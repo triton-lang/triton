@@ -21,8 +21,14 @@ typedef std::function<SmallVector<Value>(Location, ConversionPatternRewriter &,
     ConverterT;
 
 namespace {
-// ROCM utility functions for data type conversion
-/* ----- FP8E5M2 ------ */
+//===-------------------------------------------===//
+/// ROCM utility functions for data type conversion
+//===-------------------------------------------===//
+
+//===----------------===//
+///      FP8E5M2
+//===----------------===//
+
 // This data-type is the standard FP8E5M2 format
 // NVIDIA GPU supports it natively but we don't have hardware native
 // support on MI300.
@@ -221,6 +227,7 @@ Fp8E4M3FNUZ_to_Fp32(Location loc, ConversionPatternRewriter &rewriter,
   assert(v.size() == 2);
   return cvtFp8ToFp32(loc, rewriter, v[0], v[1], "fp8");
 }
+
 // Depend on whether we focus more on performance, we may skip
 // the processing of submornal values
 static Value Fp16_to_Fp8E5M2FNUZ_oneValue(Location loc,
@@ -537,7 +544,47 @@ static SmallVector<Value> Bf16_to_Fp8E5M2(Location loc,
           extract_element(i8_ty, fp8x4Vec, i32_val(3))};
 }
 
-// ROCM type conversion between fp8 and bf16
+//===-----------------------------------------===//
+/// ROCM type conversion between fp8 and bf16
+//===-----------------------------------------===//
+
+// fp8e4m3fn to bf16
+static SmallVector<Value> Fp8E4M3FN_to_Bf16(Location loc,
+                                            ConversionPatternRewriter &rewriter,
+                                            const SmallVector<Value> &v) {
+  auto fp8x4VecTy = vec_ty(i8_ty, 4);
+  Value a0 = undef(fp8x4VecTy);
+  a0 = insert_element(fp8x4VecTy, a0, int_val(8, 0), i32_val(0));
+  a0 = insert_element(fp8x4VecTy, a0, v[0], i32_val(1));
+  a0 = insert_element(fp8x4VecTy, a0, int_val(8, 0), i32_val(2));
+  a0 = insert_element(fp8x4VecTy, a0, v[1], i32_val(3));
+  a0 = bitcast(a0, i32_ty);
+
+  Value b0 = and_(i32_ty, a0, i32_val(0x7fff7fff));
+  b0 = lshr(i32_ty, b0, i32_val(4));
+
+  Value c0 = shl(i32_ty, b0, i32_val(16));
+  Value c1 = and_(i32_ty, b0, i32_val(0xFFFF0000));
+  c0 = bitcast(c0, f32_ty);
+  c1 = bitcast(c1, f32_ty);
+
+  Value d0 = fmul(f32_ty, c0, f32_val(0x1p+120)); // bias 2**(127-7)
+  Value d1 = fmul(f32_ty, c1, f32_val(0x1p+120));
+  d0 = bitcast(d0, i32_ty);
+  d1 = bitcast(d1, i32_ty);
+
+  Value out0 = or_(i32_ty, lshr(i32_ty, d0, i32_val(16)), d1);
+  Value sign0 = and_(i32_ty, a0, i32_val(0x80008000));
+  out0 = or_(i32_ty, out0, sign0);
+
+  auto bf16x2VecTy = vec_ty(bf16_ty, 2);
+  out0 = bitcast(out0, bf16x2VecTy);
+  return {extract_element(bf16_ty, out0, i32_val(0)),
+          extract_element(bf16_ty, out0, i32_val(1))};
+}
+
+/****************************************************************************/
+
 // fp8e4m3fnuz to bf16
 static SmallVector<Value>
 Fp8E4M3FNUZ_to_Bf16(Location loc, ConversionPatternRewriter &rewriter,
@@ -880,6 +927,7 @@ struct FpToFpOpConversion
             // F8 -> BF16
             {{F8E5M2TyID, BF16TyID, undefRounding}, Fp8E5M2_to_Bf16},
             {{F8E5M2FNUZTyID, BF16TyID, undefRounding}, Fp8E5M2FNUZ_to_Bf16},
+            {{F8E4M3FNTyID, BF16TyID, undefRounding}, Fp8E4M3FN_to_Bf16},
             {{F8E4M3FNUZTyID, BF16TyID, undefRounding}, Fp8E4M3FNUZ_to_Bf16},
             // BF16 -> F8
             {{BF16TyID, F8E5M2TyID, RoundingMode::RTNE}, Bf16_to_Fp8E5M2},
@@ -887,7 +935,6 @@ struct FpToFpOpConversion
              Bf16_to_Fp8E5M2FNUZ},
             {{BF16TyID, F8E4M3FNUZTyID, RoundingMode::RTNE},
              Bf16_to_Fp8E4M3FNUZ},
-
             // F32 <-> F8
             {{F32TyID, F8E4M3FNUZTyID, RoundingMode::RTNE},
              Fp32_to_Fp8E4M3FNUZ},
@@ -936,9 +983,9 @@ struct FpToFpOpConversion
       }
       return outVals;
     }
-
     size_t numElements = 4;
-    if (srcElementType.isFloat8E4M3FNUZ() ||
+    if (srcElementType.isFloat8E4M3FN() || dstElementType.isFloat8E4M3FN() ||
+        srcElementType.isFloat8E4M3FNUZ() ||
         dstElementType.isFloat8E4M3FNUZ() ||
         srcElementType.isFloat8E5M2FNUZ() ||
         dstElementType.isFloat8E5M2FNUZ()) {

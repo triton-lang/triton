@@ -192,6 +192,21 @@ bool isPureUnaryInlineAsm(Operation *op);
 // read the compute capability from the module attributes
 int getNVIDIAComputeCapability(Operation *module);
 
+std::optional<mlir::triton::gpu::SharedEncodingAttr>
+getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible);
+
+enum class MMALoadType {
+  SharedV3,
+  Registers,     // may be v2 or v3
+  DoNotPipeline, // could be a valid shared/registers MMA operand, but skip
+                 // pipelining
+};
+MMALoadType getMMALoadType(Operation *loadOp);
+
+// Returns composed LinearLayout for register to shared copy
+std::optional<triton::LinearLayout>
+getRegToSharedLayout(MLIRContext *ctx, ArrayRef<int64_t> shape,
+                     Attribute srcEnc, Attribute dstEnc, int elemBitWidth);
 } // namespace mlir
 
 #endif // TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_

@@ -8,6 +8,7 @@
 #include "Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 using namespace mlir;
@@ -24,76 +25,57 @@ using ::mlir::triton::gpu::SharedEncodingAttr;
 namespace {
 
 // Return the mask for the unique data accessed by given tensor type.
-// Used to mask out the redundant data accessed by threads.
-Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
-                        Location loc, const NVIDIA::TargetInfo &targetInfo) {
+// NOTE: Redundant memory load is allowed in triton, but redundant memory store
+// is not allowed.
+// mask = true: thread can write
+// mask = false: thread should not write
+Value getRedundantDataMask(ModuleOp moduleOp, Type valueTy,
+                           ConversionPatternRewriter &rewriter, Location loc,
+                           int regIdx, const NVIDIA::TargetInfo &targetInfo) {
+  auto ctx = moduleOp.getContext();
   auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
-  Value mask = int_val(1, 1);
+  auto numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
   auto tid = tid_val();
-  auto clusterCTAId = targetInfo.getClusterCTAId(rewriter, loc);
+  auto mask = true_val();
+  auto kReg = str_attr("register");
+  auto kLane = str_attr("lane");
+  auto kWarp = str_attr("warp");
+  auto kBlock = str_attr("block");
   if (tensorTy) {
-    auto layout = tensorTy.getEncoding();
     auto shape = tensorTy.getShape();
-    unsigned rank = shape.size();
-    auto sizePerThread = triton::gpu::getSizePerThread(layout);
-    auto threadsPerWarp = triton::gpu::getThreadsPerWarp(layout);
-    auto warpsPerCTA = triton::gpu::getWarpsPerCTA(layout);
-    auto order = triton::gpu::getOrder(layout);
-    auto warpOrder = triton::gpu::getWarpOrder(layout);
-    auto shapePerCTATile = triton::gpu::getShapePerCTATile(layout, shape);
-    Value warpSize = i32_val(32);
-    Value laneId = urem(tid, warpSize);
-    Value warpId = udiv(tid, warpSize);
-    SmallVector<Value> multiDimWarpId =
-        delinearize(rewriter, loc, warpId, warpsPerCTA, warpOrder);
-    SmallVector<Value> multiDimThreadId =
-        delinearize(rewriter, loc, laneId, threadsPerWarp, order);
-    for (unsigned dim = 0; dim < rank; ++dim) {
-      // if there is no data replication across threads on this dimension
-      if (shape[dim] >= shapePerCTATile[dim])
-        continue;
-      // Otherwise, we need to mask threads that will replicate data on this
-      // dimension. Calculate the thread index on this dimension for the CTA
-      Value threadDim =
-          add(mul(multiDimWarpId[dim], i32_val(threadsPerWarp[dim])),
-              multiDimThreadId[dim]);
-      mask = and_(mask, icmp_slt(mul(threadDim, i32_val(sizePerThread[dim])),
-                                 i32_val(shape[dim])));
-    }
-    // Do not write duplicated data when multicast is enabled
-    if (triton::gpu::getNumCTAs(layout) > 1) {
-      auto _0 = i32_val(0);
-      auto CTAsPerCGA = triton::gpu::getCTAsPerCGA(layout);
-      auto CTASplitNum = triton::gpu::getCTASplitNum(layout);
-      auto CTAOrder = triton::gpu::getCTAOrder(layout);
-
-      auto multiDimClusterCTAId =
-          delinearize(rewriter, loc, clusterCTAId, CTAsPerCGA, CTAOrder);
-
-      for (unsigned dim = 0; dim < rank; ++dim) {
-        // Skip when multicast is not enabled in this dimension
-        if (CTAsPerCGA[dim] == CTASplitNum[dim])
-          continue;
-        // This wrapping rule must be consistent with emitCTAOffsetForLayout
-        unsigned splitNum = std::min<unsigned>(shape[dim], CTASplitNum[dim]);
-        Value repId = udiv(multiDimClusterCTAId[dim], i32_val(splitNum));
-        // Consider the example where CTAsPerCGA = [4] and CTASplitNum = [2]:
-        //     CTA0 and CTA2 holds data of block0,
-        //     CTA1 and CTA3 holds data of block1.
-        // Only CTA0 and CTA1 are expected to write while CTA2 and CTA3 should
-        // be masked. We add the following mask:
-        //     multiDimClusterCTAId[dim] / splitNum == 0
-        // Actually in all existing cases of multicast, splitNum is always 1.
-        // The mask is equivalent to:
-        //     multiDimClusterCTAId[dim] == 0
-        mask = and_(mask, icmp_eq(repId, _0));
+    auto layout = tensorTy.getEncoding();
+    auto ll = triton::gpu::toLinearLayout(shape, layout);
+    assert(ll.has_value() && "Failed to convert layout to linear layout");
+    auto freeVariableMasks = ll->getFreeVariableMasks();
+    auto regMasks = freeVariableMasks[kReg];
+    if (regMasks & regIdx) {
+      // Step 1: check register redundancy
+      mask = false_val();
+    } else {
+      Value warpSize =
+          i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(moduleOp));
+      Value laneId = urem(tid, warpSize);
+      Value warpId = udiv(tid, warpSize);
+      // Step 2: check lane and warp redundancy
+      auto laneMasks = freeVariableMasks[kLane];
+      auto warpMasks = freeVariableMasks[kWarp];
+      mask = and_(mask, icmp_eq(and_(i32_val(laneMasks), laneId), i32_val(0)));
+      mask = and_(mask, icmp_eq(and_(i32_val(warpMasks), warpId), i32_val(0)));
+      if (numCTAs > 1) {
+        // Step 3: check block redundancy
+        auto ctaId = targetInfo.getClusterCTAId(rewriter, loc);
+        auto ctaMasks = freeVariableMasks[kBlock];
+        mask = and_(mask, icmp_eq(and_(i32_val(ctaMasks), ctaId), i32_val(0)));
       }
     }
   } else {
-    // If the tensor is not ranked, then it is a scalar and only thread 0 of
-    // CTA0 can write
-    mask = and_(mask, icmp_eq(clusterCTAId, i32_val(0)));
     mask = and_(mask, icmp_eq(tid, i32_val(0)));
+    if (numCTAs > 1) {
+      auto ctaId = targetInfo.getClusterCTAId(rewriter, loc);
+      // If the tensor is not ranked, then it is a scalar and only thread 0 of
+      // CTA0 within the cluster can write
+      mask = and_(mask, icmp_eq(ctaId, i32_val(0)));
+    }
   }
   return mask;
 }
@@ -253,7 +235,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
 
       PTXBuilder ptxBuilder;
 
-      Value pred = mask ? maskElems[vecStart] : int_val(1, 1);
+      Value pred = mask ? maskElems[vecStart] : true_val();
 
       const std::string readConstraint =
           (width == 64) ? "l" : ((width == 32) ? "r" : "c");
@@ -426,7 +408,7 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
                        << mask << "\n";
     }
 
-    Value mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
+    auto moduleOp = op->getParentOfType<ModuleOp>();
     const size_t dtsize =
         std::max<int>(1, valueElemTy.getIntOrFloatBitWidth() / 8);
     const size_t valueElemNBits = dtsize * 8;
@@ -474,6 +456,8 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
       PTXBuilder ptxBuilder;
       auto *asmArgList = ptxBuilder.newListOperand(asmArgs);
 
+      Value mask = getRedundantDataMask(moduleOp, valueTy, rewriter, loc,
+                                        vecStart, targetInfo);
       Value maskVal = llMask ? and_(mask, maskElems[vecStart]) : mask;
 
       auto *asmAddr =
@@ -566,7 +550,6 @@ struct AtomicCASOpConversion
                        << " origin vec = " << vecOrig
                        << " elemsPerThread = " << elemsPerThread << "\n";
 
-    Value mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
     auto vecTy = vec_ty(valueElemTy, vec);
     SmallVector<Value> resultVals(elemsPerThread);
 
@@ -596,6 +579,8 @@ struct AtomicCASOpConversion
       os << op.getSem();
       auto scope = stringifyMemSyncScope(op.getScope()).str();
       atom.global().o(semStr).o(scope).o("cas").o(sTy);
+      Value mask =
+          getRedundantDataMask(moduleOp, valueTy, rewriter, loc, i, targetInfo);
       atom(dstOpr, ptrOpr, cmpOpr, valOpr).predicate(mask);
 
       if (tensorTy) {
@@ -725,12 +710,12 @@ struct AtomicRMWOpConversion
                        << " packed = " << packed << " origin vec = " << vecOrig
                        << " numElems = " << numElems;
 
-    Value mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
-
     auto packedTy = vec_ty(valueElemTy, packed);
     SmallVector<Value> resultVals(elemsPerThread);
     for (size_t i = 0; i < elemsPerThread; i += vec * packed) {
       Value rmwPtr = ptrElements[i];
+      Value mask =
+          getRedundantDataMask(moduleOp, valueTy, rewriter, loc, i, targetInfo);
       Value rmwMask = llMask ? and_(mask, maskElements[i]) : mask;
       std::string sTy;
       PTXBuilder ptxBuilderAtomicRMW;
@@ -965,6 +950,7 @@ struct AsyncCopyGlobalToLocalOpConversion
              << vecBytes << " bytes";
     }
 
+    auto moduleOp = op->getParentOfType<ModuleOp>();
     for (int i = 0; i < shmemAddrs.size(); i++) {
       // It's possible that vecTy is larger than 128 bits, in which case we have
       // to use multiple cp.async instructions.
@@ -992,24 +978,26 @@ struct AsyncCopyGlobalToLocalOpConversion
           // if there's any mask. cp.async will automatically fill the
           // remaining slots with 0 if cp-size > src-size.
           // XXX(Keren): Always assume other = 0 for now.
+          // When 'other != 0' is supported, we will need to fold the
+          // op.getMask() and redundantDataMask() into the same predicate, the
+          // way it is done for LoadOp.
           auto selectOp =
               select(maskElems[elemIdx], i32_val(wordBytes), i32_val(0));
           srcSize = ptxBuilder.newOperand(selectOp, "r");
         }
 
-        // When 'other != 0' is supported, we will need to fold the op.getMask()
-        // and redundantDataMask() into the same predicate, the way it is done
-        // for LoadOp.
-        Value maskVal = redundantDataMask(srcTy, rewriter, loc, targetInfo);
-
-        // TODO: Masking does not work for CTA multicast with cp.async. This is
-        // a quick and dirty workaround to avoid the issue.
         bool skipMaskForMultiCTA = triton::gpu::getNumCTAs(srcLayout) > 1;
-        if (!skipMaskForMultiCTA) {
-          copyAsyncOp(dstOperand, srcOperand, copySize, srcSize)
-              .predicate(maskVal);
-        } else {
+        if (skipMaskForMultiCTA) {
+          // TODO: Masking does not work for CTA multicast with cp.async.
+          // XXX(@peterbell10): In the multi-CTA mode, the redundant data might
+          // be on different CTAs which don't share the same smem address space,
+          // so we might need to load the same data multiple times.
           copyAsyncOp(dstOperand, srcOperand, copySize, srcSize);
+        } else {
+          Value mask = getRedundantDataMask(moduleOp, srcTy, rewriter, loc,
+                                            elemIdx, targetInfo);
+          copyAsyncOp(dstOperand, srcOperand, copySize, srcSize)
+              .predicate(mask);
         }
         ptxBuilder.launch(rewriter, loc, void_ty(getContext()));
       }

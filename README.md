@@ -2,15 +2,9 @@
   <img src="https://lh5.googleusercontent.com/wzQKEsTFkrgNQO9JjhGH5wFvslJr1saLtLaJ_a6Fp_gNENpvt3VG7BmztwngU9hFJaU4CPwGiw1opQtDvTkLrxWRbO_a12Q-pdESWHgtmheIHcPbOL5ZMC4TSiJVe5ty1w=w3517" alt="Triton logo">
 </div>
 
-The Triton Conference is happening again on September 17th, 2024 in Fremont (CA)!
-
-If you are interested in attending, please fill up [this form](https://docs.google.com/forms/d/e/1FAIpQLSecHC1lkalcm0h3JDUbspekDX5bmBvMxgVTLaK3e-61bzDDbg/viewform).
-
-
 | **`Documentation`** | **`Nightly Wheels`** |
 |-------------------- | -------------------- |
 | [![Documentation](https://github.com/triton-lang/triton/actions/workflows/documentation.yml/badge.svg)](https://triton-lang.org/) | [![Wheels](https://github.com/triton-lang/triton/actions/workflows/wheels.yml/badge.svg?branch=release/2.0.x)](https://github.com/triton-lang/triton/actions/workflows/wheels.yml) |
-
 
 # Triton
 
@@ -24,20 +18,21 @@ The [official documentation](https://triton-lang.org) contains installation inst
 
 You can install the latest stable release of Triton from pip:
 
-```bash
+```shell
 pip install triton
 ```
+
 Binary wheels are available for CPython 3.8-3.12 and PyPy 3.8-3.9.
 
 And the latest nightly release:
 
-```bash
+```shell
 pip install -U --index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/Triton-Nightly/pypi/simple/ triton-nightly
 ```
 
 # Install from source
 
-```
+```shell
 git clone https://github.com/triton-lang/triton.git;
 cd triton;
 
@@ -47,7 +42,7 @@ pip install -e python
 
 Or with a virtualenv:
 
-```
+```shell
 git clone https://github.com/triton-lang/triton.git;
 cd triton;
 
@@ -156,14 +151,14 @@ $ lit test
 You may find it helpful to make a symlink to the builddir and tell your local
 git to ignore it.
 
-```
+```shell
 $ ln -s python/build/cmake<...> build
 $ echo build >> .git/info/exclude
 ```
 
 Then you can e.g. rebuild and run lit with the following command.
 
-```
+```shell
 $ ninja -C build && ( cd build ; lit test )
 ```
 
@@ -177,6 +172,9 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
    kernels. Use `MLIR_ENABLE_DUMP=kernelName` to dump for a specific kernel only.
   - Triton cache can interfere with the dump. In cases where `MLIR_ENABLE_DUMP=1` does not work, try cleaning your triton cache: `rm -r ~/.triton/cache/*`
 - `LLVM_IR_ENABLE_DUMP=1` dumps the IR before every pass run over the LLVM IR.
+- `TRITON_REPRODUCER_PATH=<reproducer_path>` will generate an MLIR reproducer file
+  at `<reproducer_path>` before each MLIR compiler stage. If any of the stages fail,
+  `<reproducer_path>` will be a local MLIR reproducer captured right before the failing pass.
 - `TRITON_INTERPRET=1` uses the Triton interpreter instead of running on the
   GPU.  You can insert Python breakpoints in your kernel code!
 - `TRITON_ENABLE_LLVM_DEBUG=1` passes `-debug` to LLVM, printing a lot of
@@ -213,10 +211,30 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
 - `LLVM_ENABLE_TIMING` dumps the timing information for each LLVM pass.
 - `TRITON_DEFAULT_FP_FUSION` overrides the default behavior of allowing fp fusion (mul+add->fma).
 - `MLIR_ENABLE_REMARK` enables the performance warnings that are emitted as remarks.
+- `TRITON_KERNEL_DUMP` enables the dumping of the IR from each compilation stage and the final ptx.
+- `TRITON_DUMP_DIR` specifies the directory to save the dumped IR and ptx when `TRITON_KERNEL_DUMP` is set to 1.
+- `TRITON_KERNEL_OVERRIDE` enables the override of the compiled kernel with a user-specified IR/ptx at the beginning of each compilation stage.
+- `TRITON_OVERRIDE_DIR` specifies the directory from which to load the IR/ptx files when `TRITON_KERNEL_OVERRIDE` is set to 1.
+
+**Kernel Override Steps**
+
+```bash
+export TRITON_ALWAYS_COMPILE=1
+export TRITON_KERNEL_DUMP=1
+export TRITON_DUMP_DIR=<dump_dir>
+export TRITON_KERNEL_OVERRIDE=1
+export TRITON_OVERRIDE_DIR=<override_dir>
+# Step 1: Run the kernel once to dump kernel's IRs and ptx in $TRITON_DUMP_DIR
+# Step 2: Copy $TRITON_DUMP_DIR/<kernel_hash> to $TRITON_OVERRIDE_DIR
+# Step 3: Delete the stages that you do not want to override and modify the stage you do want to override
+# Step 4: Run the kernel again to see the overridden result
+```
+
 
 # Changelog
 
 Version 2.0 is out! New features include:
+
 - Many, many bug fixes
 - Performance improvements
 - Backend rewritten to use MLIR
@@ -226,13 +244,14 @@ Version 2.0 is out! New features include:
 
 Community contributions are more than welcome, whether it be to fix bugs or to add new features at [github](https://github.com/triton-lang/triton/). For more detailed instructions, please visit our [contributor's guide](CONTRIBUTING.md).
 
-
 # Compatibility
 
 Supported Platforms:
-  * Linux
+
+- Linux
 
 Supported Hardware:
-  * NVIDIA GPUs (Compute Capability 7.0+)
-  * AMD GPUs (ROCm 5.2+)
-  * Under development: CPUs
+
+- NVIDIA GPUs (Compute Capability 8.0+)
+- AMD GPUs (ROCm 5.2+)
+- Under development: CPUs

@@ -13,6 +13,7 @@ tt.func @add_kernel_unroll(%arg0: tensor<256x!tt.ptr<f32>>, %arg1: i32) {
   // CHECK: scf.for
   // CHECK: tt.load
   // CHECK-NOT: tt.load
+  // CHECK: tt.num_stages = 1 : i32
   %2:2 = scf.for %arg3 = %c1_i32 to %arg1 step %c1_i32 iter_args(%arg4 = %1, %arg5 = %arg0) -> (tensor<256xf32>, tensor<256x!tt.ptr<f32>>)  : i32 {
       %3 = tt.load %arg5 : tensor<256x!tt.ptr<f32>>
     %4 = arith.addf %arg4, %3 : tensor<256xf32>

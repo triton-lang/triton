@@ -75,6 +75,50 @@ __device__ static inline int __hip_move_dpp_N(int src) {
 
 static constexpr int warpSize = __AMDGCN_WAVEFRONT_SIZE;
 
+// warp vote function __all __any __ballot
+__device__
+inline
+int __all(int predicate) {
+    return __ockl_wfall_i32(predicate);
+}
+
+__device__
+inline
+int __any(int predicate) {
+    return __ockl_wfany_i32(predicate);
+}
+
+// XXX from llvm/include/llvm/IR/InstrTypes.h
+#define ICMP_NE 33
+
+__device__
+inline
+unsigned long long int __ballot(int predicate) {
+    return __builtin_amdgcn_uicmp(predicate, 0, ICMP_NE);
+}
+
+__device__
+inline
+unsigned long long int __ballot64(int predicate) {
+    return __builtin_amdgcn_uicmp(predicate, 0, ICMP_NE);
+}
+
+// See amd_warp_sync_functions.h for an explanation of this preprocessor flag.
+#ifdef HIP_ENABLE_WARP_SYNC_BUILTINS
+// Since threads in a wave do not make independent progress, __activemask()
+// always returns the exact active mask, i.e, all active threads in the wave.
+__device__
+inline
+unsigned long long __activemask() {
+  return __ballot(true);
+}
+#endif // HIP_ENABLE_WARP_SYNC_BUILTINS
+
+__device__ static inline unsigned int __lane_id() {
+    return  __builtin_amdgcn_mbcnt_hi(
+        -1, __builtin_amdgcn_mbcnt_lo(-1, 0));
+}
+
 __device__
 inline
 int __shfl(int var, int src_lane, int width = warpSize) {

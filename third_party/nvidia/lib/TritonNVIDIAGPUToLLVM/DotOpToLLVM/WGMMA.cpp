@@ -30,6 +30,7 @@ using namespace mlir::triton;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getShapePerCTATile;
+using ::mlir::triton::gpu::MemDescType;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
@@ -47,7 +48,7 @@ triton::nvgpu::WGMMAEltType getMmaRetType(Value d) {
 }
 
 triton::nvgpu::WGMMAEltType getMmaOperandType(Value a, bool allowTF32) {
-  auto aTy = cast<TensorOrMemDesc>(a.getType()).getElementType();
+  auto aTy = cast<triton::gpu::TensorOrMemDesc>(a.getType()).getElementType();
   if (aTy.isF16()) {
     return triton::nvgpu::WGMMAEltType::f16;
   } else if (aTy.isBF16()) {
@@ -197,7 +198,7 @@ DotOpMmaV3SmemLoader loadA(const LLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Location loc,
                            const NvidiaMmaEncodingAttr &mmaEncoding,
                            Value tensor, Value smemObjBase, Value thread) {
-  auto aTy = cast<TensorOrMemDesc>(tensor.getType());
+  auto aTy = cast<triton::gpu::TensorOrMemDesc>(tensor.getType());
   auto aSharedLayout = dyn_cast<SharedEncodingAttr>(aTy.getEncoding());
   assert(aSharedLayout && "only support load dot operand from shared.");
   auto instrShape = mmaEncoding.getInstrShape();
@@ -264,6 +265,28 @@ DotOpMmaV3SmemLoader loadB(const LLVMTypeConverter *typeConverter,
 
 // Return a vector of Value of the accumulator start at startIndex and pack the
 // values into 32bits in case the accumulator is fp16.
+//
+// `elements` contains all loaded register values for operand A.
+// This consists of operand A for possibly multiple wgmma instructions.
+// For each wgmma, each warp in a warp group feeds a single "warp matrix"
+// Each warp matrix consists of 2x2 "quads".
+// Each thread holds several elements in each quad. Right before a wgmma,
+// the sum of bitwidth of
+// the elements in each quad should add up to 32.
+//
+// These values are stored unrolled in `elements`.
+// The ordering of dimensions is as follows:
+// batch (only 1 batch for Hopper currently)
+// matM (m-index of the "warp matrix")
+// matK (k-index of the "warp matrix")
+// quadK (k-index of the "quad" in the core matrix)
+// quadM (m-index of the "quad" in the core matrix)
+// vecIdx (index of the element in the quad; this is always along the k-dim)
+//
+// This ordering is decided when a tensor in DotOpEnc is lowered into llvm.
+// For WGMMA this happens in both SharedToDotOperand and MMAToDotOperand.
+// Thus, both lowerings must obey this above ordering for the below code to be
+// correct.
 llvm::SmallVector<Value> loadReg(ConversionPatternRewriter &rewriter,
                                  Location loc,
                                  const SmallVector<Value> &elements,
@@ -356,8 +379,8 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                          Value loadedC, bool allowTF32,
                          bool needsPartialAccumulator,
                          uint32_t maxNumImpreciseAcc, bool sync, Value thread) {
-  auto aTensorTy = cast<TensorOrMemDesc>(a.getType());
-  auto bTensorTy = cast<TensorOrMemDesc>(b.getType());
+  auto aTensorTy = cast<triton::gpu::TensorOrMemDesc>(a.getType());
+  auto bTensorTy = cast<triton::gpu::TensorOrMemDesc>(b.getType());
   auto dTensorTy = cast<RankedTensorType>(d.getType());
   auto aSharedLayout = dyn_cast<SharedEncodingAttr>(aTensorTy.getEncoding());
   auto bSharedLayout = cast<SharedEncodingAttr>(bTensorTy.getEncoding());
@@ -442,6 +465,11 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
         if (aSharedLayout) {
           a = aLoader.smemLoad(m, k, rewriter, loc);
         } else {
+          auto aDotOpEnc =
+              cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
+          assert(aDotOpEnc.getKWidth() ==
+                 32 / aTensorTy.getElementTypeBitWidth());
+
           unsigned regASize = (instrShape[0] * instrShape[2]) / 32;
           llvm::SmallVector<Value> regA =
               loadReg(rewriter, loc, structA, (m * numRepK + k) * regASize,

@@ -15,4 +15,18 @@ def AllocateSharedMemory : Pass<"allocate-shared-memory", "mlir::ModuleOp"> {
     let constructor = "mlir::triton::gpu::createAllocateSharedMemoryPass()";
 }
 
+def TritonGPUGlobalScratchAllocationPass : Pass<"tritongpu-global-scratch-memory-allocation", "mlir::ModuleOp"> {
+  let summary = "Assign global scratch memory allocation";
+
+  let description = [{
+    Decide on global scratch space memory allocation and assign attributes to each allocation.
+  }];
+
+  let constructor = "mlir::triton::gpu::createTritonGPUGlobalScratchAllocationPass()";
+
+  let dependentDialects = [
+    "mlir::triton::gpu::TritonGPUDialect"
+  ];
+}
+
 #endif

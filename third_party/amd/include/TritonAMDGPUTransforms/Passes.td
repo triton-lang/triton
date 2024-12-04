@@ -3,7 +3,7 @@
 
 include "mlir/Pass/PassBase.td"
 
-def TritonAMDGPUStreamPipelineV2 : Pass<"tritonamdgpu-stream-pipeline-v2", "mlir::ModuleOp"> {
+def TritonAMDGPUStreamPipeline : Pass<"tritonamdgpu-stream-pipeline", "mlir::ModuleOp"> {
   let summary = "pipeline";
 
   let description = [{
@@ -11,14 +11,17 @@ def TritonAMDGPUStreamPipelineV2 : Pass<"tritonamdgpu-stream-pipeline-v2", "mlir
     tile
   }];
 
-  let constructor = "mlir::createTritonAMDGPUStreamPipelineV2Pass()";
+  let constructor = "mlir::createTritonAMDGPUStreamPipelinePass()";
 
-  let dependentDialects = [];
+  let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
 
   let options = [
     Option<"numStages", "num_stages",
            "int32_t", /*default*/"2",
-           "Number of Pipeline stages">
+           "Number of Pipeline stages">,
+    Option<"prefetch", "prefetch",
+           "int32_t", /*default*/"0",
+           "Enable prefetch from shared memory">
   ];
 }
 

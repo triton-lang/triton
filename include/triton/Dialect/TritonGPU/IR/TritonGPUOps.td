@@ -3,10 +3,12 @@
 
 include "triton/Dialect/TritonGPU/IR/TritonGPUDialect.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUTypeInterfaces.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUAttrDefs.td"
 include "mlir/Dialect/Arith/IR/ArithBase.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
+include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
 include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
@@ -94,7 +96,7 @@ def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
 
   let arguments = (
     ins TT_PtrTensor:$src,
-    TT_MemDescType:$result,
+    TTG_MemDescType:$result,
     Optional<I1Tensor>:$mask,
     Optional<TT_Type>:$other,
     DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
@@ -167,7 +169,7 @@ def TTG_LocalAllocOp : TTG_Op<"local_alloc", [DeclareOpInterfaceMethods<MemoryEf
   }];
   let assemblyFormat = [{$src attr-dict `:` functional-type(operands, results)}];
 
-  let results = (outs TT_MemDescType:$result);
+  let results = (outs TTG_MemDescType:$result);
   let hasFolder = 1;
   let hasVerifier = 1;
 }
@@ -186,13 +188,13 @@ def TTG_LocalDeallocOp : TTG_Op<"local_dealloc", [MemoryEffects<[MemFree<SharedM
 
     Because we assume a memdesc is dead at the first point that post-dominates
     its uses, ops that wait for an async operation on a memdesc to complete
-    (such as triton_nvidia_gpu.warp_group_dot_wait) should also take the memdesc as an
+    (such as ttng.warp_group_dot_wait) should also take the memdesc as an
     operand.
   }];
 
-  let arguments = (ins TT_MemDescType:$src);
+  let arguments = (ins TTG_MemDescType:$src);
 
-  // Use qualified() otherwise "!tt.memdesc<X>" is printed as "<X>".
+  // Use qualified() otherwise "!ttg.memdesc<X>" is printed as "<X>".
   let assemblyFormat = [{$src attr-dict `:` qualified(type($src))}];
 }
 
@@ -211,14 +213,39 @@ def TTG_MemDescSubviewOp : TTG_Op<"memdesc_subview", [Pure]> {
     Then in Python syntax, the subview covers input[1][0:4][4:8].
   }];
   let arguments = (
-    ins TT_MemDescType:$src, Variadic<I32>:$offsets);
+    ins TTG_MemDescType:$src, Variadic<I32>:$offsets);
 
-  // Use qualified() otherwise "!tt.memdesc<X>" is printed as "<X>".
+  // Use qualified() otherwise "!ttg.memdesc<X>" is printed as "<X>".
   let assemblyFormat = [{$src `[` $offsets `]` attr-dict `:` qualified(type($src)) `->` qualified(type($result))}];
 
-  let results = (outs TT_MemDescType:$result);
+  let results = (outs TTG_MemDescType:$result);
 
   let hasVerifier = 1;
+}
+
+def TTG_MemDescTransOp : TTG_Op<"memdesc_trans", [Pure,
+                                                  TransposeOpInterface,
+                                                  DeclareOpInterfaceMethods<InferTypeOpInterface>,
+                                                  SameOperandsAndResultElementType]> {
+  let summary = "transpose the descriptor";
+
+  let description = [{
+    This operation returns a new descriptor
+    representing a transposed view of the buffer.
+  }];
+
+  let arguments = (ins TTG_MemDescType:$src, Variadic<I32>:$order);
+
+  let arguments = (
+    ins TTG_MemDescType:$src,
+    DenseI32ArrayAttr:$order
+  );
+
+  let results = (outs TTG_MemDescType:$result);
+
+  let assemblyFormat = "$src attr-dict `:` qualified(type($src)) `->` qualified(type($result))";
+
+  let hasFolder = 1;
 }
 
 def TTG_LocalLoadOp : TTG_Op<"local_load", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
@@ -227,7 +254,7 @@ def TTG_LocalLoadOp : TTG_Op<"local_load", [DeclareOpInterfaceMethods<MemoryEffe
   let description = [{
     Load a tensor from the local memory descriptor into a distributed tensor.
   }];
-  let arguments = (ins TT_MemDescType:$src, Optional<TTG_AsyncToken> :$token);
+  let arguments = (ins TTG_MemDescType:$src, Optional<TTG_AsyncToken> :$token);
 
   let builders = [
       OpBuilder<(ins "Type":$retType, "Value":$src),
@@ -235,7 +262,7 @@ def TTG_LocalLoadOp : TTG_Op<"local_load", [DeclareOpInterfaceMethods<MemoryEffe
       build($_builder, $_state, retType, src, /*token=*/static_cast<mlir::Value>(nullptr));
       }]>];
 
-  // Use qualified() otherwise "!tt.memdesc<X>" is printed as "<X>".
+  // Use qualified() otherwise "!ttg.memdesc<X>" is printed as "<X>".
   let assemblyFormat = [{$src (`token` $token^)? attr-dict `:` qualified(type($src)) `->` type($result)}];
 
   let results = (outs TT_Tensor:$result);
@@ -247,10 +274,10 @@ def TTG_LocalStoreOp : TTG_Op<"local_store", [DeclareOpInterfaceMethods<MemoryEf
   let description = [{
     Store a distributed tensor into a buffer in local memory.
   }];
-  let arguments = (ins TT_Tensor:$src, TT_MemDescType:$dst);
+  let arguments = (ins TT_Tensor:$src, TTG_MemDescType:$dst);
 
   let hasVerifier = 1;
-  // Use qualified() otherwise "!tt.memdesc<X>" is printed as "<X>".
+  // Use qualified() otherwise "!ttg.memdesc<X>" is printed as "<X>".
   let assemblyFormat = [{
     $src `,` $dst attr-dict `:` type($src) `->` qualified(type($dst))
   }];
@@ -268,12 +295,34 @@ def TTG_UpcastMXFPOp : TTG_Op<"upcast_mxfp", [Pure, DeclareOpInterfaceMethods<In
   let arguments = (ins
                    TT_Tensor:$src,
                    TT_Tensor:$scale,
-                   TT_F8F6F4TypeAttr:$fp_type);
+                   TT_ScaleDotElemTypeAttr:$fp_type);
   let results = (outs TT_Tensor:$result);
 
   let assemblyFormat = [{
     $src `,` $scale  `fp_type` `=` $fp_type attr-dict `:` type($src) `,` type($scale) `->` type($result)
   }];
+}
+
+// Allocate global memory
+def TTG_GlobalScratchAllocOp : TTG_Op<"global_scratch_alloc", [MemoryEffects<[MemAlloc<GlobalMemory>]>]> {
+  let summary = "allocate a global memory buffer";
+  let description = [{
+    This operation allocates a buffer in global memory that is private to the current program.
+  }];
+  let arguments = (
+    ins
+    I32Attr:$nbytes,
+    I32Attr:$alignment
+  );
+  let results = (outs TT_Ptr:$result);
+
+  let builders = [
+    OpBuilder<(ins "Type":$result, "int32_t":$nbytes, "int32_t":$alignment),
+              [{ build($_builder, $_state, result,
+                       $_builder.getI32IntegerAttr(nbytes), $_builder.getI32IntegerAttr(alignment)); }]>
+  ];
+
+  let assemblyFormat = [{attr-dict `:` qualified(type($result))}];
 }
 
 #endif
