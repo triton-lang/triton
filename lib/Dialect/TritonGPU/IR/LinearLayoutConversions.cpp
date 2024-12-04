@@ -524,7 +524,6 @@ AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 std::optional<LinearLayout>
 BlockedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   assert(shape.size() == getOrder().size());
-
   MLIRContext *ctx = getContext();
 
   const auto &order = getOrder();
