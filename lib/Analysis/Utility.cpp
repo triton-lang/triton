@@ -440,29 +440,71 @@ bool GatherLoweringHelper::isWarpLocal() {
     return false;
 
   Builder b(gatherOp.getContext());
-  StringAttr block = b.getStringAttr("block");
-  StringAttr warp = b.getStringAttr("warp");
-  StringAttr gatherDim =
+  StringAttr kBlock = b.getStringAttr("block");
+  StringAttr kWarp = b.getStringAttr("warp");
+  StringAttr kLane = b.getStringAttr("lane");
+  StringAttr kGatherDim =
       b.getStringAttr("dim" + std::to_string(gatherOp.getAxis()));
 
-  // If the sublayout `(block, warp) -> dimN` is zero, then changing the warp or
-  // block does not alter how elements are mapped to `dimN`.
-  if (!srcLayout->sublayoutIsZero({block, warp}, gatherDim) ||
-      !idxLayout->sublayoutIsZero({block, warp}, gatherDim))
+  // The tensor layouts must be distributed layouts, where the basis matrix is a
+  // subpermutation matrix plus some zero rows for broadcasting.
+  // FIXME(jeff): Check this invariant somehow.
+  //
+  // We want to know if all elements of a column along the gather axis are
+  // mapped to the same set of warps, which means the gather can be performed
+  // entirely within the warp. We need to query
+  //
+  //   srcLayout.inverse().sublayoutIsZero({kGatherDim}, {kBlock, kWarp})
+  //
+  // But due to broadcasting, the matrix might not be invertible. But since the
+  // matrix is a subpermutation matrix, we can instead query
+  //
+  //   srcLayout.sublayoutIsZero({kBlock, kWarp}, {kGatherDim})
+  //
+  // Which implies that changing the warp will not change the gather dimension.
+  // And since there is no swizzling, this applies to all warps.
+  if (!srcLayout->sublayoutIsZero({kBlock, kWarp}, kGatherDim) ||
+      !idxLayout->sublayoutIsZero({kBlock, kWarp}, kGatherDim))
     return false;
+
+  SmallVector<StringAttr> otherDims;
+  for (unsigned dim = 0, rank = srcType.getRank(); dim < rank; ++dim) {
+    if (dim != gatherOp.getAxis()) {
+      otherDims.push_back(b.getStringAttr("dim" + Twine(dim)));
+    }
+  }
 
   // `dimN` is invariant to the warp, but the `(block, warp)` mapping to all
   // other dimensions must be the same for both layouts. If so, then the warp
   // that owns a particular index element also owns all the source elements it
   // could index into.
-  SmallVector<StringAttr> otherDims;
-  for (unsigned dim = 0, rank = srcType.getRank(); dim < rank; ++dim) {
-    if (dim != gatherOp.getAxis()){
-      otherDims.push_back(b.getStringAttr("dim" + Twine(dim)));
+  if (srcLayout->sublayout({kBlock, kWarp}, otherDims) !=
+      idxLayout->sublayout({kBlock, kWarp}, otherDims))
+    return false;
+
+  // The two constraints above ensure that data-movement to perform the gather
+  // operation are contained within a warp. The subsequent constraints simplify
+  // codegen.
+
+  // Require that for any given gather column, the threads mapped to the column
+  // in the index and source tensors are the same. This means we don't need to
+  // xor shuffle across threads before emitting index shuffles; we push warp
+  // shuffling to layout conversions.
+  if (srcLayout->sublayout(kLane, otherDims) !=
+      idxLayout->sublayout(kLane, otherDims))
+    return false;
+
+  // Broadcasted source layouts are not supported at the moment, because we
+  // rely on the source layout being invertible.
+  for (auto &bases : srcLayout->getBases()) {
+    auto isZero = [](ArrayRef<int32_t> base) {
+      return llvm::all_of(base, [](int32_t b) { return b == 0; });
+    };
+    if (llvm::any_of(bases.second, isZero)) {
+      return false;
     }
   }
-  return srcLayout->sublayout({block, warp}, otherDims) ==
-         idxLayout->sublayout({block, warp}, otherDims);
+  return true;
 }
 
 unsigned getNumScratchElements(ArrayRef<unsigned> shape) {

@@ -124,6 +124,15 @@ void GatherOpConversion::emitGatherInShared(
   rewriter.replaceOp(op, packed);
 }
 
+static LinearLayout
+identityND(ArrayRef<std::pair<StringAttr, int32_t>> dimsAndSizes) {
+  auto ret = LinearLayout::empty();
+  for (auto [dim, size] : dimsAndSizes) {
+    ret *= LinearLayout::identity1D(size, dim, dim);
+  }
+  return ret;
+}
+
 void GatherOpConversion::emitWarpLocalGather(
     GatherOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const {
   MLIRContext *ctx = op.getContext();
@@ -134,51 +143,82 @@ void GatherOpConversion::emitWarpLocalGather(
   llvm::errs() << getLayoutStr(srcType, false) << "\n";
   llvm::errs() << getLayoutStr(idxType, false) << "\n";
 
+  // Layout dimension names.
+  StringAttr kBlock = str_attr("block");
+  StringAttr kWarp = str_attr("warp");
   StringAttr kLane = str_attr("lane");
   StringAttr kRegister = str_attr("register");
   StringAttr kGatherDim = rewriter.getStringAttr("dim" + Twine(op.getAxis()));
+  SmallVector<StringAttr> allDims, otherDims;
+  for (unsigned dim = 0, rank = srcType.getRank(); dim < rank; ++dim) {
+    allDims.push_back(str_attr("dim" + Twine(dim)));
+    if (dim != op.getAxis()) {
+      otherDims.push_back(allDims.back());
+    }
+  }
+
+  // Compute the src and idx layouts.
+  LinearLayout srcLayout =
+      *toLinearLayout(srcType.getShape(), srcType.getEncoding());
+  LinearLayout idxLayout =
+      *toLinearLayout(idxType.getShape(), idxType.getEncoding());
+
+  // Let `ll_src` be the source layout and `ll_idx` be the index layout.
+  // Let `src_col` be a tuple of dimensions except the gather dimension,
+  // representing a specific column in the source tensor. Likewise for
+  // `idx_col`. Let `src_idx` be the index into gather dimension in the source
+  // tensor.
+  //
+  // `(src_lane, src_reg) = ll_src^-1(src_col, src_idx)`, where `src_lane` is
+  // the thread that contains the required element and `src_reg` is the register
+  // within that thread.
+  //
+  // Because `ll_src(block=0, warp=0, lane=0)[otherDims] ==
+  // idx_src(0, 0, 0)[otherDims]`, we know given any `idx_reg` (element in the
+  // index tensor) the thread will need to read from the same column in the
+  // source tensor.
+  //
+  // Thus, we can obtain
+  //
+  //   (src_lane, src_reg) = (ll_src^-1)(
+  //       ll_idx(black, warp, lane, idx_reg)[otherDims],
+  //       idxValues[idx_reg]
+  //   )
+  //
+  // And the mapping will be the correct for each thread.
+  //
+  // Given `src_reg \in [0, N)`, we just need to emit N index shuffles for each
+  // `idx_reg` (the number of index shuffles is quadratic!) and `arith.select`
+  // using `src_reg` to get the right one.
+
+  // Fully invert the source layout. We know it is invertible because
+  // `isWarpLocal` checked this.
+  SmallVector<std::pair<StringAttr, int32_t>> srcDimsAndSizes;
+  for (auto [i, size] : llvm::enumerate(srcType.getShape())) {
+    srcDimsAndSizes.push_back({str_attr("dim" + Twine(i)), size});
+  }
+  auto srcShapeId = identityND(srcDimsAndSizes);
+  LinearLayout invSrcLayout = srcShapeId.invertAndCompose(srcLayout);
+
+  // Sanity check: the warp must be invariant to the index because otherwise the
+  // gather would need to read across warps!
+  assert(invSrcLayout.sublayoutIsZero(kGatherDim, {kBlock, kWarp}) &&
+         "expected a warp-local gather");
+
+  LinearLayout idxColLayout =
+      idxLayout.sublayout({kBlock, kWarp, kLane, kRegister}, otherDims);
 
   SmallVector<Value> srcValues =
       unpackLLElements(loc, adaptor.getSrc(), rewriter);
   SmallVector<Value> idxValues =
       unpackLLElements(loc, adaptor.getIndices(), rewriter);
 
-  // For a warp-local gather, a couple things are true:
-  // - Each warp owns 2^N columns of the source tensor along the gather axis
-  //   and the same columns of the index tensor, which may be shorter or longer
-  //   than those in the source tensor.
-  // - Columns may be owned by multiple warps if the layout is oversubscribed.
-  // - In a particular column, each thread owns at least one element of the
-  //   source tensor and at least one element of the index tensor.
-
-  // Organize the source and index values into columns.
-  SmallVector<StringAttr> otherDims;
-  for (unsigned dim = 0, rank = srcType.getRank(); dim < rank; ++dim) {
-    if (dim != op.getAxis()) {
-      otherDims.push_back(str_attr("dim" + Twine(dim)));
-    }
-  }
-
-  LinearLayout srcLayout =
-      *toLinearLayout(srcType.getShape(), srcType.getEncoding());
-  LinearLayout idxLayout =
-      *toLinearLayout(idxType.getShape(), idxType.getEncoding());
-
-  LinearLayout srcColLayout = srcLayout.sublayout({kRegister}, otherDims);
-  LinearLayout idxColLayout = idxLayout.sublayout({kRegister}, otherDims);
-  LinearLayout srcThreadLayout = srcLayout.sublayout({kRegister}, kGatherDim);
-  LinearLayout idxThreadLayout = idxLayout.sublayout({kRegister}, kGatherDim);
-
-  // Sanity check the layouts.
-  assert(srcColLayout.getInDimSize(kRegister) == srcValues.size());
-  assert(idxColLayout.getInDimSize(kRegister) == idxValues.size());
-  assert(srcThreadLayout.getInDimSize(kRegister) == srcValues.size());
-  assert(idxThreadLayout.getInDimSize(kRegister) == idxValues.size());
-
-  SmallVector<SmallVector<Value>> srcValuesCol, idxValuesCol;
-  for (auto [i, srcVal] : llvm::enumerate(srcValues)) {
-    SmallVector<std::pair<StringAttr, int32_t>> colIdx =
-        srcColLayout.apply({{kRegister, i}});
+  Value threadId = getThreadId(rewriter, loc);
+  Value threadsPerWarp = i32_val(srcLayout.getInDimSize(kLane));
+  assert(srcLayout.getInDimSize(kLane) == idxLayout.getInDimSize(kLane));
+  Value laneId = urem(threadId, threadsPerWarp);
+  Value warpId = udiv(threadId, threadsPerWarp);
+  for (auto [idxReg, idxVal] : llvm::enumerate(idxValues)) {
   }
 
   SmallVector<Value> tmpResults(idxValues.size(), f32_val(0.0));
