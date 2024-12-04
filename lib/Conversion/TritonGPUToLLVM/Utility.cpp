@@ -178,26 +178,26 @@ Value getSmemVecAddr(triton::gpu::MemDescType sharedTy, Type elemLlvmTy,
 
   auto smemBase = smemObj.getBase();
   auto sharedOrder = triton::gpu::getOrder(sharedTy.getEncoding());
-  ArrayRef<Value> smemStrides = smemObj.getStrides();
-  ArrayRef<Value> smemOffsets = smemObj.getOffsets();
+  auto smemStrides = smemObj.getStrides();
+  auto smemOffsets = smemObj.getOffsets();
   Value smemOffset;
   if (shape == allocShape.take_back(shape.size())) {
     // Rank reduce only starts from the first dimension that is different.
     // This is not entirely correct if the "batch" dimension is the contiguous
     // dimension
-    smemOffsets = llvm::to_vector(llvm::make_second_range(
+    smemOffsets = llvm::to_vector(llvm::drop_end(llvm::make_second_range(
         applyLinearLayout(loc, rewriter, regToSharedLayout,
                           {{kRegister, regId},
                            {kLane, laneId},
                            {kWarp, warpId},
-                           {kBlock, i32_val(0)}})));
+                           {kBlock, i32_val(0)}}))));
     smemOffset = dot(rewriter, loc, smemOffsets,
                      applyPermutation(smemStrides, sharedOrder));
   } else {
     assert(invertAllocSharedLayout.has_value() &&
            "invertAllocSharedLayout is required");
-    smemStrides = smemStrides.take_back(shape.size());
-    smemOffsets = smemOffsets.take_back(shape.size());
+    smemStrides.resize(shape.size());
+    smemOffsets.resize(shape.size());
     Value distanceToAllocBase = dot(rewriter, loc, smemOffsets,
                                     applyPermutation(smemStrides, sharedOrder));
 
@@ -320,9 +320,10 @@ bool emitTransferBetweenRegistersAndShared(
     // Get the address to load/store.  The multi-dim address is (offsetX1, ...,
     // offsetXN, block), where the offsets appear in minor-to-major order, and
     // we drop_end to drop block, which we know from above will be 0.
-    auto vecAddr = getSmemVecAddr(
-        sharedTy, elemLlvmTy, loc, rewriter, *regLayout, *regToSharedLayout,
-        invertAllocSharedLayout, i32_val(i), laneId, warpId, smemObj);
+    auto vecAddr =
+        getSmemVecAddr(sharedTy, elemLlvmTy, loc, rewriter, *regLayout,
+                       *regToSharedLayout, invertAllocSharedLayout,
+                       i32_val(i * vecElems), laneId, warpId, smemObj);
 
     perVectorCallback(vecTy, vecAddr);
   }
