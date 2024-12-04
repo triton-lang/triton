@@ -302,9 +302,8 @@ void storeDistributedToShared(triton::gpu::MemDescType dstTy,
     }
   };
   LDBG("What do you have here: " << srcTy.getEncoding());
-  auto blockedEncoding = dyn_cast<BlockedEncodingAttr>(srcTy.getEncoding());
-  unsigned int colIndex = 0;
-  if (crossGrain && blockedEncoding) {
+  LDBG("crossGrain: " << crossGrain);
+  if (crossGrain) {
     // This section is only for inThreadTranspose for AMD path, where we want to
     // transpose during the blocked->shared tranfer.
     // For example, the thread-local register holds a [4, 8] section of matrix,
@@ -319,6 +318,8 @@ void storeDistributedToShared(triton::gpu::MemDescType dstTy,
     // innerVecSize: 8, since it is the vector size of inner dimension
     // LDBG("innerVecSize           = " << innerVecSize);
     // LDBG("srcVals.size()         = " << srcVals.size());
+    auto blockedEncoding = dyn_cast<BlockedEncodingAttr>(srcTy.getEncoding());
+    unsigned int colIndex = 0;
     auto sizePerThread = blockedEncoding.getSizePerThread();
     auto order = blockedEncoding.getOrder();
     unsigned int numElemsPerIter = product<unsigned>(sizePerThread);
