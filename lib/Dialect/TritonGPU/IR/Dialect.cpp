@@ -1156,8 +1156,7 @@ SmallVector<unsigned> DotOperandEncodingAttr::getWarpsPerCTA() const {
 }
 SmallVector<unsigned> DotOperandEncodingAttr::getWarpOrder() const {
   // FIXME(Lezcano): Preexisting. Do we want to have this path at all?
-  if (mlir::isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr, BlockedEncodingAttr>(
-          getParent())) {
+  if (mlir::isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>(getParent())) {
     return ::getWarpOrder(getParent());
   }
   llvm::report_fatal_error("DotOperandEncoding::getWarpOrder not implemented");

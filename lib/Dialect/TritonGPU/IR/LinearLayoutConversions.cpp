@@ -569,8 +569,8 @@ AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 }
 
 std::optional<LinearLayout>
-wmmaDotToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
-                      ArrayRef<int64_t> shape) {
+wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
+                             ArrayRef<int64_t> shape) {
   auto wmmaLayout = llvm::cast<AMDWmmaEncodingAttr>(dotWmmaLayout.getParent());
   auto rank = shape.size();
   bool hasBatchDim = rank == 3;
@@ -756,7 +756,7 @@ DotOperandEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   if (auto mfmaLayout = llvm::dyn_cast<AMDMfmaEncodingAttr>(parent)) {
     return mfmaDotToLinearLayout(*this, shape);
   } else if (auto wmmaLayout = llvm::dyn_cast<AMDWmmaEncodingAttr>(parent)) {
-    return wmmaDotToLinearLayout(*this, shape);
+    return wmmaDotOperandToLinearLayout(*this, shape);
   } else if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent)) {
     return nvidiaDotToLinearLayout(shape, *this);
   }
