@@ -13,6 +13,20 @@ namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 
+bool mlir::triton::loopHasDistGreaterThanOne(scf::ForOp forOp) {
+  return llvm::any_of(forOp.getBody()->getTerminator()->getOperands(),
+                      [](Value operand) {
+                        Operation *def = operand.getDefiningOp();
+                        return !def;
+                      });
+}
+
+bool mlir::triton::isOuterLoop(scf::ForOp forOp) {
+  return llvm::any_of(forOp.getBody()->getOperations(), [](Operation &op) {
+    return isa<scf::ForOp, scf::WhileOp>(op);
+  });
+}
+
 // Combine the current mask with the given predicate.
 static Value getPredMask(RewriterBase &rewriter, Type typeLike,
                          Value currentMask, Value pred) {
@@ -78,6 +92,13 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     Value mask = getPredMask(rewriter, storeOp.getPtr().getType(),
                              storeOp.getMask(), pred);
     storeOp.getMaskMutable().assign(mask);
+    return op;
+  }
+  if (auto atomicRMWOp = dyn_cast<tt::AtomicRMWOp>(op)) {
+    rewriter.setInsertionPoint(atomicRMWOp);
+    Value mask = getPredMask(rewriter, atomicRMWOp.getPtr().getType(),
+                             atomicRMWOp.getMask(), pred);
+    atomicRMWOp.getMaskMutable().assign(mask);
     return op;
   }
 
@@ -188,9 +209,8 @@ std::pair<int, int> mlir::triton::getStageCluster(Operation *op) {
   return std::make_pair(stage, clusterId);
 }
 
-void mlir::triton::setStageCluster(scf::ForOp &forOp, Operation *op, int stage,
-                                   int cluster) {
-  auto ctx = forOp.getContext();
+void mlir::triton::setStageCluster(Operation *op, int stage, int cluster) {
+  auto ctx = op->getContext();
   op->setAttr(mlir::triton::kLoopStageAttrName,
               IntegerAttr::get(IntegerType::get(ctx, 32), stage));
   op->setAttr(mlir::triton::kLoopClusterAttrName,
