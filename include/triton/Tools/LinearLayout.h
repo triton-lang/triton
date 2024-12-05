@@ -690,13 +690,6 @@ public:
   // (i.e. every input bit affects the output).
   llvm::MapVector<StringAttr, int32_t> getFreeVariableMasks() const;
 
-  // Increase an input dimension without affecting the output dimension.  The
-  // added free variables are mapped to 0, ensuring that the new input
-  // dimensions correspond directly to the existing output space.  The function
-  // errors out if `newInDimSize` is less than the current size or the new size
-  // is not a power of 2.
-  LinearLayout resize(StringAttr inDim, int32_t newInDimSize) const;
-
   std::string toString() const;
 
   friend bool operator==(LinearLayout lhs, LinearLayout rhs);
