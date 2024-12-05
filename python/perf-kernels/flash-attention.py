@@ -234,11 +234,12 @@ def compute_alibi_tensor(alibi_slopes, seqlen_q, seqlen_k):
 def _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stride_vk, stride_bn, start_m,
                     actual_seqlen_k, actual_seqlen_q, dropout_p, philox_seed, batch_philox_offset, encoded_sm_ptrs,
                     block_min, block_max, offs_n_causal, masked_blocks, n_extra_tokens, alibi_slope, q_descale,
-                    k_descale, v_descale, p_scale, IS_CAUSAL: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,
-                    BLOCK_N: tl.constexpr, OFFS_M: tl.constexpr, OFFS_N: tl.constexpr, PRE_LOAD_V: tl.constexpr,
-                    MASK_STEPS: tl.constexpr, ENABLE_DROPOUT: tl.constexpr, RETURN_ENCODED_SOFTMAX: tl.constexpr,
-                    PADDED_HEAD: tl.constexpr, ACTUAL_BLOCK_DMODEL: tl.constexpr, QK_SCALE: tl.constexpr,
-                    INT8_GEMM: tl.constexpr, USE_P_SCALE: tl.constexpr, USE_KV_SCALE: tl.constexpr):
+                    k_descale, v_descale, p_scale, IS_CAUSAL: tl.constexpr, BLOCK_M: tl.constexpr,
+                    BLOCK_DMODEL: tl.constexpr, BLOCK_N: tl.constexpr, OFFS_M: tl.constexpr, OFFS_N: tl.constexpr,
+                    PRE_LOAD_V: tl.constexpr, MASK_STEPS: tl.constexpr, ENABLE_DROPOUT: tl.constexpr,
+                    RETURN_ENCODED_SOFTMAX: tl.constexpr, PADDED_HEAD: tl.constexpr, ACTUAL_BLOCK_DMODEL: tl.constexpr,
+                    QK_SCALE: tl.constexpr, INT8_GEMM: tl.constexpr, USE_P_SCALE: tl.constexpr,
+                    USE_KV_SCALE: tl.constexpr):
     # loop over k, v, and update accumulator
     for start_n in range(block_min, block_max, BLOCK_N):
         # For padded blocks, we will overrun the tensor size if
@@ -437,7 +438,8 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
              ACTUAL_BLOCK_DMODEL: tl.constexpr, MAX_SEQLENS_Q: tl.constexpr, MAX_SEQLENS_K: tl.constexpr,
              VARLEN: tl.constexpr, IS_CAUSAL: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,
              BLOCK_N: tl.constexpr, PRE_LOAD_V: tl.constexpr, USE_BIAS: tl.constexpr, ENABLE_DROPOUT: tl.constexpr,
-             RETURN_ENCODED_SOFTMAX: tl.constexpr, USE_ALIBI: tl.constexpr, INT8: tl.constexpr, USE_P_SCALE: tl.constexpr, USE_KV_SCALE: tl.constexpr):
+             RETURN_ENCODED_SOFTMAX: tl.constexpr, USE_ALIBI: tl.constexpr, INT8: tl.constexpr,
+             USE_P_SCALE: tl.constexpr, USE_KV_SCALE: tl.constexpr):
     start_m = tl.program_id(0)
     off_h_q = tl.program_id(1)
     off_z = tl.program_id(2)
@@ -612,7 +614,8 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
                                         start_m, seqlen_k, seqlen_q, dropout_p, philox_seed, batch_philox_offset,
                                         encoded_sm_ptrs,
                                         # _, _, offs_n_causal, masked_blocks, n_extra_tokens, _
-                                        block_min, block_max, 0, 0, 0, alibi_slope, q_descale, k_descale, v_descale, p_scale,
+                                        block_min, block_max, 0, 0, 0, alibi_slope, q_descale, k_descale, v_descale,
+                                        p_scale,
                                         # IS_CAUSAL, ....
                                         False, BLOCK_M, BLOCK_DMODEL, BLOCK_N, offs_m, offs_n,
                                         # _, MASK_STEPS, ...
@@ -637,8 +640,8 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
         acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stride_vk, stride_bn,
                                         start_m, seqlen_k, seqlen_q, dropout_p, philox_seed, batch_philox_offset,
                                         encoded_sm_ptrs, block_min, block_max, offs_n_causal, masked_blocks,
-                                        n_extra_tokens, alibi_slope, q_descale, k_descale, v_descale, p_scale, IS_CAUSAL, BLOCK_M,
-                                        BLOCK_DMODEL, BLOCK_N, offs_m, offs_n,
+                                        n_extra_tokens, alibi_slope, q_descale, k_descale, v_descale, p_scale,
+                                        IS_CAUSAL, BLOCK_M, BLOCK_DMODEL, BLOCK_N, offs_m, offs_n,
                                         # _, MASK_STEPS, ...
                                         PRE_LOAD_V, True, ENABLE_DROPOUT, RETURN_ENCODED_SOFTMAX, PADDED_HEAD,
                                         ACTUAL_BLOCK_DMODEL, QK_SCALE, INT8_GEMM, USE_P_SCALE, USE_KV_SCALE)
@@ -1064,16 +1067,17 @@ class _attention(torch.autograd.Function):
 
         q_descale, k_descale, p_scale, p_descale, v_descale = metadata.q_descale, metadata.k_descale, metadata.p_scale, metadata.p_descale, metadata.v_descale
 
-        attn_fwd[grid](
-            q, k, v, metadata.bias, metadata.sm_scale, M, o, *q_strides, *k_strides, *v_strides, *o_strides,
-            *bias_strides, *alibi_strides, q_descale, k_descale, p_scale, p_descale, v_descale, metadata.cu_seqlens_q,
-            metadata.cu_seqlens_k, dropout_p=metadata.dropout_p, philox_seed=philox_seed,
-            philox_offset_base=philox_offset, encoded_softmax=encoded_softmax, alibi_slopes=metadata.alibi_slopes,
-            HQ=nheads_q, HK=nheads_k, ACTUAL_BLOCK_DMODEL=head_size, MAX_SEQLENS_Q=metadata.max_seqlens_q,
-            MAX_SEQLENS_K=metadata.max_seqlens_k, IS_CAUSAL=metadata.causal, VARLEN=metadata.varlen,
-            BLOCK_DMODEL=padded_d_model, USE_BIAS=False if metadata.bias is None else True,
-            USE_ALIBI=False if metadata.alibi_slopes is None else True, ENABLE_DROPOUT=metadata.dropout_p > 0.0,
-            RETURN_ENCODED_SOFTMAX=metadata.return_encoded_softmax, INT8=metadata.int8, USE_P_SCALE=metadata.use_p_scale, USE_KV_SCALE=metadata.use_kv_scale)
+        attn_fwd[grid](q, k, v, metadata.bias, metadata.sm_scale, M, o, *q_strides, *k_strides, *v_strides, *o_strides,
+                       *bias_strides, *alibi_strides, q_descale, k_descale, p_scale, p_descale, v_descale,
+                       metadata.cu_seqlens_q, metadata.cu_seqlens_k, dropout_p=metadata.dropout_p,
+                       philox_seed=philox_seed, philox_offset_base=philox_offset, encoded_softmax=encoded_softmax,
+                       alibi_slopes=metadata.alibi_slopes, HQ=nheads_q, HK=nheads_k, ACTUAL_BLOCK_DMODEL=head_size,
+                       MAX_SEQLENS_Q=metadata.max_seqlens_q, MAX_SEQLENS_K=metadata.max_seqlens_k,
+                       IS_CAUSAL=metadata.causal, VARLEN=metadata.varlen, BLOCK_DMODEL=padded_d_model,
+                       USE_BIAS=False if metadata.bias is None else True,
+                       USE_ALIBI=False if metadata.alibi_slopes is None else True, ENABLE_DROPOUT=metadata.dropout_p
+                       > 0.0, RETURN_ENCODED_SOFTMAX=metadata.return_encoded_softmax, INT8=metadata.int8,
+                       USE_P_SCALE=metadata.use_p_scale, USE_KV_SCALE=metadata.use_kv_scale)
 
         ctx.save_for_backward(q, k, v, o, M)
         ctx.grid = grid
@@ -1378,7 +1382,8 @@ def test_op_fwd_int8(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, quantize_p, layout,
 
     # Compute scores
     q_descale, k_descale, v_descale = input_metadata.q_descale, input_metadata.k_descale, input_metadata.v_descale
-    scores = (torch.einsum('bhqd,bhkd->bhqk', q_quantized.half(), k_quantized.half()) * q_descale * k_descale) * input_metadata.sm_scale
+    scores = (torch.einsum('bhqd,bhkd->bhqk', q_quantized.half(), k_quantized.half()) * q_descale *
+              k_descale) * input_metadata.sm_scale
 
     if causal:
         mask = torch.tril(torch.ones(N_CTX_Q, N_CTX_K, device="cuda"), diagonal=N_CTX_K - N_CTX_Q)
@@ -1386,7 +1391,7 @@ def test_op_fwd_int8(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, quantize_p, layout,
 
     # Quantization with tiling
     if quantize_p:
-        tile_size = best_configs.kwargs["BLOCK_N"] # We need the tiling to match Block_N to work
+        tile_size = best_configs.kwargs["BLOCK_N"]  # We need the tiling to match Block_N to work
         m_i = torch.full((Z, H, N_CTX_Q), float('-inf'), device='cuda', dtype=torch.float32)
         acc = torch.zeros((Z, H, N_CTX_Q, D_HEAD), device='cuda', dtype=torch.float32)
         l_i = torch.zeros_like(m_i)
@@ -1470,6 +1475,7 @@ def test_op_fwd_int8_kv(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, layout, dtype=to
         ref_out[nan_mask] = 0
 
     torch.testing.assert_close(ref_out, tri_out, atol=2e-2, rtol=2e-2)
+
 
 @pytest.mark.parametrize('Z, H, N_CTX_Q, N_CTX_K, D_HEAD', [
     (4, 48, 1024, 1024, 64),
