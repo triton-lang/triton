@@ -1143,12 +1143,12 @@ def reinterpret_tensor_descriptor(desc_ptr: tl.tensor, block_ty: tl.block_type, 
     return tl._experimental_tensor_descriptor_base(handle, block_ty)
 
 
-def descriptor_load(desc: tl.tensor, offsets, cache_modifier: str, eviction_policy: str,
+def descriptor_load(desc: tl.tensor, offsets, cache_modifier: str, eviction_policy: str, latency: Optional[int],
                     builder: ir.builder) -> tl.tensor:
     assert isinstance(desc, tl._experimental_tensor_descriptor_base)
     offsets = _convert_to_ir_values(builder, offsets, require_i64=False)
     x = builder.create_descriptor_load(desc.handle, offsets, _str_to_load_cache_modifier(cache_modifier),
-                                       _str_to_eviction_policy(eviction_policy))
+                                       _str_to_eviction_policy(eviction_policy), latency)
     return tl.tensor(x, desc.type)
 
 

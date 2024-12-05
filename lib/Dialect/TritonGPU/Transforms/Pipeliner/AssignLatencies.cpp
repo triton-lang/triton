@@ -183,6 +183,23 @@ loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
   return loadOpToIndLevel;
 }
 
+bool hasLatenciesAssigned(scf::ForOp forOp) {
+  for (auto &op : forOp.getBody()->without_terminator()) {
+    if (op.hasAttr("tt_latency"))
+      return true;
+  }
+  return false;
+}
+
+void assignUserProvidedLatencies(scf::ForOp forOp,
+                                 DenseMap<Operation *, int> &opLatency) {
+  for (auto &op : forOp.getBody()->without_terminator()) {
+    if (auto latencyAttr = op.getAttr("tt_latency")) {
+      opLatency[&op] = mlir::cast<IntegerAttr>(latencyAttr).getInt();
+    }
+  }
+}
+
 } // namespace
 
 // Look for load ops that directly or indirectly feed into dot ops. Based
@@ -212,6 +229,10 @@ DenseMap<Operation *, int> assignLatencies(ModuleOp moduleOp,
 
   DenseMap<Operation *, int> opLatency;
   for (auto forOp : loops) {
+    if (hasLatenciesAssigned(forOp)) {
+      assignUserProvidedLatencies(forOp, opLatency);
+      continue;
+    }
     int numStages = getNumStagesOrDefault(forOp);
     bool pipelineWithoutDot = forOp->hasAttr(mlir::triton::kNumStagesAttrName);
     ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();

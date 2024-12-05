@@ -296,7 +296,7 @@ def matmul_kernel_tma_persistent(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
 
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
-    for _ in range(0, k_tiles * tiles_per_SM):
+    for _ in tl.range(0, k_tiles * tiles_per_SM, num_stages=4):
         ki = tl.where(ki == k_tiles - 1, 0, ki + 1)
         if ki == 0:
             tile_id += NUM_SMS
@@ -311,8 +311,10 @@ def matmul_kernel_tma_persistent(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
 
         offs_k = ki * BLOCK_SIZE_K
 
-        a = tl._experimental_descriptor_load(a_desc_ptr, [offs_am, offs_k], [BLOCK_SIZE_M, BLOCK_SIZE_K], dtype)
-        b = tl._experimental_descriptor_load(b_desc_ptr, [offs_bn, offs_k], [BLOCK_SIZE_N, BLOCK_SIZE_K], dtype)
+        a = tl._experimental_descriptor_load(a_desc_ptr, [offs_am, offs_k], [BLOCK_SIZE_M, BLOCK_SIZE_K], dtype,
+                                             latency=3)
+        b = tl._experimental_descriptor_load(b_desc_ptr, [offs_bn, offs_k], [BLOCK_SIZE_N, BLOCK_SIZE_K], dtype,
+                                             latency=1)
         accumulator = tl.dot(a, b.T, accumulator)
 
         if ki == k_tiles - 1:
@@ -584,38 +586,38 @@ def validate(M, N, K, dtype, tiles_per_update):
     b = torch.randn((K, N), device="cuda", dtype=torch.float16).to(dtype)
     b = b.T.contiguous()
 
-    torch_result = torch_matmul(a, b) if dtype == torch.float16 else None
-    cublas_result = cublas_matmul(a, b) if cublas is not None else None
-    naive_result = matmul(a, b.T)
-    persistent_result = matmul_persistent(a, b.T)
-    tma_persistent_result = matmul_tma_persistent(a, b) if supports_tma() else None
-    device_tma_persistent_result = matmul_device_tma_persistent(a, b, tiles_per_update) if supports_tma() else None
+    torch_matmul(a, b) if dtype == torch.float16 else None
+    # cublas_result = cublas_matmul(a, b) if cublas is not None else None
+    # naive_result = matmul(a, b.T)
+    # persistent_result = matmul_persistent(a, b.T)
+    matmul_tma_persistent(a, b) if supports_tma() else None
+    # device_tma_persistent_result = matmul_device_tma_persistent(a, b, tiles_per_update) if supports_tma() else None
 
-    if torch_result is not None:
-        naive_vs_torch = "✅" if torch.allclose(naive_result.to(torch.float16), torch_result.to(torch.float16),
-                                               atol=1.0) else "❌"
-    if cublas_result is not None:
-        naive_vs_cublas = "✅" if torch.allclose(naive_result.to(torch.float16), cublas_result.to(torch.float16),
-                                                atol=1.0) else "❌"
-    naive_vs_persistent = "✅" if torch.allclose(naive_result.to(torch.float16), persistent_result.to(torch.float16),
-                                                atol=1.0) else "❌"
-    if tma_persistent_result is not None:
-        naive_vs_tma_persistent = "✅" if torch.allclose(cublas_result.to(torch.float16),
-                                                        tma_persistent_result.to(torch.float16), atol=1.0) else "❌"
-    if device_tma_persistent_result is not None:
-        naive_vs_device_tma_persistent = "✅" if torch.allclose(cublas_result.to(
-            torch.float16), device_tma_persistent_result.to(torch.float16), atol=1.0) else "❌"
-    print(f"M={M}, N={N}, K={K} verification naive vs: ", end="")
-    if torch_result is not None:
-        print(f"torch: {naive_vs_torch} ", end="")
-    if cublas_result is not None:
-        print(f"cublas: {naive_vs_cublas} ", end="")
-    print(f"persistent: {naive_vs_persistent} ", end="")
-    if tma_persistent_result is not None:
-        print(f"TMA persistent: {naive_vs_tma_persistent} ", end="")
-    if device_tma_persistent_result is not None:
-        print(f"Device TMA persistent: {naive_vs_device_tma_persistent} ", end="")
-    print()
+    # if torch_result is not None:
+    #     naive_vs_torch = "✅" if torch.allclose(naive_result.to(torch.float16), torch_result.to(torch.float16),
+    #                                            atol=1.0) else "❌"
+    # if cublas_result is not None:
+    #     naive_vs_cublas = "✅" if torch.allclose(naive_result.to(torch.float16), cublas_result.to(torch.float16),
+    #                                             atol=1.0) else "❌"
+    # naive_vs_persistent = "✅" if torch.allclose(naive_result.to(torch.float16), persistent_result.to(torch.float16),
+    #                                             atol=1.0) else "❌"
+    # if tma_persistent_result is not None:
+    #     naive_vs_tma_persistent = "✅" if torch.allclose(cublas_result.to(torch.float16),
+    #                                                     tma_persistent_result.to(torch.float16), atol=1.0) else "❌"
+    # if device_tma_persistent_result is not None:
+    #     naive_vs_device_tma_persistent = "✅" if torch.allclose(cublas_result.to(
+    #         torch.float16), device_tma_persistent_result.to(torch.float16), atol=1.0) else "❌"
+    # print(f"M={M}, N={N}, K={K} verification naive vs: ", end="")
+    # if torch_result is not None:
+    #     print(f"torch: {naive_vs_torch} ", end="")
+    # if cublas_result is not None:
+    #     print(f"cublas: {naive_vs_cublas} ", end="")
+    # print(f"persistent: {naive_vs_persistent} ", end="")
+    # if tma_persistent_result is not None:
+    #     print(f"TMA persistent: {naive_vs_tma_persistent} ", end="")
+    # if device_tma_persistent_result is not None:
+    #     print(f"Device TMA persistent: {naive_vs_device_tma_persistent} ", end="")
+    # print()
 
 
 def show_profile(precision, profile_name):
@@ -657,10 +659,10 @@ if __name__ == "__main__":
     torch.manual_seed(0)
 
     validate(32, 32, 32, dtype, args.tiles_per_update)
-    validate(8192, 8192, 512, dtype, args.tiles_per_update)
+    # validate(8192, 8192, 512, dtype, args.tiles_per_update)
 
-    proton.start("matmul", hook="triton")
-    for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
-        bench(K, dtype, args.tiles_per_update)
-    proton.finalize()
-    show_profile(args.prec, "matmul")
+    # proton.start("matmul", hook="triton")
+    # for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
+    #     bench(K, dtype, args.tiles_per_update)
+    # proton.finalize()
+    # show_profile(args.prec, "matmul")

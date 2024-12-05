@@ -1177,14 +1177,14 @@ class _experimental_tensor_descriptor_base(_value):
         return f"tensor_descriptor<{self.type}>"
 
     @builtin
-    def load(self, offsets: List[tensor], _builder=None) -> tensor:
+    def load(self, offsets: List[tensor], latency=None, _builder=None) -> tensor:
         """Load a block from the descriptor starting at the given element offsets.
 
         Values outside of the tensor bounds will be filled with zeros.
 
         :note: Offset must be a multiple of 16-bytes
         """
-        return semantic.descriptor_load(self, offsets, "", "", _builder)
+        return semantic.descriptor_load(self, offsets, "", "", latency, _builder)
 
     @builtin
     def store(self, offsets: List[tensor], value: tensor, _builder=None) -> tensor:
@@ -1744,7 +1744,7 @@ def _experimental_reinterpret_tensor_descriptor(desc_ptr, block_shape, dtype,
 
 
 @builtin
-def _experimental_descriptor_load(desc_pointer, offsets, shape, dtype, _builder=None):
+def _experimental_descriptor_load(desc_pointer, offsets, shape, dtype, latency=None, _builder=None):
     """
     Experimental feature to access TMA descriptors loads. This is an escape hatch to easily exercise TTGIR operations.
     This will be removed in the future and shouldn't be used in production code.
@@ -1752,7 +1752,7 @@ def _experimental_descriptor_load(desc_pointer, offsets, shape, dtype, _builder=
     This loads a tensor of data based on the descriptor and offsets.
     """
     desc = _experimental_reinterpret_tensor_descriptor(desc_pointer, shape, dtype, _builder=_builder)
-    return desc.load(offsets, _builder=_builder)
+    return desc.load(offsets, latency, _builder=_builder)
 
 
 @builtin
