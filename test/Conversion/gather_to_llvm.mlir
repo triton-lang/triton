@@ -8,6 +8,8 @@
 
 #trivial_2d_one_col = #ttg.linear<{register = [[0, 1]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [], block = []}>
 
+#span_2d_cols = #ttg.linear<{register = [[1, 0]], lane = [[2, 0], [4, 0], [8, 0], [16, 0], [0, 1]], warp = [], block = []}>
+
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
 
 // Each source element is mapped to a single thread, so we expect one index shuffle.
@@ -132,6 +134,59 @@ tt.func private @gather_2d_trivial(%arg0: tensor<32x2xi32, #trivial_2d_one_col>,
   tt.return %0 : tensor<32x2xf32, #trivial_2d_one_col>
 }
 
+// The single warp is split into two columns. Each column has half contiguous
+// threads, each with 2 contiguous elements. Expect 4 index shuffles: two per
+// column. Thus, the index should be dependent on the thread id, since the
+// register alone is not enough to determine the column.
+// CHECK-LABEL: @gather_2d_span_2
+tt.func private @gather_2d_span_2(%arg0: tensor<32x2xi32, #span_2d_cols>, %arg1: tensor<32x2xf32, #span_2d_cols>) -> tensor<32x2xf32, #span_2d_cols> {
+  // CHECK-NEXT: [[SRC0:%.*]] = extractvalue { float, float } %1, 0
+  // CHECK-NEXT: [[SRC1:%.*]] = extractvalue { float, float } %1, 1
+  // CHECK-NEXT: [[IDX0:%.*]] = extractvalue { i32, i32 } %0, 0
+  // CHECK-NEXT: [[IDX1:%.*]] = extractvalue { i32, i32 } %0, 1
+
+  // This uses tid to select between the two columns:
+  // CHECK-NEXT: [[TID:%.*]] = tail call i32 @llvm.nvvm.read.ptx.sreg.tid.x()
+  // CHECK-NEXT: [[COL:%.*]] = and i32 [[TID]], 16
+
+  // Break the index into reg and thread (within column) components:
+  // CHECK-NEXT: [[REGID0:%.*]] = and i32 [[IDX0]], 1
+  // CHECK-NEXT: [[TMP:%.*]] = lshr i32 [[IDX0]], 1
+  // CHECK-NEXT: [[LANEID0:%.*]] = and i32 [[TMP]], 15
+
+  // CHECK-NEXT: [[SHUFFLE_IDX:%.*]] = or disjoint i32 [[LANEID0]], [[COL]]
+
+  // CHECK-NEXT: [[VALUE0:%.*]] = bitcast float [[SRC0]] to i32
+  // CHECK-NEXT: [[SRES0:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.idx.i32(i32 -1, i32 [[VALUE0]], i32 [[SHUFFLE_IDX]], i32 31)
+  // CHECK-NEXT: [[VALUE1:%.*]] = bitcast float [[SRC1]] to i32
+  // CHECK-NEXT: [[SRES1:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.idx.i32(i32 -1, i32 [[VALUE1]], i32 [[SHUFFLE_IDX]], i32 31)
+
+  // Use the reg id to select between the two results:
+  // CHECK-NEXT: [[PICK0:%.*]] = icmp eq i32 [[REGID0]], 0
+  // CHECK-NEXT: [[RES0_i32:%.*]] = select i1 [[PICK0]], i32 [[SRES0]], i32 [[SRES1]]
+  // CHECK-NEXT: [[RES0:%.*]] = bitcast i32 [[RES0_i32]] to float
+
+  // CHECK-NEXT: [[REGID1:%.*]] = and i32 [[IDX1]], 1
+  // CHECK-NEXT: [[TMP:%.*]] = lshr i32 [[IDX1]], 1
+  // CHECK-NEXT: [[LANEID1:%.*]] = and i32 [[TMP]], 15
+
+  // CHECK-NEXT: [[SHUFFLE_IDX:%.*]] = or disjoint i32 [[LANEID1]], [[COL]]
+
+  // CHECK-NEXT: [[SRES0:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.idx.i32(i32 -1, i32 [[VALUE0]], i32 [[SHUFFLE_IDX]], i32 31)
+  // CHECK-NEXT: [[SRES1:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.idx.i32(i32 -1, i32 [[VALUE1]], i32 [[SHUFFLE_IDX]], i32 31)
+
+  // CHECK-NEXT: [[PICK0:%.*]] = icmp eq i32 [[REGID1]], 0
+  // CHECK-NEXT: [[RES1_i32:%.*]] = select i1 [[PICK0]], i32 [[SRES0]], i32 [[SRES1]]
+  // CHECK-NEXT: [[RES1:%.*]] = bitcast i32 [[RES1_i32]] to float
+
+  %0 = tt.gather %arg1[%arg0] {axis = 0 : i32} : (tensor<32x2xf32, #span_2d_cols>, tensor<32x2xi32, #span_2d_cols>) -> tensor<32x2xf32, #span_2d_cols>
+
+  // CHECK-NEXT: [[PACKED0:%.*]] = insertvalue { float, float } undef, float [[RES0]], 0
+  // CHECK-NEXT: [[PACKED1:%.*]] = insertvalue { float, float } [[PACKED0]], float [[RES1]], 1
+  // CHECK-NEXT: ret { float, float } [[PACKED1]]
+  tt.return %0 : tensor<32x2xf32, #span_2d_cols>
+}
+
 // Keep LLVM from DCE'ing the above functions. Use volatile stores to stop LLVM
 // from removing unused function results.
 tt.func @anchor(%ptr: !llvm.ptr,
@@ -141,7 +196,10 @@ tt.func @anchor(%ptr: !llvm.ptr,
     %arg3: tensor<64xf32, #trivial_layout_wider>,
     %arg4: tensor<64xf32, #trivial_layout_wider_reg_stride_1>,
     %arg5: tensor<32x2xi32, #trivial_2d_one_col>,
-    %arg6: tensor<32x2xf32, #trivial_2d_one_col>) {
+    %arg6: tensor<32x2xf32, #trivial_2d_one_col>,
+    %arg7: tensor<32x2xi32, #span_2d_cols>,
+    %arg8: tensor<32x2xf32, #span_2d_cols>) {
+
   %0 = tt.call @gather_warp_local_trivial(%arg0, %arg1) : (tensor<32xi32, #trivial_layout>, tensor<32xf32, #trivial_layout>) -> tensor<32xf32, #trivial_layout>
   %1 = builtin.unrealized_conversion_cast %0 : tensor<32xf32, #trivial_layout> to !llvm.struct<(f32)>
   llvm.store volatile %1, %ptr : !llvm.struct<(f32)>, !llvm.ptr
@@ -161,6 +219,10 @@ tt.func @anchor(%ptr: !llvm.ptr,
   %8 = tt.call @gather_2d_trivial(%arg5, %arg6) : (tensor<32x2xi32, #trivial_2d_one_col>, tensor<32x2xf32, #trivial_2d_one_col>) -> tensor<32x2xf32, #trivial_2d_one_col>
   %9 = builtin.unrealized_conversion_cast %8 : tensor<32x2xf32, #trivial_2d_one_col> to !llvm.struct<(f32, f32)>
   llvm.store volatile %9, %ptr : !llvm.struct<(f32, f32)>, !llvm.ptr
+
+  %10 = tt.call @gather_2d_span_2(%arg7, %arg8) : (tensor<32x2xi32, #span_2d_cols>, tensor<32x2xf32, #span_2d_cols>) -> tensor<32x2xf32, #span_2d_cols>
+  %11 = builtin.unrealized_conversion_cast %10 : tensor<32x2xf32, #span_2d_cols> to !llvm.struct<(f32, f32)>
+  llvm.store volatile %11, %ptr : !llvm.struct<(f32, f32)>, !llvm.ptr
 
   tt.return
 }
