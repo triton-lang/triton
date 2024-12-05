@@ -13,6 +13,20 @@ namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 
+bool mlir::triton::loopHasDistGreaterThanOne(scf::ForOp forOp) {
+  return llvm::any_of(forOp.getBody()->getTerminator()->getOperands(),
+                      [](Value operand) {
+                        Operation *def = operand.getDefiningOp();
+                        return !def;
+                      });
+}
+
+bool mlir::triton::isOuterLoop(scf::ForOp forOp) {
+  return llvm::any_of(forOp.getBody()->getOperations(), [](Operation &op) {
+    return isa<scf::ForOp, scf::WhileOp>(op);
+  });
+}
+
 // Combine the current mask with the given predicate.
 static Value getPredMask(RewriterBase &rewriter, Type typeLike,
                          Value currentMask, Value pred) {

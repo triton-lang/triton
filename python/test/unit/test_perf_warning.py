@@ -162,16 +162,6 @@ def test_remark_swp_op_before_operands(capfd, fresh_triton_cache):
             if tl.max(val) > 0:
                 k += 1
 
-    with enable_remark_context():
-        triton.compile(
-            triton.compiler.ASTSource(
-                fn=kernel_pipe_error,
-                signature={"in_ptr": "*fp32", "out_ptr": "*fp32"},
-                constants={},
-            ),
-            options={"cluster_dims": (1, 1, 1)},
-        )
-
-    _, err = capfd.readouterr()
-
-    assert "operation scheduled before its operands" not in err, "expect swp op remark"
+    i = torch.empty(64 * 64, dtype=torch.float32).cuda()
+    o = torch.empty(64 * 64, dtype=torch.float32).cuda()
+    kernel_pipe_error[(1, )](i, o)

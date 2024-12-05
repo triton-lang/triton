@@ -37,22 +37,10 @@ namespace gpu {
 static bool preCondition(scf::ForOp forOp) {
   // Skip loop with distance > 1 for now.
   // TODO: relax the constraint in the expander.
-  if (llvm::any_of(forOp.getBody()->getTerminator()->getOperands(),
-                   [](Value operand) {
-                     Operation *def = operand.getDefiningOp();
-                     return !def;
-                   }))
+  if (loopHasDistGreaterThanOne(forOp))
     return false;
   // Don't pipeline outer loops.
-  if (forOp
-          ->walk([&](Operation *op) {
-            if (forOp.getOperation() == op)
-              return WalkResult::advance();
-            if (isa<scf::ForOp, scf::WhileOp>(op))
-              return WalkResult::interrupt();
-            return WalkResult::advance();
-          })
-          .wasInterrupted())
+  if (isOuterLoop(forOp))
     return false;
   return true;
 }
