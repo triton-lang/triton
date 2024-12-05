@@ -747,39 +747,6 @@ TEST_F(LinearLayoutTest, QuotientIdentityMultipleDimensions) {
   ASSERT_TRUE(quotientLayout->quotient({S("dim2")}).has_value());
 }
 
-TEST_F(LinearLayoutTest, Resize) {
-  auto init = LinearLayout(
-      {
-          {S("in0"), {{0, 1}, {0, 2}}},
-          {S("in1"), {{1, 0}, {2, 0}}},
-          {S("in2"), {}},
-      },
-      {S("dim0"), S("dim1")});
-  EXPECT_EQ(init.resize(S("in0"), 8),
-            LinearLayout(
-                {
-                    {S("in0"), {{0, 1}, {0, 2}, {0, 0}}},
-                    {S("in1"), {{1, 0}, {2, 0}}},
-                    {S("in2"), {}},
-                },
-                {S("dim0"), S("dim1")}));
-  EXPECT_EQ(init.resize(S("in0"), 4), LinearLayout(
-                                          {
-                                              {S("in0"), {{0, 1}, {0, 2}}},
-                                              {S("in1"), {{1, 0}, {2, 0}}},
-                                              {S("in2"), {}},
-                                          },
-                                          {S("dim0"), S("dim1")}));
-  EXPECT_EQ(init.resize(S("in1"), 8),
-            LinearLayout(
-                {
-                    {S("in0"), {{0, 1}, {0, 2}}},
-                    {S("in1"), {{1, 0}, {2, 0}, {0, 0}}},
-                    {S("in2"), {}},
-                },
-                {S("dim0"), S("dim1")}));
-}
-
 } // anonymous namespace
 } // namespace mlir::triton
 
