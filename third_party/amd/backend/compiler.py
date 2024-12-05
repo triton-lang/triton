@@ -218,9 +218,12 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_remove_layout_conversions(pm)
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
-        amd.passes.ttgpuir.add_tritongpu_bypass_lds_for_dot_operand(pm)
 
         stream_prefetch = os.getenv("TRITON_HIP_STREAM_PREFETCH", "0") == "1"
+        bypass_lds = os.environ.get("AMDGCN_BYPASS_LDS_FOR_DOT", "0") == "1"
+
+        if bypass_lds:
+            amd.passes.ttgpuir.add_tritongpu_bypass_lds_for_dot_operand(pm)
 
         # The `local-prefetch` scheduling variant requires turning on buffer ops.
         if options.instruction_sched_variant == "local-prefetch":

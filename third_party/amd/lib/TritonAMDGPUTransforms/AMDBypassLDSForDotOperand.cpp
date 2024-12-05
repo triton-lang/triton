@@ -57,11 +57,11 @@
 //
 // The required conditions are:
 //
-// 1. K-Major (K dimension is continuous) Tensor Layout :
-//    The operand we want to bypass LDS for must be K-major (i.e., row-major for
-//    operand 0 or column-major for operand 1). This supports vectorized global
-//    load instructions, as MFMA instructions require each thread to hold B
-//    operand elements along the K dimension.
+// 1. K-Contig (K dimension is continuous) Tensor Layout :
+//    The operand we want to bypass LDS for must be K-contig (i.e., row-major
+//    for operand 0 or column-major for operand 1). This supports vectorized
+//    global load instructions, as MFMA instructions require each thread to hold
+//    B operand elements along the K dimension.
 //
 // 2. kWidth * sizeof(dataType) == 128:
 //    Using the maximum kWidth for a specific data type ensures optimal global
@@ -79,9 +79,6 @@
 //
 // 1. Support is limited to bypassing LDS for operand 1 (e.g., weights in
 //    MoE-like kernels). Bypassing for operand 0 is not yet implemented.
-//
-// 2. LDS bypass is only supported for the fp16 data type due to the
-//    kWidth == 8 condition. Other data types will be supported in the future.
 //===----------------------------------------------------------------------===//
 
 using namespace mlir;
@@ -89,18 +86,31 @@ namespace ttg = triton::gpu;
 
 // Find all tt.load instructions that are involved in computation of a tensor
 // for operand that is getting converted to dot layout.
-SmallVector<triton::LoadOp> getAllLoadOpsReachingOp(Operation *op,
-                                                    ModuleOp &mod) {
+SmallVector<triton::LoadOp> getAllLoadOpsReachingOp(Operation *op) {
   SmallVector<triton::LoadOp> loadOpsVec;
+  SetVector<Operation *> visited;
+  SmallVector<Operation *> worklist;
+  worklist.push_back(op);
 
-  mod.walk([&](triton::LoadOp loadOp) {
-    SetVector<Operation *> forwardSlices;
-    getForwardSlice((Operation *)loadOp, &forwardSlices);
-    if (std::find(forwardSlices.begin(), forwardSlices.end(), op) !=
-        forwardSlices.end()) {
-      loadOpsVec.push_back(loadOp);
+  // Traverse the use-def chain
+  while (!worklist.empty()) {
+    Operation *currentOp = worklist.pop_back_val();
+    if (visited.contains(currentOp))
+      continue;
+    visited.insert(currentOp);
+
+    for (Value operand : currentOp->getOperands()) {
+      Operation *definingOp = operand.getDefiningOp();
+      if (!definingOp)
+        continue;
+
+      if (auto loadOp = dyn_cast<triton::LoadOp>(definingOp)) {
+        loadOpsVec.push_back(loadOp);
+      }
+
+      worklist.push_back(definingOp);
     }
-  });
+  }
 
   return loadOpsVec;
 }
@@ -115,10 +125,8 @@ struct TritonAMDGPUBypassLDSForDotOperandPass
     ModuleOp module = getOperation();
     auto convertOps = collectConvertOps(module);
 
-    module.dump();
-
     for (ttg::ConvertLayoutOp &convertOp : convertOps) {
-      auto loadInsts = getAllLoadOpsReachingOp(convertOp, module);
+      auto loadInsts = getAllLoadOpsReachingOp(convertOp);
       assert(!loadInsts.empty());
 
       // Convert load instructions to dot layout.
@@ -126,7 +134,7 @@ struct TritonAMDGPUBypassLDSForDotOperandPass
         auto loadType =
             dyn_cast<RankedTensorType>(loadInst.getResult().getType());
         if (!loadType)
-          return;
+          continue;
 
         auto dstType = llvm::cast<RankedTensorType>(convertOp.getType());
         auto dstDotOp =
@@ -153,7 +161,7 @@ struct TritonAMDGPUBypassLDSForDotOperandPass
     auto srcType = dyn_cast<RankedTensorType>(convertOp.getOperand().getType());
     auto dstType = dyn_cast<RankedTensorType>(convertOp.getType());
 
-    if (!srcType || !dstType || srcType.getShape().size() != 2)
+    if (!srcType || !dstType)
       return false;
 
     auto srcBlocked = dyn_cast<ttg::BlockedEncodingAttr>(srcType.getEncoding());
@@ -165,7 +173,8 @@ struct TritonAMDGPUBypassLDSForDotOperandPass
     // srcBlocked.getOrder[0] == 0 is the requirement for opIdx 1 tensor to be K
     // major (required condition 1) from the above doc).
     auto mfmaLayout = dyn_cast<ttg::AMDMfmaEncodingAttr>(dstDotOp.getParent());
-    return mfmaLayout && dstDotOp.getKWidth() == 8 &&
+    return mfmaLayout &&
+           (dstDotOp.getKWidth() == 8 || dstDotOp.getKWidth() == 16) &&
            mfmaLayout.getWarpsPerCTA()[0] == 1 && dstDotOp.getOpIdx() == 1 &&
            srcBlocked.getOrder()[0] == 0;
   }
