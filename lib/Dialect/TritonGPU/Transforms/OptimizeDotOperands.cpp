@@ -259,30 +259,25 @@ public:
     SetVector<Operation *> slice;
     BackwardSliceOptions opt;
     opt.omitBlockArguments = true;
-    // TODO(jlebar): Is this filter redundant with omitBlockArguments == true?
-    // That is, is it possible to get into a different region without going
-    // through a block argument?
-    opt.filter = [&](Operation *op) {
-      return op->getParentRegion() == cvt->getParentRegion();
-    };
     getBackwardSlice(cvt.getOperation(), &slice, opt);
 
-    // TODO(jlebar): This is too conservative when there are multiple loads in
-    // the chain (e.g. cvt(load(x) + load(y))).  The intent is to check that all
-    // of the ops between the loads and the convert are elementwise.  But
-    // actually we set foundLoad = true once we see the first load, and so we
-    // will reject the chain if the *second* load we encounter uses a
-    // non-elementwise op to calculate its pointers.
-    bool foundLoad = false;
+    // TODO(jlebar): This is too conservative when there are multiple
+    // initializers in the chain (e.g. cvt(load(x) + load(y))).  The intent is
+    // to check that all of the ops between the initializer and the convert are
+    // elementwise.  But actually we set foundInitializer = true once we see the
+    // first initializer, and so we will reject the chain if the *second*
+    // initializer we encounter uses a non-elementwise op to calculate its
+    // pointers.
+    bool foundInitializer = false;
     for (Operation *currOp : slice) {
-      if (isa<LoadOp>(currOp)) {
-        foundLoad = true;
-      } else if (foundLoad) {
+      if (isa<LoadOp>(currOp) || isa<arith::ConstantOp>(currOp)) {
+        foundInitializer = true;
+      } else if (foundInitializer) {
         if (!canHoistDotOpEncV2(currOp, dotOpEnc))
           return failure();
       }
     }
-    if (!foundLoad)
+    if (!foundInitializer)
       return failure();
 
     SmallVector<ConvertLayoutOp> newOperands;
