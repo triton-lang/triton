@@ -209,7 +209,7 @@ LinearLayout sharedToLinearLayoutNoLeadingOffset(ArrayRef<int64_t> shape,
     // AMD special swizzling for K-major matrix. We switch up swizzling pattern
     // every perPhase*maxPhase rows to reduce write bank conflict
     if (inThreadTranspose) {
-      phase = (phase ^ row / maxPhase / perPhase) % maxPhase;
+      phase = (phase ^ (row / maxPhase / perPhase)) % maxPhase;
     }
     bases2D.push_back({row, (vec * phase) % numCols});
   }

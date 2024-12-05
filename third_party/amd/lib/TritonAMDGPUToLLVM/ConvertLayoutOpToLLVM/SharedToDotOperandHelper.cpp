@@ -42,14 +42,12 @@ swizzleIndexes(ConversionPatternRewriter &rewriter, Location loc, Value row,
   // colOffOrdered = col % vec
   // colOff = colOffSwizzled + colOffOrdered
   auto phase = urem(udiv(row, perPhase), maxPhase);
-  mlir::LLVM::MulOp colOffSwizzled;
   if (inThreadTranspose) {
     // phase = (phase + row / maxPhase / perPhase) % maxPhase;
     auto rotation = udiv(row, mul(perPhase, maxPhase));
-    colOffSwizzled = mul(xor_(udiv(col, vec), xor_(phase, rotation)), vec);
-  } else {
-    colOffSwizzled = mul(xor_(udiv(col, vec), phase), vec);
+    phase = urem(xor_(phase, rotation), maxPhase);
   }
+  auto colOffSwizzled = mul(xor_(udiv(col, vec), phase), vec);
   auto colOffOrdered = urem(col, vec);
   auto colOff = add(colOffSwizzled, colOffOrdered);
 

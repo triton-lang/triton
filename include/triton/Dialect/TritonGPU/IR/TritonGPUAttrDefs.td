@@ -309,7 +309,8 @@ compared to 1*64 when the hasLeadingOffset is false.
             SmallVector<unsigned int> newOrder(order);
             std::swap(newOrder[0], newOrder[1]);
             // set inThreadTranspose to true since we want to use special swizzling
-            return $_get(context, vecSize, perPhase, maxPhase, newOrder, CTALayout, false, true);
+            bool inThreadTranspose = dotOpEnc.getOpIdx() == 0 ? false : true;
+            return $_get(context, vecSize, perPhase, maxPhase, newOrder, CTALayout, false, inThreadTranspose);
           }
         }
 
