@@ -69,7 +69,6 @@ class MetaData():
         self.p_descale = p_descale
         self.use_p_scale = (p_scale is not None) and (p_descale is not None) and (v_descale is not None)
         self.use_kv_scale = (q_descale is None) and (k_descale is not None) and (v_descale is not None)
-        assert not (self.use_p_scale and self.use_kv_scale)
 
     def need_bias(self, bias, batch, nheads, seqlen_q, seqlen_k):
         assert bias.is_cuda
@@ -239,7 +238,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stri
                     BLOCK_N: tl.constexpr, OFFS_M: tl.constexpr, OFFS_N: tl.constexpr, PRE_LOAD_V: tl.constexpr,
                     MASK_STEPS: tl.constexpr, ENABLE_DROPOUT: tl.constexpr, RETURN_ENCODED_SOFTMAX: tl.constexpr,
                     PADDED_HEAD: tl.constexpr, ACTUAL_BLOCK_DMODEL: tl.constexpr, QK_SCALE: tl.constexpr,
-                    INT8: tl.constexpr, USE_P_SCALE: tl.constexpr, USE_KV_SCALE: tl.constexpr):
+                    INT8_GEMM: tl.constexpr, USE_P_SCALE: tl.constexpr, USE_KV_SCALE: tl.constexpr):
     # loop over k, v, and update accumulator
     for start_n in range(block_min, block_max, BLOCK_N):
         # For padded blocks, we will overrun the tensor size if
@@ -274,7 +273,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stri
             qk = tl.where(causal_mask, qk, float("-inf"))
         # -- compute qk ----
 
-        if INT8 and not USE_KV_SCALE:
+        if INT8_GEMM:
             qk += ((((tl.dot(q, k) * q_descale)) * k_descale) * QK_SCALE).to(tl.float32)
         else:
             if USE_KV_SCALE:
@@ -322,7 +321,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stri
         # update m_i and l_i
         m_i = m_ij
 
-        if INT8 and not USE_KV_SCALE:
+        if INT8_GEMM:
             if USE_P_SCALE:
                 p = (p * p_scale).to(tl.int8)
                 # They are all int8
@@ -438,8 +437,7 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
              ACTUAL_BLOCK_DMODEL: tl.constexpr, MAX_SEQLENS_Q: tl.constexpr, MAX_SEQLENS_K: tl.constexpr,
              VARLEN: tl.constexpr, IS_CAUSAL: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,
              BLOCK_N: tl.constexpr, PRE_LOAD_V: tl.constexpr, USE_BIAS: tl.constexpr, ENABLE_DROPOUT: tl.constexpr,
-             RETURN_ENCODED_SOFTMAX: tl.constexpr, USE_ALIBI: tl.constexpr, INT8: tl.constexpr,
-             USE_P_SCALE: tl.constexpr, USE_KV_SCALE: tl.constexpr):
+             RETURN_ENCODED_SOFTMAX: tl.constexpr, USE_ALIBI: tl.constexpr, INT8: tl.constexpr, USE_P_SCALE: tl.constexpr, USE_KV_SCALE: tl.constexpr):
     start_m = tl.program_id(0)
     off_h_q = tl.program_id(1)
     off_z = tl.program_id(2)
@@ -522,11 +520,13 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
     v_offset = V + off_z * stride_vz + off_h_k * stride_vh + cu_seqlens_k_start * stride_vk
     v_ptrs = v_offset + offs_n[:, None] * stride_vk + offs_d[None, :] * stride_vn
     # Compute pointers for all the scale tensors used in this kernel.
+
+    INT8_GEMM: tl.constexpr = INT8 & (not USE_KV_SCALE)
     if INT8:
-        if not USE_KV_SCALE:
-            q_descale_ptrs = Q_descale + off_h_q
         k_descale_ptrs = K_descale + off_h_k
         v_descale_ptrs = V_descale + off_h_k
+        if not USE_KV_SCALE:
+            q_descale_ptrs = Q_descale + off_h_q
         if USE_P_SCALE:
             p_scale_ptrs = P_scale + off_h_q
             p_descale_ptrs = P_descale + off_h_q
@@ -570,12 +570,12 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
     q = tl.load(q_ptrs, mask=q_ptrs_mask, other=0.0)
 
     if INT8:
+        k_descale = tl.load(k_descale_ptrs)
+        v_descale = tl.load(v_descale_ptrs)
         if not USE_KV_SCALE:
             q_descale = tl.load(q_descale_ptrs)
         else:
             q_descale = None
-        k_descale = tl.load(k_descale_ptrs)
-        v_descale = tl.load(v_descale_ptrs)
         if USE_P_SCALE:
             p_scale = tl.load(p_scale_ptrs)
             p_descale = tl.load(p_descale_ptrs)
@@ -617,7 +617,7 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
                                         False, BLOCK_M, BLOCK_DMODEL, BLOCK_N, offs_m, offs_n,
                                         # _, MASK_STEPS, ...
                                         PRE_LOAD_V, False, ENABLE_DROPOUT, RETURN_ENCODED_SOFTMAX, PADDED_HEAD,
-                                        ACTUAL_BLOCK_DMODEL, QK_SCALE, INT8, USE_P_SCALE, USE_KV_SCALE)
+                                        ACTUAL_BLOCK_DMODEL, QK_SCALE, INT8_GEMM, USE_P_SCALE, USE_KV_SCALE)
         block_min = block_max
         block_max = n_blocks * BLOCK_N
 
@@ -641,7 +641,7 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
                                         BLOCK_DMODEL, BLOCK_N, offs_m, offs_n,
                                         # _, MASK_STEPS, ...
                                         PRE_LOAD_V, True, ENABLE_DROPOUT, RETURN_ENCODED_SOFTMAX, PADDED_HEAD,
-                                        ACTUAL_BLOCK_DMODEL, QK_SCALE, INT8, USE_P_SCALE, USE_KV_SCALE)
+                                        ACTUAL_BLOCK_DMODEL, QK_SCALE, INT8_GEMM, USE_P_SCALE, USE_KV_SCALE)
 
     if INT8 and not USE_KV_SCALE:
         if USE_P_SCALE:
