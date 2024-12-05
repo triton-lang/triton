@@ -1388,67 +1388,6 @@ inline Value getStructFromSharedMemoryObject(Location loc,
   return llvmStruct;
 }
 
-// For some reasons, LLVM's NVPTX backend inserts unnecessary (?) integer
-// instructions to pack & unpack sub-word integers.  A workaround is to
-// store the results of tensors with dot operand encodings in i32 to
-// facilitate instructions such as `ldmatrix`.
-//
-// TODO: Confirm if the problem is still there.
-inline bool requiresI32Conversion(Type type) {
-  auto tensorTy = dyn_cast<RankedTensorType>(type);
-  if (!tensorTy)
-    return false;
-  auto dotOpEnc = dyn_cast<DotOperandEncodingAttr>(tensorTy.getEncoding());
-  if (!dotOpEnc)
-    return false;
-  auto parent = dyn_cast<NvidiaMmaEncodingAttr>(dotOpEnc.getParent());
-  if (!(parent && parent.getVersionMajor() < 3))
-    return false;
-  return true;
-}
-
-inline SmallVector<Value> packI32s(const SmallVector<Value> &inValues,
-                                   Type type, RewriterBase &rewriter,
-                                   Location loc,
-                                   const LLVMTypeConverter *typeConverter) {
-  if (!requiresI32Conversion(type))
-    return inValues;
-  Type eltTy =
-      typeConverter->convertType(cast<RankedTensorType>(type).getElementType());
-
-  SmallVector<Value> outValues;
-  int vecWidth = 32 / eltTy.getIntOrFloatBitWidth();
-  auto vecTy = vec_ty(eltTy, vecWidth);
-  for (int i = 0; i < inValues.size(); i += vecWidth) {
-    Value vec = undef(vecTy);
-    for (int j = 0; j < vecWidth; j++) {
-      vec = insert_element(vec, inValues[i + j], i32_val(j));
-    }
-    outValues.push_back(bitcast(vec, i32_ty));
-  }
-  return outValues;
-}
-
-inline SmallVector<Value> unpackI32s(const SmallVector<Value> &inValues,
-                                     Type type, RewriterBase &rewriter,
-                                     Location loc,
-                                     const LLVMTypeConverter *typeConverter) {
-  if (!requiresI32Conversion(type))
-    return inValues;
-  Type eltTy =
-      typeConverter->convertType(cast<RankedTensorType>(type).getElementType());
-
-  SmallVector<Value> outValues;
-  for (auto v : inValues) {
-    auto vecTy = vec_ty(eltTy, 32 / eltTy.getIntOrFloatBitWidth());
-    auto vec = bitcast(v, vecTy);
-    for (int i = 0; i < 32 / eltTy.getIntOrFloatBitWidth(); i++) {
-      outValues.push_back(extract_element(vec, i32_val(i)));
-    }
-  }
-  return outValues;
-}
-
 inline SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
                                            RewriterBase &rewriter) {
   assert(bool(llvmStruct) && "can not unpack null values");
