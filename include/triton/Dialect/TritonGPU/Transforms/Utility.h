@@ -206,7 +206,8 @@ MMALoadType getMMALoadType(Operation *loadOp);
 // Returns composed LinearLayout for register to shared copy
 std::optional<triton::LinearLayout>
 getRegToSharedLayout(MLIRContext *ctx, ArrayRef<int64_t> shape,
-                     Attribute srcEnc, Attribute dstEnc, int elemBitWidth);
+                     Attribute srcEnc, Attribute dstEnc, int elemBitWidth,
+                     bool inThreadTranspose);
 } // namespace mlir
 
 #endif // TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_
