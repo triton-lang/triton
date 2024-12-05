@@ -113,7 +113,7 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
   Attribute srcLayout = srcTy.getEncoding();
   Attribute dstLayout = dstTy.getEncoding();
 
-  assert(cvtNeedsSharedMemory(srcTy, dstTy));
+  assert(!isMfmaToDotShortcut(srcTy, dstTy));
 
   // FIXME This is NOT entirely correct
   // This should be getElemOrder, but we don't have such a method
