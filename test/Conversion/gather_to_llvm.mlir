@@ -105,8 +105,30 @@ tt.func private @gather_warp_local_larger_input_stride_1(%arg0: tensor<32xi32, #
   tt.return %0 : tensor<32xf32, #trivial_layout>
 }
 
+// Each thread has 1 element in 2 gather columns, so this is the same as the
+// trivial case except now it's 2D. We expect 2 independent index shuffles.
+// CHECK-LABEL: @gather_2d_trivial
 tt.func private @gather_2d_trivial(%arg0: tensor<32x2xi32, #trivial_2d_one_col>, %arg1: tensor<32x2xf32, #trivial_2d_one_col>) -> tensor<32x2xf32, #trivial_2d_one_col> {
+  // CHECK-NEXT: [[SRC0:%.*]] = extractvalue { float, float } %1, 0
+  // CHECK-NEXT: [[SRC1:%.*]] = extractvalue { float, float } %1, 1
+  // CHECK-NEXT: [[IDX0:%.*]] = extractvalue { i32, i32 } %0, 0
+  // CHECK-NEXT: [[IDX1:%.*]] = extractvalue { i32, i32 } %0, 1
+
+  // CHECK-NEXT: [[LANEID0:%.*]] = and i32 [[IDX0]], 31
+  // CHECK-NEXT: [[VALUE0:%.*]] = bitcast float [[SRC0]] to i32
+  // CHECK-NEXT: [[RES0_i32:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.idx.i32(i32 -1, i32 [[VALUE0]], i32 [[LANEID0]], i32 31)
+  // CHECK-NEXT: [[RES0:%.*]] = bitcast i32 [[RES0_i32]] to float
+
+  // CHECK-NEXT: [[LANEID1:%.*]] = and i32 [[IDX1]], 31
+  // CHECK-NEXT: [[VALUE1:%.*]] = bitcast float [[SRC1]] to i32
+  // CHECK-NEXT: [[RES1_i32:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.idx.i32(i32 -1, i32 [[VALUE1]], i32 [[LANEID1]], i32 31)
+  // CHECK-NEXT: [[RES1:%.*]] = bitcast i32 [[RES1_i32]] to float
+
   %0 = tt.gather %arg1[%arg0] {axis = 0 : i32} : (tensor<32x2xf32, #trivial_2d_one_col>, tensor<32x2xi32, #trivial_2d_one_col>) -> tensor<32x2xf32, #trivial_2d_one_col>
+
+  // CHECK-NEXT: [[PACKED0:%.*]] = insertvalue { float, float } undef, float [[RES0]], 0
+  // CHECK-NEXT: [[PACKED1:%.*]] = insertvalue { float, float } [[PACKED0]], float [[RES1]], 1
+  // CHECK-NEXT: ret { float, float } [[PACKED1]]
   tt.return %0 : tensor<32x2xf32, #trivial_2d_one_col>
 }
 
