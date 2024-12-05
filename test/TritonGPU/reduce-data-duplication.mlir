@@ -43,20 +43,20 @@ module attributes {"ttg.target" = "hip:gfx940", "ttg.num-ctas" = 1 : i32, "ttg.n
 
 // -----
 
-// CHECK: #[[$shared_layout_transpose:.*]] = #triton_gpu.shared<{vec = 4, perPhase = 2, maxPhase = 8, order = [0, 1], hasLeadingOffset = false, inThreadTranspose = true}>
+// CHECK: #[[$shared_layout_transpose:.*]] = #ttg.shared<{vec = 4, perPhase = 2, maxPhase = 8, order = [0, 1], hasLeadingOffset = false, inThreadTranspose = true}>
 // CHECK-LABEL: threadRake_shared
-// CHECK: [[shared_ptr:%.*]] = triton_gpu.local_alloc {{.*}} -> !triton_gpu.memdesc<32x128xf16, #[[$shared_layout_transpose]], #triton_gpu.shared_memory>
-// CHECK: [[opB:%.*]] = triton_gpu.local_load [[shared_ptr]] : !triton_gpu.memdesc<32x128xf16, #[[$shared_layout_transpose]], #triton_gpu.shared_memory> -> {{.*}}
+// CHECK: [[shared_ptr:%.*]] = ttg.local_alloc {{.*}} -> !ttg.memdesc<32x128xf16, #[[$shared_layout_transpose]], #smem>
+// CHECK: [[opB:%.*]] = ttg.local_load [[shared_ptr]] : !ttg.memdesc<32x128xf16, #[[$shared_layout_transpose]], #smem> -> {{.*}}
 // CHECK: {{.*}} = tt.dot {{.*}}, [[opB]], {{.*}}
-#blocked = #triton_gpu.blocked<{sizePerThread = [1, 8], threadsPerWarp = [16, 4], warpsPerCTA = [8, 1], order = [1, 0]}>
-#blocked1 = #triton_gpu.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
-#mma = #triton_gpu.amd_mfma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 2], instrShape = [32, 32], isTransposed = true}>
-module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 8 : i32, triton_gpu.target = "hip:gfx942", "triton_gpu.threads-per-warp" = 64 : i32} {
-  tt.func public @threadRake_shared(%arg0: tensor<256x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>, %arg1: tensor<32x128x!tt.ptr<f16>, #blocked1>) {
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [16, 4], warpsPerCTA = [8, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
+#mma = #ttg.amd_mfma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 2], instrShape = [32, 32], isTransposed = true}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @threadRake_shared(%arg0: tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>, %arg1: tensor<32x128x!tt.ptr<f16>, #blocked1>) {
     %cst_0 = arith.constant dense<0.000000e+00> : tensor<256x128xf32, #mma>
     %3 = tt.load %arg1 : tensor<32x128x!tt.ptr<f16>, #blocked1>
-    %5 = triton_gpu.convert_layout %3 : tensor<32x128xf16, #blocked1> -> tensor<32x128xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
-    %6 = tt.dot %arg0, %5, %cst_0 : tensor<256x32xf16, #triton_gpu.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>> * tensor<32x128xf16, #triton_gpu.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>> -> tensor<256x128xf32, #mma>
+    %5 = ttg.convert_layout %3 : tensor<32x128xf16, #blocked1> -> tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+    %6 = tt.dot %arg0, %5, %cst_0 : tensor<256x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>> * tensor<32x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>> -> tensor<256x128xf32, #mma>
     tt.return
   }
 }
