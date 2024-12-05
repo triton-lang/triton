@@ -1671,7 +1671,7 @@ def test_load_scope_sem(device):
     block_size = 128
     data = torch.zeros((128, ), device=device, dtype=torch.float32)
 
-    out = kernel_r[(2, )](data, BLOCK_SIZE=block_size)
+    out = kernel_r[(2, )](data, BLOCK_SIZE=block_size, launch_cooperative_grid=True)
 
     asm = out.asm['ttir']
     assert len(re.findall("atomic_load .*, memSemantic = acquire, memSyncScope = gpu", asm)) == 1
