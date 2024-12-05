@@ -1,5 +1,8 @@
 // RUN: triton-opt %s --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s
 
+// Check the optimized LLVMIR, since InstCombine makes the linear layout
+// logic understandable enough (in simple cases) to check correctness by eye.
+
 #trivial_layout = #ttg.linear<{register = [], lane = [[1], [2], [4], [8], [16]], warp = [], block = []}>
 
 #trivial_layout_wider = #ttg.linear<{register = [[32]], lane = [[1], [2], [4], [8], [16]], warp = [], block = []}>
@@ -9,6 +12,9 @@
 #trivial_2d_one_col = #ttg.linear<{register = [[0, 1]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [], block = []}>
 
 #span_2d_cols = #ttg.linear<{register = [[1, 0]], lane = [[2, 0], [4, 0], [8, 0], [16, 0], [0, 1]], warp = [], block = []}>
+
+#crazy_2d_src = #ttg.linear<{register = [[0, 2], [2, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]], warp = [[0, 1], [0, 4]], block = []}>
+#crazy_2d_idx = #ttg.linear<{register = [[2, 0], [0, 2]], lane = [[0, 8], [16, 0], [1, 0], [8, 0], [4, 0]], warp = [[0, 1], [0, 4]], block = []}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
 
@@ -187,6 +193,35 @@ tt.func private @gather_2d_span_2(%arg0: tensor<32x2xi32, #span_2d_cols>, %arg1:
   tt.return %0 : tensor<32x2xf32, #span_2d_cols>
 }
 
+// CHECK-LABEL: @gather_2d_crazy
+tt.func private @gather_2d_crazy(%arg0: tensor<32x16xi32, #crazy_2d_idx>, %arg1: tensor<32x16xf32, #crazy_2d_src>) -> tensor<32x16xf32, #crazy_2d_idx> {
+  // The specific logic becomes hard to grasp here. Just check the shuffles.
+
+  // CHECK-NEXT: [[SRC0:%.*]] = extractvalue { float, float, float, float } %1, 0
+  // CHECK-NEXT: [[SRC1:%.*]] = extractvalue { float, float, float, float } %1, 1
+  // CHECK-NEXT: [[SRC2:%.*]] = extractvalue { float, float, float, float } %1, 2
+  // CHECK-NEXT: [[SRC3:%.*]] = extractvalue { float, float, float, float } %1, 3
+
+  // CHECK: [[VALUE0:%.*]] = bitcast float [[SRC0]] to i32
+  // CHECK-NEXT: tail call i32 @llvm.nvvm.shfl.sync.idx.i32(i32 -1, i32 [[VALUE0]],
+  // CHECK-NEXT: [[VALUE2:%.*]] = bitcast float [[SRC2]] to i32
+  // CHECK-NEXT: tail call i32 @llvm.nvvm.shfl.sync.idx.i32(i32 -1, i32 [[VALUE2]],
+
+  // CHECK: tail call i32 @llvm.nvvm.shfl.sync.idx.i32(i32 -1, i32 [[VALUE0]],
+  // CHECK-NEXT: tail call i32 @llvm.nvvm.shfl.sync.idx.i32(i32 -1, i32 [[VALUE2]],
+
+  // CHECK: [[VALUE1:%.*]] = bitcast float [[SRC1]] to i32
+  // CHECK-NEXT: tail call i32 @llvm.nvvm.shfl.sync.idx.i32(i32 -1, i32 [[VALUE1]],
+  // CHECK-NEXT: [[VALUE3:%.*]] = bitcast float [[SRC3]] to i32
+  // CHECK-NEXT: tail call i32 @llvm.nvvm.shfl.sync.idx.i32(i32 -1, i32 [[VALUE3]],
+
+  // CHECK: tail call i32 @llvm.nvvm.shfl.sync.idx.i32(i32 -1, i32 [[VALUE1]],
+  // CHECK-NEXT: tail call i32 @llvm.nvvm.shfl.sync.idx.i32(i32 -1, i32 [[VALUE3]],
+
+  %0 = tt.gather %arg1[%arg0] {axis = 0 : i32} : (tensor<32x16xf32, #crazy_2d_src>, tensor<32x16xi32, #crazy_2d_idx>) -> tensor<32x16xf32, #crazy_2d_idx>
+  tt.return %0 : tensor<32x16xf32, #crazy_2d_idx>
+}
+
 // Keep LLVM from DCE'ing the above functions. Use volatile stores to stop LLVM
 // from removing unused function results.
 tt.func @anchor(%ptr: !llvm.ptr,
@@ -198,7 +233,9 @@ tt.func @anchor(%ptr: !llvm.ptr,
     %arg5: tensor<32x2xi32, #trivial_2d_one_col>,
     %arg6: tensor<32x2xf32, #trivial_2d_one_col>,
     %arg7: tensor<32x2xi32, #span_2d_cols>,
-    %arg8: tensor<32x2xf32, #span_2d_cols>) {
+    %arg8: tensor<32x2xf32, #span_2d_cols>,
+    %arg9: tensor<32x16xi32, #crazy_2d_idx>,
+    %arg10: tensor<32x16xf32, #crazy_2d_src>) {
 
   %0 = tt.call @gather_warp_local_trivial(%arg0, %arg1) : (tensor<32xi32, #trivial_layout>, tensor<32xf32, #trivial_layout>) -> tensor<32xf32, #trivial_layout>
   %1 = builtin.unrealized_conversion_cast %0 : tensor<32xf32, #trivial_layout> to !llvm.struct<(f32)>
@@ -223,6 +260,10 @@ tt.func @anchor(%ptr: !llvm.ptr,
   %10 = tt.call @gather_2d_span_2(%arg7, %arg8) : (tensor<32x2xi32, #span_2d_cols>, tensor<32x2xf32, #span_2d_cols>) -> tensor<32x2xf32, #span_2d_cols>
   %11 = builtin.unrealized_conversion_cast %10 : tensor<32x2xf32, #span_2d_cols> to !llvm.struct<(f32, f32)>
   llvm.store volatile %11, %ptr : !llvm.struct<(f32, f32)>, !llvm.ptr
+
+  %12 = tt.call @gather_2d_crazy(%arg9, %arg10) : (tensor<32x16xi32, #crazy_2d_idx>, tensor<32x16xf32, #crazy_2d_src>) -> tensor<32x16xf32, #crazy_2d_idx>
+  %13 = builtin.unrealized_conversion_cast %12 : tensor<32x16xf32, #crazy_2d_idx> to !llvm.struct<(f32, f32, f32, f32)>
+  llvm.store volatile %13, %ptr : !llvm.struct<(f32, f32, f32, f32)>, !llvm.ptr
 
   tt.return
 }

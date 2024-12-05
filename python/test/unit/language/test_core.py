@@ -6218,3 +6218,6 @@ def test_gather(src_shape, indices_shape, axis):
     ref = torch.gather(src, axis, indices)
     result = triton_gather(src, axis, indices)
     torch.testing.assert_close(result, ref, rtol=0, atol=0)
+
+def test_gather_complex_layouts():
+    pass
