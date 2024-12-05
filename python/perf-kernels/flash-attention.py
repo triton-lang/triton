@@ -68,7 +68,7 @@ class MetaData():
         self.p_scale = p_scale
         self.p_descale = p_descale
         self.use_p_scale = (p_scale is not None) and (p_descale is not None) and (v_descale is not None)
-        self.use_kv_scale = (q_descale is None) and (k_descale is not None) and (v_descale is not None)
+        self.int8_kv = (q_descale is None) and (k_descale is not None) and (v_descale is not None)
 
     def need_bias(self, bias, batch, nheads, seqlen_q, seqlen_k):
         assert bias.is_cuda
@@ -113,7 +113,7 @@ class MetaData():
         assert q.shape[-1] == k.shape[-1] and q.shape[-1] == v.shape[-1]
         # TODO: Change assert if we support qkl f8 and v f16
         if self.int8:
-            if self.use_kv_scale:
+            if self.int8_kv:
                 assert v.dtype == k.dtype and k.dtype == torch.int8
                 assert q.dtype != k.dtype
                 assert (self.v_descale is not None) and (self.k_descale is not None)
@@ -239,7 +239,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stri
                     PRE_LOAD_V: tl.constexpr, MASK_STEPS: tl.constexpr, ENABLE_DROPOUT: tl.constexpr,
                     RETURN_ENCODED_SOFTMAX: tl.constexpr, PADDED_HEAD: tl.constexpr, ACTUAL_BLOCK_DMODEL: tl.constexpr,
                     QK_SCALE: tl.constexpr, INT8_GEMM: tl.constexpr, USE_P_SCALE: tl.constexpr,
-                    USE_KV_SCALE: tl.constexpr):
+                    INT8_KV: tl.constexpr):
     # loop over k, v, and update accumulator
     for start_n in range(block_min, block_max, BLOCK_N):
         # For padded blocks, we will overrun the tensor size if
@@ -277,7 +277,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stri
         if INT8_GEMM:
             qk += ((((tl.dot(q, k) * q_descale)) * k_descale) * QK_SCALE).to(tl.float32)
         else:
-            if USE_KV_SCALE:
+            if INT8_KV:
                 k = (k * k_descale).to(tl.float16)
             qk += tl.dot(q, k) * QK_SCALE
 
@@ -330,7 +330,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stri
             else:
                 acc += tl.dot(p.to(tl.float16), v.to(tl.float16))
         else:
-            if USE_KV_SCALE:
+            if INT8_KV:
                 v = (v * v_descale).to(tl.float16)
             acc += tl.dot(p.to(v.type.element_ty), v)
 
@@ -439,7 +439,7 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
              VARLEN: tl.constexpr, IS_CAUSAL: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,
              BLOCK_N: tl.constexpr, PRE_LOAD_V: tl.constexpr, USE_BIAS: tl.constexpr, ENABLE_DROPOUT: tl.constexpr,
              RETURN_ENCODED_SOFTMAX: tl.constexpr, USE_ALIBI: tl.constexpr, INT8: tl.constexpr,
-             USE_P_SCALE: tl.constexpr, USE_KV_SCALE: tl.constexpr):
+             USE_P_SCALE: tl.constexpr, INT8_KV: tl.constexpr):
     start_m = tl.program_id(0)
     off_h_q = tl.program_id(1)
     off_z = tl.program_id(2)
@@ -523,11 +523,11 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
     v_ptrs = v_offset + offs_n[:, None] * stride_vk + offs_d[None, :] * stride_vn
     # Compute pointers for all the scale tensors used in this kernel.
 
-    INT8_GEMM: tl.constexpr = INT8 & (not USE_KV_SCALE)
+    INT8_GEMM: tl.constexpr = INT8 & (not INT8_KV)
     if INT8:
         k_descale_ptrs = K_descale + off_h_k
         v_descale_ptrs = V_descale + off_h_k
-        if not USE_KV_SCALE:
+        if not INT8_KV:
             q_descale_ptrs = Q_descale + off_h_q
         if USE_P_SCALE:
             p_scale_ptrs = P_scale + off_h_q
@@ -574,7 +574,7 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
     if INT8:
         k_descale = tl.load(k_descale_ptrs)
         v_descale = tl.load(v_descale_ptrs)
-        if not USE_KV_SCALE:
+        if not INT8_KV:
             q_descale = tl.load(q_descale_ptrs)
         else:
             q_descale = None
@@ -620,7 +620,7 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
                                         False, BLOCK_M, BLOCK_DMODEL, BLOCK_N, offs_m, offs_n,
                                         # _, MASK_STEPS, ...
                                         PRE_LOAD_V, False, ENABLE_DROPOUT, RETURN_ENCODED_SOFTMAX, PADDED_HEAD,
-                                        ACTUAL_BLOCK_DMODEL, QK_SCALE, INT8_GEMM, USE_P_SCALE, USE_KV_SCALE)
+                                        ACTUAL_BLOCK_DMODEL, QK_SCALE, INT8_GEMM, USE_P_SCALE, INT8_KV)
         block_min = block_max
         block_max = n_blocks * BLOCK_N
 
@@ -644,9 +644,9 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
                                         IS_CAUSAL, BLOCK_M, BLOCK_DMODEL, BLOCK_N, offs_m, offs_n,
                                         # _, MASK_STEPS, ...
                                         PRE_LOAD_V, True, ENABLE_DROPOUT, RETURN_ENCODED_SOFTMAX, PADDED_HEAD,
-                                        ACTUAL_BLOCK_DMODEL, QK_SCALE, INT8_GEMM, USE_P_SCALE, USE_KV_SCALE)
+                                        ACTUAL_BLOCK_DMODEL, QK_SCALE, INT8_GEMM, USE_P_SCALE, INT8_KV)
 
-    if INT8 and not USE_KV_SCALE:
+    if INT8 and not INT8_KV:
         if USE_P_SCALE:
             acc *= p_descale
         acc *= v_descale
@@ -1080,7 +1080,7 @@ class _attention(torch.autograd.Function):
             BLOCK_DMODEL=padded_d_model, USE_BIAS=False if metadata.bias is None else True,
             USE_ALIBI=False if metadata.alibi_slopes is None else True, ENABLE_DROPOUT=metadata.dropout_p > 0.0,
             RETURN_ENCODED_SOFTMAX=metadata.return_encoded_softmax, INT8=metadata.int8, USE_P_SCALE=metadata.int8
-            and metadata.use_p_scale, USE_KV_SCALE=metadata.int8 and metadata.use_kv_scale)
+            and metadata.use_p_scale, INT8_KV=metadata.int8 and metadata.int8_kv)
 
         ctx.save_for_backward(q, k, v, o, M)
         ctx.grid = grid
@@ -1189,17 +1189,18 @@ def quantize_int8(tensor: torch.Tensor, dim) -> tuple[torch.Tensor, torch.Tensor
     return tensor_quantized, scale, 1 / scale
 
 
-def quantize_input(q, k, v, input_metadata: MetaData, quantize_p=False, quantize_kv=False):
-    assert not (quantize_p and quantize_kv)
+def quantize_input(q, k, v, input_metadata: MetaData, quantize_p=False, int8_kv=False):
+    assert not (quantize_p and int8_kv)
     if input_metadata.layout == 'bhsd':
         qunatization_dim = 1
     elif input_metadata.layout == 'bshd':
         qunatization_dim = 2
     else:
         assert False, 'Got unsupported tensor layout'
+    assert not (quantize_p and int8_kv)
 
     q_descale = None
-    if not quantize_kv:
+    if not int8_kv:
         q, _, q_descale = quantize_int8(q, dim=qunatization_dim)
     k, _, k_descale = quantize_int8(k, dim=qunatization_dim)
     v, _, v_descale = quantize_int8(v, dim=qunatization_dim)
@@ -1369,7 +1370,7 @@ def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, layout, 
     (4, 4, 113, 123, 1),
 ])
 @pytest.mark.parametrize('causal', [True, False])
-@pytest.mark.parametrize('quantize_p', [True, False])
+@pytest.mark.parametrize('quantize_p', [False])
 @pytest.mark.parametrize('layout', ['bhsd'])
 def test_op_fwd_int8(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, quantize_p, layout, dtype=torch.float16):
     torch.manual_seed(20)
@@ -1380,7 +1381,7 @@ def test_op_fwd_int8(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, quantize_p, layout,
 
     o = torch.empty_like(q)
 
-    q_quantized, k_quantized, v_quantized = quantize_input(q, k, v, input_metadata, quantize_p)
+    q_quantized, k_quantized, v_quantized = quantize_input(q, k, v, input_metadata, quantize_p=quantize_p)
     tri_out, _, best_configs = attention(q_quantized, k_quantized, v_quantized, o, input_metadata)
 
     # Compute scores
@@ -1456,7 +1457,7 @@ def test_op_fwd_int8_kv(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, layout, dtype=to
 
     o = torch.empty_like(q)
 
-    _, k_quantized, v_quantized = quantize_input(q, k, v, input_metadata, quantize_kv=True)
+    _, k_quantized, v_quantized = quantize_input(q, k, v, input_metadata, int8_kv=True)
     k_descale, v_descale = input_metadata.k_descale, input_metadata.v_descale
     k_dequantized = (k_quantized * k_descale).half()
     v_dequantized = (v_quantized * v_descale).half()
@@ -1746,7 +1747,8 @@ def run_benchmark(custom, args):
     x_names = ['BATCH', 'HQ', 'HK', 'N_CTX_Q', 'N_CTX_K']
     causal = args.causal
     int8 = args.int8
-    quantize_p = args.quantize_p
+    quantize_p = args.quantize_p and int8
+    int8_kv = args.int8_kv and int8
     varlen = args.layout == 'thd'
     configs = []
     if custom:
@@ -1767,6 +1769,7 @@ def run_benchmark(custom, args):
     @triton.testing.perf_report(configs)
     def bench_flash_attention(BATCH, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, causal, mode, provider, device="cuda"):
         assert mode in ["fwd", "bwd"]
+        assert not (int8_kv and quantize_p)
         warmup = 25
         rep = 100
         # TODO: Enable bias after testing.
@@ -1796,7 +1799,7 @@ def run_benchmark(custom, args):
         if causal:
             input_metadata.need_causal()
         if int8:
-            q, k, v = quantize_input(q, k, v, input_metadata, quantize_p)
+            q, k, v = quantize_input(q, k, v, input_metadata, quantize_p=quantize_p, int8_kv=int8_kv)
         o = torch.empty_like(q)
         fn = lambda: attention(q, k, v, o, input_metadata)
         if mode == 'bwd':
@@ -1844,6 +1847,7 @@ def parse_args():
     parser.add_argument("-causal", action='store_true', default=False)
     parser.add_argument("-int8", action='store_true', default=False)
     parser.add_argument("-quantize_p", action='store_true', default=False)
+    parser.add_argument("-int8_kv", action='store_true', default=False)
     parser.add_argument("-dtype", default='fp16')
     parser.add_argument("-return_time", action='store_true', default=False)
     parser.add_argument("-layout", type=str, default='bhsd', help=supported_layouts())
