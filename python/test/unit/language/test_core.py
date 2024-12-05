@@ -6285,7 +6285,7 @@ def test_gather_complex_layouts(src_shape, indices_shape, axis, src_layout, indi
     temp_file.write_text(ir)
 
     kernel = triton.compile(str(temp_file))
-    assert "llvm.nvvm.shfl.sync.idx" in kernel.asm["llir"]
+    assert ("nvvm.shfl.sync.idx" in kernel.asm["llir"]) or ("llvm.amdgcn.ds.bpermute" in kernel.asm["llir"])
 
     kernel[(1, 1, 1)](src, indices, output)
 
