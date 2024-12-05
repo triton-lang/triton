@@ -386,7 +386,7 @@ def get_cdna_autotune_configs():
                       num_warps=4),
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False}, num_stages=1,
                       num_warps=4),
-        # Fall-back config. This will use v_mfma_i32_16x16x32_i8. It gives double the correct result. Contacted the compiler team.
+        # Fall-back config. For int8 GEMM, this will use v_mfma_i32_16x16x32_i8. It gives double the correct result. Contacted the compiler team.
         # triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 1, 'PRE_LOAD_V': False}, num_stages=1,
         #               num_warps=4),
     ], ['IS_CAUSAL', 'dropout_p', 'MAX_SEQLENS_Q', 'MAX_SEQLENS_K', 'ACTUAL_BLOCK_DMODEL', 'VARLEN', 'HQ', 'HK']
@@ -1401,7 +1401,8 @@ def test_op_fwd_int8(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, quantize_p, layout,
             p_tile = (p_tile * input_metadata.p_scale).to(torch.int8)
 
             alpha = torch.exp(m_i - m_ij)
-            acc = acc * alpha.unsqueeze(-1) + torch.einsum('bhqk,bhkd->bhqd', p_tile.half(), v_tile.half())
+            # We need float here since both p and v are quantized. So they might overflow the fp16 range.
+            acc = acc * alpha.unsqueeze(-1) + torch.einsum('bhqk,bhkd->bhqd', p_tile.float(), v_tile.float())
             m_i = m_ij
             l_i = alpha * l_i + l_ij
 
@@ -1410,7 +1411,7 @@ def test_op_fwd_int8(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, quantize_p, layout,
         ref_out = acc.to(torch.float16)
     else:
         p = torch.softmax(scores, dim=-1)
-        ref_out = (torch.einsum('bhqk,bhkd->bhqd', p.half(), v_quantized.half()) * v_descale)
+        ref_out = (torch.einsum('bhqk,bhkd->bhqd', p.half(), v_quantized.half()) * v_descale).to(torch.float16)
 
     if causal:
         nan_mask = torch.isnan(ref_out)
@@ -1467,9 +1468,6 @@ def test_op_fwd_int8_kv(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, layout, dtype=to
     if causal:
         nan_mask = torch.isnan(ref_out)
         ref_out[nan_mask] = 0
-
-    print(ref_out[0,0,0,0])
-    print(tri_out[0,0,0,0])
 
     torch.testing.assert_close(ref_out, tri_out, atol=2e-2, rtol=2e-2)
 
