@@ -129,6 +129,57 @@ void GatherOpConversion::emitGatherInShared(
   rewriter.replaceOp(op, packed);
 }
 
+// High-level description of the algorithm:
+//
+// `isWarpLocal` checks that it is possible to compute each output element
+// without data movement across warps.
+//
+// If the gather dim is `dimN`, then this means
+//
+//   ll^-1(dimN)[(block, warp)] == 0
+//
+// for both source and index tensors: moving along the gather axis does not
+// change the warp. Broadcasted layouts are not supported, so we know the
+// layouts are subpermutation matrices.
+//
+// We can check this with `ll((block, warp))[dimN] == 0`.
+//
+// Let `gatherCol` be a tuple of all dimensions except the gather dimension.
+// We also check that the gather columns line up the same way with respect to
+// the warp between the source and index tensors with
+//
+//   ll_src((block, warp))[gatherCol] == ll_idx((block, warp))[gatherCol]
+//
+// This means that for all index columns, the corresponding column in the source
+// tensor is owned by the same warp.
+//
+// We also check
+//
+//   ll_src(lane)[gatherCol] == ll_idx(lane)[gatherCol]
+//
+// This boils down to the fact that the algorithm essentially emits a series of
+// index shuffles for each index value owned by each thread, and then a pile of
+// selects to pick the right value. We need to figure out given an index value
+// in a particular column, what are the source register values it could read
+// from and who owns them.
+//
+// If this relationship did not hold, then the possible source registers for
+// each index value varies with the thread, meaning the value operand provided
+// to each shuffle index instruction would depend on the thread ID. This isn't a
+// big deal. It just means would have to emit a pile of selects before each
+// shuffle as well, to pick the right source register value. But we choose not
+// to handle this.
+//
+// The codegen algorithm emits code:
+// - Given the thread ID and a particular index tensor register, figure out
+//   which gather column it belongs to using a layout.
+// - Using the index value itself as the value for `dimN`, use another layout to
+//   figure out which lane in the warp owns the desired value and which register
+//   in that lane it is.
+// - For the gather column, figure out the source registers in that column, and
+//   for each of them, emit an index shuffle with the same computed lane ID.
+// - Use the register component to select the right value from the shuffle
+//   results.
 void GatherOpConversion::emitWarpLocalGather(
     GatherOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const {
   MLIRContext *ctx = op.getContext();
