@@ -447,7 +447,7 @@ bool GatherLoweringHelper::isWarpLocal() {
       b.getStringAttr("dim" + std::to_string(gatherOp.getAxis()));
 
   // The tensor layouts must be distributed layouts, where the basis matrix is a
-  // subpermutation matrix plus some zero rows for broadcasting.
+  // subpermutation matrix (permutation matrix plus zeros for broadcasting).
   // FIXME(jeff): Check this invariant somehow.
   //
   // We want to know if all elements of a column along the gather axis are
@@ -457,7 +457,7 @@ bool GatherLoweringHelper::isWarpLocal() {
   //   srcLayout.inverse().sublayoutIsZero({kGatherDim}, {kBlock, kWarp})
   //
   // But due to broadcasting, the matrix might not be invertible. But since the
-  // matrix is a subpermutation matrix, we can instead query
+  // matrix is a permutation matrix (checked below), we can instead query
   //
   //   srcLayout.sublayoutIsZero({kBlock, kWarp}, {kGatherDim})
   //

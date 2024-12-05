@@ -140,7 +140,7 @@ void GatherOpConversion::emitGatherInShared(
 //
 // for both source and index tensors: moving along the gather axis does not
 // change the warp. Broadcasted layouts are not supported, so we know the
-// layouts are subpermutation matrices.
+// layouts are permutation matrices.
 //
 // We can check this with `ll((block, warp))[dimN] == 0`.
 //
@@ -237,7 +237,7 @@ void GatherOpConversion::emitWarpLocalGather(
   // elements per column owned by a thread.
 
   // Fully invert the source layout. We know it is invertible because
-  // `isWarpLocal` checked this (subpermutation matrix, no broadcasting).
+  // `isWarpLocal` checked this.
   LinearLayout invSrcLayout = srcLayout.invert();
 
   // Sanity check: the warp must be invariant to the index because otherwise the
