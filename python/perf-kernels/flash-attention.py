@@ -1065,7 +1065,10 @@ class _attention(torch.autograd.Function):
         else:
             alibi_strides = (0, 0)
 
-        q_descale, k_descale, p_scale, p_descale, v_descale = metadata.q_descale, metadata.k_descale, metadata.p_scale, metadata.p_descale, metadata.v_descale
+        if metadata.int8:
+            q_descale, k_descale, p_scale, p_descale, v_descale = metadata.q_descale, metadata.k_descale, metadata.p_scale, metadata.p_descale, metadata.v_descale
+        else:
+            q_descale = k_descale = p_scale = p_descale = v_descale = None
 
         attn_fwd[grid](q, k, v, metadata.bias, metadata.sm_scale, M, o, *q_strides, *k_strides, *v_strides, *o_strides,
                        *bias_strides, *alibi_strides, q_descale, k_descale, p_scale, p_descale, v_descale,
@@ -1077,7 +1080,7 @@ class _attention(torch.autograd.Function):
                        USE_BIAS=False if metadata.bias is None else True,
                        USE_ALIBI=False if metadata.alibi_slopes is None else True, ENABLE_DROPOUT=metadata.dropout_p
                        > 0.0, RETURN_ENCODED_SOFTMAX=metadata.return_encoded_softmax, INT8=metadata.int8,
-                       USE_P_SCALE=metadata.use_p_scale, USE_KV_SCALE=metadata.use_kv_scale)
+                       USE_P_SCALE=metadata.int8 and metadata.use_p_scale, USE_KV_SCALE=metadata.int8 and metadata.use_kv_scale)
 
         ctx.save_for_backward(q, k, v, o, M)
         ctx.grid = grid
