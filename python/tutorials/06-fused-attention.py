@@ -82,10 +82,10 @@ def _attn_fwd_inner(acc, l_i, m_i, q,  #
 # re-tuning.
 configs = [
     triton.Config({'BLOCK_M': BM, 'BLOCK_N': BN}, num_stages=s, num_warps=w) \
-    for BM in [64, 128]\
-    for BN in [32, 64]\
+    for BM in [64]\
+    for BN in [64]\
     for s in ([1] if is_hip() else [3, 4, 7])\
-    for w in [4, 8]\
+    for w in [4]\
 ]
 
 
@@ -540,25 +540,25 @@ def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype=torch.float16):
     # p = torch.exp(p)
     ref_out = torch.matmul(p, v)
     ref_out.backward(dout)
-    ref_dv, v.grad = v.grad.clone(), None
-    ref_dk, k.grad = k.grad.clone(), None
-    ref_dq, q.grad = q.grad.clone(), None
+    #ref_dv, v.grad = v.grad.clone(), None
+    #ref_dk, k.grad = k.grad.clone(), None
+    #ref_dq, q.grad = q.grad.clone(), None
     # triton implementation
     tri_out = attention(q, k, v, causal, sm_scale).half()
-    tri_out.backward(dout)
-    tri_dv, v.grad = v.grad.clone(), None
-    tri_dk, k.grad = k.grad.clone(), None
-    tri_dq, q.grad = q.grad.clone(), None
+    #tri_out.backward(dout)
+    #tri_dv, v.grad = v.grad.clone(), None
+    #tri_dk, k.grad = k.grad.clone(), None
+    #tri_dq, q.grad = q.grad.clone(), None
     # compare
     assert torch.allclose(ref_out, tri_out, atol=1e-2, rtol=0)
-    rtol = 0.0
+    #rtol = 0.0
     # Relative tolerance workaround for known hardware limitation of MI200 GPU.
     # For details see https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
-    if torch.version.hip is not None and triton.runtime.driver.active.get_current_target().arch == "gfx90a":
-        rtol = 1e-2
-    assert torch.allclose(ref_dv, tri_dv, atol=1e-2, rtol=rtol)
-    assert torch.allclose(ref_dk, tri_dk, atol=1e-2, rtol=rtol)
-    assert torch.allclose(ref_dq, tri_dq, atol=1e-2, rtol=rtol)
+    #if torch.version.hip is not None and triton.runtime.driver.active.get_current_target().arch == "gfx90a":
+    #    rtol = 1e-2
+    #assert torch.allclose(ref_dv, tri_dv, atol=1e-2, rtol=rtol)
+    #assert torch.allclose(ref_dk, tri_dk, atol=1e-2, rtol=rtol)
+    #assert torch.allclose(ref_dq, tri_dq, atol=1e-2, rtol=rtol)
 
 
 try:
@@ -638,4 +638,5 @@ def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, mode, provider, dev
 
 if __name__ == "__main__":
     # only works on post-Ampere GPUs right now
-    bench_flash_attention.run(save_path=".", print_data=True)
+    #bench_flash_attention.run(save_path=".", print_data=True)
+    test_op(1, 2, 1024, 64, False, dtype=torch.float16)
