@@ -44,6 +44,20 @@ GatherOpConversion::matchAndRewrite(GatherOp op, OpAdaptor adaptor,
   return success();
 }
 
+static Value convertIndexToI32(Location loc, Value index,
+                               ConversionPatternRewriter &rewriter) {
+  unsigned idxWidth = index.getType().getIntOrFloatBitWidth();
+  // The LL index computations are performed with 32 bit integers. If the
+  // indices are something else, cast them to i32.
+  if (idxWidth > 32) {
+    index = trunc(i32_ty, index);
+  } else if (idxWidth < 32) {
+    // Negative indices don't make sense, so zero-extend.
+    index = zext(i32_ty, index);
+  }
+  return index;
+}
+
 void GatherOpConversion::emitGatherInShared(
     GatherOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const {
   Location loc = op.getLoc();
@@ -101,19 +115,10 @@ void GatherOpConversion::emitGatherInShared(
       emitIndices(loc, rewriter, targetInfo, dstType.getEncoding(), dstType,
                   /*withCTAOffset=*/true);
 
-  unsigned idxWidth = op.getIndices().getType().getElementTypeBitWidth();
   unsigned axis = op.getAxis();
   SmallVector<Value> results(dstIndices.size());
   for (auto [i, idx, indices] : llvm::enumerate(idxValues, dstIndices)) {
-    // The LL index computations are performed with 32 bit integers. If the
-    // indices are something else, cast them to i32.
-    if (idxWidth > 32) {
-      idx = trunc(i32_ty, idx);
-    } else if (idxWidth < 32) {
-      // Negative indices don't make sense, so zero-extend.
-      idx = zext(i32_ty, idx);
-    }
-    indices[axis] = idx;
+    indices[axis] = convertIndexToI32(loc, idx, rewriter);
     Value offset = LLVM::linearize(rewriter, loc, indices, srcShapePerCTA);
     Value ptr = gep(smemBase.getType(), elemType, smemBase, offset);
     results[i] = load(elemType, ptr);
@@ -256,7 +261,7 @@ void GatherOpConversion::emitWarpLocalGather(
     assert(column.size() == otherDims.size());
 
     // Combine the computed column with the data-dependent gather index.
-    column.emplace_back(kGatherDim, idxVal);
+    column.emplace_back(kGatherDim, convertIndexToI32(loc, idxVal, rewriter));
     SmallVector<std::pair<StringAttr, Value>> srcLaneAndReg =
         applyLinearLayout(loc, rewriter, invSrcLayout, column);
 
