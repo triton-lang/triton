@@ -787,14 +787,13 @@ std::unique_ptr<uint64_t[]> concatMatrices(const LinearLayout &A,
   assert(A.getTotalOutDimSizeLog2() == B.getTotalOutDimSizeLog2() &&
          "Matrices must have the same number of output dimensions");
   int numRows = A.getTotalOutDimSizeLog2();
-  int numCols = A.getTotalInDimSizeLog2() + B.getTotalInDimSizeLog2();
-  assert(numCols <= 64 && "LinearLayout too large");
+  int numColsA = A.getTotalInDimSizeLog2();
 
+  // rref expects the lower bits to be the lower indices of the matrix
   auto concat = getMatrix(A);
-  auto Bmat = getMatrix(B);
-  auto numColsA = A.getTotalInDimSizeLog2();
+  auto BMat = getMatrix(B);
   for (int r = 0; r < numRows; r++) {
-    concat[r] |= Bmat[r] << numColsA;
+    concat[r] |= BMat[r] << numColsA;
   }
   return concat;
 }
@@ -802,7 +801,9 @@ std::unique_ptr<uint64_t[]> concatMatrices(const LinearLayout &A,
 LinearLayout lstsq(const LinearLayout &A, const LinearLayout &B) {
   // Solve the least square system AX = B for A = outer, B = *this
   // and return the least square solution X of minimal norm
-  // A and B may not be surjective, but they have the same image
+  // A and B may not be surjective, but we assume that Im(B) \subset Im(A)
+  // Sketch of the algorithm:
+  // https://github.com/triton-lang/triton/pull/5309#discussion_r1869084111
   int numRows = A.getTotalOutDimSizeLog2();
   int numColsA = A.getTotalInDimSizeLog2();
   int numColsB = B.getTotalInDimSizeLog2();
@@ -820,15 +821,14 @@ LinearLayout lstsq(const LinearLayout &A, const LinearLayout &B) {
     if (row == 0) {
       continue;
     }
-    int c = __builtin_ctzll(combinedMat[r]);
-    assert(c < numColsA && "Precondition broken. Im(A) != Im(B)");
+    int c = __builtin_ctzll(row);
+    assert(c < numColsA && "Precondition broken. Im(B) not contained in Im(A)");
     assert(pivotCols.empty() ||
            pivotCols.back() < c && "Pivot columns are not in increasing order");
     pivotCols.push_back(c);
   }
 
-  // Extract A^{-1}B and complete the mapping using zeros for the unnecessary
-  // fromDims
+  // Extract A^{-1}B and complete the matrix using zeros
   std::unique_ptr<uint64_t[]> retMat(new uint64_t[numColsA]());
   int j = 0;
   for (int r = 0; r < numColsA; r++) {
@@ -870,10 +870,10 @@ LinearLayout lstsq(const LinearLayout &A, const LinearLayout &B) {
 } // namespace
 
 LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
-  // TODO(Lezcano) Make friend and perhaps rename to `convertFrom`
-  // For this, we need to implement our LLVM lowerings by inverting the "from"
-  // layout, and then iterating over the elements from the "to" layout and
-  // fetching the corresponding element from the "from" layout. This exercises
+  // TODO(Lezcano) Make friend and perhaps rename to `convertFrom` or `lstsq`
+  // For this, we need to implement our LLVM lowerings by inverting the "outer"
+  // layout, and then iterating over the elements from the "this" layout and
+  // fetching the corresponding element from the "outer" layout. This exercises
   // the broadcasting that we incentivise via choosing the minimum norm solution
   // in lstsq.
 
@@ -888,7 +888,7 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
   }
 
   // We'll write A^{-1} to mean the inverse or the pseudo-inverse of A
-  // We are computing A^{-1}B so from must be surjective so that
+  // We are computing A^{-1}B so A must be surjective so that
   // it has a left inverse.
   assert(A.isSurjective());
 
