@@ -6233,6 +6233,8 @@ def test_gather(src_shape, indices_shape, axis):
      ),
 ])
 def test_gather_complex_layouts(src_shape, indices_shape, axis, src_layout, indices_layout, tmp_path: pathlib.Path):
+    if is_hip():
+        pytest.skip("warp-local gather has issues on HIP")
 
     def prepare_kernel(src: torch.Tensor, axis: int, indices: torch.Tensor):
         output = torch.empty(indices.shape, dtype=src.dtype, device=src.device)
