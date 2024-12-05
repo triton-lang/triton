@@ -1,10 +1,12 @@
-// RUN: triton-opt %s --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm | mlir-translate -mlir-to-llvmir | opt -S -O3 | FileCheck %s
+// RUN: triton-opt %s --allocate-shared-memory --convert-triton-gpu-to-llvm --convert-nv-gpu-to-llvm | mlir-translate -mlir-to-llvmir | opt -S -O1 | FileCheck %s
 
 #trivial_layout = #ttg.linear<{register = [], lane = [[1], [2], [4], [8], [16]], warp = [], block = []}>
 
 #trivial_layout_wider = #ttg.linear<{register = [[32]], lane = [[1], [2], [4], [8], [16]], warp = [], block = []}>
 
 #trivial_layout_wider_reg_stride_1 = #ttg.linear<{register = [[1]], lane = [[2], [4], [8], [16], [32]], warp = [], block = []}>
+
+#trivial_2d_one_col = #ttg.linear<{register = [[0, 1]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [], block = []}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
 
@@ -103,6 +105,11 @@ tt.func private @gather_warp_local_larger_input_stride_1(%arg0: tensor<32xi32, #
   tt.return %0 : tensor<32xf32, #trivial_layout>
 }
 
+tt.func private @gather_2d_trivial(%arg0: tensor<32x2xi32, #trivial_2d_one_col>, %arg1: tensor<32x2xf32, #trivial_2d_one_col>) -> tensor<32x2xf32, #trivial_2d_one_col> {
+  %0 = tt.gather %arg1[%arg0] {axis = 0 : i32} : (tensor<32x2xf32, #trivial_2d_one_col>, tensor<32x2xi32, #trivial_2d_one_col>) -> tensor<32x2xf32, #trivial_2d_one_col>
+  tt.return %0 : tensor<32x2xf32, #trivial_2d_one_col>
+}
+
 // Keep LLVM from DCE'ing the above functions. Use volatile stores to stop LLVM
 // from removing unused function results.
 tt.func @anchor(%ptr: !llvm.ptr,
@@ -110,7 +117,9 @@ tt.func @anchor(%ptr: !llvm.ptr,
     %arg1: tensor<32xf32, #trivial_layout>,
     %arg2: tensor<64xi32, #trivial_layout_wider>,
     %arg3: tensor<64xf32, #trivial_layout_wider>,
-    %arg4: tensor<64xf32, #trivial_layout_wider_reg_stride_1>) {
+    %arg4: tensor<64xf32, #trivial_layout_wider_reg_stride_1>,
+    %arg5: tensor<32x2xi32, #trivial_2d_one_col>,
+    %arg6: tensor<32x2xf32, #trivial_2d_one_col>) {
   %0 = tt.call @gather_warp_local_trivial(%arg0, %arg1) : (tensor<32xi32, #trivial_layout>, tensor<32xf32, #trivial_layout>) -> tensor<32xf32, #trivial_layout>
   %1 = builtin.unrealized_conversion_cast %0 : tensor<32xf32, #trivial_layout> to !llvm.struct<(f32)>
   llvm.store volatile %1, %ptr : !llvm.struct<(f32)>, !llvm.ptr
@@ -126,6 +135,10 @@ tt.func @anchor(%ptr: !llvm.ptr,
   %6 = tt.call @gather_warp_local_larger_input_stride_1(%arg0, %arg4) : (tensor<32xi32, #trivial_layout>, tensor<64xf32, #trivial_layout_wider_reg_stride_1>) -> tensor<32xf32, #trivial_layout>
   %7 = builtin.unrealized_conversion_cast %6 : tensor<32xf32, #trivial_layout> to !llvm.struct<(f32)>
   llvm.store volatile %7, %ptr : !llvm.struct<(f32)>, !llvm.ptr
+
+  %8 = tt.call @gather_2d_trivial(%arg5, %arg6) : (tensor<32x2xi32, #trivial_2d_one_col>, tensor<32x2xf32, #trivial_2d_one_col>) -> tensor<32x2xf32, #trivial_2d_one_col>
+  %9 = builtin.unrealized_conversion_cast %8 : tensor<32x2xf32, #trivial_2d_one_col> to !llvm.struct<(f32, f32)>
+  llvm.store volatile %9, %ptr : !llvm.struct<(f32, f32)>, !llvm.ptr
 
   tt.return
 }

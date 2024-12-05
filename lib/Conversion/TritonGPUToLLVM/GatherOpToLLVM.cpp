@@ -175,9 +175,10 @@ void GatherOpConversion::emitWarpLocalGather(
   //
   // And the mapping will be the correct for each thread.
   //
-  // Given `src_reg \in [0, N)`, we just need to emit N index shuffles for each
-  // `idx_reg` (the number of index shuffles is quadratic!) and `llvm.select`
-  // using `src_reg` to get the right one.
+  // Given `src_reg \in [0, K*N)`, we just need to emit N index shuffles for
+  // each `idx_reg` (the number of index shuffles is quadratic!) and
+  // `llvm.select` using `src_reg` to get the right one. `K` is the number of
+  // elements per column owned by a thread.
 
   // Fully invert the source layout. We know it is invertible because
   // `isWarpLocal` checked this (subpermutation matrix, no broadcasting).
@@ -203,6 +204,47 @@ void GatherOpConversion::emitWarpLocalGather(
 
   unsigned /*N=*/srcRegsPerThread = srcLayout.getInDimSize(kRegister);
   assert(srcRegsPerThread == srcValues.size());
+
+  // Given a index value, we need to know which sources register values it could
+  // index into. This is invariant to anything other than the register, which we
+  // checked already. Compute the full reverse map from
+  //
+  //   idx_reg -> gather_column -> (src_reg0, src_reg1, ...)
+  //
+  LinearLayout invertSrcRegMap = invSrcLayout.sublayout(allDims, {kRegister});
+  // Remove zero bases in the gather dimension to make the function injective
+  // (for a given column) over the same codomain.
+  LinearLayout::BasesT newInvertRegMapBases;
+  for (auto &[inDim, inDimBases] : invertSrcRegMap.getBases()) {
+    auto &newInDimBases = newInvertRegMapBases[inDim];
+    if (inDim != kGatherDim) {
+      newInDimBases = inDimBases;
+      continue;
+    }
+    for (auto &basis : inDimBases) {
+      if (llvm::any_of(basis, [](int32_t val) { return val != 0; })) {
+        newInDimBases.push_back(basis);
+      }
+    }
+  }
+  invertSrcRegMap = LinearLayout(
+      newInvertRegMapBases, llvm::to_vector(invertSrcRegMap.getOutDimNames()));
+  // We are left with only non-zero bases in the gather dimension, which means
+  // the number of registers per column is the size of the "gather dimension".
+  unsigned numRegsPerColumn = invertSrcRegMap.getInDimSize(kGatherDim);
+  // Get a map from idx_reg to the column it indexes into.
+  LinearLayout idxRegToCol = idxLayout.sublayout({kRegister}, otherDims);
+  // Now given `idx_reg`, we can compute the column it belongs to in both src
+  // and index tensors, then partially apply `invertSrcRegMap` with this to
+  // obtain a function that outputs the corresponding registers in the src
+  // tensor in the same column.
+
+  // L(column, i) = L(column, 0) xor L(0, i)
+  LinearLayout invertSrcRegMapColPart =
+      invertSrcRegMap.sublayout(otherDims, {kRegister});
+  LinearLayout invertSrcRegMapRest =
+      invertSrcRegMap.sublayout({kGatherDim}, {kRegister});
+
   SmallVector<Value> results;
   for (auto [idxReg, idxVal] : llvm::enumerate(idxValues)) {
     SmallVector<std::pair<StringAttr, Value>> column =
@@ -223,11 +265,25 @@ void GatherOpConversion::emitWarpLocalGather(
     assert(srcLaneName == kLane && srcRegName == kRegister);
 
     assert(!srcValues.empty() && "can't gather from an empty tensor");
+
+    // Figure out which src registers we need to index shuffle from. This is
+    // invariant to anything else.
+    SmallVector<std::pair<StringAttr, int32_t>> normalizedColumn =
+        idxRegToCol.apply({{kRegister, idxReg}});
+    int32_t srcBase =
+        invertSrcRegMapColPart.apply(normalizedColumn).front().second;
+
     Value result = undef(srcValues.front().getType());
-    for (unsigned i = 0; i != srcRegsPerThread; ++i) {
-      Value value = targetInfo.shuffleIdx(rewriter, loc, srcValues[i], srcLane);
-      result = select(icmp_eq(i32_val(i), srcReg), value, result);
+    for (unsigned i = 0; i != numRegsPerColumn; ++i) {
+      int32_t rest =
+          invertSrcRegMapRest.apply({{kGatherDim, i}}).front().second;
+      int32_t srcRegIdx = srcBase ^ rest;
+
+      Value value =
+          targetInfo.shuffleIdx(rewriter, loc, srcValues[srcRegIdx], srcLane);
+      result = select(icmp_eq(i32_val(srcRegIdx), srcReg), value, result);
     }
+
     results.push_back(result);
   }
 
