@@ -13,6 +13,7 @@ Extra Credits:
 
 """
 
+import math
 import pytest
 import torch
 
@@ -529,9 +530,9 @@ attention = _attention.apply
 @pytest.mark.parametrize("causal", [True])
 def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype=torch.float16):
     torch.manual_seed(20)
-    q = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
-    k = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
-    v = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
+    q = (torch.randn((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE) / math.sqrt(2)).requires_grad_()
+    k = (torch.randn((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE) / math.sqrt(2)).requires_grad_()
+    v = (torch.randn((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE) / math.sqrt(2)).requires_grad_()
     sm_scale = 0.5
     dout = torch.randn_like(q)
     # reference implementation
