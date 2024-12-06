@@ -4296,6 +4296,7 @@ def test_vectorization_hints(has_hints, device):
         assert "ld.global.v4.b32" not in ptx
 
 
+@pytest.mark.cpu
 @pytest.mark.interpreter
 def test_assume(device):
 
@@ -5296,6 +5297,7 @@ def test_nested_while(device):
     assert data[0] == 40
 
 
+@pytest.mark.cpu
 def test_constexpr_if_return(device):
     # Reproducer for #4883, return statement in an if with a constexpr causes
     # errors when combined with non-trivial control flow graphs
