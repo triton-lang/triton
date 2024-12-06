@@ -270,6 +270,7 @@ createTMAAsyncCopy(scf::ForOp &forOp, tt::ExperimentalDescriptorLoadOp loadOp,
       alloc.erase();
     }
 
+    builder.setInsertionPointAfter(viewLoad);
     auto sharedLoad = builder.createWithStage<ttg::LocalLoadOp>(
         loc, stage, clusterId, loadOp.getType(),
         viewLoad /*,wait->getResult(0)*/);
