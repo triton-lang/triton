@@ -37,6 +37,9 @@ def block_copy_kernel(a_ptr, b_ptr, N, BLOCK_SIZE: tl.constexpr, PADDING_OPTION:
     for boundary_check in (None, "lower", "upper")
 ])
 def test_block_copy(dtypes_str, n, padding_option, boundary_check, device):
+    if is_cpu() and boundary_check == "lower":
+        pytest.skip("Lower boundary check is NYI for CPU")
+
     src_dtype_str = dtypes_str[0]
     dst_dtype_str = dtypes_str[1]
     src_dtype = getattr(torch, src_dtype_str)
