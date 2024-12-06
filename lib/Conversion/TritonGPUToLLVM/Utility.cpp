@@ -235,13 +235,7 @@ bool emitTransferBetweenRegistersAndShared(
   SmallVector<Value> ret;
 
   // Flatten regToSharedLayout out dims into linear smem index
-  auto sharedOrder = triton::gpu::getOrder(sharedTy.getEncoding());
-  SmallVector<StringAttr> permutedDims;
-  for (int iDim : sharedOrder) {
-    permutedDims.push_back(str_attr("offset" + Twine(iDim)));
-  }
-  auto flatLayout =
-      regToSharedLayout->transposeOuts(permutedDims).flattenOuts();
+  auto flatLayout = regToSharedLayout->flattenOuts();
 
   // Precompute common smem offset for this thread
   auto threadSmemOffset = applyLinearLayout(loc, rewriter, flatLayout,
