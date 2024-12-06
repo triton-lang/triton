@@ -88,27 +88,14 @@ namespace ttg = triton::gpu;
 // for operand that is getting converted to dot layout.
 SmallVector<triton::LoadOp> getAllLoadOpsReachingOp(Operation *op) {
   SmallVector<triton::LoadOp> loadOpsVec;
-  SetVector<Operation *> visited;
-  SmallVector<Operation *> worklist;
-  worklist.push_back(op);
+  SetVector<Operation *> backwardSlice;
+  BackwardSliceOptions opt;
+  opt.omitBlockArguments = true;
+  getBackwardSlice(op, &backwardSlice, opt);
 
-  // Traverse the use-def chain
-  while (!worklist.empty()) {
-    Operation *currentOp = worklist.pop_back_val();
-    if (visited.contains(currentOp))
-      continue;
-    visited.insert(currentOp);
-
-    for (Value operand : currentOp->getOperands()) {
-      Operation *definingOp = operand.getDefiningOp();
-      if (!definingOp)
-        continue;
-
-      if (auto loadOp = dyn_cast<triton::LoadOp>(definingOp)) {
-        loadOpsVec.push_back(loadOp);
-      }
-
-      worklist.push_back(definingOp);
+  for (auto op : backwardSlice) {
+    if (auto loadOp = dyn_cast<triton::LoadOp>(op)) {
+      loadOpsVec.push_back(loadOp);
     }
   }
 
@@ -171,7 +158,7 @@ struct TritonAMDGPUBypassLDSForDotOperandPass
       return false;
 
     // srcBlocked.getOrder[0] == 0 is the requirement for opIdx 1 tensor to be K
-    // major (required condition 1) from the above doc).
+    // contig (required condition 1) from the above doc).
     auto mfmaLayout = dyn_cast<ttg::AMDMfmaEncodingAttr>(dstDotOp.getParent());
     return mfmaLayout &&
            (dstDotOp.getKWidth() == 8 || dstDotOp.getKWidth() == 16) &&

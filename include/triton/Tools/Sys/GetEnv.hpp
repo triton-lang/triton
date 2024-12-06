@@ -13,7 +13,6 @@ namespace mlir::triton {
 inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
     // clang-format off
     "AMDGCN_ENABLE_DUMP",
-    "AMDGCN_BYPASS_LDS_FOR_DOT"
     "AMDGCN_USE_BUFFER_OPS",
     "DISABLE_FAST_REDUCTION",
     "DISABLE_LLVM_OPT",
@@ -31,7 +30,11 @@ inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
     "TRITON_DISABLE_RESHAPE_ENCODING_INFERENCE",
     "TRITON_ENABLE_LLVM_DEBUG",
     "TRITON_HIP_STREAM_PREFETCH",
+<<<<<<< HEAD
     "TRITON_HIP_USE_BLOCK_PINGPONG",
+=======
+    "TRITON_HIP_BYPASS_LDS_FOR_DOT",
+>>>>>>> 036fe75a6 (Address comments)
     "TRITON_LLVM_DEBUG_ONLY",
     "TRITON_ENABLE_ASAN",
     "TRITON_OVERRIDE_ARCH",

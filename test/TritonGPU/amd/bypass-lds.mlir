@@ -1,18 +1,14 @@
-// RUN: triton-opt %s -split-input-file -tritonamdgpu-bypass-lds-for-dot-operand -tritonamdgpu-stream-pipeline=num_stages=2 -tritongpu-remove-layout-conversions | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritonamdgpu-bypass-lds-for-dot-operand -tritongpu-remove-layout-conversions | FileCheck %s
 
-// For Bypass LDS optimization to be efficient we need collaboration of 3 passes:
-//     1) Pipelining pass: This is because pipelining in registers is necessary.
-//     2) Bypass LDS pass: To convert load from blocked->dot layout.
-//     3) Remove layout conversion pass: To remove blocked->dot layout by changing layout of all ops that form tensor of pointers to dot layout.
+// For Bypass LDS optimization to be efficient we need collaboration of 2 passes:
+//     1) Bypass LDS pass: To convert load from blocked->dot layout.
+//     2) Remove layout conversion pass: To remove blocked->dot layout by changing layout of all ops that form tensor of pointers to dot layout.
 // Check that all of the optimizations were done properly to create efficient IR.
 
 // CHECK-LABEL: bypass_lds
 //       CHECK-NOT: ttg.convert_layout %{{.*}} : tensor<{{.*}}, #blocked2> -> tensor<{{.*}}, #ttg.dot_op<{opIdx = 1, parent = #mfma, kWidth = 8}>>
-//       CHECK: %[[DOT_LOAD_1:.+]] = tt.load %{{.*}} : tensor<64x256x!tt.ptr<f16>, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
-//       CHECK: %{{.*}} = scf.for %{{.*}} = %{{.*}} to %{{.*}} step %{{.*}} iter_args(%{{.*}} = %{{.*}}, %{{.*}} = %{{.*}}, %{{.*}} = %{{.*}}, %{{.*}} = %{{.*}}, %{{.*}} = %[[DOT_LOAD_1]], %{{.*}} = %{{.*}}) -> (tensor<256x256xf32, #mma>, tensor<256x64x!tt.ptr<f16>, #blocked>, i32, !ttg.memdesc<256x64xf16, #shared, #smem, mutable>, tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>, tensor<64x256x!tt.ptr<f16>, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>)
-//       CHECK: %[[DOT_LOAD_2:.+]] = tt.load %{{.*}} : tensor<64x256x!tt.ptr<f16>, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
-//       CHECK: scf.yield %{{.*}}, %{{.*}}, %{{.*}}, %{{.*}}, %[[DOT_LOAD_2:.+]], %{{.*}} : tensor<256x256xf32, #mma>, tensor<256x64x!tt.ptr<f16>, #blocked>, i32, !ttg.memdesc<256x64xf16, #shared, #smem, mutable>, tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>, tensor<64x256x!tt.ptr<f16>, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
-
+//       CHECK: %[[DOT_LOAD:.+]] = tt.load %{{.*}} : tensor<64x256x!tt.ptr<f16>, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
+//       CHECK: tt.dot %{{.*}}, %[[DOT_LOAD:.+]], %{{.*}} : tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<256x256xf32, #mma>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [0, 1]}>
 #blocked3 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 32], warpsPerCTA = [8, 1], order = [1, 0]}>
