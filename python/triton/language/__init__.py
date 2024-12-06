@@ -191,11 +191,7 @@ __all__ = [
     "floor",
     "fma",
     "full",
-<<<<<<< HEAD
-=======
-    "function_type",
     "gather",
->>>>>>> origin/main
     "histogram",
     "inline_asm_elementwise",
     "interleave",

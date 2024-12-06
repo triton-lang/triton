@@ -8,6 +8,7 @@ from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver
+from triton._utils import parse_list_string
 
 dirname = os.path.dirname(os.path.realpath(__file__))
 include_dir = [os.path.join(dirname, "include")]
@@ -164,7 +165,7 @@ class HIPUtils(object):
 
 # -------------------- Launcher ----------------------------
 def ty_to_cpp(ty):
-    if ty[0] == '*':
+    if ty[0] == '*' or ty == "none":
         return "hipDeviceptr_t"
     return {
         "i1": "int32_t",
@@ -186,13 +187,16 @@ def ty_to_cpp(ty):
 
 
 def make_launcher(constants, signature, ids, warp_size):
-    start_desc = len(signature)
-    #signature = generate_cu_signature(constants, signature, ids)
-    arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
 
     def _extracted_type(ty):
         if ty[0] == '*':
             return "PyObject*"
+        if ty[0] == '[':
+            if ty == "[]":
+                return "[]"
+            tys = parse_list_string(ty)
+            val = ','.join(map(_extracted_type, tys))
+            return f"[{val}]"
         return {
             'i1': 'int32_t',
             'i8': 'int8_t',
@@ -212,6 +216,14 @@ def make_launcher(constants, signature, ids, warp_size):
         }[ty]
 
     def format_of(ty):
+        if ty == "CUdeviceptr":
+          return "O"
+        if ty[0] == "[":
+            if ty == "[]":
+                return "()"
+            tys = parse_list_string(ty)
+            val = ''.join(map(format_of, tys))
+            return f"({val})"
         return {
             "PyObject*": "O",
             "float": "f",
@@ -227,14 +239,21 @@ def make_launcher(constants, signature, ids, warp_size):
             "uint64_t": "K",
         }[ty]
 
+    signature = {k: v for k, v in signature.items() if v != 'constexpr'}
     args_format = ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
     format = "iiiKKOOOO" + args_format
+    signature = ','.join(signature.values()).replace('[','').replace(']','')
+    signature = list(filter(bool, signature.split(',')))
+    signature = {i: s for i, s in enumerate(signature)}
     args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
+    # Record the end of regular arguments;
+    # subsequent arguments are architecture-specific descriptors, such as tensor descriptors for CUDA.
+    arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
 
     libhip_path = _get_path_to_hip_runtime_dylib()
 
     # generate glue code
-    params = [f"&arg{i}" for i in signature.keys() if i not in constants]
+    params = range(len(signature))
     params.append("&global_scratch")
     src = f"""
 #define __HIP_PLATFORM_AMD__
@@ -468,9 +487,8 @@ class HIPLauncher(object):
     def __init__(self, src, metadata):
         ids = {"ids_of_const_exprs": src.fn.constexprs if hasattr(src, "fn") else tuple()}
         constants = src.constants if hasattr(src, "constants") else dict()
-        cst_key = lambda i: src.fn.arg_names.index(i) if isinstance(i, str) else i
-        constants = {cst_key(key): value for key, value in constants.items()}
-        signature = {cst_key(key): value for key, value in src.signature.items()}
+        constants = {idx: value for idx, value in constants.items()}
+        signature = {idx: value for idx, value in src.signature.items()}
         src = make_launcher(constants, signature, ids, metadata.warp_size)
         mod = compile_module_from_src(src, "__triton_launcher")
         self.launch = mod.launch

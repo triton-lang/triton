@@ -192,6 +192,60 @@ class ContainsReturnChecker(ast.NodeVisitor):
         return self.visit(node.func)
 
 
+class ASTFunction:
+    
+    def get_path(self, x, path):
+        return reduce(lambda a, idx: a[idx], path, x)
+
+    def set_path(self, x, path, val):
+        prev = x if len(path) == 1 else self.get_path(x, path[:-1])
+        prev[path[-1]] = val
+        
+    def __init__(self, ret_types, arg_types, constexprs, constants, attrs):
+        self.ret_types = ret_types
+        self.arg_types = arg_types
+        self.constexprs = constexprs
+        self.constants = constants
+        self.attrs = attrs
+    
+    def serialize(self, builder: ir.builder):
+        # fill up IR values in template
+        # > build function
+        is_val = lambda path, _: path not in self.constexprs
+        val_paths = list(find_paths_if(self.arg_types, is_val).keys())
+        arg_types = [self.get_path(self.arg_types, path).to_ir(builder) for path in val_paths]
+        ret_types = [ret_type.to_ir(builder) for ret_type in self.ret_types]
+        return builder.get_function_ty(arg_types, ret_types)
+    
+    def deserialize(self, fn):
+        # create "template" 
+        def make_template(val):
+            if isinstance(val, (list, tuple, language.tuple_type)):
+                return language.tuple([make_template(x) for x in val])
+            return language.constexpr(None)
+        vals = make_template(self.arg_types)
+        is_val = lambda path, _: path not in self.constexprs
+        val_paths = list(find_paths_if(self.arg_types, is_val).keys())
+        # > set attributes
+        for attr_path, attr_specs in self.attrs.items():
+            for attr_name, attr_val in attr_specs:
+                if attr_path in val_paths:
+                    fn.set_arg_attr(val_paths.index(attr_path), attr_name, attr_val)
+        for i, path in enumerate(val_paths):
+            ty = self.get_path(self.arg_types, path)
+            if isinstance(ty, nv_tma_desc_type):
+                fn.set_arg_attr(i, "tt.nv_tma_desc", 1)
+        # > add IR values to the template
+        for i, path in enumerate(val_paths):
+            ty = self.get_path(self.arg_types, path)
+            self.set_path(vals, path, language.tensor(fn.args(i), ty))
+        # > add constexpr values to the template
+        constants = self.constants | self.constexprs
+        for path, val in constants.items():
+            self.set_path(vals, path, language.constexpr(val))
+        return vals
+
+
 class CodeGenerator(ast.NodeVisitor):
 
     def __init__(self, context, prototype, gscope, function_name, jit_fn: JITFunction, options,
@@ -1289,60 +1343,6 @@ def kernel_suffix(signature, specialization):
         if (i,) in specialization.divisibility_16:
             suffix += 'd'
     return suffix
-
-class ASTFunction:
-    
-    def get_path(self, x, path):
-        return reduce(lambda a, idx: a[idx], path, x)
-
-    def set_path(self, x, path, val):
-        prev = x if len(path) == 1 else self.get_path(x, path[:-1])
-        prev[path[-1]] = val
-        
-    def __init__(self, ret_types, arg_types, constexprs, constants, attrs):
-        self.ret_types = ret_types
-        self.arg_types = arg_types
-        self.constexprs = constexprs
-        self.constants = constants
-        self.attrs = attrs
-    
-    def serialize(self, builder: ir.builder):
-        # fill up IR values in template
-        # > build function
-        is_val = lambda path, _: path not in self.constexprs
-        val_paths = list(find_paths_if(self.arg_types, is_val).keys())
-        arg_types = [self.get_path(self.arg_types, path).to_ir(builder) for path in val_paths]
-        ret_types = [ret_type.to_ir(builder) for ret_type in self.ret_types]
-        return builder.get_function_ty(arg_types, ret_types)
-    
-    def deserialize(self, fn):
-        # create "template" 
-        def make_template(val):
-            if isinstance(val, (list, tuple, language.tuple_type)):
-                return language.tuple([make_template(x) for x in val])
-            return language.constexpr(None)
-        vals = make_template(self.arg_types)
-        is_val = lambda path, _: path not in self.constexprs
-        val_paths = list(find_paths_if(self.arg_types, is_val).keys())
-        # > set attributes
-        for attr_path, attr_specs in self.attrs.items():
-            for attr_name, attr_val in attr_specs:
-                if attr_path in val_paths:
-                    fn.set_arg_attr(val_paths.index(attr_path), attr_name, attr_val)
-        for i, path in enumerate(val_paths):
-            ty = self.get_path(self.arg_types, path)
-            if isinstance(ty, nv_tma_desc_type):
-                fn.set_arg_attr(i, "tt.nv_tma_desc", 1)
-        # > add IR values to the template
-        for i, path in enumerate(val_paths):
-            ty = self.get_path(self.arg_types, path)
-            self.set_path(vals, path, language.tensor(fn.args(i), ty))
-        # > add constexpr values to the template
-        constants = self.constants | self.constexprs
-        for path, val in constants.items():
-            self.set_path(vals, path, language.constexpr(val))
-        return vals
-        
         
 
 def ast_to_ttir(fn, specialization, context, options, codegen_fns, module_map):
