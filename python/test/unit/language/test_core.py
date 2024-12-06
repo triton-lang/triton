@@ -6086,10 +6086,9 @@ def test_tl_range(device):
     a = torch.randn((M, K), device=device, dtype=torch.float16)
     b = torch.randn((K, N), device=device, dtype=torch.float16)
     c = torch.empty((M, N), dtype=torch.float32, device=device)
-    pgm = matmul_kernel[
-        1,
-    ](a, b, c, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1), BLOCK_M, BLOCK_N,
-      BLOCK_K, 0, num_stages=5)
+    grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
+    pgm = matmul_kernel[grid](a, b, c, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0),
+                              c.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, 0, num_stages=5)
     if is_cpu():
         # torch.matmul not implemented for Half float (float16) cpu
         ref_out = torch.tensor(np.matmul(to_numpy(a), to_numpy(b)), dtype=torch.float32, device=device)
