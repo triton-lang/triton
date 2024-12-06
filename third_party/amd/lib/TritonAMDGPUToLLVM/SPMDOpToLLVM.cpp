@@ -1,5 +1,7 @@
+#include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 
 using namespace mlir;
 
@@ -25,10 +27,39 @@ struct GetNumProgramsOpConversion
   }
 };
 
+struct CondBarrierOpConversion
+    : public ConvertOpToLLVMPattern<triton::amdgpu::condBarrierOp> {
+  using ConvertOpToLLVMPattern<
+      triton::amdgpu::condBarrierOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::amdgpu::condBarrierOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    auto pred = op->getOperand(0);
+    Block *currentBlock = rewriter.getInsertionBlock();
+    Block *afterCondBarBlock =
+        rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+    Block *trueBlock = rewriter.createBlock(afterCondBarBlock);
+    rewriter.setInsertionPointToEnd(currentBlock);
+    rewriter.create<LLVM::CondBrOp>(loc, pred, trueBlock, afterCondBarBlock);
+
+    // conditional barrier
+    rewriter.setInsertionPointToStart(trueBlock);
+    rewriter.create<ROCDL::SBarrierOp>(loc);
+    rewriter.create<LLVM::BrOp>(loc, afterCondBarBlock);
+
+    // rewriter.setInsertionPointToStart(afterCondBarBlock);
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 } // namespace
 
 void mlir::triton::AMD::populateSPMDOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
   patterns.add<GetNumProgramsOpConversion>(typeConverter, benefit);
+  patterns.add<CondBarrierOpConversion>(typeConverter, benefit);
 }
