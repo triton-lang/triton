@@ -10,7 +10,6 @@
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Support/LLVM.h"
-#include "triton/Conversion/MLIRTypes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -409,6 +408,17 @@ unsigned ScanLoweringHelper::getAxisBlockStride() {
   llvm_unreachable("Axis not found in order");
 }
 
+GatherLoweringHelper::GatherLoweringHelper(triton::GatherOp gatherOp)
+    : gatherOp(gatherOp) {}
+
+unsigned GatherLoweringHelper::getScratchSizeInBytes() {
+  // For now, lower the gather op by writing the source tensor to shared memory.
+  // TODO(jeff): Leverage locality to avoid using scratch space when possible.
+  RankedTensorType srcType = gatherOp.getSrc().getType();
+  return product(srcType.getShape()) *
+         ceil<unsigned>(srcType.getElementTypeBitWidth(), 8);
+}
+
 unsigned getNumScratchElements(ArrayRef<unsigned> shape) {
   if (shape.empty())
     return 0;
@@ -629,27 +639,9 @@ bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
              dotOperandLayout.getOpIdx() == 0 &&
              mmaLayout.getWarpsPerCTA()[1] == 1 &&
              !cvtNeedsSharedMemory(parentTy, srcTy) &&
-             (elementTypeSize == 16 || elementTypeSize == 8);
+             (elementTypeSize == 16 || elementTypeSize == 8) &&
+             dotOperandLayout.getKWidth() == 32 / elementTypeSize;
   return ans;
-}
-
-bool matchMFMAAndDotOperandShuffleCase(RankedTensorType srcTy,
-                                       RankedTensorType dstTy) {
-  auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(srcTy.getEncoding());
-  auto dotOperandLayout = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
-  if (!mfmaLayout || !dotOperandLayout)
-    return false;
-
-  // Currently supporting 32x32 and 16x16 FP8 MFMA -> dot operand case
-  return dotOperandLayout.getParent() == mfmaLayout &&
-         dotOperandLayout.getOpIdx() == 0 && mfmaLayout.getIsTransposed() &&
-         dotOperandLayout.getKWidth() == 8 &&
-         getContigPerThread(mfmaLayout)[1] == 4 &&
-         ((mfmaLayout.getMDim() == 16 && mfmaLayout.getNDim() == 16) ||
-          (mfmaLayout.getMDim() == 32 && mfmaLayout.getNDim() == 32)) &&
-         triton::type::isFloat8(srcTy.getElementType()) &&
-         triton::type::isFloat8(dstTy.getElementType()) &&
-         mfmaLayout.getWarpsPerCTA()[1] == 1;
 }
 
 // We get the smallest submap of srcTy^{-1} * dstTy that is not the identity
@@ -671,42 +663,8 @@ std::optional<LinearLayout> minimalCvtLayout(RankedTensorType srcTy,
   StringAttr kLane = StringAttr::get(ctx, "lane");
   StringAttr kWarp = StringAttr::get(ctx, "warp");
   StringAttr kBlock = StringAttr::get(ctx, "block");
-  auto numSrcRegs = srcLayout->getInDimSize(kRegister);
-  auto numDstRegs = dstLayout->getInDimSize(kRegister);
-  // The `invertAndCompose` function will generate a layout that is injective
-  // by assigning new output dimensions to free variables.  For instance,
-  // consider a scenario where `srcLayout` has a free variable in the lane
-  // dimension, while `dstLayout` has two free variables in the lane
-  // dimension and also a larger number of registers.
-  // The injective form of `srcLayout` will add only a single additional row
-  // to the transformation matrix, whereas the injective form of `dstLayout`
-  // will add two additional rows.  This discrepancy causes misleading results
-  // because the matrices end up with a different number of rows.
-  //
-  // Take `dstLayout ⋅ srcLayout^-1` as an example:
-  //
-  //   - `injective(dstLayout)`: [n, m] → [n + 2, m]
-  //   - `injective(srcLayout)`: [n, m] → [n + 1, m]
-  //   - `injective(srcLayout)^-1`: [n + 1, m] → [m, n + 1]
-  //   - `injective(dstLayout) ⋅ injective(srcLayout)^-1`: [n + 2, m] ⋅ [m, n +
-  //   1] → [n + 2, n + 1]
-  //
-  // Here, the `(n + 1)`-th row added by `dstLayout` represents the free
-  // variable in registers, and the `(n + 2)`-th row represents the free
-  // variable in lanes.  However, the `(n + 1)`-th row added by `srcLayout`
-  // represents the free variable in lanes.  As a result, the `(n + 1)`-th row
-  // in two layouts do not correspond to the same free variable.
-  //
-  // To address this issue, we pad the free variables in `srcLayout` and
-  // `dstLayout` to ensure they have the same number of registers.  This
-  // guarantees that the resulting matrices have the same number of rows,
-  // ensuring consistency in the composition process.
-  auto numRegs = std::max(numSrcRegs, numDstRegs);
-  auto srcLayoutWithFreeRegs = srcLayout->resize(kRegister, numRegs);
-  auto dstLayoutWithFreeRegs = dstLayout->resize(kRegister, numRegs);
-  // comp describes the layout function to create dst from src.
-  LinearLayout comp =
-      dstLayoutWithFreeRegs.invertAndCompose(srcLayoutWithFreeRegs);
+
+  auto comp = dstLayout->invertAndCompose(*srcLayout);
   // We try to quotient by the largest subspace first
   auto dims = SmallVector<StringRef>{"block", "warp", "lane", "register"};
   for (auto dim : dims) {
@@ -750,10 +708,7 @@ bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
   // supported yet in Triton's backend.
   return !cvtReordersRegisters(srcTy, dstTy) &&
          !isBlockedToDotShortcut(srcTy, dstTy) &&
-         !matchMmaV3AndDotOperandLayout(srcTy, dstTy) &&
-         // to be removed when generalized warp shuffle conversions
-         // are ready:
-         !matchMFMAAndDotOperandShuffleCase(srcTy, dstTy);
+         !matchMmaV3AndDotOperandLayout(srcTy, dstTy);
 }
 
 bool atomicNeedsSharedMemory(Value value) {

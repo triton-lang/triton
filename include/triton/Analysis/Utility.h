@@ -153,6 +153,19 @@ private:
   SmallVector<Type> srcElementTypes;
 };
 
+// Helper class for lowering `tt.gather` operations. This class shares lowering
+// logic between shared memory allocation and LLVM codegen.
+class GatherLoweringHelper {
+public:
+  GatherLoweringHelper(triton::GatherOp gatherOp);
+
+  // Get the shared memory scratch size required by this op.
+  unsigned getScratchSizeInBytes();
+
+private:
+  triton::GatherOp gatherOp;
+};
+
 // Decomposes a reshape into simpler pieces.
 //
 // As an example, suppose we have a reshape from [4,4,4] to [2,2,8,2].
@@ -217,11 +230,6 @@ bool isBlockedToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy);
 // Return true if the src and dst layout match.
 bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
                                    RankedTensorType dstTy);
-
-// Check if MFMA layout can be converted to the dot operand
-// layout using warp shuffle.
-bool matchMFMAAndDotOperandShuffleCase(RankedTensorType srcTy,
-                                       RankedTensorType dstTy);
 
 // TODO: Move utility functions that belong to ConvertLayoutOp to class
 // ConvertLayoutOpHelper in the future

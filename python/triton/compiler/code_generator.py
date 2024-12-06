@@ -1,7 +1,6 @@
 import ast
 import inspect
 import re
-import sys
 import warnings
 import os
 import textwrap
@@ -1174,17 +1173,6 @@ class CodeGenerator(ast.NodeVisitor):
         return self._apply_binary_method(method_name, lhs, rhs)
 
     _method_name_for_bool_op: Dict[Type[ast.boolop], str] = {ast.And: 'logical_and', ast.Or: 'logical_or'}
-
-    if sys.version_info < (3, 8):
-
-        def visit_NameConstant(self, node):
-            return constexpr(node.value)
-
-        def visit_Num(self, node):
-            return constexpr(node.n)
-
-        def visit_Str(self, node):
-            return constexpr(ast.literal_eval(node))
 
     def visit_Attribute(self, node):
         lhs = self.visit(node.value)

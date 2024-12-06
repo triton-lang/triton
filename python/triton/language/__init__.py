@@ -70,6 +70,7 @@ from .core import (
     float8e5,
     float8e5b16,
     full,
+    gather,
     histogram,
     inline_asm_elementwise,
     int1,
@@ -190,6 +191,11 @@ __all__ = [
     "floor",
     "fma",
     "full",
+<<<<<<< HEAD
+=======
+    "function_type",
+    "gather",
+>>>>>>> origin/main
     "histogram",
     "inline_asm_elementwise",
     "interleave",

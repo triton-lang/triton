@@ -8,9 +8,12 @@ add_triton_library(TritonGPUTransforms
   OptimizeAccumulatorInit.cpp
   OptimizeDotOperands.cpp
   OptimizeThreadLocality.cpp
+  Pipeliner/AssignLatencies.cpp
   Pipeliner/MatmulLoopPipeline.cpp
   Pipeliner/OuterLoopPipeline.cpp
   Pipeliner/PipelineExpander.cpp
+  Pipeliner/TestPipelineAssignLatencies.cpp
+  Pipeliner/TestPipelineScheduleLoop.cpp
   Pipeliner/SoftwarePipeliner.cpp
   Pipeliner/TMAStoresPipeline.cpp
   Pipeliner/PipeliningUtility.cpp
@@ -18,6 +21,7 @@ add_triton_library(TritonGPUTransforms
   Prefetch.cpp
   RemoveLayoutConversions.cpp
   ReorderInstructions.cpp
+  CoalesceAsyncCopy.cpp
   Utility.cpp
 
   DEPENDS
