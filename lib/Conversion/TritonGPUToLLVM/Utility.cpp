@@ -233,23 +233,35 @@ bool emitTransferBetweenRegistersAndShared(
   auto ptrTy = shmemBase.getType();
   Value zero = i32_val(0);
   SmallVector<Value> ret;
-  for (int i = 0; i < numElems / vecElems; i++) {
-    // Get the address to load/store.  The multi-dim address is (offsetX1, ...,
-    // offsetXN, block), where the offsets appear in minor-to-major order, and
-    // we drop_end to drop block, which we know from above will be 0.
-    auto multiDimShmemOffset =
-        llvm::to_vector(llvm::drop_end(llvm::make_second_range(
-            applyLinearLayout(loc, rewriter, *regToSharedLayout,
-                              {{kRegister, i32_val(i * vecElems)},
-                               {kLane, laneId},
-                               {kWarp, warpId},
-                               {kBlock, zero}}))));
 
-    // Reorder strides according to `order`.  This way they match the
-    // multi-dimensional offsets in regToSharedLayout.
-    auto sharedOrder = triton::gpu::getOrder(sharedTy.getEncoding());
-    Value shmemOffset = dot(rewriter, loc, multiDimShmemOffset,
-                            applyPermutation(shmemStrides, sharedOrder));
+  // Flatten regToSharedLayout out dims into linear smem index
+  auto sharedOrder = triton::gpu::getOrder(sharedTy.getEncoding());
+  SmallVector<StringAttr> permutedDims;
+  for (int iDim : sharedOrder) {
+    permutedDims.push_back(str_attr("offset" + Twine(iDim)));
+  }
+  auto flatLayout =
+      regToSharedLayout->transposeOuts(permutedDims).flattenOuts();
+
+  // Precompute common smem offset for this thread
+  auto threadSmemOffset = applyLinearLayout(loc, rewriter, flatLayout,
+                                            {{kRegister, i32_val(0)},
+                                             {kLane, laneId},
+                                             {kWarp, warpId},
+                                             {kBlock, zero}})[0]
+                              .second;
+
+  for (int i = 0; i < numElems / vecElems; i++) {
+    // Get the address to load/store.
+    auto regOffset = applyLinearLayout(loc, rewriter, flatLayout,
+                                       {{kRegister, i32_val(i * vecElems)},
+                                        {kLane, zero},
+                                        {kWarp, zero},
+                                        {kBlock, zero}})[0]
+                         .second;
+
+    Value shmemOffset = xor_(threadSmemOffset, regOffset);
+
     auto vecAddr = gep(ptrTy, elemLlvmTy, shmemBase, shmemOffset);
     vecAddr.setInbounds(true);
 
