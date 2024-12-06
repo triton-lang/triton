@@ -1123,6 +1123,12 @@ emitBaseIndexForLayout(Location loc, RewriterBase &rewriter,
   return idx;
 }
 
+// Emit code to compute the (blockId, warpId, laneId) for the current thread.
+std::tuple</*blockId=*/Value, /*warpId=*/Value, /*laneId=*/Value>
+emitHardwareTuple(Location loc, RewriterBase &rewriter,
+                  const TargetInfoBase &target, bool withCTAOffset,
+                  unsigned threadsPerWarp);
+
 // Emit indices calculation within each ConversionPattern, and returns a
 // [elemsPerThread X rank] index matrix.
 //
