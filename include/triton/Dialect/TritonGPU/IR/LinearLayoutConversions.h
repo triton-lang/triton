@@ -37,12 +37,18 @@ namespace mlir::triton::gpu {
 // to compute the linear layout for MMAv3 (i.e. Hopper) shared layouts (i.e.
 // shared layouts with hasLeadingOffset == true) but is otherwise unused.
 //
+// inThreadTranspose is a flag indicating if transpose should be performed while
+// the data resides in thread-local registers. This is set to true on AMD
+// platform when non-KContig matrix is about to be written into LDS (shared
+// memory) but is otherwise unused. More details are provided in the
+// transpose2D() function in LinearLayoutConversions.cpp.
 // Returns std::nullopt if the given layout can't be converted to an LL.
 // TODO(jlebar): Remove the std::optional once all layouts are supported.
 //
 std::optional<LinearLayout>
 toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
-               std::optional<int32_t> elemBitWidth = std::nullopt);
+               std::optional<int32_t> elemBitWidth = std::nullopt,
+               bool inThreadTranspose = false);
 
 // Given a linear layout where the input dimensions contain a "block" dimension,
 // this method sets the "block" dimension to 0 and removes the corresponding

@@ -124,4 +124,19 @@ def TritonAMDGPUConvertToBufferOps : Pass<"tritonamdgpu-convert-buffer-ops", "ml
   let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
 }
 
+def TritonAMDGPUInThreadTranspose: Pass<"tritonamdgpu-in-thread-transpose", "mlir::ModuleOp"> {
+  let summary = "Transpose K-outer dot operand while data is loaded into register right before writing to LDS";
+
+  let description = [{
+    Transpose non-KContig dot operand (not consecutive on K dimension) right before writing data into LDS. This feature
+    happens right after data has been loaded from global memory to thread-local registers and will promote
+    (does not guarantee) vectorized LDS write while let SharedEncodingAttr guarantee vectorized LDS read, by
+    adding few VALU instructions to perform in-thread transpose.
+  }];
+
+  let constructor = "mlir::createTritonAMDGPUInThreadTransposePass()";
+
+  let dependentDialects = [];
+}
+
 #endif
