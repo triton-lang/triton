@@ -35,7 +35,7 @@ def min_dot_size(target: GPUTarget):
         return get_gfx94_limits
     if "gfx9" in arch_str:
         return get_gfx9_limits
-    # Other architectures will only support 16,16,16 with mfma instructions
+    # gfx11 and gfx12 architectures will only support 16,16,16 with wmma instructions
     return lambda lhsType, rhsType: (1, 1, 1) if is_fma_supported(lhsType.scalar, rhsType.scalar) else (16, 16, 16)
 
 

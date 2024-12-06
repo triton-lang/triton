@@ -77,8 +77,7 @@ struct DimIdx {
 /// Put elements from Value vec to appropriate indexes in opValues array.
 ///
 /// This function maps elements of 3d sub-tensor in linear array.
-/// Axes are arranged in following order from fastest to slowest: [nonKdim,
-/// kDim, bDim]
+/// Axes are arranged in an order provided "opOrder" argument
 void storeValuesInLinearVector(PatternRewriter &rewriter, Location loc,
                                SmallVector<Value> &opValues, Value vec,
                                ArrayRef<unsigned> perThreadTileShape,
