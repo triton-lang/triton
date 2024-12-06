@@ -81,15 +81,16 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::cpu::registerTritonOpScalarizeExternalModels(registry);
 
   // TODO: register Triton & TritonGPU passes
-  registry.insert<mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,
-                  mlir::triton::cpu::TritonCPUDialect,
-                  mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
-                  mlir::triton::gpu::TritonGPUDialect, mlir::math::MathDialect,
-                  mlir::arith::ArithDialect, mlir::scf::SCFDialect,
-                  mlir::memref::MemRefDialect, mlir::vector::VectorDialect,
-                  mlir::amx::AMXDialect, mlir::tensor::TensorDialect,
-                  mlir::gpu::GPUDialect, mlir::LLVM::LLVMDialect,
-                  mlir::NVVM::NVVMDialect, mlir::triton::nvgpu::NVGPUDialect,
-                  mlir::triton::amdgpu::TritonAMDGPUDialect,
-                  mlir::triton::proton::ProtonDialect, mlir::ROCDL::ROCDLDialect>();
+  registry
+      .insert<mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,
+              mlir::triton::cpu::TritonCPUDialect,
+              mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
+              mlir::triton::gpu::TritonGPUDialect, mlir::math::MathDialect,
+              mlir::arith::ArithDialect, mlir::scf::SCFDialect,
+              mlir::memref::MemRefDialect, mlir::vector::VectorDialect,
+              mlir::amx::AMXDialect, mlir::tensor::TensorDialect,
+              mlir::gpu::GPUDialect, mlir::LLVM::LLVMDialect,
+              mlir::NVVM::NVVMDialect, mlir::triton::nvgpu::NVGPUDialect,
+              mlir::triton::amdgpu::TritonAMDGPUDialect,
+              mlir::triton::proton::ProtonDialect, mlir::ROCDL::ROCDLDialect>();
 }
