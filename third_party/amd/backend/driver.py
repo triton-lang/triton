@@ -197,26 +197,10 @@ def make_launcher(constants, signature, ids, warp_size):
             tys = parse_list_string(ty)
             val = ','.join(map(_extracted_type, tys))
             return f"[{val}]"
-        return {
-            'i1': 'int32_t',
-            'i8': 'int8_t',
-            'i16': 'int16_t',
-            'i32': 'int32_t',
-            'i64': 'int64_t',
-            'u1': 'uint32_t',
-            'u8': 'uint8_t',
-            'u16': 'uint16_t',
-            'u32': 'uint32_t',
-            'u64': 'uint64_t',
-            'fp16': 'float',
-            'bf16': 'float',
-            'fp32': 'float',
-            'f32': 'float',
-            'fp64': 'double',
-        }[ty]
+        return ty_to_cpp(ty)
 
     def format_of(ty):
-        if ty == "CUdeviceptr":
+        if ty == "hipDeviceptr_t":
             return "O"
         if ty[0] == "[":
             if ty == "[]":
@@ -254,6 +238,7 @@ def make_launcher(constants, signature, ids, warp_size):
 
     # generate glue code
     params = list(range(len(signature)))
+    params = [f"&arg{i}" for i in signature.keys() if i not in constants]
     params.append("&global_scratch")
     src = f"""
 #define __HIP_PLATFORM_AMD__
