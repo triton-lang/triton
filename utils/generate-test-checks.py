@@ -1,23 +1,29 @@
 #!/usr/bin/env python3
-"""A script to generate FileCheck statements for mlir unit tests.
+"""
+===============================================================
+A script to generate FileCheck statements for mlir unit tests.
+===============================================================
 
 This script is a utility to add FileCheck patterns to an mlir file.
 
-NOTE: The input .mlir is expected to be the output from the parser, not a
+NOTE: The input ``.mlir`` is expected to be the output from the parser, not a
 stripped down variant.
 
 Example usage:
-$ generate-test-checks.py foo.mlir
-$ mlir-opt foo.mlir -transformation | generate-test-checks.py
-$ mlir-opt foo.mlir -transformation | generate-test-checks.py --source foo.mlir
-$ mlir-opt foo.mlir -transformation | generate-test-checks.py --source foo.mlir -i
-$ mlir-opt foo.mlir -transformation | generate-test-checks.py --source foo.mlir -i --source_delim_regex='gpu.func @'
+
+.. code-block:: shell
+
+    $ generate-test-checks.py foo.mlir
+    $ mlir-opt foo.mlir -transformation | generate-test-checks.py
+    $ mlir-opt foo.mlir -transformation | generate-test-checks.py --source foo.mlir
+    $ mlir-opt foo.mlir -transformation | generate-test-checks.py --source foo.mlir -i
+    $ mlir-opt foo.mlir -transformation | generate-test-checks.py --source foo.mlir -i --source_delim_regex='gpu.func @'
 
 The script will heuristically generate CHECK/CHECK-LABEL commands for each line
 within the file. By default this script will also try to insert string
-substitution blocks for all SSA value names. If --source file is specified, the
+substitution blocks for all SSA value names. If ``--source file`` is specified, the
 script will attempt to insert the generated CHECKs to the source file by looking
-for line positions matched by --source_delim_regex.
+for line positions matched by ``--source_delim_regex``.
 
 The script is designed to make adding checks to a test case fast, it is *not*
 designed to be authoritative about what constitutes a good test!

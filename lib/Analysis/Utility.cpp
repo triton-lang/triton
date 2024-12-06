@@ -663,42 +663,8 @@ std::optional<LinearLayout> minimalCvtLayout(RankedTensorType srcTy,
   StringAttr kLane = StringAttr::get(ctx, "lane");
   StringAttr kWarp = StringAttr::get(ctx, "warp");
   StringAttr kBlock = StringAttr::get(ctx, "block");
-  auto numSrcRegs = srcLayout->getInDimSize(kRegister);
-  auto numDstRegs = dstLayout->getInDimSize(kRegister);
-  // The `invertAndCompose` function will generate a layout that is injective
-  // by assigning new output dimensions to free variables.  For instance,
-  // consider a scenario where `srcLayout` has a free variable in the lane
-  // dimension, while `dstLayout` has two free variables in the lane
-  // dimension and also a larger number of registers.
-  // The injective form of `srcLayout` will add only a single additional row
-  // to the transformation matrix, whereas the injective form of `dstLayout`
-  // will add two additional rows.  This discrepancy causes misleading results
-  // because the matrices end up with a different number of rows.
-  //
-  // Take `dstLayout ⋅ srcLayout^-1` as an example:
-  //
-  //   - `injective(dstLayout)`: [n, m] → [n + 2, m]
-  //   - `injective(srcLayout)`: [n, m] → [n + 1, m]
-  //   - `injective(srcLayout)^-1`: [n + 1, m] → [m, n + 1]
-  //   - `injective(dstLayout) ⋅ injective(srcLayout)^-1`: [n + 2, m] ⋅ [m, n +
-  //   1] → [n + 2, n + 1]
-  //
-  // Here, the `(n + 1)`-th row added by `dstLayout` represents the free
-  // variable in registers, and the `(n + 2)`-th row represents the free
-  // variable in lanes.  However, the `(n + 1)`-th row added by `srcLayout`
-  // represents the free variable in lanes.  As a result, the `(n + 1)`-th row
-  // in two layouts do not correspond to the same free variable.
-  //
-  // To address this issue, we pad the free variables in `srcLayout` and
-  // `dstLayout` to ensure they have the same number of registers.  This
-  // guarantees that the resulting matrices have the same number of rows,
-  // ensuring consistency in the composition process.
-  auto numRegs = std::max(numSrcRegs, numDstRegs);
-  auto srcLayoutWithFreeRegs = srcLayout->resize(kRegister, numRegs);
-  auto dstLayoutWithFreeRegs = dstLayout->resize(kRegister, numRegs);
-  // comp describes the layout function to create dst from src.
-  LinearLayout comp =
-      dstLayoutWithFreeRegs.invertAndCompose(srcLayoutWithFreeRegs);
+
+  auto comp = dstLayout->invertAndCompose(*srcLayout);
   // We try to quotient by the largest subspace first
   auto dims = SmallVector<StringRef>{"block", "warp", "lane", "register"};
   for (auto dim : dims) {
