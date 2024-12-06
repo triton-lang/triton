@@ -154,9 +154,8 @@ import torch
 import triton
 import triton.language as tl
 
-DEVICE = triton.runtime.driver.active.get_current_target().backend
-# when using hip devices, the device string in pytorch is "cuda"
-PYTORCH_DEVICE = "cuda" if DEVICE == "hip" else DEVICE
+DEVICE = torch.device(triton.runtime.driver.active.get_current_target().backend,
+                      triton.runtime.driver.active.get_current_device())
 
 
 def is_cuda():
@@ -359,8 +358,8 @@ def matmul(a, b, activation=""):
 # We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS).
 
 torch.manual_seed(0)
-a = torch.randn((512, 512), device=PYTORCH_DEVICE, dtype=torch.float16)
-b = torch.randn((512, 512), device=PYTORCH_DEVICE, dtype=torch.float16)
+a = torch.randn((512, 512), device=DEVICE, dtype=torch.float16)
+b = torch.randn((512, 512), device=DEVICE, dtype=torch.float16)
 triton_output = matmul(a, b)
 torch_output = torch.matmul(a, b)
 print(f"triton_output_with_fp16_inputs={triton_output}")
@@ -377,8 +376,8 @@ else:
 TORCH_HAS_FP8 = hasattr(torch, "float8_e5m2")
 if TORCH_HAS_FP8 and is_cuda():
     torch.manual_seed(0)
-    a = torch.randn((512, 512), device=PYTORCH_DEVICE, dtype=torch.float16)
-    b = torch.randn((512, 512), device=PYTORCH_DEVICE, dtype=torch.float16)
+    a = torch.randn((512, 512), device=DEVICE, dtype=torch.float16)
+    b = torch.randn((512, 512), device=DEVICE, dtype=torch.float16)
     a = a.to(torch.float8_e5m2)
     # pre-transpose b for efficiency.
     b = b.T
@@ -427,8 +426,8 @@ for fp8_inputs in [False, True]:
 
 @triton.testing.perf_report(configs)
 def benchmark(M, N, K, provider, fp8_inputs):
-    a = torch.randn((M, K), device=PYTORCH_DEVICE, dtype=torch.float16)
-    b = torch.randn((K, N), device=PYTORCH_DEVICE, dtype=torch.float16)
+    a = torch.randn((M, K), device=DEVICE, dtype=torch.float16)
+    b = torch.randn((K, N), device=DEVICE, dtype=torch.float16)
     if TORCH_HAS_FP8 and fp8_inputs:
         a = a.to(torch.float8_e5m2)
         b = b.T

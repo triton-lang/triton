@@ -42,9 +42,8 @@ try:
 except ModuleNotFoundError:
     HAS_APEX = False
 
-DEVICE = triton.runtime.driver.active.get_current_target().backend
-# when using hip devices, the device string in pytorch is "cuda"
-PYTORCH_DEVICE = "cuda" if DEVICE == "hip" else DEVICE
+DEVICE = torch.device(triton.runtime.driver.active.get_current_target().backend,
+                      triton.runtime.driver.active.get_current_device())
 
 
 @triton.jit
@@ -294,7 +293,7 @@ class LayerNorm(torch.autograd.Function):
 layer_norm = LayerNorm.apply
 
 
-def test_layer_norm(M, N, dtype, eps=1e-5, device=PYTORCH_DEVICE):
+def test_layer_norm(M, N, dtype, eps=1e-5, device=DEVICE):
     # create data
     x_shape = (M, N)
     w_shape = (x_shape[-1], )
@@ -332,7 +331,7 @@ def test_layer_norm(M, N, dtype, eps=1e-5, device=PYTORCH_DEVICE):
         plot_name='layer-norm-backward',
         args={'M': 4096, 'dtype': torch.float16, 'mode': 'backward'},
     ))
-def bench_layer_norm(M, N, dtype, provider, mode='backward', eps=1e-5, device=PYTORCH_DEVICE):
+def bench_layer_norm(M, N, dtype, provider, mode='backward', eps=1e-5, device=DEVICE):
     # create data
     x_shape = (M, N)
     w_shape = (x_shape[-1], )

@@ -25,9 +25,8 @@ from triton.language.extra import libdevice
 
 from pathlib import Path
 
-DEVICE = triton.runtime.driver.active.get_current_target().backend
-# when using hip devices, the device string in pytorch is "cuda"
-PYTORCH_DEVICE = "cuda" if DEVICE == "hip" else DEVICE
+DEVICE = torch.device(triton.runtime.driver.active.get_current_target().backend,
+                      triton.runtime.driver.active.get_current_device())
 
 
 @triton.jit
@@ -53,8 +52,8 @@ def asin_kernel(
 
 torch.manual_seed(0)
 size = 98432
-x = torch.rand(size, device=PYTORCH_DEVICE)
-output_triton = torch.zeros(size, device=PYTORCH_DEVICE)
+x = torch.rand(size, device=DEVICE)
+output_triton = torch.zeros(size, device=DEVICE)
 output_torch = torch.asin(x)
 assert x.is_cuda and output_triton.is_cuda
 n_elements = output_torch.numel()

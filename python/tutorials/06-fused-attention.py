@@ -19,9 +19,8 @@ import torch
 import triton
 import triton.language as tl
 
-DEVICE = triton.runtime.driver.active.get_current_target().backend
-# when using hip devices, the device string in pytorch is "cuda"
-PYTORCH_DEVICE = "cuda" if DEVICE == "hip" else DEVICE
+DEVICE = torch.device(triton.runtime.driver.active.get_current_target().backend,
+                      triton.runtime.driver.active.get_current_device())
 
 
 def is_hip():
@@ -530,16 +529,13 @@ attention = _attention.apply
 @pytest.mark.parametrize("causal", [True])
 def test_op(Z, H, N_CTX, HEAD_DIM, causal, dtype=torch.float16):
     torch.manual_seed(20)
-    q = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=PYTORCH_DEVICE).normal_(mean=0.0,
-                                                                                          std=0.5).requires_grad_())
-    k = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=PYTORCH_DEVICE).normal_(mean=0.0,
-                                                                                          std=0.5).requires_grad_())
-    v = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=PYTORCH_DEVICE).normal_(mean=0.0,
-                                                                                          std=0.5).requires_grad_())
+    q = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
+    k = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
+    v = (torch.empty((Z, H, N_CTX, HEAD_DIM), dtype=dtype, device=DEVICE).normal_(mean=0.0, std=0.5).requires_grad_())
     sm_scale = 0.5
     dout = torch.randn_like(q)
     # reference implementation
-    M = torch.tril(torch.ones((N_CTX, N_CTX), device=PYTORCH_DEVICE))
+    M = torch.tril(torch.ones((N_CTX, N_CTX), device=DEVICE))
     p = torch.matmul(q, k.transpose(2, 3)) * sm_scale
     if causal:
         p[:, :, M == 0] = float("-inf")
@@ -606,7 +602,7 @@ for mode in ["fwd", "bwd"]:
 
 
 @triton.testing.perf_report(configs)
-def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, mode, provider, device=PYTORCH_DEVICE):
+def bench_flash_attention(BATCH, H, N_CTX, HEAD_DIM, causal, mode, provider, device=DEVICE):
     assert mode in ["fwd", "bwd"]
     dtype = torch.float16
     if "triton" in provider:

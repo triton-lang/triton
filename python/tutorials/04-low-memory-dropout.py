@@ -38,9 +38,8 @@ import torch
 import triton
 import triton.language as tl
 
-DEVICE = triton.runtime.driver.active.get_current_target().backend
-# when using hip devices, the device string in pytorch is "cuda"
-PYTORCH_DEVICE = "cuda" if DEVICE == "hip" else DEVICE
+DEVICE = torch.device(triton.runtime.driver.active.get_current_target().backend,
+                      triton.runtime.driver.active.get_current_device())
 
 
 @triton.jit
@@ -75,10 +74,10 @@ def dropout(x, x_keep, p):
 
 
 # Input tensor
-x = torch.randn(size=(10, ), device=PYTORCH_DEVICE)
+x = torch.randn(size=(10, ), device=DEVICE)
 # Dropout mask
 p = 0.5
-x_keep = (torch.rand(size=(10, ), device=PYTORCH_DEVICE) > p).to(torch.int32)
+x_keep = (torch.rand(size=(10, ), device=DEVICE) > p).to(torch.int32)
 #
 output = dropout(x, x_keep=x_keep, p=p)
 print(tabulate.tabulate([
@@ -142,7 +141,7 @@ def seeded_dropout(x, p, seed):
     return output
 
 
-x = torch.randn(size=(10, ), device=PYTORCH_DEVICE)
+x = torch.randn(size=(10, ), device=DEVICE)
 # Compare this to the baseline - dropout mask is never instantiated!
 output = seeded_dropout(x, p=0.5, seed=123)
 output2 = seeded_dropout(x, p=0.5, seed=123)

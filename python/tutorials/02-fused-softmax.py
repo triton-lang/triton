@@ -27,9 +27,8 @@ import triton
 import triton.language as tl
 from triton.runtime import driver
 
-DEVICE = triton.runtime.driver.active.get_current_target().backend
-# when using hip devices, the device string in pytorch is "cuda"
-PYTORCH_DEVICE = "cuda" if DEVICE == "hip" else DEVICE
+DEVICE = torch.device(triton.runtime.driver.active.get_current_target().backend,
+                      triton.runtime.driver.active.get_current_device())
 
 
 def is_hip():
@@ -114,8 +113,7 @@ def softmax_kernel(output_ptr, input_ptr, input_row_stride, output_row_stride, n
 # %%
 # We can create a helper function that enqueues the kernel and its (meta-)arguments for any given input tensor.
 
-device = getattr(torch, PYTORCH_DEVICE).current_device()
-properties = driver.active.utils.get_device_properties(device)
+properties = driver.active.utils.get_device_properties(DEVICE.index)
 NUM_SM = properties["multiprocessor_count"]
 NUM_REGS = properties["max_num_regs"]
 SIZE_SMEM = properties["max_shared_mem"]
@@ -193,7 +191,7 @@ def softmax(x):
 # This will allow us to verify that our padding mechanism works.
 
 torch.manual_seed(0)
-x = torch.randn(1823, 781, device=PYTORCH_DEVICE)
+x = torch.randn(1823, 781, device=DEVICE)
 y_triton = softmax(x)
 y_torch = torch.softmax(x, axis=1)
 assert torch.allclose(y_triton, y_torch), (y_triton, y_torch)
@@ -225,9 +223,9 @@ assert torch.allclose(y_triton, y_torch), (y_triton, y_torch)
         args={'M': 4096},  # values for function arguments not in `x_names` and `y_name`
     ))
 def benchmark(M, N, provider):
-    x = torch.randn(M, N, device=PYTORCH_DEVICE, dtype=torch.float32)
-    stream = getattr(torch, PYTORCH_DEVICE).Stream()
-    getattr(torch, PYTORCH_DEVICE).set_stream(stream)
+    x = torch.randn(M, N, device=DEVICE, dtype=torch.float32)
+    stream = getattr(torch, DEVICE.type).Stream()
+    getattr(torch, DEVICE.type).set_stream(stream)
     if provider == 'torch':
         ms = triton.testing.do_bench(lambda: torch.softmax(x, axis=-1))
     if provider == 'triton':
