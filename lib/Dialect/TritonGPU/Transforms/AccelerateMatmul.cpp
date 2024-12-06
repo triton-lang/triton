@@ -700,8 +700,9 @@ static void sinkTransposeOp(TransOp input) {
           op->setOperand(0, transOp.getOperand());
         auto resultEncoding = cvtOp.getType().getEncoding();
         auto newDstEncoding = inferSrcEncoding(transOp, resultEncoding);
+        assert(newDstEncoding);
         auto srcType = cast<RankedTensorType>(cvtOp.getOperand().getType());
-        updateValueType(cvtOp.getResult(), *newDstEncoding, srcType.getShape());
+        updateValueType(cvtOp.getResult(), newDstEncoding, srcType.getShape());
         updateUsers(cvtOp.getResult(), slice);
         continue;
       }
