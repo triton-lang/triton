@@ -12,8 +12,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK-LABLE: @matmul_loop_load_acc
 // CHECK: tt.load %{{.*}} {loop.cluster = 3 : i32, loop.stage = 0 : i32}
 // CHECK: tt.load %{{.*}} {loop.cluster = 3 : i32, loop.stage = 0 : i32}
-// CHECK: tt.load %{{.*}} {loop.cluster = 1 : i32, loop.stage = 2 : i32}
-// CHECK: tt.dot {{.*}} {loop.cluster = 1 : i32, loop.stage = 2 : i32}
+// CHECK: tt.load %{{.*}} {loop.cluster = 0 : i32, loop.stage = 2 : i32}
+// CHECK: tt.dot {{.*}} {loop.cluster = 0 : i32, loop.stage = 2 : i32}
 tt.func @matmul_loop_load_acc(%lb : index, %ub : index, %step : index,
                   %A : !tt.ptr<f16> {tt.divisibility = 16 : i32},
                   %B : !tt.ptr<f16> {tt.divisibility = 16 : i32},
