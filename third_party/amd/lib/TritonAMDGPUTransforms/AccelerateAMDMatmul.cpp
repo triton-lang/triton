@@ -497,24 +497,27 @@ public:
     if (!isa_and_nonnull<BlockedEncodingAttr>(oldRetType.getEncoding()))
       return rewriter.notifyMatchFailure(
           dotOp, "expected blocked encoding result tensor");
-
-    if (dotOp.getRhsScale())
-      return rewriter.notifyMatchFailure(dotOp, "NYI: RHS scale");
+    unsigned rank = oldRetType.getRank();
+    if (rank == 3)
+      return rewriter.notifyMatchFailure(dotOp, "NYI: 3d case");
 
     TensorValue a = dotOp.getLhs();
     TensorValue b = dotOp.getRhs();
     TensorValue aScale = dotOp.getLhsScale();
+    TensorValue bScale = dotOp.getRhsScale();
+    if (aScale && bScale)
+      return rewriter.notifyMatchFailure(dotOp, "NYI: both LHS and RHS scale");
+
     ScaleDotElemType aElemType = dotOp.getLhsType();
     ScaleDotElemType bElemType = dotOp.getRhsType();
-
-    if (!(aElemType == ScaleDotElemType::E2M1 ||
-          aElemType == ScaleDotElemType::E4M3 ||
-          aElemType == ScaleDotElemType::E5M2))
-      return rewriter.notifyMatchFailure(dotOp, "NYI: non-mxfp8/mxfp4 LHS");
-    if (!(bElemType == ScaleDotElemType::E4M3 ||
-          bElemType == ScaleDotElemType::E5M2 ||
-          bElemType == ScaleDotElemType::BF16))
-      return rewriter.notifyMatchFailure(dotOp, "NYI: non-fp8/bf16 RHS");
+    auto supportsTypes = [](ScaleDotElemType elemType) {
+      return elemType == ScaleDotElemType::E2M1 ||
+             elemType == ScaleDotElemType::E4M3 ||
+             elemType == ScaleDotElemType::E5M2 ||
+             elemType == ScaleDotElemType::BF16;
+    };
+    if (!supportsTypes(aElemType) || !supportsTypes(bElemType))
+      return rewriter.notifyMatchFailure(dotOp, "NYI: mxfp6 operand");
 
     MLIRContext *ctx = dotOp.getContext();
     auto moduleOp = dotOp->getParentOfType<ModuleOp>();
@@ -534,27 +537,30 @@ public:
     unsigned kDim = mfmaInstr.value().getKDim();
     unsigned kBase = mfmaInstr.value().getKBase();
 
-    // If A tensor contains mxfp4, we pack every two values into one int8 value
-    // there. For such cases, we have different initial kWidth for LHS and RHS,
-    // which will be "fixed" later by using upcast_mxfp to convert LHS to
-    // unpacked values. For such packed cases, we cannot support flexible kPack
-    // choices from the developer--it just does not apply here. So mandate the
-    // choice here.
-    bool isPacked = aElemType == ScaleDotElemType::E2M1;
-    unsigned kWdiths[] = {isPacked ? 4 : kBase * kPack,
-                          isPacked ? 8 : kBase * kPack};
+    // For mxfp4 A/B tensor, we pack every two values into one int8 value there.
+    // For such cases, we have different initial kWidth for LHS and RHS, which
+    // will be "fixed" later by using upcast_mxfp to convert LHS to unpacked
+    // values. For such packed cases, we cannot support flexible kPack choices
+    // from the developer--it just does not apply here. So mandate the choice
+    // here.
+    bool isAPacked = aElemType == ScaleDotElemType::E2M1;
+    bool isBPacked = bElemType == ScaleDotElemType::E2M1;
+    bool isPacked = isAPacked || isBPacked;
+    unsigned kWdiths[] = {isPacked ? (isAPacked ? 4 : 8) : kBase * kPack,
+                          isPacked ? (isAPacked ? 8 : 4) : kBase * kPack};
 
-    // For A tensor, 32 consecutive elements along K dim share the same scale.
+    // For A/B tensor, 32 consecutive elements along K dim share the same scale.
     // We'd like to keep the scale values together with the base values in the
     // same warp to avoid cross-warp data exchange. It means we want warpsPerCTA
-    // = 1 along the N dimension.
-    SmallVector<unsigned, 3> warpsPerCTA(oldRetType.getRank(), 1);
-    warpsPerCTA.front() = numWarps;
+    // = 1 along the N/M dimension for the mxfp A/B case. We achieve that by
+    // setting the M/N dimension as numWarps.
+    SmallVector<unsigned, 2> mfmaWarpsPerCTA(rank, 1);
+    mfmaWarpsPerCTA[aScale ? 0 : 1] = numWarps;
 
     // Always use transposed mfma layout. This enables larger vectorization
     // for global store instructions.
     auto mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
-        ctx, /*versionMajor=*/mfmaVersion, /*versionMinor=*/0, warpsPerCTA,
+        ctx, /*versionMajor=*/mfmaVersion, /*versionMinor=*/0, mfmaWarpsPerCTA,
         /*instrShape=*/mDim, nDim, /*isTransposed=*/true, ctaLayout);
 
     auto newRetType = RankedTensorType::get(
@@ -571,41 +577,55 @@ public:
       auto newVType = RankedTensorType::get(
           vType.getShape(), vType.getElementType(), newVEncoding);
       v = rewriter.create<ttg::ConvertLayoutOp>(v.getLoc(), newVType, v);
-      if (type == ScaleDotElemType::BF16)
-        return v;
-      // Don't need to covert int8 holding mxfp4 for A--the upcast_mxfp op can
+      // Don't need to covert int8 holding mxfp4--the upcast_mxfp op can
       // take int8 tensor as input.
-      if (idx == 0 && type == ScaleDotElemType::E2M1)
+      if (type == ScaleDotElemType::BF16 || type == ScaleDotElemType::E2M1)
         return v;
 
       auto vTypeBf16 = RankedTensorType::get(
           vType.getShape(), rewriter.getBF16Type(), newVEncoding);
-      return rewriter.create<FpToFpOp>(v.getLoc(), vTypeBf16, v);
+      return cast<TensorValue>(
+          rewriter.create<FpToFpOp>(v.getLoc(), vTypeBf16, v).getResult());
     };
     a = toMMABf16(a, 0, aElemType);
     b = toMMABf16(b, 1, bElemType);
 
-    // We need to have "matching" encoding between the A tensor and A scale
+    // We need to have "matching" encoding between the main tensor and scale
     // tensor to make sure the scale values needed is in the same warp. So we
     // adopt the same CTA layout and warps per CTA. The warp dimensions needs to
-    // match along M dimension too. With in a warp, we have 64 threads. We let
-    // each thread read in one scale value. So we need a threadsPerWarp = mDim
-    // along M dimension.
+    // match along M/N dimension too. With in a warp, we have 64 threads. We let
+    // each thread read in one scale value. So we need a threadsPerWarp =
+    // mDim/nDim along M/N dimension. Note that For MFMA intrinsics, mDim is
+    // always the same as nDim. And for scaled dot scale tensor, we always have
+    // K as the innermost dimension. So we have the same threadsPerWarp in the
+    // below no matter A or B scale. Similarly for warpsPerCTA, the non-K
+    // dimension is always at index 0.
+    assert(mDim == nDim);
     SmallVector<unsigned, 2> threadsPerWarp = {mDim, numThreads / mDim};
+    SmallVector<unsigned, 2> blockWarpsPerCTA(rank, 1);
+    blockWarpsPerCTA[0] = numWarps;
     auto newScaleEncoding = triton::gpu::BlockedEncodingAttr::get(
-        ctx, {1, 1}, threadsPerWarp, warpsPerCTA, {1, 0}, ctaLayout);
+        ctx, {1, 1}, threadsPerWarp, blockWarpsPerCTA, {1, 0}, ctaLayout);
 
-    auto newScaleType = RankedTensorType::get(aScale.getType().getShape(),
-                                              aScale.getType().getElementType(),
-                                              newScaleEncoding);
-    aScale = rewriter.create<ttg::ConvertLayoutOp>(aScale.getLoc(),
-                                                   newScaleType, aScale);
+    auto upcastMXFP = [&](TensorValue main, TensorValue scale,
+                          ScaleDotElemType elemType) -> Value {
+      if (!scale)
+        return main;
 
-    auto scaledA = rewriter.create<triton::gpu::UpcastMXFPOp>(
-        dotOp.getLoc(), a, aScale, dotOp.getLhsType());
+      auto newScaleType = RankedTensorType::get(
+          scale.getType().getShape(), scale.getType().getElementType(),
+          newScaleEncoding);
+      auto convOp = rewriter.create<ttg::ConvertLayoutOp>(scale.getLoc(),
+                                                          newScaleType, scale);
 
-    auto newDot =
-        rewriter.create<DotOp>(dotOp.getLoc(), newRetType, scaledA, b, newAcc);
+      return rewriter.create<triton::gpu::UpcastMXFPOp>(dotOp.getLoc(), main,
+                                                        convOp, elemType);
+    };
+
+    Value scaledA = upcastMXFP(a, aScale, dotOp.getLhsType());
+    Value scaledB = upcastMXFP(b, bScale, dotOp.getRhsType());
+    auto newDot = rewriter.create<DotOp>(dotOp.getLoc(), newRetType, scaledA,
+                                         scaledB, newAcc);
     rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(dotOp, oldRetType,
                                                       newDot);
     return success();

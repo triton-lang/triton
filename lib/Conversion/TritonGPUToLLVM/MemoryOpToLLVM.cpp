@@ -140,8 +140,11 @@ public:
   // Do for all DotOperandEncodingAttr once we have LLs for all of them
   static bool isSupportedDotOpLayout(Attribute layout) {
     if (auto dot = dyn_cast<DotOperandEncodingAttr>(layout)) {
+      // Use when the SharedToDotOperandMMAv2OrV3 is known to be buggy:
+      // - kWidth == 8
       if (auto mma = dyn_cast<NvidiaMmaEncodingAttr>(dot.getParent())) {
-        return mma.isAmpere() && dot.getKWidth() == 8;
+        bool legacyLoweringIsBuggy = dot.getKWidth() >= 8;
+        return legacyLoweringIsBuggy && mma.isAmpere();
       }
       if (isa<AMDMfmaEncodingAttr>(dot.getParent()))
         return true;
