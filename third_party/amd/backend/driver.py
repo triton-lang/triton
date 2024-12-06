@@ -253,7 +253,7 @@ def make_launcher(constants, signature, ids, warp_size):
     libhip_path = _get_path_to_hip_runtime_dylib()
 
     # generate glue code
-    params = range(len(signature))
+    params = list(range(len(signature)))
     params.append("&global_scratch")
     src = f"""
 #define __HIP_PLATFORM_AMD__
