@@ -999,7 +999,8 @@ class tensor(_value):
 
     @builtin
     def __getitem__(self, slices, _builder=None):
-        if isinstance(slices, (slice, constexpr)) or slices is None:
+        import builtins
+        if isinstance(slices, (builtins.slice, slice, constexpr)) or slices is None:
             slices = [slices]
         if isinstance(slices, tuple):
             slices = slices.values
@@ -1007,7 +1008,7 @@ class tensor(_value):
         for dim, sl in enumerate(slices):
             if sl is None or isinstance(sl, constexpr) and sl.value is None:
                 ret = semantic.expand_dims(ret, dim, _builder)
-            elif isinstance(sl, slice) and sl.start is None and sl.stop is None and sl.step is None:
+            elif isinstance(sl, (builtins.slice, slice)) and sl.start is None and sl.stop is None and sl.step is None:
                 pass
             else:
                 raise ValueError(f"unsupported tensor index: {sl}")
