@@ -201,6 +201,8 @@ Value getSmemVecAddr(triton::gpu::MemDescType sharedTy, Type elemLlvmTy,
                            {kLane, laneId},
                            {kWarp, warpId},
                            {kBlock, i32_val(0)}}))));
+    // Reorder strides according to `order`.  This way they match the
+    // multi-dimensional offsets in regToSharedLayout.
     smemOffset = dot(rewriter, loc, smemOffsets,
                      applyPermutation(smemStrides, sharedOrder));
   } else {
@@ -222,8 +224,6 @@ Value getSmemVecAddr(triton::gpu::MemDescType sharedTy, Type elemLlvmTy,
     Value distanceToAllocBase = dot(rewriter, loc, smemOffsets, smemStrides);
     smemOffset = sub(smemOffset, distanceToAllocBase);
   }
-  // Reorder strides according to `order`.  This way they match the
-  // multi-dimensional offsets in regToSharedLayout.
   auto ptrTy = smemBase.getType();
   auto vecAddr = gep(ptrTy, elemLlvmTy, smemBase, smemOffset);
   vecAddr.setInbounds(true);
@@ -240,9 +240,6 @@ bool emitTransferBetweenRegistersAndShared(
     std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback) {
   MLIRContext *ctx = rewriter.getContext();
 
-  auto shmemBase = smemObj.getBase();
-  auto shmemStrides = smemObj.getStrides();
-  auto shmemOffsets = smemObj.getOffsets();
   auto shape = registerTy.getShape();
   int rank = shape.size();
 
@@ -290,10 +287,9 @@ bool emitTransferBetweenRegistersAndShared(
       std::min(regToSharedLayout->getNumConsecutiveInOut(),
                maxVecElems.value_or(std::numeric_limits<int>::max()));
 
-  Value threadId = getThreadId(rewriter, loc);
-  Value threadsPerWarp = i32_val(regToSharedLayout->getInDimSize(kLane));
-  Value laneId = urem(threadId, threadsPerWarp);
-  Value warpId = udiv(threadId, threadsPerWarp);
+  auto [blockId, warpId, laneId] =
+      emitHardwareTuple(loc, rewriter, target, /*withCTAOffset=*/false,
+                        regToSharedLayout->getInDimSize(kLane));
 
   int numElems = regToSharedLayout->getInDimSize(kRegister);
   auto vecTy = vec_ty(elemLlvmTy, vecElems);
@@ -309,7 +305,6 @@ bool emitTransferBetweenRegistersAndShared(
         elemLlvmTy.getIntOrFloatBitWidth());
     assert(allocSharedLayout.has_value() &&
            "Failed to convert layout to linear layout");
-    assert(allocSharedLayout->isSurjective() && "Layout must be surjective");
     invertAllocSharedLayout = allocSharedLayout->invert();
   }
   for (int i = 0; i < numElems / vecElems; i++) {
