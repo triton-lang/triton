@@ -731,7 +731,7 @@ getFinalSchedule(scf::ForOp &forOp, int numStages) {
 LogicalResult
 allocTMABuffers(scf::ForOp forOp,
                 llvm::MapVector<Operation *, Value> &tmaBufferMapping,
-                int numBuffers) {
+                int numStages) {
   IRRewriter rewriter(forOp);
 
   // Create a multi-buffered allocation for each MakeTensorDescOp call in the
@@ -743,7 +743,7 @@ allocTMABuffers(scf::ForOp forOp,
     auto loc = op.getLoc();
     Value alloc = rewriter.create<triton::gpu::GlobalScratchAllocOp>(
         loc, triton::getPointerType(rewriter.getI8Type()),
-        numBuffers * ttng::TMA_SIZE_BYTES, ttng::TMA_ALIGN);
+        numStages * ttng::TMA_SIZE_BYTES, ttng::TMA_ALIGN);
     tmaBufferMapping[op.getOperation()] = alloc;
   });
   return success();
@@ -872,7 +872,7 @@ createAsyncOps(scf::ForOp &forOp,
   };
 
   llvm::MapVector<Operation *, Value> tmaBufferMapping;
-  if (failed(allocTMABuffers(forOp, tmaBufferMapping, numBuffers))) {
+  if (failed(allocTMABuffers(forOp, tmaBufferMapping, numStages))) {
     llvm_unreachable("TMA pipelining failed");
   }
 
