@@ -337,11 +337,8 @@ def serialize_specialization_data(name, signature, constants, attrs, options, ke
     constants = {key: str(value) if value.__class__.__name__ == "dtype" else value for key, value in constants.items()}
     import json
     obj = {
-        'name': name, 'signature': signature, 
-        'constant_keys': list(constants.keys()),
-        'constant_vals': list(constants.values()),
-        'attrs': attrs.to_dict(), 'options':
-        options.__dict__, 'key': key
+        'name': name, 'signature': signature, 'constant_keys': list(constants.keys()), 'constant_vals':
+        list(constants.values()), 'attrs': attrs.to_dict(), 'options': options.__dict__, 'key': key
     }
     serialized_obj = json.dumps(obj)
     return serialized_obj
@@ -613,11 +610,7 @@ class JITFunction(KernelInterface[T]):
             # signature = {k: ('*i8' if (v == 'none') else v) for (k, v) in zip(sigkeys, sigvals)}
 
             attrs = backend.get_attrs_descriptor(self.params, bound_vals)
-            constants = {
-                (p.num,): v
-                for (v, p) in zip(bound_vals, self.params)
-                if p.is_constexpr
-            }
+            constants = {(p.num, ): v for (v, p) in zip(bound_vals, self.params) if p.is_constexpr}
             for i, arg in constants.items():
                 if callable(arg):
                     raise TypeError(f"Callable constexpr at index {i} is not supported")

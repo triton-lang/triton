@@ -266,6 +266,7 @@ __all__ = [
     "zeros_like",
 ]
 
+
 def str_to_ty(name):
     if name == "none":
         return str_to_ty("*i8")
@@ -286,7 +287,7 @@ def str_to_ty(name):
 
     if name == "nvTmaDesc":
         return nv_tma_desc_type()
-    
+
     if name == "constexpr":
         return constexpr
 

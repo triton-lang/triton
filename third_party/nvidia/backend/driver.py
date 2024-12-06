@@ -17,6 +17,7 @@ include_dir = [os.path.join(dirname, "include")]
 libdevice_dir = os.path.join(dirname, "lib")
 libraries = ['cuda']
 
+
 @functools.lru_cache()
 def libcuda_dirs():
     env_libcuda_path = os.getenv("TRITON_LIBCUDA_PATH")
@@ -134,7 +135,7 @@ def make_launcher(constants, signature, ids):
 
     def format_of(ty):
         if ty == "CUdeviceptr":
-          return "O"
+            return "O"
         if ty[0] == "[":
             if ty == "[]":
                 return "()"
@@ -156,11 +157,10 @@ def make_launcher(constants, signature, ids):
             "uint64_t": "K",
         }[ty]
 
-
     signature = {k: v for k, v in signature.items() if v != 'constexpr'}
     args_format = ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
     format = "iiiKKOOOOO" + args_format
-    signature = ','.join(signature.values()).replace('[','').replace(']','')
+    signature = ','.join(signature.values()).replace('[', '').replace(']', '')
     signature = list(filter(bool, signature.split(',')))
     signature = {i: s for i, s in enumerate(signature)}
     args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''

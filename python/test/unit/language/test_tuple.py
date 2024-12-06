@@ -61,7 +61,9 @@ def test_assign(device="cuda"):
     assert y[1] == 10
     assert y[2] == vals[1]
 
+
 # -------
+
 
 @triton.jit
 def _tuple_fn0(Ptr, cst2: tl.constexpr, tuple1):
@@ -71,6 +73,7 @@ def _tuple_fn0(Ptr, cst2: tl.constexpr, tuple1):
     tl.store(Ptr + 7, tl.load(tuple1[2][0]))
     tl.store(Ptr + 8, tuple1[2][1][0])
     tl.store(Ptr + 9, tl.load(tuple1[2][1][2]))
+
 
 # test serialization/deserialization of tuple arguments in
 # the frontend.
@@ -85,12 +88,13 @@ def _tuple_serialize(Ptr, N1, tuple1, cst1: tl.constexpr, val1, tuple2):
     tl.store(Ptr + 4, tl.load(tuple2[0]))
     _tuple_fn0(Ptr, 15, (-1, None, tuple1))
 
+
 def test_serialize(device="cuda"):
     x0 = torch.tensor([8], dtype=torch.int32, device=device)
     x1 = torch.tensor([12], dtype=torch.int32, device=device)
     y0 = torch.tensor([10], dtype=torch.int32, device=device)
-    z = torch.empty((10,), dtype=torch.int32, device=device)
+    z = torch.empty((10, ), dtype=torch.int32, device=device)
     # we want to check that JIT specialization propagates to tuples:
-    _tuple_serialize[(1,)](z, None, (x0, (1, None, x1)), 20, 1, (y0,))
-    ref = torch.tensor([8, 1, 12, 21, 10,15, -1, 8, 1, 12], device=device)
+    _tuple_serialize[(1, )](z, None, (x0, (1, None, x1)), 20, 1, (y0, ))
+    ref = torch.tensor([8, 1, 12, 21, 10, 15, -1, 8, 1, 12], device=device)
     assert torch.equal(z, ref)

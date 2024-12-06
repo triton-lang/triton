@@ -217,7 +217,7 @@ def make_launcher(constants, signature, ids, warp_size):
 
     def format_of(ty):
         if ty == "CUdeviceptr":
-          return "O"
+            return "O"
         if ty[0] == "[":
             if ty == "[]":
                 return "()"
@@ -242,7 +242,7 @@ def make_launcher(constants, signature, ids, warp_size):
     signature = {k: v for k, v in signature.items() if v != 'constexpr'}
     args_format = ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
     format = "iiiKKOOOO" + args_format
-    signature = ','.join(signature.values()).replace('[','').replace(']','')
+    signature = ','.join(signature.values()).replace('[', '').replace(']', '')
     signature = list(filter(bool, signature.split(',')))
     signature = {i: s for i, s in enumerate(signature)}
     args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''

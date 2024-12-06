@@ -668,7 +668,7 @@ class tuple_type(dtype):
 
     def __getitem__(self, index: int) -> dtype:
         return self.types[index]
-    
+
     def is_tuple(self):
         return True
 
@@ -1170,13 +1170,15 @@ class tuple:
 
     def __init__(self, args: list):
         self.values = [i for i in args]
-    
+
     @property
     def type(self):
+
         def get_type(x):
             if isinstance(x, dtype):
                 return dtype
             return x.type
+
         return tuple_type([get_type(x) for x in self.values])
 
     def __getitem__(self, idx: constexpr):
@@ -1195,30 +1197,30 @@ class tuple:
             idx = constexpr(idx)
         assert isinstance(idx, constexpr)
         self.values[idx] = value
-    
+
     def __add__(self, other):
         if isinstance(other, list):
             other = tuple(other)
         return tuple(self.values + other.values)
         # return tuple(a + b for a, b in zip(self.values, other.values))
-    
+
     def __mul__(self, other):
         assert isinstance(other, constexpr)
         return tuple(self.values * other.value)
-        
+
     def __eq__(self, other):
         import builtins
         if isinstance(other, (list, builtins.tuple)):
             other = tuple(other)
         return constexpr(self.values == other.values)
-    
+
     def __hash__(self):
         import builtins
         return hash(builtins.tuple(self.values))
-    
+
     def __str__(self):
         return str([str(x) for x in self.values])
-    
+
     def __iter__(self):
         return iter(self.values)
 
@@ -1233,6 +1235,8 @@ class slice:
         self.stop = stop
         self.step = step
         self.type = slice_type()
+
+
 class _experimental_tensor_descriptor_base(_value):
     """"
     A tensor descriptor with unknown shape and strides

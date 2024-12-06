@@ -62,6 +62,7 @@ def _is_triton_tensor(o: Any) -> bool:
 def _is_constexpr(o: Any) -> bool:
     return o is None or isinstance(o, (constexpr, language.core.dtype))
 
+
 def _is_triton_scalar(o: Any) -> bool:
     return _is_triton_tensor(o) and (not o.type.is_block() or o.type.numel == 1)
 
@@ -193,21 +194,21 @@ class ContainsReturnChecker(ast.NodeVisitor):
 
 
 class ASTFunction:
-    
+
     def get_path(self, x, path):
         return reduce(lambda a, idx: a[idx], path, x)
 
     def set_path(self, x, path, val):
         prev = x if len(path) == 1 else self.get_path(x, path[:-1])
         prev[path[-1]] = val
-        
+
     def __init__(self, ret_types, arg_types, constexprs, constants, attrs):
         self.ret_types = ret_types
         self.arg_types = arg_types
         self.constexprs = constexprs
         self.constants = constants
         self.attrs = attrs
-    
+
     def serialize(self, builder: ir.builder):
         # fill up IR values in template
         # > build function
@@ -216,13 +217,14 @@ class ASTFunction:
         arg_types = [self.get_path(self.arg_types, path).to_ir(builder) for path in val_paths]
         ret_types = [ret_type.to_ir(builder) for ret_type in self.ret_types]
         return builder.get_function_ty(arg_types, ret_types)
-    
+
     def deserialize(self, fn):
-        # create "template" 
+        # create "template"
         def make_template(val):
             if isinstance(val, (list, tuple, language.tuple_type)):
                 return language.tuple([make_template(x) for x in val])
             return language.constexpr(None)
+
         vals = make_template(self.arg_types)
         is_val = lambda path, _: path not in self.constexprs
         val_paths = list(find_paths_if(self.arg_types, is_val).keys())
@@ -248,9 +250,9 @@ class ASTFunction:
 
 class CodeGenerator(ast.NodeVisitor):
 
-    def __init__(self, context, prototype, gscope, function_name, jit_fn: JITFunction, options,
-                 codegen_fns, module_map, module=None, is_kernel=False, function_types: Optional[Dict] = None,
-                 noinline=False, file_name: Optional[str] = None, begin_line=0):
+    def __init__(self, context, prototype, gscope, function_name, jit_fn: JITFunction, options, codegen_fns, module_map,
+                 module=None, is_kernel=False, function_types: Optional[Dict] = None, noinline=False,
+                 file_name: Optional[str] = None, begin_line=0):
         self.context = context
         self.builder = ir.builder(context)
         self.file_name = file_name
@@ -460,8 +462,7 @@ class CodeGenerator(ast.NodeVisitor):
         # initialize function
         visibility = "public" if self.is_kernel else "private"
         fn_ty = self.prototype.serialize(self.builder)
-        self.fn = self.builder.get_or_insert_function(self.module, self.function_name,
-                                                      fn_ty, visibility, self.noinline)
+        self.fn = self.builder.get_or_insert_function(self.module, self.function_name, fn_ty, visibility, self.noinline)
         self.module.push_back(self.fn)
         entry = self.fn.add_entry_block()
         arg_values = self.prototype.deserialize(self.fn)
@@ -1145,10 +1146,14 @@ class CodeGenerator(ast.NodeVisitor):
             gscope = fn.__globals__
             # If the callee is not set, we use the same debug setting as the caller
             file_name, begin_line = get_jit_fn_file_line(fn)
-            arg_types = [language.core.constexpr if arg is None or isinstance(arg, (bool, int, language.core.dtype)) else arg.type for arg in args]
+            arg_types = [
+                language.core.constexpr if arg is None or isinstance(arg,
+                                                                     (bool, int, language.core.dtype)) else arg.type
+                for arg in args
+            ]
             prototype = ASTFunction([], arg_types, args_cst, dict(), dict())
-            generator = CodeGenerator(self.context, prototype, gscope, module=self.module,
-                                      jit_fn=fn, function_name=fn_name, function_types=self.function_ret_types,
+            generator = CodeGenerator(self.context, prototype, gscope, module=self.module, jit_fn=fn,
+                                      function_name=fn_name, function_types=self.function_ret_types,
                                       noinline=fn.noinline, file_name=file_name, begin_line=begin_line,
                                       options=self.builder.options, codegen_fns=self.builder.codegen_fns,
                                       module_map=self.builder.module_map)
@@ -1338,16 +1343,16 @@ def kernel_suffix(signature, specialization):
     suffix = ''
     for i, _ in enumerate(signature):
         suffix += str(i)
-        if (i,) in specialization.equal_to_1:
+        if (i, ) in specialization.equal_to_1:
             suffix += 'c'
-        if (i,) in specialization.divisibility_16:
+        if (i, ) in specialization.divisibility_16:
             suffix += 'd'
     return suffix
-        
+
 
 def ast_to_ttir(fn, specialization, context, options, codegen_fns, module_map):
     constexprs = specialization.constants
-    arg_idx = lambda x: (fn.arg_names.index(x),) if isinstance(x, str) else x
+    arg_idx = lambda x: (fn.arg_names.index(x), ) if isinstance(x, str) else x
     constants = specialization.attrs.get_constants()
     constexprs = {arg_idx(k): v for k, v in constexprs.items()}
     arg_types = [str_to_ty(ty) for ty in specialization.signature.values()]
@@ -1358,11 +1363,9 @@ def ast_to_ttir(fn, specialization, context, options, codegen_fns, module_map):
     fn_attrs = {k: v for k, v in fn_attrs.items() if k not in constants}
     file_name, begin_line = get_jit_fn_file_line(fn)
     prototype = ASTFunction([], arg_types, constexprs, constants, fn_attrs)
-    generator = CodeGenerator(context, prototype, 
-                              gscope=fn.__globals__.copy(), 
-                              function_name=fn.repr(specialization),
-                              jit_fn=fn, is_kernel=True, file_name=file_name,
-                              begin_line=begin_line, options=options, codegen_fns=codegen_fns, module_map=module_map)
+    generator = CodeGenerator(context, prototype, gscope=fn.__globals__.copy(), function_name=fn.repr(specialization),
+                              jit_fn=fn, is_kernel=True, file_name=file_name, begin_line=begin_line, options=options,
+                              codegen_fns=codegen_fns, module_map=module_map)
     generator.visit(fn.parse())
 
     ret = generator.module

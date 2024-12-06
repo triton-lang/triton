@@ -369,7 +369,8 @@ def test_fp8_support(dtype):
         ctx = pytest.raises(CompilationError, match="")
 
     with ctx as e:
-        triton.compile(triton.compiler.ASTSource(fn=dtype_kernel, signature={"dtype": "constexpr"}, constants={"dtype": dtype}))
+        triton.compile(
+            triton.compiler.ASTSource(fn=dtype_kernel, signature={"dtype": "constexpr"}, constants={"dtype": dtype}))
 
     if dtype not in supported_dtypes:
         try:

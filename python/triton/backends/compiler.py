@@ -9,7 +9,6 @@ from typing import Dict, List, Tuple, Union
 from types import ModuleType
 from .._utils import find_paths_if
 
-
 # Table that associates strings to AttrsDescriptor (sub)classes.
 # In this way we can dynamically select the correct class
 # constructor
@@ -53,7 +52,8 @@ class AttrsDescriptor:
     `constant_properties`: a set containing the properties that can be used to determine if a parameter is constant
 
     """
-    __slots__ = ('divisibility_16', 'equal_to_1', 'equal_to_none', 'arg_properties', 'property_values', 'constant_properties')
+    __slots__ = ('divisibility_16', 'equal_to_1', 'equal_to_none', 'arg_properties', 'property_values',
+                 'constant_properties')
 
     def __init__(self, params=None, values=None):
         """
@@ -94,7 +94,7 @@ class AttrsDescriptor:
                param.do_not_specialize_on_alignment:
                 continue
             paths = find_paths_if(arg, lambda path, val: AttrsDescriptor.is_divisible_by_16(val))
-            divisibility_16 += [(param.num,) + x for x in paths]
+            divisibility_16 += [(param.num, ) + x for x in paths]
         self.arg_properties["tt.divisibility"] = divisibility_16
 
         # Equal to 1 property
@@ -103,7 +103,7 @@ class AttrsDescriptor:
             if param.do_not_specialize:
                 continue
             paths = find_paths_if(arg, lambda path, val: AttrsDescriptor.is_equal_to_1(val))
-            equal_to_1 += [(param.num,) + x for x in paths]
+            equal_to_1 += [(param.num, ) + x for x in paths]
         self.arg_properties["tt.equal_to"] = equal_to_1
 
         # Equal to None property
@@ -112,10 +112,9 @@ class AttrsDescriptor:
             if param.do_not_specialize:
                 continue
             paths = find_paths_if(arg, lambda path, val: val is None)
-            equal_to_none += [(param.num,) + x for x in paths]
+            equal_to_none += [(param.num, ) + x for x in paths]
         self.equal_to_none = equal_to_none
 
-            
     def _add_backend_properties(self, params=None, values=None):
         """ This method is for different subclasses to implement their own compile-time properties """
         pass
