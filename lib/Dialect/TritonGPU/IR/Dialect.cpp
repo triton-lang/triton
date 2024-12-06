@@ -3097,6 +3097,20 @@ struct CanonicalizeConvertFromReshape
   }
 };
 
+// gather(cvt(src), idx) -> gather(src, idx)
+struct CanonicalizeConvertFromGatherSource : public OpRewritePattern<GatherOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(GatherOp op, PatternRewriter &rewriter) const override {
+    auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
+    if (!convert)
+      return failure();
+    rewriter.replaceOpWithNewOp<GatherOp>(op, convert.getSrc(), op.getIndices(), op.getAxis());
+    return mlir::success();
+  }
+};
+
 // histogram(cvt) -> histogram
 struct CanonicalizeConvertFromHistogram
     : public mlir::OpRewritePattern<triton::HistogramOp> {
@@ -3299,6 +3313,7 @@ void ConvertLayoutOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
                                                   MLIRContext *context) {
   patterns.add<CanonicalizeConvertFromConvert>(context);
   patterns.add<CanonicalizeConvertFromReshape>(context);
+  patterns.add<CanonicalizeConvertFromGatherSource>(context);
   patterns.add<CanonicalizeConvertFromHistogram>(context);
   patterns.add<CanonicalizeConvertFromAlloc>(context);
   patterns.add<CanonicalizeConvertFromLocalStore>(context);

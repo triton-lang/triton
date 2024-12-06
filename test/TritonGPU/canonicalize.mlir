@@ -137,3 +137,17 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     tt.return %2 : !ttg.memdesc<16x16xf16, #shared, #smem>
   }
 }  // end module
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [8, 1], order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
+  // CHECK-LABEL: convert_layout_gather_src
+  tt.func @convert_layout_gather_src(%arg0: tensor<16x16xf16, #blocked>, %arg1: tensor<16x16xi32, #blocked>) -> tensor<16x16xf16, #blocked> {
+    %0 = ttg.convert_layout %arg0 : tensor<16x16xf16, #blocked> -> tensor<16x16xf16, #blocked1>
+    // CHECK-NEXT: tt.gather %arg0[%arg1]
+    %1 = tt.gather %0[%arg1] {axis = 0 : i32} : (tensor<16x16xf16, #blocked1>, tensor<16x16xi32, #blocked>) -> tensor<16x16xf16, #blocked>
+    tt.return %1 : tensor<16x16xf16, #blocked>
+  }
+}
