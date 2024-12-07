@@ -227,9 +227,9 @@ Value getSmemVecAddr(RankedTensorType registerTy,
   // Otherwise, if the last two dimensions differ from the allocated shape,
   // it indicates that there may be "holes" and that we need to apply
   // swizzling logic. This corresponds to case #2 above.
-  if (/*same shape*/ shape == allocShape ||
-      /*no swizzling*/ sharedEnc.getMaxPhase() == 1 ||
-      /*rank-reduced but rank>=2*/
+  if (/*no swizzling*/ sharedEnc.getMaxPhase() == 1 ||
+      /*swizzling but same shape*/ shape == allocShape ||
+      /*swizzling and rank-reduced but no hole and rank >= 2*/
       (shape == allocShape.take_back(rank) && rank >= 2)) { // Case 1
     // Get the address to load/store.  The multi-dim address is (offsetX1, ...,
     // offsetXN, block), where the offsets appear in minor-to-major order, and
@@ -245,7 +245,8 @@ Value getSmemVecAddr(RankedTensorType registerTy,
     smemOffset = dot(rewriter, loc, smemOffsets,
                      applyPermutation(smemStrides, sharedOrder));
   } else { // Case 2 -> rank-reduced swizzling
-    assert(rank >= 2);
+    // TODO: relax the rank >= 2 constraint
+    assert(rank >= 2 && "Swizzling only applies to tensors with rank >= 2");
     // Here, we define both tensor offsets and shared memory offsets.
     //
     // Shared memory layout in triton provides an invertible, one-to-one mapping
