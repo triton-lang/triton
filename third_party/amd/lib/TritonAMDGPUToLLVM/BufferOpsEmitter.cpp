@@ -33,6 +33,72 @@ bool isZero(Value v) {
   }
   return false;
 }
+
+// Create the auxiliary/cachepolicy value of ROCDL::RawPtrBufferLoad/StoreOp
+//   gfx940: bit 0 = sc0, bit 1 = nt, bit 3 = swz, bit 4 = sc1
+// MI300 Vector Memory instructions (Flat, Global, Scratch, and Buffer) have 3
+// bits to control scope and cacheability:
+// - SC[1:0] System Cache level: 0=wave, 1=group, 2=device, 3=system
+// - NT Non-Temporal: 0=expect temporal reuse; 1=do not expect temporal reuse
+//
+// Op   | cm  | SC1 | SC0 | NT |
+// -----+-----+-----+-----+----+--
+// Load | .ca |  0  |  0  | 0  |
+//      | .cg |  0  |  x  | 1  |
+//      | .cs |  1  |  0  | x  |
+//      | .cv |  1  |  1  | x  |
+// -----+-----+-----+-----+----+--
+// Store| .wb |  1  |  0  | 0  |
+//      | .cg |  0  |  0  | 0  |
+//      | .cs |  1  |  0  | 1  |
+//      | .wt |  1  |  1  | x  |
+int32_t getCacheModifierForCDNA3(triton::CacheModifier cm, bool isBufferLoad) {
+  int32_t aux = 0;
+  switch (cm) {
+  case triton::CacheModifier::CA:
+    aux = 0;
+    break;
+  case triton::CacheModifier::CG:
+    if (isBufferLoad)
+      aux |= 2;
+    break;
+  case triton::CacheModifier::CS:
+    aux |= 16;
+    if (!isBufferLoad)
+      aux |= 2;
+    break;
+  case triton::CacheModifier::CV:
+    aux |= 17;
+    break;
+  case triton::CacheModifier::WB:
+    aux |= 16;
+    break;
+  case triton::CacheModifier::WT:
+    aux |= 17;
+    break;
+  default:
+    aux = 0;
+  }
+  return aux;
+}
+
+int32_t getDefaultCacheModifier(triton::CacheModifier cm) { return 0; }
+
+int32_t getCacheModifierForTarget(triton::CacheModifier cm, bool isBufferLoad,
+                                  TargetInfo targetInfo) {
+  //            bit 0 = glc, bit 1 = slc, bit 2 = dlc (gfx10/gfx11),
+  //            bit 3 = swz, bit 4 = scc (gfx90a)
+  //    gfx940: bit 0 = sc0, bit 1 = nt, bit 3 = swz, bit 4 = sc1
+  //    gfx12+: bits [0-2] = th, bits [3-4] = scope,
+  //            bit 6 = swz
+  //       all: volatile op (bit 31, stripped at lowering)
+  //
+  if (targetInfo.getISAFamily() == ISAFamily::CDNA3) // gfx942, gfx941, gfx940
+    return getCacheModifierForCDNA3(cm, isBufferLoad);
+  else
+    return getDefaultCacheModifier(cm);
+}
+
 } // namespace
 
 namespace mlir::LLVM::AMD {
@@ -164,52 +230,7 @@ void BufferEmitter::fillCommonArgs(Type type, Value rsrcDesc,
   Value sgprOffset = int_val(32, 0);
 
   // 3. Create the cache modifiers word
-  //            bit 0 = glc, bit 1 = slc, bit 2 = dlc (gfx10/gfx11),
-  //            bit 3 = swz, bit 4 = scc (gfx90a)
-  //    gfx940: bit 0 = sc0, bit 1 = nt, bit 3 = swz, bit 4 = sc1
-  //    gfx12+: bits [0-2] = th, bits [3-4] = scope,
-  //            bit 6 = swz
-  //       all: volatile op (bit 31, stripped at lowering)
-  //
-  // MI300 cache modifiers:
-  // Op   | cm  | SC1 | SC0 | NT |
-  // -----+-----+-----+-----+----+--
-  // Load | .ca |  0  |  0  | 0  |
-  //      | .cg |  0  |  x  | 1  |
-  //      | .cs |  1  |  0  | x  |
-  //      | .cv |  1  |  1  | x  |
-  // -----+-----+-----+-----+----+--
-  // Store| .wb |  1  |  0  | 0  |
-  //      | .cg |  0  |  0  | 0  |
-  //      | .cs |  1  |  0  | 1  |
-  //      | .wt |  1  |  1  | x  |
-
-  int32_t aux = 0;
-  switch (cm) {
-  case triton::CacheModifier::CA:
-    aux = 0;
-    break;
-  case triton::CacheModifier::CG:
-    if (isBufferLoad)
-      aux |= 2;
-    break;
-  case triton::CacheModifier::CS:
-    aux |= 16;
-    if (!isBufferLoad)
-      aux |= 2;
-    break;
-  case triton::CacheModifier::CV:
-    aux |= 17;
-    break;
-  case triton::CacheModifier::WB:
-    aux |= 16;
-    break;
-  case triton::CacheModifier::WT:
-    aux |= 17;
-    break;
-  default:
-    aux = 0;
-  }
+  int32_t aux = getCacheModifierForTarget(cm, isBufferLoad, targetInfo);
   Value cacheModifiers = int_val(32, aux);
 
   // 5. Add the arguments

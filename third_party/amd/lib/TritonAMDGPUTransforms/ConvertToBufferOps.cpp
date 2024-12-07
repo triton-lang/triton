@@ -215,9 +215,6 @@ struct ConvertTritonStoreToBufferStore
     LDBG("Try to convert: " << op);
     Value ptr = op.getPtr();
 
-    // if (op.getCache() != triton::CacheModifier::NONE)
-    //   return failure();
-
     if (canUseBufferOps(ptr, assumptions)) {
       auto addPtrOp = ptr.getDefiningOp<triton::AddPtrOp>();
       Value tensorPtr = addPtrOp.getPtr();
