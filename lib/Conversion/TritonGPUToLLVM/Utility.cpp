@@ -185,7 +185,8 @@ Value getSmemVecAddr(RankedTensorType registerTy,
   auto shape = sharedTy.getShape();
   auto rank = shape.size();
   auto allocShape = sharedTy.getAllocShape();
-  assert(shape == allocShape || rank >= 2);
+  auto sharedEnc =
+      dyn_cast<triton::gpu::SharedEncodingAttr>(sharedTy.getEncoding());
 
   auto smemBase = smemObj.getBase();
   auto sharedOrder = triton::gpu::getOrder(sharedTy.getEncoding());
@@ -226,7 +227,10 @@ Value getSmemVecAddr(RankedTensorType registerTy,
   // Otherwise, if the last two dimensions differ from the allocated shape,
   // it indicates that there may be "holes" and that we need to apply
   // swizzling logic. This corresponds to case #2 above.
-  if (shape == allocShape.take_back(rank)) { // Case 1
+  if (/*same shape*/ shape == allocShape ||
+      /*no swizzling*/ sharedEnc.getMaxPhase() == 1 ||
+      /*rank-reduced but rank>=2*/
+      (shape == allocShape.take_back(rank) && rank >= 2)) { // Case 1
     // Get the address to load/store.  The multi-dim address is (offsetX1, ...,
     // offsetXN, block), where the offsets appear in minor-to-major order, and
     // we drop_end to drop block, which we know from above will be 0.
@@ -240,7 +244,8 @@ Value getSmemVecAddr(RankedTensorType registerTy,
     // multi-dimensional offsets in regToSharedLayout.
     smemOffset = dot(rewriter, loc, smemOffsets,
                      applyPermutation(smemStrides, sharedOrder));
-  } else { // Case 2
+  } else { // Case 2 -> rank-reduced swizzling
+    assert(rank >= 2);
     // Here, we define both tensor offsets and shared memory offsets.
     //
     // Shared memory layout in triton provides an invertible, one-to-one mapping
