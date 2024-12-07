@@ -99,7 +99,34 @@ def TritonAMDGPUCanonicalizePointers : Pass<"tritonamdgpu-canonicalize-pointers"
   let constructor = "mlir::createTritonAMDGPUCanonicalizePointersPass()";
 
   let dependentDialects = [];
+}
 
+def TritonAMDGPUBypassLDSForDotOperand: Pass<"tritonamdgpu-bypass-lds-for-dot-operand", "mlir::ModuleOp"> {
+  let summary = "Bypass moving data trough LDS for dot operand when possible.";
+
+  let description = [{
+  Under certain conditions, the dot layout of one of the operands allows direct
+  loading from HBM to VGPRs in the MFMA dot layout, without losing of vectorization of global loads
+  or increasing the number of global loads due to shared data between threads.
+  The required conditions are:
+  1. K-Major Tensor Layout:
+     The operand we want to bypass LDS for must be K-major (i.e., row-major for
+     operand 0 or column-major for operand 1). This supports vectorized global
+     load instructions, as MFMA instructions require each thread to hold B
+     operand elements along the K dimension.
+  2. kWidth * sizeof(dataType) == 128:
+     Using the maximum kWidth for a specific data type ensures optimal global
+     load vectorization (e.g., using global_load_dwordx4 instructions).
+  3. Single Warp per CTA Dimension:
+     Either warpsPerCTA[ndim] == 1 for operand A bypass or warpsPerCTA[mDim] ==
+     1 for operand B bypass. This guarantees that each tensor element is
+     handled by exactly one thread, maintaining the same number of global loads
+     as in the blocked layout (i.e., each element is loaded only once).
+  }];
+
+  let constructor = "mlir::createTritonAMDGPUBypassLDSForDotOperand()";
+
+  let dependentDialects = [];
 }
 
 def TritonAMDGPUReorderInstructions: Pass<"tritonamdgpu-reorder-instructions", "mlir::ModuleOp"> {
