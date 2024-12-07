@@ -275,6 +275,12 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
       setEncoding(result, info, changed, user);
       continue;
     }
+    if (auto gatherOp = dyn_cast<GatherOp>(user)) {
+      if (&use == &gatherOp.getIndicesMutable()){
+        setEncoding(gatherOp.getResult(), info, changed, user);
+        continue;
+      }
+    }
     if (user->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
         user->hasTrait<OpTrait::Elementwise>() ||
         isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
@@ -282,7 +288,6 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
       setEncoding(user->getResults(), info, changed, user);
       continue;
     }
-    // TODO(jeff): Propagate tt.gather indices layout to dst.
   }
   return changed;
 }
@@ -697,7 +702,7 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
   }
   if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<OpTrait::Elementwise>() ||
-      isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
+      isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp, GatherOp,
           ConvertLayoutOp, nvidia_gpu::WarpGroupDotWaitOp>(op)) {
     Operation *newOp = cloneElementwise(rewriter, op, encoding);
     for (auto [oldResult, newResult] :
@@ -710,7 +715,6 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
     }
     return newOp;
   }
-  // TODO(jeff): Handle tt.gather once it supports layout propagation.
   llvm::report_fatal_error("unexpected op in rewrite");
   return nullptr;
 }
