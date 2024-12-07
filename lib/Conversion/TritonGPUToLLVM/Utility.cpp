@@ -185,7 +185,7 @@ Value getSmemVecAddr(RankedTensorType registerTy,
   auto shape = sharedTy.getShape();
   auto rank = shape.size();
   auto allocShape = sharedTy.getAllocShape();
-  // Simplify the assumption that shared memory layouts are at least 2
+  // TODO: relax this assumption.
   assert(rank >= 2 && "Shared memory rank must be at least 2");
 
   auto smemBase = smemObj.getBase();
