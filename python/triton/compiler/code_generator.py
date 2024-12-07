@@ -538,6 +538,8 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_Assign(self, node):
         # construct values to assign
         def _sanitize_value(value):
+            if isinstance(value, language.tuple):
+                return language.tuple([_sanitize_value(v) for v in value.values])
             native_nontensor_types = (language.dtype, language.tuple)
             value = _unwrap_if_constexpr(value)
             if value is not None and \
