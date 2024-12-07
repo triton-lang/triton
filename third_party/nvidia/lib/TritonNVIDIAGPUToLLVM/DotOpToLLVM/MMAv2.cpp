@@ -516,8 +516,9 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
 
   const auto &mmaInstructions =
       isTuring ? mmaInstrPtxTuring : mmaInstrPtxAmpere;
-  assert(mmaInstructions.count(mmaType) &&
-    "Unsupported MMA instruction for the given mma type");
+  if (mmaInstructions.find(mmaType) == mmaInstructions.end()) {
+    return emitError(loc, "Unsupported MMA instruction for the given mma type");
+  }
   auto rank = dTensorTy.getRank();
   auto elemsPerThread = triton::gpu::getElemsPerThread(dTensorTy);
   auto batchOffset =
