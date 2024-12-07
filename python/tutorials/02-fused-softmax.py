@@ -27,8 +27,7 @@ import triton
 import triton.language as tl
 from triton.runtime import driver
 
-DEVICE = torch.device(triton.runtime.driver.active.get_current_target().backend,
-                      triton.runtime.driver.active.get_current_device())
+DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
 
 def is_hip():

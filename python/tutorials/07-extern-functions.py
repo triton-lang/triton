@@ -25,8 +25,7 @@ from triton.language.extra import libdevice
 
 from pathlib import Path
 
-DEVICE = torch.device(triton.runtime.driver.active.get_current_target().backend,
-                      triton.runtime.driver.active.get_current_device())
+DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
 
 @triton.jit
