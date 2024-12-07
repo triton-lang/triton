@@ -185,6 +185,7 @@ Value getSmemVecAddr(RankedTensorType registerTy,
   auto shape = sharedTy.getShape();
   auto rank = shape.size();
   auto allocShape = sharedTy.getAllocShape();
+  assert(shape == allocShape || rank >= 2);
 
   auto smemBase = smemObj.getBase();
   auto sharedOrder = triton::gpu::getOrder(sharedTy.getEncoding());
