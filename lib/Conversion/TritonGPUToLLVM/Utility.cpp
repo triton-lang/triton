@@ -171,12 +171,11 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
 
 namespace {
 
-Value getSmemVecAddr(triton::gpu::MemDescType sharedTy, Type elemLlvmTy,
+Value getSmemVecAddr(RankedTensorType registerTy,
+                     triton::gpu::MemDescType sharedTy, Type elemLlvmTy,
                      Location loc, RewriterBase &rewriter,
-                     const LinearLayout &regLayout,
-                     const LinearLayout &regToSharedLayout,
-                     std::optional<LinearLayout> invertAllocSharedLayout,
-                     Value regId, Value laneId, Value warpId,
+                     const LinearLayout &regToSharedLayout, Value regId,
+                     Value laneId, Value warpId,
                      const SharedMemoryObject &smemObj) {
   MLIRContext *ctx = rewriter.getContext();
   StringAttr kBlock = str_attr("block");
@@ -184,14 +183,51 @@ Value getSmemVecAddr(triton::gpu::MemDescType sharedTy, Type elemLlvmTy,
   StringAttr kLane = str_attr("lane");
   StringAttr kWarp = str_attr("warp");
   auto shape = sharedTy.getShape();
+  auto rank = shape.size();
   auto allocShape = sharedTy.getAllocShape();
+  // Simplify the assumption that shared memory layouts are at least 2
+  assert(rank >= 2 && "Shared memory rank must be at least 2");
 
   auto smemBase = smemObj.getBase();
   auto sharedOrder = triton::gpu::getOrder(sharedTy.getEncoding());
   auto smemOffsets = smemObj.getOffsets();
   auto smemStrides = smemObj.getStrides();
   Value smemOffset;
-  if (shape == allocShape.take_back(shape.size())) {
+  // We need to consider two scenarios when loading or storing to shared memory:
+  //
+  // 1. Contiguous Shared Memory (No "Holes")
+  //
+  //    In this case, the shared memory allocation size matches exactly the
+  //    tensor size. This implies that indexing into the shared memory is
+  //    straightforward.
+  //
+  // 2. Non-Contiguous Shared Memory ("Holes")
+  //
+  //    In this scenario, the allocated shared memory size differs from the
+  //    tensor size, creating "holes." This situation arises, for example, when
+  //    using `ttg.subview` in Triton. Indexing becomes more complex, especially
+  //    if "swizzling" (reordering of elements in the last two dimensions) is
+  //    involved. This occurs because the linear layout we derive from the
+  //    subview's shape is different to the original tensor's linear
+  //    layout before subview---"swizzling" was applied on the original shape
+  //    but not the subview's shape.
+  //
+  //  Key observations regarding swizzling:
+  //
+  //    - Swizzling only occurs for tensors with rank ≥ 2.
+  //    - It only applies to the last two dimensions of the tensor.
+  //    - The last two dimensions are always considered more "minor" than the
+  //    others.
+  //
+  // Therefore, if we have reduced from an n-dimensional (nd) shape to an
+  // m-dimensional (md) shape (with m ≥ 2) and the last two dimensions remain
+  // unchanged relative to the originally allocated shape, we can still
+  // perform direct indexing into the shared memory.
+  //
+  // Otherwise, if the last two dimensions differ from the allocated shape,
+  // it indicates that there may be "holes" and that we need to apply
+  // swizzling logic. This corresponds to case #2 above.
+  if (shape == allocShape.take_back(/*matrix dims=*/2)) { // Case 1
     // Get the address to load/store.  The multi-dim address is (offsetX1, ...,
     // offsetXN, block), where the offsets appear in minor-to-major order, and
     // we drop_end to drop block, which we know from above will be 0.
@@ -205,24 +241,46 @@ Value getSmemVecAddr(triton::gpu::MemDescType sharedTy, Type elemLlvmTy,
     // multi-dimensional offsets in regToSharedLayout.
     smemOffset = dot(rewriter, loc, smemOffsets,
                      applyPermutation(smemStrides, sharedOrder));
-  } else {
-    assert(invertAllocSharedLayout.has_value() &&
-           "invertAllocSharedLayout is required");
+  } else { // Case 2
+    // Here, we define both tensor offsets and shared memory offsets.
+    //
+    // Shared memory layout in triton provides an invertible, one-to-one mapping
+    // between tensor offsets and shared memory offsets. For the base field of
+    // any shared memory object, its shared memory offsets are the same as its
+    // tensor offsets.
+    //
+    // Our first step is to retrieve the `invertAllocSharedLayout`, which maps
+    // tensor offsets back to shared memory offsets. With this layout in hand,
+    // we then compute the "absolute" tensor offsets by adding together:
+    //
+    //   1. The shared memory offsets of the current base of the view, and
+    //   2. The tensor offsets contributed by each register.
+    //
+    // This process ensures we can use the "absolute" tensor offsets to look up
+    // the correct shared memory addresses using `invertAllocSharedLayout`.
+    std::optional<LinearLayout> regLayout =
+        triton::gpu::toLinearLayout(shape, registerTy.getEncoding());
+    auto allocSharedLayout = triton::gpu::toLinearLayout(
+        allocShape.take_back(rank), sharedTy.getEncoding(),
+        elemLlvmTy.getIntOrFloatBitWidth());
+    assert(allocSharedLayout.has_value() &&
+           "Failed to convert layout to linear layout");
+    auto invertAllocSharedLayout = allocSharedLayout->invert();
     auto multiDimTensorOffsets =
-        llvm::to_vector(applyLinearLayout(loc, rewriter, regLayout,
+        llvm::to_vector(applyLinearLayout(loc, rewriter, *regLayout,
                                           {{kRegister, regId},
                                            {kLane, laneId},
                                            {kWarp, warpId},
                                            {kBlock, i32_val(0)}}));
-    for (auto i = 0; i < shape.size(); i++) {
+    for (auto i = 0; i < rank; i++) {
       multiDimTensorOffsets[i].second =
           add(multiDimTensorOffsets[i].second, smemOffsets[i]);
     }
-    smemOffset = applyLinearLayout(loc, rewriter, *invertAllocSharedLayout,
+    smemOffset = applyLinearLayout(loc, rewriter, invertAllocSharedLayout,
                                    multiDimTensorOffsets)[0]
                      .second;
-    Value distanceToAllocBase = dot(rewriter, loc, smemOffsets, smemStrides);
-    smemOffset = sub(smemOffset, distanceToAllocBase);
+    Value baseToAllocBaseDist = dot(rewriter, loc, smemOffsets, smemStrides);
+    smemOffset = sub(smemOffset, baseToAllocBaseDist);
   }
   auto ptrTy = smemBase.getType();
   auto vecAddr = gep(ptrTy, elemLlvmTy, smemBase, smemOffset);
@@ -295,23 +353,10 @@ bool emitTransferBetweenRegistersAndShared(
   auto vecTy = vec_ty(elemLlvmTy, vecElems);
   Value zero = i32_val(0);
   SmallVector<Value> ret;
-  std::optional<LinearLayout> regLayout =
-      triton::gpu::toLinearLayout(shape, registerTy.getEncoding());
-  std::optional<LinearLayout> invertAllocSharedLayout;
-  auto allocShape = sharedTy.getAllocShape();
-  if (shape != allocShape.take_back(shape.size())) {
-    auto allocSharedLayout = triton::gpu::toLinearLayout(
-        allocShape.take_back(shape.size()), sharedTy.getEncoding(),
-        elemLlvmTy.getIntOrFloatBitWidth());
-    assert(allocSharedLayout.has_value() &&
-           "Failed to convert layout to linear layout");
-    invertAllocSharedLayout = allocSharedLayout->invert();
-  }
   for (int i = 0; i < numElems / vecElems; i++) {
-    auto vecAddr =
-        getSmemVecAddr(sharedTy, elemLlvmTy, loc, rewriter, *regLayout,
-                       *regToSharedLayout, invertAllocSharedLayout,
-                       i32_val(i * vecElems), laneId, warpId, smemObj);
+    auto vecAddr = getSmemVecAddr(
+        registerTy, sharedTy, elemLlvmTy, loc, rewriter, *regToSharedLayout,
+        i32_val(i * vecElems), laneId, warpId, smemObj);
 
     perVectorCallback(vecTy, vecAddr);
   }
