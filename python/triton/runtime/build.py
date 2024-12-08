@@ -18,6 +18,28 @@ def quiet():
         sys.stdout, sys.stderr = old_stdout, old_stderr
 
 
+def _cc_cmd(cc, src, out, include_dirs, library_dirs, libraries):
+    if os.name == "nt":
+        cc_cmd = [cc, src, "/nologo", "/O2", "/LD"]
+        cc_cmd += [f"/I{dir}" for dir in include_dirs]
+        cc_cmd += [f"/Fo{os.path.join(os.path.dirname(out), 'main.obj')}"]
+        cc_cmd += ["/link"]
+        cc_cmd += [f"/OUT:{out}"]
+        cc_cmd += [f"/IMPLIB:{os.path.join(os.path.dirname(out), 'main.lib')}"]
+        cc_cmd += [f"/PDB:{os.path.join(os.path.dirname(out), 'main.pdb')}"]
+        cc_cmd += [f"/LIBPATH:{dir}" for dir in library_dirs]
+        cc_cmd += [f'{lib}.lib' for lib in libraries]
+    else:
+        # for -Wno-psabi, see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=111047
+        cc_cmd = [cc, src, "-O3", "-shared", "-fPIC", "-Wno-psabi"]
+        cc_cmd += [f'-l{lib}' for lib in libraries]
+        cc_cmd += [f"-L{dir}" for dir in library_dirs]
+        cc_cmd += [f"-I{dir}" for dir in include_dirs]
+        cc_cmd += ["-o", out]
+
+    return cc_cmd
+
+
 def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
     suffix = sysconfig.get_config_var('EXT_SUFFIX')
     so = os.path.join(srcdir, '{name}{suffix}'.format(name=name, suffix=suffix))
@@ -28,6 +50,8 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
         clang = shutil.which("clang")
         gcc = shutil.which("gcc")
         cc = gcc if gcc is not None else clang
+        if os.name == "nt":
+            cc = shutil.which("cl")
         if cc is None:
             raise RuntimeError("Failed to find C compiler. Please specify via CC environment variable.")
     # This function was renamed and made public in Python 3.10
@@ -42,11 +66,7 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
     py_include_dir = sysconfig.get_paths(scheme=scheme)["include"]
     custom_backend_dirs = set(os.getenv(var) for var in ('TRITON_CUDACRT_PATH', 'TRITON_CUDART_PATH'))
     include_dirs = include_dirs + [srcdir, py_include_dir, *custom_backend_dirs]
-    # for -Wno-psabi, see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=111047
-    cc_cmd = [cc, src, "-O3", "-shared", "-fPIC", "-Wno-psabi", "-o", so]
-    cc_cmd += [f'-l{lib}' for lib in libraries]
-    cc_cmd += [f"-L{dir}" for dir in library_dirs]
-    cc_cmd += [f"-I{dir}" for dir in include_dirs if dir is not None]
+    cc_cmd = _cc_cmd(cc, src, so, include_dirs, library_dirs, libraries)
     ret = subprocess.check_call(cc_cmd)
     if ret == 0:
         return so
@@ -60,7 +80,7 @@ def _build(name, src, srcdir, library_dirs, include_dirs, libraries):
         language='c',
         sources=[src],
         include_dirs=include_dirs,
-        extra_compile_args=extra_compile_args + ['-O3'],
+        extra_compile_args=extra_compile_args + ['-O3' if os.name != "nt" else "/O2"],
         extra_link_args=extra_link_args,
         library_dirs=library_dirs,
         libraries=libraries,
