@@ -20,7 +20,7 @@ def compile_fn(attrs):
     src = ASTSource(
         fn=kernel_sub,
         constants={'N': 32},
-        signature={'a': "*fp32", 'b': "*fp32", 'o': "*fp32"},
+        signature={'a': "*fp32", 'b': "*fp32", 'o': "*fp32", 'N': 'constexpr'},
         attrs=attrs,
     )
     triton.compile(src=src, target=target)

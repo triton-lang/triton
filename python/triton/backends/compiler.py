@@ -3,11 +3,11 @@ import re
 import hashlib
 import subprocess
 import sysconfig
-
 from abc import ABCMeta, abstractmethod
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Union
 from types import ModuleType
+from .._utils import find_paths_if
 
 # Table that associates strings to AttrsDescriptor (sub)classes.
 # In this way we can dynamically select the correct class
@@ -52,7 +52,8 @@ class AttrsDescriptor:
     `constant_properties`: a set containing the properties that can be used to determine if a parameter is constant
 
     """
-    __slots__ = ('divisibility_16', 'equal_to_1', 'arg_properties', 'property_values', 'constant_properties')
+    __slots__ = ('divisibility_16', 'equal_to_1', 'equal_to_none', 'arg_properties', 'property_values',
+                 'constant_properties')
 
     def __init__(self, params=None, values=None):
         """
@@ -67,6 +68,7 @@ class AttrsDescriptor:
         # Default initialization
         self.arg_properties = {}
         self.property_values = {}
+        self.equal_to_none = {}
         self.constant_properties = set()
 
         self._add_common_properties(params, values)
@@ -86,17 +88,30 @@ class AttrsDescriptor:
         assert (len(params) == len(values))
 
         # Divisibility property
-        self.arg_properties["tt.divisibility"] = [
-            param.num for param, arg in zip(params, values) if AttrsDescriptor.is_divisible_by_16(arg)
-            and not param.do_not_specialize and not param.do_not_specialize_on_alignment
-        ]
+        divisibility_16 = []
+        for param, arg in zip(params, values):
+            if param.do_not_specialize or \
+               param.do_not_specialize_on_alignment:
+                continue
+            paths = find_paths_if(arg, lambda path, val: AttrsDescriptor.is_divisible_by_16(val))
+            divisibility_16 += [(param.num, ) + x for x in paths]
+        self.arg_properties["tt.divisibility"] = divisibility_16
 
         # Equal to 1 property
-        self.arg_properties["tt.equal_to"] = [
-            param.num
-            for param, arg in zip(params, values)
-            if AttrsDescriptor.is_equal_to_1(arg) and not param.do_not_specialize
-        ]
+        equal_to_1 = []
+        for param, arg in zip(params, values):
+            if param.do_not_specialize:
+                continue
+            paths = find_paths_if(arg, lambda path, val: AttrsDescriptor.is_equal_to_1(val))
+            equal_to_1 += [(param.num, ) + x for x in paths]
+        self.arg_properties["tt.equal_to"] = equal_to_1
+
+        # Equal to None property
+        equal_to_none = []
+        for param, arg in zip(params, values):
+            paths = find_paths_if(arg, lambda path, val: val is None)
+            equal_to_none += [(param.num, ) + x for x in paths]
+        self.equal_to_none = equal_to_none
 
     def _add_backend_properties(self, params=None, values=None):
         """ This method is for different subclasses to implement their own compile-time properties """
@@ -130,6 +145,8 @@ class AttrsDescriptor:
         for prop_name in self.constant_properties:
             for p in self.arg_properties.get(prop_name, []):
                 constants[p] = self.property_values[prop_name]
+        for v in self.equal_to_none:
+            constants[v] = None
         return constants
 
     def filter_out_constants(self):
@@ -166,7 +183,7 @@ class AttrsDescriptor:
         """
         attrs_descriptor = _descriptor_table[data["cls"]]()
         for prop_name, param_ids in data["arg_properties"].items():
-            attrs_descriptor.arg_properties[prop_name] = param_ids
+            attrs_descriptor.arg_properties[prop_name] = list(map(tuple, param_ids))
         attrs_descriptor._init_slots()
         return attrs_descriptor
 
