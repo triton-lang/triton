@@ -23,6 +23,16 @@ void LoadOp::getEffects(
                          SideEffects::DefaultResource::get());
 }
 
+void AtomicLoadOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Read::get(), &getPtrMutable(),
+                       triton::GlobalMemory::get());
+  if (getIsVolatile())
+    effects.emplace_back(MemoryEffects::Write::get(),
+                         SideEffects::DefaultResource::get());
+}
+
 } // namespace triton
 } // namespace mlir
 
@@ -182,6 +192,16 @@ struct CanonicalizeMaskedStorePattern : public OpRewritePattern<StoreOp> {
 
 void StoreOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                           MLIRContext *context) {
+  results.add<CanonicalizeMaskedStorePattern>(context);
+}
+
+void AtomicLoadOp::getCanonicalizationPatterns(RewritePatternSet &results,
+                                               MLIRContext *context) {
+  results.add<CanonicalizeMaskedLoadPattern>(context);
+}
+
+void AtomicStoreOp::getCanonicalizationPatterns(RewritePatternSet &results,
+                                                MLIRContext *context) {
   results.add<CanonicalizeMaskedStorePattern>(context);
 }
 
