@@ -32,35 +32,83 @@ namespace ttg = mlir::triton::gpu;
 namespace tt = mlir::triton;
 
 namespace {
-bool verifyNonNegativeByAssumption(Value expr,
-                                   const DenseSet<Value> &assumptions) {
+template <typename F>
+bool verifyNonSmallerByAssumption(Value expr,
+                                  const DenseSet<Value> &assumptions,
+                                  F matchesOther) {
   for (Value assume : assumptions) {
-    LDBG("Assumption:" << assume);
     if (auto cmpOp = assume.getDefiningOp<arith::CmpIOp>()) {
-      bool isGreaterThan = (cmpOp.getPredicate() == arith::CmpIPredicate::sge ||
-                            cmpOp.getPredicate() == arith::CmpIPredicate::sgt);
-      APInt cst;
-      if (isGreaterThan && (cmpOp.getLhs() == expr) &&
-          matchPattern(cmpOp.getRhs(), m_ConstantInt(&cst))) {
-        return cst.isNonNegative();
+      switch (cmpOp.getPredicate()) {
+      case arith::CmpIPredicate::eq:
+      case arith::CmpIPredicate::sge:
+      case arith::CmpIPredicate::sgt:
+      case arith::CmpIPredicate::uge:
+      case arith::CmpIPredicate::ugt: {
+        if (cmpOp.getLhs() == expr && matchesOther(cmpOp.getRhs())) {
+          return true;
+        }
+        break;
+      }
+      case arith::CmpIPredicate::sle:
+      case arith::CmpIPredicate::slt:
+      case arith::CmpIPredicate::ule:
+      case arith::CmpIPredicate::ult: {
+        if (cmpOp.getRhs() == expr && matchesOther(cmpOp.getLhs())) {
+          return true;
+        }
+        break;
+      }
+      default:
+        break;
       }
     }
   }
   return false;
 }
 
+bool verifyNonNegativeByAssumption(Value expr,
+                                   const DenseSet<Value> &assumptions) {
+  return verifyNonSmallerByAssumption(expr, assumptions, [](auto otherExpr) {
+    APInt cst;
+    return matchPattern(otherExpr, m_ConstantInt(&cst)) && cst.isNonNegative();
+  });
+}
+
+bool verifyNonSmallerByAssumption(Value expr,
+                                  const DenseSet<Value> &assumptions,
+                                  Value other) {
+  return verifyNonSmallerByAssumption(
+      expr, assumptions, [&](auto otherExpr) { return otherExpr == expr; });
+}
+
+// isNonNegativeType: i1, ptr, unsigned
+bool isNonNegativeType(Type type) {
+  return isa<triton::PointerType>(type) || type.isInteger(1) ||
+         type.isUnsignedInteger();
+}
+
 bool verifyNonNegativeExpr(Value expr, const DenseSet<Value> &assumptions) {
+
+  LDBG("Determing if non-negative: " << expr);
+
+  // If the type of expr is non-negative then we know its a non-negative value
+  if (isNonNegativeType(expr.getType())) {
+    LDBG("  Type is non-negative: " << expr.getType());
+    return true;
+  }
 
   // Check if the expression is contained in any assumption
   if (verifyNonNegativeByAssumption(expr, assumptions)) {
-    LDBG("Non negative by assumption");
+    LDBG("  Non negative by assumption");
     return true;
   }
 
   // Recurse if the operation is defined
   Operation *op = expr.getDefiningOp();
-  if (!op)
+  if (!op) {
+    LDBG("  No defining op, assuming possibly negative");
     return false;
+  }
 
   bool nonNegative =
       llvm::TypeSwitch<Operation *, bool>(expr.getDefiningOp())
@@ -74,7 +122,10 @@ bool verifyNonNegativeExpr(Value expr, const DenseSet<Value> &assumptions) {
             return verifyNonNegativeExpr(splatOp.getSrc(), assumptions);
           })
           .Case<triton::MakeRangeOp>([&](auto makeRangeOp) {
-            return makeRangeOp.getStart() >= 0 && makeRangeOp.getEnd() >= 0;
+            // See the warning in TritonOps.td: getStart/getEnd return unsigned,
+            // so we need to look through get*Attr.
+            return makeRangeOp.getStartAttr().getInt() >= 0 &&
+                   makeRangeOp.getEndAttr().getInt() >= 0;
           })
           .Case<arith::ConstantIntOp>(
               [&](auto constIntOp) { return constIntOp.value() >= 0; })
@@ -85,12 +136,14 @@ bool verifyNonNegativeExpr(Value expr, const DenseSet<Value> &assumptions) {
               return constVal.getSplatValue<APInt>().isNonNegative();
             return false;
           })
-          .Case<triton::GetProgramIdOp>([&](auto pidOp) { return true; })
+          .Case<triton::GetNumProgramsOp, triton::GetProgramIdOp>([&](auto) {
+            // These are defined as signless, but are actually unsigned
+            return true;
+          })
           .Case<arith::MaxSIOp>([&](auto maxOp) {
             // max(a,b) >= 0 iff a>=0 || b>=0
-            bool nnLhs = verifyNonNegativeExpr(maxOp.getLhs(), assumptions);
-            bool nnRhs = verifyNonNegativeExpr(maxOp.getRhs(), assumptions);
-            return nnLhs || nnRhs;
+            return verifyNonNegativeExpr(maxOp.getLhs(), assumptions) ||
+                   verifyNonNegativeExpr(maxOp.getRhs(), assumptions);
           })
           .Case<arith::RemSIOp>([&](auto remsiOp) {
             // a % b >= 0 iff a>=0
@@ -100,18 +153,42 @@ bool verifyNonNegativeExpr(Value expr, const DenseSet<Value> &assumptions) {
             // a = OP b >= 0 iff b >= 0
             return verifyNonNegativeExpr(unaryOp->getOperand(0), assumptions);
           })
+          .Case<arith::CeilDivUIOp, arith::DivUIOp, arith::ExtUIOp,
+                arith::FPToUIOp, arith::IndexCastUIOp, arith::MaxUIOp,
+                arith::MinUIOp, arith::RemUIOp, arith::ShRUIOp>(
+              // These OPs also return unsigned values.
+              // TODO: We can also sniff whether a Value is unsigned by looking
+              //       for whether or not it's used as an argument to one of
+              //       these OPs.
+              [&](auto uOp) { return true; })
           .Case<arith::AddIOp, arith::MinSIOp, arith::MulIOp, arith::DivSIOp>(
               // Generally speaking, a OP b >= 0  iff  a >= 0 && b >= 0 when
               // OP != sub
               [&](Operation *binOp) {
-                bool nnLhs =
-                    verifyNonNegativeExpr(binOp->getOperand(0), assumptions);
-                bool nnRhs =
-                    verifyNonNegativeExpr(binOp->getOperand(1), assumptions);
-                return nnLhs && nnRhs;
+                return verifyNonNegativeExpr(binOp->getOperand(0),
+                                             assumptions) &&
+                       verifyNonNegativeExpr(binOp->getOperand(1), assumptions);
               })
+          .Case<scf::IfOp>([&](auto ifop) {
+            // If we're here then we must have both then/else regions
+            // (each with 1 block) and each region must terminate with an
+            // `scf.yield` expression.
+            auto thenYield =
+                cast<scf::YieldOp>(ifop.getThenRegion().back().back());
+            auto elseYield =
+                cast<scf::YieldOp>(ifop.getElseRegion().back().back());
+            return verifyNonNegativeExpr(thenYield->getOperand(0),
+                                         assumptions) &&
+                   verifyNonNegativeExpr(elseYield->getOperand(0), assumptions);
+          })
+          .Case<arith::SubIOp>([&](auto op) {
+            // If a user annotates tl.assume(a >= b) then we know a - b >= 0
+            return verifyNonSmallerByAssumption(op.getLhs(), assumptions,
+                                                op.getRhs());
+          })
           .Default([&](Operation *op) {
             // Conservatively assume that the expression is negative
+            LDBG("  Unhandled op, cannot assume non-negative");
             return false;
           });
   return nonNegative;
@@ -260,6 +337,9 @@ public:
         assumptions.insert(op->getOperand(0));
     });
     LDBG("Number of assumptions found: " << assumptions.size());
+    for (Value assume : assumptions) {
+      LDBG("Assumption:" << assume);
+    }
 
     patterns.add<ConvertTritonLoadToBufferLoad>(context, assumptions);
     patterns.add<ConvertTritonStoreToBufferStore>(context, assumptions);
