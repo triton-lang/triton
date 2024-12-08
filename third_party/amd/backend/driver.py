@@ -238,7 +238,7 @@ def make_launcher(constants, signature, ids, warp_size):
 
     # generate glue code
     params = list(range(len(signature)))
-    params = [f"&arg{i}" for i in signature.keys() if i not in constants]
+    params = [f"&arg{i}" for i, ty in signature.items() if i not in constants and ty != "none"]
     params.append("&global_scratch")
     src = f"""
 #define __HIP_PLATFORM_AMD__
