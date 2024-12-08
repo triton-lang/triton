@@ -230,7 +230,15 @@ def add(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, sa
         input_scalar_ty = input.type.scalar
         other_scalar_ty = other.type.scalar
     if input_scalar_ty.is_ptr():
-        return tl.tensor(builder.create_addptr(input.handle, other.handle), input.type)
+        other_handle = other.handle
+        if other.dtype.is_int_unsigned() and other.dtype.int_bitwidth < 64:
+            # We want to zext when the offset is smaller than pointer size (64bit)
+            if other.type.is_block():
+                i64_ty = tl.block_type(tl.int64, other.type.get_block_shapes()).to_ir(builder)
+            else:
+                i64_ty = tl.int64.to_ir(builder)
+            other_handle = builder.create_int_cast(other.handle, i64_ty, False)
+        return tl.tensor(builder.create_addptr(input.handle, other_handle), input.type)
     # float + float
     elif input_scalar_ty.is_floating():
         return tl.tensor(builder.create_fadd(input.handle, other.handle), input.type)
