@@ -109,8 +109,6 @@ class AttrsDescriptor:
         # Equal to None property
         equal_to_none = []
         for param, arg in zip(params, values):
-            if param.do_not_specialize:
-                continue
             paths = find_paths_if(arg, lambda path, val: val is None)
             equal_to_none += [(param.num, ) + x for x in paths]
         self.equal_to_none = equal_to_none
