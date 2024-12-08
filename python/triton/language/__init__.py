@@ -269,7 +269,7 @@ __all__ = [
 
 def str_to_ty(name):
     if name == "none":
-        return str_to_ty("*i8")
+        return None
 
     if name[0] == "*":
         name = name[1:]

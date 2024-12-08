@@ -179,7 +179,7 @@ def make_launcher(constants, signature, ids):
     params = range(len(signature))
 
     # generate glue code
-    params = [f"&arg{i}" for i in signature.keys() if i not in constants]
+    params = [f"&arg{i}" for i, ty in signature.items() if i not in constants and ty != "none"]
     params.append("&global_scratch")
     src = f"""
 #include \"cuda.h\"

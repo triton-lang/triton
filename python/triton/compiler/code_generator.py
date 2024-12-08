@@ -212,7 +212,7 @@ class ASTFunction:
     def serialize(self, builder: ir.builder):
         # fill up IR values in template
         # > build function
-        is_val = lambda path, _: path not in self.constexprs
+        is_val = lambda path, _: path not in self.constexprs and _ is not None
         val_paths = list(find_paths_if(self.arg_types, is_val).keys())
         arg_types = [self.get_path(self.arg_types, path).to_ir(builder) for path in val_paths]
         ret_types = [ret_type.to_ir(builder) for ret_type in self.ret_types]
@@ -226,7 +226,7 @@ class ASTFunction:
             return language.constexpr(None)
 
         vals = make_template(self.arg_types)
-        is_val = lambda path, _: path not in self.constexprs
+        is_val = lambda path, _: path not in self.constexprs and _ is not None
         val_paths = list(find_paths_if(self.arg_types, is_val).keys())
         # > set attributes
         for attr_path, attr_specs in self.attrs.items():
