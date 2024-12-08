@@ -8,7 +8,7 @@ from typing import Any, Callable, Dict, Optional, Tuple, Type, Union
 from .. import language
 from .._C.libtriton import ir
 from ..language import constexpr, tensor, str_to_ty
-from ..language.core import _unwrap_if_constexpr, nv_tma_desc_type, _value
+from ..language.core import assume, _unwrap_if_constexpr, nv_tma_desc_type, _value
 from ..runtime.jit import _normalize_ty, get_jit_fn_file_line
 # ideally we wouldn't need any runtime component
 from ..runtime import JITFunction
@@ -433,9 +433,14 @@ class CodeGenerator(ast.NodeVisitor):
                 idx += 1
 
         insert_pt = self.builder.get_insertion_block()
+        self.builder.set_insertion_point_to_start(entry)
         for arg_name, arg_value in zip(arg_names, arg_values):
             self.set_value(arg_name, arg_value)
-        self.builder.set_insertion_point_to_start(entry)
+            # If the argument is marked unsigned then insert tl.assume so that
+            # we know in the backend the user will pass non-negative data.
+            if _is_triton_tensor(arg_value) and arg_value.type.is_int_unsigned():
+                assume(arg_value.__ge__(0, _builder=self.builder), _builder=self.builder)
+
         # visit function body
         self.visit_compound_statement(node.body)
 
