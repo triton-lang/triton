@@ -4352,15 +4352,17 @@ def test_pointer_arguments(device):
 def test_value_specialization(value: int, value_type: str, device) -> None:
 
     def repr(specialization):
-        spec_type = specialization.signature["VALUE"]
-        return f"kernel_{spec_type}"
+        ty = specialization.signature["value1"]
+        cst = '_'.join([k for k, v in specialization.constants.items() if v == 1])
+        return f"kernel_{ty}_{cst}"
 
     @triton.jit(repr=repr)
-    def kernel(VALUE, X):
+    def kernel(value1, is_one, X):
         pass
 
     x = torch.tensor([3.14159], device=device)
-    h = kernel[(1, )](value, x)
+    h = kernel[(1, )](value, 1, x)
+    assert "is_one" in h.name
     assert value_type in h.name
 
 
@@ -6128,6 +6130,19 @@ def test_side_effectful_reduction_2d(device, reduce_dim):
     sanitize_sum_2d_kernel[(1, )](Z, X, BLOCK_0=BLOCK_0, BLOCK_1=BLOCK_1, reduce_dim=reduce_dim,
                                   NON_REDUCE_DIM=NON_REDUCE_DIM)
     torch.testing.assert_close(Z, X.sum(reduce_dim).to(torch.int32))
+
+
+def test_dtype(device):
+
+    @triton.jit
+    def kernel(X):
+        dtype_x: tl.constexpr = X.dtype.element_ty
+        tl.static_assert(dtype_x == tl.int32)
+        tl.static_assert(dtype_x == tl.constexpr(tl.int32))
+        tl.static_assert(dtype_x == tl.int8 or (dtype_x == tl.int16 or dtype_x == tl.int32))
+
+    X = torch.zeros(1, dtype=torch.int32, device=device)
+    kernel[(1, )](X)
 
 
 def test_side_effectful_scan(device):
