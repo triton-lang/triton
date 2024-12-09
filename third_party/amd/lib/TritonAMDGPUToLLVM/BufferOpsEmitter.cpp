@@ -84,15 +84,15 @@ int32_t getCacheModifierForCDNA3(triton::CacheModifier cm, bool isBufferLoad) {
 
 int32_t getDefaultCacheModifier(triton::CacheModifier cm) { return 0; }
 
+// Cache modifiers changes how data is managed in the GPU's cache hierarchy:
+// .ca: cache all, keeps data in all cache levels with normal eviction policy
+// .cg: cache global, bypasses L1 and keeps data in L2 and below
+// .cs: cache streaming, keeps data in L1 and L2 with the evict-first policy
+// .cv: cache volatile, no caching at all
+// .wb: write-back, writes back data at all cache levels
+// .wt: write-through, write data directly to system memory
 int32_t getCacheModifierForTarget(triton::CacheModifier cm, bool isBufferLoad,
                                   TargetInfo targetInfo) {
-  //            bit 0 = glc, bit 1 = slc, bit 2 = dlc (gfx10/gfx11),
-  //            bit 3 = swz, bit 4 = scc (gfx90a)
-  //    gfx940: bit 0 = sc0, bit 1 = nt, bit 3 = swz, bit 4 = sc1
-  //    gfx12+: bits [0-2] = th, bits [3-4] = scope,
-  //            bit 6 = swz
-  //       all: volatile op (bit 31, stripped at lowering)
-  //
   if (targetInfo.getISAFamily() == ISAFamily::CDNA3) // gfx942, gfx941, gfx940
     return getCacheModifierForCDNA3(cm, isBufferLoad);
   else
