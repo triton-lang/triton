@@ -18,7 +18,14 @@ def min_dot_size(target: GPUTarget):
     # CDNA 3.0 supports k==8 in all mfma variants except for int8
     # (where the smallest `k` supported is 16)
     if "gfx94" in arch_str:
-        return lambda lhsType, rhsType: (16, 16, 16) if (lhsType.is_int8() or rhsType.is_int8()) else (16, 16, 8)
+
+        def func(lhsType, rhsType):
+            print(lhsType, rhsType)
+            if lhsType.is_int8() or rhsType.is_int8():
+                return (16, 16, 16)
+            return (16, 16, 8)
+
+        return func
     # CDNA 2.0 always supports `k==8`
     if "gfx9" in arch_str:
         return lambda lhsType, rhsType: (16, 16, 8)
