@@ -40,6 +40,16 @@ struct CanonicalizeConvertFromReshape
   matchAndRewrite(triton::ReshapeOp op,
                   PatternRewriter &rewriter) const override {
     auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
+    // If the layouts are structurally the same, the convert is trivial
+    auto srcType = convert.getSrc().getType();
+    auto dstType = convert.getType();
+    auto srcLL = toLinearLayout(srcType.getShape(), srcType.getEncoding());
+    auto dstLL = toLinearLayout(dstType.getShape(), dstType.getEncoding());
+    if (srcLL && dstLL && *srcLL == *dstLL) {
+      rewriter.replaceOpWithNewOp<triton::ReshapeOp>(
+          op, op.getType(), convert.getSrc(), op.getAllowReorder());
+      return mlir::success();
+    }
     if (!convert)
       return failure();
     if (isExpensiveView(convert.getSrc().getType(), op.getType()))
