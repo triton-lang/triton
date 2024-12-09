@@ -149,7 +149,10 @@ FailureOr<MfmaInsn> chooseMfmaInstruction(RankedTensorType cType,
   kDim = maybeMfmaInsn->getKDim();
   assert(kDim != 0);
   assert(M % mDim == 0 && N % nDim == 0);
-  assert(inputKSize % kDim == 0);
+  // if inputKSize % kDim != 0 this layout will introduce data duplication,
+  // consider FMA dot is prefered, except cases MFMA layout is enforced.
+  if (enforcedNonKDim == 0 && inputKSize % kDim != 0)
+    return failure();
   return maybeMfmaInsn;
 }
 
@@ -372,9 +375,6 @@ public:
       return rewriter.notifyMatchFailure(
           dotOp, "expected blocked encoding result tensor");
 
-    if (!supportMFMA(dotOp))
-      return failure();
-
     auto CTALayout = ttg::getCTALayout(oldRetType.getEncoding());
 
     // get MFMA encoding for the given number of warps
@@ -391,11 +391,14 @@ public:
 
     ttg::AMDMfmaEncodingAttr mfmaEnc;
 
-    auto mfmaInstr = chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim);
-    auto mDim = mfmaInstr.value().getMDim();
-    auto nDim = mfmaInstr.value().getNDim();
-    auto kDim = mfmaInstr.value().getKDim();
-    auto kBase = mfmaInstr.value().getKBase();
+    auto instrSelection = chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim);
+    if (failed(instrSelection))
+      return failure();
+    auto mfmaInstr = instrSelection.value();
+    auto mDim = mfmaInstr.getMDim();
+    auto nDim = mfmaInstr.getNDim();
+    auto kDim = mfmaInstr.getKDim();
+    auto kBase = mfmaInstr.getKBase();
 
     auto warpsPerTile =
         warpsPerTileMFMA(dotOp, retShape, numWarps, {mDim, nDim});
@@ -462,9 +465,9 @@ public:
     auto newBEncoding =
         ttg::DotOperandEncodingAttr::get(ctx, 1, mfmaEnc, kWidth);
     a = convertAndCastTensor(rewriter, a, newAEncoding,
-                             mfmaInstr.value().getElementTypeA());
+                             mfmaInstr.getElementTypeA());
     b = convertAndCastTensor(rewriter, b, newBEncoding,
-                             mfmaInstr.value().getElementTypeB());
+                             mfmaInstr.getElementTypeB());
     auto newDot = rewriter.create<tt::DotOp>(
         dotOp.getLoc(), newAcc.getType(), a, b, newAcc,
         dotOp.getInputPrecision(), dotOp.getMaxNumImpreciseAcc());
