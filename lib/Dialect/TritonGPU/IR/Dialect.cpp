@@ -1960,6 +1960,7 @@ Attribute SharedEncodingAttr::parse(AsmParser &parser, Type type) {
   std::optional<SmallVector<unsigned>> CTASplitNum;
   std::optional<SmallVector<unsigned>> CTAOrder;
   bool hasLeadingOffset = false;
+  bool inThreadTranspose = false;
 
   for (const NamedAttribute &attr : dict) {
     if (attr.getName() == "vec") {
@@ -1990,6 +1991,10 @@ Attribute SharedEncodingAttr::parse(AsmParser &parser, Type type) {
       if (parseBool(parser, attr, hasLeadingOffset, "hasLeadingOffset")
               .failed())
         return {};
+    } else if (attr.getName() == "inThreadTranspose") {
+      if (parseBool(parser, attr, inThreadTranspose, "inThreadTranspose")
+              .failed())
+        return {};
     } else {
       parser.emitError(parser.getNameLoc(), "unexpected key: ")
           << attr.getName().strref();
@@ -2002,9 +2007,9 @@ Attribute SharedEncodingAttr::parse(AsmParser &parser, Type type) {
   if (!CTALayout.has_value())
     return {};
 
-  return parser.getChecked<SharedEncodingAttr>(parser.getContext(), vec,
-                                               perPhase, maxPhase, order,
-                                               *CTALayout, hasLeadingOffset);
+  return parser.getChecked<SharedEncodingAttr>(
+      parser.getContext(), vec, perPhase, maxPhase, order, *CTALayout,
+      hasLeadingOffset, inThreadTranspose);
 }
 
 void SharedEncodingAttr::print(AsmPrinter &printer) const {
@@ -2015,7 +2020,8 @@ void SharedEncodingAttr::print(AsmPrinter &printer) const {
           << ", order = [" << getOrder() << "]";
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getOrder().size());
-  printer << ", hasLeadingOffset = " << getHasLeadingOffset() << "}>";
+  printer << ", hasLeadingOffset = " << getHasLeadingOffset();
+  printer << ", inThreadTranspose = " << getInThreadTranspose() << "}>";
 }
 
 //===----------------------------------------------------------------------===//
@@ -2568,7 +2574,7 @@ struct TritonGPUInferLayoutInterface
       resultEncoding = SharedEncodingAttr::get(
           getDialect()->getContext(), enc.getVec(), enc.getPerPhase(),
           enc.getMaxPhase(), applyPermutation(invOrderUnsigned, enc.getOrder()),
-          *ctaLayout, enc.getHasLeadingOffset());
+          *ctaLayout, enc.getHasLeadingOffset(), enc.getInThreadTranspose());
       return success();
     }
 
