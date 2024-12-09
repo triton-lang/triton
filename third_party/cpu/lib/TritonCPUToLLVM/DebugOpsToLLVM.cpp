@@ -190,7 +190,7 @@ void createRuntimePrintScalarCall(ConversionPatternRewriter &rewriter,
 
 void createRuntimePrintCall(ConversionPatternRewriter &rewriter,
                             std::array<Value, 3> pid, StringRef prefix,
-                            Value ptr, Type dtype, bool hex) {
+                            Value ptr, Type dtype, bool isSigned, bool hex) {
   assert(!prefix.empty());
   auto loc = UnknownLoc::get(rewriter.getContext());
   Value prefixValue = LLVM::addStringToModule(
@@ -205,7 +205,7 @@ void createRuntimePrintCall(ConversionPatternRewriter &rewriter,
 
   allArgs.push_back(i32_val(dtype.getIntOrFloatBitWidth()));
   allArgs.push_back(i32_val(dtype.isInteger()));
-  allArgs.push_back(i32_val(dtype.isSignedInteger()));
+  allArgs.push_back(i32_val(isSigned));
   allArgs.push_back(i32_val(hex));
 
   call(getOrAddPrintMemrefFuncDecl(rewriter), allArgs);
@@ -254,7 +254,7 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::cpu::PrintOp> {
     createRuntimePrintCall(
         rewriter, pid, op.getPrefix(), adaptor.getOperands()[0],
         cast<UnrankedMemRefType>(op.getVal()[0].getType()).getElementType(),
-        op.getHex());
+        op.getIsSigned()[0], op.getHex());
 
     rewriter.eraseOp(op);
     return success();

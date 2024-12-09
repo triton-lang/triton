@@ -61,11 +61,13 @@ struct PrintOpConversion : public OpConversionPattern<triton::PrintOp> {
       return success();
     }
 
-    for (auto operand : op.getOperands()) {
+    for (size_t i = 0; i < op.getNumOperands(); i++) {
+      Value operand = op.getOperands()[i];
+      auto isSigned = {op.getIsSigned()[i]};
       if (!isa<RankedTensorType>(operand.getType())) {
         rewriter.create<triton::cpu::PrintOp>(
             loc, op.getPrefix(), op.getHex(),
-            rewriter.getRemappedValue(operand), false);
+            rewriter.getRemappedValue(operand), isSigned);
         continue;
       }
 
@@ -92,7 +94,7 @@ struct PrintOpConversion : public OpConversionPattern<triton::PrintOp> {
           allocVal);
 
       rewriter.create<triton::cpu::PrintOp>(loc, op.getPrefix(), op.getHex(),
-                                            allocUnrankedVal, false);
+                                            allocUnrankedVal, isSigned);
 
       rewriter.create<memref::DeallocOp>(loc, allocVal);
     }
