@@ -127,27 +127,29 @@ void testReshape(RankedTensorType srcTy, RankedTensorType dstTy,
   // srcEnc.  (This is an invariant of the inference function.)
   // Even more, we check that the inferred encoding is structurally the same as
   // the src encoding, showing that the inference is consistent.
-  std::vector<std::string> diags;
-  ScopedDiagnosticHandler scopedHandler(
-      ctx, [&](Diagnostic &diag) { diags.push_back("  - " + diag.str()); });
-  Attribute inferredSrcEnc;
-  auto result = inferLayout->inferReshapeOpEncoding(
-      dstTy.getShape(), inferredEnc, srcTy.getShape(), inferredSrcEnc,
-      UnknownLoc::get(ctx));
-  EXPECT_TRUE(succeeded(result))
-      << "Inverse encoding inference (" << triton::join(dstTy.getShape(), "x")
-      << " " << stringifyLLVMType(inferredEnc) << " -> "
-      << triton::join(srcTy.getShape(), "x") << "failed:\n"
-      << join(diags, "\n");
-  auto srcLinear = toLinearLayout(srcTy.getShape(), inferredSrcEnc);
-  auto dstLinear = toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
-  EXPECT_EQ(srcLinear, dstLinear)
-      << "Inverse encoding inference (" << triton::join(dstTy.getShape(), "x")
-      << " " << stringifyLLVMType(inferredEnc) << " -> "
-      << triton::join(srcTy.getShape(), "x")
-      << " gave the wrong result.  Expected " << srcLinear->toString()
-      << " but "
-      << "got " << dstLinear->toString() << ".\n";
+  {
+    std::vector<std::string> diags;
+    ScopedDiagnosticHandler scopedHandler(
+        ctx, [&](Diagnostic &diag) { diags.push_back("  - " + diag.str()); });
+    Attribute inferredSrcEnc;
+    auto result = inferLayout->inferReshapeOpEncoding(
+        dstTy.getShape(), inferredEnc, srcTy.getShape(), inferredSrcEnc,
+        UnknownLoc::get(ctx));
+    EXPECT_TRUE(succeeded(result))
+        << "Inverse encoding inference (" << triton::join(dstTy.getShape(), "x")
+        << " " << stringifyLLVMType(inferredEnc) << " -> "
+        << triton::join(srcTy.getShape(), "x") << "failed:\n"
+        << join(diags, "\n");
+    auto srcLinear = toLinearLayout(srcTy.getShape(), inferredSrcEnc);
+    auto dstLinear = toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
+    EXPECT_EQ(srcLinear, dstLinear)
+        << "Inverse encoding inference (" << triton::join(dstTy.getShape(), "x")
+        << " " << stringifyLLVMType(inferredEnc) << " -> "
+        << triton::join(srcTy.getShape(), "x")
+        << " gave the wrong result.  Expected " << srcLinear->toString()
+        << " but "
+        << "got " << dstLinear->toString() << ".\n";
+  }
 }
 
 class InferReshapeOpEncodingTest
