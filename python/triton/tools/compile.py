@@ -108,7 +108,7 @@ if __name__ == "__main__":
     attrs = triton.backends.compiler.AttrsDescriptor.from_hints(hints)
     for p, v in attrs.get_constants().items():
         constants.update({kernel.arg_names[p[0]]: v})
-    src = triton.compiler.ASTSource(fn=kernel, constants=constants, signature=signature, attrs=attrs)
+    src = triton.compiler.ASTSource(fn=kernel, constexprs=constants, signature=signature, attrs=attrs)
     opts = {"num_warps": args.num_warps, "num_stages": args.num_stages}
     ccinfo = triton.compile(src, options=opts)
     if ccinfo.metadata.global_scratch_size > 0:

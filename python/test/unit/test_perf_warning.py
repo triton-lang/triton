@@ -92,7 +92,7 @@ def test_mma_remark(capfd, fresh_triton_cache):
                     "stride_cm": "i32",
                     "stride_cn": "i32",
                 },
-                constants={},
+                constexprs={},
             ))
     captured = capfd.readouterr()
 
