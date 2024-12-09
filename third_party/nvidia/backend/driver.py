@@ -121,7 +121,7 @@ def ty_to_cpp(ty):
 def make_launcher(constants, signature, ids):
 
     def _extracted_type(ty):
-        if ty[0] == '*':
+        if ty[0] == '*' or ty == "none":
             return "PyObject*"
         if ty == "nvTmaDesc":
             return "PyObject*"
@@ -169,7 +169,7 @@ def make_launcher(constants, signature, ids):
     arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
     internal_args_list = []
     for i, ty in signature.items():
-        if ty[0] == "*":
+        if ty[0] == "*" or ty == "none":
             internal_args_list.append(f"ptr_info{i}.dev_ptr")
         elif ty == "nvTmaDesc":
             # Note: we have to dereference the pointer
@@ -413,10 +413,9 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   }}
 
   // raise exception asap
-  {"".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
+  {"".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" or ty == "none" else "" for i, ty in signature.items()])};
   {"".join([f"CUtensorMap* tma_ptr{i} = getTmaDesc(_arg{i}); if (!tma_ptr{i}) return NULL;" if ty == "nvTmaDesc" else "" for i, ty in signature.items()])};
   Py_BEGIN_ALLOW_THREADS;
-  //printf("%llu %d %d %llu %llu %d %d %llu %llu", {",".join(internal_args_list)});
   _launch(gridX, gridY, gridZ, num_warps, num_ctas, clusterDimX, clusterDimY, clusterDimZ, shared_memory, (CUstream)_stream, (CUfunction)_function, global_scratch{', ' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
   Py_END_ALLOW_THREADS;
   if (PyErr_Occurred()) {{
@@ -457,6 +456,7 @@ PyMODINIT_FUNC PyInit___triton_launcher(void) {{
   return m;
 }}
 """
+    print(src)
     return src
 
 
