@@ -232,20 +232,33 @@ bool emitTransferBetweenRegistersAndShared(
   auto vecTy = vec_ty(elemLlvmTy, vecElems);
   auto ptrTy = shmemBase.getType();
   Value zero = i32_val(0);
+
+  // Precompute common smem offset for this thread
+  auto threadOffsetBase = applyLinearLayout(
+      loc, rewriter, *regToSharedLayout,
+      {{kRegister, zero}, {kLane, laneId}, {kWarp, warpId}, {kBlock, zero}});
+
   SmallVector<Value> ret;
-
-  // Flatten regToSharedLayout out dims into linear smem index
-  auto flatLayout = regToSharedLayout->flattenOuts();
-
   for (int i = 0; i < numElems / vecElems; i++) {
-    // Get the address to load/store.
-    auto shmemOffset = applyLinearLayout(loc, rewriter, flatLayout,
-                                         {{kRegister, i32_val(i * vecElems)},
-                                          {kLane, laneId},
-                                          {kWarp, warpId},
-                                          {kBlock, zero}})[0]
-                           .second;
+    // Get the address to load/store.  The multi-dim address is (offsetX1, ...,
+    // offsetXN, block), where the offsets appear in minor-to-major order, and
+    // we drop_end to drop block, which we know from above will be 0.
+    auto regOffset = applyLinearLayout(loc, rewriter, *regToSharedLayout,
+                                       {{kRegister, i32_val(i * vecElems)},
+                                        {kLane, zero},
+                                        {kWarp, zero},
+                                        {kBlock, zero}});
+    SmallVector<Value> multiDimShmemOffset(regOffset.size() - 1);
+    for (int i = 0; i + 1 < regOffset.size(); ++i) {
+      multiDimShmemOffset[i] =
+          xor_(regOffset[i].second, threadOffsetBase[i].second);
+    }
 
+    // Reorder strides according to `order`.  This way they match the
+    // multi-dimensional offsets in regToSharedLayout.
+    auto sharedOrder = triton::gpu::getOrder(sharedTy.getEncoding());
+    Value shmemOffset = dot(rewriter, loc, multiDimShmemOffset,
+                            applyPermutation(shmemStrides, sharedOrder));
     auto vecAddr = gep(ptrTy, elemLlvmTy, shmemBase, shmemOffset);
     vecAddr.setInbounds(true);
 
