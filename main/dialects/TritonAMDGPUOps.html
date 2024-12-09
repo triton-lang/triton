@@ -77,14 +77,18 @@
 <li class="toctree-l4"><a class="reference internal" href="#id1">Operands:</a></li>
 </ul>
 </li>
+<li class="toctree-l3"><a class="reference internal" href="#amdgpu-cond-barrier-triton-amdgpu-condbarrierop"><code class="docutils literal notranslate"><span class="pre">amdgpu.cond_barrier</span></code> (triton::amdgpu::CondBarrierOp)</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id2">Operands:</a></li>
+</ul>
+</li>
 <li class="toctree-l3"><a class="reference internal" href="#amdgpu-extract-slice-triton-amdgpu-extractsliceop"><code class="docutils literal notranslate"><span class="pre">amdgpu.extract_slice</span></code> (triton::amdgpu::ExtractSliceOp)</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="#attributes">Attributes:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#id2">Operands:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#id3">Results:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id3">Operands:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id4">Results:</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#amdgpu-instruction-sched-hint-triton-amdgpu-instructionschedhint"><code class="docutils literal notranslate"><span class="pre">amdgpu.instruction_sched_hint</span></code> (triton::amdgpu::InstructionSchedHint)</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#id4">Attributes:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id5">Attributes:</a></li>
 </ul>
 </li>
 </ul>
@@ -230,6 +234,36 @@ tensor of elements that should be written on lane <code class="docutils literal 
 </table>
 </section>
 </section>
+<section id="amdgpu-cond-barrier-triton-amdgpu-condbarrierop">
+<h2><code class="docutils literal notranslate"><span class="pre">amdgpu.cond_barrier</span></code> (triton::amdgpu::CondBarrierOp)<a class="headerlink" href="#amdgpu-cond-barrier-triton-amdgpu-condbarrierop" title="Link to this heading">¶</a></h2>
+<p><em>Conditionally set barriers to synchronize partial threads in a block</em></p>
+<p>Syntax:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `amdgpu.cond_barrier` $pred attr-dict
+</pre></div>
+</div>
+<p>condBarrierOp sets barrier instruction only when the given argument is true.
+This provides a way to synchronize partial threads in a block, deliberately
+diverges the execution sequences. However, user should guarantee all threads
+converge at the end by calling condBarrierOp(true) with the remaining threads.
+Conceptually, this is similar to having an execution barrier inside an if statement.
+This op allows us to avoid blocking the whole block when suitable to help scheduling.
+NB. This doesn’t set any memory fence.</p>
+<section id="id2">
+<h3>Operands:<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h3>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">pred</span></code></p></td>
+<td><p>1-bit signless integer</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+</section>
 <section id="amdgpu-extract-slice-triton-amdgpu-extractsliceop">
 <h2><code class="docutils literal notranslate"><span class="pre">amdgpu.extract_slice</span></code> (triton::amdgpu::ExtractSliceOp)<a class="headerlink" href="#amdgpu-extract-slice-triton-amdgpu-extractsliceop" title="Link to this heading">¶</a></h2>
 <p><em>Extract slice operation</em></p>
@@ -277,8 +311,8 @@ size of the slice is determined by the result type.</p>
 <tr><td><code>static_offsets</code></td><td>::mlir::DenseI64ArrayAttr</td><td>i64 dense array attribute</td></tr>
 </table>
 </section>
-<section id="id2">
-<h3>Operands:<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h3>
+<section id="id3">
+<h3>Operands:<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -292,8 +326,8 @@ size of the slice is determined by the result type.</p>
 </tbody>
 </table>
 </section>
-<section id="id3">
-<h3>Results:<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h3>
+<section id="id4">
+<h3>Results:<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Result</p></th>
@@ -323,8 +357,8 @@ to mark intended scheduling regions. The hint ops are eventually lowered
 into LLVM AMDGPU instruction scheduling primitives, which are meant to control
 how different kinds of instructions (valu/mfma, global/shared memory, etc.) should
 interleave for better instruction level parallelism.</p>
-<section id="id4">
-<h3>Attributes:<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h3>
+<section id="id5">
+<h3>Attributes:<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>numDsReadsA</code></td><td>::mlir::triton::amdgpu::InstCounterAttr</td><td><details><summary>An instruction counter attribute.</summary>{{% markdown %}}
