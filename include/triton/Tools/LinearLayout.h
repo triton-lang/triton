@@ -325,6 +325,7 @@ private:
 
   llvm::MapVector<StringAttr, int32_t /*size*/> outDims;
   bool surjective;
+  bool injective;
 
 public:
   using BasesT = decltype(bases);
@@ -413,6 +414,8 @@ public:
       ArrayRef<std::pair<StringAttr, int32_t>> outDims, bool requireSurjective);
 
   bool isSurjective() const { return surjective; }
+
+  bool isInjective() const { return injective; }
 
   const BasesT &getBases() const { return bases; }
 
