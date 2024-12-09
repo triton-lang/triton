@@ -237,24 +237,14 @@ bool emitTransferBetweenRegistersAndShared(
   // Flatten regToSharedLayout out dims into linear smem index
   auto flatLayout = regToSharedLayout->flattenOuts();
 
-  // Precompute common smem offset for this thread
-  auto threadSmemOffset = applyLinearLayout(loc, rewriter, flatLayout,
-                                            {{kRegister, i32_val(0)},
-                                             {kLane, laneId},
-                                             {kWarp, warpId},
-                                             {kBlock, zero}})[0]
-                              .second;
-
   for (int i = 0; i < numElems / vecElems; i++) {
     // Get the address to load/store.
-    auto regOffset = applyLinearLayout(loc, rewriter, flatLayout,
-                                       {{kRegister, i32_val(i * vecElems)},
-                                        {kLane, zero},
-                                        {kWarp, zero},
-                                        {kBlock, zero}})[0]
-                         .second;
-
-    Value shmemOffset = xor_(threadSmemOffset, regOffset);
+    auto shmemOffset = applyLinearLayout(loc, rewriter, flatLayout,
+                                         {{kRegister, i32_val(i * vecElems)},
+                                          {kLane, laneId},
+                                          {kWarp, warpId},
+                                          {kBlock, zero}})[0]
+                           .second;
 
     auto vecAddr = gep(ptrTy, elemLlvmTy, shmemBase, shmemOffset);
     vecAddr.setInbounds(true);
