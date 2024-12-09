@@ -193,43 +193,31 @@ Value getSmemVecAddr(RankedTensorType registerTy,
   auto smemOffsets = smemObj.getOffsets();
   auto smemStrides = smemObj.getStrides();
   Value smemOffset;
-  // We need to consider two scenarios when loading or storing to shared memory:
+  // When loading or storing to shared memory, we consider two scenarios:
   //
-  // 1. Contiguous Shared Memory (No "Holes")
+  //   1. Non-swizzled shared memory.
+  //   2. Swizzled shared memory.
   //
-  //    In this case, the shared memory allocation size matches exactly the
-  //    tensor size. This implies that indexing into the shared memory is
-  //    straightforward.
+  // Consider lowering `ttg.local_load %a`. In the first scenario, we can
+  // directly construct a linear layout using `%a`'s shape and shared memory
+  // encoding, irrespective of `%a`'s rank or whether it represents a slice of a
+  // larger tensor.
   //
-  // 2. Non-Contiguous Shared Memory ("Holes")
+  // The method does not apply for swizzled shared memory.
+  // Key properties of swizzling in Triton are:
   //
-  //    In this scenario, the allocated shared memory size differs from the
-  //    tensor size, creating "holes." This situation arises, for example, when
-  //    using `ttg.subview` in Triton. Indexing becomes more complex, especially
-  //    if "swizzling" (reordering of elements in the last two dimensions) is
-  //    involved. This occurs because the linear layout we derive from the
-  //    subview's shape is different to the original tensor's linear
-  //    layout before subview---"swizzling" was applied on the original shape
-  //    but not the subview's shape.
+  //   - Swizzling applies only to tensors with rank ≥ 2.
+  //   - It is restricted to the last two dimensions of the tensor.
+  //   - These last two dimensions are always treated as the most "minor."
   //
-  //  Key observations regarding swizzling:
-  //
-  //    - Swizzling only occurs for tensors with rank ≥ 2.
-  //    - It only applies to the last two dimensions of the tensor.
-  //    - The last two dimensions are always considered more "minor" than the
-  //    others.
-  //
-  // Therefore, if we have reduced from an n-dimensional (nd) shape to an
-  // m-dimensional (md) shape (with m ≥ 2) and the last two dimensions remain
-  // unchanged relative to the originally allocated shape, we can still
-  // perform direct indexing into the shared memory.
-  //
-  // Otherwise, if the last two dimensions differ from the allocated shape,
-  // it indicates that there may be "holes" and that we need to apply
-  // swizzling logic. This corresponds to case #2 above.
+  // An important edge case arises when `%a` results from `%a = ttg.subview %b`,
+  // where `%b` is swizzled. ll(a) may not be surjective because `%b`'s shape
+  // differs from `%a`'s shape. An element `[i (row_idx), j (col_idx)]` in `%a`
+  // might map to `[i, j']` after swizzling, where `j'` lies outside `%a`'s
+  // shape but within `%b`'s shape.
   if (/*no swizzling*/ sharedEnc.getMaxPhase() == 1 ||
       /*swizzling but same shape*/ shape == allocShape ||
-      /*swizzling and rank-reduced but no hole and rank >= 2*/
+      /*swizzling and rank-reduced and rank >= 2*/
       (shape == allocShape.take_back(rank) && rank >= 2)) { // Case 1
     // Get the address to load/store.  The multi-dim address is (offsetX1, ...,
     // offsetXN, block), where the offsets appear in minor-to-major order, and
@@ -245,24 +233,31 @@ Value getSmemVecAddr(RankedTensorType registerTy,
     smemOffset = dot(rewriter, loc, smemOffsets,
                      applyPermutation(smemStrides, sharedOrder));
   } else { // Case 2 -> rank-reduced swizzling
-    // TODO: relax the rank >= 2 constraint
     assert(rank >= 2 && "Swizzling only applies to tensors with rank >= 2");
-    // Here, we define both tensor offsets and shared memory offsets.
+    // We define both tensor offsets and shared memory offsets:
     //
-    // Shared memory layout in triton provides an invertible, one-to-one mapping
-    // between tensor offsets and shared memory offsets. For the base field of
-    // any shared memory object, its shared memory offsets are the same as its
-    // tensor offsets.
+    //   - Tensor offsets: Relative offsets within a given tensor.
+    //   - Shared memory offsets: Absolute offsets within the shared memory.
     //
-    // Our first step is to retrieve the `invertAllocSharedLayout`, which maps
-    // tensor offsets back to shared memory offsets. With this layout in hand,
-    // we then compute the "absolute" tensor offsets by adding together:
+    // In Triton, the shared memory layout provides an invertible, one-to-one
+    // mapping between tensor offsets and shared memory offsets. The `base`
+    // field of any shared memory object represents both the shared memory
+    // offset and the tensor offset relative to the original tensor at
+    // allocation, prior to any subview operations.
     //
-    //   1. The shared memory offsets of the current base of the view, and
-    //   2. The tensor offsets contributed by each register.
+    // To determine the shared memory offsets for a specific register when
+    // dealing with swizzled and sliced tensors, the process involves:
     //
-    // This process ensures we can use the "absolute" tensor offsets to look up
-    // the correct shared memory addresses using `invertAllocSharedLayout`.
+    //   1. Retrieving the original tensor's `invertAllocSharedLayout`, which
+    //   maps the allocated tensor's offsets back to shared memory offsets.
+    //   2. Reconstructing the register's offsets in the allocated tensor by
+    //   summing:
+    //      - The shared memory offsets of the current view's base, and
+    //      - The relative tensor offsets of the register.
+    //
+    // This approach ensures that "absolute" tensor offsets can be
+    // mapped to the correct shared memory addresses using
+    // `invertAllocSharedLayout`.
     std::optional<LinearLayout> regLayout =
         triton::gpu::toLinearLayout(shape, registerTy.getEncoding());
     auto allocSharedLayout = triton::gpu::toLinearLayout(
