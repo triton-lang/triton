@@ -51,12 +51,12 @@ def convert_type_repr(x):
 
 class ASTSource:
 
-    def __init__(self, fn, signature, constants=None, attrs=None) -> None:
+    def __init__(self, fn, signature, constexprs=None, attrs=None) -> None:
         self.fn = fn
         self.ext = "ttir"
         self.name = fn.__name__
         self.signature = signature
-        self.constants = constants
+        self.constexprs = constexprs
         self.attrs = attrs
         if isinstance(self.signature, str):
             self.signature = {k: v.strip() for k, v in enumerate(self.signature.split(","))}
@@ -64,16 +64,19 @@ class ASTSource:
             for k in self.signature.keys():
                 if not isinstance(k, str):
                     raise TypeError("Signature keys must be string")
-        if self.constants is None:
-            self.constants = {}
+        if self.constexprs is None:
+            self.constexprs = {}
         if self.attrs is None:
             self.attrs = AttrsDescriptor()
+        # this is the constexprs plus the specialized constants
+        spec_constants = {self.fn.arg_names[k[0]]: v for k, v in self.attrs.get_constants().items() if len(k) == 1}
+        self.constants = self.constexprs | spec_constants
 
     def hash(self):
         sorted_sig = [v for k, v in sorted(self.signature.items())]
         # Note - we stringify the keys here to allow sorting to work for cases
         # where constants have mixed int/str keys.
-        sorted_constants = sorted((str(k), v) for k, v in self.constants.items())
+        sorted_constants = sorted((str(k), v) for k, v in self.constexprs.items())
         key = f"{self.fn.cache_key}-{self.attrs.hash()}-{sorted_sig}-{sorted_constants}"
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
@@ -408,7 +411,7 @@ class CompiledKernel:
         arg_idx = 0
         for i, arg_name in enumerate(self.src.fn.arg_names):
             if i in self.src.fn.constexprs:
-                arg_dict[arg_name] = self.src.constants[arg_name]
+                arg_dict[arg_name] = self.src.constexprs[arg_name]
             else:
                 arg_dict[arg_name] = args[arg_idx]
                 arg_idx += 1

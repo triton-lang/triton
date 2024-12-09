@@ -609,19 +609,18 @@ class JITFunction(KernelInterface[T]):
             signature = {k: v for (k, v) in zip(sigkeys, sigvals)}
 
             attrs = backend.get_attrs_descriptor(self.params, bound_vals)
-            is_specialized = lambda v: v is None or (isinstance(v, int) and v == 1)
-            constants = {p.name: v for (v, p) in zip(bound_vals, self.params) if p.is_constexpr or is_specialized(v)}
-            for i, arg in constants.items():
+            constexprs = {p.name: v for (v, p) in zip(bound_vals, self.params) if p.is_constexpr}
+            for i, arg in constexprs.items():
                 if callable(arg):
                     raise TypeError(f"Callable constexpr at index {i} is not supported")
 
-            if self._call_hook(key, signature, device, constants, options, [attrs], warmup, before=True):
+            if self._call_hook(key, signature, device, constexprs, options, [attrs], warmup, before=True):
                 return None
             # compile the kernel
-            src = self.ASTSource(self, signature, constants, attrs)
+            src = self.ASTSource(self, signature, constexprs, attrs)
             kernel = self.compile(src, target=target, options=options.__dict__)
             self.cache[device][key] = kernel
-            self._call_hook(key, signature, device, constants, options, [attrs], warmup, before=False)
+            self._call_hook(key, signature, device, constexprs, options, [attrs], warmup, before=False)
 
         # Check that used global values have not changed.
         not_present = object()

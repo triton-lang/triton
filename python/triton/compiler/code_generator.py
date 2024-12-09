@@ -1352,7 +1352,7 @@ def kernel_suffix(signature, specialization):
 
 
 def ast_to_ttir(fn, specialization, context, options, codegen_fns, module_map):
-    constexprs = specialization.constants
+    constexprs = specialization.constexprs
     arg_idx = lambda x: (fn.arg_names.index(x), ) if isinstance(x, str) else x
     constants = specialization.attrs.get_constants()
     constexprs = {arg_idx(k): v for k, v in constexprs.items()}
