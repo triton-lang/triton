@@ -138,7 +138,7 @@ def test_remark_vectorization(capfd, fresh_triton_cache):
                     "out_ptr0": "*fp16",
                     "XBLOCK": "constexpr",
                 },
-                constants={"XBLOCK": XBLOCK},
+                constexprs={"XBLOCK": XBLOCK},
             ),
             options={"num_warps": 1},
         )
