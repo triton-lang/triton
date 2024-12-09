@@ -1370,7 +1370,7 @@ def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, layout, 
     (4, 4, 113, 123, 1),
 ])
 @pytest.mark.parametrize('causal', [True, False])
-@pytest.mark.parametrize('quantize_p', [False])
+@pytest.mark.parametrize('quantize_p', [True, False])
 @pytest.mark.parametrize('layout', ['bhsd'])
 def test_op_fwd_int8(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, quantize_p, layout, dtype=torch.float16):
     torch.manual_seed(20)
@@ -1416,7 +1416,7 @@ def test_op_fwd_int8(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, quantize_p, layout,
             l_i = alpha * l_i + l_ij
 
         l_recip = 1 / l_i.unsqueeze(-1)
-        acc = acc * l_recip * input_metadata.p_descale * input_metadata.v_descale
+        acc = acc * input_metadata.p_descale * input_metadata.v_descale * l_recip
         ref_out = acc.to(torch.float16)
     else:
         p = torch.softmax(scores, dim=-1)
