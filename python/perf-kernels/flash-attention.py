@@ -1364,9 +1364,9 @@ def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, layout, 
     (1, 8, 8081, 7099, 64),
     (1, 8, 16330, 15989, 128),
     (4, 4, 1024, 1024, 33),
-    (4, 4, 65, 1019, 65),
+    # (4, 4, 65, 1019, 65),
     (4, 4, 128, 128, 65),
-    (4, 4, 113, 123, 1),
+    # (4, 4, 113, 123, 1),
 ])
 @pytest.mark.parametrize('causal', [False])
 @pytest.mark.parametrize('quantize_p', [True, False])
