@@ -2934,10 +2934,12 @@ struct TritonGPUInferLayoutInterface
   inferReshapeOpEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
                          ArrayRef<int64_t> dstShape, Attribute &dstEnc,
                          std::optional<Location> loc) const override {
-    if (succeeded(inferReshapeOpLegacyEncoding(srcShape, srcEnc, dstShape,
-                                               dstEnc, loc))) {
-      return success();
-    }
+    auto result =
+        inferReshapeOpLegacyEncoding(srcShape, srcEnc, dstShape, dstEnc, loc);
+    // TODO(Lezcano): Remove before merge
+    // if (succeeded(result)) {
+    //  return result;
+    //}
 
     // If the legacy encoding failed, try to use LinearLayouts.
     // Once LinearLayouts are more widely used, we can remove
@@ -2962,7 +2964,24 @@ struct TritonGPUInferLayoutInterface
           {StringAttr::get(ctx, "dim" + llvm::Twine(i)), dstShape[i]});
     }
     auto dst = src->reshapeOuts(newOutDims);
-    dstEnc = LinearEncodingAttr::get(ctx, dst);
+    // TODO(Lezcano): Remove before merge
+    if (succeeded(result)) {
+      auto bf16 = FloatType::getBF16(ctx);
+      auto cvt = *minimalCvtLayout(
+          RankedTensorType::get(dstShape, bf16,
+                                LinearEncodingAttr::get(ctx, dst)),
+          RankedTensorType::get(dstShape, bf16, dstEnc));
+      auto kLane = StringAttr::get(ctx, "lane");
+      if (cvt.hasInDim(kLane)) {
+        srcEnc.dump();
+        llvm::errs() << "src: " << *src << "\n";
+        llvm::errs() << "dst: " << dst << "\n";
+        llvm::errs() << "dstLL: " << *toLinearLayout(dstShape, dstEnc) << "\n";
+        return emitOptionalError(loc, "dst != dstLL");
+      }
+    } else {
+      dstEnc = LinearEncodingAttr::get(ctx, dst);
+    }
     return success();
   }
 
