@@ -728,7 +728,7 @@ class JITFunction(KernelInterface[T]):
         if deserialized_obj['name'] != self.fn.__name__:
             raise RuntimeError(
                 f"Specialization data is for {deserialized_obj['name']} but trying to preload for {self.fn.__name__}")
-        constant_keys = map(tuple, deserialized_obj['constant_keys'])
+        constant_keys = deserialized_obj['constant_keys']
         constant_vals = deserialized_obj['constant_vals']
         constants = {
             key: tl.dtype(value) if tl.dtype.is_dtype(value) else value
