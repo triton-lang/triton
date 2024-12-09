@@ -65,9 +65,9 @@ def test_module_walk(device):
         fn=kernel,
         signature={kernel.arg_names[i]: kernel._type_of(kernel._key_of(arg))
                    for i, arg in enumerate(args)},
-        constants={kernel.arg_names[i]: arg
-                   for i, arg in enumerate(args)
-                   if not isinstance(arg, torch.Tensor)},
+        constexprs={kernel.arg_names[i]: arg
+                    for i, arg in enumerate(args)
+                    if not isinstance(arg, torch.Tensor)},
         attrs=backend.get_attrs_descriptor(kernel.params, args),
     )
 
