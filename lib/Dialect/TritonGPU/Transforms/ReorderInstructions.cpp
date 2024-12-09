@@ -100,7 +100,7 @@ public:
     });
     // Move transpositions just after their definition
     opToMove.clear();
-    m.walk([&](triton::TransOp op) {
+    m.walk([&](triton::TransposeOpInterface op) {
       Operation *argOp = op.getSrc().getDefiningOp();
       if (!argOp)
         return;

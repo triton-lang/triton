@@ -1,6 +1,7 @@
 """isort:skip_file"""
 # Import order is significant here.
 
+from .._utils import parse_list_string
 from . import math
 from . import extra
 from .standard import (
@@ -29,6 +30,7 @@ from .core import (
     _experimental_descriptor_load,
     _experimental_descriptor_store,
     _experimental_make_tensor_descriptor,
+    _experimental_reinterpret_tensor_descriptor,
     _experimental_tensor_descriptor,
     add,
     advance,
@@ -68,7 +70,7 @@ from .core import (
     float8e5,
     float8e5b16,
     full,
-    function_type,
+    gather,
     histogram,
     inline_asm_elementwise,
     int1,
@@ -93,6 +95,7 @@ from .core import (
     range,
     reduce,
     reshape,
+    slice,
     split,
     static_assert,
     static_print,
@@ -100,6 +103,8 @@ from .core import (
     store,
     tensor,
     trans,
+    tuple,
+    tuple_type,
     uint16,
     uint32,
     uint64,
@@ -129,6 +134,7 @@ __all__ = [
     "_experimental_descriptor_load",
     "_experimental_descriptor_store",
     "_experimental_make_tensor_descriptor",
+    "_experimental_reinterpret_tensor_descriptor",
     "_experimental_tensor_descriptor",
     "abs",
     "add",
@@ -185,7 +191,7 @@ __all__ = [
     "floor",
     "fma",
     "full",
-    "function_type",
+    "gather",
     "histogram",
     "inline_asm_elementwise",
     "interleave",
@@ -228,6 +234,7 @@ __all__ = [
     "reduce",
     "reshape",
     "rsqrt",
+    "slice",
     "sigmoid",
     "sin",
     "softmax",
@@ -244,6 +251,7 @@ __all__ = [
     "tensor",
     "trans",
     "triton",
+    "tuple",
     "uint16",
     "uint32",
     "uint64",
@@ -260,6 +268,9 @@ __all__ = [
 
 
 def str_to_ty(name):
+    if name == "none":
+        return None
+
     if name[0] == "*":
         name = name[1:]
         const = False
@@ -269,8 +280,16 @@ def str_to_ty(name):
         ty = str_to_ty(name)
         return pointer_type(element_ty=ty, const=const)
 
+    if name[0] == "[":
+        names = parse_list_string(name)
+        tys = [str_to_ty(x) for x in names]
+        return tuple_type(types=tys)
+
     if name == "nvTmaDesc":
         return nv_tma_desc_type()
+
+    if name == "constexpr":
+        return constexpr
 
     tys = {
         "fp8e4nv": float8e4nv,

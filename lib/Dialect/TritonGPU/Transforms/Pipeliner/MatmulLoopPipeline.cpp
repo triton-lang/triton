@@ -34,17 +34,18 @@ namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
 
-// TODO: We can extra some helpers into common utilities once we add more
+// TODO: We can extract some helpers into common utilities once we add more
 // schedules.
 
 namespace {
 
 struct LoadInfo {
-  // Layout of the data in the shared memory.
+  // Layout of the data in shared memory.
   ttg::SharedEncodingAttr sharedEncoding = nullptr;
   // Blocked encoding is used for loads not used by the dot.
   ttg::BlockedEncodingAttr blockedEncoding = nullptr;
-  bool loadIsMMAV3 = false;
+  bool isMMAv3Shared = false;
+  bool isMMAv3Registers = false;
   int distToUse = 0;
   bool usedByDot = false;
 };
@@ -63,11 +64,7 @@ public:
   OpTy createWithStage(Location location, int stage, int cluster,
                        Args &&...args) {
     OpTy op = OpBuilder::create<OpTy>(location, std::forward<Args>(args)...);
-    auto ctx = getContext();
-    op->setAttr(mlir::triton::kLoopStageAttrName,
-                IntegerAttr::get(IntegerType::get(ctx, 32), stage));
-    op->setAttr(mlir::triton::kLoopClusterAttrName,
-                IntegerAttr::get(IntegerType::get(ctx, 32), cluster));
+    tt::setStageCluster(op, stage, cluster);
     return op;
   }
   using OpBuilder::create;
@@ -101,7 +98,7 @@ static Operation *getFirstUseOfPipelinedLoad(Operation *loadOp) {
   return firstUser;
 }
 
-static int createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
+static int createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
                            Value insertIdx, Value extractIdx,
                            llvm::MapVector<Operation *, LoadInfo> &loadToInfo,
                            int numStages, int maxClusterId) {
@@ -120,33 +117,35 @@ static int createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
   Value src = loadOp.getPtr();
   Value mask = loadOp.getMask();
   Value other = loadOp.getOther();
+  ttg::MemDescType allocTy = cast<ttg::MemDescType>(alloc.getType());
+
+  auto convertBlockLayout = [&](Value src, ttg::BlockedEncodingAttr enc) {
+    auto ty = cast<RankedTensorType>(src.getType());
+    auto newTy = RankedTensorType::get(ty.getShape(), ty.getElementType(), enc);
+    auto cvt = builder.createWithStage<ttg::ConvertLayoutOp>(
+        loadOp->getLoc(), stage, clusterId, newTy, src);
+    return cvt.getResult();
+  };
+
   if (!isExpensiveLoadOrStore(loadOp) && loadToInfo[loadOp].blockedEncoding) {
     // For inexpensive loads that do not directly feed into dot ops
     // we want to use optimal layout for the data.
     ttg::BlockedEncodingAttr encoding = loadToInfo[loadOp].blockedEncoding;
-    auto convertBlockLayout = [&](Value src) {
-      auto ty = cast<RankedTensorType>(src.getType());
-      auto newTy =
-          RankedTensorType::get(ty.getShape(), ty.getElementType(), encoding);
-      auto cvt = builder.createWithStage<ttg::ConvertLayoutOp>(
-          loadOp->getLoc(), stage, clusterId, newTy, src);
-      return cvt.getResult();
-    };
-    src = convertBlockLayout(src);
+    src = convertBlockLayout(src, encoding);
     if (mask)
-      mask = convertBlockLayout(mask);
+      mask = convertBlockLayout(mask, encoding);
     if (other)
-      other = convertBlockLayout(other);
+      other = convertBlockLayout(other, encoding);
   }
 
-  tt::MemDescType allocTy = cast<tt::MemDescType>(alloc.getType());
   SmallVector<Value> copyOffsets(allocTy.getRank(), zero);
   copyOffsets[0] = insertIdx;
   Attribute sharedMemorySpace =
       triton::gpu::SharedMemorySpaceAttr::get(forOp.getContext());
-  tt::MemDescType subviewTy = tt::MemDescType::get(
+  ttg::MemDescType subviewTy = ttg::MemDescType::get(
       allocTy.getShape().drop_front(), allocTy.getElementType(),
-      allocTy.getEncoding(), sharedMemorySpace, /*mutableMemory=*/true);
+      allocTy.getEncoding(), sharedMemorySpace, /*mutableMemory=*/true,
+      /*allocShape=*/allocTy.getAllocShape());
   auto view = builder.createWithStage<ttg::MemDescSubviewOp>(
       loc, stage, clusterId, subviewTy, alloc, copyOffsets);
   Operation *copy = builder.createWithStage<ttg::AsyncCopyGlobalToLocalOp>(
@@ -157,22 +156,22 @@ static int createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
   Operation *wait = builder.createWithStage<ttg::AsyncWaitOp>(
       loc, stageForFirstUse, clusterForFirstUse, commmit->getResult(0), 0);
 
-  bool isMMV3Load = loadToInfo[loadOp].loadIsMMAV3;
+  auto loadIsMMAv3Shared = loadToInfo[loadOp].isMMAv3Shared;
 
   // Extract part.
   SmallVector<Value> loadOffsets(allocTy.getRank(), zero);
   loadOffsets[0] = extractIdx;
   auto viewLoad = builder.createWithStage<ttg::MemDescSubviewOp>(
       loc, stageForFirstUse, clusterForFirstUse, subviewTy, alloc, loadOffsets);
-  if (isMMV3Load) {
+  if (loadIsMMAv3Shared) {
     auto alloc = cast<ttg::LocalAllocOp>((*loadOp->getUsers().begin()));
-    replaceUsesAndPropagateType(builder, alloc, viewLoad.getResult());
+    tt::replaceUsesAndPropagateType(builder, alloc, viewLoad.getResult());
     alloc.erase();
   } else {
     SmallVector<ttg::LocalAllocOp> allocsToErase;
     for (Operation *user : loadOp->getUsers()) {
       if (auto alloc = dyn_cast<ttg::LocalAllocOp>(user)) {
-        replaceUsesAndPropagateType(builder, alloc, viewLoad.getResult());
+        tt::replaceUsesAndPropagateType(builder, alloc, viewLoad.getResult());
         allocsToErase.push_back(alloc);
       }
     }
@@ -190,8 +189,10 @@ static int createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
     Value other = loadOp.getOther();
     if (other && !isZeroConst(other)) {
       auto select = builder.createWithStage<arith::SelectOp>(
-          loc, stageForFirstUse, clusterForFirstUse, loadOp.getType(), mask,
-          sharedLoad.getResult(), other);
+          loc, stageForFirstUse, clusterForFirstUse, loadOp.getType(),
+          // Use the mask operand from the original load, not the one with a
+          // potentially transformed layout.
+          loadOp.getMask(), sharedLoad.getResult(), other);
       result = select->getResults();
     }
 
@@ -200,9 +201,8 @@ static int createAsyncCopy(scf::ForOp &forOp, tt::LoadOp loadOp, Value alloc,
     // Prefetch load if is not MMAV3 and is used by the dot.
     if (loadToInfo[loadOp].usedByDot) {
       assert(stageForFirstUse >= 1);
-      tt::setStageCluster(forOp, wait, stageForFirstUse - 1, maxClusterId + 1);
-      tt::setStageCluster(forOp, viewLoad, stageForFirstUse - 1,
-                          maxClusterId + 1);
+      tt::setStageCluster(wait, stageForFirstUse - 1, maxClusterId + 1);
+      tt::setStageCluster(viewLoad, stageForFirstUse - 1, maxClusterId + 1);
       retCode = stageForFirstUse - 1;
     }
   }
@@ -223,27 +223,30 @@ createTMAAsyncCopy(scf::ForOp &forOp, tt::ExperimentalDescriptorLoadOp loadOp,
   auto [stageForFirstUse, clusterForFirstUse] = tt::getStageCluster(firstUse);
 
   Attribute sharedMemorySpace =
-      triton::gpu::SharedMemorySpaceAttr::get(forOp.getContext());
+      ttg::SharedMemorySpaceAttr::get(forOp.getContext());
   Value zero = builder.createWithStage<arith::ConstantIntOp>(
       forOp.getLoc(), stage, clusterId, 0, 32);
   builder.setInsertionPoint(loadOp);
   Location loc = loadOp.getLoc();
-  tt::MemDescType allocTy = cast<tt::MemDescType>(alloc.getType());
+  ttg::MemDescType allocTy = cast<ttg::MemDescType>(alloc.getType());
   SmallVector<Value> copyOffsets(allocTy.getRank(), zero);
   copyOffsets[0] = insertIdx;
-  tt::MemDescType subviewTy = tt::MemDescType::get(
+  ttg::MemDescType subviewTy = ttg::MemDescType::get(
       allocTy.getShape().drop_front(), allocTy.getElementType(),
-      allocTy.getEncoding(), sharedMemorySpace, /*mutableMemory=*/true);
+      allocTy.getEncoding(), sharedMemorySpace, /*mutableMemory=*/true,
+      /*allocShape=*/allocTy.getAllocShape());
   auto view = builder.createWithStage<ttg::MemDescSubviewOp>(
       loc, stage, clusterId, subviewTy, alloc, copyOffsets);
 
   Value pred = builder.createWithStage<arith::ConstantIntOp>(loc, stage,
                                                              clusterId, 1, 1);
+  Value tmaPtr =
+      builder.createWithStage<triton::nvidia_gpu::TensorDescToTMAPtrOp>(
+          loc, stage, clusterId, loadOp.getDesc());
   Operation *copy = builder.createWithStage<ttng::AsyncTMACopyGlobalToLocalOp>(
-      loc, stage, clusterId, loadOp.getDescPtr(), loadOp.getIndices(), barrier,
-      view, pred);
+      loc, stage, clusterId, tmaPtr, loadOp.getIndices(), barrier, view, pred);
 
-  bool isMMV3Load = loadToInfo[loadOp].loadIsMMAV3;
+  auto loadIsMMAv3Shared = loadToInfo[loadOp].isMMAv3Shared;
 
   builder.setInsertionPointAfter(waitOp);
   // Extract part.
@@ -251,15 +254,15 @@ createTMAAsyncCopy(scf::ForOp &forOp, tt::ExperimentalDescriptorLoadOp loadOp,
   loadOffsets[0] = extractIdx;
   auto viewLoad = builder.createWithStage<ttg::MemDescSubviewOp>(
       loc, stageForFirstUse, clusterForFirstUse, subviewTy, alloc, loadOffsets);
-  if (isMMV3Load) {
+  if (loadIsMMAv3Shared) {
     auto alloc = cast<ttg::LocalAllocOp>((*loadOp->getUsers().begin()));
-    replaceUsesAndPropagateType(builder, alloc, viewLoad.getResult());
+    tt::replaceUsesAndPropagateType(builder, alloc, viewLoad.getResult());
     alloc.erase();
   } else {
     SmallVector<ttg::LocalAllocOp> allocsToErase;
     for (Operation *user : loadOp->getUsers()) {
       if (auto alloc = dyn_cast<ttg::LocalAllocOp>(user)) {
-        replaceUsesAndPropagateType(builder, alloc, viewLoad.getResult());
+        tt::replaceUsesAndPropagateType(builder, alloc, viewLoad.getResult());
         allocsToErase.push_back(alloc);
       }
     }
@@ -267,6 +270,7 @@ createTMAAsyncCopy(scf::ForOp &forOp, tt::ExperimentalDescriptorLoadOp loadOp,
       alloc.erase();
     }
 
+    builder.setInsertionPointAfter(viewLoad);
     auto sharedLoad = builder.createWithStage<ttg::LocalLoadOp>(
         loc, stage, clusterId, loadOp.getType(),
         viewLoad /*,wait->getResult(0)*/);
@@ -296,7 +300,7 @@ getBlockedEncoding(tt::LoadOp loadOp, tt::ModuleAxisInfoAnalysis &axisInfo) {
 }
 
 static std::optional<ttg::SharedEncodingAttr>
-getSharedEncoding(Operation *loadOp, bool isMMAV3) {
+getSharedEncoding(Operation *loadOp, bool isMMAV3Shared) {
   auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
   auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
   auto blockedOrder = ttg::getOrder(ty.getEncoding());
@@ -311,7 +315,7 @@ getSharedEncoding(Operation *loadOp, bool isMMAV3) {
   } else {
     order = blockedOrder;
   }
-  if (isMMAV3) {
+  if (isMMAV3Shared) {
     return ttg::SharedEncodingAttr::get(ty.getContext(), ty.getShape(), order,
                                         ctaLayout, ty.getElementType());
   }
@@ -469,15 +473,22 @@ assignMemoryLayouts(scf::ForOp &forOp,
     for (auto use : users) {
       if (use->hasTrait<OpTrait::DotLike>()) {
         LDBG("set shared encoding with dot user: " << *use);
+        auto mmaLoadType = getMMALoadType(&op);
+        auto dot = dyn_cast<tt::DotOp>(use);
+        auto warpGroupDot = dyn_cast<ttng::WarpGroupDotOp>(use);
+
         loadInfo.usedByDot = true;
-        if (loadIsMMAv3(&op)) {
-          loadInfo.loadIsMMAV3 = true;
+        loadInfo.isMMAv3Shared = mmaLoadType == MMALoadType::SharedV3;
+        loadInfo.isMMAv3Registers =
+            (mmaLoadType == MMALoadType::Registers) && warpGroupDot;
+
+        if (loadInfo.isMMAv3Shared) {
           loadInfo.sharedEncoding =
               getSharedEncoding(&op, /*loadIsMMAv3=*/true).value_or(nullptr);
         } else if (isa<tt::ExperimentalDescriptorLoadOp>(op)) {
           loadInfo.sharedEncoding =
               getSharedEncoding(&op, /*loadIsMMAv3=*/true).value_or(nullptr);
-        } else if (auto dot = dyn_cast<tt::DotOp>(use)) {
+        } else if (loadInfo.isMMAv3Registers || dot) {
           bool incompatible = false;
           loadInfo.sharedEncoding =
               getSharedEncIfAllUsersAreDotEnc(op.getResult(0), incompatible)
@@ -490,7 +501,7 @@ assignMemoryLayouts(scf::ForOp &forOp,
       if (!loadInfo.sharedEncoding && !isa<ttng::WarpGroupDotOp>(use)) {
         LDBG("try generic shared encoding");
         loadInfo.sharedEncoding =
-            getSharedEncoding(&op, /*isMMAV3=*/loadInfo.loadIsMMAV3)
+            getSharedEncoding(&op, /*isMMAV3=*/loadInfo.isMMAv3Shared)
                 .value_or(nullptr);
         if (auto loadOp = dyn_cast<tt::LoadOp>(op))
           loadInfo.blockedEncoding =
@@ -512,15 +523,15 @@ static Value createAlloc(scf::ForOp &forOp, Operation *loadOp,
                          ttg::SharedEncodingAttr sharedEnc, unsigned distance) {
   OpBuilder builder(forOp);
   Attribute sharedMemorySpace =
-      triton::gpu::SharedMemorySpaceAttr::get(forOp.getContext());
+      ttg::SharedMemorySpaceAttr::get(forOp.getContext());
   auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
   SmallVector<int64_t> bufferShape(ty.getShape().begin(), ty.getShape().end());
   bufferShape.insert(bufferShape.begin(), distance);
-  Type memdescType = mlir::triton::MemDescType::get(
-      bufferShape, ty.getElementType(), sharedEnc, sharedMemorySpace,
-      /*mutableMemory*/ true);
-  Value alloc = builder.create<mlir::triton::gpu::LocalAllocOp>(
-      loadOp->getLoc(), memdescType, Value());
+  Type memdescType = ttg::MemDescType::get(bufferShape, ty.getElementType(),
+                                           sharedEnc, sharedMemorySpace,
+                                           /*mutableMemory=*/true);
+  Value alloc =
+      builder.create<ttg::LocalAllocOp>(loadOp->getLoc(), memdescType, Value());
   return alloc;
 }
 
@@ -528,7 +539,7 @@ static Value createAlloc(scf::ForOp &forOp, Operation *loadOp,
 static Value createBarrierAlloc(scf::ForOp &forOp, unsigned distance) {
   OpBuilder builder(forOp);
   Attribute sharedMemorySpace =
-      triton::gpu::SharedMemorySpaceAttr::get(forOp.getContext());
+      ttg::SharedMemorySpaceAttr::get(forOp.getContext());
   Location loc = forOp.getLoc();
   auto context = forOp.getContext();
   auto barrierCTALayout =
@@ -536,14 +547,15 @@ static Value createBarrierAlloc(scf::ForOp &forOp, unsigned distance) {
                               /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
   auto barrierEncoding =
       ttg::SharedEncodingAttr::get(context, 1, 1, 1, {0}, barrierCTALayout);
-  Type barrierMemDescType = tt::MemDescType::get(
+  auto barrierMemDescType = ttg::MemDescType::get(
       {distance}, builder.getI64Type(), barrierEncoding, sharedMemorySpace,
       /*mutableMemory=*/true);
-  Type singleBarrierMemDescType =
-      tt::MemDescType::get({1}, builder.getI64Type(), barrierEncoding,
-                           sharedMemorySpace, /*mutableMemory=*/true);
-  Value barrierAlloc = builder.create<mlir::triton::gpu::LocalAllocOp>(
-      loc, barrierMemDescType, Value());
+  Type singleBarrierMemDescType = ttg::MemDescType::get(
+      {1}, builder.getI64Type(), barrierEncoding, sharedMemorySpace,
+      /*mutableMemory=*/true,
+      /*allocShape=*/barrierMemDescType.getAllocShape());
+  Value barrierAlloc =
+      builder.create<ttg::LocalAllocOp>(loc, barrierMemDescType, Value());
   for (unsigned i = 0; i < distance; i++) {
     Value idx = builder.create<arith::ConstantIntOp>(loc, i, 32);
     Value barrierView = builder.create<ttg::MemDescSubviewOp>(
@@ -591,7 +603,7 @@ static void createTMABarrierAndWait(
         if (it != loadToInfo.end()) {
           // Special case for MMAv3 loads, we can ignore the alloc and only
           // consider uses of the alloc op since it will be removed.
-          if (it->second.loadIsMMAV3) {
+          if (it->second.isMMAv3Shared) {
             auto alloc = cast<ttg::LocalAllocOp>(
                 (*loadInfo->loadOp->getUsers().begin()));
             if (alloc->getBlock() == loadBlock) {
@@ -641,12 +653,12 @@ static void createTMABarrierAndWait(
     Location loc = forOp.getLoc();
     OpBuilderWithStage builder(forOp);
     Attribute sharedMemorySpace =
-        triton::gpu::SharedMemorySpaceAttr::get(builder.getContext());
-    tt::MemDescType barrierTy = tt::MemDescType::get(
-        {1}, builder.getI64Type(),
-        cast<tt::MemDescType>(barrierAlloc.getType()).getEncoding(),
-        sharedMemorySpace,
-        /*mutableMemory=*/true);
+        ttg::SharedMemorySpaceAttr::get(builder.getContext());
+    auto allocTy = cast<ttg::MemDescType>(barrierAlloc.getType());
+    ttg::MemDescType barrierTy = ttg::MemDescType::get(
+        {1}, builder.getI64Type(), allocTy.getEncoding(), sharedMemorySpace,
+        /*mutableMemory=*/true,
+        /*allocShape=*/allocTy.getAllocShape());
     builder.setInsertionPoint(group[0]->loadOp);
     Value barrier = builder.createWithStage<ttg::MemDescSubviewOp>(
         loc, stage, cluster, barrierTy, barrierAlloc,
@@ -711,8 +723,9 @@ createAsyncOps(scf::ForOp &forOp,
                                                                 auto &rhs) {
         return lhs.distToUse < rhs.distToUse;
       })->distToUse;
-  bool hasMMAV3 =
-      llvm::any_of(loadToInfo, [](auto &kv) { return kv.second.loadIsMMAV3; });
+  bool hasMMAV3 = llvm::any_of(loadToInfo, [](auto &kv) {
+    return kv.second.isMMAv3Shared || kv.second.isMMAv3Registers;
+  });
   if (hasMMAV3) {
     // For MMAv3, we need an extra buffer as this is assumed in the wgmma
     // pipelining post-processing.
@@ -810,7 +823,7 @@ createAsyncOps(scf::ForOp &forOp,
 
   tt::CoarseSchedule coarseSchedule(numStages);
   coarseSchedule.deSerialize(forOp);
-  scheduleDependencies(forOp, coarseSchedule, numStages);
+  scheduleDependencies(forOp, coarseSchedule);
   coarseSchedule.serialize(forOp);
 
   // Make sure all ops have attributes.
@@ -824,16 +837,16 @@ createAsyncOps(scf::ForOp &forOp,
 static void invalidateBarriers(OpBuilder &builder,
                                SmallVector<Value> &barriers) {
   Attribute sharedMemorySpace =
-      triton::gpu::SharedMemorySpaceAttr::get(builder.getContext());
+      ttg::SharedMemorySpaceAttr::get(builder.getContext());
   for (Value barrier : barriers) {
-    int numBarriers = cast<tt::MemDescType>(barrier.getType()).getShape()[0];
+    auto allocTy = cast<ttg::MemDescType>(barrier.getType());
+    int numBarriers = allocTy.getShape()[0];
     for (int i = 0; i < numBarriers; i++) {
       Value idx = builder.create<arith::ConstantIntOp>(barrier.getLoc(), i, 32);
-      tt::MemDescType barrierTy = tt::MemDescType::get(
-          {1}, builder.getI64Type(),
-          cast<tt::MemDescType>(barrier.getType()).getEncoding(),
-          sharedMemorySpace,
-          /*mutableMemory=*/true);
+      ttg::MemDescType barrierTy = ttg::MemDescType::get(
+          {1}, builder.getI64Type(), allocTy.getEncoding(), sharedMemorySpace,
+          /*mutableMemory=*/true,
+          /*allocShape=*/allocTy.getShape());
       Value barrierView = builder.create<ttg::MemDescSubviewOp>(
           barrier.getLoc(), barrierTy, barrier, idx);
       builder.create<ttng::InvalBarrierOp>(barrier.getLoc(), barrierView);
@@ -1078,7 +1091,7 @@ static void threadValuesThroughWait(ttng::WarpGroupDotWaitOp wait,
 
   for (ttng::WarpGroupDotOp dot : asyncDots) {
     for (Value operand : dot.getOperands()) {
-      if (isa<tt::MemDescType>(operand.getType())) {
+      if (isa<ttg::MemDescType>(operand.getType())) {
         newOperands.insert(operand);
       }
     }
@@ -1096,12 +1109,12 @@ static void threadValuesThroughWait(ttng::WarpGroupDotWaitOp wait,
   };
   for (int i = 0; i < origNumOperands; i++) {
     Value operand = wait.getResult(i);
-    if (!isa<tt::MemDescType>(operand.getType()))
+    if (!isa<ttg::MemDescType>(operand.getType()))
       operand.replaceAllUsesWith(newWait.getResult(i));
   }
   for (int i = origNumOperands; i < newOperands.size(); i++) {
     Value operand = newWait.getOperand(i);
-    if (!isa<tt::MemDescType>(operand.getType()))
+    if (!isa<ttg::MemDescType>(operand.getType()))
       operand.replaceUsesWithIf(newWait.getResult(i), dominatedByNewWait);
   }
   wait->erase();
@@ -1121,6 +1134,15 @@ static void threadValuesThroughWait(ttng::WarpGroupDotWaitOp wait,
 //
 //  1. All operands that touch shared memory are multi-buffered, i.e. can't read
 //     an incomplete value while it's being written asynchronously by a load.
+//     1a. If operand A is in registers, these registers cannot be updated
+//     inside
+//         the loop.
+//         **Exception** if the operand is produced by a preceding WGMMA,
+//         then this op can be properly async. Either the f16 shortcut is
+//         possible and the WGMMA's can run back-to-back (see rule 3 below), or
+//         elementwise truncate is needed, in which case the preceding WGMMA is
+//         not async and a WarpGroupDotWait is inserted right after, which
+//         guarantees exclusive access to the operand registers.
 //
 //  2. If the dot is used by any op in the loop, it must be used under an `if`,
 //     and will be synced with a `wait 0` at the beginning of the `if` block.
@@ -1155,15 +1177,23 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
   // Rule 1: All shmem operands are multi-buffered.
   auto checkOperand = [&](Value operand) {
     if (!isa<ttg::SharedEncodingAttr>(
-            cast<TensorOrMemDesc>(operand.getType()).getEncoding())) {
-      return true;
+            cast<ttg::TensorOrMemDesc>(operand.getType()).getEncoding())) {
+      // Rule 1a: Register operands must not be modified within the loop.
+      // First, check for chained WGMMA as an exception.
+      if (auto cvt = dyn_cast<ttg::ConvertLayoutOp>(operand.getDefiningOp())) {
+        return isa<ttg::NvidiaMmaEncodingAttr>(
+            cvt.getSrc().getType().getEncoding());
+      }
+      // And then, do a stricter-than-necessary check for now, that the operand
+      // is defined outside the loop.
+      return forOp.isDefinedOutsideOfLoop(operand);
     }
 
     // If it's a shmem operand, it must either be defined outside the loop, or
     // come from an MemDescSubview op.  Only ConvertLayout and Trans ops are
     // allowed in between.
     Value transitiveOperand = operand;
-    while (isa_and_nonnull<ttg::ConvertLayoutOp, tt::TransOp>(
+    while (isa_and_nonnull<ttg::ConvertLayoutOp, ttg::MemDescTransOp>(
                transitiveOperand.getDefiningOp()) ||
            isa<BlockArgument>(transitiveOperand)) {
       auto blockArg = dyn_cast<BlockArgument>(transitiveOperand);

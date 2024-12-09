@@ -1,5 +1,5 @@
-#ifndef TRITON_CONVERSION_TRITONGPU_TO_LLVM_SHARED_TO_DOT_OPERAND_MATRIXCORE_H
-#define TRITON_CONVERSION_TRITONGPU_TO_LLVM_SHARED_TO_DOT_OPERAND_MATRIXCORE_H
+#ifndef TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_CONVERTLAYOUTOPTOLLVM_SHAREDTODOTOPERANDHELPER_H_
+#define TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_CONVERTLAYOUTOPTOLLVM_SHAREDTODOTOPERANDHELPER_H_
 
 #include "Utility.h"
 
@@ -13,18 +13,16 @@ Value getWarpIdInBlock(ConversionPatternRewriter &rewriter, Location loc,
 
 bool isSwizzled(gpu::SharedEncodingAttr layout);
 
-/**
- * @brief swizzling tensor element indexes according pattern encoded in
- * SharedEncodingAttr
- *
- * @param rewriter
- * @param loc
- * @param row row of target tensor element related to the start of smemObj
- * @param col col of target tensor element related to the start of smemObj
- * @param smemObj shared memory object, contains info about tensor in LDS
- * @param attr layout attribute, contains swizzling info
- * @return swizzled row, col indexes in tensor notation
- */
+/// Swizzling tensor element indexes according pattern encoded in
+/// SharedEncodingAttr
+///
+/// \param rewriter
+/// \param loc
+/// \param row row of target tensor element related to the start of smemObj
+/// \param col col of target tensor element related to the start of smemObj
+/// \param smemObj shared memory object, contains info about tensor in LDS
+/// \param attr layout attribute, contains swizzling info
+/// \returns swizzled row, col indexes in tensor notation
 std::pair<mlir::Value, mlir::Value>
 swizzleIndexes(ConversionPatternRewriter &rewriter, Location loc, Value row,
                Value col, SharedMemoryObject smemObj,
@@ -61,4 +59,4 @@ llvm::SmallVector<Value> computeOffsetsBType(
 
 } // namespace mlir::triton::AMD
 
-#endif
+#endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_CONVERTLAYOUTOPTOLLVM_SHAREDTODOTOPERANDHELPER_H_

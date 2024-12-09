@@ -5,6 +5,7 @@
 #include <limits>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -31,7 +32,20 @@ class ContextSource {
 public:
   ContextSource() = default;
   virtual ~ContextSource() = default;
-  virtual std::vector<Context> getContexts() = 0;
+
+  std::vector<Context> getContexts() {
+    auto contexts = getContextsImpl();
+    if (state.has_value()) {
+      contexts.push_back(state.value());
+    }
+    return contexts;
+  }
+
+  void setState(std::optional<Context> state) { ContextSource::state = state; }
+
+protected:
+  virtual std::vector<Context> getContextsImpl() = 0;
+  static thread_local std::optional<Context> state;
 };
 
 /// A scope is a context with a unique identifier.

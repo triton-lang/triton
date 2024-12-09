@@ -48,7 +48,7 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
     } else {
       warpOrder = triton::gpu::getWarpOrder(layout);
     }
-    auto shapePerCTATile = triton::gpu::getShapePerCTATile(layout, shape);
+    auto shapePerCTATile = triton::gpu::getShapePerCTATile(layout);
     Value warpSize = i32_val(triton::gpu::getWarpSize(layout));
     Value laneId = urem(tid, warpSize);
     Value warpId = udiv(tid, warpSize);
@@ -300,7 +300,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       assert(wordNElems * nWords * numVecs == numElems);
 
       Value pred = mask ? maskElems[vecStart] : int_val(1, 1);
-      Value ptr = addrspacecast(ptr_ty(getContext()), ptrElems[vecStart]);
+      Value ptr = ptrElems[vecStart];
 
       Value falseVal = createZeroVector(rewriter, loc, cast<VectorType>(vecTy));
       // If we need to mask the loaded value with other elements
@@ -478,7 +478,7 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
 
       SmallVector<std::pair<Value, std::string>> asmArgs;
       Value elem = valueElems[vecStart];
-      Value ptr = addrspacecast(ptr_ty(getContext()), ptrElems[vecStart]);
+      Value ptr = ptrElems[vecStart];
 
       // Create the store val
       Value storeVal = packElementRangeIntoVector(

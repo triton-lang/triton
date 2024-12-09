@@ -213,7 +213,7 @@ void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
       continue;
     bool hasChanged = false;
     for (auto encoding : info.encodings) {
-      std::optional<Attribute> dstEncoding;
+      Attribute dstEncoding;
       if (isa<ConvertLayoutOp>(op)) {
         // Try to remove the convert by making the dst encoding match the source
         // encoding.
@@ -222,7 +222,7 @@ void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
         dstEncoding = inferDstEncoding(op, encoding);
       }
       if (dstEncoding)
-        hasChanged |= layouts[value].encodings.insert(*dstEncoding);
+        hasChanged |= layouts[value].encodings.insert(dstEncoding);
     }
     if (hasChanged)
       changed.push_back(value);
@@ -282,6 +282,7 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
       setEncoding(user->getResults(), info, changed, user);
       continue;
     }
+    // TODO(jeff): Propagate tt.gather indices layout to dst.
   }
   return changed;
 }
@@ -450,15 +451,15 @@ Operation *LayoutPropagation::cloneElementwise(OpBuilder &rewriter,
                                                Attribute encoding) {
   Operation *newOp = rewriter.clone(*op);
 
-  std::optional<Attribute> operandEnc;
+  Attribute operandEnc;
   if (op->getNumOperands() > 0) {
     operandEnc = inferSrcEncoding(op, encoding);
-    assert(operandEnc.has_value());
+    assert(operandEnc);
   }
 
   for (OpOperand &operand : op->getOpOperands()) {
     newOp->setOperand(operand.getOperandNumber(),
-                      getValueAs(operand.get(), *operandEnc));
+                      getValueAs(operand.get(), operandEnc));
   }
 
   for (unsigned i = 0, e = op->getNumResults(); i < e; ++i) {
@@ -709,6 +710,7 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
     }
     return newOp;
   }
+  // TODO(jeff): Handle tt.gather once it supports layout propagation.
   llvm::report_fatal_error("unexpected op in rewrite");
   return nullptr;
 }
@@ -970,7 +972,9 @@ void LayoutRematerialization::backwardRematerialization(
   // we don't handle conversions to DotOperandEncodingAttr
   // this is a heuristic to accommodate fused attention
   RankedTensorType targetType = convertOp.getType();
-  if (isa<DotOperandEncodingAttr>(targetType.getEncoding()))
+  // We stop the rematerialization of linear layouts as we have to be a bit more
+  // careful with the heuristics for both correctness and perf
+  if (isa<DotOperandEncodingAttr, LinearEncodingAttr>(targetType.getEncoding()))
     return;
   Value oldV = convertOp->getOperand(0);
   LDBG("check backward remat with source " << oldV << " encoding "
@@ -1012,8 +1016,11 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     ConvertLayoutOp convertOp) {
   // we don't handle conversions to DotOperandEncodingAttr
   // this is a heuristics to accommodate fused attention
+  // We stop the rematerialization of linear layouts as we have to be a bit more
+  // careful with the heuristics for both correctness and perf
   RankedTensorType targetType = convertOp.getType();
-  if (mlir::isa<DotOperandEncodingAttr>(targetType.getEncoding()))
+  if (mlir::isa<DotOperandEncodingAttr, LinearEncodingAttr>(
+          targetType.getEncoding()))
     return;
 
   auto isExtOrBroadcastOp = [](Operation *op) {
@@ -1047,11 +1054,11 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     if (isExtOrBroadcastOp(op)) {
       SetVector<Value> tempSlice;
       DenseMap<Value, Attribute> tempLayout;
-      std::optional<Attribute> srcEncoding = inferSrcEncoding(op, layout[v]);
+      Attribute srcEncoding = inferSrcEncoding(op, layout[v]);
       if (!srcEncoding)
         return;
       LogicalResult result = getRematerializableSlice(
-          op->getOperand(0), *srcEncoding, tempSlice, tempLayout);
+          op->getOperand(0), srcEncoding, tempSlice, tempLayout);
       // If we can rematerialize the rest of the ext slice we can ignore this
       // ext as it won't need a convert.
       if (result.succeeded()) {
@@ -1070,8 +1077,7 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   if (extOrBroadcatOp == nullptr)
     return;
   Attribute dstEncoding = layout[extOrBroadcatOp->getResult(0)];
-  std::optional<Attribute> srcEncoding =
-      inferSrcEncoding(extOrBroadcatOp, dstEncoding);
+  Attribute srcEncoding = inferSrcEncoding(extOrBroadcatOp, dstEncoding);
   if (!srcEncoding)
     return;
   // Move the convert before the ext op and rewrite the slice.
@@ -1079,7 +1085,7 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   auto tensorType =
       cast<RankedTensorType>(extOrBroadcatOp->getOperand(0).getType());
   auto newType = RankedTensorType::get(
-      tensorType.getShape(), tensorType.getElementType(), *srcEncoding);
+      tensorType.getShape(), tensorType.getElementType(), srcEncoding);
   auto newConvertOp = builder.create<ConvertLayoutOp>(
       convertOp.getLoc(), newType, extOrBroadcatOp->getOperand(0));
   Operation *newExtOrBroadcast = builder.clone(*extOrBroadcatOp);

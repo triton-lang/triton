@@ -189,8 +189,8 @@ class CUDABackend(BaseBackend):
         pm.enable_debug()
         passes.common.add_inliner(pm)
         passes.ttir.add_rewrite_tensor_pointer(pm)
-        passes.ttir.add_combine(pm)
         passes.common.add_canonicalizer(pm)
+        passes.ttir.add_combine(pm)
         passes.ttir.add_reorder_broadcast(pm)
         passes.common.add_cse(pm)
         passes.common.add_licm(pm)
@@ -234,6 +234,7 @@ class CUDABackend(BaseBackend):
             passes.ttgpuir.add_pipeline(pm, opt.num_stages)
         passes.ttgpuir.add_prefetch(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, capability >= 80)
+        passes.ttgpuir.add_coalesce_async_copy(pm)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
         passes.ttgpuir.add_reorder_instructions(pm)
@@ -252,7 +253,7 @@ class CUDABackend(BaseBackend):
         ptx_version = get_ptx_version_from_options(options)
 
         # warp-specialization mutates num_warps
-        num_warp_groups = src.get_int_attr("triton_gpu.num-warp-groups-per-cta")
+        num_warp_groups = src.get_int_attr("ttg.num-warp-groups-per-cta")
         if num_warp_groups is not None:
             metadata["num_warps"] *= num_warp_groups
         mod = src
@@ -303,9 +304,9 @@ class CUDABackend(BaseBackend):
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3)
 
         # Get some metadata
-        metadata["shared"] = src.get_int_attr("triton_gpu.shared")
-        metadata["global_scratch_size"] = src.get_int_attr("triton_gpu.global_scratch_memory_size")
-        metadata["global_scratch_align"] = src.get_int_attr("triton_gpu.global_scratch_memory_alignment")
+        metadata["shared"] = src.get_int_attr("ttg.shared")
+        metadata["global_scratch_size"] = src.get_int_attr("ttg.global_scratch_memory_size")
+        metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment")
         ret = str(llvm_mod)
         del llvm_mod
         del context
