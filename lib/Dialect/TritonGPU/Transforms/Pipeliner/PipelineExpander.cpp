@@ -35,10 +35,11 @@
 #include "llvm/Support/MathExtras.h"
 
 #include "triton/Dialect/TritonGPU/Transforms/PipelineExpander.h"
+#include "triton/Dialect/TritonGPU/Transforms/PipelineErrorReporter.h"
+
 
 // FIXME: PipelineExpander should not depend on Triton-specific headers!
 #include "triton/Dialect/TritonGPU/IR/Types.h"
-
 #define DEBUG_TYPE "triton-loop-pipelining"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
@@ -258,7 +259,9 @@ bool LoopPipelinerInternal::verifySchedule() {
         continue;
       int64_t producerCycle = it->second;
       if (consumerCycle < producerCycle - numCylesPerIter * distance) {
-        consumer->emitError("operation scheduled before its operands");
+        PipelineErrorReporter errorReporter(forOp);
+        errorReporter.printSchedulingError(distance, consumer, producer,
+                                           operand);
         return false;
       }
     }
@@ -417,8 +420,8 @@ scf::ForOp LoopPipelinerInternal::createKernelLoop(
   // Keep track of the kernel argument associated to each version of the
   // values passed to the kernel.
   llvm::SmallVector<Value> newLoopArg;
-  // For existing loop argument initialize them with the right version from the
-  // prologue.
+  // For existing loop argument initialize them with the right version from
+  // the prologue.
   for (const auto &retVal :
        llvm::enumerate(forOp.getBody()->getTerminator()->getOperands())) {
     Operation *def = retVal.value().getDefiningOp();
@@ -447,8 +450,8 @@ scf::ForOp LoopPipelinerInternal::createKernelLoop(
   }
 
   // Create the new kernel loop. When we peel the epilgue we need to peel
-  // `numStages - 1` iterations. Then we adjust the upper bound to remove those
-  // iterations.
+  // `numStages - 1` iterations. Then we adjust the upper bound to remove
+  // those iterations.
   Value newUb = forOp.getUpperBound();
   if (peelEpilogue) {
     Type t = ub.getType();
@@ -756,9 +759,9 @@ LoopPipelinerInternal::emitEpilogue(RewriterBase &rewriter,
       }
     }
     if (dynamicLoop) {
-      // Select return values from this stage (live outs) based on predication.
-      // If the stage is valid select the peeled value, else use previous stage
-      // value.
+      // Select return values from this stage (live outs) based on
+      // predication. If the stage is valid select the peeled value, else use
+      // previous stage value.
       for (auto pair : llvm::enumerate(returnValues)) {
         unsigned ri = pair.index();
         auto [mapVal, currentVersion] = returnMap[ri];
