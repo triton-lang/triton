@@ -325,7 +325,6 @@ private:
 
   llvm::MapVector<StringAttr, int32_t /*size*/> outDims;
   bool surjective;
-  bool injective;
 
 public:
   using BasesT = decltype(bases);
@@ -415,7 +414,9 @@ public:
 
   bool isSurjective() const { return surjective; }
 
-  bool isInjective() const { return injective; }
+  bool isInvertible() const {
+    return surjective && getTotalInDimSize() == getTotalOutDimSize();
+  }
 
   const BasesT &getBases() const { return bases; }
 

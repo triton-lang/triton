@@ -314,9 +314,6 @@ LinearLayout::checkInvariants(bool requireSurjective) {
            toString();
   }
 
-  this->injective =
-      this->surjective && getTotalInDimSize() == getTotalOutDimSize();
-
   return std::nullopt;
 }
 
@@ -961,7 +958,7 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
 
 LinearLayout LinearLayout::invert() const {
   // A^-1(x) = A^-1(I(x)), thus A.invert() = I.invertAndCompose(A)
-  assert(isInjective() &&
+  assert(isInvertible() &&
          "A linear layout must be surjective and square to be invertible");
   LinearLayout identity = LinearLayout::empty();
   for (auto outDim : getOutDimNames()) {
