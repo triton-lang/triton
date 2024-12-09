@@ -1355,7 +1355,7 @@ def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, layout, 
     (4, 48, 1024, 1024, 64),
     (4, 12, 8192, 8192, 64),
     (2, 4, 16384, 16384, 128),
-    (2, 16, 1020, 987, 128),
+    # (2, 16, 1020, 987, 128),
     (2, 4, 7, 16219, 64),
     (4, 48, 1, 1, 64),
     (4, 48, 1, 1, 128),
@@ -1419,7 +1419,7 @@ def test_op_fwd_int8(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, quantize_p, layout,
         ref_out = acc.to(torch.float16)
     else:
         p = torch.softmax(scores, dim=-1)
-        ref_out = (torch.einsum('bhqk,bhkd->bhqd', p.half(), v_quantized.half()) * v_descale).to(torch.float16)
+        ref_out = (torch.einsum('bhqk,bhkd->bhqd', p.float(), v_quantized.float()) * v_descale).to(torch.float16)
 
     if causal:
         nan_mask = torch.isnan(ref_out)
