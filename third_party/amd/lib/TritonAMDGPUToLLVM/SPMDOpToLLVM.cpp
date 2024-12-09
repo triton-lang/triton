@@ -28,39 +28,25 @@ struct GetNumProgramsOpConversion
 };
 
 struct CondBarrierOpConversion
-    : public ConvertOpToLLVMPattern<triton::amdgpu::condBarrierOp> {
-  using ConvertOpToLLVMPattern<
-      triton::amdgpu::condBarrierOp>::ConvertOpToLLVMPattern;
+    : public ConvertOpToLLVMPattern<triton::amdgpu::CondBarrierOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(triton::amdgpu::condBarrierOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::amdgpu::CondBarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    auto i32ty = rewriter.getIntegerType(32);
-    auto workIDX = rewriter.create<ROCDL::ThreadIdXOp>(loc, i32ty);
-    auto constZero = rewriter.create<LLVM::ConstantOp>(
-        loc, i32ty, IntegerAttr::get(i32ty, 0));
-    auto constWarpSize = rewriter.create<LLVM::ConstantOp>(
-        loc, i32ty, IntegerAttr::get(i32ty, 256));
-    auto warpIDX = rewriter.create<LLVM::SDivOp>(loc, workIDX, constWarpSize);
-    auto warpLow = rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::ne,
-                                                 warpIDX, constZero);
-    auto pred = rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::eq,
-                                              warpLow, op->getOperand(0));
-
     Block *currentBlock = rewriter.getInsertionBlock();
     Block *afterCondBarBlock =
         rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
     Block *trueBlock = rewriter.createBlock(afterCondBarBlock);
     rewriter.setInsertionPointToEnd(currentBlock);
-    rewriter.create<LLVM::CondBrOp>(loc, pred, trueBlock, afterCondBarBlock);
+    rewriter.create<LLVM::CondBrOp>(loc, adaptor.getPred(), trueBlock,
+                                    afterCondBarBlock);
 
     // conditional barrier
     rewriter.setInsertionPointToStart(trueBlock);
     rewriter.create<ROCDL::SBarrierOp>(loc);
     rewriter.create<LLVM::BrOp>(loc, afterCondBarBlock);
-
-    // rewriter.setInsertionPointToStart(afterCondBarBlock);
     rewriter.eraseOp(op);
     return success();
   }

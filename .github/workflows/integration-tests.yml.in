@@ -493,7 +493,7 @@ jobs:
           echo "PATH is '$PATH'"
           cd python
           ccache --zero-stats
-          python3 -m pip install -v --no-build-isolation .[tests]
+          python3 -m pip install -v --no-build-isolation .
 
       - *print-ccache-stats
       - *inspect-cache-directories-step
