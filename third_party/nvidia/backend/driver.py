@@ -456,7 +456,6 @@ PyMODINIT_FUNC PyInit___triton_launcher(void) {{
   return m;
 }}
 """
-    print(src)
     return src
 
 
