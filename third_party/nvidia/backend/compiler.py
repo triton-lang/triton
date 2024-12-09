@@ -18,7 +18,7 @@ import sysconfig
 
 def min_dot_size(target: GPUTarget):
 
-    def check_fp_compatibility(lhs_type, rhs_type) -> Tuple[int, int, int]:  # [m, n, k]
+    def check_dot_compatibility(lhs_type, rhs_type) -> Tuple[int, int, int]:  # [m, n, k]
         lhs_bitwidth = lhs_type.scalar.primitive_bitwidth
         rhs_bitwidth = rhs_type.scalar.primitive_bitwidth
         assert lhs_bitwidth == rhs_bitwidth, "lhs and rhs bitwidth must be the same"
@@ -27,7 +27,7 @@ def min_dot_size(target: GPUTarget):
         else:
             return (16, 16, 16)
 
-    return check_fp_compatibility
+    return check_dot_compatibility
 
 
 @functools.lru_cache()
