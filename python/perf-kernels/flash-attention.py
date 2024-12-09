@@ -1183,7 +1183,10 @@ def quantize_int8(tensor: torch.Tensor, dim) -> tuple[torch.Tensor, torch.Tensor
     scale = INT8_MAX / max_vals.to(torch.float64)
 
     # Quantize the tensor
-    tensor_quantized = (tensor * scale).round().clamp(-INT8_MAX, INT8_MAX).to(torch.int8)
+    tensor = tensor * scale
+    tensor = tensor.round_()
+    tensor.clamp_(-INT8_MAX, INT8_MAX)
+    tensor_quantized = tensor.to(torch.int8)
 
     return tensor_quantized, scale, 1 / scale
 
@@ -1368,7 +1371,7 @@ def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, layout, 
     (4, 4, 128, 128, 65),
     # (4, 4, 113, 123, 1),
 ])
-@pytest.mark.parametrize('causal', [False])
+@pytest.mark.parametrize('causal', [True, False])
 @pytest.mark.parametrize('quantize_p', [True, False])
 @pytest.mark.parametrize('layout', ['bhsd'])
 def test_op_fwd_int8(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, quantize_p, layout, dtype=torch.float16):
