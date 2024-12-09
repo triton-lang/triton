@@ -382,6 +382,8 @@ def test_fp8_support(dtype):
 @pytest.mark.parametrize("dtype", [tl.float8e5, tl.int8, tl.float16])
 def test_min_dot_size(dtype):
     error_msg = "Input shapes should have "
+    target = triton.runtime.driver.active.get_current_target()
+    print("Target: ", target.arch)
     if is_cuda():
         if dtype.primitive_bitwidth == 8:
             error_msg += "M >= 16, N >= 16 and K >= 32"
