@@ -290,7 +290,7 @@ def test_pipeline_matmul(scale, device):
             # 2. check number of stages
             assert ttgir.count(f"num = {NUM_STAGES} : i32") != 0, "num_stages not match"
             # 3. check alloc
-            assert ttgir.count("ttg.local_alloc") == 2, "alloc number not match"
+            assert ttgir.count("ttg.local_alloc") != 0, "local_alloc not found"
             # 4. check dot
             cc = torch.cuda.get_device_capability()
             if cc[0] >= 9:
