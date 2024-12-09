@@ -193,17 +193,18 @@ Value getSmemVecAddr(RankedTensorType registerTy,
   auto smemOffsets = smemObj.getOffsets();
   auto smemStrides = smemObj.getStrides();
   Value smemOffset;
-  // When loading or storing to shared memory, we consider two scenarios:
+  // When loading or storing to shared memory, we consider two cases for
+  // performance reasons:
   //
   //   1. Non-swizzled shared memory.
   //   2. Swizzled shared memory.
   //
-  // Consider lowering `ttg.local_load %a`. In the first scenario, we can
+  // Consider lowering `ttg.local_load %a`. In the first case, we can
   // directly construct a linear layout using `%a`'s shape and shared memory
   // encoding, irrespective of `%a`'s rank or whether it represents a slice of a
   // larger tensor.
   //
-  // The method does not apply for swizzled shared memory.
+  // The method does not apply for swizzled shared memory in some scenarios.
   // Key properties of swizzling in Triton are:
   //
   //   - Swizzling applies only to tensors with rank ≥ 2.
@@ -211,10 +212,17 @@ Value getSmemVecAddr(RankedTensorType registerTy,
   //   - These last two dimensions are always treated as the most "minor."
   //
   // An important edge case arises when `%a` results from `%a = ttg.subview %b`,
-  // where `%b` is swizzled. ll(a) may not be surjective because `%b`'s shape
-  // differs from `%a`'s shape. An element `[i (row_idx), j (col_idx)]` in `%a`
-  // might map to `[i, j']` after swizzling, where `j'` lies outside `%a`'s
-  // shape but within `%b`'s shape.
+  // where `%b` is swizzled (and so is `%a`). In this case, constructing a
+  // layout and determining shared memory offsets using `%a`'s shape is
+  // incorrect. This is because swizzling depends on the original shape of `%b`,
+  // which differs from `%a`'s shape. As a result, some locations may fall
+  // outside `%a`'s contiguous view of memory. Specifically, an element `[i
+  // (row_idx), j (col_idx)]` in `%a` might map to `[i, j']` after swizzling,
+  // where `j'` lies outside `%a`'s shape but still within `%b`'s shape.
+  //
+  // We propose case 2 (see comments below), which provides a more general
+  // solution for all swizzled shared memory scenarios, including the edge case
+  // mentioned above.
   if (/*no swizzling*/ sharedEnc.getMaxPhase() == 1 ||
       /*swizzling but same shape*/ shape == allocShape ||
       /*swizzling and rank-reduced and rank >= 2*/
