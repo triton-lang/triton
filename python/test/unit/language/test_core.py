@@ -4352,15 +4352,17 @@ def test_pointer_arguments(device):
 def test_value_specialization(value: int, value_type: str, device) -> None:
 
     def repr(specialization):
-        spec_type = specialization.signature["VALUE"]
-        return f"kernel_{spec_type}"
+        ty = specialization.signature["value1"]
+        cst = '_'.join([k for k, v in specialization.constants.items() if v == 1])
+        return f"kernel_{ty}_{cst}"
 
     @triton.jit(repr=repr)
-    def kernel(VALUE, X):
+    def kernel(value1, is_one, X):
         pass
 
     x = torch.tensor([3.14159], device=device)
-    h = kernel[(1, )](value, x)
+    h = kernel[(1, )](value, 1, x)
+    assert "is_one" in h.name
     assert value_type in h.name
 
 

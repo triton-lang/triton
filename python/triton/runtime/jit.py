@@ -609,7 +609,8 @@ class JITFunction(KernelInterface[T]):
             signature = {k: v for (k, v) in zip(sigkeys, sigvals)}
 
             attrs = backend.get_attrs_descriptor(self.params, bound_vals)
-            constants = {p.name: v for (v, p) in zip(bound_vals, self.params) if p.is_constexpr}
+            is_specialized = lambda v: v is None or (isinstance(v, int) and v == 1)
+            constants = {p.name: v for (v, p) in zip(bound_vals, self.params) if p.is_constexpr or is_specialized(v)}
             for i, arg in constants.items():
                 if callable(arg):
                     raise TypeError(f"Callable constexpr at index {i} is not supported")
