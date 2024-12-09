@@ -1,5 +1,6 @@
 from triton.backends.compiler import BaseBackend, GPUTarget, AttrsDescriptor, register_descriptor
 from triton._C.libtriton import ir, passes, llvm, amd
+from triton._utils import find_paths_if
 from dataclasses import dataclass
 from typing import Any, Dict, Tuple
 from types import ModuleType
@@ -100,10 +101,14 @@ class HIPAttrsDescriptor(AttrsDescriptor):
         if params is None or values is None:
             return
 
-        self.arg_properties["tt.pointer_range"] = [
-            param.num for param, arg in zip(params, values) if HIPAttrsDescriptor.is_within2gb(arg)
-            and not param.do_not_specialize and not param.do_not_specialize_on_alignment
-        ]
+        pointer_range = []
+        for param, arg in zip(params, values):
+            if param.do_not_specialize or \
+               param.do_not_specialize_on_alignment:
+                continue
+            paths = find_paths_if(arg, lambda path, val: HIPAttrsDescriptor.is_within2gb(val))
+            pointer_range += [(param.num, ) + x for x in paths]
+        self.arg_properties["tt.pointer_range"] = pointer_range
 
     @staticmethod
     def is_within2gb(arg):
@@ -241,7 +246,7 @@ class HIPBackend(BaseBackend):
                                              "num_stages == 0. Now it will not happen anymore; "
                                              "please update to use num_stages == 2 for "
                                              "equivalent behavior in the past.")
-            amd.passes.ttgpuir.add_stream_pipelinev2(pm, options.num_stages, stream_prefetch)
+            amd.passes.ttgpuir.add_stream_pipeline(pm, options.num_stages, stream_prefetch)
             passes.common.add_canonicalizer(pm)
         amd.passes.ttgpuir.insert_instruction_sched_hints(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
@@ -339,9 +344,12 @@ class HIPBackend(BaseBackend):
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', [], options.enable_fp_fusion)
 
         # Get some metadata
-        metadata["shared"] = src.get_int_attr("triton_gpu.shared")
+        metadata["shared"] = src.get_int_attr("ttg.shared")
 
         amd.cleanup_bitcode_metadata(llvm_mod)
+        # Disable inlining of print related functions,
+        # because inlining of these function could slow down compilation significantly
+        amd.disable_print_inline(llvm_mod)
         return str(llvm_mod)
 
     @staticmethod

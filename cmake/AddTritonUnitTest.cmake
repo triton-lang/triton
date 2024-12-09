@@ -28,7 +28,9 @@ function(add_triton_ut)
           gmock
           ${__LIBS})
 
-  target_compile_options(${__NAME} PRIVATE -fno-rtti)
+  if(NOT MSVC)
+    target_compile_options(${__NAME} PRIVATE -fno-rtti)
+  endif()
 
   target_compile_definitions(${__NAME} PRIVATE ${__DEFS})
 
@@ -36,4 +38,7 @@ function(add_triton_ut)
   # laptop.  I think the issue may be that the very first time you run a program
   # it's a bit slow.
   gtest_discover_tests(${__NAME} DISCOVERY_TIMEOUT 60)
+
+  # Add the unit test to the top-level unit test target.
+  add_dependencies(TritonUnitTests ${__NAME})
 endfunction()

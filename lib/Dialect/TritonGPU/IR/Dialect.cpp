@@ -642,6 +642,36 @@ LinearLayout ensureLayoutNotSmallerThan(
   return ret;
 }
 
+// Returns ["dim0", "dim1", ..., "dim<rank-1>"].
+SmallVector<StringAttr> standardOutDimNames(MLIRContext *ctx, int rank) {
+  SmallVector<StringAttr> ret;
+  for (int i = 0; i < rank; i++) {
+    ret.push_back(StringAttr::get(ctx, "dim" + llvm::Twine(i)));
+  }
+  return ret;
+}
+
+// Returns a 1D -> ND layout into [dim0, dim1, ...] that's equivalent to
+// creating a 1D -> 1D mapping of size product(shape) and then reshaping to
+// permute(shape, order).
+LinearLayout identityStandardND(StringAttr inDimName, ArrayRef<unsigned> shape,
+                                ArrayRef<unsigned> order) {
+  assert(shape.size() == order.size());
+  MLIRContext *ctx = inDimName.getContext();
+  auto rank = shape.size();
+
+  // The order in triton is written wrt. [dim0, dim1, ...].
+  SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
+
+  LinearLayout ret = LinearLayout::empty();
+  for (int i = 0; i < shape.size(); i++) {
+    // Start with the most-minor dimension, which is order[0].
+    int dim = order[i];
+    ret *= LinearLayout::identity1D(shape[dim], inDimName, outDimNames[dim]);
+  }
+  return ret;
+}
+
 } // namespace gpu
 } // namespace triton
 } // namespace mlir
@@ -1143,24 +1173,22 @@ LogicalResult DotOperandEncodingAttr::verify(
     ::llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
     unsigned opIdx, Attribute parent, unsigned kWidth) {
   if (opIdx != 0 && opIdx != 1) {
-    return emitError()
-           << "triton_gpu.dot_op opIdx paramenter can be 0 or 1, got: "
-           << opIdx;
+    return emitError() << "ttg.dot_op opIdx paramenter can be 0 or 1, got: "
+                       << opIdx;
   }
   if (!parent) {
-    return emitError() << "triton_gpu.dot_op parent paramenter cannot be null";
+    return emitError() << "ttg.dot_op parent paramenter cannot be null";
   }
   if (auto parentAttr = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent)) {
     if (kWidth != 0 && !(parentAttr.isAmpere() || parentAttr.isHopper()))
-      return emitError() << "triton_gpu.dot_op kWidth parameter can only be "
+      return emitError() << "ttg.dot_op kWidth parameter can only be "
                             "non-zero for Ampere or Hopper MMA parent";
     if (kWidth == 0 && (parentAttr.isAmpere() || parentAttr.isHopper()))
-      return emitError()
-             << "triton_gpu.dot_op kWidth parameter is mandatory for "
-                "Ampere or Hopper MMA parent";
+      return emitError() << "ttg.dot_op kWidth parameter is mandatory for "
+                            "Ampere or Hopper MMA parent";
     if (opIdx != 0 && parentAttr.isHopper())
       return emitError()
-             << "triton_gpu.dot_op opIdx parameter must be 0 for "
+             << "ttg.dot_op opIdx parameter must be 0 for "
                 "Hopper MMA parent, since Hopper WGMMA only allows first "
                 "operand to be in registers";
     return success();
@@ -1169,29 +1197,26 @@ LogicalResult DotOperandEncodingAttr::verify(
   if (auto parentAttr = mlir::dyn_cast<AMDWmmaEncodingAttr>(parent)) {
     if (kWidth != 16 && parentAttr.getVersion() == 1 ||
         kWidth != 8 && parentAttr.getVersion() == 2)
-      return emitError() << "triton_gpu.dot_op kWidth parameter must be 16 for "
+      return emitError() << "ttg.dot_op kWidth parameter must be 16 for "
                             "gfx11 and 8 for gfx12";
     return success();
   }
 
   if (auto parentAttr = mlir::dyn_cast<AMDMfmaEncodingAttr>(parent)) {
     if (kWidth == 0)
-      return emitError()
-             << "triton_gpu.dot_op kWidth parameter is mandatory for "
-                "MFMA parent";
+      return emitError() << "ttg.dot_op kWidth parameter is mandatory for "
+                            "MFMA parent";
     return success();
   }
 
   if (auto parentAttr = mlir::dyn_cast<BlockedEncodingAttr>(parent)) {
     if (kWidth != 0)
-      return emitError()
-             << "triton_gpu.dot_op kWidth parameter is not supported "
-                "when the parent is a blocked layout";
+      return emitError() << "ttg.dot_op kWidth parameter is not supported "
+                            "when the parent is a blocked layout";
     return success();
   }
 
-  return emitError() << "triton_gpu.dot_op unexpected parent layout: "
-                     << parent;
+  return emitError() << "ttg.dot_op unexpected parent layout: " << parent;
 }
 
 //===----------------------------------------------------------------------===//
@@ -2434,6 +2459,7 @@ public:
   using OpAsmDialectInterface::OpAsmDialectInterface;
 
   AliasResult getAlias(Attribute attr, raw_ostream &os) const override {
+    // Encoding attributes
     if (auto mmaAttr = mlir::dyn_cast<MmaEncodingTrait>(attr)) {
       os << "mma";
       return AliasResult::FinalAlias;
@@ -2450,6 +2476,11 @@ public:
       os << "slice";
       return AliasResult::FinalAlias;
     } */
+    // Memory space attributes
+    if (auto smem = mlir::dyn_cast<SharedMemorySpaceAttr>(attr)) {
+      os << "smem";
+      return AliasResult::FinalAlias;
+    }
     return OpAsmDialectInterface::getAlias(attr, os);
   }
 };
@@ -2974,6 +3005,68 @@ struct TritonGPUInferLayoutInterface
                            ArrayRef(enc.getCTAsPerCGA()).drop_back(1),
                            ArrayRef(enc.getCTASplitNum()).drop_back(1),
                            ArrayRef(enc.getCTAOrder()).drop_front(1)));
+    return success();
+  }
+};
+
+struct TritonGPUVerifyTensorLayoutInterface
+    : public triton::DialectVerifyTensorLayoutInterface {
+  using DialectVerifyTensorLayoutInterface::DialectVerifyTensorLayoutInterface;
+
+  LogicalResult verifyTensorLayout(
+      Attribute layout, RankedTensorType rankedTy, ModuleOp module,
+      function_ref<InFlightDiagnostic()> makeErr) const override {
+    if (isa<triton::gpu::SharedEncodingAttr>(layout))
+      return makeErr() << "Shared layout is not allowed on tensor type.";
+    // TODO(jlebar): Currently this only checks blocked layouts, but other
+    // layouts also have invariants!
+
+    // TODO(jlebar): Handle the case when the encoding is nested within tt.ptr.
+    if (auto blocked = dyn_cast<triton::gpu::BlockedEncodingAttr>(layout)) {
+      // A different verifier should have checked that the layout itself is
+      // valid, including that threads-per-warp has the same rank as
+      // warps-per-block etc.
+      auto layoutRank = blocked.getThreadsPerWarp().size();
+      if (layoutRank != rankedTy.getRank()) {
+        return makeErr() << layout << ".\nLayout has rank " << layoutRank
+                         << ", but the tensor it's attached to has rank "
+                         << rankedTy.getRank() << ".";
+      }
+
+      int moduleThreadsPerWarp =
+          triton::gpu::TritonGPUDialect::getThreadsPerWarp(module);
+      int64_t layoutThreadsPerWarp = product(blocked.getThreadsPerWarp());
+      if (layoutThreadsPerWarp != moduleThreadsPerWarp) {
+        return makeErr() << layout << ".\nLayout has a total of "
+                         << layoutThreadsPerWarp
+                         << " threads per warp, but the module specifies "
+                         << moduleThreadsPerWarp << " threads per warp.";
+      }
+
+      int moduleWarpsPerCTA =
+          triton::gpu::TritonGPUDialect::getNumWarps(module);
+      int64_t layoutWarpsPerCTA = product(blocked.getWarpsPerCTA());
+      if (layoutWarpsPerCTA != moduleWarpsPerCTA) {
+        return makeErr() << layout << ".\nLayout has a total of "
+                         << layoutWarpsPerCTA
+                         << " warps per CTA, but the module specifies "
+                         << moduleWarpsPerCTA << " warps per CTA.";
+      }
+
+      if (blocked.getCTALayout().getCTAsPerCGA().size() > 0) {
+        int moduleCTAsPerCGA =
+            triton::gpu::TritonGPUDialect::getNumCTAs(module);
+        int64_t layoutCTAsPerCGA =
+            product(blocked.getCTALayout().getCTAsPerCGA());
+        if (layoutCTAsPerCGA != moduleCTAsPerCGA) {
+          return makeErr() << layout << ".\nLayout has a total of "
+                           << layoutCTAsPerCGA
+                           << " CTAs per CGA, but the module specifies "
+                           << moduleCTAsPerCGA << " CTAs per CGA.";
+        }
+      }
+    }
+
     return success();
   }
 };
@@ -3717,6 +3810,7 @@ void TritonGPUDialect::initialize() {
       >();
   addInterfaces<TritonGPUOpAsmInterface>();
   addInterfaces<TritonGPUInferLayoutInterface>();
+  addInterfaces<TritonGPUVerifyTensorLayoutInterface>();
 
   RankedTensorType::attachInterface<TensorModel>(*getContext());
   MemDescType::attachInterface<MemDescModel>(*getContext());

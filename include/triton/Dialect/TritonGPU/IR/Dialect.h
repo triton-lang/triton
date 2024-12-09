@@ -214,6 +214,10 @@ LinearLayout ensureLayoutNotSmallerThan(
     const LinearLayout &layout,
     const llvm::SmallDenseMap<StringAttr, int64_t> &shape);
 
+SmallVector<StringAttr> standardOutDimNames(MLIRContext *ctx, int rank);
+LinearLayout identityStandardND(StringAttr inDimName, ArrayRef<unsigned> shape,
+                                ArrayRef<unsigned> order);
+
 // Dump information about which threads/registers contain each of the tensor
 // elements.
 void dumpLayout(RankedTensorType tensorType);

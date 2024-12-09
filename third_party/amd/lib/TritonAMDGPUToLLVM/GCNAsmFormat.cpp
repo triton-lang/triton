@@ -5,8 +5,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include <sstream> // unify to llvm::raw_string_ostream ?
 
-namespace mlir {
-namespace triton {
+namespace mlir::triton {
 
 GCNInstr::Operand *
 GCNBuilder::newOperand(mlir::Value value, StringRef constraint,
@@ -187,5 +186,4 @@ GCNInstrExecution::getArgList() const {
   return args;
 }
 
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton

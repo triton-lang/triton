@@ -199,6 +199,11 @@ OpFoldResult TransOp::fold(FoldAdaptor adaptor) {
     return getResult();
   }
 
+  // Eliminate splat constant transpose ops.
+  if (auto attr =
+          llvm::dyn_cast_if_present<SplatElementsAttr>(adaptor.getSrc()))
+    return attr.reshape(getType());
+
   return {};
 }
 
@@ -1066,6 +1071,54 @@ Speculation::Speculatability ExternElementwiseOp::getSpeculatability() {
   if (getPure())
     return Speculation::Speculatable;
   return Speculation::NotSpeculatable;
+}
+
+// -- GatherOp --
+LogicalResult GatherOp::verify() {
+  RankedTensorType indicesTy = getIndices().getType();
+  RankedTensorType srcTy = getSrc().getType();
+  RankedTensorType resTy = getResult().getType();
+
+  if (indicesTy.getShape() != resTy.getShape()) {
+    return emitOpError("indices and output shapes must match");
+  }
+  if (indicesTy.getEncoding() != resTy.getEncoding()) {
+    return emitOpError("indices and output encodings must match");
+  }
+  if (srcTy.getElementType() != resTy.getElementType()) {
+    return emitOpError("input and output element types must match");
+  }
+  if (srcTy.getRank() != indicesTy.getRank()) {
+    return emitOpError("input and indices ranks must match");
+  }
+  if (getAxis() >= srcTy.getRank()) {
+    return emitOpError("gather dimension must be less than the input rank");
+  }
+  for (int dim = 0; dim < indicesTy.getRank(); ++dim) {
+    if (dim == getAxis())
+      continue;
+    if (indicesTy.getShape()[dim] != srcTy.getShape()[dim]) {
+      return emitOpError("indices dimension ")
+             << dim << " must match the corresponding input dimension";
+    }
+  }
+
+  return success();
+}
+
+LogicalResult GatherOp::inferReturnTypes(
+    MLIRContext *context, std::optional<Location> location, ValueRange operands,
+    DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
+    SmallVectorImpl<Type> &inferredReturnTypes) {
+  GatherOpAdaptor adaptor(operands, attributes, properties, regions);
+  auto indicesType = cast<RankedTensorType>(adaptor.getIndices().getType());
+  auto srcType = cast<RankedTensorType>(adaptor.getSrc().getType());
+
+  // Shape and encoding of the indices with the element type of the src.
+  inferredReturnTypes.push_back(
+      RankedTensorType::get(indicesType.getShape(), srcType.getElementType(),
+                            indicesType.getEncoding()));
+  return success();
 }
 
 // -- ExperimentalTensormapCreateOp --

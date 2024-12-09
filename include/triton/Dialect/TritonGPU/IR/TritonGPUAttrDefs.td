@@ -360,7 +360,7 @@ compared to 1*64 when the hasLeadingOffset is false.
               int k = (needTrans) ? matShape[0] : matShape[2];
               int vec = (order[0] == rank-1) ? k : m;
               int mmaStride = (order[0] == rank-1) ? m : k;
-              int maxPhase = mmaStride / perPhase;
+              int maxPhase = std::max(mmaStride / perPhase, 1);
               return get(context, vec, perPhase, maxPhase, order, CTALayout);
           }
 
@@ -373,7 +373,7 @@ compared to 1*64 when the hasLeadingOffset is false.
               int k = needTrans ? matShape[1] : matShape[2];
               int vec = (order[0] == rank-1) ? n : k;
               int mmaStride = (order[0] == rank-1) ? k : n;
-              int maxPhase = mmaStride / perPhase;
+              int maxPhase = std::max(mmaStride / perPhase, 1);
               return get(context, vec, perPhase, maxPhase, order, CTALayout);
           }
 
@@ -616,7 +616,7 @@ Example 1, a row-major coalesced layout may partition a 16x16 tensor over 2 warp
 
 for
 
-#triton_gpu.blocked_layout<{
+#ttg.blocked_layout<{
   sizePerThread = {2, 2}
   threadsPerWarp = {8, 4}
   warpsPerCTA = {1, 2}
@@ -642,7 +642,7 @@ Example 2, a row-major coalesced layout may partition a 32x32 tensor over 2 warp
 [ 28 28 29 29 30 30 31 31 ; 60 60 61 61 62 62 63 63  28 28 29 29 30 30 31 31 ; 60 60 61 61 62 62 63 63 ]
 for
 
-#triton_gpu.blocked_layout<{
+#ttg.blocked_layout<{
   sizePerThread = {2, 2}
   threadsPerWarp = {8, 4}
   warpsPerCTA = {1, 2}
@@ -672,7 +672,7 @@ CTA [1,0]                                              CTA [1,1]
 [ 28 28 29 29 30 30 31 31 ; 60 60 61 61 62 62 63 63 ]  [ 28 28 29 29 30 30 31 31 ; 60 60 61 61 62 62 63 63 ]
 for
 
-#triton_gpu.blocked_layout<{
+#ttg.blocked_layout<{
   sizePerThread = {2, 2}
   threadsPerWarp = {8, 4}
   warpsPerCTA = {1, 2}

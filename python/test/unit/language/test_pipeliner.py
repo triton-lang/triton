@@ -277,26 +277,26 @@ def test_pipeline_matmul(scale, device):
     if is_cuda():
         ttgir = handler.asm["ttgir"]
         if use_tma:
-            assert ttgir.count("triton_nvidia_gpu.async_tma_copy_global_to_local") != 0, "async tma copy not found"
+            assert ttgir.count("ttng.async_tma_copy_global_to_local") != 0, "async tma copy not found"
             assert ttgir.count(f"num = {NUM_STAGES} : i32") == 0, "num_stages not match"
             # a_tma, b_tma, output_tma, barriar
-            assert ttgir.count("triton_gpu.local_alloc") == 4, "alloc number not match"
-            assert ttgir.count("triton_nvidia_gpu.barrier_expect") != 0, "barrier_expect not found"
-            assert ttgir.count("triton_nvidia_gpu.wait_barrier") != 0, "wait_barrier not found"
-            assert ttgir.count("triton_nvidia_gpu.warp_group_dot") != 0, "warp_group_dot not found"
+            assert ttgir.count("ttg.local_alloc") == 4, "alloc number not match"
+            assert ttgir.count("ttng.barrier_expect") != 0, "barrier_expect not found"
+            assert ttgir.count("ttng.wait_barrier") != 0, "wait_barrier not found"
+            assert ttgir.count("ttng.warp_group_dot") != 0, "warp_group_dot not found"
         else:
             # 1. check async
-            assert ttgir.count("triton_gpu.async_copy_global_to_local") != 0, "async copy not found"
+            assert ttgir.count("ttg.async_copy_global_to_local") != 0, "async copy not found"
             # 2. check number of stages
             assert ttgir.count(f"num = {NUM_STAGES} : i32") != 0, "num_stages not match"
             # 3. check alloc
-            assert ttgir.count("triton_gpu.local_alloc") == 2, "alloc number not match"
+            assert ttgir.count("ttg.local_alloc") == 2, "alloc number not match"
             # 4. check dot
             cc = torch.cuda.get_device_capability()
             if cc[0] >= 9:
-                ttgir.count("triton_nvidia_gpu.warp_group_dot") != 0, "warp_group_dot not found"
+                ttgir.count("ttng.warp_group_dot") != 0, "warp_group_dot not found"
             else:
-                ttgir.count("triton_gpu.dot") != 0, "dot not found"
+                ttgir.count("ttg.dot") != 0, "dot not found"
 
 
 def test_pipeline_vecadd(device):
@@ -315,11 +315,11 @@ def test_pipeline_vecadd(device):
     if is_cuda():
         ttgir = handler.asm["ttgir"]
         # 1. check async
-        assert ttgir.count("triton_gpu.async_copy_global_to_local") != 0, "async copy not found"
+        assert ttgir.count("ttg.async_copy_global_to_local") != 0, "async copy not found"
         # 2. check number of stages
         assert ttgir.count(f"num = {NUM_STAGES} : i32") != 0, "num_stages not match"
         # 3. check alloc
-        assert ttgir.count("triton_gpu.local_alloc") == 2, "alloc number not match"
+        assert ttgir.count("ttg.local_alloc") == 2, "alloc number not match"
 
 
 @pytest.mark.parametrize("ROW_COUNT", [0, 1, 2, 3])

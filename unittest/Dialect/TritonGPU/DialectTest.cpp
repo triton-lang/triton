@@ -43,7 +43,7 @@ std::string strReplace(std::string s, const std::string &from,
 // We use some abbreviations when spelling out MLIR types.
 std::string expandTyStr(std::string s) {
   s = strReplace(s, "T<", "tensor<");
-  s = strReplace(s, "#B", "#triton_gpu.blocked");
+  s = strReplace(s, "#B", "#ttg.blocked");
   s = strReplace(s, "spt", "sizePerThread");
   s = strReplace(s, "tpw", "threadsPerWarp");
   s = strReplace(s, "wpc", "warpsPerCTA");

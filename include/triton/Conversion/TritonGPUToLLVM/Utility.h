@@ -400,7 +400,7 @@ inline Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
 
   ModuleOp mod = funcOp.getOperation()->getParentOfType<ModuleOp>();
   auto allocSizeAttr = mod.getOperation()->getAttrOfType<mlir::IntegerAttr>(
-      "triton_gpu.global_scratch_memory_size");
+      "ttg.global_scratch_memory_size");
   if (!allocSizeAttr) {
     return gmemBase;
   }
@@ -1123,8 +1123,19 @@ emitBaseIndexForLayout(Location loc, RewriterBase &rewriter,
   return idx;
 }
 
+// Emit code to compute the (blockId, warpId, laneId) for the current thread.
+std::tuple</*blockId=*/Value, /*warpId=*/Value, /*laneId=*/Value>
+emitHardwareTuple(Location loc, RewriterBase &rewriter,
+                  const TargetInfoBase &target, bool withCTAOffset,
+                  unsigned threadsPerWarp);
+
 // Emit indices calculation within each ConversionPattern, and returns a
 // [elemsPerThread X rank] index matrix.
+//
+// For example, for a thread a owns `elemsPerThread` elements of a tensor with
+// type `type` and layout `layout`, the result will contain `elemsPerThread`
+// vectors. Each vector contains the SSA values of the indices required to
+// access the corresponding element, starting from the inner dimension.
 SmallVector<SmallVector<Value>>
 emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
             Attribute layout, RankedTensorType type, bool withCTAOffset);

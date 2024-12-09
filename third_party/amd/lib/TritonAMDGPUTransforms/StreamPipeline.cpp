@@ -25,7 +25,7 @@
 #define GEN_PASS_CLASSES
 #include "TritonAMDGPUTransforms/Passes.h.inc"
 
-#define DEBUG_TYPE "tritonamdgpu-stream-pipeline-v2"
+#define DEBUG_TYPE "tritonamdgpu-stream-pipeline"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
@@ -857,7 +857,7 @@ void labelLoadOpsForTritonDot(scf::ForOp forOp) {
   }
 }
 
-struct PipelinePass : public TritonAMDGPUStreamPipelineV2Base<PipelinePass> {
+struct PipelinePass : public TritonAMDGPUStreamPipelineBase<PipelinePass> {
   PipelinePass() = default;
   PipelinePass(int32_t numStages, int32_t prefetch) {
     this->numStages = numStages;
@@ -891,9 +891,9 @@ private:
     return numStages;
   }
 };
-} // anonymous namespace
+} // namespace
 
-std::unique_ptr<Pass>
-mlir::createTritonAMDGPUStreamPipelineV2Pass(int numStages, int prefetch) {
+std::unique_ptr<Pass> mlir::createTritonAMDGPUStreamPipelinePass(int numStages,
+                                                                 int prefetch) {
   return std::make_unique<PipelinePass>(numStages, prefetch);
 }
