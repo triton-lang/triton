@@ -2661,8 +2661,8 @@ struct TritonGPUInferLayoutInterface
   // contains elements [a,b,c,d] before the reshape, it contains those same
   // elements after the reshape, they're just "renamed".
   //
-  // A dst encoding that satisfies this property does not exist for all inputs.
-  // Here are some positive and negative examples.
+  // Using legacy layouts, a dst encoding that satisfies this property may not
+  // exist.  Here are some positive and negative examples.
   //
   //   - NOT OK: 4x4 order=[0,1] -> 16.  Reshape merges elements so
   //     dim 1 is the fastest-changing in the dst, but the src has the opposite
@@ -2676,13 +2676,16 @@ struct TritonGPUInferLayoutInterface
   //   - OK: 32x4 sizePerThread=[4,4] -> 128.  dst with sizePerThread=[16] will
   //     contain the same elements as before.
   //
+  // With linear layouts, we can always find a dst encoding that satisfies
+  // this property.  See inferReshapeLinearEncoding.
+  //
   // Users of this function require that it is symmetrical: if
   // (srcShape,srcEnc,dstShape) => dstEnc, then (dstShape,dstEnc,srcShape) =>
   // srcEnc.
   LogicalResult
-  inferReshapeOpNoReorderEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
-                                  ArrayRef<int64_t> dstShape, Attribute &dstEnc,
-                                  std::optional<Location> loc) const override {
+  inferReshapeOpLegacyEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
+                               ArrayRef<int64_t> dstShape, Attribute &dstEnc,
+                               std::optional<Location> loc) const {
     auto src = mlir::dyn_cast<BlockedEncodingAttr>(srcEnc);
     if (!src) {
       return emitOptionalError(
@@ -2924,6 +2927,49 @@ struct TritonGPUInferLayoutInterface
                                       dstThreadsPerWarp, dstWarpsPerCTA,
                                       dstOrder, CTALayout);
 
+    return success();
+  }
+
+  LogicalResult
+  inferReshapeOpEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
+                         ArrayRef<int64_t> dstShape, Attribute &dstEnc,
+                         std::optional<Location> loc) const override {
+    if (succeeded(inferReshapeOpLegacyEncoding(srcShape, srcEnc, dstShape,
+                                               dstEnc, loc))) {
+      return success();
+    }
+
+    // If the legacy encoding failed, try to use LinearLayouts.
+    // Once LinearLayouts are more widely used, we can remove
+    // inferReshapeOpLegacyEncoding.
+    auto *ctx = getContext();
+    auto src = triton::gpu::toLinearLayout(srcShape, srcEnc);
+    if (!src) {
+      return emitOptionalError(loc,
+                               "src encoding does not support linear layout");
+    }
+
+    int totalOutDimSize = std::accumulate(dstShape.begin(), dstShape.end(), 1,
+                                          std::multiplies<int>());
+    if (src->getTotalOutDimSize() != totalOutDimSize) {
+      return emitOptionalError(loc, "numel of dst shape does not match "
+                                    "numel of src shape");
+    }
+
+    SmallVector<std::pair<StringAttr, int32_t>> newOutDims;
+    for (int i = 0; i < dstShape.size(); i++) {
+      newOutDims.push_back(
+          {StringAttr::get(ctx, "dim" + llvm::Twine(i)), dstShape[i]});
+    }
+    auto srcOutDims = llvm::to_vector(src->getOutDimNames());
+    // reshapeOp assumes C-order, so we need to transpose the out dims before
+    // the reshape
+    std::reverse(srcOutDims.begin(), srcOutDims.end());
+    std::reverse(newOutDims.begin(), newOutDims.end());
+    auto dst = src->transposeOuts(srcOutDims)
+                   .reshapeOuts(newOutDims)
+                   .transposeOuts(standardOutDimNames(ctx, newOutDims.size()));
+    dstEnc = LinearEncodingAttr::get(ctx, dst);
     return success();
   }
 
