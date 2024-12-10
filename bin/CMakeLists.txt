@@ -7,12 +7,6 @@ add_llvm_executable(triton-opt triton-opt.cpp PARTIAL_SOURCES_INTENDED)
 # TODO: what's this?
 llvm_update_compile_flags(triton-opt)
 target_link_libraries(triton-opt PRIVATE
-  TritonLLVMIR
-  TritonAnalysis
-  TritonTransforms
-  TritonGPUTransforms
-  TritonNvidiaGPUTransforms
-  MLIRGPUToROCDLTransforms
   ${dialect_libs}
   ${conversion_libs}
   ${triton_libs}
@@ -31,11 +25,6 @@ mlir_check_all_link_libraries(triton-reduce)
 
 llvm_update_compile_flags(triton-reduce)
 target_link_libraries(triton-reduce PRIVATE
-  TritonLLVMIR
-  TritonAnalysis
-  TritonTransforms
-  TritonGPUTransforms
-  TritonNvidiaGPUTransforms
   ${dialect_libs}
   ${conversion_libs}
   ${triton_libs}
@@ -53,10 +42,6 @@ add_llvm_executable(triton-lsp triton-lsp.cpp PARTIAL_SOURCES_INTENDED)
 
 llvm_update_compile_flags(triton-lsp)
 target_link_libraries(triton-lsp PRIVATE
-  TritonAnalysis
-  TritonTransforms
-  TritonGPUTransforms
-  TritonNvidiaGPUTransforms
   ${dialect_libs}
   ${conversion_libs}
   ${triton_libs}
@@ -93,8 +78,6 @@ export_executable_symbols_for_plugins(triton-llvm-opt)
 
 add_llvm_executable(triton-tensor-layout triton-tensor-layout.cpp PARTIAL_SOURCES_INTENDED)
 target_link_libraries(triton-tensor-layout PRIVATE
-  TritonGPUIR
-  TritonNvidiaGPUIR
   ${triton_libs}
   ${conversion_libs}
   ${dialect_libs}
