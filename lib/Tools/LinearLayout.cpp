@@ -313,6 +313,7 @@ LinearLayout::checkInvariants(bool requireSurjective) {
            "can be reached by some `in` coordinate, but was not:" +
            toString();
   }
+
   return std::nullopt;
 }
 
@@ -338,15 +339,6 @@ LinearLayout::LinearLayout(
     powersOf2.emplace_back().push_back(i);
   }
   return LinearLayout({{inDimName, std::move(powersOf2)}}, {outDimName});
-}
-
-/*static*/ LinearLayout LinearLayout::identityND(
-    ArrayRef<std::pair<StringAttr, int32_t>> dimsAndSizes) {
-  auto ret = LinearLayout::empty();
-  for (auto [dim, size] : dimsAndSizes) {
-    ret *= LinearLayout::identity1D(size, dim, dim);
-  }
-  return ret;
 }
 
 /*static*/ LinearLayout LinearLayout::zeros1D(int32_t size,
@@ -965,10 +957,14 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
 }
 
 LinearLayout LinearLayout::invert() const {
-  SmallVector<std::pair<StringAttr, int32_t>> dimsAndSizes;
-  llvm::append_range(dimsAndSizes, outDims);
-  auto id = identityND(dimsAndSizes);
-  return id.invertAndCompose(*this);
+  // A^-1(x) = A^-1(I(x)), thus A.invert() = I.invertAndCompose(A)
+  assert(isInvertible() &&
+         "A linear layout must be surjective and square to be invertible");
+  LinearLayout identity = LinearLayout::empty();
+  for (auto outDim : getOutDimNames()) {
+    identity *= LinearLayout::identity1D(getOutDimSize(outDim), outDim, outDim);
+  }
+  return identity.invertAndCompose(*this);
 }
 
 llvm::MapVector<StringAttr, int32_t>

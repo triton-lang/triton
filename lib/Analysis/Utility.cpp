@@ -10,6 +10,7 @@
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Support/LLVM.h"
+#include "triton/Conversion/MLIRTypes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -447,7 +448,7 @@ bool GatherLoweringHelper::isWarpLocal() {
   // mapped to the same set of warps, which means the gather can be performed
   // entirely within the warp. We need to query
   //
-  //   srcLayout.inverse().sublayoutIsZero({kGatherDim}, {kBlock, kWarp})
+  //   srcLayout.invert().sublayoutIsZero({kGatherDim}, {kBlock, kWarp})
   //
   // But due to broadcasting, the matrix might not be invertible. But since the
   // matrix is a permutation matrix (checked below), we can instead query
@@ -467,10 +468,10 @@ bool GatherLoweringHelper::isWarpLocal() {
     }
   }
 
-  // `dimN` is invariant to the warp, but the `(block, warp)` mapping to all
-  // other dimensions must be the same for both layouts. If so, then the warp
-  // that owns a particular index element also owns all the source elements it
-  // could index into.
+  // If the gather axis `dimN` is invariant to the warp, but the `(block, warp)`
+  // mapping to all other dimensions must be the same for both layouts. If so,
+  // then the warp that owns a particular index element also owns all the source
+  // elements it could index into.
   if (srcLayout->sublayout({kBlock, kWarp}, otherDims) !=
       idxLayout->sublayout({kBlock, kWarp}, otherDims))
     return false;
@@ -487,17 +488,9 @@ bool GatherLoweringHelper::isWarpLocal() {
       idxLayout->sublayout(kLane, otherDims))
     return false;
 
-  // Broadcasted source layouts are not supported at the moment, because we
-  // rely on the source layout being invertible.
-  for (auto &bases : srcLayout->getBases()) {
-    auto isZero = [](ArrayRef<int32_t> base) {
-      return llvm::all_of(base, [](int32_t b) { return b == 0; });
-    };
-    if (llvm::any_of(bases.second, isZero)) {
-      return false;
-    }
-  }
-  return true;
+  // Otherwise, the source layout has to be invertible. This primarily means
+  // the codegen path doesn't support broadcasted source layouts.
+  return srcLayout->isInvertible();
 }
 
 unsigned getNumScratchElements(ArrayRef<unsigned> shape) {
@@ -725,6 +718,25 @@ bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
   return ans;
 }
 
+bool matchMFMAAndDotOperandShuffleCase(RankedTensorType srcTy,
+                                       RankedTensorType dstTy) {
+  auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(srcTy.getEncoding());
+  auto dotOperandLayout = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
+  if (!mfmaLayout || !dotOperandLayout)
+    return false;
+
+  // Currently supporting 32x32 and 16x16 FP8 MFMA -> dot operand case
+  return dotOperandLayout.getParent() == mfmaLayout &&
+         dotOperandLayout.getOpIdx() == 0 && mfmaLayout.getIsTransposed() &&
+         dotOperandLayout.getKWidth() == 8 &&
+         getContigPerThread(mfmaLayout)[1] == 4 &&
+         ((mfmaLayout.getMDim() == 16 && mfmaLayout.getNDim() == 16) ||
+          (mfmaLayout.getMDim() == 32 && mfmaLayout.getNDim() == 32)) &&
+         triton::type::isFloat8(srcTy.getElementType()) &&
+         triton::type::isFloat8(dstTy.getElementType()) &&
+         mfmaLayout.getWarpsPerCTA()[1] == 1;
+}
+
 // We get the smallest submap of srcTy^{-1} * dstTy that is not the identity
 // under kBlock, kWarp or kLane (in that order). The idea here is that if we
 // have a transformation that's the identity on kBlock, we don't need to use
@@ -789,7 +801,10 @@ bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
   // supported yet in Triton's backend.
   return !cvtReordersRegisters(srcTy, dstTy) &&
          !isBlockedToDotShortcut(srcTy, dstTy) &&
-         !matchMmaV3AndDotOperandLayout(srcTy, dstTy);
+         !matchMmaV3AndDotOperandLayout(srcTy, dstTy) &&
+         // to be removed when generalized warp shuffle conversions
+         // are ready:
+         !matchMFMAAndDotOperandShuffleCase(srcTy, dstTy);
 }
 
 bool atomicNeedsSharedMemory(Value value) {

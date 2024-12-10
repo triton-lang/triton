@@ -17,7 +17,17 @@ import sysconfig
 
 
 def min_dot_size(target: GPUTarget):
-    return lambda lhsType, rhsType: (16, 32, 16) if lhsType.is_int8() else (16, 16, 16)
+
+    def check_dot_compatibility(lhs_type, rhs_type) -> Tuple[int, int, int]:  # [m, n, k]
+        lhs_bitwidth = lhs_type.scalar.primitive_bitwidth
+        rhs_bitwidth = rhs_type.scalar.primitive_bitwidth
+        assert lhs_bitwidth == rhs_bitwidth, "lhs and rhs bitwidth must be the same"
+        if lhs_bitwidth == 8:
+            return (16, 16, 32)
+        else:
+            return (16, 16, 16)
+
+    return check_dot_compatibility
 
 
 @functools.lru_cache()
