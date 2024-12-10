@@ -2,6 +2,7 @@
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
@@ -160,6 +161,8 @@ LogicalResult Pingponger::genLocalSlice(OpBuilder &builder, Value v,
     return failure();
   auto dotOperandEnc = ttg::DotOperandEncodingAttr::get(
       builder.getContext(), opIdx, dotEncoding, srcEncoding.getKWidth());
+  auto subviewDescType = ttg::MemDescType::get(
+      shape, elementType, type.getEncoding(), type.getMemorySpace());
   for (int i = 0; i < numSlices; i++) {
     SmallVector<Value> offsetsVal;
     SmallVector<int64_t> offsets = {0, 0};
@@ -168,10 +171,7 @@ LogicalResult Pingponger::genLocalSlice(OpBuilder &builder, Value v,
       offsetsVal.push_back(constOffsets[off]);
     }
     Value newSmem = builder.create<ttg::MemDescSubviewOp>(
-        v.getLoc(),
-        ttg::MemDescType::get(shape, elementType, type.getEncoding(),
-                              type.getMemorySpace()),
-        memDesc, offsetsVal);
+        v.getLoc(), subviewDescType, memDesc, offsetsVal);
     Value prefetchSlice = builder.create<ttg::LocalLoadOp>(
         v.getLoc(), RankedTensorType::get(shape, elementType, dotOperandEnc),
         newSmem);
@@ -226,11 +226,12 @@ LogicalResult Pingponger::transformFourPPClusters(OpBuilder &builder,
   // Clone dots four times to consume the slices
   Operation *prevDot = op;
   for (int i = 0; i < numSlices; i++) {
-    auto newOp = builder.clone(*op);
-    newOp->setOperand(0, loadSliceOps[0][i]->getResult(0));
-    newOp->setOperand(1, loadSliceOps[1][i]->getResult(0));
+    IRMapping mapping;
+    mapping.map(op.getA(), loadSliceOps[0][i]->getResult(0));
+    mapping.map(op.getB(), loadSliceOps[1][i]->getResult(0));
     if (i > 0)
-      newOp->setOperand(2, prevDot->getResult(0));
+      mapping.map(op.getC(), prevDot->getResult(0));
+    auto newOp = builder.clone(*op, mapping);
     prevDot = newOp;
     dotSliceOps.push_back(newOp);
   }
@@ -293,7 +294,7 @@ void Pingponger::addAsymmetricSyncToLoop(OpBuilder &builder, Location loc) {
   preBarrier->moveBefore(forOp);
   builder.setInsertionPointAfter(preBarrier);
 
-  // condbarrier::second_half after forOp
+  // Insert condbarrier::second_half before starting the loop
   auto i32ty = builder.getIntegerType(32);
   auto workIDX = builder.create<ROCDL::ThreadIdXOp>(loc, i32ty);
   auto constZero = builder.create<arith::ConstantIntOp>(loc, 0, 32);
@@ -306,6 +307,7 @@ void Pingponger::addAsymmetricSyncToLoop(OpBuilder &builder, Location loc) {
   auto condBarrierHigh =
       builder.create<tt::amdgpu::CondBarrierOp>(loc, warpHigh);
 
+  // Insert condbarrier::first_half after the end of the loop
   builder.setInsertionPointAfter(forOp);
   auto condBarrierLow = builder.create<tt::amdgpu::CondBarrierOp>(loc, warpLow);
 }
@@ -346,13 +348,16 @@ void Pingponger::getDotPingponged() {
   // Pingpong scheduling tries to form two different types of the instruction
   // clusters, i.e., Dot clusters and Memory clusters. While each SIMD has
   // two concurrent warps, both warps can execute a different type of
-  // instruction cluster in parallel.Here are currently available patterns
-  // - One Dot-Memory (ping-pong) cluster
+  // instruction cluster in parallel.Here are currently available patterns,
+  // more patterns could be added later.
+  //
+  // (1) One Dot-Memory (ping-pong) cluster
   //  :Ideal to support small tile size e.g., 128x128x64_FP16. Where amount
   //   of the data used per each iteration is small enough and not causing
   //   local_load waiting or register spilling. Currently used for numWarps=4
   //   case where SIMD can hold two warps from different blocks.
-  // - Four Dot-Memory (ping-pongx4) clusters
+  //
+  // (2) Four Dot-Memory (ping-pongx4) clusters
   //  :Useful for the larger tile size e.g., 256x256x64_FP16. Clustering
   //   the Dot instruction (mfma) all together without fetching data requires
   //   GPU to hold all the data for the calculation. Such large tile size
