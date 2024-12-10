@@ -385,7 +385,8 @@ jobs:
 
       - *compute-cache-keys-step
       - *cache-build-dependencies-step
-      - *restore-build-artifacts-step
+      # Build cache right now takes a long time to restore on MI GPU CI machines. Disabled for now.
+      #- *restore-build-artifacts-step
       - *inspect-cache-directories-step
 
       - name: Update compiler to clang
@@ -439,7 +440,8 @@ jobs:
       - *run-proton-tests-step
       - *run-cpp-unittests-step
       - *inspect-cache-directories-step
-      - *save-build-artifacts-step
+      # Build cache right now takes a long time to save on MI GPU CI machines. Disabled for now.
+      #- *save-build-artifacts-step
 
       - name: Clean up caches
         run: |
