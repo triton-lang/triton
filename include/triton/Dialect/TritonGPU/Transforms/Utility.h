@@ -116,10 +116,10 @@ protected:
 };
 
 // Infers the encoding of the result of op given the source encoding.
-std::optional<Attribute> inferDstEncoding(Operation *op, Attribute encoding);
+Attribute inferDstEncoding(Operation *op, Attribute encoding);
 
 // Infers the encoding of the source of op given the result encoding.
-std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding);
+Attribute inferSrcEncoding(Operation *op, Attribute encoding);
 
 bool isExpensiveLoadOrStore(Operation *op);
 
@@ -202,6 +202,11 @@ enum class MMALoadType {
                  // pipelining
 };
 MMALoadType getMMALoadType(Operation *loadOp);
+
+// Returns composed LinearLayout for register to shared copy
+std::optional<triton::LinearLayout>
+getRegToSharedLayout(MLIRContext *ctx, ArrayRef<int64_t> shape,
+                     Attribute srcEnc, Attribute dstEnc, int elemBitWidth);
 } // namespace mlir
 
 #endif // TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_

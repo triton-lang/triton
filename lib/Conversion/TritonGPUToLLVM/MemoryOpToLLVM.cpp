@@ -23,16 +23,11 @@ void lowerDistributedToShared(
   auto srcTy = cast<RankedTensorType>(src.getType());
   auto dstTy = cast<MemDescType>(dst.getType());
   auto outOrd = mlir::cast<SharedEncodingAttr>(dstTy.getEncoding()).getOrder();
-  assert(srcTy.getShape().size() <= 2 ||
-         (srcTy.getShape().size() == 3 && outOrd[2] == 0) &&
-             "Unexpected rank of ConvertLayout(blocked->shared)");
   auto elemTy = typeConverter->convertType(srcTy.getElementType());
 
-  auto smemBase = smemObj.getBase();
-  auto dstStrides = smemObj.getStrides();
   auto inVals = unpackLLElements(loc, adaptorSrc, rewriter);
-  storeDistributedToShared(dstTy, srcTy, elemTy, inVals, smemBase, dstStrides,
-                           loc, rewriter, targetInfo, llvmOpCount);
+  storeDistributedToShared(dstTy, srcTy, elemTy, inVals, smemObj, loc, rewriter,
+                           targetInfo, llvmOpCount);
 }
 
 struct GlobalScratchAllocOpConversion
@@ -160,12 +155,9 @@ public:
         // If we remove this one, ldmatrix will IMA. It can probably be relaxed
         // though
         canUseLdmatrix &=
-            srcTy.getShape()[0] >= 8 && srcTy.getShape()[1] >= 4 * kWidth;
-        // To be removed in https://github.com/triton-lang/triton/pull/5154
-        bool legacyLoweringIsBuggy =
-            (kWidth >= 8 || (kWidth == 4 && bitwidth == 32)) && mma.isAmpere();
-        return (mma.isHopper() && !canUseLdmatrix) ||
-               (mma.isAmpere() && legacyLoweringIsBuggy);
+            srcTy.getShape()[0] >= 8 &&
+            srcTy.getShape()[1] >= 4 * kWidth & dstTy.getRank() <= 2;
+        return !canUseLdmatrix;
       }
       if (isa<AMDMfmaEncodingAttr>(dot.getParent()))
         return true;
@@ -220,7 +212,8 @@ private:
     auto dstTy = op.getResult().getType();
     auto dstShape = dstTy.getShape();
     auto srcSharedLayout = cast<SharedEncodingAttr>(srcTy.getEncoding());
-    assert((dstShape.size() <= 2 || isSupportedDotOpLayout(srcTy, dstTy)) &&
+    assert((!isa<DotOperandEncodingAttr>(dstTy.getEncoding()) ||
+            isSupportedDotOpLayout(srcTy, dstTy)) &&
            "Unexpected rank of ConvertLayout(shared->distributed)");
 
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(

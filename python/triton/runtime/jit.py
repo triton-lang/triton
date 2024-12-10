@@ -308,6 +308,8 @@ def mangle_type(arg, is_const=False):
         return "fp32"
     elif hasattr(arg, "tma_desc_cpu_ptr"):
         return "nvTmaDesc"
+    elif isinstance(arg, tuple):
+        return "[" + ",".join(map(mangle_type, arg)) + "]"
     else:
         # dtypes are hashable so we can memoize this mapping:
         dsk = (arg.dtype, is_const)
@@ -335,8 +337,8 @@ def serialize_specialization_data(name, signature, constants, attrs, options, ke
     constants = {key: str(value) if value.__class__.__name__ == "dtype" else value for key, value in constants.items()}
     import json
     obj = {
-        'name': name, 'signature': signature, 'constants': constants, 'attrs': attrs.to_dict(), 'options':
-        options.__dict__, 'key': key
+        'name': name, 'signature': signature, 'constant_keys': list(constants.keys()), 'constant_vals':
+        list(constants.values()), 'attrs': attrs.to_dict(), 'options': options.__dict__, 'key': key
     }
     serialized_obj = json.dumps(obj)
     return serialized_obj
@@ -368,6 +370,7 @@ def create_function_from_signature(sig, kparams, backend):
             func_args.append(f"{name}=default_{name}")
             dict_entries.append(f"'{name}': {name}")
         if kp.is_constexpr:
+            signature_types.append('"constexpr"')
             constexpr_vals.append(name)
         else:
             non_constexpr_vals.append(name)
@@ -601,32 +604,23 @@ class JITFunction(KernelInterface[T]):
             # done here rather than when we build the signature as otherwise
             # the kernel cache key could not distinguish between byte pointers
             # and None arguments, resulting in a downstream mismatch:
-            sigkeys = [self.params[i].name for i in self.non_constexpr_indices]
+            sigkeys = [param.name for param in self.params]
             sigvals = sig_and_spec[:len(sigkeys)]
-            signature = {k: ('*i8' if (v == 'none') else v) for (k, v) in zip(sigkeys, sigvals)}
+            signature = {k: v for (k, v) in zip(sigkeys, sigvals)}
 
-            configs = (backend.get_attrs_descriptor(self.params, bound_vals), )
-            constant_params = configs[0].get_constants()
-            constants = {
-                p.name: v
-                for (v, p) in zip(bound_vals, self.params)
-                if p.is_constexpr or (p.num in constant_params) or v is None
-            }
-            for i, arg in constants.items():
+            attrs = backend.get_attrs_descriptor(self.params, bound_vals)
+            constexprs = {p.name: v for (v, p) in zip(bound_vals, self.params) if p.is_constexpr}
+            for i, arg in constexprs.items():
                 if callable(arg):
                     raise TypeError(f"Callable constexpr at index {i} is not supported")
 
-            if self._call_hook(key, signature, device, constants, options, configs, warmup, before=True):
+            if self._call_hook(key, signature, device, constexprs, options, [attrs], warmup, before=True):
                 return None
             # compile the kernel
-            src = self.ASTSource(self, signature, constants, configs[0])
-            kernel = self.compile(
-                src,
-                target=target,
-                options=options.__dict__,
-            )
+            src = self.ASTSource(self, signature, constexprs, attrs)
+            kernel = self.compile(src, target=target, options=options.__dict__)
             self.cache[device][key] = kernel
-            self._call_hook(key, signature, device, constants, options, configs, warmup, before=False)
+            self._call_hook(key, signature, device, constexprs, options, [attrs], warmup, before=False)
 
         # Check that used global values have not changed.
         not_present = object()
@@ -639,15 +633,11 @@ class JITFunction(KernelInterface[T]):
             # canonicalize grid
             assert grid is not None
             if callable(grid):
-                # Arguments are passed as a dict to `grid`, by contract.
-                # TODO(jlebar): In the new launch API, pass the compiler flags as a
-                # second parameter to `grid`.
                 grid = grid(bound_args)
             grid_size = len(grid)
             grid_0 = grid[0]
             grid_1 = grid[1] if grid_size > 1 else 1
             grid_2 = grid[2] if grid_size > 2 else 1
-
             # launch kernel
             launch_metadata = kernel.launch_metadata(grid, stream, *non_constexpr_vals)
             kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
@@ -738,9 +728,11 @@ class JITFunction(KernelInterface[T]):
         if deserialized_obj['name'] != self.fn.__name__:
             raise RuntimeError(
                 f"Specialization data is for {deserialized_obj['name']} but trying to preload for {self.fn.__name__}")
+        constant_keys = deserialized_obj['constant_keys']
+        constant_vals = deserialized_obj['constant_vals']
         constants = {
             key: tl.dtype(value) if tl.dtype.is_dtype(value) else value
-            for key, value in deserialized_obj['constants'].items()
+            for key, value in zip(constant_keys, constant_vals)
         }
         signature = dict(deserialized_obj['signature'].items())
         src = ASTSource(self, signature, constants, AttrsDescriptor.from_dict(deserialized_obj['attrs']))

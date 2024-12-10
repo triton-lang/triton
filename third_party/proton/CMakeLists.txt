@@ -19,7 +19,7 @@ include_directories(${JSON_INCLUDE_DIR})
 include_directories(${PROTON_SRC_DIR}/include)
 include_directories(${PROTON_EXTERN_DIR})
 
-find_package(Python3 REQUIRED Interpreter Development)
+find_package(Python3 REQUIRED Interpreter Development.Module)
 find_package(pybind11 CONFIG REQUIRED HINTS "${Python3_SITELIB}")
 
 # Check if the platform is MacOS
