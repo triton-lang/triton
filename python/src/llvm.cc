@@ -23,6 +23,8 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
+#include "llvm/Transforms/Instrumentation/AddressSanitizer.h"
+#include "llvm/Transforms/Instrumentation/AddressSanitizerOptions.h"
 #include <csignal>
 #include <memory>
 #include <pybind11/pybind11.h>
@@ -377,6 +379,26 @@ void init_triton_llvm(py::module &&m) {
               fpm.addPass(BreakStructPhiNodesPass());
               fpm.addPass(InstCombinePass());
             });
+        bool enableAddressSanitizer =
+            mlir::triton::tools::getBoolEnv("TRITON_ENABLE_ADDRESS_SANITIZER");
+        if (enableAddressSanitizer) {
+          llvm::SmallVector<StringRef, 3> split;
+          StringRef(mod->getTargetTriple()).split(split, '-');
+          if (split[0] != "amdgcn") {
+            std::string ErrMsg =
+                "Address Sanitizer Error: Address sanitizer is currently only "
+                "support on the AMD backend\n";
+            throw std::runtime_error(ErrMsg);
+          }
+          for (llvm::Function &f : mod->functions()) {
+            if (f.isIntrinsic() || f.isDeclaration())
+              continue;
+            f.addFnAttr("target-features", "+xnack");
+            f.addFnAttr(llvm::Attribute::SanitizeAddress);
+          }
+          AddressSanitizerOptions Opts;
+          mpm.addPass(AddressSanitizerPass(Opts));
+        }
         mpm.addPass(pb.buildPerModuleDefaultPipeline(opt));
         mpm.run(*mod, mam);
       },
