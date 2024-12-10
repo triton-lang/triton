@@ -455,7 +455,7 @@ bool GatherLoweringHelper::isWarpLocal() {
   // mapped to the same set of warps, which means the gather can be performed
   // entirely within the warp. We need to query
   //
-  //   srcLayout.inverse().sublayoutIsZero({kGatherDim}, {kBlock, kWarp})
+  //   srcLayout.invert().sublayoutIsZero({kGatherDim}, {kBlock, kWarp})
   //
   // But due to broadcasting, the matrix might not be invertible. But since the
   // matrix is a permutation matrix (checked below), we can instead query
@@ -475,10 +475,10 @@ bool GatherLoweringHelper::isWarpLocal() {
     }
   }
 
-  // `dimN` is invariant to the warp, but the `(block, warp)` mapping to all
-  // other dimensions must be the same for both layouts. If so, then the warp
-  // that owns a particular index element also owns all the source elements it
-  // could index into.
+  // If the gather axis `dimN` is invariant to the warp, but the `(block, warp)`
+  // mapping to all other dimensions must be the same for both layouts. If so,
+  // then the warp that owns a particular index element also owns all the source
+  // elements it could index into.
   if (srcLayout->sublayout({kBlock, kWarp}, otherDims) !=
       idxLayout->sublayout({kBlock, kWarp}, otherDims))
     return false;
@@ -495,17 +495,9 @@ bool GatherLoweringHelper::isWarpLocal() {
       idxLayout->sublayout(kLane, otherDims))
     return false;
 
-  // Broadcasted source layouts are not supported at the moment, because we
-  // rely on the source layout being invertible.
-  for (auto &bases : srcLayout->getBases()) {
-    auto isZero = [](ArrayRef<int32_t> base) {
-      return llvm::all_of(base, [](int32_t b) { return b == 0; });
-    };
-    if (llvm::any_of(bases.second, isZero)) {
-      return false;
-    }
-  }
-  return true;
+  // Otherwise, the source layout has to be invertible. This primarily means
+  // the codegen path doesn't support broadcasted source layouts.
+  return srcLayout->isInvertible();
 }
 
 unsigned getNumScratchElements(ArrayRef<unsigned> shape) {

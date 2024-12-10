@@ -35,7 +35,11 @@ LogicalResult
 GatherOpConversion::matchAndRewrite(GatherOp op, OpAdaptor adaptor,
                                     ConversionPatternRewriter &rewriter) const {
   GatherLoweringHelper helper(op);
-  // Specialize the lowering based on the source layout.
+  // Specialize the lowering based on the source layout. Given that the cost of
+  // a warp shuffle is approximately half the cost of a roundtrip to shared
+  // memory with zero bank conflicts, we will need a more precise heuristic to
+  // choose between the two codegen paths and rely on the middle end to pick the
+  // right layout.
   if (helper.isWarpLocal()) {
     emitWarpLocalGather(op, adaptor, rewriter);
   } else {
@@ -218,7 +222,7 @@ void GatherOpConversion::emitWarpLocalGather(
   // within that thread.
   //
   // Because `ll_src(block=0, warp=0, lane=0)[otherDims] ==
-  // idx_src(0, 0, 0)[otherDims]`, we know given any `idx_reg` (element in the
+  // ll_idx(0, 0, 0)[otherDims]`, we know given any `idx_reg` (element in the
   // index tensor) the thread will need to read from the same column in the
   // source tensor.
   //

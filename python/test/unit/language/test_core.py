@@ -6243,6 +6243,7 @@ def test_gather(src_shape, indices_shape, axis):
     torch.testing.assert_close(result, ref, rtol=0, atol=0)
 
 
+# These layouts are specially chosen to trigger the warp shuffle codegen.
 @pytest.mark.parametrize("src_shape, indices_shape, axis, src_layout, indices_layout", [
     ([32, 16], [32, 16], 0,
      "linear<{register = [[0, 2], [2, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]], warp = [[0, 1], [0, 4]], block = []}>",
@@ -6253,7 +6254,7 @@ def test_gather(src_shape, indices_shape, axis):
      "linear<{register = [[0, 2], [32, 0], [0, 32], [2, 0], [0, 16], [64, 0], [128, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]], warp = [[0, 1], [0, 4]], block = []}>"
      ),
 ])
-def test_gather_complex_layouts(src_shape, indices_shape, axis, src_layout, indices_layout, tmp_path: pathlib.Path):
+def test_gather_warp_shuffle(src_shape, indices_shape, axis, src_layout, indices_layout, tmp_path: pathlib.Path):
     if is_hip():
         pytest.skip("warp-local gather has issues on HIP")
 
