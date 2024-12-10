@@ -3106,7 +3106,18 @@ struct CanonicalizeConvertFromGatherSource : public OpRewritePattern<GatherOp> {
     auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
     if (!convert)
       return failure();
-    rewriter.replaceOpWithNewOp<GatherOp>(op, convert.getSrc(), op.getIndices(), op.getAxis());
+
+    // Don't alter the layout if it will no longer be warp-local.
+    bool wasOptimized = GatherLoweringHelper(op).isWarpLocal();
+    bool willBeOptimized =
+        GatherLoweringHelper(convert.getSrc().getType(),
+                             op.getIndices().getType(), op.getAxis())
+            .isWarpLocal();
+    if (wasOptimized && !willBeOptimized)
+      return failure();
+
+    rewriter.replaceOpWithNewOp<GatherOp>(op, convert.getSrc(), op.getIndices(),
+                                          op.getAxis());
     return mlir::success();
   }
 };

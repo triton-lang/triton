@@ -364,7 +364,8 @@ static Attribute inferSrcEncoding(SplitOp op, Attribute dstEnc) {
 
 static Attribute inferSrcEncoding(GatherOp op, Attribute dstEnc) {
   // The index encoding is the same as the output encoding.
-  return dstEnc;
+  return {};
+  // return dstEnc;
 }
 
 static Attribute inferTransOpDstEncoding(Attribute srcEnc,
@@ -427,7 +428,8 @@ static Attribute inferDstEncoding(GatherOp op, Attribute encoding) {
   // The output encoding is the same as the index encoding.
   // FIXME: This assumes `encoding` is the index encoding, which can be
   // different than the source encoding.
-  return encoding;
+  return {};
+  // return encoding;
 }
 
 static Attribute inferSrcEncoding(triton::ReshapeOp op, Attribute encoding) {
@@ -832,7 +834,12 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
         continue;
       if (isa<triton::CatOp>(definingOp))
         return failure();
-      for (Value operand : definingOp->getOperands()) {
+      for (auto [i, operand] : llvm::enumerate(definingOp->getOperands())) {
+        // HACK: Do not propagate from the result to the src of a gather.
+        if (isa<GatherOp>(definingOp) && i == 0) {
+          continue;
+        }
+
         auto srcEncoding = inferSrcEncoding(definingOp, encoding);
         if (!srcEncoding)
           return failure();

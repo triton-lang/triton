@@ -171,6 +171,9 @@ bool isLayoutAnchor(Operation *op) {
   if (isa<DotOp, nvidia_gpu::WarpGroupDotOp, AtomicRMWOp, AtomicCASOp>(op))
     return true;
 
+  if (isa<GatherOp>(op))
+    return true;
+
   // Heuristic: Mark permuting reshape as a layout anchor.  Its dst can be
   // anything, so it stops forward-propagation of layouts.  We rely on the
   // backwards pass to fix it up if necessary.  (If we didn't do this, then
@@ -724,6 +727,10 @@ bool canBeRemat(Operation *op) {
     return !isExpensiveLoadOrStore(op);
   if (isa<AtomicRMWOp, AtomicCASOp, DotOp>(op))
     return false;
+
+  if (isa<GatherOp>(op))
+    return false;
+
   if (isa<scf::WhileOp, scf::ConditionOp>(op))
     return false;
 
