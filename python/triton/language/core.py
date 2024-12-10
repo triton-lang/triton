@@ -1822,6 +1822,40 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
 
 
 @builtin
+def atomic_load(pointer, sem, scope, mask=None, other=None, cache_modifier="", eviction_policy="", volatile=False,
+                _builder=None):
+    """
+    Return a tensor of data whose values are loaded from memory at location defined by `pointer`:
+
+    `pointer` must be a single element pointer (a scalar is loaded)
+        - `mask` and `other` must also be scalars,
+        - `other` is implicitly typecast to `pointer.dtype.element_ty`, and
+
+    :param pointer: Pointer to the data to be loaded
+    :type pointer: `triton.PointerType`
+    :param mask: if `mask[idx]` is false, do not load the data at address `pointer[idx]`
+    :param other: if `mask[idx]` is false, return `other[idx]`
+    :param cache_modifier: changes cache option in NVIDIA PTX
+    :type cache_modifier: str, optional
+    :param eviction_policy: changes eviction policy in NVIDIA PTX
+    :type eviction_policy: str, optional
+    :param volatile: changes volatile option in NVIDIA PTX
+    :type volatile: bool, optional
+    """
+    # `mask` and `other` can be constexpr
+    mask = _constexpr_to_value(mask)
+    other = _constexpr_to_value(other)
+    if mask is not None:
+        mask = semantic.to_tensor(mask, _builder)
+    if other is not None:
+        other = semantic.to_tensor(other, _builder)
+    cache_modifier = _constexpr_to_value(cache_modifier)
+    eviction_policy = _constexpr_to_value(eviction_policy)
+    volatile = _constexpr_to_value(volatile)
+    return semantic.atomic_load(pointer, sem, scope, mask, other, cache_modifier, eviction_policy, volatile, _builder)
+
+
+@builtin
 def _experimental_reinterpret_tensor_descriptor(desc_ptr, block_shape, dtype,
                                                 _builder=None) -> _experimental_tensor_descriptor_base:
     """
@@ -1904,6 +1938,36 @@ def store(pointer, value, mask=None, boundary_check=(), cache_modifier="", evict
     cache_modifier = _constexpr_to_value(cache_modifier)
     eviction_policy = _constexpr_to_value(eviction_policy)
     return semantic.store(pointer, value, mask, boundary_check, cache_modifier, eviction_policy, _builder)
+
+
+@_tensor_member_fn
+@builtin
+def atomic_store(pointer, value, sem, scope, mask=None, cache_modifier="", eviction_policy="", _builder=None):
+    """
+    Atomic store data into memory locations defined by `pointer`.
+
+    `pointer` must be a single element pointer (a scalar is stored)
+        - `mask` must also be scalar, and
+
+    `value` is implicitly broadcast to `pointer.shape` and typecast to `pointer.dtype.element_ty`.
+
+    :param pointer: The memory location where the elements of `value` are stored
+    :type pointer: `triton.PointerType`
+    :param value: The tensor of elements to be stored
+    :param mask: If `mask[idx]` is false, do not store `value[idx]` at `pointer[idx]`
+    :param cache_modifier: changes cache option in NVIDIA PTX
+    :type cache_modifier: str, optional
+    :param eviction_policy: changes eviction policy in NVIDIA PTX
+    :type eviction_policy: str, optional
+    """
+    # `value` can be constexpr
+    value = semantic.to_tensor(value, _builder)
+    mask = _constexpr_to_value(mask)
+    if mask is not None:
+        mask = semantic.to_tensor(mask, _builder)
+    cache_modifier = _constexpr_to_value(cache_modifier)
+    eviction_policy = _constexpr_to_value(eviction_policy)
+    return semantic.atomic_store(pointer, value, sem, scope, mask, cache_modifier, eviction_policy, _builder)
 
 
 @builtin
