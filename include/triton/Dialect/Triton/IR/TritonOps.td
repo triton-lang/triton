@@ -248,7 +248,8 @@ def TT_LoadOp : TT_Op<"load", [
       OptionalAttr<TT_PaddingOptionAttr>:$padding,
       DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
       DefaultValuedAttr<TT_EvictionPolicyAttr, "::mlir::triton::EvictionPolicy::NORMAL">:$evict,
-      DefaultValuedAttr<BoolAttr, "false">:$isVolatile
+      DefaultValuedAttr<BoolAttr, "false">:$isVolatile,
+      OptionalAttr<TT_MemSemanticAttr>:$sem, OptionalAttr<TT_MemSyncScopeAttr>:$scope
     );
 
     let results = (outs TT_Type:$result);
@@ -271,6 +272,16 @@ def TT_LoadOp : TT_Op<"load", [
         OpBuilder<(ins "Value":$ptr, "Value":$mask, "Value":$other,
                        "ArrayRef<int32_t>":$boundaryCheck,
                        "std::optional<triton::PaddingOption>":$padding, "triton::CacheModifier":$cache,
+                       "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
+        // // A utility function to build the operation with all attributes
+        OpBuilder<(ins "Type":$resultType, "Value":$ptr, "Value":$mask, "Value":$other,
+                       "ArrayRef<int32_t>":$boundaryCheck,
+                       "PaddingOptionAttr":$padding, "triton::CacheModifier":$cache,
+                       "triton::EvictionPolicy":$evict, "bool":$isVolatile)>,
+        // // A utility function to build the operation with all attributes
+        OpBuilder<(ins "Value":$ptr, "Value":$mask, "Value":$other,
+                       "ArrayRef<int32_t>":$boundaryCheck,
+                       "PaddingOptionAttr":$padding, "triton::CacheModifier":$cache,
                        "triton::EvictionPolicy":$evict, "bool":$isVolatile)>
     ];
 
@@ -291,7 +302,9 @@ def TT_LoadOp : TT_Op<"load", [
       $ptr (`,` $mask^)? (`,` $other^)?
       oilist(
         `cacheModifier` `=` $cache |
-        `evictionPolicy` `=` $evict
+        `evictionPolicy` `=` $evict |
+        `memSemantic` `=` $sem |
+        `memSyncScope` `=` $scope
       )
       attr-dict `:` type($ptr)
     }];
@@ -318,7 +331,8 @@ def TT_StoreOp : TT_Op<"store", [
       Optional<TT_BoolLike>:$mask,
       DefaultValuedAttr<DenseI32ArrayAttr, "::llvm::ArrayRef<int32_t>{}">:$boundaryCheck,
       DefaultValuedAttr<TT_CacheModifierAttr, "triton::CacheModifier::NONE">:$cache,
-      DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict
+      DefaultValuedAttr<TT_EvictionPolicyAttr, "triton::EvictionPolicy::NORMAL">:$evict,
+      OptionalAttr<TT_MemSemanticAttr>:$sem, OptionalAttr<TT_MemSyncScopeAttr>:$scope
     );
 
     let builders = [
@@ -340,7 +354,10 @@ def TT_StoreOp : TT_Op<"store", [
     // due to limitations in MLIR's asm parser.
     let assemblyFormat = [{
       $ptr `,` $value (`,` $mask^)?
-      oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
+      oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict |
+        `memSemantic` `=` $sem |
+        `memSyncScope` `=` $scope
+      )
       attr-dict `:` type($ptr)
     }];
 
@@ -366,7 +383,7 @@ def TT_AtomicLoadOp : TT_Op<"atomic_load", [
 
     let arguments = (
       ins
-      AnyTypeOf<[TT_PtrLike, TT_TensorPtr]>:$ptr,
+      AnyTypeOf<[TT_PtrLike]>:$ptr,
       TT_MemSemanticAttr:$sem, TT_MemSyncScopeAttr:$scope,
       Optional<TT_BoolLike>:$mask,
       Optional<TT_Type>:$other,
@@ -419,7 +436,7 @@ def TT_AtomicStoreOp : TT_Op<"atomic_store", [
 
     let arguments = (
       ins
-      AnyTypeOf<[TT_PtrLike, TT_TensorPtr]>:$ptr,
+      AnyTypeOf<[TT_PtrLike]>:$ptr,
       TT_Type:$value,
       TT_MemSemanticAttr:$sem, TT_MemSyncScopeAttr:$scope,
       Optional<TT_BoolLike>:$mask,

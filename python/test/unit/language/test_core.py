@@ -1675,25 +1675,25 @@ def test_load_scope_sem(device):
     out = kernel_r[(2, )](data, BLOCK_SIZE=block_size)
 
     asm = out.asm['ttir']
-    assert len(re.findall("atomic_load .*, memSemantic = acquire, memSyncScope = gpu", asm)) == 1
-    assert len(re.findall("atomic_store .*, memSemantic = release, memSyncScope = gpu", asm)) == 1
+    assert len(re.findall("load .* memSemantic = acquire memSyncScope = gpu", asm)) == 1
+    assert len(re.findall("store .* memSemantic = release memSyncScope = gpu", asm)) == 1
 
-    assert len(re.findall("atomic_load .*, memSemantic = acquire, memSyncScope = cta", asm)) == 1
-    assert len(re.findall("atomic_store .*, memSemantic = release, memSyncScope = cta", asm)) == 1
+    assert len(re.findall("load .* memSemantic = acquire memSyncScope = cta", asm)) == 1
+    assert len(re.findall("store .* memSemantic = release memSyncScope = cta", asm)) == 1
 
-    assert len(re.findall("atomic_load .*, memSemantic = acquire, memSyncScope = sys", asm)) == 1
-    assert len(re.findall("atomic_store .*, memSemantic = release, memSyncScope = sys", asm)) == 1
+    assert len(re.findall("load .* memSemantic = acquire memSyncScope = sys", asm)) == 1
+    assert len(re.findall("store .* memSemantic = release memSyncScope = sys", asm)) == 1
 
     ########### relaxed:
 
-    assert len(re.findall("atomic_load .*, memSemantic = relaxed, memSyncScope = gpu", asm)) == 1
-    assert len(re.findall("atomic_store .*, memSemantic = relaxed, memSyncScope = gpu", asm)) == 1
+    assert len(re.findall("load .* memSemantic = relaxed memSyncScope = gpu", asm)) == 1
+    assert len(re.findall("store .* memSemantic = relaxed memSyncScope = gpu", asm)) == 1
 
-    assert len(re.findall("atomic_load .*, memSemantic = relaxed, memSyncScope = cta", asm)) == 1
-    assert len(re.findall("atomic_store .*, memSemantic = relaxed, memSyncScope = cta", asm)) == 1
+    assert len(re.findall("load .* memSemantic = relaxed memSyncScope = cta", asm)) == 1
+    assert len(re.findall("store .* memSemantic = relaxed memSyncScope = cta", asm)) == 1
 
-    assert len(re.findall("atomic_load .*, memSemantic = relaxed, memSyncScope = sys", asm)) == 1
-    assert len(re.findall("atomic_store .*, memSemantic = relaxed, memSyncScope = sys", asm)) == 1
+    assert len(re.findall("load .* memSemantic = relaxed memSyncScope = sys", asm)) == 1
+    assert len(re.findall("store .* memSemantic = relaxed memSyncScope = sys", asm)) == 1
 
     asm = out.asm['ptx']
     assert len(re.findall("ld.global.gpu.acquire", asm)) == 1

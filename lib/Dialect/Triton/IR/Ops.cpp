@@ -87,7 +87,25 @@ void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
           : PaddingOptionAttr();
   LoadOp::build(builder, state, ptr, mask, other,
                 builder.getDenseI32ArrayAttr(boundaryCheck), paddingAttr, cache,
-                evict, isVolatile);
+                evict, isVolatile, MemSemanticAttr(), MemSyncScopeAttr());
+}
+
+void LoadOp::build(OpBuilder &builder, OperationState &state, Type resultType,
+                   Value ptr, Value mask, Value other,
+                   ArrayRef<int32_t> boundaryCheck, PaddingOptionAttr padding,
+                   CacheModifier cache, EvictionPolicy evict, bool isVolatile) {
+  LoadOp::build(builder, state, resultType, ptr, mask, other,
+                builder.getDenseI32ArrayAttr(boundaryCheck), padding, cache,
+                evict, isVolatile, MemSemanticAttr(), MemSyncScopeAttr());
+}
+
+void LoadOp::build(OpBuilder &builder, OperationState &state, Value ptr,
+                   Value mask, Value other, ArrayRef<int32_t> boundaryCheck,
+                   PaddingOptionAttr padding, CacheModifier cache,
+                   EvictionPolicy evict, bool isVolatile) {
+  LoadOp::build(builder, state, ptr, mask, other,
+                builder.getDenseI32ArrayAttr(boundaryCheck), padding, cache,
+                evict, isVolatile, MemSemanticAttr(), MemSyncScopeAttr());
 }
 
 // load(ptr, splat(1), ...)        -> load(ptr, ...)
@@ -139,14 +157,15 @@ void LoadOp::getCanonicalizationPatterns(RewritePatternSet &results,
 void StoreOp::build(OpBuilder &builder, OperationState &state, Value ptr,
                     Value value, CacheModifier cache, EvictionPolicy evict) {
   return StoreOp::build(builder, state, ptr, value, /*mask=*/{},
-                        /*boundaryCheck=*/{}, cache, evict);
+                        /*boundaryCheck=*/{}, cache, evict, MemSemanticAttr(),
+                        MemSyncScopeAttr());
 }
 
 void StoreOp::build(OpBuilder &builder, OperationState &state, Value ptr,
                     Value value, Value mask, CacheModifier cache,
                     EvictionPolicy evict) {
   return StoreOp::build(builder, state, ptr, value, mask, /*boundaryCheck=*/{},
-                        cache, evict);
+                        cache, evict, MemSemanticAttr(), MemSyncScopeAttr());
 }
 
 void StoreOp::build(OpBuilder &builder, OperationState &state, Value ptr,
@@ -154,7 +173,7 @@ void StoreOp::build(OpBuilder &builder, OperationState &state, Value ptr,
                     CacheModifier cache, EvictionPolicy evict) {
   return StoreOp::build(builder, state, ptr, value, /*mask=*/{},
                         builder.getDenseI32ArrayAttr(boundaryCheck), cache,
-                        evict);
+                        evict, MemSemanticAttr(), MemSyncScopeAttr());
 }
 
 // store(ptr, value, splat(1), ...) -> store(ptr, value, ...)
@@ -195,14 +214,45 @@ void StoreOp::getCanonicalizationPatterns(RewritePatternSet &results,
   results.add<CanonicalizeMaskedStorePattern>(context);
 }
 
+// atomic_load(ptr, ..., sem, scope) -> load(ptr, ..., sem, scope)
+struct CanonicalizeAtomicLoadPattern : public OpRewritePattern<AtomicLoadOp> {
+  CanonicalizeAtomicLoadPattern(MLIRContext *context)
+      : OpRewritePattern<AtomicLoadOp>(context, 1) {}
+
+  LogicalResult matchAndRewrite(AtomicLoadOp op,
+                                PatternRewriter &rewriter) const override {
+    auto loadOp = rewriter.replaceOpWithNewOp<LoadOp>(
+        op, op.getPtr(), op.getMask(), op.getOther(), op.getCache(),
+        op.getEvict(), op.getIsVolatile());
+    loadOp.setSemAttr(op.getSemAttr());
+    loadOp.setScopeAttr(op.getScopeAttr());
+    return success();
+  }
+};
+
+// atomic_store(..., sem, scope) -> store(..., sem, scope)
+struct CanonicalizeAtomicStorePattern : public OpRewritePattern<AtomicStoreOp> {
+  CanonicalizeAtomicStorePattern(MLIRContext *context)
+      : OpRewritePattern<AtomicStoreOp>(context, 1) {}
+
+  LogicalResult matchAndRewrite(AtomicStoreOp op,
+                                PatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<StoreOp>(
+        op, op.getPtr(), op.getValue(), op.getMask(),
+        /*boundaryCheck=*/ArrayRef<int32_t>{}, op.getCache(), op.getEvict(),
+        op.getSemAttr(), op.getScopeAttr());
+    return success();
+  }
+};
+
 void AtomicLoadOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                                MLIRContext *context) {
-  results.add<CanonicalizeMaskedLoadPattern>(context);
+  results.add<CanonicalizeAtomicLoadPattern>(context);
 }
 
 void AtomicStoreOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                                 MLIRContext *context) {
-  results.add<CanonicalizeMaskedStorePattern>(context);
+  results.add<CanonicalizeAtomicStorePattern>(context);
 }
 
 //-- TransOp --
