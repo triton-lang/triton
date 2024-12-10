@@ -314,7 +314,7 @@ class HIPBackend(BaseBackend):
         llvm_mod = llvm.to_module(mod, context)
         amd.attach_target_triple(llvm_mod)
         target_features = ''
-        if os.environ.get("TRITON_ENABLE_ADDRESS_SANITIZER", "0") == "1":
+        if os.environ.get("TRITON_ENABLE_ASAN", "0") == "1":
             target_features = '+xnack'
         llvm.attach_datalayout(llvm_mod, amd.TARGET_TRIPLE, options.arch, target_features)
 
@@ -341,7 +341,7 @@ class HIPBackend(BaseBackend):
         # from memory.
         amd.set_all_fn_arg_inreg(fns[0])
 
-        if os.environ.get("TRITON_ENABLE_ADDRESS_SANITIZER", "0") == "1":
+        if os.environ.get("TRITON_ENABLE_ASAN", "0") == "1":
             default_libdir = Path(__file__).parent / 'lib'
             paths = [
                 str(default_libdir / 'asanrtl.bc'),
@@ -382,7 +382,7 @@ class HIPBackend(BaseBackend):
     @staticmethod
     def make_hsaco(src, metadata, options):
         target_features = ''
-        if os.environ.get("TRITON_ENABLE_ADDRESS_SANITIZER", "0") == "1":
+        if os.environ.get("TRITON_ENABLE_ASAN", "0") == "1":
             target_features = '+xnack'
         hsaco = amd.assemble_amdgcn(src, options.arch, target_features)
 
