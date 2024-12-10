@@ -169,7 +169,7 @@ more than 10\% on some hardware architecture (e.g., 220 to 245 TFLOPS on A100).
 Final Result
 ------------
 
-.. GENERATED FROM PYTHON SOURCE LINES 151-325
+.. GENERATED FROM PYTHON SOURCE LINES 151-327
 
 .. code-block:: Python
 
@@ -178,6 +178,8 @@ Final Result
 
     import triton
     import triton.language as tl
+
+    DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
 
     def is_cuda():
@@ -354,12 +356,12 @@ Final Result
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 326-328
+.. GENERATED FROM PYTHON SOURCE LINES 328-330
 
 We can now create a convenience wrapper function that only takes two input tensors,
 and (1) checks any shape constraint; (2) allocates the output; (3) launches the above kernel.
 
-.. GENERATED FROM PYTHON SOURCE LINES 328-351
+.. GENERATED FROM PYTHON SOURCE LINES 330-353
 
 .. code-block:: Python
 
@@ -393,21 +395,21 @@ and (1) checks any shape constraint; (2) allocates the output; (3) launches the 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 352-356
+.. GENERATED FROM PYTHON SOURCE LINES 354-358
 
 Unit Test
 ---------
 
 We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS).
 
-.. GENERATED FROM PYTHON SOURCE LINES 356-391
+.. GENERATED FROM PYTHON SOURCE LINES 358-393
 
 .. code-block:: Python
 
 
     torch.manual_seed(0)
-    a = torch.randn((512, 512), device='cuda', dtype=torch.float16)
-    b = torch.randn((512, 512), device='cuda', dtype=torch.float16)
+    a = torch.randn((512, 512), device=DEVICE, dtype=torch.float16)
+    b = torch.randn((512, 512), device=DEVICE, dtype=torch.float16)
     triton_output = matmul(a, b)
     torch_output = torch.matmul(a, b)
     print(f"triton_output_with_fp16_inputs={triton_output}")
@@ -424,8 +426,8 @@ We can test our custom matrix multiplication operation against a native torch im
     TORCH_HAS_FP8 = hasattr(torch, "float8_e5m2")
     if TORCH_HAS_FP8 and is_cuda():
         torch.manual_seed(0)
-        a = torch.randn((512, 512), device="cuda", dtype=torch.float16)
-        b = torch.randn((512, 512), device="cuda", dtype=torch.float16)
+        a = torch.randn((512, 512), device=DEVICE, dtype=torch.float16)
+        b = torch.randn((512, 512), device=DEVICE, dtype=torch.float16)
         a = a.to(torch.float8_e5m2)
         # pre-transpose b for efficiency.
         b = b.T
@@ -485,7 +487,7 @@ We can test our custom matrix multiplication operation against a native torch im
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 392-400
+.. GENERATED FROM PYTHON SOURCE LINES 394-402
 
 Benchmark
 ---------
@@ -496,7 +498,7 @@ Square Matrix Performance
 We can now compare the performance of our kernel against that of cuBLAS or rocBLAS. Here we focus on square matrices,
 but feel free to arrange this script as you wish to benchmark any other matrix shape.
 
-.. GENERATED FROM PYTHON SOURCE LINES 400-442
+.. GENERATED FROM PYTHON SOURCE LINES 402-444
 
 .. code-block:: Python
 
@@ -526,8 +528,8 @@ but feel free to arrange this script as you wish to benchmark any other matrix s
 
     @triton.testing.perf_report(configs)
     def benchmark(M, N, K, provider, fp8_inputs):
-        a = torch.randn((M, K), device='cuda', dtype=torch.float16)
-        b = torch.randn((K, N), device='cuda', dtype=torch.float16)
+        a = torch.randn((M, K), device=DEVICE, dtype=torch.float16)
+        b = torch.randn((K, N), device=DEVICE, dtype=torch.float16)
         if TORCH_HAS_FP8 and fp8_inputs:
             a = a.to(torch.float8_e5m2)
             b = b.T
@@ -570,69 +572,69 @@ but feel free to arrange this script as you wish to benchmark any other matrix s
     matmul-performance-fp16:
              M       N       K      cuBLAS      Triton
     0    256.0   256.0   256.0    4.096000    4.096000
-    1    384.0   384.0   384.0   11.059200   12.288000
+    1    384.0   384.0   384.0   12.288000   12.288000
     2    512.0   512.0   512.0   26.214401   26.214401
     3    640.0   640.0   640.0   42.666665   42.666665
     4    768.0   768.0   768.0   63.195428   68.056616
     5    896.0   896.0   896.0   78.051553   93.661869
     6   1024.0  1024.0  1024.0  110.376426   99.864382
     7   1152.0  1152.0  1152.0  135.726544  129.825388
-    8   1280.0  1280.0  1280.0  157.538463  163.840004
+    8   1280.0  1280.0  1280.0  163.840004  163.840004
     9   1408.0  1408.0  1408.0  151.438217  132.970149
     10  1536.0  1536.0  1536.0  176.947204  157.286398
-    11  1664.0  1664.0  1664.0  183.651271  179.978245
-    12  1792.0  1792.0  1792.0  170.294302  204.353162
+    11  1664.0  1664.0  1664.0  179.978245  176.449258
+    12  1792.0  1792.0  1792.0  172.914215  204.353162
     13  1920.0  1920.0  1920.0  197.485709  168.585369
     14  2048.0  2048.0  2048.0  226.719125  192.841562
-    15  2176.0  2176.0  2176.0  209.621326  211.827867
-    16  2304.0  2304.0  2304.0  231.921091  227.503545
-    17  2432.0  2432.0  2432.0  203.583068  203.583068
-    18  2560.0  2560.0  2560.0  224.438347  217.006622
-    19  2688.0  2688.0  2688.0  195.531224  200.704002
-    20  2816.0  2816.0  2816.0  212.752230  210.696652
-    21  2944.0  2944.0  2944.0  218.579083  225.502413
-    22  3072.0  3072.0  3072.0  208.173173  212.868821
-    23  3200.0  3200.0  3200.0  215.488222  216.216207
-    24  3328.0  3328.0  3328.0  207.467716  209.277023
-    25  3456.0  3456.0  3456.0  217.308808  216.724640
-    26  3584.0  3584.0  3584.0  220.380867  207.656790
-    27  3712.0  3712.0  3712.0  211.199462  217.878613
-    28  3840.0  3840.0  3840.0  211.456969  211.456969
-    29  3968.0  3968.0  3968.0  208.231980  212.215536
-    30  4096.0  4096.0  4096.0  219.310012  221.847481
+    15  2176.0  2176.0  2176.0  211.827867  211.827867
+    16  2304.0  2304.0  2304.0  229.691080  229.691080
+    17  2432.0  2432.0  2432.0  205.069087  202.118452
+    18  2560.0  2560.0  2560.0  225.986210  221.405396
+    19  2688.0  2688.0  2688.0  199.647657  199.647657
+    20  2816.0  2816.0  2816.0  212.752230  212.752230
+    21  2944.0  2944.0  2944.0  218.579083  224.486628
+    22  3072.0  3072.0  3072.0  208.173173  214.481453
+    23  3200.0  3200.0  3200.0  218.430042  218.430042
+    24  3328.0  3328.0  3328.0  208.067338  211.118166
+    25  3456.0  3456.0  3456.0  216.143621  215.565692
+    26  3584.0  3584.0  3584.0  219.305830  213.069643
+    27  3712.0  3712.0  3712.0  211.646909  218.116474
+    28  3840.0  3840.0  3840.0  208.664143  209.454544
+    29  3968.0  3968.0  3968.0  210.749463  217.511464
+    30  4096.0  4096.0  4096.0  219.310012  220.029067
     matmul-performance-fp8:
              M       N       K      Triton
     0    256.0   256.0   256.0    4.096000
     1    384.0   384.0   384.0   12.288000
     2    512.0   512.0   512.0   29.127110
-    3    640.0   640.0   640.0   51.200001
+    3    640.0   640.0   640.0   46.545454
     4    768.0   768.0   768.0   58.982401
     5    896.0   896.0   896.0   87.808000
     6   1024.0  1024.0  1024.0   99.864382
-    7   1152.0  1152.0  1152.0  129.825388
+    7   1152.0  1152.0  1152.0  124.415996
     8   1280.0  1280.0  1280.0  146.285712
     9   1408.0  1408.0  1408.0  143.467796
     10  1536.0  1536.0  1536.0  160.861090
     11  1664.0  1664.0  1664.0  157.875646
     12  1792.0  1792.0  1792.0  181.281035
     13  1920.0  1920.0  1920.0  170.666670
-    14  2048.0  2048.0  2048.0  195.083907
+    14  2048.0  2048.0  2048.0  192.841562
     15  2176.0  2176.0  2176.0  186.330074
     16  2304.0  2304.0  2304.0  205.929926
-    17  2432.0  2432.0  2432.0  200.674737
+    17  2432.0  2432.0  2432.0  199.251522
     18  2560.0  2560.0  2560.0  203.527946
-    19  2688.0  2688.0  2688.0  195.531224
-    20  2816.0  2816.0  2816.0  209.180852
-    21  2944.0  2944.0  2944.0  205.086550
-    22  3072.0  3072.0  3072.0  202.950194
+    19  2688.0  2688.0  2688.0  193.536006
+    20  2816.0  2816.0  2816.0  205.727397
+    21  2944.0  2944.0  2944.0  202.585487
+    22  3072.0  3072.0  3072.0  205.156169
     23  3200.0  3200.0  3200.0  202.531652
-    24  3328.0  3328.0  3328.0  203.365249
-    25  3456.0  3456.0  3456.0  202.059062
-    26  3584.0  3584.0  3584.0  203.428493
-    27  3712.0  3712.0  3712.0  203.043373
-    28  3840.0  3840.0  3840.0  202.549441
-    29  3968.0  3968.0  3968.0  204.395201
-    30  4096.0  4096.0  4096.0  211.699888
+    24  3328.0  3328.0  3328.0  201.093011
+    25  3456.0  3456.0  3456.0  200.551162
+    26  3584.0  3584.0  3584.0  202.969283
+    27  3712.0  3712.0  3712.0  203.456907
+    28  3840.0  3840.0  3840.0  204.800008
+    29  3968.0  3968.0  3968.0  206.295742
+    30  4096.0  4096.0  4096.0  213.044005
 
 
 
@@ -640,7 +642,7 @@ but feel free to arrange this script as you wish to benchmark any other matrix s
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (2 minutes 15.567 seconds)
+   **Total running time of the script:** (2 minutes 18.116 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_03-matrix-multiplication.py:

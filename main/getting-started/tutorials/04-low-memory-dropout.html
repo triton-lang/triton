@@ -145,6 +145,8 @@ keeps the norm consistent regardless of the dropout probability.</p>
 <span class="kn">import</span> <span class="nn">triton</span>
 <span class="kn">import</span> <span class="nn">triton.language</span> <span class="k">as</span> <span class="nn">tl</span>
 
+<span class="n">DEVICE</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">get_active_torch_device</span><span class="p">()</span>
+
 
 <span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
 <span class="k">def</span> <span class="nf">_dropout</span><span class="p">(</span>
@@ -178,10 +180,10 @@ keeps the norm consistent regardless of the dropout probability.</p>
 
 
 <span class="c1"># Input tensor</span>
-<span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">size</span><span class="o">=</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="p">))</span><span class="o">.</span><span class="n">cuda</span><span class="p">()</span>
+<span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">size</span><span class="o">=</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">)</span>
 <span class="c1"># Dropout mask</span>
 <span class="n">p</span> <span class="o">=</span> <span class="mf">0.5</span>
-<span class="n">x_keep</span> <span class="o">=</span> <span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">size</span><span class="o">=</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="p">))</span> <span class="o">&gt;</span> <span class="n">p</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">)</span><span class="o">.</span><span class="n">cuda</span><span class="p">()</span>
+<span class="n">x_keep</span> <span class="o">=</span> <span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="n">size</span><span class="o">=</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">)</span> <span class="o">&gt;</span> <span class="n">p</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">)</span>
 <span class="c1">#</span>
 <span class="n">output</span> <span class="o">=</span> <span class="n">dropout</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">x_keep</span><span class="o">=</span><span class="n">x_keep</span><span class="p">,</span> <span class="n">p</span><span class="o">=</span><span class="n">p</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="n">tabulate</span><span class="o">.</span><span class="n">tabulate</span><span class="p">([</span>
@@ -193,11 +195,11 @@ keeps the norm consistent regardless of the dropout probability.</p>
 </div>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>/home/runner/_work/triton/triton/python/triton/language/semantic.py:1608: UserWarning: tl.where with a non-boolean condition is deprecated and will error out in a future triton release. Got int32
   warnings.warn(
----------  -------  ---------  --------  --------  --------  --------  --------  --------  ---------  ---------
-input      1.541    -0.293429  -2.17879  0.568431  -1.08452  -1.3986   0.403347  0.838026  -0.719258  -0.403344
-keep mask  1         1          0        1          0         1        1         0          0          0
-output     3.08199  -0.586858   0        1.13686    0        -2.79719  0.806694  0          0          0
----------  -------  ---------  --------  --------  --------  --------  --------  --------  ---------  ---------
+---------  ---------  -------  --------  -------  --------  -------  ---------  --------  --------  -------
+input      -0.940469  0.17792  0.529538  0.13197  0.135063  1.64092  -0.309264  0.618883  -1.53066  0.46037
+keep mask   0         0        0         0        0         1         0         0          1        1
+output      0         0        0         0        0         3.28183   0         0         -3.06132  0.92074
+---------  ---------  -------  --------  -------  --------  -------  ---------  --------  --------  -------
 </pre></div>
 </div>
 </section>
@@ -251,7 +253,7 @@ other <a class="reference internal" href="../../python-api/triton.language.html#
     <span class="k">return</span> <span class="n">output</span>
 
 
-<span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">size</span><span class="o">=</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="p">))</span><span class="o">.</span><span class="n">cuda</span><span class="p">()</span>
+<span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">size</span><span class="o">=</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">)</span>
 <span class="c1"># Compare this to the baseline - dropout mask is never instantiated!</span>
 <span class="n">output</span> <span class="o">=</span> <span class="n">seeded_dropout</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">p</span><span class="o">=</span><span class="mf">0.5</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">123</span><span class="p">)</span>
 <span class="n">output2</span> <span class="o">=</span> <span class="n">seeded_dropout</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">p</span><span class="o">=</span><span class="mf">0.5</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">123</span><span class="p">)</span>
@@ -266,12 +268,12 @@ other <a class="reference internal" href="../../python-api/triton.language.html#
     <span class="p">]))</span>
 </pre></div>
 </div>
-<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>-------------------  ---------  --------  --------  -------  --------  --------  ---------  ---------  ---------  ---------
-input                -0.952835  0.371721  0.408716  1.42142  0.149397  -0.67086  -0.214186  -0.431969  -0.707878  -0.106434
-output (seed = 123)   0         0.743443  0         0        0         -1.34172   0          0         -1.41576   -0.212868
-output (seed = 123)   0         0.743443  0         0        0         -1.34172   0          0         -1.41576   -0.212868
-output (seed = 512)   0         0         0.817432  2.84284  0         -1.34172  -0.428372   0          0          0
--------------------  ---------  --------  --------  -------  --------  --------  ---------  ---------  ---------  ---------
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>-------------------  -------  ---------  ---------  -------  --------  --------  -------  --------  -------  ---------
+input                1.48333  -0.239537  -0.640795  1.62631  0.263036  -0.71516  1.99474  -1.09546  1.81107  -0.170083
+output (seed = 123)  0        -0.479074   0         0        0         -1.43032  0         0        3.62215  -0.340165
+output (seed = 123)  0        -0.479074   0         0        0         -1.43032  0         0        3.62215  -0.340165
+output (seed = 512)  0         0         -1.28159   3.25261  0         -1.43032  3.98947   0        0         0
+-------------------  -------  ---------  ---------  -------  --------  --------  -------  --------  -------  ---------
 </pre></div>
 </div>
 <p>Et Voilà! We have a triton kernel that applies the same dropout mask provided the seed is the same!
@@ -298,7 +300,7 @@ to explore the <cite>python/triton/language/random.py</cite>!</p>
 <p>Nitish Srivastava and Geoffrey Hinton and Alex Krizhevsky and Ilya Sutskever and Ruslan Salakhutdinov, “Dropout: A Simple Way to Prevent Neural Networks from Overfitting”, JMLR 2014</p>
 </div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 0.738 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 0.786 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-04-low-memory-dropout-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/bc847dec325798bdc436c4ef5ac8b78a/04-low-memory-dropout.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">04-low-memory-dropout.ipynb</span></code></a></p>

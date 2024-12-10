@@ -137,6 +137,8 @@ Let us consider instead the case of a simple (numerically stabilized) softmax op
 <span class="kn">import</span> <span class="nn">triton.language</span> <span class="k">as</span> <span class="nn">tl</span>
 <span class="kn">from</span> <span class="nn">triton.runtime</span> <span class="kn">import</span> <span class="n">driver</span>
 
+<span class="n">DEVICE</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">get_active_torch_device</span><span class="p">()</span>
+
 
 <span class="k">def</span> <span class="nf">is_hip</span><span class="p">():</span>
     <span class="k">return</span> <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">get_current_target</span><span class="p">()</span><span class="o">.</span><span class="n">backend</span> <span class="o">==</span> <span class="s2">&quot;hip&quot;</span>
@@ -212,8 +214,7 @@ memory operations properly if we want to handle any possible input shapes:</p>
 </pre></div>
 </div>
 <p>We can create a helper function that enqueues the kernel and its (meta-)arguments for any given input tensor.</p>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">device</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">current_device</span><span class="p">()</span>
-<span class="n">properties</span> <span class="o">=</span> <span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">utils</span><span class="o">.</span><span class="n">get_device_properties</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">properties</span> <span class="o">=</span> <span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">utils</span><span class="o">.</span><span class="n">get_device_properties</span><span class="p">(</span><span class="n">DEVICE</span><span class="o">.</span><span class="n">index</span><span class="p">)</span>
 <span class="n">NUM_SM</span> <span class="o">=</span> <span class="n">properties</span><span class="p">[</span><span class="s2">&quot;multiprocessor_count&quot;</span><span class="p">]</span>
 <span class="n">NUM_REGS</span> <span class="o">=</span> <span class="n">properties</span><span class="p">[</span><span class="s2">&quot;max_num_regs&quot;</span><span class="p">]</span>
 <span class="n">SIZE_SMEM</span> <span class="o">=</span> <span class="n">properties</span><span class="p">[</span><span class="s2">&quot;max_shared_mem&quot;</span><span class="p">]</span>
@@ -288,7 +289,7 @@ memory operations properly if we want to handle any possible input shapes:</p>
 <p>We make sure that we test our kernel on a matrix with an irregular number of rows and columns.
 This will allow us to verify that our padding mechanism works.</p>
 <div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
-<span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">1823</span><span class="p">,</span> <span class="mi">781</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s1">&#39;cuda&#39;</span><span class="p">)</span>
+<span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">1823</span><span class="p">,</span> <span class="mi">781</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">)</span>
 <span class="n">y_triton</span> <span class="o">=</span> <span class="n">softmax</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
 <span class="n">y_torch</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">softmax</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
 <span class="k">assert</span> <span class="n">torch</span><span class="o">.</span><span class="n">allclose</span><span class="p">(</span><span class="n">y_triton</span><span class="p">,</span> <span class="n">y_torch</span><span class="p">),</span> <span class="p">(</span><span class="n">y_triton</span><span class="p">,</span> <span class="n">y_torch</span><span class="p">)</span>
@@ -316,9 +317,9 @@ We will then compare its performance against (1) <code class="code docutils lite
         <span class="n">args</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;M&#39;</span><span class="p">:</span> <span class="mi">4096</span><span class="p">},</span>  <span class="c1"># values for function arguments not in `x_names` and `y_name`</span>
     <span class="p">))</span>
 <span class="k">def</span> <span class="nf">benchmark</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">provider</span><span class="p">):</span>
-    <span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s1">&#39;cuda&#39;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
-    <span class="n">stream</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">Stream</span><span class="p">()</span>
-    <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">set_stream</span><span class="p">(</span><span class="n">stream</span><span class="p">)</span>
+    <span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+    <span class="n">stream</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">torch</span><span class="p">,</span> <span class="n">DEVICE</span><span class="o">.</span><span class="n">type</span><span class="p">)</span><span class="o">.</span><span class="n">Stream</span><span class="p">()</span>
+    <span class="nb">getattr</span><span class="p">(</span><span class="n">torch</span><span class="p">,</span> <span class="n">DEVICE</span><span class="o">.</span><span class="n">type</span><span class="p">)</span><span class="o">.</span><span class="n">set_stream</span><span class="p">(</span><span class="n">stream</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">provider</span> <span class="o">==</span> <span class="s1">&#39;torch&#39;</span><span class="p">:</span>
         <span class="n">ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">softmax</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">))</span>
     <span class="k">if</span> <span class="n">provider</span> <span class="o">==</span> <span class="s1">&#39;triton&#39;</span><span class="p">:</span>
@@ -332,104 +333,104 @@ We will then compare its performance against (1) <code class="code docutils lite
 </div>
 <img src="../../_images/sphx_glr_02-fused-softmax_001.png" srcset="../../_images/sphx_glr_02-fused-softmax_001.png" alt="02 fused softmax" class = "sphx-glr-single-img"/><div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>softmax-performance:
           N       Triton        Torch
-0     256.0   482.689491   696.160317
-1     384.0   618.384405   820.625658
-2     512.0   753.564902   930.142759
-3     640.0   813.264576   965.651656
-4     768.0   898.147093  1030.258754
-5     896.0   944.953184  1066.856415
-6    1024.0  1010.701309  1116.615874
-7    1152.0  1109.736593   610.166245
-8    1280.0  1139.074211   669.043134
-9    1408.0  1155.393640   721.242316
-10   1536.0  1184.330843   779.268445
-11   1664.0  1218.737417   816.850173
-12   1792.0  1243.150879   854.564923
-13   1920.0  1256.185337   903.811007
-14   2048.0  1278.913062   958.176398
-15   2176.0  1256.583892   971.385304
-16   2304.0  1267.857391  1013.165844
-17   2432.0  1293.814644  1054.965680
-18   2560.0  1308.128636  1087.702304
-19   2688.0  1315.952528  1105.091766
-20   2816.0  1330.100432  1128.827264
-21   2944.0  1327.869423  1169.785266
-22   3072.0  1349.389778  1183.582179
-23   3200.0  1352.900611  1195.319370
-24   3328.0  1362.243368  1220.946252
-25   3456.0  1369.374241  1249.149613
-26   3584.0  1375.552340  1257.334969
-27   3712.0  1382.340225  1266.381630
-28   3840.0  1384.891743  1298.028129
-29   3968.0  1386.154094  1315.064365
-30   4096.0  1395.768631  1322.643742
-31   4224.0  1333.376431  1156.992575
-32   4352.0  1333.465221  1177.227004
-33   4480.0  1351.102062  1182.026014
-34   4608.0  1364.885615  1192.064521
-35   4736.0  1360.942380  1200.163010
-36   4864.0  1376.538253  1220.889896
-37   4992.0  1374.184797  1238.297714
-38   5120.0  1372.539739  1253.050862
-39   5248.0  1376.752960  1259.903625
-40   5376.0  1373.376778  1283.934933
-41   5504.0  1381.348511  1296.086978
-42   5632.0  1389.542007  1311.775377
-43   5760.0  1393.873668  1323.496250
-44   5888.0  1388.774215  1343.554720
-45   6016.0  1399.283897  1352.800190
-46   6144.0  1406.543558  1374.938789
-47   6272.0  1417.506147  1373.712480
-48   6400.0  1419.274936  1387.192208
-49   6528.0  1413.412093  1392.582652
-50   6656.0  1423.045765  1405.601393
-51   6784.0  1416.336553  1412.768594
-52   6912.0  1427.629778  1424.502682
-53   7040.0  1423.615620  1432.623174
-54   7168.0  1429.193565  1433.196868
-55   7296.0  1429.557095  1443.569086
-56   7424.0  1429.662834  1446.679033
-57   7552.0  1427.367831  1456.177564
-58   7680.0  1434.812199  1459.828467
-59   7808.0  1435.072488  1466.798498
-60   7936.0  1439.042286  1468.676122
-61   8064.0  1439.381706  1473.218759
-62   8192.0  1435.566722  1485.775545
-63   8320.0  1385.070035  1405.728127
-64   8448.0  1380.053689  1404.897368
-65   8576.0  1398.264564  1395.461186
-66   8704.0  1389.044803  1400.606248
-67   8832.0  1384.480196  1402.743796
-68   8960.0  1399.076362  1412.386637
-69   9088.0  1409.969724  1418.380518
-70   9216.0  1403.474589  1421.055204
-71   9344.0  1398.779003  1423.517080
-72   9472.0  1400.717218  1429.207574
-73   9600.0  1394.578418  1434.840797
-74   9728.0  1397.962092  1441.260433
-75   9856.0  1413.702856  1440.818910
-76   9984.0  1397.986330  1451.504817
-77  10112.0  1414.411491  1453.656833
-78  10240.0  1419.367116  1468.654301
-79  10368.0  1413.614946  1462.075459
-80  10496.0  1412.926478  1467.512844
-81  10624.0  1410.436210  1466.420297
-82  10752.0  1410.364352  1471.829907
-83  10880.0  1404.634359  1483.825593
-84  11008.0  1420.874680  1476.493943
-85  11136.0  1420.044784  1486.398400
-86  11264.0  1430.106755  1485.841498
-87  11392.0  1422.471300  1489.928118
-88  11520.0  1426.335157  1495.337268
-89  11648.0  1426.970163  1496.907207
-90  11776.0  1432.439143  1501.650806
-91  11904.0  1441.065285  1504.107602
-92  12032.0  1421.296177  1506.309105
-93  12160.0  1417.477469  1510.876782
-94  12288.0  1435.562909  1392.136786
-95  12416.0  1444.126565  1393.192471
-96  12544.0  1442.885171  1394.347410
-97  12672.0  1447.002584  1394.623517
+0     256.0   483.187427   694.500502
+1     384.0   610.393886   822.240371
+2     512.0   751.350412   917.674700
+3     640.0   822.495894   952.969328
+4     768.0   888.045562  1013.425244
+5     896.0   942.154254  1067.047728
+6    1024.0  1003.825671  1124.037377
+7    1152.0  1105.836470   613.816668
+8    1280.0  1145.235607   669.919401
+9    1408.0  1167.265350   728.619904
+10   1536.0  1188.025628   780.139036
+11   1664.0  1213.682882   814.356991
+12   1792.0  1233.229934   862.687721
+13   1920.0  1246.673202   905.872140
+14   2048.0  1274.938730   954.338175
+15   2176.0  1266.720896   977.440195
+16   2304.0  1266.436428  1011.419169
+17   2432.0  1299.427429  1053.816735
+18   2560.0  1300.414041  1083.326581
+19   2688.0  1311.975375  1104.411736
+20   2816.0  1325.083296  1127.681438
+21   2944.0  1321.548497  1168.188113
+22   3072.0  1355.710589  1188.795197
+23   3200.0  1358.490683  1192.151484
+24   3328.0  1361.201363  1226.389817
+25   3456.0  1370.291126  1251.568201
+26   3584.0  1379.134880  1258.893257
+27   3712.0  1383.537252  1267.233989
+28   3840.0  1389.862729  1303.267688
+29   3968.0  1392.106951  1316.598397
+30   4096.0  1400.757944  1323.820796
+31   4224.0  1338.055499  1156.313834
+32   4352.0  1335.105058  1175.027748
+33   4480.0  1355.398171  1185.639541
+34   4608.0  1363.187905  1198.243031
+35   4736.0  1361.103703  1196.598710
+36   4864.0  1376.020182  1218.787555
+37   4992.0  1370.362619  1237.782914
+38   5120.0  1373.320903  1252.900686
+39   5248.0  1374.405903  1257.499088
+40   5376.0  1377.567922  1285.170192
+41   5504.0  1378.061591  1295.862592
+42   5632.0  1385.018792  1316.773672
+43   5760.0  1395.997812  1324.300346
+44   5888.0  1391.229813  1346.177088
+45   6016.0  1404.072773  1357.570531
+46   6144.0  1410.170988  1372.780110
+47   6272.0  1417.037197  1374.655693
+48   6400.0  1417.268980  1388.723905
+49   6528.0  1416.961461  1392.494712
+50   6656.0  1421.767131  1401.494268
+51   6784.0  1416.287608  1413.158033
+52   6912.0  1423.072160  1423.116795
+53   7040.0  1420.890132  1433.533348
+54   7168.0  1426.479778  1436.679424
+55   7296.0  1435.510512  1443.499601
+56   7424.0  1427.425536  1445.349191
+57   7552.0  1424.500152  1452.296253
+58   7680.0  1433.420736  1458.159291
+59   7808.0  1435.515098  1466.118653
+60   7936.0  1439.936849  1470.477707
+61   8064.0  1439.065621  1475.072640
+62   8192.0  1436.231810  1484.837095
+63   8320.0  1387.641869  1401.316561
+64   8448.0  1380.637274  1403.005902
+65   8576.0  1394.503821  1396.522238
+66   8704.0  1391.170003  1400.023218
+67   8832.0  1381.904285  1405.985403
+68   8960.0  1399.078647  1411.788538
+69   9088.0  1407.165394  1414.602106
+70   9216.0  1406.673891  1423.340914
+71   9344.0  1398.258525  1424.935357
+72   9472.0  1403.492331  1430.039169
+73   9600.0  1396.110875  1432.644828
+74   9728.0  1402.824932  1442.536521
+75   9856.0  1418.301887  1441.331244
+76   9984.0  1400.410713  1449.858910
+77  10112.0  1408.493209  1458.199122
+78  10240.0  1421.732695  1470.296306
+79  10368.0  1413.792805  1462.732820
+80  10496.0  1418.558836  1464.733490
+81  10624.0  1409.038483  1469.577033
+82  10752.0  1404.812439  1473.042505
+83  10880.0  1401.848631  1478.488438
+84  11008.0  1419.006114  1480.623751
+85  11136.0  1423.484970  1488.013047
+86  11264.0  1435.488602  1486.956723
+87  11392.0  1412.089358  1492.087035
+88  11520.0  1425.356869  1492.022281
+89  11648.0  1426.905933  1497.500906
+90  11776.0  1432.500950  1500.702426
+91  11904.0  1444.741491  1506.830214
+92  12032.0  1429.239048  1508.630297
+93  12160.0  1418.085309  1510.588805
+94  12288.0  1434.802630  1389.804998
+95  12416.0  1449.947587  1389.554633
+96  12544.0  1442.208335  1392.049976
+97  12672.0  1451.309844  1392.387172
 </pre></div>
 </div>
 <dl class="simple">
@@ -440,7 +441,7 @@ Note however that the PyTorch <cite>softmax</cite> operation is more general and
 </ul>
 </dd>
 </dl>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 23.119 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 23.095 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-02-fused-softmax-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/034d953b6214fedce6ea03803c712b89/02-fused-softmax.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">02-fused-softmax.ipynb</span></code></a></p>

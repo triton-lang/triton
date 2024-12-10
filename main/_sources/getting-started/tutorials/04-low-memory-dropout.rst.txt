@@ -50,7 +50,7 @@ keeps the norm consistent regardless of the dropout probability.
 
 Let's first take a look at the baseline implementation.
 
-.. GENERATED FROM PYTHON SOURCE LINES 34-86
+.. GENERATED FROM PYTHON SOURCE LINES 34-88
 
 .. code-block:: Python
 
@@ -60,6 +60,8 @@ Let's first take a look at the baseline implementation.
 
     import triton
     import triton.language as tl
+
+    DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
 
     @triton.jit
@@ -94,10 +96,10 @@ Let's first take a look at the baseline implementation.
 
 
     # Input tensor
-    x = torch.randn(size=(10, )).cuda()
+    x = torch.randn(size=(10, ), device=DEVICE)
     # Dropout mask
     p = 0.5
-    x_keep = (torch.rand(size=(10, )) > p).to(torch.int32).cuda()
+    x_keep = (torch.rand(size=(10, ), device=DEVICE) > p).to(torch.int32)
     #
     output = dropout(x, x_keep=x_keep, p=p)
     print(tabulate.tabulate([
@@ -116,16 +118,16 @@ Let's first take a look at the baseline implementation.
 
     /home/runner/_work/triton/triton/python/triton/language/semantic.py:1608: UserWarning: tl.where with a non-boolean condition is deprecated and will error out in a future triton release. Got int32
       warnings.warn(
-    ---------  -------  ---------  --------  --------  --------  --------  --------  --------  ---------  ---------
-    input      1.541    -0.293429  -2.17879  0.568431  -1.08452  -1.3986   0.403347  0.838026  -0.719258  -0.403344
-    keep mask  1         1          0        1          0         1        1         0          0          0
-    output     3.08199  -0.586858   0        1.13686    0        -2.79719  0.806694  0          0          0
-    ---------  -------  ---------  --------  --------  --------  --------  --------  --------  ---------  ---------
+    ---------  ---------  -------  --------  -------  --------  -------  ---------  --------  --------  -------
+    input      -0.940469  0.17792  0.529538  0.13197  0.135063  1.64092  -0.309264  0.618883  -1.53066  0.46037
+    keep mask   0         0        0         0        0         1         0         0          1        1
+    output      0         0        0         0        0         3.28183   0         0         -3.06132  0.92074
+    ---------  ---------  -------  --------  -------  --------  -------  ---------  --------  --------  -------
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 87-106
+.. GENERATED FROM PYTHON SOURCE LINES 89-108
 
 Seeded dropout
 --------------
@@ -147,7 +149,7 @@ other :ref:`random number generation strategies<Random Number Generation>`.
 
 Let's put it all together.
 
-.. GENERATED FROM PYTHON SOURCE LINES 106-155
+.. GENERATED FROM PYTHON SOURCE LINES 108-157
 
 .. code-block:: Python
 
@@ -186,7 +188,7 @@ Let's put it all together.
         return output
 
 
-    x = torch.randn(size=(10, )).cuda()
+    x = torch.randn(size=(10, ), device=DEVICE)
     # Compare this to the baseline - dropout mask is never instantiated!
     output = seeded_dropout(x, p=0.5, seed=123)
     output2 = seeded_dropout(x, p=0.5, seed=123)
@@ -208,23 +210,23 @@ Let's put it all together.
 
  .. code-block:: none
 
-    -------------------  ---------  --------  --------  -------  --------  --------  ---------  ---------  ---------  ---------
-    input                -0.952835  0.371721  0.408716  1.42142  0.149397  -0.67086  -0.214186  -0.431969  -0.707878  -0.106434
-    output (seed = 123)   0         0.743443  0         0        0         -1.34172   0          0         -1.41576   -0.212868
-    output (seed = 123)   0         0.743443  0         0        0         -1.34172   0          0         -1.41576   -0.212868
-    output (seed = 512)   0         0         0.817432  2.84284  0         -1.34172  -0.428372   0          0          0
-    -------------------  ---------  --------  --------  -------  --------  --------  ---------  ---------  ---------  ---------
+    -------------------  -------  ---------  ---------  -------  --------  --------  -------  --------  -------  ---------
+    input                1.48333  -0.239537  -0.640795  1.62631  0.263036  -0.71516  1.99474  -1.09546  1.81107  -0.170083
+    output (seed = 123)  0        -0.479074   0         0        0         -1.43032  0         0        3.62215  -0.340165
+    output (seed = 123)  0        -0.479074   0         0        0         -1.43032  0         0        3.62215  -0.340165
+    output (seed = 512)  0         0         -1.28159   3.25261  0         -1.43032  3.98947   0        0         0
+    -------------------  -------  ---------  ---------  -------  --------  --------  -------  --------  -------  ---------
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 156-159
+.. GENERATED FROM PYTHON SOURCE LINES 158-161
 
 Et Voilà! We have a triton kernel that applies the same dropout mask provided the seed is the same!
 If you'd like explore further applications of pseudorandomness in GPU programming, we encourage you
 to explore the `python/triton/language/random.py`!
 
-.. GENERATED FROM PYTHON SOURCE LINES 161-167
+.. GENERATED FROM PYTHON SOURCE LINES 163-169
 
 Exercises
 ---------
@@ -233,7 +235,7 @@ Exercises
 2. Add support for striding.
 3. (challenge) Implement a kernel for sparse Johnson-Lindenstrauss transform which generates the projection matrix on the fly each time using a seed.
 
-.. GENERATED FROM PYTHON SOURCE LINES 169-174
+.. GENERATED FROM PYTHON SOURCE LINES 171-176
 
 References
 ----------
@@ -244,7 +246,7 @@ References
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 0.738 seconds)
+   **Total running time of the script:** (0 minutes 0.786 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_04-low-memory-dropout.py:

@@ -262,6 +262,8 @@ more than 10% on some hardware architecture (e.g., 220 to 245 TFLOPS on A100).</
 <span class="kn">import</span> <span class="nn">triton</span>
 <span class="kn">import</span> <span class="nn">triton.language</span> <span class="k">as</span> <span class="nn">tl</span>
 
+<span class="n">DEVICE</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">get_active_torch_device</span><span class="p">()</span>
+
 
 <span class="k">def</span> <span class="nf">is_cuda</span><span class="p">():</span>
     <span class="k">return</span> <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">get_current_target</span><span class="p">()</span><span class="o">.</span><span class="n">backend</span> <span class="o">==</span> <span class="s2">&quot;cuda&quot;</span>
@@ -458,8 +460,8 @@ and (1) checks any shape constraint; (2) allocates the output; (3) launches the 
 <h2>Unit Test<a class="headerlink" href="#unit-test" title="Link to this heading">¶</a></h2>
 <p>We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS).</p>
 <div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
-<span class="n">a</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">512</span><span class="p">,</span> <span class="mi">512</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s1">&#39;cuda&#39;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
-<span class="n">b</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">512</span><span class="p">,</span> <span class="mi">512</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s1">&#39;cuda&#39;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+<span class="n">a</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">512</span><span class="p">,</span> <span class="mi">512</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+<span class="n">b</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">512</span><span class="p">,</span> <span class="mi">512</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
 <span class="n">triton_output</span> <span class="o">=</span> <span class="n">matmul</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span>
 <span class="n">torch_output</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">matmul</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;triton_output_with_fp16_inputs=</span><span class="si">{</span><span class="n">triton_output</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
@@ -476,8 +478,8 @@ and (1) checks any shape constraint; (2) allocates the output; (3) launches the 
 <span class="n">TORCH_HAS_FP8</span> <span class="o">=</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">torch</span><span class="p">,</span> <span class="s2">&quot;float8_e5m2&quot;</span><span class="p">)</span>
 <span class="k">if</span> <span class="n">TORCH_HAS_FP8</span> <span class="ow">and</span> <span class="n">is_cuda</span><span class="p">():</span>
     <span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
-    <span class="n">a</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">512</span><span class="p">,</span> <span class="mi">512</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
-    <span class="n">b</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">512</span><span class="p">,</span> <span class="mi">512</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">a</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">512</span><span class="p">,</span> <span class="mi">512</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">b</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">512</span><span class="p">,</span> <span class="mi">512</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
     <span class="n">a</span> <span class="o">=</span> <span class="n">a</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float8_e5m2</span><span class="p">)</span>
     <span class="c1"># pre-transpose b for efficiency.</span>
     <span class="n">b</span> <span class="o">=</span> <span class="n">b</span><span class="o">.</span><span class="n">T</span>
@@ -560,8 +562,8 @@ but feel free to arrange this script as you wish to benchmark any other matrix s
 
 <span class="nd">@triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">perf_report</span><span class="p">(</span><span class="n">configs</span><span class="p">)</span>
 <span class="k">def</span> <span class="nf">benchmark</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">provider</span><span class="p">,</span> <span class="n">fp8_inputs</span><span class="p">):</span>
-    <span class="n">a</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">M</span><span class="p">,</span> <span class="n">K</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s1">&#39;cuda&#39;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
-    <span class="n">b</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">K</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s1">&#39;cuda&#39;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">a</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">M</span><span class="p">,</span> <span class="n">K</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">b</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">K</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">TORCH_HAS_FP8</span> <span class="ow">and</span> <span class="n">fp8_inputs</span><span class="p">:</span>
         <span class="n">a</span> <span class="o">=</span> <span class="n">a</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float8_e5m2</span><span class="p">)</span>
         <span class="n">b</span> <span class="o">=</span> <span class="n">b</span><span class="o">.</span><span class="n">T</span>
@@ -585,72 +587,72 @@ but feel free to arrange this script as you wish to benchmark any other matrix s
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>matmul-performance-fp16:
          M       N       K      cuBLAS      Triton
 0    256.0   256.0   256.0    4.096000    4.096000
-1    384.0   384.0   384.0   11.059200   12.288000
+1    384.0   384.0   384.0   12.288000   12.288000
 2    512.0   512.0   512.0   26.214401   26.214401
 3    640.0   640.0   640.0   42.666665   42.666665
 4    768.0   768.0   768.0   63.195428   68.056616
 5    896.0   896.0   896.0   78.051553   93.661869
 6   1024.0  1024.0  1024.0  110.376426   99.864382
 7   1152.0  1152.0  1152.0  135.726544  129.825388
-8   1280.0  1280.0  1280.0  157.538463  163.840004
+8   1280.0  1280.0  1280.0  163.840004  163.840004
 9   1408.0  1408.0  1408.0  151.438217  132.970149
 10  1536.0  1536.0  1536.0  176.947204  157.286398
-11  1664.0  1664.0  1664.0  183.651271  179.978245
-12  1792.0  1792.0  1792.0  170.294302  204.353162
+11  1664.0  1664.0  1664.0  179.978245  176.449258
+12  1792.0  1792.0  1792.0  172.914215  204.353162
 13  1920.0  1920.0  1920.0  197.485709  168.585369
 14  2048.0  2048.0  2048.0  226.719125  192.841562
-15  2176.0  2176.0  2176.0  209.621326  211.827867
-16  2304.0  2304.0  2304.0  231.921091  227.503545
-17  2432.0  2432.0  2432.0  203.583068  203.583068
-18  2560.0  2560.0  2560.0  224.438347  217.006622
-19  2688.0  2688.0  2688.0  195.531224  200.704002
-20  2816.0  2816.0  2816.0  212.752230  210.696652
-21  2944.0  2944.0  2944.0  218.579083  225.502413
-22  3072.0  3072.0  3072.0  208.173173  212.868821
-23  3200.0  3200.0  3200.0  215.488222  216.216207
-24  3328.0  3328.0  3328.0  207.467716  209.277023
-25  3456.0  3456.0  3456.0  217.308808  216.724640
-26  3584.0  3584.0  3584.0  220.380867  207.656790
-27  3712.0  3712.0  3712.0  211.199462  217.878613
-28  3840.0  3840.0  3840.0  211.456969  211.456969
-29  3968.0  3968.0  3968.0  208.231980  212.215536
-30  4096.0  4096.0  4096.0  219.310012  221.847481
+15  2176.0  2176.0  2176.0  211.827867  211.827867
+16  2304.0  2304.0  2304.0  229.691080  229.691080
+17  2432.0  2432.0  2432.0  205.069087  202.118452
+18  2560.0  2560.0  2560.0  225.986210  221.405396
+19  2688.0  2688.0  2688.0  199.647657  199.647657
+20  2816.0  2816.0  2816.0  212.752230  212.752230
+21  2944.0  2944.0  2944.0  218.579083  224.486628
+22  3072.0  3072.0  3072.0  208.173173  214.481453
+23  3200.0  3200.0  3200.0  218.430042  218.430042
+24  3328.0  3328.0  3328.0  208.067338  211.118166
+25  3456.0  3456.0  3456.0  216.143621  215.565692
+26  3584.0  3584.0  3584.0  219.305830  213.069643
+27  3712.0  3712.0  3712.0  211.646909  218.116474
+28  3840.0  3840.0  3840.0  208.664143  209.454544
+29  3968.0  3968.0  3968.0  210.749463  217.511464
+30  4096.0  4096.0  4096.0  219.310012  220.029067
 matmul-performance-fp8:
          M       N       K      Triton
 0    256.0   256.0   256.0    4.096000
 1    384.0   384.0   384.0   12.288000
 2    512.0   512.0   512.0   29.127110
-3    640.0   640.0   640.0   51.200001
+3    640.0   640.0   640.0   46.545454
 4    768.0   768.0   768.0   58.982401
 5    896.0   896.0   896.0   87.808000
 6   1024.0  1024.0  1024.0   99.864382
-7   1152.0  1152.0  1152.0  129.825388
+7   1152.0  1152.0  1152.0  124.415996
 8   1280.0  1280.0  1280.0  146.285712
 9   1408.0  1408.0  1408.0  143.467796
 10  1536.0  1536.0  1536.0  160.861090
 11  1664.0  1664.0  1664.0  157.875646
 12  1792.0  1792.0  1792.0  181.281035
 13  1920.0  1920.0  1920.0  170.666670
-14  2048.0  2048.0  2048.0  195.083907
+14  2048.0  2048.0  2048.0  192.841562
 15  2176.0  2176.0  2176.0  186.330074
 16  2304.0  2304.0  2304.0  205.929926
-17  2432.0  2432.0  2432.0  200.674737
+17  2432.0  2432.0  2432.0  199.251522
 18  2560.0  2560.0  2560.0  203.527946
-19  2688.0  2688.0  2688.0  195.531224
-20  2816.0  2816.0  2816.0  209.180852
-21  2944.0  2944.0  2944.0  205.086550
-22  3072.0  3072.0  3072.0  202.950194
+19  2688.0  2688.0  2688.0  193.536006
+20  2816.0  2816.0  2816.0  205.727397
+21  2944.0  2944.0  2944.0  202.585487
+22  3072.0  3072.0  3072.0  205.156169
 23  3200.0  3200.0  3200.0  202.531652
-24  3328.0  3328.0  3328.0  203.365249
-25  3456.0  3456.0  3456.0  202.059062
-26  3584.0  3584.0  3584.0  203.428493
-27  3712.0  3712.0  3712.0  203.043373
-28  3840.0  3840.0  3840.0  202.549441
-29  3968.0  3968.0  3968.0  204.395201
-30  4096.0  4096.0  4096.0  211.699888
+24  3328.0  3328.0  3328.0  201.093011
+25  3456.0  3456.0  3456.0  200.551162
+26  3584.0  3584.0  3584.0  202.969283
+27  3712.0  3712.0  3712.0  203.456907
+28  3840.0  3840.0  3840.0  204.800008
+29  3968.0  3968.0  3968.0  206.295742
+30  4096.0  4096.0  4096.0  213.044005
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (2 minutes 15.567 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (2 minutes 18.116 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-03-matrix-multiplication-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/b51b68bc1c6b1a5e509f67800b6235af/03-matrix-multiplication.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">03-matrix-multiplication.ipynb</span></code></a></p>
