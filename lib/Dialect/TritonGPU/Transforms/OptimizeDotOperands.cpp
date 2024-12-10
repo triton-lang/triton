@@ -217,6 +217,8 @@ public:
 //     - Do elementwise ops over #dot_operand layout.
 //     - Do dot.
 //
+// This can also be propagated when we have a constant, instead of a load.
+//
 // Eliminating the shmem round-trip is such a big win, we're willing to do it
 // even if this duplicates work because some of the elementwise ops have uses
 // that don't flow into the dot.  On the other hand, we only want to do this if
@@ -251,8 +253,9 @@ public:
     if (!canHoistDotOpEncV2(src, dotOpEnc))
       return failure();
 
-    // Check that the conversion is transitively dependent on a load, and all
-    // operations between the load and the conversion are layout preserving.
+    // Check that the conversion is transitively dependent on a load or a
+    // constant, and all operations between it and the convert are layout
+    // preserving.
     //
     // TODO(jlebar): This is accidentally quadratic; we iterate over the whole
     // slice but then at the end we only modify one op!
@@ -261,21 +264,19 @@ public:
     opt.omitBlockArguments = true;
     getBackwardSlice(cvt.getOperation(), &slice, opt);
 
-    // TODO(jlebar): This is too conservative when there are multiple
-    // initializers in the chain (e.g. cvt(load(x) + load(y))).  The intent is
-    // to check that all of the ops between the initializer and the convert are
-    // elementwise.  But actually we set foundInitializer = true once we see the
-    // first initializer, and so we will reject the chain if the *second*
-    // initializer we encounter uses a non-elementwise op to calculate its
-    // pointers.
+    // TODO(jlebar): This is too conservative when there are multiple loads in
+    // the chain (e.g. cvt(load(x) + load(y))). If the second load contains a
+    // non-layout-preserving op, then the whole chain will be rejected.
     bool foundInitializer = false;
-    for (Operation *currOp : slice) {
+    // Reverse the slice so that we start directly above the convert and check
+    // that every op allows hoisting until we find a load or a constant.
+    for (Operation *currOp : llvm::reverse(slice)) {
       if (isa<LoadOp>(currOp) || isa<arith::ConstantOp>(currOp)) {
         foundInitializer = true;
-      } else if (foundInitializer) {
-        if (!canHoistDotOpEncV2(currOp, dotOpEnc))
-          return failure();
+        break;
       }
+      if (!canHoistDotOpEncV2(currOp, dotOpEnc))
+        return failure();
     }
     if (!foundInitializer)
       return failure();
