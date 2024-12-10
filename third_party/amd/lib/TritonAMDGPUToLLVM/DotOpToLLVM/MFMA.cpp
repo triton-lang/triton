@@ -164,9 +164,8 @@ struct DotOpMFMAConversionHelper {
 
   // Conduct the Dot conversion.
   LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor) const {
-    // Check if this dot has priority set. Obtain previous op before we insert
-    // any
-    Operation *prevOp = op->getPrevNode();
+    // Check if this dot has come with priority set by setprio.
+    auto setPrioOp = dyn_cast_or_null<ROCDL::SetPrioOp>(op->getPrevNode());
 
     auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
     auto mDim = mfmaLayout.getMDim();
@@ -230,12 +229,8 @@ struct DotOpMFMAConversionHelper {
         getNumSubmatrices(aTensorTy.getElementType(), mDim, nDim);
     auto elemsPerVec = mDim * nDim * subBlocks / warpSize;
 
-    // check if we want to set prirority of this dot
-    ROCDL::SetPrioOp setPrioOp;
-    if (prevOp)
-      setPrioOp = dyn_cast<ROCDL::SetPrioOp>(prevOp);
     Value firstMfma;
-    auto getFirstMfma = [&](Value mfma) {
+    auto setFirstMfma = [&](Value mfma) {
       if (!firstMfma)
         firstMfma = mfma;
     };
@@ -261,7 +256,7 @@ struct DotOpMFMAConversionHelper {
                                        operandA[kPack][{b, m, k}], acc)
                       : generateMFMAOp(mfmaInsnName, operandA[kPack][{b, m, k}],
                                        operandB[kPack][{b, n, k}], acc);
-              getFirstMfma(acc);
+              setFirstMfma(acc);
             }
           }
           acc = reduceSubBlocks(subBlocks, acc);
@@ -274,7 +269,12 @@ struct DotOpMFMAConversionHelper {
       }
     }
 
-    // move setprio after the first mfma in the group.
+    // Originally, setprio (high) is set to the high-level dot op. After dot is
+    // being lowered to the series of mfma operations, it should be moved next
+    // to the first mfma leaving the first mfma staying at the low priority. In
+    // this way, incoming warp can be effectively waiting on the first mfma
+    // instruction (low priority) while the other warp is executing mfma with
+    // high priority. Otherwise, incoming warp can break the cluster.
     if (setPrioOp && firstMfma)
       setPrioOp->moveAfter(firstMfma.getDefiningOp());
 

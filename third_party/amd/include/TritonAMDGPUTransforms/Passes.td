@@ -125,12 +125,14 @@ def TritonAMDGPUConvertToBufferOps : Pass<"tritonamdgpu-convert-buffer-ops", "ml
 }
 
 def TritonAMDGPUBlockPingpong: Pass<"tritonamdgpu-block-pingpong", "mlir::ModuleOp"> {
-  let summary = "Transform into 2 block ping-pong";
+  let summary = "Interleaving instructions from two warps on the same SIMD to better utilize matrix core";
 
-  let description = "This pass reorder instructions to better fit the ping-pong pattern "
-                    "Where two warps from different blocks run concurrently in the synchronized fashion"
-                    "This block ping-pong pattern could be beneficial under few conditions including"
-                    "occupancy and number of warps.";
+  let description = [{
+    This pass reorder instructions to interleave instructions from two warps on the same SIMD unit.
+    We call this a ping-pong scheduling pattern, where two warps run concurrently in the synchronized fashion
+    This block ping-pong pattern could be beneficial under few conditions including
+    occupancy and number of warps.
+  }];
 
   let constructor = "mlir::createTritonAMDGPUBlockPingpongPass()";
 
