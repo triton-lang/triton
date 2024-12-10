@@ -171,25 +171,17 @@ def test_remark_swp_op_before_operands_persistent_matmul(capfd, fresh_triton_cac
 
     # this example is from https://github.com/triton-lang/triton/issues/5172
     @triton.jit
-    def matmul_kernel_persistent(
-        a_ptr,
-        b_ptr,
-        c_ptr,  #
-        M,
-        N,
-        K,  #
-        stride_am,
-        stride_ak,  #
-        stride_bk,
-        stride_bn,  #
-        stride_cm,
-        stride_cn,  #
-        BLOCK_SIZE_M: tl.constexpr,  #
-        BLOCK_SIZE_N: tl.constexpr,  #
-        BLOCK_SIZE_K: tl.constexpr,  #
-        GROUP_SIZE_M: tl.constexpr,  #
-        NUM_SMS: tl.constexpr,  #
-    ):
+    def matmul_kernel_persistent(a_ptr, b_ptr, c_ptr,  #
+                                 M, N, K,  #
+                                 stride_am, stride_ak,  #
+                                 stride_bk, stride_bn,  #
+                                 stride_cm, stride_cn,  #
+                                 BLOCK_SIZE_M: tl.constexpr,  #
+                                 BLOCK_SIZE_N: tl.constexpr,  #
+                                 BLOCK_SIZE_K: tl.constexpr,  #
+                                 GROUP_SIZE_M: tl.constexpr,  #
+                                 NUM_SMS: tl.constexpr,  #
+                                 ):
         start_pid = tl.program_id(axis=0)
         num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
         num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
@@ -232,34 +224,20 @@ def test_remark_swp_op_before_operands_persistent_matmul(capfd, fresh_triton_cac
                 offs_bn = start_n + tl.arange(0, BLOCK_SIZE_N)
                 offs_am = tl.where(offs_am < M, offs_am, 0)
                 offs_bn = tl.where(offs_bn < N, offs_bn, 0)
-                offs_am = tl.max_contiguous(
-                    tl.multiple_of(offs_am, BLOCK_SIZE_M), BLOCK_SIZE_M
-                )
-                offs_bn = tl.max_contiguous(
-                    tl.multiple_of(offs_bn, BLOCK_SIZE_N), BLOCK_SIZE_N
-                )
+                offs_am = tl.max_contiguous(tl.multiple_of(offs_am, BLOCK_SIZE_M), BLOCK_SIZE_M)
+                offs_bn = tl.max_contiguous(tl.multiple_of(offs_bn, BLOCK_SIZE_N), BLOCK_SIZE_N)
             offs_k = ki * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
-            a_ptrs = a_ptr + (
-                offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak
-            )
-            b_ptrs = b_ptr + (
-                offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn
-            )
+            a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
+            b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
 
-            a = tl.load(
-                a_ptrs, mask=offs_k_for_mask[None, :] < K - ki * BLOCK_SIZE_K, other=0.0
-            )
-            b = tl.load(
-                b_ptrs, mask=offs_k_for_mask[:, None] < K - ki * BLOCK_SIZE_K, other=0.0
-            )
+            a = tl.load(a_ptrs, mask=offs_k_for_mask[None, :] < K - ki * BLOCK_SIZE_K, other=0.0)
+            b = tl.load(b_ptrs, mask=offs_k_for_mask[:, None] < K - ki * BLOCK_SIZE_K, other=0.0)
             accumulator = tl.dot(a, b, accumulator)
 
             if ki == k_tiles - 1:
                 offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
                 offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
-                c_ptrs = (
-                    c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
-                )
+                c_ptrs = (c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :])
                 c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
                 if c_ptr.dtype.element_ty == tl.float8e4nv:
                     c = accumulator.to(tl.float8e4nv)
@@ -267,7 +245,7 @@ def test_remark_swp_op_before_operands_persistent_matmul(capfd, fresh_triton_cac
                     c = accumulator.to(tl.float16)
                 tl.store(c_ptrs, c, mask=c_mask)
                 accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
-                tile_id += NUM_SMS # this line is newly added
+                tile_id += NUM_SMS  # this line is newly added
 
     with enable_remark_context():
         dtype = torch.float16
@@ -293,7 +271,8 @@ def test_remark_swp_op_before_operands_persistent_matmul(capfd, fresh_triton_cac
         # Allocates output.
         c = torch.empty((M, N), device=a.device, dtype=dtype)
         # 1D launch kernel where each block gets its own program.
-        grid = lambda META: (min(NUM_SMS, triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"])), )
+        grid = lambda META: (min(NUM_SMS,
+                                 triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"])), )
         matmul_kernel_persistent[grid](
             a, b, c,  #
             M, N, K,  #
@@ -315,10 +294,8 @@ def test_remark_swp_op_before_operands_persistent_matmul(capfd, fresh_triton_cac
     lines = err.splitlines()
     # Define the expected strings in order
     expected_strings = [
-        "error: operation scheduled before its operands.",
-        "if ki == 0:",
-        "error: This line likely causes scheduling conflict.",
-        "tile_id += NUM_SMS"
+        "error: operation scheduled before its operands.", "if ki == 0:",
+        "error: This line likely causes scheduling conflict.", "tile_id += NUM_SMS"
     ]
     # Initialize an index to track the position in expected_strings
     index = 0
