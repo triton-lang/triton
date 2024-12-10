@@ -214,7 +214,12 @@ LinearLayout ensureLayoutNotSmallerThan(
     const LinearLayout &layout,
     const llvm::SmallDenseMap<StringAttr, int64_t> &shape);
 
+// Return a vector of the standard out dimension names for tensor layouts. These
+// are "dim0", "dim1", etc.
 SmallVector<StringAttr> standardOutDimNames(MLIRContext *ctx, int rank);
+// Return an identity mapping from `inDimName` to the standard out dimensions,
+// with the dimensions sized according to the shape. The bases are sorted
+// according to `order`, with the most minor dimension first.
 LinearLayout identityStandardND(StringAttr inDimName, ArrayRef<unsigned> shape,
                                 ArrayRef<unsigned> order);
 
