@@ -9,7 +9,7 @@ import pytest
 
 from numpy.random import RandomState
 from typing import Optional, Union
-from triton.runtime.jit import TensorWrapper, reinterpret
+from triton.runtime.jit import TensorWrapper, reinterpret, type_canonicalisation_dict
 
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
 uint_dtypes = ['uint8', 'uint16', 'uint32', 'uint64']
@@ -117,6 +117,10 @@ def to_triton(x: np.ndarray, device, dst_type=None) -> Union[TensorWrapper, torc
         if t == 'float32' and dst_type == 'bfloat16':
             return torch.tensor(x, device=device).bfloat16()
         return torch.tensor(x, device=device)
+
+
+def str_to_triton_dtype(x: str) -> tl.dtype:
+    return tl.str_to_ty(type_canonicalisation_dict[x])
 
 
 def torch_dtype_name(dtype) -> str:

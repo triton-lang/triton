@@ -21,6 +21,7 @@ from triton.language.extra import libdevice
 from triton._internal_testing import (
     integral_dtypes,
     int_dtypes,
+    str_to_triton_dtype,
     uint_dtypes,
     float_dtypes,
     float_dtypes_with_bfloat16,
@@ -1641,7 +1642,7 @@ def test_tensor_atomic_cas(sem, num_ctas, device):
                              ('float32', 'bfloat16', False, 1024),
                              ('bfloat16', 'float32', False, 1024),
                              ('float32', 'int32', True, 1024),
-                             ('float32', 'int1', False, 1024),
+                             ('float32', 'bool', False, 1024),
                              ('int8', 'bfloat16', False, 1024),
                          ] + [(f'uint{x}', f'int{x}', True, 1024)
                               for x in [8, 16, 32, 64]] + [(f'int{x}', f'uint{x}', True, 1024)
@@ -1687,19 +1688,21 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
     # triton kernel
 
     @triton.jit
-    def kernel(X, Z, BITCAST: tl.constexpr, SIZE: tl.constexpr, ARG_HASH: tl.constexpr):
+    def kernel(X, Z, TO_TYPE: tl.constexpr, BITCAST: tl.constexpr, SIZE: tl.constexpr, ARG_HASH: tl.constexpr):
         x_ptr = X + tl.arange(0, SIZE)
         z_ptr = Z + tl.arange(0, SIZE)
         x = tl.load(x_ptr)
 
         # Depending on the value of ARG_HASH (a "random" number determined by
         # the test parameters), spell the cast one of three different ways.
-        if ARG_HASH % 3 == 0:
+        if ARG_HASH % 4 == 0:
             z = x.to(Z.dtype.element_ty, bitcast=BITCAST)
-        elif ARG_HASH % 3 == 1:
+        elif ARG_HASH % 4 == 1:
             z = x.cast(Z.dtype.element_ty, bitcast=BITCAST)
-        else:
+        elif ARG_HASH % 4 == 2:
             z = tl.cast(x, Z.dtype.element_ty, bitcast=BITCAST)
+        else:
+            z = tl.cast(x, TO_TYPE, bitcast=BITCAST)
 
         tl.store(z_ptr, z)
 
@@ -1707,7 +1710,7 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
     # This way we don't have to increase the number of tests.
     arg_hash = hash((dtype_x, dtype_z, bitcast, size, num_ctas))
 
-    dtype_z_np = dtype_z if dtype_z != 'int1' else 'bool_'
+    dtype_z_np = dtype_z if dtype_z != 'bool' else 'bool_'
     # triton result
     if dtype_z.startswith('bfloat'):
         z_tri = torch.empty((size, ), dtype=getattr(torch, dtype_z), device=device)
@@ -1715,7 +1718,10 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
         z_tri = torch.empty((size, ), dtype=torch.half, device=device).to(dtype=getattr(torch, dtype_z))
     else:
         z_tri = to_triton(np.empty((size, ), dtype=getattr(np, dtype_z_np)), device=device)
-    kernel[(1, )](x_tri, z_tri, BITCAST=bitcast, SIZE=size, ARG_HASH=arg_hash, num_warps=1, num_ctas=num_ctas)
+
+    dtype_z_tri = str_to_triton_dtype(dtype_z)
+    kernel[(1, )](x_tri, z_tri, TO_TYPE=dtype_z_tri, BITCAST=bitcast, SIZE=size, ARG_HASH=arg_hash, num_warps=1,
+                  num_ctas=num_ctas)
     # torch result
     if dtype_z.startswith('bfloat') or dtype_x.startswith('bfloat') or dtype_z.startswith(
             'float8') or dtype_x.startswith('float8'):
