@@ -414,6 +414,10 @@ public:
 
   bool isSurjective() const { return surjective; }
 
+  bool isInvertible() const {
+    return surjective && getTotalInDimSize() == getTotalOutDimSize();
+  }
+
   const BasesT &getBases() const { return bases; }
 
   // Get the pos'th basis vector for the inDim -> outDim mapping.
@@ -673,6 +677,9 @@ public:
   // don't place any guarantees on the choices made by this function.
   [[nodiscard]] LinearLayout invertAndCompose(const LinearLayout &outer) const;
 
+  // Get the layout that is the inverse of this layout.
+  [[nodiscard]] LinearLayout invert() const;
+
   // For each in-dim, returns a bitmask of the "free variables" in the layout
   // function.
   //
@@ -680,13 +687,6 @@ public:
   // output.  If all of the free variables are 0, then the layout is injective
   // (i.e. every input bit affects the output).
   llvm::MapVector<StringAttr, int32_t> getFreeVariableMasks() const;
-
-  // Increase an input dimension without affecting the output dimension.  The
-  // added free variables are mapped to 0, ensuring that the new input
-  // dimensions correspond directly to the existing output space.  The function
-  // errors out if `newInDimSize` is less than the current size or the new size
-  // is not a power of 2.
-  LinearLayout resize(StringAttr inDim, int32_t newInDimSize) const;
 
   std::string toString() const;
 

@@ -3009,6 +3009,68 @@ struct TritonGPUInferLayoutInterface
   }
 };
 
+struct TritonGPUVerifyTensorLayoutInterface
+    : public triton::DialectVerifyTensorLayoutInterface {
+  using DialectVerifyTensorLayoutInterface::DialectVerifyTensorLayoutInterface;
+
+  LogicalResult verifyTensorLayout(
+      Attribute layout, RankedTensorType rankedTy, ModuleOp module,
+      function_ref<InFlightDiagnostic()> makeErr) const override {
+    if (isa<triton::gpu::SharedEncodingAttr>(layout))
+      return makeErr() << "Shared layout is not allowed on tensor type.";
+    // TODO(jlebar): Currently this only checks blocked layouts, but other
+    // layouts also have invariants!
+
+    // TODO(jlebar): Handle the case when the encoding is nested within tt.ptr.
+    if (auto blocked = dyn_cast<triton::gpu::BlockedEncodingAttr>(layout)) {
+      // A different verifier should have checked that the layout itself is
+      // valid, including that threads-per-warp has the same rank as
+      // warps-per-block etc.
+      auto layoutRank = blocked.getThreadsPerWarp().size();
+      if (layoutRank != rankedTy.getRank()) {
+        return makeErr() << layout << ".\nLayout has rank " << layoutRank
+                         << ", but the tensor it's attached to has rank "
+                         << rankedTy.getRank() << ".";
+      }
+
+      int moduleThreadsPerWarp =
+          triton::gpu::TritonGPUDialect::getThreadsPerWarp(module);
+      int64_t layoutThreadsPerWarp = product(blocked.getThreadsPerWarp());
+      if (layoutThreadsPerWarp != moduleThreadsPerWarp) {
+        return makeErr() << layout << ".\nLayout has a total of "
+                         << layoutThreadsPerWarp
+                         << " threads per warp, but the module specifies "
+                         << moduleThreadsPerWarp << " threads per warp.";
+      }
+
+      int moduleWarpsPerCTA =
+          triton::gpu::TritonGPUDialect::getNumWarps(module);
+      int64_t layoutWarpsPerCTA = product(blocked.getWarpsPerCTA());
+      if (layoutWarpsPerCTA != moduleWarpsPerCTA) {
+        return makeErr() << layout << ".\nLayout has a total of "
+                         << layoutWarpsPerCTA
+                         << " warps per CTA, but the module specifies "
+                         << moduleWarpsPerCTA << " warps per CTA.";
+      }
+
+      if (blocked.getCTALayout().getCTAsPerCGA().size() > 0) {
+        int moduleCTAsPerCGA =
+            triton::gpu::TritonGPUDialect::getNumCTAs(module);
+        int64_t layoutCTAsPerCGA =
+            product(blocked.getCTALayout().getCTAsPerCGA());
+        if (layoutCTAsPerCGA != moduleCTAsPerCGA) {
+          return makeErr() << layout << ".\nLayout has a total of "
+                           << layoutCTAsPerCGA
+                           << " CTAs per CGA, but the module specifies "
+                           << moduleCTAsPerCGA << " CTAs per CGA.";
+        }
+      }
+    }
+
+    return success();
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // Canonicalizer
 //===----------------------------------------------------------------------===//
@@ -3748,6 +3810,7 @@ void TritonGPUDialect::initialize() {
       >();
   addInterfaces<TritonGPUOpAsmInterface>();
   addInterfaces<TritonGPUInferLayoutInterface>();
+  addInterfaces<TritonGPUVerifyTensorLayoutInterface>();
 
   RankedTensorType::attachInterface<TensorModel>(*getContext());
   MemDescType::attachInterface<MemDescModel>(*getContext());

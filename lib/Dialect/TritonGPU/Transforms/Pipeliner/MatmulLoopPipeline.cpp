@@ -270,8 +270,9 @@ createTMAAsyncCopy(scf::ForOp &forOp, tt::ExperimentalDescriptorLoadOp loadOp,
       alloc.erase();
     }
 
+    builder.setInsertionPointAfter(viewLoad);
     auto sharedLoad = builder.createWithStage<ttg::LocalLoadOp>(
-        loc, stage, clusterId, loadOp.getType(),
+        loc, stageForFirstUse, clusterForFirstUse, loadOp.getType(),
         viewLoad /*,wait->getResult(0)*/);
     auto result = sharedLoad->getResults();
     loadOp->replaceAllUsesWith(result);
@@ -822,7 +823,7 @@ createAsyncOps(scf::ForOp &forOp,
 
   tt::CoarseSchedule coarseSchedule(numStages);
   coarseSchedule.deSerialize(forOp);
-  scheduleDependencies(forOp, coarseSchedule, numStages);
+  scheduleDependencies(forOp, coarseSchedule);
   coarseSchedule.serialize(forOp);
 
   // Make sure all ops have attributes.

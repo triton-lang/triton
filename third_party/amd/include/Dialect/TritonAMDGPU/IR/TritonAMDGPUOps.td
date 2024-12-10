@@ -152,6 +152,23 @@ def InstructionSchedHint : TT_AMDGPU_Op<"instruction_sched_hint", []> {
   let assemblyFormat = [{ attr-dict }];
 }
 
+def CondBarrierOp : TT_AMDGPU_Op<"cond_barrier">,
+  Arguments<(ins I1:$pred)> {
+  let summary = "Conditionally set barriers to synchronize partial threads in a block";
+
+  let description = [{
+      condBarrierOp sets barrier instruction only when the given argument is true.
+      This provides a way to synchronize partial threads in a block, deliberately
+      diverges the execution sequences. However, user should guarantee all threads
+      converge at the end by calling condBarrierOp(true) with the remaining threads.
+      Conceptually, this is similar to having an execution barrier inside an if statement.
+      This op allows us to avoid blocking the whole block when suitable to help scheduling.
+      NB. This doesn't set any memory fence.
+  }];
+
+  let assemblyFormat = "$pred attr-dict";
+}
+
 //
 // AMD Buffer operations.
 //
