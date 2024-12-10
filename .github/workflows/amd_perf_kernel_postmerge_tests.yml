@@ -27,7 +27,7 @@ jobs:
         id: set-matrix
         run: |
           if [ x"${{ github.repository }}" == x"ROCm/triton" ]; then
-            echo '::set-output name=matrix-HIP::[["self-hosted", "rocm.gfx90a"]]'
+            echo '::set-output name=matrix-HIP::[["self-hosted", "gfx942"]]'
           else
             echo '::set-output name=matrix-HIP::[["ubuntu-latest"]]'
           fi
