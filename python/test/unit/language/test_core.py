@@ -5404,7 +5404,7 @@ shared_layout_3d = [
 ]
 
 
-@pytest.mark.parametrize("M, N, K", [[8, 16, 128]])
+@pytest.mark.parametrize("M, N, K", [[16, 16, 128]])
 @pytest.mark.parametrize("shared_layout", shared_layout_3d)
 @pytest.mark.parametrize("dist_layout", layouts_3d)
 def test_local_load_store(M, N, K, dist_layout, shared_layout, device, tmp_path: pathlib.Path):
