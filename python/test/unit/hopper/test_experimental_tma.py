@@ -3,8 +3,10 @@ import torch
 
 import triton
 import triton.language as tl
-from triton.tools.experimental_descriptor import (create_1d_tma_descriptor, create_2d_tma_descriptor)
-from triton._internal_testing import dtypes_with_bfloat16, numpy_random, to_triton, requires_tma, supports_tma, tma_skip_msg
+from triton.tools.experimental_descriptor import (create_1d_tma_descriptor, create_2d_tma_descriptor,
+                                                  TmaDescKernelParam)
+from triton._internal_testing import dtypes_with_bfloat16, numpy_random, to_triton, requires_tma
+from triton._internal_testing import supports_tma, tma_skip_msg
 
 from typing import Optional
 
@@ -538,3 +540,95 @@ def test_experimental_make_tensor_descriptor_loop_carried():
     )
     torch.testing.assert_close(ref_out, A)
     assert "tensormap.cp_fenceproxy.global.shared::cta.tensormap::generic.release.gpu.sync.aligned" in kernel.asm["ptx"]
+
+
+@requires_tma
+@pytest.mark.parametrize("inner_size", [16, 64])
+def test_experimetal_descriptor_load_4d(inner_size):
+    device = "cuda"
+
+    @triton.jit
+    def kernel(Z, desc, inner_size: tl.constexpr):
+        off0 = tl.arange(0, 2)
+        off1 = tl.arange(0, 2)
+        off2 = tl.arange(0, 32)
+        off3 = tl.arange(0, inner_size)
+        x = tl._experimental_descriptor_load(desc, [2, 2, 0, 0], [2, 2, 32, inner_size], tl.dtype("uint8"))
+        out_ptrs = (Z + 2 * 32 * inner_size * off0[:, None, None, None] + 32 * inner_size * off1[None, :, None, None] +
+                    inner_size * off2[None, None, :, None] + off3[None, None, None, :])
+        tl.store(out_ptrs, x)
+
+    x = torch.randint(size=(4, 8, 32, inner_size), low=0, high=100, dtype=torch.uint8).to(device)
+    z_tri = torch.zeros(size=(2, 2, 32, inner_size), dtype=torch.uint8, device=device)
+    desc = TmaDescKernelParam(x.data_ptr(), x.shape, z_tri.shape, 1)
+
+    kernel[(1, )](z_tri, desc, inner_size)
+
+    assert torch.equal(x[2:4, 2:4, :, :], z_tri)
+
+
+@requires_tma
+def test_3d_tma_2d_load():
+    B, M, N, K, BLOCK_M, BLOCK_N = 8, 64, 64, 64, 32, 32
+
+    @triton.jit
+    def kernel(
+        q_desc,
+        k_desc,
+        o_ptr,
+        stride_ob,
+        stride_om,
+        stride_on,
+        BLOCK_M: tl.constexpr,
+        BLOCK_N: tl.constexpr,
+        BLOCK_K: tl.constexpr,
+    ):
+        batch_id = tl.program_id(0)
+        startm = tl.program_id(1) * BLOCK_M
+        startn = tl.program_id(2) * BLOCK_N
+        offs_m = startm + tl.arange(0, BLOCK_M)
+        offs_n = startn + tl.arange(0, BLOCK_N)
+        q = tl._experimental_descriptor_load(q_desc, [batch_id, startm, 0], [1, BLOCK_M, BLOCK_K], tl.float16)
+        k = tl._experimental_descriptor_load(k_desc, [batch_id, 0, startn], [1, BLOCK_K, BLOCK_N], tl.float16)
+        qk = tl.dot(q.reshape(BLOCK_M, BLOCK_K), k.reshape(BLOCK_K, BLOCK_N), out_dtype=tl.float32)
+        o_ptrs = o_ptr + batch_id * stride_ob + offs_m[:, None] * stride_om + offs_n[None, :] * stride_on
+        tl.store(o_ptrs, qk)
+
+    device = "cuda"
+
+    import numpy as np
+    from numpy.random import RandomState
+
+    rs = RandomState(17)
+    x = numpy_random((B, M, K), dtype_str="float16", rs=rs)
+    y = numpy_random((B, K, N), dtype_str="float16", rs=rs)
+    out = numpy_random((B, M, N), dtype_str="float32", rs=rs)
+
+    x_tri = to_triton(x, device=device)
+    y_tri = to_triton(y, device=device)
+
+    BLOCK_K = K
+    x_desc = TmaDescKernelParam(x_tri.data_ptr(), x_tri.shape, [1, BLOCK_M, BLOCK_K], 2)
+    y_desc = TmaDescKernelParam(y_tri.data_ptr(), y_tri.shape, [1, BLOCK_K, BLOCK_N], 2)
+
+    out_tri = to_triton(out, device=device)
+
+    grid = (
+        B,
+        triton.cdiv(M, BLOCK_M),
+        triton.cdiv(N, BLOCK_N),
+    )
+    out = kernel[grid](
+        x_desc,
+        y_desc,
+        out_tri,
+        out_tri.stride(0),
+        out_tri.stride(1),
+        out_tri.stride(2),
+        BLOCK_M=BLOCK_M,
+        BLOCK_N=BLOCK_N,
+        BLOCK_K=BLOCK_K,
+    )
+
+    out_ref = np.matmul(x, y)
+    np.testing.assert_allclose(out_ref, out_tri.cpu().float().numpy(), rtol=0.01, atol=1e-2)
