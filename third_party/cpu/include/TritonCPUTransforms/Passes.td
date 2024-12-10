@@ -137,4 +137,17 @@ def ConvertDotGeneric : Pass<"triton-cpu-convert-dot-generic", "mlir::ModuleOp">
                              "mlir::triton::cpu::TritonCPUDialect"];
 }
 
+def Canonicalize : Pass<"triton-cpu-canonicalize", "mlir::ModuleOp"> {
+    let summary = "Canonicalization pass.";
+    let description = [{
+        This pass applies various foldings to simplify analysis and transformations
+        in optimization passes.
+    }];
+
+    let constructor = "mlir::triton::cpu::createCanonicalize()";
+
+    let dependentDialects = ["mlir::vector::VectorDialect",
+                             "mlir::triton::cpu::TritonCPUDialect"];
+}
+
 #endif

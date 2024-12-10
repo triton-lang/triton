@@ -160,6 +160,7 @@ class CPUBackend(BaseBackend):
         # TTCIR -> Target TTCIR
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
+        cpu.passes.ttcpuir.add_triton_cpu_canonicalizer(pm)
         cpu.passes.ttcpuir.add_optimize_masks(pm)
         passes.common.add_canonicalizer(pm)
         convert_bf16_dot_product = ((self.cpu_arch == "aarch64" or self.cpu_arch == "armv8")
