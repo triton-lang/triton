@@ -402,11 +402,6 @@ jobs:
           ccache --zero-stats
           pip install -v -e '.[tests]'
 
-      - name: Clean up after an unsuccessful build
-        if: ${{ !success() && steps.amd-install-triton.outcome != 'success' }}
-        run: |
-          rm -rf ~/.triton
-
       - *print-ccache-stats
       - *run-lit-tests-step
 
@@ -442,8 +437,11 @@ jobs:
       - *save-build-artifacts-step
 
       - name: Clean up caches
+        # Always cleanup the worker, even if builds or tests failed
+        if: always()
         run: |
-          rm -rf ~/.triton/cache
+          rm -rf ~/.triton
+          rm -rf ~/.ccache
 
   Build-Tests:
     needs: Runner-Preparation
