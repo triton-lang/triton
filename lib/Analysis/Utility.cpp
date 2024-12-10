@@ -413,11 +413,91 @@ GatherLoweringHelper::GatherLoweringHelper(triton::GatherOp gatherOp)
     : gatherOp(gatherOp) {}
 
 unsigned GatherLoweringHelper::getScratchSizeInBytes() {
-  // For now, lower the gather op by writing the source tensor to shared memory.
-  // TODO(jeff): Leverage locality to avoid using scratch space when possible.
+  // If the gather is warp-local, no scratch space is needed.
+  if (isWarpLocal())
+    return 0;
+
+  // Otherwise, performing the gather will require scratch space to communicate
+  // the source tensor across threads. For now, assume the whole source tensor
+  // is written back to shared memory.
   RankedTensorType srcType = gatherOp.getSrc().getType();
   return product(srcType.getShape()) *
          ceil<unsigned>(srcType.getElementTypeBitWidth(), 8);
+}
+
+bool GatherLoweringHelper::isWarpLocal() {
+  // The gather is warp-local if for each column along the gather axis in the
+  // source and index tensors, all the elements are owned by the same warp.
+  RankedTensorType srcType = gatherOp.getSrc().getType();
+  RankedTensorType idxType = gatherOp.getIndices().getType();
+  std::optional<LinearLayout> srcLayout =
+      toLinearLayout(srcType.getShape(), srcType.getEncoding());
+  std::optional<LinearLayout> idxLayout =
+      toLinearLayout(idxType.getShape(), idxType.getEncoding());
+
+  // FIXME: If an unsupported layout was encountered, assume the gather is not
+  // warp-local.
+  if (!srcLayout || !idxLayout)
+    return false;
+
+  Builder b(gatherOp.getContext());
+  StringAttr kBlock = b.getStringAttr("block");
+  StringAttr kWarp = b.getStringAttr("warp");
+  StringAttr kLane = b.getStringAttr("lane");
+  StringAttr kGatherDim =
+      b.getStringAttr("dim" + std::to_string(gatherOp.getAxis()));
+
+  // The tensor layouts must be distributed layouts, where the basis matrix is a
+  // subpermutation matrix (permutation matrix plus zeros for broadcasting).
+  // FIXME(jeff): Check this invariant somehow.
+  //
+  // We want to know if all elements of a column along the gather axis are
+  // mapped to the same set of warps, which means the gather can be performed
+  // entirely within the warp. We need to query
+  //
+  //   srcLayout.invert().sublayoutIsZero({kGatherDim}, {kBlock, kWarp})
+  //
+  // But due to broadcasting, the matrix might not be invertible. But since the
+  // matrix is a permutation matrix (checked below), we can instead query
+  //
+  //   srcLayout.sublayoutIsZero({kBlock, kWarp}, {kGatherDim})
+  //
+  // Which implies that changing the warp will not change the gather dimension.
+  // And since there is no swizzling, this applies to all warps.
+  if (!srcLayout->sublayoutIsZero({kBlock, kWarp}, kGatherDim) ||
+      !idxLayout->sublayoutIsZero({kBlock, kWarp}, kGatherDim))
+    return false;
+
+  SmallVector<StringAttr> otherDims;
+  for (unsigned dim = 0, rank = srcType.getRank(); dim < rank; ++dim) {
+    if (dim != gatherOp.getAxis()) {
+      otherDims.push_back(b.getStringAttr("dim" + Twine(dim)));
+    }
+  }
+
+  // If the gather axis `dimN` is invariant to the warp, but the `(block, warp)`
+  // mapping to all other dimensions must be the same for both layouts. If so,
+  // then the warp that owns a particular index element also owns all the source
+  // elements it could index into.
+  if (srcLayout->sublayout({kBlock, kWarp}, otherDims) !=
+      idxLayout->sublayout({kBlock, kWarp}, otherDims))
+    return false;
+
+  // The two constraints above ensure that data-movement to perform the gather
+  // operation are contained within a warp. The subsequent constraints simplify
+  // codegen.
+
+  // Require that for any given gather column, the threads mapped to the column
+  // in the index and source tensors are the same. This means we don't need to
+  // xor shuffle across threads before emitting index shuffles; we push warp
+  // shuffling to layout conversions.
+  if (srcLayout->sublayout(kLane, otherDims) !=
+      idxLayout->sublayout(kLane, otherDims))
+    return false;
+
+  // Otherwise, the source layout has to be invertible. This primarily means
+  // the codegen path doesn't support broadcasted source layouts.
+  return srcLayout->isInvertible();
 }
 
 unsigned getNumScratchElements(ArrayRef<unsigned> shape) {
