@@ -11,6 +11,18 @@
 namespace mlir {
 namespace triton {
 
+namespace gpu {
+
+/// Discover operations that should become async and assign latencies to them
+/// based on the numStages value provided by the user.
+DenseMap<Operation *, int> assignLatencies(ModuleOp forOp, int numStages);
+
+/// Schedule the loop based on the latencies assigned to the operations.
+void scheduleLoop(scf::ForOp forOp,
+                  const DenseMap<Operation *, int> &opLatency);
+
+}; // namespace gpu
+
 /// This fill out the pipelining options including schedule and annotations
 /// for wait ops. This also does pre-processing by converting some of the
 /// loads into async loads so that the IR is ready to be pipelined.
@@ -108,8 +120,7 @@ public:
 
 // Add dependencies of anchor ops to the coarse schedule. Schedule them to
 // the same stage and ordering cluster as the anchor op.
-void scheduleDependencies(scf::ForOp forOp, CoarseSchedule &schedule,
-                          int numStages);
+void scheduleDependencies(scf::ForOp forOp, CoarseSchedule &schedule);
 
 } // namespace triton
 } // namespace mlir
