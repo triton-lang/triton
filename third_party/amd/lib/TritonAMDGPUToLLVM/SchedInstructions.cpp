@@ -364,9 +364,6 @@ struct InstructionSchedHintsRewriter
                                 mlir::amdgpu::sched_barrier_opt_enum::mfma_wmma,
                                 1, 0);
       }
-      if (!schedHint.getIsBufferLoadsAEnabled())
-        createSchedGroupBarrier(
-            rewriter, loc, mlir::amdgpu::sched_barrier_opt_enum::valu, 1, 0);
       createSchedGroupBarrier(
           rewriter, loc, mlir::amdgpu::sched_barrier_opt_enum::vmem_read, 1, 0);
       createSchedGroupBarrier(rewriter, loc,
@@ -383,9 +380,6 @@ struct InstructionSchedHintsRewriter
                                 mlir::amdgpu::sched_barrier_opt_enum::mfma_wmma,
                                 1, 0);
       }
-      if (!schedHint.getIsBufferLoadsBEnabled())
-        createSchedGroupBarrier(
-            rewriter, loc, mlir::amdgpu::sched_barrier_opt_enum::valu, 1, 0);
       createSchedGroupBarrier(
           rewriter, loc, mlir::amdgpu::sched_barrier_opt_enum::vmem_read, 1, 0);
       createSchedGroupBarrier(rewriter, loc,
