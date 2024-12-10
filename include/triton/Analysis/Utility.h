@@ -157,7 +157,12 @@ private:
 // logic between shared memory allocation and LLVM codegen.
 class GatherLoweringHelper {
 public:
-  GatherLoweringHelper(triton::GatherOp gatherOp);
+  GatherLoweringHelper(triton::GatherOp gatherOp)
+      : srcType(gatherOp.getSrc().getType()),
+        idxType(gatherOp.getIndices().getType()), axis(gatherOp.getAxis()) {}
+  GatherLoweringHelper(RankedTensorType srcType, RankedTensorType idxType,
+                       unsigned axis)
+      : srcType(srcType), idxType(idxType), axis(axis) {}
 
   // Get the shared memory scratch size required by this op.
   unsigned getScratchSizeInBytes();
@@ -165,7 +170,9 @@ public:
   bool isWarpLocal();
 
 private:
-  triton::GatherOp gatherOp;
+  RankedTensorType srcType;
+  RankedTensorType idxType;
+  unsigned axis;
 };
 
 // Decomposes a reshape into simpler pieces.

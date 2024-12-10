@@ -276,7 +276,7 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
       continue;
     }
     if (auto gatherOp = dyn_cast<GatherOp>(user)) {
-      if (&use == &gatherOp.getIndicesMutable()){
+      if (&use == &gatherOp.getIndicesMutable()) {
         setEncoding(gatherOp.getResult(), info, changed, user);
         continue;
       }

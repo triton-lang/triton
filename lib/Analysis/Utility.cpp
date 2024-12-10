@@ -408,9 +408,6 @@ unsigned ScanLoweringHelper::getAxisBlockStride() {
   llvm_unreachable("Axis not found in order");
 }
 
-GatherLoweringHelper::GatherLoweringHelper(triton::GatherOp gatherOp)
-    : gatherOp(gatherOp) {}
-
 unsigned GatherLoweringHelper::getScratchSizeInBytes() {
   // If the gather is warp-local, no scratch space is needed.
   if (isWarpLocal())
@@ -419,7 +416,6 @@ unsigned GatherLoweringHelper::getScratchSizeInBytes() {
   // Otherwise, performing the gather will require scratch space to communicate
   // the source tensor across threads. For now, assume the whole source tensor
   // is written back to shared memory.
-  RankedTensorType srcType = gatherOp.getSrc().getType();
   return product(srcType.getShape()) *
          ceil<unsigned>(srcType.getElementTypeBitWidth(), 8);
 }
@@ -427,8 +423,6 @@ unsigned GatherLoweringHelper::getScratchSizeInBytes() {
 bool GatherLoweringHelper::isWarpLocal() {
   // The gather is warp-local if for each column along the gather axis in the
   // source and index tensors, all the elements are owned by the same warp.
-  RankedTensorType srcType = gatherOp.getSrc().getType();
-  RankedTensorType idxType = gatherOp.getIndices().getType();
   std::optional<LinearLayout> srcLayout =
       toLinearLayout(srcType.getShape(), srcType.getEncoding());
   std::optional<LinearLayout> idxLayout =
@@ -439,12 +433,11 @@ bool GatherLoweringHelper::isWarpLocal() {
   if (!srcLayout || !idxLayout)
     return false;
 
-  Builder b(gatherOp.getContext());
+  Builder b(srcType.getContext());
   StringAttr kBlock = b.getStringAttr("block");
   StringAttr kWarp = b.getStringAttr("warp");
   StringAttr kLane = b.getStringAttr("lane");
-  StringAttr kGatherDim =
-      b.getStringAttr("dim" + std::to_string(gatherOp.getAxis()));
+  StringAttr kGatherDim = b.getStringAttr("dim" + std::to_string(axis));
 
   // The tensor layouts must be distributed layouts, where the basis matrix is a
   // subpermutation matrix (permutation matrix plus zeros for broadcasting).
@@ -469,7 +462,7 @@ bool GatherLoweringHelper::isWarpLocal() {
 
   SmallVector<StringAttr> otherDims;
   for (unsigned dim = 0, rank = srcType.getRank(); dim < rank; ++dim) {
-    if (dim != gatherOp.getAxis()) {
+    if (dim != axis) {
       otherDims.push_back(b.getStringAttr("dim" + Twine(dim)));
     }
   }

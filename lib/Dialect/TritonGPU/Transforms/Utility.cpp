@@ -425,7 +425,8 @@ static Attribute inferDstEncoding(triton::ReshapeOp op, Attribute encoding) {
 
 static Attribute inferDstEncoding(GatherOp op, Attribute encoding) {
   // The output encoding is the same as the index encoding.
-  // FIXME: This assumes `encoding` is the index encoding, which can be different than the source encoding.
+  // FIXME: This assumes `encoding` is the index encoding, which can be
+  // different than the source encoding.
   return encoding;
 }
 
