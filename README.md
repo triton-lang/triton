@@ -193,6 +193,9 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
   separated values to be specified (eg
   `TRITON_LLVM_DEBUG_ONLY="tritongpu-remove-layout-conversions` or
   `TRITON_LLVM_DEBUG_ONLY="tritongpu-remove-layout-conversions,regalloc"`).
+- `TRITON_ENABLE_ADDRESS_SANITIZER=1` invokes the LLVM address sanitizer for
+  memory leak and out of bounds access detection. Currently only supported on the AMD
+  backend. This must be run using the ASAN libraries documented [here](https://rocm.docs.amd.com/projects/llvm-project/en/latest/conceptual/using-gpu-sanitizer.html).
 - `USE_IR_LOC={ttir,ttgir}` reparses the IR such that the location information
   will be the line number of the IR file with that particular extension,
   instead of line number of the python file. This can provide a direct mapping
