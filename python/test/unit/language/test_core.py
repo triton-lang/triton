@@ -5390,6 +5390,8 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device, t
 layouts_3d = [
     BlockedLayout([4, 4, 1], [1, 8, THREADS_PER_WARP // 8], [2, 2, 1], [2, 1, 0], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
     BlockedLayout([1, 1, 4], [8, THREADS_PER_WARP // 8, 1], [2, 1, 2], [1, 2, 0], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
+    MmaLayout((3, 0), [1, 2, 2], [1, 1, 1], [1, 1, 1], [2, 1, 0], [16, 32, 32]),
+    MmaLayout((3, 0), [1, 4, 1], [1, 1, 1], [1, 1, 1], [2, 1, 0], [16, 128, 16]),
     DotOperandLayout(parent=MmaLayout([2, 0], [4, 1, 1], [1, 1, 1], [1, 1, 1], [2, 1, 0], [1, 16, 8]), op_idx=0,
                      k_width=1),
 ]
@@ -5402,7 +5404,7 @@ shared_layout_3d = [
 ]
 
 
-@pytest.mark.parametrize("M, N, K", [[8, 16, 32]])
+@pytest.mark.parametrize("M, N, K", [[8, 16, 128]])
 @pytest.mark.parametrize("shared_layout", shared_layout_3d)
 @pytest.mark.parametrize("dist_layout", layouts_3d)
 def test_local_load_store(M, N, K, dist_layout, shared_layout, device, tmp_path: pathlib.Path):
