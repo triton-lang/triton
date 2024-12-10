@@ -20,6 +20,7 @@ def add_kernel(
 ):
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
+    #Set access to go out of bounds for ASAN test
     offsets = block_start + tl.arange(0, BLOCK_SIZE) + 1
     x = tl.load(x_ptr + offsets)
     y = tl.load(y_ptr + offsets)
