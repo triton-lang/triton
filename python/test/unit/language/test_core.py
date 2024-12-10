@@ -138,18 +138,16 @@ class WmmaLayout:
 
 class MmaLayout:
 
-    def __init__(self, version, warps_per_cta, ctas_per_cga, cta_split_num, cta_order, instr_shape,
-                 has_leading_offset=False):
+    def __init__(self, version, warps_per_cta, ctas_per_cga, cta_split_num, cta_order, instr_shape):
         self.version = version
         self.warps_per_cta = warps_per_cta
         self.ctas_per_cga = ctas_per_cga
         self.cta_split_num = cta_split_num
         self.cta_order = cta_order
         self.instr_shape = instr_shape
-        self.has_leading_offset = has_leading_offset
 
     def __str__(self):
-        return f"#{GPU_DIALECT}.nvidia_mma<{{versionMajor={self.version[0]}, versionMinor={self.version[1]}, warpsPerCTA={self.warps_per_cta}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}, instrShape={self.instr_shape}, hasLeadingOffset={self.has_leading_offset}}}>"
+        return f"#{GPU_DIALECT}.nvidia_mma<{{versionMajor={self.version[0]}, versionMinor={self.version[1]}, warpsPerCTA={self.warps_per_cta}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}, instrShape={self.instr_shape}}}>"
 
 
 class DotOperandLayout:
@@ -180,7 +178,8 @@ class BlockedLayout:
 
 class SharedLayout:
 
-    def __init__(self, vec, per_phase, max_phase, order, ctas_per_cga, cta_split_num, cta_order):
+    def __init__(self, vec, per_phase, max_phase, order, ctas_per_cga, cta_split_num, cta_order,
+                 has_leading_offset=False):
         self.vec = vec
         self.per_phase = per_phase
         self.max_phase = max_phase
@@ -188,9 +187,10 @@ class SharedLayout:
         self.ctas_per_cga = ctas_per_cga
         self.cta_split_num = cta_split_num
         self.cta_order = cta_order
+        self.has_leading_offset = has_leading_offset
 
     def __str__(self):
-        return f"#{GPU_DIALECT}.shared<{{vec={self.vec}, perPhase={self.per_phase}, maxPhase={self.max_phase}, order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
+        return f"#{GPU_DIALECT}.shared<{{vec={self.vec}, perPhase={self.per_phase}, maxPhase={self.max_phase}, order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}, hasLeadingOffset={self.has_leading_offset}}}>"
 
 
 def is_layout_applicable(layout) -> bool:
@@ -5481,15 +5481,15 @@ def test_local_load_store(M, N, K, dist_layout, shared_layout, device, tmp_path:
 mma_layout = [
     MmaLayout((2, 0), [1, 4], [1, 1], [1, 1], [0, 1], [16, 8]),
     MmaLayout((2, 0), [2, 8], [1, 1], [1, 1], [0, 1], [16, 8]),
-    MmaLayout((3, 0), [4, 1], [1, 1], [1, 1], [0, 1], [16, 128, 16], has_leading_offset=True),
-    MmaLayout((3, 0), [2, 8], [1, 1], [1, 1], [0, 1], [16, 64, 32], has_leading_offset=True),
-    MmaLayout((3, 0), [8, 2], [1, 1], [1, 1], [0, 1], [16, 128, 32], has_leading_offset=True),
+    MmaLayout((3, 0), [4, 1], [1, 1], [1, 1], [0, 1], [16, 128, 16]),
+    MmaLayout((3, 0), [2, 8], [1, 1], [1, 1], [0, 1], [16, 64, 32]),
+    MmaLayout((3, 0), [8, 2], [1, 1], [1, 1], [0, 1], [16, 128, 32]),
 ]
 
 shared_layout = [
     SharedLayout(1, 1, 1, [1, 0], [1, 1], [1, 1], [0, 1]),
-    SharedLayout(4, 1, 8, [0, 1], [1, 1], [1, 1], [0, 1]),
-    SharedLayout(8, 2, 4, [1, 0], [1, 1], [1, 1], [0, 1]),
+    SharedLayout(4, 1, 8, [0, 1], [1, 1], [1, 1], [0, 1], has_leading_offset=True),
+    SharedLayout(8, 2, 4, [1, 0], [1, 1], [1, 1], [0, 1], has_leading_offset=True),
 ]
 
 
