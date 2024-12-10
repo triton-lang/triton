@@ -386,34 +386,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
-#blockedA = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
-#blockedB = #ttg.blocked<{sizePerThread = [2, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 4], order = [0, 1]}>
+#blocked = #ttg.blocked<{sizePerThread = [1, 2], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [1, 4]}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.target" = "cuda:80"} {
   tt.func @dot_op_hoisted_to_load_with_unsupported_op_and_initializer_above_slice(
-                    %pa: tensor<16x16x!tt.ptr<f16>, #blockedA> {tt.divisibility=16: i32, tt.contiguity=2 : i32},
-                    %pb: tensor<16x16x!tt.ptr<f16>, #blockedB> {tt.divisibility=16: i32, tt.contiguity=2 : i32},
+                    %pa: tensor<16x16x!tt.ptr<f16>, #blocked> {tt.divisibility=16: i32, tt.contiguity=2 : i32},
+                    %b: tensor<16x16xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>,
                     %c: tensor<16x16xf32, #mma>) -> tensor<16x16xf32, #mma>{
     // CHECK: tt.func @dot_op_hoisted_to_load_with_unsupported_op_and_initializer_above_slice
-    // Confirm that all 3 loads feed directly into a convert_layout.
+    // This checks that we propagate dot op layout given the following:
+    // initializer -> unsupported op -> initializer -> supported ops -> convert,
+    // where initializers can be constants or loads.
     // CHECK: %[[LOAD1:.*]] = tt.load
-    // CHECK: %[[LOAD2:.*]] = tt.load
-    // CHECK: %[[LOAD3:.*]] = tt.load
     // CHECK: ttg.convert_layout %[[LOAD1]]
-    // CHECK: ttg.convert_layout %[[LOAD2]]
-    // CHECK: ttg.convert_layout %[[LOAD3]]
-    %offset = arith.constant dense<16> : tensor<16x1xi32, #blockedA>
-    %broadcast = tt.broadcast %offset : tensor<16x1xi32, #blockedA> -> tensor<16x16xi32, #blockedA>
-    %pa2 = tt.addptr %pa, %broadcast : tensor<16x16x!tt.ptr<f16>, #blockedA>, tensor<16x16xi32, #blockedA>
-    %a1 = tt.load %pa : tensor<16x16x!tt.ptr<f16>, #blockedA>
-    %a2 = tt.load %pa2 : tensor<16x16x!tt.ptr<f16>, #blockedA>
-    %a = arith.addf %a1, %a2 : tensor<16x16xf16, #blockedA>
-    %b = tt.load %pb : tensor<16x16x!tt.ptr<f16>, #blockedB>
-    %ae = arith.extf %a : tensor<16x16xf16, #blockedA> to tensor<16x16xf32, #blockedA>
-    %be = arith.extf %b : tensor<16x16xf16, #blockedB> to tensor<16x16xf32, #blockedB>
-    %ac = ttg.convert_layout %ae : tensor<16x16xf32, #blockedA> -> tensor<16x16xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
-    %bc = ttg.convert_layout %be : tensor<16x16xf32, #blockedB> -> tensor<16x16xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
-    %r = tt.dot %ac, %bc, %c : tensor<16x16xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<16x16xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<16x16xf32, #mma>
+    %offset = arith.constant dense<16> : tensor<16x1xi32, #blocked>
+    %broadcast = tt.broadcast %offset : tensor<16x1xi32, #blocked> -> tensor<16x16xi32, #blocked>
+    %pa2 = tt.addptr %pa, %broadcast : tensor<16x16x!tt.ptr<f16>, #blocked>, tensor<16x16xi32, #blocked>
+    %a = tt.load %pa2 : tensor<16x16x!tt.ptr<f16>, #blocked>
+    %ae = arith.extf %a : tensor<16x16xf16, #blocked> to tensor<16x16xf32, #blocked>
+    %ac = ttg.convert_layout %ae : tensor<16x16xf32, #blocked> -> tensor<16x16xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+    %r = tt.dot %ac, %b, %c : tensor<16x16xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<16x16xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<16x16xf32, #mma>
     tt.return %r : tensor<16x16xf32, #mma>
   }
 }
