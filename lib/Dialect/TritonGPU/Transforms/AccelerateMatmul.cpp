@@ -794,8 +794,8 @@ static void setOptimizedGatherLayout(GatherOp op) {
   // assignment is a proper constraint system.
   auto distributedItf = cast<DistributedEncodingTrait>(srcType.getEncoding());
   unsigned axis = op.getAxis();
-  //if (distributedItf.getThreadOrder().front() != axis)
-  //  return;
+  if (distributedItf.getThreadOrder().front() != axis)
+    return;
 
   // Determine a warp-local gather layout that minimizes the number of emitted
   // warp shuffles.
