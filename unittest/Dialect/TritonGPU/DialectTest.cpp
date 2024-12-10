@@ -140,16 +140,30 @@ void testReshape(RankedTensorType srcTy, RankedTensorType dstTy,
         << " " << stringifyLLVMType(inferredEnc) << " -> "
         << triton::join(srcTy.getShape(), "x") << "failed:\n"
         << join(diags, "\n");
-    auto srcLinear = toLinearLayout(srcTy.getShape(), inferredSrcEnc);
-    auto dstLinear = toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
-    EXPECT_EQ(srcLinear, dstLinear)
+    auto srcLinear = toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
+    auto inferredSrcLinear = toLinearLayout(srcTy.getShape(), inferredSrcEnc);
+    EXPECT_EQ(inferredSrcLinear, srcLinear)
         << "Inverse encoding inference (" << triton::join(dstTy.getShape(), "x")
         << " " << stringifyLLVMType(inferredEnc) << " -> "
         << triton::join(srcTy.getShape(), "x")
         << " gave the wrong result.  Expected " << srcLinear->toString()
         << " but "
-        << "got " << dstLinear->toString() << ".\n";
+        << "got " << inferredSrcLinear->toString() << ".\n";
   }
+
+  // The funtional characterisation of resize is that, if we have a srcLayout
+  // and a dstLayout, then the flattened layouts are views of the same data
+  // when considered as C-contiguous.
+  auto makeFlattenedCContig = [](ArrayRef<int64_t> shape, Attribute layout) {
+    auto ctx = layout.getContext();
+    auto linear = *toLinearLayout(shape, layout);
+    auto dims = standardOutDimNames(ctx, shape.size());
+    std::reverse(dims.begin(), dims.end());
+    return linear.transposeOuts(dims).reshapeOuts(
+        {{dims.back(), linear.getTotalOutDimSize()}});
+  };
+  EXPECT_EQ(makeFlattenedCContig(srcTy.getShape(), srcTy.getEncoding()),
+            makeFlattenedCContig(dstTy.getShape(), inferredEnc));
 }
 
 class InferReshapeOpEncodingTest
