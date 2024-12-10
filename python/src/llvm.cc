@@ -380,7 +380,7 @@ void init_triton_llvm(py::module &&m) {
               fpm.addPass(InstCombinePass());
             });
         bool enableAddressSanitizer =
-            mlir::triton::tools::getBoolEnv("TRITON_ENABLE_ADDRESS_SANITIZER");
+            mlir::triton::tools::getBoolEnv("TRITON_ENABLE_ASAN");
         if (enableAddressSanitizer) {
           llvm::SmallVector<StringRef, 3> split;
           StringRef(mod->getTargetTriple()).split(split, '-');

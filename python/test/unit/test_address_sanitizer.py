@@ -3,7 +3,7 @@ import subprocess
 
 os.environ["AMD_PYTORCH_NO_CUDA_MEMORY_CACHING"] = "1"
 os.environ["PYTORCH_NO_HIP_MEMORY_CACHING"] = "1"
-os.environ["TRITON_ENABLE_ADDRESS_SANITIZER"] = "1"
+os.environ["TRITON_ENABLE_ASAN"] = "1"
 os.environ["HSA_XNACK"] = "1"
 
 

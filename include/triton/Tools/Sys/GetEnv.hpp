@@ -30,7 +30,7 @@ inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
     "TRITON_ENABLE_LLVM_DEBUG",
     "TRITON_HIP_STREAM_PREFETCH",
     "TRITON_LLVM_DEBUG_ONLY",
-    "TRITON_ENABLE_ADDRESS_SANITIZER",
+    "TRITON_ENABLE_ASAN",
     "USE_IR_LOC",
     "NVPTX_ENABLE_DUMP",
     // clang-format on
