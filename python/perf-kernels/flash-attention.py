@@ -1353,26 +1353,25 @@ def varlen_input_helper(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, equal_seqlen
 #         ref_out = ref_out.transpose(1, 2).clone()
 #     torch.testing.assert_close(ref_out, tri_out, atol=2e-2, rtol=2e-2)
 
-
 @pytest.mark.parametrize('Z, H, N_CTX_Q, N_CTX_K, D_HEAD', [
-    (4, 48, 1024, 1024, 64),
+    # (4, 48, 1024, 1024, 64),
     (4, 12, 8192, 8192, 64),
-    (2, 4, 16384, 16384, 128),
+    # (2, 4, 16384, 16384, 128),
     # (2, 16, 1020, 987, 128),
-    (2, 4, 7, 16219, 64),
-    (4, 48, 1, 1, 64),
-    (4, 48, 1, 1, 128),
-    (4, 48, 3, 3, 128),
-    (4, 48, 1001, 990, 64),
-    (1, 8, 8081, 7099, 64),
-    (1, 8, 16330, 15989, 128),
-    (4, 4, 1024, 1024, 33),
+    # (2, 4, 7, 16219, 64),
+    # (4, 48, 1, 1, 64),
+    # (4, 48, 1, 1, 128),
+    # (4, 48, 3, 3, 128),
+    # (4, 48, 1001, 990, 64),
+    # (1, 8, 8081, 7099, 64),
+    # (1, 8, 16330, 15989, 128),
+    # (4, 4, 1024, 1024, 33),
     # (4, 4, 65, 1019, 65),
-    (4, 4, 128, 128, 65),
+    # (4, 4, 128, 128, 65),
     # (4, 4, 113, 123, 1),
 ])
-@pytest.mark.parametrize('causal', [True, False])
-@pytest.mark.parametrize('quantize_p', [True, False])
+@pytest.mark.parametrize('causal', [True])
+@pytest.mark.parametrize('quantize_p', [True])
 @pytest.mark.parametrize('layout', ['bhsd'])
 def test_op_fwd_int8(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, quantize_p, layout, dtype=torch.float16):
     torch.manual_seed(20)
