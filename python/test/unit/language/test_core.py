@@ -138,16 +138,18 @@ class WmmaLayout:
 
 class MmaLayout:
 
-    def __init__(self, version, warps_per_cta, ctas_per_cga, cta_split_num, cta_order, instr_shape):
+    def __init__(self, version, warps_per_cta, ctas_per_cga, cta_split_num, cta_order, instr_shape,
+                 has_leading_offset=False):
         self.version = version
         self.warps_per_cta = warps_per_cta
         self.ctas_per_cga = ctas_per_cga
         self.cta_split_num = cta_split_num
         self.cta_order = cta_order
         self.instr_shape = instr_shape
+        self.has_leading_offset = has_leading_offset
 
     def __str__(self):
-        return f"#{GPU_DIALECT}.nvidia_mma<{{versionMajor={self.version[0]}, versionMinor={self.version[1]}, warpsPerCTA={self.warps_per_cta}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}, instrShape={self.instr_shape}}}>"
+        return f"#{GPU_DIALECT}.nvidia_mma<{{versionMajor={self.version[0]}, versionMinor={self.version[1]}, warpsPerCTA={self.warps_per_cta}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}, instrShape={self.instr_shape}, hasLeadingOffset={self.has_leading_offset}}}>"
 
 
 class DotOperandLayout:
@@ -5479,9 +5481,9 @@ def test_local_load_store(M, N, K, dist_layout, shared_layout, device, tmp_path:
 mma_layout = [
     MmaLayout((2, 0), [1, 4], [1, 1], [1, 1], [0, 1], [16, 8]),
     MmaLayout((2, 0), [2, 8], [1, 1], [1, 1], [0, 1], [16, 8]),
-    MmaLayout((3, 0), [4, 1], [1, 1], [1, 1], [0, 1], [16, 128, 16]),
-    MmaLayout((3, 0), [2, 8], [1, 1], [1, 1], [0, 1], [16, 64, 32]),
-    MmaLayout((3, 0), [8, 2], [1, 1], [1, 1], [0, 1], [16, 128, 32]),
+    MmaLayout((3, 0), [4, 1], [1, 1], [1, 1], [0, 1], [16, 128, 16], has_leading_offset=True),
+    MmaLayout((3, 0), [2, 8], [1, 1], [1, 1], [0, 1], [16, 64, 32], has_leading_offset=True),
+    MmaLayout((3, 0), [8, 2], [1, 1], [1, 1], [0, 1], [16, 128, 32], has_leading_offset=True),
 ]
 
 shared_layout = [
@@ -5494,7 +5496,7 @@ shared_layout = [
 @pytest.mark.parametrize("M, N", [[128, 128]])
 @pytest.mark.parametrize("mma_layout", mma_layout)
 @pytest.mark.parametrize("shared_layout", shared_layout)
-def test_local_load_store_mma(M, N, K, mma_layout, shared_layout, device, tmp_path: pathlib.Path):
+def test_local_load_store_mma(M, N, mma_layout, shared_layout, device, tmp_path: pathlib.Path):
     if is_hip():
         pytest.skip("test_mma2mma is not supported in HIP")
 
@@ -5512,7 +5514,7 @@ def test_local_load_store_mma(M, N, K, mma_layout, shared_layout, device, tmp_pa
     """
     ir = layouts + f"""
   module attributes {{"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = {num_warps} : i32, "ttg.threads-per-warp" = {THREADS_PER_WARP} : i32}} {{
-  tt.func public @kernel(%arg0: !tt.ptr<i32> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<i32> {{tt.divisibility = 16 : i32}}) attributes {{noinline = false}} {{
+  tt.func public @kernel(%arg0: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}) attributes {{noinline = false}} {{
     %cst = arith.constant dense<{N}> : tensor<{M}x1xi32, #dist>
     %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #ttg.slice<{{dim = 1, parent = #dist}}>>
     %1 = tt.make_range {{end = {N} : i32, start = 0 : i32}} : tensor<{N}xi32, #ttg.slice<{{dim = 0, parent = #dist}}>>
@@ -5535,7 +5537,7 @@ def test_local_load_store_mma(M, N, K, mma_layout, shared_layout, device, tmp_pa
 }}
 """
 
-    x = torch.arange(0, M * N, device=device, dtype=torch.float16, shape=(M, N))
+    x = torch.arange(0, M * N, device=device, dtype=torch.float16).reshape(M, N)
     z = torch.empty_like(x, device=device)
 
     temp_file = tmp_path / "test_local_load_store_mma.ttgir"
