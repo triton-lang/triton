@@ -1226,7 +1226,7 @@ def quantize_input(q, k, v, input_metadata: MetaData, quantize_p=False, int8_kv=
     return q, k, v
 
 
-def input_helper(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, layout):
+def input_helper(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, layout, requires_grad=True):
     torch.manual_seed(20)
 
     # Initialize q, k, v
@@ -1238,9 +1238,9 @@ def input_helper(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, layout):
         k_tensor_shape = (Z, N_CTX_K, HK, D_HEAD)
     else:
         assert False, 'Got unsupported tensor layout'
-    q = torch.randn(q_tensor_shape, dtype=dtype, device="cuda", requires_grad=True)
-    k = torch.randn(k_tensor_shape, dtype=dtype, device="cuda", requires_grad=True)
-    v = torch.randn(k_tensor_shape, dtype=dtype, device="cuda", requires_grad=True)
+    q = torch.randn(q_tensor_shape, dtype=dtype, device="cuda", requires_grad=requires_grad)
+    k = torch.randn(k_tensor_shape, dtype=dtype, device="cuda", requires_grad=requires_grad)
+    v = torch.randn(k_tensor_shape, dtype=dtype, device="cuda", requires_grad=requires_grad)
 
     sm_scale = D_HEAD**-0.5
     input_metadata = MetaData(sm_scale=sm_scale)
@@ -1376,7 +1376,7 @@ def varlen_input_helper(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, equal_seqlen
 def test_op_fwd_int8(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, quantize_p, layout, dtype=torch.float16):
     torch.manual_seed(20)
 
-    q, k, v, input_metadata = input_helper(Z, H, H, N_CTX_Q, N_CTX_K, D_HEAD, dtype, layout)
+    q, k, v, input_metadata = input_helper(Z, H, H, N_CTX_Q, N_CTX_K, D_HEAD, dtype, layout, requires_grad=False)
     if causal:
         input_metadata.need_causal()
 
