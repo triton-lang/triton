@@ -1353,6 +1353,7 @@ def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, layout, 
         ref_out = ref_out.transpose(1, 2).clone()
     torch.testing.assert_close(ref_out, tri_out, atol=2e-2, rtol=2e-2)
 
+
 @pytest.mark.parametrize('Z, H, N_CTX_Q, N_CTX_K, D_HEAD', [
     (4, 48, 1024, 1024, 64),
     (4, 12, 8192, 8192, 64),
@@ -1376,6 +1377,7 @@ def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, layout, 
 def test_op_fwd_int8(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, quantize_p, layout, dtype=torch.float16):
     torch.manual_seed(20)
 
+    # Disable grad to save memeory it won't run into OOM on CI machine.
     q, k, v, input_metadata = input_helper(Z, H, H, N_CTX_Q, N_CTX_K, D_HEAD, dtype, layout, requires_grad=False)
     if causal:
         input_metadata.need_causal()
