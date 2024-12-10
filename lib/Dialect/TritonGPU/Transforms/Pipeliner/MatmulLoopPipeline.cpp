@@ -773,9 +773,11 @@ Value subviewTMADescriptor(BuilderT &builder, Location loc, Value alloc,
 LogicalResult rewriteTMABufferUpdates(
     scf::ForOp forOp,
     const llvm::MapVector<Operation *, Value> &tmaBufferMapping,
-    ArrayRef<BlockArgument> tmaCounters, Value numBuffers, Value one,
-    Value zero) {
+    ArrayRef<BlockArgument> tmaCounters, int numStages, Value one, Value zero) {
   assert(tmaBufferMapping.size() == tmaCounters.size());
+
+  Value numStagesVal = mlir::OpBuilder(forOp).create<arith::ConstantIntOp>(
+      forOp.getLoc(), numStages, 32);
 
   for (auto [iOp, pair] : llvm::enumerate(tmaBufferMapping)) {
     auto &[op, alloc] = pair;
@@ -800,7 +802,7 @@ LogicalResult rewriteTMABufferUpdates(
 
     // Increment the buffer index counter
     Value nextCounter = createIncrementModulo(stageBuilder, loc, counter,
-                                              numBuffers, zero, one);
+                                              numStagesVal, zero, one);
 
     // If we are in a (potentially nested) if region, propagate the counter
     // up to the main for op body scope
@@ -949,7 +951,7 @@ createAsyncOps(scf::ForOp &forOp,
   }
 
   if (failed(rewriteTMABufferUpdates(newForOp, tmaBufferMapping, tmaCounters,
-                                     numBuffersVal, one, zero))) {
+                                     numStages, one, zero))) {
     llvm_unreachable("Failed to rewrite TMA ops");
   }
   tmaBufferMapping.clear();
