@@ -861,6 +861,8 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(
   int instrN = mma.getInstrShape()[1];
 
   // Construct the bases for a single chunk
+  assert(instrN >= numColsPerChunk &&
+         "Each chunk is filled in with a single warp");
   for (int logCol = 0; logCol < llvm::Log2_32(numColsPerChunk / 16); logCol++) {
     int col = 1 << logCol;
     basesReg.push_back({16 * col, 0});
@@ -878,18 +880,16 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(
   // Expand the `register` dimension so the size of columns matches `shape[1] /
   // warpsPerCTA[1]`
   auto numColsPerWarp = std::max<int>(instrN, shape[1] / warpsPerCTA[1]);
-  assert(warpsPerCTA[1] * instrN >= numColsPerChunk &&
+  assert(warpsPerCTA[1] * instrN >= shape[1] &&
          "There must be enough columns to use MMAv3");
-  auto logNumCols = numColsPerWarp <= numColsPerChunk
-                        ? 0
-                        : llvm::Log2_32(numColsPerWarp / numColsPerChunk);
+  auto logNumCols = llvm::Log2_32(numColsPerWarp / numColsPerChunk);
   for (int logCol = 0; logCol < logNumCols; logCol++) {
     int chunk = 1 << logCol;
     int basis = chunk * shape[0];
     basesReg.push_back({0, basis});
   }
 
-  // Expand the `warp` dimension so that the size of rows matches `shape[0]`
+  // Expand the `register` dimension so that the size of rows matches `shape[0]`
   assert(warpsPerCTA[0] * instrM <= shape[0] &&
          "There must be enough rows to use MMAv3");
   auto logNumRows = llvm::Log2_32(shape[0] / (warpsPerCTA[0] * instrM));
