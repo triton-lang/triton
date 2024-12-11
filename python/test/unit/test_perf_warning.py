@@ -295,7 +295,7 @@ def test_remark_swp_op_before_operands_persistent_matmul(capfd, fresh_triton_cac
     # Define the expected strings in order
     expected_strings = [
         "error: operation scheduled before its operands.", "if ki == 0:",
-        "error: This line likely causes scheduling conflict.", "tile_id += NUM_SMS"
+        "error: This line likely causes scheduling conflict.  Consider moving it", "tile_id += NUM_SMS"
     ]
     # Initialize an index to track the position in expected_strings
     index = 0

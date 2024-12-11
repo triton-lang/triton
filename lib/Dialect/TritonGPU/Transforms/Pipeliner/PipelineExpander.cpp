@@ -328,7 +328,9 @@ void LoopPipelinerInternal::printSchedulingError(int64_t distance,
   } else {
     consumer->emitError() << errorMessage;
     for (auto op : rootDefiningOps) {
-      op->emitError() << "This line likely causes scheduling conflict.";
+      op->emitError()
+          << "This line likely causes scheduling conflict. Consider moving it "
+             "to an earlier position within the loop body.";
     }
   }
 }
