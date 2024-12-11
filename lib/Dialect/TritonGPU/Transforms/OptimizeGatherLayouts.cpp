@@ -20,15 +20,6 @@ static void setOptimizedGatherLayout(GatherOp op) {
   RankedTensorType srcType = op.getSrc().getType();
   RankedTensorType idxType = op.getIndices().getType();
 
-  // HACK: Heurstic to avoid a performance footgun: a layout that conflicts with
-  // load coalescing will trigger a layout conversion, so try to avoid this
-  // scenario by checking the order. We should replace this when layout
-  // assignment is a proper constraint system.
-  auto distributedItf = cast<DistributedEncodingTrait>(srcType.getEncoding());
-  unsigned axis = op.getAxis();
-  // if (distributedItf.getThreadOrder().front() != axis)
-  //   return;
-
   // Determine a warp-local gather layout that minimizes the number of emitted
   // warp shuffles.
   unsigned numThreadsPerWarp =
@@ -63,6 +54,7 @@ static void setOptimizedGatherLayout(GatherOp op) {
 
   // We know that the layouts will be the same between the two tensors except
   // for `sizePerThread[axis]`.
+  unsigned axis = op.getAxis();
   unsigned rank = srcType.getRank();
   SmallVector<unsigned> threadsPerWarp(rank);
   SmallVector<unsigned> warpsPerCTA(rank);
@@ -78,9 +70,11 @@ static void setOptimizedGatherLayout(GatherOp op) {
   // Now spread them along the other dimensions. Do this according to order
   // (arbitrary).
   unsigned threadsToAlloc = numThreadsPerWarp / maxThreadsInAxis;
+  auto distributedItf = cast<DistributedEncodingTrait>(srcType.getEncoding());
   for (unsigned dim : distributedItf.getThreadOrder()) {
     if (dim == axis)
       continue;
+    // The gather axis is now the fastest-changing dimension.
     order.push_back(dim);
     unsigned nextThreadAlloc =
         std::min<unsigned>(srcType.getDimSize(dim), threadsToAlloc);
@@ -105,7 +99,8 @@ static void setOptimizedGatherLayout(GatherOp op) {
   assert(llvm::none_of(warpsPerCTA, [](unsigned c) { return c == 0; }));
 
   // Just set `sizePerThread` to 1 along other dimensions and let broadcasting
-  // handling it.
+  // handling it. This also means we can use the same layout between the source
+  // and index tensors for simplicity.
   SmallVector<unsigned> sizePerThread(rank, 1);
   sizePerThread[axis] = srcType.getDimSize(axis) / threadsPerWarp[axis];
 
