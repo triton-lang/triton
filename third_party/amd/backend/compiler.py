@@ -1,5 +1,6 @@
 from triton.backends.compiler import BaseBackend, GPUTarget, AttrsDescriptor, register_descriptor
 from triton._C.libtriton import ir, passes, llvm, amd
+from triton._utils import find_paths_if
 from dataclasses import dataclass
 from typing import Any, Dict, Tuple
 from types import ModuleType
@@ -17,7 +18,8 @@ def min_dot_size(target: GPUTarget):
     # CDNA 3.0 supports k==8 in all mfma variants except for int8
     # (where the smallest `k` supported is 16)
     if "gfx94" in arch_str:
-        return lambda lhsType, rhsType: (16, 16, 16) if (lhsType.is_int8() or rhsType.is_int8()) else (16, 16, 8)
+        return lambda lhsType, rhsType: (16, 16, 16) if (lhsType.scalar.is_int8() or rhsType.scalar.is_int8()) else (
+            16, 16, 8)
     # CDNA 2.0 always supports `k==8`
     if "gfx9" in arch_str:
         return lambda lhsType, rhsType: (16, 16, 8)
@@ -100,10 +102,14 @@ class HIPAttrsDescriptor(AttrsDescriptor):
         if params is None or values is None:
             return
 
-        self.arg_properties["tt.pointer_range"] = [
-            param.num for param, arg in zip(params, values) if HIPAttrsDescriptor.is_within2gb(arg)
-            and not param.do_not_specialize and not param.do_not_specialize_on_alignment
-        ]
+        pointer_range = []
+        for param, arg in zip(params, values):
+            if param.do_not_specialize or \
+               param.do_not_specialize_on_alignment:
+                continue
+            paths = find_paths_if(arg, lambda path, val: HIPAttrsDescriptor.is_within2gb(val))
+            pointer_range += [(param.num, ) + x for x in paths]
+        self.arg_properties["tt.pointer_range"] = pointer_range
 
     @staticmethod
     def is_within2gb(arg):

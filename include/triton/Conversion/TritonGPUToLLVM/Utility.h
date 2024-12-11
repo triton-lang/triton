@@ -1123,6 +1123,12 @@ emitBaseIndexForLayout(Location loc, RewriterBase &rewriter,
   return idx;
 }
 
+// Emit code to compute the (laneId, warpId, blockId) for the current thread.
+std::tuple</*laneId=*/Value, /*warpId=*/Value, /*blockId=*/Value>
+emitHardwareTuple(Location loc, RewriterBase &rewriter,
+                  const TargetInfoBase &target, bool withCTAOffset,
+                  unsigned threadsPerWarp);
+
 // Emit indices calculation within each ConversionPattern, and returns a
 // [elemsPerThread X rank] index matrix.
 //
@@ -1148,15 +1154,15 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
 // Returns true on success.
 [[nodiscard]] bool emitTransferBetweenRegistersAndShared(
     RankedTensorType registerTy, triton::gpu::MemDescType sharedTy,
-    Type elemLlvmTy, std::optional<int32_t> maxVecElems, Value shmemBase,
-    ArrayRef<Value> shmemStrides, Location loc, RewriterBase &rewriter,
+    Type elemLlvmTy, std::optional<int32_t> maxVecElems,
+    const SharedMemoryObject &smemObj, Location loc, RewriterBase &rewriter,
     const TargetInfoBase &target,
     std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback);
 
 inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
     Location loc, const TargetInfoBase &target, unsigned inVec,
     RankedTensorType srcTy, triton::gpu::SharedEncodingAttr resSharedLayout,
-    Type resElemTy, SharedMemoryObject smemObj, RewriterBase &rewriter,
+    Type resElemTy, const SharedMemoryObject &smemObj, RewriterBase &rewriter,
     ArrayRef<Value> offsetVals, ArrayRef<Value> srcStrides) {
   // This utility computes the pointers for accessing the provided swizzled
   // shared memory layout `resSharedLayout`. More specifically, it computes,
@@ -1318,14 +1324,14 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
 SmallVector<Value> loadSharedToDistributed(RankedTensorType dstTy,
                                            triton::gpu::MemDescType srcTy,
                                            Type elemLlvmTy,
-                                           SharedMemoryObject smemObj,
+                                           const SharedMemoryObject &smemObj,
                                            Location loc, RewriterBase &rewriter,
                                            const TargetInfoBase &target);
 
 void storeDistributedToShared(
     triton::gpu::MemDescType dstTy, RankedTensorType srcTy, Type elemLlvmTy,
-    ArrayRef<Value> srcVals, Value smemBase, ArrayRef<Value> dstStrides,
-    Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
+    ArrayRef<Value> srcVals, const SharedMemoryObject &smemObj, Location loc,
+    RewriterBase &rewriter, const TargetInfoBase &target,
     std::pair<size_t, Type> *const llvmOpCount = nullptr);
 
 inline Value getStructFromSharedMemoryObject(Location loc,

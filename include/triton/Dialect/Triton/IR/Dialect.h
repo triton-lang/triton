@@ -78,6 +78,16 @@ public:
                                    Attribute operandEncodingB) const = 0;
 };
 
+class DialectVerifyTensorLayoutInterface
+    : public DialectInterface::Base<DialectVerifyTensorLayoutInterface> {
+public:
+  DialectVerifyTensorLayoutInterface(Dialect *dialect) : Base(dialect) {}
+
+  virtual LogicalResult
+  verifyTensorLayout(Attribute layout, RankedTensorType type, ModuleOp module,
+                     function_ref<InFlightDiagnostic()> emitError) const = 0;
+};
+
 } // namespace triton
 } // namespace mlir
 
