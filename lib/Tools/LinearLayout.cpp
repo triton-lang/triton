@@ -957,6 +957,12 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
 }
 
 LinearLayout LinearLayout::invert() const {
+  assert(isInvertible() &&
+         "A linear layout must be surjective and square to be invertible");
+  return pseudoinvert();
+}
+
+LinearLayout LinearLayout::pseudoinvert() const {
   // A^-1(x) = A^-1(I(x)), thus A.invert() = I.invertAndCompose(A)
   LinearLayout identity = LinearLayout::empty();
   for (auto outDim : getOutDimNames()) {

@@ -677,8 +677,12 @@ public:
   // don't place any guarantees on the choices made by this function.
   [[nodiscard]] LinearLayout invertAndCompose(const LinearLayout &outer) const;
 
-  // Get the layout that is the inverse or psuedo-inverse of this layout.
+  // Get the layout that is the inverse of this layout.
   [[nodiscard]] LinearLayout invert() const;
+  // Compute and return a psueodinverse of this layout. This is a layout such
+  // that `B = A.psuedoinvert()` implies that `A(B(x)) = I`. If `A` is
+  // invertible, then this returns `A^-1`.
+  [[nodiscard]] LinearLayout pseudoinvert() const;
 
   // For each in-dim, returns a bitmask of the "free variables" in the layout
   // function.
