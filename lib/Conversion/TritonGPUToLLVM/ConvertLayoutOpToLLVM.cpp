@@ -288,62 +288,90 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       return rewriter.notifyMatchFailure(
           op, "NYI. srcTy and/or dstTy don't implement LLs yet");
     }
+    LinearLayout srcLayout =
+        *toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
+    LinearLayout dstLayout =
+        *toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
+
+    StringAttr kBlock = str_attr("block");
+    StringAttr kWarp = str_attr("warp");
+    StringAttr kLane = str_attr("lane");
+    StringAttr kRegister = str_attr("register");
 
     assert(to_vector(conversion->getInDimNames()) ==
            to_vector(conversion->getOutDimNames()));
     auto dims = conversion->getInDimNames();
-    if (llvm::is_contained(dims, str_attr("block"))) {
+    if (llvm::is_contained(dims, kBlock)) {
       // Case 1: Transfer between values in different CTAs.
       //          This requires moving values through distributed shared memory.
       return rewriter.notifyMatchFailure(
           op, "NYI: Transfer between different CTAs");
-    } else if (llvm::is_contained(dims, str_attr("warp"))) {
+    } else if (llvm::is_contained(dims, kWarp)) {
       // Case 2: Transfer between values in the same CTA, in which case we move
       //         values through shared memory.
-      LinearLayout srcLayout =
-          *toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
-      LinearLayout dstLayout =
-          *toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
       return transferWithinBlock(op, srcLayout, dstLayout, adaptor, rewriter);
-    } else if (llvm::is_contained(dims, str_attr("lane"))) {
+    } else if (llvm::is_contained(dims, kLane)) {
       // Case 3. Transfer between values in the same warp, in which case we try
       //         to move values using warp shuffles, though if the pattern is
       //         complicated enough we may fall back to using shared memory
       // TODO(Keren): implement warp shuffle instead of using the general
       // approach that uses shared memory
-      LinearLayout srcLayout =
-          *toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
-      LinearLayout dstLayout =
-          *toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
       return transferWithinBlock(op, srcLayout, dstLayout, adaptor, rewriter);
-    } else if (llvm::is_contained(dims, str_attr("register"))) {
+    } else if (llvm::is_contained(dims, kRegister) ||
+               dstLayout.getInDimSize(kRegister) !=
+                   srcLayout.getInDimSize(kRegister)) {
       // Case 4. Transfer between values in the same thread, in which case we
       //         simply reorder the elements of adaptor.getSrc().
-      return transferWithinThread(op, *conversion, adaptor, rewriter);
+      return transferWithinThread(
+          op, dstLayout.getFreeVariableMasks()[kRegister],
+          dstLayout.getInDimSize(kRegister), *conversion, adaptor, rewriter);
     } else {
-      // The two layouts are equivalent. We should probably remove these in
-      // RemoveLayoutConversion.
-      rewriter.replaceOp(op, adaptor.getSrc());
+      // Cast 5. The two layouts are equivalent. We should probably remove
+      // these in RemoveLayoutConversion.
+      auto dstCvt = requiresI32Conversion(dstTy);
+      auto srcCvt = requiresI32Conversion(srcTy);
+      if (dstCvt || srcCvt) {
+        auto inVals = unpackLLElements(op.getLoc(), adaptor.getSrc(), rewriter);
+        inVals = unpackI32s(inVals, srcTy, rewriter, op.getLoc(),
+                            getTypeConverter());
+        inVals =
+            packI32s(inVals, dstTy, rewriter, op.getLoc(), getTypeConverter());
+        auto res = packLLElements(op.getLoc(), getTypeConverter(), inVals,
+                                  rewriter, op.getType());
+        rewriter.replaceOp(op, res);
+      } else {
+        rewriter.replaceOp(op, adaptor.getSrc());
+      }
       return success();
     }
   }
 
   LogicalResult
-  transferWithinThread(ConvertLayoutOp op, const LinearLayout &conversion,
-                       OpAdaptor adaptor,
+  transferWithinThread(ConvertLayoutOp op, int32_t regMasks, int32_t numRegs,
+                       const LinearLayout &conversion, OpAdaptor adaptor,
                        ConversionPatternRewriter &rewriter) const {
     MLIRContext *ctx = op.getContext();
     auto loc = op.getLoc();
     StringAttr kRegister = str_attr("register");
     assert(!cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
 
+    auto srcTy = op.getSrc().getType();
+    auto dstTy = op.getType();
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    SmallVector<Value> outVals;
-    outVals.resize(conversion.getInDimSize(kRegister));
-    for (int i = 0; i < conversion.getInDimSize(kRegister); i++) {
-      auto srcIdx = conversion.apply({{kRegister, i}}).begin()->second;
+    inVals = unpackI32s(inVals, srcTy, rewriter, loc, getTypeConverter());
+    SmallVector<Value> outVals(numRegs);
+    for (int i = 0; i < numRegs; i++) {
+      // Remove free masks from the register index
+      // For example, if idx = 0b00111, and masks = 0b00100, then we get
+      // 0b00011. It means that register 7 (0b111) has the same value as
+      // register 3 (0b011).
+      auto idx = i & (~regMasks);
+      auto srcIdx = conversion.hasInDim(kRegister)
+                        ? conversion.apply({{kRegister, idx}}).begin()->second
+                        : idx;
       outVals[i] = inVals[srcIdx];
     }
+    outVals = packI32s(outVals, dstTy, rewriter, loc, getTypeConverter());
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
                                   op.getType());
     rewriter.replaceOp(op, result);
@@ -375,9 +403,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       if (auto dotOperand = dyn_cast<DotOperandEncodingAttr>(layout)) {
         if (auto nvidiaMma =
                 dyn_cast<NvidiaMmaEncodingAttr>(dotOperand.getParent())) {
-          if (product(getCTAsPerCGA(nvidiaMma)) > 1) {
-            return false;
-          }
           if (useLegacyMMAConversion) {
             return false;
           }
@@ -387,6 +412,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
               dotOperand.getKWidth() * dstTy.getElementTypeBitWidth() > 64;
           return largeKWidth && nvidiaMma.isAmpere();
         }
+        return false;
       }
       if (isa<BlockedEncodingAttr>(layout)) {
         return true;
@@ -428,6 +454,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         inVals[it.index()] = ptrtoint(llvmElemTy, it.value());
       }
     }
+    inVals = unpackI32s(inVals, srcTy, rewriter, loc, getTypeConverter());
 
     // Pretty sure this is the identity function ATM
     // It'd be better to simply call `quotient({kBlock})` and
@@ -447,22 +474,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       }
     }
 
-    // FIXME [Dot LL]
-    // We know it's just for largeKWidth case in Ampere
-    // In this case, we need to pack the outputs into i32
-    if (isa<DotOperandEncodingAttr>(dstTy.getEncoding())) {
-      auto concat = [&](Value a, Value b) {
-        return or_(zext(i32_ty, bitcast(a, i16_ty)),
-                   shl(zext(i32_ty, bitcast(b, i16_ty)), i32_val(16)));
-      };
-
-      SmallVector<Value> outVals32(outVals.size() / 2);
-      for (int i = 0; i < outVals32.size(); ++i) {
-        outVals32[i] = concat(outVals[2 * i], outVals[2 * i + 1]);
-      }
-      outVals = outVals32;
-    }
-
+    outVals = packI32s(outVals, dstTy, rewriter, loc, getTypeConverter());
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
                                   op.getType());
     rewriter.replaceOp(op, result);
