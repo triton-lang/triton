@@ -827,9 +827,8 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(
   StringAttr kReg = S("register");
   StringAttr kLane = S("lane");
   StringAttr kWarp = S("warp");
-  StringAttr kCol = S("dim1");
-  StringAttr kRow = S("dim0");
   StringAttr kOffset = S("offset");
+  StringAttr kBlock = S("block");
 
   int perPhase;
   int maxPhase;
@@ -880,30 +879,28 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(
          "There must be enough rows to use MMAv3");
   for (int logWarp = 0; logWarp < llvm::Log2_32(warpsPerCTA[0]); logWarp++) {
     int warp = 1 << logWarp;
-    basesWarp.push_back({warp * instrM, 0});
+    basesWarp.push_back({0, warp * instrM});
   }
 
-  // Expand the `register` dimension so the size of columns matches `instrN` and
-  // and the size of rows matches `shape[0]`
+  // Expand the `register` dimension so the size of columns matches `instrN`
   for (int logCol = 0; logCol < llvm::Log2_32(instrN / numColsPerChunk);
        logCol++) {
     int chunk = 1 << logCol;
-    int basis = shape[0] * numColsPerChunk * chunk;
-    basesReg.push_back({basis, 0});
+    int basis = chunk * shape[0];
+    basesReg.push_back({0, basis});
   }
   for (int logRow = 0;
        logRow < llvm::Log2_32(shape[0] / (warpsPerCTA[0] * instrM)); logRow++) {
     int chunk = 1 << logRow;
     int basis = chunk * warpsPerCTA[0] * instrM;
-    basesReg.push_back({basis, 0});
+    basesReg.push_back({0, basis});
   }
   auto layout = LinearLayout(
-      {{kReg, basesReg}, {kLane, basesLane}, {kWarp, basesWarp}}, {kCol, kRow});
+      {{kReg, basesReg}, {kLane, basesLane}, {kWarp, basesWarp}, {kBlock, {}}}, {S("offset1"), S("offset0")});
 
-  auto ret =
-      combineCtaCgaWithShape(layout, mma.getCTALayout(), tensorTy.getShape());
-  return ret.transposeOuts(llvm::to_vector(layout.getOutDimNames()))
-      .reshapeOuts({{kOffset, ret.getTotalOutDimSize()}, {S("iteration"), 1}});
+  llvm::errs() << "layout0: " << layout << "\n";
+
+  return layout.reshapeOuts({{S("offset"), layout.getTotalOutDimSize()}, {S("iteration"), 1}});
 }
 
 LinearLayout chooseStMatrixLayoutNoLeadingOffset(
