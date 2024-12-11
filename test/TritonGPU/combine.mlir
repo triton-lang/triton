@@ -2725,6 +2725,18 @@ tt.func @forward_propagate_layout_gather(%arg0: tensor<1024x256xi32, #blocked>, 
   tt.return %2 : tensor<1024x256xf32, #blocked>
 }
 
+tt.func @forward_only_propagation(%arg0: tensor<1024x256xi32, #blocked>, %arg1: tensor<128x256xf32, #blocked1>) -> tensor<1024x256xf32, #blocked1> {
+  // CHECK-LABEL: forward_only_propagation
+
+  // CHECK-NEXT: [[GATHER:%.*]] = tt.gather
+  %0 = ttg.convert_layout %arg0 : tensor<1024x256xi32, #blocked> -> tensor<1024x256xi32, #blocked2>
+  %1 = tt.gather %arg1[%0] {axis = 0 : i32} : (tensor<128x256xf32, #blocked1>, tensor<1024x256xi32, #blocked2>) -> tensor<1024x256xf32, #blocked2>
+  // CHECK-NEXT: [[RES:%.*]] = ttg.convert_layout [[GATHER]] : tensor<1024x256xf32, #blocked> -> tensor<1024x256xf32, #blocked1>
+  %2 = ttg.convert_layout %1 : tensor<1024x256xf32, #blocked2> -> tensor<1024x256xf32, #blocked1>
+  // CHECK-NEXT: return [[RES]]
+  tt.return %2 : tensor<1024x256xf32, #blocked1>
+}
+
 tt.func @backward_remat_gather_layout(%arg0: tensor<64x64xf32, #blocked1>) -> tensor<1x64xf32, #blocked1> {
   // CHECK-LABEL: backward_remat_gather_layout
 
