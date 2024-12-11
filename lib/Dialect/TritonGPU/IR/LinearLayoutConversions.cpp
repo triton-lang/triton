@@ -862,6 +862,7 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(
   basesLane.push_back({8, 0});
 
   auto mma = cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
+  assert(mma.getVersionMajor() >= 3 && "Only MMAv3 is supported");
   int instrM = mma.getInstrShape()[0];
   int instrN = mma.getInstrShape()[1];
 
@@ -895,12 +896,23 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(
     int basis = chunk * warpsPerCTA[0] * instrM;
     basesReg.push_back({0, basis});
   }
+
+  // Expand the `warp` dimension according to warpsPerCTA[1] to fit shape[1]
+  for (int logWarp = 0; logWarp < llvm::Log2_32(warpsPerCTA[1]); logWarp++) {
+    int warp = 1 << logWarp;
+    if (warp * instrN > shape[1]) {
+      basesWarp.push_back({0, 0});
+    } else {
+      basesWarp.push_back({0, warp * instrN});
+    }
+  }
+
   auto layout = LinearLayout(
-      {{kReg, basesReg}, {kLane, basesLane}, {kWarp, basesWarp}, {kBlock, {}}}, {S("offset1"), S("offset0")});
+      {{kReg, basesReg}, {kLane, basesLane}, {kWarp, basesWarp}, {kBlock, {}}},
+      {S("offset1"), S("offset0")});
 
-  llvm::errs() << "layout0: " << layout << "\n";
-
-  return layout.reshapeOuts({{S("offset"), layout.getTotalOutDimSize()}, {S("iteration"), 1}});
+  return layout.reshapeOuts(
+      {{S("offset"), layout.getTotalOutDimSize()}, {S("iteration"), 1}});
 }
 
 LinearLayout chooseStMatrixLayoutNoLeadingOffset(
