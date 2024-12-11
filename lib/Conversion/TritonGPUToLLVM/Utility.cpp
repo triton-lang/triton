@@ -110,7 +110,7 @@ std::tuple<Value, Value, Value> emitHardwareTuple(Location loc,
   Value warpId = udiv(threadId, threadsPerWarp);
   Value blockId =
       withCTAOffset ? target.getClusterCTAId(rewriter, loc) : i32_val(0);
-  return {blockId, warpId, laneId};
+  return {laneId, warpId, blockId};
 }
 
 SmallVector<SmallVector<Value>>
@@ -130,7 +130,7 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
   StringAttr kWarp = str_attr("warp");
   StringAttr kBlock = str_attr("block");
 
-  auto [blockId, warpId, laneId] = emitHardwareTuple(
+  auto [laneId, warpId, blockId] = emitHardwareTuple(
       loc, rewriter, target, withCTAOffset, ll->getInDimSize(kLane));
   unsigned rank = shape.size();
   SmallVector<SmallVector<Value>> ret;
@@ -353,7 +353,7 @@ bool emitTransferBetweenRegistersAndShared(
       std::min(regToSharedLayout->getNumConsecutiveInOut(),
                maxVecElems.value_or(std::numeric_limits<int>::max()));
 
-  auto [blockId, warpId, laneId] =
+  auto [laneId, warpId, blockId] =
       emitHardwareTuple(loc, rewriter, target, /*withCTAOffset=*/false,
                         regToSharedLayout->getInDimSize(kLane));
 
@@ -746,7 +746,7 @@ SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
     auto instrShape = mmaLayout.getInstrShape();
     SmallVector<Value> mmaColIdx(2);
     SmallVector<Value> mmaRowIdx(2);
-    auto [blockId, warpId, laneId] = emitHardwareTuple(
+    auto [laneId, warpId, blockId] = emitHardwareTuple(
         loc, rewriter, targetInfo, /*withCTAOffset=*/false, 32);
     // TODO: fix the bug in MMAEncodingAttr document
     SmallVector<Value> multiDimWarpId(2);

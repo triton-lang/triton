@@ -21,6 +21,7 @@ from triton.language.extra import libdevice
 from triton._internal_testing import (
     integral_dtypes,
     int_dtypes,
+    str_to_triton_dtype,
     uint_dtypes,
     float_dtypes,
     float_dtypes_with_bfloat16,
@@ -1643,7 +1644,7 @@ def test_tensor_atomic_cas(sem, num_ctas, device):
                              ('float32', 'bfloat16', False, 1024),
                              ('bfloat16', 'float32', False, 1024),
                              ('float32', 'int32', True, 1024),
-                             ('float32', 'int1', False, 1024),
+                             ('float32', 'bool', False, 1024),
                              ('int8', 'bfloat16', False, 1024),
                          ] + [(f'uint{x}', f'int{x}', True, 1024)
                               for x in [8, 16, 32, 64]] + [(f'int{x}', f'uint{x}', True, 1024)
@@ -1689,19 +1690,21 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
     # triton kernel
 
     @triton.jit
-    def kernel(X, Z, BITCAST: tl.constexpr, SIZE: tl.constexpr, ARG_HASH: tl.constexpr):
+    def kernel(X, Z, TO_TYPE: tl.constexpr, BITCAST: tl.constexpr, SIZE: tl.constexpr, ARG_HASH: tl.constexpr):
         x_ptr = X + tl.arange(0, SIZE)
         z_ptr = Z + tl.arange(0, SIZE)
         x = tl.load(x_ptr)
 
         # Depending on the value of ARG_HASH (a "random" number determined by
         # the test parameters), spell the cast one of three different ways.
-        if ARG_HASH % 3 == 0:
+        if ARG_HASH % 4 == 0:
             z = x.to(Z.dtype.element_ty, bitcast=BITCAST)
-        elif ARG_HASH % 3 == 1:
+        elif ARG_HASH % 4 == 1:
             z = x.cast(Z.dtype.element_ty, bitcast=BITCAST)
-        else:
+        elif ARG_HASH % 4 == 2:
             z = tl.cast(x, Z.dtype.element_ty, bitcast=BITCAST)
+        else:
+            z = tl.cast(x, TO_TYPE, bitcast=BITCAST)
 
         tl.store(z_ptr, z)
 
@@ -1709,7 +1712,7 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
     # This way we don't have to increase the number of tests.
     arg_hash = hash((dtype_x, dtype_z, bitcast, size, num_ctas))
 
-    dtype_z_np = dtype_z if dtype_z != 'int1' else 'bool_'
+    dtype_z_np = dtype_z if dtype_z != 'bool' else 'bool_'
     # triton result
     if dtype_z.startswith('bfloat'):
         z_tri = torch.empty((size, ), dtype=getattr(torch, dtype_z), device=device)
@@ -1717,7 +1720,10 @@ def test_cast(dtype_x, dtype_z, bitcast, size, num_ctas, device):
         z_tri = torch.empty((size, ), dtype=torch.half, device=device).to(dtype=getattr(torch, dtype_z))
     else:
         z_tri = to_triton(np.empty((size, ), dtype=getattr(np, dtype_z_np)), device=device)
-    kernel[(1, )](x_tri, z_tri, BITCAST=bitcast, SIZE=size, ARG_HASH=arg_hash, num_warps=1, num_ctas=num_ctas)
+
+    dtype_z_tri = str_to_triton_dtype(dtype_z)
+    kernel[(1, )](x_tri, z_tri, TO_TYPE=dtype_z_tri, BITCAST=bitcast, SIZE=size, ARG_HASH=arg_hash, num_warps=1,
+                  num_ctas=num_ctas)
     # torch result
     if dtype_z.startswith('bfloat') or dtype_x.startswith('bfloat') or dtype_z.startswith(
             'float8') or dtype_x.startswith('float8'):
@@ -6268,6 +6274,24 @@ def test_chained_reductions(in_shape, perm, red_dims, device):
     assert torch.all(ref == result)
 
 
+@triton.jit
+def gather_test_kernel(src_ptr, idx_ptr, out_ptr, axis: tl.constexpr, src_dim0: tl.constexpr, src_dim1: tl.constexpr,
+                       src_stride0: tl.constexpr, src_stride1: tl.constexpr, idx_dim0: tl.constexpr,
+                       idx_dim1: tl.constexpr, idx_stride0: tl.constexpr, idx_stride1: tl.constexpr,
+                       out_dim0: tl.constexpr, out_dim1: tl.constexpr, out_stride0: tl.constexpr,
+                       out_stride1: tl.constexpr):
+    src_offs = (tl.arange(0, src_dim0)[:, None] * src_stride0 + tl.arange(0, src_dim1)[None, :] * src_stride1)
+    src = tl.load(src_ptr + src_offs)
+
+    idx_offs = (tl.arange(0, idx_dim0)[:, None] * idx_stride0 + tl.arange(0, idx_dim1)[None, :] * idx_stride1)
+    idx = tl.load(idx_ptr + idx_offs)
+
+    out = tl.gather(src, idx, axis)
+
+    out_offs = (tl.arange(0, out_dim0)[:, None] * out_stride0 + tl.arange(0, out_dim1)[None, :] * out_stride1)
+    tl.store(out_ptr + out_offs, out)
+
+
 @pytest.mark.parametrize("src_shape, indices_shape, axis", [
     ([4, 4], [8, 4], 0),
     ([128, 64], [256, 64], 0),
@@ -6275,29 +6299,13 @@ def test_chained_reductions(in_shape, perm, red_dims, device):
 ])
 def test_gather(src_shape, indices_shape, axis):
 
-    @triton.jit
-    def gather_kernel(src_ptr, idx_ptr, out_ptr, axis: tl.constexpr, src_dim0: tl.constexpr, src_dim1: tl.constexpr,
-                      src_stride0: tl.constexpr, src_stride1: tl.constexpr, idx_dim0: tl.constexpr,
-                      idx_dim1: tl.constexpr, idx_stride0: tl.constexpr, idx_stride1: tl.constexpr,
-                      out_dim0: tl.constexpr, out_dim1: tl.constexpr, out_stride0: tl.constexpr,
-                      out_stride1: tl.constexpr):
-        src_offs = (tl.arange(0, src_dim0)[:, None] * src_stride0 + tl.arange(0, src_dim1)[None, :] * src_stride1)
-        src = tl.load(src_ptr + src_offs)
-
-        idx_offs = (tl.arange(0, idx_dim0)[:, None] * idx_stride0 + tl.arange(0, idx_dim1)[None, :] * idx_stride1)
-        idx = tl.load(idx_ptr + idx_offs)
-
-        out = tl.gather(src, idx, axis)
-
-        out_offs = (tl.arange(0, out_dim0)[:, None] * out_stride0 + tl.arange(0, out_dim1)[None, :] * out_stride1)
-        tl.store(out_ptr + out_offs, out)
-
     def triton_gather(src: torch.Tensor, axis: int, indices: torch.Tensor):
         output = torch.empty(indices.shape, dtype=src.dtype, device=src.device)
 
-        gather_kernel[(1, )](src, indices, output, axis, src.shape[0], src.shape[1],
-                             src.stride(0), src.stride(1), indices.shape[0], indices.shape[1], indices.stride(0),
-                             indices.stride(1), output.shape[0], output.shape[1], output.stride(0), output.stride(1))
+        gather_test_kernel[(1, )](src, indices, output, axis, src.shape[0],
+                                  src.shape[1], src.stride(0), src.stride(1), indices.shape[0], indices.shape[1],
+                                  indices.stride(0), indices.stride(1), output.shape[0], output.shape[1],
+                                  output.stride(0), output.stride(1))
 
         return output
 
@@ -6306,3 +6314,76 @@ def test_gather(src_shape, indices_shape, axis):
     ref = torch.gather(src, axis, indices)
     result = triton_gather(src, axis, indices)
     torch.testing.assert_close(result, ref, rtol=0, atol=0)
+
+
+# These layouts are specially chosen to trigger the warp shuffle codegen.
+@pytest.mark.parametrize("src_shape, indices_shape, axis, src_layout, indices_layout", [
+    ([32, 16], [32, 16], 0,
+     "linear<{register = [[0, 2], [2, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]], warp = [[0, 1], [0, 4]], block = []}>",
+     "linear<{register = [[2, 0], [0, 2]], lane = [[0, 8], [16, 0], [1, 0], [8, 0], [4, 0]], warp = [[0, 1], [0, 4]], block = []}>"
+     ),
+    ([128, 64], [256, 64], 0,
+     "linear<{register = [[0, 2], [32, 0], [2, 0], [0, 16], [0, 32], [64, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]], warp = [[0, 1], [0, 4]], block = []}>",
+     "linear<{register = [[0, 2], [32, 0], [0, 32], [2, 0], [0, 16], [64, 0], [128, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]], warp = [[0, 1], [0, 4]], block = []}>"
+     ),
+])
+def test_gather_warp_shuffle(src_shape, indices_shape, axis, src_layout, indices_layout, tmp_path: pathlib.Path):
+    if is_hip():
+        pytest.skip("warp-local gather has issues on HIP")
+
+    def prepare_kernel(src: torch.Tensor, axis: int, indices: torch.Tensor):
+        output = torch.empty(indices.shape, dtype=src.dtype, device=src.device)
+        compiled = gather_test_kernel.warmup(src, indices, output, axis, src.shape[0], src.shape[1], src.stride(0),
+                                             src.stride(1), indices.shape[0], indices.shape[1], indices.stride(0),
+                                             indices.stride(1), output.shape[0], output.shape[1], output.stride(0),
+                                             output.stride(1), grid=(1, ))
+        return output, compiled
+
+    def inject_layout(ir, src: torch.Tensor, axis, indices: torch.Tensor, src_layout, idx_layout):
+        ir = f"""
+#src_layout = #ttg.{src_layout}
+#idx_layout = #ttg.{idx_layout}
+{ir}"""
+
+        dtypes = {torch.int32: "i32", torch.float32: "f32", torch.int64: "i64", torch.float64: "f64"}
+
+        src_spec = f"{src.shape[0]}x{src.shape[1]}x{dtypes[src.dtype]}"
+        indices_spec = f"{indices.shape[0]}x{indices.shape[1]}x{dtypes[indices.dtype]}"
+        output_spec = f"{indices.shape[0]}x{indices.shape[1]}x{dtypes[src.dtype]}"
+
+        pat = r"(%[0-9]+) = tt.gather (%[0-9]+)\[(%[0-9]+)\] {axis = "
+        pat += str(axis)
+        pat += r" : i32} : \(tensor\<"
+        pat += src_spec
+        pat += r", (#[a-z]+[0-9]+)\>, tensor\<"
+        pat += indices_spec
+        pat += r", (#[a-z]+[0-9]+)\>\) -> tensor\<"
+        pat += output_spec
+        pat += r", (#[a-z]+[0-9]+)\>"
+
+        repl = r"""
+    %src = ttg.convert_layout \2 : tensor<""" + src_spec + r""", \4> -> tensor<""" + src_spec + r""", #src_layout>
+    %idx = ttg.convert_layout \3 : tensor<""" + indices_spec + r""", \5> -> tensor<""" + indices_spec + r""", #idx_layout>
+    %out = tt.gather %src[%idx] {axis = """ + str(
+            axis
+        ) + r""" : i32} : (tensor<""" + src_spec + r""", #src_layout>, tensor<""" + indices_spec + r""", #idx_layout>) -> tensor<""" + output_spec + r""", #idx_layout>
+    \1 = ttg.convert_layout %out : tensor<""" + output_spec + r""", #idx_layout> -> tensor<""" + output_spec + r""", \6>"""
+        return re.sub(pat, repl, ir)
+
+    src = torch.randn(src_shape, device='cuda')
+    indices = torch.randint(0, src.shape[axis], indices_shape, device='cuda')
+    ref = torch.gather(src, axis, indices)
+
+    output, compiled = prepare_kernel(src, axis, indices)
+    ir = compiled.asm["ttgir"]
+    ir = inject_layout(ir, src, axis, indices, src_layout, indices_layout)
+
+    temp_file = tmp_path / "test_warp_gather.ttgir"
+    temp_file.write_text(ir)
+
+    kernel = triton.compile(str(temp_file))
+    assert ("nvvm.shfl.sync.idx" in kernel.asm["llir"]) or ("llvm.amdgcn.ds.bpermute" in kernel.asm["llir"])
+
+    kernel[(1, 1, 1)](src, indices, output)
+
+    torch.testing.assert_close(output, ref, rtol=0, atol=0)
