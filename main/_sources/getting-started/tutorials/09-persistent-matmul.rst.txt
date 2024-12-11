@@ -37,7 +37,7 @@ Users can pass command-line arguments to specify matrix dimensions and iteration
 
 Note that currently this tutorial will fail on devices with a small shared memory size, such as RTX-4090.
 
-.. GENERATED FROM PYTHON SOURCE LINES 21-667
+.. GENERATED FROM PYTHON SOURCE LINES 21-677
 
 
 
@@ -48,15 +48,15 @@ Note that currently this tutorial will fail on devices with a small shared memor
 
     M=32, N=32, K=32 verification naive vs: torch: ✅ cublas: ✅ persistent: ✅ 
     M=8192, N=8192, K=512 verification naive vs: torch: ✅ cublas: ✅ persistent: ✅ 
-    174.433 5515.416 ROOT
+    174.392 5516.737 ROOT
     ├─ nan 0.049 _ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastIZZZNS0_23direct_copy_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE1_clEvENKUlvE8_clEvEUlN3c104HalfEE_EEvS4_RKT_EUliE_EEviT1_
     ├─ nan 0.044 _ZN2at6native54_GLOBAL__N__d8ceb000_21_DistributionNormal_cu_0c5b6e8543distribution_elementwise_grid_stride_kernelIfLi4EZNS0_9templates4cuda20normal_and_transformIN3c104HalfEfPNS_17CUDAGeneratorImplEZZZNS4_13normal_kernelIS9_EEvRKNS_10TensorBaseEddT_ENKUlvE_clEvENKUlvE1_clEvEUlfE_EEvRNS_18TensorIteratorBaseET1_T2_EUlP24curandStatePhilox4_32_10E0_ZNS1_27distribution_nullary_kernelIS7_f6float4S9_SO_SH_EEvSJ_SL_RKT3_T4_EUlifE_EEviNS_15PhiloxCudaStateESK_SL_
-    ├─ 175.237 4313.656 cublas [M=8192, N=8192, K=512]
-    │  └─ nan 4313.656 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
-    ├─ 168.193 408.576 matmul_kernel [M=8192, N=8192, K=512]
-    ├─ 169.063 406.472 matmul_kernel_persistent [M=8192, N=8192, K=512]
-    └─ 177.744 386.619 torch [M=8192, N=8192, K=512]
-       └─ nan 386.619 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+    ├─ 175.178 4315.129 cublas [M=8192, N=8192, K=512]
+    │  └─ nan 4315.129 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+    ├─ 168.212 408.528 matmul_kernel [M=8192, N=8192, K=512]
+    ├─ 168.987 406.656 matmul_kernel_persistent [M=8192, N=8192, K=512]
+    └─ 177.878 386.330 torch [M=8192, N=8192, K=512]
+       └─ nan 386.330 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
 
 
 
@@ -77,6 +77,8 @@ Note that currently this tutorial will fail on devices with a small shared memor
     import triton.tools.experimental_descriptor
     import triton.profiler as proton
     from contextlib import contextmanager
+
+    from typing import Optional
 
     if torch.cuda.is_available():
         from triton._C.libtriton import nvidia
@@ -424,8 +426,7 @@ Note that currently this tutorial will fail on devices with a small shared memor
 
 
     @triton.jit(launch_metadata=_matmul_launch_metadata)
-    def matmul_kernel_device_tma_persistent(workspace_ptr,  #
-                                            tiles_per_update: tl.constexpr,  #
+    def matmul_kernel_descriptor_persistent(tiles_per_update: tl.constexpr,  #
                                             a_ptr, b_ptr, c_ptr,  #
                                             M, N, K,  #
                                             BLOCK_SIZE_M: tl.constexpr,  #
@@ -441,24 +442,24 @@ Note that currently this tutorial will fail on devices with a small shared memor
         k_tiles = tl.cdiv(K, BLOCK_SIZE_K)
         num_tiles = num_pid_m * num_pid_n
 
-        TMA_SIZE: tl.constexpr = 128
-        workspace_base = workspace_ptr + start_pid * 3 * TMA_SIZE
-        a_desc_ptr = workspace_base
-        b_desc_ptr = workspace_base + TMA_SIZE
-        c_desc_ptr = workspace_base + 2 * TMA_SIZE
-
-        tl.extra.cuda.experimental_device_tensormap_create2d(desc_ptr=a_desc_ptr, global_address=a_ptr,
-                                                             load_size=[BLOCK_SIZE_M, BLOCK_SIZE_K], global_size=[M, K],
-                                                             element_ty=a_ptr.dtype.element_ty)
-        tl.extra.cuda.experimental_device_tensormap_create2d(desc_ptr=b_desc_ptr, global_address=b_ptr,
-                                                             load_size=[BLOCK_SIZE_N, BLOCK_SIZE_K], global_size=[N, K],
-                                                             element_ty=b_ptr.dtype.element_ty)
-        tl.extra.cuda.experimental_device_tensormap_create2d(desc_ptr=c_desc_ptr, global_address=c_ptr,
-                                                             load_size=[BLOCK_SIZE_M, BLOCK_SIZE_N], global_size=[M, N],
-                                                             element_ty=c_ptr.dtype.element_ty)
-        tl.extra.cuda.experimental_tensormap_fenceproxy_acquire(a_desc_ptr)
-        tl.extra.cuda.experimental_tensormap_fenceproxy_acquire(b_desc_ptr)
-        tl.extra.cuda.experimental_tensormap_fenceproxy_acquire(c_desc_ptr)
+        a_desc = tl._experimental_make_tensor_descriptor(
+            a_ptr,
+            shape=[M, K],
+            strides=[K, 1],
+            block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_K],
+        )
+        b_desc = tl._experimental_make_tensor_descriptor(
+            b_ptr,
+            shape=[N, K],
+            strides=[K, 1],
+            block_shape=[BLOCK_SIZE_N, BLOCK_SIZE_K],
+        )
+        c_desc = tl._experimental_make_tensor_descriptor(
+            c_ptr,
+            shape=[M, N],
+            strides=[N, 1],
+            block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_N],
+        )
 
         tiles_per_SM = num_tiles // NUM_SMS
         if start_pid < num_tiles % NUM_SMS:
@@ -476,6 +477,9 @@ Note that currently this tutorial will fail on devices with a small shared memor
         num_pid_in_group = GROUP_SIZE_M * num_pid_n
 
         accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+        # Create an opaque value to prevent the descriptor creation from being
+        # hoisted out of the loop
+        zero = tl.inline_asm_elementwise("mov.b32 $0, 0;", "=r", [], dtype=tl.int32, is_pure=True, pack=1)
 
         for _ in range(0, k_tiles * tiles_per_SM):
             ki = tl.where(ki == k_tiles - 1, 0, ki + 1)
@@ -484,21 +488,24 @@ Note that currently this tutorial will fail on devices with a small shared memor
 
                 # Simulate a grouped gemm
                 if ni == tiles_per_update:
-                    tl.extra.cuda.experimental_device_tensormap_create2d(desc_ptr=a_desc_ptr, global_address=a_ptr,
-                                                                         load_size=[BLOCK_SIZE_M,
-                                                                                    BLOCK_SIZE_K], global_size=[M, K],
-                                                                         element_ty=a_ptr.dtype.element_ty)
-                    tl.extra.cuda.experimental_device_tensormap_create2d(desc_ptr=b_desc_ptr, global_address=b_ptr,
-                                                                         load_size=[BLOCK_SIZE_N,
-                                                                                    BLOCK_SIZE_K], global_size=[N, K],
-                                                                         element_ty=b_ptr.dtype.element_ty)
-                    tl.extra.cuda.experimental_device_tensormap_create2d(desc_ptr=c_desc_ptr, global_address=c_ptr,
-                                                                         load_size=[BLOCK_SIZE_M,
-                                                                                    BLOCK_SIZE_N], global_size=[M, N],
-                                                                         element_ty=c_ptr.dtype.element_ty)
-                    tl.extra.cuda.experimental_tensormap_fenceproxy_acquire(a_desc_ptr)
-                    tl.extra.cuda.experimental_tensormap_fenceproxy_acquire(b_desc_ptr)
-                    tl.extra.cuda.experimental_tensormap_fenceproxy_acquire(c_desc_ptr)
+                    a_desc = tl._experimental_make_tensor_descriptor(
+                        a_ptr + zero,
+                        shape=[M, K],
+                        strides=[K, 1],
+                        block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_K],
+                    )
+                    b_desc = tl._experimental_make_tensor_descriptor(
+                        b_ptr + zero,
+                        shape=[N, K],
+                        strides=[K, 1],
+                        block_shape=[BLOCK_SIZE_N, BLOCK_SIZE_K],
+                    )
+                    c_desc = tl._experimental_make_tensor_descriptor(
+                        c_ptr + zero,
+                        shape=[M, N],
+                        strides=[N, 1],
+                        block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_N],
+                    )
                     ni = 0
 
                 tile_id += NUM_SMS
@@ -513,19 +520,19 @@ Note that currently this tutorial will fail on devices with a small shared memor
 
             offs_k = ki * BLOCK_SIZE_K
 
-            a = tl._experimental_descriptor_load(a_desc_ptr, [offs_am, offs_k], [BLOCK_SIZE_M, BLOCK_SIZE_K], dtype)
-            b = tl._experimental_descriptor_load(b_desc_ptr, [offs_bn, offs_k], [BLOCK_SIZE_N, BLOCK_SIZE_K], dtype)
+            a = a_desc.load([offs_am, offs_k])
+            b = b_desc.load([offs_bn, offs_k])
             accumulator = tl.dot(a, b.T, accumulator)
 
             if ki == k_tiles - 1:
                 c = accumulator.to(dtype)
 
-                tl._experimental_descriptor_store(c_desc_ptr, c, [offs_am, offs_bn])
+                c_desc.store([offs_am, offs_bn], c)
 
                 accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
 
-    def matmul_device_tma_persistent(a, b, tiles_per_update):
+    def matmul_descriptor_persistent(a, b, tiles_per_update):
         # Autotuner does not work with TMA. Use manual config.
         configs = {
             torch.float8_e4m3fn: {
@@ -547,12 +554,15 @@ Note that currently this tutorial will fail on devices with a small shared memor
 
         c = torch.empty((M, N), device=a.device, dtype=dtype)
         NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count
-        tma_size = 128
-        workspace = torch.empty(NUM_SMS * 3 * tma_size, dtype=torch.uint8, device="cuda")
+
+        # TMA descriptors require a global memory allocation
+        def alloc_fn(size: int, alignment: int, stream: Optional[int]):
+            return torch.empty(size, device="cuda", dtype=torch.int8)
+
+        triton.set_allocator(alloc_fn)
 
         grid = lambda META: (min(NUM_SMS, triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"])), )
-        matmul_kernel_device_tma_persistent[grid](
-            workspace,  #
+        matmul_kernel_descriptor_persistent[grid](
             tiles_per_update,  #
             a, b, c,  #
             M, N, K,  #
@@ -626,7 +636,7 @@ Note that currently this tutorial will fail on devices with a small shared memor
         bench_fn(reps, warmup_reps, matmul_persistent, a, b.T)
         if supports_tma():
             bench_fn(reps, warmup_reps, matmul_tma_persistent, a, b)
-            bench_fn(reps, warmup_reps, matmul_device_tma_persistent, a, b, tiles_per_update)
+            bench_fn(reps, warmup_reps, matmul_descriptor_persistent, a, b, tiles_per_update)
 
 
     def validate(M, N, K, dtype, tiles_per_update):
@@ -639,7 +649,7 @@ Note that currently this tutorial will fail on devices with a small shared memor
         naive_result = matmul(a, b.T)
         persistent_result = matmul_persistent(a, b.T)
         tma_persistent_result = matmul_tma_persistent(a, b) if supports_tma() else None
-        device_tma_persistent_result = matmul_device_tma_persistent(a, b, tiles_per_update) if supports_tma() else None
+        descriptor_persistent_result = matmul_descriptor_persistent(a, b, tiles_per_update) if supports_tma() else None
 
         if torch_result is not None:
             naive_vs_torch = "✅" if torch.allclose(naive_result.to(torch.float16), torch_result.to(torch.float16),
@@ -652,9 +662,9 @@ Note that currently this tutorial will fail on devices with a small shared memor
         if tma_persistent_result is not None:
             naive_vs_tma_persistent = "✅" if torch.allclose(cublas_result.to(torch.float16),
                                                             tma_persistent_result.to(torch.float16), atol=1.0) else "❌"
-        if device_tma_persistent_result is not None:
-            naive_vs_device_tma_persistent = "✅" if torch.allclose(cublas_result.to(
-                torch.float16), device_tma_persistent_result.to(torch.float16), atol=1.0) else "❌"
+        if descriptor_persistent_result is not None:
+            naive_vs_descriptor_persistent = "✅" if torch.allclose(cublas_result.to(
+                torch.float16), descriptor_persistent_result.to(torch.float16), atol=1.0) else "❌"
         print(f"M={M}, N={N}, K={K} verification naive vs: ", end="")
         if torch_result is not None:
             print(f"torch: {naive_vs_torch} ", end="")
@@ -663,8 +673,8 @@ Note that currently this tutorial will fail on devices with a small shared memor
         print(f"persistent: {naive_vs_persistent} ", end="")
         if tma_persistent_result is not None:
             print(f"TMA persistent: {naive_vs_tma_persistent} ", end="")
-        if device_tma_persistent_result is not None:
-            print(f"Device TMA persistent: {naive_vs_device_tma_persistent} ", end="")
+        if descriptor_persistent_result is not None:
+            print(f"Device TMA persistent: {naive_vs_descriptor_persistent} ", end="")
         print()
 
 
@@ -689,7 +699,7 @@ Note that currently this tutorial will fail on devices with a small shared memor
             type=int,
             default=1,
             help=
-            "Number of output tiles calculated for each update of the tma descriptor in matmul_device_tma_persistent_kernel",
+            "Number of output tiles calculated for each update of the tma descriptor in matmul_descriptor_persistent_kernel",
         )
         parser.add_argument("--prec", type=str, choices=["fp8", "fp16"], default="fp16")
         args = parser.parse_args()
@@ -718,7 +728,7 @@ Note that currently this tutorial will fail on devices with a small shared memor
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 19.806 seconds)
+   **Total running time of the script:** (0 minutes 19.824 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_09-persistent-matmul.py:
