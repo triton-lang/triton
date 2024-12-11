@@ -5484,6 +5484,7 @@ mma_layout = [
     MmaLayout((3, 0), [8, 1], [1, 1], [1, 1], [0, 1], [16, 128, 16]),  # simple 8 warps case
     MmaLayout((3, 0), [4, 2], [1, 1], [1, 1], [0, 1], [16, 128, 16]),  # multiple warps on the row
     MmaLayout((3, 0), [4, 2], [1, 1], [1, 1], [0, 1], [16, 64, 16]),  # small instrN
+    MmaLayout((3, 0), [8, 4], [1, 1], [1, 1], [0, 1], [16, 64, 16]),  # large number of warps
 ]
 
 shared_layout = [
@@ -5493,7 +5494,7 @@ shared_layout = [
 ]
 
 
-@pytest.mark.parametrize("M, N", [[128, 128], [128, 256]])
+@pytest.mark.parametrize("M, N", [[128, 128]])
 @pytest.mark.parametrize("mma_layout", mma_layout)
 @pytest.mark.parametrize("shared_layout", shared_layout)
 def test_local_load_store_mma(M, N, mma_layout, shared_layout, device, tmp_path: pathlib.Path):

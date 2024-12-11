@@ -861,6 +861,8 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(
   int instrN = mma.getInstrShape()[1];
 
   // Construct the bases for a single chunk
+  // TODO(Keren): In theory the following situation is valid but it will be
+  // suboptimal. Swizzling should happen within a warp.
   assert(instrN >= numColsPerChunk &&
          "Each chunk is filled in with a single warp");
   for (int logCol = 0; logCol < llvm::Log2_32(numColsPerChunk / 16); logCol++) {
