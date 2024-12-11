@@ -438,6 +438,7 @@ bool GatherLoweringHelper::isWarpLocal() {
   StringAttr kBlock = b.getStringAttr("block");
   StringAttr kWarp = b.getStringAttr("warp");
   StringAttr kLane = b.getStringAttr("lane");
+  StringAttr kRegister = b.getStringAttr("register");
   StringAttr kGatherDim = b.getStringAttr("dim" + std::to_string(axis));
 
   // The tensor layouts must be distributed layouts, where the basis matrix is a
@@ -461,10 +462,11 @@ bool GatherLoweringHelper::isWarpLocal() {
       !idxLayout->sublayoutIsZero({kBlock, kWarp}, kGatherDim))
     return false;
 
-  SmallVector<StringAttr> otherDims;
+  SmallVector<StringAttr> allDims, otherDims;
   for (unsigned dim = 0, rank = srcType.getRank(); dim < rank; ++dim) {
+    allDims.push_back(b.getStringAttr("dim" + Twine(dim)));
     if (dim != axis) {
-      otherDims.push_back(b.getStringAttr("dim" + Twine(dim)));
+      otherDims.push_back(allDims.back());
     }
   }
 
@@ -484,13 +486,8 @@ bool GatherLoweringHelper::isWarpLocal() {
   // in the index and source tensors are the same. This means we don't need to
   // xor shuffle across threads before emitting index shuffles; we push warp
   // shuffling to layout conversions.
-  if (srcLayout->sublayout(kLane, otherDims) !=
-      idxLayout->sublayout(kLane, otherDims))
-    return false;
-
-  // Otherwise, the source layout has to be invertible. This primarily means
-  // the codegen path doesn't support broadcasted source layouts.
-  return srcLayout->isInvertible();
+  return srcLayout->sublayout(kLane, otherDims) ==
+         idxLayout->sublayout(kLane, otherDims);
 }
 
 unsigned getNumScratchElements(ArrayRef<unsigned> shape) {

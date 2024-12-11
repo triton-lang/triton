@@ -677,7 +677,7 @@ public:
   // don't place any guarantees on the choices made by this function.
   [[nodiscard]] LinearLayout invertAndCompose(const LinearLayout &outer) const;
 
-  // Get the layout that is the inverse of this layout.
+  // Get the layout that is the inverse or psuedo-inverse of this layout.
   [[nodiscard]] LinearLayout invert() const;
 
   // For each in-dim, returns a bitmask of the "free variables" in the layout
