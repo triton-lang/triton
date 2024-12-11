@@ -5481,9 +5481,11 @@ def test_local_load_store(M, N, K, dist_layout, shared_layout, device, tmp_path:
 mma_layout = [
     MmaLayout((2, 0), [1, 4], [1, 1], [1, 1], [0, 1], [16, 8]),
     MmaLayout((2, 0), [2, 8], [1, 1], [1, 1], [0, 1], [16, 8]),
-    MmaLayout((3, 0), [4, 1], [1, 1], [1, 1], [0, 1], [16, 128, 16]),
-    MmaLayout((3, 0), [4, 2], [1, 1], [1, 1], [0, 1], [16, 128, 16]),
-    MmaLayout((3, 0), [8, 2], [1, 1], [1, 1], [0, 1], [16, 128, 16]),
+    MmaLayout((3, 0), [4, 1], [1, 1], [1, 1], [0, 1], [16, 128, 16]),  # simple case
+    MmaLayout((3, 0), [8, 1], [1, 1], [1, 1], [0, 1], [16, 128, 16]),  # simple case
+    MmaLayout((3, 0), [4, 2], [1, 1], [1, 1], [0, 1], [16, 128, 16]),  # multiple warps on the row
+    MmaLayout((3, 0), [4, 2], [1, 1], [1, 1], [0, 1], [16, 32, 16]),  # small instrN
+    MmaLayout((3, 0), [16, 2], [1, 1], [1, 1], [0, 1], [16, 128, 16]),  # duplicated warps on the column
 ]
 
 shared_layout = [
@@ -5493,7 +5495,7 @@ shared_layout = [
 ]
 
 
-@pytest.mark.parametrize("M, N", [[128, 128]])
+@pytest.mark.parametrize("M, N", [[128, 128], [128, 256]])
 @pytest.mark.parametrize("mma_layout", mma_layout)
 @pytest.mark.parametrize("shared_layout", shared_layout)
 def test_local_load_store_mma(M, N, mma_layout, shared_layout, device, tmp_path: pathlib.Path):
