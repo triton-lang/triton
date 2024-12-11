@@ -877,7 +877,7 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(
 
   // Expand the `register` dimension so the size of columns matches `shape[1] /
   // warpsPerCTA[1]`
-  auto numColsPerWarp = shape[1] / warpsPerCTA[1];
+  auto numColsPerWarp = std::max<int>(instrN, shape[1] / warpsPerCTA[1]);
   auto logNumCols = numColsPerWarp <= numColsPerChunk
                         ? 0
                         : llvm::Log2_32(numColsPerWarp / numColsPerChunk);
