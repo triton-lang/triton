@@ -3224,16 +3224,18 @@ struct CanonicalizeConvertFromConvert
   mlir::LogicalResult
   matchAndRewrite(ConvertLayoutOp op,
                   PatternRewriter &rewriter) const override {
-    // Convert to the same layout is redundant.
-    if (op->getResultTypes() == op->getOperandTypes()) {
+    auto srcType = op.getSrc().getType();
+    auto dstType = op.getType();
+    // If the layouts are structurally the same, the convert is trivial
+    auto srcLL = toLinearLayout(srcType.getShape(), srcType.getEncoding());
+    auto dstLL = toLinearLayout(dstType.getShape(), dstType.getEncoding());
+    if (srcLL && dstLL && *srcLL == *dstLL) {
       rewriter.replaceOp(op, op->getOperands());
       return success();
     }
 
     // We don't handle conversions to DotOperandEncodingAttr.  This is a
     // heuristic to accommodate fused attention.
-    auto srcType = op.getSrc().getType();
-    auto dstType = op.getType();
     if (mlir::isa<DotOperandEncodingAttr>(dstType.getEncoding()) &&
         mlir::isa<NvidiaMmaEncodingAttr>(srcType.getEncoding()))
       return failure();
