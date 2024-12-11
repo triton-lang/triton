@@ -8,8 +8,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // CHECK: set_warp_shuffle_layout_square_axis_0
 tt.func @set_warp_shuffle_layout_square_axis_0(%arg0: tensor<64x64xf32, #blocked>, %arg1: tensor<64x64xi32, #blocked>) -> tensor<64x64xf32, #blocked> {
-  // CHECK: tt.gather {{.*}} (tensor<64x64xf32, [[LAYOUT]]>, tensor<64x64xi32, [[LAYOUT]]>) -> tensor<64x64xf32, [[LAYOUT]]>
+  // CHECK-NEXT: [[SRC:%.*]] = ttg.convert_layout %arg0
+  // CHECK-NEXT: [[IDX:%.*]] = ttg.convert_layout %arg1
+  // CHECK-NEXT: [[OUT:%.*]] = tt.gather [[SRC]][[[IDX]]] {axis = 0 : i32, efficient_layout} : (tensor<64x64xf32, [[LAYOUT]]>, tensor<64x64xi32, [[LAYOUT]]>) -> tensor<64x64xf32, [[LAYOUT]]>
   %0 = tt.gather %arg0[%arg1] {axis = 0 : i32} : (tensor<64x64xf32, #blocked>, tensor<64x64xi32, #blocked>) -> tensor<64x64xf32, #blocked>
+  // CHECK-NEXT: [[RES:%.*]] = ttg.convert_layout [[OUT]]
+  // CHECK-NEXT: return [[RES]]
   tt.return %0 : tensor<64x64xf32, #blocked>
 }
 
