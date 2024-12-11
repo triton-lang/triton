@@ -27,7 +27,7 @@ jobs:
         id: set-matrix
         run: |
           if [ x"${{ github.repository }}" == x"ROCm/triton" ]; then
-            echo '::set-output name=matrix-HIP::[["self-hosted", "rocm.gfx90a"]]'
+            echo '::set-output name=matrix-HIP::[["self-hosted", "gfx942"]]'
           else
             echo '::set-output name=matrix-HIP::[["ubuntu-latest"]]'
           fi
@@ -41,7 +41,7 @@ jobs:
       matrix:
         runner: ${{fromJson(needs.Runner-Preparation-AMD.outputs.matrix-HIP)}}
     container:
-      image: rocm/pytorch:rocm6.0.2_ubuntu22.04_py3.10_pytorch_2.1.2
+      image: rocm/pytorch:latest
       options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
     steps:
       - name: Checkout
