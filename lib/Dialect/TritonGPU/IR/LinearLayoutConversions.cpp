@@ -899,10 +899,11 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(
 
   for (int logWarp = 0; logWarp < llvm::Log2_32(warpsPerCTA[1]); logWarp++) {
     int warp = 1 << logWarp;
-    if (warp * numColsPerWarp >= shape[1]) {
+    int basis = warp * numColsPerWarp;
+    if (basis >= shape[1]) {
       basesWarp.push_back({0, 0});
     } else {
-      basesWarp.push_back({0, warp * instrN});
+      basesWarp.push_back({0, basis});
     }
   }
 
