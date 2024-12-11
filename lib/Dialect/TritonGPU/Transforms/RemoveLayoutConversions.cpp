@@ -170,6 +170,8 @@ bool isLayoutAnchor(Operation *op) {
     return isExpensiveLoadOrStore(op);
   if (isa<DotOp, nvidia_gpu::WarpGroupDotOp, AtomicRMWOp, AtomicCASOp>(op))
     return true;
+  if (auto gatherOp = dyn_cast<GatherOp>(op))
+    return gatherOp.getEfficientLayout();
 
   // Heuristic: Mark permuting reshape as a layout anchor.  Its dst can be
   // anything, so it stops forward-propagation of layouts.  We rely on the
@@ -720,6 +722,9 @@ bool canBeRemat(Operation *op) {
     return !isExpensiveLoadOrStore(op);
   if (isa<AtomicRMWOp, AtomicCASOp, DotOp>(op))
     return false;
+  if (auto gather = dyn_cast<GatherOp>(op))
+    return !gather.getEfficientLayout();
+
   if (isa<scf::WhileOp, scf::ConditionOp>(op))
     return false;
 
