@@ -707,7 +707,7 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
   }
   if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<OpTrait::Elementwise>() ||
-      isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
+      isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp, GatherOp,
           ConvertLayoutOp, nvidia_gpu::WarpGroupDotWaitOp>(op)) {
     Operation *newOp = cloneElementwise(rewriter, op, encoding);
     for (auto [oldResult, newResult] :
@@ -720,7 +720,6 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
     }
     return newOp;
   }
-  // TODO(jeff): Handle tt.gather once it supports layout propagation.
   llvm::report_fatal_error("unexpected op in rewrite");
   return nullptr;
 }
