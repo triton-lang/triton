@@ -3133,7 +3133,7 @@ struct CanonicalizeConvertFromGatherSource : public OpRewritePattern<GatherOp> {
 
     rewriter.replaceOpWithNewOp<GatherOp>(op, convert.getSrc(), op.getIndices(),
                                           op.getAxis());
-    return mlir::success();
+    return success();
   }
 };
 

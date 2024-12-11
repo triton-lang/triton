@@ -2715,14 +2715,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
-tt.func @propagate_layout_gather(%arg0: tensor<1024x256xi32, #blocked2>, %arg1: tensor<128x256xf32, #blocked>) -> tensor<1024x256xf32, #blocked2> {
-  // CHECK-LABEL: propagate_layout_gather
+tt.func @forward_propagate_layout_gather(%arg0: tensor<1024x256xi32, #blocked2>, %arg1: tensor<128x256xf32, #blocked>) -> tensor<1024x256xf32, #blocked2> {
+  // CHECK-LABEL: forward_propagate_layout_gather
 
   // CHECK-NOT: convert_layout
   %0 = ttg.convert_layout %arg0 : tensor<1024x256xi32, #blocked2> -> tensor<1024x256xi32, #blocked1>
   %1 = tt.gather %arg1[%0] {axis = 0 : i32} : (tensor<128x256xf32, #blocked>, tensor<1024x256xi32, #blocked1>) -> tensor<1024x256xf32, #blocked1>
   %2 = ttg.convert_layout %1 : tensor<1024x256xf32, #blocked1> -> tensor<1024x256xf32, #blocked2>
   tt.return %2 : tensor<1024x256xf32, #blocked2>
+}
+
+tt.func @backward_remat_gather_layout(%arg0: tensor<64x64xf32, #blocked>) -> tensor<1x64xf32, #blocked> {
+  // CHECK-LABEL: backward_remat_gather_layout
+
+  %0 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked2}>>
+  %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked2}>> -> tensor<1x64xi32, #blocked2>
+  %2 = tt.gather %arg0[%1] {axis = 0 : i32} : (tensor<64x64xf32, #blocked>, tensor<1x64xi32, #blocked2>) -> tensor<1x64xf32, #blocked2>
+
+  // CHECK-NOT: convert_layout
+  %3 = ttg.convert_layout %2 : tensor<1x64xf32, #blocked2> -> tensor<1x64xf32, #blocked>
+  tt.return %3 : tensor<1x64xf32, #blocked>
 }
 
 }
