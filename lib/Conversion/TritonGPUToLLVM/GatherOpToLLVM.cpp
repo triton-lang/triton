@@ -259,7 +259,7 @@ void GatherOpConversion::emitWarpLocalGather(
   SmallVector<Value> idxValues =
       unpackLLElements(loc, adaptor.getIndices(), rewriter);
 
-  auto [blockId, warpId, laneId] =
+  auto [laneId, warpId, blockId] =
       emitHardwareTuple(loc, rewriter, targetInfo, /*withCTAOffset=*/true,
                         srcLayout.getInDimSize(kLane));
 
