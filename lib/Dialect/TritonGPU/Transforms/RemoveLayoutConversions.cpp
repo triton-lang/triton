@@ -977,18 +977,6 @@ LogicalResult LayoutRematerialization::getRematerializableSlice(
 
   LogicalResult result = getConvertBackwardSlice(
       root, slice, rootEncoding, layout, stopPropagation, isFreePassthrough);
-
-  llvm::errs() << "BACKWARD SLICE OF: " << root << "\n";
-  llvm::errs() << "enc: " << rootEncoding << "\n";
-
-  for (Value v : slice) {
-    llvm::errs() << "  " << v << "\n";
-  }
-  for (auto it : layout) {
-    llvm::errs() << "  " << it.first << "\n  ====> " << it.second << "\n";
-  }
-  llvm::errs() << result.failed() << "\n\n\n";
-
   if (result.failed() || slice.empty())
     return failure();
 
