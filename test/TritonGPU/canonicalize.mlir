@@ -150,4 +150,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
     %1 = tt.gather %0[%arg1] {axis = 0 : i32} : (tensor<16x16xf16, #blocked1>, tensor<16x16xi32, #blocked>) -> tensor<16x16xf16, #blocked>
     tt.return %1 : tensor<16x16xf16, #blocked>
   }
+
+  // CHECK-LABEL: convert_layout_gather_dst
+  tt.func @gather_efficient_layout(%arg0: tensor<16x16xf16, #blocked>, %arg1: tensor<16x16xi32, #blocked>) -> tensor<16x16xf16, #blocked> {
+    // CHECK-NEXT: convert_layout
+    %0 = ttg.convert_layout %arg0 : tensor<16x16xf16, #blocked> -> tensor<16x16xf16, #blocked1>
+    // CHECK-NEXT: tt.gather {{.*}} (tensor<16x16xf16, #blocked1>
+    %1 = tt.gather %0[%arg1] {axis = 0 : i32, efficient_layout} : (tensor<16x16xf16, #blocked1>, tensor<16x16xi32, #blocked>) -> tensor<16x16xf16, #blocked>
+    tt.return %1 : tensor<16x16xf16, #blocked>
+  }
 }
