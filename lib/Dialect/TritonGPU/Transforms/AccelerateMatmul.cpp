@@ -853,10 +853,6 @@ static void setOptimizedGatherLayout(GatherOp op) {
     threadsPerWarp[dim] = nextThreadAlloc;
     threadsToAlloc /= nextThreadAlloc;
   }
-  // If threadsToAlloc is not 1, then the tensor is too small and there will be
-  // broadcasting.
-  if (threadsToAlloc != 1)
-    return;
   assert(llvm::none_of(threadsPerWarp, [](unsigned c) { return c == 0; }));
 
   // There must be one warp along the gather axis.
@@ -872,23 +868,20 @@ static void setOptimizedGatherLayout(GatherOp op) {
     warpsPerCTA[dim] = nextWarpAlloc;
     warpsToAlloc /= nextWarpAlloc;
   }
-  if (warpsToAlloc != 1)
-    return;
   assert(llvm::none_of(warpsPerCTA, [](unsigned c) { return c == 0; }));
 
-  // Just set `sizePerThread` to all ones and let implicit broadcasting do the
-  // rest.
+  // Just set `sizePerThread` to 1 along other dimensions and let broadcasting
+  // handling it.
   SmallVector<unsigned> sizePerThread(rank, 1);
+  sizePerThread[axis] = srcType.getDimSize(axis) / threadsPerWarp[axis];
 
-  // Sanity check.
+  // Overflow by broadcasting along the gather axis since this is the most
+  // predictable.
+  threadsPerWarp[axis] *= threadsToAlloc;
+  warpsPerCTA[axis] *= warpsToAlloc;
+
   assert(product(threadsPerWarp) == numThreadsPerWarp);
   assert(product(warpsPerCTA) == numWarps);
-  for (unsigned dim = 0; dim != rank; ++dim) {
-    if (dim == axis)
-      continue;
-    assert(sizePerThread[dim] * threadsPerWarp[dim] * warpsPerCTA[dim] <=
-           srcType.getDimSize(dim));
-  }
 
   // Construct the new layout.
   MLIRContext *ctx = srcType.getContext();
