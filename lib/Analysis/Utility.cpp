@@ -438,7 +438,6 @@ bool GatherLoweringHelper::isWarpLocal() {
   StringAttr kBlock = b.getStringAttr("block");
   StringAttr kWarp = b.getStringAttr("warp");
   StringAttr kLane = b.getStringAttr("lane");
-  StringAttr kRegister = b.getStringAttr("register");
   StringAttr kGatherDim = b.getStringAttr("dim" + std::to_string(axis));
 
   // The tensor layouts must be distributed layouts, where the basis matrix is a
@@ -462,11 +461,10 @@ bool GatherLoweringHelper::isWarpLocal() {
       !idxLayout->sublayoutIsZero({kBlock, kWarp}, kGatherDim))
     return false;
 
-  SmallVector<StringAttr> allDims, otherDims;
+  SmallVector<StringAttr> otherDims;
   for (unsigned dim = 0, rank = srcType.getRank(); dim < rank; ++dim) {
-    allDims.push_back(b.getStringAttr("dim" + Twine(dim)));
     if (dim != axis) {
-      otherDims.push_back(allDims.back());
+      otherDims.push_back(b.getStringAttr("dim" + Twine(dim)));
     }
   }
 
