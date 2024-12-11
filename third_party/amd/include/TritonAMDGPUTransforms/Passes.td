@@ -136,7 +136,7 @@ def TritonAMDGPUBlockPingpong: Pass<"tritonamdgpu-block-pingpong", "mlir::Module
 
   let constructor = "mlir::createTritonAMDGPUBlockPingpongPass()";
 
-  let dependentDialects = ["mlir::ROCDL::ROCDLDialect"];
+  let dependentDialects = ["mlir::ROCDL::ROCDLDialect, mlir::triton::amdgpu::TritonAMDGPUDialect"];
 }
 
 #endif

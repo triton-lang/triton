@@ -213,8 +213,9 @@ LogicalResult Pingponger::transformFourPPClusters(OpBuilder &builder,
   auto typeB = op.getB().getType();
   auto shapeB = typeB.getShape();
   int64_t sliceWidth = shapeB[0] / numSlices;
+  if (shapeB[0] % numSlices != 0)
+    return failure();
   genOffsetConstants(loc, builder, numSlices, sliceWidth);
-
   builder.setInsertionPointAfter(gLoadOps[0]);
   auto dotEncoding = op.getType().getEncoding();
   if (genLocalSlice(builder, op.getA(), dotEncoding, 0, numSlices, sliceWidth)
@@ -364,6 +365,10 @@ void Pingponger::getDotPingponged() {
   //   exceeds the amount of register GPU has so, we need to split the dot
   //   into several pieces.
 
+  // TODO:
+  // - Add transformTwoPPClusters for the medium size tiles
+  // - Add definition of small/medium/large tile size considering data-type
+  //   so we can choose the transfrom per given tile size.
   if (numWarps == 4) { // pingpong between warps from different blocks
     // transfor a loop with small tile size
     transformOnePPClusters(builder, loc);
