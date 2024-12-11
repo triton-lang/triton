@@ -253,10 +253,19 @@ struct DotOpMFMAConversionHelper {
           acc = reduceSubBlocks(subBlocks, acc);
           for (unsigned v = 0; v < elemsPerVec; ++v) {
             Value accElem = extract_element(dstElemTy, acc, i32_val(v));
-            // dot operand layout wraps if kDimInstrSize > dot argument k
-            // dimension size for example, kDimInstrSize = 16 and operand k dim
-            // is only
-            //  means that dot results
+            // Dot operand layout minimal tile is kDimInstrSize elements across
+            // K dimension. If dot operand K dimension is smaller, layout
+            // assigns tensor elements to multiple different hardware locations.
+            // In this case mfma instruction adds elements in accumulator
+            // multiple times.
+            //
+            // Let say A=[1,2]; B=[3,4], C = A*B = 1*3+2*4 = 11
+            // Consider instruction K size is 4,
+            // in this case operands will be duplicated:
+            // A'=[1,2,1,2] B'=[3,4,3,4]
+            // C' = (1*3+2*4) + (1*3+2*4) = 22
+            //
+            // Following code adjusts accumulator values in such cases.
             if (kDimInstrSize > kDimOperandSize) {
               assert(kDimInstrSize % kDimOperandSize == 0);
               int duplicationRate = kDimInstrSize / kDimOperandSize;
