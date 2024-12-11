@@ -876,22 +876,22 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(
   std::vector<std::vector<int>> basesWarp;
   auto warpsPerCTA = mma.getWarpsPerCTA();
   auto shape = tensorTy.getShape();
-  assert(warpsPerCTA[0] * instrM <= shape[0] &&
-         "There must be enough rows to use MMAv3");
   for (int logWarp = 0; logWarp < llvm::Log2_32(warpsPerCTA[0]); logWarp++) {
     int warp = 1 << logWarp;
     basesWarp.push_back({0, warp * instrM});
   }
 
   // Expand the `register` dimension so the size of columns matches `instrN`
-  for (int logCol = 0; logCol < llvm::Log2_32(instrN / numColsPerChunk);
-       logCol++) {
+  auto numCols = instrN <= numColsPerChunk ? 0 : instrN / numColsPerChunk;
+  for (int logCol = 0; logCol < llvm::Log2_32(numCols); logCol++) {
     int chunk = 1 << logCol;
     int basis = chunk * shape[0];
     basesReg.push_back({0, basis});
   }
-  for (int logRow = 0;
-       logRow < llvm::Log2_32(shape[0] / (warpsPerCTA[0] * instrM)); logRow++) {
+  assert(warpsPerCTA[0] * instrM <= shape[0] &&
+         "There must be enough rows to use MMAv3");
+  auto numRows = shape[0] / (warpsPerCTA[0] * instrM);
+  for (int logRow = 0; logRow < llvm::Log2_32(numRows); logRow++) {
     int chunk = 1 << logRow;
     int basis = chunk * warpsPerCTA[0] * instrM;
     basesReg.push_back({0, basis});
