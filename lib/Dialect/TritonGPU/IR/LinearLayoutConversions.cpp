@@ -862,8 +862,8 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(
 
   // Construct the bases for a single chunk
   for (int logCol = 0; logCol < llvm::Log2_32(numColsPerChunk / 16); logCol++) {
-    int chunk = 1 << logCol;
-    basesReg.push_back({16 * chunk, 0});
+    int col = 1 << logCol;
+    basesReg.push_back({16 * col, 0});
   }
 
   // Construct the bases for warpsPerCTA[0]
@@ -875,14 +875,19 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(
     basesWarp.push_back({0, warp * instrM});
   }
 
-  // Expand the `register` dimension so the size of columns matches `instrN`
-  auto logNumCols =
-      instrN <= numColsPerChunk ? 0 : llvm::Log2_32(instrN / numColsPerChunk);
+  // Expand the `register` dimension so the size of columns matches `shape[1] /
+  // warpsPerCTA[1]`
+  auto numColsPerWarp = shape[1] / warpsPerCTA[1];
+  auto logNumCols = numColsPerWarp <= numColsPerChunk
+                        ? 0
+                        : llvm::Log2_32(numColsPerWarp / numColsPerChunk);
   for (int logCol = 0; logCol < logNumCols; logCol++) {
     int chunk = 1 << logCol;
     int basis = chunk * shape[0];
     basesReg.push_back({0, basis});
   }
+
+  // Expand the `warp` dimension so that the size of rows matches `shape[0]`
   assert(warpsPerCTA[0] * instrM <= shape[0] &&
          "There must be enough rows to use MMAv3");
   auto logNumRows = llvm::Log2_32(shape[0] / (warpsPerCTA[0] * instrM));
@@ -892,10 +897,9 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(
     basesReg.push_back({0, basis});
   }
 
-  // Expand the `warp` dimension according to warpsPerCTA[1] to fit shape[1]
   for (int logWarp = 0; logWarp < llvm::Log2_32(warpsPerCTA[1]); logWarp++) {
     int warp = 1 << logWarp;
-    if (warp * instrN >= shape[1]) {
+    if (warp * numColsPerWarp >= shape[1]) {
       basesWarp.push_back({0, 0});
     } else {
       basesWarp.push_back({0, warp * instrN});
