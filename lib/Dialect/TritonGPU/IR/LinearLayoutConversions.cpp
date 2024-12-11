@@ -862,33 +862,43 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(
   }
   basesLane.push_back({8, 0});
 
-  // Expand the tile's register dimension to fit the "n" dimension of the WGMMA
-  // instruction
   auto mma = cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
+  int instrM = mma.getInstrShape()[0];
   int instrN = mma.getInstrShape()[1];
-  LinearLayout layout = LinearLayout::empty();
 
-  // A single warp is used to fill out a chunk column
+  // Construct the bases for a single chunk
   for (int logCol = 0; logCol < llvm::Log2_32(numColsPerChunk / 16); logCol++) {
     int chunk = 1 << logCol;
     basesReg.push_back({16 * chunk, 0});
   }
-  // Construct the layout for a single chunk
-  layout *= LinearLayout({{kReg, basesReg}, {kLane, basesLane}}, {kCol, kRow});
 
-  // Expand the `warp` dimension according to warpsPerCTA.
+  // Construct the bases for warpsPerCTA[0]
+  std::vector<std::vector<int>> basesWarp;
   auto warpsPerCTA = mma.getWarpsPerCTA();
-  warpsPerCTA[1] = 1;
-  layout *= identityStandardND(kWarp, mma.getWarpsPerCTA(), /*order=*/{0, 1})
-                .transposeOuts(llvm::to_vector(layout.getOutDimNames()));
-
-  // Expand the `register` dimension so the size of columns matches `instrN`.
-  if (instrN > numColsPerChunk) {
-    int numWarpRows = layout.getOutDimSize(kRow);
-    layout = (layout.reshapeOuts({{kOffset, layout.getTotalOutDimSize()}}) *
-              LinearLayout::identity1D(instrN / numColsPerChunk, kReg, kOffset))
-                 .reshapeOuts({{kCol, instrN}, {kRow, numWarpRows}});
+  auto shape = tensorTy.getShape();
+  assert(warpsPerCTA[0] * instrM <= shape[0] &&
+         "There must be enough rows to use MMAv3");
+  for (int logWarp = 0; logWarp < llvm::Log2_32(warpsPerCTA[0]); logWarp++) {
+    int warp = 1 << logWarp;
+    basesWarp.push_back({warp * instrM, 0});
   }
+
+  // Expand the `register` dimension so the size of columns matches `instrN` and
+  // and the size of rows matches `shape[0]`
+  for (int logCol = 0; logCol < llvm::Log2_32(instrN / numColsPerChunk);
+       logCol++) {
+    int chunk = 1 << logCol;
+    int basis = shape[0] * numColsPerChunk * chunk;
+    basesReg.push_back({basis, 0});
+  }
+  for (int logRow = 0;
+       logRow < llvm::Log2_32(shape[0] / (warpsPerCTA[0] * instrM)); logRow++) {
+    int chunk = 1 << logRow;
+    int basis = chunk * warpsPerCTA[0] * instrM;
+    basesReg.push_back({basis, 0});
+  }
+  auto layout = LinearLayout(
+      {{kReg, basesReg}, {kLane, basesLane}, {kWarp, basesWarp}}, {kCol, kRow});
 
   auto ret =
       combineCtaCgaWithShape(layout, mma.getCTALayout(), tensorTy.getShape());
