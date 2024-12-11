@@ -3131,6 +3131,17 @@ struct CanonicalizeConvertFromReshape
     auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
     if (!convert)
       return failure();
+    // If the layouts are structurally the same, the convert is trivial
+    // Should we do this whenever cvtReordersRegisters is true?
+    auto srcType = convert.getSrc().getType();
+    auto dstType = convert.getType();
+    auto srcLL = toLinearLayout(srcType.getShape(), srcType.getEncoding());
+    auto dstLL = toLinearLayout(dstType.getShape(), dstType.getEncoding());
+    if (srcLL && dstLL && *srcLL == *dstLL) {
+      rewriter.replaceOpWithNewOp<triton::ReshapeOp>(
+          op, op.getType(), convert.getSrc(), op.getAllowReorder());
+      return mlir::success();
+    }
     if (isExpensiveView(convert.getSrc().getType(), op.getType()))
       return failure();
     if (!op.getAllowReorder() || op.getEfficientLayout())
@@ -3224,18 +3235,16 @@ struct CanonicalizeConvertFromConvert
   mlir::LogicalResult
   matchAndRewrite(ConvertLayoutOp op,
                   PatternRewriter &rewriter) const override {
-    auto srcType = op.getSrc().getType();
-    auto dstType = op.getType();
-    // If the layouts are structurally the same, the convert is trivial
-    auto srcLL = toLinearLayout(srcType.getShape(), srcType.getEncoding());
-    auto dstLL = toLinearLayout(dstType.getShape(), dstType.getEncoding());
-    if (srcLL && dstLL && *srcLL == *dstLL) {
+    // Convert to the same layout is redundant.
+    if (op->getResultTypes() == op->getOperandTypes()) {
       rewriter.replaceOp(op, op->getOperands());
       return success();
     }
 
     // We don't handle conversions to DotOperandEncodingAttr.  This is a
     // heuristic to accommodate fused attention.
+    auto srcType = op.getSrc().getType();
+    auto dstType = op.getType();
     if (mlir::isa<DotOperandEncodingAttr>(dstType.getEncoding()) &&
         mlir::isa<NvidiaMmaEncodingAttr>(srcType.getEncoding()))
       return failure();

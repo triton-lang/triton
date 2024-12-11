@@ -4526,7 +4526,7 @@ def test_trans_reshape(device):
 
     k = kernel[(1, )](input, actual, shape[0], shape[1])
     assert k.asm['ttgir'].count(
-        'ttg.convert_layout') == 2, "Expected exactly one convert_layout op in the TTGIR after optimization"
+        'ttg.convert_layout') == 1, "Expected exactly one convert_layout op in the TTGIR after optimization"
 
     np.testing.assert_equal(to_numpy(expected), to_numpy(actual))
 
