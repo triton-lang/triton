@@ -470,8 +470,8 @@ namespace f2reduce {
 
 void inplace_rref_strided(uint64_t *matrix, uint64_t rows, uint64_t cols, uint64_t stride) {
 
-    if (rows <= 1) {
-        // If the matrix has 0 or 1 rows, it must already be in RREF:
+    if (rows <= 1 || cols <= 1) {
+        // If the matrix has 0 or 1 rows or columns, it must already be in RREF:
         return;
     }
 
