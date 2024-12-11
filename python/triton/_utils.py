@@ -22,24 +22,27 @@ def list_list_unflatten(spec: List[int], flat: List[Any]) -> List[List[Any]]:
     return ret
 
 
-def find_paths_if(iterable, pred):
+def is_iterable(x):
     from .language import core
-    is_iterable = lambda x: isinstance(x, (list, tuple, core.tuple, core.tuple_type))
+    return isinstance(x, (list, tuple, core.tuple, core.tuple_type))
+
+
+def find_paths_if_impl(current, path, pred, ret):
+    path = (path[0], ) if len(path) == 1 else tuple(path)
+    if is_iterable(current):
+        for idx, item in enumerate(current):
+            find_paths_if_impl(item, path + (idx, ), pred, ret)
+    elif pred(path, current):
+        if len(path) == 1:
+            ret[(path[0], )] = current
+        else:
+            ret[tuple(path)] = current
+
+
+def find_paths_if(iterable, pred):
     ret = dict()
-
-    def _impl(current, path):
-        path = (path[0], ) if len(path) == 1 else tuple(path)
-        if is_iterable(current):
-            for idx, item in enumerate(current):
-                _impl(item, path + (idx, ))
-        elif pred(path, current):
-            if len(path) == 1:
-                ret[(path[0], )] = current
-            else:
-                ret[tuple(path)] = current
-
     if is_iterable(iterable):
-        _impl(iterable, [])
+        find_paths_if_impl(iterable, [], pred, ret)
     elif pred(list(), iterable):
         ret = {tuple(): iterable}
     else:
