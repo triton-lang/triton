@@ -362,6 +362,16 @@ static Attribute inferSrcEncoding(SplitOp op, Attribute dstEnc) {
   return {};
 }
 
+static Attribute inferSrcEncoding(GatherOp op, Attribute dstEnc) {
+  // Don't propagate through if the layout is already optimized.
+  if (op.getEfficientLayout()) {
+    return {};
+  }
+
+  // The index encoding is the same as the output encoding.
+  return dstEnc;
+}
+
 static Attribute inferTransOpDstEncoding(Attribute srcEnc,
                                          ArrayRef<int32_t> order) {
   // Simply forward to the existing inferTransOpEncoding function.
@@ -418,6 +428,18 @@ static Attribute inferDstEncoding(triton::ReshapeOp op, Attribute encoding) {
                                    op.getAllowReorder());
 }
 
+static Attribute inferDstEncoding(GatherOp op, Attribute encoding) {
+  // Don't propagate through if the layout is already optimized.
+  if (op.getEfficientLayout()) {
+    return {};
+  }
+
+  // The output encoding is the same as the index encoding.
+  // FIXME: This assumes `encoding` is the index encoding, which can be
+  // different than the source encoding.
+  return encoding;
+}
+
 static Attribute inferSrcEncoding(triton::ReshapeOp op, Attribute encoding) {
   // The encoding of x given the encoding of y in `reshape(x) -> y` is the same
   // as the encoding of x given the encoding of y in `reshape(y) -> x`.  It's an
@@ -467,8 +489,8 @@ Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
     return inferSrcEncoding(trans, encoding);
   if (auto reshape = dyn_cast<triton::ReshapeOp>(op))
     return inferSrcEncoding(reshape, encoding);
-  // TODO(jeff): Handle progagating tt.gather indices -> dst layout.
-  // This requires updating the API to specify the exact operands and results.
+  if (auto gather = dyn_cast<triton::GatherOp>(op))
+    return inferSrcEncoding(gather, encoding);
 
   return {};
 }
@@ -496,7 +518,8 @@ Attribute inferDstEncoding(Operation *op, Attribute encoding) {
     return inferDstEncoding(trans, encoding);
   if (auto reshape = dyn_cast<triton::ReshapeOp>(op))
     return inferDstEncoding(reshape, encoding);
-  // TODO(jeff): Handle progagating tt.gather indices -> dst layout.
+  if (auto gather = dyn_cast<triton::GatherOp>(op))
+    return inferDstEncoding(gather, encoding);
 
   return {};
 }
@@ -819,7 +842,12 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
         continue;
       if (isa<triton::CatOp>(definingOp))
         return failure();
-      for (Value operand : definingOp->getOperands()) {
+      for (auto [i, operand] : llvm::enumerate(definingOp->getOperands())) {
+        // HACK: Do not propagate from the result to the src of a gather.
+        if (isa<GatherOp>(definingOp) && i == 0) {
+          continue;
+        }
+
         auto srcEncoding = inferSrcEncoding(definingOp, encoding);
         if (!srcEncoding)
           return failure();

@@ -3114,6 +3114,29 @@ struct CanonicalizeConvertFromHistogram
   }
 };
 
+// The source gather layout does not matter, so we can fold conversions into the
+// source operand. Only do this if an optimized layout was not picked.
+//
+// gather(cvt(src), idx) -> gather(src, idx)
+struct CanonicalizeConvertFromGatherSource : public OpRewritePattern<GatherOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(GatherOp op, PatternRewriter &rewriter) const override {
+    // Don't do this if the compiler picked an optimized layout.
+    if (op.getEfficientLayout())
+      return failure();
+
+    auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
+    if (!convert)
+      return failure();
+
+    rewriter.replaceOpWithNewOp<GatherOp>(op, convert.getSrc(), op.getIndices(),
+                                          op.getAxis());
+    return mlir::success();
+  }
+};
+
 // alloc(cvt) -> alloc
 struct CanonicalizeConvertFromAlloc
     : public mlir::OpRewritePattern<triton::gpu::LocalAllocOp> {
@@ -3299,6 +3322,7 @@ void ConvertLayoutOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
                                                   MLIRContext *context) {
   patterns.add<CanonicalizeConvertFromConvert>(context);
   patterns.add<CanonicalizeConvertFromReshape>(context);
+  patterns.add<CanonicalizeConvertFromGatherSource>(context);
   patterns.add<CanonicalizeConvertFromHistogram>(context);
   patterns.add<CanonicalizeConvertFromAlloc>(context);
   patterns.add<CanonicalizeConvertFromLocalStore>(context);
