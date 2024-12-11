@@ -26,8 +26,8 @@ static void setOptimizedGatherLayout(GatherOp op) {
   // assignment is a proper constraint system.
   auto distributedItf = cast<DistributedEncodingTrait>(srcType.getEncoding());
   unsigned axis = op.getAxis();
-  //if (distributedItf.getThreadOrder().front() != axis)
-  //  return;
+  // if (distributedItf.getThreadOrder().front() != axis)
+  //   return;
 
   // Determine a warp-local gather layout that minimizes the number of emitted
   // warp shuffles.
@@ -122,9 +122,8 @@ static void setOptimizedGatherLayout(GatherOp op) {
   auto ctaLayout = CTALayoutAttr::get(ctx, distributedItf.getCTAsPerCGA(),
                                       distributedItf.getCTASplitNum(),
                                       distributedItf.getCTAOrder());
-  auto newLayout =
-      BlockedEncodingAttr::get(ctx, sizePerThread, threadsPerWarp, warpsPerCTA,
-                              order, ctaLayout);
+  auto newLayout = BlockedEncodingAttr::get(ctx, sizePerThread, threadsPerWarp,
+                                            warpsPerCTA, order, ctaLayout);
 
   // Update the layout on the gather op and insert conversions.
   mlir::ImplicitLocOpBuilder b(op.getLoc(), op);
