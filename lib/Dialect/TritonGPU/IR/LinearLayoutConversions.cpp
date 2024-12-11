@@ -897,6 +897,7 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(
     basesReg.push_back({0, basis});
   }
 
+  // Expand the `warp` dimension so that the size of cols matches `shape[1]`
   for (int logWarp = 0; logWarp < llvm::Log2_32(warpsPerCTA[1]); logWarp++) {
     int warp = 1 << logWarp;
     int basis = warp * numColsPerWarp;
