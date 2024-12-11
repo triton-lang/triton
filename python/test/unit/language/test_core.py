@@ -5482,14 +5482,14 @@ mma_layout = [
     MmaLayout((2, 0), [1, 4], [1, 1], [1, 1], [0, 1], [16, 8]),
     MmaLayout((2, 0), [2, 8], [1, 1], [1, 1], [0, 1], [16, 8]),
     MmaLayout((3, 0), [4, 1], [1, 1], [1, 1], [0, 1], [16, 128, 16]),
-    MmaLayout((3, 0), [2, 8], [1, 1], [1, 1], [0, 1], [16, 64, 32]),
-    MmaLayout((3, 0), [8, 2], [1, 1], [1, 1], [0, 1], [16, 128, 32]),
+    MmaLayout((3, 0), [4, 2], [1, 1], [1, 1], [0, 1], [16, 128, 16]),
+    MmaLayout((3, 0), [8, 2], [1, 1], [1, 1], [0, 1], [16, 128, 16]),
 ]
 
 shared_layout = [
-    SharedLayout(1, 1, 1, [1, 0], [1, 1], [1, 1], [0, 1]),
-    SharedLayout(4, 1, 8, [0, 1], [1, 1], [1, 1], [0, 1], has_leading_offset=True),
-    SharedLayout(8, 2, 4, [1, 0], [1, 1], [1, 1], [0, 1], has_leading_offset=True),
+    SharedLayout(8, 1, 1, [1, 0], [1, 1], [1, 1], [0, 1]),
+    SharedLayout(8, 2, 4, [0, 1], [1, 1], [1, 1], [0, 1], has_leading_offset=True),
+    SharedLayout(8, 1, 8, [1, 0], [1, 1], [1, 1], [0, 1], has_leading_offset=True),
 ]
 
 
