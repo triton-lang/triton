@@ -136,6 +136,10 @@ public:
                     ConvertLayoutOp convertOp, IRMapping &mapping);
   void rewriteSlice(SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
                     ConvertLayoutOp convertOp);
+  LogicalResult getRematerializableSlice(
+      Value root, Attribute rootEncoding, SetVector<Value> &slice,
+      DenseMap<Value, Attribute> &layout,
+      std::function<bool(Operation *)> stopPropagation = nullptr);
 
 private:
   void updateRematMapping(SmallVector<std::tuple<Value, Value>> &values);
@@ -145,6 +149,7 @@ private:
   DenseMap<Value, Attribute> mappedValues;
   // map of the values remat based on encoding.
   DenseMap<std::pair<Value, Attribute>, Value> rematMapping;
+  DenseMap<std::pair<Value, Attribute>, ConvertLayoutOp> existingCvts;
   // DenseMap<std::pair<Operation*, Attribute>, Operation*>
   SetVector<Operation *> opToDelete;
   FuncOp funcOp;
@@ -170,9 +175,8 @@ bool isLayoutAnchor(Operation *op) {
     return isExpensiveLoadOrStore(op);
   if (isa<DotOp, nvidia_gpu::WarpGroupDotOp, AtomicRMWOp, AtomicCASOp>(op))
     return true;
-
-  if (isa<GatherOp>(op))
-    return true;
+  if (auto gatherOp = dyn_cast<GatherOp>(op))
+    return gatherOp.getEfficientLayout();
 
   // Heuristic: Mark permuting reshape as a layout anchor.  Its dst can be
   // anything, so it stops forward-propagation of layouts.  We rely on the
@@ -279,7 +283,10 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
       continue;
     }
     if (auto gatherOp = dyn_cast<GatherOp>(user)) {
-      if (&use == &gatherOp.getIndicesMutable()) {
+      // Propagate the layout through the indices only, and if the layout does
+      // not have an efficient layout set.
+      if (!gatherOp.getEfficientLayout() &&
+          &use == &gatherOp.getIndicesMutable()) {
         setEncoding(gatherOp.getResult(), info, changed, user);
         continue;
       }
@@ -727,9 +734,8 @@ bool canBeRemat(Operation *op) {
     return !isExpensiveLoadOrStore(op);
   if (isa<AtomicRMWOp, AtomicCASOp, DotOp>(op))
     return false;
-
-  if (isa<GatherOp>(op))
-    return false;
+  if (auto gather = dyn_cast<GatherOp>(op))
+    return !gather.getEfficientLayout();
 
   if (isa<scf::WhileOp, scf::ConditionOp>(op))
     return false;
@@ -779,6 +785,12 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
     // If we already have a remat value for this value, use it.
     if (hasRematValue(v, layoutIt->second)) {
       mapping.map(v, getRematValue(v, layoutIt->second));
+      valuesWithExistingRemat.insert(v);
+      continue;
+    }
+    if (auto cvt = existingCvts.lookup({v, layoutIt->second});
+        cvt && cvt != convertOp) {
+      mapping.map(v, cvt.getResult());
       valuesWithExistingRemat.insert(v);
       continue;
     }
@@ -939,12 +951,44 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
   rewriteSlice(slice, layout, convertOp, mapping);
 }
 
-LogicalResult getRematerializableSlice(
+LogicalResult LayoutRematerialization::getRematerializableSlice(
     Value root, Attribute rootEncoding, SetVector<Value> &slice,
     DenseMap<Value, Attribute> &layout,
-    std::function<bool(Operation *)> stopPropagation = nullptr) {
-  LogicalResult result = getConvertBackwardSlice(root, slice, rootEncoding,
-                                                 layout, stopPropagation);
+    std::function<bool(Operation *)> stopPropagation) {
+  auto isFreePassthrough = [&](Value value, Attribute encoding) -> Value {
+    // Check if an existing conversion already exists for this.
+    if (hasRematValue(value, encoding)) {
+      return getRematValue(value, encoding);
+    }
+    if (ConvertLayoutOp existingCvt = existingCvts.lookup({value, encoding})) {
+      if (existingCvt.getSrc() != root) {
+        return existingCvt.getSrc();
+      }
+    }
+    // Check if the convert will be performed by reordering registers.
+    if (auto convertOp = value.getDefiningOp<ConvertLayoutOp>()) {
+      if (cvtReordersRegisters(convertOp.getSrc().getType(),
+                               convertOp.getType())) {
+        return convertOp.getSrc();
+      }
+    }
+    return {};
+  };
+
+  LogicalResult result = getConvertBackwardSlice(
+      root, slice, rootEncoding, layout, stopPropagation, isFreePassthrough);
+
+  llvm::errs() << "BACKWARD SLICE OF: " << root << "\n";
+  llvm::errs() << "enc: " << rootEncoding << "\n";
+
+  for (Value v : slice) {
+    llvm::errs() << "  " << v << "\n";
+  }
+  for (auto it : layout) {
+    llvm::errs() << "  " << it.first << "\n  ====> " << it.second << "\n";
+  }
+  llvm::errs() << result.failed() << "\n\n\n";
+
   if (result.failed() || slice.empty())
     return failure();
 
@@ -961,8 +1005,11 @@ LogicalResult getRematerializableSlice(
 void LayoutRematerialization::backwardRematerialization() {
   // Go through each ConvertLayoutOp.
   SmallVector<ConvertLayoutOp> convertOps;
-  funcOp.walk(
-      [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
+  funcOp.walk([&](ConvertLayoutOp convertOp) {
+    convertOps.push_back(convertOp);
+    existingCvts.insert(
+        {{convertOp.getSrc(), convertOp.getType().getEncoding()}, convertOp});
+  });
   for (ConvertLayoutOp convertOp : convertOps) {
     backwardRematerialization(convertOp);
   }

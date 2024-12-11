@@ -363,9 +363,13 @@ static Attribute inferSrcEncoding(SplitOp op, Attribute dstEnc) {
 }
 
 static Attribute inferSrcEncoding(GatherOp op, Attribute dstEnc) {
+  // Don't propagate through if the layout is already optimized.
+  if (op.getEfficientLayout()) {
+    return {};
+  }
+
   // The index encoding is the same as the output encoding.
-  return {};
-  // return dstEnc;
+  return dstEnc;
 }
 
 static Attribute inferTransOpDstEncoding(Attribute srcEnc,
@@ -425,11 +429,15 @@ static Attribute inferDstEncoding(triton::ReshapeOp op, Attribute encoding) {
 }
 
 static Attribute inferDstEncoding(GatherOp op, Attribute encoding) {
+  // Don't propagate through if the layout is already optimized.
+  if (op.getEfficientLayout()) {
+    return {};
+  }
+
   // The output encoding is the same as the index encoding.
   // FIXME: This assumes `encoding` is the index encoding, which can be
   // different than the source encoding.
-  return {};
-  // return encoding;
+  return encoding;
 }
 
 static Attribute inferSrcEncoding(triton::ReshapeOp op, Attribute encoding) {
@@ -763,20 +771,11 @@ Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
   return newOp;
 }
 
-// Check if the convert will be performed by reordering registers.
-static bool isFreeConvert(Operation *op) {
-  auto convertOp = dyn_cast<triton::gpu::ConvertLayoutOp>(op);
-  if (!convertOp)
-    return false;
-  return cvtReordersRegisters(convertOp.getSrc().getType(),
-                              convertOp.getType());
-}
-
-LogicalResult
-getConvertBackwardSlice(Value root, SetVector<Value> &slice,
-                        Attribute rootEncoding,
-                        DenseMap<Value, Attribute> &layout,
-                        std::function<bool(Operation *)> stopPropagation) {
+LogicalResult getConvertBackwardSlice(
+    Value root, SetVector<Value> &slice, Attribute rootEncoding,
+    DenseMap<Value, Attribute> &layout,
+    std::function<bool(Operation *)> stopPropagation,
+    std::function<Value(Value, Attribute)> isFreePassthrough) {
   DenseSet<std::pair<Value, Attribute>> seen;
   SmallVector<std::pair<Value, Attribute>> queue;
 
@@ -817,16 +816,16 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
 
       continue;
     }
+    if (Value passthrough = isFreePassthrough(currentValue, encoding)) {
+      enqueue(passthrough, encoding);
+      continue;
+    }
     if (auto *definingOp = currentValue.getDefiningOp()) {
       // If the op has multiple results we need to update all results layout.
       for (Value result : definingOp->getResults()) {
         if (result == currentValue || !isa<RankedTensorType>(result.getType()))
           continue;
         enqueue(result, encoding);
-      }
-      if (isFreeConvert(definingOp)) {
-        enqueue(definingOp->getOperand(0), encoding);
-        continue;
       }
       if (canFoldIntoConversion(definingOp, encoding))
         continue;

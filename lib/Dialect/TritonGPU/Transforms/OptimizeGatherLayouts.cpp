@@ -26,8 +26,8 @@ static void setOptimizedGatherLayout(GatherOp op) {
   // assignment is a proper constraint system.
   auto distributedItf = cast<DistributedEncodingTrait>(srcType.getEncoding());
   unsigned axis = op.getAxis();
-  if (distributedItf.getThreadOrder().front() != axis)
-    return;
+  //if (distributedItf.getThreadOrder().front() != axis)
+  //  return;
 
   // Determine a warp-local gather layout that minimizes the number of emitted
   // warp shuffles.
@@ -67,6 +67,7 @@ static void setOptimizedGatherLayout(GatherOp op) {
   SmallVector<unsigned> threadsPerWarp(rank);
   SmallVector<unsigned> warpsPerCTA(rank);
   SmallVector<unsigned> order;
+  order.push_back(axis);
 
   // Minimize `sizePerThread[axis]` by putting as many theads along the axis as
   // possible, limited to the actual size of the dimension.
@@ -80,6 +81,7 @@ static void setOptimizedGatherLayout(GatherOp op) {
   for (unsigned dim : distributedItf.getThreadOrder()) {
     if (dim == axis)
       continue;
+    order.push_back(dim);
     unsigned nextThreadAlloc =
         std::min<unsigned>(srcType.getDimSize(dim), threadsToAlloc);
     threadsPerWarp[dim] = nextThreadAlloc;
@@ -122,7 +124,7 @@ static void setOptimizedGatherLayout(GatherOp op) {
                                       distributedItf.getCTAOrder());
   auto newLayout =
       BlockedEncodingAttr::get(ctx, sizePerThread, threadsPerWarp, warpsPerCTA,
-                               distributedItf.getThreadOrder(), ctaLayout);
+                              order, ctaLayout);
 
   // Update the layout on the gather op and insert conversions.
   mlir::ImplicitLocOpBuilder b(op.getLoc(), op);
@@ -137,6 +139,9 @@ static void setOptimizedGatherLayout(GatherOp op) {
   auto cvtOut = b.create<ConvertLayoutOp>(op.getType(), op.getResult());
   op.getResult().replaceAllUsesExcept(cvtOut, cvtOut);
   op.getResult().setType(replaceEncoding(op.getType(), newLayout));
+
+  // Mark the layout as optimized on the op to prevent it from being changed.
+  op.setEfficientLayout(true);
 
   // Make sure we did this right.
   assert(GatherLoweringHelper(op).isWarpLocal());

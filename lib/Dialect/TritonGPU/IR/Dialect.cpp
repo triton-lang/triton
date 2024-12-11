@@ -3097,23 +3097,21 @@ struct CanonicalizeConvertFromReshape
   }
 };
 
+// The source gather layout does not matter, so we can fold conversions into the
+// source operand. Only do this if an optimized layout was not picked.
+//
 // gather(cvt(src), idx) -> gather(src, idx)
 struct CanonicalizeConvertFromGatherSource : public OpRewritePattern<GatherOp> {
   using OpRewritePattern::OpRewritePattern;
 
   mlir::LogicalResult
   matchAndRewrite(GatherOp op, PatternRewriter &rewriter) const override {
-    auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
-    if (!convert)
+    // Don't do this if the compiler picked an optimized layout.
+    if (op.getEfficientLayout())
       return failure();
 
-    // Don't alter the layout if it will no longer be warp-local.
-    bool wasOptimized = GatherLoweringHelper(op).isWarpLocal();
-    bool willBeOptimized =
-        GatherLoweringHelper(convert.getSrc().getType(),
-                             op.getIndices().getType(), op.getAxis())
-            .isWarpLocal();
-    if (wasOptimized && !willBeOptimized)
+    auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
+    if (!convert)
       return failure();
 
     rewriter.replaceOpWithNewOp<GatherOp>(op, convert.getSrc(), op.getIndices(),
