@@ -1180,7 +1180,7 @@ def quantize_int8(tensor: torch.Tensor, dim) -> tuple[torch.Tensor, torch.Tensor
     max_vals[max_vals == 0] = 1e-8
 
     # Compute scale factors for each channel
-    scale = INT8_MAX / max_vals.to(torch.float64)
+    scale = INT8_MAX / max_vals.to(torch.float32)
 
     # Quantize the tensor
     tensor = tensor * scale
