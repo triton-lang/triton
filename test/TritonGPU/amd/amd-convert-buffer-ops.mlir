@@ -42,7 +42,7 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     %1 = arith.muli %0, %c1024_i32 : i32
     %sub = arith.subi %1, %c128_i32 : i32
     %cmp = arith.cmpi sgt, %sub, %c0_i32 : i32
-    llvm.intr.assume %cmp : i1
+    "llvm.intr.assume"(%cmp) : (i1) -> ()
     %2 = tt.splat %sub : i32 -> tensor<1024xi32, #blocked>
     %3 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
     // CHECK: %[[offset:.*]] = arith.addi
