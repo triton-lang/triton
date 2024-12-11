@@ -860,6 +860,8 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(
   int instrM = mma.getInstrShape()[0];
   int instrN = mma.getInstrShape()[1];
 
+  // TODO(Keren): The following logic can be simplified by using the
+  // `divideRight` and `divide` functions in `LinearLayout`.
   // Construct the bases for a single chunk
   // In theory the following situation is valid but it will be
   // suboptimal. Swizzling should happen within a warp.
