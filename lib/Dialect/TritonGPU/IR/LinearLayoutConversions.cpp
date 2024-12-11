@@ -824,12 +824,6 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(
     MLIRContext *ctx, RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
     ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> order,
     int swizzleByteSize) {
-  StringAttr kReg = S("register");
-  StringAttr kLane = S("lane");
-  StringAttr kWarp = S("warp");
-  StringAttr kOffset = S("offset");
-  StringAttr kBlock = S("block");
-
   int perPhase;
   int maxPhase;
   if (swizzleByteSize == 32) {
@@ -849,13 +843,13 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(
   // stmatrix only supports 16-bit elements, and each vector has 8 elements
   int elemBitWidth = 16;
   int vecSize = 8;
-  int numTileRows = 16;
+  int numRowsPerTile = 16;
   int numColsPerChunk = 8 * swizzleByteSize / elemBitWidth;
 
   // Construct a single stmatrix.x4 (16x16) tile
   std::vector<std::vector<int>> basesReg = {{1, 0}, {2, 0}, {4, 0}};
   std::vector<std::vector<int>> basesLane;
-  for (int logRow = 0; logRow < llvm::Log2_32(numTileRows); logRow++) {
+  for (int logRow = 0; logRow < llvm::Log2_32(numRowsPerTile); logRow++) {
     int row = 1 << logRow;
     basesLane.push_back({vecSize * ((row / perPhase) % maxPhase), row});
   }
@@ -882,16 +876,17 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(
   }
 
   // Expand the `register` dimension so the size of columns matches `instrN`
-  auto numCols = instrN <= numColsPerChunk ? 0 : instrN / numColsPerChunk;
-  for (int logCol = 0; logCol < llvm::Log2_32(numCols); logCol++) {
+  auto logNumCols =
+      instrN <= numColsPerChunk ? 0 : llvm::Log2_32(instrN / numColsPerChunk);
+  for (int logCol = 0; logCol < logNumCols; logCol++) {
     int chunk = 1 << logCol;
     int basis = chunk * shape[0];
     basesReg.push_back({0, basis});
   }
   assert(warpsPerCTA[0] * instrM <= shape[0] &&
          "There must be enough rows to use MMAv3");
-  auto numRows = shape[0] / (warpsPerCTA[0] * instrM);
-  for (int logRow = 0; logRow < llvm::Log2_32(numRows); logRow++) {
+  auto logNumRows = llvm::Log2_32(shape[0] / (warpsPerCTA[0] * instrM));
+  for (int logRow = 0; logRow < logNumRows; logRow++) {
     int chunk = 1 << logRow;
     int basis = chunk * warpsPerCTA[0] * instrM;
     basesReg.push_back({0, basis});
@@ -907,10 +902,11 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(
     }
   }
 
-  auto layout = LinearLayout(
-      {{kReg, basesReg}, {kLane, basesLane}, {kWarp, basesWarp}, {kBlock, {}}},
-      {S("offset1"), S("offset0")});
-
+  auto layout = LinearLayout({{S("register"), basesReg},
+                              {S("lane"), basesLane},
+                              {S("warp"), basesWarp},
+                              {S("block"), {}}},
+                             {S("offset1"), S("offset0")});
   return layout.reshapeOuts(
       {{S("offset"), layout.getTotalOutDimSize()}, {S("iteration"), 1}});
 }
