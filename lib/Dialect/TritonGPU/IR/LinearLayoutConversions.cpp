@@ -878,6 +878,8 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(
   // Expand the `register` dimension so the size of columns matches `shape[1] /
   // warpsPerCTA[1]`
   auto numColsPerWarp = std::max<int>(instrN, shape[1] / warpsPerCTA[1]);
+  assert(warpsPerCTA[1] * instrN >= numColsPerChunk &&
+         "There must be enough columns to use MMAv3");
   auto logNumCols = numColsPerWarp <= numColsPerChunk
                         ? 0
                         : llvm::Log2_32(numColsPerWarp / numColsPerChunk);
@@ -900,10 +902,10 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(
   // Expand the `warp` dimension so that the size of cols matches `shape[1]`
   for (int logWarp = 0; logWarp < llvm::Log2_32(warpsPerCTA[1]); logWarp++) {
     int warp = 1 << logWarp;
-    int basis = warp * numColsPerWarp;
-    if (basis >= shape[1]) {
+    if (warp * numColsPerWarp >= shape[1]) {
       basesWarp.push_back({0, 0});
     } else {
+      int basis = (warp * numColsPerWarp) / numColsPerChunk * shape[0];
       basesWarp.push_back({0, basis});
     }
   }
