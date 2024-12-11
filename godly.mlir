@@ -110,7 +110,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %80 = tt.gather %arg5[%79] {axis = 1 : i32, efficient_layout} : (tensor<64x64xf32, #blocked1>, tensor<64x64xi32, #blocked1>) -> tensor<64x64xf32, #blocked1>
 
       %81 = ttg.convert_layout %77 : tensor<1x64xf32, #blocked> -> tensor<1x64xf32, #blocked1>
-      %83 = ttg.convert_layout %77 : tensor<1x64xf32, #blocked> -> tensor<1x64xf32, #blocked5>
       %82 = tt.broadcast %81 : tensor<1x64xf32, #blocked1> -> tensor<64x64xf32, #blocked1>
       %85 = arith.mulf %82, %arg5 : tensor<64x64xf32, #blocked1>
 

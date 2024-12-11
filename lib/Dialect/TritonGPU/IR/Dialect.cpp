@@ -3097,6 +3097,50 @@ struct CanonicalizeConvertFromReshape
   }
 };
 
+template <typename OpT>
+static OpT findUserOfType(Value val, OpT excluded = nullptr) {
+  for (Operation *user : val.getUsers()) {
+    if (user == excluded) continue;
+    if (auto op = dyn_cast<OpT>(user)) {
+      return op;
+    }
+  }
+  return {};
+}
+
+// HACK:
+// x = cvt(reshape(cvt(x, #encA)), #enc)
+// y = cvt(reshape(cvt(x, #encB)), #enc)
+// rewrite y = x
+// FIXME(jeff): This shouldn't be necessary once reshape supports all layout
+// propagations.
+struct CanonicalizeRedundantReshape : public mlir::OpRewritePattern<ConvertLayoutOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  mlir::LogicalResult matchAndRewrite(ConvertLayoutOp cvtOutA, PatternRewriter &rewriter) const override {
+    auto reshapeA = cvtOutA.getSrc().getDefiningOp<ReshapeOp>();
+    if (!reshapeA) return failure();
+    auto cvtInA = reshapeA.getSrc().getDefiningOp<ConvertLayoutOp>();
+    if (!cvtInA) return failure();
+
+    auto cvtInB = findUserOfType<ConvertLayoutOp>(cvtInA.getSrc(), cvtInA);
+    if (!cvtInB) return failure();
+    auto reshapeB= findUserOfType<ReshapeOp>(cvtInB.getResult());
+    if (!reshapeB) return failure();
+    auto cvtOutB = findUserOfType<ConvertLayoutOp>(reshapeB.getResult());
+
+    assert(cvtInA!=cvtInB);
+    assert(cvtOutA!=cvtOutB);
+    assert(reshapeA!=reshapeB);
+
+    if (cvtOutB.getType()!=cvtOutA.getType())
+      return failure();
+
+    rewriter.replaceOp(cvtOutB, cvtOutA);
+    return success();
+  }
+};
+
 // The source gather layout does not matter, so we can fold conversions into the
 // source operand. Only do this if an optimized layout was not picked.
 //
@@ -3327,6 +3371,7 @@ void ConvertLayoutOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
   patterns.add<CanonicalizeConvertFromAlloc>(context);
   patterns.add<CanonicalizeConvertFromLocalStore>(context);
   patterns.add<CanonicalizeConvertFromSplit>(context);
+  patterns.add<CanonicalizeRedundantReshape>(context);
 }
 
 // LocalAllocOp
