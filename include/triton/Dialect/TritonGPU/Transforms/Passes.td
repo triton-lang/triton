@@ -169,6 +169,20 @@ def TritonGPUOptimizeThreadLocality : Pass<"tritongpu-optimize-thread-locality",
                            "mlir::triton::TritonDialect"];
 }
 
+def TritonGPUOptimizeGatherLayouts : Pass<"tritongpu-optimize-gather-layouts", "mlir::ModuleOp"> {
+  let summary = "Pick optimized layouts for gather operations";
+
+  let description = [{
+    The `tritongpu-optimize-gather` pass will attempt to pick an optimized
+    layout for gather operations in the module. This is determined based on the
+    shapes of the gather operands as well as their existing layouts.
+
+    The pass applies heuristics to determine when it is appropriate to assign
+    specific layouts and trigger their respective codegen paths. For now, the
+    pass only attempts to apply layouts that result in warp-synchronous gathers.
+  }];
+}
+
 def TritonGPUReorderInstructions: Pass<"tritongpu-reorder-instructions", "mlir::ModuleOp"> {
   let summary = "Reorder instructions";
 
