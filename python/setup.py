@@ -665,43 +665,25 @@ package_data = {
 }
 
 
-def get_language_extra_packages():
+def get_extra_packages(extra_name):
     packages = []
+    extra_file_extensions = {"language": (".py"), "tools": (".c", ".h", ".cpp")}
+    assert extra_name in extra_file_extensions, f"{extra_name} extra is not valid"
+
     for backend in backends:
-        if backend.language_dir is None:
+        backend_extra_dir = getattr(backend, f"{extra_name}_dir", None)
+        if backend_extra_dir is None:
             continue
 
-        # Walk the `language` directory of each backend to enumerate
-        # any subpackages, which will be added to `triton.language.extra`.
-        for dir, dirs, files in os.walk(backend.language_dir, followlinks=True):
-            if not any(f for f in files if f.endswith(".py")) or dir == backend.language_dir:
-                # Ignore directories with no python files.
-                # Also ignore the root directory which corresponds to
-                # "triton/language/extra".
+        # Walk the specified directory of each backend to enumerate
+        # any subpackages, which will be added to extra_package.
+        for dir, dirs, files in os.walk(backend_extra_dir, followlinks=True):
+            if not any(f for f in files if f.endswith(extra_file_extensions[extra_name])) or dir == backend_extra_dir:
+                # Ignore directories with no relevant files
+                # or the root directory
                 continue
-            subpackage = os.path.relpath(dir, backend.language_dir)
-            package = os.path.join("triton/language/extra", subpackage)
-            packages.append(package)
-
-    return list(packages)
-
-
-def get_tools_extra_packages():
-    packages = []
-    for backend in backends:
-        if backend.tools_dir is None:
-            continue
-
-        # Walk the `tools` directory of each backend to enumerate
-        # any subpackages, which will be added to `triton.tools.extra`.
-        for dir, dirs, files in os.walk(backend.tools_dir, followlinks=True):
-            if not any(f for f in files if f.endswith(('.c', '.h', '.cpp'))) or dir == backend.tools_dir:
-                # Ignore directories with no src and header files.
-                # Also ignore the root directory which corresponds to
-                # "triton/tools/extra".
-                continue
-            subpackage = os.path.relpath(dir, backend.tools_dir)
-            package = os.path.join("triton/tools/extra", subpackage)
+            subpackage = os.path.relpath(dir, backend_extra_dir)
+            package = os.path.join(f"triton/{extra_name}/extra", subpackage)
             packages.append(package)
 
     return list(packages)
@@ -720,8 +702,8 @@ def get_packages():
         "triton/tools/extra",
     ]
     packages += [f'triton/backends/{backend.name}' for backend in backends]
-    packages += get_language_extra_packages()
-    packages += get_tools_extra_packages()
+    packages += get_extra_packages("language")
+    packages += get_extra_packages("tools")
     if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
         packages += ["triton/profiler"]
 
