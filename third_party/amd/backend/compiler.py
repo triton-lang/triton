@@ -255,6 +255,9 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_reduce_data_duplication(pm)
         if amd.has_matrix_core_feature(options.arch):
             amd.passes.ttgpuir.add_reorder_instructions(pm)
+            use_block_pingpong = os.getenv("TRITON_HIP_USE_BLOCK_PINGPONG", "0") == "1"
+            if use_block_pingpong and options.num_stages == 2:
+                amd.passes.ttgpuir.add_block_pingpong(pm)
 
         if use_buffer_ops:
             amd.passes.ttgpuir.add_canonicalize_pointers(pm)
@@ -318,7 +321,7 @@ class HIPBackend(BaseBackend):
         # Set various control constants on the LLVM module so that device
         # libraries can resolve references to them.
         amd.set_isa_version(llvm_mod, options.arch)
-        amd.set_abi_version(llvm_mod, 400)
+        amd.set_abi_version(llvm_mod, 500)
         amd.set_bool_control_constant(llvm_mod, "__oclc_finite_only_opt", False)
         amd.set_bool_control_constant(llvm_mod, "__oclc_correctly_rounded_sqrt32", True)
         amd.set_bool_control_constant(llvm_mod, "__oclc_unsafe_math_opt", False)
