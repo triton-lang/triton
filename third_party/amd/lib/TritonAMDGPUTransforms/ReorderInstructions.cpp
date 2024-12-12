@@ -227,8 +227,8 @@ static void moveUpTranspose(triton::FuncOp funcOp) {
 // Schedule global load and local store ops for better GEMM performance.
 static void scheduleGlobalLoadLocalStore(scf::ForOp forOp) {
   SmallVector<Operation *> moveOps;
-  // Search through the forOp initArgs to find global loads and local stores for
-  // a GEMM that the pipeliner may have peeled into a loop prologue.
+  // Search through the forOp initArgs to find global loads for a GEMM that
+  // the pipeliner may have peeled into a loop prologue.
   SmallVector<Value> vals = forOp.getInitArgs();
   while (!vals.empty()) {
     SmallVector<Value> nextVals; // next set of values to search via BFS.
@@ -240,7 +240,6 @@ static void scheduleGlobalLoadLocalStore(scf::ForOp forOp) {
         for (Operation *op : vals[i].getUsers()) {
           // find uses of the op that are local_store
           if (isa<ttg::LocalStoreOp>(op)) {
-            moveOps.push_back(op);
             // Recurse on operands of the local_store (to find a global load).
             for (Value operand : op->getOperands()) {
               if (operand == vals[i])
@@ -253,12 +252,12 @@ static void scheduleGlobalLoadLocalStore(scf::ForOp forOp) {
     }
     vals = std::move(nextVals);
   }
-  // Move global loads inside the loop early to prefetch. This may increase
-  // register pressure but it enables issuing global loads early.
-  forOp.walk([&](triton::LoadOp op) { moveOps.push_back(op); });
   // Move local_stores inside the loop early if dependence distance greater than
   // one iteration. Best perf on GEMM when these precede global loads.
   forOp.walk([&](ttg::LocalStoreOp op) { moveOps.push_back(op); });
+  // Move global loads inside the loop early to prefetch. This may increase
+  // register pressure but it enables issuing global loads early.
+  forOp.walk([&](triton::LoadOp op) { moveOps.push_back(op); });
 
   for (auto op : llvm::reverse(moveOps)) {
     // Gather use-def chain in block.
