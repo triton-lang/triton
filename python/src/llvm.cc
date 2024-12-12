@@ -393,7 +393,6 @@ void init_triton_llvm(py::module &&m) {
           for (llvm::Function &f : mod->functions()) {
             if (f.isIntrinsic() || f.isDeclaration())
               continue;
-            f.addFnAttr("target-features", "+xnack");
             f.addFnAttr(llvm::Attribute::SanitizeAddress);
           }
           AddressSanitizerOptions Opts;
