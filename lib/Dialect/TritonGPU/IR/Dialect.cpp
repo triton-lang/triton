@@ -1070,29 +1070,26 @@ unsigned DotOperandEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
     }
   }
   if (auto blockedLayout = mlir::dyn_cast<BlockedEncodingAttr>(getParent())) {
-    auto shapePerCTA = getShapePerCTA(*this, shape);
-    auto shapePerCTATile = getShapePerCTATile(blockedLayout);
-    auto order = blockedLayout.getOrder();
-    auto sizePerThread = blockedLayout.getSizePerThread();
+    auto shapePerCTA =
+        expandMatrixShapeWithBatch(ArrayRef(getShapePerCTA(*this, shape)));
+    auto shapePerCTATile =
+        expandMatrixShapeWithBatch(ArrayRef(getShapePerCTATile(blockedLayout)));
+    auto sizePerThread =
+        expandMatrixShapeWithBatch(ArrayRef(blockedLayout.getSizePerThread()));
 
-    int K = getOpIdx() == 0 ? shapePerCTA[1] : shapePerCTA[0];
-    int otherDim = getOpIdx() == 1 ? shapePerCTA[1] : shapePerCTA[0];
+    int batchDim = 0;
+    int kDim = getOpIdx() == 0 ? 2 : 1;
+    int nonKDim = getOpIdx() == 0 ? 1 : 2;
 
-    bool isM = getOpIdx() == 0;
+    int batchSize =
+        std::max<int>(shapePerCTA[batchDim] / shapePerCTATile[batchDim], 1) *
+        sizePerThread[batchDim];
+    int kSize = shapePerCTA[kDim];
+    int nonKSize =
+        std::max<int>(shapePerCTA[nonKDim] / shapePerCTATile[nonKDim], 1) *
+        sizePerThread[nonKDim];
 
-    int mSizePerThread =
-        order[0] == 1 ? sizePerThread[order[1]] : sizePerThread[order[0]];
-    int nSizePerThread =
-        order[0] == 0 ? sizePerThread[order[1]] : sizePerThread[order[0]];
-    int sizePerThreadMN = isM ? mSizePerThread : nSizePerThread;
-
-    int mShapePerCTATile =
-        order[0] == 1 ? shapePerCTATile[order[1]] : shapePerCTATile[order[0]];
-    int nShapePerCTATile =
-        order[0] == 0 ? shapePerCTATile[order[1]] : shapePerCTATile[order[0]];
-    int shapePerCTAMNTile = isM ? mShapePerCTATile : nShapePerCTATile;
-
-    return K * std::max<int>(otherDim / shapePerCTAMNTile, 1) * sizePerThreadMN;
+    return batchSize * kSize * nonKSize;
   }
   llvm_unreachable("unknown dot operand parent layout");
   return 0;
@@ -3309,6 +3306,36 @@ std::string getDistributedLayoutStr(RankedTensorType tensorType,
     }
   }
   return layoutStr;
+}
+
+template <typename T>
+llvm::SmallVector<T>
+mlir::triton::gpu::expandMatrixShapeWithBatch(llvm::ArrayRef<T> s) {
+  auto rank = s.size();
+  assert(rank == 2 || rank == 3);
+  if (rank == 3)
+    return llvm::SmallVector<T>(s);
+  return {1, s[0], s[1]};
+}
+
+template llvm::SmallVector<int64_t>
+mlir::triton::gpu::expandMatrixShapeWithBatch<int64_t>(
+    llvm::ArrayRef<int64_t> s);
+
+template llvm::SmallVector<unsigned>
+mlir::triton::gpu::expandMatrixShapeWithBatch<unsigned>(
+    llvm::ArrayRef<unsigned> s);
+
+llvm::SmallVector<unsigned>
+mlir::triton::gpu::expandMatrixOrderWithBatch(llvm::ArrayRef<unsigned> o) {
+  int rank = o.size();
+  assert(rank == 2 || rank == 3);
+  if (rank == 3)
+    return llvm::SmallVector<unsigned>(o);
+  llvm::SmallVector<unsigned> expanded(3, 0);
+  for (int i = 0; i < rank; ++i)
+    expanded[i] += o[i] + 1;
+  return expanded;
 }
 
 std::string mlir::triton::gpu::getLayoutStr(RankedTensorType tensorType,
