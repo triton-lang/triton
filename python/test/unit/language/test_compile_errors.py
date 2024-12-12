@@ -390,7 +390,7 @@ def test_min_dot_size(dtype):
     elif is_hip_mi300():
         if dtype == tl.float16:
             pytest.skip("fp16 FMA path supports all sizes")
-        elif dtype == tl.int8():
+        elif dtype == tl.int8:
             error_msg += "M >= 16, N >= 16 and K >= 16"
         else:
             error_msg += "M >= 16, N >= 16 and K >= 8"
