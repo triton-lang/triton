@@ -164,6 +164,9 @@ struct DotOpMFMAConversionHelper {
 
   // Conduct the Dot conversion.
   LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor) const {
+    // Check if this dot has come with priority set by setprio.
+    auto setPrioOp = dyn_cast_or_null<ROCDL::SetPrioOp>(op->getPrevNode());
+
     auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
     auto mDim = mfmaLayout.getMDim();
     auto nDim = mfmaLayout.getNDim();
@@ -226,6 +229,12 @@ struct DotOpMFMAConversionHelper {
         getNumSubmatrices(aTensorTy.getElementType(), mDim, nDim);
     auto elemsPerVec = mDim * nDim * subBlocks / warpSize;
 
+    Value firstMfma;
+    auto setFirstMfma = [&](Value mfma) {
+      if (!firstMfma)
+        firstMfma = mfma;
+    };
+
     auto vecTy = vec_ty(dstElemTy, elemsPerVec);
     for (int b = 0; b < numRepB; ++b) {
       for (int m = 0; m < numRepM; ++m) {
@@ -240,13 +249,15 @@ struct DotOpMFMAConversionHelper {
           }
           acc = zeroAuxiliarBlocks(subBlocks, acc);
           for (int k = 0; k < numRepK; k++) {
-            for (int kPack = 0; kPack < kWidth / kBase; ++kPack)
+            for (int kPack = 0; kPack < kWidth / kBase; ++kPack) {
               acc =
                   mfmaLayout.getIsTransposed()
                       ? generateMFMAOp(mfmaInsnName, operandB[kPack][{b, n, k}],
                                        operandA[kPack][{b, m, k}], acc)
                       : generateMFMAOp(mfmaInsnName, operandA[kPack][{b, m, k}],
                                        operandB[kPack][{b, n, k}], acc);
+              setFirstMfma(acc);
+            }
           }
           acc = reduceSubBlocks(subBlocks, acc);
           for (unsigned v = 0; v < elemsPerVec; ++v) {
@@ -257,6 +268,16 @@ struct DotOpMFMAConversionHelper {
         }
       }
     }
+
+    // Originally, setprio (high) is set to the high-level dot op. After dot is
+    // being lowered to the series of mfma operations, it should be moved next
+    // to the first mfma leaving the first mfma staying at the low priority. In
+    // this way, incoming warp can be effectively waiting on the first mfma
+    // instruction (low priority) while the other warp is executing mfma with
+    // high priority. Otherwise, incoming warp can break the cluster.
+    if (setPrioOp && firstMfma)
+      setPrioOp->moveAfter(firstMfma.getDefiningOp());
+
     // replace with new packed result
     Type structTy = LLVM::LLVMStructType::getLiteral(
         ctx, SmallVector<Type>(fc.size(), dstElemTy));

@@ -491,13 +491,8 @@ bool GatherLoweringHelper::isWarpLocal() {
   // in the index and source tensors are the same. This means we don't need to
   // xor shuffle across threads before emitting index shuffles; we push warp
   // shuffling to layout conversions.
-  if (srcLayout->sublayout(kLane, otherDims) !=
-      idxLayout->sublayout(kLane, otherDims))
-    return false;
-
-  // Otherwise, the source layout has to be invertible. This primarily means
-  // the codegen path doesn't support broadcasted source layouts.
-  return srcLayout->isInvertible();
+  return srcLayout->sublayout(kLane, otherDims) ==
+         idxLayout->sublayout(kLane, otherDims);
 }
 
 unsigned getNumScratchElements(ArrayRef<unsigned> shape) {

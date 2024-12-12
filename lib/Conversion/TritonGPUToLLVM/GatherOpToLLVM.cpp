@@ -240,9 +240,10 @@ void GatherOpConversion::emitWarpLocalGather(
   // `llvm.select` using `src_reg` to get the right one. `K` is the number of
   // elements per column owned by a thread.
 
-  // Fully invert the source layout. We know it is invertible because
-  // `isWarpLocal` checked this.
-  LinearLayout invSrcLayout = srcLayout.invert();
+  // Invert the source layout. It doesn't matter whether it is fully invertible
+  // with respect to anything except the register input dimension, since we know
+  // those don't vary in ways that matter for codegen.
+  LinearLayout invSrcLayout = srcLayout.pseudoinvert();
 
   // Sanity check: the warp must be invariant to the index because otherwise the
   // gather would need to read across warps!

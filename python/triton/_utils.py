@@ -22,6 +22,16 @@ def list_list_unflatten(spec: List[int], flat: List[Any]) -> List[List[Any]]:
     return ret
 
 
+def get_iterable_path(iterable, path):
+    from functools import reduce
+    return reduce(lambda a, idx: a[idx], path, iterable)
+
+
+def set_iterable_path(iterable, path, val):
+    prev = iterable if len(path) == 1 else get_iterable_path(iterable, path[:-1])
+    prev[path[-1]] = val
+
+
 def find_paths_if(iterable, pred):
     from .language import core
     is_iterable = lambda x: isinstance(x, (list, tuple, core.tuple, core.tuple_type))
@@ -34,17 +44,17 @@ def find_paths_if(iterable, pred):
                 _impl(item, path + (idx, ))
         elif pred(path, current):
             if len(path) == 1:
-                ret[(path[0], )] = current
+                ret[(path[0], )] = None
             else:
-                ret[tuple(path)] = current
+                ret[tuple(path)] = None
 
     if is_iterable(iterable):
         _impl(iterable, [])
     elif pred(list(), iterable):
-        ret = {tuple(): iterable}
+        ret = {tuple(): None}
     else:
         ret = dict()
-    return ret
+    return list(ret.keys())
 
 
 def parse_list_string(s):

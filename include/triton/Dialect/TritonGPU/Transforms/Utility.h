@@ -163,7 +163,8 @@ Operation *cloneWithInferType(mlir::OpBuilder &rewriter, Operation *op,
 LogicalResult getConvertBackwardSlice(
     Value root, SetVector<Value> &slice, Attribute rootEncoding,
     DenseMap<Value, Attribute> &layout,
-    std::function<bool(Operation *)> stopPropagation = nullptr);
+    std::function<bool(Operation *)> stopPropagation = nullptr,
+    std::function<Value(Value, Attribute)> getExistingConversion = nullptr);
 
 // Populate pattern to remove dead cycles in ForOp.
 void populateForOpDeadArgumentElimination(RewritePatternSet &patterns);
