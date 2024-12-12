@@ -222,7 +222,7 @@ static void moveUpTranspose(triton::FuncOp funcOp) {
 }
 
 // Schedule global load and local store ops for better GEMM performance.
-static void scheduleGlobalLoadLocalStore(Operation* parentOp) {
+static void scheduleGlobalLoadLocalStore(Operation *parentOp) {
   SmallVector<Operation *> moveOps;
   // Move local_stores inside the loop early if dependence distance greater than
   // one iteration. Best perf on GEMM when these precede global loads.
