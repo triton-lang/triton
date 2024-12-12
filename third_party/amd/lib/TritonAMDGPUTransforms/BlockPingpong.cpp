@@ -301,9 +301,9 @@ void Pingponger::addAsymmetricSyncToLoop(OpBuilder &builder, Location loc) {
   auto constZero = builder.create<arith::ConstantIntOp>(loc, 0, 32);
   auto constWarpSize = builder.create<arith::ConstantIntOp>(loc, 256, 32);
   auto warpIDX = builder.create<arith::DivSIOp>(loc, workIDX, constWarpSize);
-  auto warpLow = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne,
+  auto warpLow = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
                                                warpIDX, constZero);
-  auto warpHigh = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
+  auto warpHigh = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ne,
                                                 warpIDX, constZero);
   auto condBarrierHigh =
       builder.create<tt::amdgpu::CondBarrierOp>(loc, warpHigh);
