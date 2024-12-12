@@ -158,29 +158,24 @@ def TritonGPUOptimizeThreadLocality : Pass<"tritongpu-optimize-thread-locality",
   let summary = "Reduce the cost of synchronization between threads in an SM";
 
   let description = [{
-    The aim of this pass is to reduce cross-thread communication for reduction
-    operations, by adjusting the reduction size (or layout) to avoid splitting
-    the reduction operation between multiple threads. Currently, this pass only
-    optimizes reduction yielded by loop to be thread-local until
-    after the loop completes.
+    The aim of this pass is to reduce cross-thread communication for certain
+    operations, like reductions, reshapes, and gathers.
+
+    For reduction operations, this pass attempts to adjust the reduction size
+    (or layout) to avoid splitting the reduction operation between multiple
+    threads. Currently, this pass only optimizes reduction yielded by loop to be
+    thread-local until after the loop completes.
+
+    For gathers, this pass will attempt to pick an optimized layout for gather
+    operations in the module. This is determined based on the shapes of the
+    gather operands as well as their existing layouts. The pass applies
+    heuristics to determine when it is appropriate to assign specific layouts
+    and trigger their respective codegen paths. For now, the pass only attempts
+    to apply layouts that result in warp-synchronous gathers.
   }];
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::TritonDialect"];
-}
-
-def TritonGPUOptimizeGatherLayouts : Pass<"tritongpu-optimize-gather-layouts", "mlir::ModuleOp"> {
-  let summary = "Pick optimized layouts for gather operations";
-
-  let description = [{
-    The `tritongpu-optimize-gather` pass will attempt to pick an optimized
-    layout for gather operations in the module. This is determined based on the
-    shapes of the gather operands as well as their existing layouts.
-
-    The pass applies heuristics to determine when it is appropriate to assign
-    specific layouts and trigger their respective codegen paths. For now, the
-    pass only attempts to apply layouts that result in warp-synchronous gathers.
-  }];
 }
 
 def TritonGPUReorderInstructions: Pass<"tritongpu-reorder-instructions", "mlir::ModuleOp"> {
