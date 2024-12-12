@@ -671,7 +671,7 @@ class JITFunction(KernelInterface[T]):
         self.src = textwrap.dedent(inspect.getsource(fn))
         self.src = self.src[re.search(r"^def\s+\w+\s*\(", self.src, re.MULTILINE).start():]
         # cache of just-in-time compiled kernels
-        self.device_caches = defaultdict(lambda : [{}])
+        self.device_caches = defaultdict(lambda: [{}])
         self.hash = None
 
         # Map of global variables used by the function and any functions it
