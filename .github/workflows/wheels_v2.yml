@@ -70,6 +70,11 @@ jobs:
           export CIBW_BUILD="cp3{9,10,11,12,13}-manylinux_x86_64"
           python3 -m cibuildwheel python --output-dir wheelhouse
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cibw-wheels-manylinux2014-wheels-upload
+          path: ./wheelhouse/*.whl
+
       - name: Upload wheels to PyPI
         if: false # Disable Upload to PyPI until ready for release
         run: |
