@@ -882,9 +882,18 @@ def TT_GatherOp : TT_Op<"gather", [Pure,
     dimension, and each dimension of the indices tensor that is not the gather
     dimension cannot be greater than the corresponding dimension in the input
     tensor.
+
+    The `efficient_layout` attribute is set when the compiler has determined an
+    optimized layout for the operation, indicating that it should not be
+    changed.
   }];
 
-  let arguments = (ins TT_Tensor:$src, TT_IntTensor:$indices, I32Attr:$axis);
+  let arguments = (ins
+    TT_Tensor:$src,
+    TT_IntTensor:$indices,
+    I32Attr:$axis,
+    UnitAttr:$efficient_layout
+  );
   let results = (outs TT_Tensor:$result);
 
   let assemblyFormat = [{
