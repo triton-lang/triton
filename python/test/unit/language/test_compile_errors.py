@@ -389,11 +389,11 @@ def test_min_dot_size(dtype):
             error_msg = "M >= 16, N >= 16 and K >= 16"
     elif is_hip_mi300():
         if dtype.is_int8():
-            error_msg += "M >= 16, N >= 16 and K >= 16"
+            error_msg += "M >= 16, N >= 16 and K >= 1"
         else:
-            error_msg += "M >= 16, N >= 16 and K >= 8"
+            error_msg += "M >= 16, N >= 16 and K >= 1"
     elif is_hip_mi200():
-        error_msg += "M >= 16, N >= 16 and K >= 8"
+        error_msg += "M >= 16, N >= 16 and K >= 1"
     elif is_hip():
         error_msg = "M >= 16, N >= 16 and K >= 16"
     else:
