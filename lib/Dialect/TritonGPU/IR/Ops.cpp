@@ -70,8 +70,10 @@ struct CanonicalizeConvertFromHistogram
   }
 };
 
-// The source gather layout does not matter, so we can fold conversions into the
-// source operand. Only do this if an optimized layout was not picked.
+// If the gather does not have an optimized layout attached, then the source
+// layout does not matter since the gather will be codegen'd by storing the
+// source tensor into shared memory. Thus, we can fold conversions into the
+// source operand.
 //
 // gather(cvt(src), idx) -> gather(src, idx)
 struct CanonicalizeConvertFromGatherSource : public OpRewritePattern<GatherOp> {

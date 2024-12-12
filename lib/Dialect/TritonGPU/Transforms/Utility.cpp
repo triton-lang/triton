@@ -847,12 +847,16 @@ LogicalResult getConvertBackwardSlice(
         continue;
       if (isa<triton::CatOp>(definingOp))
         return failure();
+      if (auto gather = dyn_cast<GatherOp>(definingOp)) {
+        // Specially handle gather since its transfer function only applies
+        // between its index operand and result.
+        auto srcEncoding = inferSrcEncoding(gather, encoding);
+        if (!srcEncoding)
+          return failure();
+        enqueue(gather.getIndices(), srcEncoding);
+        continue;
+      }
       for (auto [i, operand] : llvm::enumerate(definingOp->getOperands())) {
-        // HACK: Do not propagate from the result to the src of a gather.
-        if (isa<GatherOp>(definingOp) && i == 0) {
-          continue;
-        }
-
         auto srcEncoding = inferSrcEncoding(definingOp, encoding);
         if (!srcEncoding)
           return failure();
