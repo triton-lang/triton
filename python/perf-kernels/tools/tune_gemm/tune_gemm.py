@@ -150,7 +150,9 @@ def prune_configs(M, N, K, configs, elemBytes_a, elemBytes_b):
         else:
             # Pipeline, we need (num_stages - 1) buffers for both A and B at the same time
             LDS = (LDSA + LDSB) * (num_stages - 1)
-        if LDS > 65536:
+        driver = triton.runtime.driver.active
+        max_shared = driver.utils.get_device_properties(driver.get_current_device())["max_shared_mem"]
+        if LDS > max_shared:
             continue
         # Skip small block sizes and num_warps for large gemm
         # For fp16 and f8, we want to only use BLOCK_SIZE >= 64
