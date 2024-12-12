@@ -41,19 +41,17 @@ bool verifyNonSmallerByAssumption(Value expr,
       switch (cmpOp.getPredicate()) {
       case arith::CmpIPredicate::eq:
       case arith::CmpIPredicate::sge:
-      case arith::CmpIPredicate::sgt:
-      case arith::CmpIPredicate::uge:
-      case arith::CmpIPredicate::ugt: {
+      case arith::CmpIPredicate::sgt: {
         if (cmpOp.getLhs() == expr && matchesOther(cmpOp.getRhs())) {
+          LDBG("  " << expr << " non-neg by assumption " << cmpOp);
           return true;
         }
         break;
       }
       case arith::CmpIPredicate::sle:
-      case arith::CmpIPredicate::slt:
-      case arith::CmpIPredicate::ule:
-      case arith::CmpIPredicate::ult: {
+      case arith::CmpIPredicate::slt: {
         if (cmpOp.getRhs() == expr && matchesOther(cmpOp.getLhs())) {
+          LDBG("  " << expr << " non-neg by assumption " << cmpOp);
           return true;
         }
         break;
@@ -78,28 +76,14 @@ bool verifyNonSmallerByAssumption(Value expr,
                                   const DenseSet<Value> &assumptions,
                                   Value other) {
   return verifyNonSmallerByAssumption(
-      expr, assumptions, [&](auto otherExpr) { return otherExpr == expr; });
-}
-
-// isNonNegativeType: i1, ptr, unsigned
-bool isNonNegativeType(Type type) {
-  return isa<triton::PointerType>(type) || type.isInteger(1) ||
-         type.isUnsignedInteger();
+      expr, assumptions, [&](auto otherAssum) { return otherAssum == other; });
 }
 
 bool verifyNonNegativeExpr(Value expr, const DenseSet<Value> &assumptions) {
-
   LDBG("Determing if non-negative: " << expr);
-
-  // If the type of expr is non-negative then we know its a non-negative value
-  if (isNonNegativeType(expr.getType())) {
-    LDBG("  Type is non-negative: " << expr.getType());
-    return true;
-  }
 
   // Check if the expression is contained in any assumption
   if (verifyNonNegativeByAssumption(expr, assumptions)) {
-    LDBG("  Non negative by assumption");
     return true;
   }
 
@@ -112,15 +96,23 @@ bool verifyNonNegativeExpr(Value expr, const DenseSet<Value> &assumptions) {
 
   bool nonNegative =
       llvm::TypeSwitch<Operation *, bool>(expr.getDefiningOp())
-          .Case<triton::BroadcastOp>([&](auto broadcastOp) {
-            return verifyNonNegativeExpr(broadcastOp.getSrc(), assumptions);
+          // Various unary triton ops that don't change the sign of the operand
+          .Case<triton::TransOp, triton::SplitOp, triton::BroadcastOp,
+                triton::ExpandDimsOp, triton::SplatOp, triton::ReshapeOp,
+                triton::gpu::ConvertLayoutOp>([&](auto unaryOp) {
+            return verifyNonNegativeExpr(unaryOp.getOperand(), assumptions);
           })
-          .Case<triton::ExpandDimsOp>([&](auto expandOp) {
-            return verifyNonNegativeExpr(expandOp.getSrc(), assumptions);
+          .Case<triton::GatherOp>([&](auto gatherOp) {
+            return verifyNonNegativeExpr(gatherOp.getSrc(), assumptions);
           })
-          .Case<triton::SplatOp>([&](auto splatOp) {
-            return verifyNonNegativeExpr(splatOp.getSrc(), assumptions);
+          // Joining two non-negative tensors is still non-negative
+          .Case<triton::JoinOp, triton::CatOp>([&](auto joinOp) {
+            return verifyNonNegativeExpr(joinOp.getLhs(), assumptions) &&
+                   verifyNonNegativeExpr(joinOp.getRhs(), assumptions);
           })
+          // Returns a tensor representing histogram: historgrams only conatin
+          // buckets of non-negative values.
+          .Case<triton::HistogramOp>([&](auto) { return true; })
           .Case<triton::MakeRangeOp>([&](auto makeRangeOp) {
             // See the warning in TritonOps.td: getStart/getEnd return unsigned,
             // so we need to look through get*Attr.
@@ -153,6 +145,11 @@ bool verifyNonNegativeExpr(Value expr, const DenseSet<Value> &assumptions) {
             // a = OP b >= 0 iff b >= 0
             return verifyNonNegativeExpr(unaryOp->getOperand(0), assumptions);
           })
+          // Casting from arbitrary data does *not* guarantee the offset is in
+          // range (even if pointer, or the data is non-negative when
+          // interpreted as the src's type).
+          .Case<triton::PtrToIntOp, triton::BitcastOp>(
+              [&](auto) { return false; })
           .Case<arith::CeilDivUIOp, arith::DivUIOp, arith::ExtUIOp,
                 arith::FPToUIOp, arith::IndexCastUIOp, arith::MaxUIOp,
                 arith::MinUIOp, arith::RemUIOp, arith::ShRUIOp>(
@@ -169,14 +166,13 @@ bool verifyNonNegativeExpr(Value expr, const DenseSet<Value> &assumptions) {
                                              assumptions) &&
                        verifyNonNegativeExpr(binOp->getOperand(1), assumptions);
               })
+          // TODO: more scf
           .Case<scf::IfOp>([&](auto ifop) {
             // If we're here then we must have both then/else regions
             // (each with 1 block) and each region must terminate with an
             // `scf.yield` expression.
-            auto thenYield =
-                cast<scf::YieldOp>(ifop.getThenRegion().back().back());
-            auto elseYield =
-                cast<scf::YieldOp>(ifop.getElseRegion().back().back());
+            auto thenYield = cast<scf::YieldOp>(ifop.thenYield());
+            auto elseYield = cast<scf::YieldOp>(ifop.elseYield());
             return verifyNonNegativeExpr(thenYield->getOperand(0),
                                          assumptions) &&
                    verifyNonNegativeExpr(elseYield->getOperand(0), assumptions);
