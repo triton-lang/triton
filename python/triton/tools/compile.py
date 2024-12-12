@@ -151,6 +151,6 @@ if __name__ == "__main__":
         "_placeholder": "",
     }
     for ext in ['h', 'c']:
-        template_path = Path(__file__).parent / f"compile.{ext}"
+        template_path = Path(__file__).parent / "extra" / "cuda" / f"compile.{ext}"
         with out_path.with_suffix(f".{sig_hash}_{suffix}.{ext}").open("w") as fp:
             fp.write(Path(template_path).read_text().format(**params))
