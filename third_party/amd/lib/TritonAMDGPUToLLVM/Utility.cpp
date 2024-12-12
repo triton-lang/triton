@@ -8,6 +8,8 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
+using mlir::triton::AMD::DppCtrl;
+using mlir::triton::AMD::ISAFamily;
 using mlir::triton::gpu::appendOrGetExternFuncOp;
 using mlir::triton::gpu::getFunctionType;
 
@@ -71,8 +73,9 @@ Type castToVectorType(Type ty) {
 } // namespace
 
 namespace mlir::LLVM::AMD {
-static Value shuffleCommon(Location loc, RewriterBase &rewriter, Value val,
-                           Value i, int strideInt, ShflKind mode, Value clamp) {
+static Value shuffleCommon(Location loc, RewriterBase &rewriter,
+                           ISAFamily isaFamily, Value val, Value i,
+                           int strideInt, ShflKind mode, Value clamp) {
   unsigned bits = val.getType().getIntOrFloatBitWidth();
 
   // On AMD, the ds_swizzle_b32 and ds_permute_b32 instructions work on
@@ -84,7 +87,8 @@ static Value shuffleCommon(Location loc, RewriterBase &rewriter, Value val,
     if (bits < 32)
       val = sext(i32_ty, val);
 
-    val = shuffleCommon(loc, rewriter, val, i, strideInt, mode, clamp);
+    val =
+        shuffleCommon(loc, rewriter, isaFamily, val, i, strideInt, mode, clamp);
 
     if (bits < 32)
       val = trunc(int_ty(bits), val);
@@ -98,8 +102,10 @@ static Value shuffleCommon(Location loc, RewriterBase &rewriter, Value val,
     Value vec = bitcast(val, vecTy);
     Value val0 = extract_element(f32_ty, vec, i32_val(0));
     Value val1 = extract_element(f32_ty, vec, i32_val(1));
-    val0 = shuffleCommon(loc, rewriter, val0, i, strideInt, mode, clamp);
-    val1 = shuffleCommon(loc, rewriter, val1, i, strideInt, mode, clamp);
+    val0 = shuffleCommon(loc, rewriter, isaFamily, val0, i, strideInt, mode,
+                         clamp);
+    val1 = shuffleCommon(loc, rewriter, isaFamily, val1, i, strideInt, mode,
+                         clamp);
     vec = undef(vecTy);
     vec = insert_element(vecTy, vec, val0, i32_val(0));
     vec = insert_element(vecTy, vec, val1, i32_val(1));
@@ -134,13 +140,83 @@ static Value shuffleCommon(Location loc, RewriterBase &rewriter, Value val,
       Value stride = i32_val(32);
       Value lineId = xor_(threadId, stride);
       return bpermute(lineId);
-    } else {
-      // This map facilates the butterfly shuffle pattern for a stride less
-      // than 16. The pattern stride is the key of the map.
-      DenseMap<short, unsigned int> masks{
-          {16, 0x401F}, {8, 0x201F}, {4, 0x101F}, {2, 0x081F}, {1, 0x041F}};
-      Value offset = i32_val(masks[strideInt]);
+    } else if (strideInt == 16) {
+      Value offset = i32_val(0x401F);
       return rewriter.create<ROCDL::DsSwizzleOp>(loc, valType, val, offset);
+    } else {
+      if (isaFamily != ISAFamily::CDNA2 && isaFamily != ISAFamily::CDNA3) {
+        // DPP is only supportted for CDNA2 and CDNA3 right now, so we fallback
+        // to ds_swizzle for other archs.
+        //
+        // This map facilates the butterfly shuffle pattern for a stride less
+        // than 16. The pattern stride is the key of the map.
+        DenseMap<short, unsigned int> masks{
+            {16, 0x401F}, {8, 0x201F}, {4, 0x101F}, {2, 0x081F}, {1, 0x041F}};
+        Value offset = i32_val(masks[strideInt]);
+        return rewriter.create<ROCDL::DsSwizzleOp>(loc, valType, val, offset);
+      }
+
+      auto createDppOpWithoutBoundCtrl = [&](Value &old, Value &src,
+                                             uint32_t dppCtrl, uint32_t rowMask,
+                                             uint32_t bankMask) {
+        return rewriter.create<ROCDL::DPPUpdateOp>(
+            loc, valType, old, src, rewriter.getI32IntegerAttr(dppCtrl),
+            rewriter.getI32IntegerAttr(rowMask),
+            rewriter.getI32IntegerAttr(bankMask), rewriter.getBoolAttr(false));
+      };
+
+      const int allRows = 0xf;
+      const int allBanks = 0xf;
+
+      switch (strideInt) {
+      case 1: {
+        // quad_perm: 1, 0, 3, 2
+        uint32_t dppCtrl = static_cast<uint32_t>(DppCtrl::QUAD_PERM_FIRST);
+        std::array<uint32_t, 4> mask = {1, 0, 3, 2};
+        for (int i = 0; i < mask.size(); i++) {
+          dppCtrl |= mask[i] << (i * 2);
+        }
+        return createDppOpWithoutBoundCtrl(val, val, dppCtrl, allRows,
+                                           allBanks);
+      }
+      case 2: {
+        // quad_perm: 2, 3, 0, 1
+        uint32_t dppCtrl = static_cast<uint32_t>(DppCtrl::QUAD_PERM_FIRST);
+        std::array<uint32_t, 4> mask = {2, 3, 0, 1};
+        for (int i = 0; i < mask.size(); i++) {
+          dppCtrl |= mask[i] << (i * 2);
+        }
+        return createDppOpWithoutBoundCtrl(val, val, dppCtrl, allRows,
+                                           allBanks);
+      }
+      case 4: {
+        // row_shr:4 bank_mask: 0xa
+        auto ret = createDppOpWithoutBoundCtrl(
+                       val, val, 4 + static_cast<uint32_t>(DppCtrl::ROW_SHR0),
+                       allRows, 0xa)
+                       .getRes();
+
+        // row_shl:4 bank_mask: 0x5
+        return createDppOpWithoutBoundCtrl(
+            ret, val, 4 + static_cast<uint32_t>(DppCtrl::ROW_SHL0), allRows,
+            0x5);
+      }
+      case 8: {
+        // row_shr:8 bank_mask: 0xc
+        auto ret = createDppOpWithoutBoundCtrl(
+                       val, val, 8 + static_cast<uint32_t>(DppCtrl::ROW_SHR0),
+                       allRows, 0xc)
+                       .getRes();
+
+        // row_shl:8 bank_mask: 0x3
+        return createDppOpWithoutBoundCtrl(
+            ret, val, 8 + static_cast<uint32_t>(DppCtrl::ROW_SHL0), allRows,
+            0x3);
+      }
+      default:
+        assert(false &&
+               "bfly shfl with stride >= 16 should not be handled by dpp.");
+      }
     }
     break;
   case ShflKind::up: {
@@ -158,22 +234,27 @@ static Value shuffleCommon(Location loc, RewriterBase &rewriter, Value val,
   return Value();
 }
 
-Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i) {
-  return shuffleCommon(loc, rewriter, val, i32_val(i), i, ShflKind::bfly,
+Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i,
+                 ISAFamily isaFamily) {
+  return shuffleCommon(loc, rewriter, isaFamily, val, i32_val(i), i,
+                       ShflKind::bfly, i32_val(0x1f));
+}
+
+Value shuffleUp(Location loc, RewriterBase &rewriter, Value val, int i,
+                ISAFamily isaFamily) {
+  return shuffleCommon(loc, rewriter, isaFamily, val, i32_val(i), i,
+                       ShflKind::up, i32_val(0x0));
+}
+
+Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i,
+                 ISAFamily isaFamily) {
+  return shuffleIdx(loc, rewriter, val, i32_val(i), isaFamily);
+}
+
+Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i,
+                 ISAFamily isaFamily) {
+  return shuffleCommon(loc, rewriter, isaFamily, val, i, 0, ShflKind::idx,
                        i32_val(0x1f));
-}
-
-Value shuffleUp(Location loc, RewriterBase &rewriter, Value val, int i) {
-  return shuffleCommon(loc, rewriter, val, i32_val(i), i, ShflKind::up,
-                       i32_val(0x0));
-}
-
-Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i) {
-  return shuffleIdx(loc, rewriter, val, i32_val(i));
-}
-
-Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i) {
-  return shuffleCommon(loc, rewriter, val, i, 0, ShflKind::idx, i32_val(0x1f));
 }
 
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
