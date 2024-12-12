@@ -48,8 +48,16 @@ def library_dirs():
     return [libdevice_dir, *libcuda_dirs()]
 
 
+@functools.lru_cache()
+def extra_cache_key():
+    # we need platform info (x86_64, aarch64 etc) to avoid incompatibility
+    # with the cached objects
+    from platform import machine, system, architecture
+    return ",".join([machine(), system(), *architecture()])
+
+
 def compile_module_from_src(src, name):
-    key = hashlib.sha256(src.encode("utf-8")).hexdigest()
+    key = hashlib.sha256((src + extra_cache_key()).encode("utf-8")).hexdigest()
     cache = get_cache_manager(key)
     ext = sysconfig.get_config_var("EXT_SUFFIX").split(".")[-1]
     cache_path = cache.get_file(f"{name}.{ext}")
