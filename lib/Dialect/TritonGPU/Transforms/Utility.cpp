@@ -363,11 +363,6 @@ static Attribute inferSrcEncoding(SplitOp op, Attribute dstEnc) {
 }
 
 static Attribute inferSrcEncoding(GatherOp op, Attribute dstEnc) {
-  // Don't propagate through if the layout is already optimized.
-  if (op.getEfficientLayout()) {
-    return {};
-  }
-
   // The index encoding is the same as the output encoding.
   return dstEnc;
 }
@@ -429,11 +424,6 @@ static Attribute inferDstEncoding(triton::ReshapeOp op, Attribute encoding) {
 }
 
 static Attribute inferDstEncoding(GatherOp op, Attribute encoding) {
-  // Don't propagate through if the layout is already optimized.
-  if (op.getEfficientLayout()) {
-    return {};
-  }
-
   // The output encoding is the same as the index encoding.
   // FIXME: This assumes `encoding` is the index encoding, which can be
   // different than the source encoding.
