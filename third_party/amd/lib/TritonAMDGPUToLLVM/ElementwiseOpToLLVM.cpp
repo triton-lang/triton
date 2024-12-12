@@ -1330,6 +1330,87 @@ private:
   bool ftz;
 };
 
+struct LogOpConversion
+    : ElementwiseOpConversionBase<mlir::math::LogOp, LogOpConversion> {
+  using ElementwiseOpConversionBase<
+      mlir::math::LogOp, LogOpConversion>::ElementwiseOpConversionBase;
+
+  explicit LogOpConversion(LLVMTypeConverter &typeConverter,
+                           ModuleAxisInfoAnalysis &axisInfoAnalysis, bool ftz,
+                           PatternBenefit benefit)
+      : ElementwiseOpConversionBase(typeConverter, axisInfoAnalysis, benefit),
+        ftz(ftz) {}
+
+  SmallVector<Value> createDestOps(mlir::math::LogOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    // For non-FP32 input, call __ocml_log_f64 for higher-precision calculation
+    if (elemTy.getIntOrFloatBitWidth() != 32)
+      return {};
+
+    // On AMD backend, both intrinsics are lowered to v_log_f32 instruction,
+    // which flushes input and output denorms. `llvm.amdgcn.log.f32` is directly
+    // lowered to v_log_f32, while `llvm.log.f32` has some auxiliary processes,
+    // including denorm preservation, handling inf, and change the base of log2
+    // to natural log.
+    StringRef funcName = ftz ? "llvm.amdgcn.log.f32" : "llvm.log.f32";
+    Type funcType = getFunctionType(elemTy, operands[0]);
+    LLVM::LLVMFuncOp funcOp =
+        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
+
+    Value intrinsicsOutput =
+        LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]).getResult();
+
+    // In case of non-ftz, `llvm.log.f32` has already changed the base, so we
+    // can safely return here.
+    if (!ftz)
+      return {intrinsicsOutput};
+
+    // In case of ftz, `llvm.amdgcn.log.f32` is lowered directly to v_log_f32,
+    // which is a log2 operator. Thus we need to adjust the result to simulate
+    // natural log.
+    const double loge2 = 0.693147180559945286;
+    return {fmul(f32_ty, intrinsicsOutput, f32_val(loge2))};
+  }
+
+private:
+  bool ftz;
+};
+
+struct SqrtOpConversion
+    : ElementwiseOpConversionBase<mlir::math::SqrtOp, SqrtOpConversion> {
+  using ElementwiseOpConversionBase<
+      mlir::math::SqrtOp, SqrtOpConversion>::ElementwiseOpConversionBase;
+
+  explicit SqrtOpConversion(LLVMTypeConverter &typeConverter,
+                            ModuleAxisInfoAnalysis &axisInfoAnalysis, bool ftz,
+                            PatternBenefit benefit)
+      : ElementwiseOpConversionBase(typeConverter, axisInfoAnalysis, benefit),
+        ftz(ftz) {}
+
+  SmallVector<Value> createDestOps(mlir::math::SqrtOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    // Only handle f32 operators here.
+    if (elemTy.getIntOrFloatBitWidth() != 32)
+      return {};
+
+    StringRef funcName = ftz ? "llvm.amdgcn.sqrt.f32" : "llvm.sqrt.f32";
+
+    Type funcType = getFunctionType(elemTy, operands[0]);
+    LLVM::LLVMFuncOp funcOp =
+        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
+
+    return {
+        LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]).getResult()};
+  }
+
+private:
+  bool ftz;
+};
+
 } // namespace
 
 namespace mlir::triton::AMD {
@@ -1371,6 +1452,8 @@ void populateElementwiseOpToLLVMPatterns(
   // Exp2OpConversion will return failure and later pass will call
   // __ocml_exp2_f64 for higher-precision calculation
   patterns.add<Exp2OpConversion>(typeConverter, axisInfoAnalysis, ftz, benefit);
+  patterns.add<LogOpConversion>(typeConverter, axisInfoAnalysis, ftz, benefit);
+  patterns.add<SqrtOpConversion>(typeConverter, axisInfoAnalysis, ftz, benefit);
   mlir::triton::populateElementwiseOpToLLVMPatterns(
       typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
   mlir::triton::populateMinMaxFOpToLLVMPattern(
