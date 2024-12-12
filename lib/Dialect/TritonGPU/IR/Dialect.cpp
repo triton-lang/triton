@@ -3172,6 +3172,12 @@ struct CanonicalizeConvertFromSplit
   }
 };
 
+OpFoldResult ConvertLayoutOp::fold(FoldAdaptor adaptor) {
+  if (getType() == getSrc().getType())
+    return getSrc();
+  return {};
+}
+
 struct CanonicalizeConvertFromConvert
     : public OpRewritePattern<ConvertLayoutOp> {
   using OpRewritePattern::OpRewritePattern;
@@ -3179,16 +3185,11 @@ struct CanonicalizeConvertFromConvert
   mlir::LogicalResult
   matchAndRewrite(ConvertLayoutOp op,
                   PatternRewriter &rewriter) const override {
-    // Convert to the same layout is redundant.
-    if (op->getResultTypes() == op->getOperandTypes()) {
-      rewriter.replaceOp(op, op->getOperands());
-      return success();
-    }
+    auto srcType = op.getSrc().getType();
+    auto dstType = op.getType();
 
     // We don't handle conversions to DotOperandEncodingAttr.  This is a
     // heuristic to accommodate fused attention.
-    auto srcType = op.getSrc().getType();
-    auto dstType = op.getType();
     if (mlir::isa<DotOperandEncodingAttr>(dstType.getEncoding()) &&
         mlir::isa<NvidiaMmaEncodingAttr>(srcType.getEncoding()))
       return failure();
@@ -3210,16 +3211,6 @@ struct CanonicalizeConvertFromConvert
     if (auto reshape = dyn_cast<ReshapeOp>(arg)) {
       if (!reshape.getAllowReorder() || reshape.getEfficientLayout() ||
           isExpensiveView(reshape.getSrc().getType(), op.getType()))
-        return failure();
-
-      // In TritonGPUToLLVM phase, ViewOp is converted to unpacking and packing
-      // operations, which requires the element type to match between unpacking
-      // and packing. However, part of values with dot operand encoding will be
-      // packed/unpacked as i32 elements instead of the underlying element type.
-      // To avoid errors, skip this folding when either the operand or result
-      // of view has a dot operand encoding.
-      if (hasDotOperandEncoding(op->getOperand(0)) ||
-          hasDotOperandEncoding(op->getResult(0)))
         return failure();
 
       rewriter.replaceOpWithNewOp<ReshapeOp>(op, op->getResult(0).getType(),
