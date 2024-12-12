@@ -3,6 +3,9 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "0 8 * * *"
+  pull_request:
+    paths:
+      - .github/workflows/wheels_v2.yml
 
 permissions: read-all
 
