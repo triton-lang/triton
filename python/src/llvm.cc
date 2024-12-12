@@ -219,7 +219,14 @@ void init_triton_llvm(py::module &&m) {
       .def("set_calling_conv", &llvm::Function::setCallingConv)
       .def("add_fn_attr", [](llvm::Function *fn, std::string &name,
                              std::string &val) { fn->addFnAttr(name, val); })
-
+      .def("add_fn_asan_attr",
+           [](llvm::Function *fn) {
+             fn->addFnAttr(llvm::Attribute::SanitizeAddress);
+           })
+      .def("add_fn_target_feature",
+           [](llvm::Function *fn, std::string &val) {
+             fn->addFnAttr("target-features", val);
+           })
       // Sets the nvvm.maxreg property on the given function.
       .def("set_nvvm_maxnreg",
            [](llvm::Function *fn, int maxnreg) {
@@ -382,19 +389,6 @@ void init_triton_llvm(py::module &&m) {
         bool enableAddressSanitizer =
             mlir::triton::tools::getBoolEnv("TRITON_ENABLE_ASAN");
         if (enableAddressSanitizer) {
-          llvm::SmallVector<StringRef, 3> split;
-          StringRef(mod->getTargetTriple()).split(split, '-');
-          if (split[0] != "amdgcn") {
-            std::string ErrMsg =
-                "Address Sanitizer Error: Address sanitizer is currently only "
-                "support on the AMD backend\n";
-            throw std::runtime_error(ErrMsg);
-          }
-          for (llvm::Function &f : mod->functions()) {
-            if (f.isIntrinsic() || f.isDeclaration())
-              continue;
-            f.addFnAttr(llvm::Attribute::SanitizeAddress);
-          }
           AddressSanitizerOptions Opts;
           mpm.addPass(AddressSanitizerPass(Opts));
         }
