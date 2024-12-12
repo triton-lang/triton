@@ -38,10 +38,8 @@ struct DecomposeUnsupportedAMDConversions
 
     triton::gpu::decomposeSplatOpToSharedLayoutConversion(mod);
 
-    auto isShortcut =
-        mlir::triton::gpu::ShortcutFn(std::not_fn(cvtNeedsSharedMemory));
-
-    triton::gpu::decomposeTensorCoreToDotLayoutConversion(mod, isShortcut);
+    triton::gpu::decomposeTensorCoreToDotLayoutConversion(mod,
+                                                          isMfmaToDotShortcut);
 
     /* -------------------------------- */
     // Replace `wmma -> dot_op` with `wmma -> blocked -> dot_op`

@@ -8,7 +8,6 @@ add_triton_library(TritonAMDGPUTransforms
   MfmaGroup.cpp
 
   DEPENDS
-  TritonAMDGPUIR
   TritonAMDGPUTransformsIncGen
   TritonGPUIR
 )

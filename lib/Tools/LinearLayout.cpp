@@ -1016,21 +1016,6 @@ bool LinearLayout::equalIgnoringOutDimSizes(const LinearLayout &other) const {
   return true;
 }
 
-LinearLayout LinearLayout::resize(StringAttr inDim,
-                                  int32_t newInDimSize) const {
-  BasesT bases = getBases();
-  assert(bases.contains(inDim) && "inDim not in layout");
-  assert(llvm::isPowerOf2_32(newInDimSize) &&
-         "newInDimSize must be a power of 2");
-  assert(newInDimSize >= getInDimSize(inDim) &&
-         "newInDimSize must be >= old size");
-  auto numFreeVariables = llvm::Log2_32(newInDimSize) - getInDimSizeLog2(inDim);
-  for (int i = 0; i < numFreeVariables; i++) {
-    bases[inDim].push_back(std::vector<int32_t>(getNumOutDims(), 0));
-  }
-  return LinearLayout(std::move(bases), llvm::to_vector(getOutDimNames()));
-}
-
 std::string LinearLayout::toString() const {
   // Start with a newline because we print out a bulleted list; it doesn't
   // make sense for the first line of this list to be on the same line as
