@@ -255,7 +255,8 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_reduce_data_duplication(pm)
         if amd.has_matrix_core_feature(options.arch):
             amd.passes.ttgpuir.add_reorder_instructions(pm)
-            if os.getenv("TRITON_HIP_USE_BLOCK_PINGPONG") == "1" and options.num_stages == 2:
+            use_block_pingpong = os.getenv("TRITON_HIP_USE_BLOCK_PINGPONG", "0") == "1"
+            if use_block_pingpong and options.num_stages == 2:
                 amd.passes.ttgpuir.add_block_pingpong(pm)
 
         if use_buffer_ops:
