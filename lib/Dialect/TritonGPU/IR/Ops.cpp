@@ -3,11 +3,29 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 #define GET_OP_CLASSES
 #include "triton/Dialect/TritonGPU/IR/Ops.cpp.inc"
 
 namespace mlir::triton::gpu {
+
+namespace {
+
+template <typename T> bool hasEncoding(Value value) {
+  auto type = value.getType();
+  if (auto tensorType = dyn_cast<TensorOrMemDesc>(type)) {
+    auto encoding = tensorType.getEncoding();
+    return encoding && isa<T>(encoding);
+  }
+  return false;
+}
+
+bool hasDotOperandEncoding(Value value) {
+  return hasEncoding<triton::gpu::DotOperandEncodingAttr>(value);
+}
+
+} // namespace
 
 //===----------------------------------------------------------------------===//
 // Canonicalizer
