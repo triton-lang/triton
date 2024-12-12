@@ -2678,7 +2678,7 @@ struct TritonGPUInferLayoutInterface
   //     contain the same elements as before.
   //
   // With linear layouts, we can always find a dst encoding that satisfies
-  // this property.  See inferReshapeLinearEncoding.
+  // this property. See inferReshapeOpEncoding.
   //
   // Users of this function require that it is symmetrical: if
   // (srcShape,srcEnc,dstShape) => dstEnc, then (dstShape,dstEnc,srcShape) =>
@@ -2915,14 +2915,13 @@ struct TritonGPUInferLayoutInterface
                          std::optional<Location> loc) const override {
     auto result =
         inferReshapeOpLegacyEncoding(srcShape, srcEnc, dstShape, dstEnc, loc);
-    // TODO(Lezcano): Remove before merge
-    // if (succeeded(result)) {
-    //  return result;
-    //}
+    if (succeeded(result)) {
+      return result;
+    }
 
-    // If the legacy encoding failed, try to use LinearLayouts.
+    // If the legacy encoding failed use LinearLayouts.
     // Once LinearLayouts are more widely used, we can remove
-    // inferReshapeOpLegacyEncoding.
+    // inferReshapeOpLegacyEncoding and simply use LLs.
     auto *ctx = getContext();
     auto src = triton::gpu::toLinearLayout(srcShape, srcEnc);
     if (!src) {
@@ -2930,17 +2929,16 @@ struct TritonGPUInferLayoutInterface
                                "src encoding does not support linear layout");
     }
 
-    int totalOutDimSize = std::accumulate(dstShape.begin(), dstShape.end(), 1,
-                                          std::multiplies<int>());
-    if (src->getTotalOutDimSize() != totalOutDimSize) {
+    if (product(srcShape) != product(dstShape)) {
       return emitOptionalError(loc, "numel of dst shape does not match "
                                     "numel of src shape");
     }
 
+    auto newRank = dstShape.size();
     SmallVector<std::pair<StringAttr, int32_t>> newOutDims;
-    for (int i = 0; i < dstShape.size(); i++) {
-      newOutDims.push_back(
-          {StringAttr::get(ctx, "dim" + llvm::Twine(i)), dstShape[i]});
+    for (auto [dim, size] :
+         llvm::zip(standardOutDimNames(ctx, newRank), dstShape)) {
+      newOutDims.emplace_back(dim, size);
     }
     auto srcOutDims = llvm::to_vector(src->getOutDimNames());
     // reshapeOp assumes C-order, so we need to transpose the out dims before
@@ -2949,27 +2947,8 @@ struct TritonGPUInferLayoutInterface
     std::reverse(newOutDims.begin(), newOutDims.end());
     auto dst = src->transposeOuts(srcOutDims)
                    .reshapeOuts(newOutDims)
-                   .transposeOuts(standardOutDimNames(ctx, newOutDims.size()));
-    // TODO(Lezcano): Remove before merge
-    if (succeeded(result)) {
-      auto bf16 = FloatType::getBF16(ctx);
-      auto cvt = *minimalCvtLayout(
-          RankedTensorType::get(dstShape, bf16,
-                                LinearEncodingAttr::get(ctx, dst)),
-          RankedTensorType::get(dstShape, bf16, dstEnc));
-      auto kLane = StringAttr::get(ctx, "lane");
-      if (cvt.hasInDim(kLane)) {
-        srcEnc.dump();
-        dstEnc.dump();
-        llvm::errs() << "src: " << *src << "\n";
-        llvm::errs() << "dst: " << dst << "\n";
-        llvm::errs() << "prevDst: " << *toLinearLayout(dstShape, dstEnc)
-                     << "\n";
-        return emitOptionalError(loc, "dst != dstLL");
-      }
-    } else {
-      dstEnc = LinearEncodingAttr::get(ctx, dst);
-    }
+                   .transposeOuts(standardOutDimNames(ctx, newRank));
+    dstEnc = LinearEncodingAttr::get(ctx, dst);
     return success();
   }
 
