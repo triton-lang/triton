@@ -173,6 +173,20 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       LLVM_DEBUG(llvm::dbgs() << " vec = " << vec << '\n');
     }
 
+    if (op.getScope().has_value() || op.getSem().has_value()) {
+      if (op.getScope().has_value() != op.getSem().has_value()) {
+        op->emitRemark() << "LoadOp: Optional atomic semantics "
+                            "(ie acquire/relaxed) and scope must both be set "
+                            "or both not be set "
+                            "at all";
+        return failure();
+      }
+      if (isa<RankedTensorType>(op.getType())) {
+        op->emitRemark() << "LoadOp: tl.atomic_load only supports scalars";
+        return failure();
+      }
+    }
+
     if (vec == 1 && numElems > 1) {
       int maskValue = !llMask ? -1 : getMaskAlignment(mask);
       op->emitRemark() << "Warning: vectorization fails vec = " << vec
@@ -299,6 +313,11 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                      .o("L1::evict_last",
                         op.getEvict() == triton::EvictionPolicy::EVICT_LAST)
                      .o("L1::cache_hint", hasL2EvictPolicy)
+                     .o("cta", op.getScope() == triton::MemSyncScope::CTA)
+                     .o("gpu", op.getScope() == triton::MemSyncScope::GPU)
+                     .o("sys", op.getScope() == triton::MemSyncScope::SYSTEM)
+                     .o("acquire", op.getSem() == triton::MemSemantic::ACQUIRE)
+                     .o("relaxed", op.getSem() == triton::MemSemantic::RELAXED)
                      .v(nWords)
                      .b(width);
 
@@ -388,6 +407,20 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
     auto valueElems = unpackLLElements(loc, llValue, rewriter);
     assert(ptrElems.size() == valueElems.size());
 
+    if (op.getScope().has_value() || op.getSem().has_value()) {
+      if (op.getScope().has_value() != op.getSem().has_value()) {
+        op->emitRemark() << "StoreOp: Optional atomic semantics "
+                            "(ie release/relaxed) and scope must both be set "
+                            "or both not be set "
+                            "at all";
+        return failure();
+      }
+      if (isa<RankedTensorType>(ptr.getType())) {
+        op->emitRemark() << "StoreOp: tl.atomic_store only supports scalars";
+        return failure();
+      }
+    }
+
     // Determine the vectorization size
     unsigned vecOrig = vec;
     SmallVector<Value> maskElems;
@@ -474,6 +507,11 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
                  op.getEvict() == triton::EvictionPolicy::EVICT_FIRST)
               .o("L1::evict_last",
                  op.getEvict() == triton::EvictionPolicy::EVICT_LAST)
+              .o("cta", op.getScope() == triton::MemSyncScope::CTA)
+              .o("gpu", op.getScope() == triton::MemSyncScope::GPU)
+              .o("sys", op.getScope() == triton::MemSyncScope::SYSTEM)
+              .o("release", op.getSem() == triton::MemSemantic::RELEASE)
+              .o("relaxed", op.getSem() == triton::MemSemantic::RELAXED)
               .v(nWords)
               .b(width);
       ptxStoreInstr(asmAddr, asmArgList).predicate(maskVal, "b");
