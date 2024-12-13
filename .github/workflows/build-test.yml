@@ -45,14 +45,16 @@ jobs:
           python3 -m pre_commit run --show-diff-on-failure --color=always --all-files --verbose
 
   build-test:
-    name: Build and test
-    runs-on:
-      - glados
-      - intel
-      - x86
+    name: Build and test on ${{ matrix.config.runner }}
+    runs-on: ${{ matrix.config.runs_on }}
+    timeout-minutes: 60  # minutes
     strategy:
       matrix:
+        fast-fail: true
         python: ['3.11']
+        config:
+          - {runner: 'GladOS Intel x86', runs_on: ['glados', 'intel', 'x86'], arch: 'x86'}
+          - {runner: 'Ubuntu 20.04 ARM64', runs_on: 'ubuntu-20.04', target-os: 'ubuntu', arch: 'arm64'}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
