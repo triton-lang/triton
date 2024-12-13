@@ -222,14 +222,39 @@ static void moveUpTranspose(triton::FuncOp funcOp) {
 }
 
 // Schedule global load and local store ops for better GEMM performance.
-static void scheduleGlobalLoadLocalStore(Operation* parentOp) {
+static void scheduleGlobalLoadLocalStore(scf::ForOp forOp) {
   SmallVector<Operation *> moveOps;
-  // Move local_stores inside the loop early if dependence distance greater than
-  // one iteration. Best perf on GEMM when these precede global loads.
-  parentOp->walk([&](ttg::LocalStoreOp op) { moveOps.push_back(op); });
-  // Move global loads inside the loop early to prefetch. This may increase
+
+  // Search through the forOp initArgs to find global loads for a GEMM that
+  // the pipeliner may have peeled into a loop prologue.
+  SmallVector<Value> vals = forOp.getInitArgs();
+  while (!vals.empty()) {
+    SmallVector<Value> nextVals; // Next set of values to search via BFS.
+    for (size_t i = 0; i < vals.size(); ++i) {
+      Operation *defOp = vals[i].getDefiningOp();
+      if (isa_and_nonnull<triton::LoadOp>(defOp)) {
+        moveOps.push_back(defOp);
+        continue;
+      }
+
+      // Find uses of the op that are local_store
+      for (Operation *op : vals[i].getUsers()) {
+        if (auto storeOp = dyn_cast<ttg::LocalStoreOp>(op)) {
+          // Recurse on operands of the local_store (to find a global_load).
+          nextVals.push_back(storeOp.getSrc());
+        }
+      }
+    }
+    vals.swap(nextVals);
+  }
+
+  // Move local_store ops inside the loop early if dependence distance greater
+  // than one iteration (i.e., num_stages > 2). For such case, better perf on
+  // GEMM when local_store ops precede global loads.
+  forOp.walk([&](ttg::LocalStoreOp op) { moveOps.push_back(op); });
+  // Move global_load ops inside the loop early to prefetch. This may increase
   // register pressure but it enables issuing global loads early.
-  parentOp->walk([&](triton::LoadOp op) { moveOps.push_back(op); });
+  forOp.walk([&](triton::LoadOp op) { moveOps.push_back(op); });
 
   for (auto op : llvm::reverse(moveOps)) {
     // Gather use-def chain in block.
@@ -386,7 +411,7 @@ struct TritonAMDGPUReorderInstructionsPass
       SmallVector<scf::ForOp> leafForOps = getLeafForOps(funcOp);
       for (auto forOp : leafForOps) {
         if (isPureMatmulProblem(forOp)) {
-          scheduleGlobalLoadLocalStore(forOp->getParentOp());
+          scheduleGlobalLoadLocalStore(forOp);
           sinkSecondLoad(forOp);
         }
       }
