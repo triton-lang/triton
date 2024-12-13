@@ -312,9 +312,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       // Case 3. Transfer between values in the same warp, in which case we try
       //         to move values using warp shuffles, though if the pattern is
       //         complicated enough we may fall back to using shared memory
-      // TODO(Keren): implement warp shuffle instead of using the general
-      // approach that uses shared memory
-      return transferWithinBlock(op, srcLayout, dstLayout, adaptor, rewriter);
+      transferWithinWarp(op, srcLayout, dstLayout, adaptor, rewriter);
+      return success();
     } else if (llvm::is_contained(dims, kRegister)) {
       // Case 4. Transfer between values in the same thread, in which case we
       //         simply reorder the elements of adaptor.getSrc().
@@ -449,6 +448,12 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     rewriter.replaceOp(op, result);
     return success();
   }
+
+  // Use warp shuffles to implement a layout conversion where data only needs to
+  // be moved within warps.
+  void transferWithinWarp(ConvertLayoutOp op, const LinearLayout &srcLayout,
+                          const LinearLayout &dstLayout, OpAdaptor adaptor,
+                          ConversionPatternRewriter &rewriter) const;
 
   SmallVector<Value>
   transferWithinBlockImpl(ArrayRef<Value> inVals, ConvertLayoutOp op,
@@ -656,6 +661,144 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 };
 
 } // namespace
+
+void ConvertLayoutOpUsingLinearLayoutsConversion::transferWithinWarp(
+    ConvertLayoutOp op, const LinearLayout &A, const LinearLayout &B,
+    OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const {
+  MLIRContext *ctx = op.getContext();
+  Location loc = op.getLoc();
+  StringAttr kRegister = str_attr("register");
+  StringAttr kLane = str_attr("lane");
+  StringAttr kWarp = str_attr("warp");
+  StringAttr kBlock = str_attr("block");
+
+  // Let `A` be the source layout and `B` be the destination layout. If `C`
+  // is a linear transformation that maps `A` to `B`, then it is defined as
+  // `C = A^-1 * B`.
+  LinearLayout C = A.invertAndCompose(B);
+
+  // We have already checked that data movement is only required within a warp,
+  // thus we can discard the block and warp dimensions. At the same time,
+  // because `A` and `B` are distributed layouts (subpermutation matrices), we
+  // know the transformation from `A` to `B` is invariant to the register ID.
+  // Reduce `C` to a transformation from source lane to destination lane.
+  C = C.sublayout({kLane}, {kLane});
+
+  // Warp shuffles are affine transformations on the lane ID. Thus, the goal is
+  // to determine a series of warp shuffles {W1, ..., Wn} such that
+  //
+  //   C = W1 ∘ ... ∘ Wn
+  //
+  // Note that the affine components must cancel out for the overall
+  // transformation to be linear. We can represent affine transformations as
+  // linear layouts by augmenting the matrix with a dummy dimension that is
+  // always set to 1.
+  //
+  //   W' = [ A c ]
+  //        [ 0 1 ]
+  //
+  // Thus the overall transformation on the lane ID is expressed as
+  //
+  //   [ l' ] = [ A c ] [ l ]
+  //   [ 1  ]   [ 0 1 ] [ 1 ]
+  //
+  // Note that this gives `l' = A * l + c` when the dummy dimension is set to 1.
+  //
+  // Butterfly shuffles are not affine because 0 ⊕ 1 = 1, thus zero input
+  // doesn't map to zero output. Because addition in GF(2) is just xor'ing the
+  // bits, we can represent a butterfly shuffle by setting `A` to the identity
+  // matrix and `c` to the shuffle operand.
+  //
+  //   W_bfly' = [ I c ]
+  //             [ 0 1 ]
+  //
+  // Where `c` is the constant operand provided to the butterfly shuffle
+  // instruction.
+  //
+  // Note that because `C` is a subpermutation matrix, butterfly shuffles don't
+  // do anything because `A` is the identity matrix. So we have to use something
+  // else. Essentially, `I -> C` consists of permuting the rows of the identity
+  // matrix and setting some to zero.
+  //
+  // If `A` consists of permuted rows from the identity matrix, it has the
+  // effect of permuting the bits of the input lane ID, since the single `1`
+  // element in each row selects a bit from the input. We can use index shuffles
+  // to arbitrarily permute the bits of the lane ID.
+  //
+  // The index shuffle formula is `j = (lane & segmask) | (b & ~segmask)`.
+  // Because `segmask` is only supported on NVIDIA, we will implement this part
+  // in software (it doesn't cost much since `b = f(lane)` anyways).
+  //
+  // We set `segmask` to determine which bits are selected from `lane` (i.e. to
+  // not permute) and set `b` as a permutation of the bits of `lane`. For
+  // example, if `b` is a constant, then
+  //
+  //   W_idx` = [ M b ]
+  //            [ 0 1 ]
+  //
+  // Where `M` is just `segmask` along the diagonal, and `b` is the constant
+  // with its bits arranged along the column. You can see we can construct a
+  // transformation that zeroes out row `i` by setting `segmask[i] = 0` and
+  // setting `b` to be all zeroes.
+  //
+  // Thus, `C` is actually
+  //
+  //   C = [ M*P 0 ]
+  //       [ 0   1 ]
+  //
+  // Where `M` is a mask diagonal and `P` is a permutation matrix. And we can
+  // emit the layout conversion in a single index shuffle. So that was
+  // anticlimactic, but at least we know how to construct the index shuffle from
+  // `C` and, if it were a more complex transformation (e.g. swizzling), we
+  // would know in principle that it could be decomposed into augmented linear
+  // layouts.
+
+  // Determine the permutation and mask. This is the forward permutation.
+  unsigned numBits = C.getInDimSizeLog2(kLane);
+  SmallVector<int> perm(numBits);
+  for (unsigned i = 0; i != numBits; ++i) {
+    int32_t base = C.getBasis(kLane, i)[0];
+    if (base == 0) {
+      // This bit is masked. Use -1 as a sentinel.
+      perm[i] = -1;
+    } else {
+      assert(llvm::isPowerOf2_32(base) && "expected a permutation matrix");
+      perm[i] = llvm::Log2_32(base);
+    }
+  }
+
+  Value threadId = getThreadId(rewriter, loc);
+  Value threadsPerWarp = i32_val(C.getInDimSize(kLane));
+  Value laneId = urem(threadId, threadsPerWarp);
+
+  // Form `b` by selecting bits from `laneId` according to `perm`.
+  Value b = i32_val(0);
+  // Form `segmask` as a constant of the masked bits.
+  uint32_t segmask = 0;
+  for (unsigned i = 0; i != numBits; ++i) {
+    if (perm[i] == -1) {
+      segmask |= 1 << i;
+    } else {
+      Value bit = and_(lshr(laneId, i32_val(perm[i])), i32_val(1));
+      b = or_(b, shl(bit, i32_val(i)));
+    }
+  }
+
+  // Compute `b' = (lane & segmask) | (b & ~segmask)`. We know that
+  // `b & ~segmask` is just `b` since `segmask` is zero a bit is set into `b`.
+  Value idx = or_(and_(laneId, i32_val(segmask)), b);
+
+  // Now perform the shuffle for each register.
+  SmallVector<Value> inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+  SmallVector<Value> outVals;
+  for (Value inVal : inVals) {
+    outVals.push_back(targetInfo.shuffleIdx(rewriter, loc, inVal, idx));
+  }
+
+  Value result =
+      packLLElements(loc, getTypeConverter(), outVals, rewriter, op.getType());
+  rewriter.replaceOp(op, result);
+}
 
 void mlir::triton::populateConvertLayoutOpUsingLinearLayoutsToLLVMPattern(
     LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
