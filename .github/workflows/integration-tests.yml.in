@@ -432,7 +432,7 @@ jobs:
       - name: Run asan tests on HIP
         run: |
           cd python/test/unit
-          python3 test_address_sanitizer.py > /dev/null 2>&1
+          ulimit -s 1024
           export PATH=$(find ~/.triton/llvm -name llvm-symbolizer  -printf '%h\n'):$PATH
           export LD_LIBRARY_PATH=$(find /opt -name libclang_rt.asan-x86_64.so -printf '%h\n'):$LD_LIBRARY_PATH
           export LD_LIBRARY_PATH=$(find /opt -type d -wholename *lib/llvm/lib/asan):$LD_LIBRARY_PATH
