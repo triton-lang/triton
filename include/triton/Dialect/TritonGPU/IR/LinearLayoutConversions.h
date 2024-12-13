@@ -246,6 +246,9 @@ LinearLayout chooseStMatrixLayout(MLIRContext *ctx, RankedTensorType tensorTy,
                                   ArrayRef<unsigned> paddedRepShape,
                                   ArrayRef<unsigned> order,
                                   int swizzleByteSize);
+
+LinearLayout chooseLdMatrixLayout(MLIRContext *ctx, Attribute sharedEnc,
+                                  Attribute dotEnc, ArrayRef<int64_t> shape);
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H
