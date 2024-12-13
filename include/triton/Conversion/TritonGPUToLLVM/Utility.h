@@ -53,6 +53,7 @@ using namespace mlir::triton;
 #define fmin(...) rewriter.create<LLVM::MinNumOp>(loc, __VA_ARGS__)
 #define shl(...) rewriter.create<LLVM::ShlOp>(loc, __VA_ARGS__)
 #define lshr(...) rewriter.create<LLVM::LShrOp>(loc, __VA_ARGS__)
+#define ashr(...) rewriter.create<LLVM::AShrOp>(loc, __VA_ARGS__)
 #define and_(...) rewriter.create<LLVM::AndOp>(loc, __VA_ARGS__)
 #define xor_(...) rewriter.create<LLVM::XOrOp>(loc, __VA_ARGS__)
 #define or_(...) rewriter.create<LLVM::OrOp>(loc, __VA_ARGS__)
@@ -334,11 +335,17 @@ SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
 SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
                                Value linear, ArrayRef<unsigned> shape);
 
+SmallVector<unsigned> delinearize(unsigned linear, ArrayRef<unsigned> shape,
+                                  ArrayRef<unsigned> order);
+
 Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
                 ArrayRef<unsigned> shape, ArrayRef<unsigned> order);
 
 Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
                 ArrayRef<unsigned> shape);
+
+size_t linearize(ArrayRef<unsigned> multiDim, ArrayRef<unsigned> shape,
+                 ArrayRef<unsigned> order);
 
 Value addStringToModule(Location loc, RewriterBase &rewriter, StringRef key,
                         StringRef content);
@@ -493,6 +500,24 @@ inline Value dot(RewriterBase &rewriter, Location loc, ArrayRef<Value> offsets,
   }
   return ret;
 }
+
+/// Extend 2d shared object to 3d.
+///
+/// If tensor has 3 dimensions, returns original shared object.
+/// If tensor shape is [M, N], return shared object describing shape [1, M, N]
+///
+/// This Function is used to simplify processing of 2d and 3d dot operands,
+/// particularly in the conversion of local_load operation.
+///
+/// \param rewriter
+/// \param loc
+/// \param smemObj
+/// \param shape shape of a tensor represented by smemObj
+/// \returns shared object describing 3d tensor
+SharedMemoryObject
+getExpandedSharedMemoryObject(ConversionPatternRewriter &rewriter, Location loc,
+                              SharedMemoryObject smemObj,
+                              ArrayRef<int64_t> shape);
 
 // -----------------------------------------------------------------------
 // Blocked layout indices
@@ -1123,8 +1148,8 @@ emitBaseIndexForLayout(Location loc, RewriterBase &rewriter,
   return idx;
 }
 
-// Emit code to compute the (blockId, warpId, laneId) for the current thread.
-std::tuple</*blockId=*/Value, /*warpId=*/Value, /*laneId=*/Value>
+// Emit code to compute the (laneId, warpId, blockId) for the current thread.
+std::tuple</*laneId=*/Value, /*warpId=*/Value, /*blockId=*/Value>
 emitHardwareTuple(Location loc, RewriterBase &rewriter,
                   const TargetInfoBase &target, bool withCTAOffset,
                   unsigned threadsPerWarp);
@@ -1154,15 +1179,15 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
 // Returns true on success.
 [[nodiscard]] bool emitTransferBetweenRegistersAndShared(
     RankedTensorType registerTy, triton::gpu::MemDescType sharedTy,
-    Type elemLlvmTy, std::optional<int32_t> maxVecElems, Value shmemBase,
-    ArrayRef<Value> shmemStrides, Location loc, RewriterBase &rewriter,
+    Type elemLlvmTy, std::optional<int32_t> maxVecElems,
+    const SharedMemoryObject &smemObj, Location loc, RewriterBase &rewriter,
     const TargetInfoBase &target,
     std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback);
 
 inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
     Location loc, const TargetInfoBase &target, unsigned inVec,
     RankedTensorType srcTy, triton::gpu::SharedEncodingAttr resSharedLayout,
-    Type resElemTy, SharedMemoryObject smemObj, RewriterBase &rewriter,
+    Type resElemTy, const SharedMemoryObject &smemObj, RewriterBase &rewriter,
     ArrayRef<Value> offsetVals, ArrayRef<Value> srcStrides) {
   // This utility computes the pointers for accessing the provided swizzled
   // shared memory layout `resSharedLayout`. More specifically, it computes,
@@ -1324,14 +1349,14 @@ inline DenseMap<unsigned, Value> getSwizzledSharedPtrs(
 SmallVector<Value> loadSharedToDistributed(RankedTensorType dstTy,
                                            triton::gpu::MemDescType srcTy,
                                            Type elemLlvmTy,
-                                           SharedMemoryObject smemObj,
+                                           const SharedMemoryObject &smemObj,
                                            Location loc, RewriterBase &rewriter,
                                            const TargetInfoBase &target);
 
 void storeDistributedToShared(
     triton::gpu::MemDescType dstTy, RankedTensorType srcTy, Type elemLlvmTy,
-    ArrayRef<Value> srcVals, Value smemBase, ArrayRef<Value> dstStrides,
-    Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
+    ArrayRef<Value> srcVals, const SharedMemoryObject &smemObj, Location loc,
+    RewriterBase &rewriter, const TargetInfoBase &target,
     std::pair<size_t, Type> *const llvmOpCount = nullptr);
 
 inline Value getStructFromSharedMemoryObject(Location loc,

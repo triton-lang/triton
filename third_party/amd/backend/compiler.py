@@ -14,16 +14,30 @@ from pathlib import Path
 
 
 def min_dot_size(target: GPUTarget):
+
+    def is_fma_supported(lhsType, rhsType):
+        return lhsType == rhsType and (lhsType.is_fp16() or lhsType.is_fp32())
+
+    def get_gfx94_limits(lhsType, rhsType):
+        if is_fma_supported(lhsType.scalar, rhsType.scalar):
+            return (1, 1, 1)
+        # CDNA 3.0 supports k==8 in all mfma variants except for int8
+        # (where the smallest `k` supported is 16)
+        return (16, 16, 16) if (lhsType.scalar.is_int8() or rhsType.scalar.is_int8()) else (16, 16, 8)
+
+    def get_gfx9_limits(lhsType, rhsType):
+        if is_fma_supported(lhsType.scalar, rhsType.scalar):
+            return (1, 1, 1)
+        # CDNA 2.0 always supports `k==8`
+        return (16, 16, 8)
+
     arch_str = target.arch
-    # CDNA 3.0 supports k==8 in all mfma variants except for int8
-    # (where the smallest `k` supported is 16)
     if "gfx94" in arch_str:
-        return lambda lhsType, rhsType: (16, 16, 16) if (lhsType.is_int8() or rhsType.is_int8()) else (16, 16, 8)
-    # CDNA 2.0 always supports `k==8`
+        return get_gfx94_limits
     if "gfx9" in arch_str:
-        return lambda lhsType, rhsType: (16, 16, 8)
-    # Other architectures will only support 16,16,16
-    return lambda lhsType, rhsType: (16, 16, 16)
+        return get_gfx9_limits
+    # gfx11 and gfx12 architectures will only support 16,16,16 with wmma instructions
+    return lambda lhsType, rhsType: (1, 1, 1) if is_fma_supported(lhsType.scalar, rhsType.scalar) else (16, 16, 16)
 
 
 @dataclass(frozen=True)
@@ -254,6 +268,9 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_reduce_data_duplication(pm)
         if amd.has_matrix_core_feature(options.arch):
             amd.passes.ttgpuir.add_reorder_instructions(pm)
+            use_block_pingpong = os.getenv("TRITON_HIP_USE_BLOCK_PINGPONG", "0") == "1"
+            if use_block_pingpong and options.num_stages == 2:
+                amd.passes.ttgpuir.add_block_pingpong(pm)
 
         if use_buffer_ops:
             amd.passes.ttgpuir.add_canonicalize_pointers(pm)
@@ -317,7 +334,7 @@ class HIPBackend(BaseBackend):
         # Set various control constants on the LLVM module so that device
         # libraries can resolve references to them.
         amd.set_isa_version(llvm_mod, options.arch)
-        amd.set_abi_version(llvm_mod, 400)
+        amd.set_abi_version(llvm_mod, 500)
         amd.set_bool_control_constant(llvm_mod, "__oclc_finite_only_opt", False)
         amd.set_bool_control_constant(llvm_mod, "__oclc_correctly_rounded_sqrt32", True)
         amd.set_bool_control_constant(llvm_mod, "__oclc_unsafe_math_opt", False)

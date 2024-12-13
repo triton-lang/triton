@@ -414,6 +414,10 @@ public:
 
   bool isSurjective() const { return surjective; }
 
+  bool isInvertible() const {
+    return surjective && getTotalInDimSize() == getTotalOutDimSize();
+  }
+
   const BasesT &getBases() const { return bases; }
 
   // Get the pos'th basis vector for the inDim -> outDim mapping.
@@ -672,6 +676,13 @@ public:
   // ambiguity in which offset we choose for a given (lane, warp).  For now we
   // don't place any guarantees on the choices made by this function.
   [[nodiscard]] LinearLayout invertAndCompose(const LinearLayout &outer) const;
+
+  // Get the layout that is the inverse of this layout.
+  [[nodiscard]] LinearLayout invert() const;
+  // Compute and return a psueodinverse of this layout. This is a layout such
+  // that `B = A.psuedoinvert()` implies that `A(B(x)) = I`. If `A` is
+  // invertible, then this returns `A^-1`.
+  [[nodiscard]] LinearLayout pseudoinvert() const;
 
   // For each in-dim, returns a bitmask of the "free variables" in the layout
   // function.
