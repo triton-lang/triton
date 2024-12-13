@@ -232,7 +232,7 @@ def add(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, sa
     if input_scalar_ty.is_ptr():
         other_handle = other.handle
         if other.dtype.is_int_unsigned() and other.dtype.int_bitwidth < 64:
-            # We want to zext when the offset is smaller than pointer size (64bit)
+            # addptr treats offset as signed. Zero-extend unsigned offsets to ensure they're positive
             if other.type.is_block():
                 i64_ty = tl.block_type(tl.int64, other.type.get_block_shapes()).to_ir(builder)
             else:
