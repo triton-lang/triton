@@ -79,8 +79,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // CHECK: gpu.barrier
 // CHECK: %[[IDX:.+]] = rocdl.workitem.id.x
 // CHECK: %[[XDIV:.+]] = arith.divsi %[[IDX]]
-// CHECK: %[[WARPLOW:.+]] = arith.cmpi ne, %[[XDIV]]
-// CHECK: %[[WARPHIGH:.+]] = arith.cmpi eq, %[[XDIV]]
+// CHECK: %[[WARPLOW:.+]] = arith.cmpi eq, %[[XDIV]]
+// CHECK: %[[WARPHIGH:.+]] = arith.cmpi ne, %[[XDIV]]
 // CHECK: amdgpu.cond_barrier %[[WARPHIGH]]
 // CHECK: scf.for
 // CHECK: tt.load
