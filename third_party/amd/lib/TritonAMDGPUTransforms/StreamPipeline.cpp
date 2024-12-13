@@ -48,8 +48,6 @@ static Operation *streamPredication(RewriterBase &rewriter, Operation *op,
     dotOp->moveBefore(yield);
     ifOp.getElseBodyBuilder().create<scf::YieldOp>(loc, dotOp.getC());
     return ifOp;
-  } else if (isa<gpu::BarrierOp>(op)) {
-    return op;
   }
   return tt::predicateOp(rewriter, op, pred);
 }
@@ -117,7 +115,7 @@ private:
   LogicalResult scheduleLoads(DenseSet<Operation *> &rootUsers);
   void scheduleDependencies();
   void scheduleDistanceOneDependencies();
-  void scheduleRemainingToLastStage();
+  LogicalResult scheduleRemainingToLastStage();
 
   LogicalResult preprocessLoopAndBuildSchedule();
 
@@ -622,16 +620,18 @@ void StreamPipeliner::scheduleDistanceOneDependencies() {
   }
 }
 
-void StreamPipeliner::scheduleRemainingToLastStage() {
+LogicalResult StreamPipeliner::scheduleRemainingToLastStage() {
   int lastStage = numStages - 1;
   // Assign the rest of the ops to the last stage.
   // Take care of the ordering of the ops - uses cannot be scheduled to the
   // cluster before the definition.
+  auto cluster = config[SCHED_TAIL].cluster;
   DenseMap<Operation *, tt::CoarseSchedule::Cluster> opToCluster;
   for (auto &op : forOp.getBody()->without_terminator()) {
     if (schedule.count(&op) == 0) {
-      auto schedType = isa<gpu::BarrierOp>(op) ? SCHED_COMPUTE : SCHED_TAIL;
-      opToCluster[&op] = config[schedType].cluster;
+      if (isa<gpu::BarrierOp>(op))
+        return failure();
+      opToCluster[&op] = cluster;
     }
   }
   SmallVector<Operation *> queue;
@@ -658,6 +658,7 @@ void StreamPipeliner::scheduleRemainingToLastStage() {
   for (auto [op, cluster] : opToCluster) {
     schedule.insert(op, lastStage, cluster);
   }
+  return success();
 }
 
 // Create an allocation that can hold distance number of loadOp shapes.
@@ -767,7 +768,8 @@ LogicalResult StreamPipeliner::preprocessLoopAndBuildSchedule() {
     schedule.dump();
   });
 
-  scheduleRemainingToLastStage();
+  if (failed(scheduleRemainingToLastStage()))
+    return failure();
   LLVM_DEBUG({
     LDBG("Final coarse schedule:");
     schedule.dump();
