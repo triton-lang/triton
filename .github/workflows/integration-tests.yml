@@ -400,6 +400,11 @@ jobs:
         run: |
           export CC=/usr/bin/clang
           export CXX=/usr/bin/clang++
+          unset HSA_DISABLE_FRAGMENT_ALLOCATOR
+          unset AMD_PYTORCH_NO_CUDA_MEMORY_CACHING
+          unset PYTORCH_NO_HIP_MEMORY_CACHING
+          unset TRITON_ENABLE_ASAN
+          unset HSA_XNACK
       - name: Install Triton
         id: amd-install-triton
         run: |
