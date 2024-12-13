@@ -221,8 +221,8 @@ bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy);
 // within a warp.  No data exchange across warps or blocks is needed.
 bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy);
 
-// Conversion from `srcTy` to `dstTy` involves data exchange across threads,
-// warps, and possibly blocks.
+// Conversion from `srcTy` to `dstTy` involves data exchange across warps and
+// possibly blocks.
 bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy);
 
 bool atomicNeedsSharedMemory(Value result);

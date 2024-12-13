@@ -799,9 +799,8 @@ bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
   // TODO(jlebar): Remove these special cases (`isBlockedToDotShortcut` and
   // `isMfmaToDotShortcut`) once they're fully subsumed by the linear-layout
   // checks.
-  // TODO(Keren): We didn't check `cvtNeedsWarpShuffle` here because it's not
-  // supported yet in Triton's backend.
   return !cvtReordersRegisters(srcTy, dstTy) &&
+         !cvtNeedsWarpShuffle(srcTy, dstTy) &&
          !isBlockedToDotShortcut(srcTy, dstTy) &&
          !matchMmaV3AndDotOperandLayout(srcTy, dstTy) &&
          // to be removed when generalized warp shuffle conversions

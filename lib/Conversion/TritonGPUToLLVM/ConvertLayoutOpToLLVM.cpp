@@ -671,6 +671,7 @@ void ConvertLayoutOpUsingLinearLayoutsConversion::transferWithinWarp(
   StringAttr kLane = str_attr("lane");
   StringAttr kWarp = str_attr("warp");
   StringAttr kBlock = str_attr("block");
+  assert(!cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
 
   // Let `A` be the source layout and `B` be the destination layout. If `C`
   // is a linear transformation that maps `A` to `B`, then it is defined as
