@@ -1510,14 +1510,11 @@ def varlen_input_helper(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, equal_seqlen
 @pytest.mark.parametrize('causal', [True, False])
 @pytest.mark.parametrize('use_alibi', [True, False])
 @pytest.mark.parametrize('layout', ['bshd', 'bhsd'])
-@pytest.mark.parametrize('persistent', [None, 'fixed', 'dynamic'])
-def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, layout, persistent, dtype=torch.float16):
+def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, layout, dtype=torch.float16):
     torch.manual_seed(20)
     q, k, v, input_metadata = input_helper(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, layout)
     if causal:
         input_metadata.need_causal()
-
-    input_metadata.set_persistent(persistent)
 
     if use_alibi:
         # for n heads the set of slopes is the geometric sequence that starts 2^(-8/n)
@@ -1562,9 +1559,81 @@ def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, layout, 
     # compare
     if layout == 'bshd':
         ref_out = ref_out.transpose(1, 2).clone()
-
     torch.testing.assert_close(ref_out, tri_out, atol=2e-2, rtol=2e-2)
-    # print(f"ref out: {ref_out.flatten()[:100]}\ntri_out:{tri_out.flatten()[:100]}")
+
+
+@pytest.mark.parametrize('Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD', [
+    (4, 48, 24, 1024, 1024, 64),
+    (1, 24, 6, 8192, 8192, 64),
+    (1, 4, 2, 16384, 16384, 128),
+    (2, 16, 4, 1020, 987, 128),
+    (2, 16, 4, 15498, 2, 128),
+    (2, 16, 2, 7, 16219, 64),
+    (4, 48, 12, 1, 1, 64),
+    (4, 48, 48, 1, 1, 128),
+    (4, 48, 24, 3, 3, 128),
+    (4, 48, 48, 1001, 990, 64),
+    (1, 8, 8, 8081, 7099, 64),
+    (1, 4, 4, 16330, 15989, 128),
+    (4, 4, 1, 1024, 1024, 33),
+    (4, 4, 2, 65, 1018, 65),
+    (4, 4, 4, 128, 128, 65),
+    (4, 4, 4, 113, 123, 1),
+])
+@pytest.mark.parametrize('causal', [True, False])
+@pytest.mark.parametrize('use_alibi', [True, False])
+@pytest.mark.parametrize('layout', ['bshd', 'bhsd'])
+@pytest.mark.parametrize('persistent', ['fixed', 'dynamic'])
+def test_op_persistent_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, layout, persistent, dtype=torch.float16):
+    torch.manual_seed(20)
+    q, k, v, input_metadata = input_helper(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, layout)
+    if causal:
+        input_metadata.need_causal()
+
+    if use_alibi:
+        # for n heads the set of slopes is the geometric sequence that starts 2^(-8/n)
+        alibi_slopes = torch.tensor([2**(-8 / HQ * i) for i in range(1, HQ + 1)], dtype=torch.float32,
+                                    device="cuda").repeat(Z, 1)
+        input_metadata.need_alibi(alibi_slopes, Z, HQ)
+    else:
+        alibi_slopes = None
+
+    o = torch.empty_like(q)
+
+    # triton implementation
+    tri_out, _ = attention(q, k, v, o, input_metadata)
+
+    # Transpose here if layout is bshd so we have same reference code for all layouts
+    if layout == 'bshd':
+        q = q.transpose(1, 2).clone()
+        k = k.transpose(1, 2).clone()
+        v = v.transpose(1, 2).clone()
+    # Replicate K and V if using MQA/GQA
+    if HQ != HK:
+        k = k.view(k.shape[0], k.shape[1], -1, k.shape[2],
+                   k.shape[3]).expand(-1, -1, HQ // HK, -1, -1).reshape(k.shape[0], -1, k.shape[2], k.shape[3])
+        v = v.view(v.shape[0], v.shape[1], -1, v.shape[2],
+                   v.shape[3]).expand(-1, -1, HQ // HK, -1, -1).reshape(v.shape[0], -1, v.shape[2], v.shape[3])
+
+    scores = torch.einsum('bhqd,bhkd->bhqk', q, k).float() * input_metadata.sm_scale
+    if causal:
+        mask = torch.tril(torch.ones(N_CTX_Q, N_CTX_K, device="cuda"), diagonal=N_CTX_K - N_CTX_Q)
+        scores[:, :, mask == 0] = float("-inf")
+    if use_alibi:
+        scores += compute_alibi_tensor(alibi_slopes, N_CTX_Q, N_CTX_K)
+
+    p = torch.softmax(scores, dim=-1)
+    if causal:
+        # If N_CTX_Q > N_CTX_K, there is at least one row of all -infs going into
+        # the softmax. This produces a row of NaNs as -inf - -inf == NaN. So we fix
+        # this by converting the NaNs to 0s, which is what they should be out of the softmax.
+        nan_mask = torch.isnan(p)
+        p[nan_mask == 1] = 0
+    ref_out = torch.einsum('bhqk,bhkd->bhqd', p.half(), v)
+    # compare
+    if layout == 'bshd':
+        ref_out = ref_out.transpose(1, 2).clone()
+    torch.testing.assert_close(ref_out, tri_out, atol=2e-2, rtol=2e-2)
 
 
 @pytest.mark.parametrize('Z, H, N_CTX_Q, N_CTX_K, D_HEAD', [
@@ -1589,8 +1658,7 @@ def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, layout, 
 @pytest.mark.parametrize('causal', [True, False])
 @pytest.mark.parametrize('use_bias', [True])
 @pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16])
-@pytest.mark.parametrize('persistent', [None, 'fixed', 'dynamic'])
-def test_op_fwd_bias(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_bias, dtype, persistent):
+def test_op_fwd_bias(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_bias, dtype):
     torch.manual_seed(20)
     sm_scale = D_HEAD**-0.5
     input_metadata = MetaData(sm_scale=sm_scale)
@@ -1602,9 +1670,6 @@ def test_op_fwd_bias(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_bias, dtype, pe
         input_metadata.need_bias(bias, Z, H, N_CTX_Q, N_CTX_K)
     else:
         bias = None
-
-    input_metadata.set_persistent(persistent)
-
     o = torch.empty_like(q)
 
     # triton implementation
@@ -1635,11 +1700,9 @@ def test_op_fwd_bias(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_bias, dtype, pe
                                                  (4, 48, 128, 128), (4, 48, 4096, 128), (4, 48, 16384, 128),
                                                  (4, 16, 1024, 128), (4, 16, 8192, 128), (32, 48, 8192, 128)])
 @pytest.mark.parametrize('causal', [True, False])
-@pytest.mark.parametrize('persistent', [None, 'fixed', 'dynamic'])
-def test_op_varlen_fwd(Z, H, N_CTX, D_HEAD, causal, persistent, dtype=torch.float16):
+def test_op_varlen_fwd(Z, H, N_CTX, D_HEAD, causal, dtype=torch.float16):
 
     q, k, v, input_metadata = varlen_input_helper(Z, H, H, N_CTX, N_CTX, D_HEAD, dtype)
-    input_metadata.set_persistent(persistent)
 
     tri_out = torch.empty_like(q)
     ref_out = torch.empty_like(q)
@@ -1660,10 +1723,8 @@ def test_op_varlen_fwd(Z, H, N_CTX, D_HEAD, causal, persistent, dtype=torch.floa
                                                       (4, 64, 8, 16384, 128), (4, 16, 4, 1024, 128),
                                                       (4, 16, 2, 8192, 128), (32, 128, 32, 8192, 128)])
 @pytest.mark.parametrize('causal', [False])
-@pytest.mark.parametrize('persistent', [None, "fixed", "dynamic"])
-def test_op_varlen_mqa_fwd(Z, HQ, HK, N_CTX, D_HEAD, causal, persistent, dtype=torch.float16):
+def test_op_varlen_mqa_fwd(Z, HQ, HK, N_CTX, D_HEAD, causal, dtype=torch.float16):
     q, k, v, input_metadata = varlen_input_helper(Z, HQ, HK, N_CTX, N_CTX, D_HEAD, dtype)
-    input_metadata.set_persistent(persistent)
     ref_out = torch.empty_like(q)
     tri_out = torch.empty_like(q)
     # Make KV look like HQ/HK "groups" of HK. Later, we will reshape so the
@@ -1810,17 +1871,6 @@ def nonvarlen_benchmark_configs():
     return configs
 
 
-def nonvarlen_benchmark_configs2():
-    head_dim = 128
-    heads = 2048 // head_dim
-    seq_lens = [512, 1024, 2048, 4096, 8192, 16384]
-    configs = []
-    for seq_len in seq_lens:
-        configs.append((16384 // seq_len, heads, heads, seq_len, seq_len))
-
-    return configs
-
-
 def varlen_benchmark_configs():
     configs = [
         (2, 16, 4, 1024, 1024),
@@ -1850,8 +1900,8 @@ def run_benchmark(custom, args):
     head_size = 128 if not args.d else args.d
     mode = 'fwd'
     x_names = ['BATCH', 'HQ', 'HK', 'N_CTX_Q', 'N_CTX_K']
-    causal = args.causal
     persistent = args.persistent
+    causal = args.causal
     varlen = args.layout == 'thd'
     configs = []
     if custom:
@@ -1864,14 +1914,13 @@ def run_benchmark(custom, args):
     print_time = args.return_time
     line_names = 'Time (ms)' if print_time else 'TFLOPS'
     configs.append(
-        triton.testing.Benchmark(
-            x_names=x_names, x_vals=x_vals_list, line_arg='provider', line_vals=['triton'], line_names=[line_names],
-            styles=[('red', '-')], ylabel='ms', plot_name=f'fused-attention-{mode}-d{head_size}-layout{args.layout}',
-            args={'D_HEAD': head_size, 'dtype': dtype, 'causal': causal, 'mode': mode, 'persistent': persistent}))
+        triton.testing.Benchmark(x_names=x_names, x_vals=x_vals_list, line_arg='provider', line_vals=['triton'],
+                                 line_names=[line_names], styles=[('red', '-')], ylabel='ms',
+                                 plot_name=f'fused-attention-{mode}-d{head_size}-layout{args.layout}',
+                                 args={'D_HEAD': head_size, 'dtype': dtype, 'causal': causal, 'mode': mode}))
 
     @triton.testing.perf_report(configs)
-    def bench_flash_attention(BATCH, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, causal, persistent, mode, provider,
-                              device="cuda"):
+    def bench_flash_attention(BATCH, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, causal, mode, provider, device="cuda"):
         assert mode in ["fwd", "bwd"]
         warmup = 25
         rep = 100
@@ -1901,8 +1950,8 @@ def run_benchmark(custom, args):
             flops_per_matmul = 2.0 * BATCH * HQ * N_CTX_Q * N_CTX_K * D_HEAD
         if causal:
             input_metadata.need_causal()
-
-        input_metadata.set_persistent(persistent)
+        
+        input_metadata.set_persistent(args.persistent)
 
         o = torch.empty_like(q)
         fn = lambda: attention(q, k, v, o, input_metadata)
@@ -1912,14 +1961,9 @@ def run_benchmark(custom, args):
             fn = lambda: o.backward(do, retain_graph=True)
         ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
         total_flops = 2 * flops_per_matmul
+        # TODO: This needs to be fixed for unequal Q/K seqlens
         if causal:
-            seqlen_q = N_CTX_Q
-            seqlen_k = N_CTX_K
-            # total_flops *= 0.5 # normally, but we have to take into account the unequal seqlen_q/k
-            if seqlen_q > seqlen_k:
-                total_flops *= seqlen_k / (2 * seqlen_q)
-            else:
-                total_flops *= 1 - seqlen_q / (2 * seqlen_k)
+            total_flops *= 0.5
         if mode == "bwd":
             total_flops *= 2.5  # 2.0(bwd) + 0.5(recompute)
         if print_time:
