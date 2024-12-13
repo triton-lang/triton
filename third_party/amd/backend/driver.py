@@ -8,6 +8,7 @@ from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver
+from triton._utils import parse_list_string
 
 dirname = os.path.dirname(os.path.realpath(__file__))
 include_dir = [os.path.join(dirname, "include")]
@@ -164,7 +165,7 @@ class HIPUtils(object):
 
 # -------------------- Launcher ----------------------------
 def ty_to_cpp(ty):
-    if ty[0] == '*':
+    if ty[0] == '*' or ty == "none":
         return "hipDeviceptr_t"
     return {
         "i1": "int32_t",
@@ -186,32 +187,27 @@ def ty_to_cpp(ty):
 
 
 def make_launcher(constants, signature, ids, warp_size):
-    start_desc = len(signature)
-    #signature = generate_cu_signature(constants, signature, ids)
-    arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
 
     def _extracted_type(ty):
-        if ty[0] == '*':
+        if ty[0] == '*' or ty == "none":
             return "PyObject*"
-        return {
-            'i1': 'int32_t',
-            'i8': 'int8_t',
-            'i16': 'int16_t',
-            'i32': 'int32_t',
-            'i64': 'int64_t',
-            'u1': 'uint32_t',
-            'u8': 'uint8_t',
-            'u16': 'uint16_t',
-            'u32': 'uint32_t',
-            'u64': 'uint64_t',
-            'fp16': 'float',
-            'bf16': 'float',
-            'fp32': 'float',
-            'f32': 'float',
-            'fp64': 'double',
-        }[ty]
+        if ty[0] == '[':
+            if ty == "[]":
+                return "[]"
+            tys = parse_list_string(ty)
+            val = ','.join(map(_extracted_type, tys))
+            return f"[{val}]"
+        return ty_to_cpp(ty)
 
     def format_of(ty):
+        if ty == "hipDeviceptr_t":
+            return "O"
+        if ty[0] == "[":
+            if ty == "[]":
+                return "()"
+            tys = parse_list_string(ty)
+            val = ''.join(map(format_of, tys))
+            return f"({val})"
         return {
             "PyObject*": "O",
             "float": "f",
@@ -220,21 +216,29 @@ def make_launcher(constants, signature, ids, warp_size):
             "int8_t": "b",
             "int16_t": "h",
             "int32_t": "i",
-            "int64_t": "l",
+            "int64_t": "L",
             "uint8_t": "B",
             "uint16_t": "H",
             "uint32_t": "I",
             "uint64_t": "K",
         }[ty]
 
+    signature = {k: v for k, v in signature.items() if v != 'constexpr'}
     args_format = ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
     format = "iiiKKOOOO" + args_format
+    signature = ','.join(signature.values()).replace('[', '').replace(']', '')
+    signature = list(filter(bool, signature.split(',')))
+    signature = {i: s for i, s in enumerate(signature)}
     args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
+    # Record the end of regular arguments;
+    # subsequent arguments are architecture-specific descriptors, such as tensor descriptors for CUDA.
+    arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
 
     libhip_path = _get_path_to_hip_runtime_dylib()
 
     # generate glue code
-    params = [f"&arg{i}" for i in signature.keys() if i not in constants]
+    params = list(range(len(signature)))
+    params = [f"&arg{i}" for i, ty in signature.items() if i not in constants and ty != "none"]
     params.append("&global_scratch")
     src = f"""
 #define __HIP_PLATFORM_AMD__
@@ -416,8 +420,8 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
 
 
   // raise exception asap
-  {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
-  _launch(gridX, gridY, gridZ, num_warps, num_ctas, clusterDimX, clusterDimY, clusterDimZ, shared_memory, (hipStream_t)_stream, (hipFunction_t)_function{', ' + ', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" else f"_arg{i}"for i, ty in signature.items()) if len(signature) > 0 else ''});
+  {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" or ty == "none" else "" for i, ty in signature.items()])};
+  _launch(gridX, gridY, gridZ, num_warps, num_ctas, clusterDimX, clusterDimY, clusterDimZ, shared_memory, (hipStream_t)_stream, (hipFunction_t)_function{', ' + ', '.join(f"ptr_info{i}.dev_ptr" if ty[0]=="*" or ty == "none" else f"_arg{i}"for i, ty in signature.items()) if len(signature) > 0 else ''});
 
   if(launch_exit_hook != Py_None){{
     PyObject* args = Py_BuildValue("(O)", launch_metadata);
@@ -468,9 +472,8 @@ class HIPLauncher(object):
     def __init__(self, src, metadata):
         ids = {"ids_of_const_exprs": src.fn.constexprs if hasattr(src, "fn") else tuple()}
         constants = src.constants if hasattr(src, "constants") else dict()
-        cst_key = lambda i: src.fn.arg_names.index(i) if isinstance(i, str) else i
-        constants = {cst_key(key): value for key, value in constants.items()}
-        signature = {cst_key(key): value for key, value in src.signature.items()}
+        constants = {idx: value for idx, value in constants.items()}
+        signature = {idx: value for idx, value in src.signature.items()}
         src = make_launcher(constants, signature, ids, metadata.warp_size)
         mod = compile_module_from_src(src, "__triton_launcher")
         self.launch = mod.launch
@@ -501,6 +504,11 @@ class HIPDriver(GPUDriver):
         arch = device_properties['arch']
         warp_size = device_properties['warpSize']
         return GPUTarget("hip", arch.split(':')[0], warp_size)
+
+    def get_active_torch_device(self):
+        import torch
+        # when using hip devices, the device string in pytorch is "cuda"
+        return torch.device("cuda", self.get_current_device())
 
     def get_benchmarker(self):
         from triton.testing import do_bench

@@ -7,11 +7,26 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "llvm/Support/Casting.h"
 
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
+
+bool mlir::triton::loopHasDistGreaterThanOne(scf::ForOp forOp) {
+  return llvm::any_of(forOp.getBody()->getTerminator()->getOperands(),
+                      [](Value operand) {
+                        Operation *def = operand.getDefiningOp();
+                        return !def;
+                      });
+}
+
+bool mlir::triton::isOuterLoop(scf::ForOp forOp) {
+  return llvm::any_of(forOp.getBody()->getOperations(), [](Operation &op) {
+    return isa<scf::ForOp, scf::WhileOp>(op);
+  });
+}
 
 // Combine the current mask with the given predicate.
 static Value getPredMask(RewriterBase &rewriter, Type typeLike,
@@ -78,6 +93,13 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     Value mask = getPredMask(rewriter, storeOp.getPtr().getType(),
                              storeOp.getMask(), pred);
     storeOp.getMaskMutable().assign(mask);
+    return op;
+  }
+  if (auto atomicRMWOp = dyn_cast<tt::AtomicRMWOp>(op)) {
+    rewriter.setInsertionPoint(atomicRMWOp);
+    Value mask = getPredMask(rewriter, atomicRMWOp.getPtr().getType(),
+                             atomicRMWOp.getMask(), pred);
+    atomicRMWOp.getMaskMutable().assign(mask);
     return op;
   }
 
@@ -177,15 +199,23 @@ void mlir::triton::replaceUsesAndPropagateType(OpBuilder &builder,
     op->erase();
 }
 
-std::pair<int, int> mlir::triton::getStageCluster(Operation *op) {
-  auto stage = cast<IntegerAttr>(op->getAttr(mlir::triton::kLoopStageAttrName))
-                   .getValue()
-                   .getSExtValue();
+std::optional<std::pair<int, int>>
+mlir::triton::maybeGetStageCluster(Operation *op) {
+  auto stage =
+      dyn_cast_if_present<IntegerAttr>(op->getAttr(tt::kLoopStageAttrName));
   auto clusterId =
-      cast<IntegerAttr>(op->getAttr(mlir::triton::kLoopClusterAttrName))
-          .getValue()
-          .getSExtValue();
-  return std::make_pair(stage, clusterId);
+      dyn_cast_if_present<IntegerAttr>(op->getAttr(tt::kLoopClusterAttrName));
+  if (!stage || !clusterId) {
+    return std::nullopt;
+  }
+
+  return {
+      {stage.getValue().getSExtValue(), clusterId.getValue().getSExtValue()}};
+}
+std::pair<int, int> mlir::triton::getStageCluster(Operation *op) {
+  auto res = maybeGetStageCluster(op);
+  assert(res.has_value() || "Operation is missing stage & cluster attribute");
+  return *res;
 }
 
 void mlir::triton::setStageCluster(Operation *op, int stage, int cluster) {
