@@ -576,12 +576,12 @@ class JITFunction(KernelInterface[T]):
         for hook in self.pre_run_hooks:
             hook(*args, **kwargs)
 
-        dc, target, backend, binder = self.device_caches[device]
+        kernel_cache, target, backend, binder = self.device_caches[device]
         bound_args, sig_and_spec, constexpr_vals, non_constexpr_vals, excess_kwargs = binder(*args, **kwargs)
 
         # compute cache key
         key = ''.join(sig_and_spec) + str((constexpr_vals, excess_kwargs))
-        kernel = dc.get(key, None)
+        kernel = kernel_cache.get(key, None)
 
         if kernel is None:
             # Kernel is not cached; we have to compile.
@@ -616,7 +616,7 @@ class JITFunction(KernelInterface[T]):
             # compile the kernel
             src = self.ASTSource(self, signature, constexprs, attrs)
             kernel = self.compile(src, target=target, options=options.__dict__)
-            dc[key] = kernel
+            kernel_cache[key] = kernel
             self._call_hook(key, signature, device, constexprs, options, [attrs], warmup, before=False)
 
         # Check that used global values have not changed.
