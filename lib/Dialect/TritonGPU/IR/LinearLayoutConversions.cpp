@@ -240,6 +240,42 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
   return combineCtaCgaWithShape(tileLayout, shared.getCTALayout(), shape);
 }
 
+LinearLayout warpsDotOperand(MLIRContext *ctx, ArrayRef<unsigned> warpShape,
+                             ArrayRef<unsigned> warpOrder, unsigned inner) {
+  // Let warpsPerCTAMma = {2, 2}, then
+  // warpsPerCTA = {2, 1} for opA and warpsPerCTA = {1, 2} for opB
+  // assume warpOrder = {1, 0}
+  // Assume that C is tiled by 2x2 tiles. Since warpOrder={1, 0}, we have that
+  // the C is owned as per the following layout:
+  // C: 0 | 1
+  //    - | -
+  //    2 | 3
+  // In order to be able to compute C, we need the following warp tiling of
+  // A and B:
+  // A: 0 1 | 0 1    B: 0 2 | 1 3
+  //    - - | - -       - - | - -
+  //    2 3 | 2 3       0 2 | 1 3
+  // In other words, we need to broadcast along K
+  auto rank = warpShape.size();
+  auto dimNames = standardOutDimNames(ctx, rank);
+  LinearLayout warpLayout = LinearLayout::empty();
+
+  // We have to broadcast along the inner dimension
+  // For A, when moving along M we go from 0 to 2.
+  // For B, when moving along N we go from 0 to 1.
+  // As such, choosing the order of A {1, 0}, gives us the correct broadcasting
+  // Same happens if the warpOrder is {0, 1}, like in Hopper
+  for (auto d : warpOrder) {
+    if (d == inner) {
+      warpLayout *= LinearLayout::zeros1D(warpShape[d], S("warp"), dimNames[d]);
+    } else {
+      warpLayout *=
+          LinearLayout::identity1D(warpShape[d], S("warp"), dimNames[d]);
+    }
+  }
+  return warpLayout;
+}
+
 } // anonymous namespace
 
 std::optional<LinearLayout>
@@ -534,12 +570,77 @@ AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 }
 
 std::optional<LinearLayout>
+wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
+                             ArrayRef<int64_t> shape) {
+  auto wmmaLayout = llvm::cast<AMDWmmaEncodingAttr>(dotWmmaLayout.getParent());
+  auto rank = shape.size();
+  bool hasBatchDim = rank == 3;
+  auto kDim = dotWmmaLayout.getOpIdx() == 0 ? rank - 1 : rank - 2;
+  int32_t kSize = shape[kDim];
+  MLIRContext *ctx = dotWmmaLayout.getContext();
+  SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
+  StringAttr kRegister = S("register");
+  StringAttr kLane = S("lane");
+  StringAttr kWarp = S("warp");
+  // lane order
+  // operand A: [1, 0] / [2, 1, 0]
+  // operand B: [0, 1] / [1, 2, 0]
+  // for both cases it is [k, nonk]/[k, nonk, batch]
+  SmallVector<unsigned> laneOrder = triton::gpu::getOrder(dotWmmaLayout);
+  // generate continuous part of register bases(i.e. kWidth)
+  std::vector<std::vector<int32_t>> registerBase;
+  const int32_t kWidth = dotWmmaLayout.getKWidth();
+  for (int i = 1; i < kWidth; i *= 2)
+    registerBase.push_back(std::vector<int32_t>{i, 0});
+  std::vector<std::vector<int32_t>> laneBase = {{0, 1}, {0, 2}, {0, 4}, {0, 8}};
+  switch (wmmaLayout.getVersion()) {
+  case 1:
+    // WMMA version 1 duplicates values in lanes 0-15 and 16-31
+    laneBase.push_back({0, 0});
+    break;
+  case 2:
+    // WMMA version 2 offset values in lanes 0-15 and 16-31 across k dimensions
+    laneBase.push_back({kWidth, 0});
+    break;
+  default:
+    assert(false && "unexpected version");
+  }
+  // Generate layout for one wmma instruction
+  LinearLayout tileLayout(
+      {{kRegister, registerBase}, {kLane, laneBase}},
+      {outDimNames[laneOrder[0]], outDimNames[laneOrder[1]]});
+  if (hasBatchDim) {
+    assert(laneOrder[2] == 0);
+    // Extend the base vector with one value to accomodate for the batch
+    // dimension, which appears at the last.
+    tileLayout *=
+        LinearLayout::identity1D(1, kRegister, outDimNames[laneOrder[2]]);
+    tileLayout *= LinearLayout::identity1D(1, kLane, outDimNames[laneOrder[2]]);
+  }
+
+  // Generate warp layout
+  auto warpsPerCTA = wmmaLayout.getWarpsPerCTA();
+  auto warpOrder = triton::gpu::getWarpOrder(dotWmmaLayout);
+  LinearLayout warpLayout = warpsDotOperand(ctx, warpsPerCTA, warpOrder, kDim);
+
+  // reorder dim names in rep order, so combineCtaCgaWithShape generate proper
+  // extension of layout
+  auto repOrder = wmmaLayout.getRepOrderForOperand(dotWmmaLayout.getOpIdx());
+  SmallVector<StringAttr> repDimNames;
+  for (auto dim : repOrder)
+    repDimNames.push_back(outDimNames[dim]);
+
+  // join instruction layout and warps using repetition order of dimensions
+  LinearLayout ctaLayout = tileLayout.transposeOuts(repDimNames) *
+                           warpLayout.transposeOuts(repDimNames);
+
+  return combineCtaCgaWithShape(ctaLayout, wmmaLayout.getCTALayout(), shape);
+}
+
+std::optional<LinearLayout>
 BlockedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   assert(shape.size() == getOrder().size());
-
-  int rank = shape.size();
   MLIRContext *ctx = getContext();
-  SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
 
   const auto &order = getOrder();
   LinearLayout ctaLayout =
@@ -619,44 +720,6 @@ NvidiaMmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   return combineCtaCgaWithShape(ctaLayout, getCTALayout(), shape);
 }
 
-LinearLayout warpsNvidiaDot(MLIRContext *ctx, ArrayRef<unsigned> mmaWarpShape,
-                            ArrayRef<unsigned> mmaWarpOrder, bool isA) {
-  // Let warpsPerCTAMma = {2, 2}, then
-  // warpsPerCTA = {2, 1} for opA and warpsPerCTA = {1, 2} for opB
-  // assume warpOrder = {1, 0}
-  // Assume that C is tiled by 2x2 tiles. Since warpOrder={1, 0}, we have that
-  // the C is owned as per the following layout:
-  // C: 0 | 1
-  //    - | -
-  //    2 | 3
-  // In order to be able to compute C, we need the following warp tiling of
-  // A and B:
-  // A: 0 1 | 0 1    B: 0 2 | 1 3
-  //    - - | - -       - - | - -
-  //    2 3 | 2 3       0 2 | 1 3
-  // In other words, we need to broadcast along K
-  auto rank = mmaWarpOrder.size();
-  auto inner = isA ? rank - 1 : rank - 2;
-  auto dimNames = standardOutDimNames(ctx, rank);
-  LinearLayout warpLayout = LinearLayout::empty();
-
-  // We have to broadcast along the inner dimension
-  // For A, when moving along M we go from 0 to 2.
-  // For B, when moving along N we go from 0 to 1.
-  // As such, choosing the order of A {1, 0}, gives us the correct broadcasting
-  // Same happens if the mmaWarpOrder is {0, 1}, like in Hopper
-  for (auto d : mmaWarpOrder) {
-    if (d == inner) {
-      warpLayout *=
-          LinearLayout::zeros1D(mmaWarpShape[d], S("warp"), dimNames[d]);
-    } else {
-      warpLayout *=
-          LinearLayout::identity1D(mmaWarpShape[d], S("warp"), dimNames[d]);
-    }
-  }
-  return warpLayout;
-}
-
 LinearLayout nvidiaDotToLinearLayout(ArrayRef<int64_t> shape,
                                      DotOperandEncodingAttr dot) {
   int rank = shape.size();
@@ -677,8 +740,9 @@ LinearLayout nvidiaDotToLinearLayout(ArrayRef<int64_t> shape,
   }
   auto ctaLayout =
       nvidiaMmaTile(ctx, tileShape, kWidth, getOrder(dot), dot.getRepOrder());
+  auto kDim = isA ? rank - 1 : rank - 2;
   ctaLayout *=
-      warpsNvidiaDot(ctx, mma.getWarpsPerCTA(), mma.getWarpOrder(), isA)
+      warpsDotOperand(ctx, mma.getWarpsPerCTA(), mma.getWarpOrder(), kDim)
           .transposeOuts(llvm::to_vector(ctaLayout.getOutDimNames()));
 
   return combineCtaCgaWithShape(ctaLayout, getCTALayout(dot), shape);
@@ -689,6 +753,8 @@ DotOperandEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   auto parent = getParent();
   if (auto mfmaLayout = llvm::dyn_cast<AMDMfmaEncodingAttr>(parent)) {
     return mfmaDotToLinearLayout(*this, shape);
+  } else if (auto wmmaLayout = llvm::dyn_cast<AMDWmmaEncodingAttr>(parent)) {
+    return wmmaDotOperandToLinearLayout(*this, shape);
   } else if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent)) {
     return nvidiaDotToLinearLayout(shape, *this);
   }

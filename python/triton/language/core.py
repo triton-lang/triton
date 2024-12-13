@@ -140,6 +140,7 @@ class constexpr:
             self.value = value.value
         else:
             self.value = value
+        self.type = constexpr
 
     def __repr__(self) -> str:
         return f"constexpr[{self.value}]"
@@ -473,6 +474,10 @@ class dtype:
     def is_const():
         return False
 
+    @staticmethod
+    def is_tuple():
+        return False
+
     def __eq__(self, other: dtype):
         if not isinstance(other, dtype):
             return False
@@ -608,11 +613,10 @@ class block_type(dtype):
 
         # Note that block_type's shape is a list of int
         # while tensor's shape is a list of constexpr.
-
-        assert (isinstance(shape, list))
+        assert (isinstance(shape, (list, tuple)))
 
         # shape can be empty ([]) when an input is a 0D tensor.
-        self.shape = _unwrap_shape(shape)
+        self.shape = tuple(_unwrap_shape(shape))
         if not self.shape:
             raise TypeError('0d block_type is forbidden')
 
@@ -647,19 +651,32 @@ class block_type(dtype):
         return self.element_ty
 
 
-class function_type(dtype):
+class tuple_type(dtype):
 
-    def __init__(self, ret_types: List[dtype], param_types: List[dtype]) -> None:
-        self.ret_types = ret_types
-        self.param_types = param_types
+    def __init__(self, types):
+        self.types = types
+        self.name = f"[{','.join(map(str, self.types))}]"
 
     def __str__(self):
-        return f'fn ({self.param_types}) -> {self.ret_types}'
+        return self.name
+
+    def __iter__(self):
+        return iter(self.types)
 
     def to_ir(self, builder: ir.builder):
-        ir_param_types = [ty.to_ir(builder) for ty in self.param_types]
-        ret_types = [ret_type.to_ir(builder) for ret_type in self.ret_types]
-        return builder.get_function_ty(ir_param_types, ret_types)
+        return [ty.to_ir(builder) for ty in self.types]
+
+    def __getitem__(self, index: int) -> dtype:
+        return self.types[index]
+
+    def is_tuple(self):
+        return True
+
+
+class slice_type(dtype):
+
+    def __init__(self):
+        self.name = 'slice_type'
 
 
 # scalar types
@@ -761,7 +778,7 @@ class tensor(_value):
         self.type = type  # Tensor type (can be block_type)
         # Following the practice in pytorch, dtype is scalar type
         self.dtype = type.scalar
-        self.shape = [constexpr(s) for s in self.shape]
+        self.shape = tuple([constexpr(s) for s in self.shape])
 
     def _flatten_ir(self):
         return [self.handle]
@@ -982,13 +999,16 @@ class tensor(_value):
 
     @builtin
     def __getitem__(self, slices, _builder=None):
-        if isinstance(slices, (slice, constexpr)) or slices is None:
+        import builtins
+        if isinstance(slices, (builtins.slice, slice, constexpr)) or slices is None:
             slices = [slices]
+        if isinstance(slices, tuple):
+            slices = slices.values
         ret = self
         for dim, sl in enumerate(slices):
             if sl is None or isinstance(sl, constexpr) and sl.value is None:
                 ret = semantic.expand_dims(ret, dim, _builder)
-            elif isinstance(sl, slice) and sl.start is None and sl.stop is None and sl.step is None:
+            elif isinstance(sl, (builtins.slice, slice)) and sl.start is None and sl.stop is None and sl.step is None:
                 pass
             else:
                 raise ValueError(f"unsupported tensor index: {sl}")
@@ -1004,13 +1024,7 @@ class tensor(_value):
         """
         Alias for :py:func:`tensor.cast`.
         """
-        # Triton doesn't like core functions calling other core functions, so we
-        # just copy-paste the implementation of cast here.  It's not too bad.
-        dtype = _unwrap_if_constexpr(dtype)
-        bitcast = _unwrap_if_constexpr(bitcast)
-        if bitcast:
-            return semantic.bitcast(self, dtype, _builder)
-        return semantic.cast(self, dtype, _builder, fp_downcast_rounding)
+        return cast(self, dtype, fp_downcast_rounding, bitcast, _builder=_builder)
 
     # Type stubs for functions added by the _tensor_member_fn decorator.
     # (Unfortunately these can't be created automatically.)
@@ -1145,6 +1159,77 @@ class tensor(_value):
 
     def flip(self, dim=None) -> tensor:
         ...
+
+
+class tuple:
+
+    def __init__(self, args: list):
+        self.values = [i for i in args]
+
+    @property
+    def type(self):
+
+        def get_type(x):
+            if isinstance(x, dtype):
+                return dtype
+            return x.type
+
+        return tuple_type([get_type(x) for x in self.values])
+
+    def __getitem__(self, idx: constexpr):
+        if isinstance(idx, int):
+            idx = constexpr(idx)
+        if isinstance(idx, constexpr):
+            return self.values[idx]
+        else:
+            import builtins
+            assert isinstance(idx, (slice, builtins.slice))
+            return tuple(self.values[idx.start:idx.stop:idx.step])
+
+    # TODO: remove
+    def __setitem__(self, idx: constexpr, value):
+        if isinstance(idx, int):
+            idx = constexpr(idx)
+        assert isinstance(idx, constexpr)
+        self.values[idx] = value
+
+    def __add__(self, other):
+        if isinstance(other, list):
+            other = tuple(other)
+        return tuple(self.values + other.values)
+        # return tuple(a + b for a, b in zip(self.values, other.values))
+
+    def __mul__(self, other):
+        assert isinstance(other, constexpr)
+        return tuple(self.values * other.value)
+
+    def __eq__(self, other):
+        import builtins
+        if isinstance(other, (list, builtins.tuple)):
+            other = tuple(other)
+        return constexpr(self.values == other.values)
+
+    def __hash__(self):
+        import builtins
+        return hash(builtins.tuple(self.values))
+
+    def __str__(self):
+        return str([str(x) for x in self.values])
+
+    def __iter__(self):
+        return iter(self.values)
+
+    def __len__(self):
+        return len(self.values)
+
+
+class slice:
+
+    def __init__(self, start, stop, step):
+        self.start = start
+        self.stop = stop
+        self.step = step
+        self.type = slice_type()
 
 
 class _experimental_tensor_descriptor_base(_value):
@@ -1562,7 +1647,7 @@ def expand_dims(input, axis, _builder=None):
     """
     input = semantic.to_tensor(input, _builder)
     axis = _constexpr_to_value(axis)
-    axes = list(axis) if isinstance(axis, Sequence) else [axis]
+    axes = list(axis) if isinstance(axis, (Sequence, tuple)) else [axis]
     new_ndim = len(input.shape) + len(axes)
     axes = [_wrap_axis(_constexpr_to_value(d), new_ndim) for d in axes]
 
@@ -1594,8 +1679,9 @@ def cast(input, dtype: dtype, fp_downcast_rounding: Optional[str] = None, bitcas
     :type bitcast: bool, optional
     """
     input = semantic.to_tensor(input, _builder)
-    if isinstance(bitcast, constexpr):
-        bitcast = bitcast.value
+    dtype = _constexpr_to_value(dtype)
+    fp_downcast_rounding = _constexpr_to_value(fp_downcast_rounding)
+    bitcast = _constexpr_to_value(bitcast)
     if bitcast:
         return semantic.bitcast(input, dtype, _builder)
     return semantic.cast(input, dtype, _builder, fp_downcast_rounding)
@@ -1647,8 +1733,10 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
 def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None, out_dtype=float32, _builder=None):
     """
     Returns the matrix product of two blocks in microscaling format.
+
     lhs and rhs use microscaling formats described here:
     https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
+
     :param lhs: The first tensor to be multiplied.
     :type lhs: 2D tensor representing fp4, fp8 or bf16 elements. Fp4 elements are packed into uint8 inputs with the first element in lower bits. Fp8 are stored as uint8 or the corresponding fp8 type.
     :param lhs_scale: Scale factor for lhs tensor.
@@ -2213,14 +2301,12 @@ def reduce(input, axis, combine_fn, keep_dims=False, _builder=None, _generator=N
         return reduce((input, ), axis, combine_fn, keep_dims=keep_dims, _builder=_builder, _generator=_generator)[0]
 
     def make_combine_region(reduce_op):
-        in_scalar_tys = [t.type.scalar for t in input]
-        prototype = function_type(in_scalar_tys, in_scalar_tys * 2)
-
+        param_types = [t.type.scalar for t in input] * 2
         region = reduce_op.get_region(0)
         with _insertion_guard(_builder):
-            param_types = [ty.to_ir(_builder) for ty in prototype.param_types]
-            block = _builder.create_block_with_parent(region, param_types)
-            args = [tensor(block.arg(i), ty) for i, ty in enumerate(prototype.param_types)]
+            to_ir = lambda T: T.to_ir(_builder)
+            block = _builder.create_block_with_parent(region, list(map(to_ir, param_types)))
+            args = [tensor(block.arg(i), ty) for i, ty in enumerate(param_types)]
             results = _generator.call_JitFunction(combine_fn, args, kwargs={})
             if isinstance(results, tensor):
                 handles = [results.handle]
@@ -2314,14 +2400,12 @@ def associative_scan(input, axis, combine_fn, reverse=False, _builder=None, _gen
         return associative_scan((input, ), axis, combine_fn, reverse, _builder=_builder, _generator=_generator)[0]
 
     def make_combine_region(scan_op):
-        in_scalar_tys = [t.type.scalar for t in input]
-        prototype = function_type(in_scalar_tys, in_scalar_tys * 2)
-
+        param_types = [t.type.scalar for t in input] * 2
         region = scan_op.get_region(0)
         with _insertion_guard(_builder):
-            param_types = [ty.to_ir(_builder) for ty in prototype.param_types]
-            block = _builder.create_block_with_parent(region, param_types)
-            args = [tensor(block.arg(i), ty) for i, ty in enumerate(prototype.param_types)]
+            to_ir = lambda T: T.to_ir(_builder)
+            block = _builder.create_block_with_parent(region, list(map(to_ir, param_types)))
+            args = [tensor(block.arg(i), ty) for i, ty in enumerate(param_types)]
             results = _generator.call_JitFunction(combine_fn, args, kwargs={})
             if isinstance(results, tensor):
                 handles = [results.handle]

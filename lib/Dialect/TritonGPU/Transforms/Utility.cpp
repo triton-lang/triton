@@ -286,23 +286,21 @@ std::string GraphLayoutMarker::getColor(const Type &type) const {
 }
 // -------------------------------------------------------------------------- //
 
-static std::optional<Attribute> inferDstEncoding(triton::ReduceOp op,
-                                                 Attribute encoding) {
+static Attribute inferDstEncoding(triton::ReduceOp op, Attribute encoding) {
   return triton::gpu::SliceEncodingAttr::get(op->getContext(), op.getAxis(),
                                              encoding);
 }
 
-static std::optional<Attribute> inferDstEncoding(triton::ExpandDimsOp op,
-                                                 Attribute encoding) {
+static Attribute inferDstEncoding(triton::ExpandDimsOp op, Attribute encoding) {
   auto sliceEncoding = mlir::dyn_cast<triton::gpu::SliceEncodingAttr>(encoding);
   if (!sliceEncoding)
-    return std::nullopt;
+    return {};
   if (op.getAxis() != sliceEncoding.getDim())
-    return std::nullopt;
+    return {};
   return sliceEncoding.getParent();
 }
 
-static std::optional<Attribute> inferDstEncoding(JoinOp op, Attribute srcEnc) {
+static Attribute inferDstEncoding(JoinOp op, Attribute srcEnc) {
   Attribute dstEnc;
   if (srcEnc.getDialect()
           .getRegisteredInterface<DialectInferLayoutInterface>()
@@ -311,10 +309,10 @@ static std::optional<Attribute> inferDstEncoding(JoinOp op, Attribute srcEnc) {
           .succeeded()) {
     return dstEnc;
   }
-  return std::nullopt;
+  return {};
 }
 
-static std::optional<Attribute> inferDstEncoding(SplitOp op, Attribute srcEnc) {
+static Attribute inferDstEncoding(SplitOp op, Attribute srcEnc) {
   Attribute dstEnc;
   if (srcEnc.getDialect()
           .getRegisteredInterface<DialectInferLayoutInterface>()
@@ -323,26 +321,24 @@ static std::optional<Attribute> inferDstEncoding(SplitOp op, Attribute srcEnc) {
           .succeeded()) {
     return dstEnc;
   }
-  return std::nullopt;
+  return {};
 }
 
-static std::optional<Attribute> inferSrcEncoding(triton::ReduceOp op,
-                                                 Attribute encoding) {
+static Attribute inferSrcEncoding(triton::ReduceOp op, Attribute encoding) {
   auto sliceEncoding = mlir::dyn_cast<triton::gpu::SliceEncodingAttr>(encoding);
   if (!sliceEncoding)
-    return std::nullopt;
+    return {};
   if (op.getAxis() != sliceEncoding.getDim())
-    return std::nullopt;
+    return {};
   return sliceEncoding.getParent();
 }
 
-static std::optional<Attribute> inferSrcEncoding(triton::ExpandDimsOp op,
-                                                 Attribute encoding) {
+static Attribute inferSrcEncoding(triton::ExpandDimsOp op, Attribute encoding) {
   return triton::gpu::SliceEncodingAttr::get(op->getContext(), op.getAxis(),
                                              encoding);
 }
 
-static std::optional<Attribute> inferSrcEncoding(JoinOp op, Attribute dstEnc) {
+static Attribute inferSrcEncoding(JoinOp op, Attribute dstEnc) {
   // Split is the inverse of join.
   Attribute srcEnc;
   if (dstEnc.getDialect()
@@ -351,10 +347,10 @@ static std::optional<Attribute> inferSrcEncoding(JoinOp op, Attribute dstEnc) {
           .succeeded()) {
     return srcEnc;
   }
-  return std::nullopt;
+  return {};
 }
 
-static std::optional<Attribute> inferSrcEncoding(SplitOp op, Attribute dstEnc) {
+static Attribute inferSrcEncoding(SplitOp op, Attribute dstEnc) {
   // Join is the inverse of split.
   Attribute srcEnc;
   if (dstEnc.getDialect()
@@ -363,11 +359,16 @@ static std::optional<Attribute> inferSrcEncoding(SplitOp op, Attribute dstEnc) {
           .succeeded()) {
     return srcEnc;
   }
-  return std::nullopt;
+  return {};
 }
 
-static std::optional<Attribute>
-inferTransOpDstEncoding(Attribute srcEnc, ArrayRef<int32_t> order) {
+static Attribute inferSrcEncoding(GatherOp op, Attribute dstEnc) {
+  // The index encoding is the same as the output encoding.
+  return dstEnc;
+}
+
+static Attribute inferTransOpDstEncoding(Attribute srcEnc,
+                                         ArrayRef<int32_t> order) {
   // Simply forward to the existing inferTransOpEncoding function.
   Attribute retEncoding;
   if (succeeded(
@@ -376,16 +377,16 @@ inferTransOpDstEncoding(Attribute srcEnc, ArrayRef<int32_t> order) {
               ->inferTransOpEncoding(srcEnc, order, retEncoding))) {
     return retEncoding;
   }
-  return std::nullopt;
+  return {};
 }
 
-static std::optional<Attribute>
-inferDstEncoding(triton::TransposeOpInterface op, Attribute encoding) {
+static Attribute inferDstEncoding(triton::TransposeOpInterface op,
+                                  Attribute encoding) {
   return inferTransOpDstEncoding(encoding, op.getOrder());
 }
 
-static std::optional<Attribute>
-inferSrcEncoding(triton::TransposeOpInterface op, Attribute encoding) {
+static Attribute inferSrcEncoding(triton::TransposeOpInterface op,
+                                  Attribute encoding) {
   // We want to solve for srcEnc in
   //   transpose(srcEnc, order) -> dstEnc.
   // Given the identity
@@ -396,13 +397,14 @@ inferSrcEncoding(triton::TransposeOpInterface op, Attribute encoding) {
                                  triton::inversePermutation(op.getOrder()));
 }
 
-static std::optional<Attribute>
-inferReshapeOpDstEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
-                          ArrayRef<int64_t> dstShape, bool allowReorder) {
+static Attribute inferReshapeOpDstEncoding(ArrayRef<int64_t> srcShape,
+                                           Attribute srcEnc,
+                                           ArrayRef<int64_t> dstShape,
+                                           bool allowReorder) {
   // We don't do anything smart to allow-reorder reshapes here.  They are
   // handled in OptimizeThreadLocality.
   if (allowReorder)
-    return std::nullopt;
+    return {};
 
   Attribute dstEnc;
   if (succeeded(
@@ -412,18 +414,23 @@ inferReshapeOpDstEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
                   srcShape, srcEnc, dstShape, dstEnc, /*loc=*/std::nullopt))) {
     return dstEnc;
   }
-  return std::nullopt;
+  return {};
 }
 
-static std::optional<Attribute> inferDstEncoding(triton::ReshapeOp op,
-                                                 Attribute encoding) {
+static Attribute inferDstEncoding(triton::ReshapeOp op, Attribute encoding) {
   return inferReshapeOpDstEncoding(op.getSrc().getType().getShape(), encoding,
                                    op.getType().getShape(),
                                    op.getAllowReorder());
 }
 
-static std::optional<Attribute> inferSrcEncoding(triton::ReshapeOp op,
-                                                 Attribute encoding) {
+static Attribute inferDstEncoding(GatherOp op, Attribute encoding) {
+  // The output encoding is the same as the index encoding.
+  // FIXME: This assumes `encoding` is the index encoding, which can be
+  // different than the source encoding.
+  return encoding;
+}
+
+static Attribute inferSrcEncoding(triton::ReshapeOp op, Attribute encoding) {
   // The encoding of x given the encoding of y in `reshape(x) -> y` is the same
   // as the encoding of x given the encoding of y in `reshape(y) -> x`.  It's an
   // invariant of inferReshapeOpNoReorderEncoding that it's symmetric in this
@@ -446,11 +453,11 @@ static bool isSingleValue(Value value) {
   return true;
 }
 
-std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding) {
+Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
   if (isa<triton::ScanOp>(op)) {
     // Scan only supports blocked encoding at the moment.
     if (!isa<triton::gpu::BlockedEncodingAttr>(encoding))
-      return std::nullopt;
+      return {};
   }
   if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::SameLoadStoreOperandsAndResultEncoding>() ||
@@ -472,16 +479,16 @@ std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding) {
     return inferSrcEncoding(trans, encoding);
   if (auto reshape = dyn_cast<triton::ReshapeOp>(op))
     return inferSrcEncoding(reshape, encoding);
-  // TODO(jeff): Handle progagating tt.gather indices -> dst layout.
-  // This requires updating the API to specify the exact operands and results.
+  if (auto gather = dyn_cast<triton::GatherOp>(op))
+    return inferSrcEncoding(gather, encoding);
 
-  return std::nullopt;
+  return {};
 }
 
-std::optional<Attribute> inferDstEncoding(Operation *op, Attribute encoding) {
+Attribute inferDstEncoding(Operation *op, Attribute encoding) {
   if (isa<triton::ScanOp>(op)) {
     if (!isa<triton::gpu::BlockedEncodingAttr>(encoding))
-      return std::nullopt;
+      return {};
   }
   if (op->hasTrait<mlir::OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<mlir::OpTrait::SameLoadStoreOperandsAndResultEncoding>() ||
@@ -501,9 +508,10 @@ std::optional<Attribute> inferDstEncoding(Operation *op, Attribute encoding) {
     return inferDstEncoding(trans, encoding);
   if (auto reshape = dyn_cast<triton::ReshapeOp>(op))
     return inferDstEncoding(reshape, encoding);
-  // TODO(jeff): Handle progagating tt.gather indices -> dst layout.
+  if (auto gather = dyn_cast<triton::GatherOp>(op))
+    return inferDstEncoding(gather, encoding);
 
-  return std::nullopt;
+  return {};
 }
 
 bool isExpensiveLoadOrStore(Operation *op) {
@@ -796,7 +804,6 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
     layout[currentValue] = encoding;
 
     if (auto ifOp = currentValue.getDefiningOp<scf::IfOp>()) {
-      auto results = ifOp.getResults();
       unsigned argIdx = mlir::cast<OpResult>(currentValue).getResultNumber();
 
       auto thenValue = ifOp.thenYield().getOperand(argIdx);
@@ -824,11 +831,20 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
         continue;
       if (isa<triton::CatOp>(definingOp))
         return failure();
-      for (Value operand : definingOp->getOperands()) {
+      if (auto gather = dyn_cast<GatherOp>(definingOp)) {
+        // Specially handle gather since its transfer function only applies
+        // between its index operand and result.
+        auto srcEncoding = inferSrcEncoding(gather, encoding);
+        if (!srcEncoding)
+          return failure();
+        enqueue(gather.getIndices(), srcEncoding);
+        continue;
+      }
+      for (auto [i, operand] : llvm::enumerate(definingOp->getOperands())) {
         auto srcEncoding = inferSrcEncoding(definingOp, encoding);
         if (!srcEncoding)
           return failure();
-        enqueue(operand, *srcEncoding);
+        enqueue(operand, srcEncoding);
       }
       continue;
     }

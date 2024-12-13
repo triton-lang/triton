@@ -216,33 +216,28 @@ static void moveUpTranspose(triton::FuncOp funcOp) {
 // Schedule global load and local store ops for better GEMM performance.
 static void scheduleGlobalLoadLocalStore(triton::FuncOp funcOp) {
   SmallVector<Operation *> moveOps;
-  // Move global loads early to prefetch. This may increase register pressure
-  // but it enables issuing global loads early.
-  funcOp.walk([&](triton::LoadOp op) { moveOps.push_back(op); });
   // Move local_stores early if dependence distance greater than one iteration.
   // Best perf on GEMM when these precede global loads.
   funcOp.walk([&](ttg::LocalStoreOp op) { moveOps.push_back(op); });
+  // Move global loads early to prefetch. This may increase register pressure
+  // but it enables issuing global loads early.
+  funcOp.walk([&](triton::LoadOp op) { moveOps.push_back(op); });
 
   for (auto op : llvm::reverse(moveOps)) {
     // Gather use-def chain in block.
     Block *block = op->getBlock();
     bool leadsToLoad = false;
-    bool dontReorder = false;
     SetVector<Operation *> backwardSet;
 
     BackwardSliceOptions options;
     options.omitBlockArguments = true;
     options.inclusive = false;
+    // Slice should inlcude values flowing into op regions
+    options.omitUsesFromAbove = false;
     options.filter = [&](Operation *defOp) -> bool {
       Block *defBlock = defOp->getBlock();
       if (!block->findAncestorOpInBlock(*defOp))
         return false;
-      // Don't hoist control flow as we don't track backtraces of ops within
-      // their regions.
-      if (isa<scf::IfOp, scf::ForOp, scf::WhileOp>(defOp)) {
-        dontReorder = true;
-        return false;
-      }
 
       // Check for a `load` dependent path.
       leadsToLoad |= isa<triton::LoadOp>(defOp);
@@ -252,9 +247,6 @@ static void scheduleGlobalLoadLocalStore(triton::FuncOp funcOp) {
     mlir::getBackwardSlice(op, &backwardSet, options);
     backwardSet.insert(op);
 
-    // If we found ops in the slice we don't want to hoist.
-    if (dontReorder)
-      continue;
     // Don't move a local_store if its source is a load from
     // the same iteration.
     if (isa<ttg::LocalStoreOp>(op) && leadsToLoad)

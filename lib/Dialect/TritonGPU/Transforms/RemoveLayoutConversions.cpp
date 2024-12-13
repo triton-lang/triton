@@ -170,6 +170,8 @@ bool isLayoutAnchor(Operation *op) {
     return isExpensiveLoadOrStore(op);
   if (isa<DotOp, nvidia_gpu::WarpGroupDotOp, AtomicRMWOp, AtomicCASOp>(op))
     return true;
+  if (auto gatherOp = dyn_cast<GatherOp>(op))
+    return gatherOp.getEfficientLayout();
 
   // Heuristic: Mark permuting reshape as a layout anchor.  Its dst can be
   // anything, so it stops forward-propagation of layouts.  We rely on the
@@ -213,7 +215,7 @@ void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
       continue;
     bool hasChanged = false;
     for (auto encoding : info.encodings) {
-      std::optional<Attribute> dstEncoding;
+      Attribute dstEncoding;
       if (isa<ConvertLayoutOp>(op)) {
         // Try to remove the convert by making the dst encoding match the source
         // encoding.
@@ -222,7 +224,7 @@ void LayoutPropagation::setEncoding(ValueRange values, LayoutInfo &info,
         dstEncoding = inferDstEncoding(op, encoding);
       }
       if (dstEncoding)
-        hasChanged |= layouts[value].encodings.insert(*dstEncoding);
+        hasChanged |= layouts[value].encodings.insert(dstEncoding);
     }
     if (hasChanged)
       changed.push_back(value);
@@ -275,6 +277,15 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
       setEncoding(result, info, changed, user);
       continue;
     }
+    if (auto gatherOp = dyn_cast<GatherOp>(user)) {
+      // Propagate the layout through the indices only, and if the layout does
+      // not have an efficient layout set.
+      if (!gatherOp.getEfficientLayout() &&
+          &use == &gatherOp.getIndicesMutable()) {
+        setEncoding(gatherOp.getResult(), info, changed, user);
+        continue;
+      }
+    }
     if (user->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
         user->hasTrait<OpTrait::Elementwise>() ||
         isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
@@ -282,7 +293,6 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
       setEncoding(user->getResults(), info, changed, user);
       continue;
     }
-    // TODO(jeff): Propagate tt.gather indices layout to dst.
   }
   return changed;
 }
@@ -451,15 +461,15 @@ Operation *LayoutPropagation::cloneElementwise(OpBuilder &rewriter,
                                                Attribute encoding) {
   Operation *newOp = rewriter.clone(*op);
 
-  std::optional<Attribute> operandEnc;
+  Attribute operandEnc;
   if (op->getNumOperands() > 0) {
     operandEnc = inferSrcEncoding(op, encoding);
-    assert(operandEnc.has_value());
+    assert(operandEnc);
   }
 
   for (OpOperand &operand : op->getOpOperands()) {
     newOp->setOperand(operand.getOperandNumber(),
-                      getValueAs(operand.get(), *operandEnc));
+                      getValueAs(operand.get(), operandEnc));
   }
 
   for (unsigned i = 0, e = op->getNumResults(); i < e; ++i) {
@@ -697,7 +707,7 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
   }
   if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<OpTrait::Elementwise>() ||
-      isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
+      isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp, GatherOp,
           ConvertLayoutOp, nvidia_gpu::WarpGroupDotWaitOp>(op)) {
     Operation *newOp = cloneElementwise(rewriter, op, encoding);
     for (auto [oldResult, newResult] :
@@ -710,7 +720,6 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
     }
     return newOp;
   }
-  // TODO(jeff): Handle tt.gather once it supports layout propagation.
   llvm::report_fatal_error("unexpected op in rewrite");
   return nullptr;
 }
@@ -720,6 +729,9 @@ bool canBeRemat(Operation *op) {
     return !isExpensiveLoadOrStore(op);
   if (isa<AtomicRMWOp, AtomicCASOp, DotOp>(op))
     return false;
+  if (auto gather = dyn_cast<GatherOp>(op))
+    return !gather.getEfficientLayout();
+
   if (isa<scf::WhileOp, scf::ConditionOp>(op))
     return false;
 
@@ -1054,11 +1066,11 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     if (isExtOrBroadcastOp(op)) {
       SetVector<Value> tempSlice;
       DenseMap<Value, Attribute> tempLayout;
-      std::optional<Attribute> srcEncoding = inferSrcEncoding(op, layout[v]);
+      Attribute srcEncoding = inferSrcEncoding(op, layout[v]);
       if (!srcEncoding)
         return;
       LogicalResult result = getRematerializableSlice(
-          op->getOperand(0), *srcEncoding, tempSlice, tempLayout);
+          op->getOperand(0), srcEncoding, tempSlice, tempLayout);
       // If we can rematerialize the rest of the ext slice we can ignore this
       // ext as it won't need a convert.
       if (result.succeeded()) {
@@ -1077,8 +1089,7 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   if (extOrBroadcatOp == nullptr)
     return;
   Attribute dstEncoding = layout[extOrBroadcatOp->getResult(0)];
-  std::optional<Attribute> srcEncoding =
-      inferSrcEncoding(extOrBroadcatOp, dstEncoding);
+  Attribute srcEncoding = inferSrcEncoding(extOrBroadcatOp, dstEncoding);
   if (!srcEncoding)
     return;
   // Move the convert before the ext op and rewrite the slice.
@@ -1086,7 +1097,7 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   auto tensorType =
       cast<RankedTensorType>(extOrBroadcatOp->getOperand(0).getType());
   auto newType = RankedTensorType::get(
-      tensorType.getShape(), tensorType.getElementType(), *srcEncoding);
+      tensorType.getShape(), tensorType.getElementType(), srcEncoding);
   auto newConvertOp = builder.create<ConvertLayoutOp>(
       convertOp.getLoc(), newType, extOrBroadcatOp->getOperand(0));
   Operation *newExtOrBroadcast = builder.clone(*extOrBroadcatOp);

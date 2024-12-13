@@ -161,6 +161,8 @@ public:
 
   // Get the shared memory scratch size required by this op.
   unsigned getScratchSizeInBytes();
+  // Determine if the gather can be performed completely within a warp.
+  bool isWarpLocal();
 
 private:
   triton::GatherOp gatherOp;
@@ -230,6 +232,11 @@ bool isBlockedToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy);
 // Return true if the src and dst layout match.
 bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
                                    RankedTensorType dstTy);
+
+// Check if MFMA layout can be converted to the dot operand
+// layout using warp shuffle.
+bool matchMFMAAndDotOperandShuffleCase(RankedTensorType srcTy,
+                                       RankedTensorType dstTy);
 
 // TODO: Move utility functions that belong to ConvertLayoutOp to class
 // ConvertLayoutOpHelper in the future

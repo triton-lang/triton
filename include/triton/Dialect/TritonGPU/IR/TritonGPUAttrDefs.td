@@ -762,8 +762,6 @@ for
   ];
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
-    SliceEncodingAttr squeeze(int axis);
-
     SmallVector<unsigned> getContigPerThread() {
       // Block encoding is dense stride layout. The elements per thread are contiguous.
       return getSizePerThread();
