@@ -547,44 +547,41 @@ class JITFunction(KernelInterface[T]):
         assert callable(hook)
         self.pre_run_hooks.append(hook)
 
-    def create_binder(self, backend):
+    def create_binder(self):
         """
         Precompute as much as possible.
         """
         from ..compiler import CompiledKernel, compile, ASTSource, make_backend
+        target = driver.active.get_current_target()
+        backend = make_backend(target)
         self.CompiledKernel = CompiledKernel
         self.compile = compile
         self.ASTSource = ASTSource
-        self.make_backend = make_backend
-        self.binder = create_function_from_signature(self.signature, self.params, backend)
+        binder = create_function_from_signature(self.signature, self.params, backend)
         self.constexpr_indices = [i for (i, p) in enumerate(self.params) if p.is_constexpr]
         self.non_constexpr_indices = [i for (i, p) in enumerate(self.params) if not p.is_constexpr]
         self.specialised_indices = [
             i for (i, p) in enumerate(self.params) if (not p.do_not_specialize) and (not p.is_constexpr)
         ]
+        return {}, target, backend, binder
 
     def run(self, *args, grid, warmup, **kwargs):
         kwargs["debug"] = kwargs.get("debug", self.debug) or os.environ.get("TRITON_DEBUG", "0") == "1"
 
         # parse options
-        from ..compiler import make_backend
         device = driver.active.get_current_device()
         stream = driver.active.get_current_stream(device)
-        target = driver.active.get_current_target()
-        backend = make_backend(target)
 
         # Execute pre run hooks with args and kwargs
         for hook in self.pre_run_hooks:
             hook(*args, **kwargs)
 
-        if self.binder is None:
-            self.create_binder(backend)
-
-        bound_args, sig_and_spec, constexpr_vals, non_constexpr_vals, excess_kwargs = self.binder(*args, **kwargs)
+        kernel_cache, target, backend, binder = self.device_caches[device]
+        bound_args, sig_and_spec, constexpr_vals, non_constexpr_vals, excess_kwargs = binder(*args, **kwargs)
 
         # compute cache key
         key = ''.join(sig_and_spec) + str((constexpr_vals, excess_kwargs))
-        kernel = self.cache[device].get(key, None)
+        kernel = kernel_cache.get(key, None)
 
         if kernel is None:
             # Kernel is not cached; we have to compile.
@@ -619,7 +616,7 @@ class JITFunction(KernelInterface[T]):
             # compile the kernel
             src = self.ASTSource(self, signature, constexprs, attrs)
             kernel = self.compile(src, target=target, options=options.__dict__)
-            self.cache[device][key] = kernel
+            kernel_cache[key] = kernel
             self._call_hook(key, signature, device, constexprs, options, [attrs], warmup, before=False)
 
         # Check that used global values have not changed.
@@ -659,8 +656,6 @@ class JITFunction(KernelInterface[T]):
         self.repr = lambda _: fn.__name__ if repr is None else repr(_)
         self.launch_metadata = launch_metadata
 
-        self.binder = None
-
         self.params = []
         for i, param in enumerate(self.signature.parameters.values()):
             dns = i in do_not_specialize or param.name in do_not_specialize
@@ -671,7 +666,7 @@ class JITFunction(KernelInterface[T]):
         self.src = textwrap.dedent(inspect.getsource(fn))
         self.src = self.src[re.search(r"^def\s+\w+\s*\(", self.src, re.MULTILINE).start():]
         # cache of just-in-time compiled kernels
-        self.cache = defaultdict(dict)
+        self.device_caches = defaultdict(lambda: self.create_binder())
         self.hash = None
 
         # Map of global variables used by the function and any functions it
@@ -742,7 +737,7 @@ class JITFunction(KernelInterface[T]):
         }
         key = deserialized_obj['key']
         kernel = compile(src, None, options)
-        self.cache[device][key] = kernel
+        self.device_caches[device][0][key] = kernel
         return kernel
 
     # we do not parse `src` in the constructor because
