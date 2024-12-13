@@ -1547,6 +1547,9 @@ tensor. The input and indices tensors must have the same number of
 dimension, and each dimension of the indices tensor that is not the gather
 dimension cannot be greater than the corresponding dimension in the input
 tensor.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">efficient_layout</span></code> attribute is set when the compiler has determined an
+optimized layout for the operation, indicating that it should not be
+changed.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
@@ -1555,6 +1558,7 @@ tensor.</p>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>axis</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+<tr><td><code>efficient_layout</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
 </table>
 </section>
 <section id="id52">

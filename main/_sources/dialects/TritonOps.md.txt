@@ -960,6 +960,10 @@ dimension, and each dimension of the indices tensor that is not the gather
 dimension cannot be greater than the corresponding dimension in the input
 tensor.
 
+The `efficient_layout` attribute is set when the compiler has determined an
+optimized layout for the operation, indicating that it should not be
+changed.
+
 Traits: `AlwaysSpeculatableImplTrait`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
@@ -971,6 +975,7 @@ Effects: `MemoryEffects::Effect{}`
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>axis</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+<tr><td><code>efficient_layout</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
 </table>
 
 #### Operands:
