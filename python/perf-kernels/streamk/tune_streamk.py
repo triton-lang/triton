@@ -143,7 +143,9 @@ def prune_configs(M, N, K, configs, elemBytes_a, elemBytes_b):
         else:
             # Pipeline, we need (num_stages - 1) buffers for both A and B at the same time
             LDS = (LDSA + LDSB) * (num_stages - 1)
-        if LDS > 65536:
+        driver = triton.runtime.driver.active
+        max_shared = driver.utils.get_device_properties(driver.get_current_device())["max_shared_mem"]
+        if LDS > max_shared:
             continue
         # Skip small block sizes and num_warps for large gemm
         # For fp16 and f8, we want to only use BLOCK_SIZE >= 64
@@ -389,14 +391,17 @@ def matmul(a, b, c, bias, P, locks, num_sms, block_m, block_n, block_k, group_m,
 
     stride_bias = bias.stride(0) if use_bias else 0
     EVEN_K = K % block_k == 0
+    m_tiles = triton.cdiv(M, block_m)
+    n_tiles = triton.cdiv(N, block_n)
+    streamk_tiles = m_tiles * n_tiles % num_sms
     # change num_xcds = 1 if using MI250
     num_xcds = 8
     streamk_gemm[
         grid,
     ](a, b, c, bias, P, locks, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1),
       stride_bias=stride_bias, BLOCK_SIZE_M=block_m, BLOCK_SIZE_N=block_n, BLOCK_SIZE_K=block_k, GROUP_SIZE_M=group_m,
-      NUM_SMS=num_sms, NUM_XCDS=num_xcds, num_warps=num_warps, num_stages=num_stages, waves_per_eu=waves_per_eu,
-      matrix_instr_nonkdim=mfmaInstrSize, kpack=kpack, BIAS=use_bias, EVEN_K=EVEN_K)
+      NUM_SMS=num_sms, STREAMK_TILES=streamk_tiles, NUM_XCDS=num_xcds, num_warps=num_warps, num_stages=num_stages,
+      waves_per_eu=waves_per_eu, matrix_instr_nonkdim=mfmaInstrSize, kpack=kpack, BIAS=use_bias, EVEN_K=EVEN_K)
     return c
 
 

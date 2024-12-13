@@ -98,6 +98,9 @@ def gen_kernel_and_configStr_from_config(config, EVEN_K, dtype_a, dtype_b, dtype
 
         matmul_def_str = f"""
 def matmul_{configStr}(M, N, K, am, ak, bk, bn, cm, cn, biasn):
+    m_tiles = triton.cdiv(M, {block_m})
+    n_tiles = triton.cdiv(N, {block_n})
+    streamk_tiles= m_tiles*n_tiles % {num_sms}
     streamk_gemm_{configStr}.warmup(
         {torch_dtype_a}, {torch_dtype_b}, {torch_dtype_c}, {torch_dtype_c}, {torch_dtype_p}, {torch_dtype_lock},
         M, N, K,
@@ -107,15 +110,16 @@ def matmul_{configStr}(M, N, K, am, ak, bk, bn, cm, cn, biasn):
         BLOCK_SIZE_K = {block_k},
         GROUP_SIZE_M = {group_m},
         NUM_SMS = {num_sms},
+        STREAMK_TILES= streamk_tiles,
         NUM_XCDS = {num_xcds},
         num_warps = {num_warps},
         num_stages = {num_stages},
         waves_per_eu = {waves_per_eu},
         matrix_instr_nonkdim = {mfmaInstrSize},
         kpack = {kpack},
-        BIAS={use_bias},
-        EVEN_K={EVEN_K},
-        grid=(1,),
+        BIAS= {use_bias},
+        EVEN_K= {EVEN_K},
+        grid= (1,),
     )
     return None
 
@@ -132,6 +136,9 @@ def try_compile_config_{configStr}(M, N, K, am, ak, bk, bn, cm, cn, biasn):
         matmul_def_str = f"""
 def matmul_{configStr}(a, b, c, bias, P, locks, M, N, K, am, ak, bk, bn, cm, cn, biasn):
     grid = {num_sms}
+    m_tiles = triton.cdiv(M, {block_m})
+    n_tiles = triton.cdiv(N, {block_n})
+    streamk_tiles= m_tiles*n_tiles % {num_sms}
     streamk_gemm_{configStr}[grid,](
         a, b, c, bias, P, locks,
         M, N, K,
@@ -141,6 +148,7 @@ def matmul_{configStr}(a, b, c, bias, P, locks, M, N, K, am, ak, bk, bn, cm, cn,
         BLOCK_SIZE_K = {block_k},
         GROUP_SIZE_M = {group_m},
         NUM_SMS = {num_sms},
+        STREAMK_TILES= streamk_tiles,
         NUM_XCDS = {num_xcds},
         num_warps = {num_warps},
         num_stages = {num_stages},
