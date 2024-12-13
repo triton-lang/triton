@@ -1092,31 +1092,33 @@ LinearLayout chooseStMatrixLayoutNoLeadingOffset(MLIRContext *ctx,
           {{S("offset"), ret.getTotalOutDimSize()}, {S("iteration"), 1}});
 }
 
-LinearLayout chooseLdMatrixLayoutNoLeadingOffset(MLIRContext *ctx,
-                                                 SharedEncodingAttr shared,
-                                                 DotOperandEncodingAttr dot,
-                                                 ArrayRef<int64_t> shape) {
+LinearLayout chooseDotLdMatrixLayout(DotOperandEncodingAttr dot,
+                                     ArrayRef<int64_t> shape, bool needTrans,
+                                     int32_t elemBitWidth) {
+  auto ctx = dot.getContext();
   auto mma = cast<NvidiaMmaEncodingAttr>(dot.getParent());
   auto rank = shape.size();
   auto opIdx = dot.getOpIdx();
-  int kDim = opIdx == 0 ? rank - 1 : rank - 2;
+  int kDim = (opIdx == 0) ? rank - 1 : rank - 2;
 
   StringAttr kReg = S("register");
   StringAttr kLane = S("lane");
   StringAttr kWarp = S("warp");
   StringAttr kBlock = S("block");
-  StringAttr kInner = opIdx == 0 ? S("dim1") : S("dim0");
-  StringAttr kOuter = opIdx == 0 ? S("dim0") : S("dim1");
+  StringAttr kInner = opIdx == 0 ? (needTrans ? S("dim0") : S("dim1"))
+                                 : (needTrans ? S("dim1") : S("dim0"));
+  StringAttr kOuter = opIdx == 0 ? (needTrans ? S("dim1") : S("dim0"))
+                                 : (needTrans ? S("dim0") : S("dim1"));
 
-  std::vector<std::vector<int>> basesReg = {{0, 1}, {0, 2}, {0, 4}};
-  std::vector<std::vector<int>> basesLane;
-  auto numRowsPerTile = 16;
-  auto numColsPerTile = 16;
-  int vecSize = shared.getVec();
-  int perPhase = shared.getPerPhase();
-  int maxPhase = shared.getMaxPhase();
-  auto warpsPerCTA = mma.getWarpsPerCTA();
-  // Construct a 16x16 tile consisting of 4 sub-tiles to use ldmatrix
+  std::vector<std::vector<int>> basesReg;
+  for (int logReg = 0; logReg < llvm::Log2_32(8 * 16 / elemBitWidth);
+       logReg++) {
+    auto reg = 1 << logReg;
+    basesReg.push_back({0, reg});
+  }
+  std::vector<std::vector<int>> basesLane = {{1, 0}, {2, 0}, {4, 0}};
+  int numTileCols;
+  // Construct a tile consisting of 4 8x8 sub-tiles to use ldmatrix
   // efficiently. opIdx=0 and opIdx=1 are handled differently.
   if (opIdx == 0) {
     // The matrix elements of thread 0 are distributed in the following pattern:
@@ -1124,48 +1126,50 @@ LinearLayout chooseLdMatrixLayoutNoLeadingOffset(MLIRContext *ctx,
     //           col0       col8
     //   row0  reg[0-1]   reg[4-5]
     //   row8  reg[2-3]   reg[6-7]
-    for (int logRow = 0; logRow < llvm::Log2_32(numRowsPerTile); logRow++) {
-      int row = 1 << logRow;
-      basesLane.push_back({row, vecSize * ((row / perPhase) % maxPhase)});
+    if (needTrans) {
+      assert(elemBitWidth == 16 &&
+             "Only 16-bit elements are supported in the transposed mode");
+      basesLane.push_back({0, 8});
+      basesLane.push_back({8, 0});
+    } else {
+      basesLane.push_back({8, 0});
+      basesLane.push_back({0, 8 * 16 / elemBitWidth});
     }
-    basesLane.push_back({0, numColsPerTile / 2});
-    // Expand the `register` dimension so the size of columns matches `K`.
-    for (int logCol = 0; logCol < llvm::Log2_32(shape[kDim] / numColsPerTile);
-         logCol++) {
-      int col = 1 << logCol;
-      basesReg.push_back({0, numColsPerTile * col});
-    }
+    numTileCols = 16 * 16 / elemBitWidth;
   } else {
     // The matrix elements of thread 0 are distributed in the following pattern:
     //
     //           col0       col8      col16    col24
     //   row0  reg[0-1]   reg[2-3]  reg[4-5]  reg[6-7]
-    // 8x8
-    for (int logRow = 0; logRow < llvm::Log2_32(numRowsPerTile / 2); logRow++) {
-      int row = 1 << logRow;
-      basesLane.push_back({row, vecSize * ((row / perPhase) % maxPhase)});
+    if (needTrans) {
+      assert(elemBitWidth == 16 &&
+             "Only 16-bit elements are supported in the transposed mode");
+      basesLane.push_back({8, 0});
+      basesLane.push_back({16, 0});
+    } else {
+      basesLane.push_back({0, 8 * 16 / elemBitWidth});
+      basesLane.push_back({0, 16 * 16 / elemBitWidth});
     }
-    // 8x16
-    basesLane.push_back({0, numColsPerTile / 2});
-    // 8x32
-    basesLane.push_back({0, numColsPerTile});
-    // Expand the `register` dimension so the size of columns matches `K`.
-    for (int logCol = 0;
-         logCol < llvm::Log2_32(shape[kDim] / (numColsPerTile * 2)); logCol++) {
-      int col = 1 << logCol;
-      basesReg.push_back({0, (numColsPerTile * 2) * col});
+    numTileCols = 32 * 16 / elemBitWidth;
+  }
+  // Expand the `register` dimension so the size of columns matches `K`.
+  for (int logCol = 0; logCol < llvm::Log2_32(shape[kDim] / numTileCols);
+       logCol++) {
+    int col = 1 << logCol;
+    if (needTrans) { // K is the outer dimension
+      basesReg.push_back({numTileCols * col, 0});
+    } else { // K is the inner dimension
+      basesReg.push_back({0, numTileCols * col});
     }
   }
   auto layout = LinearLayout(
       {{kReg, basesReg}, {kLane, basesLane}, {kWarp, {}}}, {kOuter, kInner});
   // Expand the `warp` dimension according to warpsPerCTA.
+  auto warpsPerCTA = mma.getWarpsPerCTA();
   layout *= broadcastedDotOperandLayout(ctx, warpsPerCTA, mma.getWarpOrder(),
                                         kDim, kWarp)
                 .transposeOuts(llvm::to_vector(layout.getOutDimNames()));
-  auto ret = combineCtaCgaWithShape(layout, getCTALayout(dot), shape);
-  return ret.transposeOuts({kInner, kOuter})
-      .reshapeOuts(
-          {{S("offset"), ret.getTotalOutDimSize()}, {S("iteration"), 1}});
+  return combineCtaCgaWithShape(layout, getCTALayout(dot), shape);
 }
 
 } // anonymous namespace
@@ -1177,6 +1181,12 @@ LinearLayout chooseStMatrixLayout(MLIRContext *ctx, RankedTensorType tensorTy,
                                                tensorTy.getShape());
   else
     return chooseStMatrixLayoutLeadingOffset(ctx, tensorTy, swizzleByteSize);
+}
+
+LinearLayout chooseLdMatrixLayout(Attribute enc, ArrayRef<int64_t> shape,
+                                  bool needTrans, int32_t elemBitWidth) {
+  auto dot = cast<DotOperandEncodingAttr>(enc);
+  return chooseDotLdMatrixLayout(dot, shape, needTrans, elemBitWidth);
 }
 
 LinearLayout chooseLdMatrixLayout(MLIRContext *ctx, Attribute sharedEnc,

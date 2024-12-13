@@ -42,15 +42,16 @@ public:
     if (isa<DotOperandEncodingAttr>(dstLayout) &&
         isa<NvidiaMmaEncodingAttr>(
             cast<DotOperandEncodingAttr>(dstLayout).getParent())) {
-      auto dot = cast<DotOperandEncodingAttr>(dstLayout);
-      auto mma = cast<NvidiaMmaEncodingAttr>(dot.getParent());
-      auto shared = cast<SharedEncodingAttr>(srcLayout);
+      auto dotEnc = cast<DotOperandEncodingAttr>(dstLayout);
+      auto mmaEnc = cast<NvidiaMmaEncodingAttr>(dotEnc.getParent());
+      auto sharedEnc = cast<SharedEncodingAttr>(srcLayout);
       auto bitwidth = dstTy.getElementTypeBitWidth();
       auto vecWidth = 32 / bitwidth;
-      auto kWidth = dot.getKWidth();
+      auto kWidth = dotEnc.getKWidth();
       auto rank = dstTy.getRank();
-      auto kOrder = dot.getOpIdx() == 0 ? rank - 1 : rank - 2;
-      auto needTrans = kOrder != shared.getOrder()[0];
+      auto kOrder = dotEnc.getOpIdx() == 0 ? rank - 1 : rank - 2;
+      auto noneKOrder = dotEnc.getOpIdx() == 0 ? rank - 2 : rank - 1;
+      auto needTrans = kOrder != sharedEnc.getOrder()[0];
       // Limitation 1: Cannot use ldmatrix if we need to transpose a non-fp16
       // matrix
       // Limitation 2: If kWidth is greater than the vector width of the dot
@@ -59,32 +60,28 @@ public:
       // supported yet
       auto canUseLdmatrixLegacy = (bitwidth == 16 || (!needTrans)) &&
                                   (kWidth == vecWidth) &&
-                                  (!shared.getHasLeadingOffset());
-      if (mma.isHopper()) {
+                                  (!sharedEnc.getHasLeadingOffset());
+      if (mmaEnc.isHopper()) {
         // Limitation 4 [TODO: remove]:
         // I think we should be able to remove this condition, but it's here
         // as the legacy ldmatrix path does not support it
         canUseLdmatrixLegacy &= srcTy.getElementTypeBitWidth() * kWidth == 32 &&
-                                dot.getOpIdx() == 0;
+                                dotEnc.getOpIdx() == 0;
       }
       // Limitation 5: If we perform swizzling, it must be done within a single
       // ldmatrix tile
       // Limitation 6 [TODO: remove]: Only support 2d matrices now but we should
       // be able to support 3D minor changes
-      auto maxPhase = shared.getMaxPhase();
-      auto perPhase = shared.getPerPhase();
+      auto maxPhase = sharedEnc.getMaxPhase();
+      auto perPhase = sharedEnc.getPerPhase();
       canUseLdmatrixLegacy &=
           dstTy.getRank() <= 2 && (maxPhase / perPhase <= 8);
-      auto allocShape = srcTy.getAllocShape();
       auto shape = srcTy.getShape();
-      // Limitation 7 [TODO: remove]: The LL-path doesn't support sliced shared
-      // memory, transpose, or non-16-bit types
-      auto canUseLdmatrixLL =
-          canUseLdmatrixLegacy && bitwidth == 16 && !needTrans &&
-          isSimpleSharedMemoryAccess(shape, allocShape, shared);
-      if (dot.getOpIdx() == 0) {
+      auto allocShape = srcTy.getAllocShape();
+      auto canUseLdmatrixLL = canUseLdmatrixLegacy;
+      if (dotEnc.getOpIdx() == 0) {
         canUseLdmatrixLL &=
-            srcTy.getShape()[0] >= 16 && srcTy.getShape()[1] >= 16;
+            shape[kOrder] >= (16 * 16 / bitwidth) && shape[noneKOrder] >= 16;
       } else {
         // Limitation 8 [TODO: remove]: Due to the use of ldmatrix.x4, we need
         // to read 4 tiles. For opIdx=1, a single warp load four consecutive
@@ -94,7 +91,7 @@ public:
         // It might be better to use ldmatrix.x2 in such a case instead of
         // abandoning elements.
         canUseLdmatrixLL &=
-            srcTy.getShape()[0] >= 32 && srcTy.getShape()[1] >= 16;
+            shape[kOrder] >= (32 * 16 / bitwidth) && shape[noneKOrder] >= 16;
       }
       // Limitation 9 [TODO: remove]:
       // If we remove this one, ldmatrix will IMA. It can probably be relaxed
@@ -152,44 +149,82 @@ private:
     auto loc = op.getLoc();
     auto dstTy = cast<RankedTensorType>(op.getType());
     auto srcTy = cast<MemDescType>(op.getSrc().getType());
-    auto dot = cast<DotOperandEncodingAttr>(dstTy.getEncoding());
-    auto shared = cast<SharedEncodingAttr>(srcTy.getEncoding());
+    auto dotEnc = cast<DotOperandEncodingAttr>(dstTy.getEncoding());
+    auto sharedEnc = cast<SharedEncodingAttr>(srcTy.getEncoding());
     auto shape = dstTy.getShape();
-    auto layout = chooseLdMatrixLayout(ctx, shared, dot, shape);
+    auto rank = dstTy.getRank();
+    auto kOrder = dotEnc.getOpIdx() == 0 ? rank - 1 : rank - 2;
+    auto noneKOrder = dotEnc.getOpIdx() == 0 ? rank - 2 : rank - 1;
+    auto needTrans = kOrder != sharedEnc.getOrder()[0];
+
     auto llvmElemTy = typeConverter->convertType(dstTy.getElementType());
+    auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
+    auto ldmatrixLayout =
+        chooseLdMatrixLayout(dotEnc, shape, needTrans, bitwidth);
+    auto sharedLayout = toLinearLayout(shape, sharedEnc);
+    auto ldmatrixToSharedLayout = ldmatrixLayout.invertAndCompose(sharedLayout);
+
+    auto allocShape = srcTy.getAllocShape();
+    auto allocSharedLayout =
+        toLinearLayout(allocShape.take_back(rank), sharedEnc, bitwidth);
+    auto invertAllocSharedLayout = allocSharedLayout.invert();
+
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                          llvmElemTy, rewriter);
-    auto smemPtrTy = ptr_ty(ctx, 3);
+    auto smemOffsets = smemObj.getOffsets();
+    auto smemStrides = smemObj.getStrides(srcTy, loc, rewriter);
+    Value baseToAllocBaseDist =
+        mlir::dot(rewriter, loc, smemOffsets, smemStrides);
 
     auto kRegister = str_attr("register");
     auto kLane = str_attr("lane");
     auto kWarp = str_attr("warp");
     auto kBlock = str_attr("block");
-
     auto [laneId, warpId, blockId] =
         emitHardwareTuple(loc, rewriter, targetInfo, /*withCTAOffset=*/0,
-                          layout.getInDimSize(kLane));
+                          ldmatrixToSharedLayout.getInDimSize(kLane));
 
-    auto regBase = applyLinearLayout(loc, rewriter, layout,
+    auto regBase = applyLinearLayout(loc, rewriter, ldmatrixToSharedLayout,
                                      {{kRegister, i32_val(0)},
                                       {kLane, laneId},
                                       {kWarp, warpId},
                                       {kBlock, i32_val(0)}})[0]
                        .second;
-    auto numRegs = layout.getInDimSize(kRegister);
-    auto vecSize = layout.getNumConsecutiveInOut();
+    auto numRegs = ldmatrixToSharedLayout.getInDimSize(kRegister);
+    auto vecSize = ldmatrixToSharedLayout.getNumConsecutiveInOut();
     auto matTy =
         LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, i32_ty));
     SmallVector<Value> elemsI32;
+    auto smemPtrTy = ptr_ty(ctx, 3);
     for (int i = 0; i < numRegs; i += vecSize) {
-      auto regOffset =
-          layout.apply({{kRegister, i}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}})[0]
-              .second;
-      Value offset = xor_(regBase, i32_val(regOffset));
+      Value offset;
+      if (isSimpleSharedMemoryAccess(shape, allocShape, sharedEnc)) {
+        auto regOffset =
+            ldmatrixToSharedLayout
+                .apply({{kRegister, i}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}})[0]
+                .second;
+        offset = xor_(regBase, i32_val(regOffset));
+      } else {
+        auto multiDimTensorOffsets =
+            llvm::to_vector(applyLinearLayout(loc, rewriter, ldmatrixLayout,
+                                              {{kRegister, i32_val(i)},
+                                               {kLane, laneId},
+                                               {kWarp, warpId},
+                                               {kBlock, i32_val(0)}}));
+        for (auto i = 0; i < rank; i++) {
+          multiDimTensorOffsets[i].second =
+              add(multiDimTensorOffsets[i].second, smemOffsets[i]);
+        }
+        offset = applyLinearLayout(loc, rewriter, invertAllocSharedLayout,
+                                   multiDimTensorOffsets)[0]
+                     .second;
+        offset = sub(offset, baseToAllocBaseDist);
+      }
       auto vecAddr = gep(smemPtrTy, llvmElemTy, smemObj.getBase(), offset);
       vecAddr.setInbounds(true);
+
       auto ldMatrixOp = rewriter.create<nvgpu::LoadMatrixOp>(
-          loc, matTy, vecAddr, /*needTrans=*/false);
+          loc, matTy, vecAddr, /*needTrans=*/needTrans);
       auto resV4 = ldMatrixOp.getResult();
       elemsI32.push_back(extract_val(i32_ty, resV4, 0));
       elemsI32.push_back(extract_val(i32_ty, resV4, 1));
@@ -198,7 +233,7 @@ private:
     }
 
     SmallVector<Value> elems;
-    auto numElemsPerVec = 32 / llvmElemTy.getIntOrFloatBitWidth();
+    auto numElemsPerVec = 32 / bitwidth;
     auto vecTy = vec_ty(llvmElemTy, numElemsPerVec);
     for (int v = 0; v < static_cast<int>(elemsI32.size()); ++v) {
       auto vec = bitcast(elemsI32[v], vecTy);

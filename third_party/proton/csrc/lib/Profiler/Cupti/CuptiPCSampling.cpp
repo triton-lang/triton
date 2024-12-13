@@ -378,10 +378,10 @@ void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
           if (isAPI)
             scopeId = data->addOp(externId, lineInfo.functionName);
           if (lineInfo.fileName.size())
-            scopeId = data->addOp(scopeId,
-                                  lineInfo.dirName + "/" + lineInfo.fileName +
-                                      ":" + lineInfo.functionName + "@" +
-                                      std::to_string(lineInfo.lineNumber));
+            scopeId = data->addOp(
+                scopeId, lineInfo.dirName + "/" + lineInfo.fileName + ":" +
+                             std::to_string(lineInfo.lineNumber) + "@" +
+                             lineInfo.functionName);
           auto metricKind = static_cast<PCSamplingMetric::PCSamplingMetricKind>(
               configureData->stallReasonIndexToMetricIndex
                   [stallReason->pcSamplingStallReasonIndex]);
