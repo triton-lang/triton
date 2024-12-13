@@ -11,9 +11,10 @@ os.environ["AMD_PYTORCH_NO_CUDA_MEMORY_CACHING"] = "1"
 os.environ["PYTORCH_NO_HIP_MEMORY_CACHING"] = "1"
 os.environ["TRITON_ENABLE_ASAN"] = "1"
 
-# XNACK setting here is require to set the xnack+ setting for the GPU at runtime
-# if this is not set and the xnack setting is configured be defult for xnack-
-# a runtime error some like "No kernel image found" will occur
+# HSA_XNACKhere is require to set the xnack+ setting for the GPU at runtime
+# if this is not set and the default xnack setting of the system is -xnack
+# a runtime error something like "No kernel image found" will occur. The system
+# xnack setting can be found through rocminfo.
 os.environ["HSA_XNACK"] = "1"
 
 
