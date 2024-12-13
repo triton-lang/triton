@@ -3,7 +3,6 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/Verifier.h"
-#include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -32,11 +31,17 @@ static SmallVector<scf::ForOp> getLeafForOps(triton::FuncOp funcOp) {
 }
 
 // Return true if the given ForOp contains a pure matmul problem; i.e.,
-// single dot in the main loop.
+// single dot and at least 2 glboal loads in the main loop.
 static bool isPureMatmulProblem(scf::ForOp forOp) {
-  int counter = 0;
-  forOp.walk([&counter](triton::DotOp dotOp) { ++counter; });
-  return counter == 1;
+  int dotCounter = 0;
+  int loadCounter = 0;
+  forOp.walk([&](Operation *op) {
+    if (isa<triton::DotOp>(op))
+      ++dotCounter;
+    else if (isa<triton::LoadOp>(op))
+      ++loadCounter;
+  });
+  return dotCounter == 1 && loadCounter >= 2;
 }
 
 // Search through block to find earliest insertion point for move op. This can
