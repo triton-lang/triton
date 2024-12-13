@@ -563,7 +563,7 @@ class JITFunction(KernelInterface[T]):
         self.specialised_indices = [
             i for (i, p) in enumerate(self.params) if (not p.do_not_specialize) and (not p.is_constexpr)
         ]
-        return [target, backend, binder]
+        return {}, target, backend, binder
 
     def run(self, *args, grid, warmup, **kwargs):
         kwargs["debug"] = kwargs.get("debug", self.debug) or os.environ.get("TRITON_DEBUG", "0") == "1"
@@ -576,20 +576,15 @@ class JITFunction(KernelInterface[T]):
         for hook in self.pre_run_hooks:
             hook(*args, **kwargs)
 
-        # This is a length-4 list [kernel_cache, target, backend, binder]:
-        device_cache = self.device_caches[device]
-        if len(device_cache) == 1:
-            device_cache[1:] = self.create_binder()
-        bound_args, sig_and_spec, constexpr_vals, non_constexpr_vals, excess_kwargs = device_cache[3](*args, **kwargs)
+        dc, target, backend, binder = self.device_caches[device]
+        bound_args, sig_and_spec, constexpr_vals, non_constexpr_vals, excess_kwargs = binder(*args, **kwargs)
 
         # compute cache key
         key = ''.join(sig_and_spec) + str((constexpr_vals, excess_kwargs))
-        kernel = device_cache[0].get(key, None)
+        kernel = dc.get(key, None)
 
         if kernel is None:
             # Kernel is not cached; we have to compile.
-            target = device_cache[1]
-            backend = device_cache[2]
             options = backend.parse_options(kwargs)
 
             # deprecated arguments
@@ -621,7 +616,7 @@ class JITFunction(KernelInterface[T]):
             # compile the kernel
             src = self.ASTSource(self, signature, constexprs, attrs)
             kernel = self.compile(src, target=target, options=options.__dict__)
-            device_cache[0][key] = kernel
+            dc[key] = kernel
             self._call_hook(key, signature, device, constexprs, options, [attrs], warmup, before=False)
 
         # Check that used global values have not changed.
@@ -671,7 +666,7 @@ class JITFunction(KernelInterface[T]):
         self.src = textwrap.dedent(inspect.getsource(fn))
         self.src = self.src[re.search(r"^def\s+\w+\s*\(", self.src, re.MULTILINE).start():]
         # cache of just-in-time compiled kernels
-        self.device_caches = defaultdict(lambda: [{}])
+        self.device_caches = defaultdict(lambda: self.create_binder())
         self.hash = None
 
         # Map of global variables used by the function and any functions it
