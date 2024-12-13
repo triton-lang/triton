@@ -62,7 +62,7 @@ class MetaData():
 
     def set_persistent(self, persistent):
         self.persistent = persistent
-    
+
     def need_bias(self, bias, batch, nheads, seqlen_q, seqlen_k):
         assert bias.is_cuda
         assert bias.dim() == 4
