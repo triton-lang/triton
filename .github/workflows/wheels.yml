@@ -71,7 +71,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: cibw-wheels-manylinux2014-wheels-upload
+          name: cibw-wheels-manylinux_2_28_x86_64-wheels-upload
           path: ./wheelhouse/*.whl
 
       - name: Install Azure CLI
