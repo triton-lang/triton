@@ -1961,9 +1961,12 @@ def run_benchmark(custom, args):
             fn = lambda: o.backward(do, retain_graph=True)
         ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
         total_flops = 2 * flops_per_matmul
-        # TODO: This needs to be fixed for unequal Q/K seqlens
         if causal:
-            total_flops *= 0.5
+            # total_flops *= 0.5 # normally, but we have to take into account the unequal seqlen_q/k
+            if seqlen_q > seqlen_k:
+                total_flops *= seqlen_k / (2 * seqlen_q)
+            else:
+                total_flops *= 1 - seqlen_q / (2 * seqlen_k)
         if mode == "bwd":
             total_flops *= 2.5  # 2.0(bwd) + 0.5(recompute)
         if print_time:
