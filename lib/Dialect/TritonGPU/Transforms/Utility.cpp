@@ -770,11 +770,11 @@ static bool isFreeConvert(Operation *op) {
                               convertOp.getType());
 }
 
-LogicalResult
-getConvertBackwardSlice(Value root, SetVector<Value> &slice,
-                        Attribute rootEncoding,
-                        DenseMap<Value, Attribute> &layout,
-                        std::function<bool(Operation *)> stopPropagation) {
+LogicalResult getConvertBackwardSlice(
+    Value root, SetVector<Value> &slice, Attribute rootEncoding,
+    DenseMap<Value, Attribute> &layout,
+    std::function<bool(Operation *)> stopPropagation,
+    std::function<Value(Value, Attribute)> getExistingConversion) {
   DenseSet<std::pair<Value, Attribute>> seen;
   SmallVector<std::pair<Value, Attribute>> queue;
 
@@ -812,6 +812,12 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
       enqueue(thenValue, encoding);
       enqueue(elseValue, encoding);
 
+      continue;
+    }
+    Value existing;
+    if (getExistingConversion &&
+        (existing = getExistingConversion(currentValue, encoding))) {
+      enqueue(existing, encoding);
       continue;
     }
     if (auto *definingOp = currentValue.getDefiningOp()) {
