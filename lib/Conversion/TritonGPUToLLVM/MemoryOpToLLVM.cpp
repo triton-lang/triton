@@ -147,7 +147,7 @@ public:
             srcTy.getShape()[1] >= 4 * kWidth & dstTy.getRank() <= 2;
         return !canUseLdmatrix;
       }
-      if (isa<AMDMfmaEncodingAttr>(dot.getParent()))
+      if (isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>(dot.getParent()))
         return true;
     }
     return false;
