@@ -124,22 +124,9 @@ FailureOr<MfmaInsn> chooseMfmaInstruction(RankedTensorType cType,
       mDim = 16;
       nDim = 16;
     }
-    if (minSize < 16) {
-      if (M < 16 && N >= 64) {
-        mDim = 4;
-        nDim = 64;
-      } else if (M >= 64 && N < 16) {
-        mDim = 64;
-        nDim = 4;
-      } else {
-        assert(inputKSize >= 64 &&
-               "k should be at least 64 to use this layout");
-        mDim = 4;
-        nDim = 4;
-      }
-    }
   }
-  assert(mDim != 0 && nDim != 0);
+  if (mDim == 0 || nDim == 0)
+    return failure();
 
   auto maybeMfmaInsn =
       MfmaInsn::selectMfma(mDim, nDim, aElemType, bElemType, mfmaVersion);
@@ -148,7 +135,7 @@ FailureOr<MfmaInsn> chooseMfmaInstruction(RankedTensorType cType,
 
   kDim = maybeMfmaInsn->getKDim();
   assert(kDim != 0);
-  assert(M % mDim == 0 && N % nDim == 0);
+  assert(enforcedNonKDim != 0 || (M % mDim == 0 && N % nDim == 0));
   // if inputKSize % kDim != 0 this layout will introduce data duplication,
   // consider FMA dot is prefered, except cases MFMA layout is enforced.
   if (enforcedNonKDim == 0 && inputKSize % kDim != 0)
