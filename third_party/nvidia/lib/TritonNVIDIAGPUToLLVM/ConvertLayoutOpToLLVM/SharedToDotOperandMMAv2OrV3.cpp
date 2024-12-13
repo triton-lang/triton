@@ -822,12 +822,12 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   auto expandedEncoding =
       cast<DotOperandEncodingAttr>(getExpandedEncoding(encoding));
   if (opIdx == 0)
-    return loadArg(rewriter, loc, expandedDescTy, expandedEncoding, smemObj,
-                   typeConverter, thread, true);
+    return loadArg(rewriter, loc, descTy, encoding, smemObj, typeConverter,
+                   thread, true);
   else {
     assert(opIdx == 1);
-    return loadArg(rewriter, loc, expandedDescTy, expandedEncoding, smemObj,
-                   typeConverter, thread, false);
+    return loadArg(rewriter, loc, descTy, encoding, smemObj, typeConverter,
+                   thread, false);
   }
 }
 } // namespace SharedToDotOperandMMAv2OrV3

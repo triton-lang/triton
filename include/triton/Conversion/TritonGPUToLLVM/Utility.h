@@ -268,41 +268,43 @@ struct SharedMemoryObject {
   // Offsets are applied at the last slicing operation.
   // We can use offsets to recover the previous base.
   // The offsets are zero at the initial allocation.
+  SmallVector<unsigned> order; // The order of the dimensions.
 
   SharedMemoryObject(Value base, Type baseElemType, ArrayRef<Value> strides,
                      ArrayRef<Value> offsets)
       : base(base), baseElemType(baseElemType),
         strides(strides.begin(), strides.end()),
-        offsets(offsets.begin(), offsets.end()) {}
+        offsets(offsets.begin(), offsets.end()) {
+    assert(strides.size() == offsets.size());
+    order = triton::gpu::getMatrixOrder(strides.size(), /*rowMajor=*/true);
+  }
 
   SharedMemoryObject(Value base, Type baseElemType, ArrayRef<int64_t> shape,
                      ArrayRef<unsigned> order, Location loc,
                      RewriterBase &rewriter)
-      : base(base), baseElemType(baseElemType) {
+      : base(base), baseElemType(baseElemType), order(order) {
     strides = getStridesFromShapeAndOrder(shape, order, loc, rewriter);
-    offsets.append(order.size(), i32_val(0));
   }
 
   SharedMemoryObject(Value base, Type baseElemType, ArrayRef<int64_t> shape,
                      triton::gpu::SharedEncodingAttr layout, Location loc,
                      RewriterBase &rewriter)
       : base(base), baseElemType(baseElemType) {
-    SmallVector<unsigned> order(shape.size());
-    // minor-to-major order
-    std::iota(order.rbegin(), order.rend(), 0);
+    auto layoutOrder = convertType<unsigned>(layout.getOrder());
     if (layout.getMaxPhase() > 1) { // Swizzling
-      auto layoutOrder = layout.getOrder();
       assert(layoutOrder.size() == 2 && shape.size() >= 2 &&
              "Swizzling requires at least 2 dimensions");
-      auto rankDiff = shape.size() - layoutOrder.size();
-      order[0] = layoutOrder[0] + rankDiff;
-      order[1] = layoutOrder[1] + rankDiff;
+      bool rowMajor = layoutOrder[0] == 1;
+      order = triton::gpu::getMatrixOrder(shape.size(), rowMajor);
+    } else {
+      order = layoutOrder;
     }
-    SharedMemoryObject(base, baseElemType, shape, order, loc, rewriter);
+    strides = getStridesFromShapeAndOrder(shape, order, loc, rewriter);
   }
 
   SmallVector<Value> getStrides() const { return strides; }
   SmallVector<Value> getOffsets() const { return offsets; }
+  SmallVector<unsigned> getOrder() const { return order; }
   Value getBase() const { return base; }
   Type getBaseElemType() const { return baseElemType; }
 
@@ -322,14 +324,14 @@ struct SharedMemoryObject {
     return types;
   }
 
-  Value getCSwizzleOffset(int order) const {
-    assert(order >= 0 && order < strides.size());
-    return offsets[order];
+  Value getCSwizzleOffset(int dim) const {
+    assert(dim >= 0 && dim < strides.size());
+    return offsets[dim];
   }
 
-  Value getBaseBeforeSlice(int order, Location loc,
+  Value getBaseBeforeSlice(int dim, Location loc,
                            RewriterBase &rewriter) const {
-    Value cSwizzleOffset = getCSwizzleOffset(order);
+    Value cSwizzleOffset = getCSwizzleOffset(dim);
     Value offset = sub(i32_val(0), cSwizzleOffset);
     Type type = base.getType();
     return gep(type, baseElemType, base, offset);

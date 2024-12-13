@@ -189,9 +189,9 @@ Value getSmemVecAddr(RankedTensorType registerTy,
       dyn_cast<triton::gpu::SharedEncodingAttr>(sharedTy.getEncoding());
 
   auto smemBase = smemObj.getBase();
-  auto sharedOrder = triton::gpu::getOrder(sharedTy.getEncoding());
   auto smemOffsets = smemObj.getOffsets();
   auto smemStrides = smemObj.getStrides();
+  auto smemOrder = smemObj.getOrder();
   Value smemOffset;
   // When loading or storing to shared memory, we consider two cases for
   // performance reasons:
@@ -239,7 +239,7 @@ Value getSmemVecAddr(RankedTensorType registerTy,
     // Reorder strides according to `order`.  This way they match the
     // multi-dimensional offsets in regToSharedLayout.
     smemOffset = dot(rewriter, loc, smemOffsets,
-                     applyPermutation(smemStrides, sharedOrder));
+                     applyPermutation(smemStrides, smemOrder));
   } else { // Case 2 -> rank-reduced swizzling
     assert(rank >= 2 && "Swizzling only applies to tensors with rank >= 2");
     assert(!sharedEnc.getHasLeadingOffset() &&
@@ -574,6 +574,7 @@ SmallVector<Value> getStridesFromShapeAndOrder(ArrayRef<int64_t> shape,
                                                ArrayRef<unsigned> order,
                                                Location loc,
                                                RewriterBase &rewriter) {
+  assert(order.size() == shape.size() && "shape and order must have same size");
   auto rank = shape.size();
   SmallVector<Value> strides(rank);
   int64_t stride = 1;
