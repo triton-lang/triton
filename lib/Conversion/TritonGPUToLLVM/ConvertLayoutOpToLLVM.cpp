@@ -312,7 +312,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       // Case 3. Transfer between values in the same warp, in which case we try
       //         to move values using warp shuffles, though if the pattern is
       //         complicated enough we may fall back to using shared memory
-      transferWithinWarp(op, srcLayout, dstLayout, adaptor, rewriter);
+      transferWithinWarp(op, srcLayout, dstLayout, *conversion, adaptor,
+                         rewriter);
       return success();
     } else if (llvm::is_contained(dims, kRegister)) {
       // Case 4. Transfer between values in the same thread, in which case we
@@ -452,7 +453,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
   // Use warp shuffles to implement a layout conversion where data only needs to
   // be moved within warps.
   void transferWithinWarp(ConvertLayoutOp op, const LinearLayout &srcLayout,
-                          const LinearLayout &dstLayout, OpAdaptor adaptor,
+                          const LinearLayout &dstLayout,
+                          const LinearLayout &conversion, OpAdaptor adaptor,
                           ConversionPatternRewriter &rewriter) const;
 
   SmallVector<Value>
@@ -664,7 +666,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
 void ConvertLayoutOpUsingLinearLayoutsConversion::transferWithinWarp(
     ConvertLayoutOp op, const LinearLayout &A, const LinearLayout &B,
-    OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const {
+    const LinearLayout &conversion, OpAdaptor adaptor,
+    ConversionPatternRewriter &rewriter) const {
   MLIRContext *ctx = op.getContext();
   Location loc = op.getLoc();
   StringAttr kRegister = str_attr("register");
@@ -676,13 +679,16 @@ void ConvertLayoutOpUsingLinearLayoutsConversion::transferWithinWarp(
   // Let `A` be the source layout and `B` be the destination layout. If `C`
   // is a linear transformation that maps `A` to `B`, then it is defined as
   // `C = A^-1 * B`.
-  LinearLayout C = A.invertAndCompose(B);
+  LinearLayout C = B.invertAndCompose(A);
 
   // We have already checked that data movement is only required within a warp,
   // thus we can discard the block and warp dimensions. At the same time,
   // because `A` and `B` are distributed layouts (subpermutation matrices), we
   // know the transformation from `A` to `B` is invariant to the register ID.
   // Reduce `C` to a transformation from source lane to destination lane.
+  assert(C.sublayoutIsZero(kLane, kRegister) &&
+         C.sublayoutIsZero(kRegister, kLane) &&
+         "expected a subpermutation matrix");
   C = C.sublayout({kLane}, {kLane});
 
   // Warp shuffles are affine transformations on the lane ID. Thus, the goal is
@@ -789,9 +795,25 @@ void ConvertLayoutOpUsingLinearLayoutsConversion::transferWithinWarp(
   // `b & ~segmask` is just `b` since `segmask` is zero a bit is set into `b`.
   Value idx = or_(and_(laneId, i32_val(segmask)), b);
 
-  // Now perform the shuffle for each register.
+  // For each destination register, determine which set of source registers to
+  // shuffle from. We know this is invariant to the lane ID. `conversion` is the
+  // inverse of `C`, mapping from destination to source.
   SmallVector<Value> inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-  SmallVector<Value> outVals;
+  SmallVector<Value> outVals(conversion.getInDimSize(kLane));
+  SmallVector<Value> shuffledIns(inVals.size());
+  for (int outIdx : llvm::seq(outVals.size())) {
+    auto [reg, srcIdx] = conversion.apply({{kLane, outIdx}}).front();
+    assert(reg == kRegister);
+    // Lazily shuffle the value over.
+    Value &shuffledIn = shuffledIns[srcIdx];
+    if (!shuffledIn) {
+      // Shuffle using the set of registers corresponding to `srcIdx`. The lane
+      // ID to use is the same.
+      shuffledIn = targetInfo.shuffleIdx(rewriter, loc, inVals[srcIdx], idx);
+    }
+    outVals[outIdx] = shuffledIn;
+  }
+
   for (Value inVal : inVals) {
     outVals.push_back(targetInfo.shuffleIdx(rewriter, loc, inVal, idx));
   }
