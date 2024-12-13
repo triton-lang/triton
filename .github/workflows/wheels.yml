@@ -59,8 +59,6 @@ jobs:
           # of RAM and OOMs while building if we give it the default number of
           # workers (2 * NUM_CPUs).
           export CIBW_ENVIRONMENT="MAX_JOBS=4 \
-                  TRITON_WHEEL_NAME=triton-nightly \
-                  TRITON_WHEEL_VERSION_SUFFIX=-$LATEST_DATE \
                   TRITON_BUILD_WITH_CLANG_LLD=1"
           export CIBW_MANYLINUX_X86_64_IMAGE="quay.io/pypa/manylinux_2_28_x86_64:latest"
           #export CIBW_MANYLINUX_PYPY_X86_64_IMAGE="quay.io/pypa/manylinux_2_28_x86_64:latest"
