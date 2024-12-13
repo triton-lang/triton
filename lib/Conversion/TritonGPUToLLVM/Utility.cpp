@@ -110,7 +110,7 @@ std::tuple<Value, Value, Value> emitHardwareTuple(Location loc,
   Value warpId = udiv(threadId, threadsPerWarp);
   Value blockId =
       withCTAOffset ? target.getClusterCTAId(rewriter, loc) : i32_val(0);
-  return {blockId, warpId, laneId};
+  return {laneId, warpId, blockId};
 }
 
 SmallVector<SmallVector<Value>>
@@ -130,7 +130,7 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
   StringAttr kWarp = str_attr("warp");
   StringAttr kBlock = str_attr("block");
 
-  auto [blockId, warpId, laneId] = emitHardwareTuple(
+  auto [laneId, warpId, blockId] = emitHardwareTuple(
       loc, rewriter, target, withCTAOffset, ll->getInDimSize(kLane));
   unsigned rank = shape.size();
   SmallVector<SmallVector<Value>> ret;
@@ -353,7 +353,7 @@ bool emitTransferBetweenRegistersAndShared(
       std::min(regToSharedLayout->getNumConsecutiveInOut(),
                maxVecElems.value_or(std::numeric_limits<int>::max()));
 
-  auto [blockId, warpId, laneId] =
+  auto [laneId, warpId, blockId] =
       emitHardwareTuple(loc, rewriter, target, /*withCTAOffset=*/false,
                         regToSharedLayout->getInDimSize(kLane));
 
@@ -634,6 +634,19 @@ SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
   return multiDim;
 }
 
+SmallVector<unsigned> delinearize(unsigned linear, ArrayRef<unsigned> shape,
+                                  ArrayRef<unsigned> order) {
+  auto rank = shape.size();
+  assert(order.size() == rank);
+  SmallVector<unsigned> multiDim(rank);
+  for (auto dim : order) {
+    multiDim[dim] = linear % shape[dim];
+    linear /= shape[dim];
+  }
+  assert(linear == 0);
+  return multiDim;
+}
+
 Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
                 ArrayRef<unsigned> shape, ArrayRef<unsigned> order) {
   return linearize(rewriter, loc, applyPermutation(multiDim, order),
@@ -652,6 +665,14 @@ Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
       linear = add(mul(linear, dimSize), dim);
     }
   }
+  return linear;
+}
+
+size_t linearize(ArrayRef<unsigned> multiDim, ArrayRef<unsigned> shape,
+                 ArrayRef<unsigned> order) {
+  size_t linear = 0;
+  for (unsigned dim : llvm::reverse(order))
+    linear = linear * shape[dim] + multiDim[dim];
   return linear;
 }
 
@@ -746,7 +767,7 @@ SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
     auto instrShape = mmaLayout.getInstrShape();
     SmallVector<Value> mmaColIdx(2);
     SmallVector<Value> mmaRowIdx(2);
-    auto [blockId, warpId, laneId] = emitHardwareTuple(
+    auto [laneId, warpId, blockId] = emitHardwareTuple(
         loc, rewriter, targetInfo, /*withCTAOffset=*/false, 32);
     // TODO: fix the bug in MMAEncodingAttr document
     SmallVector<Value> multiDimWarpId(2);
@@ -892,4 +913,23 @@ Value mxfpScaleBf16(RewriterBase &rewriter, Location loc, Value v,
 };
 
 } // namespace LLVM
+
+SharedMemoryObject
+getExpandedSharedMemoryObject(ConversionPatternRewriter &rewriter, Location loc,
+                              SharedMemoryObject smemObj,
+                              ArrayRef<int64_t> shape) {
+  assert(shape.size() == 2 || shape.size() == 3);
+  auto strides = smemObj.getStrides();
+  auto offsets = smemObj.getOffsets();
+  auto rank = strides.size();
+  assert(rank == shape.size());
+  if (rank == 3)
+    return smemObj;
+  strides.insert(strides.begin(), i32_val(shape[0] * shape[1]));
+  offsets.insert(offsets.begin(), i32_val(0));
+  auto expandedSmemObj = SharedMemoryObject(
+      smemObj.getBase(), smemObj.getBaseElemType(), strides, offsets);
+  return expandedSmemObj;
+}
+
 } // namespace mlir

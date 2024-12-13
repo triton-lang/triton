@@ -29,22 +29,6 @@ using namespace mlir::triton::gpu;
 // Utility
 namespace mlir {
 namespace triton {
-
-static Type getI1SameShapeFromTensorOrTensorPtr(Type type) {
-  auto i1Type = IntegerType::get(type.getContext(), 1);
-  if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
-    return RankedTensorType::get(tensorType.getShape(), i1Type,
-                                 tensorType.getEncoding());
-  } else if (auto ptrType = dyn_cast<triton::PointerType>(type)) {
-    Type pointeeType = ptrType.getPointeeType();
-    if (auto tensorType = dyn_cast<RankedTensorType>(pointeeType)) {
-      return RankedTensorType::get(tensorType.getShape(), i1Type,
-                                   tensorType.getEncoding());
-    }
-  }
-  return Type();
-}
-
 namespace gpu {
 
 // TODO: Inheritance of layout attributes
@@ -448,19 +432,6 @@ unsigned getNumCTAs(Attribute layout) {
   return product<unsigned>(getCTAsPerCGA(layout));
 }
 
-template <typename T> bool hasEncoding(Value value) {
-  auto type = value.getType();
-  if (auto tensorType = dyn_cast<TensorOrMemDesc>(type)) {
-    auto encoding = tensorType.getEncoding();
-    return encoding && isa<T>(encoding);
-  }
-  return false;
-}
-
-bool hasDotOperandEncoding(Value value) {
-  return hasEncoding<triton::gpu::DotOperandEncodingAttr>(value);
-}
-
 bool isExpensiveCat(CatOp cat, Attribute targetEncoding) {
   // If the new elements per thread is less than the old one, we will need to
   // do convert encoding that goes through shared memory anyway. So we
@@ -627,7 +598,6 @@ LinearLayout ensureLayoutNotSmallerThan(
     return layout;
   }
 
-  MLIRContext *ctx = shape.begin()->first.getContext();
   StringAttr kDim = *layout.getInDimNames().begin();
   assert(kDim == "register" || kDim == "offset");
 
@@ -767,9 +737,6 @@ static void maybePrintCTALayout(mlir::MLIRContext *context,
 #define GET_ATTRDEF_CLASSES
 #include "triton/Dialect/TritonGPU/IR/AttrDefs.cpp.inc"
 
-SliceEncodingAttr BlockedEncodingAttr::squeeze(int axis) {
-  return SliceEncodingAttr::get(getContext(), axis, *this);
-}
 SmallVector<unsigned>
 BlockedEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
                                        Type eltTy) const {
@@ -1103,29 +1070,26 @@ unsigned DotOperandEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
     }
   }
   if (auto blockedLayout = mlir::dyn_cast<BlockedEncodingAttr>(getParent())) {
-    auto shapePerCTA = getShapePerCTA(*this, shape);
-    auto shapePerCTATile = getShapePerCTATile(blockedLayout);
-    auto order = blockedLayout.getOrder();
-    auto sizePerThread = blockedLayout.getSizePerThread();
+    auto shapePerCTA =
+        expandMatrixShapeWithBatch(ArrayRef(getShapePerCTA(*this, shape)));
+    auto shapePerCTATile =
+        expandMatrixShapeWithBatch(ArrayRef(getShapePerCTATile(blockedLayout)));
+    auto sizePerThread =
+        expandMatrixShapeWithBatch(ArrayRef(blockedLayout.getSizePerThread()));
 
-    int K = getOpIdx() == 0 ? shapePerCTA[1] : shapePerCTA[0];
-    int otherDim = getOpIdx() == 1 ? shapePerCTA[1] : shapePerCTA[0];
+    int batchDim = 0;
+    int kDim = getOpIdx() == 0 ? 2 : 1;
+    int nonKDim = getOpIdx() == 0 ? 1 : 2;
 
-    bool isM = getOpIdx() == 0;
+    int batchSize =
+        std::max<int>(shapePerCTA[batchDim] / shapePerCTATile[batchDim], 1) *
+        sizePerThread[batchDim];
+    int kSize = shapePerCTA[kDim];
+    int nonKSize =
+        std::max<int>(shapePerCTA[nonKDim] / shapePerCTATile[nonKDim], 1) *
+        sizePerThread[nonKDim];
 
-    int mSizePerThread =
-        order[0] == 1 ? sizePerThread[order[1]] : sizePerThread[order[0]];
-    int nSizePerThread =
-        order[0] == 0 ? sizePerThread[order[1]] : sizePerThread[order[0]];
-    int sizePerThreadMN = isM ? mSizePerThread : nSizePerThread;
-
-    int mShapePerCTATile =
-        order[0] == 1 ? shapePerCTATile[order[1]] : shapePerCTATile[order[0]];
-    int nShapePerCTATile =
-        order[0] == 0 ? shapePerCTATile[order[1]] : shapePerCTATile[order[0]];
-    int shapePerCTAMNTile = isM ? mShapePerCTATile : nShapePerCTATile;
-
-    return K * std::max<int>(otherDim / shapePerCTAMNTile, 1) * sizePerThreadMN;
+    return batchSize * kSize * nonKSize;
   }
   llvm_unreachable("unknown dot operand parent layout");
   return 0;
@@ -1156,11 +1120,9 @@ SmallVector<unsigned> DotOperandEncodingAttr::getWarpsPerCTA() const {
 }
 SmallVector<unsigned> DotOperandEncodingAttr::getWarpOrder() const {
   // FIXME(Lezcano): Preexisting. Do we want to have this path at all?
-  if (mlir::isa<AMDMfmaEncodingAttr>(getParent())) {
+  if (mlir::isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>(getParent())) {
     return ::getWarpOrder(getParent());
   }
-  // It's quite weird to talk about warp order when that the warps
-  // are broadcasted along the K dimension
   llvm::report_fatal_error("DotOperandEncoding::getWarpOrder not implemented");
   return {};
 }
@@ -1196,9 +1158,9 @@ LogicalResult DotOperandEncodingAttr::verify(
 
   if (auto parentAttr = mlir::dyn_cast<AMDWmmaEncodingAttr>(parent)) {
     if (kWidth != 16 && parentAttr.getVersion() == 1 ||
-        kWidth != 8 && parentAttr.getVersion() == 2)
+        kWidth != 8 && kWidth != 16 && parentAttr.getVersion() == 2)
       return emitError() << "ttg.dot_op kWidth parameter must be 16 for "
-                            "gfx11 and 8 for gfx12";
+                            "gfx11 and 8/16 for gfx12";
     return success();
   }
 
@@ -3072,392 +3034,6 @@ struct TritonGPUVerifyTensorLayoutInterface
 };
 
 //===----------------------------------------------------------------------===//
-// Canonicalizer
-//===----------------------------------------------------------------------===//
-
-// reshape(cvt) -> reshape
-struct CanonicalizeConvertFromReshape
-    : public mlir::OpRewritePattern<triton::ReshapeOp> {
-  using OpRewritePattern::OpRewritePattern;
-
-  mlir::LogicalResult
-  matchAndRewrite(triton::ReshapeOp op,
-                  PatternRewriter &rewriter) const override {
-    auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
-    if (!convert)
-      return failure();
-    if (isExpensiveView(convert.getSrc().getType(), op.getType()))
-      return failure();
-    if (!op.getAllowReorder() || op.getEfficientLayout())
-      return failure();
-
-    rewriter.replaceOpWithNewOp<triton::ReshapeOp>(
-        op, op.getType(), convert.getSrc(), op.getAllowReorder());
-    return mlir::success();
-  }
-};
-
-// histogram(cvt) -> histogram
-struct CanonicalizeConvertFromHistogram
-    : public mlir::OpRewritePattern<triton::HistogramOp> {
-  using OpRewritePattern::OpRewritePattern;
-
-  mlir::LogicalResult
-  matchAndRewrite(triton::HistogramOp op,
-                  PatternRewriter &rewriter) const override {
-    auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
-    if (!convert)
-      return failure();
-    rewriter.replaceOpWithNewOp<triton::HistogramOp>(
-        op, op->getResult(0).getType(), convert.getSrc());
-    return mlir::success();
-  }
-};
-
-// alloc(cvt) -> alloc
-struct CanonicalizeConvertFromAlloc
-    : public mlir::OpRewritePattern<triton::gpu::LocalAllocOp> {
-  using OpRewritePattern::OpRewritePattern;
-
-  mlir::LogicalResult
-  matchAndRewrite(triton::gpu::LocalAllocOp op,
-                  PatternRewriter &rewriter) const override {
-    if (!op.getSrc())
-      return failure();
-    auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
-    if (!convert)
-      return failure();
-    rewriter.replaceOpWithNewOp<triton::gpu::LocalAllocOp>(
-        op, op->getResult(0).getType(), convert.getSrc());
-    return mlir::success();
-  }
-};
-
-// local_store(cvt) -> local_store
-struct CanonicalizeConvertFromLocalStore
-    : public mlir::OpRewritePattern<triton::gpu::LocalStoreOp> {
-  using OpRewritePattern::OpRewritePattern;
-
-  mlir::LogicalResult
-  matchAndRewrite(triton::gpu::LocalStoreOp op,
-                  PatternRewriter &rewriter) const override {
-    auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
-    if (!convert)
-      return failure();
-    rewriter.replaceOpWithNewOp<triton::gpu::LocalStoreOp>(op, convert.getSrc(),
-                                                           op.getDst());
-    return mlir::success();
-  }
-};
-
-struct CanonicalizeConvertFromSplit
-    : public mlir::OpRewritePattern<triton::SplitOp> {
-  using OpRewritePattern::OpRewritePattern;
-
-  mlir::LogicalResult
-  matchAndRewrite(triton::SplitOp op,
-                  PatternRewriter &rewriter) const override {
-    auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
-    if (!convert)
-      return failure();
-    auto srcEncoding = convert.getSrc().getType().getEncoding();
-    // Multiple source layout can give the same output layout, if the source
-    // layout of the convert gives the same destination layout we can skip the
-    // convert.
-    auto dstEncoding = inferDstEncoding(op, srcEncoding);
-    if (dstEncoding != op.getOutLHS().getType().getEncoding())
-      return failure();
-    rewriter.replaceOpWithNewOp<triton::SplitOp>(op, convert.getSrc());
-    return mlir::success();
-  }
-};
-
-struct CanonicalizeConvertFromConvert
-    : public OpRewritePattern<ConvertLayoutOp> {
-  using OpRewritePattern::OpRewritePattern;
-
-  mlir::LogicalResult
-  matchAndRewrite(ConvertLayoutOp op,
-                  PatternRewriter &rewriter) const override {
-    // Convert to the same layout is redundant.
-    if (op->getResultTypes() == op->getOperandTypes()) {
-      rewriter.replaceOp(op, op->getOperands());
-      return success();
-    }
-
-    // We don't handle conversions to DotOperandEncodingAttr.  This is a
-    // heuristic to accommodate fused attention.
-    auto srcType = op.getSrc().getType();
-    auto dstType = op.getType();
-    if (mlir::isa<DotOperandEncodingAttr>(dstType.getEncoding()) &&
-        mlir::isa<NvidiaMmaEncodingAttr>(srcType.getEncoding()))
-      return failure();
-
-    // for hopper MMAv3
-    if (mlir::isa<SharedEncodingAttr>(dstType.getEncoding()) &&
-        mlir::isa<NvidiaMmaEncodingAttr>(srcType.getEncoding()) &&
-        llvm::any_of(op.getResult().getUsers(), [](Operation *dot) {
-          return dot->hasTrait<OpTrait::DotLike>();
-        })) {
-      return failure();
-    }
-
-    Operation *arg = op.getSrc().getDefiningOp();
-    if (!arg)
-      return failure();
-
-    // cvt(reshape) -> reshape
-    if (auto reshape = dyn_cast<ReshapeOp>(arg)) {
-      if (!reshape.getAllowReorder() || reshape.getEfficientLayout() ||
-          isExpensiveView(reshape.getSrc().getType(), op.getType()))
-        return failure();
-
-      // In TritonGPUToLLVM phase, ViewOp is converted to unpacking and packing
-      // operations, which requires the element type to match between unpacking
-      // and packing. However, part of values with dot operand encoding will be
-      // packed/unpacked as i32 elements instead of the underlying element type.
-      // To avoid errors, skip this folding when either the operand or result
-      // of view has a dot operand encoding.
-      if (hasDotOperandEncoding(op->getOperand(0)) ||
-          hasDotOperandEncoding(op->getResult(0)))
-        return failure();
-
-      rewriter.replaceOpWithNewOp<ReshapeOp>(op, op->getResult(0).getType(),
-                                             reshape.getResult(),
-                                             reshape.getAllowReorder());
-      return success();
-    }
-
-    // cvt(histogram) -> histogram
-    if (auto histogram = dyn_cast<HistogramOp>(arg)) {
-      // For histogram ops the input and output layouts are independent, so we
-      // can always fold convert into the histogram op.
-      rewriter.replaceOpWithNewOp<HistogramOp>(op, op->getResult(0).getType(),
-                                               histogram.getSrc());
-      return success();
-    }
-
-    // cvt(local_load) -> local_load.
-    if (auto sharedLoad = dyn_cast<LocalLoadOp>(arg)) {
-      // Shared_load can load to any layout so we can always fold convert into
-      // it.
-      // We insert at the point of the original op as there could be ops with
-      // memory side-effects between the LocalLoad op and the ConvertLayout op
-      rewriter.setInsertionPoint(arg);
-      rewriter.replaceOpWithNewOp<LocalLoadOp>(op, op->getResult(0).getType(),
-                                               sharedLoad.getSrc());
-
-      return success();
-    }
-
-    // cvt(cat) -> cat
-    if (auto cat = dyn_cast<CatOp>(arg)) {
-      if (isExpensiveCat(cat, op.getType().getEncoding()))
-        return failure();
-
-      rewriter.replaceOpWithNewOp<CatOp>(op, op->getResult(0).getType(),
-                                         cat.getOperands());
-      return success();
-    }
-
-    // cvt(cvt(x, type1), type2) -> cvt(x, type2)
-    if (auto cvt = dyn_cast<ConvertLayoutOp>(arg)) {
-      auto srcType = op.getSrc().getType();
-      rewriter.replaceOpWithNewOp<triton::gpu::ConvertLayoutOp>(
-          op, op->getResultTypes().front(), cvt.getSrc());
-      return success();
-    }
-
-    // cvt(type1, splat(type2, x)) -> splat(type1, x)
-    if (auto splat = dyn_cast<triton::SplatOp>(arg)) {
-      rewriter.replaceOpWithNewOp<triton::SplatOp>(op, op->getResultTypes(),
-                                                   splat.getSrc());
-      return success();
-    }
-
-    // cvt(type1, make_range(type2, x)) -> make_range(type1, x)
-    if (auto range = dyn_cast<MakeRangeOp>(arg)) {
-      rewriter.replaceOpWithNewOp<MakeRangeOp>(
-          op, op->getResultTypes(), range.getStart(), range.getEnd());
-      return success();
-    }
-
-    // cvt(type, constant) -> constant
-    if (auto cst = llvm::dyn_cast<arith::ConstantOp>(arg))
-      if (auto ret = dyn_cast<SplatElementsAttr>(cst.getValue())) {
-        auto ty = cast<ShapedType>(op->getResultTypes().front());
-        auto newRet =
-            SplatElementsAttr::get(ty, ret.getSplatValue<Attribute>());
-        rewriter.replaceOpWithNewOp<arith::ConstantOp>(op, newRet);
-        return success();
-      }
-    return failure();
-  }
-};
-
-void ConvertLayoutOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
-                                                  MLIRContext *context) {
-  patterns.add<CanonicalizeConvertFromConvert>(context);
-  patterns.add<CanonicalizeConvertFromReshape>(context);
-  patterns.add<CanonicalizeConvertFromHistogram>(context);
-  patterns.add<CanonicalizeConvertFromAlloc>(context);
-  patterns.add<CanonicalizeConvertFromLocalStore>(context);
-  patterns.add<CanonicalizeConvertFromSplit>(context);
-}
-
-// LocalAllocOp
-void LocalAllocOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  Operation *op = getOperation();
-  // If allocation is immutable, mark it as no side effect allow things like
-  // CSE, DCE to work in early compiler passes.
-  // After the memory offset is computed, we attach the true side effect to the
-  // op.
-  if (!getType().getMutableMemory() && !op->hasAttr("allocation.offset"))
-    return;
-  effects.emplace_back(MemoryEffects::Allocate::get(),
-                       mlir::triton::gpu::SharedMemory::get());
-  if (getSrc())
-    effects.emplace_back(MemoryEffects::Write::get(),
-                         getOperation()->getOpResult(0),
-                         mlir::triton::gpu::SharedMemory::get());
-}
-
-OpFoldResult LocalAllocOp::fold(FoldAdaptor adaptor) {
-  if (getType().getMutableMemory())
-    return {};
-  auto src = getSrc();
-  if (!src)
-    return {};
-  auto localLoadOp = src.getDefiningOp<LocalLoadOp>();
-  if (!localLoadOp)
-    return {};
-  auto loadSrc = localLoadOp.getSrc();
-  if (loadSrc.getType() != getType())
-    return {};
-  return loadSrc;
-}
-
-LogicalResult LocalAllocOp::verify() {
-  if (!getSrc()) {
-    if (!getType().getMutableMemory())
-      return emitError("uninitialized alloc must have a mutable memdesc type");
-    return success();
-  }
-  auto srcTy = getSrc().getType();
-  auto dstTy = getType();
-
-  if (srcTy.getElementType() != dstTy.getElementType()) {
-    return emitError("result element type must match desc element type");
-  }
-  return success();
-}
-
-// LocalLoadOp
-void LocalLoadOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  effects.emplace_back(MemoryEffects::Read::get(), &getSrcMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
-}
-
-// LocalStoreOp
-LogicalResult LocalStoreOp::verify() {
-  if (!getDst().getType().getMutableMemory())
-    return emitOpError("Cannot store into immutable memory");
-  return success();
-}
-
-void LocalStoreOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  effects.emplace_back(MemoryEffects::Write::get(), &getDstMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
-}
-
-// AsyncCopyGlobalToLocalOp
-LogicalResult AsyncCopyGlobalToLocalOp::verify() {
-  if (!getResult().getType().getMutableMemory())
-    return emitOpError("Cannot store into immutable memory");
-  return success();
-}
-
-void AsyncCopyGlobalToLocalOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  effects.emplace_back(MemoryEffects::Read::get(), &getSrcMutable(),
-                       mlir::triton::GlobalMemory::get());
-  effects.emplace_back(MemoryEffects::Write::get(), &getResultMutable(),
-                       mlir::triton::gpu::SharedMemory::get());
-}
-
-LogicalResult MemDescSubviewOp::verify() {
-  auto srcTy = getSrc().getType();
-  auto dstTy = getType();
-
-  if (srcTy.getElementType() != dstTy.getElementType()) {
-    return emitError("result element type must match desc element type");
-  }
-  if (getOffsets().size() != srcTy.getRank()) {
-    return emitError("offsets must have the same rank as input");
-  }
-  if (srcTy.getRank() < dstTy.getRank()) {
-    return emitError("result rank must be less than or equal to input rank");
-  }
-  auto rankDiff = srcTy.getRank() - dstTy.getRank();
-  for (int i = 0; i < dstTy.getRank(); i++) {
-    if (dstTy.getDimSize(i) > srcTy.getDimSize(i + rankDiff)) {
-      return emitError(
-                 "result shape cannot be larger than input shape at dimension ")
-             << i;
-    }
-  }
-
-  auto srcEnc = srcTy.getEncoding();
-  auto dstEnc = dstTy.getEncoding();
-  if (!!srcEnc != !!dstEnc) {
-    return emitError("src and result must both have or not have an encoding");
-  }
-
-  if (!isa<SharedEncodingAttr>(srcEnc)) {
-    return emitError("src encoding must be SharedEncodingAttr");
-  }
-  if (!isa<SharedEncodingAttr>(dstEnc)) {
-    return emitError("result encoding must be SharedEncodingAttr");
-  }
-
-  // TODO(jlebar): Currently we generate illegal encodings, so we can't add a
-  // verifier for them.  In particular, we use the same encoding for the src and
-  // dst of a subview op, when the subview removes a dimension.  That generates
-  // an illegal shared encoding (because the size of `order` doesn't match the
-  // rank of the tensor), but it's not checked anywhere, and we believe the
-  // resulting code ultimately works.
-
-  return success();
-}
-
-// -- LocalAllocOp --
-
-int32_t LocalAllocOp::getAlignmentOrDefault() {
-  auto align = getAlignment();
-  if (align) {
-    return *align;
-  }
-
-  auto ty = getType();
-  auto shapePerCTA = triton::gpu::getShapePerCTA(ty);
-  auto bytes =
-      product<int64_t>(shapePerCTA) * (ty.getElementTypeBitWidth() / 8);
-
-  // XXX(Keren): magic numbers 256 and 1024
-  // Software swizzling calculates phase based on offset, while hardware
-  // swizzling do that based on physical address. Thus only by setting the
-  // alignment to 1024 can ensure the correctness.
-  return bytes > 256 ? 1024 : 8;
-}
-
-//===----------------------------------------------------------------------===//
 // Layout debug printing
 //===----------------------------------------------------------------------===//
 
@@ -3728,6 +3304,36 @@ std::string getDistributedLayoutStr(RankedTensorType tensorType,
     }
   }
   return layoutStr;
+}
+
+template <typename T>
+llvm::SmallVector<T>
+mlir::triton::gpu::expandMatrixShapeWithBatch(llvm::ArrayRef<T> s) {
+  auto rank = s.size();
+  assert(rank == 2 || rank == 3);
+  if (rank == 3)
+    return llvm::SmallVector<T>(s);
+  return {1, s[0], s[1]};
+}
+
+template llvm::SmallVector<int64_t>
+mlir::triton::gpu::expandMatrixShapeWithBatch<int64_t>(
+    llvm::ArrayRef<int64_t> s);
+
+template llvm::SmallVector<unsigned>
+mlir::triton::gpu::expandMatrixShapeWithBatch<unsigned>(
+    llvm::ArrayRef<unsigned> s);
+
+llvm::SmallVector<unsigned>
+mlir::triton::gpu::expandMatrixOrderWithBatch(llvm::ArrayRef<unsigned> o) {
+  int rank = o.size();
+  assert(rank == 2 || rank == 3);
+  if (rank == 3)
+    return llvm::SmallVector<unsigned>(o);
+  llvm::SmallVector<unsigned> expanded(3, 0);
+  for (int i = 0; i < rank; ++i)
+    expanded[i] += o[i] + 1;
+  return expanded;
 }
 
 std::string mlir::triton::gpu::getLayoutStr(RankedTensorType tensorType,
