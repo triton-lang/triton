@@ -7,7 +7,6 @@ using namespace mlir;
 using ValueTable = std::map<std::array<int, 3>, Value>;
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-using ::mlir::LLVM::getStridesFromShapeAndOrder;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getContigPerThread;
 using ::mlir::triton::gpu::getOrder;
@@ -822,15 +821,13 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   auto expandedDescTy = getExpandedDesc(descTy);
   auto expandedEncoding =
       cast<DotOperandEncodingAttr>(getExpandedEncoding(encoding));
-  auto expandedSmemObj =
-      getExpandedSharedMemoryObject(rewriter, loc, smemObj, descTy.getShape());
   if (opIdx == 0)
-    return loadArg(rewriter, loc, expandedDescTy, expandedEncoding,
-                   expandedSmemObj, typeConverter, thread, true);
+    return loadArg(rewriter, loc, expandedDescTy, expandedEncoding, smemObj,
+                   typeConverter, thread, true);
   else {
     assert(opIdx == 1);
-    return loadArg(rewriter, loc, expandedDescTy, expandedEncoding,
-                   expandedSmemObj, typeConverter, thread, false);
+    return loadArg(rewriter, loc, expandedDescTy, expandedEncoding, smemObj,
+                   typeConverter, thread, false);
   }
 }
 } // namespace SharedToDotOperandMMAv2OrV3

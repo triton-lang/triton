@@ -283,6 +283,24 @@ struct SharedMemoryObject {
     offsets.append(order.size(), i32_val(0));
   }
 
+  SharedMemoryObject(Value base, Type baseElemType, ArrayRef<int64_t> shape,
+                     triton::gpu::SharedEncodingAttr layout, Location loc,
+                     RewriterBase &rewriter)
+      : base(base), baseElemType(baseElemType) {
+    SmallVector<unsigned> order(shape.size());
+    // minor-to-major order
+    std::iota(order.rbegin(), order.rend(), 0);
+    if (layout.getMaxPhase() > 1) { // Swizzling
+      auto layoutOrder = layout.getOrder();
+      assert(layoutOrder.size() == 2 && shape.size() >= 2 &&
+             "Swizzling requires at least 2 dimensions");
+      auto rankDiff = shape.size() - layoutOrder.size();
+      order[0] = layoutOrder[0] + rankDiff;
+      order[1] = layoutOrder[1] + rankDiff;
+    }
+    SharedMemoryObject(base, baseElemType, shape, order, loc, rewriter);
+  }
+
   SmallVector<Value> getStrides() const { return strides; }
   SmallVector<Value> getOffsets() const { return offsets; }
   Value getBase() const { return base; }
