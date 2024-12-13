@@ -234,12 +234,6 @@ void dumpHWLayout(RankedTensorType tensorType);
 // Return a string representation of the layout of the tensor.
 std::string getLayoutStr(RankedTensorType tensorType, bool useHWPointOfView);
 
-template <typename T>
-llvm::SmallVector<T> expandMatrixShapeWithBatch(llvm::ArrayRef<T> s);
-
-llvm::SmallVector<unsigned>
-expandMatrixOrderWithBatch(llvm::ArrayRef<unsigned> o);
-
 } // namespace gpu
 } // namespace triton
 } // namespace mlir

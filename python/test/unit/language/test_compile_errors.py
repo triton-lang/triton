@@ -388,22 +388,14 @@ def test_min_dot_size(dtype):
         else:
             error_msg = "M >= 16, N >= 16 and K >= 16"
     elif is_hip_mi300():
-        if dtype == tl.float16:
-            pytest.skip("fp16 FMA path supports all sizes")
-        elif dtype == tl.int8:
+        if dtype.is_int8():
             error_msg += "M >= 16, N >= 16 and K >= 16"
         else:
             error_msg += "M >= 16, N >= 16 and K >= 8"
     elif is_hip_mi200():
-        if dtype == tl.float16:
-            pytest.skip("fp16 FMA path supports all sizes")
-        else:
-            error_msg += "M >= 16, N >= 16 and K >= 8"
+        error_msg += "M >= 16, N >= 16 and K >= 8"
     elif is_hip():
-        if dtype == tl.float16:
-            pytest.skip("fp16 FMA path supports all sizes")
-        else:
-            error_msg = "M >= 16, N >= 16 and K >= 16"
+        error_msg = "M >= 16, N >= 16 and K >= 16"
     else:
         pytest.skip("Test only supported on CUDA and HIP")
 
