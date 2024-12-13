@@ -1584,7 +1584,8 @@ def test_op_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, layout, 
 @pytest.mark.parametrize('use_alibi', [True, False])
 @pytest.mark.parametrize('layout', ['bshd', 'bhsd'])
 @pytest.mark.parametrize('persistent', ['fixed', 'dynamic'])
-def test_op_persistent_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, layout, persistent, dtype=torch.float16):
+def test_op_persistent_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alibi, layout, persistent,
+                           dtype=torch.float16):
     torch.manual_seed(20)
     q, k, v, input_metadata = input_helper(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, layout)
     if causal:
@@ -1900,7 +1901,6 @@ def run_benchmark(custom, args):
     head_size = 128 if not args.d else args.d
     mode = 'fwd'
     x_names = ['BATCH', 'HQ', 'HK', 'N_CTX_Q', 'N_CTX_K']
-    persistent = args.persistent
     causal = args.causal
     varlen = args.layout == 'thd'
     configs = []
@@ -1950,7 +1950,7 @@ def run_benchmark(custom, args):
             flops_per_matmul = 2.0 * BATCH * HQ * N_CTX_Q * N_CTX_K * D_HEAD
         if causal:
             input_metadata.need_causal()
-        
+
         input_metadata.set_persistent(args.persistent)
 
         o = torch.empty_like(q)
