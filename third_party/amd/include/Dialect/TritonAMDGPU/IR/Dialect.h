@@ -30,7 +30,6 @@
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/PatternMatch.h"
 #include "triton/Dialect/Triton/IR/Traits.h"
-
 // clang-format off
 #include "amd/include/Dialect/TritonAMDGPU/IR/Dialect.h.inc"
 // clang-format on
