@@ -268,21 +268,19 @@ struct SharedMemoryObject {
   // Offsets are applied at the last slicing operation.
   // We can use offsets to recover the previous base.
   // The offsets are zero at the initial allocation.
-  SmallVector<unsigned> order; // The order of the dimensions.
 
   SharedMemoryObject(Value base, Type baseElemType, ArrayRef<Value> strides,
-                     ArrayRef<Value> offsets, ArrayRef<unsigned> order)
+                     ArrayRef<Value> offsets)
       : base(base), baseElemType(baseElemType),
         strides(strides.begin(), strides.end()),
-        offsets(offsets.begin(), offsets.end()),
-        order(order.begin(), order.end()) {
+        offsets(offsets.begin(), offsets.end()) {
     assert(strides.size() == offsets.size());
   }
 
   SharedMemoryObject(Value base, Type baseElemType, ArrayRef<int64_t> shape,
                      ArrayRef<unsigned> order, Location loc,
                      RewriterBase &rewriter)
-      : base(base), baseElemType(baseElemType), order(order) {
+      : base(base), baseElemType(baseElemType) {
     strides = getStridesFromShapeAndOrder(shape, order, loc, rewriter);
   }
 
@@ -291,9 +289,8 @@ struct SharedMemoryObject {
                      RewriterBase &rewriter)
       : base(base), baseElemType(baseElemType) {
     // Minor-to-major order by default
-    order = SmallVector<unsigned>(strides.size());
+    auto order = SmallVector<unsigned>(strides.size());
     std::iota(order.rbegin(), order.rend(), 0);
-    strides = getStridesFromShapeAndOrder(shape, order, loc, rewriter);
     auto layoutOrder = convertType<unsigned>(layout.getOrder());
     if (layoutOrder.size() > shape.size()) {
       // Take the most minor orders from the layout order
@@ -312,11 +309,11 @@ struct SharedMemoryObject {
     } else {
       order = layoutOrder;
     }
+    strides = getStridesFromShapeAndOrder(shape, order, loc, rewriter);
   }
 
   SmallVector<Value> getStrides() const { return strides; }
   SmallVector<Value> getOffsets() const { return offsets; }
-  SmallVector<unsigned> getOrder() const { return order; }
   Value getBase() const { return base; }
   Type getBaseElemType() const { return baseElemType; }
 

@@ -22,7 +22,7 @@ std::pair<mlir::Value, mlir::Value>
 swizzleIndexes(ConversionPatternRewriter &rewriter, Location loc, Value row,
                Value col, SharedMemoryObject smemObj, SharedEncodingAttr attr) {
   (void)smemObj; // unused in current pattern
-  const auto &order = smemObj.getOrder();
+  const auto &order = attr.getOrder();
   auto rank = order.size();
   bool transposed = (order[rank - 2] != 1);
   if (transposed) {
@@ -122,7 +122,7 @@ llvm::SmallVector<Value> computeOffsetsAType(
     SharedEncodingAttr srcLayout, unsigned nonKDim, unsigned kDim) {
   SmallVector<Value> strides = smemObj.getStrides();
   SmallVector<Value> offsets = smemObj.getOffsets();
-  auto order = smemObj.getOrder();
+  auto order = srcLayout.getOrder();
   auto rank = offsets.size();
 
   int vectorSize = 1;
@@ -190,7 +190,7 @@ llvm::SmallVector<Value> computeOffsetsBType(
   // transposed operand A layout
   // this unifies axis order, so non-K dim is 0, k dim is 1
   auto rank = smemObj.getOffsets().size();
-  auto order = smemObj.getOrder();
+  auto order = srcLayout.getOrder();
   SmallVector<int64_t> tElemsPerInstr{elemsPerInstr[1], elemsPerInstr[0]};
   SmallVector<int64_t> tReps = transposeSpatialDims(reps);
   SmallVector<Value> tOffsets = transposeSpatialDims(smemObj.getOffsets());

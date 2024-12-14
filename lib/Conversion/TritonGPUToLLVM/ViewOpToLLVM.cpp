@@ -286,8 +286,7 @@ struct MemDescTransOpConversion
     auto dstSmemObj = SharedMemoryObject(
         srcSmemObj.base, srcSmemObj.baseElemType,
         /*strides=*/applyPermutation(srcSmemObj.strides, op.getOrder()),
-        /*offsets=*/applyPermutation(srcSmemObj.offsets, op.getOrder()),
-        /*order=*/convertType<unsigned>(op.getOrder()));
+        /*offsets=*/applyPermutation(srcSmemObj.offsets, op.getOrder()));
     auto retVal = getStructFromSharedMemoryObject(loc, dstSmemObj, rewriter);
     rewriter.replaceOp(op, retVal);
     return success();

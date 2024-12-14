@@ -600,7 +600,7 @@ getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
   const int elemBytes = descTy.getElementTypeBitWidth() / 8;
   const int mmaElemBytes = 4 / kWidth;
   const bool isHopper = mmaLayout.getVersionMajor() == 3;
-  auto order = smemObj.getOrder();
+  auto order = sharedLayout.getOrder();
 
   int nPerWarp =
       std::max<int>(shapePerCTA[2] / mmaLayout.getWarpsPerCTA()[2], 8);

@@ -191,7 +191,7 @@ Value getSmemVecAddr(RankedTensorType registerTy,
   auto smemBase = smemObj.getBase();
   auto smemOffsets = smemObj.getOffsets();
   auto smemStrides = smemObj.getStrides();
-  auto smemOrder = smemObj.getOrder();
+  auto smemOrder = sharedEnc.getOrder();
   Value smemOffset;
   // When loading or storing to shared memory, we consider two cases for
   // performance reasons:
@@ -924,19 +924,14 @@ getExpandedSharedMemoryObject(ConversionPatternRewriter &rewriter, Location loc,
   assert(shape.size() == 2 || shape.size() == 3);
   auto strides = smemObj.getStrides();
   auto offsets = smemObj.getOffsets();
-  auto order = smemObj.getOrder();
   auto rank = strides.size();
   assert(rank == shape.size());
   if (rank == 3)
     return smemObj;
   strides.insert(strides.begin(), i32_val(shape[0] * shape[1]));
   offsets.insert(offsets.begin(), i32_val(0));
-  auto expandedOrder = SmallVector<unsigned>(3, 0);
-  expandedOrder[0] = order[0] + 1;
-  expandedOrder[1] = order[1] + 1;
-  auto expandedSmemObj =
-      SharedMemoryObject(smemObj.getBase(), smemObj.getBaseElemType(), strides,
-                         offsets, expandedOrder);
+  auto expandedSmemObj = SharedMemoryObject(
+      smemObj.getBase(), smemObj.getBaseElemType(), strides, offsets);
   return expandedSmemObj;
 }
 
