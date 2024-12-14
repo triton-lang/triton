@@ -291,9 +291,8 @@ struct SharedMemoryObject {
   SharedMemoryObject(Value base, Type baseElemType, ArrayRef<int64_t> shape,
                      triton::gpu::SharedEncodingAttr layout, Location loc,
                      RewriterBase &rewriter)
-      : base(base), baseElemType(baseElemType) {
+      : SharedMemoryObject(base, baseElemType, strides, offsets) {
     auto layoutOrder = convertType<unsigned>(layout.getOrder());
-    std::iota(order.rbegin(), order.rend(), 0);
     if (layoutOrder.size() > shape.size()) {
       // Take the most minor orders from the layout order
       auto rankDiff = layoutOrder.size() - shape.size();
