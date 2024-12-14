@@ -276,7 +276,9 @@ struct SharedMemoryObject {
         strides(strides.begin(), strides.end()),
         offsets(offsets.begin(), offsets.end()) {
     assert(strides.size() == offsets.size());
-    order = triton::gpu::getMatrixOrder(strides.size(), /*rowMajor=*/true);
+    // Minor-to-major order by default
+    order = SmallVector<unsigned>(strides.size());
+    std::iota(order.rbegin(), order.rend(), 0);
   }
 
   SharedMemoryObject(Value base, Type baseElemType, ArrayRef<int64_t> shape,
