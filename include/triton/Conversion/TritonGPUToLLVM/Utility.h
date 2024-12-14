@@ -271,14 +271,12 @@ struct SharedMemoryObject {
   SmallVector<unsigned> order; // The order of the dimensions.
 
   SharedMemoryObject(Value base, Type baseElemType, ArrayRef<Value> strides,
-                     ArrayRef<Value> offsets)
+                     ArrayRef<Value> offsets, ArrayRef<unsigned> order)
       : base(base), baseElemType(baseElemType),
         strides(strides.begin(), strides.end()),
-        offsets(offsets.begin(), offsets.end()) {
+        offsets(offsets.begin(), offsets.end()),
+        order(order.begin(), order.end()) {
     assert(strides.size() == offsets.size());
-    // Minor-to-major order by default
-    order = SmallVector<unsigned>(strides.size());
-    std::iota(order.rbegin(), order.rend(), 0);
   }
 
   SharedMemoryObject(Value base, Type baseElemType, ArrayRef<int64_t> shape,
@@ -291,7 +289,11 @@ struct SharedMemoryObject {
   SharedMemoryObject(Value base, Type baseElemType, ArrayRef<int64_t> shape,
                      triton::gpu::SharedEncodingAttr layout, Location loc,
                      RewriterBase &rewriter)
-      : SharedMemoryObject(base, baseElemType, strides, offsets) {
+      : base(base), baseElemType(baseElemType) {
+    // Minor-to-major order by default
+    order = SmallVector<unsigned>(strides.size());
+    std::iota(order.rbegin(), order.rend(), 0);
+    strides = getStridesFromShapeAndOrder(shape, order, loc, rewriter);
     auto layoutOrder = convertType<unsigned>(layout.getOrder());
     if (layoutOrder.size() > shape.size()) {
       // Take the most minor orders from the layout order
@@ -310,7 +312,6 @@ struct SharedMemoryObject {
     } else {
       order = layoutOrder;
     }
-    strides = getStridesFromShapeAndOrder(shape, order, loc, rewriter);
   }
 
   SmallVector<Value> getStrides() const { return strides; }
