@@ -299,7 +299,7 @@ struct SharedMemoryObject {
       auto rankDiff = layoutOrder.size() - shape.size();
       for (auto i = 0; i < order.size(); ++i) {
         order[i] = layoutOrder[i] - rankDiff;
-        assert(order[i] <= shape.size() && order[i] >= 0);
+        assert(order[i] < shape.size() && order[i] >= 0);
       }
     } else if (layoutOrder.size() < shape.size()) {
       // Assume the layout order is the most minor orders
