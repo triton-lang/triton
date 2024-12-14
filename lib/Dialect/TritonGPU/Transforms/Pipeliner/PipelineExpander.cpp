@@ -89,13 +89,6 @@ protected:
   /// the Value.
   std::pair<Operation *, int64_t> getDefiningOpAndDistance(Value value);
 
-  /// Return the loop argument value if the Value is an argument of the loop.
-  std::optional<Value> getBlockArgYieldValueFromForLoop(BlockArgument arg);
-
-  /// Print scheduling error, depending on the detailed cases.
-  void printSchedulingError(int64_t distance, Operation *consumer,
-                            Operation *producer, Value operand);
-
   /// Return true if the schedule is possible and return false otherwise. A
   /// schedule is correct if all definitions are scheduled before uses.
   bool verifySchedule();
@@ -237,42 +230,6 @@ static SetVector<Value> getNestedOperands(Operation *op) {
     }
   });
   return operands;
-}
-
-DenseSet<Operation *> findRootDefiningOp(Operation *op,
-                                         unsigned int resultNumber) {
-  LDBG("findRootDefiningOp: " << *op << "\n from its " << resultNumber
-                              << "th result\n");
-  DenseSet<Operation *> result;
-  if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
-    // then branch.
-    {
-      auto operandFromThenBranch = ifOp.thenYield()->getOperand(resultNumber);
-      if (auto opResult = dyn_cast<OpResult>(operandFromThenBranch)) {
-        auto thenBranchResult = findRootDefiningOp(
-            operandFromThenBranch.getDefiningOp(), opResult.getResultNumber());
-        // add the result to the set.
-        result.insert(thenBranchResult.begin(), thenBranchResult.end());
-      } else if (!dyn_cast<BlockArgument>(operandFromThenBranch)) {
-        result.insert(operandFromThenBranch.getDefiningOp());
-      }
-    }
-    // else branch.
-    {
-      auto operandFromElseBranch = ifOp.thenYield()->getOperand(resultNumber);
-      if (auto opResult = dyn_cast<OpResult>(operandFromElseBranch)) {
-        auto elseBranchResult = findRootDefiningOp(opResult.getDefiningOp(),
-                                                   opResult.getResultNumber());
-        // add the result to the set.
-        result.insert(elseBranchResult.begin(), elseBranchResult.end());
-      } else if (!dyn_cast<BlockArgument>(operandFromElseBranch)) {
-        result.insert(operandFromElseBranch.getDefiningOp());
-      }
-    }
-  } else {
-    result.insert(op);
-  }
-  return std::move(result);
 }
 
 /// Compute unrolled cycles of each op (consumer) and verify that each op is
@@ -433,25 +390,18 @@ LoopPipelinerInternal::analyzeCrossStageValues() {
   return crossStageValues;
 }
 
-std::optional<Value>
-LoopPipelinerInternal::getBlockArgYieldValueFromForLoop(BlockArgument arg) {
-  if (arg.getOwner() != forOp.getBody())
-    return std::nullopt;
-  // Ignore induction variable.
-  if (arg.getArgNumber() == 0)
-    return std::nullopt;
-  return forOp.getBody()->getTerminator()->getOperand(arg.getArgNumber() - 1);
-}
-
 std::pair<Operation *, int64_t>
 LoopPipelinerInternal::getDefiningOpAndDistance(Value value) {
   int64_t distance = 0;
   if (auto arg = dyn_cast<BlockArgument>(value)) {
-    auto yieldValue = getBlockArgYieldValueFromForLoop(arg);
-    if (!yieldValue)
+    if (arg.getOwner() != forOp.getBody())
       return {nullptr, 0};
-    value = *yieldValue;
+    // Ignore induction variable.
+    if (arg.getArgNumber() == 0)
+      return {nullptr, 0};
     distance++;
+    value =
+        forOp.getBody()->getTerminator()->getOperand(arg.getArgNumber() - 1);
   }
   Operation *def = value.getDefiningOp();
   if (!def)
