@@ -36,8 +36,8 @@ bool isSwizzled(SharedEncodingAttr layout) { return layout.getMaxPhase() != 1; }
 
 SmallVector<Value> swizzleIndices(ConversionPatternRewriter &rewriter,
                                   Location loc, SmallVector<Value> rawIndices,
-                                  SharedEncodingAttr layout) {
-  const auto &order = layout.getOrder();
+                                  SharedEncodingAttr layout,
+                                  ArrayRef<unsigned> order) {
   auto rank = order.size();
 
   if (!isSwizzled(layout))
@@ -156,7 +156,7 @@ Value computeSwizzledOffset(ConversionPatternRewriter &rewriter, Location loc,
                             unsigned shapePerCTANonKTile,
                             SharedEncodingAttr sharedLayout,
                             ArrayRef<int64_t> opTensorShape,
-                            ArrayRef<Value> strides) {
+                            ArrayRef<Value> strides, ArrayRef<unsigned> order) {
   Value offset = i32_val(0);
   // Compute unswizzled multi dim coordinates in shared memmory object
   SmallVector<Value> elemMultiDimIndices(3);
@@ -168,7 +168,7 @@ Value computeSwizzledOffset(ConversionPatternRewriter &rewriter, Location loc,
 
   // Apply swizzling pattern to fastest dimension
   SmallVector<Value> swizzledIndices =
-      swizzleIndices(rewriter, loc, elemMultiDimIndices, sharedLayout);
+      swizzleIndices(rewriter, loc, elemMultiDimIndices, sharedLayout, order);
 
   // Linearize shared mem object dimensions into flat offset
   for (int d = 0; d < 3; ++d) {
@@ -226,11 +226,11 @@ Value loadFMAOp(Value srcVal, Value llVal, BlockedEncodingAttr dLayout,
   auto opTensorShape = expandMatrixShapeWithBatch(opTensorTy.getShape());
   auto sharedLayout = cast<SharedEncodingAttr>(opTensorTy.getEncoding());
 
-  auto opOrder = expandMatrixOrderWithBatch(dLayout.getOrder());
-
   auto smemObj = getSharedMemoryObjectFromStruct(
       loc, llVal, typeConverter->convertType(opTensorTy.getElementType()),
       rewriter);
+  auto order = smemObj.getOrder();
+
   auto strides = smemObj.getStrides();
   int B = opTensorShape[dim.batch];
   int K = opTensorShape[dim.k];
@@ -251,9 +251,9 @@ Value loadFMAOp(Value srcVal, Value llVal, BlockedEncodingAttr dLayout,
   auto laneId = urem(thread, warpSize);
   auto warpId = udiv(thread, warpSize);
   auto laneIds =
-      mlir::LLVM::delinearize(rewriter, loc, laneId, threadsPerWarp, opOrder);
+      mlir::LLVM::delinearize(rewriter, loc, laneId, threadsPerWarp, order);
   auto warpIds =
-      mlir::LLVM::delinearize(rewriter, loc, warpId, warpsPerCTA, opOrder);
+      mlir::LLVM::delinearize(rewriter, loc, warpId, warpsPerCTA, order);
   auto sizePerWarpB = sizePerThread[dim.batch] * threadsPerWarp[dim.batch];
   auto sizePerWarpNonK = sizePerThread[dim.nonK] * threadsPerWarp[dim.nonK];
 
@@ -269,9 +269,8 @@ Value loadFMAOp(Value srcVal, Value llVal, BlockedEncodingAttr dLayout,
   auto elemTy = typeConverter->convertType(opTensorTy.getElementType());
   Type ptrTy = smemObj.base.getType();
 
-  auto sharedOrder = smemObj.getOrder();
   // compute contiguity of fastest dimension in shared layout.
-  unsigned vectorSize = sizePerThread[sharedOrder[0]];
+  unsigned vectorSize = sizePerThread[order[0]];
   vectorSize = std::min(vectorSize, 128 / elemTy.getIntOrFloatBitWidth());
 
   bool swizzlePath = isSwizzled(sharedLayout);
@@ -281,7 +280,7 @@ Value loadFMAOp(Value srcVal, Value llVal, BlockedEncodingAttr dLayout,
   auto vecTy = vec_ty(elemTy, vectorSize);
   // loop increments depend on fastest dim
   unsigned dimStep[3] = {1, 1, 1};
-  dimStep[sharedOrder[0]] = vectorSize;
+  dimStep[order[0]] = vectorSize;
 
   auto shapePerCTABTile = shapePerCTATile[dim.batch];
   auto shapePerCTANonKTile = shapePerCTATile[dim.nonK];
@@ -335,7 +334,7 @@ Value loadFMAOp(Value srcVal, Value llVal, BlockedEncodingAttr dLayout,
               offset = computeSwizzledOffset(
                   rewriter, loc, idx, dim, bTileOffset, nonKTileOffset,
                   shapePerCTABTile, shapePerCTANonKTile, sharedLayout,
-                  opTensorShape, strides);
+                  opTensorShape, strides, order);
             } else {
               offset = computeNonSwizzledOffset(rewriter, loc, idx, dim,
                                                 opTensorShape, shapePerCTABTile,
@@ -347,8 +346,7 @@ Value loadFMAOp(Value srcVal, Value llVal, BlockedEncodingAttr dLayout,
             storeValuesInLinearVector(
                 rewriter, loc, opValues, vec, perThreadShape, /*kIdx*/ k,
                 /*nonKIdx*/ nonKTile * sizeNonKPerThread + nonK,
-                /*bIdx*/ bTile * sizeBPerThread + b, dim, sharedOrder[0],
-                opOrder);
+                /*bIdx*/ bTile * sizeBPerThread + b, dim, order[0], order);
           }
 
   return getStructFromValueTable(opValues, rewriter, loc, typeConverter,
