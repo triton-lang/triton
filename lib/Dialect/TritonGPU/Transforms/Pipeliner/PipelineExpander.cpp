@@ -35,10 +35,13 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
+#include <cassert>
 #include <cstddef>
 #include <optional>
 
 #include "triton/Dialect/TritonGPU/Transforms/PipelineExpander.h"
+
+#include "triton/Dialect/TritonGPU/Transforms/PipelineErrorReporter.h"
 
 #define DEBUG_TYPE "triton-loop-pipelining"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -88,10 +91,6 @@ protected:
 
   /// Return the loop argument value if the Value is an argument of the loop.
   std::optional<Value> getBlockArgYieldValueFromForLoop(BlockArgument arg);
-
-  DenseSet<Operation *>
-  findRootDefiningOpForSchedulingError(Operation *consumer, Operation *producer,
-                                       Value operand);
 
   /// Print scheduling error, depending on the detailed cases.
   void printSchedulingError(int64_t distance, Operation *consumer,
@@ -240,20 +239,10 @@ static SetVector<Value> getNestedOperands(Operation *op) {
   return operands;
 }
 
-// void LoopPipelinerInternal::printLoopArgConflicts(Operation *consumer,
-//                                                   Value operand,
-//                                                   Operation *producer) {
-//   if (auto arg = dyn_cast<BlockArgument>(operand)) {
-//     std::optional<Value> yieldValue = getBlockArgYieldValueFromForLoop(arg);
-//     if (yieldValue) {
-//       Value yieldValue_ = *yieldValue;
-//       yieldValue_.
-//     }
-//   }
-// }
-
 DenseSet<Operation *> findRootDefiningOp(Operation *op,
                                          unsigned int resultNumber) {
+  LDBG("findRootDefiningOp: " << *op << "\n from its " << resultNumber
+                              << "th result\n");
   DenseSet<Operation *> result;
   if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
     // then branch.
@@ -286,55 +275,6 @@ DenseSet<Operation *> findRootDefiningOp(Operation *op,
   return std::move(result);
 }
 
-DenseSet<Operation *>
-LoopPipelinerInternal::findRootDefiningOpForSchedulingError(Operation *consumer,
-                                                            Operation *producer,
-                                                            Value operand) {
-  DenseSet<Operation *> rootDefiningOps;
-  if (auto arg = dyn_cast<BlockArgument>(operand)) {
-    auto argNumber = arg.getArgNumber();
-    auto yieldValue = getBlockArgYieldValueFromForLoop(arg);
-    if (!yieldValue) {
-      LDBG("no yield value for arg " << arg << " -> BAIL");
-      return {};
-    }
-
-    if (auto opResult = dyn_cast<OpResult>(*yieldValue)) {
-      auto rootDefiningOp =
-          findRootDefiningOp(producer, opResult.getResultNumber());
-      rootDefiningOps.insert(rootDefiningOp.begin(), rootDefiningOp.end());
-    } else
-      rootDefiningOps.insert(producer);
-  }
-  return std::move(rootDefiningOps);
-}
-
-void LoopPipelinerInternal::printSchedulingError(int64_t distance,
-                                                 Operation *consumer,
-                                                 Operation *producer,
-                                                 Value operand) {
-
-  std::string errorMessage = "operation scheduled before its operands.";
-  std::string likelyBuggyMessage = "This is likely to be a bug. Please "
-                                   "report it.";
-
-  DenseSet<Operation *> rootDefiningOps;
-  if (distance > 0) {
-    rootDefiningOps =
-        findRootDefiningOpForSchedulingError(consumer, producer, operand);
-  }
-  if (rootDefiningOps.empty()) {
-    consumer->emitError() << errorMessage << " " << likelyBuggyMessage;
-  } else {
-    consumer->emitError() << errorMessage;
-    for (auto op : rootDefiningOps) {
-      op->emitError()
-          << "This line likely causes scheduling conflict. Consider moving it "
-             "to an earlier position within the loop body.";
-    }
-  }
-}
-
 /// Compute unrolled cycles of each op (consumer) and verify that each op is
 /// scheduled after its operands (producers) while adjusting for the distance
 /// between producer and consumer.
@@ -361,7 +301,9 @@ bool LoopPipelinerInternal::verifySchedule() {
         continue;
       int64_t producerCycle = it->second;
       if (consumerCycle < producerCycle - numCylesPerIter * distance) {
-        printSchedulingError(distance, consumer, producer, operand);
+        PipelineErrorReporter errorReporter(forOp);
+        errorReporter.printSchedulingError(distance, consumer, producer,
+                                           operand);
         return false;
       }
     }
