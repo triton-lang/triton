@@ -167,15 +167,21 @@ bool verifyNonNegativeExpr(Value expr, const DenseSet<Value> &assumptions) {
                        verifyNonNegativeExpr(binOp->getOperand(1), assumptions);
               })
           // TODO: more scf
-          .Case<scf::IfOp>([&](auto ifop) {
+          .Case<scf::IfOp>([&](auto ifOp) {
+            auto results = ifOp.getResults();
+            auto it = std::find(results.begin(), results.end(), expr);
+            assert(it != results.end() && "expr should be the result of ifOp");
+            auto resultIdx = it - results.begin();
+
             // If we're here then we must have both then/else regions
             // (each with 1 block) and each region must terminate with an
             // `scf.yield` expression.
-            auto thenYield = cast<scf::YieldOp>(ifop.thenYield());
-            auto elseYield = cast<scf::YieldOp>(ifop.elseYield());
-            return verifyNonNegativeExpr(thenYield->getOperand(0),
+            auto thenYield = cast<scf::YieldOp>(ifOp.thenYield());
+            auto elseYield = cast<scf::YieldOp>(ifOp.elseYield());
+            return verifyNonNegativeExpr(thenYield->getOperand(resultIdx),
                                          assumptions) &&
-                   verifyNonNegativeExpr(elseYield->getOperand(0), assumptions);
+                   verifyNonNegativeExpr(elseYield->getOperand(resultIdx),
+                                         assumptions);
           })
           .Case<arith::SubIOp>([&](auto op) {
             // If a user annotates tl.assume(a >= b) then we know a - b >= 0
