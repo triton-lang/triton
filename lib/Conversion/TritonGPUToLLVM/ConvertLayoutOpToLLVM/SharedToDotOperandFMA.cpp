@@ -228,12 +228,10 @@ Value loadFMAOp(Value srcVal, Value llVal, BlockedEncodingAttr dLayout,
 
   auto opOrder = expandMatrixOrderWithBatch(dLayout.getOrder());
 
-  auto origSmem = getSharedMemoryObjectFromStruct(
+  auto smemObj = getSharedMemoryObjectFromStruct(
       loc, llVal, typeConverter->convertType(opTensorTy.getElementType()),
       rewriter);
-  auto smem = getExpandedSharedMemoryObject(rewriter, loc, origSmem,
-                                            opTensorTy.getShape());
-  auto strides = smem.strides;
+  auto strides = smemObj.getStrides();
   int B = opTensorShape[dim.batch];
   int K = opTensorShape[dim.k];
   int NonK = opTensorShape[dim.nonK];
@@ -269,9 +267,9 @@ Value loadFMAOp(Value srcVal, Value llVal, BlockedEncodingAttr dLayout,
       add(nonKTileOffset, mul(warpIds[dim.nonK], i32_val(sizePerWarpNonK)));
 
   auto elemTy = typeConverter->convertType(opTensorTy.getElementType());
-  Type ptrTy = smem.base.getType();
+  Type ptrTy = smemObj.base.getType();
 
-  auto sharedOrder = expandMatrixOrderWithBatch(sharedLayout.getOrder());
+  auto sharedOrder = smemObj.getOrder();
   // compute contiguity of fastest dimension in shared layout.
   unsigned vectorSize = sizePerThread[sharedOrder[0]];
   vectorSize = std::min(vectorSize, 128 / elemTy.getIntOrFloatBitWidth());
@@ -308,12 +306,12 @@ Value loadFMAOp(Value srcVal, Value llVal, BlockedEncodingAttr dLayout,
   // non-constant part
   Value basePtr;
   if (swizzlePath) {
-    basePtr = smem.base;
+    basePtr = smemObj.base;
   } else {
     auto laneOffset = getUnswizzledFirstElemOffset(
         rewriter, loc, B, NonK, bTileOffset, nonKTileOffset, strides[dim.batch],
         strides[dim.nonK]);
-    basePtr = gep(ptrTy, elemTy, smem.base, laneOffset);
+    basePtr = gep(ptrTy, elemTy, smemObj.base, laneOffset);
   }
 
   // This loop nest iterates over all values loaded in one thread across batch,

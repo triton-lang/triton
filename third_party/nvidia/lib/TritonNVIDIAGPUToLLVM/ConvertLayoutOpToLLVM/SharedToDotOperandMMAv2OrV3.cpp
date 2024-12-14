@@ -9,7 +9,6 @@ using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getContigPerThread;
-using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getSizePerThread;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
@@ -601,18 +600,17 @@ getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
   const int elemBytes = descTy.getElementTypeBitWidth() / 8;
   const int mmaElemBytes = 4 / kWidth;
   const bool isHopper = mmaLayout.getVersionMajor() == 3;
-  auto order = sharedLayout.getOrder();
+  auto order = smemObj.getOrder();
 
   int nPerWarp =
       std::max<int>(shapePerCTA[2] / mmaLayout.getWarpsPerCTA()[2], 8);
   // (a, b) is the coordinate.
   auto load = [=, &rewriter, &vals](int batch, int a, int b) {
-    MMA16816SmemLoader loader(nPerWarp, warpsPerTile, sharedLayout.getOrder(),
-                              mmaLayout.getWarpsPerCTA(), kOrder, kWidth,
-                              smemObj.strides, shapePerCTA /*tileShape*/,
-                              instrShape, matShape, multiDimWarpId, perPhase,
-                              maxPhase, elemBytes, mmaElemBytes, isHopper,
-                              rewriter, typeConverter, loc);
+    MMA16816SmemLoader loader(
+        nPerWarp, warpsPerTile, order, mmaLayout.getWarpsPerCTA(), kOrder,
+        kWidth, smemObj.strides, shapePerCTA /*tileShape*/, instrShape,
+        matShape, multiDimWarpId, perPhase, maxPhase, elemBytes, mmaElemBytes,
+        isHopper, rewriter, typeConverter, loc);
     // Offset of a slice within the original tensor in shared memory
     Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
     SmallVector<Value> offs = loader.computeOffsets(lane, cSwizzleOffset);
@@ -822,12 +820,12 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   auto expandedEncoding =
       cast<DotOperandEncodingAttr>(getExpandedEncoding(encoding));
   if (opIdx == 0)
-    return loadArg(rewriter, loc, descTy, encoding, smemObj, typeConverter,
-                   thread, true);
+    return loadArg(rewriter, loc, expandedDescTy, expandedEncoding, smemObj,
+                   typeConverter, thread, true);
   else {
     assert(opIdx == 1);
-    return loadArg(rewriter, loc, descTy, encoding, smemObj, typeConverter,
-                   thread, false);
+    return loadArg(rewriter, loc, expandedDescTy, expandedEncoding, smemObj,
+                   typeConverter, thread, false);
   }
 }
 } // namespace SharedToDotOperandMMAv2OrV3

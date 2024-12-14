@@ -22,7 +22,7 @@ std::pair<mlir::Value, mlir::Value>
 swizzleIndexes(ConversionPatternRewriter &rewriter, Location loc, Value row,
                Value col, SharedMemoryObject smemObj, SharedEncodingAttr attr) {
   (void)smemObj; // unused in current pattern
-  const auto &order = attr.getOrder();
+  const auto &order = smemObj.getOrder();
   auto rank = order.size();
   bool transposed = (order[rank - 2] != 1);
   if (transposed) {
@@ -94,11 +94,11 @@ bool isKMajor(llvm::ArrayRef<unsigned> order, int opIdx) {
 bool isSwizzlePatternFitsIntoBlock(const SharedEncodingAttr sharedLayout,
                                    int opIdx, const ArrayRef<int64_t> reps,
                                    const ArrayRef<int64_t> elemsPerInstr,
+                                   const ArrayRef<unsigned> order,
                                    unsigned warpsPerBlockNonK) {
   assert(elemsPerInstr.size() == 2);
   unsigned mfmaInstrNonK = elemsPerInstr[opIdx == 0 ? 0 : 1];
   unsigned mfmaInstrK = elemsPerInstr[opIdx == 0 ? 1 : 0];
-  auto order = sharedLayout.getOrder();
   const auto swizzleFastDimSize =
       sharedLayout.getMaxPhase() * sharedLayout.getVec();
   const auto swizzleSlowDimSize =
@@ -122,10 +122,11 @@ llvm::SmallVector<Value> computeOffsetsAType(
     SharedEncodingAttr srcLayout, unsigned nonKDim, unsigned kDim) {
   SmallVector<Value> strides = smemObj.getStrides();
   SmallVector<Value> offsets = smemObj.getOffsets();
+  auto order = smemObj.getOrder();
   auto rank = offsets.size();
 
   int vectorSize = 1;
-  if (srcLayout.getOrder()[0] == rank - 1) {
+  if (order[0] == rank - 1) {
     if (isSwizzled(srcLayout))
       vectorSize = std::min(static_cast<int>(srcLayout.getVec()), numOfElems);
     else
@@ -136,10 +137,9 @@ llvm::SmallVector<Value> computeOffsetsAType(
                     reps, offsets, vectorSize, nonKDim, kDim);
   const auto numBlocks = reps[reps.size() - 2];
   const auto blockSize = mapping.size();
-  auto order = srcLayout.getOrder();
   llvm::SmallVector<Value> aOffsets(blockSize * numBlocks);
 
-  if (!isSwizzlePatternFitsIntoBlock(srcLayout, 0, reps, elemsPerInstr,
+  if (!isSwizzlePatternFitsIntoBlock(srcLayout, 0, reps, elemsPerInstr, order,
                                      warpsPerBlock)) {
     for (int block = 0; block < numBlocks; ++block) {
       int blockNonKOffset = block * nonKDim * warpsPerBlock;
@@ -190,13 +190,14 @@ llvm::SmallVector<Value> computeOffsetsBType(
   // transposed operand A layout
   // this unifies axis order, so non-K dim is 0, k dim is 1
   auto rank = smemObj.getOffsets().size();
+  auto order = smemObj.getOrder();
   SmallVector<int64_t> tElemsPerInstr{elemsPerInstr[1], elemsPerInstr[0]};
   SmallVector<int64_t> tReps = transposeSpatialDims(reps);
   SmallVector<Value> tOffsets = transposeSpatialDims(smemObj.getOffsets());
   SmallVector<Value> tStrides = transposeSpatialDims(smemObj.getStrides());
 
   int vectorSize = 1;
-  if (srcLayout.getOrder()[0] == rank - 2) {
+  if (order[0] == rank - 2) {
     if (isSwizzled(srcLayout))
       vectorSize = std::min(static_cast<int>(srcLayout.getVec()), numOfElems);
     else
@@ -207,10 +208,9 @@ llvm::SmallVector<Value> computeOffsetsBType(
                     tReps, tOffsets, vectorSize, nonKDim, kDim);
   const auto numBlocks = tReps[tReps.size() - 2];
   const auto blockSize = mapping.size();
-  auto order = srcLayout.getOrder();
   llvm::SmallVector<Value> bOffsets(blockSize * numBlocks);
 
-  if (!isSwizzlePatternFitsIntoBlock(srcLayout, 0, reps, elemsPerInstr,
+  if (!isSwizzlePatternFitsIntoBlock(srcLayout, 0, reps, elemsPerInstr, order,
                                      warpsPerBlock)) {
     for (int block = 0; block < numBlocks; ++block) {
       int blockNonKOffset = block * nonKDim * warpsPerBlock;
