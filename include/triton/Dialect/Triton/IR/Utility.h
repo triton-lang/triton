@@ -148,7 +148,7 @@ template <typename T> bool isPermutationOfIota(ArrayRef<T> vals) {
   return isIota(sorted);
 }
 
-template <typename VecT> bool IsPermutationOfIota(const VecT &vec) {
+template <typename VecT> bool isPermutationOfIota(const VecT &vec) {
   return isPermutationOfIota(ArrayRef(vec));
 }
 

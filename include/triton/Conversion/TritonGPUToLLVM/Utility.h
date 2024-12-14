@@ -288,28 +288,18 @@ struct SharedMemoryObject {
                      triton::gpu::SharedEncodingAttr layout, Location loc,
                      RewriterBase &rewriter)
       : base(base), baseElemType(baseElemType) {
-    // Minor-to-major order by default
-    auto order = SmallVector<unsigned>(strides.size());
+    SmallVector<unsigned> order(shape.size());
+    // Default minor-to-major order
     std::iota(order.rbegin(), order.rend(), 0);
-    auto layoutOrder = convertType<unsigned>(layout.getOrder());
-    if (layoutOrder.size() > shape.size()) {
-      // Take the most minor orders from the layout order
-      auto rankDiff = layoutOrder.size() - shape.size();
-      for (auto i = 0; i < order.size(); ++i) {
+    if (layout) {
+      auto layoutOrder = convertType<int>(layout.getOrder());
+      int rankDiff = layoutOrder.size() - shape.size();
+      for (size_t i = 0; i < shape.size(); ++i)
         order[i] = layoutOrder[i] - rankDiff;
-        assert(order[i] < shape.size() && order[i] >= 0);
-      }
-    } else if (layoutOrder.size() < shape.size()) {
-      // Assume the layout order is the most minor orders
-      auto rankDiff = shape.size() - layoutOrder.size();
-      for (auto i = 0; i < order.size(); ++i) {
-        order[i] = layoutOrder[i] + rankDiff;
-        assert(order[i] >= shape.size() - rankDiff && order[i] < shape.size());
-      }
-    } else {
-      order = layoutOrder;
     }
+    assert(isPermutationOfIota(order) && "Invalid order");
     strides = getStridesFromShapeAndOrder(shape, order, loc, rewriter);
+    offsets.append(order.size(), i32_val(0));
   }
 
   SmallVector<Value> getStrides() const { return strides; }
