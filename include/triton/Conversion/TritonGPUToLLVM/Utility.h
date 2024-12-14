@@ -278,13 +278,6 @@ struct SharedMemoryObject {
   }
 
   SharedMemoryObject(Value base, Type baseElemType, ArrayRef<int64_t> shape,
-                     ArrayRef<unsigned> order, Location loc,
-                     RewriterBase &rewriter)
-      : base(base), baseElemType(baseElemType) {
-    strides = getStridesFromShapeAndOrder(shape, order, loc, rewriter);
-  }
-
-  SharedMemoryObject(Value base, Type baseElemType, ArrayRef<int64_t> shape,
                      triton::gpu::SharedEncodingAttr layout, Location loc,
                      RewriterBase &rewriter)
       : base(base), baseElemType(baseElemType) {
@@ -294,7 +287,8 @@ struct SharedMemoryObject {
     if (layout) {
       auto layoutOrder = convertType<int>(layout.getOrder());
       int rankDiff = layoutOrder.size() - shape.size();
-      for (size_t i = 0; i < shape.size(); ++i)
+      auto commonRank = std::min(shape.size(), layoutOrder.size());
+      for (size_t i = 0; i < commonRank; ++i)
         order[i] = layoutOrder[i] - rankDiff;
     }
     assert(isPermutationOfIota(order) && "Invalid order");
