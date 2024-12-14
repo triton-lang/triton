@@ -521,6 +521,24 @@ inline Value dot(RewriterBase &rewriter, Location loc, ArrayRef<Value> offsets,
   return ret;
 }
 
+/// Extend 2d shared object to 3d.
+///
+/// If tensor has 3 dimensions, returns original shared object.
+/// If tensor shape is [M, N], return shared object describing shape [1, M, N]
+///
+/// This Function is used to simplify processing of 2d and 3d dot operands,
+/// particularly in the conversion of local_load operation.
+///
+/// \param rewriter
+/// \param loc
+/// \param smemObj
+/// \param shape shape of a tensor represented by smemObj
+/// \returns shared object describing 3d tensor
+SharedMemoryObject
+getExpandedSharedMemoryObject(ConversionPatternRewriter &rewriter, Location loc,
+                              SharedMemoryObject smemObj,
+                              ArrayRef<int64_t> shape);
+
 // -----------------------------------------------------------------------
 // Blocked layout indices
 // -----------------------------------------------------------------------

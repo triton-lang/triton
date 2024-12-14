@@ -211,7 +211,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
 
   auto sharedLayout = cast<SharedEncodingAttr>(aTensorTy.getEncoding());
-  auto order = smemObj.getOrder();
+  auto order = sharedLayout.getOrder();
   assert((rank == 2 || order[2] == 0) &&
          "expect batch to be the slowest dimension");
 

@@ -819,13 +819,15 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   auto expandedDescTy = getExpandedDesc(descTy);
   auto expandedEncoding =
       cast<DotOperandEncodingAttr>(getExpandedEncoding(encoding));
+  auto expandedSmemObj =
+      getExpandedSharedMemoryObject(rewriter, loc, smemObj, descTy.getShape());
   if (opIdx == 0)
-    return loadArg(rewriter, loc, expandedDescTy, expandedEncoding, smemObj,
-                   typeConverter, thread, true);
+    return loadArg(rewriter, loc, expandedDescTy, expandedEncoding,
+                   expandedSmemObj, typeConverter, thread, true);
   else {
     assert(opIdx == 1);
-    return loadArg(rewriter, loc, expandedDescTy, expandedEncoding, smemObj,
-                   typeConverter, thread, false);
+    return loadArg(rewriter, loc, expandedDescTy, expandedEncoding,
+                   expandedSmemObj, typeConverter, thread, false);
   }
 }
 } // namespace SharedToDotOperandMMAv2OrV3
