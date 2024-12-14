@@ -293,11 +293,21 @@ struct SharedMemoryObject {
                      RewriterBase &rewriter)
       : base(base), baseElemType(baseElemType) {
     auto layoutOrder = convertType<unsigned>(layout.getOrder());
-    if (layout.getMaxPhase() > 1) { // Swizzling
-      assert(layoutOrder.size() == 2 && shape.size() >= 2 &&
-             "Swizzling requires at least 2 dimensions");
-      bool rowMajor = layoutOrder[0] == 1;
-      order = triton::gpu::getMatrixOrder(shape.size(), rowMajor);
+    std::iota(order.rbegin(), order.rend(), 0);
+    if (layoutOrder.size() > shape.size()) {
+      // Take the most minor orders from the layout order
+      auto rankDiff = layoutOrder.size() - shape.size();
+      for (auto i = 0; i < order.size(); ++i) {
+        order[i] = layoutOrder[i] - rankDiff;
+        assert(order[i] <= shape.size() && order[i] >= 0);
+      }
+    } else if (layoutOrder.size() < shape.size()) {
+      // Assume the layout order is the most minor orders
+      auto rankDiff = shape.size() - layoutOrder.size();
+      for (auto i = 0; i < order.size(); ++i) {
+        order[i] = layoutOrder[i] + rankDiff;
+        assert(order[i] >= shape.size() - rankDiff && order[i] < shape.size());
+      }
     } else {
       order = layoutOrder;
     }
