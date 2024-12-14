@@ -43,292 +43,292 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32}
 
 // -----
 
-//#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
-//module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
-//  // CHECK-LABEL: tt.func @conversion2
-//  tt.func @conversion2(%arg0: !tt.ptr<f32>)-> tensor<1024xf32, #blocked>{
-//     %c1024_i32 = arith.constant 1024 : i32
-//     %0 = tt.get_program_id x : i32
-//     %1 = arith.muli %0, %c1024_i32 : i32
-//     %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
-//     %3 = tt.splat %1 : i32 -> tensor<1024xi32, #blocked>
-//     %4 = arith.addi %3, %2 : tensor<1024xi32, #blocked>
-//     %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
-//     // CHECK: %[[scalarOffset:.*]] = arith.addi {{.*}}, {{.*}} : i32
-//     // CHECK: %[[baseOffset064bit:.*]] = tt.splat {{.*}} : i64
-//     // CHECK: %[[newScalarPtr:.*]] = tt.addptr %arg0, %[[scalarOffset]]
-//     // CHECK: %[[offset064bit:.*]] = arith.extsi {{.*}}
-//     // CHECK: %[[offset164bit:.*]] = arith.addi %[[offset064bit]], %[[baseOffset064bit]]
-//     // CHECK: %[[offset132bit:.*]] = arith.trunci %[[offset164bit]] : tensor<1024xi64, #blocked> to tensor<1024xi32, #blocked>
-//     // CHECK: %[[basePtr:.*]] = tt.splat %[[newScalarPtr]]
-//     // CHECK: %[[newPtr:.*]] = tt.addptr %[[basePtr]], %[[offset132bit]]
-//     // CHECK: tt.load %[[newPtr]]
-//     %6 = tt.addptr %5, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
-//     %7 = tt.load %6 : tensor<1024x!tt.ptr<f32>, #blocked>
-//     tt.return %7 : tensor<1024xf32, #blocked>
-//  }
-//}
-//
-//// -----
-//
-//#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
-//module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
-//  // CHECK-LABEL: tt.func @conversion3
-//  tt.func @conversion3(%arg0: !tt.ptr<f32>)-> tensor<1024xf32, #blocked>{
-//     %c1024_i32 = arith.constant 1024 : i32
-//     %0 = tt.get_program_id x : i32
-//     %1 = arith.muli %0, %c1024_i32 : i32
-//     %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
-//     %3 = tt.splat %1 : i32 -> tensor<1024xi32, #blocked>
-//     %4 = arith.addi %3, %2 : tensor<1024xi32, #blocked>
-//
-//     //CHECK: %0 = tt.get_program_id x : i32
-//     //CHECK: %[[pid:.*]] = arith.muli %0, {{.*}} : i32
-//     //CHECK: %[[makerange:.*]] = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
-//     //CHECK: %[[uniformOffset1:.*]] = arith.addi %[[pid]], {{.*}} : i32
-//     //CHECK: %[[tensorOffset1:.*]] = arith.addi %{{.*}}, %[[makerange]] : tensor<1024xi32, #blocked>
-//     //CHECK: %[[uniformOffset0:.*]] = arith.addi %[[pid:.*]], %{{.*}} : i32
-//     //CHECK: %[[tensorOffset3:.*]] = arith.addi %{{.*}}, %[[makerange]] : tensor<1024xi32, #blocked>
-//     //CHECK: %[[zero:.*]] = tt.splat %{{.*}} : i64 -> tensor<1024xi64, #blocked>
-//     //CHECK: %[[uniformPtr0:.*]] = tt.addptr %arg0, %[[uniformOffset0:.*]] : !tt.ptr<f32>, i32
-//     //CHECK: %[[tensorOffset3ext:.*]] = arith.extsi %[[tensorOffset3]] : tensor<1024xi32, #blocked> to tensor<1024xi64, #blocked>
-//     //CHECK: %[[tensorOffset0:.*]]= arith.addi %[[tensorOffset3ext]], %[[zero]] : tensor<1024xi64, #blocked>
-//     //CHECK: %[[uniformPtr1:.*]] = tt.addptr %[[uniformPtr0]], %[[uniformOffset1]] : !tt.ptr<f32>, i32
-//     //CHECK: %[[tensorOffset1ext:.*]] = arith.extsi %[[tensorOffset1]] : tensor<1024xi32, #blocked> to tensor<1024xi64, #blocked>
-//     //CHECK: %[[tensorOffset2:.*]] = arith.addi %[[tensorOffset1ext]], %[[tensorOffset0]]: tensor<1024xi64, #blocked>
-//     //CHECK: %[[scalarPtr:.*]] = tt.splat %[[uniformPtr1]] : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
-//     //CHECK: %[[newPtr:.*]] = tt.addptr %[[scalarPtr]], %[[tensorOffset2]] : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi64, #blocked>
-//     //CHECK: tt.load %[[newPtr]]
-//
-//     %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
-//     %6 = tt.addptr %5, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
-//     %7 = tt.addptr %6, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
-//     %8 = tt.load %7 : tensor<1024x!tt.ptr<f32>, #blocked>
-//     tt.return %8 : tensor<1024xf32, #blocked>
-//  }
-//}
-//
-//// -----
-//
-//#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
-//module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
-//  //
-//  // This is the same as conversion3, but now the `arith.extsi` operations
-//  // disappeared and all the offsets are 32 bits.
-//  //
-//  // CHECK-LABEL: tt.func @conversion4
-//  tt.func @conversion4(%arg0: !tt.ptr<f32>{tt.pointer_range = 32 : i32})-> tensor<1024xf32, #blocked>{
-//     %c1024_i32 = arith.constant 1024 : i32
-//     %0 = tt.get_program_id x : i32
-//     %1 = arith.muli %0, %c1024_i32 : i32
-//     %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
-//     %3 = tt.splat %1 : i32 -> tensor<1024xi32, #blocked>
-//     %4 = arith.addi %3, %2 : tensor<1024xi32, #blocked>
-//
-//     //CHECK: %0 = tt.get_program_id x : i32
-//     //CHECK: %[[pid:.*]] = arith.muli %0, {{.*}} : i32
-//     //CHECK: %[[makerange:.*]] = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
-//     //CHECK: %[[uniformOffset1:.*]] = arith.addi %[[pid]], {{.*}} : i32
-//     //CHECK: %[[tensorOffset1:.*]] = arith.addi %{{.*}}, %[[makerange]] : tensor<1024xi32, #blocked>
-//     //CHECK: %[[uniformOffset0:.*]] = arith.addi %[[pid:.*]], %{{.*}} : i32
-//     //CHECK: %[[tensorOffset3:.*]] = arith.addi %{{.*}}, %[[makerange]] : tensor<1024xi32, #blocked>
-//     //CHECK: %[[zero:.*]] = tt.splat %{{.*}} : i32 -> tensor<1024xi32, #blocked>
-//     //CHECK: %[[uniformPtr0:.*]] = tt.addptr %arg0, %[[uniformOffset0:.*]] : !tt.ptr<f32>, i32
-//     //CHECK: %[[tensorOffset0:.*]]= arith.addi %[[tensorOffset3]], %[[zero]] : tensor<1024xi32, #blocked>
-//     //CHECK: %[[uniformPtr1:.*]] = tt.addptr %[[uniformPtr0]], %[[uniformOffset1]] : !tt.ptr<f32>, i32
-//     //CHECK: %[[tensorOffset2:.*]] = arith.addi %[[tensorOffset1]], %[[tensorOffset0]]: tensor<1024xi32, #blocked>
-//     //CHECK: %[[scalarPtr:.*]] = tt.splat %[[uniformPtr1]] : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
-//     //CHECK: %[[newPtr:.*]] = tt.addptr %[[scalarPtr]], %[[tensorOffset2]] : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
-//     //CHECK: tt.load %[[newPtr]]
-//     %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
-//     %6 = tt.addptr %5, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
-//     %7 = tt.addptr %6, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
-//     %8 = tt.load %7 : tensor<1024x!tt.ptr<f32>, #blocked>
-//     tt.return %8 : tensor<1024xf32, #blocked>
-//  }
-//}
-//
-//// -----
-//
-//#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
-//module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
-//  // CHECK-LABEL: tt.func @forOp
-//  tt.func @forOp(%arg0: !tt.ptr<f32>, %init : tensor<1024xf32, #blocked>)-> tensor<1024xf32, #blocked>{
-//    %c1024_i32 = arith.constant 1024 : i32
-//    %c0 = arith.constant 0: index
-//    %c128 = arith.constant 128: index
-//    %c1 = arith.constant 1 : index
-//    %0 = tt.get_program_id x : i32
-//    %1 = arith.muli %0, %c1024_i32 : i32
-//    %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
-//    // CHECK: %[[scalarOffsetLoop:.*]] = arith.addi {{.*}}, {{.*}} : i32
-//    // CHECK: %[[variableOffset1:.*]] = arith.addi %{{.*}}, %{{.*}} : tensor
-//    // CHECK: %[[scalarOffset1:.*]] = arith.addi %{{.*}}, %{{.*}} : i32
-//    // CHECK: %[[scalarOffset:.*]] = arith.addi %{{.*}}, %{{.*}} : i32
-//    // CHECK: %[[variableOffset:.*]] = arith.addi %{{.*}}, %{{.*}} : tensor
-//    // CHECK: %[[scalarPtrUpdate:.*]] = tt.addptr %arg0, %[[scalarOffset]]
-//    // CHECK: %[[ext_offset0:.*]] = arith.extsi %[[variableOffset]]
-//    // CHECK: %[[offset1:.*]] = arith.addi %[[ext_offset0]], %{{.*}} : tensor<1024xi64, #blocked>
-//    %3 = tt.splat %1 : i32 -> tensor<1024xi32, #blocked>
-//    %4 = arith.addi %3, %2 : tensor<1024xi32, #blocked>
-//    %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
-//    %6 = tt.addptr %5, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
-//    // CHECK: %[[loop:.*]]:4 = scf.for {{.*}} iter_args({{.*}}, {{.*}}, %[[loopScalarPtr:.*]] = %{{.*}}, %[[loopOffset:.*]] = %[[offset1]]) -> {{.*}} {
-//    %52:2 = scf.for %arg9 = %c0 to %c128 step %c1 iter_args(%arg1 = %6, %arg2 = %init) -> (tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xf32, #blocked>){
-//        // CHECK: %[[scalarPtrUpdateLoop:.*]] = tt.addptr %[[loopScalarPtr]], %[[scalarOffsetLoop]]
-//        // CHECK: %[[ext_offset0i:.*]] = arith.extsi %[[variableOffset1]]
-//        // CHECK: %[[offset_i:.*]] = arith.addi %[[ext_offset0i]], %[[loopOffset]]
-//        // CHECK: %[[base_ptr:.*]] = tt.splat %[[scalarPtrUpdateLoop]]
-//        // CHECK: %[[newPtr:.*]] = tt.addptr %[[base_ptr]], %[[offset_i]]
-//        // CHECK: tt.load %[[newPtr]]
-//        // CHECK: scf.yield {{.*}}, {{.*}}, %[[scalarPtrUpdateLoop]], %[[offset_i]]
-//        %11 = tt.addptr %arg1, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
-//        %9 = tt.load %11 : tensor<1024x!tt.ptr<f32>, #blocked>
-//        %10 = arith.addf %9, %arg2 : tensor<1024xf32, #blocked>
-//        scf.yield %11, %10 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xf32, #blocked>
-//    }
-//    // CHECK: tt.addptr %[[loop]]#2, %[[scalarOffset1]] : !tt.ptr<f32>, i32
-//    %8 = tt.addptr %52#0, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
-//    %11 = tt.load %8 : tensor<1024x!tt.ptr<f32>, #blocked>
-//    tt.return %11 : tensor<1024xf32, #blocked>
-//  }
-//}
-//
-//// -----
-//
-//#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
-//module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
-//  // CHECK-LABEL: tt.func @forOp2
-//  tt.func @forOp2(%arg0: !tt.ptr<f32>, %init : tensor<1024xf32, #blocked>)-> tensor<1024xf32, #blocked>{
-//    %c1024_i32 = arith.constant 1024 : i32
-//    %c0 = arith.constant 0: index
-//    %c128 = arith.constant 128: index
-//    %c1 = arith.constant 1 : index
-//    %0 = tt.get_program_id x : i32
-//    %1 = arith.muli %0, %c1024_i32 : i32
-//    %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
-//    // CHECK: %[[scalarOffset:.*]] = arith.addi %{{.*}}, %{{.*}} : i32
-//    // CHECK: %[[variableOffset0:.*]] = arith.addi %{{.*}}, %{{.*}} : tensor<1024xi32, #blocked>
-//    // CHECK: %[[finalScalarOffset:.*]] = arith.addi %{{.*}}, %{{.*}} : i32
-//    // CHECK: %[[variableOffset1:.*]] = arith.addi %{{.*}}, %{{.*}} : tensor<1024xi32, #blocked>
-//    // CHECK: %[[base_offset:.*]] = tt.splat {{.*}} : i64
-//    %3 = tt.splat %1 : i32 -> tensor<1024xi32, #blocked>
-//    %4 = arith.addi %3, %2 : tensor<1024xi32, #blocked>
-//    %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
-//    // CHECK: %[[forOut:.*]]:4 = scf.for {{.*}} iter_args(%{{.*}}, {{.*}}, %[[scalarPtr:.*]] = %arg0, %[[loopOffset:.*]] = %[[base_offset]])
-//    %52:2 = scf.for %arg9 = %c0 to %c128 step %c1 iter_args(%arg1 = %5, %arg2 = %init) -> (tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xf32, #blocked>){
-//        // CHECK: %[[scalarPtrUpdate:.*]] = tt.addptr %[[scalarPtr]], %[[scalarOffset]]
-//        // CHECK: %[[ext_offset0i:.*]] = arith.extsi %[[variableOffset0]]
-//        // CHECK: %[[ext_offset_i:.*]] = arith.addi %[[ext_offset0i]], %[[loopOffset]]
-//        // CHECK: %[[base_ptr:.*]] = tt.splat %[[scalarPtrUpdate]]
-//        // CHECK: %[[newPtr:.*]] = tt.addptr %[[base_ptr]], %[[ext_offset_i]]
-//        // CHECK: tt.load %[[newPtr]]
-//        %11 = tt.addptr %arg1, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
-//        %9 = tt.load %11 : tensor<1024x!tt.ptr<f32>, #blocked>
-//        %10 = arith.addf %9, %arg2 : tensor<1024xf32, #blocked>
-//        scf.yield %11, %10 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xf32, #blocked>
-//    }
-//    // CHECK: %[[scalarPtrFinalUpdate:.*]] = tt.addptr %[[forOut]]#2, %[[finalScalarOffset]]
-//    // CHECK: %[[ext_offset0:.*]] = arith.extsi %[[variableOffset1]]
-//    // CHECK: %[[tailOffset:.*]] = arith.addi %[[ext_offset0]], %[[forOut]]#3
-//    // CHECK: %[[tail_base_ptr:.*]] = tt.splat %[[scalarPtrFinalUpdate]]
-//    // CHECK: %[[tailPtr:.*]] = tt.addptr %[[tail_base_ptr]], %[[tailOffset]]
-//    // CHECK: tt.load %[[tailPtr]]
-//    %8 = tt.addptr %52#0, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
-//    %11 = tt.load %8 : tensor<1024x!tt.ptr<f32>, #blocked>
-//    tt.return %11 : tensor<1024xf32, #blocked>
-//  }
-//}
-//
-//// -----
-//
-//#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
-//module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
-//  // CHECK-LABEL: tt.func @forNested
-//  tt.func @forNested(%arg0: !tt.ptr<f32>, %init : tensor<1024xf32, #blocked>)-> tensor<1024xf32, #blocked>{
-//    %c1024_i32 = arith.constant 1024 : i32
-//    %c0 = arith.constant 0: index
-//    %c128 = arith.constant 128: index
-//    %c1 = arith.constant 1 : index
-//    %0 = tt.get_program_id x : i32
-//    %1 = arith.muli %0, %c1024_i32 : i32
-//    %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
-//    // CHECK: %[[scalarOffset:.*]] = arith.addi {{.*}}, {{.*}} : i32
-//    // CHECK: %[[variableOffset:.*]] = arith.addi %{{.*}}, %{{.*}} : tensor<1024xi32, #blocked>
-//    // CHECK: %[[base_offset:.*]] = tt.splat {{.*}} : i64
-//    %3 = tt.splat %1 : i32 -> tensor<1024xi32, #blocked>
-//    %4 = arith.addi %3, %2 : tensor<1024xi32, #blocked>
-//    %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
-//
-//    // CHECK: %[[forOut0:.*]]:4 = scf.for {{.*}} iter_args(%{{.*}}, {{.*}}, %[[scalarPtr0:.*]] = %arg0, %[[loopOffset0:.*]] = %[[base_offset]]){{.*}}{
-//    // CHECK: %[[forOut1:.*]]:4 = scf.for {{.*}} iter_args(%{{.*}}, {{.*}}, %[[scalarPtr1:.*]] = %[[scalarPtr0]], %[[loopOffset1:.*]] = %[[loopOffset0]]){{.*}}{
-//    // CHECK: %[[scalarPtrUpdate:.*]] = tt.addptr %[[scalarPtr1]], %{{.*}}
-//    // CHECK: %[[ext_loop_offset1:.*]] = arith.extsi %[[variableOffset]]
-//    // CHECK: %[[offset_i:.*]] = arith.addi %[[ext_loop_offset1]], %[[loopOffset1]]
-//    // CHECK: %[[base_ptr:.*]] = tt.splat %[[scalarPtrUpdate]]
-//    // CHECK: %[[newPtr:.*]] = tt.addptr %[[base_ptr]], %[[offset_i]]
-//    // CHECK: tt.load %[[newPtr]]
-//    // CHECK: scf.yield %{{.*}}, {{.*}}, %[[scalarPtrUpdate]], %[[offset_i]]
-//    // CHECK: scf.yield %{{.*}}, {{.*}}, %[[forOut1]]#2, %[[forOut1]]#3
-//
-//    %52:2 = scf.for %arg9 = %c0 to %c128 step %c1 iter_args(%arg1 = %5, %arg2 = %init) -> (tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xf32, #blocked>){
-//        %53:2 = scf.for %arg10 = %c0 to %c128 step %c1 iter_args(%arg3 = %arg1, %arg4 = %arg2) -> (tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xf32, #blocked>){
-//            %11 = tt.addptr %arg3, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
-//            %9 = tt.load %11 : tensor<1024x!tt.ptr<f32>, #blocked>
-//            %10 = arith.addf %9, %arg4 : tensor<1024xf32, #blocked>
-//            scf.yield %11, %10 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xf32, #blocked>
-//        }
-//        scf.yield %53#0, %53#1: tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xf32, #blocked>
-//    }
-//    %8 = tt.addptr %52#0, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
-//    %11 = tt.load %8 : tensor<1024x!tt.ptr<f32>, #blocked>
-//    tt.return %11 : tensor<1024xf32, #blocked>
-//  }
-//}
-//
-//// -----
-//
-//#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
-//module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
-//  // CHECK-LABEL: tt.func @ifOp
-//  tt.func @ifOp(%arg0: !tt.ptr<f32>, %init : tensor<1024xf32, #blocked>, %cond : i1)-> tensor<1024xf32, #blocked>{
-//    %c1024_i32 = arith.constant 1024 : i32
-//    %c0 = arith.constant 0: index
-//    %c128 = arith.constant 128: index
-//    %c1 = arith.constant 1 : index
-//    %0 = tt.get_program_id x : i32
-//    %1 = arith.muli %0, %c1024_i32 : i32
-//    %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
-//    // CHECK: %[[scalarOffset:.*]] = arith.addi {{.*}}, {{.*}} : i32
-//    // CHECK: %[[variableOffset:.*]] = arith.addi
-//    %3 = tt.splat %1 : i32 -> tensor<1024xi32, #blocked>
-//    %4 = arith.addi %3, %2 : tensor<1024xi32, #blocked>
-//    %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
-//    // CHECK: %[[baseOffsetVariable:.*]] = tt.splat {{.*}} : i64 -> tensor<1024xi64, #blocked>
-//    // CHECK: %[[ifOut:.*]]:3 = scf.if {{.*}} -> (tensor<1024x!tt.ptr<f32>, #blocked>, !tt.ptr<f32>, tensor<1024xi64, #blocked>)
-//    %6 = scf.if %cond -> (tensor<1024x!tt.ptr<f32>, #blocked>){
-//        // CHECK: %[[scalarOffsetUpdate:.*]] = tt.addptr %arg0, %[[scalarOffset]]
-//        // CHECK: %[[ext_offset0:.*]] = arith.extsi %[[variableOffset]]
-//        // CHECK: %[[if_offset:.*]] = arith.addi %[[ext_offset0]], %[[baseOffsetVariable]]
-//        // CHECK: scf.yield %{{.*}}, %[[scalarOffsetUpdate]], %[[if_offset]]
-//        %true = tt.addptr %5, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
-//        scf.yield %true : tensor<1024x!tt.ptr<f32>, #blocked>
-//    } else {
-//        // CHECK: %[[new_scalar_ptr:.*]] = tt.addptr %arg0, {{.*}}
-//        // CHECK: scf.yield %{{.*}}, %[[new_scalar_ptr]], %[[baseOffsetVariable]]
-//        %false = tt.addptr %5, %3 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
-//        scf.yield %false : tensor<1024x!tt.ptr<f32>, #blocked>
-//    }
-//    // CHECK: %[[trunc_offset:.*]] = arith.trunci %[[ifOut]]#2
-//    // CHECK: %[[base_ptr:.*]] = tt.splat %[[ifOut]]#1
-//    // CHECK: %[[newPtr:.*]] = tt.addptr %[[base_ptr]], %[[trunc_offset]]
-//    // CHECK: tt.load %[[newPtr]]
-//    %11 = tt.load %6 : tensor<1024x!tt.ptr<f32>, #blocked>
-//    tt.return %11 : tensor<1024xf32, #blocked>
-//  }
-//}
-//
-//// -----
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: tt.func @conversion2
+  tt.func @conversion2(%arg0: !tt.ptr<f32>)-> tensor<1024xf32, #blocked>{
+     %c1024_i32 = arith.constant 1024 : i32
+     %0 = tt.get_program_id x : i32
+     %1 = arith.muli %0, %c1024_i32 : i32
+     %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+     %3 = tt.splat %1 : i32 -> tensor<1024xi32, #blocked>
+     %4 = arith.addi %3, %2 : tensor<1024xi32, #blocked>
+     %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+     // CHECK: %[[scalarOffset:.*]] = arith.addi {{.*}}, {{.*}} : i32
+     // CHECK: %[[baseOffset064bit:.*]] = tt.splat {{.*}} : i64
+     // CHECK: %[[newScalarPtr:.*]] = tt.addptr %arg0, %[[scalarOffset]]
+     // CHECK: %[[offset064bit:.*]] = arith.extsi {{.*}}
+     // CHECK: %[[offset164bit:.*]] = arith.addi %[[offset064bit]], %[[baseOffset064bit]]
+     // CHECK: %[[offset132bit:.*]] = arith.trunci %[[offset164bit]] : tensor<1024xi64, #blocked> to tensor<1024xi32, #blocked>
+     // CHECK: %[[basePtr:.*]] = tt.splat %[[newScalarPtr]]
+     // CHECK: %[[newPtr:.*]] = tt.addptr %[[basePtr]], %[[offset132bit]]
+     // CHECK: tt.load %[[newPtr]]
+     %6 = tt.addptr %5, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+     %7 = tt.load %6 : tensor<1024x!tt.ptr<f32>, #blocked>
+     tt.return %7 : tensor<1024xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: tt.func @conversion3
+  tt.func @conversion3(%arg0: !tt.ptr<f32>)-> tensor<1024xf32, #blocked>{
+     %c1024_i32 = arith.constant 1024 : i32
+     %0 = tt.get_program_id x : i32
+     %1 = arith.muli %0, %c1024_i32 : i32
+     %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+     %3 = tt.splat %1 : i32 -> tensor<1024xi32, #blocked>
+     %4 = arith.addi %3, %2 : tensor<1024xi32, #blocked>
+
+     //CHECK: %0 = tt.get_program_id x : i32
+     //CHECK: %[[pid:.*]] = arith.muli %0, {{.*}} : i32
+     //CHECK: %[[makerange:.*]] = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+     //CHECK: %[[uniformOffset1:.*]] = arith.addi %[[pid]], {{.*}} : i32
+     //CHECK: %[[tensorOffset1:.*]] = arith.addi %{{.*}}, %[[makerange]] : tensor<1024xi32, #blocked>
+     //CHECK: %[[uniformOffset0:.*]] = arith.addi %[[pid:.*]], %{{.*}} : i32
+     //CHECK: %[[tensorOffset3:.*]] = arith.addi %{{.*}}, %[[makerange]] : tensor<1024xi32, #blocked>
+     //CHECK: %[[zero:.*]] = tt.splat %{{.*}} : i64 -> tensor<1024xi64, #blocked>
+     //CHECK: %[[uniformPtr0:.*]] = tt.addptr %arg0, %[[uniformOffset0:.*]] : !tt.ptr<f32>, i32
+     //CHECK: %[[tensorOffset3ext:.*]] = arith.extsi %[[tensorOffset3]] : tensor<1024xi32, #blocked> to tensor<1024xi64, #blocked>
+     //CHECK: %[[tensorOffset0:.*]]= arith.addi %[[tensorOffset3ext]], %[[zero]] : tensor<1024xi64, #blocked>
+     //CHECK: %[[uniformPtr1:.*]] = tt.addptr %[[uniformPtr0]], %[[uniformOffset1]] : !tt.ptr<f32>, i32
+     //CHECK: %[[tensorOffset1ext:.*]] = arith.extsi %[[tensorOffset1]] : tensor<1024xi32, #blocked> to tensor<1024xi64, #blocked>
+     //CHECK: %[[tensorOffset2:.*]] = arith.addi %[[tensorOffset1ext]], %[[tensorOffset0]]: tensor<1024xi64, #blocked>
+     //CHECK: %[[scalarPtr:.*]] = tt.splat %[[uniformPtr1]] : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+     //CHECK: %[[newPtr:.*]] = tt.addptr %[[scalarPtr]], %[[tensorOffset2]] : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi64, #blocked>
+     //CHECK: tt.load %[[newPtr]]
+
+     %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+     %6 = tt.addptr %5, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+     %7 = tt.addptr %6, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+     %8 = tt.load %7 : tensor<1024x!tt.ptr<f32>, #blocked>
+     tt.return %8 : tensor<1024xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  //
+  // This is the same as conversion3, but now the `arith.extsi` operations
+  // disappeared and all the offsets are 32 bits.
+  //
+  // CHECK-LABEL: tt.func @conversion4
+  tt.func @conversion4(%arg0: !tt.ptr<f32>{tt.pointer_range = 32 : i32})-> tensor<1024xf32, #blocked>{
+     %c1024_i32 = arith.constant 1024 : i32
+     %0 = tt.get_program_id x : i32
+     %1 = arith.muli %0, %c1024_i32 : i32
+     %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+     %3 = tt.splat %1 : i32 -> tensor<1024xi32, #blocked>
+     %4 = arith.addi %3, %2 : tensor<1024xi32, #blocked>
+
+     //CHECK: %0 = tt.get_program_id x : i32
+     //CHECK: %[[pid:.*]] = arith.muli %0, {{.*}} : i32
+     //CHECK: %[[makerange:.*]] = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+     //CHECK: %[[uniformOffset1:.*]] = arith.addi %[[pid]], {{.*}} : i32
+     //CHECK: %[[tensorOffset1:.*]] = arith.addi %{{.*}}, %[[makerange]] : tensor<1024xi32, #blocked>
+     //CHECK: %[[uniformOffset0:.*]] = arith.addi %[[pid:.*]], %{{.*}} : i32
+     //CHECK: %[[tensorOffset3:.*]] = arith.addi %{{.*}}, %[[makerange]] : tensor<1024xi32, #blocked>
+     //CHECK: %[[zero:.*]] = tt.splat %{{.*}} : i32 -> tensor<1024xi32, #blocked>
+     //CHECK: %[[uniformPtr0:.*]] = tt.addptr %arg0, %[[uniformOffset0:.*]] : !tt.ptr<f32>, i32
+     //CHECK: %[[tensorOffset0:.*]]= arith.addi %[[tensorOffset3]], %[[zero]] : tensor<1024xi32, #blocked>
+     //CHECK: %[[uniformPtr1:.*]] = tt.addptr %[[uniformPtr0]], %[[uniformOffset1]] : !tt.ptr<f32>, i32
+     //CHECK: %[[tensorOffset2:.*]] = arith.addi %[[tensorOffset1]], %[[tensorOffset0]]: tensor<1024xi32, #blocked>
+     //CHECK: %[[scalarPtr:.*]] = tt.splat %[[uniformPtr1]] : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+     //CHECK: %[[newPtr:.*]] = tt.addptr %[[scalarPtr]], %[[tensorOffset2]] : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+     //CHECK: tt.load %[[newPtr]]
+     %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+     %6 = tt.addptr %5, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+     %7 = tt.addptr %6, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+     %8 = tt.load %7 : tensor<1024x!tt.ptr<f32>, #blocked>
+     tt.return %8 : tensor<1024xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: tt.func @forOp
+  tt.func @forOp(%arg0: !tt.ptr<f32>, %init : tensor<1024xf32, #blocked>)-> tensor<1024xf32, #blocked>{
+    %c1024_i32 = arith.constant 1024 : i32
+    %c0 = arith.constant 0: index
+    %c128 = arith.constant 128: index
+    %c1 = arith.constant 1 : index
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %c1024_i32 : i32
+    %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+    // CHECK: %[[scalarOffsetLoop:.*]] = arith.addi {{.*}}, {{.*}} : i32
+    // CHECK: %[[variableOffset1:.*]] = arith.addi %{{.*}}, %{{.*}} : tensor
+    // CHECK: %[[scalarOffset1:.*]] = arith.addi %{{.*}}, %{{.*}} : i32
+    // CHECK: %[[scalarOffset:.*]] = arith.addi %{{.*}}, %{{.*}} : i32
+    // CHECK: %[[variableOffset:.*]] = arith.addi %{{.*}}, %{{.*}} : tensor
+    // CHECK: %[[scalarPtrUpdate:.*]] = tt.addptr %arg0, %[[scalarOffset]]
+    // CHECK: %[[ext_offset0:.*]] = arith.extsi %[[variableOffset]]
+    // CHECK: %[[offset1:.*]] = arith.addi %[[ext_offset0]], %{{.*}} : tensor<1024xi64, #blocked>
+    %3 = tt.splat %1 : i32 -> tensor<1024xi32, #blocked>
+    %4 = arith.addi %3, %2 : tensor<1024xi32, #blocked>
+    %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+    %6 = tt.addptr %5, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+    // CHECK: %[[loop:.*]]:4 = scf.for {{.*}} iter_args({{.*}}, {{.*}}, %[[loopScalarPtr:.*]] = %{{.*}}, %[[loopOffset:.*]] = %[[offset1]]) -> {{.*}} {
+    %52:2 = scf.for %arg9 = %c0 to %c128 step %c1 iter_args(%arg1 = %6, %arg2 = %init) -> (tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xf32, #blocked>){
+        // CHECK: %[[scalarPtrUpdateLoop:.*]] = tt.addptr %[[loopScalarPtr]], %[[scalarOffsetLoop]]
+        // CHECK: %[[ext_offset0i:.*]] = arith.extsi %[[variableOffset1]]
+        // CHECK: %[[offset_i:.*]] = arith.addi %[[ext_offset0i]], %[[loopOffset]]
+        // CHECK: %[[base_ptr:.*]] = tt.splat %[[scalarPtrUpdateLoop]]
+        // CHECK: %[[newPtr:.*]] = tt.addptr %[[base_ptr]], %[[offset_i]]
+        // CHECK: tt.load %[[newPtr]]
+        // CHECK: scf.yield {{.*}}, {{.*}}, %[[scalarPtrUpdateLoop]], %[[offset_i]]
+        %11 = tt.addptr %arg1, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+        %9 = tt.load %11 : tensor<1024x!tt.ptr<f32>, #blocked>
+        %10 = arith.addf %9, %arg2 : tensor<1024xf32, #blocked>
+        scf.yield %11, %10 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xf32, #blocked>
+    }
+    // CHECK: tt.addptr %[[loop]]#2, %[[scalarOffset1]] : !tt.ptr<f32>, i32
+    %8 = tt.addptr %52#0, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+    %11 = tt.load %8 : tensor<1024x!tt.ptr<f32>, #blocked>
+    tt.return %11 : tensor<1024xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: tt.func @forOp2
+  tt.func @forOp2(%arg0: !tt.ptr<f32>, %init : tensor<1024xf32, #blocked>)-> tensor<1024xf32, #blocked>{
+    %c1024_i32 = arith.constant 1024 : i32
+    %c0 = arith.constant 0: index
+    %c128 = arith.constant 128: index
+    %c1 = arith.constant 1 : index
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %c1024_i32 : i32
+    %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+    // CHECK: %[[scalarOffset:.*]] = arith.addi %{{.*}}, %{{.*}} : i32
+    // CHECK: %[[variableOffset0:.*]] = arith.addi %{{.*}}, %{{.*}} : tensor<1024xi32, #blocked>
+    // CHECK: %[[finalScalarOffset:.*]] = arith.addi %{{.*}}, %{{.*}} : i32
+    // CHECK: %[[variableOffset1:.*]] = arith.addi %{{.*}}, %{{.*}} : tensor<1024xi32, #blocked>
+    // CHECK: %[[base_offset:.*]] = tt.splat {{.*}} : i64
+    %3 = tt.splat %1 : i32 -> tensor<1024xi32, #blocked>
+    %4 = arith.addi %3, %2 : tensor<1024xi32, #blocked>
+    %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+    // CHECK: %[[forOut:.*]]:4 = scf.for {{.*}} iter_args(%{{.*}}, {{.*}}, %[[scalarPtr:.*]] = %arg0, %[[loopOffset:.*]] = %[[base_offset]])
+    %52:2 = scf.for %arg9 = %c0 to %c128 step %c1 iter_args(%arg1 = %5, %arg2 = %init) -> (tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xf32, #blocked>){
+        // CHECK: %[[scalarPtrUpdate:.*]] = tt.addptr %[[scalarPtr]], %[[scalarOffset]]
+        // CHECK: %[[ext_offset0i:.*]] = arith.extsi %[[variableOffset0]]
+        // CHECK: %[[ext_offset_i:.*]] = arith.addi %[[ext_offset0i]], %[[loopOffset]]
+        // CHECK: %[[base_ptr:.*]] = tt.splat %[[scalarPtrUpdate]]
+        // CHECK: %[[newPtr:.*]] = tt.addptr %[[base_ptr]], %[[ext_offset_i]]
+        // CHECK: tt.load %[[newPtr]]
+        %11 = tt.addptr %arg1, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+        %9 = tt.load %11 : tensor<1024x!tt.ptr<f32>, #blocked>
+        %10 = arith.addf %9, %arg2 : tensor<1024xf32, #blocked>
+        scf.yield %11, %10 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xf32, #blocked>
+    }
+    // CHECK: %[[scalarPtrFinalUpdate:.*]] = tt.addptr %[[forOut]]#2, %[[finalScalarOffset]]
+    // CHECK: %[[ext_offset0:.*]] = arith.extsi %[[variableOffset1]]
+    // CHECK: %[[tailOffset:.*]] = arith.addi %[[ext_offset0]], %[[forOut]]#3
+    // CHECK: %[[tail_base_ptr:.*]] = tt.splat %[[scalarPtrFinalUpdate]]
+    // CHECK: %[[tailPtr:.*]] = tt.addptr %[[tail_base_ptr]], %[[tailOffset]]
+    // CHECK: tt.load %[[tailPtr]]
+    %8 = tt.addptr %52#0, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+    %11 = tt.load %8 : tensor<1024x!tt.ptr<f32>, #blocked>
+    tt.return %11 : tensor<1024xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: tt.func @forNested
+  tt.func @forNested(%arg0: !tt.ptr<f32>, %init : tensor<1024xf32, #blocked>)-> tensor<1024xf32, #blocked>{
+    %c1024_i32 = arith.constant 1024 : i32
+    %c0 = arith.constant 0: index
+    %c128 = arith.constant 128: index
+    %c1 = arith.constant 1 : index
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %c1024_i32 : i32
+    %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+    // CHECK: %[[scalarOffset:.*]] = arith.addi {{.*}}, {{.*}} : i32
+    // CHECK: %[[variableOffset:.*]] = arith.addi %{{.*}}, %{{.*}} : tensor<1024xi32, #blocked>
+    // CHECK: %[[base_offset:.*]] = tt.splat {{.*}} : i64
+    %3 = tt.splat %1 : i32 -> tensor<1024xi32, #blocked>
+    %4 = arith.addi %3, %2 : tensor<1024xi32, #blocked>
+    %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+
+    // CHECK: %[[forOut0:.*]]:4 = scf.for {{.*}} iter_args(%{{.*}}, {{.*}}, %[[scalarPtr0:.*]] = %arg0, %[[loopOffset0:.*]] = %[[base_offset]]){{.*}}{
+    // CHECK: %[[forOut1:.*]]:4 = scf.for {{.*}} iter_args(%{{.*}}, {{.*}}, %[[scalarPtr1:.*]] = %[[scalarPtr0]], %[[loopOffset1:.*]] = %[[loopOffset0]]){{.*}}{
+    // CHECK: %[[scalarPtrUpdate:.*]] = tt.addptr %[[scalarPtr1]], %{{.*}}
+    // CHECK: %[[ext_loop_offset1:.*]] = arith.extsi %[[variableOffset]]
+    // CHECK: %[[offset_i:.*]] = arith.addi %[[ext_loop_offset1]], %[[loopOffset1]]
+    // CHECK: %[[base_ptr:.*]] = tt.splat %[[scalarPtrUpdate]]
+    // CHECK: %[[newPtr:.*]] = tt.addptr %[[base_ptr]], %[[offset_i]]
+    // CHECK: tt.load %[[newPtr]]
+    // CHECK: scf.yield %{{.*}}, {{.*}}, %[[scalarPtrUpdate]], %[[offset_i]]
+    // CHECK: scf.yield %{{.*}}, {{.*}}, %[[forOut1]]#2, %[[forOut1]]#3
+
+    %52:2 = scf.for %arg9 = %c0 to %c128 step %c1 iter_args(%arg1 = %5, %arg2 = %init) -> (tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xf32, #blocked>){
+        %53:2 = scf.for %arg10 = %c0 to %c128 step %c1 iter_args(%arg3 = %arg1, %arg4 = %arg2) -> (tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xf32, #blocked>){
+            %11 = tt.addptr %arg3, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+            %9 = tt.load %11 : tensor<1024x!tt.ptr<f32>, #blocked>
+            %10 = arith.addf %9, %arg4 : tensor<1024xf32, #blocked>
+            scf.yield %11, %10 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xf32, #blocked>
+        }
+        scf.yield %53#0, %53#1: tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xf32, #blocked>
+    }
+    %8 = tt.addptr %52#0, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+    %11 = tt.load %8 : tensor<1024x!tt.ptr<f32>, #blocked>
+    tt.return %11 : tensor<1024xf32, #blocked>
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: tt.func @ifOp
+  tt.func @ifOp(%arg0: !tt.ptr<f32>, %init : tensor<1024xf32, #blocked>, %cond : i1)-> tensor<1024xf32, #blocked>{
+    %c1024_i32 = arith.constant 1024 : i32
+    %c0 = arith.constant 0: index
+    %c128 = arith.constant 128: index
+    %c1 = arith.constant 1 : index
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %c1024_i32 : i32
+    %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+    // CHECK: %[[scalarOffset:.*]] = arith.addi {{.*}}, {{.*}} : i32
+    // CHECK: %[[variableOffset:.*]] = arith.addi
+    %3 = tt.splat %1 : i32 -> tensor<1024xi32, #blocked>
+    %4 = arith.addi %3, %2 : tensor<1024xi32, #blocked>
+    %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+    // CHECK: %[[baseOffsetVariable:.*]] = tt.splat {{.*}} : i64 -> tensor<1024xi64, #blocked>
+    // CHECK: %[[ifOut:.*]]:3 = scf.if {{.*}} -> (tensor<1024x!tt.ptr<f32>, #blocked>, !tt.ptr<f32>, tensor<1024xi64, #blocked>)
+    %6 = scf.if %cond -> (tensor<1024x!tt.ptr<f32>, #blocked>){
+        // CHECK: %[[scalarOffsetUpdate:.*]] = tt.addptr %arg0, %[[scalarOffset]]
+        // CHECK: %[[ext_offset0:.*]] = arith.extsi %[[variableOffset]]
+        // CHECK: %[[if_offset:.*]] = arith.addi %[[ext_offset0]], %[[baseOffsetVariable]]
+        // CHECK: scf.yield %{{.*}}, %[[scalarOffsetUpdate]], %[[if_offset]]
+        %true = tt.addptr %5, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+        scf.yield %true : tensor<1024x!tt.ptr<f32>, #blocked>
+    } else {
+        // CHECK: %[[new_scalar_ptr:.*]] = tt.addptr %arg0, {{.*}}
+        // CHECK: scf.yield %{{.*}}, %[[new_scalar_ptr]], %[[baseOffsetVariable]]
+        %false = tt.addptr %5, %3 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+        scf.yield %false : tensor<1024x!tt.ptr<f32>, #blocked>
+    }
+    // CHECK: %[[trunc_offset:.*]] = arith.trunci %[[ifOut]]#2
+    // CHECK: %[[base_ptr:.*]] = tt.splat %[[ifOut]]#1
+    // CHECK: %[[newPtr:.*]] = tt.addptr %[[base_ptr]], %[[trunc_offset]]
+    // CHECK: tt.load %[[newPtr]]
+    %11 = tt.load %6 : tensor<1024x!tt.ptr<f32>, #blocked>
+    tt.return %11 : tensor<1024xf32, #blocked>
+  }
+}
+
+// -----
 //
 //#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 //module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
@@ -364,8 +364,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32}
 //  }
 //}
 //
-//// -----
-//
+// -----
+
 //#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 //module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
 //  // CHECK-LABEL: tt.func @condBranch
@@ -609,37 +609,37 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32}
 //}
 //
 //// -----
-//
-//#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
-//module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
-//  // CHECK-LABEL: tt.func @forOpWithHints
-//  tt.func @forOpWithHints(%arg0: !tt.ptr<f32>, %init : tensor<1024xf32, #blocked>)-> tensor<1024xf32, #blocked>{
-//    %c0 = arith.constant 0: index
-//    %c1 = arith.constant 1 : index
-//    %c128 = arith.constant 128: index
-//    %0 = tt.get_program_id x : i32
-//    %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
-//    %3 = tt.splat %0 : i32 -> tensor<1024xi32, #blocked>
-//    %4 = arith.addi %3, %2 : tensor<1024xi32, #blocked>
-//    %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
-//    %6 = tt.addptr %5, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
-//    %52:2 = scf.for %arg9 = %c0 to %c128 step %c1 iter_args(%arg1 = %6, %arg2 = %init) -> (tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xf32, #blocked>){
-//        %9 = tt.load %arg1: tensor<1024x!tt.ptr<f32>, #blocked>
-//        // CHECK: tt.addptr {{.*}}, {{.*}} {tt.divisibility = dense<16> : tensor<1xi32>}
-//        %11 = tt.addptr %arg1, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
-//        %12 = tt.addptr %11, %3 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
-//        %10 = arith.addf %9, %arg2 : tensor<1024xf32, #blocked>
-//        scf.yield %12, %10 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xf32, #blocked>
-//    } {"tt.divisibility_arg1"=dense<[16]> : tensor<1xi32>}
-//    // CHECK: tt.divisibility_arg1
-//    // CHECK-SAME: tt.divisibility_arg4
-//    %8 = tt.addptr %52#0, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
-//    %11 = tt.load %8 : tensor<1024x!tt.ptr<f32>, #blocked>
-//    tt.return %11 : tensor<1024xf32, #blocked>
-//  }
-//}
-//
-//// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: tt.func @forOpWithHints
+  tt.func @forOpWithHints(%arg0: !tt.ptr<f32>, %init : tensor<1024xf32, #blocked>)-> tensor<1024xf32, #blocked>{
+    %c0 = arith.constant 0: index
+    %c1 = arith.constant 1 : index
+    %c128 = arith.constant 128: index
+    %0 = tt.get_program_id x : i32
+    %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+    %3 = tt.splat %0 : i32 -> tensor<1024xi32, #blocked>
+    %4 = arith.addi %3, %2 : tensor<1024xi32, #blocked>
+    %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+    %6 = tt.addptr %5, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+    %52:2 = scf.for %arg9 = %c0 to %c128 step %c1 iter_args(%arg1 = %6, %arg2 = %init) -> (tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xf32, #blocked>){
+        %9 = tt.load %arg1: tensor<1024x!tt.ptr<f32>, #blocked>
+        // CHECK: tt.addptr {{.*}}, {{.*}} {tt.divisibility = dense<16> : tensor<1xi32>}
+        %11 = tt.addptr %arg1, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+        %12 = tt.addptr %11, %3 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+        %10 = arith.addf %9, %arg2 : tensor<1024xf32, #blocked>
+        scf.yield %12, %10 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xf32, #blocked>
+    } {"tt.divisibility_arg1"=dense<[16]> : tensor<1xi32>}
+    // CHECK: tt.divisibility_arg1
+    // CHECK-SAME: tt.divisibility_arg4
+    %8 = tt.addptr %52#0, %4 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+    %11 = tt.load %8 : tensor<1024x!tt.ptr<f32>, #blocked>
+    tt.return %11 : tensor<1024xf32, #blocked>
+  }
+}
+
+// -----
 //
 //#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 //module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
