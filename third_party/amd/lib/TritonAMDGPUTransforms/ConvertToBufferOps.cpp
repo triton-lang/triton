@@ -110,7 +110,7 @@ bool verifyNonNegativeExpr(Value expr, const DenseSet<Value> &assumptions) {
             return verifyNonNegativeExpr(joinOp.getLhs(), assumptions) &&
                    verifyNonNegativeExpr(joinOp.getRhs(), assumptions);
           })
-          // Returns a tensor representing histogram: historgrams only conatin
+          // Returns a tensor representing histogram: historgrams only contain
           // buckets of non-negative values.
           .Case<triton::HistogramOp>([&](auto) { return true; })
           .Case<triton::MakeRangeOp>([&](auto makeRangeOp) {
