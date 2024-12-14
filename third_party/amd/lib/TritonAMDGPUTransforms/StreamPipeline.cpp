@@ -115,7 +115,7 @@ private:
   LogicalResult scheduleLoads(DenseSet<Operation *> &rootUsers);
   void scheduleDependencies();
   void scheduleDistanceOneDependencies();
-  LogicalResult scheduleRemainingToLastStage();
+  void scheduleRemainingToLastStage();
 
   LogicalResult preprocessLoopAndBuildSchedule();
 
@@ -620,7 +620,7 @@ void StreamPipeliner::scheduleDistanceOneDependencies() {
   }
 }
 
-LogicalResult StreamPipeliner::scheduleRemainingToLastStage() {
+void StreamPipeliner::scheduleRemainingToLastStage() {
   int lastStage = numStages - 1;
   // Assign the rest of the ops to the last stage.
   // Take care of the ordering of the ops - uses cannot be scheduled to the
@@ -628,11 +628,8 @@ LogicalResult StreamPipeliner::scheduleRemainingToLastStage() {
   auto cluster = config[SCHED_TAIL].cluster;
   DenseMap<Operation *, tt::CoarseSchedule::Cluster> opToCluster;
   for (auto &op : forOp.getBody()->without_terminator()) {
-    if (schedule.count(&op) == 0) {
-      if (isa<gpu::BarrierOp>(op))
-        return failure();
+    if (schedule.count(&op) == 0)
       opToCluster[&op] = cluster;
-    }
   }
   SmallVector<Operation *> queue;
   for (auto [op, stage, cluster] : schedule.getOpsInOrder(forOp)) {
@@ -658,7 +655,6 @@ LogicalResult StreamPipeliner::scheduleRemainingToLastStage() {
   for (auto [op, cluster] : opToCluster) {
     schedule.insert(op, lastStage, cluster);
   }
-  return success();
 }
 
 // Create an allocation that can hold distance number of loadOp shapes.
@@ -768,8 +764,7 @@ LogicalResult StreamPipeliner::preprocessLoopAndBuildSchedule() {
     schedule.dump();
   });
 
-  if (failed(scheduleRemainingToLastStage()))
-    return failure();
+  scheduleRemainingToLastStage();
   LLVM_DEBUG({
     LDBG("Final coarse schedule:");
     schedule.dump();
@@ -814,13 +809,16 @@ static bool checkPrecondition(scf::ForOp forOp) {
                    [](Value operand) { return !operand.getDefiningOp(); }))
     return false;
 
-  // Don't pipeline outer loops.
-  auto hasNestedLoopInside = [forOp](Operation *op) {
+  auto hasInvalidOp = [forOp](Operation *op) {
+    // Don't pipeline outer loops.
     if (op != forOp && isa<scf::ForOp, scf::WhileOp>(op))
+      return WalkResult::interrupt();
+    // Don't pipeline loops with barriers.
+    if (isa<gpu::BarrierOp>(op))
       return WalkResult::interrupt();
     return WalkResult::advance();
   };
-  return !forOp->walk(hasNestedLoopInside).wasInterrupted();
+  return !forOp->walk(hasInvalidOp).wasInterrupted();
 }
 
 namespace {

@@ -171,8 +171,8 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
 // CHECK:    tt.load
 // CHECK:    gpu.barrier
 // CHECK:    tt.store
-// CHECK:    scf.yield
 // CHECK-NOT:  gpu.barrier
+// CHECK:  tt.return
 
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
