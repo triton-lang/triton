@@ -91,6 +91,14 @@ Value emitRedundantThreadPredicate(
   return pred;
 }
 
+bool isCanonicalIndex(unsigned index, unsigned freeVarMask) {
+  return (index & freeVarMask) == 0;
+}
+
+unsigned getCanonicalIndex(unsigned index, unsigned freeVarMask) {
+  return index & ~freeVarMask;
+}
+
 std::string getRegisterSizeCode(int size, bool is_float) {
   switch (size) {
   case 1:
@@ -234,9 +242,9 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                               << op.getType());
     SmallVector<Value> loadedVals;
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
-      if ((regMask & vecStart) != 0) {
+      if (auto canonicalVecStart = getCanonicalIndex(vecStart, regMask);
+          vecStart != canonicalVecStart) {
         // For redundant registers, refer back to the canonical load
-        size_t canonicalVecStart = vecStart & ~regMask;
         for (auto iVec = 0; iVec < vec; ++iVec) {
           loadedVals.push_back(loadedVals[canonicalVecStart + iVec]);
         }
@@ -445,7 +453,7 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
 
     const int numVecs = elemsPerThread / vec;
     for (size_t vecStart = 0; vecStart < elemsPerThread; vecStart += vec) {
-      if ((regMask & vecStart) != 0) {
+      if (!isCanonicalIndex(vecStart, regMask)) {
         // Don't emit store ops for redundant elements within a thread
         continue;
       }
@@ -590,9 +598,9 @@ struct AtomicCASOpConversion
     SmallVector<Value> resultVals(elemsPerThread);
 
     for (size_t i = 0; i < elemsPerThread; i += vec) {
-      if ((regMask & i) != 0) {
+      if (auto canonicalVecStart = getCanonicalIndex(i, regMask);
+          canonicalVecStart != i) {
         // For redundant registers, refer back to the canonical result
-        size_t canonicalVecStart = i & ~regMask;
         for (auto iVec = 0; iVec < vec; ++iVec) {
           resultVals[i + iVec] = resultVals[canonicalVecStart + iVec];
         }
@@ -761,9 +769,9 @@ struct AtomicRMWOpConversion
     auto packedTy = vec_ty(valueElemTy, packed);
     SmallVector<Value> resultVals(elemsPerThread);
     for (size_t i = 0; i < elemsPerThread; i += vec * packed) {
-      if ((regMask & i) != 0) {
+      if (auto canonicalStart = getCanonicalIndex(i, regMask);
+          canonicalStart != i) {
         // For redundant registers, refer back to the canonical result
-        size_t canonicalStart = i & ~regMask;
         for (auto iVecPack = 0; iVecPack < vec * packed; ++iVecPack) {
           resultVals[i + iVecPack] = resultVals[canonicalStart + iVecPack];
         }
@@ -1003,8 +1011,9 @@ struct AsyncCopyGlobalToLocalOpConversion
 
     auto moduleOp = op->getParentOfType<ModuleOp>();
     auto freeVarMasks = getFreeVariableMasks(srcTy);
-    // NOTE(@peterbell10): We must load redundant data on different CTAs, since
-    // they don't access the same shared memory.
+    // NOTE(@peterbell10): We load redundant data on different CTAs, so the data
+    // is available in each CTAs respective shared memory. Otherwise, we would
+    // need an additional broadcast step to copy the data between CTAs.
     freeVarMasks[str_attr("block")] = 0;
     Value threadPred = emitRedundantThreadPredicate(moduleOp, freeVarMasks,
                                                     rewriter, loc, targetInfo);
@@ -1019,7 +1028,7 @@ struct AsyncCopyGlobalToLocalOpConversion
       for (int j = 0; j < numWordsInVec; j++) {
         int elemIdx = i * vecTy.getNumElements() + j * wordElems;
 
-        if ((regMask & elemIdx) != 0) {
+        if (!isCanonicalIndex(elemIdx, regMask)) {
           continue; // Skip redundant registers
         }
 
