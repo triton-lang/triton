@@ -94,11 +94,11 @@ bool isKMajor(llvm::ArrayRef<unsigned> order, int opIdx) {
 bool isSwizzlePatternFitsIntoBlock(const SharedEncodingAttr sharedLayout,
                                    int opIdx, const ArrayRef<int64_t> reps,
                                    const ArrayRef<int64_t> elemsPerInstr,
-                                   const ArrayRef<unsigned> order,
                                    unsigned warpsPerBlockNonK) {
   assert(elemsPerInstr.size() == 2);
   unsigned mfmaInstrNonK = elemsPerInstr[opIdx == 0 ? 0 : 1];
   unsigned mfmaInstrK = elemsPerInstr[opIdx == 0 ? 1 : 0];
+  auto order = sharedLayout.getOrder();
   const auto swizzleFastDimSize =
       sharedLayout.getMaxPhase() * sharedLayout.getVec();
   const auto swizzleSlowDimSize =
@@ -139,7 +139,7 @@ llvm::SmallVector<Value> computeOffsetsAType(
   const auto blockSize = mapping.size();
   llvm::SmallVector<Value> aOffsets(blockSize * numBlocks);
 
-  if (!isSwizzlePatternFitsIntoBlock(srcLayout, 0, reps, elemsPerInstr, order,
+  if (!isSwizzlePatternFitsIntoBlock(srcLayout, 0, reps, elemsPerInstr,
                                      warpsPerBlock)) {
     for (int block = 0; block < numBlocks; ++block) {
       int blockNonKOffset = block * nonKDim * warpsPerBlock;
@@ -210,7 +210,7 @@ llvm::SmallVector<Value> computeOffsetsBType(
   const auto blockSize = mapping.size();
   llvm::SmallVector<Value> bOffsets(blockSize * numBlocks);
 
-  if (!isSwizzlePatternFitsIntoBlock(srcLayout, 0, reps, elemsPerInstr, order,
+  if (!isSwizzlePatternFitsIntoBlock(srcLayout, 0, reps, elemsPerInstr,
                                      warpsPerBlock)) {
     for (int block = 0; block < numBlocks; ++block) {
       int blockNonKOffset = block * nonKDim * warpsPerBlock;
