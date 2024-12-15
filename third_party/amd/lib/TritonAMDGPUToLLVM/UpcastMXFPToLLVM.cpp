@@ -19,6 +19,40 @@ using namespace mlir::triton::gpu;
 
 namespace {
 
+// Scales the given bf16 v using the given scale factor without relying on bf16
+// multiplication.
+//
+// In gfx9 architectures, we don't have bf16 VALU ops. So instead this function
+// handles v * scale multiplication using i16 arithmetics to avoid relying on
+// LLVM backend emulation via fp32.
+Value mxfpScaleBf16ViaI16(RewriterBase &rewriter, Location loc, Value v,
+                          Value scale) {
+  v = bitcast(v, i16_ty);
+  // Extract the biased exponent and the rest from the bf16 value.
+  Value oldExp = lshr(and_(v, i16_val(0x7f80)), i16_val(7));
+  Value oldRest = and_(v, i16_val(0x807f));
+  // Compute the unbiased exponent from the scale.
+  Value scaleExp = sub(zext(i16_ty, scale), i16_val(127));
+  // Compute the new biased exponent for the bf16 value.
+  Value newExp = add(oldExp, scaleExp);
+  // Clamp to bf16 exponent range.
+  Value expMin = i16_val(0);
+  Value expMax = i16_val(0x00ff);
+  Value ltMin = icmp_slt(newExp, expMin);
+  Value gtMax = icmp_sgt(newExp, expMax);
+  newExp = select(ltMin, expMin, newExp);
+  newExp = select(gtMax, expMax, newExp);
+  // Get the new bf16 value. We need to clear mantissa if reaching max/inf to
+  // avoid generating NaNs.
+  Value newVI16 = or_(oldRest, shl(newExp, i16_val(7)));
+  Value newInf = and_(newVI16, i16_val(0xff80));
+  newVI16 = select(gtMax, newInf, newVI16);
+  // Account for NaN in the scale as per the mxfp specification.
+  Value scaleIsNan = icmp_eq(scale, i8_val(0xff));
+  Value nanBf16 = bitcast(i16_val(0x7fff), bf16_ty);
+  return select(scaleIsNan, nanBf16, bitcast(newVI16, bf16_ty));
+};
+
 class UpcastMXFPOpPattern : public ConvertOpToLLVMPattern<UpcastMXFPOp> {
 private:
   const TargetInfoBase &targetInfo;
@@ -98,7 +132,7 @@ public:
         for (int j = 0; j < 32; ++j) {
           int index = 32 * i + j;
           xVals[index] =
-              LLVM::mxfpScaleBf16(rewriter, loc, xVals[index], si[j / 16]);
+              mxfpScaleBf16ViaI16(rewriter, loc, xVals[index], si[j / 16]);
         }
       }
     } else {
@@ -121,7 +155,7 @@ public:
         for (int j = 0; j < 32; ++j) {
           int index = 32 * i + j;
           xVals[index] =
-              LLVM::mxfpScaleBf16(rewriter, loc, xVals[index], si[j / 8]);
+              mxfpScaleBf16ViaI16(rewriter, loc, xVals[index], si[j / 8]);
         }
       }
     }
