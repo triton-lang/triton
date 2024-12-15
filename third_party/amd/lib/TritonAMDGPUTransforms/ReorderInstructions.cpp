@@ -227,22 +227,17 @@ static void scheduleGlobalLoadLocalStore(triton::FuncOp funcOp) {
     // Gather use-def chain in block.
     Block *block = op->getBlock();
     bool leadsToLoad = false;
-    bool dontReorder = false;
     SetVector<Operation *> backwardSet;
 
     BackwardSliceOptions options;
     options.omitBlockArguments = true;
     options.inclusive = false;
+    // Slice should inlcude values flowing into op regions
+    options.omitUsesFromAbove = false;
     options.filter = [&](Operation *defOp) -> bool {
       Block *defBlock = defOp->getBlock();
       if (!block->findAncestorOpInBlock(*defOp))
         return false;
-      // Don't hoist control flow as we don't track backtraces of ops within
-      // their regions.
-      if (isa<scf::IfOp, scf::ForOp, scf::WhileOp>(defOp)) {
-        dontReorder = true;
-        return false;
-      }
 
       // Check for a `load` dependent path.
       leadsToLoad |= isa<triton::LoadOp>(defOp);
@@ -252,9 +247,6 @@ static void scheduleGlobalLoadLocalStore(triton::FuncOp funcOp) {
     mlir::getBackwardSlice(op, &backwardSet, options);
     backwardSet.insert(op);
 
-    // If we found ops in the slice we don't want to hoist.
-    if (dontReorder)
-      continue;
     // Don't move a local_store if its source is a load from
     // the same iteration.
     if (isa<ttg::LocalStoreOp>(op) && leadsToLoad)
