@@ -287,8 +287,8 @@ struct SharedMemoryObject {
     if (layout) {
       auto layoutOrder = convertType<int>(layout.getOrder());
       int rankDiff = layoutOrder.size() - shape.size();
-      auto commonRank = std::min(shape.size(), layoutOrder.size());
-      for (size_t i = 0; i < commonRank; ++i)
+      auto minRank = std::min(shape.size(), layoutOrder.size());
+      for (size_t i = 0; i < minRank; ++i)
         order[i] = layoutOrder[i] - rankDiff;
     }
     assert(isPermutationOfIota(order) && "Invalid order");
