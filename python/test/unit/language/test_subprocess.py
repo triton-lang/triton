@@ -4,6 +4,8 @@ import subprocess
 import sys
 from collections import Counter
 
+import triton
+
 import pytest
 
 dir_path = os.path.dirname(os.path.realpath(__file__))
@@ -35,6 +37,7 @@ def is_interpreter():
                                                       ("device_print_pointer", "int32"),
                                                       ("device_print_negative", "int32"),
                                                       ("device_print_uint", "uint32"),
+                                                      ("device_print_2d_tensor", "int32"),
                                                   ])
 def test_print(func_type: str, data_type: str, device: str):
     proc = subprocess.run(
@@ -101,6 +104,13 @@ def test_print(func_type: str, data_type: str, device: str):
     elif func_type == "device_print_pointer":
         for i in range(N):
             expected_lines[f"pid (0, 0, 0) idx ({i:3}) ptr: 0x"] = 1
+    elif func_type == "device_print_2d_tensor":
+        warp_size = triton.runtime.driver.active.get_current_target().warp_size
+        x_dim = N // warp_size
+        y_dim = warp_size
+        for x in range(x_dim):
+            for y in range(y_dim):
+                expected_lines[f"pid (0, 0, 0) idx ({x}, {y:2}): {(x * y_dim + y)}"] = 1
 
     actual_lines = Counter()
     for line in outs:

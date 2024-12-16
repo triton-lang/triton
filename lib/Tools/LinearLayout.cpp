@@ -313,6 +313,7 @@ LinearLayout::checkInvariants(bool requireSurjective) {
            "can be reached by some `in` coordinate, but was not:" +
            toString();
   }
+
   return std::nullopt;
 }
 
@@ -953,6 +954,21 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
   }
   ret = ret.reshapeIns(inDimsB).reshapeOuts(inDimsA);
   return ret;
+}
+
+LinearLayout LinearLayout::invert() const {
+  assert(isInvertible() &&
+         "A linear layout must be surjective and square to be invertible");
+  return pseudoinvert();
+}
+
+LinearLayout LinearLayout::pseudoinvert() const {
+  // A^-1(x) = A^-1(I(x)), thus A.invert() = I.invertAndCompose(A)
+  LinearLayout identity = LinearLayout::empty();
+  for (auto outDim : getOutDimNames()) {
+    identity *= LinearLayout::identity1D(getOutDimSize(outDim), outDim, outDim);
+  }
+  return identity.invertAndCompose(*this);
 }
 
 llvm::MapVector<StringAttr, int32_t>
