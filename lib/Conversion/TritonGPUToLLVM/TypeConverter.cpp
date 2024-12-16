@@ -11,6 +11,7 @@ using namespace mlir::triton;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
+using ::mlir::triton::gpu::MemDescType;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
@@ -27,6 +28,10 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
   });
   addConversion([&](MemDescType type) -> std::optional<Type> {
     return convertMemDescType(type, targetInfo);
+  });
+  addConversion([](TensorDescType type) -> std::optional<Type> {
+    auto ctx = type.getContext();
+    return LLVM::LLVMPointerType::get(ctx, 1);
   });
   addConversion([&](triton::gpu::AsyncTokenType type) -> std::optional<Type> {
     return convertAsyncToken(type);

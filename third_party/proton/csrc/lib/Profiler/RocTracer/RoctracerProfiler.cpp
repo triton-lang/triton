@@ -74,6 +74,7 @@ std::shared_ptr<Metric>
 convertActivityToMetric(const roctracer_record_t *activity) {
   std::shared_ptr<Metric> metric;
   switch (activity->kind) {
+  case kHipVdiCommandTask:
   case kHipVdiCommandKernel: {
     if (activity->begin_ns < activity->end_ns) {
       metric = std::make_shared<KernelMetric>(
@@ -135,7 +136,7 @@ void processActivity(RoctracerProfiler::CorrIdToExternIdMap &corrIdToExternId,
                      const roctracer_record_t *record, bool isAPI,
                      bool isGraph) {
   switch (record->kind) {
-  case 0x11F1: // Task - kernel enqueued by graph launch
+  case kHipVdiCommandTask:
   case kHipVdiCommandKernel: {
     processActivityKernel(corrIdToExternId, externId, dataSet, record, isAPI,
                           isGraph);
@@ -169,6 +170,7 @@ std::pair<bool, bool> matchKernelCbId(uint32_t cbId) {
   case HIP_API_ID_hipModuleLaunchCooperativeKernel:
   case HIP_API_ID_hipModuleLaunchCooperativeKernelMultiDevice:
   case HIP_API_ID_hipGraphExecDestroy:
+  case HIP_API_ID_hipGraphInstantiateWithFlags:
   case HIP_API_ID_hipGraphInstantiate: {
     isRuntimeApi = true;
     break;
@@ -231,8 +233,7 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
     const hip_api_data_t *data = (const hip_api_data_t *)(callbackData);
     if (data->phase == ACTIVITY_API_PHASE_ENTER) {
       // Valid context and outermost level of the kernel launch
-      auto scopeId = Scope::getNewScopeId();
-      threadState.record(scopeId);
+      auto scopeId = threadState.record();
       threadState.enterOp(scopeId);
       size_t numInstances = 1;
       if (cid == HIP_API_ID_hipGraphLaunch) {
@@ -299,6 +300,13 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
         hipStream_t Stream = data->args.hipModuleLaunchCooperativeKernel.stream;
         if (pImpl->StreamToCapture.contain(Stream))
           pImpl->StreamToCaptureCount[Stream]++;
+        break;
+      }
+      case HIP_API_ID_hipGraphInstantiateWithFlags: {
+        hipGraph_t Graph = data->args.hipGraphInstantiateWithFlags.graph;
+        hipGraphExec_t GraphExec =
+            *(data->args.hipGraphInstantiateWithFlags.pGraphExec);
+        pImpl->GraphExecToGraph[GraphExec] = Graph;
         break;
       }
       case HIP_API_ID_hipGraphInstantiate: {

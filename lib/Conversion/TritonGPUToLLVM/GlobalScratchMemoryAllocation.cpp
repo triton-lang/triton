@@ -21,7 +21,7 @@ static void allocateGMem(Operation *parentOp,
   // Recursively visit any dependency functions
   parentOp->walk([&](triton::CallOp call) {
     auto callable = call.resolveCallable();
-    if (!callable->hasAttr("triton_gpu.global_scratch_memory_size")) {
+    if (!callable->hasAttr("ttg.global_scratch_memory_size")) {
       auto inserted = callStack.insert(parentOp);
       assert(inserted && "call cycle detected");
       allocateGMem(callable, callStack);
@@ -46,9 +46,9 @@ static void allocateGMem(Operation *parentOp,
     } else if (auto callOp = dyn_cast<triton::CallOp>(op)) {
       auto callable = callOp.resolveCallable();
       auto nbytes_attr = callable->getAttrOfType<IntegerAttr>(
-          "triton_gpu.global_scratch_memory_size");
+          "ttg.global_scratch_memory_size");
       auto align_attr = callable->getAttrOfType<IntegerAttr>(
-          "triton_gpu.global_scratch_memory_alignment");
+          "ttg.global_scratch_memory_alignment");
       assert(nbytes_attr);
       assert(align_attr);
 
@@ -57,16 +57,16 @@ static void allocateGMem(Operation *parentOp,
     }
     if (nbytes > 0) {
       offset = roundUp(offset, align);
-      op->setAttr("triton_gpu.global_scratch_memory_offset",
+      op->setAttr("ttg.global_scratch_memory_offset",
                   builder.getI32IntegerAttr(offset));
       offset += nbytes;
       largestAlignment = std::max(largestAlignment, align);
     }
   });
   int32_t totalMemorySize = roundUp(offset, largestAlignment);
-  parentOp->setAttr("triton_gpu.global_scratch_memory_size",
+  parentOp->setAttr("ttg.global_scratch_memory_size",
                     builder.getI32IntegerAttr(totalMemorySize));
-  parentOp->setAttr("triton_gpu.global_scratch_memory_alignment",
+  parentOp->setAttr("ttg.global_scratch_memory_alignment",
                     builder.getI32IntegerAttr(largestAlignment));
 }
 
@@ -86,14 +86,14 @@ public:
       if (func.getVisibility() == SymbolTable::Visibility::Public) {
         assert(!seenKernel);
         seenKernel = true;
-        auto size = func->getAttrOfType<IntegerAttr>(
-            "triton_gpu.global_scratch_memory_size");
+        auto size =
+            func->getAttrOfType<IntegerAttr>("ttg.global_scratch_memory_size");
         auto align = func->getAttrOfType<IntegerAttr>(
-            "triton_gpu.global_scratch_memory_alignment");
+            "ttg.global_scratch_memory_alignment");
         assert(size);
         assert(align);
-        mod->setAttr("triton_gpu.global_scratch_memory_size", size);
-        mod->setAttr("triton_gpu.global_scratch_memory_alignment", align);
+        mod->setAttr("ttg.global_scratch_memory_size", size);
+        mod->setAttr("ttg.global_scratch_memory_alignment", align);
       }
     });
     assert(seenKernel);

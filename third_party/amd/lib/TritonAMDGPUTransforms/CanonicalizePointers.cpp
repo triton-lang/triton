@@ -107,7 +107,7 @@ private:
     // Utility copy functions
     FatPtr copy(Value newBasePtr, Value newOffset) {
       return FatPtr{newBasePtr, newOffset, canNarrow};
-    };
+    }
     FatPtr copyWithBase(Value newOffset) {
       return FatPtr{basePtr, newOffset, canNarrow};
     }

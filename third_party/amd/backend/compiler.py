@@ -1,5 +1,6 @@
 from triton.backends.compiler import BaseBackend, GPUTarget, AttrsDescriptor, register_descriptor
 from triton._C.libtriton import ir, passes, llvm, amd
+from triton._utils import find_paths_if
 from dataclasses import dataclass
 from typing import Any, Dict, Tuple
 from types import ModuleType
@@ -13,16 +14,30 @@ from pathlib import Path
 
 
 def min_dot_size(target: GPUTarget):
+
+    def is_fma_supported(lhsType, rhsType):
+        return lhsType == rhsType and (lhsType.is_fp16() or lhsType.is_fp32())
+
+    def get_gfx94_limits(lhsType, rhsType):
+        if is_fma_supported(lhsType.scalar, rhsType.scalar):
+            return (1, 1, 1)
+        # CDNA 3.0 supports k==8 in all mfma variants except for int8
+        # (where the smallest `k` supported is 16)
+        return (16, 16, 16) if (lhsType.scalar.is_int8() or rhsType.scalar.is_int8()) else (16, 16, 8)
+
+    def get_gfx9_limits(lhsType, rhsType):
+        if is_fma_supported(lhsType.scalar, rhsType.scalar):
+            return (1, 1, 1)
+        # CDNA 2.0 always supports `k==8`
+        return (16, 16, 8)
+
     arch_str = target.arch
-    # CDNA 3.0 supports k==8 in all mfma variants except for int8
-    # (where the smallest `k` supported is 16)
     if "gfx94" in arch_str:
-        return lambda lhsType, rhsType: (16, 16, 16) if (lhsType.is_int8() or rhsType.is_int8()) else (16, 16, 8)
-    # CDNA 2.0 always supports `k==8`
+        return get_gfx94_limits
     if "gfx9" in arch_str:
-        return lambda lhsType, rhsType: (16, 16, 8)
-    # Other architectures will only support 16,16,16
-    return lambda lhsType, rhsType: (16, 16, 16)
+        return get_gfx9_limits
+    # gfx11 and gfx12 architectures will only support 16,16,16 with wmma instructions
+    return lambda lhsType, rhsType: (1, 1, 1) if is_fma_supported(lhsType.scalar, rhsType.scalar) else (16, 16, 16)
 
 
 @dataclass(frozen=True)
@@ -52,6 +67,18 @@ class HIPOptions:
     # instruction scheduling of the AMDGPU backend which aims at maximizing occupancy.
     # The option is experimental and may change at any time regarding its semantics and/or may
     # be gone entirely anytime.
+    #
+    # Current experimental scheduling variants:
+    #
+    # llvm-iglp-0: injects `llvm.amdgcn.iglp_opt` intrinsic call with value `0` to the GEMM's
+    #              k-loop; i.e., "interleave DS and MFMA instructions for small GEMM kernels".
+    # llvm-iglp-1: injects `llvm.amdgcn.iglp_opt` intrinsic call with value `1` to the GEMM's
+    #              k-loop; i.e., "interleave DS and MFMA instructions for single wave small
+    #              GEMM kernels.".
+    # local-prefetch: implements instruction scheduling similar to the one from the ROCm Composable
+    #                 Kernel library. Note, this variant requires the use of buffer load/store ops
+    #                 and a special software pipelining style - i.e., 1x LDS and 1x register
+    #                 prefetch buffers for each GEMM tile.
     instruction_sched_variant: str = 'none'
 
     def __post_init__(self):
@@ -88,10 +115,14 @@ class HIPAttrsDescriptor(AttrsDescriptor):
         if params is None or values is None:
             return
 
-        self.arg_properties["tt.pointer_range"] = [
-            param.num for param, arg in zip(params, values) if HIPAttrsDescriptor.is_within2gb(arg)
-            and not param.do_not_specialize and not param.do_not_specialize_on_alignment
-        ]
+        pointer_range = []
+        for param, arg in zip(params, values):
+            if param.do_not_specialize or \
+               param.do_not_specialize_on_alignment:
+                continue
+            paths = find_paths_if(arg, lambda path, val: HIPAttrsDescriptor.is_within2gb(val))
+            pointer_range += [(param.num, ) + x for x in paths]
+        self.arg_properties["tt.pointer_range"] = pointer_range
 
     @staticmethod
     def is_within2gb(arg):
@@ -189,8 +220,8 @@ class HIPBackend(BaseBackend):
         pm.enable_debug()
         passes.common.add_inliner(pm)
         passes.ttir.add_rewrite_tensor_pointer(pm)
-        passes.ttir.add_combine(pm)
         passes.common.add_canonicalizer(pm)
+        passes.ttir.add_combine(pm)
         passes.ttir.add_reorder_broadcast(pm)
         passes.common.add_cse(pm)
         passes.common.add_licm(pm)
@@ -215,13 +246,21 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_remove_layout_conversions(pm)
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
+
+        stream_prefetch = os.getenv("TRITON_HIP_STREAM_PREFETCH", "0") == "1"
+        use_buffer_ops = os.environ.get("AMDGCN_USE_BUFFER_OPS", "0") == "1"
+
+        # The `local-prefetch` scheduling variant requires turning on buffer ops.
+        if options.instruction_sched_variant == "local-prefetch":
+            stream_prefetch = use_buffer_ops = True
+
         if amd.has_matrix_core_feature(options.arch):
             assert options.num_stages != 0, ("Triton AMD backend pipeliner has been updated. "
                                              "We used to trigger software pipelining with "
                                              "num_stages == 0. Now it will not happen anymore; "
                                              "please update to use num_stages == 2 for "
                                              "equivalent behavior in the past.")
-            amd.passes.ttgpuir.add_stream_pipelinev2(pm, options.num_stages)
+            amd.passes.ttgpuir.add_stream_pipeline(pm, options.num_stages, stream_prefetch)
             passes.common.add_canonicalizer(pm)
         amd.passes.ttgpuir.insert_instruction_sched_hints(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
@@ -229,7 +268,11 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_reduce_data_duplication(pm)
         if amd.has_matrix_core_feature(options.arch):
             amd.passes.ttgpuir.add_reorder_instructions(pm)
-        if os.environ.get("AMDGCN_USE_BUFFER_OPS", "0") == "1":
+            use_block_pingpong = os.getenv("TRITON_HIP_USE_BLOCK_PINGPONG", "0") == "1"
+            if use_block_pingpong and options.num_stages == 2:
+                amd.passes.ttgpuir.add_block_pingpong(pm)
+
+        if use_buffer_ops:
             amd.passes.ttgpuir.add_canonicalize_pointers(pm)
             passes.common.add_canonicalizer(pm)
             amd.passes.ttgpuir.add_convert_to_buffer_ops(pm)
@@ -291,7 +334,7 @@ class HIPBackend(BaseBackend):
         # Set various control constants on the LLVM module so that device
         # libraries can resolve references to them.
         amd.set_isa_version(llvm_mod, options.arch)
-        amd.set_abi_version(llvm_mod, 400)
+        amd.set_abi_version(llvm_mod, 500)
         amd.set_bool_control_constant(llvm_mod, "__oclc_finite_only_opt", False)
         amd.set_bool_control_constant(llvm_mod, "__oclc_correctly_rounded_sqrt32", True)
         amd.set_bool_control_constant(llvm_mod, "__oclc_unsafe_math_opt", False)
@@ -318,9 +361,12 @@ class HIPBackend(BaseBackend):
         llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', [], options.enable_fp_fusion)
 
         # Get some metadata
-        metadata["shared"] = src.get_int_attr("triton_gpu.shared")
+        metadata["shared"] = src.get_int_attr("ttg.shared")
 
         amd.cleanup_bitcode_metadata(llvm_mod)
+        # Disable inlining of print related functions,
+        # because inlining of these function could slow down compilation significantly
+        amd.disable_print_inline(llvm_mod)
         return str(llvm_mod)
 
     @staticmethod

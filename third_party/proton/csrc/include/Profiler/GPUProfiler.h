@@ -58,13 +58,15 @@ protected:
 
     ThreadState(ConcreteProfilerT &profiler) : profiler(profiler) {}
 
-    void record(size_t scopeId) {
+    size_t record() {
+      auto scopeId = Scope::getNewScopeId();
       if (profiler.isOpInProgress())
-        return;
+        return scopeId;
       std::set<Data *> dataSet = profiler.getDataSet();
       for (auto data : dataSet)
         data->addScope(scopeId);
       profiler.correlation.apiExternIds.insert(scopeId);
+      return scopeId;
     }
 
     void enterOp(size_t scopeId) {

@@ -164,6 +164,9 @@ struct DotOpMFMAConversionHelper {
 
   // Conduct the Dot conversion.
   LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor) const {
+    // Check if this dot has come with priority set by setprio.
+    auto setPrioOp = dyn_cast_or_null<ROCDL::SetPrioOp>(op->getPrevNode());
+
     auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
     auto mDim = mfmaLayout.getMDim();
     auto nDim = mfmaLayout.getNDim();
@@ -226,6 +229,12 @@ struct DotOpMFMAConversionHelper {
         getNumSubmatrices(aTensorTy.getElementType(), mDim, nDim);
     auto elemsPerVec = mDim * nDim * subBlocks / warpSize;
 
+    Value firstMfma;
+    auto setFirstMfma = [&](Value mfma) {
+      if (!firstMfma)
+        firstMfma = mfma;
+    };
+
     auto vecTy = vec_ty(dstElemTy, elemsPerVec);
     for (int b = 0; b < numRepB; ++b) {
       for (int m = 0; m < numRepM; ++m) {
@@ -240,13 +249,15 @@ struct DotOpMFMAConversionHelper {
           }
           acc = zeroAuxiliarBlocks(subBlocks, acc);
           for (int k = 0; k < numRepK; k++) {
-            for (int kPack = 0; kPack < kWidth / kBase; ++kPack)
+            for (int kPack = 0; kPack < kWidth / kBase; ++kPack) {
               acc =
                   mfmaLayout.getIsTransposed()
                       ? generateMFMAOp(mfmaInsnName, operandB[kPack][{b, n, k}],
                                        operandA[kPack][{b, m, k}], acc)
                       : generateMFMAOp(mfmaInsnName, operandA[kPack][{b, m, k}],
                                        operandB[kPack][{b, n, k}], acc);
+              setFirstMfma(acc);
+            }
           }
           acc = reduceSubBlocks(subBlocks, acc);
           for (unsigned v = 0; v < elemsPerVec; ++v) {
@@ -257,6 +268,16 @@ struct DotOpMFMAConversionHelper {
         }
       }
     }
+
+    // Originally, setprio (high) is set to the high-level dot op. After dot is
+    // being lowered to the series of mfma operations, it should be moved next
+    // to the first mfma leaving the first mfma staying at the low priority. In
+    // this way, incoming warp can be effectively waiting on the first mfma
+    // instruction (low priority) while the other warp is executing mfma with
+    // high priority. Otherwise, incoming warp can break the cluster.
+    if (setPrioOp && firstMfma)
+      setPrioOp->moveAfter(firstMfma.getDefiningOp());
+
     // replace with new packed result
     Type structTy = LLVM::LLVMStructType::getLiteral(
         ctx, SmallVector<Type>(fc.size(), dstElemTy));
@@ -274,11 +295,9 @@ struct DotOpMFMAConversionHelper {
     return success();
   }
 
-  /**
-   * @brief extract vector from rawElems based on kWidth and kBase
-   * rawElems is a vector of kWidth elements. We need to prepare vector(s) of
-   * kBase elements for each mfma instruction
-   */
+  /// Extract vector from rawElems based on kWidth and kBase
+  /// rawElems is a vector of kWidth elements. We need to prepare vector(s) of
+  /// kBase elements for each mfma instruction
   SmallVector<Value> extractOperands(Value rawElems, int kWidth, int kBase,
                                      Type type) const {
     int kpack = kWidth / kBase;
@@ -294,8 +313,9 @@ struct DotOpMFMAConversionHelper {
           // rocdl.mfma.f32.32x32x8bf16.1k calls for input of i16 type
           auto cast = bitcast(val, i16_ty);
           vec = insert_element(vecTy, vec, cast, i32_val(elemId));
-        } else
+        } else {
           vec = insert_element(vecTy, vec, val, i32_val(elemId));
+        }
       }
       if (type.getIntOrFloatBitWidth() == 8) {
         if (4 == kBase)
@@ -303,16 +323,15 @@ struct DotOpMFMAConversionHelper {
           results.push_back(bitcast(vec, i32_ty));
         if (8 == kBase)
           results.push_back(bitcast(vec, i64_ty));
-      } else
+      } else {
         results.push_back(vec);
+      }
     }
     return results;
   }
 
-  /**
-   * @brief Converts dot operand structure to value table and converts types
-   * appropriate for mfma instructions
-   */
+  /// Converts dot operand structure to value table and converts types
+  /// appropriate for mfma instructions
   SmallVector<ValueTable>
   getValuesFromDotOperandLayoutStruct(Value value, int batch, int n0, int n1,
                                       int kWidth, int kBase, Type type) const {

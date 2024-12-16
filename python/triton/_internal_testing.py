@@ -4,11 +4,12 @@ import numpy as np
 import torch
 import triton
 import triton.language as tl
+from triton.backends.nvidia.compiler import _path_to_binary
 import pytest
 
 from numpy.random import RandomState
 from typing import Optional, Union
-from triton.runtime.jit import TensorWrapper, reinterpret
+from triton.runtime.jit import TensorWrapper, reinterpret, type_canonicalisation_dict
 
 int_dtypes = ['int8', 'int16', 'int32', 'int64']
 uint_dtypes = ['uint8', 'uint16', 'uint32', 'uint64']
@@ -57,6 +58,11 @@ def is_hip_mi300():
 
 def is_hip_cdna():
     return is_hip_mi200() or is_hip_mi300()
+
+
+def is_xpu():
+    target = get_current_target()
+    return False if target is None else target.backend == "xpu"
 
 
 def get_arch():
@@ -113,6 +119,10 @@ def to_triton(x: np.ndarray, device, dst_type=None) -> Union[TensorWrapper, torc
         return torch.tensor(x, device=device)
 
 
+def str_to_triton_dtype(x: str) -> tl.dtype:
+    return tl.str_to_ty(type_canonicalisation_dict[x])
+
+
 def torch_dtype_name(dtype) -> str:
     if isinstance(dtype, triton.language.dtype):
         return dtype.name
@@ -135,8 +145,21 @@ def to_numpy(x):
         raise ValueError(f"Not a triton-compatible tensor: {x}")
 
 
-def supports_tma():
-    return is_cuda() and torch.cuda.get_device_capability()[0] >= 9
+def supports_tma(byval_only=False):
+    if not is_cuda():
+        return False
+    _, cuda_version = _path_to_binary("ptxas")
+    min_cuda_version = (12, 0) if byval_only else (12, 3)
+    cuda_version_tuple = tuple(map(int, cuda_version.split(".")))
+    assert len(cuda_version_tuple) == 2, cuda_version_tuple
+    return torch.cuda.get_device_capability()[0] >= 9 and cuda_version_tuple >= min_cuda_version
 
 
-requires_tma = pytest.mark.skipif(not supports_tma(), reason="Requires TMA support (NVIDIA Hopper or higher)")
+def tma_skip_msg(byval_only=False):
+    if byval_only:
+        return "Requires __grid_constant__ TMA support (NVIDIA Hopper or higher, CUDA 12.0 or higher)"
+    else:
+        return "Requires advanced TMA support (NVIDIA Hopper or higher, CUDA 12.3 or higher)"
+
+
+requires_tma = pytest.mark.skipif(not supports_tma(), reason=tma_skip_msg())

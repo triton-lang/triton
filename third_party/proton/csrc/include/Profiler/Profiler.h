@@ -27,10 +27,9 @@ public:
   /// If the profiler is already started, this function does nothing.
   Profiler *start() {
     std::unique_lock<std::shared_mutex> lock(mutex);
-    if (this->isInitialized)
-      return this;
-    this->doStart();
-    this->isInitialized = true;
+    if (this->initializedCount == 0)
+      this->doStart();
+    this->initializedCount++;
     return this;
   }
 
@@ -45,10 +44,11 @@ public:
   /// Stop the profiler.
   Profiler *stop() {
     std::unique_lock<std::shared_mutex> lock(mutex);
-    if (!this->isInitialized)
+    if (this->initializedCount == 0)
       return this;
-    this->doStop();
-    this->isInitialized = false;
+    this->initializedCount--;
+    if (this->initializedCount == 0)
+      this->doStop();
     return this;
   }
 
@@ -80,7 +80,9 @@ protected:
 
   mutable std::shared_mutex mutex;
   std::set<Data *> dataSet;
-  bool isInitialized{false};
+
+private:
+  int initializedCount{};
 };
 
 } // namespace proton

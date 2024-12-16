@@ -116,10 +116,10 @@ protected:
 };
 
 // Infers the encoding of the result of op given the source encoding.
-std::optional<Attribute> inferDstEncoding(Operation *op, Attribute encoding);
+Attribute inferDstEncoding(Operation *op, Attribute encoding);
 
 // Infers the encoding of the source of op given the result encoding.
-std::optional<Attribute> inferSrcEncoding(Operation *op, Attribute encoding);
+Attribute inferSrcEncoding(Operation *op, Attribute encoding);
 
 bool isExpensiveLoadOrStore(Operation *op);
 
@@ -192,6 +192,21 @@ bool isPureUnaryInlineAsm(Operation *op);
 // read the compute capability from the module attributes
 int getNVIDIAComputeCapability(Operation *module);
 
+std::optional<mlir::triton::gpu::SharedEncodingAttr>
+getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible);
+
+enum class MMALoadType {
+  SharedV3,
+  Registers,     // may be v2 or v3
+  DoNotPipeline, // could be a valid shared/registers MMA operand, but skip
+                 // pipelining
+};
+MMALoadType getMMALoadType(Operation *loadOp);
+
+// Returns composed LinearLayout for register to shared copy
+std::optional<triton::LinearLayout>
+getRegToSharedLayout(MLIRContext *ctx, ArrayRef<int64_t> shape,
+                     Attribute srcEnc, Attribute dstEnc, int elemBitWidth);
 } // namespace mlir
 
 #endif // TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_

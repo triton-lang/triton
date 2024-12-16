@@ -6,7 +6,6 @@
 #include "mlir/Bytecode/BytecodeWriter.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
-#include "mlir/Dialect/Index/IR/IndexDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/Transforms/InlinerInterfaceImpl.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
@@ -47,6 +46,7 @@ public:
   }
 
   OpBuilder &getBuilder() { return *builder; }
+  MLIRContext *getContext() { return builder->getContext(); }
 
   bool isLineInfoEnabled() { return lineInfoEnabled; }
 
@@ -233,10 +233,9 @@ void init_triton_ir(py::module &&m) {
   m.def("load_dialects", [](MLIRContext &context) {
     DialectRegistry registry;
     registry.insert<TritonDialect, ::mlir::triton::gpu::TritonGPUDialect,
-                    math::MathDialect, arith::ArithDialect, index::IndexDialect,
-                    scf::SCFDialect, ::mlir::gpu::GPUDialect,
-                    cf::ControlFlowDialect, LLVM::LLVMDialect,
-                    mlir::ub::UBDialect>();
+                    math::MathDialect, arith::ArithDialect, scf::SCFDialect,
+                    ::mlir::gpu::GPUDialect, cf::ControlFlowDialect,
+                    LLVM::LLVMDialect, mlir::ub::UBDialect>();
     mlir::LLVM::registerInlinerInterface(registry);
     registerBuiltinDialectTranslation(registry);
     registerLLVMDialectTranslation(registry);
@@ -249,6 +248,16 @@ void init_triton_ir(py::module &&m) {
       .def("is_integer",
            [](Type &self, unsigned width) { return self.isInteger(width); })
       .def("is_fp16", &Type::isF16)
+      .def("__eq__",
+           [](Type &self, py::object &other) {
+             Type *other_ty = py::cast<Type *>(other);
+             return (other_ty != nullptr) && (*other_ty == self);
+           })
+      .def("__ne__",
+           [](Type &self, py::object &other) {
+             Type *other_ty = py::cast<Type *>(other);
+             return (other_ty == nullptr) || (*other_ty != self);
+           })
       .def("__str__", [](Type &self) {
         std::string str;
         llvm::raw_string_ostream os(str);
@@ -596,6 +605,7 @@ void init_triton_ir(py::module &&m) {
                    "Function argument index out of range");
              return self.getArgument(idx);
            })
+      .def("get_num_args", &FuncOp::getNumArguments)
       .def(
           "add_entry_block",
           [](FuncOp &self) -> Block * { return self.addEntryBlock(); },
@@ -1308,19 +1318,26 @@ void init_triton_ir(py::module &&m) {
              self.create<StoreOp>(ptrs, val, mask, cacheModifier,
                                   evictionPolicy);
            })
+      .def("create_reinterpret_tensor_descriptor",
+           [](TritonOpBuilder &self, Value desc_ptr, Type blockTy) -> Value {
+             auto ctx = self.getContext();
+             auto resultTy = triton::TensorDescType::get(
+                 ctx, cast<RankedTensorType>(blockTy));
+             return self.create<ReinterpretTensorDescOp>(resultTy, desc_ptr);
+           })
       .def("create_descriptor_load",
-           [](TritonOpBuilder &self, Value desc_ptr,
-              std::vector<Value> &indices, Type type,
+           [](TritonOpBuilder &self, Value desc, std::vector<Value> &indices,
               CacheModifier cacheModifier,
               EvictionPolicy evictionPolicy) -> Value {
+             auto descTy = cast<triton::TensorDescType>(desc.getType());
+             auto resTy = descTy.getBlockType();
              return self.create<ExperimentalDescriptorLoadOp>(
-                 type, desc_ptr, indices, cacheModifier, evictionPolicy);
+                 resTy, desc, indices, cacheModifier, evictionPolicy);
            })
       .def("create_descriptor_store",
-           [](TritonOpBuilder &self, Value desc_ptr, Value value,
+           [](TritonOpBuilder &self, Value desc, Value value,
               std::vector<Value> &indices) -> void {
-             self.create<ExperimentalDescriptorStoreOp>(desc_ptr, value,
-                                                        indices);
+             self.create<ExperimentalDescriptorStoreOp>(desc, value, indices);
            })
       .def("create_tensormap_create",
            [](TritonOpBuilder &self, Value desc_ptr, Value global_address,
@@ -1471,12 +1488,13 @@ void init_triton_ir(py::module &&m) {
                                        maxNumImpreciseAcc);
            })
       .def("create_dot_scaled",
-           [](TritonOpBuilder &self, mlir::Value &lhs, mlir::Value &lhs_scale,
+           [](TritonOpBuilder &self, mlir::Value &lhs,
+              std::optional<mlir::Value> &lhs_scale,
               ScaleDotElemType lhs_format, mlir::Value &rhs,
               std::optional<mlir::Value> &rhs_scale,
               ScaleDotElemType rhs_format, mlir::Value &c) -> mlir::Value {
              return self.create<DotScaledOp>(
-                 c.getType(), lhs, rhs, c, lhs_scale,
+                 c.getType(), lhs, rhs, c, lhs_scale.value_or(Value()),
                  rhs_scale.value_or(Value()), lhs_format, rhs_format);
            })
       .def("create_floor",
@@ -1608,6 +1626,9 @@ void init_triton_ir(py::module &&m) {
                      IntegerType::get(operand.getContext(), 32)),
                  operand);
            })
+      .def("create_gather",
+           [](TritonOpBuilder &self, Value src, Value indices, int axis)
+               -> Value { return self.create<GatherOp>(src, indices, axis); })
       // Force GPU barrier
       .def("create_barrier",
            [](TritonOpBuilder &self) { self.create<mlir::gpu::BarrierOp>(); })
@@ -1696,7 +1717,14 @@ void init_triton_ir(py::module &&m) {
           auto anchorName = self.getOpAnchorName();
           auto passes = self.getPasses();
           Operation *op = mod.getOperation();
+          // Save a reproducer for the current pass manager invocation
+          // immediately.
           makeReproducer(anchorName, passes, op, reproducerPath);
+          // But if the pass manager crashes, attempt to generate a local
+          // reproducer instead.
+          mod.getContext()->disableMultithreading();
+          self.enableCrashReproducerGeneration(reproducerPath,
+                                               /*genLocalReproducer=*/true);
         }
 
         if (triton::tools::getBoolEnv("TRITON_ENABLE_LLVM_DEBUG")) {
@@ -1728,6 +1756,25 @@ void init_triton_ir(py::module &&m) {
         if (haveTiming) {
           self.enableTiming();
         }
+
+        // Run the pass manager under a source manager diagnostic handler, which
+        // enables emitted MLIR diagnostics to directly reference Python source
+        // code. This diagnostic handler will only filter for errors.
+        struct SourceMgrErrorDiagnosticHandler
+            : public SourceMgrDiagnosticHandler {
+          SourceMgrErrorDiagnosticHandler(MLIRContext *ctx)
+              : SourceMgrDiagnosticHandler(sourceMgr, ctx, llvm::errs()) {
+            setHandler([this](Diagnostic &diag) {
+              if (diag.getSeverity() != DiagnosticSeverity::Error)
+                return failure();
+              emitDiagnostic(diag);
+              return success();
+            });
+          }
+
+          llvm::SourceMgr sourceMgr;
+        };
+        SourceMgrErrorDiagnosticHandler diagHandler(mod.getContext());
 
         if (failed(self.run(mod.getOperation())))
           throw std::runtime_error("PassManager::run failed");

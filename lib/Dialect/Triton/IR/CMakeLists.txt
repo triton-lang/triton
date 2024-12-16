@@ -3,6 +3,7 @@ add_triton_library(TritonIR
   Ops.cpp
   Traits.cpp
   Types.cpp
+  OpInterfaces.cpp
 
   DEPENDS
   TritonTableGen

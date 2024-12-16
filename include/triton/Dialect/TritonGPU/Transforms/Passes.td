@@ -23,6 +23,38 @@ def TritonGPUPipeline : Pass<"tritongpu-pipeline", "mlir::ModuleOp"> {
   ];
 }
 
+def TritonGPUTestPipelineAssignLatencies : Pass<"tritongpu-test-pipeline-assign-latencies", "mlir::ModuleOp"> {
+  let summary = "test assigning latencies to interesting ops ahead of pipelining";
+
+  let description = [{
+    This is a test pass that tests `assignLatencies` method of `TritonGPULoopScheduling`.
+  }];
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
+                           "mlir::scf::SCFDialect",
+                           "mlir::arith::ArithDialect"];
+
+  let options = [
+    Option<"numStages", "num-stages",
+           "int32_t", /*default*/"3",
+           "number of pipeline stages">
+  ];
+}
+
+def TritonGPUTestPipelineScheduleLoop : Pass<"tritongpu-test-pipeline-schedule-loop", "mlir::ModuleOp"> {
+  let summary = "test scheduling a loop for software pipelining";
+
+  let description = [{
+    This is a test pass that tests `scheduleLoop` method of `TritonGPULoopScheduling`.
+  }];
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
+                           "mlir::scf::SCFDialect",
+                           "mlir::arith::ArithDialect"];
+}
+
 def TritonGPUF32DotTC : Pass<"tritongpu-F32DotTC", "mlir::ModuleOp"> {
   let summary = "3xTF32 trick";
 
@@ -126,11 +158,20 @@ def TritonGPUOptimizeThreadLocality : Pass<"tritongpu-optimize-thread-locality",
   let summary = "Reduce the cost of synchronization between threads in an SM";
 
   let description = [{
-    The aim of this pass is to reduce cross-thread communication for reduction
-    operations, by adjusting the reduction size (or layout) to avoid splitting
-    the reduction operation between multiple threads. Currently, this pass only
-    optimizes reduction yielded by loop to be thread-local until
-    after the loop completes.
+    The aim of this pass is to reduce cross-thread communication for certain
+    operations, like reductions, reshapes, and gathers.
+
+    For reduction operations, this pass attempts to adjust the reduction size
+    (or layout) to avoid splitting the reduction operation between multiple
+    threads. Currently, this pass only optimizes reduction yielded by loop to be
+    thread-local until after the loop completes.
+
+    For gathers, this pass will attempt to pick an optimized layout for gather
+    operations in the module. This is determined based on the shapes of the
+    gather operands as well as their existing layouts. The pass applies
+    heuristics to determine when it is appropriate to assign specific layouts
+    and trigger their respective codegen paths. For now, the pass only attempts
+    to apply layouts that result in warp-synchronous gathers.
   }];
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
@@ -174,6 +215,31 @@ def TritonGPUOptimizeAccumulatorInit: Pass<"tritongpu-optimize-accumulator-init"
 
   let description = "For the dot operations that support accumulator-use flag this pass replaces the zero-initialization "
                     "of the accumulator with the flag indicating the first use of the accumulator.";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::TritonDialect"];
+}
+
+def TritonGPULoopScheduling: Pass<"tritongpu-loop-scheduling", "mlir::ModuleOp"> {
+  let summary = "Generate loop scheduling for SWP";
+
+  let description = "This pass sets up stages and clustering for software pipelining.";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::TritonDialect"];
+  let options = [
+    Option<"numStages", "num-stages",
+           "int32_t", /*default*/"3",
+           "number of pipeline stages">
+  ];
+}
+
+def TritonGPUCoalesceAsyncCopy: Pass<"tritongpu-coalesce-async-copy", "mlir::ModuleOp"> {
+  let summary = "Improve coalescing for async global to local copies";
+
+  let description = "For AsyncCopyGlobalToLocal ops where the shared encoding's vec is less than "
+                    "the blocked encoding's sizePerThread, this pass improves coalescing by clipping the "
+                    "sizePerThread value";
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::TritonDialect"];

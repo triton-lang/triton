@@ -13,6 +13,7 @@ configure_lit_site_cfg(
 
 set(TRITON_TEST_DEPENDS
   triton-opt
+  triton-tensor-layout
 )
 
 set(FILECHECK_PATH "${LLVM_LIBRARY_DIR}/../bin/FileCheck")

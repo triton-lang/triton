@@ -6,7 +6,6 @@
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Pass/Pass.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-#include "llvm/TargetParser/TargetParser.h"
 
 namespace mlir::triton {
 #define GEN_PASS_DEF_TRITONAMDGPUINSERTINSTRUCTIONSCHEDHINTS
@@ -218,45 +217,35 @@ struct InstructionSchedHintsRewriter
       : OpRewritePattern(ctx), numStages(numStages) {
 
     this->machineDescr = MachineDescr::get(arch);
-    std::transform(variant.begin(), variant.end(), variant.begin(),
-                   [](unsigned char c) { return std::tolower(c); });
 
-    this->schedulingType = llvm::StringSwitch<SchedulingType>(variant)
-                               .Case("none", SchedulingType::NONE)
-                               .Case("iglp0", SchedulingType::IGLP0)
-                               .Case("iglp1", SchedulingType::IGLP1)
-                               .Case("ck_v3", SchedulingType::CK_V3)
-                               .Default(SchedulingType::UNKNOWN);
-
+    this->schedHint = mlir::triton::amdgpu::SchedHint::none;
     if (this->numStages < 2) {
-      this->schedulingType = SchedulingType::NONE;
       LDBG("ignoring instruction scheduling due to a very low num. "
            "stages value. Must be >= 2");
+      return;
     }
+
+    std::transform(variant.begin(), variant.end(), variant.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    if (auto maybeSchedHint = triton::amdgpu::symbolizeSchedHint(variant))
+      this->schedHint = maybeSchedHint.value();
+    else
+      LDBG("ignoring instruction scheduling because "
+           "unknown instruction scheduling variant has been provided");
   }
 
-  enum class SchedulingType : uint32_t {
-    NONE = 0,
-    IGLP0,
-    IGLP1,
-    CK_V3,
-    UNKNOWN
-  };
-
-  // This is the implementation of the CK's V3 pipelining (see
-  // see ck/tensor_operation/gpu/block/blockwise_gemm_pipeline_xdlops_v3.hpp).
+  // The following is inspired by ROCm Composable Kernel library's V3 pipelining
+  // (see ck/tensor_operation/gpu/block/blockwise_gemm_pipeline_xdlops_v3.hpp).
   // This scheduling requires 1x register and 1x LDS buffers combined with the
   // local (LDS to registers) and global (HBM to registers) data prefetching.
-  // see:
-  // include/ck/tensor_operation/gpu/block/blockwise_gemm_pipeline_xdlops_v3.h
-  void
-  createCKV3Schedule(PatternRewriter &rewriter, Location loc,
-                     triton::amdgpu::InstructionSchedHint schedHint) const {
+  void createLocalPrefetchSchedule(
+      PatternRewriter &rewriter, Location loc,
+      triton::amdgpu::InstructionSchedHint schedHint) const {
 
     if (!(schedHint.getIsBufferLoadsAEnabled() &&
           schedHint.getIsBufferLoadsBEnabled())) {
-      LDBG("Skipping instruction scheduling because `ck_v3` "
-           "scheduling can be used only with `buffer_load` instructions.");
+      LDBG("skipping `local-prefetch` scheduling given it needs `buffer_load` "
+           "instructions");
       return;
     }
 
@@ -418,15 +407,9 @@ struct InstructionSchedHintsRewriter
   LogicalResult
   matchAndRewrite(triton::amdgpu::InstructionSchedHint instructionSchedHint,
                   PatternRewriter &rewriter) const override {
-    if (this->schedulingType == SchedulingType::NONE) {
+    if (this->schedHint == mlir::triton::amdgpu::SchedHint::none) {
       rewriter.eraseOp(instructionSchedHint);
       return success();
-    }
-
-    if (this->schedulingType == SchedulingType::UNKNOWN) {
-      instructionSchedHint.emitError(
-          "unknown instruction scheduling variant has been provided");
-      return failure();
     }
 
     // The switch controls whether instructions are allowed to cross the basic
@@ -434,9 +417,8 @@ struct InstructionSchedHintsRewriter
     // not supposed to be used together with IGLP OPT according to the AMDGPU
     // backend documentation.
     const bool limitSchedulingRange =
-        !(schedulingType == SchedulingType::NONE ||
-          schedulingType == SchedulingType::IGLP0 ||
-          schedulingType == SchedulingType::IGLP1);
+        this->schedHint == mlir::triton::amdgpu::SchedHint::local_prefetch;
+    ;
     Location loc = instructionSchedHint->getLoc();
     Block *block = instructionSchedHint->getBlock();
     if (limitSchedulingRange) {
@@ -447,22 +429,17 @@ struct InstructionSchedHintsRewriter
 
     rewriter.setInsertionPoint(block, std::prev(block->end()));
 
-    switch (schedulingType) {
-    case SchedulingType::IGLP0:
-      [[fallthrough]];
-    case SchedulingType::IGLP1: {
-      createIglpOpt(rewriter, loc, static_cast<int>(schedulingType) - 1);
+    switch (this->schedHint) {
+    case mlir::triton::amdgpu::SchedHint::llvm_iglp_0:
+    case mlir::triton::amdgpu::SchedHint::llvm_iglp_1:
+      createIglpOpt(rewriter, loc, static_cast<int>(this->schedHint) - 1);
       break;
-    }
-    case SchedulingType::CK_V3: {
-      createCKV3Schedule(rewriter, loc, instructionSchedHint);
+    case mlir::triton::amdgpu::SchedHint::local_prefetch:
+      createLocalPrefetchSchedule(rewriter, loc, instructionSchedHint);
       break;
-    }
-    case SchedulingType::NONE:
-      [[fallthrough]];
-    default: {
+    case mlir::triton::amdgpu::SchedHint::none:
+    default:
       break;
-    }
     }
 
     if (limitSchedulingRange)
@@ -475,7 +452,7 @@ struct InstructionSchedHintsRewriter
 
 private:
   int32_t numStages;
-  SchedulingType schedulingType;
+  mlir::triton::amdgpu::SchedHint schedHint;
   std::unique_ptr<MachineDescr> machineDescr;
 };
 

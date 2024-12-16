@@ -33,28 +33,6 @@ using namespace mlir;
 using namespace mlir::triton;
 
 namespace {
-struct BarrierOpConversion
-    : public ConvertOpToLLVMPattern<mlir::gpu::BarrierOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
-
-  LogicalResult
-  matchAndRewrite(mlir::gpu::BarrierOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Location loc = op->getLoc();
-    if (op->hasAttr("bar_id")) {
-      // llvm.nvvm.barrier0 doesn't support bar_id and num_threads attributes,
-      // so we have to lower it to ptx manually.
-      auto barId = op->getAttrOfType<IntegerAttr>("bar_id").getInt();
-      auto numThreads = op->getAttrOfType<IntegerAttr>("num_threads").getInt();
-      barSync(rewriter, op, barId, numThreads);
-      rewriter.eraseOp(op);
-      return success();
-    }
-    // Otherwise we let the default lowering handle it
-    return failure();
-  }
-};
-
 struct FenceAsyncSharedOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::FenceAsyncSharedOp> {
   using ConvertOpToLLVMPattern<
@@ -193,7 +171,6 @@ struct WaitBarrierOpConversion
 void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
-  patterns.add<BarrierOpConversion>(typeConverter, benefit);
   patterns.add<FenceAsyncSharedOpConversion>(typeConverter, benefit);
   patterns.add<InitBarrierOpConversion, InvalBarrierOpConversion>(typeConverter,
                                                                   benefit);

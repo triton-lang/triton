@@ -13,6 +13,7 @@
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "triton/Dialect/Triton/IR/Dialect.h.inc"
+#include "triton/Dialect/Triton/IR/OpInterfaces.h"
 #include "triton/Dialect/Triton/IR/OpsEnums.h.inc"
 #include "triton/Dialect/Triton/IR/Traits.h"
 #include "triton/Dialect/Triton/IR/Types.h"
@@ -75,6 +76,16 @@ public:
   virtual LogicalResult
   verifyDotOpEncodingCompatibility(Operation *op, Attribute operandEncodingA,
                                    Attribute operandEncodingB) const = 0;
+};
+
+class DialectVerifyTensorLayoutInterface
+    : public DialectInterface::Base<DialectVerifyTensorLayoutInterface> {
+public:
+  DialectVerifyTensorLayoutInterface(Dialect *dialect) : Base(dialect) {}
+
+  virtual LogicalResult
+  verifyTensorLayout(Attribute layout, RankedTensorType type, ModuleOp module,
+                     function_ref<InFlightDiagnostic()> emitError) const = 0;
 };
 
 } // namespace triton

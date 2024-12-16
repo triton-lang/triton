@@ -230,7 +230,15 @@ def add(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, sa
         input_scalar_ty = input.type.scalar
         other_scalar_ty = other.type.scalar
     if input_scalar_ty.is_ptr():
-        return tl.tensor(builder.create_addptr(input.handle, other.handle), input.type)
+        other_handle = other.handle
+        if other.dtype.is_int_unsigned() and other.dtype.int_bitwidth < 64:
+            # addptr treats offset as signed. Zero-extend unsigned offsets to ensure they're positive
+            if other.type.is_block():
+                i64_ty = tl.block_type(tl.int64, other.type.get_block_shapes()).to_ir(builder)
+            else:
+                i64_ty = tl.int64.to_ir(builder)
+            other_handle = builder.create_int_cast(other.handle, i64_ty, False)
+        return tl.tensor(builder.create_addptr(input.handle, other_handle), input.type)
     # float + float
     elif input_scalar_ty.is_floating():
         return tl.tensor(builder.create_fadd(input.handle, other.handle), input.type)
@@ -759,14 +767,14 @@ def broadcast_impl_value(lhs: tl.tensor, rhs: tl.tensor, builder: ir.builder) ->
             # Add new axes to lhs
             for _ in range(len(lhs_shape), len(rhs_shape)):
                 lhs = tl.tensor(builder.create_expand_dims(lhs.handle, 0),
-                                tl.block_type(lhs_ty.scalar, [1] + lhs_shape))
+                                tl.block_type(lhs_ty.scalar, [1] + lhs_shape.values))
                 lhs_ty = lhs.type
                 lhs_shape = lhs_ty.get_block_shapes()
         elif len(rhs_shape) < len(lhs_shape):
             # Add new axes to rhs
             for _ in range(len(rhs_shape), len(lhs_shape)):
                 rhs = tl.tensor(builder.create_expand_dims(rhs.handle, 0),
-                                tl.block_type(rhs_ty.scalar, [1] + rhs_shape))
+                                tl.block_type(rhs_ty.scalar, [1] + rhs_shape.values))
                 rhs_ty = rhs.type
                 rhs_shape = rhs_ty.get_block_shapes()
         assert len(rhs_shape) == len(lhs_shape)
@@ -828,10 +836,6 @@ def bitcast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder) -> tl.tenso
 def cast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder,
          fp_downcast_rounding: Optional[str] = None) -> tl.tensor:
     src_ty = input.type
-    if isinstance(dst_ty, tl.constexpr):
-        dst_ty = dst_ty.value
-    if isinstance(fp_downcast_rounding, tl.constexpr):
-        fp_downcast_rounding = fp_downcast_rounding.value
     if src_ty.is_block():
         dst_ty = tl.block_type(dst_ty.scalar, input.type.get_block_shapes())
     if src_ty == dst_ty:
@@ -1138,18 +1142,24 @@ def load(ptr: tl.tensor, mask: Optional[tl.tensor], other: Optional[tl.tensor], 
         return _load_legacy(ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile, builder)
 
 
-def descriptor_load(desc_ptr: tl.tensor, offsets, cache_modifier: str, eviction_policy: str, type,
+def reinterpret_tensor_descriptor(desc_ptr: tl.tensor, block_ty: tl.block_type, builder: ir.builder):
+    handle = builder.create_reinterpret_tensor_descriptor(desc_ptr.handle, block_ty.to_ir(builder))
+    return tl._experimental_tensor_descriptor_base(handle, block_ty)
+
+
+def descriptor_load(desc: tl.tensor, offsets, cache_modifier: str, eviction_policy: str,
                     builder: ir.builder) -> tl.tensor:
+    assert isinstance(desc, tl._experimental_tensor_descriptor_base)
     offsets = _convert_to_ir_values(builder, offsets, require_i64=False)
-    x = builder.create_descriptor_load(desc_ptr.handle, offsets, type.to_ir(builder),
-                                       _str_to_load_cache_modifier(cache_modifier),
+    x = builder.create_descriptor_load(desc.handle, offsets, _str_to_load_cache_modifier(cache_modifier),
                                        _str_to_eviction_policy(eviction_policy))
-    return tl.tensor(x, type)
+    return tl.tensor(x, desc.type)
 
 
-def descriptor_store(desc_ptr: tl.tensor, value: tl.tensor, offsets, builder: ir.builder) -> tl.tensor:
+def descriptor_store(desc: tl.tensor, value: tl.tensor, offsets, builder: ir.builder) -> tl.tensor:
+    assert isinstance(desc, tl._experimental_tensor_descriptor_base)
     offsets = _convert_to_ir_values(builder, offsets, require_i64=False)
-    return tl.tensor(builder.create_descriptor_store(desc_ptr.handle, value.handle, offsets), tl.void)
+    return tl.tensor(builder.create_descriptor_store(desc.handle, value.handle, offsets), tl.void)
 
 
 def tensormap_create(
@@ -1467,6 +1477,7 @@ def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optiona
         assert lhs.dtype == rhs.dtype, f"Both operands must be same dtype. Got {lhs.dtype} and {rhs.dtype}"
 
     if lhs.dtype.is_fp8e4b15() or rhs.dtype.is_fp8e4b15():
+        # We upcast because there's no fp8e4b15 type in MLIR
         lhs = cast(lhs, tl.float16, builder)
         rhs = cast(rhs, tl.float16, builder)
 
@@ -1560,19 +1571,22 @@ def dot_scaled(lhs: tl.tensor, lhs_scale: tl.tensor, lhs_format: str, rhs: tl.te
     rhs_format: str = rhs_format.value
     lhs_format_enum = _str_to_fp_type(lhs_format)
     rhs_format_enum = _str_to_fp_type(rhs_format)
-    assert lhs_format in ("e2m1", "e4m3", "e5m2"), f"NYI: lhs_format {lhs_format}"
-    assert rhs_format in ("e4m3", "e5m2", "bf16"), f"NYI: rhs_format {rhs_format}"
+    allowed_formats = {"e2m1", "e4m3", "e5m2", "bf16"}
+    assert lhs_format in allowed_formats, f"NYI: lhs_format {lhs_format}"
+    assert rhs_format in allowed_formats, f"NYI: rhs_format {rhs_format}"
     rhs_scale_is_none = isinstance(rhs_scale, tl.constexpr) and rhs_scale.value is None
-    assert rhs_scale_is_none, "NYI: rhs_scale not supported"
+    lhs_scale_is_none = isinstance(lhs_scale, tl.constexpr) and lhs_scale.value is None
+    assert rhs_scale_is_none != lhs_scale_is_none, "There should be exactly one operand with scale"
     lhs = _bitcast_to_fp_type(lhs, lhs_format, builder)
     rhs = _bitcast_to_fp_type(rhs, rhs_format, builder)
 
     M = lhs.type.shape[-2]
     K, N = rhs.type.shape[-2:]
-    PACKED = 2 if lhs_format == "e2m1" else 1
-    assert K == PACKED * lhs.type.shape[
+    PACKED_A = 2 if lhs_format == "e2m1" else 1
+    PACKED_B = 2 if rhs_format == "e2m1" else 1
+    assert K * PACKED_B == PACKED_A * lhs.type.shape[
         -1], f"Reduction dimension should pack the same number of elements; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
-    assert K >= 64, f"scaled_dot NYI for K < 64. Got {K=}"
+    assert K * PACKED_B >= 64, f"scaled_dot NYI for K < 64. Got {K=}"
     B = lhs.type.shape[0] if lhs_rank == 3 else None
 
     ret_ty = tl.block_type(out_dtype, [B, M, N] if B else [M, N])
@@ -1583,8 +1597,9 @@ def dot_scaled(lhs: tl.tensor, lhs_scale: tl.tensor, lhs_format: str, rhs: tl.te
         acc_handle = acc.handle
         assert acc.type == ret_ty
     rhs_scale_handle = None if rhs_scale_is_none else rhs_scale.handle
+    lhs_scale_handle = None if lhs_scale_is_none else lhs_scale.handle
     return tl.tensor(
-        builder.create_dot_scaled(lhs.handle, lhs_scale.handle, lhs_format_enum, rhs.handle, rhs_scale_handle,
+        builder.create_dot_scaled(lhs.handle, lhs_scale_handle, lhs_format_enum, rhs.handle, rhs_scale_handle,
                                   rhs_format_enum, acc_handle), ret_ty)
 
 
@@ -1668,6 +1683,30 @@ def associative_scan(inputs: Sequence[tl.tensor], axis: int, region_builder_fn, 
 
 
 # ===----------------------------------------------------------------------===
+#                               Gather
+# ===----------------------------------------------------------------------===
+
+
+def gather(src: tl.tensor, index: tl.tensor, axis: int, builder: ir.builder) -> tl.tensor:
+    assert index.dtype.is_int(), "index must be an integer tensor"
+
+    rank = len(src.type.shape)
+    assert len(index.type.shape) == rank, "source and index tensors must have the same rank"
+
+    assert -rank <= axis < rank, f"gather axis {axis} must be < source rank ({rank})"
+    if axis < 0:
+        axis += rank
+
+    for d in range(rank):
+        if d == axis:
+            continue
+        assert index.type.shape[d] == src.type.shape[d], f"index dim {axis} must match the corresponding source dim"
+
+    gather = builder.create_gather(src.handle, index.handle, axis)
+    return wrap_tensor(gather, src.type.scalar, index.type.shape)
+
+
+# ===----------------------------------------------------------------------===
 #                               Histogram
 # ===----------------------------------------------------------------------===
 
@@ -1675,7 +1714,7 @@ def associative_scan(inputs: Sequence[tl.tensor], axis: int, region_builder_fn, 
 def histogram(input: tl.tensor, num_bins: int, builder: ir.builder) -> tl.tensor:
     assert len(input.shape) == 1, "histogram only supports 1D input"
     assert input.dtype.is_int(), "histogram only supports integer input"
-    return tl.tensor(builder.create_histogram(input.handle, num_bins), tl.block_type(tl.int32, (num_bins, )))
+    return tl.tensor(builder.create_histogram(input.handle, num_bins), tl.block_type(tl.int32, [num_bins]))
 
 
 ##
