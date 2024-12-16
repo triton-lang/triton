@@ -1594,6 +1594,8 @@ def test_op_persistent_fwd(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, causal, use_alib
     else:
         alibi_slopes = None
 
+    input_metadata.set_persistent(persistent)
+
     o = torch.empty_like(q)
 
     # triton implementation
