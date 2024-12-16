@@ -5,9 +5,10 @@ import os
 import time
 import inspect
 from typing import Dict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .jit import KernelInterface
-from .errors import OutOfResources, PTXASError
+from .errors import OutOfResources
 from .driver import driver
 
 
@@ -44,40 +45,36 @@ class Autotuner(KernelInterface):
         self.arg_names = arg_names
 
         # Reset to zero or restore values
-        self.reset_to_zero = []
+        self.reset_idx = []
         if reset_to_zero is not None:
-            self.reset_to_zero = list(reset_to_zero)
-        self.restore_value = []
+            self.reset_idx = [arg_names.index(k) for k in reset_to_zero]
+        self.restore_idx = []
         if restore_value is not None:
-            self.restore_value = list(restore_value)
+            self.restore_idx = [arg_names.index(k) for k in restore_value]
 
         # Hook to reset or restore for required tensors
-        self.pre_hook = lambda kwargs, reset_only=False: 0
-        self.post_hook = lambda kwargs, exception: 0
-        self.user_defined_pre_hook = False
-        self.user_defined_post_hook = False
+        self.pre_hook = lambda args, reset_only=False: 0
+        self.post_hook = lambda args, exception: 0
         if pre_hook:
             self.pre_hook = pre_hook
-            self.user_defined_pre_hook = True
-        elif (len(self.reset_to_zero) > 0 or len(self.restore_value) > 0):
+        elif (len(self.reset_idx) > 0 or len(self.restore_idx) > 0):
 
-            def _pre_hook(kwargs, reset_only=False):
-                for name in self.reset_to_zero:
-                    kwargs[name].zero_()
+            def _pre_hook(args, reset_only=False):
+                for i in self.reset_idx:
+                    args[i].zero_()
                 if not reset_only:
-                    self.restore_copies = {name: kwargs[name].clone() for name in self.restore_value}
+                    self.restore_copies = [args[i].clone() for i in self.restore_idx]
 
             self.pre_hook = _pre_hook
 
         if post_hook:
             self.post_hook = post_hook
-            self.user_defined_post_hook = True
-        elif len(self.restore_value) > 0:
+        elif len(self.restore_idx) > 0:
 
-            def _post_hook(kwargs, exception):
-                for name in self.restore_value:
-                    kwargs[name].copy_(self.restore_copies[name])
-                self.restore_copies = {}
+            def _post_hook(args, exception):
+                for i, j in enumerate(self.restore_idx):
+                    args[j].copy_(self.restore_copies[i])
+                self.restore_copies = []
 
             self.post_hook = _post_hook
 
@@ -93,10 +90,6 @@ class Autotuner(KernelInterface):
         self.base_fn = fn
         while not inspect.isfunction(self.base_fn):
             self.base_fn = self.base_fn.fn
-
-        self.num_warmups = warmup
-        self.num_reps = rep
-        self.use_cuda_graph = use_cuda_graph
 
         # If we got explicitly called via the old interface, raise a warning
         # and proceed with the old behavior.
@@ -128,12 +121,30 @@ class Autotuner(KernelInterface):
         else:
             self.do_bench = do_bench
 
+    def _compile(self, *args, config, **meta):
+        """Compile a configuration without running it."""
+        from ..compiler.errors import CompileTimeAssertionFailure
+        conflicts = meta.keys() & config.kwargs.keys()
+        if conflicts:
+            raise ValueError(f"Conflicting meta-parameters: {', '.join(conflicts)}."
+                             " Make sure that you don't re-define auto-tuned symbols.")
+        current = dict(meta, **config.all_kwargs())
+        full_nargs = {**self.nargs, **current}
+
+        try:
+            # Attempt to execute the kernel with all arguments
+            # Execution errors will indicate compilation issues
+            # Add or overwrite 'warmup' in the current dictionary to compile without running
+            current['warmup'] = True
+            self.fn.run(*args, **current)
+            return config, True  # Compilation successful
+        except Exception as e:
+            if isinstance(e, (OutOfResources, CompileTimeAssertionFailure)):
+                return config, False  # Compilation failed due to expected issues
+            raise  # Re-raise other unexpected exceptions
+
     def _bench(self, *args, config, **meta):
         from ..compiler.errors import CompileTimeAssertionFailure
-
-        verbose = os.environ.get("TRITON_PRINT_AUTOTUNING", None) == "1"
-        if verbose:
-            print(f"Autotuning kernel {self.base_fn.__name__} with config {config}")
 
         # check for conflicts, i.e. meta-parameters both provided
         # as kwargs and by the autotuner
@@ -148,26 +159,21 @@ class Autotuner(KernelInterface):
         def kernel_call():
             if config.pre_hook:
                 config.pre_hook(full_nargs)
-            self.pre_hook(full_nargs)
+            self.pre_hook(args)
             try:
-                self.fn.run(
-                    *args,
-                    **current,
-                )
+                self.fn.run(*args, **current)
             except Exception as e:
                 try:
-                    self.post_hook(full_nargs, exception=e)
+                    self.post_hook(args, exception=e)
                 finally:
-                    # Throw exception raised by `self.fn.run`
+                    # Throw exception raised by self.fn.run
                     raise
 
-            self.post_hook(full_nargs, exception=None)
+            self.post_hook(args, exception=None)
 
         try:
             return self.do_bench(kernel_call, quantiles=(0.5, 0.2, 0.8))
-        except (OutOfResources, CompileTimeAssertionFailure, PTXASError) as e:
-            if verbose:
-                print(f"Autotuning failed with {e}")
+        except (OutOfResources, CompileTimeAssertionFailure):
             return [float("inf"), float("inf"), float("inf")]
 
     def run(self, *args, **kwargs):
@@ -182,27 +188,48 @@ class Autotuner(KernelInterface):
                     key.append(str(arg.dtype))
             key = tuple(key)
             if key not in self.cache:
-                # prune configs
                 used_cached_result = False
+
+                # Step 1: Parallel compilation
                 pruned_configs = self.prune_configs(kwargs)
+                compile_start = time.time()
+                compiled_configs = []
+                with ThreadPoolExecutor() as executor:
+                    futures = {
+                        executor.submit(self._compile, *args, config=config, **kwargs): config
+                        for config in pruned_configs
+                    }
+                    for future in as_completed(futures):
+                        config, success = future.result()
+                        if success:
+                            compiled_configs.append(config)
+                compile_end = time.time()
+
+                # Step 2: Linear benchmarking
                 bench_start = time.time()
-                timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                timings = {}
+                for config in compiled_configs:
+                    timings[config] = self._bench(*args, config=config, **kwargs)
                 bench_end = time.time()
+
+                self.compile_time = compile_end - compile_start
                 self.bench_time = bench_end - bench_start
+
+                # Cache the best configuration
                 self.cache[key] = builtins.min(timings, key=timings.get)
-                full_nargs = {**self.nargs, **kwargs, **self.cache[key].all_kwargs()}
-                self.pre_hook(full_nargs, reset_only=True)
+                self.pre_hook(args, reset_only=True)
                 self.configs_timings = timings
             config = self.cache[key]
         else:
             config = self.configs[0]
+
         self.best_config = config
         if os.getenv("TRITON_PRINT_AUTOTUNING", None) == "1" and not used_cached_result:
             print(f"Triton autotuning for function {self.base_fn.__name__} finished after "
-                  f"{self.bench_time:.2f}s; best config selected: {self.best_config};")
+                  f"{self.compile_time:.2f}s (compilation) + {self.bench_time:.2f}s (benchmarking); "
+                  f"best config selected: {self.best_config};")
         if config.pre_hook is not None:
-            full_nargs = {**self.nargs, **kwargs, **config.all_kwargs()}
-            config.pre_hook(full_nargs)
+            config.pre_hook({**self.nargs, **kwargs, **config.all_kwargs()})
         ret = self.fn.run(
             *args,
             **kwargs,
@@ -338,12 +365,12 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
     :type restore_value: list[str]
     :param pre_hook: a function that will be called before the kernel is called.
         This overrides the default pre_hook used for 'reset_to_zero' and 'restore_value'.
-        'kwargs': a dict of all arguments passed to the kernel.
+        'args': a list of arguments passed to the kernel.
         'reset_only': a boolean indicating whether the pre_hook is called to reset the values only, without a corresponding post_hook.
     :type pre_hook: lambda args, reset_only
     :param post_hook: a function that will be called after the kernel is called.
         This overrides the default post_hook used for 'restore_value'.
-        'kwargs': a dict of all arguments passed to the kernel.
+        'args': a list of arguments passed to the kernel.
         'exception': the exception raised by the kernel in case of a compilation or runtime error.
     :type post_hook: lambda args, exception
     :param warmup: warmup time (in ms) to pass to benchmarking (deprecated).
