@@ -1120,11 +1120,9 @@ SmallVector<unsigned> DotOperandEncodingAttr::getWarpsPerCTA() const {
 }
 SmallVector<unsigned> DotOperandEncodingAttr::getWarpOrder() const {
   // FIXME(Lezcano): Preexisting. Do we want to have this path at all?
-  if (mlir::isa<AMDMfmaEncodingAttr>(getParent())) {
+  if (mlir::isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>(getParent())) {
     return ::getWarpOrder(getParent());
   }
-  // It's quite weird to talk about warp order when that the warps
-  // are broadcasted along the K dimension
   llvm::report_fatal_error("DotOperandEncoding::getWarpOrder not implemented");
   return {};
 }
@@ -1160,9 +1158,9 @@ LogicalResult DotOperandEncodingAttr::verify(
 
   if (auto parentAttr = mlir::dyn_cast<AMDWmmaEncodingAttr>(parent)) {
     if (kWidth != 16 && parentAttr.getVersion() == 1 ||
-        kWidth != 8 && parentAttr.getVersion() == 2)
+        kWidth != 8 && kWidth != 16 && parentAttr.getVersion() == 2)
       return emitError() << "ttg.dot_op kWidth parameter must be 16 for "
-                            "gfx11 and 8 for gfx12";
+                            "gfx11 and 8/16 for gfx12";
     return success();
   }
 
