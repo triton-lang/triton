@@ -329,41 +329,41 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32}
 }
 
 // -----
-//
-//#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
-//module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
-//  // CHECK-LABEL: tt.func @whileOp
-//  tt.func @whileOp(%arg0: !tt.ptr<f32>, %init : tensor<1024xf32, #blocked>, %cond : i1)-> tensor<1024xf32, #blocked>{
-//    %c1024_i32 = arith.constant 1024 : i32
-//    %c0 = arith.constant 0: index
-//    %c128 = arith.constant 128: index
-//    %c1 = arith.constant 1 : index
-//    %0 = tt.get_program_id x : i32
-//    %1 = arith.muli %0, %c1024_i32 : i32
-//    %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
-//    // CHECK: %[[base_offset:.*]] = tt.splat %{{.*}} : i64
-//    %3 = tt.splat %1 : i32 -> tensor<1024xi32, #blocked>
-//    %4 = arith.addi %3, %2 : tensor<1024xi32, #blocked>
-//    %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
-//    // CHECK: %[[whileOut:.*]]:3 = scf.while ({{.*}}, %[[loopPtr:.*]] = %arg0, %[[loopOffset:.*]] = %[[base_offset]])
-//    %6 = scf.while (%arg1 = %5, %arg2 = %cond) : (tensor<1024x!tt.ptr<f32>, #blocked>, i1) -> (tensor<1024x!tt.ptr<f32>, #blocked>) {
-//        // CHECK: scf.condition({{.*}}) %{{.*}}, %[[loopPtr]], %[[loopOffset]]
-//        scf.condition(%arg2) %arg1 : tensor<1024x!tt.ptr<f32>, #blocked>
-//        } do {
-//        // CHECK: ^bb{{.*}}(%{{.*}}, %[[blockPtr:.*]]: !tt.ptr<f32>, %[[blockOffset:.*]]: tensor<1024xi64, #blocked>):
-//        ^bb0(%arg1: tensor<1024x!tt.ptr<f32>, #blocked>):
-//        // CHECK: scf.yield {{.*}}, %[[blockPtr]], %[[blockOffset]]
-//        scf.yield %arg1, %cond : tensor<1024x!tt.ptr<f32>, #blocked>, i1
-//        }
-//    // CHECK: %[[trunc_offset:.*]] = arith.trunci %[[whileOut]]#2
-//    // CHECK: %[[base_ptr:.*]] = tt.splat %[[whileOut]]#1
-//    // CHECK: %[[newPtr:.*]] = tt.addptr %[[base_ptr]], %[[trunc_offset]]
-//    // CHECK: tt.load %[[newPtr]]
-//    %11 = tt.load %6 : tensor<1024x!tt.ptr<f32>, #blocked>
-//    tt.return %11 : tensor<1024xf32, #blocked>
-//  }
-//}
-//
+
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: tt.func @whileOp
+  tt.func @whileOp(%arg0: !tt.ptr<f32>, %init : tensor<1024xf32, #blocked>, %cond : i1)-> tensor<1024xf32, #blocked>{
+    %c1024_i32 = arith.constant 1024 : i32
+    %c0 = arith.constant 0: index
+    %c128 = arith.constant 128: index
+    %c1 = arith.constant 1 : index
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %c1024_i32 : i32
+    %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+    // CHECK: %[[base_offset:.*]] = tt.splat %{{.*}} : i64
+    %3 = tt.splat %1 : i32 -> tensor<1024xi32, #blocked>
+    %4 = arith.addi %3, %2 : tensor<1024xi32, #blocked>
+    %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+    // CHECK: %[[whileOut:.*]]:3 = scf.while ({{.*}}, %[[loopPtr:.*]] = %arg0, %[[loopOffset:.*]] = %[[base_offset]])
+    %6 = scf.while (%arg1 = %5) : (tensor<1024x!tt.ptr<f32>, #blocked>) -> (tensor<1024x!tt.ptr<f32>, #blocked>) {
+        // CHECK: scf.condition({{.*}}) %{{.*}}, %[[loopPtr]], %[[loopOffset]]
+        scf.condition(%cond) %arg1 : tensor<1024x!tt.ptr<f32>, #blocked>
+        } do {
+        // CHECK: ^bb{{.*}}(%{{.*}}, %[[blockPtr:.*]]: !tt.ptr<f32>, %[[blockOffset:.*]]: tensor<1024xi64, #blocked>):
+        ^bb0(%arg1: tensor<1024x!tt.ptr<f32>, #blocked>):
+        // CHECK: scf.yield {{.*}}, %[[blockPtr]], %[[blockOffset]]
+        scf.yield %arg1 : tensor<1024x!tt.ptr<f32>, #blocked>
+        }
+    // CHECK: %[[trunc_offset:.*]] = arith.trunci %[[whileOut]]#2
+    // CHECK: %[[base_ptr:.*]] = tt.splat %[[whileOut]]#1
+    // CHECK: %[[newPtr:.*]] = tt.addptr %[[base_ptr]], %[[trunc_offset]]
+    // CHECK: tt.load %[[newPtr]]
+    %11 = tt.load %6 : tensor<1024x!tt.ptr<f32>, #blocked>
+    tt.return %11 : tensor<1024xf32, #blocked>
+  }
+}
+
 // -----
 
 //#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
