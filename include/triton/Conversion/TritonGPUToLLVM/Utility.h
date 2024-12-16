@@ -273,12 +273,25 @@ struct SharedMemoryObject {
                      ArrayRef<Value> offsets)
       : base(base), baseElemType(baseElemType),
         strides(strides.begin(), strides.end()),
-        offsets(offsets.begin(), offsets.end()) {}
+        offsets(offsets.begin(), offsets.end()) {
+    assert(strides.size() == offsets.size());
+  }
 
   SharedMemoryObject(Value base, Type baseElemType, ArrayRef<int64_t> shape,
-                     ArrayRef<unsigned> order, Location loc,
+                     triton::gpu::SharedEncodingAttr layout, Location loc,
                      RewriterBase &rewriter)
       : base(base), baseElemType(baseElemType) {
+    SmallVector<unsigned> order(shape.size());
+    // Default minor-to-major order
+    std::iota(order.rbegin(), order.rend(), 0);
+    if (layout) {
+      auto layoutOrder = convertType<int>(layout.getOrder());
+      int rankDiff = layoutOrder.size() - shape.size();
+      auto minRank = std::min(shape.size(), layoutOrder.size());
+      for (size_t i = 0; i < minRank; ++i)
+        order[i] = layoutOrder[i] - rankDiff;
+    }
+    assert(isPermutationOfIota(order) && "Invalid order");
     strides = getStridesFromShapeAndOrder(shape, order, loc, rewriter);
     offsets.append(order.size(), i32_val(0));
   }
@@ -304,14 +317,14 @@ struct SharedMemoryObject {
     return types;
   }
 
-  Value getCSwizzleOffset(int order) const {
-    assert(order >= 0 && order < strides.size());
-    return offsets[order];
+  Value getCSwizzleOffset(int dim) const {
+    assert(dim >= 0 && dim < strides.size());
+    return offsets[dim];
   }
 
-  Value getBaseBeforeSlice(int order, Location loc,
+  Value getBaseBeforeSlice(int dim, Location loc,
                            RewriterBase &rewriter) const {
-    Value cSwizzleOffset = getCSwizzleOffset(order);
+    Value cSwizzleOffset = getCSwizzleOffset(dim);
     Value offset = sub(i32_val(0), cSwizzleOffset);
     Type type = base.getType();
     return gep(type, baseElemType, base, offset);
