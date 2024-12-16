@@ -197,7 +197,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     const SharedMemoryObject &smemObj,
                     const LLVMTypeConverter *typeConverter, Value thread) {
   assert((opIdx == 0 || opIdx == 1) && "unexpected operand idx");
-  auto tensorTy = cast<MemDescType>(tensor.getType());
+  auto tensorTy = cast<triton::gpu::MemDescType>(tensor.getType());
   auto expandedTensorTy = getExpandedDesc(tensorTy);
   auto expandedEncoding =
       cast<DotOperandEncodingAttr>(getExpandedEncoding(encoding));
@@ -241,8 +241,6 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   auto numRepNonK = numReps[nonKDimIdx];
   auto numRepK = numReps[kDimIdx];
   auto repB = numReps[0];
-  // TODO(Lixun): make it simpler
-  // getRepForOperand always returns a 3D vector
 
   unsigned iWarpSize = triton::gpu::getWarpSize(mfmaLayout);
   assert(iWarpSize == 64);

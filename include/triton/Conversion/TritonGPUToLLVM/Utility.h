@@ -546,7 +546,7 @@ Attribute getExpandedEncoding(Attribute encoding);
 /// Expand type of dot operands to 3d variant. If the given type is a 3d tensor,
 /// return it without change. If it is a 2d tensor, create a new type that
 /// describes 3d tensor with expanded shape and layout.
-MemDescType getExpandedDesc(MemDescType descTy);
+triton::gpu::MemDescType getExpandedDesc(triton::gpu::MemDescType descTy);
 
 // -----------------------------------------------------------------------
 // Blocked layout indices

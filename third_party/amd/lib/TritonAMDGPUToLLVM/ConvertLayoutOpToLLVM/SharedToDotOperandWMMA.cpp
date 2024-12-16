@@ -139,7 +139,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     const SharedMemoryObject &smemObj,
                     const LLVMTypeConverter *typeConverter, Value thread) {
   assert((opIdx == 0 || opIdx == 1) && "unexpected operand idx");
-  auto tensorTy = cast<MemDescType>(tensor.getType());
+  auto tensorTy = cast<triton::gpu::MemDescType>(tensor.getType());
   auto expandedTensorTy = getExpandedDesc(tensorTy);
   ArrayRef<int64_t> shape = expandedTensorTy.getShape();
   auto rank = shape.size();
