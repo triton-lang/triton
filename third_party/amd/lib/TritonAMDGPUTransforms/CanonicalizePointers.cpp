@@ -1514,6 +1514,7 @@ public:
     if (failed(rewriter.convertRegionTypes(&whileOp.getBefore(),
                                            hackTypeConverter)))
       return failure();
+    inputNo = 0;
     if (failed(rewriter.convertRegionTypes(&whileOp.getAfter(),
                                            hackTypeConverter)))
       return failure();
@@ -1572,6 +1573,108 @@ public:
   }
 };
 
+class ConvertCFCondBranch : public PointerCanonPattern<cf::CondBranchOp> {
+public:
+  using PointerCanonPattern::PointerCanonPattern;
+  LogicalResult
+  matchAndRewrite(cf::CondBranchOp branchOp, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    SmallVector<Value> trueOperands =
+        flattenValues(adaptor.getTrueDestOperands());
+    SmallVector<Value> falseOperands =
+        flattenValues(adaptor.getFalseDestOperands());
+
+    rewriter.modifyOpInPlace(branchOp, [&] {
+      branchOp->setDiscardableAttr("rewritten", rewriter.getUnitAttr());
+    });
+    auto newBrancOp = rewriter.replaceOpWithNewOp<cf::CondBranchOp>(
+        branchOp, branchOp.getCondition(), branchOp.getTrueDest(), trueOperands,
+        branchOp.getFalseDest(), falseOperands);
+
+    unsigned inputNo = 0;
+    TypeConverter hackTypeConverterTrueDest;
+    hackTypeConverterTrueDest.addConversion(
+        [&inputNo, remappedOperands = adaptor.getTrueDestOperands()](
+            Type inputType, SmallVectorImpl<Type> &types) {
+          SmallVector<Type> remappedInitTypes =
+              llvm::to_vector(remappedOperands[inputNo].getTypes());
+          types.append(remappedInitTypes);
+          inputNo++;
+          return success();
+        });
+
+    std::optional<TypeConverter::SignatureConversion> conversion =
+        hackTypeConverterTrueDest.convertBlockSignature(branchOp.getTrueDest());
+    if (!conversion)
+      return failure();
+    rewriter.applySignatureConversion(branchOp.getTrueDest(), *conversion,
+                                      &hackTypeConverterTrueDest);
+
+    inputNo = 0;
+    TypeConverter hackTypeConverterFalseDest;
+    hackTypeConverterFalseDest.addConversion(
+        [&inputNo, remappedOperands = adaptor.getFalseDestOperands()](
+            Type inputType, SmallVectorImpl<Type> &types) {
+          SmallVector<Type> remappedInitTypes =
+              llvm::to_vector(remappedOperands[inputNo].getTypes());
+          types.append(remappedInitTypes);
+          inputNo++;
+          return success();
+        });
+
+    conversion = hackTypeConverterFalseDest.convertBlockSignature(
+        branchOp.getFalseDest());
+    if (!conversion)
+      return failure();
+    rewriter.applySignatureConversion(branchOp.getFalseDest(), *conversion,
+                                      &hackTypeConverterFalseDest);
+    rewriter.modifyOpInPlace(newBrancOp, [&] {
+      newBrancOp->setDiscardableAttr("legal", rewriter.getUnitAttr());
+    });
+    return success();
+  }
+};
+
+class ConvertCFBranch : public PointerCanonPattern<cf::BranchOp> {
+public:
+  using PointerCanonPattern::PointerCanonPattern;
+  LogicalResult
+  matchAndRewrite(cf::BranchOp branchOp, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    SmallVector<Value> trueOperands = flattenValues(adaptor.getDestOperands());
+
+    rewriter.modifyOpInPlace(branchOp, [&] {
+      branchOp->setDiscardableAttr("rewritten", rewriter.getUnitAttr());
+    });
+    auto newBrancOp = rewriter.replaceOpWithNewOp<cf::BranchOp>(
+        branchOp, branchOp.getDest(), trueOperands);
+
+    unsigned inputNo = 0;
+    TypeConverter hackTypeConverterTrueDest;
+    hackTypeConverterTrueDest.addConversion(
+        [&inputNo, remappedOperands = adaptor.getDestOperands()](
+            Type inputType, SmallVectorImpl<Type> &types) {
+          SmallVector<Type> remappedInitTypes =
+              llvm::to_vector(remappedOperands[inputNo].getTypes());
+          types.append(remappedInitTypes);
+          inputNo++;
+          return success();
+        });
+
+    std::optional<TypeConverter::SignatureConversion> conversion =
+        hackTypeConverterTrueDest.convertBlockSignature(branchOp.getDest());
+    if (!conversion)
+      return failure();
+    rewriter.applySignatureConversion(branchOp.getDest(), *conversion,
+                                      &hackTypeConverterTrueDest);
+
+    rewriter.modifyOpInPlace(newBrancOp, [&] {
+      newBrancOp->setDiscardableAttr("legal", rewriter.getUnitAttr());
+    });
+    return success();
+  }
+};
+
 void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   ModuleOp module = getOperation();
   mlir::MLIRContext *context = &getContext();
@@ -1582,8 +1685,11 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
     if (op->hasAttr("rewritten") || op->hasAttr("legal"))
       return true;
     for (OpOperand &operand : op->getOpOperands()) {
-      if (auto arg = llvm::dyn_cast<BlockArgument>(operand.get()))
-        return !llvm::isa<triton::PointerType>(getElementTypeOrSelf(arg));
+      if (auto arg = llvm::dyn_cast<BlockArgument>(operand.get())) {
+        if (!llvm::isa<triton::PointerType>(getElementTypeOrSelf(arg)))
+          continue;
+        return false;
+      }
       if (operand.get().getDefiningOp()->hasAttr("rewritten"))
         return false;
     }
@@ -1603,13 +1709,15 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
       return false;
     return isLegal(op);
   });
+  target.addDynamicallyLegalDialect<cf::ControlFlowDialect>(
+      [&isLegal](Operation *op) { return isLegal(op); });
 
   FatPointers fatPrs;
 
   patterns.add<ConvertFuncOp, ConvertSplatOp, ConvertAddPtrOp, ConvertLoadOp,
                ConvertSCFForOp, ConvertSCFYieldOp, ConvertSCFIfOp,
-               ConvertSCFConditionOp, ConvertSCFWhileOp>(patterns.getContext(),
-                                                         fatPrs);
+               ConvertSCFConditionOp, ConvertSCFWhileOp, ConvertCFCondBranch,
+               ConvertCFBranch>(patterns.getContext(), fatPrs);
   ConversionConfig config;
   config.buildMaterializations = false;
   if (failed(
