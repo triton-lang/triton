@@ -17,6 +17,7 @@ Currently only the forward kernel is supported, and contains these features:
 4) Multi and grouped query attention
 5) Variable sequence lengths
 6) ALiBi and matrix bias
+7) Persistent kernels (separated to attn_fwd_persistent)
 
 """
 
@@ -679,16 +680,17 @@ def attn_fwd_persistent(
         Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh, stride_qm, stride_qk, stride_kz, stride_kh,
         stride_kn, stride_kk, stride_vz, stride_vh, stride_vk, stride_vn, stride_oz, stride_oh, stride_om, stride_on,
         stride_bz, stride_bh, stride_bm, stride_bn, stride_az, stride_ah, cu_seqlens_q, cu_seqlens_k, dropout_p,
-        philox_seed, philox_offset_base, encoded_softmax, alibi_slopes, NUM_CU, atomic_counter,
-        USE_DYNAMIC: tl.constexpr, ZQ: tl.constexpr, HQ: tl.constexpr, HK: tl.constexpr,
+        philox_seed, philox_offset_base, encoded_softmax, alibi_slopes,
+        atomic_counter, NUM_CU: tl.constexpr, USE_DYNAMIC: tl.constexpr, GRID_CU_MULTIP: tl.constexpr,
+        ZQ: tl.constexpr, HQ: tl.constexpr, HK: tl.constexpr,
         ACTUAL_BLOCK_DMODEL: tl.constexpr, MAX_SEQLENS_Q: tl.constexpr, MAX_SEQLENS_K: tl.constexpr,
         VARLEN: tl.constexpr, IS_CAUSAL: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,
         BLOCK_N: tl.constexpr, PRE_LOAD_V: tl.constexpr, USE_BIAS: tl.constexpr, ENABLE_DROPOUT: tl.constexpr,
-        RETURN_ENCODED_SOFTMAX: tl.constexpr, USE_ALIBI: tl.constexpr, GRID_CU_MULTIP: tl.constexpr):
+        RETURN_ENCODED_SOFTMAX: tl.constexpr, USE_ALIBI: tl.constexpr):
     """
     This implements the persistent kernel optimization to flash attention. With persistent kernels, we launch NUM_WG = NUM_CU * GRID_CU_MULTIP number of workgroups,
     and each workgroup loops over num_tiles_total // NUM_WG number of tiles. This is meant to amortize the workgroup launch overhead that we would otherwise incure when launching
-    a workgroup per each Q tile as is done with the standard flash attention (flash-attention.py).
+    a workgroup per each Q tile as is done with the standard flash attention (attn_fwd).
 
     If USE_DYNAMIC=True the tiles are scheduled dynamically to the workgroups with atomic add calls. This effectively balances the workloads for the workgroups and is beneficial when IS_CAUSAL=True.
     Atomic add calls however add overhead, which leads to worse performance if the workloads are already balanced (as is with IS_CAUSAL=FALSE). Then we can just use fixed scheduling.
@@ -709,19 +711,13 @@ def attn_fwd_persistent(
         # tile id basically tells us the Q block we are handling
         off_z = tile_id // num_tiles_per_sample  # at which batch sample are we
         off_h_q = tile_id % num_tiles_per_sample // num_tiles_per_head  # at which head are we inside the sample
-
         start_m = tile_id % num_tiles_per_sample % num_tiles_per_head  # at which tile are we inside the head
-        # flip the traversal order of Q blocks inside head
-        # start_m = num_tiles_per_head - tile_id % num_tiles_per_sample % num_tiles_per_head - 1
-
         # Do the specified Q block computation (following is the same as in normal flash attention)
         offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
         offs_n = tl.arange(0, BLOCK_N)
         offs_d = tl.arange(0, BLOCK_DMODEL)
-
         # We need this because Triton does not allow return or continue statements inside loop
         continue_condition = True
-
         if VARLEN:
             cu_seqlens_q_start = tl.load(cu_seqlens_q + off_z)
             cu_seqlens_q_end = tl.load(cu_seqlens_q + off_z + 1)
@@ -1319,7 +1315,7 @@ class _attention(torch.autograd.Function):
             NUM_CU = torch.cuda.get_device_properties("cuda").multi_processor_count
             grid = lambda META: (min(NUM_CU * META['GRID_CU_MULTIP'],
                                      triton.cdiv(metadata.max_seqlens_q, META['BLOCK_M']) * nheads_q * batch), )
-            atomic_counter = torch.zeros([1], dtype=torch.int32, device='cuda')
+            atomic_counter = torch.zeros([1], device=q.device, dtype=torch.int32)
 
             attn_fwd_persistent[grid](
                 q, k, v, metadata.bias, metadata.sm_scale, M, o, *q_strides, *k_strides, *v_strides, *o_strides,
