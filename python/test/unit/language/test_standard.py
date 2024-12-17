@@ -76,6 +76,29 @@ def test_flip(M, N, dtype_str, device):
 
 
 @pytest.mark.interpreter
+def test_flip_inf(device):
+    # Reproducer for https://github.com/triton-lang/triton/issues/5439
+
+    @triton.jit
+    def triton_flip_kernel(out_ptr, x_ptr, N: tl.constexpr):
+        pid = tl.program_id(0)
+        x = tl.load(x_ptr + pid * N + tl.arange(0, N))
+        shape: tl.constexpr = (N // 2, 2)
+        y = x.reshape(shape)
+        y = tl.flip(y, dim=1).reshape(x.shape)
+        tl.store(out_ptr + pid * N + tl.arange(0, N), y)
+
+    x = torch.arange(0, 16, device=device).unsqueeze(0).float()
+    x[:, -1] = float('inf')
+
+    expect = x.reshape(-1, 8, 2).flip(-1).reshape(-1, 16)
+    actual = torch.empty_like(x)
+    triton_flip_kernel[(x.shape[0], )](actual, x, x.shape[1])
+
+    torch.testing.assert_close(expect, actual)
+
+
+@pytest.mark.interpreter
 @pytest.mark.parametrize("size_i, size_j, size_g", [[5, 7, 3]])
 def test_swizzle2d(size_i, size_j, size_g, device):
 
