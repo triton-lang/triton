@@ -306,7 +306,7 @@ public:
   using MatrixOpPattern::MatrixOpPattern;
 
 protected:
-  unsigned getVectorSize(ttn::StoreMatrixOp op) const {
+  unsigned getVectorSize(ttn::StoreMatrixOp op) const override {
     return op.getVals().size();
   }
 
@@ -341,7 +341,7 @@ public:
   using MatrixOpPattern::MatrixOpPattern;
 
 protected:
-  unsigned getVectorSize(ttn::LoadMatrixOp op) const {
+  unsigned getVectorSize(ttn::LoadMatrixOp op) const override {
     auto resultType = cast<LLVM::LLVMStructType>(op.getType());
     return resultType.getBody().size();
   }
