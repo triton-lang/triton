@@ -5402,7 +5402,7 @@ layouts_3d = [
                      k_width=1),
 ]
 
-shared_layout_3d = [
+shared_layouts_3d = [
     SharedLayout(1, 1, 1, [2, 1, 0], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
     SharedLayout(4, 2, 4, [1, 2, 0], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
     SharedLayout(8, 2, 4, [0, 2, 1], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
@@ -5411,8 +5411,8 @@ shared_layout_3d = [
 
 
 @pytest.mark.parametrize("M, N, K", [[8, 16, 32]])
-@pytest.mark.parametrize("shared_layout", shared_layout_3d)
-@pytest.mark.parametrize("dist_layout", layouts_3d)
+@pytest.mark.parametrize("shared_layout", shared_layouts_3d)
+@pytest.mark.parametrize("dist_layout", filter_layouts(layouts_3d))
 def test_local_load_store(M, N, K, dist_layout, shared_layout, device, tmp_path: pathlib.Path):
     layouts = f"""
     #dist = {dist_layout}
@@ -5484,7 +5484,7 @@ def test_local_load_store(M, N, K, dist_layout, shared_layout, device, tmp_path:
     assert torch.equal(z, x)
 
 
-mma_layout = [
+mma_layouts = [
     MmaLayout((2, 0), [1, 4], [1, 1], [1, 1], [0, 1], [16, 8]),
     MmaLayout((3, 0), [4, 1], [1, 1], [1, 1], [0, 1], [16, 128, 16]),  # simple 4 warps case
     MmaLayout((3, 0), [8, 1], [1, 1], [1, 1], [0, 1], [16, 128, 16]),  # simple 8 warps case
@@ -5493,7 +5493,7 @@ mma_layout = [
     MmaLayout((3, 0), [8, 4], [1, 1], [1, 1], [0, 1], [16, 64, 16]),  # large number of warps
 ]
 
-shared_layout = [
+shared_layouts = [
     SharedLayout(8, 1, 1, [1, 0], [1, 1], [1, 1], [0, 1]),
     SharedLayout(8, 2, 4, [1, 0], [1, 1], [1, 1], [0, 1], has_leading_offset=True),  # small contiguous bytes
     SharedLayout(8, 1, 8, [1, 0], [1, 1], [1, 1], [0, 1], has_leading_offset=True),  # maximum contiguous bytes
@@ -5501,18 +5501,10 @@ shared_layout = [
 
 
 @pytest.mark.parametrize("M, N", [[128, 128]])
-@pytest.mark.parametrize("mma_layout", mma_layout)
-@pytest.mark.parametrize("shared_layout", shared_layout)
+@pytest.mark.parametrize("mma_layout", filter_layouts(mma_layouts))
+@pytest.mark.parametrize("shared_layout", shared_layouts)
 def test_local_load_store_mma(M, N, mma_layout, shared_layout, device, tmp_path: pathlib.Path):
-    if is_hip():
-        pytest.skip("test_mma2mma is not supported in HIP")
-
-    if is_cuda():
-        cc = torch.cuda.get_device_capability()
-        if cc[0] < 9 and mma_layout.version[0] >= 3:
-            pytest.skip("Skip testing MMAv3 on devices with CC < 9")
-
-    num_warps = np.cumprod(mma_layout.warps_per_cta)[-1]
+    num_warps = np.prod(mma_layout.warps_per_cta)
 
     layouts = f"""
     #dist = {mma_layout}
@@ -5553,6 +5545,9 @@ def test_local_load_store_mma(M, N, mma_layout, shared_layout, device, tmp_path:
 
     kernel[(1, 1, 1)](x, z)
     assert torch.equal(z, x)
+
+    if shared_layout.has_leading_offset:
+        assert "stmatrix" in kernel.asm["ptx"]
 
 
 mma_pairs = [
@@ -5601,18 +5596,10 @@ mma_pairs = [
 
 @pytest.mark.parametrize("M, N", [[64, 1], [1, 64], [64, 64], [128, 128], [256, 256]])
 @pytest.mark.parametrize("dtype", ['float16'])
-@pytest.mark.parametrize("mma_pair", mma_pairs)
+@pytest.mark.parametrize("mma_pair", filter_layouts(mma_pairs))
 def test_convert_mma2mma(M, N, mma_pair, dtype, device, tmp_path: pathlib.Path):
-    if is_hip():
-        pytest.skip("test_mma2mma is not supported in HIP")
-
     src_layout, _ = mma_pair
-    if is_cuda():
-        cc = torch.cuda.get_device_capability()
-        if cc[0] < 9 and src_layout.version[0] >= 3:
-            pytest.skip("Skip testing MMAv3 on devices with CC < 9")
-
-    num_warps = np.cumprod(src_layout.warps_per_cta)[-1]
+    num_warps = np.prod(src_layout.warps_per_cta)
 
     def do_test(src_layout, dst_layout):
         layouts = f"""
