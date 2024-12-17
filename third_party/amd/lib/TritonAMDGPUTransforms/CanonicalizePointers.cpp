@@ -1262,6 +1262,46 @@ public:
   }
 };
 
+class ConvertBroadcastOp : public PointerCanonPattern<triton::BroadcastOp> {
+public:
+  using PointerCanonPattern::PointerCanonPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::BroadcastOp broadcastOp, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    ArrayRef<ValueRange> remappedOperands = adaptor.getOperands();
+    // see
+    // https://github.com/llvm/llvm-project/blob/58389b220a9354ed6c34bdb9310a35165579c5e3/mlir/lib/Transforms/Utils/DialectConversion.cpp#L1177
+    assert(remappedOperands.size() == 1 && remappedOperands[0].size() == 2 &&
+           "expected adaptor to have 2 remapped values");
+    Value fatPtrBase = remappedOperands[0][0];
+    Value fatPtrOffset = remappedOperands[0][1];
+    assert(llvm::isa<triton::PointerType>(fatPtrBase.getType()) &&
+           "expected fatPtrBase to be a tt.ptr");
+    assert(llvm::isa<IntegerType>(fatPtrOffset.getType()) &&
+           "expected fatPtrOffset to be an integer type");
+
+    auto outType =
+        dyn_cast<RankedTensorType>(broadcastOp.getResult().getType());
+    auto ptrShape = outType.getShape();
+    auto offsetType = dyn_cast<RankedTensorType>(fatPtrOffset.getType());
+    if (!offsetType)
+      return failure();
+
+    auto newOffsetType = RankedTensorType::get(
+        ptrShape, offsetType.getElementType(), outType.getEncoding());
+    Value offset = rewriter.create<triton::BroadcastOp>(
+        broadcastOp.getLoc(), newOffsetType, fatPtrOffset);
+    rewriter.modifyOpInPlace(broadcastOp, [&] {
+      broadcastOp->setDiscardableAttr("rewritten", rewriter.getUnitAttr());
+    });
+    rewriter.replaceOpWithMultiple(broadcastOp,
+                                   {{broadcastOp.getSrc(), offset}});
+
+    return success();
+  }
+};
+
 class ConvertLoadOp : public PointerCanonPattern<triton::LoadOp> {
 public:
   using PointerCanonPattern::PointerCanonPattern;
@@ -1286,6 +1326,34 @@ public:
     attrs.append({rewriter.getNamedAttr("legal", rewriter.getUnitAttr())});
     auto newLoadPtrOp =
         rewriter.replaceOpWithNewOp<triton::LoadOp>(loadOp, operands, attrs);
+    return success();
+  }
+};
+
+class ConvertStoreOp : public PointerCanonPattern<triton::StoreOp> {
+public:
+  using PointerCanonPattern::PointerCanonPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::StoreOp storeOp, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    ValueRange fatPtr = *adaptor.getOperands().begin();
+    Value fatPtrBase = fatPtr.front();
+    Value fatPtrOffset = fatPtr.back();
+    Location curLoc = storeOp.getLoc();
+
+    llvm::SmallDenseMap<StringAttr, Attribute> attributes{
+        {rewriter.getStringAttr("legal"), rewriter.getUnitAttr()}};
+    Value newPtr = createTensorPointer(
+        rewriter, fatPtrBase, fatPtrOffset, curLoc,
+        fatPtrs[{fatPtrBase, fatPtrOffset}].canNarrow, attributes);
+    SmallVector<Value> operands =
+        storeOp.getOperands().take_back(storeOp.getNumOperands() - 1);
+    operands.insert(operands.begin(), newPtr);
+    SmallVector<NamedAttribute> attrs = llvm::to_vector(storeOp->getAttrs());
+    attrs.append({rewriter.getNamedAttr("legal", rewriter.getUnitAttr())});
+    auto newStoreOp = rewriter.replaceOpWithNewOp<triton::StoreOp>(
+        storeOp, TypeRange{}, ValueRange{operands}, attrs);
     return success();
   }
 };
@@ -1775,11 +1843,12 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
 
   FatPointers fatPrs;
 
-  patterns.add<ConvertFuncOp, ConvertSplatOp, ConvertAddPtrOp, ConvertLoadOp,
-               ConvertSCFForOp, ConvertSCFYieldOp, ConvertSCFIfOp,
-               ConvertSCFConditionOp, ConvertSCFWhileOp, ConvertCFCondBranch,
-               ConvertCFBranch, ConvertArithSelectOp>(patterns.getContext(),
-                                                      fatPrs);
+  patterns
+      .add<ConvertFuncOp, ConvertBroadcastOp, ConvertSplatOp, ConvertAddPtrOp,
+           ConvertLoadOp, ConvertStoreOp, ConvertSCFForOp, ConvertSCFYieldOp,
+           ConvertSCFIfOp, ConvertSCFConditionOp, ConvertSCFWhileOp,
+           ConvertCFCondBranch, ConvertCFBranch, ConvertArithSelectOp>(
+          patterns.getContext(), fatPrs);
   ConversionConfig config;
   config.buildMaterializations = false;
   if (failed(
