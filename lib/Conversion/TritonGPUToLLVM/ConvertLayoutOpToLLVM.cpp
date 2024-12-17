@@ -18,7 +18,6 @@ namespace {
 
 using ::mlir::LLVM::getMultiDimOffset;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-using ::mlir::LLVM::getStridesFromShapeAndOrder;
 using ::mlir::LLVM::getWrappedMultiDimOffset;
 using ::mlir::LLVM::linearize;
 

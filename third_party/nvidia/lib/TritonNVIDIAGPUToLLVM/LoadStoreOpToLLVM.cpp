@@ -8,11 +8,13 @@
 #include "Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+
+#include <cassert>
 
 using namespace mlir;
 using namespace mlir::triton;
+namespace ttg = mlir::triton::gpu;
 
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
@@ -24,60 +26,77 @@ using ::mlir::triton::gpu::SharedEncodingAttr;
 
 namespace {
 
-// Return the mask for the unique data accessed by given tensor type.
-// NOTE: Redundant memory load is allowed in triton, but redundant memory store
-// is not allowed.
-// mask = true: thread can write
-// mask = false: thread should not write
-Value getRedundantDataMask(ModuleOp moduleOp, Type valueTy,
-                           ConversionPatternRewriter &rewriter, Location loc,
-                           int regIdx, const NVIDIA::TargetInfo &targetInfo) {
-  auto ctx = moduleOp.getContext();
-  auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
-  auto numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
-  auto tid = tid_val();
-  auto mask = true_val();
-  auto kReg = str_attr("register");
+llvm::MapVector<StringAttr, int32_t> getAllFreeVarMasks(MLIRContext *ctx) {
+  // Mask where all elements are redundant
+  auto kReg = str_attr("reg");
   auto kLane = str_attr("lane");
   auto kWarp = str_attr("warp");
   auto kBlock = str_attr("block");
-  if (tensorTy) {
-    auto shape = tensorTy.getShape();
-    auto layout = tensorTy.getEncoding();
-    auto ll = triton::gpu::toLinearLayout(shape, layout);
-    assert(ll.has_value() && "Failed to convert layout to linear layout");
-    auto freeVariableMasks = ll->getFreeVariableMasks();
-    auto regMasks = freeVariableMasks[kReg];
-    if (regMasks & regIdx) {
-      // Step 1: check register redundancy
-      mask = false_val();
-    } else {
-      Value warpSize =
-          i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(moduleOp));
-      Value laneId = urem(tid, warpSize);
-      Value warpId = udiv(tid, warpSize);
-      // Step 2: check lane and warp redundancy
-      auto laneMasks = freeVariableMasks[kLane];
-      auto warpMasks = freeVariableMasks[kWarp];
-      mask = and_(mask, icmp_eq(and_(i32_val(laneMasks), laneId), i32_val(0)));
-      mask = and_(mask, icmp_eq(and_(i32_val(warpMasks), warpId), i32_val(0)));
-      if (numCTAs > 1) {
-        // Step 3: check block redundancy
-        auto ctaId = targetInfo.getClusterCTAId(rewriter, loc);
-        auto ctaMasks = freeVariableMasks[kBlock];
-        mask = and_(mask, icmp_eq(and_(i32_val(ctaMasks), ctaId), i32_val(0)));
-      }
-    }
-  } else {
-    mask = and_(mask, icmp_eq(tid, i32_val(0)));
-    if (numCTAs > 1) {
-      auto ctaId = targetInfo.getClusterCTAId(rewriter, loc);
-      // If the tensor is not ranked, then it is a scalar and only thread 0 of
-      // CTA0 within the cluster can write
-      mask = and_(mask, icmp_eq(ctaId, i32_val(0)));
+
+  int32_t fullMask = -1;
+  llvm::MapVector<StringAttr, int32_t> ret;
+  for (auto dimName : {kReg, kLane, kWarp, kBlock}) {
+    ret[dimName] = fullMask;
+  }
+  return ret;
+}
+
+llvm::MapVector<StringAttr, int32_t> getFreeVariableMasks(Type type) {
+  auto ctx = type.getContext();
+  auto tensorTy = dyn_cast<RankedTensorType>(type);
+  if (!tensorTy) {
+    return getAllFreeVarMasks(ctx);
+  }
+
+  auto ll = ttg::toLinearLayout(tensorTy.getShape(), tensorTy.getEncoding());
+  assert(ll && "failed to convert to linear layout");
+  return ll->getFreeVariableMasks();
+}
+
+Value maybeAnd(RewriterBase &rewriter, Location loc, Value a, Value b) {
+  if (a && b) {
+    return and_(a, b);
+  }
+  return a ? a : b;
+}
+
+// Return a predicate that is true only if the current thread holds unique data,
+// according to freeVarsMask. The predicate may be null to indicate no
+// predication is required.
+Value emitRedundantThreadPredicate(
+    ModuleOp moduleOp, const llvm::MapVector<StringAttr, int32_t> &freeVarMasks,
+    ConversionPatternRewriter &rewriter, Location loc,
+    const NVIDIA::TargetInfo &targetInfo) {
+  auto ctx = rewriter.getContext();
+  auto kLane = str_attr("lane");
+  auto kWarp = str_attr("warp");
+  auto kBlock = str_attr("block");
+
+  auto warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(moduleOp);
+  auto emitBlockId = freeVarMasks.lookup(kBlock) != 0;
+  auto [laneId, warpId, blockId] =
+      emitHardwareTuple(loc, rewriter, targetInfo, emitBlockId, warpSize);
+  auto zero = i32_val(0);
+
+  Value pred;
+  auto dimNames = {kLane, kWarp, kBlock};
+  auto dimIds = {laneId, warpId, blockId};
+  for (auto [dimName, dimId] : llvm::zip(dimNames, dimIds)) {
+    int32_t mask = freeVarMasks.lookup(dimName);
+    if (mask != 0) {
+      auto dimPred = icmp_eq(and_(dimId, i32_val(mask)), zero);
+      pred = maybeAnd(rewriter, loc, pred, dimPred);
     }
   }
-  return mask;
+  return pred;
+}
+
+bool isCanonicalIndex(unsigned index, unsigned freeVarMask) {
+  return (index & freeVarMask) == 0;
+}
+
+unsigned getCanonicalIndex(unsigned index, unsigned freeVarMask) {
+  return index & ~freeVarMask;
 }
 
 std::string getRegisterSizeCode(int size, bool is_float) {
@@ -143,6 +162,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
   LogicalResult
   matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto ctx = getContext();
     auto loc = op->getLoc();
     auto typeConverter = getTypeConverter();
 
@@ -213,11 +233,24 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
         std::max(8u, valueElemTy.getIntOrFloatBitWidth());
     const int numVecs = numElems / vec;
 
+    // Load redundantly in all dims except reg
+    auto freeVarMasks = getFreeVariableMasks(ptr.getType());
+    uint32_t regMask = freeVarMasks[str_attr("reg")];
+
     LDBG("LoadOp numElems = " << numElems << " vec = " << vec
                               << " valueElemNBits = " << valueElemNBits << " "
                               << op.getType());
     SmallVector<Value> loadedVals;
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
+      if (auto canonicalVecStart = getCanonicalIndex(vecStart, regMask);
+          vecStart != canonicalVecStart) {
+        // For redundant registers, refer back to the canonical load
+        for (auto iVec = 0; iVec < vec; ++iVec) {
+          loadedVals.push_back(loadedVals[canonicalVecStart + iVec]);
+        }
+        continue;
+      }
+
       // TODO: optimization when ptr is GEP with constant offset
       size_t in_off = 0;
 
@@ -235,7 +268,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
 
       PTXBuilder ptxBuilder;
 
-      Value pred = mask ? maskElems[vecStart] : true_val();
+      Value pred = mask ? maskElems[vecStart] : Value{};
 
       const std::string readConstraint =
           (width == 64) ? "l" : ((width == 32) ? "r" : "c");
@@ -309,9 +342,9 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       //   evictOpr = ptxBuilder.newOperand(l2Evict, "l");
 
       if (!evictOpr)
-        ld(dstsOpr, addrOpr).predicate(pred, "b");
+        ld(dstsOpr, addrOpr).maybePredicate(pred, "b");
       else
-        ld(dstsOpr, addrOpr, evictOpr).predicate(pred, "b");
+        ld(dstsOpr, addrOpr, evictOpr).maybePredicate(pred, "b");
 
       // Create inline ASM signature
       SmallVector<Type> retTys(nWords, IntegerType::get(getContext(), width));
@@ -413,8 +446,17 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
         std::max<int>(1, valueElemTy.getIntOrFloatBitWidth() / 8);
     const size_t valueElemNBits = dtsize * 8;
 
+    auto freeVarMasks = getFreeVariableMasks(ptr.getType());
+    Value threadPred = emitRedundantThreadPredicate(moduleOp, freeVarMasks,
+                                                    rewriter, loc, targetInfo);
+    uint32_t regMask = freeVarMasks[str_attr("reg")];
+
     const int numVecs = elemsPerThread / vec;
     for (size_t vecStart = 0; vecStart < elemsPerThread; vecStart += vec) {
+      if (!isCanonicalIndex(vecStart, regMask)) {
+        // Don't emit store ops for redundant elements within a thread
+        continue;
+      }
       // TODO: optimization when ptr is AddPtr with constant offset
       size_t in_off = 0;
 
@@ -456,9 +498,11 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
       PTXBuilder ptxBuilder;
       auto *asmArgList = ptxBuilder.newListOperand(asmArgs);
 
-      Value mask = getRedundantDataMask(moduleOp, valueTy, rewriter, loc,
-                                        vecStart, targetInfo);
-      Value maskVal = llMask ? and_(mask, maskElems[vecStart]) : mask;
+      Value pred = threadPred;
+      if (llMask) {
+        auto mask = maskElems[vecStart];
+        pred = maybeAnd(rewriter, loc, pred, mask);
+      }
 
       auto *asmAddr =
           ptxBuilder.newAddrOperand(ptrElems[vecStart], "l", in_off);
@@ -476,14 +520,9 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
                  op.getEvict() == triton::EvictionPolicy::EVICT_LAST)
               .v(nWords)
               .b(width);
-      ptxStoreInstr(asmAddr, asmArgList).predicate(maskVal, "b");
-
-      Type boolTy = getTypeConverter()->convertType(rewriter.getIntegerType(1));
-      llvm::SmallVector<Type> argTys({boolTy, ptr.getType()});
-      argTys.insert(argTys.end(), nWords, valArgTy);
+      ptxStoreInstr(asmAddr, asmArgList).maybePredicate(pred, "b");
 
       auto asmReturnTy = void_ty(ctx);
-
       ptxBuilder.launch(rewriter, loc, asmReturnTy);
     }
     rewriter.eraseOp(op);
@@ -550,10 +589,24 @@ struct AtomicCASOpConversion
                        << " origin vec = " << vecOrig
                        << " elemsPerThread = " << elemsPerThread << "\n";
 
+    auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
+    Value threadPred = emitRedundantThreadPredicate(moduleOp, freeVarMasks,
+                                                    rewriter, loc, targetInfo);
+    uint32_t regMask = freeVarMasks[str_attr("reg")];
+
     auto vecTy = vec_ty(valueElemTy, vec);
     SmallVector<Value> resultVals(elemsPerThread);
 
     for (size_t i = 0; i < elemsPerThread; i += vec) {
+      if (auto canonicalVecStart = getCanonicalIndex(i, regMask);
+          canonicalVecStart != i) {
+        // For redundant registers, refer back to the canonical result
+        for (auto iVec = 0; iVec < vec; ++iVec) {
+          resultVals[i + iVec] = resultVals[canonicalVecStart + iVec];
+        }
+        continue;
+      }
+
       Value casVal = undef(vecTy);
       for (int ii = 0; ii < vec; ++ii) {
         Value iiVal = createIndexAttrConstant(
@@ -579,9 +632,7 @@ struct AtomicCASOpConversion
       os << op.getSem();
       auto scope = stringifyMemSyncScope(op.getScope()).str();
       atom.global().o(semStr).o(scope).o("cas").o(sTy);
-      Value mask =
-          getRedundantDataMask(moduleOp, valueTy, rewriter, loc, i, targetInfo);
-      atom(dstOpr, ptrOpr, cmpOpr, valOpr).predicate(mask);
+      atom(dstOpr, ptrOpr, cmpOpr, valOpr).maybePredicate(threadPred);
 
       if (tensorTy) {
         auto retType = vec == 1 ? valueElemTy : vecTy;
@@ -605,7 +656,7 @@ struct AtomicCASOpConversion
         auto *valOprStore = ptxBuilderStore.newOperand(old, "r");
         auto &st = *ptxBuilderStore.create<PTXInstr>("st");
         st.shared().o(sTy);
-        st(dstOprStore, valOprStore).predicate(mask);
+        st(dstOprStore, valOprStore).maybePredicate(threadPred);
         auto ASMReturnTy = void_ty(ctx);
         ptxBuilderStore.launch(rewriter, loc, ASMReturnTy);
         createBarrier(rewriter, loc, numCTAs);
@@ -710,13 +761,26 @@ struct AtomicRMWOpConversion
                        << " packed = " << packed << " origin vec = " << vecOrig
                        << " numElems = " << numElems;
 
+    auto freeVarMasks = getFreeVariableMasks(ptr.getType());
+    Value threadPred = emitRedundantThreadPredicate(moduleOp, freeVarMasks,
+                                                    rewriter, loc, targetInfo);
+    uint32_t regMask = freeVarMasks[str_attr("reg")];
+
     auto packedTy = vec_ty(valueElemTy, packed);
     SmallVector<Value> resultVals(elemsPerThread);
     for (size_t i = 0; i < elemsPerThread; i += vec * packed) {
+      if (auto canonicalStart = getCanonicalIndex(i, regMask);
+          canonicalStart != i) {
+        // For redundant registers, refer back to the canonical result
+        for (auto iVecPack = 0; iVecPack < vec * packed; ++iVecPack) {
+          resultVals[i + iVecPack] = resultVals[canonicalStart + iVecPack];
+        }
+        continue;
+      }
+
       Value rmwPtr = ptrElements[i];
-      Value mask =
-          getRedundantDataMask(moduleOp, valueTy, rewriter, loc, i, targetInfo);
-      Value rmwMask = llMask ? and_(mask, maskElements[i]) : mask;
+      Value pred = llMask ? maybeAnd(rewriter, loc, threadPred, maskElements[i])
+                          : threadPred;
       std::string sTy;
       PTXBuilder ptxBuilderAtomicRMW;
       // 16-bit -> "h", 32-bit -> "r", 64-bit -> "l"
@@ -802,7 +866,7 @@ struct AtomicRMWOpConversion
       os << op.getSem();
       atom.o(semStr).o(rmwOp).v(vec).o(sTy);
       if (tensorTy) {
-        atom(dstOpr, ptrOpr, valOpr).predicate(rmwMask);
+        atom(dstOpr, ptrOpr, valOpr).maybePredicate(pred);
         Type retType;
         if (vec > 1) {
           SmallVector<Type> retTys(vec, valueElemTy);
@@ -829,7 +893,7 @@ struct AtomicRMWOpConversion
 
       } else {
         auto ASMReturnTy = void_ty(ctx);
-        atom(dstOpr, ptrOpr, valOpr).predicate(rmwMask);
+        atom(dstOpr, ptrOpr, valOpr).maybePredicate(pred);
         auto old = ptxBuilderAtomicRMW.launch(rewriter, loc, valueElemTy);
         if (!atomicNeedsSharedMemory(op.getResult())) {
           rewriter.eraseOp(op);
@@ -839,13 +903,7 @@ struct AtomicRMWOpConversion
                                                   op.getOperation());
         atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
         // Only threads with rmwMask = True store the result
-        PTXBuilder ptxBuilderStore;
-        auto &storeShared =
-            ptxBuilderStore.create<>("st")->shared().o("b" + sBits);
-        auto *ptrOpr = ptxBuilderStore.newAddrOperand(atomPtr, "r");
-        auto *valOpr = ptxBuilderStore.newOperand(old, tyId);
-        storeShared(ptrOpr, valOpr).predicate(rmwMask);
-        ptxBuilderStore.launch(rewriter, loc, void_ty(ctx));
+        targetInfo.storeShared(rewriter, loc, atomPtr, old, pred);
         createBarrier(rewriter, loc, numCTAs);
         Value ret = load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {ret});
@@ -874,6 +932,7 @@ struct AsyncCopyGlobalToLocalOpConversion
   LogicalResult
   matchAndRewrite(triton::gpu::AsyncCopyGlobalToLocalOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto ctx = getContext();
     auto loc = op.getLoc();
     Value res = op.getResult();
     Value mask = op.getMask();
@@ -951,6 +1010,15 @@ struct AsyncCopyGlobalToLocalOpConversion
     }
 
     auto moduleOp = op->getParentOfType<ModuleOp>();
+    auto freeVarMasks = getFreeVariableMasks(srcTy);
+    // NOTE(@peterbell10): We load redundant data on different CTAs, so the data
+    // is available in each CTAs respective shared memory. Otherwise, we would
+    // need an additional broadcast step to copy the data between CTAs.
+    freeVarMasks[str_attr("block")] = 0;
+    Value threadPred = emitRedundantThreadPredicate(moduleOp, freeVarMasks,
+                                                    rewriter, loc, targetInfo);
+    uint32_t regMask = freeVarMasks[str_attr("reg")];
+
     for (int i = 0; i < shmemAddrs.size(); i++) {
       // It's possible that vecTy is larger than 128 bits, in which case we have
       // to use multiple cp.async instructions.
@@ -959,6 +1027,10 @@ struct AsyncCopyGlobalToLocalOpConversion
       int numWordsInVec = std::max(1, vecBytes / wordBytes);
       for (int j = 0; j < numWordsInVec; j++) {
         int elemIdx = i * vecTy.getNumElements() + j * wordElems;
+
+        if (!isCanonicalIndex(elemIdx, regMask)) {
+          continue; // Skip redundant registers
+        }
 
         // Tune CG and CA.
         CacheModifier srcCacheModifier =
@@ -986,19 +1058,8 @@ struct AsyncCopyGlobalToLocalOpConversion
           srcSize = ptxBuilder.newOperand(selectOp, "r");
         }
 
-        bool skipMaskForMultiCTA = triton::gpu::getNumCTAs(srcLayout) > 1;
-        if (skipMaskForMultiCTA) {
-          // TODO: Masking does not work for CTA multicast with cp.async.
-          // XXX(@peterbell10): In the multi-CTA mode, the redundant data might
-          // be on different CTAs which don't share the same smem address space,
-          // so we might need to load the same data multiple times.
-          copyAsyncOp(dstOperand, srcOperand, copySize, srcSize);
-        } else {
-          Value mask = getRedundantDataMask(moduleOp, srcTy, rewriter, loc,
-                                            elemIdx, targetInfo);
-          copyAsyncOp(dstOperand, srcOperand, copySize, srcSize)
-              .predicate(mask);
-        }
+        copyAsyncOp(dstOperand, srcOperand, copySize, srcSize)
+            .maybePredicate(threadPred);
         ptxBuilder.launch(rewriter, loc, void_ty(getContext()));
       }
     }
