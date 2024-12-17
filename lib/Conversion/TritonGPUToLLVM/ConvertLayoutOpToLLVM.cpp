@@ -381,16 +381,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     if (!layoutIsOK(srcTy.getEncoding()) || !layoutIsOK(dstTy.getEncoding())) {
       return failure();
     }
-    // FIXME [Dot LL] Remove this once we implement this trick in LLs
-    if (matchMmaV3AndDotOperandLayout(srcTy, dstTy)) {
-      return failure();
-    }
-
-    // The following check can be removed when generalized warp shuffle
-    // conversions are ready:
-    if (matchMFMAAndDotOperandShuffleCase(srcTy, dstTy)) {
-      return failure();
-    }
 
     assert(cvtNeedsSharedMemory(srcTy, dstTy));
 
