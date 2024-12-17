@@ -99,6 +99,12 @@ void TargetInfo::storeMatrixShared(RewriterBase &rewriter, Location loc,
   llvm::report_fatal_error("AMDGPU does not support stmatrix");
 }
 
+Value TargetInfo::loadMatrixShared(RewriterBase &rewriter, Location loc,
+                                   Value ptr) const {
+  llvm::report_fatal_error("AMDGPU does not support ldmatrix");
+  return {};
+}
+
 Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
                               std::optional<Value> ctaId, Type elemTy,
                               Value pred) const {

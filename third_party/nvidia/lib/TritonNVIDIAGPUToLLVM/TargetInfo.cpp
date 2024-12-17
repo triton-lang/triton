@@ -527,6 +527,11 @@ void TargetInfo::storeMatrixShared(RewriterBase &rewriter, Location loc,
   rewriter.create<triton::nvgpu::StoreMatrixOp>(loc, ptr, inputs);
 }
 
+Value TargetInfo::loadMatrixShared(RewriterBase &rewriter, Location loc,
+                                   Value ptr) const {
+  return {};
+}
+
 std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {
   std::string funcName =
       resultElementTy.isInteger(32) ? "__nv_umulhi" : "__nv_umul64hi";

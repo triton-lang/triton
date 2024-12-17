@@ -46,6 +46,8 @@ public:
 
   virtual void storeMatrixShared(RewriterBase &rewriter, Location loc,
                                  Value ptr, Value val) const = 0;
+  virtual Value loadMatrixShared(RewriterBase &rewriter, Location loc,
+                                 Value ptr) const = 0;
 
   virtual Value shuffleXor(RewriterBase &rewriter, Location loc, Value val,
                            int i) const = 0;
