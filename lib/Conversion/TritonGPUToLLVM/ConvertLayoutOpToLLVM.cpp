@@ -655,8 +655,14 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 void mlir::triton::populateConvertLayoutOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit) {
+  if (useLegacyMMAConversion) {
+    // Prioritize the legacy MMA conversion over the LinearLayout conversion.
+    // Only for debugging purposes.
+    patterns.add<ConvertLayoutOpConversion>(typeConverter, targetInfo,
+                                            benefit.getBenefit() + 1);
+  }
   patterns.add<ConvertLayoutOpUsingLinearLayoutsConversion>(
-      typeConverter, targetInfo, benefit.getBenefit());
+      typeConverter, targetInfo, benefit);
   patterns.add<ConvertLayoutOpBlockedToDotOpShortcutConversion>(
       typeConverter, targetInfo, benefit);
 }
