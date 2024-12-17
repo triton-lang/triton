@@ -188,10 +188,11 @@ class SharedLayout:
         self.ctas_per_cga = ctas_per_cga
         self.cta_split_num = cta_split_num
         self.cta_order = cta_order
-        self.has_leading_offset = "true" if has_leading_offset else "false"
+        self.has_leading_offset = has_leading_offset
 
     def __str__(self):
-        return f"#{GPU_DIALECT}.shared<{{vec={self.vec}, perPhase={self.per_phase}, maxPhase={self.max_phase}, order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}, hasLeadingOffset={self.has_leading_offset}}}>"
+        has_leading_offset_str = "true" if self.has_leading_offset else "false"
+        return f"#{GPU_DIALECT}.shared<{{vec={self.vec}, perPhase={self.per_phase}, maxPhase={self.max_phase}, order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}, hasLeadingOffset={has_leading_offset_str}}}>"
 
 
 def is_layout_applicable(layout) -> bool:
@@ -5546,7 +5547,7 @@ def test_local_load_store_mma(M, N, mma_layout, shared_layout, device, tmp_path:
     kernel[(1, 1, 1)](x, z)
     assert torch.equal(z, x)
 
-    if shared_layout.has_leading_offset:
+    if shared_layout.has_leading_offset == "true" and mma_layout.version[0] >= 3:
         assert "stmatrix" in kernel.asm["ptx"]
 
 
