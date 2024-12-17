@@ -75,7 +75,7 @@ def test_flip(M, N, dtype_str, device):
     assert (y == z).all(), (y, z)
 
 
-# @pytest.mark.interpreter
+@pytest.mark.interpreter
 def test_flip_inf(device):
     # Reproducer for https://github.com/triton-lang/triton/issues/5439
 
