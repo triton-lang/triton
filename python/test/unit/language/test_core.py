@@ -5278,7 +5278,6 @@ def test_smid(device):
 # -----------------------
 # test layout conversions
 # -----------------------
-# TODO: backend should be tested separately
 
 layouts = [
     MmaLayout([3, 0], [4, 1], [1, 1], [1, 1], [1, 0], [16, 32, 16]),
