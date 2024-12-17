@@ -4,18 +4,19 @@ import re
 import warnings
 import os
 import textwrap
+from types import ModuleType
 from typing import Any, Callable, Dict, Optional, Tuple, Type, Union
+
 from .. import language
 from .._C.libtriton import ir
-from ..language import constexpr, tensor, str_to_ty
+from ..language import constexpr, semantic, str_to_ty, tensor
 from ..language.core import _unwrap_if_constexpr, nv_tma_desc_type, _value
 from ..runtime.jit import _normalize_ty, get_jit_fn_file_line
 # ideally we wouldn't need any runtime component
 from ..runtime import JITFunction
+from .._utils import list_list_flatten, list_list_unflatten, find_paths_if, get_iterable_path, set_iterable_path
+
 from .errors import (CompilationError, CompileTimeAssertionFailure, UnsupportedLanguageConstruct)
-from types import ModuleType
-from triton._utils import list_list_flatten, list_list_unflatten
-from .._utils import find_paths_if, get_iterable_path, set_iterable_path
 
 
 def mangle_ty(ty):
@@ -412,12 +413,12 @@ class CodeGenerator(ast.NodeVisitor):
             self.builder.ret([])
             ret_ty = language.void
         elif isinstance(ret_value, language.tuple):
-            ret_values = [language.semantic.to_tensor(v, self.builder) for v in ret_value.values]
+            ret_values = [semantic.to_tensor(v, self.builder) for v in ret_value.values]
             ret_types = [v.type for v in ret_values]
             self.builder.ret([v.handle for v in ret_values])
             ret_ty = language.tuple_type(ret_types)
         else:
-            ret = language.semantic.to_tensor(ret_value, self.builder)
+            ret = semantic.to_tensor(ret_value, self.builder)
             self.builder.ret([ret.handle])
             ret_ty = ret.type
         if self.ret_type is None:
@@ -536,7 +537,7 @@ class CodeGenerator(ast.NodeVisitor):
             if value is not None and \
                 not _is_triton_value(value) and \
                 not isinstance(value, native_nontensor_types):
-                value = language.semantic.to_tensor(value, self.builder)
+                value = semantic.to_tensor(value, self.builder)
             return value
 
         values = _sanitize_value(self.visit(node.value))
@@ -762,14 +763,14 @@ class CodeGenerator(ast.NodeVisitor):
 
                 then_block = self.builder.create_block()
                 self.builder.set_insertion_point_to_start(then_block)
-                then_val = language.semantic.to_tensor(self.visit(node.body), self.builder)
+                then_val = semantic.to_tensor(self.visit(node.body), self.builder)
                 then_block = self.builder.get_insertion_block()
 
                 else_block = self.builder.create_block()
                 self.builder.set_insertion_point_to_start(else_block)
                 # do not need to reset lscope since
                 # ternary expressions cannot define new variables
-                else_val = language.semantic.to_tensor(self.visit(node.orelse), self.builder)
+                else_val = semantic.to_tensor(self.visit(node.orelse), self.builder)
                 else_block = self.builder.get_insertion_block()
 
                 self._set_insertion_point_and_loc(ip, last_loc)
@@ -998,14 +999,14 @@ class CodeGenerator(ast.NodeVisitor):
             step = constexpr(-step.value)
             negative_step = True
             lb, ub = ub, lb
-        lb = language.semantic.to_tensor(lb, self.builder)
-        ub = language.semantic.to_tensor(ub, self.builder)
-        step = language.semantic.to_tensor(step, self.builder)
+        lb = semantic.to_tensor(lb, self.builder)
+        ub = semantic.to_tensor(ub, self.builder)
+        step = semantic.to_tensor(step, self.builder)
         # induction variable type
         if not lb.dtype.is_int() or not ub.dtype.is_int() or not step.dtype.is_int():
             raise TypeError(f"For loop bounds and step must all be ints, are ({lb.dtype}, {ub.dtype}, {step.dtype})")
-        iv_type = language.semantic.integer_promote_impl(lb.dtype, ub.dtype)
-        iv_type = language.semantic.integer_promote_impl(iv_type, step.dtype)
+        iv_type = semantic.integer_promote_impl(lb.dtype, ub.dtype)
+        iv_type = semantic.integer_promote_impl(iv_type, step.dtype)
         iv_ir_type = iv_type.to_ir(self.builder)
         iv_is_signed = iv_type.int_signedness == language.core.dtype.SIGNEDNESS.SIGNED
         # lb/ub/step might be constexpr, we need to cast them to tensor
@@ -1076,7 +1077,7 @@ class CodeGenerator(ast.NodeVisitor):
                 if name in liveins:
                     local = self.local_defs[name]
                     if isinstance(local, constexpr):
-                        local = language.semantic.to_tensor(local, self.builder)
+                        local = semantic.to_tensor(local, self.builder)
                     yields.append(local)
 
             # create YieldOp
@@ -1231,7 +1232,7 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_Attribute(self, node):
         lhs = self.visit(node.value)
         if _is_triton_tensor(lhs) and node.attr == "T":
-            return language.semantic.permute(lhs, (1, 0), builder=self.builder)
+            return semantic.permute(lhs, (1, 0), builder=self.builder)
         return getattr(lhs, node.attr)
 
     def visit_Expr(self, node):

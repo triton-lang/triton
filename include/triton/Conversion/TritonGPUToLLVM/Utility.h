@@ -53,6 +53,7 @@ using namespace mlir::triton;
 #define fmin(...) rewriter.create<LLVM::MinNumOp>(loc, __VA_ARGS__)
 #define shl(...) rewriter.create<LLVM::ShlOp>(loc, __VA_ARGS__)
 #define lshr(...) rewriter.create<LLVM::LShrOp>(loc, __VA_ARGS__)
+#define ashr(...) rewriter.create<LLVM::AShrOp>(loc, __VA_ARGS__)
 #define and_(...) rewriter.create<LLVM::AndOp>(loc, __VA_ARGS__)
 #define xor_(...) rewriter.create<LLVM::XOrOp>(loc, __VA_ARGS__)
 #define or_(...) rewriter.create<LLVM::OrOp>(loc, __VA_ARGS__)
@@ -272,12 +273,25 @@ struct SharedMemoryObject {
                      ArrayRef<Value> offsets)
       : base(base), baseElemType(baseElemType),
         strides(strides.begin(), strides.end()),
-        offsets(offsets.begin(), offsets.end()) {}
+        offsets(offsets.begin(), offsets.end()) {
+    assert(strides.size() == offsets.size());
+  }
 
   SharedMemoryObject(Value base, Type baseElemType, ArrayRef<int64_t> shape,
-                     ArrayRef<unsigned> order, Location loc,
+                     triton::gpu::SharedEncodingAttr layout, Location loc,
                      RewriterBase &rewriter)
       : base(base), baseElemType(baseElemType) {
+    SmallVector<unsigned> order(shape.size());
+    // Default minor-to-major order
+    std::iota(order.rbegin(), order.rend(), 0);
+    if (layout) {
+      auto layoutOrder = convertType<int>(layout.getOrder());
+      int rankDiff = layoutOrder.size() - shape.size();
+      auto minRank = std::min(shape.size(), layoutOrder.size());
+      for (size_t i = 0; i < minRank; ++i)
+        order[i] = layoutOrder[i] - rankDiff;
+    }
+    assert(isPermutationOfIota(order) && "Invalid order");
     strides = getStridesFromShapeAndOrder(shape, order, loc, rewriter);
     offsets.append(order.size(), i32_val(0));
   }
@@ -303,14 +317,14 @@ struct SharedMemoryObject {
     return types;
   }
 
-  Value getCSwizzleOffset(int order) const {
-    assert(order >= 0 && order < strides.size());
-    return offsets[order];
+  Value getCSwizzleOffset(int dim) const {
+    assert(dim >= 0 && dim < strides.size());
+    return offsets[dim];
   }
 
-  Value getBaseBeforeSlice(int order, Location loc,
+  Value getBaseBeforeSlice(int dim, Location loc,
                            RewriterBase &rewriter) const {
-    Value cSwizzleOffset = getCSwizzleOffset(order);
+    Value cSwizzleOffset = getCSwizzleOffset(dim);
     Value offset = sub(i32_val(0), cSwizzleOffset);
     Type type = base.getType();
     return gep(type, baseElemType, base, offset);
@@ -334,11 +348,17 @@ SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
 SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
                                Value linear, ArrayRef<unsigned> shape);
 
+SmallVector<unsigned> delinearize(unsigned linear, ArrayRef<unsigned> shape,
+                                  ArrayRef<unsigned> order);
+
 Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
                 ArrayRef<unsigned> shape, ArrayRef<unsigned> order);
 
 Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
                 ArrayRef<unsigned> shape);
+
+size_t linearize(ArrayRef<unsigned> multiDim, ArrayRef<unsigned> shape,
+                 ArrayRef<unsigned> order);
 
 Value addStringToModule(Location loc, RewriterBase &rewriter, StringRef key,
                         StringRef content);
@@ -493,6 +513,24 @@ inline Value dot(RewriterBase &rewriter, Location loc, ArrayRef<Value> offsets,
   }
   return ret;
 }
+
+/// Extend 2d shared object to 3d.
+///
+/// If tensor has 3 dimensions, returns original shared object.
+/// If tensor shape is [M, N], return shared object describing shape [1, M, N]
+///
+/// This Function is used to simplify processing of 2d and 3d dot operands,
+/// particularly in the conversion of local_load operation.
+///
+/// \param rewriter
+/// \param loc
+/// \param smemObj
+/// \param shape shape of a tensor represented by smemObj
+/// \returns shared object describing 3d tensor
+SharedMemoryObject
+getExpandedSharedMemoryObject(ConversionPatternRewriter &rewriter, Location loc,
+                              SharedMemoryObject smemObj,
+                              ArrayRef<int64_t> shape);
 
 // -----------------------------------------------------------------------
 // Blocked layout indices

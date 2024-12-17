@@ -249,6 +249,7 @@ struct ExperimentalTensormapCreateOpConversion
     Location loc = op->getLoc();
     auto ctx = getContext();
 
+    bool needsStrideWorkaround = targetInfo.getPtxVersion() <= 85;
     auto smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
 
     zero_fill_tma(loc, ctx, rewriter, targetInfo, smemBase);
@@ -264,8 +265,13 @@ struct ExperimentalTensormapCreateOpConversion
                                    op.getGlobalDim()[i]);
     }
     for (int i = 0; i + 1 < op.getRank(); ++i) {
+      auto strideVal = op.getGlobalStride()[i];
+      if (needsStrideWorkaround) {
+        // Workaround for a ptxas bug
+        strideVal = ashr(strideVal, i64_val(4));
+      }
       tensormap_replace_global_stride(loc, ctx, rewriter, smemBase, i,
-                                      op.getGlobalStride()[i]);
+                                      strideVal);
     }
     for (int i = 0; i < op.getRank(); ++i) {
       tensormap_replace_element_stride(loc, ctx, rewriter, smemBase, i,

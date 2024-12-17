@@ -52,11 +52,6 @@ mlir::LogicalResult createTMADesc(mlir::Value tmaPtr,
       loc, builder.getI64Type(), builder.getI64IntegerAttr(elemSize));
   Value globalStride = builder.template create<arith::MulIOp>(
       loc, op.getStrides()[0], elemSizeVal);
-  // TODO: Workaround for ptxas bug, remove when we update ptxas
-  Value four = builder.template create<arith::ConstantOp>(
-      loc, builder.getI64Type(), builder.getI64IntegerAttr(4));
-  globalStride =
-      builder.template create<arith::ShRSIOp>(loc, globalStride, four);
 
   int elemTypeEnum;
   switch (elemSize) {
