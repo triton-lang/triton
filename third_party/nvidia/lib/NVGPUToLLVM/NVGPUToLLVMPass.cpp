@@ -243,7 +243,7 @@ public:
   LogicalResult matchAndRewrite(MatrixOpType op,
                                 PatternRewriter &rewriter) const override {
     unsigned vecSize = getVectorSize(op);
-    bool trans = op->template hasAttr("trans")
+    bool trans = op->hasAttr("trans")
                      ? op->template getAttrOfType<BoolAttr>("trans").getValue()
                      : false;
 
