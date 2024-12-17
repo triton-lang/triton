@@ -386,9 +386,6 @@ def get_cdna_autotune_configs():
                       num_warps=4),
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False}, num_stages=1,
                       num_warps=4),
-        # Fall-back config. For int8 GEMM, this will use v_mfma_i32_16x16x32_i8. It gives double the correct result. Contacted the compiler team.
-        # triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 1, 'PRE_LOAD_V': False}, num_stages=1,
-        #               num_warps=4),
     ], ['IS_CAUSAL', 'dropout_p', 'MAX_SEQLENS_Q', 'MAX_SEQLENS_K', 'ACTUAL_BLOCK_DMODEL', 'VARLEN', 'HQ', 'HK']
 
 
