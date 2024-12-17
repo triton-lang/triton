@@ -128,26 +128,8 @@ public:
     auto bitwidth = dstTy.getElementTypeBitWidth();
     auto rank = dstTy.getRank();
     if (auto dot = dyn_cast<DotOperandEncodingAttr>(dstLayout)) {
-      auto vecWidth = 32 / bitwidth;
-      auto kWidth = dot.getKWidth();
-      auto kOrder = dot.getOpIdx() == 0 ? rank - 1 : rank - 2;
-      if (auto mma = dyn_cast<NvidiaMmaEncodingAttr>(dot.getParent())) {
-        auto needTrans = kOrder != srcLayout.getOrder()[0];
-        auto canUseLdmatrix =
-            (bitwidth == 16 || (!needTrans)) && (kWidth == vecWidth);
-        if (mma.isHopper()) {
-          // I think we should be able to remove this condition, but it's here
-          // as the legacy ldmatrix path does not support it
-          canUseLdmatrix &= srcTy.getElementTypeBitWidth() * kWidth == 32;
-        }
-        // If we remove this one, ldmatrix will IMA. It can probably be relaxed
-        // though
-        canUseLdmatrix &=
-            srcTy.getShape()[0] >= 8 &&
-            srcTy.getShape()[1] >= 4 * kWidth & dstTy.getRank() <= 2;
-        return !canUseLdmatrix;
-      }
-      if (isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>(dot.getParent()))
+      if (isa<NvidiaMmaEncodingAttr, AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>(
+              dot.getParent()))
         return true;
     }
     return false;

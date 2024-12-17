@@ -39,7 +39,31 @@ public:
     if (isa<DotOperandEncodingAttr>(dstLayout) &&
         isa<NvidiaMmaEncodingAttr>(
             cast<DotOperandEncodingAttr>(dstLayout).getParent())) {
-      return lowerSharedToDotOperand(op, adaptor, getTypeConverter(), rewriter);
+      auto dot = cast<DotOperandEncodingAttr>(dstLayout);
+      auto mma = cast<NvidiaMmaEncodingAttr>(dot.getParent());
+      auto shared = cast<SharedEncodingAttr>(srcLayout);
+      auto bitwidth = dstTy.getElementTypeBitWidth();
+      auto vecWidth = 32 / bitwidth;
+      auto kWidth = dot.getKWidth();
+      auto rank = dstTy.getRank();
+      auto kOrder = dot.getOpIdx() == 0 ? rank - 1 : rank - 2;
+      auto needTrans = kOrder != shared.getOrder()[0];
+      auto canUseLdmatrix =
+          (bitwidth == 16 || (!needTrans)) && (kWidth == vecWidth);
+      if (mma.isHopper()) {
+        // I think we should be able to remove this condition, but it's here
+        // as the legacy ldmatrix path does not support it
+        canUseLdmatrix &= srcTy.getElementTypeBitWidth() * kWidth == 32;
+      }
+      // If we remove this one, ldmatrix will IMA. It can probably be relaxed
+      // though
+      canUseLdmatrix &=
+          srcTy.getShape()[0] >= 8 &&
+          srcTy.getShape()[1] >= 4 * kWidth & dstTy.getRank() <= 2;
+      if (canUseLdmatrix) {
+        return lowerSharedToDotOperand(op, adaptor, getTypeConverter(),
+                                       rewriter);
+      }
     }
     return failure();
   }
