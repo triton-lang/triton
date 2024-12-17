@@ -412,11 +412,13 @@ def flip(x, dim=None):
     """
     core.static_assert(_is_power_of_two(x.shape[_get_flip_dim(dim, x.shape)]))
     core.static_assert(_is_power_of_two(x.numel))
-    # # reshape the tensor to have all dimensions be 2.
-    # # TODO: We shouldn't have to change the dimensions not sorted.
+    # reshape the tensor to have all dimensions be 2.
+    # TODO: We shouldn't have to change the dimensions not sorted.
     steps: core.constexpr = _log2(x.numel)
     start: core.constexpr = _log2(x.numel) - _log2(x.shape[_get_flip_dim(dim, x.shape)])
-    y = core.reshape(x, [2] * steps)
+
+    idtype = core.get_int_dtype(bitwidth=x.dtype.primitive_bitwidth, signed=True)
+    y = core.reshape(x.to(idtype, bitcast=True), [2] * steps)
     y = core.expand_dims(y, start)
     flip = (core.arange(0, 2)[:, None] == 1 - core.arange(0, 2))
     for i in core.static_range(start, steps):
@@ -425,7 +427,7 @@ def flip(x, dim=None):
             if j != i and j != i + 1:
                 flip2 = core.expand_dims(flip2, j)
         y = sum(y * flip2, i + 1, keep_dims=True)
-    x = core.reshape(y, x.shape)
+    x = core.reshape(y, x.shape).to(x.dtype, bitcast=True)
     return x
 
 

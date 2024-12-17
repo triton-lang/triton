@@ -28,7 +28,9 @@ function(add_triton_ut)
           gmock
           ${__LIBS})
 
-  target_compile_options(${__NAME} PRIVATE -fno-rtti)
+  if(NOT MSVC)
+    target_compile_options(${__NAME} PRIVATE -fno-rtti)
+  endif()
 
   target_compile_definitions(${__NAME} PRIVATE ${__DEFS})
 
