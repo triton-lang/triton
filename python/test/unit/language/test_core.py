@@ -5337,10 +5337,6 @@ def compute_scratch_buffer_shape(src_layout, dst_layout, shape):
 def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device, tmp_path: pathlib.Path):
     if str(src_layout) == str(dst_layout):
         pytest.skip()
-    if (isinstance(src_layout, DotOperandLayout)
-            and isinstance(interm_layout, SharedLayout)) or (isinstance(dst_layout, DotOperandLayout)
-                                                             and isinstance(interm_layout, SharedLayout)):
-        pytest.skip("DotOperandLayout <-> SharedLayout conversion is not completely supported")
     if is_hip():
         try:
             scratch_shape = compute_scratch_buffer_shape(src_layout, dst_layout, (M, N))
