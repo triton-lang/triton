@@ -250,8 +250,8 @@ class HIPBackend(BaseBackend):
         if amd.has_matrix_core_feature(options.arch):
             amd.passes.ttgpuir.add_reorder_instructions(pm)
 
-        amd.passes.ttgpuir.add_canonicalize_pointers(pm)
         if use_buffer_ops:
+            amd.passes.ttgpuir.add_canonicalize_pointers(pm)
             passes.common.add_canonicalizer(pm)
             amd.passes.ttgpuir.add_convert_to_buffer_ops(pm)
         passes.common.add_canonicalizer(pm)

@@ -1179,6 +1179,8 @@ public:
       // propagate the attributes of the tensor pointer to the fat pointer.
       fatPtrs[{newAddPtrOp.getResult(), fatPtrOffset}].attributes =
           fatPtrs[{fatPtrBase, fatPtrOffset}].attributes;
+      fatPtrs[{newAddPtrOp.getResult(), fatPtrOffset}].canNarrow =
+          fatPtrs[{fatPtrBase, fatPtrOffset}].canNarrow;
       return success();
     }
 
@@ -1188,7 +1190,7 @@ public:
         decomposeOffsetFromExpr(rewriter, curLoc, origOffset, bitness);
 
     // Vector offset update (if any): bump the tensor offset
-    bool canNarrow = false;
+    bool canNarrow = fatPtrs[{fatPtrBase, fatPtrOffset}].canNarrow;
     bool propagateAtrs = true;
     Value newOffset = fatPtrOffset;
     if (!isZeroConst(nonUniformOffset)) {
@@ -1257,7 +1259,8 @@ public:
       splatOp->setDiscardableAttr("rewritten", rewriter.getUnitAttr());
     });
     rewriter.replaceOpWithMultiple(splatOp, {{splatOp.getSrc(), offset}});
-
+    fatPtrs[{splatOp.getSrc(), offset}].canNarrow =
+        fatPtrs[{fatPtrBase, fatPtrOffset}].canNarrow;
     return success();
   }
 };
@@ -1297,7 +1300,8 @@ public:
     });
     rewriter.replaceOpWithMultiple(broadcastOp,
                                    {{broadcastOp.getSrc(), offset}});
-
+    fatPtrs[{broadcastOp.getSrc(), offset}].canNarrow =
+        fatPtrs[{fatPtrBase, fatPtrOffset}].canNarrow;
     return success();
   }
 };
@@ -1380,6 +1384,8 @@ public:
         auto dummyCast = rewriter.create<UnrealizedConversionCastOp>(
             arg.getLoc(), TypeRange{arg.getType()}, ValueRange{arg});
         rewriter.replaceUsesOfBlockArgument(arg, dummyCast.getResult(0));
+        // TODO(max): why is this true?
+        fatPtrs[{arg, zeroOffset}].canNarrow = true;
         rewriter.replaceOpWithMultiple(dummyCast, {{arg, zeroOffset}});
       }
       funcOp->setDiscardableAttr("rewritten", rewriter.getUnitAttr());
@@ -1862,6 +1868,11 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   if (failed(
           applyPartialConversion(module, target, std::move(patterns), config)))
     return signalPassFailure();
+
+  module.walk<WalkOrder::PreOrder>([](Operation *op) {
+    op->removeDiscardableAttr("rewritten");
+    op->removeDiscardableAttr("legal");
+  });
 }
 
 void TritonAMDGPUCanonicalizePointersPass::runOnOperationmine() {
