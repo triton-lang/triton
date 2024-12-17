@@ -121,15 +121,12 @@ public:
 
   // FIXME [Dot LL]
   // Do for all DotOperandEncodingAttr once we have LLs for all of them
-  static bool isSupportedDotOpLayout(MemDescType srcTy,
-                                     RankedTensorType dstTy) {
-    auto srcLayout = cast<SharedEncodingAttr>(srcTy.getEncoding());
-    auto dstLayout = dstTy.getEncoding();
-    auto bitwidth = dstTy.getElementTypeBitWidth();
-    auto rank = dstTy.getRank();
+  static bool isSupportedLayout(Attribute dstLayout) {
+    if (isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr,
+            LinearEncodingAttr>(dstLayout))
+      return true;
     if (auto dot = dyn_cast<DotOperandEncodingAttr>(dstLayout)) {
-      if (isa<NvidiaMmaEncodingAttr, AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>(
-              dot.getParent()))
+      if (isa<MmaEncodingTrait>(dot.getParent()))
         return true;
     }
     return false;
@@ -138,12 +135,9 @@ public:
   LogicalResult
   matchAndRewrite(LocalLoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    MemDescType srcTy = op.getSrc().getType();
     RankedTensorType dstTy = op.getType();
     Attribute dstLayout = dstTy.getEncoding();
-    if (isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr,
-            LinearEncodingAttr>(dstLayout) ||
-        isSupportedDotOpLayout(srcTy, dstTy)) {
+    if (isSupportedLayout(dstLayout)) {
       return lowerSharedToDistributed(op, adaptor, getTypeConverter(),
                                       rewriter);
     }
@@ -180,11 +174,6 @@ private:
     auto loc = op.getLoc();
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getResult().getType();
-    auto dstShape = dstTy.getShape();
-    auto srcSharedLayout = cast<SharedEncodingAttr>(srcTy.getEncoding());
-    assert((!isa<DotOperandEncodingAttr>(dstTy.getEncoding()) ||
-            isSupportedDotOpLayout(srcTy, dstTy)) &&
-           "Unexpected rank of ConvertLayout(shared->distributed)");
 
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getSrc(),
