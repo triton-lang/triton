@@ -19,6 +19,25 @@ using namespace mlir::triton::gpu;
 
 namespace {
 
+// Scales the given bf16 v using the given scale factor without relying on bf16
+// multiplication.
+//
+// In gfx9 architectures, we don't have bf16 VALU ops. So instead this function
+// handles v * scale multiplication using fp32 VALU ops. LLVM backend can do it
+// for us, just with unnecessary overheads.
+Value mxfpScaleBf16ViaF32(RewriterBase &rewriter, Location loc, Value v,
+                          Value scale) {
+  Value c16 = i32_val(16);
+  Value vF32 = bitcast(shl(zext(i32_ty, bitcast(v, i16_ty)), c16), f32_ty);
+  Value scaleF32 = bitcast(shl(zext(i32_ty, scale), i32_val(23)), f32_ty);
+  Value mulF32 = fmul(vF32, scaleF32);
+  Value mulI16 = trunc(i16_ty, lshr(bitcast(mulF32, i32_ty), c16));
+  // Account for NaN in the scale as per the mxfp specification.
+  Value scaleIsNan = icmp_eq(scale, i8_val(0xff));
+  Value nanBf16 = bitcast(i16_val(0x7fff), bf16_ty);
+  return select(scaleIsNan, nanBf16, bitcast(mulI16, bf16_ty));
+};
+
 class UpcastMXFPOpPattern : public ConvertOpToLLVMPattern<UpcastMXFPOp> {
 private:
   const TargetInfoBase &targetInfo;
@@ -98,7 +117,7 @@ public:
         for (int j = 0; j < 32; ++j) {
           int index = 32 * i + j;
           xVals[index] =
-              LLVM::mxfpScaleBf16(rewriter, loc, xVals[index], si[j / 16]);
+              mxfpScaleBf16ViaF32(rewriter, loc, xVals[index], si[j / 16]);
         }
       }
     } else {
@@ -121,7 +140,7 @@ public:
         for (int j = 0; j < 32; ++j) {
           int index = 32 * i + j;
           xVals[index] =
-              LLVM::mxfpScaleBf16(rewriter, loc, xVals[index], si[j / 8]);
+              mxfpScaleBf16ViaF32(rewriter, loc, xVals[index], si[j / 8]);
         }
       }
     }
