@@ -277,7 +277,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stri
             qk += ((((tl.dot(q, k) * q_descale)) * k_descale) * QK_SCALE).to(tl.float32)
         else:
             if INT8_KV:
-                k = (k * k_descale).to(tl.float16)
+                k = (k * k_descale).to(q.type.element_ty)
             qk += tl.dot(q, k) * QK_SCALE
 
         if bias_ptrs is not None:
@@ -327,10 +327,11 @@ def _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stri
                 # They are all int8
                 acc += tl.dot(p, v)
             else:
-                acc += tl.dot(p.to(tl.float16), v.to(tl.float16))
+                # v is in int8 but p is not, we want the gemm in p's type
+                acc += tl.dot(p, v.to(p.type.element_ty))
         else:
             if INT8_KV:
-                v = (v * v_descale).to(tl.float16)
+                v = (v * v_descale).to(p.type.element_ty)
             acc += tl.dot(p.to(v.type.element_ty), v)
 
         k_ptrs += BLOCK_N * stride_kn
