@@ -34,8 +34,6 @@ public:
                       int swizzleByteSize) const override;
   void storeMatrixShared(RewriterBase &rewriter, Location loc, Value ptr,
                          Value val) const override;
-  virtual Value loadMatrixShared(RewriterBase &rewriter, Location loc,
-                                 Value ptr) const override;
 
   Value shuffleXor(RewriterBase &rewriter, Location loc, Value val,
                    int i) const override;
