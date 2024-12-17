@@ -219,10 +219,6 @@ private:
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
     if (matchMmaV3AndDotOperandLayout(srcTy, dstTy)) {
-      if (srcTy.getElementType().getIntOrFloatBitWidth() == 16) {
-        rewriter.replaceOp(op, adaptor.getSrc());
-        return success();
-      }
       assert(srcTy.getElementType().getIntOrFloatBitWidth() == 8 &&
              "Unsupported type size.");
       convertMMAV3To8BitsDotOperand(op, adaptor, rewriter);
