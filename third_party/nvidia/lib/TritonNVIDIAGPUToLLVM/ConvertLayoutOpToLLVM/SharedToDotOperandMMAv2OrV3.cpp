@@ -8,10 +8,8 @@ using namespace mlir;
 using ValueTable = std::map<std::array<int, 3>, Value>;
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-using ::mlir::LLVM::getStridesFromShapeAndOrder;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getContigPerThread;
-using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getSizePerThread;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
@@ -596,12 +594,11 @@ getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
       std::max<int>(shapePerCTA[2] / mmaLayout.getWarpsPerCTA()[2], 8);
   // (a, b) is the coordinate.
   auto load = [=, &rewriter, &vals](int batch, int a, int b) {
-    MMA16816SmemLoader loader(nPerWarp, warpsPerTile, sharedLayout.getOrder(),
-                              mmaLayout.getWarpsPerCTA(), kOrder, kWidth,
-                              smemObj.strides, shapePerCTA /*tileShape*/,
-                              instrShape, matShape, multiDimWarpId, perPhase,
-                              maxPhase, elemBytes, mmaElemBytes, isHopper,
-                              rewriter, typeConverter, loc);
+    MMA16816SmemLoader loader(
+        nPerWarp, warpsPerTile, order, mmaLayout.getWarpsPerCTA(), kOrder,
+        kWidth, smemObj.strides, shapePerCTA /*tileShape*/, instrShape,
+        matShape, multiDimWarpId, perPhase, maxPhase, elemBytes, mmaElemBytes,
+        isHopper, rewriter, typeConverter, loc);
     // Offset of a slice within the original tensor in shared memory
     Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
     SmallVector<Value> offs = loader.computeOffsets(lane, cSwizzleOffset);
