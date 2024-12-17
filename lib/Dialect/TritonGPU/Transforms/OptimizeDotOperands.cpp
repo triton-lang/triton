@@ -399,7 +399,8 @@ struct MMAV3UseRegOperand
         dotOp.getContext(), /*opIdx=*/0, srcEnc, /*kWidth=*/kWidth);
     auto newTy = RankedTensorType::get(srcTy.getShape(), srcTy.getElementType(),
                                        dotOperandEnc);
-    if (!cvtReordersRegisters(srcTy, newTy))
+    if (!cvtReordersRegisters(srcTy, newTy) &&
+        !matchMmaV3AndDotOperandLayout(srcTy, newTy))
       return failure();
 
     Value newOperand =
