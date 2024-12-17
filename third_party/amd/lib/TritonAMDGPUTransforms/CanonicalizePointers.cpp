@@ -1675,12 +1675,67 @@ public:
   }
 };
 
+class ConvertArithSelectOp : public PointerCanonPattern<arith::SelectOp> {
+public:
+  using PointerCanonPattern::PointerCanonPattern;
+  LogicalResult
+  matchAndRewrite(arith::SelectOp selectOp, OneToNOpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    ArrayRef<ValueRange> remappedOperands = adaptor.getOperands();
+    assert(remappedOperands.size() == 3 && remappedOperands[1].size() == 2 &&
+           remappedOperands[2].size() == 2 &&
+           "expected adaptor to have 3 remapped values, 1 for cond, 2 for each "
+           "arm");
+    // If both have been traversed, then we can rewrite select of pointers as a
+    // select of base and offset
+    ValueRange fatPtrT = remappedOperands[1];
+    ValueRange fatPtrF = remappedOperands[2];
+    // Simple case of a scalar select: update the base pointer
+    if (!isa<RankedTensorType>(selectOp.getType())) {
+      auto newSelectOp = rewriter.create<arith::SelectOp>(
+          selectOp.getLoc(), selectOp.getType(),
+          // TODO(max): why fatPtrTrue here?
+          selectOp.getCondition(), fatPtrT[0], selectOp.getFalseValue());
+      rewriter.modifyOpInPlace(selectOp, [&] {
+        selectOp->setDiscardableAttr("rewritten", rewriter.getUnitAttr());
+      });
+      rewriter.modifyOpInPlace(newSelectOp, [&] {
+        newSelectOp->setDiscardableAttr("legal", rewriter.getUnitAttr());
+      });
+      rewriter.replaceOpWithMultiple(selectOp, {{newSelectOp, fatPtrT[1]}});
+      return success();
+    }
+
+    // Rewrite `select` for base and offset
+    auto newBase = rewriter.create<arith::SelectOp>(
+        selectOp.getLoc(), selectOp.getCondition(), fatPtrT[0], fatPtrF[0]);
+    auto newOffset = rewriter.create<arith::SelectOp>(
+        selectOp.getLoc(), selectOp.getCondition(), fatPtrT[1], fatPtrF[1]);
+
+    assert((fatPtrs[{fatPtrT[0], fatPtrT[1]}].canNarrow ==
+            fatPtrs[{fatPtrF[0], fatPtrF[1]}].canNarrow));
+
+    rewriter.modifyOpInPlace(selectOp, [&] {
+      selectOp->setDiscardableAttr("rewritten", rewriter.getUnitAttr());
+    });
+    rewriter.modifyOpInPlace(newBase, [&] {
+      newBase->setDiscardableAttr("legal", rewriter.getUnitAttr());
+    });
+    rewriter.modifyOpInPlace(newOffset, [&] {
+      newOffset->setDiscardableAttr("legal", rewriter.getUnitAttr());
+    });
+
+    rewriter.replaceOpWithMultiple(selectOp, {{newBase, newOffset}});
+
+    return success();
+  }
+};
+
 void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   ModuleOp module = getOperation();
   mlir::MLIRContext *context = &getContext();
   ConversionTarget target(*context);
   RewritePatternSet patterns(context);
-  target.addLegalDialect<arith::ArithDialect>();
   auto isLegal = [](Operation *op) {
     if (op->hasAttr("rewritten") || op->hasAttr("legal"))
       return true;
@@ -1711,13 +1766,20 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   });
   target.addDynamicallyLegalDialect<cf::ControlFlowDialect>(
       [&isLegal](Operation *op) { return isLegal(op); });
+  target.addDynamicallyLegalDialect<arith::ArithDialect>(
+      [&isLegal](Operation *op) {
+        if (llvm::isa<arith::SelectOp>(op))
+          return isLegal(op);
+        return true;
+      });
 
   FatPointers fatPrs;
 
   patterns.add<ConvertFuncOp, ConvertSplatOp, ConvertAddPtrOp, ConvertLoadOp,
                ConvertSCFForOp, ConvertSCFYieldOp, ConvertSCFIfOp,
                ConvertSCFConditionOp, ConvertSCFWhileOp, ConvertCFCondBranch,
-               ConvertCFBranch>(patterns.getContext(), fatPrs);
+               ConvertCFBranch, ConvertArithSelectOp>(patterns.getContext(),
+                                                      fatPrs);
   ConversionConfig config;
   config.buildMaterializations = false;
   if (failed(
