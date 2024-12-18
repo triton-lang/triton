@@ -329,6 +329,165 @@ unsigned ScanLoweringHelper::getScratchSizeInBytes() {
   return elementSizeInBytes * getScratchSizeInElems();
 }
 
+std::optional<DecomposedWarpConversion>
+getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
+                                  RankedTensorType dstTy) {
+  auto conversion = minimalCvtLayout(srcTy, dstTy);
+  if (!conversion)
+    return {};
+
+  // Don't use this codegen approach for small element sizes, since due to
+  // upcasting to i32, it can be less efficient than storing to shared memory
+  // until shuffling packed values is implemented.
+  if (srcTy.getElementTypeBitWidth() < 32)
+    return {};
+
+  MLIRContext *ctx = srcTy.getContext();
+  auto kRegister = StringAttr::get(ctx, "register");
+  auto kLane = StringAttr::get(ctx, "lane");
+
+  // We have already checked that data movement is only required within a warp,
+  // thus we can discard the block and warp dimensions.
+  LinearLayout C =
+      conversion->sublayout({kLane, kRegister}, {kLane, kRegister});
+
+  // `C` is map from `(dst_lane, dst_reg) -> (src_lane, src_reg)`. From the
+  // perspetive of the destination lane, it tells us which register from which
+  // lane to get the value. Since the source and destination layouts are
+  // permutation matrices, the overall transformation amounts to permuting data
+  // around (plus broadcasting, if necessary).
+  //
+  // Warp shuffles allow indexing into another lane, but does not allowing
+  // selecting the register. Suppose we decompose `C` into `C = P2 ∘ W ∘ P1`,
+  // where `W` is a warp shuffle and `P1` and `P2` are (lane-dependent) register
+  // permutations within a lane. Start from `C` and work backwards.
+  //
+  // Given any `C`, is it possible that for a given register, two destination
+  // lanes map to different registers in the same source lane. This is
+  // impossible to represent using a shuffle. This happens when, with respect to
+  // the identity layout, a register base is swapped with a lane base (when the
+  // destination lane changes, the source register changes but the lane does
+  // not).
+  //
+  // The goal of `P2` is to permute registers within a thread so that this does
+  // not happen. Specifically, pick `P2` such that bases in
+  // `(P2^-1 ∘ C).sublayout(kLane, {kLane, kRegister})` has non-zero lane
+  // components when the register components are non-zero.
+  //
+  // P2 can only change the register mapping within a thread. Constrain P2 as:
+  //
+  //   P2(x) = [ I P ] [ reg  ] = [ reg + P(lane)  ]
+  //           [ 0 I ] [ lane ]   [ lane           ]
+  //
+  // Then `P2^-1 ∘ C` is:
+  //
+  //   [ I  0 ] [ C(r,r) C(r,l) ] = [ C(r,r)             C(r,l)           ]
+  //   [ P' I ] [ C(l,r) C(l,l) ]   [ P'*C(r,r)+C(l,r)   P'*C(r,l)+C(l,l) ]
+  //
+  // We can see that P' selects rows (i.e. bases) from the upper half (register)
+  // and combines them with the lower half (lane). Because the goal is to select
+  // register bases `i` where C(r,l)[i] != 0, we know P'*C(r,r) = 0. Note that
+  // solutions for P' do not always exist (no register permutation will
+  // decompose C to make the warp shuffle possible), and this happens when there
+  // aren't enough non-zero bases in C(r,l).
+
+  // Find the indices of the missing lane bases: rows in the lower half where
+  // the register component is non-zero but the lane component is zero.
+  SmallVector<int> missingLaneRows;
+  for (int i = 0, e = C.getInDimSizeLog2(kLane); i != e; ++i) {
+    ArrayRef<int32_t> /*C(l,(r,l))[i]*/ lowerHalfRow = C.getBasis(kLane, i);
+    assert(lowerHalfRow.size() == 2);
+    if (/*C(l,r)*/ lowerHalfRow[0] != 0) {
+      assert(/*C(l,l)[i]*/ lowerHalfRow[1] == 0);
+      missingLaneRows.push_back(i);
+    }
+  }
+
+  // Find rows in the upperhalf that can be selected by P' to make the lane
+  // components in the lower half non-zero.
+  std::vector<std::vector<int32_t>> PPrimeLaneBases(C.getInDimSizeLog2(kLane),
+                                                    {0});
+  for (int i = 0, e = C.getInDimSizeLog2(kRegister); i != e; ++i) {
+    ArrayRef<int32_t> /*C(r,(r,l))[i]*/ upperHalfRow = C.getBasis(kRegister, i);
+    assert(upperHalfRow.size() == 2);
+    if (/*C(r,l)[i]*/ upperHalfRow[1] != 0) {
+      int32_t laneBase = upperHalfRow[1];
+      assert(/*C(r,r)[i]*/ upperHalfRow[0] == 0);
+      if (!missingLaneRows.empty()) {
+        // Select row i into row j from the missing rows. The order in which the
+        // missing rows are selected doesn't really matter.
+        PPrimeLaneBases[missingLaneRows.pop_back_val()][0] |= (1 << i);
+      }
+    } else {
+      assert(upperHalfRow[0] != 0);
+    }
+  }
+  if (!missingLaneRows.empty()) {
+    // The decomposition failed. No solution for P' is possible.
+    return {};
+  }
+
+  // P' outputs the destination register.
+  LinearLayout PPrime({{kLane, std::move(PPrimeLaneBases)}},
+                      {{kRegister, C.getInDimSize(kRegister)}},
+                      /*requiresSurjective=*/false);
+
+  // Form P2^-1 from P'.
+  unsigned dstRegSize = C.getInDimSize(kRegister);
+  unsigned numLanes = C.getInDimSize(kLane);
+  LinearLayout P2invTop =
+      LinearLayout::identity1D(dstRegSize, kRegister, kRegister)
+          .concatOuts(
+              LinearLayout::zeros1D(dstRegSize, kRegister, kLane, numLanes));
+  LinearLayout P2invBot =
+      PPrime.concatOuts(LinearLayout::identity1D(numLanes, kLane, kLane));
+  LinearLayout P2inv = P2invTop.concatIns(P2invBot);
+
+  // Check that P2^-1 was formed correctly.
+  assert(P2inv.sublayoutIsZero(kRegister, kLane));
+  assert(P2inv.squareSublayoutIsSubPermutation(kLane));
+
+  LinearLayout Cp = P2inv.compose(C);
+
+  // Now we have C' = P2^-1 ∘ C = W ∘ P1. W is considerably easier to compute.
+  // A warp shuffle is a function from `(lane, register) -> (lane)`, i.e.
+  //
+  //   W = [ I 0 ] [ reg  ] = [ reg              ]
+  //       [ R L ] [ lane ]   [ R(reg) + L(lane) ]
+  //
+  // `W^-1 ∘ C'` will be
+  //
+  //   [ I R ] [ C'(r,r) C'(r,l) ] = [ ... C'(r,l) + R*C'(l,l) ]
+  //   [ 0 L ] [ C'(l,r) C'(l,l) ] = [ ... L*C'(l,l)           ]
+  //
+  // Since P1 cannot change lanes, we know that
+  //
+  //   W^-1 ∘ C' = [ ... 0 ]
+  //               [ ... 1 ]
+  //
+  // Thus L = C'(l,l)^-1, and A = -C'(r,l) * C'(l,l)^-1. (0 - LL) = LL in GF(2).
+  // We know that C'(l,l) has a suitable pseudo-inverse.
+  LinearLayout L = Cp.sublayout(kLane, kLane).invert();
+  LinearLayout R = Cp.sublayout(kRegister, kLane).compose(L);
+
+  // Now form W^-1.
+  LinearLayout WinvLeft =
+      LinearLayout::identity1D(dstRegSize, kRegister, kRegister)
+          .concatIns(
+              LinearLayout::zeros1D(numLanes, kLane, kRegister, dstRegSize));
+  LinearLayout Winv = WinvLeft.concatOuts(R.concatIns(L));
+
+  // Check that Winv was formed correctly. P1 is just what's left over.
+  LinearLayout P1 = Winv.compose(Cp);
+  assert(P1.sublayoutIsZero(kRegister, kLane));
+  assert(P1.squareSublayoutIsIdentityOrZeros(kLane));
+
+  // Return just the interesting parts of the decomposed layouts.
+  return {{P1.sublayout({kLane, kRegister}, kRegister),
+           Cp.sublayout({kLane, kRegister}, kLane),
+           P2inv.sublayout({kLane, kRegister}, kRegister)}};
+}
+
 SmallVector<std::pair<SmallVector<int64_t>, SmallVector<int64_t>>>
 getReshapeDecomposition(ArrayRef<int64_t> srcShape,
                         ArrayRef<int64_t> dstShape) {
@@ -800,7 +959,7 @@ bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
   // `isMfmaToDotShortcut`) once they're fully subsumed by the linear-layout
   // checks.
   return !cvtReordersRegisters(srcTy, dstTy) &&
-         !cvtNeedsWarpShuffle(srcTy, dstTy) &&
+         !getWarpLayoutConvertDecomposition(srcTy, dstTy) &&
          !isBlockedToDotShortcut(srcTy, dstTy) &&
          !matchMmaV3AndDotOperandLayout(srcTy, dstTy) &&
          // to be removed when generalized warp shuffle conversions

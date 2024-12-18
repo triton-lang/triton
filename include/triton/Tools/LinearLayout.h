@@ -344,8 +344,8 @@ public:
 
   // Creates a 1D -> 1D layout that maps every input value to 0, i.e. L(x) = 0
   // for x in [0, size).
-  static LinearLayout zeros1D(int32_t size, StringAttr inDim,
-                              StringAttr outDim);
+  static LinearLayout zeros1D(int32_t size, StringAttr inDim, StringAttr outDim,
+                              int32_t outDimSize = 1);
 
   // Creates a LinearLayout from a list of bases.  These are interpreted
   // according to the rules written for the member variable `bases`.
@@ -534,6 +534,15 @@ public:
     return reshapeOuts({{*getOutDimNames().begin(), getTotalOutDimSize()}});
   }
 
+  // Concatenates two layouts by their input dimensions. The layouts must have
+  // the same output dimensions and sizes and different input dimensions. The
+  // input dimensions of this layout are placed before those of 'other'.
+  [[nodiscard]] LinearLayout concatIns(const LinearLayout &other) const;
+  // Concatenates two layouts by their output dimensions. The layouts must have
+  // the same input dimensions and sizes and different output dimensions. The
+  // output dimensions of this layout are placed before those of 'other'.
+  [[nodiscard]] LinearLayout concatOuts(const LinearLayout &other) const;
+
   // Creates a new layout which, roughly speaking, is equivalent to one where
   // every element of the `outer` layout is replaced by a full instance of the
   // `inner` layout.
@@ -616,6 +625,14 @@ public:
   // the same, and are the bases the identity?
   bool squareSublayoutIsIdentity(ArrayRef<StringAttr> dimNames) const;
 
+  // Is the sublayout defined from dimNames to dimNames the identity with zeros?
+  bool squareSublayoutIsIdentityOrZeros(ArrayRef<StringAttr> dimNames) const;
+
+  // Is the sublayout defined from dimNames to dimNames a subpermutation matrix?
+  // I.e. the layout matrix is formed by selecting unique rows from the identity
+  // matrix and adding zero rows.
+  bool squareSublayoutIsSubPermutation(ArrayRef<StringAttr> dimNames) const;
+
   // Computes and returns L(x, y, z).
   //
   // If you want to apply the layout to mlir Values instead of integers, that
@@ -691,6 +708,12 @@ public:
   // output.  If all of the free variables are 0, then the layout is injective
   // (i.e. every input bit affects the output).
   llvm::MapVector<StringAttr, int32_t> getFreeVariableMasks() const;
+
+  // Take the current linear layout and remove all zero bases for the provided
+  // dimension and return the resulting layout. This is useful for deriving a
+  // layout that returns just the unique output values when varying a given
+  // input dimension that has broadcasting.
+  [[nodiscard]] LinearLayout removeZeroBasesAlongDim(StringAttr stripDim) const;
 
   std::string toString() const;
 

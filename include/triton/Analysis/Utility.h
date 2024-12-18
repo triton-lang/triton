@@ -168,6 +168,23 @@ private:
   triton::GatherOp gatherOp;
 };
 
+// This struct represents a decomposed layout conversion within a warp into
+// three transformations: P1 and P2 represent lane-dependent register shuffles
+// and W represents a warp shuffle.
+//
+// Nearly all layout conversions that only require data movement within a warp
+// can be implemented this way.
+struct DecomposedWarpConversion {
+  triton::LinearLayout P1, W, P2;
+};
+
+// Given the source and destination tensor types where a layout conversion only
+// involves data movement within warps, attempt to find a decomposition for a
+// warp layout conversion.
+std::optional<DecomposedWarpConversion>
+getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
+                                  RankedTensorType dstTy);
+
 // Decomposes a reshape into simpler pieces.
 //
 // As an example, suppose we have a reshape from [4,4,4] to [2,2,8,2].
@@ -221,8 +238,8 @@ bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy);
 // within a warp.  No data exchange across warps or blocks is needed.
 bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy);
 
-// Conversion from `srcTy` to `dstTy` involves data exchange across warps and
-// possibly blocks.
+// Conversion from `srcTy` to `dstTy` involves data exchange across threads,
+// warps, and possibly blocks.
 bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy);
 
 bool atomicNeedsSharedMemory(Value result);

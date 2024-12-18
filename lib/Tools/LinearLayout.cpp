@@ -343,7 +343,8 @@ LinearLayout::LinearLayout(
 
 /*static*/ LinearLayout LinearLayout::zeros1D(int32_t size,
                                               StringAttr inDimName,
-                                              StringAttr outDimName) {
+                                              StringAttr outDimName,
+                                              int32_t outDimSize) {
   if (size == 0)
     return LinearLayout::empty();
 
@@ -352,7 +353,8 @@ LinearLayout::LinearLayout(
   for (int i = 0; i < llvm::Log2_32(size); i++) {
     zeros.emplace_back().push_back(0);
   }
-  return LinearLayout({{inDimName, zeros}}, {outDimName});
+  return LinearLayout({{inDimName, zeros}}, {{outDimName, outDimSize}},
+                      /*requiresSurjective=*/true);
 }
 
 int32_t LinearLayout::getOutDimIndex(StringAttr outDim) const {
@@ -541,6 +543,55 @@ LinearLayout LinearLayout::reshapeOuts(
   return LinearLayout(std::move(newBases), newOutDims, surjective);
 }
 
+LinearLayout LinearLayout::concatIns(const LinearLayout &other) const {
+  assert(llvm::to_vector(getOutDimNames()) ==
+             llvm::to_vector(other.getOutDimNames()) &&
+         "layouts must have the same output dimensions");
+  for (StringAttr outDim : getOutDimNames()) {
+    assert(getOutDimSize(outDim) == other.getOutDimSize(outDim) &&
+           "layouts must have the same output dimension sizes");
+  }
+
+  LinearLayout::BasesT resultBases = getBases();
+  for (auto &bases : other.getBases())
+    resultBases.insert(bases);
+  SmallVector<std::pair<StringAttr, int32_t>> newOutDims;
+  for (auto &[outDim, outDimSize] : outDims)
+    newOutDims.emplace_back(outDim, outDimSize);
+  return LinearLayout(std::move(resultBases), newOutDims,
+                      /*requiresSurjective=*/false);
+}
+
+LinearLayout LinearLayout::concatOuts(const LinearLayout &other) const {
+  assert(llvm::to_vector(getInDimNames()) ==
+             llvm::to_vector(other.getInDimNames()) &&
+         "layouts must have the same input dimensions");
+  for (StringAttr inDim : getInDimNames()) {
+    assert(getInDimSize(inDim) == other.getInDimSize(inDim) &&
+           "layouts must have the same input dimension sizes");
+  }
+
+  LinearLayout::BasesT result;
+  for (auto [lhsBases, rhsBases] : llvm::zip(getBases(), other.getBases())) {
+    auto &resultBases = result[lhsBases.first];
+    assert(lhsBases.first == rhsBases.first);
+    for (auto [lhsBasis, rhsBasis] :
+         llvm::zip(lhsBases.second, rhsBases.second)) {
+      std::vector<int32_t> resultBasis;
+      llvm::append_range(resultBasis, lhsBasis);
+      llvm::append_range(resultBasis, rhsBasis);
+      resultBases.push_back(std::move(resultBasis));
+    }
+  }
+  SmallVector<std::pair<StringAttr, int32_t>> newOutDims;
+  for (auto &[outDim, outDimSize] : outDims)
+    newOutDims.emplace_back(outDim, outDimSize);
+  for (auto &[outDim, outDimSize] : other.outDims)
+    newOutDims.emplace_back(outDim, outDimSize);
+  return LinearLayout(std::move(result), newOutDims,
+                      /*requiresSurjective=*/false);
+}
+
 LinearLayout operator*(LinearLayout inner, LinearLayout outer) {
   // Check that dims common to outer and inner have the same relative order.
   assertCommonDimsSameOrder(inner.getOutDimNames(), outer.getOutDimNames());
@@ -706,31 +757,58 @@ bool LinearLayout::sublayoutIsZero(ArrayRef<StringAttr> inDimNames,
   return true;
 }
 
-bool LinearLayout::squareSublayoutIsIdentity(
-    ArrayRef<StringAttr> dimNames) const {
+static bool checkSquareSublayout(const LinearLayout &ll,
+                                 ArrayRef<StringAttr> dimNames,
+                                 function_ref<bool(int, int32_t)> checkBasis) {
   // The empty layout is the identity
   if (dimNames.size() == 0) {
     return true;
   }
   // Check that the input-output sizes are the same
-  LinearLayout sl = sublayout(dimNames, dimNames);
+  LinearLayout sl = ll.sublayout(dimNames, dimNames);
   for (StringAttr dim : dimNames) {
-    if (getInDimSize(dim) != getOutDimSize(dim)) {
+    if (ll.getInDimSize(dim) != ll.getOutDimSize(dim)) {
       return false;
     }
   }
   // Once the inputs and output dimensions are the same, we can just check
   // that the basis for the single remaining dimension is the identity.
   sl = sl.flattenIns().flattenOuts();
-  int b = 0;
-  const auto &inDimBases = sl.bases.begin()->second;
-  for (auto basis : inDimBases) {
-    if (basis[0] != (1 << b)) {
+  const auto &inDimBases = ll.getBases().begin()->second;
+  for (auto [b, basis] : llvm::enumerate(inDimBases)) {
+    if (!checkBasis(b, basis[0])) {
       return false;
     }
-    b++;
   }
   return true;
+}
+
+bool LinearLayout::squareSublayoutIsIdentity(
+    ArrayRef<StringAttr> dimNames) const {
+  return checkSquareSublayout(
+      *this, dimNames, [](int b, int32_t basis) { return basis == (1 << b); });
+}
+
+bool LinearLayout::squareSublayoutIsIdentityOrZeros(
+    ArrayRef<StringAttr> dimNames) const {
+  return checkSquareSublayout(*this, dimNames, [](int b, int32_t basis) {
+    return !basis || basis == (1 << b);
+  });
+}
+
+bool LinearLayout::squareSublayoutIsSubPermutation(
+    ArrayRef<StringAttr> dimNames) const {
+  int32_t mask = 0;
+  return checkSquareSublayout(*this, dimNames, [&](int b, int32_t basis) {
+    if (basis == 0)
+      return true;
+    if (!llvm::isPowerOf2_32(basis))
+      return false;
+    if (mask & basis)
+      return false; // check if this bit is already set
+    mask |= basis;
+    return true;
+  });
 }
 
 SmallVector<std::pair<StringAttr, int32_t>>
@@ -1004,6 +1082,23 @@ LinearLayout::getFreeVariableMasks() const {
     ret[dim] = mask;
   }
   return ret;
+}
+
+LinearLayout LinearLayout::removeZeroBasesAlongDim(StringAttr stripDim) const {
+  LinearLayout::BasesT result;
+  for (auto &[inDim, inDimBases] : getBases()) {
+    auto &newInDimBases = result[inDim];
+    if (inDim != stripDim) {
+      newInDimBases = inDimBases;
+      continue;
+    }
+    for (auto &basis : inDimBases) {
+      if (llvm::any_of(basis, [](int32_t val) { return val != 0; })) {
+        newInDimBases.push_back(basis);
+      }
+    }
+  }
+  return LinearLayout(std::move(result), llvm::to_vector(getOutDimNames()));
 }
 
 size_t hash_value(const LinearLayout &layout) {
