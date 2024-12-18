@@ -31,6 +31,9 @@
 #define GEN_PASS_CLASSES
 #include "TritonAMDGPUTransforms/Passes.h.inc"
 
+#include "llvm/Support/Format.h"
+#include "llvm/Support/FormatVariadic.h"
+
 #define DEBUG_TYPE "tritonamdgpu-canonicalize-pointers"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
@@ -309,15 +312,6 @@ Value createTensorPointer(
   return addPtrOp.getResult();
 }
 
-class TritonAMDGPUCanonicalizePointersPass
-    : public TritonAMDGPUCanonicalizePointersBase<
-          TritonAMDGPUCanonicalizePointersPass> {
-public:
-  TritonAMDGPUCanonicalizePointersPass() = default;
-
-  void runOnOperation() override;
-};
-
 struct FatPointers {
   struct FatPtrAttrs {
     FatPtrAttrs(const FatPtrAttrs &other) = default;
@@ -325,7 +319,7 @@ struct FatPointers {
     // for map default insert
     FatPtrAttrs() = default;
     bool canNarrow = false;
-    llvm::SmallDenseMap<StringAttr, Attribute> attributes;
+    llvm::SmallDenseMap<StringRef, Attribute> attributes;
     friend bool operator==(const FatPtrAttrs &lhs, const FatPtrAttrs &rhs) {
       return lhs.canNarrow == rhs.canNarrow && lhs.attributes == rhs.attributes;
     }
@@ -336,8 +330,17 @@ struct FatPointers {
   using KeyT = std::pair<Value, Value>;
   using ValueT = FatPtrAttrs;
   using DenseMapT = DenseMap<KeyT, ValueT>;
-  ValueT &operator[](const KeyT &k) { return pointerAttrs[k]; }
-  ValueT &operator[](KeyT &&k) { return pointerAttrs[k]; }
+  void collectFatPointerAttributes(const KeyT &k);
+  ValueT &operator[](const KeyT &k) {
+    if (!pointerAttrs.contains(k))
+      collectFatPointerAttributes(k);
+    return pointerAttrs[k];
+  }
+  ValueT &operator[](KeyT &&k) {
+    if (!pointerAttrs.contains(k))
+      collectFatPointerAttributes(k);
+    return pointerAttrs[k];
+  }
   template <typename T>
   using const_arg_type_t = typename llvm::const_pointer_or_const_ref<T>::type;
   const ValueT &at(const_arg_type_t<KeyT> k) const {
@@ -352,6 +355,55 @@ struct FatPointers {
 private:
   DenseMapT pointerAttrs;
 };
+
+// TODO(max): this is not a good way to do this...
+void FatPointers::collectFatPointerAttributes(const KeyT &k) {
+  auto [base, offset] = k;
+  // If it is the i-th block argument, then look if the operation defined some
+  // _argi attribute and add it to the fat pointer attributes
+  if (auto arg = dyn_cast<BlockArgument>(base)) {
+    // If the value is a block parameter, the operation can specify
+    // an attribute for the given parameter by using `tt.property_argi`
+    // where `argi` refers to the arg number of the given parameter.
+    // So we need to iterate through the property, find the right one
+    // and push the property onto the pointers attributes.
+    auto op = arg.getOwner()->getParentOp();
+    for (NamedAttribute namedAttr : op->getAttrs()) {
+      StringAttr attrName = namedAttr.getName();
+      std::string argSuffix =
+          llvm::formatv("_arg{0}", arg.getArgNumber()).str();
+      if (!attrName.strref().ends_with(argSuffix))
+        continue;
+
+      auto newAttrName = attrName.strref().drop_back(argSuffix.size());
+      pointerAttrs[k].attributes[newAttrName] = namedAttr.getValue();
+      // Propagate the argument to the offset if it is also a block
+      // argument
+      if (auto offsetArg = dyn_cast<BlockArgument>(offset))
+        op->setAttr(
+            llvm::formatv("{0}_arg{1}", newAttrName, offsetArg.getArgNumber())
+                .str(),
+            namedAttr.getValue());
+    }
+    return;
+  }
+
+  // TODO(max): this doesn't make sense - ops have all sorts of dialect
+  // attributes?
+  //
+  // Otherwise add the attributes of the operation to the fat
+  // pointer auto baseAttrs = base.getDefiningOp()->getAttrs(); auto offsetAttrs
+  // = offset.getDefiningOp()->getAttrs(); assert(baseAttrs.size() ==
+  // offsetAttrs.size() &&
+  //        "expected base and offset attr dicts to be same size");
+  // for (auto [baseAttr, offsetAttr] : llvm::zip(baseAttrs, offsetAttrs)) {
+  //   assert(baseAttr.getName() == offsetAttr.getName() &&
+  //          "expected base attr name == offset attr name");
+  //   assert(baseAttr.getValue() == offsetAttr.getValue() &&
+  //          "expected base attr value == offset attr value");
+  //   pointerAttrs[k].attributes[baseAttr.getName()] = baseAttr.getValue();
+  // }
+}
 
 /// Flatten the given value ranges into a single vector of values.
 static SmallVector<Value> flattenValues(ArrayRef<ValueRange> values) {
@@ -1230,6 +1282,15 @@ public:
     rewriter.eraseOp(castOp);
     return success();
   }
+};
+
+class TritonAMDGPUCanonicalizePointersPass
+    : public TritonAMDGPUCanonicalizePointersBase<
+          TritonAMDGPUCanonicalizePointersPass> {
+public:
+  TritonAMDGPUCanonicalizePointersPass() = default;
+
+  void runOnOperation() override;
 };
 
 void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
