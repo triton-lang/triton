@@ -625,13 +625,10 @@ public:
   // the same, and are the bases the identity?
   bool squareSublayoutIsIdentity(ArrayRef<StringAttr> dimNames) const;
 
-  // Is the sublayout defined from dimNames to dimNames the identity with zeros?
-  bool squareSublayoutIsIdentityOrZeros(ArrayRef<StringAttr> dimNames) const;
-
   // Is the sublayout defined from dimNames to dimNames a subpermutation matrix?
   // I.e. the layout matrix is formed by selecting unique rows from the identity
   // matrix and adding zero rows.
-  bool squareSublayoutIsSubPermutation(ArrayRef<StringAttr> dimNames) const;
+  bool squareSublayoutIsPermutation(ArrayRef<StringAttr> dimNames) const;
 
   // Computes and returns L(x, y, z).
   //

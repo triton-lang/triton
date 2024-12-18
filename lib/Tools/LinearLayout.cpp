@@ -354,7 +354,7 @@ LinearLayout::LinearLayout(
     zeros.emplace_back().push_back(0);
   }
   return LinearLayout({{inDimName, zeros}}, {{outDimName, outDimSize}},
-                      /*requiresSurjective=*/true);
+                      /*requiresSurjective=*/outDimSize == 1);
 }
 
 int32_t LinearLayout::getOutDimIndex(StringAttr outDim) const {
@@ -774,7 +774,7 @@ static bool checkSquareSublayout(const LinearLayout &ll,
   // Once the inputs and output dimensions are the same, we can just check
   // that the basis for the single remaining dimension is the identity.
   sl = sl.flattenIns().flattenOuts();
-  const auto &inDimBases = ll.getBases().begin()->second;
+  const auto &inDimBases = sl.getBases().begin()->second;
   for (auto [b, basis] : llvm::enumerate(inDimBases)) {
     if (!checkBasis(b, basis[0])) {
       return false;
@@ -789,19 +789,10 @@ bool LinearLayout::squareSublayoutIsIdentity(
       *this, dimNames, [](int b, int32_t basis) { return basis == (1 << b); });
 }
 
-bool LinearLayout::squareSublayoutIsIdentityOrZeros(
-    ArrayRef<StringAttr> dimNames) const {
-  return checkSquareSublayout(*this, dimNames, [](int b, int32_t basis) {
-    return !basis || basis == (1 << b);
-  });
-}
-
-bool LinearLayout::squareSublayoutIsSubPermutation(
+bool LinearLayout::squareSublayoutIsPermutation(
     ArrayRef<StringAttr> dimNames) const {
   int32_t mask = 0;
   return checkSquareSublayout(*this, dimNames, [&](int b, int32_t basis) {
-    if (basis == 0)
-      return true;
     if (!llvm::isPowerOf2_32(basis))
       return false;
     if (mask & basis)

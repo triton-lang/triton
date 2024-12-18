@@ -339,7 +339,8 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   // Don't use this codegen approach for small element sizes, since due to
   // upcasting to i32, it can be less efficient than storing to shared memory
   // until shuffling packed values is implemented.
-  if (srcTy.getElementTypeBitWidth() < 32)
+  if (!isa<PointerType>(srcTy.getElementType()) &&
+      srcTy.getElementTypeBitWidth() < 32)
     return {};
 
   MLIRContext *ctx = srcTy.getContext();
@@ -400,6 +401,12 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
     if (/*C(l,r)*/ lowerHalfRow[0] != 0) {
       assert(/*C(l,l)[i]*/ lowerHalfRow[1] == 0);
       missingLaneRows.push_back(i);
+    } else if (lowerHalfRow[1] == 0) {
+      // If there is broadcasting along the lane, then C'(l,l) below won't be
+      // invertible. Intuitively, the dst tensor contains a subset of the src
+      // tensor's data, so recovering the src tensor through permutation alone
+      // is impossible. We would need an affine component (bfly shuffle).
+      return {};
     }
   }
 
@@ -410,16 +417,16 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   for (int i = 0, e = C.getInDimSizeLog2(kRegister); i != e; ++i) {
     ArrayRef<int32_t> /*C(r,(r,l))[i]*/ upperHalfRow = C.getBasis(kRegister, i);
     assert(upperHalfRow.size() == 2);
-    if (/*C(r,l)[i]*/ upperHalfRow[1] != 0) {
-      int32_t laneBase = upperHalfRow[1];
-      assert(/*C(r,r)[i]*/ upperHalfRow[0] == 0);
-      if (!missingLaneRows.empty()) {
-        // Select row i into row j from the missing rows. The order in which the
-        // missing rows are selected doesn't really matter.
-        PPrimeLaneBases[missingLaneRows.pop_back_val()][0] |= (1 << i);
-      }
-    } else {
-      assert(upperHalfRow[0] != 0);
+    if (/*C(r,l)[i]*/ upperHalfRow[1] == 0)
+      continue;
+
+    assert(upperHalfRow[0] == 0);
+    int32_t laneBase = upperHalfRow[1];
+    assert(/*C(r,r)[i]*/ upperHalfRow[0] == 0);
+    if (!missingLaneRows.empty()) {
+      // Select row i into row j from the missing rows. The order in which the
+      // missing rows are selected doesn't really matter.
+      PPrimeLaneBases[missingLaneRows.pop_back_val()][0] |= (1 << i);
     }
   }
   if (!missingLaneRows.empty()) {
@@ -445,7 +452,7 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
 
   // Check that P2^-1 was formed correctly.
   assert(P2inv.sublayoutIsZero(kRegister, kLane));
-  assert(P2inv.squareSublayoutIsSubPermutation(kLane));
+  assert(P2inv.squareSublayoutIsPermutation(kLane));
 
   LinearLayout Cp = P2inv.compose(C);
 
@@ -467,7 +474,7 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   //
   // Thus L = C'(l,l)^-1, and A = -C'(r,l) * C'(l,l)^-1. (0 - LL) = LL in GF(2).
   // We know that C'(l,l) has a suitable pseudo-inverse.
-  LinearLayout L = Cp.sublayout(kLane, kLane).invert();
+  LinearLayout L = Cp.sublayout(kLane, kLane).pseudoinvert();
   LinearLayout R = Cp.sublayout(kRegister, kLane).compose(L);
 
   // Now form W^-1.
@@ -480,7 +487,7 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   // Check that Winv was formed correctly. P1 is just what's left over.
   LinearLayout P1 = Winv.compose(Cp);
   assert(P1.sublayoutIsZero(kRegister, kLane));
-  assert(P1.squareSublayoutIsIdentityOrZeros(kLane));
+  assert(P1.squareSublayoutIsIdentity(kLane));
 
   // Return just the interesting parts of the decomposed layouts.
   return {{P1.sublayout({kLane, kRegister}, kRegister),
