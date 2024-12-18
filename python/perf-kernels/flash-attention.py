@@ -1846,6 +1846,17 @@ def nonvarlen_benchmark_configs():
     ]
     return configs
 
+def paper_benchmark_configs():
+    configs = [
+        (32,  16,  16,   512,    512),
+        (16,  16,  16,   1024,   1024),
+        (8,  16,  16,   2048,   2048),
+        (4,  16,  16,   4096,   4096),
+        (2,  16,  16,   8192,   8192),
+        (1,  16,  16,  16384,  16384),
+    ]
+    return configs
+
 
 def varlen_benchmark_configs():
     configs = [
@@ -1885,10 +1896,11 @@ def run_benchmark(custom, args):
     if custom:
         x_vals_list = [(args.b, args.hq, hk, args.sq, sk)]
     else:
-        if varlen:
-            x_vals_list = varlen_benchmark_configs()
-        else:
-            x_vals_list = nonvarlen_benchmark_configs()
+        x_vals_list = paper_benchmark_configs()
+        # if varlen:
+        #     x_vals_list = varlen_benchmark_configs()
+        # else:
+        #     x_vals_list = nonvarlen_benchmark_configs()
     print_time = args.return_time
     line_names = 'Time (ms)' if print_time else 'TFLOPS'
     configs.append(
@@ -1924,14 +1936,15 @@ def run_benchmark(custom, args):
                 seqlen_k = input_metadata.cu_seqlens_k[i + 1] - input_metadata.cu_seqlens_k[i]
                 # x2 for 2 GEMMs
                 flops_per_matmul += seqlen_q.item() * seqlen_k.item() * HQ * D_HEAD * 2
+        else:
             q, k, v, input_metadata = input_helper(BATCH, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, args.layout)
             flops_per_matmul = 2.0 * BATCH * HQ * N_CTX_Q * N_CTX_K * D_HEAD
+        if causal:
             input_metadata.need_causal()
-
-        input_metadata.set_persistent(args.persistent)
-
         if int8:
             q, k, v = quantize_input(q, k, v, input_metadata, quantize_p=quantize_p, int8_kv=int8_kv)
+        
+        input_metadata.set_persistent(args.persistent)
         o = torch.empty_like(q)
         fn = lambda: attention(q, k, v, o, input_metadata)
         if mode == 'bwd':
@@ -1988,9 +2001,7 @@ def parse_args():
     parser.add_argument("-dtype", default='fp16')
     parser.add_argument("-return_time", action='store_true', default=False)
     parser.add_argument("-layout", type=str, default='bhsd', help=supported_layouts())
-    parser.add_argument("-persistent", nargs='?', const='fixed', choices=['fixed', 'dynamic'], default=None,
-        help="Enable persistent kernels. " \
-            "Use '-persistent dynamic' for dynamic scheduling of the tiles.")
+    parser.add_argument("-persistent", nargs='?', const='fixed', choices=['fixed', 'dynamic'], default=None, help="Enable persistent kernels. Use '-persistent dynamic' for dynamic scheduling of the tiles.")
     return parser.parse_args()
 
 
