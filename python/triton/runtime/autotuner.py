@@ -4,7 +4,7 @@ import builtins
 import os
 import time
 import inspect
-from typing import Dict, Tuple, List
+from typing import Dict, Tuple, List, Optional
 from numbers import Number
 
 from .jit import KernelInterface
@@ -24,8 +24,7 @@ class Autotuner(KernelInterface):
         restore_value,
         pre_hook=None,
         post_hook=None,
-        # default type of None is incompatible with Dict
-        prune_configs_by: Dict = dict(),
+        prune_configs_by: Optional[Dict] = None,
         warmup=None,
         rep=None,
         use_cuda_graph=False,
