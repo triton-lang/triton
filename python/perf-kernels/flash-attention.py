@@ -1890,7 +1890,7 @@ def run_benchmark(custom, args):
             x_vals_list = varlen_benchmark_configs()
         else:
             x_vals_list = nonvarlen_benchmark_configs()
-    
+
     print_time = args.return_time
     line_names = 'Time (ms)' if print_time else 'TFLOPS'
     configs.append(
