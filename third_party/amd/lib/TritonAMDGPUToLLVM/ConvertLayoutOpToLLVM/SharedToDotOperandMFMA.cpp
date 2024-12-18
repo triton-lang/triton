@@ -197,39 +197,39 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     const SharedMemoryObject &smemObj,
                     const LLVMTypeConverter *typeConverter, Value thread) {
   assert((opIdx == 0 || opIdx == 1) && "unexpected operand idx");
-  auto aTensorTy = cast<triton::gpu::MemDescType>(tensor.getType());
-  ArrayRef<int64_t> shape = aTensorTy.getShape();
-  auto rank = shape.size();
-  int kDimIdx = opIdx == 0 ? rank - 1 : rank - 2;
-  int nonKDimIdx = opIdx == 0 ? rank - 2 : rank - 1;
+  auto tensorTy = cast<triton::gpu::MemDescType>(tensor.getType());
+  auto expandedTensorTy = getExpandedDesc(tensorTy);
+  auto expandedEncoding =
+      cast<DotOperandEncodingAttr>(getExpandedEncoding(encoding));
+  auto expandedSmemObj = getExpandedSharedMemoryObject(rewriter, loc, smemObj,
+                                                       tensorTy.getShape());
 
-  auto mfmaLayout = cast<AMDMfmaEncodingAttr>(encoding.getParent());
+  ArrayRef<int64_t> shape = expandedTensorTy.getShape();
+  auto rank = shape.size();
+  assert(rank == 3);
+
+  int kDimIdx = opIdx == 0 ? 2 : 1;
+  int nonKDimIdx = opIdx == 0 ? 1 : 2;
+
+  auto mfmaLayout = cast<AMDMfmaEncodingAttr>(expandedEncoding.getParent());
   auto mDim = mfmaLayout.getMDim();
   auto nDim = mfmaLayout.getNDim();
   assert((mDim == nDim && (mDim == 32 || mDim == 16 || mDim == 4)) ||
          (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64));
   auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
 
-  auto sharedLayout = cast<SharedEncodingAttr>(aTensorTy.getEncoding());
+  auto sharedLayout = cast<SharedEncodingAttr>(expandedTensorTy.getEncoding());
   auto order = sharedLayout.getOrder();
-  assert((rank == 2 || order[2] == 0) &&
-         "expect batch to be the slowest dimension");
+  assert(order[2] == 0 && "expect batch to be the slowest dimension");
 
-  auto elemTy = aTensorTy.getElementType();
-  auto kWidth = encoding.getKWidth();
+  auto elemTy = expandedTensorTy.getElementType();
+  auto kWidth = expandedEncoding.getKWidth();
   auto elemsPerInstr = mfmaLayout.getInstrShapeForOperand(kWidth, opIdx);
 
   int64_t mfmaInstrNonK;
   int64_t mfmaInstrK;
-  // TODO(Lixun): make it simpler
-  // getInstrShapeForOperand always returns a 2D vector
-  if (rank == 3) {
-    mfmaInstrNonK = elemsPerInstr[nonKDimIdx - 1];
-    mfmaInstrK = elemsPerInstr[kDimIdx - 1];
-  } else {
-    mfmaInstrNonK = elemsPerInstr[nonKDimIdx];
-    mfmaInstrK = elemsPerInstr[kDimIdx];
-  }
+  mfmaInstrNonK = elemsPerInstr[nonKDimIdx - 1];
+  mfmaInstrK = elemsPerInstr[kDimIdx - 1];
 
   if (mfmaInstrNonK > shape[nonKDimIdx] || mfmaInstrK > shape[kDimIdx]) {
     // This pattern does not support cases tensor shape is smaller than
@@ -241,12 +241,6 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   auto numRepNonK = numReps[nonKDimIdx];
   auto numRepK = numReps[kDimIdx];
   auto repB = numReps[0];
-  // TODO(Lixun): make it simpler
-  // getRepForOperand always returns a 3D vector
-  if (rank == 2) {
-    numRepNonK = numReps[nonKDimIdx + 1];
-    numRepK = numReps[kDimIdx + 1];
-  }
 
   unsigned iWarpSize = triton::gpu::getWarpSize(mfmaLayout);
   assert(iWarpSize == 64);
@@ -269,8 +263,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
 
   unsigned int maxNumWarps = shape[nonKDimIdx] / mfmaInstrNonK;
   int warpsPerBlockNonK = std::min(warpsPerCTA[nonKDimIdx], maxNumWarps);
-  int warpsPerBatch =
-      rank == 3 ? std::min<unsigned>(shape[0], warpsPerCTA[0]) : 1;
+  int warpsPerBatch = std::min<unsigned>(shape[0], warpsPerCTA[0]);
   Value warpIdInBatch = urem(linearWarpId, i32_val(warpsPerBatch));
   elemTy = typeConverter->convertType(elemTy);
 
@@ -284,7 +277,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
     // disabled, in which case offsets computation can be simplified
     // TODO (zhanglx): later when we enable vector access to LDS for non k-major
     // tensors, we'll refactor the scope of fast and normal path
-    Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
+    Value cSwizzleOffset = expandedSmemObj.getCSwizzleOffset(order[0]);
     if (opIdx == 0) {
       if (isColMajor(order)) {
         SmallVector<int64_t> elemsPerInstr{mfmaInstrK, mfmaInstrNonK};
@@ -306,7 +299,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                                          numOfElems, numReps, cSwizzleOffset);
       }
     }
-    smemBase = smemObj.getBaseBeforeSlice(order[0], loc, rewriter);
+    smemBase = expandedSmemObj.getBaseBeforeSlice(order[0], loc, rewriter);
   } else { // normal path
     // Normal path handles tensors that fall into either of the following three
     // cases:
@@ -317,16 +310,16 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
     if (opIdx == 0) {
       offsets = AMD::computeOffsetsAType(
           rewriter, loc, computeTensorElemMappingInBlock, elemsPerInstr,
-          spatialWarpId, lane, warpsPerBlockNonK, numOfElems, numReps, smemObj,
-          sharedLayout, mDim, mfmaInstrK);
+          spatialWarpId, lane, warpsPerBlockNonK, numOfElems, numReps,
+          expandedSmemObj, sharedLayout, mDim, mfmaInstrK);
     } else {
       assert(opIdx == 1);
       offsets = AMD::computeOffsetsBType(
           rewriter, loc, computeTensorElemMappingInBlock, elemsPerInstr,
-          spatialWarpId, lane, warpsPerBlockNonK, numOfElems, numReps, smemObj,
-          sharedLayout, nDim, mfmaInstrK);
+          spatialWarpId, lane, warpsPerBlockNonK, numOfElems, numReps,
+          expandedSmemObj, sharedLayout, nDim, mfmaInstrK);
     }
-    smemBase = AMD::computeBasePtr(rewriter, loc, smemObj);
+    smemBase = AMD::computeBasePtr(rewriter, loc, expandedSmemObj);
   }
 
   Type resElemTy = typeConverter->convertType(elemTy);
