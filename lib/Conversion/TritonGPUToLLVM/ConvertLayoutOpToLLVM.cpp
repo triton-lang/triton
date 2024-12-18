@@ -18,7 +18,6 @@ namespace {
 
 using ::mlir::LLVM::getMultiDimOffset;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-using ::mlir::LLVM::getStridesFromShapeAndOrder;
 using ::mlir::LLVM::getWrappedMultiDimOffset;
 using ::mlir::LLVM::linearize;
 
@@ -369,8 +368,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         return !useLegacyMMAConversion;
       }
       if (auto dotOperand = dyn_cast<DotOperandEncodingAttr>(layout)) {
-        if (isa<NvidiaMmaEncodingAttr, AMDMfmaEncodingAttr>(
-                dotOperand.getParent())) {
+        if (isa<MmaEncodingTrait>(dotOperand.getParent())) {
           return !useLegacyMMAConversion;
         }
         return false;

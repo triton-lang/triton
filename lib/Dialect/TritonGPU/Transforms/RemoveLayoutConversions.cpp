@@ -3,6 +3,7 @@
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
@@ -121,7 +122,9 @@ public:
   void addRematValue(Value old, Attribute encoding, Value newV);
   // Get the remat'ed value in the given encoding, if one already exists and
   // is different then the layout conversion root.
-  Value getRematValue(Value value, Attribute encoding, Value root) const;
+  Value getRematValue(Value value, Attribute encoding) const {
+    return rematMapping.lookup({value, encoding});
+  }
 
   void cleanup();
   void backwardRematerialization();
@@ -134,7 +137,7 @@ public:
                     ConvertLayoutOp convertOp);
 
   LogicalResult getRematerializableSlice(
-      Value root, Attribute rootEncoding, SetVector<Value> &slice,
+      OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
       DenseMap<Value, Attribute> &layout,
       std::function<bool(Operation *)> stopPropagation = nullptr);
 
@@ -149,6 +152,7 @@ private:
   // DenseMap<std::pair<Operation*, Attribute>, Operation*>
   SetVector<Operation *> opToDelete;
   FuncOp funcOp;
+  DominanceInfo domInfo;
 };
 
 void LayoutRematerialization::addRematValue(Value old, Attribute encoding,
@@ -156,21 +160,6 @@ void LayoutRematerialization::addRematValue(Value old, Attribute encoding,
   LDBG("addRematValue " << old << " encoding " << encoding << " " << newV);
   rematMapping[{old, encoding}] = newV;
   mappedValues[old] = encoding;
-}
-
-Value LayoutRematerialization::getRematValue(Value value, Attribute encoding,
-                                             Value root) const {
-  Value remat = rematMapping.lookup({value, encoding});
-  if (!remat)
-    return {};
-  // If the remat'ed value is a conversion result, make sure it is different
-  // than the root of the one we're looking at.
-  if (auto cvt = remat.getDefiningOp<ConvertLayoutOp>()) {
-    if (cvt.getSrc() == root)
-      return {};
-  }
-  // This remat'ed value can be reused.
-  return remat;
 }
 
 // Remove unneeded values now that we are done with the rematMapping.
@@ -186,6 +175,8 @@ bool isLayoutAnchor(Operation *op) {
     return isExpensiveLoadOrStore(op);
   if (isa<DotOp, nvidia_gpu::WarpGroupDotOp, AtomicRMWOp, AtomicCASOp>(op))
     return true;
+  if (auto gatherOp = dyn_cast<GatherOp>(op))
+    return gatherOp.getEfficientLayout();
 
   // Heuristic: Mark permuting reshape as a layout anchor.  Its dst can be
   // anything, so it stops forward-propagation of layouts.  We rely on the
@@ -291,6 +282,15 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
       setEncoding(result, info, changed, user);
       continue;
     }
+    if (auto gatherOp = dyn_cast<GatherOp>(user)) {
+      // Propagate the layout through the indices only, and if the layout does
+      // not have an efficient layout set.
+      if (!gatherOp.getEfficientLayout() &&
+          &use == &gatherOp.getIndicesMutable()) {
+        setEncoding(gatherOp.getResult(), info, changed, user);
+        continue;
+      }
+    }
     if (user->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
         user->hasTrait<OpTrait::Elementwise>() ||
         isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
@@ -298,7 +298,6 @@ SmallVector<Value> LayoutPropagation::propagateToUsers(Value value,
       setEncoding(user->getResults(), info, changed, user);
       continue;
     }
-    // TODO(jeff): Propagate tt.gather indices layout to dst.
   }
   return changed;
 }
@@ -713,7 +712,7 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
   }
   if (op->hasTrait<OpTrait::SameOperandsAndResultEncoding>() ||
       op->hasTrait<OpTrait::Elementwise>() ||
-      isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
+      isa<ReduceOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp, GatherOp,
           ConvertLayoutOp, nvidia_gpu::WarpGroupDotWaitOp>(op)) {
     Operation *newOp = cloneElementwise(rewriter, op, encoding);
     for (auto [oldResult, newResult] :
@@ -726,7 +725,6 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
     }
     return newOp;
   }
-  // TODO(jeff): Handle tt.gather once it supports layout propagation.
   llvm::report_fatal_error("unexpected op in rewrite");
   return nullptr;
 }
@@ -736,6 +734,9 @@ bool canBeRemat(Operation *op) {
     return !isExpensiveLoadOrStore(op);
   if (isa<AtomicRMWOp, AtomicCASOp, DotOp>(op))
     return false;
+  if (auto gather = dyn_cast<GatherOp>(op))
+    return !gather.getEfficientLayout();
+
   if (isa<scf::WhileOp, scf::ConditionOp>(op))
     return false;
 
@@ -782,7 +783,7 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
     auto layoutIt = layout.find(v);
     assert(layoutIt != layout.end());
     // If we already have a remat value for this value, use it.
-    if (Value remat = getRematValue(v, layoutIt->second, convertOp.getSrc())) {
+    if (Value remat = getRematValue(v, layoutIt->second)) {
       mapping.map(v, remat);
       valuesWithExistingRemat.insert(v);
       continue;
@@ -945,12 +946,31 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
 }
 
 LogicalResult LayoutRematerialization::getRematerializableSlice(
-    Value root, Attribute rootEncoding, SetVector<Value> &slice,
+    OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
     DenseMap<Value, Attribute> &layout,
     std::function<bool(Operation *)> stopPropagation) {
-  // Allow re-using existing conversions for a value.
-  auto getExistingConversion = [&](Value value, Attribute encoding) -> Value {
-    return getRematValue(value, encoding, root);
+  // Allow re-using existing conversions for a value. Check dominance of any
+  // re-usable materializations against the root value. This is sufficient
+  // because the conversions are processed in post-order.
+  auto getExistingConversion = [&](OpOperand &value, Attribute encoding) {
+    Value remat = getRematValue(value.get(), encoding);
+    if (!remat)
+      return Value();
+    // `value` can be replaced with an existing rematerialization if it
+    // dominates the current use of value.
+    Operation *user = value.getOwner();
+    if (domInfo.properlyDominates(remat, user)) {
+      return remat;
+    }
+    // Alternatively, if the current use can be sunk below the existing
+    // rematerialization, then it is okay to use as well. E.g. the current use
+    // is a conversion that will be folded away when its result is
+    // rematerialized.
+    if (isa<ConvertLayoutOp>(user) && remat.getDefiningOp() &&
+        domInfo.properlyDominates(user, remat.getDefiningOp())) {
+      return remat;
+    }
+    return Value();
   };
   LogicalResult result =
       getConvertBackwardSlice(root, slice, rootEncoding, layout,
@@ -971,16 +991,16 @@ LogicalResult LayoutRematerialization::getRematerializableSlice(
 void LayoutRematerialization::backwardRematerialization() {
   // Go through each ConvertLayoutOp.
   SmallVector<ConvertLayoutOp> convertOps;
-  funcOp.walk([&](ConvertLayoutOp convertOp) {
-    convertOps.push_back(convertOp);
-    // Add existing layout conversions as rematerializations of themselves. This
-    // enables rematerialization of other conversions to re-use existing
-    // conversions. Importantly, don't add them to `mappedValues`.
-    rematMapping.insert(
-        {{convertOp.getSrc(), convertOp.getType().getEncoding()}, convertOp});
-  });
+  funcOp.walk(
+      [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
   for (ConvertLayoutOp convertOp : convertOps) {
     backwardRematerialization(convertOp);
+    if (!opToDelete.contains(convertOp)) {
+      // If the conversion didn't get removed, consider it for re-use in future
+      // backward slices.
+      addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
+                    convertOp.getResult());
+    }
   }
 }
 
@@ -991,6 +1011,12 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast() {
       [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
   for (ConvertLayoutOp convertOp : convertOps) {
     hoistConvertOnTopOfExtOrBroadcast(convertOp);
+    if (!opToDelete.contains(convertOp)) {
+      // If the conversion didn't get removed, consider it for re-use in future
+      // backward slices.
+      addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
+                    convertOp.getResult());
+    }
   }
 }
 
@@ -1007,8 +1033,9 @@ void LayoutRematerialization::backwardRematerialization(
   LDBG("check backward remat with source " << oldV << " encoding "
                                            << targetType.getEncoding());
   // Check to see if there are existing remat'ed values for the pair of oldValue
-  // and encoding.
-  if (Value newV = getRematValue(oldV, targetType.getEncoding(), oldV)) {
+  // and encoding. Make sure it dominates the current conversion.
+  Value newV = getRematValue(oldV, targetType.getEncoding());
+  if (newV && domInfo.properlyDominates(newV, convertOp)) {
     // Replace it with the remat'ed value.
     convertOp.replaceAllUsesWith(newV);
     opToDelete.insert(convertOp);
@@ -1021,7 +1048,7 @@ void LayoutRematerialization::backwardRematerialization(
   SetVector<Value> slice;
   DenseMap<Value, Attribute> layout;
   LogicalResult result = getRematerializableSlice(
-      convertOp.getSrc(), targetType.getEncoding(), slice, layout);
+      convertOp.getSrcMutable(), targetType.getEncoding(), slice, layout);
   if (result.failed()) {
     LDBG("  getRematerializableSlice failed");
     return;
@@ -1064,9 +1091,9 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   // 1. Take a backward slice of all the tensor dependencies.
   SetVector<Value> slice;
   DenseMap<Value, Attribute> layout;
-  LogicalResult result =
-      getRematerializableSlice(convertOp.getSrc(), targetType.getEncoding(),
-                               slice, layout, isExtOrBroadcastOp);
+  LogicalResult result = getRematerializableSlice(
+      convertOp.getSrcMutable(), targetType.getEncoding(), slice, layout,
+      isExtOrBroadcastOp);
   if (result.failed())
     return;
 
@@ -1084,7 +1111,7 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
       if (!srcEncoding)
         return;
       LogicalResult result = getRematerializableSlice(
-          op->getOperand(0), srcEncoding, tempSlice, tempLayout);
+          op->getOpOperand(0), srcEncoding, tempSlice, tempLayout);
       // If we can rematerialize the rest of the ext slice we can ignore this
       // ext as it won't need a convert.
       if (result.succeeded()) {

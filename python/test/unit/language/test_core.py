@@ -179,7 +179,8 @@ class BlockedLayout:
 
 class SharedLayout:
 
-    def __init__(self, vec, per_phase, max_phase, order, ctas_per_cga, cta_split_num, cta_order):
+    def __init__(self, vec, per_phase, max_phase, order, ctas_per_cga, cta_split_num, cta_order,
+                 has_leading_offset=False):
         self.vec = vec
         self.per_phase = per_phase
         self.max_phase = max_phase
@@ -187,9 +188,11 @@ class SharedLayout:
         self.ctas_per_cga = ctas_per_cga
         self.cta_split_num = cta_split_num
         self.cta_order = cta_order
+        self.has_leading_offset = has_leading_offset
 
     def __str__(self):
-        return f"#{GPU_DIALECT}.shared<{{vec={self.vec}, perPhase={self.per_phase}, maxPhase={self.max_phase}, order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
+        has_leading_offset_str = "true" if self.has_leading_offset else "false"
+        return f"#{GPU_DIALECT}.shared<{{vec={self.vec}, perPhase={self.per_phase}, maxPhase={self.max_phase}, order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}, hasLeadingOffset={has_leading_offset_str}}}>"
 
 
 def is_layout_applicable(layout) -> bool:
@@ -3168,13 +3171,21 @@ def convert_fp8_to_fp32(x, device, dtype_str):
     ([(16, 16, 8, 4, False, False, 'None', 'ieee', 'float32', 'float32', 1),
       (32, 16, 8, 4, False, False, 'None', 'ieee', 'float16', 'float16', 1)] if "gfx9" in get_arch() else []) +
     [(128, 128, 64, 4, False, False, 'chain-dot', 'ieee', float8_type, 'float32', 1)
-     for float8_type in ["float8e5", "float8e4nv"]])
+     for float8_type in ["float8e5", "float8e4nv"]] +
+    [(*shape_nw, False, False, epilogue, 'ieee', in_dtype, out_dtype, 1)
+     for shape_nw in [(2, 2, 16, 1), (1, 64, 64, 1), (64, 2, 64, 2), (64, 64, 4, 4)]
+     for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols']
+     for in_dtype, out_dtype in [('float16', 'float16'), ('float32', 'float32')]])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, num_ctas, device):
     if is_interpreter():
+        if M < 16 or N < 16 or K < 16:
+            pytest.skip("small dots are supported only on HIP at the moment")
         if in_dtype == 'bfloat16':
             pytest.skip("bfloat16 is not supported in the interpreter")
     else:
+        if not is_hip() and (M < 16 or N < 16 or K < 16):
+            pytest.skip("small dots are supported only on HIP at the moment")
         if is_cuda():
             capability = torch.cuda.get_device_capability()
 
@@ -3614,7 +3625,14 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, normal_type, mxfp_type, nu
                           for in_dtype_str, out_dtype_str in [('int8', 'int8'), ('float16', 'float16'),
                                                               ('float16', 'float32'), ('float32', 'float32')]] +
                          # Large block sizes
-                         [(4, 4, 128, 128, 64, 64, 64, 'float16', 'float16')])
+                         [(4, 4, 128, 128, 64, 64, 64, 'float16', 'float16')] +
+                         # Small block sizes
+                         [(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_str)
+                          for B in [1, 2, 8]
+                          for num_warps in [1, 2, 4]
+                          for BLOCK_M, BLOCK_N in [(1, 32), (32, 2), (8, 8)]
+                          for M, N, K in [(32, 32, 32)]
+                          for in_dtype_str, out_dtype_str in [('float16', 'float16'), ('float32', 'float32')]])
 def test_dot3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_str, device):
     if is_hip():
         # hip does not support tf32 precision, so use ieee for all tests
@@ -3627,6 +3645,8 @@ def test_dot3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_
                 pytest.skip(f"{out_dtype_str} has low precision in WMMA dot")
     else:
         input_precision = "tf32" if is_cuda() and in_dtype_str == 'float32' else "ieee"
+        if BLOCK_M < 16 or BLOCK_N < 16:
+            pytest.skip("small dots are supported only on HIP at the moment")
 
     if B == 8 and M == 64 and in_dtype_str == "float32" and out_dtype_str == "float32":
         if not is_interpreter() and triton.runtime.driver.active.utils.get_device_properties(
@@ -3686,6 +3706,10 @@ def test_dot3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_
     if in_dtype_str == 'int8':
         out = numpy_random((B, M, N), dtype_str='int32', rs=rs)
     else:
+        if is_hip() and (BLOCK_M < 16 or BLOCK_N < 16) and out_dtype_str == 'float16':
+            # float16 accumulator in FMA dot loose precision too fast
+            x *= 0.1
+            y *= 0.1
         out = numpy_random((B, M, N), dtype_str=out_dtype_str, rs=rs)
 
     x_tri = to_triton(x, device=device)
@@ -5397,7 +5421,7 @@ layouts_3d = [
                      k_width=1),
 ]
 
-shared_layout_3d = [
+shared_layouts_3d = [
     SharedLayout(1, 1, 1, [2, 1, 0], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
     SharedLayout(4, 2, 4, [1, 2, 0], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
     SharedLayout(8, 2, 4, [0, 2, 1], [1, 1, 1], [1, 1, 1], [0, 1, 2]),
@@ -5406,8 +5430,8 @@ shared_layout_3d = [
 
 
 @pytest.mark.parametrize("M, N, K", [[8, 16, 32]])
-@pytest.mark.parametrize("shared_layout", shared_layout_3d)
-@pytest.mark.parametrize("dist_layout", layouts_3d)
+@pytest.mark.parametrize("shared_layout", shared_layouts_3d)
+@pytest.mark.parametrize("dist_layout", filter_layouts(layouts_3d))
 def test_local_load_store(M, N, K, dist_layout, shared_layout, device, tmp_path: pathlib.Path):
     layouts = f"""
     #dist = {dist_layout}
@@ -5479,6 +5503,72 @@ def test_local_load_store(M, N, K, dist_layout, shared_layout, device, tmp_path:
     assert torch.equal(z, x)
 
 
+mma_layouts = [
+    MmaLayout((2, 0), [1, 4], [1, 1], [1, 1], [0, 1], [16, 8]),
+    MmaLayout((3, 0), [4, 1], [1, 1], [1, 1], [0, 1], [16, 128, 16]),  # simple 4 warps case
+    MmaLayout((3, 0), [8, 1], [1, 1], [1, 1], [0, 1], [16, 128, 16]),  # simple 8 warps case
+    MmaLayout((3, 0), [4, 2], [1, 1], [1, 1], [0, 1], [16, 128, 16]),  # multiple warps on the row
+    MmaLayout((3, 0), [4, 2], [1, 1], [1, 1], [0, 1], [16, 64, 16]),  # small instrN
+    MmaLayout((3, 0), [8, 4], [1, 1], [1, 1], [0, 1], [16, 64, 16]),  # large number of warps
+]
+
+shared_layouts = [
+    SharedLayout(8, 1, 1, [1, 0], [1, 1], [1, 1], [0, 1]),
+    SharedLayout(8, 2, 4, [1, 0], [1, 1], [1, 1], [0, 1], has_leading_offset=True),  # small contiguous bytes
+    SharedLayout(8, 1, 8, [1, 0], [1, 1], [1, 1], [0, 1], has_leading_offset=True),  # maximum contiguous bytes
+]
+
+
+@pytest.mark.parametrize("M, N", [[128, 128]])
+@pytest.mark.parametrize("mma_layout", filter_layouts(mma_layouts))
+@pytest.mark.parametrize("shared_layout", shared_layouts)
+def test_local_load_store_mma(M, N, mma_layout, shared_layout, device, tmp_path: pathlib.Path):
+    num_warps = np.prod(mma_layout.warps_per_cta)
+
+    layouts = f"""
+    #dist = {mma_layout}
+    #shared = {shared_layout}
+    #smem = #ttg.shared_memory
+    """
+    ir = layouts + f"""
+  module attributes {{"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = {num_warps} : i32, "ttg.threads-per-warp" = {THREADS_PER_WARP} : i32}} {{
+  tt.func public @kernel(%arg0: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}) attributes {{noinline = false}} {{
+    %cst = arith.constant dense<{N}> : tensor<{M}x1xi32, #dist>
+    %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #ttg.slice<{{dim = 1, parent = #dist}}>>
+    %1 = tt.make_range {{end = {N} : i32, start = 0 : i32}} : tensor<{N}xi32, #ttg.slice<{{dim = 0, parent = #dist}}>>
+    %2 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<{M}x{N}x!tt.ptr<f16>, #dist>
+    %3 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<{M}x{N}x!tt.ptr<f16>, #dist>
+    %4 = tt.expand_dims %0 {{axis = 1 : i32}} : tensor<{M}xi32, #ttg.slice<{{dim = 1, parent = #dist}}>> -> tensor<{M}x1xi32, #dist>
+    %5 = arith.muli %4, %cst : tensor<{M}x1xi32, #dist>
+    %6 = tt.expand_dims %1 {{axis = 0 : i32}} : tensor<{N}xi32, #ttg.slice<{{dim = 0, parent = #dist}}>> -> tensor<1x{N}xi32, #dist>
+    %7 = tt.broadcast %6 : tensor<1x{N}xi32, #dist> -> tensor<{M}x{N}xi32, #dist>
+    %8 = tt.broadcast %5 : tensor<{M}x1xi32, #dist> -> tensor<{M}x{N}xi32, #dist>
+    %9 = arith.addi %8, %7 : tensor<{M}x{N}xi32, #dist>
+    %10 = tt.addptr %2, %9 : tensor<{M}x{N}x!tt.ptr<f16>, #dist>, tensor<{M}x{N}xi32, #dist>
+    %11 = tt.load %10 : tensor<{M}x{N}x!tt.ptr<f16>, #dist>
+    %12 = ttg.local_alloc %11 : (tensor<{M}x{N}xf16, #dist>) -> !ttg.memdesc<{M}x{N}xf16, #shared, #smem>
+    %13 = ttg.local_load %12 : !ttg.memdesc<{M}x{N}xf16, #shared, #smem> -> tensor<{M}x{N}xf16, #dist>
+    %14 = tt.addptr %3, %9 : tensor<{M}x{N}x!tt.ptr<f16>, #dist>, tensor<{M}x{N}xi32, #dist>
+    tt.store %14, %13 : tensor<{M}x{N}x!tt.ptr<f16>, #dist>
+    tt.return
+  }}
+}}
+"""
+
+    x = torch.arange(0, M * N, device=device, dtype=torch.float16).reshape(M, N)
+    z = torch.empty_like(x, device=device)
+
+    temp_file = tmp_path / "test_local_load_store_mma.ttgir"
+    temp_file.write_text(ir)
+    kernel = triton.compile(str(temp_file))
+
+    kernel[(1, 1, 1)](x, z)
+    assert torch.equal(z, x)
+
+    if shared_layout.has_leading_offset == "true" and mma_layout.version[0] >= 3:
+        assert "stmatrix" in kernel.asm["ptx"]
+
+
 mma_pairs = [
     [
         MmaLayout((2, 0), [1, 4], [1, 1], [1, 1], [0, 1], [16, 8]),
@@ -5525,18 +5615,10 @@ mma_pairs = [
 
 @pytest.mark.parametrize("M, N", [[64, 1], [1, 64], [64, 64], [128, 128], [256, 256]])
 @pytest.mark.parametrize("dtype", ['float16'])
-@pytest.mark.parametrize("mma_pair", mma_pairs)
-def test_convertmma2mma(M, N, mma_pair, dtype, device, tmp_path: pathlib.Path):
-    if is_hip():
-        pytest.skip("test_mma2mma is not supported in HIP")
-
+@pytest.mark.parametrize("mma_pair", filter_layouts(mma_pairs))
+def test_convert_mma2mma(M, N, mma_pair, dtype, device, tmp_path: pathlib.Path):
     src_layout, _ = mma_pair
-    if is_cuda():
-        cc = torch.cuda.get_device_capability()
-        if cc[0] < 9 and src_layout.version[0] >= 3:
-            pytest.skip("Skip testing MMAv3 on devices with CC < 9")
-
-    num_warps = np.cumprod(src_layout.warps_per_cta)[-1]
+    num_warps = np.prod(src_layout.warps_per_cta)
 
     def do_test(src_layout, dst_layout):
         layouts = f"""
@@ -5572,7 +5654,7 @@ def test_convertmma2mma(M, N, mma_pair, dtype, device, tmp_path: pathlib.Path):
         x = to_triton(numpy_random((M, N), dtype_str=dtype), device=device)
         z = torch.empty_like(x)
 
-        temp_file = tmp_path / "test_convertmma2mma.ttgir"
+        temp_file = tmp_path / "test_convert_mma2mma.ttgir"
         temp_file.write_text(ir)
         kernel = triton.compile(str(temp_file))
 

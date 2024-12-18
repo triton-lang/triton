@@ -78,23 +78,11 @@ struct LocalAllocOpConversion
     auto typeConverter = getTypeConverter();
     auto sharedLayout =
         cast<triton::gpu::SharedEncodingAttr>(resultTy.getEncoding());
-    auto order = sharedLayout.getOrder();
-    // Workaround for 3D tensors
-    // TODO: we need to modify the pipeline pass to give a proper shared
-    // encoding to 3D tensors
-    SmallVector<unsigned> newOrder;
-    if (resultTy.getShape().size() != order.size()) {
-      for (auto i = 0; i < order.size(); ++i)
-        newOrder.push_back(order[i] + 1);
-      newOrder.push_back(0);
-    } else {
-      newOrder = SmallVector<unsigned>(order.begin(), order.end());
-    }
 
     auto llvmElemTy = typeConverter->convertType(resultTy.getElementType());
     auto shapePerCTA = getShapePerCTA(sharedLayout, resultTy.getShape());
     auto smemObj = SharedMemoryObject(smemBase, llvmElemTy, shapePerCTA,
-                                      newOrder, loc, rewriter);
+                                      sharedLayout, loc, rewriter);
     // If there is an initial tensor, store it into the shared memory.
     if (op.getSrc()) {
       lowerDistributedToShared(loc, op.getSrc(), op.getResult(),
@@ -159,7 +147,7 @@ public:
             srcTy.getShape()[1] >= 4 * kWidth & dstTy.getRank() <= 2;
         return !canUseLdmatrix;
       }
-      if (isa<AMDMfmaEncodingAttr>(dot.getParent()))
+      if (isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>(dot.getParent()))
         return true;
     }
     return false;
