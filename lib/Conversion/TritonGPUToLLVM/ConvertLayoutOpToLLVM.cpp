@@ -711,7 +711,7 @@ void ConvertLayoutOpUsingLinearLayoutsConversion::transferWithinWarp(
       int32_t check =
           reducedP1.apply({{kLane, j}, {kRegister, i}}).front().second;
       shflSrc =
-          select(icmp_eq(srcRegIdx, i32_val(check)), srcValues[j], shflSrc);
+          select(icmp_eq(srcRegIdx, i32_val(check)), srcValues[check], shflSrc);
     }
 
     out = applyLinearLayout(loc, rewriter, Cp,
@@ -735,7 +735,8 @@ void ConvertLayoutOpUsingLinearLayoutsConversion::transferWithinWarp(
     for (unsigned j = 0, e = reducedP2.getInDimSize(kLane); j != e; ++j) {
       int32_t check =
           reducedP2.apply({{kLane, j}, {kRegister, i}}).front().second;
-      result = select(icmp_eq(resultIdx, i32_val(check)), shflOuts[j], result);
+      result =
+          select(icmp_eq(resultIdx, i32_val(check)), shflOuts[check], result);
     }
     results[i] = result;
   }

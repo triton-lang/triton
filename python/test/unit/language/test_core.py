@@ -5411,7 +5411,7 @@ def test_convert2d(M, N, src_layout, interm_layout, dst_layout, dtype, device, t
 
     kernel[(1, 1, 1)](x.data_ptr(), z.data_ptr())
 
-    assert torch.equal(z, x)
+    torch.testing.assert_close(z, x, rtol=0, atol=0)
 
 
 layouts_3d = [
