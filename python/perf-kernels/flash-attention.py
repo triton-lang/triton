@@ -274,7 +274,7 @@ def _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stri
         # -- compute qk ----
 
         if INT8_GEMM:
-            qk += ((((tl.dot(q, k) * q_descale)) * k_descale) * QK_SCALE).to(tl.float32)
+            qk += ((((tl.dot(q, k).to(tl.float32) * q_descale)) * k_descale) * QK_SCALE)
         else:
             if INT8_KV:
                 k = (k * k_descale).to(q.type.element_ty)
