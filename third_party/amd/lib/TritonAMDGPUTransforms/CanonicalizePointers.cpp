@@ -19,6 +19,7 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SetOperations.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -35,6 +36,7 @@
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 using namespace mlir;
+namespace tt = triton;
 
 // -----------------------------------------------------------------------------
 // Pointer canonicalizer utility class
@@ -119,7 +121,7 @@ std::optional<Value> maybeGetOrCreateScalarConstant(RewriterBase &rewriter,
   Operation *op = expr.getDefiningOp();
 
   // Check for splatness
-  if (auto splatOp = dyn_cast_or_null<triton::SplatOp>(op))
+  if (auto splatOp = dyn_cast_or_null<tt::SplatOp>(op))
     return splatOp.getSrc();
 
   // Check for constant
@@ -147,7 +149,7 @@ std::optional<Value> maybeGetOrCreateScalarConstant(RewriterBase &rewriter,
 // TODO(max): is this correct?
 bool canNarrowOffset(Value baseOffset, Value addOffset) {
   Type addOffsetType = getElementTypeOrSelf(addOffset);
-  auto baseSplatOp = baseOffset.getDefiningOp<triton::SplatOp>();
+  auto baseSplatOp = baseOffset.getDefiningOp<tt::SplatOp>();
   return baseSplatOp && addOffsetType.isInteger(32);
 }
 
@@ -193,9 +195,9 @@ std::pair<Value, Value> createDecomposeOffsetFromMul(RewriterBase &rewriter,
   Value uniformMul =
       rewriter.create<arith::MulIOp>(loc, uniformOffsetL, uniformOffsetR);
 
-  Value uniformOffsetLSplat = rewriter.create<triton::SplatOp>(
+  Value uniformOffsetLSplat = rewriter.create<tt::SplatOp>(
       loc, nonUniformOffsetL.getType(), uniformOffsetL);
-  Value uniformOffsetRSplat = rewriter.create<triton::SplatOp>(
+  Value uniformOffsetRSplat = rewriter.create<tt::SplatOp>(
       loc, nonUniformOffsetR.getType(), uniformOffsetR);
 
   Value nonUNonU =
@@ -232,17 +234,17 @@ std::pair<Value, Value> createDecomposeOffsetFromExpr(RewriterBase &rewriter,
   auto offsets =
       llvm::TypeSwitch<Operation *, std::pair<Value, Value>>(
           expr.getDefiningOp())
-          .Case<triton::BroadcastOp>([&](auto broadcastOp) {
+          .Case<tt::BroadcastOp>([&](auto broadcastOp) {
             auto [uniform, nonUniform] = createDecomposeOffsetFromExpr(
                 rewriter, loc, broadcastOp.getSrc(), bitness);
-            auto broadcastNonUniform = rewriter.create<triton::BroadcastOp>(
+            auto broadcastNonUniform = rewriter.create<tt::BroadcastOp>(
                 loc, broadcastOp.getType(), nonUniform);
             return std::make_pair(uniform, broadcastNonUniform);
           })
-          .Case<triton::ExpandDimsOp>([&](auto expandOp) {
+          .Case<tt::ExpandDimsOp>([&](auto expandOp) {
             auto [uniform, nonUniform] = createDecomposeOffsetFromExpr(
                 rewriter, loc, expandOp.getSrc(), bitness);
-            auto expandNonUniform = rewriter.create<triton::ExpandDimsOp>(
+            auto expandNonUniform = rewriter.create<tt::ExpandDimsOp>(
                 loc, nonUniform, expandOp.getAxis());
             return std::make_pair(uniform, expandNonUniform);
           })
@@ -264,32 +266,12 @@ std::pair<Value, Value> createDecomposeOffsetFromExpr(RewriterBase &rewriter,
 }
 
 static const std::string kPtrCanonPrefix = "__amdpointercanonicalize.";
-static const std::string kLegalAttr = kPtrCanonPrefix + "legal__";
-static const std::string kRewrittenAttr = kPtrCanonPrefix + "rewritten__";
 static const std::string kSCFThenRewrittenAttr =
     kPtrCanonPrefix + "scf-then-rewritten__";
 static const std::string kSCFElseRewrittenAttr =
     kPtrCanonPrefix + "scf-else-rewritten__";
 static const std::string kSCFIfOpYieldFatPtrOffsets =
     kPtrCanonPrefix + "scf-if-yield-fatptr-offsets__";
-
-static void setLegalAttr(RewriterBase &rewriter, Operation *newOp) {
-  rewriter.modifyOpInPlace(newOp, [&] {
-    newOp->setDiscardableAttr(kLegalAttr, rewriter.getUnitAttr());
-  });
-}
-
-static void setRewrittenAttr(RewriterBase &rewriter, Operation *origOp) {
-  rewriter.modifyOpInPlace(origOp, [&] {
-    origOp->setDiscardableAttr(kRewrittenAttr, rewriter.getUnitAttr());
-  });
-}
-
-static void setRewrittenLegalAttrs(RewriterBase &rewriter, Operation *origOp,
-                                   Operation *newOp) {
-  setRewrittenAttr(rewriter, origOp);
-  setLegalAttr(rewriter, newOp);
-}
 
 Value createTensorPointer(
     RewriterBase &rewriter, Value basePtr, Value offset, Location loc,
@@ -299,8 +281,8 @@ Value createTensorPointer(
 
   // Scalar case: we only need to `tt.addptr %basePtr, %offset`
   if (!tensorType) {
-    auto addPtrOp = rewriter.create<triton::AddPtrOp>(loc, basePtr.getType(),
-                                                      basePtr, offset);
+    auto addPtrOp =
+        rewriter.create<tt::AddPtrOp>(loc, basePtr.getType(), basePtr, offset);
     for (auto attribute : attributes)
       addPtrOp->setAttr(attribute.getFirst(), attribute.getSecond());
     return addPtrOp.getResult();
@@ -317,12 +299,10 @@ Value createTensorPointer(
   if (canNarrow)
     offset = createNarrow64bitOffsetTo32bits(rewriter, loc, offset);
 
-  triton::SplatOp tensorPtr =
-      rewriter.create<triton::SplatOp>(loc, tensorPtrType, basePtr);
-  setLegalAttr(rewriter, tensorPtr);
-  triton::AddPtrOp addPtrOp =
-      rewriter.create<triton::AddPtrOp>(loc, tensorPtrType, tensorPtr, offset);
-  setLegalAttr(rewriter, addPtrOp);
+  tt::SplatOp tensorPtr =
+      rewriter.create<tt::SplatOp>(loc, tensorPtrType, basePtr);
+  tt::AddPtrOp addPtrOp =
+      rewriter.create<tt::AddPtrOp>(loc, tensorPtrType, tensorPtr, offset);
 
   for (auto attribute : attributes)
     addPtrOp->setAttr(attribute.getFirst(), attribute.getSecond());
@@ -427,27 +407,49 @@ static Value getSingleValue(ValueRange values) {
 
 template <typename SourceOp>
 struct PointerCanonicalizationPattern : OpConversionPattern<SourceOp> {
-  PointerCanonicalizationPattern(MLIRContext *context, FatPointers &fatPtrs,
+  PointerCanonicalizationPattern(MLIRContext *context,
+                                 llvm::SetVector<Operation *> &opsToRewrite,
+                                 FatPointers &fatPtrs,
                                  PatternBenefit benefit = 1)
-      : OpConversionPattern<SourceOp>(context, benefit), fatPtrs(fatPtrs) {}
+      : OpConversionPattern<SourceOp>(context, benefit), fatPtrs(fatPtrs),
+        opToRewrite(opsToRewrite) {}
+
+  virtual LogicalResult matchAndRewrite_(
+      SourceOp op,
+      typename OpConversionPattern<SourceOp>::OneToNOpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const {
+    llvm_unreachable("must override matchAndRewrite_");
+  }
+
+  LogicalResult matchAndRewrite(
+      SourceOp op,
+      typename OpConversionPattern<SourceOp>::OneToNOpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    if (failed(matchAndRewrite_(op, adaptor, rewriter)))
+      return failure();
+    opToRewrite.remove(op);
+    return success();
+  }
+
   FatPointers &fatPtrs;
+  llvm::SetVector<Operation *> &opToRewrite;
 };
 
 /// splat integer offset, keep base
-class ConvertSplatOp : public PointerCanonicalizationPattern<triton::SplatOp> {
+class ConvertSplatOp : public PointerCanonicalizationPattern<tt::SplatOp> {
 public:
   using PointerCanonicalizationPattern::PointerCanonicalizationPattern;
 
   LogicalResult
-  matchAndRewrite(triton::SplatOp splatOp, OneToNOpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
+  matchAndRewrite_(tt::SplatOp splatOp, OneToNOpAdaptor adaptor,
+                   ConversionPatternRewriter &rewriter) const override {
     ValueRange remappedOperands = adaptor.getSrc();
     if (remappedOperands.size() != 2)
       return rewriter.notifyMatchFailure(
           splatOp, "expected SplatOp src to have already been remapped");
     Value fatPtrBase = remappedOperands[0];
     Value fatPtrOffset = remappedOperands[1];
-    if (!llvm::isa<triton::PointerType>(fatPtrBase.getType()))
+    if (!llvm::isa<tt::PointerType>(fatPtrBase.getType()))
       return rewriter.notifyMatchFailure(splatOp,
                                          "non tt.ptr base unimplemented");
     if (!llvm::isa<IntegerType>(fatPtrOffset.getType()))
@@ -457,24 +459,25 @@ public:
     RankedTensorType outType = splatOp.getResult().getType();
     auto newOffsetType = RankedTensorType::get(
         outType.getShape(), fatPtrOffset.getType(), outType.getEncoding());
-    triton::SplatOp offset = rewriter.create<triton::SplatOp>(
+    tt::SplatOp offset = rewriter.create<tt::SplatOp>(
         splatOp.getLoc(), newOffsetType, fatPtrOffset);
-    setRewrittenLegalAttrs(rewriter, splatOp, offset);
     rewriter.replaceOpWithMultiple(splatOp, {{fatPtrBase, offset}});
+    opToRewrite.remove(splatOp);
     fatPtrs[{fatPtrBase, offset}] = fatPtrs[{fatPtrBase, fatPtrOffset}];
+
     return success();
   }
 };
 
 /// Broadcast offset, keep base.
 class ConvertBroadcastOp
-    : public PointerCanonicalizationPattern<triton::BroadcastOp> {
+    : public PointerCanonicalizationPattern<tt::BroadcastOp> {
 public:
   using PointerCanonicalizationPattern::PointerCanonicalizationPattern;
 
   LogicalResult
-  matchAndRewrite(triton::BroadcastOp broadcastOp, OneToNOpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
+  matchAndRewrite_(tt::BroadcastOp broadcastOp, OneToNOpAdaptor adaptor,
+                   ConversionPatternRewriter &rewriter) const override {
     ValueRange remappedOperands = adaptor.getSrc();
     if (remappedOperands.size() != 2)
       return rewriter.notifyMatchFailure(
@@ -483,7 +486,7 @@ public:
 
     Value fatPtrBase = remappedOperands[0];
     Value fatPtrOffset = remappedOperands[1];
-    if (!llvm::isa<triton::PointerType>(fatPtrBase.getType()))
+    if (!llvm::isa<tt::PointerType>(fatPtrBase.getType()))
       return rewriter.notifyMatchFailure(broadcastOp,
                                          "non tt.ptr base unimplemented");
     auto offsetType = dyn_cast<RankedTensorType>(fatPtrOffset.getType());
@@ -494,10 +497,10 @@ public:
         dyn_cast<RankedTensorType>(broadcastOp.getResult().getType());
     auto newOffsetType = RankedTensorType::get(
         outType.getShape(), offsetType.getElementType(), outType.getEncoding());
-    triton::BroadcastOp newOffset = rewriter.create<triton::BroadcastOp>(
+    tt::BroadcastOp newOffset = rewriter.create<tt::BroadcastOp>(
         broadcastOp.getLoc(), newOffsetType, fatPtrOffset);
-    setRewrittenLegalAttrs(rewriter, broadcastOp, newOffset);
     rewriter.replaceOpWithMultiple(broadcastOp, {{fatPtrBase, newOffset}});
+    opToRewrite.remove(broadcastOp);
     fatPtrs[{fatPtrBase, newOffset}] = fatPtrs[{fatPtrBase, fatPtrOffset}];
     return success();
   }
@@ -508,14 +511,13 @@ public:
 /// 2. Constant tensor offset -> bump only the offset
 /// 3. Non-constant tensor offset -> decompose parent(offset) into uniform and
 /// non-uniform comop
-class ConvertAddPtrOp
-    : public PointerCanonicalizationPattern<triton::AddPtrOp> {
+class ConvertAddPtrOp : public PointerCanonicalizationPattern<tt::AddPtrOp> {
 public:
   using PointerCanonicalizationPattern::PointerCanonicalizationPattern;
 
   LogicalResult
-  matchAndRewrite(triton::AddPtrOp addPtrOp, OneToNOpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
+  matchAndRewrite_(tt::AddPtrOp addPtrOp, OneToNOpAdaptor adaptor,
+                   ConversionPatternRewriter &rewriter) const override {
     ValueRange remappedPtr = adaptor.getPtr();
     if (remappedPtr.size() != 2)
       return rewriter.notifyMatchFailure(
@@ -533,12 +535,11 @@ public:
     rewriter.setInsertionPoint(addPtrOp);
 
     // If it is a scalar pointer update, simply bump the base pointer
-    if (llvm::isa<triton::PointerType>(addPtrOp.getPtr().getType())) {
+    if (llvm::isa<tt::PointerType>(addPtrOp.getPtr().getType())) {
       assert(llvm::isa<IntegerType>(origOffset.getType()) &&
              "expected offset to be integer type");
-      auto newAddPtrOp = rewriter.create<triton::AddPtrOp>(
+      auto newAddPtrOp = rewriter.create<tt::AddPtrOp>(
           curLoc, fatPtrBase.getType(), fatPtrBase, origOffset);
-      setRewrittenLegalAttrs(rewriter, addPtrOp, newAddPtrOp);
       rewriter.replaceOpWithMultiple(addPtrOp, {{newAddPtrOp, fatPtrOffset}});
       fatPtrs[{newAddPtrOp, fatPtrOffset}].canNarrow =
           fatPtrs[{fatPtrBase, fatPtrOffset}].canNarrow;
@@ -551,9 +552,8 @@ public:
     // Early exit for the case of a constant tensor
     if (auto scalarConst =
             maybeGetOrCreateScalarConstant(rewriter, curLoc, origOffset)) {
-      triton::AddPtrOp newAddPtrOp = rewriter.create<triton::AddPtrOp>(
+      tt::AddPtrOp newAddPtrOp = rewriter.create<tt::AddPtrOp>(
           curLoc, fatPtrBase.getType(), fatPtrBase, *scalarConst);
-      setRewrittenLegalAttrs(rewriter, addPtrOp, newAddPtrOp);
       rewriter.replaceOpWithMultiple(addPtrOp, {{newAddPtrOp, fatPtrOffset}});
       // If we are updating the tensor pointer with a constant value, we can
       // propagate the attributes of the tensor pointer to the fat pointer.
@@ -567,7 +567,7 @@ public:
     auto [uniformOffset, nonUniformOffset] =
         createDecomposeOffsetFromExpr(rewriter, curLoc, origOffset, bitness);
 
-    auto newAddPtrOp = rewriter.create<triton::AddPtrOp>(
+    auto newAddPtrOp = rewriter.create<tt::AddPtrOp>(
         curLoc, fatPtrBase.getType(), fatPtrBase, uniformOffset);
 
     // Vector offset update (if any): bump the tensor offset
@@ -592,7 +592,6 @@ public:
       propagateAtrs = false;
     }
 
-    setRewrittenLegalAttrs(rewriter, addPtrOp, newAddPtrOp);
     rewriter.replaceOpWithMultiple(addPtrOp, {{newAddPtrOp, newOffset}});
     auto nextFatPtr = std::pair{newAddPtrOp.getResult(), newOffset};
     fatPtrs[nextFatPtr].canNarrow = canNarrow;
@@ -610,8 +609,8 @@ class ConvertSCFForOp : public PointerCanonicalizationPattern<scf::ForOp> {
 
 public:
   LogicalResult
-  matchAndRewrite(scf::ForOp forOp, OneToNOpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
+  matchAndRewrite_(scf::ForOp forOp, OneToNOpAdaptor adaptor,
+                   ConversionPatternRewriter &rewriter) const override {
     SmallVector<size_t> valRangeLens;
     ArrayRef<ValueRange> remappedInits = adaptor.getInitArgs();
     for (ValueRange remappedInit : remappedInits)
@@ -676,7 +675,6 @@ public:
       offset += len;
     }
 
-    setRewrittenLegalAttrs(rewriter, forOp, newForOp);
     rewriter.replaceOpWithMultiple(forOp, packedRets);
 
     return success();
@@ -690,8 +688,8 @@ public:
   using PointerCanonicalizationPattern::PointerCanonicalizationPattern;
 
   LogicalResult
-  matchAndRewrite(scf::YieldOp yieldOp, OneToNOpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
+  matchAndRewrite_(scf::YieldOp yieldOp, OneToNOpAdaptor adaptor,
+                   ConversionPatternRewriter &rewriter) const override {
     ArrayRef<ValueRange> remappedYields = adaptor.getOperands();
     SmallVector<Value> newYieldedValues = flattenValues(remappedYields);
     // have to mutate here because otherwise scf.if, scf.for, and scf.while will
@@ -735,7 +733,6 @@ public:
             rewriter.getDenseI64ArrayAttr(fatPtrOffsets));
     }
 
-    setLegalAttr(rewriter, yieldOp);
     return success();
   }
 };
@@ -745,8 +742,8 @@ class ConvertSCFWhileOp : public PointerCanonicalizationPattern<scf::WhileOp> {
 public:
   using PointerCanonicalizationPattern::PointerCanonicalizationPattern;
   LogicalResult
-  matchAndRewrite(scf::WhileOp whileOp, OneToNOpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
+  matchAndRewrite_(scf::WhileOp whileOp, OneToNOpAdaptor adaptor,
+                   ConversionPatternRewriter &rewriter) const override {
     SmallVector<size_t> valRangeLens;
     ArrayRef<ValueRange> remappedInits = adaptor.getInits();
     for (ValueRange remappedInit : remappedInits)
@@ -820,7 +817,6 @@ public:
       offset += len;
     }
 
-    setRewrittenLegalAttrs(rewriter, whileOp, newWhileOp);
     rewriter.replaceOpWithMultiple(whileOp, packedRets);
 
     return success();
@@ -833,8 +829,8 @@ class ConvertSCFConditionOp
 public:
   using PointerCanonicalizationPattern::PointerCanonicalizationPattern;
   LogicalResult
-  matchAndRewrite(scf::ConditionOp condOp, OneToNOpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
+  matchAndRewrite_(scf::ConditionOp condOp, OneToNOpAdaptor adaptor,
+                   ConversionPatternRewriter &rewriter) const override {
     SmallVector<Value> newArgs = flattenValues(adaptor.getArgs());
     // have to mutate here because otherwise scf.while will
     // get confused about which condition is the "correct" condition (since
@@ -843,7 +839,6 @@ public:
       condOp.getArgsMutable().clear();
       condOp.getArgsMutable().append(newArgs);
     });
-    setLegalAttr(rewriter, condOp);
     return success();
   }
 };
@@ -854,15 +849,14 @@ class ConvertCFCondBranch
 public:
   using PointerCanonicalizationPattern::PointerCanonicalizationPattern;
   LogicalResult
-  matchAndRewrite(cf::CondBranchOp branchOp, OneToNOpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
+  matchAndRewrite_(cf::CondBranchOp branchOp, OneToNOpAdaptor adaptor,
+                   ConversionPatternRewriter &rewriter) const override {
     ArrayRef<ValueRange> remappedTrueOperands = adaptor.getTrueDestOperands();
     ArrayRef<ValueRange> remappedFalseOperands = adaptor.getFalseDestOperands();
     SmallVector<Value> trueOperands = flattenValues(remappedTrueOperands);
     SmallVector<Value> falseOperands = flattenValues(remappedFalseOperands);
 
-    setRewrittenAttr(rewriter, branchOp);
-    auto newBrancOp = rewriter.replaceOpWithNewOp<cf::CondBranchOp>(
+    rewriter.replaceOpWithNewOp<cf::CondBranchOp>(
         branchOp, branchOp.getCondition(), branchOp.getTrueDest(), trueOperands,
         branchOp.getFalseDest(), falseOperands);
 
@@ -926,12 +920,17 @@ public:
     // propagate canNarrow to bb arg fatPtrs in false bb
     propagateCanNarrowToBlock(newFalseBlock, remappedFalseOperands);
 
-    setLegalAttr(rewriter, newBrancOp);
     return success();
   }
 };
 
-/// Rewrite both operands. Note, this should only be reached after both
+/// Rewrite select(fatPtrTrue, fatPtrFalse) ->
+///   (
+///     select(fatPtrTrueBase, fatPtrTrueOffset),
+///     select(fatPtrFalseBase, fatPtrFalseOffset)
+///    )
+///
+/// Note, this should only be reached after both
 /// operands have already been rewritten because DialectConversion walks
 /// PreOrder in order ForwardDominance order: see
 /// https://github.com/llvm/llvm-project/blob/58389b220a9354ed6c34bdb9310a35165579c5e3/mlir/lib/Transforms/Utils/DialectConversion.cpp#L2702
@@ -940,8 +939,8 @@ class ConvertArithSelectOp
 public:
   using PointerCanonicalizationPattern::PointerCanonicalizationPattern;
   LogicalResult
-  matchAndRewrite(arith::SelectOp selectOp, OneToNOpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
+  matchAndRewrite_(arith::SelectOp selectOp, OneToNOpAdaptor adaptor,
+                   ConversionPatternRewriter &rewriter) const override {
     ArrayRef<ValueRange> remappedOperands = adaptor.getOperands();
     if (remappedOperands[1].size() != 2 || remappedOperands[2].size() != 2)
       return rewriter.notifyMatchFailure(
@@ -954,10 +953,8 @@ public:
     // Simple case of a scalar select: update the base pointer
     if (!isa<RankedTensorType>(selectOp.getType())) {
       auto newSelectOp = rewriter.create<arith::SelectOp>(
-          selectOp.getLoc(), selectOp.getType(),
-          // TODO(max): why fatPtrTrue here?
-          selectOp.getCondition(), fatPtrTrue[0], selectOp.getFalseValue());
-      setRewrittenLegalAttrs(rewriter, selectOp, newSelectOp);
+          selectOp.getLoc(), selectOp.getType(), selectOp.getCondition(),
+          fatPtrTrue[0], selectOp.getFalseValue());
       rewriter.replaceOpWithMultiple(selectOp, {{newSelectOp, fatPtrTrue[1]}});
       return success();
     }
@@ -974,8 +971,6 @@ public:
             fatPtrs[{fatPtrFalse[0], fatPtrFalse[1]}].canNarrow) &&
            "expected can narrow to be the same for both fatPtrT and fatPtrF");
 
-    setRewrittenLegalAttrs(rewriter, selectOp, newBase);
-    setRewrittenLegalAttrs(rewriter, selectOp, newOffset);
     rewriter.replaceOpWithMultiple(selectOp, {{newBase, newOffset}});
     fatPtrs[{newBase, newOffset}].canNarrow =
         fatPtrs[{fatPtrTrue[0], fatPtrTrue[1]}].canNarrow;
@@ -992,8 +987,8 @@ class ConvertSCFIfOp : public PointerCanonicalizationPattern<scf::IfOp> {
 public:
   using PointerCanonicalizationPattern::PointerCanonicalizationPattern;
   LogicalResult
-  matchAndRewrite(scf::IfOp ifOp, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
+  matchAndRewrite_(scf::IfOp ifOp, OneToNOpAdaptor adaptor,
+                   ConversionPatternRewriter &rewriter) const override {
     assert(ifOp.thenYield()->hasAttr(kSCFIfOpYieldFatPtrOffsets) &&
            "expected then yield to report fat ptr indices");
 
@@ -1004,17 +999,23 @@ public:
       assert(ifOp.thenYield().getOperandTypes() ==
                  ifOp.elseYield().getOperandTypes() &&
              "ifOp types must match in both arms");
-      assert(ifOp.elseYield()->hasAttr(kSCFIfOpYieldFatPtrOffsets) &&
-             "expected then yield to report fat ptr indices");
       if (auto thenFatPtrIndxs = ifOp.thenYield()->getDiscardableAttr(
               kSCFIfOpYieldFatPtrOffsets)) {
-        auto elseFatPtrIndx =
+        assert(ifOp.elseYield()->hasAttr(kSCFIfOpYieldFatPtrOffsets) &&
+               "expected then yield to report fat ptr indices");
+        auto elseFatPtrIndxs =
             ifOp.elseYield()->getDiscardableAttr(kSCFIfOpYieldFatPtrOffsets);
-        assert(elseFatPtrIndx &&
+        assert(elseFatPtrIndxs &&
                "expected else fat ptr indices as well as then fat ptr indices");
-        for (auto [i, j] : llvm::zip(
-                 llvm::cast<DenseI64ArrayAttr>(thenFatPtrIndxs).asArrayRef(),
-                 llvm::cast<DenseI64ArrayAttr>(elseFatPtrIndx).asArrayRef())) {
+
+        DenseI64ArrayAttr thenIdxs =
+            llvm::dyn_cast<DenseI64ArrayAttr>(thenFatPtrIndxs);
+        DenseI64ArrayAttr elseIdxs =
+            llvm::dyn_cast<DenseI64ArrayAttr>(elseFatPtrIndxs);
+        assert(bool(thenIdxs) && bool(elseIdxs) &&
+               "expected else fat ptr index attrs to be DenseI64ArrayAttr");
+        for (auto [i, j] :
+             llvm::zip(thenIdxs.asArrayRef(), elseIdxs.asArrayRef())) {
           assert(i == j &&
                  "expected thenFatPtrIndxs and elseFatPtrIndxs to agree");
           assert(i < ifOp.thenYield().getNumOperands() &&
@@ -1042,7 +1043,6 @@ public:
       rewriter.inlineBlockBefore(ifOp.elseBlock(), newIfOp.elseBlock(),
                                  newIfOp.elseBlock()->begin());
 
-    setRewrittenLegalAttrs(rewriter, ifOp, newIfOp);
     rewriter.replaceOpWithMultiple(ifOp, {newIfOp.getResults()});
 
     for (int64_t idx :
@@ -1064,14 +1064,13 @@ class ConvertCFBranch : public PointerCanonicalizationPattern<cf::BranchOp> {
 public:
   using PointerCanonicalizationPattern::PointerCanonicalizationPattern;
   LogicalResult
-  matchAndRewrite(cf::BranchOp branchOp, OneToNOpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
+  matchAndRewrite_(cf::BranchOp branchOp, OneToNOpAdaptor adaptor,
+                   ConversionPatternRewriter &rewriter) const override {
     ArrayRef<ValueRange> remappedDestOperands = adaptor.getDestOperands();
     SmallVector<Value> trueOperands = flattenValues(remappedDestOperands);
 
-    setRewrittenAttr(rewriter, branchOp);
-    auto newBrancOp = rewriter.replaceOpWithNewOp<cf::BranchOp>(
-        branchOp, branchOp.getDest(), trueOperands);
+    rewriter.replaceOpWithNewOp<cf::BranchOp>(branchOp, branchOp.getDest(),
+                                              trueOperands);
 
     unsigned inputNo = 0;
     TypeConverter localTypeConverterTrueDest;
@@ -1103,18 +1102,17 @@ public:
       offset += operands.size();
     }
 
-    setLegalAttr(rewriter, newBrancOp);
     return success();
   }
 };
 
-class ConvertLoadOp : public PointerCanonicalizationPattern<triton::LoadOp> {
+class ConvertLoadOp : public PointerCanonicalizationPattern<tt::LoadOp> {
 public:
   using PointerCanonicalizationPattern::PointerCanonicalizationPattern;
 
   LogicalResult
-  matchAndRewrite(triton::LoadOp loadOp, OneToNOpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
+  matchAndRewrite_(tt::LoadOp loadOp, OneToNOpAdaptor adaptor,
+                   ConversionPatternRewriter &rewriter) const override {
     ValueRange fatPtr = adaptor.getPtr();
     if (fatPtr.size() != 2)
       return rewriter.notifyMatchFailure(
@@ -1123,8 +1121,7 @@ public:
     Value fatPtrOffset = fatPtr[1];
     Location curLoc = loadOp.getLoc();
 
-    llvm::SmallDenseMap<StringAttr, Attribute> attributes{
-        {rewriter.getStringAttr(kLegalAttr), rewriter.getUnitAttr()}};
+    llvm::SmallDenseMap<StringAttr, Attribute> attributes{};
     Value newPtr = fatPtrBase;
     if (llvm::isa<RankedTensorType>(loadOp.getPtr().getType()))
       newPtr = createTensorPointer(
@@ -1134,21 +1131,18 @@ public:
         loadOp.getOperands().take_back(loadOp.getNumOperands() - 1);
     operands.insert(operands.begin(), newPtr);
     SmallVector<NamedAttribute> attrs = llvm::to_vector(loadOp->getAttrs());
-    attrs.append({rewriter.getNamedAttr(kLegalAttr, rewriter.getUnitAttr())});
-    auto newLoadPtrOp =
-        rewriter.replaceOpWithNewOp<triton::LoadOp>(loadOp, operands, attrs);
-    setLegalAttr(rewriter, newLoadPtrOp);
+    rewriter.replaceOpWithNewOp<tt::LoadOp>(loadOp, operands, attrs);
     return success();
   }
 };
 
-class ConvertStoreOp : public PointerCanonicalizationPattern<triton::StoreOp> {
+class ConvertStoreOp : public PointerCanonicalizationPattern<tt::StoreOp> {
 public:
   using PointerCanonicalizationPattern::PointerCanonicalizationPattern;
 
   LogicalResult
-  matchAndRewrite(triton::StoreOp storeOp, OneToNOpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
+  matchAndRewrite_(tt::StoreOp storeOp, OneToNOpAdaptor adaptor,
+                   ConversionPatternRewriter &rewriter) const override {
     ValueRange fatPtr = adaptor.getPtr();
     if (fatPtr.size() != 2)
       return rewriter.notifyMatchFailure(
@@ -1157,9 +1151,7 @@ public:
     Value fatPtrOffset = fatPtr[1];
     Location curLoc = storeOp.getLoc();
 
-    llvm::SmallDenseMap<StringAttr, Attribute> attributes{
-        {rewriter.getStringAttr(kLegalAttr), rewriter.getUnitAttr()}};
-
+    llvm::SmallDenseMap<StringAttr, Attribute> attributes{};
     Value newPtr = fatPtrBase;
     if (llvm::isa<RankedTensorType>(storeOp.getPtr().getType()))
       newPtr = createTensorPointer(
@@ -1169,10 +1161,8 @@ public:
         storeOp.getOperands().take_back(storeOp.getNumOperands() - 1);
     operands.insert(operands.begin(), newPtr);
     SmallVector<NamedAttribute> attrs = llvm::to_vector(storeOp->getAttrs());
-    attrs.append({rewriter.getNamedAttr(kLegalAttr, rewriter.getUnitAttr())});
-    auto newStoreOp = rewriter.replaceOpWithNewOp<triton::StoreOp>(
-        storeOp, TypeRange{}, ValueRange{operands}, attrs);
-    setLegalAttr(rewriter, newStoreOp);
+    rewriter.replaceOpWithNewOp<tt::StoreOp>(storeOp, TypeRange{},
+                                             ValueRange{operands}, attrs);
     return success();
   }
 };
@@ -1183,19 +1173,19 @@ public:
 /// This unrealized_cast remains through out the first pass of the dialect
 /// conversion and is then materialized in the second pass
 /// (ConvertUnrealizedConversionCastOp).
-class ConvertFuncOp : public PointerCanonicalizationPattern<triton::FuncOp> {
+class ConvertFuncOp : public PointerCanonicalizationPattern<tt::FuncOp> {
 public:
   using PointerCanonicalizationPattern::PointerCanonicalizationPattern;
 
   LogicalResult
-  matchAndRewrite(triton::FuncOp funcOp, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
+  matchAndRewrite_(tt::FuncOp funcOp, OneToNOpAdaptor adaptor,
+                   ConversionPatternRewriter &rewriter) const override {
     int64_t bitness = 64;
     rewriter.setInsertionPointToStart(&funcOp.getBody().front());
     rewriter.modifyOpInPlace(funcOp, [&] {
       for (auto [idx, arg] : llvm::enumerate(funcOp.getArguments())) {
         // The pointer argument needs to be a scalar
-        if (!isa<triton::PointerType>(arg.getType()))
+        if (!isa<tt::PointerType>(arg.getType()))
           continue;
         if (auto pointerRangeAttr =
                 funcOp.getArgAttrOfType<IntegerAttr>(idx, "tt.pointer_range"))
@@ -1210,8 +1200,21 @@ public:
         rewriter.replaceOpWithMultiple(dummyCast, {{arg, zeroOffset}});
       }
     });
-    setRewrittenAttr(rewriter, funcOp);
 
+    return success();
+  }
+};
+
+/// No-op to make conversion framework happy.
+class ConvertReturnOp : public PointerCanonicalizationPattern<tt::ReturnOp> {
+public:
+  using PointerCanonicalizationPattern::PointerCanonicalizationPattern;
+
+  LogicalResult
+  matchAndRewrite_(tt::ReturnOp returnOp, OneToNOpAdaptor adaptor,
+                   ConversionPatternRewriter &rewriter) const override {
+    auto returns = flattenValues(adaptor.getSrcs());
+    rewriter.replaceOpWithNewOp<tt::ReturnOp>(returnOp, TypeRange{}, returns);
     return success();
   }
 };
@@ -1219,9 +1222,9 @@ public:
 /// Rewrite %1 = unrealize_cast(%arg0: tt.ptr, c0: i32) -> tt.ptr inserted by
 /// ConvertFuncOp to be just %arg0: tt.ptr.
 class ConvertUnrealizedConversionCastOp
-    : public PointerCanonicalizationPattern<UnrealizedConversionCastOp> {
+    : public OpConversionPattern<UnrealizedConversionCastOp> {
 public:
-  using PointerCanonicalizationPattern::PointerCanonicalizationPattern;
+  using OpConversionPattern::OpConversionPattern;
 
   LogicalResult
   matchAndRewrite(UnrealizedConversionCastOp castOp, OpAdaptor adaptor,
@@ -1229,14 +1232,14 @@ public:
     assert(std::distance(castOp->getUses().begin(), castOp->getUses().end()) >
                0 &&
            "expected at least 1 use of unrealized_cast");
-    // dunno why but i get -Wdangling here...
+    // Don't know why but i get -Wdangling here...
     ArrayRef<ValueRange> remappedOperands = adaptor.getOperands();
     if (remappedOperands.size() != 1 || remappedOperands[0].size() != 2)
       return rewriter.notifyMatchFailure(
           castOp, "expected CastOp to have already been remapped");
     Value fatPtrBase = remappedOperands[0][0];
     Value fatPtrOffset = remappedOperands[0][1];
-    if (!llvm::isa<triton::PointerType>(fatPtrBase.getType()))
+    if (!llvm::isa<tt::PointerType>(fatPtrBase.getType()))
       return rewriter.notifyMatchFailure(castOp,
                                          "non tt.ptr base unimplemented");
     if (!llvm::isa<IntegerType>(fatPtrOffset.getType()))
@@ -1257,70 +1260,106 @@ public:
 };
 
 void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
-  ModuleOp module = getOperation();
   mlir::MLIRContext *context = &getContext();
   ConversionTarget target(*context);
   RewritePatternSet patterns(context);
-  auto isLegal = [](Operation *op) {
-    if (op->hasAttr(kRewrittenAttr) || op->hasAttr(kLegalAttr))
+
+  tt::FuncOp func = getOperation();
+
+  // forward slice == all transitive uses
+  ForwardSliceOptions sliceOpts([](Operation *op) {
+    // scf.if isn't a direct user but could contain users
+    // NB: we need this here and the loop below because
+    // forward slice not propagate through the scf.if without the `true` here.
+    if (llvm::isa<scf::IfOp>(op))
       return true;
-    for (OpOperand &operand : op->getOpOperands()) {
-      if (auto arg = llvm::dyn_cast<BlockArgument>(operand.get())) {
-        if (!llvm::isa<triton::PointerType>(getElementTypeOrSelf(arg)))
-          continue;
-        return false;
-      }
-      if (operand.get().getDefiningOp()->hasAttr(kRewrittenAttr))
-        return false;
+    return llvm::any_of(op->getOperandTypes(), [](Type ty) {
+      return llvm::isa<tt::PointerType>(getElementTypeOrSelf(ty));
+    });
+  });
+  sliceOpts.inclusive = true;
+  llvm::SetVector<Operation *> opsToRewrite;
+  opsToRewrite.insert(func);
+  for (auto arg : func.getArguments())
+    if (llvm::isa<tt::PointerType>(arg.getType())) {
+      // NB: reusing the same SetVector invalidates the topo order implied by
+      // getForwardSlice
+      getForwardSlice(arg, &opsToRewrite, sliceOpts);
     }
-    return true;
-  };
-  target.addDynamicallyLegalDialect<triton::TritonDialect>(
-      [&isLegal](Operation *op) {
-        if (llvm::isa<triton::FuncOp>(op) && !op->hasAttr(kRewrittenAttr))
-          return false;
-        return isLegal(op);
-      });
-  target.addDynamicallyLegalDialect<scf::SCFDialect>([&isLegal](Operation *op) {
-    if (auto ifOp = llvm::dyn_cast<scf::IfOp>(op))
+
+  // getForwardSlice doesn't check successorRegions
+  for (auto op : opsToRewrite) {
+    if (llvm::isa<cf::BranchOp, cf::CondBranchOp>(op)) {
+      unsigned opOffset = llvm::isa<cf::BranchOp>(op) ? 0 : 1;
+      for (auto successor : op->getSuccessors()) {
+        for (auto arg : successor->getArguments()) {
+          // if the bb arg corresponds to an op that will be rewritten
+          if (opsToRewrite.contains(
+                  op->getOperand(opOffset + arg.getArgNumber())
+                      .getDefiningOp()))
+            getForwardSlice(arg, &opsToRewrite, sliceOpts);
+        }
+      }
+    }
+  }
+
+  // NB: we need this here and the check in sliceOpts because without this
+  // loop, getForwardSlice never finds any scf.ifs at all (they have no
+  // operands)
+  for (auto op : opsToRewrite) {
+    if (auto parentIfOp = op->getParentOp()) {
+      if (llvm::isa<scf::IfOp>(parentIfOp)) {
+        getForwardSlice(parentIfOp, &opsToRewrite, sliceOpts);
+      }
+    }
+  }
+
+  // llvm::errs() << "ops to rewrite:\n";
+  // for (auto ops_to_rewrite : opsToRewrite)
+  //   llvm::errs() << ops_to_rewrite->getName() << "\n";
+  // llvm::errs() << "\n";
+
+  auto isLegal = [&opsToRewrite](Operation *op) {
+    if (auto ifOp = llvm::dyn_cast<scf::IfOp>(op)) {
+      // This is the only hack in the entire pass; on first traversal,
+      // `scf.if` will be walked over, but we do not want to rewrite it yet
+      // because the `yields` in the then/else regions haven't been rewritten
+      // yet (and those `yields` tell us the final result types of the
+      // `scf.if`). Therefore, we check for these attributes and if they're
+      // absent then the `scf.if` is legal. Once both `yields` have been
+      // rewritten (the corresponding attributes have been added), we report the
+      // `scf.if` as illegal, and it will be rewritten (the pattern will fire).
       return !(ifOp->hasAttr(kSCFThenRewrittenAttr) and
                ifOp->hasAttr(kSCFElseRewrittenAttr));
-    if (llvm::isa<scf::ConditionOp>(op) && !op->hasAttr(kLegalAttr))
-      return false;
-    return isLegal(op);
-  });
-  target.addDynamicallyLegalDialect<cf::ControlFlowDialect>(
-      [&isLegal](Operation *op) { return isLegal(op); });
-  target.addDynamicallyLegalDialect<arith::ArithDialect>(
-      [&isLegal](Operation *op) {
-        if (llvm::isa<arith::SelectOp>(op))
-          return isLegal(op);
-        return true;
-      });
+    }
+    return !opsToRewrite.contains(op);
+  };
+
+  target.addDynamicallyLegalDialect<tt::TritonDialect>(isLegal);
+  target.addDynamicallyLegalDialect<scf::SCFDialect>(isLegal);
+  target.addDynamicallyLegalDialect<cf::ControlFlowDialect>(isLegal);
+  target.addDynamicallyLegalDialect<arith::ArithDialect>(isLegal);
 
   FatPointers fatPrs;
 
-  patterns
-      .add<ConvertFuncOp, ConvertBroadcastOp, ConvertSplatOp, ConvertAddPtrOp,
-           ConvertLoadOp, ConvertStoreOp, ConvertSCFForOp, ConvertSCFYieldOp,
-           ConvertSCFIfOp, ConvertSCFConditionOp, ConvertSCFWhileOp,
-           ConvertCFCondBranch, ConvertCFBranch, ConvertArithSelectOp>(
-          patterns.getContext(), fatPrs);
+  patterns.add<ConvertFuncOp, ConvertBroadcastOp, ConvertSplatOp,
+               ConvertAddPtrOp, ConvertLoadOp, ConvertStoreOp, ConvertSCFForOp,
+               ConvertSCFYieldOp, ConvertSCFIfOp, ConvertSCFConditionOp,
+               ConvertSCFWhileOp, ConvertCFCondBranch, ConvertCFBranch,
+               ConvertArithSelectOp, ConvertReturnOp>(patterns.getContext(),
+                                                      opsToRewrite, fatPrs);
   ConversionConfig config;
   config.buildMaterializations = false;
-  if (failed(
-          applyPartialConversion(module, target, std::move(patterns), config)))
+  if (failed(applyPartialConversion(func, target, std::move(patterns), config)))
     return signalPassFailure();
 
   patterns.clear();
   target.addIllegalOp<UnrealizedConversionCastOp>();
-  patterns.add<ConvertUnrealizedConversionCastOp>(patterns.getContext(),
-                                                  fatPrs);
-  if (failed(
-          applyPartialConversion(module, target, std::move(patterns), config)))
+  patterns.add<ConvertUnrealizedConversionCastOp>(patterns.getContext());
+  if (failed(applyPartialConversion(func, target, std::move(patterns), config)))
     return signalPassFailure();
 
-  module.walk<WalkOrder::PreOrder>([](Operation *op) {
+  func.walk<WalkOrder::PreOrder>([](Operation *op) {
     for (auto attr : op->getDiscardableAttrs()) {
       if (attr.getName().strref().starts_with(kPtrCanonPrefix))
         op->removeDiscardableAttr(attr.getName());
