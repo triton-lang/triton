@@ -1,25 +1,4 @@
 // RUN: triton-opt %s -split-input-file -tritonamdgpu-canonicalize-pointers | FileCheck %s
-
-module {
-  tt.func public @add_kernel(
-    %in_ptr0: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32} ,
-    %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32} ,
-    %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32} ) -> tensor<1024xf32> attributes {noinline = false} {
-    %c1024_i32 = arith.constant 1024 : i32
-    %pid = tt.get_program_id x : i32
-    %block_start = arith.muli %pid, %c1024_i32 : i32
-    %make_range = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
-    %block_start_splat = tt.splat %block_start : i32 -> tensor<1024xi32>
-    %offsets = arith.addi %block_start_splat, %make_range : tensor<1024xi32>
-    %in_ptr0_splat = tt.splat %in_ptr0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
-    %addr = tt.addptr %in_ptr0_splat, %offsets : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
-    %val = tt.load %addr : tensor<1024x!tt.ptr<f32>>
-    tt.return %val : tensor<1024xf32>
-  }
-}
-
-// -----
-
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: tt.func @conversion1
@@ -346,14 +325,14 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32}
     %4 = arith.addi %3, %2 : tensor<1024xi32, #blocked>
     %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
     // CHECK: %[[whileOut:.*]]:3 = scf.while ({{.*}}, %[[loopPtr:.*]] = %arg0, %[[loopOffset:.*]] = %[[base_offset]])
-    %6 = scf.while (%arg1 = %5) : (tensor<1024x!tt.ptr<f32>, #blocked>) -> (tensor<1024x!tt.ptr<f32>, #blocked>) {
+    %6 = scf.while (%arg1 = %5, %arg2 = %cond) : (tensor<1024x!tt.ptr<f32>, #blocked>, i1) -> (tensor<1024x!tt.ptr<f32>, #blocked>) {
         // CHECK: scf.condition({{.*}}) %{{.*}}, %[[loopPtr]], %[[loopOffset]]
-        scf.condition(%cond) %arg1 : tensor<1024x!tt.ptr<f32>, #blocked>
+        scf.condition(%arg2) %arg1 : tensor<1024x!tt.ptr<f32>, #blocked>
         } do {
         // CHECK: ^bb{{.*}}(%{{.*}}, %[[blockPtr:.*]]: !tt.ptr<f32>, %[[blockOffset:.*]]: tensor<1024xi64, #blocked>):
         ^bb0(%arg1: tensor<1024x!tt.ptr<f32>, #blocked>):
         // CHECK: scf.yield {{.*}}, %[[blockPtr]], %[[blockOffset]]
-        scf.yield %arg1 : tensor<1024x!tt.ptr<f32>, #blocked>
+        scf.yield %arg1, %cond : tensor<1024x!tt.ptr<f32>, #blocked>, i1
         }
     // CHECK: %[[trunc_offset:.*]] = arith.trunci %[[whileOut]]#2
     // CHECK: %[[base_ptr:.*]] = tt.splat %[[whileOut]]#1
@@ -703,7 +682,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: tt.func @scalar_while
-  tt.func @scalar_while(%arg0: !tt.ptr<f32>, %init : f32, %cond : i1) -> f32 {
+  tt.func @scalar_while(%arg0: !tt.ptr<f32>, %init : f32, %cond : i1)->f32{
     %c1024_i32 = arith.constant 1024 : i32
     %c0 = arith.constant 0: index
     %c128 = arith.constant 128: index
@@ -713,14 +692,14 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32}
     // CHECK: %[[ptr0:.*]] = tt.addptr %arg0, %{{.*}}
     // CHECK: scf.while ({{.*}}, {{.*}} = %arg2, %[[ptr1:.*]] = %[[ptr0]], {{.*}})
     %2 = tt.addptr %arg0, %0 : !tt.ptr<f32>, i32
-    %6 = scf.while (%arg1 = %2) : (!tt.ptr<f32>) -> (!tt.ptr<f32>) {
+    %6 = scf.while (%arg1 = %2, %arg2 = %cond) : (!tt.ptr<f32>, i1) -> (!tt.ptr<f32>) {
         // CHECK: scf.condition({{.*}}) {{.*}}, %[[ptr1]]
-        scf.condition(%cond) %arg1 : !tt.ptr<f32>
+        scf.condition(%arg2) %arg1 : !tt.ptr<f32>
         } do {
         // CHECK: ^bb0({{.*}}: !tt.ptr<f32>, %[[ptr2:.*]]: !tt.ptr<f32>, {{.*}})
         // CHECK:   scf.yield %{{.*}}, {{.*}} %[[ptr2]], {{.*}}, {{.*}}
         ^bb0(%arg1: !tt.ptr<f32>):
-          scf.yield %arg1 : !tt.ptr<f32>
+          scf.yield %arg1, %cond : !tt.ptr<f32>, i1
         }
     %11 = tt.load %6 : !tt.ptr<f32>
     tt.return %11 : f32

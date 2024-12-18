@@ -796,8 +796,10 @@ public:
     propagateCanNarrowToBlock(newAfterBodyBlock);
 
     SmallVector<Value> initArgs = flattenValues(remappedInits);
-    SmallVector<Type> resultTypes =
-        llvm::map_to_vector(initArgs, [](Value v) { return v.getType(); });
+    SmallVector<Type> resultTypes = llvm::map_to_vector(
+        llvm::make_filter_range(
+            initArgs, [](Value v) { return !v.getType().isInteger(1); }),
+        [](Value v) { return v.getType(); });
     auto newWhileOp =
         rewriter.create<scf::WhileOp>(whileOp.getLoc(), resultTypes, initArgs);
 
@@ -809,6 +811,10 @@ public:
 
     SmallVector<ValueRange> packedRets;
     for (unsigned i = 0, offset = 0; i < valRangeLens.size(); i++) {
+      // skip %cond
+      if (remappedInits[i].size() == 1 &&
+          remappedInits[i].getType()[0].isInteger(1))
+        continue;
       size_t len = valRangeLens[i];
       assert(offset < newWhileOp->getNumResults() &&
              "expected offset to be within bounds of results");
