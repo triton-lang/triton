@@ -1032,6 +1032,7 @@ Row |
     "CTALayoutAttr":$CTALayout
   );
 
+  let genVerifyDecl = 1;
   let hasCustomAssemblyFormat = 1;
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
