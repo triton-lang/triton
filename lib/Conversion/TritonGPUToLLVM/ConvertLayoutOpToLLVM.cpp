@@ -312,9 +312,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       // Case 3. Transfer between values in the same warp, in which case we try
       //         to move values using warp shuffles, though if the pattern is
       //         complicated enough we may fall back to using shared memory
-      transferWithinWarp(op, srcLayout, dstLayout, *conversion, adaptor,
-                         rewriter);
+      transferWithinWarp(op, *conversion, adaptor, rewriter);
       return success();
+      //return transferWithinBlock(op, srcLayout, dstLayout, adaptor, rewriter);
     } else if (llvm::is_contained(dims, kRegister)) {
       // Case 4. Transfer between values in the same thread, in which case we
       //         simply reorder the elements of adaptor.getSrc().
@@ -452,9 +452,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
   // Use warp shuffles to implement a layout conversion where data only needs to
   // be moved within warps.
-  void transferWithinWarp(ConvertLayoutOp op, const LinearLayout &srcLayout,
-                          const LinearLayout &dstLayout,
-                          const LinearLayout &conversion, OpAdaptor adaptor,
+  void transferWithinWarp(ConvertLayoutOp op, const LinearLayout &conversion,
+                          OpAdaptor adaptor,
                           ConversionPatternRewriter &rewriter) const;
 
   SmallVector<Value>
@@ -664,162 +663,352 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
 } // namespace
 
+static LinearLayout combineLinearLayouts(const LinearLayout &lhs,
+                                         const LinearLayout &rhs) {
+  LinearLayout::BasesT result;
+  assert(lhs.getNumInDims() == rhs.getNumInDims() &&
+         lhs.getNumOutDims() == rhs.getNumOutDims() &&
+         "linear layouts must have the same shape");
+  for (auto [inDimName, lhsInDimBases, rhsInDimBases] :
+       llvm::zip(llvm::make_first_range(lhs.getBases()),
+                 llvm::make_second_range(lhs.getBases()),
+                 llvm::make_second_range(rhs.getBases()))) {
+    assert(lhsInDimBases.size() == rhsInDimBases.size() &&
+           "linear layouts must have the same shape");
+    auto &resultInDimBases = result[inDimName];
+    for (auto [lhsBases, rhsBases] : llvm::zip(lhsInDimBases, rhsInDimBases)) {
+      std::vector<int32_t> resultBases;
+      for (auto [lhs, rhs] : llvm::zip(lhsBases, rhsBases)) {
+        resultBases.push_back(lhs ^ rhs);
+      }
+      resultInDimBases.push_back(std::move(resultBases));
+    }
+  }
+
+  SmallVector<std::pair<StringAttr, int32_t>> outDims;
+  for (StringAttr outDim : lhs.getOutDimNames()) {
+    outDims.emplace_back(outDim, lhs.getOutDimSize(outDim));
+  }
+  return LinearLayout(result, outDims, /*requiresSurjective=*/false);
+}
+
+static bool linearLayoutIsZero(const LinearLayout &ll) {
+  for (auto [inDim, inDimBases] : ll.getBases()) {
+    for (auto basis : inDimBases) {
+      if (!llvm::all_of(basis, [](int32_t b) { return b == 0; })) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+static bool linearLayoutIs1DSubPermutation(const LinearLayout &ll) {
+  assert(ll.getNumInDims() == 1 && ll.getNumOutDims() == 1);
+  assert(ll.getBases().size() == 1);
+  StringAttr dim = *ll.getInDimNames().begin();
+  assert(ll.getInDimSize(dim) == ll.getOutDimSize(dim));
+  int32_t mask = 0;
+  for (ArrayRef<int32_t> bases : ll.getBases().front().second) {
+    assert(bases.size() == 1);
+    int32_t basis = bases.front();
+    if (!basis)
+      continue;
+    if (!llvm::isPowerOf2_32(basis))
+      return false;
+    if (mask & basis) // check if this bit is already set
+      return false;
+    mask |= basis;
+  }
+  return true; // missing bits are allowed in subpermutation
+}
+
+static LinearLayout linearLayoutZeros1D(StringAttr inDim, int32_t inDimSize,
+                                        StringAttr outDim, int32_t outDimSize) {
+  LinearLayout::BasesT bases;
+  auto &inDimBases = bases[inDim];
+  inDimBases.assign(llvm::Log2_32(inDimSize), {0});
+  return LinearLayout(std::move(bases), {{outDim, outDimSize}},
+                      /*requiresSurjective=*/false);
+}
+
+static bool linearLayoutIs1DIdentityWithZeros(const LinearLayout &ll) {
+  assert(ll.getNumInDims() == 1 && ll.getNumOutDims() == 1);
+  assert(ll.getBases().size() == 1);
+  StringAttr dim = *ll.getInDimNames().begin();
+  assert(ll.getInDimSize(dim) == ll.getOutDimSize(dim));
+  for (auto [i, bases] : llvm::enumerate(ll.getBases().front().second)) {
+    assert(bases.size() == 1);
+    int32_t basis = bases.front();
+    if (basis && basis != (1 << i))
+      return false;
+  }
+  return true;
+}
+
+static LinearLayout concatIns(const LinearLayout &lhs,
+                              const LinearLayout &rhs) {
+  LinearLayout::BasesT result;
+  for (auto &bases : lhs.getBases())
+    result.insert(bases);
+  for (auto &bases : rhs.getBases())
+    result.insert(bases);
+  SmallVector<std::pair<StringAttr, int32_t>> outDims;
+  for (StringAttr outDim : lhs.getOutDimNames())
+    outDims.emplace_back(outDim, lhs.getOutDimSize(outDim));
+  return LinearLayout(result, outDims, /*requiresSurjective=*/false);
+}
+
+static LinearLayout concatOuts(const LinearLayout &lhs,
+                               const LinearLayout &rhs) {
+  LinearLayout::BasesT result;
+  for (auto [lhsBases, rhsBases] : llvm::zip(lhs.getBases(), rhs.getBases())) {
+    auto &resultBases = result[lhsBases.first];
+    assert(lhsBases.first == rhsBases.first);
+    for (auto [lhsBasis, rhsBasis] :
+         llvm::zip(lhsBases.second, rhsBases.second)) {
+      std::vector<int32_t> resultBasis;
+      llvm::append_range(resultBasis, lhsBasis);
+      llvm::append_range(resultBasis, rhsBasis);
+      resultBases.push_back(std::move(resultBasis));
+    }
+  }
+  SmallVector<std::pair<StringAttr, int32_t>> outDims;
+  for (StringAttr outDim : lhs.getOutDimNames())
+    outDims.emplace_back(outDim, lhs.getOutDimSize(outDim));
+  for (StringAttr outDim : rhs.getOutDimNames())
+    outDims.emplace_back(outDim, rhs.getOutDimSize(outDim));
+  return LinearLayout(result, outDims, /*requiresSurjective=*/false);
+}
+
+static LinearLayout stripZeroBasesAlongDim(const LinearLayout &ll,
+                                           StringAttr stripDim) {
+  LinearLayout::BasesT result;
+  for (auto &[inDim, inDimBases] : ll.getBases()) {
+    auto &newInDimBases = result[inDim];
+    if (inDim != stripDim) {
+      newInDimBases = inDimBases;
+      continue;
+    }
+    for (auto &basis : inDimBases) {
+      if (llvm::any_of(basis, [](int32_t val) { return val != 0; })) {
+        newInDimBases.push_back(basis);
+      }
+    }
+  }
+  return LinearLayout(std::move(result), llvm::to_vector(ll.getOutDimNames()));
+}
+
 void ConvertLayoutOpUsingLinearLayoutsConversion::transferWithinWarp(
-    ConvertLayoutOp op, const LinearLayout &A, const LinearLayout &B,
-    const LinearLayout &conversion, OpAdaptor adaptor,
+    ConvertLayoutOp op, const LinearLayout &conversion, OpAdaptor adaptor,
     ConversionPatternRewriter &rewriter) const {
   MLIRContext *ctx = op.getContext();
   Location loc = op.getLoc();
   StringAttr kRegister = str_attr("register");
   StringAttr kLane = str_attr("lane");
-  StringAttr kWarp = str_attr("warp");
-  StringAttr kBlock = str_attr("block");
   assert(!cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
 
-  // Let `A` be the source layout and `B` be the destination layout. If `C`
-  // is a linear transformation that maps `A` to `B`, then it is defined as
-  // `C = A^-1 * B`.
-  LinearLayout C = B.invertAndCompose(A);
-
   // We have already checked that data movement is only required within a warp,
-  // thus we can discard the block and warp dimensions. At the same time,
-  // because `A` and `B` are distributed layouts (subpermutation matrices), we
-  // know the transformation from `A` to `B` is invariant to the register ID.
-  // Reduce `C` to a transformation from source lane to destination lane.
-  assert(C.sublayoutIsZero(kLane, kRegister) &&
-         C.sublayoutIsZero(kRegister, kLane) &&
-         "expected a subpermutation matrix");
-  C = C.sublayout({kLane}, {kLane});
+  // thus we can discard the block and warp dimensions.
+  LinearLayout C = conversion.sublayout({kLane, kRegister}, {kLane, kRegister});
 
-  // Warp shuffles are affine transformations on the lane ID. Thus, the goal is
-  // to determine a series of warp shuffles {W1, ..., Wn} such that
-  //
-  //   C = W1 ∘ ... ∘ Wn
-  //
-  // Note that the affine components must cancel out for the overall
-  // transformation to be linear. We can represent affine transformations as
-  // linear layouts by augmenting the matrix with a dummy dimension that is
-  // always set to 1.
-  //
-  //   W' = [ A c ]
-  //        [ 0 1 ]
-  //
-  // Thus the overall transformation on the lane ID is expressed as
-  //
-  //   [ l' ] = [ A c ] [ l ]
-  //   [ 1  ]   [ 0 1 ] [ 1 ]
-  //
-  // Note that this gives `l' = A * l + c` when the dummy dimension is set to 1.
-  //
-  // Butterfly shuffles are not affine because 0 ⊕ 1 = 1, thus zero input
-  // doesn't map to zero output. Because addition in GF(2) is just xor'ing the
-  // bits, we can represent a butterfly shuffle by setting `A` to the identity
-  // matrix and `c` to the shuffle operand.
-  //
-  //   W_bfly' = [ I c ]
-  //             [ 0 1 ]
-  //
-  // Where `c` is the constant operand provided to the butterfly shuffle
-  // instruction.
-  //
-  // Note that because `C` is a subpermutation matrix, butterfly shuffles don't
-  // do anything because `A` is the identity matrix. So we have to use something
-  // else. Essentially, `I -> C` consists of permuting the rows of the identity
-  // matrix and setting some to zero.
-  //
-  // If `A` consists of permuted rows from the identity matrix, it has the
-  // effect of permuting the bits of the input lane ID, since the single `1`
-  // element in each row selects a bit from the input. We can use index shuffles
-  // to arbitrarily permute the bits of the lane ID.
-  //
-  // The index shuffle formula is `j = (lane & segmask) | (b & ~segmask)`.
-  // Because `segmask` is only supported on NVIDIA, we will implement this part
-  // in software (it doesn't cost much since `b = f(lane)` anyways).
-  //
-  // We set `segmask` to determine which bits are selected from `lane` (i.e. to
-  // not permute) and set `b` as a permutation of the bits of `lane`. For
-  // example, if `b` is a constant, then
-  //
-  //   W_idx` = [ M b ]
-  //            [ 0 1 ]
-  //
-  // Where `M` is just `segmask` along the diagonal, and `b` is the constant
-  // with its bits arranged along the column. You can see we can construct a
-  // transformation that zeroes out row `i` by setting `segmask[i] = 0` and
-  // setting `b` to be all zeroes.
-  //
-  // Thus, `C` is actually
-  //
-  //   C = [ M*P 0 ]
-  //       [ 0   1 ]
-  //
-  // Where `M` is a mask diagonal and `P` is a permutation matrix. And we can
-  // emit the layout conversion in a single index shuffle. So that was
-  // anticlimactic, but at least we know how to construct the index shuffle from
-  // `C` and, if it were a more complex transformation (e.g. swizzling), we
-  // would know in principle that it could be decomposed into augmented linear
-  // layouts.
+  // Get the source register values and prepare the outputs.
+  SmallVector<Value> inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
+  SmallVector<Value> outVals(conversion.getInDimSize(kRegister));
 
-  // Determine the permutation and mask. This is the forward permutation.
-  unsigned numBits = C.getInDimSizeLog2(kLane);
-  SmallVector<int> perm(numBits);
-  for (unsigned i = 0; i != numBits; ++i) {
-    int32_t base = C.getBasis(kLane, i)[0];
-    if (base == 0) {
-      // This bit is masked. Use -1 as a sentinel.
-      perm[i] = -1;
-    } else {
-      assert(llvm::isPowerOf2_32(base) && "expected a permutation matrix");
-      perm[i] = llvm::Log2_32(base);
+  // `C` is map from `(dst_lane, dst_reg) -> (src_lane, src_reg)`. From the
+  // perspetive of the destination lane, it tells us which register from which
+  // lane to get the value. Since the source and destination layouts are
+  // permutation matrices, the overall transformation amounts to permuting data
+  // around (plus broadcasting, if necessary).
+  //
+  // Warp shuffles allow indexing into another lane, but does not allowing
+  // selecting the register. Suppose we decompose `C` into `C = P2 ∘ W ∘ P1`,
+  // where `W` is a warp shuffle and `P1` and `P2` are (lane-dependent) register
+  // permutations within a lane. Start from `C` and work backwards.
+  //
+  // Given any `C`, is it possible that for a given register, two destination
+  // lanes map to different registers in the same source lane. This is
+  // impossible to represent using a shuffle. This happens when, with respect to
+  // the identity layout, a register base is swapped with a lane base (when the
+  // destination lane changes, the source register changes but the lane does
+  // not).
+  //
+  // The goal of `P2` is to permute registers within a thread so that this does
+  // not happen. Specifically, pick `P2` such that bases in
+  // `(P2^-1 ∘ C).sublayout(kLane, {kLane, kRegister})` has non-zero lane
+  // components when the register components are non-zero.
+  //
+  // P2 can only change the register mapping within a thread. Constrain P2 as:
+  //
+  //   P2(x) = [ I P ] [ reg  ] = [ reg + P(lane)  ]
+  //           [ 0 I ] [ lane ]   [ lane           ]
+  //
+  // Then `P2^-1 ∘ C` is:
+  //
+  //   [ I  0 ] [ C(r,r) C(r,l) ] = [ C(r,r)             C(r,l)           ]
+  //   [ P' I ] [ C(l,r) C(l,l) ]   [ P'*C(r,r)+C(l,r)   P'*C(r,l)+C(l,l) ]
+  //
+  // We can see that P' selects rows (i.e. bases) from the upper half (register)
+  // and combines them with the lower half (lane). Because the goal is to select
+  // register bases `i` where C(r,l)[i] != 0, we know P'*C(r,r) = 0. Note that
+  // solutions for P' do not always exist (no register permutation will
+  // decompose C to make the warp shuffle possible), and this happens when there
+  // aren't enough non-zero bases in C(r,l).
+
+  // Find the indices of the missing lane bases: rows in the lower half where
+  // the register component is non-zero but the lane component is zero.
+  SmallVector<int> missingLaneRows;
+  for (int i = 0, e = C.getInDimSizeLog2(kLane); i != e; ++i) {
+    ArrayRef<int32_t> /*C(l,(r,l))[i]*/ lowerHalfRow = C.getBasis(kLane, i);
+    assert(lowerHalfRow.size() == 2);
+    if (/*C(l,r)*/ lowerHalfRow[0] != 0) {
+      assert(/*C(l,l)[i]*/ lowerHalfRow[1] == 0);
+      missingLaneRows.push_back(i);
     }
   }
+
+  // Find rows in the upperhalf that can be selected by P' to make the lane
+  // components in the lower half non-zero.
+  std::vector<std::vector<int32_t>> PPrimeLaneBases(C.getInDimSizeLog2(kLane),
+                                                    {0});
+  for (int i = 0, e = C.getInDimSizeLog2(kRegister); i != e; ++i) {
+    ArrayRef<int32_t> /*C(r,(r,l))[i]*/ upperHalfRow = C.getBasis(kRegister, i);
+    assert(upperHalfRow.size() == 2);
+    if (/*C(r,l)[i]*/ upperHalfRow[1] != 0) {
+      int32_t laneBase = upperHalfRow[1];
+      assert(/*C(r,r)[i]*/ upperHalfRow[0] == 0);
+      if (!missingLaneRows.empty()) {
+        // Select row i into row j from the missing rows. The order in which the
+        // missing rows are selected doesn't really matter.
+        PPrimeLaneBases[missingLaneRows.pop_back_val()][0] |= (1 << i);
+      }
+    } else {
+      assert(upperHalfRow[0] != 0);
+    }
+  }
+  if (!missingLaneRows.empty()) {
+    llvm::report_fatal_error("decomposition failed: no solution for P'");
+  }
+  // P' outputs the destination register.
+  LinearLayout PPrime({{kLane, std::move(PPrimeLaneBases)}},
+                      {{kRegister, C.getInDimSize(kRegister)}},
+                      /*requiresSurjective=*/false);
+
+  // Form P2^-1 from P'.
+  LinearLayout top = concatOuts(
+      LinearLayout::identity1D(C.getInDimSize(kRegister), kRegister, kRegister),
+      linearLayoutZeros1D(kRegister, C.getInDimSize(kRegister), kLane,
+                          C.getInDimSize(kLane)));
+  LinearLayout bottom = concatOuts(
+      PPrime, LinearLayout::identity1D(C.getInDimSize(kLane), kLane, kLane));
+  LinearLayout P2inv = concatIns(top, bottom);
+  LinearLayout Cp = P2inv.compose(C);
+
+  // Now we have C' = P2^-1 ∘ C = W ∘ P1. W is considerably easier to compute.
+  // A warp shuffle is a function from `(lane, register) -> (lane)`, i.e.
+  //
+  //   W = [ I 0 ] [ reg  ] = [ reg              ]
+  //       [ R L ] [ lane ]   [ R(reg) + L(lane) ]
+  //
+  // `W^-1 ∘ C'` will be
+  //
+  //   [ I R ] [ C'(r,r) C'(r,l) ] = [ ... C'(r,l) + R*C'(l,l) ]
+  //   [ 0 L ] [ C'(l,r) C'(l,l) ] = [ ... L*C'(l,l)           ]
+  //
+  // Since P1 cannot change lanes, we know that
+  //
+  //   W^-1 ∘ C' = [ ... 0 ]
+  //               [ ... 1 ]
+  //
+  // Thus L = C'(l,l)^-1, and A = -C'(r,l) * C'(l,l)^-1. (0 - LL) = LL in GF(2).
+  // We know that C'(l,l) has a suitable pseudo-inverse.
+  LinearLayout L = Cp.sublayout(kLane, kLane).invert();
+  LinearLayout R = Cp.sublayout(kRegister, kLane).compose(L);
+
+  // Now form W^-1.
+  LinearLayout WinvLeft =
+      concatIns(LinearLayout::identity1D(Cp.getInDimSize(kRegister), kRegister,
+                                         kRegister),
+                linearLayoutZeros1D(kLane, Cp.getInDimSize(kLane), kRegister,
+                                    Cp.getInDimSize(kRegister)));
+  LinearLayout Winv = concatOuts(WinvLeft, concatIns(R, L));
+
+  // Check that Winv was formed correctly. P1 is just what's left over.
+  LinearLayout P1 = Winv.compose(Cp);
+  assert(P1.sublayoutIsZero(kRegister, kLane));
+  assert(linearLayoutIs1DIdentityWithZeros(P1.sublayout(kLane, kLane)));
+
+  // Grab the source elements and prepare the outputs of just the shuffles.
+  SmallVector<Value> srcValues =
+      unpackLLElements(loc, adaptor.getSrc(), rewriter);
+  SmallVector<Value> shflOuts(conversion.getInDimSize(kRegister));
 
   Value threadId = getThreadId(rewriter, loc);
-  Value threadsPerWarp = i32_val(C.getInDimSize(kLane));
+  Value threadsPerWarp = i32_val(conversion.getInDimSize(kLane));
   Value laneId = urem(threadId, threadsPerWarp);
 
-  // Form `b` by selecting bits from `laneId` according to `perm`.
-  Value b = i32_val(0);
-  // Form `segmask` as a constant of the masked bits.
-  uint32_t segmask = 0;
-  for (unsigned i = 0; i != numBits; ++i) {
-    if (perm[i] == -1) {
-      segmask |= 1 << i;
-    } else {
-      Value bit = and_(lshr(laneId, i32_val(perm[i])), i32_val(1));
-      b = or_(b, shl(bit, i32_val(i)));
+  // To minimize the number of selects emitted on the source side, determine the
+  // minimum set of registers that could be selected from each thread.
+  // InstCombine *might* be able to crush this, but if the sizePerThread is
+  // large, it's truly a huge number of selects that get emitted.
+  P1 = P1.sublayout({kLane, kRegister}, kRegister);
+  Cp = Cp.sublayout({kLane, kRegister}, kLane);
+  // If reducedP1 is trivial, then we will emit
+  // shflSrc = select(i == i, src[i], undef) and this will get trivially folded,
+  // so don't worry about this case.
+  LinearLayout reducedP1 = stripZeroBasesAlongDim(P1, kLane);
+
+  // Emit one shuffle per destination register.
+  for (int i = 0, e = shflOuts.size(); i != e; ++i) {
+    // 'Cp' maps a (dst_lane, dst_reg) -> (src_lane, src_reg), and we know that
+    // for a register, it does not map to different registers in the same lane.
+    // At the same time, for each register, P1 returns the source value index
+    // to provide as the shuffle value.
+    auto out = applyLinearLayout(loc, rewriter, P1,
+                                 {{kLane, laneId}, {kRegister, i32_val(i)}});
+    assert(out.size() == 1);
+    Value srcRegIdx = out.front().second;
+    // The size of the input lane dimension is the number of selects to emit.
+    // TODO(jeff): For dtypes smaller than i32, we can use byte permutes and
+    // shuffle multiple values at a time.
+    Value shflSrc = undef(srcValues.front().getType());
+    for (unsigned j = 0, e = reducedP1.getInDimSize(kLane); j != e; ++j) {
+      int32_t check =
+          reducedP1.apply({{kLane, j}, {kRegister, i}}).front().second;
+      shflSrc =
+          select(icmp_eq(srcRegIdx, i32_val(check)), srcValues[j], shflSrc);
     }
+
+    out = applyLinearLayout(loc, rewriter, Cp,
+                            {{kLane, laneId}, {kRegister, i32_val(i)}});
+    assert(out.size() == 1);
+    Value shflIdx = out.front().second;
+    shflOuts[i] = targetInfo.shuffleIdx(rewriter, loc, shflSrc, shflIdx);
   }
 
-  // Compute `b' = (lane & segmask) | (b & ~segmask)`. We know that
-  // `b & ~segmask` is just `b` since `segmask` is zero a bit is set into `b`.
-  Value idx = or_(and_(laneId, i32_val(segmask)), b);
+  // Finally, we just need to apply P2 to the shflOuts to permute the registers
+  // into their final form. Use the same trick to reduce the number of emitted
+  // selects.
+  P2inv = P2inv.sublayout({kLane, kRegister}, {kRegister});
+  LinearLayout reducedP2 = stripZeroBasesAlongDim(P2inv, kLane);
+  SmallVector<Value> results(shflOuts.size());
+  for (int i = 0, e = results.size(); i != e; ++i) {
+    Value result = undef(srcValues.front().getType());
 
-  // For each destination register, determine which set of source registers to
-  // shuffle from. We know this is invariant to the lane ID. `conversion` is the
-  // inverse of `C`, mapping from destination to source.
-  SmallVector<Value> inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-  SmallVector<Value> outVals(conversion.getInDimSize(kLane));
-  SmallVector<Value> shuffledIns(inVals.size());
-  for (int outIdx : llvm::seq(outVals.size())) {
-    auto [reg, srcIdx] = conversion.apply({{kLane, outIdx}}).front();
-    assert(reg == kRegister);
-    // Lazily shuffle the value over.
-    Value &shuffledIn = shuffledIns[srcIdx];
-    if (!shuffledIn) {
-      // Shuffle using the set of registers corresponding to `srcIdx`. The lane
-      // ID to use is the same.
-      shuffledIn = targetInfo.shuffleIdx(rewriter, loc, inVals[srcIdx], idx);
+    auto out = applyLinearLayout(loc, rewriter, P2inv,
+                                 {{kLane, laneId}, {kRegister, i32_val(i)}});
+    Value resultIdx = out.front().second;
+    for (unsigned j = 0, e = reducedP2.getInDimSize(kLane); j != e; ++j) {
+      int32_t check =
+          reducedP2.apply({{kLane, j}, {kRegister, i}}).front().second;
+      result = select(icmp_eq(resultIdx, i32_val(check)), shflOuts[j], result);
     }
-    outVals[outIdx] = shuffledIn;
-  }
-
-  for (Value inVal : inVals) {
-    outVals.push_back(targetInfo.shuffleIdx(rewriter, loc, inVal, idx));
+    results[i] = result;
   }
 
   Value result =
-      packLLElements(loc, getTypeConverter(), outVals, rewriter, op.getType());
+      packLLElements(loc, getTypeConverter(), results, rewriter, op.getType());
   rewriter.replaceOp(op, result);
 }
 
