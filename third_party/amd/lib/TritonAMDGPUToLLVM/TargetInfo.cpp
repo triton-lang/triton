@@ -426,6 +426,19 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
 
 int TargetInfo::getSharedAddressSpace() const { return 3; }
 
+Value TargetInfo::getStackPointer(RewriterBase &rewriter,
+                                  FunctionOpInterface funcOp) const {
+  // See NOTE: [Additional Function Arguments]
+  if (!LLVM::isKernel(funcOp)) {
+    return funcOp.getArgument(funcOp.getNumArguments() - 2);
+  }
+
+  auto mod = funcOp->getParentOfType<ModuleOp>();
+  auto globalBase = dyn_cast<LLVM::GlobalOp>(mod.lookupSymbol("global_smem"));
+  assert(globalBase);
+  return rewriter.create<LLVM::AddressOfOp>(funcOp.getLoc(), globalBase);
+}
+
 bool TargetInfo::supportVectorizedAtomics() const {
   // Note: not currently tested or used, but AMD generally supports vectorized
   // atomics.

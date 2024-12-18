@@ -91,6 +91,9 @@ public:
 
   virtual bool supportVectorizedAtomics() const = 0;
 
+  virtual Value getStackPointer(RewriterBase &rewriter,
+                                FunctionOpInterface funcOp) const = 0;
+
   virtual ~TargetInfoBase() {}
 };
 } // namespace mlir::triton

@@ -60,6 +60,9 @@ public:
                   StringRef file, StringRef func, int line) const override;
   int getSharedAddressSpace() const override;
 
+  Value getStackPointer(RewriterBase &rewriter,
+                        FunctionOpInterface funcOp) const override;
+
   bool supportVectorizedAtomics() const override;
 
   int getPtxVersion() const { return ptxVersion; }
