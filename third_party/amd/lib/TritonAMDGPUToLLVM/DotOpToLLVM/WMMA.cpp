@@ -317,8 +317,8 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
                           bTensorTy.getElementType(), dstElemTy, wmmaVer)
                     : generateWMMAOp(
                           rewriter, loc, wmmaInstrType, ha[{b, m, k}],
-                          hb[{b, n, k}], acc, aTensorTy.getElementType(),
-                          bTensorTy.getElementType(), dstElemTy, wmmaVer);
+                          hb[{b, n, k}], acc, bTensorTy.getElementType(),
+                          aTensorTy.getElementType(), dstElemTy, wmmaVer);
         }
         for (unsigned v = 0; v < dElemsToStorePerThread; ++v) {
           fc[fcThreadOffIdx + v] = extract_element(

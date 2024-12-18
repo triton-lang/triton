@@ -791,7 +791,9 @@ public:
     auto warpsPerTile = warpsPerTileWMMA(dotOp, retShape, numWarps);
 
     auto CTALayout = ttg::getCTALayout(oldRetEncoding);
-    bool isTransposed = (wmmaVersion == 2);
+
+    // TODO implement heuristic/option for this parameter
+    bool isTransposed = false;
     wmmaEnc = ttg::AMDWmmaEncodingAttr::get(ctx, wmmaVersion, isTransposed,
                                             warpsPerTile, CTALayout);
 

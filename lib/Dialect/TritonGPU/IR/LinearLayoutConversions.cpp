@@ -585,7 +585,7 @@ AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   // Please also check explaining comments in TritonGPUAttrDefs.td at the
   // AMDWmmaEncodingAttr section.
   unsigned ver = getVersion();
-  LinearLayout tileLayout;
+  auto tileLayout = LinearLayout::empty();
   switch (ver) {
   case 1:
     tileLayout = LinearLayout(
@@ -594,19 +594,10 @@ AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
         {outDimNames[threadOrder[0]], outDimNames[threadOrder[1]]});
     break;
   case 2:
-    if (getIsTransposed()) {
-      tileLayout = LinearLayout(
-          {{kRegister, {{1, 0}, {2, 0}, {4, 0}}},
-           {kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, /*gap*/ {8, 0}}}},
-          {outDimNames[threadOrder[0]], outDimNames[threadOrder[1]]})
-    } else {
-      tileLayout = LinearLayout(
-          {
-              {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, /*gap*/ {0, 8}}},
-              {kRegister, {{0, 1}, {0, 2}, {0, 4}}},
-          },
-          {outDimNames[threadOrder[0]], outDimNames[threadOrder[1]]});
-    }
+    tileLayout = LinearLayout(
+        {{kRegister, {{0, 1}, {0, 2}, {0, 4}}},
+         {kLane, {{1, 0}, {2, 0}, {4, 0}, {8, 0}, /*gap*/ {0, 8}}}},
+        {outDimNames[threadOrder[0]], outDimNames[threadOrder[1]]});
     break;
   default:
     assert(false && "unexpected wmma layout version");
