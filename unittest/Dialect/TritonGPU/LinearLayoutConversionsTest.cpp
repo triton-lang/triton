@@ -733,6 +733,37 @@ TEST_F(LinearLayoutConversionsTest, DotMMAv2_split_warp_kwidth8) {
           {S("dim0"), S("dim1")}));
 }
 
+TEST_F(LinearLayoutConversionsTest, SliceDot) {
+  // Slice layout with a DotOperand (MMAv2) as the parent.
+  auto parentV2 = dot(mma(2, 0, {16, 8}, {1, 1}), /*opIdx=*/0, /*kWidth=*/8);
+  auto sliceV2 = slice(parentV2, /*dim=*/1);
+
+  EXPECT_EQ(toLinearLayout({16}, sliceV2),
+            LinearLayout(
+                {
+                    {S("register"), {{8}}},
+                    {S("lane"), {{0}, {0}, {1}, {2}, {4}}},
+                    {S("warp"), {}},
+                    {S("block"), {}},
+                },
+                {S("dim0")}));
+
+  // Slice layout with a DotOperand (MMAv3) as the parent.
+  auto parentV3 =
+      dot(mma(3, 0, {16, 16, 8}, {4, 1}), /*opIdx=*/0, /*kWidth=*/2);
+  auto sliceV3 = slice(parentV3, /*dim=*/0);
+
+  EXPECT_EQ(toLinearLayout({16}, sliceV3),
+            LinearLayout(
+                {
+                    {S("register"), {{1}, {8}}},
+                    {S("lane"), {{2}, {4}, {0}, {0}, {0}}},
+                    {S("warp"), {{0}, {0}}},
+                    {S("block"), {}},
+                },
+                {S("dim0")}));
+}
+
 TEST_F(LinearLayoutConversionsTest, MFMA32_2x4Warps) {
   auto mfmaNT = mfma(/*warps=*/{2, 4}, /*mDim=*/32, /*nDim=*/32,
                      /*isTransposed=*/false);
