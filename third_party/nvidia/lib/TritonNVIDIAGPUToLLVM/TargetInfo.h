@@ -62,6 +62,8 @@ public:
 
   bool supportVectorizedAtomics() const override;
 
+  int getPtxVersion() const { return ptxVersion; }
+
 private:
   int computeCapability;
   int ptxVersion;

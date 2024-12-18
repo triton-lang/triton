@@ -25,11 +25,9 @@ void lowerDistributedToShared(
   auto outOrd = mlir::cast<SharedEncodingAttr>(dstTy.getEncoding()).getOrder();
   auto elemTy = typeConverter->convertType(srcTy.getElementType());
 
-  auto smemBase = smemObj.getBase();
-  auto dstStrides = smemObj.getStrides();
   auto inVals = unpackLLElements(loc, adaptorSrc, rewriter);
-  storeDistributedToShared(dstTy, srcTy, elemTy, inVals, smemBase, dstStrides,
-                           loc, rewriter, targetInfo, llvmOpCount);
+  storeDistributedToShared(dstTy, srcTy, elemTy, inVals, smemObj, loc, rewriter,
+                           targetInfo, llvmOpCount);
 }
 
 struct GlobalScratchAllocOpConversion
@@ -80,23 +78,11 @@ struct LocalAllocOpConversion
     auto typeConverter = getTypeConverter();
     auto sharedLayout =
         cast<triton::gpu::SharedEncodingAttr>(resultTy.getEncoding());
-    auto order = sharedLayout.getOrder();
-    // Workaround for 3D tensors
-    // TODO: we need to modify the pipeline pass to give a proper shared
-    // encoding to 3D tensors
-    SmallVector<unsigned> newOrder;
-    if (resultTy.getShape().size() != order.size()) {
-      for (auto i = 0; i < order.size(); ++i)
-        newOrder.push_back(order[i] + 1);
-      newOrder.push_back(0);
-    } else {
-      newOrder = SmallVector<unsigned>(order.begin(), order.end());
-    }
 
     auto llvmElemTy = typeConverter->convertType(resultTy.getElementType());
     auto shapePerCTA = getShapePerCTA(sharedLayout, resultTy.getShape());
     auto smemObj = SharedMemoryObject(smemBase, llvmElemTy, shapePerCTA,
-                                      newOrder, loc, rewriter);
+                                      sharedLayout, loc, rewriter);
     // If there is an initial tensor, store it into the shared memory.
     if (op.getSrc()) {
       lowerDistributedToShared(loc, op.getSrc(), op.getResult(),
@@ -157,16 +143,11 @@ public:
         // If we remove this one, ldmatrix will IMA. It can probably be relaxed
         // though
         canUseLdmatrix &=
-            srcTy.getShape()[0] >= 8 && srcTy.getShape()[1] >= 4 * kWidth;
-        // To be removed in https://github.com/triton-lang/triton/pull/5154
-        bool legacyLoweringIsBuggy =
-            (kWidth >= 8 || (kWidth == 4 && bitwidth == 32) ||
-             dstTy.getRank() == 3) &&
-            mma.isAmpere();
-        return (mma.isHopper() && !canUseLdmatrix) ||
-               (mma.isAmpere() && legacyLoweringIsBuggy);
+            srcTy.getShape()[0] >= 8 &&
+            srcTy.getShape()[1] >= 4 * kWidth & dstTy.getRank() <= 2;
+        return !canUseLdmatrix;
       }
-      if (isa<AMDMfmaEncodingAttr>(dot.getParent()))
+      if (isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>(dot.getParent()))
         return true;
     }
     return false;

@@ -26,10 +26,12 @@ def test_int_annotation(signed, width, device):
     @triton.jit
     @annotated_function(X=torch.tensor, v=f"tl.{'' if signed else 'u'}int{width}")
     def _kernel(X, v):
-        tl.store(X, v)
+        tl.store(X + v, v)
 
     h = _kernel[(1, )](torch.empty(1, device=device), 3)
     pfx = 'si' if signed else 'ui'
+    if not signed and width < 64:
+        assert "arith.extui %arg1" in h.asm["ttir"]
     assert f'%arg1: i{width}' in h.asm["ttir"]
     assert f'arith.{pfx}tofp' in h.asm["ttir"]
 
