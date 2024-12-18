@@ -336,60 +336,22 @@ struct FatPointers {
   using KeyT = std::pair<Value, Value>;
   using ValueT = FatPtrAttrs;
   using DenseMapT = DenseMap<KeyT, ValueT>;
-  ValueT &operator[](const KeyT &k) { return pointers[k]; }
-  ValueT &operator[](KeyT &&k) { return pointers[k]; }
+  ValueT &operator[](const KeyT &k) { return pointerAttrs[k]; }
+  ValueT &operator[](KeyT &&k) { return pointerAttrs[k]; }
   template <typename T>
   using const_arg_type_t = typename llvm::const_pointer_or_const_ref<T>::type;
-  const ValueT &at(const_arg_type_t<KeyT> k) const { return pointers.at(k); }
-  const bool contains(const KeyT &k) { return pointers.contains(k); }
+  const ValueT &at(const_arg_type_t<KeyT> k) const {
+    // this is redundant - DenseMap will assert the same thing - but better to
+    // have our own message
+    assert(pointerAttrs.contains(k) &&
+           "expected fatPtrs to contain remapped fat pointer");
+    return pointerAttrs.at(k);
+  }
+  const bool contains(const KeyT &k) { return pointerAttrs.contains(k); }
 
 private:
-  DenseMapT pointers;
+  DenseMapT pointerAttrs;
 };
-
-std::optional<UnrealizedConversionCastOp> getFatPtrCastOp(Value base,
-                                                          Value offset) {
-  std::optional<UnrealizedConversionCastOp> maybeCastOp;
-  for (Operation *user : base.getUsers()) {
-    if (auto castOp = llvm::dyn_cast<UnrealizedConversionCastOp>(user)) {
-      if (castOp.getNumOperands() == 2 && castOp.getOperand(0) == base &&
-          castOp.getOperand(1) == offset) {
-        maybeCastOp = castOp;
-      }
-    }
-  }
-#ifndef NDEBUG
-  for (Operation *user : offset.getUsers()) {
-    if (auto castOp = llvm::dyn_cast<UnrealizedConversionCastOp>(user)) {
-      if (castOp.getNumOperands() == 2 && castOp.getOperand(0) == base &&
-          castOp.getOperand(1) == offset) {
-        assert(
-            castOp == *maybeCastOp &&
-            "expected castop through base and castop through offset to match");
-      }
-    }
-  }
-#endif
-  return maybeCastOp;
-}
-
-std::optional<UnrealizedConversionCastOp> getFatPtrCastOp(OpOperand &operand) {
-  Value operandVal = operand.get();
-  for (Operation *user : operandVal.getUsers()) {
-    if (auto castOp = llvm::dyn_cast<UnrealizedConversionCastOp>(user)) {
-      if (castOp.getNumOperands() == 2 &&
-          (castOp.getOperand(0) == operandVal ||
-           castOp.getOperand(1) == operandVal) &&
-          castOp.getNumResults() == 1 &&
-          std::distance(castOp->getUsers().begin(), castOp->getUsers().end()) ==
-              1 &&
-          *castOp->getUsers().begin() == operand.getOwner()) {
-        return castOp;
-      }
-    }
-  }
-  return {};
-}
 
 /// Flatten the given value ranges into a single vector of values.
 static SmallVector<Value> flattenValues(ArrayRef<ValueRange> values) {
@@ -462,8 +424,8 @@ public:
     tt::SplatOp offset = rewriter.create<tt::SplatOp>(
         splatOp.getLoc(), newOffsetType, fatPtrOffset);
     rewriter.replaceOpWithMultiple(splatOp, {{fatPtrBase, offset}});
-    opToRewrite.remove(splatOp);
-    fatPtrs[{fatPtrBase, offset}] = fatPtrs[{fatPtrBase, fatPtrOffset}];
+    fatPtrs[{fatPtrBase, offset}].canNarrow =
+        fatPtrs.at({fatPtrBase, fatPtrOffset}).canNarrow;
 
     return success();
   }
@@ -500,8 +462,8 @@ public:
     tt::BroadcastOp newOffset = rewriter.create<tt::BroadcastOp>(
         broadcastOp.getLoc(), newOffsetType, fatPtrOffset);
     rewriter.replaceOpWithMultiple(broadcastOp, {{fatPtrBase, newOffset}});
-    opToRewrite.remove(broadcastOp);
-    fatPtrs[{fatPtrBase, newOffset}] = fatPtrs[{fatPtrBase, fatPtrOffset}];
+    fatPtrs[{fatPtrBase, newOffset}].canNarrow =
+        fatPtrs.at({fatPtrBase, fatPtrOffset}).canNarrow;
     return success();
   }
 };
@@ -542,7 +504,7 @@ public:
           curLoc, fatPtrBase.getType(), fatPtrBase, origOffset);
       rewriter.replaceOpWithMultiple(addPtrOp, {{newAddPtrOp, fatPtrOffset}});
       fatPtrs[{newAddPtrOp, fatPtrOffset}].canNarrow =
-          fatPtrs[{fatPtrBase, fatPtrOffset}].canNarrow;
+          fatPtrs.at({fatPtrBase, fatPtrOffset}).canNarrow;
       return success();
     }
 
@@ -558,7 +520,7 @@ public:
       // If we are updating the tensor pointer with a constant value, we can
       // propagate the attributes of the tensor pointer to the fat pointer.
       fatPtrs[{newAddPtrOp, fatPtrOffset}].canNarrow =
-          fatPtrs[{fatPtrBase, fatPtrOffset}].canNarrow;
+          fatPtrs.at({fatPtrBase, fatPtrOffset}).canNarrow;
       return success();
     }
 
@@ -571,7 +533,7 @@ public:
         curLoc, fatPtrBase.getType(), fatPtrBase, uniformOffset);
 
     // Vector offset update (if any): bump the tensor offset
-    bool canNarrow = fatPtrs[{fatPtrBase, fatPtrOffset}].canNarrow;
+    bool canNarrow = fatPtrs.at({fatPtrBase, fatPtrOffset}).canNarrow;
     bool propagateAtrs = true;
     Value newOffset = fatPtrOffset;
     if (!isZeroConst(nonUniformOffset)) {
@@ -645,11 +607,9 @@ public:
     int offset = 1;
     for (auto operands : remappedInits) {
       if (operands.size() == 2) {
-        assert(fatPtrs.contains({operands[0], operands[1]}) &&
-               "expected fatPtrs to contain remapped fat pointer");
         fatPtrs[{newBodyBlock->getArgument(offset),
                  newBodyBlock->getArgument(offset + 1)}]
-            .canNarrow = fatPtrs[{operands[0], operands[1]}].canNarrow;
+            .canNarrow = fatPtrs.at({operands[0], operands[1]}).canNarrow;
       }
       offset += operands.size();
     }
@@ -671,6 +631,13 @@ public:
       assert(offset < newForOp->getNumResults() &&
              "expected offset to be within bounds of results");
       ValueRange mappedValue = newForOp->getResults().slice(offset, len);
+      // propagate fatPtrs
+      if (mappedValue.size() == 2) {
+        assert(remappedInits[i].size() == 2 &&
+               "expected corresponding inits to be a remapped fat ptr");
+        fatPtrs[{mappedValue[0], mappedValue[1]}] =
+            fatPtrs.at({remappedInits[i][0], remappedInits[i][1]});
+      }
       packedRets.push_back(mappedValue);
       offset += len;
     }
@@ -720,11 +687,8 @@ public:
       int offset = 0;
       SmallVector<int64_t> fatPtrOffsets;
       for (auto operands : remappedYields) {
-        if (operands.size() == 2) {
-          assert(fatPtrs.contains({operands[0], operands[1]}) &&
-                 "expected fatPtrs to contain remapped fat pointer");
+        if (operands.size() == 2)
           fatPtrOffsets.push_back(offset);
-        }
         offset += operands.size();
       }
       if (!fatPtrOffsets.empty())
@@ -772,10 +736,8 @@ public:
       int offset = 0;
       for (auto operands : remappedInits) {
         if (operands.size() == 2) {
-          assert(fatPtrs.contains({operands[0], operands[1]}) &&
-                 "expected fatPtrs to contain remapped fat pointer");
           fatPtrs[{block->getArgument(offset), block->getArgument(offset + 1)}]
-              .canNarrow = fatPtrs[{operands[0], operands[1]}].canNarrow;
+              .canNarrow = fatPtrs.at({operands[0], operands[1]}).canNarrow;
         }
         offset += operands.size();
       }
@@ -819,6 +781,13 @@ public:
       assert(offset < newWhileOp->getNumResults() &&
              "expected offset to be within bounds of results");
       ValueRange mappedValue = newWhileOp->getResults().slice(offset, len);
+      // propagate fatPtrs
+      if (mappedValue.size() == 2) {
+        assert(remappedInits[i].size() == 2 &&
+               "expected corresponding inits to be a remapped fat ptr");
+        fatPtrs[{mappedValue[0], mappedValue[1]}] =
+            fatPtrs.at({remappedInits[i][0], remappedInits[i][1]});
+      }
       packedRets.push_back(mappedValue);
       offset += len;
     }
@@ -886,10 +855,8 @@ public:
       int offset = 0;
       for (auto operands : remappedOperands) {
         if (operands.size() == 2) {
-          assert(fatPtrs.contains({operands[0], operands[1]}) &&
-                 "expected fatPtrs to contain remapped fat pointer");
           fatPtrs[{block->getArgument(offset), block->getArgument(offset + 1)}]
-              .canNarrow = fatPtrs[{operands[0], operands[1]}].canNarrow;
+              .canNarrow = fatPtrs.at({operands[0], operands[1]}).canNarrow;
         }
         offset += operands.size();
       }
@@ -962,6 +929,8 @@ public:
           selectOp.getLoc(), selectOp.getType(), selectOp.getCondition(),
           fatPtrTrue[0], selectOp.getFalseValue());
       rewriter.replaceOpWithMultiple(selectOp, {{newSelectOp, fatPtrTrue[1]}});
+      fatPtrs[{newSelectOp, /*fatPtrOffset*/ fatPtrTrue[1]}].canNarrow =
+          fatPtrs.at({fatPtrTrue[0], fatPtrTrue[1]}).canNarrow;
       return success();
     }
 
@@ -973,13 +942,13 @@ public:
         selectOp.getLoc(), selectOp.getCondition(), fatPtrTrue[1],
         fatPtrFalse[1]);
 
-    assert((fatPtrs[{fatPtrTrue[0], fatPtrTrue[1]}].canNarrow ==
-            fatPtrs[{fatPtrFalse[0], fatPtrFalse[1]}].canNarrow) &&
+    assert((fatPtrs.at({fatPtrTrue[0], fatPtrTrue[1]}).canNarrow ==
+            fatPtrs.at({fatPtrFalse[0], fatPtrFalse[1]}).canNarrow) &&
            "expected can narrow to be the same for both fatPtrT and fatPtrF");
 
     rewriter.replaceOpWithMultiple(selectOp, {{newBase, newOffset}});
     fatPtrs[{newBase, newOffset}].canNarrow =
-        fatPtrs[{fatPtrTrue[0], fatPtrTrue[1]}].canNarrow;
+        fatPtrs.at({fatPtrTrue[0], fatPtrTrue[1]}).canNarrow;
 
     return success();
   }
@@ -1031,8 +1000,8 @@ public:
           Value thenFatPtrOffset = ifOp.thenYield().getOperand(i + 1);
           Value elseFatPtrBase = ifOp.elseYield().getOperand(i);
           Value elseFatPtrOffset = ifOp.elseYield().getOperand(i + 1);
-          assert((fatPtrs[{thenFatPtrBase, thenFatPtrOffset}].canNarrow ==
-                  fatPtrs[{elseFatPtrBase, elseFatPtrOffset}].canNarrow) &&
+          assert((fatPtrs.at({thenFatPtrBase, thenFatPtrOffset}).canNarrow ==
+                  fatPtrs.at({elseFatPtrBase, elseFatPtrOffset}).canNarrow) &&
                  "expected then fat ptr canNarrow and else fat ptr canNarrow "
                  "to be equal");
         }
@@ -1058,7 +1027,7 @@ public:
       Value thenFatPtrBase = newIfOp.thenYield().getOperand(idx);
       Value thenFatPtrOffset = newIfOp.thenYield().getOperand(idx + 1);
       fatPtrs[{newIfOp.getResult(idx), newIfOp.getResult(idx + 1)}].canNarrow =
-          fatPtrs[{thenFatPtrBase, thenFatPtrOffset}].canNarrow;
+          fatPtrs.at({thenFatPtrBase, thenFatPtrOffset}).canNarrow;
     }
 
     return success();
@@ -1099,11 +1068,9 @@ public:
     int offset = 0;
     for (auto operands : remappedDestOperands) {
       if (operands.size() == 2) {
-        assert(fatPtrs.contains({operands[0], operands[1]}) &&
-               "expected fatPtrs to contain remapped fat pointer");
         fatPtrs[{newDestBlock->getArgument(offset),
                  newDestBlock->getArgument(offset + 1)}]
-            .canNarrow = fatPtrs[{operands[0], operands[1]}].canNarrow;
+            .canNarrow = fatPtrs.at({operands[0], operands[1]}).canNarrow;
       }
       offset += operands.size();
     }
@@ -1132,7 +1099,7 @@ public:
     if (llvm::isa<RankedTensorType>(loadOp.getPtr().getType()))
       newPtr = createTensorPointer(
           rewriter, fatPtrBase, fatPtrOffset, curLoc,
-          fatPtrs[{fatPtrBase, fatPtrOffset}].canNarrow, attributes);
+          fatPtrs.at({fatPtrBase, fatPtrOffset}).canNarrow, attributes);
     SmallVector<Value> operands =
         loadOp.getOperands().take_back(loadOp.getNumOperands() - 1);
     operands.insert(operands.begin(), newPtr);
@@ -1162,7 +1129,7 @@ public:
     if (llvm::isa<RankedTensorType>(storeOp.getPtr().getType()))
       newPtr = createTensorPointer(
           rewriter, fatPtrBase, fatPtrOffset, curLoc,
-          fatPtrs[{fatPtrBase, fatPtrOffset}].canNarrow, attributes);
+          fatPtrs.at({fatPtrBase, fatPtrOffset}).canNarrow, attributes);
     SmallVector<Value> operands =
         storeOp.getOperands().take_back(storeOp.getNumOperands() - 1);
     operands.insert(operands.begin(), newPtr);
