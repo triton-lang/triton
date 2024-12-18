@@ -49,6 +49,9 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
   OpBuilder::InsertionGuard guard(rewriter);
   if (mlir::isMemoryEffectFree(op))
     return op;
+  if (op->hasTrait<OpTrait::TritonMetaDataOp>())
+    return op;
+
   if (isa<ttg::AsyncCommitGroupOp, ttg::AsyncWaitOp>(op))
     return op;
   if (isa<ttg::LocalLoadOp, ttg::LocalStoreOp>(op))

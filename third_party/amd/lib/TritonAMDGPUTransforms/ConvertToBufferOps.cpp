@@ -269,6 +269,12 @@ struct ConvertTritonLoadToBufferLoad
         bufferLoadOp->setAttr(triton::amdgpu::OpIdxAttr::getMnemonic(),
                               opIdxAttr);
       }
+      if (auto regionIdxAttr =
+              op->getAttrOfType<triton::amdgpu::SchedRegionIdxAttr>(
+                  triton::amdgpu::SchedRegionIdxAttr::getMnemonic())) {
+        bufferLoadOp->setAttr(triton::amdgpu::SchedRegionIdxAttr::getMnemonic(),
+                              regionIdxAttr);
+      }
       rewriter.replaceOp(op, bufferLoadOp);
 
       return success();

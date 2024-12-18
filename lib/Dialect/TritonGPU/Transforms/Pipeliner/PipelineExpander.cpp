@@ -20,6 +20,7 @@
 // in the last stage. If we are not peeling the epilgue we need to remap the
 // output correctly.
 
+#include "triton/Dialect/TritonGPU/Transforms/PipelineExpander.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SCF/Transforms/Patterns.h"
@@ -27,11 +28,10 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/RegionUtils.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
-
-#include "triton/Dialect/TritonGPU/Transforms/PipelineExpander.h"
 
 #define DEBUG_TYPE "triton-loop-pipelining"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -304,6 +304,8 @@ LogicalResult LoopPipelinerInternal::emitPrologue(RewriterBase &rewriter) {
 
     for (Operation *op : opOrder) {
       if (stages[op] > i)
+        continue;
+      if (op->hasTrait<OpTrait::TritonMetaDataOp>())
         continue;
       Operation *newOp =
           cloneAndUpdateOperands(rewriter, op, [&](OpOperand *newOperand) {
@@ -708,6 +710,8 @@ LoopPipelinerInternal::emitEpilogue(RewriterBase &rewriter,
     SmallVector<std::pair<Value, unsigned>> returnMap(returnValues.size());
     for (Operation *op : opOrder) {
       if (stages[op] < i)
+        continue;
+      if (op->hasTrait<OpTrait::TritonMetaDataOp>())
         continue;
       unsigned currentVersion = maxStage - stages[op] + i;
       unsigned nextVersion = currentVersion + 1;

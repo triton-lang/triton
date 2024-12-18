@@ -32,6 +32,7 @@
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
+using namespace triton::amdgpu;
 
 static Operation *streamPredication(RewriterBase &rewriter, Operation *op,
                                     Value pred) {
@@ -305,6 +306,14 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
   // instructions for each GEMM tile.
   if (auto attr = loadOp->getAttr(triton::amdgpu::OpIdxAttr::getMnemonic())) {
     storeOp->setAttr(triton::amdgpu::OpIdxAttr::getMnemonic(), attr);
+  }
+
+  // TODO: add comment
+  if (auto attr =
+          loadOp->getAttr(triton::amdgpu::SchedRegionIdxAttr::getMnemonic())) {
+    storeOp->setAttr(triton::amdgpu::SchedRegionIdxAttr::getMnemonic(), attr);
+    sharedLoad->setAttr(triton::amdgpu::SchedRegionIdxAttr::getMnemonic(),
+                        attr);
   }
 
   loadOp->replaceAllUsesWith(ValueRange{result});
@@ -843,18 +852,24 @@ template <typename TargetOpType> Operation *passPrevUnaryOps(Value value) {
 }
 
 // Annotate each `tt.LoadOp` instruction with its corresponding gemm operand
-// index. Note, this is a part of the instruction scheduling routine. Currently,
-// we support `forOp`s which contain only a single `tt.DotOp` in the bodies.
+// index. Note, this is a part of the instruction scheduling routine.
 void labelLoadOpsForTritonDot(scf::ForOp forOp) {
   mlir::MLIRContext *ctx = forOp->getContext();
-  if (auto dotOp = triton::getSingleDotOpIfExists(forOp)) {
-    for (auto [opIdx, dotOperand] : llvm::enumerate(dotOp->getOperands())) {
-      if (auto loadOp = passPrevUnaryOps<triton::LoadOp>(dotOperand)) {
-        auto opIdxAttr = triton::amdgpu::OpIdxAttr::get(ctx, opIdx);
-        loadOp->setAttr(triton::amdgpu::OpIdxAttr::getMnemonic(), opIdxAttr);
+  forOp->walk([&](triton::DotOp dotOp) {
+    if (auto regionIdx = dotOp->getAttrOfType<SchedRegionIdxAttr>(
+            SchedRegionIdxAttr::getMnemonic())) {
+      for (auto [opIdx, dotOperand] : llvm::enumerate(dotOp->getOperands())) {
+        if (auto loadOp = passPrevUnaryOps<triton::LoadOp>(dotOperand)) {
+          auto opIdxAttr = OpIdxAttr::get(ctx, opIdx);
+          loadOp->setAttr(OpIdxAttr::getMnemonic(), opIdxAttr);
+
+          // TODO: make a list of `SchedRegionIdx`. Results of a `load` can be
+          // used by multiple tt.DotOps
+          loadOp->setAttr(SchedRegionIdxAttr::getMnemonic(), regionIdx);
+        }
       }
     }
-  }
+  });
 }
 
 struct PipelinePass : public TritonAMDGPUStreamPipelineBase<PipelinePass> {

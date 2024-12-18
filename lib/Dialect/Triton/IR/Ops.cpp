@@ -102,10 +102,12 @@ struct CanonicalizeMaskedLoadPattern : public OpRewritePattern<LoadOp> {
 
     if (splatMask.getSplatValue<IntegerAttr>().getValue() == true) {
       // mask = splat(1)
-      rewriter.replaceOpWithNewOp<LoadOp>(
+      DictionaryAttr notPropertiesAttrs = loadOp->getRawDictionaryAttrs();
+      auto newLoadOp = rewriter.replaceOpWithNewOp<LoadOp>(
           loadOp, loadOp.getType(), loadOp.getPtr(), Value(), Value(),
           loadOp.getBoundaryCheckAttr(), loadOp.getPaddingAttr(),
           loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
+      newLoadOp->setAttrs(notPropertiesAttrs);
     } else {
       // mask = splat(0)
 

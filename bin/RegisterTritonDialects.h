@@ -67,6 +67,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::registerTritonAMDGPUCanonicalizePointers();
   mlir::registerTritonAMDGPUConvertToBufferOps();
   mlir::triton::registerTritonAMDGPUInsertInstructionSchedHints();
+  mlir::triton::registerTritonAMDGPUInsertInstructionSchedGuards();
   mlir::triton::registerTritonAMDGPULowerInstructionSchedHints();
 
   // TODO: register Triton & TritonGPU passes

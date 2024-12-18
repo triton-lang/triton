@@ -66,6 +66,15 @@ def TritonAMDGPUInsertInstructionSchedHints : Pass<"triton-amdgpu-insert-instruc
                              "mlir::triton::amdgpu::TritonAMDGPUDialect"];
 }
 
+def TritonAMDGPUInsertInstructionSchedGuards : Pass<"triton-amdgpu-insert-instruction-sched-guards", "mlir::ModuleOp"> {
+    let summary = "Insert instruction scheduling guards after the dot ops in the main loop";
+    let constructor = "mlir::triton::createTritonAMDGPUInsertInstructionSchedGuardsPass()";
+
+    let dependentDialects = ["mlir::LLVM::LLVMDialect",
+                             "mlir::ROCDL::ROCDLDialect",
+                             "mlir::triton::amdgpu::TritonAMDGPUDialect"];
+}
+
 def TritonAMDGPULowerInstructionSchedHints : Pass<"triton-amdgpu-lower-insert-instruction-sched-hints", "mlir::ModuleOp"> {
     let summary = "Lower instruction scheduling hints to LLVM intrinsics";
     let constructor = "mlir::triton::createTritonAMDGPULowerInstructionSchedHintsPass(/*arch=*/\"\",/*numStages=*/2, /*variant=*/\"\")";

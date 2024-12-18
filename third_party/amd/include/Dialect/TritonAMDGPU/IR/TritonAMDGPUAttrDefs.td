@@ -46,6 +46,18 @@ def TritonAMDGPU_OpIdxAttr : TritonAMDGPU_Attr<"OpIdx"> {
   let assemblyFormat = "`<` $value `>`";
 }
 
+def TritonAMDGPU_SchedRegionIdxAttr : TritonAMDGPU_Attr<"SchedRegionIdx"> {
+  let cppNamespace = "::mlir::triton::amdgpu";
+  let mnemonic = "SchedRegionIdx";
+  let summary = "A scheduling region index attribute.";
+  let description = [{
+    The attribute is a way to describe a scheduling region.
+  }];
+
+  let parameters = (ins "uint32_t":$value);
+  let assemblyFormat = "`<` $value `>`";
+}
+
 def TritonAMDGPU_InstCounter : TritonAMDGPU_Attr<"InstCounter"> {
   let cppNamespace = "::mlir::triton::amdgpu";
   let mnemonic = "InstCounter";
@@ -74,13 +86,17 @@ class TritonAMDGPU_I32EnumAttr<string mnemonic, TritonAMDGPU_I32Enum enumInfo> :
 def SchedHintCaseNone : I32EnumAttrCase<"none", 0>;
 def SchedHintCaseLLVMIglp0 : I32EnumAttrCase<"llvm_iglp_0", 1>;
 def SchedHintCaseLLVMIglp1 : I32EnumAttrCase<"llvm_iglp_1", 2>;
-def SchedHintCaseLocalPrefetch : I32EnumAttrCase<"local_prefetch", 3>;
+def SchedHintCaseLLVMIglp2 : I32EnumAttrCase<"llvm_iglp_2", 3>;
+def SchedHintCaseLLVMIglp3 : I32EnumAttrCase<"llvm_iglp_3", 4>;
+def SchedHintCaseLocalPrefetch : I32EnumAttrCase<"local_prefetch", 5>;
 
 def TritonAMDGPU_SchedHintsEnum : TritonAMDGPU_I32Enum<
   "SchedHint", "Instruction Scheduling Hints for AMD GPUs", [
     SchedHintCaseNone,
     SchedHintCaseLLVMIglp0,
     SchedHintCaseLLVMIglp1,
+    SchedHintCaseLLVMIglp2,
+    SchedHintCaseLLVMIglp3,
     SchedHintCaseLocalPrefetch,
   ]>;
 

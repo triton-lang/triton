@@ -114,7 +114,7 @@ def ExtractSliceOp
   let hasVerifier = 1;
 }
 
-def InstructionSchedHint : TT_AMDGPU_Op<"instruction_sched_hint", []> {
+def InstructionSchedHint : TT_AMDGPU_Op<"instruction_sched_hint", [TritonMetaDataOp]> {
   let summary = "A placeholder op for instruction scheduling hints within a basic block";
   let description = [{
     A placeholder op for instruction scheduling hints applied to instructions within

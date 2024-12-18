@@ -69,12 +69,18 @@ class HIPOptions:
     #
     # Current experimental scheduling variants:
     #
-    # llvm-iglp-0: injects `llvm.amdgcn.iglp_opt` intrinsic call with value `0` to the GEMM's
+    # llvm_iglp_0: injects `llvm.amdgcn.iglp_opt` intrinsic call with value `0` to the GEMM's
     #              k-loop; i.e., "interleave DS and MFMA instructions for small GEMM kernels".
-    # llvm-iglp-1: injects `llvm.amdgcn.iglp_opt` intrinsic call with value `1` to the GEMM's
+    # llvm_iglp_1: injects `llvm.amdgcn.iglp_opt` intrinsic call with value `1` to the GEMM's
     #              k-loop; i.e., "interleave DS and MFMA instructions for single wave small
     #              GEMM kernels.".
-    # local-prefetch: implements instruction scheduling similar to the one from the ROCm Composable
+    # llvm_iglp_2: injects `llvm.amdgcn.iglp_opt` intrinsic call with value `2` to the GEMM's
+    #              k-loop; i.e., "interleave TRANS and MFMA instructions, as well as their VALU
+    #              and DS predecessors, for attention kernels".
+    # llvm_iglp_3: injects `llvm.amdgcn.iglp_opt` intrinsic call with value `3` to the GEMM's
+    #              k-loop; i.e., "interleave TRANS and MFMA instructions, with no predecessor
+    #              interleaving, for attention kernels".
+    # local_prefetch: implements instruction scheduling similar to the one from the ROCm Composable
     #                 Kernel library. Note, this variant requires the use of buffer load/store ops
     #                 and a special software pipelining style - i.e., 1x LDS and 1x register
     #                 prefetch buffers for each GEMM tile.
@@ -221,10 +227,11 @@ class HIPBackend(BaseBackend):
 
         stream_prefetch = os.getenv("TRITON_HIP_STREAM_PREFETCH", "0") == "1"
 
-        # The `local-prefetch` scheduling variant requires turning on buffer ops.
-        if options.instruction_sched_variant == "local-prefetch":
-            stream_prefetch = True
+        # The `local_prefetch` scheduling variant requires turning on buffer ops.
+        if options.instruction_sched_variant == "local_prefetch":
+            stream_prefetch = use_buffer_ops = True
 
+        amd.passes.ttgpuir.insert_instruction_sched_hints(pm)
         if amd.has_matrix_core_feature(options.arch):
             assert options.num_stages != 0, ("Triton AMD backend pipeliner has been updated. "
                                              "We used to trigger software pipelining with "
@@ -233,7 +240,6 @@ class HIPBackend(BaseBackend):
                                              "equivalent behavior in the past.")
             amd.passes.ttgpuir.add_stream_pipeline(pm, options.num_stages, stream_prefetch)
             passes.common.add_canonicalizer(pm)
-        amd.passes.ttgpuir.insert_instruction_sched_hints(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
@@ -248,6 +254,7 @@ class HIPBackend(BaseBackend):
             amd.passes.ttgpuir.add_canonicalize_pointers(pm)
             passes.common.add_canonicalizer(pm)
             amd.passes.ttgpuir.add_convert_to_buffer_ops(pm)
+        amd.passes.ttgpuir.insert_instruction_sched_guards(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)

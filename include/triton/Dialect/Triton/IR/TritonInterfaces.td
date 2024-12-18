@@ -12,5 +12,6 @@ def SameLoadStoreOperandsShape : NativeOpTrait<"SameLoadStoreOperandsShape">;
 def SameLoadStoreOperandsAndResultShape : NativeOpTrait<"SameLoadStoreOperandsAndResultShape">;
 def SameLoadStoreOperandsEncoding : NativeOpTrait<"SameLoadStoreOperandsEncoding">;
 def SameLoadStoreOperandsAndResultEncoding : NativeOpTrait<"SameLoadStoreOperandsAndResultEncoding">;
+def TritonMetaDataOp : NativeOpTrait<"TritonMetaDataOp">;
 
 #endif // TRITON_INTERFACES

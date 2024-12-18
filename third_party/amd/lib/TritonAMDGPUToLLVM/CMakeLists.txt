@@ -30,4 +30,5 @@ add_triton_library(TritonAMDGPUToLLVM
     TritonGPUToLLVM
     TritonAMDGPUIR
     TritonProtonToLLVM
+    TritonAMDUtils
 )

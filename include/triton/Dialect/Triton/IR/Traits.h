@@ -104,6 +104,12 @@ public:
   }
 };
 
+template <class ConcreteType>
+class TritonMetaDataOp : public TraitBase<ConcreteType, TritonMetaDataOp> {
+public:
+  static LogicalResult verifyTrait(Operation *op) { return success(); }
+};
+
 template <typename ConcreteType>
 class SameOperandsAndResultEncoding
     : public TraitBase<ConcreteType, SameOperandsAndResultEncoding> {

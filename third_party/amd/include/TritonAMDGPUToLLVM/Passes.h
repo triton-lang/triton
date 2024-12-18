@@ -44,6 +44,8 @@ createConvertBuiltinFuncToLLVMPass(bool ftz);
 std::unique_ptr<OperationPass<ModuleOp>>
 createTritonAMDGPUInsertInstructionSchedHintsPass();
 std::unique_ptr<OperationPass<ModuleOp>>
+createTritonAMDGPUInsertInstructionSchedGuardsPass();
+std::unique_ptr<OperationPass<ModuleOp>>
 createTritonAMDGPULowerInstructionSchedHintsPass(StringRef arch,
                                                  int32_t numStages,
                                                  StringRef variant);
