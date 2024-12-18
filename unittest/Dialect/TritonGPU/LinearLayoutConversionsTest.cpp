@@ -737,15 +737,15 @@ TEST_F(LinearLayoutConversionsTest, SliceDot) {
   // Then slice out dimension #1 => resulting shape {16, 64}.
   auto sliceV2 = slice(parentV2, /*dim=*/1);
 
-  EXPECT_EQ(toLinearLayout({16, 64}, sliceV2),
+  EXPECT_EQ(toLinearLayout({16}, sliceV2),
             LinearLayout(
                 {
-                    {S("register"), {{0, 0}, {0, 0}, {0, 0}, {8, 0}, {0, 0}}},
-                    {S("lane"), {{0, 0}, {0, 0}, {1, 0}, {2, 0}, {4, 0}}},
+                    {S("register"), {{8}}},
+                    {S("lane"), {{0}, {0}, {1}, {2}, {4}}},
                     {S("warp"), {}},
                     {S("block"), {}},
                 },
-                {S("dim0"), S("dim1")}));
+                {S("dim0")}));
 
   // Test a slice layout with a DotOperand (MMAv3) as the parent.
   // Parent is a Dot operand on top of a MMAv3 encoding.
@@ -755,15 +755,15 @@ TEST_F(LinearLayoutConversionsTest, SliceDot) {
   // Then slice out dimension #1 => resulting shape {64, 16}.
   auto sliceV3 = slice(parentV3, /*dim=*/0);
 
-  EXPECT_EQ(toLinearLayout({128, 16}, sliceV3),
+  EXPECT_EQ(toLinearLayout({16}, sliceV3),
             LinearLayout(
                 {
-                    {S("register"), {{0, 1}, {0, 0}, {0, 8}, {0, 0}}},
-                    {S("lane"), {{0, 2}, {0, 4}, {0, 0}, {0, 0}, {0, 0}}},
-                    {S("warp"), {{0, 0}, {0, 0}}},
+                    {S("register"), {{1}, {8}}},
+                    {S("lane"), {{2}, {4}, {0}, {0}, {0}}},
+                    {S("warp"), {{0}, {0}}},
                     {S("block"), {}},
                 },
-                {S("dim0"), S("dim1")}));
+                {S("dim0")}));
 }
 
 TEST_F(LinearLayoutConversionsTest, MFMA32_2x4Warps) {
