@@ -8,7 +8,6 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
-#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Tools/LinearLayout.h"
 #include "llvm/Support/ErrorHandling.h"
 
@@ -705,19 +704,14 @@ LogicalResult ReshapeOp::verify() {
 
   if (srcEnc && !getAllowReorder()) {
     Attribute inferredDstEnc;
-    assert(succeeded(cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
-                         ->inferReshapeOpEncoding(srcTy.getShape(), srcEnc,
-                                                  dstTy.getShape(),
-                                                  inferredDstEnc, getLoc())));
+    auto result =
+        cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
+            ->inferReshapeOpEncoding(srcTy.getShape(), srcEnc, dstTy.getShape(),
+                                     inferredDstEnc, getLoc());
+    assert(succeeded(result));
     if (inferredDstEnc != dstEnc) {
-      // Check whether the encodings are structurally the same.
-      auto shape = dstTy.getShape();
-      auto dstLL = triton::gpu::toLinearLayout(shape, dstEnc);
-      auto inferredDstLL = triton::gpu::toLinearLayout(shape, inferredDstEnc);
-      if (dstLL != inferredDstLL) {
-        return emitError("Expected result encoding ")
-               << inferredDstEnc << " but was " << dstEnc;
-      }
+      return emitError("Expected result encoding ")
+             << inferredDstEnc << " but was " << dstEnc;
     }
   }
 

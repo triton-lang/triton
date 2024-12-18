@@ -2645,10 +2645,10 @@ struct TritonGPUInferLayoutInterface
   // Users of this function require that it is symmetrical: if
   // (srcShape,srcEnc,dstShape) => dstEnc, then (dstShape,dstEnc,srcShape) =>
   // srcEnc.
-  LogicalResult
-  inferReshapeOpLegacyEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
-                               ArrayRef<int64_t> dstShape, Attribute &dstEnc,
-                               std::optional<Location> loc) const {
+  LogicalResult inferReshapeOpLegacyEncoding(ArrayRef<int64_t> srcShape,
+                                             Attribute srcEnc,
+                                             ArrayRef<int64_t> dstShape,
+                                             Attribute &dstEnc) const {
     auto src = mlir::dyn_cast<BlockedEncodingAttr>(srcEnc);
     if (!src) {
       return failure();
@@ -2876,7 +2876,7 @@ struct TritonGPUInferLayoutInterface
                          ArrayRef<int64_t> dstShape, Attribute &dstEnc,
                          std::optional<Location> loc) const override {
     auto result =
-        inferReshapeOpLegacyEncoding(srcShape, srcEnc, dstShape, dstEnc, loc);
+        inferReshapeOpLegacyEncoding(srcShape, srcEnc, dstShape, dstEnc);
     if (succeeded(result)) {
       return result;
     }
@@ -2903,8 +2903,8 @@ struct TritonGPUInferLayoutInterface
       newOutDims.emplace_back(dim, size);
     }
     auto srcOutDims = llvm::to_vector(src->getOutDimNames());
-    // reshapeOp assumes C-order, so we need to transpose the out dims before
-    // the reshape
+    // reshapeOp assumes minor-to-major, so we need to transpose the out dims
+    // before the reshape
     std::reverse(srcOutDims.begin(), srcOutDims.end());
     std::reverse(newOutDims.begin(), newOutDims.end());
     auto dst = src->transposeOuts(srcOutDims)

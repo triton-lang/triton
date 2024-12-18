@@ -407,11 +407,12 @@ static Attribute inferReshapeOpDstEncoding(ArrayRef<int64_t> srcShape,
     return {};
 
   Attribute dstEnc;
-  assert(succeeded(
+  auto result =
       srcEnc.getDialect()
           .getRegisteredInterface<triton::DialectInferLayoutInterface>()
           ->inferReshapeOpEncoding(srcShape, srcEnc, dstShape, dstEnc,
-                                   /*loc=*/std::nullopt)));
+                                   /*loc=*/std::nullopt);
+  assert(succeeded(result));
   return dstEnc;
 }
 
