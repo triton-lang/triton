@@ -966,7 +966,8 @@ bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
   // `isMfmaToDotShortcut`) once they're fully subsumed by the linear-layout
   // checks.
   return !cvtReordersRegisters(srcTy, dstTy) &&
-         !getWarpLayoutConvertDecomposition(srcTy, dstTy) &&
+         !(cvtNeedsWarpShuffle(srcTy, dstTy) &&
+           getWarpLayoutConvertDecomposition(srcTy, dstTy)) &&
          !isBlockedToDotShortcut(srcTy, dstTy) &&
          !matchMmaV3AndDotOperandLayout(srcTy, dstTy) &&
          // to be removed when generalized warp shuffle conversions
