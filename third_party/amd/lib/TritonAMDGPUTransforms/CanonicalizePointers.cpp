@@ -1125,9 +1125,11 @@ public:
 
     llvm::SmallDenseMap<StringAttr, Attribute> attributes{
         {rewriter.getStringAttr(kLegalAttr), rewriter.getUnitAttr()}};
-    Value newPtr = createTensorPointer(
-        rewriter, fatPtrBase, fatPtrOffset, curLoc,
-        fatPtrs[{fatPtrBase, fatPtrOffset}].canNarrow, attributes);
+    Value newPtr = fatPtrBase;
+    if (llvm::isa<RankedTensorType>(loadOp.getPtr().getType()))
+      newPtr = createTensorPointer(
+          rewriter, fatPtrBase, fatPtrOffset, curLoc,
+          fatPtrs[{fatPtrBase, fatPtrOffset}].canNarrow, attributes);
     SmallVector<Value> operands =
         loadOp.getOperands().take_back(loadOp.getNumOperands() - 1);
     operands.insert(operands.begin(), newPtr);
@@ -1157,9 +1159,12 @@ public:
 
     llvm::SmallDenseMap<StringAttr, Attribute> attributes{
         {rewriter.getStringAttr(kLegalAttr), rewriter.getUnitAttr()}};
-    Value newPtr = createTensorPointer(
-        rewriter, fatPtrBase, fatPtrOffset, curLoc,
-        fatPtrs[{fatPtrBase, fatPtrOffset}].canNarrow, attributes);
+
+    Value newPtr = fatPtrBase;
+    if (llvm::isa<RankedTensorType>(storeOp.getPtr().getType()))
+      newPtr = createTensorPointer(
+          rewriter, fatPtrBase, fatPtrOffset, curLoc,
+          fatPtrs[{fatPtrBase, fatPtrOffset}].canNarrow, attributes);
     SmallVector<Value> operands =
         storeOp.getOperands().take_back(storeOp.getNumOperands() - 1);
     operands.insert(operands.begin(), newPtr);
