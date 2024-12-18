@@ -313,12 +313,12 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
           acc = wmmaLayout.getIsTransposed()
                     ? generateWMMAOp(
                           rewriter, loc, wmmaInstrType, hb[{b, n, k}],
-                          ha[{b, m, k}], acc, aTensorTy.getElementType(),
-                          bTensorTy.getElementType(), dstElemTy, wmmaVer)
+                          ha[{b, m, k}], acc, bTensorTy.getElementType(),
+                          aTensorTy.getElementType(), dstElemTy, wmmaVer)
                     : generateWMMAOp(
                           rewriter, loc, wmmaInstrType, ha[{b, m, k}],
-                          hb[{b, n, k}], acc, bTensorTy.getElementType(),
-                          aTensorTy.getElementType(), dstElemTy, wmmaVer);
+                          hb[{b, n, k}], acc, aTensorTy.getElementType(),
+                          bTensorTy.getElementType(), dstElemTy, wmmaVer);
         }
         for (unsigned v = 0; v < dElemsToStorePerThread; ++v) {
           fc[fcThreadOffIdx + v] = extract_element(
