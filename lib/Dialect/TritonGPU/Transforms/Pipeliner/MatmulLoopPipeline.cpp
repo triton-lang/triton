@@ -580,7 +580,7 @@ struct AsyncLoad {
 };
 
 // Create barriers and wait ops for the async loads. Barriers may be shared by
-// multiple loads is the schedule allows it.
+// multiple loads if the schedule allows it.
 static void createTMABarrierAndWait(
     scf::ForOp &forOp, SmallVector<AsyncLoad> &asyncLoads,
     SmallVector<Value> &barriers, const DenseMap<int, StageGroup> &stageGroups,
@@ -832,7 +832,6 @@ createAsyncOps(scf::ForOp &forOp,
     extractIdx = builder.create<arith::SelectOp>(loc, cndExt, extractIdx, zero);
     stageGroup.extractIdx = extractIdx;
     if (phase) {
-      phase = newForOp.getBody()->getArgument(newOperandIndex + 2);
       Value nextPhase = builder.create<arith::XOrIOp>(loc, phase, one);
       phase = builder.create<arith::SelectOp>(loc, cndExt, phase, nextPhase);
       stageGroup.phase = phase;

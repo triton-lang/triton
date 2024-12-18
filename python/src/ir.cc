@@ -1711,6 +1711,12 @@ void init_triton_ir(py::module &&m) {
                    printingFlags);
              }
            })
+      .def("get_pipeline_str", [](PassManager &self) {
+        std::string pipelineStr;
+        llvm::raw_string_ostream os(pipelineStr);
+        self.printAsTextualPipeline(os);
+        return os.str();
+      })
       .def("run", [](PassManager &self, ModuleOp &mod) {
         // TODO: maybe dump module to file and print error for better
         // diagnostics
