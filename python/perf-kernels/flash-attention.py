@@ -380,36 +380,36 @@ def is_rdna():
 
 def get_cdna_autotune_configs():
     return [
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
-                      num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
-                      num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 3, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
-                      num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 1, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
-                      num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
-                      num_warps=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+                      num_stages=1, num_warps=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+                      num_stages=1, num_warps=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 3, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+                      num_stages=1, num_warps=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 1, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+                      num_stages=1, num_warps=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+                      num_stages=1, num_warps=4),
     ], ['IS_CAUSAL', 'dropout_p', 'MAX_SEQLENS_Q', 'MAX_SEQLENS_K', 'ACTUAL_BLOCK_DMODEL', 'VARLEN', 'HQ', 'HK']
 
 
 def get_rdna_autotune_configs():
     return [
-        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 32, 'waves_per_eu': 4, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
-                      num_warps=2),
-        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
-                      num_warps=2),
-        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 16, 'waves_per_eu': 4, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
-                      num_warps=2),
-        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 16, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
-                      num_warps=2),
-        triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 4, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
-                      num_warps=2),
-        triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
-                      num_warps=2),
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 32, 'waves_per_eu': 4, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+                      num_stages=1, num_warps=2),
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+                      num_stages=1, num_warps=2),
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 16, 'waves_per_eu': 4, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+                      num_stages=1, num_warps=2),
+        triton.Config({'BLOCK_M': 32, 'BLOCK_N': 16, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+                      num_stages=1, num_warps=2),
+        triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 4, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+                      num_stages=1, num_warps=2),
+        triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+                      num_stages=1, num_warps=2),
         # Fall-back config.
-        triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 1, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2}, num_stages=1,
-                      num_warps=2),
+        triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 1, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+                      num_stages=1, num_warps=2),
     ], ['IS_CAUSAL', 'dropout_p', 'MAX_SEQLENS_Q', 'MAX_SEQLENS_K', 'ACTUAL_BLOCK_DMODEL', 'VARLEN', 'HQ', 'HK']
 
 
@@ -435,14 +435,13 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
              stride_kh, stride_kn, stride_kk, stride_vz, stride_vh, stride_vk, stride_vn, stride_oz, stride_oh,
              stride_om, stride_on, stride_bz, stride_bh, stride_bm, stride_bn, stride_az, stride_ah, Q_descale,
              K_descale, P_scale, P_descale, V_descale, cu_seqlens_q, cu_seqlens_k, dropout_p, philox_seed,
-             PERSISTENT: tl.constexpr, PERSISTENT_DYNAMIC: tl.constexpr, atomic_counter, NUM_CU: tl.constexpr, GRID_CU_MULTIP: tl.constexpr, B: tl.constexpr,
-             philox_offset_base, encoded_softmax, alibi_slopes, HQ: tl.constexpr, HK: tl.constexpr,
-             ACTUAL_BLOCK_DMODEL: tl.constexpr, MAX_SEQLENS_Q: tl.constexpr, MAX_SEQLENS_K: tl.constexpr,
-             VARLEN: tl.constexpr, IS_CAUSAL: tl.constexpr, BLOCK_M: tl.constexpr, BLOCK_DMODEL: tl.constexpr,
-             BLOCK_N: tl.constexpr, PRE_LOAD_V: tl.constexpr, USE_BIAS: tl.constexpr, ENABLE_DROPOUT: tl.constexpr,
-             RETURN_ENCODED_SOFTMAX: tl.constexpr, USE_ALIBI: tl.constexpr, INT8: tl.constexpr,
-             USE_P_SCALE: tl.constexpr, INT8_KV: tl.constexpr):
-
+             PERSISTENT: tl.constexpr, PERSISTENT_DYNAMIC: tl.constexpr, atomic_counter, NUM_CU: tl.constexpr,
+             GRID_CU_MULTIP: tl.constexpr, B: tl.constexpr, philox_offset_base, encoded_softmax, alibi_slopes,
+             HQ: tl.constexpr, HK: tl.constexpr, ACTUAL_BLOCK_DMODEL: tl.constexpr, MAX_SEQLENS_Q: tl.constexpr,
+             MAX_SEQLENS_K: tl.constexpr, VARLEN: tl.constexpr, IS_CAUSAL: tl.constexpr, BLOCK_M: tl.constexpr,
+             BLOCK_DMODEL: tl.constexpr, BLOCK_N: tl.constexpr, PRE_LOAD_V: tl.constexpr, USE_BIAS: tl.constexpr,
+             ENABLE_DROPOUT: tl.constexpr, RETURN_ENCODED_SOFTMAX: tl.constexpr, USE_ALIBI: tl.constexpr,
+             INT8: tl.constexpr, USE_P_SCALE: tl.constexpr, INT8_KV: tl.constexpr):
 
     if PERSISTENT:
         NUM_WG = NUM_CU * GRID_CU_MULTIP  # number of workgroups launched
@@ -458,7 +457,7 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
         tile_id = tl.program_id(0)
         num_tiles_total = tl.cdiv(MAX_SEQLENS_Q, BLOCK_M) * HQ * B
 
-    while tile_id < num_tiles_total: # loops more than once only if PERSISTENT
+    while tile_id < num_tiles_total:  # loops more than once only if PERSISTENT
         if PERSISTENT:
             # tile id basically tells us the Q block we are handling
             off_z = tile_id // num_tiles_per_sample  # at which batch sample are we
@@ -472,7 +471,7 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
         offs_n = tl.arange(0, BLOCK_N)
         offs_d = tl.arange(0, BLOCK_DMODEL)
 
-        continue_condition = True # as we can't have return statements inside while loop in Triton
+        continue_condition = True  # as we can't have return statements inside while loop in Triton
 
         if VARLEN:
             cu_seqlens_q_start = tl.load(cu_seqlens_q + off_z)
@@ -642,17 +641,18 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
                 # value because there is no masking. Similarly we do not need padding.
                 if n_full_blocks > 0:
                     block_max = (n_blocks - masked_blocks) * BLOCK_N
-                    acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stride_vk, stride_bn,
-                                                    start_m, seqlen_k, seqlen_q, dropout_p, philox_seed, batch_philox_offset,
-                                                    encoded_sm_ptrs,
+                    acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stride_vk,
+                                                    stride_bn, start_m, seqlen_k, seqlen_q, dropout_p, philox_seed,
+                                                    batch_philox_offset, encoded_sm_ptrs,
                                                     # _, _, offs_n_causal, masked_blocks, n_extra_tokens, _
-                                                    block_min, block_max, 0, 0, 0, alibi_slope, q_descale, k_descale, v_descale,
-                                                    p_scale,
+                                                    block_min, block_max, 0, 0, 0, alibi_slope, q_descale, k_descale,
+                                                    v_descale, p_scale,
                                                     # IS_CAUSAL, ....
                                                     False, BLOCK_M, BLOCK_DMODEL, BLOCK_N, offs_m, offs_n,
                                                     # _, MASK_STEPS, ...
-                                                    PRE_LOAD_V, False, ENABLE_DROPOUT, RETURN_ENCODED_SOFTMAX, PADDED_HEAD,
-                                                    ACTUAL_BLOCK_DMODEL, QK_SCALE, INT8_GEMM, USE_P_SCALE, INT8_KV)
+                                                    PRE_LOAD_V, False, ENABLE_DROPOUT, RETURN_ENCODED_SOFTMAX,
+                                                    PADDED_HEAD, ACTUAL_BLOCK_DMODEL, QK_SCALE, INT8_GEMM, USE_P_SCALE,
+                                                    INT8_KV)
                     block_min = block_max
                     block_max = n_blocks * BLOCK_N
 
@@ -669,14 +669,14 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
                         bias_ptrs += n_full_blocks * BLOCK_N * stride_bn
                     if RETURN_ENCODED_SOFTMAX:
                         encoded_sm_ptrs += n_full_blocks * BLOCK_N
-                    acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stride_vk, stride_bn,
-                                                    start_m, seqlen_k, seqlen_q, dropout_p, philox_seed, batch_philox_offset,
-                                                    encoded_sm_ptrs, block_min, block_max, offs_n_causal, masked_blocks,
-                                                    n_extra_tokens, alibi_slope, q_descale, k_descale, v_descale, p_scale,
-                                                    IS_CAUSAL, BLOCK_M, BLOCK_DMODEL, BLOCK_N, offs_m, offs_n,
-                                                    # _, MASK_STEPS, ...
-                                                    PRE_LOAD_V, True, ENABLE_DROPOUT, RETURN_ENCODED_SOFTMAX, PADDED_HEAD,
-                                                    ACTUAL_BLOCK_DMODEL, QK_SCALE, INT8_GEMM, USE_P_SCALE, INT8_KV)
+                    acc, l_i, m_i = _attn_fwd_inner(
+                        acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stride_vk, stride_bn, start_m, seqlen_k,
+                        seqlen_q, dropout_p, philox_seed, batch_philox_offset, encoded_sm_ptrs, block_min, block_max,
+                        offs_n_causal, masked_blocks, n_extra_tokens, alibi_slope, q_descale, k_descale, v_descale,
+                        p_scale, IS_CAUSAL, BLOCK_M, BLOCK_DMODEL, BLOCK_N, offs_m, offs_n,
+                        # _, MASK_STEPS, ...
+                        PRE_LOAD_V, True, ENABLE_DROPOUT, RETURN_ENCODED_SOFTMAX, PADDED_HEAD, ACTUAL_BLOCK_DMODEL,
+                        QK_SCALE, INT8_GEMM, USE_P_SCALE, INT8_KV)
 
                 if INT8 and not INT8_KV:
                     if USE_P_SCALE:
@@ -733,7 +733,7 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
             else:
                 tile_id += NUM_WG
         else:
-            tile_id = num_tiles_total # break after single tile
+            tile_id = num_tiles_total  # break after single tile
 
 
 @triton.jit
@@ -1113,24 +1113,25 @@ class _attention(torch.autograd.Function):
 
         if metadata.persistent is not None:
             grid = lambda META: (min(NUM_CU * META['GRID_CU_MULTIP'],
-                                    triton.cdiv(metadata.max_seqlens_q, META['BLOCK_M']) * nheads_q * batch), )
+                                     triton.cdiv(metadata.max_seqlens_q, META['BLOCK_M']) * nheads_q * batch), )
         else:
             grid = lambda META: (triton.cdiv(metadata.max_seqlens_q, META['BLOCK_M']), nheads_q, batch)
-        
+
         atomic_counter = torch.zeros([1], device=q.device, dtype=torch.int32)
 
-        attn_fwd[grid](
-                q, k, v, metadata.bias, metadata.sm_scale, M, o, *q_strides, *k_strides, *v_strides, *o_strides,
-                *bias_strides, *alibi_strides, q_descale, k_descale, p_scale, p_descale, v_descale,
-                metadata.cu_seqlens_q, metadata.cu_seqlens_k, dropout_p=metadata.dropout_p, philox_seed=philox_seed,
-                philox_offset_base=philox_offset, encoded_softmax=encoded_softmax, alibi_slopes=metadata.alibi_slopes,
-                HQ=nheads_q, HK=nheads_k, ACTUAL_BLOCK_DMODEL=head_size, MAX_SEQLENS_Q=metadata.max_seqlens_q,
-                MAX_SEQLENS_K=metadata.max_seqlens_k, IS_CAUSAL=metadata.causal, VARLEN=metadata.varlen,
-                BLOCK_DMODEL=padded_d_model, USE_BIAS=False if metadata.bias is None else True,
-                USE_ALIBI=False if metadata.alibi_slopes is None else True, ENABLE_DROPOUT=metadata.dropout_p > 0.0,
-                RETURN_ENCODED_SOFTMAX=metadata.return_encoded_softmax, INT8=metadata.int8, USE_P_SCALE=metadata.int8
-                and metadata.use_p_scale, INT8_KV=metadata.int8 and metadata.int8_kv,
-                PERSISTENT=metadata.persistent is not None, PERSISTENT_DYNAMIC=metadata.persistent == "dynamic", NUM_CU=NUM_CU, atomic_counter=atomic_counter, B=batch)
+        attn_fwd[grid](q, k, v, metadata.bias, metadata.sm_scale, M, o, *q_strides, *k_strides, *v_strides, *o_strides,
+                       *bias_strides, *alibi_strides, q_descale, k_descale, p_scale, p_descale, v_descale,
+                       metadata.cu_seqlens_q, metadata.cu_seqlens_k, dropout_p=metadata.dropout_p,
+                       philox_seed=philox_seed, philox_offset_base=philox_offset, encoded_softmax=encoded_softmax,
+                       alibi_slopes=metadata.alibi_slopes, HQ=nheads_q, HK=nheads_k, ACTUAL_BLOCK_DMODEL=head_size,
+                       MAX_SEQLENS_Q=metadata.max_seqlens_q, MAX_SEQLENS_K=metadata.max_seqlens_k,
+                       IS_CAUSAL=metadata.causal, VARLEN=metadata.varlen, BLOCK_DMODEL=padded_d_model,
+                       USE_BIAS=False if metadata.bias is None else True,
+                       USE_ALIBI=False if metadata.alibi_slopes is None else True, ENABLE_DROPOUT=metadata.dropout_p
+                       > 0.0, RETURN_ENCODED_SOFTMAX=metadata.return_encoded_softmax, INT8=metadata.int8,
+                       USE_P_SCALE=metadata.int8 and metadata.use_p_scale, INT8_KV=metadata.int8 and metadata.int8_kv,
+                       PERSISTENT=metadata.persistent is not None, PERSISTENT_DYNAMIC=metadata.persistent == "dynamic",
+                       NUM_CU=NUM_CU, atomic_counter=atomic_counter, B=batch)
 
         ctx.save_for_backward(q, k, v, o, M)
         ctx.grid = grid
@@ -1846,14 +1847,15 @@ def nonvarlen_benchmark_configs():
     ]
     return configs
 
+
 def paper_benchmark_configs():
     configs = [
-        (32,  16,  16,   512,    512),
-        (16,  16,  16,   1024,   1024),
-        (8,  16,  16,   2048,   2048),
-        (4,  16,  16,   4096,   4096),
-        (2,  16,  16,   8192,   8192),
-        (1,  16,  16,  16384,  16384),
+        (32, 16, 16, 512, 512),
+        (16, 16, 16, 1024, 1024),
+        (8, 16, 16, 2048, 2048),
+        (4, 16, 16, 4096, 4096),
+        (2, 16, 16, 8192, 8192),
+        (1, 16, 16, 16384, 16384),
     ]
     return configs
 
@@ -1943,7 +1945,7 @@ def run_benchmark(custom, args):
             input_metadata.need_causal()
         if int8:
             q, k, v = quantize_input(q, k, v, input_metadata, quantize_p=quantize_p, int8_kv=int8_kv)
-        
+
         input_metadata.set_persistent(args.persistent)
         o = torch.empty_like(q)
         fn = lambda: attention(q, k, v, o, input_metadata)
@@ -2001,7 +2003,9 @@ def parse_args():
     parser.add_argument("-dtype", default='fp16')
     parser.add_argument("-return_time", action='store_true', default=False)
     parser.add_argument("-layout", type=str, default='bhsd', help=supported_layouts())
-    parser.add_argument("-persistent", nargs='?', const='fixed', choices=['fixed', 'dynamic'], default=None, help="Enable persistent kernels. Use '-persistent dynamic' for dynamic scheduling of the tiles.")
+    parser.add_argument(
+        "-persistent", nargs='?', const='fixed', choices=['fixed', 'dynamic'], default=None,
+        help="Enable persistent kernels. Use '-persistent dynamic' for dynamic scheduling of the tiles.")
     return parser.parse_args()
 
 
