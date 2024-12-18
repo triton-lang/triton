@@ -8,6 +8,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Tools/LinearLayout.h"
 #include "llvm/Support/ErrorHandling.h"
 
 namespace mlir {
@@ -701,24 +702,21 @@ LogicalResult ReshapeOp::verify() {
                      "encodings, or (b) neither does.");
   }
 
-  if (srcEnc && !getAllowReorder()) {
-    Attribute inferredDstEnc;
-    if (cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
-            ->inferReshapeOpNoReorderEncoding(srcTy.getShape(), srcEnc,
-                                              dstTy.getShape(), inferredDstEnc,
-                                              getLoc())
-            .failed()) {
-      return emitError("This reshape is impossible without reordering, but "
-                       "reordering is not allowed.  Try choosing a different "
-                       "encoding for the input tensor (or allow reordering).");
-    }
-    if (inferredDstEnc != dstEnc) {
-      return emitError("Expected result encoding ")
-             << inferredDstEnc << " but was " << dstEnc;
-    }
+  if (!srcEnc || getAllowReorder()) {
+    return success();
   }
 
-  return success();
+  // Check that we can infer the dst encoding from the src encoding
+  // and that the inferred dst encoding is the same as the given dst encoding
+  Attribute inferredDstEnc;
+  auto result =
+      cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
+          ->inferReshapeOpEncoding(srcTy.getShape(), srcEnc, dstTy.getShape(),
+                                   inferredDstEnc, getLoc());
+  assert(succeeded(result));
+  return cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
+      ->verifyLayoutsAreEqual(dstTy.getShape(), inferredDstEnc, dstEnc,
+                              getLoc());
 }
 
 //-- FpToFpOp --
