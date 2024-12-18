@@ -1848,18 +1848,6 @@ def nonvarlen_benchmark_configs():
     return configs
 
 
-def paper_benchmark_configs():
-    configs = [
-        (32, 16, 16, 512, 512),
-        (16, 16, 16, 1024, 1024),
-        (8, 16, 16, 2048, 2048),
-        (4, 16, 16, 4096, 4096),
-        (2, 16, 16, 8192, 8192),
-        (1, 16, 16, 16384, 16384),
-    ]
-    return configs
-
-
 def varlen_benchmark_configs():
     configs = [
         (2, 16, 4, 1024, 1024),
@@ -1898,11 +1886,11 @@ def run_benchmark(custom, args):
     if custom:
         x_vals_list = [(args.b, args.hq, hk, args.sq, sk)]
     else:
-        x_vals_list = paper_benchmark_configs()
-        # if varlen:
-        #     x_vals_list = varlen_benchmark_configs()
-        # else:
-        #     x_vals_list = nonvarlen_benchmark_configs()
+        if varlen:
+            x_vals_list = varlen_benchmark_configs()
+        else:
+            x_vals_list = nonvarlen_benchmark_configs()
+    
     print_time = args.return_time
     line_names = 'Time (ms)' if print_time else 'TFLOPS'
     configs.append(
