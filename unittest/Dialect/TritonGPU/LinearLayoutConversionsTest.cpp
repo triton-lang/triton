@@ -730,11 +730,8 @@ TEST_F(LinearLayoutConversionsTest, DotMMAv2_split_warp_kwidth8) {
 }
 
 TEST_F(LinearLayoutConversionsTest, SliceDot) {
-  // Test a slice layout with a DotOperand (MMAv2) as the parent.
-  // Parent is a Dot operand on top of a MMAv2 encoding.
+  // Slice layout with a DotOperand (MMAv2) as the parent.
   auto parentV2 = dot(mma(2, 0, {16, 8}, {1, 1}), /*opIdx=*/0, /*kWidth=*/8);
-  // Insert dimension #1 in the parent's shape => final shape {16, 1, 64}
-  // Then slice out dimension #1 => resulting shape {16, 64}.
   auto sliceV2 = slice(parentV2, /*dim=*/1);
 
   EXPECT_EQ(toLinearLayout({16}, sliceV2),
@@ -747,12 +744,9 @@ TEST_F(LinearLayoutConversionsTest, SliceDot) {
                 },
                 {S("dim0")}));
 
-  // Test a slice layout with a DotOperand (MMAv3) as the parent.
-  // Parent is a Dot operand on top of a MMAv3 encoding.
+  // Slice layout with a DotOperand (MMAv3) as the parent.
   auto parentV3 =
       dot(mma(3, 0, {16, 16, 8}, {4, 1}), /*opIdx=*/0, /*kWidth=*/2);
-  // Insert dimension #1 in the parent's shape => final shape {64, 1, 16}
-  // Then slice out dimension #1 => resulting shape {64, 16}.
   auto sliceV3 = slice(parentV3, /*dim=*/0);
 
   EXPECT_EQ(toLinearLayout({16}, sliceV3),
