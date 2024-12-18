@@ -61,10 +61,9 @@ class MetaData():
             self.max_seqlens_q = max(cu_seqlens_q[i + 1].item() - cu_seqlens_q[i].item(), self.max_seqlens_q)
             self.max_seqlens_k = max(cu_seqlens_k[i + 1].item() - cu_seqlens_k[i].item(), self.max_seqlens_k)
 
-<<<<<<< HEAD
     def set_persistent(self, persistent):
         self.persistent = persistent
-=======
+        
     def set_int8_params(self, q_descale, k_descale, v_descale, p_scale, p_descale):
         self.int8 = True
         self.q_descale = q_descale
@@ -74,7 +73,6 @@ class MetaData():
         self.p_descale = p_descale
         self.use_p_scale = (p_scale is not None) and (p_descale is not None) and (v_descale is not None)
         self.int8_kv = (q_descale is None) and (k_descale is not None) and (v_descale is not None)
->>>>>>> main_perf
 
     def need_bias(self, bias, batch, nheads, seqlen_q, seqlen_k):
         assert bias.is_cuda
@@ -392,12 +390,6 @@ def get_cdna_autotune_configs():
                       num_warps=4),
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False}, num_stages=1,
                       num_warps=4),
-<<<<<<< HEAD
-        # # Fall-back config.
-        triton.Config({'BLOCK_M': 16, 'BLOCK_N': 16, 'waves_per_eu': 1, 'PRE_LOAD_V': False}, num_stages=1,
-                      num_warps=4),
-=======
->>>>>>> main_perf
     ], ['IS_CAUSAL', 'dropout_p', 'MAX_SEQLENS_Q', 'MAX_SEQLENS_K', 'ACTUAL_BLOCK_DMODEL', 'VARLEN', 'HQ', 'HK']
 
 
@@ -1394,12 +1386,17 @@ class _attention(torch.autograd.Function):
         else:
             alibi_strides = (0, 0)
 
-<<<<<<< HEAD
         if metadata.persistent is not None:
             NUM_CU = torch.cuda.get_device_properties("cuda").multi_processor_count
             grid = lambda META: (min(NUM_CU * META['GRID_CU_MULTIP'],
                                      triton.cdiv(metadata.max_seqlens_q, META['BLOCK_M']) * nheads_q * batch), )
             atomic_counter = torch.zeros([1], device=q.device, dtype=torch.int32)
+
+            # TODO: add int8 to persistent
+            if metadata.int8:
+                print("int8 conversion not supported with persistent kernels yet!")
+            q_descale = k_descale = p_scale = p_descale = v_descale = None
+
 
             attn_fwd_persistent[grid](
                 q, k, v, metadata.bias, metadata.sm_scale, M, o, *q_strides, *k_strides, *v_strides, *o_strides,
@@ -1414,34 +1411,22 @@ class _attention(torch.autograd.Function):
                 RETURN_ENCODED_SOFTMAX=metadata.return_encoded_softmax)
 
         else:  # baseline
+            if metadata.int8:
+                q_descale, k_descale, p_scale, p_descale, v_descale = metadata.q_descale, metadata.k_descale, metadata.p_scale, metadata.p_descale, metadata.v_descale
+            else:
+                q_descale = k_descale = p_scale = p_descale = v_descale = None
             grid = lambda META: (triton.cdiv(metadata.max_seqlens_q, META['BLOCK_M']), nheads_q, batch)
-            attn_fwd[grid](q, k, v, metadata.bias, metadata.sm_scale, M, o, *q_strides, *k_strides, *v_strides,
-                           *o_strides, *bias_strides, *alibi_strides, metadata.cu_seqlens_q, metadata.cu_seqlens_k,
-                           dropout_p=metadata.dropout_p, philox_seed=philox_seed, philox_offset_base=philox_offset,
-                           encoded_softmax=encoded_softmax, alibi_slopes=metadata.alibi_slopes, HQ=nheads_q,
-                           HK=nheads_k, ACTUAL_BLOCK_DMODEL=head_size, MAX_SEQLENS_Q=metadata.max_seqlens_q,
-                           MAX_SEQLENS_K=metadata.max_seqlens_k, IS_CAUSAL=metadata.causal, VARLEN=metadata.varlen,
-                           BLOCK_DMODEL=padded_d_model, USE_BIAS=False if metadata.bias is None else True,
-                           USE_ALIBI=False if metadata.alibi_slopes is None else True, ENABLE_DROPOUT=metadata.dropout_p
-                           > 0.0, RETURN_ENCODED_SOFTMAX=metadata.return_encoded_softmax)
-=======
-        if metadata.int8:
-            q_descale, k_descale, p_scale, p_descale, v_descale = metadata.q_descale, metadata.k_descale, metadata.p_scale, metadata.p_descale, metadata.v_descale
-        else:
-            q_descale = k_descale = p_scale = p_descale = v_descale = None
-
-        attn_fwd[grid](q, k, v, metadata.bias, metadata.sm_scale, M, o, *q_strides, *k_strides, *v_strides, *o_strides,
-                       *bias_strides, *alibi_strides, q_descale, k_descale, p_scale, p_descale, v_descale,
-                       metadata.cu_seqlens_q, metadata.cu_seqlens_k, dropout_p=metadata.dropout_p,
-                       philox_seed=philox_seed, philox_offset_base=philox_offset, encoded_softmax=encoded_softmax,
-                       alibi_slopes=metadata.alibi_slopes, HQ=nheads_q, HK=nheads_k, ACTUAL_BLOCK_DMODEL=head_size,
-                       MAX_SEQLENS_Q=metadata.max_seqlens_q, MAX_SEQLENS_K=metadata.max_seqlens_k,
-                       IS_CAUSAL=metadata.causal, VARLEN=metadata.varlen, BLOCK_DMODEL=padded_d_model,
-                       USE_BIAS=False if metadata.bias is None else True,
-                       USE_ALIBI=False if metadata.alibi_slopes is None else True, ENABLE_DROPOUT=metadata.dropout_p
-                       > 0.0, RETURN_ENCODED_SOFTMAX=metadata.return_encoded_softmax, INT8=metadata.int8,
-                       USE_P_SCALE=metadata.int8 and metadata.use_p_scale, INT8_KV=metadata.int8 and metadata.int8_kv)
->>>>>>> main_perf
+            attn_fwd[grid](q, k, v, metadata.bias, metadata.sm_scale, M, o, *q_strides, *k_strides, *v_strides, *o_strides,
+                        *bias_strides, *alibi_strides, q_descale, k_descale, p_scale, p_descale, v_descale,
+                        metadata.cu_seqlens_q, metadata.cu_seqlens_k, dropout_p=metadata.dropout_p,
+                        philox_seed=philox_seed, philox_offset_base=philox_offset, encoded_softmax=encoded_softmax,
+                        alibi_slopes=metadata.alibi_slopes, HQ=nheads_q, HK=nheads_k, ACTUAL_BLOCK_DMODEL=head_size,
+                        MAX_SEQLENS_Q=metadata.max_seqlens_q, MAX_SEQLENS_K=metadata.max_seqlens_k,
+                        IS_CAUSAL=metadata.causal, VARLEN=metadata.varlen, BLOCK_DMODEL=padded_d_model,
+                        USE_BIAS=False if metadata.bias is None else True,
+                        USE_ALIBI=False if metadata.alibi_slopes is None else True, ENABLE_DROPOUT=metadata.dropout_p
+                        > 0.0, RETURN_ENCODED_SOFTMAX=metadata.return_encoded_softmax, INT8=metadata.int8,
+                        USE_P_SCALE=metadata.int8 and metadata.use_p_scale, INT8_KV=metadata.int8 and metadata.int8_kv)
 
         ctx.save_for_backward(q, k, v, o, M)
         ctx.grid = grid
