@@ -83,6 +83,11 @@ public:
   virtual LogicalResult
   verifyDotOpEncodingCompatibility(Operation *op, Attribute operandEncodingA,
                                    Attribute operandEncodingB) const = 0;
+
+  virtual LogicalResult
+  inferFp4ToFpOpEncoding(ArrayRef<int64_t> shape, int axis, Attribute inEnc,
+                         Attribute &outEnc, bool fwdInference,
+                         std::optional<Location> loc) const = 0;
 };
 
 class DialectVerifyTensorLayoutInterface

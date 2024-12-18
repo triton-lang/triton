@@ -1130,11 +1130,9 @@ void LayoutRematerialization::hoistConvertDotOperand(
 
   // We hoist over any operation that can be done without data movement between
   // threads We do views and elementwise pure ops for now
-  // UpcastMXFPOp is here temporarily until
-  // https://github.com/triton-lang/triton/pull/5475 lands
   auto noDataMovement = [](Operation *op) {
     return (op->hasTrait<OpTrait::Elementwise>() && isMemoryEffectFree(op)) ||
-           isa<BroadcastOp, ExpandDimsOp, ReshapeOp, TransOp, UpcastMXFPOp,
+           isa<BroadcastOp, ExpandDimsOp, ReshapeOp, TransOp, Fp4ToFpOp,
                ConvertLayoutOp>(op);
   };
   // Stop the slice as soon as we find an operation that cannot be done without
