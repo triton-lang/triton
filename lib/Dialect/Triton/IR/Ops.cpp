@@ -702,20 +702,21 @@ LogicalResult ReshapeOp::verify() {
                      "encodings, or (b) neither does.");
   }
 
-  if (srcEnc && !getAllowReorder()) {
-    Attribute inferredDstEnc;
-    auto result =
-        cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
-            ->inferReshapeOpEncoding(srcTy.getShape(), srcEnc, dstTy.getShape(),
-                                     inferredDstEnc, getLoc());
-    assert(succeeded(result));
-    if (inferredDstEnc != dstEnc) {
-      return emitError("Expected result encoding ")
-             << inferredDstEnc << " but was " << dstEnc;
-    }
+  if (!srcEnc || getAllowReorder()) {
+    return success();
   }
 
-  return success();
+  // Check that we can infer the dst encoding from the src encoding
+  // and that the inferred dst encoding is the same as the given dst encoding
+  Attribute inferredDstEnc;
+  auto result =
+      cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
+          ->inferReshapeOpEncoding(srcTy.getShape(), srcEnc, dstTy.getShape(),
+                                   inferredDstEnc, getLoc());
+  assert(succeeded(result));
+  return cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
+      ->verifyLayoutsAreEqual(dstTy.getShape(), inferredDstEnc, dstEnc,
+                              getLoc());
 }
 
 //-- FpToFpOp --
