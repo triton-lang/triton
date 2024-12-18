@@ -263,12 +263,33 @@ std::pair<Value, Value> createDecomposeOffsetFromExpr(RewriterBase &rewriter,
   return offsets;
 }
 
-static const char kLegalAttr[] = "__amd-pointer-canonicalize-legal__";
-static const char kRewrittenAttr[] = "__amd-pointer-canonicalize-rewritten__";
-static const char kSCFThenRewrittenAttr[] =
-    "__amd-pointer-canonicalize-scf-then-rewritten__";
-static const char kSCFElseRewrittenAttr[] =
-    "__amd-pointer-canonicalize-scf-else-rewritten__";
+static const std::string kPtrCanonPrefix = "__amdpointercanonicalize.";
+static const std::string kLegalAttr = kPtrCanonPrefix + "legal__";
+static const std::string kRewrittenAttr = kPtrCanonPrefix + "rewritten__";
+static const std::string kSCFThenRewrittenAttr =
+    kPtrCanonPrefix + "scf-then-rewritten__";
+static const std::string kSCFElseRewrittenAttr =
+    kPtrCanonPrefix + "scf-else-rewritten__";
+static const std::string kSCFIfOpYieldFatPtrOffsets =
+    kPtrCanonPrefix + "scf-if-yield-fatptr-offsets__";
+
+static void setLegalAttr(RewriterBase &rewriter, Operation *newOp) {
+  rewriter.modifyOpInPlace(newOp, [&] {
+    newOp->setDiscardableAttr(kLegalAttr, rewriter.getUnitAttr());
+  });
+}
+
+static void setRewrittenAttr(RewriterBase &rewriter, Operation *origOp) {
+  rewriter.modifyOpInPlace(origOp, [&] {
+    origOp->setDiscardableAttr(kRewrittenAttr, rewriter.getUnitAttr());
+  });
+}
+
+static void setRewrittenLegalAttrs(RewriterBase &rewriter, Operation *origOp,
+                                   Operation *newOp) {
+  setRewrittenAttr(rewriter, origOp);
+  setLegalAttr(rewriter, newOp);
+}
 
 Value createTensorPointer(
     RewriterBase &rewriter, Value basePtr, Value offset, Location loc,
@@ -296,12 +317,12 @@ Value createTensorPointer(
   if (canNarrow)
     offset = createNarrow64bitOffsetTo32bits(rewriter, loc, offset);
 
-  Value tensorPtr = rewriter.create<triton::SplatOp>(
-      loc, TypeRange{tensorPtrType}, ValueRange{basePtr},
-      SmallVector{rewriter.getNamedAttr(kLegalAttr, rewriter.getUnitAttr())});
-
-  auto addPtrOp =
+  triton::SplatOp tensorPtr =
+      rewriter.create<triton::SplatOp>(loc, tensorPtrType, basePtr);
+  setLegalAttr(rewriter, tensorPtr);
+  triton::AddPtrOp addPtrOp =
       rewriter.create<triton::AddPtrOp>(loc, tensorPtrType, tensorPtr, offset);
+  setLegalAttr(rewriter, addPtrOp);
 
   for (auto attribute : attributes)
     addPtrOp->setAttr(attribute.getFirst(), attribute.getSecond());
@@ -340,6 +361,7 @@ struct FatPointers {
   template <typename T>
   using const_arg_type_t = typename llvm::const_pointer_or_const_ref<T>::type;
   const ValueT &at(const_arg_type_t<KeyT> k) const { return pointers.at(k); }
+  const bool contains(const KeyT &k) { return pointers.contains(k); }
 
 private:
   DenseMapT pointers;
@@ -410,26 +432,6 @@ struct PointerCanonicalizationPattern : OpConversionPattern<SourceOp> {
       : OpConversionPattern<SourceOp>(context, benefit), fatPtrs(fatPtrs) {}
   FatPointers &fatPtrs;
 };
-
-static void setLegalAttr(ConversionPatternRewriter &rewriter,
-                         Operation *newOp) {
-  rewriter.modifyOpInPlace(newOp, [&] {
-    newOp->setDiscardableAttr(kLegalAttr, rewriter.getUnitAttr());
-  });
-}
-
-static void setRewrittenAttr(ConversionPatternRewriter &rewriter,
-                             Operation *origOp) {
-  rewriter.modifyOpInPlace(origOp, [&] {
-    origOp->setDiscardableAttr(kRewrittenAttr, rewriter.getUnitAttr());
-  });
-}
-
-static void setRewrittenLegalAttrs(ConversionPatternRewriter &rewriter,
-                                   Operation *origOp, Operation *newOp) {
-  setRewrittenAttr(rewriter, origOp);
-  setLegalAttr(rewriter, newOp);
-}
 
 /// splat integer offset, keep base
 class ConvertSplatOp : public PointerCanonicalizationPattern<triton::SplatOp> {
@@ -617,8 +619,8 @@ public:
 
     // rewrite the body bb args
     unsigned inputNo = 0;
-    TypeConverter hackTypeConverter;
-    hackTypeConverter.addConversion(
+    TypeConverter localTypeConverter;
+    localTypeConverter.addConversion(
         [&inputNo, remappedInits = adaptor.getInitArgs()](
             Type inputType, SmallVectorImpl<Type> &types) {
           // handle the 0th iv
@@ -633,11 +635,25 @@ public:
           return success();
         });
     std::optional<TypeConverter::SignatureConversion> conversion =
-        hackTypeConverter.convertBlockSignature(forOp.getBody());
+        localTypeConverter.convertBlockSignature(forOp.getBody());
     if (!conversion)
       return failure();
-    rewriter.applySignatureConversion(forOp.getBody(), *conversion,
-                                      &hackTypeConverter);
+    auto newBodyBlock = rewriter.applySignatureConversion(
+        forOp.getBody(), *conversion, &localTypeConverter);
+
+    // propagate canNarrow to bb arg fatPtrs in for body bb
+    // skip iv at index 0
+    int offset = 1;
+    for (auto operands : remappedInits) {
+      if (operands.size() == 2) {
+        assert(fatPtrs.contains({operands[0], operands[1]}) &&
+               "expected fatPtrs to contain remapped fat pointer");
+        fatPtrs[{newBodyBlock->getArgument(offset),
+                 newBodyBlock->getArgument(offset + 1)}]
+            .canNarrow = fatPtrs[{operands[0], operands[1]}].canNarrow;
+      }
+      offset += operands.size();
+    }
 
     SmallVector<Value> initArgs = flattenValues(adaptor.getInitArgs());
     auto newForOp = rewriter.create<scf::ForOp>(
@@ -676,7 +692,8 @@ public:
   LogicalResult
   matchAndRewrite(scf::YieldOp yieldOp, OneToNOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    SmallVector<Value> newYieldedValues = flattenValues(adaptor.getOperands());
+    ArrayRef<ValueRange> remappedYields = adaptor.getOperands();
+    SmallVector<Value> newYieldedValues = flattenValues(remappedYields);
     // have to mutate here because otherwise scf.if, scf.for, and scf.while will
     // get confused about which yield is the "correct" yield (since there will
     // be two of them before the rewriter DCEs)
@@ -689,16 +706,33 @@ public:
     // other to indicate to the parent IfOp that the result type can now be
     // rewritten and not before.
     if (auto ifOp = dyn_cast<scf::IfOp>(yieldOp->getParentOp())) {
-      if (ifOp.thenBlock() == yieldOp->getBlock())
+      if (ifOp.thenBlock() == yieldOp->getBlock()) {
         rewriter.modifyOpInPlace(ifOp, [&] {
           ifOp->setDiscardableAttr(kSCFThenRewrittenAttr,
                                    rewriter.getUnitAttr());
         });
-      else
+      } else {
         rewriter.modifyOpInPlace(ifOp, [&] {
           ifOp->setDiscardableAttr(kSCFElseRewrittenAttr,
                                    rewriter.getUnitAttr());
         });
+      }
+      // set indices of fatPtrs so that IfOp can propagate canNarrow to
+      // result users
+      int offset = 0;
+      SmallVector<int64_t> fatPtrOffsets;
+      for (auto operands : remappedYields) {
+        if (operands.size() == 2) {
+          assert(fatPtrs.contains({operands[0], operands[1]}) &&
+                 "expected fatPtrs to contain remapped fat pointer");
+          fatPtrOffsets.push_back(offset);
+        }
+        offset += operands.size();
+      }
+      if (!fatPtrOffsets.empty())
+        yieldOp->setDiscardableAttr(
+            kSCFIfOpYieldFatPtrOffsets,
+            rewriter.getDenseI64ArrayAttr(fatPtrOffsets));
     }
 
     setLegalAttr(rewriter, yieldOp);
@@ -717,26 +751,52 @@ public:
     ArrayRef<ValueRange> remappedInits = adaptor.getInits();
     for (ValueRange remappedInit : remappedInits)
       valRangeLens.push_back(remappedInit.size());
-    // rewrite the "before" region (bb args)
-    TypeConverter hackTypeConverter;
+
+    // rewrite the "before" block bb args
     unsigned inputNo = 0;
-    hackTypeConverter.addConversion(
-        [&inputNo, &remappedInits = std::as_const(remappedInits)](
-            Type inputType, SmallVectorImpl<Type> &types) {
+    TypeConverter localTypeConverter;
+    localTypeConverter.addConversion(
+        [&inputNo, remappedInits](Type _inputType,
+                                  SmallVectorImpl<Type> &types) {
           SmallVector<Type> remappedInitTypes =
               llvm::to_vector(remappedInits[inputNo].getTypes());
           types.append(remappedInitTypes);
           inputNo++;
           return success();
         });
-    if (failed(rewriter.convertRegionTypes(&whileOp.getBefore(),
-                                           hackTypeConverter)))
+    std::optional<TypeConverter::SignatureConversion> conversion =
+        localTypeConverter.convertBlockSignature(whileOp.getBeforeBody());
+    if (!conversion)
       return failure();
-    // rewrite the "after" region (bb args)
-    inputNo = 0;
-    if (failed(rewriter.convertRegionTypes(&whileOp.getAfter(),
-                                           hackTypeConverter)))
+    auto newBeforeBodyBlock = rewriter.applySignatureConversion(
+        whileOp.getBeforeBody(), *conversion, &localTypeConverter);
+
+    auto propagateCanNarrowToBlock = [remappedInits, this](Block *block) {
+      int offset = 0;
+      for (auto operands : remappedInits) {
+        if (operands.size() == 2) {
+          assert(fatPtrs.contains({operands[0], operands[1]}) &&
+                 "expected fatPtrs to contain remapped fat pointer");
+          fatPtrs[{block->getArgument(offset), block->getArgument(offset + 1)}]
+              .canNarrow = fatPtrs[{operands[0], operands[1]}].canNarrow;
+        }
+        offset += operands.size();
+      }
+    };
+
+    // propagate canNarrow to bb arg fatPtrs in before bb
+    propagateCanNarrowToBlock(newBeforeBodyBlock);
+
+    // rewrite the "after" block bb args
+    conversion =
+        localTypeConverter.convertBlockSignature(whileOp.getAfterBody());
+    if (!conversion)
       return failure();
+    auto newAfterBodyBlock = rewriter.applySignatureConversion(
+        whileOp.getAfterBody(), *conversion, &localTypeConverter);
+
+    // propagate canNarrow to bb arg fatPtrs in after bb
+    propagateCanNarrowToBlock(newAfterBodyBlock);
 
     SmallVector<Value> initArgs = flattenValues(remappedInits);
     SmallVector<Type> resultTypes =
@@ -796,54 +856,76 @@ public:
   LogicalResult
   matchAndRewrite(cf::CondBranchOp branchOp, OneToNOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    SmallVector<Value> trueOperands =
-        flattenValues(adaptor.getTrueDestOperands());
-    SmallVector<Value> falseOperands =
-        flattenValues(adaptor.getFalseDestOperands());
+    ArrayRef<ValueRange> remappedTrueOperands = adaptor.getTrueDestOperands();
+    ArrayRef<ValueRange> remappedFalseOperands = adaptor.getFalseDestOperands();
+    SmallVector<Value> trueOperands = flattenValues(remappedTrueOperands);
+    SmallVector<Value> falseOperands = flattenValues(remappedFalseOperands);
 
     setRewrittenAttr(rewriter, branchOp);
     auto newBrancOp = rewriter.replaceOpWithNewOp<cf::CondBranchOp>(
         branchOp, branchOp.getCondition(), branchOp.getTrueDest(), trueOperands,
         branchOp.getFalseDest(), falseOperands);
 
+    // can't put inputNo inside because of limited lifetime (it'll be popped
+    // from stack memory after lambda returns...)
+    auto makeTypeConv = [](unsigned &inputNo,
+                           ArrayRef<ValueRange> remappedOperands) {
+      return [&inputNo, remappedOperands](Type inputType,
+                                          SmallVectorImpl<Type> &types) {
+        SmallVector<Type> remappedInitTypes =
+            llvm::to_vector(remappedOperands[inputNo].getTypes());
+        types.append(remappedInitTypes);
+        inputNo++;
+        return success();
+      };
+    };
+
+    auto propagateCanNarrowToBlock = [this](Block *block,
+                                            ArrayRef<ValueRange>
+                                                remappedOperands) {
+      int offset = 0;
+      for (auto operands : remappedOperands) {
+        if (operands.size() == 2) {
+          assert(fatPtrs.contains({operands[0], operands[1]}) &&
+                 "expected fatPtrs to contain remapped fat pointer");
+          fatPtrs[{block->getArgument(offset), block->getArgument(offset + 1)}]
+              .canNarrow = fatPtrs[{operands[0], operands[1]}].canNarrow;
+        }
+        offset += operands.size();
+      }
+    };
+
     // convert the type signature of the true dest bb
+    TypeConverter localTypeConverterTrueDest;
     unsigned inputNo = 0;
-    TypeConverter hackTypeConverterTrueDest;
-    hackTypeConverterTrueDest.addConversion(
-        [&inputNo, remappedOperands = adaptor.getTrueDestOperands()](
-            Type inputType, SmallVectorImpl<Type> &types) {
-          SmallVector<Type> remappedInitTypes =
-              llvm::to_vector(remappedOperands[inputNo].getTypes());
-          types.append(remappedInitTypes);
-          inputNo++;
-          return success();
-        });
+    localTypeConverterTrueDest.addConversion(
+        makeTypeConv(inputNo, remappedTrueOperands));
     std::optional<TypeConverter::SignatureConversion> conversion =
-        hackTypeConverterTrueDest.convertBlockSignature(branchOp.getTrueDest());
+        localTypeConverterTrueDest.convertBlockSignature(
+            branchOp.getTrueDest());
     if (!conversion)
       return failure();
-    rewriter.applySignatureConversion(branchOp.getTrueDest(), *conversion,
-                                      &hackTypeConverterTrueDest);
+    auto newTrueBlock = rewriter.applySignatureConversion(
+        branchOp.getTrueDest(), *conversion, &localTypeConverterTrueDest);
+
+    // propagate canNarrow to bb arg fatPtrs in true bb
+    propagateCanNarrowToBlock(newTrueBlock, remappedTrueOperands);
 
     // convert the type signature of the false dest bb
     inputNo = 0;
-    TypeConverter hackTypeConverterFalseDest;
-    hackTypeConverterFalseDest.addConversion(
-        [&inputNo, remappedOperands = adaptor.getFalseDestOperands()](
-            Type inputType, SmallVectorImpl<Type> &types) {
-          SmallVector<Type> remappedInitTypes =
-              llvm::to_vector(remappedOperands[inputNo].getTypes());
-          types.append(remappedInitTypes);
-          inputNo++;
-          return success();
-        });
-
-    conversion = hackTypeConverterFalseDest.convertBlockSignature(
+    TypeConverter localTypeConverterFalseDest;
+    localTypeConverterFalseDest.addConversion(
+        makeTypeConv(inputNo, remappedFalseOperands));
+    conversion = localTypeConverterFalseDest.convertBlockSignature(
         branchOp.getFalseDest());
     if (!conversion)
       return failure();
-    rewriter.applySignatureConversion(branchOp.getFalseDest(), *conversion,
-                                      &hackTypeConverterFalseDest);
+    auto newFalseBlock = rewriter.applySignatureConversion(
+        branchOp.getFalseDest(), *conversion, &localTypeConverterFalseDest);
+
+    // propagate canNarrow to bb arg fatPtrs in false bb
+    propagateCanNarrowToBlock(newFalseBlock, remappedFalseOperands);
+
     setLegalAttr(rewriter, newBrancOp);
     return success();
   }
@@ -912,10 +994,8 @@ public:
   LogicalResult
   matchAndRewrite(scf::IfOp ifOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (ifOp.getNumResults() != 1 ||
-        ifOp.thenYield().getOperandTypes().size() != 2)
-      return rewriter.notifyMatchFailure(
-          ifOp, "only 1 -> 2 supported for scf::IfOp rewrite");
+    assert(ifOp.thenYield()->hasAttr(kSCFIfOpYieldFatPtrOffsets) &&
+           "expected then yield to report fat ptr indices");
 
     bool withElseRegion = ifOp.getNumRegions() > 1;
 
@@ -924,6 +1004,32 @@ public:
       assert(ifOp.thenYield().getOperandTypes() ==
                  ifOp.elseYield().getOperandTypes() &&
              "ifOp types must match in both arms");
+      assert(ifOp.elseYield()->hasAttr(kSCFIfOpYieldFatPtrOffsets) &&
+             "expected then yield to report fat ptr indices");
+      if (auto thenFatPtrIndxs = ifOp.thenYield()->getDiscardableAttr(
+              kSCFIfOpYieldFatPtrOffsets)) {
+        auto elseFatPtrIndx =
+            ifOp.elseYield()->getDiscardableAttr(kSCFIfOpYieldFatPtrOffsets);
+        assert(elseFatPtrIndx &&
+               "expected else fat ptr indices as well as then fat ptr indices");
+        for (auto [i, j] : llvm::zip(
+                 llvm::cast<DenseI64ArrayAttr>(thenFatPtrIndxs).asArrayRef(),
+                 llvm::cast<DenseI64ArrayAttr>(elseFatPtrIndx).asArrayRef())) {
+          assert(i == j &&
+                 "expected thenFatPtrIndxs and elseFatPtrIndxs to agree");
+          assert(i < ifOp.thenYield().getNumOperands() &&
+                 i + 1 < ifOp.thenYield().getNumOperands() &&
+                 "expected idx to be within bounds of IfOp's results");
+          Value thenFatPtrBase = ifOp.thenYield().getOperand(i);
+          Value thenFatPtrOffset = ifOp.thenYield().getOperand(i + 1);
+          Value elseFatPtrBase = ifOp.elseYield().getOperand(i);
+          Value elseFatPtrOffset = ifOp.elseYield().getOperand(i + 1);
+          assert((fatPtrs[{thenFatPtrBase, thenFatPtrOffset}].canNarrow ==
+                  fatPtrs[{elseFatPtrBase, elseFatPtrOffset}].canNarrow) &&
+                 "expected then fat ptr canNarrow and else fat ptr canNarrow "
+                 "to be equal");
+        }
+      }
     }
 #endif
 
@@ -939,6 +1045,16 @@ public:
     setRewrittenLegalAttrs(rewriter, ifOp, newIfOp);
     rewriter.replaceOpWithMultiple(ifOp, {newIfOp.getResults()});
 
+    for (int64_t idx :
+         llvm::cast<DenseI64ArrayAttr>(newIfOp.thenYield()->getDiscardableAttr(
+                                           kSCFIfOpYieldFatPtrOffsets))
+             .asArrayRef()) {
+      Value thenFatPtrBase = newIfOp.thenYield().getOperand(idx);
+      Value thenFatPtrOffset = newIfOp.thenYield().getOperand(idx + 1);
+      fatPtrs[{newIfOp.getResult(idx), newIfOp.getResult(idx + 1)}].canNarrow =
+          fatPtrs[{thenFatPtrBase, thenFatPtrOffset}].canNarrow;
+    }
+
     return success();
   }
 };
@@ -950,30 +1066,43 @@ public:
   LogicalResult
   matchAndRewrite(cf::BranchOp branchOp, OneToNOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    SmallVector<Value> trueOperands = flattenValues(adaptor.getDestOperands());
+    ArrayRef<ValueRange> remappedDestOperands = adaptor.getDestOperands();
+    SmallVector<Value> trueOperands = flattenValues(remappedDestOperands);
 
     setRewrittenAttr(rewriter, branchOp);
     auto newBrancOp = rewriter.replaceOpWithNewOp<cf::BranchOp>(
         branchOp, branchOp.getDest(), trueOperands);
 
     unsigned inputNo = 0;
-    TypeConverter hackTypeConverterTrueDest;
-    hackTypeConverterTrueDest.addConversion(
-        [&inputNo, remappedOperands = adaptor.getDestOperands()](
-            Type _inputType, SmallVectorImpl<Type> &types) {
+    TypeConverter localTypeConverterTrueDest;
+    localTypeConverterTrueDest.addConversion(
+        [&inputNo, remappedDestOperands](Type _inputType,
+                                         SmallVectorImpl<Type> &types) {
           SmallVector<Type> remappedInitTypes =
-              llvm::to_vector(remappedOperands[inputNo].getTypes());
+              llvm::to_vector(remappedDestOperands[inputNo].getTypes());
           types.append(remappedInitTypes);
           inputNo++;
           return success();
         });
-
     std::optional<TypeConverter::SignatureConversion> conversion =
-        hackTypeConverterTrueDest.convertBlockSignature(branchOp.getDest());
+        localTypeConverterTrueDest.convertBlockSignature(branchOp.getDest());
     if (!conversion)
       return failure();
-    rewriter.applySignatureConversion(branchOp.getDest(), *conversion,
-                                      &hackTypeConverterTrueDest);
+    auto newDestBlock = rewriter.applySignatureConversion(
+        branchOp.getDest(), *conversion, &localTypeConverterTrueDest);
+
+    int offset = 0;
+    for (auto operands : remappedDestOperands) {
+      if (operands.size() == 2) {
+        assert(fatPtrs.contains({operands[0], operands[1]}) &&
+               "expected fatPtrs to contain remapped fat pointer");
+        fatPtrs[{newDestBlock->getArgument(offset),
+                 newDestBlock->getArgument(offset + 1)}]
+            .canNarrow = fatPtrs[{operands[0], operands[1]}].canNarrow;
+      }
+      offset += operands.size();
+    }
+
     setLegalAttr(rewriter, newBrancOp);
     return success();
   }
@@ -986,9 +1115,12 @@ public:
   LogicalResult
   matchAndRewrite(triton::LoadOp loadOp, OneToNOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    ValueRange fatPtr = *adaptor.getOperands().begin();
-    Value fatPtrBase = fatPtr.front();
-    Value fatPtrOffset = fatPtr.back();
+    ValueRange fatPtr = adaptor.getPtr();
+    if (fatPtr.size() != 2)
+      return rewriter.notifyMatchFailure(
+          loadOp, "expected LoadOp ptr to have already been remapped");
+    Value fatPtrBase = fatPtr[0];
+    Value fatPtrOffset = fatPtr[1];
     Location curLoc = loadOp.getLoc();
 
     llvm::SmallDenseMap<StringAttr, Attribute> attributes{
@@ -1015,9 +1147,12 @@ public:
   LogicalResult
   matchAndRewrite(triton::StoreOp storeOp, OneToNOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    ValueRange fatPtr = *adaptor.getOperands().begin();
-    Value fatPtrBase = fatPtr.front();
-    Value fatPtrOffset = fatPtr.back();
+    ValueRange fatPtr = adaptor.getPtr();
+    if (fatPtr.size() != 2)
+      return rewriter.notifyMatchFailure(
+          storeOp, "expected StoreOp ptr to have already been remapped");
+    Value fatPtrBase = fatPtr[0];
+    Value fatPtrOffset = fatPtr[1];
     Location curLoc = storeOp.getLoc();
 
     llvm::SmallDenseMap<StringAttr, Attribute> attributes{
@@ -1181,8 +1316,10 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
     return signalPassFailure();
 
   module.walk<WalkOrder::PreOrder>([](Operation *op) {
-    op->removeDiscardableAttr(kRewrittenAttr);
-    op->removeDiscardableAttr(kLegalAttr);
+    for (auto attr : op->getDiscardableAttrs()) {
+      if (attr.getName().strref().starts_with(kPtrCanonPrefix))
+        op->removeDiscardableAttr(attr.getName());
+    }
   });
 }
 
