@@ -904,13 +904,6 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(
     MLIRContext *ctx, RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
     ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> order,
     int swizzleByteSize) {
-  StringAttr kReg = S("register");
-  StringAttr kLane = S("lane");
-  StringAttr kWarp = S("warp");
-  StringAttr kCol = S("dim1");
-  StringAttr kRow = S("dim0");
-  StringAttr kOffset = S("offset");
-
   int perPhase;
   int maxPhase;
   if (swizzleByteSize == 32) {
@@ -930,45 +923,84 @@ LinearLayout chooseStMatrixLayoutLeadingOffset(
   // stmatrix only supports 16-bit elements, and each vector has 8 elements
   int elemBitWidth = 16;
   int vecSize = 8;
-  int numRows = 16;
-  int numCols = 8 * swizzleByteSize / elemBitWidth;
+  int numRowsPerTile = 16;
+  int numColsPerChunk = 8 * swizzleByteSize / elemBitWidth;
 
   // Construct a single stmatrix.x4 (16x16) tile
   std::vector<std::vector<int>> basesReg = {{1, 0}, {2, 0}, {4, 0}};
   std::vector<std::vector<int>> basesLane;
-  for (int logRow = 0; logRow < llvm::Log2_32(numRows); logRow++) {
+  for (int logRow = 0; logRow < llvm::Log2_32(numRowsPerTile); logRow++) {
     int row = 1 << logRow;
     basesLane.push_back({vecSize * ((row / perPhase) % maxPhase), row});
   }
   basesLane.push_back({8, 0});
 
-  // Expand the tile's register dimension to fit swizzleByteSize, which is a
-  // "chunk"
-  for (int logChunk = 0; logChunk < llvm::Log2_32(numCols / 16); logChunk++) {
-    int chunk = 1 << logChunk;
-    basesReg.push_back({16 * chunk, 0});
+  auto mma = cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
+  assert(mma.getVersionMajor() >= 3 && "Only MMAv3 is supported");
+  int instrM = mma.getInstrShape()[0];
+  int instrN = mma.getInstrShape()[1];
+
+  // TODO(Keren): The following logic can be simplified by using the
+  // `divideLeft` function in `LinearLayout` once it's available.
+  // Construct the bases for a single chunk
+  // In theory the following situation is valid but it will be
+  // suboptimal. Swizzling should happen within a warp.
+  assert(instrN >= numColsPerChunk &&
+         "Each chunk is filled in with a single warp");
+  for (int logCol = 0; logCol < llvm::Log2_32(numColsPerChunk / 16); logCol++) {
+    int col = 1 << logCol;
+    basesReg.push_back({16 * col, 0});
   }
 
-  // Construct the layout for a single chunk
-  LinearLayout layout =
-      LinearLayout({{kReg, basesReg}, {kLane, basesLane}}, {kCol, kRow});
+  // Construct the bases for warpsPerCTA[0]
+  std::vector<std::vector<int>> basesWarp;
+  auto warpsPerCTA = mma.getWarpsPerCTA();
+  auto shape = tensorTy.getShape();
+  for (int logWarp = 0; logWarp < llvm::Log2_32(warpsPerCTA[0]); logWarp++) {
+    int warp = 1 << logWarp;
+    basesWarp.push_back({0, warp * instrM});
+  }
 
-  // Expand the `warp` dimension according to warpsPerCTA.
-  auto mma = cast<NvidiaMmaEncodingAttr>(tensorTy.getEncoding());
-  layout *= identityStandardND(kWarp, mma.getWarpsPerCTA(), /*order=*/{0, 1})
-                .transposeOuts(llvm::to_vector(layout.getOutDimNames()));
+  // Expand the `register` dimension so the size of columns matches `shape[1] /
+  // warpsPerCTA[1]`
+  auto numColsPerWarp = std::max<int>(instrN, shape[1] / warpsPerCTA[1]);
+  assert(warpsPerCTA[1] * instrN >= shape[1] &&
+         "There must be enough columns to use MMAv3");
+  auto logNumCols = llvm::Log2_32(numColsPerWarp / numColsPerChunk);
+  for (int logCol = 0; logCol < logNumCols; logCol++) {
+    int chunk = 1 << logCol;
+    int basis = chunk * shape[0];
+    basesReg.push_back({0, basis});
+  }
 
-  // Expand the `register` dimension so the size of columns matches `n`.
-  int n = mma.getInstrShape()[1];
-  int numWarpRows = layout.getOutDimSize(kRow);
-  layout = (layout.reshapeOuts({{kOffset, layout.getTotalOutDimSize()}}) *
-            LinearLayout::identity1D(n / numCols, kReg, kOffset))
-               .reshapeOuts({{kCol, n}, {kRow, numWarpRows}});
+  // Expand the `register` dimension so that the size of rows matches `shape[0]`
+  assert(warpsPerCTA[0] * instrM <= shape[0] &&
+         "There must be enough rows to use MMAv3");
+  auto logNumRows = llvm::Log2_32(shape[0] / (warpsPerCTA[0] * instrM));
+  for (int logRow = 0; logRow < logNumRows; logRow++) {
+    int chunk = 1 << logRow;
+    int basis = chunk * warpsPerCTA[0] * instrM;
+    basesReg.push_back({0, basis});
+  }
 
-  auto ret =
-      combineCtaCgaWithShape(layout, mma.getCTALayout(), tensorTy.getShape());
-  return ret.transposeOuts(llvm::to_vector(layout.getOutDimNames()))
-      .reshapeOuts({{kOffset, ret.getTotalOutDimSize()}, {S("iteration"), 1}});
+  // Expand the `warp` dimension so that the size of cols matches `shape[1]`
+  for (int logWarp = 0; logWarp < llvm::Log2_32(warpsPerCTA[1]); logWarp++) {
+    int warp = 1 << logWarp;
+    if (warp * numColsPerWarp >= shape[1]) {
+      basesWarp.push_back({0, 0});
+    } else {
+      int basis = (warp * numColsPerWarp) / numColsPerChunk * shape[0];
+      basesWarp.push_back({0, basis});
+    }
+  }
+
+  auto layout = LinearLayout({{S("register"), basesReg},
+                              {S("lane"), basesLane},
+                              {S("warp"), basesWarp},
+                              {S("block"), {}}},
+                             {S("offset1"), S("offset0")});
+  return layout.reshapeOuts(
+      {{S("offset"), layout.getTotalOutDimSize()}, {S("iteration"), 1}});
 }
 
 LinearLayout chooseStMatrixLayoutNoLeadingOffset(
