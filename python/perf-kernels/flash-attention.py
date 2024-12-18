@@ -63,7 +63,7 @@ class MetaData():
 
     def set_persistent(self, persistent):
         self.persistent = persistent
-        
+
     def set_int8_params(self, q_descale, k_descale, v_descale, p_scale, p_descale):
         self.int8 = True
         self.q_descale = q_descale
