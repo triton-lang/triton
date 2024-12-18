@@ -42,7 +42,7 @@ This script contains the Flash Attention kernel with the following support
 - Multi and Grouped Query attention
 - ALiBi bias
 - Matrix bias
-- Persistent kernels
+- Persistent kernels. Useful when the sequence lengths are up to a moderate length and especially when doing causal attention.
 
 These are currently supported for the forward kernel only.
 

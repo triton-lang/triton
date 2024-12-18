@@ -620,6 +620,7 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
 
 # Persistent kernel version of the flash attention forward
 
+
 def get_cdna_autotune_configs_persistent():
     return [
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
