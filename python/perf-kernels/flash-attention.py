@@ -63,7 +63,7 @@ class MetaData():
 
     def set_persistent(self, persistent):
         self.persistent = persistent
-        
+
     def set_int8_params(self, q_descale, k_descale, v_descale, p_scale, p_descale):
         self.int8 = True
         self.q_descale = q_descale
@@ -441,7 +441,7 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
              BLOCK_N: tl.constexpr, PRE_LOAD_V: tl.constexpr, USE_BIAS: tl.constexpr, ENABLE_DROPOUT: tl.constexpr,
              RETURN_ENCODED_SOFTMAX: tl.constexpr, USE_ALIBI: tl.constexpr, INT8: tl.constexpr,
              USE_P_SCALE: tl.constexpr, INT8_KV: tl.constexpr):
-    
+
     start_m = tl.program_id(0)
     off_h_q = tl.program_id(1)
     off_z = tl.program_id(2)
@@ -1399,7 +1399,6 @@ class _attention(torch.autograd.Function):
                 print("int8 conversion not supported with persistent kernels yet!")
             q_descale = k_descale = p_scale = p_descale = v_descale = None
 
-
             attn_fwd_persistent[grid](
                 q, k, v, metadata.bias, metadata.sm_scale, M, o, *q_strides, *k_strides, *v_strides, *o_strides,
                 *bias_strides, *alibi_strides, metadata.cu_seqlens_q, metadata.cu_seqlens_k,
@@ -1418,17 +1417,17 @@ class _attention(torch.autograd.Function):
             else:
                 q_descale = k_descale = p_scale = p_descale = v_descale = None
             grid = lambda META: (triton.cdiv(metadata.max_seqlens_q, META['BLOCK_M']), nheads_q, batch)
-            attn_fwd[grid](q, k, v, metadata.bias, metadata.sm_scale, M, o, *q_strides, *k_strides, *v_strides, *o_strides,
-                        *bias_strides, *alibi_strides, q_descale, k_descale, p_scale, p_descale, v_descale,
-                        metadata.cu_seqlens_q, metadata.cu_seqlens_k, dropout_p=metadata.dropout_p,
-                        philox_seed=philox_seed, philox_offset_base=philox_offset, encoded_softmax=encoded_softmax,
-                        alibi_slopes=metadata.alibi_slopes, HQ=nheads_q, HK=nheads_k, ACTUAL_BLOCK_DMODEL=head_size,
-                        MAX_SEQLENS_Q=metadata.max_seqlens_q, MAX_SEQLENS_K=metadata.max_seqlens_k,
-                        IS_CAUSAL=metadata.causal, VARLEN=metadata.varlen, BLOCK_DMODEL=padded_d_model,
-                        USE_BIAS=False if metadata.bias is None else True,
-                        USE_ALIBI=False if metadata.alibi_slopes is None else True, ENABLE_DROPOUT=metadata.dropout_p
-                        > 0.0, RETURN_ENCODED_SOFTMAX=metadata.return_encoded_softmax, INT8=metadata.int8,
-                        USE_P_SCALE=metadata.int8 and metadata.use_p_scale, INT8_KV=metadata.int8 and metadata.int8_kv)
+            attn_fwd[grid](
+                q, k, v, metadata.bias, metadata.sm_scale, M, o, *q_strides, *k_strides, *v_strides, *o_strides,
+                *bias_strides, *alibi_strides, q_descale, k_descale, p_scale, p_descale, v_descale,
+                metadata.cu_seqlens_q, metadata.cu_seqlens_k, dropout_p=metadata.dropout_p, philox_seed=philox_seed,
+                philox_offset_base=philox_offset, encoded_softmax=encoded_softmax, alibi_slopes=metadata.alibi_slopes,
+                HQ=nheads_q, HK=nheads_k, ACTUAL_BLOCK_DMODEL=head_size, MAX_SEQLENS_Q=metadata.max_seqlens_q,
+                MAX_SEQLENS_K=metadata.max_seqlens_k, IS_CAUSAL=metadata.causal, VARLEN=metadata.varlen,
+                BLOCK_DMODEL=padded_d_model, USE_BIAS=False if metadata.bias is None else True,
+                USE_ALIBI=False if metadata.alibi_slopes is None else True, ENABLE_DROPOUT=metadata.dropout_p > 0.0,
+                RETURN_ENCODED_SOFTMAX=metadata.return_encoded_softmax, INT8=metadata.int8, USE_P_SCALE=metadata.int8
+                and metadata.use_p_scale, INT8_KV=metadata.int8 and metadata.int8_kv)
 
         ctx.save_for_backward(q, k, v, o, M)
         ctx.grid = grid
@@ -2240,7 +2239,7 @@ def run_benchmark(custom, args):
         total_flops = 2 * flops_per_matmul
         if causal:
             # total_flops *= 0.5 # normally, but we have to take into account the unequal seqlen_q/k
-            seqlen_q= N_CTX_Q
+            seqlen_q = N_CTX_Q
             seqlen_k = N_CTX_K
             if seqlen_q > seqlen_k:
                 total_flops *= seqlen_k / (2 * seqlen_q)
