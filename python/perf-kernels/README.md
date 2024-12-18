@@ -42,9 +42,30 @@ This script contains the Flash Attention kernel with the following support
 - Multi and Grouped Query attention
 - ALiBi bias
 - Matrix bias
+<<<<<<< HEAD
 - Persistent kernels. Useful when the sequence lengths are up to a moderate length and especially when doing causal attention.
+=======
+- Int8 quantization
+>>>>>>> main_perf
 
 These are currently supported for the forward kernel only.
+
+INT8 Quantization Support
+
+1. <em>q_descale</em>, <em>k_descale</em>, and <em>v_descale</em> provided:
+   - The first QK GEMM runs in INT8, then the output is dequantized to the specified <em>dtype</em>.
+   - The second PV GEMM runs in the specified <em>dtype</em>.
+
+2. <em>q_descale</em>, <em>k_descale</em>, <em>p_descale</em>, and <em>v_descale</em> provided:
+   - Both the first and second GEMM operations run in INT8.
+   - The results are dequantized to the specified <em>dtype</em> after both GEMMs.
+
+3. Only <em>k_descale</em> and <em>v_descale</em> provided:
+   - K and V are dequantized before the first and second GEMM operations, respectively.
+   - Both GEMMs run in the specified <em>dtype</em>.
+
+Note: The softmax operation is always performed in <em>fp32</em>.
+
 
 ## `06-attention-decode.py`
 
