@@ -482,10 +482,9 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
             if start_m * BLOCK_M > seqlen_q:
                 continue_condition = False
                 # return
-            else:
-                cu_seqlens_k_start = tl.load(cu_seqlens_k + off_z)
-                cu_seqlens_k_end = tl.load(cu_seqlens_k + off_z + 1)
-                seqlen_k = cu_seqlens_k_end - cu_seqlens_k_start
+            cu_seqlens_k_start = tl.load(cu_seqlens_k + off_z)
+            cu_seqlens_k_end = tl.load(cu_seqlens_k + off_z + 1)
+            seqlen_k = cu_seqlens_k_end - cu_seqlens_k_start
         else:
             cu_seqlens_q_start = 0
             cu_seqlens_k_start = 0
