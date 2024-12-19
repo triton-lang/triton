@@ -243,10 +243,7 @@ public:
   LogicalResult matchAndRewrite(MatrixOpType op,
                                 PatternRewriter &rewriter) const override {
     unsigned vecSize = getVectorSize(op);
-    bool trans = op->hasAttr("trans")
-                     ? op->template getAttrOfType<BoolAttr>("trans").getValue()
-                     : false;
-
+    bool trans = op.getTrans();
     // Template method for PTX assembly generation
     std::string ptxAsm =
         (llvm::Twine(ConcreteMatrixOpPattern::kOpCode) +
