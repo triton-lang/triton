@@ -443,16 +443,16 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
              ENABLE_DROPOUT: tl.constexpr, RETURN_ENCODED_SOFTMAX: tl.constexpr, USE_ALIBI: tl.constexpr,
              INT8: tl.constexpr, USE_P_SCALE: tl.constexpr, INT8_KV: tl.constexpr):
 
-    if PERSISTENT: # if persistent, kernel loops over multiple tiles
+    if PERSISTENT:  # if persistent, kernel loops over multiple tiles
         NUM_WG = NUM_CU * GRID_CU_MULTIP  # number of workgroups launched
         num_tiles_per_head = tl.cdiv(MAX_SEQLENS_Q, BLOCK_M)  # the number of work units (tiles) of a single head
         num_tiles_per_sample = num_tiles_per_head * HQ  # times the number of heads
         num_tiles_total = num_tiles_per_sample * B  # times the number of samples
-        if PERSISTENT_DYNAMIC: 
+        if PERSISTENT_DYNAMIC:
             tile_id = atomic_counter.atomic_add(1)  # retuns the value BEFORE the atomic operation
         else:
             tile_id = tl.program_id(0)
-    else: # standard, kernel processes only one tile
+    else:  # standard, kernel processes only one tile
         tile_id = 0
         num_tiles_total = 1
 
@@ -466,7 +466,7 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
             start_m = tl.program_id(0)
             off_h_q = tl.program_id(1)
             off_z = tl.program_id(2)
-        
+
         offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
         offs_n = tl.arange(0, BLOCK_N)
         offs_d = tl.arange(0, BLOCK_DMODEL)
@@ -734,7 +734,7 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
             else:
                 tile_id += NUM_WG
         else:
-            tile_id = num_tiles_total # break after single tile
+            tile_id = num_tiles_total  # break after single tile
 
 
 @triton.jit
@@ -2017,8 +2017,7 @@ def main():
     assert args.dtype in arg_to_torch_dtype, \
            "Only fp16, bf16 and f32 types currently supported."
 
-    test_op_fwd_int8(4, 4, 65, 1019, 65, True, True, 'bhsd')
-    # run_benchmark(custom_config, args)
+    run_benchmark(custom_config, args)
 
 
 if __name__ == '__main__':
