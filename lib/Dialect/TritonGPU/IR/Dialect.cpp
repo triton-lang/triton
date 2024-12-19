@@ -2495,12 +2495,14 @@ struct TritonGPUInferLayoutInterface
   //                   = inverse(trans.order) * inputEnc.order.
   //
   LogicalResult inferTransOpEncoding(Attribute operandEncoding,
+                                     ArrayRef<int64_t> shape,
                                      ArrayRef<int32_t> order, // trans order
                                      Attribute &resultEncoding) const override {
     // Note: inferFooOpEncoding should not crash if given invalid inputs, which
     // happens when someone creates invalid IR.  If we return failure() on
     // error, then MLIR will generate a helpful error message.
 
+    auto *ctx = getDialect()->getContext();
     auto invOrder = inversePermutation(order);
     SmallVector<unsigned> invOrderUnsigned(invOrder.begin(), invOrder.end());
 
@@ -2514,8 +2516,7 @@ struct TritonGPUInferLayoutInterface
       }
 
       return CTALayoutAttr::get(
-          getDialect()->getContext(),
-          applyPermutation(layout.getCTAsPerCGA(), order),
+          ctx, applyPermutation(layout.getCTAsPerCGA(), order),
           applyPermutation(layout.getCTASplitNum(), order),
           applyPermutation(invOrderUnsigned, layout.getCTAOrder()));
     };
@@ -2529,9 +2530,9 @@ struct TritonGPUInferLayoutInterface
         return failure();
       }
       resultEncoding = SharedEncodingAttr::get(
-          getDialect()->getContext(), enc.getVec(), enc.getPerPhase(),
-          enc.getMaxPhase(), applyPermutation(invOrderUnsigned, enc.getOrder()),
-          *ctaLayout, enc.getHasLeadingOffset());
+          ctx, enc.getVec(), enc.getPerPhase(), enc.getMaxPhase(),
+          applyPermutation(invOrderUnsigned, enc.getOrder()), *ctaLayout,
+          enc.getHasLeadingOffset());
       return success();
     }
 
@@ -2547,11 +2548,25 @@ struct TritonGPUInferLayoutInterface
         return failure();
       }
       resultEncoding = BlockedEncodingAttr::get(
-          getDialect()->getContext(),
-          applyPermutation(enc.getSizePerThread(), order),
+          ctx, applyPermutation(enc.getSizePerThread(), order),
           applyPermutation(enc.getThreadsPerWarp(), order),
           applyPermutation(enc.getWarpsPerCTA(), order),
           applyPermutation(invOrderUnsigned, enc.getOrder()), *ctaLayout);
+      return success();
+    }
+    if (auto ll = toLinearLayout(shape, operandEncoding)) {
+      auto permutedDims =
+          applyPermutation(llvm::to_vector(ll->getOutDimNames()), order);
+      // transposedLl has transposed dims
+      auto transposedLl = ll->transposeOuts(permutedDims);
+      auto rank = shape.size();
+      SmallVector<std::pair<StringAttr, int32_t>> reorderedDims;
+      for (auto [dimi, permDim] :
+           llvm::zip(standardOutDimNames(ctx, rank), permutedDims)) {
+        reorderedDims.emplace_back(dimi, transposedLl.getOutDimSize(permDim));
+      }
+      auto retLl = transposedLl.reshapeOuts(reorderedDims);
+      resultEncoding = LinearEncodingAttr::get(ctx, retLl);
       return success();
     }
 

@@ -214,8 +214,9 @@ LogicalResult TransOp::inferReturnTypes(
     SmallVectorImpl<Type> &inferredReturnTypes) {
   // type is the same as the input
   auto argTy = cast<RankedTensorType>(operands[0].getType());
+  auto shape = argTy.getShape();
   auto order = properties.as<Properties *>()->order.asArrayRef();
-  SmallVector<int64_t> retShape = applyPermutation(argTy.getShape(), order);
+  SmallVector<int64_t> retShape = applyPermutation(shape, order);
 
   auto retEltTy = argTy.getElementType();
   Attribute argEncoding = argTy.getEncoding();
@@ -224,7 +225,7 @@ LogicalResult TransOp::inferReturnTypes(
     Dialect &dialect = argEncoding.getDialect();
     auto inferLayoutInterface = cast<DialectInferLayoutInterface>(&dialect);
     if (inferLayoutInterface
-            ->inferTransOpEncoding(argEncoding, order, retEncoding)
+            ->inferTransOpEncoding(argEncoding, shape, order, retEncoding)
             .failed()) {
       return failure();
     }
