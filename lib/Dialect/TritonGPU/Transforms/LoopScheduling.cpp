@@ -24,15 +24,13 @@ namespace gpu {
 namespace {
 
 bool hasGpuBarriers(scf::ForOp forOp) {
-  for (auto &op : forOp.getBody()->without_terminator()) {
-    if (isa<mlir::gpu::BarrierOp>(op))
-      return true;
-  }
-  return false;
+  WalkResult result = forOp.walk(
+      [&](mlir::gpu::BarrierOp barrier) { return WalkResult::interrupt(); });
+  return result.wasInterrupted();
 }
 
 // Return true if the preconditions for pipelining the loop are met.
-bool preCondition(scf::ForOp forOp) {
+bool isSafeToPipeline(scf::ForOp forOp) {
   // Skip loop with distance > 1 for now.
   // TODO: relax the constraint in the expander.
   if (loopHasDistGreaterThanOne(forOp))
@@ -284,7 +282,7 @@ void scheduleRemainingToLastStage(scf::ForOp forOp, CoarseSchedule &schedule,
 
 void scheduleLoop(scf::ForOp forOp,
                   const DenseMap<Operation *, int> &opLatency) {
-  if (!hasLatenciesAssigned(forOp, opLatency) || !preCondition(forOp))
+  if (!hasLatenciesAssigned(forOp, opLatency) || !isSafeToPipeline(forOp))
     return;
   // Based on the latencies, schedule the key ops to the stages.
   CoarseSchedule schedule = scheduleKeyOps(forOp, opLatency);
