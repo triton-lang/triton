@@ -222,7 +222,7 @@ class Autotuner(KernelInterface):
             elif not isinstance(top_k, int):
                 # Slice index must be an integer
                 # if top_k is a float > 1.0, raise an exception
-                raise ValueError(f"Error while pruning configs, top_k must be either 1) a float <= 1.0 or 2) an int")
+                raise TypeError(f"Error while pruning configs, top_k must be either 1) a float <= 1.0 or 2) an int")
 
             if len(pruned_configs) > top_k:
                 est_timing = {
