@@ -1012,17 +1012,10 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
     ret *= LinearLayout::identity1D(A.getInDimSize(dim), dim, dim);
   }
 
-  // Reshape the result
-  SmallVector<std::pair<StringAttr, int32_t>> inDimsA;
-  SmallVector<std::pair<StringAttr, int32_t>> inDimsB;
-  for (auto dim : A.getInDimNames()) {
-    inDimsA.push_back({dim, A.getInDimSize(dim)});
-  }
-  for (auto dim : B.getInDimNames()) {
-    inDimsB.push_back({dim, B.getInDimSize(dim)});
-  }
-  ret = ret.reshapeIns(inDimsB).reshapeOuts(inDimsA);
-  return ret;
+  // Reorder the dimensions in the result to match the order expected by the
+  // current and outer layouts.
+  return ret.transposeIns(llvm::to_vector(B.getInDimNames()))
+      .transposeOuts(llvm::to_vector(A.getInDimNames()));
 }
 
 LinearLayout LinearLayout::invert() const {

@@ -513,6 +513,59 @@ TEST_F(LinearLayoutTest, InvertAndCompose_BroadcastedDims2) {
   EXPECT_EQ(c.compose(b), a.transposeOuts(llvm::to_vector(b.getOutDimNames())));
 }
 
+TEST_F(LinearLayoutTest, InvertAndCompose_IdentityInDim) {
+  SmallVector<StringAttr> outDims = {S("dim0"), S("dim1"), S("dim2"),
+                                     S("dim3"), S("dim4"), S("dim5"),
+                                     S("dim6"), S("dim7"), S("dim8")};
+
+  LinearLayout src({{S("register"),
+                     {
+                         {0, 0, 0, 0, 0, 0, 0, 0, 1},
+                         {0, 0, 0, 0, 0, 0, 0, 1, 0},
+                     }},
+                    {S("lane"),
+                     {
+                         {0, 0, 0, 0, 0, 0, 1, 0, 0},
+                         {0, 0, 0, 0, 0, 1, 0, 0, 0},
+                         {0, 0, 0, 0, 1, 0, 0, 0, 0},
+                         {0, 0, 0, 1, 0, 0, 0, 0, 0},
+                         {0, 0, 1, 0, 0, 0, 0, 0, 0},
+                     }},
+                    {S("warp"),
+                     {
+                         {0, 1, 0, 0, 0, 0, 0, 0, 0},
+                         {1, 0, 0, 0, 0, 0, 0, 0, 0},
+                     }},
+                    {S("block"), {}}},
+                   outDims);
+  LinearLayout dst({{S("register"),
+                     {
+                         {0, 0, 0, 0, 0, 0, 0, 0, 1},
+                         {0, 0, 0, 0, 0, 0, 0, 1, 0},
+                     }},
+                    {S("lane"),
+                     {
+                         {1, 0, 0, 0, 0, 0, 0, 0, 0},
+                         {0, 1, 0, 0, 0, 0, 0, 0, 0},
+                         {0, 0, 1, 0, 0, 0, 0, 0, 0},
+                         {0, 0, 0, 1, 0, 0, 0, 0, 0},
+                         {0, 0, 0, 0, 1, 0, 0, 0, 0},
+                     }},
+                    {S("warp"),
+                     {
+                         {0, 0, 0, 0, 0, 1, 0, 0, 0},
+                         {0, 0, 0, 0, 0, 0, 1, 0, 0},
+                     }},
+                    {S("block"), {}}},
+                   outDims);
+
+  LinearLayout cvt = dst.invertAndCompose(src);
+  SmallVector<std::pair<StringAttr, int32_t>> k = {
+      {S("register"), 3}, {S("lane"), 0}, {S("warp"), 2}, {S("block"), 0}};
+
+  EXPECT_EQ(dst.apply(k), src.apply(cvt.apply(k)));
+}
+
 TEST_F(LinearLayoutTest, NumConsecutiveInOut) {
   EXPECT_EQ(
       1,
