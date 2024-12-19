@@ -341,8 +341,8 @@ MMA16816SmemLoader::loadX4(int batch, int mat0, int mat1, ArrayRef<Value> ptrs,
       stridedOffset = add(
           stridedOffset, mul(i32_val(batch * warpsPerCTA[0]), smemBatchOffset));
     Value readPtr = gep(ptr_ty(ctx, 3), shemTy, ptr, stridedOffset);
-    auto ldMatrixOp = rewriter.create<nvgpu::LoadMatrixOp>(loc, resTy, readPtr);
-    ldMatrixOp->setAttr("trans", rewriter.getBoolAttr(needTrans));
+    auto ldMatrixOp =
+        rewriter.create<nvgpu::LoadMatrixOp>(loc, resTy, readPtr, needTrans);
     auto resV4 = ldMatrixOp.getResult();
     return {extract_val(elemTy, resV4, 0), extract_val(elemTy, resV4, 1),
             extract_val(elemTy, resV4, 2), extract_val(elemTy, resV4, 3)};

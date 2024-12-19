@@ -101,12 +101,19 @@ def NVGPU_ClusterWaitOp : NVGPU_Op<"cluster_wait", []> {
 }
 
 def NVGPU_StoreMatrixOp : NVGPU_Op<"stmatrix", [MemoryEffects<[MemWrite]>]> {
-  let arguments = (ins LLVM_PointerShared:$addr, Variadic<I32>:$vals);
+  let arguments = (
+    ins LLVM_PointerShared:$addr,
+    Variadic<I32>:$vals,
+    DefaultValuedAttr<BoolAttr, "false">:$trans
+  );
   let assemblyFormat = "operands attr-dict `:` type(operands)";
 }
 
 def NVGPU_LoadMatrixOp : NVGPU_Op<"ldmatrix", [MemoryEffects<[MemRead]>]> {
-  let arguments = (ins LLVM_PointerShared:$addr);
+  let arguments = (
+    ins LLVM_PointerShared:$addr,
+    DefaultValuedAttr<BoolAttr, "false">:$trans
+  );
   let results = (outs LLVM_AnyStruct:$result);
   let assemblyFormat = "$addr attr-dict `:` functional-type($addr, $result)";
 }
