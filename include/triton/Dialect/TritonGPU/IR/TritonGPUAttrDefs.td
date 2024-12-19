@@ -766,6 +766,7 @@ for
       // Block encoding is dense stride layout. The elements per thread are contiguous.
       return getSizePerThread();
     };
+    SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
   }];
 
   let hasCustomAssemblyFormat = 1;

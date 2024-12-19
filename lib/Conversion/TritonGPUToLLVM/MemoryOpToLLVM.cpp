@@ -126,7 +126,7 @@ public:
             LinearEncodingAttr>(dstLayout))
       return true;
     if (auto dot = dyn_cast<DotOperandEncodingAttr>(dstLayout)) {
-      if (isa<MmaEncodingTrait>(dot.getParent()))
+      if (isa<MmaEncodingTrait, BlockedEncodingAttr>(dot.getParent()))
         return true;
     }
     return false;
@@ -164,6 +164,8 @@ private:
     Value res = SharedToDotOperandFMA::convertLayout(
         dotLayout.getOpIdx(), op.getSrc(), adaptor.getSrc(), blockedLayout,
         thread, loc, getTypeConverter(), rewriter);
+    if (!res)
+      return failure();
     rewriter.replaceOp(op, res);
     return success();
   }

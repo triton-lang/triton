@@ -650,6 +650,44 @@ BlockedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   return combineCtaCgaWithShape(ctaLayout, getCTALayout(), shape);
 }
 
+std::optional<LinearLayout>
+fmaDotToLinearLayout(DotOperandEncodingAttr operandLayout,
+                     ArrayRef<int64_t> shape) {
+  int rank = shape.size();
+  auto blocked = cast<BlockedEncodingAttr>(operandLayout.getParent());
+  MLIRContext *ctx = operandLayout.getContext();
+
+  // TODO: introduce registerOrder or use getOrder(operandLayout)
+  // Currently this order is used in legacy converter, because we do not
+  // have access to full dot operand layout, only parent part.
+  auto regOrder = blocked.getOrder();
+  // TODO: use operandLayout.getThreadOrder()
+  auto threadOrder = blocked.getThreadOrder();
+  auto warpOrder = blocked.getWarpOrder();
+  auto repOrder = blocked.getRepOrder();
+
+  StringAttr kReg = S("register");
+  StringAttr kLane = S("lane");
+  StringAttr kWarp = S("warp");
+
+  SmallVector<unsigned> threadSize = blocked.getSizePerThread();
+  auto kDimIdx = operandLayout.getOpIdx() == 0 ? rank - 1 : rank - 2;
+  threadSize[kDimIdx] = shape[kDimIdx];
+  auto threadShape = blocked.getThreadsPerWarp();
+  auto warpShape = blocked.getWarpsPerCTA();
+
+  SmallVector<StringAttr> repDimNames = orderedOutDimNames(ctx, repOrder);
+
+  LinearLayout ctaLayout = identityStandardND(kReg, threadSize, regOrder)
+                               .transposeOuts(repDimNames) *
+                           identityStandardND(kLane, threadShape, threadOrder)
+                               .transposeOuts(repDimNames) *
+                           identityStandardND(kWarp, warpShape, warpOrder)
+                               .transposeOuts(repDimNames);
+
+  return combineCtaCgaWithShape(ctaLayout, getCTALayout(operandLayout), shape);
+}
+
 LinearLayout nvidiaMmaTile(MLIRContext *ctx, ArrayRef<unsigned> tileShape,
                            unsigned kWidth, ArrayRef<unsigned> order,
                            ArrayRef<unsigned> repOrder) {
@@ -750,9 +788,12 @@ LinearLayout nvidiaDotToLinearLayout(ArrayRef<int64_t> shape,
 std::optional<LinearLayout>
 DotOperandEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   auto parent = getParent();
-  if (auto mfmaLayout = llvm::dyn_cast<AMDMfmaEncodingAttr>(parent)) {
+  if (auto blockedLayout = mlir::dyn_cast<BlockedEncodingAttr>(parent)) {
+    return fmaDotToLinearLayout(*this, shape);
+  }
+  if (auto mfmaLayout = mlir::dyn_cast<AMDMfmaEncodingAttr>(parent)) {
     return mfmaDotToLinearLayout(*this, shape);
-  } else if (auto wmmaLayout = llvm::dyn_cast<AMDWmmaEncodingAttr>(parent)) {
+  } else if (auto wmmaLayout = mlir::dyn_cast<AMDWmmaEncodingAttr>(parent)) {
     return wmmaDotOperandToLinearLayout(*this, shape);
   } else if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent)) {
     return nvidiaDotToLinearLayout(shape, *this);

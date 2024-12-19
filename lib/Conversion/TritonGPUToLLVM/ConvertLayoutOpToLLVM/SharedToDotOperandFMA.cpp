@@ -98,13 +98,13 @@ void storeValuesInLinearVector(PatternRewriter &rewriter, Location loc,
   }
 }
 
-void verifyCTALayout(CTALayoutAttr ctaLayout) {
+bool verifyCTALayout(CTALayoutAttr ctaLayout) {
   auto ctaSplit = ctaLayout.getCTASplitNum();
   for (auto split : ctaSplit) {
     if (split != 1)
-      llvm::report_fatal_error("tensors splited in CGA(thread group clusters) "
-                               "are not supported in FMA dot yet.");
+      return false;
   }
+  return true;
 }
 
 /// Get a linear offset of first element loaded by thread.
@@ -216,7 +216,9 @@ Value loadFMAOp(Value srcVal, Value llVal, BlockedEncodingAttr dLayout,
                 Value thread, Location loc,
                 const LLVMTypeConverter *typeConverter,
                 ConversionPatternRewriter &rewriter, const int dotOpNo) {
-  verifyCTALayout(dLayout.getCTALayout());
+  if (!verifyCTALayout(dLayout.getCTALayout()))
+    return Value();
+  return Value();
 
   DimIdx dim;
   dim.batch = 0;
