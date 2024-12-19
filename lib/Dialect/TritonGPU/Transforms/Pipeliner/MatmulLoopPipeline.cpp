@@ -900,10 +900,14 @@ createAsyncOps(scf::ForOp &forOp,
     AsyncLoad asyncLoad = {.loadOp = loadOp};
     bool isTMALoad = false;
     int numBuffers = info.distToUse;
+    // For MMAv3, we need an extra buffer as this is assumed in the wgmma
+    // pipelining post-processing.
+    if (info.isMMAv3Shared || info.isMMAv3Registers) {
+      ++numBuffers;
+    }
     if (isa<tt::ExperimentalDescriptorLoadOp>(loadOp)) {
       isTMALoad = true;
       asyncLoad.isTMALoad = isTMALoad;
-      numBuffers++;
     }
     assert(info.sharedEncoding && "LoadOp shared encoding not defined.");
     Value alloc = createAlloc(forOp, loadOp, info.sharedEncoding, numBuffers);
@@ -928,9 +932,9 @@ createAsyncOps(scf::ForOp &forOp,
 
   Location loc = forOp.getLoc();
   // Create a counter to index into the allocations per loop iteration.
-  // NOTE: We create two duplicates values, insertIdx and extractIdx
-  // so that the pipeliner will re-materialize the value in later stages of the
-  // pipeline instead of carrying it as a dependency across multiple iterations.
+  // NOTE: We create two duplicates values, insertIdx and extractIdx so that the
+  // pipeliner will re-materialize the value in later stages of the pipeline
+  // instead of carrying it as a dependency across multiple iterations.
   Value minusOne = builder.create<arith::ConstantIntOp>(loc, -1, 32);
   Value zero = builder.create<arith::ConstantIntOp>(loc, 0, 32);
   Value one = builder.create<arith::ConstantIntOp>(loc, 1, 32);
@@ -1002,6 +1006,7 @@ createAsyncOps(scf::ForOp &forOp,
     stageGroup.insertIdx = insertIdx;
 
     extractIdx = builder.create<arith::AddIOp>(loc, extractIdx, one);
+    // Duplicate the constant to keep it from being carried across loops.
     numBuffersVal = builder.create<arith::ConstantIntOp>(loc, numBuffers, 32);
     Value cndExt = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
                                                  extractIdx, numBuffersVal);
