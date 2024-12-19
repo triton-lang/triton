@@ -147,7 +147,8 @@ public:
             srcTy.getShape()[1] >= 4 * kWidth & dstTy.getRank() <= 2;
         return !canUseLdmatrix;
       }
-      if (isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>(dot.getParent()))
+      if (isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr, BlockedEncodingAttr>(
+              dot.getParent()))
         return true;
     }
     return false;
@@ -188,6 +189,8 @@ private:
     Value res = SharedToDotOperandFMA::convertLayout(
         dotLayout.getOpIdx(), op.getSrc(), adaptor.getSrc(), blockedLayout,
         thread, loc, getTypeConverter(), rewriter);
+    if (!res)
+      return failure();
     rewriter.replaceOp(op, res);
     return success();
   }
