@@ -93,11 +93,17 @@ void PipelineErrorReporter::printSchedulingError(int64_t distance,
   std::string errorMessage = "operation scheduled before its operands.";
   std::string likelyBuggyMessage = "This is likely to be a bug. Please "
                                    "report it.";
-
+  // We only find the root defining ops for loop-carried dependencies.
+  // When distance is 0, we let the set of root defining ops to be empty.
   if (distance > 0) {
+    // TODO: I only find the root defining ops of the producer. We should also
+    // find the root user ops of the consumer.
     findRootSchedulingErrorLoopCarryDep(consumer, producer, operand);
   }
   if (rootDefiningOps.empty()) {
+    // We failed to find the root defining ops. Whether the disntance is 0 or
+    // not, an empty set means we have some bugs in the pipeline expander. We should
+    // let the user help report the bug.
     consumer->emitError() << errorMessage << " " << likelyBuggyMessage;
   } else {
     consumer->emitError() << errorMessage;

@@ -8,6 +8,8 @@
 using namespace mlir;
 using namespace mlir::scf;
 
+/// This class is used to report the scheduling error. It is used by
+/// the pipeline expander.
 class PipelineErrorReporter {
 protected:
   ForOp forOp;
@@ -15,10 +17,12 @@ protected:
   /// defining ops in IfOps, as there are then branches and else branches.
   DenseSet<Operation *> rootDefiningOps;
 
-  /// Recursively find the root defining op of the value in IfOps.
+  /// Recursively find the root defining op of the value in IfOps by traversing
+  /// back the index of an OpResult and yielded values.
   void findRootDefiningOp(Operation *op, unsigned int resultNumber);
 
-  /// Return the loop argument value if the Value is an argument of the loop.
+  /// Get the operand from the yield operation of the loop, which is the real
+  /// value of the loop-carried dependency.
   std::optional<Value> getBlockArgYieldValueFromForLoop(BlockArgument arg);
 
   /// Find the loop-carried dependency that really causes the scheduling error,
@@ -36,7 +40,12 @@ public:
 
   /// Print the scheduling error message using MLIR's diagnostic engine.
   /// Depending on whether it is a loop-carried dependency, we print different
-  /// messages.
+  /// messages. When distance is 0, it means the consumer and producer are in
+  /// the same iteration. We are not supposed to have scheduling error in this
+  /// case, as we have addressed the potential data dependency conflicts.
+  ///
+  /// When distance is 1, we find the root scheduling error, and print the
+  /// diagnostic message.
   void printSchedulingError(int64_t distance, Operation *consumer,
                             Operation *producer, Value operand);
 
