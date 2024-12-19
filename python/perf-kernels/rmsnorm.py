@@ -50,6 +50,7 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, input_row_stride, output_row_stride
     col_offsets = tl.arange(0, BLOCK_SIZE)
     tl.assume(input_row_stride >= 0)
     tl.assume(output_row_stride >= 0)
+    tl.assume(row_start >= 0)
 
     if USE_BLOCKED:
 
@@ -61,11 +62,11 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, input_row_stride, output_row_stride
             # Accumulate sum of squares
             sum_squares = tl.zeros([1], dtype=tl.float32)
             n_cols_blks = tl.cdiv(n_cols, BLOCK_SIZE) - 1
-            for blk_idx in range(n_cols_blks, num_stages=1):
+            for blk_idx in tl.range(0, n_cols_blks, num_stages=2):
                 cols = blk_idx * BLOCK_SIZE + col_offsets
                 input_ptrs = row_input_ptr + cols
                 input_ptrs = tl.multiple_of(input_ptrs, (16, ))
-                x = tl.load(input_ptrs)
+                x = tl.load(input_ptrs).to(tl.float32)
                 sum_squares += tl.sum(x * x, axis=0)
 
             # Handle remainder
@@ -73,7 +74,7 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, input_row_stride, output_row_stride
             mask = cols < n_cols
             input_ptrs = row_input_ptr + cols
             input_ptrs = tl.multiple_of(input_ptrs, (16, ))
-            x = tl.load(input_ptrs, mask=mask, other=0.0, cache_modifier=".cg")
+            x = tl.load(input_ptrs, mask=mask, other=0.0, cache_modifier=".cg").to(tl.float32)
             sum_squares += tl.sum(x * x, axis=0)
 
             # Compute normalization factor
@@ -81,48 +82,43 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, input_row_stride, output_row_stride
             norm_factor = tl.rsqrt(mean_square + epsilon)
 
             # Normalize and write output
-            for blk_idx in range(n_cols_blks, num_stages=1):
+            for blk_idx in tl.range(0, n_cols_blks, num_stages=2):
                 cols = blk_idx * BLOCK_SIZE + col_offsets
                 input_ptrs = row_input_ptr + cols
                 input_ptrs = tl.multiple_of(input_ptrs, (16, ))
-                x = tl.load(input_ptrs)
+                x = tl.load(input_ptrs).to(tl.float32)
                 g_ptrs = g_ptr + cols
-                g = tl.load(g_ptrs)
+                g = tl.load(g_ptrs).to(tl.float32)
                 rms_norm = x * norm_factor * g
                 output_ptrs = row_output_ptr + cols
-                tl.store(output_ptrs, rms_norm)
+                tl.store(output_ptrs, rms_norm.to(output_ptr.type.element_ty))
 
             # Handle remainder
             cols = n_cols_blks * BLOCK_SIZE + col_offsets
             mask = cols < n_cols
             input_ptrs = row_input_ptr + cols
-            x = tl.load(input_ptrs, mask=mask, other=0.0, cache_modifier=".cg")
+            x = tl.load(input_ptrs, mask=mask, other=0.0, cache_modifier=".cg").to(tl.float32)
             g_ptrs = g_ptr + cols
-            g = tl.load(g_ptrs, mask=mask, other=0.0)
+            g = tl.load(g_ptrs, mask=mask, other=0.0).to(tl.float32)
             rms_norm = x * norm_factor * g
             output_ptrs = row_output_ptr + cols
-            tl.store(output_ptrs, rms_norm, mask=mask)
+            tl.store(output_ptrs, rms_norm.to(output_ptr.type.element_ty), mask=mask)
 
     else:
         mask = col_offsets < n_cols
-        for row_idx in tl.range(row_start, n_rows, NUM_PRGMS, num_stages=1):
-            row_start_ptr = input_ptr + row_idx * input_row_stride
-            input_ptrs = row_start_ptr + col_offsets
+        for row_idx in tl.range(row_start, n_rows, NUM_PRGMS, num_stages=2):
+            input_ptrs = input_ptr + row_idx * input_row_stride + col_offsets
             input_ptrs = tl.multiple_of(input_ptrs, (16, ))
-            row = tl.load(input_ptrs, mask=mask, other=0.0, cache_modifier=".cg")
-            g = tl.load(g_ptr + col_offsets, mask=mask, other=0.0)
+            row = tl.load(input_ptrs, mask=mask, other=0.0, cache_modifier=".cg").to(tl.float32)
+            g = tl.load(g_ptr + col_offsets, mask=mask, other=0.0).to(tl.float32)
             row_norm = row * row
             row_norm = tl.sum(row_norm, axis=-1)
-            row_norm = row_norm / n_cols
-            row_norm = row_norm + epsilon
-            row_norm = tl.rsqrt(row_norm)
-            rms_norm = row * row_norm
-            rms_norm = rms_norm * g
+            row_norm = tl.math.rsqrt((row_norm / n_cols) + epsilon)
+            rms_norm = row * row_norm * g
 
-            output_row_start_ptr = output_ptr + row_idx * output_row_stride
-            output_ptrs = output_row_start_ptr + col_offsets
+            output_ptrs = output_ptr + row_idx * output_row_stride + col_offsets
             output_ptrs = tl.multiple_of(output_ptrs, (16, ))
-            tl.store(output_ptrs, rms_norm, mask=mask)
+            tl.store(output_ptrs, rms_norm.to(output_ptr.type.element_ty), mask=mask)
 
 
 def triton_rmsnorm(x, y, g, n_rows, n_cols, blk_size, USE_BLOCKED, NUM_PRGMS, epsilon=1e-6):
