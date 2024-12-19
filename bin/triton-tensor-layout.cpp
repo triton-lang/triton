@@ -80,10 +80,11 @@ static cl::opt<std::string> TensorStr(
 //===--------------------------------------------------------------------===//
 
 LogicalResult layoutPrint(RankedTensorType tensorType, raw_ostream &os) {
-  StringRef dialectName = tensorType.getEncoding().getDialect().getNamespace();
-
-  // Dispatch to the corresponding dialect helper function to print the layout.
-  if (dialectName == "ttg") {
+  // DistributedEncodingTrait and SharedEncodingAttr implements the
+  // toLinearLayout interface.
+  mlir::Attribute layout = tensorType.getEncoding();
+  if (isa<mlir::triton::gpu::DistributedEncodingTrait,
+          mlir::triton::gpu::SharedEncodingAttr>(layout)) {
     os << triton::gpu::getLayoutStr(tensorType, UseHWPointOfView);
     return success();
   }

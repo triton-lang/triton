@@ -34,8 +34,6 @@ struct DecomposeUnsupportedAMDConversions
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
-    triton::gpu::decomposeSplatOpToSharedLayoutConversion(mod);
-
     auto isShortcut =
         mlir::triton::gpu::ShortcutFn(std::not_fn(cvtNeedsSharedMemory));
 
