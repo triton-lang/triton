@@ -1,6 +1,7 @@
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "Utility.h"
 #include "mlir/Support/LLVM.h"
+#include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"
 
 using namespace mlir;
 
@@ -339,23 +340,10 @@ MMA16816SmemLoader::loadX4(int batch, int mat0, int mat1, ArrayRef<Value> ptrs,
     if (batch != 0)
       stridedOffset = add(
           stridedOffset, mul(i32_val(batch * warpsPerCTA[0]), smemBatchOffset));
-
     Value readPtr = gep(ptr_ty(ctx, 3), shemTy, ptr, stridedOffset);
-
-    PTXBuilder builder;
-    // ldmatrix.m8n8.x4 returns 4x2xfp16(that is 4xb32) elements for a
-    // thread.
-    auto resArgs = builder.newListOperand(4, "=r");
-    auto addrArg = builder.newAddrOperand(readPtr, "r");
-
-    auto ldmatrix = builder.create("ldmatrix.sync.aligned.m8n8.x4")
-                        ->o("trans", needTrans /*predicate*/)
-                        .o("shared.b16");
-    ldmatrix(resArgs, addrArg);
-
-    // The result type is 4xi32, each i32 is composed of 2xf16
-    // elements (adjacent two columns in a row) or a single f32 element.
-    Value resV4 = builder.launch(rewriter, loc, resTy);
+    auto ldMatrixOp = rewriter.create<nvgpu::LoadMatrixOp>(loc, resTy, readPtr);
+    ldMatrixOp->setAttr("trans", rewriter.getBoolAttr(needTrans));
+    auto resV4 = ldMatrixOp.getResult();
     return {extract_val(elemTy, resV4, 0), extract_val(elemTy, resV4, 1),
             extract_val(elemTy, resV4, 2), extract_val(elemTy, resV4, 3)};
   } else {
