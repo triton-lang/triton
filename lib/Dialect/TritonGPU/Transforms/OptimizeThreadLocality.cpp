@@ -1,11 +1,14 @@
 #include <memory>
 #include <numeric>
 
+#include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
+#include "triton/Analysis/Utility.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -92,16 +95,168 @@ struct OptimizeReshapeLayoutPattern
 
 } // namespace
 
+static RankedTensorType replaceEncoding(RankedTensorType oldType,
+                                        Attribute newEncoding) {
+  return RankedTensorType::get(oldType.getShape(), oldType.getElementType(),
+                               newEncoding);
+}
+
+// This function considers a gather op in isolation and attemps to determine
+// whether an optimized layout can be applied to the source and index tensors.
+static void setOptimizedGatherLayout(GatherOp op, mlir::RewriterBase &b) {
+  RankedTensorType srcType = op.getSrc().getType();
+  RankedTensorType idxType = op.getIndices().getType();
+
+  // Determine a warp-local gather layout that minimizes the number of emitted
+  // warp shuffles.
+  unsigned numThreadsPerWarp =
+      product<unsigned>(triton::gpu::getThreadsPerWarp(srcType.getEncoding()));
+  unsigned numWarps =
+      product<unsigned>(triton::gpu::getWarpsPerCTA(srcType.getEncoding()));
+
+  // If in a gather column, each thread owns `srcSizePerThread[axis]` elements
+  // in the source tensor and `idxSizePerThread[axis]` elements in the index
+  // tensor (including broadcasting), then the number of index shuffles per
+  // column is `srcSizePerThread[axis] * idxSizePerThread[axis]`. This is then
+  // replicated over the number of columns in which a thread owns (an equal
+  // number of) elements, which is `product(srcSizePerThread[i] for i != axis)`.
+  //
+  // Thus, the total number of index shuffles is `product(srcSizePerThread) *
+  // idxSizePerThread[axis]`. Since we cannot alter the number of threads per
+  // warp or the number of warps, `product(srcSizePerThread)` is just a function
+  // of the shape.
+  //
+  // So we want to minimize `idxSizePerThread[axis]`. Note that broadcasting is
+  // forbidden in the source tensor but allowed in the index tensor. Choose the
+  // smallest value while still ensuring that a warp spans whole columns.
+  //
+  // In order to prevent broadcasting in the source tensor layout, ensure
+  //
+  //   sizePerThread(i) * threadsPerWarp(i) * warpsPerCTA(i) = shape(i)
+  //
+  // For all i != axis in the source tensor. The same relationship must hold for
+  // the index tensor. This means we can't just set `idxSizePerThread[axis]` to
+  // 1 and compute the rest from that. Find the smallest value where this
+  // relationship is still respected.
+
+  // We know that the layouts will be the same between the two tensors except
+  // for `sizePerThread[axis]`.
+  unsigned axis = op.getAxis();
+  unsigned rank = srcType.getRank();
+  SmallVector<unsigned> threadsPerWarp(rank);
+  SmallVector<unsigned> warpsPerCTA(rank);
+  SmallVector<unsigned> order;
+  order.push_back(axis);
+
+  // Minimize `sizePerThread[axis]` by putting as many theads along the axis as
+  // possible, limited to the actual size of the dimension.
+  unsigned maxThreadsInAxis =
+      std::min<unsigned>(srcType.getDimSize(axis), numThreadsPerWarp);
+  threadsPerWarp[axis] = maxThreadsInAxis;
+
+  // Now spread them along the other dimensions. Do this according to order
+  // (arbitrary).
+  unsigned threadsToAlloc = numThreadsPerWarp / maxThreadsInAxis;
+  auto distributedItf = cast<DistributedEncodingTrait>(srcType.getEncoding());
+  for (unsigned dim : distributedItf.getThreadOrder()) {
+    if (dim == axis)
+      continue;
+    // The gather axis is now the fastest-changing dimension.
+    order.push_back(dim);
+    unsigned nextThreadAlloc =
+        std::min<unsigned>(srcType.getDimSize(dim), threadsToAlloc);
+    threadsPerWarp[dim] = nextThreadAlloc;
+    threadsToAlloc /= nextThreadAlloc;
+  }
+  assert(llvm::none_of(threadsPerWarp, [](unsigned c) { return c == 0; }));
+
+  // There must be one warp along the gather axis.
+  warpsPerCTA[axis] = 1;
+  // Allocate the remaining warps in the same manner.
+  unsigned warpsToAlloc = numWarps;
+  for (unsigned dim : distributedItf.getWarpOrder()) {
+    if (dim == axis)
+      continue;
+    unsigned warpsCanFit = srcType.getDimSize(dim) / threadsPerWarp[dim];
+    assert(warpsCanFit != 0);
+    unsigned nextWarpAlloc = std::min<unsigned>(warpsCanFit, warpsToAlloc);
+    warpsPerCTA[dim] = nextWarpAlloc;
+    warpsToAlloc /= nextWarpAlloc;
+  }
+  assert(llvm::none_of(warpsPerCTA, [](unsigned c) { return c == 0; }));
+
+  // Just set `sizePerThread` to 1 along other dimensions and let broadcasting
+  // handling it. This also means we can use the same layout between the source
+  // and index tensors for simplicity.
+  SmallVector<unsigned> sizePerThread(rank, 1);
+  sizePerThread[axis] = srcType.getDimSize(axis) / threadsPerWarp[axis];
+
+  // Overflow by broadcasting along the gather axis since this is the most
+  // predictable.
+  threadsPerWarp[axis] *= threadsToAlloc;
+  warpsPerCTA[axis] *= warpsToAlloc;
+
+  assert(product(threadsPerWarp) == numThreadsPerWarp);
+  assert(product(warpsPerCTA) == numWarps);
+
+  // Construct the new layout.
+  MLIRContext *ctx = srcType.getContext();
+  auto ctaLayout = CTALayoutAttr::get(ctx, distributedItf.getCTAsPerCGA(),
+                                      distributedItf.getCTASplitNum(),
+                                      distributedItf.getCTAOrder());
+  auto newLayout = BlockedEncodingAttr::get(ctx, sizePerThread, threadsPerWarp,
+                                            warpsPerCTA, order, ctaLayout);
+
+  // Update the layout on the gather op and insert conversions.
+  auto cvtSrc = b.create<ConvertLayoutOp>(
+      op.getLoc(), replaceEncoding(srcType, newLayout), op.getSrc());
+  auto cvtIdx = b.create<ConvertLayoutOp>(
+      op.getLoc(), replaceEncoding(idxType, newLayout), op.getIndices());
+
+  b.setInsertionPointAfter(op);
+  auto cvtOut =
+      b.create<ConvertLayoutOp>(op.getLoc(), op.getType(), op.getResult());
+  b.replaceAllUsesExcept(op.getResult(), cvtOut, cvtOut);
+
+  b.modifyOpInPlace(op, [&] {
+    op.getSrcMutable().set(cvtSrc);
+    op.getIndicesMutable().set(cvtIdx);
+    op.getResult().setType(replaceEncoding(op.getType(), newLayout));
+
+    // Mark the layout as optimized on the op to prevent it from being changed.
+    op.setEfficientLayout(true);
+  });
+
+  // Make sure we did this right.
+  assert(GatherLoweringHelper(op).isWarpLocal());
+}
+
+namespace {
+struct OptimizeGatherLayoutPattern : public mlir::OpRewritePattern<GatherOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(GatherOp op,
+                                PatternRewriter &rewriter) const override {
+    if (op.getEfficientLayout())
+      return failure();
+    setOptimizedGatherLayout(op, rewriter);
+    return success();
+  }
+};
+} // namespace
+
+namespace {
 class TritonGPUOptimizeThreadLocalityPass
     : public impl::TritonGPUOptimizeThreadLocalityBase<
           TritonGPUOptimizeThreadLocalityPass> {
   void runOnOperation() override {
     ModuleOp mod = getOperation();
 
-    // First try to optimize the layout of existing views.
-    mlir::RewritePatternSet viewLayoutPatterns(&getContext());
-    viewLayoutPatterns.add<OptimizeReshapeLayoutPattern>(&getContext());
-    if (mlir::applyPatternsAndFoldGreedily(mod, std::move(viewLayoutPatterns))
+    // First try to optimize the layout of views and gathers.
+    mlir::RewritePatternSet layoutPatterns(&getContext());
+    layoutPatterns.add<OptimizeReshapeLayoutPattern>(&getContext());
+    layoutPatterns.add<OptimizeGatherLayoutPattern>(&getContext());
+    if (mlir::applyPatternsAndFoldGreedily(mod, std::move(layoutPatterns))
             .failed()) {
       signalPassFailure();
     }
@@ -433,6 +588,7 @@ private:
     return res;
   }
 };
+} // namespace
 
 } // namespace gpu
 } // namespace triton

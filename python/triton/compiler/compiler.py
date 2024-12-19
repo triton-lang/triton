@@ -170,9 +170,9 @@ def parse(full_name, ext, context):
         module = ir.parse_mlir_module(full_name, context)
         module.context = context
         return module
-    if ext == "llir" or ext == "ptx":
+    if ext == "llir" or ext == "ptx" or ext == "amdgcn":
         return Path(full_name).read_text()
-    if ext == "cubin":
+    if ext == "cubin" or ext == "hsaco":
         return Path(full_name).read_bytes()
 
 
