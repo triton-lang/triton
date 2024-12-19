@@ -7,10 +7,14 @@
 #include "triton/Analysis/AxisInfo.h"
 
 namespace mlir::triton::AMD {
-void populateConvertLayoutOpToLLVMPatterns(
-    LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
-    RewritePatternSet &patterns, int numWarps,
-    ModuleAxisInfoAnalysis &axisInfoAnalysis, PatternBenefit benefit);
+void populateConvertLayoutOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                           const TargetInfo &targetInfo,
+                                           RewritePatternSet &patterns,
+                                           PatternBenefit benefit);
+
+void populateMemoryOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                    RewritePatternSet &patterns,
+                                    PatternBenefit benefit);
 
 void populateDotOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns, int numWarps,
