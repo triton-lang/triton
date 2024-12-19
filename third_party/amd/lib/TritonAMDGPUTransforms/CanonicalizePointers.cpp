@@ -1365,6 +1365,12 @@ static void getForwardSliceImpl(OpOperand *use, Operation *op,
 
 void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   ConversionTarget target(getContext());
+
+  // Leaving this here intentionally: if there is a global type converter
+  // registered then the dialect conversion framework will not unpack/remap the
+  // unrealized_cast and just send the result of the unrealized_cast;
+  // TypeConverter tyc; see
+  // https://github.com/llvm/llvm-project/blob/58389b220a9354ed6c34bdb9310a35165579c5e3/mlir/lib/Transforms/Utils/DialectConversion.cpp#L1179-L1185
   RewritePatternSet patterns(&getContext());
 
   SmallVector<tt::FuncOp> funcOps;
@@ -1374,8 +1380,8 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
     funcOps.push_back(op);
     return WalkResult::advance();
   });
-  if (funcOps.size() > 1) {
-    getOperation().emitError("only on tt.func supported");
+  if (funcOps.size() != 1) {
+    getOperation().emitError("only one tt.func supported");
     return signalPassFailure();
   }
 
@@ -1423,12 +1429,8 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
                                                       opsToRewrite, fatPrs);
   ConversionConfig config;
   config.buildMaterializations = false;
-  if (failed(
-          applyPartialConversion(func, target, std::move(patterns), config))) {
-    LLVM_DEBUG(llvm::errs() << "post pointer-canonicalization: \n");
-    LLVM_DEBUG(func);
+  if (failed(applyPartialConversion(func, target, std::move(patterns), config)))
     return signalPassFailure();
-  }
 
   patterns.clear();
   target.addIllegalOp<UnrealizedConversionCastOp>();
