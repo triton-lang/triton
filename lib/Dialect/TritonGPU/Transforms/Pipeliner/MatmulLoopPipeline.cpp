@@ -866,24 +866,6 @@ static SmallVector<Value>
 createAsyncOps(scf::ForOp &forOp,
                llvm::MapVector<Operation *, LoadInfo> &loadToInfo,
                SmallVector<Value> &barriers, int numStages) {
-  // Calculate the number of buffers needed for each load.
-  // TODO pawel: we could do more fine-grained allocation here and
-  // allocate only the number of buffers that specific loads need.
-  // Instead, we allocate the maximum number of buffers needed by any load.
-  // int numBuffers =
-  //     llvm::max_element(llvm::make_second_range(loadToInfo), [](auto &lhs,
-  //                                                               auto &rhs) {
-  //       return lhs.distToUse < rhs.distToUse;
-  //     })->distToUse;
-  // bool hasMMAV3 = llvm::any_of(loadToInfo, [](auto &kv) {
-  //   return kv.second.isMMAv3Shared || kv.second.isMMAv3Registers;
-  // });
-  // if (hasMMAV3) {
-  //   // For MMAv3, we need an extra buffer as this is assumed in the wgmma
-  //   // pipelining post-processing.
-  //   numBuffers++;
-  // };
-
   llvm::MapVector<Operation *, Value> tmaBufferMapping;
   if (failed(allocTMABuffers(forOp, tmaBufferMapping, numStages))) {
     llvm_unreachable("TMA pipelining failed");
