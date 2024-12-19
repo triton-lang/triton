@@ -380,16 +380,16 @@ def is_rdna():
 
 def get_cdna_autotune_configs():
     return [
-        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
-        #               num_stages=1, num_warps=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+                      num_stages=1, num_warps=4),
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
                       num_stages=1, num_warps=4),
-        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 3, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
-        #               num_stages=1, num_warps=4),
-        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 1, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
-        #               num_stages=1, num_warps=4),
-        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
-        #               num_stages=1, num_warps=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 3, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+                      num_stages=1, num_warps=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 1, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+                      num_stages=1, num_warps=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+                      num_stages=1, num_warps=4),
     ], ['IS_CAUSAL', 'dropout_p', 'MAX_SEQLENS_Q', 'MAX_SEQLENS_K', 'ACTUAL_BLOCK_DMODEL', 'VARLEN', 'HQ', 'HK']
 
 
@@ -445,16 +445,16 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
 
     if PERSISTENT: # if persistent, kernel loops over multiple tiles
         NUM_WG = NUM_CU * GRID_CU_MULTIP  # number of workgroups launched
-        num_tiles_per_head = tl.cdiv(MAX_SEQLENS_Q, BLOCK_M)  #the number of work units (tiles) of a single head
+        num_tiles_per_head = tl.cdiv(MAX_SEQLENS_Q, BLOCK_M)  # the number of work units (tiles) of a single head
         num_tiles_per_sample = num_tiles_per_head * HQ  # times the number of heads
         num_tiles_total = num_tiles_per_sample * B  # times the number of samples
-        if PERSISTENT_DYNAMIC: # standard, kernel processes only one tile
+        if PERSISTENT_DYNAMIC: 
             tile_id = atomic_counter.atomic_add(1)  # retuns the value BEFORE the atomic operation
         else:
             tile_id = tl.program_id(0)
-    else:
-        tile_id = tl.program_id(0)
-        num_tiles_total = tl.cdiv(MAX_SEQLENS_Q, BLOCK_M) * HQ * B
+    else: # standard, kernel processes only one tile
+        tile_id = 0
+        num_tiles_total = 1
 
     while tile_id < num_tiles_total:  # loops more than once only if PERSISTENT
         if PERSISTENT:
@@ -466,6 +466,7 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
             start_m = tl.program_id(0)
             off_h_q = tl.program_id(1)
             off_z = tl.program_id(2)
+        
         offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
         offs_n = tl.arange(0, BLOCK_N)
         offs_d = tl.arange(0, BLOCK_DMODEL)
@@ -515,7 +516,7 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
                     o_offset = Out + off_z * stride_oz + off_h_q * stride_oh + cu_seqlens_q_start * stride_om
                     o_ptrs = o_offset + offs_m[:, None] * stride_om + offs_d[None, :] * stride_on
                     acc = tl.zeros([BLOCK_M, BLOCK_DMODEL], dtype=Out.type.element_ty)
-                    o_ptrs_mask = offs_m[:, None] < seqlen_q
+                    o_ptrs_mask = (offs_m[:, None] < seqlen_q).broadcast_to([BLOCK_M, BLOCK_DMODEL])
                     # We still need to write 0s to the result
                     tl.store(o_ptrs, acc, mask=o_ptrs_mask)
                     # The tensor allocated for L is based on MAX_SEQLENS_Q as that is
@@ -733,7 +734,7 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
             else:
                 tile_id += NUM_WG
         else:
-            tile_id = num_tiles_total  # break after single tile
+            tile_id = num_tiles_total # break after single tile
 
 
 @triton.jit
@@ -1514,6 +1515,7 @@ def test_op_fwd_int8(Z, H, N_CTX_Q, N_CTX_K, D_HEAD, causal, quantize_p, layout,
     o = torch.empty_like(q)
 
     q_quantized, k_quantized, v_quantized = quantize_input(q, k, v, input_metadata, quantize_p=quantize_p)
+
     tri_out, _, best_configs = attention(q_quantized, k_quantized, v_quantized, o, input_metadata)
 
     # Compute scores
