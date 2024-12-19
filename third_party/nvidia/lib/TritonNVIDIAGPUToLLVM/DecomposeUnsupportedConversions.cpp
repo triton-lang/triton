@@ -76,7 +76,6 @@ struct DecomposeUnsupportedConversions
     auto nvidiaShortCutFn = [&](RankedTensorType srcTy,
                                 RankedTensorType dstTy) { return true; };
     ModuleOp mod = getOperation();
-    triton::gpu::decomposeSplatOpToSharedLayoutConversion(mod);
     triton::gpu::decomposeTensorCoreToDotLayoutConversion(mod,
                                                           nvidiaShortCutFn);
     triton::gpu::decomposeBlockedToDotLayoutConversion(mod);
