@@ -1148,9 +1148,11 @@ public:
     Location curLoc = loadOp.getLoc();
 
     llvm::SmallDenseMap<StringAttr, Attribute> attributes{};
-    Value newPtr = createTensorPointer(
-        rewriter, fatPtrBase, fatPtrOffset, curLoc,
-        fatPtrs.at({fatPtrBase, fatPtrOffset}).canNarrow, attributes);
+    Value newPtr = fatPtrBase;
+    if (llvm::isa<RankedTensorType>(loadOp.getPtr().getType()))
+      newPtr = createTensorPointer(
+          rewriter, fatPtrBase, fatPtrOffset, curLoc,
+          fatPtrs.at({fatPtrBase, fatPtrOffset}).canNarrow, attributes);
     SmallVector<Value> operands =
         loadOp.getOperands().take_back(loadOp.getNumOperands() - 1);
     operands.insert(operands.begin(), newPtr);
@@ -1292,6 +1294,75 @@ public:
   void runOnOperation() override;
 };
 
+/// Forward slice == transitive use
+/// This is a port/adaptation of upstream's getForwardSliceImpl
+/// that operates on values instead of ops so that we can track tt.ptr through
+/// the operands/args of region ops like scf.for/scf.while.
+/// It also handles scf.if in a special way beacuse scf.if does not have
+/// operands.
+///
+/// TODO(max): this is still just a heuristic approximation to a "dataflow
+/// analysis" that "understands" the relationship between each operands and
+/// results for each op (i.e., whether fat ptrs are actually propagated).
+static void getForwardSliceImpl(OpOperand *use, Operation *op,
+                                SetVector<Operation *> *forwardSlice) {
+  assert(use && op && "expected both use and op to be valid pointers");
+  assert(use->getOwner() == op && "expected use's owner to be op");
+
+  if (!llvm::isa<tt::PointerType>(getElementTypeOrSelf(use->get().getType())))
+    return;
+
+  // verbose because you can't construct <OpOperand*> from <OpOperand&>
+  SmallVector<OpOperand *> nextUses;
+  auto addUses = [&nextUses](const Value::use_range &uses) {
+    for (auto &use : uses)
+      nextUses.emplace_back(&use);
+  };
+
+  // all of this is necessary because both the LoopLikeInterface and
+  // BrancOpInterface are bad...
+  auto addBlockArgUses = [&use, &addUses](
+                             const Block::BlockArgListType &blockArgs,
+                             unsigned argOffset = 0, unsigned useOffset = 0) {
+    for (auto arg : blockArgs) {
+      if (arg.getArgNumber() - argOffset == use->getOperandNumber() - useOffset)
+        addUses(arg.getUses());
+    }
+  };
+
+  if (auto whileLoop = llvm::dyn_cast<scf::WhileOp>(op)) {
+    addBlockArgUses(whileLoop.getBeforeArguments());
+    addBlockArgUses(whileLoop.getAfterArguments());
+  } else if (auto forLoop = llvm::dyn_cast<scf::ForOp>(op)) {
+    addBlockArgUses(forLoop.getRegionIterArgs(), forLoop.getNumInductionVars(),
+                    forLoop.getNumControlOperands());
+
+  } else if (auto branchOp = llvm::dyn_cast<cf::BranchOp>(op)) {
+    addBlockArgUses(branchOp.getDest()->getArguments());
+  } else if (auto condBranchOp = llvm::dyn_cast<cf::CondBranchOp>(op)) {
+    // the 0th operand of cf.cond_br is the condition
+    addBlockArgUses(condBranchOp.getTrueDest()->getArguments(), /*argOffset*/ 0,
+                    /*useOffset*/ 1);
+    addBlockArgUses(condBranchOp.getFalseDest()->getArguments(),
+                    /*argOffset*/ 0, /*useOffset*/ 1);
+  } else if (auto yield = llvm::dyn_cast<scf::YieldOp>(op)) {
+    forwardSlice->insert(yield);
+    if (auto ifOp = llvm::dyn_cast<scf::IfOp>(yield->getParentOp()))
+      op = ifOp;
+  }
+
+  for (auto result : op->getResults())
+    addUses(result.getUses());
+
+  for (OpOperand *nextUse : nextUses) {
+    auto owner = nextUse->getOwner();
+    if (forwardSlice->count(owner) == 0)
+      getForwardSliceImpl(nextUse, owner, forwardSlice);
+  }
+
+  forwardSlice->insert(op);
+}
+
 void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   ConversionTarget target(getContext());
   RewritePatternSet patterns(&getContext());
@@ -1310,58 +1381,16 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
 
   tt::FuncOp func = funcOps[0];
 
-  // forward slice == all transitive uses
-  ForwardSliceOptions sliceOpts([](Operation *op) {
-    // scf.if isn't a direct user but could contain users
-    // NB: we need this here and the loop below because
-    // forward slice not propagate through the scf.if without the `true` here.
-    if (llvm::isa<scf::IfOp>(op))
-      return true;
-    return llvm::any_of(op->getOperandTypes(), [](Type ty) {
-      return llvm::isa<tt::PointerType>(getElementTypeOrSelf(ty));
-    });
-  });
-  sliceOpts.inclusive = true;
   llvm::SetVector<Operation *> opsToRewrite;
   opsToRewrite.insert(func);
-  for (auto arg : func.getArguments())
+  for (auto arg : func.getArguments()) {
     if (llvm::isa<tt::PointerType>(arg.getType())) {
       // NB: reusing the same SetVector invalidates the topo order implied by
       // getForwardSlice
-      getForwardSlice(arg, &opsToRewrite, sliceOpts);
-    }
-
-  // getForwardSlice doesn't check successorRegions
-  for (auto op : opsToRewrite) {
-    if (llvm::isa<cf::BranchOp, cf::CondBranchOp>(op)) {
-      unsigned opOffset = llvm::isa<cf::BranchOp>(op) ? 0 : 1;
-      for (auto successor : op->getSuccessors()) {
-        for (auto arg : successor->getArguments()) {
-          auto oper = op->getOperand(opOffset + arg.getArgNumber());
-          // this is a heuristic - bb args with tt.ptr types need to be
-          // rewritten
-          if (llvm::isa<tt::PointerType>(getElementTypeOrSelf(oper.getType())))
-            getForwardSlice(arg, &opsToRewrite, sliceOpts);
-        }
-      }
+      for (auto &use : arg.getUses())
+        getForwardSliceImpl(&use, use.getOwner(), &opsToRewrite);
     }
   }
-
-  // NB: we need this here and the check in sliceOpts because without this
-  // loop, getForwardSlice never finds any scf.ifs at all (they have no
-  // operands)
-  for (auto op : opsToRewrite) {
-    if (auto parentIfOp = op->getParentOp()) {
-      if (llvm::isa<scf::IfOp>(parentIfOp)) {
-        getForwardSlice(parentIfOp, &opsToRewrite, sliceOpts);
-      }
-    }
-  }
-
-  // llvm::errs() << "ops to rewrite:\n";
-  // for (auto ops_to_rewrite : opsToRewrite)
-  //   llvm::errs() << ops_to_rewrite->getName() << "\n";
-  // llvm::errs() << "\n";
 
   auto isLegal = [&opsToRewrite](Operation *op) {
     if (auto ifOp = llvm::dyn_cast<scf::IfOp>(op)) {
@@ -1394,8 +1423,12 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
                                                       opsToRewrite, fatPrs);
   ConversionConfig config;
   config.buildMaterializations = false;
-  if (failed(applyPartialConversion(func, target, std::move(patterns), config)))
+  if (failed(
+          applyPartialConversion(func, target, std::move(patterns), config))) {
+    LLVM_DEBUG(llvm::errs() << "post pointer-canonicalization: \n");
+    LLVM_DEBUG(func);
     return signalPassFailure();
+  }
 
   patterns.clear();
   target.addIllegalOp<UnrealizedConversionCastOp>();
