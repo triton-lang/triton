@@ -1646,6 +1646,48 @@ def test_tensor_atomic_cas(sem, num_ctas, device):
     assert (torch.equal(X, Y))
 
 
+@pytest.mark.interpreter
+@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9 or is_hip(),
+                    reason="Requires compute capability >= 9 for NV")
+def test_load_scope_sem_coop_grid_cta_not_one(device):
+
+    @triton.jit
+    def kernel_r(ptrs, BLOCK_SIZE: tl.constexpr):
+        numel = 512
+        offset = tl.program_id(0) * BLOCK_SIZE
+        index = offset
+        mask = index < numel
+        a = tl.load(ptrs, mask=mask)
+        tl.store(ptrs, a)
+
+    block_size = 128
+    data = torch.zeros((128, ), device=device, dtype=torch.float32)
+
+    out = kernel_r[(2, )](data, BLOCK_SIZE=block_size, num_ctas=4, launch_cooperative_grid=True)
+    out = kernel_r[(2, )](data, BLOCK_SIZE=block_size, num_ctas=4, launch_cooperative_grid=False)
+
+
+@pytest.mark.interpreter
+@pytest.mark.skipif(is_hip(), reason="Not implemented for AMD At this moment")
+def test_load_scope_sem_coop_grid_cta_one(device):
+
+    @triton.jit
+    def kernel_r(ptrs, BLOCK_SIZE: tl.constexpr):
+        numel = 512
+        offset = tl.program_id(0) * BLOCK_SIZE
+        index = offset
+        mask = index < numel
+        a = tl.load(ptrs, mask=mask)
+        tl.store(ptrs, a)
+
+    block_size = 128
+    data = torch.zeros((128, ), device=device, dtype=torch.float32)
+
+    # Should do nothing different for num_ctas=1 (with coop launch grid)
+    out = kernel_r[(2, )](data, BLOCK_SIZE=block_size, num_ctas=1, launch_cooperative_grid=True)
+    out = kernel_r[(2, )](data, BLOCK_SIZE=block_size, num_ctas=1, launch_cooperative_grid=False)
+
+
 # ---------------
 # test cast
 # ---------------
