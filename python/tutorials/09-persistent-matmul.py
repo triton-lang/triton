@@ -298,7 +298,7 @@ def matmul_kernel_tma_persistent(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
 
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
-    for _ in tl.range(0, k_tiles * tiles_per_SM, num_stages=4):
+    for _ in range(0, k_tiles * tiles_per_SM):
         ki = tl.where(ki == k_tiles - 1, 0, ki + 1)
         if ki == 0:
             tile_id += NUM_SMS
@@ -313,10 +313,8 @@ def matmul_kernel_tma_persistent(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
 
         offs_k = ki * BLOCK_SIZE_K
 
-        a = tl._experimental_descriptor_load(a_desc_ptr, [offs_am, offs_k], [BLOCK_SIZE_M, BLOCK_SIZE_K], dtype,
-                                             latency=3)
-        b = tl._experimental_descriptor_load(b_desc_ptr, [offs_bn, offs_k], [BLOCK_SIZE_N, BLOCK_SIZE_K], dtype,
-                                             latency=1)
+        a = tl._experimental_descriptor_load(a_desc_ptr, [offs_am, offs_k], [BLOCK_SIZE_M, BLOCK_SIZE_K], dtype)
+        b = tl._experimental_descriptor_load(b_desc_ptr, [offs_bn, offs_k], [BLOCK_SIZE_N, BLOCK_SIZE_K], dtype)
         accumulator = tl.dot(a, b.T, accumulator)
 
         if ki == k_tiles - 1:
@@ -671,8 +669,8 @@ if __name__ == "__main__":
     validate(32, 32, 32, dtype, args.tiles_per_update)
     validate(8192, 8192, 512, dtype, args.tiles_per_update)
 
-    # proton.start("matmul", hook="triton")
-    # for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
-    #     bench(K, dtype, args.tiles_per_update)
-    # proton.finalize()
-    # show_profile(args.prec, "matmul")
+    proton.start("matmul", hook="triton")
+    for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
+        bench(K, dtype, args.tiles_per_update)
+    proton.finalize()
+    show_profile(args.prec, "matmul")

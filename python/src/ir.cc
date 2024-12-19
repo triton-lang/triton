@@ -1327,17 +1327,12 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_descriptor_load",
            [](TritonOpBuilder &self, Value desc, std::vector<Value> &indices,
-              CacheModifier cacheModifier, EvictionPolicy evictionPolicy,
-              std::optional<int> latency) -> Value {
+              CacheModifier cacheModifier,
+              EvictionPolicy evictionPolicy) -> Value {
              auto descTy = cast<triton::TensorDescType>(desc.getType());
              auto resTy = descTy.getBlockType();
-             IntegerAttr latencyAttr = nullptr;
-             if (latency.has_value())
-               latencyAttr =
-                   self.getBuilder().getI32IntegerAttr(latency.value());
              return self.create<ExperimentalDescriptorLoadOp>(
-                 resTy, desc, indices, cacheModifier, evictionPolicy,
-                 latencyAttr);
+                 resTy, desc, indices, cacheModifier, evictionPolicy);
            })
       .def("create_descriptor_store",
            [](TritonOpBuilder &self, Value desc, Value value,
@@ -1712,12 +1707,6 @@ void init_triton_ir(py::module &&m) {
                    printingFlags);
              }
            })
-      .def("get_pipeline_str", [](PassManager &self) {
-        std::string pipelineStr;
-        llvm::raw_string_ostream os(pipelineStr);
-        self.printAsTextualPipeline(os);
-        return os.str();
-      })
       .def("run", [](PassManager &self, ModuleOp &mod) {
         // TODO: maybe dump module to file and print error for better
         // diagnostics
