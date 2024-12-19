@@ -1254,8 +1254,7 @@ def TT_ExperimentalDescriptorLoadOp : TT_Op<"experimental_descriptor_load", [Mem
       TT_TensorDescType:$desc,
       Variadic<I32>:$indices,
       DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
-      DefaultValuedAttr<TT_EvictionPolicyAttr, "::mlir::triton::EvictionPolicy::NORMAL">:$evict,
-      OptionalAttr<I32Attr>:$tt_latency
+      DefaultValuedAttr<TT_EvictionPolicyAttr, "::mlir::triton::EvictionPolicy::NORMAL">:$evict
     );
 
     let results = (outs TT_Tensor:$result);
