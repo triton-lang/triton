@@ -770,10 +770,7 @@ SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   std::optional<LinearLayout> parentLL =
       triton::gpu::toLinearLayout(parentShape, getParent());
   if (!parentLL.has_value()) {
-    if (mlir::isa<DotOperandEncodingAttr>(getParent()))
-      return std::nullopt;
-    llvm::report_fatal_error(
-        "Failed to compute parent layout for slice layout.");
+    return std::nullopt;
   }
 
   // Remove dimension getDim() from the parent layout.
