@@ -355,7 +355,9 @@ protected:
 
   std::string getOperands(ttn::LoadMatrixOp op,
                           unsigned vecSize) const override {
-    return getPtxRegOperands(0, vecSize) + ", " + getPtxAddrOperand(vecSize);
+    return (llvm::Twine(getPtxRegOperands(0, vecSize)) + ", " +
+            getPtxAddrOperand(vecSize))
+        .str();
   }
 
   OperandsAndConstraints
