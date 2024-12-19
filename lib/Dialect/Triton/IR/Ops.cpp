@@ -24,6 +24,16 @@ void LoadOp::getEffects(
                          SideEffects::DefaultResource::get());
 }
 
+void AtomicLoadOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Read::get(), &getPtrMutable(),
+                       triton::GlobalMemory::get());
+  // Always assume volatile for now:
+  effects.emplace_back(MemoryEffects::Write::get(),
+                       SideEffects::DefaultResource::get());
+}
+
 } // namespace triton
 } // namespace mlir
 

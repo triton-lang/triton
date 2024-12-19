@@ -150,6 +150,191 @@ protected:
   ModuleAxisInfoAnalysis &axisAnalysisPass;
 };
 
+struct AtomicLoadOpConversion
+    : public ConvertOpToLLVMPattern<triton::AtomicLoadOp>,
+      public LoadStoreConversionBase {
+  AtomicLoadOpConversion(LLVMTypeConverter &converter,
+                         const NVIDIA::TargetInfo &targetInfo,
+                         ModuleAxisInfoAnalysis &axisAnalysisPass,
+                         PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::AtomicLoadOp>(converter, benefit),
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+
+  LogicalResult
+  matchAndRewrite(triton::AtomicLoadOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto ctx = getContext();
+    auto loc = op->getLoc();
+    auto typeConverter = getTypeConverter();
+
+    // original values
+    Value ptr = op.getPtr();
+    Value mask = op.getMask();
+    Value other = op.getOther();
+    LDBG("Lower AtomicLoadOp for " << ptr);
+
+    // adaptor values
+    Value llPtr = adaptor.getPtr();
+    Value llMask = adaptor.getMask();
+    Value llOther = adaptor.getOther();
+
+    // Check that this is a scalar only
+    unsigned numElems = getTotalElemsPerThread(ptr.getType());
+    assert(!isa<RankedTensorType>(ptr.getType()) && "Expected Ptr to Scalar");
+    assert(1 == numElems && "Expected Ptr to Scalar");
+
+    auto getScalarLLVMValue = [](Location loc, Value val,
+                                 RewriterBase &rewriter) -> Value {
+      auto elems = unpackLLElements(loc, val, rewriter);
+      assert(elems.size() == 1);
+      return elems[0];
+    };
+
+    // Get the LLVM values for pointer, mask, other
+    Value ptrElem = getScalarLLVMValue(loc, llPtr, rewriter);
+    Value maskElem;
+    Value otherElem;
+    if (llMask)
+      maskElem = getScalarLLVMValue(loc, llMask, rewriter);
+    if (other)
+      otherElem = getScalarLLVMValue(loc, llOther, rewriter);
+
+    Type valueTy =
+        typeConverter->convertType(getElementTypeOrSelf(op.getType()));
+    const unsigned valueNBits = std::max(8u, valueTy.getIntOrFloatBitWidth());
+    const size_t maxWordWidth = std::max<size_t>(32, valueNBits);
+    const size_t width = std::min((size_t)valueNBits, maxWordWidth);
+    const size_t movWidth = width < 16 ? 16 : width;
+
+    PTXBuilder ptxBuilder;
+
+    const std::string readConstraint =
+        (width == 64) ? "l" : ((width == 32) ? "r" : "c");
+    const std::string writeConstraint =
+        (width == 64) ? "=l" : ((width == 32) ? "=r" : "=c");
+
+    // If there is a `other` value, use it to init.
+    bool init = other == nullptr;
+    auto *dstOpr = ptxBuilder.newOperand(writeConstraint, init); // =r operation
+
+    if (other) {
+      // PTX doesn't support mov.u8, so we need to use mov.u16
+      PTXInstr &mov =
+          ptxBuilder.create<>("mov")->o("u" + std::to_string(movWidth));
+      PTXInstr::Operand *opr = ptxBuilder.newOperand(otherElem, readConstraint);
+      mov(dstOpr, opr);
+    }
+
+    size_t in_off = 0;
+    auto *addrOpr = ptxBuilder.newAddrOperand(ptrElem, "l", in_off);
+    auto &ld = ptxBuilder.create<>("ld")
+                   ->global()
+                   .o("cta", op.getScope() == triton::MemSyncScope::CTA)
+                   .o("gpu", op.getScope() == triton::MemSyncScope::GPU)
+                   .o("sys", op.getScope() == triton::MemSyncScope::SYSTEM)
+                   .o("acquire", op.getSem() == triton::MemSemantic::ACQUIRE)
+                   .o("relaxed", op.getSem() == triton::MemSemantic::RELAXED)
+                   .b(width);
+
+    Value pred = mask ? maskElem : Value{};
+    ld(dstOpr, addrOpr).maybePredicate(pred, "b");
+
+    // Create inline ASM signature
+    Type retTy = IntegerType::get(getContext(), width);
+    Value ret = ptxBuilder.launch(rewriter, loc, retTy);
+    ret = bitcast(ret, op.getType());
+
+    rewriter.replaceOp(op, {ret});
+    return success();
+  }
+};
+
+struct AtomicStoreOpConversion
+    : public ConvertOpToLLVMPattern<triton::AtomicStoreOp>,
+      public LoadStoreConversionBase {
+  AtomicStoreOpConversion(LLVMTypeConverter &converter,
+                          const NVIDIA::TargetInfo &targetInfo,
+                          ModuleAxisInfoAnalysis &axisAnalysisPass,
+                          PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::AtomicStoreOp>(converter, benefit),
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+
+  LogicalResult
+  matchAndRewrite(triton::AtomicStoreOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Value ptr = op.getPtr();
+    Value value = op.getValue();
+
+    Value llPtr = adaptor.getPtr();
+    Value llMask = adaptor.getMask();
+    Value llValue = adaptor.getValue();
+
+    auto loc = op->getLoc();
+    MLIRContext *ctx = rewriter.getContext();
+
+    unsigned elemsPerThread = getTotalElemsPerThread(ptr.getType());
+    assert(!isa<RankedTensorType>(ptr.getType()) && "Expected Ptr to Scalar");
+    assert(1 == elemsPerThread && "Expected Ptr to Scalar");
+
+    auto getScalarLLVMValue = [](Location loc, Value val,
+                                 RewriterBase &rewriter) -> Value {
+      auto elems = unpackLLElements(loc, val, rewriter);
+      assert(elems.size() == 1);
+      return elems[0];
+    };
+
+    Value ptrElem = getScalarLLVMValue(loc, llPtr, rewriter);
+    Value valueElem = getScalarLLVMValue(loc, llValue, rewriter);
+    Value maskElem;
+    if (llMask)
+      maskElem = getScalarLLVMValue(loc, llMask, rewriter);
+
+    auto valueTy = value.getType();
+    Type valueCTy = typeConverter->convertType(getElementTypeOrSelf(valueTy));
+    const unsigned valueNBits = std::max(8u, valueCTy.getIntOrFloatBitWidth());
+    const size_t maxWordWidth = std::max<size_t>(32, valueNBits);
+    const size_t width = std::min((size_t)valueNBits, maxWordWidth);
+
+    Type valArgTy = IntegerType::get(ctx, width);
+    Value elem = valueElem;
+    if (elem.getType().isInteger(1))
+      elem = sext(i8_ty, elem);
+    elem = bitcast(elem, valArgTy);
+
+    // Prepare the PTX inline asm.
+    PTXBuilder ptxBuilder;
+    std::string constraint = (width == 64) ? "l" : ((width == 32) ? "r" : "c");
+    std::pair<Value, std::string> asmArg = {elem, constraint};
+    auto *asmArgList = ptxBuilder.newListOperand(asmArg);
+
+    auto moduleOp = op->getParentOfType<ModuleOp>();
+    auto freeVarMasks = getFreeVariableMasks(ptr.getType());
+    Value pred = emitRedundantThreadPredicate(moduleOp, freeVarMasks, rewriter,
+                                              loc, targetInfo);
+    if (llMask)
+      pred = maybeAnd(rewriter, loc, pred, maskElem);
+
+    size_t in_off = 0;
+    auto *asmAddr = ptxBuilder.newAddrOperand(ptrElem, "l", in_off);
+    auto &ptxStoreInstr =
+        ptxBuilder.create<>("st")
+            ->global()
+            .o("cta", op.getScope() == triton::MemSyncScope::CTA)
+            .o("gpu", op.getScope() == triton::MemSyncScope::GPU)
+            .o("sys", op.getScope() == triton::MemSyncScope::SYSTEM)
+            .o("release", op.getSem() == triton::MemSemantic::RELEASE)
+            .o("relaxed", op.getSem() == triton::MemSemantic::RELAXED)
+            .b(width);
+    ptxStoreInstr(asmAddr, asmArgList).maybePredicate(pred, "b");
+
+    auto asmReturnTy = void_ty(ctx);
+    ptxBuilder.launch(rewriter, loc, asmReturnTy);
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                           public LoadStoreConversionBase {
   LoadOpConversion(LLVMTypeConverter &converter,
@@ -1336,6 +1521,7 @@ void mlir::triton::NVIDIA::populateLoadStoreOpToLLVMPatterns(
     RewritePatternSet &patterns, ModuleAxisInfoAnalysis &axisInfoAnalysis,
     PatternBenefit benefit) {
   patterns.add<AsyncCopyGlobalToLocalOpConversion, AtomicCASOpConversion,
+               AtomicLoadOpConversion, AtomicStoreOpConversion,
                AtomicRMWOpConversion, LoadOpConversion, StoreOpConversion>(
       typeConverter, targetInfo, axisInfoAnalysis, benefit);
   patterns.add<AsyncCommitGroupOpConversion>(typeConverter, benefit);
