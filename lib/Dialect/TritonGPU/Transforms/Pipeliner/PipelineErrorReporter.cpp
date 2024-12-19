@@ -55,10 +55,8 @@ PipelineErrorReporter::getBlockArgYieldValueFromForLoop(BlockArgument arg) {
   return forOp.getBody()->getTerminator()->getOperand(arg.getArgNumber() - 1);
 }
 
-void 
-PipelineErrorReporter::findRootSchedulingErrorLoopCarryDep(Operation *consumer,
-                                                           Operation *producer,
-                                                           Value operand) {
+void PipelineErrorReporter::findRootSchedulingErrorLoopCarryDep(
+    Operation *consumer, Operation *producer, Value operand) {
   DenseSet<Operation *> rootDefiningOps;
   LDBG("findRootSchedulingErrorLoopCarryDep: this operand is not ready at "
        "the consumer: "
@@ -102,8 +100,8 @@ void PipelineErrorReporter::printSchedulingError(int64_t distance,
   }
   if (rootDefiningOps.empty()) {
     // We failed to find the root defining ops. Whether the disntance is 0 or
-    // not, an empty set means we have some bugs in the pipeline expander. We should
-    // let the user help report the bug.
+    // not, an empty set means we have some bugs in the pipeline expander. We
+    // should let the user help report the bug.
     consumer->emitError() << errorMessage << " " << likelyBuggyMessage;
   } else {
     consumer->emitError() << errorMessage;

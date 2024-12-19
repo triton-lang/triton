@@ -28,8 +28,7 @@ protected:
   /// Find the loop-carried dependency that really causes the scheduling error,
   /// going into nested operations of IfOps.
   void findRootSchedulingErrorLoopCarryDep(Operation *consumer,
-                                                            Operation *producer,
-                                                            Value operand);
+                                           Operation *producer, Value operand);
 
 public:
   explicit PipelineErrorReporter(ForOp forOp) : forOp(forOp) {}
@@ -48,6 +47,5 @@ public:
   /// diagnostic message.
   void printSchedulingError(int64_t distance, Operation *consumer,
                             Operation *producer, Value operand);
-
 };
 #endif // TRITON_TRITONGPU_TRANSFORMS_PIPELINER_PIPELINE_ERROR_REPORTER_H_
