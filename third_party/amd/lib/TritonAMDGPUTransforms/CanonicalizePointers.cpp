@@ -1358,11 +1358,6 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
     }
   }
 
-  // llvm::errs() << "ops to rewrite:\n";
-  // for (auto ops_to_rewrite : opsToRewrite)
-  //   llvm::errs() << ops_to_rewrite->getName() << "\n";
-  // llvm::errs() << "\n";
-
   auto isLegal = [&opsToRewrite](Operation *op) {
     if (auto ifOp = llvm::dyn_cast<scf::IfOp>(op)) {
       // This is the only hack in the entire pass; on first traversal,
