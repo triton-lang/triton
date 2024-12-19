@@ -139,26 +139,32 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     const SharedMemoryObject &smemObj,
                     const LLVMTypeConverter *typeConverter, Value thread) {
   assert((opIdx == 0 || opIdx == 1) && "unexpected operand idx");
-  auto rank = smemObj.getStrides().size();
-  int kDimIdx = opIdx == 0 ? rank - 1 : rank - 2;
-  int nonKDimIdx = opIdx == 0 ? rank - 2 : rank - 1;
+  auto tensorTy = cast<triton::gpu::MemDescType>(tensor.getType());
+  auto expandedTensorTy = getExpandedDesc(tensorTy);
+  ArrayRef<int64_t> shape = expandedTensorTy.getShape();
+  auto rank = shape.size();
+  assert(rank == 3);
+  int kDimIdx = opIdx == 0 ? 2 : 1;
+  int nonKDimIdx = opIdx == 0 ? 1 : 2;
 
-  auto wmmaLayout = cast<AMDWmmaEncodingAttr>(encoding.getParent());
+  auto expandedEncoding =
+      cast<DotOperandEncodingAttr>(getExpandedEncoding(encoding));
+
+  auto wmmaLayout = cast<AMDWmmaEncodingAttr>(expandedEncoding.getParent());
   auto computeTensorElemMappingInBlock =
       wmmaLayout.getVersion() == 1 ? computeTensorElemMappingInBlockWmma1
                                    : computeTensorElemMappingInBlockWmma2;
   assert(wmmaLayout.getMNKDimPerInstr()[nonKDimIdx] == 16);
   auto warpsPerCTA = wmmaLayout.getWarpsPerCTA();
-
-  auto aTensorTy = cast<triton::gpu::MemDescType>(tensor.getType());
-  ArrayRef<int64_t> shape = aTensorTy.getShape();
-  auto sharedLayout = cast<SharedEncodingAttr>(aTensorTy.getEncoding());
+  auto sharedLayout = cast<SharedEncodingAttr>(expandedTensorTy.getEncoding());
   auto order = sharedLayout.getOrder();
-  assert((rank == 2 || order[2] == 0) &&
-         "expect batch to be the slowest dimension");
+  assert(order[2] == 0 && "expect batch to be the slowest dimension");
 
-  auto elemTy = aTensorTy.getElementType();
-  int kWidth = encoding.getKWidth();
+  auto expandedSmemObj = getExpandedSharedMemoryObject(rewriter, loc, smemObj,
+                                                       tensorTy.getShape());
+
+  auto elemTy = expandedTensorTy.getElementType();
+  int kWidth = expandedEncoding.getKWidth();
   auto elemsPerInstr = wmmaLayout.getElemsPerInstrForOperands();
   auto wmmaInstrK = elemsPerInstr[opIdx == 0 ? 1 : 0];
   auto wmmaInstrNonK = elemsPerInstr[opIdx == 0 ? 0 : 1];
@@ -180,30 +186,29 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   Value lane = urem(thread, waveSize);
   unsigned int maxNumWarps = shape[nonKDimIdx] / wmmaInstrNonK;
   int warpsPerBlockNonK = std::min(warpsPerCTA[nonKDimIdx], maxNumWarps);
-  int warpsPerBatch =
-      rank == 3 ? std::min<unsigned>(shape[0], warpsPerCTA[0]) : 1;
+  int warpsPerBatch = std::min<unsigned>(shape[0], warpsPerCTA[0]);
   Value waveIdInBatch = urem(linearWaveId, i32_val(warpsPerBatch));
   elemTy = typeConverter->convertType(elemTy);
-
   SmallVector<Value> loadedValues;
   SmallVector<Value> offsets;
   Value smemBase;
   Value spatialWarpId = AMD::getWarpIdInBlock(
       rewriter, loc, linearWaveId, warpsPerCTA, elemsPerInstr[0],
       shape[nonKDimIdx], nonKDimIdx, triton::gpu::getOrder(wmmaLayout));
+
   if (opIdx == 0) {
     offsets = AMD::computeOffsetsAType(
         rewriter, loc, computeTensorElemMappingInBlock, elemsPerInstr,
         spatialWarpId, lane, warpsPerBlockNonK, numElemsPerThreadPerRep,
-        numReps, smemObj, sharedLayout, wmmaInstrNonK, wmmaInstrK);
+        numReps, expandedSmemObj, sharedLayout, wmmaInstrNonK, wmmaInstrK);
   } else {
     assert(opIdx == 1);
     offsets = AMD::computeOffsetsBType(
         rewriter, loc, computeTensorElemMappingInBlock, elemsPerInstr,
         spatialWarpId, lane, warpsPerBlockNonK, numElemsPerThreadPerRep,
-        numReps, smemObj, sharedLayout, wmmaInstrNonK, wmmaInstrK);
+        numReps, expandedSmemObj, sharedLayout, wmmaInstrNonK, wmmaInstrK);
   }
-  smemBase = AMD::computeBasePtr(rewriter, loc, smemObj);
+  smemBase = AMD::computeBasePtr(rewriter, loc, expandedSmemObj);
 
   Type resElemTy = typeConverter->convertType(elemTy);
   Type smemPtrTy = ptr_ty(rewriter.getContext(), 3);
