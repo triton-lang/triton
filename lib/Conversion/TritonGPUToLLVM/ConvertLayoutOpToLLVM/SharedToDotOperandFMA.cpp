@@ -218,7 +218,6 @@ Value loadFMAOp(Value srcVal, Value llVal, BlockedEncodingAttr dLayout,
                 ConversionPatternRewriter &rewriter, const int dotOpNo) {
   if (!verifyCTALayout(dLayout.getCTALayout()))
     return Value();
-  return Value();
 
   DimIdx dim;
   dim.batch = 0;
@@ -293,6 +292,11 @@ Value loadFMAOp(Value srcVal, Value llVal, BlockedEncodingAttr dLayout,
   auto sizeNonKPerThread = sizePerThread[dim.nonK];
   auto numBTiles = std::max(1u, B / shapePerCTABTile);
   auto numNonKTiles = std::max(1u, NonK / shapePerCTANonKTile);
+
+  // Found discrepancy in this case,
+  // use linear layout based converter for this case
+  if (numBTiles != 1 || numNonKTiles != 1)
+    return Value();
 
   auto perThreadShape =
       getElemsPerThreadInOp(opTensorShape, shapePerCTATile, sizePerThread);
