@@ -23,6 +23,8 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include "llvm/Transforms/InstCombine/InstCombine.h"
+#include "llvm/Transforms/Instrumentation/AddressSanitizer.h"
+#include "llvm/Transforms/Instrumentation/AddressSanitizerOptions.h"
 #include <csignal>
 #include <memory>
 #include <pybind11/pybind11.h>
@@ -217,7 +219,14 @@ void init_triton_llvm(py::module &&m) {
       .def("set_calling_conv", &llvm::Function::setCallingConv)
       .def("add_fn_attr", [](llvm::Function *fn, std::string &name,
                              std::string &val) { fn->addFnAttr(name, val); })
-
+      .def("add_fn_asan_attr",
+           [](llvm::Function *fn) {
+             fn->addFnAttr(llvm::Attribute::SanitizeAddress);
+           })
+      .def("add_fn_target_feature",
+           [](llvm::Function *fn, std::string &val) {
+             fn->addFnAttr("target-features", val);
+           })
       // Sets the nvvm.maxreg property on the given function.
       .def("set_nvvm_maxnreg",
            [](llvm::Function *fn, int maxnreg) {
@@ -377,6 +386,12 @@ void init_triton_llvm(py::module &&m) {
               fpm.addPass(BreakStructPhiNodesPass());
               fpm.addPass(InstCombinePass());
             });
+        bool enableAddressSanitizer =
+            mlir::triton::tools::getBoolEnv("TRITON_ENABLE_ASAN");
+        if (enableAddressSanitizer) {
+          AddressSanitizerOptions Opts;
+          mpm.addPass(AddressSanitizerPass(Opts));
+        }
         mpm.addPass(pb.buildPerModuleDefaultPipeline(opt));
         mpm.run(*mod, mam);
       },
