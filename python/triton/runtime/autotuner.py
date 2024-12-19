@@ -5,7 +5,6 @@ import os
 import time
 import inspect
 from typing import Dict, Tuple, List, Optional
-from numbers import Number
 
 from .jit import KernelInterface
 from .errors import OutOfResources, PTXASError
@@ -41,8 +40,7 @@ class Autotuner(KernelInterface):
         else:
             self.configs = configs
         self.keys = key
-        # cache is a mapping of Tuple keys to numbers
-        self.cache: Dict[Tuple, Number] = {}
+        self.cache: Dict[Tuple, Config] = {}
         self.arg_names = arg_names
 
         # Reset to zero or restore values
@@ -221,10 +219,11 @@ class Autotuner(KernelInterface):
             top_k = self.configs_top_k
             if isinstance(top_k, float) and top_k <= 1.0:
                 top_k = int(len(self.configs) * top_k)
-            else:
+            elif not isinstance(top_k, int):
                 # Slice index must be an integer
-                # if top_k is a float > 1.0, we need to cast to int or we have a type error
-                top_k = int(top_k)
+                # if top_k is a float > 1.0, raise an exception
+                raise ValueError(f"Error while pruning configs, top_k must be either 1) a float <= 1.0 or 2) an int")
+
             if len(pruned_configs) > top_k:
                 est_timing = {
                     config: self.perf_model(
