@@ -25,15 +25,14 @@
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/Format.h"
+#include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/LogicalResult.h"
 #include <utility>
 
 #define GEN_PASS_CLASSES
 #include "TritonAMDGPUTransforms/Passes.h.inc"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-
-#include "llvm/Support/Format.h"
-#include "llvm/Support/FormatVariadic.h"
 
 #define DEBUG_TYPE "tritonamdgpu-canonicalize-pointers"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -505,8 +504,9 @@ public:
       return rewriter.notifyMatchFailure(broadcastOp,
                                          "non tt.ptr base unimplemented");
     auto offsetType = dyn_cast<RankedTensorType>(fatPtrOffset.getType());
-    return rewriter.notifyMatchFailure(broadcastOp,
-                                       "non-tensor offset unimplemented");
+    if (!offsetType)
+      return rewriter.notifyMatchFailure(broadcastOp,
+                                         "non-tensor offset unimplemented");
 
     auto outType =
         dyn_cast<RankedTensorType>(broadcastOp.getResult().getType());
@@ -1296,9 +1296,19 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   ConversionTarget target(getContext());
   RewritePatternSet patterns(&getContext());
 
-  tt::FuncOp func = getOperation();
-  if (func.isPrivate())
-    return;
+  SmallVector<tt::FuncOp> funcOps;
+  getOperation().walk<WalkOrder::PreOrder>([&funcOps](tt::FuncOp op) {
+    if (op.isPrivate())
+      return WalkResult::skip();
+    funcOps.push_back(op);
+    return WalkResult::advance();
+  });
+  if (funcOps.size() > 1) {
+    getOperation().emitError("only on tt.func supported");
+    return signalPassFailure();
+  }
+
+  tt::FuncOp func = funcOps[0];
 
   // forward slice == all transitive uses
   ForwardSliceOptions sliceOpts([](Operation *op) {
