@@ -380,16 +380,16 @@ def is_rdna():
 
 def get_cdna_autotune_configs():
     return [
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
-                      num_stages=1, num_warps=4),
+        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+        #               num_stages=1, num_warps=4),
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
                       num_stages=1, num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 3, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
-                      num_stages=1, num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 1, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
-                      num_stages=1, num_warps=4),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
-                      num_stages=1, num_warps=4),
+        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 3, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+        #               num_stages=1, num_warps=4),
+        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'waves_per_eu': 1, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+        #               num_stages=1, num_warps=4),
+        # triton.Config({'BLOCK_M': 128, 'BLOCK_N': 32, 'waves_per_eu': 2, 'PRE_LOAD_V': False, 'GRID_CU_MULTIP': 2},
+        #               num_stages=1, num_warps=4),
     ], ['IS_CAUSAL', 'dropout_p', 'MAX_SEQLENS_Q', 'MAX_SEQLENS_K', 'ACTUAL_BLOCK_DMODEL', 'VARLEN', 'HQ', 'HK']
 
 
@@ -443,13 +443,12 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
              ENABLE_DROPOUT: tl.constexpr, RETURN_ENCODED_SOFTMAX: tl.constexpr, USE_ALIBI: tl.constexpr,
              INT8: tl.constexpr, USE_P_SCALE: tl.constexpr, INT8_KV: tl.constexpr):
 
-    if PERSISTENT:
+    if PERSISTENT: # if persistent, kernel loops over multiple tiles
         NUM_WG = NUM_CU * GRID_CU_MULTIP  # number of workgroups launched
         num_tiles_per_head = tl.cdiv(MAX_SEQLENS_Q, BLOCK_M)  #the number of work units (tiles) of a single head
         num_tiles_per_sample = num_tiles_per_head * HQ  # times the number of heads
         num_tiles_total = num_tiles_per_sample * B  # times the number of samples
-        # atomic counter is initialized as 0
-        if PERSISTENT_DYNAMIC:
+        if PERSISTENT_DYNAMIC: # standard, kernel processes only one tile
             tile_id = atomic_counter.atomic_add(1)  # retuns the value BEFORE the atomic operation
         else:
             tile_id = tl.program_id(0)
@@ -482,9 +481,10 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
             if start_m * BLOCK_M > seqlen_q:
                 continue_condition = False
                 # return
-            cu_seqlens_k_start = tl.load(cu_seqlens_k + off_z)
-            cu_seqlens_k_end = tl.load(cu_seqlens_k + off_z + 1)
-            seqlen_k = cu_seqlens_k_end - cu_seqlens_k_start
+            else:
+                cu_seqlens_k_start = tl.load(cu_seqlens_k + off_z)
+                cu_seqlens_k_end = tl.load(cu_seqlens_k + off_z + 1)
+                seqlen_k = cu_seqlens_k_end - cu_seqlens_k_start
         else:
             cu_seqlens_q_start = 0
             cu_seqlens_k_start = 0
@@ -2015,7 +2015,8 @@ def main():
     assert args.dtype in arg_to_torch_dtype, \
            "Only fp16, bf16 and f32 types currently supported."
 
-    run_benchmark(custom_config, args)
+    test_op_fwd_int8(4, 4, 65, 1019, 65, True, True, 'bhsd')
+    # run_benchmark(custom_config, args)
 
 
 if __name__ == '__main__':
