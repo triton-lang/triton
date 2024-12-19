@@ -30,6 +30,7 @@
 
 #define GEN_PASS_CLASSES
 #include "TritonAMDGPUTransforms/Passes.h.inc"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include "llvm/Support/Format.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -1147,11 +1148,9 @@ public:
     Location curLoc = loadOp.getLoc();
 
     llvm::SmallDenseMap<StringAttr, Attribute> attributes{};
-    Value newPtr = fatPtrBase;
-    if (llvm::isa<RankedTensorType>(loadOp.getPtr().getType()))
-      newPtr = createTensorPointer(
-          rewriter, fatPtrBase, fatPtrOffset, curLoc,
-          fatPtrs.at({fatPtrBase, fatPtrOffset}).canNarrow, attributes);
+    Value newPtr = createTensorPointer(
+        rewriter, fatPtrBase, fatPtrOffset, curLoc,
+        fatPtrs.at({fatPtrBase, fatPtrOffset}).canNarrow, attributes);
     SmallVector<Value> operands =
         loadOp.getOperands().take_back(loadOp.getNumOperands() - 1);
     operands.insert(operands.begin(), newPtr);
@@ -1294,11 +1293,12 @@ public:
 };
 
 void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
-  mlir::MLIRContext *context = &getContext();
-  ConversionTarget target(*context);
-  RewritePatternSet patterns(context);
+  ConversionTarget target(getContext());
+  RewritePatternSet patterns(&getContext());
 
   tt::FuncOp func = getOperation();
+  if (func.isPrivate())
+    return;
 
   // forward slice == all transitive uses
   ForwardSliceOptions sliceOpts([](Operation *op) {
@@ -1327,10 +1327,10 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
       unsigned opOffset = llvm::isa<cf::BranchOp>(op) ? 0 : 1;
       for (auto successor : op->getSuccessors()) {
         for (auto arg : successor->getArguments()) {
-          // if the bb arg corresponds to an op that will be rewritten
-          if (opsToRewrite.contains(
-                  op->getOperand(opOffset + arg.getArgNumber())
-                      .getDefiningOp()))
+          auto oper = op->getOperand(opOffset + arg.getArgNumber());
+          // this is a heuristic - bb args with tt.ptr types need to be
+          // rewritten
+          if (llvm::isa<tt::PointerType>(getElementTypeOrSelf(oper.getType())))
             getForwardSlice(arg, &opsToRewrite, sliceOpts);
         }
       }
