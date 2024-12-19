@@ -196,6 +196,8 @@ struct DotOpMFMAConversionHelper {
     auto bEncoding = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
     int kWidth = aEncoding.getKWidth();
     auto rank = aTensorTy.getShape().size();
+    const auto kDimOperandSize = aTensorTy.getShape()[rank - 1];
+    const auto kDimInstrSize = mfmaLayout.getInstrShapeForOperand(kWidth, 0)[1];
 
     auto repA = mfmaLayout.getRepForOperand(aTensorTy.getShape(), kWidth, 0);
     auto repB = mfmaLayout.getRepForOperand(bTensorTy.getShape(), kWidth, 1);
@@ -261,9 +263,36 @@ struct DotOpMFMAConversionHelper {
           }
           acc = reduceSubBlocks(subBlocks, acc);
           for (unsigned v = 0; v < elemsPerVec; ++v) {
-            fc[b * numRepM * numRepN * elemsPerVec + m * numRepN * elemsPerVec +
-               n * elemsPerVec + v] =
-                extract_element(dstElemTy, acc, i32_val(v));
+            Value accElem = extract_element(dstElemTy, acc, i32_val(v));
+            // Dot operand layout minimal tile is kDimInstrSize elements across
+            // K dimension. If dot operand K dimension is smaller, layout
+            // assigns tensor elements to multiple different hardware locations.
+            // In this case mfma instruction adds elements in accumulator
+            // multiple times.
+            //
+            // Let say A=[1,2]; B=[3,4], C = A*B = 1*3+2*4 = 11
+            // Consider instruction K size is 4,
+            // in this case operands will be duplicated:
+            // A'=[1,2,1,2] B'=[3,4,3,4]
+            // C' = (1*3+2*4) + (1*3+2*4) = 22
+            //
+            // Following code adjusts accumulator values in such cases.
+            if (kDimInstrSize > kDimOperandSize) {
+              assert(kDimInstrSize % kDimOperandSize == 0);
+              int duplicationRate = kDimInstrSize / kDimOperandSize;
+              if (dstElemTy.isInteger()) {
+                accElem = sdiv(accElem, i32_val(duplicationRate));
+              } else {
+                auto attr = rewriter.getFloatAttr(dstElemTy, duplicationRate);
+                auto duplicationRateVal =
+                    rewriter.create<LLVM::ConstantOp>(loc, dstElemTy, attr);
+                accElem = rewriter.create<LLVM::FDivOp>(loc, dstElemTy, accElem,
+                                                        duplicationRateVal);
+              }
+            }
+            auto linearIdx = b * numRepM * numRepN * elemsPerVec +
+                             m * numRepN * elemsPerVec + n * elemsPerVec + v;
+            fc[linearIdx] = accElem;
           }
         }
       }
