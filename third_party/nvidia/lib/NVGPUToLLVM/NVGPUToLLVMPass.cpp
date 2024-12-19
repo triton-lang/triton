@@ -235,7 +235,7 @@ public:
 };
 
 // Base class for Matrix Operation Patterns
-template <typename MatrixOpType>
+template <typename MatrixOpType, typename ConcreteMatrixOpPattern>
 class MatrixOpPattern : public OpRewritePattern<MatrixOpType> {
 public:
   using OpRewritePattern<MatrixOpType>::OpRewritePattern;
@@ -248,8 +248,10 @@ public:
                      : false;
 
     // Template method for PTX assembly generation
-    std::string ptxAsm = getPtxOpCode(op) + getPtxModifiers(vecSize, trans) +
-                         " " + getOperands(op, vecSize) + ";";
+    std::string ptxAsm =
+        (llvm::Twine(ConcreteMatrixOpPattern::kOpCode) +
+         getPtxModifiers(vecSize, trans) + " " + getOperands(op, vecSize) + ";")
+            .str();
 
     OperandsAndConstraints operandAndConstraints =
         getOperandsAndConstraints(op, vecSize);
@@ -262,36 +264,37 @@ public:
 protected:
   // Shared helper methods
   std::string getPtxModifiers(unsigned vecSize, bool trans) const {
-    const std::string ptxAsmBase = ".sync.aligned.m8n8";
+    auto ptxAsmBase = llvm::Twine(".sync.aligned.m8n8");
     const std::string suffix = trans ? ".trans.shared.b16" : ".shared.b16";
     switch (vecSize) {
     case 1:
-      return ptxAsmBase + ".x1" + suffix;
+      return (ptxAsmBase + ".x1" + suffix).str();
     case 2:
-      return ptxAsmBase + ".x2" + suffix;
+      return (ptxAsmBase + ".x2" + suffix).str();
     case 4:
-      return ptxAsmBase + ".x4" + suffix;
+      return (ptxAsmBase + ".x4" + suffix).str();
     default:
       assert(false && "Invalid vector size");
     }
   }
 
   std::string getPtxRegOperands(unsigned startIdx, unsigned count) const {
-    std::string regOperands = "{";
+    llvm::SmallString<20> regOperands;
+    llvm::raw_svector_ostream stream(regOperands);
+    stream << "{";
     for (unsigned i = 0; i < count; i++) {
-      regOperands += "$" + std::to_string(startIdx + i);
+      stream << "$" + llvm::utostr(startIdx + i);
       if (i != count - 1)
-        regOperands += ", ";
+        stream << ", ";
     }
-    regOperands += "}";
-    return regOperands;
+    stream << "}";
+    return std::string(regOperands.str());
   }
 
   std::string getPtxAddrOperand(unsigned idx) const {
-    return "[$" + std::to_string(idx) + "]";
+    return (llvm::Twine("[$") + llvm::utostr(idx) + "]").str();
   }
 
-  virtual std::string getPtxOpCode(MatrixOpType op) const = 0;
   virtual std::string getOperands(MatrixOpType op, unsigned vecSize) const = 0;
   virtual OperandsAndConstraints
   getOperandsAndConstraints(MatrixOpType op, unsigned vecSize) const = 0;
@@ -301,22 +304,23 @@ protected:
 };
 
 // StoreMatrixOp Pattern
-class StoreMatrixOpPattern : public MatrixOpPattern<ttn::StoreMatrixOp> {
+class StoreMatrixOpPattern
+    : public MatrixOpPattern<ttn::StoreMatrixOp, StoreMatrixOpPattern> {
 public:
-  using MatrixOpPattern::MatrixOpPattern;
+  using MatrixOpPattern<ttn::StoreMatrixOp,
+                        StoreMatrixOpPattern>::MatrixOpPattern;
+  static constexpr const char *kOpCode = "stmatrix";
 
 protected:
   unsigned getVectorSize(ttn::StoreMatrixOp op) const override {
     return op.getVals().size();
   }
 
-  std::string getPtxOpCode(ttn::StoreMatrixOp) const override {
-    return "stmatrix";
-  }
-
   std::string getOperands(ttn::StoreMatrixOp op,
                           unsigned vecSize) const override {
-    return getPtxAddrOperand(0) + ", " + getPtxRegOperands(1, vecSize);
+    return (llvm::Twine(getPtxAddrOperand(0)) + ", " +
+            getPtxRegOperands(1, vecSize))
+        .str();
   }
 
   OperandsAndConstraints
@@ -336,18 +340,17 @@ protected:
 };
 
 // LoadMatrixOp Pattern
-class LoadMatrixOpPattern : public MatrixOpPattern<ttn::LoadMatrixOp> {
+class LoadMatrixOpPattern
+    : public MatrixOpPattern<ttn::LoadMatrixOp, LoadMatrixOpPattern> {
 public:
-  using MatrixOpPattern::MatrixOpPattern;
+  using MatrixOpPattern<ttn::LoadMatrixOp,
+                        LoadMatrixOpPattern>::MatrixOpPattern;
+  static constexpr const char *kOpCode = "ldmatrix";
 
 protected:
   unsigned getVectorSize(ttn::LoadMatrixOp op) const override {
     auto resultType = cast<LLVM::LLVMStructType>(op.getType());
     return resultType.getBody().size();
-  }
-
-  std::string getPtxOpCode(ttn::LoadMatrixOp) const override {
-    return "ldmatrix";
   }
 
   std::string getOperands(ttn::LoadMatrixOp op,
