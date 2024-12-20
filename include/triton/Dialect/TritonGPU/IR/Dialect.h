@@ -217,9 +217,6 @@ LinearLayout ensureLayoutNotSmallerThan(
 // Return a vector of the standard out dimension names for tensor layouts. These
 // are "dim0", "dim1", etc.
 SmallVector<StringAttr> standardOutDimNames(MLIRContext *ctx, int rank);
-// Returns ["dim0", "dim1", ..., "dim<rank-1>"] in given order.
-SmallVector<StringAttr> orderedOutDimNames(MLIRContext *ctx,
-                                           ArrayRef<unsigned> order);
 // Return an identity mapping from `inDimName` to the standard out dimensions,
 // with the dimensions sized according to the shape. The bases are sorted
 // according to `order`, with the most minor dimension first.

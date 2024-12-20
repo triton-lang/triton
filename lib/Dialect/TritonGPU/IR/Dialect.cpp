@@ -621,17 +621,6 @@ SmallVector<StringAttr> standardOutDimNames(MLIRContext *ctx, int rank) {
   return ret;
 }
 
-// Returns ["dim0", "dim1", ..., "dim<rank-1>"] in given order.
-SmallVector<StringAttr> orderedOutDimNames(MLIRContext *ctx,
-                                           ArrayRef<unsigned> order) {
-  auto rank = order.size();
-  SmallVector<StringAttr> ret;
-  for (int i = 0; i < rank; i++) {
-    ret.push_back(StringAttr::get(ctx, "dim" + llvm::Twine(order[i])));
-  }
-  return ret;
-}
-
 // Returns a 1D -> ND layout into [dim0, dim1, ...] that's equivalent to
 // creating a 1D -> 1D mapping of size product(shape) and then reshaping to
 // permute(shape, order).

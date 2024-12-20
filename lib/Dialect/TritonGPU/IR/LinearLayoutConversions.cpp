@@ -676,7 +676,8 @@ fmaDotToLinearLayout(DotOperandEncodingAttr operandLayout,
   auto threadShape = blocked.getThreadsPerWarp();
   auto warpShape = blocked.getWarpsPerCTA();
 
-  SmallVector<StringAttr> repDimNames = orderedOutDimNames(ctx, repOrder);
+  SmallVector<StringAttr> repDimNames =
+      permuteDimNames(standardOutDimNames(ctx, rank), repOrder);
 
   LinearLayout ctaLayout = identityStandardND(kReg, threadSize, regOrder)
                                .transposeOuts(repDimNames) *

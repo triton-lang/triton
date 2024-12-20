@@ -56,7 +56,7 @@ static ValueTableFMA getValueTableFromStructFMA(
     auto inRepSpatialIdx =
         mlir::LLVM::delinearize(inRepLinearIdx, perRepShape, inRepOrder);
     auto repSpatialIdx =
-        mlir::LLVM::delinearize(repLinearIdx, perRepShape, repOrder);
+        mlir::LLVM::delinearize(repLinearIdx, repetitions, repOrder);
     OperandValueKey key{repSpatialIdx[0], repSpatialIdx[nonKDim],
                         inRepSpatialIdx[0], inRepSpatialIdx[nonKDim],
                         inRepSpatialIdx[kDim]};
