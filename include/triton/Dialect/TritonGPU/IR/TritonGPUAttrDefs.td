@@ -763,7 +763,7 @@ for
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
     SmallVector<unsigned> getContigPerThread() {
-      // Block encoding is dense str  ide layout. The elements per thread are contiguous.
+      // Block encoding is dense stride layout. The elements per thread are contiguous.
       return getSizePerThread();
     };
   }];
