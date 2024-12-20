@@ -287,6 +287,9 @@ std::string GraphLayoutMarker::getColor(const Type &type) const {
 // -------------------------------------------------------------------------- //
 
 static Attribute inferDstEncoding(triton::ReduceOp op, Attribute encoding) {
+  // ReduceOp does not support LinearEncodingAttr yet.
+  if (isa<triton::gpu::LinearEncodingAttr>(encoding))
+    return {};
   return triton::gpu::SliceEncodingAttr::get(op->getContext(), op.getAxis(),
                                              encoding);
 }
@@ -330,7 +333,12 @@ static Attribute inferSrcEncoding(triton::ReduceOp op, Attribute encoding) {
     return {};
   if (op.getAxis() != sliceEncoding.getDim())
     return {};
-  return sliceEncoding.getParent();
+
+  // ReduceOp does not support LinearEncodingAttr yet.
+  Attribute result = sliceEncoding.getParent();
+  if (isa<triton::gpu::LinearEncodingAttr>(result))
+    return {};
+  return result;
 }
 
 static Attribute inferSrcEncoding(triton::ExpandDimsOp op, Attribute encoding) {
