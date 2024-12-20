@@ -443,9 +443,6 @@ SmallVector<SmallVector<unsigned>> emitOffsetForLayout(Attribute layout,
   StringAttr kBlock = str_attr("block");
 
   SmallVector<SmallVector<unsigned>> offsets;
-  if (isa<triton::gpu::LinearEncodingAttr>(layout)) {
-    ll = ll->removeZeroBasesAlongDim(kRegister);
-  }
   for (int i = 0; i < ll->getInDimSize(str_attr("register")); i++) {
     auto idxs =
         ll->apply({{kRegister, i}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}});
