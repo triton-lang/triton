@@ -1,4 +1,5 @@
 add_triton_library(TritonTools
+  LayoutUtils.cpp
   LinearLayout.cpp
 
   DEPENDS
