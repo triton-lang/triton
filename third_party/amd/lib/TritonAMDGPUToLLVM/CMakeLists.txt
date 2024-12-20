@@ -17,6 +17,7 @@ add_triton_library(TritonAMDGPUToLLVM
     TargetInfo.cpp
     TargetUtils.cpp
     DecomposeUnsupportedConversions.cpp
+    SetSpecificAllocationSize.cpp
     OptimizeLDSUsage.cpp
     OptimizeLDSUtility.cpp
     SPMDOpToLLVM.cpp

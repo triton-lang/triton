@@ -720,24 +720,144 @@ bool supportsGlobalAtomicF16PackedAndDpp(triton::AMD::ISAFamily isaFamily) {
          isaFamily == triton::AMD::ISAFamily::CDNA3;
 }
 
-Value generateI32DppMove(PatternRewriter &rewriter, Value val, int dppCtrl) {
-  assert(val.getType().isInteger(32));
+Value generateIntDppMove(PatternRewriter &rewriter, Value val, int dppCtrl) {
+  Type movedTy = val.getType();
+  assert(movedTy.isInteger());
   auto loc = val.getLoc();
-  Value old = i32_val(0);
+  Value old = int_val(movedTy.getIntOrFloatBitWidth(), 0);
   int rowMask = 0b1111;  // enable all rows
   int bankMask = 0b1111; // enable all banks
   bool boundCtrl = false;
   auto dppMovOp = rewriter.create<ROCDL::DPPUpdateOp>(
-      loc, i32_ty, old, val, dppCtrl, rowMask, bankMask, boundCtrl);
+      loc, movedTy, old, val, dppCtrl, rowMask, bankMask, boundCtrl);
   return dppMovOp.getResult();
 }
 
-Value shiftLeftI32ByDpp(PatternRewriter &rewriter, Value val) {
-  return generateI32DppMove(rewriter, val, 0x101); // shift left 1 lane
+Value shiftLeftIntByDpp(PatternRewriter &rewriter, Value val, int step = 1) {
+  return generateIntDppMove(rewriter, val, 0x100 + step); // shift left
 }
 
-Value shiftRightI32ByDpp(PatternRewriter &rewriter, Value val) {
-  return generateI32DppMove(rewriter, val, 0x111); // shift right 1 lane
+Value shiftRightIntByDpp(PatternRewriter &rewriter, Value val, int step = 1) {
+  return generateIntDppMove(rewriter, val, 0x110 + step); // shift right
+}
+
+void generateBitonicSort(PatternRewriter &rewriter, Value key, Value val) {
+  // todo: extend logic to block size
+  // get warp size
+  auto loc = val.getLoc();
+  int warpSize = 64;
+  Value warpSize_ = i32_val(warpSize);
+  Value laneId = urem(tid_val(), warpSize_);
+  int keyBitWidth = key.getType().getIntOrFloatBitWidth();
+  int valBitWidth = val.getType().getIntOrFloatBitWidth();
+
+  auto generatePermute = [&](Value valFrom, Value threadBasedDest) {
+    int permNum = valFrom.getType().getIntOrFloatBitWidth() / 32;
+    Type i32VecValTy = vec_ty(i32_ty, permNum);
+    Value valCastedVec = bitcast(valFrom, i32VecValTy);
+    Value movedVec = undef(i32VecValTy);
+    for (int iPerm = 0; iPerm < permNum; ++iPerm) {
+      Value movedPart = rewriter.create<ROCDL::DsBpermuteOp>(
+          loc, i32_ty, threadBasedDest,
+          extract_element(i32_ty, valCastedVec, i32_val(iPerm)));
+      insert_element(i32VecValTy, movedVec, movedPart, i32_val(iPerm));
+    }
+    return bitcast(movedVec, valFrom.getType());
+  };
+  auto bitonicIter = [&](int j, int k, Value keyIntermediate,
+                         Value valIntermediate) {
+    Value cmpKey, cmpVal;
+    Value permuteToComparerAddr = mul(sub(laneId, i32_val(j)), i32_val(4));
+    Value permuteToComparableAddr = mul(add(laneId, i32_val(j)), i32_val(4));
+    Value ij = xor_(laneId, i32_val(j));
+    // Send self key and value to thread which will compare them
+    if (k <= 16) {
+      cmpKey = shiftLeftIntByDpp(rewriter, keyIntermediate, j);
+      cmpVal = shiftLeftIntByDpp(rewriter, valIntermediate, j);
+    } else if (k <= 64) {
+      cmpKey = generatePermute(keyIntermediate, permuteToComparerAddr);
+      cmpVal = generatePermute(valIntermediate, permuteToComparerAddr);
+    } else {
+      llvm_unreachable("interwarp communication logic is not implemented yet "
+                       "for the algorithm");
+    }
+    Value cond = icmp_sgt(ij, laneId);
+    cond = and_(cond, or_(and_(icmp_eq(and_(laneId, i32_val(k)), i32_val(0)),
+                               icmp_sgt(keyIntermediate, cmpKey)),
+                          and_(icmp_ne(and_(laneId, i32_val(k)), i32_val(0)),
+                               icmp_sgt(cmpKey, keyIntermediate))));
+    auto *curBlock = rewriter.getInsertionBlock();
+    auto *endBlock = curBlock->splitBlock(rewriter.getInsertionPoint());
+    auto *bitIterBlock = rewriter.createBlock(
+        curBlock->getParent(), std::next(Region::iterator(curBlock)));
+    endBlock->addArgument(cmpKey.getType(), loc);
+    endBlock->addArgument(cmpVal.getType(), loc);
+
+    rewriter.setInsertionPointToEnd(curBlock);
+    rewriter.create<LLVM::CondBrOp>(loc, cond, bitIterBlock, endBlock,
+                                    ValueRange({cmpKey, cmpVal}));
+
+    rewriter.setInsertionPointToEnd(bitIterBlock);
+
+    cmpKey = keyIntermediate;
+    cmpVal = valIntermediate;
+
+    rewriter.create<LLVM::BrOp>(loc, ValueRange({cmpKey, cmpVal}), endBlock);
+    rewriter.setInsertionPointToStart(endBlock);
+
+    if (k <= 16) {
+      cmpKey = shiftRightIntByDpp(rewriter, endBlock->getArgument(0), j);
+      cmpVal = shiftRightIntByDpp(rewriter, endBlock->getArgument(1), j);
+    } else if (k <= 64) {
+      cmpKey =
+          generatePermute(endBlock->getArgument(0), permuteToComparableAddr);
+      cmpVal =
+          generatePermute(endBlock->getArgument(1), permuteToComparableAddr);
+    } else {
+      llvm_unreachable("interwarp communication logic is not implemented yet "
+                       "for the algorithm");
+    }
+    curBlock = endBlock;
+    endBlock = curBlock->splitBlock(rewriter.getInsertionPoint());
+    auto *setToComparableBlock = rewriter.createBlock(
+        curBlock->getParent(), std::next(Region::iterator(curBlock)));
+
+    rewriter.setInsertionPointToEnd(curBlock);
+    cond = icmp_sle(ij, laneId);
+    rewriter.create<LLVM::CondBrOp>(loc, cond, setToComparableBlock, endBlock);
+
+    rewriter.setInsertionPointToEnd(setToComparableBlock);
+    keyIntermediate = cmpKey;
+    valIntermediate = cmpVal;
+    rewriter.create<LLVM::BrOp>(loc, endBlock);
+    rewriter.setInsertionPointToStart(endBlock);
+  };
+  // Generate 21 iterations for 64 threads
+  for (int k = 0b10; k <= warpSize; k <<= 1) {
+    for (int j = k >> 1; j > 0; j >>= 1) {
+      bitonicIter(j, k, key, val);
+    }
+  }
+}
+
+Value generatePopcount64(PatternRewriter &rewriter, Value val) {
+  auto loc = val.getLoc();
+  // popcount64 impl:
+  Value m1 = i64_val(0x5555555555555555); // binary: 0101...
+  Value m2 = i64_val(0x3333333333333333); // binary: 00110011..
+  Value m4 = i64_val(0x0f0f0f0f0f0f0f0f); // binary:  4 zeros,  4 ones ...
+  Value h01 =
+      i64_val(0x0101010101010101); // the sum of 256 to the power of 0,1,2,3...
+  val = sub(val, and_(m1, lshr(val, i64_val(1)))); // put count of each 2 bits
+                                                   // into those 2 bits
+  val = add(and_(val, m2),
+            and_(lshr(val, i64_val(2)),
+                 m2)); // put count of each 4 bits into those 4 bits
+  val = and_(add(val, lshr(val, i64_val(4))),
+             m4); // put count of each 8 bits into those 8 bits
+  return lshr(
+      mul(val, h01),
+      i64_val(56)); // left 8 bits of x + (x<<8) + (x<<16) + (x<<24) + ...
 }
 
 struct AtomicRMWOpConversion
@@ -813,6 +933,10 @@ struct AtomicRMWOpConversion
     int numElems = 1;
     Type packF16Ty = vec_ty(valueElemTy, 2);
 
+    bool tryCollectPartSumInLDS =
+        LLVM::AMD::isRuntimeLdsReductionforAtomicApplicable(
+            op, targetInfo.getISAFamily());
+
     // In the case of unpaired f16 elements utilize dpp instructions to
     // accelerate atomics. Here is an algorithm of lowering
     // tt::atomicRmwOp(%ptr, %val, %mask):
@@ -838,9 +962,12 @@ struct AtomicRMWOpConversion
       vec = std::min<unsigned>(vec, availableVecSize);
       // Force F16 packing  in the case it's not comming in as packed, but the
       // ISA can support packed atomic instructions.
+      // TODO: apply f16 dpp logic only for the case when all the threads per
+      // warp has exclusive access.
       useDppForPackedF16 =
           supportsGlobalAtomicF16PackedAndDpp(targetInfo.getISAFamily()) &&
-          vec == 1 && isF16Ty && atomicRmwAttr == RMWOp::FADD;
+          vec == 1 && isF16Ty && atomicRmwAttr == RMWOp::FADD &&
+          !tryCollectPartSumInLDS;
       // mask
       numElems = tensorTy.getNumElements();
     }
@@ -872,7 +999,7 @@ struct AtomicRMWOpConversion
             insert_element(packF16Ty, packedVal, valElements[i], i32_val(0));
         // Pack to i32 type to simplify transaction
         packedVal = bitcast(packedVal, i32_ty);
-        Value dppMoveRes = shiftLeftI32ByDpp(rewriter, packedVal);
+        Value dppMoveRes = shiftLeftIntByDpp(rewriter, packedVal);
         // Unpack results back
         Value unpackedDppRes = bitcast(dppMoveRes, packF16Ty);
         operand = undef(packF16Ty);
@@ -905,18 +1032,26 @@ struct AtomicRMWOpConversion
 
       rewriter.setInsertionPointToEnd(atomicBlock);
       auto maybeKind = matchAtomicOp(atomicRmwAttr);
-      // TODO: use rocdl.raw.buffer.atomic from ROCDL dialect to use efficient
-      // atomics for MI-* series of AMD GPU.
-      Value atom =
-          rewriter
-              .create<LLVM::AtomicRMWOp>(loc, *maybeKind, rmwPtr, operand,
-                                         atomicMemOrdering, StringRef("agent"))
-              .getResult();
-      if (!tensorTy) {
-        if (atomicNeedsSharedMemory(op.getResult())) {
-          Value atomPtr =
-              getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
-          store(atom, atomPtr);
+      Value atom;
+      if (tryCollectPartSumInLDS) {
+        Value ldsPtr =
+            getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
+        atom = atomicForReducedGroupsInLds(rewriter, rmwPtr, operand, ldsPtr,
+                                           *maybeKind, atomicMemOrdering);
+      } else {
+        // TODO: use rocdl.raw.buffer.atomic from ROCDL dialect to use efficient
+        // atomics for MI-* series of AMD GPU.
+        atom = rewriter
+                   .create<LLVM::AtomicRMWOp>(loc, *maybeKind, rmwPtr, operand,
+                                              atomicMemOrdering,
+                                              StringRef("agent"))
+                   .getResult();
+        if (!tensorTy) {
+          if (atomicNeedsSharedMemory(op.getResult())) {
+            Value atomPtr = getSharedMemoryBase(loc, rewriter, targetInfo,
+                                                op.getOperation());
+            store(atom, atomPtr);
+          }
         }
       }
       rewriter.create<LLVM::BrOp>(loc, atom, endBlock);
@@ -928,7 +1063,7 @@ struct AtomicRMWOpConversion
           // Return packed to i32 result after atomic operation back from master
           // lane.
           auto packedRet = bitcast(retVal, i32_ty);
-          Value dppMovRes = shiftRightI32ByDpp(rewriter, packedRet);
+          Value dppMovRes = shiftRightIntByDpp(rewriter, packedRet);
           // Unpack results back
           Value unpackedDppRes = bitcast(dppMovRes, packF16Ty);
           retVal = insert_element(
@@ -963,6 +1098,145 @@ struct AtomicRMWOpConversion
       rewriter.replaceOp(op, {resultStruct});
     }
     return success();
+  }
+
+private:
+  Value atomicForReducedGroupsInLds(PatternRewriter &rewriter, Value rmwPtr,
+                                    Value operand, Value ldsPtr,
+                                    LLVM::AtomicBinOp opKind,
+                                    LLVM::AtomicOrdering memOrdering) const {
+    // Algorithm description:
+    // 1. Sort {ptr, operand} among the threads within the warp
+    // 2. Distribute threads between groups defined by pointers
+    // 3. Select master thread for each group
+    // 4. Collect partial sum in LDS for each group
+    // 5. Utilize global atomic operation for each group by master thread
+    auto loc = operand.getLoc();
+    Type operandElemType = operand.getType();
+    const size_t valueElemNbits = operandElemType.getIntOrFloatBitWidth();
+
+    Type origPtrType = rmwPtr.getType();
+    if (!operandElemType.isInteger())
+      operand = bitcast(operand, int_ty(valueElemNbits));
+
+    rmwPtr = ptrtoint(i64_ty, rmwPtr);
+    // Sorting is done with bitonic sort implemented with dpp.
+    generateBitonicSort(rewriter, rmwPtr, operand);
+    if (!operandElemType.isInteger())
+      operand = bitcast(operand, operandElemType);
+
+    // Define the role of each thread with bitmask:
+    // (0)00 - thread with exclusive atomic access: there are no other
+    //         threads with access to the same ptr
+    // (1)01 - one of several threads with an access to single ptr excluding
+    //         master thread
+    // (2)10 - master of several threads with an access to single ptr
+
+    Value role = i32_val(0);
+    // Use DPP to check neighbours
+    Value prev = generateIntDppMove(rewriter, rmwPtr, 0x130); // shift wave left
+    Value next =
+        generateIntDppMove(rewriter, rmwPtr, 0x138); // shift wave right
+    Value warpSize = i32_val(64);
+    Value laneId = urem(tid_val(), warpSize);
+    Value warpId = udiv(tid_val(), warpSize);
+    Value condCommon = and_(icmp_ne(laneId, i32_val(0)), icmp_eq(prev, rmwPtr));
+    Value condMaster =
+        and_(icmp_ne(laneId, i32_val(63)),
+             and_(icmp_eq(next, rmwPtr), icmp_eq(condCommon, i1_val(0))));
+    role = or_(role, zext(i32_ty, condCommon));
+    role = or_(role, shl(zext(i32_ty, condCommon), i32_val(1)));
+
+    rmwPtr = inttoptr(origPtrType, rmwPtr);
+
+    // CFG for each role:
+    //       | - 0, 1, 2
+    //       |\_______
+    //       |  ______\1,2_____
+    //       | |calculate      |
+    //       | |partial atomic |
+    //       | |in LDS_________|
+    //  ____0|____    |
+    // |execute   |   |\________
+    // |exclusive |  1|  _______\2________
+    // |atomic____|   | |execute master   |
+    //       |        | |atomic for group |
+    //       |        | |to global mem____|
+    //       |        |         |
+    //       |________|________/
+    //       | - 0, 1, 2
+
+    // Define master mask for each thread to calculate number of self group
+    // further
+    Value masterMask = targetInfo.ballot(rewriter, loc, i64_ty, condMaster);
+
+    auto *curBlock = rewriter.getInsertionBlock();
+    auto *endBlock = curBlock->splitBlock(rewriter.getInsertionPoint());
+    auto *partialSharedBlock = rewriter.createBlock(
+        curBlock->getParent(), std::next(Region::iterator(curBlock)));
+    auto *exclusiveBlock = rewriter.createBlock(
+        curBlock->getParent(), std::next(Region::iterator(curBlock)));
+    rewriter.setInsertionPointToEnd(curBlock);
+    Value condPartShared = icmp_ne(role, i32_val(0));
+    rewriter.create<LLVM::CondBrOp>(loc, condPartShared, partialSharedBlock,
+                                    exclusiveBlock);
+
+    rewriter.setInsertionPointToEnd(exclusiveBlock);
+    // Execute exclusive atomic
+    Value atom;
+    atom = rewriter
+               .create<LLVM::AtomicRMWOp>(loc, opKind, rmwPtr, operand,
+                                          memOrdering, StringRef("agent"))
+               .getResult();
+
+    endBlock->addArgument(atom.getType(), loc);
+    rewriter.create<LLVM::BrOp>(loc, atom, endBlock);
+
+    rewriter.setInsertionPointToEnd(partialSharedBlock);
+    // Calculate partial sum in LDS.
+    // First of all, define the number of group that thread is participating
+    // in. Take master mask, calculated before and shift it to laneId-number
+    // of bits, then just calculate number of set bits in this number. We
+    // got number of group.
+    masterMask = shl(masterMask, sub(i64_val(63), zext(i64_ty, laneId)));
+    Value groupIdx = generatePopcount64(rewriter, masterMask);
+
+    Type ldsPtrType = ldsPtr.getType();
+    ldsPtr = ptrtoint(i64_ty, ldsPtr);
+    Value ldsInitPtr =
+        add(ldsPtr, mul(zext(i64_ty, add(mul(warpId, warpSize), laneId)),
+                        i64_val(valueElemNbits)));
+    ldsInitPtr = inttoptr(ldsPtrType, ldsInitPtr);
+    store(i32_val(0), ldsInitPtr);
+    ldsPtr = add(ldsPtr, mul(add(zext(i64_ty, mul(warpId, warpSize)), groupIdx),
+                             i64_val(valueElemNbits)));
+    ldsPtr = inttoptr(ldsPtrType, ldsPtr);
+    // Calculate partial sum in LDS
+    Value partialAtomic =
+        rewriter
+            .create<LLVM::AtomicRMWOp>(loc, opKind, ldsPtr, operand,
+                                       memOrdering, StringRef("agent"))
+            .getResult();
+
+    auto *partialSharedMaster =
+        rewriter.createBlock(partialSharedBlock->getParent(),
+                             std::next(Region::iterator(partialSharedBlock)));
+    rewriter.setInsertionPointToEnd(partialSharedBlock);
+    Value condPartMaster = icmp_eq(role, i32_val(2));
+    rewriter.create<LLVM::CondBrOp>(loc, condPartMaster, partialSharedMaster,
+                                    endBlock, partialAtomic);
+
+    // Utilize global atomic by master thread
+    rewriter.setInsertionPointToEnd(partialSharedMaster);
+    Value oper = load(operandElemType, ldsPtr);
+    atom = rewriter
+               .create<LLVM::AtomicRMWOp>(loc, opKind, rmwPtr, oper,
+                                          memOrdering, StringRef("agent"))
+               .getResult();
+    rewriter.create<LLVM::BrOp>(loc, atom, endBlock);
+    rewriter.setInsertionPointToEnd(endBlock);
+
+    return endBlock->getArgument(0);
   }
 };
 } // namespace
