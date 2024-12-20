@@ -611,11 +611,6 @@ public:
   bool sublayoutIsZero(ArrayRef<StringAttr> inDimNames,
                        ArrayRef<StringAttr> outDimNames) const;
 
-  // Is the sublayout defined from dimNames to dimNames the identity?
-  // In particular, is the input and  output size in these dimensions
-  // the same, and are the bases the identity?
-  bool squareSublayoutIsIdentity(ArrayRef<StringAttr> dimNames) const;
-
   // Computes and returns L(x, y, z).
   //
   // If you want to apply the layout to mlir Values instead of integers, that
