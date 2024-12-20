@@ -514,6 +514,14 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   assert(P1.sublayoutIsZero(kRegister, kLane));
   assert(squareSublayoutIsIdentity(P1, kLane));
 
+  // Determine the minimum number of selects that have to be emitted per
+  // shuffle. This can be quite large if the layout is not cooperative. This is
+  // a rough heurstic for now.
+  LinearLayout reducedP1 = P1.removeZeroBasesAlongDim(kLane);
+  LinearLayout reducedP2 = P2inv.removeZeroBasesAlongDim(kLane);
+  if (reducedP1.getInDimSize(kLane) > 4 || reducedP2.getInDimSize(kLane) > 4)
+    return {};
+
   // Return just the interesting parts of the decomposed layouts.
   return {{P1.sublayout({kLane, kRegister}, kRegister),
            Cp.sublayout({kLane, kRegister}, kLane),
