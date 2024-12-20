@@ -1000,14 +1000,6 @@ unsigned NvidiaMmaEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
   return product<unsigned>(getElemsPerThread(shape, eltTy));
 }
 
-// Blocked encoding
-
-SmallVector<unsigned>
-BlockedEncodingAttr::getRepOrderForOperand(int opIdx) const {
-  auto rank = getWarpsPerCTA().size();
-  return getOrderForDotOperand(opIdx, rank, /*kMajor*/ true);
-}
-
 //
 
 SmallVector<unsigned>
