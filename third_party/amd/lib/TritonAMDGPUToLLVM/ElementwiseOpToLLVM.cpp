@@ -1081,9 +1081,52 @@ struct FDivOpConversion
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
+    // For non-F32 input, it's lowered to LLVM::FDivOp, which is a
+    // IEEE-compliant DIV operation.
+    if (elemTy.getIntOrFloatBitWidth() != 32)
+      return {rewriter.create<LLVM::FDivOp>(loc, elemTy, operands[0][0],
+                                            operands[0][1])};
 
-    return {rewriter.create<LLVM::FDivOp>(loc, elemTy, operands[0][0],
-                                          operands[0][1])};
+    // The algorithm comes from
+    // https://github.com/llvm/llvm-project/blob/bda7aadfcd0596675c8b4b381f178f3d8f854f20/llvm/lib/Target/AMDGPU/AMDGPULegalizerInfo.cpp#L4980-L5065
+    // with the Newton-Raphson refinement removed, to perform a faster,
+    // approximated DIV operation, aligning with the `div.full.f32` instruction
+    // on the NV backend.
+    Value &lhs = operands[0][0];
+    Value &rhs = operands[0][1];
+    MLIRContext *ctx = rewriter.getContext();
+    Type divScaleResType = struct_ty({elemTy, i1_ty});
+
+    // The `llvm.amdgcn.div.scale.f32` instruction has two outputs: the scaled
+    // variable and the VCC register.
+    LLVM::CallIntrinsicOp denominatorScaleOp = LLVM::createLLVMIntrinsicCallOp(
+        rewriter, loc, "llvm.amdgcn.div.scale.f32", divScaleResType,
+        {lhs, rhs, i1_val(0)});
+    Value denominatorScaled = extract_val(denominatorScaleOp.getResult(0), 0);
+    LLVM::CallIntrinsicOp numeratorScaleOp = LLVM::createLLVMIntrinsicCallOp(
+        rewriter, loc, "llvm.amdgcn.div.scale.f32", divScaleResType,
+        {lhs, rhs, i1_val(1)});
+    Value numeratorScaled = extract_val(numeratorScaleOp.getResult(0), 0);
+    Value vcc = extract_val(numeratorScaleOp.getResult(0), 1);
+
+    Value rcp =
+        LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.rcp.f32",
+                                        elemTy, {denominatorScaled})
+            .getResult(0);
+
+    Value approxDiv = fmul(numeratorScaled, rcp);
+
+    // Since the Newton-Raphson is skipped, we use 0 instead of approximations
+    // as the inputs.
+    auto fmas = LLVM::createLLVMIntrinsicCallOp(
+                    rewriter, loc, "llvm.amdgcn.div.fmas.f32", elemTy,
+                    {f32_val(0), f32_val(0), approxDiv, vcc})
+                    .getResult(0);
+
+    return {LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
+                                            "llvm.amdgcn.div.fixup.f32", elemTy,
+                                            {fmas, rhs, lhs})
+                .getResult(0)};
   }
 };
 
