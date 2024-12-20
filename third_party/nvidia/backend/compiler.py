@@ -294,7 +294,9 @@ class CUDABackend(BaseBackend):
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
         llvm.init_targets()
         context = llvm.context()
-
+        if os.environ.get("TRITON_ENABLE_ASAN", "0") == "1":
+            raise ASANError(
+                "Address Sanitizer Error: Address sanitizer is currently only supporteedd on the AMD backend")
         llvm_mod = llvm.to_module(mod, context)
         proc = 'sm_90a' if capability == 90 else f'sm_{capability}'
         features = get_features(options)
