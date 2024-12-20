@@ -325,28 +325,26 @@ TEST_F(LinearLayoutConversionsTest, BlockedDotOperandLhs) {
                    {S("dim0"), S("dim1")}));
 }
 
-TEST_F(LinearLayoutConversionsTest, BlockedDotOperandLhs1) {
-  auto parent = blocked(/*size*/ {1, 1}, /*threads*/ {1, 32}, /*warps*/ {1, 1},
-                        /*ctas*/ {1, 1}, /*splits*/ {1, 1}, /*order*/ {1, 0},
-                        /*cta order*/ {1, 0});
+TEST_F(LinearLayoutConversionsTest, BlockedDot3dOperandLhs) {
+  auto parent =
+      blocked(/*size*/ {2, 2, 4}, /*threads*/ {2, 4, 4}, /*warps*/ {2, 2, 2},
+              /*ctas*/ {1, 1, 1}, /*splits*/ {1, 1, 1}, /*order*/ {2, 1, 0},
+              /*cta order*/ {2, 1, 0});
   auto dotOperand = dot(parent, /*idx*/ 0, /*kWidth*/ 0);
-  EXPECT_EQ(toLinearLayout({1, 64}, dotOperand),
-            LinearLayout({{S("register"),
-                           {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {0, 32}}},
-                          {S("lane"), {{0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}}},
-                          {S("warp"), {}},
-                          {S("block"), {}}},
-                         {S("dim0"), S("dim1")}));
-
-  auto dotOperand1 = dot(parent, /*idx*/ 1, /*kWidth*/ 0);
-  EXPECT_EQ(toLinearLayout({64, 64}, dotOperand1),
-            LinearLayout(
-                {{S("register"),
-                  {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}, {32, 0}, {0, 32}}},
-                 {S("lane"), {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}}},
-                 {S("warp"), {}},
-                 {S("block"), {}}},
-                {S("dim0"), S("dim1")}));
+  EXPECT_EQ(
+      toLinearLayout({16, 32, 4}, dotOperand),
+      LinearLayout(
+          {{S("register"),
+            {{0, 0, 1},
+             {0, 0, 2},
+             {0, 1, 0},
+             {1, 0, 0},
+             {0, 16, 0},
+             {8, 0, 0}}},
+           {S("lane"), {{0, 0, 0}, {0, 0, 0}, {0, 2, 0}, {0, 4, 0}, {2, 0, 0}}},
+           {S("warp"), {{0, 0, 0}, {0, 8, 0}, {4, 0, 0}}},
+           {S("block"), {}}},
+          {S("dim0"), S("dim1"), S("dim2")}));
 }
 
 TEST_F(LinearLayoutConversionsTest, BlockedDotOperandRhs) {
@@ -361,6 +359,29 @@ TEST_F(LinearLayoutConversionsTest, BlockedDotOperandRhs) {
                           {S("warp"), {{0, 16}, {0, 32}, {0, 0}}},
                           {S("block"), {}}},
                          {S("dim0"), S("dim1")}));
+}
+
+TEST_F(LinearLayoutConversionsTest, BlockedDot3dOperandRhs) {
+  auto parent =
+      blocked(/*size*/ {2, 2, 4}, /*threads*/ {2, 4, 4}, /*warps*/ {2, 2, 2},
+              /*ctas*/ {1, 1, 1}, /*splits*/ {1, 1, 1}, /*order*/ {2, 1, 0},
+              /*cta order*/ {2, 1, 0});
+  auto dotOperand = dot(parent, /*idx*/ 1, /*kWidth*/ 0);
+  EXPECT_EQ(
+      toLinearLayout({16, 4, 64}, dotOperand),
+      LinearLayout(
+          {{S("register"),
+            {{0, 0, 1},
+             {0, 0, 2},
+             {0, 1, 0},
+             {0, 2, 0},
+             {1, 0, 0},
+             {0, 0, 32},
+             {8, 0, 0}}},
+           {S("lane"), {{0, 0, 4}, {0, 0, 8}, {0, 0, 0}, {0, 0, 0}, {2, 0, 0}}},
+           {S("warp"), {{0, 0, 16}, {0, 0, 0}, {4, 0, 0}}},
+           {S("block"), {}}},
+          {S("dim0"), S("dim1"), S("dim2")}));
 }
 
 TEST_F(LinearLayoutConversionsTest, MMAv2_16x16) {
