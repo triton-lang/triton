@@ -78,23 +78,11 @@ struct LocalAllocOpConversion
     auto typeConverter = getTypeConverter();
     auto sharedLayout =
         cast<triton::gpu::SharedEncodingAttr>(resultTy.getEncoding());
-    auto order = sharedLayout.getOrder();
-    // Workaround for 3D tensors
-    // TODO: we need to modify the pipeline pass to give a proper shared
-    // encoding to 3D tensors
-    SmallVector<unsigned> newOrder;
-    if (resultTy.getShape().size() != order.size()) {
-      for (auto i = 0; i < order.size(); ++i)
-        newOrder.push_back(order[i] + 1);
-      newOrder.push_back(0);
-    } else {
-      newOrder = SmallVector<unsigned>(order.begin(), order.end());
-    }
 
     auto llvmElemTy = typeConverter->convertType(resultTy.getElementType());
     auto shapePerCTA = getShapePerCTA(sharedLayout, resultTy.getShape());
     auto smemObj = SharedMemoryObject(smemBase, llvmElemTy, shapePerCTA,
-                                      newOrder, loc, rewriter);
+                                      sharedLayout, loc, rewriter);
     // If there is an initial tensor, store it into the shared memory.
     if (op.getSrc()) {
       lowerDistributedToShared(loc, op.getSrc(), op.getResult(),
@@ -133,33 +121,12 @@ public:
 
   // FIXME [Dot LL]
   // Do for all DotOperandEncodingAttr once we have LLs for all of them
-  static bool isSupportedDotOpLayout(MemDescType srcTy,
-                                     RankedTensorType dstTy) {
-    auto srcLayout = cast<SharedEncodingAttr>(srcTy.getEncoding());
-    auto dstLayout = dstTy.getEncoding();
-    auto bitwidth = dstTy.getElementTypeBitWidth();
-    auto rank = dstTy.getRank();
+  static bool isSupportedLayout(Attribute dstLayout) {
+    if (isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr,
+            LinearEncodingAttr>(dstLayout))
+      return true;
     if (auto dot = dyn_cast<DotOperandEncodingAttr>(dstLayout)) {
-      auto vecWidth = 32 / bitwidth;
-      auto kWidth = dot.getKWidth();
-      auto kOrder = dot.getOpIdx() == 0 ? rank - 1 : rank - 2;
-      if (auto mma = dyn_cast<NvidiaMmaEncodingAttr>(dot.getParent())) {
-        auto needTrans = kOrder != srcLayout.getOrder()[0];
-        auto canUseLdmatrix =
-            (bitwidth == 16 || (!needTrans)) && (kWidth == vecWidth);
-        if (mma.isHopper()) {
-          // I think we should be able to remove this condition, but it's here
-          // as the legacy ldmatrix path does not support it
-          canUseLdmatrix &= srcTy.getElementTypeBitWidth() * kWidth == 32;
-        }
-        // If we remove this one, ldmatrix will IMA. It can probably be relaxed
-        // though
-        canUseLdmatrix &=
-            srcTy.getShape()[0] >= 8 &&
-            srcTy.getShape()[1] >= 4 * kWidth & dstTy.getRank() <= 2;
-        return !canUseLdmatrix;
-      }
-      if (isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>(dot.getParent()))
+      if (isa<MmaEncodingTrait>(dot.getParent()))
         return true;
     }
     return false;
@@ -168,12 +135,9 @@ public:
   LogicalResult
   matchAndRewrite(LocalLoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    MemDescType srcTy = op.getSrc().getType();
     RankedTensorType dstTy = op.getType();
     Attribute dstLayout = dstTy.getEncoding();
-    if (isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr,
-            LinearEncodingAttr>(dstLayout) ||
-        isSupportedDotOpLayout(srcTy, dstTy)) {
+    if (isSupportedLayout(dstLayout)) {
       return lowerSharedToDistributed(op, adaptor, getTypeConverter(),
                                       rewriter);
     }
@@ -210,11 +174,6 @@ private:
     auto loc = op.getLoc();
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getResult().getType();
-    auto dstShape = dstTy.getShape();
-    auto srcSharedLayout = cast<SharedEncodingAttr>(srcTy.getEncoding());
-    assert((!isa<DotOperandEncodingAttr>(dstTy.getEncoding()) ||
-            isSupportedDotOpLayout(srcTy, dstTy)) &&
-           "Unexpected rank of ConvertLayout(shared->distributed)");
 
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getSrc(),
@@ -277,7 +236,7 @@ private:
 
 } // namespace
 
-void mlir::triton::populateMemoryOpToLLVMPattern(
+void mlir::triton::populateMemoryOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit,
     std::optional<BackendCallbacks> backendCallbacks) {

@@ -407,14 +407,13 @@ static Attribute inferReshapeOpDstEncoding(ArrayRef<int64_t> srcShape,
     return {};
 
   Attribute dstEnc;
-  if (succeeded(
-          srcEnc.getDialect()
-              .getRegisteredInterface<triton::DialectInferLayoutInterface>()
-              ->inferReshapeOpNoReorderEncoding(
-                  srcShape, srcEnc, dstShape, dstEnc, /*loc=*/std::nullopt))) {
-    return dstEnc;
-  }
-  return {};
+  auto result =
+      srcEnc.getDialect()
+          .getRegisteredInterface<triton::DialectInferLayoutInterface>()
+          ->inferReshapeOpEncoding(srcShape, srcEnc, dstShape, dstEnc,
+                                   /*loc=*/std::nullopt);
+  assert(succeeded(result));
+  return dstEnc;
 }
 
 static Attribute inferDstEncoding(triton::ReshapeOp op, Attribute encoding) {
@@ -770,16 +769,16 @@ static bool isFreeConvert(Operation *op) {
                               convertOp.getType());
 }
 
-LogicalResult
-getConvertBackwardSlice(Value root, SetVector<Value> &slice,
-                        Attribute rootEncoding,
-                        DenseMap<Value, Attribute> &layout,
-                        std::function<bool(Operation *)> stopPropagation) {
-  DenseSet<std::pair<Value, Attribute>> seen;
-  SmallVector<std::pair<Value, Attribute>> queue;
+LogicalResult getConvertBackwardSlice(
+    OpOperand &root, SetVector<Value> &slice, Attribute rootEncoding,
+    DenseMap<Value, Attribute> &layout,
+    std::function<bool(Operation *)> stopPropagation,
+    std::function<Value(OpOperand &, Attribute)> getExistingConversion) {
+  DenseSet<std::pair<OpOperand *, Attribute>> seen;
+  SmallVector<std::pair<OpOperand *, Attribute>> queue;
 
-  auto enqueue = [&](Value operand, Attribute encoding) {
-    auto x = std::make_pair(operand, encoding);
+  auto enqueue = [&](OpOperand &operand, Attribute encoding) {
+    auto x = std::make_pair(&operand, encoding);
     if (!seen.insert(x).second) {
       return; // Already enqueued, skip
     }
@@ -787,8 +786,20 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
   };
   enqueue(root, rootEncoding);
 
+  auto updateLayout = [&](Value value, Attribute encoding) {
+    assert((isa<RankedTensorType>(value.getType())));
+    slice.insert(value);
+    if (layout.find(value) != layout.end()) {
+      if (layout[value] != encoding)
+        return failure();
+    }
+    layout[value] = encoding;
+    return success();
+  };
+
   while (!queue.empty()) {
-    auto [currentValue, encoding] = queue.back();
+    auto [currentValueUse, encoding] = queue.back();
+    Value currentValue = currentValueUse->get();
     queue.pop_back();
     if (!isa<RankedTensorType>(currentValue.getType()))
       continue;
@@ -796,18 +807,22 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
     // TODO: enable this based on needs.
     if (currentValue.getDefiningOp<scf::ForOp>())
       return failure();
-    slice.insert(currentValue);
-    if (layout.find(currentValue) != layout.end()) {
-      if (layout[currentValue] != encoding)
+    if (failed(updateLayout(currentValue, encoding)))
+      return failure();
+
+    Value existing;
+    if (getExistingConversion &&
+        (existing = getExistingConversion(*currentValueUse, encoding))) {
+      if (failed(updateLayout(existing, encoding)))
         return failure();
+      currentValue = existing;
     }
-    layout[currentValue] = encoding;
 
     if (auto ifOp = currentValue.getDefiningOp<scf::IfOp>()) {
       unsigned argIdx = mlir::cast<OpResult>(currentValue).getResultNumber();
 
-      auto thenValue = ifOp.thenYield().getOperand(argIdx);
-      auto elseValue = ifOp.elseYield().getOperand(argIdx);
+      OpOperand &thenValue = ifOp.thenYield()->getOpOperand(argIdx);
+      OpOperand &elseValue = ifOp.elseYield()->getOpOperand(argIdx);
 
       enqueue(thenValue, encoding);
       enqueue(elseValue, encoding);
@@ -819,10 +834,11 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
       for (Value result : definingOp->getResults()) {
         if (result == currentValue || !isa<RankedTensorType>(result.getType()))
           continue;
-        enqueue(result, encoding);
+        if (failed(updateLayout(result, encoding)))
+          return failure();
       }
       if (isFreeConvert(definingOp)) {
-        enqueue(definingOp->getOperand(0), encoding);
+        enqueue(definingOp->getOpOperand(0), encoding);
         continue;
       }
       if (canFoldIntoConversion(definingOp, encoding))
@@ -837,10 +853,10 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
         auto srcEncoding = inferSrcEncoding(gather, encoding);
         if (!srcEncoding)
           return failure();
-        enqueue(gather.getIndices(), srcEncoding);
+        enqueue(gather.getIndicesMutable(), srcEncoding);
         continue;
       }
-      for (auto [i, operand] : llvm::enumerate(definingOp->getOperands())) {
+      for (auto [i, operand] : llvm::enumerate(definingOp->getOpOperands())) {
         auto srcEncoding = inferSrcEncoding(definingOp, encoding);
         if (!srcEncoding)
           return failure();
@@ -853,9 +869,9 @@ getConvertBackwardSlice(Value root, SetVector<Value> &slice,
     Operation *parentOp = block->getParentOp();
     if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
       OpOperand *initOperand = forOp.getTiedLoopInit(blockArg);
-      Value yieldOperand = forOp.getBody()->getTerminator()->getOperand(
+      OpOperand &yieldOperand = forOp.getBody()->getTerminator()->getOpOperand(
           blockArg.getArgNumber() - forOp.getNumInductionVars());
-      enqueue(initOperand->get(), encoding);
+      enqueue(*initOperand, encoding);
       enqueue(yieldOperand, encoding);
       continue;
     }

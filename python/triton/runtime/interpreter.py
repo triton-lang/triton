@@ -726,10 +726,12 @@ class ReduceScanOpIneterface:
             self.check_axis(arg.shape, self.axis)
 
     def to_tensor(self, ret, dtype):
+        np_dtype = _get_np_dtype(dtype)
         if hasattr(ret, "shape") and ret.shape:
+            ret = ret.astype(np_dtype)
             ret_type = tl.block_type(dtype, list(ret.shape))
         else:
-            ret = np.array([ret]).astype(_get_np_dtype(dtype))
+            ret = np.array([ret], dtype=np_dtype)
             ret_type = dtype
         return tl.core.tensor(TensorHandle(ret, dtype.scalar), ret_type)
 
