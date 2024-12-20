@@ -98,13 +98,13 @@ void storeValuesInLinearVector(PatternRewriter &rewriter, Location loc,
   }
 }
 
-void verifyCTALayout(CTALayoutAttr ctaLayout) {
+bool verifyCTALayout(CTALayoutAttr ctaLayout) {
   auto ctaSplit = ctaLayout.getCTASplitNum();
   for (auto split : ctaSplit) {
     if (split != 1)
-      llvm::report_fatal_error("tensors splited in CGA(thread group clusters) "
-                               "are not supported in FMA dot yet.");
+      return false;
   }
+  return true;
 }
 
 /// Get a linear offset of first element loaded by thread.
@@ -216,7 +216,8 @@ Value loadFMAOp(Value srcVal, Value llVal, BlockedEncodingAttr dLayout,
                 Value thread, Location loc,
                 const LLVMTypeConverter *typeConverter,
                 ConversionPatternRewriter &rewriter, const int dotOpNo) {
-  verifyCTALayout(dLayout.getCTALayout());
+  if (!verifyCTALayout(dLayout.getCTALayout()))
+    return Value();
 
   DimIdx dim;
   dim.batch = 0;
@@ -291,6 +292,15 @@ Value loadFMAOp(Value srcVal, Value llVal, BlockedEncodingAttr dLayout,
   auto sizeNonKPerThread = sizePerThread[dim.nonK];
   auto numBTiles = std::max(1u, B / shapePerCTABTile);
   auto numNonKTiles = std::max(1u, NonK / shapePerCTANonKTile);
+
+  // Found discrepancy in this case,
+  // use linear layout based converter for this case
+  // TODO: break batch and non-k dimension iterations in
+  // "repeat" and "inside-repeate" parts, pack them in llvm structure
+  // according repeat and register order.
+  // See FMA.cpp:getValueTableFromStructFMA for reference
+  if (numBTiles != 1 || numNonKTiles != 1)
+    return Value();
 
   auto perThreadShape =
       getElemsPerThreadInOp(opTensorShape, shapePerCTATile, sizePerThread);
