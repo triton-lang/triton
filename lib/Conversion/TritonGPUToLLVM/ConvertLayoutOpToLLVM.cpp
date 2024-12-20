@@ -660,7 +660,7 @@ void ConvertLayoutOpUsingLinearLayoutsConversion::transferWithinWarp(
   StringAttr kRegister = str_attr("register");
   StringAttr kLane = str_attr("lane");
   assert(!cvtNeedsSharedMemory(op.getSrc().getType(), op.getType()));
-  auto [P1, Cp, P2inv] = std::move(decomposed);
+  auto [P1, Cp, P2inv, reducedP1, reducedP2] = std::move(decomposed);
 
   // Grab the source elements and prepare the outputs of just the shuffles.
   SmallVector<Value> srcValues =
@@ -670,15 +670,6 @@ void ConvertLayoutOpUsingLinearLayoutsConversion::transferWithinWarp(
   Value threadId = getThreadId(rewriter, loc);
   Value threadsPerWarp = i32_val(Cp.getInDimSize(kLane));
   Value laneId = urem(threadId, threadsPerWarp);
-
-  // To minimize the number of selects emitted on the source side, determine the
-  // minimum set of registers that could be selected from each thread.
-  // InstCombine *might* be able to crush this, but if the sizePerThread is
-  // large, it's truly a huge number of selects that get emitted.
-  // If reducedP1 is trivial, then we will emit
-  // shflSrc = select(i == i, src[i], undef) and this will get trivially folded,
-  // so don't worry about this case.
-  LinearLayout reducedP1 = P1.removeZeroBasesAlongDim(kLane);
 
   // Emit one shuffle per destination register.
   for (int i : llvm::seq(shflOuts.size())) {
@@ -711,7 +702,6 @@ void ConvertLayoutOpUsingLinearLayoutsConversion::transferWithinWarp(
   // Finally, we just need to apply P2 to the shflOuts to permute the registers
   // into their final form. Use the same trick to reduce the number of emitted
   // selects.
-  LinearLayout reducedP2 = P2inv.removeZeroBasesAlongDim(kLane);
   SmallVector<Value> results(shflOuts.size());
   for (int i : llvm::seq(results.size())) {
     Value result = undef(srcValues.front().getType());

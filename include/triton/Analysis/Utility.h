@@ -176,6 +176,7 @@ private:
 // can be implemented this way.
 struct DecomposedWarpConversion {
   triton::LinearLayout P1, W, P2;
+  triton::LinearLayout reducedP1, reducedP2;
 };
 
 // Given the source and destination tensor types where a layout conversion only

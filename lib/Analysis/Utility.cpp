@@ -514,18 +514,31 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   assert(P1.sublayoutIsZero(kRegister, kLane));
   assert(squareSublayoutIsIdentity(P1, kLane));
 
-  // Determine the minimum number of selects that have to be emitted per
-  // shuffle. This can be quite large if the layout is not cooperative. This is
-  // a rough heurstic for now.
+  // Grab just the interesting parts of the decomposed layouts.
+  P1 = P1.sublayout({kLane, kRegister}, kRegister);
+  P2inv = P2inv.sublayout({kLane, kRegister}, kRegister);
+  Cp = Cp.sublayout({kLane, kRegister}, kLane);
+
+  // To minimize the number of selects emitted on the source side, determine the
+  // minimum set of registers that could be selected from each thread.
+  // InstCombine *might* be able to crush this, but if the sizePerThread is
+  // large, it's truly a huge number of selects that get emitted.
+  // If reducedP1 is trivial, then we will emit
+  // shflSrc = select(i == i, src[i], undef) and this will get trivially folded,
+  // so don't worry about this case.
+  //
+  // This can still be quite large if the layout is not cooperative. In that
+  // case, fallback to the shared memory conversion. This is a rough heurstic
+  // for now and doesn't consider that the shared memory conversion can use
+  // vector stores and stmatrix.
   LinearLayout reducedP1 = P1.removeZeroBasesAlongDim(kLane);
   LinearLayout reducedP2 = P2inv.removeZeroBasesAlongDim(kLane);
   if (reducedP1.getInDimSize(kLane) > 4 || reducedP2.getInDimSize(kLane) > 4)
     return {};
 
   // Return just the interesting parts of the decomposed layouts.
-  return {{P1.sublayout({kLane, kRegister}, kRegister),
-           Cp.sublayout({kLane, kRegister}, kLane),
-           P2inv.sublayout({kLane, kRegister}, kRegister)}};
+  return {{std::move(P1), std::move(Cp), std::move(P2inv), std::move(reducedP1),
+           std::move(reducedP2)}};
 }
 
 SmallVector<std::pair<SmallVector<int64_t>, SmallVector<int64_t>>>
