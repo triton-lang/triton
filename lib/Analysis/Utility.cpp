@@ -17,6 +17,7 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LinearLayout.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 
 namespace mlir {
@@ -452,7 +453,7 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
 
   // Check that P2^-1 was formed correctly.
   assert(P2inv.sublayoutIsZero(kRegister, kLane));
-  assert(P2inv.squareSublayoutIsPermutation(kLane));
+  assert(squareSublayoutIsPermutation(P2inv, kLane));
 
   LinearLayout Cp = P2inv.compose(C);
 
@@ -487,7 +488,7 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   // Check that Winv was formed correctly. P1 is just what's left over.
   LinearLayout P1 = Winv.compose(Cp);
   assert(P1.sublayoutIsZero(kRegister, kLane));
-  assert(P1.squareSublayoutIsIdentity(kLane));
+  assert(squareSublayoutIsIdentity(P1, kLane));
 
   // Return just the interesting parts of the decomposed layouts.
   return {{P1.sublayout({kLane, kRegister}, kRegister),

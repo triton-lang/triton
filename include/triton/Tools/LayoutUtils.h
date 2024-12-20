@@ -13,7 +13,8 @@ bool squareSublayoutIsIdentity(const LinearLayout &ll,
 // Is the sublayout defined from dimNames to dimNames a subpermutation matrix?
 // I.e. the layout matrix is formed by selecting unique rows from the identity
 // matrix and adding zero rows.
-bool squareSublayoutIsPermutation(ArrayRef<StringAttr> dimNames) const;
+bool squareSublayoutIsPermutation(const LinearLayout &ll,
+                                  ArrayRef<StringAttr> dimNames);
 } // namespace mlir::triton
 
 #endif // TRITON_TOOLS_LAYOUTUTILS_H
