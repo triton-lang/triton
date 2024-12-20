@@ -28,13 +28,13 @@ static bool checkSquareSublayout(const LinearLayout &ll,
   return true;
 }
 
-bool squareSublayoutIsIdentity(LinearLayout &ll,
+bool squareSublayoutIsIdentity(const LinearLayout &ll,
                                ArrayRef<StringAttr> dimNames) {
   return checkSquareSublayout(
       ll, dimNames, [](int b, int32_t basis) { return basis == (1 << b); });
 }
 
-bool squareSublayoutIsPermutation(LinearLayout &ll,
+bool squareSublayoutIsPermutation(const LinearLayout &ll,
                                   ArrayRef<StringAttr> dimNames) {
   int32_t mask = 0;
   return checkSquareSublayout(ll, dimNames, [&](int b, int32_t basis) {
