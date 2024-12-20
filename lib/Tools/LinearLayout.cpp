@@ -7,6 +7,7 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "third_party/f2reduce/f2reduce.h"
 #include "triton/Tools/StrUtil.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetOperations.h"
 #include "llvm/Support/Debug.h"
@@ -678,7 +679,7 @@ bool LinearLayout::isTrivialOver(ArrayRef<StringAttr> dimNames) const {
   // We can quotient out dimNames iff they don't affect the remainingInDimNames
   // in the result. In other words, we want to check that B is zero, and C is
   // zero, and D is the identity
-  return squareSublayoutIsIdentity(dimNames) &&
+  return squareSublayoutIsIdentity(*this, dimNames) &&
          sublayoutIsZero(remainingInDimNames, dimNames) &&
          sublayoutIsZero(dimNames, remainingOutDimNames);
 }
@@ -755,51 +756,6 @@ bool LinearLayout::sublayoutIsZero(ArrayRef<StringAttr> inDimNames,
     }
   }
   return true;
-}
-
-static bool checkSquareSublayout(const LinearLayout &ll,
-                                 ArrayRef<StringAttr> dimNames,
-                                 function_ref<bool(int, int32_t)> checkBasis) {
-  // The empty layout is the identity
-  if (dimNames.size() == 0) {
-    return true;
-  }
-  // Check that the input-output sizes are the same
-  LinearLayout sl = ll.sublayout(dimNames, dimNames);
-  for (StringAttr dim : dimNames) {
-    if (ll.getInDimSize(dim) != ll.getOutDimSize(dim)) {
-      return false;
-    }
-  }
-  // Once the inputs and output dimensions are the same, we can just check
-  // that the basis for the single remaining dimension is the identity.
-  sl = sl.flattenIns().flattenOuts();
-  const auto &inDimBases = sl.getBases().begin()->second;
-  for (auto [b, basis] : llvm::enumerate(inDimBases)) {
-    if (!checkBasis(b, basis[0])) {
-      return false;
-    }
-  }
-  return true;
-}
-
-bool LinearLayout::squareSublayoutIsIdentity(
-    ArrayRef<StringAttr> dimNames) const {
-  return checkSquareSublayout(
-      *this, dimNames, [](int b, int32_t basis) { return basis == (1 << b); });
-}
-
-bool LinearLayout::squareSublayoutIsPermutation(
-    ArrayRef<StringAttr> dimNames) const {
-  int32_t mask = 0;
-  return checkSquareSublayout(*this, dimNames, [&](int b, int32_t basis) {
-    if (!llvm::isPowerOf2_32(basis))
-      return false;
-    if (mask & basis)
-      return false; // check if this bit is already set
-    mask |= basis;
-    return true;
-  });
 }
 
 SmallVector<std::pair<StringAttr, int32_t>>

@@ -620,16 +620,6 @@ public:
   bool sublayoutIsZero(ArrayRef<StringAttr> inDimNames,
                        ArrayRef<StringAttr> outDimNames) const;
 
-  // Is the sublayout defined from dimNames to dimNames the identity?
-  // In particular, is the input and  output size in these dimensions
-  // the same, and are the bases the identity?
-  bool squareSublayoutIsIdentity(ArrayRef<StringAttr> dimNames) const;
-
-  // Is the sublayout defined from dimNames to dimNames a subpermutation matrix?
-  // I.e. the layout matrix is formed by selecting unique rows from the identity
-  // matrix and adding zero rows.
-  bool squareSublayoutIsPermutation(ArrayRef<StringAttr> dimNames) const;
-
   // Computes and returns L(x, y, z).
   //
   // If you want to apply the layout to mlir Values instead of integers, that
