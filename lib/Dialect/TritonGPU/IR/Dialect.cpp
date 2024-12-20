@@ -1522,8 +1522,7 @@ SmallVector<unsigned> LinearEncodingAttr::getWarpOrder() const {
                      getOrder());
 }
 SmallVector<unsigned> LinearEncodingAttr::getThreadsPerWarp() const {
-  return basesPerDim(getLinearLayout(), StringAttr::get(getContext(), "lane"),
-                     /*skipBroadcast=*/false);
+  return basesPerDim(getLinearLayout(), StringAttr::get(getContext(), "lane"));
 }
 SmallVector<unsigned> LinearEncodingAttr::getThreadOrder() const {
   return orderPerDim(getLinearLayout(), StringAttr::get(getContext(), "lane"),
