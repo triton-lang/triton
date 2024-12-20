@@ -356,20 +356,40 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   // `C` is map from `(dst_lane, dst_reg) -> (src_lane, src_reg)`. From the
   // perspetive of the destination lane, it tells us which register from which
   // lane to get the value. Since the source and destination layouts are
-  // permutation matrices, the overall transformation amounts to permuting data
-  // around (plus broadcasting, if necessary).
+  // subpermutation matrices, the overall transformation amounts to permuting
+  // data around (plus broadcasting, if necessary).
   //
   // Warp shuffles allow indexing into another lane, but does not allowing
-  // selecting the register. Suppose we decompose `C` into `C = P2 ∘ W ∘ P1`,
+  // selecting the register. Suppose we decompose `C` into `C = P1 ∘ W ∘ P2`,
   // where `W` is a warp shuffle and `P1` and `P2` are (lane-dependent) register
   // permutations within a lane. Start from `C` and work backwards.
   //
-  // Given any `C`, is it possible that for a given register, two destination
-  // lanes map to different registers in the same source lane. This is
-  // impossible to represent using a shuffle. This happens when, with respect to
-  // the identity layout, a register base is swapped with a lane base (when the
-  // destination lane changes, the source register changes but the lane does
-  // not).
+  // Given any `C`, is it possible that for a given destination register, two
+  // destination lanes map to different source registers in the same source
+  // lane. This is impossible to represent using a shuffle. This happens when,
+  // with respect to the identity layout, a register base is swapped with a lane
+  // base (when the destination lane changes, the source register changes but
+  // the lane does not).
+  //
+  // Example:
+  //
+  //   src = {register = [[1,0], [2,0]], lane = [[0,1], [0,2]]}
+  //   dst = {register = [[0,1], [2,0]], lane = [[1,0], [0,2]]}
+  //   cvt = dst, since src is the identity layout
+  //
+  // The map from destination -> source looks like:
+  //
+  //             dst_lane
+  // dst_reg       0      1      2      3
+  //  0          T0:0   T0:1   T2:0   T2:1
+  //  1          T1:0   T1:1   T3:0   T3:1
+  //  2          T0:2   T0:3   T2:2   T2:3
+  //  3          T1:2   T1:3   T3:2   T3:3
+  //
+  // Note for each destination register, two lanes want two different registers
+  // in the same source lane (T0:0 -> T0:0, T1:0 -> T0:1). This is impossible to
+  // represent with a warp shuffle, because the source lane (e.g. T0) can only
+  // supply one of its registers as the shuffle value.
   //
   // The goal of `P2` is to permute registers within a thread so that this does
   // not happen. Specifically, pick `P2` such that bases in
@@ -378,25 +398,29 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   //
   // P2 can only change the register mapping within a thread. Constrain P2 as:
   //
-  //   P2(x) = [ I P ] [ reg  ] = [ reg + P(lane)  ]
-  //           [ 0 I ] [ lane ]   [ lane           ]
+  //   P2 = [ I P ]
+  //        [ P I ]
   //
   // Then `P2^-1 ∘ C` is:
   //
   //   [ I  0 ] [ C(r,r) C(r,l) ] = [ C(r,r)             C(r,l)           ]
   //   [ P' I ] [ C(l,r) C(l,l) ]   [ P'*C(r,r)+C(l,r)   P'*C(r,l)+C(l,l) ]
   //
+  // Where addition in GF(2) is xor.
+  //
   // We can see that P' selects rows (i.e. bases) from the upper half (register)
-  // and combines them with the lower half (lane). Because the goal is to select
-  // register bases `i` where C(r,l)[i] != 0, we know P'*C(r,r) = 0. Note that
-  // solutions for P' do not always exist (no register permutation will
-  // decompose C to make the warp shuffle possible), and this happens when there
-  // aren't enough non-zero bases in C(r,l).
-
+  // and combines them with the lower half (lane). Because the goal is for P' to
+  // select register bases `i` where C(r,l)[i] != 0, we know P'*C(r,r) = 0,
+  // since the corresponding C(r,r)[i] element in the same row will be zero.
+  //
+  // Note that solutions for P' do not always exist (no register permutation
+  // will decompose C to make the warp shuffle possible), and this happens when
+  // there aren't enough non-zero bases in C(r,l).
+  //
   // Find the indices of the missing lane bases: rows in the lower half where
   // the register component is non-zero but the lane component is zero.
   SmallVector<int> missingLaneRows;
-  for (int i = 0, e = C.getInDimSizeLog2(kLane); i != e; ++i) {
+  for (int i : llvm::seq(C.getInDimSizeLog2(kLane))) {
     ArrayRef<int32_t> /*C(l,(r,l))[i]*/ lowerHalfRow = C.getBasis(kLane, i);
     assert(lowerHalfRow.size() == 2);
     if (/*C(l,r)*/ lowerHalfRow[0] != 0) {
@@ -415,7 +439,7 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   // components in the lower half non-zero.
   std::vector<std::vector<int32_t>> PPrimeLaneBases(C.getInDimSizeLog2(kLane),
                                                     {0});
-  for (int i = 0, e = C.getInDimSizeLog2(kRegister); i != e; ++i) {
+  for (int i : llvm::seq(C.getInDimSizeLog2(kRegister))) {
     ArrayRef<int32_t> /*C(r,(r,l))[i]*/ upperHalfRow = C.getBasis(kRegister, i);
     assert(upperHalfRow.size() == 2);
     if (/*C(r,l)[i]*/ upperHalfRow[1] == 0)
@@ -460,8 +484,8 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   // Now we have C' = P2^-1 ∘ C = W ∘ P1. W is considerably easier to compute.
   // A warp shuffle is a function from `(lane, register) -> (lane)`, i.e.
   //
-  //   W = [ I 0 ] [ reg  ] = [ reg              ]
-  //       [ R L ] [ lane ]   [ R(reg) + L(lane) ]
+  //   W = [ I R' ]
+  //       [ 0 L  ]
   //
   // `W^-1 ∘ C'` will be
   //
@@ -471,9 +495,9 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   // Since P1 cannot change lanes, we know that
   //
   //   W^-1 ∘ C' = [ ... 0 ]
-  //               [ ... 1 ]
+  //               [ ... I ]
   //
-  // Thus L = C'(l,l)^-1, and A = -C'(r,l) * C'(l,l)^-1. (0 - LL) = LL in GF(2).
+  // Thus L = C'(l,l)^-1, and R = -C'(r,l) * C'(l,l)^-1. (0 - LL) = LL in GF(2).
   // We know that C'(l,l) has a suitable pseudo-inverse.
   LinearLayout L = Cp.sublayout(kLane, kLane).pseudoinvert();
   LinearLayout R = Cp.sublayout(kRegister, kLane).compose(L);

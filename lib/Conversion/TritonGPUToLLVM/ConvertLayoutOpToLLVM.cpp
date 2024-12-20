@@ -681,7 +681,7 @@ void ConvertLayoutOpUsingLinearLayoutsConversion::transferWithinWarp(
   LinearLayout reducedP1 = P1.removeZeroBasesAlongDim(kLane);
 
   // Emit one shuffle per destination register.
-  for (int i = 0, e = shflOuts.size(); i != e; ++i) {
+  for (int i : llvm::seq(shflOuts.size())) {
     // 'Cp' maps a (dst_lane, dst_reg) -> (src_lane, src_reg), and we know that
     // for a register, it does not map to different registers in the same lane.
     // At the same time, for each register, P1 returns the source value index
@@ -694,7 +694,7 @@ void ConvertLayoutOpUsingLinearLayoutsConversion::transferWithinWarp(
     // TODO(jeff): For dtypes smaller than i32, we can use byte permutes and
     // shuffle multiple values at a time.
     Value shflSrc = undef(srcValues.front().getType());
-    for (unsigned j = 0, e = reducedP1.getInDimSize(kLane); j != e; ++j) {
+    for (int j : llvm::seq(reducedP1.getInDimSize(kLane))) {
       int32_t check =
           reducedP1.apply({{kLane, j}, {kRegister, i}}).front().second;
       shflSrc =
@@ -713,13 +713,13 @@ void ConvertLayoutOpUsingLinearLayoutsConversion::transferWithinWarp(
   // selects.
   LinearLayout reducedP2 = P2inv.removeZeroBasesAlongDim(kLane);
   SmallVector<Value> results(shflOuts.size());
-  for (int i = 0, e = results.size(); i != e; ++i) {
+  for (int i : llvm::seq(results.size())) {
     Value result = undef(srcValues.front().getType());
 
     auto out = applyLinearLayout(loc, rewriter, P2inv,
                                  {{kLane, laneId}, {kRegister, i32_val(i)}});
     Value resultIdx = out.front().second;
-    for (unsigned j = 0, e = reducedP2.getInDimSize(kLane); j != e; ++j) {
+    for (int j : llvm::seq(reducedP2.getInDimSize(kLane))) {
       int32_t check =
           reducedP2.apply({{kLane, j}, {kRegister, i}}).front().second;
       result =
