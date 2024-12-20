@@ -162,6 +162,37 @@ proton-viewer -h
 
 ## Advanced features
 
+### `cpu_timed_scope`
+
+`cpu_timed_scope` is a utility that wraps `scope` to measure the CPU time of a scope along with other metrics.
+The following example demonstrates how to use `cpu_timed_scope`:
+
+```python
+import triton.profiler as proton
+
+with proton.cpu_timed_scope("test"):
+    foo[1,](x, y)
+```
+
+Note that the output metrics of `cpu_timed_scope` is `cpu_time`. We use `time` to represent accelerator (GPU) time.
+
+### Metrics naming
+
+Custom metrics should follow this format: `metric_name (unit) (type)`.
+We prefer no space within the metric name.
+`unit` and `type` are optional fields.
+
+There are three types of metrics in proton: inclusive, exclusive, and property metrics.
+By default, a metric is inclusive.
+The metric types are distinguished by the suffix of their names.
+The following table shows the suffix for each type and its meaning:
+
+| Suffix | Name | Meaning |
+| --- | --- | --- |
+| (inc) or "" | Inclusive metric | The metric is accumulated at a scope and can be propagated to the parent scope. |
+| (exc) | Exclusive metric | The metric is accumulated at a scope and cannot be propagated to the parent scope. |
+| (pty) | Property metric | The metric is a property of the scope and cannot be accumulated or propagated. |
+
 ### State annotation
 
 In addition to `proton.scope`, we can also customize the call path of each GPU operation using `proton.state`.
