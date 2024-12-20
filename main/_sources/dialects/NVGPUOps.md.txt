@@ -61,6 +61,38 @@ operation ::= `nvgpu.fence_async_shared` attr-dict
 <tr><td><code>bCluster</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
 </table>
 
+### `nvgpu.ldmatrix` (triton::nvgpu::LoadMatrixOp)
+
+Syntax:
+
+```
+operation ::= `nvgpu.ldmatrix` $addr attr-dict `:` functional-type($addr, $result)
+```
+
+
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::DefaultResource}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>trans</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `addr` | LLVM pointer in address space 3
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | LLVM structure type
+
 ### `nvgpu.stmatrix` (triton::nvgpu::StoreMatrixOp)
 
 Syntax:
@@ -74,12 +106,19 @@ Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
 Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}`
 
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>trans</code></td><td>::mlir::UnitAttr</td><td>unit attribute</td></tr>
+</table>
+
 #### Operands:
 
 | Operand | Description |
 | :-----: | ----------- |
 | `addr` | LLVM pointer in address space 3
-| `datas` | variadic of 32-bit signless integer
+| `vals` | variadic of 32-bit signless integer
 
 ### `nvgpu.wgmma_commit_group` (triton::nvgpu::WGMMACommitGroupOp)
 

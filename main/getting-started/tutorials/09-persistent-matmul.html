@@ -127,15 +127,15 @@ python<span class="w"> </span><span class="m">09</span>-persistent-matmul.py<spa
 <p>Note that currently this tutorial will fail on devices with a small shared memory size, such as RTX-4090.</p>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>M=32, N=32, K=32 verification naive vs: torch: ✅ cublas: ✅ persistent: ✅
 M=8192, N=8192, K=512 verification naive vs: torch: ✅ cublas: ✅ persistent: ✅
-175.915 5468.950 ROOT
-├─ nan 0.048 _ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastIZZZNS0_23direct_copy_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE1_clEvENKUlvE8_clEvEUlN3c104HalfEE_EEvS4_RKT_EUliE_EEviT1_
+176.297 5457.104 ROOT
+├─ nan 0.049 _ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastIZZZNS0_23direct_copy_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE1_clEvENKUlvE8_clEvEUlN3c104HalfEE_EEvS4_RKT_EUliE_EEviT1_
 ├─ nan 0.044 _ZN2at6native54_GLOBAL__N__d8ceb000_21_DistributionNormal_cu_0c5b6e8543distribution_elementwise_grid_stride_kernelIfLi4EZNS0_9templates4cuda20normal_and_transformIN3c104HalfEfPNS_17CUDAGeneratorImplEZZZNS4_13normal_kernelIS9_EEvRKNS_10TensorBaseEddT_ENKUlvE_clEvENKUlvE1_clEvEUlfE_EEvRNS_18TensorIteratorBaseET1_T2_EUlP24curandStatePhilox4_32_10E0_ZNS1_27distribution_nullary_kernelIS7_f6float4S9_SO_SH_EEvSJ_SL_RKT3_T4_EUlifE_EEviNS_15PhiloxCudaStateESK_SL_
-├─ 176.673 4278.596 cublas [M=8192, N=8192, K=512]
-│  └─ nan 4278.596 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
-├─ 168.988 406.653 matmul_kernel [M=8192, N=8192, K=512]
-├─ 171.608 400.444 matmul_kernel_persistent [M=8192, N=8192, K=512]
-└─ 179.347 383.165 torch [M=8192, N=8192, K=512]
-   └─ nan 383.165 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+├─ 176.992 4270.885 cublas [M=8192, N=8192, K=512]
+│  └─ nan 4270.885 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+├─ 169.239 406.051 matmul_kernel [M=8192, N=8192, K=512]
+├─ 173.215 396.729 matmul_kernel_persistent [M=8192, N=8192, K=512]
+└─ 179.262 383.346 torch [M=8192, N=8192, K=512]
+   └─ nan 383.346 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
 </pre></div>
 </div>
 <div class="line-block">
@@ -172,8 +172,6 @@ M=8192, N=8192, K=512 verification naive vs: torch: ✅ cublas: ✅ persistent: 
     <span class="n">ret</span> <span class="o">=</span> <span class="p">{}</span>
     <span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span> <span class="o">=</span> <span class="n">args</span><span class="p">[</span><span class="s2">&quot;M&quot;</span><span class="p">],</span> <span class="n">args</span><span class="p">[</span><span class="s2">&quot;N&quot;</span><span class="p">],</span> <span class="n">args</span><span class="p">[</span><span class="s2">&quot;K&quot;</span><span class="p">]</span>
     <span class="n">ret</span><span class="p">[</span><span class="s2">&quot;name&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">kernel</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2"> [M=</span><span class="si">{</span><span class="n">M</span><span class="si">}</span><span class="s2">, N=</span><span class="si">{</span><span class="n">N</span><span class="si">}</span><span class="s2">, K=</span><span class="si">{</span><span class="n">K</span><span class="si">}</span><span class="s2">]&quot;</span>
-    <span class="k">if</span> <span class="s2">&quot;tiles_per_update&quot;</span> <span class="ow">in</span> <span class="n">args</span><span class="p">:</span>
-        <span class="n">ret</span><span class="p">[</span><span class="s2">&quot;name&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">kernel</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2"> [M=</span><span class="si">{</span><span class="n">M</span><span class="si">}</span><span class="s2">, N=</span><span class="si">{</span><span class="n">N</span><span class="si">}</span><span class="s2">, K=</span><span class="si">{</span><span class="n">K</span><span class="si">}</span><span class="s2">, tiles_per_update=</span><span class="si">{</span><span class="n">args</span><span class="p">[</span><span class="s1">&#39;tiles_per_update&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">02</span><span class="si">}</span><span class="s2">]&quot;</span>
     <span class="k">if</span> <span class="s2">&quot;c_ptr&quot;</span> <span class="ow">in</span> <span class="n">args</span><span class="p">:</span>
         <span class="n">bytes_per_elem</span> <span class="o">=</span> <span class="n">args</span><span class="p">[</span><span class="s2">&quot;c_ptr&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">element_size</span><span class="p">()</span>
     <span class="k">else</span><span class="p">:</span>
@@ -498,8 +496,7 @@ M=8192, N=8192, K=512 verification naive vs: torch: ✅ cublas: ✅ persistent: 
 
 
 <span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span><span class="p">(</span><span class="n">launch_metadata</span><span class="o">=</span><span class="n">_matmul_launch_metadata</span><span class="p">)</span>
-<span class="k">def</span> <span class="nf">matmul_kernel_descriptor_persistent</span><span class="p">(</span><span class="n">tiles_per_update</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
-                                        <span class="n">a_ptr</span><span class="p">,</span> <span class="n">b_ptr</span><span class="p">,</span> <span class="n">c_ptr</span><span class="p">,</span>  <span class="c1">#</span>
+<span class="k">def</span> <span class="nf">matmul_kernel_descriptor_persistent</span><span class="p">(</span><span class="n">a_ptr</span><span class="p">,</span> <span class="n">b_ptr</span><span class="p">,</span> <span class="n">c_ptr</span><span class="p">,</span>  <span class="c1">#</span>
                                         <span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span>  <span class="c1">#</span>
                                         <span class="n">BLOCK_SIZE_M</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
                                         <span class="n">BLOCK_SIZE_N</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>  <span class="c1">#</span>
@@ -539,7 +536,6 @@ M=8192, N=8192, K=512 verification naive vs: torch: ✅ cublas: ✅ persistent: 
 
     <span class="n">tile_id</span> <span class="o">=</span> <span class="n">start_pid</span> <span class="o">-</span> <span class="n">NUM_SMS</span>
     <span class="n">ki</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span>
-    <span class="n">ni</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span>
 
     <span class="n">pid_m</span> <span class="o">=</span> <span class="mi">0</span>
     <span class="n">pid_n</span> <span class="o">=</span> <span class="mi">0</span>
@@ -549,36 +545,10 @@ M=8192, N=8192, K=512 verification naive vs: torch: ✅ cublas: ✅ persistent: 
     <span class="n">num_pid_in_group</span> <span class="o">=</span> <span class="n">GROUP_SIZE_M</span> <span class="o">*</span> <span class="n">num_pid_n</span>
 
     <span class="n">accumulator</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">BLOCK_SIZE_M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
-    <span class="c1"># Create an opaque value to prevent the descriptor creation from being</span>
-    <span class="c1"># hoisted out of the loop</span>
-    <span class="n">zero</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">inline_asm_elementwise</span><span class="p">(</span><span class="s2">&quot;mov.b32 $0, 0;&quot;</span><span class="p">,</span> <span class="s2">&quot;=r&quot;</span><span class="p">,</span> <span class="p">[],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">tl</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span> <span class="n">is_pure</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">pack</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
 
     <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">k_tiles</span> <span class="o">*</span> <span class="n">tiles_per_SM</span><span class="p">):</span>
         <span class="n">ki</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">ki</span> <span class="o">==</span> <span class="n">k_tiles</span> <span class="o">-</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">ki</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">ki</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-            <span class="n">ni</span> <span class="o">+=</span> <span class="mi">1</span>
-
-            <span class="c1"># Simulate a grouped gemm</span>
-            <span class="k">if</span> <span class="n">ni</span> <span class="o">==</span> <span class="n">tiles_per_update</span><span class="p">:</span>
-                <span class="n">a_desc</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">_experimental_make_tensor_descriptor</span><span class="p">(</span>
-                    <span class="n">a_ptr</span> <span class="o">+</span> <span class="n">zero</span><span class="p">,</span>
-                    <span class="n">shape</span><span class="o">=</span><span class="p">[</span><span class="n">M</span><span class="p">,</span> <span class="n">K</span><span class="p">],</span>
-                    <span class="n">strides</span><span class="o">=</span><span class="p">[</span><span class="n">K</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span>
-                    <span class="n">block_shape</span><span class="o">=</span><span class="p">[</span><span class="n">BLOCK_SIZE_M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_K</span><span class="p">],</span>
-                <span class="p">)</span>
-                <span class="n">b_desc</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">_experimental_make_tensor_descriptor</span><span class="p">(</span>
-                    <span class="n">b_ptr</span> <span class="o">+</span> <span class="n">zero</span><span class="p">,</span>
-                    <span class="n">shape</span><span class="o">=</span><span class="p">[</span><span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">],</span>
-                    <span class="n">strides</span><span class="o">=</span><span class="p">[</span><span class="n">K</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span>
-                    <span class="n">block_shape</span><span class="o">=</span><span class="p">[</span><span class="n">BLOCK_SIZE_N</span><span class="p">,</span> <span class="n">BLOCK_SIZE_K</span><span class="p">],</span>
-                <span class="p">)</span>
-                <span class="n">c_desc</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">_experimental_make_tensor_descriptor</span><span class="p">(</span>
-                    <span class="n">c_ptr</span> <span class="o">+</span> <span class="n">zero</span><span class="p">,</span>
-                    <span class="n">shape</span><span class="o">=</span><span class="p">[</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">],</span>
-                    <span class="n">strides</span><span class="o">=</span><span class="p">[</span><span class="n">N</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span>
-                    <span class="n">block_shape</span><span class="o">=</span><span class="p">[</span><span class="n">BLOCK_SIZE_M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">],</span>
-                <span class="p">)</span>
-                <span class="n">ni</span> <span class="o">=</span> <span class="mi">0</span>
 
             <span class="n">tile_id</span> <span class="o">+=</span> <span class="n">NUM_SMS</span>
             <span class="n">group_id</span> <span class="o">=</span> <span class="n">tile_id</span> <span class="o">//</span> <span class="n">num_pid_in_group</span>
@@ -604,8 +574,7 @@ M=8192, N=8192, K=512 verification naive vs: torch: ✅ cublas: ✅ persistent: 
             <span class="n">accumulator</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">BLOCK_SIZE_M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
 
 
-<span class="k">def</span> <span class="nf">matmul_descriptor_persistent</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">tiles_per_update</span><span class="p">):</span>
-    <span class="c1"># Autotuner does not work with TMA. Use manual config.</span>
+<span class="k">def</span> <span class="nf">matmul_descriptor_persistent</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">):</span>
     <span class="n">configs</span> <span class="o">=</span> <span class="p">{</span>
         <span class="n">torch</span><span class="o">.</span><span class="n">float8_e4m3fn</span><span class="p">:</span> <span class="p">{</span>
             <span class="s2">&quot;BLOCK_SIZE_M&quot;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s2">&quot;BLOCK_SIZE_N&quot;</span><span class="p">:</span> <span class="mi">256</span><span class="p">,</span> <span class="s2">&quot;BLOCK_SIZE_K&quot;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s2">&quot;GROUP_SIZE_M&quot;</span><span class="p">:</span> <span class="mi">8</span><span class="p">,</span> <span class="s2">&quot;num_stages&quot;</span><span class="p">:</span> <span class="mi">4</span><span class="p">,</span>
@@ -635,7 +604,6 @@ M=8192, N=8192, K=512 verification naive vs: torch: ✅ cublas: ✅ persistent: 
 
     <span class="n">grid</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">META</span><span class="p">:</span> <span class="p">(</span><span class="nb">min</span><span class="p">(</span><span class="n">NUM_SMS</span><span class="p">,</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">META</span><span class="p">[</span><span class="s2">&quot;BLOCK_SIZE_M&quot;</span><span class="p">])</span> <span class="o">*</span> <span class="n">triton</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">META</span><span class="p">[</span><span class="s2">&quot;BLOCK_SIZE_N&quot;</span><span class="p">])),</span> <span class="p">)</span>
     <span class="n">matmul_kernel_descriptor_persistent</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span>
-        <span class="n">tiles_per_update</span><span class="p">,</span>  <span class="c1">#</span>
         <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">c</span><span class="p">,</span>  <span class="c1">#</span>
         <span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span>  <span class="c1">#</span>
         <span class="n">BLOCK_SIZE_M</span><span class="o">=</span><span class="n">configs</span><span class="p">[</span><span class="n">dtype</span><span class="p">][</span><span class="s2">&quot;BLOCK_SIZE_M&quot;</span><span class="p">],</span>  <span class="c1">#</span>
@@ -692,7 +660,7 @@ M=8192, N=8192, K=512 verification naive vs: torch: ✅ cublas: ✅ persistent: 
             <span class="n">fn</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">)</span>
 
 
-<span class="k">def</span> <span class="nf">bench</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">dtype</span><span class="p">,</span> <span class="n">tiles_per_update</span><span class="p">,</span> <span class="n">reps</span><span class="o">=</span><span class="mi">1000</span><span class="p">,</span> <span class="n">warmup_reps</span><span class="o">=</span><span class="mi">10000</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">bench</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">dtype</span><span class="p">,</span> <span class="n">reps</span><span class="o">=</span><span class="mi">1000</span><span class="p">,</span> <span class="n">warmup_reps</span><span class="o">=</span><span class="mi">10000</span><span class="p">):</span>
     <span class="n">M</span> <span class="o">=</span> <span class="mi">8192</span>
     <span class="n">N</span> <span class="o">=</span> <span class="mi">8192</span>
     <span class="n">a</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">M</span><span class="p">,</span> <span class="n">K</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="p">)</span>
@@ -708,10 +676,10 @@ M=8192, N=8192, K=512 verification naive vs: torch: ✅ cublas: ✅ persistent: 
     <span class="n">bench_fn</span><span class="p">(</span><span class="n">reps</span><span class="p">,</span> <span class="n">warmup_reps</span><span class="p">,</span> <span class="n">matmul_persistent</span><span class="p">,</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="o">.</span><span class="n">T</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">supports_tma</span><span class="p">():</span>
         <span class="n">bench_fn</span><span class="p">(</span><span class="n">reps</span><span class="p">,</span> <span class="n">warmup_reps</span><span class="p">,</span> <span class="n">matmul_tma_persistent</span><span class="p">,</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span>
-        <span class="n">bench_fn</span><span class="p">(</span><span class="n">reps</span><span class="p">,</span> <span class="n">warmup_reps</span><span class="p">,</span> <span class="n">matmul_descriptor_persistent</span><span class="p">,</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">tiles_per_update</span><span class="p">)</span>
+        <span class="n">bench_fn</span><span class="p">(</span><span class="n">reps</span><span class="p">,</span> <span class="n">warmup_reps</span><span class="p">,</span> <span class="n">matmul_descriptor_persistent</span><span class="p">,</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span>
 
 
-<span class="k">def</span> <span class="nf">validate</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">dtype</span><span class="p">,</span> <span class="n">tiles_per_update</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">validate</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">dtype</span><span class="p">):</span>
     <span class="n">a</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">M</span><span class="p">,</span> <span class="n">K</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="p">)</span>
     <span class="n">b</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="n">K</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="p">)</span>
     <span class="n">b</span> <span class="o">=</span> <span class="n">b</span><span class="o">.</span><span class="n">T</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
@@ -721,7 +689,7 @@ M=8192, N=8192, K=512 verification naive vs: torch: ✅ cublas: ✅ persistent: 
     <span class="n">naive_result</span> <span class="o">=</span> <span class="n">matmul</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="o">.</span><span class="n">T</span><span class="p">)</span>
     <span class="n">persistent_result</span> <span class="o">=</span> <span class="n">matmul_persistent</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="o">.</span><span class="n">T</span><span class="p">)</span>
     <span class="n">tma_persistent_result</span> <span class="o">=</span> <span class="n">matmul_tma_persistent</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span> <span class="k">if</span> <span class="n">supports_tma</span><span class="p">()</span> <span class="k">else</span> <span class="kc">None</span>
-    <span class="n">descriptor_persistent_result</span> <span class="o">=</span> <span class="n">matmul_descriptor_persistent</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">tiles_per_update</span><span class="p">)</span> <span class="k">if</span> <span class="n">supports_tma</span><span class="p">()</span> <span class="k">else</span> <span class="kc">None</span>
+    <span class="n">descriptor_persistent_result</span> <span class="o">=</span> <span class="n">matmul_descriptor_persistent</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span> <span class="k">if</span> <span class="n">supports_tma</span><span class="p">()</span> <span class="k">else</span> <span class="kc">None</span>
 
     <span class="k">if</span> <span class="n">torch_result</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">naive_vs_torch</span> <span class="o">=</span> <span class="s2">&quot;✅&quot;</span> <span class="k">if</span> <span class="n">torch</span><span class="o">.</span><span class="n">allclose</span><span class="p">(</span><span class="n">naive_result</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">),</span> <span class="n">torch_result</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">),</span>
@@ -746,7 +714,7 @@ M=8192, N=8192, K=512 verification naive vs: torch: ✅ cublas: ✅ persistent: 
     <span class="k">if</span> <span class="n">tma_persistent_result</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
         <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;TMA persistent: </span><span class="si">{</span><span class="n">naive_vs_tma_persistent</span><span class="si">}</span><span class="s2"> &quot;</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">descriptor_persistent_result</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Device TMA persistent: </span><span class="si">{</span><span class="n">naive_vs_descriptor_persistent</span><span class="si">}</span><span class="s2"> &quot;</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Tensor descriptor persistent: </span><span class="si">{</span><span class="n">naive_vs_descriptor_persistent</span><span class="si">}</span><span class="s2"> &quot;</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">)</span>
     <span class="nb">print</span><span class="p">()</span>
 
 
@@ -766,13 +734,6 @@ M=8192, N=8192, K=512 verification naive vs: torch: ✅ cublas: ✅ persistent: 
     <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;-K&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span> <span class="n">required</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="mi">512</span><span class="p">)</span>
     <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;--K_range&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span> <span class="n">nargs</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
     <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;--K_step&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="mi">512</span><span class="p">)</span>
-    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
-        <span class="s2">&quot;--tiles_per_update&quot;</span><span class="p">,</span>
-        <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span>
-        <span class="n">default</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
-        <span class="n">help</span><span class="o">=</span>
-        <span class="s2">&quot;Number of output tiles calculated for each update of the tma descriptor in matmul_descriptor_persistent_kernel&quot;</span><span class="p">,</span>
-    <span class="p">)</span>
     <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;--prec&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">str</span><span class="p">,</span> <span class="n">choices</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;fp8&quot;</span><span class="p">,</span> <span class="s2">&quot;fp16&quot;</span><span class="p">],</span> <span class="n">default</span><span class="o">=</span><span class="s2">&quot;fp16&quot;</span><span class="p">)</span>
     <span class="n">args</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_args</span><span class="p">()</span>
 
@@ -788,17 +749,17 @@ M=8192, N=8192, K=512 verification naive vs: torch: ✅ cublas: ✅ persistent: 
 
     <span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
 
-    <span class="n">validate</span><span class="p">(</span><span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="n">dtype</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">tiles_per_update</span><span class="p">)</span>
-    <span class="n">validate</span><span class="p">(</span><span class="mi">8192</span><span class="p">,</span> <span class="mi">8192</span><span class="p">,</span> <span class="mi">512</span><span class="p">,</span> <span class="n">dtype</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">tiles_per_update</span><span class="p">)</span>
+    <span class="n">validate</span><span class="p">(</span><span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="n">dtype</span><span class="p">)</span>
+    <span class="n">validate</span><span class="p">(</span><span class="mi">8192</span><span class="p">,</span> <span class="mi">8192</span><span class="p">,</span> <span class="mi">512</span><span class="p">,</span> <span class="n">dtype</span><span class="p">)</span>
 
     <span class="n">proton</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="s2">&quot;matmul&quot;</span><span class="p">,</span> <span class="n">hook</span><span class="o">=</span><span class="s2">&quot;triton&quot;</span><span class="p">)</span>
     <span class="k">for</span> <span class="n">K</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">K_range</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">args</span><span class="o">.</span><span class="n">K_range</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">K_step</span><span class="p">):</span>
-        <span class="n">bench</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">dtype</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">tiles_per_update</span><span class="p">)</span>
+        <span class="n">bench</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">dtype</span><span class="p">)</span>
     <span class="n">proton</span><span class="o">.</span><span class="n">finalize</span><span class="p">()</span>
     <span class="n">show_profile</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">prec</span><span class="p">,</span> <span class="s2">&quot;matmul&quot;</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 19.530 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 19.520 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-09-persistent-matmul-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/b5537c431cd73b8ee3c32cdf90c58104/09-persistent-matmul.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">09-persistent-matmul.ipynb</span></code></a></p>
