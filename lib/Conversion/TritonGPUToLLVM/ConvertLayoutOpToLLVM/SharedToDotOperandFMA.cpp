@@ -295,6 +295,10 @@ Value loadFMAOp(Value srcVal, Value llVal, BlockedEncodingAttr dLayout,
 
   // Found discrepancy in this case,
   // use linear layout based converter for this case
+  // TODO: break batch and non-k dimension iterations in
+  // "repeat" and "inside-repeate" parts, pack them in llvm structure
+  // according repeat and register order.
+  // See FMA.cpp:getValueTableFromStructFMA for reference
   if (numBTiles != 1 || numNonKTiles != 1)
     return Value();
 

@@ -27,11 +27,8 @@ struct OperandValueKey {
 
 template <> struct std::hash<OperandValueKey> {
   std::size_t operator()(const OperandValueKey &k) const {
-    return std::hash<unsigned>()(k.bRepIdx) ^
-           (std::hash<unsigned>()(k.nonKRepIdx) << 1) ^
-           (std::hash<unsigned>()(k.bIdx) << 2) ^
-           (std::hash<unsigned>()(k.nonKIdx) << 3) ^
-           (std::hash<unsigned>()(k.kIdx) << 4);
+    return llvm::hash_combine(k.bRepIdx, k.nonKRepIdx, k.bIdx, k.nonKIdx,
+                              k.kIdx);
   }
 };
 
