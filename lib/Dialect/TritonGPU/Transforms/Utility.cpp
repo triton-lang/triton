@@ -368,13 +368,14 @@ static Attribute inferSrcEncoding(GatherOp op, Attribute dstEnc) {
 }
 
 static Attribute inferTransOpDstEncoding(Attribute srcEnc,
+                                         ArrayRef<int64_t> shape,
                                          ArrayRef<int32_t> order) {
   // Simply forward to the existing inferTransOpEncoding function.
   Attribute retEncoding;
   if (succeeded(
           srcEnc.getDialect()
               .getRegisteredInterface<triton::DialectInferLayoutInterface>()
-              ->inferTransOpEncoding(srcEnc, order, retEncoding))) {
+              ->inferTransOpEncoding(srcEnc, shape, order, retEncoding))) {
     return retEncoding;
   }
   return {};
@@ -382,7 +383,9 @@ static Attribute inferTransOpDstEncoding(Attribute srcEnc,
 
 static Attribute inferDstEncoding(triton::TransposeOpInterface op,
                                   Attribute encoding) {
-  return inferTransOpDstEncoding(encoding, op.getOrder());
+  return inferTransOpDstEncoding(
+      encoding, cast<RankedTensorType>(op.getSrc().getType()).getShape(),
+      op.getOrder());
 }
 
 static Attribute inferSrcEncoding(triton::TransposeOpInterface op,
@@ -393,8 +396,9 @@ static Attribute inferSrcEncoding(triton::TransposeOpInterface op,
   //   transpose(transpose(x, order), inverse(order)) == x,
   // we can see this is equivalent to
   //   transpose(dstEnc, inverse(order)) -> srcEnc.
-  return inferTransOpDstEncoding(encoding,
-                                 triton::inversePermutation(op.getOrder()));
+  return inferTransOpDstEncoding(
+      encoding, cast<RankedTensorType>(op.getSrc().getType()).getShape(),
+      triton::inversePermutation(op.getOrder()));
 }
 
 static Attribute inferReshapeOpDstEncoding(ArrayRef<int64_t> srcShape,
