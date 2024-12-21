@@ -1330,6 +1330,46 @@ private:
   bool ftz;
 };
 
+struct RsqrtOpConversion
+    : ElementwiseOpConversionBase<mlir::math::RsqrtOp, RsqrtOpConversion> {
+  using ElementwiseOpConversionBase<
+      mlir::math::RsqrtOp, RsqrtOpConversion>::ElementwiseOpConversionBase;
+
+  explicit RsqrtOpConversion(LLVMTypeConverter &typeConverter,
+                             ModuleAxisInfoAnalysis &axisInfoAnalysis, bool ftz,
+                             PatternBenefit benefit)
+      : ElementwiseOpConversionBase(typeConverter, axisInfoAnalysis, benefit),
+        ftz(ftz) {}
+
+  SmallVector<Value> createDestOps(mlir::math::RsqrtOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    // This pass only deals with FP32 input with ftz configuration. Other cases
+    // are delegate to MLIR.
+    //
+    // For FP16/FP64 input, it's lowered to __ocml_rsqrt_f16/__ocml_rsqrt_f64.
+    //
+    // For FP32 input with non-ftz configuration, it's lowered to
+    // __ocml_rsqrt_f32, which will check the ftz/daz settings in the backend
+    // dynamically to decide to preserve/flush denorms.
+    if (elemTy.getIntOrFloatBitWidth() != 32 || !ftz)
+      return {};
+
+    // `llvm.amdgcn.rsq.f32` provides direct access to v_rsq_f32_e32.
+    StringRef funcName = "llvm.amdgcn.rsq.f32";
+    Type funcType = getFunctionType(elemTy, operands[0]);
+    LLVM::LLVMFuncOp funcOp =
+        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
+
+    return {
+        LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]).getResult()};
+  }
+
+private:
+  bool ftz;
+};
+
 } // namespace
 
 namespace mlir::triton::AMD {
@@ -1371,6 +1411,8 @@ void populateElementwiseOpToLLVMPatterns(
   // Exp2OpConversion will return failure and later pass will call
   // __ocml_exp2_f64 for higher-precision calculation
   patterns.add<Exp2OpConversion>(typeConverter, axisInfoAnalysis, ftz, benefit);
+  patterns.add<RsqrtOpConversion>(typeConverter, axisInfoAnalysis, ftz,
+                                  benefit);
   mlir::triton::populateElementwiseOpToLLVMPatterns(
       typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
   mlir::triton::populateMinMaxFOpToLLVMPattern(
