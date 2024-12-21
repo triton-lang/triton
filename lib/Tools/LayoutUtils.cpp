@@ -2,8 +2,9 @@
 
 namespace mlir::triton {
 
-bool squareSublayoutIsIdentity(const LinearLayout &ll,
-                               ArrayRef<StringAttr> dimNames) {
+static bool checkSquareSublayout(const LinearLayout &ll,
+                                 ArrayRef<StringAttr> dimNames,
+                                 function_ref<bool(int, int32_t)> checkBasis) {
   // The empty layout is the identity
   if (dimNames.size() == 0) {
     return true;
@@ -18,15 +19,32 @@ bool squareSublayoutIsIdentity(const LinearLayout &ll,
   // Once the inputs and output dimensions are the same, we can just check
   // that the basis for the single remaining dimension is the identity.
   sl = sl.flattenIns().flattenOuts();
-  int b = 0;
   const auto &inDimBases = sl.getBases().begin()->second;
-  for (auto basis : inDimBases) {
-    if (basis[0] != (1 << b)) {
+  for (auto [b, basis] : llvm::enumerate(inDimBases)) {
+    if (!checkBasis(b, basis[0])) {
       return false;
     }
-    b++;
   }
   return true;
+}
+
+bool squareSublayoutIsIdentity(const LinearLayout &ll,
+                               ArrayRef<StringAttr> dimNames) {
+  return checkSquareSublayout(
+      ll, dimNames, [](int b, int32_t basis) { return basis == (1 << b); });
+}
+
+bool squareSublayoutIsPermutation(const LinearLayout &ll,
+                                  ArrayRef<StringAttr> dimNames) {
+  int32_t mask = 0;
+  return checkSquareSublayout(ll, dimNames, [&](int b, int32_t basis) {
+    if (!llvm::isPowerOf2_32(basis))
+      return false;
+    if (mask & basis)
+      return false; // check if this bit is already set
+    mask |= basis;
+    return true;
+  });
 }
 
 } // namespace mlir::triton
