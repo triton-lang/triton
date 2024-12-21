@@ -532,7 +532,7 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   // vector stores and stmatrix.
   LinearLayout reducedP1 = P1.removeZeroBasesAlongDim(kLane);
   LinearLayout reducedP2 = P2inv.removeZeroBasesAlongDim(kLane);
-  if (reducedP1.getInDimSize(kLane) > 4 || reducedP2.getInDimSize(kLane) > 4)
+  if (reducedP1.getInDimSize(kLane) > 8 || reducedP2.getInDimSize(kLane) > 8)
     return {};
 
   // Return just the interesting parts of the decomposed layouts.
