@@ -66,11 +66,10 @@ if is_interpreter():
     THREADS_PER_WARP = 1
 elif is_hip():
     THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
-    target_arch = get_arch()
-    # for gfx9 multiple variants of mma instructions are supported:
+    # for CDNA multiple variants of mma instructions are supported:
     # mfma 16x16/mfma 32x32
     # 0 is a special value for automatic heuristic
-    if "gfx9" in target_arch:
+    if is_hip_cdna():
         mma_nonk_sizes = [0, 16, 32]
 else:
     THREADS_PER_WARP = 32

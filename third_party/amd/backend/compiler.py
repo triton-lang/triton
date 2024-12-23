@@ -21,7 +21,7 @@ def min_dot_size(target: GPUTarget):
     def get_gfx94_limits(lhsType, rhsType):
         if is_fma_supported(lhsType.scalar, rhsType.scalar):
             return (1, 1, 1)
-        return (16, 16, 1) if (lhsType.scalar.is_int8() or rhsType.scalar.is_int8()) else (16, 16, 1)
+        return (16, 16, 1)
 
     def get_gfx9_limits(lhsType, rhsType):
         if is_fma_supported(lhsType.scalar, rhsType.scalar):
