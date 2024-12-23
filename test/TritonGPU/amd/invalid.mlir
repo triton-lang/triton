@@ -1,6 +1,6 @@
 // RUN: triton-opt --split-input-file %s --verify-diagnostics
 
-// expected-error @+1 {{transposed case is supported only for WMMA version 2}}
+// expected-error @+1 {{Transposed WMMA is supported only for version 2}}
 #wmma = #ttg.amd_wmma<{version = 1, isTranspose = true, warpsPerCTA = [2, 2]}>
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
     tt.func public @fn(%arg0: !tt.ptr<i32>) {
