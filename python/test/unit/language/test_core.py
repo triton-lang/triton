@@ -6356,6 +6356,7 @@ def gather_test_kernel(src_ptr, idx_ptr, out_ptr, axis: tl.constexpr, src_dim0: 
     tl.store(out_ptr + out_offs, out)
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("src_shape, indices_shape, axis", [
     ([4, 4], [8, 4], 0),
     ([128, 64], [256, 64], 0),
