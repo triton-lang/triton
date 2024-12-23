@@ -998,7 +998,7 @@ def _patch_lang_core(lang):
 
 
 def _patch_lang(fn):
-    langs = [value for _, value in fn.__globals__.items() if value in [tl, tl.core]]
+    langs = [value for _, value in fn.__globals__.items() if inspect.ismodule(value) and value in [tl, tl.core]]
     assert len(langs) >= 1, "triton.language must be visible from within jit'd function"
     for lang in langs:
         _patch_builtin(lang, interpreter_builder)
