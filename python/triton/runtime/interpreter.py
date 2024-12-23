@@ -556,6 +556,9 @@ class InterpreterBuilder:
     def create_histogram(self, data, bins):
         return TensorHandle(np.histogram(data.data, bins=bins, range=(0, bins))[0], tl.int32)
 
+    def create_gather(self, src, indices, axis):
+        return TensorHandle(np.take_along_axis(src.data, indices.data, axis=axis), src.dtype.scalar)
+
     # pointer arithmetic
 
     def create_addptr(self, ptr, offset):
