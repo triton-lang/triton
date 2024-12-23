@@ -4,6 +4,7 @@ add_triton_library(TritonAMDGPUToLLVM
     ConvertLayoutOpToLLVM/SharedToDotOperandMFMA.cpp
     ConvertLayoutOpToLLVM/SharedToDotOperandWMMA.cpp
     ConvertLayoutOpToLLVM.cpp
+    MemoryOpToLLVM.cpp
     DotOpToLLVM/MFMA.cpp
     DotOpToLLVM/WMMA.cpp
     DotOpToLLVM.cpp

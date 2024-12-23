@@ -53,6 +53,9 @@ class HIPOptions:
     default_dot_input_precision: str = "ieee"
     allowed_dot_input_precisions: Tuple[str] = ("ieee", )
     enable_fp_fusion: bool = True
+    # TODO: Implement cooperative grid launch for AMD:
+    # See: https://rocm.docs.amd.com/projects/HIPIFY/en/latest/tables/CUDA_Driver_API_functions_supported_by_HIP.html
+    launch_cooperative_grid: bool = False
     matrix_instr_nonkdim: int = 0
     kpack: int = 1
     allow_flush_denorm: bool = False
@@ -342,6 +345,13 @@ class HIPBackend(BaseBackend):
         # The public kernel should be kernel 0.
         fns[0].set_calling_conv(amd.CALLING_CONV_AMDGPU_KERNEL)
         fns[0].add_fn_attr("amdgpu-flat-work-group-size", f"1,{options.num_warps*options.warp_size}")
+        # LLVM AMDGPU backend supports the attribute "amdgpu-waves-per-eu"="<min>[, <max>]".
+        # This attribute may be attached to a kernel function definition and is an optimization hint.
+        # <min> parameter specifies the requested minimum number of waves per EU, and optional <max> parameter
+        # specifies the requested maximum number of waves per EU (must be greater than <min> if specified).
+        # If <max> is omitted, then there is no restriction on the maximum number of waves per EU other than
+        # the one dictated by the hardware for which the kernel is compiled. Passing 0, 0 as <min>, <max>
+        # implies the default behavior (no limits).
         fns[0].add_fn_attr("amdgpu-waves-per-eu", f"{options.waves_per_eu}")
         denormal_mode = "preserve-sign" if options.allow_flush_denorm else "ieee"
         fns[0].add_fn_attr("denormal-fp-math-f32", denormal_mode)

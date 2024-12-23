@@ -23,21 +23,20 @@ using ttn::OperandsAndConstraints;
 
 namespace {
 
-const std::string Wgmma_Fence_Op = "wgmma.fence.sync.aligned;";
-const std::string Wgmma_Commit_Group_Op = "wgmma.commit_group.sync.aligned;";
-const std::string Cluster_Wait_Op = "barrier.cluster.wait.aligned;";
-const std::string Fence_Mbarrier_Init_Op =
-    "fence.mbarrier_init.release.cluster;";
-const std::string Cluster_Cta_Id_Op = "{\n"
-                                      ".reg .u32 a<5>;              \n"
-                                      "mov.u32 a0, %cluster_ctaid.x;\n"  // x
-                                      "mov.u32 a1, %cluster_ctaid.y;\n"  // y
-                                      "mov.u32 a2, %cluster_ctaid.z;\n"  // z
-                                      "mov.u32 a3, %cluster_nctaid.x;\n" // nx
-                                      "mov.u32 a4, %cluster_nctaid.y;\n" // ny
-                                      "mad.lo.u32 a1, a2, a4, a1;     \n"
-                                      "mad.lo.u32 $0, a1, a3, a0;     \n"
-                                      "}";
+const std::string kWgmmaFenceOp = "wgmma.fence.sync.aligned;";
+const std::string kWgmmaCommitGroupOp = "wgmma.commit_group.sync.aligned;";
+const std::string kClusterWaitOp = "barrier.cluster.wait.aligned;";
+const std::string kFenceMbarrierInitOp = "fence.mbarrier_init.release.cluster;";
+const std::string kClusterCtaIdOp = "{\n"
+                                    ".reg .u32 a<5>;              \n"
+                                    "mov.u32 a0, %cluster_ctaid.x;\n"  // x
+                                    "mov.u32 a1, %cluster_ctaid.y;\n"  // y
+                                    "mov.u32 a2, %cluster_ctaid.z;\n"  // z
+                                    "mov.u32 a3, %cluster_nctaid.x;\n" // nx
+                                    "mov.u32 a4, %cluster_nctaid.y;\n" // ny
+                                    "mad.lo.u32 a1, a2, a4, a1;     \n"
+                                    "mad.lo.u32 $0, a1, a3, a0;     \n"
+                                    "}";
 
 bool isNumber(const std::string &s) {
   return !s.empty() && std::find_if(s.begin(), s.end(), [](unsigned char c) {
@@ -235,46 +234,138 @@ public:
   }
 };
 
-class StoreMatrixOpPattern : public OpRewritePattern<ttn::StoreMatrixOp> {
+// Base class for Matrix Operation Patterns
+template <typename MatrixOpType, typename ConcreteMatrixOpPattern>
+class MatrixOpPattern : public OpRewritePattern<MatrixOpType> {
 public:
-  using OpRewritePattern<ttn::StoreMatrixOp>::OpRewritePattern;
+  using OpRewritePattern<MatrixOpType>::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(ttn::StoreMatrixOp op,
+  LogicalResult matchAndRewrite(MatrixOpType op,
                                 PatternRewriter &rewriter) const override {
-    return rewriteAsPtxAsm(op, rewriter, getPtxAsm(op),
-                           getOperandsAndConstraints(op));
+    unsigned vecSize = getVectorSize(op);
+    bool trans = op.getTrans();
+    // Template method for PTX assembly generation
+    std::string ptxAsm =
+        (llvm::Twine(ConcreteMatrixOpPattern::kOpCode) +
+         getPtxModifiers(vecSize, trans) + " " + getOperands(op, vecSize) + ";")
+            .str();
+
+    OperandsAndConstraints operandAndConstraints =
+        getOperandsAndConstraints(op, vecSize);
+    Constraints outputConstraints = getOutputConstraints(op, vecSize);
+
+    return rewriteAsPtxAsm(op, rewriter, ptxAsm, operandAndConstraints,
+                           outputConstraints);
+  }
+
+protected:
+  // Shared helper methods
+  std::string getPtxModifiers(unsigned vecSize, bool trans) const {
+    auto ptxAsmBase = llvm::Twine(".sync.aligned.m8n8");
+    const std::string suffix = trans ? ".trans.shared.b16" : ".shared.b16";
+    switch (vecSize) {
+    case 1:
+      return (ptxAsmBase + ".x1" + suffix).str();
+    case 2:
+      return (ptxAsmBase + ".x2" + suffix).str();
+    case 4:
+      return (ptxAsmBase + ".x4" + suffix).str();
+    default:
+      assert(false && "Invalid vector size");
+    }
+  }
+
+  std::string getPtxRegOperands(unsigned startIdx, unsigned count) const {
+    llvm::SmallString<20> regOperands;
+    llvm::raw_svector_ostream stream(regOperands);
+    stream << "{";
+    for (unsigned i = 0; i < count; i++) {
+      stream << "$" + llvm::utostr(startIdx + i);
+      if (i != count - 1)
+        stream << ", ";
+    }
+    stream << "}";
+    return std::string(regOperands.str());
+  }
+
+  std::string getPtxAddrOperand(unsigned idx) const {
+    return (llvm::Twine("[$") + llvm::utostr(idx) + "]").str();
+  }
+
+  virtual std::string getOperands(MatrixOpType op, unsigned vecSize) const = 0;
+  virtual OperandsAndConstraints
+  getOperandsAndConstraints(MatrixOpType op, unsigned vecSize) const = 0;
+  virtual Constraints getOutputConstraints(MatrixOpType op,
+                                           unsigned vecSize) const = 0;
+  virtual unsigned getVectorSize(MatrixOpType op) const = 0;
+};
+
+// StoreMatrixOp Pattern
+class StoreMatrixOpPattern
+    : public MatrixOpPattern<ttn::StoreMatrixOp, StoreMatrixOpPattern> {
+public:
+  using MatrixOpPattern<ttn::StoreMatrixOp,
+                        StoreMatrixOpPattern>::MatrixOpPattern;
+  static constexpr const char *kOpCode = "stmatrix";
+
+protected:
+  unsigned getVectorSize(ttn::StoreMatrixOp op) const override {
+    return op.getVals().size();
+  }
+
+  std::string getOperands(ttn::StoreMatrixOp op,
+                          unsigned vecSize) const override {
+    return (llvm::Twine(getPtxAddrOperand(0)) + ", " +
+            getPtxRegOperands(1, vecSize))
+        .str();
   }
 
   OperandsAndConstraints
-  getOperandsAndConstraints(ttn::StoreMatrixOp op) const {
-    OperandsAndConstraints operandsAndTypes;
-    auto addr = op.getAddr();
-    auto datas = op.getDatas();
-    operandsAndTypes.push_back({addr, "r"});
-    for (unsigned i = 0; i < datas.size(); i++) {
-      operandsAndTypes.push_back({datas[i], "r"});
+  getOperandsAndConstraints(ttn::StoreMatrixOp op,
+                            unsigned vecSize) const override {
+    OperandsAndConstraints constraints = {{op.getAddr(), "r"}};
+    for (unsigned i = 0; i < vecSize; i++) {
+      constraints.push_back({op.getVals()[i], "r"});
     }
-    return operandsAndTypes;
+    return constraints;
   }
 
-  std::string getPtxAsm(ttn::StoreMatrixOp op) const {
-    auto datas = op.getDatas();
-    std::string ptxAsm;
-    switch (datas.size()) {
-    case 1:
-      ptxAsm = "stmatrix.sync.aligned.m8n8.x1.shared.b16 [$0], {$1};";
-      break;
-    case 2:
-      ptxAsm = "stmatrix.sync.aligned.m8n8.x2.shared.b16 [$0], {$1, $2};";
-      break;
-    case 4:
-      ptxAsm =
-          "stmatrix.sync.aligned.m8n8.x4.shared.b16 [$0], {$1, $2, $3, $4};";
-      break;
-    default:
-      assert(false && "Invalid size");
-    }
-    return ptxAsm;
+  Constraints getOutputConstraints(ttn::StoreMatrixOp op,
+                                   unsigned vecSize) const override {
+    return {}; // No output constraints for StoreMatrixOp
+  }
+};
+
+// LoadMatrixOp Pattern
+class LoadMatrixOpPattern
+    : public MatrixOpPattern<ttn::LoadMatrixOp, LoadMatrixOpPattern> {
+public:
+  using MatrixOpPattern<ttn::LoadMatrixOp,
+                        LoadMatrixOpPattern>::MatrixOpPattern;
+  static constexpr const char *kOpCode = "ldmatrix";
+
+protected:
+  unsigned getVectorSize(ttn::LoadMatrixOp op) const override {
+    auto resultType = cast<LLVM::LLVMStructType>(op.getType());
+    return resultType.getBody().size();
+  }
+
+  std::string getOperands(ttn::LoadMatrixOp op,
+                          unsigned vecSize) const override {
+    return (llvm::Twine(getPtxRegOperands(0, vecSize)) + ", " +
+            getPtxAddrOperand(vecSize))
+        .str();
+  }
+
+  OperandsAndConstraints
+  getOperandsAndConstraints(ttn::LoadMatrixOp op,
+                            unsigned vecSize) const override {
+    return {{op.getAddr(), "r"}};
+  }
+
+  Constraints getOutputConstraints(ttn::LoadMatrixOp op,
+                                   unsigned vecSize) const override {
+    return Constraints(vecSize, "=r");
   }
 };
 
@@ -507,17 +598,16 @@ public:
 #define POPULATE_NVGPU_OP(SRC_OP, ASM)                                         \
   patterns.add<NVGPUOpGenericPattern<SRC_OP>>(context, ASM, Constraints(),     \
                                               Constraints());
-    POPULATE_NVGPU_OP(ttn::WGMMAFenceOp, Wgmma_Fence_Op)
-    POPULATE_NVGPU_OP(ttn::WGMMACommitGroupOp, Wgmma_Commit_Group_Op)
-    POPULATE_NVGPU_OP(ttn::ClusterWaitOp, Cluster_Wait_Op)
+    POPULATE_NVGPU_OP(ttn::WGMMAFenceOp, kWgmmaFenceOp)
+    POPULATE_NVGPU_OP(ttn::WGMMACommitGroupOp, kWgmmaCommitGroupOp)
+    POPULATE_NVGPU_OP(ttn::ClusterWaitOp, kClusterWaitOp)
 #undef POPULATE_NVGPU_OP
     patterns.add<NVGPUOpGenericPattern<ttn::ClusterCTAIdOp>>(
-        context, Cluster_Cta_Id_Op, Constraints({"=r"}), Constraints());
+        context, kClusterCtaIdOp, Constraints({"=r"}), Constraints());
 
-    patterns
-        .add<FenceAsyncSharedOpPattern, StoreMatrixOpPattern,
-             ClusterArriveOpPattern, WGMMAOpPattern, WGMMAWaitGroupOpPattern>(
-            context);
+    patterns.add<FenceAsyncSharedOpPattern, LoadMatrixOpPattern,
+                 StoreMatrixOpPattern, ClusterArriveOpPattern, WGMMAOpPattern,
+                 WGMMAWaitGroupOpPattern>(context);
 
     if (applyPatternsAndFoldGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
