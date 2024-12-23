@@ -164,7 +164,8 @@ proton-viewer -h
 
 ### `cpu_timed_scope`
 
-There's a new utility `cpu_timed_scope` that can be used to measure the CPU time of a scope. The following example demonstrates how to use `cpu_timed_scope`.
+`cpu_timed_scope` is a utility that wraps `scope` to measure the CPU time of a scope along with other metrics.
+The following example demonstrates how to use `cpu_timed_scope`:
 
 ```python
 import triton.profiler as proton
@@ -177,9 +178,10 @@ Note that the output metrics of `cpu_timed_scope` is `cpu_time`. We use `time` t
 
 ### Metrics suffix
 
-There are three types of metrics in proton, including inclusive, exclusive, and property metrics.
-By default a metric is inclusive.
-They are differentiated by the suffix of the metric name. The following table lists the suffixes of each type of metric and their meanings:
+There are three types of metrics in proton: inclusive, exclusive, and property metrics.
+By default, a metric is inclusive.
+The metric types are distinguished by the suffix of their names.
+The following table shows the suffix for each type and its meaning:
 
 | Suffix | Name | Meaning |
 | --- | --- | --- |

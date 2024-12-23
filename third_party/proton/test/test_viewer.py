@@ -18,6 +18,10 @@ def test_help():
     assert ret == 0
 
 
+def test_exclusive_metrics():
+    pass
+
+
 def test_sort():
     with open(leaf_example_file, "r") as f:
         gf, raw_metrics, device_info = get_raw_metrics(f)
