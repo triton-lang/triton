@@ -273,21 +273,28 @@ struct DotOpMFMAConversionHelper {
             // Let say A=[1,2]; B=[3,4], C = A*B = 1*3+2*4 = 11
             // Consider instruction K size is 4,
             // in this case operands will be duplicated:
-            // A'=[1,2,1,2] B'=[3,4,3,4]
+            // A' = [1,2,1,2] B' = [3,4,3,4]
             // C' = (1*3+2*4) + (1*3+2*4) = 22
             //
             // Following code adjusts accumulator values in such cases.
+            // If accumulator is integer, shift accumulator right by
+            // log2(duplicationRate) If accumulator is float, multiply accum
+            // with 1/duplicationRate constant
             if (kDimInstrSize > kDimOperandSize) {
               assert(kDimInstrSize % kDimOperandSize == 0);
               int duplicationRate = kDimInstrSize / kDimOperandSize;
+              assert(llvm::isPowerOf2_32(duplicationRate));
               if (dstElemTy.isInteger()) {
-                accElem = sdiv(accElem, i32_val(duplicationRate));
+                auto shiftSize = llvm::Log2_32(duplicationRate);
+                assert(!accElem.getType().isUnsignedInteger() &&
+                       "MFMA uses signed accumulator");
+                accElem = ashr(accElem, i32_val(shiftSize));
               } else {
-                auto attr = rewriter.getFloatAttr(dstElemTy, duplicationRate);
-                auto duplicationRateVal =
-                    rewriter.create<LLVM::ConstantOp>(loc, dstElemTy, attr);
-                accElem = rewriter.create<LLVM::FDivOp>(loc, dstElemTy, accElem,
-                                                        duplicationRateVal);
+                auto multiplierAttr =
+                    rewriter.getFloatAttr(dstElemTy, 1.0 / duplicationRate);
+                auto multiplierVal = rewriter.create<LLVM::ConstantOp>(
+                    loc, dstElemTy, multiplierAttr);
+                accElem = fmul(accElem, multiplierVal);
               }
             }
             auto linearIdx = b * numRepM * numRepN * elemsPerVec +
