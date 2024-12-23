@@ -84,6 +84,7 @@ jobs:
           pip uninstall -y triton
           cd python
           pip install -v -e .
+          pip install numpy==1.26.4
       - name: Run Perf Kernels Unit Tests
         run: |
           pytest -vvv ./python/perf-kernels/flash-attention.py
