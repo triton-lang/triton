@@ -1,3 +1,23 @@
+# streak gemm script v0.4
+
+### features added:
+- enable tuning with different kernels from command line, default for streamk_kernel
+- change persistent_gemm kernel back
+-
+
+### command line example
+
+tuning shapes using persistent_gemm
+```
+python tune_streamk.py --gemm_size_file input.yaml --kernel persistent_gemm,persistent_gemm --ngpus 8 --jobs 24
+```
+
+test correctness using streamk_kernel
+```
+python tune_streamk.py --gemm_size_file tuning_results.yaml --compare_wo_tuning --kernel streamk_kernel,streamk_gemm
+
+```
+
 # streamk gemm script v0.3
 
 ### features added:

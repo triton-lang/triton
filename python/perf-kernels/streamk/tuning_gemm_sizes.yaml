@@ -1,0 +1,80 @@
+# If new gemm sizes/configs are added please provide a fallback tuned config in fallback_configs.yaml.
+# The fallback configs will be used in case the weekly tuning has not been run
+#
+- {'M': 4864, 'N': 4096, 'K': 4096, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 4864, 'N': 4096, 'K': 4160, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 4864, 'N': 4096, 'K': 4224, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 4864, 'N': 4096, 'K': 4288, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+
+- {'M': 4864, 'N': 4096, 'K': 4097, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 4864, 'N': 4096, 'K': 4098, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 4864, 'N': 4096, 'K': 4100, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 4864, 'N': 4096, 'K': 4104, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 4864, 'N': 4096, 'K': 4112, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+
+- {'M': 4864, 'N': 8192, 'K': 4096, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 4864, 'N': 8192, 'K': 4160, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 4864, 'N': 8192, 'K': 8192, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 4864, 'N': 8192, 'K': 8256, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+
+- {'M': 1024, 'N': 1024, 'K': 1024, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 1024, 'N': 1024, 'K': 1024, 'rowMajorA': 'T', 'rowMajorB': 'T'}
+- {'M': 8192, 'N': 8192, 'K': 8192, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 8192, 'N': 8192, 'K': 8192, 'rowMajorA': 'T', 'rowMajorB': 'T'}
+
+- {'M': 4864, 'N': 4096, 'K': 8256, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 4864, 'N': 4096, 'K': 8256, 'rowMajorA': 'T', 'rowMajorB': 'T'}
+
+- {'M': 1024, 'N': 8192, 'K': 28672, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 1024, 'N': 8192, 'K': 28672, 'rowMajorA': 'T', 'rowMajorB': 'T'}
+- {'M': 1024, 'N': 28672, 'K': 8192, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 1024, 'N': 28672, 'K': 8192, 'rowMajorA': 'T', 'rowMajorB': 'T'}
+- {'M': 1024, 'N': 14336, 'K': 4096, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 1024, 'N': 14336, 'K': 4096, 'rowMajorA': 'T', 'rowMajorB': 'T'}
+- {'M': 1, 'N': 8192, 'K': 28672, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 1, 'N': 8192, 'K': 28672, 'rowMajorA': 'T', 'rowMajorB': 'T'}
+- {'M': 1, 'N': 14336, 'K': 4096, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 1, 'N': 14336, 'K': 4096, 'rowMajorA': 'T', 'rowMajorB': 'T'}
+- {'M': 1024, 'N': 16384, 'K': 53248, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 1024, 'N': 16384, 'K': 53248, 'rowMajorA': 'T', 'rowMajorB': 'T'}
+- {'M': 1024, 'N': 53248, 'K': 16384, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 1024, 'N': 53248, 'K': 16384, 'rowMajorA': 'T', 'rowMajorB': 'T'}
+- {'M': 32, 'N': 16384, 'K': 53248, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 32, 'N': 16384, 'K': 53248, 'rowMajorA': 'T', 'rowMajorB': 'T'}
+- {'M': 32, 'N': 53248, 'K': 16384, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 32, 'N': 53248, 'K': 16384, 'rowMajorA': 'T', 'rowMajorB': 'T'}
+
+- {'M': 2, 'N': 3584, 'K': 4096, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 2, 'N': 3584, 'K': 4096, 'rowMajorA': 'T', 'rowMajorB': 'T'}
+- {'M': 2, 'N': 4096, 'K': 1792, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 2, 'N': 4096, 'K': 1792, 'rowMajorA': 'T', 'rowMajorB': 'T'}
+- {'M': 4096, 'N': 13312, 'K': 8896, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 4096, 'N': 13312, 'K': 8896, 'rowMajorA': 'T', 'rowMajorB': 'T'}
+- {'M': 2048, 'N': 17792, 'K': 13312, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 2048, 'N': 17792, 'K': 13312, 'rowMajorA': 'T', 'rowMajorB': 'T'}
+- {'M': 1024, 'N': 13312, 'K': 1664, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 1024, 'N': 13312, 'K': 1664, 'rowMajorA': 'T', 'rowMajorB': 'T'}
+
+- {'M': 8192, 'N': 1536, 'K': 5120, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 8192, 'N': 1536, 'K': 5120, 'rowMajorA': 'T', 'rowMajorB': 'T'}
+- {'M': 8192, 'N': 5120, 'K': 1024, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 8192, 'N': 5120, 'K': 1024, 'rowMajorA': 'T', 'rowMajorB': 'T'}
+- {'M': 8192, 'N': 1024, 'K': 5120, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 8192, 'N': 1024, 'K': 5120, 'rowMajorA': 'T', 'rowMajorB': 'T'}
+- {'M': 32768, 'N': 5120, 'K': 512, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 32768, 'N': 5120, 'K': 512, 'rowMajorA': 'T', 'rowMajorB': 'T'}
+- {'M': 512, 'N': 1536, 'K': 5120, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 512, 'N': 1536, 'K': 5120, 'rowMajorA': 'T', 'rowMajorB': 'T'}
+- {'M': 512, 'N': 5120, 'K': 1024, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 512, 'N': 5120, 'K': 1024, 'rowMajorA': 'T', 'rowMajorB': 'T'}
+- {'M': 512, 'N': 1024, 'K': 5120, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 512, 'N': 1024, 'K': 5120, 'rowMajorA': 'T', 'rowMajorB': 'T'}
+- {'M': 2048, 'N': 5120, 'K': 512, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 2048, 'N': 5120, 'K': 512, 'rowMajorA': 'T', 'rowMajorB': 'T'}
+
+- {'M': 20196, 'N': 512, 'K': 1536, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 20196, 'N': 512, 'K': 1536, 'rowMajorA': 'T', 'rowMajorB': 'T'}
+- {'M': 171792, 'N': 512, 'K': 1536, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 171792, 'N': 512, 'K': 1536, 'rowMajorA': 'T', 'rowMajorB': 'T'}
+- {'M': 173318, 'N': 512, 'K': 1536, 'rowMajorA': 'T', 'rowMajorB': 'N'}
+- {'M': 173318, 'N': 512, 'K': 1536, 'rowMajorA': 'T', 'rowMajorB': 'T'}

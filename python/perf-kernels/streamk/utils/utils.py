@@ -69,7 +69,7 @@ def get_filename_profile_driver(M, N, K, job_id):
     return f"{path}/../profile_driver_{M}x{N}x{K}_{job_id}.py"
 
 
-def get_default_tuning_result_filename():
+def get_default_tuning_result_filename(kernel_name):
     git_branch_name = run_bash_command("git rev-parse --abbrev-ref HEAD")
     git_branch_name = git_branch_name[0].decode()
     # handle branch name of "xxx/xxx" format
@@ -80,7 +80,7 @@ def get_default_tuning_result_filename():
     dt_string = datetime.now().strftime("%m-%d-%Y-%H:%M:%S")
 
     path = os.path.dirname(os.path.abspath(__file__))
-    defaultName = f"{path}/../tuning_results_{git_branch_name}@{git_commit_hash}_{dt_string}.yaml"
+    defaultName = f"{path}/../tuning_results@{kernel_name}@{git_branch_name}@{git_commit_hash}_{dt_string}.yaml"
     return defaultName
 
 

@@ -3,7 +3,7 @@ import triton.language as tl
 
 
 @triton.jit()
-def streamk_gemm(
+def persistent_gemm(
     A,
     B,
     C,

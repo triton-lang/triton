@@ -4,7 +4,7 @@ import random
 
 from streamk_kernel import streamk_gemm
 #from streamk_kernel_atomic import streamk_gemm
-#from persistent_gemm import streamk_gemm
+#from persistent_gemm import persistent_gemm
 
 torch.manual_seed(123)
 random.seed(123)
