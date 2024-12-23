@@ -65,8 +65,8 @@ private:
     auto llvmElemTy = typeConverter->convertType(
         cast<MemDescType>(src.getType()).getElementType());
 
-    auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
-                                                   llvmElemTy, rewriter);
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
+                                                         llvmElemTy, rewriter);
     Value res;
     auto dopOpParent = dotOperandLayout.getParent();
     if (isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>(dopOpParent)) {
