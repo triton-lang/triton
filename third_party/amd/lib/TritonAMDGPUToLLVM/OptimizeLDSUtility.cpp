@@ -68,9 +68,13 @@ Attribute createTmpLayout(Attribute layout, ArrayRef<unsigned> warpsPerCTA) {
         ctx, src.getOpIdx(), createTmpLayout(src.getParent(), warpsPerCTA),
         src.getKWidth());
   }
-  if (auto src = dyn_cast<triton::gpu::SliceEncodingAttr>(layout))
+  if (auto src = dyn_cast<triton::gpu::SliceEncodingAttr>(layout)) {
+    // TODO: think of a way to construct slice layouts based on warpsPerCTA
+    // argument
+    auto parentWarpsPerCTA = triton::gpu::getWarpsPerCTA(src.getParent());
     return triton::gpu::SliceEncodingAttr::get(
-        ctx, src.getDim(), createTmpLayout(src.getParent(), warpsPerCTA));
+        ctx, src.getDim(), createTmpLayout(src.getParent(), parentWarpsPerCTA));
+  }
   assert("Encountered unsupported layout");
   return Attribute();
 }
