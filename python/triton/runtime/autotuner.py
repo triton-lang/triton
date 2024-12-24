@@ -386,6 +386,7 @@ def heuristics(values):
 
     .. highlight:: python
     .. code-block:: python
+
         # smallest power-of-two >= x_size
         @triton.heuristics(values={'BLOCK_SIZE': lambda args: triton.next_power_of_2(args['x_size'])})
         @triton.jit
