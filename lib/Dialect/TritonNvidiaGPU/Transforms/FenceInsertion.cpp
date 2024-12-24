@@ -44,7 +44,7 @@ public:
       return;
     ModuleOp mod = getOperation();
     mod.walk([&](Operation *op) {
-      if (!isa<ttng::WarpGroupDotOp>(op))
+      if (!op->hasTrait<OpTrait::DotLike>())
         return WalkResult::advance();
       OpBuilder builder(op);
       auto a = op->getOperand(0);
