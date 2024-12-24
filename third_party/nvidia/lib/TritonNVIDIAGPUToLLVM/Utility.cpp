@@ -8,8 +8,8 @@ namespace LLVM {
 namespace NVIDIA {
 using namespace mlir::triton;
 
-static Value shuffleCommon(Location loc, RewriterBase &rewriter, Value val,
-                           Value i, NVVM::ShflKind mode, Value clamp) {
+static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter, Value val,
+                               Value i, NVVM::ShflKind mode, Value clamp) {
   unsigned bits = val.getType().getIntOrFloatBitWidth();
 
   if (bits == 64) {
@@ -17,8 +17,8 @@ static Value shuffleCommon(Location loc, RewriterBase &rewriter, Value val,
     Value vec = bitcast(val, vecTy);
     Value val0 = extract_element(f32_ty, vec, i32_val(0));
     Value val1 = extract_element(f32_ty, vec, i32_val(1));
-    val0 = shuffleCommon(loc, rewriter, val0, i, mode, clamp);
-    val1 = shuffleCommon(loc, rewriter, val1, i, mode, clamp);
+    val0 = shuffleCommonImpl(loc, rewriter, val0, i, mode, clamp);
+    val1 = shuffleCommonImpl(loc, rewriter, val1, i, mode, clamp);
     vec = undef(vecTy);
     vec = insert_element(vecTy, vec, val0, i32_val(0));
     vec = insert_element(vecTy, vec, val1, i32_val(1));
@@ -38,6 +38,18 @@ static Value shuffleCommon(Location loc, RewriterBase &rewriter, Value val,
       result = trunc(int_ty(bits), result);
     result = bitcast(result, type);
   }
+  return result;
+}
+
+static Value shuffleCommon(Location loc, RewriterBase &rewriter, Value val,
+                           Value i, NVVM::ShflKind mode, Value clamp) {
+  // To shuffle pointers, convert them to i64.
+  Type valTy = val.getType();
+  if (isa<LLVM::LLVMPointerType>(valTy))
+    val = ptrtoint(i64_ty, val);
+  Value result = shuffleCommonImpl(loc, rewriter, val, i, mode, clamp);
+  if (isa<LLVM::LLVMPointerType>(valTy))
+    result = inttoptr(valTy, result);
   return result;
 }
 
