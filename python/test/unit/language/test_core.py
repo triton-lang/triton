@@ -1688,6 +1688,38 @@ def test_load_scope_sem_coop_grid_cta_one(device):
     out = kernel_r[(2, )](data, BLOCK_SIZE=block_size, num_ctas=1, launch_cooperative_grid=False)
 
 
+@pytest.mark.interpreter
+@pytest.mark.skipif(is_hip(), reason="Not implemented for AMD At this moment")
+def test_load_scope_sem(device):
+
+    @triton.jit
+    def kernel_r(ptrs, BLOCK_SIZE: tl.constexpr):
+        numel = 512
+        offset = tl.program_id(0) * BLOCK_SIZE
+        index = offset
+        mask = index < numel
+
+        a = tl.atomic_add(ptrs, 0, sem='acquire', scope='gpu', mask=mask)
+        tl.atomic_xchg(ptrs, a, sem='release', scope='gpu')
+
+        a = tl.atomic_add(ptrs, 0, sem='acquire', scope='cta')
+        tl.atomic_xchg(ptrs, a + 1, sem='release', scope='cta', mask=mask)
+
+        a = a + tl.atomic_add(ptrs, 0, sem='acquire', scope='sys', mask=mask)
+        tl.atomic_xchg(ptrs, a + 1, sem='release', scope='sys')
+
+    block_size = 128
+    data = torch.zeros((128, ), device=device, dtype=torch.float32)
+
+    out = kernel_r[(2, )](data, BLOCK_SIZE=block_size, launch_cooperative_grid=True)
+
+    asm = out.asm['ptx']
+
+    assert len(re.findall("ld.global.gpu.acquire", asm)) == 1
+    assert len(re.findall("ld.global.cta.acquire", asm)) == 1
+    assert len(re.findall("ld.global.sys.acquire", asm)) == 1
+
+
 # ---------------
 # test cast
 # ---------------

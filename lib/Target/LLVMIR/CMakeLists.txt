@@ -1,6 +1,7 @@
 add_triton_library(TritonLLVMIR
         LLVMDIScope.cpp
         LLVMIRBreakPhiStruct.cpp
+        LLVMIRInlineAsmRewrite.cpp
 
         DEPENDS
         LLVMIRIncGen
