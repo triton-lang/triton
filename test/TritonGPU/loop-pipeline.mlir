@@ -1,6 +1,6 @@
 // RUN: triton-opt %s -split-input-file -tritongpu-loop-scheduling=num-stages=3 -tritongpu-pipeline=num-stages=3 -canonicalize | FileCheck %s --check-prefixes=COMMON,CHECK
 // RUN: triton-opt %s -split-input-file -tritonamdgpu-stream-pipeline=num_stages=2 -canonicalize | FileCheck %s --check-prefixes=COMMON,AMD
-// RUN: triton-opt %s -split-input-file -tritonamdgpu-stream-pipeline="num_stages=2 prefetch=1" -canonicalize | FileCheck %s --check-prefixes=COMMON,AMD_PREFETCH
+// RUN: triton-opt %s -split-input-file -tritonamdgpu-stream-pipeline="num_stages=2 local_prefetch=1" -canonicalize | FileCheck %s --check-prefixes=COMMON,AMD_PREFETCH
 
 // 4 warps
 // matmul: 128x32 @ 32x128 -> 128x128
@@ -504,16 +504,22 @@ tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
 //       AMD_PREFETCH:   tt.load
 //       AMD_PREFETCH:   tt.load
 //       AMD_PREFETCH:   tt.load
+//       AMD_PREFETCH:   ttg.local_store
+//       AMD_PREFETCH:   ttg.local_store
+//       AMD_PREFETCH:   tt.load
 //       AMD_PREFETCH:   ttg.local_load
+//       AMD_PREFETCH:   tt.load
+//       AMD_PREFETCH:   tt.load
 //       AMD_PREFETCH:   ttg.local_load
 //       AMD_PREFETCH:   scf.for
 //       AMD_PREFETCH:     ttg.local_store
 //       AMD_PREFETCH:     ttg.local_store
 //       AMD_PREFETCH:     tt.load
-//       AMD_PREFETCH:     tt.load
-//       AMD_PREFETCH:     tt.load
-//       AMD_PREFETCH:     tt.dot
 //       AMD_PREFETCH:     ttg.local_load
+//       AMD_PREFETCH:     tt.load
+//       AMD_PREFETCH:     tt.load
+//       AMD_PREFETCH:     ttg.local_load
+//       AMD_PREFETCH:     tt.dot
 //       AMD_PREFETCH:     scf.yield
 //       AMD_PREFETCH:   tt.dot
 //       AMD_PREFETCH:   tt.dot
