@@ -846,12 +846,12 @@ struct AtomicRMWOpConversion
       Value pred = llMask ? maybeAnd(rewriter, loc, threadPred, maskElements[i])
                           : threadPred;
 
-      if (doPTXLDPromotion) {
-        // Should be zero: Value valElement = valElements[i];
-        if (promoteToPTXLD(op, rmwPtr, pred, adaptor, rewriter).failed())
-          return failure();
-        continue;
-      }
+      // if (doPTXLDPromotion) {
+      //   // Should be zero: Value valElement = valElements[i];
+      //   if (promoteToPTXLD(op, rmwPtr, pred, adaptor, rewriter).failed())
+      //     return failure();
+      //   continue;
+      // }
 
       std::string sTy;
       PTXBuilder ptxBuilderAtomicRMW;
