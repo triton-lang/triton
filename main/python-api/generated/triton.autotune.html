@@ -117,8 +117,8 @@
                  <span class="c1"># the value of x_size changes</span>
 <span class="p">)</span>
 <span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
-<span class="k">def</span> <span class="nf">kernel</span><span class="p">(</span><span class="n">x_ptr</span><span class="p">,</span> <span class="n">x_size</span><span class="p">,</span> <span class="o">**</span><span class="n">META</span><span class="p">):</span>
-    <span class="n">BLOCK_SIZE</span> <span class="o">=</span> <span class="n">META</span><span class="p">[</span><span class="s1">&#39;BLOCK_SIZE&#39;</span><span class="p">]</span>
+<span class="k">def</span> <span class="nf">kernel</span><span class="p">(</span><span class="n">x_ptr</span><span class="p">,</span> <span class="n">x_size</span><span class="p">,</span> <span class="n">BLOCK_SIZE</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">):</span>
+    <span class="o">...</span>
 </pre></div>
 </div>
 <dl class="field-list simple">
