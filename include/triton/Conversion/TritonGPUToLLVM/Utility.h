@@ -45,6 +45,8 @@ using namespace mlir::triton;
 #define fadd(...) rewriter.create<LLVM::FAddOp>(loc, __VA_ARGS__)
 #define mul(...) rewriter.create<LLVM::MulOp>(loc, __VA_ARGS__)
 #define fmul(...) rewriter.create<LLVM::FMulOp>(loc, __VA_ARGS__)
+#define fma(...) rewriter.create<LLVM::FMAOp>(loc, __VA_ARGS__)
+#define neg(...) rewriter.create<LLVM::FNegOp>(loc, __VA_ARGS__)
 #define smax(...) rewriter.create<LLVM::SMaxOp>(loc, __VA_ARGS__)
 #define umax(...) rewriter.create<LLVM::UMaxOp>(loc, __VA_ARGS__)
 #define fmax(...) rewriter.create<LLVM::MaxNumOp>(loc, __VA_ARGS__)
