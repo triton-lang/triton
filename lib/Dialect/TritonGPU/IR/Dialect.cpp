@@ -3010,6 +3010,102 @@ struct TritonGPUInferLayoutInterface
                            ArrayRef(enc.getCTAOrder()).drop_front(1)));
     return success();
   }
+
+  LogicalResult
+  inferFp4ToFpOpEncoding(ArrayRef<int64_t> shape, int axis, Attribute inEnc,
+                         Attribute &outEnc, bool fwdInference,
+                         std::optional<Location> loc) const override {
+    // We implement two legacy layout propagations
+    // Once we fully migrate to LinearLayouts, we can remove these.
+    auto *ctx = getContext();
+    auto rank = shape.size();
+    // The output encoding will only be a legacy encoding if the axis is the
+    // fastest running dimension.
+    if (getOrder(inEnc)[axis] == 0) {
+      // Dot operand: double kWidth if kDim == axis.
+      if (auto dotEnc = mlir::dyn_cast<DotOperandEncodingAttr>(inEnc)) {
+        auto kWidth = dotEnc.getKWidth();
+        if (fwdInference) {
+          kWidth *= 2;
+        } else {
+          if (kWidth > 1) {
+            // bwd inference
+            kWidth /= 2;
+          } else {
+            return emitOptionalError(loc,
+                                     "Fp4ToFpOp requires at least 2 elements "
+                                     "per thread in the axis dimension");
+          }
+        }
+        outEnc = DotOperandEncodingAttr::get(ctx, dotEnc.getOpIdx(),
+                                             dotEnc.getParent(), kWidth);
+        return success();
+      }
+
+      // Blocked layout: double elemsPerThread[axis].
+      if (auto blockedEnc = mlir::dyn_cast<BlockedEncodingAttr>(inEnc)) {
+        auto sizePerThread = llvm::to_vector(blockedEnc.getSizePerThread());
+        if (fwdInference) {
+          sizePerThread[axis] *= 2;
+        } else {
+          if (sizePerThread[axis] > 1) {
+            sizePerThread[axis] /= 2;
+          } else {
+            return emitOptionalError(
+                loc, "Fp4ToFpOp requires at least 2 elements per "
+                     "thread in the axis dimension");
+          }
+        }
+        outEnc = BlockedEncodingAttr::get(
+            ctx, sizePerThread, blockedEnc.getThreadsPerWarp(),
+            blockedEnc.getWarpsPerCTA(), blockedEnc.getOrder(),
+            blockedEnc.getCTALayout());
+        return success();
+      }
+    }
+
+    auto optLl = toLinearLayout(shape, inEnc);
+    if (!optLl)
+      return emitOptionalError(
+          loc, "Fp4ToFpOp fallback requires linear layout conversion");
+    auto ll = *optLl;
+
+    auto kRegister = StringAttr::get(ctx, "register");
+    auto outDims = llvm::to_vector(ll.getOutDimNames());
+    LinearLayout newLl = LinearLayout::empty();
+    if (fwdInference) {
+      auto split = LinearLayout::identity1D(2, kRegister, outDims[axis]);
+      newLl = split * ll;
+      // FIXME!!!!
+      // operator* transposes the output dimensions??!! WTF
+      newLl = newLl.transposeOuts(outDims);
+    } else {
+      // TODO This requires a division algorithm!
+      // Implement manually ll.divideLeft(split)
+      auto contiguousElems =
+          LinearEncodingAttr::get(ctx, ll).getContigPerThread();
+      if (contiguousElems[axis] > 1) {
+        LinearLayout::BasesT newBases;
+        for (const auto &basesDim : ll.getBases()) {
+          std::vector<std::vector<int32_t>> newBasesDim;
+          for (auto base : basesDim.second) {
+            if (base[axis] == 1) {
+              continue;
+            }
+            base[axis] /= 2;
+            newBasesDim.push_back(std::move(base));
+          }
+          newBases.insert({basesDim.first, std::move(newBasesDim)});
+        }
+        newLl = LinearLayout(std::move(newBases), std::move(outDims));
+      } else {
+        return emitOptionalError(loc, "Fp4ToFpOp requires at least 2 elements "
+                                      "per thread in the axis dimension");
+      }
+    }
+    outEnc = LinearEncodingAttr::get(ctx, newLl);
+    return success();
+  }
 };
 
 struct TritonGPUVerifyTensorLayoutInterface
