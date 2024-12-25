@@ -2085,7 +2085,8 @@ AMDMfmaEncodingAttr::getRepOrderForOperand(int opIdx) const {
 
 SmallVector<unsigned>
 AMDMfmaEncodingAttr::getThreadsPerWarpForOperand(int opIdx) const {
-  llvm::report_fatal_error("Not implemented");
+  llvm::report_fatal_error(
+      "getThreadsPerWarpForOperand not implemented for AMDMfmaEncodingAttr");
   return {};
 }
 
@@ -2152,7 +2153,8 @@ AMDWmmaEncodingAttr::getRepOrderForOperand(int opIdx) const {
 
 SmallVector<unsigned>
 AMDWmmaEncodingAttr::getThreadsPerWarpForOperand(int opIdx) const {
-  llvm::report_fatal_error("Not implemented");
+  llvm::report_fatal_error("getThreadsPerWarpForOperand not implemented for "
+                           "AMDWmmaEncodingAttr");
   return {};
 }
 
@@ -2414,7 +2416,7 @@ SmallVector<unsigned> DotOperandEncodingAttr::getThreadsPerWarp() const {
     return mma.getThreadsPerWarpForOperand(getOpIdx());
   }
   llvm::report_fatal_error(
-      "getRepOrder not implemented for DotOperandEncodingAttr");
+      "getThreadsPerWarp not implemented for DotOperandEncodingAttr");
   return {};
 }
 SmallVector<unsigned> DotOperandEncodingAttr::getSizePerThread() const {
