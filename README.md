@@ -196,6 +196,7 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
 - `TRITON_ENABLE_ASAN=1` invokes the LLVM address sanitizer for
   memory leak and out of bounds access detection. Currently only supported on the AMD
   backend. This must be run using the ASAN libraries documented [here](https://rocm.docs.amd.com/projects/llvm-project/en/latest/conceptual/using-gpu-sanitizer.html).
+
   When enabling the address sanitizer it is recommended to disable various memory caching strategies
   both within the ROCm stack and PyTorch. This will give the address sanitizer the best chance at finding the
   memory fault where it originates. This can be done through the HSA_DISABLE_FRAGMENT_ALLOCATOR, AMD_PYTORCH_NO_CUDA_MEMORY_CACHING,
