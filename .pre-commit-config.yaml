@@ -23,12 +23,6 @@ repos:
       - id: ruff
         files: '^python/.*'
         args: ["--fix", "--exit-non-zero-on-fix"]
-        exclude: |
-          (?x)(
-            ^python/triton/runtime/.*|
-            ^test/|
-            ^docs/conf.py$
-          )
 
   - repo: https://github.com/google/yapf
     rev: "7e21823"
