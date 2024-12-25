@@ -201,8 +201,6 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
   memory fault where it originates. This can be done through the HSA_DISABLE_FRAGMENT_ALLOCATOR, AMD_PYTORCH_NO_CUDA_MEMORY_CACHING,
   and PYTORCH_NO_HIP_MEMORY_CACHING environment variables.
 
-  If you experience hangs while ASAN is enabled check the system ulimit value (`ulimit -n`). If this number is large it can cause issues with launching the `llvm-symbolizer`. It is recommended to have it set it to the linux default (`ulimit -s 1024`).
-
 - `USE_IR_LOC={ttir,ttgir}` reparses the IR such that the location information
   will be the line number of the IR file with that particular extension,
   instead of line number of the python file. This can provide a direct mapping
