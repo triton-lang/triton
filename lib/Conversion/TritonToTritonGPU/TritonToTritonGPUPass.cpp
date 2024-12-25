@@ -16,6 +16,8 @@
 #include "triton/Conversion/TritonToTritonGPU/Passes.h.inc"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
+#include "third_party/proton/dialect/include/Dialect/Proton/IR/Dialect.h"
+
 namespace {
 
 using namespace mlir;
@@ -544,7 +546,8 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       GenericOpPattern<triton::StoreOp>, GenericOpPattern<triton::HistogramOp>,
       GenericOpPattern<triton::GatherOp>,
       GenericOpPattern<triton::ExternElementwiseOp>,
-      GenericOpPattern<triton::PrintOp>, GenericOpPattern<triton::AssertOp>,
+      GenericOpPattern<triton::proton::RecordOp>, GenericOpPattern<triton::PrintOp>, 
+      GenericOpPattern<triton::AssertOp>,
       GenericOpPattern<triton::AtomicCASOp>,
       GenericOpPattern<triton::AtomicRMWOp>, GenericOpPattern<ReturnOp>,
       GenericOpPattern<triton::ExperimentalDescriptorLoadOp>,

@@ -31,6 +31,8 @@
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/Support/SourceMgr.h"
 
+#include "third_party/proton/dialect/include/Dialect/Proton/IR/Dialect.h"
+
 namespace {
 
 namespace py = pybind11;
@@ -234,7 +236,7 @@ void init_triton_ir(py::module &&m) {
     DialectRegistry registry;
     registry.insert<TritonDialect, ::mlir::triton::gpu::TritonGPUDialect,
                     math::MathDialect, arith::ArithDialect, scf::SCFDialect,
-                    ::mlir::gpu::GPUDialect, cf::ControlFlowDialect,
+                    ::mlir::gpu::GPUDialect, cf::ControlFlowDialect, ::mlir::triton::proton::ProtonDialect,
                     LLVM::LLVMDialect, mlir::ub::UBDialect>();
     mlir::LLVM::registerInlinerInterface(registry);
     registerBuiltinDialectTranslation(registry);
@@ -1603,6 +1605,18 @@ void init_triton_ir(py::module &&m) {
                                                llvm::StringRef(prefix));
              self.create<PrintOp>(prefixAttr, hex, values, isSigned);
            })
+      .def("create_record",
+           [](TritonOpBuilder &self, const std::string &prefix, bool hex,
+              const std::vector<Value> &values,
+              const std::vector<int32_t> &isSigned) -> void {
+             auto prefixAttr = StringAttr::get(self.getBuilder().getContext(),
+                                               llvm::StringRef(prefix));
+             self.create<PrintOp>(prefixAttr, hex, values, isSigned);
+           })
+       .def("create_proton_record",
+         [](TritonOpBuilder &self, bool isStart, int32_t regionId) -> void{
+               self.create<mlir::triton::proton::RecordOp>(isStart, regionId);
+         })
       .def("create_assert",
            [](TritonOpBuilder &self, Value &condition,
               const std::string &message) -> void {

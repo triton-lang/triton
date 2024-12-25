@@ -20,6 +20,7 @@ add_triton_library(TritonGPUToLLVM
     SPMDOpToLLVM.cpp
     DecomposeUnsupportedConversions.cpp
     PrintOpToLLVM.cpp
+    RecordOpToLLVM.cpp
 
     DEPENDS
     TritonGPUConversionPassIncGen
@@ -33,6 +34,7 @@ add_triton_library(TritonGPUToLLVM
     MLIRGPUTransforms
     TritonAnalysis
     TritonIR
+    ProtonIR
     TritonGPUIR
     TritonGPUTransforms
     TritonNvidiaGPUTransforms

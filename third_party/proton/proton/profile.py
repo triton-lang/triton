@@ -3,11 +3,52 @@ import triton
 import os
 
 from triton._C.libproton import proton as libproton
+from triton.language import core as tl
+import triton.language
+#from triton._C.libtriton import ir
 from .hook import register_triton_hook, unregister_triton_hook
+from functools import wraps
 from .flags import set_profiling_off, set_profiling_on, is_command_line
-from typing import Optional
+from typing import Optional, TypeVar
+from . import semantic
+import builtins
+
+T = TypeVar('T')
 
 DEFAULT_PROFILE_NAME = "proton"
+TRITON_BUILTIN = "__triton_builtin__"
+
+def builtin(fn: T) -> T:
+    """Mark a function as a builtin."""
+    assert callable(fn)
+
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if "_builder" not in kwargs or kwargs["_builder"] is None:
+            raise ValueError("Did you forget to add @triton.jit ? "
+                             "(`_builder` argument must be provided outside of JIT functions.)")
+        return fn(*args, **kwargs)
+
+    setattr(wrapper, TRITON_BUILTIN, True)
+
+    return wrapper
+
+@builtin
+def record(prefix, *args, hex=False, _builder=None):
+    import string
+    prefix = tl._constexpr_to_value(prefix)
+    assert isinstance(prefix, str), f"{prefix} is not string"
+    b_ascii = True
+    for ch in prefix:
+        if ch not in string.printable:
+            b_ascii = False
+            break
+    assert b_ascii, f"{prefix} is not an ascii string"
+    new_args = []
+    for arg in args:
+        new_args.append(triton.language.semantic.to_tensor(arg, _builder))
+    return semantic.proton_record(True, 0, _builder)
+#    return semantic.record(prefix, new_args, hex, _builder)
 
 
 def _select_backend() -> str:

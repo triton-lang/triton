@@ -7,6 +7,8 @@ add_triton_library(ProtonIR
   ProtonAttrDefsIncGen
 
   LINK_LIBS PUBLIC
+  LLVMSupport
+  MLIRIR
   MLIRLLVMDialect
   TritonIR
   TritonGPUIR
