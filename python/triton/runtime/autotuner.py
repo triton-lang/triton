@@ -210,7 +210,7 @@ class Autotuner(KernelInterface):
                 pruned_configs = self.prune_configs(kwargs)
                 compile_start = time.time()
                 compiled_configs = []
-                with ThreadPoolExecutor() as executor:
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
                     futures = {
                         executor.submit(self._compile, *args, config=config, **kwargs): config
                         for config in pruned_configs
