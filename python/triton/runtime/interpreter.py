@@ -1091,7 +1091,7 @@ class GridExecutor:
             if hasattr(arg_dev, "data_ptr"):
                 # No need to rewrap because this just modifies internal
                 arg_dev, arg_hst = _unwrap_tensor(arg_dev), _unwrap_tensor(arg_hst)
-                arg_dev.untyped_storage().copy_(arg_hst.untyped_storage().to(device=arg_dev.device))
+                arg_dev.untyped_storage().copy_(arg_hst.untyped_storage())
 
 
         # Restore keyword arguments
