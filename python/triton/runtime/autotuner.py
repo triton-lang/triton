@@ -223,9 +223,7 @@ class Autotuner(KernelInterface):
 
                 # Step 2: Linear benchmarking
                 bench_start = time.time()
-                timings = {}
-                for config in compiled_configs:
-                    timings[config] = self._bench(*args, config=config, **kwargs)
+                timings = {config: self._bench(*args, config=config, **kwargs) for config in compiled_configs}
                 bench_end = time.time()
 
                 self.compile_time = compile_end - compile_start
