@@ -6453,8 +6453,10 @@ def test_gather_warp_shuffle(src_shape, indices_shape, axis, src_layout, indices
 
     torch.testing.assert_close(output, ref, rtol=0, atol=0)
 
+
 @pytest.mark.interpreter
 def test_zero_strided_interpreter_tensors(device):
+
     @triton.jit
     def _simple_add(
         X,
@@ -6476,10 +6478,6 @@ def test_zero_strided_interpreter_tensors(device):
     a, b, c = x.shape
     grid = (a, b, c)
     with torch.cuda.device(x.device.index):
-        _simple_add[grid](
-            x,
-            x.stride(0),
-            x.stride(1)
-        )
+        _simple_add[grid](x, x.stride(0), x.stride(1))
 
     assert torch.allclose(x, torch.ones_like(x) * c_dim)

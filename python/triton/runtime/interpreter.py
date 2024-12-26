@@ -1044,10 +1044,12 @@ def _unwrap_tensor(t):
         return t.base
     return t
 
+
 def _rewrap_tensor(t, original_tensor):
     if isinstance(original_tensor, triton.runtime.jit.TensorWrapper):
         return triton.runtime.jit.TensorWrapper(t, original_tensor.dtype)
     return t
+
 
 class GridExecutor:
 
@@ -1061,17 +1063,14 @@ class GridExecutor:
         self.constexprs = [name for name in arg_names if __annotations__.get(name) == "constexpr"]
 
     def _init_args_hst(self, args_dev, kwargs):
+
         def _to_cpu(arg):
             if not hasattr(arg, "data_ptr"):
                 return arg
             unwrapped_arg = _unwrap_tensor(arg)
             cpu_arg = unwrapped_arg.new_empty(0, device='cpu')
-            cpu_arg.set_(
-                unwrapped_arg.untyped_storage().cpu(),
-                unwrapped_arg.storage_offset(),
-                unwrapped_arg.size(),
-                unwrapped_arg.stride()
-            )
+            cpu_arg.set_(unwrapped_arg.untyped_storage().cpu(), unwrapped_arg.storage_offset(), unwrapped_arg.size(),
+                         unwrapped_arg.stride())
             cpu_arg = _rewrap_tensor(cpu_arg, original_tensor=arg)
             return cpu_arg
 
@@ -1092,7 +1091,6 @@ class GridExecutor:
                 # No need to rewrap because this just modifies internal
                 arg_dev, arg_hst = _unwrap_tensor(arg_dev), _unwrap_tensor(arg_hst)
                 arg_dev.untyped_storage().copy_(arg_hst.untyped_storage())
-
 
         # Restore keyword arguments
         for key, kwarg_dev in kwargs.items():
