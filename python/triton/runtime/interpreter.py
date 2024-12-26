@@ -1065,7 +1065,7 @@ class GridExecutor:
             if not hasattr(arg, "data_ptr"):
                 return arg
             unwrapped_arg = _unwrap_tensor(arg)
-            cpu_arg = unwrapped_arg.new_empty(unwrapped_arg.untyped_storage().size() // unwrapped_arg.element_size(), device='cpu')
+            cpu_arg = unwrapped_arg.new_empty(0, device='cpu')
             cpu_arg.set_(
                 unwrapped_arg.untyped_storage().cpu(),
                 unwrapped_arg.storage_offset(),
