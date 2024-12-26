@@ -22,7 +22,7 @@ def register_descriptor(cls):
     return cls
 
 
-@register_descriptor
+@dataclass
 class AttrsDescriptor:
     """
     This class handles compile-time properties for specific function parameters.
