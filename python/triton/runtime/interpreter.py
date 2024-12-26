@@ -1039,6 +1039,16 @@ def _implicit_cvt(arg):
 interpreter_builder = InterpreterBuilder()
 
 
+def _unwrap_tensor(t):
+    if isinstance(t, triton.runtime.jit.TensorWrapper):
+        return t.base
+    return t
+
+def _rewrap_tensor(t, original_tensor):
+    if isinstance(original_tensor, triton.runtime.jit.TensorWrapper):
+        return triton.runtime.jit.TensorWrapper(t, original_tensor.dtype)
+    return t
+
 class GridExecutor:
 
     def __init__(self, fn, arg_names, grid):
@@ -1054,18 +1064,16 @@ class GridExecutor:
         def _to_cpu(arg):
             if not hasattr(arg, "data_ptr"):
                 return arg
-
-            if 0 in arg.stride():
-                cpu_arg = arg.new_empty(arg.size(), device='cpu')
-                cpu_arg.set_(
-                    arg.untyped_storage().cpu(),
-                    arg.storage_offset(),
-                    arg.size(),
-                    arg.stride()
-                )
-                return cpu_arg
-            else:
-                return arg.cpu()
+            unwrapped_arg = _unwrap_tensor(arg)
+            cpu_arg = unwrapped_arg.new_empty(unwrapped_arg.untyped_storage().size() // unwrapped_arg.element_size(), device='cpu')
+            cpu_arg.set_(
+                unwrapped_arg.untyped_storage().cpu(),
+                unwrapped_arg.storage_offset(),
+                unwrapped_arg.size(),
+                unwrapped_arg.stride()
+            )
+            cpu_arg = _rewrap_tensor(cpu_arg, original_tensor=arg)
+            return cpu_arg
 
         args_hst = [_to_cpu(arg) for arg in args_dev]
 
@@ -1081,10 +1089,10 @@ class GridExecutor:
     def _restore_args_dev(self, args_dev, args_hst, kwargs, kwargs_hst):
         for arg_dev, arg_hst in zip(args_dev, args_hst):
             if hasattr(arg_dev, "data_ptr"):
-                if 0 in arg_dev.stride():
-                    arg_dev.untyped_storage().copy_(arg_hst.untyped_storage().to(device=arg_dev.device))
-                else:
-                    arg_dev.data.copy_(arg_hst.to(arg_dev.device).data)
+                # No need to rewrap because this just modifies internal
+                arg_dev, arg_hst = _unwrap_tensor(arg_dev), _unwrap_tensor(arg_hst)
+                arg_dev.untyped_storage().copy_(arg_hst.untyped_storage().to(device=arg_dev.device))
+
 
         # Restore keyword arguments
         for key, kwarg_dev in kwargs.items():
