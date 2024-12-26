@@ -38,7 +38,7 @@ def _find_already_mmapped_dylib_on_linux(lib_name):
     # Load libc and get the dl_iterate_phdr symbol.
     try:
         dl_iterate_phdr = ctypes.CDLL('libc.so.6').dl_iterate_phdr
-    except:
+    except (OSError, AttributeError):
         return None
     # argtypes must use c_char_p to accept create_string_buffer.
     dl_iterate_phdr.argtypes = [callback_t, c_char_p]

@@ -219,8 +219,6 @@ class CUDABackend(BaseBackend):
             cluster_info.clusterDimZ = opt.cluster_dims[2]
         # Set up Diagnostic
         if os.environ.get("MLIR_ENABLE_REMARK", "0") == "1":
-            srcMgr = llvm.source_mgr()
-            diag = ir.source_mgr_diag(srcMgr, mod.context)
             mod.context.printOpOnDiagnostic(True)
         # TTIR -> TTGIR
         pm = ir.pass_manager(mod.context)
@@ -273,8 +271,6 @@ class CUDABackend(BaseBackend):
         pm.enable_debug()
         # Set up Diagnostic
         if os.environ.get("MLIR_ENABLE_REMARK", "0") == "1":
-            srcMgr = llvm.source_mgr()
-            diag = ir.source_mgr_diag(srcMgr, mod.context)
             mod.context.printOpOnDiagnostic(True)
         nvidia.passes.ttgpuir.add_decompose_unsupported_conversions(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)

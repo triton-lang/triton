@@ -1,0 +1,2 @@
+# See https://llvm.org/docs/CommandGuide/lit.html#test-suites
+builtins = ["config", "lit_config"]

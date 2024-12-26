@@ -1,11 +1,9 @@
 import tempfile
 
-import numpy as np
 import pytest
 import torch
 
 import triton
-import triton.language as tl
 
 from triton._internal_testing import is_hip
 
@@ -101,7 +99,6 @@ def test_extract_slice(dtype, M, N, M_tile_size, N_tile_size, M_tile_offset, N_t
     }}
     """
     x = torch.randn((M, N), device=device, dtype=torch.float16)
-    import tempfile
     with tempfile.NamedTemporaryFile(mode='w', suffix='.ttgir') as f:
         f.write(ir)
         f.flush()
