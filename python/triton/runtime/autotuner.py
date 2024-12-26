@@ -137,7 +137,6 @@ class Autotuner(KernelInterface):
             raise ValueError(f"Conflicting meta-parameters: {', '.join(conflicts)}."
                              " Make sure that you don't re-define auto-tuned symbols.")
         current = dict(meta, **config.all_kwargs())
-        full_nargs = {**self.nargs, **current}
 
         try:
             # Attempt to execute the kernel with all arguments
