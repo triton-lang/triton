@@ -1051,12 +1051,24 @@ class GridExecutor:
         self.constexprs = [name for name in arg_names if __annotations__.get(name) == "constexpr"]
 
     def _init_args_hst(self, args_dev, kwargs):
-        args_hst = []
-        for arg in args_dev:
-            if hasattr(arg, "data_ptr"):
-                args_hst.append(arg.cpu())
+        def _to_cpu(arg):
+            if not hasattr(arg, "data_ptr"):
+                return arg
+
+            if 0 in arg.stride():
+                cpu_arg = arg.new_empty(arg.size(), device='cpu')
+                cpu_arg.set_(
+                    arg.untyped_storage().cpu(),
+                    arg.storage_offset(),
+                    arg.size(),
+                    arg.stride()
+                )
+                return cpu_arg
             else:
-                args_hst.append(arg)
+                return arg.cpu()
+
+        args_hst = [_to_cpu(arg) for arg in args_dev]
+
         # Process keyword arguments
         kwargs_hst = {}
         for key, value in kwargs.items():
@@ -1069,7 +1081,10 @@ class GridExecutor:
     def _restore_args_dev(self, args_dev, args_hst, kwargs, kwargs_hst):
         for arg_dev, arg_hst in zip(args_dev, args_hst):
             if hasattr(arg_dev, "data_ptr"):
-                arg_dev.data.copy_(arg_hst.to(arg_dev.device).data)
+                if 0 in arg_dev.stride():
+                    arg_dev.untyped_storage().copy_(arg_hst.untyped_storage().to(device=arg_dev.device))
+                else:
+                    arg_dev.data.copy_(arg_hst.to(arg_dev.device).data)
 
         # Restore keyword arguments
         for key, kwarg_dev in kwargs.items():
