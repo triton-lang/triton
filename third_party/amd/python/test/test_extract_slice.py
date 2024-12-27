@@ -2,9 +2,7 @@ import tempfile
 
 import pytest
 import torch
-
 import triton
-
 from triton._internal_testing import is_hip
 
 num_ctas_list = [1]

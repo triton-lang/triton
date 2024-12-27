@@ -1,4 +1,4 @@
-from typing import Tuple, List, Any
+from typing import Any, List, Tuple
 
 # Poor man's PyTree
 

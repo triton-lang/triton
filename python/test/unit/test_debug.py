@@ -1,7 +1,8 @@
 import pytest
 import torch
-import triton.language as tl
+
 import triton
+import triton.language as tl
 
 
 @pytest.mark.parametrize('cond', [True, False])

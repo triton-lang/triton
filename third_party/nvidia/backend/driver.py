@@ -1,16 +1,17 @@
 import functools
-import os
-import sysconfig
 import hashlib
+import os
 import subprocess
+import sysconfig
 import tempfile
 from pathlib import Path
-from triton.runtime.build import _build
-from triton.runtime.cache import get_cache_manager
-from triton.runtime import _allocation
+
+from triton._utils import parse_list_string
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver
-from triton._utils import parse_list_string
+from triton.runtime import _allocation
+from triton.runtime.build import _build
+from triton.runtime.cache import get_cache_manager
 
 dirname = os.path.dirname(os.path.realpath(__file__))
 include_dir = [os.path.join(dirname, "include")]

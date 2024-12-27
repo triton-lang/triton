@@ -1,7 +1,8 @@
 import pathlib
+
 import triton
-from triton.compiler import IRSource, make_backend
 from triton._C.libtriton import ir
+from triton.compiler import IRSource, make_backend
 
 target = triton.runtime.driver.active.get_current_target()
 backend = make_backend(target)

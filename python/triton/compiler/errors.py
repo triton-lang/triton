@@ -1,5 +1,6 @@
 import ast
 from typing import Optional
+
 from ..errors import TritonError
 
 

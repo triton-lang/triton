@@ -1,19 +1,19 @@
-from triton.backends.compiler import BaseBackend, GPUTarget
-from triton._C.libtriton import ir, passes, llvm, nvidia
-from triton.runtime.errors import PTXASError
-
-from dataclasses import dataclass
 import functools
-from typing import Any, Dict, Tuple, Optional
-from types import ModuleType
 import hashlib
-import re
-import tempfile
-import signal
 import os
+import re
+import signal
 import subprocess
-from pathlib import Path
 import sysconfig
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+from types import ModuleType
+from typing import Any, Dict, Optional, Tuple
+
+from triton._C.libtriton import ir, llvm, nvidia, passes
+from triton.backends.compiler import BaseBackend, GPUTarget
+from triton.runtime.errors import PTXASError
 
 
 def min_dot_size(target: GPUTarget):

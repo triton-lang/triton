@@ -1,7 +1,7 @@
+import pytest
 import torch
 
 import triton
-import pytest
 import triton.language as tl
 
 

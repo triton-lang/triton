@@ -1,8 +1,10 @@
 from __future__ import annotations
+
+import pytest
 import torch
+
 import triton
 import triton.language as tl
-import pytest
 
 
 def annotated_function(return_type=None, **arg_types):

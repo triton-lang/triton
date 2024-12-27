@@ -1,12 +1,13 @@
+import hashlib
 import os
 import re
-import hashlib
 import subprocess
 import sysconfig
 from abc import ABCMeta, abstractmethod
 from dataclasses import dataclass
-from typing import Dict, List, Tuple, Union
 from types import ModuleType
+from typing import Dict, List, Tuple, Union
+
 from .._utils import find_paths_if
 
 # Table that associates strings to AttrsDescriptor (sub)classes.

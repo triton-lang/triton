@@ -1,18 +1,19 @@
 import ast
-import textwrap
 import inspect
+import math
+import textwrap
+from dataclasses import dataclass
+from functools import partial
 from typing import Tuple
 
-import math
 import numpy as np
 
 import triton
 import triton.language as tl
-from dataclasses import dataclass
-from .errors import InterpreterError
-from functools import partial
+
 from .._C.libtriton import interpreter as _interpreter
 from .._C.libtriton import ir as _ir
+from .errors import InterpreterError
 
 
 class TensorHandle:
@@ -1182,7 +1183,7 @@ class FunctionRewriter:
         return self._compile_and_exec(transformed_ast)
 
     def _get_jit_fn_file_line(self):
-        from .jit import get_jit_fn_file_line, JITFunction
+        from .jit import JITFunction, get_jit_fn_file_line
         return get_jit_fn_file_line(JITFunction(self.fn))
 
     def _find_def(self, lines):

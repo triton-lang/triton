@@ -1,9 +1,9 @@
-import random
-import torch
-import math
-
-import triton.profiler as proton
 import argparse
+import math
+import random
+
+import torch
+import triton.profiler as proton
 
 mode = "torch"
 

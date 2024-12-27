@@ -1,5 +1,6 @@
-from ..errors import TritonError
 from typing import Optional
+
+from ..errors import TritonError
 
 
 class InterpreterError(TritonError):

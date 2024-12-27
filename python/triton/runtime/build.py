@@ -1,10 +1,11 @@
 import contextlib
-import sys
 import io
-import sysconfig
 import os
 import shutil
 import subprocess
+import sys
+import sysconfig
+
 import setuptools
 
 

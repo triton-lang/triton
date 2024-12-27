@@ -15,15 +15,15 @@ Triton automatically selects the correct underlying device function to invoke ba
 #  asin Kernel
 # ------------
 
+import inspect
+import os
+from pathlib import Path
+
 import torch
 
 import triton
 import triton.language as tl
-import inspect
-import os
 from triton.language.extra import libdevice
-
-from pathlib import Path
 
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
 

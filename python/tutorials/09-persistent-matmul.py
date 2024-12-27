@@ -20,15 +20,15 @@ Note that currently this tutorial will fail on devices with a small shared memor
 """
 
 import argparse
+from contextlib import contextmanager
+from typing import Optional
 
 import torch
+
 import triton
 import triton.language as tl
-import triton.tools.experimental_descriptor
 import triton.profiler as proton
-from contextlib import contextmanager
-
-from typing import Optional
+import triton.tools.experimental_descriptor
 
 if torch.cuda.is_available():
     from triton._C.libtriton import nvidia

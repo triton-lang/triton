@@ -13,7 +13,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton.common.backend import (BaseBackend, compute_core_version_key, register_backend)
+from triton.common.backend import BaseBackend, compute_core_version_key, register_backend
 from triton.common.build import quiet
 from triton.compiler.make_launcher import make_so_cache_key
 from triton.runtime.cache import get_cache_manager

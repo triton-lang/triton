@@ -1,15 +1,15 @@
 import importlib.util
 import itertools
-import shutil
 import pathlib
+import shutil
 
 import pytest
 import torch
 
 import triton
 import triton.language as tl
-from triton.runtime.jit import JITFunction
 from triton._internal_testing import is_hip
+from triton.runtime.jit import JITFunction
 
 
 @triton.jit

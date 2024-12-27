@@ -1,6 +1,7 @@
 import os
-import pytest
 import tempfile
+
+import pytest
 
 
 def pytest_addoption(parser):

@@ -1,8 +1,7 @@
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence, Union
-
-from dataclasses import dataclass
 
 
 def _exists(x):

@@ -1,14 +1,15 @@
 import functools
-import os
 import hashlib
+import os
 import subprocess
 import tempfile
 from pathlib import Path
-from triton.runtime.build import _build
-from triton.runtime.cache import get_cache_manager
+
+from triton._utils import parse_list_string
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver
-from triton._utils import parse_list_string
+from triton.runtime.build import _build
+from triton.runtime.cache import get_cache_manager
 
 dirname = os.path.dirname(os.path.realpath(__file__))
 include_dir = [os.path.join(dirname, "include")]
@@ -23,7 +24,7 @@ def _find_already_mmapped_dylib_on_linux(lib_name):
     # See https://www.man7.org/linux/man-pages/man3/dl_iterate_phdr.3.html for details.
 
     import ctypes
-    from ctypes import c_char, c_int, c_size_t, c_void_p, c_char_p, POINTER
+    from ctypes import POINTER, c_char, c_char_p, c_int, c_size_t, c_void_p
 
     class DlPhdrInfo(ctypes.Structure):
         _fields_ = [

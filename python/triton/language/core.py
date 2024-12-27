@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-from warnings import warn
+import builtins
+import inspect
+import os
+import typing
 from contextlib import contextmanager
 from enum import Enum
 from functools import partial, wraps
-import typing
-from typing import Union, Callable, List, Sequence, TypeVar, Optional
-import builtins
-from ..runtime.jit import jit
-import inspect
-import os
+from typing import Callable, List, Optional, Sequence, TypeVar, Union
+from warnings import warn
 
 from .._C.libtriton import ir
+from ..runtime.jit import jit
 from . import semantic
 from ._utils import TRITON_MAX_TENSOR_NUMEL, validate_block_shape
 

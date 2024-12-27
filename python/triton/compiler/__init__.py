@@ -1,4 +1,4 @@
-from .compiler import CompiledKernel, ASTSource, IRSource, compile, make_backend, LazyDict
+from .compiler import ASTSource, CompiledKernel, IRSource, LazyDict, compile, make_backend
 from .errors import CompilationError
 
 __all__ = [

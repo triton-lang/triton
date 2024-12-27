@@ -1,8 +1,9 @@
-import triton
-import pytest
-import subprocess
 import json
 import pathlib
+import subprocess
+
+import pytest
+import triton
 
 
 def test_help():

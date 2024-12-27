@@ -1,16 +1,17 @@
-from triton.backends.compiler import BaseBackend, GPUTarget, AttrsDescriptor, register_descriptor
-from triton._C.libtriton import ir, passes, llvm, amd
-from triton._utils import find_paths_if
-from dataclasses import dataclass
-from typing import Any, Dict, Tuple
-from types import ModuleType
+import functools
 import hashlib
-import tempfile
 import os
 import re
 import subprocess
-import functools
+import tempfile
+from dataclasses import dataclass
 from pathlib import Path
+from types import ModuleType
+from typing import Any, Dict, Tuple
+
+from triton._C.libtriton import amd, ir, llvm, passes
+from triton._utils import find_paths_if
+from triton.backends.compiler import AttrsDescriptor, BaseBackend, GPUTarget, register_descriptor
 
 
 def min_dot_size(target: GPUTarget):

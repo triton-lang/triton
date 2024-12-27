@@ -1,6 +1,7 @@
 import json
-import triton.profiler as proton
 import pathlib
+
+import triton.profiler as proton
 
 
 def test_profile_single_session(tmp_path: pathlib.Path):

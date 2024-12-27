@@ -1,8 +1,7 @@
 from typing import Sequence
 
-from triton.language import core
-from triton.language import semantic
 from triton._C.libtriton import ir
+from triton.language import core, semantic
 
 __all__ = [
     "experimental_device_tensormap_create1d",

@@ -1,8 +1,8 @@
 from __future__ import annotations  # remove after python 3.11
-import warnings
 
-from typing import List, Optional, Sequence, Tuple, TypeVar
 import numbers
+import warnings
+from typing import List, Optional, Sequence, Tuple, TypeVar
 
 from .._C.libtriton import ir
 from . import core as tl

@@ -1,7 +1,7 @@
-from . import core
-from . import semantic
 from functools import wraps
 from typing import List
+
+from . import core, semantic
 
 T = core.TypeVar('T')
 

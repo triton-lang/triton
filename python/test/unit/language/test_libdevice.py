@@ -3,7 +3,6 @@ import torch
 
 import triton
 import triton.language as tl
-
 from triton.language.extra import libdevice
 from triton.language.extra.libdevice import fast_dividef as my_fast_dividef
 

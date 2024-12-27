@@ -2,11 +2,11 @@
 
 import pytest
 import torch
+
 import triton
 import triton.language as tl
 import triton.tools.experimental_descriptor
-
-from triton._internal_testing import is_cuda, is_hopper, is_hip_cdna, is_hip_mi200
+from triton._internal_testing import is_cuda, is_hip_cdna, is_hip_mi200, is_hopper
 
 
 def check_capabilities():

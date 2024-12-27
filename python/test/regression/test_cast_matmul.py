@@ -11,7 +11,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_hip_mi300, is_cuda, is_hip
+from triton._internal_testing import is_cuda, is_hip, is_hip_mi300
 
 input_dtypes = ["bfloat16", "float16", "float32", "float64"]
 if is_cuda():

@@ -1,12 +1,12 @@
+import json
+import pathlib
+from typing import NamedTuple
+
+import pytest
 import torch
 import triton
-import triton.profiler as proton
-import json
-import pytest
-from typing import NamedTuple
-import pathlib
-
 import triton.language as tl
+import triton.profiler as proton
 from triton.profiler.hook import COMPUTE_METADATA_SCOPE_NAME
 
 

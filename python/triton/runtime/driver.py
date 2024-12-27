@@ -1,5 +1,4 @@
-from ..backends import backends
-from ..backends import DriverBase
+from ..backends import DriverBase, backends
 
 
 def _create_driver():

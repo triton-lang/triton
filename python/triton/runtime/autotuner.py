@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import builtins
+import inspect
 import os
 import time
-import inspect
-from typing import Dict, Tuple, List, Optional
+from typing import Dict, List, Optional, Tuple
 
-from .jit import KernelInterface
-from .errors import OutOfResources, PTXASError
 from .driver import driver
+from .errors import OutOfResources, PTXASError
+from .jit import KernelInterface
 
 
 class Autotuner(KernelInterface):

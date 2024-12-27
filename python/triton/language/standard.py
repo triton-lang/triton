@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 from ..runtime.jit import jit
-from . import core
-from . import math
+from . import core, math
 
 # constexpr utilities
 
