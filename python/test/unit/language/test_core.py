@@ -89,7 +89,7 @@ def patch_kernel(template, to_replace):
     else:
         kernel = triton.JITFunction(template.fn)
         for key, value in to_replace.items():
-            kernel.src = kernel.src.replace(key, value)
+            kernel._unsafe_update_src(kernel.src.replace(key, value))
         return kernel
 
 

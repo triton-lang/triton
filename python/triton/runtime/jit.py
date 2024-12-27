@@ -662,8 +662,9 @@ class JITFunction(KernelInterface[T]):
             self.params.append(KernelParam(i, param, dns, dns_oa))
 
         # function source code (without decorators)
-        self.src = textwrap.dedent(inspect.getsource(fn))
-        self.src = self.src[re.search(r"^def\s+\w+\s*\(", self.src, re.MULTILINE).start():]
+        src = textwrap.dedent(inspect.getsource(fn))
+        src = src[re.search(r"^def\s+\w+\s*\(", src, re.MULTILINE).start():]
+        self._unsafe_update_src(src)
         # cache of just-in-time compiled kernels
         self.device_caches = defaultdict(lambda: self.create_binder())
         self.hash = None
@@ -753,11 +754,20 @@ class JITFunction(KernelInterface[T]):
         raise RuntimeError("Cannot call @triton.jit'd outside of the scope of a kernel")
 
     def __setattr__(self, name, value):
-        super(JITFunction, self).__setattr__(name, value)
-        # - when `.src` attribute is set, cache path needs
-        #   to be reinitialized
+        # - when `.src` attribute is set, cache key of all callers need to be re-computed
         if name == "src":
-            self.hash = None
+            raise AttributeError(f"Cannot set attribute '{name}' directly. "
+                                 f"Use '_unsafe_update_src()' and manually clear `.hash` of all callers"
+                                 f"instead.")
+        super(JITFunction, self).__setattr__(name, value)
+
+    def _unsafe_update_src(self, new_src):
+        """
+        The only method allowed to modify src.
+        Bypasses the __setattr__ restriction by calling super().__setattr__ directly.
+        """
+        self.hash = None
+        super().__setattr__('src', new_src)
 
     def __repr__(self):
         return f"JITFunction({self.module}:{self.fn.__name__})"

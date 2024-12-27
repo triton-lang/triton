@@ -72,9 +72,9 @@ def apply_src_change(target, old, new, to_modify):
     function_0.hash = None
     function_1.hash = None
     function_2.hash = None
-    to_modify.src = to_modify.src.replace(old, new)
+    to_modify._unsafe_update_src(to_modify.src.replace(old, new))
     ret = target.cache_key
-    to_modify.src = to_modify.src.replace(new, old)
+    to_modify._unsafe_update_src(to_modify.src.replace(new, old))
     return ret
 
 
