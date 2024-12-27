@@ -1,11 +1,12 @@
 import functools
-import triton
 import os
-
-from triton._C.libproton import proton as libproton
-from .hook import register_triton_hook, unregister_triton_hook
-from .flags import set_profiling_off, set_profiling_on, is_command_line
 from typing import Optional
+
+import triton
+from triton._C.libproton import proton as libproton
+
+from .flags import is_command_line, set_profiling_off, set_profiling_on
+from .hook import register_triton_hook, unregister_triton_hook
 
 DEFAULT_PROFILE_NAME = "proton"
 

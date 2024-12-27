@@ -1,12 +1,19 @@
+from typing import Optional
+
 import pytest
 import torch
 
 import triton
 import triton.language as tl
-from triton.tools.experimental_descriptor import (create_1d_tma_descriptor, create_2d_tma_descriptor)
-from triton._internal_testing import dtypes_with_bfloat16, numpy_random, to_triton, requires_tma, supports_tma, tma_skip_msg
-
-from typing import Optional
+from triton._internal_testing import (
+    dtypes_with_bfloat16,
+    numpy_random,
+    requires_tma,
+    supports_tma,
+    tma_skip_msg,
+    to_triton,
+)
+from triton.tools.experimental_descriptor import create_1d_tma_descriptor, create_2d_tma_descriptor
 
 
 def create_tma_desc_gmem_ptr(ptr, dims, block_dims, element_size):

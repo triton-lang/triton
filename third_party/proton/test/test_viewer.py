@@ -1,8 +1,16 @@
-import pytest
 import subprocess
-from triton.profiler.viewer import get_min_time_flops, get_min_time_bytes, get_raw_metrics, format_frames, derive_metrics, filter_frames
-from triton.profiler.hook import COMPUTE_METADATA_SCOPE_NAME
+
 import numpy as np
+import pytest
+from triton.profiler.hook import COMPUTE_METADATA_SCOPE_NAME
+from triton.profiler.viewer import (
+    derive_metrics,
+    filter_frames,
+    format_frames,
+    get_min_time_bytes,
+    get_min_time_flops,
+    get_raw_metrics,
+)
 
 file_path = __file__
 triton_example_file = file_path.replace("test_viewer.py", "examples/triton.json")

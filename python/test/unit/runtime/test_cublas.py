@@ -1,7 +1,9 @@
+import os
+
 import pytest
 import torch
+
 import triton
-import os
 
 
 def is_interpreter():

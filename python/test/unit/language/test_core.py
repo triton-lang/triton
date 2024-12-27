@@ -1,48 +1,47 @@
 # flake8: noqa: F821,F841
 import contextlib
+import inspect
 import itertools
-import re
-from typing import Optional
 import math
-import textwrap
+import os
 import pathlib
+import re
+import textwrap
+from typing import Optional
 
 import numpy as np
 import pytest
 import torch
-import os
-import inspect
 from numpy.random import RandomState
 
 import triton
 import triton.language as tl
-from triton.language.extra import libdevice
-
 from triton._internal_testing import (
-    integral_dtypes,
-    int_dtypes,
-    str_to_triton_dtype,
-    uint_dtypes,
-    float_dtypes,
-    float_dtypes_with_bfloat16,
     dtypes,
     dtypes_with_bfloat16,
+    float_dtypes,
+    float_dtypes_with_bfloat16,
+    get_arch,
+    int_dtypes,
+    integral_dtypes,
     is_cuda,
-    is_interpreter,
-    is_hopper,
     is_hip,
     is_hip_cdna,
     is_hip_mi200,
     is_hip_mi300,
+    is_hopper,
+    is_interpreter,
     is_xpu,
-    get_arch,
-    torch_float8_dtypes,
-    torch_dtypes,
     numpy_random,
+    str_to_triton_dtype,
+    to_numpy,
     to_triton,
     torch_dtype_name,
-    to_numpy,
+    torch_dtypes,
+    torch_float8_dtypes,
+    uint_dtypes,
 )
+from triton.language.extra import libdevice
 
 
 @contextlib.contextmanager

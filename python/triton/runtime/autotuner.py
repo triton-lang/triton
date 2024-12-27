@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import builtins
+import inspect
 import os
 import time
-import inspect
-from typing import Dict, Tuple, List, Optional
+from typing import Dict, List, Optional, Tuple
 
-from .jit import KernelInterface
-from .errors import OutOfResources, PTXASError
 from .driver import driver
+from .errors import OutOfResources, PTXASError
+from .jit import KernelInterface
 
 
 class Autotuner(KernelInterface):
@@ -221,7 +221,7 @@ class Autotuner(KernelInterface):
                 top_k = int(len(self.configs) * top_k)
             elif not isinstance(top_k, int):
                 # Slice index must be an integer
-                raise TypeError(f"Error while pruning configs, top_k must be either 1) a float <= 1.0 or 2) an int")
+                raise TypeError("Error while pruning configs, top_k must be either 1) a float <= 1.0 or 2) an int")
 
             if len(pruned_configs) > top_k:
                 est_timing = {

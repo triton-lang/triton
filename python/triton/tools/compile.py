@@ -8,8 +8,8 @@ from typing import List
 
 import triton
 import triton.backends
-from triton.compiler.code_generator import kernel_suffix
 from triton.backends.nvidia.driver import ty_to_cpp
+from triton.compiler.code_generator import kernel_suffix
 
 desc = """
 Triton ahead-of-time compiler:

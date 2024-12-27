@@ -1,10 +1,12 @@
 import argparse
-import sys
 import os
 import pathlib
-from .profile import start, finalize, _select_backend
-from .flags import set_command_line
+import sys
+
 import triton
+
+from .flags import set_command_line
+from .profile import _select_backend, finalize, start
 
 
 def parse_arguments():

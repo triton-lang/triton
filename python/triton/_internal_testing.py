@@ -1,14 +1,15 @@
 import os
 import re
+from typing import Optional, Union
+
 import numpy as np
+import pytest
 import torch
+from numpy.random import RandomState
+
 import triton
 import triton.language as tl
 from triton.backends.nvidia.compiler import _path_to_binary
-import pytest
-
-from numpy.random import RandomState
-from typing import Optional, Union
 from triton.runtime.jit import TensorWrapper, reinterpret, type_canonicalisation_dict
 
 int_dtypes = ['int8', 'int16', 'int32', 'int64']

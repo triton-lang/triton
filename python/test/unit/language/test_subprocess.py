@@ -4,9 +4,9 @@ import subprocess
 import sys
 from collections import Counter
 
-import triton
-
 import pytest
+
+import triton
 
 dir_path = os.path.dirname(os.path.realpath(__file__))
 print_path = os.path.join(dir_path, "print_helper.py")

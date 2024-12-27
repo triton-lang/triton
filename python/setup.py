@@ -1,32 +1,30 @@
+import contextlib
+import json
 import os
 import platform
 import re
-import contextlib
 import shlex
 import shutil
 import subprocess
 import sys
 import sysconfig
 import tarfile
-import zipfile
 import urllib.request
-import json
-from io import BytesIO
+import zipfile
+from dataclasses import dataclass
 from distutils.command.clean import clean
+from distutils.command.install import install
+from io import BytesIO
 from pathlib import Path
 from typing import List, Optional
 
+import pybind11
 from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
 from setuptools.command.build_py import build_py
-from dataclasses import dataclass
-
-from distutils.command.install import install
 from setuptools.command.develop import develop
 from setuptools.command.egg_info import egg_info
 from wheel.bdist_wheel import bdist_wheel
-
-import pybind11
 
 
 @dataclass

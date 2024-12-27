@@ -2,11 +2,11 @@
 
 
 import numpy as np
-import torch
 import pytest
+import torch
+
 import triton
 import triton.language as tl
-
 from triton._internal_testing import is_cuda, is_hip, is_hip_mi300
 
 

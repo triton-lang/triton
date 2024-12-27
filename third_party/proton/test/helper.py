@@ -1,8 +1,7 @@
-import triton.profiler as proton
-
-import torch
 import sys
 
+import torch
+import triton.profiler as proton
 from helper_kernels import custom_add
 
 

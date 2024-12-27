@@ -5,26 +5,23 @@ __version__ = '3.2.0'
 # Note: import order is significant here.
 
 # submodules
+from . import language, testing, tools
+from .compiler import CompilationError, compile
+from .errors import TritonError
 from .runtime import (
-    autotune,
     Config,
-    heuristics,
+    InterpreterError,
     JITFunction,
     KernelInterface,
-    reinterpret,
-    TensorWrapper,
-    OutOfResources,
-    InterpreterError,
     MockTensor,
+    OutOfResources,
+    TensorWrapper,
+    autotune,
+    heuristics,
+    reinterpret,
 )
-from .runtime.jit import jit
-from .compiler import compile, CompilationError
-from .errors import TritonError
 from .runtime._allocation import set_allocator
-
-from . import language
-from . import testing
-from . import tools
+from .runtime.jit import jit
 
 __all__ = [
     "autotune",

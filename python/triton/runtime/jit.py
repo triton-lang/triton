@@ -1,4 +1,5 @@
 from __future__ import annotations, division
+
 import ast
 import hashlib
 import inspect
@@ -8,9 +9,10 @@ import re
 import textwrap
 from collections import defaultdict
 from functools import cached_property
-from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, overload, Dict, Any, Tuple
-from ..runtime.driver import driver
 from types import ModuleType
+from typing import Any, Callable, Dict, Generic, Iterable, Optional, Tuple, TypeVar, Union, overload
+
+from ..runtime.driver import driver
 
 TRITON_MODULE = __name__[:-len(".runtime.jit")]
 
@@ -552,7 +554,7 @@ class JITFunction(KernelInterface[T]):
         """
         Precompute as much as possible.
         """
-        from ..compiler import CompiledKernel, compile, ASTSource, make_backend
+        from ..compiler import ASTSource, CompiledKernel, compile, make_backend
         target = driver.active.get_current_target()
         backend = make_backend(target)
         self.CompiledKernel = CompiledKernel
@@ -715,10 +717,12 @@ class JITFunction(KernelInterface[T]):
         return self.run(grid=grid, warmup=True, *map(MockTensor.wrap_dtype, args), **kwargs)
 
     def preload(self, specialization_data):
-        from ..compiler import compile, ASTSource
-        from triton.backends.compiler import AttrsDescriptor
         import json
+
         import triton.language as tl
+        from triton.backends.compiler import AttrsDescriptor
+
+        from ..compiler import ASTSource, compile
         device = driver.active.get_current_device()
         deserialized_obj = json.loads(specialization_data)
         if deserialized_obj['name'] != self.fn.__name__:

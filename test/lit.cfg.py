@@ -1,15 +1,11 @@
 # -*- Python -*-
 
 import os
-import platform
-import re
-import subprocess
-import tempfile
 
 import lit.formats
 import lit.util
 from lit.llvm import llvm_config
-from lit.llvm.subst import FindTool, ToolSubst
+from lit.llvm.subst import ToolSubst
 
 # Configuration file for the 'lit' test runner
 

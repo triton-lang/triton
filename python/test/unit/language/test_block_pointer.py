@@ -1,9 +1,9 @@
 import pytest
 import torch
+from test_core import check_type_supported
 
 import triton
 import triton.language as tl
-from test_core import check_type_supported
 
 
 @triton.jit

@@ -1,11 +1,11 @@
 import os
+import re
 import shutil
 
 import pytest
-
 import torch
+
 import triton
-import re
 
 
 @triton.jit

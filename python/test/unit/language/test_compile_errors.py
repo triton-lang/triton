@@ -1,13 +1,14 @@
 import contextlib
-import pytest
 import os
+import traceback
 
+import pytest
 import torch
+
 import triton
 import triton.language as tl
+from triton._internal_testing import is_cuda, is_hip, is_hip_mi200, is_hip_mi300, is_interpreter
 from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
-import traceback
-from triton._internal_testing import is_interpreter, is_cuda, is_hip, is_hip_mi300, is_hip_mi200
 
 
 def test_err_undefined_variable():

@@ -1,21 +1,24 @@
 from __future__ import annotations
+
+import functools
 import hashlib
 import json
+import os
+import re
+import sysconfig
+from pathlib import Path
+
+from .. import __version__
 from .._C.libtriton import get_cache_invalidating_env_vars, ir
 from ..backends import backends
-from ..backends.compiler import GPUTarget, AttrsDescriptor
-from .. import __version__
+from ..backends.compiler import AttrsDescriptor, GPUTarget
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager
 from ..runtime.driver import driver
 from ..tools.disasm import get_sass
+
 # TODO: this shouldn't be here
 from .code_generator import ast_to_ttir
-from pathlib import Path
-import re
-import functools
-import os
-import sysconfig
 
 # - ^\s*tt\.func\s+ : match the start of the string, any leading whitespace, the keyword func,
 #    and any following whitespace

@@ -1,22 +1,22 @@
 import ast
 import inspect
-import re
-import warnings
 import os
+import re
 import textwrap
+import warnings
 from types import ModuleType
 from typing import Any, Callable, Dict, Optional, Tuple, Type, Union
 
 from .. import language
 from .._C.libtriton import ir
+from .._utils import find_paths_if, get_iterable_path, list_list_flatten, list_list_unflatten, set_iterable_path
 from ..language import constexpr, semantic, str_to_ty, tensor
-from ..language.core import _unwrap_if_constexpr, nv_tma_desc_type, _value
-from ..runtime.jit import _normalize_ty, get_jit_fn_file_line
+from ..language.core import _unwrap_if_constexpr, _value, nv_tma_desc_type
+
 # ideally we wouldn't need any runtime component
 from ..runtime import JITFunction
-from .._utils import list_list_flatten, list_list_unflatten, find_paths_if, get_iterable_path, set_iterable_path
-
-from .errors import (CompilationError, CompileTimeAssertionFailure, UnsupportedLanguageConstruct)
+from ..runtime.jit import _normalize_ty, get_jit_fn_file_line
+from .errors import CompilationError, CompileTimeAssertionFailure, UnsupportedLanguageConstruct
 
 
 def mangle_ty(ty):
