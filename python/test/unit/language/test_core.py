@@ -3236,8 +3236,6 @@ def convert_fp8_to_fp32(x, device, dtype_str):
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, num_ctas, device):
     if is_interpreter():
-        if M < 16 or N < 16 or K < 16:
-            pytest.skip("small dots are supported only on HIP at the moment")
         if in_dtype == 'bfloat16':
             pytest.skip("bfloat16 is not supported in the interpreter")
     else:
@@ -3702,7 +3700,7 @@ def test_dot3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_
                 pytest.skip(f"{out_dtype_str} has low precision in WMMA dot")
     else:
         input_precision = "tf32" if is_cuda() and in_dtype_str == 'float32' else "ieee"
-        if BLOCK_M < 16 or BLOCK_N < 16:
+        if not is_interpreter() and (BLOCK_M < 16 or BLOCK_N < 16):
             pytest.skip("small dots are supported only on HIP at the moment")
 
     if B == 8 and M == 64 and in_dtype_str == "float32" and out_dtype_str == "float32":
