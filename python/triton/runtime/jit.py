@@ -581,7 +581,8 @@ class JITFunction(KernelInterface[T]):
         bound_args, sig_and_spec, constexpr_vals, non_constexpr_vals, excess_kwargs = binder(*args, **kwargs)
 
         # compute cache key
-        key = ''.join(sig_and_spec) + str((constexpr_vals, excess_kwargs))
+        constexpr_key = '-'.join([x.cache_key if isinstance(x, JITFunction) else str(x) for x in constexpr_vals])
+        key = ''.join(sig_and_spec) + constexpr_key + str(excess_kwargs)
         kernel = kernel_cache.get(key, None)
 
         if kernel is None:
@@ -608,9 +609,6 @@ class JITFunction(KernelInterface[T]):
 
             attrs = backend.get_attrs_descriptor(self.params, bound_vals)
             constexprs = {p.name: v for (v, p) in zip(bound_vals, self.params) if p.is_constexpr}
-            for i, arg in constexprs.items():
-                if callable(arg):
-                    raise TypeError(f"Callable constexpr at index {i} is not supported")
 
             if self._call_hook(key, signature, device, constexprs, options, [attrs], warmup, before=True):
                 return None

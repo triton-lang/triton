@@ -599,3 +599,35 @@ def test_within_2gb(device, fresh_triton_cache) -> None:
     # Torch tensor <= 2GB
     kernel_add[(1, 0)](torch.empty(2**31 - 1, dtype=torch.int8, device=device))
     assert pointer_range_32 == [(0, )]
+
+
+def test_function_arguments():
+
+    @triton.jit
+    def func1():
+        return 1
+
+    @triton.jit
+    def func2():
+        return 2
+
+    @triton.jit
+    def func3(x):
+        return x
+
+    @triton.jit
+    def func4(x, y):
+        return x + y
+
+    @triton.jit
+    def kernel(Y, fn: tl.constexpr, fn_args):
+        tl.store(Y, fn(*fn_args))
+
+    y = torch.zeros((5, ), dtype=torch.int32, device="cuda")
+    kernel[(1, )](y[0], func1, tuple())
+    kernel[(1, )](y[1], func2, tuple())
+    kernel[(1, )](y[2], func3, (3, ))
+    kernel[(1, )](y[3], func4, (3, 4))
+    kernel[(1, )](y[4], func1, tuple())
+    assert len(kernel.device_caches[0][0]) == 4
+    assert y.tolist() == [1, 2, 3, 7, 1]
