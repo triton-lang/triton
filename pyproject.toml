@@ -21,3 +21,4 @@ line-length = 120
 
 [tool.ruff.lint]
 ignore = ["E501", "E701", "E731", "E741"]
+extend-select = ["I"]
