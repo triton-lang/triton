@@ -2191,13 +2191,8 @@ SmallVector<unsigned> AMDWmmaEncodingAttr::getThreadsPerWarp() const {
   auto rank = getWarpsPerCTA().size();
   SmallVector<unsigned> threads(rank, 1);
   auto mnkInstr = getMNKDimPerInstr();
-  if (getIsTransposed()) {
-    threads[rank - 2] = 16;
-    threads[rank - 1] = 2;
-  } else {
-    threads[rank - 2] = 2;
-    threads[rank - 1] = 16;
-  }
+  threads[rank - 2] = mnkInstr[0] / getSizePerThread()[rank - 2];
+  threads[rank - 1] = mnkInstr[1] / getSizePerThread()[rank - 1];
   return threads;
 }
 
