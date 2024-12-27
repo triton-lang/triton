@@ -17,34 +17,37 @@ from .driver import driver
 class Autotuner(KernelInterface):
 
     def __init__(
-        self,
-        fn,
-        arg_names,
-        configs,
-        key,
-        reset_to_zero,
-        restore_value,
-        pre_hook=None,
-        post_hook=None,
-        prune_configs_by: Optional[Dict] = None,
-        warmup=None,
-        rep=None,
-        use_cuda_graph=False,
-        do_bench=None,
+            self,
+            fn,
+            arg_names,
+            configs,
+            key,
+            reset_to_zero,
+            restore_value,
+            pre_hook=None,
+            post_hook=None,
+            prune_configs_by: Optional[Dict] = None,
+            warmup=None,
+            rep=None,
+            use_cuda_graph=False,
+            do_bench=None,
+            max_workers: int = os.cpu_count(),
     ):
         """
         :param prune_configs_by: a dict of functions that are used to prune configs, fields:
             'perf_model': performance model used to predicate running time with different configs, returns running time
             'top_k': number of configs to bench
             'prune_num_stages_by'(optional): a function used to prune num_stages. It takes configs:List[Config] as its input, and returns pruned configs.
+         :param max_workers: (Optional) The maximum number of threads to use for parallel compilation. Defaults to the number of CPU cores.
         """
         if not configs:
             self.configs = [Config({}, num_warps=4, num_stages=2, num_ctas=1)]
         else:
             self.configs = configs
         self.keys = key
-        self.cache: Dict[Tuple, Config] = {}
+        self.cache: Dict[Tuple, Config] = {} = {
         self.arg_names = arg_names
+        self.max_workers = max_workers
 
         # Reset to zero or restore values
         self.reset_to_zero = []
@@ -212,7 +215,8 @@ class Autotuner(KernelInterface):
                 pruned_configs = self.prune_configs(kwargs)
                 compile_start = time.time()
                 compiled_configs = []
-                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+
+                with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
                     futures = {
                         executor.submit(self._compile, *args, config=config, **kwargs): config
                         for config in pruned_configs
