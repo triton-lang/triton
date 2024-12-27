@@ -6455,7 +6455,7 @@ def test_gather_warp_shuffle(src_shape, indices_shape, axis, src_layout, indices
 
 
 @pytest.mark.interpreter
-def test_zero_strided_interpreter_tensors(device):
+def test_zero_strided_tensors(device):
 
     @triton.jit
     def _simple_add(
