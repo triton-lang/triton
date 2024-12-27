@@ -114,16 +114,13 @@ def test_combine_fn_change():
         ["tl.reduce", "tl.associative_scan"],
         ["a + b", "a * b"],
     ):
-        combine_fn.src = orig_combine_fn_src.replace("COMBINE_OP", combine_op)
-        kernel_with_combine_fn.src = orig_kernel_src.replace("REDUCE_OR_SCAN", reduce_or_scan)
+        combine_fn._unsafe_update_src(orig_combine_fn_src.replace("COMBINE_OP", combine_op))
+        kernel_with_combine_fn._unsafe_update_src(orig_kernel_src.replace("REDUCE_OR_SCAN", reduce_or_scan))
         try:
             key = kernel_with_combine_fn.cache_key
         finally:
-            combine_fn.src = orig_combine_fn_src
-            kernel_with_combine_fn.src = orig_kernel_src
-
-            kernel_with_combine_fn.hash = None
-            combine_fn.hash = None
+            combine_fn._unsafe_update_src(orig_combine_fn_src)
+            kernel_with_combine_fn._unsafe_update_src(orig_kernel_src)
 
         assert key not in seen_keys
         seen_keys.add(key)
