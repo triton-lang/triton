@@ -620,6 +620,8 @@ def test_function_arguments():
     def kernel(Y, fn: tl.constexpr, fn_args):
         tl.store(Y, fn(*fn_args))
 
+    JITFunction.cache_hook = None
+    JITFunction.compiled_hook = None
     y = torch.zeros((5, ), dtype=torch.int32, device="cuda")
     kernel[(1, )](y[0], func1, tuple())
     kernel[(1, )](y[1], func2, tuple())
