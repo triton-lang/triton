@@ -1,0 +1,2 @@
+[build-system]
+requires = ["setuptools>=40.8.0", "wheel", "cmake>=3.18", "ninja>=1.11.1", "pybind11>=2.13.1"]
