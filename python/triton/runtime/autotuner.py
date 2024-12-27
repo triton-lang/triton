@@ -4,7 +4,7 @@ import builtins
 import os
 import time
 import inspect
-from typing import Dict
+from typing import Dict, Tuple, List, Optional
 
 from .jit import KernelInterface
 from .errors import OutOfResources, PTXASError
@@ -23,7 +23,7 @@ class Autotuner(KernelInterface):
         restore_value,
         pre_hook=None,
         post_hook=None,
-        prune_configs_by: Dict = None,
+        prune_configs_by: Optional[Dict] = None,
         warmup=None,
         rep=None,
         use_cuda_graph=False,
@@ -40,7 +40,7 @@ class Autotuner(KernelInterface):
         else:
             self.configs = configs
         self.keys = key
-        self.cache = {}
+        self.cache: Dict[Tuple, Config] = {}
         self.arg_names = arg_names
 
         # Reset to zero or restore values
@@ -211,7 +211,7 @@ class Autotuner(KernelInterface):
         self.nargs = None
         return ret
 
-    def prune_configs(self, kwargs):
+    def prune_configs(self, kwargs: Dict) -> List[Config]:
         pruned_configs = self.configs
         if self.early_config_prune:
             pruned_configs = self.early_config_prune(self.configs, self.nargs, **kwargs)
@@ -219,6 +219,10 @@ class Autotuner(KernelInterface):
             top_k = self.configs_top_k
             if isinstance(top_k, float) and top_k <= 1.0:
                 top_k = int(len(self.configs) * top_k)
+            elif not isinstance(top_k, int):
+                # Slice index must be an integer
+                raise TypeError(f"Error while pruning configs, top_k must be either 1) a float <= 1.0 or 2) an int")
+
             if len(pruned_configs) > top_k:
                 est_timing = {
                     config: self.perf_model(
@@ -313,8 +317,8 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
                          # the value of x_size changes
         )
         @triton.jit
-        def kernel(x_ptr, x_size, **META):
-            BLOCK_SIZE = META['BLOCK_SIZE']
+        def kernel(x_ptr, x_size, BLOCK_SIZE: tl.constexpr):
+            ...
     :note: When all the configurations are evaluated, the kernel will run multiple times.
            This means that whatever value the kernel updates will be updated multiple times.
            To avoid this undesired behavior, you can use the `reset_to_zero` argument, which
@@ -378,18 +382,19 @@ class Heuristics(KernelInterface):
 def heuristics(values):
     """
     Decorator for specifying how the values of certain meta-parameters may be computed.
-    This is useful for cases where auto-tuning is prohibitevely expensive, or just not applicable.
+    This is useful for cases where auto-tuning is prohibitively expensive, or just not applicable.
 
     .. highlight:: python
     .. code-block:: python
 
-        @triton.heuristics(values={'BLOCK_SIZE': lambda args: 2 ** int(math.ceil(math.log2(args[1])))})
+        # smallest power-of-two >= x_size
+        @triton.heuristics(values={'BLOCK_SIZE': lambda args: triton.next_power_of_2(args['x_size'])})
         @triton.jit
-        def kernel(x_ptr, x_size, **META):
-            BLOCK_SIZE = META['BLOCK_SIZE'] # smallest power-of-two >= x_size
+        def kernel(x_ptr, x_size, BLOCK_SIZE: tl.constexpr):
+            ...
     :param values: a dictionary of meta-parameter names and functions that compute the value of the meta-parameter.
                    each such function takes a list of positional arguments as input.
-    :type values: dict[str, Callable[[list[Any]], Any]]
+    :type values: dict[str, Callable[[dict[str, Any]], Any]]
     """
 
     def decorator(fn):

@@ -504,7 +504,7 @@ class JITFunction(KernelInterface[T]):
         name = self.fn.__name__
         module = self.fn.__module__
         arg_reprs = ", ".join([f"{param.name}: {ty}" for param, ty in zip(self.params, key[1])])
-        repr = f"{name}[num_warps={options.num_warps}, num_ctas={options.num_ctas}, num_stages={options.num_stages}, enable_fp_fusion={options.enable_fp_fusion}]({arg_reprs})"
+        repr = f"{name}[num_warps={options.num_warps}, num_ctas={options.num_ctas}, num_stages={options.num_stages}, enable_fp_fusion={options.enable_fp_fusion}, launch_cooperative_grid={options.launch_cooperative_grid}]({arg_reprs})"
 
         class JitFunctionInfo:
 
@@ -524,6 +524,7 @@ class JITFunction(KernelInterface[T]):
             'num_ctas': options.num_ctas,
             'num_stages': options.num_stages,
             'enable_fp_fusion': options.enable_fp_fusion,
+            'launch_cooperative_grid': options.launch_cooperative_grid,
             'extern_libs': options.extern_libs,
             'configs': configs,
             'specialization_data': specialization_data,
