@@ -1039,6 +1039,18 @@ def _implicit_cvt(arg):
 interpreter_builder = InterpreterBuilder()
 
 
+def _unwrap_tensor(t):
+    if isinstance(t, triton.runtime.jit.TensorWrapper):
+        return t.base
+    return t
+
+
+def _rewrap_tensor(t, original_tensor):
+    if isinstance(original_tensor, triton.runtime.jit.TensorWrapper):
+        return triton.runtime.jit.TensorWrapper(t, original_tensor.dtype)
+    return t
+
+
 class GridExecutor:
 
     def __init__(self, fn, arg_names, grid):
@@ -1051,12 +1063,19 @@ class GridExecutor:
         self.constexprs = [name for name in arg_names if __annotations__.get(name) == "constexpr"]
 
     def _init_args_hst(self, args_dev, kwargs):
-        args_hst = []
-        for arg in args_dev:
-            if hasattr(arg, "data_ptr"):
-                args_hst.append(arg.cpu())
-            else:
-                args_hst.append(arg)
+
+        def _to_cpu(arg):
+            if not hasattr(arg, "data_ptr"):
+                return arg
+            unwrapped_arg = _unwrap_tensor(arg)
+            cpu_arg = unwrapped_arg.new_empty(0, device='cpu')
+            cpu_arg.set_(unwrapped_arg.untyped_storage().cpu(), unwrapped_arg.storage_offset(), unwrapped_arg.size(),
+                         unwrapped_arg.stride())
+            cpu_arg = _rewrap_tensor(cpu_arg, original_tensor=arg)
+            return cpu_arg
+
+        args_hst = [_to_cpu(arg) for arg in args_dev]
+
         # Process keyword arguments
         kwargs_hst = {}
         for key, value in kwargs.items():
@@ -1069,7 +1088,9 @@ class GridExecutor:
     def _restore_args_dev(self, args_dev, args_hst, kwargs, kwargs_hst):
         for arg_dev, arg_hst in zip(args_dev, args_hst):
             if hasattr(arg_dev, "data_ptr"):
-                arg_dev.data.copy_(arg_hst.to(arg_dev.device).data)
+                # No need to rewrap because this just modifies internal
+                arg_dev, arg_hst = _unwrap_tensor(arg_dev), _unwrap_tensor(arg_hst)
+                arg_dev.untyped_storage().copy_(arg_hst.untyped_storage())
 
         # Restore keyword arguments
         for key, kwarg_dev in kwargs.items():
