@@ -9,9 +9,7 @@ import triton.language as tl
 
 
 @triton.jit
-def kernel_single(X,
-                  Y,
-                  BLOCK: tl.constexpr):
+def kernel_single(X, Y, BLOCK: tl.constexpr):
     x = tl.load(X + tl.arange(0, BLOCK))
     tl.store(Y + tl.arange(0, BLOCK), x)
 
@@ -22,9 +20,7 @@ def device_inline(x):
 
 
 @triton.jit
-def kernel_call(X,
-                Y,
-                BLOCK: tl.constexpr):
+def kernel_call(X, Y, BLOCK: tl.constexpr):
     x = tl.load(X + tl.arange(0, BLOCK))
     y = device_inline(x)
     tl.store(Y + tl.arange(0, BLOCK), y)
@@ -154,17 +150,17 @@ def test_line_info(func: str):
     shape = (128, )
     kernel_info = {}
     if func == "single":
-        kernel_info = kernel_single.warmup(torch.float32, torch.float32, BLOCK=shape[0], grid=(1,))
+        kernel_info = kernel_single.warmup(torch.float32, torch.float32, BLOCK=shape[0], grid=(1, ))
     elif func == "call":
-        kernel_info = kernel_call.warmup(torch.float32, torch.float32, BLOCK=shape[0], grid=(1,))
+        kernel_info = kernel_call.warmup(torch.float32, torch.float32, BLOCK=shape[0], grid=(1, ))
     elif func == "call_noinline":
-        kernel_info = kernel_call_noinline.warmup(torch.float32, torch.float32, BLOCK=shape[0], grid=(1,))
+        kernel_info = kernel_call_noinline.warmup(torch.float32, torch.float32, BLOCK=shape[0], grid=(1, ))
     elif func == "autotune":
-        kernel_info = kernel_autotune.warmup(torch.float32, torch.float32, SIZE=shape[0], grid=(1,))[0]
+        kernel_info = kernel_autotune.warmup(torch.float32, torch.float32, SIZE=shape[0], grid=(1, ))[0]
     elif func == "dot_combine":
-        kernel_info = kernel_dot_combine.warmup(20, grid=(1,))
+        kernel_info = kernel_dot_combine.warmup(20, grid=(1, ))
     elif func == "cdiv":
-        kernel_info = kernel_cdiv.warmup(20, grid=(1,))
+        kernel_info = kernel_cdiv.warmup(20, grid=(1, ))
 
     file_lines = extract_file_lines(command, anchor, separator, kernel_info.asm[obj_kind])
     if func == "single":
