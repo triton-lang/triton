@@ -8,7 +8,6 @@ import inspect
 from typing import Dict, Tuple, List, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-
 from .jit import KernelInterface
 from .errors import OutOfResources, PTXASError
 from .driver import driver
@@ -45,7 +44,7 @@ class Autotuner(KernelInterface):
         else:
             self.configs = configs
         self.keys = key
-        self.cache: Dict[Tuple, Config] = {} = {
+        self.cache: Dict[Tuple, Config] = {}
         self.arg_names = arg_names
         self.max_workers = max_workers
 
