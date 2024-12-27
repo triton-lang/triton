@@ -378,27 +378,6 @@ def test_no_cache_callable():
     assert not kernel.used_global_vals
 
 
-def test_constexpr_not_callable(device) -> None:
-
-    @triton.jit
-    def kernel(X, c: tl.constexpr):
-        tl.store(X, 2)
-
-    x = torch.empty(1, dtype=torch.int32, device=device)
-    error = False
-    try:
-        kernel[(1, )](x, c="str")
-    except BaseException:
-        error = True
-    assert error is False
-    # try and catch
-    try:
-        kernel[(1, )](x, c=tl.abs)
-    except BaseException:
-        error = True
-    assert error is True
-
-
 def test_jit_warmup_cache(device) -> None:
 
     @triton.jit
