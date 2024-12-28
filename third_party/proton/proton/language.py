@@ -1,6 +1,3 @@
-from __future__ import annotations  # remove after python 3.11
-import warnings
-
 from triton._C.libtriton import ir
 from triton.language import core as tl
 
