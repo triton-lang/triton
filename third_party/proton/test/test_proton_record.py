@@ -6,8 +6,6 @@ import triton
 import triton.language as tl
 import triton.profiler as proton
 
-DEVICE = triton.runtime.driver.active.get_active_torch_device()
-
 
 def test_proton_record(tmp_path: pathlib.Path):
 
@@ -26,22 +24,18 @@ def test_proton_record(tmp_path: pathlib.Path):
         x = tl.load(x_ptr + offsets, mask=mask)
         proton.record(True, 0)
         y = tl.load(y_ptr + offsets, mask=mask)
+        proton.record(False, 0)
         output = x + y
         tl.store(output_ptr + offsets, output, mask=mask)
-
-    def add(x: torch.Tensor, y: torch.Tensor):
-        output = torch.empty_like(x)
-        assert x.device == DEVICE and y.device == DEVICE and output.device == DEVICE
-        n_elements = output.numel()
-        BLOCK = 4096
-        grid = (int(n_elements / BLOCK), 1, 1)
-        pgm = add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
-        ttir = pgm.asm['ttir']
-        assert "proton.record() {isStart = true, regionId = 0 : i32}" in ttir
-        return output
 
     torch.manual_seed(0)
     size = 2**12
     x = torch.rand(size, device='cuda')
     y = torch.rand(size, device='cuda')
-    output_triton = add(x, y)
+    output = torch.empty_like(x)
+    n_elements = output.numel()
+    grid = (1, 1, 1)
+    pgm = add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+    ttir = pgm.asm['ttir']
+    assert "proton.record() {isStart = true, regionId = 0 : i32}" in ttir
+    assert "proton.record() {isStart = false, regionId = 0 : i32}" in ttir
