@@ -236,8 +236,9 @@ void init_triton_ir(py::module &&m) {
     DialectRegistry registry;
     registry.insert<TritonDialect, ::mlir::triton::gpu::TritonGPUDialect,
                     math::MathDialect, arith::ArithDialect, scf::SCFDialect,
-                    ::mlir::gpu::GPUDialect, cf::ControlFlowDialect, ::mlir::triton::proton::ProtonDialect,
-                    LLVM::LLVMDialect, mlir::ub::UBDialect>();
+                    ::mlir::gpu::GPUDialect, cf::ControlFlowDialect,
+                    ::mlir::triton::proton::ProtonDialect, LLVM::LLVMDialect,
+                    mlir::ub::UBDialect>();
     mlir::LLVM::registerInlinerInterface(registry);
     registerBuiltinDialectTranslation(registry);
     registerLLVMDialectTranslation(registry);
@@ -1605,10 +1606,10 @@ void init_triton_ir(py::module &&m) {
                                                llvm::StringRef(prefix));
              self.create<PrintOp>(prefixAttr, hex, values, isSigned);
            })
-       .def("create_proton_record",
-         [](TritonOpBuilder &self, bool isStart, int32_t regionId) -> void{
-               self.create<mlir::triton::proton::RecordOp>(isStart, regionId);
-         })
+      .def("create_proton_record",
+           [](TritonOpBuilder &self, bool isStart, int32_t regionId) -> void {
+             self.create<mlir::triton::proton::RecordOp>(isStart, regionId);
+           })
       .def("create_assert",
            [](TritonOpBuilder &self, Value &condition,
               const std::string &message) -> void {

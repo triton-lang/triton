@@ -8,14 +8,15 @@
 
 #include "third_party/proton/dialect/include/Dialect/Proton/IR/Dialect.h"
 
-
 namespace {
 
-struct RecordOpConversion : public ConvertOpToLLVMPattern<mlir::triton::proton::RecordOp> {
+struct RecordOpConversion
+    : public ConvertOpToLLVMPattern<mlir::triton::proton::RecordOp> {
   explicit RecordOpConversion(LLVMTypeConverter &typeConverter,
-                             const TargetInfoBase &targetInfo,
-                             PatternBenefit benefit)
-      : mlir::ConvertOpToLLVMPattern<mlir::triton::proton::RecordOp>(typeConverter, benefit),
+                              const TargetInfoBase &targetInfo,
+                              PatternBenefit benefit)
+      : mlir::ConvertOpToLLVMPattern<mlir::triton::proton::RecordOp>(
+            typeConverter, benefit),
         targetInfo(targetInfo) {}
 
   LogicalResult
@@ -25,7 +26,6 @@ struct RecordOpConversion : public ConvertOpToLLVMPattern<mlir::triton::proton::
     rewriter.eraseOp(op);
     return success();
   }
-
 
 protected:
   const TargetInfoBase &targetInfo;
