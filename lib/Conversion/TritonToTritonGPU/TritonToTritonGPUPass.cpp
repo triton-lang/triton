@@ -546,7 +546,6 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       GenericOpPattern<triton::StoreOp>, GenericOpPattern<triton::HistogramOp>,
       GenericOpPattern<triton::GatherOp>,
       GenericOpPattern<triton::ExternElementwiseOp>,
-      GenericOpPattern<triton::proton::RecordOp>,
       GenericOpPattern<triton::PrintOp>, GenericOpPattern<triton::AssertOp>,
       GenericOpPattern<triton::AtomicCASOp>,
       GenericOpPattern<triton::AtomicRMWOp>, GenericOpPattern<ReturnOp>,
@@ -558,7 +557,13 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       GenericOpPattern<triton::DotScaledOp>, GenericOpPattern<triton::CallOp>,
       TritonFuncOpPattern>(typeConverter, context);
 }
-
+// Proton patterns
+void populateProtonPatterns(TritonGPUTypeConverter &typeConverter,
+                            RewritePatternSet &patterns) {
+  MLIRContext *context = patterns.getContext();
+  patterns.add<GenericOpPattern<triton::proton::RecordOp>>(typeConverter,
+                                                           context);
+}
 //
 // SCF patterns
 //
@@ -773,6 +778,7 @@ public:
     populateArithPatternsAndLegality(typeConverter, patterns, target);
     populateMathPatternsAndLegality(typeConverter, patterns, target);
     populateTritonPatterns(typeConverter, patterns, numCTAs);
+    populateProtonPatterns(typeConverter, patterns);
     // TODO: can we use
     //    mlir::scf::populateSCFStructurealTypeConversionsAndLegality(...) here?
     populateSCFPatterns(typeConverter, patterns);
