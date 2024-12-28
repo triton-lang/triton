@@ -7,7 +7,6 @@ from triton.language import core as tl
 from triton.language.core import builtin
 import triton.language
 from .hook import register_triton_hook, unregister_triton_hook
-from functools import wraps
 from .flags import set_profiling_off, set_profiling_on, is_command_line
 from typing import Optional
 from . import language
