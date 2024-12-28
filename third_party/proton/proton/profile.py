@@ -11,27 +11,8 @@ from functools import wraps
 from .flags import set_profiling_off, set_profiling_on, is_command_line
 from typing import Optional
 from . import language
-#import builtins
-
-#T = TypeVar('T')
 
 DEFAULT_PROFILE_NAME = "proton"
-#TRITON_BUILTIN = "__triton_builtin__"
-#
-#def builtin(fn: T) -> T:
-#    """Mark a function as a builtin."""
-#    assert callable(fn)
-#
-#    @wraps(fn)
-#    def wrapper(*args, **kwargs):
-#        if "_builder" not in kwargs or kwargs["_builder"] is None:
-#            raise ValueError("Did you forget to add @triton.jit ? "
-#                             "(`_builder` argument must be provided outside of JIT functions.)")
-#        return fn(*args, **kwargs)
-#
-#    setattr(wrapper, TRITON_BUILTIN, True)
-#
-#    return wrapper
 
 @builtin
 def record(isStart: bool, regionId: int, _builder=None):
