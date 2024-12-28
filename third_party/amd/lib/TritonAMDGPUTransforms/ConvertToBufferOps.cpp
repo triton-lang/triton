@@ -227,6 +227,60 @@ bool canUseBufferOps(Value ptr, const DenseSet<Value> &assumptions) {
 }
 } // namespace
 
+
+struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
+    : public mlir::OpRewritePattern<triton::AtomicRMWOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  ConvertTritonAtomicRMWOpToBufferAtomicRMW(mlir::MLIRContext *context,
+                                            DenseSet<Value> &assumptions)
+      : mlir::OpRewritePattern<triton::AtomicRMWOp>(context),
+        assumptions(assumptions) {}
+
+  mlir::LogicalResult
+  matchAndRewrite(triton::AtomicRMWOp op, PatternRewriter &rewriter) const override {
+    LDBG("Try to convert: " << op);
+    Value ptr = op.getPtr();
+    auto atomicRmwAttr = op.getAtomicRmwOp();
+    auto sem = op.getSem();
+    auto scope = op.getScope();
+
+    // In addition to the `canUserBufferOps` check, we should ensure that
+    // 1. The result of the AtomicRMWOp is not used (raw buffer variant does not return a result)
+    // 2. Check the hardware---only MI-* series GPUs are supported
+    //    (i.e., CDNA 1, 2, 3)
+    // 3. The RMWOp is supported (fadd, fmax, smax, umin)
+
+    auto opUsers = op.getResult().getUsers();
+    auto hasUsers = std::distance(opUsers.begin(), opUsers.end()) > 0;
+
+    if (canUseBufferOps(ptr, assumptions) && !hasUsers) {
+      auto addPtrOp = ptr.getDefiningOp<triton::AddPtrOp>();
+      Value tensorPtr = addPtrOp.getPtr();
+      Value tensorOffset = addPtrOp.getOffset();
+      auto splatOp = tensorPtr.getDefiningOp<triton::SplatOp>();
+      Value basePtr = splatOp.getSrc();
+
+      Value maybeMask{};
+      if (op.getMask() && !isZeroConst(op.getMask()))
+        maybeMask = op.getMask();
+
+      rewriter.create<triton::amdgpu::BufferAtomicRMWOp>(
+        op->getLoc(), atomicRmwAttr, basePtr, tensorOffset, op.getVal(), sem, scope, maybeMask);
+
+      rewriter.eraseOp(op);
+
+      return success();
+    }
+    LDBG("Failed to convert: " << op);
+    return failure();
+  }
+
+private:
+  // Assumptions collected through the function
+  DenseSet<Value> assumptions;
+};
+
 struct ConvertTritonLoadToBufferLoad
     : public mlir::OpRewritePattern<triton::LoadOp> {
   using OpRewritePattern::OpRewritePattern;
@@ -267,7 +321,6 @@ struct ConvertTritonLoadToBufferLoad
                               opIdxAttr);
       }
       rewriter.replaceOp(op, bufferLoadOp);
-
       return success();
     }
     LDBG("Failed to convert: " << op);
@@ -339,6 +392,7 @@ public:
 
     patterns.add<ConvertTritonLoadToBufferLoad>(context, assumptions);
     patterns.add<ConvertTritonStoreToBufferStore>(context, assumptions);
+    patterns.add<ConvertTritonAtomicRMWOpToBufferAtomicRMW>(context, assumptions);
     if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
   }

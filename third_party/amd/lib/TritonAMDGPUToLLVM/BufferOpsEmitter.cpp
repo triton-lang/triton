@@ -86,6 +86,38 @@ Value BufferEmitter::emitLoad(Type type, Value rsrcDesc, Value offset,
   return data;
 }
 
+// The following ops are currently supported:
+// - fadd
+// - umin
+void BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc, Value offset,
+                                   Value data, Value pred) {
+  VectorType vecTy = cast<VectorType>(data.getType());
+  Type bufferType = getBufferOpType(type);
+  if (vecTy != bufferType)
+    data = bitcast(data, bufferType);
+
+  SmallVector<Value, 6> args{data};
+  fillCommonArgs(type, rsrcDesc, offset, pred, args);
+
+  // No return values
+  TypeRange returnTypes{};
+
+  switch (rmwType) {
+  case RMWOp::FADD:
+    rewriter.create<ROCDL::RawPtrBufferAtomicFaddOp>(
+      loc, returnTypes, args, ArrayRef<NamedAttribute>());
+    break;
+  case RMWOp::UMIN:
+    rewriter.create<ROCDL::RawPtrBufferAtomicUminOp>(
+      loc, returnTypes, args, ArrayRef<NamedAttribute>());
+    break;
+  default:
+    // TODO check for this
+    break;
+  }
+}
+
+
 void BufferEmitter::emitStore(Value rsrcDesc, Value offset, Value data,
                               Value pred, triton::CacheModifier cm) {
   VectorType vecTy = cast<VectorType>(data.getType());

@@ -514,6 +514,80 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
   }
 };
 
+///
+
+struct BufferAtomicRMWOpConversion
+    : public ConvertOpToLLVMPattern<triton::amdgpu::BufferAtomicRMWOp>,
+      public LoadStoreConversionBase {
+  using ConvertOpToLLVMPattern<
+      triton::amdgpu::BufferAtomicRMWOp>::ConvertOpToLLVMPattern;
+
+  BufferAtomicRMWOpConversion(LLVMTypeConverter &converter,
+                          const AMD::TargetInfo &targetInfo,
+                          ModuleAxisInfoAnalysis &axisAnalysisPass,
+                          PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::amdgpu::BufferAtomicRMWOp>(converter, benefit),
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+
+  LogicalResult
+  matchAndRewrite(triton::amdgpu::BufferAtomicRMWOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op->getLoc();
+    LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo);
+
+    // original values
+    Value ptr = op.getPtr();
+    Value offset = op.getOffsets();
+    Value mask = op.getMask();
+    Value data = op.getValue();
+    auto atomicRmwAttr = op.getAtomicRmwOp();
+
+    Value llPtr = adaptor.getPtr();
+    Value llOffset = adaptor.getOffsets();
+    Value llMask = adaptor.getMask();
+    Value llData = adaptor.getValue();
+
+
+    // Determine the vectorization size
+    Type valueTy = data.getType();
+    Type valueElemTy =
+        typeConverter->convertType(getElementTypeOrSelf(valueTy));
+    Type ptrType = getPointerTypeWithShape(ptr, offset);
+
+    unsigned numElems = getTotalElemsPerThread(ptrType);
+    unsigned vec = getVectorSize(ptr, offset);
+
+    // Get the offsets and value
+    SmallVector<Value> offsetElems = unpackLLElements(loc, llOffset, rewriter);
+    SmallVector<Value> valueElems = unpackLLElements(loc, llData, rewriter);
+
+    // Get the mask
+    SmallVector<Value> maskElems =
+        getMaskElemsAndUpdateVeclen(rewriter, loc, llMask, mask, vec);
+
+    Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr);
+    Value rDataMask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
+    for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
+      Type vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
+      Value pred = mask ? and_(maskElems[vecStart], rDataMask) : rDataMask;
+      Value falseVal = createZeroVector(rewriter, loc, cast<VectorType>(vecTy));
+      // Create the store val
+      Value storeVal = packElementRangeIntoVector(
+          rewriter, this->getTypeConverter(), loc, cast<VectorType>(vecTy),
+          valueElems, vecStart);
+
+      bufferEmitter.emitAtomicRMW(atomicRmwAttr, vecTy, rsrcDesc, offsetElems[vecStart], storeVal, pred);
+    } // end vec
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+
+
+///
+
 struct BufferStoreOpConversion
     : public ConvertOpToLLVMPattern<triton::amdgpu::BufferStoreOp>,
       public LoadStoreConversionBase {
@@ -1011,7 +1085,7 @@ void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        PatternBenefit benefit) {
   patterns
       .add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
-           StoreOpConversion, BufferLoadOpConversion, BufferStoreOpConversion>(
+           StoreOpConversion, BufferLoadOpConversion, BufferStoreOpConversion, BufferAtomicRMWOpConversion>(
           typeConverter, targetInfo, axisInfoAnalysis, benefit);
 }
 } // namespace mlir::triton::AMD

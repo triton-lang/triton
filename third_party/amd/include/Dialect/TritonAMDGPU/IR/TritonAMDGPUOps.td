@@ -26,13 +26,16 @@
 #define TRITON_AMDGPU_OPS
 
 include "mlir/IR/OpBase.td"
-include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
-include "mlir/IR/EnumAttr.td"
+include "triton/Dialect/Triton/IR/TritonDialect.td"
 include "triton/Dialect/Triton/IR/TritonTypes.td"
+include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
+include "triton/Dialect/Triton/IR/TritonInterfaces.td"
+include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
+
+include "mlir/IR/EnumAttr.td"
 include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
-include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 include "TritonAMDGPUDialect.td"
 include "TritonAMDGPUAttrDefs.td"
 
@@ -208,6 +211,41 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
       attr-dict `:` type($result)
     }];
 }
+
+def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
+  SameLoadStoreOperandsEncoding,
+  MemoryEffects<[MemRead<GlobalMemory>]>,
+  MemoryEffects<[MemWrite<GlobalMemory>]>,
+  TypesMatchWith<"value element type matches the pointed type of ptr", "value", "ptr", "getPointerTypeToElement($_self)">,
+  TypesMatchWith<"value and offsets have the same shape", "value", "offsets", "getI32SameShape($_self)">,
+  TypesMatchWith<"value and mask have the same shape", "value", "mask", "getI1SameShape($_self)",
+                 "($_op.getOperands().size() <= 3) || std::equal_to<>()">,
+]>{
+    let summary = "Load from a scalar base pointer and a tensor offset";
+    let description = [{
+        The semantics of this operation closely resemble standard buffer loads/stores.
+        Similar to TT_AtomicRMWOp: Buffer atomic RMW ops load data at $ptr, do $rmw_op with $val, and store result to $ptr.
+
+        This variant of Atomic RMW does not return a value: `https://github.com/llvm/llvm-project/blob/main/mlir/include/mlir/Dialect/LLVMIR/ROCDLOps.td#L482`
+        TT_AtomicRMWOp returns a value, so we need to use the `results` field as a placeholder to replace the op.
+    }];
+    let arguments = (
+      ins
+      TT_AtomicRMWAttr:$atomic_rmw_op,
+      TT_Ptr:$ptr,
+      I32Tensor:$offsets,
+      TT_Tensor:$value,
+      TT_MemSemanticAttr:$sem,
+      TT_MemSyncScopeAttr:$scope,
+      Optional<TT_BoolTensor>:$mask
+    );
+
+    let assemblyFormat = [{
+        $atomic_rmw_op `,` $sem `,` $scope `,` $value `,` $ptr `[` $offsets `]` (`,` $mask^)?
+        attr-dict `:` type($ptr) `,` type($offsets) `,` type($value)
+    }];
+}
+
 
 def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
   SameLoadStoreOperandsEncoding,
