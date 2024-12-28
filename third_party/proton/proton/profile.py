@@ -5,12 +5,11 @@ import os
 from triton._C.libproton import proton as libproton
 from triton.language import core as tl
 import triton.language
-#from triton._C.libtriton import ir
 from .hook import register_triton_hook, unregister_triton_hook
 from functools import wraps
 from .flags import set_profiling_off, set_profiling_on, is_command_line
 from typing import Optional, TypeVar
-from . import semantic
+from . import language
 import builtins
 
 T = TypeVar('T')
@@ -35,7 +34,7 @@ def builtin(fn: T) -> T:
 
 @builtin
 def record(isStart: bool, regionId: int, _builder=None):
-    return semantic.proton_record(isStart, regionId, _builder)
+    return language.proton_record(isStart, regionId, _builder)
 
 
 def _select_backend() -> str:

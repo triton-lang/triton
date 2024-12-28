@@ -88,10 +88,7 @@ void initProton(pybind11::module &&m) {
   pybind11::bind_map<std::map<std::string, MetricValueType>>(m, "MetricMap");
 }
 
-void init_triton_proton(pybind11::module &&m);
-
 PYBIND11_MODULE(libproton, m) {
   m.doc() = "Python bindings to the Proton API";
   initProton(std::move(m.def_submodule("proton")));
-  init_triton_proton(std::move(m.def_submodule("ttproton")));
 }
