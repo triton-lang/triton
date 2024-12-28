@@ -33,7 +33,7 @@ protected:
 
 } // namespace
 
-void mlir::triton::populateRecordOpToLLVMPattern(
+void mlir::triton::proton::populateRecordOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     const TargetInfoBase &targetInfo, PatternBenefit benefit) {
   patterns.add<RecordOpConversion>(typeConverter, targetInfo, benefit);

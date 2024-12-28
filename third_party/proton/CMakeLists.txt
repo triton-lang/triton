@@ -4,6 +4,7 @@ set(PROTON_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/csrc)
 set(PROTON_EXTERN_DIR ${CMAKE_CURRENT_SOURCE_DIR}/extern)
 file(GLOB_RECURSE PROTON_SRC ${PROTON_SRC_DIR}/lib/*.cpp)
 add_library(proton SHARED ${PROTON_SRC} ${PROTON_SRC_DIR}/${PROJECT_NAME}.cpp)
+
 if(NOT CUPTI_INCLUDE_DIR)
   message(FATAL_ERROR "CUPTI include directory not defined")
 endif()
@@ -38,5 +39,4 @@ include_directories(SYSTEM ${ROCTRACER_INCLUDE_DIR})
 target_compile_definitions(proton PRIVATE __HIP_PLATFORM_AMD__)
 
 target_link_libraries(proton PRIVATE Python3::Module pybind11::headers)
-
 target_link_options(proton PRIVATE ${PROTON_PYTHON_LDFLAGS})
