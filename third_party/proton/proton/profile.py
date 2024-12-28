@@ -4,33 +4,34 @@ import os
 
 from triton._C.libproton import proton as libproton
 from triton.language import core as tl
+from triton.language.core import builtin
 import triton.language
 from .hook import register_triton_hook, unregister_triton_hook
 from functools import wraps
 from .flags import set_profiling_off, set_profiling_on, is_command_line
-from typing import Optional, TypeVar
+from typing import Optional
 from . import language
-import builtins
+#import builtins
 
-T = TypeVar('T')
+#T = TypeVar('T')
 
 DEFAULT_PROFILE_NAME = "proton"
-TRITON_BUILTIN = "__triton_builtin__"
-
-def builtin(fn: T) -> T:
-    """Mark a function as a builtin."""
-    assert callable(fn)
-
-    @wraps(fn)
-    def wrapper(*args, **kwargs):
-        if "_builder" not in kwargs or kwargs["_builder"] is None:
-            raise ValueError("Did you forget to add @triton.jit ? "
-                             "(`_builder` argument must be provided outside of JIT functions.)")
-        return fn(*args, **kwargs)
-
-    setattr(wrapper, TRITON_BUILTIN, True)
-
-    return wrapper
+#TRITON_BUILTIN = "__triton_builtin__"
+#
+#def builtin(fn: T) -> T:
+#    """Mark a function as a builtin."""
+#    assert callable(fn)
+#
+#    @wraps(fn)
+#    def wrapper(*args, **kwargs):
+#        if "_builder" not in kwargs or kwargs["_builder"] is None:
+#            raise ValueError("Did you forget to add @triton.jit ? "
+#                             "(`_builder` argument must be provided outside of JIT functions.)")
+#        return fn(*args, **kwargs)
+#
+#    setattr(wrapper, TRITON_BUILTIN, True)
+#
+#    return wrapper
 
 @builtin
 def record(isStart: bool, regionId: int, _builder=None):
