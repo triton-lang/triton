@@ -58,6 +58,7 @@ def add(x: torch.Tensor, y: torch.Tensor):
     pgm = add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
     ttir = pgm.asm['ttir']
     print(ttir)    
+    assert "proton.record() {isStart = true, regionId = 0 : i32}" in ttir
     # We return a handle to z but, since `torch.cuda.synchronize()` hasn't been called, the kernel is still
     # running asynchronously at this point.
     return output

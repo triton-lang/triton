@@ -2,12 +2,8 @@ project(Proton CXX)
 
 set(PROTON_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/csrc)
 set(PROTON_EXTERN_DIR ${CMAKE_CURRENT_SOURCE_DIR}/extern)
-set(PROTON_DIALECT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/dialect)
 file(GLOB_RECURSE PROTON_SRC ${PROTON_SRC_DIR}/lib/*.cpp)
-add_library(proton SHARED ${PROTON_SRC} ${PROTON_SRC_DIR}/${PROJECT_NAME}.cpp 
-	${CMAKE_CURRENT_SOURCE_DIR}/dialect/triton_proton.cc
-	)
-
+add_library(proton SHARED ${PROTON_SRC} ${PROTON_SRC_DIR}/${PROJECT_NAME}.cpp)
 if(NOT CUPTI_INCLUDE_DIR)
   message(FATAL_ERROR "CUPTI include directory not defined")
 endif()
@@ -20,7 +16,6 @@ endif()
 
 include_directories(${JSON_INCLUDE_DIR})
 include_directories(${PROTON_SRC_DIR}/include)
-include_directories(${PROTON_DIALECT_DIR}/include)
 include_directories(${PROTON_EXTERN_DIR})
 
 find_package(Python3 REQUIRED Interpreter Development.Module)
@@ -42,9 +37,6 @@ include_directories(${CUPTI_INCLUDE_DIR})
 include_directories(SYSTEM ${ROCTRACER_INCLUDE_DIR})
 target_compile_definitions(proton PRIVATE __HIP_PLATFORM_AMD__)
 
-target_link_libraries(proton PRIVATE Python3::Module pybind11::headers LLVMSupport MLIRIR ProtonIR TritonGPUIR TritonIR MLIRGPUDialect
-  MLIRTransforms
-  MLIRTransformUtils
-  TritonGPUTransforms
- )
+target_link_libraries(proton PRIVATE Python3::Module pybind11::headers)
+
 target_link_options(proton PRIVATE ${PROTON_PYTHON_LDFLAGS})
