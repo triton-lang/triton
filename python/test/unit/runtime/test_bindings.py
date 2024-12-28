@@ -1,4 +1,5 @@
 import triton
+from triton.runtime.jit import mangle_type
 import triton.language as tl
 
 import torch
@@ -63,7 +64,7 @@ def test_module_walk(device):
     backend = triton.compiler.compiler.make_backend(target)
     src = triton.compiler.compiler.ASTSource(
         fn=kernel,
-        signature={kernel.arg_names[i]: triton.runtime.jit.mangle_type(arg)
+        signature={kernel.arg_names[i]: mangle_type(arg)
                    for i, arg in enumerate(args)},
         constexprs={kernel.arg_names[i]: arg
                     for i, arg in enumerate(args)
