@@ -34,21 +34,8 @@ def builtin(fn: T) -> T:
     return wrapper
 
 @builtin
-def record(prefix, *args, hex=False, _builder=None):
-    import string
-    prefix = tl._constexpr_to_value(prefix)
-    assert isinstance(prefix, str), f"{prefix} is not string"
-    b_ascii = True
-    for ch in prefix:
-        if ch not in string.printable:
-            b_ascii = False
-            break
-    assert b_ascii, f"{prefix} is not an ascii string"
-    new_args = []
-    for arg in args:
-        new_args.append(triton.language.semantic.to_tensor(arg, _builder))
-    return semantic.proton_record(True, 0, _builder)
-#    return semantic.record(prefix, new_args, hex, _builder)
+def record(isStart: bool, regionId: int, _builder=None):
+    return semantic.proton_record(isStart, regionId, _builder)
 
 
 def _select_backend() -> str:

@@ -29,7 +29,7 @@ def add_kernel(x_ptr,  # *Pointer* to first input vector.
     # Load x and y from DRAM, masking out any extra elements in case the input is not a
     # multiple of the block size.
     x = tl.load(x_ptr + offsets, mask=mask)
-    proton.record("x: ", x, hex=True)
+    proton.record(True, 0)
     y = tl.load(y_ptr + offsets, mask=mask)
     output = x + y
     # Write x + y back to DRAM.
@@ -57,7 +57,7 @@ def add(x: torch.Tensor, y: torch.Tensor):
     #  - Don't forget to pass meta-parameters as keywords arguments.
     pgm = add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
     ttir = pgm.asm['ttir']
-#    print(ttir)    
+    print(ttir)    
     # We return a handle to z but, since `torch.cuda.synchronize()` hasn't been called, the kernel is still
     # running asynchronously at this point.
     return output

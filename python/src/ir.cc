@@ -1605,14 +1605,14 @@ void init_triton_ir(py::module &&m) {
                                                llvm::StringRef(prefix));
              self.create<PrintOp>(prefixAttr, hex, values, isSigned);
            })
-      .def("create_record",
-           [](TritonOpBuilder &self, const std::string &prefix, bool hex,
-              const std::vector<Value> &values,
-              const std::vector<int32_t> &isSigned) -> void {
-             auto prefixAttr = StringAttr::get(self.getBuilder().getContext(),
-                                               llvm::StringRef(prefix));
-             self.create<PrintOp>(prefixAttr, hex, values, isSigned);
-           })
+//      .def("create_record",
+//           [](TritonOpBuilder &self, const std::string &prefix, bool hex,
+//              const std::vector<Value> &values,
+//              const std::vector<int32_t> &isSigned) -> void {
+//             auto prefixAttr = StringAttr::get(self.getBuilder().getContext(),
+//                                               llvm::StringRef(prefix));
+//             self.create<PrintOp>(prefixAttr, hex, values, isSigned);
+//           })
        .def("create_proton_record",
          [](TritonOpBuilder &self, bool isStart, int32_t regionId) -> void{
                self.create<mlir::triton::proton::RecordOp>(isStart, regionId);
