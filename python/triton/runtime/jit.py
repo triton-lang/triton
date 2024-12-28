@@ -449,43 +449,6 @@ class JITFunction(KernelInterface[T]):
     # cache_hook will always be called before compilation and compiled_hook after.
     compiled_hook = None
 
-    @staticmethod
-    def _key_of(arg):
-        if hasattr(arg, "dtype"):
-            return arg.dtype
-        elif isinstance(arg, bool):
-            return "i1"
-        elif isinstance(arg, int):
-            if -(2**31) <= arg and arg <= 2**31 - 1:
-                return "i32"
-            elif 2**63 <= arg and arg <= 2**64 - 1:
-                return "u64"
-            else:
-                return "i64"
-        elif isinstance(arg, float):
-            return "fp32"
-        elif arg is None:
-            return None
-        else:
-            raise TypeError(f"Unsupported type {type(arg)} for {arg}")
-
-    @staticmethod
-    def _type_of(key, is_const=False):
-        # `None` is nullptr.  Implicitly convert to *i8.
-        if key is None:
-            return "*i8"
-        elif isinstance(key, str):
-            return key
-
-        dtype_str = str(key).split(".")[-1]
-        dtype_str = type_canonicalisation_dict[dtype_str]
-        const_str = "*k" if is_const else "*"
-        return const_str + dtype_str
-
-    def _make_constants(self, constexpr_key):
-        constants = dict(zip(self.constexprs, constexpr_key))
-        return constants
-
     def _call_hook(
         self,
         key,
