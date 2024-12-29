@@ -9,13 +9,19 @@ from .hook import register_triton_hook, unregister_triton_hook
 from .flags import set_profiling_off, set_profiling_on, is_command_line
 from typing import Optional
 from . import language
+import warnings
 
 DEFAULT_PROFILE_NAME = "proton"
 
 
-@builtin
-def record(isStart: bool, regionId: int, _builder=None):
-    return language.proton_record(isStart, regionId, _builder)
+class dev:
+
+    @builtin
+    def record(isStart: bool, regionId: int, _builder=None):
+        warnings.warn(
+            "\nWarning the dev module within Proton contains under development features that are not intended to be used outside of the core development team"
+        )
+        return language.proton_record(isStart, regionId, _builder)
 
 
 def _select_backend() -> str:

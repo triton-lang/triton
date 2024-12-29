@@ -7,6 +7,6 @@ from .profile import (
     deactivate,
     finalize,
     profile,
-    record,
+    dev,
     DEFAULT_PROFILE_NAME,
 )
