@@ -41,6 +41,7 @@ public:
   }
 
   /// Stop the profiler.
+  /// Do real stop if there's no data to collect.
   Profiler *stop() {
     if (!this->started) {
       return this;
