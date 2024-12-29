@@ -361,41 +361,46 @@ def create_function_from_signature(sig, kparams, backend):
     non_constexpr_vals = []
     signature_types = []
     specialisations = []
-
-    for ((name, sp), kp) in zip(sig.parameters.items(), kparams):
+    # parameters
+    for name, sp in sig.parameters.items():
         if sp.default is inspect.Parameter.empty:
             func_args.append(name)
             dict_entries.append(f"'{name}': {name}")
         else:
             func_args.append(f"{name}=default_{name}")
             dict_entries.append(f"'{name}': {name}")
+    # signature
+    for name, kp in zip(sig.parameters.keys(), kparams):
         if kp.is_constexpr:
             signature_types.append('"constexpr"')
-            constexpr_vals.append(name)
+        elif kp.annotation_type:
+            signature_types.append('"%s"' % kp.annotation_type)
         else:
-            non_constexpr_vals.append(name)
-            if not kp.do_not_specialize:
-                if not kp.do_not_specialize_on_alignment:
-                    specialisations.append('compute_spec_key(%s, align=True)' % name)
-                else:
-                    specialisations.append('compute_spec_key(%s, align=False)' % name)
-            if kp.annotation_type:
-                signature_types.append('"%s"' % kp.annotation_type)
-            else:
-                signature_types.append('mangle_type(%s, %s)' % (name, 'True' if kp.is_const else 'False'))
+            signature_types.append('mangle_type(%s, %s)' % (name, 'True' if kp.is_const else 'False'))
+    # sort constexpr vs non-constexpr values
+    for name, kp in zip(sig.parameters.keys(), kparams):
+        if kp.is_constexpr:
+            constexpr_vals.append(name)
+    # specialization key
+    for name, kp in zip(sig.parameters.keys(), kparams):
+        if kp.do_not_specialize:
+            continue
+        align = not kp.do_not_specialize_on_alignment
+        specialisations.append('compute_spec_key(%s, align=%s)' % (name, align))
 
-    cache_key = ''.join([x + ', ' for x in signature_types + specialisations])
     constexpr_vals = ''.join([x + ', ' for x in constexpr_vals])
-    non_constexpr_vals = ''.join([x + ', ' for x in non_constexpr_vals])
-
-    func_args.append('**excess_kwargs')
-
     # Join all arguments into a function definition string
     args_str = ', '.join(func_args)
     dict_str = ', '.join(dict_entries)
-    func_body = "def dynamic_func(%s):\n    return {%s}, (%s), (%s), (%s), excess_kwargs" % (
-        args_str, dict_str, cache_key, constexpr_vals, non_constexpr_vals)
-
+    func_body = f"""
+def dynamic_func({args_str}, **excess_kwargs):
+    key = ''
+    key += ''.join(({','.join(signature_types)}))
+    key += ''.join(({','.join(specialisations)}))
+    key +=  '-'.join([x.cache_key if isinstance(x, JITFunction) else str(x) for x in ({constexpr_vals})])
+    key += str(excess_kwargs)
+    return {{{dict_str}}}, key, ({','.join(signature_types)})
+"""
     # Prepare defaults to be inserted into function namespace
     func_namespace = {
         f"default_{name}": param.default
@@ -403,6 +408,7 @@ def create_function_from_signature(sig, kparams, backend):
         if param.default is not inspect.Parameter.empty
     }
 
+    func_namespace["JITFunction"] = JITFunction
     func_namespace['mangle_type'] = mangle_type
     func_namespace['compute_spec_key'] = backend.compute_spec_key
 
@@ -541,35 +547,27 @@ class JITFunction(KernelInterface[T]):
             hook(*args, **kwargs)
 
         kernel_cache, target, backend, binder = self.device_caches[device]
-        bound_args, sig_and_spec, constexpr_vals, non_constexpr_vals, excess_kwargs = binder(*args, **kwargs)
+        bound_args, key, sigvals = binder(*args, **kwargs)
 
         # compute cache key
-        constexpr_key = '-'.join([x.cache_key if isinstance(x, JITFunction) else str(x) for x in constexpr_vals])
-        key = ''.join(sig_and_spec) + constexpr_key + str(excess_kwargs)
         kernel = kernel_cache.get(key, None)
 
         if kernel is None:
+            sigkeys = [param.name for param in self.params]
+            signature = {k: v for (k, v) in zip(sigkeys, sigvals)}
+
             # Kernel is not cached; we have to compile.
             options = backend.parse_options(kwargs)
 
-            # deprecated arguments
+            # check arguments
             assert "device_type" not in kwargs, "device_type option is deprecated; current target will be used"
             assert "device" not in kwargs, "device option is deprecated; current device will be used"
             assert "stream" not in kwargs, "stream option is deprecated; current stream will be used"
-            for k in excess_kwargs:
-                if k not in options.__dict__:
+            for k in kwargs:
+                if k not in options.__dict__ and k not in sigkeys:
                     raise KeyError("Keyword argument %s was specified but unrecognised" % k)
 
             bound_vals = tuple(bound_args.values())
-
-            # `None` is nullptr. Implicitly convert to *i8. This needs to be
-            # done here rather than when we build the signature as otherwise
-            # the kernel cache key could not distinguish between byte pointers
-            # and None arguments, resulting in a downstream mismatch:
-            sigkeys = [param.name for param in self.params]
-            sigvals = sig_and_spec[:len(sigkeys)]
-            signature = {k: v for (k, v) in zip(sigkeys, sigvals)}
-
             attrs = backend.get_attrs_descriptor(self.params, bound_vals)
             constexprs = {p.name: v for (v, p) in zip(bound_vals, self.params) if p.is_constexpr}
 
@@ -598,9 +596,10 @@ class JITFunction(KernelInterface[T]):
             grid_1 = grid[1] if grid_size > 1 else 1
             grid_2 = grid[2] if grid_size > 2 else 1
             # launch kernel
-            launch_metadata = kernel.launch_metadata(grid, stream, *non_constexpr_vals)
-            kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata, launch_metadata,
-                       self.CompiledKernel.launch_enter_hook, self.CompiledKernel.launch_exit_hook, *non_constexpr_vals)
+            launch_metadata = kernel.launch_metadata(grid, stream, *bound_args.values())
+            kernel.run(grid_0, grid_1, grid_2, stream, kernel.function, kernel.packed_metadata,
+                       launch_metadata, self.CompiledKernel.launch_enter_hook, self.CompiledKernel.launch_exit_hook,
+                       *bound_args.values())
         return kernel
 
     def __init__(self, fn, version=None, do_not_specialize=None, do_not_specialize_on_alignment=None, debug=None,

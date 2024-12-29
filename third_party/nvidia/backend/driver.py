@@ -121,6 +121,8 @@ def ty_to_cpp(ty):
 def make_launcher(constants, signature, ids):
 
     def _extracted_type(ty):
+        if ty == "constexpr":
+            return "PyObject*"
         if ty[0] == '*' or ty == "none":
             return "PyObject*"
         if ty == "nvTmaDesc":
@@ -157,7 +159,6 @@ def make_launcher(constants, signature, ids):
             "uint64_t": "K",
         }[ty]
 
-    signature = {k: v for k, v in signature.items() if v != 'constexpr'}
     args_format = ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
     format = "iiiKKpOOOOO" + args_format
     signature = ','.join(signature.values()).replace('[', '').replace(']', '')
@@ -166,7 +167,7 @@ def make_launcher(constants, signature, ids):
     args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
     # Record the end of regular arguments;
     # subsequent arguments are architecture-specific descriptors, such as tensor descriptors for CUDA.
-    arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
+    arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items() if ty != "constexpr")
     internal_args_list = []
     for i, ty in signature.items():
         if ty[0] == "*" or ty == "none":
@@ -174,12 +175,12 @@ def make_launcher(constants, signature, ids):
         elif ty == "nvTmaDesc":
             # Note: we have to dereference the pointer
             internal_args_list.append(f"*tma_ptr{i}")
-        else:
+        elif ty != "constexpr":
             internal_args_list.append(f"_arg{i}")
     params = range(len(signature))
 
     # generate glue code
-    params = [f"&arg{i}" for i, ty in signature.items() if i not in constants and ty != "none"]
+    params = [f"&arg{i}" for i, ty in signature.items() if i not in constants and ty != "none" and ty != "constexpr"]
     params.append("&global_scratch")
     src = f"""
 #include \"cuda.h\"

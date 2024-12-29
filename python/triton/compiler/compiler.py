@@ -411,11 +411,8 @@ class CompiledKernel:
         arg_dict = {}
         arg_idx = 0
         for i, arg_name in enumerate(self.src.fn.arg_names):
-            if i in self.src.fn.constexprs:
-                arg_dict[arg_name] = self.src.constexprs[arg_name]
-            else:
-                arg_dict[arg_name] = args[arg_idx]
-                arg_idx += 1
+            arg_dict[arg_name] = args[arg_idx]
+            arg_idx += 1
         ret.add(self.src.fn.launch_metadata, (grid, self.metadata, arg_dict))
         return ret
 
