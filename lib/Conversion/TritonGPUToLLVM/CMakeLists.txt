@@ -33,6 +33,7 @@ add_triton_library(TritonGPUToLLVM
     MLIRGPUTransforms
     TritonAnalysis
     TritonIR
+    #    ProtonIR
     TritonGPUIR
     TritonGPUTransforms
     TritonNvidiaGPUTransforms
