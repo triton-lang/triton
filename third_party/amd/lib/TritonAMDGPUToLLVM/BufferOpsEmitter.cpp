@@ -97,19 +97,16 @@ void BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc, Valu
     data = bitcast(data, bufferType);
 
   SmallVector<Value, 6> args{data};
-  fillCommonArgs(type, rsrcDesc, offset, pred, args);
-
-  // No return values
-  TypeRange returnTypes{};
+  fillCommonArgs(vecTy, rsrcDesc, offset, pred, args);
 
   switch (rmwType) {
   case RMWOp::FADD:
     rewriter.create<ROCDL::RawPtrBufferAtomicFaddOp>(
-      loc, returnTypes, args, ArrayRef<NamedAttribute>());
+      loc, TypeRange{}, args, ArrayRef<NamedAttribute>());
     break;
   case RMWOp::UMIN:
     rewriter.create<ROCDL::RawPtrBufferAtomicUminOp>(
-      loc, returnTypes, args, ArrayRef<NamedAttribute>());
+      loc, TypeRange{}, args, ArrayRef<NamedAttribute>());
     break;
   default:
     // TODO check for this
