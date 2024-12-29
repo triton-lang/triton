@@ -7,7 +7,7 @@ from triton.language import core as tl
 from triton.language.core import builtin
 from .. import language
 
+
 @builtin
 def record(isStart: bool, regionId: int, _builder=None):
     return language.proton_record(isStart, regionId, _builder)
-
