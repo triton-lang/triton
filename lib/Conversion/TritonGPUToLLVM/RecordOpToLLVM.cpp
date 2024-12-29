@@ -7,6 +7,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
 #include "third_party/proton/dialect/include/Dialect/Proton/IR/Dialect.h"
+#include "third_party/proton/dialect/include/TritonProtonToLLVM/PatternTritonProtonOpToLLVM.h"
 
 namespace {
 

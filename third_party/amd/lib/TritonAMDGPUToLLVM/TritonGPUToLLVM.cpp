@@ -24,6 +24,8 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
+#include "third_party/proton/dialect/include/TritonProtonToLLVM/PatternTritonProtonOpToLLVM.h"
+
 namespace mlir::triton {
 #define GEN_PASS_DEF_CONVERTTRITONAMDGPUTOLLVM
 #include "TritonAMDGPUToLLVM/Passes.h.inc"

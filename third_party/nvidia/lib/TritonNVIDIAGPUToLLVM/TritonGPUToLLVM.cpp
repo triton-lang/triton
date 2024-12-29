@@ -22,6 +22,8 @@
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 
+#include "third_party/proton/dialect/include/TritonProtonToLLVM/PatternTritonProtonOpToLLVM.h"
+
 namespace mlir {
 namespace triton {
 #define GEN_PASS_DEF_CONVERTTRITONGPUTOLLVM
