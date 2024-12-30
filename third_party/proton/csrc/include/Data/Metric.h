@@ -3,6 +3,7 @@
 
 #include "Utility/String.h"
 #include "Utility/Traits.h"
+#include <iostream>
 #include <variant>
 #include <vector>
 
@@ -93,10 +94,11 @@ public:
   FlexibleMetric(const std::string &valueName,
                  std::variant<MetricValueType> value)
       : Metric(MetricKind::Flexible, 1), valueName(valueName) {
-    this->exclusive = endWith(toLower(valueName), "(exc)");
-    this->property = endWith(toLower(valueName), "(pty)");
+    this->exclusive = endWith(valueName, "(exc)");
+    this->property = endWith(valueName, "(pty)");
     this->valueName = trim(replace(this->valueName, "(exc)", ""));
     this->valueName = trim(replace(this->valueName, "(pty)", ""));
+    std::cout << "valueName: " << valueName << std::endl;
     std::visit([&](auto &&v) { this->values[0] = v; }, value);
   }
 
@@ -105,8 +107,6 @@ public:
                  bool exclusive)
       : Metric(MetricKind::Flexible, 1), valueName(valueName),
         property(property), exclusive(exclusive) {
-    this->valueName = trim(replace(this->valueName, "(exc)", ""));
-    this->valueName = trim(replace(this->valueName, "(pty)", ""));
     std::visit([&](auto &&v) { this->values[0] = v; }, value);
   }
 
