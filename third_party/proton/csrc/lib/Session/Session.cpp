@@ -220,7 +220,7 @@ void SessionManager::exitOp(const Scope &scope) {
 
 void SessionManager::addMetrics(
     size_t scopeId, const std::map<std::string, MetricValueType> &metrics) {
-  std::shared_lock<std::shared_mutex> lock(mutex);
+  std::lock_guard<std::mutex> lock(mutex);
   for (auto [sessionId, active] : sessionActive) {
     if (active) {
       sessions[sessionId]->data->addMetrics(scopeId, metrics);
