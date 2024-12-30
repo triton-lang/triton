@@ -502,6 +502,7 @@ using ::mlir::triton::gpu::BlockedEncodingAttr;
 using ::mlir::triton::gpu::CTALayoutAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
+using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
 
 inline Value dot(RewriterBase &rewriter, Location loc, ArrayRef<Value> offsets,
@@ -512,6 +513,19 @@ inline Value dot(RewriterBase &rewriter, Location loc, ArrayRef<Value> offsets,
     ret = add(ret, mul(offset, stride));
   }
   return ret;
+}
+
+template <typename T>
+SmallVector<T> insertValue(ArrayRef<T> vec, unsigned index, T value) {
+  SmallVector<T> res(vec.begin(), vec.end());
+  res.insert(res.begin() + index, value);
+  return res;
+}
+template <typename T>
+SmallVector<T> insertValue(const SmallVector<T> &vec, unsigned index, T value) {
+  SmallVector<T> res(vec.begin(), vec.end());
+  res.insert(res.begin() + index, value);
+  return res;
 }
 
 /// Extend 2d shared object to 3d.
@@ -531,6 +545,21 @@ SharedMemoryObject
 getExpandedSharedMemoryObject(ConversionPatternRewriter &rewriter, Location loc,
                               SharedMemoryObject smemObj,
                               ArrayRef<int64_t> shape);
+
+CTALayoutAttr getExpandedCTALayout(MLIRContext *ctx,
+                                   CTALayoutAttr ctaLayoutAttr);
+
+/// Expand layout of dot operands and dot results to 3d variant.
+///
+/// If given layout describes 3d tensor, return it without change.
+/// If given layout describes 2d tensor, create new layout
+/// describing 3d tensor by adding batch = 1.
+Attribute getExpandedEncoding(Attribute encoding);
+
+/// Expand type of dot operands to 3d variant. If the given type is a 3d tensor,
+/// return it without change. If it is a 2d tensor, create a new type that
+/// describes 3d tensor with expanded shape and layout.
+triton::gpu::MemDescType getExpandedDesc(triton::gpu::MemDescType descTy);
 
 // -----------------------------------------------------------------------
 // Blocked layout indices
