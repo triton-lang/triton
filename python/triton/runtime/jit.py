@@ -449,43 +449,6 @@ class JITFunction(KernelInterface[T]):
     # cache_hook will always be called before compilation and compiled_hook after.
     compiled_hook = None
 
-    @staticmethod
-    def _key_of(arg):
-        if hasattr(arg, "dtype"):
-            return arg.dtype
-        elif isinstance(arg, bool):
-            return "i1"
-        elif isinstance(arg, int):
-            if -(2**31) <= arg and arg <= 2**31 - 1:
-                return "i32"
-            elif 2**63 <= arg and arg <= 2**64 - 1:
-                return "u64"
-            else:
-                return "i64"
-        elif isinstance(arg, float):
-            return "fp32"
-        elif arg is None:
-            return None
-        else:
-            raise TypeError(f"Unsupported type {type(arg)} for {arg}")
-
-    @staticmethod
-    def _type_of(key, is_const=False):
-        # `None` is nullptr.  Implicitly convert to *i8.
-        if key is None:
-            return "*i8"
-        elif isinstance(key, str):
-            return key
-
-        dtype_str = str(key).split(".")[-1]
-        dtype_str = type_canonicalisation_dict[dtype_str]
-        const_str = "*k" if is_const else "*"
-        return const_str + dtype_str
-
-    def _make_constants(self, constexpr_key):
-        constants = dict(zip(self.constexprs, constexpr_key))
-        return constants
-
     def _call_hook(
         self,
         key,
@@ -581,7 +544,8 @@ class JITFunction(KernelInterface[T]):
         bound_args, sig_and_spec, constexpr_vals, non_constexpr_vals, excess_kwargs = binder(*args, **kwargs)
 
         # compute cache key
-        key = ''.join(sig_and_spec) + str((constexpr_vals, excess_kwargs))
+        constexpr_key = '-'.join([x.cache_key if isinstance(x, JITFunction) else str(x) for x in constexpr_vals])
+        key = ''.join(sig_and_spec) + constexpr_key + str(excess_kwargs)
         kernel = kernel_cache.get(key, None)
 
         if kernel is None:
@@ -608,9 +572,6 @@ class JITFunction(KernelInterface[T]):
 
             attrs = backend.get_attrs_descriptor(self.params, bound_vals)
             constexprs = {p.name: v for (v, p) in zip(bound_vals, self.params) if p.is_constexpr}
-            for i, arg in constexprs.items():
-                if callable(arg):
-                    raise TypeError(f"Callable constexpr at index {i} is not supported")
 
             if self._call_hook(key, signature, device, constexprs, options, [attrs], warmup, before=True):
                 return None
@@ -664,8 +625,9 @@ class JITFunction(KernelInterface[T]):
             self.params.append(KernelParam(i, param, dns, dns_oa))
 
         # function source code (without decorators)
-        self.src = textwrap.dedent(inspect.getsource(fn))
-        self.src = self.src[re.search(r"^def\s+\w+\s*\(", self.src, re.MULTILINE).start():]
+        src = textwrap.dedent(inspect.getsource(fn))
+        src = src[re.search(r"^def\s+\w+\s*\(", src, re.MULTILINE).start():]
+        self._unsafe_update_src(src)
         # cache of just-in-time compiled kernels
         self.device_caches = defaultdict(lambda: self.create_binder())
         self.hash = None
@@ -755,11 +717,20 @@ class JITFunction(KernelInterface[T]):
         raise RuntimeError("Cannot call @triton.jit'd outside of the scope of a kernel")
 
     def __setattr__(self, name, value):
-        super(JITFunction, self).__setattr__(name, value)
-        # - when `.src` attribute is set, cache path needs
-        #   to be reinitialized
+        # - when `.src` attribute is set, cache key of all callers need to be re-computed
         if name == "src":
-            self.hash = None
+            raise AttributeError(f"Cannot set attribute '{name}' directly. "
+                                 f"Use '_unsafe_update_src()' and manually clear `.hash` of all callers"
+                                 f"instead.")
+        super(JITFunction, self).__setattr__(name, value)
+
+    def _unsafe_update_src(self, new_src):
+        """
+        The only method allowed to modify src.
+        Bypasses the __setattr__ restriction by calling super().__setattr__ directly.
+        """
+        self.hash = None
+        super().__setattr__('src', new_src)
 
     def __repr__(self):
         return f"JITFunction({self.module}:{self.fn.__name__})"
