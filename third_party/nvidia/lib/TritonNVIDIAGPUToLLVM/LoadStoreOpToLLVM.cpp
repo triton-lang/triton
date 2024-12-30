@@ -1605,7 +1605,7 @@ LogicalResult AsyncTMAScatterOpConversion::matchAndRewrite(
 
   // TODO: Separate the syncronizations operations into separate TTGIR ops to
   // be able to schedule them at the high level.
-  rewriter.create<NVVM::CpAsyncCommitGroupOp>(loc);
+  rewriter.create<NVVM::CpAsyncBulkCommitGroupOp>(loc);
 
   rewriter.eraseOp(op);
   return success();
