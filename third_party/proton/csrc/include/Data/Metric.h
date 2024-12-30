@@ -3,7 +3,6 @@
 
 #include "Utility/String.h"
 #include "Utility/Traits.h"
-#include <iostream>
 #include <variant>
 #include <vector>
 
@@ -98,7 +97,6 @@ public:
     this->property = endWith(valueName, "(pty)");
     this->valueName = trim(replace(this->valueName, "(exc)", ""));
     this->valueName = trim(replace(this->valueName, "(pty)", ""));
-    std::cout << "valueName: " << valueName << std::endl;
     std::visit([&](auto &&v) { this->values[0] = v; }, value);
   }
 
