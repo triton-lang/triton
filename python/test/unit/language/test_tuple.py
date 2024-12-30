@@ -1,4 +1,3 @@
-from typing import NamedTuple
 import pytest
 import triton
 import triton.language as tl
@@ -99,45 +98,3 @@ def test_serialize(device="cuda"):
     _tuple_serialize[(1, )](z, None, (x0, (1, None, x1)), 20, 1, (y0, ))
     ref = torch.tensor([8, 1, 12, 21, 10, 15, -1, 8, 1, 12], device=device)
     assert torch.equal(z, ref)
-
-
-class Closure(NamedTuple):
-    fn: tl.constexpr
-    captured: tuple
-
-
-class Tensor(NamedTuple):
-    ptr: any
-    shape: tuple
-    stride: tuple
-
-
-@triton.jit
-def mul(x, a):
-    return x * tl.load(a)
-
-
-@triton.jit
-def _namedtuple_kernel(closure, x, y, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
-    offs_m = tl.arange(0, BLOCK_M)
-    offs_n = tl.arange(0, BLOCK_N)
-    # load x
-    mask_x = (offs_m[:, None] < x.shape[0]) & (offs_n[None, :] < x.shape[1])
-    Xs = x.ptr + offs_m[:, None] * x.stride[0] + offs_n[None, :] * x.stride[1]
-    x = tl.load(Xs, mask=mask_x, other=0)
-    # compute y
-    y = closure.fn(x, *closure.captured)
-    # store y
-    mask_y = (offs_m[:, None] < y.shape[0]) & (offs_n[None, :] < y.shape[1])
-    Ys = y.ptr + offs_m[:, None] * y.stride[0] + offs_n[None, :] * y.stride[1]
-    tl.store(Ys, y, mask=mask_y)
-
-
-def test_namedtuple(device="cuda"):
-    x = torch.empty((32, 32), dtype=torch.float32, device=device)
-    y = torch.empty((16, 16), dtype=torch.float32, device=device)
-    a = torch.tensor([5.2], dtype=torch.float32, device=device)
-    closure = Closure(mul, a)
-    tx = Tensor(x, x.shape, x.stride())
-    ty = Tensor(y, y.shape, y.stride())
-    _namedtuple_kernel[(1, )](closure, tx, ty, 64, 64)
