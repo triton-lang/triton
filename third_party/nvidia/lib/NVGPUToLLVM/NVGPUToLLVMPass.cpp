@@ -18,7 +18,6 @@ using namespace mlir::triton;
 #include "NVGPUToLLVM/Passes.h.inc"
 
 namespace ttn = mlir::triton::nvgpu;
-using ::mlir::LLVM::NVIDIA::getSRegValue;
 using ttn::Constraints;
 using ttn::OperandsAndConstraints;
 

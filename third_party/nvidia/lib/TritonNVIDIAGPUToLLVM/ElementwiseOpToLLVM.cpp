@@ -360,23 +360,21 @@ struct FpToFpOpConversion
   static Value convertFp32ToBf16(Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  const Value &v, const RoundingMode rounding) {
-    PTXBuilder builder;
-    StringRef ptx;
+    StringRef name;
     switch (rounding) {
     case RoundingMode::RTNE:
-      ptx = "cvt.rn.bf16.f32";
+      name = "llvm.nvvm.f2bf16.rn";
       break;
     case RoundingMode::RTZ:
-      ptx = "cvt.rz.bf16.f32";
+      name = "llvm.nvvm.f2bf16.rz";
       break;
+    default:
+      emitError(loc) << "unsupported rounding mode for f32->bf16 conversion: "
+                     << stringifyRoundingMode(rounding) << "\n";
+      llvm_unreachable("");
     }
-    auto &cvt = *builder.create(ptx.str());
-    auto res = builder.newOperand("=h");
-    auto operand = builder.newOperand(v, "r");
-    cvt(res, operand);
-    // TODO: This is a hack to get the right type. We should be able to invoke
-    // the type converter
-    return builder.launch(rewriter, loc, bf16_ty, false);
+    return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, name, bf16_ty, {v})
+        .getResult(0);
   }
 
   static Value convertFp32ToFp16(Location loc,
@@ -392,9 +390,8 @@ struct FpToFpOpConversion
       ptx = "cvt.rz.f16.f32";
       break;
     default:
-      llvm::errs() << "WARNING: unsupported rounding mode for f32->f16 "
-                      "conversion: "
-                   << stringifyRoundingMode(rounding) << "\n";
+      emitError(loc) << "unsupported rounding mode for f32->f16 conversion: "
+                     << stringifyRoundingMode(rounding) << "\n";
       llvm_unreachable("");
     }
     auto &cvt = *builder.create(ptx.str());
@@ -552,26 +549,22 @@ struct FDivOpConversion
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    PTXBuilder ptxBuilder;
-    auto &fdiv = *ptxBuilder.create<PTXInstr>("div");
     unsigned bitwidth = elemTy.getIntOrFloatBitWidth();
+    StringRef name;
+    Type resultTy;
     if (32 == bitwidth) {
-      fdiv.o("full").o("f32");
+      name = "llvm.nvvm.div.full";
+      resultTy = f32_ty;
     } else if (64 == bitwidth) {
-      fdiv.o("rn").o("f64");
+      name = "llvm.nvvm.div.rn.d";
+      resultTy = f64_ty;
     } else {
       llvm::report_fatal_error("Unsupported bitwidth");
     }
-
-    auto res = ptxBuilder.newOperand(bitwidth == 32 ? "=r" : "=l");
-    auto lhs =
-        ptxBuilder.newOperand(operands[0][0], bitwidth == 32 ? "r" : "l");
-    auto rhs =
-        ptxBuilder.newOperand(operands[0][1], bitwidth == 32 ? "r" : "l");
-    fdiv(res, lhs, rhs);
-
-    Value ret = ptxBuilder.launch(rewriter, loc, elemTy, false);
-    return {ret};
+    Value args[] = {operands[0][0], operands[0][1]};
+    auto callOp =
+        LLVM::createLLVMIntrinsicCallOp(rewriter, loc, name, resultTy, args);
+    return {callOp.getResult(0)};
   }
 };
 
@@ -646,12 +639,11 @@ struct ExpOpConversionApprox
     const double log2e = 1.4426950408889634;
     Value prod = b.fmul(f32_ty, operands[0][0], b.f32_val(log2e));
 
-    PTXBuilder ptxBuilder;
-    auto &exp2 = ptxBuilder.create<PTXInstr>("ex2")->o("approx").o("f32");
-    auto output = ptxBuilder.newOperand("=f");
-    auto input = ptxBuilder.newOperand(prod, "f");
-    exp2(output, input);
-    return {ptxBuilder.launch(rewriter, loc, f32_ty, false)};
+    Type resultTy = operands[0][0].getType();
+    StringRef name = "llvm.nvvm.ex2.approx.f";
+    auto callOp =
+        LLVM::createLLVMIntrinsicCallOp(rewriter, loc, name, resultTy, {prod});
+    return {callOp.getResult(0)};
   }
 };
 
@@ -721,30 +713,22 @@ struct ClampFOpConversion
                                       Type elemTy,
                                       MultipleOperandsRange operands,
                                       Location loc) const {
-    // min.xorsign.abs
-    PTXBuilder ptxBuilder;
-    bool propNan = (op.getPropagateNan() == PropagateNan::ALL);
-    auto &minXorsign = ptxBuilder.create<PTXInstr>("min")
-                           ->o("NaN", propNan)
-                           .o("xorsign")
-                           .o("abs");
-    const char *outType = nullptr;
-    const char *inType = nullptr;
-    if (elemTy.isF32()) {
-      minXorsign.o("f32");
-      outType = "=f";
-      inType = "f";
-    } else if (elemTy.isF16()) {
-      minXorsign.o("f16");
-      outType = "=h";
-      inType = "h";
+    std::string name = "llvm.nvvm.fmin";
+    if (op.getPropagateNan() == PropagateNan::ALL) {
+      name += ".nan";
     }
-    auto output = ptxBuilder.newOperand(outType);
-    auto inputA = ptxBuilder.newOperand(operands[0][0], inType);
-    auto inputB = ptxBuilder.newOperand(operands[0][2], inType);
-    minXorsign(output, inputA, inputB);
+    name += ".xorsign.abs";
+    if (elemTy.isF32()) {
+      name += ".f";
+    } else if (elemTy.isF16()) {
+      name += ".f16";
+    }
 
-    return {ptxBuilder.launch(rewriter, loc, elemTy, false)};
+    Type resultTy = operands[0][0].getType();
+    Value args[] = {operands[0][0], operands[0][2]};
+    auto callOp =
+        LLVM::createLLVMIntrinsicCallOp(rewriter, loc, name, resultTy, args);
+    return {callOp.getResult(0)};
   }
 
   SmallVector<Value> createDestOps(ClampFOp op, OpAdaptor adaptor,

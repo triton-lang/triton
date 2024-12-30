@@ -505,6 +505,15 @@ Value createConstantF16(Location loc, OpBuilder &rewriter, float v) {
                                            rewriter.getF16FloatAttr(v));
 }
 
+Value createConstantBF16(Location loc, OpBuilder &rewriter, float v) {
+  APFloat apf(v);
+  bool ignored;
+  apf.convert(APFloat::BFloat(), APFloat::rmNearestTiesToEven, &ignored);
+  auto type = type::bf16Ty(rewriter.getContext());
+  auto attr = FloatAttr::get(type, apf);
+  return rewriter.create<LLVM::ConstantOp>(loc, type, attr);
+}
+
 Value createConstantF32(Location loc, OpBuilder &rewriter, float v) {
   auto type = type::f32Ty(rewriter.getContext());
   return rewriter.create<LLVM::ConstantOp>(loc, type,
