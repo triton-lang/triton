@@ -160,7 +160,13 @@ More options can be found by running the following command.
 proton-viewer -h
 ```
 
-## Advanced features
+## Advanced features and knowledge
+
+### Thread management
+
+We guarantee that any call to `libproton.so`, such as `enter_scope`, is synchronized using explicit locks.
+For operations that do not trigger calls to libproton.so—including callbacks to CUDA/HIP APIs—we use separated locks to protect data structures that may be accessed concurrently by multiple threads.
+For example, the `enter_op` method in `OpInterface` can be invoked by the main thread that involves triton operators, as well as by helper threads that invoke torch operators.
 
 ### `cpu_timed_scope`
 
