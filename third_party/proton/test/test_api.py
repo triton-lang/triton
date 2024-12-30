@@ -171,6 +171,8 @@ def test_scope_properties(tmp_path: pathlib.Path):
     assert temp_file.exists()
     with temp_file.open() as f:
         data = json.load(f)
+    #FIXME(Debug)
+    print(data)
     for child in data[0]["children"]:
         if child["frame"]["name"] == "test2":
             assert child["metrics"]["a"] == 1.0
