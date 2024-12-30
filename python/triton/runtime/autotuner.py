@@ -15,23 +15,10 @@ from .driver import driver
 
 class Autotuner(KernelInterface):
 
-    def __init__(
-            self,
-            fn,
-            arg_names,
-            configs,
-            key,
-            reset_to_zero,
-            restore_value,
-            pre_hook=None,
-            post_hook=None,
-            prune_configs_by: Optional[Dict] = None,
-            warmup=None,
-            rep=None,
-            use_cuda_graph=False,
-            do_bench=None,
-            max_workers: int = os.cpu_count(),
-    ):
+    def __init__(self, fn, arg_names, configs, key, reset_to_zero, restore_value, pre_hook=None, post_hook=None,
+                 prune_configs_by: Optional[Dict] = None, warmup=None, rep=None, use_cuda_graph=False, do_bench=None,
+                 max_workers: int = os.cpu_count() or 1,  # Fallback to 1 if os.cpu_count() is None
+                 ):
         """
         :param prune_configs_by: a dict of functions that are used to prune configs, fields:
             'perf_model': performance model used to predicate running time with different configs, returns running time
@@ -212,18 +199,31 @@ class Autotuner(KernelInterface):
                 used_cached_result = False
                 # Step 1: Parallel compilation
                 pruned_configs = self.prune_configs(kwargs)
+
+                # Workaround for older python versions to safely initialize sysconfig variables
+                # See https://github.com/python/cpython/issues/92452
+                import sysconfig
+                sysconfig.get_config_vars()
+
                 compile_start = time.time()
                 compiled_configs = []
 
-                with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                    futures = {
-                        executor.submit(self._compile, *args, config=config, **kwargs): config
-                        for config in pruned_configs
-                    }
-                    for future in as_completed(futures):
-                        config, success = future.result()
-                        if success:
-                            compiled_configs.append(config)
+                if self.max_workers == 1:
+                    # Single-threaded execution
+                    for config in pruned_configs:
+                        compiled_configs.append(self._compile(*args, config=config, **kwargs)[0])
+                else:
+                    # Multi-threaded execution
+                    with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                        futures = {
+                            executor.submit(self._compile, *args, config=config, **kwargs): config
+                            for config in pruned_configs
+                        }
+                        for future in as_completed(futures):
+                            config, success = future.result()
+                            if success:
+                                compiled_configs.append(config)
+
                 compile_end = time.time()
 
                 # Step 2: Linear benchmarking
