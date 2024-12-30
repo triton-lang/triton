@@ -201,6 +201,7 @@ class ASTFunction:
         self.arg_types = arg_types
         self.constexprs = constexprs
         self.constants = constants
+        self.all_constants = constexprs | constants
         self.attrs = attrs
 
     def serialize(self, builder: ir.builder):

@@ -11,6 +11,7 @@ from functools import cached_property
 from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, overload, Dict, Any, Tuple
 from ..runtime.driver import driver
 from types import ModuleType
+from .._utils import find_paths_if, get_iterable_path
 
 TRITON_MODULE = __name__[:-len(".runtime.jit")]
 
@@ -275,41 +276,36 @@ class KernelParam:
         return self._param.default != inspect.Parameter.empty
 
 
-def compute_spec_key(v, align):
-
-    if align and hasattr(v, "data_ptr") and (v.data_ptr() % 16 == 0):
-        return "D"
-    elif isinstance(v, int):
-        # bool is a subclass of int, so we don't check explicitly above.
-        if align and (v % 16 == 0):
-            return "D"
-        elif v == 1:
-            return "1"
-    return "N"
-
-
 dtype2str = {}
 
 
-def mangle_type(arg, is_const=False):
+def specialize_arg(arg, is_const=False, specialize=True, align=True):
 
     if arg is None:
-        return "none"
+        return ("constexpr", None)
     elif isinstance(arg, bool):
-        return "i1"
+        return ("i1", None)
     elif isinstance(arg, int):
+        if arg == 1 and specialize:
+            return ("constexpr", 1)
+        key = "D" if align and (arg % 16) == 0 else None
         if -(2**31) <= arg and arg <= 2**31 - 1:
-            return "i32"
+            return ("i32", key)
         elif 2**63 <= arg and arg <= 2**64 - 1:
-            return "u64"
+            return ("u64", key)
         else:
-            return "i64"
+            return ("i64", key)
     elif isinstance(arg, float):
-        return "fp32"
+        return ("fp32", None)
     elif hasattr(arg, "tma_desc_cpu_ptr"):
-        return "nvTmaDesc"
+        return ("nvTmaDesc", None)
     elif isinstance(arg, tuple):
-        return "[" + ",".join(map(mangle_type, arg)) + "]"
+        spec = [specialize_arg(x) for x in arg]
+        tys = [x[0] for x in spec]
+        keys = [x[1] for x in spec]
+        return (tys, keys)
+    elif isinstance(arg, JITFunction):
+        return ("constexpr", arg.cache_key)
     else:
         # dtypes are hashable so we can memoize this mapping:
         dsk = (arg.dtype, is_const)
@@ -317,7 +313,12 @@ def mangle_type(arg, is_const=False):
         if res is None:
             res = ("*k" if dsk[1] else "*") + type_canonicalisation_dict[str(dsk[0]).split('.')[-1]]
             dtype2str[dsk] = res
-        return res
+        key = "D" if align and (arg.data_ptr() % 16) == 0 else None
+        return (res, key)
+
+
+def mangle_type(arg):
+    return specialize_arg(arg)[0]
 
 
 class KernelInterface(Generic[T]):
@@ -351,55 +352,28 @@ def create_function_from_signature(sig, kparams, backend):
     basis to avoid having to run these expensive functions -- which constitute
     much of the kernel launch overhead -- every time we run the kernel.
     """
-
     assert len(sig.parameters) == len(kparams)
-
     # Create the function argument list and the dict entries for the return statement
-    func_args = []
-    dict_entries = []
-    constexpr_vals = []
-    non_constexpr_vals = []
-    signature_types = []
-    specialisations = []
-    # parameters
-    for name, sp in sig.parameters.items():
-        if sp.default is inspect.Parameter.empty:
-            func_args.append(name)
-            dict_entries.append(f"'{name}': {name}")
-        else:
-            func_args.append(f"{name}=default_{name}")
-            dict_entries.append(f"'{name}': {name}")
+    specialization = []
     # signature
     for name, kp in zip(sig.parameters.keys(), kparams):
         if kp.is_constexpr:
-            signature_types.append('"constexpr"')
+            specialization.append(f'("constexpr", {name})')
         elif kp.annotation_type:
-            signature_types.append('"%s"' % kp.annotation_type)
+            specialization.append('("%s", None)' % kp.annotation_type)
         else:
-            signature_types.append('mangle_type(%s, %s)' % (name, 'True' if kp.is_const else 'False'))
-    # sort constexpr vs non-constexpr values
-    for name, kp in zip(sig.parameters.keys(), kparams):
-        if kp.is_constexpr:
-            constexpr_vals.append(name)
-    # specialization key
-    for name, kp in zip(sig.parameters.keys(), kparams):
-        if kp.do_not_specialize:
-            continue
-        align = not kp.do_not_specialize_on_alignment
-        specialisations.append('compute_spec_key(%s, align=%s)' % (name, align))
-
-    constexpr_vals = ''.join([x + ', ' for x in constexpr_vals])
+            is_const = 'True' if kp.is_const else 'False'
+            specialize = 'False' if kp.do_not_specialize else 'True'
+            align = 'False' if kp.do_not_specialize_on_alignment else 'True'
+            specialization.append('specialize_arg(%s, %s, %s, %s)' % (name, is_const, specialize, align))
+    # compute argument string for a given parameter
+    arg = lambda x: x[0] if x[1].default is inspect.Parameter.empty else f"{x[0]}=default_{x[0]}"
     # Join all arguments into a function definition string
-    args_str = ', '.join(func_args)
-    dict_str = ', '.join(dict_entries)
     func_body = f"""
-def dynamic_func({args_str}, **excess_kwargs):
-    key = ''
-    key += ''.join(({','.join(signature_types)}))
-    key += ''.join(({','.join(specialisations)}))
-    key +=  '-'.join([x.cache_key if isinstance(x, JITFunction) else str(x) for x in ({constexpr_vals})])
-    key += str(excess_kwargs)
-    return {{{dict_str}}}, key, ({','.join(signature_types)})
+def dynamic_func({", ".join(map(arg, sig.parameters.items()))}, **options):
+    params = {{{', '.join([f"'{name}': {name}" for name in sig.parameters.keys()])}}}
+    specialization = {','.join(specialization)}
+    return params, specialization, options
 """
     # Prepare defaults to be inserted into function namespace
     func_namespace = {
@@ -409,8 +383,7 @@ def dynamic_func({args_str}, **excess_kwargs):
     }
 
     func_namespace["JITFunction"] = JITFunction
-    func_namespace['mangle_type'] = mangle_type
-    func_namespace['compute_spec_key'] = backend.compute_spec_key
+    func_namespace['specialize_arg'] = specialize_arg
 
     # Execute the function string in func_namespace to create the function
     exec(func_body, func_namespace)
@@ -535,6 +508,13 @@ class JITFunction(KernelInterface[T]):
         ]
         return {}, target, backend, binder
 
+    def _join_signature(self, obj):
+        if isinstance(obj, list):
+            inner = ",".join(self._join_signature(x) for x in obj)
+            return f"[{inner}]"
+        else:
+            return str(obj)
+
     def run(self, *args, grid, warmup, **kwargs):
         kwargs["debug"] = kwargs.get("debug", self.debug) or os.environ.get("TRITON_DEBUG", "0") == "1"
 
@@ -547,14 +527,16 @@ class JITFunction(KernelInterface[T]):
             hook(*args, **kwargs)
 
         kernel_cache, target, backend, binder = self.device_caches[device]
-        bound_args, key, sigvals = binder(*args, **kwargs)
+        bound_args, specialization, options = binder(*args, **kwargs)
 
         # compute cache key
+        key = str(specialization) + str(options)
         kernel = kernel_cache.get(key, None)
 
         if kernel is None:
-            sigkeys = [param.name for param in self.params]
-            signature = {k: v for (k, v) in zip(sigkeys, sigvals)}
+            sigkeys = [x.name for x in self.params]
+            sigvals = [x[0] for x in specialization]
+            signature = {k: self._join_signature(v) for (k, v) in zip(sigkeys, sigvals)}
 
             # Kernel is not cached; we have to compile.
             options = backend.parse_options(kwargs)
@@ -569,7 +551,8 @@ class JITFunction(KernelInterface[T]):
 
             bound_vals = tuple(bound_args.values())
             attrs = backend.get_attrs_descriptor(self.params, bound_vals)
-            constexprs = {p.name: v for (v, p) in zip(bound_vals, self.params) if p.is_constexpr}
+            constexprs = find_paths_if(sigvals, lambda _, val: val == "constexpr")
+            constexprs = {path: get_iterable_path(list(bound_args.values()), path) for path in constexprs}
 
             if self._call_hook(key, signature, device, constexprs, options, [attrs], warmup, before=True):
                 return None
