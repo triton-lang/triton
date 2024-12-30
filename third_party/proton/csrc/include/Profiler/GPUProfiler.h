@@ -58,13 +58,11 @@ protected:
   struct ThreadState {
     ConcreteProfilerT &profiler;
     size_t scopeId{Scope::DummyScopeId};
-    bool opInProgress{false};
 
     ThreadState(ConcreteProfilerT &profiler) : profiler(profiler) {}
 
     void enterOp() {
-      opInProgress = profiler.isOpInProgress();
-      if (opInProgress)
+      if (profiler.isOpInProgress())
         return;
       scopeId = Scope::getNewScopeId();
       profiler.enterOp(Scope(scopeId));
@@ -72,7 +70,7 @@ protected:
     }
 
     void exitOp() {
-      if (!opInProgress)
+      if (!profiler.isOpInProgress())
         return;
       profiler.exitOp(Scope(scopeId));
     }
