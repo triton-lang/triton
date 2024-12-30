@@ -4,6 +4,7 @@ import re
 import warnings
 import os
 import textwrap
+import itertools
 from types import ModuleType
 from typing import Any, Callable, Dict, Optional, Tuple, Type, Union
 
@@ -430,6 +431,11 @@ class CodeGenerator(ast.NodeVisitor):
         # basic block in case there are any ops after the return.
         post_ret_block = self.builder.create_block()
         self.builder.set_insertion_point_to_end(post_ret_block)
+
+    def visit_Starred(self, node) -> Any:
+        args = self.visit(node.value)
+        assert isinstance(args, language.core.tuple)
+        return args.values
 
     def visit_FunctionDef(self, node):
         arg_names, kwarg_names = self.visit(node.args)
@@ -1185,6 +1191,7 @@ class CodeGenerator(ast.NodeVisitor):
 
         kws = dict(self.visit(keyword) for keyword in node.keywords)
         args = [self.visit(arg) for arg in node.args]
+        args = list(itertools.chain.from_iterable(x if isinstance(x, list) else [x] for x in args))
         if isinstance(fn, JITFunction):
             _check_fn_args(node, fn, args)
             return self.call_JitFunction(fn, args, kws)
