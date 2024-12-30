@@ -9,4 +9,4 @@ from .profile import (
     profile,
     DEFAULT_PROFILE_NAME,
 )
-from .language import (record)
+from .language import record
