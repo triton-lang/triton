@@ -6,6 +6,7 @@ import triton
 import triton.language as tl
 import triton.profiler.language as pl
 
+
 def test_proton_record(tmp_path: pathlib.Path):
 
     @triton.jit
