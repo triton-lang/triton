@@ -4,24 +4,11 @@ import os
 
 from triton._C.libproton import proton as libproton
 from triton.language import core as tl
-from triton.language.core import builtin
 from .hook import register_triton_hook, unregister_triton_hook
 from .flags import set_profiling_off, set_profiling_on, is_command_line
 from typing import Optional
-from . import language
-import warnings
 
 DEFAULT_PROFILE_NAME = "proton"
-
-
-class dev:
-
-    @builtin
-    def record(isStart: bool, regionId: int, _builder=None):
-        warnings.warn(
-            "\nWarning the dev module within Proton contains under development features that are not intended to be used outside of the core development team"
-        )
-        return language.proton_record(isStart, regionId, _builder)
 
 
 def _select_backend() -> str:

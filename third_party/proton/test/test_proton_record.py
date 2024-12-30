@@ -4,8 +4,7 @@ import pathlib
 
 import triton
 import triton.language as tl
-import triton.profiler as proton
-
+import triton.profiler.language as pl
 
 def test_proton_record(tmp_path: pathlib.Path):
 
@@ -22,9 +21,9 @@ def test_proton_record(tmp_path: pathlib.Path):
         offsets = block_start + tl.arange(0, BLOCK_SIZE)
         mask = offsets < n_elements
         x = tl.load(x_ptr + offsets, mask=mask)
-        proton.dev.record(True, 0)
+        pl.record(True, 0)
         y = tl.load(y_ptr + offsets, mask=mask)
-        proton.dev.record(False, 0)
+        pl.record(False, 0)
         output = x + y
         tl.store(output_ptr + offsets, output, mask=mask)
 

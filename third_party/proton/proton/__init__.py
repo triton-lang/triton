@@ -7,6 +7,8 @@ from .profile import (
     deactivate,
     finalize,
     profile,
-    dev,
     DEFAULT_PROFILE_NAME,
+)
+from .language import (
+    record
 )
