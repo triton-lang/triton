@@ -541,6 +541,10 @@ class JITFunction(KernelInterface[T]):
         if kernel is None:
             # options
             options = backend.parse_options(kwargs)
+            # signature
+            sigkeys = [x.name for x in self.params]
+            sigvals = [x[0] for x in specialization]
+            signature = {k: self._join_signature(v) for (k, v) in zip(sigkeys, sigvals)}
             # check arguments
             assert "device_type" not in kwargs, "device_type option is deprecated; current target will be used"
             assert "device" not in kwargs, "device option is deprecated; current device will be used"
@@ -548,10 +552,6 @@ class JITFunction(KernelInterface[T]):
             for k in kwargs:
                 if k not in options.__dict__ and k not in sigkeys:
                     raise KeyError("Keyword argument %s was specified but unrecognised" % k)
-            # signature
-            sigkeys = [x.name for x in self.params]
-            sigvals = [x[0] for x in specialization]
-            signature = {k: self._join_signature(v) for (k, v) in zip(sigkeys, sigvals)}
             # constexprs
             constexprs = find_paths_if(sigvals, lambda _, val: val == "constexpr")
             constexprs = {path: get_iterable_path(list(bound_args.values()), path) for path in constexprs}
