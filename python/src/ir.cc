@@ -1606,10 +1606,6 @@ void init_triton_ir(py::module &&m) {
                                                llvm::StringRef(prefix));
              self.create<PrintOp>(prefixAttr, hex, values, isSigned);
            })
-      .def("create_proton_record",
-           [](TritonOpBuilder &self, bool isStart, int32_t regionId) -> void {
-             self.create<mlir::triton::proton::RecordOp>(isStart, regionId);
-           })
       .def("create_assert",
            [](TritonOpBuilder &self, Value &condition,
               const std::string &message) -> void {
@@ -1661,6 +1657,11 @@ void init_triton_ir(py::module &&m) {
               std::vector<int32_t> &tensorShape) -> Value {
              return self.create<MakeTensorDescOp>(base, shape, strides,
                                                   tensorShape);
+           })
+      // Proton Ops
+      .def("create_proton_record",
+           [](TritonOpBuilder &self, bool isStart, int32_t regionId) -> void {
+             self.create<mlir::triton::proton::RecordOp>(isStart, regionId);
            });
 
   py::class_<PassManager>(m, "pass_manager", py::module_local())
