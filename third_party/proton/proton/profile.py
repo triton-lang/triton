@@ -9,6 +9,7 @@ from typing import Optional
 
 DEFAULT_PROFILE_NAME = "proton"
 
+
 def _select_backend() -> str:
     backend = triton.runtime.driver.active.get_current_target().backend
     if backend == "cuda":
