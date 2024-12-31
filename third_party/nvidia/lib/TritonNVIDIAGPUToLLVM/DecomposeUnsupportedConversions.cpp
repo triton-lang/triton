@@ -69,16 +69,7 @@ public:
 struct DecomposeUnsupportedConversions
     : public mlir::triton::impl::DecomposeUnsupportedNVIDIAConversionsBase<
           DecomposeUnsupportedConversions> {
-  void runOnOperation() override {
-    ModuleOp mod = getOperation();
-    triton::gpu::decomposeBlockedToDotLayoutConversion(mod);
-
-    mlir::RewritePatternSet patterns(&getContext());
-    patterns.add<DecomposeLocalLoadToDotOperand>(&getContext());
-    if (mlir::applyPatternsAndFoldGreedily(mod, std::move(patterns)).failed()) {
-      signalPassFailure();
-    }
-  }
+  void runOnOperation() override {}
 };
 } // namespace
 
