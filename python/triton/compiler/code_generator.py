@@ -196,12 +196,10 @@ class ContainsReturnChecker(ast.NodeVisitor):
 
 class ASTFunction:
 
-    def __init__(self, ret_types, arg_types, constexprs, constants, attrs):
+    def __init__(self, ret_types, arg_types, constexprs, attrs):
         self.ret_types = ret_types
         self.arg_types = arg_types
         self.constexprs = constexprs
-        self.constants = constants
-        self.all_constants = constexprs | constants
         self.attrs = attrs
 
     def serialize(self, builder: ir.builder):
@@ -237,7 +235,7 @@ class ASTFunction:
             ty = get_iterable_path(self.arg_types, path)
             set_iterable_path(vals, path, language.tensor(fn.args(i), ty))
         # > add constexpr values to the template
-        constants = self.constants | self.constexprs
+        constants = self.constexprs
         for path, val in constants.items():
             set_iterable_path(vals, path, language.constexpr(val))
         return vals
@@ -1154,7 +1152,7 @@ class CodeGenerator(ast.NodeVisitor):
                                                                      (bool, int, language.core.dtype)) else arg.type
                 for arg in args
             ]
-            prototype = ASTFunction([], arg_types, args_cst, dict(), dict())
+            prototype = ASTFunction([], arg_types, args_cst, dict())
             generator = CodeGenerator(self.context, prototype, gscope, module=self.module, jit_fn=fn,
                                       function_name=fn_name, function_types=self.function_ret_types,
                                       noinline=fn.noinline, file_name=file_name, begin_line=begin_line,
@@ -1341,37 +1339,16 @@ class CodeGenerator(ast.NodeVisitor):
     }
 
 
-def kernel_suffix(signature, specialization):
-    # suffix format:
-    # <argid><'c' if equal to 1><'d' if divisible by 16><'e' if divisible by 8>
-    suffix = ''
-    for i, _ in enumerate(signature):
-        suffix += str(i)
-        if (i, ) in specialization.equal_to_1:
-            suffix += 'c'
-        if (i, ) in specialization.divisibility_16:
-            suffix += 'd'
-    return suffix
-
-
 def ast_to_ttir(fn, specialization, context, options, codegen_fns, module_map):
     constexprs = specialization.constexprs
-    arg_idx = lambda x: (fn.arg_names.index(x), ) if isinstance(x, str) else x
-    constants = specialization.attrs.get_constants()
-    constexprs = {arg_idx(k): v for k, v in constexprs.items()}
-    arg_types = [str_to_ty(ty) for ty in specialization.signature.values()]
-    # find index of constants in serialized order
     attrs = specialization.attrs
-    new_attrs = attrs.filter_out_constants()
-    fn_attrs = new_attrs.get_fn_attrs()
-    fn_attrs = {k: v for k, v in fn_attrs.items() if k not in constants}
+    arg_types = [str_to_ty(ty) for ty in specialization.signature.values()]
+    prototype = ASTFunction([], arg_types, constexprs, attrs)
     file_name, begin_line = get_jit_fn_file_line(fn)
-    prototype = ASTFunction([], arg_types, constexprs, constants, fn_attrs)
     generator = CodeGenerator(context, prototype, gscope=fn.__globals__.copy(), function_name=fn.repr(specialization),
                               jit_fn=fn, is_kernel=True, file_name=file_name, begin_line=begin_line, options=options,
                               codegen_fns=codegen_fns, module_map=module_map)
     generator.visit(fn.parse())
-
     ret = generator.module
     # module takes ownership of the context
     ret.context = context

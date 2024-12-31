@@ -279,16 +279,20 @@ class KernelParam:
 dtype2str = {}
 
 
-def specialize_arg(arg, is_const=False, specialize=True, align=True):
-
+def specialize_impl(arg, specialize_extra, is_const=False, specialize_value=True, align=True):
+    from ..language import constexpr
     if arg is None:
         return ("constexpr", None)
+    elif isinstance(arg, JITFunction):
+        return ("constexpr", arg.cache_key)
+    elif isinstance(arg, constexpr):
+        return ("constexpr", arg)
     elif isinstance(arg, bool):
         return ("i1", None)
     elif isinstance(arg, int):
-        if arg == 1 and specialize:
+        key = specialize_extra(arg) if specialize_value else None
+        if arg == 1 and specialize_value:
             return ("constexpr", 1)
-        key = "D" if align and (arg % 16) == 0 else None
         if -(2**31) <= arg and arg <= 2**31 - 1:
             return ("i32", key)
         elif 2**63 <= arg and arg <= 2**64 - 1:
@@ -300,12 +304,10 @@ def specialize_arg(arg, is_const=False, specialize=True, align=True):
     elif hasattr(arg, "tma_desc_cpu_ptr"):
         return ("nvTmaDesc", None)
     elif isinstance(arg, tuple):
-        spec = [specialize_arg(x) for x in arg]
+        spec = [specialize_impl(x, specialize_extra) for x in arg]
         tys = [x[0] for x in spec]
         keys = [x[1] for x in spec]
         return (tys, keys)
-    elif isinstance(arg, JITFunction):
-        return ("constexpr", arg.cache_key)
     else:
         # dtypes are hashable so we can memoize this mapping:
         dsk = (arg.dtype, is_const)
@@ -313,12 +315,12 @@ def specialize_arg(arg, is_const=False, specialize=True, align=True):
         if res is None:
             res = ("*k" if dsk[1] else "*") + type_canonicalisation_dict[str(dsk[0]).split('.')[-1]]
             dtype2str[dsk] = res
-        key = "D" if align and (arg.data_ptr() % 16) == 0 else None
+        key = specialize_extra(arg.data_ptr()) if align else None
         return (res, key)
 
 
 def mangle_type(arg):
-    return specialize_arg(arg)[0]
+    return specialize_impl(arg)[0]
 
 
 class KernelInterface(Generic[T]):
@@ -365,7 +367,8 @@ def create_function_from_signature(sig, kparams, backend):
             is_const = 'True' if kp.is_const else 'False'
             specialize = 'False' if kp.do_not_specialize else 'True'
             align = 'False' if kp.do_not_specialize_on_alignment else 'True'
-            specialization.append('specialize_arg(%s, %s, %s, %s)' % (name, is_const, specialize, align))
+            specialization.append("specialize_impl(%s, specialize_extra, %s, %s, %s)" %
+                                  (name, is_const, specialize, align))
     # compute argument string for a given parameter
     arg = lambda x: x[0] if x[1].default is inspect.Parameter.empty else f"{x[0]}=default_{x[0]}"
     # Join all arguments into a function definition string
@@ -383,7 +386,8 @@ def dynamic_func({", ".join(map(arg, sig.parameters.items()))}, **options):
     }
 
     func_namespace["JITFunction"] = JITFunction
-    func_namespace['specialize_arg'] = specialize_arg
+    func_namespace["specialize_impl"] = specialize_impl
+    func_namespace["specialize_extra"] = backend.get_arg_specialization
 
     # Execute the function string in func_namespace to create the function
     exec(func_body, func_namespace)
@@ -533,14 +537,10 @@ class JITFunction(KernelInterface[T]):
         key = str(specialization) + str(options)
         kernel = kernel_cache.get(key, None)
 
+        # Kernel is not cached; we have to compile.
         if kernel is None:
-            sigkeys = [x.name for x in self.params]
-            sigvals = [x[0] for x in specialization]
-            signature = {k: self._join_signature(v) for (k, v) in zip(sigkeys, sigvals)}
-
-            # Kernel is not cached; we have to compile.
+            # options
             options = backend.parse_options(kwargs)
-
             # check arguments
             assert "device_type" not in kwargs, "device_type option is deprecated; current target will be used"
             assert "device" not in kwargs, "device option is deprecated; current device will be used"
@@ -548,19 +548,24 @@ class JITFunction(KernelInterface[T]):
             for k in kwargs:
                 if k not in options.__dict__ and k not in sigkeys:
                     raise KeyError("Keyword argument %s was specified but unrecognised" % k)
-
-            bound_vals = tuple(bound_args.values())
-            attrs = backend.get_attrs_descriptor(self.params, bound_vals)
+            # signature
+            sigkeys = [x.name for x in self.params]
+            sigvals = [x[0] for x in specialization]
+            signature = {k: self._join_signature(v) for (k, v) in zip(sigkeys, sigvals)}
+            # constexprs
             constexprs = find_paths_if(sigvals, lambda _, val: val == "constexpr")
             constexprs = {path: get_iterable_path(list(bound_args.values()), path) for path in constexprs}
-
-            if self._call_hook(key, signature, device, constexprs, options, [attrs], warmup, before=True):
+            # attributes
+            attrvals = [x[1] for x in specialization]
+            attrs = find_paths_if(attrvals, lambda _, x: isinstance(x, str))
+            attrs = {k: backend.parse_attr(get_iterable_path(attrvals, k)) for k in attrs}
+            if self._call_hook(key, signature, device, constexprs, options, attrs, warmup, before=True):
                 return None
             # compile the kernel
             src = self.ASTSource(self, signature, constexprs, attrs)
             kernel = self.compile(src, target=target, options=options.__dict__)
             kernel_cache[key] = kernel
-            self._call_hook(key, signature, device, constexprs, options, [attrs], warmup, before=False)
+            self._call_hook(key, signature, device, constexprs, options, attrs, warmup, before=False)
 
         # Check that used global values have not changed.
         not_present = object()
@@ -660,7 +665,6 @@ class JITFunction(KernelInterface[T]):
 
     def preload(self, specialization_data):
         from ..compiler import compile, ASTSource
-        from triton.backends.compiler import AttrsDescriptor
         import json
         import triton.language as tl
         device = driver.active.get_current_device()
@@ -675,7 +679,7 @@ class JITFunction(KernelInterface[T]):
             for key, value in zip(constant_keys, constant_vals)
         }
         signature = dict(deserialized_obj['signature'].items())
-        src = ASTSource(self, signature, constants, AttrsDescriptor.from_dict(deserialized_obj['attrs']))
+        src = ASTSource(self, signature, constants)
         options = {
             key: tuple(value) if isinstance(value, list) else value
             for key, value in deserialized_obj['options'].items()

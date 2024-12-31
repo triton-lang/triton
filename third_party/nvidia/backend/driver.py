@@ -96,7 +96,7 @@ class CudaUtils(object):
 
 
 def ty_to_cpp(ty):
-    if ty[0] == '*' or ty == "none":
+    if ty[0] == '*':
         return "CUdeviceptr"
     return {
         "i1": "int32_t",
@@ -123,7 +123,7 @@ def make_launcher(constants, signature):
     def _extracted_type(ty):
         if ty == "constexpr":
             return "PyObject*"
-        if ty[0] == '*' or ty == "none":
+        if ty[0] == '*':
             return "PyObject*"
         if ty == "nvTmaDesc":
             return "PyObject*"
@@ -170,7 +170,7 @@ def make_launcher(constants, signature):
     arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items() if ty != "constexpr")
     internal_args_list = []
     for i, ty in signature.items():
-        if ty[0] == "*" or ty == "none":
+        if ty[0] == "*":
             internal_args_list.append(f"ptr_info{i}.dev_ptr")
         elif ty == "nvTmaDesc":
             # Note: we have to dereference the pointer
@@ -184,13 +184,13 @@ def make_launcher(constants, signature):
     ptr_decls = [
         f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;"
         for i, ty in signature.items()
-        if ty[0] == "*" or ty == "none"
+        if ty[0] == "*"
     ]
     tma_decls = [
         f"CUtensorMap* tma_ptr{i} = getTmaDesc(_arg{i}); if (!tma_ptr{i}) return NULL;" for i, ty in signature.items()
         if ty == "nvTmaDesc"
     ]
-    params = [f"&arg{i}" for i, ty in signature.items() if ty != "none" and ty != "constexpr"]
+    params = [f"&arg{i}" for i, ty in signature.items() if ty != "constexpr"]
     params.append("&global_scratch")
     src = f"""
 #include \"cuda.h\"
