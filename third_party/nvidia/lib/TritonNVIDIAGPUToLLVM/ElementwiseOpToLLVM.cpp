@@ -2,6 +2,7 @@
 #include "TargetInfo.h"
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "Utility.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
@@ -350,26 +351,10 @@ struct FpToFpOpConversion
       : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
         computeCapability(computeCapability) {}
 
-  static Value convertBf16ToFp32(Location loc,
-                                 ConversionPatternRewriter &rewriter,
-                                 const Value &v) {
-    PTXBuilder builder;
-    auto &cvt = *builder.create("cvt.f32.bf16");
-    auto res = builder.newOperand("=r");
-    auto operand = builder.newOperand(v, "h");
-    cvt(res, operand);
-    return builder.launch(rewriter, loc, f32_ty, false);
-  }
-
   static Value convertFp16ToFp32(Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  const Value &v) {
-    PTXBuilder builder;
-    auto &cvt = *builder.create("cvt.f32.f16");
-    auto res = builder.newOperand("=r");
-    auto operand = builder.newOperand(v, "h");
-    cvt(res, operand);
-    return builder.launch(rewriter, loc, f32_ty, false);
+    return rewriter.create<LLVM::FPExtOp>(loc, f32_ty, v);
   }
 
   static Value convertFp32ToBf16(Location loc,
@@ -590,96 +575,6 @@ struct FDivOpConversion
   }
 };
 
-struct FMulOpConversion
-    : ElementwiseOpConversionBase<arith::MulFOp, FMulOpConversion> {
-  using Base = ElementwiseOpConversionBase<arith::MulFOp, FMulOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
-
-  SmallVector<Value> createDestOps(arith::MulFOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-    auto lhsElemTy = getElementType(op.getLhs());
-    auto rhsElemTy = getElementType(op.getRhs());
-    if (lhsElemTy.isBF16() && rhsElemTy.isBF16()) {
-      PTXBuilder builder;
-      auto ptxAsm = " { .reg .b16 c;        \n"
-                    "    mov.b16 c, 0x8000U; \n" // 0.0
-                    "    fma.rn.bf16 $0, $1, $2, c; } \n";
-      auto &fMul = *builder.create<PTXInstr>(ptxAsm);
-      auto res = builder.newOperand("=h");
-      auto lhs = builder.newOperand(operands[0][0], "h");
-      auto rhs = builder.newOperand(operands[0][1], "h");
-      fMul({res, lhs, rhs}, /*onlyAttachMLIRArgs=*/true);
-      return {builder.launch(rewriter, loc, bf16_ty, false)};
-    } else {
-      return {rewriter.create<LLVM::FMulOp>(loc, elemTy, operands[0][0],
-                                            operands[0][1])};
-    }
-  }
-};
-
-struct FAddOpConversion
-    : ElementwiseOpConversionBase<arith::AddFOp, FAddOpConversion> {
-  using Base = ElementwiseOpConversionBase<arith::AddFOp, FAddOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
-
-  SmallVector<Value> createDestOps(arith::AddFOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-    auto lhsElemTy = getElementType(op.getLhs());
-    auto rhsElemTy = getElementType(op.getRhs());
-    if (lhsElemTy.isBF16() && rhsElemTy.isBF16()) {
-      PTXBuilder builder;
-      auto ptxAsm = "{ .reg .b16 c;         \n"
-                    "   mov.b16 c, 0x3f80U; \n" // 1.0
-                    "   fma.rn.bf16 $0, $1, c, $2; } \n";
-      auto &fAdd = *builder.create<PTXInstr>(ptxAsm);
-      auto res = builder.newOperand("=h");
-      auto lhs = builder.newOperand(operands[0][0], "h");
-      auto rhs = builder.newOperand(operands[0][1], "h");
-      fAdd({res, lhs, rhs}, /*onlyAttachMLIRArgs=*/true);
-      return {builder.launch(rewriter, loc, bf16_ty, false)};
-    } else {
-      return {rewriter.create<LLVM::FAddOp>(loc, elemTy, operands[0][0],
-                                            operands[0][1])};
-    }
-  }
-};
-
-struct FSubOpConversion
-    : ElementwiseOpConversionBase<arith::SubFOp, FSubOpConversion> {
-  using Base = ElementwiseOpConversionBase<arith::SubFOp, FSubOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
-
-  SmallVector<Value> createDestOps(arith::SubFOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-    auto lhsElemTy = getElementType(op.getLhs());
-    auto rhsElemTy = getElementType(op.getRhs());
-    if (lhsElemTy.isBF16() && rhsElemTy.isBF16()) {
-      PTXBuilder builder;
-      auto ptxAsm = " { .reg .b16 c;         \n"
-                    "    mov.b16 c, 0xbf80U; \n" // -1.0
-                    "    fma.rn.bf16 $0, $2, c, $1;} \n";
-      auto &fSub = *builder.create<PTXInstr>(ptxAsm);
-      auto res = builder.newOperand("=h");
-      auto lhs = builder.newOperand(operands[0][0], "h");
-      auto rhs = builder.newOperand(operands[0][1], "h");
-      fSub({res, lhs, rhs}, /*onlyAttachMLIRArgs=*/true);
-      return {builder.launch(rewriter, loc, bf16_ty, false)};
-    } else {
-      return {rewriter.create<LLVM::FSubOp>(loc, elemTy, operands[0][0],
-                                            operands[0][1])};
-    }
-  }
-};
-
 // Uses inline ptx to convert s8/u8 to bf16, since the
 struct SIToFPOpConversion
     : ElementwiseOpConversionBase<arith::SIToFPOp, SIToFPOpConversion> {
@@ -730,51 +625,6 @@ struct FPToSIOpConversion
                                    Location loc) const {
     auto inElemTy = getElementType(op.getIn());
     return {rewriter.create<LLVM::FPToSIOp>(loc, elemTy, operands[0][0])};
-  }
-};
-
-struct ExtFOpConversion
-    : ElementwiseOpConversionBase<arith::ExtFOp, ExtFOpConversion> {
-  using Base = ElementwiseOpConversionBase<arith::ExtFOp, ExtFOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
-
-  SmallVector<Value> createDestOps(arith::ExtFOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-    auto inElemTy = getElementType(op.getIn());
-    if (inElemTy.isBF16()) {
-      auto outElemTy = getElementType(op.getOut());
-      assert(outElemTy.isF32() && "unsupported conversion");
-      return {
-          FpToFpOpConversion::convertBf16ToFp32(loc, rewriter, operands[0][0])};
-    } else {
-      return {rewriter.create<LLVM::FPExtOp>(loc, elemTy, operands[0][0])};
-    }
-  }
-};
-
-struct TruncFOpConversion
-    : ElementwiseOpConversionBase<arith::TruncFOp, TruncFOpConversion> {
-  using Base = ElementwiseOpConversionBase<arith::TruncFOp, TruncFOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
-
-  SmallVector<Value> createDestOps(arith::TruncFOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-    auto outElemTy = getElementType(op.getOut());
-    if (outElemTy.isBF16()) {
-      auto inElemTy = getElementType(op.getIn());
-      assert(inElemTy.isF32() && "unsupported conversion");
-      return {// Trunc uses the default rounding mode: RTNE
-              FpToFpOpConversion::convertFp32ToBf16(
-                  loc, rewriter, operands[0][0], RoundingMode::RTNE)};
-    } else {
-      return {rewriter.create<LLVM::FPTruncOp>(loc, elemTy, operands[0][0])};
-    }
   }
 };
 
@@ -961,15 +811,21 @@ void mlir::triton::NVIDIA::populateElementwiseOpToLLVMPatterns(
   mlir::triton::populateElementwiseOpToLLVMPatterns(
       typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
 
+#define POPULATE_OP(SRC_OP, DST_OP)                                            \
+  patterns.add<ElementwiseOpConversion<SRC_OP, DST_OP>>(                       \
+      typeConverter, axisInfoAnalysis, benefit)
+
+  POPULATE_OP(arith::SubFOp, LLVM::FSubOp);
+  POPULATE_OP(arith::AddFOp, LLVM::FAddOp);
+  POPULATE_OP(arith::MulFOp, LLVM::FMulOp);
+
+  POPULATE_OP(arith::ExtFOp, LLVM::FPExtOp);
+  POPULATE_OP(arith::TruncFOp, LLVM::FPTruncOp);
+
+#undef POPULATE_OP
+
   patterns.add<FDivOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<FSubOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<FAddOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<FMulOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-
-  patterns.add<ExtFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<TruncFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FPToSIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-
   patterns.add<SIToFPOpConversion>(typeConverter, axisInfoAnalysis,
                                    computeCapability, benefit);
   patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis,
