@@ -166,7 +166,7 @@ class HIPBackend(BaseBackend):
     @staticmethod
     def get_arg_specialization(arg):
         ret = BaseBackend.get_arg_specialization(arg)
-        if HIPBackend.is_within2gb(arg):
+        if HIPBackend.is_within_2gb(arg):
             ret += "S"
         return ret
 
