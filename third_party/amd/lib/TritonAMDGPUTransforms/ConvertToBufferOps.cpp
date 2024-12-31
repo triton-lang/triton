@@ -246,7 +246,7 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
   matchAndRewrite(triton::AtomicRMWOp op, PatternRewriter &rewriter) const override {
     LDBG("Try to convert: " << op);
     Value ptr = op.getPtr();
-    auto atomicRmwAttr = op.getAtomicRmwOp();
+    auto atomicRmwOp= op.getAtomicRmwOp();
     auto sem = op.getSem();
     auto scope = op.getScope();
 
@@ -256,27 +256,63 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
       LDBG("Failed to convert: " << op);
       return failure();
     }
+
     auto addPtrOp = ptr.getDefiningOp<triton::AddPtrOp>();
     Value tensorPtr = addPtrOp.getPtr();
     Value tensorOffset = addPtrOp.getOffset();
     auto splatOp = tensorPtr.getDefiningOp<triton::SplatOp>();
     Value basePtr = splatOp.getSrc();
 
-    // 2. Check the hardware---only MI-* series GPUs are supported
+    // 2. FP8 atomics are not supported with buffer atomics
+    auto checkFP8Value = op.getVal().getType();
+    if (auto vecType = dyn_cast<RankedTensorType>(checkFP8Value)) {
+      checkFP8Value = vecType.getElementType();
+    }
+    bool isFP8 = checkFP8Value.isFloat8E5M2() || checkFP8Value.isFloat8E4M3FN() ||
+                 checkFP8Value.isFloat8E5M2FNUZ() || checkFP8Value.isFloat8E4M3FNUZ();
+    if (isFP8) {
+      LDBG("Failed to convert: " << op);
+      return failure();
+    }
+
+    // 3. Check the hardware---only MI-* series GPUs are supported
     //    (i.e., CDNA 1, 2, 3)
-    // 3. The RMWOp is supported (fadd, fmax, smax, umin)
-    // 4. Buffer atomics support 32 and 64-bit operations, so inputs must be at least 32-bits
+
+    // TODO
+
+    // 4. Check if the RMWOp is supported
+    //    see: https://github.com/ytsaurus/ytsaurus/blob/fa3b61994db90ee211d2944e5b385e55a4d6be42/contrib/libs/llvm18/include/llvm/IR/IntrinsicsAMDGPU.h#L765
+    switch (atomicRmwOp) {
+      case RMWOp::AND:
+      case RMWOp::OR:
+      case RMWOp::XOR:
+      case RMWOp::ADD:
+      case RMWOp::FADD:
+      case RMWOp::MAX:
+      case RMWOp::MIN:
+      case RMWOp::UMAX:
+      case RMWOp::UMIN:
+      case RMWOp::SMAX:
+      case RMWOp::SMIN:
+      case RMWOp::XCHG:
+        break
+      default:
+        LDBG("Failed to convert: " << op);
+        return failure();
+    }
+
+    // 5. Buffer atomics support 32 and 64-bit operations, so inputs must be at least 32-bits
     //    Otherwise, fall back to the existing path for atomics
     auto opValueType = op.getVal().getType();
     auto opBitWidth = 0;
     if (auto vecType = dyn_cast<RankedTensorType>(opValueType)) {
       // We can't just get the numElements * elemBitWidth here
-      // We have to perform the same vectorization check as when we lower to LLVM
-      // This is because of cases such as tensor<2xf16...>---In these cases we need
-      // to check the contiguity of the tensor as well.
-      opBitWidth = getVectorSize(basePtr, tensorOffset, axisAnalysisPass);
+      // In cases such as tensor<2xf16...>, if the elements are contiguous we can emit
+      // the buffer op. Otherwise, the buffer ops lowering will try to emit individual (unsupported) f16/bf16 ops.
+      auto elemBitWidth = vecType.getElementType().getIntOrFloatBitWidth();
+      opBitWidth = getVectorSize(basePtr, tensorOffset, axisAnalysisPass) * elemBitWidth;
     } else {
-      opBitWidth = op.getVal().getType().getIntOrFloatBitWidth();
+      opBitWidth = opValueType.getIntOrFloatBitWidth();
     }
 
     if (opBitWidth >= 32) {
@@ -285,7 +321,7 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
         maybeMask = op.getMask();
 
       auto atomicRMWOp = rewriter.create<triton::amdgpu::BufferAtomicRMWOp>(
-        op->getLoc(), op.getVal().getType(), atomicRmwAttr, basePtr, tensorOffset, op.getVal(), sem, scope, maybeMask);
+        op->getLoc(), op.getVal().getType(), atomicRmwOp, basePtr, tensorOffset, op.getVal(), sem, scope, maybeMask);
 
       rewriter.replaceOp(op, atomicRMWOp);
 

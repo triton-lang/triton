@@ -507,6 +507,10 @@ struct BufferAtomicRMWOpConversion
     unsigned numElems = getTotalElemsPerThread(ptrType);
     unsigned vec = getVectorSize(ptr, offset, axisAnalysisPass);
 
+    // v4f16 and v4bf16 variants of buffer atomics do not exist, only v2f16, v2bf16
+    if (valueElemTy.isBF16() || valueElemTy.isF16())
+      vec = std::min<unsigned>(vec, 2);
+
     // Get the offsets and value
     SmallVector<Value> offsetElems = unpackLLElements(loc, llOffset, rewriter);
     SmallVector<Value> valueElems = unpackLLElements(loc, llData, rewriter);

@@ -88,7 +88,7 @@ private:
   // Given a type, the buffer type can be either the same type
   // or a packed version. E.g., a vector of 8xfp16 can be bitcasted to
   // a vector of 4xi32. This usually makes the life of the backend easier
-  Type getBufferOpType(Type type, bool bitcastBF16);
+  Type getBufferOpType(Type type, bool atomicsOp);
 
   // Rewriter utilities
   RewriterBase &rewriter;

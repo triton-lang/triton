@@ -78,7 +78,7 @@ Value BufferEmitter::emitLoad(Type type, Value rsrcDesc, Value offset,
                               triton::CacheModifier cm) {
   SmallVector<Value, 6> args;
   fillCommonArgs(type, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/true, args);
-  Type bufferType = getBufferOpType(type, true);
+  Type bufferType = getBufferOpType(type, false);
   Value data = rewriter.create<ROCDL::RawPtrBufferLoadOp>(
       loc, bufferType, args, ArrayRef<NamedAttribute>());
   data = bitcast(data, type);
@@ -90,7 +90,7 @@ Value BufferEmitter::emitLoad(Type type, Value rsrcDesc, Value offset,
 Value BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc, Value offset,
                                    Value data, Value pred) {
   VectorType vecTy = cast<VectorType>(data.getType());
-  Type bufferType = getBufferOpType(type, false);
+  Type bufferType = getBufferOpType(type, true);
   if (vecTy != bufferType)
     data = bitcast(data, bufferType);
 
@@ -104,6 +104,7 @@ Value BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc, Val
   auto instrinsic = "llvm.amdgcn.raw.ptr.buffer.atomic." + rmwOpStr;
   auto bufferAtomicRMW = LLVM::createLLVMIntrinsicCallOp(
     rewriter, loc, instrinsic, bufferType, args);
+
   data = bitcast(bufferAtomicRMW.getResult(0), type);
   return data;
 }
@@ -112,7 +113,7 @@ Value BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc, Val
 void BufferEmitter::emitStore(Value rsrcDesc, Value offset, Value data,
                               Value pred, triton::CacheModifier cm) {
   VectorType vecTy = cast<VectorType>(data.getType());
-  Type bufferType = getBufferOpType(vecTy, true);
+  Type bufferType = getBufferOpType(vecTy, false);
   if (vecTy != bufferType)
     data = bitcast(data, bufferType);
   SmallVector<Value, 6> args{data};
@@ -134,15 +135,19 @@ Type BufferEmitter::getBufferOpType(Type type, bool atomicsOp) {
   const size_t totalWidthBits = valueElemNBits * vecSize;
 
   Type bufferElementType = elementType;
-  if (elementType.isBF16()) {
+  // We don't want to cast to bf16 if we are emitting buffer atomics
+  if (elementType.isBF16() && !atomicsOp) {
     bufferElementType = rewriter.getI16Type();
   }
 
   // If we are dealing with a subword type (e.g., i8 or f16) but we
   // still need multiple words, then pack the subwords into 32bit integers
   // and update the vector length and the type
+  // We never need to pack for buffer atomics because we ensure
+  // 1) We can always emit a 32-bit / 64-bit atomics op
+  // 2) For tensors of 16-bit values that the values are contiguous
   int64_t bufferVecSize = vecSize;
-  if (valueElemNBits < 32) {
+  if (valueElemNBits < 32 && !atomicsOp) {
     if (totalWidthBits > 32) {
       bufferElementType = rewriter.getI32Type();
       bufferVecSize = totalWidthBits / 32;
