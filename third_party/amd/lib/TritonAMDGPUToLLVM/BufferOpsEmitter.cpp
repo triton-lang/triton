@@ -6,6 +6,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include <iostream>
 
 #include "BufferOpsEmitter.h"
 
@@ -77,7 +78,7 @@ Value BufferEmitter::emitLoad(Type type, Value rsrcDesc, Value offset,
                               triton::CacheModifier cm) {
   SmallVector<Value, 6> args;
   fillCommonArgs(type, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/true, args);
-  Type bufferType = getBufferOpType(type);
+  Type bufferType = getBufferOpType(type, true);
   Value data = rewriter.create<ROCDL::RawPtrBufferLoadOp>(
       loc, bufferType, args, ArrayRef<NamedAttribute>());
   data = bitcast(data, type);
@@ -86,39 +87,32 @@ Value BufferEmitter::emitLoad(Type type, Value rsrcDesc, Value offset,
   return data;
 }
 
-// The following ops are currently supported:
-// - fadd
-// - umin
-void BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc, Value offset,
+Value BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc, Value offset,
                                    Value data, Value pred) {
   VectorType vecTy = cast<VectorType>(data.getType());
-  Type bufferType = getBufferOpType(type);
+  Type bufferType = getBufferOpType(type, false);
   if (vecTy != bufferType)
     data = bitcast(data, bufferType);
 
   SmallVector<Value, 6> args{data};
   fillCommonArgs(vecTy, rsrcDesc, offset, pred, args);
 
-  switch (rmwType) {
-  case RMWOp::FADD:
-    rewriter.create<ROCDL::RawPtrBufferAtomicFaddOp>(
-      loc, TypeRange{}, args, ArrayRef<NamedAttribute>());
-    break;
-  case RMWOp::UMIN:
-    rewriter.create<ROCDL::RawPtrBufferAtomicUminOp>(
-      loc, TypeRange{}, args, ArrayRef<NamedAttribute>());
-    break;
-  default:
-    // TODO check for this
-    break;
-  }
+  // TODO:
+  //   The ops in ROCDL (e.g., RawPtrBufferAtomicFaddOp) have no return value, but they lower to instrinsics that can return values.
+  //   This causes the LLVM verifier to fail. When this is fixed, the ROCDL ops should be used here.
+  auto rmwOpStr = stringifyRMWOp(rmwType).str();
+  auto instrinsic = "llvm.amdgcn.raw.ptr.buffer.atomic." + rmwOpStr;
+  auto bufferAtomicRMW = LLVM::createLLVMIntrinsicCallOp(
+    rewriter, loc, instrinsic, bufferType, args);
+  data = bitcast(bufferAtomicRMW.getResult(0), type);
+  return data;
 }
 
 
 void BufferEmitter::emitStore(Value rsrcDesc, Value offset, Value data,
                               Value pred, triton::CacheModifier cm) {
   VectorType vecTy = cast<VectorType>(data.getType());
-  Type bufferType = getBufferOpType(vecTy);
+  Type bufferType = getBufferOpType(vecTy, true);
   if (vecTy != bufferType)
     data = bitcast(data, bufferType);
   SmallVector<Value, 6> args{data};
@@ -128,7 +122,7 @@ void BufferEmitter::emitStore(Value rsrcDesc, Value offset, Value data,
                                               ArrayRef<NamedAttribute>());
 }
 
-Type BufferEmitter::getBufferOpType(Type type) {
+Type BufferEmitter::getBufferOpType(Type type, bool atomicsOp) {
   int64_t vecSize = 1;
   Type elementType = type;
   if (auto vecType = dyn_cast<VectorType>(type)) {
@@ -139,10 +133,10 @@ Type BufferEmitter::getBufferOpType(Type type) {
   const int valueElemNBits = std::max(8u, elementType.getIntOrFloatBitWidth());
   const size_t totalWidthBits = valueElemNBits * vecSize;
 
-  // For bf16, always convert to i16
   Type bufferElementType = elementType;
-  if (elementType.isBF16())
+  if (elementType.isBF16()) {
     bufferElementType = rewriter.getI16Type();
+  }
 
   // If we are dealing with a subword type (e.g., i8 or f16) but we
   // still need multiple words, then pack the subwords into 32bit integers

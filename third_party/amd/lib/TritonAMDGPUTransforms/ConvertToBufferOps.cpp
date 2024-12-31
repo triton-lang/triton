@@ -17,17 +17,21 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "triton/Analysis/AxisInfo.h"
+#include "../TritonAMDGPUToLLVM/Utility.h"
 #include <deque>
 #include <optional>
 
 #define GEN_PASS_CLASSES
 #include "TritonAMDGPUTransforms/Passes.h"
 
+#undef DEBUG_TYPE
 #define DEBUG_TYPE "tritonamdgpu-convert-buffer-ops"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 using namespace mlir;
+using ::mlir::LLVM::AMD::getVectorSize;
 namespace ttg = mlir::triton::gpu;
 namespace tt = mlir::triton;
 
@@ -233,9 +237,10 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
   using OpRewritePattern::OpRewritePattern;
 
   ConvertTritonAtomicRMWOpToBufferAtomicRMW(mlir::MLIRContext *context,
-                                            DenseSet<Value> &assumptions)
+                                            DenseSet<Value> &assumptions,
+                                            ModuleAxisInfoAnalysis axisAnalysisPass)
       : mlir::OpRewritePattern<triton::AtomicRMWOp>(context),
-        assumptions(assumptions) {}
+        assumptions(assumptions), axisAnalysisPass(axisAnalysisPass) {}
 
   mlir::LogicalResult
   matchAndRewrite(triton::AtomicRMWOp op, PatternRewriter &rewriter) const override {
@@ -246,29 +251,43 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     auto scope = op.getScope();
 
     // In addition to the `canUserBufferOps` check, we should ensure that
-    // 1. The result of the AtomicRMWOp is not used (raw buffer variant does not return a result)
+    // 1. Perform the canUserBufferOps check
+    if (!canUseBufferOps(ptr, assumptions)) {
+      LDBG("Failed to convert: " << op);
+      return failure();
+    }
+    auto addPtrOp = ptr.getDefiningOp<triton::AddPtrOp>();
+    Value tensorPtr = addPtrOp.getPtr();
+    Value tensorOffset = addPtrOp.getOffset();
+    auto splatOp = tensorPtr.getDefiningOp<triton::SplatOp>();
+    Value basePtr = splatOp.getSrc();
+
     // 2. Check the hardware---only MI-* series GPUs are supported
     //    (i.e., CDNA 1, 2, 3)
     // 3. The RMWOp is supported (fadd, fmax, smax, umin)
+    // 4. Buffer atomics support 32 and 64-bit operations, so inputs must be at least 32-bits
+    //    Otherwise, fall back to the existing path for atomics
+    auto opValueType = op.getVal().getType();
+    auto opBitWidth = 0;
+    if (auto vecType = dyn_cast<RankedTensorType>(opValueType)) {
+      // We can't just get the numElements * elemBitWidth here
+      // We have to perform the same vectorization check as when we lower to LLVM
+      // This is because of cases such as tensor<2xf16...>---In these cases we need
+      // to check the contiguity of the tensor as well.
+      opBitWidth = getVectorSize(basePtr, tensorOffset, axisAnalysisPass);
+    } else {
+      opBitWidth = op.getVal().getType().getIntOrFloatBitWidth();
+    }
 
-    auto opUsers = op.getResult().getUsers();
-    auto hasUsers = std::distance(opUsers.begin(), opUsers.end()) > 0;
-
-    if (canUseBufferOps(ptr, assumptions) && !hasUsers) {
-      auto addPtrOp = ptr.getDefiningOp<triton::AddPtrOp>();
-      Value tensorPtr = addPtrOp.getPtr();
-      Value tensorOffset = addPtrOp.getOffset();
-      auto splatOp = tensorPtr.getDefiningOp<triton::SplatOp>();
-      Value basePtr = splatOp.getSrc();
-
+    if (opBitWidth >= 32) {
       Value maybeMask{};
       if (op.getMask() && !isZeroConst(op.getMask()))
         maybeMask = op.getMask();
 
-      rewriter.create<triton::amdgpu::BufferAtomicRMWOp>(
-        op->getLoc(), atomicRmwAttr, basePtr, tensorOffset, op.getVal(), sem, scope, maybeMask);
+      auto atomicRMWOp = rewriter.create<triton::amdgpu::BufferAtomicRMWOp>(
+        op->getLoc(), op.getVal().getType(), atomicRmwAttr, basePtr, tensorOffset, op.getVal(), sem, scope, maybeMask);
 
-      rewriter.eraseOp(op);
+      rewriter.replaceOp(op, atomicRMWOp);
 
       return success();
     }
@@ -279,6 +298,7 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
 private:
   // Assumptions collected through the function
   DenseSet<Value> assumptions;
+  ModuleAxisInfoAnalysis axisAnalysisPass;
 };
 
 struct ConvertTritonLoadToBufferLoad
@@ -378,10 +398,11 @@ public:
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);
-    ModuleOp m = getOperation();
+    ModuleOp mod = getOperation();
+
     // Collect assumptions in the function
     DenseSet<Value> assumptions;
-    m.walk([&](LLVM::AssumeOp op) {
+    mod.walk([&](LLVM::AssumeOp op) {
       if (op->getOperand(0).getDefiningOp<arith::CmpIOp>())
         assumptions.insert(op->getOperand(0));
     });
@@ -390,10 +411,11 @@ public:
       LDBG("Assumption:" << assume);
     }
 
+    ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
     patterns.add<ConvertTritonLoadToBufferLoad>(context, assumptions);
     patterns.add<ConvertTritonStoreToBufferStore>(context, assumptions);
-    patterns.add<ConvertTritonAtomicRMWOpToBufferAtomicRMW>(context, assumptions);
-    if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
+    patterns.add<ConvertTritonAtomicRMWOpToBufferAtomicRMW>(context, assumptions, axisInfoAnalysis);
+    if (applyPatternsAndFoldGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
   }
 };

@@ -22,6 +22,7 @@ using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryBase;
 using ::mlir::LLVM::AMD::llLoad;
 using ::mlir::LLVM::AMD::llStore;
+using ::mlir::LLVM::AMD::getVectorSize;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 
 namespace {
@@ -154,57 +155,6 @@ struct LoadStoreConversionBase {
     return offsetType.cloneWith(std::nullopt, basePtrType);
   }
 
-  // Get contiguity for a tensor pointer `ptr`
-  unsigned getContiguity(Value ptr) const {
-    auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
-    if (!tensorTy)
-      return 1;
-    return axisAnalysisPass.getPtrContiguity(ptr);
-  }
-
-  // Get contiguity for a scalar pointer `ptr` and a tensor `offset`
-  unsigned getContiguity(Value ptr, Value offset) const {
-    // Get contiguity from the offset
-    Type type = getPointerTypeWithShape(ptr, offset);
-    RankedTensorType tensorTy = cast<RankedTensorType>(type);
-    auto layout = tensorTy.getEncoding();
-    auto order = triton::gpu::getOrder(layout);
-    auto uniqueContigPerThread =
-        triton::gpu::getUniqueContigPerThread(layout, tensorTy.getShape());
-    assert(order[0] < uniqueContigPerThread.size() &&
-           "Unexpected uniqueContigPerThread size");
-    unsigned contiguity = uniqueContigPerThread[order[0]];
-
-    // Get alignment from the pointer. Since this is a scalar pointer
-    // we should not take the pointer contiguity to consider alignment
-    auto *axisInfo = axisAnalysisPass.getAxisInfo(ptr);
-    auto maxMultipleBytes = axisInfo->getDivisibility(0);
-    auto elemNumBits = triton::getPointeeBitWidth(tensorTy);
-    auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
-    auto align = std::max<int64_t>(maxMultipleBytes / elemNumBytes, 1);
-
-    // Final contiguity is a min of the offset contiguity and pointer alignment
-    contiguity = std::min<int64_t>(align, contiguity);
-    return contiguity;
-  }
-
-  // Determine the vector size of a tensor of pointers
-  unsigned getVectorSize(Value ptr) const {
-    auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
-    if (!tensorTy)
-      return 1;
-    auto contiguity = getContiguity(ptr);
-    auto pointeeBitWidth = triton::getPointeeBitWidth(tensorTy);
-    return std::min<unsigned>(128 / pointeeBitWidth, contiguity);
-  }
-
-  // Given a scalar pointer and a tensor of offsets, determine the vector size
-  unsigned getVectorSize(Value ptr, Value offset) const {
-    auto contiguity = getContiguity(ptr, offset);
-    auto pointeeBitWidth = triton::getPointeeBitWidth(ptr.getType());
-    return std::min<unsigned>(128 / pointeeBitWidth, contiguity);
-  }
-
   // Unpack the elements contained in a `llvmStruct` into a `SmallVector` of
   // `Value`s. While you do that, check also the alignment of the mask and
   // update the vector length `vec` accordingly
@@ -288,7 +238,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
     Type valueTy = op.getType();
     Type valueElemTy =
         typeConverter->convertType(getElementTypeOrSelf(valueTy));
-    unsigned vec = getVectorSize(ptr);
+    unsigned vec = getVectorSize(ptr, axisAnalysisPass);
     unsigned numElems = getTotalElemsPerThread(ptr.getType());
 
     // Get the LLVM values for pointers
@@ -392,7 +342,7 @@ struct BufferLoadOpConversion
         typeConverter->convertType(getElementTypeOrSelf(valueTy));
     Type ptrType = getPointerTypeWithShape(ptr, offset);
     unsigned numElems = getTotalElemsPerThread(ptrType);
-    unsigned vec = getVectorSize(ptr, offset);
+    unsigned vec = getVectorSize(ptr, offset, axisAnalysisPass);
 
     // Get the offset
     SmallVector<Value> offsetElems = unpackLLElements(loc, llOffset, rewriter);
@@ -470,7 +420,7 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
         typeConverter->convertType(getElementTypeOrSelf(valueTy));
 
     // Determine the vectorization size
-    unsigned vec = getVectorSize(ptr);
+    unsigned vec = getVectorSize(ptr, axisAnalysisPass);
     unsigned elemsPerThread = getTotalElemsPerThread(ptr.getType());
 
     auto ptrElems = unpackLLElements(loc, llPtr, rewriter);
@@ -555,7 +505,7 @@ struct BufferAtomicRMWOpConversion
     Type ptrType = getPointerTypeWithShape(ptr, offset);
 
     unsigned numElems = getTotalElemsPerThread(ptrType);
-    unsigned vec = getVectorSize(ptr, offset);
+    unsigned vec = getVectorSize(ptr, offset, axisAnalysisPass);
 
     // Get the offsets and value
     SmallVector<Value> offsetElems = unpackLLElements(loc, llOffset, rewriter);
@@ -567,6 +517,7 @@ struct BufferAtomicRMWOpConversion
 
     Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr);
     Value rDataMask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
+    SmallVector<Value> loadedVals;
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
       Type vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
       Value pred = mask ? and_(maskElems[vecStart], rDataMask) : rDataMask;
@@ -576,10 +527,19 @@ struct BufferAtomicRMWOpConversion
           rewriter, this->getTypeConverter(), loc, cast<VectorType>(vecTy),
           valueElems, vecStart);
 
-      bufferEmitter.emitAtomicRMW(atomicRmwAttr, vecTy, rsrcDesc, offsetElems[vecStart], storeVal, pred);
+      Value loadVal = bufferEmitter.emitAtomicRMW(atomicRmwAttr, vecTy, rsrcDesc, offsetElems[vecStart], storeVal, pred);
+      for (size_t ii = 0; ii < vec; ++ii) {
+        Value vecIdx = createIndexAttrConstant(
+            rewriter, loc, this->getTypeConverter()->getIndexType(), ii);
+        Value loaded = extract_element(valueElemTy, loadVal, vecIdx);
+        loadedVals.push_back(loaded);
+      }
     } // end vec
+    Type llvmResultStructTy = getTypeConverter()->convertType(valueTy);
+    Value resultStruct = packLLElements(loc, getTypeConverter(), loadedVals,
+                                        rewriter, llvmResultStructTy);
 
-    rewriter.eraseOp(op);
+    rewriter.replaceOp(op, {resultStruct});
     return success();
   }
 };
@@ -627,7 +587,7 @@ struct BufferStoreOpConversion
     Type ptrType = getPointerTypeWithShape(ptr, offset);
 
     unsigned numElems = getTotalElemsPerThread(ptrType);
-    unsigned vec = getVectorSize(ptr, offset);
+    unsigned vec = getVectorSize(ptr, offset, axisAnalysisPass);
 
     // Get the offsets and value
     SmallVector<Value> offsetElems = unpackLLElements(loc, llOffset, rewriter);
@@ -715,7 +675,7 @@ struct AtomicCASOpConversion
     auto valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
     auto elemsPerThread = getTotalElemsPerThread(op.getVal().getType());
     // vec = 1 for scalar
-    auto vec = getVectorSize(op.getPtr());
+    auto vec = getVectorSize(op.getPtr(), axisAnalysisPass);
     // tensor
     if (TensorTy) {
       auto valTy = cast<RankedTensorType>(op.getVal().getType());
@@ -913,7 +873,7 @@ struct AtomicRMWOpConversion
     const size_t valueElemNbits = valueElemTy.getIntOrFloatBitWidth();
     auto elemsPerThread = getTotalElemsPerThread(val.getType());
     // vec = 1, numElements = 1 for scalar
-    auto vec = getVectorSize(ptr);
+    auto vec = getVectorSize(ptr, axisAnalysisPass);
     int numElems = 1;
     Type packF16Ty = vec_ty(valueElemTy, 2);
 

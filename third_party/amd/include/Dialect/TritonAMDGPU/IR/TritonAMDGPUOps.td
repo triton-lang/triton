@@ -213,9 +213,14 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
 }
 
 def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
-  SameLoadStoreOperandsEncoding,
+  SameLoadStoreOperandsAndResultEncoding,
   MemoryEffects<[MemRead<GlobalMemory>]>,
   MemoryEffects<[MemWrite<GlobalMemory>]>,
+  TypesMatchWith<"result element type matches the value type", "result", "value", "$_self">,
+  TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "getPointerTypeToElement($_self)">,
+  TypesMatchWith<"result and offsets have the same shape", "result", "offsets", "getI32SameShape($_self)">,
+  TypesMatchWith<"result and mask have the same shape", "result", "mask", "getI1SameShape($_self)",
+                 "($_op.getOperands().size() <= 2) || std::equal_to<>()">,
   TypesMatchWith<"value element type matches the pointed type of ptr", "value", "ptr", "getPointerTypeToElement($_self)">,
   TypesMatchWith<"value and offsets have the same shape", "value", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"value and mask have the same shape", "value", "mask", "getI1SameShape($_self)",
@@ -239,10 +244,11 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
       TT_MemSyncScopeAttr:$scope,
       Optional<TT_BoolTensor>:$mask
     );
+    let results = (outs TT_Tensor:$result);
 
     let assemblyFormat = [{
         $atomic_rmw_op `,` $sem `,` $scope `,` $value `,` $ptr `[` $offsets `]` (`,` $mask^)?
-        attr-dict `:` type($ptr) `,` type($offsets) `,` type($value)
+        attr-dict `:` type($result)
     }];
 }
 

@@ -73,7 +73,7 @@ struct BufferEmitter {
   // The following ops are currently supported:
   // - fadd
   // - umin
-  void emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc, Value offset, Value data, Value pred);
+  Value emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc, Value offset, Value data, Value pred);
 
   // Emit a predicated rocdl.raw.ptr.buffer.store
   void emitStore(Value rsrcDesc, Value offset, Value data, Value pred,
@@ -88,7 +88,7 @@ private:
   // Given a type, the buffer type can be either the same type
   // or a packed version. E.g., a vector of 8xfp16 can be bitcasted to
   // a vector of 4xi32. This usually makes the life of the backend easier
-  Type getBufferOpType(Type type);
+  Type getBufferOpType(Type type, bool bitcastBF16);
 
   // Rewriter utilities
   RewriterBase &rewriter;

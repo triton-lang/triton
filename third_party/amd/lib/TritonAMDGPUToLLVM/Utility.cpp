@@ -6,6 +6,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
+using mlir::triton::ModuleAxisInfoAnalysis;
 using mlir::triton::AMD::DppCtrl;
 using mlir::triton::AMD::ISAFamily;
 using mlir::triton::gpu::appendOrGetExternFuncOp;
@@ -504,6 +505,64 @@ Value cvtFp32ToFp16(Location loc, RewriterBase &rewriter, const Value &v,
     resetRTZ();
   }
   return builder.launch(rewriter, loc, f16_ty, false);
+}
+
+Type getPointerTypeWithShape(Value basePtr, Value offset) {
+    Type basePtrType = basePtr.getType();
+    auto offsetType = cast<RankedTensorType>(offset.getType());
+    return offsetType.cloneWith(std::nullopt, basePtrType);
+}
+
+
+// Get contiguity for a tensor pointer `ptr`
+unsigned getContiguity(Value ptr, ModuleAxisInfoAnalysis axisAnalysisPass) {
+  auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
+  if (!tensorTy)
+    return 1;
+  return axisAnalysisPass.getPtrContiguity(ptr);
+}
+
+// Get contiguity for a scalar pointer `ptr` and a tensor `offset`
+unsigned getContiguity(Value ptr, Value offset, ModuleAxisInfoAnalysis axisAnalysisPass) {
+  // Get contiguity from the offset
+  Type type = getPointerTypeWithShape(ptr, offset);
+  RankedTensorType tensorTy = cast<RankedTensorType>(type);
+  auto layout = tensorTy.getEncoding();
+  auto order = triton::gpu::getOrder(layout);
+  auto uniqueContigPerThread =
+      triton::gpu::getUniqueContigPerThread(layout, tensorTy.getShape());
+  assert(order[0] < uniqueContigPerThread.size() &&
+          "Unexpected uniqueContigPerThread size");
+  unsigned contiguity = uniqueContigPerThread[order[0]];
+
+  // Get alignment from the pointer. Since this is a scalar pointer
+  // we should not take the pointer contiguity to consider alignment
+  auto *axisInfo = axisAnalysisPass.getAxisInfo(ptr);
+  auto maxMultipleBytes = axisInfo->getDivisibility(0);
+  auto elemNumBits = triton::getPointeeBitWidth(tensorTy);
+  auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
+  auto align = std::max<int64_t>(maxMultipleBytes / elemNumBytes, 1);
+
+  // Final contiguity is a min of the offset contiguity and pointer alignment
+  contiguity = std::min<int64_t>(align, contiguity);
+  return contiguity;
+}
+
+// Determine the vector size of a tensor of pointers
+unsigned getVectorSize(Value ptr, ModuleAxisInfoAnalysis axisAnalysisPass) {
+  auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
+  if (!tensorTy)
+    return 1;
+  auto contiguity = getContiguity(ptr, axisAnalysisPass);
+  auto pointeeBitWidth = triton::getPointeeBitWidth(tensorTy);
+  return std::min<unsigned>(128 / pointeeBitWidth, contiguity);
+}
+
+// Given a scalar pointer and a tensor of offsets, determine the vector size
+unsigned getVectorSize(Value ptr, Value offset, ModuleAxisInfoAnalysis axisAnalysisPass) {
+  auto contiguity = getContiguity(ptr, offset, axisAnalysisPass);
+  auto pointeeBitWidth = triton::getPointeeBitWidth(ptr.getType());
+  return std::min<unsigned>(128 / pointeeBitWidth, contiguity);
 }
 
 } // namespace mlir::LLVM::AMD
