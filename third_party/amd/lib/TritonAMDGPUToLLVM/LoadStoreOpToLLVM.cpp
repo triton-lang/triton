@@ -464,7 +464,20 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
   }
 };
 
-///
+static LLVM::AtomicOrdering getMemoryOrdering(MemSemantic memOrdering) {
+  switch (memOrdering) {
+  case MemSemantic::RELAXED:
+    return LLVM::AtomicOrdering::monotonic;
+  case MemSemantic::ACQUIRE:
+    return LLVM::AtomicOrdering::acquire;
+  case MemSemantic::RELEASE:
+    return LLVM::AtomicOrdering::release;
+  case MemSemantic::ACQUIRE_RELEASE:
+    return LLVM::AtomicOrdering::acq_rel;
+  default:
+    return LLVM::AtomicOrdering::acq_rel;
+  }
+}
 
 struct BufferAtomicRMWOpConversion
     : public ConvertOpToLLVMPattern<triton::amdgpu::BufferAtomicRMWOp>,
@@ -520,9 +533,63 @@ struct BufferAtomicRMWOpConversion
     SmallVector<Value> maskElems =
         getMaskElemsAndUpdateVeclen(rewriter, loc, llMask, mask, vec);
 
+
+    // We need to manually emit memory fences (LLVM doesn't do this for buffer ops)
+    // see: https://llvm.org/docs/AMDGPUUsage.html#memory-model-gfx942 (memory model for GFX940, GFX941, GFX942)
+    auto memOrdering = op.getSem();
+    auto atomicMemOrdering = getMemoryOrdering(memOrdering);
+    auto rel = LLVM::AtomicOrdering::release;
+    auto acq = LLVM::AtomicOrdering::acquire;
+
+    bool emitReleaseFence = false;
+    bool emitAcquireFence = false;
+    switch (memOrdering) {
+      case MemSemantic::RELAXED:
+        // we don't support this for now
+        return failure();
+      case MemSemantic::RELEASE:
+        emitReleaseFence = true;
+        break;
+      case MemSemantic::ACQUIRE:
+        emitAcquireFence = true;
+        break;
+      case MemSemantic::ACQUIRE_RELEASE:
+        emitAcquireFence = true;
+        emitReleaseFence = true;
+      default:
+        // default == acq_rel, so we emit the same barriers
+        emitAcquireFence = true;
+        emitReleaseFence = true;
+    }
+
     Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr);
     Value rDataMask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
     SmallVector<Value> loadedVals;
+
+    // set the scope
+    auto memScope = op.getScope();
+    auto scopeStr = "";
+    switch(memScope) {
+      case MemSyncScope::GPU:
+      case MemSyncScope::SYSTEM:
+        scopeStr = "agent";
+        break;
+      default:
+        scopeStr = "workgroup";
+    }
+
+    StringAttr scope = mlir::StringAttr::get(loc.getContext(), scopeStr);
+
+    // Vector memory operations are performed as wavefront wide operations and completion is reported to a wavefront in execution order.
+    // If as a part of the vectorization we emit multiple invidual atomic ops which represent a "larger", we don't need to fully synchronize
+    // between these as a result.
+
+    if (emitReleaseFence)
+      rewriter.create<LLVM::FenceOp>(loc, TypeRange{}, rel, scope);
+
+    MLIRContext *ctx = rewriter.getContext();
+    GCNBuilder waitcntBuilder;
+    mlir::Operation* lastRMWOp;
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
       Type vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
       Value pred = mask ? and_(maskElems[vecStart], rDataMask) : rDataMask;
@@ -535,6 +602,24 @@ struct BufferAtomicRMWOpConversion
       Value loadVal =
           bufferEmitter.emitAtomicRMW(atomicRmwAttr, vecTy, rsrcDesc,
                                       offsetElems[vecStart], storeVal, pred);
+      // Track the last op, so we can emit a fenceop after the loop
+      lastRMWOp = loadVal.getDefiningOp();
+
+      // To sync vector memory ops between CUs within an agent, we need an s_waitcnt
+      // skip doing this on the last iteration of the loop
+      if (vecStart + vec < numElems) {
+        if (memScope == MemSyncScope::GPU) {
+          waitcntBuilder.create<>("s_waitcnt vmcnt(0)")->operator()();
+          Value inst = waitcntBuilder.launch(rewriter, lastRMWOp->getLoc(), void_ty(ctx));
+          lastRMWOp = inst.getDefiningOp();
+        } else if (memScope == MemSyncScope::CTA) {
+          // If the scope is at the CTA-level we just need "buffer_wbinvl1_vol" between the vector memory ops
+          waitcntBuilder.create<>("buffer_wbinvl1_vol")->operator()();
+          Value inst = waitcntBuilder.launch(rewriter, lastRMWOp->getLoc(), void_ty(ctx));
+          lastRMWOp = inst.getDefiningOp();
+        }
+      }
+
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, this->getTypeConverter()->getIndexType(), ii);
@@ -542,6 +627,11 @@ struct BufferAtomicRMWOpConversion
         loadedVals.push_back(loaded);
       }
     } // end vec
+
+    // Acquire Fence post-atomic
+    if (emitAcquireFence)
+        rewriter.create<LLVM::FenceOp>(lastRMWOp->getLoc(), TypeRange{}, acq, scope);
+
     Type llvmResultStructTy = getTypeConverter()->convertType(valueTy);
     Value resultStruct = packLLElements(loc, getTypeConverter(), loadedVals,
                                         rewriter, llvmResultStructTy);
@@ -619,21 +709,6 @@ struct BufferStoreOpConversion
     return success();
   }
 };
-
-static LLVM::AtomicOrdering getMemoryOrdering(MemSemantic memOrdering) {
-  switch (memOrdering) {
-  case MemSemantic::RELAXED:
-    return LLVM::AtomicOrdering::monotonic;
-  case MemSemantic::ACQUIRE:
-    return LLVM::AtomicOrdering::acquire;
-  case MemSemantic::RELEASE:
-    return LLVM::AtomicOrdering::release;
-  case MemSemantic::ACQUIRE_RELEASE:
-    return LLVM::AtomicOrdering::acq_rel;
-  default:
-    return LLVM::AtomicOrdering::acq_rel;
-  }
-}
 
 struct AtomicCASOpConversion
     : public ConvertOpToLLVMPattern<triton::AtomicCASOp>,

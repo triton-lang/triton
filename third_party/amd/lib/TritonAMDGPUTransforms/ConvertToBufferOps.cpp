@@ -1,4 +1,3 @@
-#include "../TritonAMDGPUToLLVM/Utility.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -19,6 +18,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "../TritonAMDGPUToLLVM/Utility.h"
 #include <deque>
 #include <optional>
 
@@ -264,22 +264,25 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     Value basePtr = splatOp.getSrc();
 
     // 2. FP8 atomics are not supported with buffer atomics
-    auto checkFP8Value = op.getVal().getType();
-    if (auto vecType = dyn_cast<RankedTensorType>(checkFP8Value)) {
-      checkFP8Value = vecType.getElementType();
+    //    easier to just check what we support
+    auto checkType = op.getVal().getType();
+    if (auto vecType = dyn_cast<RankedTensorType>(checkType)) {
+      checkType = vecType.getElementType();
     }
-    bool isFP8 =
-        checkFP8Value.isFloat8E5M2() || checkFP8Value.isFloat8E4M3FN() ||
-        checkFP8Value.isFloat8E5M2FNUZ() || checkFP8Value.isFloat8E4M3FNUZ();
-    if (isFP8) {
-      LDBG("Failed to convert: " << op);
+    bool isSupportedType =
+        checkType.isF16() || checkType.isBF16() ||
+        checkType.isF32() || checkType.isF64() || checkType.isInteger();
+    if (!isSupportedType) {
+      LDBG("Failed to convert: " << op << "of type: " << checkType);
       return failure();
     }
+    LDBG("RMW supported type");
 
     // 3. Check the hardware---only MI-* series GPUs are supported
     //    (we will just check for CNDA 3 for now)
 
     // TODO
+    LDBG("RMW supported HW");
 
     // 4. Check if the RMWOp is supported
     switch (atomicRmwOp) {
@@ -292,12 +295,13 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     case RMWOp::MIN:
     case RMWOp::UMAX:
     case RMWOp::UMIN:
-    case RMWOp::SMAX:
-    case RMWOp::SMIN:
     case RMWOp::XCHG:
-      break default : LDBG("Failed to convert: " << op);
+      break;
+    default:
+      LDBG("Failed to convert: " << op);
       return failure();
     }
+    LDBG("RMW supported Op");
 
     // 5. Buffer atomics support 32 and 64-bit operations, so inputs must be at
     // least 32-bits

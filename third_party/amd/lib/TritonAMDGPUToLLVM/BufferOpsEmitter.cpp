@@ -95,6 +95,7 @@ Value BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc,
     data = bitcast(data, bufferType);
 
   SmallVector<Value, 6> args{data};
+
   fillCommonArgs(vecTy, rsrcDesc, offset, pred, args);
 
   // TODO:
