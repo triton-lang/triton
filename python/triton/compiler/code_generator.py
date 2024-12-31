@@ -1340,10 +1340,8 @@ class CodeGenerator(ast.NodeVisitor):
 
 
 def ast_to_ttir(fn, specialization, context, options, codegen_fns, module_map):
-    constexprs = specialization.constexprs
-    attrs = specialization.attrs
     arg_types = [str_to_ty(ty) for ty in specialization.signature.values()]
-    prototype = ASTFunction([], arg_types, constexprs, attrs)
+    prototype = ASTFunction([], arg_types, specialization.constexprs, specialization.attrs)
     file_name, begin_line = get_jit_fn_file_line(fn)
     generator = CodeGenerator(context, prototype, gscope=fn.__globals__.copy(), function_name=fn.repr(specialization),
                               jit_fn=fn, is_kernel=True, file_name=file_name, begin_line=begin_line, options=options,
