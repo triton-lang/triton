@@ -587,9 +587,16 @@ struct BufferAtomicRMWOpConversion
     if (emitReleaseFence)
       rewriter.create<LLVM::FenceOp>(loc, TypeRange{}, rel, scope);
 
+    mlir::Operation* lastRMWOp;
     MLIRContext *ctx = rewriter.getContext();
     GCNBuilder waitcntBuilder;
-    mlir::Operation* lastRMWOp;
+
+    if (memScope == MemSyncScope::GPU) {
+      waitcntBuilder.create<>("s_waitcnt vmcnt(0)")->operator()();
+    } else if (memScope == MemSyncScope::CTA) {
+      waitcntBuilder.create<>("buffer_wbinvl1_vol")->operator()();
+    }
+
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
       Type vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
       Value pred = mask ? and_(maskElems[vecStart], rDataMask) : rDataMask;
@@ -607,14 +614,12 @@ struct BufferAtomicRMWOpConversion
 
       // To sync vector memory ops between CUs within an agent, we need an s_waitcnt
       // skip doing this on the last iteration of the loop
-      if (vecStart + vec < numElems) {
+      if (vecStart < numElems - vec) {
         if (memScope == MemSyncScope::GPU) {
-          waitcntBuilder.create<>("s_waitcnt vmcnt(0)")->operator()();
           Value inst = waitcntBuilder.launch(rewriter, lastRMWOp->getLoc(), void_ty(ctx));
           lastRMWOp = inst.getDefiningOp();
         } else if (memScope == MemSyncScope::CTA) {
           // If the scope is at the CTA-level we just need "buffer_wbinvl1_vol" between the vector memory ops
-          waitcntBuilder.create<>("buffer_wbinvl1_vol")->operator()();
           Value inst = waitcntBuilder.launch(rewriter, lastRMWOp->getLoc(), void_ty(ctx));
           lastRMWOp = inst.getDefiningOp();
         }
