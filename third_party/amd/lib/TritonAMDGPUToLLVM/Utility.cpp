@@ -508,11 +508,10 @@ Value cvtFp32ToFp16(Location loc, RewriterBase &rewriter, const Value &v,
 }
 
 Type getPointerTypeWithShape(Value basePtr, Value offset) {
-    Type basePtrType = basePtr.getType();
-    auto offsetType = cast<RankedTensorType>(offset.getType());
-    return offsetType.cloneWith(std::nullopt, basePtrType);
+  Type basePtrType = basePtr.getType();
+  auto offsetType = cast<RankedTensorType>(offset.getType());
+  return offsetType.cloneWith(std::nullopt, basePtrType);
 }
-
 
 // Get contiguity for a tensor pointer `ptr`
 unsigned getContiguity(Value ptr, ModuleAxisInfoAnalysis axisAnalysisPass) {
@@ -523,7 +522,8 @@ unsigned getContiguity(Value ptr, ModuleAxisInfoAnalysis axisAnalysisPass) {
 }
 
 // Get contiguity for a scalar pointer `ptr` and a tensor `offset`
-unsigned getContiguity(Value ptr, Value offset, ModuleAxisInfoAnalysis axisAnalysisPass) {
+unsigned getContiguity(Value ptr, Value offset,
+                       ModuleAxisInfoAnalysis axisAnalysisPass) {
   // Get contiguity from the offset
   Type type = getPointerTypeWithShape(ptr, offset);
   RankedTensorType tensorTy = cast<RankedTensorType>(type);
@@ -532,7 +532,7 @@ unsigned getContiguity(Value ptr, Value offset, ModuleAxisInfoAnalysis axisAnaly
   auto uniqueContigPerThread =
       triton::gpu::getUniqueContigPerThread(layout, tensorTy.getShape());
   assert(order[0] < uniqueContigPerThread.size() &&
-          "Unexpected uniqueContigPerThread size");
+         "Unexpected uniqueContigPerThread size");
   unsigned contiguity = uniqueContigPerThread[order[0]];
 
   // Get alignment from the pointer. Since this is a scalar pointer
@@ -559,7 +559,8 @@ unsigned getVectorSize(Value ptr, ModuleAxisInfoAnalysis axisAnalysisPass) {
 }
 
 // Given a scalar pointer and a tensor of offsets, determine the vector size
-unsigned getVectorSize(Value ptr, Value offset, ModuleAxisInfoAnalysis axisAnalysisPass) {
+unsigned getVectorSize(Value ptr, Value offset,
+                       ModuleAxisInfoAnalysis axisAnalysisPass) {
   auto contiguity = getContiguity(ptr, offset, axisAnalysisPass);
   auto pointeeBitWidth = triton::getPointeeBitWidth(ptr.getType());
   return std::min<unsigned>(128 / pointeeBitWidth, contiguity);

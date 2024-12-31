@@ -87,8 +87,8 @@ Value BufferEmitter::emitLoad(Type type, Value rsrcDesc, Value offset,
   return data;
 }
 
-Value BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc, Value offset,
-                                   Value data, Value pred) {
+Value BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc,
+                                   Value offset, Value data, Value pred) {
   VectorType vecTy = cast<VectorType>(data.getType());
   Type bufferType = getBufferOpType(type, true);
   if (vecTy != bufferType)
@@ -98,17 +98,18 @@ Value BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc, Val
   fillCommonArgs(vecTy, rsrcDesc, offset, pred, args);
 
   // TODO:
-  //   The ops in ROCDL (e.g., RawPtrBufferAtomicFaddOp) have no return value, but they lower to instrinsics that can return values.
-  //   This causes the LLVM verifier to fail. When this is fixed, the ROCDL ops should be used here.
+  //   The ops in ROCDL (e.g., RawPtrBufferAtomicFaddOp) have no return value,
+  //   but they lower to instrinsics that can return values. This causes the
+  //   LLVM verifier to fail. When this is fixed, the ROCDL ops should be used
+  //   here.
   auto rmwOpStr = stringifyRMWOp(rmwType).str();
   auto instrinsic = "llvm.amdgcn.raw.ptr.buffer.atomic." + rmwOpStr;
   auto bufferAtomicRMW = LLVM::createLLVMIntrinsicCallOp(
-    rewriter, loc, instrinsic, bufferType, args);
+      rewriter, loc, instrinsic, bufferType, args);
 
   data = bitcast(bufferAtomicRMW.getResult(0), type);
   return data;
 }
-
 
 void BufferEmitter::emitStore(Value rsrcDesc, Value offset, Value data,
                               Value pred, triton::CacheModifier cm) {

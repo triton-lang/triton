@@ -7,10 +7,10 @@
 
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-#include "triton/Analysis/AxisInfo.h"
 
 namespace mlir::LLVM::AMD {
 
@@ -68,13 +68,15 @@ Type getPointerTypeWithShape(Value basePtr, Value offset);
 unsigned getContiguity(Value ptr, ModuleAxisInfoAnalysis axisAnalysisPass);
 
 // Get contiguity for a scalar pointer `ptr` and a tensor `offset`
-unsigned getContiguity(Value ptr, Value offset, ModuleAxisInfoAnalysis axisAnalysisPass);
+unsigned getContiguity(Value ptr, Value offset,
+                       ModuleAxisInfoAnalysis axisAnalysisPass);
 
 // Determine the vector size of a tensor of pointers
 unsigned getVectorSize(Value ptr, ModuleAxisInfoAnalysis axisAnalysisPass);
 
 // Given a scalar pointer and a tensor of offsets, determine the vector size
-unsigned getVectorSize(Value ptr, Value offset, ModuleAxisInfoAnalysis axisAnalysisPass);
+unsigned getVectorSize(Value ptr, Value offset,
+                       ModuleAxisInfoAnalysis axisAnalysisPass);
 
 } // namespace mlir::LLVM::AMD
 
