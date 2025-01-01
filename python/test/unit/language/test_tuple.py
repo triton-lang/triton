@@ -81,6 +81,7 @@ def _tuple_fn0(Ptr, cst2: tl.constexpr, tuple1):
 def _tuple_serialize(Ptr, N1, tuple1, cst1: tl.constexpr, val1, tuple2):
     tl.static_assert(N1 is None)
     tl.static_assert(tuple1[1][1] is None)
+    tl.static_assert(tuple1[1][3] == 4)
     tl.store(Ptr + 0, tl.load(tuple1[0]))
     tl.store(Ptr + 1, tuple1[1][0])
     tl.store(Ptr + 2, tl.load(tuple1[1][2]))
@@ -95,6 +96,6 @@ def test_serialize(device="cuda"):
     y0 = torch.tensor([10], dtype=torch.int32, device=device)
     z = torch.empty((10, ), dtype=torch.int32, device=device)
     # we want to check that JIT specialization propagates to tuples:
-    _tuple_serialize[(1, )](z, None, (x0, (1, None, x1)), 20, 1, (y0, ))
+    _tuple_serialize[(1, )](z, None, (x0, (1, None, x1, tl.constexpr(4))), 20, 1, (y0, ))
     ref = torch.tensor([8, 1, 12, 21, 10, 15, -1, 8, 1, 12], device=device)
     assert torch.equal(z, ref)

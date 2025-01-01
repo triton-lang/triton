@@ -4435,7 +4435,7 @@ def test_value_specialization(value: int, value_type: str, device) -> None:
 
     def repr(specialization):
         ty = specialization.signature["value1"]
-        cst = '_'.join([k for k, v in specialization.constants.items() if v == 1])
+        cst = '_'.join([k for k, v in specialization.constants.items() if isinstance(k, str) and v == 1])
         return f"kernel_{ty}_{cst}"
 
     @triton.jit(repr=repr)

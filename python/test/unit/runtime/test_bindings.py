@@ -68,7 +68,6 @@ def test_module_walk(device):
         constexprs={kernel.arg_names[i]: arg
                     for i, arg in enumerate(args)
                     if not isinstance(arg, torch.Tensor)},
-        attrs=backend.get_attrs_descriptor(kernel.params, args),
     )
 
     context = triton._C.libtriton.ir.context()
