@@ -57,7 +57,7 @@ class ASTSource:
         self.name = fn.__name__
         self.signature = signature
         self.constants = constants or dict()
-        self.attrs = attrs or []
+        self.attrs = attrs or dict()
         if isinstance(self.signature, str):
             self.signature = {k: v.strip() for k, v in enumerate(self.signature.split(","))}
         else:

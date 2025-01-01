@@ -373,9 +373,9 @@ def create_function_from_signature(sig, kparams, backend):
     arg = lambda x: x[0] if x[1].default is inspect.Parameter.empty else f"{x[0]}=default_{x[0]}"
     # Join all arguments into a function definition string
     func_body = f"""
-def dynamic_func({", ".join(map(arg, sig.parameters.items()))}, **options):
+def dynamic_func({", ".join(list(map(arg, sig.parameters.items())) + ["**options"])}):
     params = {{{', '.join([f"'{name}': {name}" for name in sig.parameters.keys()])}}}
-    specialization = ({','.join(specialization)},)
+    specialization = [{','.join(specialization)}]
     return params, specialization, options
 """
     # Prepare defaults to be inserted into function namespace
