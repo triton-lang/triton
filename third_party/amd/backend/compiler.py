@@ -158,7 +158,7 @@ class HIPBackend(BaseBackend):
     @staticmethod
     def parse_attr(desc):
         ret = BaseBackend.parse_attr(desc)
-        if desc == "S":
+        if "S" in desc:
             ret += [["tt.pointer_range", 32]]
         return ret
 

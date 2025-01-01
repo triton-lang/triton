@@ -88,7 +88,7 @@ class BaseBackend(metaclass=ABCMeta):
     def parse_attr(desc):
         assert isinstance(desc, str)
         ret = []
-        if desc == "D":
+        if "D" in desc:
             ret += [["tt.divisibility", 16]]
         return ret
 
