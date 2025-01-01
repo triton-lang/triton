@@ -563,7 +563,7 @@ def test_within_2gb(device, fresh_triton_cache) -> None:
 
     def cache_hook(*args, **kwargs):
         nonlocal pointer_range_32
-        pointer_range_32 = kwargs["compile"]["configs"][0].pointer_range_32
+        pointer_range_32 = [k for k, v in kwargs["compile"]["configs"][0].items() if ['tt.pointer_range', 32] in v]
 
     JITFunction.cache_hook = cache_hook
     # In warmup we assume that the pointer range is 32 bits
