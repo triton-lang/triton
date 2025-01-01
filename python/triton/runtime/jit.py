@@ -375,7 +375,7 @@ def create_function_from_signature(sig, kparams, backend):
     func_body = f"""
 def dynamic_func({", ".join(map(arg, sig.parameters.items()))}, **options):
     params = {{{', '.join([f"'{name}': {name}" for name in sig.parameters.keys()])}}}
-    specialization = {','.join(specialization)}
+    specialization = ({','.join(specialization)},)
     return params, specialization, options
 """
     # Prepare defaults to be inserted into function namespace
