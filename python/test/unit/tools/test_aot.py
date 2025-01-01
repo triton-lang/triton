@@ -281,32 +281,33 @@ def generate_matmul_test_data(dir, M, N, K):
 def test_compile_link_matmul_no_specialization():
     np.random.seed(3)
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        dtype = "fp16"
-        BM, BN, BK = 16, 16, 16
+    tmp_dir = "."
+    # with tempfile.TemporaryDirectory() as tmp_dir:
+    dtype = "fp16"
+    BM, BN, BK = 16, 16, 16
 
-        kernel_path = write_triton_kernels(tmp_dir, kernel_src, kernel_utils_src)
-        compile_aot_kernel_no_specialization(tmp_dir, kernel_path, dtype, BM, BN, BK)
-        link_aot_kernels(tmp_dir)
+    kernel_path = write_triton_kernels(tmp_dir, kernel_src, kernel_utils_src)
+    compile_aot_kernel_no_specialization(tmp_dir, kernel_path, dtype, BM, BN, BK)
+    link_aot_kernels(tmp_dir)
 
-        # compile test case
-        M, N, K = 16, 16, 16
-        gen_kernel_library(tmp_dir, "libkernel.so")
-        gen_test_bin(tmp_dir, M, N, K)
+    # compile test case
+    M, N, K = 16, 16, 16
+    gen_kernel_library(tmp_dir, "libkernel.so")
+    gen_test_bin(tmp_dir, M, N, K)
 
-        # initialize test data
-        a, b, a_path, b_path, c_path = generate_matmul_test_data(tmp_dir, M, N, K)
+    # initialize test data
+    a, b, a_path, b_path, c_path = generate_matmul_test_data(tmp_dir, M, N, K)
 
-        # run test case
-        env = os.environ.copy()
-        env["LD_LIBRARY_PATH"] = tmp_dir
-        subprocess.run(["./test", a_path, b_path, c_path], env=env, check=True, cwd=tmp_dir)
+    # run test case
+    env = os.environ.copy()
+    env["LD_LIBRARY_PATH"] = tmp_dir
+    subprocess.run(["./test", a_path, b_path, c_path], env=env, check=True, cwd=tmp_dir)
 
-        # read data and compare against reference
-        c = np.genfromtxt(c_path, delimiter=",", dtype=np.int32)
-        c_tri = c.reshape((M, N)).view(np.float32)
-        c_ref = np.matmul(a.astype(np.float32), b.astype(np.float32))
-        np.testing.assert_allclose(c_tri, c_ref * c_ref, atol=1e-4, rtol=0.0)
+    # read data and compare against reference
+    c = np.genfromtxt(c_path, delimiter=",", dtype=np.int32)
+    c_tri = c.reshape((M, N)).view(np.float32)
+    c_ref = np.matmul(a.astype(np.float32), b.astype(np.float32))
+    np.testing.assert_allclose(c_tri, c_ref * c_ref, atol=1e-4, rtol=0.0)
 
 
 def test_compile_link_matmul():
