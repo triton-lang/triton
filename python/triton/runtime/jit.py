@@ -290,10 +290,10 @@ def specialize_impl(arg, specialize_extra, is_const=False, specialize_value=True
     elif isinstance(arg, bool):
         return ("i1", None)
     elif isinstance(arg, int):
-        key = specialize_extra(arg) if specialize_value else None
+        key = specialize_extra(arg, align=align) if specialize_value else None
         if arg == 1 and specialize_value:
             return ("constexpr", 1)
-        if -(2**31) <= arg and arg <= 2**31 - 1:
+        elif -(2**31) <= arg and arg <= 2**31 - 1:
             return ("i32", key)
         elif 2**63 <= arg and arg <= 2**64 - 1:
             return ("u64", key)
@@ -315,12 +315,12 @@ def specialize_impl(arg, specialize_extra, is_const=False, specialize_value=True
         if res is None:
             res = ("*k" if dsk[1] else "*") + type_canonicalisation_dict[str(dsk[0]).split('.')[-1]]
             dtype2str[dsk] = res
-        key = specialize_extra(arg.data_ptr()) if align else None
+        key = specialize_extra(arg.data_ptr(), align=align) if specialize_value else None
         return (res, key)
 
 
 def mangle_type(arg):
-    return specialize_impl(arg)[0]
+    return specialize_impl(arg, lambda _, **kwargs: None)[0]
 
 
 class KernelInterface(Generic[T]):
@@ -340,8 +340,9 @@ def serialize_specialization_data(name, signature, constants, attrs, options, ke
     constants = {key: str(value) if value.__class__.__name__ == "dtype" else value for key, value in constants.items()}
     import json
     obj = {
-        'name': name, 'signature': signature, 'constant_keys': list(constants.keys()), 'constant_vals':
-        list(constants.values()), 'attrs': attrs.to_dict(), 'options': options.__dict__, 'key': key
+        'name': name, 'signature': signature, 'constant_keys': [list(x) for x in constants.keys()], 'constant_vals':
+        list(constants.values()), 'attrs_keys': [list(x) for x in attrs.keys()], 'attrs_vals': list(attrs.values()),
+        'options': options.__dict__, 'key': key
     }
     serialized_obj = json.dumps(obj)
     return serialized_obj
@@ -361,14 +362,16 @@ def create_function_from_signature(sig, kparams, backend):
     for name, kp in zip(sig.parameters.keys(), kparams):
         if kp.is_constexpr:
             specialization.append(f'("constexpr", {name})')
-        elif kp.annotation_type:
-            specialization.append('("%s", None)' % kp.annotation_type)
         else:
             is_const = 'True' if kp.is_const else 'False'
             specialize = 'False' if kp.do_not_specialize else 'True'
             align = 'False' if kp.do_not_specialize_on_alignment else 'True'
-            specialization.append("specialize_impl(%s, specialize_extra, %s, %s, %s)" %
-                                  (name, is_const, specialize, align))
+            ret = f"specialize_impl({name}, specialize_extra, {is_const}, {specialize}, {align})"
+            if kp.annotation_type:
+                specialization.append(f'("{kp.annotation_type}",) + {ret}[1:]')
+            else:
+                specialization.append(f"{ret}")
+
     # compute argument string for a given parameter
     arg = lambda x: x[0] if x[1].default is inspect.Parameter.empty else f"{x[0]}=default_{x[0]}"
     # Join all arguments into a function definition string
@@ -559,13 +562,13 @@ class JITFunction(KernelInterface[T]):
             attrvals = [x[1] for x in specialization]
             attrs = find_paths_if(attrvals, lambda _, x: isinstance(x, str))
             attrs = {k: backend.parse_attr(get_iterable_path(attrvals, k)) for k in attrs}
-            if self._call_hook(key, signature, device, constexprs, options, attrs, warmup, before=True):
+            if self._call_hook(key, signature, device, constexprs, options, [attrs], warmup, before=True):
                 return None
             # compile the kernel
             src = self.ASTSource(self, signature, constexprs, attrs)
             kernel = self.compile(src, target=target, options=options.__dict__)
             kernel_cache[key] = kernel
-            self._call_hook(key, signature, device, constexprs, options, attrs, warmup, before=False)
+            self._call_hook(key, signature, device, constexprs, options, [attrs], warmup, before=False)
 
         # Check that used global values have not changed.
         not_present = object()
@@ -672,14 +675,17 @@ class JITFunction(KernelInterface[T]):
         if deserialized_obj['name'] != self.fn.__name__:
             raise RuntimeError(
                 f"Specialization data is for {deserialized_obj['name']} but trying to preload for {self.fn.__name__}")
-        constant_keys = deserialized_obj['constant_keys']
+        constant_keys = map(tuple, deserialized_obj['constant_keys'])
         constant_vals = deserialized_obj['constant_vals']
         constants = {
             key: tl.dtype(value) if tl.dtype.is_dtype(value) else value
             for key, value in zip(constant_keys, constant_vals)
         }
+        attrs_keys = map(tuple, deserialized_obj['attrs_keys'])
+        attrs_vals = deserialized_obj['attrs_vals']
+        attrs = dict(zip(attrs_keys, attrs_vals))
         signature = dict(deserialized_obj['signature'].items())
-        src = ASTSource(self, signature, constants)
+        src = ASTSource(self, signature, constants, attrs)
         options = {
             key: tuple(value) if isinstance(value, list) else value
             for key, value in deserialized_obj['options'].items()

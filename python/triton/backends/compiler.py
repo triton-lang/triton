@@ -89,14 +89,14 @@ class BaseBackend(metaclass=ABCMeta):
         assert isinstance(desc, str)
         ret = []
         if desc == "D":
-            ret += [("tt.divisibility", 16)]
+            ret += [["tt.divisibility", 16]]
         return ret
 
     @staticmethod
-    def get_arg_specialization(arg):
+    def get_arg_specialization(arg, **kwargs):
         """
         Return a string unique to each possible specialization of the argument
         """
-        if arg % 16 == 0:
+        if arg % 16 == 0 and kwargs.get("align", False):
             return "D"
         return ""
