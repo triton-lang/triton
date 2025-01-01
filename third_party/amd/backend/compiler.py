@@ -163,9 +163,9 @@ class HIPBackend(BaseBackend):
         return ret
 
     @staticmethod
-    def get_arg_specialization(arg, type, **kwargs):
-        ret = BaseBackend.get_arg_specialization(arg, type, **kwargs)
-        if type == "tensor" and HIPBackend.is_within_2gb(arg):
+    def get_arg_specialization(arg, ty, **kwargs):
+        ret = BaseBackend.get_arg_specialization(arg, ty, **kwargs)
+        if ty == "tensor" and HIPBackend.is_within_2gb(arg):
             ret += "S"
         return ret
 
