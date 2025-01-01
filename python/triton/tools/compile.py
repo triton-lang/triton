@@ -130,7 +130,7 @@ if __name__ == "__main__":
     # dump C stub code
     suffix = ''
     for i, ty in enumerate(signature.values()):
-        suffix += ty
+        suffix += str(i)
         if hints.get((i, ), None) == 1:
             suffix += 'c'
         if hints.get((i, ), None) == 16:
