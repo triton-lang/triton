@@ -57,10 +57,11 @@ class ASTSource:
         self.name = fn.__name__
         self.signature = signature
         self.constants = dict()
-        for k, v in constexprs.items():
-            k = (fn.arg_names.index(k), ) if isinstance(k, str) else k
-            assert isinstance(k, tuple)
-            self.constants[k] = v
+        if constexprs is not None:
+            for k, v in constexprs.items():
+                k = (fn.arg_names.index(k), ) if isinstance(k, str) else k
+                assert isinstance(k, tuple)
+                self.constants[k] = v
         self.attrs = attrs or dict()
         if isinstance(self.signature, str):
             self.signature = {k: v.strip() for k, v in enumerate(self.signature.split(","))}
