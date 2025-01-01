@@ -319,8 +319,8 @@ def specialize_impl(arg, specialize_extra, is_const=False, specialize_value=True
         return (res, key)
 
 
-def mangle_type(arg):
-    return specialize_impl(arg, lambda _, **kwargs: None)[0]
+def mangle_type(arg, specialize=False):
+    return specialize_impl(arg, lambda _, **kwargs: None, specialize_value=specialize)[0]
 
 
 class KernelInterface(Generic[T]):
