@@ -149,7 +149,6 @@ class HIPBackend(BaseBackend):
 
     @staticmethod
     def is_within_2gb(arg):
-        # !!TODO!! this won't work - `arg` is passed as `data_ptr`
         if hasattr(arg, "ptr_range"):
             return arg.ptr_range() <= 2**31 - 1
         if "torch.Tensor" in str(type(arg)) and hasattr(arg, "untyped_storage"):
@@ -164,9 +163,9 @@ class HIPBackend(BaseBackend):
         return ret
 
     @staticmethod
-    def get_arg_specialization(arg, **kwargs):
-        ret = BaseBackend.get_arg_specialization(arg, **kwargs)
-        if HIPBackend.is_within_2gb(arg):
+    def get_arg_specialization(arg, type, **kwargs):
+        ret = BaseBackend.get_arg_specialization(arg, type, **kwargs)
+        if type == "tensor" and HIPBackend.is_within_2gb(arg):
             ret += "S"
         return ret
 

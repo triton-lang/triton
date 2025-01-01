@@ -93,10 +93,12 @@ class BaseBackend(metaclass=ABCMeta):
         return ret
 
     @staticmethod
-    def get_arg_specialization(arg, **kwargs):
+    def get_arg_specialization(arg, type, **kwargs):
         """
         Return a string unique to each possible specialization of the argument
         """
-        if arg % 16 == 0 and kwargs.get("align", False):
+        if type == "int" and arg % 16 == 0 and kwargs.get("align", False):
+            return "D"
+        if type == "tensor" and arg.data_ptr() % 16 == 0 and kwargs.get("align", False):
             return "D"
         return ""

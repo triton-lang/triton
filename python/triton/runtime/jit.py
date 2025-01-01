@@ -290,7 +290,7 @@ def specialize_impl(arg, specialize_extra, is_const=False, specialize_value=True
     elif isinstance(arg, bool):
         return ("i1", None)
     elif isinstance(arg, int):
-        key = specialize_extra(arg, align=align) if specialize_value else None
+        key = specialize_extra(arg, "int", align=align) if specialize_value else None
         if arg == 1 and specialize_value:
             return ("constexpr", 1)
         elif -(2**31) <= arg and arg <= 2**31 - 1:
@@ -315,7 +315,7 @@ def specialize_impl(arg, specialize_extra, is_const=False, specialize_value=True
         if res is None:
             res = ("*k" if dsk[1] else "*") + type_canonicalisation_dict[str(dsk[0]).split('.')[-1]]
             dtype2str[dsk] = res
-        key = specialize_extra(arg.data_ptr(), align=align) if specialize_value else None
+        key = specialize_extra(arg, "tensor", align=align) if specialize_value else None
         return (res, key)
 
 
