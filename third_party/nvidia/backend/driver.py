@@ -10,7 +10,6 @@ from triton.runtime.cache import get_cache_manager
 from triton.runtime import _allocation
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver
-from triton._utils import parse_list_string
 
 dirname = os.path.dirname(os.path.realpath(__file__))
 include_dir = [os.path.join(dirname, "include")]
@@ -120,32 +119,30 @@ def ty_to_cpp(ty):
 
 def make_launcher(constants, signature):
 
+    def _serialize_signature(sig):
+        if isinstance(sig, tuple):
+            return ','.join(map(_serialize_signature, sig))
+        return sig
+
     def _extracted_type(ty):
-        if ty == "constexpr":
-            return "PyObject*"
+        if isinstance(ty, tuple):
+            val = ','.join(map(_extracted_type, ty))
+            return f"[{val}]"
         if ty[0] == '*':
             return "PyObject*"
-        if ty == "nvTmaDesc":
+        if ty in ("constexpr", "nvTmaDesc"):
             return "PyObject*"
-        if ty[0] == '[':
-            if ty == "[]":
-                return "[]"
-            tys = parse_list_string(ty)
-            val = ','.join(map(_extracted_type, tys))
-            return f"[{val}]"
         return ty_to_cpp(ty)
 
     def format_of(ty):
-        if ty == "CUdeviceptr":
-            return "O"
-        if ty[0] == "[":
-            if ty == "[]":
-                return "()"
-            tys = parse_list_string(ty)
-            val = ''.join(map(format_of, tys))
+        if isinstance(ty, tuple):
+            val = ''.join(map(format_of, ty))
             return f"({val})"
+        if ty[0] == '*':
+            return "O"
+        if ty in ("constexpr", "nvTmaDesc"):
+            return "O"
         return {
-            "PyObject*": "O",
             "float": "f",
             "double": "d",
             "long": "l",
@@ -157,11 +154,11 @@ def make_launcher(constants, signature):
             "uint16_t": "H",
             "uint32_t": "I",
             "uint64_t": "K",
-        }[ty]
+        }[ty_to_cpp(ty)]
 
-    args_format = ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
+    args_format = ''.join([format_of(ty) for ty in signature.values()])
     format = "iiiKKpOOOOO" + args_format
-    signature = ','.join(signature.values()).replace('[', '').replace(']', '')
+    signature = ','.join(map(_serialize_signature, signature.values()))
     signature = list(filter(bool, signature.split(',')))
     signature = {i: s for i, s in enumerate(signature)}
     args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
