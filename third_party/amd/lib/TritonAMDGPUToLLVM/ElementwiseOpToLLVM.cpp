@@ -89,6 +89,88 @@ Fp16_to_Fp8E5M2_RTZ(Location loc, ConversionPatternRewriter &rewriter,
           extract_element(i8_ty, a1, i32_val(3))};
 }
 
+//===----------------===//
+///      FP8E4M3
+//===----------------===//
+
+// Cast FP16 to FP8E4M3FN in saturation and round-to-nearest-even mode.
+// According to
+// https://www.opencompute.org/documents/ocp-8-bit-floating-point-specification-ofp8-revision-1-0-2023-12-01-pdf-1,
+// In saturation mode, inf and out-of-range numbers are converted to the largest
+// normal number, i.e. ±448. NaNs are converted to NaNs. And those smaller than
+// the smallest subnormals are flushed to ±0.
+static Value
+Fp16_to_Fp8E4M3FN_RTNE_oneValue(Location loc,
+                                ConversionPatternRewriter &rewriter, Value v) {
+  Value vi16 = bitcast(v, i16_ty);
+  Value e = and_(vi16, i16_val(0x7C00));
+  Value m = and_(vi16, i16_val(0x03FF));
+
+  // Check NaNs: S.11111.MMMMMMMMMM(MMMMMMMMMM != 0)
+  Value isExponentAllOnes = icmp_eq(e, i16_val(0x7C00));
+  Value isMantissaNotAllZeros = icmp_ugt(m, i16_val(0));
+  Value isNaN = and_(isExponentAllOnes, isMantissaNotAllZeros);
+
+  // Rounding to nearest even
+  constexpr uint16_t remainingMantissaLSBMask = 0x0080;
+  constexpr uint16_t baseRoundingBias = 0x007F; // 1 << (10 - 3 - 1) - 1
+
+  // S.EEEEE.MMMMMMMMMM => 0.00000.00M0000000 => 0.00000.000000000M
+  Value remainingMantissaLSB =
+      lshr(and_(vi16, i16_val(remainingMantissaLSBMask)), i16_val(7));
+
+  Value roundingBias = add(remainingMantissaLSB, i16_val(baseRoundingBias));
+  Value vFp8 = add(vi16, roundingBias);
+
+  // Reduce mantissa to 3 bits
+  vFp8 = and_(vFp8, i16_val(0x0380)); // 0x0380 === 0.00000.1110000000
+
+  // remove sign bit
+  vFp8 = and_(vFp8, i16_val(0x7FFF));
+
+  // adjust bias
+  vFp8 = sub(vFp8, i16_val((15 - 7) << 10));
+
+  // shift right and truncate
+  vFp8 = lshr(vFp8, i16_val(7)); // 10 - 3
+  vFp8 = trunc(i8_ty, vFp8);
+
+  // In saturation mode, numbers larger than the max normal number(including
+  // infinity) in FP8 after rounding will be replaced with max_E4M3, i.e. 0x7E
+  // === 0.1111.110
+  //
+  // S.11111.0000000000 0x5F7F === 0.10111.1101111111 is the largest possible
+  // normal number(including infinity) after rounding in FP8
+  constexpr uint16_t maxPossibleNormal = 0x5F7F;
+  Value isOverflowOrInf = icmp_ugt(vFp8, i16_val(maxPossibleNormal));
+  vFp8 = select(isOverflowOrInf, i8_val(0x7E), vFp8);
+
+  // Round numbers smaller than the smallest normal number in FP8 to 0, 0x2400
+  // is the FP16 representation of 2^{-6}, which is the smallest normal number
+  // in FP8E4M3FN.
+  Value isSubnormal = icmp_ult(vFp8, i16_val(0x2400));
+  vFp8 = select(isSubnormal, i8_val(0), vFp8);
+
+  // NaN remains NaN after conversion
+  vFp8 = select(isNaN, i8_val(0x7F), vFp8);
+
+  // Set sign bit
+  Value sign = and_(vi16, i16_val(0x8000));
+  sign = lshr(sign, i16_val(8));
+  vFp8 = or_(vFp8, sign);
+
+  return vFp8;
+}
+
+static SmallVector<Value>
+Fp16_to_Fp8E4M3FN_RTNE(Location loc, ConversionPatternRewriter &rewriter,
+                       const SmallVector<Value> &v) {
+  SmallVector<Value> result(2);
+  result[0] = Fp16_to_Fp8E4M3FN_RTNE_oneValue(loc, rewriter, v[0]);
+  result[1] = Fp16_to_Fp8E4M3FN_RTNE_oneValue(loc, rewriter, v[1]);
+  return result;
+}
+
 static Value cvtFp16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
                            const Value &v) {
   GCNBuilder builder;
@@ -950,6 +1032,8 @@ struct FpToFpOpConversion
              Fp8E5M2FNUZ_to_Fp16(isaFamily)},
             {{F8E5M2TyID, F16TyID, undefRounding}, Fp8E5M2_to_Fp16},
             // F16 -> F8
+            {{F16TyID, F8E4M3FNTyID, RoundingMode::RTNE},
+             Fp16_to_Fp8E4M3FN_RTNE},
             {{F16TyID, F8E5M2FNUZTyID, RoundingMode::RTNE},
              Fp16_to_Fp8E5M2FNUZ(isaFamily)},
             {{F16TyID, F8E4M3FNUZTyID, RoundingMode::RTNE},
