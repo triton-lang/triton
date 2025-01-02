@@ -1,6 +1,5 @@
-from triton.backends.compiler import BaseBackend, GPUTarget, AttrsDescriptor, register_descriptor
+from triton.backends.compiler import BaseBackend, GPUTarget
 from triton._C.libtriton import ir, passes, llvm, amd
-from triton._utils import find_paths_if
 from dataclasses import dataclass
 from typing import Any, Dict, Tuple
 from types import ModuleType
@@ -102,48 +101,6 @@ class HIPOptions:
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
-@register_descriptor
-class HIPAttrsDescriptor(AttrsDescriptor):
-    # This property asserts if the underlying storage area of a given pointer
-    # can be resepresented as a 32 bit integer. When this is true, we can be
-    # sure that all indices into the tensor behind that pointer can use 32-bit
-    # indexing. That opens the door for the AMD backend to use buffer load/store
-    # instrinsics, which requires this property. Buffer load/store intrinsics
-    # gives direct out-of-bound support and simplifies index calculation for
-    # lower register pressure.
-    __slots__ = ("pointer_range_32")
-
-    def _add_backend_properties(self, params=None, values=None):
-        self.property_values["tt.pointer_range"] = 32
-        if params is None or values is None:
-            return
-
-        pointer_range = []
-        for param, arg in zip(params, values):
-            if param.do_not_specialize or \
-               param.do_not_specialize_on_alignment:
-                continue
-            paths = find_paths_if(arg, lambda path, val: HIPAttrsDescriptor.is_within2gb(val))
-            pointer_range += [(param.num, ) + x for x in paths]
-        self.arg_properties["tt.pointer_range"] = pointer_range
-
-    @staticmethod
-    def is_within2gb(arg):
-        if hasattr(arg, "ptr_range"):
-            return arg.ptr_range() <= 2**31 - 1
-        if "torch.Tensor" in str(type(arg)) and hasattr(arg, "untyped_storage"):
-            # Please note that 2**31-1 is the max int32 positive limit
-            return arg.untyped_storage().size() <= 2**31 - 1
-        return False
-
-    @staticmethod
-    def get_property_key(val, align):
-        generic_key = AttrsDescriptor.get_property_key(val, align)
-        hip_key = "S" if HIPAttrsDescriptor.is_within2gb(val) else "N"
-        key = (generic_key + hip_key).replace("N", "")
-        return key if key else "N"
-
-
 class HIPBackend(BaseBackend):
 
     @staticmethod
@@ -190,12 +147,27 @@ class HIPBackend(BaseBackend):
     def load_dialects(self, ctx):
         amd.load_dialects(ctx)
 
-    def get_attrs_descriptor(self, params, args):
-        return HIPAttrsDescriptor(params, args)
+    @staticmethod
+    def is_within_2gb(arg):
+        if hasattr(arg, "ptr_range"):
+            return arg.ptr_range() <= 2**31 - 1
+        if "torch.Tensor" in str(type(arg)) and hasattr(arg, "untyped_storage"):
+            return arg.untyped_storage().size() <= 2**31 - 1
+        return False
 
     @staticmethod
-    def compute_spec_key(arg, align):
-        return HIPAttrsDescriptor.get_property_key(arg, align)
+    def parse_attr(desc):
+        ret = BaseBackend.parse_attr(desc)
+        if "S" in desc:
+            ret += [["tt.pointer_range", 32]]
+        return ret
+
+    @staticmethod
+    def get_arg_specialization(arg, ty, **kwargs):
+        ret = BaseBackend.get_arg_specialization(arg, ty, **kwargs)
+        if ty == "tensor" and HIPBackend.is_within_2gb(arg):
+            ret += "S"
+        return ret
 
     @staticmethod
     def path_to_rocm_lld():

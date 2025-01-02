@@ -8,7 +8,6 @@ from typing import List
 
 import triton
 import triton.backends
-from triton.compiler.code_generator import kernel_suffix
 from triton.backends.nvidia.driver import ty_to_cpp
 
 desc = """
@@ -95,19 +94,19 @@ if __name__ == "__main__":
     hints = {k: v for k, v in hints.items() if v is not None}
     constants = {kernel.arg_names[i]: constexpr(s) for i, s in enumerate(signature)}
     constants = {k: v for k, v in constants.items() if v is not None}
+    for key, value in hints.items():
+        if value == 1:
+            constants[kernel.arg_names[key[0]]] = value
     signature = {kernel.arg_names[i]: s.split(":")[0] for i, s in enumerate(signature)}
     for key in constants:
         signature[key] = 'constexpr'
     const_sig = 'x'.join([str(v) for v in constants.values()])
     doc_string = [f"{k}={v}" for k, v in constants.items()]
     doc_string += [f"num_warps={args.num_warps}", f"num_stages={args.num_stages}"]
-
     # compile ast into cubin
     for h in hints.values():
         assert h in [1, 16], f"Only 1 and 16 are valid hints, got {h}"
-    attrs = triton.backends.compiler.AttrsDescriptor.from_hints(hints)
-    for p, v in attrs.get_constants().items():
-        constants.update({kernel.arg_names[p[0]]: v})
+    attrs = {k: [("tt.divisibility", 16)] for k, v in hints.items() if v == 16}
     src = triton.compiler.ASTSource(fn=kernel, constexprs=constants, signature=signature, attrs=attrs)
     opts = {"num_warps": args.num_warps, "num_stages": args.num_stages}
     ccinfo = triton.compile(src, options=opts)
@@ -124,12 +123,18 @@ if __name__ == "__main__":
             arg_types.append(signature[arg_name])
             arg_names_not_1.append(arg_name)
             arg_types_not_1.append(signature[arg_name])
-        elif (i, ) in attrs.equal_to_1:
+        elif hints.get((i, ), None) == 1:
             arg_names.append(arg_name)
-            arg_types.append(signature[arg_name])
+            arg_types.append("i32")
 
     # dump C stub code
-    suffix = kernel_suffix(signature.values(), attrs)
+    suffix = ''
+    for i, ty in enumerate(signature.values()):
+        suffix += str(i)
+        if hints.get((i, ), None) == 1:
+            suffix += 'c'
+        if hints.get((i, ), None) == 16:
+            suffix += 'd'
     func_name = '_'.join([out_name, sig_hash, suffix])
     hex_ = str(binascii.hexlify(ccinfo.asm["cubin"]))[2:-1]
     params = {
@@ -151,6 +156,6 @@ if __name__ == "__main__":
         "_placeholder": "",
     }
     for ext in ['h', 'c']:
-        template_path = Path(__file__).parent / f"compile.{ext}"
+        template_path = Path(__file__).parent / "extra" / "cuda" / f"compile.{ext}"
         with out_path.with_suffix(f".{sig_hash}_{suffix}.{ext}").open("w") as fp:
             fp.write(Path(template_path).read_text().format(**params))

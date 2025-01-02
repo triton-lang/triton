@@ -241,7 +241,7 @@ class InterpreterBuilder:
         self.options = InterpreterOptions()
         self.codegen_fns = {}
         self.codegen_fns["convert_custom_types"] = ExtraFunctions._convert_custom_types
-        self.codegen_fns["min_dot_size"] = lambda lhsType, rhsType: (16, 16, 16)
+        self.codegen_fns["min_dot_size"] = lambda lhsType, rhsType: (1, 1, 1)
 
     def set_grid_idx(self, x, y, z):
         if not x < self.grid_dim[0]:
@@ -555,6 +555,9 @@ class InterpreterBuilder:
 
     def create_histogram(self, data, bins):
         return TensorHandle(np.histogram(data.data, bins=bins, range=(0, bins))[0], tl.int32)
+
+    def create_gather(self, src, indices, axis):
+        return TensorHandle(np.take_along_axis(src.data, indices.data, axis=axis), src.dtype.scalar)
 
     # pointer arithmetic
 
@@ -998,7 +1001,7 @@ def _patch_lang_core(lang):
 
 
 def _patch_lang(fn):
-    langs = [value for _, value in fn.__globals__.items() if value in [tl, tl.core]]
+    langs = [value for _, value in fn.__globals__.items() if inspect.ismodule(value) and value in [tl, tl.core]]
     assert len(langs) >= 1, "triton.language must be visible from within jit'd function"
     for lang in langs:
         _patch_builtin(lang, interpreter_builder)
@@ -1012,7 +1015,7 @@ def _patch_lang(fn):
 # TODO: wrap everything in triton tensors
 def _implicit_cvt(arg):
     if isinstance(arg, int):
-        ty = tl.str_to_ty(triton.runtime.jit.JITFunction._type_of(triton.runtime.jit.JITFunction._key_of(arg)))
+        ty = tl.str_to_ty(triton.runtime.jit.mangle_type(arg))
         dtype = np.int32
         if -2**31 <= arg < 2**31:
             dtype = np.int32
@@ -1027,13 +1030,25 @@ def _implicit_cvt(arg):
         handle = TensorHandle(np.array([arg], dtype=dtype), ty)
         return tl.tensor(handle, ty)
     if hasattr(arg, "data_ptr"):
-        ty = tl.str_to_ty(triton.runtime.jit.JITFunction._type_of(triton.runtime.jit.JITFunction._key_of(arg)))
+        ty = tl.str_to_ty(triton.runtime.jit.mangle_type(arg))
         handle = TensorHandle(np.array([arg.data_ptr()], dtype=np.uint64), ty)
         return tl.tensor(handle, ty)
     return arg
 
 
 interpreter_builder = InterpreterBuilder()
+
+
+def _unwrap_tensor(t):
+    if isinstance(t, triton.runtime.jit.TensorWrapper):
+        return t.base
+    return t
+
+
+def _rewrap_tensor(t, original_tensor):
+    if isinstance(original_tensor, triton.runtime.jit.TensorWrapper):
+        return triton.runtime.jit.TensorWrapper(t, original_tensor.dtype)
+    return t
 
 
 class GridExecutor:
@@ -1048,12 +1063,19 @@ class GridExecutor:
         self.constexprs = [name for name in arg_names if __annotations__.get(name) == "constexpr"]
 
     def _init_args_hst(self, args_dev, kwargs):
-        args_hst = []
-        for arg in args_dev:
-            if hasattr(arg, "data_ptr"):
-                args_hst.append(arg.cpu())
-            else:
-                args_hst.append(arg)
+
+        def _to_cpu(arg):
+            if not hasattr(arg, "data_ptr"):
+                return arg
+            unwrapped_arg = _unwrap_tensor(arg)
+            cpu_arg = unwrapped_arg.new_empty(0, device='cpu')
+            cpu_arg.set_(unwrapped_arg.untyped_storage().cpu(), unwrapped_arg.storage_offset(), unwrapped_arg.size(),
+                         unwrapped_arg.stride())
+            cpu_arg = _rewrap_tensor(cpu_arg, original_tensor=arg)
+            return cpu_arg
+
+        args_hst = [_to_cpu(arg) for arg in args_dev]
+
         # Process keyword arguments
         kwargs_hst = {}
         for key, value in kwargs.items():
@@ -1066,7 +1088,9 @@ class GridExecutor:
     def _restore_args_dev(self, args_dev, args_hst, kwargs, kwargs_hst):
         for arg_dev, arg_hst in zip(args_dev, args_hst):
             if hasattr(arg_dev, "data_ptr"):
-                arg_dev.data.copy_(arg_hst.to(arg_dev.device).data)
+                # No need to rewrap because this just modifies internal
+                arg_dev, arg_hst = _unwrap_tensor(arg_dev), _unwrap_tensor(arg_hst)
+                arg_dev.untyped_storage().copy_(arg_hst.untyped_storage())
 
         # Restore keyword arguments
         for key, kwarg_dev in kwargs.items():
