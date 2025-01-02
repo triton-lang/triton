@@ -58,6 +58,9 @@ struct ScratchConfig {
   }
 };
 
+std::pair</*inVec*/ unsigned, /*outVec*/ unsigned>
+getScratchCvtInOutVecLengths(RankedTensorType srcTy, RankedTensorType dstTy);
+
 ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
                                      RankedTensorType dstTy);
 

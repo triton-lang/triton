@@ -10,6 +10,7 @@
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Support/LLVM.h"
+#include "triton/Analysis/Allocation.h"
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -336,13 +337,6 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   if (!conversion)
     return {};
 
-  // Only use this codegen approach for element bitwidths >= 32, since values of
-  // smaller element types will get upcasted to i32 when shuffled.
-  // TODO: Implement shuffling packed values.
-  if (!isa<PointerType>(srcTy.getElementType()) &&
-      srcTy.getElementTypeBitWidth() < 32)
-    return {};
-
   MLIRContext *ctx = srcTy.getContext();
   auto kRegister = StringAttr::get(ctx, "register");
   auto kLane = StringAttr::get(ctx, "lane");
@@ -526,14 +520,25 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   // If reducedP1 is trivial, then we will emit
   // shflSrc = select(i == i, src[i], undef) and this will get trivially folded,
   // so don't worry about this case.
-  //
-  // This can still be quite large if the layout is not cooperative. In that
-  // case, fallback to the shared memory conversion. This is a rough heurstic
-  // for now and doesn't consider that the shared memory conversion can use
-  // vector stores and stmatrix.
   LinearLayout reducedP1 = P1.removeZeroBasesAlongDim(kLane);
   LinearLayout reducedP2 = P2inv.removeZeroBasesAlongDim(kLane);
-  if (reducedP1.getInDimSize(kLane) > 4 || reducedP2.getInDimSize(kLane) > 4)
+
+  // The number of emitted selects can still be quite large if the layout is not
+  // cooperative. This happens when the source register is more correlated
+  // with the desination lane than the destination register (i.e. the number of
+  // non-zero bases). The number of selects impacts performance and grows
+  // exponentially with the number of non-zero bases. Experiments show that more
+  // than 1 select causes performance to be slower than shared memory.
+  if (reducedP1.getInDimSize(kLane) > 2 || reducedP2.getInDimSize(kLane) > 2)
+    return {};
+
+  // When the element type is smaller than 32 bits, values are upcasted to i32
+  // for shuffles. When the shared memory conversion can use vector stores of
+  // sufficiently large length, the shared memory conversion is faster.
+  // TODO: Implementing shuffling packed 16 and 8 bit values.
+  auto [inVec, outVec] = getScratchCvtInOutVecLengths(srcTy, dstTy);
+  if (!isa<PointerType>(srcTy.getElementType()) &&
+      srcTy.getElementTypeBitWidth() < 32 && inVec > 4 && outVec > 4)
     return {};
 
   // Return just the interesting parts of the decomposed layouts.
