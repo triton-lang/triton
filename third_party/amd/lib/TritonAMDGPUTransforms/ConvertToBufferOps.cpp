@@ -1,3 +1,4 @@
+#include "../TritonAMDGPUToLLVM/Utility.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -18,7 +19,6 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/TypeSwitch.h"
-#include "../TritonAMDGPUToLLVM/Utility.h"
 #include <deque>
 #include <optional>
 
@@ -271,9 +271,9 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     if (auto vecType = dyn_cast<RankedTensorType>(checkType)) {
       checkType = vecType.getElementType();
     }
-    bool isSupportedType =
-        checkType.isF16() || checkType.isBF16() ||
-        checkType.isF32() || checkType.isF64() || checkType.isInteger();
+    bool isSupportedType = checkType.isF16() || checkType.isBF16() ||
+                           checkType.isF32() || checkType.isF64() ||
+                           checkType.isInteger();
     if (!isSupportedType) {
       LDBG("Failed to convert: " << op << "of type: " << checkType);
       return failure();
@@ -433,7 +433,8 @@ class TritonAMDGPUConvertToBufferOpsPass
 
 public:
   TritonAMDGPUConvertToBufferOpsPass() = default;
-  TritonAMDGPUConvertToBufferOpsPass(StringRef archGen, bool enableBufferAtomics) {
+  TritonAMDGPUConvertToBufferOpsPass(StringRef archGen,
+                                     bool enableBufferAtomics) {
     this->archGenerationName = archGen.data();
     this->enableBufferAtomics = enableBufferAtomics;
   };
@@ -458,11 +459,13 @@ public:
     patterns.add<ConvertTritonStoreToBufferStore>(context, assumptions);
 
     // Gate buffer atomics behind CDNA3 (i.e., MI300 series) for now
-    // GFX942-specific assumptions regarding cache coherence are made when lowering to LLVM
+    // GFX942-specific assumptions regarding cache coherence are made when
+    // lowering to LLVM
     switch (auto isaFamily = triton::AMD::deduceISAFamily(archGenerationName)) {
     case ISAFamily::CDNA3:
       if (enableBufferAtomics)
-        patterns.add<ConvertTritonAtomicRMWOpToBufferAtomicRMW>(context, assumptions, axisInfoAnalysis);
+        patterns.add<ConvertTritonAtomicRMWOpToBufferAtomicRMW>(
+            context, assumptions, axisInfoAnalysis);
       break;
     default:
       break;
@@ -473,6 +476,9 @@ public:
   }
 };
 
-std::unique_ptr<Pass> mlir::createTritonAMDGPUConvertToBufferOpsPass(std::string archGen, bool enableBufferAtomics) {
-  return std::make_unique<TritonAMDGPUConvertToBufferOpsPass>(archGen, enableBufferAtomics);
+std::unique_ptr<Pass>
+mlir::createTritonAMDGPUConvertToBufferOpsPass(std::string archGen,
+                                               bool enableBufferAtomics) {
+  return std::make_unique<TritonAMDGPUConvertToBufferOpsPass>(
+      archGen, enableBufferAtomics);
 }
