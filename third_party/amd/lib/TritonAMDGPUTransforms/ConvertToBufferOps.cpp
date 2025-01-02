@@ -1,4 +1,3 @@
-#include "../TritonAMDGPUToLLVM/Utility.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -13,6 +12,7 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
+#include "third_party/amd/lib/TritonAMDGPUToLLVM/Utility.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -259,13 +259,38 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
       return failure();
     }
 
+    // 2. Check the scope. We support GPU and CTA for now (SYSTEM scope is not
+    // supported yet)
+    switch (scope) {
+    case MemSyncScope::GPU:
+    case MemSyncScope::CTA:
+      break;
+    default:
+      LDBG("Failed to convert: " << op);
+      return failure();
+    }
+    LDBG("RMW supported scope");
+
+    // 3. Check the memory ordering.
+    //    TODO: support relaxed + monotonic
+    switch (sem) {
+    case MemSemantic::RELEASE:
+    case MemSemantic::ACQUIRE:
+    case MemSemantic::ACQUIRE_RELEASE:
+      break;
+    default:
+      LDBG("Failed to convert: " << op);
+      return failure();
+    }
+    LDBG("RMW supported memory ordering");
+
     auto addPtrOp = ptr.getDefiningOp<triton::AddPtrOp>();
     Value tensorPtr = addPtrOp.getPtr();
     Value tensorOffset = addPtrOp.getOffset();
     auto splatOp = tensorPtr.getDefiningOp<triton::SplatOp>();
     Value basePtr = splatOp.getSrc();
 
-    // 2. FP8 atomics are not supported with buffer atomics
+    // 3. Buffer atomic RMW does not support FP8 ops
     //    easier to just check what we support
     auto checkType = op.getVal().getType();
     if (auto vecType = dyn_cast<RankedTensorType>(checkType)) {
@@ -273,14 +298,14 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     }
     bool isSupportedType = checkType.isF16() || checkType.isBF16() ||
                            checkType.isF32() || checkType.isF64() ||
-                           checkType.isInteger();
+                           checkType.isInteger(32) || checkType.isInteger(64);
     if (!isSupportedType) {
       LDBG("Failed to convert: " << op << "of type: " << checkType);
       return failure();
     }
     LDBG("RMW supported type");
 
-    // 3. Check if the RMWOp is supported
+    // 4. Check if the RMWOp is supported
     switch (atomicRmwOp) {
     case RMWOp::AND:
     case RMWOp::OR:
@@ -299,16 +324,15 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     }
     LDBG("RMW supported Op");
 
-    // 4. Buffer atomics support 32 and 64-bit operations, so inputs must be at
-    // least 32-bits
-    //    Otherwise, fall back to the existing path for atomics
+    // 5. Buffer atomics support 32 and 64-bit operations, so inputs must be at
+    //    least 32-bits. Otherwise, fall back to the existing path for atomics
     auto opValueType = op.getVal().getType();
     auto opBitWidth = 0;
     if (auto vecType = dyn_cast<RankedTensorType>(opValueType)) {
-      // We can't just get the numElements * elemBitWidth here
-      // In cases such as tensor<2xf16...>, if the elements are contiguous we
-      // can emit the buffer op. Otherwise, the buffer ops lowering will try to
-      // emit individual (unsupported) f16/bf16 ops.
+      // We can't just compute the opBitWidth using the numElements *
+      // elemBitWidth here. In cases such as tensor<2xf16...>, if the elements
+      // are contiguous we can emit the buffer op. Otherwise, the buffer ops
+      // lowering will try to emit individual (unsupported) f16/bf16 ops.
       auto elemBitWidth = vecType.getElementType().getIntOrFloatBitWidth();
       opBitWidth =
           getVectorSize(basePtr, tensorOffset, axisAnalysisPass) * elemBitWidth;

@@ -521,9 +521,13 @@ struct BufferAtomicRMWOpConversion
     unsigned vec = getVectorSize(ptr, offset, axisAnalysisPass);
 
     // v4f16 and v4bf16 variants of buffer atomics do not exist.
-    // only v2f16 and v2bf16
-    if (valueElemTy.isBF16() || valueElemTy.isF16())
-      vec = std::min<unsigned>(vec, 2);
+    // only v2f16 and v2bf16.
+    if (valueElemTy.isBF16() || valueElemTy.isF16()) {
+      // We clamp to the only supported vectorization width here (2).
+      // In ConvertToBufferOps we check that we have a large enough vector size
+      assert(vec >= 2);
+      vec = (unsigned)2;
+    }
 
     // Get the offsets and value
     SmallVector<Value> offsetElems = unpackLLElements(loc, llOffset, rewriter);
@@ -569,8 +573,10 @@ struct BufferAtomicRMWOpConversion
     auto memScope = op.getScope();
     auto scopeStr = "";
     switch (memScope) {
-    case MemSyncScope::GPU:
+    // System scope is not supported yet
     case MemSyncScope::SYSTEM:
+      return failure();
+    case MemSyncScope::GPU:
       scopeStr = "agent";
       break;
     default:
@@ -584,7 +590,7 @@ struct BufferAtomicRMWOpConversion
 
     mlir::Operation *lastRMWOp;
     MLIRContext *ctx = rewriter.getContext();
-    GCNBuilder waitcntBuilder, invalidateL1;
+    GCNBuilder waitcntBuilder;
 
     // Triton supports three scopes for atomic access
     // 1. System
@@ -635,10 +641,10 @@ struct BufferAtomicRMWOpConversion
     // sufficient for synchronization between instructions.
     //    We don't need to invalidate L1 between these ops on GFX942, just after
     //    (i.e., we can skip `buffer_wbinvl1_vol`)
-    // 3. If we had multiple agents or multiple L2 caches we would need to call
-    // `buffer_wbl2 sc1`. Triton doesn't support this yet though.
+    // 3. If we had multiple agents we would need to call `buffer_wbl2 sc1`.
+    //    This would be required at SYSTEM scope.
 
-    if (memScope == MemSyncScope::GPU || memScope == MemSyncScope::SYSTEM) {
+    if (memScope == MemSyncScope::GPU) {
       waitcntBuilder.create<>("s_waitcnt vmcnt(0)")->operator()();
     } else if (memScope == MemSyncScope::CTA) {
       // TODO: Within a CTA we can possibly relax this?
