@@ -121,7 +121,7 @@ static Operation *getFirstUseOfPipelinedLoad(Operation *loadOp) {
 static int createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
                            Value insertIdx, Value extractIdx,
                            llvm::MapVector<Operation *, LoadInfo> &loadToInfo,
-                           int numStages, int maxClusterId) {
+                           int maxClusterId) {
   int retCode = -1;
   OpBuilderWithStage builder(forOp);
   auto opPair = tt::getStageCluster(loadOp);
@@ -234,8 +234,7 @@ static void
 createTMAAsyncCopy(scf::ForOp &forOp, tt::ExperimentalDescriptorLoadOp loadOp,
                    Value alloc, Value insertIdx, Value extractIdx,
                    Value barrier, Operation *waitOp, Value phase,
-                   llvm::MapVector<Operation *, LoadInfo> &loadToInfo,
-                   int numStages) {
+                   llvm::MapVector<Operation *, LoadInfo> &loadToInfo) {
   assert(phase && "Phase value is required for TMA async copy.");
   OpBuilderWithStage builder(forOp);
   auto [stage, clusterId] = tt::getStageCluster(loadOp);
@@ -585,21 +584,28 @@ static Value createBarrierAlloc(scf::ForOp &forOp, unsigned distance) {
   return barrierAlloc;
 }
 
+struct StageGroup {
+  Value insertIdx;
+  Value extractIdx;
+  Value phase;
+  bool hasTMALoad = false;
+};
 struct AsyncLoad {
-  AsyncLoad(Operation *loadOp, Value alloc) : loadOp(loadOp), alloc(alloc) {}
   Operation *loadOp;
   Value alloc;
   Value barrier;
   Operation *waitOp = nullptr;
   int firstUseStage, firstUseCluster;
   bool isTMALoad = false;
+  int numBuffers = 0;
 };
 
 // Create barriers and wait ops for the async loads. Barriers may be shared by
-// multiple loads is the schedule allows it.
+// multiple loads if the schedule allows it.
 static void createTMABarrierAndWait(
-    scf::ForOp &forOp, SmallVector<AsyncLoad> &asyncLoads, Value insertIdx,
-    Value extractIdx, Value phase, int numBuffers, SmallVector<Value> &barriers,
+    scf::ForOp &forOp, SmallVector<AsyncLoad> &asyncLoads,
+    SmallVector<Value> &barriers,
+    const llvm::MapVector<int, StageGroup> &stageGroups,
     const llvm::MapVector<Operation *, LoadInfo> &loadToInfo) {
   llvm::SmallDenseMap<Operation *, AsyncLoad *> loadToAsyncLoad;
   for (AsyncLoad &asyncLoad : asyncLoads) {
@@ -639,12 +645,15 @@ static void createTMABarrierAndWait(
     };
     addToGroup(&asyncLoad);
     Operation *nextOp = asyncLoad.loadOp->getNextNode();
+    int numBuffers = asyncLoad.numBuffers;
     while (nextOp) {
       if (users.count(nextOp) || visited.count(nextOp))
         break;
       if (isa<tt::ExperimentalDescriptorLoadOp>(nextOp)) {
         auto it = loadToAsyncLoad.find(nextOp);
         if (it != loadToAsyncLoad.end() && it->second->isTMALoad) {
+          if (it->second->numBuffers != numBuffers)
+            break;
           if (group.size() > 0 &&
               sameStageCluster(group[0]->loadOp, it->second->loadOp))
             addToGroup(it->second);
@@ -659,6 +668,8 @@ static void createTMABarrierAndWait(
   // load.
   for (SmallVector<AsyncLoad *> &group : loadGroups) {
     int sizeInBytes = 0;
+    int numBuffers = group[0]->numBuffers;
+    const StageGroup &stageGroup = stageGroups.find(numBuffers)->second;
     for (AsyncLoad *asyncLoad : group) {
       auto tensorTy =
           cast<RankedTensorType>(asyncLoad->loadOp->getResult(0).getType());
@@ -682,7 +693,7 @@ static void createTMABarrierAndWait(
     builder.setInsertionPoint(group[0]->loadOp);
     Value barrier = builder.createWithStage<ttg::MemDescSubviewOp>(
         loc, stage, cluster, barrierTy, barrierAlloc,
-        ArrayRef<Value>({insertIdx}));
+        ArrayRef<Value>({stageGroup.insertIdx}));
     Value pred = builder.createWithStage<arith::ConstantIntOp>(loc, stage,
                                                                cluster, 1, 1);
     Operation *expect = builder.createWithStage<ttng::BarrierExpectOp>(
@@ -691,10 +702,10 @@ static void createTMABarrierAndWait(
     builder.setInsertionPointAfter(group.back()->loadOp);
     Value barrierViewWait = builder.createWithStage<ttg::MemDescSubviewOp>(
         loc, group[0]->firstUseStage, group[0]->firstUseCluster, barrierTy,
-        barrierAlloc, ArrayRef<Value>({extractIdx}));
+        barrierAlloc, ArrayRef<Value>({stageGroup.extractIdx}));
     Operation *wait = builder.createWithStage<ttng::WaitBarrierOp>(
         loc, group[0]->firstUseStage, group[0]->firstUseCluster,
-        barrierViewWait, phase);
+        barrierViewWait, stageGroup.phase);
     // Update the async loads info.
     for (AsyncLoad *asyncLoad : group) {
       asyncLoad->barrier = barrier;
@@ -855,46 +866,47 @@ static SmallVector<Value>
 createAsyncOps(scf::ForOp &forOp,
                llvm::MapVector<Operation *, LoadInfo> &loadToInfo,
                SmallVector<Value> &barriers, int numStages) {
-  // Calculate the number of buffers needed for each load.
-  // TODO pawel: we could do more fine-grained allocation here and
-  // allocate only the number of buffers that specific loads need.
-  // Instead, we allocate the maximum number of buffers needed by any load.
-  int numBuffers =
-      llvm::max_element(llvm::make_second_range(loadToInfo), [](auto &lhs,
-                                                                auto &rhs) {
-        return lhs.distToUse < rhs.distToUse;
-      })->distToUse;
-  bool hasMMAV3 = llvm::any_of(loadToInfo, [](auto &kv) {
-    return kv.second.isMMAv3Shared || kv.second.isMMAv3Registers;
-  });
-  if (hasMMAV3) {
-    // For MMAv3, we need an extra buffer as this is assumed in the wgmma
-    // pipelining post-processing.
-    numBuffers++;
-  };
-
   llvm::MapVector<Operation *, Value> tmaBufferMapping;
   if (failed(allocTMABuffers(forOp, tmaBufferMapping, numStages))) {
     llvm_unreachable("TMA pipelining failed");
   }
 
+  // Each group of loads/allocs with the same number of buffers (and stages)
+  // will share the indices and barriers.
+
   SmallVector<AsyncLoad> asyncLoads;
   SmallVector<Value> allocs;
-  bool hasTMALoad = false;
+  llvm::MapVector<int, StageGroup> stageGroups;
+
   for (auto &[loadOp, info] : loadToInfo) {
+    AsyncLoad asyncLoad = {.loadOp = loadOp};
+    bool isTMALoad = false;
+    int numBuffers = info.distToUse;
+    // For MMAv3, we need an extra buffer as this is assumed in the wgmma
+    // pipelining post-processing.
+    if (info.isMMAv3Shared || info.isMMAv3Registers) {
+      ++numBuffers;
+    }
+    if (isa<tt::ExperimentalDescriptorLoadOp>(loadOp)) {
+      isTMALoad = true;
+      asyncLoad.isTMALoad = isTMALoad;
+    }
     assert(info.sharedEncoding && "LoadOp shared encoding not defined.");
     Value alloc = createAlloc(forOp, loadOp, info.sharedEncoding, numBuffers);
     assert(alloc && "Failed to create alloc for the async load.");
     allocs.push_back(alloc);
-    asyncLoads.emplace_back(loadOp, alloc);
-    if (isa<tt::ExperimentalDescriptorLoadOp>(loadOp)) {
-      hasTMALoad = true;
-      asyncLoads.back().isTMALoad = true;
-    }
+    asyncLoad.alloc = alloc;
+
     auto *firstUse = getFirstUseOfPipelinedLoad(loadOp);
     auto [firstUseStage, firstUseCluster] = tt::getStageCluster(firstUse);
-    asyncLoads.back().firstUseStage = firstUseStage;
-    asyncLoads.back().firstUseCluster = firstUseCluster;
+    asyncLoad.firstUseStage = firstUseStage;
+    asyncLoad.firstUseCluster = firstUseCluster;
+    asyncLoad.numBuffers = numBuffers;
+    stageGroups.insert({numBuffers, {}});
+    if (isTMALoad) {
+      stageGroups[numBuffers].hasTMALoad = true;
+    }
+    asyncLoads.push_back(asyncLoad);
   }
 
   IRRewriter builder(forOp.getContext());
@@ -908,41 +920,34 @@ createAsyncOps(scf::ForOp &forOp,
   Value minusOne = builder.create<arith::ConstantIntOp>(loc, -1, 32);
   Value zero = builder.create<arith::ConstantIntOp>(loc, 0, 32);
   Value one = builder.create<arith::ConstantIntOp>(loc, 1, 32);
-  Value insertIdx = minusOne;
-  Value extractIdx = minusOne;
-  Value phase = Value();
-  Value numBuffersVal =
-      builder.create<arith::ConstantIntOp>(loc, numBuffers, 32);
   SmallVector<Value> newOperands;
-  newOperands.push_back(insertIdx);
-  newOperands.push_back(extractIdx);
-  if (hasTMALoad) {
-    // A single barrier arrival sequence is a "phase" and two phases can
-    // overlap, provided the phases are differentiated with an alternating
-    // boolean value.
-    phase = builder.create<arith::ConstantIntOp>(loc, 0, 32);
-    newOperands.push_back(phase);
+  unsigned newOperandIndex = forOp.getBody()->getNumArguments();
+  for (auto [_, stageGroup] : stageGroups) {
+    newOperands.push_back(minusOne); // insertIdx
+    newOperands.push_back(minusOne); // extractIdx
+    if (stageGroup.hasTMALoad) {
+      // A single barrier arrival sequence is a "phase" and two phases can
+      // overlap, provided the phases are differentiated with an alternating
+      // boolean value.
+      newOperands.push_back(zero); // phase
+    }
   }
   // Also create one counter per TMA buffer. This allows the descriptors to be
   // updated independently without needing to write duplicate of existing tma
   // descriptors.
+  unsigned tmaCounterArgsStartIdx = newOperandIndex + newOperands.size();
   for (int i = 0; i < tmaBufferMapping.size(); ++i) {
     newOperands.push_back(zero);
   }
 
-  unsigned newOperandIndex = forOp.getBody()->getNumArguments();
   // Patch the loop to add the new loop carried dependencies.
   scf::ForOp newForOp =
       replaceForOpWithNewSignature(builder, forOp, newOperands);
   forOp.erase();
   forOp = newForOp;
-  insertIdx = newForOp.getBody()->getArgument(newOperandIndex);
-  extractIdx = newForOp.getBody()->getArgument(newOperandIndex + 1);
-  if (phase) {
-    phase = newForOp.getBody()->getArgument(newOperandIndex + 2);
-  }
+
   auto tmaCounters = ArrayRef<BlockArgument>(newForOp.getBody()->getArguments())
-                         .slice(newOperandIndex + (phase ? 3 : 2));
+                         .slice(tmaCounterArgsStartIdx);
 
   // Update yield op with temporary yield values
   auto forYield = cast<scf::YieldOp>(newForOp.getBody()->getTerminator());
@@ -956,44 +961,70 @@ createAsyncOps(scf::ForOp &forOp,
   }
   tmaBufferMapping.clear();
 
-  // FIXME: loads can be in different (stage, cluster)
-  // Create two counters for the insert and extract indices to avoid creating
-  // long liverange.
-  builder.setInsertionPoint(newForOp.getBody(), newForOp.getBody()->begin());
-  insertIdx = builder.create<arith::AddIOp>(loc, insertIdx, one);
-  Value cndIns = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
-                                               insertIdx, numBuffersVal);
-  insertIdx = builder.create<arith::SelectOp>(loc, cndIns, insertIdx, zero);
+  builder.setInsertionPoint(forOp);
+  loc = forOp.getLoc();
+  int argIdx = newOperandIndex;
+  for (auto &[numBuffers, stageGroup] : stageGroups) {
+    Value insertIdx = newForOp.getBody()->getArgument(argIdx);
+    argIdx++;
+    Value extractIdx = newForOp.getBody()->getArgument(argIdx);
+    argIdx++;
+    Value phase = nullptr;
+    if (stageGroup.hasTMALoad) {
+      phase = newForOp.getBody()->getArgument(argIdx);
+      argIdx++;
+    }
 
-  extractIdx = builder.create<arith::AddIOp>(loc, extractIdx, one);
-  Value cndExt = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
-                                               extractIdx, numBuffersVal);
-  extractIdx = builder.create<arith::SelectOp>(loc, cndExt, extractIdx, zero);
-  if (phase) {
-    Value nextPhase = builder.create<arith::XOrIOp>(loc, phase, one);
-    phase = builder.create<arith::SelectOp>(loc, cndExt, phase, nextPhase);
+    // Create two counters for the insert and extract indices to avoid creating
+    // long liverange.
+    builder.setInsertionPoint(newForOp.getBody(), newForOp.getBody()->begin());
+
+    Value numBuffersVal =
+        builder.create<arith::ConstantIntOp>(loc, numBuffers, 32);
+    insertIdx = builder.create<arith::AddIOp>(loc, insertIdx, one);
+    Value cndIns = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
+                                                 insertIdx, numBuffersVal);
+    insertIdx = builder.create<arith::SelectOp>(loc, cndIns, insertIdx, zero);
+    stageGroup.insertIdx = insertIdx;
+
+    extractIdx = builder.create<arith::AddIOp>(loc, extractIdx, one);
+    // Duplicate the constant to keep it from being carried across loops.
+    numBuffersVal = builder.create<arith::ConstantIntOp>(loc, numBuffers, 32);
+    Value cndExt = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
+                                                 extractIdx, numBuffersVal);
+    extractIdx = builder.create<arith::SelectOp>(loc, cndExt, extractIdx, zero);
+    stageGroup.extractIdx = extractIdx;
+    if (phase) {
+      Value nextPhase = builder.create<arith::XOrIOp>(loc, phase, one);
+      phase = builder.create<arith::SelectOp>(loc, cndExt, phase, nextPhase);
+      stageGroup.phase = phase;
+    }
   }
-  createTMABarrierAndWait(forOp, asyncLoads, insertIdx, extractIdx, phase,
-                          numBuffers, barriers, loadToInfo);
+  createTMABarrierAndWait(forOp, asyncLoads, barriers, stageGroups, loadToInfo);
 
   auto [_, maxClusterId] = tt::getMinMaxCluster(forOp);
   for (AsyncLoad &asyncLoad : asyncLoads) {
+    auto [insertIdx, extractIdx, phase, _] = stageGroups[asyncLoad.numBuffers];
     if (auto loadOp = dyn_cast<tt::LoadOp>(asyncLoad.loadOp)) {
       createAsyncCopy(forOp, loadOp, asyncLoad.alloc, insertIdx, extractIdx,
-                      loadToInfo, numStages, maxClusterId);
+                      loadToInfo, maxClusterId);
     } else {
       auto descLoad = cast<tt::ExperimentalDescriptorLoadOp>(asyncLoad.loadOp);
       createTMAAsyncCopy(forOp, descLoad, asyncLoad.alloc, insertIdx,
                          extractIdx, asyncLoad.barrier, asyncLoad.waitOp, phase,
-                         loadToInfo, numStages);
+                         loadToInfo);
     }
   }
-  // Patch the yield with the updated counters.
-  forYield.setOperand(newOperandIndex + -1, insertIdx);
-  forYield.setOperand(newOperandIndex + 0, extractIdx);
-  if (phase) {
-    forYield.setOperand(newOperandIndex + 1, phase);
+  // Patch the yield with the updated counters. Subtract to account for the loop
+  // counter.
+  argIdx = newOperandIndex - 1;
+  for (auto &[numBuffers, stageGroup] : stageGroups) {
+    forYield.setOperand(argIdx++, stageGroup.insertIdx);
+    forYield.setOperand(argIdx++, stageGroup.extractIdx);
+    if (stageGroup.phase)
+      forYield.setOperand(argIdx++, stageGroup.phase);
   }
+  assert(argIdx + 1 == tmaCounterArgsStartIdx);
 
   tt::CoarseSchedule coarseSchedule(numStages);
   coarseSchedule.deSerialize(forOp);
