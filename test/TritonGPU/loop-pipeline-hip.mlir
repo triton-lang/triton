@@ -164,15 +164,15 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
 
 // -----
 
+// Disable pipelining for loops that contain barrier.
+//   Barriers are problematic since they are not chained to any other operation.
 // CHECK-LABEL: tt.func public @add_barrier_kernel
-// CHECK:  tt.load
 // CHECK:  scf.for
 // CHECK:    tt.load
 // CHECK:    gpu.barrier
 // CHECK:    tt.store
-// CHECK:    scf.yield
-// CHECK:  gpu.barrier
-// CHECK:  tt.store
+// CHECK-NOT:  gpu.barrier
+// CHECK:  tt.return
 
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
