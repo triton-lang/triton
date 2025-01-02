@@ -394,7 +394,7 @@ struct MemDescSubviewOpConversion
     int rankReduced = srcTy.getRank() - destRank;
     for (int i = rankReduced; i < opOffsetVals.size(); i++) {
       strides.push_back(smemObj.strides[i]);
-      offsetVals.push_back(opOffsetVals[i]);
+      offsetVals.push_back(add(opOffsetVals[i], smemObj.offsets[i]));
     }
     // Compute the offset based on the original strides of the shared memory
     // object

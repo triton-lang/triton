@@ -31,6 +31,7 @@ void init_triton_passes_common(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_canonicalizer", createCanonicalizerPass);
   ADD_PASS_WRAPPER_0("add_cse", createCSEPass);
   ADD_PASS_WRAPPER_0("add_licm", createLoopInvariantCodeMotionPass);
+  ADD_PASS_WRAPPER_0("print_ir", createPrintIRPass);
 }
 
 void init_triton_passes_ttir(py::module &&m) {

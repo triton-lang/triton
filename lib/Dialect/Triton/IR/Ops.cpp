@@ -8,6 +8,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Tools/LinearLayout.h"
 #include "llvm/Support/ErrorHandling.h"
 
 namespace mlir {
@@ -221,7 +222,7 @@ LogicalResult TransOp::inferReturnTypes(
   Attribute retEncoding;
   if (argEncoding) {
     Dialect &dialect = argEncoding.getDialect();
-    auto inferLayoutInterface = dyn_cast<DialectInferLayoutInterface>(&dialect);
+    auto inferLayoutInterface = cast<DialectInferLayoutInterface>(&dialect);
     if (inferLayoutInterface
             ->inferTransOpEncoding(argEncoding, order, retEncoding)
             .failed()) {
@@ -250,7 +251,7 @@ DotOp::inferReturnTypes(MLIRContext *context, std::optional<Location> location,
   if (aEnc) {
     assert(bEnc && retEnc);
     Dialect &dialect = retEnc.getDialect();
-    auto interface = dyn_cast<DialectInferLayoutInterface>(&dialect);
+    auto interface = cast<DialectInferLayoutInterface>(&dialect);
     if (interface->inferDotOpEncoding(aEnc, 0, retEnc, location).failed())
       return failure();
     if (interface->inferDotOpEncoding(bEnc, 1, retEnc, location).failed())
@@ -331,8 +332,7 @@ inferReduceReturnShape(RankedTensorType argTy, Type retEltTy, int axis,
     Attribute retEncoding;
     if (argEncoding) {
       Dialect &dialect = argEncoding.getDialect();
-      auto inferLayoutInterface =
-          dyn_cast<DialectInferLayoutInterface>(&dialect);
+      auto inferLayoutInterface = cast<DialectInferLayoutInterface>(&dialect);
       if (inferLayoutInterface
               ->inferReduceOpEncoding(argEncoding, axis, retEncoding)
               .failed()) {
@@ -565,7 +565,7 @@ LogicalResult ExpandDimsOp::inferReturnTypes(
   Attribute retEncoding;
   if (argEncoding) {
     Dialect &dialect = argEncoding.getDialect();
-    auto inferLayoutInterface = dyn_cast<DialectInferLayoutInterface>(&dialect);
+    auto inferLayoutInterface = cast<DialectInferLayoutInterface>(&dialect);
     if (inferLayoutInterface
             ->inferExpandDimsOpEncoding(argEncoding, axis, retEncoding, loc)
             .failed())
@@ -604,7 +604,7 @@ LogicalResult ExpandDimsOp::canonicalize(ExpandDimsOp op,
     // Infer the encoding of the new expand op, if encodings are present.
     Attribute newExpandEnc;
     if (auto srcEnc = srcTy.getEncoding()) {
-      if (dyn_cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
+      if (cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
               ->inferExpandDimsOpEncoding(srcEnc, op.getAxis(), newExpandEnc,
                                           op.getLoc())
               .failed()) {
@@ -702,24 +702,21 @@ LogicalResult ReshapeOp::verify() {
                      "encodings, or (b) neither does.");
   }
 
-  if (srcEnc && !getAllowReorder()) {
-    Attribute inferredDstEnc;
-    if (cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
-            ->inferReshapeOpNoReorderEncoding(srcTy.getShape(), srcEnc,
-                                              dstTy.getShape(), inferredDstEnc,
-                                              getLoc())
-            .failed()) {
-      return emitError("This reshape is impossible without reordering, but "
-                       "reordering is not allowed.  Try choosing a different "
-                       "encoding for the input tensor (or allow reordering).");
-    }
-    if (inferredDstEnc != dstEnc) {
-      return emitError("Expected result encoding ")
-             << inferredDstEnc << " but was " << dstEnc;
-    }
+  if (!srcEnc || getAllowReorder()) {
+    return success();
   }
 
-  return success();
+  // Check that we can infer the dst encoding from the src encoding
+  // and that the inferred dst encoding is the same as the given dst encoding
+  Attribute inferredDstEnc;
+  auto result =
+      cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
+          ->inferReshapeOpEncoding(srcTy.getShape(), srcEnc, dstTy.getShape(),
+                                   inferredDstEnc, getLoc());
+  assert(succeeded(result));
+  return cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
+      ->verifyLayoutsAreEqual(dstTy.getShape(), inferredDstEnc, dstEnc,
+                              getLoc());
 }
 
 //-- FpToFpOp --
@@ -975,7 +972,6 @@ JoinOp::inferReturnTypes(MLIRContext *context, std::optional<Location> location,
   assert(isa<RankedTensorType>(operands[1].getType()));
 
   Value lhs = operands[0];
-  Value rhs = operands[1];
   auto srcTy = cast<RankedTensorType>(lhs.getType());
 
   SmallVector<int64_t> retShape(srcTy.getShape());
@@ -984,7 +980,7 @@ JoinOp::inferReturnTypes(MLIRContext *context, std::optional<Location> location,
   Attribute srcEnc = srcTy.getEncoding();
   Attribute retEnc;
   if (srcEnc) {
-    if (dyn_cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
+    if (cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
             ->inferJoinOpEncoding(srcEnc, retEnc, location)
             .failed()) {
       return failure();
@@ -1017,7 +1013,7 @@ LogicalResult SplitOp::inferReturnTypes(
   Attribute srcEnc = srcTy.getEncoding();
   Attribute retEnc;
   if (srcEnc) {
-    if (dyn_cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
+    if (cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
             ->inferSplitOpEncoding(srcEnc, retEnc, location)
             .failed()) {
       return failure();

@@ -34,36 +34,15 @@ struct DecomposeUnsupportedAMDConversions
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
-    triton::gpu::decomposeSplatOpToSharedLayoutConversion(mod);
-
-    auto isShortcut =
-        mlir::triton::gpu::ShortcutFn(std::not_fn(cvtNeedsSharedMemory));
-
-    triton::gpu::decomposeTensorCoreToDotLayoutConversion(mod, isShortcut);
-
-    // Replace `wmma -> dot_op` with `wmma -> blocked -> dot_op`
-    mod.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
-      OpBuilder builder(cvtOp);
-      auto srcType = cvtOp.getSrc().getType();
-      auto dstType = cvtOp.getType();
+    auto shortcutFn = [](RankedTensorType srcTy, RankedTensorType dstTy) {
       auto srcWmma =
-          dyn_cast<triton::gpu::AMDWmmaEncodingAttr>(srcType.getEncoding());
+          dyn_cast<triton::gpu::AMDWmmaEncodingAttr>(srcTy.getEncoding());
       auto dstDotOp =
-          dyn_cast<triton::gpu::DotOperandEncodingAttr>(dstType.getEncoding());
-      if (srcWmma && dstDotOp) {
-        auto tmpType = RankedTensorType::get(
-            dstType.getShape(), dstType.getElementType(),
-            triton::gpu::BlockedEncodingAttr::get(
-                mod.getContext(), srcType.getShape(), getSizePerThread(srcWmma),
-                getOrder(srcWmma), numWarps, threadsPerWarp, numCTAs));
-        auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
-            cvtOp.getLoc(), tmpType, cvtOp.getOperand());
-        auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
-            cvtOp.getLoc(), dstType, tmp);
-        cvtOp.replaceAllUsesWith(newConvert.getResult());
-        cvtOp.erase();
-      }
-    });
+          dyn_cast<triton::gpu::DotOperandEncodingAttr>(dstTy.getEncoding());
+      return !cvtNeedsSharedMemory(srcTy, dstTy) && !(srcWmma && dstDotOp);
+    };
+
+    triton::gpu::decomposeTensorCoreToDotLayoutConversion(mod, shortcutFn);
     // Try to reduce LDS usage of cvt(mfma->blocked) op by changing the shape of
     // WarpsPerCta attribute in mfma layout. The implicit LDS usage of
     // cvt(mfma->blocked) op depends on the number of warps per CTA that mfma

@@ -16,12 +16,7 @@
 
 namespace {
 
-using ::mlir::LLVM::getMultiDimOffset;
-using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-using ::mlir::LLVM::getStridesFromShapeAndOrder;
-using ::mlir::LLVM::getWrappedMultiDimOffset;
-using ::mlir::LLVM::linearize;
-
+using namespace mlir;
 using namespace mlir::triton::gpu;
 
 // XXX(Keren): A temporary knob to control the use of legacy MMA conversion
@@ -106,13 +101,14 @@ private:
       //       of performance issue observed.
       for (unsigned elemId = 0; elemId < accumSizePerThread; elemId += vec) {
         SmallVector<Value> multiDimOffset =
-            getMultiDimOffset(layout, loc, rewriter, targetInfo, elemId, type,
-                              multiDimCTAInRepId, shapePerCTATile);
-        SmallVector<Value> multiDimOffsetWrapped = getWrappedMultiDimOffset(
-            rewriter, loc, multiDimOffset, origRepShape, shapePerCTATile,
-            shapePerCTA);
-        Value offset = linearize(rewriter, loc, multiDimOffsetWrapped,
-                                 paddedRepShape, outOrd);
+            LLVM::getMultiDimOffset(layout, loc, rewriter, targetInfo, elemId,
+                                    type, multiDimCTAInRepId, shapePerCTATile);
+        SmallVector<Value> multiDimOffsetWrapped =
+            LLVM::getWrappedMultiDimOffset(rewriter, loc, multiDimOffset,
+                                           origRepShape, shapePerCTATile,
+                                           shapePerCTA);
+        Value offset = LLVM::linearize(rewriter, loc, multiDimOffsetWrapped,
+                                       paddedRepShape, outOrd);
         auto elemPtrTy = smemBase.getType();
         Value ptr = gep(elemPtrTy, llvmElemTy, smemBase, offset);
         auto vecTy = vec_ty(llvmElemTy, vec);
@@ -268,7 +264,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
   // conversions.  TODO(jlebar): Eventually we want this to be the only pattern.
   explicit ConvertLayoutOpUsingLinearLayoutsConversion(
       LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
-      PatternBenefit benefit = 2)
+      PatternBenefit benefit = 1)
       : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
   }
 
@@ -315,14 +311,10 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       // TODO(Keren): implement warp shuffle instead of using the general
       // approach that uses shared memory
       return transferWithinBlock(op, srcLayout, dstLayout, adaptor, rewriter);
-    } else if (llvm::is_contained(dims, kRegister) ||
-               dstLayout.getInDimSize(kRegister) !=
-                   srcLayout.getInDimSize(kRegister)) {
+    } else if (llvm::is_contained(dims, kRegister)) {
       // Case 4. Transfer between values in the same thread, in which case we
       //         simply reorder the elements of adaptor.getSrc().
-      return transferWithinThread(
-          op, dstLayout.getFreeVariableMasks()[kRegister],
-          dstLayout.getInDimSize(kRegister), *conversion, adaptor, rewriter);
+      return transferWithinThread(op, *conversion, adaptor, rewriter);
     } else {
       // Cast 5. The two layouts are equivalent. We should probably remove
       // these in RemoveLayoutConversion.
@@ -332,8 +324,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
   }
 
   LogicalResult
-  transferWithinThread(ConvertLayoutOp op, int32_t regMasks, int32_t numRegs,
-                       const LinearLayout &conversion, OpAdaptor adaptor,
+  transferWithinThread(ConvertLayoutOp op, const LinearLayout &conversion,
+                       OpAdaptor adaptor,
                        ConversionPatternRewriter &rewriter) const {
     MLIRContext *ctx = op.getContext();
     auto loc = op.getLoc();
@@ -343,16 +335,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
     auto inVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    SmallVector<Value> outVals(numRegs);
-    for (int i = 0; i < numRegs; i++) {
-      // Remove free masks from the register index
-      // For example, if idx = 0b00111, and masks = 0b00100, then we get
-      // 0b00011. It means that register 7 (0b111) has the same value as
-      // register 3 (0b011).
-      auto idx = i & (~regMasks);
-      auto srcIdx = conversion.hasInDim(kRegister)
-                        ? conversion.apply({{kRegister, idx}}).begin()->second
-                        : idx;
+    SmallVector<Value> outVals(conversion.getInDimSize(kRegister));
+    for (int i = 0; i < outVals.size(); i++) {
+      auto srcIdx = conversion.apply({{kRegister, i}}).begin()->second;
       outVals[i] = inVals[srcIdx];
     }
     Value result = packLLElements(loc, getTypeConverter(), outVals, rewriter,
@@ -380,8 +365,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         return !useLegacyMMAConversion;
       }
       if (auto dotOperand = dyn_cast<DotOperandEncodingAttr>(layout)) {
-        if (isa<NvidiaMmaEncodingAttr, AMDMfmaEncodingAttr>(
-                dotOperand.getParent())) {
+        if (isa<MmaEncodingTrait>(dotOperand.getParent())) {
           return !useLegacyMMAConversion;
         }
         return false;
@@ -395,10 +379,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
       return false;
     };
     if (!layoutIsOK(srcTy.getEncoding()) || !layoutIsOK(dstTy.getEncoding())) {
-      return failure();
-    }
-    // FIXME [Dot LL] Remove this once we implement this trick in LLs
-    if (matchMmaV3AndDotOperandLayout(srcTy, dstTy)) {
       return failure();
     }
 
@@ -662,22 +642,17 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
 
 } // namespace
 
-void mlir::triton::populateConvertLayoutOpUsingLinearLayoutsToLLVMPattern(
-    LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
-    RewritePatternSet &patterns, PatternBenefit benefit) {
-  patterns.add<ConvertLayoutOpUsingLinearLayoutsConversion>(
-      typeConverter, targetInfo, benefit);
-}
-
 void mlir::triton::populateConvertLayoutOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit) {
-  // We prefer using the linear layout conversion, so it gets a higher benefit.
-  // Eventually the LL conversion will subsume all of the others and be the only
-  // one left.
-  mlir::triton::populateConvertLayoutOpUsingLinearLayoutsToLLVMPattern(
-      typeConverter, targetInfo, patterns, benefit.getBenefit() + 1);
+  if (useLegacyMMAConversion) {
+    // Prioritize the legacy MMA conversion over the LinearLayout conversion.
+    // Only for debugging purposes.
+    patterns.add<ConvertLayoutOpConversion>(typeConverter, targetInfo,
+                                            benefit.getBenefit() + 1);
+  }
+  patterns.add<ConvertLayoutOpUsingLinearLayoutsConversion>(
+      typeConverter, targetInfo, benefit);
   patterns.add<ConvertLayoutOpBlockedToDotOpShortcutConversion>(
       typeConverter, targetInfo, benefit);
-  patterns.add<ConvertLayoutOpConversion>(typeConverter, targetInfo, benefit);
 }

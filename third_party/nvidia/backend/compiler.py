@@ -17,7 +17,17 @@ import sysconfig
 
 
 def min_dot_size(target: GPUTarget):
-    return lambda lhsType, rhsType: (16, 32, 16) if lhsType.is_int8() else (16, 16, 16)
+
+    def check_dot_compatibility(lhs_type, rhs_type) -> Tuple[int, int, int]:  # [m, n, k]
+        lhs_bitwidth = lhs_type.scalar.primitive_bitwidth
+        rhs_bitwidth = rhs_type.scalar.primitive_bitwidth
+        assert lhs_bitwidth == rhs_bitwidth, "lhs and rhs bitwidth must be the same"
+        if lhs_bitwidth == 8:
+            return (16, 16, 32)
+        else:
+            return (16, 16, 16)
+
+    return check_dot_compatibility
 
 
 @functools.lru_cache()
@@ -102,6 +112,7 @@ class CUDAOptions:
     cluster_dims: tuple = (1, 1, 1)
     ptx_version: int = None
     enable_fp_fusion: bool = True
+    launch_cooperative_grid: bool = False
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e4b15")
     deprecated_fp8_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "tf32"

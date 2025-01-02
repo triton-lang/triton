@@ -762,8 +762,6 @@ for
   ];
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
-    SliceEncodingAttr squeeze(int axis);
-
     SmallVector<unsigned> getContigPerThread() {
       // Block encoding is dense stride layout. The elements per thread are contiguous.
       return getSizePerThread();
@@ -790,6 +788,11 @@ def MmaEncodingTrait : AttrInterface<"MmaEncodingTrait"> {
                     "getSizePerThreadForOperand",
                     (ins "int":$opIdx,
                          "int":$kWidth)>,
+
+    InterfaceMethod<"Return the number of threads per warp for dot operands.",
+                    "SmallVector<unsigned>",
+                    "getThreadsPerWarpForOperand",
+                    (ins "int":$opIdx)>,
 
     InterfaceMethod<"Get the order of reps (tiles of this layout that tile the whole tensor). The fastest-changing axis first",
                     "SmallVector<unsigned>",
@@ -917,6 +920,7 @@ V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,
     SmallVector<int64_t> getInstrShapeForOperand(int kWidth, int opIdx) const;
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape, int kWidth, int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
+    SmallVector<unsigned> getThreadsPerWarpForOperand(int opIdx) const;
 
     SmallVector<unsigned> getContigPerThread() {
       auto rank = getWarpsPerCTA().size();
@@ -957,7 +961,7 @@ is supported.
 
 // ----------------------------------- version = 1 ----------------------------------- //
 
-Row |                  warp 0                                    warp 2
+Row |                  warp 0                                    warp 1
     |/-------------------^-------------------\ /-------------------^-------------------\
 0   |[0  1  2  ... 14 15] [0  1  2  ... 14 15] [0  1  2  ... 14 15] [0  1  2  ... 14 15]
 1   |[16 17 18 ... 30 31] [16 17 18 ... 30 31] [16 17 18 ... 30 31] [16 17 18 ... 30 31]
@@ -967,7 +971,7 @@ Row |                  warp 0                                    warp 2
 14  |[0  1  2  ... 14 15] [0  1  2  ... 14 15] [0  1  2  ... 14 15] [0  1  2  ... 14 15]
 15  |[16 17 18 ... 30 31] [16 17 18 ... 30 31] [16 17 18 ... 30 31] [16 17 18 ... 30 31]
 
-    |                  warp 1                                    warp 3
+    |                  warp 2                                    warp 3
 16  |/-------------------^-------------------\ /-------------------^-------------------\
 17  |[0  1  2  ... 14 15] [0  1  2  ... 14 15] [0  1  2  ... 14 15] [0  1  2  ... 14 15]
 18  |[16 17 18 ... 30 31] [16 17 18 ... 30 31] [16 17 18 ... 30 31] [16 17 18 ... 30 31]
@@ -977,9 +981,9 @@ Row |                  warp 0                                    warp 2
 30  |[0  1  2  ... 14 15] [0  1  2  ... 14 15] [0  1  2  ... 14 15] [0  1  2  ... 14 15]
 31  |[16 17 18 ... 30 31] [16 17 18 ... 30 31] [16 17 18 ... 30 31] [16 17 18 ... 30 31]
 
-// ----------------------------------- version = 2 ----------------------------------- //
+// ------------------------ version = 2, isTransposed = false ------------------------ //
 
-Row |       warp 0                warp 2
+Row |       warp 0                warp 1
     |/--------^---------\ /---------^--------\
 0   |[0  1  2  ... 14 15] [0  1  2  ... 14 15]
 1   |[0  1  2  ... 14 15] [0  1  2  ... 14 15]
@@ -992,7 +996,7 @@ Row |       warp 0                warp 2
 14  |[16 17 18 ... 30 31] [16 17 18 ... 30 31]
 15  |[16 17 18 ... 30 31] [16 17 18 ... 30 31]
     |
-    |       warp 1                warp 3
+    |       warp 2                warp 3
     |/--------^---------\ /---------^--------\
 16  |[0  1  2  ... 14 15] [0  1  2  ... 14 15]
 17  |[0  1  2  ... 14 15] [0  1  2  ... 14 15]
@@ -1004,15 +1008,37 @@ Row |       warp 0                warp 2
 ..  | ...                  ...
 30  |[16 17 18 ... 30 31] [16 17 18 ... 30 31]
 31  |[16 17 18 ... 30 31] [16 17 18 ... 30 31]
+
+// ------------------------ version = 2, isTransposed = true ------------------------ //
+
+    |               warp 0                     warp 1
+    |/----------------^----------------\ /-------^-------\
+Col>| 0  1  2  3  4  5  6  7  8  ... 15  16 17 18  ... 32
+Row |
+0   |[0  0  0  0  0  0  0  0  16 ... 16] [0  0  0  ... 16]
+1   |[1  1  1  1  1  1  1  1  17 ... 17] [1  1  1  ... 17]
+..  | ...                  ...
+14  |[14 14 14 14 14 14 14 14 30 ... 30] [14 14 14 ... 30]
+15  |[15 15 15 15 15 15 15 15 31 ... 31] [15 15 15 ... 31]
+    |
+    |               warp 2                     warp 3
+    |/----------------^----------------\ /-------^-------\
+16  |[0  0  0  0  0  0  0  0  16 ... 16] [0  0  0  ... 16]
+17  |[1  1  1  1  1  1  1  1  17 ... 17] [1  1  1  ... 17]
+..  | ...                  ...
+30  |[14 14 14 14 14 14 14 14 30 ... 30] [14 14 14 ... 30]
+31  |[15 15 15 15 15 15 15 15 31 ... 31] [15 15 15 ... 31]
   }];
 
   let parameters = (
     ins
     "unsigned": $version,
+    "bool":$isTransposed,
     ArrayRefParameter<"unsigned">:$warpsPerCTA__,
     "CTALayoutAttr":$CTALayout
   );
 
+  let genVerifyDecl = 1;
   let hasCustomAssemblyFormat = 1;
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
@@ -1025,6 +1051,7 @@ Row |       warp 0                warp 2
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape,
                                           Type elemType, int kWidth, int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
+    SmallVector<unsigned> getThreadsPerWarpForOperand(int opIdx) const;
     static SmallVector<unsigned> getMNKDimPerInstr();
 
     SmallVector<unsigned> getContigPerThread() {
@@ -1143,6 +1170,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
                                           int bitwidth, int kWidth,
                                           int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
+    SmallVector<unsigned> getThreadsPerWarpForOperand(int opIdx) const;
 
     bool supportReduction() const {
       if (isAmpere() || isHopper()) {

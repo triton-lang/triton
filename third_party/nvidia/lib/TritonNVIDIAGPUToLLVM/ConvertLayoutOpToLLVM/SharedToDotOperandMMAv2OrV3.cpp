@@ -1,16 +1,15 @@
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "Utility.h"
 #include "mlir/Support/LLVM.h"
+#include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"
 
 using namespace mlir;
 
 using ValueTable = std::map<std::array<int, 3>, Value>;
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-using ::mlir::LLVM::getStridesFromShapeAndOrder;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getContigPerThread;
-using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getSizePerThread;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
@@ -341,23 +340,10 @@ MMA16816SmemLoader::loadX4(int batch, int mat0, int mat1, ArrayRef<Value> ptrs,
     if (batch != 0)
       stridedOffset = add(
           stridedOffset, mul(i32_val(batch * warpsPerCTA[0]), smemBatchOffset));
-
     Value readPtr = gep(ptr_ty(ctx, 3), shemTy, ptr, stridedOffset);
-
-    PTXBuilder builder;
-    // ldmatrix.m8n8.x4 returns 4x2xfp16(that is 4xb32) elements for a
-    // thread.
-    auto resArgs = builder.newListOperand(4, "=r");
-    auto addrArg = builder.newAddrOperand(readPtr, "r");
-
-    auto ldmatrix = builder.create("ldmatrix.sync.aligned.m8n8.x4")
-                        ->o("trans", needTrans /*predicate*/)
-                        .o("shared.b16");
-    ldmatrix(resArgs, addrArg);
-
-    // The result type is 4xi32, each i32 is composed of 2xf16
-    // elements (adjacent two columns in a row) or a single f32 element.
-    Value resV4 = builder.launch(rewriter, loc, resTy);
+    auto ldMatrixOp =
+        rewriter.create<nvgpu::LoadMatrixOp>(loc, resTy, readPtr, needTrans);
+    auto resV4 = ldMatrixOp.getResult();
     return {extract_val(elemTy, resV4, 0), extract_val(elemTy, resV4, 1),
             extract_val(elemTy, resV4, 2), extract_val(elemTy, resV4, 3)};
   } else {
@@ -608,12 +594,11 @@ getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
       std::max<int>(shapePerCTA[2] / mmaLayout.getWarpsPerCTA()[2], 8);
   // (a, b) is the coordinate.
   auto load = [=, &rewriter, &vals](int batch, int a, int b) {
-    MMA16816SmemLoader loader(nPerWarp, warpsPerTile, sharedLayout.getOrder(),
-                              mmaLayout.getWarpsPerCTA(), kOrder, kWidth,
-                              smemObj.strides, shapePerCTA /*tileShape*/,
-                              instrShape, matShape, multiDimWarpId, perPhase,
-                              maxPhase, elemBytes, mmaElemBytes, isHopper,
-                              rewriter, typeConverter, loc);
+    MMA16816SmemLoader loader(
+        nPerWarp, warpsPerTile, order, mmaLayout.getWarpsPerCTA(), kOrder,
+        kWidth, smemObj.strides, shapePerCTA /*tileShape*/, instrShape,
+        matShape, multiDimWarpId, perPhase, maxPhase, elemBytes, mmaElemBytes,
+        isHopper, rewriter, typeConverter, loc);
     // Offset of a slice within the original tensor in shared memory
     Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
     SmallVector<Value> offs = loader.computeOffsets(lane, cSwizzleOffset);
@@ -810,23 +795,6 @@ MemDescType getExpandedDesc(MemDescType descTy) {
   auto expandedDesc = MemDescType::get(expandedShape, elTy, expandedEncoding,
                                        descTy.getMemorySpace());
   return expandedDesc;
-}
-
-SharedMemoryObject
-getExpandedSharedMemoryObject(ConversionPatternRewriter &rewriter, Location loc,
-                              SharedMemoryObject smemObj,
-                              ArrayRef<int64_t> shape) {
-  auto strides = smemObj.getStrides();
-  auto offsets = smemObj.getOffsets();
-  auto rank = strides.size();
-  if (rank == 3)
-    return smemObj;
-  auto expandedStrides = insertValue(strides, 0, i32_val(shape[0] * shape[1]));
-  auto expandedOffsets = insertValue(offsets, 0, i32_val(0));
-  auto expandedSmemObj =
-      SharedMemoryObject(smemObj.getBase(), smemObj.getBaseElemType(),
-                         expandedStrides, expandedOffsets);
-  return expandedSmemObj;
 }
 
 namespace SharedToDotOperandMMAv2OrV3 {
