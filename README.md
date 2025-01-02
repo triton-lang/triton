@@ -130,36 +130,15 @@ There currently isn't a turnkey way to run all the Triton tests, but you can
 follow the following recipe.
 
 ```shell
-# One-time setup.  Note we have to reinstall local Triton because torch
+# One-time setup.  Note this will reinstall local Triton because torch
 # overwrites it with the public version.
-$ pip install scipy numpy torch pytest lit pandas matplotlib && pip install -e python
+$ make dev-install
 
-# Run Python tests using your local GPU.
-$ python3 -m pytest python/test/unit
+# To run all tests (requires a GPU)
+$ make test
 
-# Move to builddir.  Fill in <...> with the full path, e.g.
-# `cmake.linux-x86_64-cpython-3.11`.
-$ cd python/build/cmake<...>
-
-# Run C++ unit tests.
-$ ctest -j32
-
-# Run lit tests.
-$ lit test
-```
-
-You may find it helpful to make a symlink to the builddir and tell your local
-git to ignore it.
-
-```shell
-$ ln -s python/build/cmake<...> build
-$ echo build >> .git/info/exclude
-```
-
-Then you can e.g. rebuild and run lit with the following command.
-
-```shell
-$ ninja -C build && ( cd build ; lit test )
+# Or, to run tests without a gpu
+$ make test-cpp test-lit
 ```
 
 # Tips for hacking
