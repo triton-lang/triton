@@ -1314,6 +1314,7 @@ vecIdx (index of the element in the quad; this is always along the k-dim)
       assert(rank == 2 || rank == 3);
       SmallVector<unsigned> contigPerThread(rank, 1);
       auto kWidth = getKWidth();
+      assert(kWidth != 0 && "Do not support kWidth=0");
       if (getOpIdx() == 0)
         contigPerThread[rank - 1] = kWidth;
       else
