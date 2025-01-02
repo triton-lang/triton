@@ -62,8 +62,11 @@ private:
   LogicalResult genLocalSlice(OpBuilder &builder, Value v,
                               Attribute dotEncoding, unsigned opIdx,
                               unsigned numSlices, int64_t sliceWidth);
+  LogicalResult sliceDot(OpBuilder &builder, Location loc, tt::DotOp op,
+                         unsigned numSlices);
   void transformOnePPClusters(OpBuilder &builder, Location loc);
   LogicalResult transformFourPPClusters(OpBuilder &builder, Location loc);
+  LogicalResult transformTwoPPClusters(OpBuilder &builder, Location loc);
   void addAsymmetricSyncToLoop(OpBuilder &builder, Location loc);
   void updateOpInsertion(Operation *Op);
   void appendOp(Operation *Op);
@@ -92,10 +95,11 @@ void Pingponger::appendSlicedLoadAB(int slice) {
 // Also, SchedBarrier with `0` is set here to tell compiler backend not to
 // reorder any instruction across this point.
 void Pingponger::appendClusterBarrier(OpBuilder &builder, Location loc) {
-  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
-  // MembarAnalysis can recognize gpu::BarrierOp and skip inserting additional
-  // barrier
+  // appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  //  MembarAnalysis can recognize gpu::BarrierOp and skip inserting additional
+  //  barrier
   appendOp(builder.create<gpu::BarrierOp>(loc));
+  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
 }
 void Pingponger::appendOpWithPrio(OpBuilder &builder, Operation *op,
                                   Location loc) {
@@ -183,32 +187,11 @@ LogicalResult Pingponger::genLocalSlice(OpBuilder &builder, Value v,
   return success();
 }
 
-// Transform a loop into four Dot - Memory (ping - pong) clusters
-// This transfrom is useful when the original dot tile is too large that there's
-// no enough register to hold data for a Dot cluster. This path slices the dot
-// into four pieces and pair with four clusters of reordered memory operations.
-// There are multiple guards at the boundary of each cluster.
-// (1) sched.barrier : with mask0 to prevent compiler backed from reroder
-//  instructions across the boundary
-// (2) gpu.barrier : ensures asymmetric synchronization at each point
-// (3) setprio (1->0) : in order to avoid incomming warp overtaking resource
-//  while the other warp is actively using it.
-//
-// Here's overview of the instruction clusters
-// mem0: global load A, local load A(1/4), local load B(1/4)
-// dot0: dot A(1/4) * B(1/4)
-// mem1: global load B, local load A(2/4), local load B(2/4)
-// dot1: dot A(2/4) * B(2/4)
-// mem2: local load A(3/4, 4/4), local load B(3/4, 4/4)
-// dot2: dot A(3/4) * B(3/4)
-// mem3: local store A and B
-// dot3: dot A(4/4) * B(4/4)
-
-LogicalResult Pingponger::transformFourPPClusters(OpBuilder &builder,
-                                                  Location loc) {
-  // First, slice local_loads and dot into 4 parts
-  unsigned numSlices = 4;
-  auto op = cast<tt::DotOp>(dotOps[0]);
+// Split dot into 'numSlices' pieces. This is required by pingpong scheduling
+// when it needs to schedule multiple dot clusters. Calls genLocalSlice to
+// create corresponding local_load slices.
+LogicalResult Pingponger::sliceDot(OpBuilder &builder, Location loc,
+                                   tt::DotOp op, unsigned numSlices) {
   builder.setInsertionPointToStart(forOp.getBody());
   auto typeB = op.getB().getType();
   auto shapeB = typeB.getShape();
@@ -240,11 +223,41 @@ LogicalResult Pingponger::transformFourPPClusters(OpBuilder &builder,
   op->erase();
   for (auto loads : lLoadOps)
     loads->erase();
+  return success();
+}
 
+// Transform a loop into four Dot - Memory (ping - pong) clusters
+// This transfrom is useful when the original dot tile is too large that there's
+// no enough register to hold data for a Dot cluster. This path slices the dot
+// into four pieces and pair with four clusters of reordered memory operations.
+// There are multiple guards at the boundary of each cluster.
+// (1) sched.barrier : with mask0 to prevent compiler backed from reroder
+//  instructions across the boundary
+// (2) gpu.barrier : ensures asymmetric synchronization at each point
+// (3) setprio (1->0) : in order to avoid incomming warp overtaking resource
+//  while the other warp is actively using it.
+//
+// Here's overview of the instruction clusters
+// mem0: global load A, local load A(1/4), local load B(1/4)
+// dot0: dot A(1/4) * B(1/4)
+// mem1: global load B, local load A(2/4), local load B(2/4)
+// dot1: dot A(2/4) * B(2/4)
+// mem2: local load A(3/4, 4/4), local load B(3/4, 4/4)
+// dot2: dot A(3/4) * B(3/4)
+// mem3: local store A and B
+// dot3: dot A(4/4) * B(4/4)
+
+LogicalResult Pingponger::transformFourPPClusters(OpBuilder &builder,
+                                                  Location loc) {
+  // First, slice local_loads and dot into 4 parts
+  if (sliceDot(builder, loc, dotOps[0], 4).failed())
+    return failure();
   builder.setInsertionPointAfter(gLoadOps[1]);
   // Reorder operations into four mem/dot clusters
 
   // mem0: global load A, local load A(1/4), local load B(1/4)
+  // set insertion point at the last global_load where all the addresses are
+  // ready to be used.
   updateOpInsertion(gLoadOps[1]);
   appendSlicedLoadAB(/*slice=*/0);
   appendClusterBarrier(builder, loc);
@@ -277,6 +290,51 @@ LogicalResult Pingponger::transformFourPPClusters(OpBuilder &builder,
 
   // dot3 (4/4)
   appendOpWithPrio(builder, dotSliceOps[3], loc);
+  appendClusterBarrier(builder, loc);
+
+  return success();
+}
+
+// Transform a loop into two Dot - Memory (ping - pong) clusters
+// This is useful for the medium sized tile which doesn't fit to either one/four
+// cluster scheduling.
+LogicalResult Pingponger::transformTwoPPClusters(OpBuilder &builder,
+                                                 Location loc) {
+  // First, slice local_loads and dot into 2 parts
+  if (sliceDot(builder, loc, dotOps[0], 2).failed())
+    return failure();
+  // Reorder operations into two mem/dot clusters
+
+  // Memory cluster #0
+  // interleave local_loads and global_loads to minimize the stalling
+  // cycles, sched.barrier prevents backend from canceling the interleaved order
+  updateOpInsertion(gLoadOps[1]);
+  appendSlicedLoadAB(/*slice=*/0);
+  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  appendOp(gLoadOps[0]);
+  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  appendSlicedLoadAB(/*slice=*/1);
+  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+  appendOp(gLoadOps[1]);
+  // The first cluster just fits into the two cluster pingpong and cannot
+  // include wait of the local_load inserted by the gpu.barrier, using s.barrier
+  // instead. backend will schedule the local memory fences later in the dot0
+  // cluster.
+  appendOp(builder.create<ROCDL::SBarrierOp>(loc));
+  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
+
+  // dot0 (1/2)
+  appendOpWithPrio(builder, dotSliceOps[0], loc);
+  appendClusterBarrier(builder, loc);
+
+  // mem1: local store A and B
+  // Don't need to reorder local_stores, just add cluster barrier after the the
+  // last store
+  updateOpInsertion(lStoreOps[1]);
+  appendClusterBarrier(builder, loc);
+
+  // dot1 (2/2)
+  appendOpWithPrio(builder, dotSliceOps[1], loc);
   appendClusterBarrier(builder, loc);
 
   return success();
@@ -373,9 +431,11 @@ void Pingponger::getDotPingponged() {
     // transfor a loop with small tile size
     transformOnePPClusters(builder, loc);
   } else if (numWarps == 8) { // pingpong between warps from the same block
-    // transfor a loop with large tile size which requires dots to be sliced
+    // transform a loop with large tile size which requires dots to be sliced
     if (transformFourPPClusters(builder, dotOps[0]->getLoc()).failed())
       return;
+    //if (transformTwoPPClusters(builder, dotOps[0]->getLoc()).failed())
+      //return;
 
     // Let half of the warps start the loop first and the others follow later
     // but in the synchronized way. This can be accompished by calling
