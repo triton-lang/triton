@@ -270,7 +270,8 @@ def str_to_ty(name):
     from builtins import tuple
 
     if isinstance(name, tuple):
-        return tuple_type([str_to_ty(x) for x in name])
+        fields = type(name).__dict__.get("_fields", None)
+        return tuple_type([str_to_ty(x) for x in name], fields)
 
     if name[0] == "*":
         name = name[1:]
