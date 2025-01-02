@@ -19,7 +19,10 @@ def TritonAMDGPUStreamPipeline : Pass<"tritonamdgpu-stream-pipeline", "mlir::Mod
     Option<"numStages", "num_stages",
            "int32_t", /*default*/"2",
            "Number of Pipeline stages">,
-    Option<"prefetch", "prefetch",
+    Option<"globalPrefetch", "global_prefetch",
+           "int32_t", /*default*/"0",
+           "Enable prefetch from global memory">,
+    Option<"localPrefetch", "local_prefetch",
            "int32_t", /*default*/"0",
            "Enable prefetch from shared memory">
   ];
