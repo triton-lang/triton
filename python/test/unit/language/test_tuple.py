@@ -1,6 +1,7 @@
 import pytest
 import triton
 import triton.language as tl
+from typing import NamedTuple
 import torch
 
 
@@ -99,3 +100,46 @@ def test_serialize(device="cuda"):
     _tuple_serialize[(1, )](z, None, (x0, (1, None, x1, tl.constexpr(4))), 20, 1, (y0, ))
     ref = torch.tensor([8, 1, 12, 21, 10, 15, -1, 8, 1, 12], device=device)
     assert torch.equal(z, ref)
+
+
+class Function(NamedTuple):
+    fn: tl.constexpr
+    captured: tuple
+
+
+class Tensor(NamedTuple):
+    ptr: any
+    shape: tuple
+    stride: tuple
+
+
+@triton.jit
+def _namedtuple_kernel(closure, X, Y, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
+    offs_m = tl.arange(0, BLOCK_M)
+    offs_n = tl.arange(0, BLOCK_N)
+    # load x
+    mask_x = (offs_m[:, None] < X.shape[0]) & (offs_n[None, :] < X.shape[1])
+    Xs = X.ptr + offs_m[:, None] * X.stride[0] + offs_n[None, :] * X.stride[1]
+    x = tl.load(Xs, mask=mask_x, other=0)
+    # compute y
+    y = closure.fn(x, *closure.captured)
+    # store y
+    mask_y = (offs_m[:, None] < Y.shape[0]) & (offs_n[None, :] < Y.shape[1])
+    Ys = Y.ptr + offs_m[:, None] * Y.stride[0] + offs_n[None, :] * Y.stride[1]
+    tl.store(Ys, y, mask=mask_y)
+
+
+def test_namedtuple(device="cuda"):
+    x = torch.randn((32, 32), dtype=torch.float32, device=device)
+    y = torch.empty((16, 16), dtype=torch.float32, device=device)
+    a = torch.tensor([5.2], dtype=torch.float32, device=device)
+
+    @triton.jit
+    def mul(x, a):
+        return x * tl.load(a)
+
+    function = Function(mul, (a, ))
+    tx = Tensor(x, x.shape, x.stride())
+    ty = Tensor(y, y.shape, y.stride())
+    _namedtuple_kernel[(1, )](function, tx, ty, 64, 64)
+    assert torch.allclose(y, x[:16, :16] * a)

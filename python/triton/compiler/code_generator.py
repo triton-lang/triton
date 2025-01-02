@@ -213,9 +213,9 @@ class ASTFunction:
 
     def deserialize(self, fn):
         # create "template"
-        def make_template(val):
-            if isinstance(val, (list, tuple, language.tuple_type)):
-                return language.tuple([make_template(x) for x in val])
+        def make_template(ty):
+            if isinstance(ty, (list, tuple, language.tuple_type)):
+                return language.tuple([make_template(x) for x in ty], ty)
             return language.constexpr(None)
 
         vals = make_template(self.arg_types)

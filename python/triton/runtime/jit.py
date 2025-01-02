@@ -305,8 +305,9 @@ def specialize_impl(arg, specialize_extra, is_const=False, specialize_value=True
         return ("nvTmaDesc", None)
     elif isinstance(arg, tuple):
         spec = [specialize_impl(x, specialize_extra) for x in arg]
-        tys = tuple([x[0] for x in spec])
-        keys = tuple([x[1] for x in spec])
+        make_tuple = lambda vals: type(arg)(*vals) if hasattr(arg, "_fields") else tuple(vals)
+        tys = make_tuple([x[0] for x in spec])
+        keys = make_tuple([x[1] for x in spec])
         return (tys, keys)
     else:
         # dtypes are hashable so we can memoize this mapping:
