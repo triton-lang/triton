@@ -336,9 +336,9 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   if (!conversion)
     return {};
 
-  // Don't use this codegen approach for small element sizes, since due to
-  // upcasting to i32, it can be less efficient than storing to shared memory
-  // until shuffling packed values is implemented.
+  // Only use this codegen approach for element bitwidths >= 32, since values of
+  // smaller element types will get upcasted to i32 when shuffled.
+  // TODO: Implement shuffling packed values.
   if (!isa<PointerType>(srcTy.getElementType()) &&
       srcTy.getElementTypeBitWidth() < 32)
     return {};
@@ -397,7 +397,7 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   //
   // P2 can only change the register mapping within a thread. Constrain P2 as:
   //
-  //   P2 = [ I P ]
+  //   P2 = [ I 0 ]
   //        [ P I ]
   //
   // Then `P2^-1 ∘ C` is:
@@ -422,7 +422,7 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   for (int i : llvm::seq(C.getInDimSizeLog2(kLane))) {
     ArrayRef<int32_t> /*C(l,(r,l))[i]*/ lowerHalfRow = C.getBasis(kLane, i);
     assert(lowerHalfRow.size() == 2);
-    if (/*C(l,r)*/ lowerHalfRow[0] != 0) {
+    if (/*C(l,r)[i]*/ lowerHalfRow[0] != 0) {
       assert(/*C(l,l)[i]*/ lowerHalfRow[1] == 0);
       missingLaneRows.push_back(i);
     } else if (lowerHalfRow[1] == 0) {
@@ -434,8 +434,9 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
     }
   }
 
-  // Find rows in the upperhalf that can be selected by P' to make the lane
-  // components in the lower half non-zero.
+  // Find rows in the upper-half  of C (i.e. the (reg) -> (reg, lane) submatrix)
+  // that can be selected by P' to make the lane components in the lower half
+  // (i.e. the (lane) -> (lane) submatrix) non-zero.
   std::vector<std::vector<int32_t>> PPrimeLaneBases(C.getInDimSizeLog2(kLane),
                                                     {0});
   for (int i : llvm::seq(C.getInDimSizeLog2(kRegister))) {
@@ -481,7 +482,7 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   LinearLayout Cp = P2inv.compose(C);
 
   // Now we have C' = P2^-1 ∘ C = W ∘ P1. W is considerably easier to compute.
-  // A warp shuffle is a function from `(lane, register) -> (lane)`, i.e.
+  // A warp shuffle is a function from `(register, lane) -> (lane)`, i.e.
   //
   //   W = [ I R' ]
   //       [ 0 L  ]
@@ -532,7 +533,7 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   // vector stores and stmatrix.
   LinearLayout reducedP1 = P1.removeZeroBasesAlongDim(kLane);
   LinearLayout reducedP2 = P2inv.removeZeroBasesAlongDim(kLane);
-  if (reducedP1.getInDimSize(kLane) > 8 || reducedP2.getInDimSize(kLane) > 8)
+  if (reducedP1.getInDimSize(kLane) > 4 || reducedP2.getInDimSize(kLane) > 4)
     return {};
 
   // Return just the interesting parts of the decomposed layouts.

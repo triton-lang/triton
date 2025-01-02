@@ -121,10 +121,10 @@ tt.func private @convert_layout_blocked_blocked(%arg0: tensor<16x16xi32, #blocke
   // 6         T10:0  T26:0   T11:0  T27:0
   // 7         T14:0  T30:0   T15:0  T31:0
   //
-  // Where the registers change every 2 lanes like [0, 4, 1, 5, 2, 6, 3, 7].
-  // Due to this, there needs to be 8 selects per shuffle input and output.
-  // The lane mapping also changes every register. Due to this, we choose to
-  // fall back to the shared memory implementation.
+  // Where the registers change every 2 lanes like [0, 4, 1, 5, 2, 6, 3, 7] and
+  // wraps around at lane 16. Due to this, there needs to be 8 selects per
+  // shuffle input and output. The lane mapping also changes every register. Due
+  // to this, we choose to fall back to the shared memory implementation.
 
   // CHECK-NOT: shfl.sync.idx
   // CHECK: st.shared

@@ -343,7 +343,10 @@ public:
                                  StringAttr outDim);
 
   // Creates a 1D -> 1D layout that maps every input value to 0, i.e. L(x) = 0
-  // for x in [0, size).
+  // for x in [0, size). By default this creates a surjective layout where
+  // `outDim` has size 1 (the only element is 0). If `outDimSize` is specified
+  // to be greater than 1, then this creates a non-surjective layout with a
+  // specific size for `outDim`.
   static LinearLayout zeros1D(int32_t size, StringAttr inDim, StringAttr outDim,
                               int32_t outDimSize = 1);
 
