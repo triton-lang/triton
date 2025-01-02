@@ -224,7 +224,7 @@ def make_launcher(constants, signature, warp_size):
             "uint64_t": "K",
         }[ty_to_cpp(ty)]
 
-    args_format = ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
+    args_format = ''.join([format_of(ty) for ty in signature.values()])
     format = "iiiKKOOOO" + args_format
     signature = ','.join(map(_serialize_signature, signature.values()))
     signature = list(filter(bool, signature.split(',')))
