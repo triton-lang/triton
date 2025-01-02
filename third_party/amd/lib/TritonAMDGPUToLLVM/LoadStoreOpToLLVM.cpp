@@ -520,8 +520,8 @@ struct BufferAtomicRMWOpConversion
     unsigned numElems = getTotalElemsPerThread(ptrType);
     unsigned vec = getVectorSize(ptr, offset, axisAnalysisPass);
 
-    // v4f16 and v4bf16 variants of buffer atomics do not exist, only v2f16,
-    // v2bf16
+    // v4f16 and v4bf16 variants of buffer atomics do not exist.
+    // only v2f16 and v2bf16
     if (valueElemTy.isBF16() || valueElemTy.isF16())
       vec = std::min<unsigned>(vec, 2);
 
@@ -535,7 +535,7 @@ struct BufferAtomicRMWOpConversion
 
 
     // We need to manually emit memory fences (LLVM doesn't do this for buffer ops)
-    // see: https://llvm.org/docs/AMDGPUUsage.html#memory-model-gfx942 (memory model for GFX940, GFX941, GFX942)
+    // see: https://llvm.org/docs/AMDGPUUsage.html#memory-model-gfx942
     auto memOrdering = op.getSem();
     auto atomicMemOrdering = getMemoryOrdering(memOrdering);
     auto rel = LLVM::AtomicOrdering::release;
@@ -580,21 +580,54 @@ struct BufferAtomicRMWOpConversion
 
     StringAttr scope = mlir::StringAttr::get(loc.getContext(), scopeStr);
 
-    // Vector memory operations are performed as wavefront wide operations and completion is reported to a wavefront in execution order.
-    // If as a part of the vectorization we emit multiple invidual atomic ops which represent a "larger", we don't need to fully synchronize
-    // between these as a result.
-
     if (emitReleaseFence)
       rewriter.create<LLVM::FenceOp>(loc, TypeRange{}, rel, scope);
 
     mlir::Operation* lastRMWOp;
     MLIRContext *ctx = rewriter.getContext();
-    GCNBuilder waitcntBuilder;
+    GCNBuilder waitcntBuilder, invalidateL1;
 
-    if (memScope == MemSyncScope::GPU) {
+    // Triton supports three scopes for atomic access
+    // 1. System
+    // 2. GPU (default)
+    // 3. CTA (i.e., threadblock or warp-group)
+    //
+    // Currently, the AMD backend emits atomics with agent-scope.
+    //
+    // The following properties are used to emit proper synchronization primitives between sequential buffer atomics
+    // See: Memory Model GFX942 (MI300 series) https://llvm.org/docs/AMDGPUUsage.html#memory-model-gfx942:
+    //
+    // buffer/global/flat_load/store/atomic instructions to global memory are termed vector memory operations.
+    //
+    // 1. Vector memory operations are performed as wavefront wide operations and completion is reported to a wavefront in execution order.
+    //    If as a part of the vectorization we emit multiple invidual atomic ops which represent a "larger", we don't need to fully synchronize
+    //    between these as a result of this property (since we know the ordering)
+    //
+    // 2. The vector memory operations access a single vector L1 cache shared by all SIMDs a CU.
+    //    No special action is required for coherence between wavefronts in the same work-group since they execute on the same CU.
+    //
+    // 3. Each CU has a separate request queue per channel for its associated L2.
+    //    Therefore, the vector and scalar memory operations performed by wavefronts executing with different L1 caches
+    //    and the same L2 cache can be reordered relative to each other.
+    //    A s_waitcnt vmcnt(0) is required to ensure synchronization between vector memory operations of different CUs.
+    //    It ensures a previous vector memory operation has completed before executing a subsequent vector memory or LDS operation
+    //    and so can be used to meet the requirements of acquire and release.
+    //
+    // 4. Atomic read-modify-write instructions implicitly bypass the L1 cache (this is specific to gfx942)
+    //    Therefore, they do not use the sc0 bit for coherence and instead use it to indicate if the
+    //    instruction returns the original value being updated. They do use sc1 to indicate system or agent scope coherence.
+    //
+    // In summary:
+    // 1. We have to emit memory fences (i.e., acq/rel/acq_rel) before and after our buffer atomics
+    // 2. Because buffer atomic rmw ops skip the l1 cache, s_waitcnt vmcnt(0) is sufficient for synchronization between instructions.
+    //    We don't need to invalidate L1 between these ops on GFX942, just after (i.e., we can skip `buffer_wbinvl1_vol`)
+    // 3. If we had multiple agents or multiple L2 caches we would need to call `buffer_wbl2 sc1`. Triton doesn't support this yet though.
+
+    if (memScope == MemSyncScope::GPU || memScope == MemSyncScope::SYSTEM) {
       waitcntBuilder.create<>("s_waitcnt vmcnt(0)")->operator()();
     } else if (memScope == MemSyncScope::CTA) {
-      waitcntBuilder.create<>("buffer_wbinvl1_vol")->operator()();
+      // TODO: Within a CTA we can possibly relax this?
+      waitcntBuilder.create<>("s_waitcnt vmcnt(0)")->operator()();
     }
 
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
@@ -615,14 +648,8 @@ struct BufferAtomicRMWOpConversion
       // To sync vector memory ops between CUs within an agent, we need an s_waitcnt
       // skip doing this on the last iteration of the loop
       if (vecStart < numElems - vec) {
-        if (memScope == MemSyncScope::GPU) {
-          Value inst = waitcntBuilder.launch(rewriter, lastRMWOp->getLoc(), void_ty(ctx));
-          lastRMWOp = inst.getDefiningOp();
-        } else if (memScope == MemSyncScope::CTA) {
-          // If the scope is at the CTA-level we just need "buffer_wbinvl1_vol" between the vector memory ops
-          Value inst = waitcntBuilder.launch(rewriter, lastRMWOp->getLoc(), void_ty(ctx));
-          lastRMWOp = inst.getDefiningOp();
-        }
+        Value inst = waitcntBuilder.launch(rewriter, lastRMWOp->getLoc(), void_ty(ctx));
+        lastRMWOp = inst.getDefiningOp();
       }
 
       for (size_t ii = 0; ii < vec; ++ii) {

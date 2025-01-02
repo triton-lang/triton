@@ -32,6 +32,8 @@
 
 using namespace mlir;
 using ::mlir::LLVM::AMD::getVectorSize;
+using mlir::triton::AMD::ISAFamily;
+
 namespace ttg = mlir::triton::gpu;
 namespace tt = mlir::triton;
 
@@ -278,13 +280,7 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     }
     LDBG("RMW supported type");
 
-    // 3. Check the hardware---only MI-* series GPUs are supported
-    //    (we will just check for CNDA 3 for now)
-
-    // TODO
-    LDBG("RMW supported HW");
-
-    // 4. Check if the RMWOp is supported
+    // 3. Check if the RMWOp is supported
     switch (atomicRmwOp) {
     case RMWOp::AND:
     case RMWOp::OR:
@@ -303,7 +299,7 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     }
     LDBG("RMW supported Op");
 
-    // 5. Buffer atomics support 32 and 64-bit operations, so inputs must be at
+    // 4. Buffer atomics support 32 and 64-bit operations, so inputs must be at
     // least 32-bits
     //    Otherwise, fall back to the existing path for atomics
     auto opValueType = op.getVal().getType();
@@ -437,6 +433,10 @@ class TritonAMDGPUConvertToBufferOpsPass
 
 public:
   TritonAMDGPUConvertToBufferOpsPass() = default;
+  TritonAMDGPUConvertToBufferOpsPass(StringRef archGen, bool enableBufferAtomics) {
+    this->archGenerationName = archGen.data();
+    this->enableBufferAtomics = enableBufferAtomics;
+  };
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     RewritePatternSet patterns(context);
@@ -456,13 +456,23 @@ public:
     ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
     patterns.add<ConvertTritonLoadToBufferLoad>(context, assumptions);
     patterns.add<ConvertTritonStoreToBufferStore>(context, assumptions);
-    patterns.add<ConvertTritonAtomicRMWOpToBufferAtomicRMW>(
-        context, assumptions, axisInfoAnalysis);
+
+    // Gate buffer atomics behind CDNA3 (i.e., MI300 series) for now
+    // GFX942-specific assumptions regarding cache coherence are made when lowering to LLVM
+    switch (auto isaFamily = triton::AMD::deduceISAFamily(archGenerationName)) {
+    case ISAFamily::CDNA3:
+      if (enableBufferAtomics)
+        patterns.add<ConvertTritonAtomicRMWOpToBufferAtomicRMW>(context, assumptions, axisInfoAnalysis);
+      break;
+    default:
+      break;
+    }
+
     if (applyPatternsAndFoldGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
   }
 };
 
-std::unique_ptr<Pass> mlir::createTritonAMDGPUConvertToBufferOpsPass() {
-  return std::make_unique<TritonAMDGPUConvertToBufferOpsPass>();
+std::unique_ptr<Pass> mlir::createTritonAMDGPUConvertToBufferOpsPass(std::string archGen, bool enableBufferAtomics) {
+  return std::make_unique<TritonAMDGPUConvertToBufferOpsPass>(archGen, enableBufferAtomics);
 }

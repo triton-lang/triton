@@ -68,8 +68,8 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
                      mlir::createTritonAMDGPUOptimizeEpiloguePass);
   ADD_PASS_WRAPPER_0("add_canonicalize_pointers",
                      mlir::createTritonAMDGPUCanonicalizePointersPass);
-  ADD_PASS_WRAPPER_0("add_convert_to_buffer_ops",
-                     mlir::createTritonAMDGPUConvertToBufferOpsPass);
+  ADD_PASS_WRAPPER_2("add_convert_to_buffer_ops",
+                     mlir::createTritonAMDGPUConvertToBufferOpsPass, const std::string, bool);
   ADD_PASS_WRAPPER_0("add_reorder_instructions",
                      mlir::createTritonAMDGPUReorderInstructionsPass);
   ADD_PASS_WRAPPER_0("add_block_pingpong",
