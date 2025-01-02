@@ -529,6 +529,14 @@ struct BufferAtomicRMWOpConversion
       vec = (unsigned)2;
     }
 
+    // The max width of a buffer atomic op is 64-bits
+    // Some types like F32 don't have a 2x vectorized version
+    // v2bf16 does exist but throws LLVM errors
+    if (valueElemTy.isF32() || valueElemTy.isF64() ||
+        valueElemTy.isInteger(32) || valueElemTy.isInteger(64)) {
+      vec = (unsigned)1;
+    }
+
     // Get the offsets and value
     SmallVector<Value> offsetElems = unpackLLElements(loc, llOffset, rewriter);
     SmallVector<Value> valueElems = unpackLLElements(loc, llData, rewriter);
@@ -579,8 +587,11 @@ struct BufferAtomicRMWOpConversion
     case MemSyncScope::GPU:
       scopeStr = "agent";
       break;
-    default:
+    case MemSyncScope::CTA:
       scopeStr = "workgroup";
+      break;
+    default:
+      return failure();
     }
 
     StringAttr scope = mlir::StringAttr::get(loc.getContext(), scopeStr);
@@ -673,7 +684,6 @@ struct BufferAtomicRMWOpConversion
             waitcntBuilder.launch(rewriter, lastRMWOp->getLoc(), void_ty(ctx));
         lastRMWOp = inst.getDefiningOp();
       }
-
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, this->getTypeConverter()->getIndexType(), ii);
@@ -695,8 +705,6 @@ struct BufferAtomicRMWOpConversion
     return success();
   }
 };
-
-///
 
 struct BufferStoreOpConversion
     : public ConvertOpToLLVMPattern<triton::amdgpu::BufferStoreOp>,

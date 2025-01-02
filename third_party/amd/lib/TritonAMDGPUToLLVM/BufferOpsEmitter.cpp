@@ -6,7 +6,6 @@
 #include "mlir/IR/PatternMatch.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include <iostream>
 
 #include "BufferOpsEmitter.h"
 

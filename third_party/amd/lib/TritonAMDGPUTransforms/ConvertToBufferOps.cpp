@@ -290,7 +290,7 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     auto splatOp = tensorPtr.getDefiningOp<triton::SplatOp>();
     Value basePtr = splatOp.getSrc();
 
-    // 3. Buffer atomic RMW does not support FP8 ops
+    // 4. Buffer atomic RMW does not support FP8 ops
     //    easier to just check what we support
     auto checkType = op.getVal().getType();
     if (auto vecType = dyn_cast<RankedTensorType>(checkType)) {
@@ -305,7 +305,7 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     }
     LDBG("RMW supported type");
 
-    // 4. Check if the RMWOp is supported
+    // 5. Check if the RMWOp is supported
     switch (atomicRmwOp) {
     case RMWOp::AND:
     case RMWOp::OR:
@@ -324,7 +324,7 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     }
     LDBG("RMW supported Op");
 
-    // 5. Buffer atomics support 32 and 64-bit operations, so inputs must be at
+    // 6. Buffer atomics support 32 and 64-bit operations, so inputs must be at
     //    least 32-bits. Otherwise, fall back to the existing path for atomics
     auto opValueType = op.getVal().getType();
     auto opBitWidth = 0;

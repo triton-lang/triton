@@ -70,7 +70,6 @@ struct BufferEmitter {
                  Value falseVal, CacheModifier cm);
 
   // Emit a predicated rocdl.raw.ptr.buffer.atomic.* RMWOp
-  // Can optionally emit a memfence after the RMWOp
   Value emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc, Value offset,
                       Value data, Value pred);
 
