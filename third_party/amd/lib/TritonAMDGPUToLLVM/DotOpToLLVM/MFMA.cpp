@@ -279,7 +279,7 @@ struct DotOpMFMAConversionHelper {
             // Following code adjusts accumulator values in such cases.
             // If accumulator is integer, shift accumulator right by
             // log2(duplicationRate) If accumulator is float, multiply accum
-            // with 1/duplicationRate constant
+            // with 1/duplicationRate constant.
             if (kDimInstrSize > kDimOperandSize) {
               assert(kDimInstrSize % kDimOperandSize == 0);
               int duplicationRate = kDimInstrSize / kDimOperandSize;
