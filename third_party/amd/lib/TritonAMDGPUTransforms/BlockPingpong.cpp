@@ -154,8 +154,6 @@ LogicalResult Pingponger::genLocalSlice(OpBuilder &builder, Value v,
   SmallVector<Operation *> subviews;
   auto memDesc = v.getDefiningOp()->getOperand(0);
   auto type = cast<ttg::MemDescType>(memDesc.getType());
-  auto encoding = cast<RankedTensorType>(v.getType()).getEncoding();
-  auto srcEncoding = cast<ttg::DotOperandEncodingAttr>(encoding);
   SmallVector<int64_t> shape = llvm::to_vector(type.getShape());
   Type elementType = type.getElementType();
   int64_t kIdx = opIdx == 0 ? 1 : 0;
@@ -164,7 +162,7 @@ LogicalResult Pingponger::genLocalSlice(OpBuilder &builder, Value v,
   if (sliceWidth < 16)
     return failure();
   auto dotOperandEnc = ttg::DotOperandEncodingAttr::get(
-      builder.getContext(), opIdx, dotEncoding, srcEncoding.getKWidth());
+      builder.getContext(), opIdx, dotEncoding, kWidth);
   auto subviewDescType = ttg::MemDescType::get(
       shape, elementType, type.getEncoding(), type.getMemorySpace());
   for (int i = 0; i < numSlices; i++) {
@@ -207,7 +205,7 @@ LogicalResult Pingponger::sliceDot(OpBuilder &builder, Location loc,
           .failed())
     return failure();
 
-  // Clone dots four times to consume the slices
+  // Clone dots to consume all the slices
   Operation *prevDot = op;
   for (int i = 0; i < numSlices; i++) {
     IRMapping mapping;
@@ -375,7 +373,6 @@ void Pingponger::getDotPingponged() {
   OpBuilder builder(forOp);
   MLIRContext *ctx = forOp.getContext();
   Location loc = forOp.getLoc();
-  auto f16ty = builder.getF16Type();
 
   forOp->walk([&](Operation *op) {
     if (auto gLoad = dyn_cast<tt::LoadOp>(op))
@@ -422,20 +419,53 @@ void Pingponger::getDotPingponged() {
   //   GPU to hold all the data for the calculation. Such large tile size
   //   exceeds the amount of register GPU has so, we need to split the dot
   //   into several pieces.
+  //
+  // (3) Twp Dot-Memory (ping-pongx2) clusters
+  //  :Covers medium sized tile e.g., 256x128x64_FP16. Different tile size may
+  //  require different scheduling pattern because the loop consists of
+  //  different amount of memory transfer and dot operation. This scheduling
+  //  support the tile sizes not supported by above two methods.
+  //
+  // N.B., Tile size smaller than 128x128x64_FP16 is likely not compute-bound
+  // that pingpong scheduling doesn't help much.
 
-  // TODO:
-  // - Add transformTwoPPClusters for the medium size tiles
-  // - Add definition of small/medium/large tile size considering data-type
-  //   so we can choose the transfrom per given tile size.
+  auto dotType = dotOps[0].getType();
+  auto dotShape = dotType.getShape();
+  auto AType = dotOps[0].getA().getType();
+  auto AShape = AType.getShape();
+  auto elemWidth = dotType.getElementType().getIntOrFloatBitWidth();
+  int64_t tileSize = dotShape[0] * dotShape[1] * AShape[1] * elemWidth;
+
+  const int64_t SmallTile = 16777216;  // e.g. 128x128x64x16bit
+  const int64_t MediumTile = 35554432; // SmallTile x 2
+  const int64_t LargeTile = 67108864;  // e.g. 256x256x64x16bit
+
+  auto encoding = cast<RankedTensorType>(AType).getEncoding();
+  auto srcEncoding = cast<ttg::DotOperandEncodingAttr>(encoding);
+  kWidth = srcEncoding.getKWidth();
+  auto mfmaEncoding =
+      dyn_cast<ttg::AMDMfmaEncodingAttr>(srcEncoding.getParent());
+  SmallVector<int64_t> intShape;
+  intShape.push_back(mfmaEncoding.getMDim());
+  intShape.push_back(mfmaEncoding.getNDim());
+
   if (numWarps == 4) { // pingpong between warps from different blocks
     // transfor a loop with small tile size
-    transformOnePPClusters(builder, loc);
+    if (tileSize == SmallTile)
+      transformOnePPClusters(builder, loc);
   } else if (numWarps == 8) { // pingpong between warps from the same block
-    // transform a loop with large tile size which requires dots to be sliced
-    if (transformFourPPClusters(builder, dotOps[0]->getLoc()).failed())
+    // transform a loop where the tile size requires dots to be sliced
+    if (tileSize == MediumTile) {
+      if (transformTwoPPClusters(builder, dotOps[0]->getLoc()).failed())
+        return;
+    } else if (tileSize >= LargeTile) {
+      // Avoid known register spilling.
+      if (intShape[0] == 16 && intShape[1] == 16 && kWidth == 8)
+        return;
+      if (transformFourPPClusters(builder, dotOps[0]->getLoc()).failed())
+        return;
+    } else // small tile needs numWarp=4 for pingpong.
       return;
-    //if (transformTwoPPClusters(builder, dotOps[0]->getLoc()).failed())
-      //return;
 
     // Let half of the warps start the loop first and the others follow later
     // but in the synchronized way. This can be accompished by calling
