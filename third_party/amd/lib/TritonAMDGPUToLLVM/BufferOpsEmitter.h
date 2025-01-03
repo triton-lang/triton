@@ -9,6 +9,7 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include <cstdint>
 
 namespace mlir::LLVM::AMD {
 // Utility class to take care of buffer operation emission. We may add more

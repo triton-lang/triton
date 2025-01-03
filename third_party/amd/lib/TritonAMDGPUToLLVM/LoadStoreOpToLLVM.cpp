@@ -652,8 +652,12 @@ struct BufferAtomicRMWOpConversion
     // sufficient for synchronization between instructions.
     //    We don't need to invalidate L1 between these ops on GFX942, just after
     //    (i.e., we can skip `buffer_wbinvl1_vol`)
-    // 3. If we had multiple agents we would need to call `buffer_wbl2 sc1`.
-    //    This would be required at SYSTEM scope.
+    // 3. We don't have to explicitly write-back l2 because s_waitcnt vmcnt(0)
+    //    already does this as-per the ISA docs:
+    //    "Decremented for reads when the data has been written back to the VGPRs, and for writes when the
+    //    data has been written to the L2 cache. Ordering: Memory reads and writes return in the order they
+    //    were issued, including mixing reads and writes"
+    // 4. We set GLC=1, to return the old value. This is what allows us to not have to write-back the L2 cache.
 
     if (memScope == MemSyncScope::GPU) {
       waitcntBuilder.create<>("s_waitcnt vmcnt(0)")->operator()();

@@ -95,7 +95,7 @@ Value BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc,
 
   SmallVector<Value, 6> args{data};
 
-  fillCommonArgs(vecTy, rsrcDesc, offset, pred, args);
+  fillCommonArgs(vecTy, rsrcDesc, offset, pred, /*cache modifiers, GLC=1 */1, args);
 
   // TODO:
   //   The ops in ROCDL (e.g., RawPtrBufferAtomicFaddOp) have no return value,
@@ -195,7 +195,7 @@ void BufferEmitter::fillCommonArgs(Type type, Value rsrcDesc,
       getCtrlBitsForCacheModifierOnTarget(cm, isBufferLoad, targetInfo);
   Value cacheModifiers = int_val(32, aux);
 
-  // 5. Add the arguments
+  // 4. Add the arguments
   args.push_back(rsrcDesc);
   args.push_back(maskedOffsetBytes);
   args.push_back(sgprOffset);
