@@ -87,7 +87,8 @@ Value BufferEmitter::emitLoad(Type type, Value rsrcDesc, Value offset,
 }
 
 Value BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc,
-                                   Value offset, Value data, Value pred) {
+                                   Value offset, Value data, Value pred,
+                                   bool hasUsers) {
   VectorType vecTy = cast<VectorType>(data.getType());
   Type bufferType = getBufferOpType(type, true);
   if (vecTy != bufferType)
@@ -95,7 +96,13 @@ Value BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc,
 
   SmallVector<Value, 6> args{data};
 
-  fillCommonArgs(vecTy, rsrcDesc, offset, pred, /*cache modifiers, GLC=1 */1, args);
+  // if the original op has users, set GLC=1, otherwise we can drop the value
+  // TODO we should have an enum for these
+  uint32_t cacheModifier = 0;
+  if (hasUsers)
+    cacheModifier = 1;
+
+  fillCommonArgs(vecTy, rsrcDesc, offset, pred, cacheModifier, args);
 
   // TODO:
   //   The ops in ROCDL (e.g., RawPtrBufferAtomicFaddOp) have no return value,
@@ -169,7 +176,6 @@ Type BufferEmitter::getBufferOpType(Type type, bool atomicsOp) {
 
   return bufferType;
 }
-
 void BufferEmitter::fillCommonArgs(Type type, Value rsrcDesc,
                                    Value vOffsetElems, Value pred,
                                    triton::CacheModifier cm, bool isBufferLoad,

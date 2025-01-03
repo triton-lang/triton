@@ -618,13 +618,7 @@ struct BufferAtomicRMWOpConversion
     // buffer/global/flat_load/store/atomic instructions to global memory are
     // termed vector memory operations.
     //
-    // 1. Vector memory operations are performed as wavefront wide operations
-    // and completion is reported to a wavefront in execution order.
-    //    If as a part of the vectorization we emit multiple invidual atomic ops
-    //    which represent a "larger", we don't need to fully synchronize between
-    //    these as a result of this property (since we know the ordering)
-    //
-    // 2. The vector memory operations access a single vector L1 cache shared by
+    // 1. Vector memory operations access a single vector L1 cache shared by
     // all SIMDs a CU.
     //    No special action is required for coherence between wavefronts in the
     //    same work-group since they execute on the same CU.
@@ -633,31 +627,36 @@ struct BufferAtomicRMWOpConversion
     // L2.
     //    Therefore, the vector and scalar memory operations performed by
     //    wavefronts executing with different L1 caches and the same L2 cache
-    //    can be reordered relative to each other. A s_waitcnt vmcnt(0) is
+    //    can be reordered relative to each other. A `s_waitcnt vmcnt(0)` is
     //    required to ensure synchronization between vector memory operations of
     //    different CUs. It ensures a previous vector memory operation has
     //    completed before executing a subsequent vector memory or LDS operation
     //    and so can be used to meet the requirements of acquire and release.
     //
     // 4. Atomic read-modify-write instructions implicitly bypass the L1 cache
-    // (this is specific to gfx942)
+    //    (specific to gfx942)
     //    Therefore, they do not use the sc0 bit for coherence and instead use
     //    it to indicate if the instruction returns the original value being
     //    updated. They do use sc1 to indicate system or agent scope coherence.
+    //    See the cache modifiers word in BufferEmitter::fillCommonArgs for
+    //    more details.
     //
     // In summary:
     // 1. We have to emit memory fences (i.e., acq/rel/acq_rel) before and after
-    // our buffer atomics
+    //    our buffer atomics.
     // 2. Because buffer atomic rmw ops skip the l1 cache, s_waitcnt vmcnt(0) is
-    // sufficient for synchronization between instructions.
+    //    sufficient for synchronization between instructions.
     //    We don't need to invalidate L1 between these ops on GFX942, just after
     //    (i.e., we can skip `buffer_wbinvl1_vol`)
-    // 3. We don't have to explicitly write-back l2 because s_waitcnt vmcnt(0)
-    //    already does this as-per the ISA docs:
-    //    "Decremented for reads when the data has been written back to the VGPRs, and for writes when the
-    //    data has been written to the L2 cache. Ordering: Memory reads and writes return in the order they
-    //    were issued, including mixing reads and writes"
-    // 4. We set GLC=1, to return the old value. This is what allows us to not have to write-back the L2 cache.
+    // 3. We don't have to explicitly write to the l2 cache because
+    //    `s_waitcnt vmcnt(0)` already does this as-per the MI300/CDNA3 ISA
+    //    docs: "Decremented for reads when the data has been written back to
+    //    the VGPRs, and for writes when the data has been written to the L2
+    //    cache. Ordering: Memory reads and writes return in the order they were
+    //    issued, including mixing reads and writes"
+    // 4. We set GLC=1, to return the old value. Since `tl.atomic_*` returns
+    //    the pre-op value, we don't have the write-back the L2 cache between
+    //    ops.
 
     if (memScope == MemSyncScope::GPU) {
       waitcntBuilder.create<>("s_waitcnt vmcnt(0)")->operator()();
@@ -665,6 +664,10 @@ struct BufferAtomicRMWOpConversion
       // TODO: Within a CTA we can possibly relax this?
       waitcntBuilder.create<>("s_waitcnt vmcnt(0)")->operator()();
     }
+
+    // Check if the op has users, if it does we set GLC=1, otherwise GLC=0
+    auto opUsers = op.getResult().getUsers();
+    auto hasUsers = std::distance(opUsers.begin(), opUsers.end()) > 0;
 
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
       Type vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
@@ -675,9 +678,9 @@ struct BufferAtomicRMWOpConversion
           rewriter, this->getTypeConverter(), loc, cast<VectorType>(vecTy),
           valueElems, vecStart);
 
-      Value loadVal =
-          bufferEmitter.emitAtomicRMW(atomicRmwAttr, vecTy, rsrcDesc,
-                                      offsetElems[vecStart], storeVal, pred);
+      Value loadVal = bufferEmitter.emitAtomicRMW(
+          atomicRmwAttr, vecTy, rsrcDesc, offsetElems[vecStart], storeVal, pred,
+          hasUsers);
       // Track the last op, so we can emit a fenceop after the loop
       lastRMWOp = loadVal.getDefiningOp();
 
