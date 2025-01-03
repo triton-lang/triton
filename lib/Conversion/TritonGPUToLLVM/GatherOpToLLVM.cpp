@@ -275,21 +275,7 @@ void GatherOpConversion::emitWarpLocalGather(
   LinearLayout invertSrcRegMap = invSrcLayout.sublayout(allDims, {kRegister});
   // Remove zero bases in the gather dimension to make the function injective
   // (for a given column) over the same codomain.
-  LinearLayout::BasesT newInvertRegMapBases;
-  for (auto &[inDim, inDimBases] : invertSrcRegMap.getBases()) {
-    auto &newInDimBases = newInvertRegMapBases[inDim];
-    if (inDim != kGatherDim) {
-      newInDimBases = inDimBases;
-      continue;
-    }
-    for (auto &basis : inDimBases) {
-      if (llvm::any_of(basis, [](int32_t val) { return val != 0; })) {
-        newInDimBases.push_back(basis);
-      }
-    }
-  }
-  invertSrcRegMap = LinearLayout(
-      newInvertRegMapBases, llvm::to_vector(invertSrcRegMap.getOutDimNames()));
+  invertSrcRegMap = invertSrcRegMap.removeZeroBasesAlongDim(kGatherDim);
   // We are left with only non-zero bases in the gather dimension, which means
   // the number of registers per column is the size of the "gather dimension".
   unsigned numRegsPerColumn = invertSrcRegMap.getInDimSize(kGatherDim);
