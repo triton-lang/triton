@@ -304,7 +304,10 @@ class HIPBackend(BaseBackend):
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
         amd.attach_target_triple(llvm_mod)
-        llvm.attach_datalayout(llvm_mod, amd.TARGET_TRIPLE, options.arch, '')
+        target_features = ''
+        if os.environ.get("TRITON_ENABLE_ASAN", "0") == "1":
+            target_features = '+xnack'
+        llvm.attach_datalayout(llvm_mod, amd.TARGET_TRIPLE, options.arch, target_features)
 
         # Set various control constants on the LLVM module so that device
         # libraries can resolve references to them.
@@ -330,13 +333,24 @@ class HIPBackend(BaseBackend):
         fns[0].add_fn_attr("amdgpu-waves-per-eu", f"{options.waves_per_eu}")
         denormal_mode = "preserve-sign" if options.allow_flush_denorm else "ieee"
         fns[0].add_fn_attr("denormal-fp-math-f32", denormal_mode)
+        if os.environ.get("TRITON_ENABLE_ASAN", "0") == "1":
+            fns[0].add_fn_target_feature("+xnack")
+            fns[0].add_fn_asan_attr()
 
         # Hint the compiler that we'd like the firmware to set the kernel arguments
         # to user SGPRs so that the kernel does not need to s_load its arguments
         # from memory.
         amd.set_all_fn_arg_inreg(fns[0])
 
-        if options.extern_libs:
+        if os.environ.get("TRITON_ENABLE_ASAN", "0") == "1":
+            default_libdir = Path(__file__).parent / 'lib'
+            paths = [
+                str(default_libdir / 'asanrtl.bc'),
+                str(default_libdir / "ocml.bc"),
+                str(default_libdir / "ockl.bc")
+            ]
+            llvm.link_extern_libs(llvm_mod, paths)
+        elif options.extern_libs:
             paths = [path for (name, path) in options.extern_libs if amd.need_extern_lib(llvm_mod, name)]
             llvm.link_extern_libs(llvm_mod, paths)
 
@@ -368,7 +382,10 @@ class HIPBackend(BaseBackend):
 
     @staticmethod
     def make_hsaco(src, metadata, options):
-        hsaco = amd.assemble_amdgcn(src, options.arch, '')
+        target_features = ''
+        if os.environ.get("TRITON_ENABLE_ASAN", "0") == "1":
+            target_features = '+xnack'
+        hsaco = amd.assemble_amdgcn(src, options.arch, target_features)
 
         rocm_path = HIPBackend.path_to_rocm_lld()
         with tempfile.NamedTemporaryFile() as tmp_out:

@@ -305,8 +305,9 @@ def specialize_impl(arg, specialize_extra, is_const=False, specialize_value=True
         return ("nvTmaDesc", None)
     elif isinstance(arg, tuple):
         spec = [specialize_impl(x, specialize_extra) for x in arg]
-        tys = [x[0] for x in spec]
-        keys = [x[1] for x in spec]
+        make_tuple = lambda vals: type(arg)(*vals) if hasattr(arg, "_fields") else tuple(vals)
+        tys = make_tuple([x[0] for x in spec])
+        keys = make_tuple([x[1] for x in spec])
         return (tys, keys)
     else:
         # dtypes are hashable so we can memoize this mapping:
@@ -515,13 +516,6 @@ class JITFunction(KernelInterface[T]):
         ]
         return {}, target, backend, binder
 
-    def _join_signature(self, obj):
-        if isinstance(obj, list):
-            inner = ",".join(self._join_signature(x) for x in obj)
-            return f"[{inner}]"
-        else:
-            return str(obj)
-
     def run(self, *args, grid, warmup, **kwargs):
         kwargs["debug"] = kwargs.get("debug", self.debug) or os.environ.get("TRITON_DEBUG", "0") == "1"
 
@@ -547,7 +541,7 @@ class JITFunction(KernelInterface[T]):
             # signature
             sigkeys = [x.name for x in self.params]
             sigvals = [x[0] for x in specialization]
-            signature = {k: self._join_signature(v) for (k, v) in zip(sigkeys, sigvals)}
+            signature = {k: v for (k, v) in zip(sigkeys, sigvals)}
             # check arguments
             assert "device_type" not in kwargs, "device_type option is deprecated; current target will be used"
             assert "device" not in kwargs, "device option is deprecated; current device will be used"
