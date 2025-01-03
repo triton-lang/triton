@@ -276,13 +276,12 @@ def _attn_fwd_inner(acc, l_i, m_i, q, k_ptrs, v_ptrs, bias_ptrs, stride_kn, stri
             causal_mask = OFFS_M[:, None] >= causal_boundary[None, :]
             qk = tl.where(causal_mask, qk, float("-inf"))
         # -- compute qk ----
-
         if INT8_GEMM:
             qk += ((((tl.dot(q, k).to(tl.float32) * q_descale)) * k_descale) * QK_SCALE)
         else:
             if INT8_KV:
                 k = (k * k_descale).to(q.type.element_ty)
-            qk += tl.dot(q, k) * QK_SCALE
+            qk += (tl.dot(q, k) * QK_SCALE)
 
         if bias_ptrs is not None:
             bias_offs_n = start_n + tl.arange(0, BLOCK_N) if MASK_STEPS else None
@@ -1870,6 +1869,49 @@ def varlen_benchmark_configs():
     return configs
 
 
+def model_benchmark_configs(args):
+    import os
+    import json
+    # If user did not provide an absolute path, resolve relative path from script directory
+    if not os.path.isabs(args.model_configs):
+        config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), args.model_configs)
+    else:
+        config_file = args.model_configs
+
+    with open(config_file, 'r') as f:
+        configs = json.load(f)
+    fa_configs = []
+
+    if args.model != "all":
+        # Check if the model exists
+        model_name = args.model
+        if model_name not in configs:
+            raise ValueError(f"Model '{model_name}' not found in {config_file}")
+        # Handle a specific model
+        config = configs[model_name]
+        HQ = config["num_attention_heads"]
+        HK = HQ if config["num_key_value_heads"] is None else config["num_key_value_heads"]
+
+        max_ctx_len = config["max_ctx_len"]
+        N_CTX_Q = args.sq if args.sq else max_ctx_len
+        N_CTX_K = args.sk if args.sk else max_ctx_len
+        batch_size = args.b if args.b else 1
+
+        fa_configs.append((model_name, batch_size, HQ, HK, N_CTX_Q, N_CTX_K))
+    else:
+        # Handle all models
+        for model_name, config in configs.items():
+            HQ = config["num_attention_heads"]
+            HK = HQ if config["num_key_value_heads"] is None else config["num_key_value_heads"]
+            max_ctx_len = config["max_ctx_len"]
+            N_CTX_Q = args.sq if args.sq else max_ctx_len
+            N_CTX_K = args.sk if args.sk else max_ctx_len
+            batch_size = args.b if args.b else 1
+            fa_configs.append((model_name, batch_size, HQ, HK, N_CTX_Q, N_CTX_K))
+
+    return fa_configs
+
+
 def run_benchmark(custom, args):
 
     dtype = arg_to_torch_dtype[args.dtype]
@@ -1884,6 +1926,7 @@ def run_benchmark(custom, args):
     int8_kv = args.int8_kv and int8
     varlen = args.layout == 'thd'
     configs = []
+    plot_name = f'fused-attention-{mode}-d{head_size}-layout{args.layout}'
     if custom:
         x_vals_list = [(args.b, args.hq, hk, args.sq, sk)]
     else:
@@ -1892,16 +1935,22 @@ def run_benchmark(custom, args):
         else:
             x_vals_list = nonvarlen_benchmark_configs()
 
+        if args.model:
+            x_vals_list = model_benchmark_configs(args)
+            x_names = ['model', 'BATCH', 'HQ', 'HK', 'N_CTX_Q', 'N_CTX_K']
+            plot_name = f'fused-attention-{mode}-layout{args.layout}'
+
     print_time = args.return_time
-    line_names = 'Time (ms)' if print_time else 'TFLOPS'
+    line_vals = ['triton', 'torch']  # 'Time (ms)' if print_time else 'TFLOPS'
     configs.append(
-        triton.testing.Benchmark(x_names=x_names, x_vals=x_vals_list, line_arg='provider', line_vals=['triton'],
-                                 line_names=[line_names], styles=[('red', '-')], ylabel='ms',
-                                 plot_name=f'fused-attention-{mode}-d{head_size}-layout{args.layout}',
+        triton.testing.Benchmark(x_names=x_names, x_vals=x_vals_list, line_arg='provider', line_vals=line_vals,
+                                 line_names=line_vals, styles=[('red', '-'),
+                                                               ('green', '-')], ylabel='ms', plot_name=plot_name,
                                  args={'D_HEAD': head_size, 'dtype': dtype, 'causal': causal, 'mode': mode}))
 
     @triton.testing.perf_report(configs)
-    def bench_flash_attention(BATCH, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, causal, mode, provider, device="cuda"):
+    def bench_flash_attention(BATCH, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, causal, mode, provider, device="cuda",
+                              model=None):
         assert mode in ["fwd", "bwd"]
         assert not (int8_kv and quantize_p)
         warmup = 25
@@ -1942,6 +1991,17 @@ def run_benchmark(custom, args):
             o, _ = fn()
             do = torch.randn_like(o)
             fn = lambda: o.backward(do, retain_graph=True)
+
+        if "torch" in provider:
+            if HQ != HK:
+                k = k.view(k.shape[0], k.shape[1], -1, k.shape[2],
+                           k.shape[3]).expand(-1, -1, HQ // HK, -1, -1).reshape(k.shape[0], -1, k.shape[2], k.shape[3])
+                v = v.view(v.shape[0], v.shape[1], -1, v.shape[2],
+                           v.shape[3]).expand(-1, -1, HQ // HK, -1, -1).reshape(v.shape[0], -1, v.shape[2], v.shape[3])
+
+            fn = lambda: torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0,
+                                                                          is_causal=causal, scale=None)
+
         ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
         total_flops = 2 * flops_per_matmul
         if causal:
@@ -1959,7 +2019,7 @@ def run_benchmark(custom, args):
         else:
             return total_flops / ms * 1e-9
 
-    bench_flash_attention.run(save_path=".", print_data=True)
+    bench_flash_attention.run(save_path=".", print_data=True, show_plots=True)
 
 
 def supported_layouts():
@@ -1976,6 +2036,21 @@ def parse_args():
         prog="Benchmark FlashAttention",
         allow_abbrev=False,
     )
+    parser.add_argument('-model_configs', type=str, default="model_configs.json", help="Model config json file.")
+
+    def get_available_models(config_file='model_configs.json'):
+        import os
+        import json
+        """Load model names from the configuration file."""
+        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), config_file)
+        with open(config_path, 'r') as f:
+            configs = json.load(f)
+        return list(configs.keys())
+
+    available_models = get_available_models()  # Dynamically load model names
+    model_help = ("Model name to benchmark. Select from: [" + ", ".join(available_models) +
+                  "]. Use 'all' to benchmark all models or leave blank for the default benchmark script.")
+    parser.add_argument('-model', type=str, default=None, help=model_help)
     parser.add_argument("-b", type=int, default=0)
     parser.add_argument("-hq", type=int, default=0)
     parser.add_argument("-hk", type=int, default=0)
@@ -2006,12 +2081,16 @@ def main():
     custom_config = False
     assert args.layout == 'thd' or not args.equal_seqlens, \
            "Equal sequence lengths arg must be used with the thd layout."
-    if args.b or args.hq or args.hk or args.sq or args.sk or args.d:
+    if args.hq or args.hk or args.d:
         custom_config = True
         assert args.b and args.hq and args.sq and args.d, \
                "If custom config is specified, please provide \
                 all of batch, number of Q heads, Q sequence length \
                 and head size."
+
+    if args.model:
+        assert not (args.hq or args.hk or args.d), \
+                "Specifying model fixes hq, hk and d already. Do not provide them!"
 
     assert args.dtype in arg_to_torch_dtype, \
            "Only fp16, bf16 and f32 types currently supported."
