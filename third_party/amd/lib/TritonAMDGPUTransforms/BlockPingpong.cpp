@@ -433,11 +433,11 @@ void Pingponger::getDotPingponged() {
   auto dotShape = dotType.getShape();
   auto AType = dotOps[0].getA().getType();
   auto AShape = AType.getShape();
-  auto elemWidth = dotType.getElementType().getIntOrFloatBitWidth();
+  auto elemWidth = AType.getElementType().getIntOrFloatBitWidth();
   int64_t tileSize = dotShape[0] * dotShape[1] * AShape[1] * elemWidth;
 
   const int64_t SmallTile = 16777216;  // e.g. 128x128x64x16bit
-  const int64_t MediumTile = 35554432; // SmallTile x 2
+  const int64_t MediumTile = 33554432; // SmallTile x 2
   const int64_t LargeTile = 67108864;  // e.g. 256x256x64x16bit
 
   auto encoding = cast<RankedTensorType>(AType).getEncoding();
