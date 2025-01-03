@@ -845,10 +845,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   tt.func @convert_dot(%A: tensor<16x16xf16, #blocked0>, %B: tensor<16x16xf16, #blocked0>) {
     %AA = ttg.local_alloc %A : (tensor<16x16xf16, #blocked0>) -> !ttg.memdesc<16x16xf16, #shared0, #smem>
     %BB = ttg.local_alloc %B : (tensor<16x16xf16, #blocked0>) -> !ttg.memdesc<16x16xf16, #shared0, #smem>
-    // CHECK: llvm.inline_asm
-    // CHECK: ldmatrix.sync.aligned.m8n8.x4
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: ldmatrix.sync.aligned.m8n8.x4
+    // CHECK: nvgpu.ldmatrix
+    // CHECK: nvgpu.ldmatrix
     %AA_DOT = ttg.local_load %AA : !ttg.memdesc<16x16xf16, #shared0, #smem> -> tensor<16x16xf16, #dot_operand_a>
     %BB_DOT = ttg.local_load %BB : !ttg.memdesc<16x16xf16, #shared0, #smem> -> tensor<16x16xf16, #dot_operand_b>
     %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #mma0>
@@ -876,8 +874,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   tt.func @convert_dot_fp8(%A: tensor<16x16xf8E5M2, #blocked0>, %B: tensor<16x16xf8E5M2, #blocked0>) {
     %AA = ttg.local_alloc %A : (tensor<16x16xf8E5M2, #blocked0>) -> !ttg.memdesc<16x16xf8E5M2, #shared0, #smem>
     %BB = ttg.local_alloc %B : (tensor<16x16xf8E5M2, #blocked0>) -> !ttg.memdesc<16x16xf8E5M2, #shared0, #smem>
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: ldmatrix.sync.aligned.m8n8.x4
+    // CHECK: nvgpu.ldmatrix
     %AA_DOT = ttg.local_load %AA : !ttg.memdesc<16x16xf8E5M2, #shared0, #smem> -> tensor<16x16xf8E5M2, #dot_operand_a>
     %BB_DOT = ttg.local_load %BB : !ttg.memdesc<16x16xf8E5M2, #shared0, #smem> -> tensor<16x16xf8E5M2, #dot_operand_b>
     %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf32, #mma0>
@@ -1177,7 +1174,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @matmul_kernel_dot_operand_layout(%ptr:!tt.ptr<f32> {tt.divisibility = 16 : i32},
   %a:!ttg.memdesc<128x32xf16, #shared, #smem>, %b:!ttg.memdesc<32x256xf16, #shared, #smem>) {
     %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #mma>
-    // CHECK: ldmatrix.sync.aligned.m8n8.x4.shared.b16
+    // CHECK: nvgpu.ldmatrix
     %a_mat = ttg.local_load %a : !ttg.memdesc<128x32xf16, #shared, #smem> -> tensor<128x32xf16, #dot_operand_a>
     %b_mat = ttg.local_load %b : !ttg.memdesc<32x256xf16, #shared, #smem> -> tensor<32x256xf16, #dot_operand_b>
 
@@ -1227,11 +1224,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   tt.func @matmul_tf32dot(%ptr:!tt.ptr<f32> {tt.divisibility = 16 : i32},
   %a:!ttg.memdesc<32x16xf32, #shared, #smem>, %b:!ttg.memdesc<16x32xf32, #shared, #smem>) {
     %cst = arith.constant dense<0.000000e+00> : tensor<32x32xf32, #mma>
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: ldmatrix.sync.aligned.m8n8.x4.shared.b16
+    // CHECK: nvgpu.ldmatrix
     // CHECK-SAME: (i32, i32, i32, i32)
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: ldmatrix.sync.aligned.m8n8.x4.shared.b16
+    // CHECK: nvgpu.ldmatrix
     // CHECK-SAME: (i32, i32, i32, i32)
     %a_mat = ttg.local_load %a : !ttg.memdesc<32x16xf32, #shared, #smem> -> tensor<32x16xf32, #dot_operand_a>
     %b_mat = ttg.local_load %b : !ttg.memdesc<16x32xf32, #shared, #smem> -> tensor<16x32xf32, #dot_operand_b>
@@ -1720,10 +1715,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     %f16_shared = ttg.local_alloc %f16_inp : (tensor<16x16xf16, #blocked0>) -> !ttg.memdesc<16x16xf16, #shared0, #smem>
     %i16_shared = ttg.local_alloc %i16_inp : (tensor<16x16xi16, #blocked0>) -> !ttg.memdesc<16x16xi16, #shared0, #smem>
 
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: ldmatrix.sync.aligned.m8n8.x4
-    // CHECK: llvm.inline_asm
-    // CHECK-SAME: ldmatrix.sync.aligned.m8n8.x4
+    // CHECK: nvgpu.ldmatrix
+    // CHECK: nvgpu.ldmatrix
 
     %f16_dot = ttg.local_load %f16_shared : !ttg.memdesc<16x16xf16, #shared0, #smem> -> tensor<16x16xf16, #dot_operand_a>
     %i16_dot = ttg.local_load %i16_shared : !ttg.memdesc<16x16xi16, #shared0, #smem> -> tensor<16x16xi16, #dot_operand_b>
@@ -2095,6 +2088,31 @@ tt.func @upcast_mxfp(%arg0: tensor<32x32xi8, #ttg.dot_op<{opIdx = 0, parent = #m
   // CHECK-COUNT-32: llvm.fmul
   %0 = ttg.upcast_mxfp %arg0, %arg1 fp_type = e2m1 : tensor<32x32xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>, tensor<32x2xi8, #linear> -> tensor<32x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
   tt.return
+}
+
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1, 16], threadsPerWarp = [4, 4, 2], warpsPerCTA = [8, 1, 1], order = [2, 1, 0]}>
+#linear = #ttg.linear<{register = [[0, 0], [0, 0], [0, 0], [0, 0]], lane = [[0, 0], [0, 1], [0, 2], [1, 0], [2, 0]], warp = [[4, 0], [8, 0], [16, 0]], block = []}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+
+// CHECK-LABEL: expand_dims_linear_layout
+tt.func private @expand_dims_linear_layout() -> tensor<1x4xi32, #linear> {
+  %0 = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32, #ttg.slice<{dim = 0, parent = #linear}>>
+  %1 = tt.expand_dims %0 {axis = 0 : i32} : tensor<4xi32, #ttg.slice<{dim = 0, parent = #linear}>> -> tensor<1x4xi32, #linear>
+  // CHECK: return %{{.*}} : !llvm.struct<(i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32)>
+  tt.return %1 : tensor<1x4xi32, #linear>
+}
+
+// CHECK-LABEL: reshape_linear_layout_broadcasting
+tt.func private @reshape_linear_layout_broadcasting(%arg0: tensor<32x4xbf16, #linear>) -> tensor<32x4x1xbf16, #blocked> {
+  // CHECK-COUNT-16: extractvalue
+  // CHECK-COUNT-16: insertvalue
+  %0 = tt.reshape %arg0 : tensor<32x4xbf16, #linear> -> tensor<32x4x1xbf16, #blocked>
+  tt.return %0 : tensor<32x4x1xbf16, #blocked>
 }
 
 }

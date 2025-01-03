@@ -103,7 +103,8 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     return op;
   }
 
-  assert("don't know how to predicate this op" && false);
+  op->emitError("pipeliner doesn't know how to predicate this op.");
+  llvm::report_fatal_error("Fatal pipeliner error");
   return op;
 }
 

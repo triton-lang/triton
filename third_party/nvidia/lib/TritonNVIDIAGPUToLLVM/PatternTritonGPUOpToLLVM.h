@@ -23,6 +23,11 @@ void populateConvertLayoutOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                            RewritePatternSet &patterns,
                                            PatternBenefit benefit);
 
+void populateMemoryOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                    const TargetInfo &targetInfo,
+                                    RewritePatternSet &patterns,
+                                    PatternBenefit benefit);
+
 void populateConvertLayoutOpToLLVMOptimizedPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfo &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit);

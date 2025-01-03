@@ -1441,7 +1441,7 @@ SmallVector<unsigned> basesPerDim(const LinearLayout::BasesT &namedBases,
 
   SmallVector<unsigned> ret(rank, 1);
   auto nonZero = [](auto val) { return val != 0; };
-  int nonZeroIdx = -1;
+  int nonZeroIdx = 0;
   for (const auto &basis : bases) {
     auto it = std::find_if(basis.begin(), basis.end(), nonZero);
     // Bases can have one or zero non-zero elements
@@ -1453,7 +1453,6 @@ SmallVector<unsigned> basesPerDim(const LinearLayout::BasesT &namedBases,
     } else if (!skipBroadcast) {
       // If we've seen a non-zero basis, we double the size of the previous dim
       // This is just needed to count the CTAsPerCGA
-      assert(nonZeroIdx != -1);
       ret[nonZeroIdx] *= 2;
     }
   }
@@ -1598,12 +1597,14 @@ LinearEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 
 SmallVector<unsigned>
 LinearEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type) const {
-  // We can relax this assert by calling toLinearLayout rather than
-  // getLinearLayout
-  SmallVector<int32_t> shapeVec(shape.begin(), shape.end());
-  assert(shapeVec == llvm::to_vector(getLinearLayout().getOutDimSizes()));
-  auto ll = getLinearLayout();
-  return basesPerDim(ll, StringAttr::get(getContext(), "register"));
+  // When broadcasting the layout the shape changes, otherwise the shape is
+  // the same as the shape of the tensor
+  // We can either have BroadcastOp with SameOperandsAndResultEncoding, or keep
+  // the invariant that the shape of the LL is that of the tensor
+  // We choose the former for BC
+  auto ll = *toLinearLayout(shape);
+  return basesPerDim(ll, StringAttr::get(getContext(), "register"),
+                     /*skipBroadcast=*/false);
 }
 
 // Start of Selection
@@ -1828,6 +1829,7 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
     return {};
 
   unsigned version = 0;
+  bool isTransposed = false;
   SmallVector<unsigned> warpsPerCTA;
   std::optional<SmallVector<unsigned>> CTAsPerCGA;
   std::optional<SmallVector<unsigned>> CTASplitNum;
@@ -1836,6 +1838,10 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
   for (const NamedAttribute &attr : dict) {
     if (attr.getName() == "version") {
       if (parseUInt(parser, attr, version, "version").failed())
+        return {};
+    }
+    if (attr.getName() == "isTranspose") {
+      if (parseBool(parser, attr, isTransposed, "isTranspose").failed())
         return {};
     }
     if (attr.getName() == "warpsPerCTA") {
@@ -1864,17 +1870,35 @@ Attribute AMDWmmaEncodingAttr::parse(AsmParser &parser, Type type) {
   if (!CTALayout.has_value())
     return {};
 
-  return parser.getChecked<AMDWmmaEncodingAttr>(parser.getContext(), version,
-                                                warpsPerCTA, *CTALayout);
+  return parser.getChecked<AMDWmmaEncodingAttr>(
+      parser.getContext(), version, isTransposed, warpsPerCTA, *CTALayout);
 }
 
 void AMDWmmaEncodingAttr::print(AsmPrinter &printer) const {
   printer << "<{"
-          << "version = " << getVersion() << ", warpsPerCTA = ["
+          << "version = " << getVersion()
+          << ", isTranspose = " << getIsTransposed() << ", warpsPerCTA = ["
           << ArrayRef(getWarpsPerCTA()) << "]";
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getWarpsPerCTA().size());
   printer << "}>";
+}
+
+LogicalResult
+AMDWmmaEncodingAttr::verify(function_ref<mlir::InFlightDiagnostic()> emitError,
+                            unsigned version, bool isTransposed,
+                            llvm::ArrayRef<unsigned int> warpsPerCTA,
+                            mlir::triton::gpu::CTALayoutAttr) {
+  if (version != 1 && version != 2) {
+    return emitError() << "WMMA version must be in the [1, 2] range";
+  }
+  // Transposed layout is needed for bypassing LDS between multiple dots.
+  // Version 1 tt.dot results and tt.dot operand layouts are different,
+  // therefore we test and support transposed only for version 2.
+  if (version != 2 && isTransposed) {
+    return emitError() << "Transposed WMMA is supported only for version 2";
+  }
+  return success();
 }
 
 //===----------------------------------------------------------------------===//
@@ -2082,6 +2106,13 @@ AMDMfmaEncodingAttr::getRepOrderForOperand(int opIdx) const {
   return getOrderForDotOperand(opIdx, rank, /*kMajor*/ true);
 }
 
+SmallVector<unsigned>
+AMDMfmaEncodingAttr::getThreadsPerWarpForOperand(int opIdx) const {
+  llvm::report_fatal_error(
+      "getThreadsPerWarpForOperand not implemented for AMDMfmaEncodingAttr");
+  return {};
+}
+
 SmallVector<int64_t>
 AMDMfmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> operandShape,
                                       int kWidth, int opIdx) const {
@@ -2143,6 +2174,13 @@ AMDWmmaEncodingAttr::getRepOrderForOperand(int opIdx) const {
   return getOrderForDotOperand(opIdx, rank, /*kMajor*/ true);
 }
 
+SmallVector<unsigned>
+AMDWmmaEncodingAttr::getThreadsPerWarpForOperand(int opIdx) const {
+  llvm::report_fatal_error("getThreadsPerWarpForOperand not implemented for "
+                           "AMDWmmaEncodingAttr");
+  return {};
+}
+
 SmallVector<unsigned> AMDWmmaEncodingAttr::getCTAsPerCGA() const {
   return SmallVector<unsigned>(getCTALayout().getCTAsPerCGA());
 }
@@ -2159,7 +2197,10 @@ SmallVector<unsigned> AMDWmmaEncodingAttr::getWarpOrder() const {
   return ::getOrder(*this);
 }
 SmallVector<unsigned> AMDWmmaEncodingAttr::getThreadOrder() const {
-  return ::getOrder(*this);
+  auto order = ::getOrder(*this);
+  if (getIsTransposed())
+    std::swap(order[0], order[1]);
+  return order;
 }
 SmallVector<unsigned> AMDWmmaEncodingAttr::getThreadsPerWarp() const {
   auto rank = getWarpsPerCTA().size();
@@ -2173,8 +2214,13 @@ SmallVector<unsigned> AMDWmmaEncodingAttr::getThreadsPerWarp() const {
 SmallVector<unsigned> AMDWmmaEncodingAttr::getSizePerThread() const {
   auto rank = getWarpsPerCTA().size();
   SmallVector<unsigned> sizePerThread(rank, 1);
-  sizePerThread[rank - 2] = 8;
-  sizePerThread[rank - 1] = 1;
+  if (getIsTransposed()) {
+    sizePerThread[rank - 2] = 1;
+    sizePerThread[rank - 1] = 8;
+  } else {
+    sizePerThread[rank - 2] = 8;
+    sizePerThread[rank - 1] = 1;
+  }
   return sizePerThread;
 }
 SmallVector<unsigned>
@@ -2320,6 +2366,15 @@ NvidiaMmaEncodingAttr::getRepOrderForOperand(int opIdx) const {
   return getOrderForDotOperand(opIdx, rank, /*kMajor*/ true);
 }
 
+SmallVector<unsigned>
+NvidiaMmaEncodingAttr::getThreadsPerWarpForOperand(int opIdx) const {
+  auto threadsPerWarp = getThreadsPerWarp();
+  auto rank = threadsPerWarp.size();
+  if (opIdx == 1)
+    std::swap(threadsPerWarp[rank - 2], threadsPerWarp[rank - 1]);
+  return threadsPerWarp;
+}
+
 SmallVector<int64_t>
 NvidiaMmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> shape, int bitwidth,
                                         int kWidth, int opIdx) const {
@@ -2388,16 +2443,12 @@ SmallVector<unsigned> DotOperandEncodingAttr::getRepOrder() const {
 }
 
 SmallVector<unsigned> DotOperandEncodingAttr::getThreadsPerWarp() const {
-  auto parent = getParent();
-  if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent)) {
-    auto threadsPerWarp = mma.getThreadsPerWarp();
-    auto rank = threadsPerWarp.size();
-    if (getOpIdx() == 1)
-      std::swap(threadsPerWarp[rank - 2], threadsPerWarp[rank - 1]);
-    return threadsPerWarp;
+  if (auto mma = mlir::dyn_cast<MmaEncodingTrait>(getParent())) {
+    return mma.getThreadsPerWarpForOperand(getOpIdx());
   }
   llvm::report_fatal_error(
       "getThreadsPerWarp not implemented for DotOperandEncodingAttr");
+  return {};
 }
 SmallVector<unsigned> DotOperandEncodingAttr::getSizePerThread() const {
   auto parentLayout = getParent();
@@ -2623,8 +2674,8 @@ struct TritonGPUInferLayoutInterface
   // contains elements [a,b,c,d] before the reshape, it contains those same
   // elements after the reshape, they're just "renamed".
   //
-  // A dst encoding that satisfies this property does not exist for all inputs.
-  // Here are some positive and negative examples.
+  // Using legacy layouts, a dst encoding that satisfies this property may not
+  // exist.  Here are some positive and negative examples.
   //
   //   - NOT OK: 4x4 order=[0,1] -> 16.  Reshape merges elements so
   //     dim 1 is the fastest-changing in the dst, but the src has the opposite
@@ -2638,17 +2689,19 @@ struct TritonGPUInferLayoutInterface
   //   - OK: 32x4 sizePerThread=[4,4] -> 128.  dst with sizePerThread=[16] will
   //     contain the same elements as before.
   //
+  // With linear layouts, we can always find a dst encoding that satisfies
+  // this property. See inferReshapeOpEncoding.
+  //
   // Users of this function require that it is symmetrical: if
   // (srcShape,srcEnc,dstShape) => dstEnc, then (dstShape,dstEnc,srcShape) =>
   // srcEnc.
-  LogicalResult
-  inferReshapeOpNoReorderEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
-                                  ArrayRef<int64_t> dstShape, Attribute &dstEnc,
-                                  std::optional<Location> loc) const override {
+  LogicalResult inferReshapeOpLegacyEncoding(ArrayRef<int64_t> srcShape,
+                                             Attribute srcEnc,
+                                             ArrayRef<int64_t> dstShape,
+                                             Attribute &dstEnc) const {
     auto src = mlir::dyn_cast<BlockedEncodingAttr>(srcEnc);
     if (!src) {
-      return emitOptionalError(
-          loc, "Non-reordering reshape only supports BlockedEncoding");
+      return failure();
     }
 
     // Nop reshape; we can always infer an encoding.
@@ -2681,9 +2734,7 @@ struct TritonGPUInferLayoutInterface
     // to handle CTASplitNum.
     if (!all_of(src.getCTAsPerCGA(), [](int32_t x) { return x == 1; }) ||
         !all_of(src.getCTASplitNum(), [](int32_t x) { return x == 1; })) {
-      return emitOptionalError(
-          loc, "Non-reordering reshape does not currently support multi-CTA "
-               "layouts other than the default layout.");
+      return failure();
     }
 
     // Cowardly refuse to handle encodings where shape[dim] is not divisible by
@@ -2693,12 +2744,7 @@ struct TritonGPUInferLayoutInterface
       for (int dim = 0; dim < srcShape.size(); dim++) {
         if (srcShape[dim] >= subblock[dim] &&
             srcShape[dim] % subblock[dim] != 0) {
-          return emitOptionalError(loc,
-                                   "Can't do a non-reordering reshape because "
-                                   "the size of dimension ",
-                                   dim, " (", srcShape[dim], ")",
-                                   " is not divisible by ", name, "[", dim, "]",
-                                   " = ", subblock[dim]);
+          return failure();
         }
       }
       return success();
@@ -2723,11 +2769,7 @@ struct TritonGPUInferLayoutInterface
     // physical order, with `a` being the most major.
     for (const auto &[srcDims, dstDims] : decomp) {
       if (!isConsecutive(to_vector(reverse(gather(srcInvOrder, srcDims))))) {
-        return emitOptionalError(loc,
-                                 "Cannot do a non-reordering reshape given "
-                                 "this src encoding order.  Dimensions [",
-                                 join(srcDims),
-                                 "] must be physically consecutive.");
+        return failure();
       }
     }
 
@@ -2774,11 +2816,7 @@ struct TritonGPUInferLayoutInterface
           // Check that more-minor dims all have 1 in shapeRemaining.
           for (int j = i + 1; j < srcDims.size(); j++) {
             if (shapeRemaining[j] != 1) {
-              return emitOptionalError(
-                  loc,
-                  "Invalid src encoding for non-reordering reshape.  Must use "
-                  "up sizePerThread / threadsPerWarp / warpsPerCTA for "
-                  "more-minor dimensions before more major-dims can use them.");
+              return failure();
             }
           }
 
@@ -2793,13 +2831,7 @@ struct TritonGPUInferLayoutInterface
           // only if we're the most-major dimension of the chunk and in all
           // future chunks, only this most-major dim has a non-1 size.
           if (shapeRemaining[i] == 0 && i != 0) {
-            return emitOptionalError(
-                loc,
-                "Invalid src encoding for non-reordering reshape.  Block "
-                "size in dimension ",
-                dim,
-                " is larger than the shape that dimension, but this is only "
-                "allowed for the most-major dimension of a reshape chunk");
+            return failure();
           }
         }
         return success();
@@ -2886,6 +2918,65 @@ struct TritonGPUInferLayoutInterface
                                       dstThreadsPerWarp, dstWarpsPerCTA,
                                       dstOrder, CTALayout);
 
+    return success();
+  }
+
+  LogicalResult verifyLayoutsAreEqual(ArrayRef<int64_t> shape,
+                                      Attribute expected, Attribute got,
+                                      Location loc) const override {
+    if (expected == got) {
+      return success();
+    }
+    // Check whether the encodings are structurally the same.
+    auto expectedLL = triton::gpu::toLinearLayout(shape, expected);
+    auto gotLL = triton::gpu::toLinearLayout(shape, got);
+    if (expectedLL != gotLL) {
+      return emitError(loc, "Expected result encoding ")
+             << expected << " but was " << got;
+    }
+    return success();
+  }
+
+  LogicalResult
+  inferReshapeOpEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
+                         ArrayRef<int64_t> dstShape, Attribute &dstEnc,
+                         std::optional<Location> loc) const override {
+    auto result =
+        inferReshapeOpLegacyEncoding(srcShape, srcEnc, dstShape, dstEnc);
+    if (succeeded(result)) {
+      return result;
+    }
+
+    // If the legacy encoding failed use LinearLayouts.
+    // Once LinearLayouts are more widely used, we can remove
+    // inferReshapeOpLegacyEncoding and simply use LLs.
+    auto *ctx = getContext();
+    auto src = triton::gpu::toLinearLayout(srcShape, srcEnc);
+    if (!src) {
+      return emitOptionalError(loc,
+                               "src encoding does not support linear layout");
+    }
+
+    if (product(srcShape) != product(dstShape)) {
+      return emitOptionalError(loc, "numel of dst shape does not match "
+                                    "numel of src shape");
+    }
+
+    auto newRank = dstShape.size();
+    SmallVector<std::pair<StringAttr, int32_t>> newOutDims;
+    for (auto [dim, size] :
+         llvm::zip(standardOutDimNames(ctx, newRank), dstShape)) {
+      newOutDims.emplace_back(dim, size);
+    }
+    auto srcOutDims = llvm::to_vector(src->getOutDimNames());
+    // reshapeOp assumes minor-to-major, so we need to transpose the out dims
+    // before the reshape
+    std::reverse(srcOutDims.begin(), srcOutDims.end());
+    std::reverse(newOutDims.begin(), newOutDims.end());
+    auto dst = src->transposeOuts(srcOutDims)
+                   .reshapeOuts(newOutDims)
+                   .transposeOuts(standardOutDimNames(ctx, newRank));
+    dstEnc = LinearEncodingAttr::get(ctx, dst);
     return success();
   }
 

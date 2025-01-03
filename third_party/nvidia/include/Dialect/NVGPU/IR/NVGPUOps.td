@@ -43,12 +43,10 @@ def NVGPU_WGMMACommitGroupOp : NVGPU_Op<"wgmma_commit_group", []> {
   let assemblyFormat = "attr-dict";
 }
 
-def NVGPU_WGMMAWaitGroupOp : NVGPU_Op<"wgmma_wait_group",
-[DeclareOpInterfaceMethods<InferTypeOpInterface>,
- AllTypesMatch<["input", "output"]>]> {
+def NVGPU_WGMMAWaitGroupOp : NVGPU_Op<"wgmma_wait_group", [DeclareOpInterfaceMethods<InferTypeOpInterface>,
+                                                           AllTypesMatch<["input", "output"]>]> {
   let arguments = (ins LLVM_AnyStruct:$input, I32Attr:$pendings);
   let results = (outs LLVM_AnyStruct:$output);
-  let assemblyFormat = "attr-dict";
   let assemblyFormat = "$input attr-dict `:` type($input)";
 }
 
@@ -103,8 +101,21 @@ def NVGPU_ClusterWaitOp : NVGPU_Op<"cluster_wait", []> {
 }
 
 def NVGPU_StoreMatrixOp : NVGPU_Op<"stmatrix", [MemoryEffects<[MemWrite]>]> {
-  let arguments = (ins LLVM_PointerShared:$addr, Variadic<I32>:$datas);
+  let arguments = (
+    ins LLVM_PointerShared:$addr,
+    Variadic<I32>:$vals,
+    UnitAttr:$trans
+  );
   let assemblyFormat = "operands attr-dict `:` type(operands)";
+}
+
+def NVGPU_LoadMatrixOp : NVGPU_Op<"ldmatrix", [MemoryEffects<[MemRead]>]> {
+  let arguments = (
+    ins LLVM_PointerShared:$addr,
+    UnitAttr:$trans
+  );
+  let results = (outs LLVM_AnyStruct:$result);
+  let assemblyFormat = "$addr attr-dict `:` functional-type($addr, $result)";
 }
 
 def NVGPU_ClusterCTAIdOp : NVGPU_Op<"cluster_id", [Pure]> {

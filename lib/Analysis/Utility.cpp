@@ -219,14 +219,13 @@ bool ReduceOpHelper::isSupportedLayout() {
   }
 
   auto srcLayout = getSrcLayout();
-  if (isa<BlockedEncodingAttr>(srcLayout)) {
+  if (isa<BlockedEncodingAttr, LinearEncodingAttr, SliceEncodingAttr>(
+          srcLayout)) {
     return true;
   }
+
   if (auto mmaLayout = dyn_cast<MmaEncodingTrait>(srcLayout)) {
     return mmaLayout.supportReduction();
-  }
-  if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(srcLayout)) {
-    return true;
   }
   return false;
 }
@@ -714,8 +713,7 @@ bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
   auto ans = mmaLayout.getVersionMajor() == 3 &&
              dotOperandLayout.getOpIdx() == 0 &&
              mmaLayout.getWarpsPerCTA()[1] == 1 &&
-             !cvtNeedsSharedMemory(parentTy, srcTy) &&
-             (elementTypeSize == 16 || elementTypeSize == 8) &&
+             !cvtNeedsSharedMemory(parentTy, srcTy) && elementTypeSize == 8 &&
              dotOperandLayout.getKWidth() == 32 / elementTypeSize;
   return ans;
 }
