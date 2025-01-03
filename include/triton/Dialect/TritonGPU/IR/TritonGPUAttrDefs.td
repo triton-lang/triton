@@ -294,7 +294,7 @@ compared to 1*64 when the hasLeadingOffset is false.
             int perPhase = std::max(1, elemsPerOneBanksRow / innerDimLength);
             // vecSize is set to kWidth of the dotop layout
             int vecSize = dotOpEnc.getKWidth();
-            int maxPhase = std::min(SIMDWidth / perPhase, innerDimLength / vecSize);
+            int maxPhase = std::max(std::min(SIMDWidth / perPhase, innerDimLength / vecSize), 1);
 
             // TODO (zhanglx): figure out better parameters for mfma4
             if (mfmaEnc.getMDim() == 4)

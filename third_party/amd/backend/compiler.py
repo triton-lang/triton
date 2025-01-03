@@ -20,15 +20,12 @@ def min_dot_size(target: GPUTarget):
     def get_gfx94_limits(lhsType, rhsType):
         if is_fma_supported(lhsType.scalar, rhsType.scalar):
             return (1, 1, 1)
-        # CDNA 3.0 supports k==8 in all mfma variants except for int8
-        # (where the smallest `k` supported is 16)
-        return (16, 16, 16) if (lhsType.scalar.is_int8() or rhsType.scalar.is_int8()) else (16, 16, 8)
+        return (16, 16, 1)
 
     def get_gfx9_limits(lhsType, rhsType):
         if is_fma_supported(lhsType.scalar, rhsType.scalar):
             return (1, 1, 1)
-        # CDNA 2.0 always supports `k==8`
-        return (16, 16, 8)
+        return (16, 16, 1)
 
     arch_str = target.arch
     if "gfx94" in arch_str:

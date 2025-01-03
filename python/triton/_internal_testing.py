@@ -48,12 +48,16 @@ def is_hip():
 
 def is_hip_mi200():
     target = get_current_target()
-    return target.backend == 'hip' and target.arch == 'gfx90a'
+    if target is None or target.backend != 'hip':
+        return False
+    return target.arch == 'gfx90a'
 
 
 def is_hip_mi300():
     target = get_current_target()
-    return target.backend == 'hip' and target.arch in ('gfx940', 'gfx941', 'gfx942')
+    if target is None or target.backend != 'hip':
+        return False
+    return target.arch in ('gfx940', 'gfx941', 'gfx942')
 
 
 def is_hip_cdna():
