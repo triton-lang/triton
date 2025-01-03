@@ -178,8 +178,7 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
 
   When enabling the address sanitizer it is recommended to disable various memory caching strategies
   both within the ROCm stack and PyTorch. This will give the address sanitizer the best chance at finding the
-  memory fault where it originates. This can be done through the HSA_DISABLE_FRAGMENT_ALLOCATOR, AMD_PYTORCH_NO_CUDA_MEMORY_CACHING,
-  and PYTORCH_NO_HIP_MEMORY_CACHING environment variables.
+  memory fault where it originates. See this [test](https://github.com/triton-lang/triton/blob/main/python/test/unit/test_address_sanitizer.py) for more details.
 
 - `USE_IR_LOC={ttir,ttgir}` reparses the IR such that the location information
   will be the line number of the IR file with that particular extension,
