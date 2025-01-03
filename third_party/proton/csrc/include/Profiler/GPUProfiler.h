@@ -45,6 +45,8 @@ protected:
   // OpInterface
   void startOp(const Scope &scope) override {
     this->correlation.pushExternId(scope.scopeId);
+    for (auto data : getDataSet())
+      data->addOp(scope.scopeId, scope.name);
   }
   void stopOp(const Scope &scope) override { this->correlation.popExternId(); }
 
@@ -55,32 +57,22 @@ protected:
 
   struct ThreadState {
     ConcreteProfilerT &profiler;
+    size_t scopeId{Scope::DummyScopeId};
 
     ThreadState(ConcreteProfilerT &profiler) : profiler(profiler) {}
 
-    size_t record() {
-      auto scopeId = Scope::getNewScopeId();
-      if (profiler.isOpInProgress())
-        return scopeId;
-      std::set<Data *> dataSet = profiler.getDataSet();
-      for (auto data : dataSet)
-        data->addScope(scopeId);
-      profiler.correlation.apiExternIds.insert(scopeId);
-      return scopeId;
-    }
-
-    void enterOp(size_t scopeId) {
+    void enterOp() {
       if (profiler.isOpInProgress())
         return;
-      profiler.correlation.pushExternId(scopeId);
-      profiler.setOpInProgress(true);
+      scopeId = Scope::getNewScopeId();
+      profiler.enterOp(Scope(scopeId));
+      profiler.correlation.apiExternIds.insert(scopeId);
     }
 
     void exitOp() {
       if (!profiler.isOpInProgress())
         return;
-      profiler.correlation.popExternId();
-      profiler.setOpInProgress(false);
+      profiler.exitOp(Scope(scopeId));
     }
   };
 

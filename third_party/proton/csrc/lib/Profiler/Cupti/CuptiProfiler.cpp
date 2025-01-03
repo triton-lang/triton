@@ -61,7 +61,7 @@ processActivityKernel(CuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
       auto scopeId = parentId;
       if (apiExternIds.contain(scopeId)) {
         // It's triggered by a CUDA op but not triton op
-        scopeId = data->addScope(parentId, kernel->name);
+        scopeId = data->addOp(parentId, kernel->name);
       }
       data->addMetric(scopeId, convertActivityToMetric(activity));
     }
@@ -75,7 +75,7 @@ processActivityKernel(CuptiProfiler::CorrIdToExternIdMap &corrIdToExternId,
     // --- CUPTI thread ---
     // 3. corrId -> numKernels
     for (auto *data : dataSet) {
-      auto externId = data->addScope(parentId, kernel->name);
+      auto externId = data->addOp(parentId, kernel->name);
       data->addMetric(externId, convertActivityToMetric(activity));
     }
   }
@@ -239,7 +239,7 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
                                                        size_t size,
                                                        size_t validSize) {
   CuptiProfiler &profiler = threadState.profiler;
-  auto &dataSet = profiler.dataSet;
+  auto dataSet = profiler.getDataSet();
   uint32_t maxCorrelationId = 0;
   CUptiResult status;
   CUpti_Activity *activity = nullptr;
@@ -323,8 +323,7 @@ void CuptiProfiler::CuptiProfilerPimpl::callbackFn(void *userData,
         static_cast<const CUpti_CallbackData *>(cbData);
     auto *pImpl = dynamic_cast<CuptiProfilerPimpl *>(profiler.pImpl.get());
     if (callbackData->callbackSite == CUPTI_API_ENTER) {
-      auto scopeId = threadState.record();
-      threadState.enterOp(scopeId);
+      threadState.enterOp();
       size_t numInstances = 1;
       if (cbId == CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch ||
           cbId == CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch_ptsz) {
@@ -396,9 +395,6 @@ void CuptiProfiler::CuptiProfilerPimpl::doFlush() {
   if (cuContext) {
     cuda::ctxSynchronize<true>();
   }
-  if (profiler.isPCSamplingEnabled()) {
-    pcSampling.finalize(cuContext);
-  }
   profiler.correlation.flush(
       /*maxRetries=*/100, /*sleepMs=*/10,
       /*flush=*/[]() {
@@ -413,6 +409,11 @@ void CuptiProfiler::CuptiProfilerPimpl::doFlush() {
 
 void CuptiProfiler::CuptiProfilerPimpl::doStop() {
   if (profiler.isPCSamplingEnabled()) {
+    profiler.disablePCSampling();
+    CUcontext cuContext = nullptr;
+    cuda::ctxGetCurrent<false>(&cuContext);
+    if (cuContext)
+      pcSampling.finalize(cuContext);
     setResourceCallbacks(subscriber, /*enable=*/false);
     cupti::activityDisable<true>(CUPTI_ACTIVITY_KIND_KERNEL);
   } else {

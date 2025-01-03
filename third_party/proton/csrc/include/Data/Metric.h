@@ -1,6 +1,7 @@
 #ifndef PROTON_DATA_METRIC_H_
 #define PROTON_DATA_METRIC_H_
 
+#include "Utility/String.h"
 #include "Utility/Traits.h"
 #include <variant>
 #include <vector>
@@ -15,8 +16,12 @@ using MetricValueType = std::variant<uint64_t, int64_t, double, std::string>;
 /// `Metric` is the base class for all metrics.
 /// Each `Metric` has a name and a set of values.
 /// Each value could be of type `uint64_t`, `int64_t`, or `double`,
-/// Each value also has its own name and is either aggregable or not.
-/// Currently the only aggregation operation is `addition`.
+/// Each value can be inclusive (inc), exclusive (exc), or a property (pty).
+/// Inclusive values are aggregated by addition and can be propagated to the
+/// parent.
+/// Exclusive values can be aggregated at a context but cannot be
+/// propagated to the parent.
+/// Property values are not aggregated and cannot be propagated to the parent.
 class Metric {
 public:
   Metric(MetricKind kind, size_t size) : kind(kind), values(size) {}
@@ -27,7 +32,9 @@ public:
 
   virtual const std::string getValueName(int valueId) const = 0;
 
-  virtual bool isAggregable(int valueId) const = 0;
+  virtual bool isProperty(int valueId) const = 0;
+
+  virtual bool isExclusive(int valueId) const = 0;
 
   std::vector<MetricValueType> getValues() const { return values; }
 
@@ -44,10 +51,10 @@ public:
             using CurrentType = std::decay_t<decltype(currentValue)>;
             using ValueType = std::decay_t<decltype(otherValue)>;
             if constexpr (std::is_same_v<ValueType, CurrentType>) {
-              if (isAggregable(valueId)) {
-                currentValue += otherValue;
-              } else {
+              if (isProperty(valueId)) {
                 currentValue = otherValue;
+              } else {
+                currentValue += otherValue;
               }
             }
           },
@@ -81,15 +88,23 @@ protected:
 
 /// A flexible metric is provided by users but not the backend profiling API.
 /// Each flexible metric has a single value.
-/// When aggregable = true, the value can be aggregated over time.
-/// When aggregable = false, the value is a property that doesn't change over
-/// time.
 class FlexibleMetric : public Metric {
 public:
   FlexibleMetric(const std::string &valueName,
-                 std::variant<MetricValueType> value, bool aggregable)
-      : valueName(valueName), Metric(MetricKind::Flexible, 1),
-        aggregable(aggregable) {
+                 std::variant<MetricValueType> value)
+      : Metric(MetricKind::Flexible, 1), valueName(valueName) {
+    this->exclusive = endWith(valueName, "(exc)");
+    this->property = endWith(valueName, "(pty)");
+    this->valueName = trim(replace(this->valueName, "(exc)", ""));
+    this->valueName = trim(replace(this->valueName, "(pty)", ""));
+    std::visit([&](auto &&v) { this->values[0] = v; }, value);
+  }
+
+  FlexibleMetric(const std::string &valueName,
+                 std::variant<MetricValueType> value, bool property,
+                 bool exclusive)
+      : Metric(MetricKind::Flexible, 1), valueName(valueName),
+        property(property), exclusive(exclusive) {
     std::visit([&](auto &&v) { this->values[0] = v; }, value);
   }
 
@@ -99,11 +114,14 @@ public:
     return valueName;
   }
 
-  bool isAggregable(int valueId) const override { return aggregable; }
+  bool isProperty(int valueId) const override { return property; }
+
+  bool isExclusive(int valueId) const override { return exclusive; }
 
 private:
-  const bool aggregable;
-  const std::string valueName;
+  bool property{};
+  bool exclusive{};
+  std::string valueName;
 };
 
 class KernelMetric : public Metric {
@@ -137,11 +155,15 @@ public:
     return VALUE_NAMES[valueId];
   }
 
-  virtual bool isAggregable(int valueId) const { return AGGREGABLE[valueId]; }
+  virtual bool isProperty(int valueId) const { return PROPERTY[valueId]; }
+
+  virtual bool isExclusive(int valueId) const { return EXCLUSIVE[valueId]; }
 
 private:
-  const static inline bool AGGREGABLE[kernelMetricKind::Count] = {
-      false, false, true, true, false, false};
+  const static inline bool PROPERTY[kernelMetricKind::Count] = {
+      true, true, false, false, true, true};
+  const static inline bool EXCLUSIVE[kernelMetricKind::Count] = {
+      false, false, false, false, true, true};
   const static inline std::string VALUE_NAMES[kernelMetricKind::Count] = {
       "start_time (ns)", "end_time (ns)", "count",
       "time (ns)",       "device_id",     "device_type",
@@ -191,7 +213,9 @@ public:
     return VALUE_NAMES[valueId];
   }
 
-  virtual bool isAggregable(int valueId) const { return true; }
+  virtual bool isProperty(int valueId) const { return false; }
+
+  virtual bool isExclusive(int valueId) const { return false; }
 
 private:
   const static inline std::string VALUE_NAMES[PCSamplingMetricKind::Count] = {
