@@ -117,6 +117,9 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
 }
 
 unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
+  if (op->hasAttr("allocation.size")) {
+    return op->getAttrOfType<mlir::IntegerAttr>("allocation.size").getInt();
+  }
   if (auto reduceOp = dyn_cast<ReduceOp>(op)) {
     ReduceOpHelper helper(reduceOp);
     return helper.getScratchSizeInBytes();

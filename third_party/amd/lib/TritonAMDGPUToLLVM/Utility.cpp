@@ -358,4 +358,46 @@ void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
   LLVM::createLLVMCallOp(rewriter, loc, funcOp, ValueRange({ptr, val, pred}));
 }
 
+bool isRuntimeLdsReductionforAtomicApplicable(triton::AtomicRMWOp atomOp,
+                                              ISAFamily isaFamily) {
+  if (isaFamily != triton::AMD::ISAFamily::CDNA3)
+    return false;
+  Value res = atomOp.getResult();
+  Value value = atomOp.getVal();
+  Type resType = res.getType();
+  auto tensorTy = dyn_cast<RankedTensorType>(value.getType());
+  Type elemTy = tensorTy ? tensorTy.getElementType() : value.getType();
+  size_t elemSize = elemTy.getIntOrFloatBitWidth();
+  auto mask = atomOp.getMask();
+  bool hasMask = false;
+  if (mask) {
+    auto constOp = mask.getDefiningOp<arith::ConstantOp>();
+    if (constOp) {
+      if (auto denseAttr =
+              dyn_cast<DenseIntElementsAttr>(constOp.getValueAttr())) {
+        hasMask =
+            !(denseAttr.isSplat() && denseAttr.getSplatValue<APInt>().isOne());
+      } else {
+        hasMask = isConstantZero(mask);
+      }
+    } else {
+      hasMask = true;
+    }
+  }
+  // Atomic reduction in LDS leads to some overhead for corner cases, so we
+  // need an option to enable this optimization.
+  // Сonditions for disabling optimization:
+  // - Scalar cases do not need such analysis;
+  // - XCHG operation depends on the execution order, which could be corrupted
+  //   after optimization, disable it for now;
+  // - Return value for each thread is also sensetive to the execution order;
+  // - Only power of 2 number of threads with contigious lanes numbering can be
+  //   supported.
+
+  // TODO: support data types less than 32 bits
+  return isa<RankedTensorType>(resType) &&
+         atomOp.getAtomicRmwOp() != triton::RMWOp::XCHG && res.use_empty() &&
+         !hasMask && elemSize >= 32;
+}
+
 } // namespace mlir::LLVM::AMD

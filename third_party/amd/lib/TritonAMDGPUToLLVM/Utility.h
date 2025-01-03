@@ -47,6 +47,10 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
 void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
              Value pred, int64_t alignmentBytes = 0,
              triton::CacheModifier cm = triton::CacheModifier::NONE);
+
+// Checks if runtime LDS reduction for atomic applicable or not
+bool isRuntimeLdsReductionforAtomicApplicable(
+    triton::AtomicRMWOp atomOp, mlir::triton::AMD::ISAFamily isaFamily);
 } // namespace mlir::LLVM::AMD
 
 #endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_UTILITY_H_

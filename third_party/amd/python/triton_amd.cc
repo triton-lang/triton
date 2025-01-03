@@ -58,6 +58,10 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
     pm.addPass(
         mlir::triton::AMD::createDecomposeUnsupportedConversionsPass(arch));
   });
+  m.def("add_set_specific_allocation_size", [](mlir::PassManager &pm,
+                                               const std::string &arch) {
+    pm.addPass(mlir::triton::AMD::createSetSpecificAllocationSizePass(arch));
+  });
   ADD_PASS_WRAPPER_2("add_optimize_lds_usage",
                      mlir::triton::AMD::createOptimizeLDSUsagePass,
                      const std::string &, int32_t);

@@ -209,3 +209,40 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+#blocked5 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: atomic_runtime_lds_reduction
+  tt.func @atomic_runtime_lds_reduction(%arg0 : tensor<64x!tt.ptr<f32>, #blocked5>, %arg2 : tensor<64xf32, #blocked5>) {
+    // COM: Check bitonic sort for 64 lanes:
+    // COM: Each iteration should contain 4 intra-wave moves (2 for key and 2 for value).
+    // COM: First 10(1+2+3+4) iterations are done via dpp instructions. 1 instruction corresponds to one move.
+    // COM: 40 = (2 * 1 + 2 * 1) * 10
+    // CHECK-COUNT-40: rocdl.update.dpp
+
+    // COM: Last 11(5+6) iterations are done via ds_permute instructions.
+    // COM: As far as ds_permute operates with 32bit values, address (as key) is moved via 2 instructions, value - via 1.
+    // COM: 66 = (2 * 2 + 2 * 1) * 11
+    // CHECK-COUNT-66: rocdl.ds_bpermute
+
+    // COM: Use 2 dpp moves to check neighbours and determine self role.
+    // CHECK-COUNT-2: rocdl.update.dpp
+
+    // COM: Determine self group with exec mask.
+    // CHECK: llvm.amdgcn.ballot
+
+    // COM: TODO: check CFG as well.
+    // COM: Instruction for exclusive access.
+    // CHECK: llvm.atomicrmw {{.*}} !llvm.ptr<1>
+
+    // COM: Instruction for collecting partial sum in LDS.
+    // CHECK: llvm.atomicrmw {{.*}} !llvm.ptr<3>
+
+    // COM: Global atomic invokation by a single thread per each group.
+    // CHECK: llvm.atomicrmw {{.*}} !llvm.ptr<1>
+    %0 = tt.atomic_rmw fadd, relaxed, gpu, %arg0, %arg2 {allocation.offset = 0 : i32} : (tensor<64x!tt.ptr<f32>, #blocked5>, tensor<64xf32, #blocked5>) -> tensor<64xf32, #blocked5>
+    tt.return
+  }
+}
