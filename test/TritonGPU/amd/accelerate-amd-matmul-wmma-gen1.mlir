@@ -133,14 +133,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
    // CHECK-SAME: %[[DOT3_ARG_B:.+]]: tensor<64x32xi16, #ttg.dot_op<{opIdx = 1, parent = #[[DOT_OP_PARENT]]}>>
    %1: tensor<64x32xi16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>,
    %2: tensor<128x32x!tt.ptr<i16>, #blocked>) {
-    // CHECK: %[[DOT3_ARG_C:.+]] = arith.constant dense<0> : tensor<128x32xi16, #[[DOT_OP_PARENT]]>
+    // CHECK: %[[DOT3_OP_C:.+]] = arith.constant dense<0.000000e+00> : tensor<128x32xf32, #[[DOT_OP_PARENT]]>
     %3 = arith.constant dense<0> : tensor<128x32xi16, #blocked>
     // CHECK: %[[DOT3_OP_A:.+]] = arith.sitofp %[[DOT3_ARG_A]]
     // CHECK-SAME: to tensor<128x64xf32, #ttg.dot_op<{opIdx = 0, parent = #[[DOT_OP_PARENT]]
     // CHECK: %[[DOT3_OP_B:.+]] = arith.sitofp %[[DOT3_ARG_B]]
     // CHECK-SAME: to tensor<64x32xf32, #ttg.dot_op<{opIdx = 1, parent = #[[DOT_OP_PARENT]]
-    // CHECK: %[[DOT3_OP_C:.+]] = arith.sitofp %[[DOT3_ARG_C]]
-    // CHECK-SAME: to tensor<128x32xf32, #[[DOT_OP_PARENT]]
     // CHECK: %[[DOT3_FMA_RES:.+]] = tt.dot %[[DOT3_OP_A]], %[[DOT3_OP_B]], %[[DOT3_OP_C]]
     // CHECK-SAME: -> tensor<128x32xf32, #[[DOT_OP_PARENT]]>
     %4 = tt.dot %0, %1, %3 : tensor<128x64xi16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x32xi16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x32xi16, #blocked>
