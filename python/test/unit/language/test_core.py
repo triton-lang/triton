@@ -4435,7 +4435,7 @@ def test_value_specialization(value: int, value_type: str, device) -> None:
 
     def repr(specialization):
         ty = specialization.signature["value1"]
-        cst = '_'.join([k for k, v in specialization.constants.items() if v == 1])
+        cst = '_'.join([k for k, v in specialization.constants.items() if isinstance(k, str) and v == 1])
         return f"kernel_{ty}_{cst}"
 
     @triton.jit(repr=repr)
@@ -5625,6 +5625,10 @@ def test_local_load_store_mma(M, N, mma_layout, shared_layout, device, tmp_path:
         assert "stmatrix" in kernel.asm["ptx"]
 
 
+def filter_layout_pairs(layout_pairs):
+    return [pair for pair in layout_pairs if is_layout_applicable(pair[0]) and is_layout_applicable(pair[1])]
+
+
 mma_pairs = [
     [
         MmaLayout((2, 0), [1, 4], [1, 1], [1, 1], [0, 1], [16, 8]),
@@ -5666,15 +5670,68 @@ mma_pairs = [
         MmaLayout((3, 0), [4, 1], [1, 1], [1, 1], [0, 1], [16, 64, 16]),
         MmaLayout((3, 0), [4, 1], [1, 1], [1, 1], [0, 1], [16, 128, 16]),
     ],
+    [
+        WmmaLayout(1, [4, 4]),
+        WmmaLayout(1, [16, 1]),
+    ],
+    [
+        WmmaLayout(1, [16, 1]),
+        WmmaLayout(1, [4, 4]),
+    ],
+    [
+        WmmaLayout(2, [4, 4]),
+        WmmaLayout(2, [16, 1]),
+    ],
+    [
+        WmmaLayout(2, [16, 1]),
+        WmmaLayout(2, [4, 4]),
+    ],
+    [
+        MfmaLayout([2, 0], [2, 2], [32, 32], False),
+        MfmaLayout([2, 0], [4, 1], [32, 32], False),
+    ],
+    [
+        MfmaLayout([2, 0], [4, 1], [32, 32], False),
+        MfmaLayout([2, 0], [2, 2], [32, 32], False),
+    ],
+    [
+        MfmaLayout([2, 0], [2, 2], [32, 32], False),
+        MfmaLayout([2, 0], [4, 1], [32, 32], True),
+    ],
+    [
+        MfmaLayout([2, 0], [4, 1], [32, 32], False),
+        MfmaLayout([2, 0], [2, 2], [32, 32], True),
+    ],
+    [
+        MfmaLayout([2, 0], [4, 4], [16, 16], False),
+        MfmaLayout([2, 0], [16, 1], [16, 16], False),
+    ],
+    [
+        MfmaLayout([2, 0], [16, 1], [16, 16], False),
+        MfmaLayout([2, 0], [4, 4], [16, 16], False),
+    ],
+    [
+        MfmaLayout([2, 0], [4, 4], [16, 16], False),
+        MfmaLayout([2, 0], [16, 1], [16, 16], True),
+    ],
+    [
+        MfmaLayout([2, 0], [16, 1], [16, 16], False),
+        MfmaLayout([2, 0], [4, 4], [16, 16], True),
+    ],
 ]
 
 
-@pytest.mark.parametrize("M, N", [[64, 1], [1, 64], [64, 64], [128, 128], [256, 256]])
+@pytest.mark.parametrize("M, N", [[16, 16], [64, 1], [1, 64], [64, 64], [128, 128], [256, 256]])
 @pytest.mark.parametrize("dtype", ['float16'])
-@pytest.mark.parametrize("mma_pair", filter_layouts(mma_pairs))
+@pytest.mark.parametrize("mma_pair", filter_layout_pairs(mma_pairs))
 def test_convert_mma2mma(M, N, mma_pair, dtype, device, tmp_path: pathlib.Path):
+    if is_hip():
+        if isinstance(mma_pair[1], MfmaLayout) and (mma_pair[1].instr_shape[1] > M or mma_pair[1].instr_shape[1] > N):
+            pytest.skip("HIP do not fully support skinny tensor store")
+
     src_layout, _ = mma_pair
     num_warps = np.prod(src_layout.warps_per_cta)
+    warp_size = THREADS_PER_WARP
 
     def do_test(src_layout, dst_layout):
         layouts = f"""
@@ -5683,7 +5740,7 @@ def test_convert_mma2mma(M, N, mma_pair, dtype, device, tmp_path: pathlib.Path):
         """
 
         ir = layouts + f"""
-        module attributes {{"ttg.num-warps" = {num_warps} : i32, "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = 32 : i32}} {{
+        module attributes {{"ttg.num-warps" = {num_warps} : i32, "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = {warp_size} : i32}} {{
         tt.func public @kernel_0d1d(%arg0: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}) {{
         %cst = arith.constant dense<{N}> : tensor<{M}x1xi32, #src>
         %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #ttg.slice<{{dim = 1, parent = #src}}>>

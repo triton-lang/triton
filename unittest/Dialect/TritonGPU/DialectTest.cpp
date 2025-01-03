@@ -266,14 +266,32 @@ INSTANTIATE_TEST_SUITE_P(
          R"(T<2x2xf32,   #B<{spt=[2,1],   tpw=[2,2],   wpc=[4,8],   ord=[1,0]}>>)"},
     })));
 
-class AMDMfmaLayoutTest : public ::testing::Test {
+class AMDLayoutTest : public ::testing::Test {
 public:
-  AMDMfmaLayoutTest() {
+  AMDLayoutTest() {
     ctx.getOrLoadDialect<TritonGPUDialect>();
     ctaLayout =
         triton::gpu::CTALayoutAttr::get(&ctx, ctaPerCGA, ctaSplit, ctaOrder);
     f16Ty = FloatType::getF16(&ctx);
   }
+
+  triton::gpu::DotOperandEncodingAttr
+  createDotOperand(int idx, Attribute parent, int kWidth) {
+    return triton::gpu::DotOperandEncodingAttr::get(&ctx, idx, parent, kWidth);
+  }
+
+protected:
+  MLIRContext ctx;
+  const SmallVector<unsigned> ctaPerCGA{1, 1, 1};
+  const SmallVector<unsigned> ctaSplit{1, 1, 1};
+  const SmallVector<unsigned> ctaOrder{2, 1, 0};
+  triton::gpu::CTALayoutAttr ctaLayout;
+  Type f16Ty;
+};
+
+class AMDMfmaLayoutTest : public AMDLayoutTest {
+public:
+  AMDMfmaLayoutTest() = default;
 
   triton::gpu::AMDMfmaEncodingAttr createMFMA(int mDim, int nDim,
                                               ArrayRef<unsigned> warpsPerCTA) {
@@ -288,20 +306,23 @@ public:
         &ctx, /*versionMajor=*/2, /*versionMinor=*/0, warpsPerCTA, mDim, nDim,
         /*isTransposed=*/true, ctaLayout);
   }
+};
 
-  triton::gpu::DotOperandEncodingAttr
-  createDotOperand(int idx, triton::gpu::AMDMfmaEncodingAttr parent,
-                   int kWidth) {
-    return triton::gpu::DotOperandEncodingAttr::get(&ctx, idx, parent, kWidth);
+class AMDWmmaLayoutTest : public AMDLayoutTest {
+public:
+  AMDWmmaLayoutTest() = default;
+
+  triton::gpu::AMDWmmaEncodingAttr
+  createWMMAv1(ArrayRef<unsigned> warpsPerCTA) {
+    return triton::gpu::AMDWmmaEncodingAttr::get(
+        &ctx, /*version=*/1, /*isTransposed=*/false, warpsPerCTA, ctaLayout);
   }
 
-protected:
-  MLIRContext ctx;
-  const SmallVector<unsigned> ctaPerCGA{1, 1, 1};
-  const SmallVector<unsigned> ctaSplit{1, 1, 1};
-  const SmallVector<unsigned> ctaOrder{2, 1, 0};
-  triton::gpu::CTALayoutAttr ctaLayout;
-  Type f16Ty;
+  triton::gpu::AMDWmmaEncodingAttr
+  createWMMAv2(bool isTransposed, ArrayRef<unsigned> warpsPerCTA) {
+    return triton::gpu::AMDWmmaEncodingAttr::get(
+        &ctx, /*version=*/2, isTransposed, warpsPerCTA, ctaLayout);
+  }
 };
 
 TEST_F(AMDMfmaLayoutTest, mfma32) {
@@ -364,6 +385,72 @@ TEST_F(AMDMfmaLayoutTest, mfma_dot_op) {
   auto tdot3dOp1 = createDotOperand(1, tmfma3d, 4);
   ASSERT_THAT(tdot3dOp0.getWarpOrder(), tmfma3d.getWarpOrder());
   ASSERT_THAT(tdot3dOp1.getWarpOrder(), tmfma3d.getWarpOrder());
+}
+
+TEST_F(AMDWmmaLayoutTest, wmmaV1) {
+  auto wmma2d = createWMMAv1({2, 4});
+  ASSERT_THAT(wmma2d.getThreadOrder(), testing::ElementsAre(1u, 0u));
+  ASSERT_THAT(wmma2d.getWarpOrder(), testing::ElementsAre(1u, 0u));
+  ASSERT_THAT(wmma2d.getSizePerThread(), testing::ElementsAre(8u, 1u));
+  ASSERT_THAT(wmma2d.getThreadsPerWarp(), testing::ElementsAre(2u, 16u));
+
+  auto wmma3d = createWMMAv1({2, 4, 1});
+  ASSERT_THAT(wmma3d.getThreadOrder(), testing::ElementsAre(2u, 1u, 0u));
+  ASSERT_THAT(wmma3d.getWarpOrder(), testing::ElementsAre(2u, 1u, 0u));
+  ASSERT_THAT(wmma3d.getSizePerThread(), testing::ElementsAre(1u, 8u, 1u));
+  ASSERT_THAT(wmma3d.getThreadsPerWarp(), testing::ElementsAre(1, 2u, 16u));
+}
+
+TEST_F(AMDWmmaLayoutTest, wmmaV2) {
+  auto wmma2d = createWMMAv2(false, {2, 4});
+  ASSERT_THAT(wmma2d.getThreadOrder(), testing::ElementsAre(1u, 0u));
+  ASSERT_THAT(wmma2d.getWarpOrder(), testing::ElementsAre(1u, 0u));
+  ASSERT_THAT(wmma2d.getSizePerThread(), testing::ElementsAre(8u, 1u));
+  ASSERT_THAT(wmma2d.getThreadsPerWarp(), testing::ElementsAre(2u, 16u));
+
+  auto wmma3d = createWMMAv2(false, {2, 4, 1});
+  ASSERT_THAT(wmma3d.getThreadOrder(), testing::ElementsAre(2u, 1u, 0u));
+  ASSERT_THAT(wmma3d.getWarpOrder(), testing::ElementsAre(2u, 1u, 0u));
+  ASSERT_THAT(wmma3d.getSizePerThread(), testing::ElementsAre(1u, 8u, 1u));
+  ASSERT_THAT(wmma3d.getThreadsPerWarp(), testing::ElementsAre(1u, 2u, 16u));
+
+  auto twmma2d = createWMMAv2(true, {2, 4});
+  ASSERT_THAT(twmma2d.getThreadOrder(), testing::ElementsAre(0u, 1u));
+  ASSERT_THAT(twmma2d.getWarpOrder(), testing::ElementsAre(1u, 0u));
+  ASSERT_THAT(twmma2d.getSizePerThread(), testing::ElementsAre(1u, 8u));
+  ASSERT_THAT(twmma2d.getThreadsPerWarp(), testing::ElementsAre(16u, 2u));
+
+  auto twmma3d = createWMMAv2(true, {2, 4, 1});
+  ASSERT_THAT(twmma3d.getThreadOrder(), testing::ElementsAre(1u, 2u, 0u));
+  ASSERT_THAT(twmma3d.getWarpOrder(), testing::ElementsAre(2u, 1u, 0u));
+  ASSERT_THAT(twmma3d.getSizePerThread(), testing::ElementsAre(1u, 1u, 8u));
+  ASSERT_THAT(twmma3d.getThreadsPerWarp(), testing::ElementsAre(1u, 16u, 2u));
+}
+
+TEST_F(AMDWmmaLayoutTest, wmma_dot_op) {
+  auto wmma2dVer1 = createWMMAv1({2, 4});
+  auto dot2dVer1Op0 = createDotOperand(0, wmma2dVer1, 16);
+  auto dot2dVer1Op1 = createDotOperand(1, wmma2dVer1, 16);
+  ASSERT_THAT(dot2dVer1Op0.getWarpOrder(), wmma2dVer1.getWarpOrder());
+  ASSERT_THAT(dot2dVer1Op1.getWarpOrder(), wmma2dVer1.getWarpOrder());
+
+  auto wmma3dVer1 = createWMMAv1({2, 4});
+  auto dot3dVer1Op0 = createDotOperand(0, wmma3dVer1, 16);
+  auto dot3dVer1Op1 = createDotOperand(1, wmma3dVer1, 16);
+  ASSERT_THAT(dot3dVer1Op0.getWarpOrder(), wmma3dVer1.getWarpOrder());
+  ASSERT_THAT(dot3dVer1Op1.getWarpOrder(), wmma3dVer1.getWarpOrder());
+
+  auto wmma2dVer2 = createWMMAv2(false, {2, 4});
+  auto dot2dVer2Op0 = createDotOperand(0, wmma2dVer2, 16);
+  auto dot2dVer2Op1 = createDotOperand(1, wmma2dVer2, 16);
+  ASSERT_THAT(dot2dVer2Op0.getWarpOrder(), wmma2dVer2.getWarpOrder());
+  ASSERT_THAT(dot2dVer2Op1.getWarpOrder(), wmma2dVer2.getWarpOrder());
+
+  auto wmma3dVer2 = createWMMAv2(false, {2, 4});
+  auto dot3dVer2Op0 = createDotOperand(0, wmma3dVer2, 16);
+  auto dot3dVer2Op1 = createDotOperand(1, wmma3dVer2, 16);
+  ASSERT_THAT(dot3dVer2Op0.getWarpOrder(), wmma3dVer2.getWarpOrder());
+  ASSERT_THAT(dot3dVer2Op1.getWarpOrder(), wmma3dVer2.getWarpOrder());
 }
 
 class LinearEncodingTest : public ::testing::Test {
