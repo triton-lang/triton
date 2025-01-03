@@ -905,8 +905,6 @@ struct AtomicRMWOpConversion
 
       rewriter.setInsertionPointToEnd(atomicBlock);
       auto maybeKind = matchAtomicOp(atomicRmwAttr);
-      // TODO: use rocdl.raw.buffer.atomic from ROCDL dialect to use efficient
-      // atomics for MI-* series of AMD GPU.
       Value atom =
           rewriter
               .create<LLVM::AtomicRMWOp>(loc, *maybeKind, rmwPtr, operand,
