@@ -697,6 +697,65 @@ struct AtomicRMWOpConversion
            (elementType.isF16() || elementType.isBF16() || elementType.isF32());
   }
 
+  bool isPromotableToPTXLD(triton::AtomicRMWOp op) const {
+    if (op.getAtomicRmwOp() != RMWOp::ADD && op.getAtomicRmwOp() != RMWOp::FADD)
+      return false;
+    if (isa<RankedTensorType>(op.getType()))
+      return false;
+    if (!isa<arith::ConstantOp>(op.getVal().getDefiningOp()))
+      return false;
+
+    auto constOp = cast<arith::ConstantOp>(op.getVal().getDefiningOp());
+    if (!isa<FloatAttr>(constOp.getValueAttr()) &&
+        !isa<IntegerAttr>(constOp.getValueAttr()))
+      return false;
+
+    if (auto attr = dyn_cast_or_null<FloatAttr>(constOp.getValueAttr()))
+      if (!attr.getValue().isZero())
+        return false;
+
+    if (auto attr = dyn_cast_or_null<IntegerAttr>(constOp.getValueAttr()))
+      if (!attr.getValue().isZero())
+        return false;
+
+    return true;
+  }
+
+  LogicalResult promoteToPTXLD(triton::AtomicRMWOp op, Value rmwPtr,
+                               Value rmwPred, OpAdaptor adaptor,
+                               ConversionPatternRewriter &rewriter) const {
+    auto loc = op->getLoc();
+    Type valueTy =
+        getTypeConverter()->convertType(getElementTypeOrSelf(op.getType()));
+    const unsigned valueNBits = std::max(8u, valueTy.getIntOrFloatBitWidth());
+    const size_t maxWordWidth = std::max<size_t>(32, valueNBits);
+    const size_t width = std::min((size_t)valueNBits, maxWordWidth);
+
+    const std::string writeConstraint =
+        (width == 64) ? "=l" : ((width == 32) ? "=r" : "=c");
+    PTXBuilder ptxBuilder;
+    bool init = false;                                           // no other
+    auto *dstOpr = ptxBuilder.newOperand(writeConstraint, init); // =r operation
+    auto *addrOpr = ptxBuilder.newAddrOperand(rmwPtr, "l", 0 /* in_off */);
+    auto &ld = ptxBuilder.create<>("ld")
+                   ->global()
+                   .o("cta", op.getScope() == triton::MemSyncScope::CTA)
+                   .o("gpu", op.getScope() == triton::MemSyncScope::GPU)
+                   .o("sys", op.getScope() == triton::MemSyncScope::SYSTEM)
+                   .o("acquire", op.getSem() == triton::MemSemantic::ACQUIRE)
+                   .o("relaxed", op.getSem() == triton::MemSemantic::RELAXED)
+                   .b(width);
+    ld(dstOpr, addrOpr).maybePredicate(rmwPred, "b");
+
+    // Create inline ASM signature
+    Type retTy = IntegerType::get(getContext(), width);
+    Value ret = ptxBuilder.launch(rewriter, loc, retTy);
+    ret = bitcast(ret, op.getType());
+
+    rewriter.replaceOp(op, {ret});
+    return success();
+  }
+
   LogicalResult
   matchAndRewrite(triton::AtomicRMWOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -768,6 +827,11 @@ struct AtomicRMWOpConversion
 
     auto packedTy = vec_ty(valueElemTy, packed);
     SmallVector<Value> resultVals(elemsPerThread);
+
+    // Lower AtomicRMWOp to a ld.acquire if possible
+    const bool doPTXLDPromotion =
+        isPromotableToPTXLD(op) && vec == 1 && packed == 1;
+
     for (size_t i = 0; i < elemsPerThread; i += vec * packed) {
       if (auto canonicalStart = getCanonicalIndex(i, regMask);
           canonicalStart != i) {
@@ -781,6 +845,14 @@ struct AtomicRMWOpConversion
       Value rmwPtr = ptrElements[i];
       Value pred = llMask ? maybeAnd(rewriter, loc, threadPred, maskElements[i])
                           : threadPred;
+
+      // if (doPTXLDPromotion) {
+      //   // Should be zero: Value valElement = valElements[i];
+      //   if (promoteToPTXLD(op, rmwPtr, pred, adaptor, rewriter).failed())
+      //     return failure();
+      //   continue;
+      // }
+
       std::string sTy;
       PTXBuilder ptxBuilderAtomicRMW;
       // 16-bit -> "h", 32-bit -> "r", 64-bit -> "l"
