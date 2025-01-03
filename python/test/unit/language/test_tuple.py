@@ -114,19 +114,23 @@ class Tensor(NamedTuple):
 
 
 @triton.jit
-def _namedtuple_kernel(closure, X, Y, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
+def _namedtuple_mask_func(Tensor, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
     offs_m = tl.arange(0, BLOCK_M)
     offs_n = tl.arange(0, BLOCK_N)
-    # load x
-    mask_x = (offs_m[:, None] < X.shape[0]) & (offs_n[None, :] < X.shape[1])
+    mask = (offs_m[:, None] < Tensor.shape[0]) & (offs_n[None, :] < Tensor.shape[1])
+    return mask
+
+
+@triton.jit
+def _namedtuple_kernel(closure, _X, Y, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
+    offs_m = tl.arange(0, BLOCK_M)
+    offs_n = tl.arange(0, BLOCK_N)
+    X = Tensor(shape=_X.shape, ptr=_X.ptr, stride=_X.stride)
     Xs = X.ptr + offs_m[:, None] * X.stride[0] + offs_n[None, :] * X.stride[1]
-    x = tl.load(Xs, mask=mask_x, other=0)
-    # compute y
-    y = closure.fn(x, *closure.captured)
-    # store y
-    mask_y = (offs_m[:, None] < Y.shape[0]) & (offs_n[None, :] < Y.shape[1])
     Ys = Y.ptr + offs_m[:, None] * Y.stride[0] + offs_n[None, :] * Y.stride[1]
-    tl.store(Ys, y, mask=mask_y)
+    x = tl.load(Xs, mask=_namedtuple_mask_func(X, BLOCK_M, BLOCK_N), other=0)
+    y = closure.fn(x, *closure.captured)
+    tl.store(Ys, y, mask=_namedtuple_mask_func(Y, BLOCK_M, BLOCK_N))
 
 
 def test_namedtuple(device="cuda"):
