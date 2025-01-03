@@ -304,6 +304,11 @@ def compile(src, target=None, options=None):
     # This is needed to safely finalize threads pool inside context: if current process forks before
     # python GC deletes context object, thread pool in child process will be invalid, which could
     # lead to child crash or hang.
+    #
+    # However disabling multithreading causes the code to hang if the ASAN pass is enabled
+    # this is likely due to the llvm-symbolizer forking a process
+    # TODO: Reconcile the difference here between the ASAN and non-ASAN path with enabling
+    # multithreading in the MLIR context
     if not os.environ.get("TRITON_ENABLE_ASAN", "0") == "1":
         context.disable_multithreading()
     # return handle to compiled kernel
