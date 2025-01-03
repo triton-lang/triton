@@ -4,6 +4,7 @@ import re
 import warnings
 import os
 import textwrap
+import itertools
 from types import ModuleType
 from typing import Any, Callable, Dict, Optional, Tuple, Type, Union
 
@@ -195,17 +196,16 @@ class ContainsReturnChecker(ast.NodeVisitor):
 
 class ASTFunction:
 
-    def __init__(self, ret_types, arg_types, constexprs, constants, attrs):
+    def __init__(self, ret_types, arg_types, constants, attrs):
         self.ret_types = ret_types
         self.arg_types = arg_types
-        self.constexprs = constexprs
         self.constants = constants
         self.attrs = attrs
 
     def serialize(self, builder: ir.builder):
         # fill up IR values in template
         # > build function
-        is_val = lambda path, _: path not in self.constexprs and _ is not None
+        is_val = lambda path, _: path not in self.constants and _ is not None
         val_paths = list(find_paths_if(self.arg_types, is_val))
         arg_types = [get_iterable_path(self.arg_types, path).to_ir(builder) for path in val_paths]
         ret_types = [ret_type.to_ir(builder) for ret_type in self.ret_types]
@@ -213,13 +213,13 @@ class ASTFunction:
 
     def deserialize(self, fn):
         # create "template"
-        def make_template(val):
-            if isinstance(val, (list, tuple, language.tuple_type)):
-                return language.tuple([make_template(x) for x in val])
+        def make_template(ty):
+            if isinstance(ty, (list, tuple, language.tuple_type)):
+                return language.tuple([make_template(x) for x in ty], ty)
             return language.constexpr(None)
 
         vals = make_template(self.arg_types)
-        is_val = lambda path, _: path not in self.constexprs and _ is not None
+        is_val = lambda path, _: path not in self.constants and _ is not None
         val_paths = list(find_paths_if(self.arg_types, is_val))
         # > set attributes
         for attr_path, attr_specs in self.attrs.items():
@@ -235,7 +235,7 @@ class ASTFunction:
             ty = get_iterable_path(self.arg_types, path)
             set_iterable_path(vals, path, language.tensor(fn.args(i), ty))
         # > add constexpr values to the template
-        constants = self.constants | self.constexprs
+        constants = self.constants
         for path, val in constants.items():
             set_iterable_path(vals, path, language.constexpr(val))
         return vals
@@ -315,6 +315,9 @@ class CodeGenerator(ast.NodeVisitor):
 
         return False
 
+    def _is_namedtuple(self, val):
+        return isinstance(val, type) and issubclass(val, tuple) and hasattr(val, "_fields")
+
     def _define_name_lookup(self):
 
         def local_lookup(name: str, absent):
@@ -333,6 +336,7 @@ class CodeGenerator(ast.NodeVisitor):
                     getattr(val, "__triton_builtin__", False),  #
                     getattr(val, "__module__", "").startswith("triton.language"),  #
                     isinstance(val, language.dtype),  #
+                    self._is_namedtuple(val),
                     self._is_constexpr_global(name),  #
                     # Allow accesses to globals while visiting an ast.arg
                     # because you should be able to do
@@ -430,6 +434,11 @@ class CodeGenerator(ast.NodeVisitor):
         # basic block in case there are any ops after the return.
         post_ret_block = self.builder.create_block()
         self.builder.set_insertion_point_to_end(post_ret_block)
+
+    def visit_Starred(self, node) -> Any:
+        args = self.visit(node.value)
+        assert isinstance(args, language.core.tuple)
+        return args.values
 
     def visit_FunctionDef(self, node):
         arg_names, kwarg_names = self.visit(node.args)
@@ -530,6 +539,11 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_Assign(self, node):
         # construct values to assign
         def _sanitize_value(value):
+            if self._is_namedtuple(type(value)):
+                vals = [_sanitize_value(v) for v in value]
+                types = [v.type for v in vals]
+                fields = type(value)._fields
+                return language.tuple(vals, language.tuple_type(types, fields))
             if isinstance(value, language.tuple):
                 return language.tuple([_sanitize_value(v) for v in value.values])
             native_nontensor_types = (language.dtype, language.tuple)
@@ -1147,7 +1161,7 @@ class CodeGenerator(ast.NodeVisitor):
                                                                      (bool, int, language.core.dtype)) else arg.type
                 for arg in args
             ]
-            prototype = ASTFunction([], arg_types, args_cst, dict(), dict())
+            prototype = ASTFunction([], arg_types, args_cst, dict())
             generator = CodeGenerator(self.context, prototype, gscope, module=self.module, jit_fn=fn,
                                       function_name=fn_name, function_types=self.function_ret_types,
                                       noinline=fn.noinline, file_name=file_name, begin_line=begin_line,
@@ -1185,6 +1199,7 @@ class CodeGenerator(ast.NodeVisitor):
 
         kws = dict(self.visit(keyword) for keyword in node.keywords)
         args = [self.visit(arg) for arg in node.args]
+        args = list(itertools.chain.from_iterable(x if isinstance(x, list) else [x] for x in args))
         if isinstance(fn, JITFunction):
             _check_fn_args(node, fn, args)
             return self.call_JitFunction(fn, args, kws)
@@ -1333,37 +1348,20 @@ class CodeGenerator(ast.NodeVisitor):
     }
 
 
-def kernel_suffix(signature, specialization):
-    # suffix format:
-    # <argid><'c' if equal to 1><'d' if divisible by 16><'e' if divisible by 8>
-    suffix = ''
-    for i, _ in enumerate(signature):
-        suffix += str(i)
-        if (i, ) in specialization.equal_to_1:
-            suffix += 'c'
-        if (i, ) in specialization.divisibility_16:
-            suffix += 'd'
-    return suffix
-
-
-def ast_to_ttir(fn, specialization, context, options, codegen_fns, module_map):
-    constexprs = specialization.constexprs
-    arg_idx = lambda x: (fn.arg_names.index(x), ) if isinstance(x, str) else x
-    constants = specialization.attrs.get_constants()
-    constexprs = {arg_idx(k): v for k, v in constexprs.items()}
-    arg_types = [str_to_ty(ty) for ty in specialization.signature.values()]
-    # find index of constants in serialized order
-    attrs = specialization.attrs
-    new_attrs = attrs.filter_out_constants()
-    fn_attrs = new_attrs.get_fn_attrs()
-    fn_attrs = {k: v for k, v in fn_attrs.items() if k not in constants}
+def ast_to_ttir(fn, src, context, options, codegen_fns, module_map):
+    arg_types = list(map(str_to_ty, src.signature.values()))
+    prototype = ASTFunction([], arg_types, src.constants, src.attrs)
     file_name, begin_line = get_jit_fn_file_line(fn)
-    prototype = ASTFunction([], arg_types, constexprs, constants, fn_attrs)
-    generator = CodeGenerator(context, prototype, gscope=fn.__globals__.copy(), function_name=fn.repr(specialization),
-                              jit_fn=fn, is_kernel=True, file_name=file_name, begin_line=begin_line, options=options,
+    # query function representation
+    from collections import namedtuple
+    leaves = filter(lambda v: len(v) == 1, src.constants)
+    constants = {fn.arg_names[i[0]]: src.constants[i] for i in leaves}
+    signature = src.signature
+    proxy = namedtuple("SpecializationProxy", ["constants", "signature"])(constants, signature)
+    generator = CodeGenerator(context, prototype, gscope=fn.__globals__.copy(), function_name=fn.repr(proxy), jit_fn=fn,
+                              is_kernel=True, file_name=file_name, begin_line=begin_line, options=options,
                               codegen_fns=codegen_fns, module_map=module_map)
     generator.visit(fn.parse())
-
     ret = generator.module
     # module takes ownership of the context
     ret.context = context

@@ -23,3 +23,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @test_rsqrt(%arg0: tensor<64xf32, #blocked>) attributes {noinline = false} {
+    // LLVM_FTZ: llvm.amdgcn.rsq.f32
+    // LLVM_NO_FTZ: _ocml_rsqrt_f32
+    %0 = math.rsqrt %arg0 : tensor<64xf32, #blocked>
+    tt.return
+  }
+}

@@ -239,8 +239,11 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
   return combineCtaCgaWithShape(tileLayout, shared.getCTALayout(), shape);
 }
 
-LinearLayout warpsDotOperand(MLIRContext *ctx, ArrayRef<unsigned> warpShape,
-                             ArrayRef<unsigned> warpOrder, unsigned inner) {
+/// Function to generate lane and warp layout for dot operands.
+LinearLayout broadcastedDotOperandLayout(MLIRContext *ctx,
+                                         ArrayRef<unsigned> shape,
+                                         ArrayRef<unsigned> order,
+                                         unsigned kDim, StringAttr inDimName) {
   // Let warpsPerCTAMma = {2, 2}, then
   // warpsPerCTA = {2, 1} for opA and warpsPerCTA = {1, 2} for opB
   // assume warpOrder = {1, 0}
@@ -255,24 +258,23 @@ LinearLayout warpsDotOperand(MLIRContext *ctx, ArrayRef<unsigned> warpShape,
   //    - - | - -       - - | - -
   //    2 3 | 2 3       0 2 | 1 3
   // In other words, we need to broadcast along K
-  auto rank = warpShape.size();
+  auto rank = shape.size();
   auto dimNames = standardOutDimNames(ctx, rank);
-  LinearLayout warpLayout = LinearLayout::empty();
+  LinearLayout layout = LinearLayout::empty();
 
   // We have to broadcast along the inner dimension
   // For A, when moving along M we go from 0 to 2.
   // For B, when moving along N we go from 0 to 1.
   // As such, choosing the order of A {1, 0}, gives us the correct broadcasting
   // Same happens if the warpOrder is {0, 1}, like in Hopper
-  for (auto d : warpOrder) {
-    if (d == inner) {
-      warpLayout *= LinearLayout::zeros1D(warpShape[d], S("warp"), dimNames[d]);
+  for (auto d : order) {
+    if (d == kDim) {
+      layout *= LinearLayout::zeros1D(shape[d], inDimName, dimNames[d]);
     } else {
-      warpLayout *=
-          LinearLayout::identity1D(warpShape[d], S("warp"), dimNames[d]);
+      layout *= LinearLayout::identity1D(shape[d], inDimName, dimNames[d]);
     }
   }
-  return warpLayout;
+  return layout;
 }
 
 } // anonymous namespace
@@ -620,7 +622,8 @@ wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
   // Generate warp layout
   auto warpsPerCTA = wmmaLayout.getWarpsPerCTA();
   auto warpOrder = triton::gpu::getWarpOrder(dotWmmaLayout);
-  LinearLayout warpLayout = warpsDotOperand(ctx, warpsPerCTA, warpOrder, kDim);
+  LinearLayout warpLayout =
+      broadcastedDotOperandLayout(ctx, warpsPerCTA, warpOrder, kDim, S("warp"));
 
   // reorder dim names in rep order, so combineCtaCgaWithShape generate proper
   // extension of layout
@@ -648,6 +651,48 @@ BlockedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
       identityStandardND(S("warp"), getWarpsPerCTA(), order);
 
   return combineCtaCgaWithShape(ctaLayout, getCTALayout(), shape);
+}
+
+std::optional<LinearLayout>
+fmaDotToLinearLayout(DotOperandEncodingAttr operandLayout,
+                     ArrayRef<int64_t> shape) {
+  int rank = shape.size();
+  auto blocked = cast<BlockedEncodingAttr>(operandLayout.getParent());
+  MLIRContext *ctx = operandLayout.getContext();
+
+  // TODO: introduce registerOrder or use getOrder(operandLayout)
+  // Currently this order is used in legacy converter, because we do not
+  // have access to full dot operand layout, only parent part.
+  auto regOrder = blocked.getOrder();
+  // TODO: use operandLayout.getThreadOrder()
+  auto threadOrder = blocked.getThreadOrder();
+  auto warpOrder = blocked.getWarpOrder();
+  auto repOrder = blocked.getRepOrder();
+
+  StringAttr kReg = S("register");
+  StringAttr kLane = S("lane");
+  StringAttr kWarp = S("warp");
+
+  SmallVector<unsigned> threadSize = blocked.getSizePerThread();
+  auto kDimIdx = operandLayout.getOpIdx() == 0 ? rank - 1 : rank - 2;
+  threadSize[kDimIdx] = shape[kDimIdx];
+  auto threadShape = blocked.getThreadsPerWarp();
+  auto warpShape = blocked.getWarpsPerCTA();
+
+  SmallVector<StringAttr> repDimNames =
+      permuteDimNames(standardOutDimNames(ctx, rank), repOrder);
+
+  auto registersLayout = identityStandardND(kReg, threadSize, regOrder);
+  auto lanesLayout = broadcastedDotOperandLayout(ctx, threadShape, threadOrder,
+                                                 kDimIdx, kLane);
+  auto warpsLayout =
+      broadcastedDotOperandLayout(ctx, warpShape, warpOrder, kDimIdx, kWarp);
+
+  LinearLayout ctaLayout = registersLayout.transposeOuts(repDimNames) *
+                           lanesLayout.transposeOuts(repDimNames) *
+                           warpsLayout.transposeOuts(repDimNames);
+
+  return combineCtaCgaWithShape(ctaLayout, getCTALayout(operandLayout), shape);
 }
 
 LinearLayout nvidiaMmaTile(MLIRContext *ctx, ArrayRef<unsigned> tileShape,
@@ -740,9 +785,9 @@ LinearLayout nvidiaDotToLinearLayout(ArrayRef<int64_t> shape,
   auto ctaLayout =
       nvidiaMmaTile(ctx, tileShape, kWidth, getOrder(dot), dot.getRepOrder());
   auto kDim = isA ? rank - 1 : rank - 2;
-  ctaLayout *=
-      warpsDotOperand(ctx, mma.getWarpsPerCTA(), mma.getWarpOrder(), kDim)
-          .transposeOuts(llvm::to_vector(ctaLayout.getOutDimNames()));
+  ctaLayout *= broadcastedDotOperandLayout(ctx, mma.getWarpsPerCTA(),
+                                           mma.getWarpOrder(), kDim, S("warp"))
+                   .transposeOuts(llvm::to_vector(ctaLayout.getOutDimNames()));
 
   return combineCtaCgaWithShape(ctaLayout, getCTALayout(dot), shape);
 }
@@ -750,9 +795,11 @@ LinearLayout nvidiaDotToLinearLayout(ArrayRef<int64_t> shape,
 std::optional<LinearLayout>
 DotOperandEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   auto parent = getParent();
-  if (auto mfmaLayout = llvm::dyn_cast<AMDMfmaEncodingAttr>(parent)) {
+  if (auto blockedLayout = mlir::dyn_cast<BlockedEncodingAttr>(parent)) {
+    return fmaDotToLinearLayout(*this, shape);
+  } else if (auto mfmaLayout = mlir::dyn_cast<AMDMfmaEncodingAttr>(parent)) {
     return mfmaDotToLinearLayout(*this, shape);
-  } else if (auto wmmaLayout = llvm::dyn_cast<AMDWmmaEncodingAttr>(parent)) {
+  } else if (auto wmmaLayout = mlir::dyn_cast<AMDWmmaEncodingAttr>(parent)) {
     return wmmaDotOperandToLinearLayout(*this, shape);
   } else if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent)) {
     return nvidiaDotToLinearLayout(shape, *this);
