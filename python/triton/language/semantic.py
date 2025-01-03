@@ -1717,9 +1717,6 @@ def histogram(input: tl.tensor, num_bins: int, builder: ir.builder) -> tl.tensor
     return tl.tensor(builder.create_histogram(input.handle, num_bins), tl.block_type(tl.int32, [num_bins]))
 
 
-##
-
-
 def multiple_of(x: tl.tensor, values: List[int]) -> tl.tensor:
     if max(1, len(x.shape)) != len(values):
         raise ValueError("Shape of input to multiple_of does not match the length of values")

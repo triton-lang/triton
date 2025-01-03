@@ -63,12 +63,11 @@ def test_module_walk(device):
     backend = triton.compiler.compiler.make_backend(target)
     src = triton.compiler.compiler.ASTSource(
         fn=kernel,
-        signature={kernel.arg_names[i]: kernel._type_of(kernel._key_of(arg))
+        signature={kernel.arg_names[i]: triton.runtime.jit.mangle_type(arg)
                    for i, arg in enumerate(args)},
         constexprs={kernel.arg_names[i]: arg
                     for i, arg in enumerate(args)
                     if not isinstance(arg, torch.Tensor)},
-        attrs=backend.get_attrs_descriptor(kernel.params, args),
     )
 
     context = triton._C.libtriton.ir.context()

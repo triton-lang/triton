@@ -28,15 +28,19 @@ from wheel.bdist_wheel import bdist_wheel
 
 import pybind11
 
+from build_helpers import get_base_dir, get_cmake_dir
+
 
 @dataclass
 class Backend:
     name: str
     package_data: List[str]
     language_package_data: List[str]
+    tools_package_data: List[str]
     src_dir: str
     backend_dir: str
     language_dir: Optional[str]
+    tools_dir: Optional[str]
     install_dir: str
     is_external: bool
 
@@ -68,6 +72,10 @@ class BackendInstaller:
         if not os.path.exists(language_dir):
             language_dir = None
 
+        tools_dir = os.path.abspath(os.path.join(backend_src_dir, "tools"))
+        if not os.path.exists(tools_dir):
+            tools_dir = None
+
         for file in ["compiler.py", "driver.py"]:
             assert os.path.exists(os.path.join(backend_path, file)), f"${file} does not exist in ${backend_path}"
 
@@ -78,9 +86,13 @@ class BackendInstaller:
         if language_dir is not None:
             language_package_data = [f"{os.path.relpath(p, language_dir)}/*" for p, _, _, in os.walk(language_dir)]
 
+        tools_package_data = []
+        if tools_dir is not None:
+            tools_package_data = [f"{os.path.relpath(p, tools_dir)}/*" for p, _, _, in os.walk(tools_dir)]
+
         return Backend(name=backend_name, package_data=package_data, language_package_data=language_package_data,
-                       src_dir=backend_src_dir, backend_dir=backend_path, language_dir=language_dir,
-                       install_dir=install_dir, is_external=is_external)
+                       tools_package_data=tools_package_data, src_dir=backend_src_dir, backend_dir=backend_path,
+                       language_dir=language_dir, tools_dir=tools_dir, install_dir=install_dir, is_external=is_external)
 
     # Copy all in-tree backends under triton/third_party.
     @staticmethod
@@ -331,19 +343,6 @@ def download_and_copy(name, src_path, dst_path, variable, version, url_func):
 
 
 # ---- cmake extension ----
-
-
-def get_base_dir():
-    return os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
-
-
-def get_cmake_dir():
-    plat_name = sysconfig.get_platform()
-    python_version = sysconfig.get_python_version()
-    dir_name = f"cmake.{plat_name}-{sys.implementation.name}-{python_version}"
-    cmake_dir = Path(get_base_dir()) / "python" / "build" / dir_name
-    cmake_dir.mkdir(parents=True, exist_ok=True)
-    return cmake_dir
 
 
 class CMakeClean(clean):
@@ -598,6 +597,15 @@ def add_link_to_backends():
                 install_dir = os.path.join(extra_dir, x)
                 update_symlink(install_dir, src_dir)
 
+        if backend.tools_dir:
+            # Link the contents of each backend's `tools` directory into
+            # `triton.tools.extra`.
+            extra_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "triton", "tools", "extra"))
+            for x in os.listdir(backend.tools_dir):
+                src_dir = os.path.join(backend.tools_dir, x)
+                install_dir = os.path.join(extra_dir, x)
+                update_symlink(install_dir, src_dir)
+
 
 def add_link_to_proton():
     proton_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, "third_party", "proton", "proton"))
@@ -640,28 +648,31 @@ class plugin_egginfo(egg_info):
 
 
 package_data = {
-    "triton/tools": ["compile.h", "compile.c"], **{f"triton/backends/{b.name}": b.package_data
-                                                   for b in backends}, "triton/language/extra": sum(
-        (b.language_package_data for b in backends), [])
+    "triton/tools/extra": sum((b.tools_package_data for b in backends), []),
+    **{f"triton/backends/{b.name}": b.package_data
+       for b in backends}, "triton/language/extra": sum((b.language_package_data for b in backends), [])
 }
 
 
-def get_language_extra_packages():
+def get_extra_packages(extra_name):
     packages = []
+    extra_file_extensions = {"language": (".py"), "tools": (".c", ".h", ".cpp")}
+    assert extra_name in extra_file_extensions, f"{extra_name} extra is not valid"
+
     for backend in backends:
-        if backend.language_dir is None:
+        backend_extra_dir = getattr(backend, f"{extra_name}_dir", None)
+        if backend_extra_dir is None:
             continue
 
-        # Walk the `language` directory of each backend to enumerate
-        # any subpackages, which will be added to `triton.language.extra`.
-        for dir, dirs, files in os.walk(backend.language_dir, followlinks=True):
-            if not any(f for f in files if f.endswith(".py")) or dir == backend.language_dir:
-                # Ignore directories with no python files.
-                # Also ignore the root directory which corresponds to
-                # "triton/language/extra".
+        # Walk the specified directory of each backend to enumerate
+        # any subpackages, which will be added to extra_package.
+        for dir, dirs, files in os.walk(backend_extra_dir, followlinks=True):
+            if not any(f for f in files if f.endswith(extra_file_extensions[extra_name])) or dir == backend_extra_dir:
+                # Ignore directories with no relevant files
+                # or the root directory
                 continue
-            subpackage = os.path.relpath(dir, backend.language_dir)
-            package = os.path.join("triton/language/extra", subpackage)
+            subpackage = os.path.relpath(dir, backend_extra_dir)
+            package = os.path.join(f"triton/{extra_name}/extra", subpackage)
             packages.append(package)
 
     return list(packages)
@@ -677,9 +688,11 @@ def get_packages():
         "triton/runtime",
         "triton/backends",
         "triton/tools",
+        "triton/tools/extra",
     ]
     packages += [f'triton/backends/{backend.name}' for backend in backends]
-    packages += get_language_extra_packages()
+    packages += get_extra_packages("language")
+    packages += get_extra_packages("tools")
     if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
         packages += ["triton/profiler"]
 
@@ -735,11 +748,11 @@ setup(
         "Intended Audience :: Developers",
         "Topic :: Software Development :: Build Tools",
         "License :: OSI Approved :: MIT License",
-        "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
     ],
     test_suite="tests",
     extras_require={

@@ -317,8 +317,8 @@ def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_va
                          # the value of x_size changes
         )
         @triton.jit
-        def kernel(x_ptr, x_size, **META):
-            BLOCK_SIZE = META['BLOCK_SIZE']
+        def kernel(x_ptr, x_size, BLOCK_SIZE: tl.constexpr):
+            ...
     :note: When all the configurations are evaluated, the kernel will run multiple times.
            This means that whatever value the kernel updates will be updated multiple times.
            To avoid this undesired behavior, you can use the `reset_to_zero` argument, which
@@ -382,18 +382,19 @@ class Heuristics(KernelInterface):
 def heuristics(values):
     """
     Decorator for specifying how the values of certain meta-parameters may be computed.
-    This is useful for cases where auto-tuning is prohibitevely expensive, or just not applicable.
+    This is useful for cases where auto-tuning is prohibitively expensive, or just not applicable.
 
     .. highlight:: python
     .. code-block:: python
 
-        @triton.heuristics(values={'BLOCK_SIZE': lambda args: 2 ** int(math.ceil(math.log2(args[1])))})
+        # smallest power-of-two >= x_size
+        @triton.heuristics(values={'BLOCK_SIZE': lambda args: triton.next_power_of_2(args['x_size'])})
         @triton.jit
-        def kernel(x_ptr, x_size, **META):
-            BLOCK_SIZE = META['BLOCK_SIZE'] # smallest power-of-two >= x_size
+        def kernel(x_ptr, x_size, BLOCK_SIZE: tl.constexpr):
+            ...
     :param values: a dictionary of meta-parameter names and functions that compute the value of the meta-parameter.
                    each such function takes a list of positional arguments as input.
-    :type values: dict[str, Callable[[list[Any]], Any]]
+    :type values: dict[str, Callable[[dict[str, Any]], Any]]
     """
 
     def decorator(fn):

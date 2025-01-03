@@ -72,9 +72,9 @@ def apply_src_change(target, old, new, to_modify):
     function_0.hash = None
     function_1.hash = None
     function_2.hash = None
-    to_modify.src = to_modify.src.replace(old, new)
+    to_modify._unsafe_update_src(to_modify.src.replace(old, new))
     ret = target.cache_key
-    to_modify.src = to_modify.src.replace(new, old)
+    to_modify._unsafe_update_src(to_modify.src.replace(new, old))
     return ret
 
 
@@ -114,16 +114,13 @@ def test_combine_fn_change():
         ["tl.reduce", "tl.associative_scan"],
         ["a + b", "a * b"],
     ):
-        combine_fn.src = orig_combine_fn_src.replace("COMBINE_OP", combine_op)
-        kernel_with_combine_fn.src = orig_kernel_src.replace("REDUCE_OR_SCAN", reduce_or_scan)
+        combine_fn._unsafe_update_src(orig_combine_fn_src.replace("COMBINE_OP", combine_op))
+        kernel_with_combine_fn._unsafe_update_src(orig_kernel_src.replace("REDUCE_OR_SCAN", reduce_or_scan))
         try:
             key = kernel_with_combine_fn.cache_key
         finally:
-            combine_fn.src = orig_combine_fn_src
-            kernel_with_combine_fn.src = orig_kernel_src
-
-            kernel_with_combine_fn.hash = None
-            combine_fn.hash = None
+            combine_fn._unsafe_update_src(orig_combine_fn_src)
+            kernel_with_combine_fn._unsafe_update_src(orig_kernel_src)
 
         assert key not in seen_keys
         seen_keys.add(key)
@@ -381,27 +378,6 @@ def test_no_cache_callable():
     assert not kernel.used_global_vals
 
 
-def test_constexpr_not_callable(device) -> None:
-
-    @triton.jit
-    def kernel(X, c: tl.constexpr):
-        tl.store(X, 2)
-
-    x = torch.empty(1, dtype=torch.int32, device=device)
-    error = False
-    try:
-        kernel[(1, )](x, c="str")
-    except BaseException:
-        error = True
-    assert error is False
-    # try and catch
-    try:
-        kernel[(1, )](x, c=tl.abs)
-    except BaseException:
-        error = True
-    assert error is True
-
-
 def test_jit_warmup_cache(device) -> None:
 
     @triton.jit
@@ -587,7 +563,7 @@ def test_within_2gb(device, fresh_triton_cache) -> None:
 
     def cache_hook(*args, **kwargs):
         nonlocal pointer_range_32
-        pointer_range_32 = kwargs["compile"]["configs"][0].pointer_range_32
+        pointer_range_32 = [k for k, v in kwargs["compile"]["configs"][0].items() if ['tt.pointer_range', 32] in v]
 
     JITFunction.cache_hook = cache_hook
     # In warmup we assume that the pointer range is 32 bits
@@ -599,3 +575,37 @@ def test_within_2gb(device, fresh_triton_cache) -> None:
     # Torch tensor <= 2GB
     kernel_add[(1, 0)](torch.empty(2**31 - 1, dtype=torch.int8, device=device))
     assert pointer_range_32 == [(0, )]
+
+
+def test_function_arguments():
+
+    @triton.jit
+    def func1():
+        return 1
+
+    @triton.jit
+    def func2():
+        return 2
+
+    @triton.jit
+    def func3(x):
+        return x
+
+    @triton.jit
+    def func4(x, y):
+        return x + y
+
+    @triton.jit
+    def kernel(Y, fn: tl.constexpr, fn_args):
+        tl.store(Y, fn(*fn_args))
+
+    JITFunction.cache_hook = None
+    JITFunction.compiled_hook = None
+    y = torch.zeros((5, ), dtype=torch.int32, device="cuda")
+    kernel[(1, )](y[0], func1, tuple())
+    kernel[(1, )](y[1], func2, tuple())
+    kernel[(1, )](y[2], func3, (3, ))
+    kernel[(1, )](y[3], func4, (3, 4))
+    kernel[(1, )](y[4], func1, tuple())
+    assert len(kernel.device_caches[0][0]) == 4
+    assert y.tolist() == [1, 2, 3, 7, 1]
