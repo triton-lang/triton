@@ -1358,12 +1358,153 @@ struct RsqrtOpConversion
 
     // `llvm.amdgcn.rsq.f32` provides direct access to v_rsq_f32_e32.
     StringRef funcName = "llvm.amdgcn.rsq.f32";
+
     Type funcType = getFunctionType(elemTy, operands[0]);
     LLVM::LLVMFuncOp funcOp =
         appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
 
     return {
         LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]).getResult()};
+  }
+
+private:
+  bool ftz;
+};
+
+static inline std::pair<Value, Value>
+ScaleUpIfDenorm(ConversionPatternRewriter &rewriter, Location loc,
+                const Value &src, float scaleThreshold, float scaleFactor) {
+  Value needScale = fcmp_ogt(f32_val(scaleThreshold), src);
+  Value scaledSrc = fmul(f32_ty, src, f32_val(scaleFactor));
+  Value selectedSrc = select(needScale, scaledSrc, src);
+  return {needScale, selectedSrc};
+}
+
+static inline Value ScaleDownIfDenorm(ConversionPatternRewriter &rewriter,
+                                      Location loc, const Value &src,
+                                      Value needScale, float scaleFactor) {
+  Value scaledSrc = fmul(f32_ty, src, f32_val(scaleFactor));
+  return select(needScale, scaledSrc, src);
+}
+
+struct SqrtOpConversion
+    : ElementwiseOpConversionBase<mlir::math::SqrtOp, SqrtOpConversion> {
+  using ElementwiseOpConversionBase<
+      mlir::math::SqrtOp, SqrtOpConversion>::ElementwiseOpConversionBase;
+
+  explicit SqrtOpConversion(LLVMTypeConverter &typeConverter,
+                            ModuleAxisInfoAnalysis &axisInfoAnalysis, bool ftz,
+                            PatternBenefit benefit)
+      : ElementwiseOpConversionBase(typeConverter, axisInfoAnalysis, benefit),
+        ftz(ftz) {}
+
+  SmallVector<Value> createDestOps(mlir::math::SqrtOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    // Only handle f32 here. Other data types will be lowered to LLVM::SqrtOp by
+    // MLIR.
+    if (elemTy.getIntOrFloatBitWidth() != 32)
+      return {};
+
+    Value needScale = false_val();
+    Value scaledSrc = operands[0][0];
+    if (!ftz) {
+      // In case of non-ftz, we need to scale up the input by a factor 2^{32},
+      // if it's below 2^{-96}, to prevent it from being flushed by
+      // llvm.amdgcn.sqrt.f32.
+      //
+      // And we will scale down the result afterwards to get correct result.
+      // Reference:
+      // https://github.com/llvm/llvm-project/blob/0876c11ceeb093904decc4d89bef213d483a5656/llvm/lib/Target/AMDGPU/AMDGPULegalizerInfo.cpp#L5235-L5314.
+      std::tie(needScale, scaledSrc) = ScaleUpIfDenorm(
+          rewriter, loc, operands[0][0], 0x1.0p-96f, 0x1.0p+32f);
+    }
+
+    // llvm.amdgcn.sqrt.f32 provides direct access to v_sqrt_f32, which provides
+    // 1ULP accuracy and flushs denorms.
+    StringRef funcName = "llvm.amdgcn.sqrt.f32";
+
+    Type funcType = getFunctionType(elemTy, operands[0]);
+    LLVM::LLVMFuncOp funcOp =
+        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
+
+    Value intrinsicsOutput =
+        LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]).getResult();
+
+    if (!ftz) {
+      // In case of non-ftz, we need to calibrate the result by scaling down by
+      // a factor 2^{-16}.
+      return {ScaleDownIfDenorm(rewriter, loc, intrinsicsOutput, needScale,
+                                0x1.0p-16f)};
+    } else {
+      return {intrinsicsOutput};
+    }
+  }
+
+private:
+  bool ftz;
+};
+
+struct PreciseSqrtOpConversion
+    : ElementwiseOpConversionBase<triton::PreciseSqrtOp,
+                                  PreciseSqrtOpConversion> {
+  using ElementwiseOpConversionBase<
+      triton::PreciseSqrtOp,
+      PreciseSqrtOpConversion>::ElementwiseOpConversionBase;
+
+  explicit PreciseSqrtOpConversion(LLVMTypeConverter &typeConverter,
+                                   ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                                   bool ftz, PatternBenefit benefit)
+      : ElementwiseOpConversionBase(typeConverter, axisInfoAnalysis, benefit),
+        ftz(ftz) {}
+
+  SmallVector<Value> createDestOps(triton::PreciseSqrtOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    // If the op is neither f32 nor denorm flushing(ftz), it's directly lowered
+    // to LLVM::SqrtOp.
+    if (elemTy.getIntOrFloatBitWidth() != 32 || !ftz) {
+      return {rewriter.create<LLVM::SqrtOp>(
+          loc, elemTy, operands[0], adaptor.getAttributes().getValue())};
+    }
+
+    // In case of f32 and ftz, according to
+    // https://github.com/llvm/llvm-project/blob/3d6b2d491209018918e4c881a0917bffc54cc0d9/llvm/lib/Target/AMDGPU/AMDGPULegalizerInfo.cpp#L5235-L5314,
+    // we use `x * rsq(x)` to approximate sqrt(x), then use extra refinement
+    // iteration to correct the result.
+    StringRef funcName = "llvm.amdgcn.rsq.f32";
+
+    Type funcType = getFunctionType(elemTy, operands[0]);
+    LLVM::LLVMFuncOp funcOp =
+        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
+
+    Value sqrtR =
+        LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]).getResult();
+
+    Value sqrtX = operands[0][0];
+    Value sqrtS = fmul(f32_ty, sqrtX, sqrtR);
+
+    // Refine the approximation with Newton iteration
+    Value sqrtH = fmul(f32_ty, sqrtR, f32_val(0.5f));
+    Value sqrtE = fma(neg(f32_ty, sqrtH), sqrtS, f32_val(0.5f));
+    sqrtH = fma(sqrtH, sqrtE, sqrtH);
+    sqrtS = fma(sqrtS, sqrtE, sqrtS);
+    Value sqrtD = fma(neg(f32_ty, sqrtS), sqrtS, sqrtX);
+    sqrtS = fma(sqrtD, sqrtH, sqrtS);
+
+    // Handle +0/-0/+inf
+    // These flags come from
+    // https://github.com/llvm/llvm-project/blob/217e0f39710dec3348c996ecf98a76fd08b69853/llvm/include/llvm/ADT/FloatingPointMode.h#L239-L265.
+    const unsigned fcPosInf = 0x0200;
+    const unsigned fcNegZero = 0x0020;
+    const unsigned fcPosZero = 0x0040;
+    const unsigned fcZero = fcNegZero | fcPosZero;
+
+    Value isZeroOrPosInf =
+        rewriter.create<LLVM::IsFPClass>(loc, i1_ty, sqrtX, fcPosInf | fcZero);
+    return {select(isZeroOrPosInf, sqrtX, sqrtS)};
   }
 
 private:
@@ -1385,9 +1526,6 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<ElementwiseOpConversion<arith::MaximumFOp, LLVM::MaximumOp>>(
       typeConverter, axisInfoAnalysis, benefit);
   patterns.add<ElementwiseOpConversion<triton::PreciseDivFOp, LLVM::FDivOp>>(
-      typeConverter, axisInfoAnalysis, benefit);
-
-  patterns.add<ElementwiseOpConversion<triton::PreciseSqrtOp, LLVM::SqrtOp>>(
       typeConverter, axisInfoAnalysis, benefit);
 
   patterns.add<FDivOpConversion>(typeConverter, axisInfoAnalysis, benefit);
@@ -1413,6 +1551,9 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<Exp2OpConversion>(typeConverter, axisInfoAnalysis, ftz, benefit);
   patterns.add<RsqrtOpConversion>(typeConverter, axisInfoAnalysis, ftz,
                                   benefit);
+  patterns.add<SqrtOpConversion>(typeConverter, axisInfoAnalysis, ftz, benefit);
+  patterns.add<PreciseSqrtOpConversion>(typeConverter, axisInfoAnalysis, ftz,
+                                        benefit);
   mlir::triton::populateElementwiseOpToLLVMPatterns(
       typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
   mlir::triton::populateMinMaxFOpToLLVMPattern(
