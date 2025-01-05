@@ -1135,11 +1135,11 @@ LogicalResult DotOperandEncodingAttr::verify(
     ::llvm::function_ref<::mlir::InFlightDiagnostic()> emitError,
     unsigned opIdx, Attribute parent, unsigned kWidth) {
   if (opIdx != 0 && opIdx != 1) {
-    return emitError() << "ttg.dot_op opIdx paramenter can be 0 or 1, got: "
+    return emitError() << "ttg.dot_op opIdx parameter can be 0 or 1, got: "
                        << opIdx;
   }
   if (!parent) {
-    return emitError() << "ttg.dot_op parent paramenter cannot be null";
+    return emitError() << "ttg.dot_op parent parameter cannot be null";
   }
   if (auto parentAttr = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent)) {
     if (kWidth != 0 && !(parentAttr.isAmpere() || parentAttr.isHopper()))
@@ -2315,7 +2315,7 @@ SmallVector<unsigned> NvidiaMmaEncodingAttr::getWarpsPerCTA() const {
 }
 SmallVector<unsigned> NvidiaMmaEncodingAttr::getWarpOrder() const {
   auto rank = getWarpsPerCTA().size();
-  // Hopper (wgmma) uses column-major as this is embeded in the instruction
+  // Hopper (wgmma) uses column-major as this is embedded in the instruction
   // For Ampere we can choose either row-major or column-major.
   // We choose row-major as the legacy path did so
   return getMatrixOrder(rank, /*rowMajor*/ !isHopper());

@@ -1,6 +1,6 @@
 // RUN: triton-opt %s -split-input-file -verify-diagnostics
 
-// expected-error@+2 {{ttg.dot_op opIdx paramenter can be 0 or 1, got: 2}}
+// expected-error@+2 {{ttg.dot_op opIdx parameter can be 0 or 1, got: 2}}
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
 #dot_op = #ttg.dot_op<{opIdx = 2, parent = #blocked, kWidth = 2}>
 

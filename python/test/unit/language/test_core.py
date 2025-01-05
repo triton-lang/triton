@@ -2404,7 +2404,7 @@ def test_scan2d(op, dtype_str, shape, axis, reverse, num_warps, device):
     check_type_supported(dtype_str, device)
     if dtype_str == 'bfloat16':
         if op == 'cummax':
-            pytest.skip("bfloat16 compare not suppoted before sm90")
+            pytest.skip("bfloat16 compare not supported before sm90")
         if op == 'linear_recurrence':
             pytest.skip("Skipping linear_recurrence scan on bfloat16 due to accuracy issues")
     numpy_dtype_str = 'float32' if dtype_str == 'bfloat16' else dtype_str
@@ -6190,7 +6190,7 @@ def test_temp_var_in_loop(device):
                 acc = temp
             else:
                 acc += tl.full((BLOCK, ), 1, dtype=tl.int32)
-            # re-use the temp variable and make sure to check that it isn't creating incorrect IR.
+            # reuse the temp variable and make sure to check that it isn't creating incorrect IR.
             temp = tl.full((BLOCK, ), 1, dtype=tl.int32)
             acc += temp
         z = Z + tl.arange(0, BLOCK)

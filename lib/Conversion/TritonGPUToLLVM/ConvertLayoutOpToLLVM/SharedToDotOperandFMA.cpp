@@ -158,7 +158,7 @@ Value computeSwizzledOffset(ConversionPatternRewriter &rewriter, Location loc,
                             ArrayRef<int64_t> opTensorShape,
                             ArrayRef<Value> strides) {
   Value offset = i32_val(0);
-  // Compute unswizzled multi dim coordinates in shared memmory object
+  // Compute unswizzled multi dim coordinates in shared memory object
   SmallVector<Value> elemMultiDimIndices(3);
   elemMultiDimIndices[dim.batch] =
       add(bTileOffset, i32_val(i.bTile * shapePerCTABTile + i.b));
@@ -309,7 +309,7 @@ Value loadFMAOp(Value srcVal, Value llVal, BlockedEncodingAttr dLayout,
                               sizeNonKPerThread);
 
   // In swizzled memory case basePtr stores pointer to the beginning of shared
-  // memmory object.
+  // memory object.
   //
   // If memory is not swizzled, algorithm breaks element offset pointer into
   // constant and non-constant part. Non-constant (depends on thread id) part is

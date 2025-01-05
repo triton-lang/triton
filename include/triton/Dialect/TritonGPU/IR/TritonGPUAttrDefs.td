@@ -950,7 +950,7 @@ available on AMD Radeon GPUs of RDNA architectures.
   - 1: gfx11
   - 2: gfx12
 - A `warpsPerCTA` parameter characterizes data distribution between warps.
-  An important limitation of WMMA for layout is a shape for tiles proccessed
+  An important limitation of WMMA for layout is a shape for tiles processed
   by a single warp. It is [16, 16].
   This encoding assumes specific access to matrix elements by threads.
 
