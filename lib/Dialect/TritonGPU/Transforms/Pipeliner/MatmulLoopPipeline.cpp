@@ -171,7 +171,7 @@ static int createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
   Operation *copy = builder.createWithStage<ttg::AsyncCopyGlobalToLocalOp>(
       loc, stage, clusterId, src, view, mask, other, loadOp.getCache(),
       loadOp.getEvict(), loadOp.getIsVolatile());
-  Operation *commmit = builder.createWithStage<ttg::AsyncCommitGroupOp>(
+  Operation *commit = builder.createWithStage<ttg::AsyncCommitGroupOp>(
       loc, stage, clusterId, copy->getResult(0));
   Operation *wait = builder.createWithStage<ttg::AsyncWaitOp>(
       loc, stageForFirstUse, clusterForFirstUse, commmit->getResult(0), 0);

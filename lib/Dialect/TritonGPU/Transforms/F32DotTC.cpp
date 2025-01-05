@@ -11,7 +11,7 @@ namespace gpu {
 
 namespace {
 
-// nb. We call the trick TF32x3 as C++ disallows varaibles starting with numbers
+// nb. We call the trick TF32x3 as C++ disallows variables starting with numbers
 // Implement 3xTF32 trick https://github.com/NVIDIA/cutlass/discussions/385
 // For a, b f32
 // dot(a, b, inputPrecision="tf32x3") ->

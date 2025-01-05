@@ -854,7 +854,7 @@ def TT_ElementwiseInlineAsmOp : TT_Op<"elementwise_inline_asm", [
 // Histogram Op
 //
 def TT_HistogramOp : TT_Op<"histogram", [Pure]> {
-  let summary = "return a histgram of the inputs.";
+  let summary = "return a histogram of the inputs.";
   let description = [{
     Return the histogram of the input tensor. The number of bins is equal to
     the dimension of the output tensor. Each bins has a width of 1 and bins

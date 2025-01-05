@@ -348,7 +348,7 @@ void init_triton_llvm(py::module &&m) {
         // level plugins. LLVM IR level plugin passes typically want to insert
         // calls to externally generated code (i.e. precompile a Cuda/Hip kernel
         // with Clang and then insert a call to it within an instrumentation
-        // pass) setting the targetMachine value here can can cause a mis-match
+        // pass) setting the targetMachine value here can can cause a mismatch
         // in the target machine between the MLIR and Clang generated kernels
         // and break the lowering of some target specific intrinsics.
         std::unique_ptr<TargetMachine> targetMachine = nullptr;
