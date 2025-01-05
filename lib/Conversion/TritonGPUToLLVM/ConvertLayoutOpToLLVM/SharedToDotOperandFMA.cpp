@@ -49,9 +49,6 @@ SmallVector<Value> swizzleIndices(ConversionPatternRewriter &rewriter,
 
   auto fastIdx = rawIndices[order[0]];
   auto secondIdx = rawIndices[order[1]];
-  // Original algorithm taken from getSwizzledSharedPtrs function
-  // (TritonGPUToLLVMBase.h)
-  //
   // phase = (secondIdx // perPhase) % maxPhase
   // swizzledGroup = ((fastIdx // vec) ^ phase) * vec
   // groupRemainder = fastIdx % vec

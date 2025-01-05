@@ -33,9 +33,6 @@ swizzleIndexes(ConversionPatternRewriter &rewriter, Location loc, Value row,
   auto perPhase = i32_val(attr.getPerPhase());
   auto maxPhase = i32_val(attr.getMaxPhase());
 
-  // Original algorithm taken from getSwizzledSharedPtrs function
-  // (TritonGPUToLLVMBase.h): Basic algorithm for row-major tensor is following:
-  //
   // phase = (row // perPhase) % maxPhase
   // colOffSwizzled = ((col // vec) ^ phase) * vec
   // colOffOrdered = col % vec
