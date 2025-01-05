@@ -437,6 +437,18 @@ jobs:
 
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
           TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py
+      - name: Run asan tests on HIP
+        run: |
+          cd third_party/amd/python/test/
+          ulimit -s 1024
+          export PATH=$(find ~/.triton/llvm -name llvm-symbolizer  -printf '%h\n'):$PATH
+          export LD_LIBRARY_PATH=$(find /opt -name libclang_rt.asan-x86_64.so -printf '%h\n'):$LD_LIBRARY_PATH
+          export LD_LIBRARY_PATH=$(find /opt -type d -wholename *lib/llvm/lib/asan):$LD_LIBRARY_PATH
+          export LD_LIBRARY_PATH=$(find /usr -name libcaffe2_nvrtc.so -printf '%h\n'):$LD_LIBRARY_PATH
+          export CLANG_ASAN_LIB=$(find /opt -name libclang_rt.asan-x86_64.so)
+          export HIP_ASAN_LIB=$(find /opt -wholename *lib/asan/libamdhip64.so)
+          ASAN_OPTIONS=detect_leaks=0,alloc_dealloc_mismatch=0 \
+          LD_PRELOAD=$CLANG_ASAN_LIB:$HIP_ASAN_LIB python3 -m pytest -s test_address_sanitizer.py
       - name: Run regression tests
         run: |
           # Reenable test_functional_regression.py once it's fixed

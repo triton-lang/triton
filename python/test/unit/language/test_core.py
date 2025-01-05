@@ -59,11 +59,18 @@ def promotion_numpy_2_0():
 # num_ctas_list = [1, 4] if torch.cuda.get_device_capability()[0] == 9 else [1]
 num_ctas_list = [1]
 
+mma_nonk_sizes = []
+
 GPU_DIALECT = "ttg"
 if is_interpreter():
     THREADS_PER_WARP = 1
 elif is_hip():
     THREADS_PER_WARP = triton.runtime.driver.active.get_current_target().warp_size
+    # for CDNA multiple variants of mma instructions are supported:
+    # mfma 16x16/mfma 32x32
+    # 0 is a special value for automatic heuristic
+    if is_hip_cdna():
+        mma_nonk_sizes = [0, 16, 32]
 else:
     THREADS_PER_WARP = 32
 
@@ -89,7 +96,7 @@ def patch_kernel(template, to_replace):
     else:
         kernel = triton.JITFunction(template.fn)
         for key, value in to_replace.items():
-            kernel.src = kernel.src.replace(key, value)
+            kernel._unsafe_update_src(kernel.src.replace(key, value))
         return kernel
 
 
@@ -3206,14 +3213,14 @@ def convert_fp8_to_fp32(x, device, dtype_str):
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize(
-    "M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack",
-    [(*shape, 4, False, False, epilogue, input_precision, in_dtype, out_dtype, 1)
+    "M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size",
+    [(*shape, 4, False, False, epilogue, input_precision, in_dtype, out_dtype, 1, None)
      for shape in [(64, 64, 64), (32, 32, 32), (16, 16, 16)]
      for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols', 'softmax', 'chain-dot']
      for input_precision in ['tf32', 'tf32x3', 'ieee']
      for in_dtype, out_dtype in [('float16', 'float16'), ('float16', 'float32'), ('float32', 'float32')]
      if not (input_precision != 'ieee' and (in_dtype in ['float16']))] +
-    [(*shape_nw, col_a, col_b, 'none', input_precision, in_dtype, out_dtype, kpack)
+    [(*shape_nw, col_a, col_b, 'none', input_precision, in_dtype, out_dtype, kpack, None)
      for shape_nw in [[128, 256, 32, 8], [128, 16, 32, 4], [32, 128, 64, 4], [128, 128, 64, 4], [64, 128, 128, 4],
                       [32, 128, 64, 2], [64, 64, 32, 4], [32, 32, 128, 16], [128, 128, 64, 2], [64, 128, 128, 2]]
      for input_precision in ["tf32" if is_cuda() else "ieee"]
@@ -3221,23 +3228,29 @@ def convert_fp8_to_fp32(x, device, dtype_str):
      for col_b in [True, False]
      for in_dtype, out_dtype in [('int8', 'int8'), ('float16', 'float16'), ('float16', 'float32'), ('float32',
                                                                                                     'float32')]
-     for kpack in [1, 2 if is_hip() else 1]] + [(64, 64, 64, 4, col_a, col_b, 'none', 'ieee', 'float32', 'float32', 1)
-                                                for col_a in [True, False]
-                                                for col_b in [True, False]] +
-    [(64, 64, 64, 4, False, False, 'chain-dot', 'ieee', 'bfloat16', 'float32', 1)] +
-    ([(16, 16, 8, 4, False, False, 'None', 'ieee', 'float32', 'float32', 1),
-      (32, 16, 8, 4, False, False, 'None', 'ieee', 'float16', 'float16', 1)] if "gfx9" in get_arch() else []) +
-    [(128, 128, 64, 4, False, False, 'chain-dot', 'ieee', float8_type, 'float32', 1)
+     for kpack in [1, 2 if is_hip() else 1]] +
+    [(64, 64, 64, 4, col_a, col_b, 'none', 'ieee', 'float32', 'float32', 1, None)
+     for col_a in [True, False]
+     for col_b in [True, False]] +
+    [(64, 64, 64, 4, False, False, 'chain-dot', 'ieee', 'bfloat16', 'float32', 1, None)] +
+    ([(16, 16, 8, 4, False, False, 'None', 'ieee', 'float32', 'float32', 1, None),
+      (32, 16, 8, 4, False, False, 'None', 'ieee', 'float16', 'float16', 1, None)] if "gfx9" in get_arch() else []) +
+    [(128, 128, 64, 4, False, False, 'chain-dot', 'ieee', float8_type, 'float32', 1, None)
      for float8_type in ["float8e5", "float8e4nv"]] +
-    [(*shape_nw, False, False, epilogue, 'ieee', in_dtype, out_dtype, 1)
+    # small k cases for MFMA dots
+    [(32, 32, k_size, 4, False, False, 'None', 'ieee', in_dtype, out_dtype, 1, mma_nonk_size)
+     for k_size in [1, 2, 4, 8]
+     for in_dtype, out_dtype in [('float16', 'float32'), ('int8', 'int32')]
+     for mma_nonk_size in mma_nonk_sizes] +
+    # small m/n cases for FMA dots
+    [(*shape_nw, False, False, epilogue, 'ieee', in_dtype, out_dtype, 1, None)
      for shape_nw in [(2, 2, 16, 1), (1, 64, 64, 1), (64, 2, 64, 2), (64, 64, 4, 4)]
      for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols']
      for in_dtype, out_dtype in [('float16', 'float16'), ('float32', 'float32')]])
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
-def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, num_ctas, device):
+def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size,
+             num_ctas, device):
     if is_interpreter():
-        if M < 16 or N < 16 or K < 16:
-            pytest.skip("small dots are supported only on HIP at the moment")
         if in_dtype == 'bfloat16':
             pytest.skip("bfloat16 is not supported in the interpreter")
     else:
@@ -3362,6 +3375,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
 
     if is_hip():
         kern_kwargs['kpack'] = kpack
+        if mma_nonk_size is not None:
+            kern_kwargs['matrix_instr_nonkdim'] = mma_nonk_size
 
     pgm = kernel[(1, 1)](x_tri, x_tri.stride(0), x_tri.stride(1), y_tri, y_tri.stride(0), y_tri.stride(1), w_tri,
                          w_tri.stride(0), w_tri.stride(1), z_tri, z_tri.stride(0), z_tri.stride(1), **kern_kwargs)
@@ -3444,16 +3459,16 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
             assert 'wgmma.mma_async.sync.aligned.m64n128k32.f32.e4m3.e4m3' in ptx
 
 
-@pytest.mark.parametrize("M, N, K, col_a, col_b, rhs_scale, normal_type, mxfp_type, num_warps, mma, kpack",
-                         [(M, N, K, col_a, col_b, rhs_scale, normal_type, mxfp_type, 4, mma, kpack)
+@pytest.mark.parametrize("M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, num_warps, mma, kpack",
+                         [(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, 4, mma, kpack)
                           for M, N, K in itertools.product([32, 64, 128], [32, 64, 128], [64, 128])
                           for col_a, col_b in itertools.product([True, False], repeat=2)
                           for rhs_scale in [False, True]
-                          for normal_type in ["e2m1", "e4m3", "e5m2"]
-                          for mxfp_type in ["e4m3", "e5m2", "bf16"]
-                          for mma in ([32, 16] if is_hip() else [16])
+                          for mxfp_type in ["e2m1", "e4m3", "e5m2"]
+                          for normal_type in ["e4m3", "e5m2", "bf16"]
+                          for mma in (mma_nonk_sizes if is_hip() else [16])
                           for kpack in ([1, 2] if is_hip() else [1])])
-def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, normal_type, mxfp_type, num_warps, mma, kpack, device):
+def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, num_warps, mma, kpack, device):
     if is_cuda():
         cc = torch.cuda.get_device_capability()
         if cc < (8, 9):
@@ -3461,8 +3476,8 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, normal_type, mxfp_type, nu
     if is_hip():
         if not is_hip_cdna():
             pytest.skip("scaled_dot only implemented for HIP CDNA")
-        if "e4m3" in (normal_type, mxfp_type) and not is_hip_mi300():
-            pytest.skip(f"scaled_dot({normal_type}, {mxfp_type}) only implemented for MI300")
+        if "e4m3" in (mxfp_type, normal_type) and not is_hip_mi300():
+            pytest.skip(f"scaled_dot({mxfp_type}, {normal_type}) only implemented for MI300")
         if mma == 16 and K == 64:
             pytest.skip(f"K == {K} too small for mfma {mma} in scaled_dot")
 
@@ -3616,8 +3631,8 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, normal_type, mxfp_type, nu
             ret = ret.mT
         return ret
 
-    type_a = normal_type if not rhs_scale else mxfp_type
-    type_b = mxfp_type if not rhs_scale else normal_type
+    type_a = normal_type if rhs_scale else mxfp_type
+    type_b = mxfp_type if rhs_scale else normal_type
 
     DIV_FACTOR_A = 2 if type_a == "e2m1" else 1
     DIV_FACTOR_B = 2 if type_b == "e2m1" else 1
@@ -3702,7 +3717,7 @@ def test_dot3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_
                 pytest.skip(f"{out_dtype_str} has low precision in WMMA dot")
     else:
         input_precision = "tf32" if is_cuda() and in_dtype_str == 'float32' else "ieee"
-        if BLOCK_M < 16 or BLOCK_N < 16:
+        if not is_interpreter() and (BLOCK_M < 16 or BLOCK_N < 16):
             pytest.skip("small dots are supported only on HIP at the moment")
 
     if B == 8 and M == 64 and in_dtype_str == "float32" and out_dtype_str == "float32":
@@ -4437,7 +4452,7 @@ def test_value_specialization(value: int, value_type: str, device) -> None:
 
     def repr(specialization):
         ty = specialization.signature["value1"]
-        cst = '_'.join([k for k, v in specialization.constants.items() if v == 1])
+        cst = '_'.join([k for k, v in specialization.constants.items() if isinstance(k, str) and v == 1])
         return f"kernel_{ty}_{cst}"
 
     @triton.jit(repr=repr)
@@ -5627,6 +5642,10 @@ def test_local_load_store_mma(M, N, mma_layout, shared_layout, device, tmp_path:
         assert "stmatrix" in kernel.asm["ptx"]
 
 
+def filter_layout_pairs(layout_pairs):
+    return [pair for pair in layout_pairs if is_layout_applicable(pair[0]) and is_layout_applicable(pair[1])]
+
+
 mma_pairs = [
     [
         MmaLayout((2, 0), [1, 4], [1, 1], [1, 1], [0, 1], [16, 8]),
@@ -5668,15 +5687,68 @@ mma_pairs = [
         MmaLayout((3, 0), [4, 1], [1, 1], [1, 1], [0, 1], [16, 64, 16]),
         MmaLayout((3, 0), [4, 1], [1, 1], [1, 1], [0, 1], [16, 128, 16]),
     ],
+    [
+        WmmaLayout(1, [4, 4]),
+        WmmaLayout(1, [16, 1]),
+    ],
+    [
+        WmmaLayout(1, [16, 1]),
+        WmmaLayout(1, [4, 4]),
+    ],
+    [
+        WmmaLayout(2, [4, 4]),
+        WmmaLayout(2, [16, 1]),
+    ],
+    [
+        WmmaLayout(2, [16, 1]),
+        WmmaLayout(2, [4, 4]),
+    ],
+    [
+        MfmaLayout([2, 0], [2, 2], [32, 32], False),
+        MfmaLayout([2, 0], [4, 1], [32, 32], False),
+    ],
+    [
+        MfmaLayout([2, 0], [4, 1], [32, 32], False),
+        MfmaLayout([2, 0], [2, 2], [32, 32], False),
+    ],
+    [
+        MfmaLayout([2, 0], [2, 2], [32, 32], False),
+        MfmaLayout([2, 0], [4, 1], [32, 32], True),
+    ],
+    [
+        MfmaLayout([2, 0], [4, 1], [32, 32], False),
+        MfmaLayout([2, 0], [2, 2], [32, 32], True),
+    ],
+    [
+        MfmaLayout([2, 0], [4, 4], [16, 16], False),
+        MfmaLayout([2, 0], [16, 1], [16, 16], False),
+    ],
+    [
+        MfmaLayout([2, 0], [16, 1], [16, 16], False),
+        MfmaLayout([2, 0], [4, 4], [16, 16], False),
+    ],
+    [
+        MfmaLayout([2, 0], [4, 4], [16, 16], False),
+        MfmaLayout([2, 0], [16, 1], [16, 16], True),
+    ],
+    [
+        MfmaLayout([2, 0], [16, 1], [16, 16], False),
+        MfmaLayout([2, 0], [4, 4], [16, 16], True),
+    ],
 ]
 
 
-@pytest.mark.parametrize("M, N", [[64, 1], [1, 64], [64, 64], [128, 128], [256, 256]])
+@pytest.mark.parametrize("M, N", [[16, 16], [64, 1], [1, 64], [64, 64], [128, 128], [256, 256]])
 @pytest.mark.parametrize("dtype", ['float16'])
-@pytest.mark.parametrize("mma_pair", filter_layouts(mma_pairs))
+@pytest.mark.parametrize("mma_pair", filter_layout_pairs(mma_pairs))
 def test_convert_mma2mma(M, N, mma_pair, dtype, device, tmp_path: pathlib.Path):
+    if is_hip():
+        if isinstance(mma_pair[1], MfmaLayout) and (mma_pair[1].instr_shape[1] > M or mma_pair[1].instr_shape[1] > N):
+            pytest.skip("HIP do not fully support skinny tensor store")
+
     src_layout, _ = mma_pair
     num_warps = np.prod(src_layout.warps_per_cta)
+    warp_size = THREADS_PER_WARP
 
     def do_test(src_layout, dst_layout):
         layouts = f"""
@@ -5685,7 +5757,7 @@ def test_convert_mma2mma(M, N, mma_pair, dtype, device, tmp_path: pathlib.Path):
         """
 
         ir = layouts + f"""
-        module attributes {{"ttg.num-warps" = {num_warps} : i32, "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = 32 : i32}} {{
+        module attributes {{"ttg.num-warps" = {num_warps} : i32, "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = {warp_size} : i32}} {{
         tt.func public @kernel_0d1d(%arg0: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}) {{
         %cst = arith.constant dense<{N}> : tensor<{M}x1xi32, #src>
         %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #ttg.slice<{{dim = 1, parent = #src}}>>
@@ -6452,3 +6524,32 @@ def test_gather_warp_shuffle(src_shape, indices_shape, axis, src_layout, indices
     kernel[(1, 1, 1)](src, indices, output)
 
     torch.testing.assert_close(output, ref, rtol=0, atol=0)
+
+
+@pytest.mark.interpreter
+def test_zero_strided_tensors(device):
+
+    @triton.jit
+    def _simple_add(
+        X,
+        stride_x_a,
+        stride_x_b,
+    ):
+        pid_a = tl.program_id(0)
+        pid_b = tl.program_id(1)
+
+        # doesn't directly index c dim, so relies on 0-strided c dim to affect every element
+        x_ptr = X + pid_a * stride_x_a + pid_b * stride_x_b
+
+        tl.atomic_add(x_ptr, 1)
+
+    x = torch.zeros((2, 2, 1), device=device)
+    c_dim = 3
+    x = x.expand((2, 2, c_dim))
+
+    a, b, c = x.shape
+    grid = (a, b, c)
+    with torch.cuda.device(x.device.index):
+        _simple_add[grid](x, x.stride(0), x.stride(1))
+
+    assert torch.allclose(x, torch.ones_like(x) * c_dim)

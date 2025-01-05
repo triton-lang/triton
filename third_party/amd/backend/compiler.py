@@ -1,6 +1,5 @@
-from triton.backends.compiler import BaseBackend, GPUTarget, AttrsDescriptor, register_descriptor
+from triton.backends.compiler import BaseBackend, GPUTarget
 from triton._C.libtriton import ir, passes, llvm, amd
-from triton._utils import find_paths_if
 from dataclasses import dataclass
 from typing import Any, Dict, Tuple
 from types import ModuleType
@@ -21,15 +20,12 @@ def min_dot_size(target: GPUTarget):
     def get_gfx94_limits(lhsType, rhsType):
         if is_fma_supported(lhsType.scalar, rhsType.scalar):
             return (1, 1, 1)
-        # CDNA 3.0 supports k==8 in all mfma variants except for int8
-        # (where the smallest `k` supported is 16)
-        return (16, 16, 16) if (lhsType.scalar.is_int8() or rhsType.scalar.is_int8()) else (16, 16, 8)
+        return (16, 16, 1)
 
     def get_gfx9_limits(lhsType, rhsType):
         if is_fma_supported(lhsType.scalar, rhsType.scalar):
             return (1, 1, 1)
-        # CDNA 2.0 always supports `k==8`
-        return (16, 16, 8)
+        return (16, 16, 1)
 
     arch_str = target.arch
     if "gfx94" in arch_str:
@@ -102,48 +98,6 @@ class HIPOptions:
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
-@register_descriptor
-class HIPAttrsDescriptor(AttrsDescriptor):
-    # This property asserts if the underlying storage area of a given pointer
-    # can be resepresented as a 32 bit integer. When this is true, we can be
-    # sure that all indices into the tensor behind that pointer can use 32-bit
-    # indexing. That opens the door for the AMD backend to use buffer load/store
-    # instrinsics, which requires this property. Buffer load/store intrinsics
-    # gives direct out-of-bound support and simplifies index calculation for
-    # lower register pressure.
-    __slots__ = ("pointer_range_32")
-
-    def _add_backend_properties(self, params=None, values=None):
-        self.property_values["tt.pointer_range"] = 32
-        if params is None or values is None:
-            return
-
-        pointer_range = []
-        for param, arg in zip(params, values):
-            if param.do_not_specialize or \
-               param.do_not_specialize_on_alignment:
-                continue
-            paths = find_paths_if(arg, lambda path, val: HIPAttrsDescriptor.is_within2gb(val))
-            pointer_range += [(param.num, ) + x for x in paths]
-        self.arg_properties["tt.pointer_range"] = pointer_range
-
-    @staticmethod
-    def is_within2gb(arg):
-        if hasattr(arg, "ptr_range"):
-            return arg.ptr_range() <= 2**31 - 1
-        if "torch.Tensor" in str(type(arg)) and hasattr(arg, "untyped_storage"):
-            # Please note that 2**31-1 is the max int32 positive limit
-            return arg.untyped_storage().size() <= 2**31 - 1
-        return False
-
-    @staticmethod
-    def get_property_key(val, align):
-        generic_key = AttrsDescriptor.get_property_key(val, align)
-        hip_key = "S" if HIPAttrsDescriptor.is_within2gb(val) else "N"
-        key = (generic_key + hip_key).replace("N", "")
-        return key if key else "N"
-
-
 class HIPBackend(BaseBackend):
 
     @staticmethod
@@ -190,12 +144,27 @@ class HIPBackend(BaseBackend):
     def load_dialects(self, ctx):
         amd.load_dialects(ctx)
 
-    def get_attrs_descriptor(self, params, args):
-        return HIPAttrsDescriptor(params, args)
+    @staticmethod
+    def is_within_2gb(arg):
+        if hasattr(arg, "ptr_range"):
+            return arg.ptr_range() <= 2**31 - 1
+        if "torch.Tensor" in str(type(arg)) and hasattr(arg, "untyped_storage"):
+            return arg.untyped_storage().size() <= 2**31 - 1
+        return False
 
     @staticmethod
-    def compute_spec_key(arg, align):
-        return HIPAttrsDescriptor.get_property_key(arg, align)
+    def parse_attr(desc):
+        ret = BaseBackend.parse_attr(desc)
+        if "S" in desc:
+            ret += [["tt.pointer_range", 32]]
+        return ret
+
+    @staticmethod
+    def get_arg_specialization(arg, ty, **kwargs):
+        ret = BaseBackend.get_arg_specialization(arg, ty, **kwargs)
+        if ty == "tensor" and HIPBackend.is_within_2gb(arg):
+            ret += "S"
+        return ret
 
     @staticmethod
     def path_to_rocm_lld():
@@ -332,7 +301,10 @@ class HIPBackend(BaseBackend):
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
         amd.attach_target_triple(llvm_mod)
-        llvm.attach_datalayout(llvm_mod, amd.TARGET_TRIPLE, options.arch, '')
+        target_features = ''
+        if os.environ.get("TRITON_ENABLE_ASAN", "0") == "1":
+            target_features = '+xnack'
+        llvm.attach_datalayout(llvm_mod, amd.TARGET_TRIPLE, options.arch, target_features)
 
         # Set various control constants on the LLVM module so that device
         # libraries can resolve references to them.
@@ -358,13 +330,24 @@ class HIPBackend(BaseBackend):
         fns[0].add_fn_attr("amdgpu-waves-per-eu", f"{options.waves_per_eu}")
         denormal_mode = "preserve-sign" if options.allow_flush_denorm else "ieee"
         fns[0].add_fn_attr("denormal-fp-math-f32", denormal_mode)
+        if os.environ.get("TRITON_ENABLE_ASAN", "0") == "1":
+            fns[0].add_fn_target_feature("+xnack")
+            fns[0].add_fn_asan_attr()
 
         # Hint the compiler that we'd like the firmware to set the kernel arguments
         # to user SGPRs so that the kernel does not need to s_load its arguments
         # from memory.
         amd.set_all_fn_arg_inreg(fns[0])
 
-        if options.extern_libs:
+        if os.environ.get("TRITON_ENABLE_ASAN", "0") == "1":
+            default_libdir = Path(__file__).parent / 'lib'
+            paths = [
+                str(default_libdir / 'asanrtl.bc'),
+                str(default_libdir / "ocml.bc"),
+                str(default_libdir / "ockl.bc")
+            ]
+            llvm.link_extern_libs(llvm_mod, paths)
+        elif options.extern_libs:
             paths = [path for (name, path) in options.extern_libs if amd.need_extern_lib(llvm_mod, name)]
             llvm.link_extern_libs(llvm_mod, paths)
 
@@ -396,7 +379,10 @@ class HIPBackend(BaseBackend):
 
     @staticmethod
     def make_hsaco(src, metadata, options):
-        hsaco = amd.assemble_amdgcn(src, options.arch, '')
+        target_features = ''
+        if os.environ.get("TRITON_ENABLE_ASAN", "0") == "1":
+            target_features = '+xnack'
+        hsaco = amd.assemble_amdgcn(src, options.arch, target_features)
 
         rocm_path = HIPBackend.path_to_rocm_lld()
         with tempfile.NamedTemporaryFile() as tmp_out:

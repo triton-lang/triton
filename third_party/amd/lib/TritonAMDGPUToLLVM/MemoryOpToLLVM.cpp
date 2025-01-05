@@ -58,19 +58,18 @@ private:
       triton::gpu::LocalLoadOp op, triton::gpu::LocalLoadOpAdaptor adaptor,
       const LLVMTypeConverter *typeConverter,
       ConversionPatternRewriter &rewriter,
-      const DotOperandEncodingAttr &dotOperandLayout, bool isOuter) const {
+      const DotOperandEncodingAttr &dotOperandLayout) const {
     auto loc = op.getLoc();
     Value src = op.getSrc();
     Value dst = op.getResult();
     auto llvmElemTy = typeConverter->convertType(
         cast<MemDescType>(src.getType()).getElementType());
 
-    auto smemObj = mlir::LLVM::getSharedMemoryObjectFromStruct(
-        loc, adaptor.getSrc(), llvmElemTy, rewriter);
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
+                                                         llvmElemTy, rewriter);
     Value res;
     auto dopOpParent = dotOperandLayout.getParent();
-    if (!isOuter &&
-        isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>(dopOpParent)) {
+    if (isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>(dopOpParent)) {
       auto sharedToDotConvert = isa<AMDMfmaEncodingAttr>(dopOpParent)
                                     ? SharedToDotOperandMFMA::convertLayout
                                     : SharedToDotOperandWMMA::convertLayout;
@@ -89,24 +88,13 @@ private:
                           triton::gpu::LocalLoadOpAdaptor adaptor,
                           const LLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter) const {
-    auto loc = op.getLoc();
-    Value src = op.getSrc();
     Value dst = op.getResult();
     auto dstTensorTy = cast<RankedTensorType>(dst.getType());
-    auto srcTensorTy = cast<MemDescType>(src.getType());
     auto dotOperandLayout =
         cast<DotOperandEncodingAttr>(dstTensorTy.getEncoding());
-    auto sharedLayout = cast<SharedEncodingAttr>(srcTensorTy.getEncoding());
 
-    bool isOuter{};
-    int K{};
-    if (dotOperandLayout.getOpIdx() == 0) // $a
-      K = dstTensorTy.getShape()[sharedLayout.getOrder()[0]];
-    else // $b
-      K = dstTensorTy.getShape()[sharedLayout.getOrder()[1]];
-    isOuter = K == 1;
     Value res = lowerSharedToDotOperandMMA(op, adaptor, typeConverter, rewriter,
-                                           dotOperandLayout, isOuter);
+                                           dotOperandLayout);
     if (!res)
       return failure();
     rewriter.replaceOp(op, res);
