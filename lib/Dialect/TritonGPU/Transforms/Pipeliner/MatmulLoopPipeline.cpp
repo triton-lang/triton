@@ -174,7 +174,7 @@ static int createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
   Operation *commit = builder.createWithStage<ttg::AsyncCommitGroupOp>(
       loc, stage, clusterId, copy->getResult(0));
   Operation *wait = builder.createWithStage<ttg::AsyncWaitOp>(
-      loc, stageForFirstUse, clusterForFirstUse, commmit->getResult(0), 0);
+      loc, stageForFirstUse, clusterForFirstUse, commit->getResult(0), 0);
 
   auto loadIsMMAv3Shared = loadToInfo[loadOp].isMMAv3Shared;
 
