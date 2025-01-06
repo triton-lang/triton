@@ -1088,7 +1088,7 @@ struct FDivOpConversion
                                             operands[0][1])};
 
     // The algorithm comes from
-    // https://github.com/llvm/llvm-project/blob/bda7aadfcd0596675c8b4b381f178f3d8f854f20/llvm/lib/Target/AMDGPU/AMDGPULegalizerInfo.cpp#L4980-L5065
+    // https://github.com/llvm/llvm-project/blob/bda7aadf/llvm/lib/Target/AMDGPU/AMDGPULegalizerInfo.cpp#L4980-L5065
     // with the Newton-Raphson refinement removed, to perform a faster,
     // approximated DIV operation, aligning with the `div.full.f32` instruction
     // on the NV backend.
@@ -1097,15 +1097,23 @@ struct FDivOpConversion
     MLIRContext *ctx = rewriter.getContext();
     Type divScaleResType = struct_ty({elemTy, i1_ty});
 
-    // The `llvm.amdgcn.div.scale.f32` instruction has two outputs: the scaled
-    // variable and the VCC register.
-    LLVM::CallIntrinsicOp denominatorScaleOp = LLVM::createLLVMIntrinsicCallOp(
+    // The `llvm.amdgcn.div.scale.f32` instruction's signature is
+    // (src0, src1, src2) -> (ret0, ret1), where
+    //
+    // src0: The numerator or lhs of FDivOp.
+    // src1: The denominator or rhs of FDivOp.
+    // src2: A boolean indicating which operand to scale. If true, lhs is
+    // scaled; Otherwise, rhs is scaled.
+    //
+    // ret0: The scaled operand.
+    // ret1: The VCC register indicating whether post-scaling is required.
+    auto denominatorScaleOp = LLVM::createLLVMIntrinsicCallOp(
         rewriter, loc, "llvm.amdgcn.div.scale.f32", divScaleResType,
-        {lhs, rhs, i1_val(0)});
+        {lhs, rhs, false_val()});
     Value denominatorScaled = extract_val(denominatorScaleOp.getResult(0), 0);
-    LLVM::CallIntrinsicOp numeratorScaleOp = LLVM::createLLVMIntrinsicCallOp(
+    auto numeratorScaleOp = LLVM::createLLVMIntrinsicCallOp(
         rewriter, loc, "llvm.amdgcn.div.scale.f32", divScaleResType,
-        {lhs, rhs, i1_val(1)});
+        {lhs, rhs, true_val()});
     Value numeratorScaled = extract_val(numeratorScaleOp.getResult(0), 0);
     Value vcc = extract_val(numeratorScaleOp.getResult(0), 1);
 
