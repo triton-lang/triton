@@ -3465,19 +3465,24 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                           for col_a, col_b in itertools.product([True, False], repeat=2)
                           for rhs_scale in [False, True]
                           for mxfp_type in ["e2m1", "e4m3", "e5m2"]
-                          for normal_type in ["e4m3", "e5m2", "bf16"]
+                          for normal_type in ["e4m3", "e5m2", "bf16", "fp16"]
                           for mma in (mma_nonk_sizes if is_hip() else [16])
                           for kpack in ([1, 2] if is_hip() else [1])])
 def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, num_warps, mma, kpack, device):
     if is_cuda():
+        if normal_type == "fp16":
+            pytest.skip("scaled_dot with fp16 input not supported on CUDA yet")
         cc = torch.cuda.get_device_capability()
         if cc < (8, 9):
             pytest.skip("float8e4nv not supported on CUDA < 8.9")
     if is_hip():
         if not is_hip_cdna():
             pytest.skip("scaled_dot only implemented for HIP CDNA")
-        if "e4m3" in (mxfp_type, normal_type) and not is_hip_mi300():
-            pytest.skip(f"scaled_dot({mxfp_type}, {normal_type}) only implemented for MI300")
+        if "e4m3" in (mxfp_type, normal_type):
+            if not is_hip_mi300():
+                pytest.skip(f"scaled_dot({mxfp_type}, {normal_type}) only implemented for MI300")
+            if normal_type == "fp16":
+                pytest.skip(f"scaled_dot({mxfp_type}, {normal_type}) not yet implemented for MI300")
         if mma == 16 and K == 64:
             pytest.skip(f"K == {K} too small for mfma {mma} in scaled_dot")
 
@@ -3583,7 +3588,12 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
         def upcast(v, scale, type, transposed):
             comp_dtype = torch.bfloat16
             if scale is None:
-                type = {"e4m3": torch.float8_e4m3fn, "e5m2": torch.float8_e5m2, "bf16": torch.bfloat16}[type]
+                type = {
+                    "e4m3": torch.float8_e4m3fn,
+                    "e5m2": torch.float8_e5m2,
+                    "bf16": torch.bfloat16,
+                    "fp16": torch.float16,
+                }[type]
                 return v.view(type).to(comp_dtype)
             e_bits, m_bits = {"e2m1": (2, 1), "e4m3": (4, 3), "e5m2": (5, 2)}[type]
             # Packing is always on the K dimension so we transpose before upcasting then transpose back.
@@ -3623,6 +3633,10 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
             shape = shape[:-2] + (shape[-1], shape[-2])
         if ty == "bf16":
             ret = torch.randn(shape, dtype=torch.bfloat16, device=device)
+            # Clamp to avoid relative error issues
+            ret.clamp_(-2**15, 2**15 - 1)
+        elif ty == "fp16":
+            ret = torch.randn(shape, dtype=torch.float16, device=device)
             # Clamp to avoid relative error issues
             ret.clamp_(-2**15, 2**15 - 1)
         else:
@@ -3665,9 +3679,12 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
     if is_hip():
         kernel_kwargs["kpack"] = kpack
         kernel_kwargs["matrix_instr_nonkdim"] = mma
-    z = x.new_empty((M, N), dtype=torch.bfloat16)
+    z = x.new_empty((M, N), dtype=torch.float16 if normal_type == "fp16" else torch.bfloat16)
     pgm = dot_scale_kernel[(1, )](x, *x.stride(), scale_x, y, *y.stride(), scale_y, z, M, N, K, type_a, type_b,
                                   **kernel_kwargs)
+    # FIXME: update reference computation impl to verify correctness
+    if normal_type == "fp16":
+        return
     z_ref = dot_scale_ref(x, scale_x, y, scale_y, type_a, type_b)
     # Bigger tolerance for AMD MI200 devices.
     # MI200 devices use reduced precision fp16 and bf16 and flush input and output denormal values

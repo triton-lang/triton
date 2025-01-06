@@ -99,25 +99,6 @@ static Value cvtFp16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
   return builder.launch(rewriter, loc, f32_ty, false);
 }
 
-static Value cvtFp32ToFp16(Location loc, ConversionPatternRewriter &rewriter,
-                           const Value &v, const RoundingMode rounding) {
-  GCNBuilder builder;
-
-  auto &cvt = *builder.create("v_cvt_f16_f32");
-  auto res = builder.newOperand("=v");
-  auto operand = builder.newOperand(v, "v");
-  if (rounding == RoundingMode::RTZ) {
-    auto &setRTZ = *builder.create("s_setreg_imm32_b32 0x1801, 0xc");
-    setRTZ();
-  }
-  cvt(res, operand);
-  if (rounding == RoundingMode::RTZ) {
-    auto &resetRTZ = *builder.create("s_setreg_imm32_b32 0x1801, 0x0");
-    resetRTZ();
-  }
-  return builder.launch(rewriter, loc, f16_ty, false);
-}
-
 // convert fp8 to fp32
 static SmallVector<Value> cvtFp8ToFp32(Location loc,
                                        ConversionPatternRewriter &rewriter,
@@ -194,8 +175,8 @@ convert_val_Fp8_to_Fp16(Location loc, ConversionPatternRewriter &rewriter,
   SmallVector<Value> ret = cvtFp8ToFp32(loc, rewriter, v0, v1, fp8_format);
 
   // Convert fp32 to fp16
-  ret[0] = cvtFp32ToFp16(loc, rewriter, ret[0], RoundingMode::RTNE);
-  ret[1] = cvtFp32ToFp16(loc, rewriter, ret[1], RoundingMode::RTNE);
+  ret[0] = LLVM::AMD::cvtFp32ToFp16(loc, rewriter, ret[0], RoundingMode::RTNE);
+  ret[1] = LLVM::AMD::cvtFp32ToFp16(loc, rewriter, ret[1], RoundingMode::RTNE);
 
   return ret;
 }
@@ -967,7 +948,7 @@ struct FpToFpOpConversion
       outVals.reserve(operands[0].size());
       for (Value v : operands[0]) {
         outVals.push_back(
-            cvtFp32ToFp16(loc, rewriter, v, roundingMode.value()));
+            LLVM::AMD::cvtFp32ToFp16(loc, rewriter, v, roundingMode.value()));
       }
       return outVals;
     }
@@ -1018,8 +999,8 @@ struct FpToFpOpConversion
     }
     if (useFP16IntermediateSrc)
       for (Value &v : inVals)
-        v = cvtFp32ToFp16(loc, rewriter, v,
-                          roundingMode.value_or(RoundingMode::RTNE));
+        v = LLVM::AMD::cvtFp32ToFp16(loc, rewriter, v,
+                                     roundingMode.value_or(RoundingMode::RTNE));
     inVals.resize(numElements, undef(typeConverter->convertType(srcType)));
     SmallVector<Value> outVals;
     if (srcType != dstType) {

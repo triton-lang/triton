@@ -72,9 +72,8 @@ SmallVector<GCNBuilder::Operand *, 4> GCNBuilder::getAllArgs() const {
   return res;
 }
 
-mlir::Value GCNBuilder::launch(ConversionPatternRewriter &rewriter,
-                               Location loc, Type resTy, bool hasSideEffect,
-                               bool isAlignStack,
+mlir::Value GCNBuilder::launch(RewriterBase &rewriter, Location loc, Type resTy,
+                               bool hasSideEffect, bool isAlignStack,
                                ArrayRef<Attribute> attrs) const {
   auto *ctx = rewriter.getContext();
   auto inlineAsm = rewriter.create<LLVM::InlineAsmOp>(
