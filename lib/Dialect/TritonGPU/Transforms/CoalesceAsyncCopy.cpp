@@ -114,7 +114,7 @@ public:
     mlir::RewritePatternSet patterns(context);
     patterns.add<ClipAsyncCopySizePerThread>(context);
 
-    if (failed(applyPatternsAndFoldGreedily(m, std::move(patterns))))
+    if (failed(applyPatternsGreedily(m, std::move(patterns))))
       signalPassFailure();
   }
 };

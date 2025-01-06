@@ -422,7 +422,7 @@ struct PrefetchPass : public impl::TritonGPUPrefetchBase<PrefetchPass> {
     RewritePatternSet cleanUpPatterns(&getContext());
     triton::gpu::ConvertLayoutOp::getCanonicalizationPatterns(cleanUpPatterns,
                                                               &getContext());
-    if (mlir::applyPatternsAndFoldGreedily(getOperation(),
+    if (mlir::applyPatternsGreedily(getOperation(),
                                            std::move(cleanUpPatterns))
             .failed()) {
       signalPassFailure();

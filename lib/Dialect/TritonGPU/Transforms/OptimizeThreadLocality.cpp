@@ -256,7 +256,7 @@ class TritonGPUOptimizeThreadLocalityPass
     mlir::RewritePatternSet layoutPatterns(&getContext());
     layoutPatterns.add<OptimizeReshapeLayoutPattern>(&getContext());
     layoutPatterns.add<OptimizeGatherLayoutPattern>(&getContext());
-    if (mlir::applyPatternsAndFoldGreedily(mod, std::move(layoutPatterns))
+    if (mlir::applyPatternsGreedily(mod, std::move(layoutPatterns))
             .failed()) {
       signalPassFailure();
     }
