@@ -1372,7 +1372,7 @@ private:
 };
 
 static inline std::pair<Value, Value>
-ScaleUpIfDenorm(ConversionPatternRewriter &rewriter, Location loc,
+scaleUpIfDenorm(ConversionPatternRewriter &rewriter, Location loc,
                 const Value &src, float scaleThreshold, float scaleFactor) {
   Value needScale = fcmp_ogt(f32_val(scaleThreshold), src);
   Value scaledSrc = fmul(f32_ty, src, f32_val(scaleFactor));
@@ -1380,7 +1380,7 @@ ScaleUpIfDenorm(ConversionPatternRewriter &rewriter, Location loc,
   return {needScale, selectedSrc};
 }
 
-static inline Value ScaleDownIfDenorm(ConversionPatternRewriter &rewriter,
+static inline Value scaleDownIfDenorm(ConversionPatternRewriter &rewriter,
                                       Location loc, const Value &src,
                                       Value needScale, float scaleFactor) {
   Value scaledSrc = fmul(f32_ty, src, f32_val(scaleFactor));
@@ -1402,22 +1402,33 @@ struct SqrtOpConversion
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    // Only handle f32 here. Other data types will be lowered to LLVM::SqrtOp by
-    // MLIR.
+    // This function only handles FP32 inputs. Other data types are lowered to
+    // LLVM::SqrtOp by MLIR.
+    //
+    // On the AMDGPU backend, instructions legalized from LLVM::SqrtOp are
+    // designed to produce IEEE-compliant results and always preserve denorms.
+    // But what we actually need is an approximated SQRT. So we need to manually
+    // lower the op.
+    //
+    // Differences in this approach are
+    // 1. Refinement iterations following llvm.amdgcn.sqrt.f32 are removed to
+    // improve performance.
+    // 2. With ftz disabled, the scaling-up-and-down process is bypassed to
+    // ensure denorms are flushed to zero. flush the denorms to zero.
     if (elemTy.getIntOrFloatBitWidth() != 32)
       return {};
 
     Value needScale = false_val();
     Value scaledSrc = operands[0][0];
     if (!ftz) {
-      // In case of non-ftz, we need to scale up the input by a factor 2^{32},
-      // if it's below 2^{-96}, to prevent it from being flushed by
+      // For non-ftz cases, if the input value is below 2^{-96}, it needs to be
+      // scaled up by a factor of 2^{32}, to prevent it from being flushed by
       // llvm.amdgcn.sqrt.f32.
       //
-      // And we will scale down the result afterwards to get correct result.
+      // The result is then scaled down afterward to get the correct result.
       // Reference:
-      // https://github.com/llvm/llvm-project/blob/0876c11ceeb093904decc4d89bef213d483a5656/llvm/lib/Target/AMDGPU/AMDGPULegalizerInfo.cpp#L5235-L5314.
-      std::tie(needScale, scaledSrc) = ScaleUpIfDenorm(
+      // https://github.com/llvm/llvm-project/blob/0876c11c/llvm/lib/Target/AMDGPU/AMDGPULegalizerInfo.cpp#L5235-L5314.
+      std::tie(needScale, scaledSrc) = scaleUpIfDenorm(
           rewriter, loc, operands[0][0], 0x1.0p-96f, 0x1.0p+32f);
     }
 
@@ -1435,7 +1446,7 @@ struct SqrtOpConversion
     if (!ftz) {
       // In case of non-ftz, we need to calibrate the result by scaling down by
       // a factor 2^{-16}.
-      return {ScaleDownIfDenorm(rewriter, loc, intrinsicsOutput, needScale,
+      return {scaleDownIfDenorm(rewriter, loc, intrinsicsOutput, needScale,
                                 0x1.0p-16f)};
     } else {
       return {intrinsicsOutput};
@@ -1463,17 +1474,22 @@ struct PreciseSqrtOpConversion
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    // If the op is neither f32 nor denorm flushing(ftz), it's directly lowered
+    // If the op is neither FP32 nor denorm flushing(ftz), it's directly lowered
     // to LLVM::SqrtOp.
     if (elemTy.getIntOrFloatBitWidth() != 32 || !ftz) {
       return {rewriter.create<LLVM::SqrtOp>(
           loc, elemTy, operands[0], adaptor.getAttributes().getValue())};
     }
 
-    // In case of f32 and ftz, according to
-    // https://github.com/llvm/llvm-project/blob/3d6b2d491209018918e4c881a0917bffc54cc0d9/llvm/lib/Target/AMDGPU/AMDGPULegalizerInfo.cpp#L5235-L5314,
-    // we use `x * rsq(x)` to approximate sqrt(x), then use extra refinement
-    // iteration to correct the result.
+    // On the AMDGPU backend, instructions legalized from LLVM::SqrtOp are
+    // designed to always preserve denorms, according to
+    // https://github.com/llvm/llvm-project/blob/3d6b2d49/llvm/lib/Target/AMDGPU/AMDGPULegalizerInfo.cpp#L5235-L5314.
+    //
+    // For f32 inputs with ftz enabled, we need to manually lower the op to
+    // bypass the scaling-up-and-down process while keeping other parts
+    // unchanged. To ensure IEEE-compliant results, we approximate `sqrt(x)`
+    // using `x * rsq(x)` and apply extra refinement iterations to correct the
+    // result.
     StringRef funcName = "llvm.amdgcn.rsq.f32";
 
     Type funcType = getFunctionType(elemTy, operands[0]);
@@ -1496,7 +1512,7 @@ struct PreciseSqrtOpConversion
 
     // Handle +0/-0/+inf
     // These flags come from
-    // https://github.com/llvm/llvm-project/blob/217e0f39710dec3348c996ecf98a76fd08b69853/llvm/include/llvm/ADT/FloatingPointMode.h#L239-L265.
+    // https://github.com/llvm/llvm-project/blob/217e0f39/llvm/include/llvm/ADT/FloatingPointMode.h#L239-L265.
     const unsigned fcPosInf = 0x0200;
     const unsigned fcNegZero = 0x0020;
     const unsigned fcPosZero = 0x0040;
