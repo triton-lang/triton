@@ -1258,13 +1258,12 @@ public:
     assert(std::distance(castOp->getUses().begin(), castOp->getUses().end()) >
                0 &&
            "expected at least 1 use of unrealized_cast");
-    // Don't know why but i get -Wdangling here...
-    ArrayRef<ValueRange> remappedOperands = adaptor.getOperands();
-    if (remappedOperands.size() != 1 || remappedOperands[0].size() != 2)
+    ValueRange remappedOperands = adaptor.getOperands();
+    if (remappedOperands.size() != 2)
       return rewriter.notifyMatchFailure(
           castOp, "expected CastOp to have already been remapped");
-    Value fatPtrBase = remappedOperands[0][0];
-    Value fatPtrOffset = remappedOperands[0][1];
+    Value fatPtrBase = remappedOperands[0];
+    Value fatPtrOffset = remappedOperands[1];
     if (!llvm::isa<tt::PointerType>(fatPtrBase.getType()))
       return rewriter.notifyMatchFailure(castOp,
                                          "non tt.ptr base unimplemented");
