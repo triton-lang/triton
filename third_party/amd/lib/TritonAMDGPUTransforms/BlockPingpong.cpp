@@ -95,7 +95,6 @@ void Pingponger::appendSlicedLoadAB(int slice) {
 // Also, SchedBarrier with `0` is set here to tell compiler backend not to
 // reorder any instruction across this point.
 void Pingponger::appendClusterBarrier(OpBuilder &builder, Location loc) {
-  // appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
   //  MembarAnalysis can recognize gpu::BarrierOp and skip inserting additional
   //  barrier
   appendOp(builder.create<gpu::BarrierOp>(loc));
@@ -431,40 +430,45 @@ void Pingponger::getDotPingponged() {
 
   auto dotType = dotOps[0].getType();
   auto dotShape = dotType.getShape();
-  auto AType = dotOps[0].getA().getType();
-  auto AShape = AType.getShape();
-  auto elemWidth = AType.getElementType().getIntOrFloatBitWidth();
-  int64_t tileSize = dotShape[0] * dotShape[1] * AShape[1] * elemWidth;
+  auto aType = dotOps[0].getA().getType();
+  auto aShape = aType.getShape();
+  auto elemWidth = aType.getElementTypeBitWidth();
+  int64_t tileSize = dotShape[0] * dotShape[1] * aShape[1] * elemWidth;
 
-  const int64_t SmallTile = 16777216;  // e.g. 128x128x64x16bit
-  const int64_t MediumTile = 33554432; // SmallTile x 2
-  const int64_t LargeTile = 67108864;  // e.g. 256x256x64x16bit
+  const int64_t smallTile = 16777216;  // e.g. 128x128x64x16bit
+  const int64_t mediumTile = 33554432; // smallTile x 2
+  const int64_t largeTile = 67108864;  // e.g. 256x256x64x16bit
 
-  auto encoding = cast<RankedTensorType>(AType).getEncoding();
+  auto encoding = cast<RankedTensorType>(aType).getEncoding();
   auto srcEncoding = cast<ttg::DotOperandEncodingAttr>(encoding);
   kWidth = srcEncoding.getKWidth();
-  auto mfmaEncoding =
-      dyn_cast<ttg::AMDMfmaEncodingAttr>(srcEncoding.getParent());
+  auto mfmaEncoding = cast<ttg::AMDMfmaEncodingAttr>(srcEncoding.getParent());
   SmallVector<int64_t> intShape;
   intShape.push_back(mfmaEncoding.getMDim());
   intShape.push_back(mfmaEncoding.getNDim());
 
-  if (numWarps == 4) { // pingpong between warps from different blocks
-    // transfor a loop with small tile size
-    if (tileSize == SmallTile)
+  if (numWarps == 4) { // Pingpong between warps from different blocks
+    // Transform a loop with small tile size.
+    // We've observed that this small tile size spent almost equivalent cycle
+    // times for issuing the memory operations and issuing dot operations,
+    // smaller tile sizes are not likely to get any advantage from current dot
+    // centric pingpong scheduling.
+    if (tileSize == smallTile)
       transformOnePPClusters(builder, loc);
-  } else if (numWarps == 8) { // pingpong between warps from the same block
-    // transform a loop where the tile size requires dots to be sliced
-    if (tileSize == MediumTile) {
+    // numWarps=4 doesn't need asymmetric sync, return.
+    return;
+  } else if (numWarps == 8) { // Pingpong between warps from the same block
+    // Transform a loop where the tile size requires dots to be sliced
+    if (tileSize == mediumTile) {
       if (transformTwoPPClusters(builder, dotOps[0]->getLoc()).failed())
         return;
-    } else if (tileSize >= LargeTile) {
-      // Avoid known register spilling.
+    } else if (tileSize >= largeTile) {
+      // Avoid known register spilling. i.e., mfma16x16x16 & largetile & kpack>1
       if (intShape[0] == 16 && intShape[1] == 16 && kWidth == 8)
         return;
       if (transformFourPPClusters(builder, dotOps[0]->getLoc()).failed())
         return;
-    } else // small tile needs numWarp=4 for pingpong.
+    } else
       return;
 
     // Let half of the warps start the loop first and the others follow later
