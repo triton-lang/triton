@@ -1654,7 +1654,7 @@ def test_tensor_atomic_cas(sem, num_ctas, device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9 or is_hip(),
+@pytest.mark.skipif(not is_cuda() or torch.cuda.get_device_capability()[0] < 9,
                     reason="Requires compute capability >= 9 for NV")
 def test_load_scope_sem_coop_grid_cta_not_one(device):
 
