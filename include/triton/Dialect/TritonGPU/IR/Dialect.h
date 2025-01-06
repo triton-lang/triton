@@ -11,13 +11,64 @@
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 
+// Forward declaration
+namespace mlir::triton::gpu {
+class LinearLayoutCache;
+}
+
 #define GET_OP_CLASSES
 #include "triton/Dialect/TritonGPU/IR/Dialect.h.inc"
 #include "triton/Dialect/TritonGPU/IR/Ops.h.inc"
 
+// LinearLayoutCache Utils
+using CacheKey =
+    std::tuple<std::vector<int64_t>, mlir::Attribute, std::optional<int32_t>>;
+
+namespace llvm {
+template <typename T> size_t hash_value(const std::vector<T> &vec) {
+  return hash_combine_range(vec.begin(), vec.end());
+}
+} // namespace llvm
+
+namespace std {
+template <> struct hash<CacheKey> {
+  size_t operator()(const CacheKey &key) const noexcept {
+    using llvm::hash_value;
+    size_t seed = 0;
+    std::apply(
+        [&seed](const auto &...elems) {
+          ((seed = llvm::hash_combine(seed, hash_value(elems))), ...);
+        },
+        key);
+    return seed;
+  }
+};
+} // namespace std
+
 namespace mlir {
 namespace triton {
 namespace gpu {
+
+class LinearLayoutCache {
+public:
+  std::optional<LinearLayout> get(const CacheKey &key) {
+    std::shared_lock lock(mutex);
+    auto it = cache.find(key);
+    if (it != cache.end()) {
+      return it->second;
+    }
+    return std::nullopt;
+  }
+
+  void set(CacheKey key, LinearLayout result) {
+    std::scoped_lock lock(mutex);
+    cache.emplace(std::move(key), std::move(result));
+  }
+
+private:
+  std::unordered_map<CacheKey, LinearLayout> cache;
+  llvm::sys::SmartRWMutex<true> mutex;
+};
 
 struct SharedMemory : public SideEffects::Resource::Base<SharedMemory> {
   StringRef getName() final { return "<SharedMemory>"; }
