@@ -7,7 +7,7 @@
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Libdevice (tl.extra.libdevice) function &mdash; Triton  documentation</title>
-      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=fa44fd50" />
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=03e43079" />
       <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=e59714d7" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery.css?v=d2d258e8" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-binder.css?v=f4aeca0c" />
@@ -125,21 +125,21 @@ For example, both <cite>__nv_asin</cite> and <cite>__nv_asinf</cite> calculate t
 Triton automatically selects the correct underlying device function to invoke based on input and output types.</p>
 <section id="asin-kernel">
 <h2>asin Kernel<a class="headerlink" href="#asin-kernel" title="Link to this heading">¶</a></h2>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">torch</span>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
 
-<span class="kn">import</span> <span class="nn">triton</span>
-<span class="kn">import</span> <span class="nn">triton.language</span> <span class="k">as</span> <span class="nn">tl</span>
-<span class="kn">import</span> <span class="nn">inspect</span>
-<span class="kn">import</span> <span class="nn">os</span>
-<span class="kn">from</span> <span class="nn">triton.language.extra</span> <span class="kn">import</span> <span class="n">libdevice</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">triton</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">triton.language</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">tl</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">inspect</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">triton.language.extra</span><span class="w"> </span><span class="kn">import</span> <span class="n">libdevice</span>
 
-<span class="kn">from</span> <span class="nn">pathlib</span> <span class="kn">import</span> <span class="n">Path</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
 
 <span class="n">DEVICE</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">get_active_torch_device</span><span class="p">()</span>
 
 
 <span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
-<span class="k">def</span> <span class="nf">asin_kernel</span><span class="p">(</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">asin_kernel</span><span class="p">(</span>
     <span class="n">x_ptr</span><span class="p">,</span>
     <span class="n">y_ptr</span><span class="p">,</span>
     <span class="n">n_elements</span><span class="p">,</span>
@@ -182,11 +182,11 @@ The maximum difference between torch and triton is 2.384185791015625e-07
 <section id="customize-the-libdevice-library-path">
 <h2>Customize the libdevice library path<a class="headerlink" href="#customize-the-libdevice-library-path" title="Link to this heading">¶</a></h2>
 <p>We can also customize the libdevice library path by passing the path to the <cite>libdevice</cite> library to the <cite>asin</cite> kernel.</p>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">is_cuda</span><span class="p">():</span>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">is_cuda</span><span class="p">():</span>
     <span class="k">return</span> <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">get_current_target</span><span class="p">()</span><span class="o">.</span><span class="n">backend</span> <span class="o">==</span> <span class="s2">&quot;cuda&quot;</span>
 
 
-<span class="k">def</span> <span class="nf">is_hip</span><span class="p">():</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">is_hip</span><span class="p">():</span>
     <span class="k">return</span> <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">get_current_target</span><span class="p">()</span><span class="o">.</span><span class="n">backend</span> <span class="o">==</span> <span class="s2">&quot;hip&quot;</span>
 
 
@@ -218,7 +218,7 @@ tensor([0.4105, 0.5430, 0.0249,  ..., 0.0424, 0.5351, 0.8149], device=&#39;cuda:
 The maximum difference between torch and triton is 2.384185791015625e-07
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 0.269 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 0.273 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-07-extern-functions-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/859d98d69fb02c33053d474c27761677/07-extern-functions.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">07-extern-functions.ipynb</span></code></a></p>

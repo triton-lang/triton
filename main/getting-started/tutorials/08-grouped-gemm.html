@@ -7,7 +7,7 @@
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Group GEMM &mdash; Triton  documentation</title>
-      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=fa44fd50" />
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=03e43079" />
       <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=e59714d7" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery.css?v=d2d258e8" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-binder.css?v=f4aeca0c" />
@@ -118,7 +118,7 @@ of gemms. The scheduling is static and we do it on device.</p>
         N    cuBLAS    Triton
 0   128.0  0.021504  0.014336
 1   256.0  0.023552  0.018432
-2   512.0  0.032768  0.026624
+2   512.0  0.032768  0.027648
 3  1024.0  0.071680  0.087040
 </pre></div>
 </div>
@@ -146,10 +146,10 @@ of gemms. The scheduling is static and we do it on device.</p>
 <span class="c1"># TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE</span>
 <span class="c1"># SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.</span>
 
-<span class="kn">import</span> <span class="nn">torch</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
 
-<span class="kn">import</span> <span class="nn">triton</span>
-<span class="kn">import</span> <span class="nn">triton.language</span> <span class="k">as</span> <span class="nn">tl</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">triton</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">triton.language</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">tl</span>
 
 <span class="n">DEVICE</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">get_active_torch_device</span><span class="p">()</span>
 
@@ -184,7 +184,7 @@ of gemms. The scheduling is static and we do it on device.</p>
     <span class="n">key</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;group_size&#39;</span><span class="p">],</span>
 <span class="p">)</span>
 <span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
-<span class="k">def</span> <span class="nf">grouped_matmul_kernel</span><span class="p">(</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">grouped_matmul_kernel</span><span class="p">(</span>
     <span class="c1"># device tensor of matrices pointers</span>
     <span class="n">group_a_ptrs</span><span class="p">,</span>
     <span class="n">group_b_ptrs</span><span class="p">,</span>
@@ -262,7 +262,7 @@ of gemms. The scheduling is static and we do it on device.</p>
         <span class="n">last_problem_end</span> <span class="o">=</span> <span class="n">last_problem_end</span> <span class="o">+</span> <span class="n">num_tiles</span>
 
 
-<span class="k">def</span> <span class="nf">group_gemm_fn</span><span class="p">(</span><span class="n">group_A</span><span class="p">,</span> <span class="n">group_B</span><span class="p">):</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">group_gemm_fn</span><span class="p">(</span><span class="n">group_A</span><span class="p">,</span> <span class="n">group_B</span><span class="p">):</span>
     <span class="k">assert</span> <span class="nb">len</span><span class="p">(</span><span class="n">group_A</span><span class="p">)</span> <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="n">group_B</span><span class="p">)</span>
     <span class="n">group_size</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">group_A</span><span class="p">)</span>
 
@@ -330,7 +330,7 @@ of gemms. The scheduling is static and we do it on device.</p>
 
 
 <span class="c1"># only launch the kernel, no tensor preparation here to remove all overhead</span>
-<span class="k">def</span> <span class="nf">triton_perf_fn</span><span class="p">(</span><span class="n">a_ptrs</span><span class="p">,</span> <span class="n">b_ptrs</span><span class="p">,</span> <span class="n">c_ptrs</span><span class="p">,</span> <span class="n">sizes</span><span class="p">,</span> <span class="n">lds</span><span class="p">,</span> <span class="n">group_size</span><span class="p">):</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">triton_perf_fn</span><span class="p">(</span><span class="n">a_ptrs</span><span class="p">,</span> <span class="n">b_ptrs</span><span class="p">,</span> <span class="n">c_ptrs</span><span class="p">,</span> <span class="n">sizes</span><span class="p">,</span> <span class="n">lds</span><span class="p">,</span> <span class="n">group_size</span><span class="p">):</span>
     <span class="n">grid</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">META</span><span class="p">:</span> <span class="p">(</span><span class="n">META</span><span class="p">[</span><span class="s1">&#39;NUM_SM&#39;</span><span class="p">],</span> <span class="p">)</span>
     <span class="n">grouped_matmul_kernel</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span>
         <span class="n">a_ptrs</span><span class="p">,</span>
@@ -342,7 +342,7 @@ of gemms. The scheduling is static and we do it on device.</p>
     <span class="p">)</span>
 
 
-<span class="k">def</span> <span class="nf">torch_perf_fn</span><span class="p">(</span><span class="n">group_A</span><span class="p">,</span> <span class="n">group_B</span><span class="p">):</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">torch_perf_fn</span><span class="p">(</span><span class="n">group_A</span><span class="p">,</span> <span class="n">group_B</span><span class="p">):</span>
     <span class="k">for</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">group_A</span><span class="p">,</span> <span class="n">group_B</span><span class="p">):</span>
         <span class="n">torch</span><span class="o">.</span><span class="n">matmul</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span>
 
@@ -365,7 +365,7 @@ of gemms. The scheduling is static and we do it on device.</p>
         <span class="c1"># name for the plot. Used also as a file name for saving the plot.</span>
         <span class="n">args</span><span class="o">=</span><span class="p">{},</span>
     <span class="p">))</span>
-<span class="k">def</span> <span class="nf">benchmark</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">provider</span><span class="p">):</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">benchmark</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">provider</span><span class="p">):</span>
     <span class="n">group_size</span> <span class="o">=</span> <span class="mi">4</span>
     <span class="n">group_A</span> <span class="o">=</span> <span class="p">[]</span>
     <span class="n">group_B</span> <span class="o">=</span> <span class="p">[]</span>
@@ -406,7 +406,7 @@ of gemms. The scheduling is static and we do it on device.</p>
 <span class="n">benchmark</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">show_plots</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 4.267 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 4.336 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-08-grouped-gemm-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/6360f3425f2c39f9f330971830c25ba7/08-grouped-gemm.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">08-grouped-gemm.ipynb</span></code></a></p>

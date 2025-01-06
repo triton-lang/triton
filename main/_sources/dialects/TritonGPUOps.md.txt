@@ -42,7 +42,7 @@ operation ::= `ttg.async_copy_global_to_local` $src `,` $result (`mask` $mask^)?
 
 This operation copies data from global memory to local memory asynchronously.
 This is analogue to tt.load except the data are copied to local memory pointed
-by by the memory descriptor instread of a distributed tensor. The rest of the
+by by the memory descriptor instead of a distributed tensor. The rest of the
 operands are the same as tt.load.
 
 Traits: `AttrSizedOperandSegments`, `VerifyTensorLayoutsTrait`

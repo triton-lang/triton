@@ -7,7 +7,7 @@
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Layer Normalization &mdash; Triton  documentation</title>
-      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=fa44fd50" />
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=03e43079" />
       <link rel="stylesheet" type="text/css" href="../../_static/css/theme.css?v=e59714d7" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery.css?v=d2d258e8" />
       <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-binder.css?v=f4aeca0c" />
@@ -138,15 +138,15 @@ The forward pass can be expressed as follows:</p>
 \[y = \frac{ x - \text{E}[x] }{ \sqrt{\text{Var}(x) + \epsilon} } * w + b\]</div>
 <p>where <span class="math notranslate nohighlight">\(\epsilon\)</span> is a small constant added to the denominator for numerical stability.
 Let’s first take a look at the forward pass implementation.</p>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">torch</span>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
 
-<span class="kn">import</span> <span class="nn">triton</span>
-<span class="kn">import</span> <span class="nn">triton.language</span> <span class="k">as</span> <span class="nn">tl</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">triton</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">triton.language</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">tl</span>
 
 <span class="k">try</span><span class="p">:</span>
     <span class="c1"># This is https://github.com/NVIDIA/apex, NOT the apex on PyPi, so it</span>
     <span class="c1"># should not be added to extras_require in setup.py.</span>
-    <span class="kn">import</span> <span class="nn">apex</span>
+    <span class="kn">import</span><span class="w"> </span><span class="nn">apex</span>
     <span class="n">HAS_APEX</span> <span class="o">=</span> <span class="kc">True</span>
 <span class="k">except</span> <span class="ne">ModuleNotFoundError</span><span class="p">:</span>
     <span class="n">HAS_APEX</span> <span class="o">=</span> <span class="kc">False</span>
@@ -155,7 +155,7 @@ Let’s first take a look at the forward pass implementation.</p>
 
 
 <span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
-<span class="k">def</span> <span class="nf">_layer_norm_fwd_fused</span><span class="p">(</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_layer_norm_fwd_fused</span><span class="p">(</span>
     <span class="n">X</span><span class="p">,</span>  <span class="c1"># pointer to the input</span>
     <span class="n">Y</span><span class="p">,</span>  <span class="c1"># pointer to the output</span>
     <span class="n">W</span><span class="p">,</span>  <span class="c1"># pointer to the weights</span>
@@ -230,7 +230,7 @@ here’s a diagram of the parallel reduction strategy for <span class="math notr
 In Stage 2, the buffers are further reduced to compute the final <span class="math notranslate nohighlight">\(\nabla_{w}\)</span> and <span class="math notranslate nohighlight">\(\nabla_{b}\)</span>.
 In the following implementation, Stage 1 is implemented by the function <code class="code docutils literal notranslate"><span class="pre">_layer_norm_bwd_dx_fused</span></code> and Stage 2 is implemented by the function <code class="code docutils literal notranslate"><span class="pre">_layer_norm_bwd_dwdb</span></code>.</p>
 <div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
-<span class="k">def</span> <span class="nf">_layer_norm_bwd_dx_fused</span><span class="p">(</span><span class="n">DX</span><span class="p">,</span>  <span class="c1"># pointer to the input gradient</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_layer_norm_bwd_dx_fused</span><span class="p">(</span><span class="n">DX</span><span class="p">,</span>  <span class="c1"># pointer to the input gradient</span>
                              <span class="n">DY</span><span class="p">,</span>  <span class="c1"># pointer to the output gradient</span>
                              <span class="n">DW</span><span class="p">,</span>  <span class="c1"># pointer to the partial sum of weights gradient</span>
                              <span class="n">DB</span><span class="p">,</span>  <span class="c1"># pointer to the partial sum of biases gradient</span>
@@ -290,7 +290,7 @@ In the following implementation, Stage 1 is implemented by the function <code cl
 
 
 <span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
-<span class="k">def</span> <span class="nf">_layer_norm_bwd_dwdb</span><span class="p">(</span><span class="n">DW</span><span class="p">,</span>  <span class="c1"># pointer to the partial sum of weights gradient</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_layer_norm_bwd_dwdb</span><span class="p">(</span><span class="n">DW</span><span class="p">,</span>  <span class="c1"># pointer to the partial sum of weights gradient</span>
                          <span class="n">DB</span><span class="p">,</span>  <span class="c1"># pointer to the partial sum of biases gradient</span>
                          <span class="n">FINAL_DW</span><span class="p">,</span>  <span class="c1"># pointer to the weights gradient</span>
                          <span class="n">FINAL_DB</span><span class="p">,</span>  <span class="c1"># pointer to the biases gradient</span>
@@ -322,10 +322,10 @@ In the following implementation, Stage 1 is implemented by the function <code cl
 <p>We can now compare the performance of our kernel against that of PyTorch.
 Here we focus on inputs that have Less than 64KB per feature.
 Specifically, one can set <code class="code docutils literal notranslate"><span class="pre">'mode':</span> <span class="pre">'backward'</span></code> to benchmark the backward pass.</p>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span> <span class="nc">LayerNorm</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">autograd</span><span class="o">.</span><span class="n">Function</span><span class="p">):</span>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span><span class="w"> </span><span class="nc">LayerNorm</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">autograd</span><span class="o">.</span><span class="n">Function</span><span class="p">):</span>
 
     <span class="nd">@staticmethod</span>
-    <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">normalized_shape</span><span class="p">,</span> <span class="n">weight</span><span class="p">,</span> <span class="n">bias</span><span class="p">,</span> <span class="n">eps</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">normalized_shape</span><span class="p">,</span> <span class="n">weight</span><span class="p">,</span> <span class="n">bias</span><span class="p">,</span> <span class="n">eps</span><span class="p">):</span>
         <span class="c1"># allocate output</span>
         <span class="n">y</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty_like</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
         <span class="c1"># reshape input data into 2D tensor</span>
@@ -352,7 +352,7 @@ Specifically, one can set <code class="code docutils literal notranslate"><span 
         <span class="k">return</span> <span class="n">y</span>
 
     <span class="nd">@staticmethod</span>
-    <span class="k">def</span> <span class="nf">backward</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">dy</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">backward</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">dy</span><span class="p">):</span>
         <span class="n">x</span><span class="p">,</span> <span class="n">w</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">m</span><span class="p">,</span> <span class="n">v</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">saved_tensors</span>
         <span class="c1"># heuristics for amount of parallel reduction stream for DW/DB</span>
         <span class="n">N</span> <span class="o">=</span> <span class="n">w</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
@@ -389,7 +389,7 @@ Specifically, one can set <code class="code docutils literal notranslate"><span 
 <span class="n">layer_norm</span> <span class="o">=</span> <span class="n">LayerNorm</span><span class="o">.</span><span class="n">apply</span>
 
 
-<span class="k">def</span> <span class="nf">test_layer_norm</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">dtype</span><span class="p">,</span> <span class="n">eps</span><span class="o">=</span><span class="mf">1e-5</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">):</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">test_layer_norm</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">dtype</span><span class="p">,</span> <span class="n">eps</span><span class="o">=</span><span class="mf">1e-5</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">):</span>
     <span class="c1"># create data</span>
     <span class="n">x_shape</span> <span class="o">=</span> <span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">)</span>
     <span class="n">w_shape</span> <span class="o">=</span> <span class="p">(</span><span class="n">x_shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span> <span class="p">)</span>
@@ -427,7 +427,7 @@ Specifically, one can set <code class="code docutils literal notranslate"><span 
         <span class="n">plot_name</span><span class="o">=</span><span class="s1">&#39;layer-norm-backward&#39;</span><span class="p">,</span>
         <span class="n">args</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;M&#39;</span><span class="p">:</span> <span class="mi">4096</span><span class="p">,</span> <span class="s1">&#39;dtype&#39;</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">,</span> <span class="s1">&#39;mode&#39;</span><span class="p">:</span> <span class="s1">&#39;backward&#39;</span><span class="p">},</span>
     <span class="p">))</span>
-<span class="k">def</span> <span class="nf">bench_layer_norm</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">dtype</span><span class="p">,</span> <span class="n">provider</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s1">&#39;backward&#39;</span><span class="p">,</span> <span class="n">eps</span><span class="o">=</span><span class="mf">1e-5</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">):</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">bench_layer_norm</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">dtype</span><span class="p">,</span> <span class="n">provider</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s1">&#39;backward&#39;</span><span class="p">,</span> <span class="n">eps</span><span class="o">=</span><span class="mf">1e-5</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">):</span>
     <span class="c1"># create data</span>
     <span class="n">x_shape</span> <span class="o">=</span> <span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">)</span>
     <span class="n">w_shape</span> <span class="o">=</span> <span class="p">(</span><span class="n">x_shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span> <span class="p">)</span>
@@ -438,7 +438,7 @@ Specifically, one can set <code class="code docutils literal notranslate"><span 
     <span class="n">x</span><span class="o">.</span><span class="n">requires_grad_</span><span class="p">(</span><span class="kc">True</span><span class="p">)</span>
     <span class="n">quantiles</span> <span class="o">=</span> <span class="p">[</span><span class="mf">0.5</span><span class="p">,</span> <span class="mf">0.2</span><span class="p">,</span> <span class="mf">0.8</span><span class="p">]</span>
 
-    <span class="k">def</span> <span class="nf">y_fwd</span><span class="p">():</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">y_fwd</span><span class="p">():</span>
 
         <span class="k">if</span> <span class="n">provider</span> <span class="o">==</span> <span class="s2">&quot;triton&quot;</span><span class="p">:</span>
             <span class="k">return</span> <span class="n">layer_norm</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">w_shape</span><span class="p">,</span> <span class="n">weight</span><span class="p">,</span> <span class="n">bias</span><span class="p">,</span> <span class="n">eps</span><span class="p">)</span>  <span class="c1"># noqa: F811, E704</span>
@@ -469,35 +469,35 @@ Specifically, one can set <code class="code docutils literal notranslate"><span 
 </div>
 <img src="../../_images/sphx_glr_05-layer-norm_001.png" srcset="../../_images/sphx_glr_05-layer-norm_001.png" alt="05 layer norm" class = "sphx-glr-single-img"/><div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>layer-norm-backward:
           N      Triton       Torch
-0    1024.0  106.852172  378.092307
-1    1536.0  162.396478  449.560983
-2    2048.0  220.412561  517.389457
-3    2560.0  271.858403  574.205608
-4    3072.0  324.792956  614.400016
-5    3584.0  377.263151  547.872604
-6    4096.0  448.876724  561.737163
-7    4608.0  500.416301  567.138460
-8    5120.0  561.095906  567.575085
-9    5632.0  600.746677  563.200014
-10   6144.0  635.586191  562.809189
-11   6656.0  668.384935  566.468098
-12   7168.0  715.309778  540.981122
-13   7680.0  794.482739  548.571433
-14   8192.0  826.084057  549.184373
-15   8704.0  710.530618  561.548373
+0    1024.0   94.160917  378.092307
+1    1536.0  155.544304  449.560983
+2    2048.0  210.051276  517.389457
+3    2560.0  258.151268  574.205608
+4    3072.0  308.485355  614.400016
+5    3584.0  361.411775  547.872604
+6    4096.0  413.042029  561.737163
+7    4608.0  470.604256  570.061876
+8    5120.0  525.128191  568.888888
+9    5632.0  567.932789  563.200014
+10   6144.0  599.414609  562.809189
+11   6656.0  649.365826  566.468098
+12   7168.0  682.666672  540.981122
+13   7680.0  737.279965  548.571433
+14   8192.0  780.190482  549.184373
+15   8704.0  710.530618  563.061992
 16   9216.0  754.894224  567.138460
 17   9728.0  778.239963  570.836186
 18  10240.0  785.175727  563.669722
-19  10752.0  832.412895  553.751076
-20  11264.0  852.794958  559.701851
-21  11776.0  843.653757  568.659959
-22  12288.0  864.844559  572.644636
-23  12800.0  895.626842  578.531044
+19  10752.0  829.736306  554.941947
+20  11264.0  852.794958  560.863067
+21  11776.0  843.653757  567.518063
+22  12288.0  864.844559  573.758739
+23  12800.0  893.023256  578.531044
 24  13312.0  942.442503  579.833026
 25  13824.0  945.230782  579.015709
-26  14336.0  966.471899  569.642383
-27  14848.0  973.639363  570.163213
-28  15360.0  985.668461  579.622631
+26  14336.0  966.471899  568.700819
+27  14848.0  968.347805  570.163213
+28  15360.0  980.425504  579.622631
 29  15872.0  964.374659  581.569482
 </pre></div>
 </div>
@@ -510,7 +510,7 @@ Specifically, one can set <code class="code docutils literal notranslate"><span 
 <p>Jimmy Lei Ba and Jamie Ryan Kiros and Geoffrey E. Hinton, “Layer Normalization”, Arxiv 2016</p>
 </div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 29.615 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 29.518 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-05-layer-norm-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/ae7fff29e1b574187bc930ed94bcc353/05-layer-norm.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">05-layer-norm.ipynb</span></code></a></p>

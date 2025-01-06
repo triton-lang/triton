@@ -1055,7 +1055,7 @@ Effects: `MemoryEffects::Effect{}`
 
 ### `tt.histogram` (triton::HistogramOp)
 
-_Return a histgram of the inputs._
+_Return a histogram of the inputs._
 
 
 Syntax:

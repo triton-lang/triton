@@ -7,7 +7,7 @@
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>TritonNvidiaGPUOps &mdash; Triton  documentation</title>
-      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=fa44fd50" />
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
       <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=e59714d7" />
       <link rel="stylesheet" type="text/css" href="../_static/sg_gallery.css?v=d2d258e8" />
       <link rel="stylesheet" type="text/css" href="../_static/sg_gallery-binder.css?v=f4aeca0c" />
@@ -180,7 +180,7 @@
 </div>
 <p>This operation copies data from global memory to local memory
 asynchronously.  This is analogue to tt.load except the data are copied to
-local memory pointed by the memory descriptor instread of a distributed
+local memory pointed by the memory descriptor instead of a distributed
 tensor. The data copied depends on the global memory descriptor pointed to
 by <code class="docutils literal notranslate"><span class="pre">desc_ptr</span></code>.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
@@ -242,7 +242,7 @@ by <code class="docutils literal notranslate"><span class="pre">desc_ptr</span><
 </div>
 <p>This operation copies data from local memory to global memory
 asynchronously.  This is analogue to tt.store except the data are copied from
-local memory pointed by the memory descriptor instread of a distributed
+local memory pointed by the memory descriptor instead of a distributed
 tensor. The data copied depends on the global memory descriptor pointed to
 by <code class="docutils literal notranslate"><span class="pre">desc_ptr</span></code>.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
@@ -389,7 +389,7 @@ number of arrives expected by the barrier.</p>
 </pre></div>
 </div>
 <p>Invalidate a barrier allocation so that it can be re-used. According to PTX
-spec this has to be done before any re-use of the memory used by mbarrier.</p>
+spec this has to be done before any reuse of the memory used by mbarrier.</p>
 <p>https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#parallel-synchronization-and-communication-instructions-mbarrier-inval</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
