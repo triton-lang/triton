@@ -101,7 +101,7 @@ static RankedTensorType replaceEncoding(RankedTensorType oldType,
                                newEncoding);
 }
 
-// This function considers a gather op in isolation and attemps to determine
+// This function considers a gather op in isolation and attempts to determine
 // whether an optimized layout can be applied to the source and index tensors.
 static void setOptimizedGatherLayout(GatherOp op, mlir::RewriterBase &b) {
   RankedTensorType srcType = op.getSrc().getType();

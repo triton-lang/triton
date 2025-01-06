@@ -1543,7 +1543,7 @@ TEST_F(LinearLayoutConversionsTest, WMMA_v1_2x4Warps) {
   // For 128x128, we need 8x8 WMMA instances. Given that we have 2x4 warps, each
   // warp handles 4x2 instances. So for both the warp M and N dimension, we
   // distribute. The register dimension will handle (8 x 4x2 =) 64 values--those
-  // additonal base vectors after the intrinsic shape are next power of two
+  // additional base vectors after the intrinsic shape are next power of two
   // values following the warp dimension, given that we are tiling cyclically
   // among warps.
   EXPECT_EQ(toLinearLayout({128, 128}, legacy),
