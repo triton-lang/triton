@@ -150,6 +150,7 @@ static void findLoopNests(Operation *container,
 // Logue
 //===----------------------------------------------------------------------===//
 
+namespace {
 // A prologue or epilogue.
 struct Logue {
   // Move the ops in the logue before the iterator.
@@ -172,9 +173,10 @@ struct Logue {
 
   // Get the number of outputs.
   unsigned getNumOutputs() const { return outputs.size(); }
-
+  // Get the outputs as a `ValueRange`.
+  ValueRange getOutputs() const { return outputs; }
   // Get the types of the outputs.
-  TypeRange getOutputTypes() const { return ValueRange(outputs).getTypes(); }
+  TypeRange getOutputTypes() const { return getOutputs().getTypes(); }
 
   // A contiguous range of ops representing the prologue or epilogue.
   SmallVector<Operation *> ops;
@@ -182,6 +184,7 @@ struct Logue {
   // used by ops outside of `ops`.
   SmallVector<Value> outputs;
 };
+} // namespace
 
 // Given a range of ops, form it into a logue by finding the outputs.
 static Logue createLogueFrom(llvm::iterator_range<Block::iterator> ops,
@@ -632,7 +635,7 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
     // the inner loop.
     b.setInsertionPointToEnd(thenBlock);
     SmallVector<Value> thenOuts{inner.getLowerBound()};
-    llvm::append_range(thenOuts, prologue.outputs);
+    llvm::append_range(thenOuts, prologue.getOutputs());
     llvm::append_range(thenOuts, inner.getInits());
     b.create<scf::YieldOp>(loc, thenOuts);
 
@@ -721,7 +724,7 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   b.setInsertionPointToEnd(thenBlock);
   Value nextI = b.create<arith::AddIOp>(loc, i, outer.getStep());
   SmallVector<Value> thenOuts{nextI};
-  llvm::append_range(thenOuts, epilogue.outputs);
+  llvm::append_range(thenOuts, epilogue.getOutputs());
   b.create<scf::YieldOp>(loc, thenOuts);
 
   b.createBlock(&epilogueIf.getElseRegion());
