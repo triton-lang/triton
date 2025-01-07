@@ -41,7 +41,8 @@ def build_for_backend(name, src, srcdir):
         scheme = 'posix_prefix'
     py_include_dir = sysconfig.get_paths(scheme=scheme)["include"]
 
-    subprocess.check_call([cc, src, f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", "-o", so])
+    cc_cmd = [cc, src, f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", "-o", so]
+    subprocess.run(cc_cmd, capture_output=True, text=True, check=True)
     return so
 
 
