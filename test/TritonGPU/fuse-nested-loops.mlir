@@ -417,3 +417,21 @@ tt.func @upcast_index_to_i64(%lbi: index, %ubi: index, %stepi: index, %lbj: inde
   }
   tt.return
 }
+
+// CHECK-LABEL: @triple_loop_nest
+tt.func @triple_loop_nest(
+    %lbi: i64, %ubi: i64, %stepi: i64,
+    %lbj: i64, %ubj: i64, %stepj: i64,
+    %lbk: i64, %ubk: i64, %stepk: i64) {
+ // CHECK-COUNT-1: scf.for
+ scf.for %i = %lbi to %ubi step %stepi : i64 {
+   scf.for %j = %lbj to %ubj step %stepj : i64 {
+      scf.for %k = %lbk to %ubk step %stepk : i64 {
+        "body"(%i, %j, %k) : (i64, i64, i64) -> ()
+      }
+    }
+  }
+  // CHECK-NOT: scf.for
+  // CHECK: tt.return
+  tt.return
+}
