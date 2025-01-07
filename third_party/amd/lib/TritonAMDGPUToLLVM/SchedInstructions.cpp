@@ -320,38 +320,38 @@ struct InstructionSchedHintsRewriter
     const uint32_t mmaIssueCycle = this->machineDescr->getMmaIssueCycle();
     const uint32_t numLdsDataPaths = this->machineDescr->getNumLdsDataPaths();
 
-    // compute how many ds_reads from tile A we can put between to adjacent
+    // Compute how many ds_reads from tile A we can put between to adjacent
     // MFMAs
     const auto dsReadAMmaRate = (mmaExecCycle - mmaIssueCycle +
                                  numLdsDataPaths * dsReadAIssueCycle - 1) /
                                 (numLdsDataPaths * dsReadAIssueCycle);
 
-    // compute how many ds_reads from tile B we can put between to adjacent
+    // Compute how many ds_reads from tile B we can put between to adjacent
     // MFMAs
     const auto dsReadBMmaRate = (mmaExecCycle - mmaIssueCycle +
                                  numLdsDataPaths * dsReadBIssueCycle - 1) /
                                 (numLdsDataPaths * dsReadBIssueCycle);
 
-    // compute how many (MFMA [ds_read]+) clusters we can get from tile A
+    // Compute how many (MFMA [ds_read]+) clusters we can get from tile A
     const auto numDsreadAMma =
         (numDsReadInstA + dsReadAMmaRate - 1) / dsReadAMmaRate;
 
-    // compute how many (MFMA [ds_read]+) clusters we can get from tile B
+    // Compute how many (MFMA [ds_read]+) clusters we can get from tile B
     const auto numDsreadBMma =
         (numDsReadInstB + dsReadBMmaRate - 1) / dsReadBMmaRate;
 
-    // stage 1
-    // compute how many MFMAs we have left for stage 1 - i.e., clusters with
+    // Stage 1
+    // Compute how many MFMAs we have left for stage 1 - i.e., clusters with
     // ds_writes, global/buffer_loads, MFMAs
     const auto numMmaStage1 = numMmaInst - (numDsreadAMma + numDsreadBMma);
     const auto numMmaPerIssue =
         numMmaStage1 / (numBufferLoadInstA + numBufferLoadInstB);
 
-    // compute how many ds_reads we have per global/buffer load resulting from
+    // Compute how many ds_writes we have per global/buffer load resulting from
     // tile A
     const auto numDswritePerIssueA = numDsWriteInstA / numBufferLoadInstA;
 
-    // compute how many ds_reads we have per global/buffer load resulting from
+    // Compute how many ds_writes we have per global/buffer load resulting from
     // tile B
     const auto numDswritePerIssueB = numDsWriteInstB / numBufferLoadInstB;
 
