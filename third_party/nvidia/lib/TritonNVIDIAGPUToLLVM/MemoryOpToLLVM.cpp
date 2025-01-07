@@ -60,6 +60,7 @@ public:
       canUseLdmatrix &=
           srcTy.getShape()[0] >= 8 &&
           srcTy.getShape()[1] >= 4 * kWidth & dstTy.getRank() <= 2;
+      canUseLdmatrix &= (!shared.getHasLeadingOffset());
       if (canUseLdmatrix) {
         return lowerSharedToDotOperand(op, adaptor, getTypeConverter(),
                                        rewriter);
