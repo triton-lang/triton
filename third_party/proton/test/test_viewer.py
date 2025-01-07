@@ -14,8 +14,7 @@ leaf_example_file = file_path.replace("test_viewer.py", "examples/leaf_nodes.jso
 
 def test_help():
     # Only check if the viewer can be invoked
-    ret = subprocess.check_call(["proton-viewer", "-h"], stdout=subprocess.DEVNULL)
-    assert ret == 0
+    subprocess.check_call(["proton-viewer", "-h"], stdout=subprocess.DEVNULL)
 
 
 def test_sort():
