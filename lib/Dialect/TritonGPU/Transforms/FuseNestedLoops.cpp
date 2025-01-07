@@ -152,6 +152,24 @@ static void findLoopNests(Operation *container,
 
 // A prologue or epilogue.
 struct Logue {
+  // Move the ops in the logue before the iterator.
+  void moveBefore(Block *block, Block::iterator it) {
+    for (Operation *op : ops)
+      op->moveBefore(block, it);
+  }
+
+  // Replace all uses of the logue results with the given values, where `logue`
+  // comprises all the ops in `containingRegion`.
+  void replaceAllUsesWith(ValueRange values, Region &containingRegion) {
+    for (auto [newOut, output] : llvm::zip(values, outputs)) {
+      // Replace uses of the prologue outputs that are not in the prologue, i.e.
+      // inside the `then` region where it got spliced.
+      output.replaceUsesWithIf(newOut, [&](OpOperand &use) {
+        return !containingRegion.isAncestor(use.getOwner()->getParentRegion());
+      });
+    }
+  }
+
   // A contiguous range of ops representing the prologue or epilogue.
   SmallVector<Operation *> ops;
   // The outputs of the logue. These are the SSA value results of `ops` that are
@@ -592,24 +610,24 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
     // The `scf.if` outputs will be `jk` and the outputs of prologuek. We also
     // have to initialize the inner loop iter args.
     scf::ForOp inner = innerLoops[k];
-    Logue &logue = logues[k];
+    Logue &prologue = logues[k];
 
     SmallVector<Type> prologueOutTypes{inner.getInductionVar().getType()};
-    llvm::append_range(prologueOutTypes, ValueRange(logue.outputs).getTypes());
+    llvm::append_range(prologueOutTypes,
+                       ValueRange(prologue.outputs).getTypes());
     llvm::append_range(prologueOutTypes, inner.getInits().getTypes());
     auto prologueIf = b.create<scf::IfOp>(loc, prologueOutTypes, prologueCond);
     logueIfs.push_back(prologueIf);
 
     // Splice prologuek into the `then` region.
     Block *thenBlock = b.createBlock(&prologueIf.getThenRegion());
-    for (Operation *op : logue.ops)
-      op->moveBefore(thenBlock, thenBlock->end());
+    prologue.moveBefore(thenBlock, thenBlock->end());
 
     // Yield the initialized jk, the prologue outputs, and the initial values of
     // the inner loop.
     b.setInsertionPointToEnd(thenBlock);
     SmallVector<Value> thenOuts{inner.getLowerBound()};
-    llvm::append_range(thenOuts, logue.outputs);
+    llvm::append_range(thenOuts, prologue.outputs);
     llvm::append_range(thenOuts, inner.getInits());
     b.create<scf::YieldOp>(loc, thenOuts);
 
@@ -617,7 +635,7 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
     // the iter args.
     b.createBlock(&prologueIf.getElseRegion());
     Value lastJk = ivars[k];
-    unsigned numOuts = logue.outputs.size();
+    unsigned numOuts = prologue.outputs.size();
     SmallVector<Value> elseOuts{lastJk};
     elseOuts.append(logueOutsIt, logueOutsIt + numOuts);
     elseOuts.append(bodyOutsIt, bodyOutsIt + inner.getNumResults());
@@ -631,15 +649,7 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
     ValueRange prologueInits =
         prologueIf.getResults().slice(1 + numOuts, inner.getNumResults());
     inner.getInductionVar().replaceAllUsesWith(jk);
-
-    for (auto [ifOut, output] : llvm::zip(prologueOuts, logue.outputs)) {
-      // Replace uses of the prologue outputs that are not in the prologue, i.e.
-      // inside the `then` region where it got spliced.
-      output.replaceUsesWithIf(ifOut, [&](OpOperand &use) {
-        return !prologueIf.getThenRegion().isAncestor(
-            use.getOwner()->getParentRegion());
-      });
-    }
+    prologue.replaceAllUsesWith(prologueOuts, prologueIf.getThenRegion());
     for (auto [init, iterArg] :
          llvm::zip(prologueInits, inner.getRegionIterArgs()))
       iterArg.replaceAllUsesWith(init);
@@ -691,40 +701,31 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   // if T == len_j0 + len_j1 + ... + len_jN - N - 1:
   //   epilogue(i)
   //   i += stepi
+  Logue &epilogue = logues.back();
   auto epilogueCond = b.create<arith::CmpIOp>(
       loc, arith::CmpIPredicate::eq, T,
       b.create<arith::SubIOp>(loc, innerLen, intTyCst(1)));
   SmallVector<Type> epilogueOutTypes{i.getType()};
-  llvm::append_range(epilogueOutTypes,
-                     ValueRange(logues.back().outputs).getTypes());
+  llvm::append_range(epilogueOutTypes, ValueRange(epilogue.outputs).getTypes());
   auto epilogueIf = b.create<scf::IfOp>(loc, epilogueOutTypes, epilogueCond);
   logueIfs.push_back(epilogueIf);
 
   Block *thenBlock = b.createBlock(&epilogueIf.getThenRegion());
-  for (Operation *op : logues.back().ops)
-    op->moveBefore(thenBlock, thenBlock->end());
+  epilogue.moveBefore(thenBlock, thenBlock->end());
 
   b.setInsertionPointToEnd(thenBlock);
   Value nextI = b.create<arith::AddIOp>(loc, i, outer.getStep());
   SmallVector<Value> thenOuts{nextI};
-  llvm::append_range(thenOuts, logues.back().outputs);
+  llvm::append_range(thenOuts, epilogue.outputs);
   b.create<scf::YieldOp>(loc, thenOuts);
 
   b.createBlock(&epilogueIf.getElseRegion());
   SmallVector<Value> elseOuts{i};
-  elseOuts.append(logueOutsIt, logueOutsIt + logues.back().outputs.size());
+  elseOuts.append(logueOutsIt, logueOutsIt + epilogue.outputs.size());
   b.create<scf::YieldOp>(loc, elseOuts);
-
-  for (auto [ifOut, output] :
-       llvm::zip(epilogueIf.getResults().slice(1, logues.back().outputs.size()),
-                 logues.back().outputs)) {
-    // Replace uses of the prologue outputs that are not in the prologue, i.e.
-    // inside the `then` region where it got spliced.
-    output.replaceUsesWithIf(ifOut, [&](OpOperand &use) {
-      return !epilogueIf.getThenRegion().isAncestor(
-          use.getOwner()->getParentRegion());
-    });
-  }
+  epilogue.replaceAllUsesWith(
+      epilogueIf.getResults().slice(1, epilogue.outputs.size()),
+      epilogueIf.getThenRegion());
 
   // Finally, create the yield of the fused loop.
   SmallVector<Value> outerOuts{T, /*i=*/epilogueIf.getResult(0)};
