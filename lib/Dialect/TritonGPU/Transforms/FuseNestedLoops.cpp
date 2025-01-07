@@ -170,6 +170,12 @@ struct Logue {
     }
   }
 
+  // Get the number of outputs.
+  unsigned getNumOutputs() const { return outputs.size(); }
+
+  // Get the types of the outputs.
+  TypeRange getOutputTypes() const { return ValueRange(outputs).getTypes(); }
+
   // A contiguous range of ops representing the prologue or epilogue.
   SmallVector<Operation *> ops;
   // The outputs of the logue. These are the SSA value results of `ops` that are
@@ -567,7 +573,7 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   }
   unsigned logueOutsStartIdx = fusedInits.size();
   for (Logue &logue : logues) {
-    for (Type outputType : ValueRange(logue.outputs).getTypes())
+    for (Type outputType : logue.getOutputTypes())
       fusedInits.push_back(b.create<UndefOp>(loc, outputType));
   }
 
@@ -613,8 +619,7 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
     Logue &prologue = logues[k];
 
     SmallVector<Type> prologueOutTypes{inner.getInductionVar().getType()};
-    llvm::append_range(prologueOutTypes,
-                       ValueRange(prologue.outputs).getTypes());
+    llvm::append_range(prologueOutTypes, prologue.getOutputTypes());
     llvm::append_range(prologueOutTypes, inner.getInits().getTypes());
     auto prologueIf = b.create<scf::IfOp>(loc, prologueOutTypes, prologueCond);
     logueIfs.push_back(prologueIf);
@@ -635,7 +640,7 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
     // the iter args.
     b.createBlock(&prologueIf.getElseRegion());
     Value lastJk = ivars[k];
-    unsigned numOuts = prologue.outputs.size();
+    unsigned numOuts = prologue.getNumOutputs();
     SmallVector<Value> elseOuts{lastJk};
     elseOuts.append(logueOutsIt, logueOutsIt + numOuts);
     elseOuts.append(bodyOutsIt, bodyOutsIt + inner.getNumResults());
@@ -706,7 +711,7 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
       loc, arith::CmpIPredicate::eq, T,
       b.create<arith::SubIOp>(loc, innerLen, intTyCst(1)));
   SmallVector<Type> epilogueOutTypes{i.getType()};
-  llvm::append_range(epilogueOutTypes, ValueRange(epilogue.outputs).getTypes());
+  llvm::append_range(epilogueOutTypes, epilogue.getOutputTypes());
   auto epilogueIf = b.create<scf::IfOp>(loc, epilogueOutTypes, epilogueCond);
   logueIfs.push_back(epilogueIf);
 
@@ -721,10 +726,10 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
 
   b.createBlock(&epilogueIf.getElseRegion());
   SmallVector<Value> elseOuts{i};
-  elseOuts.append(logueOutsIt, logueOutsIt + epilogue.outputs.size());
+  elseOuts.append(logueOutsIt, logueOutsIt + epilogue.getNumOutputs());
   b.create<scf::YieldOp>(loc, elseOuts);
   epilogue.replaceAllUsesWith(
-      epilogueIf.getResults().slice(1, epilogue.outputs.size()),
+      epilogueIf.getResults().slice(1, epilogue.getNumOutputs()),
       epilogueIf.getThenRegion());
 
   // Finally, create the yield of the fused loop.
@@ -739,7 +744,7 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   }
   for (auto [logueIf, logue] : llvm::zip(logueIfs, logues)) {
     llvm::append_range(outerOuts,
-                       logueIf.getResults().slice(1, logue.outputs.size()));
+                       logueIf.getResults().slice(1, logue.getNumOutputs()));
   }
 
   b.setInsertionPointToEnd(fused.getBody());
