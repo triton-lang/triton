@@ -68,8 +68,14 @@ public:
       auto shape = srcTy.getShape();
       auto canUseLdmatrixLL =
           canUseLdmatrixLegacy && bitwidth == 16 && !needTrans &&
-          srcTy.getShape()[0] >= 16 && srcTy.getShape()[1] >= 16 &&
           isSimpleSharedMemoryAccess(shape, allocShape, shared);
+      if (dot.getOpIdx() == 0) {
+        canUseLdmatrixLL &=
+            srcTy.getShape()[0] >= 16 && srcTy.getShape()[1] >= 16;
+      } else {
+        canUseLdmatrixLL &=
+            srcTy.getShape()[0] >= 32 && srcTy.getShape()[1] >= 16;
+      }
       // If we remove this one, ldmatrix will IMA. It can probably be relaxed
       // though
       canUseLdmatrixLegacy &=

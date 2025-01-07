@@ -1133,12 +1133,8 @@ LinearLayout chooseLdMatrixLayoutNoLeadingOffset(MLIRContext *ctx,
     }
     // 8x16
     basesLane.push_back({0, numColsPerTile / 2});
-    if (shape[kDim] > numColsPerTile) {
-      // 8x32
-      basesLane.push_back({0, numColsPerTile});
-    } else {
-      basesLane.push_back({0, 0});
-    }
+    // 8x32
+    basesLane.push_back({0, numColsPerTile});
     // Expand the `register` dimension so the size of columns matches `K`.
     for (int logCol = 0;
          logCol < llvm::Log2_32(shape[kDim] / (numColsPerTile * 2)); logCol++) {
