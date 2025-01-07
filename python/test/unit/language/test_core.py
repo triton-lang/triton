@@ -55,6 +55,10 @@ def promotion_numpy_2_0():
         np._set_promotion_state(state)
 
 
+# No need to emulate NumPy 2.0 if the user has NumPy 2.0
+if np.__version__[0] != "1":
+    promotion_numpy_2_0 = contextlib.nullcontext
+
 # TODO: enable multiple cta cluster testing.
 # num_ctas_list = [1, 4] if torch.cuda.get_device_capability()[0] == 9 else [1]
 num_ctas_list = [1]
