@@ -86,7 +86,7 @@ def test_hooks(device):
     _kernel[(1, )](src, N)
 
     # On NVIDIA GPUs:
-    # The tunning knob `num_stages` can be set by users.
+    # The tuning knob `num_stages` can be set by users.
     # This will cause out of resources when N_STAGES = 100
     # shared memory bytes = N_STAGES * BLOCK_SIZE * sizeof(float)
     # On AMD GPUs:

@@ -513,6 +513,59 @@ TEST_F(LinearLayoutTest, InvertAndCompose_BroadcastedDims2) {
   EXPECT_EQ(c.compose(b), a.transposeOuts(llvm::to_vector(b.getOutDimNames())));
 }
 
+TEST_F(LinearLayoutTest, InvertAndCompose_IdentityInDim) {
+  SmallVector<StringAttr> outDims = {S("dim0"), S("dim1"), S("dim2"),
+                                     S("dim3"), S("dim4"), S("dim5"),
+                                     S("dim6"), S("dim7"), S("dim8")};
+
+  LinearLayout src({{S("register"),
+                     {
+                         {0, 0, 0, 0, 0, 0, 0, 0, 1},
+                         {0, 0, 0, 0, 0, 0, 0, 1, 0},
+                     }},
+                    {S("lane"),
+                     {
+                         {0, 0, 0, 0, 0, 0, 1, 0, 0},
+                         {0, 0, 0, 0, 0, 1, 0, 0, 0},
+                         {0, 0, 0, 0, 1, 0, 0, 0, 0},
+                         {0, 0, 0, 1, 0, 0, 0, 0, 0},
+                         {0, 0, 1, 0, 0, 0, 0, 0, 0},
+                     }},
+                    {S("warp"),
+                     {
+                         {0, 1, 0, 0, 0, 0, 0, 0, 0},
+                         {1, 0, 0, 0, 0, 0, 0, 0, 0},
+                     }},
+                    {S("block"), {}}},
+                   outDims);
+  LinearLayout dst({{S("register"),
+                     {
+                         {0, 0, 0, 0, 0, 0, 0, 0, 1},
+                         {0, 0, 0, 0, 0, 0, 0, 1, 0},
+                     }},
+                    {S("lane"),
+                     {
+                         {1, 0, 0, 0, 0, 0, 0, 0, 0},
+                         {0, 1, 0, 0, 0, 0, 0, 0, 0},
+                         {0, 0, 1, 0, 0, 0, 0, 0, 0},
+                         {0, 0, 0, 1, 0, 0, 0, 0, 0},
+                         {0, 0, 0, 0, 1, 0, 0, 0, 0},
+                     }},
+                    {S("warp"),
+                     {
+                         {0, 0, 0, 0, 0, 1, 0, 0, 0},
+                         {0, 0, 0, 0, 0, 0, 1, 0, 0},
+                     }},
+                    {S("block"), {}}},
+                   outDims);
+
+  LinearLayout cvt = dst.invertAndCompose(src);
+  SmallVector<std::pair<StringAttr, int32_t>> k = {
+      {S("register"), 3}, {S("lane"), 0}, {S("warp"), 2}, {S("block"), 0}};
+
+  EXPECT_EQ(dst.apply(k), src.apply(cvt.apply(k)));
+}
+
 TEST_F(LinearLayoutTest, NumConsecutiveInOut) {
   EXPECT_EQ(
       1,
@@ -593,35 +646,6 @@ TEST_F(LinearLayoutTest, SublayoutIsZero) {
   EXPECT_FALSE(l1.sublayoutIsZero({S("in1")}, {S("out2")}));
   EXPECT_FALSE(l1.sublayoutIsZero({S("in2")}, {S("out1")}));
   EXPECT_FALSE(l1.sublayoutIsZero({S("in2")}, {S("out2")}));
-}
-
-TEST_F(LinearLayoutTest, SquareSublayoutIsIdentity) {
-  EXPECT_TRUE(LinearLayout::identity1D(4, S("in"), S("in"))
-                  .squareSublayoutIsIdentity({S("in")}));
-  EXPECT_TRUE(LinearLayout::identity1D(4, S("in"), S("in"))
-                  .squareSublayoutIsIdentity({}));
-
-  LinearLayout l1(
-      {{S("in1"), {{1, 1}, {2, 2}, {4, 4}}}, {S("in2"), {{2, 1}, {1, 2}}}},
-      {{S("in1"), 8}, {S("in2"), 8}}, /*requireSurjective=*/false);
-  EXPECT_TRUE(l1.squareSublayoutIsIdentity({S("in1")}));
-  EXPECT_FALSE(l1.squareSublayoutIsIdentity({S("in2")}));
-
-  LinearLayout l2 = LinearLayout::identity1D(4, S("in1"), S("in1")) *
-                    LinearLayout::identity1D(8, S("in2"), S("in2")) *
-                    LinearLayout({{S("in3"), {{1, 1, 1}}}},
-                                 {{S("in1"), 2}, {S("in2"), 2}, {S("in3"), 2}},
-                                 /*requireSurjective=*/false);
-  EXPECT_FALSE(l2.squareSublayoutIsIdentity({S("in1")}));
-  EXPECT_FALSE(l2.squareSublayoutIsIdentity({S("in2")}));
-  EXPECT_TRUE(l2.squareSublayoutIsIdentity({S("in3")}));
-  EXPECT_FALSE(l2.squareSublayoutIsIdentity({S("in1"), S("in2")}));
-
-  LinearLayout l3 = LinearLayout::identity1D(4, S("in1"), S("in1")) *
-                    LinearLayout::identity1D(8, S("in2"), S("in2"));
-  EXPECT_TRUE(l3.squareSublayoutIsIdentity({S("in1")}));
-  EXPECT_TRUE(l3.squareSublayoutIsIdentity({S("in2")}));
-  EXPECT_TRUE(l3.squareSublayoutIsIdentity({S("in1"), S("in2")}));
 }
 
 TEST_F(LinearLayoutTest, FreeVariableMasks) {

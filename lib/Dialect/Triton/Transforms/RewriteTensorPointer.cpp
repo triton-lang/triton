@@ -395,7 +395,7 @@ public:
 
   Operation *rewriteForOp(OpBuilder &builder, scf::ForOp op,
                           std::stack<Operation *> &eraser) {
-    // Generate new iteration operands and set rewrited information
+    // Generate new iteration operands and set rewritten information
     SmallVector<Value> oldIterOperands = llvm::to_vector(op.getInitArgs());
     SmallVector<Value> newIterOperands = llvm::to_vector(op.getInitArgs());
     for (unsigned i = 0, oldI = 0, size = op.getInitArgs().size(); i < size;
@@ -425,7 +425,7 @@ public:
          ++i, ++oldI) {
       auto oldRegionIterArg = op.getRegionIterArg(oldI);
       if (triton::isTensorPointerType(oldRegionIterArg.getType())) {
-        // Pass rewrited info inside
+        // Pass rewritten info inside
         assert(rewritedInfo.count(oldIterOperands[oldI]));
         auto info = rewritedInfo[oldIterOperands[oldI]];
         mapping.map(oldRegionIterArg, oldRegionIterArg);
@@ -450,7 +450,7 @@ public:
     for (unsigned i = 0, oldI = 0; oldI < op.getNumResults(); ++i, ++oldI) {
       auto oldResult = op.getResult(oldI);
       if (triton::isTensorPointerType(oldResult.getType())) {
-        // Pack new offsets into rewrited info
+        // Pack new offsets into rewritten info
         assert(rewritedInfo.count(oldIterOperands[oldI]));
         auto info = rewritedInfo[oldIterOperands[oldI]];
         for (unsigned j = 0; j < info.length(); ++j)

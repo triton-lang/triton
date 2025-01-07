@@ -17,7 +17,7 @@ using namespace mlir::triton;
 // NOTE: [Additional Function Arguments]
 // To support use of shared memory and global scratch memory inside of a
 // function, the caller allocates a single large block of the relevant memory
-// and calls the funciton with these extra arguments at the end.
+// and calls the function with these extra arguments at the end.
 // Specifically, the last argument is the global scratch memory allocation and
 // the second to last is the shared memory allocation.
 //

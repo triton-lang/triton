@@ -1,7 +1,7 @@
 // RUN: triton-opt %s -split-input-file --tritonamdgpu-accelerate-matmul='arch-generation-name=gfx1100 matrix-instruction-size=0' | FileCheck %s
 
 // CHECK: #[[DOT_OP_PARENT:.+]] = #ttg.blocked<{{.*}}>
-// CHECK: #[[WMMA_0:.+]] = #ttg.amd_wmma<{version = 1, warpsPerCTA = [1, 4]}>
+// CHECK: #[[WMMA_0:.+]] = #ttg.amd_wmma<{version = 1, isTranspose = false, warpsPerCTA = [1, 4]}>
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @wmma_dot_cf32(
@@ -31,7 +31,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // -----
 
 // CHECK: #[[DOT_OP_PARENT:.+]] = #ttg.blocked<{{.*}}>
-// CHECK: #[[WMMA_1:.+]] = #ttg.amd_wmma<{version = 1, warpsPerCTA = [2, 2]}>
+// CHECK: #[[WMMA_1:.+]] = #ttg.amd_wmma<{version = 1, isTranspose = false, warpsPerCTA = [2, 2]}>
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @wmma_dot_cf16(
@@ -61,7 +61,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // -----
 
 // CHECK: #[[DOT_OP_PARENT:.+]] = #ttg.blocked<{{.*}}>
-// CHECK: #[[WMMA_0:.+]] = #ttg.amd_wmma<{version = 1, warpsPerCTA = [1, 4]}>
+// CHECK: #[[WMMA_0:.+]] = #ttg.amd_wmma<{version = 1, isTranspose = false, warpsPerCTA = [1, 4]}>
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @wmma_dot_ab8_cf16(
@@ -95,7 +95,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 // -----
 
 // CHECK: #[[DOT_OP_PARENT:.+]] = #ttg.blocked<{{.*}}>
-// CHECK: #[[WMMA_1:.+]] = #ttg.amd_wmma<{version = 1, warpsPerCTA = [2, 2]}>
+// CHECK: #[[WMMA_1:.+]] = #ttg.amd_wmma<{version = 1, isTranspose = false, warpsPerCTA = [2, 2]}>
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @wmma_dot_i8_i32(

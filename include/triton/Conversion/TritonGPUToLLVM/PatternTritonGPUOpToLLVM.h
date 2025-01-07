@@ -25,7 +25,6 @@ namespace triton {
 constexpr int patternBenefitDefault = 1;
 constexpr int patternBenefitPrioritizeOverLLVMConversions = 10;
 constexpr int patternBenefitClampOptimizedPattern = 20;
-constexpr int patternBenefitConvertLayoutOptimizedPattern = 20;
 
 struct BackendCallbacks {
   /**
@@ -50,7 +49,7 @@ void populateElementwiseOpToLLVMPatterns(
 // callback receives 1) the current source op, 2) the number of issued LLVM
 // instructions and 3) their input types. Each MLIR backend can provide a
 // callback and, thus, handle backend-specific behaviors.
-void populateMemoryOpToLLVMPattern(
+void populateMemoryOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit,
     std::optional<BackendCallbacks> backendCallbacks = std::nullopt);
@@ -101,10 +100,6 @@ void populateConvertLayoutOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                            const TargetInfoBase &targetInfo,
                                            RewritePatternSet &patterns,
                                            PatternBenefit benefit);
-
-void populateConvertLayoutOpUsingLinearLayoutsToLLVMPattern(
-    LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
-    RewritePatternSet &patterns, PatternBenefit benefit);
 
 void populateControlFlowOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                         RewritePatternSet &patterns,

@@ -173,7 +173,7 @@ struct SplitOpConversion : public ConvertOpToLLVMPattern<SplitOp> {
     // verifier):
     //
     // - The op has a blocked encoding.
-    // - The last dimension (the one we're spliting) has sizePerThread=2,
+    // - The last dimension (the one we're splitting) has sizePerThread=2,
     // threadPerWarp=1 and warpPerBlock=1.
     //
     // With these invariants, split is trivial: We can count how many contiguous
