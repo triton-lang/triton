@@ -114,8 +114,7 @@ Value BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc,
   auto bufferAtomicRMW = LLVM::createLLVMIntrinsicCallOp(
       rewriter, loc, instrinsic, bufferType, args);
 
-  data = bitcast(bufferAtomicRMW.getResult(0), type);
-  return data;
+  return bitcast(bufferAtomicRMW.getResult(0), type);
 }
 
 void BufferEmitter::emitStore(Value rsrcDesc, Value offset, Value data,
