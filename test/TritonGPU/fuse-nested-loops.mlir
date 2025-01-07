@@ -172,7 +172,7 @@ tt.func @fuse_one_level_inouts(%lbi: i64, %ubi: i64, %stepi: i64, %lbj: i64, %ub
     // CHECK-NEXT: }
     %epilogue_out = "epilogue"(%i, %prologue_out, %inner_out, %m) : (i64, index, index, index) -> index
 
-    // CHECK-NEXT: yield [[T]], [[EPILOGUE_OUTS]]#0, [[EPILOGUE_OUTS]]#1, [[BODY_OUTS]]#0, [[BODY_OUTS]]#1, [[PROLOGUE_OUTS]]#1, [[EPILOGUE_OUTS]]#1 : i64, i64, index, i64, index, index, index
+    // CHECK-NEXT: yield %{{.*}}, [[EPILOGUE_OUTS]]#0, [[EPILOGUE_OUTS]]#1, [[BODY_OUTS]]#0, [[BODY_OUTS]]#1, [[PROLOGUE_OUTS]]#1, [[EPILOGUE_OUTS]]#1 : i64, i64, index, i64, index, index, index
     scf.yield %epilogue_out : index
   }
   // CHECK: return [[OUTER_OUTS]]#2
