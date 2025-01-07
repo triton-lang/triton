@@ -622,7 +622,7 @@ struct BufferAtomicRMWOpConversion
     //    No special action is required for coherence between wavefronts in the
     //    same work-group since they execute on the same CU.
     //
-    // 3. Each CU has a separate request queue per channel for its associated
+    // 2. Each CU has a separate request queue per channel for its associated
     // L2.
     //    Therefore, the vector and scalar memory operations performed by
     //    wavefronts executing with different L1 caches and the same L2 cache
@@ -632,7 +632,7 @@ struct BufferAtomicRMWOpConversion
     //    completed before executing a subsequent vector memory or LDS operation
     //    and so can be used to meet the requirements of acquire and release.
     //
-    // 4. Atomic read-modify-write instructions implicitly bypass the L1 cache
+    // 3. Atomic read-modify-write instructions implicitly bypass the L1 cache
     //    (specific to gfx942)
     //    Therefore, they do not use the sc0 bit for coherence and instead use
     //    it to indicate if the instruction returns the original value being
