@@ -3452,8 +3452,6 @@ struct MemDescModel
   }
 };
 
-LinearLayoutCache TritonGPUDialect::llCache;
-
 void TritonGPUDialect::initialize() {
   registerTypes();
 

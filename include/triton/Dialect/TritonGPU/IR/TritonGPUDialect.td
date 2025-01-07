@@ -43,7 +43,8 @@ def TritonGPU_Dialect : Dialect {
       }
       return cast<IntegerAttr>(threadsPerWarp).getInt();
     }
-    static LinearLayoutCache llCache;
+
+    LinearLayoutCache llCache;
   }];
 
   let useDefaultTypePrinterParser = 1;
