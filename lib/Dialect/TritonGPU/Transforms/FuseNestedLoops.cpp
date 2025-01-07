@@ -705,6 +705,17 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   elseOuts.append(logueOutsIt, logueOutsIt + logues.back().outputs.size());
   b.create<scf::YieldOp>(loc, elseOuts);
 
+  for (auto [ifOut, output] :
+       llvm::zip(epilogueIf.getResults().slice(1, logues.back().outputs.size()),
+                 logues.back().outputs)) {
+    // Replace uses of the prologue outputs that are not in the prologue, i.e.
+    // inside the `then` region where it got spliced.
+    output.replaceUsesWithIf(ifOut, [&](OpOperand &use) {
+      return !epilogueIf.getThenRegion().isAncestor(
+          use.getOwner()->getParentRegion());
+    });
+  }
+
   // Finally, create the yield of the fused loop.
   SmallVector<Value> outerOuts{T, /*i=*/epilogueIf.getResult(0)};
   llvm::append_range(outerOuts, outer.getYieldedValues());
@@ -722,6 +733,8 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
 
   b.setInsertionPointToEnd(fused.getBody());
   b.create<scf::YieldOp>(loc, outerOuts);
+  outer.replaceAllUsesWith(
+      fused.getResults().slice(outerArgsStartIdx, outer.getNumResults()));
   outer.erase();
 }
 
@@ -730,13 +743,14 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
 //===----------------------------------------------------------------------===//
 
 void FuseNestedLoopsPass::runOnOperation() {
+  auto &domInfo = getAnalysis<DominanceInfo>();
+
   for (auto func : getOperation().getOps<FuncOp>()) {
     SmallVector<LoopNest> nests;
     findLoopNests(func, nests);
 
     for (auto &nest : nests) {
-      nest.dump();
-      fuseOneLevel(nest.root, getAnalysis<DominanceInfo>());
+      fuseOneLevel(nest.root, domInfo);
     }
   }
 }
