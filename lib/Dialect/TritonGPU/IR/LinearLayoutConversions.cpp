@@ -1101,7 +1101,6 @@ LinearLayout chooseLdMatrixLayoutNoLeadingOffset(MLIRContext *ctx,
 
   std::vector<std::vector<int>> basesReg = {{0, 1}, {0, 2}, {0, 4}};
   std::vector<std::vector<int>> basesLane;
-  std::vector<std::vector<int>> basesWarp;
   auto numRowsPerTile = 16;
   auto numColsPerTile = 16;
   int vecSize = shared.getVec();
@@ -1148,9 +1147,8 @@ LinearLayout chooseLdMatrixLayoutNoLeadingOffset(MLIRContext *ctx,
       basesReg.push_back({0, (numColsPerTile * 2) * col});
     }
   }
-  auto layout =
-      LinearLayout({{kReg, basesReg}, {kLane, basesLane}, {kWarp, {basesWarp}}},
-                   {kOuter, kInner});
+  auto layout = LinearLayout(
+      {{kReg, basesReg}, {kLane, basesLane}, {kWarp, {}}}, {kOuter, kInner});
   // Expand the `warp` dimension according to warpsPerCTA.
   layout *= broadcastedDotOperandLayout(ctx, warpsPerCTA, mma.getWarpOrder(),
                                         kDim, kWarp)
