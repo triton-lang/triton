@@ -51,21 +51,30 @@ public:
       auto rank = dstTy.getRank();
       auto kOrder = dot.getOpIdx() == 0 ? rank - 1 : rank - 2;
       auto needTrans = kOrder != shared.getOrder()[0];
+      // Limitation 1: Cannot use ldmatrix if we need to transpose a non-fp16
+      // matrix
+      // Limitation 2 [TODO: remove]: If kWidth is greater than the
+      // vector width supported by MMA, we don't use ldmatrix
       auto canUseLdmatrixLegacy =
           (bitwidth == 16 || (!needTrans)) && (kWidth == vecWidth);
       if (mma.isHopper()) {
+        // Limitation 3 [TODO: remove]:
         // I think we should be able to remove this condition, but it's here
         // as the legacy ldmatrix path does not support it
         canUseLdmatrixLegacy &= srcTy.getElementTypeBitWidth() * kWidth == 32 &&
                                 dot.getOpIdx() == 0;
       }
-      // If we perform swizzling, it must be done within a single ldmatrix tile
+      // Limitation 4: If we perform swizzling, it must be done within a single
+      // ldmatrix tile
+      // Limitation 5 [TODO: remove]: Only support 2d matrices
       auto maxPhase = shared.getMaxPhase();
       auto perPhase = shared.getPerPhase();
       canUseLdmatrixLegacy &=
           dstTy.getRank() <= 2 && (maxPhase / perPhase <= 8);
       auto allocShape = srcTy.getAllocShape();
       auto shape = srcTy.getShape();
+      // Limitation 6 [TODO: remove]: The LL-path doesn't support sliced shared
+      // memory, transpose, or non-16-bit types
       auto canUseLdmatrixLL =
           canUseLdmatrixLegacy && bitwidth == 16 && !needTrans &&
           isSimpleSharedMemoryAccess(shape, allocShape, shared);
@@ -73,14 +82,21 @@ public:
         canUseLdmatrixLL &=
             srcTy.getShape()[0] >= 16 && srcTy.getShape()[1] >= 16;
       } else {
+        // Limitation 7 [TODO: remove]: Due to the use of ldmatrix.x4, we need
+        // to read 4 tiles. For opIdx=1, a single warp load four consecutive
+        // tiles along the K dimension, so the minimum size is 4 * 8= 32.
+        // The legacy path doesn't have this limitation because it reads
+        // duplicated elements and throw them away.
+        // It might be better to use ldmatrix.x2 in such a case.
         canUseLdmatrixLL &=
             srcTy.getShape()[0] >= 32 && srcTy.getShape()[1] >= 16;
       }
+      // Limitation 8 [TODO: remove]:
       // If we remove this one, ldmatrix will IMA. It can probably be relaxed
-      // though
+      // though. Remove this constraint after all other limitations have been
+      // resolved
       canUseLdmatrixLegacy &=
           srcTy.getShape()[0] >= 8 && srcTy.getShape()[1] >= 4 * kWidth;
-      // The LL path only supports ldmatrix.x4
       if (canUseLdmatrixLL) {
         return lowerSharedToDotOperandLL(op, adaptor, getTypeConverter(),
                                          rewriter);
@@ -179,11 +195,10 @@ private:
     SmallVector<Value> elems;
     auto numElemsPerVec = 32 / llvmElemTy.getIntOrFloatBitWidth();
     auto vecTy = vec_ty(llvmElemTy, numElemsPerVec);
-    for (int i = 0; i < elemsI32.size(); ++i) {
-      // Unpack the 32-bit values into the final result
-      auto vec = bitcast(elemsI32[i], vecTy);
-      for (auto v = 0; v < numElemsPerVec; ++v)
-        elems.push_back(extract_element(llvmElemTy, vec, i32_val(v)));
+    for (int v = 0; v < static_cast<int>(elemsI32.size()); ++v) {
+      auto vec = bitcast(elemsI32[v], vecTy);
+      for (int i = 0; i < numElemsPerVec; ++i)
+        elems.push_back(extract_element(llvmElemTy, vec, i32_val(i)));
     }
 
     auto structTy = LLVM::LLVMStructType::getLiteral(
