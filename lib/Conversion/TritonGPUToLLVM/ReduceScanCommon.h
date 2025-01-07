@@ -51,7 +51,7 @@ inline SmallVector<Value> applyCombineOp(Location loc,
                                          ConversionPatternRewriter &rewriter,
                                          Region &combineOp, ValueRange acc,
                                          ValueRange cur, Value pred = {}) {
-  // Allows for passing an unitialized acc and use cur as the neutral element
+  // Allows for passing an uninitialized acc and use cur as the neutral element
   if (acc.size() == 0) {
     return cur;
   }

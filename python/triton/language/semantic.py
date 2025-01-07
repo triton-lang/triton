@@ -61,7 +61,7 @@ def computation_type_impl(a_ty: tl.dtype, a_is_scalar: bool, b_ty: tl.dtype, b_i
                           div_or_mod: bool) -> tl.dtype:
     # 0) For scalars we follow semantics similar to PyTorch, namely:
     # - If the scalar is of a lower or equal kind (bool < uint < int < fp),
-    #   it doesn't participate in the pomotion
+    #   it doesn't participate in the promotion
     if a_is_scalar != b_is_scalar:
         scalar_ty, tensor_ty = (a_ty, b_ty) if a_is_scalar else (b_ty, a_ty)
         if scalar_ty.kind().value <= tensor_ty.kind().value:
@@ -1049,7 +1049,7 @@ def _load_block_pointer(ptr, mask, other, boundary_check, padding, cache, evicti
         raise ValueError("`mask` and `other` arguments cannot be specified for loading block pointers")
 
     elt_ty = ptr.type.element_ty.element_ty
-    assert elt_ty != tl.int1, "`tl.int1` should be rewrited in `tl.make_block_ptr`"
+    assert elt_ty != tl.int1, "`tl.int1` should be rewritten in `tl.make_block_ptr`"
     if elt_ty.is_int() and padding == ir.PADDING_OPTION.PAD_NAN:
         raise ValueError("Padding option `nan` is not supported for integer block pointers")
 
@@ -1213,7 +1213,7 @@ def _store_block_pointer(ptr, val, mask, boundary_check, cache, eviction, builde
     assert ptr.type.element_ty.element_ty == val.type.element_ty, f"Block element type({ptr.type.element_ty.element_ty}) and value element type({val.type.element_ty}) mismatch"
 
     elt_ty = ptr.type.element_ty.element_ty
-    assert elt_ty != tl.int1, "`tl.int1` should be rewrited in `tl.make_block_ptr`"
+    assert elt_ty != tl.int1, "`tl.int1` should be rewritten in `tl.make_block_ptr`"
 
     # Check `boundary_check` argument
     boundary_check = _canonicalize_boundary_check(boundary_check, block_shape)

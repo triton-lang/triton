@@ -950,7 +950,7 @@ LogicalResult LayoutRematerialization::getRematerializableSlice(
     DenseMap<Value, Attribute> &layout,
     std::function<bool(Operation *)> stopPropagation) {
   // Allow re-using existing conversions for a value. Check dominance of any
-  // re-usable materializations against the root value. This is sufficient
+  // reusable materializations against the root value. This is sufficient
   // because the conversions are processed in post-order.
   auto getExistingConversion = [&](OpOperand &value, Attribute encoding) {
     Value remat = getRematValue(value.get(), encoding);
@@ -996,7 +996,7 @@ void LayoutRematerialization::backwardRematerialization() {
   for (ConvertLayoutOp convertOp : convertOps) {
     backwardRematerialization(convertOp);
     if (!opToDelete.contains(convertOp)) {
-      // If the conversion didn't get removed, consider it for re-use in future
+      // If the conversion didn't get removed, consider it for reuse in future
       // backward slices.
       addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
                     convertOp.getResult());
@@ -1012,7 +1012,7 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast() {
   for (ConvertLayoutOp convertOp : convertOps) {
     hoistConvertOnTopOfExtOrBroadcast(convertOp);
     if (!opToDelete.contains(convertOp)) {
-      // If the conversion didn't get removed, consider it for re-use in future
+      // If the conversion didn't get removed, consider it for reuse in future
       // backward slices.
       addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
                     convertOp.getResult());
@@ -1025,7 +1025,9 @@ void LayoutRematerialization::backwardRematerialization(
   // we don't handle conversions to DotOperandEncodingAttr
   // this is a heuristic to accommodate fused attention
   RankedTensorType targetType = convertOp.getType();
-  if (isa<DotOperandEncodingAttr>(targetType.getEncoding()))
+  // We stop the rematerialization of linear layouts as we have to be a bit more
+  // careful with the heuristics for both correctness and perf
+  if (isa<DotOperandEncodingAttr, LinearEncodingAttr>(targetType.getEncoding()))
     return;
   Value oldV = convertOp.getSrc();
   LDBG("check backward remat with source " << oldV << " encoding "
@@ -1067,8 +1069,11 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     ConvertLayoutOp convertOp) {
   // we don't handle conversions to DotOperandEncodingAttr
   // this is a heuristics to accommodate fused attention
+  // We stop the rematerialization of linear layouts as we have to be a bit more
+  // careful with the heuristics for both correctness and perf
   RankedTensorType targetType = convertOp.getType();
-  if (isa<DotOperandEncodingAttr>(targetType.getEncoding()))
+  if (mlir::isa<DotOperandEncodingAttr, LinearEncodingAttr>(
+          targetType.getEncoding()))
     return;
 
   auto isExtOrBroadcastOp = [](Operation *op) {

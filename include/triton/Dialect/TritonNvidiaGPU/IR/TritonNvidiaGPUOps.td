@@ -136,7 +136,7 @@ def TTNG_InvalBarrierOp : TTNG_Op<"inval_barrier", [DeclareOpInterfaceMethods<Me
 
     let description = [{
       Invalidate a barrier allocation so that it can be re-used. According to PTX
-      spec this has to be done before any re-use of the memory used by mbarrier.
+      spec this has to be done before any reuse of the memory used by mbarrier.
 
       https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#parallel-synchronization-and-communication-instructions-mbarrier-inval
     }];
@@ -213,7 +213,7 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
   let description = [{
     This operation copies data from global memory to local memory
     asynchronously.  This is analogue to tt.load except the data are copied to
-    local memory pointed by the memory descriptor instread of a distributed
+    local memory pointed by the memory descriptor instead of a distributed
     tensor. The data copied depends on the global memory descriptor pointed to
     by `desc_ptr`.
   }];
@@ -243,7 +243,7 @@ def TTNG_AsyncTMACopyLocalToGlobalOp : TTNG_Op<"async_tma_copy_local_to_global",
   let description = [{
     This operation copies data from local memory to global memory
     asynchronously.  This is analogue to tt.store except the data are copied from
-    local memory pointed by the memory descriptor instread of a distributed
+    local memory pointed by the memory descriptor instead of a distributed
     tensor. The data copied depends on the global memory descriptor pointed to
     by `desc_ptr`.
   }];

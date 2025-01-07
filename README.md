@@ -130,36 +130,15 @@ There currently isn't a turnkey way to run all the Triton tests, but you can
 follow the following recipe.
 
 ```shell
-# One-time setup.  Note we have to reinstall local Triton because torch
+# One-time setup.  Note this will reinstall local Triton because torch
 # overwrites it with the public version.
-$ pip install scipy numpy torch pytest lit pandas matplotlib && pip install -e python
+$ make dev-install
 
-# Run Python tests using your local GPU.
-$ python3 -m pytest python/test/unit
+# To run all tests (requires a GPU)
+$ make test
 
-# Move to builddir.  Fill in <...> with the full path, e.g.
-# `cmake.linux-x86_64-cpython-3.11`.
-$ cd python/build/cmake<...>
-
-# Run C++ unit tests.
-$ ctest -j32
-
-# Run lit tests.
-$ lit test
-```
-
-You may find it helpful to make a symlink to the builddir and tell your local
-git to ignore it.
-
-```shell
-$ ln -s python/build/cmake<...> build
-$ echo build >> .git/info/exclude
-```
-
-Then you can e.g. rebuild and run lit with the following command.
-
-```shell
-$ ninja -C build && ( cd build ; lit test )
+# Or, to run tests without a gpu
+$ make test-cpp test-lit
 ```
 
 # Tips for hacking
@@ -193,6 +172,14 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
   separated values to be specified (eg
   `TRITON_LLVM_DEBUG_ONLY="tritongpu-remove-layout-conversions` or
   `TRITON_LLVM_DEBUG_ONLY="tritongpu-remove-layout-conversions,regalloc"`).
+- `TRITON_ENABLE_ASAN=1` invokes the LLVM address sanitizer for
+  memory leak and out of bounds access detection. Currently only supported on the AMD
+  backend. This must be run using the ASAN libraries documented [here](https://rocm.docs.amd.com/projects/llvm-project/en/latest/conceptual/using-gpu-sanitizer.html).
+
+  When enabling the address sanitizer it is recommended to disable various memory caching strategies
+  both within the ROCm stack and PyTorch. This will give the address sanitizer the best chance at finding the
+  memory fault where it originates. See this [test](https://github.com/triton-lang/triton/blob/main/third_party/amd/python/test/test_address_sanitizer.py) for more details.
+
 - `USE_IR_LOC={ttir,ttgir}` reparses the IR such that the location information
   will be the line number of the IR file with that particular extension,
   instead of line number of the python file. This can provide a direct mapping

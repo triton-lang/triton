@@ -48,8 +48,6 @@ static Operation *streamPredication(RewriterBase &rewriter, Operation *op,
     dotOp->moveBefore(yield);
     ifOp.getElseBodyBuilder().create<scf::YieldOp>(loc, dotOp.getC());
     return ifOp;
-  } else if (isa<gpu::BarrierOp>(op)) {
-    return op;
   }
   return tt::predicateOp(rewriter, op, pred);
 }
@@ -627,12 +625,11 @@ void StreamPipeliner::scheduleRemainingToLastStage() {
   // Assign the rest of the ops to the last stage.
   // Take care of the ordering of the ops - uses cannot be scheduled to the
   // cluster before the definition.
+  auto cluster = config[SCHED_TAIL].cluster;
   DenseMap<Operation *, tt::CoarseSchedule::Cluster> opToCluster;
   for (auto &op : forOp.getBody()->without_terminator()) {
-    if (schedule.count(&op) == 0) {
-      auto schedType = isa<gpu::BarrierOp>(op) ? SCHED_COMPUTE : SCHED_TAIL;
-      opToCluster[&op] = config[schedType].cluster;
-    }
+    if (schedule.count(&op) == 0)
+      opToCluster[&op] = cluster;
   }
   SmallVector<Operation *> queue;
   for (auto [op, stage, cluster] : schedule.getOpsInOrder(forOp)) {
@@ -812,13 +809,16 @@ static bool checkPrecondition(scf::ForOp forOp) {
                    [](Value operand) { return !operand.getDefiningOp(); }))
     return false;
 
-  // Don't pipeline outer loops.
-  auto hasNestedLoopInside = [forOp](Operation *op) {
+  auto hasInvalidOp = [forOp](Operation *op) {
+    // Don't pipeline outer loops.
     if (op != forOp && isa<scf::ForOp, scf::WhileOp>(op))
+      return WalkResult::interrupt();
+    // Don't pipeline loops with barriers.
+    if (isa<gpu::BarrierOp>(op))
       return WalkResult::interrupt();
     return WalkResult::advance();
   };
-  return !forOp->walk(hasNestedLoopInside).wasInterrupted();
+  return !forOp->walk(hasInvalidOp).wasInterrupted();
 }
 
 namespace {

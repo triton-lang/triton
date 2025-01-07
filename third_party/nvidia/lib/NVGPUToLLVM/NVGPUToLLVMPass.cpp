@@ -9,6 +9,7 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include "nvidia/lib/TritonNVIDIAGPUToLLVM/Utility.h"
+#include "llvm/Support/ErrorHandling.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -271,7 +272,7 @@ protected:
     case 4:
       return (ptxAsmBase + ".x4" + suffix).str();
     default:
-      assert(false && "Invalid vector size");
+      llvm_unreachable("Invalid vector size");
     }
   }
 

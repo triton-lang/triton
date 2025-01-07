@@ -653,9 +653,10 @@ class block_type(dtype):
 
 class tuple_type(dtype):
 
-    def __init__(self, types):
+    def __init__(self, types, fields=None):
         self.types = types
-        self.name = f"[{','.join(map(str, self.types))}]"
+        self.fields = fields or [''] * len(types)
+        self.name = '[' + ','.join([f"{k}:{v}" for k, v in zip(self.fields, self.types)]) + ']'
 
     def __str__(self):
         return self.name
@@ -1163,18 +1164,17 @@ class tensor(_value):
 
 class tuple:
 
-    def __init__(self, args: list):
+    def __init__(self, args: list, type: tuple_type = None):
         self.values = [i for i in args]
-
-    @property
-    def type(self):
 
         def get_type(x):
             if isinstance(x, dtype):
                 return dtype
+            if isinstance(x, int):
+                return constexpr
             return x.type
 
-        return tuple_type([get_type(x) for x in self.values])
+        self.type = type or tuple_type([get_type(x) for x in self.values])
 
     def __getitem__(self, idx: constexpr):
         if isinstance(idx, int):
@@ -1185,6 +1185,9 @@ class tuple:
             import builtins
             assert isinstance(idx, (slice, builtins.slice))
             return tuple(self.values[idx.start:idx.stop:idx.step])
+
+    def __getattr__(self, name):
+        return self.values[self.type.fields.index(name)]
 
     # TODO: remove
     def __setitem__(self, idx: constexpr, value):
@@ -1712,7 +1715,7 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
       the device does not have Tensor Cores or the inputs are not of dtype f32,
       this option is ignored. For devices that do have tensor cores, the
       default precision is tf32.
-    :type input_precision: string. Available options for nvidia: :code:`"tf32"`, :code:`"tf32x3"`, :code:`"ieee"`. Default: :code:`"tf32"`. Avaliable options for amd: :code:`"ieee"`.
+    :type input_precision: string. Available options for nvidia: :code:`"tf32"`, :code:`"tf32x3"`, :code:`"ieee"`. Default: :code:`"tf32"`. Available options for amd: :code:`"ieee"`.
     :param allow_tf32: *Deprecated.* If true, input_precision is set to "tf32".
       Only one of :code:`input_precision` and :code:`allow_tf32` can be
       specified (i.e. at least one must be :code:`None`).
@@ -1944,7 +1947,7 @@ def _experimental_make_tensor_descriptor(
     """Make an experimental tensor descriptor object
 
     :param base: the base pointer of the tensor, must be 16-byte aligned
-    :param shape: A list of non-negative integers represeting the tensor shape
+    :param shape: A list of non-negative integers representing the tensor shape
     :param strides: A list of tensor strides. Leading dimensions must be multiples
         of 16-byte strides and the last dimension must be contiguous.
     :param block_shape: The shape of block to be loaded/stored from global memory
