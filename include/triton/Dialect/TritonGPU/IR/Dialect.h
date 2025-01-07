@@ -11,15 +11,6 @@
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 
-// Forward declaration
-namespace mlir::triton::gpu {
-class LinearLayoutCache;
-}
-
-#define GET_OP_CLASSES
-#include "triton/Dialect/TritonGPU/IR/Dialect.h.inc"
-#include "triton/Dialect/TritonGPU/IR/Ops.h.inc"
-
 // LinearLayoutCache Utils
 using CacheKey =
     std::tuple<std::vector<int64_t>, mlir::Attribute, std::optional<int32_t>>;
@@ -45,9 +36,7 @@ template <> struct hash<CacheKey> {
 };
 } // namespace std
 
-namespace mlir {
-namespace triton {
-namespace gpu {
+namespace mlir::triton::gpu {
 
 class LinearLayoutCache {
 public:
@@ -69,7 +58,13 @@ private:
   std::unordered_map<CacheKey, LinearLayout> cache;
   llvm::sys::SmartRWMutex<true> mutex;
 };
+} // namespace mlir::triton::gpu
 
+#define GET_OP_CLASSES
+#include "triton/Dialect/TritonGPU/IR/Dialect.h.inc"
+#include "triton/Dialect/TritonGPU/IR/Ops.h.inc"
+
+namespace mlir::triton::gpu {
 struct SharedMemory : public SideEffects::Resource::Base<SharedMemory> {
   StringRef getName() final { return "<SharedMemory>"; }
 };
@@ -291,8 +286,6 @@ llvm::SmallVector<T> expandMatrixShapeWithBatch(llvm::ArrayRef<T> s);
 llvm::SmallVector<unsigned>
 expandMatrixOrderWithBatch(llvm::ArrayRef<unsigned> o);
 
-} // namespace gpu
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_DIALECT_H_
