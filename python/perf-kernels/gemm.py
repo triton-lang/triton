@@ -6,7 +6,7 @@ import argparse
 import pytest
 import re
 
-import os
+from utils.benchmark_utils import get_available_models, get_model_configs
 
 
 @triton.autotune(
@@ -314,15 +314,7 @@ def parse_args():
 
     parser.add_argument('-model_configs', type=str, default="model_configs.json", help="Model config json file.")
 
-    def get_available_models(config_file='model_configs.json'):
-        import json
-        """Load model names from the configuration file."""
-        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), config_file)
-        with open(config_path, 'r') as f:
-            configs = json.load(f)
-        return list(configs.keys())
-
-    available_models = get_available_models()  # Dynamically load model names
+    available_models = get_available_models(model_families=["llama3"])  # Dynamically load model names
     model_help = ("Model name to benchmark. Select from: [" + ", ".join(available_models) +
                   "]. Use 'all' to benchmark all models or leave blank for the default benchmark script.")
     parser.add_argument('-model', type=str, default=None, help=model_help)
@@ -350,35 +342,15 @@ def main():
     verbose = args.v
 
     if args.model:
-        batch_size = args.b if args.b else 1
-        import os
-        import json
-        # If user did not provide an absolute path, resolve relative path from script directory
-        if not os.path.isabs(args.model_configs):
-            config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), args.model_configs)
-        else:
-            config_file = args.model_configs
-
-        with open(config_file, 'r') as f:
-            configs = json.load(f)
+        config_file = args.model_configs
+        configs = get_model_configs(config_path=config_file, model_families=["llama3"], model=args.model)
         mnk_list = []
+        batch_size = args.b if args.b else 1
 
-        if args.model != "all":
-            model_name = args.model
-            # Check if the model exists
-            if model_name not in configs:
-                raise ValueError(f"Model '{model_name}' not found in {config_file}")
-            # Handle a specific model
-            config = configs[model_name]
+        for model_name, config in configs.items():
             seq_len = args.sl if args.sl else config["max_ctx_len"]
             M, N, K = batch_size * seq_len, config["hidden_size"], config["intermediate_size"]
             mnk_list.append((model_name, M, N, K))
-        else:
-            # Handle all models
-            for model_name, config in configs.items():
-                seq_len = args.sl if args.sl else config["max_ctx_len"]
-                M, N, K = batch_size * seq_len, config["hidden_size"], config["intermediate_size"]
-                mnk_list.append((model_name, M, N, K))
 
         benchmark.benchmarks.x_names = ['model', 'M', 'N', 'K']
         benchmark.benchmarks.x_vals = mnk_list
