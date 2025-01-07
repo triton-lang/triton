@@ -238,6 +238,7 @@ static bool isOuterLoopInvariant(mlir::DominanceInfo &domInfo, scf::ForOp outer,
     // invariant.
     if (!canHoistLoopBoundComputation(op))
       return false;
+    visited.insert(op);
     // Recurse on the operands of the op.
     for (Value operand : op->getOperands())
       queue.push(operand);
@@ -299,9 +300,9 @@ static Value castIntIfNecessary(OpBuilder &b, Location loc, Value value,
 //   len_j0 = len(range(lbj0, ubj0, stepj0))
 //   len_j1 = len(range(lbj1, ubj1, stepj1))
 //   ...
-//   len_jN = len(range(lbjN, ubjN, stepjN)
-//   inner_len = len_j0 + len_j1 + ... + len_jN - N
-//   total_iters = len_i * max(1, inner_len)
+//   len_jN = len(range(lbjN, ubjN, stepjN))
+//   inner_len = max(1, len_j0) + max(1, len_j1) + ... + max(1, len_jN) - N
+//   total_iters = len_i * inner_len
 //
 //   T = -1
 //   i = lbi
@@ -315,31 +316,34 @@ static Value castIntIfNecessary(OpBuilder &b, Location loc, Value value,
 //       body0(i, j0)
 //       j0 += stepj0
 //
-//     if T == len_j0 - 1:
+//     if T == max(1, len_j0) - 1:
 //       prologue1(i)
 //       j1 = lbj1
-//     if T >= len_j0 - 1 and T < len_j0 + len_j1 - 1:
+//     if T >= max(1, len_j0) - 1
+//    and T <  max(1, len_j0) - 1 + len_j1:
 //       body1(i, j1)
 //       j1 += stepj1
 //
-//     if T == len_j0 + len_j1 - 2:
+//     if T == max(1, len_j0) + max(1, len_j1) - 2:
 //       prologue2(i)
 //       j2 = lbj2
-//     if T >= len_j0 + len_j1 - 2 and T < len_j0 + len_j1 + len_j2 - 3:
+//     if T >= max(1, len_j0) + max(1, len_j1) - 2
+//    and T <  max(1, len_j0) + max(1, len_j1) - 2 + len_j2:
 //       body2(i, j2)
 //       j2 += stepj2
 //
 //     ...
 //
-//     if T == len_j0 + len_j1 + ... + len_jN-1 - N:
+//     if T == max(1, len_j0) + max(1, len_j1) + ... + max(1, len_jN-1) - N:
 //       prologueN(i)
 //       jN = lbjN
-//     if T >= len_j0 + len_j1 + ... + len_jN-1 - N
-//    and T <  len_j0 + len_j1 + ... + len_jN - N:
+//     if T >= max(1, len_j0) + max(1, len_j1) + ... + max(1, len_jN-1) - N
+//    and T <  max(1, len_j0) + max(1, len_j1) + ... + max(1, len_jN-1) - N +
+//             len_jN:
 //       bodyN(i, jN)
 //       jN += stepjN
 //
-//     if T == len_j0 + len_j1 + ... + len_jN - N - 1:
+//     if T == max(1, len_j0) + max(1, len_j1) + ... + max(1, len_jN) - (N + 1):
 //       epilogue(i)
 //       i += stepi
 //
@@ -461,6 +465,7 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   Value lenOuter = computeNumIters(b, outer);
   SmallVector<Value> lenInners;
   for (LoopNestNode *child : childrenToFuse) {
+    // len_jk = len(range(lbjk, ubjk, stepjk))
     Value lenInner = computeNumIters(b, child->loop);
     intTyWidth = std::max(intTyWidth, getBitWidth(lenInner.getType()));
     lenInners.push_back(lenInner);
@@ -473,23 +478,23 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
     return b.create<arith::ConstantOp>(loc, IntegerAttr::get(intTy, v));
   };
 
-  // inner_len = len_j0 + len_j1 + ... + len_jN - N
+  // inner_len = max(1, len_j0) + max(1, len_j1) + ... + max(1, len_jN) - N
   unsigned N = childrenToFuse.size() - 1;
   Value innerLen = intTyCst(0);
   // Keep all the partial sums because we need them later.
   SmallVector<Value> partialInnerSums;
   partialInnerSums.push_back(innerLen);
   for (Value lenInner : lenInners) {
-    innerLen = b.create<arith::AddIOp>(
-        loc, innerLen, castIntIfNecessary(b, loc, lenInner, intTy));
+    lenInner = castIntIfNecessary(b, loc, lenInner, intTy);
+    lenInner = b.create<arith::MaxSIOp>(loc, intTyCst(1), lenInner);
+    innerLen = b.create<arith::AddIOp>(loc, innerLen, lenInner);
     partialInnerSums.push_back(innerLen);
   }
   innerLen = b.create<arith::SubIOp>(loc, innerLen, intTyCst(N));
 
-  // total_iters = len_i * max(1, inner_len)
-  Value totalIters = b.create<arith::MaxSIOp>(loc, intTyCst(1), innerLen);
-  totalIters = b.create<arith::MulIOp>(
-      loc, castIntIfNecessary(b, loc, lenOuter, intTy), totalIters);
+  // total_iters = len_i * inner_len
+  Value totalIters = b.create<arith::MulIOp>(
+      loc, castIntIfNecessary(b, loc, lenOuter, intTy), innerLen);
 
   // The outputs of the prologue, each epilogue, and all inner loop bodies need
   // to carried through the fused loop.
@@ -573,7 +578,7 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
       ValueRange(fused.getRegionIterArgs()).begin() + logueOutsStartIdx;
   SmallVector<scf::IfOp> logueIfs, bodyIfs;
   for (unsigned k = 0; k <= N; ++k) {
-    // if T == len_j0 + ... len_jk-1 - k
+    // if T == max(1, len_j0) + ... max(1, len_jk-1) - k
     //   prologuek(i)
     //   jk = lbjk
     Value innerStartT =
@@ -635,13 +640,14 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
          llvm::zip(prologueInits, inner.getRegionIterArgs()))
       iterArg.replaceAllUsesWith(init);
 
-    // if  T >= len_j0 + len_j1 + ... + len_jk-1 - k
-    // and T <  len_j0 + len_j1 + ... + len_jk - k:
+    // if  T >= max(1, len_j0) + max(1, len_j1) + ... + max(1, len_jk-1) - k
+    // and T <  max(1, len_j0) + max(1, len_j1) + ... + max(1, len_jk-1) - k +
+    //          len_jk
     //   bodyk(i, jk)
     //   jk += stepjk
     b.setInsertionPointAfter(prologueIf);
-    Value innerEndT =
-        b.create<arith::SubIOp>(loc, partialInnerSums[k + 1], intTyCst(k));
+    Value innerEndT = b.create<arith::AddIOp>(
+        loc, innerStartT, castIntIfNecessary(b, loc, lenInners[k], intTy));
     Value bodyCond = b.create<arith::AndIOp>(
         loc,
         b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sge, T, innerStartT),
