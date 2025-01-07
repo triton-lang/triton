@@ -531,7 +531,6 @@ struct BufferAtomicRMWOpConversion
 
     // The max width of a buffer atomic op is 64-bits
     // Some types like F32 don't have a 2x vectorized version
-    // v2bf16 does exist but throws LLVM errors
     if (valueElemTy.isF32() || valueElemTy.isF64() ||
         valueElemTy.isInteger(32) || valueElemTy.isInteger(64)) {
       vec = (unsigned)1;
@@ -1124,13 +1123,13 @@ struct AtomicRMWOpConversion
 
       rewriter.setInsertionPointToEnd(atomicBlock);
       auto maybeKind = matchAtomicOp(atomicRmwAttr);
-      // TODO: use rocdl.raw.buffer.atomic from ROCDL dialect to use efficient
-      // atomics for MI-* series of AMD GPU.
+
       Value atom = rewriter
                        .create<LLVM::AtomicRMWOp>(loc, *maybeKind, rmwPtr,
                                                   operand, atomicMemOrdering,
                                                   StringRef(scopeStr.value()))
                        .getResult();
+
       if (!tensorTy) {
         if (atomicNeedsSharedMemory(op.getResult())) {
           Value atomPtr =
