@@ -2,6 +2,7 @@
 #include "mlir/IR/Dominance.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "llvm/Support/Debug.h"
+#include <queue>
 
 namespace mlir {
 namespace triton {
