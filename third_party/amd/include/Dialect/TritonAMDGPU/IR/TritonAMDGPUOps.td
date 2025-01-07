@@ -230,9 +230,6 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
     let description = [{
         The semantics of this operation closely resemble standard buffer loads/stores.
         Similar to TT_AtomicRMWOp: Buffer atomic RMW ops load data at $ptr, do $rmw_op with $val, and store result to $ptr.
-
-        This variant of Atomic RMW does not return a value: `https://github.com/llvm/llvm-project/blob/main/mlir/include/mlir/Dialect/LLVMIR/ROCDLOps.td#L482`
-        TT_AtomicRMWOp returns a value, so we need to use the `results` field as a placeholder to replace the op.
     }];
     let arguments = (
       ins
