@@ -257,6 +257,13 @@ static bool isOuterLoopInvariant(mlir::DominanceInfo &domInfo, scf::ForOp outer,
   return true;
 }
 
+// Pessimistically assume the internal storage bitwidth for index types.
+static unsigned getIntTypeWidth(Type type) {
+  if (isa<IndexType>(type))
+    return IndexType::kInternalStorageBitWidth;
+  return cast<IntegerType>(type).getWidth();
+}
+
 // Generate IR to compute the number of iterations of a loop.
 static Value computeNumIters(OpBuilder &b, scf::ForOp loop) {
   // len(range(lb, ub, step)) = ceildiv(ub - lb, step)
@@ -417,7 +424,7 @@ static Value castIntIfNecessary(OpBuilder &b, Location loc, Value value,
 static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   scf::ForOp outer = parent->loop;
 
-  SmallVector<LoopNestNode *> childrenToFuse;
+  SmallVector<scf::ForOp> innerLoops;
   llvm::SetVector<Operation *> toHoist;
   for (LoopNestNode *child : parent->children) {
     scf::ForOp inner = child->loop;
@@ -433,7 +440,7 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
       continue;
 
     // Add this child to the list of loops to fuse.
-    childrenToFuse.push_back(child);
+    innerLoops.push_back(child->loop);
   }
 
   // From the perspective of the overall analysis, we can delete all the
@@ -443,7 +450,7 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   parent->children.clear();
 
   // If there are no child loops to fuse, then there is nothing to do.
-  if (childrenToFuse.empty())
+  if (innerLoops.empty())
     return;
 
   // The transformation will definitely succeed on `childrenToFuse`. `toHoist`
@@ -456,21 +463,16 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   // Determine the integer type to use for the length computations. Use an
   // integer bitwidth twice the size of the largest integer, up to 64 bits, to
   // avoid overflow.
-  auto getBitWidth = [](Type type) {
-    if (isa<IndexType>(type))
-      return IndexType::kInternalStorageBitWidth;
-    return cast<IntegerType>(type).getWidth();
-  };
-  unsigned intTyWidth = getBitWidth(outer.getInductionVar().getType());
+  unsigned intTyWidth = getIntTypeWidth(outer.getInductionVar().getType());
 
   // Generate the computations of the fused loop bounds.
   OpBuilder b(outer);
   Value lenOuter = computeNumIters(b, outer);
   SmallVector<Value> lenInners;
-  for (LoopNestNode *child : childrenToFuse) {
+  for (scf::ForOp loop : innerLoops) {
     // len_jk = len(range(lbjk, ubjk, stepjk))
-    Value lenInner = computeNumIters(b, child->loop);
-    intTyWidth = std::max(intTyWidth, getBitWidth(lenInner.getType()));
+    Value lenInner = computeNumIters(b, loop);
+    intTyWidth = std::max(intTyWidth, getIntTypeWidth(lenInner.getType()));
     lenInners.push_back(lenInner);
   }
   intTyWidth = std::min(64u, intTyWidth * 2);
@@ -482,7 +484,7 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   };
 
   // inner_len = max(1, len_j0) + max(1, len_j1) + ... + max(1, len_jN) - N
-  unsigned N = childrenToFuse.size() - 1;
+  unsigned N = innerLoops.size() - 1;
   Value innerLen = intTyCst(0);
   // Keep all the partial sums because we need them later.
   SmallVector<Value> partialInnerSums;
@@ -506,16 +508,14 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
     logues.push_back(createLogueFrom({begin, end}, domInfo));
   };
   // prologue0
-  addLogue(outer.getBody()->begin(),
-           childrenToFuse.front()->loop->getIterator());
+  addLogue(outer.getBody()->begin(), innerLoops.front()->getIterator());
   // prologuek where 0 < k <= N
-  for (auto i : llvm::seq<unsigned>(0, childrenToFuse.size() - 1)) {
-    scf::ForOp prevLoop = childrenToFuse[i]->loop;
-    scf::ForOp nextLoop = childrenToFuse[i + 1]->loop;
-    addLogue(std::next(prevLoop->getIterator()), nextLoop->getIterator());
+  for (auto i : llvm::seq<unsigned>(0, innerLoops.size() - 1)) {
+    addLogue(std::next(innerLoops[i]->getIterator()),
+             innerLoops[i + 1]->getIterator());
   }
   // epilogue
-  addLogue(std::next(childrenToFuse.back()->loop->getIterator()),
+  addLogue(std::next(innerLoops.back()->getIterator()),
            // Don't include the outer loop yield.
            std::prev(outer.getBody()->end()));
 
@@ -538,19 +538,19 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
 
   // Everything else is initialized to undef.
   unsigned ivarStartIdx = fusedInits.size();
-  for (LoopNestNode *child : childrenToFuse) {
+  for (scf::ForOp loop : innerLoops) {
     fusedInits.push_back(
-        b.create<UndefOp>(loc, child->loop.getInductionVar().getType()));
+        b.create<UndefOp>(loc, loop.getInductionVar().getType()));
   }
   unsigned innerOutsStartIdx = fusedInits.size();
-  for (LoopNestNode *child : childrenToFuse) {
-    for (Type resultType : child->loop->getResultTypes())
+  for (scf::ForOp loop : innerLoops) {
+    for (Type resultType : loop.getResultTypes())
       fusedInits.push_back(b.create<UndefOp>(loc, resultType));
   }
   unsigned logueOutsStartIdx = fusedInits.size();
   for (Logue &logue : logues) {
-    for (Value output : logue.outputs)
-      fusedInits.push_back(b.create<UndefOp>(loc, output.getType()));
+    for (Type outputType : ValueRange(logue.outputs).getTypes())
+      fusedInits.push_back(b.create<UndefOp>(loc, outputType));
   }
 
   // for _ in range(total_iters):
@@ -591,24 +591,25 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
 
     // The `scf.if` outputs will be `jk` and the outputs of prologuek. We also
     // have to initialize the inner loop iter args.
-    scf::ForOp inner = childrenToFuse[k]->loop;
+    scf::ForOp inner = innerLoops[k];
+    Logue &logue = logues[k];
+
     SmallVector<Type> prologueOutTypes{inner.getInductionVar().getType()};
-    llvm::append_range(prologueOutTypes,
-                       ValueRange(logues[k].outputs).getTypes());
+    llvm::append_range(prologueOutTypes, ValueRange(logue.outputs).getTypes());
     llvm::append_range(prologueOutTypes, inner.getInits().getTypes());
     auto prologueIf = b.create<scf::IfOp>(loc, prologueOutTypes, prologueCond);
     logueIfs.push_back(prologueIf);
 
     // Splice prologuek into the `then` region.
     Block *thenBlock = b.createBlock(&prologueIf.getThenRegion());
-    for (Operation *op : logues[k].ops)
+    for (Operation *op : logue.ops)
       op->moveBefore(thenBlock, thenBlock->end());
 
     // Yield the initialized jk, the prologue outputs, and the initial values of
     // the inner loop.
     b.setInsertionPointToEnd(thenBlock);
     SmallVector<Value> thenOuts{inner.getLowerBound()};
-    llvm::append_range(thenOuts, logues[k].outputs);
+    llvm::append_range(thenOuts, logue.outputs);
     llvm::append_range(thenOuts, inner.getInits());
     b.create<scf::YieldOp>(loc, thenOuts);
 
@@ -616,7 +617,7 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
     // the iter args.
     b.createBlock(&prologueIf.getElseRegion());
     Value lastJk = ivars[k];
-    unsigned numOuts = logues[k].outputs.size();
+    unsigned numOuts = logue.outputs.size();
     SmallVector<Value> elseOuts{lastJk};
     elseOuts.append(logueOutsIt, logueOutsIt + numOuts);
     elseOuts.append(bodyOutsIt, bodyOutsIt + inner.getNumResults());
@@ -631,7 +632,7 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
         prologueIf.getResults().slice(1 + numOuts, inner.getNumResults());
     inner.getInductionVar().replaceAllUsesWith(jk);
 
-    for (auto [ifOut, output] : llvm::zip(prologueOuts, logues[k].outputs)) {
+    for (auto [ifOut, output] : llvm::zip(prologueOuts, logue.outputs)) {
       // Replace uses of the prologue outputs that are not in the prologue, i.e.
       // inside the `then` region where it got spliced.
       output.replaceUsesWithIf(ifOut, [&](OpOperand &use) {
@@ -730,10 +731,10 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   llvm::append_range(outerOuts, outer.getYieldedValues());
   for (scf::IfOp bodyIf : bodyIfs)
     outerOuts.push_back(/*jk=*/bodyIf.getResult(0));
-  for (auto [bodyIf, child] : llvm::zip(bodyIfs, childrenToFuse)) {
-    llvm::append_range(
-        outerOuts, bodyIf.getResults().slice(1, child->loop.getNumResults()));
-    child->loop.erase();
+  for (auto [bodyIf, loop] : llvm::zip(bodyIfs, innerLoops)) {
+    llvm::append_range(outerOuts,
+                       bodyIf.getResults().slice(1, loop.getNumResults()));
+    loop.erase();
   }
   for (auto [logueIf, logue] : llvm::zip(logueIfs, logues)) {
     llvm::append_range(outerOuts,
