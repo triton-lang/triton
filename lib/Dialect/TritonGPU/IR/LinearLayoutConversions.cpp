@@ -944,10 +944,9 @@ LinearLayout chooseShemLayoutForRegToRegConversion(
 }
 
 namespace {
-LinearLayout chooseStMatrixLayoutLeadingOffset(
-    MLIRContext *ctx, RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
-    ArrayRef<unsigned> paddedRepShape, ArrayRef<unsigned> order,
-    int swizzleByteSize) {
+LinearLayout chooseStMatrixLayoutLeadingOffset(MLIRContext *ctx,
+                                               RankedTensorType tensorTy,
+                                               int swizzleByteSize) {
   int perPhase;
   int maxPhase;
   if (swizzleByteSize == 32) {
@@ -1096,9 +1095,9 @@ LinearLayout chooseLdMatrixLayoutNoLeadingOffset(MLIRContext *ctx,
   StringAttr kReg = S("register");
   StringAttr kLane = S("lane");
   StringAttr kWarp = S("warp");
+  StringAttr kBlock = S("block");
   StringAttr kInner = opIdx == 0 ? S("dim1") : S("dim0");
   StringAttr kOuter = opIdx == 0 ? S("dim0") : S("dim1");
-  StringAttr kBlock = S("block");
 
   std::vector<std::vector<int>> basesReg = {{0, 1}, {0, 2}, {0, 4}};
   std::vector<std::vector<int>> basesLane;
@@ -1108,24 +1107,31 @@ LinearLayout chooseLdMatrixLayoutNoLeadingOffset(MLIRContext *ctx,
   int vecSize = shared.getVec();
   int perPhase = shared.getPerPhase();
   int maxPhase = shared.getMaxPhase();
-  auto layout = LinearLayout::empty();
   auto warpsPerCTA = mma.getWarpsPerCTA();
+  // Construct a 16x16 tile consisting of 4 sub-tiles to use ldmatrix
+  // efficiently. opIdx=0 and opIdx=1 are handled differently.
   if (opIdx == 0) {
-    // Expand the `register` dimension so the size of columns matches `K`.
+    // The matrix elements of thread 0 are distributed in the following pattern:
+    //
+    //           col0       col8
+    //   row0  reg[0-1]   reg[4-5]
+    //   row8  reg[2-3]   reg[6-7]
     for (int logRow = 0; logRow < llvm::Log2_32(numRowsPerTile); logRow++) {
       int row = 1 << logRow;
       basesLane.push_back({row, vecSize * ((row / perPhase) % maxPhase)});
     }
     basesLane.push_back({0, numColsPerTile / 2});
+    // Expand the `register` dimension so the size of columns matches `K`.
     for (int logCol = 0; logCol < llvm::Log2_32(shape[kDim] / numColsPerTile);
          logCol++) {
       int col = 1 << logCol;
       basesReg.push_back({0, numColsPerTile * col});
     }
-    layout = LinearLayout({{kReg, basesReg}, {kLane, basesLane}, {kWarp, {}}},
-                          {kOuter, kInner});
   } else {
-    // Construct half of the tile
+    // The matrix elements of thread 0 are distributed in the following pattern:
+    //
+    //           col0       col8      col16    col24
+    //   row0  reg[0-1]   reg[2-3]  reg[4-5]  reg[6-7]
     // 8x8
     for (int logRow = 0; logRow < llvm::Log2_32(numRowsPerTile / 2); logRow++) {
       int row = 1 << logRow;
@@ -1141,10 +1147,10 @@ LinearLayout chooseLdMatrixLayoutNoLeadingOffset(MLIRContext *ctx,
       int col = 1 << logCol;
       basesReg.push_back({0, (numColsPerTile * 2) * col});
     }
-    layout = LinearLayout(
-        {{kReg, basesReg}, {kLane, basesLane}, {kWarp, {basesWarp}}},
-        {kOuter, kInner});
   }
+  auto layout =
+      LinearLayout({{kReg, basesReg}, {kLane, basesLane}, {kWarp, {basesWarp}}},
+                   {kOuter, kInner});
   // Expand the `warp` dimension according to warpsPerCTA.
   layout *= broadcastedDotOperandLayout(ctx, warpsPerCTA, mma.getWarpOrder(),
                                         kDim, kWarp)
@@ -1158,16 +1164,12 @@ LinearLayout chooseLdMatrixLayoutNoLeadingOffset(MLIRContext *ctx,
 } // anonymous namespace
 
 LinearLayout chooseStMatrixLayout(MLIRContext *ctx, RankedTensorType tensorTy,
-                                  ArrayRef<unsigned> repShape,
-                                  ArrayRef<unsigned> paddedRepShape,
-                                  ArrayRef<unsigned> order,
                                   int swizzleByteSize) {
   if (swizzleByteSize == 0)
     return chooseStMatrixLayoutNoLeadingOffset(ctx, tensorTy.getEncoding(),
                                                tensorTy.getShape());
   else
-    return chooseStMatrixLayoutLeadingOffset(
-        ctx, tensorTy, repShape, paddedRepShape, order, swizzleByteSize);
+    return chooseStMatrixLayoutLeadingOffset(ctx, tensorTy, swizzleByteSize);
 }
 
 LinearLayout chooseLdMatrixLayout(MLIRContext *ctx, Attribute sharedEnc,

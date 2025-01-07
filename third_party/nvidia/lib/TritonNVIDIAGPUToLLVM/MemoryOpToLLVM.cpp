@@ -239,8 +239,8 @@ struct LocalAllocOpConversion
                                    swizzleByteSize)) {
       return failure();
     }
-    auto layout = chooseStMatrixLayout(rewriter.getContext(), srcTy, shape,
-                                       shape, order, swizzleByteSize);
+    auto layout =
+        chooseStMatrixLayout(rewriter.getContext(), srcTy, swizzleByteSize);
     Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
     auto smemPtrTy = ptr_ty(ctx, 3);
 
