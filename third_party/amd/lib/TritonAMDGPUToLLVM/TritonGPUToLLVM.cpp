@@ -228,6 +228,7 @@ struct ConvertTritonAMDGPUToLLVM
                                                           patterns);
     mlir::triton::populatePrintOpToLLVMPattern(typeConverter, patterns,
                                                targetInfo, commonBenefit);
+    mlir::triton::populateUndefOpToLLVMPattern(typeConverter, patterns);
     mlir::ub::populateUBToLLVMConversionPatterns(typeConverter, patterns);
 
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns)))) {

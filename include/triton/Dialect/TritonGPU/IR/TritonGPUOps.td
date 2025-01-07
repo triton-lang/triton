@@ -325,4 +325,16 @@ def TTG_GlobalScratchAllocOp : TTG_Op<"global_scratch_alloc", [MemoryEffects<[Me
   let assemblyFormat = [{attr-dict `:` qualified(type($result))}];
 }
 
+def TTG_UndefOp : TTG_Op<"undef", [Pure]> {
+  let summary = "undef";
+
+  let description = [{
+    This operation returns an undefined value.
+  }];
+
+  let results = (outs AnyType:$result);
+
+  let assemblyFormat = "attr-dict `:` type($result)";
+}
+
 #endif
