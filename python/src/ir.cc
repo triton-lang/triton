@@ -29,6 +29,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/SourceMgr.h"
 
 #include "third_party/proton/dialect/include/Dialect/Proton/IR/Dialect.h"
@@ -38,6 +39,22 @@ namespace {
 namespace py = pybind11;
 using namespace mlir;
 using namespace triton;
+
+llvm::raw_fd_ostream &mlir_dumps() {
+  std::error_code EC;
+  static llvm::raw_fd_ostream S(::triton::tools::getStrEnv("MLIR_DUMP_PATH"),
+                                EC, llvm::sys::fs::CD_CreateAlways);
+  assert(!EC);
+  return S;
+}
+
+llvm::raw_ostream &mlir_dumps_or_dbgs() {
+  if (!::triton::tools::getStrEnv("MLIR_DUMP_PATH").empty()) {
+    return mlir_dumps();
+  } else {
+    return llvm::dbgs();
+  }
+}
 
 // A custom op builder that keeps track of the last location
 class TritonOpBuilder {
@@ -1711,7 +1728,7 @@ void init_triton_ir(py::module &&m) {
                    /*shouldPrintAfterPass=*/printAlways,
                    /*printModuleScope=*/true,
                    /*printAfterOnlyOnChange=*/false,
-                   /*printAfterOnlyOnFailure*/ true, llvm::dbgs(),
+                   /*printAfterOnlyOnFailure*/ true, mlir_dumps_or_dbgs(),
                    printingFlags);
              }
            })

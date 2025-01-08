@@ -53,27 +53,31 @@ public:
       auto needTrans = kOrder != shared.getOrder()[0];
       // Limitation 1: Cannot use ldmatrix if we need to transpose a non-fp16
       // matrix
-      // Limitation 2 [TODO: remove]: If kWidth is greater than the
-      // vector width supported by MMA, we don't use ldmatrix
-      auto canUseLdmatrixLegacy =
-          (bitwidth == 16 || (!needTrans)) && (kWidth == vecWidth);
+      // Limitation 2: If kWidth is greater than the vector width of the dot
+      // operands of MMA, we don't use ldmatrix
+      // Limitation 3 [TODO: remove]: Shared memory with leading offset is not
+      // supported yet
+      auto canUseLdmatrixLegacy = (bitwidth == 16 || (!needTrans)) &&
+                                  (kWidth == vecWidth) &&
+                                  (!shared.getHasLeadingOffset());
       if (mma.isHopper()) {
-        // Limitation 3 [TODO: remove]:
+        // Limitation 4 [TODO: remove]:
         // I think we should be able to remove this condition, but it's here
         // as the legacy ldmatrix path does not support it
         canUseLdmatrixLegacy &= srcTy.getElementTypeBitWidth() * kWidth == 32 &&
                                 dot.getOpIdx() == 0;
       }
-      // Limitation 4: If we perform swizzling, it must be done within a single
+      // Limitation 5: If we perform swizzling, it must be done within a single
       // ldmatrix tile
-      // Limitation 5 [TODO: remove]: Only support 2d matrices
+      // Limitation 6 [TODO: remove]: Only support 2d matrices now but we should
+      // be able to support 3D minor changes
       auto maxPhase = shared.getMaxPhase();
       auto perPhase = shared.getPerPhase();
       canUseLdmatrixLegacy &=
           dstTy.getRank() <= 2 && (maxPhase / perPhase <= 8);
       auto allocShape = srcTy.getAllocShape();
       auto shape = srcTy.getShape();
-      // Limitation 6 [TODO: remove]: The LL-path doesn't support sliced shared
+      // Limitation 7 [TODO: remove]: The LL-path doesn't support sliced shared
       // memory, transpose, or non-16-bit types
       auto canUseLdmatrixLL =
           canUseLdmatrixLegacy && bitwidth == 16 && !needTrans &&
@@ -82,16 +86,17 @@ public:
         canUseLdmatrixLL &=
             srcTy.getShape()[0] >= 16 && srcTy.getShape()[1] >= 16;
       } else {
-        // Limitation 7 [TODO: remove]: Due to the use of ldmatrix.x4, we need
+        // Limitation 8 [TODO: remove]: Due to the use of ldmatrix.x4, we need
         // to read 4 tiles. For opIdx=1, a single warp load four consecutive
-        // tiles along the K dimension, so the minimum size is 4 * 8= 32.
+        // tiles along the K dimension, so the minimum K size is 4 * 8 = 32.
         // The legacy path doesn't have this limitation because it reads
-        // duplicated elements and throw them away.
-        // It might be better to use ldmatrix.x2 in such a case.
+        // duplicated elements from shared memory and throw them away.
+        // It might be better to use ldmatrix.x2 in such a case instead of
+        // abandoning elements.
         canUseLdmatrixLL &=
             srcTy.getShape()[0] >= 32 && srcTy.getShape()[1] >= 16;
       }
-      // Limitation 8 [TODO: remove]:
+      // Limitation 9 [TODO: remove]:
       // If we remove this one, ldmatrix will IMA. It can probably be relaxed
       // though. Remove this constraint after all other limitations have been
       // resolved
