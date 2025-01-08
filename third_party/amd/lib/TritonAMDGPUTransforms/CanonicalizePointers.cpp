@@ -525,7 +525,7 @@ public:
 /// 1. If it is a scalar pointer update -> bump only the base pointer;
 /// 2. Constant tensor offset -> bump only the offset
 /// 3. Non-constant tensor offset -> decompose parent(offset) into uniform and
-/// non-uniform comop
+/// non-uniform components.
 class ConvertAddPtrOp : public PointerCanonicalizationPattern<tt::AddPtrOp> {
 public:
   using PointerCanonicalizationPattern::PointerCanonicalizationPattern;
@@ -1407,7 +1407,7 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
       // absent then the `scf.if` is legal. Once both `yields` have been
       // rewritten (the corresponding attributes have been added), we report the
       // `scf.if` as illegal, and it will be rewritten (the pattern will fire).
-      return !(ifOp->hasAttr(kSCFThenRewrittenAttr) and
+      return !(ifOp->hasAttr(kSCFThenRewrittenAttr) &&
                ifOp->hasAttr(kSCFElseRewrittenAttr));
     }
     return !opsToRewrite.contains(op);
