@@ -140,7 +140,6 @@ static void findLoopNests(Operation *container,
                           SmallVectorImpl<LoopNest> &nests) {
   container->walk<mlir::WalkOrder::PreOrder>([&](scf::ForOp loop) {
     LoopNest nest(loop);
-    SmallVector<Value> preconditions;
     constructLoopNest(nest.root, nest, nests);
     nests.push_back(std::move(nest));
     return WalkResult::skip();
