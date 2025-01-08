@@ -352,13 +352,13 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   }
   if (hasBatchDim) {
     assert(order[2] == 0);
-    // Extend the base vector with one value to accomodate for the batch
+    // Extend the base vector with one value to accommodate for the batch
     // dimension, which appears at the last.
     tileLayout *= LinearLayout::identity1D(1, kRegister, outDimNames[order[2]]);
     tileLayout *= LinearLayout::identity1D(1, kLane, outDimNames[order[2]]);
   }
 
-  // And each warp takes the same register and lane sub-layout. So mulitply with
+  // And each warp takes the same register and lane sub-layout. So multiply with
   // an identity layout for the warp.
   LinearLayout warpLayout =
       identityStandardND(S("warp"), getWarpsPerCTA(), order);
@@ -435,7 +435,7 @@ mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
 
   if (mfmaLayout.getMDim() == 32) {
     // Canonical MFMA linear layout handles 4 consecutive elements along
-    // the register dimension. Dot operand handles varaible kWidth consecutive
+    // the register dimension. Dot operand handles variable kWidth consecutive
     // elements. For lane dim, since the MFMA thread arrangement is {K, N} = {2,
     // 32}, this means that mapping of first 5 base (up to thread 16) vectors
     // will be an identity along N dim. Thread 32 will be mapped to element
@@ -465,7 +465,7 @@ mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
 
   if (hasBatchDim) {
     assert(order[2] == 0);
-    // Extend the base vector with one value to accomodate for the batch
+    // Extend the base vector with one value to accommodate for the batch
     // dimension, which appears at the last.
     tileLayout *= LinearLayout::identity1D(1, kRegister, outDimNames[order[2]]);
     tileLayout *= LinearLayout::identity1D(1, kLane, outDimNames[order[2]]);
@@ -546,14 +546,14 @@ AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 
   if (hasBatchDim) {
     int batchIndex = 0;
-    // Extend the base vector with one value to accomodate for the batch
+    // Extend the base vector with one value to accommodate for the batch
     // dimension, which appears at the last.
     tileLayout *=
         LinearLayout::identity1D(1, kRegister, outDimNames[batchIndex]);
     tileLayout *= LinearLayout::identity1D(1, kLane, outDimNames[batchIndex]);
   }
 
-  // And each warp takes the same register and lane sub-layout. So mulitply with
+  // And each warp takes the same register and lane sub-layout. So multiply with
   // an identity layout for the warp.
   auto warpOrder = getWarpOrder();
   LinearLayout warpLayout =
@@ -612,7 +612,7 @@ wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
       {outDimNames[laneOrder[0]], outDimNames[laneOrder[1]]});
   if (hasBatchDim) {
     assert(laneOrder[2] == 0);
-    // Extend the base vector with one value to accomodate for the batch
+    // Extend the base vector with one value to accommodate for the batch
     // dimension, which appears at the last.
     tileLayout *=
         LinearLayout::identity1D(1, kRegister, outDimNames[laneOrder[2]]);

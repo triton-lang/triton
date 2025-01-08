@@ -8,13 +8,11 @@ import sysconfig
 import tempfile
 from pathlib import Path
 
-import setuptools
 import torch
 
 import triton
 import triton.language as tl
 from triton.common.backend import (BaseBackend, compute_core_version_key, register_backend)
-from triton.common.build import quiet
 from triton.compiler.make_launcher import make_so_cache_key
 from triton.runtime.cache import get_cache_manager
 from triton.runtime.driver import DriverBase
@@ -43,39 +41,7 @@ def build_for_backend(name, src, srcdir):
         scheme = 'posix_prefix'
     py_include_dir = sysconfig.get_paths(scheme=scheme)["include"]
 
-    ret = subprocess.check_call([cc, src, f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", "-o", so])
-    if ret == 0:
-        return so
-    # fallback on setuptools
-    extra_compile_args = []
-    library_dirs = []
-    include_dirs = [srcdir]
-    libraries = []
-    # extra arguments
-    extra_link_args = []
-    # create extension module
-    ext = setuptools.Extension(
-        name=name,
-        language='c',
-        sources=[src],
-        include_dirs=include_dirs,
-        extra_compile_args=extra_compile_args + ['-O3'],
-        extra_link_args=extra_link_args,
-        library_dirs=library_dirs,
-        libraries=libraries,
-    )
-    # build extension module
-    args = ['build_ext']
-    args.append('--build-temp=' + srcdir)
-    args.append('--build-lib=' + srcdir)
-    args.append('-q')
-    args = dict(
-        name=name,
-        ext_modules=[ext],
-        script_args=args,
-    )
-    with quiet():
-        setuptools.setup(**args)
+    subprocess.check_call([cc, src, f"-I{py_include_dir}", f"-I{srcdir}", "-shared", "-fPIC", "-o", so])
     return so
 
 

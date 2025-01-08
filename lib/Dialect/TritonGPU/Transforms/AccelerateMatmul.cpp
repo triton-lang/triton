@@ -96,7 +96,7 @@ SmallVector<unsigned> warpsPerTileV2(DotOp dotOp, const ArrayRef<int64_t> shape,
     if (reps[0] >= reps[1]) {
       warps[0] *= 2;
       // Too many warps for this mma (repM == repN == 1).
-      // We allocate the remainin warps to the left (arbitrary choice)
+      // We allocate the remaining warps to the left (arbitrary choice)
       if (reps[0] != 1) {
         reps[0] /= 2;
       }
@@ -287,7 +287,7 @@ public:
     Operation *newDot = nullptr;
     if (versionMajor == 3) {
       auto eltType = dotOp.getA().getType().getElementType();
-      // In MMAV3 tranpose is only supported for f16 and bf16.
+      // In MMAV3 transpose is only supported for f16 and bf16.
       bool allowTranspose = eltType.isF16() || eltType.isBF16();
       a = getSharedMemoryMMAOperand(a, rewriter, 0, allowTranspose);
       b = getSharedMemoryMMAOperand(b, rewriter, 1, allowTranspose);
