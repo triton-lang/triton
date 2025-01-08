@@ -2585,18 +2585,19 @@ struct TritonGPUInferLayoutInterface
       return success();
     }
     if (auto ll = toLinearLayout(shape, operandEncoding)) {
-      auto permutedDims =
-          applyPermutation(llvm::to_vector(ll->getOutDimNames()), order);
-      // transposedLl has transposed dims
-      auto transposedLl = ll->transposeOuts(permutedDims);
-      auto rank = shape.size();
-      SmallVector<std::pair<StringAttr, int32_t>> reorderedDims;
-      for (auto [dimi, permDim] :
-           llvm::zip(standardOutDimNames(ctx, rank), permutedDims)) {
-        reorderedDims.emplace_back(dimi, transposedLl.getOutDimSize(permDim));
+      auto namedBases = ll->getBases();
+      for (auto &bases : llvm::make_second_range(namedBases)) {
+        for (auto &b : bases) {
+          std::vector<int32_t> newB;
+          for (int i = 0; i < order.size(); i++) {
+            newB.push_back(b[order[i]]);
+          }
+          b = std::move(newB);
+        }
       }
-      auto retLl = transposedLl.reshapeOuts(reorderedDims);
-      resultEncoding = LinearEncodingAttr::get(ctx, retLl);
+      auto retLl = LinearLayout(std::move(namedBases),
+                                llvm::to_vector(ll->getOutDimNames()));
+      resultEncoding = LinearEncodingAttr::get(ctx, std::move(retLl));
       return success();
     }
 
