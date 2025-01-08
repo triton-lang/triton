@@ -875,12 +875,10 @@ SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 }
 
 std::optional<LinearLayout>
-toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
-               std::optional<int32_t> elemBitWidth /*= std::nullopt*/) {
+TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
+                                 std::optional<int32_t> elemBitWidth) {
   CacheKey key{std::vector<int64_t>(shape.begin(), shape.end()), layout,
                elemBitWidth};
-  auto *ctx = layout.getContext();
-  auto &llCache = ctx->getLoadedDialect<TritonGPUDialect>()->llCache;
   auto result = llCache.get(key);
   if (result.has_value()) {
     return result;
@@ -902,6 +900,14 @@ toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
     llCache.set(std::move(key), *result);
   }
   return result;
+}
+
+std::optional<LinearLayout>
+toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
+               std::optional<int32_t> elemBitWidth /*= std::nullopt*/) {
+  auto *ctx = layout.getContext();
+  return ctx->getLoadedDialect<TritonGPUDialect>()->toLinearLayout(
+      shape, layout, elemBitWidth);
 }
 
 LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {
