@@ -313,6 +313,9 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         transferWithinWarp(op, *decomposedCvt, adaptor, rewriter);
         return success();
       }
+      // TODO: Since data is only transferred within a warp over shared memory,
+      // we should use `bar.warp.sync` instead of `barrier`, which will improve
+      // latency when warps issue barriers on different cycles.
       return transferWithinBlock(op, srcLayout, dstLayout, adaptor, rewriter);
     } else if (llvm::is_contained(dims, kRegister)) {
       // Case 4. Transfer between values in the same thread, in which case we

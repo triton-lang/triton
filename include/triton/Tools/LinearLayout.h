@@ -539,11 +539,15 @@ public:
 
   // Concatenates two layouts by their input dimensions. The layouts must have
   // the same output dimensions and sizes and different input dimensions. The
-  // input dimensions of this layout are placed before those of 'other'.
+  // input dimensions of this layout are placed before those of 'other'. This
+  // can be thought of as the opposite of `sublayout`, which slices a layout
+  // from a larger one.
   [[nodiscard]] LinearLayout concatIns(const LinearLayout &other) const;
   // Concatenates two layouts by their output dimensions. The layouts must have
   // the same input dimensions and sizes and different output dimensions. The
-  // output dimensions of this layout are placed before those of 'other'.
+  // output dimensions of this layout are placed before those of 'other'. This
+  // can be thought of as the opposite of `sublayout`, which slices a layout
+  // from a larger one.
   [[nodiscard]] LinearLayout concatOuts(const LinearLayout &other) const;
 
   // Creates a new layout which, roughly speaking, is equivalent to one where
