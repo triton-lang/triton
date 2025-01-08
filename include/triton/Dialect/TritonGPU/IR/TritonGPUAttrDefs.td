@@ -294,7 +294,7 @@ compared to 1*64 when the hasLeadingOffset is false.
             int perPhase = std::max(1, elemsPerOneBanksRow / innerDimLength);
             // vecSize is set to kWidth of the dotop layout
             int vecSize = dotOpEnc.getKWidth();
-            int maxPhase = std::min(SIMDWidth / perPhase, innerDimLength / vecSize);
+            int maxPhase = std::max(std::min(SIMDWidth / perPhase, innerDimLength / vecSize), 1);
 
             // TODO (zhanglx): figure out better parameters for mfma4
             if (mfmaEnc.getMDim() == 4)
@@ -950,7 +950,7 @@ available on AMD Radeon GPUs of RDNA architectures.
   - 1: gfx11
   - 2: gfx12
 - A `warpsPerCTA` parameter characterizes data distribution between warps.
-  An important limitation of WMMA for layout is a shape for tiles proccessed
+  An important limitation of WMMA for layout is a shape for tiles processed
   by a single warp. It is [16, 16].
   This encoding assumes specific access to matrix elements by threads.
 

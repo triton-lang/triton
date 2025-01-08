@@ -193,6 +193,23 @@ def test_rand(size, seed, dtype, device, const_seed):
     assert scipy.stats.kstest(x.tolist(), 'uniform', args=(0, 1)).statistic < 0.01
 
 
+def test_seed_is_int(device):
+
+    @triton.jit
+    def kernel(X, seed):
+        offset = tl.arange(0, 1)
+        rand = tl.rand(seed, offset)
+        tl.store(X + offset, rand)
+
+    x = torch.empty(1, dtype=torch.float32, device=device)
+    with pytest.raises(triton.compiler.errors.CompilationError):
+        seed0 = torch.zeros(1, dtype=torch.int32, device="cuda")
+        kernel[(1, )](x, seed0)
+    with pytest.raises(triton.compiler.errors.CompilationError):
+        seed1 = 2.3
+        kernel[(1, )](x, seed1)
+
+
 # test normal PRNG
 
 

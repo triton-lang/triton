@@ -25,23 +25,14 @@ struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     // D = A * B + C
-    Value A = op.getA();
     Value D = op.getResult();
 
-    // Here we assume the DotOp's operands always comes from shared memory.
-    auto AShapePerCTA = getShapePerCTA(A.getType());
-    size_t reduceAxis = 1;
-    unsigned K = AShapePerCTA[reduceAxis];
-    bool isOuter = K == 1;
-
-    if (!isOuter) {
-      auto dEncoding = cast<RankedTensorType>(D.getType()).getEncoding();
-      if (isa<AMDMfmaEncodingAttr>(dEncoding) && supportMFMA(op)) {
-        return AMD::convertMFMA(op, adaptor, getTypeConverter(), rewriter);
-      }
-      if (isa<AMDWmmaEncodingAttr>(dEncoding)) {
-        return AMD::convertWMMA(op, adaptor, getTypeConverter(), rewriter);
-      }
+    auto dEncoding = cast<RankedTensorType>(D.getType()).getEncoding();
+    if (isa<AMDMfmaEncodingAttr>(dEncoding)) {
+      return AMD::convertMFMA(op, adaptor, getTypeConverter(), rewriter);
+    }
+    if (isa<AMDWmmaEncodingAttr>(dEncoding)) {
+      return AMD::convertWMMA(op, adaptor, getTypeConverter(), rewriter);
     }
 
     if (isa<BlockedEncodingAttr>(

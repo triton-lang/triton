@@ -190,19 +190,39 @@ static const Fp8ConversionDesc Fp16_to_Fp8E4M3Nv = {
     "}",
     32, 16, 2};
 
-// Fp8E4M3 (x2) -> Fp16 (x2) (packed)
-static const Fp8ConversionDesc Fp8E4M3Nv_to_Bf16 = {
-    "{                                       \n"
-    ".reg .b32 a;                            \n"
-    ".reg .f16 a<2>;                         \n"
-    ".reg .b16 b<2>;                         \n"
-    "cvt.rn.f16x2.e4m3x2 a, $1;              \n"
-    "mov.b32 {a0, a1}, a;                    \n"
-    "cvt.bf16.f16 b0, a0;                    \n"
-    "cvt.bf16.f16 b1, a1;                    \n"
-    "mov.b32 $0, {b0, b1};                   \n"
-    "}",
-    16, 32, 2};
+static const Fp8ConversionDesc Fp8E4M3Nv_to_Bf16(bool hasNativeFP) {
+  Fp8ConversionDesc ret;
+  // Fp8E4M3 (x2) -> Fp16 (x2) (packed)
+  if (!hasNativeFP) {
+    ret = {"{                                       \n"
+           ".reg .b32 a;                            \n"
+           ".reg .f16 a<2>;                         \n"
+           ".reg .f32 b<2>;                         \n"
+           ".reg .b16 c<2>;                         \n"
+           "cvt.rn.f16x2.e4m3x2 a, $1;              \n"
+           "mov.b32 {a0, a1}, a;                    \n"
+           "cvt.f32.f16 b0, a0;                     \n"
+           "cvt.f32.f16 b1, a1;                     \n"
+           "cvt.rn.bf16.f32 c0, b0;                 \n"
+           "cvt.rn.bf16.f32 c1, b1;                 \n"
+           "mov.b32 $0, {c0, c1};                   \n"
+           "}",
+           16, 32, 2};
+  } else {
+    ret = {"{                                       \n"
+           ".reg .b32 a;                            \n"
+           ".reg .f16 a<2>;                         \n"
+           ".reg .b16 b<2>;                         \n"
+           "cvt.rn.f16x2.e4m3x2 a, $1;              \n"
+           "mov.b32 {a0, a1}, a;                    \n"
+           "cvt.bf16.f16 b0, a0;                    \n"
+           "cvt.bf16.f16 b1, a1;                    \n"
+           "mov.b32 $0, {b0, b1};                   \n"
+           "}",
+           16, 32, 2};
+  }
+  return ret;
+}
 
 // Bf16 (x2) -> Fp8E4M3 (x2) (packed)
 static const Fp8ConversionDesc Bf16_to_Fp8E4M3Nv = {
@@ -424,7 +444,8 @@ struct FpToFpOpConversion
             // F8 -> BF16
             {{F8E5M2TyID, BF16TyID, undefRounding},
              Fp8E5M2_to_Bf16(computeCapability >= 90)},
-            {{F8E4M3TyID, BF16TyID, undefRounding}, Fp8E4M3Nv_to_Bf16},
+            {{F8E4M3TyID, BF16TyID, undefRounding},
+             Fp8E4M3Nv_to_Bf16(computeCapability >= 90)},
             // BF16 -> F8
             {{BF16TyID, F8E5M2TyID, RoundingMode::RTNE},
              Bf16_to_Fp8E5M2(computeCapability >= 90)},

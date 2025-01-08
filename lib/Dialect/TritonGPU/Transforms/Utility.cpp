@@ -407,13 +407,14 @@ static Attribute inferReshapeOpDstEncoding(ArrayRef<int64_t> srcShape,
     return {};
 
   Attribute dstEnc;
-  auto result =
-      srcEnc.getDialect()
-          .getRegisteredInterface<triton::DialectInferLayoutInterface>()
-          ->inferReshapeOpEncoding(srcShape, srcEnc, dstShape, dstEnc,
-                                   /*loc=*/std::nullopt);
-  assert(succeeded(result));
-  return dstEnc;
+  if (succeeded(
+          srcEnc.getDialect()
+              .getRegisteredInterface<triton::DialectInferLayoutInterface>()
+              ->inferReshapeOpNoReorderEncoding(
+                  srcShape, srcEnc, dstShape, dstEnc, /*loc=*/std::nullopt))) {
+    return dstEnc;
+  }
+  return {};
 }
 
 static Attribute inferDstEncoding(triton::ReshapeOp op, Attribute encoding) {
@@ -969,7 +970,7 @@ int getNVIDIAComputeCapability(Operation *module) {
 
 // If all the transitive uses of the given value have are used by a convert to
 // the same dot operand encoding, return the shared encoding that needs to be
-// used to be compatible with users' layouts. If there are imcompatible shared
+// used to be compatible with users' layouts. If there are incompatible shared
 // encodings, set incompatible to true.
 std::optional<ttg::SharedEncodingAttr>
 getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
