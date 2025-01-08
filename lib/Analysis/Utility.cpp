@@ -532,6 +532,14 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   if (reducedP1.getInDimSize(kLane) > 2 || reducedP2.getInDimSize(kLane) > 2)
     return {};
 
+  // HACK: Workaround AMD codegen path generating transient invalid layouts.
+  auto isInvalidDotEnc = [](RankedTensorType type) {
+    auto dotEnc = dyn_cast<DotOperandEncodingAttr>(type.getEncoding());
+    return dotEnc && dotEnc.getKWidth() == 0;
+  };
+  if (isInvalidDotEnc(srcTy) || isInvalidDotEnc(dstTy))
+    return {};
+
   // When the element type is smaller than 32 bits, values are upcasted to i32
   // for shuffles. When the shared memory conversion can use vector stores of
   // sufficiently large length, the shared memory conversion is faster.
