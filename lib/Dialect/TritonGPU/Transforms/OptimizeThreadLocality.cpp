@@ -101,7 +101,7 @@ class TritonGPUOptimizeThreadLocalityPass
     // First try to optimize the layout of existing views.
     mlir::RewritePatternSet viewLayoutPatterns(&getContext());
     viewLayoutPatterns.add<OptimizeReshapeLayoutPattern>(&getContext());
-    if (mlir::applyPatternsAndFoldGreedily(mod, std::move(viewLayoutPatterns))
+    if (mlir::applyPatternsGreedily(mod, std::move(viewLayoutPatterns))
             .failed()) {
       signalPassFailure();
     }

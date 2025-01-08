@@ -91,7 +91,7 @@ struct F32DotTCPass : public impl::TritonGPUF32DotTCBase<F32DotTCPass> {
 
     RewritePatternSet decomposePatterns(context);
     decomposePatterns.add<TF32x3>(context);
-    if (applyPatternsAndFoldGreedily(m, std::move(decomposePatterns))
+    if (applyPatternsGreedily(m, std::move(decomposePatterns))
             .failed()) {
       signalPassFailure();
     }

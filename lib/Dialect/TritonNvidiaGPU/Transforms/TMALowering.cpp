@@ -111,7 +111,7 @@ public:
 
     mlir::RewritePatternSet patterns(context);
     patterns.add<TMALoadLowering, TMAStoreLowering>(context);
-    if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
+    if (applyPatternsGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
   }
 };
