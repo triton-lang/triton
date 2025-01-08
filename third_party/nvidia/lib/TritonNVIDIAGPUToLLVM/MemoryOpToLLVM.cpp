@@ -123,6 +123,78 @@ private:
   }
 };
 
+LogicalResult lowerDistributedToSharedStmatrix(
+    Location loc, TypedValue<RankedTensorType> src, MemDescType memDescType,
+    Value adaptorSrc, Value smemBase, const TypeConverter *typeConverter,
+    ConversionPatternRewriter &rewriter, const TargetInfoBase &targetInfo,
+    std::pair<size_t, Type> *const llvmOpCount = nullptr) {
+  auto mmaEncoding =
+      dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>(src.getType().getEncoding());
+  if (!mmaEncoding)
+    return failure();
+  auto sharedLayout =
+      cast<triton::gpu::SharedEncodingAttr>(memDescType.getEncoding());
+  if (!sharedLayout.getHasLeadingOffset())
+    return failure();
+  int swizzleByteSize = 0;
+  if (sharedLayout.getPerPhase() == 4 && sharedLayout.getMaxPhase() == 2)
+    swizzleByteSize = 32;
+  else if (sharedLayout.getPerPhase() == 2 && sharedLayout.getMaxPhase() == 4)
+    swizzleByteSize = 64;
+  else if (sharedLayout.getPerPhase() == 1 && sharedLayout.getMaxPhase() == 8)
+    swizzleByteSize = 128;
+  else
+    return failure();
+
+  RankedTensorType srcTy = src.getType();
+  SmallVector<unsigned> shape =
+      convertType<unsigned, int64_t>(srcTy.getShape());
+  auto order = sharedLayout.getOrder();
+  if (!targetInfo.canUseStMatrix(srcTy, shape, shape, order, swizzleByteSize)) {
+    return failure();
+  }
+
+  auto *ctx = rewriter.getContext();
+
+  auto layout = chooseStMatrixLayout(rewriter.getContext(), srcTy, shape, shape,
+                                     order, swizzleByteSize);
+  auto llvmElemTy = typeConverter->convertType(memDescType.getElementType());
+  auto smemPtrTy = ptr_ty(ctx, 3);
+
+  auto kRegister = str_attr("register");
+  auto kLane = str_attr("lane");
+  auto kWarp = str_attr("warp");
+  auto kBlock = str_attr("block");
+
+  Value threadId = getThreadId(rewriter, loc);
+  Value threadsPerWarp = i32_val(layout.getInDimSize(kLane));
+  Value laneId = urem(threadId, threadsPerWarp);
+  Value warpId = udiv(threadId, threadsPerWarp);
+
+  auto regBase = applyLinearLayout(loc, rewriter, layout,
+                                   {{kRegister, i32_val(0)},
+                                    {kLane, laneId},
+                                    {kWarp, warpId},
+                                    {kBlock, i32_val(0)}})[0]
+                     .second;
+  auto srcVals = unpackLLElements(loc, adaptorSrc, rewriter);
+  auto srcVec = layout.getNumConsecutiveInOut();
+  for (int i = 0; i < srcVals.size(); i += srcVec) {
+    auto regIdx =
+        layout.apply({{kRegister, i}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}})[0]
+            .second;
+    Value offset = xor_(regBase, i32_val(regIdx));
+    auto vecAddr = gep(smemPtrTy, llvmElemTy, smemBase, offset);
+    vecAddr.setInbounds(true);
+    SmallVector<Value> inValsVec;
+    for (int j = 0; j < srcVec; j++)
+      inValsVec.push_back(srcVals[i + j]);
+    Value valsVec = packLLVector(loc, inValsVec, rewriter);
+    targetInfo.storeMatrixShared(rewriter, loc, vecAddr, valsVec);
+  }
+  return success();
+}
+
 struct LocalAllocOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::LocalAllocOp> {
   LocalAllocOpConversion(const LLVMTypeConverter &converter,
@@ -136,79 +208,58 @@ struct LocalAllocOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     if (!op.getSrc())
       return failure();
-    auto mmaEncoding = dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>(
-        op.getSrc().getType().getEncoding());
-    if (!mmaEncoding)
-      return failure();
+    MemDescType memDescType = op.getType();
     auto sharedLayout =
-        cast<triton::gpu::SharedEncodingAttr>(op.getType().getEncoding());
-    if (!sharedLayout.getHasLeadingOffset())
-      return failure();
-    int swizzleByteSize = 0;
-    if (sharedLayout.getPerPhase() == 4 && sharedLayout.getMaxPhase() == 2)
-      swizzleByteSize = 32;
-    else if (sharedLayout.getPerPhase() == 2 && sharedLayout.getMaxPhase() == 4)
-      swizzleByteSize = 64;
-    else if (sharedLayout.getPerPhase() == 1 && sharedLayout.getMaxPhase() == 8)
-      swizzleByteSize = 128;
-    else
-      return failure();
-
-    auto *ctx = rewriter.getContext();
-    Location loc = op->getLoc();
-
+        cast<triton::gpu::SharedEncodingAttr>(memDescType.getEncoding());
     RankedTensorType srcTy = op.getSrc().getType();
-    SmallVector<unsigned> shape =
-        convertType<unsigned, int64_t>(srcTy.getShape());
-    auto order = sharedLayout.getOrder();
-    if (!targetInfo.canUseStMatrix(srcTy, shape, shape, order,
-                                   swizzleByteSize)) {
-      return failure();
-    }
-    auto layout = chooseStMatrixLayout(rewriter.getContext(), srcTy, shape,
-                                       shape, order, swizzleByteSize);
-    Value smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
-    auto smemPtrTy = ptr_ty(ctx, 3);
-
-    auto kRegister = str_attr("register");
-    auto kLane = str_attr("lane");
-    auto kWarp = str_attr("warp");
-    auto kBlock = str_attr("block");
-
-    Value threadId = getThreadId(rewriter, loc);
-    Value threadsPerWarp = i32_val(layout.getInDimSize(kLane));
-    Value laneId = urem(threadId, threadsPerWarp);
-    Value warpId = udiv(threadId, threadsPerWarp);
-
-    auto regBase = applyLinearLayout(loc, rewriter, layout,
-                                     {{kRegister, i32_val(0)},
-                                      {kLane, laneId},
-                                      {kWarp, warpId},
-                                      {kBlock, i32_val(0)}})[0]
-                       .second;
-    auto srcVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    auto srcVec = layout.getNumConsecutiveInOut();
     Type llvmElemTy = typeConverter->convertType(srcTy.getElementType());
-    for (int i = 0; i < srcVals.size(); i += srcVec) {
-      auto regIdx =
-          layout.apply({{kRegister, i}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}})[0]
-              .second;
-      Value offset = xor_(regBase, i32_val(regIdx));
-      auto vecAddr = gep(smemPtrTy, llvmElemTy, smemBase, offset);
-      vecAddr.setInbounds(true);
-      SmallVector<Value> inValsVec;
-      for (int j = 0; j < srcVec; j++)
-        inValsVec.push_back(srcVals[i + j]);
-      Value valsVec = packLLVector(loc, inValsVec, rewriter);
-      targetInfo.storeMatrixShared(rewriter, loc, vecAddr, valsVec);
+    Value smemBase =
+        LLVM::getSharedMemoryBase(op.getLoc(), rewriter, targetInfo, op);
+
+    if (lowerDistributedToSharedStmatrix(op.getLoc(), op.getSrc(), memDescType,
+                                         adaptor.getSrc(), smemBase,
+                                         typeConverter, rewriter, targetInfo)
+            .failed()) {
+      return failure();
     }
 
     auto resultTy = cast<MemDescType>(op.getType());
     auto shapePerCTA = getShapePerCTA(sharedLayout, resultTy.getShape());
     auto smemObj = SharedMemoryObject(smemBase, llvmElemTy, shapePerCTA,
-                                      sharedLayout, loc, rewriter);
-    auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
+                                      sharedLayout, op.getLoc(), rewriter);
+    auto retVal =
+        getStructFromSharedMemoryObject(op.getLoc(), smemObj, rewriter);
     rewriter.replaceOp(op, retVal);
+    return success();
+  }
+
+private:
+  const NVIDIA::TargetInfo &targetInfo;
+};
+
+struct LocalStoreOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::LocalStoreOp> {
+  LocalStoreOpConversion(const LLVMTypeConverter &converter,
+                         const NVIDIA::TargetInfo &targetInfo,
+                         PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern<triton::gpu::LocalStoreOp>(converter, benefit),
+        targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::LocalStoreOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Type llvmElemTy =
+        getTypeConverter()->convertType(op.getDst().getType().getElementType());
+    SharedMemoryObject smemObj = LLVM::getSharedMemoryObjectFromStruct(
+        op.getLoc(), adaptor.getDst(), llvmElemTy, rewriter);
+    MemDescType memDescType = op.getDst().getType();
+    if (lowerDistributedToSharedStmatrix(
+            op.getLoc(), op.getSrc(), memDescType, adaptor.getSrc(),
+            smemObj.getBase(), getTypeConverter(), rewriter, targetInfo)
+            .failed()) {
+      return failure();
+    }
+    rewriter.eraseOp(op);
     return success();
   }
 
@@ -222,6 +273,8 @@ void mlir::triton::NVIDIA::populateMemoryOpToLLVMPatterns(
     RewritePatternSet &patterns, PatternBenefit benefit) {
   // Backend optimized memory ops get higher benefit
   patterns.add<LocalAllocOpConversion>(typeConverter, targetInfo,
+                                       benefit.getBenefit() + 1);
+  patterns.add<LocalStoreOpConversion>(typeConverter, targetInfo,
                                        benefit.getBenefit() + 1);
   patterns.add<LocalLoadOpConversion>(typeConverter, benefit.getBenefit() + 1);
   mlir::triton::populateMemoryOpToLLVMPatterns(typeConverter, targetInfo,
