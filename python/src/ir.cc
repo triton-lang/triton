@@ -29,13 +29,32 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/SourceMgr.h"
+
+#include "third_party/proton/dialect/include/Dialect/Proton/IR/Dialect.h"
 
 namespace {
 
 namespace py = pybind11;
 using namespace mlir;
 using namespace triton;
+
+llvm::raw_fd_ostream &mlir_dumps() {
+  std::error_code EC;
+  static llvm::raw_fd_ostream S(::triton::tools::getStrEnv("MLIR_DUMP_PATH"),
+                                EC, llvm::sys::fs::CD_CreateAlways);
+  assert(!EC);
+  return S;
+}
+
+llvm::raw_ostream &mlir_dumps_or_dbgs() {
+  if (!::triton::tools::getStrEnv("MLIR_DUMP_PATH").empty()) {
+    return mlir_dumps();
+  } else {
+    return llvm::dbgs();
+  }
+}
 
 // A custom op builder that keeps track of the last location
 class TritonOpBuilder {
@@ -235,7 +254,8 @@ void init_triton_ir(py::module &&m) {
     registry.insert<TritonDialect, ::mlir::triton::gpu::TritonGPUDialect,
                     math::MathDialect, arith::ArithDialect, scf::SCFDialect,
                     ::mlir::gpu::GPUDialect, cf::ControlFlowDialect,
-                    LLVM::LLVMDialect, mlir::ub::UBDialect>();
+                    ::mlir::triton::proton::ProtonDialect, LLVM::LLVMDialect,
+                    mlir::ub::UBDialect>();
     mlir::LLVM::registerInlinerInterface(registry);
     registerBuiltinDialectTranslation(registry);
     registerLLVMDialectTranslation(registry);
@@ -1654,6 +1674,11 @@ void init_triton_ir(py::module &&m) {
               std::vector<int32_t> &tensorShape) -> Value {
              return self.create<MakeTensorDescOp>(base, shape, strides,
                                                   tensorShape);
+           })
+      // Proton Ops
+      .def("create_proton_record",
+           [](TritonOpBuilder &self, bool isStart, int32_t regionId) -> void {
+             self.create<mlir::triton::proton::RecordOp>(isStart, regionId);
            });
 
   py::class_<PassManager>(m, "pass_manager", py::module_local())
@@ -1703,7 +1728,7 @@ void init_triton_ir(py::module &&m) {
                    /*shouldPrintAfterPass=*/printAlways,
                    /*printModuleScope=*/true,
                    /*printAfterOnlyOnChange=*/false,
-                   /*printAfterOnlyOnFailure*/ true, llvm::dbgs(),
+                   /*printAfterOnlyOnFailure*/ true, mlir_dumps_or_dbgs(),
                    printingFlags);
              }
            })
