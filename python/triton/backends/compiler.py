@@ -15,6 +15,7 @@ class GPUTarget(object):
     # Target architecture, e.g., 90 (for cuda compute capability), gfx940 (for hip)
     arch: Union[int, str]
     warp_size: int
+    features: str
 
 
 class BaseBackend(metaclass=ABCMeta):
