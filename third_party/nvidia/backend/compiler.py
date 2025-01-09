@@ -122,6 +122,7 @@ class CUDAOptions:
     debug: bool = False
     backend_name: str = 'cuda'
     sanitize_overflow: bool = True
+    override_nv_compute_capability: int = None
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -147,7 +148,11 @@ class CUDABackend(BaseBackend):
 
     def __init__(self, target: GPUTarget) -> None:
         super().__init__(target)
-        self.capability = target.arch
+        # Capability can be overrided to limit feature set to a specific version
+        cap_override = os.getenv("TRITON_OVERRIDE_NV_CAPABILITY")
+        self.capability = int(cap_override) if cap_override is not None else target.arch
+        # HW Capability is used to determine the binary format
+        self.hw_capability = target.arch
         assert isinstance(self.capability, int)
         self.binary_ext = "cubin"
 
@@ -165,6 +170,9 @@ class CUDABackend(BaseBackend):
 
         if "enable_fp_fusion" not in args:
             args["enable_fp_fusion"] = os.getenv("TRITON_DEFAULT_FP_FUSION", "1") == "1"
+
+        if "override_nv_compute_capability" in args and args["override_nv_compute_capability"] is not None:
+            self.capability = args["override_nv_compute_capability"]
         args["max_num_imprecise_acc_default"] = 2**30 if self.capability == 90 else 0
         return CUDAOptions(**args)
 
@@ -396,8 +404,8 @@ class CUDABackend(BaseBackend):
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
         stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, self.capability)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options, self.capability)
-        stages["ptx"] = lambda src, metadata: self.make_ptx(src, metadata, options, self.capability)
-        stages["cubin"] = lambda src, metadata: self.make_cubin(src, metadata, options, self.capability)
+        stages["ptx"] = lambda src, metadata: self.make_ptx(src, metadata, options, self.hw_capability)
+        stages["cubin"] = lambda src, metadata: self.make_cubin(src, metadata, options, self.hw_capability)
 
     @functools.lru_cache()
     def hash(self):
