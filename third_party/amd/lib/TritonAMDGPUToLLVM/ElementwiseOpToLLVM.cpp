@@ -1413,8 +1413,8 @@ struct SqrtOpConversion
     // Differences in this approach are
     // 1. Refinement iterations following llvm.amdgcn.sqrt.f32 are removed to
     // improve performance.
-    // 2. With ftz disabled, the scaling-up-and-down process is bypassed to
-    // ensure denorms are flushed to zero. flush the denorms to zero.
+    // 2. With ftz enabled, the scaling-up-and-down process is bypassed to
+    // ensure denorms are flushed to zero.
     if (elemTy.getIntOrFloatBitWidth() != 32)
       return {};
 
@@ -1444,8 +1444,8 @@ struct SqrtOpConversion
         LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]).getResult();
 
     if (!ftz) {
-      // In case of non-ftz, we need to calibrate the result by scaling down by
-      // a factor 2^{-16}.
+      // In case of non-ftz, we need to calibrate the results by scaling down by
+      // a factor of 2^{-16}.
       return {scaleDownIfDenorm(rewriter, loc, intrinsicsOutput, needScale,
                                 0x1.0p-16f)};
     } else {
