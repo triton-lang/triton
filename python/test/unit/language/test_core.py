@@ -6037,6 +6037,37 @@ def test_enable_fp_fusion(enable_fp_fusion, default_override, device):
 
 
 # -----------------------
+# test override_nv_compute_capability
+# -----------------------
+
+
+@pytest.mark.parametrize("nv_compute_capability", [70, 80, 90])
+@pytest.mark.parametrize("env_var_override", [False, True])
+def test_override_nv_compute_capability(nv_compute_capability, env_var_override, device):
+    if not is_cuda():
+        pytest.skip('test_override_nv_compute_capability only for CUDA')
+
+    @triton.jit
+    def simple(data, out):
+        in_ptrs = data + tl.arange(0, 128)
+        out_ptrs = out + tl.arange(0, 128)
+        tl.store(out_ptrs, tl.load(in_ptrs) * 1.5 + 1.0)
+
+    data = torch.randn((128, ), device=device, dtype=torch.float32)
+    out = torch.empty_like(data)
+
+    if env_var_override:
+        os.environ["TRITON_OVERRIDE_NV_CAPABILITY"] = str(nv_compute_capability)
+        h = simple[(1, )](data, out)
+        os.environ.pop("TRITON_OVERRIDE_NV_CAPABILITY")
+    else:
+        h = simple[(1, )](data, out, override_nv_compute_capability=nv_compute_capability)
+    torch.testing.assert_close(data * 1.5 + 1.0, out)
+    ttgir_cc = re.search(r'cuda:(\d+)', h.asm["ttgir"])
+    assert int(ttgir_cc.group(1)) == nv_compute_capability
+
+
+# -----------------------
 # test propagate_nan
 # -----------------------
 
