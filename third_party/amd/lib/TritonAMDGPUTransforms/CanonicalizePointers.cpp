@@ -418,6 +418,9 @@ static Value getSingleValue(ValueRange values) {
   return values.front();
 }
 
+/// This is convenience class that keeps track of (and removes from) opToRewrite
+/// after successful matchAndRewrite calls; subclasses must define
+/// matchAndRewrite_ just as that would for conventional OpConversionPatterns.
 template <typename SourceOp>
 struct PointerCanonicalizationPattern : OpConversionPattern<SourceOp> {
   PointerCanonicalizationPattern(MLIRContext *context,
@@ -620,35 +623,6 @@ public:
 using ConversionCallbackFn =
     std::function<std::optional<LogicalResult>(Type, SmallVectorImpl<Type> &)>;
 
-// There's quite an annoying bug in 1:N conversion triggered here:
-// if you pass the same argument twice to iter_args, such as
-// scf.for ... iter_args(%arg30 = %6, %arg3 = %6, %arg4 = %arg1)
-// the type converter will only fire for %arg30 and %arg3
-// because the result for %arg3 is already "cached" (the types are the
-// same...).
-// Thus, %arg4 will accidentally get the mapping meant for %arg3.
-// This the reason the conversion gets added each time - because that's the
-// only way to clear the cached conversions
-// https://github.com/llvm/llvm-project/blob/b48b99f6253c917a15b698a68c1bf41d15ea6dc6/mlir/include/mlir/Transforms/DialectConversion.h#L402-L403
-static FailureOr<Block *>
-nonCachingSignatureConversion(ConversionCallbackFn conversion,
-                              Block *oldBodyBlock,
-                              ConversionPatternRewriter &rewriter) {
-  TypeConverter localTypeConverter;
-  localTypeConverter.addConversion(conversion);
-  auto oldTypes = oldBodyBlock->getArgumentTypes();
-  TypeConverter::SignatureConversion sigConversion(oldTypes.size());
-  for (unsigned i = 0, e = oldTypes.size(); i != e; ++i) {
-    if (failed(localTypeConverter.convertSignatureArg(i, oldTypes[i],
-                                                      sigConversion)))
-      return failure();
-    // this is a hack to clear the cached conversion - see note just above
-    localTypeConverter.addConversion(conversion);
-  }
-  return rewriter.applySignatureConversion(oldBodyBlock, sigConversion,
-                                           &localTypeConverter);
-}
-
 /// Rewrite init args and result type and bb args.
 class ConvertSCFForOp : public PointerCanonicalizationPattern<scf::ForOp> {
   using PointerCanonicalizationPattern::PointerCanonicalizationPattern;
@@ -663,33 +637,26 @@ public:
       valRangeLens.push_back(remappedInit.size());
 
     // rewrite the body bb args
-    unsigned inputNo = 0;
-    auto conversion = [&inputNo, &remappedInits](Type inputType,
-                                                 SmallVectorImpl<Type> &types) {
-      // handle the 0th arg which is the induction var
-      if (inputNo == 0) {
-        types.append({inputType});
-      } else {
-        SmallVector<Type> remappedInitTypes =
-            llvm::to_vector(remappedInits[inputNo - 1].getTypes());
-        types.append(remappedInitTypes);
-      }
-      inputNo++;
-      return success();
-    };
     Block *oldBodyBlock = forOp.getBody();
+    auto oldTypes = oldBodyBlock->getArgumentTypes();
+    TypeConverter::SignatureConversion sigConversion(oldTypes.size());
+    // handle the 0th arg which is the induction var
+    sigConversion.addInputs(0, {oldTypes[0]});
+    for (unsigned i = 1, e = oldTypes.size(); i != e; ++i) {
+      SmallVector<Type> remappedInitTypes =
+          llvm::to_vector(remappedInits[i - 1].getTypes());
+      sigConversion.addInputs(i, remappedInitTypes);
+    }
     auto newBodyBlock =
-        nonCachingSignatureConversion(conversion, oldBodyBlock, rewriter);
-    if (failed(newBodyBlock))
-      return failure();
+        rewriter.applySignatureConversion(oldBodyBlock, sigConversion);
 
     // propagate fatPtrAttrs to bb arg fatPtrs in for body bb
     // skip iv at index 0
     int offset = 1;
     for (auto operands : remappedInits) {
       if (operands.size() == 2) {
-        fatPtrs[{newBodyBlock.value()->getArgument(offset),
-                 newBodyBlock.value()->getArgument(offset + 1)}] =
+        fatPtrs[{newBodyBlock->getArgument(offset),
+                 newBodyBlock->getArgument(offset + 1)}] =
             fatPtrs.at({operands[0], operands[1]});
       }
       offset += operands.size();
@@ -782,6 +749,36 @@ public:
   }
 };
 
+/// Simple here means each block arg is replaced 1-1 with the remapped operand
+/// types (e.g., scf.for does not use this helper because scf.for needs to skip
+/// the 0th bb arg, the induction var).
+static void convertSimpleBlockSignature(Block *oldBlock,
+                                        ArrayRef<ValueRange> remappedOperands,
+                                        ConversionPatternRewriter &rewriter,
+                                        FatPointers &fatPtrs) {
+  auto oldBlockTypes = oldBlock->getArgumentTypes();
+  TypeConverter::SignatureConversion blockSigConversion(oldBlockTypes.size());
+  for (unsigned i = 0, e = oldBlockTypes.size(); i != e; ++i) {
+    SmallVector<Type> remappedInitTypes =
+        llvm::to_vector(remappedOperands[i].getTypes());
+    blockSigConversion.addInputs(i, remappedInitTypes);
+  }
+  auto newBlock =
+      rewriter.applySignatureConversion(oldBlock, blockSigConversion);
+
+  int offset = 0;
+  for (auto operands : remappedOperands) {
+    if (operands.size() == 2) {
+      assert(fatPtrs.contains({operands[0], operands[1]}) &&
+             "expected fatPtrs to contain existing (op0, op1) fat pointer");
+      fatPtrs[{newBlock->getArgument(offset),
+               newBlock->getArgument(offset + 1)}]
+          .canNarrow = fatPtrs.at({operands[0], operands[1]}).canNarrow;
+    }
+    offset += operands.size();
+  }
+}
+
 /// Rewrite init_args, result type, before region bb args, after region bb args.
 class ConvertSCFWhileOp : public PointerCanonicalizationPattern<scf::WhileOp> {
 public:
@@ -794,42 +791,10 @@ public:
     for (ValueRange remappedInit : remappedInits)
       valRangeLens.push_back(remappedInit.size());
 
-    // rewrite the "before" block bb args
-    unsigned inputNo = 0;
-    TypeConverter localTypeConverter;
-    auto conversion = [&inputNo, remappedInits](Type _inputType,
-                                                SmallVectorImpl<Type> &types) {
-      SmallVector<Type> remappedInitTypes =
-          llvm::to_vector(remappedInits[inputNo].getTypes());
-      types.append(remappedInitTypes);
-      inputNo++;
-      return success();
-    };
-    auto newBeforeBodyBlock = nonCachingSignatureConversion(
-        conversion, whileOp.getBeforeBody(), rewriter);
-    if (failed(newBeforeBodyBlock))
-      return failure();
-
-    auto propagateCanNarrowToBlock = [remappedInits, this](Block *block) {
-      int offset = 0;
-      for (auto operands : remappedInits) {
-        if (operands.size() == 2) {
-          fatPtrs[{block->getArgument(offset), block->getArgument(offset + 1)}]
-              .canNarrow = fatPtrs.at({operands[0], operands[1]}).canNarrow;
-        }
-        offset += operands.size();
-      }
-    };
-    // propagate canNarrow to bb arg fatPtrs in before bb
-    propagateCanNarrowToBlock(newBeforeBodyBlock.value());
-
-    inputNo = 0;
-    auto newAfterBodyBlock = nonCachingSignatureConversion(
-        conversion, whileOp.getAfterBody(), rewriter);
-    if (failed(newAfterBodyBlock))
-      return failure();
-    // propagate canNarrow to bb arg fatPtrs in after bb
-    propagateCanNarrowToBlock(newAfterBodyBlock.value());
+    convertSimpleBlockSignature(whileOp.getBeforeBody(), remappedInits,
+                                rewriter, fatPtrs);
+    convertSimpleBlockSignature(whileOp.getAfterBody(), remappedInits, rewriter,
+                                fatPtrs);
 
     SmallVector<Value> initArgs = flattenValues(remappedInits);
     SmallVector<Type> resultTypes = llvm::map_to_vector(
@@ -909,53 +874,10 @@ public:
         branchOp, branchOp.getCondition(), branchOp.getTrueDest(), trueOperands,
         branchOp.getFalseDest(), falseOperands);
 
-    // can't put inputNo inside because of limited lifetime (it'll be popped
-    // from stack memory after lambda returns...)
-    auto makeTypeConv = [](unsigned &inputNo,
-                           ArrayRef<ValueRange> remappedOperands) {
-      return [&inputNo, remappedOperands](Type inputType,
-                                          SmallVectorImpl<Type> &types) {
-        SmallVector<Type> remappedInitTypes =
-            llvm::to_vector(remappedOperands[inputNo].getTypes());
-        types.append(remappedInitTypes);
-        inputNo++;
-        return success();
-      };
-    };
-
-    auto propagateCanNarrowToBlock = [this](Block *block,
-                                            ArrayRef<ValueRange>
-                                                remappedOperands) {
-      int offset = 0;
-      for (auto operands : remappedOperands) {
-        if (operands.size() == 2) {
-          fatPtrs[{block->getArgument(offset), block->getArgument(offset + 1)}]
-              .canNarrow = fatPtrs.at({operands[0], operands[1]}).canNarrow;
-        }
-        offset += operands.size();
-      }
-    };
-
-    // convert the type signature of the true dest bb
-    unsigned inputNo = 0;
-    auto newTrueBlock = nonCachingSignatureConversion(
-        makeTypeConv(inputNo, remappedTrueOperands), branchOp.getTrueDest(),
-        rewriter);
-    if (failed(newTrueBlock))
-      return failure();
-
-    // propagate canNarrow to bb arg fatPtrs in true bb
-    propagateCanNarrowToBlock(newTrueBlock.value(), remappedTrueOperands);
-
-    // convert the type signature of the false dest bb
-    inputNo = 0;
-    auto newFalseBlock = nonCachingSignatureConversion(
-        makeTypeConv(inputNo, remappedFalseOperands), branchOp.getFalseDest(),
-        rewriter);
-    if (failed(newFalseBlock))
-      return failure();
-    // propagate canNarrow to bb arg fatPtrs in false bb
-    propagateCanNarrowToBlock(newFalseBlock.value(), remappedFalseOperands);
+    convertSimpleBlockSignature(branchOp.getTrueDest(), remappedTrueOperands,
+                                rewriter, fatPtrs);
+    convertSimpleBlockSignature(branchOp.getFalseDest(), remappedFalseOperands,
+                                rewriter, fatPtrs);
 
     return success();
   }
@@ -1110,31 +1032,8 @@ public:
 
     rewriter.replaceOpWithNewOp<cf::BranchOp>(branchOp, branchOp.getDest(),
                                               trueOperands);
-
-    unsigned inputNo = 0;
-    TypeConverter localTypeConverterTrueDest;
-    auto conversion = [&inputNo, remappedDestOperands](
-                          Type _inputType, SmallVectorImpl<Type> &types) {
-      SmallVector<Type> remappedInitTypes =
-          llvm::to_vector(remappedDestOperands[inputNo].getTypes());
-      types.append(remappedInitTypes);
-      inputNo++;
-      return success();
-    };
-    auto newDestBlock =
-        nonCachingSignatureConversion(conversion, branchOp.getDest(), rewriter);
-    if (failed(newDestBlock))
-      return failure();
-
-    int offset = 0;
-    for (auto operands : remappedDestOperands) {
-      if (operands.size() == 2) {
-        fatPtrs[{newDestBlock.value()->getArgument(offset),
-                 newDestBlock.value()->getArgument(offset + 1)}] =
-            fatPtrs.at({operands[0], operands[1]});
-      }
-      offset += operands.size();
-    }
+    convertSimpleBlockSignature(branchOp.getDest(), remappedDestOperands,
+                                rewriter, fatPtrs);
 
     return success();
   }
