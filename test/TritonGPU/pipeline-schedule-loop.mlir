@@ -349,4 +349,20 @@ tt.func @gpu_barrier(%lb : index, %ub : index, %step : index,
   }
   tt.return %loop#0 : tensor<128x32xf16, #A>
 }
+
+// Until pipeline lowering relies on num_stages, we need to update it manually
+// CHECK-LABEL: @update_num_stages
+tt.func @update_num_stages(%lb : index, %ub : index, %step : index,
+                 %a_ptr_init : tensor<128x32x!tt.ptr<f16>, #A>) -> tensor<128x32xf16, #A> {
+  %init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A>
+  %loop = scf.for %iv = %lb to %ub step %step iter_args(%acc = %init) -> (tensor<128x32xf16, #A>) {
+    // CHECK: tt.load {{.*}} {loop.cluster = 4 : i32, loop.stage = 0 : i32}
+    %a = tt.load %a_ptr_init {tt.latency = 4 : i32} : tensor<128x32x!tt.ptr<f16>, #A>
+    // CHECK: arith.addf {{.*}} {loop.cluster = 0 : i32, loop.stage = 4 : i32}
+    %res = arith.addf %acc, %a : tensor<128x32xf16, #A>
+    scf.yield %res : tensor<128x32xf16, #A>
+    // CHECK: tt.num_stages = 5 : i32
+  }
+  tt.return %loop#0 : tensor<128x32xf16, #A>
+}
 }

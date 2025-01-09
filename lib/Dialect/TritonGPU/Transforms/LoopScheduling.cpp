@@ -29,6 +29,15 @@ bool hasGpuBarriers(scf::ForOp forOp) {
   return result.wasInterrupted();
 }
 
+// This is required only until we refactor the pipeline lowering to calculate
+// the num stages based on the ops in the loop.
+void updateForOpNumStages(scf::ForOp forOp, int numStages) {
+  forOp->setAttr(
+      kNumStagesAttrName,
+      mlir::IntegerAttr::get(mlir::IntegerType::get(forOp->getContext(), 32),
+                             numStages));
+}
+
 // Return true if the preconditions for pipelining the loop are met.
 bool isSafeToPipeline(scf::ForOp forOp) {
   // Skip loop with distance > 1 for now.
@@ -292,6 +301,10 @@ void scheduleLoop(scf::ForOp forOp,
     LDBG("Initial coarse schedule:");
     schedule.dump();
   });
+  // This is required only until we refactor the pipeline lowering to calculate
+  // the num stages based on the ops in the loop.
+  updateForOpNumStages(forOp, schedule.numStages);
+
   // Schedule the dependencies
   CoarseSchedule::Cluster afterPrologue =
       schedulePrologueAndEpilogue(forOp, schedule);
