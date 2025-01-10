@@ -326,7 +326,7 @@ def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
     if src_dtype != 'float32' and is_cuda() and torch.cuda.get_device_capability(0) < (9, 0):
         pytest.skip("non-float32 downcast tests only supported on NVGPU with compute capability 9.0+")
 
-    if dst_dtype in ('float8e5', 'float8e4nv') and rounding == 'rtne' and (is_hip() or torch.cuda.get_device_capability(0) < (9, 0)):
+    if dst_dtype in ('float8e5', 'float8e4nv') and rounding == 'rtne' and (is_hip() or torch.cuda.is_available() and torch.cuda.get_device_capability(0) < (9, 0)):
         pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on NVGPU with compute capability 9.0+")
 
     if dst_dtype in ('float8e5b16', 'float8e4b8') and rounding == 'rtne' and (is_cuda() or not is_hip_mi300()):
