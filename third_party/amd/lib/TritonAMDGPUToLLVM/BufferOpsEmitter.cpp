@@ -142,7 +142,7 @@ Type BufferEmitter::getBufferOpType(Type type, bool atomicsOp) {
   const size_t totalWidthBits = valueElemNBits * vecSize;
 
   Type bufferElementType = elementType;
-  // We don't want to cast to bf16 if we are emitting buffer atomics
+  // We don't want to cast from bf16 if we are emitting buffer atomics
   if (elementType.isBF16() && !atomicsOp) {
     bufferElementType = rewriter.getI16Type();
   }
