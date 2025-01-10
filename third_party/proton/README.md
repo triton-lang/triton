@@ -180,7 +180,17 @@ with proton.cpu_timed_scope("test"):
     foo[1,](x, y)
 ```
 
-Note that the output metrics of `cpu_timed_scope` is `cpu_time`. We use `time` to represent accelerator (GPU) time.
+The `cpu_timed_scope` output metric is referred to as `cpu_time`, while `time` represents accelerator (e.g., GPU) time.
+The key distinction between `cpu_time` and `time` lies in their inclusivity: `cpu_time` is exclusive, whereas `time` is inclusive.
+This difference arises because the time spent on individual kernels represents the smallest measurable time granularity, and each kernel is mutually exclusive.
+This exclusivity allows time to be accurately accumulated across parent scopes for `time`.
+In contrast, `cpu_time` measures the time within a specific scope.
+Since a parent scope encompasses the time spent in its child scopes, summing `cpu_time` from child scope into parent scope would result in double counting.
+To visualize both the CPU and GPU time, we can use the following command:
+
+```bash
+proton-viewer -m time/ns,cpu_time/ns <proton.hatchet>
+```
 
 ### Metrics naming
 
