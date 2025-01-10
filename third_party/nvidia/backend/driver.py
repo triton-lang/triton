@@ -10,7 +10,6 @@ from triton.runtime.cache import get_cache_manager
 from triton.runtime import _allocation
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver
-from triton._utils import parse_list_string
 
 dirname = os.path.dirname(os.path.realpath(__file__))
 include_dir = [os.path.join(dirname, "include")]
@@ -96,7 +95,7 @@ class CudaUtils(object):
 
 
 def ty_to_cpp(ty):
-    if ty[0] == '*' or ty == "none":
+    if ty[0] == '*':
         return "CUdeviceptr"
     return {
         "i1": "int32_t",
@@ -118,32 +117,32 @@ def ty_to_cpp(ty):
     }[ty]
 
 
-def make_launcher(constants, signature, ids):
+def make_launcher(constants, signature):
+
+    def _serialize_signature(sig):
+        if isinstance(sig, tuple):
+            return ','.join(map(_serialize_signature, sig))
+        return sig
 
     def _extracted_type(ty):
-        if ty[0] == '*' or ty == "none":
-            return "PyObject*"
-        if ty == "nvTmaDesc":
-            return "PyObject*"
-        if ty[0] == '[':
-            if ty == "[]":
-                return "[]"
-            tys = parse_list_string(ty)
-            val = ','.join(map(_extracted_type, tys))
+        if isinstance(ty, tuple):
+            val = ','.join(map(_extracted_type, ty))
             return f"[{val}]"
+        if ty[0] == '*':
+            return "PyObject*"
+        if ty in ("constexpr", "nvTmaDesc"):
+            return "PyObject*"
         return ty_to_cpp(ty)
 
     def format_of(ty):
-        if ty == "CUdeviceptr":
-            return "O"
-        if ty[0] == "[":
-            if ty == "[]":
-                return "()"
-            tys = parse_list_string(ty)
-            val = ''.join(map(format_of, tys))
+        if isinstance(ty, tuple):
+            val = ''.join(map(format_of, ty))
             return f"({val})"
+        if ty[0] == '*':
+            return "O"
+        if ty in ("constexpr", "nvTmaDesc"):
+            return "O"
         return {
-            "PyObject*": "O",
             "float": "f",
             "double": "d",
             "long": "l",
@@ -155,31 +154,40 @@ def make_launcher(constants, signature, ids):
             "uint16_t": "H",
             "uint32_t": "I",
             "uint64_t": "K",
-        }[ty]
+        }[ty_to_cpp(ty)]
 
-    signature = {k: v for k, v in signature.items() if v != 'constexpr'}
-    args_format = ''.join([format_of(_extracted_type(ty)) for ty in signature.values()])
+    args_format = ''.join([format_of(ty) for ty in signature.values()])
     format = "iiiKKpOOOOO" + args_format
-    signature = ','.join(signature.values()).replace('[', '').replace(']', '')
+    signature = ','.join(map(_serialize_signature, signature.values()))
     signature = list(filter(bool, signature.split(',')))
     signature = {i: s for i, s in enumerate(signature)}
     args_list = ', ' + ', '.join(f"&_arg{i}" for i, ty in signature.items()) if len(signature) > 0 else ''
     # Record the end of regular arguments;
     # subsequent arguments are architecture-specific descriptors, such as tensor descriptors for CUDA.
-    arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items())
+    arg_decls = ', '.join(f"{ty_to_cpp(ty)} arg{i}" for i, ty in signature.items() if ty != "constexpr")
     internal_args_list = []
     for i, ty in signature.items():
-        if ty[0] == "*" or ty == "none":
+        if ty[0] == "*":
             internal_args_list.append(f"ptr_info{i}.dev_ptr")
         elif ty == "nvTmaDesc":
             # Note: we have to dereference the pointer
             internal_args_list.append(f"*tma_ptr{i}")
-        else:
+        elif ty != "constexpr":
             internal_args_list.append(f"_arg{i}")
     params = range(len(signature))
 
     # generate glue code
-    params = [f"&arg{i}" for i, ty in signature.items() if i not in constants and ty != "none"]
+    newline = '\n  '
+    ptr_decls = [
+        f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;"
+        for i, ty in signature.items()
+        if ty[0] == "*"
+    ]
+    tma_decls = [
+        f"CUtensorMap* tma_ptr{i} = getTmaDesc(_arg{i}); if (!tma_ptr{i}) return NULL;" for i, ty in signature.items()
+        if ty == "nvTmaDesc"
+    ]
+    params = [f"&arg{i}" for i, ty in signature.items() if ty != "constexpr"]
     params.append("&global_scratch")
     src = f"""
 #include \"cuda.h\"
@@ -412,7 +420,7 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   PyObject *kernel_metadata = NULL;
   PyObject *launch_metadata = NULL;
   PyObject *global_scratch_obj = NULL;
-  {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
+  {newline.join([f"{_extracted_type(ty)} _arg{i};" for i, ty in signature.items()])}
   if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ,
                                            &_stream, &_function, &launch_cooperative_grid, &global_scratch_obj,
                                            &kernel_metadata, &launch_metadata,
@@ -445,8 +453,8 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   }}
 
   // raise exception asap
-  {"".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" or ty == "none" else "" for i, ty in signature.items()])};
-  {"".join([f"CUtensorMap* tma_ptr{i} = getTmaDesc(_arg{i}); if (!tma_ptr{i}) return NULL;" if ty == "nvTmaDesc" else "" for i, ty in signature.items()])};
+  {newline.join(ptr_decls)}
+  {newline.join(tma_decls)}
   Py_BEGIN_ALLOW_THREADS;
   _launch(gridX, gridY, gridZ, num_warps, num_ctas, launch_cooperative_grid, clusterDimX, clusterDimY, clusterDimZ, shared_memory, (CUstream)_stream, (CUfunction)_function, global_scratch{', ' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
   Py_END_ALLOW_THREADS;
@@ -494,11 +502,11 @@ PyMODINIT_FUNC PyInit___triton_launcher(void) {{
 class CudaLauncher(object):
 
     def __init__(self, src, metadata):
-        ids = {"ids_of_const_exprs": src.fn.constexprs if hasattr(src, "fn") else tuple()}
         constants = src.constants if hasattr(src, "constants") else dict()
-        constants = {idx: value for idx, value in constants.items()}
+        arg_idx = lambda x: (src.fn.arg_names.index(x), ) if isinstance(x, str) else x
+        constants = {arg_idx(idx): value for idx, value in constants.items()}
         signature = {idx: value for idx, value in src.signature.items()}
-        src = make_launcher(constants, signature, ids)
+        src = make_launcher(constants, signature)
         mod = compile_module_from_src(src, "__triton_launcher")
         self.launch = mod.launch
         self.global_scratch_size = metadata.global_scratch_size
