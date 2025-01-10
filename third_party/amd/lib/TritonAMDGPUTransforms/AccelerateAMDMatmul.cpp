@@ -152,11 +152,12 @@ FailureOr<MfmaInsn> chooseMfmaInstruction(tt::DotOp dot, int mfmaVersion,
 }
 
 FailureOr<MfmaInsn> chooseMfmaInstruction(tt::DotScaledOp dot, int mfmaVersion,
-                                          int nonKDim) {
-  // For scaled dot, we handle it with bf16 emulation for now.
-  Type bf16Type = Builder(dot.getContext()).getBF16Type();
+                                          int nonKDim, bool useFp16) {
+  // For scaled dot, we handle it with fp16 or bf16 emulation for now.
+  Builder b(dot.getContext());
+  Type elemType = useFp16 ? b.getF16Type() : b.getBF16Type();
   return chooseMfmaInstruction(
-      dot.getC().getType(), /*aElemType=*/bf16Type, /*bElemType=*/bf16Type,
+      dot.getC().getType(), /*aElemType=*/elemType, /*bElemType=*/elemType,
       dot.getLhs().getType().getShape().back(), mfmaVersion, nonKDim);
 }
 
@@ -505,7 +506,8 @@ public:
       return elemType == ScaleDotElemType::E2M1 ||
              elemType == ScaleDotElemType::E4M3 ||
              elemType == ScaleDotElemType::E5M2 ||
-             elemType == ScaleDotElemType::BF16;
+             elemType == ScaleDotElemType::BF16 ||
+             elemType == ScaleDotElemType::FP16;
     };
     if (!supportsTypes(aElemType) || !supportsTypes(bElemType))
       return rewriter.notifyMatchFailure(dotOp, "NYI: mxfp6 operand");
@@ -518,10 +520,19 @@ public:
     int numThreads = ttg::TritonGPUDialect::getThreadsPerWarp(moduleOp);
 
     // Choose a suitable MFMA instruction for this scaled dot op.
+    bool useFp16 = dotOp.getLhsType() == ScaleDotElemType::FP16 ||
+                   dotOp.getRhsType() == ScaleDotElemType::FP16;
     FailureOr<MfmaInsn> mfmaInstr =
-        chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim);
+        chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim, useFp16);
     if (failed(mfmaInstr))
       return rewriter.notifyMatchFailure(dotOp, "cannot choose mfma intrinsic");
+
+    if (useFp16) {
+      dotOp.emitRemark(
+          "Warning: detected one dot_scaled operand is fp16 tensor so "
+          "upcasting to fp16 for computation, which impacts precision; "
+          "experimental behavior and may change in future");
+    }
 
     unsigned mDim = mfmaInstr.value().getMDim();
     unsigned nDim = mfmaInstr.value().getNDim();
@@ -560,8 +571,8 @@ public:
     auto newAcc = rewriter.create<ttg::ConvertLayoutOp>(
         dotOp.getC().getLoc(), newRetType, dotOp.getC());
 
-    auto toMMABf16 = [&](TensorValue v, int idx,
-                         ScaleDotElemType type) -> TensorValue {
+    auto upcastForMMA = [&](TensorValue v, int idx,
+                            ScaleDotElemType type) -> TensorValue {
       auto vType = v.getType();
       auto newVEncoding = DotOperandEncodingAttr::get(
           ctx, idx, newRetType.getEncoding(), kWdiths[idx]);
@@ -570,16 +581,19 @@ public:
       v = rewriter.create<ttg::ConvertLayoutOp>(v.getLoc(), newVType, v);
       // Don't need to covert int8 holding mxfp4--the upcast_mxfp op can
       // take int8 tensor as input.
-      if (type == ScaleDotElemType::BF16 || type == ScaleDotElemType::E2M1)
+      if (type == ScaleDotElemType::BF16 || type == ScaleDotElemType::FP16 ||
+          type == ScaleDotElemType::E2M1)
         return v;
 
-      auto vTypeBf16 = RankedTensorType::get(
-          vType.getShape(), rewriter.getBF16Type(), newVEncoding);
+      auto upcastedType = RankedTensorType::get(
+          vType.getShape(),
+          useFp16 ? rewriter.getF16Type() : rewriter.getBF16Type(),
+          newVEncoding);
       return cast<TensorValue>(
-          rewriter.create<FpToFpOp>(v.getLoc(), vTypeBf16, v).getResult());
+          rewriter.create<FpToFpOp>(v.getLoc(), upcastedType, v).getResult());
     };
-    a = toMMABf16(a, 0, aElemType);
-    b = toMMABf16(b, 1, bElemType);
+    a = upcastForMMA(a, 0, aElemType);
+    b = upcastForMMA(b, 1, bElemType);
 
     // We need to have "matching" encoding between the main tensor and scale
     // tensor to make sure the scale values needed is in the same warp. So we
@@ -598,10 +612,10 @@ public:
     auto newScaleEncoding = triton::gpu::BlockedEncodingAttr::get(
         ctx, {1, 1}, threadsPerWarp, blockWarpsPerCTA, {1, 0}, ctaLayout);
 
-    auto upcastMXFP = [&](TensorValue main, TensorValue scale,
+    auto upcastMXFP = [&](TensorValue v, TensorValue scale,
                           ScaleDotElemType elemType) -> Value {
       if (!scale)
-        return main;
+        return v;
 
       auto newScaleType = RankedTensorType::get(
           scale.getType().getShape(), scale.getType().getElementType(),
@@ -609,8 +623,13 @@ public:
       auto convOp = rewriter.create<ttg::ConvertLayoutOp>(scale.getLoc(),
                                                           newScaleType, scale);
 
-      return rewriter.create<triton::gpu::UpcastMXFPOp>(dotOp.getLoc(), main,
-                                                        convOp, elemType);
+      Builder b(v.getContext());
+      // TODO: Emit device assert to check scale tensor range fitting into fp16?
+      Type outputElemType = useFp16 ? b.getF16Type() : b.getBF16Type();
+      auto outputType =
+          ttg::UpcastMXFPOp::deduceOutputType(v, elemType, outputElemType);
+      return rewriter.create<ttg::UpcastMXFPOp>(dotOp.getLoc(), outputType, v,
+                                                convOp, elemType);
     };
 
     Value scaledA = upcastMXFP(a, aScale, dotOp.getLhsType());

@@ -573,8 +573,10 @@ private:
           maybeWithEncoding(scale.getType(), scaleEncoding);
       scale = rewriter.create<ConvertLayoutOp>(scale.getLoc(),
                                                newScaleDotElemType, scale);
-      ret = rewriter.create<triton::gpu::UpcastMXFPOp>(v.getLoc(), ret, scale,
-                                                       type);
+      auto retTy = triton::gpu::UpcastMXFPOp::deduceOutputType(
+          ret, type, Builder(v.getContext()).getBF16Type());
+      ret = rewriter.create<triton::gpu::UpcastMXFPOp>(v.getLoc(), retTy, ret,
+                                                       scale, type);
     }
     return ret;
   }
