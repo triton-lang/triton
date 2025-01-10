@@ -75,6 +75,12 @@ void init_triton_passes_ttgpuir(py::module &&m) {
                             createTritonGPULoopScheduling, int);
   ADD_PASS_WRAPPER_0("add_coalesce_async_copy",
                      createTritonGPUCoalesceAsyncCopy);
+  //Proton passes
+  ADD_PASS_WRAPPER_2("add_allocate_proton_smem_buffer",
+                     createAllocateProtonSMEMBufferPass,
+                     const std::string &, int32_t);
+  
+
 }
 
 void init_triton_passes_convert(py::module &&m) {

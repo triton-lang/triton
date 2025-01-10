@@ -15,6 +15,19 @@ def AllocateSharedMemory : Pass<"allocate-shared-memory", "mlir::ModuleOp"> {
     let constructor = "mlir::triton::gpu::createAllocateSharedMemoryPass()";
 }
 
+
+def AllocateProtonSMEMBuffer : Pass<"allocate-proton-smem-buffer", "mlir::ModuleOp"> {
+    let constructor = "mlir::triton::gpu::createAllocateProtonSMEMBufferPass(\"\")";
+
+    let options = [
+        Option<"targetArch", "target-arch", "std::string", /*default*/"",
+               "gfx target device architecture, e.g., gfx942">,
+        Option<"customLDSLimit", "lds-limit", "int", /*default*/"0",
+               "custom limit of LDS consumption, if not provided, maximum LDS size is used">,
+    ];
+}
+
+
 def TritonGPUGlobalScratchAllocationPass : Pass<"tritongpu-global-scratch-memory-allocation", "mlir::ModuleOp"> {
   let summary = "Assign global scratch memory allocation";
 

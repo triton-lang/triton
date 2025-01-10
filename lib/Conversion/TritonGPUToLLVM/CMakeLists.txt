@@ -21,6 +21,8 @@ add_triton_library(TritonGPUToLLVM
     DecomposeUnsupportedConversions.cpp
     PrintOpToLLVM.cpp
 
+    AllocateProtonSMEMBuffer.cpp
+
     DEPENDS
     TritonGPUConversionPassIncGen
 
