@@ -27,7 +27,7 @@ std::unique_ptr<Pass> createTritonAMDGPUOptimizeEpiloguePass();
 std::unique_ptr<Pass> createTritonAMDGPUCanonicalizePointersPass();
 
 std::unique_ptr<Pass> createTritonAMDGPUConvertToBufferOpsPass(
-    std::string archGenName = std::string(), bool enableBufferAtomics = false);
+    std::string archGenName = std::string());
 
 std::unique_ptr<Pass> createTritonAMDGPUBlockPingpongPass();
 

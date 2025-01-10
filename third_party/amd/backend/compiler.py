@@ -222,6 +222,9 @@ class HIPBackend(BaseBackend):
         stream_prefetch = os.getenv("TRITON_HIP_STREAM_PREFETCH", "0") == "1"
         use_buffer_ops = os.environ.get("AMDGCN_USE_BUFFER_OPS", "0") == "1"
 
+        # TODO: this is for testing the PR, this should be removed before landing
+        use_buffer_ops = True
+
         # The `local-prefetch` scheduling variant requires turning on buffer ops.
         if options.instruction_sched_variant == "local-prefetch":
             stream_prefetch = True
@@ -248,7 +251,7 @@ class HIPBackend(BaseBackend):
         if use_buffer_ops:
             amd.passes.ttgpuir.add_canonicalize_pointers(pm)
             passes.common.add_canonicalizer(pm)
-            amd.passes.ttgpuir.add_convert_to_buffer_ops(pm, options.arch, enable_buffer_atomics)
+            amd.passes.ttgpuir.add_convert_to_buffer_ops(pm, options.arch)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)

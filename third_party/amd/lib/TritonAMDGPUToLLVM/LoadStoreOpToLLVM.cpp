@@ -286,7 +286,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                              ptrAlignmentBytes, cacheMod);
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
-            rewriter, loc, this->getTypeConverter()->getIndexType(), ii);
+            rewriter, loc, getTypeConverter()->getIndexType(), ii);
         Value loaded = extract_element(valueElemTy, loadVal, vecIdx);
         loadedVals.push_back(loaded);
       }
@@ -372,7 +372,7 @@ struct BufferLoadOpConversion
           vecTy, rsrcDesc, offsetElems[vecStart], pred, falseVal, cacheMod);
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
-            rewriter, loc, this->getTypeConverter()->getIndexType(), ii);
+            rewriter, loc, getTypeConverter()->getIndexType(), ii);
         Value loaded = extract_element(valueElemTy, loadVal, vecIdx);
         loadedVals.push_back(loaded);
       }
@@ -526,14 +526,12 @@ struct BufferAtomicRMWOpConversion
       // We clamp to the only supported vectorization width here (2).
       // In ConvertToBufferOps we check that we have a large enough vector size
       assert(vec >= 2);
-      vec = (unsigned)2;
-    }
-
-    // The max width of a buffer atomic op is 64-bits
-    // Some types like F32 don't have a 2x vectorized version
-    if (valueElemTy.isF32() || valueElemTy.isF64() ||
-        valueElemTy.isInteger(32) || valueElemTy.isInteger(64)) {
-      vec = (unsigned)1;
+      vec = 2u;
+      // The max width of a buffer atomic op is 64-bits
+      // Some types like F32 don't have a 2x vectorized version
+    } else if (valueElemTy.isF32() || valueElemTy.isF64() ||
+               valueElemTy.isInteger(32) || valueElemTy.isInteger(64)) {
+      vec = 1u;
     }
 
     // Get the offsets and value
@@ -692,7 +690,7 @@ struct BufferAtomicRMWOpConversion
       }
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
-            rewriter, loc, this->getTypeConverter()->getIndexType(), ii);
+            rewriter, loc, getTypeConverter()->getIndexType(), ii);
         Value loaded = extract_element(valueElemTy, loadVal, vecIdx);
         loadedVals.push_back(loaded);
       }

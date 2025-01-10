@@ -127,9 +127,6 @@ def TritonAMDGPUConvertToBufferOps : Pass<"tritonamdgpu-convert-buffer-ops", "ml
     Option<"archGenerationName", "arch-generation-name",
            "std::string", /*default=*/"std::string{}",
            "GFX generation name of target device.">,
-    Option<"enableBufferAtomics", "enable-buffer-atomics-flag",
-           "bool", /*default*/"false",
-           "Flag to enable buffer atomic RMW ops.">,
   ];
 }
 

@@ -239,7 +239,7 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
 
   ConvertTritonAtomicRMWOpToBufferAtomicRMW(
       mlir::MLIRContext *context, DenseSet<Value> &assumptions,
-      ModuleAxisInfoAnalysis axisAnalysisPass)
+      ModuleAxisInfoAnalysis &axisAnalysisPass)
       : mlir::OpRewritePattern<triton::AtomicRMWOp>(context),
         assumptions(assumptions), axisAnalysisPass(axisAnalysisPass) {}
 
@@ -255,8 +255,7 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     // In addition to the `canUserBufferOps` check, we should ensure that
     // 1. Perform the canUserBufferOps check
     if (!canUseBufferOps(ptr, assumptions)) {
-      LDBG("Failed to convert: " << op);
-      return failure();
+      return rewriter.notifyMatchFailure(op, "canUseBufferOps check failed");
     }
 
     // 2. Check the scope. We support GPU and CTA for now (SYSTEM scope is not
@@ -266,8 +265,7 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     case MemSyncScope::CTA:
       break;
     default:
-      LDBG("Failed to convert: " << op);
-      return failure();
+      return rewriter.notifyMatchFailure(op, "RMW with unsupported scope");
     }
     LDBG("RMW supported scope");
 
@@ -279,10 +277,9 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     case MemSemantic::ACQUIRE_RELEASE:
       break;
     default:
-      LDBG("Failed to convert: " << op);
-      return failure();
+      return rewriter.notifyMatchFailure(
+          op, "RMW with unsupported memory ordering");
     }
-    LDBG("RMW supported memory ordering");
 
     auto addPtrOp = ptr.getDefiningOp<triton::AddPtrOp>();
     Value tensorPtr = addPtrOp.getPtr();
@@ -292,16 +289,12 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
 
     // 4. Buffer atomic RMW does not support FP8 ops
     //    easier to just check what we support
-    auto checkType = op.getVal().getType();
-    if (auto vecType = dyn_cast<RankedTensorType>(checkType)) {
-      checkType = vecType.getElementType();
-    }
+    auto checkType = getElementTypeOrSelf(op.getVal());
     bool isSupportedType = checkType.isF16() || checkType.isBF16() ||
                            checkType.isF32() || checkType.isF64() ||
                            checkType.isInteger(32) || checkType.isInteger(64);
     if (!isSupportedType) {
-      LDBG("Failed to convert: " << op << "of type: " << checkType);
-      return failure();
+      return rewriter.notifyMatchFailure(op, "RMW with unsupported type");
     }
     LDBG("RMW supported type");
 
@@ -319,8 +312,9 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     case RMWOp::XCHG:
       break;
     default:
-      LDBG("Failed to convert: " << op);
-      return failure();
+      auto rmwOpStr = stringifyRMWOp(atomicRmwOp).str();
+      return rewriter.notifyMatchFailure(op, "RMW with unsupported op: " +
+                                                 rmwOpStr);
     }
     LDBG("RMW supported Op");
 
@@ -328,39 +322,37 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     //    least 32-bits. Otherwise, fall back to the existing path for atomics
     auto opValueType = op.getVal().getType();
     auto opBitWidth = 0;
-    if (auto vecType = dyn_cast<RankedTensorType>(opValueType)) {
+    if (auto tensorType = dyn_cast<RankedTensorType>(opValueType)) {
       // We can't just compute the opBitWidth using the numElements *
       // elemBitWidth here. In cases such as tensor<2xf16...>, if the elements
       // are contiguous we can emit the buffer op. Otherwise, the buffer ops
       // lowering will try to emit individual (unsupported) f16/bf16 ops.
-      auto elemBitWidth = vecType.getElementType().getIntOrFloatBitWidth();
+      auto elemBitWidth = tensorType.getElementTypeBitWidth();
       opBitWidth =
           getVectorSize(basePtr, tensorOffset, axisAnalysisPass) * elemBitWidth;
     } else {
       opBitWidth = opValueType.getIntOrFloatBitWidth();
     }
 
-    if (opBitWidth >= 32) {
-      Value maybeMask{};
-      if (op.getMask() && !isZeroConst(op.getMask()))
-        maybeMask = op.getMask();
-
-      auto atomicRMWOp = rewriter.create<triton::amdgpu::BufferAtomicRMWOp>(
-          op->getLoc(), op.getVal().getType(), atomicRmwOp, basePtr,
-          tensorOffset, op.getVal(), sem, scope, maybeMask);
-
-      rewriter.replaceOp(op, atomicRMWOp);
-
-      return success();
+    if (opBitWidth < 32) {
+      return rewriter.notifyMatchFailure(op, "RMW requires opBitWidth >= 32");
     }
-    LDBG("Failed to convert: " << op);
-    return failure();
+
+    Value maybeMask{};
+    if (op.getMask() && !isZeroConst(op.getMask()))
+      maybeMask = op.getMask();
+
+    rewriter.replaceOpWithNewOp<triton::amdgpu::BufferAtomicRMWOp>(
+        op, op.getVal().getType(), atomicRmwOp, basePtr, tensorOffset,
+        op.getVal(), sem, scope, maybeMask);
+
+    return success();
   }
 
 private:
   // Assumptions collected through the function
   DenseSet<Value> assumptions;
-  ModuleAxisInfoAnalysis axisAnalysisPass;
+  ModuleAxisInfoAnalysis &axisAnalysisPass;
 };
 
 struct ConvertTritonLoadToBufferLoad
@@ -457,10 +449,8 @@ class TritonAMDGPUConvertToBufferOpsPass
 
 public:
   TritonAMDGPUConvertToBufferOpsPass() = default;
-  TritonAMDGPUConvertToBufferOpsPass(StringRef archGen,
-                                     bool enableBufferAtomics) {
+  TritonAMDGPUConvertToBufferOpsPass(StringRef archGen) {
     this->archGenerationName = archGen.data();
-    this->enableBufferAtomics = enableBufferAtomics;
   };
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -485,15 +475,9 @@ public:
     // Gate buffer atomics behind CDNA3 (i.e., MI300 series) for now
     // GFX942-specific assumptions regarding cache coherence are made when
     // lowering to LLVM
-    switch (auto isaFamily = triton::AMD::deduceISAFamily(archGenerationName)) {
-    case ISAFamily::CDNA3:
-      if (enableBufferAtomics)
-        patterns.add<ConvertTritonAtomicRMWOpToBufferAtomicRMW>(
-            context, assumptions, axisInfoAnalysis);
-      break;
-    default:
-      break;
-    }
+    if (ISAFamily::CDNA3 == triton::AMD::deduceISAFamily(archGenerationName))
+      patterns.add<ConvertTritonAtomicRMWOpToBufferAtomicRMW>(
+          context, assumptions, axisInfoAnalysis);
 
     if (applyPatternsAndFoldGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
@@ -501,8 +485,6 @@ public:
 };
 
 std::unique_ptr<Pass>
-mlir::createTritonAMDGPUConvertToBufferOpsPass(std::string archGen,
-                                               bool enableBufferAtomics) {
-  return std::make_unique<TritonAMDGPUConvertToBufferOpsPass>(
-      archGen, enableBufferAtomics);
+mlir::createTritonAMDGPUConvertToBufferOpsPass(std::string archGen) {
+  return std::make_unique<TritonAMDGPUConvertToBufferOpsPass>(archGen);
 }

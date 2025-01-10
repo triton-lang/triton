@@ -65,18 +65,18 @@ Value cvtFp32ToFp16(Location loc, RewriterBase &rewriter, const Value &v,
 Type getPointerTypeWithShape(Value basePtr, Value offset);
 
 // Get contiguity for a tensor pointer `ptr`
-unsigned getContiguity(Value ptr, ModuleAxisInfoAnalysis axisAnalysisPass);
+unsigned getContiguity(Value ptr, ModuleAxisInfoAnalysis &axisAnalysisPass);
 
 // Get contiguity for a scalar pointer `ptr` and a tensor `offset`
 unsigned getContiguity(Value ptr, Value offset,
-                       ModuleAxisInfoAnalysis axisAnalysisPass);
+                       ModuleAxisInfoAnalysis &axisAnalysisPass);
 
 // Determine the vector size of a tensor of pointers
-unsigned getVectorSize(Value ptr, ModuleAxisInfoAnalysis axisAnalysisPass);
+unsigned getVectorSize(Value ptr, ModuleAxisInfoAnalysis &axisAnalysisPass);
 
 // Given a scalar pointer and a tensor of offsets, determine the vector size
 unsigned getVectorSize(Value ptr, Value offset,
-                       ModuleAxisInfoAnalysis axisAnalysisPass);
+                       ModuleAxisInfoAnalysis &axisAnalysisPass);
 
 } // namespace mlir::LLVM::AMD
 

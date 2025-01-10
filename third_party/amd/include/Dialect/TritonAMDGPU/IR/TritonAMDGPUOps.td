@@ -220,16 +220,20 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
   TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "getPointerTypeToElement($_self)">,
   TypesMatchWith<"result and offsets have the same shape", "result", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"result and mask have the same shape", "result", "mask", "getI1SameShape($_self)",
-                 "($_op.getOperands().size() <= 2) || std::equal_to<>()">,
+                 "($_op.getOperands().size() <= 3) || std::equal_to<>()">,
   TypesMatchWith<"value element type matches the pointed type of ptr", "value", "ptr", "getPointerTypeToElement($_self)">,
   TypesMatchWith<"value and offsets have the same shape", "value", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"value and mask have the same shape", "value", "mask", "getI1SameShape($_self)",
                  "($_op.getOperands().size() <= 3) || std::equal_to<>()">,
 ]>{
-    let summary = "Load from a scalar base pointer and a tensor offset";
+    let summary = "Atomic RMW op which reads, modifies, and writes to a scalar base pointer and a tensor offset";
     let description = [{
-        The semantics of this operation closely resemble standard buffer loads/stores.
-        Similar to TT_AtomicRMWOp: Buffer atomic RMW ops load data at $ptr, do $rmw_op with $val, and store result to $ptr.
+        AMD Buffer atomic RMW operation. Buffer atomics are similar to normal atomics, but access global memory via a
+        scalar base pointer and a tensor of offsets instead of a tensor of pointers.
+        Similar to other buffer ops, the `mask` is a boolean vector that determines if a given element should be processed with
+        the atomic RMW op. Elements with `mask[i] == 0` are dropped (i.e., the atomic is not executed).
+        Similar to TT_AtomicRMWOp: Buffer atomic RMW ops load data at $ptr, do $rmw_op with $val, and store result to $ptr with
+        the specified memory semantics and scope. Atomic RMW ops return the pre-op value if used, otherwise the value is implicitly dropped.
     }];
     let arguments = (
       ins

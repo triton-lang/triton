@@ -513,17 +513,15 @@ Type getPointerTypeWithShape(Value basePtr, Value offset) {
   return offsetType.cloneWith(std::nullopt, basePtrType);
 }
 
-// Get contiguity for a tensor pointer `ptr`
-unsigned getContiguity(Value ptr, ModuleAxisInfoAnalysis axisAnalysisPass) {
+unsigned getContiguity(Value ptr, ModuleAxisInfoAnalysis &axisAnalysisPass) {
   auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
   if (!tensorTy)
     return 1;
   return axisAnalysisPass.getPtrContiguity(ptr);
 }
 
-// Get contiguity for a scalar pointer `ptr` and a tensor `offset`
 unsigned getContiguity(Value ptr, Value offset,
-                       ModuleAxisInfoAnalysis axisAnalysisPass) {
+                       ModuleAxisInfoAnalysis &axisAnalysisPass) {
   // Get contiguity from the offset
   Type type = getPointerTypeWithShape(ptr, offset);
   RankedTensorType tensorTy = cast<RankedTensorType>(type);
@@ -548,8 +546,7 @@ unsigned getContiguity(Value ptr, Value offset,
   return contiguity;
 }
 
-// Determine the vector size of a tensor of pointers
-unsigned getVectorSize(Value ptr, ModuleAxisInfoAnalysis axisAnalysisPass) {
+unsigned getVectorSize(Value ptr, ModuleAxisInfoAnalysis &axisAnalysisPass) {
   auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
   if (!tensorTy)
     return 1;
@@ -558,9 +555,8 @@ unsigned getVectorSize(Value ptr, ModuleAxisInfoAnalysis axisAnalysisPass) {
   return std::min<unsigned>(128 / pointeeBitWidth, contiguity);
 }
 
-// Given a scalar pointer and a tensor of offsets, determine the vector size
 unsigned getVectorSize(Value ptr, Value offset,
-                       ModuleAxisInfoAnalysis axisAnalysisPass) {
+                       ModuleAxisInfoAnalysis &axisAnalysisPass) {
   auto contiguity = getContiguity(ptr, offset, axisAnalysisPass);
   auto pointeeBitWidth = triton::getPointeeBitWidth(ptr.getType());
   return std::min<unsigned>(128 / pointeeBitWidth, contiguity);
