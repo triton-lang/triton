@@ -651,9 +651,10 @@ struct BufferAtomicRMWOpConversion
     //    the VGPRs, and for writes when the data has been written to the L2
     //    cache. Ordering: Memory reads and writes return in the order they were
     //    issued, including mixing reads and writes"
-    // 4. We set GLC=1, to return the old value. Since `tl.atomic_*` returns
-    //    the pre-op value, we don't have the write-back the L2 cache between
-    //    ops.
+    // 4. We set GLC=1, to return the old value. Atomics in GFX942 execute with
+    //    either device (default) or system scope (controlled by the sc1 flag).
+    //    This is distinct from the memory scope of the atomic (i.e, the memory
+    //    fences which appear before/after the ops).
 
     if (memScope == MemSyncScope::GPU) {
       waitcntBuilder.create<>("s_waitcnt vmcnt(0)")->operator()();
