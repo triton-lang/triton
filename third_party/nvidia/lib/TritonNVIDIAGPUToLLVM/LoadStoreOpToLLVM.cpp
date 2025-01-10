@@ -1082,10 +1082,13 @@ struct AsyncTMACopyGlobalToLocalOpConversion
   matchAndRewrite(triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp op,
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    assert(op.getCache() == triton::CacheModifier::NONE &&
-           "cache modifiers not supported yet.");
-    assert(op.getEvict() == triton::EvictionPolicy::NORMAL &&
-           "eviction policy not supported yet.");
+    if (op.getCache() != triton::CacheModifier::NONE)
+      return op.emitError("cache modifiers not supported yet");
+    if (op.getEvict() != triton::EvictionPolicy::NORMAL)
+      return op.emitError("eviction policy not supported yet");
+    if (op.getIsVolatile())
+      return op.emitError("volatile not supported yet");
+
     auto loc = op.getLoc();
     Type llvmElemTy =
         typeConverter->convertType(op.getResult().getType().getElementType());

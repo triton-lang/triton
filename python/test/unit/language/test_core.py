@@ -55,6 +55,10 @@ def promotion_numpy_2_0():
         np._set_promotion_state(state)
 
 
+# No need to emulate NumPy 2.0 if the user has NumPy 2.0
+if np.__version__[0] != "1":
+    promotion_numpy_2_0 = contextlib.nullcontext
+
 # TODO: enable multiple cta cluster testing.
 # num_ctas_list = [1, 4] if torch.cuda.get_device_capability()[0] == 9 else [1]
 num_ctas_list = [1]
@@ -3211,42 +3215,94 @@ def convert_fp8_to_fp32(x, device, dtype_str):
     assert "Unsupported float8 dtype"
 
 
+# M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size
+def get_test_dot_base_cases():
+    return [(*shape, 4, False, False, epilogue, input_precision, in_dtype, out_dtype, 1, None)
+            for shape in [(64, 64, 64), (32, 32, 32), (16, 16, 16)]
+            for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols', 'softmax', 'chain-dot']
+            for input_precision in ['tf32', 'tf32x3', 'ieee']
+            for in_dtype, out_dtype in [('float16', 'float16'), ('float16', 'float32'), ('float32', 'float32')]
+            if not (input_precision != 'ieee' and (in_dtype in ['float16']))]
+
+
+# M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size
+def get_test_dot_mixed_sizes_cases():
+    available_kpack = [1, 2 if is_hip() else 1]
+    available_precision = ["tf32" if is_cuda() else "ieee"]
+    return [
+        (*shape_nw, col_a, col_b, 'none', input_precision, in_dtype, out_dtype, kpack, None)
+        for shape_nw in [[128, 256, 32, 8], [128, 16, 32, 4], [32, 128, 64, 4], [128, 128, 64, 4], [64, 128, 128, 4],
+                         [32, 128, 64, 2], [64, 64, 32, 4], [32, 32, 128, 16], [128, 128, 64, 2], [64, 128, 128, 2]]
+        for input_precision in available_precision
+        for col_a in [True, False]
+        for col_b in [True, False]
+        for in_dtype, out_dtype in [('int8', 'int8'), ('float16', 'float16'), ('float16',
+                                                                               'float32'), ('float32', 'float32')]
+        for kpack in available_kpack
+    ]
+
+
+# M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size
+# introduced in #2370
+def get_test_dot_transposed_op_base_cases():
+    return [(64, 64, 64, 4, col_a, col_b, 'none', 'ieee', 'float32', 'float32', 1, None)
+            for col_a in [True, False]
+            for col_b in [True, False]]
+
+
+# M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size
+# Introduced in #2750
+def get_test_dot_h100_shortcut_cases():
+    return [(64, 64, 64, 4, False, False, 'chain-dot', 'ieee', 'bfloat16', 'float32', 1, None)]
+
+
+# M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size
+# introduced in #3908
+def get_test_dot_mfma_edge_cases():
+    if not is_hip_cdna():
+        return []
+    return [(16, 16, 8, 4, False, False, 'None', 'ieee', 'float32', 'float32', 1, None),
+            (32, 16, 8, 4, False, False, 'None', 'ieee', 'float16', 'float16', 1, None)]
+
+
+# M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size
+# introduced in #3370
+def get_test_dot_fp8_output_cases():
+    return [(128, 128, 64, 4, False, False, 'chain-dot', 'ieee', float8_type, 'float32', 1, None)
+            for float8_type in ["float8e5", "float8e4nv"]]
+
+
+# M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size
+# introduced in #5406
+def get_test_dot_small_k_mfma_cases():
+    if not is_hip_cdna():
+        return []
+    return [(32, 32, k_size, 4, False, False, 'None', 'ieee', in_dtype, out_dtype, 1, mma_nonk_size)
+            for k_size in [1, 2, 4, 8]
+            for in_dtype, out_dtype in [('float16', 'float32'), ('int8', 'int32')]
+            for mma_nonk_size in mma_nonk_sizes]
+
+
+# M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size
+# introduced in #4516
+def get_test_dot_small_mn_fma_cases():
+    return [(*shape_nw, False, False, epilogue, 'ieee', in_dtype, out_dtype, 1, None)
+            for shape_nw in [(2, 2, 16, 1), (1, 64, 64, 1), (64, 2, 64, 2), (64, 64, 4, 4)]
+            for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols']
+            for in_dtype, out_dtype in [('float16', 'float16'), ('float32', 'float32')]]
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize(
     "M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size",
-    [(*shape, 4, False, False, epilogue, input_precision, in_dtype, out_dtype, 1, None)
-     for shape in [(64, 64, 64), (32, 32, 32), (16, 16, 16)]
-     for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols', 'softmax', 'chain-dot']
-     for input_precision in ['tf32', 'tf32x3', 'ieee']
-     for in_dtype, out_dtype in [('float16', 'float16'), ('float16', 'float32'), ('float32', 'float32')]
-     if not (input_precision != 'ieee' and (in_dtype in ['float16']))] +
-    [(*shape_nw, col_a, col_b, 'none', input_precision, in_dtype, out_dtype, kpack, None)
-     for shape_nw in [[128, 256, 32, 8], [128, 16, 32, 4], [32, 128, 64, 4], [128, 128, 64, 4], [64, 128, 128, 4],
-                      [32, 128, 64, 2], [64, 64, 32, 4], [32, 32, 128, 16], [128, 128, 64, 2], [64, 128, 128, 2]]
-     for input_precision in ["tf32" if is_cuda() else "ieee"]
-     for col_a in [True, False]
-     for col_b in [True, False]
-     for in_dtype, out_dtype in [('int8', 'int8'), ('float16', 'float16'), ('float16', 'float32'), ('float32',
-                                                                                                    'float32')]
-     for kpack in [1, 2 if is_hip() else 1]] +
-    [(64, 64, 64, 4, col_a, col_b, 'none', 'ieee', 'float32', 'float32', 1, None)
-     for col_a in [True, False]
-     for col_b in [True, False]] +
-    [(64, 64, 64, 4, False, False, 'chain-dot', 'ieee', 'bfloat16', 'float32', 1, None)] +
-    ([(16, 16, 8, 4, False, False, 'None', 'ieee', 'float32', 'float32', 1, None),
-      (32, 16, 8, 4, False, False, 'None', 'ieee', 'float16', 'float16', 1, None)] if "gfx9" in get_arch() else []) +
-    [(128, 128, 64, 4, False, False, 'chain-dot', 'ieee', float8_type, 'float32', 1, None)
-     for float8_type in ["float8e5", "float8e4nv"]] +
-    # small k cases for MFMA dots
-    [(32, 32, k_size, 4, False, False, 'None', 'ieee', in_dtype, out_dtype, 1, mma_nonk_size)
-     for k_size in [1, 2, 4, 8]
-     for in_dtype, out_dtype in [('float16', 'float32'), ('int8', 'int32')]
-     for mma_nonk_size in mma_nonk_sizes] +
-    # small m/n cases for FMA dots
-    [(*shape_nw, False, False, epilogue, 'ieee', in_dtype, out_dtype, 1, None)
-     for shape_nw in [(2, 2, 16, 1), (1, 64, 64, 1), (64, 2, 64, 2), (64, 64, 4, 4)]
-     for epilogue in ['none', 'trans', 'add-matrix', 'add-rows', 'add-cols']
-     for in_dtype, out_dtype in [('float16', 'float16'), ('float32', 'float32')]])
+    get_test_dot_base_cases() + \
+    get_test_dot_mixed_sizes_cases() + \
+    get_test_dot_transposed_op_base_cases() + \
+    get_test_dot_h100_shortcut_cases() + \
+    get_test_dot_mfma_edge_cases() + \
+    get_test_dot_fp8_output_cases() + \
+    get_test_dot_small_k_mfma_cases() + \
+    get_test_dot_small_mn_fma_cases())
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size,
              num_ctas, device):
@@ -6007,6 +6063,37 @@ def test_enable_fp_fusion(enable_fp_fusion, default_override, device):
         return
     found_fma = re.search(r'(mad|fma)\.r[nzmp]\.(ftz\.)?f32', h.asm["ptx"]) is not None
     assert found_fma == enable_fp_fusion
+
+
+# -----------------------
+# test override_nv_compute_capability
+# -----------------------
+
+
+@pytest.mark.parametrize("nv_compute_capability", [70, 80, 90])
+@pytest.mark.parametrize("env_var_override", [False, True])
+def test_override_nv_compute_capability(nv_compute_capability, env_var_override, device):
+    if not is_cuda():
+        pytest.skip('test_override_nv_compute_capability only for CUDA')
+
+    @triton.jit
+    def simple(data, out):
+        in_ptrs = data + tl.arange(0, 128)
+        out_ptrs = out + tl.arange(0, 128)
+        tl.store(out_ptrs, tl.load(in_ptrs) * 1.5 + 1.0)
+
+    data = torch.randn((128, ), device=device, dtype=torch.float32)
+    out = torch.empty_like(data)
+
+    if env_var_override:
+        os.environ["TRITON_OVERRIDE_NV_CAPABILITY"] = str(nv_compute_capability)
+        h = simple[(1, )](data, out)
+        os.environ.pop("TRITON_OVERRIDE_NV_CAPABILITY")
+    else:
+        h = simple[(1, )](data, out, override_nv_compute_capability=nv_compute_capability)
+    torch.testing.assert_close(data * 1.5 + 1.0, out)
+    ttgir_cc = re.search(r'cuda:(\d+)', h.asm["ttgir"])
+    assert int(ttgir_cc.group(1)) == nv_compute_capability
 
 
 # -----------------------
