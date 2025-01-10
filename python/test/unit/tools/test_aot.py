@@ -436,7 +436,7 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32,
         kernel_path = os.path.join(tmp_dir, "empty_kernel.ttgir")
         with open(kernel_path, "w") as fp:
             fp.write(src)
-        k = triton.compile(kernel_path, target=GPUTarget("cuda", 80, 32))
+        k = triton.compile(kernel_path, target=GPUTarget("cuda", 80, 32, ""))
         ptx = k.asm["ptx"]
         assert ".target sm_80" in ptx
         assert ".address_size 64" in ptx
