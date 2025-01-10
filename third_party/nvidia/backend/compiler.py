@@ -284,7 +284,6 @@ class CUDABackend(BaseBackend):
             srcMgr = llvm.source_mgr()
             diag = ir.source_mgr_diag(srcMgr, mod.context)
             mod.context.printOpOnDiagnostic(True)
-        nvidia.passes.ttgpuir.add_decompose_unsupported_conversions(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
