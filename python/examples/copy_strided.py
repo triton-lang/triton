@@ -17,8 +17,8 @@ def kernel(X, stride_xm,  #
 
 src = tc.ASTSource(
     fn=kernel,
-    constants={"BLOCK_M": 64, "BLOCK_N": 64},
-    signature="*fp32,i32,*fp32,i32",
+    constexprs={"BLOCK_M": 64, "BLOCK_N": 64},
+    signature="*fp32,i32,*fp32,i32,constexpr,constexpr",
 )
 
 ret = triton.compile(src)
