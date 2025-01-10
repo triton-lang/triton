@@ -273,16 +273,23 @@ def upcast_test(src_dtype, dst_dtype, exponent_bits, mantissa_bits, exponent_bia
 def test_typeconvert_upcast(src_dtype, dst_dtype, device):
 
     # On HIP, fp8e4nv upcasting is only supported to bf16 and fp16, and it's only supported on MI300.
-    if src_dtype == 'float8e4nv' and is_hip() and (dst_dtype != 'bfloat16' or dst_dtype != 'float16' or not is_hip_mi300()):
-        pytest.skip(f"upcasting {src_dtype} to {dst_dtype} not supported in this architecture")
-
-    if ((src_dtype == 'float8e4nv' and is_cuda() and torch.cuda.get_device_capability(0) < (8, 9))
-       or (src_dtype in ('float8e4b15') and is_hip())
-       or (src_dtype in ('float8e4b8', 'float8e5b16') and (is_cuda() or not is_hip_mi300()))):
-        # If the dtype should error out in the given device, we assert that and return
-        with pytest.raises(triton.CompilationError, match="not supported in this architecture"):
-            launch_exhaustive_populate(getattr(tl, src_dtype), 0, 65536, False, 8, 0x7f, device=device)
-        return
+    if is_cuda():
+        if ((src_dtype == 'float8e4nv' and torch.cuda.get_device_capability(0) < (8, 9))
+            or src_dtype in ('float8e4b8', 'float8e5b16')):
+            # If the dtype should error out in the given device, we assert that and return
+            with pytest.raises(triton.CompilationError, match="not supported in this architecture"):
+                launch_exhaustive_populate(getattr(tl, src_dtype), 0, 65536, False, 8, 0x7f, device=device)
+            return
+    elif is_hip():
+        if  src_dtype == 'float8e4nv' and (
+            dst_dtype in ('float32', 'float16') or ((dst_dtype in ('bfloat16')) and not is_hip_mi300())):
+            pytest.skip(f"upcasting {src_dtype} to {dst_dtype} not supported in this architecture")
+        if (src_dtype in ('float8e4b15') or
+            (src_dtype in ('float8e4b8', 'float8e5b16') and not is_hip_mi300())):
+            # If the dtype should error out in the given device, we assert that and return
+            with pytest.raises(triton.CompilationError, match="not supported in this architecture"):
+                launch_exhaustive_populate(getattr(tl, src_dtype), 0, 65536, False, 8, 0x7f, device=device)
+            return
 
     # dtype : (exponent_bits, mantissa_bits, exponent_bias, max_repr)
     stuff = {

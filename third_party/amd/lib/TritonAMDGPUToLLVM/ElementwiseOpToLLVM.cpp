@@ -960,7 +960,6 @@ struct FpToFpOpConversion
             // F8 -> F16
             {{F8E4M3FNUZTyID, F16TyID, undefRounding},
              Fp8E4M3FNUZ_to_Fp16(isaFamily)},
-            {{F8E4M3FNTyID, F16TyID, undefRounding}, Fp8E4M3FN_to_Fp16},
             {{F8E5M2FNUZTyID, F16TyID, undefRounding},
              Fp8E5M2FNUZ_to_Fp16(isaFamily)},
             {{F8E5M2TyID, F16TyID, undefRounding}, Fp8E5M2_to_Fp16},
