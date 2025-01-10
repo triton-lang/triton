@@ -1743,7 +1743,7 @@ def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None,
     Software emulation enables targeting hardware architectures without native microscaling
     operation support. Right now for such case, microscaled lhs/rhs are upcasted to
     :code:`bf16` element type beforehand for dot computation, with one exception:
-    for AMD CDNA3 specifically, if one of the inputs is of normal :code:`fp16` element type,
+    for AMD CDNA3 specifically, if one of the inputs is of :code:`fp16` element type,
     the other input is also upcasted to :code:`fp16` element type instead.
     This behavior is experimental and may be subject to change in the future.
 
