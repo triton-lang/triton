@@ -2,8 +2,10 @@
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -22,9 +24,26 @@ struct AllocateProtonSMEMBuffer
           AllocateProtonSMEMBuffer> {
   void runOnOperation() override {
     ModuleOp mod = getOperation();
-    MLIRContext *ctx = &getContext();
+    OpBuilder b(mod.getBodyRegion());
+    MLIRContext *context = &getContext();
+    auto loc = mod.getLoc();
+
+    //bool hasProtonRecordOp = false;
+    //func.walk([&](triton::ProtonRecordOp op) { hasProtonRecordOp = true; });
+    //if (!hasProtonRecordOp) {
+    //  return;
+    //}
+
+    auto elemTy =  IntegerType::get(context, 32);
+    auto arrayTy = LLVM::LLVMArrayType::get(elemTy, 42);
+    auto global = b.create<LLVM::GlobalOp>(
+        loc, arrayTy, /*isConstant=*/false, LLVM::Linkage::External,
+        "proton_smem", /*value=*/Attribute(), /*alignment=*/16, /*addrSpace*/ 3);
     ModuleAllocation allocation(mod);
+
+    llvm::errs() << mod  << "\n";
     llvm::errs() <<  "Shared Memory: " << allocation.getSharedMemorySize() << "\n";
+
 
   }
 };
