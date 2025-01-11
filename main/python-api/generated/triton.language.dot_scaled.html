@@ -126,15 +126,21 @@
 <dd><p>Returns the matrix product of two blocks in microscaling format.</p>
 <p>lhs and rhs use microscaling formats described here:
 <a class="reference external" href="https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf">https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf</a></p>
+<p>Software emulation enables targeting hardware architectures without native microscaling
+operation support. Right now for such case, microscaled lhs/rhs are upcasted to
+<code class="code docutils literal notranslate"><span class="pre">bf16</span></code> element type beforehand for dot computation, with one exception:
+for AMD CDNA3 specifically, if one of the inputs is of <code class="code docutils literal notranslate"><span class="pre">fp16</span></code> element type,
+the other input is also upcasted to <code class="code docutils literal notranslate"><span class="pre">fp16</span></code> element type instead.
+This behavior is experimental and may be subject to change in the future.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>lhs</strong> (<em>2D tensor representing fp4</em><em>, </em><em>fp8</em><em> or </em><em>bf16 elements. Fp4 elements are packed into uint8 inputs with the first element in lower bits. Fp8 are stored as uint8</em><em> or </em><em>the corresponding fp8 type.</em>) – The first tensor to be multiplied.</p></li>
 <li><p><strong>lhs_scale</strong> (<em>e8m0 type represented as an uint8 tensor.</em>) – Scale factor for lhs tensor.</p></li>
-<li><p><strong>lhs_format</strong> (<em>str</em>) – format of the lhs tensor. Available formats: {<code class="code docutils literal notranslate"><span class="pre">e2m1</span></code>, <code class="code docutils literal notranslate"><span class="pre">e4m3</span></code>, <code class="code docutils literal notranslate"><span class="pre">e5m2</span></code>, <code class="code docutils literal notranslate"><span class="pre">bf16</span></code>}.</p></li>
+<li><p><strong>lhs_format</strong> (<em>str</em>) – format of the lhs tensor. Available formats: {<code class="code docutils literal notranslate"><span class="pre">e2m1</span></code>, <code class="code docutils literal notranslate"><span class="pre">e4m3</span></code>, <code class="code docutils literal notranslate"><span class="pre">e5m2</span></code>, <code class="code docutils literal notranslate"><span class="pre">bf16</span></code>, <code class="code docutils literal notranslate"><span class="pre">fp16</span></code>}.</p></li>
 <li><p><strong>rhs</strong> (<em>2D tensor representing fp4</em><em>, </em><em>fp8</em><em> or </em><em>bf16 elements. Fp4 elements are packed into uint8 inputs with the first element in lower bits. Fp8 are stored as uint8</em><em> or </em><em>the corresponding fp8 type.</em>) – The second tensor to be multiplied.</p></li>
 <li><p><strong>rhs_scale</strong> (<em>e8m0 type represented as an uint8 tensor.</em>) – Scale factor for rhs tensor.</p></li>
-<li><p><strong>rhs_format</strong> (<em>str</em>) – format of the rhs tensor. Available formats: {<code class="code docutils literal notranslate"><span class="pre">e2m1</span></code>, <code class="code docutils literal notranslate"><span class="pre">e4m3</span></code>, <code class="code docutils literal notranslate"><span class="pre">e5m2</span></code>, <code class="code docutils literal notranslate"><span class="pre">bf16</span></code>}.</p></li>
+<li><p><strong>rhs_format</strong> (<em>str</em>) – format of the rhs tensor. Available formats: {<code class="code docutils literal notranslate"><span class="pre">e2m1</span></code>, <code class="code docutils literal notranslate"><span class="pre">e4m3</span></code>, <code class="code docutils literal notranslate"><span class="pre">e5m2</span></code>, <code class="code docutils literal notranslate"><span class="pre">bf16</span></code>, <code class="code docutils literal notranslate"><span class="pre">fp16</span></code>}.</p></li>
 <li><p><strong>acc</strong> – The accumulator tensor. If not None, the result is added to this tensor.</p></li>
 </ul>
 </dd>

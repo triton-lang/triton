@@ -390,7 +390,7 @@ Effects: `MemoryEffects::Effect{}`
 
 ### `ttg.upcast_mxfp` (triton::gpu::UpcastMXFPOp)
 
-_Convert an mxfp tensor to bf16_
+_Convert an mxfp tensor to bf16/fp16_
 
 
 Syntax:
@@ -404,7 +404,7 @@ https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-fina
 
 Traits: `AlwaysSpeculatableImplTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
 Effects: `MemoryEffects::Effect{}`
 
@@ -412,13 +412,14 @@ Effects: `MemoryEffects::Effect{}`
 
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>fp_type</code></td><td>::mlir::triton::ScaleDotElemTypeAttr</td><td><details><summary>allowed 32-bit signless integer cases: 0, 1, 2, 3, 4, 5</summary>{{% markdown %}}Enum cases:
+<tr><td><code>fp_type</code></td><td>::mlir::triton::ScaleDotElemTypeAttr</td><td><details><summary>allowed 32-bit signless integer cases: 0, 1, 2, 3, 4, 5, 6</summary>{{% markdown %}}Enum cases:
 * e4m3 (`E4M3`)
 * e5m2 (`E5M2`)
 * e2m3 (`E2M3`)
 * e3m2 (`E3M2`)
 * e2m1 (`E2M1`)
-* bf16 (`BF16`){{% /markdown %}}</details></td></tr>
+* bf16 (`BF16`)
+* fp16 (`FP16`){{% /markdown %}}</details></td></tr>
 </table>
 
 #### Operands:

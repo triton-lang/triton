@@ -675,7 +675,7 @@ representing a transposed view of the buffer.</p>
 </section>
 <section id="ttg-upcast-mxfp-triton-gpu-upcastmxfpop">
 <h2><code class="docutils literal notranslate"><span class="pre">ttg.upcast_mxfp</span></code> (triton::gpu::UpcastMXFPOp)<a class="headerlink" href="#ttg-upcast-mxfp-triton-gpu-upcastmxfpop" title="Link to this heading">¶</a></h2>
-<p><em>Convert an mxfp tensor to bf16</em></p>
+<p><em>Convert an mxfp tensor to bf16/fp16</em></p>
 <p>Syntax:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttg.upcast_mxfp` $src `,` $scale  `fp_type` `=` $fp_type attr-dict `:` type($src) `,` type($scale) `-&gt;` type($result)
 </pre></div>
@@ -683,19 +683,20 @@ representing a transposed view of the buffer.</p>
 <p>Compute the bf16 encoded in the given mxfp number as per
 https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
 <section id="id22">
 <h3>Attributes:<a class="headerlink" href="#id22" title="Link to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>fp_type</code></td><td>::mlir::triton::ScaleDotElemTypeAttr</td><td><details><summary>allowed 32-bit signless integer cases: 0, 1, 2, 3, 4, 5</summary>{{% markdown %}}Enum cases:
+<tr><td><code>fp_type</code></td><td>::mlir::triton::ScaleDotElemTypeAttr</td><td><details><summary>allowed 32-bit signless integer cases: 0, 1, 2, 3, 4, 5, 6</summary>{{% markdown %}}Enum cases:
 * e4m3 (`E4M3`)
 * e5m2 (`E5M2`)
 * e2m3 (`E2M3`)
 * e3m2 (`E3M2`)
 * e2m1 (`E2M1`)
-* bf16 (`BF16`){{% /markdown %}}</details></td></tr>
+* bf16 (`BF16`)
+* fp16 (`FP16`){{% /markdown %}}</details></td></tr>
 </table>
 </section>
 <section id="id23">
