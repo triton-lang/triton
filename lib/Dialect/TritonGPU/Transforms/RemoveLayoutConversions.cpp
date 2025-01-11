@@ -1074,24 +1074,9 @@ void LayoutRematerialization::backwardRematerialization(
 // of the convert.
 void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     ConvertLayoutOp convertOp) {
-<<<<<<< HEAD
-<<<<<<< HEAD
   // we don't handle conversions to DotOperandEncodingAttr
   // this is a heuristics to accommodate fused attention
   RankedTensorType targetType = convertOp.getType();
-<<<<<<< HEAD
-  if (isa<DotOperandEncodingAttr>(targetType.getEncoding()))
-=======
-  if (mlir::isa<DotOperandEncodingAttr, LinearEncodingAttr>(
-          targetType.getEncoding()))
-=======
-=======
-  // We stop the rematerialization of linear layouts as we have to be a bit more
-  // careful with the heuristics for both correctness and perf
-  RankedTensorType targetType = convertOp.getType();
-  if (mlir::isa<LinearEncodingAttr>(targetType.getEncoding()))
-    return;
->>>>>>> 3a72d5eaa (Address second iteration of review)
   // Skip conversions to DotOperandEncodingAttr when the operand index is 0.
   // This heuristic is applied to prevent moving the blocked->dot conversion of
   // the Q tensor (a loop invariant in Flash Attention) outside the loop. Doing
@@ -1100,11 +1085,6 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   // it reduces the total number of conversions.
   auto dotEnc = dyn_cast<DotOperandEncodingAttr>(targetType.getEncoding());
   if (dotEnc && dotEnc.getOpIdx() == 0)
-<<<<<<< HEAD
->>>>>>> adb106c4 (Introduce workaround for getSizePerThreadForOperands and add some doc)
->>>>>>> 4579abe12 (Introduce workaround for getSizePerThreadForOperands and add some doc)
-=======
->>>>>>> 3a72d5eaa (Address second iteration of review)
     return;
 
   auto isExtOrBroadcastOp = [](Operation *op) {
