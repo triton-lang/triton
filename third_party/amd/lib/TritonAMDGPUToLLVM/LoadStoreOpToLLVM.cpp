@@ -233,7 +233,9 @@ struct LoadStoreConversionBase {
     auto scopeStr = "";
     switch (scope) {
     case MemSyncScope::SYSTEM:
-      scopeStr = "system";
+      // The default AMDHSA LLVM Sync Scope is "system", so no string is
+      // provided here
+      scopeStr = "";
       break;
     case MemSyncScope::GPU:
       scopeStr = "agent";
