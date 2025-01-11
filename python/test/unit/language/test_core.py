@@ -6093,7 +6093,7 @@ def test_override_arch(arch, env_var_override, device):
         h = simple[(1, )](data, out, arch=arch)
     torch.testing.assert_close(data * 1.5 + 1.0, out)
     ttgir_cc = re.search(r'cuda:(\d+)', h.asm["ttgir"])
-    assert int(ttgir_cc.group(1)) == arch
+    assert ttgir_cc.group(1) == arch[2:]
 
 
 # -----------------------

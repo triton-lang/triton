@@ -148,7 +148,7 @@ class CUDABackend(BaseBackend):
 
     def _parse_arch(self, arch):
         pattern = r"^sm(\d+)$"
-        match = re.fullmatch(pattern, s)
+        match = re.fullmatch(pattern, arch)
         if not match:
             raise ValueError(f"TRITON_OVERRIDE_ARCH must have the form {pattern}")
         return int(match.group(1))
@@ -184,7 +184,7 @@ class CUDABackend(BaseBackend):
 
         if args.get("arch", None) is not None:
             self.sw_capability = self._parse_arch(args["arch"])
-        args["max_num_imprecise_acc_default"] = 2**30 if self.capability == 90 else 0
+        args["max_num_imprecise_acc_default"] = 2**30 if self.sw_capability == 90 else 0
         return CUDAOptions(**args)
 
     def pack_metadata(self, metadata):
