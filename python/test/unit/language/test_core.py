@@ -217,10 +217,7 @@ class SharedLayout:
 
 
 def is_layout_applicable(layout) -> bool:
-    common_layouts = [BlockedLayout, SharedLayout]
-    if layout in common_layouts:
-        return True
-    elif isinstance(layout, BlockedLayout) or isinstance(layout, SharedLayout):
+    if isinstance(layout, (BlockedLayout, SharedLayout)):
         return True
     elif isinstance(layout, SliceLayout):
         return is_layout_applicable(layout.parent)
