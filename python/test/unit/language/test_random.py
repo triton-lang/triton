@@ -203,7 +203,7 @@ def test_seed_is_int(device):
 
     x = torch.empty(1, dtype=torch.float32, device=device)
     with pytest.raises(triton.compiler.errors.CompilationError):
-        seed0 = torch.zeros(1, dtype=torch.int32, device="cuda")
+        seed0 = torch.zeros(1, dtype=torch.int32, device=device)
         kernel[(1, )](x, seed0)
     with pytest.raises(triton.compiler.errors.CompilationError):
         seed1 = 2.3

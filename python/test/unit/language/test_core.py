@@ -217,8 +217,7 @@ class SharedLayout:
 
 
 def is_layout_applicable(layout) -> bool:
-    common_layouts = [BlockedLayout, SharedLayout]
-    if layout in common_layouts:
+    if isinstance(layout, (BlockedLayout, SharedLayout)):
         return True
     elif isinstance(layout, SliceLayout):
         return is_layout_applicable(layout.parent)
@@ -1447,6 +1446,7 @@ def test_noinline(mode, device):
                                    for mode in ['all_neg', 'all_pos', 'min_neg', 'max_pos']
                                    for sem in [None, 'acquire', 'release', 'acq_rel', 'relaxed']]))
 def test_atomic_rmw(op, dtype_x_str, mode, sem, device):
+    check_type_supported(dtype_x_str, device)
     if is_interpreter():
         if dtype_x_str == 'float16':
             pytest.skip("Only test atomic float16 ops on GPU")
@@ -1523,6 +1523,7 @@ def test_atomic_rmw_predicate(num_ctas, device):
                           for num_ctas in num_ctas_list
                           for dtype_x_str in ['float16', 'float32', 'uint64', 'int64', 'float64']])
 def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, device):
+    check_type_supported(dtype_x_str, device)
     shape0, shape1 = shape
     # triton kernel
 
@@ -2874,7 +2875,7 @@ layouts = [
 
 
 @pytest.mark.parametrize("M", [32, 64, 128, 256])
-@pytest.mark.parametrize("src_layout", layouts)
+@pytest.mark.parametrize("src_layout", filter_layouts(layouts))
 def test_store_op(M, src_layout, device, tmp_path: pathlib.Path):
 
     ir = f"""
@@ -3807,7 +3808,7 @@ def test_dot3d(B, num_warps, M, N, K, BLOCK_M, BLOCK_N, in_dtype_str, out_dtype_
 
     if B == 8 and M == 64 and in_dtype_str == "float32" and out_dtype_str == "float32":
         if not is_interpreter() and triton.runtime.driver.active.utils.get_device_properties(
-                torch.cuda.current_device())["max_shared_mem"] < 131072:
+                triton.runtime.driver.active.get_current_device())["max_shared_mem"] < 131072:
             pytest.skip(
                 "Skipping tests with B = 8, M = 64, in_type = float32, out_type = float32 due to insufficient shared memory (less than 128 KB per SM) on this GPU."
             )
@@ -6550,7 +6551,7 @@ def gather_test_kernel(src_ptr, idx_ptr, out_ptr, axis: tl.constexpr, src_dim0: 
     ([128, 64], [256, 64], 0),
     ([128, 64], [128, 128], 1),
 ])
-def test_gather(src_shape, indices_shape, axis):
+def test_gather(src_shape, indices_shape, axis, device):
 
     def triton_gather(src: torch.Tensor, axis: int, indices: torch.Tensor):
         output = torch.empty(indices.shape, dtype=src.dtype, device=src.device)
@@ -6562,8 +6563,8 @@ def test_gather(src_shape, indices_shape, axis):
 
         return output
 
-    src = torch.randn(src_shape, device='cuda')
-    indices = torch.randint(0, src.shape[axis], indices_shape, device='cuda')
+    src = torch.randn(src_shape, device=device)
+    indices = torch.randint(0, src.shape[axis], indices_shape, device=device)
     ref = torch.gather(src, axis, indices)
     result = triton_gather(src, axis, indices)
     torch.testing.assert_close(result, ref, rtol=0, atol=0)
@@ -6580,7 +6581,8 @@ def test_gather(src_shape, indices_shape, axis):
      "linear<{register = [[0, 2], [32, 0], [0, 32], [2, 0], [0, 16], [64, 0], [128, 0]], lane = [[0, 8], [8, 0], [1, 0], [4, 0], [16, 0]], warp = [[0, 1], [0, 4]], block = []}>"
      ),
 ])
-def test_gather_warp_shuffle(src_shape, indices_shape, axis, src_layout, indices_layout, tmp_path: pathlib.Path):
+def test_gather_warp_shuffle(src_shape, indices_shape, axis, src_layout, indices_layout, tmp_path: pathlib.Path,
+                             device):
     if is_hip():
         pytest.skip("warp-local gather has issues on HIP")
 
@@ -6623,8 +6625,8 @@ def test_gather_warp_shuffle(src_shape, indices_shape, axis, src_layout, indices
     \1 = ttg.convert_layout %out : tensor<""" + output_spec + r""", #idx_layout> -> tensor<""" + output_spec + r""", \6>"""
         return re.sub(pat, repl, ir)
 
-    src = torch.randn(src_shape, device='cuda')
-    indices = torch.randint(0, src.shape[axis], indices_shape, device='cuda')
+    src = torch.randn(src_shape, device=device)
+    indices = torch.randint(0, src.shape[axis], indices_shape, device=device)
     ref = torch.gather(src, axis, indices)
 
     output, compiled = prepare_kernel(src, axis, indices)
