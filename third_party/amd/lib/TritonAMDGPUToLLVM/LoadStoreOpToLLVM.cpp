@@ -624,7 +624,6 @@ struct AtomicCASOpConversion
 
     auto memOrdering = op.getSem();
     auto atomicMemOrdering = getMemoryOrdering(memOrdering);
-    // See: https://llvm.org/docs/AMDGPUUsage.html#memory-scopes
     auto scope = op.getScope();
     auto scopeStr = getAMDGPUMemScopeStr(scope);
     if (!scopeStr)
