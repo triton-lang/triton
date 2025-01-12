@@ -18,7 +18,7 @@ repos:
       - id: debug-statements
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.7.1
+    rev: v0.9.1
     hooks:
       - id: ruff
         files: '(^python|^third_party/proton|^third_party/amd)/.*'
@@ -31,14 +31,14 @@ repos:
           )
 
   - repo: https://github.com/google/yapf
-    rev: "7e21823"
+    rev: "v0.43.0"
     hooks:
       - id: yapf
         args: ["-p", "-i"]
         exclude: "python/test/unit/language/test_line_info.py"
 
   - repo: https://github.com/pre-commit/mirrors-clang-format
-    rev: v19.1.2
+    rev: v19.1.6
     hooks:
       - id: clang-format
 
