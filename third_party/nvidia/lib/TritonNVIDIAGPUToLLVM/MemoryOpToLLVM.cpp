@@ -250,8 +250,8 @@ LogicalResult lowerDistributedToSharedStmatrix(
 
   auto *ctx = rewriter.getContext();
 
-  auto layout = chooseStMatrixLayout(rewriter.getContext(), srcTy, shape, shape,
-                                     order, swizzleByteSize);
+  auto layout =
+      chooseStMatrixLayout(rewriter.getContext(), srcTy, swizzleByteSize);
   auto llvmElemTy = typeConverter->convertType(memDescType.getElementType());
   auto smemPtrTy = ptr_ty(ctx, 3);
 
@@ -370,7 +370,8 @@ void mlir::triton::NVIDIA::populateMemoryOpToLLVMPatterns(
                                        benefit.getBenefit() + 1);
   patterns.add<LocalStoreOpConversion>(typeConverter, targetInfo,
                                        benefit.getBenefit() + 1);
-  patterns.add<LocalLoadOpConversion>(typeConverter, benefit.getBenefit() + 1);
+  patterns.add<LocalLoadOpConversion>(typeConverter, targetInfo,
+                                      benefit.getBenefit() + 1);
   mlir::triton::populateMemoryOpToLLVMPatterns(typeConverter, targetInfo,
                                                patterns, benefit);
 }
