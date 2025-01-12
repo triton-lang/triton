@@ -28,6 +28,11 @@ void RecordOp::getEffects(
                        SideEffects::DefaultResource::get());
 }
 
+void InitLocalBufferOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {}
+
+
 } // namespace proton
 } // namespace triton
 } // namespace mlir
