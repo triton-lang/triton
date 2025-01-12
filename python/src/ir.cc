@@ -1513,10 +1513,12 @@ void init_triton_ir(py::module &&m) {
               std::optional<mlir::Value> &lhs_scale,
               ScaleDotElemType lhs_format, mlir::Value &rhs,
               std::optional<mlir::Value> &rhs_scale,
-              ScaleDotElemType rhs_format, mlir::Value &c) -> mlir::Value {
-             return self.create<DotScaledOp>(
-                 c.getType(), lhs, rhs, c, lhs_scale.value_or(Value()),
-                 rhs_scale.value_or(Value()), lhs_format, rhs_format);
+              ScaleDotElemType rhs_format, bool fast_math,
+              mlir::Value &c) -> mlir::Value {
+             return self.create<DotScaledOp>(c.getType(), lhs, rhs, c,
+                                             lhs_scale.value_or(Value()),
+                                             rhs_scale.value_or(Value()),
+                                             lhs_format, rhs_format, fast_math);
            })
       .def("create_floor",
            [](TritonOpBuilder &self, Value &val) -> Value {

@@ -1562,7 +1562,8 @@ def _bitcast_to_fp_type(val: tl.tensor, float_format: str, builder: ir.builder):
 
 
 def dot_scaled(lhs: tl.tensor, lhs_scale: tl.tensor, lhs_format: str, rhs: tl.tensor, rhs_scale: Optional[tl.tensor],
-               rhs_format: str, acc: tl.tensor | None, out_dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
+               rhs_format: str, fast_math: bool, acc: tl.tensor | None, out_dtype: tl.dtype,
+               builder: ir.builder) -> tl.tensor:
     assert lhs.type.is_block() and rhs.type.is_block()
     #TODO: validate types.
     lhs_rank = len(lhs.shape)
@@ -1601,7 +1602,7 @@ def dot_scaled(lhs: tl.tensor, lhs_scale: tl.tensor, lhs_format: str, rhs: tl.te
     lhs_scale_handle = None if lhs_scale_is_none else lhs_scale.handle
     return tl.tensor(
         builder.create_dot_scaled(lhs.handle, lhs_scale_handle, lhs_format_enum, rhs.handle, rhs_scale_handle,
-                                  rhs_format_enum, acc_handle), ret_ty)
+                                  rhs_format_enum, fast_math, acc_handle), ret_ty)
 
 
 # ===----------------------------------------------------------------------===//

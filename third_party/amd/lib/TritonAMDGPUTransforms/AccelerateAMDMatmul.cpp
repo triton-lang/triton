@@ -613,7 +613,7 @@ public:
         ctx, {1, 1}, threadsPerWarp, blockWarpsPerCTA, {1, 0}, ctaLayout);
 
     auto upcastMXFP = [&](TensorValue v, TensorValue scale,
-                          ScaleDotElemType elemType) -> Value {
+                          ScaleDotElemType elemType, bool fastMath) -> Value {
       if (!scale)
         return v;
 
@@ -629,11 +629,13 @@ public:
       auto outputType =
           ttg::UpcastMXFPOp::deduceOutputType(v, elemType, outputElemType);
       return rewriter.create<ttg::UpcastMXFPOp>(dotOp.getLoc(), outputType, v,
-                                                convOp, elemType);
+                                                convOp, elemType, fastMath);
     };
 
-    Value scaledA = upcastMXFP(a, aScale, dotOp.getLhsType());
-    Value scaledB = upcastMXFP(b, bScale, dotOp.getRhsType());
+    Value scaledA =
+        upcastMXFP(a, aScale, dotOp.getLhsType(), dotOp.getFastMath());
+    Value scaledB =
+        upcastMXFP(b, bScale, dotOp.getRhsType(), dotOp.getFastMath());
     auto newDot = rewriter.create<DotOp>(dotOp.getLoc(), newRetType, scaledA,
                                          scaledB, newAcc);
     rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(dotOp, oldRetType,
