@@ -1548,7 +1548,7 @@ def _bitcast_to_fp_type(val: tl.tensor, float_format: str, builder: ir.builder):
     If float_format is subbyte, make sure it's packed as uint8 and return it.
     Otherwise, return a tensor (perhaps bitcasting) of the specified float format.
     """
-    triton_ty = {"e5m2": tl.float8e5, "e4m3": tl.float8e4nv, "bf16": tl.bfloat16}.get(float_format)
+    triton_ty = {"e5m2": tl.float8e5, "e4m3": tl.float8e4nv, "bf16": tl.bfloat16, "fp16": tl.float16}.get(float_format)
     if triton_ty is None:
         assert float_format == "e2m1", f"Internal Error: Unexpected float format: {float_format}"
         assert val.dtype == tl.uint8, f"e2m1 format must be packed as uint8. Got {val.dtype}"
@@ -1556,13 +1556,14 @@ def _bitcast_to_fp_type(val: tl.tensor, float_format: str, builder: ir.builder):
     if val.dtype == triton_ty:
         return val
     else:
-        unsigned_ty = {"e5m2": tl.uint8, "e4m3": tl.uint8, "bf16": tl.uint16}[float_format]
+        unsigned_ty = {"e5m2": tl.uint8, "e4m3": tl.uint8, "bf16": tl.uint16, "fp16": tl.uint16}[float_format]
         assert val.dtype == unsigned_ty, f"Unexpected dtype for {float_format}. Got {val.dtype}"
         return bitcast(val, triton_ty, builder)
 
 
 def dot_scaled(lhs: tl.tensor, lhs_scale: tl.tensor, lhs_format: str, rhs: tl.tensor, rhs_scale: Optional[tl.tensor],
-               rhs_format: str, acc: tl.tensor | None, out_dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
+               rhs_format: str, fast_math: bool, acc: tl.tensor | None, out_dtype: tl.dtype,
+               builder: ir.builder) -> tl.tensor:
     assert lhs.type.is_block() and rhs.type.is_block()
     #TODO: validate types.
     lhs_rank = len(lhs.shape)
@@ -1572,7 +1573,7 @@ def dot_scaled(lhs: tl.tensor, lhs_scale: tl.tensor, lhs_format: str, rhs: tl.te
     rhs_format: str = rhs_format.value
     lhs_format_enum = _str_to_fp_type(lhs_format)
     rhs_format_enum = _str_to_fp_type(rhs_format)
-    allowed_formats = {"e2m1", "e4m3", "e5m2", "bf16"}
+    allowed_formats = {"e2m1", "e4m3", "e5m2", "bf16", "fp16"}
     assert lhs_format in allowed_formats, f"NYI: lhs_format {lhs_format}"
     assert rhs_format in allowed_formats, f"NYI: rhs_format {rhs_format}"
     rhs_scale_is_none = isinstance(rhs_scale, tl.constexpr) and rhs_scale.value is None
@@ -1601,7 +1602,7 @@ def dot_scaled(lhs: tl.tensor, lhs_scale: tl.tensor, lhs_format: str, rhs: tl.te
     lhs_scale_handle = None if lhs_scale_is_none else lhs_scale.handle
     return tl.tensor(
         builder.create_dot_scaled(lhs.handle, lhs_scale_handle, lhs_format_enum, rhs.handle, rhs_scale_handle,
-                                  rhs_format_enum, acc_handle), ret_ty)
+                                  rhs_format_enum, fast_math, acc_handle), ret_ty)
 
 
 # ===----------------------------------------------------------------------===//

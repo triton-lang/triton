@@ -122,7 +122,7 @@ class CUDAOptions:
     debug: bool = False
     backend_name: str = 'cuda'
     sanitize_overflow: bool = True
-    override_nv_compute_capability: int = None
+    arch: str = None
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -146,34 +146,45 @@ class CUDABackend(BaseBackend):
     def supports_target(target: GPUTarget):
         return target.backend == 'cuda'
 
+    def _parse_arch(self, arch):
+        pattern = r"^sm(\d+)$"
+        match = re.fullmatch(pattern, arch)
+        if not match:
+            raise ValueError(f"TRITON_OVERRIDE_ARCH must have the form {pattern}")
+        return int(match.group(1))
+
     def __init__(self, target: GPUTarget) -> None:
         super().__init__(target)
         # Capability can be overrided to limit feature set to a specific version
-        cap_override = os.getenv("TRITON_OVERRIDE_NV_CAPABILITY")
-        self.capability = int(cap_override) if cap_override is not None else target.arch
+        self.hw_capability = target.arch
+        self.sw_capability = self.hw_capability
+        arch = os.getenv("TRITON_OVERRIDE_ARCH")
+        if arch is not None:
+            self.sw_capability = self._parse_arch(arch)
         # HW Capability is used to determine the binary format
         self.hw_capability = target.arch
-        assert isinstance(self.capability, int)
+        assert isinstance(self.hw_capability, int)
+        assert isinstance(self.sw_capability, int)
         self.binary_ext = "cubin"
 
     def parse_options(self, opts) -> Any:
         args = {k: opts[k] for k in CUDAOptions.__dataclass_fields__.keys() if k in opts}
         if "supported_fp8_dtypes" not in args:
             supported_fp8_dtypes = set(CUDAOptions.supported_fp8_dtypes)
-            if self.capability >= 89:
+            if self.sw_capability >= 89:
                 supported_fp8_dtypes.add("fp8e4nv")
             args["supported_fp8_dtypes"] = tuple(sorted(supported_fp8_dtypes))
 
         if "deprecated_fp8_dtypes" not in args:
-            if self.capability >= 90:
+            if self.sw_capability >= 90:
                 args["deprecated_fp8_dtypes"] = ("fp8e4b15", )
 
         if "enable_fp_fusion" not in args:
             args["enable_fp_fusion"] = os.getenv("TRITON_DEFAULT_FP_FUSION", "1") == "1"
 
-        if "override_nv_compute_capability" in args and args["override_nv_compute_capability"] is not None:
-            self.capability = args["override_nv_compute_capability"]
-        args["max_num_imprecise_acc_default"] = 2**30 if self.capability == 90 else 0
+        if args.get("arch", None) is not None:
+            self.sw_capability = self._parse_arch(args["arch"])
+        args["max_num_imprecise_acc_default"] = 2**30 if self.sw_capability == 90 else 0
         return CUDAOptions(**args)
 
     def pack_metadata(self, metadata):
@@ -190,7 +201,7 @@ class CUDABackend(BaseBackend):
         import triton.language.extra.cuda as cuda
         codegen_fns = {
             "convert_custom_types":
-            cuda.convert_custom_float8_sm80 if self.capability >= 80 else cuda.convert_custom_float8_sm70,
+            cuda.convert_custom_float8_sm80 if self.sw_capability >= 80 else cuda.convert_custom_float8_sm70,
             "min_dot_size": min_dot_size(self.target)
         }
         return codegen_fns
@@ -401,12 +412,12 @@ class CUDABackend(BaseBackend):
 
     def add_stages(self, stages, options):
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
-        stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, self.capability)
-        stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options, self.capability)
+        stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, self.sw_capability)
+        stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options, self.sw_capability)
         stages["ptx"] = lambda src, metadata: self.make_ptx(src, metadata, options, self.hw_capability)
         stages["cubin"] = lambda src, metadata: self.make_cubin(src, metadata, options, self.hw_capability)
 
     @functools.lru_cache()
     def hash(self):
         version = get_ptxas_version()
-        return f'{version}-{self.capability}'
+        return f'{version}-{self.sw_capability}-{self.hw_capability}'
