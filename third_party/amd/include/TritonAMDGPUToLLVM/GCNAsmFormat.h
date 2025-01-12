@@ -232,9 +232,8 @@ struct GCNBuilder {
 
   std::string dump() const;
 
-  mlir::Value launch(ConversionPatternRewriter &rewriter, Location loc,
-                     Type resTy, bool hasSideEffect = true,
-                     bool isAlignStack = false,
+  mlir::Value launch(RewriterBase &rewriter, Location loc, Type resTy,
+                     bool hasSideEffect = true, bool isAlignStack = false,
                      ArrayRef<Attribute> attrs = {}) const;
 
 private:

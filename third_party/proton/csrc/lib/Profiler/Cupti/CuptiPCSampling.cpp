@@ -376,12 +376,12 @@ void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
         for (auto *data : dataSet) {
           auto scopeId = externId;
           if (isAPI)
-            scopeId = data->addScope(externId, lineInfo.functionName);
+            scopeId = data->addOp(externId, lineInfo.functionName);
           if (lineInfo.fileName.size())
-            scopeId = data->addScope(
-                scopeId, lineInfo.dirName + "/" + lineInfo.fileName + ":" +
-                             lineInfo.functionName + "@" +
-                             std::to_string(lineInfo.lineNumber));
+            scopeId = data->addOp(scopeId,
+                                  lineInfo.dirName + "/" + lineInfo.fileName +
+                                      ":" + lineInfo.functionName + "@" +
+                                      std::to_string(lineInfo.lineNumber));
           auto metricKind = static_cast<PCSamplingMetric::PCSamplingMetricKind>(
               configureData->stallReasonIndexToMetricIndex
                   [stallReason->pcSamplingStallReasonIndex]);

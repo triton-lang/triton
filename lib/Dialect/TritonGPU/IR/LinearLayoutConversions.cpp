@@ -875,22 +875,39 @@ SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 }
 
 std::optional<LinearLayout>
-toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
-               std::optional<int32_t> elemBitWidth /*= std::nullopt*/) {
-  // Layouts are distributed or shared
+TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
+                                 std::optional<int32_t> elemBitWidth) {
+  CacheKey key{std::vector<int64_t>(shape.begin(), shape.end()), layout,
+               elemBitWidth};
+  auto result = llCache.get(key);
+  if (result.has_value()) {
+    return result;
+  }
+
+  // Layouts are distributed or shared in triton core
   if (auto distributed = dyn_cast<DistributedEncodingTrait>(layout)) {
-    return distributed.toLinearLayout(shape);
+    result = distributed.toLinearLayout(shape);
   } else if (auto shared = dyn_cast<SharedEncodingAttr>(layout)) {
     if (shared.getHasLeadingOffset()) {
       assert(elemBitWidth.has_value());
-      return sharedToLinearLayoutLeadingOffset(shape, shared, *elemBitWidth);
+      result = sharedToLinearLayoutLeadingOffset(shape, shared, *elemBitWidth);
     } else {
-      return sharedToLinearLayoutNoLeadingOffset(shape, shared);
+      result = sharedToLinearLayoutNoLeadingOffset(shape, shared);
     }
   }
 
-  // Third party layouts
-  return std::nullopt;
+  if (result.has_value()) {
+    llCache.set(std::move(key), *result);
+  }
+  return result;
+}
+
+std::optional<LinearLayout>
+toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
+               std::optional<int32_t> elemBitWidth /*= std::nullopt*/) {
+  auto *ctx = layout.getContext();
+  return ctx->getLoadedDialect<TritonGPUDialect>()->toLinearLayout(
+      shape, layout, elemBitWidth);
 }
 
 LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {
