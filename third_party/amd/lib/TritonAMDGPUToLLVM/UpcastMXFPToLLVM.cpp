@@ -53,12 +53,14 @@ SmallVector<Value> convertMxfp4x2ToFp16x2(RewriterBase &rewriter, Location loc,
   return results;
 }
 
-Value mxfpScaleFp16(RewriterBase &rewriter, Location loc, Value v,
-                    Value scale) {
+Value mxfpScaleFp16(RewriterBase &rewriter, Location loc, Value v, Value scale,
+                    bool fastMath) {
   Value scaleF32 = bitcast(shl(zext(i32_ty, scale), i32_val(23)), f32_ty);
   Value scaleF16 =
       LLVM::AMD::cvtFp32ToFp16(loc, rewriter, scaleF32, RoundingMode::RTNE);
   Value mulF16 = fmul(v, scaleF16);
+  if (fastMath)
+    return mulF16;
   // Account for NaN in the scale as per the mxfp specification.
   Value scaleIsNan = icmp_eq(scale, i8_val(0xff));
   Value nanF16 = bitcast(i16_val(0x7c01), f16_ty);
@@ -72,16 +74,19 @@ Value mxfpScaleFp16(RewriterBase &rewriter, Location loc, Value v,
 // handles v * scale multiplication using fp32 VALU ops. LLVM backend can do it
 // for us, just with unnecessary overheads.
 Value mxfpScaleBf16ViaF32(RewriterBase &rewriter, Location loc, Value v,
-                          Value scale) {
+                          Value scale, bool fastMath) {
   Value c16 = i32_val(16);
   Value vF32 = bitcast(shl(zext(i32_ty, bitcast(v, i16_ty)), c16), f32_ty);
   Value scaleF32 = bitcast(shl(zext(i32_ty, scale), i32_val(23)), f32_ty);
   Value mulF32 = fmul(vF32, scaleF32);
   Value mulI16 = trunc(i16_ty, lshr(bitcast(mulF32, i32_ty), c16));
+  Value mulBf16 = bitcast(mulI16, bf16_ty);
+  if (fastMath)
+    return mulBf16;
   // Account for NaN in the scale as per the mxfp specification.
   Value scaleIsNan = icmp_eq(scale, i8_val(0xff));
   Value nanBf16 = bitcast(i16_val(0x7fff), bf16_ty);
-  return select(scaleIsNan, nanBf16, bitcast(mulI16, bf16_ty));
+  return select(scaleIsNan, nanBf16, mulBf16);
 };
 
 class UpcastMXFPOpPattern : public ConvertOpToLLVMPattern<UpcastMXFPOp> {
@@ -166,9 +171,10 @@ public:
         for (int j = 0; j < 32; ++j) {
           int index = 32 * i + j;
           xVals[index] =
-              useFp16 ? mxfpScaleFp16(rewriter, loc, xVals[index], si[j / 16])
+              useFp16 ? mxfpScaleFp16(rewriter, loc, xVals[index], si[j / 16],
+                                      op.getFastMath())
                       : mxfpScaleBf16ViaF32(rewriter, loc, xVals[index],
-                                            si[j / 16]);
+                                            si[j / 16], op.getFastMath());
         }
       }
     } else {
@@ -190,10 +196,11 @@ public:
 
         for (int j = 0; j < 32; ++j) {
           int index = 32 * i + j;
-          xVals[index] =
-              useFp16
-                  ? mxfpScaleFp16(rewriter, loc, xVals[index], si[j / 16])
-                  : mxfpScaleBf16ViaF32(rewriter, loc, xVals[index], si[j / 8]);
+          xVals[index] = useFp16
+                             ? mxfpScaleFp16(rewriter, loc, xVals[index],
+                                             si[j / 16], op.getFastMath())
+                             : mxfpScaleBf16ViaF32(rewriter, loc, xVals[index],
+                                                   si[j / 8], op.getFastMath());
         }
       }
     }
