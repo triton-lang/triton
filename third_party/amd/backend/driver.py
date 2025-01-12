@@ -509,9 +509,15 @@ class HIPDriver(GPUDriver):
     def get_current_target(self):
         device = self.get_current_device()
         device_properties = self.utils.get_device_properties(device)
-        arch = device_properties['arch']
         warp_size = device_properties['warpSize']
-        return GPUTarget("hip", arch.split(':')[0], warp_size)
+        arch = device_properties['arch'].split(':', 1)
+        arch_name = arch[0]
+        # reformat features
+        arch_features = []
+        for feat in arch[1].split(':'):
+            modifier = feat[-1:]
+            arch_features.append(modifier + feat[:-1])
+        return GPUTarget("hip", arch_name, warp_size, ','.join(arch_features))
 
     def get_active_torch_device(self):
         import torch

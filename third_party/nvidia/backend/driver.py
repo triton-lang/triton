@@ -535,7 +535,7 @@ class CudaDriver(GPUDriver):
         capability = self.get_device_capability(device)
         capability = capability[0] * 10 + capability[1]
         warp_size = 32
-        return GPUTarget("cuda", capability, warp_size)
+        return GPUTarget("cuda", capability, warp_size, "")
 
     def get_active_torch_device(self):
         import torch

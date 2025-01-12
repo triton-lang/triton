@@ -47,6 +47,7 @@ class HIPOptions:
     debug: bool = False
     sanitize_overflow: bool = True
     arch: str = None
+    features: str = None
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", )
     deprecated_fp8_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "ieee"
@@ -110,7 +111,10 @@ class HIPBackend(BaseBackend):
         self.binary_ext = "hsaco"
 
     def parse_options(self, opts) -> Any:
-        args = {'arch': self.target.arch}
+        target_features = self.target.features.split(',')
+        if os.environ.get("TRITON_ENABLE_ASAN", "0") == "1":
+            target_features.append('+xnack')
+        args = {'arch': self.target.arch, 'features': ','.join(target_features)}
 
         if "supported_fp8_dtypes" not in opts:
             supported_fp8_dtypes = set(HIPOptions.supported_fp8_dtypes)
@@ -301,10 +305,7 @@ class HIPBackend(BaseBackend):
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
         amd.attach_target_triple(llvm_mod)
-        target_features = ''
-        if os.environ.get("TRITON_ENABLE_ASAN", "0") == "1":
-            target_features = '+xnack'
-        llvm.attach_datalayout(llvm_mod, amd.TARGET_TRIPLE, options.arch, target_features)
+        llvm.attach_datalayout(llvm_mod, amd.TARGET_TRIPLE, options.arch, options.features)
 
         # Set various control constants on the LLVM module so that device
         # libraries can resolve references to them.
@@ -330,8 +331,8 @@ class HIPBackend(BaseBackend):
         fns[0].add_fn_attr("amdgpu-waves-per-eu", f"{options.waves_per_eu}")
         denormal_mode = "preserve-sign" if options.allow_flush_denorm else "ieee"
         fns[0].add_fn_attr("denormal-fp-math-f32", denormal_mode)
+        fns[0].add_fn_target_feature(options.features)
         if os.environ.get("TRITON_ENABLE_ASAN", "0") == "1":
-            fns[0].add_fn_target_feature("+xnack")
             fns[0].add_fn_asan_attr()
 
         # Hint the compiler that we'd like the firmware to set the kernel arguments
@@ -351,7 +352,7 @@ class HIPBackend(BaseBackend):
             paths = [path for (name, path) in options.extern_libs if amd.need_extern_lib(llvm_mod, name)]
             llvm.link_extern_libs(llvm_mod, paths)
 
-        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', [], options.enable_fp_fusion)
+        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, options.features, [], options.enable_fp_fusion)
 
         # Get some metadata
         metadata["shared"] = src.get_int_attr("ttg.shared")
@@ -371,7 +372,8 @@ class HIPBackend(BaseBackend):
         assert len(names) == 1
         metadata["name"] = names[0]
         # llvm -> hsaco
-        amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, '', [], options.enable_fp_fusion, False)
+        amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, options.features, [],
+                                       options.enable_fp_fusion, False)
         if os.environ.get("AMDGCN_ENABLE_DUMP", "0") == "1":
             print("// -----// AMDGCN Dump //----- //")
             print(amdgcn)
@@ -379,10 +381,7 @@ class HIPBackend(BaseBackend):
 
     @staticmethod
     def make_hsaco(src, metadata, options):
-        target_features = ''
-        if os.environ.get("TRITON_ENABLE_ASAN", "0") == "1":
-            target_features = '+xnack'
-        hsaco = amd.assemble_amdgcn(src, options.arch, target_features)
+        hsaco = amd.assemble_amdgcn(src, options.arch, options.features)
 
         rocm_path = HIPBackend.path_to_rocm_lld()
         with tempfile.NamedTemporaryFile() as tmp_out:
