@@ -65,11 +65,10 @@ def TT_RecordOp : TT_Proton_Op<"record", [DeclareOpInterfaceMethods<MemoryEffect
 
 def TT_InitLocalBufferOp : TT_Proton_Op<"init_buffer", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
   let arguments = (
-    ins BoolAttr: $isStart,
-    ConfinedAttr<I32Attr, [IntNonNegative]>:$regionId
+    ins ConfinedAttr<I32Attr, [IntNonNegative]>:$bufferSize
   );
-  let results = (outs TT_PtrLike :$indexPtr);
-  let assemblyFormat = " `(` operands `)` attr-dict `:` type($indexPtr)";
+  let results = (outs TT_PtrLike :$basePtr);
+  let assemblyFormat = " `(` operands `)` attr-dict `:` type($basePtr)";
 
 }
 
