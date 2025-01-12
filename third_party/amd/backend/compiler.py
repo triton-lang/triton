@@ -133,7 +133,7 @@ class HIPBackend(BaseBackend):
             metadata.cluster_dims[2],
         )
 
-    def get_codegen_implementation(self):
+    def get_codegen_implementation(self, options):
         codegen_fns = {"min_dot_size": min_dot_size(self.target)}
         return codegen_fns
 
