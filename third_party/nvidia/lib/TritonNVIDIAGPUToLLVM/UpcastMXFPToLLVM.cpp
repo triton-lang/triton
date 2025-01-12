@@ -149,8 +149,8 @@ public:
             for (int k = 0; k < kWidth; ++k) {
               auto idx =
                   32 * i + 16 * mxfp + rep * 2 * kWidth + subTile * kWidth + k;
-              xVals[idx] =
-                  LLVM::mxfpScaleBf16(rewriter, loc, xVals[idx], si[subTile]);
+              xVals[idx] = LLVM::mxfpScaleBf16(rewriter, loc, xVals[idx],
+                                               si[subTile], op.getFastMath());
             }
           }
         }

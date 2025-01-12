@@ -690,7 +690,8 @@ def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
       Optional<RankedTensorOf<[I8]>>:$lhs_scale,
       Optional<RankedTensorOf<[I8]>>:$rhs_scale,
       TT_ScaleDotElemTypeAttr:$lhs_type,
-      TT_ScaleDotElemTypeAttr:$rhs_type
+      TT_ScaleDotElemTypeAttr:$rhs_type,
+      BoolAttr:$fastMath
     );
 
     let results = (outs TT_FloatTensor:$d);

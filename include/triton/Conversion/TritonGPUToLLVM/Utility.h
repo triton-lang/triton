@@ -480,7 +480,8 @@ SmallVector<Value> convertMxfp4x2ToBf16x2(RewriterBase &rewriter, Location loc,
                                           ArrayRef<Value> values);
 
 // Scale a mxfp4 value by a given scale.
-Value mxfpScaleBf16(RewriterBase &rewriter, Location loc, Value v, Value scale);
+Value mxfpScaleBf16(RewriterBase &rewriter, Location loc, Value v, Value scale,
+                    bool fastMath);
 
 } // namespace LLVM
 
