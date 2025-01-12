@@ -63,7 +63,7 @@ def TT_RecordOp : TT_Proton_Op<"record", [DeclareOpInterfaceMethods<MemoryEffect
 }
 
 
-def TT_InitLocalBufferOp : TT_Proton_Op<"init_buffer", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+def TT_InitLocalBufferOp : TT_Proton_Op<"init_local_buffer", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
   let arguments = (
     ins ConfinedAttr<I32Attr, [IntNonNegative]>:$bufferSize
   );

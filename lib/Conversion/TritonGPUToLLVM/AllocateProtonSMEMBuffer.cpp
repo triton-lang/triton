@@ -7,6 +7,8 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 
+#include "third_party/proton/dialect/include/Dialect/Proton/IR/Dialect.h"
+
 using namespace mlir;
 using namespace mlir::triton;
 
@@ -28,17 +30,28 @@ struct AllocateProtonSMEMBuffer
     MLIRContext *context = &getContext();
     auto loc = mod.getLoc();
 
+    bool hasProtonRecordOp = false;
+    FuncOp func = *mod.getOps<triton::FuncOp>().begin();
+    func.walk([&](mlir::triton::proton::RecordOp op) { 
+        llvm::errs() << op << "\n";
+	hasProtonRecordOp = true; 
+	});
+
+    //if hasProtonRecordOp
+    //b.create InitLocalBufferOp
+
+    //mlir::triton::proton::InitLocalBufferOp
     //bool hasProtonRecordOp = false;
     //func.walk([&](triton::ProtonRecordOp op) { hasProtonRecordOp = true; });
     //if (!hasProtonRecordOp) {
     //  return;
     //}
 
-    auto elemTy =  IntegerType::get(context, 32);
-    auto arrayTy = LLVM::LLVMArrayType::get(elemTy, 42);
-    auto global = b.create<LLVM::GlobalOp>(
-        loc, arrayTy, /*isConstant=*/false, LLVM::Linkage::External,
-        "proton_smem", /*value=*/Attribute(), /*alignment=*/16, /*addrSpace*/ 3);
+    //auto elemTy =  IntegerType::get(context, 32);
+    //auto arrayTy = LLVM::LLVMArrayType::get(elemTy, 42);
+    //auto global = b.create<LLVM::GlobalOp>(
+    //    loc, arrayTy, /*isConstant=*/false, LLVM::Linkage::External,
+    //    "proton_smem", /*value=*/Attribute(), /*alignment=*/16, /*addrSpace*/ 3);
     ModuleAllocation allocation(mod);
 
     llvm::errs() << mod  << "\n";
