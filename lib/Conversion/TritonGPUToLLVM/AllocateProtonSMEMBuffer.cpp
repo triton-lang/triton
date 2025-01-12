@@ -33,9 +33,18 @@ struct AllocateProtonSMEMBuffer
     bool hasProtonRecordOp = false;
     FuncOp func = *mod.getOps<triton::FuncOp>().begin();
     func.walk([&](mlir::triton::proton::RecordOp op) { 
-        llvm::errs() << op << "\n";
+        //llvm::errs() << op << "\n";
 	hasProtonRecordOp = true; 
 	});
+    if(hasProtonRecordOp){
+    	b.setInsertionPointToStart(&func.getBody().front());
+    	int bufferSize = 32; //bytes
+	//Value bufferSizeVal = LLVM::createConstantI32(loc, b, bufferSize);
+    	auto ptrTy = PointerType::get(IntegerType::get(context, 32), 1);
+	auto buffer = b.create<triton::proton::InitLocalBufferOp>(loc, ptrTy, bufferSize);
+
+    }
+
 
     //if hasProtonRecordOp
     //b.create InitLocalBufferOp
