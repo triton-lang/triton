@@ -2110,7 +2110,15 @@ tt.func @upcast_mxfp(%arg0: tensor<32x32xi8, #ttg.dot_op<{opIdx = 0, parent = #m
   // CHECK-COUNT-4: llvm.inline_asm
   // CHECK-COUNT-2: nvvm.shfl.sync
   // CHECK-COUNT-32: llvm.fmul
-  %0 = ttg.upcast_mxfp %arg0, %arg1 fp_type = e2m1 : tensor<32x32xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>, tensor<32x2xi8, #linear> -> tensor<32x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
+  // CHECK: llvm.icmp
+  // CHECK: llvm.select
+  %0 = ttg.upcast_mxfp %arg0, %arg1 fp_type = e2m1 {fastMath = false} : tensor<32x32xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>, tensor<32x2xi8, #linear> -> tensor<32x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
+  // CHECK-COUNT-4: llvm.inline_asm
+  // CHECK-COUNT-2: nvvm.shfl.sync
+  // CHECK-COUNT-32: llvm.fmul
+  // CHECK-NOT: llvm.icmp
+  // CHECK-NOT: llvm.select
+  %1 = ttg.upcast_mxfp %arg0, %arg1 fp_type = e2m1 {fastMath = true} : tensor<32x32xi8, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>, tensor<32x2xi8, #linear> -> tensor<32x64xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
   tt.return
 }
 
