@@ -344,23 +344,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: unsigned_ops
-  tt.func @unsigned_ops(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg1: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg2 : i32, %arg3 : i32, %arg4 : f32, %arg5 : index) {
+  tt.func @unsigned_ops(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg1: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg2 : i32, %arg3 : i32, %arg4 : f32) {
     %c5_i32 = arith.constant 5 : i32
     %0 = arith.ceildivui %arg2, %c5_i32 : i32
     %1 = arith.divui %arg3, %c5_i32 : i32
     %2 = arith.fptoui %arg4 : f32 to i32
-    %3 = arith.index_castui %arg5 : index to i32
     %4 = arith.maxui %arg2, %arg3 : i32
     %5 = arith.minui %arg2, %arg3 : i32
     %6 = arith.remui %arg2, %c5_i32 : i32
     %7 = arith.shrui %arg3, %c5_i32 : i32
     %8 = arith.addi %0, %1 : i32
-    %9 = arith.addi %2, %3 : i32
     %10 = arith.addi %4, %5 : i32
     %11 = arith.addi %6, %7 : i32
-    %12 = arith.addi %8, %9 : i32
+    %12 = arith.addi %8, %2 : i32
     %13 = arith.addi %10, %11 : i32
-    %14 = arith.addi %12, %13 : i32
+    %14 = arith.addi %8, %13 : i32
     %15 = tt.splat %14 : i32 -> tensor<8xi32, #blocked>
     %16 = tt.make_range {end = 8 : i32, start = 0 : i32} : tensor<8xi32, #blocked>
     %17 = arith.addi %15, %16 : tensor<8xi32, #blocked>

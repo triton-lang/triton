@@ -151,8 +151,8 @@ bool verifyNonNegativeExpr(Value expr, const DenseSet<Value> &assumptions) {
           .Case<triton::PtrToIntOp, triton::BitcastOp>(
               [&](auto) { return false; })
           .Case<arith::CeilDivUIOp, arith::DivUIOp, arith::ExtUIOp,
-                arith::FPToUIOp, arith::IndexCastUIOp, arith::MaxUIOp,
-                arith::MinUIOp, arith::RemUIOp, arith::ShRUIOp>(
+                arith::FPToUIOp, arith::MaxUIOp, arith::MinUIOp, arith::RemUIOp,
+                arith::ShRUIOp>(
               // These OPs also return unsigned values.
               // TODO: We can also sniff whether a Value is unsigned by looking
               //       for whether or not it's used as an argument to one of
