@@ -232,7 +232,7 @@ class CUDABackend(BaseBackend):
         # Set up Diagnostic
         if os.environ.get("MLIR_ENABLE_REMARK", "0") == "1":
             srcMgr = llvm.source_mgr()
-            diag = ir.source_mgr_diag(srcMgr, mod.context)
+            _ = ir.source_mgr_diag(srcMgr, mod.context)
             mod.context.printOpOnDiagnostic(True)
         # TTIR -> TTGIR
         pm = ir.pass_manager(mod.context)
@@ -286,7 +286,7 @@ class CUDABackend(BaseBackend):
         # Set up Diagnostic
         if os.environ.get("MLIR_ENABLE_REMARK", "0") == "1":
             srcMgr = llvm.source_mgr()
-            diag = ir.source_mgr_diag(srcMgr, mod.context)
+            _ = ir.source_mgr_diag(srcMgr, mod.context)
             mod.context.printOpOnDiagnostic(True)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
         passes.convert.add_scf_to_cf(pm)
@@ -306,7 +306,7 @@ class CUDABackend(BaseBackend):
         llvm.init_targets()
         context = llvm.context()
         if os.environ.get("TRITON_ENABLE_ASAN", "0") == "1":
-            raise ASANError(
+            raise RuntimeError(
                 "Address Sanitizer Error: Address sanitizer is currently only supporteedd on the AMD backend")
         llvm_mod = llvm.to_module(mod, context)
         proc = 'sm_90a' if capability == 90 else f'sm_{capability}'
