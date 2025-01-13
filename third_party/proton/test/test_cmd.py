@@ -24,10 +24,10 @@ def test_exec(mode, tmp_path: pathlib.Path):
         subprocess.check_call(["proton", "-n", name, helper_file, "test"], stdout=subprocess.DEVNULL)
     elif mode == "python":
         subprocess.check_call(["python3", "-m", "triton.profiler.proton", "-n", name, helper_file, "test"],
-                                    stdout=subprocess.DEVNULL)
+                              stdout=subprocess.DEVNULL)
     elif mode == "pytest":
         subprocess.check_call(["proton", "-n", name, "pytest", "-k", "test_main", helper_file],
-                               stdout=subprocess.DEVNULL)
+                              stdout=subprocess.DEVNULL)
     with temp_file.open() as f:
         data = json.load(f, )
     kernels = data[0]["children"]
