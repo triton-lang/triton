@@ -206,7 +206,6 @@ class HIPBackend(BaseBackend):
     def make_ttgir(mod, metadata, options):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        passes.ttgpuir.add_allocate_proton_smem_buffer(pm)
         passes.ttir.add_convert_to_ttgpuir(pm, f"hip:{options.arch}", options.num_warps, options.warp_size,
                                            options.num_ctas)
         pm.run(mod)
@@ -252,6 +251,8 @@ class HIPBackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
+
+        passes.ttgpuir.add_allocate_proton_smem_buffer(pm)
 
         pm.run(mod)
         return mod
