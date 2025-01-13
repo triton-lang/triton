@@ -238,12 +238,6 @@ class CUDABackend(BaseBackend):
             cluster_info.clusterDimX = opt.cluster_dims[0]
             cluster_info.clusterDimY = opt.cluster_dims[1]
             cluster_info.clusterDimZ = opt.cluster_dims[2]
-        # Set up Diagnostic
-        if os.environ.get("MLIR_ENABLE_REMARK", "0") == "1":
-            srcMgr = llvm.source_mgr()
-            _ = ir.source_mgr_diag(srcMgr, mod.context)
-            mod.context.printOpOnDiagnostic(True)
-        # TTIR -> TTGIR
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.ttir.add_convert_to_ttgpuir(pm, f"cuda:{capability}", opt.num_warps, 32, opt.num_ctas)
@@ -299,11 +293,7 @@ class CUDABackend(BaseBackend):
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        # Set up Diagnostic
-        if os.environ.get("MLIR_ENABLE_REMARK", "0") == "1":
-            srcMgr = llvm.source_mgr()
-            _ = ir.source_mgr_diag(srcMgr, mod.context)
-            mod.context.printOpOnDiagnostic(True)
+
         nvidia.passes.ttnvgpuir.add_lower_mma(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
         passes.convert.add_scf_to_cf(pm)
