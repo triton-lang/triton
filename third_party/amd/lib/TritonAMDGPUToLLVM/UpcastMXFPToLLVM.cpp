@@ -97,16 +97,18 @@ SmallVector<Value, 2> upcast4xMxfp4ToBf16(RewriterBase &rewriter,
       rewriter, loc, funcOp, {resB1LutHiNoS, resB1LutLoNoS, selectorEM});
   auto resB1S = LLVM::createLLVMCallOp(rewriter, loc, funcOp,
                                        {resB1LutHiS, resB1LutLoS, selectorS});
-  Value v3210ResB32 = or_(resB1NoS.getResult(), resB1S.getResult());
+  Value restB1 = or_(resB1NoS.getResult(), resB1S.getResult());
 
   // Extract resultant bf16 values #0 and #1.
+  // #0 would use selector 0x00/0x04 to pick from B0/B1.
+  // #1 would use selector 0x01/0x05 to pick from B0/B1.
   auto res10 = LLVM::createLLVMCallOp(
-      rewriter, loc, funcOp,
-      {v3210ResB32, resB0.getResult(), i32_val(0x05010400)});
+      rewriter, loc, funcOp, {restB1, resB0.getResult(), i32_val(0x05010400)});
   // Extract resultant bf16 values #2 and #3.
+  // #2 would use selector 0x02/0x06 to pick from B0/B1.
+  // #3 would use selector 0x03/0x07 to pick from B0/B1.
   auto res32 = LLVM::createLLVMCallOp(
-      rewriter, loc, funcOp,
-      {v3210ResB32, resB0.getResult(), i32_val(0x07030602)});
+      rewriter, loc, funcOp, {restB1, resB0.getResult(), i32_val(0x07030602)});
 
   return {res10.getResult(), res32.getResult()};
 }
