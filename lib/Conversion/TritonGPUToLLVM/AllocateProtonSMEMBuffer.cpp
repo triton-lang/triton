@@ -45,6 +45,7 @@ struct AllocateProtonSMEMBuffer
 
     }
 
+    ModuleAllocation allocation(mod);
 
     //if hasProtonRecordOp
     //b.create InitLocalBufferOp
@@ -61,7 +62,6 @@ struct AllocateProtonSMEMBuffer
     //auto global = b.create<LLVM::GlobalOp>(
     //    loc, arrayTy, /*isConstant=*/false, LLVM::Linkage::External,
     //    "proton_smem", /*value=*/Attribute(), /*alignment=*/16, /*addrSpace*/ 3);
-    ModuleAllocation allocation(mod);
 
     llvm::errs() << mod  << "\n";
     llvm::errs() <<  "Shared Memory: " << allocation.getSharedMemorySize() << "\n";
@@ -78,7 +78,7 @@ namespace triton {
 
 namespace gpu {
 
-std::unique_ptr<OperationPass<ModuleOp>> createAllocateProtonSMEMBufferPass(StringRef targetArch, int customLDSLimit) {
+std::unique_ptr<OperationPass<ModuleOp>> createAllocateProtonSMEMBufferPass() {
   return std::make_unique<AllocateProtonSMEMBuffer>();
 }
 

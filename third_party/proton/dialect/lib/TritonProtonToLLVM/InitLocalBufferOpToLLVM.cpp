@@ -24,6 +24,22 @@ struct InitLocalBufferOpConversion
   matchAndRewrite(mlir::triton::proton::InitLocalBufferOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
 
+  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+  auto ctx = moduleOp.getContext();
+  size_t contentSize = op.getBufferSize();
+  auto globalType = LLVM::LLVMArrayType::get(i8_ty, contentSize);
+
+  LLVM::GlobalOp global;
+  {
+    RewriterBase::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToStart(moduleOp.getBody());
+   global = rewriter.create<LLVM::GlobalOp>(
+        UnknownLoc::get(ctx), globalType,
+        /*isConstant=*/false, LLVM::Linkage::Internal,
+        "proton_smem", /*value=*/Attribute(), /*alignment=*/16, 3);
+	
+  }
+
     rewriter.eraseOp(op);
     return success();
   }

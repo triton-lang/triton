@@ -128,7 +128,7 @@ struct ConvertTritonAMDGPUToLLVM
     // because the call op has to know the shared memory base address of each
     // function
     initSharedMemory(typeConverter);
-    //initProtonSMEMBuffer(typeConverter);
+
 
     // Convert call and ret ops
     {
@@ -151,6 +151,9 @@ struct ConvertTritonAMDGPUToLLVM
     OpBuilder::InsertPoint indexInsertPoint;
 
     RewritePatternSet patterns(context);
+
+
+
     int commonBenefit = patternBenefitPrioritizeOverLLVMConversions;
     // Make benefit for AMD specific patterns higher so they apply before common
     // patterns
@@ -172,6 +175,9 @@ struct ConvertTritonAMDGPUToLLVM
     auto populatePatterns7 = [&](auto populateFunc, int benefit) {
       populateFunc(typeConverter, patterns, targetInfo, benefit);
     };
+
+    mlir::triton::proton::populateInitLocalBufferOpToLLVMPattern(
+ 	typeConverter, patterns, targetInfo, AMDBenefit);
 
     AMD::populateConvertLayoutOpToLLVMPatterns(typeConverter, targetInfo,
                                                patterns, AMDBenefit);
@@ -234,8 +240,6 @@ struct ConvertTritonAMDGPUToLLVM
 
     mlir::triton::proton::populateRecordOpToLLVMPattern(
         typeConverter, patterns, targetInfo, commonBenefit);
-    mlir::triton::proton::populateInitLocalBufferOpToLLVMPattern(
-	typeConverter, patterns, targetInfo, commonBenefit);
 
     mlir::ub::populateUBToLLVMConversionPatterns(typeConverter, patterns);
 
