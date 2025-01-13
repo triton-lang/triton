@@ -28,7 +28,7 @@ struct InitLocalBufferOpConversion
   Location loc = UnknownLoc::get(rewriter.getContext());
   auto ctx = moduleOp.getContext();
   size_t contentSize = op.getBufferSize();
-  auto globalType = LLVM::LLVMArrayType::get(i8_ty, 1);
+  auto globalType = LLVM::LLVMArrayType::get(i8_ty, contentSize);
 
   LLVM::GlobalOp global;
   {
@@ -48,6 +48,7 @@ struct InitLocalBufferOpConversion
       gep(ptr_ty(ctx), i8_ty, globalPtr, SmallVector<Value>({zero}));  
   store(i32_val(42), stringStart);  
   rewriter.replaceOp(op, stringStart);
+
     
     return success();
   }
