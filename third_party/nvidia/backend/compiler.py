@@ -232,7 +232,7 @@ class CUDABackend(BaseBackend):
         # Set up Diagnostic
         if os.environ.get("MLIR_ENABLE_REMARK", "0") == "1":
             srcMgr = llvm.source_mgr()
-            ir.source_mgr_diag(srcMgr, mod.context)
+            _ = ir.source_mgr_diag(srcMgr, mod.context)
             mod.context.printOpOnDiagnostic(True)
         # TTIR -> TTGIR
         pm = ir.pass_manager(mod.context)
@@ -286,7 +286,7 @@ class CUDABackend(BaseBackend):
         # Set up Diagnostic
         if os.environ.get("MLIR_ENABLE_REMARK", "0") == "1":
             srcMgr = llvm.source_mgr()
-            ir.source_mgr_diag(srcMgr, mod.context)
+            _ = ir.source_mgr_diag(srcMgr, mod.context)
             mod.context.printOpOnDiagnostic(True)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
         passes.convert.add_scf_to_cf(pm)
