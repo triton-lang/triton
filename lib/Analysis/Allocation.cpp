@@ -12,6 +12,12 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/raw_ostream.h"
+
+#define DEBUG_TYPE "allocation-shared-memory"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace mlir {
 
@@ -297,6 +303,10 @@ private:
       auto value = valueBufferIter.first;
       auto *buffer = valueBufferIter.second;
       bufferRange[buffer] = getLiveness(value);
+      LLVM_DEBUG({
+        llvm::dbgs() << "-- buffer " << buffer->id << "; value: ";
+        value.dump();
+      });
     }
   }
 
@@ -336,6 +346,10 @@ private:
         auto *buffer = opScratchIter.second;
         bufferRange.insert({buffer, Interval(operationId.lookup(op),
                                              operationId.lookup(op) + 1)});
+        LLVM_DEBUG({
+          llvm::dbgs() << "-- buffer " << buffer->id << "; value: ";
+          op->dump();
+        });
       }
     };
     processScratchMemory(allocation->opScratch);
@@ -387,6 +401,21 @@ private:
     resolveScratchBufferLiveness(operationId);
   }
 
+#ifndef NDEBUG
+  void dumpBuffers() {
+    LDBG("Dump bufferRange: id size offset ---------");
+    for (auto bufferIter : bufferRange) {
+      LLVM_DEBUG({
+        llvm::dbgs() << "-- " << bufferIter.first->id << " "
+                     << bufferIter.first->size << " "
+                     << bufferIter.first->offset;
+        llvm::dbgs() << " interval " << bufferIter.second.start() << " "
+                     << bufferIter.second.end() << "\n";
+      });
+    }
+  }
+#endif
+
   /// Computes the shared memory offsets for all related values.
   /// Paper: Algorithms for Compile-Time Memory Optimization
   /// (https://dl.acm.org/doi/pdf/10.5555/314500.315082)
@@ -395,6 +424,10 @@ private:
     for (auto bufferIter : bufferRange) {
       buffers.emplace_back(bufferIter.first);
     }
+
+    // Sort buffers by size in descending order
+    llvm::sort(buffers,
+               [&](BufferT *A, BufferT *B) { return A->size > B->size; });
 
     calculateStarts(buffers);
 
@@ -471,6 +504,9 @@ private:
         xBuffers.erase(bufferIt);
       }
     }
+#ifndef NDEBUG
+    dumpBuffers();
+#endif
   }
 
   /// Builds a graph of all shared memory values. Edges are created between
@@ -497,6 +533,19 @@ private:
         }
       }
     }
+
+    // Dump interference graph
+    LDBG("\n");
+    LDBG("Dump interference graph: \n");
+    LLVM_DEBUG({
+      for (auto edges : interference) {
+        llvm::dbgs() << "-- from " << edges.first->id << " to ";
+        for (auto node : edges.second) {
+          llvm::dbgs() << node->id << "; ";
+        }
+        llvm::dbgs() << "\n";
+      }
+    });
   }
 
   /// Finalizes shared memory offsets considering interference.
@@ -524,6 +573,9 @@ private:
       }
       auto it = std::find(available.begin(), available.end(), true);
       colors[x] = std::distance(available.begin(), it);
+      LLVM_DEBUG({
+        llvm::dbgs() << "-- color " << x->id << " " << colors[x] << "\n";
+      });
     }
     // Finalize allocation
     // color0: [0, 7), [0, 8), [0, 15) -> [0, 7), [0, 8), [0, 15)
@@ -541,6 +593,9 @@ private:
       allocation->sharedMemorySize =
           std::max(allocation->sharedMemorySize, x->offset + x->size);
     }
+#ifndef NDEBUG
+    dumpBuffers();
+#endif
   }
 
 private:
