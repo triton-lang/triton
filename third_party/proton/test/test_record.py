@@ -1,5 +1,4 @@
 import torch
-import pytest
 import pathlib
 
 import triton
