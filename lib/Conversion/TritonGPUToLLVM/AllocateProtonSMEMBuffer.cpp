@@ -45,7 +45,7 @@ struct AllocateProtonSMEMBuffer
 
     }
 
-    ModuleAllocation allocation(mod);
+    //ModuleAllocation allocation(mod);
 
     //if hasProtonRecordOp
     //b.create InitLocalBufferOp
@@ -63,8 +63,8 @@ struct AllocateProtonSMEMBuffer
     //    loc, arrayTy, /*isConstant=*/false, LLVM::Linkage::External,
     //    "proton_smem", /*value=*/Attribute(), /*alignment=*/16, /*addrSpace*/ 3);
 
-    llvm::errs() << mod  << "\n";
-    llvm::errs() <<  "Shared Memory: " << allocation.getSharedMemorySize() << "\n";
+    //llvm::errs() << mod  << "\n";
+    //llvm::errs() <<  "Shared Memory: " << allocation.getSharedMemorySize() << "\n";
 
 
   }

@@ -176,9 +176,6 @@ struct ConvertTritonAMDGPUToLLVM
       populateFunc(typeConverter, patterns, targetInfo, benefit);
     };
 
-    mlir::triton::proton::populateInitLocalBufferOpToLLVMPattern(
- 	typeConverter, patterns, targetInfo, AMDBenefit);
-
     AMD::populateConvertLayoutOpToLLVMPatterns(typeConverter, targetInfo,
                                                patterns, AMDBenefit);
     mlir::triton::populateConvertLayoutOpToLLVMPatterns(
@@ -237,6 +234,9 @@ struct ConvertTritonAMDGPUToLLVM
                                                           patterns);
     mlir::triton::populatePrintOpToLLVMPattern(typeConverter, patterns,
                                                targetInfo, commonBenefit);
+
+    mlir::triton::proton::populateInitLocalBufferOpToLLVMPattern(
+ 	typeConverter, patterns, targetInfo, commonBenefit);
 
     mlir::triton::proton::populateRecordOpToLLVMPattern(
         typeConverter, patterns, targetInfo, commonBenefit);

@@ -35,3 +35,5 @@ n_elements = output.numel()
 grid = (1, 1, 1)
 pgm = add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
 ttir = pgm.asm['ttir']
+llir = pgm.asm['llir']
+print(llir)

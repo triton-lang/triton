@@ -25,9 +25,10 @@ struct InitLocalBufferOpConversion
                   ConversionPatternRewriter &rewriter) const override {
 
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+  Location loc = UnknownLoc::get(rewriter.getContext());
   auto ctx = moduleOp.getContext();
   size_t contentSize = op.getBufferSize();
-  auto globalType = LLVM::LLVMArrayType::get(i8_ty, contentSize);
+  auto globalType = LLVM::LLVMArrayType::get(i8_ty, 1);
 
   LLVM::GlobalOp global;
   {
@@ -35,12 +36,19 @@ struct InitLocalBufferOpConversion
     rewriter.setInsertionPointToStart(moduleOp.getBody());
    global = rewriter.create<LLVM::GlobalOp>(
         UnknownLoc::get(ctx), globalType,
-        /*isConstant=*/false, LLVM::Linkage::Internal,
+        /*isConstant=*/false, LLVM::Linkage::External,
         "proton_smem", /*value=*/Attribute(), /*alignment=*/16, 3);
-	
+        
   }
-
-    rewriter.eraseOp(op);
+  Value zero = i32_val(0);
+  Type globalPtrType = LLVM::LLVMPointerType::get(ctx, global.getAddrSpace());
+  Value globalPtr = rewriter.create<LLVM::AddressOfOp>(
+      UnknownLoc::get(ctx), globalPtrType, global.getSymName());
+  Value stringStart =
+      gep(ptr_ty(ctx), i8_ty, globalPtr, SmallVector<Value>({zero}));  
+  store(i32_val(42), stringStart);  
+  rewriter.replaceOp(op, stringStart);
+    
     return success();
   }
 
