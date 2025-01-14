@@ -25,7 +25,6 @@ repos:
         args: ["--fix", "--exit-non-zero-on-fix"]
         exclude: |
           (?x)(
-            ^python/triton/runtime/.*|
             ^test/|
             ^docs/conf.py$
           )
