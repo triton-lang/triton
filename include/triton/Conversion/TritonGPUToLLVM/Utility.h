@@ -257,9 +257,7 @@ struct SharedMemoryObject {
 
   SharedMemoryObject(Value base, Type baseElemType, ArrayRef<Value> offsets)
       : base(base), baseElemType(baseElemType),
-        offsets(offsets.begin(), offsets.end()) {
-    assert(strides.size() == offsets.size());
-  }
+        offsets(offsets.begin(), offsets.end()) {}
 
   SharedMemoryObject(Value base, Type baseElemType, ArrayRef<int64_t> shape,
                      triton::gpu::SharedEncodingAttr layout, Location loc,
