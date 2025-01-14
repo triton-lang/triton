@@ -1107,6 +1107,8 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     ConvertLayoutOp convertOp) {
   // we don't handle conversions to DotOperandEncodingAttr
   // this is a heuristics to accommodate fused attention
+  // We stop the rematerialization of linear layouts as we have to be a bit more
+  // careful with the heuristics for both correctness and perf
   RankedTensorType targetType = convertOp.getType();
   if (!shouldPropagateConversion(convertOp)) {
     return;

@@ -480,7 +480,8 @@ SmallVector<Value> convertMxfp4x2ToBf16x2(RewriterBase &rewriter, Location loc,
                                           ArrayRef<Value> values);
 
 // Scale a mxfp4 value by a given scale.
-Value mxfpScaleBf16(RewriterBase &rewriter, Location loc, Value v, Value scale);
+Value mxfpScaleBf16(RewriterBase &rewriter, Location loc, Value v, Value scale,
+                    bool fastMath);
 
 } // namespace LLVM
 
@@ -1116,6 +1117,17 @@ inline Value packLLVector(Location loc, ValueRange vals,
     vec = insert_element(vec, vals[i], i32_val(i));
   }
   return vec;
+}
+
+inline bool
+isSimpleSharedMemoryAccess(ArrayRef<int64_t> shape,
+                           ArrayRef<int64_t> allocShape,
+                           triton::gpu::SharedEncodingAttr sharedEnc) {
+  auto rank = shape.size();
+  return /*no swizzling*/ sharedEnc.getMaxPhase() == 1 ||
+         /*swizzling but same shape*/ shape == allocShape ||
+         /*swizzling and rank-reduced and rank >= 2*/
+         (shape == allocShape.take_back(rank) && rank >= 2);
 }
 
 } // namespace mlir

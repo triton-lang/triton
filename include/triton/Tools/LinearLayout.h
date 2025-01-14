@@ -725,4 +725,4 @@ inline std::ostream &operator<<(std::ostream &os, const LinearLayout &layout) {
 
 } // namespace mlir::triton
 
-#endif
+#endif // TRITON_TOOLS_LINEARLAYOUT_H

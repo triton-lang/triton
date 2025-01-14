@@ -1,4 +1,3 @@
-from triton._C.libtriton import ir
 from triton.language import core as tl
 from triton.language.core import builtin
 import warnings

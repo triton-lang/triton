@@ -242,10 +242,12 @@ LinearLayout chooseShemLayoutForRegToRegConversion(
 // bit width of the tensor in the future to support more flexible tensor
 // encodings
 LinearLayout chooseStMatrixLayout(MLIRContext *ctx, RankedTensorType tensorTy,
-                                  ArrayRef<unsigned> repShape,
-                                  ArrayRef<unsigned> paddedRepShape,
-                                  ArrayRef<unsigned> order,
                                   int swizzleByteSize);
+
+// The primary goal of this function is to efficiently store 2D tiles of a
+// tensor into shared memory using the `ldmatrix` instruction.
+LinearLayout chooseLdMatrixLayout(MLIRContext *ctx, Attribute sharedEnc,
+                                  Attribute dotEnc, ArrayRef<int64_t> shape);
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H

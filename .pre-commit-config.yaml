@@ -21,7 +21,7 @@ repos:
     rev: v0.7.1
     hooks:
       - id: ruff
-        files: '^python/.*'
+        files: '(^python|^third_party/proton|^third_party/amd|^third_party/nvidia)/.*'
         args: ["--fix", "--exit-non-zero-on-fix"]
         exclude: |
           (?x)(

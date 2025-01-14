@@ -269,7 +269,7 @@ def compile(src, target=None, options=None):
         ir.load_dialects(context)
         backend.load_dialects(context)
 
-    codegen_fns = backend.get_codegen_implementation()
+    codegen_fns = backend.get_codegen_implementation(options)
     module_map = backend.get_module_map()
     # try:
     module = src.make_ir(options, codegen_fns, module_map, context)

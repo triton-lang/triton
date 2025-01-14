@@ -223,10 +223,7 @@ Value getSmemVecAddr(RankedTensorType registerTy,
   // We propose case 2 (see comments below), which provides a more general
   // solution for all swizzled shared memory scenarios, including the edge case
   // mentioned above.
-  if (/*no swizzling*/ sharedEnc.getMaxPhase() == 1 ||
-      /*swizzling but same shape*/ shape == allocShape ||
-      /*swizzling and rank-reduced and rank >= 2*/
-      (shape == allocShape.take_back(rank) && rank >= 2)) { // Case 1
+  if (isSimpleSharedMemoryAccess(shape, allocShape, sharedEnc)) { // Case 1
     // Get the address to load/store.  The multi-dim address is (offsetX1, ...,
     // offsetXN, block), where the offsets appear in minor-to-major order, and
     // we drop_end to drop block, which we know from above will be 0.
@@ -904,13 +901,15 @@ SmallVector<Value> convertMxfp4x2ToBf16x2(RewriterBase &rewriter, Location loc,
   return results;
 }
 
-Value mxfpScaleBf16(RewriterBase &rewriter, Location loc, Value v,
-                    Value scale) {
+Value mxfpScaleBf16(RewriterBase &rewriter, Location loc, Value v, Value scale,
+                    bool fastMath) {
   Value vBf16 = bitcast(v, bf16_ty);
-  Value nanBf16 = bitcast(i16_val(0x7fff), bf16_ty);
-  Value scaleIsNan = icmp_eq(scale, i8_val(0xff));
   Value scaleBf16 = bitcast(shl(zext(i16_ty, scale), i16_val(7)), bf16_ty);
   Value scaledBf16 = fmul(vBf16, scaleBf16);
+  if (fastMath)
+    return scaledBf16;
+  Value nanBf16 = bitcast(i16_val(0x7fff), bf16_ty);
+  Value scaleIsNan = icmp_eq(scale, i8_val(0xff));
   // Account for NaN in the scale as per the mxfp specification.
   return select(scaleIsNan, nanBf16, scaledBf16);
 };

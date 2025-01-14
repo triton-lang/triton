@@ -337,6 +337,23 @@ public:
       : OpRewritePattern(context, benefit), mfmaVersion(mfmaVersion),
         nonKDim(nonKDim), kPack(kPack) {}
 
+  bool isChainDot(tt::DotOp &dotOp) const {
+    auto filter = [&dotOp](Operation *op) {
+      return op->getParentRegion() == dotOp->getParentRegion();
+    };
+    ForwardSliceOptions fwdOpt;
+    fwdOpt.filter = filter;
+    BackwardSliceOptions bwdOpt;
+    bwdOpt.omitBlockArguments = true;
+    bwdOpt.filter = filter;
+    auto slices = getSlice(dotOp, bwdOpt, fwdOpt);
+    for (Operation *op : slices) {
+      if (isa<tt::DotOp>(op) && (op != dotOp))
+        return true;
+    }
+    return false;
+  }
+
   bool isSecondDot(tt::DotOp &dotOp) const {
     auto filter = [&dotOp](Operation *op) {
       return op->getParentRegion() == dotOp->getParentRegion();
@@ -391,12 +408,16 @@ public:
     auto warpsPerTile =
         warpsPerTileMFMA(dotOp, retShape, numWarps, {mDim, nDim});
 
-    // Always use transposed mfma layout. This enables larger vectorization
-    // for global store instructions
+    // Use transposed mfma layout to enable larger vectorization for global
+    // store instructions, except for fp8 matmul kernels due to regression
+    // TODO (lixun): investigate the regression and enable this feature again
+    auto aElemTy = mfmaInstr.getElementTypeA();
+    bool isFP8 = aElemTy.isFloat8E5M2FNUZ() || aElemTy.isFloat8E4M3FNUZ();
+    bool isTransposed = isChainDot(dotOp) || !isFP8;
     mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
         oldRetType.getContext(),
         /*versionMajor*/ mfmaVersion, /*versionMinor*/ 0, warpsPerTile,
-        /*instrShape*/ mDim, nDim, /*isTransposed*/ true, CTALayout);
+        /*instrShape*/ mDim, nDim, isTransposed, CTALayout);
 
     Type mfmaAccType;
     if (oldRetType.getElementType().isIntOrIndex())
@@ -613,7 +634,7 @@ public:
         ctx, {1, 1}, threadsPerWarp, blockWarpsPerCTA, {1, 0}, ctaLayout);
 
     auto upcastMXFP = [&](TensorValue v, TensorValue scale,
-                          ScaleDotElemType elemType) -> Value {
+                          ScaleDotElemType elemType, bool fastMath) -> Value {
       if (!scale)
         return v;
 
@@ -629,11 +650,13 @@ public:
       auto outputType =
           ttg::UpcastMXFPOp::deduceOutputType(v, elemType, outputElemType);
       return rewriter.create<ttg::UpcastMXFPOp>(dotOp.getLoc(), outputType, v,
-                                                convOp, elemType);
+                                                convOp, elemType, fastMath);
     };
 
-    Value scaledA = upcastMXFP(a, aScale, dotOp.getLhsType());
-    Value scaledB = upcastMXFP(b, bScale, dotOp.getRhsType());
+    Value scaledA =
+        upcastMXFP(a, aScale, dotOp.getLhsType(), dotOp.getFastMath());
+    Value scaledB =
+        upcastMXFP(b, bScale, dotOp.getRhsType(), dotOp.getFastMath());
     auto newDot = rewriter.create<DotOp>(dotOp.getLoc(), newRetType, scaledA,
                                          scaledB, newAcc);
     rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(dotOp, oldRetType,

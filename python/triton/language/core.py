@@ -1733,7 +1733,8 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
 
 
 @builtin
-def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None, out_dtype=float32, _builder=None):
+def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, fast_math=False, acc=None, out_dtype=float32,
+               _builder=None):
     """
     Returns the matrix product of two blocks in microscaling format.
 
@@ -1763,7 +1764,8 @@ def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None,
     """
     out_dtype = _constexpr_to_value(out_dtype)
     assert out_dtype == float32, "Only float32 is supported for out_dtype at the moment"
-    return semantic.dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc, out_dtype, _builder)
+    return semantic.dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, fast_math, acc, out_dtype,
+                               _builder)
 
 
 # -----------------------
