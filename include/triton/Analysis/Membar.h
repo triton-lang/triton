@@ -12,7 +12,7 @@ class OpBuilder;
 
 /// Callback to allow backend to provide more information on whether a barrier
 /// is needed between two operations. Even though two operations access the same
-/// shared memory thay may not require a barrier in between them.
+/// shared memory they may not require a barrier in between them.
 using MembarFilterFn = std::function<bool(Operation *, Operation *)>;
 
 struct BlockInfo {

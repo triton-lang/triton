@@ -160,7 +160,54 @@ More options can be found by running the following command.
 proton-viewer -h
 ```
 
-## Advanced features
+## Advanced features and knowledge
+
+### Thread management
+
+We guarantee that any call to `libproton.so`, such as `enter_scope`, is synchronized using explicit locks.
+For operations that do not trigger calls to libproton.so—including callbacks to CUDA/HIP APIs—we use separated locks to protect data structures that may be accessed concurrently by multiple threads.
+For example, the `enter_op` method in `OpInterface` can be invoked by the main thread that involves triton operators, as well as by helper threads that invoke torch operators.
+
+### `cpu_timed_scope`
+
+`cpu_timed_scope` is a utility that wraps `scope` to measure the CPU time of a scope along with other metrics.
+The following example demonstrates how to use `cpu_timed_scope`:
+
+```python
+import triton.profiler as proton
+
+with proton.cpu_timed_scope("test"):
+    foo[1,](x, y)
+```
+
+The `cpu_timed_scope` output metric is referred to as `cpu_time`, while `time` represents accelerator (e.g., GPU) time.
+The key distinction between `cpu_time` and `time` lies in their inclusivity: `cpu_time` is exclusive, whereas `time` is inclusive.
+This difference arises because the time spent on individual kernels represents the smallest measurable time granularity, and each kernel is mutually exclusive.
+This exclusivity allows time to be accurately accumulated across parent scopes for `time`.
+In contrast, `cpu_time` measures the time within a specific scope.
+Since a parent scope encompasses the time spent in its child scopes, summing `cpu_time` from child scope into parent scope would result in double counting.
+To visualize both the CPU and GPU time, we can use the following command:
+
+```bash
+proton-viewer -m time/ns,cpu_time/ns <proton.hatchet>
+```
+
+### Metrics naming
+
+Custom metrics should follow this format: `metric_name (unit) (type)`.
+We prefer no space within the metric name.
+`unit` and `type` are optional fields.
+
+There are three types of metrics in proton: inclusive, exclusive, and property metrics.
+By default, a metric is inclusive.
+The metric types are distinguished by the suffix of their names.
+The following table shows the suffix for each type and its meaning:
+
+| Suffix | Name | Meaning |
+| --- | --- | --- |
+| (inc) or "" | Inclusive metric | The metric is accumulated at a scope and can be propagated to the parent scope. |
+| (exc) | Exclusive metric | The metric is accumulated at a scope and cannot be propagated to the parent scope. |
+| (pty) | Property metric | The metric is a property of the scope and cannot be accumulated or propagated. |
 
 ### State annotation
 

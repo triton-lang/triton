@@ -1,7 +1,6 @@
 """isort:skip_file"""
 # Import order is significant here.
 
-from .._utils import parse_list_string
 from . import math
 from . import extra
 from .standard import (
@@ -200,7 +199,6 @@ __all__ = [
     "int32",
     "int64",
     "int8",
-    "ir",
     "join",
     "load",
     "log",
@@ -250,7 +248,6 @@ __all__ = [
     "swizzle2d",
     "tensor",
     "trans",
-    "triton",
     "tuple",
     "uint16",
     "uint32",
@@ -268,8 +265,11 @@ __all__ = [
 
 
 def str_to_ty(name):
-    if name == "none":
-        return None
+    from builtins import tuple
+
+    if isinstance(name, tuple):
+        fields = type(name).__dict__.get("_fields", None)
+        return tuple_type([str_to_ty(x) for x in name], fields)
 
     if name[0] == "*":
         name = name[1:]
@@ -279,11 +279,6 @@ def str_to_ty(name):
             const = True
         ty = str_to_ty(name)
         return pointer_type(element_ty=ty, const=const)
-
-    if name[0] == "[":
-        names = parse_list_string(name)
-        tys = [str_to_ty(x) for x in names]
-        return tuple_type(types=tys)
 
     if name == "nvTmaDesc":
         return nv_tma_desc_type()

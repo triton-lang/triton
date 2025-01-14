@@ -49,9 +49,13 @@ void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
              Value pred, int64_t alignmentBytes = 0,
              triton::CacheModifier cm = triton::CacheModifier::NONE);
 
+// Get cache modifier information for creating load or store instruction
 std::pair<bool, bool> getCacheModifierFlagsForPredicatedCall(LLVM::CallOp);
 int32_t getCtrlBitsForCacheModifierOnTarget(triton::CacheModifier, bool,
                                             mlir::triton::AMD::TargetInfo);
+
+Value cvtFp32ToFp16(Location loc, RewriterBase &rewriter, const Value &v,
+                    triton::RoundingMode rounding);
 } // namespace mlir::LLVM::AMD
 
 #endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_UTILITY_H_

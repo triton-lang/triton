@@ -6,6 +6,7 @@
 
 #include "mlir/IR/BuiltinAttributes.h"
 #include "third_party/f2reduce/f2reduce.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetOperations.h"
@@ -116,11 +117,6 @@ std::unique_ptr<uint64_t[]> getMatrix(const LinearLayout &layout) {
 // outDim as columns.  In other words, finds the number of linearly-independent
 // bases for this output dimension.
 int getMatrixRank(std::unique_ptr<uint64_t[]> m, int numRows, int numCols) {
-  // f2reduce underflows if the number of cols is 0, return the rank early in
-  // this case.
-  if (numCols == 0) {
-    return 0;
-  }
   // stride is specified in number of 64-bit words per row, and we pack our
   // matrix so that there's only one uint64_t per row.
   assert(numCols <= 64);
@@ -627,7 +623,7 @@ bool LinearLayout::isTrivialOver(ArrayRef<StringAttr> dimNames) const {
   // We can quotient out dimNames iff they don't affect the remainingInDimNames
   // in the result. In other words, we want to check that B is zero, and C is
   // zero, and D is the identity
-  return squareSublayoutIsIdentity(dimNames) &&
+  return squareSublayoutIsIdentity(*this, dimNames) &&
          sublayoutIsZero(remainingInDimNames, dimNames) &&
          sublayoutIsZero(dimNames, remainingOutDimNames);
 }
@@ -702,33 +698,6 @@ bool LinearLayout::sublayoutIsZero(ArrayRef<StringAttr> inDimNames,
         return false;
       }
     }
-  }
-  return true;
-}
-
-bool LinearLayout::squareSublayoutIsIdentity(
-    ArrayRef<StringAttr> dimNames) const {
-  // The empty layout is the identity
-  if (dimNames.size() == 0) {
-    return true;
-  }
-  // Check that the input-output sizes are the same
-  LinearLayout sl = sublayout(dimNames, dimNames);
-  for (StringAttr dim : dimNames) {
-    if (getInDimSize(dim) != getOutDimSize(dim)) {
-      return false;
-    }
-  }
-  // Once the inputs and output dimensions are the same, we can just check
-  // that the basis for the single remaining dimension is the identity.
-  sl = sl.flattenIns().flattenOuts();
-  int b = 0;
-  const auto &inDimBases = sl.bases.begin()->second;
-  for (auto basis : inDimBases) {
-    if (basis[0] != (1 << b)) {
-      return false;
-    }
-    b++;
   }
   return true;
 }
@@ -943,17 +912,10 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
     ret *= LinearLayout::identity1D(A.getInDimSize(dim), dim, dim);
   }
 
-  // Reshape the result
-  SmallVector<std::pair<StringAttr, int32_t>> inDimsA;
-  SmallVector<std::pair<StringAttr, int32_t>> inDimsB;
-  for (auto dim : A.getInDimNames()) {
-    inDimsA.push_back({dim, A.getInDimSize(dim)});
-  }
-  for (auto dim : B.getInDimNames()) {
-    inDimsB.push_back({dim, B.getInDimSize(dim)});
-  }
-  ret = ret.reshapeIns(inDimsB).reshapeOuts(inDimsA);
-  return ret;
+  // Reorder the dimensions in the result to match the order expected by the
+  // current and outer layouts.
+  return ret.transposeIns(llvm::to_vector(B.getInDimNames()))
+      .transposeOuts(llvm::to_vector(A.getInDimNames()));
 }
 
 LinearLayout LinearLayout::invert() const {

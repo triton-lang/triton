@@ -23,6 +23,27 @@ namespace gpu {
 
 namespace {
 
+bool hasGpuBarriers(scf::ForOp forOp) {
+  WalkResult result = forOp.walk(
+      [&](mlir::gpu::BarrierOp barrier) { return WalkResult::interrupt(); });
+  return result.wasInterrupted();
+}
+
+// Return true if the preconditions for pipelining the loop are met.
+bool isSafeToPipeline(scf::ForOp forOp) {
+  // Skip loop with distance > 1 for now.
+  // TODO: relax the constraint in the expander.
+  if (loopHasDistGreaterThanOne(forOp))
+    return false;
+  // Don't pipeline outer loops.
+  if (isOuterLoop(forOp))
+    return false;
+  // Skip loops with barriers.
+  if (hasGpuBarriers(forOp))
+    return false;
+  return true;
+}
+
 bool hasLatenciesAssigned(scf::ForOp forOp,
                           const DenseMap<Operation *, int> &opLatency) {
   for (auto &op : forOp.getBody()->without_terminator()) {
@@ -94,7 +115,7 @@ CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
   }
 
   auto stages = llvm::make_second_range(opToStage);
-  int maxStage = *std::max_element(stages.begin(), stages.end());
+  int maxStage = *llvm::max_element(stages);
   CoarseSchedule schedule(maxStage + 1);
   SmallVector<CoarseSchedule::Cluster> clusters(maxStage + 1);
   for (int i = 0; i <= maxStage; i++) {
@@ -261,7 +282,7 @@ void scheduleRemainingToLastStage(scf::ForOp forOp, CoarseSchedule &schedule,
 
 void scheduleLoop(scf::ForOp forOp,
                   const DenseMap<Operation *, int> &opLatency) {
-  if (!hasLatenciesAssigned(forOp, opLatency))
+  if (!hasLatenciesAssigned(forOp, opLatency) || !isSafeToPipeline(forOp))
     return;
   // Based on the latencies, schedule the key ops to the stages.
   CoarseSchedule schedule = scheduleKeyOps(forOp, opLatency);

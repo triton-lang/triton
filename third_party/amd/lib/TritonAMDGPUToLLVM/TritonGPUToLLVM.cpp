@@ -24,6 +24,8 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
+#include "third_party/proton/dialect/include/TritonProtonToLLVM/PatternTritonProtonOpToLLVM.h"
+
 namespace mlir::triton {
 #define GEN_PASS_DEF_CONVERTTRITONAMDGPUTOLLVM
 #include "TritonAMDGPUToLLVM/Passes.h.inc"
@@ -171,8 +173,7 @@ struct ConvertTritonAMDGPUToLLVM
     };
 
     AMD::populateConvertLayoutOpToLLVMPatterns(typeConverter, targetInfo,
-                                               patterns, numWarps,
-                                               axisInfoAnalysis, AMDBenefit);
+                                               patterns, AMDBenefit);
     mlir::triton::populateConvertLayoutOpToLLVMPatterns(
         typeConverter, targetInfo, patterns, commonBenefit);
     AMD::populateDotOpToLLVMPatterns(typeConverter, patterns, numWarps,
@@ -197,7 +198,8 @@ struct ConvertTritonAMDGPUToLLVM
     mlir::triton::BackendCallbacks callbacks;
     callbacks.localStoreOpConversion = storeOpConversionCallback;
 
-    mlir::triton::populateMemoryOpToLLVMPattern(
+    AMD::populateMemoryOpToLLVMPatterns(typeConverter, patterns, AMDBenefit);
+    mlir::triton::populateMemoryOpToLLVMPatterns(
         typeConverter, targetInfo, patterns, commonBenefit, callbacks);
     mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
                                                    patterns, commonBenefit);
@@ -228,6 +230,10 @@ struct ConvertTritonAMDGPUToLLVM
                                                           patterns);
     mlir::triton::populatePrintOpToLLVMPattern(typeConverter, patterns,
                                                targetInfo, commonBenefit);
+
+    mlir::triton::proton::populateRecordOpToLLVMPattern(
+        typeConverter, patterns, targetInfo, commonBenefit);
+
     mlir::ub::populateUBToLLVMConversionPatterns(typeConverter, patterns);
 
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns)))) {

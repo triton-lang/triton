@@ -209,7 +209,7 @@ private:
   };
 
   /// Op -> Scratch Buffer
-  using OpScratchMapT = DenseMap<Operation *, BufferT *>;
+  using OpScratchMapT = llvm::MapVector<Operation *, BufferT *>;
   /// Value -> Explicit Buffer
   using ValueBufferMapT = llvm::MapVector<Value, BufferT *>;
   /// Value -> Alias Buffer

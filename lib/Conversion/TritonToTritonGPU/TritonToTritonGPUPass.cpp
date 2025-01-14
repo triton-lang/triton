@@ -16,6 +16,8 @@
 #include "triton/Conversion/TritonToTritonGPU/Passes.h.inc"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
+#include "third_party/proton/dialect/include/Dialect/Proton/IR/Dialect.h"
+
 namespace {
 
 using namespace mlir;
@@ -555,7 +557,17 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       GenericOpPattern<triton::DotScaledOp>, GenericOpPattern<triton::CallOp>,
       TritonFuncOpPattern>(typeConverter, context);
 }
-
+// Proton patterns
+// NOTE: Because Proton's inputs are scalars and not tensors this conversion
+// isn't strictly nessessary however you could envision a case where we pass in
+// tensors in for Triton object specific tracing operations in which case we
+// would need to fill in the OpConversionPattern
+void populateProtonPatterns(TritonGPUTypeConverter &typeConverter,
+                            RewritePatternSet &patterns) {
+  MLIRContext *context = patterns.getContext();
+  patterns.add<GenericOpPattern<triton::proton::RecordOp>>(typeConverter,
+                                                           context);
+}
 //
 // SCF patterns
 //
@@ -770,6 +782,7 @@ public:
     populateArithPatternsAndLegality(typeConverter, patterns, target);
     populateMathPatternsAndLegality(typeConverter, patterns, target);
     populateTritonPatterns(typeConverter, patterns, numCTAs);
+    populateProtonPatterns(typeConverter, patterns);
     // TODO: can we use
     //    mlir::scf::populateSCFStructurealTypeConversionsAndLegality(...) here?
     populateSCFPatterns(typeConverter, patterns);

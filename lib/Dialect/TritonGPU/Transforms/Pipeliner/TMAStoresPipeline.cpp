@@ -83,7 +83,7 @@ bool mlir::triton::pipelineTMAStores(scf::ForOp forOp) {
     // Reuse allocations for stores of the same shape and types. This allows
     // saving shared memory usage. It is valid since we have a wait 0 before
     // every local_store. We could pipeline more aggressively if we didn't
-    // re-use but there is a tradeoff with shared memory usage.
+    // reuse but there is a tradeoff with shared memory usage.
     auto key = std::make_pair(op.getSrc().getType().getShape(),
                               op.getSrc().getType().getElementType());
     auto it = allocs.find(key);

@@ -146,6 +146,7 @@ Scan/Sort Ops
     cumsum
     histogram
     sort
+    gather
 
 Atomic Ops
 ----------
@@ -204,6 +205,7 @@ Compiler Hint Ops
     :toctree: generated
     :nosignatures:
 
+    assume
     debug_barrier
     max_constancy
     max_contiguous

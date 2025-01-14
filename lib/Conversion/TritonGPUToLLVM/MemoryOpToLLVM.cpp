@@ -119,78 +119,13 @@ public:
       : ConvertOpToLLVMPattern(typeConverter, benefit), targetInfo(targetInfo) {
   }
 
-  // FIXME [Dot LL]
-  // Do for all DotOperandEncodingAttr once we have LLs for all of them
-  static bool isSupportedDotOpLayout(MemDescType srcTy,
-                                     RankedTensorType dstTy) {
-    auto srcLayout = cast<SharedEncodingAttr>(srcTy.getEncoding());
-    auto dstLayout = dstTy.getEncoding();
-    auto bitwidth = dstTy.getElementTypeBitWidth();
-    auto rank = dstTy.getRank();
-    if (auto dot = dyn_cast<DotOperandEncodingAttr>(dstLayout)) {
-      auto vecWidth = 32 / bitwidth;
-      auto kWidth = dot.getKWidth();
-      auto kOrder = dot.getOpIdx() == 0 ? rank - 1 : rank - 2;
-      if (auto mma = dyn_cast<NvidiaMmaEncodingAttr>(dot.getParent())) {
-        auto needTrans = kOrder != srcLayout.getOrder()[0];
-        auto canUseLdmatrix =
-            (bitwidth == 16 || (!needTrans)) && (kWidth == vecWidth);
-        if (mma.isHopper()) {
-          // I think we should be able to remove this condition, but it's here
-          // as the legacy ldmatrix path does not support it
-          canUseLdmatrix &= srcTy.getElementTypeBitWidth() * kWidth == 32;
-        }
-        // If we remove this one, ldmatrix will IMA. It can probably be relaxed
-        // though
-        canUseLdmatrix &=
-            srcTy.getShape()[0] >= 8 &&
-            srcTy.getShape()[1] >= 4 * kWidth & dstTy.getRank() <= 2;
-        return !canUseLdmatrix;
-      }
-      if (isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>(dot.getParent()))
-        return true;
-    }
-    return false;
-  };
-
   LogicalResult
   matchAndRewrite(LocalLoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    MemDescType srcTy = op.getSrc().getType();
-    RankedTensorType dstTy = op.getType();
-    Attribute dstLayout = dstTy.getEncoding();
-    if (isa<BlockedEncodingAttr, MmaEncodingTrait, SliceEncodingAttr,
-            LinearEncodingAttr>(dstLayout) ||
-        isSupportedDotOpLayout(srcTy, dstTy)) {
-      return lowerSharedToDistributed(op, adaptor, getTypeConverter(),
-                                      rewriter);
-    }
-    if (isa<DotOperandEncodingAttr>(dstLayout) &&
-        isa<BlockedEncodingAttr>(
-            cast<DotOperandEncodingAttr>(dstLayout).getParent())) {
-      return lowerSharedToDotOpFMA(op, adaptor, getTypeConverter(), rewriter);
-    }
-    return failure();
+    return lowerSharedToDistributed(op, adaptor, getTypeConverter(), rewriter);
   }
 
 private:
-  LogicalResult
-  lowerSharedToDotOpFMA(LocalLoadOp op, LocalLoadOpAdaptor adaptor,
-                        const LLVMTypeConverter *typeConverter,
-                        ConversionPatternRewriter &rewriter) const {
-    auto loc = op.getLoc();
-    RankedTensorType dstTy = op.getType();
-    Attribute dstLayout = dstTy.getEncoding();
-    auto dotLayout = cast<DotOperandEncodingAttr>(dstLayout);
-    auto blockedLayout = cast<BlockedEncodingAttr>(
-        cast<DotOperandEncodingAttr>(dstLayout).getParent());
-    auto thread = getThreadId(rewriter, loc);
-    Value res = SharedToDotOperandFMA::convertLayout(
-        dotLayout.getOpIdx(), op.getSrc(), adaptor.getSrc(), blockedLayout,
-        thread, loc, getTypeConverter(), rewriter);
-    rewriter.replaceOp(op, res);
-    return success();
-  }
   LogicalResult
   lowerSharedToDistributed(LocalLoadOp op, LocalLoadOpAdaptor adaptor,
                            const LLVMTypeConverter *typeConverter,
@@ -198,11 +133,6 @@ private:
     auto loc = op.getLoc();
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getResult().getType();
-    auto dstShape = dstTy.getShape();
-    auto srcSharedLayout = cast<SharedEncodingAttr>(srcTy.getEncoding());
-    assert((!isa<DotOperandEncodingAttr>(dstTy.getEncoding()) ||
-            isSupportedDotOpLayout(srcTy, dstTy)) &&
-           "Unexpected rank of ConvertLayout(shared->distributed)");
 
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
         loc, adaptor.getSrc(),
@@ -265,7 +195,7 @@ private:
 
 } // namespace
 
-void mlir::triton::populateMemoryOpToLLVMPattern(
+void mlir::triton::populateMemoryOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
     RewritePatternSet &patterns, PatternBenefit benefit,
     std::optional<BackendCallbacks> backendCallbacks) {

@@ -11,6 +11,9 @@ def do_bench(kernel_call, quantiles):
 
 @pytest.mark.parametrize('use_cuda_graph', [False, True])
 def test_kwargs(use_cuda_graph: bool, device: str):
+    if use_cuda_graph and not torch.cuda.is_available():
+        pytest.xfail("CUDA is not available")
+
     M, N = 1024, 16
     src = torch.randn(M * N, device=device)
     dst = torch.empty(M * N, device=device)
@@ -86,7 +89,7 @@ def test_hooks(device):
     _kernel[(1, )](src, N)
 
     # On NVIDIA GPUs:
-    # The tunning knob `num_stages` can be set by users.
+    # The tuning knob `num_stages` can be set by users.
     # This will cause out of resources when N_STAGES = 100
     # shared memory bytes = N_STAGES * BLOCK_SIZE * sizeof(float)
     # On AMD GPUs:

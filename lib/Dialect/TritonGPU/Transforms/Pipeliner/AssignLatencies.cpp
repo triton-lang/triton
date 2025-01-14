@@ -183,6 +183,23 @@ loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
   return loadOpToIndLevel;
 }
 
+bool hasLatenciesAssigned(scf::ForOp forOp) {
+  for (auto &op : forOp.getBody()->without_terminator()) {
+    if (op.hasAttr("tt_latency"))
+      return true;
+  }
+  return false;
+}
+
+void assignUserProvidedLatencies(scf::ForOp forOp,
+                                 DenseMap<Operation *, int> &opLatency) {
+  for (auto &op : forOp.getBody()->without_terminator()) {
+    if (auto latencyAttr = op.getAttr("tt_latency")) {
+      opLatency[&op] = mlir::cast<IntegerAttr>(latencyAttr).getInt();
+    }
+  }
+}
+
 } // namespace
 
 // Look for load ops that directly or indirectly feed into dot ops. Based
@@ -212,6 +229,10 @@ DenseMap<Operation *, int> assignLatencies(ModuleOp moduleOp,
 
   DenseMap<Operation *, int> opLatency;
   for (auto forOp : loops) {
+    if (hasLatenciesAssigned(forOp)) {
+      assignUserProvidedLatencies(forOp, opLatency);
+      continue;
+    }
     int numStages = getNumStagesOrDefault(forOp);
     bool pipelineWithoutDot = forOp->hasAttr(mlir::triton::kNumStagesAttrName);
     ModuleOp moduleOp = forOp->getParentOfType<ModuleOp>();
@@ -236,8 +257,7 @@ DenseMap<Operation *, int> assignLatencies(ModuleOp moduleOp,
 
     // Calculate the stage distance between applicable loads.
     auto vals = llvm::make_second_range(loadOpToIndLevel);
-    int maxIndirectionLevel =
-        vals.empty() ? 0 : *std::max_element(vals.begin(), vals.end());
+    int maxIndirectionLevel = vals.empty() ? 0 : *llvm::max_element(vals);
     unsigned loadLatency = (numStages - 1) / (maxIndirectionLevel + 1);
 
     for (auto [loadOp, dist] : loadOpToIndLevel) {

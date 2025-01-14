@@ -1,5 +1,6 @@
 #include "PatternTritonGPUOpToLLVM.h"
 
+#include "Utility.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -19,6 +20,53 @@ using namespace mlir::triton::gpu;
 
 namespace {
 
+SmallVector<Value> convertMxfp4x2ToFp16x2(RewriterBase &rewriter, Location loc,
+                                          ArrayRef<Value> values) {
+  SmallVector<Value> results;
+  for (auto v : values) {
+    auto em0 = and_(v, i8_val(0x7));
+    auto em1 = and_(v, i8_val(0x70));
+    // FP16 bits: sign = 1, exponent = 5, mantissa = 10
+    Value v0 = or_(shl(zext(i16_ty, em0), i16_val(10 - 1)),
+                   shl(zext(i16_ty, and_(v, i8_val(0x8))), i16_val(12)));
+    Value v1 = or_(shl(zext(i16_ty, em1), i16_val(10 - 1 - 4)),
+                   shl(zext(i16_ty, and_(v, i8_val(0x80))), i16_val(8)));
+
+    // Three cases:
+    // 1) x is normal and non-zero: Correct bias
+    v0 = select(icmp_ne(and_(em0, i8_val(0x6)), i8_val(0)),
+                add(v0, i16_val((15 - 1) << 10)), v0);
+    v1 = select(icmp_ne(and_(em1, i8_val(0x60)), i8_val(0)),
+                add(v1, i16_val((15 - 1) << 10)), v1);
+
+    // 2) x is subnormal (x == 0bs001 where s is the sign): Map to fp16 +-0.5
+    v0 = bitcast(select(icmp_eq(em0, i8_val(0x1)),
+                        or_(i16_val(0x3800), and_(v0, i16_val(0x8000))), v0),
+                 f16_ty);
+    v1 = bitcast(select(icmp_eq(em1, i8_val(0x10)),
+                        or_(i16_val(0x3800), and_(v1, i16_val(0x8000))), v1),
+                 f16_ty);
+    // 3) x is zero, nothing to do
+    results.push_back(v0);
+    results.push_back(v1);
+  }
+  return results;
+}
+
+Value mxfpScaleFp16(RewriterBase &rewriter, Location loc, Value v, Value scale,
+                    bool fastMath) {
+  Value scaleF32 = bitcast(shl(zext(i32_ty, scale), i32_val(23)), f32_ty);
+  Value scaleF16 =
+      LLVM::AMD::cvtFp32ToFp16(loc, rewriter, scaleF32, RoundingMode::RTNE);
+  Value mulF16 = fmul(v, scaleF16);
+  if (fastMath)
+    return mulF16;
+  // Account for NaN in the scale as per the mxfp specification.
+  Value scaleIsNan = icmp_eq(scale, i8_val(0xff));
+  Value nanF16 = bitcast(i16_val(0x7c01), f16_ty);
+  return select(scaleIsNan, nanF16, bitcast(mulF16, f16_ty));
+};
+
 // Scales the given bf16 v using the given scale factor without relying on bf16
 // multiplication.
 //
@@ -26,16 +74,19 @@ namespace {
 // handles v * scale multiplication using fp32 VALU ops. LLVM backend can do it
 // for us, just with unnecessary overheads.
 Value mxfpScaleBf16ViaF32(RewriterBase &rewriter, Location loc, Value v,
-                          Value scale) {
+                          Value scale, bool fastMath) {
   Value c16 = i32_val(16);
   Value vF32 = bitcast(shl(zext(i32_ty, bitcast(v, i16_ty)), c16), f32_ty);
   Value scaleF32 = bitcast(shl(zext(i32_ty, scale), i32_val(23)), f32_ty);
   Value mulF32 = fmul(vF32, scaleF32);
   Value mulI16 = trunc(i16_ty, lshr(bitcast(mulF32, i32_ty), c16));
+  Value mulBf16 = bitcast(mulI16, bf16_ty);
+  if (fastMath)
+    return mulBf16;
   // Account for NaN in the scale as per the mxfp specification.
   Value scaleIsNan = icmp_eq(scale, i8_val(0xff));
   Value nanBf16 = bitcast(i16_val(0x7fff), bf16_ty);
-  return select(scaleIsNan, nanBf16, bitcast(mulI16, bf16_ty));
+  return select(scaleIsNan, nanBf16, mulBf16);
 };
 
 class UpcastMXFPOpPattern : public ConvertOpToLLVMPattern<UpcastMXFPOp> {
@@ -55,7 +106,7 @@ public:
     bool isPacked = fpType == ScaleDotElemType::E2M1;
     if (!(isPacked || fpType == ScaleDotElemType::E4M3 ||
           fpType == ScaleDotElemType::E5M2))
-      return rewriter.notifyMatchFailure(op, "NYI: non-mxfp8 cases");
+      return rewriter.notifyMatchFailure(op, "NYI: non-mxfp4/mxfp8 cases");
 
     Location loc = op.getLoc();
     auto xVals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
@@ -88,8 +139,11 @@ public:
     Value warpId = udiv(tid, warpSize);
     Value laneId = urem(tid, warpSize);
 
-    if (isPacked)
-      xVals = LLVM::convertMxfp4x2ToBf16x2(rewriter, loc, xVals);
+    bool useFp16 = op.getType().getElementType().isF16();
+    if (isPacked) {
+      xVals = useFp16 ? convertMxfp4x2ToFp16x2(rewriter, loc, xVals)
+                      : LLVM::convertMxfp4x2ToBf16x2(rewriter, loc, xVals);
+    }
 
     // Given that MFMA layout for the A tensor arranges thread in a column-major
     // manner, for the current tid, it's at row (tid % mDim). When we set up
@@ -117,7 +171,10 @@ public:
         for (int j = 0; j < 32; ++j) {
           int index = 32 * i + j;
           xVals[index] =
-              mxfpScaleBf16ViaF32(rewriter, loc, xVals[index], si[j / 16]);
+              useFp16 ? mxfpScaleFp16(rewriter, loc, xVals[index], si[j / 16],
+                                      op.getFastMath())
+                      : mxfpScaleBf16ViaF32(rewriter, loc, xVals[index],
+                                            si[j / 16], op.getFastMath());
         }
       }
     } else {
@@ -139,8 +196,11 @@ public:
 
         for (int j = 0; j < 32; ++j) {
           int index = 32 * i + j;
-          xVals[index] =
-              mxfpScaleBf16ViaF32(rewriter, loc, xVals[index], si[j / 8]);
+          xVals[index] = useFp16
+                             ? mxfpScaleFp16(rewriter, loc, xVals[index],
+                                             si[j / 16], op.getFastMath())
+                             : mxfpScaleBf16ViaF32(rewriter, loc, xVals[index],
+                                                   si[j / 8], op.getFastMath());
         }
       }
     }

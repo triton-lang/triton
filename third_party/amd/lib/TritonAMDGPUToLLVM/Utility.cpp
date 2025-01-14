@@ -1,10 +1,8 @@
 #include "Utility.h"
-#include "PatternTritonGPUOpToLLVM.h"
+#include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
-#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/IR/PatternMatch.h"
-#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
@@ -487,6 +485,24 @@ getCtrlBitsForCacheModifierOnTarget(triton::CacheModifier cm, bool isBufferLoad,
     return getCtrlBitsForCacheModifierOnGFX942(cm, isBufferLoad);
   else
     return getDefaultCtrlBitsForCacheModifier(cm);
+
+Value cvtFp32ToFp16(Location loc, RewriterBase &rewriter, const Value &v,
+                    triton::RoundingMode rounding) {
+  GCNBuilder builder;
+
+  auto &cvt = *builder.create("v_cvt_f16_f32");
+  auto res = builder.newOperand("=v");
+  auto operand = builder.newOperand(v, "v");
+  if (rounding == triton::RoundingMode::RTZ) {
+    auto &setRTZ = *builder.create("s_setreg_imm32_b32 0x1801, 0xc");
+    setRTZ();
+  }
+  cvt(res, operand);
+  if (rounding == triton::RoundingMode::RTZ) {
+    auto &resetRTZ = *builder.create("s_setreg_imm32_b32 0x1801, 0x0");
+    resetRTZ();
+  }
+  return builder.launch(rewriter, loc, f16_ty, false);
 }
 
 } // namespace mlir::LLVM::AMD

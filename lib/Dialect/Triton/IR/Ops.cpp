@@ -1119,6 +1119,27 @@ LogicalResult GatherOp::inferReturnTypes(
   return success();
 }
 
+// -- ExperimentalDesciptorLoadOp --
+static LogicalResult verifyDesciptorLoadStoreType(Operation *op,
+                                                  TensorDescType desc,
+                                                  RankedTensorType tensor) {
+  RankedTensorType block = desc.getBlockType();
+  if (block.getShape() == tensor.getShape() &&
+      block.getElementType() == tensor.getElementType())
+    return success();
+  return op->emitOpError("tensor desciptor block and tensor types must match");
+}
+
+LogicalResult ExperimentalDescriptorLoadOp::verify() {
+  return verifyDesciptorLoadStoreType(*this, getDesc().getType(), getType());
+}
+
+// -- ExperimentalDesciptorStoreOp --
+LogicalResult ExperimentalDescriptorStoreOp::verify() {
+  return verifyDesciptorLoadStoreType(*this, getDesc().getType(),
+                                      getSrc().getType());
+}
+
 // -- ExperimentalTensormapCreateOp --
 LogicalResult ExperimentalTensormapCreateOp::verify() {
   auto rank = getBoxDim().size();

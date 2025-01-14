@@ -653,9 +653,10 @@ class block_type(dtype):
 
 class tuple_type(dtype):
 
-    def __init__(self, types):
+    def __init__(self, types, fields=None):
         self.types = types
-        self.name = f"[{','.join(map(str, self.types))}]"
+        self.fields = fields or [''] * len(types)
+        self.name = '[' + ','.join([f"{k}:{v}" for k, v in zip(self.fields, self.types)]) + ']'
 
     def __str__(self):
         return self.name
@@ -1163,18 +1164,17 @@ class tensor(_value):
 
 class tuple:
 
-    def __init__(self, args: list):
+    def __init__(self, args: list, type: tuple_type = None):
         self.values = [i for i in args]
-
-    @property
-    def type(self):
 
         def get_type(x):
             if isinstance(x, dtype):
                 return dtype
+            if isinstance(x, int):
+                return constexpr
             return x.type
 
-        return tuple_type([get_type(x) for x in self.values])
+        self.type = type or tuple_type([get_type(x) for x in self.values])
 
     def __getitem__(self, idx: constexpr):
         if isinstance(idx, int):
@@ -1185,6 +1185,9 @@ class tuple:
             import builtins
             assert isinstance(idx, (slice, builtins.slice))
             return tuple(self.values[idx.start:idx.stop:idx.step])
+
+    def __getattr__(self, name):
+        return self.values[self.type.fields.index(name)]
 
     # TODO: remove
     def __setitem__(self, idx: constexpr, value):
@@ -1262,7 +1265,7 @@ class _experimental_tensor_descriptor_base(_value):
         return f"tensor_descriptor<{self.type}>"
 
     @builtin
-    def load(self, offsets: List[tensor], _builder=None) -> tensor:
+    def load(self, offsets: List[constexpr | tensor], _builder=None) -> tensor:
         """Load a block from the descriptor starting at the given element offsets.
 
         Values outside of the tensor bounds will be filled with zeros.
@@ -1272,7 +1275,7 @@ class _experimental_tensor_descriptor_base(_value):
         return semantic.descriptor_load(self, offsets, "", "", _builder)
 
     @builtin
-    def store(self, offsets: List[tensor], value: tensor, _builder=None) -> tensor:
+    def store(self, offsets: List[constexpr | tensor], value: tensor, _builder=None) -> tensor:
         """Store a block from the descriptor starting at the given element offsets.
 
         Values outside of the tensor bounds will be ignored.
@@ -1712,7 +1715,7 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
       the device does not have Tensor Cores or the inputs are not of dtype f32,
       this option is ignored. For devices that do have tensor cores, the
       default precision is tf32.
-    :type input_precision: string. Available options for nvidia: :code:`"tf32"`, :code:`"tf32x3"`, :code:`"ieee"`. Default: :code:`"tf32"`. Avaliable options for amd: :code:`"ieee"`.
+    :type input_precision: string. Available options for nvidia: :code:`"tf32"`, :code:`"tf32x3"`, :code:`"ieee"`. Default: :code:`"tf32"`. Available options for amd: :code:`"ieee"`.
     :param allow_tf32: *Deprecated.* If true, input_precision is set to "tf32".
       Only one of :code:`input_precision` and :code:`allow_tf32` can be
       specified (i.e. at least one must be :code:`None`).
@@ -1730,30 +1733,39 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
 
 
 @builtin
-def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None, out_dtype=float32, _builder=None):
+def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, fast_math=False, acc=None, out_dtype=float32,
+               _builder=None):
     """
     Returns the matrix product of two blocks in microscaling format.
 
     lhs and rhs use microscaling formats described here:
     https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
 
+    Software emulation enables targeting hardware architectures without native microscaling
+    operation support. Right now for such case, microscaled lhs/rhs are upcasted to
+    :code:`bf16` element type beforehand for dot computation, with one exception:
+    for AMD CDNA3 specifically, if one of the inputs is of :code:`fp16` element type,
+    the other input is also upcasted to :code:`fp16` element type instead.
+    This behavior is experimental and may be subject to change in the future.
+
     :param lhs: The first tensor to be multiplied.
     :type lhs: 2D tensor representing fp4, fp8 or bf16 elements. Fp4 elements are packed into uint8 inputs with the first element in lower bits. Fp8 are stored as uint8 or the corresponding fp8 type.
     :param lhs_scale: Scale factor for lhs tensor.
     :type lhs_scale: e8m0 type represented as an uint8 tensor.
-    :param lhs_format: format of the lhs tensor. Available formats: {:code:`e2m1`, :code:`e4m3`, :code:`e5m2`, :code:`bf16`}.
+    :param lhs_format: format of the lhs tensor. Available formats: {:code:`e2m1`, :code:`e4m3`, :code:`e5m2`, :code:`bf16`, :code:`fp16`}.
     :type lhs_format: str
     :param rhs: The second tensor to be multiplied.
     :type rhs: 2D tensor representing fp4, fp8 or bf16 elements. Fp4 elements are packed into uint8 inputs with the first element in lower bits. Fp8 are stored as uint8 or the corresponding fp8 type.
     :param rhs_scale: Scale factor for rhs tensor.
     :type rhs_scale: e8m0 type represented as an uint8 tensor.
-    :param rhs_format: format of the rhs tensor. Available formats: {:code:`e2m1`, :code:`e4m3`, :code:`e5m2`, :code:`bf16`}.
+    :param rhs_format: format of the rhs tensor. Available formats: {:code:`e2m1`, :code:`e4m3`, :code:`e5m2`, :code:`bf16`, :code:`fp16`}.
     :type rhs_format: str
     :param acc: The accumulator tensor. If not None, the result is added to this tensor.
     """
     out_dtype = _constexpr_to_value(out_dtype)
     assert out_dtype == float32, "Only float32 is supported for out_dtype at the moment"
-    return semantic.dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc, out_dtype, _builder)
+    return semantic.dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, fast_math, acc, out_dtype,
+                               _builder)
 
 
 # -----------------------
@@ -1944,7 +1956,7 @@ def _experimental_make_tensor_descriptor(
     """Make an experimental tensor descriptor object
 
     :param base: the base pointer of the tensor, must be 16-byte aligned
-    :param shape: A list of non-negative integers represeting the tensor shape
+    :param shape: A list of non-negative integers representing the tensor shape
     :param strides: A list of tensor strides. Leading dimensions must be multiples
         of 16-byte strides and the last dimension must be contiguous.
     :param block_shape: The shape of block to be loaded/stored from global memory

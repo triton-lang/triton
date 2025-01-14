@@ -49,9 +49,6 @@ SmallVector<Value> swizzleIndices(ConversionPatternRewriter &rewriter,
 
   auto fastIdx = rawIndices[order[0]];
   auto secondIdx = rawIndices[order[1]];
-  // Original algorithm taken from getSwizzledSharedPtrs function
-  // (TritonGPUToLLVMBase.h)
-  //
   // phase = (secondIdx // perPhase) % maxPhase
   // swizzledGroup = ((fastIdx // vec) ^ phase) * vec
   // groupRemainder = fastIdx % vec
@@ -98,13 +95,13 @@ void storeValuesInLinearVector(PatternRewriter &rewriter, Location loc,
   }
 }
 
-void verifyCTALayout(CTALayoutAttr ctaLayout) {
+bool verifyCTALayout(CTALayoutAttr ctaLayout) {
   auto ctaSplit = ctaLayout.getCTASplitNum();
   for (auto split : ctaSplit) {
     if (split != 1)
-      llvm::report_fatal_error("tensors splited in CGA(thread group clusters) "
-                               "are not supported in FMA dot yet.");
+      return false;
   }
+  return true;
 }
 
 /// Get a linear offset of first element loaded by thread.
@@ -158,7 +155,7 @@ Value computeSwizzledOffset(ConversionPatternRewriter &rewriter, Location loc,
                             ArrayRef<int64_t> opTensorShape,
                             ArrayRef<Value> strides) {
   Value offset = i32_val(0);
-  // Compute unswizzled multi dim coordinates in shared memmory object
+  // Compute unswizzled multi dim coordinates in shared memory object
   SmallVector<Value> elemMultiDimIndices(3);
   elemMultiDimIndices[dim.batch] =
       add(bTileOffset, i32_val(i.bTile * shapePerCTABTile + i.b));
@@ -216,7 +213,8 @@ Value loadFMAOp(Value srcVal, Value llVal, BlockedEncodingAttr dLayout,
                 Value thread, Location loc,
                 const LLVMTypeConverter *typeConverter,
                 ConversionPatternRewriter &rewriter, const int dotOpNo) {
-  verifyCTALayout(dLayout.getCTALayout());
+  if (!verifyCTALayout(dLayout.getCTALayout()))
+    return Value();
 
   DimIdx dim;
   dim.batch = 0;
@@ -292,6 +290,15 @@ Value loadFMAOp(Value srcVal, Value llVal, BlockedEncodingAttr dLayout,
   auto numBTiles = std::max(1u, B / shapePerCTABTile);
   auto numNonKTiles = std::max(1u, NonK / shapePerCTANonKTile);
 
+  // Found discrepancy in this case,
+  // use linear layout based converter for this case
+  // TODO: break batch and non-k dimension iterations in
+  // "repeat" and "inside-repeate" parts, pack them in llvm structure
+  // according repeat and register order.
+  // See FMA.cpp:getValueTableFromStructFMA for reference
+  if (numBTiles != 1 || numNonKTiles != 1)
+    return Value();
+
   auto perThreadShape =
       getElemsPerThreadInOp(opTensorShape, shapePerCTATile, sizePerThread);
 
@@ -299,7 +306,7 @@ Value loadFMAOp(Value srcVal, Value llVal, BlockedEncodingAttr dLayout,
                               sizeNonKPerThread);
 
   // In swizzled memory case basePtr stores pointer to the beginning of shared
-  // memmory object.
+  // memory object.
   //
   // If memory is not swizzled, algorithm breaks element offset pointer into
   // constant and non-constant part. Non-constant (depends on thread id) part is

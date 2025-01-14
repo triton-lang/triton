@@ -37,11 +37,26 @@ llvm.func @cluster_id() -> i32 {
 
 // -----
 
-// CHECK-LABEL: @st_matrix
-llvm.func @st_matrix(%i: i32, %ptr: !llvm.ptr<3>) {
+// CHECK-LABEL: @stmatrix
+llvm.func @stmatrix(%i: i32, %ptr: !llvm.ptr<3>) {
   // CHECK: stmatrix.sync.aligned.m8n8.x4.shared.b16 [$0], {$1, $2, $3, $4};
   nvgpu.stmatrix %ptr, %i, %i, %i, %i : !llvm.ptr<3>, i32, i32, i32, i32
+  // CHECK: stmatrix.sync.aligned.m8n8.x4.trans.shared.b16 [$0], {$1, $2, $3, $4};
+  nvgpu.stmatrix %ptr, %i, %i, %i, %i {trans} : !llvm.ptr<3>, i32, i32, i32, i32
   llvm.return
+}
+
+// -----
+
+// CHECK-LABEL: @ldmatrix
+llvm.func @ldmatrix(%ptr: !llvm.ptr<3>) -> !llvm.struct<(i32, i32, i32, i32)> {
+  // CHECK: ldmatrix.sync.aligned.m8n8.x4.shared.b16 {$0, $1, $2, $3}, [$4];
+  %0 = nvgpu.ldmatrix %ptr : (!llvm.ptr<3>) -> !llvm.struct<(i32, i32, i32, i32)>
+  // CHECK: ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {$0, $1, $2, $3}, [$4];
+  %1 = nvgpu.ldmatrix %ptr {trans} : (!llvm.ptr<3>) -> !llvm.struct<(i32, i32, i32, i32)>
+  %2 = llvm.extractvalue %1[0] : !llvm.struct<(i32, i32, i32, i32)>
+  %3 = llvm.insertvalue %2, %0[0] : !llvm.struct<(i32, i32, i32, i32)>
+  llvm.return %3 : !llvm.struct<(i32, i32, i32, i32)>
 }
 
 // -----
