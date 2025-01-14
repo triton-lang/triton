@@ -401,20 +401,27 @@ private:
     resolveScratchBufferLiveness(operationId);
   }
 
-#ifndef NDEBUG
   void dumpBuffers() {
     LDBG("Dump bufferRange: id size offset ---------");
     for (auto bufferIter : bufferRange) {
-      LLVM_DEBUG({
-        llvm::dbgs() << "-- " << bufferIter.first->id << " "
-                     << bufferIter.first->size << " "
-                     << bufferIter.first->offset;
-        llvm::dbgs() << " interval " << bufferIter.second.start() << " "
-                     << bufferIter.second.end() << "\n";
-      });
+      llvm::dbgs() << "-- " << bufferIter.first->id << " "
+                   << bufferIter.first->size << " " << bufferIter.first->offset;
+      llvm::dbgs() << " interval " << bufferIter.second.start() << " "
+                   << bufferIter.second.end() << "\n";
     }
   }
-#endif
+
+  void dumpInterferenceGraph(const GraphT &interference) {
+    LDBG("\n");
+    LDBG("Dump interference graph: \n");
+    for (auto edges : interference) {
+      llvm::dbgs() << "-- from " << edges.first->id << " to ";
+      for (auto node : edges.second) {
+        llvm::dbgs() << node->id << "; ";
+      }
+      llvm::dbgs() << "\n";
+    }
+  }
 
   /// Computes the shared memory offsets for all related values.
   /// Paper: Algorithms for Compile-Time Memory Optimization
@@ -425,7 +432,10 @@ private:
       buffers.emplace_back(bufferIter.first);
     }
 
-    // Sort buffers by size in descending order
+    // Sort buffers by size in descending order to reduce the fragmentation
+    // of big buffers. Big buffers have a higher chance to overlap with multiple
+    // other buffers, and allocating them first (by calculateStarts) ensures a
+    // higher chance that they will occupy a standalone smem slot.
     llvm::sort(buffers,
                [&](BufferT *A, BufferT *B) { return A->size > B->size; });
 
@@ -504,9 +514,7 @@ private:
         xBuffers.erase(bufferIt);
       }
     }
-#ifndef NDEBUG
-    dumpBuffers();
-#endif
+    LLVM_DEBUG(dumpBuffers());
   }
 
   /// Builds a graph of all shared memory values. Edges are created between
@@ -534,18 +542,7 @@ private:
       }
     }
 
-    // Dump interference graph
-    LDBG("\n");
-    LDBG("Dump interference graph: \n");
-    LLVM_DEBUG({
-      for (auto edges : interference) {
-        llvm::dbgs() << "-- from " << edges.first->id << " to ";
-        for (auto node : edges.second) {
-          llvm::dbgs() << node->id << "; ";
-        }
-        llvm::dbgs() << "\n";
-      }
-    });
+    LLVM_DEBUG(dumpInterferenceGraph(interference));
   }
 
   /// Finalizes shared memory offsets considering interference.
@@ -593,9 +590,7 @@ private:
       allocation->sharedMemorySize =
           std::max(allocation->sharedMemorySize, x->offset + x->size);
     }
-#ifndef NDEBUG
-    dumpBuffers();
-#endif
+    LLVM_DEBUG(dumpBuffers());
   }
 
 private:
