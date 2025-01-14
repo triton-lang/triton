@@ -433,9 +433,10 @@ private:
     }
 
     // Sort buffers by size in descending order to reduce the fragmentation
-    // of big buffers. Big buffers have a higher chance to overlap with multiple
-    // other buffers, and allocating them first (by calculateStarts) ensures a
-    // higher chance that they will occupy a standalone smem slot.
+    // on big buffers caused by smaller buffers. Big buffers have a higher
+    // chance to overlap with multiple other buffers, and allocating them first
+    // (by calculateStarts) ensures a higher chance that they will occupy a
+    // standalone smem slot.
     llvm::stable_sort(
         buffers, [&](BufferT *A, BufferT *B) { return A->size > B->size; });
 
