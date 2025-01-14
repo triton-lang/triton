@@ -403,6 +403,7 @@ inline Value getStackPointer(RewriterBase &rewriter,
   return rewriter.create<LLVM::AddressOfOp>(funcOp.getLoc(), globalBase);
 }
 
+//TODO: Move this into Proton backend
 inline Value getProtonStackPointer(RewriterBase &rewriter,
                              FunctionOpInterface funcOp) {
   // See NOTE: [Additional Function Arguments]
@@ -483,6 +484,7 @@ inline Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
   return base;
 }
 
+//TODO: Move this into Proton backend
 inline Value getProtonSharedMemoryBase(Location loc, RewriterBase &rewriter,
                                  const TargetInfoBase &target, Operation *op) {
   auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(),

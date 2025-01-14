@@ -13,8 +13,6 @@ include "ProtonAttrDefs.td"
 include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
 
 
-def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
-
 class TT_Proton_Op<string mnemonic, list<Trait> traits = []> :
     Op<Proton_Dialect, mnemonic, !listconcat(traits, [])> {
 }
@@ -67,7 +65,7 @@ def TT_RecordOp : TT_Proton_Op<"record", [DeclareOpInterfaceMethods<MemoryEffect
 }
 
 
-def TT_InitLocalBufferOp : TT_Proton_Op<"init_local_buffer", [MemoryEffects<[MemWrite<GlobalMemory>]>]> {
+def TT_InitLocalBufferOp : TT_Proton_Op<"init_local_buffer", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
   let arguments = (ins I32Attr: $bufferSize);
   let results = (outs TT_PtrLike :$basePtr);
   let builders = [

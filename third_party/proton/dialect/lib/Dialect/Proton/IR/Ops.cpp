@@ -7,6 +7,7 @@
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 
@@ -28,16 +29,13 @@ void RecordOp::getEffects(
                        SideEffects::DefaultResource::get());
 }
 
-//void InitLocalBufferOp::getEffects(
-//    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-//        &effects) {
-//  effects.emplace_back(MemoryEffects::Write::get(),
-//                       SideEffects::DefaultResource::get());
-//  effects.emplace_back(MemoryEffects::Read::get(),
-//                       SideEffects::DefaultResource::get());
-
-//}
-
+void InitLocalBufferOp::getEffects(
+      SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Allocate::get(),
+                       mlir::triton::gpu::SharedMemory::get());
+	
+}
 
 } // namespace proton
 } // namespace triton

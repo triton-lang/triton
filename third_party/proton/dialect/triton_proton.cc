@@ -11,6 +11,7 @@ namespace{
 
 void init_triton_proton_passes_ttgpuir(py::module &&m) {
   using namespace mlir::triton;
+//TODO: Enable these calls here once every is moved into Proton backend  
 //  m.def("add_allocate_smem_buffer", [](mlir::PassManager &pm) {
 //    pm.addPass(mlir::triton::proton::createAllocateSMEMBufferPass());
 //  });
