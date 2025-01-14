@@ -790,11 +790,10 @@ LogicalResult getConvertBackwardSlice(
   auto updateLayout = [&](Value value, Attribute encoding) {
     assert((isa<RankedTensorType>(value.getType())));
     slice.insert(value);
-    if (layout.find(value) != layout.end()) {
-      if (layout[value] != encoding)
-        return failure();
-    }
-    layout[value] = encoding;
+    Attribute &existing = layout[value];
+    if (existing && existing != encoding)
+      return failure();
+    existing = encoding;
     return success();
   };
 
