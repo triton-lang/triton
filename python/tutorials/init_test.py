@@ -1,13 +1,13 @@
-
 import torch
 
 import triton
 import triton.language as tl
 import triton.profiler.language as pl
 from triton.runtime import driver
+import pytest
+import pathlib
 
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
-
 
 def is_hip():
     return triton.runtime.driver.active.get_current_target().backend == "hip"
@@ -58,25 +58,27 @@ WARP_SIZE = properties["warpSize"]
 target = triton.runtime.driver.active.get_current_target()
 kernels = {}
 
-
-def softmax(x):
+def test_proton_buff_init(tmp_path: pathlib.Path):
+    torch.manual_seed(0)
+    x = torch.randn(1823, 781, device=DEVICE)
+    
     n_rows, n_cols = x.shape
-
+    
     # The block size of each loop iteration is the smallest power of two greater than the number of columns in `x`
     BLOCK_SIZE = triton.next_power_of_2(n_cols)
-
+    
     # Another trick we can use is to ask the compiler to use more threads per row by
     # increasing the number of warps (`num_warps`) over which each row is distributed.
     # You will see in the next tutorial how to auto-tune this value in a more natural
     # way so you don't have to come up with manual heuristics yourself.
     num_warps = 8
-
+    
     # Number of software pipelining stages.
     num_stages = 4 if SIZE_SMEM > 200000 else 2
-
+    
     # Allocate output
     y = torch.empty_like(x)
-
+    
     # pre-compile kernel to get register usage and compute thread occupancy.
     kernel = softmax_kernel.warmup(y, x, x.stride(0), y.stride(0), n_rows, n_cols, BLOCK_SIZE=BLOCK_SIZE,
                                    num_stages=num_stages, num_warps=num_warps, grid=(1, ))
@@ -93,7 +95,7 @@ def softmax(x):
         # not required to be equal numbers of both types.
         if is_cdna():
             NUM_GPRS = NUM_REGS * 2
-
+    
         # MAX_NUM_THREADS represents maximum number of resident threads per multi-processor.
         # When we divide this number with WARP_SIZE we get maximum number of waves that can
         # execute on a CU (multi-processor)  in parallel.
@@ -104,14 +106,9 @@ def softmax(x):
         occupancy = NUM_REGS // (n_regs * WARP_SIZE * num_warps)
     occupancy = min(occupancy, SIZE_SMEM // size_smem)
     num_programs = NUM_SM * occupancy
-
+    
     num_programs = min(num_programs, n_rows)
-
+    
     # Create a number of persistent programs.
-    kernel[(num_programs, 1, 1)](y, x, x.stride(0), y.stride(0), n_rows, n_cols, BLOCK_SIZE, num_stages)
-    return y
-
-torch.manual_seed(0)
-x = torch.randn(1823, 781, device=DEVICE)
-y_triton = softmax(x)
-
+    llir = kernel.asm['llir']
+    assert "@proton_smem = external local_unnamed_addr addrspace(3) global" in llir

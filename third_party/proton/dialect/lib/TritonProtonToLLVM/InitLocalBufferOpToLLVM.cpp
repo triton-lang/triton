@@ -48,10 +48,8 @@ struct InitLocalBufferOpConversion
       gep(ptr_ty(ctx), i8_ty, globalPtr, SmallVector<Value>({zero}));  
   //Store a 0 just to keep the buffer from being optimized away in the IR
   store(i32_val(0), bufferStart);  
-  rewriter.replaceOp(op, bufferStart);
-
-    
-    return success();
+  rewriter.replaceOp(op, bufferStart); 
+  return success();
   }
 
 protected:
