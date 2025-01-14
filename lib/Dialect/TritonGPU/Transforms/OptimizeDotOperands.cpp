@@ -265,8 +265,11 @@ public:
     getBackwardSlice(cvt.getOperation(), &slice, opt);
 
     // TODO(jlebar): This is too conservative when there are multiple loads in
-    // the chain (e.g. cvt(load(x) + load(y))). If the second load contains a
-    // non-layout-preserving op, then the whole chain will be rejected.
+    // the chain. If one of the loads has a non-layout-preserving op and the
+    // other does not, then we may or may not accept the chain, depending on
+    // which load gets hit first by getBackwardSlice. For example:
+    // cvt(broadcast(load(x)) + load(y)) // accepted & load(y) will benefit.
+    // cvt(load(y) + broadcast(load(x))) // rejected & load(y) will not benefit.
     bool foundInitializer = false;
     // Reverse the slice so that we start directly above the convert and check
     // that every op allows hoisting until we find a load or a constant.
