@@ -191,7 +191,11 @@ Value getSmemVecAddr(RankedTensorType registerTy,
 
   auto smemBase = smemObj.getBase();
   auto smemOffsets = smemObj.getOffsets();
-  auto smemStrides = getStride auto smemOrder = sharedEnc.getOrder();
+  auto smemOrder = sharedEnc.getOrder();
+  auto allocStrides =
+      LLVM::getStridesFromShapeAndOrder(allocShape, smemOrder, loc, rewriter);
+  auto smemStrides =
+      SmallVector<Value>(allocStrides.end() - rank, allocStrides.end());
   Value smemOffset;
   // When loading or storing to shared memory, we consider two cases for
   // performance reasons:
