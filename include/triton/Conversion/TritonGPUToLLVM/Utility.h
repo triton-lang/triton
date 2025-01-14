@@ -246,36 +246,17 @@ createLLVMIntrinsicCallOp(OpBuilder &builder, Location loc, StringRef intrinsic,
 // Is v an integer or floating-point scalar constant equal to 0?
 bool isConstantZero(Value v);
 
-/// Helper function to get strides from a given shape and its order
-SmallVector<Value> getStridesFromShapeAndOrder(ArrayRef<int64_t> shape,
-                                               ArrayRef<unsigned> order,
-                                               Location loc,
-                                               RewriterBase &rewriter);
 struct SharedMemoryObject {
   Value base; // i32 ptr. The start address of the shared memory object after
               // the initial allocation or the last slicing operation.
   Type baseElemType;
-  // We need to store strides as Values, not integers, because the
-  // extract_slice instruction can take a slice at arbitrary offsets.
-  // Take $a[16:32, 16:32] as an example; though we know the stride of $a[0] is
-  // 32, we need to let the instruction that uses $a be aware of that.
-  // Otherwise, when we use $a, we only know that the shape of $a is 16x16. If
-  // we store strides into an attribute array of integers, the information
-  // cannot pass through block argument assignment because attributes are
-  // associated with operations, not Values.
-  // TODO(Keren): We may need to figure out a way to store strides as integers
-  // if we want to support more optimizations.
-  SmallVector<Value>
-      strides; // i32 int. The strides of the shared memory object.
   SmallVector<Value> offsets; // i32 int.
   // Offsets are applied at the last slicing operation.
   // We can use offsets to recover the previous base.
   // The offsets are zero at the initial allocation.
 
-  SharedMemoryObject(Value base, Type baseElemType, ArrayRef<Value> strides,
-                     ArrayRef<Value> offsets)
+  SharedMemoryObject(Value base, Type baseElemType, ArrayRef<Value> offsets)
       : base(base), baseElemType(baseElemType),
-        strides(strides.begin(), strides.end()),
         offsets(offsets.begin(), offsets.end()) {
     assert(strides.size() == offsets.size());
   }
@@ -295,11 +276,9 @@ struct SharedMemoryObject {
         order[i] = layoutOrder[i] - rankDiff;
     }
     assert(isPermutationOfIota(order) && "Invalid order");
-    strides = getStridesFromShapeAndOrder(shape, order, loc, rewriter);
     offsets.append(order.size(), i32_val(0));
   }
 
-  SmallVector<Value> getStrides() const { return strides; }
   SmallVector<Value> getOffsets() const { return offsets; }
   Value getBase() const { return base; }
   Type getBaseElemType() const { return baseElemType; }
@@ -307,7 +286,6 @@ struct SharedMemoryObject {
   SmallVector<Value> getElems() const {
     SmallVector<Value> elems;
     elems.push_back(base);
-    elems.append(strides.begin(), strides.end());
     elems.append(offsets.begin(), offsets.end());
     return elems;
   }
@@ -315,13 +293,12 @@ struct SharedMemoryObject {
   SmallVector<Type> getTypes() const {
     SmallVector<Type> types;
     types.push_back(base.getType());
-    types.append(strides.size(), IntegerType::get(base.getContext(), 32));
     types.append(offsets.size(), IntegerType::get(base.getContext(), 32));
     return types;
   }
 
   Value getCSwizzleOffset(int dim) const {
-    assert(dim >= 0 && dim < strides.size());
+    assert(dim >= 0 && dim < offsets.size());
     return offsets[dim];
   }
 
@@ -333,6 +310,16 @@ struct SharedMemoryObject {
     return gep(type, baseElemType, base, offset);
   }
 };
+
+/// Helper function to get strides from a given shape and its order
+SmallVector<Value> getStridesFromShapeAndOrder(ArrayRef<int64_t> shape,
+                                               ArrayRef<unsigned> order,
+                                               Location loc,
+                                               RewriterBase &rewriter);
+
+Value getStructFromSharedMemoryObject(Location loc,
+                                      const SharedMemoryObject &smemObj,
+                                      RewriterBase &rewriter);
 
 SharedMemoryObject getSharedMemoryObjectFromStruct(Location loc,
                                                    Value llvmStruct,
@@ -1022,22 +1009,6 @@ void storeDistributedToShared(
     ArrayRef<Value> srcVals, const SharedMemoryObject &smemObj, Location loc,
     RewriterBase &rewriter, const TargetInfoBase &target,
     std::pair<size_t, Type> *const llvmOpCount = nullptr);
-
-inline Value getStructFromSharedMemoryObject(Location loc,
-                                             const SharedMemoryObject &smemObj,
-                                             RewriterBase &rewriter) {
-  auto elems = smemObj.getElems();
-  auto types = smemObj.getTypes();
-  auto structTy =
-      LLVM::LLVMStructType::getLiteral(rewriter.getContext(), types);
-  // pack into struct
-  Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structTy);
-  for (const auto &v : llvm::enumerate(elems)) {
-    assert(v.value() && "can not insert null values");
-    llvmStruct = insert_val(structTy, llvmStruct, v.value(), v.index());
-  }
-  return llvmStruct;
-}
 
 inline SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
                                            RewriterBase &rewriter) {

@@ -285,7 +285,6 @@ struct MemDescTransOpConversion
                                                       llvmElemTy, rewriter);
     auto dstSmemObj = SharedMemoryObject(
         srcSmemObj.base, srcSmemObj.baseElemType,
-        /*strides=*/applyPermutation(srcSmemObj.strides, op.getOrder()),
         /*offsets=*/applyPermutation(srcSmemObj.offsets, op.getOrder()));
     auto retVal = getStructFromSharedMemoryObject(loc, dstSmemObj, rewriter);
     rewriter.replaceOp(op, retVal);
@@ -383,6 +382,11 @@ struct MemDescSubviewOpConversion
     Location loc = op->getLoc();
     auto srcTy = op.getSrc().getType();
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
+    auto layoutOrder = getOrder(srcTy.getEncoding());
+    auto allocShape = srcTy.getAllocShape();
+    auto rank = srcTy.getRank();
+    auto allocStrides = LLVM::getStridesFromShapeAndOrder(
+        allocShape, layoutOrder, loc, rewriter);
 
     // newBase = base + offset
     auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
@@ -390,19 +394,19 @@ struct MemDescSubviewOpConversion
     SmallVector<Value> opOffsetVals = op.getOffsets();
     size_t destRank = op.getResult().getType().getRank();
     SmallVector<Value> offsetVals;
-    SmallVector<Value> strides;
     int rankReduced = srcTy.getRank() - destRank;
     for (int i = rankReduced; i < opOffsetVals.size(); i++) {
-      strides.push_back(smemObj.strides[i]);
       offsetVals.push_back(add(opOffsetVals[i], smemObj.offsets[i]));
     }
+    SmallVector<Value> strides(allocStrides.end() - offsetVals.size(),
+                               allocStrides.end());
     // Compute the offset based on the original strides of the shared memory
     // object
-    auto offset = dot(rewriter, loc, opOffsetVals, smemObj.strides);
+    auto offset = dot(rewriter, loc, opOffsetVals, strides);
     auto elemPtrTy = smemObj.base.getType();
     smemObj =
         SharedMemoryObject(gep(elemPtrTy, llvmElemTy, smemObj.base, offset),
-                           llvmElemTy, strides, offsetVals);
+                           llvmElemTy, offsetVals);
     auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
     rewriter.replaceOp(op, retVal);
     return success();

@@ -274,6 +274,10 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   Value warpIdInBatch = urem(linearWarpId, i32_val(warpsPerBatch));
   elemTy = typeConverter->convertType(elemTy);
 
+  auto allocStrides = LLVM::getStridesFromShapeAndOrder(
+      aTensorTy.getAllocShape(), order, loc, rewriter);
+  auto strides =
+      SmallVector<Value>(allocStrides.end() - order.size(), allocStrides.end());
   SmallVector<Value> loadedValues;
   SmallVector<Value> offsets;
   Value smemBase;
@@ -318,15 +322,15 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
       offsets = AMD::computeOffsetsAType(
           rewriter, loc, computeTensorElemMappingInBlock, elemsPerInstr,
           spatialWarpId, lane, warpsPerBlockNonK, numOfElems, numReps, smemObj,
-          sharedLayout, mDim, mfmaInstrK);
+          strides, sharedLayout, mDim, mfmaInstrK);
     } else {
       assert(opIdx == 1);
       offsets = AMD::computeOffsetsBType(
           rewriter, loc, computeTensorElemMappingInBlock, elemsPerInstr,
           spatialWarpId, lane, warpsPerBlockNonK, numOfElems, numReps, smemObj,
-          sharedLayout, nDim, mfmaInstrK);
+          strides, sharedLayout, nDim, mfmaInstrK);
     }
-    smemBase = AMD::computeBasePtr(rewriter, loc, smemObj);
+    smemBase = AMD::computeBasePtr(rewriter, loc, smemObj, strides);
   }
 
   Type resElemTy = typeConverter->convertType(elemTy);

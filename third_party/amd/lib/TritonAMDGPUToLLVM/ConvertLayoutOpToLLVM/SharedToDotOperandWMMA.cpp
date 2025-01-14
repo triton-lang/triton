@@ -139,7 +139,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     const SharedMemoryObject &smemObj,
                     const LLVMTypeConverter *typeConverter, Value thread) {
   assert((opIdx == 0 || opIdx == 1) && "unexpected operand idx");
-  auto rank = smemObj.getStrides().size();
+  auto rank = smemObj.getOffsets().size();
   int kDimIdx = opIdx == 0 ? rank - 1 : rank - 2;
   int nonKDimIdx = opIdx == 0 ? rank - 2 : rank - 1;
 
@@ -203,7 +203,11 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
         spatialWarpId, lane, warpsPerBlockNonK, numElemsPerThreadPerRep,
         numReps, smemObj, sharedLayout, wmmaInstrNonK, wmmaInstrK);
   }
-  smemBase = AMD::computeBasePtr(rewriter, loc, smemObj);
+  auto allocStrides = LLVM::getStridesFromShapeAndOrder(
+      aTensorTy.getAllocShape(), order, loc, rewriter);
+  auto strides =
+      SmallVector<Value>(allocStrides.end() - order.size(), allocStrides.end());
+  smemBase = AMD::computeBasePtr(rewriter, loc, smemObj, strides);
 
   Type resElemTy = typeConverter->convertType(elemTy);
   Type smemPtrTy = ptr_ty(rewriter.getContext(), 3);

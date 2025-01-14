@@ -50,10 +50,9 @@ swizzleIndexes(ConversionPatternRewriter &rewriter, Location loc, Value row,
 
 Value computeOffset(ConversionPatternRewriter &rewriter, Location loc,
                     Value row, Value col, SharedMemoryObject smemObj,
-                    SharedEncodingAttr srcLayout) {
+                    ArrayRef<Value> strides, SharedEncodingAttr srcLayout) {
   auto [swizzledRow, swizzledCol] =
       swizzleIndexes(rewriter, loc, row, col, smemObj, srcLayout);
-  const auto &strides = smemObj.getStrides();
   auto rank = strides.size();
   assert(rank == 2 || rank == 3);
   Value rowOffset = mul(swizzledRow, strides[rank - 2]);
@@ -62,12 +61,13 @@ Value computeOffset(ConversionPatternRewriter &rewriter, Location loc,
 }
 
 Value computeBasePtr(ConversionPatternRewriter &rewriter, Location loc,
-                     const SharedMemoryObject &smemObj) {
+                     const SharedMemoryObject &smemObj,
+                     ArrayRef<Value> strides) {
   Value base = smemObj.base;
   Type type = base.getType();
   Type elemType = smemObj.getBaseElemType();
-  for (int i = 0; i < smemObj.strides.size(); ++i) {
-    Value offset = sub(i32_val(0), mul(smemObj.offsets[i], smemObj.strides[i]));
+  for (int i = 0; i < strides.size(); ++i) {
+    Value offset = sub(i32_val(0), mul(smemObj.offsets[i], strides[i]));
     base = gep(type, elemType, base, offset);
   }
   return base;
@@ -115,9 +115,8 @@ llvm::SmallVector<Value> computeOffsetsAType(
     ConversionPatternRewriter &rewriter, Location loc,
     computeTensorElemMappingInBlockT fn, const ArrayRef<int64_t> &elemsPerInstr,
     Value warpId, Value laneId, int warpsPerBlock, int numOfElems,
-    ArrayRef<int64_t> reps, SharedMemoryObject smemObj,
+    ArrayRef<int64_t> reps, SharedMemoryObject smemObj, ArrayRef<Value> strides,
     SharedEncodingAttr srcLayout, unsigned nonKDim, unsigned kDim) {
-  SmallVector<Value> strides = smemObj.getStrides();
   SmallVector<Value> offsets = smemObj.getOffsets();
   auto order = srcLayout.getOrder();
   auto rank = offsets.size();
@@ -144,7 +143,7 @@ llvm::SmallVector<Value> computeOffsetsAType(
         Value row = add(mapping[i][0], i32_val(blockNonKOffset));
         Value col = mapping[i][1];
         aOffsets[block * blockSize + i] =
-            computeOffset(rewriter, loc, row, col, smemObj, srcLayout);
+            computeOffset(rewriter, loc, row, col, smemObj, strides, srcLayout);
       }
     }
   } else {
@@ -154,7 +153,7 @@ llvm::SmallVector<Value> computeOffsetsAType(
       Value row = mapping[i][0];
       Value col = mapping[i][1];
       inblockOffset[i] =
-          computeOffset(rewriter, loc, row, col, smemObj, srcLayout);
+          computeOffset(rewriter, loc, row, col, smemObj, strides, srcLayout);
     }
     for (int block = 0; block < numBlocks; ++block) {
       int blockNonKOffset = block * nonKDim * warpsPerBlock;
@@ -181,7 +180,7 @@ llvm::SmallVector<Value> computeOffsetsBType(
     ConversionPatternRewriter &rewriter, Location loc,
     computeTensorElemMappingInBlockT fn, const ArrayRef<int64_t> &elemsPerInstr,
     Value warpId, Value laneId, int warpsPerBlock, int numOfElems,
-    ArrayRef<int64_t> reps, SharedMemoryObject smemObj,
+    ArrayRef<int64_t> reps, SharedMemoryObject smemObj, ArrayRef<Value> strides,
     SharedEncodingAttr srcLayout, unsigned nonKDim, unsigned kDim) {
   // transpose reps and offsets, because operand B has layout equal to
   // transposed operand A layout
@@ -191,7 +190,7 @@ llvm::SmallVector<Value> computeOffsetsBType(
   SmallVector<int64_t> tElemsPerInstr{elemsPerInstr[1], elemsPerInstr[0]};
   SmallVector<int64_t> tReps = transposeSpatialDims(reps);
   SmallVector<Value> tOffsets = transposeSpatialDims(smemObj.getOffsets());
-  SmallVector<Value> tStrides = transposeSpatialDims(smemObj.getStrides());
+  SmallVector<Value> tStrides = transposeSpatialDims(strides);
 
   int vectorSize = 1;
   if (order[0] == rank - 2) {

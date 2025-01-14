@@ -2,6 +2,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Attributes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -190,8 +191,7 @@ Value getSmemVecAddr(RankedTensorType registerTy,
 
   auto smemBase = smemObj.getBase();
   auto smemOffsets = smemObj.getOffsets();
-  auto smemStrides = smemObj.getStrides();
-  auto smemOrder = sharedEnc.getOrder();
+  auto smemStrides = getStride auto smemOrder = sharedEnc.getOrder();
   Value smemOffset;
   // When loading or storing to shared memory, we consider two cases for
   // performance reasons:
@@ -548,6 +548,22 @@ bool isConstantZero(Value v) {
   return false;
 }
 
+Value getStructFromSharedMemoryObject(Location loc,
+                                      const SharedMemoryObject &smemObj,
+                                      RewriterBase &rewriter) {
+  auto elems = smemObj.getElems();
+  auto types = smemObj.getTypes();
+  auto structTy =
+      LLVM::LLVMStructType::getLiteral(rewriter.getContext(), types);
+  // pack into struct
+  Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structTy);
+  for (const auto &v : llvm::enumerate(elems)) {
+    assert(v.value() && "can not insert null values");
+    llvmStruct = insert_val(structTy, llvmStruct, v.value(), v.index());
+  }
+  return llvmStruct;
+}
+
 SharedMemoryObject getSharedMemoryObjectFromStruct(Location loc,
                                                    Value llvmStruct,
                                                    Type elemTy,
@@ -563,23 +579,30 @@ SharedMemoryObject getSharedMemoryObjectFromStruct(Location loc,
   auto rank = (elems.size() - 1) / 2;
   return {/*base=*/elems[0],
           /*baseElemType=*/elemTy,
-          /*strides=*/{elems.begin() + 1, elems.begin() + 1 + rank},
           /*offsets=*/{elems.begin() + 1 + rank, elems.end()}};
 }
 
-SmallVector<Value> getStridesFromShapeAndOrder(ArrayRef<int64_t> shape,
-                                               ArrayRef<unsigned> order,
+SmallVector<Value> getStridesFromShapeAndOrder(ArrayRef<int64_t> allocShape,
+                                               ArrayRef<unsigned> layoutOrder,
                                                Location loc,
                                                RewriterBase &rewriter) {
-  assert(order.size() == shape.size() && "shape and order must have same size");
-  auto rank = shape.size();
-  SmallVector<Value> strides(rank);
+  // Default minor-to-major order
+  SmallVector<unsigned> allocOrder(allocShape.size());
+  std::iota(allocOrder.rbegin(), allocOrder.rend(), 0);
+  int rankDiff = layoutOrder.size() - allocShape.size();
+  auto minRank = std::min(allocShape.size(), layoutOrder.size());
+  for (size_t i = 0; i < minRank; ++i)
+    allocOrder[i] = layoutOrder[i] - rankDiff;
+  assert(isPermutationOfIota(allocOrder) && "Invalid order");
+
+  auto rank = allocShape.size();
+  SmallVector<Value> allocStrides(rank);
   int64_t stride = 1;
-  for (auto idx : order) {
-    strides[idx] = i32_val(stride);
-    stride *= shape[idx];
+  for (auto idx : allocOrder) {
+    allocStrides[idx] = i32_val(stride);
+    stride *= allocShape[idx];
   }
-  return strides;
+  return allocStrides;
 }
 
 // Convert an \param index to a multi-dim coordinate given \param shape and
@@ -921,16 +944,14 @@ getExpandedSharedMemoryObject(ConversionPatternRewriter &rewriter, Location loc,
                               SharedMemoryObject smemObj,
                               ArrayRef<int64_t> shape) {
   assert(shape.size() == 2 || shape.size() == 3);
-  auto strides = smemObj.getStrides();
   auto offsets = smemObj.getOffsets();
-  auto rank = strides.size();
+  auto rank = offsets.size();
   assert(rank == shape.size());
   if (rank == 3)
     return smemObj;
-  strides.insert(strides.begin(), i32_val(shape[0] * shape[1]));
   offsets.insert(offsets.begin(), i32_val(0));
-  auto expandedSmemObj = SharedMemoryObject(
-      smemObj.getBase(), smemObj.getBaseElemType(), strides, offsets);
+  auto expandedSmemObj =
+      SharedMemoryObject(smemObj.getBase(), smemObj.getBaseElemType(), offsets);
   return expandedSmemObj;
 }
 

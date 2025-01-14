@@ -589,6 +589,10 @@ getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
   const int mmaElemBytes = 4 / kWidth;
   const bool isHopper = mmaLayout.getVersionMajor() == 3;
   auto order = sharedLayout.getOrder();
+  auto allocStrides = LLVM::getStridesFromShapeAndOrder(descTy.getAllocShape(),
+                                                        order, loc, rewriter);
+  SmallVector<Value> strides = {allocStrides.end() - order.size(),
+                                allocStrides.end()};
 
   int nPerWarp =
       std::max<int>(shapePerCTA[2] / mmaLayout.getWarpsPerCTA()[2], 8);
@@ -596,9 +600,9 @@ getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
   auto load = [=, &rewriter, &vals](int batch, int a, int b) {
     MMA16816SmemLoader loader(
         nPerWarp, warpsPerTile, order, mmaLayout.getWarpsPerCTA(), kOrder,
-        kWidth, smemObj.strides, shapePerCTA /*tileShape*/, instrShape,
-        matShape, multiDimWarpId, perPhase, maxPhase, elemBytes, mmaElemBytes,
-        isHopper, rewriter, typeConverter, loc);
+        kWidth, strides, shapePerCTA /*tileShape*/, instrShape, matShape,
+        multiDimWarpId, perPhase, maxPhase, elemBytes, mmaElemBytes, isHopper,
+        rewriter, typeConverter, loc);
     // Offset of a slice within the original tensor in shared memory
     Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
     SmallVector<Value> offs = loader.computeOffsets(lane, cSwizzleOffset);
