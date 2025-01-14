@@ -436,8 +436,8 @@ private:
     // of big buffers. Big buffers have a higher chance to overlap with multiple
     // other buffers, and allocating them first (by calculateStarts) ensures a
     // higher chance that they will occupy a standalone smem slot.
-    llvm::sort(buffers,
-               [&](BufferT *A, BufferT *B) { return A->size > B->size; });
+    llvm::stable_sort(
+        buffers, [&](BufferT *A, BufferT *B) { return A->size > B->size; });
 
     calculateStarts(buffers);
 
