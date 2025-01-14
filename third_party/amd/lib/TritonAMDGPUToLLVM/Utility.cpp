@@ -485,6 +485,7 @@ getCtrlBitsForCacheModifierOnTarget(triton::CacheModifier cm, bool isBufferLoad,
     return getCtrlBitsForCacheModifierOnGFX942(cm, isBufferLoad);
   else
     return getDefaultCtrlBitsForCacheModifier(cm);
+}
 
 Value cvtFp32ToFp16(Location loc, RewriterBase &rewriter, const Value &v,
                     triton::RoundingMode rounding) {
