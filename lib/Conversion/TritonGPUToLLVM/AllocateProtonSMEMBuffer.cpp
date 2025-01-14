@@ -9,13 +9,16 @@
 
 #include "third_party/proton/dialect/include/Dialect/Proton/IR/Dialect.h"
 
+
 using namespace mlir;
 using namespace mlir::triton;
 
 namespace mlir {
 namespace triton {
 #define GEN_PASS_DEF_ALLOCATEPROTONSMEMBUFFER
+//TODO: Remove this when passes have been moved to proton backend
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h.inc"
+#include "../third_party/proton/dialect/include/TritonProtonToLLVM/Passes.h.inc"
 } // namespace triton
 } // namespace mlir
 
@@ -64,7 +67,7 @@ std::unique_ptr<OperationPass<ModuleOp>> createAllocateProtonSMEMBufferPass() {
   return std::make_unique<AllocateProtonSMEMBuffer>();
 }
 
-} // namespace gpu
+} // namespace proton
 
 } // namespace triton
 
