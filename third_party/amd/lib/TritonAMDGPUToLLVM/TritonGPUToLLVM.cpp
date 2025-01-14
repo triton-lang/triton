@@ -267,20 +267,6 @@ private:
         // Add ROCm support.
         static_cast<unsigned>(NVVM::NVVMMemorySpace::kSharedMemorySpace));
   }
-//  void initProtonSMEMBuffer(LLVMTypeConverter &typeConverter) {
-//    ModuleOp mod = getOperation();
-//    OpBuilder b(mod.getBodyRegion());
-//    auto ctx = mod.getContext();
-//    auto loc = mod.getLoc();
-//    auto elemTy = typeConverter.convertType(b.getIntegerType(8));
-//    auto arrayTy = LLVM::LLVMArrayType::get(elemTy, 0);
-//    auto global = b.create<LLVM::GlobalOp>(
-//        loc, arrayTy, /*isConstant=*/false, LLVM::Linkage::External,
-//        "proton_smem", /*value=*/Attribute(), /*alignment=*/16,
-//        // Add ROCm support.
-//        static_cast<unsigned>(NVVM::NVVMMemorySpace::kSharedMemorySpace));
-//  }
-    
 
 };
 

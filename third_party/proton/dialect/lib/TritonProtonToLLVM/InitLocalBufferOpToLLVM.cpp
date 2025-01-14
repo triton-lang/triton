@@ -44,10 +44,11 @@ struct InitLocalBufferOpConversion
   Type globalPtrType = LLVM::LLVMPointerType::get(ctx, global.getAddrSpace());
   Value globalPtr = rewriter.create<LLVM::AddressOfOp>(
       UnknownLoc::get(ctx), globalPtrType, global.getSymName());
-  Value stringStart =
+  Value bufferStart =
       gep(ptr_ty(ctx), i8_ty, globalPtr, SmallVector<Value>({zero}));  
-  store(i32_val(42), stringStart);  
-  rewriter.replaceOp(op, stringStart);
+  //Store a 0 just to keep the buffer from being optimized away in the IR
+  store(i32_val(0), bufferStart);  
+  rewriter.replaceOp(op, bufferStart);
 
     
     return success();
