@@ -1021,24 +1021,32 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast() {
 }
 
 bool shouldPropagateConversion(ConvertLayoutOp convertOp) {
+  // We stop the rematerialization of linear layouts as we have to be a bit more
+  // careful with the heuristics for both correctness and perf
+  RankedTensorType targetType = convertOp.getType();
+  if (isa<LinearEncodingAttr>(targetType.getEncoding())) {
+    return false;
+  }
   // Skip conversions to DotOperandEncodingAttr when the operand index is 0.
   // This heuristic is applied to prevent moving the blocked->dot conversion of
   // the Q tensor (a loop invariant in Flash Attention) outside the loop. Doing
   // so can increase register pressure and cause spilling in some cases.
-  // TODO: Fix this logic to avoid propagating conversions backward unless
-  // it reduces the total number of conversions.
   //
   // Skip conversions to DotOperandEncodingAttr when the operand index is 1 if
-  // it may be hoisted above a load. Currently loading in dot layout with
-  // blocked parent encoding is not enabled.
-  // TODO: Remove this limitation once we enable loading in dot enc with blocked
-  // parent.
-  RankedTensorType targetType = convertOp.getType();
+  // it's not intentionally placed above a load as we have to be a bit more
+  // careful with the heuristics for both correctness and perf.
+  // TODO: Fix this logic to avoid propagating conversions backward unless
+  // it reduces the total number of conversions.
+
   auto dotEnc = dyn_cast<DotOperandEncodingAttr>(targetType.getEncoding());
   if (!dotEnc) {
     return true;
   }
+  if (dotEnc.getOpIdx() == 0) {
+    return false;
+  }
 
+  assert(dotEnc.getOpIdx() == 1);
   SetVector<Operation *> slice;
   BackwardSliceOptions opt;
   opt.omitBlockArguments = true;
@@ -1047,14 +1055,14 @@ bool shouldPropagateConversion(ConvertLayoutOp convertOp) {
   };
   getBackwardSlice(convertOp.getOperation(), &slice, opt);
 
-  bool foundCheapLoad = false;
+  bool foundLoad = false;
   for (Operation *currOp : slice) {
     if (isa<LoadOp>(currOp)) {
-      foundCheapLoad = !isExpensiveLoadOrStore(currOp);
+      foundLoad = true;
     }
   }
 
-  if (dotEnc.getOpIdx() == 0 || foundCheapLoad)
+  if (foundLoad)
     return false;
 
   return true;
@@ -1105,10 +1113,6 @@ void LayoutRematerialization::backwardRematerialization(
 // of the convert.
 void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     ConvertLayoutOp convertOp) {
-  // we don't handle conversions to DotOperandEncodingAttr
-  // this is a heuristics to accommodate fused attention
-  // We stop the rematerialization of linear layouts as we have to be a bit more
-  // careful with the heuristics for both correctness and perf
   RankedTensorType targetType = convertOp.getType();
   if (!shouldPropagateConversion(convertOp)) {
     return;
