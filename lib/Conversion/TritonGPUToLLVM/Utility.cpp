@@ -223,10 +223,7 @@ Value getSmemVecAddr(RankedTensorType registerTy,
   // We propose case 2 (see comments below), which provides a more general
   // solution for all swizzled shared memory scenarios, including the edge case
   // mentioned above.
-  if (/*no swizzling*/ sharedEnc.getMaxPhase() == 1 ||
-      /*swizzling but same shape*/ shape == allocShape ||
-      /*swizzling and rank-reduced and rank >= 2*/
-      (shape == allocShape.take_back(rank) && rank >= 2)) { // Case 1
+  if (isSimpleSharedMemoryAccess(shape, allocShape, sharedEnc)) { // Case 1
     // Get the address to load/store.  The multi-dim address is (offsetX1, ...,
     // offsetXN, block), where the offsets appear in minor-to-major order, and
     // we drop_end to drop block, which we know from above will be 0.

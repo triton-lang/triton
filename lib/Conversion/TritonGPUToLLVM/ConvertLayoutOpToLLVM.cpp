@@ -468,10 +468,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         scratchConfig.paddedRepShape, scratchConfig.order,
         /*swizzleByteSize=*/0);
     LinearLayout shmemStoreLayout =
-        isStMatrix ? chooseStMatrixLayout(
-                         ctx, op.getSrc().getType(), scratchConfig.repShape,
-                         scratchConfig.paddedRepShape, scratchConfig.order,
-                         /*swizzleByteSize=*/0)
+        isStMatrix ? chooseStMatrixLayout(ctx, op.getSrc().getType(),
+                                          /*swizzleByteSize=*/0)
                    : srcLayout.invertAndCompose(sharedLayout);
 
     const int shmemAllocatedNumElems =
