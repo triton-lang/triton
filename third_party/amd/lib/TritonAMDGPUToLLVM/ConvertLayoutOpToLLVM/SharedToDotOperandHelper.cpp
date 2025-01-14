@@ -216,7 +216,7 @@ llvm::SmallVector<Value> computeOffsetsBType(
         Value row = mapping[i][1];
         Value col = add(mapping[i][0], i32_val(blockNonKOffset));
         bOffsets[block * blockSize + i] =
-            computeOffset(rewriter, loc, row, col, smemObj, srcLayout);
+            computeOffset(rewriter, loc, row, col, smemObj, strides, srcLayout);
       }
     }
   } else {
@@ -228,7 +228,7 @@ llvm::SmallVector<Value> computeOffsetsBType(
       Value row = mapping[i][1];
       Value col = mapping[i][0];
       inblockOffset[i] =
-          computeOffset(rewriter, loc, row, col, smemObj, srcLayout);
+          computeOffset(rewriter, loc, row, col, smemObj, strides, srcLayout);
     }
     for (int block = 0; block < numBlocks; ++block) {
       int blockNonKOffset = block * nonKDim * warpsPerBlock;
