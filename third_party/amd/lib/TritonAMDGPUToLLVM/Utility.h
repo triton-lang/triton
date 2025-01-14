@@ -50,9 +50,11 @@ void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
              triton::CacheModifier cm = triton::CacheModifier::NONE);
 
 // Get cache modifier information for creating load or store instruction
+// Get flags <volatile, nontemporal> for a predicated Load or Store
 std::pair<bool, bool> getCacheModifierFlagsForPredicatedCall(LLVM::CallOp);
+// Get the cachepolicy value for a cache modifier
 int32_t getCtrlBitsForCacheModifierOnTarget(triton::CacheModifier, bool,
-                                            mlir::triton::AMD::TargetInfo);
+                                            mlir::triton::AMD::TargetInfo &);
 
 Value cvtFp32ToFp16(Location loc, RewriterBase &rewriter, const Value &v,
                     triton::RoundingMode rounding);

@@ -73,8 +73,7 @@ private:
     // LLVM::StoreOp | 0         | 0       | (cg) global store
     //               | 0         | 1       | (cs) global store nt
     //               | 1         | 0/1     | (wt) global store sc0 sc1
-    bool volatileFlag, nonTmpFlag;
-    std::tie(volatileFlag, nonTmpFlag) =
+    auto [volatileFlag, nonTmpFlag] =
         mlir::LLVM::AMD::getCacheModifierFlagsForPredicatedCall(callOp);
     auto storeOp = rewriter.create<LLVM::StoreOp>(
         loc, val, ptr, /*alignment=*/0, volatileFlag, nonTmpFlag);
@@ -109,8 +108,7 @@ private:
     // LLVM::LoadOp | 0         | 0       | (ca) global load
     //              | 0/1       | 1       | (cg) global load nt
     //              | 1         | 0       | (cv) flat load sc0 sc1
-    bool volatileFlag, nonTmpFlag;
-    std::tie(volatileFlag, nonTmpFlag) =
+    auto [volatileFlag, nonTmpFlag] =
         mlir::LLVM::AMD::getCacheModifierFlagsForPredicatedCall(callOp);
     auto loadOp = rewriter.create<LLVM::LoadOp>(
         loc, elemTy, ptr, /*alignment=*/0, volatileFlag, nonTmpFlag);

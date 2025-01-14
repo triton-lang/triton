@@ -383,7 +383,7 @@ static bool isPredicatedStoreWT(LLVM::CallOp callOp) {
       mlir::LLVM::AMD::predicatedStoreWT);
 }
 
-// Utility function that returns flags <volatile, notemporal> for a predicated
+// Utility function that returns flags <volatile, nontemporal> for a predicated
 // Load or Store
 // ---------------------------------
 // Op   | cm  | volatile | NT
@@ -456,10 +456,10 @@ static int32_t getCtrlBitsForCacheModifierOnGFX942(triton::CacheModifier cm,
     aux |= sc0Bit | sc1Bit;
     break;
   case triton::CacheModifier::WB:
-    aux |= sc1Bit;
+    aux = 0;
     break;
   case triton::CacheModifier::WT:
-    aux |= 17;
+    aux |= sc1Bit;
     break;
   default:
     aux = 0;
@@ -480,7 +480,7 @@ static int32_t getDefaultCtrlBitsForCacheModifier(triton::CacheModifier cm) {
 // .wt: write-through, write data directly to system memory
 int32_t
 getCtrlBitsForCacheModifierOnTarget(triton::CacheModifier cm, bool isBufferLoad,
-                                    mlir::triton::AMD::TargetInfo targetInfo) {
+                                    mlir::triton::AMD::TargetInfo &targetInfo) {
   if (targetInfo.getGPUKind() == llvm::AMDGPU::GK_GFX942) // gfx942
     return getCtrlBitsForCacheModifierOnGFX942(cm, isBufferLoad);
   else
