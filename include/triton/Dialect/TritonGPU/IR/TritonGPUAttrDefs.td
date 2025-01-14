@@ -567,6 +567,11 @@ L(T) = [ {0,8} , {1,9} , {2,10}, {3,11}, {0,8} , {1, 9} , {2, 10}, {3, 11},
 // Linear Layout Encoding
 //===----------------------------------------------------------------------===//
 
+def LinearLayoutParam : AttrOrTypeParameter<"LinearLayout",
+                                            "linear layout"> {
+  let cppAccessorType = "const LinearLayout &";
+}
+
 def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding"> {
   let mnemonic = "linear";
 
@@ -574,7 +579,7 @@ def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding"
     See the docs in LinearLayout.h for the definition of linear layouts.
   }];
 
-  let parameters = (ins "LinearLayout":$linearLayout);
+  let parameters = (ins LinearLayoutParam:$linearLayout);
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
     SmallVector<unsigned> getContigPerThread() const;
