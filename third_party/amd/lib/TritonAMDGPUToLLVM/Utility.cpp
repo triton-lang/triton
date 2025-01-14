@@ -358,37 +358,35 @@ void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
   LLVM::createLLVMCallOp(rewriter, loc, funcOp, ValueRange({ptr, val, pred}));
 }
 
-  static bool isPredicatedLoadCA(LLVM::CallOp callOp) {
-    return callOp.getCallee().value().contains(
-        mlir::LLVM::AMD::predicatedLoadCA);
-  }
+static bool isPredicatedLoadCA(LLVM::CallOp callOp) {
+  return callOp.getCallee().value().contains(mlir::LLVM::AMD::predicatedLoadCA);
+}
 
-static   bool isPredicatedLoadCG(LLVM::CallOp callOp) {
-    return callOp.getCallee().value().contains(
-        mlir::LLVM::AMD::predicatedLoadCG);
-  }
+static bool isPredicatedLoadCG(LLVM::CallOp callOp) {
+  return callOp.getCallee().value().contains(mlir::LLVM::AMD::predicatedLoadCG);
+}
 
-static   bool isPredicatedLoadCV(LLVM::CallOp callOp) {
-    return callOp.getCallee().value().contains(
-        mlir::LLVM::AMD::predicatedLoadCV);
-  }
+static bool isPredicatedLoadCV(LLVM::CallOp callOp) {
+  return callOp.getCallee().value().contains(mlir::LLVM::AMD::predicatedLoadCV);
+}
 
-static   bool isPredicatedStoreCS(LLVM::CallOp callOp) {
-    return callOp.getCallee().value().contains(
-        mlir::LLVM::AMD::predicatedStoreCS);
-  }
+static bool isPredicatedStoreCS(LLVM::CallOp callOp) {
+  return callOp.getCallee().value().contains(
+      mlir::LLVM::AMD::predicatedStoreCS);
+}
 
-static   bool isPredicatedStoreCG(LLVM::CallOp callOp) {
-    return callOp.getCallee().value().contains(
-        mlir::LLVM::AMD::predicatedStoreCG);
-  }
+static bool isPredicatedStoreCG(LLVM::CallOp callOp) {
+  return callOp.getCallee().value().contains(
+      mlir::LLVM::AMD::predicatedStoreCG);
+}
 
-static   bool isPredicatedStoreWT(LLVM::CallOp callOp) {
-    return callOp.getCallee().value().contains(
-        mlir::LLVM::AMD::predicatedStoreWT);
-  }
+static bool isPredicatedStoreWT(LLVM::CallOp callOp) {
+  return callOp.getCallee().value().contains(
+      mlir::LLVM::AMD::predicatedStoreWT);
+}
 
-// Utility function that returns flags <volatile, notemporal> for a predicated Load or Store
+// Utility function that returns flags <volatile, notemporal> for a predicated
+// Load or Store
 // ---------------------------------
 // Op   | cm  | volatile | NT
 // -----+-----+---------------------
@@ -402,14 +400,15 @@ static   bool isPredicatedStoreWT(LLVM::CallOp callOp) {
 //      | .cs |   F      | T
 //      | .wt |   T      | T
 // -----+-----+----------+---------
-std::pair<bool, bool> getCacheModifierFlagsForPredicatedCall(LLVM::CallOp callOp) {
+std::pair<bool, bool>
+getCacheModifierFlagsForPredicatedCall(LLVM::CallOp callOp) {
   if (isPredicatedLoadCA(callOp))
     return std::make_pair(false, false);
   if (isPredicatedLoadCG(callOp))
     return std::make_pair(false, true);
   if (isPredicatedLoadCV(callOp))
     return std::make_pair(true, true);
-  
+
   if (isPredicatedStoreCG(callOp))
     return std::make_pair(false, false);
   if (isPredicatedStoreCS(callOp))
@@ -440,8 +439,9 @@ std::pair<bool, bool> getCacheModifierFlagsForPredicatedCall(LLVM::CallOp callOp
 //      | .cs |  0  |  1  | 1  |
 //      | .wt |  1  |  x  | x  |
 // -----+-----+-----+-----+----+--
-static int32_t getCtrlBitsForCacheModifierOnGFX942(triton::CacheModifier cm, bool isBufferLoad) {
-  const int sc0Bit =0b1, ntBit = 0b10, sc1Bit = 0b1000;
+static int32_t getCtrlBitsForCacheModifierOnGFX942(triton::CacheModifier cm,
+                                                   bool isBufferLoad) {
+  const int sc0Bit = 0b1, ntBit = 0b10, sc1Bit = 0b1000;
   int32_t aux = 0;
   switch (cm) {
   case triton::CacheModifier::CA:
@@ -449,7 +449,7 @@ static int32_t getCtrlBitsForCacheModifierOnGFX942(triton::CacheModifier cm, boo
     break;
   case triton::CacheModifier::CG:
     if (isBufferLoad)
-      aux |= sc0Bit | ntBit;  
+      aux |= sc0Bit | ntBit;
     break;
   case triton::CacheModifier::CS:
     aux |= sc0Bit | ntBit;
@@ -469,7 +469,9 @@ static int32_t getCtrlBitsForCacheModifierOnGFX942(triton::CacheModifier cm, boo
   return aux;
 }
 
-static int32_t getDefaultCtrlBitsForCacheModifier(triton::CacheModifier cm) { return 0; }
+static int32_t getDefaultCtrlBitsForCacheModifier(triton::CacheModifier cm) {
+  return 0;
+}
 
 // Cache modifiers changes how data is managed in the GPU's cache hierarchy:
 // .ca: cache at all levels with LRU policy
@@ -478,8 +480,9 @@ static int32_t getDefaultCtrlBitsForCacheModifier(triton::CacheModifier cm) { re
 // .cv: don't cache and fetch again
 // .wb: write-back, writes back data at all cache levels
 // .wt: write-through, write data directly to system memory
-int32_t getCtrlBitsForCacheModifierOnTarget(triton::CacheModifier cm, bool isBufferLoad,
-                                  mlir::triton::AMD::TargetInfo targetInfo) {
+int32_t
+getCtrlBitsForCacheModifierOnTarget(triton::CacheModifier cm, bool isBufferLoad,
+                                    mlir::triton::AMD::TargetInfo targetInfo) {
   if (targetInfo.getGPUKind() == llvm::AMDGPU::GK_GFX942) // gfx942
     return getCtrlBitsForCacheModifierOnGFX942(cm, isBufferLoad);
   else

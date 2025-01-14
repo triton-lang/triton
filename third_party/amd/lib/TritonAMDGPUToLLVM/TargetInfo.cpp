@@ -57,7 +57,9 @@ Value printfPromoteValue(RewriterBase &rewriter, Value value) {
 }
 } // namespace
 
-llvm::AMDGPU::GPUKind TargetInfo::getGPUKind() const { return llvm::AMDGPU::parseArchAMDGCN(arch); }
+llvm::AMDGPU::GPUKind TargetInfo::getGPUKind() const {
+  return llvm::AMDGPU::parseArchAMDGCN(arch);
+}
 
 int TargetInfo::getSharedMemorySize() const { return 64 * 1024; }
 

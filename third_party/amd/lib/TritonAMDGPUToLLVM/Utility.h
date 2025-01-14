@@ -50,7 +50,8 @@ void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
              triton::CacheModifier cm = triton::CacheModifier::NONE);
 
 std::pair<bool, bool> getCacheModifierFlagsForPredicatedCall(LLVM::CallOp);
-int32_t getCtrlBitsForCacheModifierOnTarget(triton::CacheModifier, bool, mlir::triton::AMD::TargetInfo);
+int32_t getCtrlBitsForCacheModifierOnTarget(triton::CacheModifier, bool,
+                                            mlir::triton::AMD::TargetInfo);
 } // namespace mlir::LLVM::AMD
 
 #endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_UTILITY_H_
