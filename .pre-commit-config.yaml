@@ -21,12 +21,10 @@ repos:
     rev: v0.9.1
     hooks:
       - id: ruff
-        files: '(^python|^third_party/proton|^third_party/amd|^third_party/nvidia)/.*'
+        files: '(^python|^third_party/proton|^third_party/amd|^third_party/nvidia|^test)/.*'
         args: ["--fix", "--exit-non-zero-on-fix"]
         exclude: |
           (?x)(
-            ^python/triton/runtime/.*|
-            ^test/|
             ^docs/conf.py$
           )
 
