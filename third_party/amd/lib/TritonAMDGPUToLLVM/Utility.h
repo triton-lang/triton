@@ -1,6 +1,7 @@
 #ifndef TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_UTILITY_H_
 #define TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_UTILITY_H_
 
+#include "TargetInfo.h"
 #include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
 
@@ -47,6 +48,9 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
 void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
              Value pred, int64_t alignmentBytes = 0,
              triton::CacheModifier cm = triton::CacheModifier::NONE);
+
+std::pair<bool, bool> getCacheModifierFlagsForPredicatedCall(LLVM::CallOp);
+int32_t getCtrlBitsForCacheModifierOnTarget(triton::CacheModifier, bool, mlir::triton::AMD::TargetInfo);
 } // namespace mlir::LLVM::AMD
 
 #endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_UTILITY_H_

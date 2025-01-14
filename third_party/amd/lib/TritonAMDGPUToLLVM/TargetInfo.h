@@ -4,6 +4,7 @@
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include <string>
+#include "llvm/TargetParser/TargetParser.h"
 
 namespace mlir::triton::AMD {
 class TargetInfo : public mlir::triton::TargetInfoBase {
@@ -11,6 +12,8 @@ public:
   explicit TargetInfo(std::string arch) : arch(std::move(arch)) {}
 
   ISAFamily getISAFamily() const { return deduceISAFamily(arch); }
+
+  llvm::AMDGPU::GPUKind getGPUKind() const;
 
   int getSharedMemorySize() const;
 

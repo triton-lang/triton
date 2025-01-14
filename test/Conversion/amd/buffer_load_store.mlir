@@ -6,7 +6,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     tt.func @buffer_load(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %offset : tensor<128xi32, #blocked0>{tt.divisibility=16:i32}) {
         // CHECK: %[[c_mask:.*]] = llvm.mlir.constant(true) : i1
         // CHECK: %[[offset:.*]] = llvm.select %[[c_mask]]
-        // CHECK: %[[aux:.*]] = llvm.mlir.constant(16 : i32) : i32
+        // CHECK: %[[aux:.*]] = llvm.mlir.constant(3 : i32) : i32
         // CHECK: rocdl.raw.ptr.buffer.load {{.*}}, %[[offset]], {{.*}}, %[[aux]]
         %ret = amdgpu.buffer_load %arg0[%offset] cacheModifier = cs : tensor<128xf32, #blocked0>
         tt.return
@@ -67,7 +67,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     tt.func @buffer_store(%value : tensor<128xf32, #blocked0>, %arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %offset : tensor<128xi32, #blocked0>{tt.divisibility=16:i32}) {
         // CHECK: %[[c_mask:.*]] = llvm.mlir.constant(true) : i1
         // CHECK: %[[offset:.*]] = llvm.select %[[c_mask]]
-        // CHECK: %[[aux:.*]] = llvm.mlir.constant(18 : i32) : i32
+        // CHECK: %[[aux:.*]] = llvm.mlir.constant(3 : i32) : i32
         // CHECK: rocdl.raw.ptr.buffer.store {{.*}}, {{.*}}, %[[offset]], {{.*}}, %[[aux]]
         amdgpu.buffer_store %value, %arg0[%offset] cacheModifier = cs : tensor<128xf32, #blocked0>
         tt.return
