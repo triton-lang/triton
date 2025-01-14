@@ -3,10 +3,8 @@
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
-#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/IR/PatternMatch.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
-#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
 #include "BufferOpsEmitter.h"
@@ -75,9 +73,10 @@ Value BufferEmitter::createResourceDescriptor(Value basePtr) {
 }
 
 Value BufferEmitter::emitLoad(Type type, Value rsrcDesc, Value offset,
-                              Value pred, Value falseVal) {
+                              Value pred, Value falseVal,
+                              triton::CacheModifier cm) {
   SmallVector<Value, 6> args;
-  fillCommonArgs(type, rsrcDesc, offset, pred, args);
+  fillCommonArgs(type, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/true, args);
   Type bufferType = getBufferOpType(type);
   Value data = rewriter.create<ROCDL::RawPtrBufferLoadOp>(
       loc, bufferType, args, ArrayRef<NamedAttribute>());
@@ -88,13 +87,14 @@ Value BufferEmitter::emitLoad(Type type, Value rsrcDesc, Value offset,
 }
 
 void BufferEmitter::emitStore(Value rsrcDesc, Value offset, Value data,
-                              Value pred) {
+                              Value pred, triton::CacheModifier cm) {
   VectorType vecTy = cast<VectorType>(data.getType());
   Type bufferType = getBufferOpType(vecTy);
   if (vecTy != bufferType)
     data = bitcast(data, bufferType);
   SmallVector<Value, 6> args{data};
-  fillCommonArgs(vecTy, rsrcDesc, offset, pred, args);
+  fillCommonArgs(vecTy, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/false,
+                 args);
   rewriter.create<ROCDL::RawPtrBufferStoreOp>(loc, TypeRange{}, args,
                                               ArrayRef<NamedAttribute>());
 }
@@ -143,6 +143,7 @@ Type BufferEmitter::getBufferOpType(Type type) {
 
 void BufferEmitter::fillCommonArgs(Type type, Value rsrcDesc,
                                    Value vOffsetElems, Value pred,
+                                   triton::CacheModifier cm, bool isBufferLoad,
                                    SmallVector<Value> &args) {
 
   // 1. Create the (masked) offset
@@ -161,10 +162,9 @@ void BufferEmitter::fillCommonArgs(Type type, Value rsrcDesc,
   Value sgprOffset = int_val(32, 0);
 
   // 3. Create the cache modifiers word
-  // bit 0: GLC = 0 (atomics drop value, less coherency)
-  // bits 1-2: SLC, DLC = 0 (similarly)
-  // bit 3: swizzled (0 for raw)
-  Value cacheModifiers = int_val(32, 0);
+  int32_t aux =
+      getCtrlBitsForCacheModifierOnTarget(cm, isBufferLoad, targetInfo);
+  Value cacheModifiers = int_val(32, aux);
 
   // 5. Add the arguments
   args.push_back(rsrcDesc);
