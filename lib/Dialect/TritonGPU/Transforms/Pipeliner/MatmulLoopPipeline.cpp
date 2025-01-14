@@ -334,10 +334,6 @@ getSharedEncoding(Operation *loadOp, bool isMMAV3Shared) {
   } else {
     order = blockedOrder;
   }
-  if (isMMAV3Shared) {
-    return ttg::SharedEncodingAttr::get(ty.getContext(), ty.getShape(), order,
-                                        ctaLayout, ty.getElementType());
-  }
 
   // If the load is used by a LocalAllocOp, use the same encoding as the allocs.
   // If the allocs don't all have the same encoding, bail.
