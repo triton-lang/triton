@@ -76,6 +76,7 @@ void init_triton_passes_ttgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_coalesce_async_copy",
                      createTritonGPUCoalesceAsyncCopy);
   //Proton passes
+  //TODO: move this into Proton backend
   ADD_PASS_WRAPPER_0("add_allocate_proton_smem_buffer",
                      createAllocateProtonSMEMBufferPass);
   
