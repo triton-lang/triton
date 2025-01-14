@@ -42,9 +42,9 @@
 //    reducing wait times.
 //
 // 2. Ensuring Consecutive Thread Access:
-//    When consecutive threads access sequential memory addresses, the TA unit
-//    in the VMEM can merge multiple requests into a single, larger transaction.
-//    This approach significantly boosts memory bandwidth utilization.
+//    When consecutive threads access sequential memory addresses we expect
+//    fewer requests per chache line. This approach can significantly affect
+//    memory bandwidth utilization.
 //
 //===----------------------------------------------------------------------===//
 //

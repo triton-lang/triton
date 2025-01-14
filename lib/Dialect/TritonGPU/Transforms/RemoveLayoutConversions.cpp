@@ -1020,22 +1020,53 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast() {
   }
 }
 
-void LayoutRematerialization::backwardRematerialization(
-    ConvertLayoutOp convertOp) {
+bool shouldPropagateConversion(ConvertLayoutOp convertOp) {
   // Skip conversions to DotOperandEncodingAttr when the operand index is 0.
   // This heuristic is applied to prevent moving the blocked->dot conversion of
   // the Q tensor (a loop invariant in Flash Attention) outside the loop. Doing
   // so can increase register pressure and cause spilling in some cases.
   // TODO: Fix this logic to avoid propagating conversions backward unless
   // it reduces the total number of conversions.
+  //
+  // Skip conversions to DotOperandEncodingAttr when the operand index is 1 if
+  // it may be hoisted above a load. Currently loading in dot layout with
+  // blocked parent encoding is not enabled.
+  // TODO: Remove this limitation once we enable loading in dot enc with blocked
+  // parent.
   RankedTensorType targetType = convertOp.getType();
   auto dotEnc = dyn_cast<DotOperandEncodingAttr>(targetType.getEncoding());
-  if (dotEnc && dotEnc.getOpIdx() == 0)
+  if (!dotEnc) {
+    return true;
+  }
+
+  SetVector<Operation *> slice;
+  BackwardSliceOptions opt;
+  opt.omitBlockArguments = true;
+  opt.filter = [&](Operation *op) {
+    return op->getParentRegion() == convertOp->getParentRegion();
+  };
+  getBackwardSlice(convertOp.getOperation(), &slice, opt);
+
+  bool foundCheapLoad = false;
+  for (Operation *currOp : slice) {
+    if (isa<LoadOp>(currOp)) {
+      foundCheapLoad = !isExpensiveLoadOrStore(currOp);
+    }
+  }
+
+  if (dotEnc.getOpIdx() == 0 || foundCheapLoad)
+    return false;
+
+  return true;
+}
+
+void LayoutRematerialization::backwardRematerialization(
+    ConvertLayoutOp convertOp) {
+  RankedTensorType targetType = convertOp.getType();
+  if (!shouldPropagateConversion(convertOp)) {
     return;
-  // We stop the rematerialization of linear layouts as we have to be a bit more
-  // careful with the heuristics for both correctness and perf
-  if (isa<LinearEncodingAttr>(targetType.getEncoding()))
-    return;
+  }
+
   Value oldV = convertOp.getSrc();
   LDBG("check backward remat with source " << oldV << " encoding "
                                            << targetType.getEncoding());
@@ -1077,15 +1108,9 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   // we don't handle conversions to DotOperandEncodingAttr
   // this is a heuristics to accommodate fused attention
   RankedTensorType targetType = convertOp.getType();
-  // Skip conversions to DotOperandEncodingAttr when the operand index is 0.
-  // This heuristic is applied to prevent moving the blocked->dot conversion of
-  // the Q tensor (a loop invariant in Flash Attention) outside the loop. Doing
-  // so can increase register pressure and cause spilling in some cases.
-  // TODO: Fix this logic to avoid propagating conversions backward unless
-  // it reduces the total number of conversions.
-  auto dotEnc = dyn_cast<DotOperandEncodingAttr>(targetType.getEncoding());
-  if (dotEnc && dotEnc.getOpIdx() == 0)
+  if (!shouldPropagateConversion(convertOp)) {
     return;
+  }
 
   auto isExtOrBroadcastOp = [](Operation *op) {
     if (isa<arith::ExtSIOp, arith::ExtUIOp, arith::ExtFOp, BroadcastOp,
