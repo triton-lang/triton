@@ -536,9 +536,7 @@ getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
   // HACK: Workaround AMD codegen path generating transient invalid layouts.
   auto isInvalidDotEnc = [](RankedTensorType type) {
     auto dotEnc = dyn_cast<DotOperandEncodingAttr>(type.getEncoding());
-    return dotEnc &&
-           isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>(dotEnc.getParent()) &&
-           dotEnc.getKWidth() == 0;
+    return dotEnc && dotEnc.getKWidth() == 0;
   };
   if (isInvalidDotEnc(srcTy) || isInvalidDotEnc(dstTy))
     return {};
