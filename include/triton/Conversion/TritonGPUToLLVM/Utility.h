@@ -283,7 +283,8 @@ public:
                                 RewriterBase &rewriter) const {
     auto allocStrides = SharedMemoryObject::getStridesForShape(
         allocShape, layoutOrder, loc, rewriter);
-    return {allocStrides.end() - offsets.size(), allocStrides.end()};
+    return SmallVector<Value>(allocStrides.end() - offsets.size(),
+                              allocStrides.end());
   }
 
   static SmallVector<unsigned>
