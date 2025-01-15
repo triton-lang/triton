@@ -303,3 +303,160 @@ the [triton-dev-containers repository](https://github.com/redhat-et/triton-dev-c
 
 For detailed instructions on how to use the dev containers please see
 the [dev container user guide](https://github.com/redhat-et/triton-dev-containers/blob/main/.devcontainer/devcontainer.md)
+
+# Warp Specialization Support
+
+
+Warp specialization enhances kernel performance by utilizing an asynchronous execution model, where different parts of the kernel are handled by separate hardware units. The data communication between these units, via shared memory on the H100, operates with high efficiency. With this in mind, we’ve developed an automatic warp specialization optimization that partitions a user kernel into asynchronous tasks (which map to warp groups on NVIDIA GPU), which naturally execute concurrently, leveraging the hardware’s multitasking warp scheduler. The following sections provide a breakdown of the compiler features developed to enable warp specialization.
+
+
+## Asynchronous Tasks
+
+Warp specialization is built on top of the concept of partitioning the user’s program into asynchronous tasks (referred to as "async tasks" or “tasks” in the following sections). Each async task will be executed by a standalone warp group on the supported hardware, to achieve instruction level parallelism. While optimally and automatically partitioning asynchronous tasks remains a challenge for compilers, our approach to automatic task partitioning has proven effective for kernels similar to typical examples like GEMM and Flash Attention.
+
+To enable warp specialization, user just needs to specify certain autotune flags, i.e., `num_consumer_groups` and `num_buffers_warp_spec`. For example, a warp-specialized GEMM implementation might look like below. You can find a complete example in 09-persistent-matmul.py.
+
+```python
+@triton.autotune(
+    configs=[
+        triton.Config(
+            {
+                "BLOCK_SIZE_M": 128,
+                "BLOCK_SIZE_N": 256,
+                "BLOCK_SIZE_K": 64,
+                "GROUP_SIZE_M": 8,
+            },
+            num_stages=2,
+            num_warps=4,
+            num_consumer_groups=2,
+            num_buffers_warp_spec=3,
+        ),
+    ],
+    key=["M", "N", "K"],
+)
+@triton.jit
+def matmul_persistent_ws_kernel(
+   a_ptr, b_ptr, c_ptr, M, N, K,
+   stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,
+   BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
+):
+   pid = tl.program_id(axis=0)
+   num_pid_m = tl.cdiv(M, BLOCK_M)
+   num_pid_n = tl.cdiv(N, BLOCK_N)
+   pid_m = pid // num_pid_m
+   pid_n = pid % num_pid_n
+   offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+   offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+   offs_k = tl.arange(0, BLOCK_K)
+   a_ptrs = a_ptr + (offs_m[:, None] * stride_am + offs_k[None, :] * stride_ak)
+   b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_n[None, :] * stride_bn)
+   acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+   for k in range(0, tl.cdiv(K, BLOCK_K)):
+       a = tl.load(a_ptrs)
+       b = tl.load(b_ptrs)
+       acc += tl.dot(a, b)
+       a_ptrs += BLOCK_K * stride_ak
+       b_ptrs += BLOCK_K * stride_bk
+   c = acc.to(tl.float16)
+   c_ptrs = c_ptr + stride_cm * offs_m[:, None] + stride_cn * offs_n[None, :]
+   tl.store(c_ptrs, c)
+```
+
+The compiler automatically determines how to utilize one producer warp group and two consumer warp groups to execute the kernel. It begins by assigning task IDs to certain anchor operations, which influence the task assignments for the remaining operations. Once the anchor tasks are annotated, the compiler assigns the non-anchor operations to tasks as follows:
+
+- Control dependencies exclusive to an anchor operation are included in the same task as the anchor operation.
+- Data dependencies exclusive to an anchor operation are included in the same task as the anchor operation, unless they are another anchor operation.
+- Control or data dependencies shared between tasks are included in all those tasks.
+
+For the GEMM example above, the compiler computes a task scheme and annotates it in the IR using MLIR attributes. To illustrate this more clearly, let's use source code annotations. After task propagation:
+
+
+```python
+@triton.jit
+def matmul_persistent_ws_kernel(
+   a_ptr, b_ptr, c_ptr, M, N, K,
+   stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,
+   BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
+):
+   pid = tl.program_id(axis=0) # async_task 0, 1
+   num_pid_m = tl.cdiv(M, BLOCK_M) # async_task 0, 1
+   num_pid_n = tl.cdiv(N, BLOCK_N) # async_task 0, 1
+   pid_m = pid // num_pid_m # async_task 0, 1
+   pid_n = pid % num_pid_n # async_task 0, 1
+   offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M) # async_task 0, 1
+   offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N) # async_task 0, 1
+   offs_k = tl.arange(0, BLOCK_K) # async_task 0
+   a_ptrs = a_ptr + (offs_m[:, None] * stride_am + offs_k[None, :] * stride_ak) # async_task 0
+   b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_n[None, :] * stride_bn) # async_task 0
+   acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32) # async_task 1
+   for k in range(0, tl.cdiv(K, BLOCK_K)): # async_task 0, 1
+       a = tl.load(a_ptrs)   # async_task 0
+       b = tl.load(b_ptrs)   # async_task 0
+       acc += tl.dot(a, b)   # async_task 1
+       a_ptrs += BLOCK_K * stride_ak # async_task 0
+       b_ptrs += BLOCK_K * stride_bk # async_task 0
+   c = acc.to(tl.float16) # async_task 1
+   c_ptrs = c_ptr + stride_cm * offs_m[:, None] + stride_cn * offs_n[None, :] # async_task 1
+   tl.store(c_ptrs, c) # async_task 1
+```
+
+
+## Data Partitioning
+
+To further improve performance, the compiler will split the same workload across two async tasks  This way, when one task is blocked on a heavy computation (e.g., the dot operation), the other group can execute other operations in parallel. The compiler determines how to divide the work between the two tasks to maximize performance. On the H100 GPU, the compiler will, by default, attempt to split the input tensor A along the M dimension so that each consumer computes half of the output tensor independently. This approach is known as cooperative partitioning. If this split is not advantageous—for instance, if it results in a smaller-than-native `wgmma` instruction—the compiler will instead attempt to split along the N dimension.
+
+The transformed code for the above GEMM kernel with a configured tile size [128, 256, 64] will look like below (using source annotations instead of IR for illustration).
+
+
+```python
+@triton.jit
+def matmul_persistent_ws_kernel(
+   a_ptr, b_ptr, c_ptr, M, N, K,
+   stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,
+   BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
+):
+   pid = tl.program_id(axis=0) # async_task 0, 1, 2
+   num_pid_m = tl.cdiv(M, BLOCK_M) # async_task 0, 1, 2
+   num_pid_n = tl.cdiv(N, BLOCK_N) # async_task 0, 1, 2
+   pid_m = pid // num_pid_m # async_task 0, 1, 2
+   pid_n = pid % num_pid_n # async_task 0, 1, 2
+   offs_m_1 = pid_m * BLOCK_M + tl.arange(0, BLOCK_M // 2) # async_task 0, 1, 2
+   offs_m_2 = pid_m * BLOCK_M + tl.arange(BLOCK_M // 2, BLOCK_M) # async_task 0, 1, 2
+   offs_n = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_N) # async_task 0, 1, 2
+   offs_k = tl.arange(0, BLOCK_K) # async_task 0
+   a_ptrs_1 = a_ptr + (offs_m_1[:, None] * stride_am + offs_k[None, :] * stride_ak) # async_task 0
+   a_ptrs_2 = a_ptr + (offs_m_2[:, None] * stride_am + offs_k[None, :] * stride_ak) # async_task 0
+   b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_n[None, :] * stride_bn) # async_task 0
+   acc_1 = tl.zeros((BLOCK_M // 2, BLOCK_N), dtype=tl.float32) # async_task 1
+   acc_1 = tl.zeros((BLOCK_M // 2, BLOCK_N), dtype=tl.float32) # async_task 2
+   for k in range(0, tl.cdiv(K, BLOCK_K)): # async_task 0, 1, 2
+       a_1 = tl.load(a_ptrs_1)   # async_task 0
+       a_2 = tl.load(a_ptrs_2)   # async_task 0
+       b = tl.load(b_ptrs)   # async_task 0
+       acc_1 += tl.dot(a_1, b)   # async_task 1
+       acc_2 += tl.dot(a_2, b)   # async_task 2
+       a_ptrs_1 += BLOCK_K * stride_ak # async_task 0
+       a_ptrs_2 += BLOCK_K * stride_ak # async_task 0
+       b_ptrs += BLOCK_K * stride_bk # async_task 0
+   c_1 = acc_1.to(tl.float16) # async_task 1
+   c_2 = acc_2.to(tl.float16) # async_task 2
+   c_ptrs_1 = c_ptr_1 + stride_cm * offs_m_1[:, None] + stride_cn * offs_n[None, :] # async_task 1
+   c_ptrs_2 = c_ptr_2 + stride_cm * offs_m_2[:, None] + stride_cn * offs_n[None, :] # async_task 2
+   tl.store(c_ptrs_1, c_1) # async_task 1
+   tl.store(c_ptrs_2, c_2) # async_task 2
+```
+
+
+## Code Partitioning
+
+We assume all operations are already marked with a list of taskIds. We first find all communications required between warp groups. Each communication starts from a load operation with a single taskId, and ends at a direct user of the load which belongs to a different taskId. For `ForOps` containing a communication channel, we add additional arguments: `phase` and `bufferIndex`.
+
+We introduce a tuning configuration: `num_buffers_warp_spec`. For each communication channel, if it is within a `forOp`, we use an array of buffers in SMEM to save the results, and size of the array is determined by `num_buffers_warp_spec`. We also use an array of barriers for each communication channel that is inside a `ForOp`. At this pass, four new operations are introduced to correctly synchronize between the producer and the consumer: `ProducerAcquireOp`, `ProducerCommitOp`, `ConsumerWaitOp`, and `ConsumerReleaseOp`. Each of the four new ops take a token, a buffer Index. `ProducerAcquire` and `ConsumerWait` take an additional phase operand.
+
+
+For `ForOps` with multiple task Ids, we clone one copy for each taskId, each copy contains the operations with the specific taskId. In the end, we create multiple `IfOps`, one for each possible taskId. We go through the body of the function, clone the op for each attached task Id and put the cloned op in the right `IfOp`.
+
+To adjust register usage, we introduce two new ops: `RegAllocOp` and `RegDeallocOp`, both taking an integer operand. For each warp group, we decide to insert either `RegAllocOp` or `RegDeallocOp`. The current heuristic is simple: if the task Id is 0, we add `RegDeallocOp`, otherwise we use `RegAllocOp`. The amount of register adjustment can be tuned via `reg_dec_producer` and `reg_inc_consumer`.
+
+This pass also lowers `loadOp`s to `AsyncTMACopyGlobalToLocalOp` or `AsyncCopyGlobalToLocalOp`, so the communication can be expressed via SMEM. For TMA, the producer will become
+`ProducerAcquire` -> `barrier_expect` -> `AsyncTMACopyGlobalToLocalOp`, and the consumer will contain `wait_barrier` -> ops -> `ConsumerRelease`. For non-TMA loads, the producer will become `ProducerAcquire` -> `AsyncCopyGlobalToLocalOp` -> `ProducerCommitOp`, and the consumer will contain `ConsumerWaitOp` -> ops -> `ConsumerRelease`.
