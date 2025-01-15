@@ -216,8 +216,52 @@ class SharedLayout:
         return f"#{GPU_DIALECT}.shared<{{vec={self.vec}, perPhase={self.per_phase}, maxPhase={self.max_phase}, order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}, hasLeadingOffset={has_leading_offset_str}}}>"
 
 
+class LinearLayout:
+
+    def __init__(self, register, lane, warp, block):
+        self.register = register
+        self.lane = lane
+        self.warp = warp
+        self.block = block
+
+    def __str__(self):
+        return f"#{GPU_DIALECT}.linear<{{register={self.register}, lane={self.lane}, warp={self.warp}, block={self.block}}}>"
+
+
+# Python impl of LinearEncodingAttr::basesPerDim
+def bases_per_dim(layout, dim, rank, skip_broadcast=True):
+    assert isinstance(layout, LinearLayout)
+    bases = getattr(layout, dim)
+    result = [1] * rank
+
+    if not bases:
+        return result
+
+    non_zero_idx = None
+
+    for basis in bases:
+        # Find the first non-zero index in the current basis
+        idx = next((i for i, v in enumerate(basis) if v != 0), None)
+        if idx is not None:
+            non_zero_idx = idx
+            result[idx] *= 2
+        elif not skip_broadcast:
+            # If no non-zero found and we're not skipping broadcasts, use the last found non-zero index
+            assert non_zero_idx is not None
+            result[non_zero_idx] *= 2
+
+    return result
+
+
+def warps_per_cta(layout, shape):
+    if isinstance(layout, LinearLayout):
+        return bases_per_dim(layout, 'warp', len(shape))
+    else:
+        return layout.warps_per_cta
+
+
 def is_layout_applicable(layout) -> bool:
-    if isinstance(layout, (BlockedLayout, SharedLayout)):
+    if isinstance(layout, (BlockedLayout, SharedLayout, LinearLayout)):
         return True
     elif isinstance(layout, SliceLayout):
         return is_layout_applicable(layout.parent)
@@ -2727,6 +2771,9 @@ layouts = [
     WmmaLayout(version=1, warps_per_cta=[2, 2]),
     WmmaLayout(version=1, warps_per_cta=[4, 1]),
     WmmaLayout(version=1, warps_per_cta=[1, 4]),
+    LinearLayout(register=[[0, 16], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], lane=[[0, 0], [0, 1], [0, 2], [0, 4],
+                                                                                    [0, 8]], warp=[[32, 0], [0, 32]],
+                 block=[]),
 ]
 
 
@@ -2746,6 +2793,8 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, add_ov
         pytest.skip("Skipping test because it runs out of shared memory")
     if reduce_op == "sum" and dtype_str == "float16" and M * N > 1024:
         pytest.skip("Skipping sum reduction on float16 due to accuracy issues")
+    if is_hip() and isinstance(src_layout, LinearLayout):
+        pytest.skip("FIXME: LinearLayout not supported on HIP")
 
     if isinstance(src_layout, MmaLayout) and src_layout.version == 3:
         src_layout[2] = 16 if dtype_str == "float16" else 8
@@ -2772,7 +2821,8 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, add_ov
     rdims_2d = f"1x{N}" if axis == 0 else f"{M}x1"
     store_range = "%7" if axis == 0 else "%1"
     blocked = BlockedLayout([1, 1], [32, THREADS_PER_WARP // 32], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1])
-    num_warps = src_layout.warps_per_cta[0] * src_layout.warps_per_cta[1]
+    warps = warps_per_cta(src_layout, [M, N])
+    num_warps = warps[0] * warps[1]
     if num_warps == 8:
         blocked = BlockedLayout([1, 1], [32, THREADS_PER_WARP // 32], [4, 2], [0, 1], [1, 1], [1, 1], [0, 1])
     one_d_layout = BlockedLayout([1], [THREADS_PER_WARP], [num_warps], [0], [1], [1], [0])
@@ -3538,8 +3588,6 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
         if "e4m3" in (mxfp_type, normal_type):
             if not is_hip_mi300():
                 pytest.skip(f"scaled_dot({mxfp_type}, {normal_type}) only implemented for MI300")
-            if normal_type == "fp16":
-                pytest.skip(f"scaled_dot({mxfp_type}, {normal_type}) not yet implemented for MI300")
         if mma == 16 and K == 64:
             pytest.skip(f"K == {K} too small for mfma {mma} in scaled_dot")
 

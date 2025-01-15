@@ -363,6 +363,15 @@ SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
 SmallVector<unsigned> delinearize(unsigned linear, ArrayRef<unsigned> shape,
                                   ArrayRef<unsigned> order);
 
+// Returns a tuple with the delinearized coordinates and a boolean which is true
+// iff the Value is not broadcasted (equivalently, if the value is the "first"
+// lane/thread/etc. that holds the given value). In mathy terms, the boolean is
+// true if the element is the canonical representative of the class.
+std::tuple<SmallVector<Value>, Value>
+delinearize(RewriterBase &rewriter, Location loc,
+            triton::gpu::DistributedEncodingTrait layout,
+            ArrayRef<int64_t> shape, StringAttr dimName, Value linear);
+
 Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
                 ArrayRef<unsigned> shape, ArrayRef<unsigned> order);
 
@@ -482,11 +491,6 @@ inline Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
 // -----------------------------------------------------------------------
 // MXFP utilities
 // -----------------------------------------------------------------------
-
-// Convert each value, which is an int8 containing 2 packed mxfp4 values,
-// into 2 standalone bf16 values
-SmallVector<Value> convertMxfp4x2ToBf16x2(RewriterBase &rewriter, Location loc,
-                                          ArrayRef<Value> values);
 
 // Scale a mxfp4 value by a given scale.
 Value mxfpScaleBf16(RewriterBase &rewriter, Location loc, Value v, Value scale,
