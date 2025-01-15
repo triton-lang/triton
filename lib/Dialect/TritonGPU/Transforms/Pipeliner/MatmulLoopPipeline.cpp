@@ -356,6 +356,11 @@ getSharedEncoding(Operation *loadOp, bool isMMAV3Shared) {
     return localAllocEnc;
   }
 
+  if (isMMAV3Shared) {
+    return ttg::SharedEncodingAttr::get(ty.getContext(), ty.getShape(), order,
+                                        ctaLayout, ty.getElementType());
+  }
+
   // Use non-swizzled layout for loads that do not feed into dot ops.
   // TODO: This won't be optimal for 2D tensors.
   return ttg::SharedEncodingAttr::get(ty.getContext(), 1, 1, 1, order,
