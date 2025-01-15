@@ -184,6 +184,7 @@ Value getSmemVecAddr(RankedTensorType registerTy,
   StringAttr kLane = str_attr("lane");
   StringAttr kWarp = str_attr("warp");
   auto shape = sharedTy.getShape();
+  auto allocShape = sharedTy.getAllocShape();
   auto rank = shape.size();
   auto sharedEnc =
       dyn_cast<triton::gpu::SharedEncodingAttr>(sharedTy.getEncoding());
@@ -191,8 +192,7 @@ Value getSmemVecAddr(RankedTensorType registerTy,
   auto smemBase = smemObj.getBase();
   auto smemOffsets = smemObj.getOffsets();
   auto smemOrder = sharedEnc.getOrder();
-  auto smemStrides =
-      smemObj.getStrides(sharedTy.getAllocShape(), smemOrder, loc, rewriter);
+  auto smemStrides = smemObj.getStrides(allocShape, smemOrder, loc, rewriter);
   Value smemOffset;
   // When loading or storing to shared memory, we consider two cases for
   // performance reasons:
