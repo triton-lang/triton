@@ -581,28 +581,6 @@ SharedMemoryObject getSharedMemoryObjectFromStruct(Location loc,
           /*offsets=*/{elems.begin() + 1, elems.end()}};
 }
 
-SmallVector<Value> getSmemAllocStrides(ArrayRef<int64_t> allocShape,
-                                       ArrayRef<unsigned> layoutOrder,
-                                       Location loc, RewriterBase &rewriter) {
-  // Default minor-to-major order
-  SmallVector<unsigned> allocOrder(allocShape.size());
-  std::iota(allocOrder.rbegin(), allocOrder.rend(), 0);
-  int rankDiff = layoutOrder.size() - allocShape.size();
-  auto minRank = std::min(allocShape.size(), layoutOrder.size());
-  for (size_t i = 0; i < minRank; ++i)
-    allocOrder[i] = layoutOrder[i] - rankDiff;
-  assert(isPermutationOfIota(allocOrder) && "Invalid order");
-
-  auto rank = allocShape.size();
-  SmallVector<Value> allocStrides(rank);
-  int64_t stride = 1;
-  for (auto idx : allocOrder) {
-    allocStrides[idx] = i32_val(stride);
-    stride *= allocShape[idx];
-  }
-  return allocStrides;
-}
-
 // Convert an \param index to a multi-dim coordinate given \param shape and
 // \param order.
 SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
