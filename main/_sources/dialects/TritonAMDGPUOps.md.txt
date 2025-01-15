@@ -8,6 +8,7 @@ Syntax:
 
 ```
 operation ::= `amdgpu.buffer_load` $ptr `[` $offsets `]` (`,` $mask^)? (`,` $other^)?
+              oilist(`cacheModifier` `=` $cache)
               attr-dict `:` type($result)
 ```
 
@@ -23,6 +24,20 @@ Traits: `AttrSizedOperandSegments`, `SameLoadStoreOperandsAndResultEncoding`
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
 Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMemory}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</summary>{{% markdown %}}Enum cases:
+* none (`NONE`)
+* ca (`CA`)
+* cg (`CG`)
+* wb (`WB`)
+* cs (`CS`)
+* wt (`WT`)
+* cv (`CV`){{% /markdown %}}</details></td></tr>
+</table>
 
 #### Operands:
 
@@ -48,6 +63,7 @@ Syntax:
 
 ```
 operation ::= `amdgpu.buffer_store` $value `,` $ptr `[` $offsets `]` (`,` $mask^)?
+              oilist(`cacheModifier` `=` $cache)
               attr-dict `:` type($value)
 ```
 
@@ -63,6 +79,20 @@ Traits: `SameLoadStoreOperandsEncoding`
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
 Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</summary>{{% markdown %}}Enum cases:
+* none (`NONE`)
+* ca (`CA`)
+* cg (`CG`)
+* wb (`WB`)
+* cs (`CS`)
+* wt (`WT`)
+* cv (`CV`){{% /markdown %}}</details></td></tr>
+</table>
 
 #### Operands:
 
