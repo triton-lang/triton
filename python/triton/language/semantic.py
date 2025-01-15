@@ -1154,7 +1154,8 @@ def validate_descriptor_block(shape, dtype):
     # to be at least as big as the swizzle tile.
     assert shape[0] >= 8, f"tensor descriptor block shape must have at least 8 rows, but got {shape[0]}"
     min_cols = 32 / dtype.primitive_bitwidth * 8
-    assert shape[1] >= min_cols, f"{dtype} tensor descriptor block shape must have at least {min_cols} columns, but got {shape[1]}"
+    assert shape[
+        1] >= min_cols, f"{dtype} tensor descriptor block shape must have at least {min_cols} columns, but got {shape[1]}"
 
 
 def descriptor_load(desc: tl._experimental_tensor_desciptor_base, offsets, cache_modifier: str, eviction_policy: str,
