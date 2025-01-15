@@ -2,10 +2,29 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Attributes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/STLExtras.h"
+
+#if defined(_MSC_VER) && !defined(__clang__)
+// from https://gist.github.com/pps83/3210a2f980fd02bb2ba2e5a1fc4a2ef0
+#include <intrin.h>
+
+static int __builtin_clz(unsigned x) {
+  unsigned long r;
+  _BitScanReverse(&r, x);
+  return static_cast<int>(r);
+}
+
+static int __builtin_ctz(unsigned x) {
+  unsigned long r;
+  _BitScanForward(&r, x);
+  return static_cast<int>(r);
+}
+
+#endif
 
 namespace mlir {
 
@@ -580,6 +599,57 @@ SmallVector<Value> getStridesFromShapeAndOrder(ArrayRef<int64_t> shape,
     stride *= shape[idx];
   }
   return strides;
+}
+
+// Extract the bits of `a` that are set in `mask`
+Value pext_i32(RewriterBase &rewriter, Location loc, Value a, uint32_t mask) {
+  assert(a.getType() == i32_ty && "a must be i32");
+  // Handle width = 32 to avoid doing 1 << 32
+  if (mask == 0xFFFFFFFF)
+    return a;
+
+  // Implements the blocked algorithm from
+  // https://forums.developer.nvidia.com/t/pdep-and-pext-functionality-for-cuda/270973
+  uint32_t mskConst = mask;
+  uint32_t extcnt = 0;
+  Value result = i32_val(0);
+  while (mskConst) {
+    uint32_t oldmsk = mskConst;
+    uint32_t bitgrplsb = mskConst & (-mskConst);
+    mskConst &= bitgrplsb + mskConst;
+    uint32_t bitgrp = mskConst ^ oldmsk;
+    uint32_t lsbpos = 31 - __builtin_clz(bitgrplsb);
+    // like popcount for a number 0..01..1..0 but portable
+    uint32_t grplen = __builtin_ctz(~(bitgrp >> lsbpos));
+    uint32_t shift = lsbpos - extcnt;
+    extcnt += grplen;
+    result = or_(result, lshr(and_(i32_val(bitgrp), a), i32_val(shift)));
+  }
+  return result;
+}
+
+std::tuple<SmallVector<Value>, Value>
+delinearize(RewriterBase &rewriter, Location loc,
+            triton::gpu::DistributedEncodingTrait layout,
+            ArrayRef<int64_t> shape, StringAttr dimName, Value linear) {
+  auto ll = *triton::gpu::toLinearLayout(shape, layout);
+  auto linearLayout =
+      triton::gpu::LinearEncodingAttr::get(rewriter.getContext(), ll);
+  assert(ll.hasInDim(dimName));
+  int32_t freeVarMask = ll.getFreeVariableMasks()[dimName];
+  auto isRepresentative = true_val();
+  if (freeVarMask != 0) {
+    isRepresentative = icmp_eq(and_(i32_val(freeVarMask), linear), i32_val(0));
+    // We remove the bits of linear that are set to one in freeVarMask
+    int32_t nonFreeVarMask = ~freeVarMask & (ll.getInDimSize(dimName) - 1);
+    linear = pext_i32(rewriter, loc, linear, nonFreeVarMask);
+  }
+
+  auto orderDim = linearLayout.orderPerDim(dimName, linearLayout.getOrder());
+  auto shapeDim = linearLayout.basesPerDim(dimName);
+  auto multiDim = delinearize(rewriter, loc, linear, shapeDim, orderDim);
+
+  return std::make_tuple(std::move(multiDim), isRepresentative);
 }
 
 // Convert an \param index to a multi-dim coordinate given \param shape and
