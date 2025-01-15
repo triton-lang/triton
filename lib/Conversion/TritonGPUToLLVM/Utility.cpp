@@ -8,6 +8,17 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/STLExtras.h"
 
+#if defined(_MSC_VER) && !defined(__clang__)
+// from https://gist.github.com/pps83/3210a2f980fd02bb2ba2e5a1fc4a2ef0
+#include <intrin.h>
+
+static int __builtin_ctz(unsigned x) {
+  unsigned long r;
+  _BitScanForward(&r, x);
+  return static_cast<int>(r);
+}
+#endif
+
 namespace mlir {
 
 namespace triton::gpu {
