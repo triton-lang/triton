@@ -2,10 +2,22 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Attributes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/STLExtras.h"
+
+#if defined(_MSC_VER) && !defined(__clang__)
+// from https://gist.github.com/pps83/3210a2f980fd02bb2ba2e5a1fc4a2ef0
+#include <intrin.h>
+
+static int __builtin_ctz(unsigned x) {
+  unsigned long r;
+  _BitScanForward(&r, x);
+  return static_cast<int>(r);
+}
+#endif
 
 namespace mlir {
 
@@ -580,6 +592,53 @@ SmallVector<Value> getStridesFromShapeAndOrder(ArrayRef<int64_t> shape,
     stride *= shape[idx];
   }
   return strides;
+}
+
+// Extract the bits of `a` that are set in `mask`
+Value pext_i32(RewriterBase &rewriter, Location loc, Value a, uint32_t mask) {
+  assert(a.getType() == i32_ty && "a must be i32");
+  // Handle width = 32 to avoid doing 1 << 32
+  if (mask == 0xFFFFFFFF)
+    return a;
+
+  // We implement a blocked algorithm to avoid generating too many instructions
+  Value result = i32_val(0);
+  int resultPos = 0;
+  while (mask) {
+    int start = __builtin_ctz(mask);
+    int width = __builtin_ctz(~(mask >> start));
+    Value shifted = lshr(a, i32_val(start));
+    Value widthMask = i32_val(((1u << width) - 1));
+    Value blockVal = and_(shifted, widthMask);
+    result = or_(result, shl(blockVal, i32_val(resultPos)));
+    resultPos += width;
+    mask &= ~(((1u << width) - 1) << start);
+  }
+  return result;
+}
+
+std::tuple<SmallVector<Value>, Value>
+delinearize(RewriterBase &rewriter, Location loc,
+            triton::gpu::DistributedEncodingTrait layout,
+            ArrayRef<int64_t> shape, StringAttr dimName, Value linear) {
+  auto ll = *triton::gpu::toLinearLayout(shape, layout);
+  auto linearLayout =
+      triton::gpu::LinearEncodingAttr::get(rewriter.getContext(), ll);
+  assert(ll.hasInDim(dimName));
+  int32_t freeVarMask = ll.getFreeVariableMasks()[dimName];
+  auto isRepresentative = true_val();
+  if (freeVarMask != 0) {
+    isRepresentative = icmp_eq(and_(i32_val(freeVarMask), linear), i32_val(0));
+    // We remove the bits of linear that are set to one in freeVarMask
+    int32_t nonFreeVarMask = ~freeVarMask & (ll.getInDimSize(dimName) - 1);
+    linear = pext_i32(rewriter, loc, linear, nonFreeVarMask);
+  }
+
+  auto orderDim = linearLayout.orderPerDim(dimName, linearLayout.getOrder());
+  auto shapeDim = linearLayout.basesPerDim(dimName);
+  auto multiDim = delinearize(rewriter, loc, linear, shapeDim, orderDim);
+
+  return std::make_tuple(std::move(multiDim), isRepresentative);
 }
 
 // Convert an \param index to a multi-dim coordinate given \param shape and
