@@ -179,4 +179,90 @@ def TritonGPUOptimizeAccumulatorInit: Pass<"tritongpu-optimize-accumulator-init"
                            "mlir::triton::TritonDialect"];
 }
 
+def TritonGPUWSTaskPartition : Pass<"tritongpu-warp-spec-task-partition", "mlir::ModuleOp"> {
+  let summary = "Warp specialization task partition";
+
+  let description = "This pass computes a warp schedule partition by annoating anchor operations with async task ids";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"];
+  let options = [
+    Option<"numConsumerGroups", "num-consumer-groups",
+           "int32_t", /*default*/"0",
+           "number of consumer warp groups for warp specialization">
+  ];
+}
+
+def TritonGPUTaskIdPropagate : Pass<"triton-gpu-taskid-propagate", "mlir::ModuleOp"> {
+  let summary = "Propagate async_task_id annotations based on dependencies";
+
+  let description = [{
+    This pass propagates the `async_task_id` annotation to the dependencies
+    of any op that has it set.  This has the functional effect of partitioning
+    the graph into multiple async tasks, based on the initial annotation.
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+
+  let options = [
+    Option<"numConsumerGroups", "num-consumer-groups",
+           "int32_t", /*default*/"0",
+           "number of consumer warp groups for warp specialization">
+  ];
+}
+
+def TritonGPUWSCodePartition: Pass<"tritongpu-warp-spec-code-partition", "mlir::ModuleOp"> {
+  let summary = "TritonGPU warp specialization code partition";
+
+  let description = "This pass generates warp specialized code baed on task id attributes.";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::TritonDialect",
+                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"];
+  let options = [
+    Option<"numBuffers", "num-buffers",
+           "int32_t", /*default*/"0",
+           "number of buffering for producer-consumer">,
+    Option<"numConsumerGroups", "num-consumer-groups",
+           "int32_t", /*default*/"0",
+           "number of consumer warp groups for warp specialization">,
+    Option<"regDecProducer", "producer-reg-dec",
+           "int32_t", /*default*/"40",
+           "register decrement for producer warp group">,
+    Option<"regIncConsumer", "consumer-reg-inc",
+           "int32_t", /*default*/"232",
+           "register indrement for consumer warp group">
+  ];
+}
+
+def TritonGPUWSDataPartition : Pass<"tritongpu-warp-spec-data-partition", "mlir::ModuleOp"> {
+  let summary = "Warp specialization data partition";
+
+  let description = "This pass partitions operations into multiple suboperations which operate on smaller data shapes";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"];
+  let options = [
+    Option<"numConsumerGroups", "num-consumer-groups",
+           "int32_t", /*default*/"0",
+           "number of consumer warp groups for warp specialization">
+  ];
+}
+
+def TritonGPUWSLowering : Pass<"tritongpu-warp-spec-lowering", "mlir::ModuleOp"> {
+  let summary = "Warp specialization lowering";
+
+  let description = "This pass lowers warp specializtion related operations.";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"];
+  let options = [
+    Option<"numConsumerGroups", "num-consumer-groups",
+           "int32_t", /*default*/"0",
+           "number of consumer warp groups for warp specialization">
+  ];
+}
 #endif

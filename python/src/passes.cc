@@ -68,6 +68,15 @@ void init_triton_passes_ttgpuir(py::module &&m) {
                      createTritonGPUCombineTensorSelectAndIf);
   ADD_PASS_WRAPPER_0("add_optimize_accumulator_init",
                      createTritonGPUOptimizeAccumulatorInit);
+  ADD_PASS_OPTION_WRAPPER_1("add_ws_task_partition",
+                            createTritonGPUWSTaskPartition, int);
+  ADD_PASS_OPTION_WRAPPER_1("add_ws_data_partition",
+                            createTritonGPUWSDataPartition, int);
+  ADD_PASS_OPTION_WRAPPER_1("add_ws_lowering", createTritonGPUWSLowering, int);
+  ADD_PASS_OPTION_WRAPPER_1("add_taskid_propagate",
+                            createTritonGPUTaskIdPropagate, int);
+  ADD_PASS_OPTION_WRAPPER_4("add_ws_code_partition",
+                            createTritonGPUWSCodePartition, int, int, int, int);
 }
 
 void init_triton_passes_convert(py::module &&m) {

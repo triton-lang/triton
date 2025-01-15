@@ -2792,8 +2792,9 @@ struct CanonicalizeConvertFromAlloc
     auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
     if (!convert)
       return failure();
-    rewriter.replaceOpWithNewOp<triton::gpu::LocalAllocOp>(
+    auto newAlloc = rewriter.replaceOpWithNewOp<triton::gpu::LocalAllocOp>(
         op, op->getResult(0).getType(), convert.getSrc());
+    newAlloc->setAttrs(op->getAttrs());
     return mlir::success();
   }
 };
@@ -2809,8 +2810,9 @@ struct CanonicalizeConvertFromLocalStore
     auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
     if (!convert)
       return failure();
-    rewriter.replaceOpWithNewOp<triton::gpu::LocalStoreOp>(op, convert.getSrc(),
-                                                           op.getDst());
+    auto store = rewriter.replaceOpWithNewOp<triton::gpu::LocalStoreOp>(
+        op, convert.getSrc(), op.getDst());
+    store->setAttrs(op->getAttrs());
     return mlir::success();
   }
 };
@@ -2928,8 +2930,10 @@ struct CanonicalizeConvertFromConvert
     // cvt(cvt(x, type1), type2) -> cvt(x, type2)
     if (auto cvt = dyn_cast<ConvertLayoutOp>(arg)) {
       auto srcType = op.getSrc().getType();
-      rewriter.replaceOpWithNewOp<triton::gpu::ConvertLayoutOp>(
+      auto origAttrs = op->getAttrs();
+      auto newOp = rewriter.replaceOpWithNewOp<triton::gpu::ConvertLayoutOp>(
           op, op->getResultTypes().front(), cvt.getSrc());
+      newOp->setAttrs(origAttrs);
       return success();
     }
 
