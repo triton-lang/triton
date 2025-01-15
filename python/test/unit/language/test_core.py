@@ -185,7 +185,8 @@ class SliceLayout:
 
 class BlockedLayout:
 
-    def __init__(self, size_per_thread, threads_per_warp, warps_per_cta, order, ctas_per_cga, cta_split_num, cta_order):
+    def __init__(self, size_per_thread, threads_per_warp, warps_per_cta, order, ctas_per_cga=[1, 1],
+                 cta_split_num=[1, 1], cta_order=[0, 1]):
         self.sz_per_thread = size_per_thread
         self.threads_per_warp = threads_per_warp
         self.warps_per_cta = warps_per_cta
@@ -5798,6 +5799,87 @@ def test_convert_mma2mma(M, N, mma_pair, dtype, device, tmp_path: pathlib.Path):
 
     do_test(mma_pair[0], mma_pair[1])
     do_test(mma_pair[1], mma_pair[0])
+
+
+single_warp_layouts = [
+    BlockedLayout([1, 1], [THREADS_PER_WARP, 1], [1, 1], [1, 0]),
+    BlockedLayout([1, 1], [THREADS_PER_WARP // 2, 2], [1, 1], [1, 0]),
+    BlockedLayout([1, 1], [THREADS_PER_WARP // 4, 4], [1, 1], [1, 0]),
+    BlockedLayout([1, 1], [THREADS_PER_WARP // 8, 8], [1, 1], [1, 0]),
+    BlockedLayout([1, 1], [THREADS_PER_WARP // 16, 16], [1, 1], [1, 0]),
+    BlockedLayout([1, 1], [THREADS_PER_WARP // 32, 32], [1, 1], [1, 0]),
+    BlockedLayout([32, 1], [1, THREADS_PER_WARP], [1, 1], [1, 0]),
+    BlockedLayout([16, 1], [2, THREADS_PER_WARP // 2], [1, 1], [1, 0]),
+    BlockedLayout([1, 4], [THREADS_PER_WARP, 1], [1, 1], [1, 0]),
+    BlockedLayout([1, 4], [THREADS_PER_WARP // 2, 2], [1, 1], [1, 0]),
+    BlockedLayout([1, 4], [THREADS_PER_WARP // 4, 4], [1, 1], [1, 0]),
+    BlockedLayout([1, 4], [THREADS_PER_WARP // 8, 8], [1, 1], [1, 0]),
+    BlockedLayout([1, 4], [THREADS_PER_WARP // 16, 16], [1, 1], [1, 0]),
+    BlockedLayout([1, 4], [THREADS_PER_WARP // 32, 32], [1, 1], [1, 0]),
+]
+
+
+@pytest.mark.parametrize("M, N", [[32, 32], [64, 64]])
+@pytest.mark.parametrize("dtype", ['float16'])
+@pytest.mark.parametrize("src_layout", single_warp_layouts)
+@pytest.mark.parametrize("dst_layout", single_warp_layouts)
+def test_convert_warp_local(M, N, src_layout, dst_layout, dtype, device, tmp_path: pathlib.Path):
+    if str(src_layout) == str(dst_layout):
+        pytest.skip()
+    if np.prod(src_layout.threads_per_warp) == 0 or np.prod(dst_layout.threads_per_warp) == 0:
+        pytest.skip()
+
+    # Test layout pairs that are likely to codegen warp shuffles.
+    a, b = list(np.array(src_layout.threads_per_warp) // np.array(dst_layout.threads_per_warp))
+    c = a if a != 0 else b
+    if c > 2:
+        pytest.skip()
+
+    layouts = f"""
+    #src = {src_layout}
+    #dst = {dst_layout}
+    #smem = #ttg.shared_memory
+    """
+
+    conversion = f"""
+    %12 = ttg.convert_layout %9 : tensor<{M}x{N}xi32, #src> -> tensor<{M}x{N}xi32, #dst>
+    %13 = ttg.convert_layout %11 : tensor<{M}x{N}xf16, #src> -> tensor<{M}x{N}xf16, #dst>
+    """
+
+    ir = layouts + f"""
+    module attributes {{"ttg.num-warps" = 1 : i32, "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = {THREADS_PER_WARP} : i32}} {{
+  tt.func public @kernel_0d1d(%arg0: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<f16> {{tt.divisibility = 16 : i32}}) {{
+    %cst = arith.constant dense<{N}> : tensor<{M}x1xi32, #src>
+    %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #ttg.slice<{{dim = 1, parent = #src}}>>
+    %1 = tt.make_range {{end = {N} : i32, start = 0 : i32}} : tensor<{N}xi32, #ttg.slice<{{dim = 0, parent = #src}}>>
+    %2 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<{M}x{N}x!tt.ptr<f16>, #src>
+    %4 = tt.expand_dims %0 {{axis = 1 : i32}} : tensor<{M}xi32, #ttg.slice<{{dim = 1, parent = #src}}>> -> tensor<{M}x1xi32, #src>
+    %5 = arith.muli %4, %cst : tensor<{M}x1xi32, #src>
+    %6 = tt.expand_dims %1 {{axis = 0 : i32}} : tensor<{N}xi32, #ttg.slice<{{dim = 0, parent = #src}}>> -> tensor<1x{N}xi32, #src>
+    %7 = tt.broadcast %6 : tensor<1x{N}xi32, #src> -> tensor<{M}x{N}xi32, #src>
+    %8 = tt.broadcast %5 : tensor<{M}x1xi32, #src> -> tensor<{M}x{N}xi32, #src>
+    %9 = arith.addi %8, %7 : tensor<{M}x{N}xi32, #src>
+    %10 = tt.addptr %2, %9 : tensor<{M}x{N}x!tt.ptr<f16>, #src>, tensor<{M}x{N}xi32, #src>
+    %11 = tt.load %10 : tensor<{M}x{N}x!tt.ptr<f16>, #src>
+    %3 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<{M}x{N}x!tt.ptr<f16>, #dst>
+    """ + conversion + f"""
+    %14 = tt.addptr %3, %12 : tensor<{M}x{N}x!tt.ptr<f16>, #dst>, tensor<{M}x{N}xi32, #dst>
+    tt.store %14, %13 : tensor<{M}x{N}x!tt.ptr<f16>, #dst>
+    tt.return
+  }}
+}}
+"""
+
+    x = to_triton(numpy_random((M, N), dtype_str=dtype), device=device)
+    z = torch.empty_like(x, device=device)
+
+    temp_file = tmp_path / "test_convert_warp_local.ttgir"
+    temp_file.write_text(ir)
+    kernel = triton.compile(str(temp_file))
+
+    kernel[(1, 1, 1)](x.data_ptr(), z.data_ptr())
+
+    torch.testing.assert_close(z, x, rtol=0, atol=0)
 
 
 @pytest.mark.interpreter
