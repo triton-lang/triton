@@ -383,7 +383,6 @@ struct MemDescSubviewOpConversion
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
     auto layoutOrder = getOrder(srcTy.getEncoding());
     auto allocShape = srcTy.getAllocShape();
-    auto rank = srcTy.getRank();
     auto allocStrides = SharedMemoryObject::getStridesForShape(
         allocShape, layoutOrder, loc, rewriter);
 
@@ -391,18 +390,18 @@ struct MemDescSubviewOpConversion
     auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                    llvmElemTy, rewriter);
     SmallVector<Value> opOffsetVals = op.getOffsets();
-    size_t destRank = op.getResult().getType().getRank();
+    SmallVector<Value> smemStrides(allocStrides.end() - opOffsetVals.size(),
+                                   allocStrides.end());
     SmallVector<Value> offsetVals;
-    int rankReduced = srcTy.getRank() - destRank;
+    auto destRank = op.getResult().getType().getRank();
+    auto rankReduced = srcTy.getRank() - destRank;
     for (int i = rankReduced; i < opOffsetVals.size(); i++) {
       offsetVals.push_back(add(opOffsetVals[i], smemObj.getOffsets()[i]));
     }
-    SmallVector<Value> strides(allocStrides.end() - offsetVals.size(),
-                               allocStrides.end());
     // Compute the offset based on the original strides of the shared memory
     // object
-    auto offset = dot(rewriter, loc, opOffsetVals, strides);
-    auto elemPtrTy = smemObj.getBaseElemType();
+    auto offset = dot(rewriter, loc, opOffsetVals, smemStrides);
+    auto elemPtrTy = smemObj.getBase().getType();
     smemObj = SharedMemoryObject(
         gep(elemPtrTy, llvmElemTy, smemObj.getBase(), offset), llvmElemTy,
         offsetVals);
