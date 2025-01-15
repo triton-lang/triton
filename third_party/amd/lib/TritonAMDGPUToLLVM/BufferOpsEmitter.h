@@ -67,14 +67,16 @@ struct BufferEmitter {
 
   // Emit a predicated rocdl.raw.ptr.buffer.load
   Value emitLoad(Type type, Value rsrcDesc, Value offset, Value pred,
-                 Value falseVal);
+                 Value falseVal, CacheModifier cm);
 
   // Emit a predicated rocdl.raw.ptr.buffer.store
-  void emitStore(Value rsrcDesc, Value offset, Value data, Value pred);
+  void emitStore(Value rsrcDesc, Value offset, Value data, Value pred,
+                 CacheModifier cm);
 
 private:
   // Fill common buffer operation arguments.
   void fillCommonArgs(Type type, Value rsrcDesc, Value vOffsetElems, Value pred,
+                      CacheModifier cm, bool isBufferLoad,
                       SmallVector<Value> &args);
 
   // Given a type, the buffer type can be either the same type

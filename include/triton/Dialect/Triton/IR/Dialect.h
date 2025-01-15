@@ -55,13 +55,19 @@ public:
 
   // Tries to compute the encoding for the result of a reshape operation that
   // makes the reshape a "nop", i.e. the same GPU threads contain the same
-  // elements as before the reshape.  Note that this is not always possible (in
-  // which case you'd need to choose a different layout for the input to the
-  // reshape).
+  // elements as before the reshape using legacy layouts.  This is not always
+  // possible (in which case we fallback to using LinearLayouts)
+  // In the future we'll always use LinearLayouts
   virtual LogicalResult
-  inferReshapeOpNoReorderEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
-                                  ArrayRef<int64_t> dstShape, Attribute &dstEnc,
-                                  std::optional<Location> loc) const = 0;
+  inferReshapeOpEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
+                         ArrayRef<int64_t> dstShape, Attribute &dstEnc,
+                         std::optional<Location> loc) const = 0;
+
+  // Check if two layouts are structurally the same, even if their names are
+  // different
+  virtual LogicalResult verifyLayoutsAreEqual(ArrayRef<int64_t> shape,
+                                              Attribute expected, Attribute got,
+                                              Location loc) const = 0;
 
   virtual LogicalResult
   inferJoinOpEncoding(Attribute srcEnc, Attribute &dstEnc,
