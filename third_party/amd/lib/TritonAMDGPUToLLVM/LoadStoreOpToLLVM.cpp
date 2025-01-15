@@ -553,8 +553,8 @@ struct BufferAtomicRMWOpConversion
     bool emitAcquireFence = false;
     switch (memOrdering) {
     case MemSemantic::RELAXED:
-      // we don't support this for now
-      return failure();
+      // In this case, no memory fences are needed
+      break;
     case MemSemantic::RELEASE:
       emitReleaseFence = true;
       break;
@@ -684,7 +684,8 @@ struct BufferAtomicRMWOpConversion
 
       // To sync vector memory ops between CUs within an agent, we need an
       // s_waitcnt skip doing this on the last iteration of the loop
-      if (vecStart < numElems - vec) {
+      // In the relaxed memory ordering, we don't need this barrier
+      if (vecStart < numElems - vec && (emitReleaseFence || emitAcquireFence)) {
         Value inst =
             waitcntBuilder.launch(rewriter, lastRMWOp->getLoc(), void_ty(ctx));
         lastRMWOp = inst.getDefiningOp();

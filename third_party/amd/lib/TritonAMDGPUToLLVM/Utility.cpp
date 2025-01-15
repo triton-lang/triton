@@ -425,19 +425,22 @@ getCacheModifierFlagsForPredicatedCall(LLVM::CallOp callOp) {
 // - SC[1:0] System Cache level: 0=wave, 1=group, 2=device, 3=system
 // - NT Non-Temporal: 0=expect temporal reuse; 1=do not expect temporal reuse
 //
-// -----+-----+-----+-----+----+--
-// Op   | cm  | SC1 | SC0 | NT |
-// -----+-----+-----+-----+----+--
-// Load | .ca |  0  |  0  | 0  |
-//      | .cg |  0  |  1  | 1  |
-//      | .cs |  0  |  1  | 1  |
-//      | .cv |  1  |  1  | x  |
-// -----+-----+-----+-----+----+--
-// Store| .wb |  0  |  0  | 0  |
-//      | .cg |  0  |  0  | 0  |
-//      | .cs |  0  |  1  | 1  |
-//      | .wt |  1  |  x  | x  |
-// -----+-----+-----+-----+----+--
+// -------+-----+-----+-----+----+--
+// Op     | cm  | SC1 | SC0 | NT |
+// -------+-----+-----+-----+----+--
+// Load   | .ca |  0  |  0  | 0  |
+//        | .cg |  0  |  1  | 1  |
+//        | .cs |  0  |  1  | 1  |
+//        | .cv |  1  |  1  | x  |
+// -------+-----+-----+-----+----+--
+// Store  | .wb |  0  |  0  | 0  |
+//        | .cg |  0  |  0  | 0  |
+//        | .cs |  0  |  1  | 1  |
+//        | .wt |  1  |  x  | x  |
+// -------+-----+-----+-----+----+--
+// Atomic | N/A |  0  |  1  | x  | Setting sc0 returns the pre-op value
+//        | N/A |  1  |  0  | x  | Setting sc1 performs a system-scope atomic
+// -------+-----+-----+-----+----+--
 static int32_t getCtrlBitsForCacheModifierOnGFX942(triton::CacheModifier cm,
                                                    bool isBufferLoad) {
   const int sc0Bit = 0b1, ntBit = 0b10, sc1Bit = 0b1000;
@@ -465,6 +468,19 @@ static int32_t getCtrlBitsForCacheModifierOnGFX942(triton::CacheModifier cm,
   default:
     aux = 0;
   }
+  return aux;
+}
+
+int32_t getCtrlBitsForBufferAtomicsOnGFX942(bool setSC0, bool setSC1,
+                                            bool setNT) {
+  const int sc0Bit = 0b1, ntBit = 0b10, sc1Bit = 0b1000;
+  int32_t aux = 0;
+  if (setSC0)
+    aux |= sc0Bit;
+  if (setSC1)
+    aux |= sc1Bit;
+  if (setNT)
+    aux |= ntBit;
   return aux;
 }
 

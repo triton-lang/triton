@@ -270,8 +270,9 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     LDBG("RMW supported scope");
 
     // 3. Check the memory ordering.
-    //    TODO: support relaxed + monotonic
+    //    TODO: support monotonic
     switch (sem) {
+    case MemSemantic::RELAXED:
     case MemSemantic::RELEASE:
     case MemSemantic::ACQUIRE:
     case MemSemantic::ACQUIRE_RELEASE:

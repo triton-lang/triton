@@ -57,6 +57,10 @@ std::pair<bool, bool> getCacheModifierFlagsForPredicatedCall(LLVM::CallOp);
 int32_t getCtrlBitsForCacheModifierOnTarget(triton::CacheModifier, bool,
                                             mlir::triton::AMD::TargetInfo &);
 
+// Get cache modifier information for buffer atomics
+int32_t getCtrlBitsForBufferAtomicsOnGFX942(bool setSC0, bool setSC1,
+                                            bool setNT);
+
 Value cvtFp32ToFp16(Location loc, RewriterBase &rewriter, const Value &v,
                     triton::RoundingMode rounding);
 

@@ -81,7 +81,7 @@ struct BufferEmitter {
 private:
   // Fill common buffer operation arguments.
   void fillCommonArgs(Type type, Value rsrcDesc, Value vOffsetElems, Value pred,
-                      CacheModifier cm, bool isBufferLoad,
+                      CacheModifier cm, bool isBufferLoad, bool isBufferAtomic,
                       SmallVector<Value> &args);
 
   // Given a type, the buffer type can be either the same type
