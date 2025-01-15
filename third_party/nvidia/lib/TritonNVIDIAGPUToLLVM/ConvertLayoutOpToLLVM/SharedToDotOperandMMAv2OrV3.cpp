@@ -589,8 +589,8 @@ getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
   const int mmaElemBytes = 4 / kWidth;
   const bool isHopper = mmaLayout.getVersionMajor() == 3;
   auto order = sharedLayout.getOrder();
-  auto strides =
-      smemObj.getStrides(descTy.getAllocShape(), order, loc, rewriter);
+  auto strides = SharedMemoryObject::getStridesForShape(descTy.getAllocShape(),
+                                                        order, loc, rewriter);
 
   int nPerWarp =
       std::max<int>(shapePerCTA[2] / mmaLayout.getWarpsPerCTA()[2], 8);
@@ -789,13 +789,16 @@ MemDescType getExpandedDesc(MemDescType descTy) {
 
   auto elTy = descTy.getElementType();
   auto shape = descTy.getShape();
+  auto allocShape = descTy.getAllocShape();
+  auto isMutable = descTy.getMutableMemory();
   auto expandedShape = SmallVector<int64_t>(3, 1);
   expandedShape[1] = shape[0];
   expandedShape[2] = shape[1];
   auto encoding = descTy.getEncoding();
   auto expandedEncoding = getExpandedEncoding(encoding);
-  auto expandedDesc = MemDescType::get(expandedShape, elTy, expandedEncoding,
-                                       descTy.getMemorySpace());
+  auto expandedDesc =
+      MemDescType::get(expandedShape, elTy, expandedEncoding,
+                       descTy.getMemorySpace(), isMutable, allocShape);
   return expandedDesc;
 }
 
