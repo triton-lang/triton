@@ -1244,7 +1244,9 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
     layout.insert(thenLayout.begin(), thenLayout.end());
   }
 
-  if (hoistAbove.empty())
+  // It's hard to know if duplicating the conversion into separate branches is
+  // profitable without more analysis. For now, hoist at most one.
+  if (hoistAbove.size() != 1)
     return;
 
   IRMapping mapping;
