@@ -606,18 +606,4 @@ int32_t LocalAllocOp::getAlignmentOrDefault() {
   return bytes > 256 ? 1024 : 8;
 }
 
-// -- UndefOp --
-
-void UndefOp::getAsmResultNames(
-    function_ref<void(Value, StringRef)> setNameFn) {
-  std::string name;
-  llvm::raw_string_ostream os(name);
-  os << "undef";
-
-  if (isa<IntegerType, FloatType>(getType()))
-    os << "_" << getType();
-
-  setNameFn(getResult(), name);
-}
-
 } // namespace mlir::triton::gpu

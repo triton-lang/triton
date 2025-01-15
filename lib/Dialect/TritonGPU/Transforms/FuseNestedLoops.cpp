@@ -2,6 +2,7 @@
 #include "mlir/IR/Dominance.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "llvm/Support/Debug.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include <queue>
 
 namespace mlir {
@@ -567,17 +568,17 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   unsigned ivarStartIdx = fusedInits.size();
   for (scf::ForOp loop : innerLoops) {
     fusedInits.push_back(
-        b.create<UndefOp>(loc, loop.getInductionVar().getType()));
+        b.create<ub::PoisonOp>(loc, loop.getInductionVar().getType()));
   }
   unsigned innerOutsStartIdx = fusedInits.size();
   for (scf::ForOp loop : innerLoops) {
     for (Type resultType : loop.getResultTypes())
-      fusedInits.push_back(b.create<UndefOp>(loc, resultType));
+      fusedInits.push_back(b.create<ub::PoisonOp>(loc, resultType));
   }
   unsigned logueOutsStartIdx = fusedInits.size();
   for (Logue &logue : logues) {
     for (Type outputType : logue.getOutputTypes())
-      fusedInits.push_back(b.create<UndefOp>(loc, outputType));
+      fusedInits.push_back(b.create<ub::PoisonOp>(loc, outputType));
   }
 
   // for _ in range(total_iters):

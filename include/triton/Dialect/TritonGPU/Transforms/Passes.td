@@ -66,7 +66,8 @@ def TritonGPUFuseNestedLoops : Pass<"tritongpu-fuse-nested-loops", "mlir::Module
 
   let dependentDialects = [
     "mlir::triton::gpu::TritonGPUDialect",
-    "mlir::arith::ArithDialect"
+    "mlir::arith::ArithDialect",
+    "mlir::ub::UBDialect",
   ];
 }
 

@@ -151,7 +151,6 @@ struct ConvertTritonGPUToLLVM
                                                     targetInfo, benefit);
     mlir::triton::populatePrintOpToLLVMPattern(typeConverter, patterns,
                                                targetInfo, benefit);
-    mlir::triton::populateUndefOpToLLVMPattern(typeConverter, patterns);
     mlir::triton::proton::populateRecordOpToLLVMPattern(typeConverter, patterns,
                                                         targetInfo, benefit);
     mlir::triton::populateControlFlowOpToLLVMPattern(typeConverter, patterns,

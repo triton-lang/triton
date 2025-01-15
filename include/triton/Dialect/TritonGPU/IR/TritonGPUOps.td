@@ -10,7 +10,6 @@ include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
 include "mlir/IR/OpBase.td"
-include "mlir/IR/OpAsmInterface.td" // OpAsmOpInterface
 include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
 include "mlir/Interfaces/DestinationStyleOpInterface.td"
@@ -324,19 +323,6 @@ def TTG_GlobalScratchAllocOp : TTG_Op<"global_scratch_alloc", [MemoryEffects<[Me
   ];
 
   let assemblyFormat = [{attr-dict `:` qualified(type($result))}];
-}
-
-def TTG_UndefOp : TTG_Op<"undef", [Pure,
-    DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmResultNames"]>]> {
-  let summary = "undef";
-
-  let description = [{
-    This operation returns an undefined value.
-  }];
-
-  let results = (outs AnyType:$result);
-
-  let assemblyFormat = "attr-dict `:` type($result)";
 }
 
 #endif

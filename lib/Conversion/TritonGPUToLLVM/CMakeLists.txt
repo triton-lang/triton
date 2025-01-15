@@ -18,7 +18,6 @@ add_triton_library(TritonGPUToLLVM
     ScanOpToLLVM.cpp
     SPMDOpToLLVM.cpp
     TypeConverter.cpp
-    UndefOpToLLVM.cpp
     Utility.cpp
     ViewOpToLLVM.cpp
 

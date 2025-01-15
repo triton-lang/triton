@@ -52,8 +52,9 @@ tt.func @fuse_one_level_simple(%lbi: i64, %ubi: i64, %stepi: i64, %lbj: i64, %ub
   // j = None
   // for _ in range(total_iters):
   //
+  // CHECK: [[UNDEF_I64:%.*]] = ub.poison : i64
   // CHECK: scf.for %{{.*}} = %c0_i64 to [[TOTAL_ITERS]] step %c1_i64 iter_args(
-  // CHECK-SAME: [[T_ARG:%.*]] = %c-1_i64, [[I:%.*]] = [[LBI]], [[J_ARG:%.*]] = %undef_i64) -> (i64, i64, i64) : i64 {
+  // CHECK-SAME: [[T_ARG:%.*]] = %c-1_i64, [[I:%.*]] = [[LBI]], [[J_ARG:%.*]] = [[UNDEF_I64]]) -> (i64, i64, i64) : i64 {
   scf.for %i = %lbi to %ubi step %stepi : i64 {
     // T = (T + 1) % inner_len
     //
@@ -117,14 +118,16 @@ tt.func @fuse_one_level_simple(%lbi: i64, %ubi: i64, %stepi: i64, %lbj: i64, %ub
 // CHECK-SAME: [[LBI:%.*]]: i64, [[UBI:%.*]]: i64, [[STEPI:%.*]]: i64, [[LBJ:%.*]]: i64, [[UBJ:%.*]]: i64, [[STEPJ:%.*]]: i64
 // CHECK-SAME: [[INOUT:%.*]]: index
 tt.func @fuse_one_level_inouts(%lbi: i64, %ubi: i64, %stepi: i64, %lbj: i64, %ubj: i64, %stepj: i64, %inout: index) -> index {
+  // CHECK-DAG: [[UNDEF_I64:%.*]] = ub.poison : i64
+  // CHECK-DAG: [[UNDEF_INDEX:%.*]] = ub.poison : index
   // CHECK: [[OUTER_OUTS:%.*]]:7 = scf.for %{{.*}} = %c0_i64 to [[TOTAL_ITERS:%.*]] step %c1_i64 iter_args(
   // CHECK-SAME: [[T_ARG:%arg[0-9]+]] = %c-1_i64,
   // CHECK-SAME: [[I:%arg[0-9]+]] = [[LBI]]
   // CHECK-SAME: [[M:%arg[0-9]+]] = [[INOUT]]
-  // CHECK-SAME: [[J_ARG:%arg[0-9]+]] = %undef_i64
-  // CHECK-SAME: [[K_ARG:%arg[0-9]+]] = %undef
-  // CHECK-SAME: [[PROLOGUE_OUT_ARG:%arg[0-9]+]] = %undef
-  // CHECK-SAME: [[EPILOGUE_OUT_ARG:%arg[0-9]+]] = %undef
+  // CHECK-SAME: [[J_ARG:%arg[0-9]+]] = [[UNDEF_I64]]
+  // CHECK-SAME: [[K_ARG:%arg[0-9]+]] = [[UNDEF_INDEX]]
+  // CHECK-SAME: [[PROLOGUE_OUT_ARG:%arg[0-9]+]] = [[UNDEF_INDEX]]
+  // CHECK-SAME: [[EPILOGUE_OUT_ARG:%arg[0-9]+]] = [[UNDEF_INDEX]]
   // CHECK-SAME: ) -> (i64, i64, index, i64, index, index, index) : i64 {
   %outer_out = scf.for %i = %lbi to %ubi step %stepi iter_args(%m = %inout) -> index : i64 {
     // if T == 0:
@@ -210,20 +213,22 @@ tt.func @multiple_loops(
   // CHECK:      [[INNER_LEN:%.*]] = arith.subi [[PLEN3]], %c2_i64
   // CHECK-NEXT: [[TOTAL_ITERS:%.*]] = arith.muli [[LEN_I]], [[INNER_LEN]]
 
+  // CHECK:      [[UNDEF_I64:%.*]] = ub.poison : i64
+  // CHECK:      [[UNDEF_F32:%.*]] = ub.poison : f32
   // CHECK:      [[OUTS:%.*]]:13 = scf.for %{{.*}} = %c0_i64 to [[TOTAL_ITERS]] step %c1_i64 iter_args(
   // CHECK-SAME: [[T_ARG:%arg[0-9]+]] = %c-1_i64,
   // CHECK-SAME: [[I:%arg[0-9]+]] = [[LBI]],
   // CHECK-SAME: [[M:%arg[0-9]+]] = [[M0]],
-  // CHECK-SAME: [[J0_ARG:%arg[0-9]+]] = %undef_i64,
-  // CHECK-SAME: [[J1_ARG:%arg[0-9]+]] = %undef_i64,
-  // CHECK-SAME: [[J2_ARG:%arg[0-9]+]] = %undef_i64,
-  // CHECK-SAME: [[BODY0_ARG:%arg[0-9]+]] = %undef_f32,
-  // CHECK-SAME: [[BODY1_ARG:%arg[0-9]+]] = %undef_f32,
-  // CHECK-SAME: [[BODY2_ARG:%arg[0-9]+]] = %undef_f32,
-  // CHECK-SAME: [[PROLOGUE0_ARG:%arg[0-9]+]] = %undef_f32,
-  // CHECK-SAME: [[PROLOGUE1_ARG:%arg[0-9]+]] = %undef_f32,
-  // CHECK-SAME: [[PROLOGUE2_ARG:%arg[0-9]+]] = %undef_f32,
-  // CHECK-SAME: [[EPILOGUE_ARG:%arg[0-9]+]] = %undef_f32)
+  // CHECK-SAME: [[J0_ARG:%arg[0-9]+]] = [[UNDEF_I64]],
+  // CHECK-SAME: [[J1_ARG:%arg[0-9]+]] = [[UNDEF_I64]],
+  // CHECK-SAME: [[J2_ARG:%arg[0-9]+]] = [[UNDEF_I64]],
+  // CHECK-SAME: [[BODY0_ARG:%arg[0-9]+]] = [[UNDEF_F32]],
+  // CHECK-SAME: [[BODY1_ARG:%arg[0-9]+]] = [[UNDEF_F32]],
+  // CHECK-SAME: [[BODY2_ARG:%arg[0-9]+]] = [[UNDEF_F32]],
+  // CHECK-SAME: [[PROLOGUE0_ARG:%arg[0-9]+]] = [[UNDEF_F32]],
+  // CHECK-SAME: [[PROLOGUE1_ARG:%arg[0-9]+]] = [[UNDEF_F32]],
+  // CHECK-SAME: [[PROLOGUE2_ARG:%arg[0-9]+]] = [[UNDEF_F32]],
+  // CHECK-SAME: [[EPILOGUE_ARG:%arg[0-9]+]] = [[UNDEF_F32]])
   %mN = scf.for %i = %lbi to %ubi step %stepi iter_args(%m = %m0) -> f32 : i64 {
 
     // CHECK:      [[T_PLUS_1:%.*]] = arith.addi [[T_ARG]], %c1_i64
