@@ -24,5 +24,21 @@
       "intermediate_size": 53248,
       "vocab_size": 128256
     }
+  },
+  "mistral": {
+    "7B": {
+      "hidden_size": 4096,
+      "intermediate_size": 14336,
+      "num_attention_heads": 32,
+      "num_key_value_heads": 8,
+      "vocab_size": 32000
+    },
+    "22B": {
+      "hidden_size": 6144,
+      "intermediate_size": 16384,
+      "num_attention_heads": 48,
+      "num_key_value_heads": 8,
+      "vocab_size": 32000
+    }
   }
 }
