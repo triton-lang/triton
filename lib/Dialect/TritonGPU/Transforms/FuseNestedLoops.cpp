@@ -419,12 +419,12 @@ static Value castIntIfNecessary(OpBuilder &b, Location loc, Value value,
 //
 // This needs to be rewritten into:
 //
-//   %undef = tt.undef
+//   %poison = ub.poison
 //   %Tlast, %ilast, %jlast, %alast = scf.for %unused = ...
 //       iter_args(%Tprev = %c-1_i32,
 //                 %iprev = %lbi - %stepi,
-//                 %jprev = %undef,
-//                 %aprev = %undef) -> (i32, i32, i32, i32) {
+//                 %jprev = %poison,
+//                 %aprev = %poison) -> (i32, i32, i32, i32) {
 //     %T = (%Tprev + 1) mod (...)
 //     %a, %i, %j = scf.if %T == 0 {
 //       %inext = %iprev + 1
