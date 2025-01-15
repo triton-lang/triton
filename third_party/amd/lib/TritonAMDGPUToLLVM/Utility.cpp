@@ -1,10 +1,8 @@
 #include "Utility.h"
-#include "PatternTritonGPUOpToLLVM.h"
+#include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
-#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/IR/PatternMatch.h"
-#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
@@ -356,6 +354,156 @@ void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
   LLVM::LLVMFuncOp funcOp =
       appendOrGetExternFuncOp(rewriter, parent, funcName, funcType);
   LLVM::createLLVMCallOp(rewriter, loc, funcOp, ValueRange({ptr, val, pred}));
+}
+
+static bool isPredicatedLoadCA(LLVM::CallOp callOp) {
+  return callOp.getCallee().value().contains(mlir::LLVM::AMD::predicatedLoadCA);
+}
+
+static bool isPredicatedLoadCG(LLVM::CallOp callOp) {
+  return callOp.getCallee().value().contains(mlir::LLVM::AMD::predicatedLoadCG);
+}
+
+static bool isPredicatedLoadCV(LLVM::CallOp callOp) {
+  return callOp.getCallee().value().contains(mlir::LLVM::AMD::predicatedLoadCV);
+}
+
+static bool isPredicatedStoreCS(LLVM::CallOp callOp) {
+  return callOp.getCallee().value().contains(
+      mlir::LLVM::AMD::predicatedStoreCS);
+}
+
+static bool isPredicatedStoreCG(LLVM::CallOp callOp) {
+  return callOp.getCallee().value().contains(
+      mlir::LLVM::AMD::predicatedStoreCG);
+}
+
+static bool isPredicatedStoreWT(LLVM::CallOp callOp) {
+  return callOp.getCallee().value().contains(
+      mlir::LLVM::AMD::predicatedStoreWT);
+}
+
+// Utility function that returns flags <volatile, nontemporal> for a predicated
+// Load or Store
+// ---------------------------------
+// Op   | cm  | volatile | NT
+// -----+-----+---------------------
+// Load | .ca |   F      | F
+//      | .cg |   F      | T
+//      | .cs |   F      | T
+//      | .cv |   T      | T
+// -----+-----+----------+---------
+// Store| .wb |   F      | F
+//      | .cg |   F      | F
+//      | .cs |   F      | T
+//      | .wt |   T      | T
+// -----+-----+----------+---------
+std::pair<bool, bool>
+getCacheModifierFlagsForPredicatedCall(LLVM::CallOp callOp) {
+  if (isPredicatedLoadCA(callOp))
+    return std::make_pair(false, false);
+  if (isPredicatedLoadCG(callOp))
+    return std::make_pair(false, true);
+  if (isPredicatedLoadCV(callOp))
+    return std::make_pair(true, true);
+
+  if (isPredicatedStoreCG(callOp))
+    return std::make_pair(false, false);
+  if (isPredicatedStoreCS(callOp))
+    return std::make_pair(false, true);
+  if (isPredicatedStoreWT(callOp))
+    return std::make_pair(true, true);
+  // unsupported modifier
+  return std::make_pair(false, false);
+}
+
+// Create the auxiliary/cachepolicy value of ROCDL::RawPtrBufferLoad/StoreOp
+//   gfx942: bit 0 = sc0, bit 1 = nt, bit 3 = swz, bit 4 = sc1
+// GFX942 Vector Memory instructions (Flat, Global, Scratch, and Buffer) have 3
+// bits to control scope and cacheability:
+// - SC[1:0] System Cache level: 0=wave, 1=group, 2=device, 3=system
+// - NT Non-Temporal: 0=expect temporal reuse; 1=do not expect temporal reuse
+//
+// -----+-----+-----+-----+----+--
+// Op   | cm  | SC1 | SC0 | NT |
+// -----+-----+-----+-----+----+--
+// Load | .ca |  0  |  0  | 0  |
+//      | .cg |  0  |  1  | 1  |
+//      | .cs |  0  |  1  | 1  |
+//      | .cv |  1  |  1  | x  |
+// -----+-----+-----+-----+----+--
+// Store| .wb |  0  |  0  | 0  |
+//      | .cg |  0  |  0  | 0  |
+//      | .cs |  0  |  1  | 1  |
+//      | .wt |  1  |  x  | x  |
+// -----+-----+-----+-----+----+--
+static int32_t getCtrlBitsForCacheModifierOnGFX942(triton::CacheModifier cm,
+                                                   bool isBufferLoad) {
+  const int sc0Bit = 0b1, ntBit = 0b10, sc1Bit = 0b1000;
+  int32_t aux = 0;
+  switch (cm) {
+  case triton::CacheModifier::CA:
+    aux = 0;
+    break;
+  case triton::CacheModifier::CG:
+    if (isBufferLoad)
+      aux |= sc0Bit | ntBit;
+    break;
+  case triton::CacheModifier::CS:
+    aux |= sc0Bit | ntBit;
+    break;
+  case triton::CacheModifier::CV:
+    aux |= sc0Bit | sc1Bit;
+    break;
+  case triton::CacheModifier::WB:
+    aux = 0;
+    break;
+  case triton::CacheModifier::WT:
+    aux |= sc1Bit;
+    break;
+  default:
+    aux = 0;
+  }
+  return aux;
+}
+
+static int32_t getDefaultCtrlBitsForCacheModifier(triton::CacheModifier cm) {
+  return 0;
+}
+
+// Cache modifiers changes how data is managed in the GPU's cache hierarchy:
+// .ca: cache at all levels with LRU policy
+// .cg: cache at L2, can use .ca or .cs
+// .cs: cache streaming, use data once
+// .cv: don't cache and fetch again
+// .wb: write-back, writes back data at all cache levels
+// .wt: write-through, write data directly to system memory
+int32_t
+getCtrlBitsForCacheModifierOnTarget(triton::CacheModifier cm, bool isBufferLoad,
+                                    mlir::triton::AMD::TargetInfo &targetInfo) {
+  if (targetInfo.getGPUKind() == llvm::AMDGPU::GK_GFX942) // gfx942
+    return getCtrlBitsForCacheModifierOnGFX942(cm, isBufferLoad);
+  else
+    return getDefaultCtrlBitsForCacheModifier(cm);
+}
+
+Value cvtFp32ToFp16(Location loc, RewriterBase &rewriter, const Value &v,
+                    triton::RoundingMode rounding) {
+  GCNBuilder builder;
+
+  auto &cvt = *builder.create("v_cvt_f16_f32");
+  auto res = builder.newOperand("=v");
+  auto operand = builder.newOperand(v, "v");
+  if (rounding == triton::RoundingMode::RTZ) {
+    auto &setRTZ = *builder.create("s_setreg_imm32_b32 0x1801, 0xc");
+    setRTZ();
+  }
+  cvt(res, operand);
+  if (rounding == triton::RoundingMode::RTZ) {
+    auto &resetRTZ = *builder.create("s_setreg_imm32_b32 0x1801, 0x0");
+    resetRTZ();
+  }
+  return builder.launch(rewriter, loc, f16_ty, false);
 }
 
 } // namespace mlir::LLVM::AMD

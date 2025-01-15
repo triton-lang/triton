@@ -356,10 +356,6 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
 
-    // TODO (Keren): Currently, we handle general mma/blocked/slice/dot(ampere)
-    // -> mma/blocked/slice/dot(ampere) conversions. The following tasks must be
-    // completed before we can remove the layoutIsOK check:
-    // 1. Support for AMD's WMMA dot operand
     std::function<bool(Attribute)> layoutIsOK = [&](Attribute layout) {
       if (isa<MmaEncodingTrait>(layout)) {
         return !useLegacyMMAConversion;
@@ -368,15 +364,11 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         if (isa<MmaEncodingTrait>(dotOperand.getParent())) {
           return !useLegacyMMAConversion;
         }
-        return false;
-      }
-      if (isa<BlockedEncodingAttr, LinearEncodingAttr>(layout)) {
-        return true;
       }
       if (auto slice = dyn_cast<SliceEncodingAttr>(layout)) {
         return layoutIsOK(slice.getParent());
       }
-      return false;
+      return true;
     };
     if (!layoutIsOK(srcTy.getEncoding()) || !layoutIsOK(dstTy.getEncoding())) {
       return failure();
@@ -476,10 +468,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
         scratchConfig.paddedRepShape, scratchConfig.order,
         /*swizzleByteSize=*/0);
     LinearLayout shmemStoreLayout =
-        isStMatrix ? chooseStMatrixLayout(
-                         ctx, op.getSrc().getType(), scratchConfig.repShape,
-                         scratchConfig.paddedRepShape, scratchConfig.order,
-                         /*swizzleByteSize=*/0)
+        isStMatrix ? chooseStMatrixLayout(ctx, op.getSrc().getType(),
+                                          /*swizzleByteSize=*/0)
                    : srcLayout.invertAndCompose(sharedLayout);
 
     const int shmemAllocatedNumElems =

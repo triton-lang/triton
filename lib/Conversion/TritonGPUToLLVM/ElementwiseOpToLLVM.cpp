@@ -458,35 +458,6 @@ struct AbsFOpConversion
     return {rewriter.create<LLVM::FAbsOp>(loc, elemTy, operands[0][0])};
   }
 };
-/// The lowering of index_cast becomes an integer conversion since index
-/// becomes an integer.  If the bit width of the source and target integer
-/// types is the same, just erase the cast.  If the target type is wider,
-/// sign-extend the value, otherwise truncate it.
-struct IndexCastOpLowering
-    : public ElementwiseOpConversionBase<arith::IndexCastOp,
-                                         IndexCastOpLowering> {
-  using Base =
-      ElementwiseOpConversionBase<arith::IndexCastOp, IndexCastOpLowering>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
-
-  SmallVector<Value> createDestOps(arith::IndexCastOp op, OpAdaptor adaptor,
-                                   ConversionPatternRewriter &rewriter,
-                                   Type elemTy, MultipleOperandsRange operands,
-                                   Location loc) const {
-    auto inElemTy =
-        this->getTypeConverter()->convertType(getElementType(op.getIn()));
-    unsigned targetBits = elemTy.getIntOrFloatBitWidth();
-    unsigned sourceBits = inElemTy.getIntOrFloatBitWidth();
-
-    if (targetBits == sourceBits)
-      return {operands[0][0]};
-    if (targetBits < sourceBits)
-      return {
-          rewriter.create<LLVM::TruncOp>(op.getLoc(), elemTy, operands[0][0])};
-    return {rewriter.create<LLVM::SExtOp>(op.getLoc(), elemTy, operands[0][0])};
-  }
-};
 
 struct SelectOpConversion
     : ElementwiseOpConversionBase<arith::SelectOp, SelectOpConversion> {
@@ -705,6 +676,5 @@ void mlir::triton::populateElementwiseOpToLLVMPatterns(
   patterns.add<ElementwiseInlineAsmOpConversion>(typeConverter, benefit);
   patterns.add<AbsIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<AbsFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<IndexCastOpLowering>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SelectOpConversion>(typeConverter, axisInfoAnalysis, benefit);
 }

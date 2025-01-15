@@ -6,8 +6,17 @@
 
 namespace proton {
 
-/// Incrementally build a list of contexts by shadowing the stack with
-/// user-defined scopes.
+/// ShadowContextSource is designed to:
+///
+///   - Maintain a main context stack for the main thread.
+///   - Provide thread-local context stacks for individual threads.
+///   - Allow threads to inherit and shadow the main context stack with their
+///     own user-defined scopes.
+///
+/// This implementation is suited for use cases like PyTorch, where:
+///
+///   - The main thread initializes the main context stack during session setup.
+///   - The backward phase spawns multiple CPU threads.
 class ShadowContextSource : public ContextSource, public ScopeInterface {
 public:
   ShadowContextSource() = default;
@@ -17,8 +26,13 @@ public:
   void exitScope(const Scope &scope) override;
 
 private:
-  std::vector<Context> getContextsImpl() override { return contextStack; }
-  std::vector<Context> contextStack;
+  std::vector<Context> getContextsImpl() override;
+
+  void initializeThreadContext();
+
+  std::vector<Context> *mainContextStack{};
+  static thread_local bool contextInitialized;
+  static thread_local std::vector<Context> threadContextStack;
 };
 
 } // namespace proton

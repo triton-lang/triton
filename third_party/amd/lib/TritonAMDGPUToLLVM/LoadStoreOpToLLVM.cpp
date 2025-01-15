@@ -227,6 +227,29 @@ struct LoadStoreConversionBase {
     return axisAnalysisPass.getPtrAlignment(ptr);
   }
 
+  std::optional<const std::string>
+  getAMDGPUMemScopeStr(MemSyncScope scope) const {
+    // See: https://llvm.org/docs/AMDGPUUsage.html#memory-scopes
+    auto scopeStr = "";
+    switch (scope) {
+    case MemSyncScope::SYSTEM:
+      // The default AMDHSA LLVM Sync Scope is "system", so no string is
+      // provided here
+      scopeStr = "";
+      break;
+    case MemSyncScope::GPU:
+      scopeStr = "agent";
+      break;
+    case MemSyncScope::CTA:
+      scopeStr = "workgroup";
+      break;
+    default:
+      return std::nullopt;
+    }
+
+    return scopeStr;
+  }
+
 protected:
   const AMD::TargetInfo &targetInfo;
   ModuleAxisInfoAnalysis &axisAnalysisPass;
@@ -355,6 +378,7 @@ struct BufferLoadOpConversion
     Value offset = op.getOffsets();
     Value mask = op.getMask();
     Value other = op.getOther();
+    auto cacheMod = op.getCache();
 
     // Converted values
     Value llPtr = adaptor.getPtr();
@@ -395,7 +419,7 @@ struct BufferLoadOpConversion
             rewriter, this->getTypeConverter(), loc, cast<VectorType>(vecTy),
             otherElems, vecStart);
       Value loadVal = bufferEmitter.emitLoad(
-          vecTy, rsrcDesc, offsetElems[vecStart], pred, falseVal);
+          vecTy, rsrcDesc, offsetElems[vecStart], pred, falseVal, cacheMod);
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, this->getTypeConverter()->getIndexType(), ii);
@@ -515,6 +539,7 @@ struct BufferStoreOpConversion
     Value offset = op.getOffsets();
     Value mask = op.getMask();
     Value data = op.getValue();
+    auto cacheMod = op.getCache();
 
     Value llPtr = adaptor.getPtr();
     Value llOffset = adaptor.getOffsets();
@@ -547,7 +572,8 @@ struct BufferStoreOpConversion
       Value storeVal = packElementRangeIntoVector(
           rewriter, this->getTypeConverter(), loc, cast<VectorType>(vecTy),
           valueElems, vecStart);
-      bufferEmitter.emitStore(rsrcDesc, offsetElems[vecStart], storeVal, pred);
+      bufferEmitter.emitStore(rsrcDesc, offsetElems[vecStart], storeVal, pred,
+                              cacheMod);
     } // end vec
 
     rewriter.eraseOp(op);
@@ -601,6 +627,10 @@ struct AtomicCASOpConversion
 
     auto memOrdering = op.getSem();
     auto atomicMemOrdering = getMemoryOrdering(memOrdering);
+    auto scope = op.getScope();
+    auto scopeStr = getAMDGPUMemScopeStr(scope);
+    if (!scopeStr)
+      return failure();
 
     // deal with tensor or scalar
     auto valueTy = op.getResult().getType();
@@ -643,7 +673,7 @@ struct AtomicCASOpConversion
         auto failureOrdering = LLVM::AtomicOrdering::monotonic;
         auto cmpxchg = rewriter.create<LLVM::AtomicCmpXchgOp>(
             loc, casPtr, casCmp, casVal, successOrdering, failureOrdering,
-            StringRef("agent"));
+            StringRef(scopeStr.value()));
 
         // Extract the new_loaded value from the pair.
         Value ret = extract_val(valueElemTy, cmpxchg, i);
@@ -852,7 +882,12 @@ struct AtomicRMWOpConversion
       mask = and_(mask, icmp_eq(urem(tid, i32_val(2)), i32_val(0)));
 
     auto memOrdering = op.getSem();
+    auto scope = op.getScope();
     auto atomicMemOrdering = getMemoryOrdering(memOrdering);
+
+    auto scopeStr = getAMDGPUMemScopeStr(scope);
+    if (!scopeStr)
+      return failure();
 
     auto vecTy = vec_ty(valueElemTy, vec);
     auto retType = vec == 1 ? valueElemTy : vecTy;
@@ -907,11 +942,11 @@ struct AtomicRMWOpConversion
       auto maybeKind = matchAtomicOp(atomicRmwAttr);
       // TODO: use rocdl.raw.buffer.atomic from ROCDL dialect to use efficient
       // atomics for MI-* series of AMD GPU.
-      Value atom =
-          rewriter
-              .create<LLVM::AtomicRMWOp>(loc, *maybeKind, rmwPtr, operand,
-                                         atomicMemOrdering, StringRef("agent"))
-              .getResult();
+      Value atom = rewriter
+                       .create<LLVM::AtomicRMWOp>(loc, *maybeKind, rmwPtr,
+                                                  operand, atomicMemOrdering,
+                                                  StringRef(scopeStr.value()))
+                       .getResult();
       if (!tensorTy) {
         if (atomicNeedsSharedMemory(op.getResult())) {
           Value atomPtr =

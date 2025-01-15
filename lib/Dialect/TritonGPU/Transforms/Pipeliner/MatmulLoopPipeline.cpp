@@ -879,7 +879,8 @@ createAsyncOps(scf::ForOp &forOp,
   llvm::MapVector<int, StageGroup> stageGroups;
 
   for (auto &[loadOp, info] : loadToInfo) {
-    AsyncLoad asyncLoad = {.loadOp = loadOp};
+    AsyncLoad asyncLoad;
+    asyncLoad.loadOp = loadOp;
     bool isTMALoad = false;
     int numBuffers = info.distToUse;
     // For MMAv3, we need an extra buffer as this is assumed in the wgmma

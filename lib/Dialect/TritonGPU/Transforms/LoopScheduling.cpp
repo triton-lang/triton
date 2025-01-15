@@ -115,7 +115,7 @@ CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
   }
 
   auto stages = llvm::make_second_range(opToStage);
-  int maxStage = *std::max_element(stages.begin(), stages.end());
+  int maxStage = *llvm::max_element(stages);
   CoarseSchedule schedule(maxStage + 1);
   SmallVector<CoarseSchedule::Cluster> clusters(maxStage + 1);
   for (int i = 0; i <= maxStage; i++) {

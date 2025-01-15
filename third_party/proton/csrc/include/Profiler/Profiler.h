@@ -26,29 +26,30 @@ public:
   /// Start the profiler.
   /// If the profiler is already started, this function does nothing.
   Profiler *start() {
-    std::unique_lock<std::shared_mutex> lock(mutex);
-    if (this->initializedCount == 0)
+    if (!this->started) {
+      this->started = true;
       this->doStart();
-    this->initializedCount++;
+    }
     return this;
   }
 
   /// Flush the profiler's data from the device to the host.
   /// It doesn't stop the profiler.
   Profiler *flush() {
-    std::unique_lock<std::shared_mutex> lock(mutex);
     this->doFlush();
     return this;
   }
 
   /// Stop the profiler.
+  /// Do real stop if there's no data to collect.
   Profiler *stop() {
-    std::unique_lock<std::shared_mutex> lock(mutex);
-    if (this->initializedCount == 0)
+    if (!this->started) {
       return this;
-    this->initializedCount--;
-    if (this->initializedCount == 0)
+    }
+    if (this->getDataSet().empty()) {
+      this->started = false;
       this->doStop();
+    }
     return this;
   }
 
@@ -78,11 +79,13 @@ protected:
   virtual void doFlush() = 0;
   virtual void doStop() = 0;
 
+  // `dataSet` can be accessed by both the user thread and the background
+  // threads
   mutable std::shared_mutex mutex;
   std::set<Data *> dataSet;
 
 private:
-  int initializedCount{};
+  bool started{};
 };
 
 } // namespace proton
