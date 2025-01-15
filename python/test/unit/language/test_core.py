@@ -3538,8 +3538,6 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
         if "e4m3" in (mxfp_type, normal_type):
             if not is_hip_mi300():
                 pytest.skip(f"scaled_dot({mxfp_type}, {normal_type}) only implemented for MI300")
-            if normal_type == "fp16":
-                pytest.skip(f"scaled_dot({mxfp_type}, {normal_type}) not yet implemented for MI300")
         if mma == 16 and K == 64:
             pytest.skip(f"K == {K} too small for mfma {mma} in scaled_dot")
 
