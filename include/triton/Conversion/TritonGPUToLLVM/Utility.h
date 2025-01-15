@@ -246,34 +246,17 @@ createLLVMIntrinsicCallOp(OpBuilder &builder, Location loc, StringRef intrinsic,
 // Is v an integer or floating-point scalar constant equal to 0?
 bool isConstantZero(Value v);
 
-struct SharedMemoryObject {
-  Value base; // i32 ptr. The start address of the shared memory object after
-              // the initial allocation or the last slicing operation.
-  Type baseElemType;
-  SmallVector<Value> offsets; // i32 int.
-  // Offsets are applied at the last slicing operation.
-  // We can use offsets to recover the previous base.
-  // The offsets are zero at the initial allocation.
-
+class SharedMemoryObject {
+public:
   SharedMemoryObject(Value base, Type baseElemType, ArrayRef<Value> offsets)
       : base(base), baseElemType(baseElemType),
         offsets(offsets.begin(), offsets.end()) {}
 
   SharedMemoryObject(Value base, Type baseElemType, ArrayRef<int64_t> shape,
-                     triton::gpu::SharedEncodingAttr layout, Location loc,
-                     RewriterBase &rewriter)
+                     Attribute layout, Location loc, RewriterBase &rewriter)
       : base(base), baseElemType(baseElemType) {
-    SmallVector<unsigned> order(shape.size());
-    // Default minor-to-major order
-    std::iota(order.rbegin(), order.rend(), 0);
-    if (layout) {
-      auto layoutOrder = convertType<int>(layout.getOrder());
-      int rankDiff = layoutOrder.size() - shape.size();
-      auto minRank = std::min(shape.size(), layoutOrder.size());
-      for (size_t i = 0; i < minRank; ++i)
-        order[i] = layoutOrder[i] - rankDiff;
-    }
-    assert(isPermutationOfIota(order) && "Invalid order");
+    auto layoutOrder = ::mlir::triton::gpu::getOrder(layout);
+    auto order = SharedMemoryObject::getOrderForShape(shape, layoutOrder);
     offsets.append(order.size(), i32_val(0));
   }
 
@@ -295,11 +278,51 @@ struct SharedMemoryObject {
     return types;
   }
 
+  SmallVector<Value> getStrides(ArrayRef<int64_t> allocShape,
+                                ArrayRef<unsigned> layoutOrder, Location loc,
+                                RewriterBase &rewriter) const {
+    auto allocStrides = SharedMemoryObject::getStridesForShape(
+        allocShape, layoutOrder, loc, rewriter);
+    return {allocStrides.end() - offsets.size(), allocStrides.end()};
+  }
+
+  static SmallVector<unsigned>
+  getOrderForShape(ArrayRef<int64_t> shape, ArrayRef<unsigned> layoutOrder) {
+    SmallVector<unsigned> order(shape.size());
+    // Default minor-to-major order
+    std::iota(order.rbegin(), order.rend(), 0);
+    if (layoutOrder.size() > 0) {
+      int rankDiff = layoutOrder.size() - shape.size();
+      auto minRank = std::min<size_t>(shape.size(), layoutOrder.size());
+      for (size_t i = 0; i < minRank; ++i)
+        order[i] = layoutOrder[i] - rankDiff;
+    }
+    assert(isPermutationOfIota(order) && "Invalid order");
+    return order;
+  }
+
+  static SmallVector<Value> getStridesForShape(ArrayRef<int64_t> shape,
+                                               ArrayRef<unsigned> layoutOrder,
+                                               Location loc,
+                                               RewriterBase &rewriter) {
+    auto order = SharedMemoryObject::getOrderForShape(shape, layoutOrder);
+    auto rank = shape.size();
+    SmallVector<Value> strides(rank);
+    int64_t stride = 1;
+    for (auto idx : order) {
+      strides[idx] = i32_val(stride);
+      stride *= shape[idx];
+    }
+    return strides;
+  }
+
+  // TODO(Keren): deprecate the method once AMD backend has cleaned up
   Value getCSwizzleOffset(int dim) const {
     assert(dim >= 0 && dim < offsets.size());
     return offsets[dim];
   }
 
+  // TODO(Keren): deprecate the method once AMD backend has cleaned up
   Value getBaseBeforeSlice(int dim, Location loc,
                            RewriterBase &rewriter) const {
     Value cSwizzleOffset = getCSwizzleOffset(dim);
@@ -307,13 +330,13 @@ struct SharedMemoryObject {
     Type type = base.getType();
     return gep(type, baseElemType, base, offset);
   }
-};
 
-/// Helper function to get strides from a given shape and its order
-SmallVector<Value> getStridesFromShapeAndOrder(ArrayRef<int64_t> shape,
-                                               ArrayRef<unsigned> order,
-                                               Location loc,
-                                               RewriterBase &rewriter);
+private:
+  Value base; // i32 ptr. The start address of the shared memory object.
+  Type baseElemType;
+  SmallVector<Value>
+      offsets; // i32 int. The offsets are zero at the initial allocation.
+};
 
 Value getStructFromSharedMemoryObject(Location loc,
                                       const SharedMemoryObject &smemObj,

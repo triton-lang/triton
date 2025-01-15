@@ -185,17 +185,14 @@ Value getSmemVecAddr(RankedTensorType registerTy,
   StringAttr kWarp = str_attr("warp");
   auto shape = sharedTy.getShape();
   auto rank = shape.size();
-  auto allocShape = sharedTy.getAllocShape();
   auto sharedEnc =
       dyn_cast<triton::gpu::SharedEncodingAttr>(sharedTy.getEncoding());
 
   auto smemBase = smemObj.getBase();
   auto smemOffsets = smemObj.getOffsets();
   auto smemOrder = sharedEnc.getOrder();
-  auto allocStrides =
-      LLVM::getStridesFromShapeAndOrder(allocShape, smemOrder, loc, rewriter);
   auto smemStrides =
-      SmallVector<Value>(allocStrides.end() - rank, allocStrides.end());
+      smemObj.getStrides(sharedTy.getAllocShape(), smemOrder, loc, rewriter);
   Value smemOffset;
   // When loading or storing to shared memory, we consider two cases for
   // performance reasons:
@@ -586,10 +583,9 @@ SharedMemoryObject getSharedMemoryObjectFromStruct(Location loc,
           /*offsets=*/{elems.begin() + 1 + rank, elems.end()}};
 }
 
-SmallVector<Value> getStridesFromShapeAndOrder(ArrayRef<int64_t> allocShape,
-                                               ArrayRef<unsigned> layoutOrder,
-                                               Location loc,
-                                               RewriterBase &rewriter) {
+SmallVector<Value> getSmemAllocStrides(ArrayRef<int64_t> allocShape,
+                                       ArrayRef<unsigned> layoutOrder,
+                                       Location loc, RewriterBase &rewriter) {
   // Default minor-to-major order
   SmallVector<unsigned> allocOrder(allocShape.size());
   std::iota(allocOrder.rbegin(), allocOrder.rend(), 0);

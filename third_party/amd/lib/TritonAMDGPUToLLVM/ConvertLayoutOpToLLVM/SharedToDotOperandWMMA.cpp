@@ -187,10 +187,8 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
 
   SmallVector<Value> loadedValues;
   SmallVector<Value> offsets;
-  auto allocStrides = LLVM::getStridesFromShapeAndOrder(
-      aTensorTy.getAllocShape(), order, loc, rewriter);
   auto strides =
-      SmallVector<Value>(allocStrides.end() - order.size(), allocStrides.end());
+      smemObj.getStrides(aTensorTy.getAllocShape(), order, loc, rewriter);
   Value smemBase;
   Value spatialWarpId = AMD::getWarpIdInBlock(
       rewriter, loc, linearWaveId, warpsPerCTA, elemsPerInstr[0],
