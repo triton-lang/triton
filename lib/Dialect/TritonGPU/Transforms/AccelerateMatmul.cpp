@@ -398,6 +398,7 @@ public:
     auto scale = scaledDotOp.getLhsScale();
     auto aType = scaledDotOp.getLhsType();
     auto bType = scaledDotOp.getRhsType();
+    bool fastMath = scaledDotOp.getFastMath();
 
     auto rank = oldRetType.getShape().size();
     if (rank != 2)
@@ -510,7 +511,8 @@ public:
       newScaleEncoding = LinearEncodingAttr::get(ctx, std::move(newLL));
     }
 
-    a = createArg(rewriter, a, 0, aType, newAEncoding, scale, newScaleEncoding);
+    a = createArg(rewriter, a, 0, aType, newAEncoding, scale, newScaleEncoding,
+                  fastMath);
 
     Operation *newDot = nullptr;
     if (versionMajor == 2) {
@@ -518,7 +520,8 @@ public:
       assert(bType != ScaleDotElemType::E2M1 && "NYI: rhs scale for fp4");
       auto newBEncoding = DotOperandEncodingAttr::get(ctx, 1, mmaEnc, bKWidth);
       b = createArg(rewriter, b, 1, bType, newBEncoding,
-                    /*scale=*/std::nullopt, /*scaleEncoding=*/std::nullopt);
+                    /*scale=*/std::nullopt, /*scaleEncoding=*/std::nullopt,
+                    fastMath);
       newDot = rewriter.create<DotOp>(scaledDotOp.getLoc(), newRetType, a, b,
                                       newAcc);
     } else {
@@ -541,7 +544,7 @@ private:
   createArg(mlir::PatternRewriter &rewriter, TypedValue<RankedTensorType> v,
             int idx, ScaleDotElemType type, std::optional<Attribute> vEncoding,
             std::optional<TypedValue<RankedTensorType>> opt_scale,
-            std::optional<Attribute> scaleEncoding) const {
+            std::optional<Attribute> scaleEncoding, bool fastMath) const {
     auto ctx = rewriter.getContext();
     // Create a new tensor with a given encoding or remove the encoding
     auto maybeWithEncoding =
@@ -573,8 +576,10 @@ private:
           maybeWithEncoding(scale.getType(), scaleEncoding);
       scale = rewriter.create<ConvertLayoutOp>(scale.getLoc(),
                                                newScaleDotElemType, scale);
-      ret = rewriter.create<triton::gpu::UpcastMXFPOp>(v.getLoc(), ret, scale,
-                                                       type);
+      auto retTy = triton::gpu::UpcastMXFPOp::deduceOutputType(
+          ret, type, Builder(v.getContext()).getBF16Type());
+      ret = rewriter.create<triton::gpu::UpcastMXFPOp>(v.getLoc(), retTy, ret,
+                                                       scale, type, fastMath);
     }
     return ret;
   }
@@ -587,6 +592,7 @@ private:
     auto scale = scaledDotOp.getLhsScale();
     auto aType = scaledDotOp.getLhsType();
     auto bType = scaledDotOp.getRhsType();
+    bool fastMath = scaledDotOp.getFastMath();
 
     // create a DotOp to be passed in to getMMAVersionSafe
     // We don't pass encodings as we just want to get the type and shape
@@ -595,7 +601,7 @@ private:
     // end up in the graph
     RankedTensorType aTType =
         createArg(rewriter, a, 0, aType, /*vEncoding=*/std::nullopt, scale,
-                  /*scaleEncoding=*/std::nullopt)
+                  /*scaleEncoding=*/std::nullopt, fastMath)
             .getType();
     auto aTypeNoEnc =
         RankedTensorType::get(aTType.getShape(), aTType.getElementType());
@@ -603,7 +609,8 @@ private:
 
     RankedTensorType bTType =
         createArg(rewriter, b, 1, bType, /*vEncoding=*/std::nullopt,
-                  /*scale=*/std::nullopt, /*scaleEncoding=*/std::nullopt)
+                  /*scale=*/std::nullopt, /*scaleEncoding=*/std::nullopt,
+                  fastMath)
             .getType();
     auto bTypeNoEnc =
         RankedTensorType::get(bTType.getShape(), bTType.getElementType());
@@ -750,7 +757,7 @@ static Operation *transposeDotOp(DotScaledOp dotOp) {
   Value result = builder.create<DotScaledOp>(
       dotOp.getLoc(), cTransposed.getType(), rhsTransposed, lhsTransposed,
       cTransposed, dotOp.getRhsScale(), dotOp.getLhsScale(), dotOp.getRhsType(),
-      dotOp.getLhsType());
+      dotOp.getLhsType(), dotOp.getFastMath());
   Operation *transposedResult =
       builder.create<TransOp>(result.getLoc(), result, transOrder);
   dotOp.replaceAllUsesWith(transposedResult);

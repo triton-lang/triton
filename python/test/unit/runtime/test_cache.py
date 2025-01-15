@@ -577,7 +577,7 @@ def test_within_2gb(device, fresh_triton_cache) -> None:
     assert pointer_range_32 == [(0, )]
 
 
-def test_function_arguments():
+def test_function_arguments(device):
 
     @triton.jit
     def func1():
@@ -601,7 +601,7 @@ def test_function_arguments():
 
     JITFunction.cache_hook = None
     JITFunction.compiled_hook = None
-    y = torch.zeros((5, ), dtype=torch.int32, device="cuda")
+    y = torch.zeros((5, ), dtype=torch.int32, device=device)
     kernel[(1, )](y[0], func1, tuple())
     kernel[(1, )](y[1], func2, tuple())
     kernel[(1, )](y[2], func3, (3, ))

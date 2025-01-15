@@ -567,6 +567,11 @@ L(T) = [ {0,8} , {1,9} , {2,10}, {3,11}, {0,8} , {1, 9} , {2, 10}, {3, 11},
 // Linear Layout Encoding
 //===----------------------------------------------------------------------===//
 
+def LinearLayoutParam : AttrOrTypeParameter<"LinearLayout",
+                                            "linear layout"> {
+  let cppAccessorType = "const LinearLayout &";
+}
+
 def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding"> {
   let mnemonic = "linear";
 
@@ -574,11 +579,24 @@ def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding"
     See the docs in LinearLayout.h for the definition of linear layouts.
   }];
 
-  let parameters = (ins "LinearLayout":$linearLayout);
+  let parameters = (ins LinearLayoutParam:$linearLayout);
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
     SmallVector<unsigned> getContigPerThread() const;
     SmallVector<unsigned> getOrder() const;
+
+    // Generalizes get{Warp,Thread,CTA}Order to linear layouts.
+    // Returns the order of the dimensions `dimName` of the layout.
+    // If more than dimension is of size one, it uses defaultOrder to determine
+    // the order of the dimensions of size one.
+    SmallVector<unsigned> orderPerDim(StringAttr dimName,
+                                      ArrayRef<unsigned> defaultOrder) const;
+
+    // Generalizes getThreadsPerWarp, getWarpsPerCTA, getCTAsPerCGA to linear layouts.
+    // Returns the bases of the dimensions `dimName` of the layout.
+    // If skipBroadcast is false, we count a base zero
+    SmallVector<unsigned> basesPerDim(StringAttr dimName,
+                                      bool skipBroadcast = true) const;
   }];
 
   let genVerifyDecl = 1;

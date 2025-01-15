@@ -65,34 +65,19 @@ SmallVector<unsigned> ReduceOpHelper::getOrderWithAxisAtBeginning() {
 // reduction axis within the warp.
 unsigned ReduceOpHelper::getThreadOffsetOnReductionAxis() {
   auto srcLayout = getSrcLayout();
-
-  // If the reduction axis is the fast axis of the parent layout
-  if (isReductionOnLayoutFastAxis()) {
-    return 1;
-  }
-
-  unsigned threadOffset = 1;
-  SmallVector<int> dimsRemoved;
-  while (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(srcLayout)) {
-    dimsRemoved.push_back(sliceLayout.getDim());
-    srcLayout = sliceLayout.getParent();
-  }
-  // In case of slice layout we want to know the axis dimension relative to the
-  // most inner parent layout. `adjustedAxis` is the matching axis dim in the
-  // parent layout.
-  int adjustedAxis = axis;
-  for (auto dim : dimsRemoved) {
-    if (dim <= adjustedAxis)
-      adjustedAxis++;
-  }
-  auto threadsPerWarp = getThreadsPerWarp(srcLayout);
-  auto order = getThreadOrder(srcLayout);
-  for (unsigned i = 0; i < order.size(); i++) {
-    if (order[i] == adjustedAxis)
+  auto *ctx = srcLayout.getContext();
+  auto linearLayout = *toLinearLayout(getSrcShape(), srcLayout);
+  auto axis = getAxis();
+  auto kLane = mlir::StringAttr::get(ctx, "lane");
+  const auto &bases = linearLayout.getBases();
+  const auto &lanes = bases.find(kLane)->second;
+  auto offset = 1;
+  for (const auto &lane : lanes) {
+    if (lane[axis] != 0)
       break;
-    threadOffset *= threadsPerWarp[order[i]];
+    offset *= 2;
   }
-  return threadOffset;
+  return offset;
 }
 
 // Cases where distributed shared memory is not required in ConvertLayout:
@@ -170,10 +155,11 @@ unsigned ReduceOpHelper::getIntraWarpSizeWithUniqueData() {
 }
 
 unsigned ReduceOpHelper::getThreadsReductionAxis() {
-  auto srcLayout = getSrcLayout();
-  auto srcShape = getSrcShape();
-  return getThreadsPerWarpWithUniqueData(srcLayout, srcShape)[axis] *
-         getWarpsPerCTAWithUniqueData(srcLayout, srcShape)[axis];
+  auto axis = getAxis();
+  auto *ctx = getSrcLayout().getContext();
+  auto ll = LinearEncodingAttr::get(
+      ctx, *toLinearLayout(getSrcShape(), getSrcLayout()));
+  return ll.getThreadsPerWarp()[axis] * ll.getWarpsPerCTA()[axis];
 }
 
 bool ReduceOpHelper::isWarpSynchronous() {
@@ -221,14 +207,13 @@ bool ReduceOpHelper::isSupportedLayout() {
   }
 
   auto srcLayout = getSrcLayout();
-  if (isa<BlockedEncodingAttr>(srcLayout)) {
+  if (isa<BlockedEncodingAttr, LinearEncodingAttr, SliceEncodingAttr>(
+          srcLayout)) {
     return true;
   }
+
   if (auto mmaLayout = dyn_cast<MmaEncodingTrait>(srcLayout)) {
     return mmaLayout.supportReduction();
-  }
-  if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(srcLayout)) {
-    return true;
   }
   return false;
 }

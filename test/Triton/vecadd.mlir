@@ -18,10 +18,7 @@ module {
     %11 = tt.splat %cst : f32 -> tensor<256xf32>
     %c0_i32 = arith.constant 0 : i32
     %c32_i32 = arith.constant 32 : i32
-    %12 = arith.index_cast %c0_i32 : i32 to index
-    %13 = arith.index_cast %arg4 : i32 to index
-    %14 = arith.index_cast %c32_i32 : i32 to index
-    %15:3 = scf.for %arg6 = %12 to %13 step %14 iter_args(%arg7 = %11, %arg8 = %8, %arg9 = %10) -> (tensor<256xf32>, tensor<256x!tt.ptr<f32>>, tensor<256x!tt.ptr<f32>>) {
+    %15:3 = scf.for %arg6 = %c0_i32 to %arg4 step %c32_i32 iter_args(%arg7 = %11, %arg8 = %8, %arg9 = %10) -> (tensor<256xf32>, tensor<256x!tt.ptr<f32>>, tensor<256x!tt.ptr<f32>>) : i32 {
       %cst_0 = arith.constant 0.000000e+00 : f32
       %18 = tt.splat %cst_0 : f32 -> tensor<256xf32>
       %19 = tt.load %arg8, %6, %18 : tensor<256x!tt.ptr<f32>>

@@ -993,7 +993,7 @@ def _patch_lang_core(lang):
     lang.static_assert = _new_static_assert
     lang.static_print = print
     lang.dtype.to_ir = _new_to_ir
-    lang.multiple_of = partial(_set_attr, name="tt.divisiblity")
+    lang.multiple_of = partial(_set_attr, name="tt.divisibility")
     lang.max_contiguous = partial(_set_attr, name="tt.contiguity")
     lang.max_constancy = partial(_set_attr, name="tt.constancy")
 

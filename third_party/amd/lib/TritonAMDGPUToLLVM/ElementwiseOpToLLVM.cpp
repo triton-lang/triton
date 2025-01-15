@@ -99,25 +99,6 @@ static Value cvtFp16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
   return builder.launch(rewriter, loc, f32_ty, false);
 }
 
-static Value cvtFp32ToFp16(Location loc, ConversionPatternRewriter &rewriter,
-                           const Value &v, const RoundingMode rounding) {
-  GCNBuilder builder;
-
-  auto &cvt = *builder.create("v_cvt_f16_f32");
-  auto res = builder.newOperand("=v");
-  auto operand = builder.newOperand(v, "v");
-  if (rounding == RoundingMode::RTZ) {
-    auto &setRTZ = *builder.create("s_setreg_imm32_b32 0x1801, 0xc");
-    setRTZ();
-  }
-  cvt(res, operand);
-  if (rounding == RoundingMode::RTZ) {
-    auto &resetRTZ = *builder.create("s_setreg_imm32_b32 0x1801, 0x0");
-    resetRTZ();
-  }
-  return builder.launch(rewriter, loc, f16_ty, false);
-}
-
 // convert fp8 to fp32
 static SmallVector<Value> cvtFp8ToFp32(Location loc,
                                        ConversionPatternRewriter &rewriter,
@@ -194,8 +175,8 @@ convert_val_Fp8_to_Fp16(Location loc, ConversionPatternRewriter &rewriter,
   SmallVector<Value> ret = cvtFp8ToFp32(loc, rewriter, v0, v1, fp8_format);
 
   // Convert fp32 to fp16
-  ret[0] = cvtFp32ToFp16(loc, rewriter, ret[0], RoundingMode::RTNE);
-  ret[1] = cvtFp32ToFp16(loc, rewriter, ret[1], RoundingMode::RTNE);
+  ret[0] = LLVM::AMD::cvtFp32ToFp16(loc, rewriter, ret[0], RoundingMode::RTNE);
+  ret[1] = LLVM::AMD::cvtFp32ToFp16(loc, rewriter, ret[1], RoundingMode::RTNE);
 
   return ret;
 }
@@ -276,6 +257,56 @@ Fp16_to_Fp8E5M2FNUZ_HW(Location loc, ConversionPatternRewriter &rewriter,
 ConverterT Fp16_to_Fp8E5M2FNUZ(AMD::ISAFamily isaFamily) {
   return isaFamily == AMD::ISAFamily::CDNA3 ? Fp16_to_Fp8E5M2FNUZ_HW
                                             : Fp16_to_Fp8E5M2FNUZ_SW;
+}
+
+static Value Fp8E4M3FN_to_Fp16_oneValue(Location loc,
+                                        ConversionPatternRewriter &rewriter,
+                                        Value v) {
+  auto fp8x2VecTy = vec_ty(i8_ty, 2);
+  Value a = undef(fp8x2VecTy);
+  a = insert_element(fp8x2VecTy, a, i8_val(0), i32_val(0));
+  a = insert_element(fp8x2VecTy, a, v, i32_val(1));
+  a = bitcast(a, i16_ty);
+
+  // Get sign and absolute value
+  Value sign = and_(a, i16_val(0x8000));
+  a = and_(a, i16_val(0x7FFF));
+
+  // Right shift 1 bit to adjust the positions of exponent and mantissa
+  a = lshr(a, i16_val(1));
+
+  // Adjust exponent, (15 - 7) << 10 === 0x2000
+  a = add(a, i16_val(0x2000));
+
+  // Check NaN
+  Value vAbs = and_(bitcast(v, i8_ty), i8_val(0x7F));
+  a = select(icmp_eq(vAbs, i8_val(0x7F)), i16_val(0x7E00), a);
+
+  // Check denorms and zero
+  // Here we use a LUT to map S.0000.000 ~ S.0000.111 to its corresponding fp16
+  // value
+  constexpr size_t lutSize = 8;
+  static constexpr int denormsAndZeroLut[lutSize] = {
+      0x0000, 0x1800, 0x1C00, 0x1E00, 0x2000, 0x2100, 0x2200, 0x2300};
+
+  for (int i = 0; i < lutSize; i++) {
+    a = select(icmp_eq(vAbs, i8_val(i)), i16_val(denormsAndZeroLut[i]), a);
+  }
+
+  // Set sign
+  a = or_(a, sign);
+  a = bitcast(a, f16_ty);
+
+  return a;
+}
+
+static SmallVector<Value> Fp8E4M3FN_to_Fp16(Location loc,
+                                            ConversionPatternRewriter &rewriter,
+                                            const SmallVector<Value> &values) {
+  SmallVector<Value> results(2);
+  results[0] = Fp8E4M3FN_to_Fp16_oneValue(loc, rewriter, values[0]);
+  results[1] = Fp8E4M3FN_to_Fp16_oneValue(loc, rewriter, values[1]);
+  return results;
 }
 
 static SmallVector<Value> Fp8E5M2_to_Fp16(Location loc,
@@ -914,6 +945,7 @@ struct FpToFpOpConversion
             // F8 -> F16
             {{F8E4M3FNUZTyID, F16TyID, undefRounding},
              Fp8E4M3FNUZ_to_Fp16(isaFamily)},
+            {{F8E4M3FNTyID, F16TyID, undefRounding}, Fp8E4M3FN_to_Fp16},
             {{F8E5M2FNUZTyID, F16TyID, undefRounding},
              Fp8E5M2FNUZ_to_Fp16(isaFamily)},
             {{F8E5M2TyID, F16TyID, undefRounding}, Fp8E5M2_to_Fp16},
@@ -967,7 +999,7 @@ struct FpToFpOpConversion
       outVals.reserve(operands[0].size());
       for (Value v : operands[0]) {
         outVals.push_back(
-            cvtFp32ToFp16(loc, rewriter, v, roundingMode.value()));
+            LLVM::AMD::cvtFp32ToFp16(loc, rewriter, v, roundingMode.value()));
       }
       return outVals;
     }
@@ -1018,8 +1050,8 @@ struct FpToFpOpConversion
     }
     if (useFP16IntermediateSrc)
       for (Value &v : inVals)
-        v = cvtFp32ToFp16(loc, rewriter, v,
-                          roundingMode.value_or(RoundingMode::RTNE));
+        v = LLVM::AMD::cvtFp32ToFp16(loc, rewriter, v,
+                                     roundingMode.value_or(RoundingMode::RTNE));
     inVals.resize(numElements, undef(typeConverter->convertType(srcType)));
     SmallVector<Value> outVals;
     if (srcType != dstType) {
@@ -1358,12 +1390,169 @@ struct RsqrtOpConversion
 
     // `llvm.amdgcn.rsq.f32` provides direct access to v_rsq_f32_e32.
     StringRef funcName = "llvm.amdgcn.rsq.f32";
+
     Type funcType = getFunctionType(elemTy, operands[0]);
     LLVM::LLVMFuncOp funcOp =
         appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
 
     return {
         LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]).getResult()};
+  }
+
+private:
+  bool ftz;
+};
+
+static inline std::pair<Value, Value>
+scaleUpIfDenorm(ConversionPatternRewriter &rewriter, Location loc,
+                const Value &src, float scaleThreshold, float scaleFactor) {
+  Value needScale = fcmp_ogt(f32_val(scaleThreshold), src);
+  Value scaledSrc = fmul(f32_ty, src, f32_val(scaleFactor));
+  Value selectedSrc = select(needScale, scaledSrc, src);
+  return {needScale, selectedSrc};
+}
+
+static inline Value scaleDownIfDenorm(ConversionPatternRewriter &rewriter,
+                                      Location loc, const Value &src,
+                                      Value needScale, float scaleFactor) {
+  Value scaledSrc = fmul(f32_ty, src, f32_val(scaleFactor));
+  return select(needScale, scaledSrc, src);
+}
+
+struct SqrtOpConversion
+    : ElementwiseOpConversionBase<mlir::math::SqrtOp, SqrtOpConversion> {
+  using ElementwiseOpConversionBase<
+      mlir::math::SqrtOp, SqrtOpConversion>::ElementwiseOpConversionBase;
+
+  explicit SqrtOpConversion(LLVMTypeConverter &typeConverter,
+                            ModuleAxisInfoAnalysis &axisInfoAnalysis, bool ftz,
+                            PatternBenefit benefit)
+      : ElementwiseOpConversionBase(typeConverter, axisInfoAnalysis, benefit),
+        ftz(ftz) {}
+
+  SmallVector<Value> createDestOps(mlir::math::SqrtOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    // This function only handles FP32 inputs. Other data types are lowered to
+    // LLVM::SqrtOp by MLIR.
+    //
+    // On the AMDGPU backend, instructions legalized from LLVM::SqrtOp are
+    // designed to produce IEEE-compliant results and always preserve denorms.
+    // But what we actually need is an approximated SQRT. So we need to manually
+    // lower the op.
+    //
+    // Differences in this approach are
+    // 1. Refinement iterations following llvm.amdgcn.sqrt.f32 are removed to
+    // improve performance.
+    // 2. With ftz enabled, the scaling-up-and-down process is bypassed to
+    // ensure denorms are flushed to zero.
+    if (elemTy.getIntOrFloatBitWidth() != 32)
+      return {};
+
+    Value needScale = false_val();
+    Value scaledSrc = operands[0][0];
+    if (!ftz) {
+      // For non-ftz cases, if the input value is below 2^{-96}, it needs to be
+      // scaled up by a factor of 2^{32}, to prevent it from being flushed by
+      // llvm.amdgcn.sqrt.f32.
+      //
+      // The result is then scaled down afterward to get the correct result.
+      // Reference:
+      // https://github.com/llvm/llvm-project/blob/0876c11c/llvm/lib/Target/AMDGPU/AMDGPULegalizerInfo.cpp#L5235-L5314.
+      std::tie(needScale, scaledSrc) = scaleUpIfDenorm(
+          rewriter, loc, operands[0][0], 0x1.0p-96f, 0x1.0p+32f);
+    }
+
+    // llvm.amdgcn.sqrt.f32 provides direct access to v_sqrt_f32, which provides
+    // 1ULP accuracy and flushs denorms.
+    StringRef funcName = "llvm.amdgcn.sqrt.f32";
+
+    Type funcType = getFunctionType(elemTy, operands[0]);
+    LLVM::LLVMFuncOp funcOp =
+        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
+
+    Value intrinsicsOutput =
+        LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]).getResult();
+
+    if (!ftz) {
+      // In case of non-ftz, we need to calibrate the results by scaling down by
+      // a factor of 2^{-16}.
+      return {scaleDownIfDenorm(rewriter, loc, intrinsicsOutput, needScale,
+                                0x1.0p-16f)};
+    } else {
+      return {intrinsicsOutput};
+    }
+  }
+
+private:
+  bool ftz;
+};
+
+struct PreciseSqrtOpConversion
+    : ElementwiseOpConversionBase<triton::PreciseSqrtOp,
+                                  PreciseSqrtOpConversion> {
+  using ElementwiseOpConversionBase<
+      triton::PreciseSqrtOp,
+      PreciseSqrtOpConversion>::ElementwiseOpConversionBase;
+
+  explicit PreciseSqrtOpConversion(LLVMTypeConverter &typeConverter,
+                                   ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                                   bool ftz, PatternBenefit benefit)
+      : ElementwiseOpConversionBase(typeConverter, axisInfoAnalysis, benefit),
+        ftz(ftz) {}
+
+  SmallVector<Value> createDestOps(triton::PreciseSqrtOp op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    // If the op is neither FP32 nor denorm flushing(ftz), it's directly lowered
+    // to LLVM::SqrtOp.
+    if (elemTy.getIntOrFloatBitWidth() != 32 || !ftz) {
+      return {rewriter.create<LLVM::SqrtOp>(
+          loc, elemTy, operands[0], adaptor.getAttributes().getValue())};
+    }
+
+    // On the AMDGPU backend, instructions legalized from LLVM::SqrtOp are
+    // designed to always preserve denorms, according to
+    // https://github.com/llvm/llvm-project/blob/3d6b2d49/llvm/lib/Target/AMDGPU/AMDGPULegalizerInfo.cpp#L5235-L5314.
+    //
+    // For f32 inputs with ftz enabled, we need to manually lower the op to
+    // bypass the scaling-up-and-down process while keeping other parts
+    // unchanged. To ensure IEEE-compliant results, we approximate `sqrt(x)`
+    // using `x * rsq(x)` and apply extra refinement iterations to correct the
+    // result.
+    StringRef funcName = "llvm.amdgcn.rsq.f32";
+
+    Type funcType = getFunctionType(elemTy, operands[0]);
+    LLVM::LLVMFuncOp funcOp =
+        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
+
+    Value sqrtR =
+        LLVM::createLLVMCallOp(rewriter, loc, funcOp, operands[0]).getResult();
+
+    Value sqrtX = operands[0][0];
+    Value sqrtS = fmul(f32_ty, sqrtX, sqrtR);
+
+    // Refine the approximation with Newton iteration
+    Value sqrtH = fmul(f32_ty, sqrtR, f32_val(0.5f));
+    Value sqrtE = fma(neg(f32_ty, sqrtH), sqrtS, f32_val(0.5f));
+    sqrtH = fma(sqrtH, sqrtE, sqrtH);
+    sqrtS = fma(sqrtS, sqrtE, sqrtS);
+    Value sqrtD = fma(neg(f32_ty, sqrtS), sqrtS, sqrtX);
+    sqrtS = fma(sqrtD, sqrtH, sqrtS);
+
+    // Handle +0/-0/+inf
+    // These flags come from
+    // https://github.com/llvm/llvm-project/blob/217e0f39/llvm/include/llvm/ADT/FloatingPointMode.h#L239-L265.
+    const unsigned fcPosInf = 0x0200;
+    const unsigned fcNegZero = 0x0020;
+    const unsigned fcPosZero = 0x0040;
+    const unsigned fcZero = fcNegZero | fcPosZero;
+
+    Value isZeroOrPosInf =
+        rewriter.create<LLVM::IsFPClass>(loc, i1_ty, sqrtX, fcPosInf | fcZero);
+    return {select(isZeroOrPosInf, sqrtX, sqrtS)};
   }
 
 private:
@@ -1385,9 +1574,6 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<ElementwiseOpConversion<arith::MaximumFOp, LLVM::MaximumOp>>(
       typeConverter, axisInfoAnalysis, benefit);
   patterns.add<ElementwiseOpConversion<triton::PreciseDivFOp, LLVM::FDivOp>>(
-      typeConverter, axisInfoAnalysis, benefit);
-
-  patterns.add<ElementwiseOpConversion<triton::PreciseSqrtOp, LLVM::SqrtOp>>(
       typeConverter, axisInfoAnalysis, benefit);
 
   patterns.add<FDivOpConversion>(typeConverter, axisInfoAnalysis, benefit);
@@ -1413,6 +1599,9 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<Exp2OpConversion>(typeConverter, axisInfoAnalysis, ftz, benefit);
   patterns.add<RsqrtOpConversion>(typeConverter, axisInfoAnalysis, ftz,
                                   benefit);
+  patterns.add<SqrtOpConversion>(typeConverter, axisInfoAnalysis, ftz, benefit);
+  patterns.add<PreciseSqrtOpConversion>(typeConverter, axisInfoAnalysis, ftz,
+                                        benefit);
   mlir::triton::populateElementwiseOpToLLVMPatterns(
       typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
   mlir::triton::populateMinMaxFOpToLLVMPattern(

@@ -547,8 +547,11 @@ class CudaDriver(GPUDriver):
 
     @staticmethod
     def is_active():
-        import torch
-        return torch.cuda.is_available() and (torch.version.hip is None)
+        try:
+            import torch
+            return torch.cuda.is_available() and (torch.version.hip is None)
+        except ImportError:
+            return False
 
     def get_benchmarker(self):
         from triton.testing import do_bench
@@ -562,3 +565,6 @@ class CudaDriver(GPUDriver):
         # doesn't contain any input data before the run
         cache_size = 256 * 1024 * 1024
         return torch.empty(int(cache_size // 4), dtype=torch.int, device='cuda')
+
+    def clear_cache(self, cache):
+        cache.zero_()

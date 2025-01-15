@@ -37,7 +37,7 @@ def _find_already_mmapped_dylib_on_linux(lib_name):
     # Load libc and get the dl_iterate_phdr symbol.
     try:
         dl_iterate_phdr = ctypes.CDLL('libc.so.6').dl_iterate_phdr
-    except:
+    except Exception:
         return None
     # argtypes must use c_char_p to accept create_string_buffer.
     dl_iterate_phdr.argtypes = [callback_t, c_char_p]
@@ -500,8 +500,11 @@ class HIPDriver(GPUDriver):
 
     @staticmethod
     def is_active():
-        import torch
-        return torch.version.hip is not None
+        try:
+            import torch
+            return torch.version.hip is not None
+        except ImportError:
+            return False
 
     def get_current_target(self):
         device = self.get_current_device()
@@ -525,3 +528,6 @@ class HIPDriver(GPUDriver):
         # It's the same as the Nvidia backend.
         cache_size = 256 * 1024 * 1024
         return torch.empty(int(cache_size // 4), dtype=torch.int, device='cuda')
+
+    def clear_cache(self, cache):
+        cache.zero_()

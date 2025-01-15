@@ -2,10 +2,22 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Attributes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/STLExtras.h"
+
+#if defined(_MSC_VER) && !defined(__clang__)
+// from https://gist.github.com/pps83/3210a2f980fd02bb2ba2e5a1fc4a2ef0
+#include <intrin.h>
+
+static int __builtin_ctz(unsigned x) {
+  unsigned long r;
+  _BitScanForward(&r, x);
+  return static_cast<int>(r);
+}
+#endif
 
 namespace mlir {
 
@@ -223,10 +235,7 @@ Value getSmemVecAddr(RankedTensorType registerTy,
   // We propose case 2 (see comments below), which provides a more general
   // solution for all swizzled shared memory scenarios, including the edge case
   // mentioned above.
-  if (/*no swizzling*/ sharedEnc.getMaxPhase() == 1 ||
-      /*swizzling but same shape*/ shape == allocShape ||
-      /*swizzling and rank-reduced and rank >= 2*/
-      (shape == allocShape.take_back(rank) && rank >= 2)) { // Case 1
+  if (isSimpleSharedMemoryAccess(shape, allocShape, sharedEnc)) { // Case 1
     // Get the address to load/store.  The multi-dim address is (offsetX1, ...,
     // offsetXN, block), where the offsets appear in minor-to-major order, and
     // we drop_end to drop block, which we know from above will be 0.
@@ -585,6 +594,53 @@ SmallVector<Value> getStridesFromShapeAndOrder(ArrayRef<int64_t> shape,
   return strides;
 }
 
+// Extract the bits of `a` that are set in `mask`
+Value pext_i32(RewriterBase &rewriter, Location loc, Value a, uint32_t mask) {
+  assert(a.getType() == i32_ty && "a must be i32");
+  // Handle width = 32 to avoid doing 1 << 32
+  if (mask == 0xFFFFFFFF)
+    return a;
+
+  // We implement a blocked algorithm to avoid generating too many instructions
+  Value result = i32_val(0);
+  int resultPos = 0;
+  while (mask) {
+    int start = __builtin_ctz(mask);
+    int width = __builtin_ctz(~(mask >> start));
+    Value shifted = lshr(a, i32_val(start));
+    Value widthMask = i32_val(((1u << width) - 1));
+    Value blockVal = and_(shifted, widthMask);
+    result = or_(result, shl(blockVal, i32_val(resultPos)));
+    resultPos += width;
+    mask &= ~(((1u << width) - 1) << start);
+  }
+  return result;
+}
+
+std::tuple<SmallVector<Value>, Value>
+delinearize(RewriterBase &rewriter, Location loc,
+            triton::gpu::DistributedEncodingTrait layout,
+            ArrayRef<int64_t> shape, StringAttr dimName, Value linear) {
+  auto ll = *triton::gpu::toLinearLayout(shape, layout);
+  auto linearLayout =
+      triton::gpu::LinearEncodingAttr::get(rewriter.getContext(), ll);
+  assert(ll.hasInDim(dimName));
+  int32_t freeVarMask = ll.getFreeVariableMasks()[dimName];
+  auto isRepresentative = true_val();
+  if (freeVarMask != 0) {
+    isRepresentative = icmp_eq(and_(i32_val(freeVarMask), linear), i32_val(0));
+    // We remove the bits of linear that are set to one in freeVarMask
+    int32_t nonFreeVarMask = ~freeVarMask & (ll.getInDimSize(dimName) - 1);
+    linear = pext_i32(rewriter, loc, linear, nonFreeVarMask);
+  }
+
+  auto orderDim = linearLayout.orderPerDim(dimName, linearLayout.getOrder());
+  auto shapeDim = linearLayout.basesPerDim(dimName);
+  auto multiDim = delinearize(rewriter, loc, linear, shapeDim, orderDim);
+
+  return std::make_tuple(std::move(multiDim), isRepresentative);
+}
+
 // Convert an \param index to a multi-dim coordinate given \param shape and
 // \param order.
 SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
@@ -871,46 +927,15 @@ SmallVector<Value> getWrappedMultiDimOffset(
   return multiDimOffsetWrapped;
 }
 
-SmallVector<Value> convertMxfp4x2ToBf16x2(RewriterBase &rewriter, Location loc,
-                                          ArrayRef<Value> values) {
-  SmallVector<Value> results;
-  for (auto v : values) {
-    auto em0 = and_(v, i8_val(0x7));
-    auto em1 = and_(v, i8_val(0x70));
-    Value v0 = or_(shl(zext(i16_ty, em0), i16_val(6)),
-                   shl(zext(i16_ty, and_(v, i8_val(0x8))), i16_val(12)));
-    Value v1 = or_(shl(zext(i16_ty, em1), i16_val(2)),
-                   shl(zext(i16_ty, and_(v, i8_val(0x80))), i16_val(8)));
-
-    // Three cases:
-    // 1) x is normal and non-zero: Correct bias
-    v0 = select(icmp_ne(and_(em0, i8_val(0x6)), i8_val(0)),
-                add(v0, i16_val((127 - 1) << 7)), v0);
-    v1 = select(icmp_ne(and_(em1, i8_val(0x60)), i8_val(0)),
-                add(v1, i16_val((127 - 1) << 7)), v1);
-
-    // 2) x is subnormal (x == 0bs001 where s is the sign): Map to +-0.5 in
-    // bf16
-    v0 = bitcast(select(icmp_eq(em0, i8_val(0x1)),
-                        or_(i16_val(16128), and_(v0, i16_val(0x8000))), v0),
-                 bf16_ty);
-    v1 = bitcast(select(icmp_eq(em1, i8_val(0x10)),
-                        or_(i16_val(16128), and_(v1, i16_val(0x8000))), v1),
-                 bf16_ty);
-    // 3) x is zero, nothing to do
-    results.push_back(v0);
-    results.push_back(v1);
-  }
-  return results;
-}
-
-Value mxfpScaleBf16(RewriterBase &rewriter, Location loc, Value v,
-                    Value scale) {
+Value mxfpScaleBf16(RewriterBase &rewriter, Location loc, Value v, Value scale,
+                    bool fastMath) {
   Value vBf16 = bitcast(v, bf16_ty);
-  Value nanBf16 = bitcast(i16_val(0x7fff), bf16_ty);
-  Value scaleIsNan = icmp_eq(scale, i8_val(0xff));
   Value scaleBf16 = bitcast(shl(zext(i16_ty, scale), i16_val(7)), bf16_ty);
   Value scaledBf16 = fmul(vBf16, scaleBf16);
+  if (fastMath)
+    return scaledBf16;
+  Value nanBf16 = bitcast(i16_val(0x7fff), bf16_ty);
+  Value scaleIsNan = icmp_eq(scale, i8_val(0xff));
   // Account for NaN in the scale as per the mxfp specification.
   return select(scaleIsNan, nanBf16, scaledBf16);
 };

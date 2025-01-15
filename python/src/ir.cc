@@ -1,4 +1,4 @@
-#include <optional>
+﻿#include <optional>
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -232,6 +232,7 @@ void init_triton_ir(py::module &&m) {
       .value("E3M2", ScaleDotElemType::E3M2)
       .value("E2M1", ScaleDotElemType::E2M1)
       .value("BF16", ScaleDotElemType::BF16)
+      .value("FP16", ScaleDotElemType::FP16)
       .export_values();
 
   py::class_<MLIRContext>(m, "context", py::module_local())
@@ -1032,16 +1033,6 @@ void init_triton_ir(py::module &&m) {
              else
                return self.create<arith::ExtUIOp>(dstType, src);
            })
-      .def("create_to_index",
-           [](TritonOpBuilder &self, Value &input) -> Value {
-             return self.create<arith::IndexCastOp>(
-                 self.getBuilder().getIndexType(), input);
-           })
-      .def("create_index_to_si",
-           [](TritonOpBuilder &self, Value &input) -> Value {
-             return self.create<arith::IndexCastOp>(
-                 self.getBuilder().getI64Type(), input);
-           })
       .def("create_fmul",
            [](TritonOpBuilder &self, Value &lhs, Value &rhs) -> Value {
              return self.create<arith::MulFOp>(lhs, rhs);
@@ -1512,10 +1503,12 @@ void init_triton_ir(py::module &&m) {
               std::optional<mlir::Value> &lhs_scale,
               ScaleDotElemType lhs_format, mlir::Value &rhs,
               std::optional<mlir::Value> &rhs_scale,
-              ScaleDotElemType rhs_format, mlir::Value &c) -> mlir::Value {
-             return self.create<DotScaledOp>(
-                 c.getType(), lhs, rhs, c, lhs_scale.value_or(Value()),
-                 rhs_scale.value_or(Value()), lhs_format, rhs_format);
+              ScaleDotElemType rhs_format, bool fast_math,
+              mlir::Value &c) -> mlir::Value {
+             return self.create<DotScaledOp>(c.getType(), lhs, rhs, c,
+                                             lhs_scale.value_or(Value()),
+                                             rhs_scale.value_or(Value()),
+                                             lhs_format, rhs_format, fast_math);
            })
       .def("create_floor",
            [](TritonOpBuilder &self, Value &val) -> Value {

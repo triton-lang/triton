@@ -46,6 +46,8 @@ using namespace mlir::triton;
 #define fadd(...) rewriter.create<LLVM::FAddOp>(loc, __VA_ARGS__)
 #define mul(...) rewriter.create<LLVM::MulOp>(loc, __VA_ARGS__)
 #define fmul(...) rewriter.create<LLVM::FMulOp>(loc, __VA_ARGS__)
+#define fma(...) rewriter.create<LLVM::FMAOp>(loc, __VA_ARGS__)
+#define neg(...) rewriter.create<LLVM::FNegOp>(loc, __VA_ARGS__)
 #define smax(...) rewriter.create<LLVM::SMaxOp>(loc, __VA_ARGS__)
 #define umax(...) rewriter.create<LLVM::UMaxOp>(loc, __VA_ARGS__)
 #define fmax(...) rewriter.create<LLVM::MaxNumOp>(loc, __VA_ARGS__)
@@ -352,6 +354,15 @@ SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
 SmallVector<unsigned> delinearize(unsigned linear, ArrayRef<unsigned> shape,
                                   ArrayRef<unsigned> order);
 
+// Returns a tuple with the delinearized coordinates and a boolean which is true
+// iff the Value is not broadcasted (equivalently, if the value is the "first"
+// lane/thread/etc. that holds the given value). In mathy terms, the boolean is
+// true if the element is the canonical representative of the class.
+std::tuple<SmallVector<Value>, Value>
+delinearize(RewriterBase &rewriter, Location loc,
+            triton::gpu::DistributedEncodingTrait layout,
+            ArrayRef<int64_t> shape, StringAttr dimName, Value linear);
+
 Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
                 ArrayRef<unsigned> shape, ArrayRef<unsigned> order);
 
@@ -472,13 +483,9 @@ inline Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
 // MXFP utilities
 // -----------------------------------------------------------------------
 
-// Convert each value, which is an int8 containing 2 packed mxfp4 values,
-// into 2 standalone bf16 values
-SmallVector<Value> convertMxfp4x2ToBf16x2(RewriterBase &rewriter, Location loc,
-                                          ArrayRef<Value> values);
-
 // Scale a mxfp4 value by a given scale.
-Value mxfpScaleBf16(RewriterBase &rewriter, Location loc, Value v, Value scale);
+Value mxfpScaleBf16(RewriterBase &rewriter, Location loc, Value v, Value scale,
+                    bool fastMath);
 
 } // namespace LLVM
 
@@ -1114,6 +1121,17 @@ inline Value packLLVector(Location loc, ValueRange vals,
     vec = insert_element(vec, vals[i], i32_val(i));
   }
   return vec;
+}
+
+inline bool
+isSimpleSharedMemoryAccess(ArrayRef<int64_t> shape,
+                           ArrayRef<int64_t> allocShape,
+                           triton::gpu::SharedEncodingAttr sharedEnc) {
+  auto rank = shape.size();
+  return /*no swizzling*/ sharedEnc.getMaxPhase() == 1 ||
+         /*swizzling but same shape*/ shape == allocShape ||
+         /*swizzling and rank-reduced and rank >= 2*/
+         (shape == allocShape.take_back(rank) && rank >= 2);
 }
 
 } // namespace mlir
