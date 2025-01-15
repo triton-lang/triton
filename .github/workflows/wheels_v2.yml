@@ -3,9 +3,6 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "20 2 * * *"
-  pull_request:
-    paths:
-      - .github/workflows/wheels_v2.yml
 
 jobs:
 
