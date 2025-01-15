@@ -12,11 +12,18 @@
 // from https://gist.github.com/pps83/3210a2f980fd02bb2ba2e5a1fc4a2ef0
 #include <intrin.h>
 
+static int __builtin_clz(unsigned x) {
+  unsigned long r;
+  _BitScanReverse(&r, x);
+  return static_cast<int>(r);
+}
+
 static int __builtin_ctz(unsigned x) {
   unsigned long r;
   _BitScanForward(&r, x);
   return static_cast<int>(r);
 }
+
 #endif
 
 namespace mlir {
@@ -601,18 +608,22 @@ Value pext_i32(RewriterBase &rewriter, Location loc, Value a, uint32_t mask) {
   if (mask == 0xFFFFFFFF)
     return a;
 
-  // We implement a blocked algorithm to avoid generating too many instructions
+  // Implements the blocked algorithm from
+  // https://forums.developer.nvidia.com/t/pdep-and-pext-functionality-for-cuda/270973
+  uint32_t mskConst = mask;
+  uint32_t extcnt = 0;
   Value result = i32_val(0);
-  int resultPos = 0;
-  while (mask) {
-    int start = __builtin_ctz(mask);
-    int width = __builtin_ctz(~(mask >> start));
-    Value shifted = lshr(a, i32_val(start));
-    Value widthMask = i32_val(((1u << width) - 1));
-    Value blockVal = and_(shifted, widthMask);
-    result = or_(result, shl(blockVal, i32_val(resultPos)));
-    resultPos += width;
-    mask &= ~(((1u << width) - 1) << start);
+  while (mskConst) {
+    uint32_t oldmsk = mskConst;
+    uint32_t bitgrplsb = mskConst & (-mskConst);
+    mskConst &= bitgrplsb + mskConst;
+    uint32_t bitgrp = mskConst ^ oldmsk;
+    uint32_t lsbpos = 31 - __builtin_clz(bitgrplsb);
+    // like popcount for a number 0..01..1..0 but portable
+    uint32_t grplen = __builtin_ctz(~(bitgrp >> lsbpos));
+    uint32_t shift = lsbpos - extcnt;
+    extcnt += grplen;
+    result = or_(result, lshr(and_(i32_val(bitgrp), a), i32_val(shift)));
   }
   return result;
 }
