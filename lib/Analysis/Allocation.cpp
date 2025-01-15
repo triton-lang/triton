@@ -75,6 +75,36 @@ static SmallVector<unsigned> getRepShapeForAtomic(Value result) {
   return smemShape;
 }
 
+std::pair<unsigned, unsigned>
+getScratchCvtInOutVecLengths(RankedTensorType srcTy, RankedTensorType dstTy) {
+  Attribute srcLayout = srcTy.getEncoding();
+  Attribute dstLayout = dstTy.getEncoding();
+  const auto &inOrd = gpu::getOrder(srcLayout);
+  const auto &outOrd = gpu::getOrder(dstLayout);
+  unsigned rank = srcTy.getRank();
+
+  unsigned srcContigPerThread =
+      gpu::getUniqueContigPerThread(srcLayout, srcTy.getShape())[inOrd[0]];
+  unsigned dstContigPerThread =
+      gpu::getUniqueContigPerThread(dstLayout, dstTy.getShape())[outOrd[0]];
+  // TODO: Fix the legacy issue that ourOrd[0] == 0 always means
+  //       that we cannot do vectorization.
+  unsigned innerDim = rank - 1;
+  unsigned inVec = outOrd[0] != innerDim  ? 1
+                   : inOrd[0] != innerDim ? 1
+                                          : srcContigPerThread;
+  unsigned outVec = outOrd[0] != innerDim ? 1 : dstContigPerThread;
+
+  if (mlir::isa<gpu::NvidiaMmaEncodingAttr>(srcLayout) &&
+      mlir::isa<gpu::BlockedEncodingAttr>(dstLayout)) {
+    // when storing from mma layout and loading in blocked layout vectorizing
+    // the load back gives better performance even if there is a
+    // transposition.
+    outVec = dstContigPerThread;
+  }
+  return {inVec, outVec};
+}
+
 ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
                                      RankedTensorType dstTy) {
   // Initialize vector sizes and stride
@@ -88,29 +118,11 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
 
   assert(cvtNeedsSharedMemory(srcTy, dstTy));
 
-  const auto &inOrd = gpu::getOrder(srcLayout);
   const auto &outOrd = gpu::getOrder(dstLayout);
   scratchConfig.order = outOrd;
 
-  unsigned srcContigPerThread =
-      gpu::getUniqueContigPerThread(srcLayout, srcTy.getShape())[inOrd[0]];
-  unsigned dstContigPerThread =
-      gpu::getUniqueContigPerThread(dstLayout, dstTy.getShape())[outOrd[0]];
-  // TODO: Fix the legacy issue that ourOrd[0] == 0 always means
-  //       that we cannot do vectorization.
-  unsigned innerDim = rank - 1;
-  scratchConfig.inVec = outOrd[0] != innerDim  ? 1
-                        : inOrd[0] != innerDim ? 1
-                                               : srcContigPerThread;
-  scratchConfig.outVec = outOrd[0] != innerDim ? 1 : dstContigPerThread;
-
-  if (mlir::isa<gpu::NvidiaMmaEncodingAttr>(srcLayout) &&
-      mlir::isa<gpu::BlockedEncodingAttr>(dstLayout)) {
-    // when storing from mma layout and loading in blocked layout vectorizing
-    // the load back gives better performance even if there is a
-    // transposition.
-    scratchConfig.outVec = dstContigPerThread;
-  }
+  std::tie(scratchConfig.inVec, scratchConfig.outVec) =
+      getScratchCvtInOutVecLengths(srcTy, dstTy);
 
   // No padding is required if the tensor is 1-D, or if all dimensions except
   // the first accessed dimension have a size of 1.
