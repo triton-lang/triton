@@ -45,7 +45,7 @@ def get_autotune_config():
 
 @triton.autotune(configs=get_autotune_config(), key=['n_rows', 'n_cols'], use_cuda_graph=True)
 @triton.jit
-def rms_kernel(output_ptr, input_ptr, g_ptr, input_row_stride, output_row_stride, n_rows, n_cols, epsilon,
+def rms_kernel(output_ptr, input_ptr, g_ptr, rsigma_ptr, input_row_stride, output_row_stride, n_rows, n_cols, epsilon,
                BLOCK_SIZE: tl.constexpr, USE_BLOCKED: tl.constexpr, NUM_PRGMS: tl.constexpr):
     row_start = tl.program_id(0)
     col_offsets = tl.arange(0, BLOCK_SIZE)
@@ -61,8 +61,8 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, input_row_stride, output_row_stride
             row_output_ptr = output_ptr + row_idx * output_row_stride
 
             # Accumulate sum of squares
-            sum_squares = tl.zeros([1], dtype=tl.float32)
             n_cols_blks = tl.cdiv(n_cols, BLOCK_SIZE) - 1
+            sum_squares: tl.float32 = 0.
             for blk_idx in tl.range(0, n_cols_blks, num_stages=2):
                 cols = blk_idx * BLOCK_SIZE + col_offsets
                 input_ptrs = row_input_ptr + cols
@@ -81,6 +81,9 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, input_row_stride, output_row_stride
             # Compute normalization factor
             mean_square = sum_squares / n_cols
             norm_factor = tl.rsqrt(mean_square + epsilon)
+
+            # Store rsigma (norm_factor)
+            tl.store(rsigma_ptr + row_idx, norm_factor)
 
             # Normalize and write output
             for blk_idx in tl.range(0, n_cols_blks, num_stages=2):
@@ -114,30 +117,33 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, input_row_stride, output_row_stride
             g = tl.load(g_ptr + col_offsets, mask=mask, other=0.0).to(tl.float32)
             row_norm = row * row
             row_norm = tl.sum(row_norm, axis=-1)
-            row_norm = tl.math.rsqrt((row_norm / n_cols) + epsilon)
-            rms_norm = row * row_norm * g
+            norm_factor = tl.math.rsqrt((row_norm / n_cols) + epsilon)
+
+            # Store rsigma (norm_factor)
+            rsigma_output_ptr = rsigma_ptr + row_idx
+            tl.store(rsigma_output_ptr, norm_factor)
+
+            rms_norm = row * norm_factor * g
 
             output_ptrs = output_ptr + row_idx * output_row_stride + col_offsets
             output_ptrs = tl.multiple_of(output_ptrs, (16, ))
             tl.store(output_ptrs, rms_norm.to(output_ptr.type.element_ty), mask=mask)
 
 
-def triton_rmsnorm(x, y, g, n_rows, n_cols, blk_size, USE_BLOCKED, NUM_PRGMS, epsilon=1e-6):
+def triton_rmsnorm(x, y, g, rsigma, n_rows, n_cols, blk_size, USE_BLOCKED, NUM_PRGMS, epsilon=1e-6):
     grid = lambda meta: (NUM_PRGMS, )
-    rms_kernel[grid](y, x, g, x.stride(0), y.stride(0), n_rows, n_cols, epsilon, blk_size, USE_BLOCKED, NUM_PRGMS)
+    rms_kernel[grid](y, x, g, rsigma, x.stride(0), y.stride(0), n_rows, n_cols, epsilon, blk_size, USE_BLOCKED,
+                     NUM_PRGMS)
 
-    return y
+    return y, rsigma
 
 
-def torch_rmsnorm(x, g):
+def torch_rmsnorm(x, g, epsilon=1e-6):
     M, N = x.shape
-    if hasattr(torch.nn, 'RMSNorm'):
-        rms_norm = torch.nn.RMSNorm(N, device='cuda')
-        return rms_norm(x)
-    else:
-        rms = torch.sqrt(torch.sum(x * x, dim=-1) * 1 / N)
-        rms_norm = torch.div(x, rms.unsqueeze(1).repeat(1, N)) * g
-        return rms_norm
+    rms = torch.sqrt(torch.sum(x * x, dim=-1) * 1 / N)
+    rsigma = 1.0 / rms
+    rms_norm = x * rsigma.unsqueeze(1) * g
+    return rms_norm, rsigma
 
 
 @pytest.mark.parametrize('M, N', [
@@ -154,17 +160,19 @@ def test_rmsnorm(M, N):
     torch.manual_seed(0)
     x = torch.randn(M, N, device='cuda')
     y = torch.zeros_like(x, device='cuda')
+    rsigma = torch.empty((M, ), device='cuda', dtype=torch.float32)
     n_rows, n_cols = x.shape
     MAX_FUSED_SIZE = 65536 // x.element_size()
     blk_size = min(MAX_FUSED_SIZE, triton.next_power_of_2(n_cols))
     USE_BLOCKED = n_cols > blk_size
     NUM_PRGMS = min(n_rows, get_num_sms())
     g = torch.ones((1, N), device='cuda')
-    y_triton = triton_rmsnorm(x, y, g, n_rows, n_cols, blk_size, USE_BLOCKED, NUM_PRGMS)
+    y_triton, rsigma_triton = triton_rmsnorm(x, y, g, rsigma, n_rows, n_cols, blk_size, USE_BLOCKED, NUM_PRGMS)
 
-    y_torch = torch_rmsnorm(x, g)
+    y_torch, rsigma_torch = torch_rmsnorm(x, g)
 
     assert torch.allclose(y_triton, y_torch), (y_triton, y_torch)
+    assert torch.allclose(rsigma_triton, rsigma_torch), (rsigma_triton, rsigma_torch)
 
 
 #Benchmark
@@ -232,6 +240,7 @@ def run_benchmark(args):
     def benchmark(M, N, provider, model=None):
         x = torch.randn(M, N, device='cuda', dtype=dtype)
         y = torch.zeros_like(x, device='cuda')
+        rsigma = torch.empty((M, ), device='cuda', dtype=torch.float32)
         n_rows, n_cols = x.shape
         MAX_FUSED_SIZE = 65536 // x.element_size()
         blk_size = min(MAX_FUSED_SIZE, triton.next_power_of_2(n_cols))
@@ -244,7 +253,7 @@ def run_benchmark(args):
             ms = triton.testing.do_bench(lambda: torch_rmsnorm(x, g))
         if provider == 'triton':
             ms = triton.testing.do_bench(
-                lambda: triton_rmsnorm(x, y, g, n_rows, n_cols, blk_size, USE_BLOCKED, NUM_PRGMS))
+                lambda: triton_rmsnorm(x, y, g, rsigma, n_rows, n_cols, blk_size, USE_BLOCKED, NUM_PRGMS))
             global verbose
             if verbose:
                 print(f'SIZE: {N} Best tuning config: ({rms_kernel.best_config})')
@@ -293,13 +302,14 @@ def main():
     if args.no_benchmark:
         x = torch.randn(args.M_start, args.N_start, device='cuda')
         y = torch.zeros_like(x, device='cuda')
+        rsigma = torch.empty((args.M_start, ), device='cuda', dtype=torch.float32)
         n_rows, n_cols = x.shape
         MAX_FUSED_SIZE = 65536 // x.element_size()
         blk_size = min(MAX_FUSED_SIZE, triton.next_power_of_2(n_cols))
         USE_BLOCKED = n_cols > blk_size
         NUM_PRGMS = min(n_rows, get_num_sms())
         g = torch.ones((1, args.N_start), device='cuda')
-        triton_rmsnorm(x, y, g, n_rows, n_cols, blk_size, USE_BLOCKED, NUM_PRGMS)
+        triton_rmsnorm(x, y, g, rsigma, n_rows, n_cols, blk_size, USE_BLOCKED, NUM_PRGMS)
     else:
         verbose = args.v
         run_benchmark(args)
