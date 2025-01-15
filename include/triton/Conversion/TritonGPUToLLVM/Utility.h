@@ -13,6 +13,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
@@ -146,6 +147,23 @@ using namespace mlir::triton;
 
 namespace mlir {
 namespace triton {
+
+static inline void insertBarrier(OpBuilder &builder, Operation *op) {
+  auto barrierOp = builder.create<mlir::gpu::BarrierOp>(op->getLoc());
+  auto asyncTaskIds = getAsyncTaskIds(op);
+  assert(asyncTaskIds.size() <= 1);
+  if (asyncTaskIds.size() == 1) {
+    int asyncTaskId = asyncTaskIds[0];
+    int barId = asyncTaskId + nameBarrierIdBegin;
+    assert(barId < nameBarrierIdEnd);
+    auto mod = op->getParentOfType<ModuleOp>();
+    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+    int warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    int numThreads = numWarps * warpSize;
+    barrierOp->setAttr("bar_id", builder.getI64IntegerAttr(barId));
+    barrierOp->setAttr("num_threads", builder.getI64IntegerAttr(numThreads));
+  }
+}
 
 // Delinearize supposing order is [0, 1, .. , n]
 template <typename T>

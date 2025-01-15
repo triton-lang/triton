@@ -38,13 +38,7 @@ void setUseAccFlag(Operation *op, Value useAcc) {
 }
 
 bool isConstantZeroTensor(Value v) {
-  auto constOp = v.getDefiningOp<arith::ConstantOp>();
-  if (!constOp)
-    return false;
-  auto splat = mlir::dyn_cast<SplatElementsAttr>(constOp.getValue());
-  if (!splat)
-    return false;
-  return splat.getSplatValue<FloatAttr>().getValue().convertToFloat() == 0.0f;
+  return (matchPattern(v, m_Zero()) || matchPattern(v, m_AnyZeroFloat()));
 }
 
 std::optional<std::pair<Operation *, int>> findZeroInitOp(Value accUse,

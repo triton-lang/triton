@@ -13,7 +13,11 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/raw_ostream.h"
 
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::BlockedEncodingAttr;
@@ -27,6 +31,10 @@ using ::mlir::triton::gpu::getUniqueContigPerThread;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 using ::mlir::triton::gpu::SliceEncodingAttr;
+
+#define DEBUG_TYPE "allocation-analysis"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace mlir {
 
@@ -196,8 +204,19 @@ private:
                      allocType.getElementTypeBitWidth() / 8;
 
         auto alignment = alloc.getAlignmentOrDefault();
-        allocation->addBuffer<BufferT::BufferKind::Explicit>(result, bytes,
-                                                             alignment);
+        LLVM_DEBUG({
+          llvm::dbgs() << "check localAlloc in getExplicitValueSize: ";
+          alloc.dump();
+        });
+        int sharingGroup = -1;
+        if (alloc->hasAttr("allocation.shareGroup")) {
+          sharingGroup =
+              mlir::cast<IntegerAttr>(alloc->getAttr("allocation.shareGroup"))
+                  .getInt();
+          LDBG("with shareGroup of " << sharingGroup);
+        }
+        allocation->addBuffer<BufferT::BufferKind::Explicit>(
+            result, bytes, alignment, 0, sharingGroup);
       }
     }
   }
@@ -312,6 +331,13 @@ private:
       getExplicitValueSize(op);
       getScratchValueSize(op);
     });
+    LDBG("getValuesAndSizes --");
+    for (auto valueBufferIter : allocation->valueBuffer) {
+      auto *buffer = valueBufferIter.second;
+      LLVM_DEBUG(llvm::dbgs()
+                 << "-- buffer " << buffer->id << " " << buffer->size << " "
+                 << buffer->offset << " " << buffer->sharingGroup << "\n");
+    }
     // Get the alias values
     std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
     SharedMemoryAliasAnalysis *aliasAnalysis =
@@ -333,11 +359,12 @@ private:
   /// Computes the liveness range of the allocated value.
   /// Each buffer is allocated only once.
   void resolveExplicitBufferLiveness(
-      function_ref<Interval<size_t>(Value value)> getLiveness) {
+      function_ref<Interval<size_t>(Value value, BufferT *buffer)>
+          getLiveness) {
     for (auto valueBufferIter : allocation->valueBuffer) {
       auto value = valueBufferIter.first;
       auto *buffer = valueBufferIter.second;
-      bufferRange[buffer] = getLiveness(value);
+      bufferRange[buffer] = getLiveness(value, buffer);
     }
   }
 
@@ -345,11 +372,12 @@ private:
   /// values because each allocated buffer could be an alias of others, if block
   /// arguments are involved.
   void resolveAliasBufferLiveness(
-      function_ref<Interval<size_t>(Value value)> getLiveness) {
+      function_ref<Interval<size_t>(Value value, BufferT *buffer)>
+          getLiveness) {
     for (auto aliasBufferIter : allocation->aliasBuffer) {
       auto value = aliasBufferIter.first;
       auto buffers = aliasBufferIter.second;
-      auto range = getLiveness(value);
+      auto range = getLiveness(value, buffers.front());
       for (auto *buffer : buffers) {
         auto minId = range.start();
         auto maxId = range.end();
@@ -375,8 +403,21 @@ private:
         // range.
         auto *op = opScratchIter.first;
         auto *buffer = opScratchIter.second;
-        bufferRange.insert({buffer, Interval(operationId.lookup(op),
-                                             operationId.lookup(op) + 1)});
+        // Extend live range when asyncTaskId is not empty (i.e when we have
+        // warp spec).
+        if (getAsyncTaskIds(op).empty()) {
+          bufferRange.insert({buffer, Interval(operationId.lookup(op),
+                                               operationId.lookup(op) + 1)});
+        } else {
+          for (auto tId : getAsyncTaskIds(op))
+            buffer->regionIds.insert(tId);
+          // For warp-specialized code, we can assume each region has its own
+          // copy of a scratch buffer, i.e each region is for a single taskId.
+          // In that case, we don't need to extend the liveness of scratch
+          // buffers.
+          bufferRange.insert({buffer, Interval(operationId.lookup(op),
+                                               operationId.lookup(op) + 1)});
+        }
       }
     };
     processScratchMemory(allocation->opScratch);
@@ -407,19 +448,38 @@ private:
 
     // Analyze liveness of explicit buffers
     Liveness liveness(operation);
-    auto getValueLivenessRange = [&](Value value) {
+    auto getValueLivenessRange = [&](Value value, BufferT *buffer) {
       auto liveOperations = liveness.resolveLiveness(value);
-      auto minId = std::numeric_limits<size_t>::max();
-      auto maxId = std::numeric_limits<size_t>::min();
+      // Update regions for buffer.
       std::for_each(liveOperations.begin(), liveOperations.end(),
                     [&](Operation *liveOp) {
-                      if (operationId[liveOp] < minId) {
-                        minId = operationId[liveOp];
-                      }
-                      if ((operationId[liveOp] + 1) > maxId) {
-                        maxId = operationId[liveOp] + 1;
+                      for (auto rId : getAsyncTaskIds(liveOp)) {
+                        buffer->regionIds.insert(rId);
                       }
                     });
+      auto minId = std::numeric_limits<size_t>::max();
+      auto maxId = std::numeric_limits<size_t>::min();
+      std::for_each(
+          liveOperations.begin(), liveOperations.end(), [&](Operation *liveOp) {
+            if (buffer->regionIds.size() > 1 || buffer->sharingGroup >= 0) {
+              // For a buffer that is associated with warp
+              // specialization, due to producer-consumer channel, it
+              // should have at least two regions, and it will be live
+              // throughout. For a buffer that is local to a consumer:
+              // we need to make sure not to overlap with local
+              // buffers from another consumer. This will be handled
+              // when building the interference graph.
+              minId = 0;
+              maxId = operationId.size();
+              return;
+            }
+            if (operationId[liveOp] < minId) {
+              minId = operationId[liveOp];
+            }
+            if ((operationId[liveOp] + 1) > maxId) {
+              maxId = operationId[liveOp] + 1;
+            }
+          });
       return Interval(minId, maxId);
     };
 
@@ -428,16 +488,66 @@ private:
     resolveScratchBufferLiveness(operationId);
   }
 
+  void dumpBuffers() {
+    LDBG("Dump bufferRange: id size offset sharingGroup ---------");
+    for (auto bufferIter : bufferRange) {
+      LLVM_DEBUG({
+        llvm::dbgs() << "-- " << bufferIter.first->id << " "
+                     << bufferIter.first->size << " "
+                     << bufferIter.first->offset << " "
+                     << bufferIter.first->sharingGroup << " regions [";
+        for (auto tId : bufferIter.first->regionIds) {
+          llvm::dbgs() << tId << " ";
+        }
+        llvm::dbgs() << "] interval " << bufferIter.second.start() << " "
+                     << bufferIter.second.end() << "\n";
+      });
+    }
+  }
+
   /// Computes the shared memory offsets for all related values.
   /// Paper: Algorithms for Compile-Time Memory Optimization
   /// (https://dl.acm.org/doi/pdf/10.5555/314500.315082)
   void computeOffsets() {
     SmallVector<BufferT *> buffers;
+    // Handle sharingGroup here. For allocations with the same sharingGroup
+    // get the union of the live range, and union of the regionIds. Put
+    // the
+    // largest buffer in buffers.
+    DenseMap<int, SmallVector<BufferT *>> toGroup;
     for (auto bufferIter : bufferRange) {
+      if (bufferIter.first->sharingGroup >= 0)
+        toGroup[bufferIter.first->sharingGroup].push_back(bufferIter.first);
+    }
+    DenseMap<int, BufferT *> sharingIdToRep;
+    for (auto &kv : toGroup) {
+      size_t bigSize = 0;
+      BufferT *rep = nullptr;
+      for (auto *buf : kv.second) {
+        if (buf->size > bigSize) {
+          rep = buf;
+          bigSize = buf->size;
+        }
+      }
+      // FIXME: update live range and regionIds.
+      sharingIdToRep[kv.first] = rep;
+    }
+    for (auto bufferIter : bufferRange) {
+      if (sharingIdToRep.find(bufferIter.first->sharingGroup) !=
+          sharingIdToRep.end()) {
+        if (bufferIter.first !=
+            sharingIdToRep[bufferIter.first->sharingGroup]) {
+          LDBG("-- ignore shared buffer " << bufferIter.first->size << " "
+                                          << bufferIter.first->offset << " "
+                                          << bufferIter.first->sharingGroup);
+          continue;
+        }
+      }
       buffers.emplace_back(bufferIter.first);
     }
 
     calculateStarts(buffers);
+    dumpBuffers();
 
     // NOTE: The original paper doesn't consider interference between
     // the bumped ranges. Buffers that previously do not interfere with
@@ -452,6 +562,18 @@ private:
       allocate(buffers, interference);
       buildInterferenceGraph(buffers, interference);
     } while (!interference.empty());
+    // Update allocation for sharingGroup.
+    for (auto &kv : toGroup) {
+      auto *rep = sharingIdToRep[kv.first];
+      for (auto *buf : kv.second) {
+        if (buf != rep) {
+          buf->setOffsetAligned(rep->offset);
+          LDBG("-- set sharing buffer's offset "
+               << buf->size << " " << buf->offset << " " << buf->sharingGroup);
+        }
+      }
+    }
+    dumpBuffers();
   }
 
   /// Computes the initial shared memory offsets.
@@ -519,6 +641,21 @@ private:
   void buildInterferenceGraph(const SmallVector<BufferT *> &buffers,
                               GraphT &interference) {
     // Reset interference graph
+    auto inDifferentRegion = [&](BufferT *A, BufferT *B) {
+      auto tA = A->regionIds;
+      auto tB = B->regionIds;
+      if (tA.empty() && tB.empty())
+        return false;
+      if (tA.empty() || tB.empty())
+        return true;
+      for (auto t1 : tA) {
+        for (auto t2 : tB) {
+          if (t1 != t2)
+            return true;
+        }
+      }
+      return false;
+    };
     interference.clear();
     for (auto x : buffers) {
       for (auto y : buffers) {
@@ -536,6 +673,9 @@ private:
             xSizeRange.intersects(ySizeRange)) {
           interference[x].insert(y);
         }
+        // if x and y belong to different regions (ignore producer region).
+        if (inDifferentRegion(x, y) && xSizeRange.intersects(ySizeRange))
+          interference[x].insert(y);
       }
     }
   }

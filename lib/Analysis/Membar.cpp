@@ -6,6 +6,7 @@
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include <deque>
 
 namespace mlir {
@@ -94,7 +95,7 @@ void MembarAnalysis::visitTerminator(Operation *op,
 
 void MembarAnalysis::insertBarrier(Operation *op, OpBuilder *builder) {
   OpBuilder::InsertionGuard g(*builder);
-  auto barrierOp = builder->create<gpu::BarrierOp>(op->getLoc());
+  ::insertBarrier(*builder, op);
 }
 
 void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
