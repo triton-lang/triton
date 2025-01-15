@@ -2840,6 +2840,7 @@ tt.func @hoist_one_conditional(
     %arg3: tensor<128x128xf32, #mma>
 ) -> tensor<128x128xf32, #mma> {
 
+  // CHECK: arith.constant {{.*}} tensor<128x32xf32, #ttg.dot_op
   %cst = arith.constant dense<0.000000e+00> : tensor<128x32xf32, #blocked>
   // CHECK: scf.if
   %0 = scf.if %arg0 -> (tensor<128x32xf32, #blocked>) {
@@ -2866,6 +2867,8 @@ tt.func @hoist_multiple_conditional(
     %arg4: tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>,
     %arg5: tensor<128x128xf32, #mma>
 ) -> tensor<128x128xf32, #mma> {
+  // CHECK: arith.constant {{.*}} tensor<128x32xf32, #ttg.dot_op
+  // CHECK: arith.constant {{.*}} tensor<128x32xf32, #ttg.dot_op
   %cst0 = arith.constant dense<1.0> : tensor<128x32xf32, #blocked>
   %cst1 = arith.constant dense<2.0> : tensor<128x32xf32, #blocked>
   // CHECK: scf.if
@@ -2878,6 +2881,7 @@ tt.func @hoist_multiple_conditional(
   } else {
     scf.yield %cst0 : tensor<128x32xf32, #blocked>
   }
+  // CHECK: scf.if
   %1 = scf.if %arg1 -> (tensor<128x32xf32, #blocked>) {
     // CHECK-NEXT: [[RES:%.*]] = tt.load
     %4 = tt.load %arg3 : tensor<128x32x!tt.ptr<f32>, #blocked>
@@ -2892,6 +2896,64 @@ tt.func @hoist_multiple_conditional(
   %3 = ttg.convert_layout %2 : tensor<128x32xf32, #blocked> -> tensor<128x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
   %4 = tt.dot %3, %arg4, %arg5 : tensor<128x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<128x128xf32, #mma>
   tt.return %4 : tensor<128x128xf32, #mma>
+}
+
+// CHECK-LABEL: @hoist_across_loop
+tt.func @hoist_across_loop(
+    %arg0: i1,
+    %arg1: tensor<128x32x!tt.ptr<f32>, #blocked>,
+    %arg2: tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>,
+    %arg3: tensor<128x128xf32, #mma>
+) -> tensor<128x128xf32, #mma> {
+  // CHECK: arith.constant {{.*}} tensor<128x32xf32, #ttg.dot_op
+  %cst = arith.constant dense<1.0> : tensor<128x32xf32, #blocked>
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c32_i32 = arith.constant 32 : i32
+  // CHECK: scf.for
+  %0:2 = scf.for %i = %c0_i32 to %c32_i32 step %c1_i32 iter_args(%arg4 = %cst, %acc = %arg3) -> (tensor<128x32xf32, #blocked>, tensor<128x128xf32, #mma>) : i32 {
+    // CHECK-NEXT: scf.if
+    %1 = scf.if %arg0 -> (tensor<128x32xf32, #blocked>) {
+      // CHECK-NEXT: [[RES:%.*]] = tt.load
+      // CHECK-NEXT: ttg.convert_layout [[RES]]
+      %3 = tt.load %arg1 : tensor<128x32x!tt.ptr<f32>, #blocked>
+      scf.yield %3 : tensor<128x32xf32, #blocked>
+    } else {
+      scf.yield %arg4 : tensor<128x32xf32, #blocked>
+    }
+    // CHECK-NOT: ttg.convert_layout
+    %2 = ttg.convert_layout %1 : tensor<128x32xf32, #blocked> -> tensor<128x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+    %3 = tt.dot %2, %arg2, %acc : tensor<128x32xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<32x128xf32, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<128x128xf32, #mma>
+    scf.yield %1, %3 : tensor<128x32xf32, #blocked>, tensor<128x128xf32, #mma>
+  }
+  tt.return %0#1 : tensor<128x128xf32, #mma>
+}
+
+// CHECK-LABEL: @chained_if
+tt.func @chained_if(%arg0: i1, %arg1: i1, %arg2: tensor<32x32x!tt.ptr<f32>, #blocked>, %arg3: tensor<32x32x!tt.ptr<f32>, #blocked>) -> tensor<32x32xf32, #mma> {
+  // CHECK: arith.constant {{.*}} tensor<32x32xf32, #mma>
+  %cst = arith.constant dense<1.0> : tensor<32x32xf32, #blocked>
+  // CHECK: scf.if
+  %0 = scf.if %arg0 -> tensor<32x32xf32, #blocked> {
+    // CHECK-NEXT: [[RES:%.*]] = tt.load
+    %anchor = tt.load %arg2 : tensor<32x32x!tt.ptr<f32>, #blocked>
+    // CHECK-NEXT: ttg.convert_layout [[RES]]
+    scf.yield %anchor : tensor<32x32xf32, #blocked>
+  } else {
+    scf.yield %cst : tensor<32x32xf32, #blocked>
+  }
+  // CHECK: scf.if
+  %1 = scf.if %arg1 -> tensor<32x32xf32, #blocked> {
+    // CHECK-NEXT: [[RES:%.*]] = tt.load
+    %anchor = tt.load %arg3 : tensor<32x32x!tt.ptr<f32>, #blocked>
+    // CHECK-NEXT: ttg.convert_layout [[RES]]
+    scf.yield %anchor : tensor<32x32xf32, #blocked>
+  } else {
+    scf.yield %0 : tensor<32x32xf32, #blocked>
+  }
+  // CHECK-NOT: ttg.convert_layout
+  %2 = ttg.convert_layout %1 : tensor<32x32xf32, #blocked> -> tensor<32x32xf32, #mma>
+  tt.return %2 : tensor<32x32xf32, #mma>
 }
 
 }

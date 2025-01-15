@@ -1179,15 +1179,18 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
   // Take the backward slice of tensor dependencies, stopping at conditionals.
   SetVector<Value> slice;
   DenseMap<Value, Attribute> layout;
-  if (failed(getRematerializableSlice(
-          convertOp.getSrcMutable(), convertOp.getType().getEncoding(), slice,
-          layout, [](Operation *op) { return isa<scf::IfOp>(op); })))
+  auto isIfOp = [](Operation *op) { return isa<scf::IfOp>(op); };
+  if (failed(getRematerializableSlice(convertOp.getSrcMutable(),
+                                      convertOp.getType().getEncoding(), slice,
+                                      layout, isIfOp)))
     return;
 
   // Find conditional edges above which the conversion can be hoisted.
   SmallVector<std::pair<Value, OpOperand *>> hoistAbove;
   unsigned sliceSize = slice.size();
-  for (unsigned i = 0; i < sliceSize; i++) {
+  // The routine will recurse through backward slices, e.g. to handle loops and
+  // conditional chains. Thus, we re-query the size of `slice`.
+  for (unsigned i = 0; i < slice.size(); i++) {
     Value v = slice[i];
     auto ifOp = v.getDefiningOp<scf::IfOp>();
     if (!ifOp)
@@ -1208,10 +1211,10 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
     SetVector<Value> thenSlice, elseSlice;
     DenseMap<Value, Attribute> thenLayout, elseLayout;
 
-    LogicalResult thenResult =
-        getRematerializableSlice(thenRes, rootLayout, thenSlice, thenLayout);
-    LogicalResult elseResult =
-        getRematerializableSlice(elseRes, rootLayout, elseSlice, elseLayout);
+    LogicalResult thenResult = getRematerializableSlice(
+        thenRes, rootLayout, thenSlice, thenLayout, isIfOp);
+    LogicalResult elseResult = getRematerializableSlice(
+        elseRes, rootLayout, elseSlice, elseLayout, isIfOp);
 
     // If propagation across both edges of this conditional succeeded, then we
     // don't need to hoist across it.
