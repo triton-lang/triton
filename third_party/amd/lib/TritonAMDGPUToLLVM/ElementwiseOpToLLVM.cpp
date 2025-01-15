@@ -355,7 +355,7 @@ static Value convertFp32ToBf16(Location loc,
     return bitcast(truncated, bf16_ty);
   }
 
-  GCNBuild builder;
+  GCNBuilder builder;
 
   // build v_cmp_u_f32 instruction
   std::string cmp_ins_str = "v_cmp_u_f32";
@@ -363,7 +363,7 @@ static Value convertFp32ToBf16(Location loc,
   // output chk_nan: uint32_tx2
   auto is_nan = builder.newOperand("=s");
   // input v : f32
-  auto in_f32 = builder.newOperand("+v", v);
+  auto in_f32 = builder.newOperand(v, "+v");
   check_nan(is_nan, in_f32, in_f32);
 
   // build v_bfe_u32 instruction
@@ -373,31 +373,31 @@ static Value convertFp32ToBf16(Location loc,
   auto tmp = builder.newOperand("+v");
   auto val_16 = i32_val(0x7FFF000);
   auto val_1  = i32_val(1);
-  auto offset = builder.newOperand("v", val_16);
-  auto sz = builder.newOperand("v", val_1);
-  bfe(tmp, v, offset, sz);
+  auto offset = builder.newOperand(val_16, "v");
+  auto sz = builder.newOperand(val_1, "v");
+  bfe(tmp, in_f32, offset, sz);
 
   // build v_add3_u32 instruction
   std::string add3_str = "v_add3_u32";
   auto &add3 = *builder.create(add3_str);
   // input: round_bais
   auto val_7FFF = i32_val(0x7FFF);
-  auto round_bias = builder.newOperand("v", val_7FFF);
+  auto round_bias = builder.newOperand(val_7FFF, "v");
   add3(tmp, in_f32, tmp, round_bias);
 
   // build v_cndmask_b32
   std::string cndmask_str = "v_cndmask_b32";
   auto &cndmask = *builder.create(cndmask_str);
-  auto nan_val = i32_val(0x7FFF0000);
-  auto f32_nan = builder.newOperand("v", nan_val);
+  auto val_nan = i32_val(0x7FFF0000);
+  auto f32_nan = builder.newOperand(val_nan, "v");
   cndmask(in_f32, tmp, f32_nan, is_nan);
 
   // build v_lshrrev_b32
   std::string lshrrev_str = "v_lshrrev_b32";
-  auto &lshrrev = *builder.create(lshrrev);
+  auto &lshrrev = *builder.create(lshrrev_str);
   lshrrev(in_f32, offset, in_f32);
 
-  auto res = build.launch(rewriter, loc, i32_ty, false);
+  auto res = builder.launch(rewriter, loc, i32_ty, false);
 
   auto i16x2VecTy = vec_ty(i16_ty, 2);
   Value retVec = bitcast(res, i16x2VecTy);
