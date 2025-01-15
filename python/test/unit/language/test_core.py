@@ -1,4 +1,4 @@
-# flake8: noqa: F821,F841
+# ruff: noqa: F821,F841
 import contextlib
 import itertools
 import re
