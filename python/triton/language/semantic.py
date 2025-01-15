@@ -1153,7 +1153,7 @@ def validate_descriptor_block(shape, dtype):
     # Due to limitations of the shared memory encoding, the TMA bounding box has
     # to be at least as big as the swizzle tile.
     assert shape[0] >= 8, f"tensor descriptor block shape must have at least 8 rows, but got {shape[0]}"
-    min_cols = 32 / dtype.primitive_bitwidth * 8
+    min_cols = 32 // dtype.primitive_bitwidth * 8
     assert shape[
         1] >= min_cols, f"{dtype} tensor descriptor block shape must have at least {min_cols} columns, but got {shape[1]}"
 
