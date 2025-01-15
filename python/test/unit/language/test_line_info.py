@@ -197,18 +197,18 @@ def test_line_info_interpreter(func: str):
         expected_def_lineno = 12
     elif func == "call":
         kernel = kernel_call
-        expected_def_lineno = 25
+        expected_def_lineno = 23
     elif func == "call_noinline":
         kernel = kernel_call_noinline
-        expected_def_lineno = 41
+        expected_def_lineno = 37
     elif func == "autotune":
         kernel = kernel_autotune.fn
-        expected_def_lineno = 52
+        expected_def_lineno = 48
     elif func == "dot_combine":
         kernel = kernel_dot_combine
-        expected_def_lineno = 62
+        expected_def_lineno = 58
     elif func == "cdiv":
         kernel = kernel_cdiv
-        expected_def_lineno = 72
+        expected_def_lineno = 68
     kernel.rewrite()
     assert kernel.rewriter.def_file_lineno == expected_def_lineno
