@@ -219,14 +219,13 @@ bool ReduceOpHelper::isSupportedLayout() {
   }
 
   auto srcLayout = getSrcLayout();
-  if (isa<BlockedEncodingAttr>(srcLayout)) {
+  if (isa<BlockedEncodingAttr, LinearEncodingAttr, SliceEncodingAttr>(
+          srcLayout)) {
     return true;
   }
+
   if (auto mmaLayout = dyn_cast<MmaEncodingTrait>(srcLayout)) {
     return mmaLayout.supportReduction();
-  }
-  if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(srcLayout)) {
-    return true;
   }
   return false;
 }
