@@ -819,6 +819,8 @@ LogicalResult getConvertBackwardSlice(
     }
 
     if (auto ifOp = currentValue.getDefiningOp<scf::IfOp>()) {
+      if (stopPropagation && stopPropagation(ifOp))
+        continue;
       unsigned argIdx = mlir::cast<OpResult>(currentValue).getResultNumber();
 
       OpOperand &thenValue = ifOp.thenYield()->getOpOperand(argIdx);
