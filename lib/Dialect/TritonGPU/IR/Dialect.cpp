@@ -92,23 +92,9 @@ unsigned getWarpSize(Attribute layout) {
 SmallVector<unsigned>
 getThreadsPerWarpWithUniqueData(Attribute layout,
                                 ArrayRef<int64_t> tensorShape) {
-  if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(layout)) {
-    auto parentLayout = sliceLayout.getParent();
-    auto parentShape = sliceLayout.paddedShape(tensorShape);
-    auto parentThreadsPerWarp =
-        getThreadsPerWarpWithUniqueData(parentLayout, parentShape);
-    SmallVector<unsigned> threadsPerWarp = parentThreadsPerWarp;
-    threadsPerWarp.erase(threadsPerWarp.begin() + sliceLayout.getDim());
-    return threadsPerWarp;
-  }
-  auto threadsPerWarp = getThreadsPerWarp(layout);
-  assert(threadsPerWarp.size() == tensorShape.size() &&
-         "layout and tensor shape must have the same rank");
-  for (unsigned i = 0; i < threadsPerWarp.size(); i++) {
-    threadsPerWarp[i] = std::min<unsigned>(threadsPerWarp[i], tensorShape[i]);
-  }
-
-  return threadsPerWarp;
+  auto linearLayout = *toLinearLayout(tensorShape, layout);
+  auto llAttr = LinearEncodingAttr::get(layout.getContext(), linearLayout);
+  return llAttr.getThreadsPerWarp();
 }
 
 SmallVector<unsigned> getWarpsPerCTA(Attribute layout) {
@@ -123,26 +109,9 @@ SmallVector<unsigned> getWarpsPerCTA(Attribute layout) {
 
 SmallVector<unsigned>
 getWarpsPerCTAWithUniqueData(Attribute layout, ArrayRef<int64_t> tensorShape) {
-  if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(layout)) {
-    auto parentLayout = sliceLayout.getParent();
-    auto parentShape = sliceLayout.paddedShape(tensorShape);
-    auto parentWarpsPerCTA =
-        getWarpsPerCTAWithUniqueData(parentLayout, parentShape);
-    SmallVector<unsigned> warpsPerCTA = parentWarpsPerCTA;
-    warpsPerCTA.erase(warpsPerCTA.begin() + sliceLayout.getDim());
-    return warpsPerCTA;
-  }
-  auto warpsPerCTA = getWarpsPerCTA(layout);
-  assert(warpsPerCTA.size() == tensorShape.size() &&
-         "layout and tensor shape must have the same rank");
-  for (unsigned i = 0; i < warpsPerCTA.size(); i++) {
-    auto sizePerWarp =
-        getSizePerThread(layout)[i] * getThreadsPerWarp(layout)[i];
-    auto maxWarpsPerDim = ceil<unsigned>(tensorShape[i], sizePerWarp);
-    warpsPerCTA[i] = std::min<unsigned>(warpsPerCTA[i], maxWarpsPerDim);
-  }
-
-  return warpsPerCTA;
+  auto linearLayout = *toLinearLayout(tensorShape, layout);
+  auto llAttr = LinearEncodingAttr::get(layout.getContext(), linearLayout);
+  return llAttr.getWarpsPerCTA();
 }
 
 SmallVector<unsigned> getSizePerThread(Attribute layout) {
@@ -176,6 +145,15 @@ SmallVector<unsigned> getUniqueContigPerThread(Attribute layout,
     parentUniqueContigPerThread.erase(parentUniqueContigPerThread.begin() +
                                       sliceLayout.getDim());
     return parentUniqueContigPerThread;
+  } else if (mlir::isa<LinearEncodingAttr>(layout)) {
+    // FIXME: This should be the impelmentation of the function, but at the
+    // moment it breaks some uses. For example, if we have a blocked layout
+    // with shape [128, 128] and size=[4, 1], that is tiled in the second
+    // dimension, then the default path will return [4, 1], but this path will
+    // return [4, 128]!
+    auto linearLayout = *toLinearLayout(shape, layout);
+    auto llAttr = LinearEncodingAttr::get(layout.getContext(), linearLayout);
+    return llAttr.getContigPerThread();
   }
   // Base case
   auto rank = shape.size();
@@ -1430,9 +1408,9 @@ Attribute LinearEncodingAttr::parse(AsmParser &parser, Type type) {
                                                std::move(linearLayout));
 }
 
-SmallVector<unsigned> basesPerDim(const LinearLayout::BasesT &namedBases,
-                                  StringAttr dimName, size_t rank,
-                                  bool skipBroadcast = true) {
+SmallVector<unsigned> basesPerDimImpl(const LinearLayout::BasesT &namedBases,
+                                      StringAttr dimName, size_t rank,
+                                      bool skipBroadcast = true) {
   const auto &bases = namedBases.find(dimName)->second;
 
   if (bases.empty()) {
@@ -1459,15 +1437,17 @@ SmallVector<unsigned> basesPerDim(const LinearLayout::BasesT &namedBases,
   return ret;
 }
 
-SmallVector<unsigned> basesPerDim(const LinearLayout &ll, StringAttr dimName,
-                                  bool skipBroadcast = true) {
-  auto shapeIter = ll.getOutDimSizes();
-  auto rank = std::distance(shapeIter.begin(), shapeIter.end());
-  return basesPerDim(ll.getBases(), dimName, rank, skipBroadcast);
+SmallVector<unsigned>
+LinearEncodingAttr::basesPerDim(StringAttr dimName, bool skipBroadcast) const {
+  auto ll = getLinearLayout();
+  auto rank = ll.getNumOutDims();
+  return basesPerDimImpl(ll.getBases(), dimName, rank, skipBroadcast);
 }
 
-SmallVector<unsigned> orderPerDim(const LinearLayout &ll, StringAttr dimName,
-                                  ArrayRef<unsigned> defaultOrder) {
+SmallVector<unsigned>
+LinearEncodingAttr::orderPerDim(StringAttr dimName,
+                                ArrayRef<unsigned> defaultOrder) const {
+  auto ll = getLinearLayout();
   const auto &bases = ll.getBases().find(dimName)->second;
   llvm::SetVector<unsigned> order;
   auto nonZero = [](auto val) { return val != 0; };
@@ -1504,29 +1484,26 @@ SmallVector<unsigned> LinearEncodingAttr::getRepOrder() const {
 }
 SmallVector<unsigned> LinearEncodingAttr::getCTAsPerCGA() const {
   // CTAs are split into an identity part (SplitNum) and a broadcast part
-  return basesPerDim(getLinearLayout(), StringAttr::get(getContext(), "block"),
+  return basesPerDim(StringAttr::get(getContext(), "block"),
                      /*skipBroadcast=*/false);
 }
 SmallVector<unsigned> LinearEncodingAttr::getCTAOrder() const {
-  return orderPerDim(getLinearLayout(), StringAttr::get(getContext(), "block"),
-                     getOrder());
+  return orderPerDim(StringAttr::get(getContext(), "block"), getOrder());
 }
 SmallVector<unsigned> LinearEncodingAttr::getCTASplitNum() const {
-  return basesPerDim(getLinearLayout(), StringAttr::get(getContext(), "block"));
+  return basesPerDim(StringAttr::get(getContext(), "block"));
 }
 SmallVector<unsigned> LinearEncodingAttr::getWarpsPerCTA() const {
-  return basesPerDim(getLinearLayout(), StringAttr::get(getContext(), "warp"));
+  return basesPerDim(StringAttr::get(getContext(), "warp"));
 }
 SmallVector<unsigned> LinearEncodingAttr::getWarpOrder() const {
-  return orderPerDim(getLinearLayout(), StringAttr::get(getContext(), "warp"),
-                     getOrder());
+  return orderPerDim(StringAttr::get(getContext(), "warp"), getOrder());
 }
 SmallVector<unsigned> LinearEncodingAttr::getThreadsPerWarp() const {
-  return basesPerDim(getLinearLayout(), StringAttr::get(getContext(), "lane"));
+  return basesPerDim(StringAttr::get(getContext(), "lane"));
 }
 SmallVector<unsigned> LinearEncodingAttr::getThreadOrder() const {
-  return orderPerDim(getLinearLayout(), StringAttr::get(getContext(), "lane"),
-                     getOrder());
+  return orderPerDim(StringAttr::get(getContext(), "lane"), getOrder());
 }
 SmallVector<unsigned> LinearEncodingAttr::getSizePerThread() const {
   auto rank = getRepOrder().size();
@@ -1563,7 +1540,7 @@ SmallVector<unsigned> LinearEncodingAttr::getSizePerThread() const {
     ctaShape[dim] /= 2;
     registers.pop_back();
   }
-  return basesPerDim(bases, kRegister, rank);
+  return basesPerDimImpl(bases, kRegister, rank);
 }
 
 SmallVector<unsigned> LinearEncodingAttr::getOrder() const {
@@ -1574,8 +1551,7 @@ SmallVector<unsigned> LinearEncodingAttr::getOrder() const {
   // This order is as good as any really
   std::iota(order.rbegin(), order.rend(), 0);
 
-  return orderPerDim(getLinearLayout(),
-                     StringAttr::get(getContext(), "register"), order);
+  return orderPerDim(StringAttr::get(getContext(), "register"), order);
 }
 
 std::optional<LinearLayout>
@@ -1602,9 +1578,9 @@ LinearEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type) const {
   // We can either have BroadcastOp with SameOperandsAndResultEncoding, or keep
   // the invariant that the shape of the LL is that of the tensor
   // We choose the former for BC
-  auto ll = *toLinearLayout(shape);
-  return basesPerDim(ll, StringAttr::get(getContext(), "register"),
-                     /*skipBroadcast=*/false);
+  auto scaledLayout = get(getContext(), *toLinearLayout(shape));
+  auto kRegister = StringAttr::get(getContext(), "register");
+  return scaledLayout.basesPerDim(kRegister, /*skipBroadcast=*/false);
 }
 
 // Start of Selection
