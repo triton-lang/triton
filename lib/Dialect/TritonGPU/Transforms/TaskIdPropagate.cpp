@@ -2,8 +2,9 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/Utility.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/raw_ostream.h"
 
 #define DEBUG_TYPE "triton-gpu-taskid-propagate"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")

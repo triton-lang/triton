@@ -1,5 +1,5 @@
 
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
