@@ -77,6 +77,5 @@ jobs:
           path: ./wheelhouse/*.whl
 
       - name: Upload wheels to PyPI
-        if: false # Disable Upload to PyPI until ready for release
         run: |
           python3 -m twine upload wheelhouse/* -u __token__ -p ${{ secrets.PYPY_API_TOKEN }}
