@@ -860,6 +860,24 @@ LogicalResult rewriteTMABufferUpdates(
   return success();
 }
 
+bool dependsOnAnotherLoadOp(Operation *rootLoadOp) {
+  SmallVector<Operation *> worklist;
+  worklist.push_back(rootLoadOp);
+  while (!worklist.empty()) {
+    Operation *op = worklist.pop_back_val();
+    for (Value operand : op->getOperands()) {
+      if (isa<BlockArgument>(operand))
+        continue;
+      Operation *definingOp = operand.getDefiningOp();
+      if (isa<tt::LoadOp>(definingOp) ||
+          isa<tt::ExperimentalDescriptorLoadOp>(definingOp))
+        return true;
+      worklist.push_back(definingOp);
+    }
+  }
+  return false;
+}
+
 // Convert load ops into their async version and apply multi-buffering based on
 // the required number of buffers.
 static SmallVector<Value>
@@ -879,6 +897,8 @@ createAsyncOps(scf::ForOp &forOp,
   llvm::MapVector<int, StageGroup> stageGroups;
 
   for (auto &[loadOp, info] : loadToInfo) {
+    if (dependsOnAnotherLoadOp(loadOp))
+      continue;
     AsyncLoad asyncLoad;
     asyncLoad.loadOp = loadOp;
     bool isTMALoad = false;
