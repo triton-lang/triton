@@ -1,8 +1,8 @@
 #include "mlir/Analysis/TopologicalSortUtils.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Dominance.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "llvm/Support/Debug.h"
-#include "mlir/Dialect/UB/IR/UBOps.h"
 #include <queue>
 
 namespace mlir {
