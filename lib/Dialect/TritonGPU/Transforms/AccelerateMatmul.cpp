@@ -448,7 +448,7 @@ public:
                                    ? 0
                                    : mmaEnc.getInstrShape().size() - 2];
     auto mod = scaledDotOp->getParentOfType<ModuleOp>();
-    int warpSize = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+    int warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
     assert(instrShapeM <= warpSize);
     // Necessary choice to leave all the scales of the tile in that given warp
     auto threadsPerWarp =
