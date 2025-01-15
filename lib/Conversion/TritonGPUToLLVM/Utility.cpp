@@ -576,11 +576,9 @@ SharedMemoryObject getSharedMemoryObjectFromStruct(Location loc,
     Type type = types[i];
     elems[i] = extract_val(type, llvmStruct, i);
   }
-
-  auto rank = (elems.size() - 1) / 2;
   return {/*base=*/elems[0],
           /*baseElemType=*/elemTy,
-          /*offsets=*/{elems.begin() + 1 + rank, elems.end()}};
+          /*offsets=*/{elems.begin() + 1, elems.end()}};
 }
 
 SmallVector<Value> getSmemAllocStrides(ArrayRef<int64_t> allocShape,
