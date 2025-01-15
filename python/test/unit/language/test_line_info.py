@@ -164,24 +164,24 @@ def test_line_info(func: str):
 
     file_lines = extract_file_lines(command, anchor, separator, kernel_info.asm[obj_kind])
     if func == "single":
-        assert (check_file_lines(file_lines, "test_line_info.py", 15))
-        assert (check_file_lines(file_lines, "test_line_info.py", 16))
+        assert (check_file_lines(file_lines, "test_line_info.py", 13))
+        assert (check_file_lines(file_lines, "test_line_info.py", 14))
     elif func == "call":
-        assert (check_file_lines(file_lines, "test_line_info.py", 28))
-        assert (check_file_lines(file_lines, "test_line_info.py", 30))
+        assert (check_file_lines(file_lines, "test_line_info.py", 24))
+        assert (check_file_lines(file_lines, "test_line_info.py", 26))
     elif func == "call_noinline":
-        assert (check_file_lines(file_lines, "test_line_info.py", 42))
-        assert (check_file_lines(file_lines, "test_line_info.py", 35))
-        assert (check_file_lines(file_lines, "test_line_info.py", 37))
+        assert (check_file_lines(file_lines, "test_line_info.py", 38))
+        assert (check_file_lines(file_lines, "test_line_info.py", 31))
+        assert (check_file_lines(file_lines, "test_line_info.py", 31))
     elif func == "autotune":
-        assert (check_file_lines(file_lines, "test_line_info.py", 53))
-        assert (check_file_lines(file_lines, "test_line_info.py", 54))
-        assert (check_file_lines(file_lines, "test_line_info.py", 55))
+        assert (check_file_lines(file_lines, "test_line_info.py", 49))
+        assert (check_file_lines(file_lines, "test_line_info.py", 50))
+        assert (check_file_lines(file_lines, "test_line_info.py", 51))
     elif func == "dot_combine":
-        assert (check_file_lines(file_lines, "test_line_info.py", 65))
-        assert (check_file_lines(file_lines, "test_line_info.py", 66, should_contain=False))
+        assert (check_file_lines(file_lines, "test_line_info.py", 61))
+        assert (check_file_lines(file_lines, "test_line_info.py", 62, should_contain=False))
     elif func == "cdiv":
-        assert (check_file_lines(file_lines, "test_line_info.py", 75))
+        assert (check_file_lines(file_lines, "test_line_info.py", 74))
 
 
 @pytest.mark.interpreter
