@@ -507,7 +507,7 @@ private:
       auto multiDimRepId =
           getMultiDimIndex<unsigned>(repId, numReplicates, outOrd);
       if (repId != 0) {
-        barrier();
+        insertBarrier(rewriter, op);
       }
 
       if (isLayoutMmaV1(srcLayout))
@@ -519,7 +519,7 @@ private:
                        multiDimRepId, inVec, paddedRepShape, origRepShape,
                        outOrd, vals, smemBase);
 
-      barrier();
+      insertBarrier(rewriter, op);
 
       if (isLayoutMmaV1(dstLayout))
         processReplicaForMMAV1(loc, rewriter, /*stNotRd*/ false, dstTy,

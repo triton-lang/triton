@@ -31,6 +31,10 @@ class HIPOptions:
     waves_per_eu: int = 1
     num_stages: int = 2
     num_ctas: int = 1
+    num_buffers_warp_spec: int = 0
+    num_consumer_groups: int = 0
+    reg_dec_producer: int = 0
+    reg_inc_consumer: int = 0
     extern_libs: dict = None
     cluster_dims: tuple = (1, 1, 1)
     debug: bool = False

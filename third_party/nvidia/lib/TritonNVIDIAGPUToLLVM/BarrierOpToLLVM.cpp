@@ -55,6 +55,77 @@ struct BarrierOpConversion
   }
 };
 
+// --------------------------------------------------------------------------
+// -- MBarrier related Ops lowering, to be moved to a separate file ---------
+// --------------------------------------------------------------------------
+struct MBarrierArriveOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::MBarrierArriveOp> {
+  using ConvertOpToLLVMPattern<
+      triton::nvidia_gpu::MBarrierArriveOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::MBarrierArriveOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    auto mbarrier = LLVM::getSharedMemoryObjectFromStruct(
+        op.getLoc(), adaptor.getMbarrier(),
+        typeConverter->convertType(op.getMbarrier().getType().getElementType()),
+        rewriter);
+
+    bool trackAsyncOp = op.getTrackAsyncOp();
+    triton::nvgpu::MBarriveType type = triton::nvgpu::MBarriveType::normal;
+    uint32_t txCount = op.getTxCount();
+    auto remoteCtaId = adaptor.getRemoteCtaId();
+    if (trackAsyncOp) {
+      type = triton::nvgpu::MBarriveType::cp_async;
+    } else if (remoteCtaId) {
+      assert(txCount == 0 &&
+             "remote arrive of transaction mbarrier is not implemented yet");
+      type = triton::nvgpu::MBarriveType::remote;
+    } else if (txCount > 0) {
+      type = triton::nvgpu::MBarriveType::expect_tx;
+    }
+    Value pred = adaptor.getPred();
+    if (pred == nullptr) {
+      pred = int_val(/*width*/ 1, 1);
+    }
+    rewriter.replaceOpWithNewOp<triton::nvgpu::MBarrierArriveOp>(
+        op, mbarrier.getBase(), pred, remoteCtaId, type, txCount);
+    return success();
+  }
+};
+
+struct NamedBarrierArriveOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::NamedBarrierArriveOp> {
+  using ConvertOpToLLVMPattern<
+      triton::nvidia_gpu::NamedBarrierArriveOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::NamedBarrierArriveOp op,
+                  OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    rewriter.replaceOpWithNewOp<triton::nvgpu::NamedBarrierArriveOp>(
+        op, adaptor.getBar(), adaptor.getNumThreads());
+    return success();
+  }
+};
+
+struct NamedBarrierWaitOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::NamedBarrierWaitOp> {
+  using ConvertOpToLLVMPattern<
+      triton::nvidia_gpu::NamedBarrierWaitOp>::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::NamedBarrierWaitOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op->getLoc();
+    rewriter.replaceOpWithNewOp<triton::nvgpu::NamedBarrierWaitOp>(
+        op, adaptor.getBar(), adaptor.getNumThreads());
+    return success();
+  }
+};
+
 struct FenceAsyncSharedOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::FenceAsyncSharedOp> {
   using ConvertOpToLLVMPattern<
@@ -83,8 +154,18 @@ struct InitBarrierOpConversion
         typeConverter->convertType(op.getAlloc().getType().getElementType()),
         rewriter);
 
+    auto asyncTaskIds = getAsyncTaskIds(op);
+    int executingThreadId = 0;
+    if (!asyncTaskIds.empty()) {
+      assert(asyncTaskIds.size() == 1 && "only support single async task");
+      auto mod = op->getParentOfType<ModuleOp>();
+      int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+      int warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+      executingThreadId = asyncTaskIds[0] * numWarps * warpSize;
+    }
+
     auto id = getThreadId(rewriter, loc);
-    auto pred = icmp_eq(id, i32_val(0));
+    auto pred = icmp_eq(id, i32_val(executingThreadId));
     ::mlir::triton::PTXBuilder ptxBuilder;
     const std::string ptx = "@$0 mbarrier.init.shared::cta.b64 [$1], " +
                             std::to_string(op.getCount()) + ";";
@@ -112,8 +193,17 @@ struct InvalBarrierOpConversion
         typeConverter->convertType(op.getAlloc().getType().getElementType()),
         rewriter);
 
+    auto asyncTaskIds = getAsyncTaskIds(op);
+    int executingThreadId = 0;
+    if (!asyncTaskIds.empty()) {
+      assert(asyncTaskIds.size() == 1 && "only support single async task");
+      auto mod = op->getParentOfType<ModuleOp>();
+      int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+      int warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+      executingThreadId = asyncTaskIds[0] * numWarps * warpSize;
+    }
     auto id = getThreadId(rewriter, loc);
-    Value pred = icmp_eq(id, i32_val(0));
+    Value pred = icmp_eq(id, i32_val(executingThreadId));
     ::mlir::triton::PTXBuilder ptxBuilder;
     const std::string ptx = "@$0 mbarrier.inval.shared::cta.b64 [$1];";
     auto &barSyncOp = *ptxBuilder.create<>(ptx);
@@ -140,8 +230,17 @@ struct BarrierExpectConversion
         typeConverter->convertType(op.getAlloc().getType().getElementType()),
         rewriter);
 
+    auto asyncTaskIds = getAsyncTaskIds(op);
+    int executingThreadId = 0;
+    if (!asyncTaskIds.empty()) {
+      assert(asyncTaskIds.size() == 1 && "only support single async task");
+      auto mod = op->getParentOfType<ModuleOp>();
+      int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+      int warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+      executingThreadId = asyncTaskIds[0] * numWarps * warpSize;
+    }
     auto id = getThreadId(rewriter, loc);
-    Value pred = icmp_eq(id, i32_val(0));
+    Value pred = icmp_eq(id, i32_val(executingThreadId));
     pred = and_(pred, adaptor.getPred());
     ::mlir::triton::PTXBuilder ptxBuilder;
     const std::string ptx =
@@ -194,6 +293,9 @@ void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     PatternBenefit benefit) {
   patterns.add<BarrierOpConversion>(typeConverter, benefit);
+  patterns.add<MBarrierArriveOpConversion>(typeConverter, benefit);
+  patterns.add<NamedBarrierArriveOpConversion>(typeConverter, benefit);
+  patterns.add<NamedBarrierWaitOpConversion>(typeConverter, benefit);
   patterns.add<FenceAsyncSharedOpConversion>(typeConverter, benefit);
   patterns.add<InitBarrierOpConversion, InvalBarrierOpConversion>(typeConverter,
                                                                   benefit);
