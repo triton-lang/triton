@@ -439,6 +439,8 @@ Value LayoutPropagation::getValueAs(Value value, Attribute encoding) {
                                          tensorType.getElementType(), encoding);
     Value converted = rewriter.create<ConvertLayoutOp>(value.getLoc(), tmpType,
                                                        rewrittenValue);
+    if (value.getDefiningOp())
+      converted.getDefiningOp()->setAttrs(value.getDefiningOp()->getAttrs());
     // TODO: we could cache the conversion.
     return converted;
   }
@@ -681,6 +683,7 @@ Operation *LayoutPropagation::rewriteOp(Operation *op) {
     auto newType = RankedTensorType::get(tensorType.getShape(),
                                          tensorType.getElementType(), encoding);
     auto cvt = rewriter.create<ConvertLayoutOp>(op->getLoc(), newType, src);
+    cvt->setAttrs(op->getAttrs());
     map(op->getResult(0), cvt.getResult());
     return cvt.getOperation();
   }
@@ -1082,6 +1085,7 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
       tensorType.getShape(), tensorType.getElementType(), *srcEncoding);
   auto newConvertOp = builder.create<ConvertLayoutOp>(
       convertOp.getLoc(), newType, extOrBroadcatOp->getOperand(0));
+  newConvertOp->setAttrs(convertOp->getAttrs());
   Operation *newExtOrBroadcast = builder.clone(*extOrBroadcatOp);
   newExtOrBroadcast->setOperand(0, newConvertOp.getResult());
   auto oldExtOrBroadcastType =
