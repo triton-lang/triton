@@ -347,7 +347,7 @@ static Value convertBf16ToFp32(Location loc,
 
 static Value convertFp32ToBf16(Location loc,
                                ConversionPatternRewriter &rewriter,
-                               const Value &v, const RoundingMode rounding) {
+                               Value v, const RoundingMode rounding) {
   if (rounding == RoundingMode::RTZ) {
     auto as_int32 = bitcast(v, i32_ty);
     auto shifted = lshr(i32_ty, as_int32, i32_val(16));
@@ -355,70 +355,48 @@ static Value convertFp32ToBf16(Location loc,
     return bitcast(truncated, bf16_ty);
   }
 
-  GCNBuilder builder0;
-  // build v_cmp_u_f32 instruction
+  GCNBuilder builder;
   std::string cmp_ins_str = "v_cmp_u_f32";
-  auto &check_nan = *builder0.create(cmp_ins_str);
-  // output chk_nan: uint32_tx2
-  // auto val_0 = i64_val(0);
-  auto is_nan = builder0.newOperand("=s");
-  // input v : f32
-  auto in_f32 = builder0.newOperand(v, "+v");
-  check_nan(is_nan, in_f32, in_f32);
-  auto is_nan_ret = builder0.launch(rewriter, loc, i64_ty, false);
-
-  // build v_bfe_u32 instruction
-  GCNBuilder builder1;
+  auto &check_nan = *builder.create(cmp_ins_str);
   std::string ins_bfe = "v_bfe_u32";
-  auto &bfe = *builder1.create(ins_bfe);
-  // output tmp
-  // Value tmp_val = i32_val(0);
-  auto tmp = builder1.newOperand("=v");
-  auto val_16 = i32_val(0x7FFF000);
-  auto val_1  = i32_val(1);
-  auto in_f32_1 = builder1.newOperand(v, "+v");
-  auto offset = builder1.newOperand(val_16, "v");
-  auto sz = builder1.newOperand(val_1, "v");
-  bfe(tmp, in_f32_1, offset, sz);
-  auto tmp_ret = builder1.launch(rewriter, loc, i32_ty, false);
-
-  GCNBuilder builder2;
-  // build v_add3_u32 instruction
+  auto &bfe = *builder.create(ins_bfe);
   std::string add3_str = "v_add3_u32";
-  auto &add3 = *builder2.create(add3_str);
-  // input: round_bais
-  auto tmp2 = builder2.newOperand("=v");
-  auto in_f32_2 = builder2.newOperand(v, "+v");
-  auto val_7FFF = i32_val(0x7FFF);
-  auto tmp_in = builder2.newOperand(tmp_ret, "v");
-  auto round_bias = builder2.newOperand(val_7FFF, "v");
-  add3(tmp2, in_f32_2, tmp_in, round_bias);
-  auto tmp_ret1 = builder2.launch(rewriter, loc, i32_ty, false);
-
-  GCNBuilder builder3;
-  // build v_cndmask_b32
+  auto &add3 = *builder.create(add3_str);
   std::string cndmask_str = "v_cndmask_b32";
-  auto &cndmask = *builder3.create(cndmask_str);
-  auto cndmask_out = builder3.newOperand("=v");
-  auto val_nan = i32_val(0x7FFF0000);
-  auto tmp_in1 = builder3.newOperand(tmp_ret1, "v");
-  auto f32_nan = builder3.newOperand(val_nan, "v");
-  auto is_nan_in = builder3.newOperand(is_nan_ret, "s");
-  cndmask(cndmask_out, tmp_in1, f32_nan, is_nan_in);
-  auto cndmask_ret = builder3.launch(rewriter, loc, i32_ty, false);
-
-  GCNBuilder builder4;
-  // build v_lshrrev_b32
+  auto &cndmask = *builder.create(cndmask_str);
   std::string lshrrev_str = "v_lshrrev_b32";
-  auto &lshrrev = *builder4.create(lshrrev_str);
-  auto output = builder4.newOperand("=v");
-  auto offset1 = builder4.newOperand(val_16, "v");
-  auto cndmask_in = builder4.newOperand(cndmask_ret, "v");
-  lshrrev(output, offset1, cndmask_in);
+  auto &lshrrev = *builder.create(lshrrev_str);
 
-  auto res = builder4.launch(rewriter, loc, i32_ty, false);
+  auto output = builder.newOperand("=v");
+  Value nan_val = i64_val(0);
+  auto is_nan = builder.newOperand(nan_val, "+s");
+  Value tmp_val = i32_val(0);
+  auto tmp = builder.newOperand(tmp_val, "+v");
+  Value mask_val = i32_val(0);
+  auto cndmask_out = builder.newOperand(mask_val, "+v");
+  auto in_f32 = builder.newOperand(v, "+v");
+  check_nan(is_nan, in_f32, in_f32);
 
-  auto shifted = lshr(i32_ty, res, i32_val(16));
+  auto offset = builder.newConstantOperand(16);
+  auto sz = builder.newConstantOperand(1);
+  bfe(tmp, in_f32, offset, sz);
+
+  Value bias_val = i32_val(0x7FFF);
+  auto round_bias = builder.newOperand(bias_val, "v");
+  add3(tmp, in_f32, tmp, round_bias);
+
+  Value f32_nan_val = i32_val(0x7FFF0000);
+  auto f32_nan = builder.newOperand(f32_nan_val, "v");
+  cndmask(in_f32, tmp, f32_nan, is_nan);
+  lshrrev(in_f32, offset, in_f32);
+
+  llvm::outs() << "asm = \n\t" << builder.dump() << "\n";
+
+  // auto res = builder.launch(rewriter, loc, i32_ty, false);
+  builder.launch(rewriter, loc, i32_ty, false);
+
+  auto vi32 = bitcast(v, i32_ty);
+  auto shifted = lshr(i32_ty, vi32, i32_val(16));
   auto truncated = trunc(i16_ty, shifted);
   return bitcast(truncated, bf16_ty);
 }
