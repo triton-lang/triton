@@ -95,6 +95,13 @@ struct ConvertTritonGPUToLLVM
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
+    // Hack: WSLowering may have changed the effective number of warps,
+    // in a way that isn't reflected in triton_gpu.num-warps.  If so, we have to
+    // respect that here.
+    if (Attribute attr = mod->getAttr("triton_gpu.num-warp-groups-per-cta")) {
+      numWarps *= cast<IntegerAttr>(attr).getInt();
+    }
+
     // Allocate shared memory and set barrier
     ModuleAllocation allocation(mod);
     ModuleMembarAnalysis membarPass(&allocation, NVIDIA::canSkipBarSync);
@@ -177,6 +184,8 @@ struct ConvertTritonGPUToLLVM
                                                    patterns, benefit);
     mlir::triton::NVIDIA::populateUpcastMXFPToLLVMPatterns(
         typeConverter, patterns, targetInfo, benefit);
+    mlir::triton::populateRegReallocOpToLLVMPatterns(typeConverter, patterns,
+                                                     benefit);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();
 
