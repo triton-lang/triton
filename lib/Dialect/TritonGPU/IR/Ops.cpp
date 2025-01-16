@@ -63,6 +63,31 @@ struct CanonicalizeConvertFromReshape
   }
 };
 
+// TODO We should do this generically for op(cvt) -> op
+// trans(cvt) -> trans
+struct CanonicalizeConvertFromTranspose
+    : public mlir::OpRewritePattern<triton::TransOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(triton::TransOp op,
+                  PatternRewriter &rewriter) const override {
+    auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
+    if (!convert)
+      return failure();
+    auto srcType = convert.getSrc().getType();
+    auto dstType = convert.getType();
+    auto srcLL = *toLinearLayout(srcType.getShape(), srcType.getEncoding());
+    auto dstLL = *toLinearLayout(dstType.getShape(), dstType.getEncoding());
+    if (srcLL != dstLL)
+      return failure();
+    // If the layouts are structurally the same, the convert is trivial
+    rewriter.replaceOpWithNewOp<triton::TransOp>(
+        op, op.getType(), convert.getSrc(), op.getOrder());
+    return mlir::success();
+  }
+};
+
 // histogram(cvt) -> histogram
 struct CanonicalizeConvertFromHistogram
     : public mlir::OpRewritePattern<triton::HistogramOp> {
@@ -289,6 +314,7 @@ void ConvertLayoutOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
                                                   MLIRContext *context) {
   patterns.add<CanonicalizeConvertFromConvert>(context);
   patterns.add<CanonicalizeConvertFromReshape>(context);
+  patterns.add<CanonicalizeConvertFromTranspose>(context);
   patterns.add<CanonicalizeConvertFromGatherSource>(context);
   patterns.add<CanonicalizeConvertFromHistogram>(context);
   patterns.add<CanonicalizeConvertFromAlloc>(context);
