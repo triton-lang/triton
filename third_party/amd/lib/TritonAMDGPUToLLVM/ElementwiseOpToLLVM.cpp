@@ -362,8 +362,8 @@ static Value convertFp32ToBf16(Location loc,
   std::string cmp_ins_str = "v_cmp_u_f32";
   auto &check_nan = *builder.create(cmp_ins_str);
   // output chk_nan: uint32_tx2
-  // auto val_0 = i64_val(0);
-  auto is_nan = builder.newOperand("=s");
+  auto val_0 = i64_val(0);
+  auto is_nan = builder.newOperand(val_0, "+s");
   // input v : f32
   auto in_f32 = builder.newOperand(v, "+v");
   check_nan(is_nan, in_f32, in_f32);
@@ -398,7 +398,8 @@ static Value convertFp32ToBf16(Location loc,
   // build v_lshrrev_b32
   std::string lshrrev_str = "v_lshrrev_b32";
   auto &lshrrev = *builder.create(lshrrev_str);
-  lshrrev(in_f32, offset, in_f32);
+  auto output = builder.newOperand("=v");
+  lshrrev(output, offset, in_f32);
 
   auto res = builder.launch(rewriter, loc, i32_ty, false);
 
