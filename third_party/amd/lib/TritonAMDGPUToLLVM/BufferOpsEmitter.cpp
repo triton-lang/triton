@@ -76,8 +76,7 @@ Value BufferEmitter::emitLoad(Type type, Value rsrcDesc, Value offset,
                               Value pred, Value falseVal,
                               triton::CacheModifier cm) {
   SmallVector<Value, 6> args;
-  fillCommonArgs(type, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/true,
-                 /*isBufferAtomic=*/false, args);
+  fillCommonArgs(type, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/true, args);
   Type bufferType = getBufferOpType(type, false);
   Value data = rewriter.create<ROCDL::RawPtrBufferLoadOp>(
       loc, bufferType, args, ArrayRef<NamedAttribute>());
@@ -96,14 +95,7 @@ Value BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc,
     data = bitcast(data, bufferType);
 
   SmallVector<Value, 6> args{data};
-
-  triton::CacheModifier cm = triton::CacheModifier::NONE;
-  // triton::CacheModifier::WT is a placeholder value
-  if (hasUsers)
-    cm = triton::CacheModifier::WT;
-
-  fillCommonArgs(type, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/false,
-                 /*isBufferAtomic=*/true, args);
+  fillCommonArgsAtomics(type, rsrcDesc, offset, pred, hasUsers, args);
 
   // TODO:
   //   The ops in ROCDL (e.g., RawPtrBufferAtomicFaddOp) have no return value,
@@ -126,7 +118,7 @@ void BufferEmitter::emitStore(Value rsrcDesc, Value offset, Value data,
     data = bitcast(data, bufferType);
   SmallVector<Value, 6> args{data};
   fillCommonArgs(vecTy, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/false,
-                 /*isBufferAtomic=*/false, args);
+                 args);
   rewriter.create<ROCDL::RawPtrBufferStoreOp>(loc, TypeRange{}, args,
                                               ArrayRef<NamedAttribute>());
 }
@@ -176,10 +168,10 @@ Type BufferEmitter::getBufferOpType(Type type, bool atomicsOp) {
 
   return bufferType;
 }
+
 void BufferEmitter::fillCommonArgs(Type type, Value rsrcDesc,
                                    Value vOffsetElems, Value pred,
                                    triton::CacheModifier cm, bool isBufferLoad,
-                                   bool isBufferAtomic,
                                    SmallVector<Value> &args) {
 
   // 1. Create the (masked) offset
@@ -198,17 +190,45 @@ void BufferEmitter::fillCommonArgs(Type type, Value rsrcDesc,
   Value sgprOffset = int_val(32, 0);
 
   // 3. Create the cache modifiers word
+  int32_t aux =
+      getCtrlBitsForCacheModifierOnTarget(cm, isBufferLoad, targetInfo);
+  Value cacheModifiers = int_val(32, aux);
+
+  // 4. Add the arguments
+  args.push_back(rsrcDesc);
+  args.push_back(maskedOffsetBytes);
+  args.push_back(sgprOffset);
+  args.push_back(cacheModifiers);
+}
+
+void BufferEmitter::fillCommonArgsAtomics(Type type, Value rsrcDesc,
+                                          Value vOffsetElems, Value pred,
+                                          bool hasUsers,
+                                          SmallVector<Value> &args) {
+
+  // 1. Create the (masked) offset
+  Type elementType = getElementTypeOrSelf(type);
+  const int valueElemNBits = std::max(8u, elementType.getIntOrFloatBitWidth());
+  const int elementByteWidth = valueElemNBits / 8;
+  // Please note: the index passed is not in bytes, but in number of elements
+  // In order to pass the index to the buffer operation, we need to convert in
+  // bytes (i.e., we need to multiply by `elementByteWidth`)
+  Value vOffsetOutOfBunds = int_val(
+      32, static_cast<int>(std::numeric_limits<int>::max() + int64_t(1)));
+  Value vOffsetBytes = mul(int_val(32, elementByteWidth), vOffsetElems);
+  Value maskedOffsetBytes = select(pred, vOffsetBytes, vOffsetOutOfBunds);
+
+  // 2. Set the sgprOffset to 0
+  Value sgprOffset = int_val(32, 0);
+
+  // 3. Create the cache modifiers word
   int32_t aux = 0;
-  // Since buffer atomics don't have have user-facing cache modifiers
-  // use WT as a `magic` placeholder value to set SC0
-  if (isBufferAtomic && cm == triton::CacheModifier::WT)
+  if (hasUsers)
     aux = getCtrlBitsForBufferAtomicsOnGFX942(/*setSC0*/ true, /*setSC1*/ false,
                                               /*setNT*/ false);
-  else if (isBufferAtomic)
+  else
     aux = getCtrlBitsForBufferAtomicsOnGFX942(
         /*setSC0*/ false, /*setSC1*/ false, /*setNT*/ false);
-  else
-    aux = getCtrlBitsForCacheModifierOnTarget(cm, isBufferLoad, targetInfo);
 
   Value cacheModifiers = int_val(32, aux);
 
@@ -218,4 +238,5 @@ void BufferEmitter::fillCommonArgs(Type type, Value rsrcDesc,
   args.push_back(sgprOffset);
   args.push_back(cacheModifiers);
 }
+
 } // namespace mlir::LLVM::AMD

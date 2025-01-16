@@ -81,8 +81,13 @@ struct BufferEmitter {
 private:
   // Fill common buffer operation arguments.
   void fillCommonArgs(Type type, Value rsrcDesc, Value vOffsetElems, Value pred,
-                      CacheModifier cm, bool isBufferLoad, bool isBufferAtomic,
+                      CacheModifier cm, bool isBufferLoad,
                       SmallVector<Value> &args);
+
+  // Fill buffer atomics arguments
+  void fillCommonArgsAtomics(Type type, Value rsrcDesc, Value vOffsetElems,
+                             Value pred, bool hasUsers,
+                             SmallVector<Value> &args);
 
   // Given a type, the buffer type can be either the same type
   // or a packed version. E.g., a vector of 8xfp16 can be bitcasted to
