@@ -348,8 +348,8 @@ static Value convertBf16ToFp32(Location loc,
 static Value convertFp32ToBf16(Location loc,
                                ConversionPatternRewriter &rewriter,
                                Value v, const RoundingMode rounding) {
+  auto as_int32 = bitcast(v, i32_ty);
   if (rounding == RoundingMode::RTZ) {
-    auto as_int32 = bitcast(v, i32_ty);
     auto shifted = lshr(i32_ty, as_int32, i32_val(16));
     auto truncated = trunc(i16_ty, shifted);
     return bitcast(truncated, bf16_ty);
@@ -367,14 +367,12 @@ static Value convertFp32ToBf16(Location loc,
   std::string lshrrev_str = "v_lshrrev_b32";
   auto &lshrrev = *builder.create(lshrrev_str);
 
-  auto output = builder.newOperand("=v");
-  Value nan_val = i64_val(0);
-  auto is_nan = builder.newOperand(nan_val, "+s");
+  auto is_nan = builder.newOperand("=s");
   Value tmp_val = i32_val(0);
   auto tmp = builder.newOperand(tmp_val, "+v");
   Value mask_val = i32_val(0);
   auto cndmask_out = builder.newOperand(mask_val, "+v");
-  auto in_f32 = builder.newOperand(v, "+v");
+  auto in_f32 = builder.newOperand(as_int32, "+v");
   check_nan(is_nan, in_f32, in_f32);
 
   auto offset = builder.newConstantOperand(16);
@@ -390,14 +388,11 @@ static Value convertFp32ToBf16(Location loc,
   cndmask(in_f32, tmp, f32_nan, is_nan);
   lshrrev(in_f32, offset, in_f32);
 
-  llvm::outs() << "asm = \n\t" << builder.dump() << "\n";
-
-  // auto res = builder.launch(rewriter, loc, i32_ty, false);
   builder.launch(rewriter, loc, i32_ty, false);
 
-  auto vi32 = bitcast(v, i32_ty);
-  auto shifted = lshr(i32_ty, vi32, i32_val(16));
+  auto shifted = lshr(i32_ty, as_int32, i32_val(16));
   auto truncated = trunc(i16_ty, shifted);
+  
   return bitcast(truncated, bf16_ty);
 }
 
