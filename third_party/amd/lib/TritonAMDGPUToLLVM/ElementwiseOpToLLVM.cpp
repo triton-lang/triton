@@ -924,7 +924,6 @@ struct ElementwiseOpConversion
                                     ConversionPatternRewriter &rewriter,
                                     Type elemTy, MultipleOperandsRange operands,
                                     Location loc) const {
-    llvm::outs() << "amdCreateDestOps\n";
     return {rewriter.create<DestOp>(loc, elemTy, operands[0],
                                     adaptor.getAttributes().getValue())};
   }
