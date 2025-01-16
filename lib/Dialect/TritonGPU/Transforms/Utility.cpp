@@ -396,9 +396,9 @@ static Attribute inferSrcEncoding(triton::TransposeOpInterface op,
   //   transpose(transpose(x, order), inverse(order)) == x,
   // we can see this is equivalent to
   //   transpose(dstEnc, inverse(order)) -> srcEnc.
-  return inferTransOpDstEncoding(
-      encoding, cast<RankedTensorType>(op.getSrc().getType()).getShape(),
-      triton::inversePermutation(op.getOrder()));
+  auto shape = cast<RankedTensorType>(op->getResult(0).getType()).getShape();
+  return inferTransOpDstEncoding(encoding, shape,
+                                 triton::inversePermutation(op.getOrder()));
 }
 
 static Attribute inferReshapeOpDstEncoding(ArrayRef<int64_t> srcShape,

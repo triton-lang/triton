@@ -2589,8 +2589,8 @@ struct TritonGPUInferLayoutInterface
     for (auto &bases : llvm::make_second_range(namedBases)) {
       for (auto &b : bases) {
         std::vector<int32_t> newB;
-        for (int i = 0; i < order.size(); i++) {
-          newB.push_back(b[order[i]]);
+        for (auto i : order) {
+          newB.push_back(b[i]);
         }
         b = std::move(newB);
       }
