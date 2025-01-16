@@ -789,11 +789,13 @@ MemDescType getExpandedDesc(MemDescType descTy) {
 
   auto elTy = descTy.getElementType();
   auto shape = descTy.getShape();
-  auto allocShape = descTy.getAllocShape();
   auto isMutable = descTy.getMutableMemory();
   auto expandedShape = SmallVector<int64_t>(3, 1);
   expandedShape[1] = shape[0];
   expandedShape[2] = shape[1];
+  SmallVector<int64_t> allocShape = llvm::to_vector(descTy.getAllocShape());
+  for (int i = allocShape.size(); i < 3; ++i)
+    allocShape.insert(allocShape.begin(), 1);
   auto encoding = descTy.getEncoding();
   auto expandedEncoding = getExpandedEncoding(encoding);
   auto expandedDesc =
