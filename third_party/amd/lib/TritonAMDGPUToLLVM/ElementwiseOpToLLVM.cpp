@@ -346,11 +346,10 @@ static Value convertBf16ToFp32(Location loc,
 }
 
 static Value convertFp32ToBf16(Location loc,
-                               ConversionPatternRewriter &rewriter,
-                               const Value &v, const RoundingMode rounding) {
-  llvm::outs() << "============================================\n";
+                               ConversionPatternRewriter &rewriter, Value v,
+                               const RoundingMode rounding) {
+  auto as_int32 = bitcast(v, i32_ty);
   if (rounding == RoundingMode::RTZ) {
-    auto as_int32 = bitcast(v, i32_ty);
     auto shifted = lshr(i32_ty, as_int32, i32_val(16));
     auto truncated = trunc(i16_ty, shifted);
     return bitcast(truncated, bf16_ty);
@@ -387,81 +386,44 @@ static Value convertFp32ToBf16(Location loc,
 */
 
   GCNBuilder builder;
-
-  // build v_cmp_u_f32 instruction
   std::string cmp_ins_str = "v_cmp_u_f32";
   auto &check_nan = *builder.create(cmp_ins_str);
-  // output chk_nan: uint32_tx2
-  auto val_0 = i64_val(0);
-  auto is_nan = builder.newOperand(val_0, "+s");
-  // input v : f32
-  auto in_f32 = builder.newOperand(v, "+v");
-  check_nan(is_nan, in_f32, in_f32);
-
-  // build v_bfe_u32 instruction
   std::string ins_bfe = "v_bfe_u32";
   auto &bfe = *builder.create(ins_bfe);
-  // output tmp
-  Value tmp_val = i32_val(0);
-  auto tmp = builder.newOperand(tmp_val, "+v");
-  auto val_16 = i32_val(0x7FFF000);
-  auto val_1  = i32_val(1);
-  auto offset = builder.newOperand(val_16, "v");
-  auto sz = builder.newOperand(val_1, "v");
-  bfe(tmp, in_f32, offset, sz);
-
-  // build v_add3_u32 instruction
   std::string add3_str = "v_add3_u32";
   auto &add3 = *builder.create(add3_str);
-  // input: round_bais
-  auto val_7FFF = i32_val(0x7FFF);
-  auto round_bias = builder.newOperand(val_7FFF, "v");
-  add3(tmp, in_f32, tmp, round_bias);
-
-  // build v_cndmask_b32
   std::string cndmask_str = "v_cndmask_b32";
   auto &cndmask = *builder.create(cndmask_str);
-  auto val_nan = i32_val(0x7FFF0000);
-  auto f32_nan = builder.newOperand(val_nan, "v");
-  cndmask(in_f32, tmp, f32_nan, is_nan);
-
-  // build v_lshrrev_b32
   std::string lshrrev_str = "v_lshrrev_b32";
   auto &lshrrev = *builder.create(lshrrev_str);
-  auto output = builder.newOperand("=v");
-  lshrrev(output, offset, in_f32);
 
-  auto res = builder.launch(rewriter, loc, i32_ty, false);
+  auto is_nan = builder.newOperand("=s");
+  Value tmp_val = i32_val(0);
+  auto tmp = builder.newOperand(tmp_val, "+v");
+  Value mask_val = i32_val(0);
+  auto cndmask_out = builder.newOperand(mask_val, "+v");
+  auto in_f32 = builder.newOperand(as_int32, "+v");
+  check_nan(is_nan, in_f32, in_f32);
 
-  std::string asm_str = builder.dump();
-  llvm::outs() << "asm_str = \n";
-  llvm::outs() << asm_str << "\n"; 
+  auto offset = builder.newConstantOperand(16);
+  auto sz = builder.newConstantOperand(1);
+  bfe(tmp, in_f32, offset, sz);
 
-  auto bf16x2VecTy = vec_ty(bf16_ty, 2);
-  Value retVec = bitcast(res, bf16x2VecTy);
-  return extract_element(bf16_ty, retVec, i32_val(0));
+  Value bias_val = i32_val(0x7FFF);
+  auto round_bias = builder.newOperand(bias_val, "v");
+  add3(tmp, in_f32, tmp, round_bias);
 
-  // auto as_uint32 = bitcast(v, i32_ty);
-  // auto check_exponent =
-  //     and_(i32_ty, xor_(i32_ty, as_uint32, i32_val(0xffffffff)),
-  //          i32_val(0x7f800000));
-  // auto exponent_not_all1s = icmp_ne(check_exponent, i32_val(0));
-  // auto exponent_all1s = icmp_eq(check_exponent, i32_val(0));
-  // auto rounded =
-  //     add(i32_ty, i32_val(0x7fff),
-  //         and_(i32_ty, lshr(i32_ty, as_uint32, i32_val(16)), i32_val(1)));
-  // rounded = add(i32_ty, rounded, as_uint32);
-  // auto res = select(exponent_not_all1s, rounded, as_uint32);
+  Value f32_nan_val = i32_val(0x7FFF0000);
+  auto f32_nan = builder.newOperand(f32_nan_val, "v");
+  cndmask(in_f32, tmp, f32_nan, is_nan);
+  lshrrev(in_f32, offset, in_f32);
 
-  // auto preserve_nan =
-  //     and_(i1_ty, exponent_all1s,
-  //          icmp_ne(and_(i32_ty, as_uint32, i32_val(0xffff)), i32_val(0)));
-  // auto nan = or_(i32_ty, as_uint32, i32_val(0x10000));
-  // res = select(preserve_nan, nan, res);
+  builder.launch(rewriter, loc, i32_ty, false);
 
-  // auto shifted = lshr(i32_ty, res, i32_val(16));
-  // auto truncated = trunc(i16_ty, shifted);
-  // return bitcast(truncated, bf16_ty);
+  auto shifted = lshr(i32_ty, as_int32, i32_val(16));
+  auto truncated = trunc(i16_ty, shifted);
+
+  return bitcast(truncated, bf16_ty);
 }
 
 static Value Fp8E5M2FNUZ_to_Fp16_oneValue(Location loc,
