@@ -231,8 +231,7 @@ Value loadFMAOp(Value srcVal, Value llVal, BlockedEncodingAttr dLayout,
       rewriter);
   auto smem = getExpandedSharedMemoryObject(rewriter, loc, origSmem,
                                             opTensorTy.getShape());
-  auto smemStrides =
-      origSmem.getStrides(opTensorTy.getAllocShape(), opOrder, loc, rewriter);
+  auto smemStrides = origSmem.getStrides(opTensorTy, loc, rewriter);
   int B = opTensorShape[dim.batch];
   int K = opTensorShape[dim.k];
   int NonK = opTensorShape[dim.nonK];

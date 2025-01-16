@@ -274,11 +274,10 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   Value warpIdInBatch = urem(linearWarpId, i32_val(warpsPerBatch));
   elemTy = typeConverter->convertType(elemTy);
 
-  auto smemStrides =
-      smemObj.getStrides(aTensorTy.getAllocShape(), order, loc, rewriter);
   SmallVector<Value> loadedValues;
   SmallVector<Value> offsets;
   Value smemBase;
+  auto smemStrides = smemObj.getStrides(aTensorTy, loc, rewriter);
   bool isFastPath =
       !AMD::isKMajor(order, opIdx) && !hasSwizzleEnabled(sharedLayout);
   if (isFastPath) {

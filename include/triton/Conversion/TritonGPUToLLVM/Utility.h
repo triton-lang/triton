@@ -278,43 +278,16 @@ public:
     return types;
   }
 
-  SmallVector<Value> getStrides(ArrayRef<int64_t> allocShape,
-                                ArrayRef<unsigned> layoutOrder, Location loc,
+  SmallVector<Value> getStrides(MemDescType memDesc, Location loc,
                                 RewriterBase &rewriter) const {
+    auto allocShape = memDesc.getAllocShape();
+    auto allocShapePerCTA =
+        triton::gpu::getShapePerCTA(memDesc.getEncoding(), allocShape);
+    auto layoutOrder = triton::gpu::getOrder(memDesc.getEncoding());
     auto allocStrides = SharedMemoryObject::getStridesForShape(
         allocShape, layoutOrder, loc, rewriter);
     return SmallVector<Value>(allocStrides.end() - offsets.size(),
                               allocStrides.end());
-  }
-
-  static SmallVector<unsigned>
-  getOrderForShape(ArrayRef<int64_t> shape, ArrayRef<unsigned> layoutOrder) {
-    SmallVector<unsigned> order(shape.size());
-    // Default minor-to-major order
-    std::iota(order.rbegin(), order.rend(), 0);
-    if (layoutOrder.size() > 0) {
-      int rankDiff = layoutOrder.size() - shape.size();
-      auto minRank = std::min<size_t>(shape.size(), layoutOrder.size());
-      for (size_t i = 0; i < minRank; ++i)
-        order[i] = layoutOrder[i] - rankDiff;
-    }
-    assert(isPermutationOfIota(order) && "Invalid order");
-    return order;
-  }
-
-  static SmallVector<Value> getStridesForShape(ArrayRef<int64_t> shape,
-                                               ArrayRef<unsigned> layoutOrder,
-                                               Location loc,
-                                               RewriterBase &rewriter) {
-    auto order = SharedMemoryObject::getOrderForShape(shape, layoutOrder);
-    auto rank = shape.size();
-    SmallVector<Value> strides(rank);
-    int64_t stride = 1;
-    for (auto idx : order) {
-      strides[idx] = i32_val(stride);
-      stride *= shape[idx];
-    }
-    return strides;
   }
 
   // TODO(Keren): deprecate the method once AMD backend has cleaned up
@@ -333,6 +306,40 @@ public:
   }
 
 private:
+  static SmallVector<unsigned>
+  getOrderForShape(ArrayRef<int64_t> shape, ArrayRef<unsigned> layoutOrder) {
+    SmallVector<unsigned> order(shape.size());
+    // Default minor-to-major order
+    std::iota(order.rbegin(), order.rend(), 0);
+    if (layoutOrder.size() > 0) {
+      // If a layout order is provided, we assume it specifies the order in
+      // which the dimensions are first accessed, and unspecified dimensions
+      // retain the minor-to-major order. For example, if order = [2, 1, 0] and
+      // layoutOrder = [0, 1], we need to shift `layoutOrder`
+      // by -1 (move them right). The resulting order will then be [1, 2, 0].
+      int rankDiff = layoutOrder.size() - shape.size();
+      auto minRank = std::min<size_t>(shape.size(), layoutOrder.size());
+      for (size_t i = 0; i < minRank; ++i)
+        order[i] = layoutOrder[i] - rankDiff;
+    }
+    assert(isPermutationOfIota(order) && "Invalid order");
+    return order;
+  }
+
+  static SmallVector<Value> getStridesForShape(ArrayRef<int64_t> shape,
+                                               ArrayRef<unsigned> layoutOrder,
+                                               Location loc,
+                                               RewriterBase &rewriter) {
+    SmallVector<Value> strides(shape.size());
+    auto order = SharedMemoryObject::getOrderForShape(shape, layoutOrder);
+    int64_t stride = 1;
+    for (auto idx : order) {
+      strides[idx] = i32_val(stride);
+      stride *= shape[idx];
+    }
+    return strides;
+  }
+
   Value base; // i32 ptr. The start address of the shared memory object.
   Type baseElemType;
   SmallVector<Value>

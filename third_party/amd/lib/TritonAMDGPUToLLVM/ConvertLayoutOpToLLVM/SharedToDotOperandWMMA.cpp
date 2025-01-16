@@ -187,9 +187,8 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
 
   SmallVector<Value> loadedValues;
   SmallVector<Value> offsets;
-  auto smemStrides =
-      smemObj.getStrides(aTensorTy.getAllocShape(), order, loc, rewriter);
   Value smemBase;
+  auto smemStrides = smemObj.getStrides(aTensorTy, loc, rewriter);
   Value spatialWarpId = AMD::getWarpIdInBlock(
       rewriter, loc, linearWaveId, warpsPerCTA, elemsPerInstr[0],
       shape[nonKDimIdx], nonKDimIdx, triton::gpu::getOrder(wmmaLayout));
