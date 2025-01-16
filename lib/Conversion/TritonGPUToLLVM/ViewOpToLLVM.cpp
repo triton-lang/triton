@@ -298,20 +298,9 @@ struct TransOpConversion : public ConvertOpToLLVMPattern<TransOp> {
   LogicalResult
   matchAndRewrite(TransOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // TODO: With linear layouts, this should just return adaptor.getSrc()
-    // We should check whether this is also the case for the legacy path
-    Location loc = op->getLoc();
-    auto resultTy = cast<RankedTensorType>(op.getType());
-    // If the dst encoding is blocked, then TransOp::inferReturnTypes
-    // ensures that:
-    //  - the src encoding is also blocked, and
-    //  - the translation from src to dst is just a "renaming" of the
-    //    registers, i.e. each thread has exactly the same values.
-    // Thus the transpose op simply returns the same values it got.
-    auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    Value ret =
-        packLLElements(loc, this->getTypeConverter(), vals, rewriter, resultTy);
-    rewriter.replaceOp(op, ret);
+    // By construction, TransOp::inferReturnTypes ensures that the src encoding
+    // is the same as the dst encoding so that this op is a no-op.
+    rewriter.replaceOp(op, adaptor.getSrc());
     return success();
   }
 };
