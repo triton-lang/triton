@@ -991,10 +991,10 @@ unsigned SharedEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
   llvm_unreachable("getElemsPerThread is not supported for shared layout");
   return 0;
 }
-int32_t SharedEncodingAttr::getAlignment(Type eltTy) const {
+int32_t SharedEncodingAttr::getAlignment() const {
   if (getHasLeadingOffset())
     return 128 * getMaxPhase();
-  return std::max(eltTy.getIntOrFloatBitWidth() * getVec(), 8u);
+  return 16;
 }
 
 SmallVector<unsigned>

@@ -596,12 +596,9 @@ int32_t LocalAllocOp::getAlignmentOrDefault() {
     return *align;
   }
 
-  if (!isSharedMemoryAlloc())
-    return 8;
-
   auto ty = getType();
-  auto enc = cast<SharedEncodingAttr>(ty.getEncoding());
-  return enc.getAlignment(ty.getElementType());
+  auto enc = dyn_cast<SharedEncodingAttr>(ty.getEncoding());
+  return enc ? enc.getAlignment() : 16;
 }
 
 } // namespace mlir::triton::gpu
