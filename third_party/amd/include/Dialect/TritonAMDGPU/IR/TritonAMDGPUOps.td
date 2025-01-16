@@ -179,9 +179,9 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
   TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "getPointerTypeToElement($_self)">,
   TypesMatchWith<"result and offsets have the same shape", "result", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"result and mask have the same shape", "result", "mask", "getI1SameShape($_self)",
-                 "($_op.getOperands().size() <= 2) || std::equal_to<>()">,
-  TypesMatchWith<"result and other have the same type", "result", "other", "$_self",
                  "($_op.getOperands().size() <= 3) || std::equal_to<>()">,
+  TypesMatchWith<"result and other have the same type", "result", "other", "$_self",
+                 "($_op.getOperands().size() <= 4) || std::equal_to<>()">,
 ]>{
     let summary = "Load from a scalar base pointer and a tensor offset";
     let description = [{
@@ -191,18 +191,22 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
       are similar to a normal load, i.e., the `mask` is a boolean vector that
       determines if a given element should be read from memory, and `other` is the
       element that should be returned on lane `i` when `mask[i] == 0`.
+      `stride` of the buffer can be inferred from the accessing pattern and used
+      when creating the buffer descriptor, so enable cache swizzling for block
+      accessing pattern.
     }];
     let arguments = (
       ins
       TT_Ptr:$ptr,
       I32Tensor:$offsets,
       Optional<TT_BoolTensor>:$mask,
-      Optional<TT_Tensor>:$other
+      Optional<TT_Tensor>:$other,
+      Optional<I32>:$stride
     );
     let results = (outs TT_Tensor:$result);
 
     let assemblyFormat = [{
-      $ptr `[` $offsets `]` (`,` $mask^)? (`,` $other^)?
+      $ptr `[` $offsets `]` (`,` $mask^)? (`,` $other^)? (`,` $stride^)?
       attr-dict `:` type($result)
     }];
 }

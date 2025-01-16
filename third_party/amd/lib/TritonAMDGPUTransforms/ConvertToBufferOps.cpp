@@ -225,6 +225,92 @@ bool canUseBufferOps(Value ptr, const DenseSet<Value> &assumptions) {
   LDBG("Non-negative");
   return true;
 }
+
+// Traverse pointer sources and return it from the block arg of the parent
+// so we can find incremental addPtr within its user.
+Value getInputArg(Value v) {
+  while (auto srcOp = v.getDefiningOp()) {
+    if (auto addPtrOp = dyn_cast<tt::AddPtrOp>(srcOp))
+      v = addPtrOp.getPtr();
+    else if (auto splatOp = dyn_cast<tt::SplatOp>(srcOp))
+      v = splatOp.getSrc();
+    else if (auto bcOp = dyn_cast<tt::BroadcastOp>(srcOp))
+      v = bcOp.getSrc();
+    else
+      return nullptr;
+  }
+  if (auto funcArg = dyn_cast<BlockArgument>(v)) {
+    return v;
+  } else
+    return nullptr;
+}
+
+// Try to infer how the parent loop use the given buffer and extract the value
+// to calculate the stride of the buffer
+Value inferStride(triton::LoadOp op, PatternRewriter &rewriter) {
+  Location loc = op.getLoc();
+  if (auto forOp = dyn_cast<scf::ForOp>(op->getParentOp())) {
+    Value currDotChain;
+    // Figure out what does the forOp is doing, e.g. GEMM
+    forOp->walk([&](Operation *op) {
+      if (auto maybeGemmDot = dyn_cast<tt::DotOp>(op)) {
+        // TODO: support 3d dot.
+        if (maybeGemmDot.getType().getRank() != 2) {
+          currDotChain = nullptr;
+          return;
+        }
+        if (currDotChain) {
+          // accumulating dot could be a slice of the bigger dot
+          if (currDotChain == maybeGemmDot.getC())
+            currDotChain = maybeGemmDot->getResult(0);
+          else {
+            // TODO: support FA(1), catch FA
+            // e.g. currDotChain == maybeGemmDot.getB or C
+            currDotChain = nullptr;
+            return;
+          }
+        } else
+          currDotChain = maybeGemmDot->getResult(0);
+      }
+    });
+
+    // TODO: support FA(2), investigate how to infer the stride.
+
+    // Get how much this buffer is incremented in each iteration.
+    if (currDotChain) {
+      auto ptr = getInputArg(op.getPtr());
+      arith::ConstantIntOp increment;
+      for (auto user : ptr.getUsers()) {
+        if (auto addPtrOp = dyn_cast<tt::AddPtrOp>(user)) {
+          auto v = addPtrOp.getOffset();
+          if (auto constIncrTensorOp =
+                  dyn_cast<arith::ConstantOp>(v.getDefiningOp())) {
+            auto incrValue =
+                dyn_cast<IntegerAttr>(constIncrTensorOp.getValue()).getInt();
+            increment =
+                rewriter.create<arith::ConstantIntOp>(loc, incrValue, 32);
+          }
+        }
+      }
+      auto ub = forOp.getUpperBound();
+      // Upperbound could be decreased by the pipelining prefetch.
+      if (auto maybeSubIOp = ub.getDefiningOp<arith::SubIOp>()) {
+        ub = maybeSubIOp.getLhs();
+      }
+      // stride = increment * ub = GEMM_K
+      auto inferredStrideA =
+          rewriter.create<arith::MulIOp>(loc, ub, increment);
+
+      // Hoist out of the loop, both loop ub and incrementing constant should be
+      // coming outside.
+      inferredStrideA->moveBefore(forOp);
+      return inferredStrideA;
+    } else
+      return nullptr;
+  } else
+    return nullptr;
+}
+
 } // namespace
 
 struct ConvertTritonLoadToBufferLoad
@@ -256,10 +342,11 @@ struct ConvertTritonLoadToBufferLoad
       Value maybeMask{};
       if (op.getMask() && !isZeroConst(op.getMask()))
         maybeMask = op.getMask();
+      Value maybeStride = inferStride(op, rewriter);
 
       auto bufferLoadOp = rewriter.create<triton::amdgpu::BufferLoadOp>(
           op->getLoc(), op.getType(), basePtr, tensorOffset, maybeMask,
-          maybeOther);
+          maybeOther, maybeStride);
 
       // Propagate `OpIdxAttr` if the currently processed `tt.LoadOp` was
       // labeled it. The attribute needs to be preserved for custom instruction

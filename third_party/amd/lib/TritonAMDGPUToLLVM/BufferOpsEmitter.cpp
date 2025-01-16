@@ -39,7 +39,8 @@ namespace mlir::LLVM::AMD {
 BufferEmitter::BufferEmitter(RewriterBase &rw, Location loc, TargetInfo ti)
     : rewriter(rw), loc(loc), targetInfo(ti) {}
 
-Value BufferEmitter::createResourceDescriptor(Value basePtr) {
+Value BufferEmitter::createResourceDescriptor(Value basePtr,
+                                              Value inferredStride) {
   // 1. Create the resource descriptor
   // bits 0-11: dst sel, ignored by these intrinsics
   // bits 12-14: data format (ignored, must be nonzero, 7=float)
@@ -64,7 +65,22 @@ Value BufferEmitter::createResourceDescriptor(Value basePtr) {
     uint32_t oob = 3;
     flags |= (oob << 28);
   }
+
   Value stride = int_val(16, 0);
+  if (targetInfo.getISAFamily() == ISAFamily::CDNA3) {
+    if (inferredStride) {
+      // TODO: consider better heuristics and stride > 8K
+      // It's only hint for the performance and corner cases can be ignored for
+      // now.
+      Value enableSwizzle = int_val(16, 16384);
+      Value stride16b =
+          rewriter.create<arith::TruncIOp>(loc, i16_ty, inferredStride);
+      // stride[13:0] = swizzling stride
+      // stride[14] = swizzle enabling bit
+      stride = rewriter.create<arith::OrIOp>(loc, enableSwizzle, stride16b);
+    }
+  }
+
   Value flagsConst = int_val(32, flags);
   Type rsrcType = LLVM::LLVMPointerType::get(rewriter.getContext(), 8);
   Value numRecordsByte = int_val(32, std::numeric_limits<int>::max() - 1);
