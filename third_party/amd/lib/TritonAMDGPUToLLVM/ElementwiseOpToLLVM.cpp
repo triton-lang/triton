@@ -348,6 +348,7 @@ static Value convertBf16ToFp32(Location loc,
 static Value convertFp32ToBf16(Location loc,
                                ConversionPatternRewriter &rewriter,
                                const Value &v, const RoundingMode rounding) {
+  llvm::outs() << "============================================\n";
   if (rounding == RoundingMode::RTZ) {
     auto as_int32 = bitcast(v, i32_ty);
     auto shifted = lshr(i32_ty, as_int32, i32_val(16));
@@ -361,6 +362,7 @@ static Value convertFp32ToBf16(Location loc,
   std::string cmp_ins_str = "v_cmp_u_f32";
   auto &check_nan = *builder.create(cmp_ins_str);
   // output chk_nan: uint32_tx2
+  // auto val_0 = i64_val(0);
   auto is_nan = builder.newOperand("=s");
   // input v : f32
   auto in_f32 = builder.newOperand(v, "+v");
@@ -370,7 +372,8 @@ static Value convertFp32ToBf16(Location loc,
   std::string ins_bfe = "v_bfe_u32";
   auto &bfe = *builder.create(ins_bfe);
   // output tmp
-  auto tmp = builder.newOperand("+v");
+  Value tmp_val = i32_val(0);
+  auto tmp = builder.newOperand(tmp_val, "+v");
   auto val_16 = i32_val(0x7FFF000);
   auto val_1  = i32_val(1);
   auto offset = builder.newOperand(val_16, "v");
@@ -399,9 +402,13 @@ static Value convertFp32ToBf16(Location loc,
 
   auto res = builder.launch(rewriter, loc, i32_ty, false);
 
-  auto i16x2VecTy = vec_ty(i16_ty, 2);
-  Value retVec = bitcast(res, i16x2VecTy);
-  return extract_element(i16_ty, retVec, i32_val(0));
+  std::string asm_str = builder.dump();
+  llvm::outs() << "asm_str = \n";
+  llvm::outs() << asm_str << "\n"; 
+
+  auto bf16x2VecTy = vec_ty(bf16_ty, 2);
+  Value retVec = bitcast(res, bf16x2VecTy);
+  return extract_element(bf16_ty, retVec, i32_val(0));
 
   // auto as_uint32 = bitcast(v, i32_ty);
   // auto check_exponent =
@@ -949,6 +956,7 @@ struct ElementwiseOpConversion
                                     ConversionPatternRewriter &rewriter,
                                     Type elemTy, MultipleOperandsRange operands,
                                     Location loc) const {
+    llvm::outs() << "amdCreateDestOps\n";
     return {rewriter.create<DestOp>(loc, elemTy, operands[0],
                                     adaptor.getAttributes().getValue())};
   }
