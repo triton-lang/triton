@@ -362,23 +362,25 @@ static Value convertFp32ToBf16(Location loc,
   std::string cmp_ins_str = "v_cmp_u_f32";
   auto &check_nan = *builder.create(cmp_ins_str);
   // output chk_nan: uint32_tx2
-  auto val_0 = i64_val(0);
-  auto is_nan = builder.newOperand(val_0, "+s");
+  // auto val_0 = i64_val(0);
+  auto is_nan = builder.newOperand("=s");
   // input v : f32
   auto in_f32 = builder.newOperand(v, "+v");
   check_nan(is_nan, in_f32, in_f32);
+  auto is_nan_ret = builder.launch(rewriter, loc, i64_ty, false);
 
   // build v_bfe_u32 instruction
   std::string ins_bfe = "v_bfe_u32";
   auto &bfe = *builder.create(ins_bfe);
   // output tmp
-  Value tmp_val = i32_val(0);
-  auto tmp = builder.newOperand(tmp_val, "+v");
+  // Value tmp_val = i32_val(0);
+  auto tmp = builder.newOperand("=v");
   auto val_16 = i32_val(0x7FFF000);
   auto val_1  = i32_val(1);
   auto offset = builder.newOperand(val_16, "v");
   auto sz = builder.newOperand(val_1, "v");
   bfe(tmp, in_f32, offset, sz);
+  auto tmp_ret = builder.launch(rewriter, loc, i32_ty, false);
 
   // build v_add3_u32 instruction
   std::string add3_str = "v_add3_u32";
@@ -386,20 +388,27 @@ static Value convertFp32ToBf16(Location loc,
   // input: round_bais
   auto val_7FFF = i32_val(0x7FFF);
   auto round_bias = builder.newOperand(val_7FFF, "v");
-  add3(tmp, in_f32, tmp, round_bias);
+  auto tmp_in = builder.newOperand(tmp_ret, "v");
+  add3(tmp, in_f32, tmp_in, round_bias);
+  auto tmp_ret1 = builder.launch(rewriter, loc, i32_ty, false);
 
   // build v_cndmask_b32
   std::string cndmask_str = "v_cndmask_b32";
   auto &cndmask = *builder.create(cndmask_str);
   auto val_nan = i32_val(0x7FFF0000);
   auto f32_nan = builder.newOperand(val_nan, "v");
-  cndmask(in_f32, tmp, f32_nan, is_nan);
+  auto tmp_in1 = builder.newOperand(tmp_ret1, "v");
+  auto is_nan_in = builder.newOperand(is_nan_ret, "v");
+  auto cndmask_out = builder.newOperand("=v");
+  cndmask(cndmask_out, tmp_in1, f32_nan, is_nan_in);
+  auto cndmask_ret = builder.launch(rewriter, loc, i32_ty, false);
 
   // build v_lshrrev_b32
   std::string lshrrev_str = "v_lshrrev_b32";
   auto &lshrrev = *builder.create(lshrrev_str);
   auto output = builder.newOperand("=v");
-  lshrrev(output, offset, in_f32);
+  auto cndmask_in = builder.newOperand(cndmask_ret, "v");
+  lshrrev(output, offset, cndmask_in);
 
   auto res = builder.launch(rewriter, loc, i32_ty, false);
 
