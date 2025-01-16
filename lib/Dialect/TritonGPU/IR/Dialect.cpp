@@ -2584,24 +2584,21 @@ struct TritonGPUInferLayoutInterface
           applyPermutation(invOrderUnsigned, enc.getOrder()), *ctaLayout);
       return success();
     }
-    if (auto ll = toLinearLayout(shape, operandEncoding)) {
-      auto namedBases = ll->getBases();
-      for (auto &bases : llvm::make_second_range(namedBases)) {
-        for (auto &b : bases) {
-          std::vector<int32_t> newB;
-          for (int i = 0; i < order.size(); i++) {
-            newB.push_back(b[order[i]]);
-          }
-          b = std::move(newB);
+    auto ll = *toLinearLayout(shape, operandEncoding);
+    auto namedBases = ll.getBases();
+    for (auto &bases : llvm::make_second_range(namedBases)) {
+      for (auto &b : bases) {
+        std::vector<int32_t> newB;
+        for (int i = 0; i < order.size(); i++) {
+          newB.push_back(b[order[i]]);
         }
+        b = std::move(newB);
       }
-      auto retLl = LinearLayout(std::move(namedBases),
-                                llvm::to_vector(ll->getOutDimNames()));
-      resultEncoding = LinearEncodingAttr::get(ctx, std::move(retLl));
-      return success();
     }
-
-    return failure(); // unhandled encoding
+    auto retLl = LinearLayout(std::move(namedBases),
+                              llvm::to_vector(ll.getOutDimNames()));
+    resultEncoding = LinearEncodingAttr::get(ctx, std::move(retLl));
+    return success();
   }
 
   LogicalResult
