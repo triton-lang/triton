@@ -160,10 +160,10 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK-LABEL:   tt.func @forOp(
 // CHECK-SAME:                   %[[VAL_0:.*]]: !tt.ptr<f32>,
 // CHECK-SAME:                   %[[VAL_1:.*]]: tensor<1024xf32>) -> tensor<1024xf32> {
-// CHECK:           %[[VAL_2:.*]] = arith.constant 1024 : i32
-// CHECK:           %[[VAL_3:.*]] = arith.constant 0 : index
-// CHECK:           %[[VAL_4:.*]] = arith.constant 128 : index
-// CHECK:           %[[VAL_5:.*]] = arith.constant 1 : index
+// CHECK-DAG:       %[[VAL_2:.*]] = arith.constant 1024 : i32
+// CHECK-DAG:       %[[VAL_3:.*]] = arith.constant 0 : index
+// CHECK-DAG:       %[[VAL_4:.*]] = arith.constant 128 : index
+// CHECK-DAG:       %[[VAL_5:.*]] = arith.constant 1 : index
 // CHECK:           %[[VAL_6:.*]] = tt.get_program_id x : i32
 // CHECK:           %[[VAL_7:.*]] = arith.muli %[[VAL_6]], %[[VAL_2]] : i32
 // CHECK:           %[[VAL_8:.*]] = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
@@ -217,11 +217,11 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK-LABEL:   tt.func @forOp2(
 // CHECK-SAME:                    %[[VAL_0:.*]]: !tt.ptr<f32>,
 // CHECK-SAME:                    %[[VAL_1:.*]]: tensor<1024xf32>) -> tensor<1024xf32> {
-// CHECK:           %[[VAL_2:.*]] = arith.constant dense<0> : tensor<1024xi64>
-// CHECK:           %[[VAL_3:.*]] = arith.constant 1024 : i32
-// CHECK:           %[[VAL_4:.*]] = arith.constant 0 : index
-// CHECK:           %[[VAL_5:.*]] = arith.constant 128 : index
-// CHECK:           %[[VAL_6:.*]] = arith.constant 1 : index
+// CHECK-DAG:       %[[VAL_2:.*]] = arith.constant dense<0> : tensor<1024xi64>
+// CHECK-DAG:       %[[VAL_3:.*]] = arith.constant 1024 : i32
+// CHECK-DAG:       %[[VAL_4:.*]] = arith.constant 0 : index
+// CHECK-DAG:       %[[VAL_5:.*]] = arith.constant 128 : index
+// CHECK-DAG:       %[[VAL_6:.*]] = arith.constant 1 : index
 // CHECK:           %[[VAL_7:.*]] = tt.get_program_id x : i32
 // CHECK:           %[[VAL_8:.*]] = arith.muli %[[VAL_7]], %[[VAL_3]] : i32
 // CHECK:           %[[VAL_9:.*]] = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
@@ -276,11 +276,11 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK-LABEL:   tt.func @forNested(
 // CHECK-SAME:                       %[[VAL_0:.*]]: !tt.ptr<f32>,
 // CHECK-SAME:                       %[[VAL_1:.*]]: tensor<1024xf32>) -> tensor<1024xf32> {
-// CHECK:           %[[VAL_2:.*]] = arith.constant dense<0> : tensor<1024xi64>
-// CHECK:           %[[VAL_3:.*]] = arith.constant 1024 : i32
-// CHECK:           %[[VAL_4:.*]] = arith.constant 0 : index
-// CHECK:           %[[VAL_5:.*]] = arith.constant 128 : index
-// CHECK:           %[[VAL_6:.*]] = arith.constant 1 : index
+// CHECK-DAG:       %[[VAL_2:.*]] = arith.constant dense<0> : tensor<1024xi64>
+// CHECK-DAG:       %[[VAL_3:.*]] = arith.constant 1024 : i32
+// CHECK-DAG:       %[[VAL_4:.*]] = arith.constant 0 : index
+// CHECK-DAG:       %[[VAL_5:.*]] = arith.constant 128 : index
+// CHECK-DAG:       %[[VAL_6:.*]] = arith.constant 1 : index
 // CHECK:           %[[VAL_7:.*]] = tt.get_program_id x : i32
 // CHECK:           %[[VAL_8:.*]] = arith.muli %[[VAL_7]], %[[VAL_3]] : i32
 // CHECK:           %[[VAL_9:.*]] = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
@@ -333,8 +333,8 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK-SAME:                  %[[VAL_0:.*]]: !tt.ptr<f32>,
 // CHECK-SAME:                  %[[VAL_1:.*]]: tensor<1024xf32>,
 // CHECK-SAME:                  %[[VAL_2:.*]]: i1) -> tensor<1024xf32> {
-// CHECK:           %[[VAL_3:.*]] = arith.constant dense<0> : tensor<1024xi64>
-// CHECK:           %[[VAL_4:.*]] = arith.constant 1024 : i32
+// CHECK-DAG:       %[[VAL_3:.*]] = arith.constant dense<0> : tensor<1024xi64>
+// CHECK-DAG:       %[[VAL_4:.*]] = arith.constant 1024 : i32
 // CHECK:           %[[VAL_5:.*]] = tt.get_program_id x : i32
 // CHECK:           %[[VAL_6:.*]] = arith.muli %[[VAL_5]], %[[VAL_4]] : i32
 // CHECK:           %[[VAL_7:.*]] = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
@@ -352,13 +352,11 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           %[[VAL_16:.*]] = tt.load %[[VAL_15]] : tensor<1024x!tt.ptr<f32>>
 // CHECK:           tt.return %[[VAL_16]] : tensor<1024xf32>
 // CHECK:         }
-// CHECK:         tt.func private @evaluate_condition() -> i1
 
 // -----
 
 
 module attributes {"ttg.num-warps" = 4 : i32} {
-  tt.func private @evaluate_condition() -> i1
   tt.func @whileOp(%arg0: !tt.ptr<f32>, %arg1: tensor<1024xf32>) -> tensor<1024xf32> {
     %c1024_i32 = arith.constant 1024 : i32
     %c0 = arith.constant 0 : index
@@ -429,8 +427,8 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK-LABEL:   tt.func @condBranch(
 // CHECK-SAME:                        %[[VAL_0:.*]]: !tt.ptr<f32>,
 // CHECK-SAME:                        %[[VAL_1:.*]]: i1) -> tensor<1024xf32> {
-// CHECK:           %[[VAL_2:.*]] = arith.constant dense<0> : tensor<1024xi64>
-// CHECK:           %[[VAL_3:.*]] = arith.constant 1024 : i32
+// CHECK-DAG:       %[[VAL_2:.*]] = arith.constant dense<0> : tensor<1024xi64>
+// CHECK-DAG:       %[[VAL_3:.*]] = arith.constant 1024 : i32
 // CHECK:           %[[VAL_4:.*]] = tt.get_program_id x : i32
 // CHECK:           %[[VAL_5:.*]] = arith.muli %[[VAL_4]], %[[VAL_3]] : i32
 // CHECK:           %[[VAL_6:.*]] = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
@@ -625,8 +623,8 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK-LABEL:   tt.func @select(
 // CHECK-SAME:                    %[[VAL_0:.*]]: !tt.ptr<f32>,
 // CHECK-SAME:                    %[[VAL_1:.*]]: i1) -> tensor<1024xf32> {
-// CHECK:           %[[VAL_2:.*]] = arith.constant dense<0> : tensor<1024xi64>
-// CHECK:           %[[VAL_3:.*]] = arith.constant 1024 : i32
+// CHECK-DAG:       %[[VAL_2:.*]] = arith.constant dense<0> : tensor<1024xi64>
+// CHECK-DAG:       %[[VAL_3:.*]] = arith.constant 1024 : i32
 // CHECK:           %[[VAL_4:.*]] = tt.get_program_id x : i32
 // CHECK:           %[[VAL_5:.*]] = arith.muli %[[VAL_4]], %[[VAL_3]] : i32
 // CHECK:           %[[VAL_6:.*]] = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
@@ -645,7 +643,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 
 module attributes {"ttg.num-ctas" = 1 : i32} {
-  tt.func @where_kernel(%arg0: !tt.ptr<i64>, %arg1: !tt.ptr<i64>, %arg2: !tt.ptr<i64>, %cst: i8) -> tensor<1024xi64> {
+  tt.func @where_kernel(%arg0: !tt.ptr<i64>, %arg1: !tt.ptr<i64>, %cst: i8) -> tensor<1024xi64> {
     %c0_i8 = arith.constant 0 : i8
     %c1024_i32 = arith.constant 1024 : i32
     %0 = tt.get_program_id x : i32
@@ -664,9 +662,9 @@ module attributes {"ttg.num-ctas" = 1 : i32} {
 
 // I don't know why but FileCheck doesn't like check-same here and elsewhere where I've removed them...
 
-// CHECK:   tt.func @where_kernel(%[[VAL_0:.*]]: !tt.ptr<i64>, %[[VAL_1:.*]]: !tt.ptr<i64>, %[[VAL_2:.*]]: !tt.ptr<i64>, %[[VAL_3:.*]]: i8) -> tensor<1024xi64> {
-// CHECK:     %[[VAL_4:.*]] = arith.constant 0 : i8
-// CHECK:     %[[VAL_5:.*]] = arith.constant 1024 : i32
+// CHECK:   tt.func @where_kernel(%[[VAL_0:.*]]: !tt.ptr<i64>, %[[VAL_1:.*]]: !tt.ptr<i64>, %[[VAL_3:.*]]: i8) -> tensor<1024xi64> {
+// CHECK-DAG: %[[VAL_4:.*]] = arith.constant 0 : i8
+// CHECK-DAG: %[[VAL_5:.*]] = arith.constant 1024 : i32
 // CHECK:     %[[VAL_6:.*]] = tt.get_program_id x : i32
 // CHECK:     %[[VAL_7:.*]] = arith.muli %[[VAL_6]], %[[VAL_5]] : i32
 // CHECK:     %[[VAL_8:.*]] = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
@@ -708,9 +706,9 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK-LABEL:   tt.func @forOpWithHints(
 // CHECK-SAME:                            %[[VAL_0:.*]]: !tt.ptr<f32>,
 // CHECK-SAME:                            %[[VAL_1:.*]]: tensor<1024xf32>) -> tensor<1024xf32> {
-// CHECK:           %[[VAL_2:.*]] = arith.constant 0 : index
-// CHECK:           %[[VAL_3:.*]] = arith.constant 1 : index
-// CHECK:           %[[VAL_4:.*]] = arith.constant 128 : index
+// CHECK-DAG:       %[[VAL_2:.*]] = arith.constant 0 : index
+// CHECK-DAG:       %[[VAL_3:.*]] = arith.constant 1 : index
+// CHECK-DAG:       %[[VAL_4:.*]] = arith.constant 128 : index
 // CHECK:           %[[VAL_5:.*]] = tt.get_program_id x : i32
 // CHECK:           %[[VAL_6:.*]] = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
 // CHECK:           %[[VAL_7:.*]] = tt.addptr %[[VAL_0]], %[[VAL_5]] : !tt.ptr<f32>, i32
@@ -740,7 +738,7 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 
 module attributes {"ttg.num-warps" = 4 : i32} {
-  tt.func public @scalar_pointers(%arg0: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<i32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+  tt.func public @scalar_pointers(%arg0: !tt.ptr<i64> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     %c1_i32 = arith.constant 1 : i32
     %c0_i64 = arith.constant 0 : i64
     %c100_i32 = arith.constant 100 : i32
@@ -754,10 +752,10 @@ module attributes {"ttg.num-warps" = 4 : i32} {
   }
 }
 
-// CHECK:   tt.func public @scalar_pointers(%[[VAL_0:.*]]: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %[[VAL_1:.*]]: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %[[VAL_2:.*]]: !tt.ptr<i32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
-// CHECK:     %[[VAL_3:.*]] = arith.constant 0 : i64
-// CHECK:     %[[VAL_4:.*]] = arith.constant 1 : i32
-// CHECK:     %[[VAL_5:.*]] = arith.constant 100 : i32
+// CHECK:   tt.func public @scalar_pointers(%[[VAL_0:.*]]: !tt.ptr<i64> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+// CHECK-DAG: %[[VAL_3:.*]] = arith.constant 0 : i64
+// CHECK-DAG: %[[VAL_4:.*]] = arith.constant 1 : i32
+// CHECK-DAG: %[[VAL_5:.*]] = arith.constant 100 : i32
 // CHECK:     %[[VAL_6:.*]] = tt.addptr %[[VAL_0]], %[[VAL_4]] : !tt.ptr<i64>, i32
 // CHECK:     %[[VAL_7:.*]] = scf.for %[[VAL_8:.*]] = %[[VAL_4]] to %[[VAL_5]] step %[[VAL_4]] iter_args(%[[VAL_9:.*]] = %[[VAL_6]]) -> (!tt.ptr<i64>)  : i32 {
 // CHECK:       tt.store %[[VAL_9]], %[[VAL_3]] : !tt.ptr<i64>
@@ -791,8 +789,8 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK-SAME:                       %[[VAL_0:.*]]: !tt.ptr<f32>,
 // CHECK-SAME:                       %[[VAL_1:.*]]: tensor<1024xf32>,
 // CHECK-SAME:                       %[[VAL_2:.*]]: i1) -> f32 {
-// CHECK:           %[[VAL_3:.*]] = arith.constant 1 : i32
-// CHECK:           %[[VAL_4:.*]] = arith.constant 100 : i32
+// CHECK-DAG:       %[[VAL_3:.*]] = arith.constant 1 : i32
+// CHECK-DAG:       %[[VAL_4:.*]] = arith.constant 100 : i32
 // CHECK:           %[[VAL_5:.*]] = tt.addptr %[[VAL_0]], %[[VAL_3]] : !tt.ptr<f32>, i32
 // CHECK:           %[[VAL_6:.*]] = scf.if %[[VAL_2]] -> (!tt.ptr<f32>) {
 // CHECK:             %[[VAL_7:.*]] = tt.addptr %[[VAL_5]], %[[VAL_3]] : !tt.ptr<f32>, i32
@@ -899,10 +897,10 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 // CHECK-LABEL:   tt.func @flipFlopForOpSimple(
 // CHECK-SAME:      %[[VAL_0:.*]]: !tt.ptr<f32>, %[[VAL_1:.*]]: tensor<1024xf32>) -> tensor<1024xf32> {
-// CHECK:           %[[VAL_2:.*]] = arith.constant 1024 : i32
-// CHECK:           %[[VAL_3:.*]] = arith.constant 0 : index
-// CHECK:           %[[VAL_4:.*]] = arith.constant 128 : index
-// CHECK:           %[[VAL_5:.*]] = arith.constant 1 : index
+// CHECK-DAG:       %[[VAL_2:.*]] = arith.constant 1024 : i32
+// CHECK-DAG:       %[[VAL_3:.*]] = arith.constant 0 : index
+// CHECK-DAG:       %[[VAL_4:.*]] = arith.constant 128 : index
+// CHECK-DAG:       %[[VAL_5:.*]] = arith.constant 1 : index
 // CHECK:           %[[VAL_6:.*]] = tt.get_program_id x : i32
 // CHECK:           %[[VAL_7:.*]] = arith.muli %[[VAL_6]], %[[VAL_2]] : i32
 // CHECK:           %[[VAL_8:.*]] = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
@@ -966,10 +964,10 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 // CHECK-LABEL:   tt.func @flipFlopForOpComplex(
 // CHECK-SAME:      %[[VAL_0:.*]]: !tt.ptr<f32>, %[[VAL_1:.*]]: !tt.ptr<f32>, %[[VAL_2:.*]]: tensor<1024xf32>) -> (tensor<1024xf32>, tensor<1024xf32>) {
-// CHECK:           %[[VAL_3:.*]] = arith.constant 1024 : i32
-// CHECK:           %[[VAL_4:.*]] = arith.constant 0 : index
-// CHECK:           %[[VAL_5:.*]] = arith.constant 128 : index
-// CHECK:           %[[VAL_6:.*]] = arith.constant 1 : index
+// CHECK-DAG:       %[[VAL_3:.*]] = arith.constant 1024 : i32
+// CHECK-DAG:       %[[VAL_4:.*]] = arith.constant 0 : index
+// CHECK-DAG:       %[[VAL_5:.*]] = arith.constant 128 : index
+// CHECK-DAG:       %[[VAL_6:.*]] = arith.constant 1 : index
 // CHECK:           %[[VAL_7:.*]] = tt.get_program_id x : i32
 // CHECK:           %[[VAL_8:.*]] = arith.muli %[[VAL_7]], %[[VAL_3]] : i32
 // CHECK:           %[[VAL_9:.*]] = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>

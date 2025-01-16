@@ -32,7 +32,7 @@
 
 #define GEN_PASS_CLASSES
 #include "TritonAMDGPUTransforms/Passes.h.inc"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "mlir/Transforms/WalkPatternRewriteDriver.h"
 
 #define DEBUG_TYPE "tritonamdgpu-canonicalize-pointers"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -314,7 +314,7 @@ struct FatPointers {
            "expected fatPtrs to contain remapped fat pointer");
     return pointerAttrs.at(k);
   }
-  const bool contains(const KeyT &k) { return pointerAttrs.contains(k); }
+  bool contains(const KeyT &k) { return pointerAttrs.contains(k); }
 
 private:
   DenseMapT pointerAttrs;
@@ -418,33 +418,38 @@ static Value getSingleValue(ValueRange values) {
   return values.front();
 }
 
-/// This is convenience class that keeps track of (and removes from) opToRewrite
-/// after successful matchAndRewrite calls; subclasses must define
+/// This is convenience class (that is a copy-paste of some of
+/// OpConversionPattern) that keeps track of (and removes from) opToRewrite
+/// after successful matchAndRewrite_ calls; subclasses must define
 /// matchAndRewrite_ just as that would for conventional OpConversionPatterns.
 template <typename SourceOp>
-struct PointerCanonicalizationPattern : OpConversionPattern<SourceOp> {
+struct PointerCanonicalizationPattern : ConversionPattern {
+  using OpAdaptor = typename SourceOp::Adaptor;
+  using OneToNOpAdaptor =
+      typename SourceOp::template GenericAdaptor<ArrayRef<ValueRange>>;
+
   PointerCanonicalizationPattern(MLIRContext *context,
                                  llvm::SetVector<Operation *> &opsToRewrite,
                                  FatPointers &fatPtrs,
                                  PatternBenefit benefit = 1)
-      : OpConversionPattern<SourceOp>(context, benefit), fatPtrs(fatPtrs),
-        opToRewrite(opsToRewrite) {}
+      : ConversionPattern(SourceOp::getOperationName(), benefit, context),
+        fatPtrs(fatPtrs), opToRewrite(opsToRewrite) {}
 
-  virtual LogicalResult matchAndRewrite_(
-      SourceOp op,
-      typename OpConversionPattern<SourceOp>::OneToNOpAdaptor adaptor,
-      ConversionPatternRewriter &rewriter) const {
-    llvm_unreachable("must override matchAndRewrite_");
-  }
-
-  LogicalResult matchAndRewrite(
-      SourceOp op,
-      typename OpConversionPattern<SourceOp>::OneToNOpAdaptor adaptor,
-      ConversionPatternRewriter &rewriter) const override {
-    if (failed(matchAndRewrite_(op, adaptor, rewriter)))
+  LogicalResult
+  matchAndRewrite(Operation *op, ArrayRef<ValueRange> operands,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto sourceOp = cast<SourceOp>(op);
+    if (failed(matchAndRewrite_(sourceOp, OneToNOpAdaptor(operands, sourceOp),
+                                rewriter)))
       return failure();
     opToRewrite.remove(op);
     return success();
+  }
+
+  virtual LogicalResult
+  matchAndRewrite_(SourceOp op, OneToNOpAdaptor adaptor,
+                   ConversionPatternRewriter &rewriter) const {
+    llvm_unreachable("must override match or matchAndRewrite_");
   }
 
   FatPointers &fatPtrs;
@@ -900,15 +905,15 @@ public:
   LogicalResult
   matchAndRewrite_(arith::SelectOp selectOp, OneToNOpAdaptor adaptor,
                    ConversionPatternRewriter &rewriter) const override {
-    ArrayRef<ValueRange> remappedOperands = adaptor.getOperands();
-    if (remappedOperands[1].size() != 2 || remappedOperands[2].size() != 2)
+    if (adaptor.getTrueValue().size() != 2 ||
+        adaptor.getFalseValue().size() != 2)
       return rewriter.notifyMatchFailure(
           selectOp, "expected adaptor to have had both true and false operands "
                     "already remapped");
     // If both have been traversed, then we can rewrite select of pointers as a
     // select of base and offset
-    ValueRange fatPtrTrue = remappedOperands[1];
-    ValueRange fatPtrFalse = remappedOperands[2];
+    ValueRange fatPtrFalse = adaptor.getFalseValue();
+    ValueRange fatPtrTrue = adaptor.getTrueValue();
     // Simple case of a scalar select: update the base pointer
     if (!isa<RankedTensorType>(selectOp.getType())) {
       auto newSelectOp = rewriter.create<arith::SelectOp>(
@@ -1104,42 +1109,46 @@ public:
   }
 };
 
-/// tt.func gets rewritten differently from all of the other ops - the op itself
-/// is not rewritten but all tt.ptr args are rewritten (all uses) to be
-/// %1 = unrealize_cast(%arg0: tt.ptr, c0: i32) -> tt.ptr.
-/// This unrealized_cast remains through out the first pass of the dialect
-/// conversion and is then materialized in the second pass
-/// (ConvertUnrealizedConversionCastOp).
-class ConvertFuncOp : public PointerCanonicalizationPattern<tt::FuncOp> {
-public:
-  using PointerCanonicalizationPattern::PointerCanonicalizationPattern;
+static const std::string kInitFuncArgsRewritten =
+    kPtrCanonPrefix + "init-func-ptr-args";
+/// tt.func gets rewritten differently from all the other ops - the op itself is
+/// not rewritten. What is rewritten are all tt.ptr args are rewritten (all
+/// uses) to be %1 = unrealize_cast(%arg0: tt.ptr, c0: i32) -> tt.ptr. This
+/// unrealized_cast is then (possibly) materialized in the second pass
+/// (ConvertUnimplementedOpUnrealizedCasts) if it wasn't DCEd (via a user
+/// extracting the tt.ptr and c0 operands).
+struct InitFuncPtrArgs : OpRewritePattern<tt::FuncOp> {
+  InitFuncPtrArgs(MLIRContext *context, FatPointers &fatPtrs)
+      : OpRewritePattern(context, 0), fatPtrs(fatPtrs) {}
 
-  LogicalResult
-  matchAndRewrite_(tt::FuncOp funcOp, OneToNOpAdaptor adaptor,
-                   ConversionPatternRewriter &rewriter) const override {
+  LogicalResult matchAndRewrite(tt::FuncOp newOp,
+                                PatternRewriter &rewriter) const override {
+    if (newOp->hasAttr(kInitFuncArgsRewritten))
+      return failure();
+
     int64_t bitness = 64;
-    rewriter.setInsertionPointToStart(&funcOp.getBody().front());
-    rewriter.modifyOpInPlace(funcOp, [&] {
-      for (auto [idx, arg] : llvm::enumerate(funcOp.getArguments())) {
-        // The pointer argument needs to be a scalar
-        if (!isa<tt::PointerType>(arg.getType()))
-          continue;
-        if (auto pointerRangeAttr =
-                funcOp.getArgAttrOfType<IntegerAttr>(idx, "tt.pointer_range"))
-          bitness = pointerRangeAttr.getInt();
-        Value zeroOffset =
-            rewriter.create<arith::ConstantIntOp>(funcOp.getLoc(), 0, bitness);
-        auto dummyCast = rewriter.create<UnrealizedConversionCastOp>(
-            arg.getLoc(), TypeRange{arg.getType()}, ValueRange{arg});
-        rewriter.replaceUsesOfBlockArgument(arg, dummyCast.getResult(0));
-        // TODO(max): why is this true?
-        fatPtrs[{arg, zeroOffset}].canNarrow = true;
-        rewriter.replaceOpWithMultiple(dummyCast, {{arg, zeroOffset}});
-      }
-    });
+    rewriter.setInsertionPointToStart(&newOp.getBody().front());
+    for (auto [idx, arg] : llvm::enumerate(newOp.getArguments())) {
+      // The pointer argument needs to be a scalar
+      if (!isa<tt::PointerType>(arg.getType()))
+        continue;
+      if (auto pointerRangeAttr =
+              newOp.getArgAttrOfType<IntegerAttr>(idx, "tt.pointer_range"))
+        bitness = pointerRangeAttr.getInt();
+      Value zeroOffset =
+          rewriter.create<arith::ConstantIntOp>(newOp.getLoc(), 0, bitness);
+      auto dummyCast = rewriter.create<UnrealizedConversionCastOp>(
+          arg.getLoc(), TypeRange{arg.getType()}, ValueRange{arg, zeroOffset});
+      rewriter.replaceAllUsesExcept(arg, dummyCast.getResult(0), dummyCast);
+      // TODO(max): why is this true?
+      fatPtrs[{arg, zeroOffset}].canNarrow = true;
+    }
 
+    newOp->setDiscardableAttr(kInitFuncArgsRewritten, rewriter.getUnitAttr());
     return success();
   }
+
+  FatPointers &fatPtrs;
 };
 
 /// No-op to make conversion framework happy.
@@ -1156,16 +1165,60 @@ public:
   }
 };
 
-/// Rewrite %1 = unrealize_cast(%arg0: tt.ptr, c0: i32) -> tt.ptr inserted by
-/// ConvertFuncOp to be just %arg0: tt.ptr.
-class ConvertUnrealizedConversionCastOp
+class ConvertFuncOpArgsUnrealizedCasts
     : public PointerCanonicalizationPattern<UnrealizedConversionCastOp> {
 public:
   using PointerCanonicalizationPattern::PointerCanonicalizationPattern;
 
-  LogicalResult matchAndRewrite_(UnrealizedConversionCastOp castOp,
-                                 OneToNOpAdaptor adaptor,
-                                 ConversionPatternRewriter &rewriter) const {
+  LogicalResult
+  matchAndRewrite_(UnrealizedConversionCastOp castOp, OneToNOpAdaptor adaptor,
+                   ConversionPatternRewriter &rewriter) const override {
+    // Exhaustive checking we're converting ONLY unrealized_casts inserted (by
+    // the 1:N conversion) in ConvertFuncOp.
+    assert(std::distance(castOp->getUses().begin(), castOp->getUses().end()) >
+               0 &&
+           "expected at least 1 use of unrealized_cast");
+    ArrayRef<ValueRange> remappedOperands = adaptor.getOperands();
+    if (remappedOperands.size() != 2 || remappedOperands[0].size() != 1 ||
+        remappedOperands[1].size() != 1)
+      return rewriter.notifyMatchFailure(
+          castOp, "expected CastOp to have already been remapped");
+    Value fatPtrBase = remappedOperands[0][0];
+    if (!llvm::isa<BlockArgument>(fatPtrBase) ||
+        !llvm::isa<tt::FuncOp>(fatPtrBase.getParentBlock()->getParentOp()) ||
+        !llvm::isa<tt::PointerType>(fatPtrBase.getType()))
+      return rewriter.notifyMatchFailure(
+          castOp,
+          "expected CastOp first operand to be tt.ptr block arg of tt.func");
+    Value fatPtrOffset = remappedOperands[1][0];
+    if (llvm::isa<BlockArgument>(fatPtrOffset) ||
+        !llvm::isa<arith::ConstantOp>(fatPtrOffset.getDefiningOp()))
+      return rewriter.notifyMatchFailure(
+          castOp, "expected CastOp second operand to be arith.constant");
+    OpFoldResult maybeScalar = getAsOpFoldResult(fatPtrOffset);
+    auto maybeAttr = llvm::dyn_cast<mlir::Attribute>(maybeScalar);
+
+    if (auto integerAttr =
+            llvm::dyn_cast_or_null<mlir::IntegerAttr>(maybeAttr)) {
+      if (integerAttr.getValue() == 0) {
+        rewriter.replaceOpWithMultiple(castOp, {{fatPtrBase, fatPtrOffset}});
+        return success();
+      }
+    }
+    return rewriter.notifyMatchFailure(
+        castOp,
+        "expected CastOp second operand to be arith.constant with value 0");
+  }
+};
+
+class ConvertUnimplementedOpUnrealizedCasts
+    : public PointerCanonicalizationPattern<UnrealizedConversionCastOp> {
+public:
+  using PointerCanonicalizationPattern::PointerCanonicalizationPattern;
+
+  LogicalResult
+  matchAndRewrite_(UnrealizedConversionCastOp castOp, OneToNOpAdaptor adaptor,
+                   ConversionPatternRewriter &rewriter) const override {
     assert(std::distance(castOp->getUses().begin(), castOp->getUses().end()) >
                0 &&
            "expected at least 1 use of unrealized_cast");
@@ -1280,33 +1333,37 @@ static void getForwardSliceImpl(OpOperand *use, Operation *op,
   forwardSlice->insert(op);
 }
 
-void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
-  ConversionTarget target(getContext());
-
-  // Leaving this here intentionally: if there is a global type converter
-  // registered then the dialect conversion framework will not unpack/remap the
-  // unrealized_cast and just send the result of the unrealized_cast;
-  // TypeConverter tyc; see
-  // https://github.com/llvm/llvm-project/blob/58389b220a9354ed6c34bdb9310a35165579c5e3/mlir/lib/Transforms/Utils/DialectConversion.cpp#L1179-L1185
-  RewritePatternSet patterns(&getContext());
-
+static FailureOr<tt::FuncOp> getFunc(Operation *moduleOp) {
   SmallVector<tt::FuncOp> funcOps;
-  getOperation().walk<WalkOrder::PreOrder>([&funcOps](tt::FuncOp op) {
+  moduleOp->walk<WalkOrder::PreOrder>([&funcOps](tt::FuncOp op) {
     if (op.isPrivate())
       return WalkResult::skip();
     funcOps.push_back(op);
     return WalkResult::advance();
   });
   if (funcOps.size() != 1) {
-    getOperation().emitError("only one tt.func supported");
-    return signalPassFailure();
+    moduleOp->emitError("only one tt.func supported");
+    return {};
   }
 
-  tt::FuncOp func = funcOps[0];
+  return {funcOps[0]};
+}
+
+void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
+
+  FatPointers fatPrs;
+  RewritePatternSet patterns(&getContext());
+  // Convert tt.func; %1 = unrealize_cast(%arg0: tt.ptr, c0: i32) -> tt.ptr
+  patterns.add<InitFuncPtrArgs>(patterns.getContext(), fatPrs);
+  walkAndApplyPatterns(getOperation(), std::move(patterns));
+  patterns.clear();
+
+  auto func = getFunc(getOperation());
+  if (failed(func))
+    return signalPassFailure();
 
   llvm::SetVector<Operation *> opsToRewrite;
-  opsToRewrite.insert(func);
-  for (auto arg : func.getArguments()) {
+  for (auto arg : func->getArguments()) {
     if (llvm::isa<tt::PointerType>(arg.getType())) {
       // NB: reusing the same SetVector invalidates the topo order implied by
       // getForwardSlice
@@ -1315,6 +1372,9 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
     }
   }
 
+  ConversionConfig config;
+  config.buildMaterializations = false;
+  ConversionTarget target(getContext());
   auto isLegal = [&opsToRewrite](Operation *op) {
     if (auto ifOp = llvm::dyn_cast<scf::IfOp>(op)) {
       // This is the only hack in the entire pass; on first traversal,
@@ -1336,27 +1396,36 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   target.addDynamicallyLegalDialect<cf::ControlFlowDialect>(isLegal);
   target.addDynamicallyLegalDialect<arith::ArithDialect>(isLegal);
 
-  FatPointers fatPrs;
-
-  patterns.add<ConvertFuncOp, ConvertBroadcastOp, ConvertSplatOp,
-               ConvertAddPtrOp, ConvertLoadOp, ConvertStoreOp, ConvertSCFForOp,
-               ConvertSCFYieldOp, ConvertSCFIfOp, ConvertSCFConditionOp,
-               ConvertSCFWhileOp, ConvertCFCondBranch, ConvertCFBranch,
-               ConvertArithSelectOp, ConvertReturnOp>(patterns.getContext(),
-                                                      opsToRewrite, fatPrs);
-  ConversionConfig config;
-  config.buildMaterializations = false;
-  if (failed(applyPartialConversion(func, target, std::move(patterns), config)))
-    return signalPassFailure();
-
+  // Rewrite the rest of the ops.
+  // Note we *do not* declare unrealized_cast an
+  // illegal op here in order that the whole conversion passes, even if there are
+  // tt ops that we do not currently support (their operands will be handled by
+  // ConvertUnimplementedOpUnrealizedCasts below).
+  // Note we *do* add ConvertFuncOpArgsUnrealizedCasts because that is necessary
+  // for "initializing" the chain of fat pointers starting from tt.func tt.ptr
+  // args.
   patterns.clear();
-  target.addIllegalOp<UnrealizedConversionCastOp>();
-  patterns.add<ConvertUnrealizedConversionCastOp>(patterns.getContext(),
-                                                  opsToRewrite, fatPrs);
-  if (failed(applyPartialConversion(func, target, std::move(patterns), config)))
+  patterns.add<ConvertFuncOpArgsUnrealizedCasts, ConvertBroadcastOp,
+               ConvertSplatOp, ConvertAddPtrOp, ConvertLoadOp, ConvertStoreOp,
+               ConvertSCFForOp, ConvertSCFYieldOp, ConvertSCFIfOp,
+               ConvertSCFConditionOp, ConvertSCFWhileOp, ConvertCFCondBranch,
+               ConvertCFBranch, ConvertArithSelectOp, ConvertReturnOp>(
+      patterns.getContext(), opsToRewrite, fatPrs);
+  if (failed(
+          applyPartialConversion(*func, target, std::move(patterns), config)))
     return signalPassFailure();
 
-  func.walk<WalkOrder::PreOrder>([](Operation *op) {
+  // Rewrite any lingering unrealized_casts that *should* only be the result of
+  // unsupported ops.
+  target.addIllegalOp<UnrealizedConversionCastOp>();
+  patterns.clear();
+  patterns.add<ConvertUnimplementedOpUnrealizedCasts>(patterns.getContext(),
+                                                      opsToRewrite, fatPrs);
+  if (failed(
+          applyPartialConversion(*func, target, std::move(patterns), config)))
+    return signalPassFailure();
+
+  func->walk<WalkOrder::PreOrder>([](Operation *op) {
     for (auto attr : op->getDiscardableAttrs()) {
       if (attr.getName().strref().starts_with(kPtrCanonPrefix))
         op->removeDiscardableAttr(attr.getName());
