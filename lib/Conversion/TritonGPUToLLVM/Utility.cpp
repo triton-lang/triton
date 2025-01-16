@@ -210,7 +210,9 @@ Value getSmemVecAddr(RankedTensorType registerTy,
   auto smemBase = smemObj.getBase();
   auto smemOffsets = smemObj.getOffsets();
   auto smemOrder = sharedEnc.getOrder();
-  auto smemStrides = smemObj.getStrides(allocShape, smemOrder, loc, rewriter);
+  auto allocShapePerCTA = triton::gpu::getShapePerCTA(sharedEnc, allocShape);
+  auto smemStrides =
+      smemObj.getStrides(allocShapePerCTA, smemOrder, loc, rewriter);
   Value smemOffset;
   // When loading or storing to shared memory, we consider two cases for
   // performance reasons:
