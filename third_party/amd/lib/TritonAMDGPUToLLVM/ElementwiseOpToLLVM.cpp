@@ -97,67 +97,72 @@ Fp16_to_Fp8E5M2_RTZ(Location loc, ConversionPatternRewriter &rewriter,
 // According to
 // https://www.opencompute.org/documents/ocp-8-bit-floating-point-specification-ofp8-revision-1-0-2023-12-01-pdf-1,
 // In saturation mode, inf and out-of-range numbers are converted to the largest
-// normal number, i.e. ±448. NaNs are converted to NaNs. And those smaller than
-// the smallest subnormals are flushed to ±0.
+// normal number, i.e. ±448. NaNs are converted to NaNs.
 static Value
 Fp16_to_Fp8E4M3FN_RTNE_oneValue(Location loc,
                                 ConversionPatternRewriter &rewriter, Value v) {
-  Value vi16 = bitcast(v, i16_ty);
-
   StringRef funcName = "llvm.is.fpclass";
   Value isNaN = LLVM::createLLVMIntrinsicCallOp(rewriter, loc, funcName, i1_ty,
                                                 {v, i32_val(0x3)})
                     ->getResult(0);
 
+  // Get sign and absolute value
+  Value vi16 = bitcast(v, i16_ty);
+  Value sign = trunc(i8_ty, lshr(and_(vi16, i16_val(0x8000)), i16_val(8)));
+  vi16 = and_(vi16, i16_val(0x7FFF));
+
   // Rounding to nearest even
-  constexpr uint16_t remainingMantissaLSBMask = 0x0080;
-  constexpr uint16_t baseRoundingBias = 0x007F; // 1 << (10 - 3 - 1) - 1
+  constexpr uint16_t baseRoundingBias = 0x003F; // 1 << (10 - 3 - 1) - 1
 
   // S.EEEEE.MMMMMMMMMM => 0.00000.00M0000000 => 0.00000.000000000M
-  Value remainingMantissaLSB =
-      lshr(and_(vi16, i16_val(remainingMantissaLSBMask)), i16_val(7));
-
+  Value remainingMantissaLSB = lshr(and_(vi16, i16_val(0x0080)), i16_val(7));
   Value roundingBias = add(remainingMantissaLSB, i16_val(baseRoundingBias));
   Value vFp8 = add(vi16, roundingBias);
 
   // Reduce mantissa to 3 bits
-  vFp8 = and_(vFp8, i16_val(0xFF80)); // 0xFF80 === 1.11111.1110000000
+  vFp8 = and_(vFp8, i16_val(0xFF80)); // 0xFF80 == 1.11111.1110000000
 
-  // Remove sign bit
-  vFp8 = and_(vFp8, i16_val(0x7FFF));
-
-  // Round numbers smaller than the smallest normal number in FP8 to 0, 0x2400
-  // is the FP16 representation of 2^{-6}, which is the smallest normal number
-  // in FP8E4M3FN.
-  Value isSubnormal = icmp_ult(vFp8, i16_val(0x2400));
-
-  // S.11111.0000000000 0x5F7F === 0.10111.1101111111 is the largest possible
-  // normal number(including infinity) after rounding in FP8
-  constexpr uint16_t largestPossibleNormal = 0x5F7F;
-  Value isOverflowOrInf = icmp_ugt(vFp8, i16_val(largestPossibleNormal));
+  // 0x2400 is the FP16 representation of 2^{-6}, which is the smallest normal
+  // number in FP8E4M3FN. We round numbers smaller than that to 0x2400 to make
+  // it easier to handle subnormals
+  vFp8 = umax(vFp8, i16_val(0x2400));
 
   // Adjust exponent bias
-  vFp8 = sub(vFp8, i16_val((15 - 7) << 10));
+  vFp8 = sub(vFp8, i16_val(0x2000)); // (15 - 7) << 10
 
   // Shift right and truncate
-  vFp8 = lshr(vFp8, i16_val(7)); // 10 - 3
-  vFp8 = trunc(i8_ty, vFp8);
+  vFp8 = trunc(i8_ty, lshr(vFp8, i16_val(7))); // 10 - 3
 
+  // 0x5F7F == 0.10111.1101111111 is the largest possible normal
+  // number(including infinity) after rounding in FP8
+  //
   // In saturation mode, numbers larger than the max normal number(including
   // infinity) in FP8 after rounding will be replaced with max_E4M3, i.e. 0x7E
   // === 0.1111.110
+  Value isOverflowOrInf = icmp_ugt(vi16, i16_val(0x5F7F));
   vFp8 = select(isOverflowOrInf, i8_val(0x7E), vFp8);
 
-  // Flush subnormals to zeros
-  vFp8 = select(isSubnormal, i8_val(0), vFp8);
+  // Round subnormals to nearest even. Ref:
+  // https://github.com/openxla/xla/blob/f20c6fe2/xla/service/elemental_ir_emitter.cc#L272
+  constexpr size_t lutSize = 8;
+  constexpr float halfwayPointsLUT[lutSize] = {0x1400, 0x1A00, 0x1D00, 0x1F00,
+                                               0x2080, 0x2180, 0x2280, 0x2380};
+
+  for (int i = lutSize - 1; i >= 0; i--) {
+    Value cmp;
+    if (i % 2 == 0) {
+      cmp = icmp_ule(vi16, i16_val(halfwayPointsLUT[i]));
+    } else {
+      cmp = icmp_ult(vi16, i16_val(halfwayPointsLUT[i]));
+    }
+
+    vFp8 = select(cmp, i8_val(i), vFp8);
+  }
 
   // NaN remains NaN after conversion
   vFp8 = select(isNaN, i8_val(0x7F), vFp8);
 
   // Set sign bit
-  Value sign = and_(vi16, i16_val(0x8000));
-  sign = lshr(sign, i16_val(8));
-  sign = trunc(i8_ty, sign);
   vFp8 = or_(vFp8, sign);
 
   return vFp8;
