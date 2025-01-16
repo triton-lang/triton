@@ -167,7 +167,8 @@ static Value getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter,
   auto newType = MemDescType::get(argType.getShape(), argType.getElementType(),
                                   newLayout, SharedMemorySpace);
   rewriter.setInsertionPointAfterValue(arg);
-  return rewriter.create<LocalAllocOp>(arg.getLoc(), newType, arg);
+  const int32_t alignment = newLayout.getAlignment();
+  return rewriter.create<LocalAllocOp>(arg.getLoc(), newType, arg, alignment);
 }
 
 SmallVector<unsigned, 3>

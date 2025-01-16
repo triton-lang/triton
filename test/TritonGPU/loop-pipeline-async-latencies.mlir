@@ -19,8 +19,8 @@ tt.func public @matmul_kernel_tma_persistent(%arg0: !tt.ptr<i8, 0> {tt.nv_tma_de
   %1 = tt.reinterpret_tensor_descriptor %arg0 : !tt.ptr<i8, 0> to !tt.tensordesc<tensor<128x64xf16>>
   %2 = tt.reinterpret_tensor_descriptor %arg1 : !tt.ptr<i8, 0> to !tt.tensordesc<tensor<256x64xf16>>
 
-  // CHECK: [[LHS_BUFFERS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x128x64xf16,
-  // CHECK: [[RHS_BUFFERS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<4x256x64xf16,
+  // CHECK: [[LHS_BUFFERS:%.*]] = ttg.local_alloc {alignment = 1024 : i32} : () -> !ttg.memdesc<2x128x64xf16,
+  // CHECK: [[RHS_BUFFERS:%.*]] = ttg.local_alloc {alignment = 1024 : i32} : () -> !ttg.memdesc<4x256x64xf16,
 
   // CHECK: [[LHS_BARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64,
   // CHECK-NEXT: [[LHS_BAR0:%.*]] = ttg.memdesc_subview [[LHS_BARS]][%c0_i32]

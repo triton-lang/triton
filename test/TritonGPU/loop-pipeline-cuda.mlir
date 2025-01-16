@@ -172,8 +172,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 //   CHECK-LABEL: @matmul_tma
-//     CHECK-DAG:   ttg.local_alloc  : () -> !ttg.memdesc<3x128x64xf16, #{{.+}}, #smem, mutable>
-//     CHECK-DAG:   ttg.local_alloc  : () -> !ttg.memdesc<3x64x256xf16, #{{.+}}, #smem, mutable>
+//     CHECK-DAG:   ttg.local_alloc {alignment = 1024 : i32} : () -> !ttg.memdesc<3x128x64xf16, #{{.+}}, #smem, mutable>
+//     CHECK-DAG:   ttg.local_alloc {alignment = 1024 : i32} : () -> !ttg.memdesc<3x64x256xf16, #{{.+}}, #smem, mutable>
 //     CHECK-DAG:   ttg.local_alloc  : () -> !ttg.memdesc<3xi64, #{{.+}}, #smem, mutable>
 // CHECK-COUNT-3:   ttng.init_barrier
 // CHECK-COUNT-4:   ttng.async_tma_copy_global_to_local

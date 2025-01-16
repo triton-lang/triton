@@ -33,7 +33,7 @@ static Value createAlloc(scf::ForOp &forOp,
   auto ty = cast<RankedTensorType>(storeOp.getSrc().getType());
   auto order = ttg::getOrder(ty.getEncoding());
   auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
-  Attribute encoding =
+  auto encoding =
       ttg::SharedEncodingAttr::get(ty.getContext(), 1, 1, 1, order, ctaLayout);
   if (ty.getRank() > 1) {
     encoding = ttg::SharedEncodingAttr::get(
@@ -44,8 +44,9 @@ static Value createAlloc(scf::ForOp &forOp,
   Type memdescType =
       ttg::MemDescType::get(ty.getShape(), ty.getElementType(), encoding,
                             sharedMemorySpace, /*mutableMemory*/ true);
-  Value alloc = builder.create<ttg::LocalAllocOp>(storeOp->getLoc(),
-                                                  memdescType, Value());
+  const int32_t alignment = encoding.getAlignment();
+  Value alloc = builder.create<ttg::LocalAllocOp>(
+      storeOp->getLoc(), memdescType, Value(), alignment);
   return alloc;
 }
 

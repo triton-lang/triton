@@ -549,8 +549,9 @@ static Value createAlloc(scf::ForOp &forOp, Operation *loadOp,
   Type memdescType = ttg::MemDescType::get(bufferShape, ty.getElementType(),
                                            sharedEnc, sharedMemorySpace,
                                            /*mutableMemory=*/true);
-  Value alloc =
-      builder.create<ttg::LocalAllocOp>(loadOp->getLoc(), memdescType, Value());
+  const int32_t alignment = sharedEnc.getAlignment();
+  Value alloc = builder.create<ttg::LocalAllocOp>(loadOp->getLoc(), memdescType,
+                                                  Value(), alignment);
   return alloc;
 }
 

@@ -182,11 +182,12 @@ public:
       return failure();
     rewriter.setInsertionPoint(trans);
     auto sharedMemorySpace = SharedMemorySpaceAttr::get(getContext());
+    const int32_t alignment = newInnerCvtEnc.getAlignment();
     auto alloc = rewriter.create<LocalAllocOp>(
         trans.getLoc(),
         MemDescType::get(srcTy.getShape(), srcTy.getElementType(),
                          newInnerCvtEnc, sharedMemorySpace),
-        trans.getSrc());
+        trans.getSrc(), alignment);
     auto newTrans = rewriter.create<MemDescTransOp>(trans.getLoc(), alloc,
                                                     ArrayRef<int32_t>({1, 0}));
     rewriter.replaceOpWithNewOp<LocalLoadOp>(trans, sharedLoadTy, newTrans);
@@ -359,8 +360,9 @@ public:
     MemDescType innerTy =
         MemDescType::get(srcTy.getShape(), srcTy.getElementType(), newInnerEnc,
                          allocType.getMemorySpace());
+    const int32_t alignment = newInnerEnc.getAlignment();
     auto newAlloc = rewriter.create<LocalAllocOp>(allocOp.getLoc(), innerTy,
-                                                  trans.getSrc());
+                                                  trans.getSrc(), alignment);
     rewriter.replaceOpWithNewOp<MemDescTransOp>(allocOp, newAlloc,
                                                 ArrayRef<int32_t>({1, 0}));
     return success();

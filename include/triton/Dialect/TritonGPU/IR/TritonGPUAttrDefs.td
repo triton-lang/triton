@@ -432,7 +432,9 @@ compared to 1*64 when the hasLeadingOffset is false.
     }]>
   ];
 
-  let extraClassDeclaration = extraBaseClassDeclaration;
+  let extraClassDeclaration = extraBaseClassDeclaration # [{
+    int32_t getAlignment() const;
+  }];
   let hasCustomAssemblyFormat = 1;
 }
 
