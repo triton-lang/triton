@@ -1017,6 +1017,17 @@ def TT_MakeTensorDescOp : TT_Op<"make_tensor_descriptor", [
   }];
 }
 
+def TT_ExperimentalUpdateTensorDescOp : TT_Op<"update_tensor_desc", [
+    MemoryEffects<[MemWrite<GlobalMemory>]>,
+    AttrSizedOperandSegments
+]> {
+  let arguments = (ins
+    TT_TensorDescType:$desc,
+    Optional<TT_Ptr>:$base,
+    Variadic<I32>:$shape
+  );
+}
+
 def ReinterpretTensorDescOp : TT_Op<"reinterpret_tensor_descriptor", [Pure]> {
   let summary = "Reinterpret a pointer as a tensor descriptor";
 
@@ -1297,7 +1308,7 @@ def TT_ExperimentalDescriptorStoreOp : TT_Op<"experimental_descriptor_store", [
   let hasVerifier = 1;
 }
 
-def TT_ExperimentalTensormapCreateOp: TT_Op<
+def TT_ExperimentalTensormapCreateOp : TT_Op<
   "experimental_tensormap_create",
   [
     MemoryEffects<[MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>,

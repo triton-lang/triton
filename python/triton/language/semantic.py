@@ -1875,3 +1875,8 @@ def make_tensor_descriptor(
     handle = builder.create_make_tensor_descriptor(base.handle, [s.handle for s in shape], [s.handle for s in strides],
                                                    block_shape)
     return tl._experimental_tensor_descriptor(handle, shape, strides, type)
+
+
+def update_tensor_descriptor(desc, base, shape, _builder):
+    _builder.create_update_tensor_descriptor(desc.handle, base.handle, [s.handle for s in shape])
+    return tl.tensor(None, tl.void)

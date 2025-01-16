@@ -17,9 +17,9 @@ using namespace mlir::triton::nvidia_gpu;
 
 namespace {
 
-void tensormap_cp_fenceproxy(Location loc, MLIRContext *ctx,
-                             ConversionPatternRewriter &rewriter, Value outPtr,
-                             Value inPtr) {
+void tensormap_cp_fenceproxy(Location loc, ConversionPatternRewriter &rewriter,
+                             Value outPtr, Value inPtr) {
+  MLIRContext *ctx = loc.getContext();
   PTXBuilder ptxBuilder;
 
   // prepare asm operands
@@ -41,10 +41,11 @@ void tensormap_cp_fenceproxy(Location loc, MLIRContext *ctx,
   ptxBuilder.launch(rewriter, loc, void_ty(ctx));
 };
 
-void tensormap_replace_generic(Location loc, MLIRContext *ctx,
+void tensormap_replace_generic(Location loc,
                                ConversionPatternRewriter &rewriter,
                                std::string fieldName, Value descPtr,
                                int32_t newVal) {
+  MLIRContext *ctx = loc.getContext();
   PTXBuilder ptxBuilder;
 
   // prepare asm operands
@@ -65,11 +66,13 @@ void tensormap_replace_generic(Location loc, MLIRContext *ctx,
   ptxBuilder.launch(rewriter, loc, void_ty(ctx));
 }
 
-void tensormap_replace_generic(Location loc, MLIRContext *ctx,
+void tensormap_replace_generic(Location loc,
                                ConversionPatternRewriter &rewriter,
                                std::string fieldName, Value descPtr,
                                Value newVal,
-                               std::optional<int32_t> ord = std::nullopt) {
+                               std::optional<int32_t> ord = std::nullopt,
+                               bool global = false) {
+  MLIRContext *ctx = loc.getContext();
   PTXBuilder ptxBuilder;
 
   auto newValTy = newVal.getType();
@@ -92,7 +95,7 @@ void tensormap_replace_generic(Location loc, MLIRContext *ctx,
   // Define the instruction opcode
   auto &replace = ptxBuilder.create<>("tensormap.replace.tile")
                       ->o(fieldName)
-                      .o("shared::cta")
+                      .o(global ? "global" : "shared::cta")
                       .o("b1024")
                       .o("b32", width == 32)
                       .o("b64", width == 64);
@@ -109,72 +112,71 @@ void tensormap_replace_generic(Location loc, MLIRContext *ctx,
   ptxBuilder.launch(rewriter, loc, void_ty(ctx));
 }
 
-void tensormap_replace_global_address(Location loc, MLIRContext *ctx,
+void tensormap_replace_global_address(Location loc,
                                       ConversionPatternRewriter &rewriter,
-                                      Value descPtr, Value newVal) {
-  tensormap_replace_generic(loc, ctx, rewriter, "global_address", descPtr,
-                            newVal);
+                                      Value descPtr, Value newVal,
+                                      bool global = false) {
+  tensormap_replace_generic(loc, rewriter, "global_address", descPtr, newVal,
+                            /*ord=*/std::nullopt, global);
 }
 
-void tensormap_replace_rank(Location loc, MLIRContext *ctx,
-                            ConversionPatternRewriter &rewriter, Value descPtr,
-                            int32_t newVal) {
-  tensormap_replace_generic(loc, ctx, rewriter, "rank", descPtr, newVal);
+void tensormap_replace_rank(Location loc, ConversionPatternRewriter &rewriter,
+                            Value descPtr, int32_t newVal) {
+  tensormap_replace_generic(loc, rewriter, "rank", descPtr, newVal);
 }
 
-void tensormap_replace_box_dim(Location loc, MLIRContext *ctx,
+void tensormap_replace_box_dim(Location loc,
                                ConversionPatternRewriter &rewriter,
                                Value descPtr, int32_t ord, Value newVal) {
-  tensormap_replace_generic(loc, ctx, rewriter, "box_dim", descPtr, newVal,
-                            ord);
+  tensormap_replace_generic(loc, rewriter, "box_dim", descPtr, newVal, ord);
 }
 
-void tensormap_replace_global_dim(Location loc, MLIRContext *ctx,
+void tensormap_replace_global_dim(Location loc,
                                   ConversionPatternRewriter &rewriter,
-                                  Value descPtr, int32_t ord, Value newVal) {
-  tensormap_replace_generic(loc, ctx, rewriter, "global_dim", descPtr, newVal,
-                            ord);
+                                  Value descPtr, int32_t ord, Value newVal,
+                                  bool global = false) {
+  tensormap_replace_generic(loc, rewriter, "global_dim", descPtr, newVal, ord,
+                            global);
 }
 
-void tensormap_replace_global_stride(Location loc, MLIRContext *ctx,
+void tensormap_replace_global_stride(Location loc,
                                      ConversionPatternRewriter &rewriter,
                                      Value descPtr, int32_t ord, Value newVal) {
-  tensormap_replace_generic(loc, ctx, rewriter, "global_stride", descPtr,
-                            newVal, ord);
+  tensormap_replace_generic(loc, rewriter, "global_stride", descPtr, newVal,
+                            ord);
 }
 
-void tensormap_replace_element_stride(Location loc, MLIRContext *ctx,
+void tensormap_replace_element_stride(Location loc,
                                       ConversionPatternRewriter &rewriter,
                                       Value descPtr, int32_t ord,
                                       Value newVal) {
-  tensormap_replace_generic(loc, ctx, rewriter, "element_stride", descPtr,
-                            newVal, ord);
+  tensormap_replace_generic(loc, rewriter, "element_stride", descPtr, newVal,
+                            ord);
 }
 
-void tensormap_replace_elemtype(Location loc, MLIRContext *ctx,
+void tensormap_replace_elemtype(Location loc,
                                 ConversionPatternRewriter &rewriter,
                                 Value descPtr, int32_t newVal) {
-  tensormap_replace_generic(loc, ctx, rewriter, "elemtype", descPtr, newVal);
+  tensormap_replace_generic(loc, rewriter, "elemtype", descPtr, newVal);
 }
 
-void tensormap_replace_interleave_layout(Location loc, MLIRContext *ctx,
+void tensormap_replace_interleave_layout(Location loc,
                                          ConversionPatternRewriter &rewriter,
                                          Value descPtr, int32_t newVal) {
-  tensormap_replace_generic(loc, ctx, rewriter, "interleave_layout", descPtr,
+  tensormap_replace_generic(loc, rewriter, "interleave_layout", descPtr,
                             newVal);
 }
 
-void tensormap_replace_swizzle_mode(Location loc, MLIRContext *ctx,
+void tensormap_replace_swizzle_mode(Location loc,
                                     ConversionPatternRewriter &rewriter,
                                     Value descPtr, int32_t newVal) {
-  tensormap_replace_generic(loc, ctx, rewriter, "swizzle_mode", descPtr,
-                            newVal);
+  tensormap_replace_generic(loc, rewriter, "swizzle_mode", descPtr, newVal);
 }
 
-void tensormap_replace_fill_mode(Location loc, MLIRContext *ctx,
+void tensormap_replace_fill_mode(Location loc,
                                  ConversionPatternRewriter &rewriter,
                                  Value descPtr, int32_t newVal) {
-  tensormap_replace_generic(loc, ctx, rewriter, "fill_mode", descPtr, newVal);
+  tensormap_replace_generic(loc, rewriter, "fill_mode", descPtr, newVal);
 }
 
 struct ExperimentalTensormapFenceproxyAcquireOpConversion
@@ -253,15 +255,14 @@ struct ExperimentalTensormapCreateOpConversion
     auto smemBase = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op);
 
     zero_fill_tma(loc, ctx, rewriter, targetInfo, smemBase);
-    tensormap_replace_global_address(loc, ctx, rewriter, smemBase,
+    tensormap_replace_global_address(loc, rewriter, smemBase,
                                      adaptor.getGlobalAddress());
-    tensormap_replace_rank(loc, ctx, rewriter, smemBase, op.getRank() - 1);
+    tensormap_replace_rank(loc, rewriter, smemBase, op.getRank() - 1);
     for (int i = 0; i < op.getRank(); ++i) {
-      tensormap_replace_box_dim(loc, ctx, rewriter, smemBase, i,
-                                op.getBoxDim()[i]);
+      tensormap_replace_box_dim(loc, rewriter, smemBase, i, op.getBoxDim()[i]);
     }
     for (int i = 0; i < op.getRank(); ++i) {
-      tensormap_replace_global_dim(loc, ctx, rewriter, smemBase, i,
+      tensormap_replace_global_dim(loc, rewriter, smemBase, i,
                                    op.getGlobalDim()[i]);
     }
     for (int i = 0; i + 1 < op.getRank(); ++i) {
@@ -270,22 +271,65 @@ struct ExperimentalTensormapCreateOpConversion
         // Workaround for a ptxas bug
         strideVal = ashr(strideVal, i64_val(4));
       }
-      tensormap_replace_global_stride(loc, ctx, rewriter, smemBase, i,
-                                      strideVal);
+      tensormap_replace_global_stride(loc, rewriter, smemBase, i, strideVal);
     }
     for (int i = 0; i < op.getRank(); ++i) {
-      tensormap_replace_element_stride(loc, ctx, rewriter, smemBase, i,
+      tensormap_replace_element_stride(loc, rewriter, smemBase, i,
                                        op.getElementStride()[i]);
     }
-    tensormap_replace_elemtype(loc, ctx, rewriter, smemBase, op.getElemType());
-    tensormap_replace_interleave_layout(loc, ctx, rewriter, smemBase,
+    tensormap_replace_elemtype(loc, rewriter, smemBase, op.getElemType());
+    tensormap_replace_interleave_layout(loc, rewriter, smemBase,
                                         op.getInterleaveLayout());
-    tensormap_replace_swizzle_mode(loc, ctx, rewriter, smemBase,
+    tensormap_replace_swizzle_mode(loc, rewriter, smemBase,
                                    op.getSwizzleMode());
-    tensormap_replace_fill_mode(loc, ctx, rewriter, smemBase, op.getFillMode());
-    tensormap_cp_fenceproxy(loc, ctx, rewriter, adaptor.getDescPtr(), smemBase);
+    tensormap_replace_fill_mode(loc, rewriter, smemBase, op.getFillMode());
+    tensormap_cp_fenceproxy(loc, rewriter, adaptor.getDescPtr(), smemBase);
     rewriter.eraseOp(op);
     return success();
+  }
+};
+
+struct ExperimentalUpdateTensorDescOpConversion
+    : public ConvertOpToLLVMPattern<ExperimentalUpdateTensorDescOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(ExperimentalUpdateTensorDescOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+
+    if (Value basePtr = adaptor.getBase()) {
+      tensormap_replace_global_address(loc, rewriter, adaptor.getDesc(),
+                                       basePtr, /*global=*/true);
+    }
+    for (auto [i, dim] : llvm::enumerate(adaptor.getShape())) {
+      tensormap_replace_global_dim(loc, rewriter, adaptor.getDesc(), i, dim,
+                                   /*global=*/true);
+    }
+
+    // Execute collectively on first warp in block
+    constexpr int kWarpSize = 32;
+    Value threadId = getThreadId(rewriter, loc);
+    Value pred = icmp_slt(threadId, i32_val(kWarpSize));
+
+    PTXBuilder ptxBuilder;
+    auto &release =
+        *ptxBuilder.create<>("fence.proxy.tensormap::generic.release.gpu;");
+    release().predicate(pred);
+
+    auto *descAddrOpr = ptxBuilder.newAddrOperand(adaptor.getDesc(), "l");
+    auto *sizeOpr = ptxBuilder.newConstantOperand(TMA_SIZE_BYTES);
+    auto &acquire =
+        *ptxBuilder.create<>("fence.proxy.tensormap::generic.acquire.gpu");
+    acquire(descAddrOpr, sizeOpr).predicate(pred);
+
+    ptxBuilder.launch(rewriter, loc, getVoidType());
+
+    // We run the fence on a single warp, then use a barrier to synchronize the
+    // rest. This ends up being faster than running the fence on each warp.
+    rewriter.create<NVVM::Barrier0Op>(loc);
+
+    return failure();
   }
 };
 
@@ -328,7 +372,8 @@ void mlir::triton::NVIDIA::populateTMAToLLVMPatterns(
   patterns.add<ExperimentalTensormapCreateOpConversion>(typeConverter,
                                                         targetInfo, benefit);
   patterns
-      .add<ExperimentalTensormapFenceproxyAcquireOpConversion,
+      .add<ExperimentalUpdateTensorDescOpConversion,
+           ExperimentalTensormapFenceproxyAcquireOpConversion,
            ReinterpretTensorDescOpConversion, TensorDescToTMAPtrOpConversion>(
           typeConverter, benefit);
 }

@@ -2003,6 +2003,11 @@ def _experimental_make_tensor_descriptor(
     return semantic.make_tensor_descriptor(base, shape, strides, block_shape, _builder)
 
 
+@builtin
+def _experimental_update_tensor_descriptor(desc, base=None, shape=None):
+    return semantic.update_tensor_descriptor(desc, base, shape)
+
+
 # -----------------------
 # Atomic Memory Operations
 # -----------------------
