@@ -356,6 +356,36 @@ static Value convertFp32ToBf16(Location loc,
     return bitcast(truncated, bf16_ty);
   }
 
+  /*
+  This is to insert the following asm:
+    uint16_t float_to_bf16_rtn_asm(float f)
+    {
+        union
+        {
+            float fp32;
+            uint32_t int32;
+        } u = {f};
+
+        static constexpr uint32_t FP32_NAN            = 0x7fff0000;
+        static constexpr uint32_t ROUND_BIAS_FOR_BF16 = 0x7fff;
+
+        using uint32x2_t = uint32_t __attribute__((ext_vector_type(2)));
+        uint32x2_t check_nan;
+        uint32_t tmp;
+        asm volatile("\n \
+                v_cmp_u_f32 %0, %2, %2 \n \
+                v_bfe_u32 %1, %2, 16, 1 \n \
+                v_add3_u32 %1, %2, %1, %3 \n \
+                v_cndmask_b32 %2, %1, %4, %0 \n \
+                v_lshrrev_b32 %2, 16, %2 \n \
+                "
+                    : "=s"(check_nan), "+v"(tmp), "+v"(u.fp32)
+                    : "v"(ROUND_BIAS_FOR_BF16), "v"(FP32_NAN));
+
+        return uint16_t(u.int32);
+    }  
+*/
+
   GCNBuilder builder;
 
   // build v_cmp_u_f32 instruction
