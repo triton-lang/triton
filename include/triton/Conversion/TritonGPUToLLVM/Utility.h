@@ -252,12 +252,10 @@ public:
       : base(base), baseElemType(baseElemType),
         offsets(offsets.begin(), offsets.end()) {}
 
-  SharedMemoryObject(Value base, Type baseElemType, ArrayRef<int64_t> shape,
-                     Attribute layout, Location loc, RewriterBase &rewriter)
+  SharedMemoryObject(Value base, Type baseElemType, int64_t rank, Location loc,
+                     RewriterBase &rewriter)
       : base(base), baseElemType(baseElemType) {
-    auto layoutOrder = ::mlir::triton::gpu::getOrder(layout);
-    auto order = SharedMemoryObject::getOrderForShape(shape, layoutOrder);
-    offsets.append(order.size(), i32_val(0));
+    offsets.append(rank, i32_val(0));
   }
 
   SmallVector<Value> getOffsets() const { return offsets; }
@@ -278,7 +276,7 @@ public:
     return types;
   }
 
-  SmallVector<Value> getStrides(MemDescType memDesc, Location loc,
+  SmallVector<Value> getStrides(triton::gpu::MemDescType memDesc, Location loc,
                                 RewriterBase &rewriter) const {
     auto allocShape = memDesc.getAllocShape();
     auto allocShapePerCTA =
