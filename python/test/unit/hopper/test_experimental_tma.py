@@ -76,11 +76,10 @@ def matmul_kernel_tma(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
     offs_k = 0
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
-        a = tl._experimental_descriptor_load(a_desc_ptr, [offs_am, offs_k], [BLOCK_SIZE_M, BLOCK_SIZE_K], dtype)
-        b = tl._experimental_descriptor_load(b_desc_ptr, [offs_k, offs_bn], [BLOCK_SIZE_K, BLOCK_SIZE_N], dtype)
+        a = tl._experimental_descriptor_load(a_desc_ptr, [offs_am, offs_k], [BLOCK_SIZE_M, BLOCK_SIZE_K], tl.float8e4nv)
+        b = tl._experimental_descriptor_load(b_desc_ptr, [offs_k, offs_bn], [BLOCK_SIZE_K, BLOCK_SIZE_N], tl.float8e4nv)
         accumulator = tl.dot(a, b, acc=accumulator)
         offs_k += BLOCK_SIZE_K
-    accumulator = accumulator.to(dtype)
     tl._experimental_descriptor_store(c_desc_ptr, accumulator, [offs_am, offs_bn])
 
 
@@ -94,9 +93,11 @@ def test_experimental_tma_matmul(num_stages, BLOCK_M, BLOCK_N, BLOCK_K, byval_tm
     device = "cuda"
     M, N, K = 8192, 8192, 1024
     torch.manual_seed(42)
-    A = torch.randn((M, K), dtype=torch.float16, device=device)
-    B = torch.randn((K, N), dtype=torch.float16, device=device)
-    C = torch.empty((M, N), dtype=torch.float16, device=device)
+    A = torch.randn((M, K), dtype=torch.float16, device=device).to(torch.float8_e4m3fn)
+    B = torch.randn((K, N), dtype=torch.float16, device=device).to(torch.float8_e4m3fn)
+    C = torch.empty((M, N), dtype=torch.float32, device=device)
+
+
     if byval_tma:
         desc_a = create_2d_tma_descriptor(A.data_ptr(), M, K, BLOCK_M, BLOCK_K, A.element_size())
         desc_b = create_2d_tma_descriptor(B.data_ptr(), K, N, BLOCK_K, BLOCK_N, B.element_size())
@@ -108,12 +109,16 @@ def test_experimental_tma_matmul(num_stages, BLOCK_M, BLOCK_N, BLOCK_K, byval_tm
     kernel = matmul_kernel_tma[(triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1,
                                 1)](desc_a, desc_b, desc_c, M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, BYVAL_TMA=byval_tma,
                                     num_warps=8, num_stages=num_stages, dtype=tl.float16)
-    ref_out = torch.matmul(A.to(torch.float32), B.to(torch.float32)).to(torch.float16)
+    print(kernel.asm["ttgir"])
+    ref_out = torch.matmul(A.to(torch.float32), B.to(torch.float32))
     torch.testing.assert_close(ref_out, C, rtol=1e-3, atol=1e-3)
     if BLOCK_M >= 64 and BLOCK_N >= 64:
         assert "stmatrix.sync.aligned.m8n8.x4.shared.b16" in kernel.asm["ptx"]
     if byval_tma:
         assert ".param .align 64 .b8" in kernel.asm["ptx"]
+
+
+test_experimental_tma_matmul(3, 128, 64, 64, True)
 
 
 @triton.jit
