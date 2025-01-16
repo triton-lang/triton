@@ -302,7 +302,7 @@ struct ExperimentalUpdateTensorDescOpConversion
       tensormap_replace_global_address(loc, rewriter, adaptor.getDesc(),
                                        basePtr, /*global=*/true);
     }
-    for (auto [i, dim] : llvm::enumerate(adaptor.getShape())) {
+    for (auto [i, dim] : llvm::enumerate(llvm::reverse(adaptor.getShape()))) {
       tensormap_replace_global_dim(loc, rewriter, adaptor.getDesc(), i, dim,
                                    /*global=*/true);
     }
@@ -314,7 +314,7 @@ struct ExperimentalUpdateTensorDescOpConversion
 
     PTXBuilder ptxBuilder;
     auto &release =
-        *ptxBuilder.create<>("fence.proxy.tensormap::generic.release.gpu;");
+        *ptxBuilder.create<>("fence.proxy.tensormap::generic.release.gpu");
     release().predicate(pred);
 
     auto *descAddrOpr = ptxBuilder.newAddrOperand(adaptor.getDesc(), "l");
@@ -328,8 +328,9 @@ struct ExperimentalUpdateTensorDescOpConversion
     // We run the fence on a single warp, then use a barrier to synchronize the
     // rest. This ends up being faster than running the fence on each warp.
     rewriter.create<NVVM::Barrier0Op>(loc);
+    rewriter.eraseOp(op);
 
-    return failure();
+    return success();
   }
 };
 

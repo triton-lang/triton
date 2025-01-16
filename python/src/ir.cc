@@ -1668,6 +1668,14 @@ void init_triton_ir(py::module &&m) {
              return self.create<MakeTensorDescOp>(base, shape, strides,
                                                   tensorShape);
            })
+      // Update a tensor descriptor.
+      .def("create_update_tensor_descriptor",
+           [](TritonOpBuilder &self, Value &desc, std::optional<Value> base,
+              std::optional<std::vector<Value>> shape) {
+             self.create<ExperimentalUpdateTensorDescOp>(
+                 desc, base.value_or(Value()),
+                 shape.value_or(std::vector<Value>()));
+           })
       // Proton Ops
       .def("create_proton_record",
            [](TritonOpBuilder &self, bool isStart, int32_t regionId) -> void {

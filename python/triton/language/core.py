@@ -2004,8 +2004,8 @@ def _experimental_make_tensor_descriptor(
 
 
 @builtin
-def _experimental_update_tensor_descriptor(desc, base=None, shape=None):
-    return semantic.update_tensor_descriptor(desc, base, shape)
+def _experimental_update_tensor_descriptor(desc, base=None, shape=None, _builder=None):
+    return semantic.update_tensor_descriptor(desc, base, shape, _builder)
 
 
 # -----------------------
