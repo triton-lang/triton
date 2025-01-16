@@ -383,8 +383,9 @@ struct MemDescSubviewOpConversion
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
     auto layoutOrder = getOrder(srcTy.getEncoding());
     auto allocShape = srcTy.getAllocShape();
+    auto allocShapePerCTA = getShapePerCTA(srcTy.getEncoding(), allocShape);
     auto allocStrides = SharedMemoryObject::getStridesForShape(
-        allocShape, layoutOrder, loc, rewriter);
+        allocShapePerCTA, layoutOrder, loc, rewriter);
 
     // newBase = base + offset
     auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
