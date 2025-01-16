@@ -319,7 +319,7 @@ getBlockedEncoding(tt::LoadOp loadOp, tt::ModuleAxisInfoAnalysis &axisInfo) {
 }
 
 static std::optional<ttg::SharedEncodingAttr>
-getSharedEncoding(Operation *loadOp, bool isMMAV3Shared) {
+getSharedEncoding(Operation *loadOp, bool isMMAV3Shared, bool isTMALoad) {
   auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
   auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
   auto blockedOrder = ttg::getOrder(ty.getEncoding());
@@ -333,6 +333,13 @@ getSharedEncoding(Operation *loadOp, bool isMMAV3Shared) {
     order.push_back(0);
   } else {
     order = blockedOrder;
+  }
+
+  auto mmav3Enc = ttg::SharedEncodingAttr::get(
+      ty.getContext(), ty.getShape(), order, ctaLayout, ty.getElementType());
+
+  if (isMMAV3Shared && isTMALoad) {
+    return mmav3Enc;
   }
 
   // If the load is used by a LocalAllocOp, use the same encoding as the allocs.
@@ -357,8 +364,9 @@ getSharedEncoding(Operation *loadOp, bool isMMAV3Shared) {
   }
 
   if (isMMAV3Shared) {
-    return ttg::SharedEncodingAttr::get(ty.getContext(), ty.getShape(), order,
-                                        ctaLayout, ty.getElementType());
+    // When there is no local alloc but MMAv3 encoding is requested - it is for
+    // MMAv2
+    return mmav3Enc;
   }
 
   // Use non-swizzled layout for loads that do not feed into dot ops.
@@ -488,6 +496,7 @@ assignMemoryLayouts(scf::ForOp &forOp,
       }
     });
 
+    bool isTMALoad = isa<tt::ExperimentalDescriptorLoadOp>(op);
     loadsToPipeline.insert(&op);
     LoadInfo loadInfo;
     for (auto use : users) {
@@ -502,12 +511,10 @@ assignMemoryLayouts(scf::ForOp &forOp,
         loadInfo.isMMAv3Registers =
             (mmaLoadType == MMALoadType::Registers) && warpGroupDot;
 
-        if (loadInfo.isMMAv3Shared) {
+        if (loadInfo.isMMAv3Shared || isTMALoad) {
           loadInfo.sharedEncoding =
-              getSharedEncoding(&op, /*loadIsMMAv3=*/true).value_or(nullptr);
-        } else if (isa<tt::ExperimentalDescriptorLoadOp>(op)) {
-          loadInfo.sharedEncoding =
-              getSharedEncoding(&op, /*loadIsMMAv3=*/true).value_or(nullptr);
+              getSharedEncoding(&op, /*loadIsMMAv3=*/true, isTMALoad)
+                  .value_or(nullptr);
         } else if (loadInfo.isMMAv3Registers || dot) {
           bool incompatible = false;
           loadInfo.sharedEncoding =
@@ -521,7 +528,8 @@ assignMemoryLayouts(scf::ForOp &forOp,
       if (!loadInfo.sharedEncoding && !isa<ttng::WarpGroupDotOp>(use)) {
         LDBG("try generic shared encoding");
         loadInfo.sharedEncoding =
-            getSharedEncoding(&op, /*isMMAV3=*/loadInfo.isMMAv3Shared)
+            getSharedEncoding(&op, /*isMMAV3=*/loadInfo.isMMAv3Shared,
+                              isTMALoad)
                 .value_or(nullptr);
         if (auto loadOp = dyn_cast<tt::LoadOp>(op))
           loadInfo.blockedEncoding =
