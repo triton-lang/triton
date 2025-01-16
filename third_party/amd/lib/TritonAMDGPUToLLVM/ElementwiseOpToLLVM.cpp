@@ -421,32 +421,6 @@ static Value convertFp32ToBf16(Location loc,
   auto shifted = lshr(i32_ty, res, i32_val(16));
   auto truncated = trunc(i16_ty, shifted);
   return bitcast(truncated, bf16_ty);
-
-  // auto bf16x2VecTy = vec_ty(bf16_ty, 2);
-  // Value retVec = bitcast(res, bf16x2VecTy);
-  // return extract_element(bf16_ty, retVec, i32_val(1));
-
-  // auto as_uint32 = bitcast(v, i32_ty);
-  // auto check_exponent =
-  //     and_(i32_ty, xor_(i32_ty, as_uint32, i32_val(0xffffffff)),
-  //          i32_val(0x7f800000));
-  // auto exponent_not_all1s = icmp_ne(check_exponent, i32_val(0));
-  // auto exponent_all1s = icmp_eq(check_exponent, i32_val(0));
-  // auto rounded =
-  //     add(i32_ty, i32_val(0x7fff),
-  //         and_(i32_ty, lshr(i32_ty, as_uint32, i32_val(16)), i32_val(1)));
-  // rounded = add(i32_ty, rounded, as_uint32);
-  // auto res = select(exponent_not_all1s, rounded, as_uint32);
-
-  // auto preserve_nan =
-  //     and_(i1_ty, exponent_all1s,
-  //          icmp_ne(and_(i32_ty, as_uint32, i32_val(0xffff)), i32_val(0)));
-  // auto nan = or_(i32_ty, as_uint32, i32_val(0x10000));
-  // res = select(preserve_nan, nan, res);
-
-  // auto shifted = lshr(i32_ty, res, i32_val(16));
-  // auto truncated = trunc(i16_ty, shifted);
-  // return bitcast(truncated, bf16_ty);
 }
 
 static Value Fp8E5M2FNUZ_to_Fp16_oneValue(Location loc,
