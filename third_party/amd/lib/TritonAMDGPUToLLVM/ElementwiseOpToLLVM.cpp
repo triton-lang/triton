@@ -346,8 +346,8 @@ static Value convertBf16ToFp32(Location loc,
 }
 
 static Value convertFp32ToBf16(Location loc,
-                               ConversionPatternRewriter &rewriter, Value v,
-                               const RoundingMode rounding) {
+                               ConversionPatternRewriter &rewriter,
+                               const Value &v, const RoundingMode rounding) {
   auto as_int32 = bitcast(v, i32_ty);
   if (rounding == RoundingMode::RTZ) {
     auto shifted = lshr(i32_ty, as_int32, i32_val(16));
