@@ -549,9 +549,8 @@ static Value createAlloc(scf::ForOp &forOp, Operation *loadOp,
   Type memdescType = ttg::MemDescType::get(bufferShape, ty.getElementType(),
                                            sharedEnc, sharedMemorySpace,
                                            /*mutableMemory=*/true);
-  const int32_t alignment = sharedEnc.getAlignment();
-  Value alloc = builder.create<ttg::LocalAllocOp>(loadOp->getLoc(), memdescType,
-                                                  Value(), alignment);
+  Value alloc =
+      builder.create<ttg::LocalAllocOp>(loadOp->getLoc(), memdescType);
   return alloc;
 }
 
@@ -575,7 +574,7 @@ static Value createBarrierAlloc(scf::ForOp &forOp, unsigned distance) {
       /*mutableMemory=*/true,
       /*allocShape=*/barrierMemDescType.getAllocShape());
   Value barrierAlloc =
-      builder.create<ttg::LocalAllocOp>(loc, barrierMemDescType, Value());
+      builder.create<ttg::LocalAllocOp>(loc, barrierMemDescType);
   for (unsigned i = 0; i < distance; i++) {
     Value idx = builder.create<arith::ConstantIntOp>(loc, i, 32);
     Value barrierView = builder.create<ttg::MemDescSubviewOp>(

@@ -596,16 +596,12 @@ int32_t LocalAllocOp::getAlignmentOrDefault() {
     return *align;
   }
 
-  auto ty = getType();
-  auto shapePerCTA = triton::gpu::getShapePerCTA(ty);
-  auto bytes =
-      product<int64_t>(shapePerCTA) * (ty.getElementTypeBitWidth() / 8);
+  if (!isSharedMemoryAlloc())
+    return 8;
 
-  // XXX(Keren): magic numbers 256 and 1024
-  // Software swizzling calculates phase based on offset, while hardware
-  // swizzling do that based on physical address. Thus only by setting the
-  // alignment to 1024 can ensure the correctness.
-  return bytes > 256 ? 1024 : 8;
+  auto ty = getType();
+  auto enc = cast<SharedEncodingAttr>(ty.getEncoding());
+  return enc.getAlignment(ty.getElementType());
 }
 
 } // namespace mlir::triton::gpu

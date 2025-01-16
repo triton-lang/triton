@@ -34,8 +34,8 @@ public:
     auto tensorType = op.getResult().getType();
     auto order = getOrder(tensorType.getEncoding());
     auto ctaLayout = getCTALayout(tensorType.getEncoding());
-    auto encoding = SharedEncodingAttr::get(tensorType.getContext(), 1, 1, 1,
-                                            order, ctaLayout);
+    Attribute encoding = SharedEncodingAttr::get(tensorType.getContext(), 1, 1,
+                                                 1, order, ctaLayout);
     if (tensorType.getRank() > 1) {
       encoding = SharedEncodingAttr::get(
           tensorType.getContext(), tensorType.getShape(), order, ctaLayout,
@@ -44,9 +44,7 @@ public:
     MemDescType memDescType =
         MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
                          encoding, sharedMemorySpace, /*mutableMemory=*/true);
-    const int32_t alignment = encoding.getAlignment();
-    Value alloc =
-        rewriter.create<LocalAllocOp>(loc, memDescType, Value(), alignment);
+    Value alloc = rewriter.create<LocalAllocOp>(loc, memDescType);
     auto barrierCTALayout = CTALayoutAttr::get(
         /*context=*/tensorType.getContext(), /*CTAsPerCGA=*/{1},
         /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
@@ -87,8 +85,8 @@ public:
     auto tensorType = op.getSrc().getType();
     auto order = getOrder(tensorType.getEncoding());
     auto ctaLayout = getCTALayout(tensorType.getEncoding());
-    auto encoding = SharedEncodingAttr::get(tensorType.getContext(), 1, 1, 1,
-                                            order, ctaLayout);
+    Attribute encoding = SharedEncodingAttr::get(tensorType.getContext(), 1, 1,
+                                                 1, order, ctaLayout);
     if (tensorType.getRank() > 1) {
       encoding = SharedEncodingAttr::get(
           tensorType.getContext(), tensorType.getShape(), order, ctaLayout,
@@ -97,9 +95,7 @@ public:
     MemDescType memDescType =
         MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
                          encoding, sharedMemorySpace, /*mutableMemory=*/true);
-    const int32_t alignment = encoding.getAlignment();
-    Value alloc =
-        rewriter.create<LocalAllocOp>(loc, memDescType, op.getSrc(), alignment);
+    Value alloc = rewriter.create<LocalAllocOp>(loc, memDescType, op.getSrc());
     rewriter.create<triton::nvidia_gpu::FenceAsyncSharedOp>(loc, false);
     Value tmaPtr = rewriter.create<triton::nvidia_gpu::TensorDescToTMAPtrOp>(
         loc, op.getDesc());

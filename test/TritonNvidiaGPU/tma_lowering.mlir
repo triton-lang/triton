@@ -3,8 +3,8 @@
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
 // CHECK-LABEL: tma_load
-// CHECK: ttg.local_alloc {alignment = 1024 : i32} : ()
-// CHECK: ttg.local_alloc : ()
+// CHECK: ttg.local_alloc  : ()
+// CHECK: ttg.local_alloc  : ()
 // CHECK: ttng.init_barrier
 // CHECK: ttng.tensor_desc_to_tma_ptr
 // CHECK: ttng.async_tma_copy_global_to_local

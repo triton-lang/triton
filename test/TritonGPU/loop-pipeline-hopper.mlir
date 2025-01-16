@@ -334,8 +334,8 @@ tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
 //      %a = tt.load %a_tileptr  : !tt.ptr<tensor<128x32xf16>, 1>
 //      %b = tt.load %b_tileptr  : !tt.ptr<tensor<32x128xf16>, 1>
 //
-//      %sa = ttg.local_alloc %a {alignment = 1024 : i32} : (tensor<128x32xf16, #BA>) -> !ttg.memdesc<128x32xf16, #SA, #smem>
-//      %sb = ttg.local_alloc %b {alignment = 1024 : i32} : (tensor<32x128xf16, #BB>) -> !ttg.memdesc<32x128xf16, #SB, #smem>
+//      %sa = ttg.local_alloc %a : (tensor<128x32xf16, #BA>) -> !ttg.memdesc<128x32xf16, #SA, #smem>
+//      %sb = ttg.local_alloc %b : (tensor<32x128xf16, #BB>) -> !ttg.memdesc<32x128xf16, #SB, #smem>
 //      %c = ttng.warp_group_dot %sa, %sb, %prev_c : tensor<128x32xf16, #SA> * tensor<32x128xf16, #SB> -> tensor<128x128xf32, #C>
 //
 //      %a_tileptr_next = tt.advance %a_tileptr, [%c0, %c32_i32] : !tt.ptr<tensor<128x32xf16>, 1>
@@ -725,7 +725,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-LABEL: tma_multiple_store_pipeline
   tt.func public @tma_multiple_store_pipeline(%arg0: tensor<1xf32, #blocked>, %arg1: !tt.tensordesc<tensor<1xf32>>, %arg2: i32, %arg3: i32) attributes {noinline = false} {
     %c0_i32 = arith.constant 0 : i32
-    // CHECK: %[[ALLOC:.+]] = ttg.local_alloc {alignment = 128 : i32} : () -> !ttg.memdesc<1xf32, #shared, #smem, mutable>
+    // CHECK: %[[ALLOC:.+]] = ttg.local_alloc  : () -> !ttg.memdesc<1xf32, #shared, #smem, mutable>
     // CHECK: scf.for
     scf.for %arg4 = %c0_i32 to %arg3 step %arg2  : i32 {
       %1 = arith.divsi %arg4, %arg2 : i32
