@@ -991,6 +991,11 @@ unsigned SharedEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
   llvm_unreachable("getElemsPerThread is not supported for shared layout");
   return 0;
 }
+int32_t SharedEncodingAttr::getAlignment() const {
+  if (getHasLeadingOffset())
+    return 128 * getMaxPhase();
+  return 16;
+}
 
 SmallVector<unsigned>
 DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
