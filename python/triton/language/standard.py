@@ -3,6 +3,7 @@ from __future__ import annotations
 from ..runtime.jit import jit
 from . import core
 from . import math
+import triton.language as tl
 
 # constexpr utilities
 
@@ -452,3 +453,48 @@ def interleave(a, b):
         # understand that if we take the `if` above we definitely don't run this
         # `else`.
         return core.reshape(c, c.shape[:-2] + [2 * c.shape[-2]])
+
+
+# topk
+
+
+@core._tensor_member_fn
+@jit
+def topk(x, k: core.constexpr, descending: core.constexpr = core.CONSTEXPR_1):
+    """
+    Returns the top-k elements and their indices along the last dimension.
+    :param x: The input tensor.
+    :type x: Tensor
+    :param k: The number of top elements to return.
+    :type k: int
+    :param descending: If True (default), returns the largest elements. If False, returns the smallest.
+    :type descending: bool
+    :return: A tuple of (top-k elements, top-k indices) tensors.
+    :rtype: Tuple[Tensor, Tensor]
+    """
+    core.static_assert(k > 0, "k must be greater than 0.")
+    core.static_assert(k <= x.shape[-1], "k must not exceed the size of the last dimension.")
+    # Verify that the shape of the input tensor satisfies Triton's requirements.
+    core.static_assert(_is_power_of_two(x.shape[-1]), "Last dimension must be a power of 2.")
+
+    # Sort the tensor along the last dimension.
+    sorted_elements = tl.sort(x, dim=len(x.shape) - 1, descending=descending)
+
+    # Create a range tensor to map the top-k elements back to their original indices.
+    # n_outer represents the number of elements outside the last dimension being processed.
+    n_outer: core.constexpr = x.numel // x.shape[-1]
+    last_dim_size: core.constexpr = x.shape[-1]
+
+    # Create a tensor for the original indices.
+    original_indices = core.arange(0, last_dim_size)
+    original_indices = core.reshape(original_indices, [1, last_dim_size])
+    original_indices = core.broadcast_to(original_indices, [n_outer, last_dim_size])
+
+    # Create a mask to keep only the first k elements and their indices.
+    mask = original_indices < k
+
+    # Apply the mask to the sorted elements and indices.
+    topk_elements = sorted_elements * mask.to(sorted_elements.dtype)
+    topk_indices = original_indices * mask.to(original_indices.dtype)
+
+    return (topk_elements, topk_indices)

@@ -265,6 +265,7 @@ class constexpr:
 
 
 CONSTEXPR_0 = constexpr(0)
+CONSTEXPR_1 = constexpr(1)
 
 
 def _unwrap_if_constexpr(o):
@@ -1159,6 +1160,9 @@ class tensor(_value):
         ...
 
     def flip(self, dim=None) -> tensor:
+        ...
+
+    def topk(self, k: constexpr, descending: constexpr = CONSTEXPR_1) -> tuple[tensor, tensor]:
         ...
 
 

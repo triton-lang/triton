@@ -114,3 +114,48 @@ def test_swizzle2d(size_i, size_j, size_g, device):
     expected_order = torch.tensor([[0, 3, 6, 9, 12, 15, 18], [1, 4, 7, 10, 13, 16, 19], [2, 5, 8, 11, 14, 17, 20],
                                    [21, 23, 25, 27, 29, 31, 33], [22, 24, 26, 28, 30, 32, 34]]).to(device)
     assert (output == expected_order).all(), (output, expected_order)
+
+
+# ---------------
+# test topk op
+# ---------------
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("M, N", [[1, 512], [8, 64], [256, 16], [512, 8]])
+@pytest.mark.parametrize("k", [1, 4, 10, 100, 512])
+@pytest.mark.parametrize("descending", [False, True])
+@pytest.mark.parametrize("dtype_str", ['int32', 'float16', 'float32', 'bfloat16'])
+def test_topk(M, N, k, descending, dtype_str, device):
+    k = min(k, M)
+
+    @triton.jit
+    def topk_kernel(X, expected_values, expected_indices, N: tl.constexpr, M: tl.constexpr, k: tl.constexpr,
+                    descending: tl.constexpr):
+        offx = tl.arange(0, M)
+        offy = tl.arange(0, N) * M
+        off2d = offx[None, :] + offy[:, None]
+        x = tl.load(X + off2d)
+        actual_values, actual_indices = tl.topk(x, k=k, descending=descending)
+        tl.store(expected_values + off2d, actual_values)
+        tl.store(expected_indices + off2d, actual_indices)
+
+    x = numpy_random((N, M), dtype_str=dtype_str)
+    x = torch.from_numpy(x).to(device)
+
+    if descending:
+        torch_values, torch_indices = torch.topk(x, k, dim=1)
+    else:
+        torch_values, torch_indices = torch.topk(x, k, dim=1, largest=False)
+
+    # Allocate output tensors.
+    expected_values = torch.zeros_like(x)
+    expected_indices = torch.zeros_like(x, dtype=torch.int64)
+
+    expected_values[:, :k] = torch_values
+    expected_indices[:, :k] = torch_indices
+
+    topk_kernel[(1, )](x, expected_values, expected_indices, N, M, k, descending, num_warps=8)
+
+    assert torch.allclose(expected_values, expected_values), (expected_values, expected_values)
+    assert torch.allclose(expected_indices, expected_indices), (expected_indices, expected_indices)
