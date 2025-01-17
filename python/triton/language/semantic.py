@@ -1879,5 +1879,6 @@ def make_tensor_descriptor(
 
 def update_tensor_descriptor(desc, base, shape, builder):
     shape = [to_tensor(x, builder) for x in shape] if shape else None
-    builder.create_update_tensor_descriptor(desc.handle, base.handle if base else None, [s.handle for s in shape] if shape else None)
+    builder.create_update_tensor_descriptor(desc.handle, base.handle if base else None,
+                                            [s.handle for s in shape] if shape else None)
     return tl.tensor(None, tl.void)
