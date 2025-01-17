@@ -25,6 +25,16 @@ bool hasDotOperandEncoding(Value value) {
   return hasEncoding<triton::gpu::DotOperandEncodingAttr>(value);
 }
 
+bool isConvertTrivial(ConvertLayoutOp op) {
+  auto srcType = op.getSrc().getType();
+  auto dstType = op.getType();
+  auto srcEncoding = srcType.getEncoding();
+  auto dstEncoding = dstType.getEncoding();
+  return cast<DialectInferLayoutInterface>(&srcEncoding.getDialect())
+      ->verifyLayoutsAreEqual(srcType.getShape(), srcEncoding, dstEncoding, {})
+      .succeeded();
+}
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -43,22 +53,21 @@ struct CanonicalizeConvertFromReshape
     if (!convert)
       return failure();
     // If the layouts are structurally the same, the convert is trivial
-    auto srcType = convert.getSrc().getType();
-    auto dstType = convert.getType();
-    auto srcLL = toLinearLayout(srcType.getShape(), srcType.getEncoding());
-    auto dstLL = toLinearLayout(dstType.getShape(), dstType.getEncoding());
-    if (srcLL == dstLL) {
+    if (isConvertTrivial(convert)) {
       rewriter.replaceOpWithNewOp<triton::ReshapeOp>(
-          op, op.getType(), convert.getSrc(), op.getAllowReorder());
-      return mlir::success();
+          op, op.getType(), convert.getSrc(), op.getAllowReorder(),
+          op.getEfficientLayout());
+      return success();
     }
+
     if (isExpensiveView(convert.getSrc().getType(), op.getType()))
       return failure();
     if (!op.getAllowReorder() || op.getEfficientLayout())
       return failure();
 
     rewriter.replaceOpWithNewOp<triton::ReshapeOp>(
-        op, op.getType(), convert.getSrc(), op.getAllowReorder());
+        op, op.getType(), convert.getSrc(), op.getAllowReorder(),
+        op.getEfficientLayout());
     return mlir::success();
   }
 };
@@ -75,20 +84,14 @@ struct CanonicalizeConvertFromTranspose
   mlir::LogicalResult
   matchAndRewrite(triton::TransOp op,
                   PatternRewriter &rewriter) const override {
+    // If the layouts are structurally the same, the convert is trivial
     auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
-    if (!convert)
-      return failure();
-    auto srcEncoding = convert.getSrc().getType().getEncoding();
-    // If the layouts are structurally the same and the inferred layout is the
-    // same as that of the output, we can skip the convert.
-    auto dstEncoding = inferDstEncoding(op, srcEncoding);
-    if (dstEncoding != op.getType().getEncoding())
+    if (!convert || !isConvertTrivial(convert))
       return failure();
 
-    // If the layouts are structurally the same, the convert is trivial
     rewriter.replaceOpWithNewOp<triton::TransOp>(
         op, op.getType(), convert.getSrc(), op.getOrder());
-    return mlir::success();
+    return success();
   }
 };
 

@@ -66,9 +66,9 @@ public:
 
   // Check if two layouts are structurally the same, even if their names are
   // different
-  virtual LogicalResult verifyLayoutsAreEqual(ArrayRef<int64_t> shape,
-                                              Attribute expected, Attribute got,
-                                              Location loc) const = 0;
+  virtual LogicalResult
+  verifyLayoutsAreEqual(ArrayRef<int64_t> shape, Attribute expected,
+                        Attribute got, std::optional<Location> loc) const = 0;
 
   virtual LogicalResult
   inferJoinOpEncoding(Attribute srcEnc, Attribute &dstEnc,

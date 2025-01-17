@@ -2914,9 +2914,10 @@ struct TritonGPUInferLayoutInterface
     return success();
   }
 
-  LogicalResult verifyLayoutsAreEqual(ArrayRef<int64_t> shape,
-                                      Attribute expected, Attribute got,
-                                      Location loc) const override {
+  LogicalResult
+  verifyLayoutsAreEqual(ArrayRef<int64_t> shape, Attribute expected,
+                        Attribute got,
+                        std::optional<Location> loc) const override {
     if (expected == got) {
       return success();
     }
@@ -2924,8 +2925,8 @@ struct TritonGPUInferLayoutInterface
     auto expectedLL = triton::gpu::toLinearLayout(shape, expected);
     auto gotLL = triton::gpu::toLinearLayout(shape, got);
     if (expectedLL != gotLL) {
-      return emitError(loc, "Expected result encoding ")
-             << expected << " but was " << got;
+      return emitOptionalError(loc, "Expected result encoding ", expected,
+                               " but was ", got);
     }
     return success();
   }
