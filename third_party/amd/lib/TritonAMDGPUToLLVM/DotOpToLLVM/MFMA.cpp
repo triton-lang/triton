@@ -25,7 +25,6 @@
 #include "TritonAMDGPUTransforms/MfmaGroup.h"
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
-#include <signal.h>
 
 using namespace mlir;
 using namespace mlir::triton;
