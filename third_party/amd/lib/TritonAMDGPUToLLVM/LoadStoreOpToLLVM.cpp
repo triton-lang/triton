@@ -1459,6 +1459,65 @@ private:
     return endBlock->getArgument(0);
   }
 };
+
+struct AsyncWaitConversion : public ConvertOpToLLVMPattern<AsyncWaitOp> {
+  using ConvertOpToLLVMPattern<AsyncWaitOp>::ConvertOpToLLVMPattern;
+
+  AsyncWaitConversion(LLVMTypeConverter &converter,
+                      const AMD::TargetInfo &targetInfo,
+                      ModuleAxisInfoAnalysis &axisAnalysisPass,
+                      PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<AsyncWaitOp>(converter, benefit) {}
+
+  LogicalResult
+  matchAndRewrite(AsyncWaitOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op->getLoc();
+
+    // TODO Alex: correctly handle pending count
+    LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.s.waitcnt", {},
+                                    {i32_val(0)});
+
+    // Drop the result token.
+    Value zero = rewriter.create<LLVM::ConstantOp>(
+        op.getLoc(), IntegerType::get(op.getContext(), 32),
+        rewriter.getI32IntegerAttr(0));
+    rewriter.replaceOp(op, zero);
+    return success();
+
+    return success();
+  }
+};
+
+struct AsyncCommitGroupConversion
+    : public ConvertOpToLLVMPattern<AsyncCommitGroupOp> {
+  using ConvertOpToLLVMPattern<AsyncCommitGroupOp>::ConvertOpToLLVMPattern;
+
+  AsyncCommitGroupConversion(LLVMTypeConverter &converter,
+                             const AMD::TargetInfo &targetInfo,
+                             ModuleAxisInfoAnalysis &axisAnalysisPass,
+                             PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<AsyncCommitGroupOp>(converter, benefit) {}
+
+  LogicalResult
+  matchAndRewrite(AsyncCommitGroupOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op->getLoc();
+
+    // TODO Alex: correctly handle pending count
+    // LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.s.waitcnt",
+    // {},
+    //                                 {i32_val(0)});
+
+    // Drop the result token.
+    Value zero = rewriter.create<LLVM::ConstantOp>(
+        op.getLoc(), IntegerType::get(op.getContext(), 32),
+        rewriter.getI32IntegerAttr(0));
+    rewriter.replaceOp(op, zero);
+    return success();
+  }
+};
+
 } // namespace
 
 namespace mlir::triton::AMD {
@@ -1470,7 +1529,9 @@ void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        PatternBenefit benefit) {
   patterns.add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
                StoreOpConversion, BufferLoadOpConversion,
-               BufferStoreOpConversion, BufferAtomicRMWOpConversion>(
+               BufferStoreOpConversion, BufferAtomicRMWOpConversion,
+               AsyncLoadOpConversion, AsyncCommitGroupConversion,
+               AsyncWaitConversion, AsyncCommitGroupConversion>(
       typeConverter, targetInfo, axisInfoAnalysis, benefit);
 }
 } // namespace mlir::triton::AMD
