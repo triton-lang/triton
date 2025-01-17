@@ -72,9 +72,9 @@ Type castToVectorType(Type ty) {
 } // namespace
 
 namespace mlir::LLVM::AMD {
-static Value shuffleCommon(Location loc, RewriterBase &rewriter,
-                           ISAFamily isaFamily, Value val, Value i,
-                           int strideInt, ShflKind mode, Value clamp) {
+static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
+                               ISAFamily isaFamily, Value val, Value i,
+                               int strideInt, ShflKind mode, Value clamp) {
   unsigned bits = val.getType().getIntOrFloatBitWidth();
 
   // On AMD, the ds_swizzle_b32 and ds_permute_b32 instructions work on
@@ -86,8 +86,8 @@ static Value shuffleCommon(Location loc, RewriterBase &rewriter,
     if (bits < 32)
       val = sext(i32_ty, val);
 
-    val =
-        shuffleCommon(loc, rewriter, isaFamily, val, i, strideInt, mode, clamp);
+    val = shuffleCommonImpl(loc, rewriter, isaFamily, val, i, strideInt, mode,
+                            clamp);
 
     if (bits < 32)
       val = trunc(int_ty(bits), val);
@@ -101,10 +101,10 @@ static Value shuffleCommon(Location loc, RewriterBase &rewriter,
     Value vec = bitcast(val, vecTy);
     Value val0 = extract_element(f32_ty, vec, i32_val(0));
     Value val1 = extract_element(f32_ty, vec, i32_val(1));
-    val0 = shuffleCommon(loc, rewriter, isaFamily, val0, i, strideInt, mode,
-                         clamp);
-    val1 = shuffleCommon(loc, rewriter, isaFamily, val1, i, strideInt, mode,
-                         clamp);
+    val0 = shuffleCommonImpl(loc, rewriter, isaFamily, val0, i, strideInt, mode,
+                             clamp);
+    val1 = shuffleCommonImpl(loc, rewriter, isaFamily, val1, i, strideInt, mode,
+                             clamp);
     vec = undef(vecTy);
     vec = insert_element(vecTy, vec, val0, i32_val(0));
     vec = insert_element(vecTy, vec, val1, i32_val(1));
@@ -231,6 +231,20 @@ static Value shuffleCommon(Location loc, RewriterBase &rewriter,
     break;
   }
   return Value();
+}
+
+static Value shuffleCommon(Location loc, RewriterBase &rewriter,
+                           ISAFamily isaFamily, Value val, Value i,
+                           int strideInt, ShflKind mode, Value clamp) {
+  // To shuffle pointers, convert them to i64.
+  Type valTy = val.getType();
+  if (isa<LLVM::LLVMPointerType>(valTy))
+    val = ptrtoint(i64_ty, val);
+  Value result = shuffleCommonImpl(loc, rewriter, isaFamily, val, i, strideInt,
+                                   mode, clamp);
+  if (isa<LLVM::LLVMPointerType>(valTy))
+    result = inttoptr(valTy, result);
+  return result;
 }
 
 Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i,

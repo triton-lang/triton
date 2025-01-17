@@ -354,6 +354,15 @@ SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
 SmallVector<unsigned> delinearize(unsigned linear, ArrayRef<unsigned> shape,
                                   ArrayRef<unsigned> order);
 
+// Returns a tuple with the delinearized coordinates and a boolean which is true
+// iff the Value is not broadcasted (equivalently, if the value is the "first"
+// lane/thread/etc. that holds the given value). In mathy terms, the boolean is
+// true if the element is the canonical representative of the class.
+std::tuple<SmallVector<Value>, Value>
+delinearize(RewriterBase &rewriter, Location loc,
+            triton::gpu::DistributedEncodingTrait layout,
+            ArrayRef<int64_t> shape, StringAttr dimName, Value linear);
+
 Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
                 ArrayRef<unsigned> shape, ArrayRef<unsigned> order);
 

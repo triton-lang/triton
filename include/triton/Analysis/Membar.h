@@ -34,6 +34,25 @@ struct BlockInfo {
     return *this;
   }
 
+  void dump() {
+    auto &err = llvm::errs();
+    err << "Block Interval:\n";
+    err << "  Read Intervals:\n";
+    for (auto &[interval, ops] : syncReadIntervals) {
+      err << "    [" << interval.start() << ", " << interval.end() << "] ";
+      for (auto &op : ops)
+        err << op->getName() << " ";
+      err << "\n";
+    }
+    err << "  Write Intervals:\n";
+    for (auto &[interval, ops] : syncWriteIntervals) {
+      err << "    [" << interval.start() << ", " << interval.end() << "] ";
+      for (auto &op : ops)
+        err << op->getName() << " ";
+      err << "\n";
+    }
+  }
+
   /// Returns true if intervals in two BlockInfo objects are intersected.
   bool isIntersected(const BlockInfo &other, MembarFilterFn filter) const {
     return /*RAW*/ isIntersected(syncWriteIntervals, other.syncReadIntervals,
