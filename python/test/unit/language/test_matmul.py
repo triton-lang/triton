@@ -6,7 +6,7 @@ import triton.language as tl
 import triton.tools.experimental_descriptor
 from test_mxfp import MXFP4Tensor, MXScaleTensor
 import re
-from triton._internal_testing import is_cuda, is_hip, is_hip_mi200
+from triton._internal_testing import is_cuda, is_hip, is_hip_mi200, is_hip_mi350, is_hip_cdna
 
 
 def f8_to_f16(x, dtype):
@@ -715,8 +715,18 @@ def block_scale_fp4_matmul(  #
                                                        (128, 256, 256), (128, 128, 64), (128, 64, 128)])
 @pytest.mark.parametrize(("scale_type", "VEC_SIZE"), [("float8_e8m0fnu", 32), ("float8_e4m3fn", 16)],
                          ids=["mxfp4", "nvfp4"])
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 10, reason="Requires compute capability >= 10")
-def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, scale_type, device):
+@pytest.mark.parametrize("nonKDim", ([0, 16, 32] if is_hip_cdna() else []))
+def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, scale_type, nonKDim, device):
+    if is_cuda() and torch.cuda.get_device_capability()[0] < 10:
+        pytest.skip("Requires compute capability >= 10")
+    if is_hip():
+        if not is_hip_mi350():
+            pytest.skip("Only supported on MI350")
+        if scale_type != 'float8_e8m0fnu':
+            pytest.skip("AMDGPU only support E8M0 scale")
+        if (nonKDim == 16 and BLOCK_K < 128) or (nonKDim == 32 and BLOCK_K < 64):
+            pytest.skip("Unsupported block size")
+
     NUM_STAGES = 1
     torch.manual_seed(42)
     a_mxfp4 = MXFP4Tensor(size=(M, K), device=device).random()
@@ -748,9 +758,12 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, scale_typ
 
     output = a.new_empty((M, N), dtype=torch.float32)
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
+    kernel_kwargs = {}
+    if is_hip():
+        kernel_kwargs["matrix_instr_nonkdim"] = nonKDim
     block_scale_fp4_matmul[grid](a, b, output, a_scale, b_scale, M, N, K, a_scale.stride(0), a.stride(0), a.stride(1),
                                  b.stride(0), b.stride(1), output.stride(0), output.stride(1), VEC_SIZE, BLOCK_M,
-                                 BLOCK_N, BLOCK_K, NUM_STAGES=NUM_STAGES)
+                                 BLOCK_N, BLOCK_K, NUM_STAGES=NUM_STAGES, **kernel_kwargs)
 
     torch.testing.assert_close(ref_out, output, atol=1e-2, rtol=1e-2)
 

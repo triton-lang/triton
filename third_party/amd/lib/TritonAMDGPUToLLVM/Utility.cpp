@@ -600,4 +600,25 @@ unsigned getVectorSize(Value ptr, Value offset,
   return std::min<unsigned>(128 / pointeeBitWidth, contiguity);
 }
 
+Type scaleDotElemTypeToMLIRType(MLIRContext *ctx, triton::ScaleDotElemType t) {
+  switch (t) {
+  case triton::ScaleDotElemType::FP16:
+    return Float16Type::get(ctx);
+  case triton::ScaleDotElemType::BF16:
+    return BFloat16Type::get(ctx);
+  case triton::ScaleDotElemType::E4M3:
+    return Float8E4M3FNUZType::get(ctx);
+  case triton::ScaleDotElemType::E5M2:
+    return Float8E5M2FNUZType::get(ctx);
+  case triton::ScaleDotElemType::E3M2:
+    return Float6E3M2FNType::get(ctx);
+  case triton::ScaleDotElemType::E2M3:
+    return Float6E2M3FNType::get(ctx);
+  case triton::ScaleDotElemType::E2M1:
+    return Float4E2M1FNType::get(ctx);
+  default:
+    llvm_unreachable("unsupported ScaleDotElemType!");
+  }
+}
+
 } // namespace mlir::LLVM::AMD

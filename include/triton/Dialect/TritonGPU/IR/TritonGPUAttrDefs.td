@@ -862,6 +862,7 @@ It is characterized by the following parameters:
   - 1.0: gfx908, i.e. MI100
   - 2.0: gfx90a: i.e. MI200, MI210, MI250
   - 3.0: gfx940, gfx941, gfx942: MI300
+  - 4.0: gfx950: MI350
 - `warpsPerCTA` indicates the warp layout in the block.
 - `MDim` and `NDim` indicate the dimension of the output of the mfma instruction.
 - `isTransposed` indicates the result tensor is transposed so that it can be converted to dotOperand layout
@@ -931,7 +932,7 @@ The data will be distributed between threads as follows:
 
 Example 3:
 Suppose we have a tensor with a shape of [8, 8], warpsPerCTA set to [2, 2] and nonKDim set to 4.
-The data will be distributed between threads as follows(note that each element is duploicated in 16 threads):
+The data will be distributed between threads as follows(note that each element is duplicated in 16 threads):
 Suppose we have a tensor with a shape of [8, 8], warpsPerCTA set to [2, 2] and MDim=NDim=4.
 The data will be distributed between threads as follows(note that each element is duplicated in 16 threads):
 

@@ -10,7 +10,8 @@
 // during to LLVM conversion/lowering to facilitate instruction scheduling
 // controls.
 namespace mlir::triton {
-void setNumGeneratedMMAs(DotOp op, size_t mmaCount, unsigned m, unsigned n,
+template <typename DotOpType>
+void setNumGeneratedMMAs(DotOpType op, size_t mmaCount, unsigned m, unsigned n,
                          unsigned k, Type elementType);
 
 template <typename LoadOpType>

@@ -15,6 +15,11 @@ LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                           const LLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter);
 
+LogicalResult convertScaledMFMA(triton::DotScaledOp op,
+                                triton::DotScaledOp::Adaptor adaptor,
+                                const LLVMTypeConverter *typeConverter,
+                                ConversionPatternRewriter &rewriter);
+
 LogicalResult convertWMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                           const LLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter);
@@ -47,6 +52,25 @@ struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
         "Unsupported DotOp found when converting TritonGPU to LLVM.");
   }
 };
+
+struct ScaledDotOpConversion
+    : public ConvertOpToLLVMPattern<triton::DotScaledOp> {
+  using ConvertOpToLLVMPattern<triton::DotScaledOp>::ConvertOpToLLVMPattern;
+  int mfmaVersion;
+  int nonKDim;
+  int kPack;
+
+  ScaledDotOpConversion(LLVMTypeConverter &typeConverter, int mfmaVersion,
+                        int nonKDim, int kPack, PatternBenefit benefit = 1)
+      : ConvertOpToLLVMPattern(typeConverter, benefit),
+        mfmaVersion(mfmaVersion), nonKDim(nonKDim), kPack(kPack) {}
+
+  LogicalResult
+  matchAndRewrite(triton::DotScaledOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    return AMD::convertScaledMFMA(op, adaptor, getTypeConverter(), rewriter);
+  }
+};
 } // namespace
 
 namespace mlir::triton::AMD {
@@ -55,5 +79,6 @@ void populateDotOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                  ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                  PatternBenefit benefit) {
   patterns.add<DotOpConversion>(typeConverter, benefit);
+  patterns.add<ScaledDotOpConversion>(typeConverter, benefit);
 }
 } // namespace mlir::triton::AMD
