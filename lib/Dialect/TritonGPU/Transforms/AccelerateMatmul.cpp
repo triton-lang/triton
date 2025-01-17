@@ -472,7 +472,7 @@ public:
 
       // Extract warp layout from dotAEncoding
       // In the future we'll have some nice division utils, but until then...
-      auto dotLL = *newAEncoding.toLinearLayout(a.getType().getShape());
+      auto dotLL = newAEncoding.toLinearLayout(a.getType().getShape());
       LinearLayout::BasesT scaleBases = dotLL.getBases();
       auto kWarp = StringAttr::get(ctx, "warp");
       auto &warpBases = scaleBases[kWarp];

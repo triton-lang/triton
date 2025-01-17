@@ -47,7 +47,7 @@ struct CanonicalizeConvertFromReshape
     auto dstType = convert.getType();
     auto srcLL = toLinearLayout(srcType.getShape(), srcType.getEncoding());
     auto dstLL = toLinearLayout(dstType.getShape(), dstType.getEncoding());
-    if (srcLL && dstLL && *srcLL == *dstLL) {
+    if (srcLL == dstLL) {
       rewriter.replaceOpWithNewOp<triton::ReshapeOp>(
           op, op.getType(), convert.getSrc(), op.getAllowReorder());
       return mlir::success();
