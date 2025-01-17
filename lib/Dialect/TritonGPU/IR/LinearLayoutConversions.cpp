@@ -279,7 +279,7 @@ LinearLayout broadcastedDotOperandLayout(MLIRContext *ctx,
 
 } // anonymous namespace
 
-std::optional<LinearLayout>
+LinearLayout
 AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   int rank = shape.size();
   assert(rank == getWarpsPerCTA().size());
@@ -367,9 +367,8 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   return combineCtaCgaWithShape(ctaLayout, getCTALayout(), shape);
 }
 
-std::optional<LinearLayout>
-mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
-                      ArrayRef<int64_t> shape) {
+LinearLayout mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
+                                   ArrayRef<int64_t> shape) {
 
   // Current linear layout conversion for dot operand is only necessary to
   // enable LDS bypass for operand B in the MFMA dot path. To achieve
@@ -479,7 +478,7 @@ mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
   return combineCtaCgaWithShape(ctaLayout, mfmaLayout.getCTALayout(), shape);
 }
 
-std::optional<LinearLayout>
+LinearLayout
 AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   int rank = shape.size();
   assert(rank == getWarpsPerCTA().size());
@@ -570,9 +569,8 @@ AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   return combineCtaCgaWithShape(ctaLayout, getCTALayout(), shape);
 }
 
-std::optional<LinearLayout>
-wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
-                             ArrayRef<int64_t> shape) {
+LinearLayout wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
+                                          ArrayRef<int64_t> shape) {
   auto wmmaLayout = llvm::cast<AMDWmmaEncodingAttr>(dotWmmaLayout.getParent());
   auto rank = shape.size();
   bool hasBatchDim = rank == 3;
@@ -639,7 +637,7 @@ wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
   return combineCtaCgaWithShape(ctaLayout, wmmaLayout.getCTALayout(), shape);
 }
 
-std::optional<LinearLayout>
+LinearLayout
 BlockedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   assert(shape.size() == getOrder().size());
   MLIRContext *ctx = getContext();
@@ -653,9 +651,8 @@ BlockedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   return combineCtaCgaWithShape(ctaLayout, getCTALayout(), shape);
 }
 
-std::optional<LinearLayout>
-fmaDotToLinearLayout(DotOperandEncodingAttr operandLayout,
-                     ArrayRef<int64_t> shape) {
+LinearLayout fmaDotToLinearLayout(DotOperandEncodingAttr operandLayout,
+                                  ArrayRef<int64_t> shape) {
   int rank = shape.size();
   auto blocked = cast<BlockedEncodingAttr>(operandLayout.getParent());
   MLIRContext *ctx = operandLayout.getContext();
@@ -736,7 +733,7 @@ LinearLayout nvidiaMmaTile(MLIRContext *ctx, ArrayRef<unsigned> tileShape,
   return ctaLayout;
 }
 
-std::optional<LinearLayout>
+LinearLayout
 NvidiaMmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   auto ctx = getContext();
   int rank = shape.size();
@@ -792,7 +789,7 @@ LinearLayout nvidiaDotToLinearLayout(ArrayRef<int64_t> shape,
   return combineCtaCgaWithShape(ctaLayout, getCTALayout(dot), shape);
 }
 
-std::optional<LinearLayout>
+LinearLayout
 DotOperandEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   auto parent = getParent();
   if (auto blockedLayout = mlir::dyn_cast<BlockedEncodingAttr>(parent)) {
@@ -801,24 +798,19 @@ DotOperandEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
     return mfmaDotToLinearLayout(*this, shape);
   } else if (auto wmmaLayout = mlir::dyn_cast<AMDWmmaEncodingAttr>(parent)) {
     return wmmaDotOperandToLinearLayout(*this, shape);
-  } else if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent)) {
+  } else {
+    auto mma = mlir::cast<NvidiaMmaEncodingAttr>(parent);
     return nvidiaDotToLinearLayout(shape, *this);
   }
-  return std::nullopt;
 }
 
-std::optional<LinearLayout>
-SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
+LinearLayout SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   MLIRContext *ctx = getContext();
 
   // First compute the linear layout for this layout's parent.
   SmallVector<int64_t> parentShape(shape);
   parentShape.insert(parentShape.begin() + getDim(), 1);
-  std::optional<LinearLayout> parentLL =
-      triton::gpu::toLinearLayout(parentShape, getParent());
-  if (!parentLL.has_value()) {
-    return std::nullopt;
-  }
+  LinearLayout parentLL = triton::gpu::toLinearLayout(parentShape, getParent());
 
   // Remove dimension getDim() from the parent layout.
   //
@@ -829,19 +821,19 @@ SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   //  3. Fix up duplicate registers introduced by slicing.
   auto outDimNames = standardOutDimNames(ctx, shape.size() + 1);
   LinearLayout transform = LinearLayout::empty();
-  for (auto [idx, outDim] : llvm::enumerate(parentLL->getOutDimNames())) {
+  for (auto [idx, outDim] : llvm::enumerate(parentLL.getOutDimNames())) {
     if (idx == getDim()) {
       // Because we're multiplying by all zeros, we could replace outDimNames[0]
       // with any other valid out-dim; the layout will be the same.
-      transform *= LinearLayout::zeros1D(parentLL->getOutDimSize(outDim),
-                                         outDim, outDimNames[0]);
+      transform *= LinearLayout::zeros1D(parentLL.getOutDimSize(outDim), outDim,
+                                         outDimNames[0]);
     } else {
       transform *=
-          LinearLayout::identity1D(parentLL->getOutDimSize(outDim), outDim,
+          LinearLayout::identity1D(parentLL.getOutDimSize(outDim), outDim,
                                    outDimNames[idx - (idx < getDim() ? 0 : 1)]);
     }
   }
-  LinearLayout sliceLL = parentLL->compose(transform);
+  LinearLayout sliceLL = parentLL.compose(transform);
 
   // Step 3: Along the "register" dim, remove any all-zero bases.
   auto bases = sliceLL.getBases();
@@ -874,20 +866,22 @@ SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   return ret;
 }
 
-std::optional<LinearLayout>
+LinearLayout
 TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
                                  std::optional<int32_t> elemBitWidth) {
   CacheKey key{std::vector<int64_t>(shape.begin(), shape.end()), layout,
                elemBitWidth};
-  auto result = llCache.get(key);
-  if (result.has_value()) {
-    return result;
+  if (auto result = llCache.get(key)) {
+    return *result;
   }
 
   // Layouts are distributed or shared in triton core
+  // To add a new layout add an else-if clause
+  LinearLayout result = LinearLayout::empty();
   if (auto distributed = dyn_cast<DistributedEncodingTrait>(layout)) {
     result = distributed.toLinearLayout(shape);
-  } else if (auto shared = dyn_cast<SharedEncodingAttr>(layout)) {
+  } else {
+    auto shared = dyn_cast<SharedEncodingAttr>(layout);
     if (shared.getHasLeadingOffset()) {
       assert(elemBitWidth.has_value());
       result = sharedToLinearLayoutLeadingOffset(shape, shared, *elemBitWidth);
@@ -896,13 +890,11 @@ TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
     }
   }
 
-  if (result.has_value()) {
-    llCache.set(std::move(key), *result);
-  }
+  llCache.set(std::move(key), result);
   return result;
 }
 
-std::optional<LinearLayout>
+LinearLayout
 toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
                std::optional<int32_t> elemBitWidth /*= std::nullopt*/) {
   auto *ctx = layout.getContext();
