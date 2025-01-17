@@ -146,9 +146,9 @@ void testReshape(RankedTensorType srcTy, RankedTensorType dstTy,
         << "Inverse encoding inference (" << triton::join(dstTy.getShape(), "x")
         << " " << stringifyLLVMType(inferredEnc) << " -> "
         << triton::join(srcTy.getShape(), "x")
-        << " gave the wrong result.  Expected " << srcLinear->toString()
+        << " gave the wrong result.  Expected " << srcLinear.toString()
         << " but "
-        << "got " << inferredSrcLinear->toString() << ".\n";
+        << "got " << inferredSrcLinear.toString() << ".\n";
   }
 
   // The funtional characterisation of resize is that, if we have a srcLayout
@@ -156,7 +156,7 @@ void testReshape(RankedTensorType srcTy, RankedTensorType dstTy,
   // when considered as C-contiguous.
   auto makeFlattenedCContig = [](ArrayRef<int64_t> shape, Attribute layout) {
     auto ctx = layout.getContext();
-    auto linear = *toLinearLayout(shape, layout);
+    auto linear = toLinearLayout(shape, layout);
     auto dims = standardOutDimNames(ctx, shape.size());
     std::reverse(dims.begin(), dims.end());
     return linear.transposeOuts(dims).reshapeOuts(
@@ -515,7 +515,7 @@ TEST_F(LinearEncodingTest, DistributedEncodingToLinearEncoding) {
       }
 
       // Create LinearEncodingAttr from the LinearLayout
-      auto linearLayout = *distributedEncoding.toLinearLayout(shape);
+      auto linearLayout = distributedEncoding.toLinearLayout(shape);
       auto linearEncoding =
           triton::gpu::LinearEncodingAttr::get(&ctx, linearLayout);
 

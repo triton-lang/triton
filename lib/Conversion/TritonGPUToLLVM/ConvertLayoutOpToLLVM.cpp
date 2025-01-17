@@ -277,24 +277,20 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
 
-    auto conversion = minimalCvtLayout(srcTy, dstTy);
-    if (!conversion.has_value()) {
-      return rewriter.notifyMatchFailure(
-          op, "NYI. srcTy and/or dstTy don't implement LLs yet");
-    }
+    LinearLayout conversion = minimalCvtLayout(srcTy, dstTy);
     LinearLayout srcLayout =
-        *toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
+        toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
     LinearLayout dstLayout =
-        *toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
+        toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
 
     StringAttr kBlock = str_attr("block");
     StringAttr kWarp = str_attr("warp");
     StringAttr kLane = str_attr("lane");
     StringAttr kRegister = str_attr("register");
 
-    assert(to_vector(conversion->getInDimNames()) ==
-           to_vector(conversion->getOutDimNames()));
-    auto dims = conversion->getInDimNames();
+    assert(to_vector(conversion.getInDimNames()) ==
+           to_vector(conversion.getOutDimNames()));
+    auto dims = conversion.getInDimNames();
     if (llvm::is_contained(dims, kBlock)) {
       // Case 1: Transfer between values in different CTAs.
       //          This requires moving values through distributed shared memory.
@@ -320,7 +316,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     } else if (llvm::is_contained(dims, kRegister)) {
       // Case 4. Transfer between values in the same thread, in which case we
       //         simply reorder the elements of adaptor.getSrc().
-      return transferWithinThread(op, *conversion, adaptor, rewriter);
+      return transferWithinThread(op, conversion, adaptor, rewriter);
     } else {
       // Cast 5. The two layouts are equivalent. We should probably remove
       // these in RemoveLayoutConversion.

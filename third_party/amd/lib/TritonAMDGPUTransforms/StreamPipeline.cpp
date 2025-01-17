@@ -670,8 +670,7 @@ Value StreamPipeliner::createAlloc(Operation *loadOp,
   Type memdescType = ttg::MemDescType::get(bufferShape, ty.getElementType(),
                                            sharedEnc, sharedMemorySpace,
                                            /*mutableMemory=*/true);
-  auto alloc =
-      builder.create<ttg::LocalAllocOp>(loadOp->getLoc(), memdescType, Value());
+  auto alloc = builder.create<ttg::LocalAllocOp>(loadOp->getLoc(), memdescType);
   sharedMemAllocs.push_back(alloc);
   return alloc;
 }
