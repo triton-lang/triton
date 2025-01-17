@@ -39,6 +39,7 @@ def moe_gemm_kernel(
     EM: tl.constexpr,
     N: tl.constexpr,
     K: tl.constexpr,
+    EVEN_K: tl.constexpr,
     MUL_ROUTED_WEIGHT: tl.constexpr,
     BLOCK_SIZE_M: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr,
@@ -97,8 +98,12 @@ def moe_gemm_kernel(
 
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         # Masking ensures we don't load from invalid tokens or indices
-        a = tl.load(a_ptrs, mask=(token_mask[:, None] & (offs_k[None, :] < K - k * BLOCK_SIZE_K)), other=0.0)
-        b = tl.load(b_ptrs, mask=(offs_k[:, None] < K - k * BLOCK_SIZE_K), other=0.0)
+        if EVEN_K:
+            a = tl.load(a_ptrs, mask=(token_mask[:, None]), other=0.0)
+            b = tl.load(b_ptrs)
+        else:
+            a = tl.load(a_ptrs, mask=(token_mask[:, None] & (offs_k[None, :] < K - k * BLOCK_SIZE_K)), other=0.0)
+            b = tl.load(b_ptrs, mask=(offs_k[:, None] < K - k * BLOCK_SIZE_K), other=0.0)
 
         accumulator = tl.dot(a, b, acc=accumulator)
         a_ptrs += BLOCK_SIZE_K * stride_ak
@@ -292,8 +297,10 @@ def moe_gemm(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, topk_weights: to
     _, N, K = b.shape
     grid = lambda META: (triton.cdiv(EM, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
 
+    EVEN_K = K % config["BLOCK_SIZE_K"] == 0
+
     moe_gemm_kernel[grid](a, b, c, a.stride(0), a.stride(1), b.stride(0), b.stride(1), b.stride(2), c.stride(1),
-                          c.stride(2), top_k, topk_weights, sorted_token_ids, expert_ids, EM, N, K,
+                          c.stride(2), top_k, topk_weights, sorted_token_ids, expert_ids, EM, N, K, EVEN_K,
                           MUL_ROUTED_WEIGHT=topk_weights is not None, **config)
     return c
 
@@ -327,6 +334,7 @@ def input_helper(M: int, N: int, K: int, top_k: int, E: int, routed_weight: bool
     (64, 14336, 4096, 2, 8),
     (16, 14336, 1, 2, 4),
     (1, 14336, 128, 2, 4),
+    (3, 14336, 128, 2, 4),
     (16, 14336, 128, 1, 4),
     (16, 14336, 128, 1, 1),
     (64, 7186, 128, 2, 8),
