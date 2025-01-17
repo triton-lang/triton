@@ -65,6 +65,7 @@ struct CanonicalizeConvertFromReshape
 
 // TODO We should do this generically for op(cvt) -> op
 // We have similar patterns for reshape and split...
+// See https://github.com/triton-lang/triton/pull/5403#discussion_r1920091671
 
 // trans(cvt) -> trans
 struct CanonicalizeConvertFromTranspose
