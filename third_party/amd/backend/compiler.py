@@ -49,7 +49,7 @@ class HIPOptions:
     arch: str = None
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", )
     deprecated_fp8_dtypes: Tuple[str] = ()
-    default_dot_input_precision: str = "tf32"
+    default_dot_input_precision: str = "ieee"
     allowed_dot_input_precisions: Tuple[str] = (
         "tf32",
         "ieee",
