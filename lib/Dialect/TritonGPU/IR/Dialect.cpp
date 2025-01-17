@@ -2584,7 +2584,7 @@ struct TritonGPUInferLayoutInterface
           applyPermutation(invOrderUnsigned, enc.getOrder()), *ctaLayout);
       return success();
     }
-    auto ll = *toLinearLayout(shape, operandEncoding);
+    auto ll = toLinearLayout(shape, operandEncoding);
     auto namedBases = ll.getBases();
     for (auto &bases : llvm::make_second_range(namedBases)) {
       for (auto &b : bases) {
