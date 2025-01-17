@@ -50,10 +50,7 @@ class HIPOptions:
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", )
     deprecated_fp8_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "ieee"
-    allowed_dot_input_precisions: Tuple[str] = (
-        "tf32",
-        "ieee",
-    )
+    allowed_dot_input_precisions: Tuple[str] = ("ieee", )
     enable_fp_fusion: bool = True
     # TODO: Implement cooperative grid launch for AMD:
     # See: https://rocm.docs.amd.com/projects/HIPIFY/en/latest/tables/CUDA_Driver_API_functions_supported_by_HIP.html
@@ -114,6 +111,12 @@ class HIPBackend(BaseBackend):
 
     def parse_options(self, opts) -> Any:
         args = {'arch': os.getenv("TRITON_OVERRIDE_ARCH", self.target.arch)}
+
+        # Enable XF32 (TF32) for MI300-series GPUs
+        if self.target.arch in ('gfx942'):
+            allowed_dot_input_precisions = set(HIPOptions.allowed_dot_input_precisions)
+            allowed_dot_input_precisions.update({'tf32'})
+            args["allowed_dot_input_precisions"] = tuple(sorted(allowed_dot_input_precisions))
 
         if "supported_fp8_dtypes" not in opts:
             supported_fp8_dtypes = set(HIPOptions.supported_fp8_dtypes)
