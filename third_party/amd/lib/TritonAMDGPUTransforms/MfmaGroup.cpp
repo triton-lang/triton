@@ -7,8 +7,7 @@ static MfmaTypeId chooseAppropriateMfmaId(mlir::Type dataTypeA,
                                           bool allowXF32) {
   if (allowXF32 && dataTypeA.isF32() && dataTypeB.isF32()) {
     return MfmaTypeId::Xf32TyId;
-  }
-  if (dataTypeA.isF32() && dataTypeB.isF32()) {
+  } else if (dataTypeA.isF32() && dataTypeB.isF32()) {
     return MfmaTypeId::Fp32TyId;
   }
   if (dataTypeA.isF16() && dataTypeB.isF16()) {
