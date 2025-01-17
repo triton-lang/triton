@@ -73,7 +73,13 @@ struct CanonicalizeConvertFromTranspose
   matchAndRewrite(triton::TransOp op,
                   PatternRewriter &rewriter) const override {
     auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
-    if (!convert)
+    // Canonicalize only for trans(cvt) : Layout -> Linear
+    // See
+    // https://github.com/triton-lang/triton/pull/5403#discussion_r1919306932
+    // Once every layout inherits from LinearEncodingAttr and we define equality
+    // as equality of the underlying LinearEncodingAttr, we can remove this
+    // check and even make it generic as a pattern op(cvt) -> op
+    if (!convert || !isa<LinearEncodingAttr>(convert.getType().getEncoding()))
       return failure();
     auto srcType = convert.getSrc().getType();
     auto dstType = convert.getType();
