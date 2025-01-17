@@ -183,8 +183,6 @@ struct DotOpMFMAConversionHelper {
     auto elemTyA = aTensorTy.getElementType();
     auto elemTyB = bTensorTy.getElementType();
 
-    // XF32 is allowed if the input precision is TF32 and mfmaVersion is 3
-    // (CDNA3, MI300 series only)
     bool allowXF32 =
         op.getInputPrecision() == InputPrecision::TF32 && mfmaVersion == 3;
     StringRef mfmaInsnName;
@@ -200,7 +198,7 @@ struct DotOpMFMAConversionHelper {
     auto bEncoding = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
     int kWidth = aEncoding.getKWidth();
 
-    // If we are using XF32, the kWidth is actually 2
+    // If we are using XF32, the kWidth (and kBase) is double that of F32.
     if (aTensorTy.getElementType().isF32() && allowXF32)
       kWidth *= 2;
 
