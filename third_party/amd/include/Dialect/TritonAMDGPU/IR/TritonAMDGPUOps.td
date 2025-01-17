@@ -199,15 +199,15 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
       ins
       TT_Ptr:$ptr,
       I32Tensor:$offsets,
+      I32:$stride,
       Optional<TT_BoolTensor>:$mask,
-      Optional<TT_Tensor>:$other,
-      Optional<I32>:$stride
+      Optional<TT_Tensor>:$other
     );
     let results = (outs TT_Tensor:$result);
 
     let assemblyFormat = [{
-      $ptr `[` $offsets `]` (`,` $mask^)? (`,` $other^)? (`,` $stride^)?
-      attr-dict `:` type($result)
+      $ptr `[` $offsets `]``,` $stride (`,` $mask^)? (`,` $other^)?
+      attr-dict `:` type($ptr) `[` type($offsets) `]``,` type($stride) `->` type($result)
     }];
 }
 

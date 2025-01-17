@@ -67,17 +67,46 @@ Value BufferEmitter::createResourceDescriptor(Value basePtr,
   }
 
   Value stride = int_val(16, 0);
+  // Value stride = int_val(16, 20480);
+
   if (targetInfo.getISAFamily() == ISAFamily::CDNA3) {
     if (inferredStride) {
-      // TODO: consider better heuristics and stride > 8K
-      // It's only hint for the performance and corner cases can be ignored for
-      // now.
-      Value enableSwizzle = int_val(16, 16384);
-      Value stride16b =
-          rewriter.create<arith::TruncIOp>(loc, i16_ty, inferredStride);
-      // stride[13:0] = swizzling stride
-      // stride[14] = swizzle enabling bit
-      stride = rewriter.create<arith::OrIOp>(loc, enableSwizzle, stride16b);
+      Value enable512 = int_val(16, 512 + 16384);
+      Value enable1k = int_val(16, 1024 + 16384);
+      Value enable2k = int_val(16, 2048 + 16384);
+      Value enable4k = int_val(16, 4096 + 16384);
+      Value enable8k = int_val(16, 8192 + 16384);
+
+      Value const8K = int_val(32, 18);
+      Value const4K = int_val(32, 19);
+      Value const2K = int_val(32, 20);
+      Value const1K = int_val(32, 21);
+      Value const512 = int_val(32, 22);
+
+      auto isPoison =
+          IntegerAttr::get(IntegerType::get(rewriter.getContext(), 1), 0);
+      Value leadingZeros = rewriter.create<LLVM::CountLeadingZerosOp>(
+          loc, inferredStride.getType(), inferredStride, isPoison);
+
+      Value cmp8k = rewriter.create<arith::CmpIOp>(
+          loc, arith::CmpIPredicate::eq, leadingZeros, const8K);
+      Value cmp4k = rewriter.create<arith::CmpIOp>(
+          loc, arith::CmpIPredicate::eq, leadingZeros, const4K);
+      Value cmp2k = rewriter.create<arith::CmpIOp>(
+          loc, arith::CmpIPredicate::eq, leadingZeros, const2K);
+      Value cmp1k = rewriter.create<arith::CmpIOp>(
+          loc, arith::CmpIPredicate::eq, leadingZeros, const1K);
+      Value cmp512 = rewriter.create<arith::CmpIOp>(
+          loc, arith::CmpIPredicate::eq, leadingZeros, const512);
+
+      Value sel0 =
+          rewriter.create<arith::SelectOp>(loc, cmp8k, enable8k, stride);
+      Value sel1 = rewriter.create<arith::SelectOp>(loc, cmp4k, enable4k, sel0);
+      Value sel2 = rewriter.create<arith::SelectOp>(loc, cmp2k, enable2k, sel1);
+      Value sel3 = rewriter.create<arith::SelectOp>(loc, cmp1k, enable1k, sel2);
+      Value sel4 =
+          rewriter.create<arith::SelectOp>(loc, cmp512, enable512, sel3);
+      stride = sel4;
     }
   }
 

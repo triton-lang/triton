@@ -278,37 +278,21 @@ Value inferStride(triton::LoadOp op, PatternRewriter &rewriter) {
 
     // Get how much this buffer is incremented in each iteration.
     if (currDotChain) {
-      auto ptr = getInputArg(op.getPtr());
-      arith::ConstantIntOp increment;
-      for (auto user : ptr.getUsers()) {
-        if (auto addPtrOp = dyn_cast<tt::AddPtrOp>(user)) {
-          auto v = addPtrOp.getOffset();
-          if (auto constIncrTensorOp =
-                  dyn_cast<arith::ConstantOp>(v.getDefiningOp())) {
-            auto incrValue =
-                dyn_cast<IntegerAttr>(constIncrTensorOp.getValue()).getInt();
-            increment =
-                rewriter.create<arith::ConstantIntOp>(loc, incrValue, 32);
-          }
-        }
-      }
       auto ub = forOp.getUpperBound();
-      // Upperbound could be decreased by the pipelining prefetch.
-      if (auto maybeSubIOp = ub.getDefiningOp<arith::SubIOp>()) {
-        ub = maybeSubIOp.getLhs();
+      Value inferredK;
+      while (auto maybeGemmK = ub.getDefiningOp()) {
+        if (isa<arith::AddIOp, arith::SubIOp, arith::MulIOp, arith::DivSIOp>(
+                maybeGemmK))
+          ub = maybeGemmK->getOperand(0);
+        else
+          break;
+        inferredK = ub;
       }
-      // stride = increment * ub = GEMM_K
-      auto inferredStrideA =
-          rewriter.create<arith::MulIOp>(loc, ub, increment);
-
-      // Hoist out of the loop, both loop ub and incrementing constant should be
-      // coming outside.
-      inferredStrideA->moveBefore(forOp);
-      return inferredStrideA;
-    } else
-      return nullptr;
-  } else
-    return nullptr;
+      if (isa<BlockArgument>(inferredK))
+        return inferredK;
+    }
+  }
+  return nullptr;
 }
 
 } // namespace
@@ -343,10 +327,13 @@ struct ConvertTritonLoadToBufferLoad
       if (op.getMask() && !isZeroConst(op.getMask()))
         maybeMask = op.getMask();
       Value maybeStride = inferStride(op, rewriter);
+      if (!maybeStride)
+        maybeStride =
+            rewriter.create<arith::ConstantIntOp>(op->getLoc(), 0, 32);
 
       auto bufferLoadOp = rewriter.create<triton::amdgpu::BufferLoadOp>(
-          op->getLoc(), op.getType(), basePtr, tensorOffset, maybeMask,
-          maybeOther, maybeStride);
+          op->getLoc(), op.getType(), basePtr, tensorOffset, maybeStride,
+          maybeMask, maybeOther);
 
       // Propagate `OpIdxAttr` if the currently processed `tt.LoadOp` was
       // labeled it. The attribute needs to be preserved for custom instruction
