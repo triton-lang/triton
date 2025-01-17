@@ -13,6 +13,7 @@ include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
 include "mlir/Interfaces/ControlFlowInterfaces.td" // BranchOpInterface
 include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
 include "mlir/Interfaces/CallInterfaces.td" // CallOpInterface
+include "mlir/Interfaces/InferIntRangeInterface.td"
 include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
 
 
@@ -417,7 +418,8 @@ def TT_AtomicCASOp : TT_Op<"atomic_cas", [MemoryEffects<[MemRead<GlobalMemory>]>
 //
 def TT_SplatOp : TT_Op<"splat", [Pure,
                                  SameOperandsAndResultElementType,
-                                 SameOperandsAndResultEncoding]> {
+                                 SameOperandsAndResultEncoding,
+                                 DeclareOpInterfaceMethods<InferIntRangeInterface, ["inferResultRanges"]>]> {
     let summary = "splat";
 
     let arguments = (ins TT_Type:$src);
@@ -587,7 +589,8 @@ def TT_TransOp : TT_Op<"trans", [Pure,
 //
 // SPMD Ops
 //
-def TT_GetProgramIdOp : TT_Op<"get_program_id", [Pure]> {
+def TT_GetProgramIdOp : TT_Op<"get_program_id", [Pure,
+                                                 DeclareOpInterfaceMethods<InferIntRangeInterface, ["inferResultRanges"]>]> {
     let arguments = (ins TT_ProgramDim:$axis);
 
     let results = (outs I32:$result);
@@ -802,7 +805,8 @@ def TT_ExternElementwiseOp : TT_Op<"extern_elementwise", [Elementwise,
 //
 // Make Range Op
 //
-def TT_MakeRangeOp : TT_Op<"make_range", [Pure]> {
+def TT_MakeRangeOp : TT_Op<"make_range", [Pure,
+                                          DeclareOpInterfaceMethods<InferIntRangeInterface, ["inferResultRanges"]>]> {
     let summary = "make range";
 
     let description = [{

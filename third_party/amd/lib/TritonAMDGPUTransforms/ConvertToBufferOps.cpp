@@ -1,3 +1,5 @@
+#include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
+#include "mlir/Analysis/DataFlow/IntegerRangeAnalysis.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -38,10 +40,9 @@ namespace ttg = mlir::triton::gpu;
 namespace tt = mlir::triton;
 
 namespace {
-template <typename F>
-bool verifyNonSmallerByAssumption(Value expr,
-                                  const DenseSet<Value> &assumptions,
-                                  F matchesOther) {
+bool verifyNonSmallerByAssumption(
+    Value expr, const DenseSet<Value> &assumptions,
+    const std::function<bool(Value)> &matchesOther) {
   for (Value assume : assumptions) {
     if (auto cmpOp = assume.getDefiningOp<arith::CmpIOp>()) {
       switch (cmpOp.getPredicate()) {
@@ -224,12 +225,7 @@ bool canUseBufferOps(Value ptr, const DenseSet<Value> &assumptions) {
     return false;
   LDBG("32 bit offset");
 
-  // 3. Check if the offset is non-negative
-  if (!verifyNonNegativeExpr(offset, assumptions))
-    return false;
-
-  LDBG("Non-negative");
-  return true;
+  return verifyNonNegativeExpr(offset, assumptions);
 }
 
 // Extract stride of the blocked offset of LD/ST ops.
@@ -471,6 +467,23 @@ private:
   DenseSet<Value> assumptions;
 };
 
+/// Gather ranges for all the values in `values`. Appends to the existing
+/// vector.
+static LogicalResult collectRanges(DataFlowSolver &solver, ValueRange values,
+                                   SmallVectorImpl<ConstantIntRanges> &ranges) {
+  for (Value val : values) {
+    auto *maybeInferredRange =
+        solver.lookupState<dataflow::IntegerValueRangeLattice>(val);
+    if (!maybeInferredRange || maybeInferredRange->getValue().isUninitialized())
+      return failure();
+
+    const ConstantIntRanges &inferredRange =
+        maybeInferredRange->getValue().getValue();
+    ranges.push_back(inferredRange);
+  }
+  return success();
+}
+
 class TritonAMDGPUConvertToBufferOpsPass
     : public TritonAMDGPUConvertToBufferOpsBase<
           TritonAMDGPUConvertToBufferOpsPass> {
@@ -491,10 +504,6 @@ public:
       if (op->getOperand(0).getDefiningOp<arith::CmpIOp>())
         assumptions.insert(op->getOperand(0));
     });
-    LDBG("Number of assumptions found: " << assumptions.size());
-    for (Value assume : assumptions) {
-      LDBG("Assumption:" << assume);
-    }
 
     ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
     patterns.add<ConvertTritonLoadToBufferLoad>(context, assumptions);
@@ -509,6 +518,32 @@ public:
 
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
+
+    DataFlowSolver solver;
+    solver.load<dataflow::DeadCodeAnalysis>();
+    solver.load<dataflow::IntegerRangeAnalysis>();
+    if (failed(solver.initializeAndRun(getOperation())))
+      return signalPassFailure();
+
+    mod->walk<WalkOrder::PreOrder>([&solver](Operation *op) {
+      SmallVector<ConstantIntRanges> inputRange;
+      (void)collectRanges(solver, op->getOperands(), inputRange);
+      SmallVector<ConstantIntRanges> outputRange;
+      (void)collectRanges(solver, op->getResults(), outputRange);
+
+      if (inputRange.size() || outputRange.size()) {
+        op->print(llvm::outs());
+        llvm::outs() << "\n";
+      }
+
+      if (inputRange.size())
+        llvm::outs() << "input range: " << inputRange[0] << "\n";
+      if (outputRange.size())
+        llvm::outs() << "output range: " << outputRange[0] << "\n";
+
+    });
+
+    llvm::outs() << "\n\n";
   }
 };
 
