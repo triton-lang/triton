@@ -162,7 +162,7 @@ FailureOr<MfmaInsn> chooseMfmaInstruction(tt::DotScaledOp dot, int mfmaVersion,
   return chooseMfmaInstruction(dot.getC().getType(), /*aElemType=*/elemType,
                                /*bElemType=*/elemType,
                                dot.getLhs().getType().getShape().back(),
-                               mfmaVersion, /*allowXF32=*/ false, nonKDim);
+                               mfmaVersion, /*allowXF32=*/false, nonKDim);
 }
 
 using OperandTypesVector = SmallVector<Type, 4>;
