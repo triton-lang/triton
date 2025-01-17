@@ -90,8 +90,8 @@ Type TritonGPUToLLVMTypeConverter::convertTritonTensorType(
     types.push_back(ptrType);
     // shape dims
     auto rank = type.getRank();
-    // offsets + strides
-    for (auto i = 0; i < rank * 2; i++) {
+    // offsets
+    for (auto i = 0; i < rank; i++) {
       types.push_back(IntegerType::get(ctx, 32));
     }
     return LLVM::LLVMStructType::getLiteral(ctx, types);
@@ -114,8 +114,8 @@ Type TritonGPUToLLVMTypeConverter::convertMemDescType(
   types.push_back(ptrType);
   // shape dims
   auto rank = type.getShape().size();
-  // offsets + strides
-  for (auto i = 0; i < rank * 2; i++) {
+  // offsets
+  for (auto i = 0; i < rank; i++) {
     types.push_back(IntegerType::get(ctx, 32));
   }
   return LLVM::LLVMStructType::getLiteral(ctx, types);

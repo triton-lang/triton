@@ -231,7 +231,7 @@ Value loadFMAOp(Value srcVal, Value llVal, BlockedEncodingAttr dLayout,
       rewriter);
   auto smem = getExpandedSharedMemoryObject(rewriter, loc, origSmem,
                                             opTensorTy.getShape());
-  auto strides = smem.strides;
+  auto smemStrides = origSmem.getStrides(opTensorTy, loc, rewriter);
   int B = opTensorShape[dim.batch];
   int K = opTensorShape[dim.k];
   int NonK = opTensorShape[dim.nonK];
@@ -267,7 +267,7 @@ Value loadFMAOp(Value srcVal, Value llVal, BlockedEncodingAttr dLayout,
       add(nonKTileOffset, mul(warpIds[dim.nonK], i32_val(sizePerWarpNonK)));
 
   auto elemTy = typeConverter->convertType(opTensorTy.getElementType());
-  Type ptrTy = smem.base.getType();
+  Type ptrTy = smem.getBase().getType();
 
   auto sharedOrder = expandMatrixOrderWithBatch(sharedLayout.getOrder());
   // compute contiguity of fastest dimension in shared layout.
@@ -315,12 +315,12 @@ Value loadFMAOp(Value srcVal, Value llVal, BlockedEncodingAttr dLayout,
   // non-constant part
   Value basePtr;
   if (swizzlePath) {
-    basePtr = smem.base;
+    basePtr = smem.getBase();
   } else {
     auto laneOffset = getUnswizzledFirstElemOffset(
-        rewriter, loc, B, NonK, bTileOffset, nonKTileOffset, strides[dim.batch],
-        strides[dim.nonK]);
-    basePtr = gep(ptrTy, elemTy, smem.base, laneOffset);
+        rewriter, loc, B, NonK, bTileOffset, nonKTileOffset,
+        smemStrides[dim.batch], smemStrides[dim.nonK]);
+    basePtr = gep(ptrTy, elemTy, smem.getBase(), laneOffset);
   }
 
   // This loop nest iterates over all values loaded in one thread across batch,
@@ -344,11 +344,11 @@ Value loadFMAOp(Value srcVal, Value llVal, BlockedEncodingAttr dLayout,
               offset = computeSwizzledOffset(
                   rewriter, loc, idx, dim, bTileOffset, nonKTileOffset,
                   shapePerCTABTile, shapePerCTANonKTile, sharedLayout,
-                  opTensorShape, strides);
+                  opTensorShape, smemStrides);
             } else {
-              offset = computeNonSwizzledOffset(rewriter, loc, idx, dim,
-                                                opTensorShape, shapePerCTABTile,
-                                                shapePerCTANonKTile, strides);
+              offset = computeNonSwizzledOffset(
+                  rewriter, loc, idx, dim, opTensorShape, shapePerCTABTile,
+                  shapePerCTANonKTile, smemStrides);
             }
 
             Value elemAddr = gep(ptrTy, elemTy, basePtr, offset);
