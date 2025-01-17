@@ -338,7 +338,7 @@ getSharedEncoding(Operation *loadOp, bool isMMAV3Shared, bool isTMALoad) {
   auto mmav3Enc = ttg::SharedEncodingAttr::get(
       ty.getContext(), ty.getShape(), order, ctaLayout, ty.getElementType());
 
-  if (isMMAV3Shared && isTMALoad) {
+  if (isTMALoad) {
     // For TMA, the encoding compatible with it takes precedence over local
     // alloc created for the MMA operand.
     return mmav3Enc;
