@@ -396,6 +396,222 @@ struct BufferLoadOpConversion
   }
 };
 
+struct AsyncLoadOpConversion
+    : public ConvertOpToLLVMPattern<triton::gpu::AsyncCopyGlobalToLocalOp>,
+      public LoadStoreConversionBase {
+  using ConvertOpToLLVMPattern<
+      triton::gpu::AsyncCopyGlobalToLocalOp>::ConvertOpToLLVMPattern;
+
+  AsyncLoadOpConversion(LLVMTypeConverter &converter,
+                        const AMD::TargetInfo &targetInfo,
+                        ModuleAxisInfoAnalysis &axisAnalysisPass,
+                        PatternBenefit benefit)
+      : ConvertOpToLLVMPattern<triton::gpu::AsyncCopyGlobalToLocalOp>(converter,
+                                                                      benefit),
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+
+  LogicalResult
+  matchAndRewrite(triton::gpu::AsyncCopyGlobalToLocalOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+
+    auto loc = op.getLoc();
+    Value res = op.getResult();
+    Value mask = op.getMask();
+    Value other = op.getOther();
+    // assert(!mask && "GlobalLoadToLDS with mask is not implemented yet!");
+    // assert(!other && "GlobalLoadToLDS with other is not implemented yet!");
+    auto funcOp = op->getParentOfType<FunctionOpInterface>();
+
+    auto srcTy = op.getSrc().getType();
+    auto dstTy = op.getResult().getType();
+    auto resElemTy = getTypeConverter()->convertType(dstTy.getElementType());
+    auto srcLayout = srcTy.getEncoding();
+
+    assert((isa<BlockedEncodingAttr, SliceEncodingAttr>(srcLayout) &&
+            "Unexpected srcLayout in AsyncCopyGlobalToLocalOpConversion"));
+    auto resSharedLayout = cast<SharedEncodingAttr>(dstTy.getEncoding());
+    auto srcShape = srcTy.getShape();
+    assert(
+        (srcShape.size() <= 2) &&
+        "Async copy only supports 1d and 2d tensors: Unexpected rank of %src");
+
+    Value llDst = adaptor.getResult();
+    Value llSrc = adaptor.getSrc();
+    Value llMask = adaptor.getMask();
+    Value llOther = adaptor.getOther();
+
+    // %src
+    auto srcElems = unpackLLElements(loc, llSrc, rewriter);
+    // llvm::outs() << "Src elems count: " << srcElems.size() << "\n";
+
+    // %dst
+    auto smemObj = mlir::LLVM::getSharedMemoryObjectFromStruct(
+        loc, llDst, resElemTy, rewriter);
+    // %mask
+    SmallVector<Value> maskElems;
+    if (llMask) {
+      maskElems = unpackLLElements(loc, llMask, rewriter);
+      assert(srcElems.size() == maskElems.size());
+    }
+
+    // %other
+    SmallVector<Value> otherElems;
+    if (llOther) {
+      // assert(false && "Not implemented");
+      // FIXME(Keren): assume other is 0 for now.
+      //
+      // It's not necessary for now because the pipeline pass will skip
+      // generating insert_slice_async if the load op has any "other" tensor.
+      otherElems = unpackLLElements(loc, llOther, rewriter);
+      assert(srcElems.size() == otherElems.size());
+    }
+
+    // We can load N elements at a time if:
+    //  1. Every group of N source pointers are contiguous.  For example, if
+    //     N=2, then the pointers should be [x, x+1, y, y+1, ...].
+    unsigned vec = getVectorSize(op.getSrc());
+    // llvm::outs() << "Vec size: " << vec << "\n";
+
+    unsigned maxVec = getContiguity(op.getSrc());
+    // llvm::outs() << "Max vec: " << maxVec << "\n";
+    if (mask) {
+      maxVec = std::min(maxVec, getMaskAlignment(mask));
+    }
+    llvm::outs() << "Max Vec: " << maxVec << "\n";
+    llvm::outs().flush();
+
+    // Addresses to store into, one per `vecTy`.
+    VectorType vecTy;
+    SmallVector<Value> shmemAddrs;
+    bool ok = emitTransferBetweenRegistersAndShared(
+        srcTy, dstTy, resElemTy, maxVec, smemObj, loc, rewriter, targetInfo,
+        [&](VectorType vecTy_, Value shmemAddr) {
+          vecTy = vecTy_;
+          shmemAddrs.push_back(shmemAddr);
+        });
+    assert(ok);
+    llvm::outs() << "Shared to reg\n";
+    llvm::outs().flush();
+
+    int vecBytes = vecTy.getNumElements() * vecTy.getElementTypeBitWidth() / 8;
+    assert(llvm::isPowerOf2_32(vecBytes));
+    if (vecBytes < 4) {
+      return emitError(
+                 loc,
+                 "direct load to lds does not support transfers smaller than "
+                 "4 bytes; calculated this as ")
+             << vecBytes << " bytes";
+    }
+    if (vecBytes > 8) {
+      llvm::outs() << "here\n";
+      // TODO we should probably emit a perf warning here
+      // return emitWarning(
+      //            loc,
+      //            "direct load to lds does not support transfers larger than "
+      //            "8 bytes; calculated this as ")
+      //        << vecBytes << " bytes, which means less bandwidth";
+      llvm::outs() << "There\n";
+    }
+
+    // Value zr = rewriter.create<LLVM::ConstantOp>(
+    //     op.getLoc(), IntegerType::get(op.getContext(), 32),
+    //     rewriter.getI32IntegerAttr(0));
+    // Value two = rewriter.create<LLVM::ConstantOp>(
+    //     op.getLoc(), IntegerType::get(op.getContext(), 32),
+    //     rewriter.getI32IntegerAttr(2));
+    StringRef funcName = "llvm.amdgcn.global.load.lds";
+    // Type funcType = getFunctionType(
+    //     void_ty(getContext()),
+    //     ValueRange({srcElems[0], smemObj.getBase(), zr, zr, zr}));
+    // LLVM::LLVMFuncOp llFuncOp =
+    //     appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
+
+    for (int i = 0; i < shmemAddrs.size(); i++) {
+      // It's possible that vecTy is larger than 128 bits, in which case we
+      // have to use multiple cp.async instructions.
+      int wordBytes = std::min(vecBytes, 4);
+      int wordElems = wordBytes * 8 / vecTy.getElementTypeBitWidth();
+      int numWordsInVec = std::max(1, vecBytes / wordBytes);
+      llvm::outs() << "Create intrinsics\n";
+      llvm::outs().flush();
+
+      if (wordBytes < 1 && wordBytes > 8) {
+        return emitError(loc, "[GlobalLoadToLDS] Unsupported load size of: " +
+                                  std::to_string(wordBytes) + "bytes");
+      }
+
+      // [LLVMQualPointerType<1>,            // Base global pointer to load from
+      //  LLVMQualPointerType<3>,            // LDS base pointer to store to
+      //  llvm_i32_ty,                       // Data byte size: 1/2/4 (/12/16
+      //  for gfx950) llvm_i32_ty,                       // imm offset (applied
+      //  to both global and LDS address) llvm_i32_ty],                      //
+      //  auxiliary data (imm, cachepolicy (bit 0 = sc0,
+      //                                     // bit 1 = sc1,
+      //                                     // bit 4 = scc))
+      std::string intrinsic = "llvm.amdgcn.global.load.lds";
+      llvm::outs() << "Wordbytes: " << wordBytes << "\n";
+      Value loadWidth = rewriter.create<LLVM::ConstantOp>(
+          op.getLoc(), rewriter.getI32Type(),
+          rewriter.getI32IntegerAttr(wordBytes));
+
+      Value sizeValue = rewriter.create<LLVM::ConstantOp>(
+          op.getLoc(), IntegerType::get(op.getContext(), 32),
+          rewriter.getI32IntegerAttr(wordBytes));
+
+      for (int j = 0; j < numWordsInVec; j++) {
+        llvm::outs() << "Word bytes: " << wordBytes << "\n";
+        llvm::outs() << "Word elems: " << wordElems << "\n";
+        llvm::outs() << "Word nums : " << numWordsInVec << "\n";
+        // Tune CG and CA.
+        // TODO Alex select correct cache modifier
+        // CacheModifier srcCacheModifier =
+        //     wordBytes == 16 ? CacheModifier::CG : CacheModifier::CA;
+        // assert(wordBytes == 16 || wordBytes == 8 || wordBytes == 4);
+
+        Value offsetValue = rewriter.create<LLVM::ConstantOp>(
+            op.getLoc(), IntegerType::get(op.getContext(), 32),
+            // rewriter.getI32IntegerAttr(j));
+            rewriter.getI32IntegerAttr(j * wordBytes));
+
+        int elemIdx = i * vecTy.getNumElements() + j * wordElems;
+        LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, {},
+                                        {srcElems[0], shmemAddrs[0], loadWidth,
+                                         /*imm
+                              offset=*/i32_val(0), i32_val(2)});
+        // LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
+        // "llvm.amdgcn.s.waitcnt",
+        //                                 {}, {i32_val(0)});
+
+        // Block *currentBlock = rewriter.getInsertionBlock();
+        // Block *afterLoad =
+        //     rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+        // Block *loadBlock = rewriter.createBlock(afterLoad);
+        // rewriter.setInsertionPointToEnd(currentBlock);
+        // rewriter.create<LLVM::CondBrOp>(loc, maskElems[elemIdx], loadBlock,
+        //                                 afterLoad);
+        // rewriter.setInsertionPointToStart(loadBlock);
+        // rewriter
+        //     .create<LLVM::CallOp>(loc, llFuncOp,
+        //                           ValueRange({srcElems[elemIdx],
+        //                           shmemAddrs[i],
+        //                                       loadWidth, offsetValue, two}))
+        //     .getResult();
+        // rewriter.create<LLVM::BrOp>(loc, afterLoad);
+        // rewriter.setInsertionPointToStart(afterLoad);
+
+        llvm::outs() << "Word nums : " << numWordsInVec << "\n";
+      }
+    }
+
+    // Drop the result token.
+    Value zero = rewriter.create<LLVM::ConstantOp>(
+        op.getLoc(), IntegerType::get(op.getContext(), 32),
+        rewriter.getI32IntegerAttr(0));
+    rewriter.replaceOp(op, zero);
+    return success();
+  }
+};
+
 struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
                            public LoadStoreConversionBase {
   using ConvertOpToLLVMPattern<triton::StoreOp>::ConvertOpToLLVMPattern;
