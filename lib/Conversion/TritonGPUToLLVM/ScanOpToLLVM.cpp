@@ -410,6 +410,15 @@ ScanOpConversion::getDelinearizedIds(ConversionPatternRewriter &rewriter,
   Value flatIdParallel =
       add(laneIdParallel,
           mul(warpIdParallel, i32_val(helper.getNonAxisNumThreadsPerWarp())));
+
+  // Clamp the lane ID to just threads with unique data within a warp.
+  LinearLayout layout =
+      triton::gpu::toLinearLayout(helper.getShape(), srcEncoding);
+  StringAttr kLane = rewriter.getStringAttr("lane");
+  int32_t laneMask = layout.getFreeVariableMasks()[kLane];
+  laneMask = (layout.getInDimSize(kLane) - 1) & ~laneMask;
+  laneIdAxis = and_(laneIdAxis, i32_val(laneMask));
+
   return std::make_tuple(laneIdAxis, warpIdAxis, flatIdParallel);
 }
 
@@ -461,7 +470,7 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   ScanLoweringHelper helper(op);
   auto loc = helper.getLoc();
   if (!helper.isSupported())
-    return failure();
+    return op.emitError("TODO: unsupported scan layout");
 
   Value threadId = getThreadId(rewriter, loc);
   auto mod = op->getParentOfType<ModuleOp>();
