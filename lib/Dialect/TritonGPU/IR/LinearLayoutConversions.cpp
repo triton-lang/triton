@@ -1153,17 +1153,11 @@ LinearLayout chooseDotLdMatrixLayout(DotOperandEncodingAttr dot,
     numTileCols = 32 * 16 / elemBitWidth;
   }
   // Expand the `register` dimension so the size of columns matches `K`.
-  for (int logCol = 0; logCol < llvm::Log2_32(shape[kDim] / numTileCols);
-       logCol++) {
-    int col = 1 << logCol;
-    if (needTrans) { // K is the outer dimension
-      basesReg.push_back({numTileCols * col, 0});
-    } else { // K is the inner dimension
-      basesReg.push_back({0, numTileCols * col});
-    }
-  }
-  auto layout = LinearLayout(
-      {{kReg, basesReg}, {kLane, basesLane}, {kWarp, {}}}, {kOuter, kInner});
+  auto layout =
+      LinearLayout({{kReg, basesReg}, {kLane, basesLane}, {kWarp, {}}},
+                   {kOuter, kInner}) *
+      LinearLayout::identity1D(shape[kDim] / numTileCols, kReg,
+                               S("dim" + std::to_string(kDim)));
   // Expand the `warp` dimension according to warpsPerCTA.
   auto warpsPerCTA = mma.getWarpsPerCTA();
   layout *= broadcastedDotOperandLayout(ctx, warpsPerCTA, mma.getWarpOrder(),
