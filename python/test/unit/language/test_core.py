@@ -2631,6 +2631,24 @@ def test_histogram(M, N, device):
     assert (z_torch == z).all()
 
 
+@pytest.mark.parametrize("M, N", [(1, 64), (2, 32), (4, 16), (8, 8), (16, 4), (32, 2), (64, 1)])
+def test_scan_1d(M, N):
+
+    @triton.jit
+    def scan_kernel(out_ptr, in_ptr, M: tl.constexpr, N: tl.constexpr):
+        input = tl.load(in_ptr + tl.arange(0, M))
+        output = tl.cumsum(input).reshape([1, M]).broadcast_to([N, M])
+        tl.store(out_ptr + tl.arange(0, M * N), output.reshape([M * N]))
+
+    x = torch.randint(-100, 100, (M,), dtype=torch.int32, device='cuda')
+    output = torch.empty(M * N, dtype=torch.int32, device='cuda')
+
+    scan_kernel[(1,)](output, x, M, N)
+
+    ref = torch.cumsum(x, dim=0).reshape([1, M]).broadcast_to([N, M]).reshape([M * N])
+    torch.testing.assert_close(ref.to(torch.int32), output, atol=0, rtol=0)
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize("op", ['sum', 'max', 'min'])
 @pytest.mark.parametrize("BLOCK_N", [32, 64, 128])
