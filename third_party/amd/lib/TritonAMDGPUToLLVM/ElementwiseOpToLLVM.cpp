@@ -372,7 +372,9 @@ static Value convertFp32ToBf16(Location loc,
   std::string lshrrev_str = "v_lshrrev_b32";
   auto &lshrrev = *builder.create(lshrrev_str);
 
-  auto is_nan = builder.newOperand("=s");
+  Value s_val = i64_val(0);
+  auto output = builder.newOperand("=v");
+  auto is_nan = builder.newOperand(s_val, "+s");
   Value tmp_val = i32_val(0);
   auto tmp = builder.newOperand(tmp_val, "+v");
   Value mask_val = i32_val(0);
@@ -391,12 +393,10 @@ static Value convertFp32ToBf16(Location loc,
   Value f32_nan_val = i32_val(0x7FFF0000);
   auto f32_nan = builder.newOperand(f32_nan_val, "v");
   cndmask(in_f32, tmp, f32_nan, is_nan);
-  lshrrev(in_f32, offset, in_f32);
+  lshrrev(output, offset, in_f32);
 
-  builder.launch(rewriter, loc, i32_ty, false);
-
-  auto shifted = lshr(i32_ty, as_int32, i32_val(16));
-  auto truncated = trunc(i16_ty, shifted);
+  auto ret = builder.launch(rewriter, loc, i32_ty, false);
+  auto truncated = trunc(i16_ty, ret);
 
   return bitcast(truncated, bf16_ty);
 }
