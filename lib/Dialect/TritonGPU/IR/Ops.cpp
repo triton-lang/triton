@@ -42,6 +42,16 @@ struct CanonicalizeConvertFromReshape
     auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
     if (!convert)
       return failure();
+    // If the layouts are structurally the same, the convert is trivial
+    auto srcType = convert.getSrc().getType();
+    auto dstType = convert.getType();
+    auto srcLL = toLinearLayout(srcType.getShape(), srcType.getEncoding());
+    auto dstLL = toLinearLayout(dstType.getShape(), dstType.getEncoding());
+    if (srcLL == dstLL) {
+      rewriter.replaceOpWithNewOp<triton::ReshapeOp>(
+          op, op.getType(), convert.getSrc(), op.getAllowReorder());
+      return mlir::success();
+    }
     if (isExpensiveView(convert.getSrc().getType(), op.getType()))
       return failure();
     if (!op.getAllowReorder() || op.getEfficientLayout())
@@ -587,15 +597,8 @@ int32_t LocalAllocOp::getAlignmentOrDefault() {
   }
 
   auto ty = getType();
-  auto shapePerCTA = triton::gpu::getShapePerCTA(ty);
-  auto bytes =
-      product<int64_t>(shapePerCTA) * (ty.getElementTypeBitWidth() / 8);
-
-  // XXX(Keren): magic numbers 256 and 1024
-  // Software swizzling calculates phase based on offset, while hardware
-  // swizzling do that based on physical address. Thus only by setting the
-  // alignment to 1024 can ensure the correctness.
-  return bytes > 256 ? 1024 : 8;
+  auto enc = dyn_cast<SharedEncodingAttr>(ty.getEncoding());
+  return enc ? enc.getAlignment() : 16;
 }
 
 } // namespace mlir::triton::gpu

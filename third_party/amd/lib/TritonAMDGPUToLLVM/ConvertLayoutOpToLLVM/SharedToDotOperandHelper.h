@@ -30,10 +30,11 @@ swizzleIndexes(ConversionPatternRewriter &rewriter, Location loc, Value row,
 
 Value computeOffset(ConversionPatternRewriter &rewriter, Location loc,
                     Value row, Value col, SharedMemoryObject smemObj,
-                    gpu::SharedEncodingAttr srcLayout);
+                    ArrayRef<Value> strides, gpu::SharedEncodingAttr srcLayout);
 
 Value computeBasePtr(ConversionPatternRewriter &rewriter, Location loc,
-                     const SharedMemoryObject &smemObj);
+                     const SharedMemoryObject &smemObj,
+                     ArrayRef<Value> strides);
 
 bool isKMajor(llvm::ArrayRef<unsigned> order, int opIdx);
 
@@ -47,14 +48,14 @@ llvm::SmallVector<Value> computeOffsetsAType(
     ConversionPatternRewriter &rewriter, Location loc,
     computeTensorElemMappingInBlockT fn, const ArrayRef<int64_t> &elemsPerInstr,
     Value warpId, Value laneId, int warpsPerBlock, int numOfElems,
-    ArrayRef<int64_t> reps, SharedMemoryObject smemObj,
+    ArrayRef<int64_t> reps, SharedMemoryObject smemObj, ArrayRef<Value> strides,
     gpu::SharedEncodingAttr srcLayout, unsigned nonKDim, unsigned kDim);
 
 llvm::SmallVector<Value> computeOffsetsBType(
     ConversionPatternRewriter &rewriter, Location loc,
     computeTensorElemMappingInBlockT fn, const ArrayRef<int64_t> &elemsPerInstr,
     Value warpId, Value laneId, int warpsPerBlock, int numOfElems,
-    ArrayRef<int64_t> reps, SharedMemoryObject smemObj,
+    ArrayRef<int64_t> reps, SharedMemoryObject smemObj, ArrayRef<Value> strides,
     gpu::SharedEncodingAttr srcLayout, unsigned nonKDim, unsigned kDim);
 
 } // namespace mlir::triton::AMD

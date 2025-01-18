@@ -447,7 +447,8 @@ public:
         mmaEnc.getInstrShape()[versionMajor == 3
                                    ? 0
                                    : mmaEnc.getInstrShape().size() - 2];
-    auto warpSize = getWarpSize(newAEncoding);
+    auto mod = scaledDotOp->getParentOfType<ModuleOp>();
+    int warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
     assert(instrShapeM <= warpSize);
     // Necessary choice to leave all the scales of the tile in that given warp
     auto threadsPerWarp =
@@ -471,7 +472,7 @@ public:
 
       // Extract warp layout from dotAEncoding
       // In the future we'll have some nice division utils, but until then...
-      auto dotLL = *newAEncoding.toLinearLayout(a.getType().getShape());
+      auto dotLL = newAEncoding.toLinearLayout(a.getType().getShape());
       LinearLayout::BasesT scaleBases = dotLL.getBases();
       auto kWarp = StringAttr::get(ctx, "warp");
       auto &warpBases = scaleBases[kWarp];

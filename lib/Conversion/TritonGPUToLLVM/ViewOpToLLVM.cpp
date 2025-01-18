@@ -284,9 +284,8 @@ struct MemDescTransOpConversion
     auto srcSmemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                       llvmElemTy, rewriter);
     auto dstSmemObj = SharedMemoryObject(
-        srcSmemObj.base, srcSmemObj.baseElemType,
-        /*strides=*/applyPermutation(srcSmemObj.strides, op.getOrder()),
-        /*offsets=*/applyPermutation(srcSmemObj.offsets, op.getOrder()));
+        srcSmemObj.getBase(), srcSmemObj.getBaseElemType(),
+        /*offsets=*/applyPermutation(srcSmemObj.getOffsets(), op.getOrder()));
     auto retVal = getStructFromSharedMemoryObject(loc, dstSmemObj, rewriter);
     rewriter.replaceOp(op, retVal);
     return success();
@@ -379,30 +378,31 @@ struct MemDescSubviewOpConversion
   LogicalResult
   matchAndRewrite(triton::gpu::MemDescSubviewOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // %dst = extract_slice %src[%offsets]
     Location loc = op->getLoc();
     auto srcTy = op.getSrc().getType();
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
+    auto layoutOrder = getOrder(srcTy.getEncoding());
 
     // newBase = base + offset
     auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                    llvmElemTy, rewriter);
+    auto smemStrides = smemObj.getStrides(srcTy, loc, rewriter);
     SmallVector<Value> opOffsetVals = op.getOffsets();
-    size_t destRank = op.getResult().getType().getRank();
+    SmallVector<Value> opSmemStrides(smemStrides.end() - opOffsetVals.size(),
+                                     smemStrides.end());
     SmallVector<Value> offsetVals;
-    SmallVector<Value> strides;
-    int rankReduced = srcTy.getRank() - destRank;
+    auto destRank = op.getResult().getType().getRank();
+    auto rankReduced = srcTy.getRank() - destRank;
     for (int i = rankReduced; i < opOffsetVals.size(); i++) {
-      strides.push_back(smemObj.strides[i]);
-      offsetVals.push_back(add(opOffsetVals[i], smemObj.offsets[i]));
+      offsetVals.push_back(add(opOffsetVals[i], smemObj.getOffsets()[i]));
     }
     // Compute the offset based on the original strides of the shared memory
     // object
-    auto offset = dot(rewriter, loc, opOffsetVals, smemObj.strides);
-    auto elemPtrTy = smemObj.base.getType();
-    smemObj =
-        SharedMemoryObject(gep(elemPtrTy, llvmElemTy, smemObj.base, offset),
-                           llvmElemTy, strides, offsetVals);
+    auto offset = dot(rewriter, loc, opOffsetVals, opSmemStrides);
+    auto elemPtrTy = smemObj.getBase().getType();
+    smemObj = SharedMemoryObject(
+        gep(elemPtrTy, llvmElemTy, smemObj.getBase(), offset), llvmElemTy,
+        offsetVals);
     auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
     rewriter.replaceOp(op, retVal);
     return success();

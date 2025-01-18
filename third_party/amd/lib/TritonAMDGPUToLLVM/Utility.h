@@ -7,6 +7,7 @@
 
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -56,8 +57,31 @@ std::pair<bool, bool> getCacheModifierFlagsForPredicatedCall(LLVM::CallOp);
 int32_t getCtrlBitsForCacheModifierOnTarget(triton::CacheModifier, bool,
                                             mlir::triton::AMD::TargetInfo &);
 
+// Get cache modifier information for buffer atomics
+int32_t getCtrlBitsForBufferAtomicsOnGFX942(bool setSC0, bool setSC1,
+                                            bool setNT);
+
 Value cvtFp32ToFp16(Location loc, RewriterBase &rewriter, const Value &v,
                     triton::RoundingMode rounding);
+
+// Return a tensor of pointers with the same type of `basePtr` and the same
+// shape of `offset`
+Type getPointerTypeWithShape(Value basePtr, Value offset);
+
+// Get contiguity for a tensor pointer `ptr`
+unsigned getContiguity(Value ptr, ModuleAxisInfoAnalysis &axisAnalysisPass);
+
+// Get contiguity for a scalar pointer `ptr` and a tensor `offset`
+unsigned getContiguity(Value ptr, Value offset,
+                       ModuleAxisInfoAnalysis &axisAnalysisPass);
+
+// Determine the vector size of a tensor of pointers
+unsigned getVectorSize(Value ptr, ModuleAxisInfoAnalysis &axisAnalysisPass);
+
+// Given a scalar pointer and a tensor of offsets, determine the vector size
+unsigned getVectorSize(Value ptr, Value offset,
+                       ModuleAxisInfoAnalysis &axisAnalysisPass);
+
 } // namespace mlir::LLVM::AMD
 
 #endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_UTILITY_H_

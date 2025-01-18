@@ -407,14 +407,13 @@ static Attribute inferReshapeOpDstEncoding(ArrayRef<int64_t> srcShape,
     return {};
 
   Attribute dstEnc;
-  if (succeeded(
-          srcEnc.getDialect()
-              .getRegisteredInterface<triton::DialectInferLayoutInterface>()
-              ->inferReshapeOpNoReorderEncoding(
-                  srcShape, srcEnc, dstShape, dstEnc, /*loc=*/std::nullopt))) {
-    return dstEnc;
-  }
-  return {};
+  auto result =
+      srcEnc.getDialect()
+          .getRegisteredInterface<triton::DialectInferLayoutInterface>()
+          ->inferReshapeOpEncoding(srcShape, srcEnc, dstShape, dstEnc,
+                                   /*loc=*/std::nullopt);
+  assert(succeeded(result));
+  return dstEnc;
 }
 
 static Attribute inferDstEncoding(triton::ReshapeOp op, Attribute encoding) {
@@ -1190,19 +1189,15 @@ void populateForOpDeadArgumentElimination(RewritePatternSet &patterns) {
   patterns.add<ForOpDeadArgElimination>(patterns.getContext());
 }
 
-std::optional<LinearLayout>
-getRegToSharedLayout(MLIRContext *ctx, ArrayRef<int64_t> shape,
-                     Attribute srcEnc, Attribute dstEnc, int elemBitWidth) {
+LinearLayout getRegToSharedLayout(MLIRContext *ctx, ArrayRef<int64_t> shape,
+                                  Attribute srcEnc, Attribute dstEnc,
+                                  int elemBitWidth) {
   StringAttr kBlock = StringAttr::get(ctx, ("block"));
   int rank = shape.size();
 
-  std::optional<LinearLayout> regLayout =
-      triton::gpu::toLinearLayout(shape, srcEnc);
-  std::optional<LinearLayout> sharedLayout =
+  LinearLayout regLayout = triton::gpu::toLinearLayout(shape, srcEnc);
+  LinearLayout sharedLayout =
       triton::gpu::toLinearLayout(shape, dstEnc, elemBitWidth);
-  if (!regLayout.has_value() || !sharedLayout.has_value()) {
-    return std::nullopt;
-  }
   auto sharedOrder = triton::gpu::getOrder(dstEnc);
 
   // sharedLayout's in-dims are currently (offset, block).  Reshape to
@@ -1218,12 +1213,12 @@ getRegToSharedLayout(MLIRContext *ctx, ArrayRef<int64_t> shape,
     multiDimSharedSize.push_back(
         {StringAttr::get(ctx, ("offset" + std::to_string(dim))), size});
   }
-  multiDimSharedSize.push_back({kBlock, sharedLayout->getInDimSize(kBlock)});
-  sharedLayout = sharedLayout->reshapeIns(multiDimSharedSize);
+  multiDimSharedSize.push_back({kBlock, sharedLayout.getInDimSize(kBlock)});
+  sharedLayout = sharedLayout.reshapeIns(multiDimSharedSize);
 
   // regToSharedLayout maps from (register, lane, warp, block) to (offsetX1,
   // ..., offsetXN, block), where the offsetX's are in minor-to-major order.
-  return regLayout->invertAndCompose(*sharedLayout);
+  return regLayout.invertAndCompose(sharedLayout);
 }
 
 } // namespace mlir
