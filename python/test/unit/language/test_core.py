@@ -2640,10 +2640,10 @@ def test_scan_1d(M, N):
         output = tl.cumsum(input).reshape([1, M]).broadcast_to([N, M])
         tl.store(out_ptr + tl.arange(0, M * N), output.reshape([M * N]))
 
-    x = torch.randint(-100, 100, (M,), dtype=torch.int32, device='cuda')
+    x = torch.randint(-100, 100, (M, ), dtype=torch.int32, device='cuda')
     output = torch.empty(M * N, dtype=torch.int32, device='cuda')
 
-    scan_kernel[(1,)](output, x, M, N)
+    scan_kernel[(1, )](output, x, M, N)
 
     ref = torch.cumsum(x, dim=0).reshape([1, M]).broadcast_to([N, M]).reshape([M * N])
     torch.testing.assert_close(ref.to(torch.int32), output, atol=0, rtol=0)

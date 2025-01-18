@@ -66,4 +66,3 @@ tt.func public @anchor(%ptr: !llvm.ptr, %arg0: !llvm.struct<(i32)>, %arg1: !llvm
 }
 
 }
-
