@@ -1183,13 +1183,4 @@ LinearLayout chooseLdMatrixLayout(Attribute enc, ArrayRef<int64_t> shape,
   return chooseDotLdMatrixLayout(dot, shape, needTrans, elemBitWidth);
 }
 
-LinearLayout chooseLdMatrixLayout(MLIRContext *ctx, Attribute sharedEnc,
-                                  Attribute dotEnc, ArrayRef<int64_t> shape) {
-  auto shared = cast<SharedEncodingAttr>(sharedEnc);
-  auto dot = cast<DotOperandEncodingAttr>(dotEnc);
-  assert(!shared.getHasLeadingOffset() &&
-         "Ldmatrix does not support leading offset yet");
-  return chooseLdMatrixLayoutNoLeadingOffset(ctx, shared, dot, shape);
-}
-
 } // namespace mlir::triton::gpu
