@@ -169,11 +169,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
 
-// Smoke test for trans(cvt) : Linear -> Layout
-// See https://github.com/triton-lang/triton/pull/5403#discussion_r1919306932
-
 // CHECK-LABEL: @infer_trans
 tt.func @infer_trans(%arg0: tensor<32x32xf32, #linear>) -> tensor<32x32xf32, #blocked_trans> {
+  // CHECK-NOT: ttg.convert_layout
   %0 = ttg.convert_layout %arg0 : tensor<32x32xf32, #linear> -> tensor<32x32xf32, #blocked>
   %1 = tt.trans %0  {order = array<i32: 1, 0>} : tensor<32x32xf32, #blocked> -> tensor<32x32xf32, #blocked_trans>
   tt.return %1 : tensor<32x32xf32, #blocked_trans>
