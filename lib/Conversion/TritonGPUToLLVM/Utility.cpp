@@ -208,7 +208,6 @@ Value getSmemVecAddr(RankedTensorType registerTy,
   auto smemBase = smemObj.getBase();
   auto smemOffsets = smemObj.getOffsets();
   auto smemStrides = smemObj.getStrides(sharedTy, loc, rewriter);
-  auto smemOrder = sharedEnc.getOrder();
   Value smemOffset;
   // When loading or storing to shared memory, we consider two cases for
   // performance reasons:
@@ -250,10 +249,6 @@ Value getSmemVecAddr(RankedTensorType registerTy,
                            {kLane, laneId},
                            {kWarp, warpId},
                            {kBlock, i32_val(0)}}))));
-    // Reorder strides according to `order`.  This way they match the
-    // multi-dimensional offsets in regToSharedLayout.
-    smemOffset = dot(rewriter, loc, smemOffsets,
-                     applyPermutation(smemStrides, smemOrder));
   } else { // Case 2 -> rank-reduced swizzling
     assert(rank >= 2 && "Swizzling only applies to tensors with rank >= 2");
     assert(!sharedEnc.getHasLeadingOffset() &&
