@@ -206,9 +206,10 @@ enum class MMALoadType {
 MMALoadType getMMALoadType(Operation *loadOp);
 
 // Returns composed LinearLayout for register to shared copy
-std::optional<triton::LinearLayout>
-getRegToSharedLayout(MLIRContext *ctx, ArrayRef<int64_t> shape,
-                     Attribute srcEnc, Attribute dstEnc, int elemBitWidth);
+triton::LinearLayout getRegToSharedLayout(MLIRContext *ctx,
+                                          ArrayRef<int64_t> shape,
+                                          Attribute srcEnc, Attribute dstEnc,
+                                          int elemBitWidth);
 
 // Convert \param op operands and results to layout \param encoding.
 void convertOpEncoding(Attribute encoding, Operation *op);

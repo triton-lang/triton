@@ -27,7 +27,8 @@ std::unique_ptr<Pass> createTritonAMDGPUBypassLDSForDotOperand();
 
 std::unique_ptr<Pass> createTritonAMDGPUCanonicalizePointersPass();
 
-std::unique_ptr<Pass> createTritonAMDGPUConvertToBufferOpsPass();
+std::unique_ptr<Pass> createTritonAMDGPUConvertToBufferOpsPass(
+    std::string archGenName = std::string());
 
 std::unique_ptr<Pass> createTritonAMDGPUBlockPingpongPass();
 

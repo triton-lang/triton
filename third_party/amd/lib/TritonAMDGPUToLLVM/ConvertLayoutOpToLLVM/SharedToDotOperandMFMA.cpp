@@ -277,6 +277,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   SmallVector<Value> loadedValues;
   SmallVector<Value> offsets;
   Value smemBase;
+  auto smemStrides = smemObj.getStrides(aTensorTy, loc, rewriter);
   bool isFastPath =
       !AMD::isKMajor(order, opIdx) && !hasSwizzleEnabled(sharedLayout);
   if (isFastPath) {
@@ -318,15 +319,15 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
       offsets = AMD::computeOffsetsAType(
           rewriter, loc, computeTensorElemMappingInBlock, elemsPerInstr,
           spatialWarpId, lane, warpsPerBlockNonK, numOfElems, numReps, smemObj,
-          sharedLayout, mDim, mfmaInstrK);
+          smemStrides, sharedLayout, mDim, mfmaInstrK);
     } else {
       assert(opIdx == 1);
       offsets = AMD::computeOffsetsBType(
           rewriter, loc, computeTensorElemMappingInBlock, elemsPerInstr,
           spatialWarpId, lane, warpsPerBlockNonK, numOfElems, numReps, smemObj,
-          sharedLayout, nDim, mfmaInstrK);
+          smemStrides, sharedLayout, nDim, mfmaInstrK);
     }
-    smemBase = AMD::computeBasePtr(rewriter, loc, smemObj);
+    smemBase = AMD::computeBasePtr(rewriter, loc, smemObj, smemStrides);
   }
 
   Type resElemTy = typeConverter->convertType(elemTy);

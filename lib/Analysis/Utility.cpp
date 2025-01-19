@@ -10,12 +10,14 @@
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Support/LLVM.h"
+#include "triton/Analysis/Allocation.h"
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 
@@ -63,34 +65,19 @@ SmallVector<unsigned> ReduceOpHelper::getOrderWithAxisAtBeginning() {
 // reduction axis within the warp.
 unsigned ReduceOpHelper::getThreadOffsetOnReductionAxis() {
   auto srcLayout = getSrcLayout();
-
-  // If the reduction axis is the fast axis of the parent layout
-  if (isReductionOnLayoutFastAxis()) {
-    return 1;
-  }
-
-  unsigned threadOffset = 1;
-  SmallVector<int> dimsRemoved;
-  while (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(srcLayout)) {
-    dimsRemoved.push_back(sliceLayout.getDim());
-    srcLayout = sliceLayout.getParent();
-  }
-  // In case of slice layout we want to know the axis dimension relative to the
-  // most inner parent layout. `adjustedAxis` is the matching axis dim in the
-  // parent layout.
-  int adjustedAxis = axis;
-  for (auto dim : dimsRemoved) {
-    if (dim <= adjustedAxis)
-      adjustedAxis++;
-  }
-  auto threadsPerWarp = getThreadsPerWarp(srcLayout);
-  auto order = getThreadOrder(srcLayout);
-  for (unsigned i = 0; i < order.size(); i++) {
-    if (order[i] == adjustedAxis)
+  auto *ctx = srcLayout.getContext();
+  auto linearLayout = toLinearLayout(getSrcShape(), srcLayout);
+  auto axis = getAxis();
+  auto kLane = mlir::StringAttr::get(ctx, "lane");
+  const auto &bases = linearLayout.getBases();
+  const auto &lanes = bases.find(kLane)->second;
+  auto offset = 1;
+  for (const auto &lane : lanes) {
+    if (lane[axis] != 0)
       break;
-    threadOffset *= threadsPerWarp[order[i]];
+    offset *= 2;
   }
-  return threadOffset;
+  return offset;
 }
 
 // Cases where distributed shared memory is not required in ConvertLayout:
@@ -168,10 +155,11 @@ unsigned ReduceOpHelper::getIntraWarpSizeWithUniqueData() {
 }
 
 unsigned ReduceOpHelper::getThreadsReductionAxis() {
-  auto srcLayout = getSrcLayout();
-  auto srcShape = getSrcShape();
-  return getThreadsPerWarpWithUniqueData(srcLayout, srcShape)[axis] *
-         getWarpsPerCTAWithUniqueData(srcLayout, srcShape)[axis];
+  auto axis = getAxis();
+  auto *ctx = getSrcLayout().getContext();
+  auto ll = LinearEncodingAttr::get(
+      ctx, toLinearLayout(getSrcShape(), getSrcLayout()));
+  return ll.getThreadsPerWarp()[axis] * ll.getWarpsPerCTA()[axis];
 }
 
 bool ReduceOpHelper::isWarpSynchronous() {
@@ -219,14 +207,13 @@ bool ReduceOpHelper::isSupportedLayout() {
   }
 
   auto srcLayout = getSrcLayout();
-  if (isa<BlockedEncodingAttr>(srcLayout)) {
+  if (isa<BlockedEncodingAttr, LinearEncodingAttr, SliceEncodingAttr>(
+          srcLayout)) {
     return true;
   }
+
   if (auto mmaLayout = dyn_cast<MmaEncodingTrait>(srcLayout)) {
     return mmaLayout.supportReduction();
-  }
-  if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(srcLayout)) {
-    return true;
   }
   return false;
 }
@@ -327,6 +314,227 @@ unsigned ScanLoweringHelper::getScratchSizeInBytes() {
     elementSizeInBytes += ceil<unsigned>(ty.getIntOrFloatBitWidth(), 8);
   }
   return elementSizeInBytes * getScratchSizeInElems();
+}
+
+std::optional<DecomposedWarpConversion>
+getWarpLayoutConvertDecomposition(RankedTensorType srcTy,
+                                  RankedTensorType dstTy) {
+  auto conversion = minimalCvtLayout(srcTy, dstTy);
+
+  MLIRContext *ctx = srcTy.getContext();
+  auto kRegister = StringAttr::get(ctx, "register");
+  auto kLane = StringAttr::get(ctx, "lane");
+
+  // We have already checked that data movement is only required within a warp,
+  // thus we can discard the block and warp dimensions.
+  LinearLayout C = conversion.sublayout({kLane, kRegister}, {kLane, kRegister});
+
+  // `C` is map from `(dst_lane, dst_reg) -> (src_lane, src_reg)`. From the
+  // perspetive of the destination lane, it tells us which register from which
+  // lane to get the value. Since the source and destination layouts are
+  // subpermutation matrices, the overall transformation amounts to permuting
+  // data around (plus broadcasting, if necessary).
+  //
+  // Warp shuffles allow indexing into another lane, but does not allowing
+  // selecting the register. Suppose we decompose `C` into `C = P1 ∘ W ∘ P2`,
+  // where `W` is a warp shuffle and `P1` and `P2` are (lane-dependent) register
+  // permutations within a lane. Start from `C` and work backwards.
+  //
+  // Given any `C`, is it possible that for a given destination register, two
+  // destination lanes map to different source registers in the same source
+  // lane. This is impossible to represent using a shuffle. This happens when,
+  // with respect to the identity layout, a register base is swapped with a lane
+  // base (when the destination lane changes, the source register changes but
+  // the lane does not).
+  //
+  // Example:
+  //
+  //   src = {register = [[1,0], [2,0]], lane = [[0,1], [0,2]]}
+  //   dst = {register = [[0,1], [2,0]], lane = [[1,0], [0,2]]}
+  //   cvt = dst, since src is the identity layout
+  //
+  // The map from destination -> source looks like:
+  //
+  //             dst_lane
+  // dst_reg       0      1      2      3
+  //  0          T0:0   T0:1   T2:0   T2:1
+  //  1          T1:0   T1:1   T3:0   T3:1
+  //  2          T0:2   T0:3   T2:2   T2:3
+  //  3          T1:2   T1:3   T3:2   T3:3
+  //
+  // Note for each destination register, two lanes want two different registers
+  // in the same source lane (T0:0 -> T0:0, T1:0 -> T0:1). This is impossible to
+  // represent with a warp shuffle, because the source lane (e.g. T0) can only
+  // supply one of its registers as the shuffle value.
+  //
+  // The goal of `P2` is to permute registers within a thread so that this does
+  // not happen. Specifically, pick `P2` such that bases in
+  // `(P2^-1 ∘ C).sublayout(kLane, {kLane, kRegister})` has non-zero lane
+  // components when the register components are non-zero.
+  //
+  // P2 can only change the register mapping within a thread. Constrain P2 as:
+  //
+  //   P2 = [ I 0 ]
+  //        [ P I ]
+  //
+  // Then `P2^-1 ∘ C` is:
+  //
+  //   [ I  0 ] [ C(r,r) C(r,l) ] = [ C(r,r)             C(r,l)           ]
+  //   [ P' I ] [ C(l,r) C(l,l) ]   [ P'*C(r,r)+C(l,r)   P'*C(r,l)+C(l,l) ]
+  //
+  // Where addition in GF(2) is xor.
+  //
+  // We can see that P' selects rows (i.e. bases) from the upper half (register)
+  // and combines them with the lower half (lane). Because the goal is for P' to
+  // select register bases `i` where C(r,l)[i] != 0, we know P'*C(r,r) = 0,
+  // since the corresponding C(r,r)[i] element in the same row will be zero.
+  //
+  // Note that solutions for P' do not always exist (no register permutation
+  // will decompose C to make the warp shuffle possible), and this happens when
+  // there aren't enough non-zero bases in C(r,l).
+  //
+  // Find the indices of the missing lane bases: rows in the lower half where
+  // the register component is non-zero but the lane component is zero.
+  SmallVector<int> missingLaneRows;
+  for (int i : llvm::seq(C.getInDimSizeLog2(kLane))) {
+    ArrayRef<int32_t> /*C(l,(r,l))[i]*/ lowerHalfRow = C.getBasis(kLane, i);
+    assert(lowerHalfRow.size() == 2);
+    if (/*C(l,r)[i]*/ lowerHalfRow[0] != 0) {
+      assert(/*C(l,l)[i]*/ lowerHalfRow[1] == 0);
+      missingLaneRows.push_back(i);
+    } else if (lowerHalfRow[1] == 0) {
+      // If there is broadcasting along the lane, then C'(l,l) below won't be
+      // invertible. Intuitively, the dst tensor contains a subset of the src
+      // tensor's data, so recovering the src tensor through permutation alone
+      // is impossible. We would need an affine component (bfly shuffle).
+      return {};
+    }
+  }
+
+  // Find rows in the upper-half  of C (i.e. the (reg) -> (reg, lane) submatrix)
+  // that can be selected by P' to make the lane components in the lower half
+  // (i.e. the (lane) -> (lane) submatrix) non-zero.
+  std::vector<std::vector<int32_t>> PPrimeLaneBases(C.getInDimSizeLog2(kLane),
+                                                    {0});
+  for (int i : llvm::seq(C.getInDimSizeLog2(kRegister))) {
+    ArrayRef<int32_t> /*C(r,(r,l))[i]*/ upperHalfRow = C.getBasis(kRegister, i);
+    assert(upperHalfRow.size() == 2);
+    if (/*C(r,l)[i]*/ upperHalfRow[1] == 0)
+      continue;
+
+    assert(upperHalfRow[0] == 0);
+    int32_t laneBase = upperHalfRow[1];
+    assert(/*C(r,r)[i]*/ upperHalfRow[0] == 0);
+    if (!missingLaneRows.empty()) {
+      // Select row i into row j from the missing rows. The order in which the
+      // missing rows are selected doesn't really matter.
+      PPrimeLaneBases[missingLaneRows.pop_back_val()][0] |= (1 << i);
+    }
+  }
+  if (!missingLaneRows.empty()) {
+    // The decomposition failed. No solution for P' is possible.
+    return {};
+  }
+
+  // P' outputs the destination register.
+  LinearLayout PPrime({{kLane, std::move(PPrimeLaneBases)}},
+                      {{kRegister, C.getInDimSize(kRegister)}},
+                      /*requiresSurjective=*/false);
+
+  // Form P2^-1 from P'.
+  unsigned dstRegSize = C.getInDimSize(kRegister);
+  unsigned numLanes = C.getInDimSize(kLane);
+  LinearLayout P2invTop =
+      LinearLayout::identity1D(dstRegSize, kRegister, kRegister)
+          .concatOuts(
+              LinearLayout::zeros1D(dstRegSize, kRegister, kLane, numLanes));
+  LinearLayout P2invBot =
+      PPrime.concatOuts(LinearLayout::identity1D(numLanes, kLane, kLane));
+  LinearLayout P2inv = P2invTop.concatIns(P2invBot);
+
+  // Check that P2^-1 was formed correctly.
+  assert(P2inv.sublayoutIsZero(kRegister, kLane));
+  assert(squareSublayoutIsPermutation(P2inv, kLane));
+
+  LinearLayout Cp = P2inv.compose(C);
+
+  // Now we have C' = P2^-1 ∘ C = W ∘ P1. W is considerably easier to compute.
+  // A warp shuffle is a function from `(register, lane) -> (lane)`, i.e.
+  //
+  //   W = [ I R' ]
+  //       [ 0 L  ]
+  //
+  // `W^-1 ∘ C'` will be
+  //
+  //   [ I R ] [ C'(r,r) C'(r,l) ] = [ ... C'(r,l) + R*C'(l,l) ]
+  //   [ 0 L ] [ C'(l,r) C'(l,l) ] = [ ... L*C'(l,l)           ]
+  //
+  // Since P1 cannot change lanes, we know that
+  //
+  //   W^-1 ∘ C' = [ ... 0 ]
+  //               [ ... I ]
+  //
+  // Thus L = C'(l,l)^-1, and R = -C'(r,l) * C'(l,l)^-1. (0 - LL) = LL in GF(2).
+  // We know that C'(l,l) has a suitable pseudo-inverse.
+  LinearLayout L = Cp.sublayout(kLane, kLane).pseudoinvert();
+  LinearLayout R = Cp.sublayout(kRegister, kLane).compose(L);
+
+  // Now form W^-1.
+  LinearLayout WinvLeft =
+      LinearLayout::identity1D(dstRegSize, kRegister, kRegister)
+          .concatIns(
+              LinearLayout::zeros1D(numLanes, kLane, kRegister, dstRegSize));
+  LinearLayout Winv = WinvLeft.concatOuts(R.concatIns(L));
+
+  // Check that Winv was formed correctly. P1 is just what's left over.
+  LinearLayout P1 = Winv.compose(Cp);
+  assert(P1.sublayoutIsZero(kRegister, kLane));
+  assert(squareSublayoutIsIdentity(P1, kLane));
+
+  // Grab just the interesting parts of the decomposed layouts.
+  P1 = P1.sublayout({kLane, kRegister}, kRegister);
+  P2inv = P2inv.sublayout({kLane, kRegister}, kRegister);
+  Cp = Cp.sublayout({kLane, kRegister}, kLane);
+
+  // To minimize the number of selects emitted on the source side, determine the
+  // minimum set of registers that could be selected from each thread.
+  // InstCombine *might* be able to crush this, but if the sizePerThread is
+  // large, it's truly a huge number of selects that get emitted.
+  // If reducedP1 is trivial, then we will emit
+  // shflSrc = select(i == i, src[i], undef) and this will get trivially folded,
+  // so don't worry about this case.
+  LinearLayout reducedP1 = P1.removeZeroBasesAlongDim(kLane);
+  LinearLayout reducedP2 = P2inv.removeZeroBasesAlongDim(kLane);
+
+  // The number of emitted selects can still be quite large if the layout is not
+  // cooperative. This happens when the source register is more correlated
+  // with the desination lane than the destination register (i.e. the number of
+  // non-zero bases). The number of selects impacts performance and grows
+  // exponentially with the number of non-zero bases. Experiments show that more
+  // than 1 select causes performance to be slower than shared memory.
+  if (reducedP1.getInDimSize(kLane) > 2 || reducedP2.getInDimSize(kLane) > 2)
+    return {};
+
+  // HACK: Workaround AMD codegen path generating transient invalid layouts.
+  auto isInvalidDotEnc = [](RankedTensorType type) {
+    auto dotEnc = dyn_cast<DotOperandEncodingAttr>(type.getEncoding());
+    return dotEnc && dotEnc.getKWidth() == 0;
+  };
+  if (isInvalidDotEnc(srcTy) || isInvalidDotEnc(dstTy))
+    return {};
+
+  // When the element type is smaller than 32 bits, values are upcasted to i32
+  // for shuffles. When the shared memory conversion can use vector stores of
+  // sufficiently large length, the shared memory conversion is faster.
+  // TODO: Implementing shuffling packed 16 and 8 bit values.
+  auto [inVec, outVec] = getScratchCvtInOutVecLengths(srcTy, dstTy);
+  if (!isa<PointerType>(srcTy.getElementType()) &&
+      srcTy.getElementTypeBitWidth() < 32 && inVec > 4 && outVec > 4)
+    return {};
+
+  // Return just the interesting parts of the decomposed layouts.
+  return {{std::move(P1), std::move(Cp), std::move(P2inv), std::move(reducedP1),
+           std::move(reducedP2)}};
 }
 
 SmallVector<std::pair<SmallVector<int64_t>, SmallVector<int64_t>>>
@@ -430,15 +638,10 @@ bool GatherLoweringHelper::isWarpLocal() {
   // source and index tensors, all the elements are owned by the same warp.
   RankedTensorType srcType = gatherOp.getSrc().getType();
   RankedTensorType idxType = gatherOp.getIndices().getType();
-  std::optional<LinearLayout> srcLayout =
+  LinearLayout srcLayout =
       toLinearLayout(srcType.getShape(), srcType.getEncoding());
-  std::optional<LinearLayout> idxLayout =
+  LinearLayout idxLayout =
       toLinearLayout(idxType.getShape(), idxType.getEncoding());
-
-  // FIXME: If an unsupported layout was encountered, assume the gather is not
-  // warp-local.
-  if (!srcLayout || !idxLayout)
-    return false;
 
   Builder b(gatherOp.getContext());
   StringAttr kBlock = b.getStringAttr("block");
@@ -464,8 +667,8 @@ bool GatherLoweringHelper::isWarpLocal() {
   //
   // Which implies that changing the warp will not change the gather dimension.
   // And since there is no swizzling, this applies to all warps.
-  if (!srcLayout->sublayoutIsZero({kBlock, kWarp}, kGatherDim) ||
-      !idxLayout->sublayoutIsZero({kBlock, kWarp}, kGatherDim))
+  if (!srcLayout.sublayoutIsZero({kBlock, kWarp}, kGatherDim) ||
+      !idxLayout.sublayoutIsZero({kBlock, kWarp}, kGatherDim))
     return false;
 
   SmallVector<StringAttr> otherDims;
@@ -479,8 +682,8 @@ bool GatherLoweringHelper::isWarpLocal() {
   // mapping to all other dimensions must be the same for both layouts. If so,
   // then the warp that owns a particular index element also owns all the source
   // elements it could index into.
-  if (srcLayout->sublayout({kBlock, kWarp}, otherDims) !=
-      idxLayout->sublayout({kBlock, kWarp}, otherDims))
+  if (srcLayout.sublayout({kBlock, kWarp}, otherDims) !=
+      idxLayout.sublayout({kBlock, kWarp}, otherDims))
     return false;
 
   // The two constraints above ensure that data-movement to perform the gather
@@ -491,8 +694,8 @@ bool GatherLoweringHelper::isWarpLocal() {
   // in the index and source tensors are the same. This means we don't need to
   // xor shuffle across threads before emitting index shuffles; we push warp
   // shuffling to layout conversions.
-  return srcLayout->sublayout(kLane, otherDims) ==
-         idxLayout->sublayout(kLane, otherDims);
+  return srcLayout.sublayout(kLane, otherDims) ==
+         idxLayout.sublayout(kLane, otherDims);
 }
 
 unsigned getNumScratchElements(ArrayRef<unsigned> shape) {
@@ -673,21 +876,18 @@ bool matchMFMAAndDotOperandShuffleCase(RankedTensorType srcTy,
 // distributed shared memory. If it's also the identity on kWarp, we can
 // transfer via warp-shuffles, and if it's the identity on kLane just have to
 // reorder the registers
-std::optional<LinearLayout> minimalCvtLayout(RankedTensorType srcTy,
-                                             RankedTensorType dstTy) {
+LinearLayout minimalCvtLayout(RankedTensorType srcTy, RankedTensorType dstTy) {
   MLIRContext *ctx = srcTy.getContext();
-  std::optional<LinearLayout> srcLayout =
+  LinearLayout srcLayout =
       toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
-  std::optional<LinearLayout> dstLayout =
+  LinearLayout dstLayout =
       toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
-  if (!(srcLayout.has_value() && dstLayout.has_value()))
-    return std::nullopt;
   StringAttr kRegister = StringAttr::get(ctx, "register");
   StringAttr kLane = StringAttr::get(ctx, "lane");
   StringAttr kWarp = StringAttr::get(ctx, "warp");
   StringAttr kBlock = StringAttr::get(ctx, "block");
 
-  auto comp = dstLayout->invertAndCompose(*srcLayout);
+  auto comp = dstLayout.invertAndCompose(srcLayout);
   // We try to quotient by the largest subspace first
   auto dims = SmallVector<StringRef>{"block", "warp", "lane", "register"};
   for (auto dim : dims) {
@@ -703,33 +903,27 @@ std::optional<LinearLayout> minimalCvtLayout(RankedTensorType srcTy,
 bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy) {
   auto layout = minimalCvtLayout(srcTy, dstTy);
   MLIRContext *ctx = srcTy.getContext();
-  if (!layout.has_value()) {
-    return false;
-  }
   auto kRegister = StringAttr::get(ctx, "register");
-  auto outDims = llvm::to_vector(layout->getOutDimNames());
+  auto outDims = to_vector(layout.getOutDimNames());
   return outDims.empty() || ArrayRef(outDims) == ArrayRef({kRegister});
 }
 
 bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy) {
   auto layout = minimalCvtLayout(srcTy, dstTy);
   MLIRContext *ctx = srcTy.getContext();
-  if (!layout.has_value()) {
-    return false;
-  }
   auto kRegister = StringAttr::get(ctx, "register");
   auto kLane = StringAttr::get(ctx, "lane");
-  return llvm::to_vector(layout->getOutDimNames()) ==
-         llvm::SmallVector<StringAttr, 2>{kRegister, kLane};
+  return to_vector(layout.getOutDimNames()) ==
+         SmallVector<StringAttr, 2>{kRegister, kLane};
 }
 
 bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy) {
   // TODO(jlebar): Remove these special cases (`isBlockedToDotShortcut` and
   // `isMfmaToDotShortcut`) once they're fully subsumed by the linear-layout
   // checks.
-  // TODO(Keren): We didn't check `cvtNeedsWarpShuffle` here because it's not
-  // supported yet in Triton's backend.
   return !cvtReordersRegisters(srcTy, dstTy) &&
+         !(cvtNeedsWarpShuffle(srcTy, dstTy) &&
+           getWarpLayoutConvertDecomposition(srcTy, dstTy)) &&
          !isBlockedToDotShortcut(srcTy, dstTy) &&
          !matchMmaV3AndDotOperandLayout(srcTy, dstTy) &&
          // to be removed when generalized warp shuffle conversions
