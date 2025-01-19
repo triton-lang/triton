@@ -34,7 +34,8 @@ public:
   DialectInferLayoutInterface(Dialect *dialect) : Base(dialect) {}
 
   virtual LogicalResult
-  inferTransOpEncoding(Attribute operandEncoding, ArrayRef<int32_t> order,
+  inferTransOpEncoding(Attribute operandEncoding, ArrayRef<int64_t> shape,
+                       ArrayRef<int32_t> order,
                        Attribute &resultEncoding) const = 0;
 
   virtual LogicalResult
@@ -65,9 +66,9 @@ public:
 
   // Check if two layouts are structurally the same, even if their names are
   // different
-  virtual LogicalResult verifyLayoutsAreEqual(ArrayRef<int64_t> shape,
-                                              Attribute expected, Attribute got,
-                                              Location loc) const = 0;
+  virtual LogicalResult
+  verifyLayoutsAreEqual(ArrayRef<int64_t> shape, Attribute expected,
+                        Attribute got, std::optional<Location> loc) const = 0;
 
   virtual LogicalResult
   inferJoinOpEncoding(Attribute srcEnc, Attribute &dstEnc,

@@ -25,6 +25,16 @@ bool hasDotOperandEncoding(Value value) {
   return hasEncoding<triton::gpu::DotOperandEncodingAttr>(value);
 }
 
+bool isConvertTrivial(ConvertLayoutOp op) {
+  auto srcType = op.getSrc().getType();
+  auto dstType = op.getType();
+  auto srcEncoding = srcType.getEncoding();
+  auto dstEncoding = dstType.getEncoding();
+  return cast<DialectInferLayoutInterface>(&srcEncoding.getDialect())
+      ->verifyLayoutsAreEqual(srcType.getShape(), srcEncoding, dstEncoding, {})
+      .succeeded();
+}
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -43,23 +53,45 @@ struct CanonicalizeConvertFromReshape
     if (!convert)
       return failure();
     // If the layouts are structurally the same, the convert is trivial
-    auto srcType = convert.getSrc().getType();
-    auto dstType = convert.getType();
-    auto srcLL = toLinearLayout(srcType.getShape(), srcType.getEncoding());
-    auto dstLL = toLinearLayout(dstType.getShape(), dstType.getEncoding());
-    if (srcLL == dstLL) {
+    if (isConvertTrivial(convert)) {
       rewriter.replaceOpWithNewOp<triton::ReshapeOp>(
-          op, op.getType(), convert.getSrc(), op.getAllowReorder());
-      return mlir::success();
+          op, op.getType(), convert.getSrc(), op.getAllowReorder(),
+          op.getEfficientLayout());
+      return success();
     }
+
     if (isExpensiveView(convert.getSrc().getType(), op.getType()))
       return failure();
     if (!op.getAllowReorder() || op.getEfficientLayout())
       return failure();
 
     rewriter.replaceOpWithNewOp<triton::ReshapeOp>(
-        op, op.getType(), convert.getSrc(), op.getAllowReorder());
+        op, op.getType(), convert.getSrc(), op.getAllowReorder(),
+        op.getEfficientLayout());
     return mlir::success();
+  }
+};
+
+// TODO We should do this generically for op(cvt) -> op
+// We have similar patterns for reshape and split...
+// See https://github.com/triton-lang/triton/pull/5403#discussion_r1920091671
+
+// trans(cvt) -> trans
+struct CanonicalizeConvertFromTranspose
+    : public mlir::OpRewritePattern<triton::TransOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(triton::TransOp op,
+                  PatternRewriter &rewriter) const override {
+    // If the layouts are structurally the same, the convert is trivial
+    auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
+    if (!convert || !isConvertTrivial(convert))
+      return failure();
+
+    rewriter.replaceOpWithNewOp<triton::TransOp>(
+        op, op.getType(), convert.getSrc(), op.getOrder());
+    return success();
   }
 };
 
@@ -289,6 +321,7 @@ void ConvertLayoutOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
                                                   MLIRContext *context) {
   patterns.add<CanonicalizeConvertFromConvert>(context);
   patterns.add<CanonicalizeConvertFromReshape>(context);
+  patterns.add<CanonicalizeConvertFromTranspose>(context);
   patterns.add<CanonicalizeConvertFromGatherSource>(context);
   patterns.add<CanonicalizeConvertFromHistogram>(context);
   patterns.add<CanonicalizeConvertFromAlloc>(context);
@@ -435,6 +468,7 @@ LogicalResult MemDescTransOp::inferReturnTypes(
     SmallVectorImpl<Type> &inferredReturnTypes) {
   // type is the same as the input
   auto argTy = cast<MemDescType>(operands[0].getType());
+  auto argShape = argTy.getShape();
   auto order = properties.as<Properties *>()->order.asArrayRef();
   SmallVector<int64_t> retShape = applyPermutation(argTy.getShape(), order);
 
@@ -445,7 +479,7 @@ LogicalResult MemDescTransOp::inferReturnTypes(
     Dialect &dialect = argEncoding.getDialect();
     auto inferLayoutInterface = cast<DialectInferLayoutInterface>(&dialect);
     if (inferLayoutInterface
-            ->inferTransOpEncoding(argEncoding, order, retEncoding)
+            ->inferTransOpEncoding(argEncoding, argShape, order, retEncoding)
             .failed()) {
       return failure();
     }
