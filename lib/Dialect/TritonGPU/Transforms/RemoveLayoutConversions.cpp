@@ -1021,31 +1021,24 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast() {
 }
 
 bool shouldPropagateConversion(ConvertLayoutOp convertOp) {
-  // We stop the rematerialization of linear layouts as we have to be a bit more
-  // careful with the heuristics for both correctness and perf
   RankedTensorType targetType = convertOp.getType();
-  if (isa<LinearEncodingAttr>(targetType.getEncoding())) {
-    return false;
+  auto dotEnc = dyn_cast<DotOperandEncodingAttr>(targetType.getEncoding());
+  // If the target encoding is not DotOperandEncodingAttr, allow propagation.
+  if (!dotEnc) {
+    return true;
   }
   // Skip conversions to DotOperandEncodingAttr when the operand index is 0.
   // This heuristic is applied to prevent moving the blocked->dot conversion of
   // the Q tensor (a loop invariant in Flash Attention) outside the loop. Doing
   // so can increase register pressure and cause spilling in some cases.
-  //
-  // Skip conversions to DotOperandEncodingAttr when the operand index is 1 if
-  // it's not intentionally placed above a load as we have to be a bit more
-  // careful with the heuristics for both correctness and perf.
-  // TODO: Fix this logic to avoid propagating conversions backward unless
-  // it reduces the total number of conversions.
-
-  auto dotEnc = dyn_cast<DotOperandEncodingAttr>(targetType.getEncoding());
-  if (!dotEnc) {
-    return true;
-  }
   if (dotEnc.getOpIdx() == 0) {
     return false;
   }
-
+  // Skip conversions to DotOperandEncodingAttr when the operand index is 1 if
+  // it's not intentionally placed above a load as we have to be a bit more
+  // careful with the heuristics for both correctness and performance.
+  // TODO: Fix this logic to avoid propagating conversions backward unless
+  // it reduces the total number of conversions.
   assert(dotEnc.getOpIdx() == 1);
   SetVector<Operation *> slice;
   BackwardSliceOptions opt;
@@ -1055,16 +1048,12 @@ bool shouldPropagateConversion(ConvertLayoutOp convertOp) {
   };
   getBackwardSlice(convertOp.getOperation(), &slice, opt);
 
-  bool foundLoad = false;
   for (Operation *currOp : slice) {
     if (isa<LoadOp>(currOp)) {
-      foundLoad = true;
+      return false;
     }
   }
-
-  if (foundLoad)
-    return false;
-
+  // Allow propagation if no LoadOp is found.
   return true;
 }
 
