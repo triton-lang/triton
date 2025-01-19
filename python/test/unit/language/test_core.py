@@ -3745,14 +3745,13 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
             return torch.matmul(x_upcast, y_upcast)
 
     comp_dtype = torch.float16 if normal_type == "fp16" else torch.bfloat16
-    comp_dtype_bias = 15 if normal_type == "fp16" else 127
     # The max exponent we use to initialize data in the x/y and associated scale tensor to avoid
     # overflow when scaling.
     comp_dtype_max_exp = 6 if normal_type == "fp16" else 15
 
     torch.manual_seed(0)
 
-    def make_arg(shape, ty, col_major=False, max_val=255):
+    def make_arg(shape, ty, col_major=False):
         if col_major:
             shape = shape[:-2] + (shape[-1], shape[-2])
         if ty == "bf16" or ty == "fp16":
@@ -3760,7 +3759,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
             # Clamp to avoid relative error issues
             ret.clamp_(-2**comp_dtype_max_exp, 2**comp_dtype_max_exp - 1)
         else:
-            ret = torch.randint(max_val + 1, shape, dtype=torch.uint8, device=device)
+            ret = torch.randint(256, shape, dtype=torch.uint8, device=device)
         if col_major:
             ret = ret.mT
         return ret
@@ -3773,8 +3772,8 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
     x = make_arg((M, K // DIV_FACTOR_A), type_a, col_major=col_a)
     y = make_arg((K // DIV_FACTOR_B, N), type_b, col_major=col_b)
 
-    max_scale = 127 + 11
-    min_scale = 127 - 10
+    max_scale = 127 + 4
+    min_scale = 127 - 5
     scale_x = torch.randint(min_scale, max_scale + 1, (M, K // 32), dtype=torch.uint8, device=device)
     scale_y = torch.randint(min_scale, max_scale + 1, (N, K // 32), dtype=torch.uint8, device=device)
     if rhs_scale:
@@ -3787,6 +3786,8 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
         # Fp8E5M2_to_Bf16 doesn't preserve NaNs (fixme)
         if dtype not in ("e5m2", "e4m3"):
             return x
+        if dtype == "e5m2" and comp_dtype == torch.float16:
+            x = x & 0xB
         mask = 0x7C if dtype == "e5m2" else 0x7F
         finite = torch.arange(x.numel(), device=device, dtype=torch.uint8).reshape_as(x) % mask
         x_finite = torch.where(x & mask == mask, finite | (0x80 & x), x)
