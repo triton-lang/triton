@@ -22,6 +22,7 @@ public:
                                const TargetInfoBase &targetInfo);
   Type convertMemDescType(triton::gpu::MemDescType type,
                           const TargetInfoBase &targetInfo);
+  Type convertAsyncTokenType(triton::gpu::AsyncTokenType type);
 
   template <typename... T> void convertFP8Type() {
     (addConversion([&](T type) -> std::optional<Type> {

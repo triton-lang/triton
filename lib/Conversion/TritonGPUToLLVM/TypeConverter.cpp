@@ -28,6 +28,9 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
   addConversion([&](MemDescType type) -> std::optional<Type> {
     return convertMemDescType(type, targetInfo);
   });
+  addConversion([&](triton::gpu::AsyncTokenType type) -> std::optional<Type> {
+    return convertAsyncTokenType(type);
+  });
 
   convertFP8Type<mlir::Float8E4M3FNUZType, mlir::Float8E4M3FNType,
                  mlir::Float8E5M2Type, mlir::Float8E5M2FNUZType>();
@@ -70,4 +73,9 @@ Type TritonGPUToLLVMTypeConverter::convertMemDescType(
   }
   emitError(UnknownLoc::get(ctx), "unsupported MemDescType encoding");
   return nullptr;
+}
+
+Type TritonGPUToLLVMTypeConverter::convertAsyncTokenType(
+    triton::gpu::AsyncTokenType type) {
+  return IntegerType::get(type.getContext(), 32);
 }
