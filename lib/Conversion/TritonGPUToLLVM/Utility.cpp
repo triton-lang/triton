@@ -346,8 +346,9 @@ bool emitTransferBetweenRegistersAndShared(
       std::min(regToSharedLayout.getNumConsecutiveInOut(),
                maxVecElems.value_or(std::numeric_limits<int>::max()));
 
+  auto withCTAOffset = triton::gpu::getNumCTAs(sharedTy.getEncoding()) > 1;
   auto [laneId, warpId, blockId] =
-      emitHardwareTuple(loc, rewriter, target, /*withCTAOffset=*/false,
+      emitHardwareTuple(loc, rewriter, target, withCTAOffset,
                         regToSharedLayout.getInDimSize(kLane));
 
   auto allocShape = sharedTy.getAllocShape();
