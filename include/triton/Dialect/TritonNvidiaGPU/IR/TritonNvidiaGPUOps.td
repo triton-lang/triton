@@ -128,7 +128,7 @@ def TTNG_InitBarrierOp : TTNG_Op<"init_barrier", [DeclareOpInterfaceMethods<Memo
     let hasVerifier = 1;
     let arguments = (ins TTG_MemDescType:$alloc,
                          I32Attr:$count);
-    let assemblyFormat = "$alloc `,` $count attr-dict `:` type($alloc)";
+    let assemblyFormat = "$alloc `,` $count attr-dict `:` qualified(type($alloc))";
 }
 
 def TTNG_InvalBarrierOp : TTNG_Op<"inval_barrier", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
@@ -143,7 +143,7 @@ def TTNG_InvalBarrierOp : TTNG_Op<"inval_barrier", [DeclareOpInterfaceMethods<Me
 
     let hasVerifier = 1;
     let arguments = (ins TTG_MemDescType:$alloc);
-    let assemblyFormat = "$alloc attr-dict `:` type($alloc)";
+    let assemblyFormat = "$alloc attr-dict `:` qualified(type($alloc))";
 }
 
 def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
@@ -162,7 +162,7 @@ def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect", [DeclareOpInterfaceMethods<
   );
 
   let assemblyFormat = [{
-    $alloc `,` $size attr-dict `,` $pred `:` type($alloc)
+    $alloc `,` $size attr-dict `,` $pred `:` qualified(type($alloc))
   }];
 }
 
@@ -183,7 +183,7 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [DeclareOpInterfaceMethods<Memo
     let hasVerifier = 1;
     let arguments = (ins TTG_MemDescType:$alloc,
                          I32:$phase);
-    let assemblyFormat = "$alloc `,` $phase attr-dict `:` type($alloc)";
+    let assemblyFormat = "$alloc `,` $phase attr-dict `:` qualified(type($alloc))";
 }
 
 def TTNG_TensorDescToTMAPtrOp : TTNG_Op<"tensor_desc_to_tma_ptr", [Pure]> {
@@ -233,7 +233,7 @@ def TTNG_AsyncTMACopyGlobalToLocalOp : TTNG_Op<"async_tma_copy_global_to_local",
   let assemblyFormat = [{
     $desc_ptr `[` $coord `]` $result `,` $barrier `,` $pred
     oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
-    attr-dict `:` type($desc_ptr) `,` type($barrier) `->` type($result)
+    attr-dict `:` qualified(type($desc_ptr)) `,` qualified(type($barrier)) `->` qualified(type($result))
   }];
 }
 
@@ -255,7 +255,7 @@ def TTNG_AsyncTMACopyLocalToGlobalOp : TTNG_Op<"async_tma_copy_local_to_global",
 
   let assemblyFormat = [{
     $desc_ptr `[` $coord `]` $src
-    attr-dict `:` type($desc_ptr) `,` type($src)
+    attr-dict `:` qualified(type($desc_ptr)) `,` qualified(type($src))
   }];
 }
 
