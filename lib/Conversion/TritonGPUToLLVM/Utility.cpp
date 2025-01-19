@@ -351,8 +351,6 @@ bool emitTransferBetweenRegistersAndShared(
                         regToSharedLayout.getInDimSize(kLane));
 
   auto allocShape = sharedTy.getAllocShape();
-  LinearLayout regLayout =
-      triton::gpu::toLinearLayout(shape, registerTy.getEncoding());
   LinearLayout invertAllocSharedLayout =
       triton::gpu::toLinearLayout(allocShape.take_back(registerTy.getRank()),
                                   sharedTy.getEncoding(),
