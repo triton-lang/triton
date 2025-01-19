@@ -200,9 +200,11 @@ Value getSmemVecAddr(const LinearLayout &regLayout,
   StringAttr kRegister = str_attr("register");
   StringAttr kLane = str_attr("lane");
   StringAttr kWarp = str_attr("warp");
-  auto shape = triton::gpu::getShapePerCTA(sharedTy);
   auto allocShape = sharedTy.getAllocShape();
-  auto rank = shape.size();
+  auto shapePerCTA = triton::gpu::getShapePerCTA(sharedTy);
+  auto allocShapePerCTA =
+      triton::gpu::getShapePerCTA(sharedTy.getEncoding(), allocShape);
+  auto rank = shapePerCTA.size();
   auto sharedEnc =
       dyn_cast<triton::gpu::SharedEncodingAttr>(sharedTy.getEncoding());
 
@@ -240,7 +242,8 @@ Value getSmemVecAddr(const LinearLayout &regLayout,
   // We propose case 2 (see comments below), which provides a more general
   // solution for all swizzled shared memory scenarios, including the edge case
   // mentioned above.
-  if (isSimpleSharedMemoryAccess(shape, allocShape, sharedEnc)) { // Case 1
+  if (isSimpleSharedMemoryAccess(shapePerCTA, allocShapePerCTA,
+                                 sharedEnc)) { // Case 1
     smemOffset = applyLinearLayout(loc, rewriter, regToSharedLayout,
                                    {{kRegister, regId},
                                     {kLane, laneId},
@@ -312,11 +315,11 @@ bool emitTransferBetweenRegistersAndShared(
   StringAttr kLane = str_attr("lane");
   StringAttr kWarp = str_attr("warp");
 
-  auto shape = triton::gpu::getShapePerCTA(sharedTy);
+  auto shapePerCTA = triton::gpu::getShapePerCTA(sharedTy);
   LinearLayout regLayout =
-      triton::gpu::toLinearLayout(shape, registerTy.getEncoding());
+      triton::gpu::toLinearLayout(shapePerCTA, registerTy.getEncoding());
   LinearLayout sharedLayout = triton::gpu::toLinearLayout(
-      shape, sharedTy.getEncoding(), elemLlvmTy.getIntOrFloatBitWidth());
+      shapePerCTA, sharedTy.getEncoding(), elemLlvmTy.getIntOrFloatBitWidth());
   LinearLayout regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
 
   // TODO(jlebar): We don't currently support loading from shared memory in a
@@ -351,10 +354,12 @@ bool emitTransferBetweenRegistersAndShared(
                         regToSharedLayout.getInDimSize(kLane));
 
   auto allocShape = sharedTy.getAllocShape();
+  auto allocShapePerCTA =
+      triton::gpu::getShapePerCTA(sharedTy.getEncoding(), allocShape);
   LinearLayout invertAllocSharedLayout =
-      triton::gpu::toLinearLayout(allocShape.take_back(registerTy.getRank()),
-                                  sharedTy.getEncoding(),
-                                  elemLlvmTy.getIntOrFloatBitWidth())
+      triton::gpu::toLinearLayout(
+          ArrayRef<int64_t>(allocShapePerCTA).take_back(registerTy.getRank()),
+          sharedTy.getEncoding(), elemLlvmTy.getIntOrFloatBitWidth())
           .invert();
 
   int numElems = regToSharedLayout.getInDimSize(kRegister);
