@@ -17,7 +17,7 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
     const TargetInfoBase &targetInfo, const DataLayoutAnalysis *analysis)
     : LLVMTypeConverter(ctx, options, analysis) {
   addConversion([ctx](triton::PointerType type) -> std::optional<Type> {
-    return LLVM::LLVMPointerType::get(ctx, 1);
+    return LLVM::LLVMPointerType::get(ctx, type.getAddressSpace());
   });
   addConversion([ctx](TensorDescType type) -> std::optional<Type> {
     return LLVM::LLVMPointerType::get(ctx, 1);
