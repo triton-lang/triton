@@ -394,11 +394,11 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
         getSharedMemoryObjectFromStruct(
             loc, loadedA,
             typeConverter->convertType(aTensorTy.getElementType()), rewriter)
-            .base;
+            .getBase();
   baseB = getSharedMemoryObjectFromStruct(
               loc, loadedB,
               typeConverter->convertType(bTensorTy.getElementType()), rewriter)
-              .base;
+              .getBase();
   if (aSharedLayout) {
     auto aOrd = aSharedLayout.getOrder();
     transA = aOrd[0] == 0;

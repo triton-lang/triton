@@ -58,6 +58,12 @@ struct ScratchConfig {
   }
 };
 
+// For a layout conversion between `srcTy` and `dstTy`, return the vector length
+// that can be used for the stores to and loads from shared memory,
+// respectively.
+std::pair</*inVec*/ unsigned, /*outVec*/ unsigned>
+getScratchCvtInOutVecLengths(RankedTensorType srcTy, RankedTensorType dstTy);
+
 ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
                                      RankedTensorType dstTy);
 

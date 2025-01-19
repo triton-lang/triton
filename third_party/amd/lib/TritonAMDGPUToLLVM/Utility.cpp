@@ -6,6 +6,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
+using mlir::triton::ModuleAxisInfoAnalysis;
 using mlir::triton::AMD::DppCtrl;
 using mlir::triton::AMD::ISAFamily;
 using mlir::triton::gpu::appendOrGetExternFuncOp;
@@ -71,9 +72,9 @@ Type castToVectorType(Type ty) {
 } // namespace
 
 namespace mlir::LLVM::AMD {
-static Value shuffleCommon(Location loc, RewriterBase &rewriter,
-                           ISAFamily isaFamily, Value val, Value i,
-                           int strideInt, ShflKind mode, Value clamp) {
+static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
+                               ISAFamily isaFamily, Value val, Value i,
+                               int strideInt, ShflKind mode, Value clamp) {
   unsigned bits = val.getType().getIntOrFloatBitWidth();
 
   // On AMD, the ds_swizzle_b32 and ds_permute_b32 instructions work on
@@ -85,8 +86,8 @@ static Value shuffleCommon(Location loc, RewriterBase &rewriter,
     if (bits < 32)
       val = sext(i32_ty, val);
 
-    val =
-        shuffleCommon(loc, rewriter, isaFamily, val, i, strideInt, mode, clamp);
+    val = shuffleCommonImpl(loc, rewriter, isaFamily, val, i, strideInt, mode,
+                            clamp);
 
     if (bits < 32)
       val = trunc(int_ty(bits), val);
@@ -100,10 +101,10 @@ static Value shuffleCommon(Location loc, RewriterBase &rewriter,
     Value vec = bitcast(val, vecTy);
     Value val0 = extract_element(f32_ty, vec, i32_val(0));
     Value val1 = extract_element(f32_ty, vec, i32_val(1));
-    val0 = shuffleCommon(loc, rewriter, isaFamily, val0, i, strideInt, mode,
-                         clamp);
-    val1 = shuffleCommon(loc, rewriter, isaFamily, val1, i, strideInt, mode,
-                         clamp);
+    val0 = shuffleCommonImpl(loc, rewriter, isaFamily, val0, i, strideInt, mode,
+                             clamp);
+    val1 = shuffleCommonImpl(loc, rewriter, isaFamily, val1, i, strideInt, mode,
+                             clamp);
     vec = undef(vecTy);
     vec = insert_element(vecTy, vec, val0, i32_val(0));
     vec = insert_element(vecTy, vec, val1, i32_val(1));
@@ -230,6 +231,20 @@ static Value shuffleCommon(Location loc, RewriterBase &rewriter,
     break;
   }
   return Value();
+}
+
+static Value shuffleCommon(Location loc, RewriterBase &rewriter,
+                           ISAFamily isaFamily, Value val, Value i,
+                           int strideInt, ShflKind mode, Value clamp) {
+  // To shuffle pointers, convert them to i64.
+  Type valTy = val.getType();
+  if (isa<LLVM::LLVMPointerType>(valTy))
+    val = ptrtoint(i64_ty, val);
+  Value result = shuffleCommonImpl(loc, rewriter, isaFamily, val, i, strideInt,
+                                   mode, clamp);
+  if (isa<LLVM::LLVMPointerType>(valTy))
+    result = inttoptr(valTy, result);
+  return result;
 }
 
 Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i,
@@ -424,19 +439,22 @@ getCacheModifierFlagsForPredicatedCall(LLVM::CallOp callOp) {
 // - SC[1:0] System Cache level: 0=wave, 1=group, 2=device, 3=system
 // - NT Non-Temporal: 0=expect temporal reuse; 1=do not expect temporal reuse
 //
-// -----+-----+-----+-----+----+--
-// Op   | cm  | SC1 | SC0 | NT |
-// -----+-----+-----+-----+----+--
-// Load | .ca |  0  |  0  | 0  |
-//      | .cg |  0  |  1  | 1  |
-//      | .cs |  0  |  1  | 1  |
-//      | .cv |  1  |  1  | x  |
-// -----+-----+-----+-----+----+--
-// Store| .wb |  0  |  0  | 0  |
-//      | .cg |  0  |  0  | 0  |
-//      | .cs |  0  |  1  | 1  |
-//      | .wt |  1  |  x  | x  |
-// -----+-----+-----+-----+----+--
+// -------+-----+-----+-----+----+--
+// Op     | cm  | SC1 | SC0 | NT |
+// -------+-----+-----+-----+----+--
+// Load   | .ca |  0  |  0  | 0  |
+//        | .cg |  0  |  1  | 1  |
+//        | .cs |  0  |  1  | 1  |
+//        | .cv |  1  |  1  | x  |
+// -------+-----+-----+-----+----+--
+// Store  | .wb |  0  |  0  | 0  |
+//        | .cg |  0  |  0  | 0  |
+//        | .cs |  0  |  1  | 1  |
+//        | .wt |  1  |  x  | x  |
+// -------+-----+-----+-----+----+--
+// Atomic | N/A |  0  |  1  | x  | Setting sc0 returns the pre-op value
+//        | N/A |  1  |  0  | x  | Setting sc1 performs a system-scope atomic
+// -------+-----+-----+-----+----+--
 static int32_t getCtrlBitsForCacheModifierOnGFX942(triton::CacheModifier cm,
                                                    bool isBufferLoad) {
   const int sc0Bit = 0b1, ntBit = 0b10, sc1Bit = 0b1000;
@@ -464,6 +482,19 @@ static int32_t getCtrlBitsForCacheModifierOnGFX942(triton::CacheModifier cm,
   default:
     aux = 0;
   }
+  return aux;
+}
+
+int32_t getCtrlBitsForBufferAtomicsOnGFX942(bool setSC0, bool setSC1,
+                                            bool setNT) {
+  const int sc0Bit = 0b1, ntBit = 0b10, sc1Bit = 0b1000;
+  int32_t aux = 0;
+  if (setSC0)
+    aux |= sc0Bit;
+  if (setSC1)
+    aux |= sc1Bit;
+  if (setNT)
+    aux |= ntBit;
   return aux;
 }
 
@@ -504,6 +535,61 @@ Value cvtFp32ToFp16(Location loc, RewriterBase &rewriter, const Value &v,
     resetRTZ();
   }
   return builder.launch(rewriter, loc, f16_ty, false);
+}
+
+Type getPointerTypeWithShape(Value basePtr, Value offset) {
+  Type basePtrType = basePtr.getType();
+  auto offsetType = cast<RankedTensorType>(offset.getType());
+  return offsetType.cloneWith(std::nullopt, basePtrType);
+}
+
+unsigned getContiguity(Value ptr, ModuleAxisInfoAnalysis &axisAnalysisPass) {
+  auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
+  if (!tensorTy)
+    return 1;
+  return axisAnalysisPass.getPtrContiguity(ptr);
+}
+
+unsigned getContiguity(Value ptr, Value offset,
+                       ModuleAxisInfoAnalysis &axisAnalysisPass) {
+  // Get contiguity from the offset
+  Type type = getPointerTypeWithShape(ptr, offset);
+  RankedTensorType tensorTy = cast<RankedTensorType>(type);
+  auto layout = tensorTy.getEncoding();
+  auto order = triton::gpu::getOrder(layout);
+  auto uniqueContigPerThread =
+      triton::gpu::getUniqueContigPerThread(layout, tensorTy.getShape());
+  assert(order[0] < uniqueContigPerThread.size() &&
+         "Unexpected uniqueContigPerThread size");
+  unsigned contiguity = uniqueContigPerThread[order[0]];
+
+  // Get alignment from the pointer. Since this is a scalar pointer
+  // we should not take the pointer contiguity to consider alignment
+  auto *axisInfo = axisAnalysisPass.getAxisInfo(ptr);
+  auto maxMultipleBytes = axisInfo->getDivisibility(0);
+  auto elemNumBits = triton::getPointeeBitWidth(tensorTy);
+  auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
+  auto align = std::max<int64_t>(maxMultipleBytes / elemNumBytes, 1);
+
+  // Final contiguity is a min of the offset contiguity and pointer alignment
+  contiguity = std::min<int64_t>(align, contiguity);
+  return contiguity;
+}
+
+unsigned getVectorSize(Value ptr, ModuleAxisInfoAnalysis &axisAnalysisPass) {
+  auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
+  if (!tensorTy)
+    return 1;
+  auto contiguity = getContiguity(ptr, axisAnalysisPass);
+  auto pointeeBitWidth = triton::getPointeeBitWidth(tensorTy);
+  return std::min<unsigned>(128 / pointeeBitWidth, contiguity);
+}
+
+unsigned getVectorSize(Value ptr, Value offset,
+                       ModuleAxisInfoAnalysis &axisAnalysisPass) {
+  auto contiguity = getContiguity(ptr, offset, axisAnalysisPass);
+  auto pointeeBitWidth = triton::getPointeeBitWidth(ptr.getType());
+  return std::min<unsigned>(128 / pointeeBitWidth, contiguity);
 }
 
 } // namespace mlir::LLVM::AMD

@@ -33,7 +33,6 @@ repos:
     hooks:
       - id: yapf
         args: ["-p", "-i"]
-        exclude: "python/test/unit/language/test_line_info.py"
 
   - repo: https://github.com/pre-commit/mirrors-clang-format
     rev: v19.1.6

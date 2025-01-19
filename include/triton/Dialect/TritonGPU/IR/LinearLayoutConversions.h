@@ -38,11 +38,8 @@ namespace mlir::triton::gpu {
 // shared layouts with hasLeadingOffset == true) but is otherwise unused.
 //
 // Returns std::nullopt if the given layout can't be converted to an LL.
-// TODO(jlebar): Remove the std::optional once all layouts are supported.
-//
-std::optional<LinearLayout>
-toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
-               std::optional<int32_t> elemBitWidth = std::nullopt);
+LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
+                            std::optional<int32_t> elemBitWidth = std::nullopt);
 
 // Given a linear layout where the input dimensions contain a "block" dimension,
 // this method sets the "block" dimension to 0 and removes the corresponding

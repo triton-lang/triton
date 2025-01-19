@@ -432,7 +432,9 @@ compared to 1*64 when the hasLeadingOffset is false.
     }]>
   ];
 
-  let extraClassDeclaration = extraBaseClassDeclaration;
+  let extraClassDeclaration = extraBaseClassDeclaration # [{
+    int32_t getAlignment() const;
+  }];
   let hasCustomAssemblyFormat = 1;
 }
 
@@ -504,7 +506,7 @@ We call each individual tile "rep".
                     "SmallVector<unsigned>",
                     "getContigPerThread">,
     InterfaceMethod<"Convert to LinearLayout.",
-                    "std::optional<LinearLayout>",
+                    "LinearLayout",
                     "toLinearLayout",
                     (ins "ArrayRef<int64_t>":$shape)>
   ];
@@ -559,7 +561,7 @@ L(T) = [ {0,8} , {1,9} , {2,10}, {3,11}, {0,8} , {1, 9} , {2, 10}, {3, 11},
 
     SmallVector<unsigned> getSizePerThread() const;
 
-    std::optional<LinearLayout> toLinearLayout(ArrayRef<int64_t> shape) const;
+    LinearLayout toLinearLayout(ArrayRef<int64_t> shape) const;
   }];
 }
 
@@ -584,6 +586,19 @@ def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding"
   let extraClassDeclaration = extraDistributedDeclaration # [{
     SmallVector<unsigned> getContigPerThread() const;
     SmallVector<unsigned> getOrder() const;
+
+    // Generalizes get{Warp,Thread,CTA}Order to linear layouts.
+    // Returns the order of the dimensions `dimName` of the layout.
+    // If more than dimension is of size one, it uses defaultOrder to determine
+    // the order of the dimensions of size one.
+    SmallVector<unsigned> orderPerDim(StringAttr dimName,
+                                      ArrayRef<unsigned> defaultOrder) const;
+
+    // Generalizes getThreadsPerWarp, getWarpsPerCTA, getCTAsPerCGA to linear layouts.
+    // Returns the bases of the dimensions `dimName` of the layout.
+    // If skipBroadcast is false, we count a base zero
+    SmallVector<unsigned> basesPerDim(StringAttr dimName,
+                                      bool skipBroadcast = true) const;
   }];
 
   let genVerifyDecl = 1;

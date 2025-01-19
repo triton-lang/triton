@@ -318,9 +318,8 @@ struct LocalAllocOpConversion
     }
 
     auto resultTy = cast<MemDescType>(op.getType());
-    auto shapePerCTA = getShapePerCTA(sharedLayout, resultTy.getShape());
-    auto smemObj = SharedMemoryObject(smemBase, llvmElemTy, shapePerCTA,
-                                      sharedLayout, op.getLoc(), rewriter);
+    auto smemObj = SharedMemoryObject(smemBase, llvmElemTy, resultTy.getRank(),
+                                      op.getLoc(), rewriter);
     auto retVal =
         getStructFromSharedMemoryObject(op.getLoc(), smemObj, rewriter);
     rewriter.replaceOp(op, retVal);
