@@ -3812,13 +3812,13 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
     torch.testing.assert_close(z, z_ref, atol=atol, rtol=rtol)
 
     # make sure ld/st are vectorized
-    # if is_cuda():
-    #     ptx = pgm.asm['ptx']
-    #     if (max(M, N) * K) // (num_warps * 32) >= 4:
-    #         assert 'ld.global.v4' in ptx
-    #     if M * N // (num_warps * 32) >= 4:
-    #         assert 'st.global.v4' in ptx
-    #     assert re.search(r'[mma|wgmma.mma_async].sync.aligned.m\d+n\d+k16(?:.row.col)?.f32.[bf|fp]16.[bf|fp]16', ptx)
+    if is_cuda():
+        ptx = pgm.asm['ptx']
+        if (max(M, N) * K) // (num_warps * 32) >= 4:
+            assert 'ld.global.v4' in ptx
+        if M * N // (num_warps * 32) >= 4:
+            assert 'st.global.v4' in ptx
+        assert re.search(r'(mma|wgmma.mma_async).sync.aligned.m\d+n\d+k16(?:.row.col)?.f32.(f|bf)16.(f|bf)16', ptx)
 
 
 @pytest.mark.interpreter
