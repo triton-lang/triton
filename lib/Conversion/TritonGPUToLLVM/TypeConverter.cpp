@@ -13,18 +13,15 @@ using ::mlir::triton::gpu::MemDescType;
 using ::mlir::triton::gpu::SharedEncodingAttr;
 
 TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
-    MLIRContext *ctx, LowerToLLVMOptions &option,
+    MLIRContext *ctx, LowerToLLVMOptions &options,
     const TargetInfoBase &targetInfo, const DataLayoutAnalysis *analysis)
-    : LLVMTypeConverter(ctx, option, analysis) {
-  addConversion([&](triton::PointerType type) -> std::optional<Type> {
-    auto ctx = type.getContext();
+    : LLVMTypeConverter(ctx, options, analysis) {
+  addConversion([ctx](triton::PointerType type) -> std::optional<Type> {
     return LLVM::LLVMPointerType::get(ctx, 1);
   });
-  addConversion([](TensorDescType type) -> std::optional<Type> {
-    auto ctx = type.getContext();
+  addConversion([ctx](TensorDescType type) -> std::optional<Type> {
     return LLVM::LLVMPointerType::get(ctx, 1);
   });
-
   addConversion([&](RankedTensorType type) -> std::optional<Type> {
     return convertTritonTensorType(type, targetInfo);
   });
@@ -37,7 +34,6 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
 }
 
 namespace mlir {
-
 LLVM::LLVMStructType getSharedMemoryType(MLIRContext *ctx, int64_t rank,
                                          const TargetInfoBase &targetInfo) {
   SmallVector<Type, 4> types;
@@ -72,5 +68,6 @@ Type TritonGPUToLLVMTypeConverter::convertMemDescType(
   if (isa<SharedEncodingAttr>(type.getEncoding())) {
     return getSharedMemoryType(ctx, type.getRank(), targetInfo);
   }
-  llvm_unreachable("unsupported MemDescType encoding");
+  emitError(UnknownLoc::get(ctx), "unsupported MemDescType encoding");
+  return nullptr;
 }
