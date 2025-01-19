@@ -398,6 +398,7 @@ public:
     auto scale = scaledDotOp.getLhsScale();
     auto aType = scaledDotOp.getLhsType();
     auto bType = scaledDotOp.getRhsType();
+    auto computeType = getComputeType(aType, bType, rewriter);
     bool fastMath = scaledDotOp.getFastMath();
 
     auto rank = oldRetType.getShape().size();
@@ -408,8 +409,10 @@ public:
             aType == ScaleDotElemType::E5M2 ||
             aType == ScaleDotElemType::E2M1) &&
            "NYI: lhs supports fp4 or fp8");
-    assert(bType == ScaleDotElemType::E4M3 || bType == ScaleDotElemType::E5M2 ||
-           bType == ScaleDotElemType::BF16 && "NYI: rhs supports fp8 and bf16");
+    assert(
+        (bType == ScaleDotElemType::E4M3 || bType == ScaleDotElemType::E5M2 ||
+         bType == ScaleDotElemType::BF16 || bType == ScaleDotElemType::FP16) &&
+        "NYI: rhs supports fp8, fp16, bf16");
     bool isFp4 = aType == ScaleDotElemType::E2M1;
 
     auto mmaEnc = getMMAEncoding(rewriter, scaledDotOp);
@@ -513,7 +516,7 @@ public:
     }
 
     a = createArg(rewriter, a, 0, aType, newAEncoding, scale, newScaleEncoding,
-                  fastMath);
+                  computeType, fastMath);
 
     Operation *newDot = nullptr;
     if (versionMajor == 2) {
@@ -522,7 +525,7 @@ public:
       auto newBEncoding = DotOperandEncodingAttr::get(ctx, 1, mmaEnc, bKWidth);
       b = createArg(rewriter, b, 1, bType, newBEncoding,
                     /*scale=*/std::nullopt, /*scaleEncoding=*/std::nullopt,
-                    fastMath);
+                    computeType, fastMath);
       newDot = rewriter.create<DotOp>(scaledDotOp.getLoc(), newRetType, a, b,
                                       newAcc);
     } else {
@@ -545,7 +548,8 @@ private:
   createArg(mlir::PatternRewriter &rewriter, TypedValue<RankedTensorType> v,
             int idx, ScaleDotElemType type, std::optional<Attribute> vEncoding,
             std::optional<TypedValue<RankedTensorType>> opt_scale,
-            std::optional<Attribute> scaleEncoding, bool fastMath) const {
+            std::optional<Attribute> scaleEncoding, Type computeType,
+            bool fastMath) const {
     auto ctx = rewriter.getContext();
     // Create a new tensor with a given encoding or remove the encoding
     auto maybeWithEncoding =
@@ -562,13 +566,14 @@ private:
     TypedValue<RankedTensorType> ret =
         rewriter.create<ConvertLayoutOp>(v.getLoc(), newVType, v);
 
-    // convert to bf16
-    if (type != ScaleDotElemType::E2M1 && type != ScaleDotElemType::BF16) {
+    // convert to compute type
+    if (type != ScaleDotElemType::E2M1 && type != ScaleDotElemType::FP16 &&
+        type != ScaleDotElemType::BF16) {
       assert(type == ScaleDotElemType::E5M2 || type == ScaleDotElemType::E4M3);
-      auto vTypeBf16 = RankedTensorType::get(
-          newVType.getShape(), rewriter.getBF16Type(), newVType.getEncoding());
+      auto vTypeCompute = RankedTensorType::get(
+          newVType.getShape(), computeType, newVType.getEncoding());
       ret = cast<TypedValue<RankedTensorType>>(
-          rewriter.create<FpToFpOp>(v.getLoc(), vTypeBf16, ret).getResult());
+          rewriter.create<FpToFpOp>(v.getLoc(), vTypeCompute, ret).getResult());
     }
     if (opt_scale.has_value()) {
       auto scale = *opt_scale;
@@ -577,12 +582,19 @@ private:
           maybeWithEncoding(scale.getType(), scaleEncoding);
       scale = rewriter.create<ConvertLayoutOp>(scale.getLoc(),
                                                newScaleDotElemType, scale);
-      auto retTy = triton::gpu::UpcastMXFPOp::deduceOutputType(
-          ret, type, Builder(v.getContext()).getBF16Type());
+      auto retTy =
+          triton::gpu::UpcastMXFPOp::deduceOutputType(ret, type, computeType);
       ret = rewriter.create<triton::gpu::UpcastMXFPOp>(v.getLoc(), retTy, ret,
                                                        scale, type, fastMath);
     }
     return ret;
+  }
+
+  mlir::Type getComputeType(ScaleDotElemType aType, ScaleDotElemType bType,
+                            mlir::PatternRewriter &rewriter) const {
+    if (aType == ScaleDotElemType::FP16 || bType == ScaleDotElemType::FP16)
+      return rewriter.getF16Type();
+    return rewriter.getBF16Type();
   }
 
   NvidiaMmaEncodingAttr getMMAEncoding(mlir::PatternRewriter &rewriter,
@@ -593,6 +605,7 @@ private:
     auto scale = scaledDotOp.getLhsScale();
     auto aType = scaledDotOp.getLhsType();
     auto bType = scaledDotOp.getRhsType();
+    auto computeType = getComputeType(aType, bType, rewriter);
     bool fastMath = scaledDotOp.getFastMath();
 
     // create a DotOp to be passed in to getMMAVersionSafe
@@ -602,7 +615,7 @@ private:
     // end up in the graph
     RankedTensorType aTType =
         createArg(rewriter, a, 0, aType, /*vEncoding=*/std::nullopt, scale,
-                  /*scaleEncoding=*/std::nullopt, fastMath)
+                  /*scaleEncoding=*/std::nullopt, computeType, fastMath)
             .getType();
     auto aTypeNoEnc =
         RankedTensorType::get(aTType.getShape(), aTType.getElementType());
@@ -611,7 +624,7 @@ private:
     RankedTensorType bTType =
         createArg(rewriter, b, 1, bType, /*vEncoding=*/std::nullopt,
                   /*scale=*/std::nullopt, /*scaleEncoding=*/std::nullopt,
-                  fastMath)
+                  computeType, fastMath)
             .getType();
     auto bTypeNoEnc =
         RankedTensorType::get(bTType.getShape(), bTType.getElementType());

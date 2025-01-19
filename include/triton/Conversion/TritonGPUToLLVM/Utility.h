@@ -37,6 +37,7 @@ using namespace mlir::triton;
 #define zext(...) rewriter.create<LLVM::ZExtOp>(loc, __VA_ARGS__)
 #define sext(...) rewriter.create<LLVM::SExtOp>(loc, __VA_ARGS__)
 #define fpext(...) rewriter.create<LLVM::FPExtOp>(loc, __VA_ARGS__)
+#define fptrunc(...) rewriter.create<LLVM::FPTruncOp>(loc, __VA_ARGS__)
 #define trunc(...) rewriter.create<LLVM::TruncOp>(loc, __VA_ARGS__)
 #define udiv(...) rewriter.create<LLVM::UDivOp>(loc, __VA_ARGS__)
 #define sdiv(...) rewriter.create<LLVM::SDivOp>(loc, __VA_ARGS__)
