@@ -20,28 +20,20 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
     auto ctx = type.getContext();
     return LLVM::LLVMPointerType::get(ctx, 1);
   });
+  addConversion([](TensorDescType type) -> std::optional<Type> {
+    auto ctx = type.getContext();
+    return LLVM::LLVMPointerType::get(ctx, 1);
+  });
+
   addConversion([&](RankedTensorType type) -> std::optional<Type> {
     return convertTritonTensorType(type, targetInfo);
   });
   addConversion([&](MemDescType type) -> std::optional<Type> {
     return convertMemDescType(type, targetInfo);
   });
-  addConversion([](TensorDescType type) -> std::optional<Type> {
-    auto ctx = type.getContext();
-    return LLVM::LLVMPointerType::get(ctx, 1);
-  });
-  addConversion([&](mlir::Float8E4M3FNUZType type) -> std::optional<Type> {
-    return IntegerType::get(type.getContext(), 8);
-  });
-  addConversion([&](mlir::Float8E4M3FNType type) -> std::optional<Type> {
-    return IntegerType::get(type.getContext(), 8);
-  });
-  addConversion([&](mlir::Float8E5M2Type type) -> std::optional<Type> {
-    return IntegerType::get(type.getContext(), 8);
-  });
-  addConversion([&](mlir::Float8E5M2FNUZType type) -> std::optional<Type> {
-    return IntegerType::get(type.getContext(), 8);
-  });
+
+  convertFP8Type<mlir::Float8E4M3FNUZType, mlir::Float8E4M3FNType,
+                 mlir::Float8E5M2Type, mlir::Float8E5M2FNUZType>();
 }
 
 namespace mlir {

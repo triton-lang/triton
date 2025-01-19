@@ -22,6 +22,13 @@ public:
                                const TargetInfoBase &targetInfo);
   Type convertMemDescType(triton::gpu::MemDescType type,
                           const TargetInfoBase &targetInfo);
+
+  template <typename... T> void convertFP8Type() {
+    (addConversion([&](T type) -> std::optional<Type> {
+       return IntegerType::get(type.getContext(), 8);
+     }),
+     ...);
+  }
 };
 
 #endif
