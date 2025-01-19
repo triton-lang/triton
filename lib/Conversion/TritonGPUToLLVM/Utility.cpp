@@ -188,12 +188,13 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
 
 namespace {
 
-Value getSmemVecAddr(RankedTensorType registerTy,
+Value getSmemVecAddr(const LinearLayout &regLayout,
+                     const LinearLayout &regToSharedLayout,
+                     const LinearLayout &invertAllocSharedLayout,
+                     const SharedMemoryObject &smemObj,
                      triton::gpu::MemDescType sharedTy, Type elemLlvmTy,
-                     Location loc, RewriterBase &rewriter,
-                     const LinearLayout &regToSharedLayout, Value regId,
-                     Value laneId, Value warpId,
-                     const SharedMemoryObject &smemObj) {
+                     Value regId, Value laneId, Value warpId, Location loc,
+                     RewriterBase &rewriter) {
   MLIRContext *ctx = rewriter.getContext();
   StringAttr kBlock = str_attr("block");
   StringAttr kRegister = str_attr("register");
@@ -274,12 +275,6 @@ Value getSmemVecAddr(RankedTensorType registerTy,
     // This approach ensures that "absolute" tensor offsets can be
     // mapped to the correct shared memory addresses using
     // `invertAllocSharedLayout`.
-    LinearLayout regLayout =
-        triton::gpu::toLinearLayout(shape, registerTy.getEncoding());
-    LinearLayout allocSharedLayout = triton::gpu::toLinearLayout(
-        allocShape.take_back(rank), sharedTy.getEncoding(),
-        elemLlvmTy.getIntOrFloatBitWidth());
-    LinearLayout invertAllocSharedLayout = allocSharedLayout.invert();
     auto multiDimTensorOffsets =
         llvm::to_vector(applyLinearLayout(loc, rewriter, regLayout,
                                           {{kRegister, regId},
@@ -328,15 +323,15 @@ bool emitTransferBetweenRegistersAndShared(
   // different CTA.  We'd need to emit `mapa.shared::cluster` instructions.
   for (int inBlock = 1; inBlock < regToSharedLayout.getInDimSize(kBlock);
        inBlock *= 2) {
-    auto idx = llvm::to_vector(llvm::make_second_range(regToSharedLayout.apply(
-        {{kRegister, 0}, {kLane, 0}, {kWarp, 0}, {kBlock, inBlock}})));
-    // offsetX1, ..., offsetXN must all be 0.
-    if (!llvm::all_of(ArrayRef(idx).drop_back(1),
-                      [&](auto offset) { return offset == 0; })) {
+    auto idx = regToSharedLayout.apply(
+        {{kRegister, 0}, {kLane, 0}, {kWarp, 0}, {kBlock, inBlock}});
+    // Intra-block offset must be 0
+    int32_t offset = idx[0].second;
+    if (offset != 0) {
       return false;
     }
     // Check if there's any cross CTA load.
-    int32_t outBlock = idx.back();
+    int32_t outBlock = idx[1].second;
     if (outBlock != inBlock) {
       return false;
     }
@@ -355,15 +350,24 @@ bool emitTransferBetweenRegistersAndShared(
       emitHardwareTuple(loc, rewriter, target, /*withCTAOffset=*/false,
                         regToSharedLayout.getInDimSize(kLane));
 
+  auto allocShape = sharedTy.getAllocShape();
+  LinearLayout regLayout =
+      triton::gpu::toLinearLayout(shape, registerTy.getEncoding());
+  LinearLayout invertAllocSharedLayout =
+      triton::gpu::toLinearLayout(allocShape.take_back(registerTy.getRank()),
+                                  sharedTy.getEncoding(),
+                                  elemLlvmTy.getIntOrFloatBitWidth())
+          .invert();
+
   int numElems = regToSharedLayout.getInDimSize(kRegister);
   auto vecTy = vec_ty(elemLlvmTy, vecElems);
   Value zero = i32_val(0);
   SmallVector<Value> ret;
   for (int i = 0; i < numElems / vecElems; i++) {
+    auto regId = i32_val(i * vecElems);
     auto vecAddr = getSmemVecAddr(
-        registerTy, sharedTy, elemLlvmTy, loc, rewriter, regToSharedLayout,
-        i32_val(i * vecElems), laneId, warpId, smemObj);
-
+        regLayout, regToSharedLayout, invertAllocSharedLayout, smemObj,
+        sharedTy, elemLlvmTy, regId, laneId, warpId, loc, rewriter);
     perVectorCallback(vecTy, vecAddr);
   }
   return true;

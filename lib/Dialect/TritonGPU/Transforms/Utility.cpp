@@ -1193,13 +1193,4 @@ void populateForOpDeadArgumentElimination(RewritePatternSet &patterns) {
   patterns.add<ForOpDeadArgElimination>(patterns.getContext());
 }
 
-LinearLayout getRegToSharedLayout(MLIRContext *ctx, ArrayRef<int64_t> shape,
-                                  Attribute srcEnc, Attribute dstEnc,
-                                  int elemBitWidth) {
-  LinearLayout regLayout = triton::gpu::toLinearLayout(shape, srcEnc);
-  LinearLayout sharedLayout =
-      triton::gpu::toLinearLayout(shape, dstEnc, elemBitWidth);
-  return regLayout.invertAndCompose(sharedLayout);
-}
-
 } // namespace mlir
