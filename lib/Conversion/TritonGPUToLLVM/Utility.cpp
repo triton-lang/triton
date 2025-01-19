@@ -193,18 +193,16 @@ Value getSmemVecAddr(const LinearLayout &regLayout,
                      const LinearLayout &invertAllocSharedLayout,
                      const SharedMemoryObject &smemObj,
                      triton::gpu::MemDescType sharedTy, Type elemLlvmTy,
-                     Value regId, Value laneId, Value warpId, Location loc,
-                     RewriterBase &rewriter) {
+                     Value regId, Value laneId, Value warpId, Value blockId,
+                     Location loc, RewriterBase &rewriter) {
   MLIRContext *ctx = rewriter.getContext();
   StringAttr kBlock = str_attr("block");
   StringAttr kRegister = str_attr("register");
   StringAttr kLane = str_attr("lane");
   StringAttr kWarp = str_attr("warp");
+  auto shape = sharedTy.getShape();
   auto allocShape = sharedTy.getAllocShape();
-  auto shapePerCTA = triton::gpu::getShapePerCTA(sharedTy);
-  auto allocShapePerCTA =
-      triton::gpu::getShapePerCTA(sharedTy.getEncoding(), allocShape);
-  auto rank = shapePerCTA.size();
+  auto rank = shape.size();
   auto sharedEnc =
       dyn_cast<triton::gpu::SharedEncodingAttr>(sharedTy.getEncoding());
 
@@ -242,13 +240,12 @@ Value getSmemVecAddr(const LinearLayout &regLayout,
   // We propose case 2 (see comments below), which provides a more general
   // solution for all swizzled shared memory scenarios, including the edge case
   // mentioned above.
-  if (isSimpleSharedMemoryAccess(shapePerCTA, allocShapePerCTA,
-                                 sharedEnc)) { // Case 1
+  if (isSimpleSharedMemoryAccess(shape, allocShape, sharedEnc)) { // Case 1
     smemOffset = applyLinearLayout(loc, rewriter, regToSharedLayout,
                                    {{kRegister, regId},
                                     {kLane, laneId},
                                     {kWarp, warpId},
-                                    {kBlock, i32_val(0)}})[0]
+                                    {kBlock, blockId}})[0]
                      .second;
   } else { // Case 2 -> rank-reduced swizzling
     assert(rank >= 2 && "Swizzling only applies to tensors with rank >= 2");
@@ -283,7 +280,7 @@ Value getSmemVecAddr(const LinearLayout &regLayout,
                                           {{kRegister, regId},
                                            {kLane, laneId},
                                            {kWarp, warpId},
-                                           {kBlock, i32_val(0)}}));
+                                           {kBlock, blockId}}));
     for (auto i = 0; i < rank; i++) {
       multiDimTensorOffsets[i].second =
           add(multiDimTensorOffsets[i].second, smemOffsets[i]);
@@ -315,11 +312,11 @@ bool emitTransferBetweenRegistersAndShared(
   StringAttr kLane = str_attr("lane");
   StringAttr kWarp = str_attr("warp");
 
-  auto shapePerCTA = triton::gpu::getShapePerCTA(sharedTy);
+  auto shape = sharedTy.getShape();
   LinearLayout regLayout =
-      triton::gpu::toLinearLayout(shapePerCTA, registerTy.getEncoding());
+      triton::gpu::toLinearLayout(shape, registerTy.getEncoding());
   LinearLayout sharedLayout = triton::gpu::toLinearLayout(
-      shapePerCTA, sharedTy.getEncoding(), elemLlvmTy.getIntOrFloatBitWidth());
+      shape, sharedTy.getEncoding(), elemLlvmTy.getIntOrFloatBitWidth());
   LinearLayout regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
 
   // TODO(jlebar): We don't currently support loading from shared memory in a
@@ -354,13 +351,11 @@ bool emitTransferBetweenRegistersAndShared(
                         regToSharedLayout.getInDimSize(kLane));
 
   auto allocShape = sharedTy.getAllocShape();
-  auto allocShapePerCTA =
-      triton::gpu::getShapePerCTA(sharedTy.getEncoding(), allocShape);
   LinearLayout invertAllocSharedLayout =
-      triton::gpu::toLinearLayout(
-          ArrayRef<int64_t>(allocShapePerCTA).take_back(registerTy.getRank()),
-          sharedTy.getEncoding(), elemLlvmTy.getIntOrFloatBitWidth())
-          .invert();
+      triton::gpu::toLinearLayout(allocShape.take_back(registerTy.getRank()),
+                                  sharedTy.getEncoding(),
+                                  elemLlvmTy.getIntOrFloatBitWidth())
+          .pseudoinvert();
 
   int numElems = regToSharedLayout.getInDimSize(kRegister);
   auto vecTy = vec_ty(elemLlvmTy, vecElems);
@@ -370,7 +365,7 @@ bool emitTransferBetweenRegistersAndShared(
     auto regId = i32_val(i * vecElems);
     auto vecAddr = getSmemVecAddr(
         regLayout, regToSharedLayout, invertAllocSharedLayout, smemObj,
-        sharedTy, elemLlvmTy, regId, laneId, warpId, loc, rewriter);
+        sharedTy, elemLlvmTy, regId, laneId, warpId, blockId, loc, rewriter);
     perVectorCallback(vecTy, vecAddr);
   }
   return true;
