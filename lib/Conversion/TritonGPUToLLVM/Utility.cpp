@@ -200,7 +200,7 @@ Value getSmemVecAddr(const LinearLayout &regLayout,
   StringAttr kRegister = str_attr("register");
   StringAttr kLane = str_attr("lane");
   StringAttr kWarp = str_attr("warp");
-  auto shape = sharedTy.getShape();
+  auto shape = triton::gpu::getShapePerCTA(sharedTy);
   auto allocShape = sharedTy.getAllocShape();
   auto rank = shape.size();
   auto sharedEnc =
@@ -312,7 +312,7 @@ bool emitTransferBetweenRegistersAndShared(
   StringAttr kLane = str_attr("lane");
   StringAttr kWarp = str_attr("warp");
 
-  auto shape = registerTy.getShape();
+  auto shape = triton::gpu::getShapePerCTA(sharedTy);
   LinearLayout regLayout =
       triton::gpu::toLinearLayout(shape, registerTy.getEncoding());
   LinearLayout sharedLayout = triton::gpu::toLinearLayout(
