@@ -240,15 +240,12 @@ Value getSmemVecAddr(RankedTensorType registerTy,
   // solution for all swizzled shared memory scenarios, including the edge case
   // mentioned above.
   if (isSimpleSharedMemoryAccess(shape, allocShape, sharedEnc)) { // Case 1
-    // Get the address to load/store.  The multi-dim address is (offsetX1, ...,
-    // offsetXN, block), where the offsets appear in minor-to-major order, and
-    // we drop_end to drop block, which we know from above will be 0.
-    smemOffsets = llvm::to_vector(llvm::drop_end(llvm::make_second_range(
-        applyLinearLayout(loc, rewriter, regToSharedLayout,
-                          {{kRegister, regId},
-                           {kLane, laneId},
-                           {kWarp, warpId},
-                           {kBlock, i32_val(0)}}))));
+    smemOffset = applyLinearLayout(loc, rewriter, regToSharedLayout,
+                                   {{kRegister, regId},
+                                    {kLane, laneId},
+                                    {kWarp, warpId},
+                                    {kBlock, i32_val(0)}})[0]
+                     .second;
   } else { // Case 2 -> rank-reduced swizzling
     assert(rank >= 2 && "Swizzling only applies to tensors with rank >= 2");
     assert(!sharedEnc.getHasLeadingOffset() &&
@@ -315,17 +312,17 @@ bool emitTransferBetweenRegistersAndShared(
     std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback) {
   MLIRContext *ctx = rewriter.getContext();
 
-  auto shape = registerTy.getShape();
-  int rank = shape.size();
-
   StringAttr kBlock = str_attr("block");
   StringAttr kRegister = str_attr("register");
   StringAttr kLane = str_attr("lane");
   StringAttr kWarp = str_attr("warp");
 
-  LinearLayout regToSharedLayout = getRegToSharedLayout(
-      ctx, shape, registerTy.getEncoding(), sharedTy.getEncoding(),
-      elemLlvmTy.getIntOrFloatBitWidth());
+  auto shape = registerTy.getShape();
+  LinearLayout regLayout =
+      triton::gpu::toLinearLayout(shape, registerTy.getEncoding());
+  LinearLayout sharedLayout = triton::gpu::toLinearLayout(
+      shape, sharedTy.getEncoding(), elemLlvmTy.getIntOrFloatBitWidth());
+  LinearLayout regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
 
   // TODO(jlebar): We don't currently support loading from shared memory in a
   // different CTA.  We'd need to emit `mapa.shared::cluster` instructions.
@@ -350,12 +347,6 @@ bool emitTransferBetweenRegistersAndShared(
   //
   // It's OK if the vector width we choose here is wider than the hardware
   // supports; LLVM will legalize it.
-  //
-  // TODO(jlebar): shmemStrides are Values, but most of them are usually integer
-  // constants.  We could add those constant strides to the LL, and then before
-  // calling getNumConsecutiveInOut(), we could flatten consecutive out-dims
-  // which have known strides.  This would allow us to vectorize across multiple
-  // shmem out dimensions where possible.
   const int vecElems =
       std::min(regToSharedLayout.getNumConsecutiveInOut(),
                maxVecElems.value_or(std::numeric_limits<int>::max()));
