@@ -33,7 +33,7 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
                  mlir::Float8E5M2Type, mlir::Float8E5M2FNUZType>();
 }
 
-namespace mlir {
+namespace {
 LLVM::LLVMStructType getSharedMemoryType(MLIRContext *ctx, int64_t rank,
                                          const TargetInfoBase &targetInfo) {
   SmallVector<Type, 4> types;
@@ -47,7 +47,7 @@ LLVM::LLVMStructType getSharedMemoryType(MLIRContext *ctx, int64_t rank,
   }
   return LLVM::LLVMStructType::getLiteral(ctx, types);
 }
-} // namespace mlir
+} // namespace
 
 Type TritonGPUToLLVMTypeConverter::convertTritonTensorType(
     RankedTensorType type, const TargetInfoBase &targetInfo) {
