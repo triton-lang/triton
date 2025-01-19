@@ -46,9 +46,8 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
 
 namespace mlir {
 
-LLVM::LLVMStructType
-getStructForSharedMemory(MLIRContext *ctx, int64_t rank,
-                         const TargetInfoBase &targetInfo) {
+LLVM::LLVMStructType getSharedMemoryType(MLIRContext *ctx, int64_t rank,
+                                         const TargetInfoBase &targetInfo) {
   SmallVector<Type, 4> types;
   // base ptr
   auto ptrType =
@@ -66,7 +65,7 @@ Type TritonGPUToLLVMTypeConverter::convertTritonTensorType(
     RankedTensorType type, const TargetInfoBase &targetInfo) {
   auto ctx = type.getContext();
   if (isa<SharedEncodingAttr>(type.getEncoding())) {
-    return getStructForSharedMemory(ctx, type.getRank(), targetInfo);
+    return getSharedMemoryType(ctx, type.getRank(), targetInfo);
   }
 
   Type eltType = convertType(type.getElementType());
@@ -79,7 +78,7 @@ Type TritonGPUToLLVMTypeConverter::convertMemDescType(
     MemDescType type, const TargetInfoBase &targetInfo) {
   auto ctx = type.getContext();
   if (isa<SharedEncodingAttr>(type.getEncoding())) {
-    return getStructForSharedMemory(ctx, type.getRank(), targetInfo);
+    return getSharedMemoryType(ctx, type.getRank(), targetInfo);
   }
   llvm_unreachable("unsupported MemDescType encoding");
 }
