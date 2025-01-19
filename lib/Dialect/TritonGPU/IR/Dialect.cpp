@@ -2525,12 +2525,14 @@ struct TritonGPUInferLayoutInterface
   //                   = inverse(trans.order) * inputEnc.order.
   //
   LogicalResult inferTransOpEncoding(Attribute operandEncoding,
+                                     ArrayRef<int64_t> shape,
                                      ArrayRef<int32_t> order, // trans order
                                      Attribute &resultEncoding) const override {
     // Note: inferFooOpEncoding should not crash if given invalid inputs, which
     // happens when someone creates invalid IR.  If we return failure() on
     // error, then MLIR will generate a helpful error message.
 
+    auto *ctx = getDialect()->getContext();
     auto invOrder = inversePermutation(order);
     SmallVector<unsigned> invOrderUnsigned(invOrder.begin(), invOrder.end());
 
@@ -2544,8 +2546,7 @@ struct TritonGPUInferLayoutInterface
       }
 
       return CTALayoutAttr::get(
-          getDialect()->getContext(),
-          applyPermutation(layout.getCTAsPerCGA(), order),
+          ctx, applyPermutation(layout.getCTAsPerCGA(), order),
           applyPermutation(layout.getCTASplitNum(), order),
           applyPermutation(invOrderUnsigned, layout.getCTAOrder()));
     };
@@ -2559,9 +2560,9 @@ struct TritonGPUInferLayoutInterface
         return failure();
       }
       resultEncoding = SharedEncodingAttr::get(
-          getDialect()->getContext(), enc.getVec(), enc.getPerPhase(),
-          enc.getMaxPhase(), applyPermutation(invOrderUnsigned, enc.getOrder()),
-          *ctaLayout, enc.getHasLeadingOffset());
+          ctx, enc.getVec(), enc.getPerPhase(), enc.getMaxPhase(),
+          applyPermutation(invOrderUnsigned, enc.getOrder()), *ctaLayout,
+          enc.getHasLeadingOffset());
       return success();
     }
 
@@ -2577,15 +2578,27 @@ struct TritonGPUInferLayoutInterface
         return failure();
       }
       resultEncoding = BlockedEncodingAttr::get(
-          getDialect()->getContext(),
-          applyPermutation(enc.getSizePerThread(), order),
+          ctx, applyPermutation(enc.getSizePerThread(), order),
           applyPermutation(enc.getThreadsPerWarp(), order),
           applyPermutation(enc.getWarpsPerCTA(), order),
           applyPermutation(invOrderUnsigned, enc.getOrder()), *ctaLayout);
       return success();
     }
-
-    return failure(); // unhandled encoding
+    auto ll = toLinearLayout(shape, operandEncoding);
+    auto namedBases = ll.getBases();
+    for (auto &bases : llvm::make_second_range(namedBases)) {
+      for (auto &b : bases) {
+        std::vector<int32_t> newB;
+        for (auto i : order) {
+          newB.push_back(b[i]);
+        }
+        b = std::move(newB);
+      }
+    }
+    auto retLl = LinearLayout(std::move(namedBases),
+                              llvm::to_vector(ll.getOutDimNames()));
+    resultEncoding = LinearEncodingAttr::get(ctx, std::move(retLl));
+    return success();
   }
 
   LogicalResult
@@ -2901,9 +2914,10 @@ struct TritonGPUInferLayoutInterface
     return success();
   }
 
-  LogicalResult verifyLayoutsAreEqual(ArrayRef<int64_t> shape,
-                                      Attribute expected, Attribute got,
-                                      Location loc) const override {
+  LogicalResult
+  verifyLayoutsAreEqual(ArrayRef<int64_t> shape, Attribute expected,
+                        Attribute got,
+                        std::optional<Location> loc) const override {
     if (expected == got) {
       return success();
     }
@@ -2911,8 +2925,8 @@ struct TritonGPUInferLayoutInterface
     auto expectedLL = triton::gpu::toLinearLayout(shape, expected);
     auto gotLL = triton::gpu::toLinearLayout(shape, got);
     if (expectedLL != gotLL) {
-      return emitError(loc, "Expected result encoding ")
-             << expected << " but was " << got;
+      return emitOptionalError(loc, "Expected result encoding ", expected,
+                               " but was ", got);
     }
     return success();
   }
