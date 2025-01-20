@@ -981,6 +981,21 @@ int getNVIDIAComputeCapability(Operation *module) {
   return computeCapability;
 }
 
+StringRef getAMDArch(Operation *module) {
+  assert(module->hasAttr(triton::AttrTargetName) &&
+         "Expected a target attribute on the module operation");
+
+  StringAttr targetAttr =
+      cast<StringAttr>(module->getAttr(triton::AttrTargetName));
+
+  StringRef ref = targetAttr.strref();
+  assert(ref.starts_with("hip:") &&
+         "expected target attribute to be prefixed with \"cuda:\"");
+
+  StringRef archStr = ref.drop_front(4); // drop the "hip:"
+  return archStr;
+}
+
 // If all the transitive uses of the given value have are used by a convert to
 // the same dot operand encoding, return the shared encoding that needs to be
 // used to be compatible with users' layouts. If there are incompatible shared
