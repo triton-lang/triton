@@ -8,6 +8,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Tools/LinearLayout.h"
 #include "llvm/Support/ErrorHandling.h"
 
 namespace mlir {
@@ -208,13 +209,14 @@ OpFoldResult TransOp::fold(FoldAdaptor adaptor) {
 }
 
 LogicalResult TransOp::inferReturnTypes(
-    MLIRContext *context, std::optional<Location> location, ValueRange operands,
-    DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
-    SmallVectorImpl<Type> &inferredReturnTypes) {
+    MLIRContext *context, std::optional<Location> location,
+    TransOp::Adaptor adaptor, SmallVectorImpl<Type> &inferredReturnTypes) {
+
   // type is the same as the input
-  auto argTy = cast<RankedTensorType>(operands[0].getType());
-  auto order = properties.as<Properties *>()->order.asArrayRef();
-  SmallVector<int64_t> retShape = applyPermutation(argTy.getShape(), order);
+  auto argTy = cast<RankedTensorType>(adaptor.getSrc().getType());
+  auto shape = argTy.getShape();
+  auto order = adaptor.getOrder();
+  SmallVector<int64_t> retShape = applyPermutation(shape, order);
 
   auto retEltTy = argTy.getElementType();
   Attribute argEncoding = argTy.getEncoding();
@@ -223,7 +225,7 @@ LogicalResult TransOp::inferReturnTypes(
     Dialect &dialect = argEncoding.getDialect();
     auto inferLayoutInterface = cast<DialectInferLayoutInterface>(&dialect);
     if (inferLayoutInterface
-            ->inferTransOpEncoding(argEncoding, order, retEncoding)
+            ->inferTransOpEncoding(argEncoding, shape, order, retEncoding)
             .failed()) {
       return failure();
     }
@@ -231,6 +233,26 @@ LogicalResult TransOp::inferReturnTypes(
   inferredReturnTypes.push_back(
       RankedTensorType::get(retShape, retEltTy, retEncoding));
   return success();
+}
+
+bool TransOp::isCompatibleReturnTypes(TypeRange lhs, TypeRange rhs) {
+  assert(lhs.size() == rhs.size());
+  assert(lhs.size() == 1);
+  auto lhsType = cast<RankedTensorType>(lhs[0]);
+  auto rhsType = cast<RankedTensorType>(rhs[0]);
+
+  if (lhsType.getShape() != rhsType.getShape())
+    return false;
+
+  auto lhsEnc = lhsType.getEncoding();
+  auto rhsEnc = rhsType.getEncoding();
+  // If there's no encoding or the encodings are the same
+  if (lhsEnc == rhsEnc)
+    return true;
+
+  return cast<DialectInferLayoutInterface>(&lhsEnc.getDialect())
+      ->verifyLayoutsAreEqual(lhsType.getShape(), lhsEnc, rhsEnc, {})
+      .succeeded();
 }
 
 //-- DotOp --
@@ -701,24 +723,21 @@ LogicalResult ReshapeOp::verify() {
                      "encodings, or (b) neither does.");
   }
 
-  if (srcEnc && !getAllowReorder()) {
-    Attribute inferredDstEnc;
-    if (cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
-            ->inferReshapeOpNoReorderEncoding(srcTy.getShape(), srcEnc,
-                                              dstTy.getShape(), inferredDstEnc,
-                                              getLoc())
-            .failed()) {
-      return emitError("This reshape is impossible without reordering, but "
-                       "reordering is not allowed.  Try choosing a different "
-                       "encoding for the input tensor (or allow reordering).");
-    }
-    if (inferredDstEnc != dstEnc) {
-      return emitError("Expected result encoding ")
-             << inferredDstEnc << " but was " << dstEnc;
-    }
+  if (!srcEnc || getAllowReorder()) {
+    return success();
   }
 
-  return success();
+  // Check that we can infer the dst encoding from the src encoding
+  // and that the inferred dst encoding is the same as the given dst encoding
+  Attribute inferredDstEnc;
+  auto result =
+      cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
+          ->inferReshapeOpEncoding(srcTy.getShape(), srcEnc, dstTy.getShape(),
+                                   inferredDstEnc, getLoc());
+  assert(succeeded(result));
+  return cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
+      ->verifyLayoutsAreEqual(dstTy.getShape(), inferredDstEnc, dstEnc,
+                              getLoc());
 }
 
 //-- FpToFpOp --

@@ -44,9 +44,8 @@ def TritonGPU_Dialect : Dialect {
       return cast<IntegerAttr>(threadsPerWarp).getInt();
     }
 
-    std::optional<LinearLayout>
-    toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
-                   std::optional<int32_t> elemBitWidth);
+    LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
+                                std::optional<int32_t> elemBitWidth);
 
     private:
       LinearLayoutCache llCache;

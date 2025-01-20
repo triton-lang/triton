@@ -139,7 +139,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     const SharedMemoryObject &smemObj,
                     const LLVMTypeConverter *typeConverter, Value thread) {
   assert((opIdx == 0 || opIdx == 1) && "unexpected operand idx");
-  auto rank = smemObj.getStrides().size();
+  auto rank = smemObj.getOffsets().size();
   int kDimIdx = opIdx == 0 ? rank - 1 : rank - 2;
   int nonKDimIdx = opIdx == 0 ? rank - 2 : rank - 1;
 
@@ -188,6 +188,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   SmallVector<Value> loadedValues;
   SmallVector<Value> offsets;
   Value smemBase;
+  auto smemStrides = smemObj.getStrides(aTensorTy, loc, rewriter);
   Value spatialWarpId = AMD::getWarpIdInBlock(
       rewriter, loc, linearWaveId, warpsPerCTA, elemsPerInstr[0],
       shape[nonKDimIdx], nonKDimIdx, triton::gpu::getOrder(wmmaLayout));
@@ -195,15 +196,15 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
     offsets = AMD::computeOffsetsAType(
         rewriter, loc, computeTensorElemMappingInBlock, elemsPerInstr,
         spatialWarpId, lane, warpsPerBlockNonK, numElemsPerThreadPerRep,
-        numReps, smemObj, sharedLayout, wmmaInstrNonK, wmmaInstrK);
+        numReps, smemObj, smemStrides, sharedLayout, wmmaInstrNonK, wmmaInstrK);
   } else {
     assert(opIdx == 1);
     offsets = AMD::computeOffsetsBType(
         rewriter, loc, computeTensorElemMappingInBlock, elemsPerInstr,
         spatialWarpId, lane, warpsPerBlockNonK, numElemsPerThreadPerRep,
-        numReps, smemObj, sharedLayout, wmmaInstrNonK, wmmaInstrK);
+        numReps, smemObj, smemStrides, sharedLayout, wmmaInstrNonK, wmmaInstrK);
   }
-  smemBase = AMD::computeBasePtr(rewriter, loc, smemObj);
+  smemBase = AMD::computeBasePtr(rewriter, loc, smemObj, smemStrides);
 
   Type resElemTy = typeConverter->convertType(elemTy);
   Type smemPtrTy = ptr_ty(rewriter.getContext(), 3);

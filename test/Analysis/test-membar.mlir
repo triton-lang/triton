@@ -596,6 +596,19 @@ tt.func @convert_layout4(%A : !tt.ptr<f16>, %cond : i1) {
   tt.return
 }
 
+// CHECK-LABEL: convert_layout5
+tt.func @convert_layout5(%A : !tt.ptr<f16>) {
+  %cst = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
+  %0 = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  %1 = ttg.local_alloc %cst : (tensor<16x16xf16, #AL>) -> !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // CHECK: ttg.local_load
+  // CHECK-NEXT: gpu.barrier
+  // CHECK: ttg.local_load
+  %3 = ttg.local_load %0 : !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<16x16xf16, #AL>
+  %4 = ttg.local_load %1 : !ttg.memdesc<16x16xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<16x16xf16, #AL>
+  tt.return
+}
+
 // CHECK-LABEL: single_call_sync
 tt.func @single_call_sync(%A : !tt.ptr<f16>) {
   %0 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
@@ -611,7 +624,7 @@ tt.func @single_call_sync(%A : !tt.ptr<f16>) {
 tt.func @single_call_no_sync(%A : !tt.ptr<f16>) {
   // CHECK-NOT: gpu.barrier
   %0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #AL>
-  tt.call @convert_layout2(%A) : (!tt.ptr<f16>) -> ()
+  tt.call @convert_layout5(%A) : (!tt.ptr<f16>) -> ()
   %1 = ttg.convert_layout %0 : tensor<16x16xf16, #AL> -> tensor<16x16xf16, #BL>
   tt.return
 }
