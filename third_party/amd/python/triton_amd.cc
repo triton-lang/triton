@@ -40,6 +40,10 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
   m.def("add_membar_analysis", [](mlir::PassManager &pm) {
     pm.addPass(mlir::createTritonAMDGPUMembarAnalysisPass());
   });
+  m.def("add_refine_amdgpu_ops",
+        [](mlir::PassManager &pm, const std::string &arch) {
+          pm.addPass(createTritonAMDGPURefineOpsPass(arch));
+        });
   m.def("add_to_llvmir",
         [](mlir::PassManager &pm, const std::string &arch, bool ftz) {
           pm.addPass(createConvertTritonAMDGPUToLLVMPass(arch, ftz));
