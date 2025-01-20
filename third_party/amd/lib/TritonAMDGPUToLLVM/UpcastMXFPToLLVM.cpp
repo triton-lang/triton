@@ -21,38 +21,6 @@ using namespace mlir::triton::gpu;
 
 namespace {
 
-// Returns (EM, S) selectors to the llvm.amdgcn.perm intrinsic for selecting
-// resultant bf16/fp16 bytes in the lookup table.
-std::pair<Value, Value> composePermuteSelectors(Location loc,
-                                                RewriterBase &rewriter,
-                                                Value val10, Value val32) {
-  // Each input value packs two mxfp4 values. First extract each mxfp4 value's
-  // EM and S bits. In order to form the selector for llvm.amdgcn.perm
-  // instruction, we need to shuffle them into a 4xu8 manner.
-
-  // 0xX[S.EE.M] -> 0x0000000[0EEM]
-  Value v0EM = zext(i32_ty, and_(val10, i8_val(0x07)));
-  // 0xX[S.EE.M] -> 0x0000000[000S]
-  Value v0S = lshr(zext(i32_ty, and_(val10, i8_val(0x08))), i32_val(3));
-  // 0x[S.EE.M]X -> 0x00000[0EEM]00
-  Value v1EM = shl(zext(i32_ty, and_(val10, i8_val(0x70))), i32_val(4));
-  // 0x[S.EE.M]X -> 0x00000[000S]00
-  Value v1S = shl(zext(i32_ty, and_(val10, i8_val(0x80))), i32_val(4 - 3));
-
-  // 0xX[S.EE.M] -> 0x000[0EEM]0000
-  Value v2EM = shl(zext(i32_ty, and_(val32, i8_val(0x07))), i32_val(16));
-  // 0xX[S.EE.M] -> 0x000[000S]0000
-  Value v2S = shl(zext(i32_ty, and_(val32, i8_val(0x08))), i32_val(16 - 3));
-  // 0x[S.EE.M]X -> 0x0[0EEM]000000
-  Value v3EM = shl(zext(i32_ty, and_(val32, i8_val(0x70))), i32_val(20));
-  // 0x[S.EE.M]X -> 0x0[000S]000000
-  Value v3S = shl(zext(i32_ty, and_(val32, i8_val(0x80))), i32_val(20 - 3));
-
-  Value selectorEM = or_(v3EM, or_(v2EM, or_(v1EM, v0EM)));
-  Value selectorS = or_(v3S, or_(v2S, or_(v1S, v0S)));
-  return {selectorEM, selectorS};
-}
-
 SmallVector<Value, 4> upcast8xMxfp4(RewriterBase &rewriter,
                                     UpcastMXFPOp upcastOp, bool tofp16,
                                     Value packedVec) {
