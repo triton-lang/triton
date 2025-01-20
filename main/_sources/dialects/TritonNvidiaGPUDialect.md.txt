@@ -5,21 +5,3 @@ Triton Nvidia GPU Dialect.
 
 [TOC]
 
-## Types
-
-### MutexType
-
-
-
-Syntax: `!ttng.mutex`
-
-
-
-### TokenType
-
-
-
-Syntax: `!ttng.token`
-
-
-

@@ -1788,7 +1788,7 @@ convertLayout ops that appear before and/or after the operation.
 We do this so that you can chain multiple data-movement ops (e.g.
 transpose+reshape+concat) without going to shared memory after each one.
 
-Traits: `AlwaysSpeculatableImplTrait`, `SameOperandsAndResultElementType`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+Traits: `AlwaysSpeculatableImplTrait`, `InferTypeOpAdaptor`, `SameOperandsAndResultElementType`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`, `TransposeOpInterface`
 
