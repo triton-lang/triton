@@ -424,9 +424,7 @@ private:
   }
 
   void dumpAllocationSize() {
-    auto functionOp = operation->getParentOfType<FuncOp>();
-    LDBG("Dump shared memory allocation size for function: "
-         << functionOp.getName());
+    LDBG("Dump shared memory allocation size -----------");
     llvm::dbgs() << "Allocated: " << allocation->sharedMemorySize << "\n";
     auto liveBuffers = allocation->getLiveBuffers();
     auto analyzedSize = 0;
