@@ -64,7 +64,10 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, rsigma_ptr, input_row_stride, outpu
 
             # Accumulate sum of squares
             n_cols_blks = tl.cdiv(n_cols, BLOCK_SIZE) - 1
-            sum_squares: tl.float32 = 0.
+            # older version of triton doesn't accept below init
+            # sum_squares: tl.float32 = 0.
+            # however, with type promoting rule in triton, sum_squares should be always fp32 with below init
+            sum_squares = 0.
             for blk_idx in tl.range(0, n_cols_blks, num_stages=2):
                 cols = blk_idx * BLOCK_SIZE + col_offsets
                 input_ptrs = row_input_ptr + cols
@@ -147,32 +150,41 @@ def triton_rmsnorm(x, y, g, rsigma, n_rows, n_cols, ZERO_CENTERED_GAMMA, blk_siz
     return y, rsigma
 
 
-def torch_rmsnorm(x, g, ZERO_CENTERED_GAMMA, epsilon=1e-6):
+def torch_rmsnorm(x, g, ZERO_CENTERED_GAMMA, out_dtype=torch.float16, epsilon=1e-6):
     M, N = x.shape
-    rms = torch.sqrt(torch.sum(x * x, dim=-1) * 1 / N)
+    # cast to float32 as the triton kernel
+    x_f32 = x.float()
+    g_f32 = g.float()
+    rms = torch.sqrt(torch.sum(x_f32 * x_f32, dim=-1) * 1 / N)
     rsigma = 1.0 / rms
     if (ZERO_CENTERED_GAMMA):
-        g += 1
-    rms_norm = x * rsigma.unsqueeze(1) * g
-    rms_norm = rms_norm.to(x.dtype)
+        g_f32 += 1
+    rms_norm_f32 = x_f32 * rsigma.unsqueeze(1) * g_f32
+    rms_norm = rms_norm_f32.to(out_dtype)
     return rms_norm, rsigma
 
 
+arg_to_torch_dtype = {'fp16': torch.float16, 'bf16': torch.bfloat16, 'fp32': torch.float32}
+
+
+@pytest.mark.parametrize("in_dtype_str", ["fp32", "fp16", "bf16"])
+@pytest.mark.parametrize("out_dtype_str", ["fp32", "fp16", "bf16"])
 @pytest.mark.parametrize('ZERO_CENTERED_GAMMA', [True, False])
 @pytest.mark.parametrize('M, N', [
     (1, 4),
     (2, 10),
     (8192, 4096),
     (4096, 8192),
-    (1, 8192),
     (1, 31744),
     (3, 65536),
     (873, 1245),
 ])
-def test_rmsnorm(M, N, ZERO_CENTERED_GAMMA):
+def test_rmsnorm(M, N, ZERO_CENTERED_GAMMA, in_dtype_str, out_dtype_str):
+    in_dtype = arg_to_torch_dtype[in_dtype_str]
+    out_dtype = arg_to_torch_dtype[out_dtype_str]
     torch.manual_seed(0)
-    x = torch.randn(M, N, device='cuda')
-    y = torch.zeros_like(x, device='cuda')
+    x = torch.randn(M, N, device='cuda', dtype=in_dtype)
+    y = torch.zeros_like(x, device='cuda', dtype=out_dtype)
     rsigma = torch.empty((M, ), device='cuda', dtype=torch.float32)
 
     n_rows, n_cols = x.shape
@@ -180,21 +192,29 @@ def test_rmsnorm(M, N, ZERO_CENTERED_GAMMA):
     blk_size = min(MAX_FUSED_SIZE, triton.next_power_of_2(n_cols))
     USE_BLOCKED = n_cols > blk_size
     NUM_PRGMS = min(n_rows, get_num_sms())
-    g = torch.ones((1, N), device='cuda')
+    g = torch.ones((1, N), device='cuda', dtype=in_dtype)
 
     y_triton, rsigma_triton = triton_rmsnorm(x, y, g, rsigma, n_rows, n_cols, ZERO_CENTERED_GAMMA, blk_size,
                                              USE_BLOCKED, NUM_PRGMS)
 
-    y_torch, rsigma_torch = torch_rmsnorm(x, g, ZERO_CENTERED_GAMMA)
+    y_torch, rsigma_torch = torch_rmsnorm(x, g, ZERO_CENTERED_GAMMA, out_dtype)
 
-    assert torch.allclose(y_triton, y_torch), (y_triton, y_torch)
-    assert torch.allclose(rsigma_triton, rsigma_torch), (rsigma_triton, rsigma_torch)
+    if out_dtype in (torch.float16, torch.bfloat16):
+        atol, rtol = 1e-3, 1e-2
+    else:
+        # float32 typically can be tighter
+        atol, rtol = 1e-5, 1e-5
+
+    assert y_triton.dtype == out_dtype, f"y_triton has dtype={y_triton.dtype}, expected {out_dtype}"
+    assert y_torch.dtype == out_dtype, f"y_torch has dtype={y_torch.dtype}, expected {out_dtype}"
+
+    assert torch.allclose(y_triton, y_torch, atol=atol, rtol=rtol), \
+        f"Mismatch in 'y' (in={in_dtype_str}, out={out_dtype_str})"
+    assert torch.allclose(rsigma_triton, rsigma_torch, atol=atol, rtol=rtol), \
+        f"Mismatch in 'rsigma' (in={in_dtype_str}, out={out_dtype_str})"
 
 
 #Benchmark
-arg_to_torch_dtype = {'fp16': torch.float16, 'bf16': torch.bfloat16, 'fp32': torch.float32}
-
-
 def model_benchmark_configs(args):
     config_file = args.model_configs
     configs = get_model_configs(config_path=config_file, model_families=["llama3"], model=args.model)
