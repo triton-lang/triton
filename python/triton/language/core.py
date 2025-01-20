@@ -594,6 +594,8 @@ class pointer_type(dtype):
     def __ne__(self, other: pointer_type) -> bool:
         return not self.__eq__(other)
 
+    __hash__ = dtype.__hash__
+
     @property
     def scalar(self):
         return self
@@ -645,6 +647,8 @@ class block_type(dtype):
 
     def __ne__(self, other: block_type) -> bool:
         return not self.__eq__(other)
+
+    __hash__ = dtype.__hash__
 
     @property
     def scalar(self):

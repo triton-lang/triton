@@ -513,6 +513,11 @@ def test_dtype_codegen():
         assert repr(eval(full_name)) == full_name
 
 
+@pytest.mark.parameterize("dtype", [tl.pointer_type(tl.int8), tl.block_type(tl.int8, [42])])
+def test_dtype_is_hashable(dtype):
+    hash(dtype)
+
+
 # ---------------
 # test binary ops
 # ---------------
