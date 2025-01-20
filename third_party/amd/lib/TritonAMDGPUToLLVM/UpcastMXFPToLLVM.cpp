@@ -291,7 +291,7 @@ public:
           int index = 32 * i + j;
           xVals[index] = useFp16
                              ? mxfpScaleFp16(rewriter, loc, xVals[index],
-                                             si[j / 16], op.getFastMath())
+                                             si[j / 8], op.getFastMath())
                              : mxfpScaleBf16ViaF32(rewriter, loc, xVals[index],
                                                    si[j / 8], op.getFastMath());
         }
