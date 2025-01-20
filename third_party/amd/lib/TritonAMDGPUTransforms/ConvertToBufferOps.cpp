@@ -226,73 +226,27 @@ bool canUseBufferOps(Value ptr, const DenseSet<Value> &assumptions) {
   return true;
 }
 
-// Traverse pointer sources and return it from the block arg of the parent
-// so we can find incremental addPtr within its user.
-Value getInputArg(Value v) {
-  while (auto srcOp = v.getDefiningOp()) {
-    if (auto addPtrOp = dyn_cast<tt::AddPtrOp>(srcOp))
-      v = addPtrOp.getPtr();
-    else if (auto splatOp = dyn_cast<tt::SplatOp>(srcOp))
-      v = splatOp.getSrc();
-    else if (auto bcOp = dyn_cast<tt::BroadcastOp>(srcOp))
-      v = bcOp.getSrc();
-    else
-      return nullptr;
-  }
-  if (auto funcArg = dyn_cast<BlockArgument>(v)) {
-    return v;
-  } else
-    return nullptr;
-}
-
-// Try to infer how the parent loop use the given buffer and extract the value
-// to calculate the stride of the buffer
-Value inferStride(triton::LoadOp op, PatternRewriter &rewriter) {
-  Location loc = op.getLoc();
-  if (auto forOp = dyn_cast<scf::ForOp>(op->getParentOp())) {
-    Value currDotChain;
-    // Figure out what does the forOp is doing, e.g. GEMM
-    forOp->walk([&](Operation *op) {
-      if (auto maybeGemmDot = dyn_cast<tt::DotOp>(op)) {
-        // TODO: support 3d dot.
-        if (maybeGemmDot.getType().getRank() != 2) {
-          currDotChain = nullptr;
-          return;
-        }
-        if (currDotChain) {
-          // accumulating dot could be a slice of the bigger dot
-          if (currDotChain == maybeGemmDot.getC())
-            currDotChain = maybeGemmDot->getResult(0);
-          else {
-            // TODO: support FA(1), catch FA
-            // e.g. currDotChain == maybeGemmDot.getB or C
-            currDotChain = nullptr;
-            return;
+// Extract stride of the blocked offset of LD/ST ops.
+Value getBlockStride(Value offset, PatternRewriter &rewriter) {
+  Value blockStride;
+  // canonicalize pointer pass sets block stride via
+  // `offset:add-broadcast-muli-splat`, backtrace that pattern to reach the
+  // stride.
+  if (auto maybeAdd = offset.getDefiningOp<arith::AddIOp>()) {
+    for (auto addOpr : maybeAdd.getOperands()) {
+      if (auto maybeBC = addOpr.getDefiningOp<tt::BroadcastOp>()) {
+        auto bcSrc = maybeBC.getSrc();
+        if (auto maybeMul = bcSrc.getDefiningOp<arith::MulIOp>()) {
+          for (auto mulOpr : maybeMul.getOperands()) {
+            if (auto maybeSplat = mulOpr.getDefiningOp<tt::SplatOp>()) {
+              blockStride = maybeSplat.getSrc();
+            }
           }
-        } else
-          currDotChain = maybeGemmDot->getResult(0);
+        }
       }
-    });
-
-    // TODO: support FA(2), investigate how to infer the stride.
-
-    // Get how much this buffer is incremented in each iteration.
-    if (currDotChain) {
-      auto ub = forOp.getUpperBound();
-      Value inferredK;
-      while (auto maybeGemmK = ub.getDefiningOp()) {
-        if (isa<arith::AddIOp, arith::SubIOp, arith::MulIOp, arith::DivSIOp>(
-                maybeGemmK))
-          ub = maybeGemmK->getOperand(0);
-        else
-          break;
-        inferredK = ub;
-      }
-      if (isa<BlockArgument>(inferredK))
-        return inferredK;
     }
   }
-  return nullptr;
+  return blockStride;
 }
 
 } // namespace
@@ -326,13 +280,12 @@ struct ConvertTritonLoadToBufferLoad
       Value maybeMask{};
       if (op.getMask() && !isZeroConst(op.getMask()))
         maybeMask = op.getMask();
-      Value maybeStride = inferStride(op, rewriter);
-      if (!maybeStride)
-        maybeStride =
+      Value blockStride = getBlockStride(tensorOffset, rewriter);
+      if (!blockStride)
+        blockStride =
             rewriter.create<arith::ConstantIntOp>(op->getLoc(), 0, 32);
-
       auto bufferLoadOp = rewriter.create<triton::amdgpu::BufferLoadOp>(
-          op->getLoc(), op.getType(), basePtr, tensorOffset, maybeStride,
+          op->getLoc(), op.getType(), basePtr, tensorOffset, blockStride,
           maybeMask, maybeOther);
 
       // Propagate `OpIdxAttr` if the currently processed `tt.LoadOp` was
@@ -383,8 +336,12 @@ struct ConvertTritonStoreToBufferStore
       Value maybeMask{};
       if (op.getMask() && !isZeroConst(op.getMask()))
         maybeMask = op.getMask();
+      Value blockStride = getBlockStride(tensorOffset, rewriter);
+      if (!blockStride)
+        blockStride =
+            rewriter.create<arith::ConstantIntOp>(op->getLoc(), 0, 32);
       rewriter.replaceOpWithNewOp<triton::amdgpu::BufferStoreOp>(
-          op, op.getValue(), basePtr, tensorOffset, maybeMask);
+          op, op.getValue(), basePtr, tensorOffset, blockStride, maybeMask);
       return success();
     }
     LDBG("Failed to convert: " << op);

@@ -191,9 +191,8 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
       are similar to a normal load, i.e., the `mask` is a boolean vector that
       determines if a given element should be read from memory, and `other` is the
       element that should be returned on lane `i` when `mask[i] == 0`.
-      `stride` of the buffer can be inferred from the accessing pattern and used
-      when creating the buffer descriptor, so enable cache swizzling for block
-      accessing pattern.
+      `stride` of the buffer can be obtained from populating the block offset and
+      when found, cache swizzling will be enabled in the buffer descriptor.
     }];
     let arguments = (
       ins
@@ -217,7 +216,7 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
   TypesMatchWith<"value element type matches the pointed type of ptr", "value", "ptr", "getPointerTypeToElement($_self)">,
   TypesMatchWith<"value and offsets have the same shape", "value", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"value and mask have the same shape", "value", "mask", "getI1SameShape($_self)",
-                 "($_op.getOperands().size() <= 3) || std::equal_to<>()">,
+                 "($_op.getOperands().size() <= 4) || std::equal_to<>()">,
 ]>{
     let summary = "Store into scalar base pointer and a tensor offset";
     let description = [{
@@ -227,18 +226,21 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
       are similar to a normal store , i.e., the `mask` is a boolean vector that
       determines if a given element should be written to memory, and `value` is the
       tensor of elements that should be written on lane `i` when `mask[i] == 1`.
+      `stride` of the buffer can be obtained from populating the block offset and
+      when found, cache swizzling will be enabled in the buffer descriptor.
     }];
     let arguments = (
       ins
       TT_Tensor:$value,
       TT_Ptr:$ptr,
       I32Tensor:$offsets,
+      I32:$stride,
       Optional<TT_BoolTensor>:$mask
     );
 
     let assemblyFormat = [{
-      $value `,` $ptr `[` $offsets `]` (`,` $mask^)?
-      attr-dict `:` type($value)
+      $value `,` $ptr `[` $offsets `]` `,` $stride (`,` $mask^)?
+      attr-dict `:` type($ptr) `[` type($offsets) `]``,` type($stride) `->` type($value)
     }];
 }
 
