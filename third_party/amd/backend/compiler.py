@@ -358,6 +358,15 @@ class HIPBackend(BaseBackend):
         metadata["shared"] = src.get_int_attr("ttg.shared")
 
         amd.cleanup_bitcode_metadata(llvm_mod)
+
+        if "AMD_INSERT_LLIR" in os.environ.keys():
+            insert_module_path = str(os.environ["AMD_INSERT_LLIR"])
+            if not os.path.exists(insert_module_path):
+                raise RuntimeError(f'cannot find llir file to insert. Given: `{insert_module_path}`')
+            with open(insert_module_path, "r") as file:
+                file_content = file.readlines()
+            llvm_mod = ''.join(file_content)
+        
         # Disable inlining of print related functions,
         # because inlining of these function could slow down compilation significantly
         amd.disable_print_inline(llvm_mod)
@@ -373,6 +382,16 @@ class HIPBackend(BaseBackend):
         metadata["name"] = names[0]
         # llvm -> hsaco
         amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, '', [], options.enable_fp_fusion, False)
+
+        if "AMD_INSERT_AMDGCN" in os.environ.keys():
+            insert_module_path = str(os.environ["AMD_INSERT_AMDGCN"])
+            if not os.path.exists(insert_module_path):
+                raise RuntimeError(f'cannot find amdgcn file to insert. Given: `{insert_module_path}`')
+            with open(insert_module_path, "r") as file:
+                file_content = file.readlines()
+            amdgcn = ''.join(file_content)
+
+        # dump isa, make change, and recompiled
         if os.environ.get("AMDGCN_ENABLE_DUMP", "0") == "1":
             print("// -----// AMDGCN Dump //----- //")
             print(amdgcn)
