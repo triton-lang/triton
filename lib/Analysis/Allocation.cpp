@@ -425,7 +425,6 @@ private:
 
   void dumpAllocationSize() {
     LDBG("Dump shared memory allocation size -----------");
-    llvm::dbgs() << "Allocated: " << allocation->sharedMemorySize << "\n";
     auto liveBuffers = allocation->getLiveBuffers();
     auto analyzedSize = 0;
     for (auto [op, bufferIds] : liveBuffers) {
@@ -436,7 +435,8 @@ private:
       }
       analyzedSize = std::max(analyzedSize, size);
     }
-    llvm::dbgs() << "Analyzed: " << analyzedSize << "\n";
+    llvm::dbgs() << "Allocated: " << allocation->sharedMemorySize
+                 << ", analyzed: " << analyzedSize << "\n";
   }
 
   void dumpInterferenceGraph(const GraphT &interference) {
