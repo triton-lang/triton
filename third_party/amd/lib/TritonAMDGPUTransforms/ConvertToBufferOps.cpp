@@ -233,8 +233,7 @@ bool canUseBufferOps(Value ptr, const DenseSet<Value> &assumptions) {
 }
 
 // Extract stride of the blocked offset of LD/ST ops.
-Value getBlockStride(Value offset, PatternRewriter &rewriter) {
-  Value blockStride;
+Value getBlockStride(Location loc, Value offset, PatternRewriter &rewriter) {
   // canonicalize pointer pass sets block stride via
   // `offset:add-broadcast-muli-splat`, backtrace that pattern to reach the
   // stride.
@@ -245,14 +244,15 @@ Value getBlockStride(Value offset, PatternRewriter &rewriter) {
         if (auto maybeMul = bcSrc.getDefiningOp<arith::MulIOp>()) {
           for (auto mulOpr : maybeMul.getOperands()) {
             if (auto maybeSplat = mulOpr.getDefiningOp<tt::SplatOp>()) {
-              blockStride = maybeSplat.getSrc();
+              return maybeSplat.getSrc();
             }
           }
         }
       }
     }
   }
-  return blockStride;
+  return rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
+  ;
 }
 
 } // namespace
@@ -406,10 +406,7 @@ struct ConvertTritonLoadToBufferLoad
       Value maybeMask{};
       if (op.getMask() && !isZeroConst(op.getMask()))
         maybeMask = op.getMask();
-      Value blockStride = getBlockStride(tensorOffset, rewriter);
-      if (!blockStride)
-        blockStride =
-            rewriter.create<arith::ConstantIntOp>(op->getLoc(), 0, 32);
+      Value blockStride = getBlockStride(op->getLoc(), tensorOffset, rewriter);
       auto bufferLoadOp = rewriter.create<triton::amdgpu::BufferLoadOp>(
           op->getLoc(), op.getType(), basePtr, tensorOffset, blockStride,
           op.getCache(), maybeMask, maybeOther);
@@ -458,10 +455,7 @@ struct ConvertTritonStoreToBufferStore
       Value maybeMask{};
       if (op.getMask() && !isZeroConst(op.getMask()))
         maybeMask = op.getMask();
-      Value blockStride = getBlockStride(tensorOffset, rewriter);
-      if (!blockStride)
-        blockStride =
-            rewriter.create<arith::ConstantIntOp>(op->getLoc(), 0, 32);
+      Value blockStride = getBlockStride(op->getLoc(), tensorOffset, rewriter);
       rewriter.replaceOpWithNewOp<triton::amdgpu::BufferStoreOp>(
           op, op.getValue(), basePtr, tensorOffset, blockStride, op.getCache(),
           maybeMask);
