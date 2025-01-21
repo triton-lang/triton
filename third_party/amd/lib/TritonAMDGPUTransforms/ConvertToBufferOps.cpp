@@ -231,6 +231,30 @@ bool canUseBufferOps(Value ptr, const DenseSet<Value> &assumptions) {
   LDBG("Non-negative");
   return true;
 }
+
+// Extract stride of the blocked offset of LD/ST ops.
+Value getBlockStride(Location loc, Value offset, PatternRewriter &rewriter) {
+  // canonicalize pointer pass sets block stride via
+  // `offset:add-broadcast-muli-splat`, backtrace that pattern to reach the
+  // stride.
+  if (auto maybeAdd = offset.getDefiningOp<arith::AddIOp>()) {
+    for (auto addOpr : maybeAdd.getOperands()) {
+      if (auto maybeBC = addOpr.getDefiningOp<tt::BroadcastOp>()) {
+        auto bcSrc = maybeBC.getSrc();
+        if (auto maybeMul = bcSrc.getDefiningOp<arith::MulIOp>()) {
+          for (auto mulOpr : maybeMul.getOperands()) {
+            if (auto maybeSplat = mulOpr.getDefiningOp<tt::SplatOp>()) {
+              return maybeSplat.getSrc();
+            }
+          }
+        }
+      }
+    }
+  }
+  return rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
+  ;
+}
+
 } // namespace
 
 struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
@@ -382,10 +406,10 @@ struct ConvertTritonLoadToBufferLoad
       Value maybeMask{};
       if (op.getMask() && !isZeroConst(op.getMask()))
         maybeMask = op.getMask();
-
+      Value blockStride = getBlockStride(op->getLoc(), tensorOffset, rewriter);
       auto bufferLoadOp = rewriter.create<triton::amdgpu::BufferLoadOp>(
-          op->getLoc(), op.getType(), basePtr, tensorOffset, op.getCache(),
-          maybeMask, maybeOther);
+          op->getLoc(), op.getType(), basePtr, tensorOffset, blockStride,
+          op.getCache(), maybeMask, maybeOther);
 
       // Propagate `OpIdxAttr` if the currently processed `tt.LoadOp` was
       // labeled it. The attribute needs to be preserved for custom instruction
@@ -431,8 +455,10 @@ struct ConvertTritonStoreToBufferStore
       Value maybeMask{};
       if (op.getMask() && !isZeroConst(op.getMask()))
         maybeMask = op.getMask();
+      Value blockStride = getBlockStride(op->getLoc(), tensorOffset, rewriter);
       rewriter.replaceOpWithNewOp<triton::amdgpu::BufferStoreOp>(
-          op, op.getValue(), basePtr, tensorOffset, op.getCache(), maybeMask);
+          op, op.getValue(), basePtr, tensorOffset, blockStride, op.getCache(),
+          maybeMask);
       return success();
     }
     LDBG("Failed to convert: " << op);
