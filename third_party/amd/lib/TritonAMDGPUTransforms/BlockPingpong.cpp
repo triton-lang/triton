@@ -162,13 +162,9 @@ LogicalResult Pingponger::genLocalSlice(OpBuilder &builder, Value v,
     return failure();
   auto dotOperandEnc = ttg::DotOperandEncodingAttr::get(
       builder.getContext(), opIdx, dotEncoding, kWidth);
-  SmallVector<int64_t> allocShape = llvm::to_vector(type.getAllocShape());
-  for (int i = allocShape.size(); i < 3; ++i)
-    allocShape.insert(allocShape.begin(), 1);
-
   auto subviewDescType = ttg::MemDescType::get(
       shape, elementType, type.getEncoding(), type.getMemorySpace(),
-      type.getMutableMemory(), allocShape);
+      type.getMutableMemory(), type.getAllocShape());
   for (int i = 0; i < numSlices; i++) {
     SmallVector<Value> offsetsVal;
     SmallVector<int64_t> offsets = {0, 0};
