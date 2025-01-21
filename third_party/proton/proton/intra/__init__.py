@@ -5,3 +5,5 @@ from .intra import (
     deactivate,
     set_alloc_state,
 )
+
+__all__ = ["init", "finalize", "activate", "deactivate", "set_alloc_state"]

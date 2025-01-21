@@ -26,7 +26,8 @@ global_scratch_mem: Optional[torch.Tensor] = None
 activated: bool = False
 
 
-def set_alloc_state(global_scratch: torch.Tensor, grid_size: int, scratch_size: int, alignment: int, stream: Optional[int]):
+def set_alloc_state(global_scratch: torch.Tensor, grid_size: int, scratch_size: int, alignment: int,
+                    stream: Optional[int]):
     global state
     global global_scratch_mem
     global activated
@@ -42,7 +43,7 @@ def set_alloc_state(global_scratch: torch.Tensor, grid_size: int, scratch_size: 
     global_scratch_mem = global_scratch
 
 
-def init(config = dict()):
+def init(config=dict()):
     global state
     global activated
 

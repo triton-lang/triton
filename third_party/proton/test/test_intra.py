@@ -1,5 +1,3 @@
-import pytest
-import triton
 import triton.intraprof as profiler
 
 
@@ -17,11 +15,11 @@ def test_setting_config():
 
 
 def test_setting_state():
-    assert profiler.intra.activated == False
+    assert not profiler.intra.activated
     profiler.activate()
-    assert profiler.intra.activated == True
+    assert profiler.intra.activated
     profiler.deactivate()
-    assert profiler.intra.activated == False
+    assert not profiler.intra.activated
 
     profiler.activate()
     profiler.init()
