@@ -3578,8 +3578,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                           for kpack in ([1, 2] if is_hip() else [1])])
 def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, num_warps, mma, kpack, device):
     if is_cuda():
-        if normal_type == "fp16":
-            pytest.skip("scaled_dot with fp16 input not supported on CUDA yet")
         cc = torch.cuda.get_device_capability()
         if cc < (8, 9):
             pytest.skip("float8e4nv not supported on CUDA < 8.9")
@@ -3747,14 +3745,13 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
             return torch.matmul(x_upcast, y_upcast)
 
     comp_dtype = torch.float16 if normal_type == "fp16" else torch.bfloat16
-    comp_dtype_bias = 15 if normal_type == "fp16" else 127
     # The max exponent we use to initialize data in the x/y and associated scale tensor to avoid
     # overflow when scaling.
     comp_dtype_max_exp = 6 if normal_type == "fp16" else 15
 
     torch.manual_seed(0)
 
-    def make_arg(shape, ty, col_major=False, max_val=255):
+    def make_arg(shape, ty, col_major=False):
         if col_major:
             shape = shape[:-2] + (shape[-1], shape[-2])
         if ty == "bf16" or ty == "fp16":
@@ -3762,7 +3759,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
             # Clamp to avoid relative error issues
             ret.clamp_(-2**comp_dtype_max_exp, 2**comp_dtype_max_exp - 1)
         else:
-            ret = torch.randint(max_val + 1, shape, dtype=torch.uint8, device=device)
+            ret = torch.randint(256, shape, dtype=torch.uint8, device=device)
         if col_major:
             ret = ret.mT
         return ret
@@ -3775,9 +3772,9 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
     x = make_arg((M, K // DIV_FACTOR_A), type_a, col_major=col_a)
     y = make_arg((K // DIV_FACTOR_B, N), type_b, col_major=col_b)
 
-    # sample scales that don't overflow as otherwise it's implementation defined (underflowing is alright)
-    scale_x = make_arg((M, K // 32), "e8m0", max_val=comp_dtype_bias + comp_dtype_max_exp)
-    scale_y = make_arg((N, K // 32), "e8m0", max_val=comp_dtype_bias + comp_dtype_max_exp)
+    min_scale, max_scale = (0, 142) if comp_dtype == torch.bfloat16 else (124, 131)
+    scale_x = torch.randint(min_scale, max_scale + 1, (M, K // 32), dtype=torch.uint8, device=device)
+    scale_y = torch.randint(min_scale, max_scale + 1, (N, K // 32), dtype=torch.uint8, device=device)
     if rhs_scale:
         scale_x = None
     else:
@@ -3788,6 +3785,8 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
         # Fp8E5M2_to_Bf16 doesn't preserve NaNs (fixme)
         if dtype not in ("e5m2", "e4m3"):
             return x
+        if dtype == "e5m2" and comp_dtype == torch.float16:
+            x = x & 0xB
         mask = 0x7C if dtype == "e5m2" else 0x7F
         finite = torch.arange(x.numel(), device=device, dtype=torch.uint8).reshape_as(x) % mask
         x_finite = torch.where(x & mask == mask, finite | (0x80 & x), x)
@@ -3819,7 +3818,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
             assert 'ld.global.v4' in ptx
         if M * N // (num_warps * 32) >= 4:
             assert 'st.global.v4' in ptx
-        assert re.search(r'[mma|wgmma.mma_async].sync.aligned.m\d+n\d+k16(?:.row.col)?.f32.bf16.bf16', ptx)
+        assert re.search(r'(mma|wgmma.mma_async).sync.aligned.m\d+n\d+k16(?:.row.col)?.f32.(f|bf)16.(f|bf)16', ptx)
 
 
 @pytest.mark.interpreter
