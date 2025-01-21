@@ -410,15 +410,6 @@ ScanOpConversion::getDelinearizedIds(ConversionPatternRewriter &rewriter,
   Value flatIdParallel =
       add(laneIdParallel,
           mul(warpIdParallel, i32_val(helper.getNonAxisNumThreadsPerWarp())));
-
-  // Clamp the lane ID to just threads with unique data within a warp.
-  LinearLayout layout =
-      triton::gpu::toLinearLayout(helper.getShape(), srcEncoding);
-  StringAttr kLane = rewriter.getStringAttr("lane");
-  int32_t laneMask = layout.getFreeVariableMasks()[kLane];
-  laneMask = (layout.getInDimSize(kLane) - 1) & ~laneMask;
-  laneIdAxis = and_(laneIdAxis, i32_val(laneMask));
-
   return std::make_tuple(laneIdAxis, warpIdAxis, flatIdParallel);
 }
 
@@ -478,6 +469,14 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   Value warpSize = i32_val(iWarpSize);
   Value warpId = udiv(threadId, warpSize);
   Value laneId = urem(threadId, warpSize);
+
+  // Clamp the lane ID to just threads with unique data within a warp.
+  LinearLayout layout =
+      triton::gpu::toLinearLayout(helper.getShape(), helper.getEncoding());
+  StringAttr kLane = rewriter.getStringAttr("lane");
+  int32_t laneMask = layout.getFreeVariableMasks()[kLane];
+  laneMask = (layout.getInDimSize(kLane) - 1) & ~laneMask;
+  laneId = and_(laneId, i32_val(laneMask));
 
   auto [laneIdAxis, warpIdAxis, flatIdParallel] =
       getDelinearizedIds(rewriter, helper, laneId, warpId);
