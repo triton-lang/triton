@@ -13,7 +13,6 @@
 
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
-namespace ttng = mlir::triton::nvidia_gpu;
 namespace mlir {
 namespace triton {
 namespace gpu {
