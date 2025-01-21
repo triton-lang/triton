@@ -36,29 +36,9 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
                  mlir::Float8E5M2Type, mlir::Float8E5M2FNUZType>();
 }
 
-namespace {
-LLVM::LLVMStructType getSharedMemoryType(MLIRContext *ctx, int64_t rank,
-                                         const TargetInfoBase &targetInfo) {
-  SmallVector<Type, 4> types;
-  // base ptr
-  auto ptrType =
-      LLVM::LLVMPointerType::get(ctx, targetInfo.getSharedAddressSpace());
-  types.push_back(ptrType);
-  // offsets
-  for (auto i = 0; i < rank; i++) {
-    types.push_back(IntegerType::get(ctx, 32));
-  }
-  return LLVM::LLVMStructType::getLiteral(ctx, types);
-}
-} // namespace
-
 Type TritonGPUToLLVMTypeConverter::convertTritonTensorType(
     RankedTensorType type, const TargetInfoBase &targetInfo) {
   auto ctx = type.getContext();
-  if (isa<SharedEncodingAttr>(type.getEncoding())) {
-    return getSharedMemoryType(ctx, type.getRank(), targetInfo);
-  }
-
   Type eltType = convertType(type.getElementType());
   unsigned numElementsPerThread = getTotalElemsPerThread(type);
   SmallVector<Type, 4> types(numElementsPerThread, eltType);
@@ -68,11 +48,17 @@ Type TritonGPUToLLVMTypeConverter::convertTritonTensorType(
 Type TritonGPUToLLVMTypeConverter::convertMemDescType(
     MemDescType type, const TargetInfoBase &targetInfo) {
   auto ctx = type.getContext();
-  if (isa<SharedEncodingAttr>(type.getEncoding())) {
-    return getSharedMemoryType(ctx, type.getRank(), targetInfo);
+  SmallVector<Type, 4> types;
+  // base ptr
+  auto ptrType =
+      LLVM::LLVMPointerType::get(ctx, targetInfo.getSharedAddressSpace());
+  types.push_back(ptrType);
+  auto rank = type.getRank();
+  // offsets
+  for (auto i = 0; i < rank; i++) {
+    types.push_back(IntegerType::get(ctx, 32));
   }
-  emitError(UnknownLoc::get(ctx), "unsupported MemDescType encoding");
-  return nullptr;
+  return LLVM::LLVMStructType::getLiteral(ctx, types);
 }
 
 Type TritonGPUToLLVMTypeConverter::convertAsyncTokenType(
