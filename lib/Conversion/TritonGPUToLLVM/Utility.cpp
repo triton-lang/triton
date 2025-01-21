@@ -351,6 +351,13 @@ bool emitTransferBetweenRegistersAndShared(
       emitHardwareTuple(loc, rewriter, target, withCTAOffset,
                         regToSharedLayout.getInDimSize(kLane));
 
+  // For kernels with a single CTA, `allocSharedLayout.sublayout(S("block"),
+  // outDims) == 0`. We need to take out the "block" dimension in order to use
+  // `invert`.
+  // For kernels with multiple CTAs per CGA,
+  // `allocSharedLayout.sublayout(S("block"), outDims) != 0`. We do not need to
+  // take out the "block" dimension.
+  // Thus We use `pseudoinvert` instead of `invert` here for simplicity.
   auto allocShape = sharedTy.getAllocShape();
   LinearLayout invertAllocSharedLayout =
       triton::gpu::toLinearLayout(allocShape.take_back(registerTy.getRank()),
