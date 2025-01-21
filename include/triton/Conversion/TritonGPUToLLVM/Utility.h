@@ -403,20 +403,6 @@ inline Value getStackPointer(RewriterBase &rewriter,
   return rewriter.create<LLVM::AddressOfOp>(funcOp.getLoc(), globalBase);
 }
 
-//TODO: Move this into Proton backend
-inline Value getProtonStackPointer(RewriterBase &rewriter,
-                             FunctionOpInterface funcOp) {
-  // See NOTE: [Additional Function Arguments]
-  if (!isKernel(funcOp)) {
-    return funcOp.getArgument(funcOp.getNumArguments() - 2);
-  }
-
-  auto mod = funcOp->getParentOfType<ModuleOp>();
-  auto globalBase = dyn_cast<LLVM::GlobalOp>(mod.lookupSymbol("proton_smem"));
-  assert(globalBase);
-  return rewriter.create<LLVM::AddressOfOp>(funcOp.getLoc(), globalBase);
-}
-
 inline Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
                                  FunctionOpInterface funcOp,
                                  Value allocOffset = {}) {
@@ -481,19 +467,6 @@ inline Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
                       .getZExtValue();
   Value offVal = i32_val(offset);
   Value base = gep(ptrTy, i8_ty, LLVM::getStackPointer(rewriter, func), offVal);
-  return base;
-}
-
-//TODO: Move this into Proton backend
-inline Value getProtonSharedMemoryBase(Location loc, RewriterBase &rewriter,
-                                 const TargetInfoBase &target, Operation *op) {
-  auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(),
-                                          target.getSharedAddressSpace());
-  FunctionOpInterface func =
-      op->template getParentOfType<FunctionOpInterface>();
-  size_t offset = 0;
-  Value offVal = i32_val(offset);
-  Value base = gep(ptrTy, i8_ty, LLVM::getProtonStackPointer(rewriter, func), offVal);
   return base;
 }
 
