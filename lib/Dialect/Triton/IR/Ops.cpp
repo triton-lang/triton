@@ -637,6 +637,11 @@ LogicalResult ExpandDimsOp::inferReturnTypes(
   return success();
 }
 
+void ExpandDimsOp::inferResultRanges(ArrayRef<ConstantIntRanges> argRanges,
+                                     SetIntRangeFn setResultRange) {
+  setResultRange(getResult(), argRanges[0]);
+}
+
 LogicalResult ExpandDimsOp::canonicalize(ExpandDimsOp op,
                                          PatternRewriter &rewriter) {
   auto definingOp = op.getSrc().getDefiningOp();
@@ -1287,7 +1292,8 @@ LogicalResult ExperimentalTensormapCreateOp::verify() {
 // -- GetProgramIdOp --
 void GetProgramIdOp::inferResultRanges(ArrayRef<ConstantIntRanges> argRanges,
                                        SetIntRangeFn setResultRange) {
-  setResultRange(getResult(), ConstantIntRanges::constant({32, 0, true}));
+  setResultRange(getResult(), ConstantIntRanges::range({32, 0, true},
+                                                       {32, 2048, true}, true));
 }
 
 } // namespace triton

@@ -433,6 +433,7 @@ def TT_SplatOp : TT_Op<"splat", [Pure,
 
 def TT_ExpandDimsOp : TT_Op<"expand_dims", [Pure,
                                             DeclareOpInterfaceMethods<InferTypeOpInterface>,
+                                            DeclareOpInterfaceMethods<InferIntRangeInterface, ["inferResultRanges"]>,
                                             SameOperandsAndResultElementType]> {
     let summary = "expand_dims";
 
