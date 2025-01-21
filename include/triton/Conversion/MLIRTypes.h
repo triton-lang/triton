@@ -21,10 +21,10 @@ inline Type u1Ty(MLIRContext *ctx) {
 }
 
 // Float types
-inline Type f16Ty(MLIRContext *ctx) { return FloatType::getF16(ctx); }
-inline Type f32Ty(MLIRContext *ctx) { return FloatType::getF32(ctx); }
-inline Type f64Ty(MLIRContext *ctx) { return FloatType::getF64(ctx); }
-inline Type bf16Ty(MLIRContext *ctx) { return FloatType::getBF16(ctx); }
+inline Type f16Ty(MLIRContext *ctx) { return Float16Type::get(ctx); }
+inline Type f32Ty(MLIRContext *ctx) { return Float32Type::get(ctx); }
+inline Type f64Ty(MLIRContext *ctx) { return Float64Type::get(ctx); }
+inline Type bf16Ty(MLIRContext *ctx) { return BFloat16Type::get(ctx); }
 
 inline bool isFloat(Type type) {
   return type.isF32() || type.isF64() || type.isF16() || type.isF128() ||
