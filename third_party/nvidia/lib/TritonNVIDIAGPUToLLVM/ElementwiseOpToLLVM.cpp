@@ -451,8 +451,8 @@ struct FpToFpOpConversion
       llvm::errs() << "\n";
       llvm::report_fatal_error("Unsupported rounding mode for conversion.");
     }
-    if (computeCapability < 89 &&
-        (srcTy.isFloat8E4M3FN() || dstTy.isFloat8E4M3FN())) {
+    if (computeCapability < 89 && (llvm::isa<Float8E4M3FNType>(srcTy) ||
+                                   llvm::isa<Float8E4M3FNType>(dstTy))) {
       llvm::errs() << "Conversion from/to f8e4m3nv is only supported on "
                       "compute capability >= 89"
                    << "\n";
@@ -475,7 +475,8 @@ struct FpToFpOpConversion
     auto dstElementType = getElementType(op.getResult());
     auto roundingMode = op.getRounding();
 
-    if (dstElementType.isFloat8E5M2() || dstElementType.isFloat8E4M3FN()) {
+    if (llvm::isa<Float8E5M2Type>(dstElementType) ||
+        llvm::isa<Float8E4M3FNType>(dstElementType)) {
       assert(roundingMode.has_value() &&
              "Rounding mode must be specified for convertsions to fp8");
 
@@ -512,8 +513,9 @@ struct FpToFpOpConversion
 
     bool useFP16IntermediateSrc =
         srcElementType.isF32() &&
-        (!(computeCapability >= 90 && (dstElementType.isFloat8E4M3FN() ||
-                                       dstElementType.isFloat8E5M2())) ||
+        (!(computeCapability >= 90 &&
+           (llvm::isa<Float8E4M3FNType>(dstElementType) ||
+            llvm::isa<Float8E5M2Type>(dstElementType))) ||
          roundingMode.value() == RoundingMode::RTZ);
     bool isDstFP32 = dstElementType.isF32();
     Type srcType = useFP16IntermediateSrc ? f16_ty : srcElementType;
