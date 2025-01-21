@@ -182,9 +182,9 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
   TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "getPointerTypeToElement($_self)">,
   TypesMatchWith<"result and offsets have the same shape", "result", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"result and mask have the same shape", "result", "mask", "getI1SameShape($_self)",
-                 "($_op.getOperands().size() <= 2) || std::equal_to<>()">,
-  TypesMatchWith<"result and other have the same type", "result", "other", "$_self",
                  "($_op.getOperands().size() <= 3) || std::equal_to<>()">,
+  TypesMatchWith<"result and other have the same type", "result", "other", "$_self",
+                 "($_op.getOperands().size() <= 4) || std::equal_to<>()">,
 ]>{
     let summary = "Load from a scalar base pointer and a tensor offset";
     let description = [{
@@ -194,11 +194,17 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
       are similar to a normal load, i.e., the `mask` is a boolean vector that
       determines if a given element should be read from memory, and `other` is the
       element that should be returned on lane `i` when `mask[i] == 0`.
+      Stride is the distance between the beginning of contiguous memory chunks.
+      When performing a load of a block, the `stride` is the address difference between
+      the first elements of each row in bytes. Compiler tries to obtain the `stride`
+      when it converts to the buffer ops because it is important for optimizing
+      the cache memory access.
     }];
     let arguments = (
       ins
       TT_Ptr:$ptr,
       I32Tensor:$offsets,
+      I32:$stride,
       DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
       Optional<TT_BoolTensor>:$mask,
       Optional<TT_Tensor>:$other
@@ -208,6 +214,7 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
     let assemblyFormat = [{
       $ptr `[` $offsets `]` (`,` $mask^)? (`,` $other^)?
       oilist(`cacheModifier` `=` $cache)
+      `stride` `=` $stride
       attr-dict `:` type($result)
     }];
 }
@@ -253,14 +260,13 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
     }];
 }
 
-
 def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
   SameLoadStoreOperandsEncoding,
   MemoryEffects<[MemWrite<GlobalMemory>]>,
   TypesMatchWith<"value element type matches the pointed type of ptr", "value", "ptr", "getPointerTypeToElement($_self)">,
   TypesMatchWith<"value and offsets have the same shape", "value", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"value and mask have the same shape", "value", "mask", "getI1SameShape($_self)",
-                 "($_op.getOperands().size() <= 3) || std::equal_to<>()">,
+                 "($_op.getOperands().size() <= 4) || std::equal_to<>()">,
 ]>{
     let summary = "Store into scalar base pointer and a tensor offset";
     let description = [{
@@ -270,12 +276,18 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
       are similar to a normal store , i.e., the `mask` is a boolean vector that
       determines if a given element should be written to memory, and `value` is the
       tensor of elements that should be written on lane `i` when `mask[i] == 1`.
+      Stride is the distance between the beginning of contiguous memory chunks.
+      When performing a block store, the `stride` is the address difference between
+      the first elements of each row in bytes. Compiler tries to obtain the `stride`
+      when it converts to the buffer ops because it is important for optimizing
+      the cache memory access.
     }];
     let arguments = (
       ins
       TT_Tensor:$value,
       TT_Ptr:$ptr,
       I32Tensor:$offsets,
+      I32:$stride,
       DefaultValuedAttr<TT_CacheModifierAttr, "mlir::triton::CacheModifier::NONE">:$cache,
       Optional<TT_BoolTensor>:$mask
     );
@@ -283,6 +295,7 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
     let assemblyFormat = [{
       $value `,` $ptr `[` $offsets `]` (`,` $mask^)?
       oilist(`cacheModifier` `=` $cache)
+      `stride` `=` $stride
       attr-dict `:` type($value)
     }];
 }

@@ -335,6 +335,7 @@ struct BufferLoadOpConversion
     Value llOffset = adaptor.getOffsets();
     Value llMask = adaptor.getMask();
     Value llOther = adaptor.getOther();
+    Value llStride = adaptor.getStride();
 
     // Determine the vectorization size
     Type valueTy = op.getType();
@@ -358,7 +359,7 @@ struct BufferLoadOpConversion
       otherElems = unpackLLElements(loc, llOther, rewriter);
 
     // Create the resource descriptor and then emit the buffer_load intrinsic(s)
-    Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr);
+    Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr, llStride);
     SmallVector<Value> loadedVals;
     Type vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
@@ -743,6 +744,7 @@ struct BufferStoreOpConversion
     Value llOffset = adaptor.getOffsets();
     Value llMask = adaptor.getMask();
     Value llData = adaptor.getValue();
+    Value llStride = adaptor.getStride();
 
     // Determine the vectorization size
     Type valueTy = data.getType();
@@ -761,7 +763,7 @@ struct BufferStoreOpConversion
     SmallVector<Value> maskElems =
         getMaskElemsAndUpdateVeclen(rewriter, loc, llMask, mask, vec);
 
-    Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr);
+    Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr, llStride);
     Value rDataMask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
       Type vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
