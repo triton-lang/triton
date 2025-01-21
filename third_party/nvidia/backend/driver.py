@@ -10,6 +10,7 @@ from triton.runtime.cache import get_cache_manager
 from triton.runtime import _allocation
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver
+from triton.intraprof import set_alloc_state
 
 dirname = os.path.dirname(os.path.realpath(__file__))
 include_dir = [os.path.join(dirname, "include")]
@@ -518,6 +519,7 @@ class CudaLauncher(object):
             grid_size = gridX * gridY * gridZ
             alloc_size = grid_size * self.global_scratch_size
             global_scratch = _allocation._allocator(alloc_size, self.global_scratch_align, stream)
+            set_alloc_state(global_scratch, grid_size, self.global_scratch_size, self.global_scratch_align, stream)
         else:
             global_scratch = None
         self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, global_scratch, *args)

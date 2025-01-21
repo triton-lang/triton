@@ -1,6 +1,7 @@
 from triton.backends.compiler import BaseBackend, GPUTarget
-from triton._C.libtriton import ir, passes, llvm, nvidia
+from triton._C.libtriton import ir, passes, llvm, nvidia, proton
 from triton.runtime.errors import PTXASError
+import triton.intraprof as profiler
 
 from dataclasses import dataclass
 import functools
@@ -293,6 +294,9 @@ class CUDABackend(BaseBackend):
         passes.convert.add_index_to_llvmir(pm)
         passes.ttgpuir.add_allocate_shared_memory(pm)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
+        if profiler.intra.activated:
+            config = profiler.intra.state.config
+            proton.passes.add_proton_lowering(pm, config.max_shared, config.alloc_scratch, config.alignment)
         nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, ptx_version)
         nvidia.passes.ttnvgpuir.add_nvgpu_to_llvm(pm)
         passes.convert.add_arith_to_llvmir(pm)
