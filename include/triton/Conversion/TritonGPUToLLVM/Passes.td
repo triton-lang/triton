@@ -15,16 +15,6 @@ def AllocateSharedMemory : Pass<"allocate-shared-memory", "mlir::ModuleOp"> {
     let constructor = "mlir::triton::gpu::createAllocateSharedMemoryPass()";
 }
 
-//TODO: move this into Proton backend
-def AllocateProtonSMEMBuffer : Pass<"allocate-proton-smem-buffer", "mlir::ModuleOp"> {
-    let constructor = "mlir::triton::gpu::createAllocateProtonSMEMBufferPass()";
-  let dependentDialects = [
-    "mlir::triton::gpu::TritonGPUDialect"
-  ];
-
-}
-
-
 def TritonGPUGlobalScratchAllocationPass : Pass<"tritongpu-global-scratch-memory-allocation", "mlir::ModuleOp"> {
   let summary = "Assign global scratch memory allocation";
 

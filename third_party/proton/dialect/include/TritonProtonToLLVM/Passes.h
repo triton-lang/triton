@@ -1,5 +1,5 @@
-#ifndef TRITON_CONVERSION_TRITONPROTONTOLLVM_PASSES_H
-#define TRITON_CONVERSION_TRITONPROTONTOLLVM_PASSES_H
+#ifndef TRITON_THIRD_PARTY_PROTON_INCLUDE_TRITONPROTONGPUTOLLVM_PASSES_H_
+#define TRITON_THIRD_PARTY_PROTON_INCLUDE_TRITONPROTONGPUTOLLVM_PASSES_H_
 
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Pass/Pass.h"
@@ -12,19 +12,14 @@ namespace mlir {
 class ModuleOp;
 template <typename T> class OperationPass;
 
-namespace triton {
+} // namespace mlir
 
-#define GEN_PASS_DECL
-#include "third_party/proton/dialect/include/TritonProtonToLLVM/Passes.h.inc"
-
-namespace proton {
-
-} // namespace proton
+namespace mlir::triton {
+std::unique_ptr<OperationPass<ModuleOp>>
+createAllocateProtonSMEMBuffer();
 
 #define GEN_PASS_REGISTRATION
-#include "third_party/proton/dialect/include/TritonProtonToLLVM/Passes.h.inc"
-
-} // namespace triton
+#include "../third_party/proton/dialect/include/TritonProtonToLLVM/Passes.h.inc"
 
 } // namespace mlir
 

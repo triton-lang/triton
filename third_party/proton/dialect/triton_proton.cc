@@ -5,25 +5,24 @@
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
 
+#include "../third_party/proton/dialect/include/TritonProtonToLLVM/Passes.h"
+
 namespace py = pybind11;
 
 namespace{
 
 void init_triton_proton_passes_ttgpuir(py::module &&m) {
   using namespace mlir::triton;
-//TODO: Enable these calls here once every is moved into Proton backend  
-//  m.def("add_allocate_smem_buffer", [](mlir::PassManager &pm) {
-//    pm.addPass(mlir::triton::proton::createAllocateSMEMBufferPass());
-//  });
-//  ADD_PASS_WRAPPER_0("add_allocate_smem_buffer",
-//                     mlir::triton::proton::createAllocateSMEMBufferPass);
+  m.def("add_allocate_smem_buffer", [](mlir::PassManager &pm) {
+    pm.addPass(createAllocateProtonSMEMBuffer());
+  });
 }
 }
 
 void init_triton_proton(py::module &&m) {
   m.doc() = "Python bindings to the Proton backend";	
   auto passes = m.def_submodule("passes");
-//  init_triton_proton_passes_ttgpuir(passes.def_submodule("ttgpuir"));
+  init_triton_proton_passes_ttgpuir(passes.def_submodule("ttgpuir"));
 
   // load dialects
   m.def("load_dialects", [](mlir::MLIRContext &context) {

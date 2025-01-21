@@ -61,13 +61,10 @@ namespace mlir {
 
 namespace triton {
 
-namespace gpu {
-
-std::unique_ptr<OperationPass<ModuleOp>> createAllocateProtonSMEMBufferPass() {
+std::unique_ptr<OperationPass<ModuleOp>> createAllocateProtonSMEMBuffer() {
   return std::make_unique<AllocateProtonSMEMBuffer>();
-}
 
-} // namespace proton
+}
 
 } // namespace triton
 

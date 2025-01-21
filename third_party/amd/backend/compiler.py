@@ -1,5 +1,5 @@
 from triton.backends.compiler import BaseBackend, GPUTarget
-from triton._C.libtriton import ir, passes, llvm, amd
+from triton._C.libtriton import ir, passes, llvm, amd, proton
 from dataclasses import dataclass
 from typing import Any, Dict, Tuple
 from types import ModuleType
@@ -252,9 +252,7 @@ class HIPBackend(BaseBackend):
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
 
-        #TODO: move this into proton backend so call is instead:
-        #proton.passes.add_allocate_proton_smem_buffer(pm)
-        passes.ttgpuir.add_allocate_proton_smem_buffer(pm)
+        proton.passes.ttgpuir.add_allocate_smem_buffer(pm)
 
         pm.run(mod)
         return mod
