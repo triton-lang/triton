@@ -194,8 +194,11 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
       are similar to a normal load, i.e., the `mask` is a boolean vector that
       determines if a given element should be read from memory, and `other` is the
       element that should be returned on lane `i` when `mask[i] == 0`.
-      `stride` of the buffer can be obtained from populating the block offset and
-      when found, cache swizzling will be enabled in the buffer descriptor.
+      Stride is the distance between the beginning of contiguous memory chunks.
+      When performing a load of a block, the `stride` is the address difference between
+      the first elements of each row in bytes. Compiler tries to obtain the `stride`
+      when it converts to the buffer ops because it is important for optimizing
+      the cache memory access.
     }];
     let arguments = (
       ins
@@ -209,9 +212,10 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
     let results = (outs TT_Tensor:$result);
 
     let assemblyFormat = [{
-      $ptr `[` $offsets `]``,` $stride (`,` $mask^)? (`,` $other^)?
+      $ptr `[` $offsets `]` (`,` $mask^)? (`,` $other^)?
       oilist(`cacheModifier` `=` $cache)
-      attr-dict `:` type($ptr) `[` type($offsets) `]``,` type($stride) `->` type($result)
+      `stride` `=` $stride
+      attr-dict `:` type($result)
     }];
 }
 
@@ -256,7 +260,6 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
     }];
 }
 
-
 def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
   SameLoadStoreOperandsEncoding,
   MemoryEffects<[MemWrite<GlobalMemory>]>,
@@ -273,8 +276,11 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
       are similar to a normal store , i.e., the `mask` is a boolean vector that
       determines if a given element should be written to memory, and `value` is the
       tensor of elements that should be written on lane `i` when `mask[i] == 1`.
-      `stride` of the buffer can be obtained from populating the block offset and
-      when found, cache swizzling will be enabled in the buffer descriptor.
+      Stride is the distance between the beginning of contiguous memory chunks.
+      When performing a block store, the `stride` is the address difference between
+      the first elements of each row in bytes. Compiler tries to obtain the `stride`
+      when it converts to the buffer ops because it is important for optimizing
+      the cache memory access.
     }];
     let arguments = (
       ins
@@ -287,9 +293,10 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
     );
 
     let assemblyFormat = [{
-      $value `,` $ptr `[` $offsets `]` `,` $stride (`,` $mask^)?
+      $value `,` $ptr `[` $offsets `]` (`,` $mask^)?
       oilist(`cacheModifier` `=` $cache)
-      attr-dict `:` type($ptr) `[` type($offsets) `]``,` type($stride) `->` type($value)
+      `stride` `=` $stride
+      attr-dict `:` type($value)
     }];
 }
 

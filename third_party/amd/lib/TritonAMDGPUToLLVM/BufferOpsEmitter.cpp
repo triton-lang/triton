@@ -66,15 +66,20 @@ Value BufferEmitter::createResourceDescriptor(Value basePtr,
 
   Value stride = int_val(16, 0);
   if (targetInfo.getISAFamily() == ISAFamily::CDNA3) {
-    Value enableSwizzle = int_val(16, 16384);
-    Value mask14b = int_val(16, 16383);
-    // cache swizzle support only upto 8k stride, cannot help larger address bit
-    // e.g. it
-    Value stride16b = rewriter.create<LLVM::TruncOp>(loc, i16_ty, blockStride);
-    Value strideSat = rewriter.create<LLVM::AndOp>(loc, stride16b, mask14b);
-    // stride[13:0] = swizzling stride
-    // stride[14] = swizzle enabling bit
-    stride = rewriter.create<LLVM::OrOp>(loc, enableSwizzle, strideSat);
+    if (blockStride) { // TODO: BufferAtomicRMWOp is unsupported
+      Value enableSwizzle = int_val(16, 16384);
+      Value mask14b = int_val(16, 16383);
+      // Cache swizzle supports only upto 8k stride. Also simply swizzling the
+      // largest available stride (8k) doesn't help those unsupported large
+      // stride. Especially better to avoid using the stride which is 2^N when
+      // N>13, e.g. by add padding to the buffer.
+      Value stride16b =
+          rewriter.create<LLVM::TruncOp>(loc, i16_ty, blockStride);
+      Value strideSat = rewriter.create<LLVM::AndOp>(loc, stride16b, mask14b);
+      // stride[13:0] = swizzling stride
+      // stride[14] = swizzle enabling bit
+      stride = rewriter.create<LLVM::OrOp>(loc, enableSwizzle, strideSat);
+    }
   }
 
   Value flagsConst = int_val(32, flags);
