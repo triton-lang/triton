@@ -484,7 +484,7 @@ private:
       buildInterferenceGraph(buffers, interference);
     } while (!interference.empty());
 
-    dumpAllocationSize();
+    LLVM_DEBUG(dumpAllocationSize());
   }
 
   /// Computes the initial shared memory offsets.
