@@ -31,6 +31,67 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+// CHECK-LABEL: buffer_stride
+  tt.func public @buffer_stride(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}, %arg4: i32 {tt.divisibility = 16 : i32}, %arg5: i32 {tt.divisibility = 16 : i32}, %arg6: i32 {tt.divisibility = 16 : i32}, %arg7: i32 {tt.divisibility = 16 : i32}, %arg8: i32 {tt.divisibility = 16 : i32}, %arg9: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %c48_i32 = arith.constant 48 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %0 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<256x1xi32, #blocked>
+    %cmp = arith.cmpi sgt, %arg6, %c0_i32 : i32
+    llvm.intr.assume %cmp : i1
+    %2 = tt.splat %arg6 : i32 -> tensor<256x1xi32, #blocked>
+    %3 = arith.muli %1, %2 : tensor<256x1xi32, #blocked>
+    %4 = tt.addptr %arg0, %c32_i32 : !tt.ptr<f16>, i32
+    %5 = tt.broadcast %3 : tensor<256x1xi32, #blocked> -> tensor<256x64xi32, #blocked>
+    %6 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %7 = tt.expand_dims %6 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #blocked>
+    %8 = tt.broadcast %7 : tensor<1x64xi32, #blocked> -> tensor<256x64xi32, #blocked>
+    %9 = arith.addi %8, %5 : tensor<256x64xi32, #blocked>
+    %10 = tt.splat %4 : !tt.ptr<f16> -> tensor<256x64x!tt.ptr<f16>, #blocked>
+    %11 = tt.addptr %10, %9 : tensor<256x64x!tt.ptr<f16>, #blocked>, tensor<256x64xi32, #blocked>
+
+    // CHECK: %[[splat:.*]] = tt.splat %arg[[#stride:]]
+    // CHECK: %[[mul:.*]] = arith.muli %[[#]], %[[splat]]
+    // CHECK: %[[ptr:.*]] = tt.addptr %arg0
+    // CHECK: %[[bcast1:.*]] = tt.broadcast %[[mul]]
+    // CHECK: %[[bcast0:.*]] = tt.broadcast %[[#]]
+    // CHECK: %[[offset:.*]] = arith.addi %[[bcast0]], %[[bcast1]]
+    // CHECK: %[[buffer:.*]] = amdgpu.buffer_load %[[ptr]][%[[offset]]] stride = %arg[[#stride]]
+
+    %12 = tt.load %11 {OpIdx = #amdgpu.OpIdx<0>} : tensor<256x64x!tt.ptr<f16>, #blocked>
+    %13 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
+    %14 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
+    %15 = tt.expand_dims %13 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<256x1xi32, #blocked>
+    %16 = tt.expand_dims %14 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #blocked>
+    %cmp1 = arith.cmpi sgt, %arg8, %c0_i32 : i32
+    llvm.intr.assume %cmp1 : i1
+    %17 = tt.splat %arg8 : i32 -> tensor<256x1xi32, #blocked>
+    %18 = arith.muli %17, %15 : tensor<256x1xi32, #blocked>
+    %19 = tt.addptr %arg2, %c48_i32 : !tt.ptr<f16>, i32
+    %20 = tt.broadcast %18 : tensor<256x1xi32, #blocked> -> tensor<256x64xi32, #blocked>
+    %21 = tt.broadcast %16 : tensor<1x64xi32, #blocked> -> tensor<256x64xi32, #blocked>
+    %22 = tt.addptr %19, %c48_i32 : !tt.ptr<f16>, i32
+    %23 = arith.addi %21, %20 : tensor<256x64xi32, #blocked>
+    %24 = tt.splat %22 : !tt.ptr<f16> -> tensor<256x64x!tt.ptr<f16>, #blocked>
+    %25 = tt.addptr %24, %23 : tensor<256x64x!tt.ptr<f16>, #blocked>, tensor<256x64xi32, #blocked>
+
+    // CHECK: %[[splatb:.*]] = tt.splat %arg[[#strideb:]]
+    // CHECK: %[[mulb:.*]] = arith.muli %[[splatb]], %[[#]]
+    // CHECK: %[[bcast1b:.*]] = tt.broadcast %[[mulb]]
+    // CHECK: %[[bcast0b:.*]] = tt.broadcast %[[#]]
+    // CHECK: %[[ptrb:.*]] = tt.addptr
+    // CHECK: %[[offsetb:.*]] = arith.addi %[[bcast0b]], %[[bcast1b]]
+    // CHECK: buffer_store %[[buffer]], %[[ptrb]][%[[offsetb]]] stride = %arg[[#strideb]]
+
+    tt.store %25, %12 : tensor<256x64x!tt.ptr<f16>, #blocked>
+    tt.return
+  }
+}
+// -----
+
 #blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: assume_positive_offset
