@@ -1119,10 +1119,11 @@ LinearLayout chooseDotLdMatrixLayout(DotOperandEncodingAttr dot,
   }
   std::vector<std::vector<int>> basesLane = {{1, 0}, {2, 0}, {4, 0}};
   int numTileCols;
-  // Construct a tile consisting of 4 8x8 sub-tiles to use ldmatrix
+  // Construct a tile consisting of 4 8x8x16bits sub-tiles to use ldmatrix
   // efficiently. opIdx=0 and opIdx=1 are handled differently.
   if (opIdx == 0) {
-    // The matrix elements of thread 0 are distributed in the following pattern:
+    // The matrix elements of thread 0 are distributed in the following pattern
+    // (fp16):
     //
     //           col0       col8
     //   row0  reg[0-1]   reg[4-5]
@@ -1138,7 +1139,8 @@ LinearLayout chooseDotLdMatrixLayout(DotOperandEncodingAttr dot,
     }
     numTileCols = 16 * 16 / elemBitWidth;
   } else {
-    // The matrix elements of thread 0 are distributed in the following pattern:
+    // The matrix elements of thread 0 are distributed in the following pattern
+    // (fp16):
     //
     //           col0       col8      col16    col24
     //   row0  reg[0-1]   reg[2-3]  reg[4-5]  reg[6-7]
