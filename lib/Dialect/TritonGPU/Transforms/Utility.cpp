@@ -793,11 +793,10 @@ LogicalResult getConvertBackwardSlice(
   auto updateLayout = [&](Value value, Attribute encoding) {
     assert((isa<RankedTensorType>(value.getType())));
     slice.insert(value);
-    if (layout.find(value) != layout.end()) {
-      if (layout[value] != encoding)
-        return failure();
-    }
-    layout[value] = encoding;
+    Attribute &existing = layout[value];
+    if (existing && existing != encoding)
+      return failure();
+    existing = encoding;
     return success();
   };
 
@@ -823,6 +822,8 @@ LogicalResult getConvertBackwardSlice(
     }
 
     if (auto ifOp = currentValue.getDefiningOp<scf::IfOp>()) {
+      if (stopPropagation && stopPropagation(ifOp))
+        continue;
       unsigned argIdx = mlir::cast<OpResult>(currentValue).getResultNumber();
 
       OpOperand &thenValue = ifOp.thenYield()->getOpOperand(argIdx);
@@ -1239,38 +1240,6 @@ struct ForOpDeadArgElimination : public OpRewritePattern<scf::ForOp> {
 
 void populateForOpDeadArgumentElimination(RewritePatternSet &patterns) {
   patterns.add<ForOpDeadArgElimination>(patterns.getContext());
-}
-
-LinearLayout getRegToSharedLayout(MLIRContext *ctx, ArrayRef<int64_t> shape,
-                                  Attribute srcEnc, Attribute dstEnc,
-                                  int elemBitWidth) {
-  StringAttr kBlock = StringAttr::get(ctx, ("block"));
-  int rank = shape.size();
-
-  LinearLayout regLayout = triton::gpu::toLinearLayout(shape, srcEnc);
-  LinearLayout sharedLayout =
-      triton::gpu::toLinearLayout(shape, dstEnc, elemBitWidth);
-  auto sharedOrder = triton::gpu::getOrder(dstEnc);
-
-  // sharedLayout's in-dims are currently (offset, block).  Reshape to
-  // (offsetX1, offsetX2, ..., block) so that we can apply the N-dimensional
-  // shmem strides.  (The offsetX's appear in minor-to-major order.)
-  auto sharedLegacy = cast<triton::gpu::SharedEncodingAttr>(dstEnc);
-  SmallVector<std::pair<StringAttr, int32_t>> multiDimSharedSize;
-  for (int i = 0; i < rank; i++) {
-    int dim = sharedOrder[i];
-    int64_t size = std::max(
-        int64_t{1},
-        shape[dim] / sharedLegacy.getCTALayout().getCTASplitNum()[dim]);
-    multiDimSharedSize.push_back(
-        {StringAttr::get(ctx, ("offset" + std::to_string(dim))), size});
-  }
-  multiDimSharedSize.push_back({kBlock, sharedLayout.getInDimSize(kBlock)});
-  sharedLayout = sharedLayout.reshapeIns(multiDimSharedSize);
-
-  // regToSharedLayout maps from (register, lane, warp, block) to (offsetX1,
-  // ..., offsetXN, block), where the offsetX's are in minor-to-major order.
-  return regLayout.invertAndCompose(sharedLayout);
 }
 
 } // namespace mlir

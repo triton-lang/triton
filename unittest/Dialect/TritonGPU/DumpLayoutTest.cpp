@@ -182,7 +182,7 @@ TEST_F(DumpLayoutTest, Simple1DShared) {
                              {1},   /* ord, row-major */
                              {1});  /* cOrd */
 
-  auto elemTy = FloatType::getF16(sharedLayout.getContext());
+  auto elemTy = Float16Type::get(sharedLayout.getContext());
   auto tensorType = RankedTensorType::get({32}, elemTy, sharedLayout);
   std::string layout = getLayoutStr(tensorType, /*useHWPointOfView=*/false);
   assertSameStr(refStr, layout);
@@ -237,7 +237,7 @@ TEST_F(DumpLayoutTest, Larger2DShared) {
                              {1, 0},  /* ord, row-major */
                              {1, 0}); /* cOrd */
 
-  auto elemTy = FloatType::getF16(sharedLayout.getContext());
+  auto elemTy = Float16Type::get(sharedLayout.getContext());
   auto tensorType = RankedTensorType::get({8, 32}, elemTy, sharedLayout);
   std::string layout = getLayoutStr(tensorType, /*useHWPointOfView=*/false);
   assertSameStr(refStr, layout);
@@ -510,7 +510,7 @@ Offset: 255 -> (7,17)
                                {1, 0},  /* ord, row-major */
                                {1, 0}); /* cOrd */
 
-  auto elemTyHW = FloatType::getF16(sharedLayoutHW.getContext());
+  auto elemTyHW = Float16Type::get(sharedLayoutHW.getContext());
   auto tensorTypeHW = RankedTensorType::get({8, 32}, elemTyHW, sharedLayoutHW);
 
   std::string layoutHW = getLayoutStr(tensorTypeHW, /*useHWPointOfView=*/true);

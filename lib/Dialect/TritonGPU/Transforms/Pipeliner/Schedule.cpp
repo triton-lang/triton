@@ -13,7 +13,6 @@
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
-namespace ttng = mlir::triton::nvidia_gpu;
 
 void tt::CoarseSchedule::insertDepsOfOp(Operation *op, int stage,
                                         tt::CoarseSchedule::Cluster cluster,

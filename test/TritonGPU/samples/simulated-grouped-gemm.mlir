@@ -65,11 +65,11 @@
 // CHECK:           %[[VAL_50:.*]] = ttg.local_alloc  : () -> !ttg.memdesc<3x256x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable>
 // CHECK:           %[[VAL_51:.*]] = ttg.local_alloc  : () -> !ttg.memdesc<3xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable>
 // CHECK:           %[[VAL_52:.*]] = ttg.memdesc_subview %[[VAL_51]]{{\[}}%[[VAL_13]]] : !ttg.memdesc<3xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable> -> !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
-// CHECK:           ttng.init_barrier %[[VAL_52]], 1 : <1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
+// CHECK:           ttng.init_barrier %[[VAL_52]], 1 : !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
 // CHECK:           %[[VAL_53:.*]] = ttg.memdesc_subview %[[VAL_51]]{{\[}}%[[VAL_10]]] : !ttg.memdesc<3xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable> -> !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
-// CHECK:           ttng.init_barrier %[[VAL_53]], 1 : <1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
+// CHECK:           ttng.init_barrier %[[VAL_53]], 1 : !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
 // CHECK:           %[[VAL_54:.*]] = ttg.memdesc_subview %[[VAL_51]]{{\[}}%[[VAL_7]]] : !ttg.memdesc<3xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable> -> !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
-// CHECK:           ttng.init_barrier %[[VAL_54]], 1 : <1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
+// CHECK:           ttng.init_barrier %[[VAL_54]], 1 : !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
 // CHECK:           %[[VAL_55:.*]] = arith.cmpi sgt, %[[VAL_44]], %[[VAL_13]] : i32
 // CHECK:           %[[VAL_56:.*]] = arith.select %[[VAL_55]], %[[VAL_23]], %[[VAL_41]] : i32
 // CHECK:           %[[VAL_57:.*]] = arith.select %[[VAL_55]], %[[VAL_13]], %[[VAL_12]] : i32
@@ -89,13 +89,13 @@
 // CHECK:             scf.yield %[[VAL_13]], %[[VAL_13]] : i32, i32
 // CHECK:           }
 // CHECK:           %[[VAL_69:.*]] = ttg.memdesc_subview %[[VAL_51]]{{\[}}%[[VAL_13]]] : !ttg.memdesc<3xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable> -> !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
-// CHECK:           ttng.barrier_expect %[[VAL_69]], 49152, %[[VAL_55]] : <1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
+// CHECK:           ttng.barrier_expect %[[VAL_69]], 49152, %[[VAL_55]] : !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
 // CHECK:           %[[VAL_70:.*]] = ttg.memdesc_subview %[[VAL_49]]{{\[}}%[[VAL_13]], %[[VAL_13]], %[[VAL_13]]] : !ttg.memdesc<3x128x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable> -> !ttg.memdesc<128x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable, 3x128x64>
 // CHECK:           %[[VAL_71:.*]] = ttng.tensor_desc_to_tma_ptr %[[VAL_32]] : !tt.tensordesc<tensor<128x64xf16>> to !tt.ptr<i8>
-// CHECK:           ttng.async_tma_copy_global_to_local %[[VAL_71]]{{\[}}%[[VAL_72:.*]]#0, %[[VAL_13]]] %[[VAL_70]], %[[VAL_69]], %[[VAL_55]] : <i8>, <1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3> -> <128x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable, 3x128x64>
+// CHECK:           ttng.async_tma_copy_global_to_local %[[VAL_71]]{{\[}}%[[VAL_72:.*]]#0, %[[VAL_13]]] %[[VAL_70]], %[[VAL_69]], %[[VAL_55]] : !tt.ptr<i8>, !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3> -> !ttg.memdesc<128x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable, 3x128x64>
 // CHECK:           %[[VAL_73:.*]] = ttg.memdesc_subview %[[VAL_50]]{{\[}}%[[VAL_13]], %[[VAL_13]], %[[VAL_13]]] : !ttg.memdesc<3x256x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable> -> !ttg.memdesc<256x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable, 3x256x64>
 // CHECK:           %[[VAL_74:.*]] = ttng.tensor_desc_to_tma_ptr %[[VAL_33]] : !tt.tensordesc<tensor<256x64xf16>> to !tt.ptr<i8>
-// CHECK:           ttng.async_tma_copy_global_to_local %[[VAL_74]]{{\[}}%[[VAL_72]]#1, %[[VAL_13]]] %[[VAL_73]], %[[VAL_69]], %[[VAL_55]] : <i8>, <1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3> -> <256x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable, 3x256x64>
+// CHECK:           ttng.async_tma_copy_global_to_local %[[VAL_74]]{{\[}}%[[VAL_72]]#1, %[[VAL_13]]] %[[VAL_73]], %[[VAL_69]], %[[VAL_55]] : !tt.ptr<i8>, !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3> -> !ttg.memdesc<256x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable, 3x256x64>
 // CHECK:           %[[VAL_75:.*]] = arith.cmpi sgt, %[[VAL_44]], %[[VAL_10]] : i32
 // CHECK:           %[[VAL_76:.*]] = arith.cmpi ne, %[[VAL_45]], %[[VAL_13]] : i32
 // CHECK:           %[[VAL_77:.*]] = arith.extui %[[VAL_76]] : i1 to i32
@@ -145,13 +145,13 @@
 // CHECK:           }
 // CHECK:           %[[VAL_109:.*]] = arith.muli %[[VAL_77]], %[[VAL_17]] : i32
 // CHECK:           %[[VAL_110:.*]] = ttg.memdesc_subview %[[VAL_51]]{{\[}}%[[VAL_10]]] : !ttg.memdesc<3xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable> -> !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
-// CHECK:           ttng.barrier_expect %[[VAL_110]], 49152, %[[VAL_75]] : <1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
+// CHECK:           ttng.barrier_expect %[[VAL_110]], 49152, %[[VAL_75]] : !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
 // CHECK:           %[[VAL_111:.*]] = ttg.memdesc_subview %[[VAL_49]]{{\[}}%[[VAL_10]], %[[VAL_13]], %[[VAL_13]]] : !ttg.memdesc<3x128x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable> -> !ttg.memdesc<128x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable, 3x128x64>
 // CHECK:           %[[VAL_112:.*]] = ttng.tensor_desc_to_tma_ptr %[[VAL_113:.*]]#0 : !tt.tensordesc<tensor<128x64xf16>> to !tt.ptr<i8>
-// CHECK:           ttng.async_tma_copy_global_to_local %[[VAL_112]]{{\[}}%[[VAL_113]]#5, %[[VAL_109]]] %[[VAL_111]], %[[VAL_110]], %[[VAL_75]] : <i8>, <1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3> -> <128x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable, 3x128x64>
+// CHECK:           ttng.async_tma_copy_global_to_local %[[VAL_112]]{{\[}}%[[VAL_113]]#5, %[[VAL_109]]] %[[VAL_111]], %[[VAL_110]], %[[VAL_75]] : !tt.ptr<i8>, !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3> -> !ttg.memdesc<128x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable, 3x128x64>
 // CHECK:           %[[VAL_114:.*]] = ttg.memdesc_subview %[[VAL_50]]{{\[}}%[[VAL_10]], %[[VAL_13]], %[[VAL_13]]] : !ttg.memdesc<3x256x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable> -> !ttg.memdesc<256x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable, 3x256x64>
 // CHECK:           %[[VAL_115:.*]] = ttng.tensor_desc_to_tma_ptr %[[VAL_113]]#1 : !tt.tensordesc<tensor<256x64xf16>> to !tt.ptr<i8>
-// CHECK:           ttng.async_tma_copy_global_to_local %[[VAL_115]]{{\[}}%[[VAL_113]]#6, %[[VAL_109]]] %[[VAL_114]], %[[VAL_110]], %[[VAL_75]] : <i8>, <1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3> -> <256x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable, 3x256x64>
+// CHECK:           ttng.async_tma_copy_global_to_local %[[VAL_115]]{{\[}}%[[VAL_113]]#6, %[[VAL_109]]] %[[VAL_114]], %[[VAL_110]], %[[VAL_75]] : !tt.ptr<i8>, !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3> -> !ttg.memdesc<256x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable, 3x256x64>
 // CHECK:           %[[VAL_116:.*]] = ttg.local_alloc  : () -> !ttg.memdesc<128x256xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable>
 // CHECK:           %[[VAL_117:.*]]:24 = scf.for %[[VAL_118:.*]] = %[[VAL_13]] to %[[VAL_44]] step %[[VAL_10]] iter_args(%[[VAL_119:.*]] = %[[VAL_77]], %[[VAL_120:.*]] = %[[VAL_113]]#0, %[[VAL_121:.*]] = %[[VAL_113]]#1, %[[VAL_122:.*]] = %[[VAL_113]]#2, %[[VAL_123:.*]] = %[[VAL_113]]#3, %[[VAL_124:.*]] = %[[VAL_113]]#4, %[[VAL_125:.*]] = %[[VAL_113]]#5, %[[VAL_126:.*]] = %[[VAL_113]]#6, %[[VAL_127:.*]] = %[[VAL_22]], %[[VAL_128:.*]] = %[[VAL_9]], %[[VAL_129:.*]] = %[[VAL_10]], %[[VAL_130:.*]] = %[[VAL_12]], %[[VAL_131:.*]] = %[[VAL_13]], %[[VAL_132:.*]] = %[[VAL_113]]#7, %[[VAL_133:.*]] = %[[VAL_113]]#8, %[[VAL_134:.*]] = %[[VAL_113]]#9, %[[VAL_135:.*]] = %[[VAL_13]], %[[VAL_136:.*]] = %[[VAL_77]], %[[VAL_137:.*]] = %[[VAL_35]], %[[VAL_138:.*]] = %[[VAL_113]]#2, %[[VAL_139:.*]] = %[[VAL_72]]#0, %[[VAL_140:.*]] = %[[VAL_113]]#5, %[[VAL_141:.*]] = %[[VAL_72]]#1, %[[VAL_142:.*]] = %[[VAL_113]]#6) -> (i32, !tt.tensordesc<tensor<128x64xf16>>, !tt.tensordesc<tensor<256x64xf16>>, !tt.tensordesc<tensor<128x256xf16>>, i32, i32, i32, i32, tensor<128x256xf32, #[[$ATTR_0]]>, i1, i32, i32, i32, i32, i32, i32, i32, i32, !tt.tensordesc<tensor<128x256xf16>>, !tt.tensordesc<tensor<128x256xf16>>, i32, i32, i32, i32)  : i32 {
 // CHECK:             %[[VAL_143:.*]] = arith.subi %[[VAL_44]], %[[VAL_7]] : i32
@@ -221,7 +221,7 @@
 // CHECK:             %[[VAL_194:.*]] = arith.xori %[[VAL_131]], %[[VAL_10]] : i32
 // CHECK:             %[[VAL_195:.*]] = arith.select %[[VAL_192]], %[[VAL_131]], %[[VAL_194]] : i32
 // CHECK:             %[[VAL_196:.*]] = ttg.memdesc_subview %[[VAL_51]]{{\[}}%[[VAL_193]]] : !ttg.memdesc<3xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable> -> !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
-// CHECK:             ttng.wait_barrier %[[VAL_196]], %[[VAL_195]] : <1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
+// CHECK:             ttng.wait_barrier %[[VAL_196]], %[[VAL_195]] : !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
 // CHECK:             %[[VAL_197:.*]] = ttg.memdesc_subview %[[VAL_50]]{{\[}}%[[VAL_193]], %[[VAL_13]], %[[VAL_13]]] : !ttg.memdesc<3x256x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable> -> !ttg.memdesc<256x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable, 3x256x64>
 // CHECK:             %[[VAL_198:.*]] = ttg.memdesc_subview %[[VAL_49]]{{\[}}%[[VAL_193]], %[[VAL_13]], %[[VAL_13]]] : !ttg.memdesc<3x128x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable> -> !ttg.memdesc<128x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable, 3x128x64>
 // CHECK:             %[[VAL_199:.*]] = ttg.memdesc_trans %[[VAL_197]] {order = array<i32: 1, 0>} : !ttg.memdesc<256x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable, 3x256x64> -> !ttg.memdesc<64x256xf16, #[[$ATTR_3]], #[[$ATTR_4]], mutable>
@@ -232,13 +232,13 @@
 // CHECK:             %[[VAL_204:.*]] = arith.select %[[VAL_203]], %[[VAL_202]], %[[VAL_13]] : i32
 // CHECK:             %[[VAL_205:.*]] = arith.muli %[[VAL_147]], %[[VAL_17]] : i32
 // CHECK:             %[[VAL_206:.*]] = ttg.memdesc_subview %[[VAL_51]]{{\[}}%[[VAL_204]]] : !ttg.memdesc<3xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable> -> !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
-// CHECK:             ttng.barrier_expect %[[VAL_206]], 49152, %[[VAL_144]] : <1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
+// CHECK:             ttng.barrier_expect %[[VAL_206]], 49152, %[[VAL_144]] : !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
 // CHECK:             %[[VAL_207:.*]] = ttg.memdesc_subview %[[VAL_49]]{{\[}}%[[VAL_204]], %[[VAL_13]], %[[VAL_13]]] : !ttg.memdesc<3x128x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable> -> !ttg.memdesc<128x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable, 3x128x64>
 // CHECK:             %[[VAL_208:.*]] = ttng.tensor_desc_to_tma_ptr %[[VAL_209:.*]]#0 : !tt.tensordesc<tensor<128x64xf16>> to !tt.ptr<i8>
-// CHECK:             ttng.async_tma_copy_global_to_local %[[VAL_208]]{{\[}}%[[VAL_209]]#5, %[[VAL_205]]] %[[VAL_207]], %[[VAL_206]], %[[VAL_144]] : <i8>, <1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3> -> <128x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable, 3x128x64>
+// CHECK:             ttng.async_tma_copy_global_to_local %[[VAL_208]]{{\[}}%[[VAL_209]]#5, %[[VAL_205]]] %[[VAL_207]], %[[VAL_206]], %[[VAL_144]] : !tt.ptr<i8>, !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3> -> !ttg.memdesc<128x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable, 3x128x64>
 // CHECK:             %[[VAL_210:.*]] = ttg.memdesc_subview %[[VAL_50]]{{\[}}%[[VAL_204]], %[[VAL_13]], %[[VAL_13]]] : !ttg.memdesc<3x256x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable> -> !ttg.memdesc<256x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable, 3x256x64>
 // CHECK:             %[[VAL_211:.*]] = ttng.tensor_desc_to_tma_ptr %[[VAL_209]]#1 : !tt.tensordesc<tensor<256x64xf16>> to !tt.ptr<i8>
-// CHECK:             ttng.async_tma_copy_global_to_local %[[VAL_211]]{{\[}}%[[VAL_209]]#6, %[[VAL_205]]] %[[VAL_210]], %[[VAL_206]], %[[VAL_144]] : <i8>, <1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3> -> <256x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable, 3x256x64>
+// CHECK:             ttng.async_tma_copy_global_to_local %[[VAL_211]]{{\[}}%[[VAL_209]]#6, %[[VAL_205]]] %[[VAL_210]], %[[VAL_206]], %[[VAL_144]] : !tt.ptr<i8>, !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3> -> !ttg.memdesc<256x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable, 3x256x64>
 // CHECK:             %[[VAL_212:.*]] = arith.cmpi eq, %[[VAL_135]], %[[VAL_45]] : i32
 // CHECK:             %[[VAL_213:.*]] = arith.cmpi ne, %[[VAL_135]], %[[VAL_45]] : i32
 // CHECK:             scf.if %[[VAL_212]] {
@@ -248,7 +248,7 @@
 // CHECK:               ttg.local_store %[[VAL_215]], %[[VAL_116]] : tensor<128x256xf16, #[[$ATTR_0]]> -> !ttg.memdesc<128x256xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable>
 // CHECK:               ttng.fence_async_shared {bCluster = false}
 // CHECK:               %[[VAL_216:.*]] = ttng.tensor_desc_to_tma_ptr %[[VAL_137]] : !tt.tensordesc<tensor<128x256xf16>> to !tt.ptr<i8>
-// CHECK:               ttng.async_tma_copy_local_to_global %[[VAL_216]]{{\[}}%[[VAL_139]], %[[VAL_141]]] %[[VAL_116]] : <i8>, <128x256xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable>
+// CHECK:               ttng.async_tma_copy_local_to_global %[[VAL_216]]{{\[}}%[[VAL_139]], %[[VAL_141]]] %[[VAL_116]] : !tt.ptr<i8>, !ttg.memdesc<128x256xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable>
 // CHECK:             }
 // CHECK:             scf.yield %[[VAL_147]], %[[VAL_209]]#0, %[[VAL_209]]#1, %[[VAL_209]]#2, %[[VAL_209]]#3, %[[VAL_209]]#4, %[[VAL_209]]#5, %[[VAL_209]]#6, %[[VAL_201]]#0, %[[VAL_213]], %[[VAL_204]], %[[VAL_193]], %[[VAL_195]], %[[VAL_209]]#7, %[[VAL_209]]#8, %[[VAL_209]]#9, %[[VAL_136]], %[[VAL_147]], %[[VAL_138]], %[[VAL_209]]#2, %[[VAL_140]], %[[VAL_209]]#5, %[[VAL_142]], %[[VAL_209]]#6 : i32, !tt.tensordesc<tensor<128x64xf16>>, !tt.tensordesc<tensor<256x64xf16>>, !tt.tensordesc<tensor<128x256xf16>>, i32, i32, i32, i32, tensor<128x256xf32, #[[$ATTR_0]]>, i1, i32, i32, i32, i32, i32, i32, i32, i32, !tt.tensordesc<tensor<128x256xf16>>, !tt.tensordesc<tensor<128x256xf16>>, i32, i32, i32, i32
 // CHECK:           }
@@ -257,11 +257,11 @@
 // CHECK:           %[[VAL_217:.*]] = ttng.warp_group_dot_wait %[[VAL_218:.*]]#8 {pendings = 0 : i32} : tensor<128x256xf32, #[[$ATTR_0]]>
 // CHECK:           %[[VAL_219:.*]] = ttg.async_wait  {num = 0 : i32}
 // CHECK:           %[[VAL_220:.*]] = ttg.memdesc_subview %[[VAL_51]]{{\[}}%[[VAL_13]]] : !ttg.memdesc<3xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable> -> !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
-// CHECK:           ttng.inval_barrier %[[VAL_220]] : <1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
+// CHECK:           ttng.inval_barrier %[[VAL_220]] : !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
 // CHECK:           %[[VAL_221:.*]] = ttg.memdesc_subview %[[VAL_51]]{{\[}}%[[VAL_10]]] : !ttg.memdesc<3xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable> -> !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
-// CHECK:           ttng.inval_barrier %[[VAL_221]] : <1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
+// CHECK:           ttng.inval_barrier %[[VAL_221]] : !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
 // CHECK:           %[[VAL_222:.*]] = ttg.memdesc_subview %[[VAL_51]]{{\[}}%[[VAL_7]]] : !ttg.memdesc<3xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable> -> !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
-// CHECK:           ttng.inval_barrier %[[VAL_222]] : <1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
+// CHECK:           ttng.inval_barrier %[[VAL_222]] : !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
 // CHECK:           ttg.local_dealloc %[[VAL_49]] : !ttg.memdesc<3x128x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable>
 // CHECK:           ttg.local_dealloc %[[VAL_50]] : !ttg.memdesc<3x256x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable>
 // CHECK:           tt.return
