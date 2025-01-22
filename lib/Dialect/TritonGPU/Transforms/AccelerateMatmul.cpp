@@ -12,6 +12,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/StrUtil.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
@@ -398,6 +399,7 @@ public:
     auto scale = scaledDotOp.getLhsScale();
     auto aType = scaledDotOp.getLhsType();
     auto bType = scaledDotOp.getRhsType();
+    auto computeType = getComputeType(aType, bType, rewriter);
     bool fastMath = scaledDotOp.getFastMath();
 
     auto rank = oldRetType.getShape().size();
@@ -408,8 +410,10 @@ public:
             aType == ScaleDotElemType::E5M2 ||
             aType == ScaleDotElemType::E2M1) &&
            "NYI: lhs supports fp4 or fp8");
-    assert(bType == ScaleDotElemType::E4M3 || bType == ScaleDotElemType::E5M2 ||
-           bType == ScaleDotElemType::BF16 && "NYI: rhs supports fp8 and bf16");
+    assert(
+        (bType == ScaleDotElemType::E4M3 || bType == ScaleDotElemType::E5M2 ||
+         bType == ScaleDotElemType::BF16 || bType == ScaleDotElemType::FP16) &&
+        "NYI: rhs supports fp8, fp16, bf16");
     bool isFp4 = aType == ScaleDotElemType::E2M1;
 
     auto mmaEnc = getMMAEncoding(rewriter, scaledDotOp);
@@ -513,7 +517,7 @@ public:
     }
 
     a = createArg(rewriter, a, 0, aType, newAEncoding, scale, newScaleEncoding,
-                  fastMath);
+                  computeType, fastMath);
 
     Operation *newDot = nullptr;
     if (versionMajor == 2) {
@@ -522,7 +526,7 @@ public:
       auto newBEncoding = DotOperandEncodingAttr::get(ctx, 1, mmaEnc, bKWidth);
       b = createArg(rewriter, b, 1, bType, newBEncoding,
                     /*scale=*/std::nullopt, /*scaleEncoding=*/std::nullopt,
-                    fastMath);
+                    computeType, fastMath);
       newDot = rewriter.create<DotOp>(scaledDotOp.getLoc(), newRetType, a, b,
                                       newAcc);
     } else {
@@ -545,7 +549,8 @@ private:
   createArg(mlir::PatternRewriter &rewriter, TypedValue<RankedTensorType> v,
             int idx, ScaleDotElemType type, std::optional<Attribute> vEncoding,
             std::optional<TypedValue<RankedTensorType>> opt_scale,
-            std::optional<Attribute> scaleEncoding, bool fastMath) const {
+            std::optional<Attribute> scaleEncoding, Type computeType,
+            bool fastMath) const {
     auto ctx = rewriter.getContext();
     // Create a new tensor with a given encoding or remove the encoding
     auto maybeWithEncoding =
@@ -562,13 +567,14 @@ private:
     TypedValue<RankedTensorType> ret =
         rewriter.create<ConvertLayoutOp>(v.getLoc(), newVType, v);
 
-    // convert to bf16
-    if (type != ScaleDotElemType::E2M1 && type != ScaleDotElemType::BF16) {
+    // convert to compute type
+    if (type != ScaleDotElemType::E2M1 && type != ScaleDotElemType::FP16 &&
+        type != ScaleDotElemType::BF16) {
       assert(type == ScaleDotElemType::E5M2 || type == ScaleDotElemType::E4M3);
-      auto vTypeBf16 = RankedTensorType::get(
-          newVType.getShape(), rewriter.getBF16Type(), newVType.getEncoding());
+      auto vTypeCompute = RankedTensorType::get(
+          newVType.getShape(), computeType, newVType.getEncoding());
       ret = cast<TypedValue<RankedTensorType>>(
-          rewriter.create<FpToFpOp>(v.getLoc(), vTypeBf16, ret).getResult());
+          rewriter.create<FpToFpOp>(v.getLoc(), vTypeCompute, ret).getResult());
     }
     if (opt_scale.has_value()) {
       auto scale = *opt_scale;
@@ -577,12 +583,19 @@ private:
           maybeWithEncoding(scale.getType(), scaleEncoding);
       scale = rewriter.create<ConvertLayoutOp>(scale.getLoc(),
                                                newScaleDotElemType, scale);
-      auto retTy = triton::gpu::UpcastMXFPOp::deduceOutputType(
-          ret, type, Builder(v.getContext()).getBF16Type());
+      auto retTy =
+          triton::gpu::UpcastMXFPOp::deduceOutputType(ret, type, computeType);
       ret = rewriter.create<triton::gpu::UpcastMXFPOp>(v.getLoc(), retTy, ret,
                                                        scale, type, fastMath);
     }
     return ret;
+  }
+
+  mlir::Type getComputeType(ScaleDotElemType aType, ScaleDotElemType bType,
+                            mlir::PatternRewriter &rewriter) const {
+    if (aType == ScaleDotElemType::FP16 || bType == ScaleDotElemType::FP16)
+      return rewriter.getF16Type();
+    return rewriter.getBF16Type();
   }
 
   NvidiaMmaEncodingAttr getMMAEncoding(mlir::PatternRewriter &rewriter,
@@ -593,6 +606,7 @@ private:
     auto scale = scaledDotOp.getLhsScale();
     auto aType = scaledDotOp.getLhsType();
     auto bType = scaledDotOp.getRhsType();
+    auto computeType = getComputeType(aType, bType, rewriter);
     bool fastMath = scaledDotOp.getFastMath();
 
     // create a DotOp to be passed in to getMMAVersionSafe
@@ -602,7 +616,7 @@ private:
     // end up in the graph
     RankedTensorType aTType =
         createArg(rewriter, a, 0, aType, /*vEncoding=*/std::nullopt, scale,
-                  /*scaleEncoding=*/std::nullopt, fastMath)
+                  /*scaleEncoding=*/std::nullopt, computeType, fastMath)
             .getType();
     auto aTypeNoEnc =
         RankedTensorType::get(aTType.getShape(), aTType.getElementType());
@@ -611,7 +625,7 @@ private:
     RankedTensorType bTType =
         createArg(rewriter, b, 1, bType, /*vEncoding=*/std::nullopt,
                   /*scale=*/std::nullopt, /*scaleEncoding=*/std::nullopt,
-                  fastMath)
+                  computeType, fastMath)
             .getType();
     auto bTypeNoEnc =
         RankedTensorType::get(bTType.getShape(), bTType.getElementType());
@@ -643,110 +657,8 @@ private:
   }
 };
 
-static void updateValueType(Value v, Attribute encoding,
-                            ArrayRef<int64_t> shape) {
-  auto tensorType = cast<RankedTensorType>(v.getType());
-  auto newType =
-      RankedTensorType::get(shape, tensorType.getElementType(), encoding);
-  v.setType(newType);
-}
-
-static TransOp updateUsers(Value result, const SetVector<Operation *> &slice) {
-  TransOp transOp;
-  if (llvm::any_of(result.getUsers(),
-                   [&](Operation *user) { return slice.count(user) == 0; })) {
-    OpBuilder builder(result.getContext());
-    builder.setInsertionPointAfterValue(result);
-    transOp =
-        builder.create<TransOp>(result.getLoc(), result, ArrayRef({1, 0}));
-    result.replaceUsesWithIf(transOp.getResult(), [&](OpOperand &operand) {
-      return operand.getOwner() != transOp.getOperation() &&
-             slice.count(operand.getOwner()) == 0;
-    });
-  }
-  return transOp;
-}
-
-// Sync the transpose in the IR, this is done to avoid generating convert layout
-// when we have a transpose right after a dot as mma layout cannot be propagated
-// through transpose op. Once we have layouts that can represent transposed MMA
-// we can remove this transformation.
-static void sinkTransposeOp(TransOp input) {
-  SmallVector<TransOp> queue = {input};
-  while (!queue.empty()) {
-    TransOp transOp = queue.back();
-    Value currentValue = transOp.getResult();
-    queue.pop_back();
-    mlir::ForwardSliceOptions options;
-    options.filter = [](Operation *op) {
-      if (op->hasTrait<OpTrait::Elementwise>() && op->getNumOperands() == 1)
-        return true;
-      if (isa<scf::YieldOp>(op))
-        return isa<scf::ForOp>(op->getParentOp());
-      if (isa<ConvertLayoutOp>(op))
-        return true;
-      return false;
-    };
-    SetVector<Operation *> slice;
-    mlir::getForwardSlice(currentValue, &slice, options);
-    for (Operation *op : slice) {
-      if (op->hasTrait<OpTrait::Elementwise>()) {
-        // Update users of transpose op.
-        if (op->getOperand(0) == transOp.getResult())
-          op->setOperand(0, transOp.getOperand());
-        // Update the type of the result.
-        for (Value result : op->getResults()) {
-          auto srcType = cast<RankedTensorType>(op->getOperand(0).getType());
-          updateValueType(result, srcType.getEncoding(), srcType.getShape());
-          updateUsers(result, slice);
-        }
-        continue;
-      }
-      if (auto cvtOp = dyn_cast<ConvertLayoutOp>(op)) {
-        // Update users of transpose op.
-        if (op->getOperand(0) == transOp.getResult())
-          op->setOperand(0, transOp.getOperand());
-        auto resultEncoding = cvtOp.getType().getEncoding();
-        auto newDstEncoding = inferSrcEncoding(transOp, resultEncoding);
-        assert(newDstEncoding);
-        auto srcType = cast<RankedTensorType>(cvtOp.getOperand().getType());
-        updateValueType(cvtOp.getResult(), newDstEncoding, srcType.getShape());
-        updateUsers(cvtOp.getResult(), slice);
-        continue;
-      }
-      assert(isa<scf::YieldOp>(op));
-      auto forOp = dyn_cast<scf::ForOp>(op->getParentOp());
-      assert(forOp);
-      for (OpOperand &operand : op->getOpOperands()) {
-        Operation *def = operand.get().getDefiningOp();
-        if (def && (slice.count(def)) || def == transOp.getOperation()) {
-          if (def == transOp.getOperation())
-            operand.set(transOp.getOperand());
-          Type newType = operand.get().getType();
-          forOp.getResult(operand.getOperandNumber()).setType(newType);
-          TransOp retTrans =
-              updateUsers(forOp.getResult(operand.getOperandNumber()), slice);
-          // Recursively try to propagate the new transpose inserted.
-          if (retTrans)
-            queue.push_back(retTrans);
-          forOp.getRegionIterArg(operand.getOperandNumber()).setType(newType);
-          TransOp argTrans = updateUsers(
-              forOp.getRegionIterArg(operand.getOperandNumber()), slice);
-          if (argTrans)
-            queue.push_back(argTrans);
-          OpBuilder builder(forOp);
-          OpOperand &init = forOp.getInitsMutable()[operand.getOperandNumber()];
-          Value initTranspose = builder.create<TransOp>(
-              forOp.getLoc(), init.get(), ArrayRef({1, 0}));
-          init.set(initTranspose);
-        }
-      }
-    }
-  }
-}
-
 // Transpose scaled_dot ops that have a scale on lhs.
-static Operation *transposeDotOp(DotScaledOp dotOp) {
+static void transposeDotOp(DotScaledOp dotOp) {
   OpBuilder builder(dotOp);
   Value lhs = dotOp.getLhs();
   std::array<int, 2> transOrder = {1, 0};
@@ -763,7 +675,6 @@ static Operation *transposeDotOp(DotScaledOp dotOp) {
       builder.create<TransOp>(result.getLoc(), result, transOrder);
   dotOp.replaceAllUsesWith(transposedResult);
   dotOp.erase();
-  return transposedResult;
 }
 
 static void transposeDots(ModuleOp m) {
@@ -774,14 +685,8 @@ static void transposeDots(ModuleOp m) {
     if (dotOp.getLhsScale() == nullptr && dotOp.getRhsScale() != nullptr)
       toTranspose.push_back(dotOp);
   });
-  SmallVector<Operation *> transposes;
   for (DotScaledOp dotOp : toTranspose) {
-    Operation *transpose = transposeDotOp(dotOp);
-    transposes.push_back(transpose);
-  }
-
-  for (Operation *transpose : transposes) {
-    sinkTransposeOp(cast<TransOp>(transpose));
+    transposeDotOp(dotOp);
   }
 }
 
@@ -805,7 +710,7 @@ public:
     mlir::RewritePatternSet patterns(context);
     patterns.add<BlockedToMMA, DecomposeScaledBlocked>(context,
                                                        computeCapability);
-    if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed()) {
+    if (applyPatternsGreedily(m, std::move(patterns)).failed()) {
       signalPassFailure();
     }
     // Now that we have picked the mma type, decompose dot that are not natively

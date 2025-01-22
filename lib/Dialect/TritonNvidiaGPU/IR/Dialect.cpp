@@ -39,24 +39,11 @@ using namespace mlir;
 using namespace mlir::triton::nvidia_gpu;
 
 //===----------------------------------------------------------------------===//
-// Attribute methods
-//===----------------------------------------------------------------------===//
-#define GET_ATTRDEF_CLASSES
-#include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUAttrDefs.cpp.inc"
-
-//===----------------------------------------------------------------------===//
 
 void TritonNvidiaGPUDialect::initialize() {
-  registerTypes();
-
-  addAttributes<
-#define GET_ATTRDEF_LIST
-#include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUAttrDefs.cpp.inc"
-      >();
   addOperations<
 #define GET_OP_LIST
 #include "triton/Dialect/TritonNvidiaGPU/IR/Ops.cpp.inc"
-#include "triton/Dialect/TritonNvidiaGPU/IR/OpsEnums.cpp.inc"
       >();
 }
 

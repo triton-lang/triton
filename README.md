@@ -171,7 +171,7 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
   DEBUG_TYPE` throughout LLVM and Triton) in order to allow the debug output to
   be less noisy. `TRITON_LLVM_DEBUG_ONLY` allows for one or more comma
   separated values to be specified (eg
-  `TRITON_LLVM_DEBUG_ONLY="tritongpu-remove-layout-conversions` or
+  `TRITON_LLVM_DEBUG_ONLY="tritongpu-remove-layout-conversions"` or
   `TRITON_LLVM_DEBUG_ONLY="tritongpu-remove-layout-conversions,regalloc"`).
 - `TRITON_ENABLE_ASAN=1` invokes the LLVM address sanitizer for
   memory leak and out of bounds access detection. Currently only supported on the AMD

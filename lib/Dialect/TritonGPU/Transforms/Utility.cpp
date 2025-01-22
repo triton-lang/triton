@@ -368,13 +368,14 @@ static Attribute inferSrcEncoding(GatherOp op, Attribute dstEnc) {
 }
 
 static Attribute inferTransOpDstEncoding(Attribute srcEnc,
+                                         ArrayRef<int64_t> shape,
                                          ArrayRef<int32_t> order) {
   // Simply forward to the existing inferTransOpEncoding function.
   Attribute retEncoding;
   if (succeeded(
           srcEnc.getDialect()
               .getRegisteredInterface<triton::DialectInferLayoutInterface>()
-              ->inferTransOpEncoding(srcEnc, order, retEncoding))) {
+              ->inferTransOpEncoding(srcEnc, shape, order, retEncoding))) {
     return retEncoding;
   }
   return {};
@@ -382,7 +383,9 @@ static Attribute inferTransOpDstEncoding(Attribute srcEnc,
 
 static Attribute inferDstEncoding(triton::TransposeOpInterface op,
                                   Attribute encoding) {
-  return inferTransOpDstEncoding(encoding, op.getOrder());
+  return inferTransOpDstEncoding(
+      encoding, cast<RankedTensorType>(op.getSrc().getType()).getShape(),
+      op.getOrder());
 }
 
 static Attribute inferSrcEncoding(triton::TransposeOpInterface op,
@@ -393,7 +396,8 @@ static Attribute inferSrcEncoding(triton::TransposeOpInterface op,
   //   transpose(transpose(x, order), inverse(order)) == x,
   // we can see this is equivalent to
   //   transpose(dstEnc, inverse(order)) -> srcEnc.
-  return inferTransOpDstEncoding(encoding,
+  auto shape = cast<RankedTensorType>(op->getResult(0).getType()).getShape();
+  return inferTransOpDstEncoding(encoding, shape,
                                  triton::inversePermutation(op.getOrder()));
 }
 
@@ -1187,38 +1191,6 @@ struct ForOpDeadArgElimination : public OpRewritePattern<scf::ForOp> {
 
 void populateForOpDeadArgumentElimination(RewritePatternSet &patterns) {
   patterns.add<ForOpDeadArgElimination>(patterns.getContext());
-}
-
-LinearLayout getRegToSharedLayout(MLIRContext *ctx, ArrayRef<int64_t> shape,
-                                  Attribute srcEnc, Attribute dstEnc,
-                                  int elemBitWidth) {
-  StringAttr kBlock = StringAttr::get(ctx, ("block"));
-  int rank = shape.size();
-
-  LinearLayout regLayout = triton::gpu::toLinearLayout(shape, srcEnc);
-  LinearLayout sharedLayout =
-      triton::gpu::toLinearLayout(shape, dstEnc, elemBitWidth);
-  auto sharedOrder = triton::gpu::getOrder(dstEnc);
-
-  // sharedLayout's in-dims are currently (offset, block).  Reshape to
-  // (offsetX1, offsetX2, ..., block) so that we can apply the N-dimensional
-  // shmem strides.  (The offsetX's appear in minor-to-major order.)
-  auto sharedLegacy = cast<triton::gpu::SharedEncodingAttr>(dstEnc);
-  SmallVector<std::pair<StringAttr, int32_t>> multiDimSharedSize;
-  for (int i = 0; i < rank; i++) {
-    int dim = sharedOrder[i];
-    int64_t size = std::max(
-        int64_t{1},
-        shape[dim] / sharedLegacy.getCTALayout().getCTASplitNum()[dim]);
-    multiDimSharedSize.push_back(
-        {StringAttr::get(ctx, ("offset" + std::to_string(dim))), size});
-  }
-  multiDimSharedSize.push_back({kBlock, sharedLayout.getInDimSize(kBlock)});
-  sharedLayout = sharedLayout.reshapeIns(multiDimSharedSize);
-
-  // regToSharedLayout maps from (register, lane, warp, block) to (offsetX1,
-  // ..., offsetXN, block), where the offsetX's are in minor-to-major order.
-  return regLayout.invertAndCompose(sharedLayout);
 }
 
 } // namespace mlir

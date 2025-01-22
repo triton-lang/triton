@@ -21,42 +21,9 @@ using namespace mlir::triton::gpu;
 
 namespace {
 
-// Returns (EM, S) selectors to the llvm.amdgcn.perm intrinsic for selecting
-// resultant bf16/fp16 bytes in the lookup table.
-std::pair<Value, Value> composePermuteSelectors(Location loc,
-                                                RewriterBase &rewriter,
-                                                Value val10, Value val32) {
-  // Each input value packs two mxfp4 values. First extract each mxfp4 value's
-  // EM and S bits. In order to form the selector for llvm.amdgcn.perm
-  // instruction, we need to shuffle them into a 4xu8 manner.
-
-  // 0xX[S.EE.M] -> 0x0000000[0EEM]
-  Value v0EM = zext(i32_ty, and_(val10, i8_val(0x07)));
-  // 0xX[S.EE.M] -> 0x0000000[000S]
-  Value v0S = lshr(zext(i32_ty, and_(val10, i8_val(0x08))), i32_val(3));
-  // 0x[S.EE.M]X -> 0x00000[0EEM]00
-  Value v1EM = shl(zext(i32_ty, and_(val10, i8_val(0x70))), i32_val(4));
-  // 0x[S.EE.M]X -> 0x00000[000S]00
-  Value v1S = shl(zext(i32_ty, and_(val10, i8_val(0x80))), i32_val(4 - 3));
-
-  // 0xX[S.EE.M] -> 0x000[0EEM]0000
-  Value v2EM = shl(zext(i32_ty, and_(val32, i8_val(0x07))), i32_val(16));
-  // 0xX[S.EE.M] -> 0x000[000S]0000
-  Value v2S = shl(zext(i32_ty, and_(val32, i8_val(0x08))), i32_val(16 - 3));
-  // 0x[S.EE.M]X -> 0x0[0EEM]000000
-  Value v3EM = shl(zext(i32_ty, and_(val32, i8_val(0x70))), i32_val(20));
-  // 0x[S.EE.M]X -> 0x0[000S]000000
-  Value v3S = shl(zext(i32_ty, and_(val32, i8_val(0x80))), i32_val(20 - 3));
-
-  Value selectorEM = or_(v3EM, or_(v2EM, or_(v1EM, v0EM)));
-  Value selectorS = or_(v3S, or_(v2S, or_(v1S, v0S)));
-  return {selectorEM, selectorS};
-}
-
-SmallVector<Value, 2> upcast4xMxfp4(RewriterBase &rewriter,
+SmallVector<Value, 4> upcast8xMxfp4(RewriterBase &rewriter,
                                     UpcastMXFPOp upcastOp, bool tofp16,
-                                    ArrayRef<Value> inputs) {
-  assert(inputs.size() == 2);
+                                    Value packedVec) {
   Location loc = upcastOp.getLoc();
 
   // MXFP4 has 4 bits, S.EE.M, for Sign, Exponent, and Mantissa respectively.
@@ -67,9 +34,6 @@ SmallVector<Value, 2> upcast4xMxfp4(RewriterBase &rewriter,
   // implement such a LUT; though we need to select the two bytes for the
   // resultant bf16/fp16 bit patterns separately. For the byte containing S, we
   // also need to handle the S and E bits separately.
-
-  auto [selectorEM, selectorS] =
-      composePermuteSelectors(loc, rewriter, inputs[0], inputs[1]);
 
   // FP4 has 4 bits: S.EE.M. Bf16/fp16 bit patterns for positive values:
   //
@@ -90,55 +54,133 @@ SmallVector<Value, 2> upcast4xMxfp4(RewriterBase &rewriter,
   // Encode Byte #1 (EM, non-S part) for BF16/FP16 in a LUT.
   Value resB1LutLoNoS = tofp16 ? i32_val(0x3e3c3800) : i32_val(0x3f3f3f00);
   Value resB1LutHiNoS = tofp16 ? i32_val(0x46444240) : i32_val(0x40404040);
-  // Encode Byte #1 (S part) for BF16/FP16 in a LUT.
-  Value resB1LutLoS = i32_val(0x8000);
-  Value resB1LutHiS = i32_val(0);
 
   Type i32Ty = rewriter.getI32Type();
   auto permU32FnTy = LLVM::LLVMFunctionType::get(i32Ty, {i32Ty, i32Ty, i32Ty});
   LLVM::LLVMFuncOp funcOp = appendOrGetExternFuncOp(
       rewriter, upcastOp, "llvm.amdgcn.perm", permU32FnTy);
 
-  // Select Byte #0 for all 4 mxfp4 values. It's always 0 if upcasting to fp16.
-  Value resB0 = i32_val(0);
+  // Start with 8 mxfp4 elements in a single i32 register
+  // | e7e6 | e5e4 | e3e2 | e1e0 |
+  Value input = bitcast(packedVec, i32Ty);
+
+  // Step 1: extract EM bits for elements 0,2,4,6 and 1,3,5,7 respectively.
+  // e2m1_6420_idx = | 0[0e6EM] | 0[0e4EM] | 0[0e2EM] | 0[0e0EM] |
+  Value e2m1_6420_idx = and_(input, i32_val(0x07070707));
+  // e2m1_7531_idx = | [0e7EM]0 | [0e5EM]0 | [0e3EM]0 | [0e1EM]0 |
+  Value e2m1_7531_idx = and_(input, i32_val(0x70707070));
+  // e2m1_7531_idx = | 0[0e7EM] | 0[0e5EM] | 0[0e3EM] | 0[0e1EM] |
+  e2m1_7531_idx = lshr(e2m1_7531_idx, i32_val(4));
+
+  // Step 2: extract S bit for elements 0,2,4,6 and 1,3,5,7
+  // s_6420 = | 0[e6S000] | 0[e4S000] | 0[e2S000] | 0[e0S000] |
+  Value s_6420 = and_(input, i32_val(0x08080808));
+  // s_6420 = | [e6S000]0 | [e4S000]0 | [e2S000]0 | [e0S000]0 |
+  s_6420 = shl(s_6420, i32_val(4));
+  // s_7531 = | [e7S000]0 | [e5S000]0 | [e3S000]0 | [e1S000]0 |
+  Value s_7531 = and_(input, i32_val(0x80808080));
+
+  // Step 3: Upcast elements 0,2,4,6 to 4 16-bit elements
+  // Select Byte #0. It's always 0 if upcasting to fp16.
+  // resB0_6420 = | e6B0 | e4B0 | e2B0 | e0B0 |
+  Value resB0_6420 = i32_val(0);
   if (!tofp16) {
-    resB0 = LLVM::createLLVMCallOp(rewriter, loc, funcOp,
-                                   {resB0LutHi, resB0LutLo, selectorEM})
-                .getResult();
+    resB0_6420 = LLVM::createLLVMCallOp(rewriter, loc, funcOp,
+                                        {resB0LutHi, resB0LutLo, e2m1_6420_idx})
+                     .getResult();
   }
-  // Select Byte #1 for all 4 mxfp4 values.
-  auto resB1NoS = LLVM::createLLVMCallOp(
-      rewriter, loc, funcOp, {resB1LutHiNoS, resB1LutLoNoS, selectorEM});
-  auto resB1S = LLVM::createLLVMCallOp(rewriter, loc, funcOp,
-                                       {resB1LutHiS, resB1LutLoS, selectorS});
-  Value restB1 = or_(resB1NoS.getResult(), resB1S.getResult());
+  // Select Byte #1
+  Value resB1NoS_6420 =
+      LLVM::createLLVMCallOp(rewriter, loc, funcOp,
+                             {resB1LutHiNoS, resB1LutLoNoS, e2m1_6420_idx})
+          .getResult();
+  // resB1_6420 = | e6B1 | e4B1 | e2B1 | e0B1 |
+  Value resB1_6420 = or_(resB1NoS_6420, s_6420);
+  // Construct 16-bit values of e0 and e2
+  // res_20 = | e2B1 | e2B0 | e0B1 | e0B0 | = | e2_f16 | e0_f16 |
+  Value res_20 =
+      LLVM::createLLVMCallOp(rewriter, loc, funcOp,
+                             {resB1_6420, resB0_6420, i32_val(0x05010400)})
+          .getResult();
+  // Construct 16-bit values of e4 and e6
+  // res_64 = | e6B1 | e6B0 | e4B1 | e4B0 | = | e6_f16 | e4_f16 |
+  Value res_64 =
+      LLVM::createLLVMCallOp(rewriter, loc, funcOp,
+                             {resB1_6420, resB0_6420, i32_val(0x07030602)})
+          .getResult();
 
-  // Extract resultant bf16/fp16 values #0 and #1.
-  // #0 would use selector 0x00/0x04 to pick from B0/B1.
-  // #1 would use selector 0x01/0x05 to pick from B0/B1.
-  auto res10 = LLVM::createLLVMCallOp(rewriter, loc, funcOp,
-                                      {restB1, resB0, i32_val(0x05010400)});
-  // Extract resultant bf16/fp16 values #2 and #3.
-  // #2 would use selector 0x02/0x06 to pick from B0/B1.
-  // #3 would use selector 0x03/0x07 to pick from B0/B1.
-  auto res32 = LLVM::createLLVMCallOp(rewriter, loc, funcOp,
-                                      {restB1, resB0, i32_val(0x07030602)});
+  // Step 4: Upcast elements 1,3,5,7 to 4 16-bit elements
+  // This is a copy of step 3 on different group of elements
+  // Select Byte #0. It's always 0 if upcasting to fp16.
+  // resB0_7531 = | e7B0 | e5B0 | e3B0 | e1B0 |
+  Value resB0_7531 = i32_val(0);
+  if (!tofp16) {
+    resB0_7531 = LLVM::createLLVMCallOp(rewriter, loc, funcOp,
+                                        {resB0LutHi, resB0LutLo, e2m1_7531_idx})
+                     .getResult();
+  }
+  // Select Byte #1
+  Value resB1NoS_7531 =
+      LLVM::createLLVMCallOp(rewriter, loc, funcOp,
+                             {resB1LutHiNoS, resB1LutLoNoS, e2m1_7531_idx})
+          .getResult();
+  // resB1_7531 = | e7B1 | e5B1 | e3B1 | e1B1 |
+  Value resB1_7531 = or_(resB1NoS_7531, s_7531);
+  // Construct 16-bit values of e1 and e3
+  // res_31 = | e3B1 | e3B0 | e1B1 | e1B0 | = | e3_f16 | e1_f16 |
+  Value res_31 =
+      LLVM::createLLVMCallOp(rewriter, loc, funcOp,
+                             {resB1_7531, resB0_7531, i32_val(0x05010400)})
+          .getResult();
+  // Construct 16-bit values of e5 and e7
+  // res_75 = | e7B1 | e7B0 | e5B1 | e5B0 | = | e7_f16 | e5_f16 |
+  Value res_75 =
+      LLVM::createLLVMCallOp(rewriter, loc, funcOp,
+                             {resB1_7531, resB0_7531, i32_val(0x07030602)})
+          .getResult();
 
-  return {res10.getResult(), res32.getResult()};
+  // Step 5: Reorder 16-bit elements to be 0,1,2,3,4,5,6,7
+  // res_10 = | e1_f16 | e0_f16 |
+  Value res_10 = LLVM::createLLVMCallOp(rewriter, loc, funcOp,
+                                        {res_31, res_20, i32_val(0x05040100)})
+                     .getResult();
+  // res_32 = | e3_f16 | e2_f16 |
+  Value res_32 = LLVM::createLLVMCallOp(rewriter, loc, funcOp,
+                                        {res_31, res_20, i32_val(0x07060302)})
+                     .getResult();
+  // res_54 = | e5_f16 | e4_f16 |
+  Value res_54 = LLVM::createLLVMCallOp(rewriter, loc, funcOp,
+                                        {res_75, res_64, i32_val(0x05040100)})
+                     .getResult();
+  // res_76 = | e7_f16 | e6_f16 |
+  Value res_76 = LLVM::createLLVMCallOp(rewriter, loc, funcOp,
+                                        {res_75, res_64, i32_val(0x07060302)})
+                     .getResult();
+
+  return {res_10, res_32, res_54, res_76};
 }
 
 SmallVector<Value> upcastMxfp4(RewriterBase &rewriter, UpcastMXFPOp upcastOp,
                                bool toFp16, ArrayRef<Value> values) {
-  assert(values.size() % 2 == 0);
+  assert(values.size() % 4 == 0);
   Location loc = upcastOp.getLoc();
 
   SmallVector<Value> results;
   results.reserve(values.size() * 2);
   Type elemType = toFp16 ? f16_ty : bf16_ty;
-  for (int i = 0; i < values.size(); i += 2) {
-    SmallVector<Value, 2> v4i32 =
-        upcast4xMxfp4(rewriter, upcastOp, toFp16, values.slice(i, 2));
-    for (int j = 0; j < 2; j++) {
+  for (int i = 0; i < values.size(); i += 4) {
+    Value v0 = values[i];
+    Value v1 = values[i + 1];
+    Value v2 = values[i + 2];
+    Value v3 = values[i + 3];
+    Value packedVec = undef(vec_ty(i8_ty, 4));
+    packedVec = insert_element(packedVec, v0, i32_val(0));
+    packedVec = insert_element(packedVec, v1, i32_val(1));
+    packedVec = insert_element(packedVec, v2, i32_val(2));
+    packedVec = insert_element(packedVec, v3, i32_val(3));
+    SmallVector<Value, 4> v4i32 =
+        upcast8xMxfp4(rewriter, upcastOp, toFp16, packedVec);
+    for (int j = 0; j < 4; j++) {
       Value elements = bitcast(v4i32[j], vec_ty(elemType, 2));
       results.push_back(extract_element(elements, i32_val(0)));
       results.push_back(extract_element(elements, i32_val(1)));
@@ -291,7 +333,7 @@ public:
           int index = 32 * i + j;
           xVals[index] = useFp16
                              ? mxfpScaleFp16(rewriter, loc, xVals[index],
-                                             si[j / 16], op.getFastMath())
+                                             si[j / 8], op.getFastMath())
                              : mxfpScaleBf16ViaF32(rewriter, loc, xVals[index],
                                                    si[j / 8], op.getFastMath());
         }
