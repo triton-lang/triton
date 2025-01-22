@@ -50,7 +50,7 @@ public:
       auto kWidth = dotEnc.getKWidth();
       auto rank = dstTy.getRank();
       auto kOrder = dotEnc.getOpIdx() == 0 ? rank - 1 : rank - 2;
-      auto noneKOrder = dotEnc.getOpIdx() == 0 ? rank - 2 : rank - 1;
+      auto nonKOrder = dotEnc.getOpIdx() == 0 ? rank - 2 : rank - 1;
       auto needTrans = kOrder != sharedEnc.getOrder()[0];
       // Limitation 1: Cannot use ldmatrix if we need to transpose a non-fp16
       // matrix
@@ -81,7 +81,7 @@ public:
       auto canUseLdmatrixLL = canUseLdmatrixLegacy;
       if (dotEnc.getOpIdx() == 0) {
         canUseLdmatrixLL &=
-            shape[kOrder] >= (16 * 16 / bitwidth) && shape[noneKOrder] >= 16;
+            shape[kOrder] >= (16 * 16 / bitwidth) && shape[nonKOrder] >= 16;
       } else {
         // Limitation 8 [TODO: remove]: Due to the use of ldmatrix.x4, we need
         // to read 4 tiles. For opIdx=1, a single warp load four consecutive
@@ -91,7 +91,7 @@ public:
         // It might be better to use ldmatrix.x2 in such a case instead of
         // abandoning elements.
         canUseLdmatrixLL &=
-            shape[kOrder] >= (32 * 16 / bitwidth) && shape[noneKOrder] >= 16;
+            shape[kOrder] >= (32 * 16 / bitwidth) && shape[nonKOrder] >= 16;
       }
       // Limitation 9 [TODO: remove]:
       // If we remove this one, ldmatrix will IMA. It can probably be relaxed
@@ -154,7 +154,6 @@ private:
     auto shape = dstTy.getShape();
     auto rank = dstTy.getRank();
     auto kOrder = dotEnc.getOpIdx() == 0 ? rank - 1 : rank - 2;
-    auto noneKOrder = dotEnc.getOpIdx() == 0 ? rank - 2 : rank - 1;
     auto needTrans = kOrder != sharedEnc.getOrder()[0];
 
     auto llvmElemTy = typeConverter->convertType(dstTy.getElementType());
@@ -167,7 +166,7 @@ private:
     auto allocShape = srcTy.getAllocShape();
     auto allocSharedLayout =
         toLinearLayout(allocShape.take_back(rank), sharedEnc, bitwidth);
-    auto invertAllocSharedLayout = allocSharedLayout.invert();
+    auto invertAllocSharedLayout = allocSharedLayout.pseudoinvert();
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                          llvmElemTy, rewriter);
 
