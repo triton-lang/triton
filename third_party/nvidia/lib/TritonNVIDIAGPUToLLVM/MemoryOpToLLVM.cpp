@@ -160,41 +160,30 @@ private:
     auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
     auto ldmatrixLayout =
         chooseLdMatrixLayout(dotEnc, shape, needTrans, bitwidth);
-    auto sharedLayout = toLinearLayout(shape, sharedEnc);
-    auto ldmatrixToSharedLayout = ldmatrixLayout.invertAndCompose(sharedLayout);
-
-    auto allocShape = srcTy.getAllocShape();
-    auto allocSharedLayout =
-        toLinearLayout(allocShape.take_back(rank), sharedEnc, bitwidth);
-    auto invertAllocSharedLayout = allocSharedLayout.pseudoinvert();
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                          llvmElemTy, rewriter);
 
-    auto kRegister = str_attr("register");
-    auto kLane = str_attr("lane");
-    auto [laneId, warpId, blockId] =
-        emitHardwareTuple(loc, rewriter, targetInfo, /*withCTAOffset=*/0,
-                          ldmatrixToSharedLayout.getInDimSize(kLane));
-    auto numRegs = ldmatrixToSharedLayout.getInDimSize(kRegister);
-    auto vecSize = ldmatrixToSharedLayout.getNumConsecutiveInOut();
-    auto matTy =
-        LLVM::LLVMStructType::getLiteral(ctx, SmallVector<Type>(4, i32_ty));
+    // Emit ldmatrix load operations for values packed in i32s
     SmallVector<Value> elemsI32;
-    auto smemPtrTy = ptr_ty(ctx, 3);
-    for (int i = 0; i < numRegs; i += vecSize) {
-      auto vecAddr =
-          getSmemVecAddr(ldmatrixLayout, ldmatrixToSharedLayout,
-                         invertAllocSharedLayout, smemObj, srcTy, llvmElemTy,
-                         i32_val(i), laneId, warpId, blockId, loc, rewriter);
-      auto ldMatrixOp = rewriter.create<nvgpu::LoadMatrixOp>(
-          loc, matTy, vecAddr, /*needTrans=*/needTrans);
-      auto resV4 = ldMatrixOp.getResult();
-      elemsI32.push_back(extract_val(i32_ty, resV4, 0));
-      elemsI32.push_back(extract_val(i32_ty, resV4, 1));
-      elemsI32.push_back(extract_val(i32_ty, resV4, 2));
-      elemsI32.push_back(extract_val(i32_ty, resV4, 3));
-    }
+    bool valid = emitTransferBetweenRegistersAndShared(
+        ldmatrixLayout, srcTy, llvmElemTy,
+        /*maxVecElems=*/std::nullopt, smemObj, loc, rewriter, targetInfo,
+        [&](VectorType vecTy, Value vecAddr) {
+          auto numElems = vecTy.getNumElements();
+          auto numElemsI32 = numElems * bitwidth / 32;
+          auto matTy = LLVM::LLVMStructType::getLiteral(
+              ctx, SmallVector<Type>(numElemsI32, i32_ty));
+          auto ldMatrixOp = rewriter.create<nvgpu::LoadMatrixOp>(
+              loc, matTy, vecAddr, /*needTrans=*/needTrans);
+          auto resV4 = ldMatrixOp.getResult();
+          elemsI32.push_back(extract_val(i32_ty, resV4, 0));
+          elemsI32.push_back(extract_val(i32_ty, resV4, 1));
+          elemsI32.push_back(extract_val(i32_ty, resV4, 2));
+          elemsI32.push_back(extract_val(i32_ty, resV4, 3));
+        });
+    assert(valid && "Failed to emit ldmatrix load operations");
 
+    // Unpack i32 values to the original type
     SmallVector<Value> elems;
     auto numElemsPerVec = 32 / bitwidth;
     auto vecTy = vec_ty(llvmElemTy, numElemsPerVec);

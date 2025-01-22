@@ -1029,6 +1029,12 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
     const TargetInfoBase &target,
     std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback);
 
+[[nodiscard]] bool emitTransferBetweenRegistersAndShared(
+    LinearLayout &regLayout, triton::gpu::MemDescType sharedTy, Type elemLlvmTy,
+    std::optional<int32_t> maxVecElems, const SharedMemoryObject &smemObj,
+    Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
+    std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback);
+
 SmallVector<Value> loadSharedToDistributed(RankedTensorType dstTy,
                                            triton::gpu::MemDescType srcTy,
                                            Type elemLlvmTy,
@@ -1132,14 +1138,6 @@ isSimpleSharedMemoryAccess(ArrayRef<int64_t> shape,
          /*swizzling and rank-reduced and rank >= 2*/
          (shape == allocShape.take_back(rank) && rank >= 2);
 }
-
-Value getSmemVecAddr(const LinearLayout &regLayout,
-                     const LinearLayout &regToSharedLayout,
-                     const LinearLayout &invertAllocSharedLayout,
-                     const SharedMemoryObject &smemObj,
-                     triton::gpu::MemDescType sharedTy, Type elemLlvmTy,
-                     Value regId, Value laneId, Value warpId, Value blockId,
-                     Location loc, RewriterBase &rewriter);
 
 } // namespace mlir
 
