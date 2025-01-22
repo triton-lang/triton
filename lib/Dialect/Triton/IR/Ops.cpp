@@ -679,6 +679,14 @@ LogicalResult ReshapeOp::canonicalize(ReshapeOp op, PatternRewriter &rewriter) {
 }
 
 OpFoldResult ReshapeOp::fold(FoldAdaptor adaptor) {
+  if (getAllowReorder()) {
+    for (auto *use : (*this)->getUsers()) {
+      if (auto reducOp = dyn_cast<ReduceOp>(use)) {
+        // Don't fold allow_reorder used by reduce op.
+        return {};
+      }
+    }
+  }
   if (getType() == getSrc().getType()) {
     // no-op
     return getSrc();
