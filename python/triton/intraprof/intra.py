@@ -1,7 +1,7 @@
 from typing import Optional
 from dataclasses import dataclass
 import torch
-# import triton
+import triton
 
 
 @dataclass(frozen=True)
@@ -51,9 +51,8 @@ def init(config=dict()):
         return
 
     state = State()
-    # device = triton.runtime.driver.active.get_current_device()
-    # shared_mem = triton.runtime.driver.active.utils.get_device_properties(device)["max_shared_mem"]
-    shared_mem = 220 * 1024
+    device = triton.runtime.driver.active.get_current_device()
+    shared_mem = triton.runtime.driver.active.utils.get_device_properties(device)["max_shared_mem"]
     args = {'max_shared': shared_mem}
     args.update({k: config[k] for k in Config.__dataclass_fields__.keys() if k in config})
     state.config = Config(**args)
@@ -85,7 +84,7 @@ def _alloc_fn(size: int, alignment: int, stream: Optional[int]):
 def activate():
     global activated
     activated = True
-    # triton.set_allocator(_alloc_fn)
+    triton.set_allocator(_alloc_fn)
 
 
 def deactivate():
