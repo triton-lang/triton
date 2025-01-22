@@ -1656,6 +1656,28 @@ def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, check_return_val,
 
 
 @pytest.mark.interpreter
+@pytest.mark.parametrize("size, num_ctas, dtype_x_str", [(size, num_ctas, dtype_x_str)
+                                                         for size in [2, 4, 8, 32, 64, 128]
+                                                         for num_ctas in num_ctas_list
+                                                         for dtype_x_str in ['float16']])
+def test_tensor_atomic_add_non_exclusive_offset(size, num_ctas, dtype_x_str, device):
+
+    @triton.jit
+    def kernel(X, val, NUM: tl.constexpr):
+        off = tl.arange(0, NUM)
+        offset = off[:, None] * NUM + off[None, :]
+        val = tl.load(val + offset)
+        tl.atomic_add(X + offset // 2, val)
+
+    shape = (size // 2, size)
+    x = torch.zeros(shape, dtype=getattr(torch, dtype_x_str), device=device)
+    val = torch.randn((size**2), dtype=getattr(torch, dtype_x_str), device=device)
+    kernel[(1, )](x, val, size, num_warps=1, num_ctas=num_ctas)
+    ref = val[0::2] + val[1::2]
+    torch.testing.assert_close(ref, x.reshape(math.prod(shape)))
+
+
+@pytest.mark.interpreter
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_tensor_atomic_rmw_block(num_ctas, device):
     shape = (8, 8)
