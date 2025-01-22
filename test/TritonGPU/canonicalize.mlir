@@ -40,7 +40,7 @@ tt.func @test_canonicalize_convert_expensive_view(%arg0: tensor<256x16xf32, #blo
 
 // -----
 
-// test that the convert does get combined with even view if the resulting operation
+// test that the convert does get combined with the view even if the resulting operation
 // is an efficient view.
 // CHECK-LABEL: @test_canonicalize_convert_view
 // CHECK-SAME: (%[[ARG:.+]]: tensor<64x64xf32
