@@ -142,9 +142,9 @@ def rms_kernel(output_ptr, input_ptr, g_ptr, rsigma_ptr, input_row_stride, outpu
 
 
 @triton.jit
-def rms_bwd_kernel(grad_output_ptr, input_ptr, g_ptr, rsigma_ptr, dx_input_ptr, dg_ptr, input_row_stride,
-                   output_row_stride, n_rows, n_cols, epsilon, ZERO_CENTERED_GAMMA: tl.constexpr,
-                   BLOCK_SIZE: tl.constexpr, USE_BLOCKED: tl.constexpr, NUM_PRGMS: tl.constexpr):
+def rms_bwd_kernel(grad_output_ptr, input_ptr, g_ptr, rsigma_ptr, dx_ptr, dg_ptr, input_row_stride, output_row_stride,
+                   n_rows, n_cols, epsilon, ZERO_CENTERED_GAMMA: tl.constexpr, BLOCK_SIZE: tl.constexpr,
+                   USE_BLOCKED: tl.constexpr, NUM_PRGMS: tl.constexpr):
     row_start = tl.program_id(0)
     col_offsets = tl.arange(0, BLOCK_SIZE)
     tl.assume(input_row_stride >= 0)
@@ -154,10 +154,8 @@ def rms_bwd_kernel(grad_output_ptr, input_ptr, g_ptr, rsigma_ptr, dx_input_ptr, 
     if USE_BLOCKED:
         for row_idx in tl.range(row_start, n_rows, NUM_PRGMS, num_stages=1):
             row_input_ptr = input_ptr + row_idx * input_row_stride
-            row_g_ptr = g_ptr + row_idx * input_row_stride
             row_grad_output_ptr = grad_output_ptr + row_idx * output_row_stride
-            row_dx_input_ptr = dx_input_ptr + row_idx * input_row_stride
-            row_dg_input_ptr = dg_ptr + row_idx * input_row_stride
+            row_dx_ptr = dx_ptr + row_idx * input_row_stride
 
             # Compute gradients sum of all colums for each row
             n_cols_blks = tl.cdiv(n_cols, BLOCK_SIZE) - 1
@@ -172,7 +170,7 @@ def rms_bwd_kernel(grad_output_ptr, input_ptr, g_ptr, rsigma_ptr, dx_input_ptr, 
 
                 x = tl.load(input_ptrs).to(tl.float32)
                 grad_output = tl.load(grad_output_ptrs).to(tl.float32)
-                g_ptrs = row_g_ptr + cols
+                g_ptrs = g_ptr + cols
                 g = tl.load(g_ptrs).to(tl.float32)
                 if (ZERO_CENTERED_GAMMA):
                     g += 1
@@ -185,7 +183,7 @@ def rms_bwd_kernel(grad_output_ptr, input_ptr, g_ptr, rsigma_ptr, dx_input_ptr, 
             x = tl.load(input_ptrs, mask=mask, other=0.0).to(tl.float32)
             grad_output_ptrs = row_grad_output_ptr + cols
             grad_output = tl.load(grad_output_ptrs, mask=mask, other=0.0).to(tl.float32)
-            g_ptrs = row_g_ptr + cols
+            g_ptrs = g_ptr + cols
             g = tl.load(g_ptrs, mask=mask, other=0.0).to(tl.float32)
             if (ZERO_CENTERED_GAMMA):
                 g += 1
@@ -205,19 +203,19 @@ def rms_bwd_kernel(grad_output_ptr, input_ptr, g_ptr, rsigma_ptr, dx_input_ptr, 
                 x = tl.load(input_ptrs).to(tl.float32)
                 grad_output = tl.load(grad_output_ptrs).to(tl.float32)
 
-                g_ptrs = row_g_ptr + cols
+                g_ptrs = g_ptr + cols
                 g = tl.load(g_ptrs).to(tl.float32)
                 if (ZERO_CENTERED_GAMMA):
                     g += 1
                 grad_input = grad_output * norm_factor * g - (norm_factor * norm_factor * norm_factor) * x * (grad_sum /
                                                                                                               n_cols)
 
-                dx_input_ptrs = row_dx_input_ptr + cols
-                tl.store(dx_input_ptrs, grad_input.to(dx_input_ptr.type.element_ty))
+                dx_ptrs = row_dx_ptr + cols
+                tl.store(dx_ptrs, grad_input.to(dx_ptr.type.element_ty))
 
-                dg_input_ptrs = row_dg_input_ptr + cols
                 dg = grad_output * x * norm_factor
-                tl.store(dg_input_ptrs, dg.to(dg_ptr.type.element_ty))
+                dg_ptrs = dg_ptr + cols
+                tl.store(dg_ptrs, dg.to(dg_ptr.type.element_ty))
 
             # Handle remainder
             cols = n_cols_blks * BLOCK_SIZE + col_offsets
@@ -227,32 +225,30 @@ def rms_bwd_kernel(grad_output_ptr, input_ptr, g_ptr, rsigma_ptr, dx_input_ptr, 
             x = tl.load(input_ptrs, mask=mask, other=0.0).to(tl.float32)
             grad_output_ptrs = row_grad_output_ptr + cols
             grad_output = tl.load(grad_output_ptrs, mask=mask, other=0.0).to(tl.float32)
-            g_ptrs = row_g_ptr + cols
+            g_ptrs = g_ptr + cols
             g = tl.load(g_ptrs, mask=mask, other=0.0).to(tl.float32)
             if (ZERO_CENTERED_GAMMA):
                 g += 1
             grad_input = grad_output * norm_factor * g - (norm_factor * norm_factor * norm_factor) * x * (grad_sum /
                                                                                                           n_cols)
 
-            dx_input_ptrs = row_dx_input_ptr + cols
-            tl.store(dx_input_ptrs, grad_input.to(dx_input_ptr.type.element_ty), mask=mask)
+            dx_ptrs = row_dx_ptr + cols
+            tl.store(dx_ptrs, grad_input.to(dx_ptr.type.element_ty), mask=mask)
 
             dg = grad_output * x * norm_factor
-            dg_input_ptrs = row_dg_input_ptr + cols
-            tl.store(dg_input_ptrs, dg.to(dg_ptr.type.element_ty), mask=mask)
+            dg_ptrs = dg_ptr + cols
+            tl.store(dg_ptrs, dg.to(dg_ptr.type.element_ty), mask=mask)
 
     else:
         mask = col_offsets < n_cols
         for row_idx in tl.range(row_start, n_rows, NUM_PRGMS, num_stages=2):
             input_ptrs = input_ptr + row_idx * input_row_stride + col_offsets
             grad_output_ptrs = grad_output_ptr + row_idx * output_row_stride + col_offsets
-            dx_input_ptrs = dx_input_ptr + row_idx * input_row_stride + col_offsets
-            dg_input_ptrs = dg_ptr + row_idx * input_row_stride + col_offsets
+            dx_ptrs = dx_ptr + row_idx * input_row_stride + col_offsets
 
             input_ptrs = tl.multiple_of(input_ptrs, (16, ))
             grad_output_ptrs = tl.multiple_of(grad_output_ptrs, (16, ))
-            dx_input_ptrs = tl.multiple_of(dx_input_ptrs, (16, ))
-            dg_input_ptrs = tl.multiple_of(dg_input_ptrs, (16, ))
+            dx_ptrs = tl.multiple_of(dx_ptrs, (16, ))
 
             x = tl.load(input_ptrs, mask=mask, other=0.0).to(tl.float32)
             grad_output = tl.load(grad_output_ptrs, mask=mask, other=0.0).to(tl.float32)
@@ -265,10 +261,10 @@ def rms_bwd_kernel(grad_output_ptr, input_ptr, g_ptr, rsigma_ptr, dx_input_ptr, 
 
             grad_input = grad_output * norm_factor * g - (norm_factor * norm_factor * norm_factor) * x * (grad_sum /
                                                                                                           n_cols)
-            tl.store(dx_input_ptrs, grad_input.to(dx_input_ptr.type.element_ty), mask=mask)
+            tl.store(dx_ptrs, grad_input.to(dx_ptr.type.element_ty), mask=mask)
 
             dg = grad_output * x * norm_factor
-            tl.store(dg_input_ptrs, dg.to(dg_ptr.type.element_ty), mask=mask)
+            tl.store(dg_ptr + col_offsets, dg.to(dg_ptr.type.element_ty), mask=mask)
 
 
 def triton_rmsnorm_backward(grad_output, x, g, rsigma, dx, dg, n_rows, n_cols, ZERO_CENTERED_GAMMA, blk_size,
