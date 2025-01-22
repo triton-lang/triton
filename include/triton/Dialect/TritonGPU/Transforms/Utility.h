@@ -205,11 +205,6 @@ enum class MMALoadType {
 };
 MMALoadType getMMALoadType(Operation *loadOp);
 
-// Returns composed LinearLayout for register to shared copy
-triton::LinearLayout getRegToSharedLayout(MLIRContext *ctx,
-                                          ArrayRef<int64_t> shape,
-                                          Attribute srcEnc, Attribute dstEnc,
-                                          int elemBitWidth);
 } // namespace mlir
 
 #endif // TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_
