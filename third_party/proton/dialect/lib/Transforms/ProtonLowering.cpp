@@ -149,7 +149,7 @@ public:
 
     mlir::RewritePatternSet patterns(context);
     patterns.add<RecordOpLowering>(context, buffer, index);
-    if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
+    if (applyPatternsGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
 
     // Finalize the profiler, adding FinalizedOp before return.
