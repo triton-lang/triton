@@ -700,7 +700,7 @@ LogicalResult ReshapeOp::canonicalize(ReshapeOp op, PatternRewriter &rewriter) {
 }
 
 OpFoldResult ReshapeOp::fold(FoldAdaptor adaptor) {
-  if (getType() == getSrc().getType()) {
+  if (getType() == getSrc().getType() && !getAllowReorder()) {
     // no-op
     return getSrc();
   }
