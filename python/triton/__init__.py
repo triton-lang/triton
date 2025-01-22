@@ -5,7 +5,6 @@ __version__ = '3.2.0'
 # Note: import order is significant here.
 
 # submodules
-from . import intraprof
 from .runtime import (
     autotune,
     Config,
@@ -26,6 +25,7 @@ from .runtime._allocation import set_allocator
 from . import language
 from . import testing
 from . import tools
+from . import intraprof
 
 __all__ = [
     "autotune",
