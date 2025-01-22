@@ -1133,6 +1133,14 @@ isSimpleSharedMemoryAccess(ArrayRef<int64_t> shape,
          (shape == allocShape.take_back(rank) && rank >= 2);
 }
 
+Value getSmemVecAddr(const LinearLayout &regLayout,
+                     const LinearLayout &regToSharedLayout,
+                     const LinearLayout &invertAllocSharedLayout,
+                     const SharedMemoryObject &smemObj,
+                     triton::gpu::MemDescType sharedTy, Type elemLlvmTy,
+                     Value regId, Value laneId, Value warpId, Value blockId,
+                     Location loc, RewriterBase &rewriter);
+
 } // namespace mlir
 
 #endif

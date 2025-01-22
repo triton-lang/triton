@@ -168,28 +168,14 @@ private:
     auto allocSharedLayout =
         toLinearLayout(allocShape.take_back(rank), sharedEnc, bitwidth);
     auto invertAllocSharedLayout = allocSharedLayout.invert();
-
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                          llvmElemTy, rewriter);
-    auto smemOffsets = smemObj.getOffsets();
-    auto smemStrides = smemObj.getStrides(srcTy, loc, rewriter);
-    Value baseToAllocBaseDist =
-        mlir::dot(rewriter, loc, smemOffsets, smemStrides);
 
     auto kRegister = str_attr("register");
     auto kLane = str_attr("lane");
-    auto kWarp = str_attr("warp");
-    auto kBlock = str_attr("block");
     auto [laneId, warpId, blockId] =
         emitHardwareTuple(loc, rewriter, targetInfo, /*withCTAOffset=*/0,
                           ldmatrixToSharedLayout.getInDimSize(kLane));
-
-    auto regBase = applyLinearLayout(loc, rewriter, ldmatrixToSharedLayout,
-                                     {{kRegister, i32_val(0)},
-                                      {kLane, laneId},
-                                      {kWarp, warpId},
-                                      {kBlock, i32_val(0)}})[0]
-                       .second;
     auto numRegs = ldmatrixToSharedLayout.getInDimSize(kRegister);
     auto vecSize = ldmatrixToSharedLayout.getNumConsecutiveInOut();
     auto matTy =
@@ -197,32 +183,10 @@ private:
     SmallVector<Value> elemsI32;
     auto smemPtrTy = ptr_ty(ctx, 3);
     for (int i = 0; i < numRegs; i += vecSize) {
-      Value offset;
-      if (isSimpleSharedMemoryAccess(shape, allocShape, sharedEnc)) {
-        auto regOffset =
-            ldmatrixToSharedLayout
-                .apply({{kRegister, i}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}})[0]
-                .second;
-        offset = xor_(regBase, i32_val(regOffset));
-      } else {
-        auto multiDimTensorOffsets =
-            llvm::to_vector(applyLinearLayout(loc, rewriter, ldmatrixLayout,
-                                              {{kRegister, i32_val(i)},
-                                               {kLane, laneId},
-                                               {kWarp, warpId},
-                                               {kBlock, i32_val(0)}}));
-        for (auto i = 0; i < rank; i++) {
-          multiDimTensorOffsets[i].second =
-              add(multiDimTensorOffsets[i].second, smemOffsets[i]);
-        }
-        offset = applyLinearLayout(loc, rewriter, invertAllocSharedLayout,
-                                   multiDimTensorOffsets)[0]
-                     .second;
-        offset = sub(offset, baseToAllocBaseDist);
-      }
-      auto vecAddr = gep(smemPtrTy, llvmElemTy, smemObj.getBase(), offset);
-      vecAddr.setInbounds(true);
-
+      auto vecAddr =
+          getSmemVecAddr(ldmatrixLayout, ldmatrixToSharedLayout,
+                         invertAllocSharedLayout, smemObj, srcTy, llvmElemTy,
+                         i32_val(i), laneId, warpId, blockId, loc, rewriter);
       auto ldMatrixOp = rewriter.create<nvgpu::LoadMatrixOp>(
           loc, matTy, vecAddr, /*needTrans=*/needTrans);
       auto resV4 = ldMatrixOp.getResult();

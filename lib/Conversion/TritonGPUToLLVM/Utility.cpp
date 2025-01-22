@@ -186,8 +186,6 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
   return ret;
 }
 
-namespace {
-
 Value getSmemVecAddr(const LinearLayout &regLayout,
                      const LinearLayout &regToSharedLayout,
                      const LinearLayout &invertAllocSharedLayout,
@@ -296,8 +294,6 @@ Value getSmemVecAddr(const LinearLayout &regLayout,
   vecAddr.setInbounds(true);
   return vecAddr;
 }
-
-} // namespace
 
 bool emitTransferBetweenRegistersAndShared(
     RankedTensorType registerTy, triton::gpu::MemDescType sharedTy,
