@@ -5,10 +5,11 @@ namespace mlir {
 static MfmaTypeId chooseAppropriateMfmaId(mlir::Type dataTypeA,
                                           mlir::Type dataTypeB,
                                           bool allowXF32) {
-  if (allowXF32 && dataTypeA.isF32() && dataTypeB.isF32()) {
-    return MfmaTypeId::Xf32TyId;
-  } else if (dataTypeA.isF32() && dataTypeB.isF32()) {
-    return MfmaTypeId::Fp32TyId;
+  if (dataTypeA.isF32() && dataTypeB.isF32()) {
+    if (allowXF32)
+      return MfmaTypeId::Xf32TyId;
+    else
+      return MfmaTypeId::Fp32TyId;
   }
   if (dataTypeA.isF16() && dataTypeB.isF16()) {
     return MfmaTypeId::Fp16TyId;
