@@ -232,6 +232,7 @@ the specified memory semantics and scope. Atomic RMW ops return the pre-op value
 <p>Syntax:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `amdgpu.buffer_load` $ptr `[` $offsets `]` (`,` $mask^)? (`,` $other^)?
               oilist(`cacheModifier` `=` $cache)
+              `stride` `=` $stride
               attr-dict `:` type($result)
 </pre></div>
 </div>
@@ -240,7 +241,12 @@ a normal store but it accesses global memory via a scalar base pointer
 and a tensor of offsets instead of a tensor of pointers. The other fields
 are similar to a normal load, i.e., the <code class="docutils literal notranslate"><span class="pre">mask</span></code> is a boolean vector that
 determines if a given element should be read from memory, and <code class="docutils literal notranslate"><span class="pre">other</span></code> is the
-element that should be returned on lane <code class="docutils literal notranslate"><span class="pre">i</span></code> when <code class="docutils literal notranslate"><span class="pre">mask[i]</span> <span class="pre">==</span> <span class="pre">0</span></code>.</p>
+element that should be returned on lane <code class="docutils literal notranslate"><span class="pre">i</span></code> when <code class="docutils literal notranslate"><span class="pre">mask[i]</span> <span class="pre">==</span> <span class="pre">0</span></code>.
+Stride is the distance between the beginning of contiguous memory chunks.
+When performing a load of a block, the <code class="docutils literal notranslate"><span class="pre">stride</span></code> is the address difference between
+the first elements of each row in bytes. Compiler tries to obtain the <code class="docutils literal notranslate"><span class="pre">stride</span></code>
+when it converts to the buffer ops because it is important for optimizing
+the cache memory access.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsAndResultEncoding</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Read</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory}</span></code></p>
@@ -273,10 +279,13 @@ element that should be returned on lane <code class="docutils literal notranslat
 <tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">offsets</span></code></p></td>
 <td><p>tensor of 32-bit signless integer values</p></td>
 </tr>
-<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">mask</span></code></p></td>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">stride</span></code></p></td>
+<td><p>32-bit signless integer</p></td>
+</tr>
+<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">mask</span></code></p></td>
 <td><p>ranked tensor of 1-bit signless integer values</p></td>
 </tr>
-<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">other</span></code></p></td>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">other</span></code></p></td>
 <td><p>ranked tensor of floating-point or integer or ptr values</p></td>
 </tr>
 </tbody>
@@ -304,6 +313,7 @@ element that should be returned on lane <code class="docutils literal notranslat
 <p>Syntax:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `amdgpu.buffer_store` $value `,` $ptr `[` $offsets `]` (`,` $mask^)?
               oilist(`cacheModifier` `=` $cache)
+              `stride` `=` $stride
               attr-dict `:` type($value)
 </pre></div>
 </div>
@@ -312,7 +322,12 @@ normal store but it accesses global memory via a scalar base pointer
 and a tensor of offsets instead of a tensor of pointers. The other fields
 are similar to a normal store , i.e., the <code class="docutils literal notranslate"><span class="pre">mask</span></code> is a boolean vector that
 determines if a given element should be written to memory, and <code class="docutils literal notranslate"><span class="pre">value</span></code> is the
-tensor of elements that should be written on lane <code class="docutils literal notranslate"><span class="pre">i</span></code> when <code class="docutils literal notranslate"><span class="pre">mask[i]</span> <span class="pre">==</span> <span class="pre">1</span></code>.</p>
+tensor of elements that should be written on lane <code class="docutils literal notranslate"><span class="pre">i</span></code> when <code class="docutils literal notranslate"><span class="pre">mask[i]</span> <span class="pre">==</span> <span class="pre">1</span></code>.
+Stride is the distance between the beginning of contiguous memory chunks.
+When performing a block store, the <code class="docutils literal notranslate"><span class="pre">stride</span></code> is the address difference between
+the first elements of each row in bytes. Compiler tries to obtain the <code class="docutils literal notranslate"><span class="pre">stride</span></code>
+when it converts to the buffer ops because it is important for optimizing
+the cache memory access.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsEncoding</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory}</span></code></p>
@@ -348,7 +363,10 @@ tensor of elements that should be written on lane <code class="docutils literal 
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">offsets</span></code></p></td>
 <td><p>tensor of 32-bit signless integer values</p></td>
 </tr>
-<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">mask</span></code></p></td>
+<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">stride</span></code></p></td>
+<td><p>32-bit signless integer</p></td>
+</tr>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">mask</span></code></p></td>
 <td><p>ranked tensor of 1-bit signless integer values</p></td>
 </tr>
 </tbody>

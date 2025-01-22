@@ -9,7 +9,7 @@ Syntax:
 ```
 operation ::= `ttng.async_tma_copy_global_to_local` $desc_ptr `[` $coord `]` $result `,` $barrier `,` $pred
               oilist(`cacheModifier` `=` $cache | `evictionPolicy` `=` $evict)
-              attr-dict `:` type($desc_ptr) `,` type($barrier) `->` type($result)
+              attr-dict `:` qualified(type($desc_ptr)) `,` qualified(type($barrier)) `->` qualified(type($result))
 ```
 
 This operation copies data from global memory to local memory
@@ -60,7 +60,7 @@ Syntax:
 
 ```
 operation ::= `ttng.async_tma_copy_local_to_global` $desc_ptr `[` $coord `]` $src
-              attr-dict `:` type($desc_ptr) `,` type($src)
+              attr-dict `:` qualified(type($desc_ptr)) `,` qualified(type($src))
 ```
 
 This operation copies data from local memory to global memory
@@ -89,7 +89,7 @@ _Signal a barrier of an expected number of bytes to be copied._
 Syntax:
 
 ```
-operation ::= `ttng.barrier_expect` $alloc `,` $size attr-dict `,` $pred `:` type($alloc)
+operation ::= `ttng.barrier_expect` $alloc `,` $size attr-dict `,` $pred `:` qualified(type($alloc))
 ```
 
 This signal the barrier that `size` bytes are expected to be copied. The
@@ -171,7 +171,7 @@ _Initialize a barrier in the given shared memory allocation._
 Syntax:
 
 ```
-operation ::= `ttng.init_barrier` $alloc `,` $count attr-dict `:` type($alloc)
+operation ::= `ttng.init_barrier` $alloc `,` $count attr-dict `:` qualified(type($alloc))
 ```
 
 Initializes a shared memory allocation with mbarrier information.
@@ -205,7 +205,7 @@ _Invalidate a barrier allocation._
 Syntax:
 
 ```
-operation ::= `ttng.inval_barrier` $alloc attr-dict `:` type($alloc)
+operation ::= `ttng.inval_barrier` $alloc attr-dict `:` qualified(type($alloc))
 ```
 
 Invalidate a barrier allocation so that it can be re-used. According to PTX
@@ -284,7 +284,7 @@ _Wait until the mbarrier phase completes._
 Syntax:
 
 ```
-operation ::= `ttng.wait_barrier` $alloc `,` $phase attr-dict `:` type($alloc)
+operation ::= `ttng.wait_barrier` $alloc `,` $phase attr-dict `:` qualified(type($alloc))
 ```
 
 Blocks the program progress until the mbarrier object in `alloc` completes
