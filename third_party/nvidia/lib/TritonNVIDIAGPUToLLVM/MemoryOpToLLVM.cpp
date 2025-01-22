@@ -70,14 +70,17 @@ public:
       }
       // Limitation 5: If we perform swizzling, it must be done within a single
       // ldmatrix tile
-      // Limitation 6 [TODO: remove]: Only support 2d matrices now but we should
-      // be able to support 3D minor changes
       auto maxPhase = sharedEnc.getMaxPhase();
       auto perPhase = sharedEnc.getPerPhase();
+      auto vecSize = sharedEnc.getVec();
       canUseLdmatrixLegacy &=
-          dstTy.getRank() <= 2 && (maxPhase / perPhase <= 8);
+          (maxPhase == 1) ||
+          ((maxPhase / perPhase <= 8) && (vecSize * bitwidth >= 8 * 16));
       auto shape = srcTy.getShape();
       auto allocShape = srcTy.getAllocShape();
+      // Limitation 6 [TODO: remove]: Only support 2d matrices now but we should
+      // be able to support 3D minor changes
+      canUseLdmatrixLegacy &= shape.size() <= 2;
       auto canUseLdmatrixLL = canUseLdmatrixLegacy;
       if (dotEnc.getOpIdx() == 0) {
         canUseLdmatrixLL &=
