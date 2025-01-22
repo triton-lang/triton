@@ -433,6 +433,31 @@ static Value convertBf16ToFp32(Location loc,
   return bitcast(shifted, f32_ty);
 }
 
+static Value buildGCNInstruction(Location loc,
+                                 ConversionPatternRewriter &rewritter,
+                                 const std::string &instr_name,
+                                 const SmallVector<std::string> &constraints,
+                                 const SmallVector<Value> &vals,
+                                 Type ret_type) {
+  assert(constraints.size() == vals.size() + 1);
+  assert(vals.size() == 2 or vals.size() == 3);
+  GCNBuilder builder;
+  auto &instr = *builder.create(instr_name);
+  auto out = builder.newOperand(constraints[0]);
+  SmallVector<GCNBuilder::Operand *> operands;
+  for (int i = 0; i < vals.size(); ++i) {
+    operands.push_back(builder.newOperand(vals[i], constraints[i + 1]));
+  }
+
+  if (vals.size() == 2) {
+    instr(out, operands[0], operands[1]);
+  } else {
+    instr(out, operands[0], operands[1], operands[2]);
+  }
+
+  return builder.launch(rewritter, loc, ret_type, false);
+}
+
 static Value convertFp32ToBf16(Location loc,
                                ConversionPatternRewriter &rewriter,
                                const Value &v, const RoundingMode rounding) {
@@ -448,44 +473,32 @@ static Value convertFp32ToBf16(Location loc,
   // https://github.com/ROCm/composable_kernel/blob/develop/include/ck_tile/core/numeric/bfloat16.hpp#L156-L182
   // It uses less VGPR and less number of instructions compared to the
   // previous implementation
-  GCNBuilder builder;
-  std::string cmp_ins_str = "v_cmp_u_f32";
-  auto &check_nan = *builder.create(cmp_ins_str);
-  std::string ins_bfe = "v_bfe_u32";
-  auto &bfe = *builder.create(ins_bfe);
-  std::string add3_str = "v_add3_u32";
-  auto &add3 = *builder.create(add3_str);
-  std::string cndmask_str = "v_cndmask_b32";
-  auto &cndmask = *builder.create(cndmask_str);
-  std::string lshrrev_str = "v_lshrrev_b32";
-  auto &lshrrev = *builder.create(lshrrev_str);
+  SmallVector<std::string> constraints0 = {"=s", "v", "v"};
+  SmallVector<Value> vals0 = {v, v};
+  auto is_nan_ret = buildGCNInstruction(loc, rewriter, "v_cmp_u_f32",
+                                        constraints0, vals0, i64_ty);
 
-  Value s_val = i64_val(0);
-  auto output = builder.newOperand("=v");
-  auto is_nan = builder.newOperand(s_val, "+s");
-  Value tmp_val = i32_val(0);
-  auto tmp = builder.newOperand(tmp_val, "+v");
-  Value mask_val = i32_val(0);
-  auto cndmask_out = builder.newOperand(mask_val, "+v");
-  auto in_f32 = builder.newOperand(as_int32, "+v");
-  check_nan(is_nan, in_f32, in_f32);
+  auto val_16 = i32_val(16);
+  auto val_1 = i32_val(1);
+  SmallVector<std::string> constraints1 = {"=v", "v", "v", "v"};
+  SmallVector<Value> vals1 = {v, val_16, val_1};
+  auto tmp_ret = buildGCNInstruction(loc, rewriter, "v_bfe_u32", constraints1,
+                                     vals1, i32_ty);
 
-  auto offset = builder.newConstantOperand(16);
-  auto sz = builder.newConstantOperand(1);
-  bfe(tmp, in_f32, offset, sz);
+  SmallVector<std::string> constraints2 = {"=v", "v", "v", "v"};
+  auto val_7FFF = i32_val(0x7FFF);
+  SmallVector<Value> vals2 = {v, tmp_ret, val_7FFF};
+  auto tmp_ret1 = buildGCNInstruction(loc, rewriter, "v_add3_u32", constraints2,
+                                      vals2, i32_ty);
 
-  Value bias_val = i32_val(0x7FFF);
-  auto round_bias = builder.newOperand(bias_val, "v");
-  add3(tmp, in_f32, tmp, round_bias);
+  SmallVector<std::string> constraints3 = {"=v", "v", "v", "s"};
+  auto val_nan = i32_val(0x7FFF0000);
+  SmallVector<Value> vals3 = {tmp_ret1, val_nan, is_nan_ret};
+  auto cndmask_ret = buildGCNInstruction(loc, rewriter, "v_cndmask_b32",
+                                         constraints3, vals3, i32_ty);
 
-  Value f32_nan_val = i32_val(0x7FFF0000);
-  auto f32_nan = builder.newOperand(f32_nan_val, "v");
-  cndmask(in_f32, tmp, f32_nan, is_nan);
-  lshrrev(output, offset, in_f32);
-
-  auto ret = builder.launch(rewriter, loc, i32_ty, false);
-  auto truncated = trunc(i16_ty, ret);
-
+  auto shifted = lshr(i32_ty, cndmask_ret, val_16);
+  auto truncated = trunc(i16_ty, shifted);
   return bitcast(truncated, bf16_ty);
 }
 
