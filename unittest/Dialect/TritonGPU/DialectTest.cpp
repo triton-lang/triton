@@ -273,7 +273,7 @@ public:
     ctx.getOrLoadDialect<TritonGPUDialect>();
     ctaLayout =
         triton::gpu::CTALayoutAttr::get(&ctx, ctaPerCGA, ctaSplit, ctaOrder);
-    f16Ty = FloatType::getF16(&ctx);
+    f16Ty = Float16Type::get(&ctx);
   }
 
   triton::gpu::DotOperandEncodingAttr
@@ -526,7 +526,7 @@ TEST_F(LinearEncodingTest, DistributedEncodingToLinearEncoding) {
       ASSERT_EQ(linearLayout, expandedLL);
 
       // Test that methods of DistributedEncoding return the same values
-      Type eltTy = FloatType::getF32(&ctx);
+      Type eltTy = Float32Type::get(&ctx);
 
       ASSERT_EQ(getOrder(distributedEncoding), linearEncoding.getRepOrder());
       ASSERT_EQ(cast<triton::gpu::TritonGPU_AttrTrait>(distributedEncoding)
