@@ -1,11 +1,6 @@
 name: Wheels Build manylinux2014_x86_64
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "20 2 * * *"
-  pull_request:
-    paths:
-      - .github/workflows/wheels_v2.yml
 
 jobs:
 
@@ -77,6 +72,5 @@ jobs:
           path: ./wheelhouse/*.whl
 
       - name: Upload wheels to PyPI
-        if: false # Disable Upload to PyPI until ready for release
         run: |
           python3 -m twine upload wheelhouse/* -u __token__ -p ${{ secrets.PYPY_API_TOKEN }}
