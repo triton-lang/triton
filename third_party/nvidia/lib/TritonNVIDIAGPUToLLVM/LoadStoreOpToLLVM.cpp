@@ -49,8 +49,7 @@ llvm::MapVector<StringAttr, int32_t> getFreeVariableMasks(Type type) {
   }
 
   auto ll = ttg::toLinearLayout(tensorTy.getShape(), tensorTy.getEncoding());
-  assert(ll && "failed to convert to linear layout");
-  return ll->getFreeVariableMasks();
+  return ll.getFreeVariableMasks();
 }
 
 Value maybeAnd(RewriterBase &rewriter, Location loc, Value a, Value b) {

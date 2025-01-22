@@ -209,13 +209,14 @@ OpFoldResult TransOp::fold(FoldAdaptor adaptor) {
 }
 
 LogicalResult TransOp::inferReturnTypes(
-    MLIRContext *context, std::optional<Location> location, ValueRange operands,
-    DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
-    SmallVectorImpl<Type> &inferredReturnTypes) {
+    MLIRContext *context, std::optional<Location> location,
+    TransOp::Adaptor adaptor, SmallVectorImpl<Type> &inferredReturnTypes) {
+
   // type is the same as the input
-  auto argTy = cast<RankedTensorType>(operands[0].getType());
-  auto order = properties.as<Properties *>()->order.asArrayRef();
-  SmallVector<int64_t> retShape = applyPermutation(argTy.getShape(), order);
+  auto argTy = cast<RankedTensorType>(adaptor.getSrc().getType());
+  auto shape = argTy.getShape();
+  auto order = adaptor.getOrder();
+  SmallVector<int64_t> retShape = applyPermutation(shape, order);
 
   auto retEltTy = argTy.getElementType();
   Attribute argEncoding = argTy.getEncoding();
@@ -224,7 +225,7 @@ LogicalResult TransOp::inferReturnTypes(
     Dialect &dialect = argEncoding.getDialect();
     auto inferLayoutInterface = cast<DialectInferLayoutInterface>(&dialect);
     if (inferLayoutInterface
-            ->inferTransOpEncoding(argEncoding, order, retEncoding)
+            ->inferTransOpEncoding(argEncoding, shape, order, retEncoding)
             .failed()) {
       return failure();
     }
@@ -232,6 +233,26 @@ LogicalResult TransOp::inferReturnTypes(
   inferredReturnTypes.push_back(
       RankedTensorType::get(retShape, retEltTy, retEncoding));
   return success();
+}
+
+bool TransOp::isCompatibleReturnTypes(TypeRange lhs, TypeRange rhs) {
+  assert(lhs.size() == rhs.size());
+  assert(lhs.size() == 1);
+  auto lhsType = cast<RankedTensorType>(lhs[0]);
+  auto rhsType = cast<RankedTensorType>(rhs[0]);
+
+  if (lhsType.getShape() != rhsType.getShape())
+    return false;
+
+  auto lhsEnc = lhsType.getEncoding();
+  auto rhsEnc = rhsType.getEncoding();
+  // If there's no encoding or the encodings are the same
+  if (lhsEnc == rhsEnc)
+    return true;
+
+  return cast<DialectInferLayoutInterface>(&lhsEnc.getDialect())
+      ->verifyLayoutsAreEqual(lhsType.getShape(), lhsEnc, rhsEnc, {})
+      .succeeded();
 }
 
 //-- DotOp --

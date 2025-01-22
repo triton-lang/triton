@@ -432,7 +432,9 @@ compared to 1*64 when the hasLeadingOffset is false.
     }]>
   ];
 
-  let extraClassDeclaration = extraBaseClassDeclaration;
+  let extraClassDeclaration = extraBaseClassDeclaration # [{
+    int32_t getAlignment() const;
+  }];
   let hasCustomAssemblyFormat = 1;
 }
 
@@ -504,7 +506,7 @@ We call each individual tile "rep".
                     "SmallVector<unsigned>",
                     "getContigPerThread">,
     InterfaceMethod<"Convert to LinearLayout.",
-                    "std::optional<LinearLayout>",
+                    "LinearLayout",
                     "toLinearLayout",
                     (ins "ArrayRef<int64_t>":$shape)>
   ];
@@ -559,7 +561,7 @@ L(T) = [ {0,8} , {1,9} , {2,10}, {3,11}, {0,8} , {1, 9} , {2, 10}, {3, 11},
 
     SmallVector<unsigned> getSizePerThread() const;
 
-    std::optional<LinearLayout> toLinearLayout(ArrayRef<int64_t> shape) const;
+    LinearLayout toLinearLayout(ArrayRef<int64_t> shape) const;
   }];
 }
 

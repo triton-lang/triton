@@ -56,7 +56,7 @@ struct ClipAsyncCopySizePerThread
     auto regToSharedLayout =
         getRegToSharedLayout(rewriter.getContext(), srcTy.getShape(), blockEnc,
                              sharedEnc, elemBitWidth);
-    auto copyContigSize = regToSharedLayout->getNumConsecutiveInOut();
+    auto copyContigSize = regToSharedLayout.getNumConsecutiveInOut();
 
     // obtain block sizePerThread along contig dim
     auto sizePerThread = blockEnc.getSizePerThread();
@@ -114,7 +114,7 @@ public:
     mlir::RewritePatternSet patterns(context);
     patterns.add<ClipAsyncCopySizePerThread>(context);
 
-    if (failed(applyPatternsAndFoldGreedily(m, std::move(patterns))))
+    if (failed(applyPatternsGreedily(m, std::move(patterns))))
       signalPassFailure();
   }
 };

@@ -217,6 +217,8 @@ public:
 //     - Do elementwise ops over #dot_operand layout.
 //     - Do dot.
 //
+// This can also be propagated when we have a constant, instead of a load.
+//
 // Eliminating the shmem round-trip is such a big win, we're willing to do it
 // even if this duplicates work because some of the elementwise ops have uses
 // that don't flow into the dot.  On the other hand, we only want to do this if
@@ -251,38 +253,35 @@ public:
     if (!canHoistDotOpEncV2(src, dotOpEnc))
       return failure();
 
-    // Check that the conversion is transitively dependent on a load, and all
-    // operations between the load and the conversion are layout preserving.
+    // Check that the conversion is transitively dependent on a load or a
+    // constant, and all operations between it and the convert are layout
+    // preserving.
     //
     // TODO(jlebar): This is accidentally quadratic; we iterate over the whole
     // slice but then at the end we only modify one op!
     SetVector<Operation *> slice;
     BackwardSliceOptions opt;
     opt.omitBlockArguments = true;
-    // TODO(jlebar): Is this filter redundant with omitBlockArguments == true?
-    // That is, is it possible to get into a different region without going
-    // through a block argument?
-    opt.filter = [&](Operation *op) {
-      return op->getParentRegion() == cvt->getParentRegion();
-    };
     getBackwardSlice(cvt.getOperation(), &slice, opt);
 
     // TODO(jlebar): This is too conservative when there are multiple loads in
-    // the chain (e.g. cvt(load(x) + load(y))).  The intent is to check that all
-    // of the ops between the loads and the convert are elementwise.  But
-    // actually we set foundLoad = true once we see the first load, and so we
-    // will reject the chain if the *second* load we encounter uses a
-    // non-elementwise op to calculate its pointers.
-    bool foundLoad = false;
-    for (Operation *currOp : slice) {
-      if (isa<LoadOp>(currOp)) {
-        foundLoad = true;
-      } else if (foundLoad) {
-        if (!canHoistDotOpEncV2(currOp, dotOpEnc))
-          return failure();
+    // the chain. If one of the loads has a non-layout-preserving op and the
+    // other does not, then we may or may not accept the chain, depending on
+    // which load gets hit first by getBackwardSlice. For example:
+    // cvt(broadcast(load(x)) + load(y)) // accepted & load(y) will benefit.
+    // cvt(load(y) + broadcast(load(x))) // rejected & load(y) will not benefit.
+    bool foundInitializer = false;
+    // Reverse the slice so that we start directly above the convert and check
+    // that every op allows hoisting until we find a load or a constant.
+    for (Operation *currOp : llvm::reverse(slice)) {
+      if (isa<LoadOp>(currOp) || isa<arith::ConstantOp>(currOp)) {
+        foundInitializer = true;
+        break;
       }
+      if (!canHoistDotOpEncV2(currOp, dotOpEnc))
+        return failure();
     }
-    if (!foundLoad)
+    if (!foundInitializer)
       return failure();
 
     SmallVector<ConvertLayoutOp> newOperands;
@@ -584,7 +583,7 @@ public:
     patterns.add<FuseTransHopper>(context);
     patterns.add<MMAV3UseRegOperand>(context);
     ConvertLayoutOp::getCanonicalizationPatterns(patterns, context);
-    if (failed(applyPatternsAndFoldGreedily(m, std::move(patterns))))
+    if (failed(applyPatternsGreedily(m, std::move(patterns))))
       signalPassFailure();
   }
 };
