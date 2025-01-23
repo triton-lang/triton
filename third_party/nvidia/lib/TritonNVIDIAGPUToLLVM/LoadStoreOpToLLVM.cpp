@@ -1310,12 +1310,12 @@ struct AsyncCommitGroupOpConversion
   }
 };
 
-struct TMAStoreWaitConversion
-    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::TMAStoreWait> {
+struct TMAStoreWaitOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::TMAStoreWaitOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(triton::nvidia_gpu::TMAStoreWait op, OpAdaptor adaptor,
+  matchAndRewrite(triton::nvidia_gpu::TMAStoreWaitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     PTXBuilder ptxBuilder;
     auto &asyncWaitOp = *ptxBuilder.create<>("cp.async.bulk.wait_group.read");
@@ -1343,6 +1343,6 @@ void mlir::triton::NVIDIA::populateLoadStoreOpToLLVMPatterns(
   patterns.add<AsyncCommitGroupOpConversion>(typeConverter, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, benefit);
   patterns.add<AsyncTMACopyGlobalToLocalOpConversion,
-               AsyncTMACopyLocalToGlobalOpConversion, TMAStoreWaitConversion>(
+               AsyncTMACopyLocalToGlobalOpConversion, TMAStoreWaitOpConversion>(
       typeConverter, benefit);
 }

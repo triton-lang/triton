@@ -101,7 +101,7 @@ public:
         loc, op.getDesc());
     rewriter.create<triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp>(
         loc, tmaPtr, op.getIndices(), alloc);
-    rewriter.create<triton::nvidia_gpu::TMAStoreWait>(loc, 0);
+    rewriter.create<triton::nvidia_gpu::TMAStoreWaitOp>(loc, 0);
     rewriter.eraseOp(op);
     return success();
   }

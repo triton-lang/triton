@@ -258,7 +258,7 @@ def TTNG_AsyncTMACopyLocalToGlobalOp : TTNG_Op<"async_tma_copy_local_to_global",
   }];
 }
 
-def TTNG_TMAStoreWait : TTNG_Op<"async_tma_store_wait"> {
+def TTNG_TMAStoreWaitOp : TTNG_Op<"async_tma_store_wait"> {
   let summary = "wait until all the inputs are read.";
   let arguments = (ins I32Attr:$pendings);
   let description = [{
