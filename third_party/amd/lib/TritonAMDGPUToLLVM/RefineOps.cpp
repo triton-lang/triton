@@ -31,6 +31,8 @@ namespace mlir::triton {
 } // namespace mlir::triton
 
 using namespace mlir;
+namespace tt = mlir::triton;
+namespace ttg = mlir::triton::gpu;
 
 namespace {
 
@@ -49,71 +51,225 @@ static SmallVector<scf::ForOp> getLeafForOps(triton::FuncOp funcOp) {
   return leafOps;
 }
 
+// TODO: refactor. We should rely on some other indices (i.e., don't use OpIdx
+// for this purpose)
+using LocalAllocTable =
+    DenseMap<Operation *, std::pair<ttg::LocalAllocOp, Value>>;
+LocalAllocTable getLocalAllocTable(scf::ForOp forOp) {
+  LocalAllocTable allocTable;
+  DenseMap<uint32_t, ttg::LocalAllocOp> storeTable;
+  Value selectorValue = nullptr;
+  forOp->walk([&](ttg::LocalStoreOp op) {
+    if (auto opIdx = op->getAttrOfType<triton::amdgpu::OpIdxAttr>(
+            triton::amdgpu::OpIdxAttr::getMnemonic())) {
+      auto subviewOp =
+          cast<ttg::MemDescSubviewOp>(op->getOperand(1).getDefiningOp());
+      selectorValue = subviewOp.getOffsets().front();
+      auto localAlloc =
+          cast<ttg::LocalAllocOp>(subviewOp.getOperand(0).getDefiningOp());
+
+      storeTable.insert({opIdx.getValue(), localAlloc});
+      allocTable.insert({op, {localAlloc, selectorValue}});
+    }
+  });
+
+  forOp->walk([&](ttg::LocalLoadOp op) {
+    Value dst = op.getResult();
+    auto dstTensorTy = cast<RankedTensorType>(dst.getType());
+    auto dotOperandLayout =
+        cast<DotOperandEncodingAttr>(dstTensorTy.getEncoding());
+    const size_t opIdx = dotOperandLayout.getOpIdx();
+    ttg::LocalAllocOp localAllocOp = storeTable.find(opIdx)->second;
+
+    for (auto [idx, value] : llvm::enumerate(forOp.getYieldedValues())) {
+      if (selectorValue == value) {
+        selectorValue = forOp.getRegionIterArgs()[idx];
+        break;
+      }
+    }
+
+    allocTable.insert({op, {localAllocOp, selectorValue}});
+  });
+
+  return allocTable;
+}
+
+SmallVector<Value> createOffset(llvm::ArrayRef<Value> valueOffset,
+                                llvm::ArrayRef<int32_t> intOffset,
+                                OpBuilder &rewriter, Location loc) {
+  SmallVector<Value> values;
+  for (auto item : valueOffset) {
+    values.push_back(item);
+  }
+
+  for (auto item : intOffset) {
+    Value value = rewriter.create<arith::ConstantIntOp>(loc, item, 32);
+    values.push_back(value);
+  }
+  return values;
+}
+
 struct DotOpMFMAConverter {
   AMDMfmaEncodingAttr mfmaLayout;
-
+  LocalAllocTable &allocTable;
   OpBuilder &rewriter;
   Location loc;
   MLIRContext *ctx{};
+
   explicit DotOpMFMAConverter(AMDMfmaEncodingAttr mfmaLayout,
-                              OpBuilder &rewriter, Location loc)
-      : mfmaLayout(mfmaLayout), rewriter(rewriter), loc(loc),
-        ctx(mfmaLayout.getContext()) {}
+                              LocalAllocTable &allocTable, OpBuilder &rewriter,
+                              Location loc)
+      : mfmaLayout(mfmaLayout), allocTable(allocTable), rewriter(rewriter),
+        loc(loc), ctx(mfmaLayout.getContext()) {}
 
-  void convert(DotOp op, DotOpAdaptor adaptor) const {
+  void convert(DotOp dotOp, DotOpAdaptor adaptor) const {
 
+    InputPrecisionAttr precisionAttr = dotOp.getInputPrecisionAttr();
     auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
     auto mDim = mfmaLayout.getMDim();
     auto nDim = mfmaLayout.getNDim();
-    auto mfmaVersion = mfmaLayout.getVersionMajor();
-    assert((mDim == nDim && (mDim == 32 || mDim == 16 || mDim == 4)) ||
-           (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64));
+    // assert((mDim == nDim && (mDim == 32 || mDim == 16 || mDim == 4)) ||
+    //        (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64));
 
-    Value a = op.getA();
-    Value b = op.getB();
-    Value d = op.getD();
+    SmallVector<int64_t> elementsPerWarp = {mDim * warpsPerCTA[0],
+                                            nDim * warpsPerCTA[1]};
+
+    Value a = dotOp.getA();
+    Value b = dotOp.getB();
+    Value c = dotOp.getC();
+    Value d = dotOp.getD();
+
+    auto localLoadA = cast<ttg::LocalLoadOp>(a.getDefiningOp());
+    auto localLoadB = cast<ttg::LocalLoadOp>(b.getDefiningOp());
+    if (!(allocTable.contains(localLoadA) && allocTable.contains(localLoadB))) {
+      return;
+    }
+
     auto aTensorTy = cast<RankedTensorType>(a.getType());
     auto bTensorTy = cast<RankedTensorType>(b.getType());
+    auto cTensorTy = cast<RankedTensorType>(c.getType());
     auto dTensorTy = cast<RankedTensorType>(d.getType());
+
     auto elemTyA = aTensorTy.getElementType();
     auto elemTyB = bTensorTy.getElementType();
+    auto elemTyC = cTensorTy.getElementType();
+    auto elemTyD = dTensorTy.getElementType();
 
-    StringRef mfmaInsnName;
-    auto maybeMfmaInsn =
-        MfmaInsn::selectMfma(mDim, nDim, elemTyA, elemTyB, mfmaVersion);
-    if (failed(maybeMfmaInsn))
-      llvm::report_fatal_error("No match found in MFMA database\n");
+    auto encodeA = aTensorTy.getEncoding();
+    auto encodeB = bTensorTy.getEncoding();
+    auto encodeC = cTensorTy.getEncoding();
+    auto encodeD = dTensorTy.getEncoding();
 
-    mfmaInsnName = maybeMfmaInsn->getInsnName();
-    unsigned kBase = maybeMfmaInsn->getKBase();
+    auto shapeA = aTensorTy.getShape();
+    auto shapeB = bTensorTy.getShape();
+    auto shapeC = cTensorTy.getShape();
+    auto shapeD = dTensorTy.getShape();
 
-    auto aEncoding = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
-    auto bEncoding = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
-    int kWidth = aEncoding.getKWidth();
-    auto rank = aTensorTy.getShape().size();
-    const auto kDimOperandSize = aTensorTy.getShape()[rank - 1];
-    const auto kDimInstrSize = mfmaLayout.getInstrShapeForOperand(kWidth, 0)[1];
+    auto numRepM = shapeA[0] / elementsPerWarp[0];
+    auto numRepN = shapeB[1] / elementsPerWarp[1];
 
-    auto repA = mfmaLayout.getRepForOperand(aTensorTy.getShape(), kWidth, 0);
-    auto repB = mfmaLayout.getRepForOperand(bTensorTy.getShape(), kWidth, 1);
+    constexpr int M = 0;
+    constexpr int N = 1;
 
-    assert(repA[2] == repB[1]);
+    SmallVector<int64_t> refinedShapeA = {shapeA[M] / numRepM, shapeA[N]};
+    SmallVector<int64_t> refinedShapeB = {shapeB[M], shapeB[N] / numRepN};
+    SmallVector<int64_t> refinedShapeCD = {shapeC[M] / numRepM,
+                                           shapeC[N] / numRepN};
 
-    Value loadedA = adaptor.getA();
-    Value loadedB = adaptor.getB();
-    Value loadedC = adaptor.getC();
+    auto refinedTensorTypeA =
+        RankedTensorType::get(refinedShapeA, elemTyA, encodeA);
+    auto refinedTensorTypeB =
+        RankedTensorType::get(refinedShapeB, elemTyB, encodeB);
+    auto refinedTensorTypeC =
+        RankedTensorType::get(refinedShapeCD, elemTyC, encodeC);
+    auto refinedTensorTypeD =
+        RankedTensorType::get(refinedShapeCD, elemTyD, encodeD);
 
-    auto numRepM = repA[1];
-    auto numRepN = repB[2];
-    auto numRepK = repA[2];
-    auto numRepB = repA[0];
-    assert(repA[0] == repB[0]);
+    auto sharedMemorySpace =
+        triton::gpu::SharedMemorySpaceAttr::get(dotOp.getContext());
 
-    // TODO: add logic
+    ttg::LocalAllocOp allocOpA = allocTable.find(localLoadA)->second.first;
+    Value valueSelectorA = allocTable.find(localLoadA)->second.second;
+    ttg::MemDescType allocTypeA =
+        cast<ttg::MemDescType>(allocOpA.getResult().getType());
+
+    ttg::LocalAllocOp allocOpB = allocTable.find(localLoadB)->second.first;
+    Value valueSelectorB = allocTable.find(localLoadB)->second.second;
+    ttg::MemDescType allocTypeB =
+        cast<ttg::MemDescType>(allocOpB.getResult().getType());
+
+    constexpr bool mutableMemory = true;
+    auto subviewTypeA = ttg::MemDescType::get(
+        refinedShapeA, allocTypeA.getElementType(), allocTypeA.getEncoding(),
+        sharedMemorySpace, mutableMemory);
+
+    auto subviewTypeB = ttg::MemDescType::get(
+        refinedShapeB, allocTypeB.getElementType(), allocTypeB.getEncoding(),
+        sharedMemorySpace, mutableMemory);
+
+    rewriter.setInsertionPointAfter(localLoadA);
+    SmallVector<ttg::LocalLoadOp> subtilesA;
+    for (int32_t i = 0; i < numRepM; ++i) {
+      int32_t shift = i * elementsPerWarp[M];
+      auto offset = createOffset({valueSelectorA}, {shift, 0}, rewriter, loc);
+      auto viewLoadA = rewriter.create<ttg::MemDescSubviewOp>(
+          loc, subviewTypeA, allocOpA.getResult(), offset);
+
+      auto refinedLoadA =
+          rewriter.create<ttg::LocalLoadOp>(loc, refinedTensorTypeA, viewLoadA);
+      subtilesA.push_back(refinedLoadA);
+    }
+
+    rewriter.setInsertionPointAfter(localLoadB);
+    SmallVector<ttg::LocalLoadOp> subtilesB;
+    for (int32_t i = 0; i < numRepN; ++i) {
+      int32_t shift = i * elementsPerWarp[N];
+      auto offset = createOffset({valueSelectorB}, {0, shift}, rewriter, loc);
+      auto viewLoadB = rewriter.create<ttg::MemDescSubviewOp>(
+          loc, subviewTypeB, allocOpB.getResult(), offset);
+
+      auto refinedLoadB =
+          rewriter.create<ttg::LocalLoadOp>(loc, refinedTensorTypeB, viewLoadB);
+      subtilesB.push_back(refinedLoadB);
+    }
+
+    rewriter.setInsertionPointAfter(dotOp);
+    SmallVector<Value> refinedDotValues;
+    for (int32_t m = 0; m < numRepM; ++m) {
+      for (int32_t n = 0; n < numRepN; ++n) {
+        SmallVector<int64_t> offset = {m * elementsPerWarp[M],
+                                       n * elementsPerWarp[N]};
+        auto refinedTensorC = rewriter.create<triton::amdgpu::ExtractSliceOp>(
+            loc, Type{refinedTensorTypeC}, Value{c}, offset);
+
+        auto refinedTensorA = subtilesA[m];
+        auto refinedTensorB = subtilesB[n];
+
+        auto result = rewriter.create<tt::DotOp>(loc, refinedTensorTypeD,
+                                                 refinedTensorA, refinedTensorB,
+                                                 refinedTensorC, precisionAttr);
+        refinedDotValues.push_back(result);
+      }
+    }
+
+    // TODO: join results
+    for (int32_t m = 0; m < numRepM; ++m) {
+      for (int32_t n = 0; n < numRepN; ++n) {
+        Value refinedTensorC = refinedDotValues[n + numRepN * m];
+      }
+    }
+
+    // TODO: replace the use of the orig. C with the new (joined) one
+
+    // TODO: remove old ops
+    // localLoadA.erase()
+    // localLoadB.erase()
+    // dotOp.erase()
   }
 };
 
-void convertMFMA(triton::DotOp op, OpBuilder &rewriter) {
+void convertMFMA(OpBuilder &rewriter, triton::DotOp op,
+                 LocalAllocTable &localAllocTable) {
   auto rankedTType = [](Value tensor) {
     return cast<RankedTensorType>(tensor.getType());
   };
@@ -135,8 +291,7 @@ void convertMFMA(triton::DotOp op, OpBuilder &rewriter) {
   auto mfmaLayout = cast<AMDMfmaEncodingAttr>(
       cast<RankedTensorType>(op.getResult().getType()).getEncoding());
 
-  DotOpMFMAConverter converter(mfmaLayout, rewriter, loc);
-
+  DotOpMFMAConverter converter(mfmaLayout, localAllocTable, rewriter, loc);
   converter.convert(op, DotOpAdaptor(op));
 }
 
@@ -156,14 +311,20 @@ struct TritonAMDGPURefineOps
       return signalPassFailure();
     }
 
-    mod->walk([](triton::FuncOp funcOp) {
+    mod->walk([&](triton::FuncOp funcOp) {
       SmallVector<scf::ForOp> forOps = getLeafForOps(funcOp);
       for (auto forOp : forOps) {
-        forOp.walk([](triton::DotOp dotOp) {
+        auto allocTable = getLocalAllocTable(forOp);
+
+        // handle loops which operate on local memory
+        if (allocTable.empty())
+          continue;
+
+        forOp.walk([&](triton::DotOp dotOp) {
           OpBuilder rewriter(dotOp->getContext());
 
           // TODO: extend to WMMA instructions
-          convertMFMA(dotOp, rewriter);
+          convertMFMA(rewriter, dotOp, allocTable);
         });
       }
     });

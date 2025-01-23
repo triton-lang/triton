@@ -96,6 +96,7 @@ def TritonAMDGPURefineOps : Pass<"triton-amdgpu-refine-ops", "mlir::ModuleOp"> {
                              "mlir::gpu::GPUDialect",
                              "mlir::scf::SCFDialect",
                              "mlir::triton::TritonDialect",
+                             "mlir::triton::amdgpu::TritonAMDGPUDialect",
                              "mlir::triton::gpu::TritonGPUDialect",
                              "mlir::ROCDL::ROCDLDialect"];
 
