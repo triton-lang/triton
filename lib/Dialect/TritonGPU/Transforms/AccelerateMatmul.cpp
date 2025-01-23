@@ -632,7 +632,8 @@ static void decomposeMixedModeDotOp(ModuleOp mod, int computeCapability) {
     NvidiaMmaEncodingAttr mmaLayout =
         dyn_cast<NvidiaMmaEncodingAttr>(D.getType().getEncoding());
     if (mmaLayout) {
-      bool isNativeFP8 = llvm::isa<Float8E5M2Type>(AElType) || llvm::isa<Float8E4M3FNType>(AElType);
+      bool isNativeFP8 = llvm::isa<Float8E5M2Type>(AElType) ||
+                         llvm::isa<Float8E4M3FNType>(AElType);
       // promote operands for sm < 89 since fp8 mma is not natively supported
       // promote operands for sm >= 90 when mma is not v3
       if (!isNativeFP8 ||
