@@ -55,6 +55,22 @@ def TritonGPUTestPipelineScheduleLoop : Pass<"tritongpu-test-pipeline-schedule-l
                            "mlir::arith::ArithDialect"];
 }
 
+def TritonGPUFuseNestedLoops : Pass<"tritongpu-fuse-nested-loops", "mlir::ModuleOp"> {
+  let summary = "fuse nested loops for pipelining";
+
+  let description = [{
+    The `tritongpu-fuse-nested-loops` pass will analyze loop nests in the module
+    that need to be pipelined and fuse them into a single loop. This composes
+    with the pipeliner to pipeline loop nests.
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::arith::ArithDialect",
+    "mlir::ub::UBDialect",
+  ];
+}
+
 def TritonGPUF32DotTC : Pass<"tritongpu-F32DotTC", "mlir::ModuleOp"> {
   let summary = "3xTF32 trick";
 
