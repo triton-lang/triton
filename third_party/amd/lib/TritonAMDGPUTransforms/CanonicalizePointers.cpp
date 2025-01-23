@@ -1398,12 +1398,11 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
 
   // Rewrite the rest of the ops.
   // Note we *do not* declare unrealized_cast an
-  // illegal op here in order that the whole conversion passes, even if there are
-  // tt ops that we do not currently support (their operands will be handled by
-  // ConvertUnimplementedOpUnrealizedCasts below).
-  // Note we *do* add ConvertFuncOpArgsUnrealizedCasts because that is necessary
-  // for "initializing" the chain of fat pointers starting from tt.func tt.ptr
-  // args.
+  // illegal op here in order that the whole conversion passes, even if there
+  // are tt ops that we do not currently support (their operands will be handled
+  // by ConvertUnimplementedOpUnrealizedCasts below). Note we *do* add
+  // ConvertFuncOpArgsUnrealizedCasts because that is necessary for
+  // "initializing" the chain of fat pointers starting from tt.func tt.ptr args.
   patterns.clear();
   patterns.add<ConvertFuncOpArgsUnrealizedCasts, ConvertBroadcastOp,
                ConvertSplatOp, ConvertAddPtrOp, ConvertLoadOp, ConvertStoreOp,
