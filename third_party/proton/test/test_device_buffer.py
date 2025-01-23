@@ -4,7 +4,6 @@ import triton
 import triton.language as tl
 import triton.profiler.language as pl
 from triton.runtime import driver
-import pytest
 import pathlib
 
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
