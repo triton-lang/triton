@@ -112,6 +112,12 @@ class HIPBackend(BaseBackend):
     def parse_options(self, opts) -> Any:
         args = {'arch': os.getenv("TRITON_OVERRIDE_ARCH", self.target.arch)}
 
+        # Enable XF32 (TF32) for CDNA3 GPUs
+        if self.target.arch in ('gfx940', 'gfx941', 'gfx942'):
+            allowed_dot_input_precisions = set(HIPOptions.allowed_dot_input_precisions)
+            allowed_dot_input_precisions.update({'tf32'})
+            args["allowed_dot_input_precisions"] = tuple(sorted(allowed_dot_input_precisions))
+
         if "supported_fp8_dtypes" not in opts:
             supported_fp8_dtypes = set(HIPOptions.supported_fp8_dtypes)
             if self.target.arch in ('gfx940', 'gfx941', 'gfx942'):
