@@ -1,6 +1,7 @@
 #include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Dominance.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "llvm/Support/Debug.h"
 #include <queue>
@@ -778,14 +779,28 @@ static void flattenLoopNest(LoopNestNode *node, mlir::DominanceInfo &domInfo) {
 // Pass Implementation
 //===----------------------------------------------------------------------===//
 
+// Fuse simple loop nests with a single outer and inner loop, and where the
+// inner loop has a `tt.dot` operation.
+static bool shouldFuse(const LoopNest &nest) {
+  if (nest.nodes.size() != 2 || nest.root->children.size() != 1)
+    return false;
+
+  scf::ForOp innerLoop = nest.root->children.front()->loop;
+  return llvm::any_of(innerLoop.getOps(),
+                      [](Operation &op) { return isa<DotOp>(op); });
+}
+
 void FuseNestedLoopsPass::runOnOperation() {
   auto &domInfo = getAnalysis<DominanceInfo>();
 
   for (auto func : getOperation().getOps<FuncOp>()) {
     SmallVector<LoopNest> nests;
     findLoopNests(func, nests);
-    for (LoopNest &nest : nests)
+    for (LoopNest &nest : nests) {
+      if (!shouldFuse(nest))
+        continue;
       flattenLoopNest(nest.root, domInfo);
+    }
   }
 }
 
