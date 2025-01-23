@@ -15,7 +15,7 @@ using namespace mlir::triton;
 
 namespace mlir {
 namespace triton {
-#define GEN_PASS_DEF_ALLOCATEPROTONSMEMBUFFER
+#define GEN_PASS_DEF_ALLOCATEPROTONDEVICEBUFFER
 //TODO: Remove this when passes have been moved to proton backend
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h.inc"
 #include "../third_party/proton/dialect/include/TritonProtonToLLVM/Passes.h.inc"
@@ -24,13 +24,13 @@ namespace triton {
 
 namespace {
 //TODO: move this into Proton backend
-struct AllocateProtonSMEMBuffer
-    : public mlir::triton::impl::AllocateProtonSMEMBufferBase<
-          AllocateProtonSMEMBuffer> {
+struct AllocateProtonDeviceBuffer
+    : public mlir::triton::impl::AllocateProtonDeviceBufferBase<
+          AllocateProtonDeviceBuffer> {
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     ModuleAllocation allocation(mod);
-    
+
     OpBuilder b(mod.getBodyRegion());
     MLIRContext *context = &getContext();
     auto loc = mod.getLoc();
@@ -45,7 +45,7 @@ struct AllocateProtonSMEMBuffer
 	//For now just hard code the device buffer size we want to use. 
         int deviceBufferSizeInBytes = 1024;										     
     	auto ptrTy = PointerType::get(IntegerType::get(context, 8), 1);
-	auto buffer = b.create<triton::proton::InitLocalBufferOp>(loc, ptrTy, deviceBufferSizeInBytes);
+	auto buffer = b.create<triton::proton::InitDeviceBufferOp>(loc, ptrTy, deviceBufferSizeInBytes);
 
     }
 
@@ -58,8 +58,8 @@ namespace mlir {
 
 namespace triton {
 
-std::unique_ptr<OperationPass<ModuleOp>> createAllocateProtonSMEMBuffer() {
-  return std::make_unique<AllocateProtonSMEMBuffer>();
+std::unique_ptr<OperationPass<ModuleOp>> createAllocateProtonDeviceBuffer() {
+  return std::make_unique<AllocateProtonDeviceBuffer>();
 
 }
 

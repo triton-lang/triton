@@ -3,8 +3,8 @@
 
 include "mlir/Pass/PassBase.td"
 
-def AllocateProtonSMEMBuffer : Pass<"allocate-proton-smem-buffer", "mlir::ModuleOp"> {
-    let constructor = "mlir::triton::createAllocateProtonSMEMBuffer()";
+def AllocateProtonDeviceBuffer : Pass<"allocate-proton-device-buffer", "mlir::ModuleOp"> {
+    let constructor = "mlir::triton::createAllocateProtonDeviceBuffer()";
 
 }
 #endif

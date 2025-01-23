@@ -11,17 +11,17 @@
 
 namespace {
 
-struct InitLocalBufferOpConversion
-    : public ConvertOpToLLVMPattern<mlir::triton::proton::InitLocalBufferOp> {
-  explicit InitLocalBufferOpConversion(LLVMTypeConverter &typeConverter,
-                              const TargetInfoBase &targetInfo,
-                              PatternBenefit benefit)
-      : mlir::ConvertOpToLLVMPattern<mlir::triton::proton::InitLocalBufferOp>(
+struct InitDeviceBufferOpConversion
+    : public ConvertOpToLLVMPattern<mlir::triton::proton::InitDeviceBufferOp> {
+  explicit InitDeviceBufferOpConversion(LLVMTypeConverter &typeConverter,
+                                       const TargetInfoBase &targetInfo,
+                                       PatternBenefit benefit)
+      : mlir::ConvertOpToLLVMPattern<mlir::triton::proton::InitDeviceBufferOp>(
             typeConverter, benefit),
         targetInfo(targetInfo) {}
 
   LogicalResult
-  matchAndRewrite(mlir::triton::proton::InitLocalBufferOp op, OpAdaptor adaptor,
+  matchAndRewrite(mlir::triton::proton::InitDeviceBufferOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
 
     auto moduleOp =
@@ -37,7 +37,7 @@ struct InitLocalBufferOpConversion
     auto dataAttr =
         DenseElementsAttr::get(dataAttrType, llvm::ArrayRef(buffer));
     auto arrayTy =
-        LLVM::LLVMArrayType::get(IntegerType::get(ctx, 8), buffer.size());	  
+        LLVM::LLVMArrayType::get(IntegerType::get(ctx, 8), buffer.size());
     LLVM::GlobalOp global;
     {
       RewriterBase::InsertionGuard guard(rewriter);
@@ -46,10 +46,10 @@ struct InitLocalBufferOpConversion
                                                /*isConstant=*/false,
                                                LLVM::Linkage::External,
                                                "proton_buffer", dataAttr);
-    }    
+    }
     global.setAddrSpace(1);
     global.setExternallyInitialized(true);
-   Value zero = i32_val(0);
+    Value zero = i32_val(0);
     Type globalPtrType = LLVM::LLVMPointerType::get(ctx, global.getAddrSpace());
     Value globalPtr = rewriter.create<LLVM::AddressOfOp>(
         UnknownLoc::get(rewriter.getContext()), globalPtrType,
@@ -57,7 +57,7 @@ struct InitLocalBufferOpConversion
     Value bufferStart =
         gep(ptr_ty(ctx), i8_ty, globalPtr, SmallVector<Value>({zero}));
     rewriter.replaceOp(op, bufferStart);
-  return success();
+    return success();
   }
 
 protected:
@@ -66,8 +66,8 @@ protected:
 
 } // namespace
 
-void mlir::triton::proton::populateInitLocalBufferOpToLLVMPattern(
+void mlir::triton::proton::populateInitDeviceBufferOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     const TargetInfoBase &targetInfo, PatternBenefit benefit) {
-  patterns.add<InitLocalBufferOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<InitDeviceBufferOpConversion>(typeConverter, targetInfo, benefit);
 }

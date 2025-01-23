@@ -129,7 +129,6 @@ struct ConvertTritonAMDGPUToLLVM
     // function
     initSharedMemory(typeConverter);
 
-
     // Convert call and ret ops
     {
       mlir::LowerToLLVMOptions option(context);
@@ -151,8 +150,6 @@ struct ConvertTritonAMDGPUToLLVM
     OpBuilder::InsertPoint indexInsertPoint;
 
     RewritePatternSet patterns(context);
-
-
 
     int commonBenefit = patternBenefitPrioritizeOverLLVMConversions;
     // Make benefit for AMD specific patterns higher so they apply before common
@@ -235,8 +232,8 @@ struct ConvertTritonAMDGPUToLLVM
     mlir::triton::populatePrintOpToLLVMPattern(typeConverter, patterns,
                                                targetInfo, commonBenefit);
 
-    mlir::triton::proton::populateInitLocalBufferOpToLLVMPattern(
- 	typeConverter, patterns, targetInfo, commonBenefit);
+    mlir::triton::proton::populateInitDeviceBufferOpToLLVMPattern(
+        typeConverter, patterns, targetInfo, commonBenefit);
 
     mlir::triton::proton::populateRecordOpToLLVMPattern(
         typeConverter, patterns, targetInfo, commonBenefit);
@@ -267,7 +264,6 @@ private:
         // Add ROCm support.
         static_cast<unsigned>(NVVM::NVVMMemorySpace::kSharedMemorySpace));
   }
-
 };
 
 } // namespace

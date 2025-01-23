@@ -252,7 +252,7 @@ class HIPBackend(BaseBackend):
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
 
-        proton.passes.ttgpuir.add_allocate_smem_buffer(pm)
+        proton.passes.ttgpuir.add_allocate_device_buffer(pm)
 
         pm.run(mod)
         return mod
@@ -275,7 +275,6 @@ class HIPBackend(BaseBackend):
         passes.convert.add_index_to_llvmir(pm)
 
         passes.ttgpuir.add_allocate_shared_memory(pm)
-
 
         ## __HIP_FTZ is used to control the denorm flushing behavior of exp2 op as follows:
         ## 1. If __HIP_FTZ = 1, exp2 flushes denorms in input and output regardless

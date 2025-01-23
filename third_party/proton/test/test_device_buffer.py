@@ -9,6 +9,7 @@ import pathlib
 
 DEVICE = triton.runtime.driver.active.get_active_torch_device()
 
+
 def is_hip():
     return triton.runtime.driver.active.get_current_target().backend == "hip"
 
@@ -16,6 +17,8 @@ def is_hip():
 def is_cdna():
     return is_hip() and triton.runtime.driver.active.get_current_target().arch in ('gfx940', 'gfx941', 'gfx942',
                                                                                    'gfx90a', 'gfx908')
+
+
 @triton.jit
 def softmax_kernel(output_ptr, input_ptr, input_row_stride, output_row_stride, n_rows, n_cols, BLOCK_SIZE: tl.constexpr,
                    num_stages: tl.constexpr):
@@ -47,19 +50,20 @@ SIZE_SMEM = properties["max_shared_mem"]
 WARP_SIZE = properties["warpSize"]
 target = triton.runtime.driver.active.get_current_target()
 
+
 def test_proton_buff_init(tmp_path: pathlib.Path):
     torch.manual_seed(0)
     x = torch.randn(1823, 781, device=DEVICE)
-    
+
     n_rows, n_cols = x.shape
-    
+
     BLOCK_SIZE = triton.next_power_of_2(n_cols)
-    
+
     num_warps = 8
     num_stages = 4 if SIZE_SMEM > 200000 else 2
-    
+
     y = torch.empty_like(x)
-    
+
     kernel = softmax_kernel.warmup(y, x, x.stride(0), y.stride(0), n_rows, n_cols, BLOCK_SIZE=BLOCK_SIZE,
                                    num_stages=num_stages, num_warps=num_warps, grid=(1, ))
     kernel._init_handles()
@@ -75,8 +79,8 @@ def test_proton_buff_init(tmp_path: pathlib.Path):
         occupancy = NUM_REGS // (n_regs * WARP_SIZE * num_warps)
     occupancy = min(occupancy, SIZE_SMEM // size_smem)
     num_programs = NUM_SM * occupancy
-    
+
     num_programs = min(num_programs, n_rows)
-    
+
     llir = kernel.asm['llir']
     assert "@proton_buffer = local_unnamed_addr addrspace(1) externally_initialized global [1024 x i8] zeroinitializer" in llir

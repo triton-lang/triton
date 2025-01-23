@@ -11,4 +11,3 @@ add_triton_library(ProtonIR
   TritonIR
   TritonGPUIR
 )
-

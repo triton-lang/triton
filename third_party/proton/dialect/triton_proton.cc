@@ -9,18 +9,18 @@
 
 namespace py = pybind11;
 
-namespace{
+namespace {
 
 void init_triton_proton_passes_ttgpuir(py::module &&m) {
   using namespace mlir::triton;
-  m.def("add_allocate_smem_buffer", [](mlir::PassManager &pm) {
-    pm.addPass(createAllocateProtonSMEMBuffer());
+  m.def("add_allocate_device_buffer", [](mlir::PassManager &pm) {
+    pm.addPass(createAllocateProtonDeviceBuffer());
   });
 }
-}
+} // namespace
 
 void init_triton_proton(py::module &&m) {
-  m.doc() = "Python bindings to the Proton backend";	
+  m.doc() = "Python bindings to the Proton backend";
   auto passes = m.def_submodule("passes");
   init_triton_proton_passes_ttgpuir(passes.def_submodule("ttgpuir"));
 

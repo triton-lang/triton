@@ -70,8 +70,8 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::registerTritonAMDGPUInsertInstructionSchedHints();
   mlir::triton::registerTritonAMDGPULowerInstructionSchedHints();
 
-  //Proton passes
-  mlir::triton::registerAllocateProtonSMEMBuffer();
+  // Proton passes
+  mlir::triton::registerAllocateProtonDeviceBuffer();
 
   // TODO: register Triton & TritonGPU passes
   registry

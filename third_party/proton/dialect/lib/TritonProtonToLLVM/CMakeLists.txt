@@ -1,11 +1,11 @@
 add_triton_library(TritonProtonToLLVM
     RecordOpToLLVM.cpp
-    InitLocalBufferOpToLLVM.cpp
-    AllocateProtonSMEMBuffer.cpp
+    InitDeviceBufferOpToLLVM.cpp
+    AllocateProtonDeviceBuffer.cpp
 
     DEPENDS
     TritonProtonConversionPassIncGen
-    
+
     LINK_LIBS PUBLIC
     ProtonIR
 )
