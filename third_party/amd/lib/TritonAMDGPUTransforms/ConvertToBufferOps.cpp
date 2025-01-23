@@ -1073,6 +1073,7 @@ public:
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
 
+    visits = 0;
     std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
     solver->load<MyIntegerRangeAnalysis>();
     if (failed(solver->initializeAndRun(getOperation())))
