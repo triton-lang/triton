@@ -89,6 +89,94 @@ Fp16_to_Fp8E5M2_RTZ(Location loc, ConversionPatternRewriter &rewriter,
           extract_element(i8_ty, a1, i32_val(3))};
 }
 
+//===----------------===//
+///      FP8E4M3
+//===----------------===//
+
+// Cast FP16 to FP8E4M3FN in saturation and round-to-nearest-even mode.
+// According to
+// https://www.opencompute.org/documents/ocp-8-bit-floating-point-specification-ofp8-revision-1-0-2023-12-01-pdf-1,
+// In saturation mode, inf and out-of-range numbers are converted to the largest
+// normal number, i.e. ±448. NaNs are converted to NaNs.
+static Value
+Fp16_to_Fp8E4M3FN_RTNE_oneValue(Location loc,
+                                ConversionPatternRewriter &rewriter, Value v) {
+  StringRef funcName = "llvm.is.fpclass";
+  Value isNaN = LLVM::createLLVMIntrinsicCallOp(rewriter, loc, funcName, i1_ty,
+                                                {v, i32_val(0x3)})
+                    ->getResult(0);
+
+  // Get sign and absolute value
+  Value vi16 = bitcast(v, i16_ty);
+  Value sign = trunc(i8_ty, lshr(and_(vi16, i16_val(0x8000)), i16_val(8)));
+  vi16 = and_(vi16, i16_val(0x7FFF));
+
+  // Rounding to nearest even
+  constexpr uint16_t baseRoundingBias = 0x003F; // 1 << (10 - 3 - 1) - 1
+
+  // S.EEEEE.MMMMMMMMMM => 0.00000.00M0000000 => 0.00000.000000000M
+  Value remainingMantissaLSB = lshr(and_(vi16, i16_val(0x0080)), i16_val(7));
+  Value roundingBias = add(remainingMantissaLSB, i16_val(baseRoundingBias));
+  Value vFp8 = add(vi16, roundingBias);
+
+  // Reduce mantissa to 3 bits
+  vFp8 = and_(vFp8, i16_val(0xFF80)); // 0xFF80 == 1.11111.1110000000
+
+  // 0x2400 is the FP16 representation of 2^{-6}, which is the smallest normal
+  // number in FP8E4M3FN. We round numbers smaller than that to 0x2400 to make
+  // it easier to handle subnormals
+  vFp8 = umax(vFp8, i16_val(0x2400));
+
+  // Adjust exponent bias
+  vFp8 = sub(vFp8, i16_val(0x2000)); // (15 - 7) << 10
+
+  // Shift right and truncate
+  vFp8 = trunc(i8_ty, lshr(vFp8, i16_val(7))); // 10 - 3
+
+  // 0x5F7F == 0.10111.1101111111 is the largest possible normal
+  // number(including infinity) after rounding in FP8
+  //
+  // In saturation mode, numbers larger than the max normal number(including
+  // infinity) in FP8 after rounding will be replaced with max_E4M3, i.e. 0x7E
+  // === 0.1111.110
+  Value isOverflowOrInf = icmp_ugt(vi16, i16_val(0x5F7F));
+  vFp8 = select(isOverflowOrInf, i8_val(0x7E), vFp8);
+
+  // Round subnormals to nearest even. Ref:
+  // https://github.com/openxla/xla/blob/f20c6fe2/xla/service/elemental_ir_emitter.cc#L272
+  constexpr size_t lutSize = 8;
+  constexpr float halfwayPointsLUT[lutSize] = {0x1400, 0x1A00, 0x1D00, 0x1F00,
+                                               0x2080, 0x2180, 0x2280, 0x2380};
+
+  for (int i = lutSize - 1; i >= 0; i--) {
+    Value cmp;
+    if (i % 2 == 0) {
+      cmp = icmp_ule(vi16, i16_val(halfwayPointsLUT[i]));
+    } else {
+      cmp = icmp_ult(vi16, i16_val(halfwayPointsLUT[i]));
+    }
+
+    vFp8 = select(cmp, i8_val(i), vFp8);
+  }
+
+  // NaN remains NaN after conversion
+  vFp8 = select(isNaN, i8_val(0x7F), vFp8);
+
+  // Set sign bit
+  vFp8 = or_(vFp8, sign);
+
+  return vFp8;
+}
+
+static SmallVector<Value>
+Fp16_to_Fp8E4M3FN_RTNE(Location loc, ConversionPatternRewriter &rewriter,
+                       const SmallVector<Value> &v) {
+  SmallVector<Value> result(2);
+  result[0] = Fp16_to_Fp8E4M3FN_RTNE_oneValue(loc, rewriter, v[0]);
+  result[1] = Fp16_to_Fp8E4M3FN_RTNE_oneValue(loc, rewriter, v[1]);
+  return result;
+}
+
 static Value cvtFp16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
                            const Value &v) {
   GCNBuilder builder;
@@ -97,25 +185,6 @@ static Value cvtFp16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
   auto operand = builder.newOperand(v, "v");
   cvt(res, operand);
   return builder.launch(rewriter, loc, f32_ty, false);
-}
-
-static Value cvtFp32ToFp16(Location loc, ConversionPatternRewriter &rewriter,
-                           const Value &v, const RoundingMode rounding) {
-  GCNBuilder builder;
-
-  auto &cvt = *builder.create("v_cvt_f16_f32");
-  auto res = builder.newOperand("=v");
-  auto operand = builder.newOperand(v, "v");
-  if (rounding == RoundingMode::RTZ) {
-    auto &setRTZ = *builder.create("s_setreg_imm32_b32 0x1801, 0xc");
-    setRTZ();
-  }
-  cvt(res, operand);
-  if (rounding == RoundingMode::RTZ) {
-    auto &resetRTZ = *builder.create("s_setreg_imm32_b32 0x1801, 0x0");
-    resetRTZ();
-  }
-  return builder.launch(rewriter, loc, f16_ty, false);
 }
 
 // convert fp8 to fp32
@@ -194,8 +263,8 @@ convert_val_Fp8_to_Fp16(Location loc, ConversionPatternRewriter &rewriter,
   SmallVector<Value> ret = cvtFp8ToFp32(loc, rewriter, v0, v1, fp8_format);
 
   // Convert fp32 to fp16
-  ret[0] = cvtFp32ToFp16(loc, rewriter, ret[0], RoundingMode::RTNE);
-  ret[1] = cvtFp32ToFp16(loc, rewriter, ret[1], RoundingMode::RTNE);
+  ret[0] = LLVM::AMD::cvtFp32ToFp16(loc, rewriter, ret[0], RoundingMode::RTNE);
+  ret[1] = LLVM::AMD::cvtFp32ToFp16(loc, rewriter, ret[1], RoundingMode::RTNE);
 
   return ret;
 }
@@ -278,50 +347,54 @@ ConverterT Fp16_to_Fp8E5M2FNUZ(AMD::ISAFamily isaFamily) {
                                             : Fp16_to_Fp8E5M2FNUZ_SW;
 }
 
-static SmallVector<Value> Fp8E4M3FN_to_Fp16(Location loc,
-                                            ConversionPatternRewriter &rewriter,
-                                            const SmallVector<Value> &v) {
-  auto fp8x4VecTy = vec_ty(i8_ty, 4);
-  Value a = undef(fp8x4VecTy);
-  a = insert_element(fp8x4VecTy, a, i8_val(0), i32_val(0));
-  a = insert_element(fp8x4VecTy, a, v[0], i32_val(1));
-  a = insert_element(fp8x4VecTy, a, i8_val(0), i32_val(2));
-  a = insert_element(fp8x4VecTy, a, v[1], i32_val(3));
-  a = bitcast(a, i32_ty);
+static Value Fp8E4M3FN_to_Fp16_oneValue(Location loc,
+                                        ConversionPatternRewriter &rewriter,
+                                        Value v) {
+  auto fp8x2VecTy = vec_ty(i8_ty, 2);
+  Value a = undef(fp8x2VecTy);
+  a = insert_element(fp8x2VecTy, a, i8_val(0), i32_val(0));
+  a = insert_element(fp8x2VecTy, a, v, i32_val(1));
+  a = bitcast(a, i16_ty);
 
   // Get sign and absolute value
-  Value sign = and_(a, i32_val(0x80008000));
-  a = and_(a, i32_val(0x7FFF7FFF));
+  Value sign = and_(a, i16_val(0x8000));
+  a = and_(a, i16_val(0x7FFF));
 
   // Right shift 1 bit to adjust the positions of exponent and mantissa
-  a = lshr(a, i32_val(1));
+  a = lshr(a, i16_val(1));
 
   // Adjust exponent, (15 - 7) << 10 === 0x2000
-  a = add(a, i32_val(0x20002000));
+  a = add(a, i16_val(0x2000));
 
   // Check NaN
-  // If the fp8 input is NaN(S.1111.111), the output is set to NaN by masking
-  // all the bits of exponent and mantissa to 1.
-  auto i16x2VecTy = vec_ty(i16_ty, 2);
-  Value maskVec = undef(i16x2VecTy);
+  Value vAbs = and_(bitcast(v, i8_ty), i8_val(0x7F));
+  a = select(icmp_eq(vAbs, i8_val(0x7F)), i16_val(0x7E00), a);
 
-  Value isNaN0 = icmp_uge(bitcast(v[0], i8_ty), i8_val(0x7F));
-  Value mask0 = select(isNaN0, i16_val(0x7FFF), i16_val(0));
-  maskVec = insert_element(i16x2VecTy, maskVec, mask0, i32_val(0));
+  // Check denorms and zero
+  // Here we use a LUT to map S.0000.000 ~ S.0000.111 to its corresponding fp16
+  // value
+  constexpr size_t lutSize = 8;
+  static constexpr int denormsAndZeroLut[lutSize] = {
+      0x0000, 0x1800, 0x1C00, 0x1E00, 0x2000, 0x2100, 0x2200, 0x2300};
 
-  Value isNaN1 = icmp_uge(bitcast(v[1], i8_ty), i8_val(0x7F));
-  Value mask1 = select(isNaN1, i16_val(0x7FFF), i16_val(0));
-  maskVec = insert_element(i16x2VecTy, maskVec, mask1, i32_val(1));
-
-  a = or_(a, bitcast(maskVec, i32_ty));
+  for (int i = 0; i < lutSize; i++) {
+    a = select(icmp_eq(vAbs, i8_val(i)), i16_val(denormsAndZeroLut[i]), a);
+  }
 
   // Set sign
   a = or_(a, sign);
+  a = bitcast(a, f16_ty);
 
-  auto fp16x2VecTy = vec_ty(f16_ty, 2);
-  Value fp16x2Vec = bitcast(a, fp16x2VecTy);
-  return {extract_element(f16_ty, fp16x2Vec, i32_val(0)),
-          extract_element(f16_ty, fp16x2Vec, i32_val(1))};
+  return a;
+}
+
+static SmallVector<Value> Fp8E4M3FN_to_Fp16(Location loc,
+                                            ConversionPatternRewriter &rewriter,
+                                            const SmallVector<Value> &values) {
+  SmallVector<Value> results(2);
+  results[0] = Fp8E4M3FN_to_Fp16_oneValue(loc, rewriter, values[0]);
+  results[1] = Fp8E4M3FN_to_Fp16_oneValue(loc, rewriter, values[1]);
+  return results;
 }
 
 static SmallVector<Value> Fp8E5M2_to_Fp16(Location loc,
@@ -965,6 +1038,8 @@ struct FpToFpOpConversion
              Fp8E5M2FNUZ_to_Fp16(isaFamily)},
             {{F8E5M2TyID, F16TyID, undefRounding}, Fp8E5M2_to_Fp16},
             // F16 -> F8
+            {{F16TyID, F8E4M3FNTyID, RoundingMode::RTNE},
+             Fp16_to_Fp8E4M3FN_RTNE},
             {{F16TyID, F8E5M2FNUZTyID, RoundingMode::RTNE},
              Fp16_to_Fp8E5M2FNUZ(isaFamily)},
             {{F16TyID, F8E4M3FNUZTyID, RoundingMode::RTNE},
@@ -1014,7 +1089,7 @@ struct FpToFpOpConversion
       outVals.reserve(operands[0].size());
       for (Value v : operands[0]) {
         outVals.push_back(
-            cvtFp32ToFp16(loc, rewriter, v, roundingMode.value()));
+            LLVM::AMD::cvtFp32ToFp16(loc, rewriter, v, roundingMode.value()));
       }
       return outVals;
     }
@@ -1065,8 +1140,8 @@ struct FpToFpOpConversion
     }
     if (useFP16IntermediateSrc)
       for (Value &v : inVals)
-        v = cvtFp32ToFp16(loc, rewriter, v,
-                          roundingMode.value_or(RoundingMode::RTNE));
+        v = LLVM::AMD::cvtFp32ToFp16(loc, rewriter, v,
+                                     roundingMode.value_or(RoundingMode::RTNE));
     inVals.resize(numElements, undef(typeConverter->convertType(srcType)));
     SmallVector<Value> outVals;
     if (srcType != dstType) {

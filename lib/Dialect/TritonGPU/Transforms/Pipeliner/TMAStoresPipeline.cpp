@@ -44,8 +44,8 @@ static Value createAlloc(scf::ForOp &forOp,
   Type memdescType =
       ttg::MemDescType::get(ty.getShape(), ty.getElementType(), encoding,
                             sharedMemorySpace, /*mutableMemory*/ true);
-  Value alloc = builder.create<ttg::LocalAllocOp>(storeOp->getLoc(),
-                                                  memdescType, Value());
+  Value alloc =
+      builder.create<ttg::LocalAllocOp>(storeOp->getLoc(), memdescType);
   return alloc;
 }
 

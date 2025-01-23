@@ -473,14 +473,14 @@ tt.func @for() {
   // CHECK-NEXT: contiguity = [1, 1], divisibility = [4, 4], constancy = [128, 32], constant_value = 4
   %c_init = arith.constant dense<4> : tensor<128x32xi32>
   // CHECK-NEXT: contiguity = [1], divisibility = [128], constancy = [1], constant_value = 128
-  %ub = arith.constant 128 : index
+  %ub = arith.constant 128 : i32
   // CHECK-NEXT: contiguity = [1], divisibility = [4611686018427387904], constancy = [1], constant_value = 0
-  %lb = arith.constant 0 : index
+  %lb = arith.constant 0 : i32
   // CHECK-NEXT: contiguity = [1], divisibility = [16], constancy = [1], constant_value = 16
-  %step = arith.constant 16 : index
-  %a, %b, %c = scf.for %iv = %lb to %ub step %step iter_args(%a = %a_init, %b = %b_init, %c = %c_init) -> (tensor<128x32xi32>, tensor<128x32xi32>, tensor<128x32xi32>) {
+  %step = arith.constant 16 : i32
+  %a, %b, %c = scf.for %iv = %lb to %ub step %step iter_args(%a = %a_init, %b = %b_init, %c = %c_init) -> (tensor<128x32xi32>, tensor<128x32xi32>, tensor<128x32xi32>) : i32 {
     // CHECK-NEXT: contiguity = [1], divisibility = [16], constancy = [1], constant_value = <none>
-    %t = arith.index_cast %iv : index to i32
+    %t = arith.addi %iv, %lb : i32
     // CHECK: contiguity = [1, 1], divisibility = [1, 1], constancy = [128, 32], constant_value = <none>
     // CHECK: contiguity = [1, 1], divisibility = [1, 1], constancy = [128, 32], constant_value = <none>
     // CHECK: contiguity = [1, 1], divisibility = [4, 4], constancy = [128, 32], constant_value = 4
@@ -492,10 +492,12 @@ tt.func @for() {
 // -----
 
 // CHECK-LABEL: @for_dynamic
-tt.func @for_dynamic(%lb: index {tt.divisibility = 16 : i32}, %step: index {tt.divisibility = 8 : i32}, %ub: index) {
-  scf.for %iv = %lb to %ub step %step {
+tt.func @for_dynamic(%lb: i32 {tt.divisibility = 16 : i32}, %step: i32 {tt.divisibility = 8 : i32}, %ub: i32) {
+  // CHECK-NEXT: contiguity = [1], divisibility = [4611686018427387904], constancy = [1], constant_value = 0
+  %c0 = arith.constant 0 : i32
+  scf.for %iv = %lb to %ub step %step : i32 {
     // CHECK-NEXT: contiguity = [1], divisibility = [8], constancy = [1], constant_value = <none>
-    %t = arith.index_cast %iv : index to i32
+    %t = arith.addi %iv, %c0 : i32
   }
   tt.return
 }

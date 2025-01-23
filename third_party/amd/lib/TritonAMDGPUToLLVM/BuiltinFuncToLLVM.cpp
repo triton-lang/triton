@@ -39,39 +39,9 @@ private:
     return callOp.getCallee().value().contains(mlir::LLVM::AMD::predicatedLoad);
   }
 
-  bool isPredicatedLoadCA(LLVM::CallOp callOp) const {
-    return callOp.getCallee().value().contains(
-        mlir::LLVM::AMD::predicatedLoadCA);
-  }
-
-  bool isPredicatedLoadCG(LLVM::CallOp callOp) const {
-    return callOp.getCallee().value().contains(
-        mlir::LLVM::AMD::predicatedLoadCG);
-  }
-
-  bool isPredicatedLoadCV(LLVM::CallOp callOp) const {
-    return callOp.getCallee().value().contains(
-        mlir::LLVM::AMD::predicatedLoadCV);
-  }
-
   bool isPredicatedStore(LLVM::CallOp callOp) const {
     return callOp.getCallee().value().contains(
         mlir::LLVM::AMD::predicatedStore);
-  }
-
-  bool isPredicatedStoreCS(LLVM::CallOp callOp) const {
-    return callOp.getCallee().value().contains(
-        mlir::LLVM::AMD::predicatedStoreCS);
-  }
-
-  bool isPredicatedStoreCG(LLVM::CallOp callOp) const {
-    return callOp.getCallee().value().contains(
-        mlir::LLVM::AMD::predicatedStoreCG);
-  }
-
-  bool isPredicatedStoreWT(LLVM::CallOp callOp) const {
-    return callOp.getCallee().value().contains(
-        mlir::LLVM::AMD::predicatedStoreWT);
   }
 
   bool isWrappedLLVMIntrinsic(LLVM::CallOp callOp) const {
@@ -103,10 +73,10 @@ private:
     // LLVM::StoreOp | 0         | 0       | (cg) global store
     //               | 0         | 1       | (cs) global store nt
     //               | 1         | 0/1     | (wt) global store sc0 sc1
-    bool vialatileFlag = isPredicatedStoreWT(callOp);
-    bool nonTmpFlag = isPredicatedStoreCS(callOp);
+    auto [volatileFlag, nonTmpFlag] =
+        mlir::LLVM::AMD::getCacheModifierFlagsForPredicatedCall(callOp);
     auto storeOp = rewriter.create<LLVM::StoreOp>(
-        loc, val, ptr, /*alignment=*/0, vialatileFlag, nonTmpFlag);
+        loc, val, ptr, /*alignment=*/0, volatileFlag, nonTmpFlag);
     rewriter.create<LLVM::BrOp>(loc, afterStore);
     rewriter.setInsertionPointToStart(afterStore);
     rewriter.eraseOp(callOp);
@@ -138,10 +108,10 @@ private:
     // LLVM::LoadOp | 0         | 0       | (ca) global load
     //              | 0/1       | 1       | (cg) global load nt
     //              | 1         | 0       | (cv) flat load sc0 sc1
-    bool vialatileFlag = isPredicatedLoadCV(callOp);
-    bool nonTmpFlag = isPredicatedLoadCG(callOp);
+    auto [volatileFlag, nonTmpFlag] =
+        mlir::LLVM::AMD::getCacheModifierFlagsForPredicatedCall(callOp);
     auto loadOp = rewriter.create<LLVM::LoadOp>(
-        loc, elemTy, ptr, /*alignment=*/0, vialatileFlag, nonTmpFlag);
+        loc, elemTy, ptr, /*alignment=*/0, volatileFlag, nonTmpFlag);
     rewriter.create<LLVM::BrOp>(loc, loadOp->getResult(0), afterLoad);
     rewriter.setInsertionPointToStart(falseBlock);
     rewriter.create<LLVM::BrOp>(loc, falseVal, afterLoad);
@@ -229,7 +199,7 @@ struct ConvertBuiltinFuncToLLVM
     RewritePatternSet patterns(context);
     patterns.add<CallOpConversion>(context, this->ftz);
 
-    if (mlir::applyPatternsAndFoldGreedily(mod, std::move(patterns), config)
+    if (mlir::applyPatternsGreedily(mod, std::move(patterns), config)
             .failed()) {
       signalPassFailure();
     }

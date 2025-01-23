@@ -25,6 +25,16 @@ bool hasDotOperandEncoding(Value value) {
   return hasEncoding<triton::gpu::DotOperandEncodingAttr>(value);
 }
 
+bool isConvertTrivial(ConvertLayoutOp op) {
+  auto srcType = op.getSrc().getType();
+  auto dstType = op.getType();
+  auto srcEncoding = srcType.getEncoding();
+  auto dstEncoding = dstType.getEncoding();
+  return cast<DialectInferLayoutInterface>(&srcEncoding.getDialect())
+      ->verifyLayoutsAreEqual(srcType.getShape(), srcEncoding, dstEncoding, {})
+      .succeeded();
+}
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -43,23 +53,45 @@ struct CanonicalizeConvertFromReshape
     if (!convert)
       return failure();
     // If the layouts are structurally the same, the convert is trivial
-    auto srcType = convert.getSrc().getType();
-    auto dstType = convert.getType();
-    auto srcLL = toLinearLayout(srcType.getShape(), srcType.getEncoding());
-    auto dstLL = toLinearLayout(dstType.getShape(), dstType.getEncoding());
-    if (srcLL && dstLL && *srcLL == *dstLL) {
+    if (isConvertTrivial(convert)) {
       rewriter.replaceOpWithNewOp<triton::ReshapeOp>(
-          op, op.getType(), convert.getSrc(), op.getAllowReorder());
-      return mlir::success();
+          op, op.getType(), convert.getSrc(), op.getAllowReorder(),
+          op.getEfficientLayout());
+      return success();
     }
+
     if (isExpensiveView(convert.getSrc().getType(), op.getType()))
       return failure();
-    if (!op.getAllowReorder() || op.getEfficientLayout())
+    if (!op.getAllowReorder())
       return failure();
 
     rewriter.replaceOpWithNewOp<triton::ReshapeOp>(
-        op, op.getType(), convert.getSrc(), op.getAllowReorder());
+        op, op.getType(), convert.getSrc(), op.getAllowReorder(),
+        op.getEfficientLayout());
     return mlir::success();
+  }
+};
+
+// TODO We should do this generically for op(cvt) -> op
+// We have similar patterns for reshape and split...
+// See https://github.com/triton-lang/triton/pull/5403#discussion_r1920091671
+
+// trans(cvt) -> trans
+struct CanonicalizeConvertFromTranspose
+    : public mlir::OpRewritePattern<triton::TransOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(triton::TransOp op,
+                  PatternRewriter &rewriter) const override {
+    // If the layouts are structurally the same, the convert is trivial
+    auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
+    if (!convert || !isConvertTrivial(convert))
+      return failure();
+
+    rewriter.replaceOpWithNewOp<triton::TransOp>(
+        op, op.getType(), convert.getSrc(), op.getOrder());
+    return success();
   }
 };
 
@@ -289,6 +321,7 @@ void ConvertLayoutOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
                                                   MLIRContext *context) {
   patterns.add<CanonicalizeConvertFromConvert>(context);
   patterns.add<CanonicalizeConvertFromReshape>(context);
+  patterns.add<CanonicalizeConvertFromTranspose>(context);
   patterns.add<CanonicalizeConvertFromGatherSource>(context);
   patterns.add<CanonicalizeConvertFromHistogram>(context);
   patterns.add<CanonicalizeConvertFromAlloc>(context);
@@ -301,13 +334,15 @@ LogicalResult UpcastMXFPOp::verify() {
 
   auto xTy = getSrc().getType();
   auto scaleTy = getScale().getType();
-
-  if (xTy.getElementType() != FloatType::getBF16(getContext()) &&
-      xTy.getElementType() != IntegerType::get(getContext(), 8)) {
-    return emitOpError("element type of the first operand must be bf16 or i8");
+  Builder b(getContext());
+  if (xTy.getElementType() != b.getBF16Type() &&
+      xTy.getElementType() != b.getF16Type() &&
+      xTy.getElementType() != b.getI8Type()) {
+    return emitOpError(
+        "element type of the first operand must be bf16/fp16 or i8");
   }
 
-  if (scaleTy.getElementType() != IntegerType::get(getContext(), 8)) {
+  if (scaleTy.getElementType() != b.getI8Type()) {
     return emitOpError("element type of the second operand must be uint8");
   }
 
@@ -381,44 +416,34 @@ LogicalResult UpcastMXFPOp::verify() {
   return success();
 }
 
-LogicalResult UpcastMXFPOp::inferReturnTypes(
-    MLIRContext *ctx, std::optional<Location> loc, ValueRange operands,
-    DictionaryAttr attributes, OpaqueProperties opaqueProperties,
-    RegionRange regions, SmallVectorImpl<Type> &inferredReturnTypes) {
-  auto xTy = cast<RankedTensorType>(operands[0].getType());
-  auto properties = opaqueProperties.as<const Properties *>();
-  auto typeEncoded = properties->fp_type.getValue();
+RankedTensorType
+UpcastMXFPOp::deduceOutputType(TypedValue<RankedTensorType> inputTensor,
+                               ScaleDotElemType inputElemType,
+                               Type outputElemType) {
+  MLIRContext *ctx = inputTensor.getContext();
+  auto xTy = inputTensor.getType();
+  if (inputElemType != ScaleDotElemType::E2M1)
+    return xTy;
+
   auto xShape = xTy.getShape();
-
+  auto newShape = llvm::to_vector(xShape);
   auto encoding = xTy.getEncoding();
-
-  if (typeEncoded == ScaleDotElemType::E2M1) {
-    RankedTensorType retTy;
-
-    auto newShape = SmallVector<int64_t>(xShape);
-    if (!encoding) {
-      newShape.back() *= 2;
-      retTy = RankedTensorType::get(xShape, FloatType::getBF16(ctx));
-    } else {
-      auto oldEncoding = cast<DotOperandEncodingAttr>(encoding);
-      auto newVEncoding = DotOperandEncodingAttr::get(
-          ctx, oldEncoding.getOpIdx(), oldEncoding.getParent(),
-          oldEncoding.getKWidth() * 2);
-      // Figure out the K dimension for the input A/B, given that the return
-      // type is upcasted A/B type so we need to update the proper dim size.
-      const int opIdx = oldEncoding.getOpIdx();
-      const bool hasBatch = xShape.size() == 3;
-      const int kIdx = (opIdx == 0 ? 1 : 0) + hasBatch;
-      newShape[kIdx] *= 2;
-      retTy = RankedTensorType::get(newShape, FloatType::getBF16(ctx),
-                                    newVEncoding);
-    }
-    inferredReturnTypes.push_back(retTy);
-  } else {
-    inferredReturnTypes.push_back(xTy);
+  if (!encoding) {
+    newShape.back() *= 2;
+    return RankedTensorType::get(xShape, outputElemType);
   }
 
-  return success();
+  auto oldEncoding = cast<DotOperandEncodingAttr>(encoding);
+  auto newVEncoding = DotOperandEncodingAttr::get(ctx, oldEncoding.getOpIdx(),
+                                                  oldEncoding.getParent(),
+                                                  oldEncoding.getKWidth() * 2);
+  // Figure out the K dimension for the input A/B, given that the return
+  // type is upcasted A/B type so we need to update the proper dim size.
+  const int opIdx = oldEncoding.getOpIdx();
+  const bool hasBatch = xShape.size() == 3;
+  const int kIdx = (opIdx == 0 ? 1 : 0) + hasBatch;
+  newShape[kIdx] *= 2;
+  return RankedTensorType::get(newShape, outputElemType, newVEncoding);
 }
 
 OpFoldResult MemDescTransOp::fold(FoldAdaptor adaptor) {
@@ -443,6 +468,7 @@ LogicalResult MemDescTransOp::inferReturnTypes(
     SmallVectorImpl<Type> &inferredReturnTypes) {
   // type is the same as the input
   auto argTy = cast<MemDescType>(operands[0].getType());
+  auto argShape = argTy.getShape();
   auto order = properties.as<Properties *>()->order.asArrayRef();
   SmallVector<int64_t> retShape = applyPermutation(argTy.getShape(), order);
 
@@ -453,7 +479,7 @@ LogicalResult MemDescTransOp::inferReturnTypes(
     Dialect &dialect = argEncoding.getDialect();
     auto inferLayoutInterface = cast<DialectInferLayoutInterface>(&dialect);
     if (inferLayoutInterface
-            ->inferTransOpEncoding(argEncoding, order, retEncoding)
+            ->inferTransOpEncoding(argEncoding, argShape, order, retEncoding)
             .failed()) {
       return failure();
     }
@@ -605,15 +631,8 @@ int32_t LocalAllocOp::getAlignmentOrDefault() {
   }
 
   auto ty = getType();
-  auto shapePerCTA = triton::gpu::getShapePerCTA(ty);
-  auto bytes =
-      product<int64_t>(shapePerCTA) * (ty.getElementTypeBitWidth() / 8);
-
-  // XXX(Keren): magic numbers 256 and 1024
-  // Software swizzling calculates phase based on offset, while hardware
-  // swizzling do that based on physical address. Thus only by setting the
-  // alignment to 1024 can ensure the correctness.
-  return bytes > 256 ? 1024 : 8;
+  auto enc = dyn_cast<SharedEncodingAttr>(ty.getEncoding());
+  return enc ? enc.getAlignment() : 16;
 }
 
 } // namespace mlir::triton::gpu

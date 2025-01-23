@@ -11,6 +11,9 @@ def do_bench(kernel_call, quantiles):
 
 @pytest.mark.parametrize('use_cuda_graph', [False, True])
 def test_kwargs(use_cuda_graph: bool, device: str):
+    if use_cuda_graph and not torch.cuda.is_available():
+        pytest.xfail("CUDA is not available")
+
     M, N = 1024, 16
     src = torch.randn(M * N, device=device)
     dst = torch.empty(M * N, device=device)

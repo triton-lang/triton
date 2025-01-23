@@ -110,7 +110,7 @@ class HIPBackend(BaseBackend):
         self.binary_ext = "hsaco"
 
     def parse_options(self, opts) -> Any:
-        args = {'arch': self.target.arch}
+        args = {'arch': os.getenv("TRITON_OVERRIDE_ARCH", self.target.arch)}
 
         if "supported_fp8_dtypes" not in opts:
             supported_fp8_dtypes = set(HIPOptions.supported_fp8_dtypes)
@@ -120,7 +120,7 @@ class HIPBackend(BaseBackend):
 
         if "enable_fp_fusion" not in opts:
             args["enable_fp_fusion"] = os.getenv("TRITON_DEFAULT_FP_FUSION", "1") == "1"
-        args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() if k in opts})
+        args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() if k in opts and opts[k] is not None})
         return HIPOptions(**args)
 
     def pack_metadata(self, metadata):
@@ -133,7 +133,7 @@ class HIPBackend(BaseBackend):
             metadata.cluster_dims[2],
         )
 
-    def get_codegen_implementation(self):
+    def get_codegen_implementation(self, options):
         codegen_fns = {"min_dot_size": min_dot_size(self.target)}
         return codegen_fns
 
@@ -220,6 +220,11 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
 
         stream_prefetch = os.getenv("TRITON_HIP_STREAM_PREFETCH", "0") == "1"
+        use_buffer_ops = os.environ.get("AMDGCN_USE_BUFFER_OPS", "0") == "1"
+        bypass_lds = os.environ.get("TRITON_HIP_BYPASS_LDS_FOR_DOT", "0") == "1"
+
+        if bypass_lds:
+            amd.passes.ttgpuir.add_bypass_lds_for_dot_operand(pm)
 
         # The `local-prefetch` scheduling variant requires turning on buffer ops.
         if options.instruction_sched_variant == "local-prefetch":
@@ -247,7 +252,7 @@ class HIPBackend(BaseBackend):
         if use_buffer_ops:
             amd.passes.ttgpuir.add_canonicalize_pointers(pm)
             passes.common.add_canonicalizer(pm)
-            amd.passes.ttgpuir.add_convert_to_buffer_ops(pm)
+            amd.passes.ttgpuir.add_convert_to_buffer_ops(pm, options.arch)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)

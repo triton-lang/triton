@@ -2,6 +2,7 @@ add_triton_library(TritonGPUTransforms
   AccelerateMatmul.cpp
   Coalesce.cpp
   F32DotTC.cpp
+  FuseNestedLoops.cpp
   CombineTensorSelectAndIf.cpp
   LoopScheduling.cpp
   ReduceDataDuplication.cpp

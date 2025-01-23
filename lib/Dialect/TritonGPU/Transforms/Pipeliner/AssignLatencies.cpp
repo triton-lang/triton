@@ -257,8 +257,7 @@ DenseMap<Operation *, int> assignLatencies(ModuleOp moduleOp,
 
     // Calculate the stage distance between applicable loads.
     auto vals = llvm::make_second_range(loadOpToIndLevel);
-    int maxIndirectionLevel =
-        vals.empty() ? 0 : *std::max_element(vals.begin(), vals.end());
+    int maxIndirectionLevel = vals.empty() ? 0 : *llvm::max_element(vals);
     unsigned loadLatency = (numStages - 1) / (maxIndirectionLevel + 1);
 
     for (auto [loadOp, dist] : loadOpToIndLevel) {

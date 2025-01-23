@@ -10,20 +10,6 @@ class TTG_TypeDef<string name, string _mnemonic, list<Trait> traits = []>
     let mnemonic = _mnemonic;
 }
 
-def TTG_TokenType : TTG_TypeDef<"Token", "token"> {
-  let parameters = (ins "int32_t":$type);
-
-  let builders = [
-    TypeBuilder<(ins "unsigned":$type), [{
-      return $_get($_ctxt, type);
-    }]>
-  ];
-
-  let hasCustomAssemblyFormat = 1;
-
-  let skipDefaultBuilders = 1;
-}
-
 def TTG_AsyncToken : TTG_TypeDef<"AsyncToken", "async.token", []> {
   let summary = "async token type";
   let description = [{

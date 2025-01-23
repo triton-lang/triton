@@ -25,6 +25,7 @@
 #define TRITON_AMDGPU_ATTRDEFS
 
 include "mlir/IR/AttrTypeBase.td"
+include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 include "TritonAMDGPUDialect.td"
 include "mlir/IR/EnumAttr.td"
 

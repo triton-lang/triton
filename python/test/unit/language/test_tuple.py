@@ -25,7 +25,7 @@ def _tuple_index(_0, Ptrs, _1: tl.constexpr, values, _2, _3: tl.constexpr, _4):
 
 
 @pytest.mark.parametrize("size", [0, 1, 2, 3, 4])
-def test_index(size, device="cuda"):
+def test_index(size, device):
     vals = tuple([i + 1 for i in range(size)])
     rets = tuple([torch.zeros((1, ), dtype=torch.float32, device=device) for _ in vals])
     _tuple_index[(1, )](0, rets, 0, vals, 0, 0, 0)
@@ -51,7 +51,7 @@ def _tuple_assign(XPtrs, YPtrs, values):
     tl.store(Y[2], y[2])
 
 
-def test_assign(device="cuda"):
+def test_assign(device):
     vals = (2., 3.)
     x = tuple([torch.zeros((1, ), dtype=torch.float32, device=device) for _ in range(2)])
     y = tuple([torch.zeros((1, ), dtype=torch.float32, device=device) for _ in range(3)])
@@ -91,7 +91,7 @@ def _tuple_serialize(Ptr, N1, tuple1, cst1: tl.constexpr, val1, tuple2):
     _tuple_fn0(Ptr, 15, (-1, None, tuple1))
 
 
-def test_serialize(device="cuda"):
+def test_serialize(device):
     x0 = torch.tensor([8], dtype=torch.int32, device=device)
     x1 = torch.tensor([12], dtype=torch.int32, device=device)
     y0 = torch.tensor([10], dtype=torch.int32, device=device)
@@ -133,7 +133,7 @@ def _namedtuple_kernel(closure, _X, Y, BLOCK_M: tl.constexpr, BLOCK_N: tl.conste
     tl.store(Ys, y, mask=_namedtuple_mask_func(Y, BLOCK_M, BLOCK_N))
 
 
-def test_namedtuple(device="cuda"):
+def test_namedtuple(device):
     x = torch.randn((32, 32), dtype=torch.float32, device=device)
     y = torch.empty((16, 16), dtype=torch.float32, device=device)
     a = torch.tensor([5.2], dtype=torch.float32, device=device)

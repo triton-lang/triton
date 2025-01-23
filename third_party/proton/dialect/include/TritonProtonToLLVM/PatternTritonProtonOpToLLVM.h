@@ -3,11 +3,8 @@
 
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 
-using namespace mlir;
-using namespace mlir::triton;
-
-namespace mlir {
-namespace triton {
+namespace mlir::triton {
+class TargetInfoBase;
 namespace proton {
 void populateRecordOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                    RewritePatternSet &patterns,
@@ -19,7 +16,6 @@ void populateInitDeviceBufferOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                              PatternBenefit benefit);
 
 } // namespace proton
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton
 
 #endif
