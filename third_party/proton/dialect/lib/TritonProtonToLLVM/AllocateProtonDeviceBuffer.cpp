@@ -22,7 +22,6 @@ namespace triton {
 } // namespace mlir
 
 namespace {
-// TODO: move this into Proton backend
 struct AllocateProtonDeviceBuffer
     : public mlir::triton::impl::AllocateProtonDeviceBufferBase<
           AllocateProtonDeviceBuffer> {
