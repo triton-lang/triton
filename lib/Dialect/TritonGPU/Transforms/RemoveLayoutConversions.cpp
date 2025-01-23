@@ -1061,8 +1061,8 @@ void LayoutRematerialization::backwardRematerialization(
     ConvertLayoutOp convertOp) {
   // DotOperand is hoisted by hoistDotOperand
   RankedTensorType targetType = convertOp.getType();
-  if (isa<DotOperandEncodingAttr>(targetType.getEncoding()))
-    return;
+  // if (isa<DotOperandEncodingAttr>(targetType.getEncoding()))
+  //   return;
   Value oldV = convertOp.getSrc();
   LDBG("check backward remat with source " << oldV << " encoding "
                                            << targetType.getEncoding());
