@@ -1129,8 +1129,8 @@ LinearLayout chooseDotLdMatrixLayout(DotOperandEncodingAttr dot,
     //   row0  reg[0-1]   reg[4-5]
     //   row8  reg[2-3]   reg[6-7]
     if (needTrans) {
-      assert(elemBitWidth == 16 &&
-             "Only 16-bit elements are supported in the transposed mode");
+      assert(elemBitWidth <= 16 && "Only elements smaller than 16 bits are "
+                                   "supported in the transposed mode");
       basesLane.push_back({0, 8});
       basesLane.push_back({8, 0});
     } else {
@@ -1145,8 +1145,8 @@ LinearLayout chooseDotLdMatrixLayout(DotOperandEncodingAttr dot,
     //           col0       col8      col16    col24
     //   row0  reg[0-1]   reg[2-3]  reg[4-5]  reg[6-7]
     if (needTrans) {
-      assert(elemBitWidth == 16 &&
-             "Only 16-bit elements are supported in the transposed mode");
+      assert(elemBitWidth <= 16 && "Only elements smaller than 16 bits are "
+                                   "supported in the transposed mode");
       basesLane.push_back({8, 0});
       basesLane.push_back({16, 0});
     } else {

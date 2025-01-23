@@ -58,9 +58,8 @@ public:
       // operands of MMA, we don't use ldmatrix
       // Limitation 3 [TODO: remove]: Shared memory with leading offset is not
       // supported yet
-      auto canUseLdmatrixLegacy = (bitwidth == 16 || (!needTrans)) &&
-                                  (kWidth == vecWidth) &&
-                                  (!sharedEnc.getHasLeadingOffset());
+      auto canUseLdmatrixLegacy =
+          (kWidth == vecWidth) && (!sharedEnc.getHasLeadingOffset());
       if (mmaEnc.isHopper()) {
         // Limitation 4 [TODO: remove]:
         // I think we should be able to remove this condition, but it's here
@@ -80,8 +79,10 @@ public:
       auto allocShape = srcTy.getAllocShape();
       // Limitation 6 [TODO: remove]: Only support 2d matrices now but we should
       // be able to support 3D minor changes
-      canUseLdmatrixLegacy &= shape.size() <= 2;
-      auto canUseLdmatrixLL = canUseLdmatrixLegacy;
+      auto canUseLdmatrixLL = (bitwidth <= 16 || (!needTrans)) &&
+                              shape.size() <= 2 && canUseLdmatrixLegacy;
+      canUseLdmatrixLegacy &=
+          (bitwidth == 16 || (!needTrans)) && shape.size() <= 2;
       if (dotEnc.getOpIdx() == 0) {
         canUseLdmatrixLL &=
             shape[kOrder] >= (16 * 16 / bitwidth) && shape[nonKOrder] >= 16;
