@@ -147,6 +147,8 @@ public:
 
   LogicalResult matchAndRewrite(ConvertLayoutOp cvtOp,
                                 PatternRewriter &rewriter) const override {
+
+    return failure();
     // Match outerCvt(trans(innerCvt(x))).
     auto trans = cvtOp.getSrc().getDefiningOp<TransOp>();
     if (!trans || trans.getOrder() != ArrayRef<int32_t>{1, 0})

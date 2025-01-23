@@ -1043,8 +1043,8 @@ void LayoutRematerialization::backwardRematerialization(
   // we don't handle conversions to DotOperandEncodingAttr
   // this is a heuristic to accommodate fused attention
   RankedTensorType targetType = convertOp.getType();
-  if (isa<DotOperandEncodingAttr>(targetType.getEncoding()))
-    return;
+  // if (isa<DotOperandEncodingAttr>(targetType.getEncoding()))
+  //   return;
   Value oldV = convertOp.getSrc();
   LDBG("check backward remat with source " << oldV << " encoding "
                                            << targetType.getEncoding());
