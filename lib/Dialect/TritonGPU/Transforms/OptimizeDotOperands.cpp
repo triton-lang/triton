@@ -137,8 +137,8 @@ auto cloneSlice(PatternRewriter &rewriter,
 }
 
 // Given
-//   convert(trans(src)) #dot_operand ->
-//   convert(local_load(trans(alloc(src))))
+//   dot(convert(trans(src)) #dot_operand) ->
+//   dot(convert(local_load(trans(alloc(src)))))
 // change the encoding of the inner convert to a special, swizzled shared
 // encoding.
 class SwizzleShmemConvert : public OpRewritePattern<ConvertLayoutOp> {
@@ -147,6 +147,9 @@ public:
 
   LogicalResult matchAndRewrite(ConvertLayoutOp cvtOp,
                                 PatternRewriter &rewriter) const override {
+    if (!cvtOp->hasOneUse() ||
+        !isa<triton::DotOp>(cvtOp->use_begin()->getOwner()))
+      return failure();
     // Match outerCvt(trans(innerCvt(x))).
     auto trans = cvtOp.getSrc().getDefiningOp<TransOp>();
     if (!trans || trans.getOrder() != ArrayRef<int32_t>{1, 0})
