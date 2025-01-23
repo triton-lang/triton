@@ -265,16 +265,18 @@ unsigned ScanLoweringHelper::getAxisNumBlocks() {
   auto sizePerThreads = getSizePerThread(getEncoding());
   auto threadsPerWarp = getThreadsPerWarp(getEncoding());
   auto warpsPerCTA = getWarpsPerCTA(getEncoding());
+  auto CTAsPerCGA = getCTAsPerCGA(getEncoding());
   unsigned axis = getAxis();
   return ceil<unsigned>(
       getShape()[axis],
-      (sizePerThreads[axis] * threadsPerWarp[axis] * warpsPerCTA[axis]));
+      (sizePerThreads[axis] * threadsPerWarp[axis] * warpsPerCTA[axis] * CTAsPerCGA[axis]));
 }
 
 unsigned ScanLoweringHelper::getNonAxisNumBlocks() {
   auto sizePerThreads = getSizePerThread(getEncoding());
   auto threadsPerWarp = getThreadsPerWarp(getEncoding());
   auto warpsPerCTA = getWarpsPerCTA(getEncoding());
+  auto CTAsPerCGA = getCTAsPerCGA(getEncoding());
   unsigned axis = getAxis();
   unsigned numBlocks = 1;
   for (unsigned i = 0; i < sizePerThreads.size(); i++) {
@@ -282,7 +284,7 @@ unsigned ScanLoweringHelper::getNonAxisNumBlocks() {
       continue;
     numBlocks *=
         ceil<unsigned>(getShape()[i], (sizePerThreads[i] * threadsPerWarp[i] *
-                                       warpsPerCTA[i]));
+                                       warpsPerCTA[i] * CTAsPerCGA[i]));
   }
   return numBlocks;
 }
@@ -611,12 +613,14 @@ unsigned ScanLoweringHelper::getAxisBlockStride() {
   auto sizePerThreads = getSizePerThread(getEncoding());
   auto threadsPerWarp = getThreadsPerWarp(getEncoding());
   auto warpsPerCTA = getWarpsPerCTA(getEncoding());
+  auto CTAsPerCGA = getCTAsPerCGA(getEncoding());
   for (unsigned dim : order) {
     if (dim == getAxis())
       return stride;
     stride *= ceil<unsigned int>(getShape()[dim], sizePerThreads[dim] *
                                                       threadsPerWarp[dim] *
-                                                      warpsPerCTA[dim]);
+                                                      warpsPerCTA[dim] *
+                                                      CTAsPerCGA[dim]);
   }
   llvm_unreachable("Axis not found in order");
 }
