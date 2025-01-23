@@ -14,9 +14,9 @@ void populateRecordOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                    const TargetInfoBase &targetInfo,
                                    PatternBenefit benefit);
 void populateInitDeviceBufferOpToLLVMPattern(LLVMTypeConverter &typeConverter,
-                                            RewritePatternSet &patterns,
-                                            const TargetInfoBase &targetInfo,
-                                            PatternBenefit benefit);
+                                             RewritePatternSet &patterns,
+                                             const TargetInfoBase &targetInfo,
+                                             PatternBenefit benefit);
 
 } // namespace proton
 } // namespace triton
