@@ -168,9 +168,10 @@ private:
 
     // Emit ldmatrix load operations for values packed in i32s
     SmallVector<Value> elemsI32;
+    auto maxVecElems = 8 * 16 / bitwidth;
     bool valid = emitTransferBetweenRegistersAndShared(
         ldmatrixLayout, srcTy, llvmElemTy,
-        /*maxVecElems=*/std::nullopt, smemObj, loc, rewriter, targetInfo,
+        /*maxVecElems=*/maxVecElems, smemObj, loc, rewriter, targetInfo,
         [&](VectorType vecTy, Value vecAddr) {
           auto numElems = vecTy.getNumElements();
           auto numElemsI32 = numElems * bitwidth / 32;
