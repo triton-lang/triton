@@ -267,9 +267,9 @@ unsigned ScanLoweringHelper::getAxisNumBlocks() {
   auto warpsPerCTA = getWarpsPerCTA(getEncoding());
   auto CTAsPerCGA = getCTAsPerCGA(getEncoding());
   unsigned axis = getAxis();
-  return ceil<unsigned>(
-      getShape()[axis],
-      (sizePerThreads[axis] * threadsPerWarp[axis] * warpsPerCTA[axis] * CTAsPerCGA[axis]));
+  return ceil<unsigned>(getShape()[axis],
+                        (sizePerThreads[axis] * threadsPerWarp[axis] *
+                         warpsPerCTA[axis] * CTAsPerCGA[axis]));
 }
 
 unsigned ScanLoweringHelper::getNonAxisNumBlocks() {
@@ -617,10 +617,9 @@ unsigned ScanLoweringHelper::getAxisBlockStride() {
   for (unsigned dim : order) {
     if (dim == getAxis())
       return stride;
-    stride *= ceil<unsigned int>(getShape()[dim], sizePerThreads[dim] *
-                                                      threadsPerWarp[dim] *
-                                                      warpsPerCTA[dim] *
-                                                      CTAsPerCGA[dim]);
+    stride *= ceil<unsigned int>(getShape()[dim],
+                                 sizePerThreads[dim] * threadsPerWarp[dim] *
+                                     warpsPerCTA[dim] * CTAsPerCGA[dim]);
   }
   llvm_unreachable("Axis not found in order");
 }
