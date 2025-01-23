@@ -199,7 +199,7 @@ struct ConvertBuiltinFuncToLLVM
     RewritePatternSet patterns(context);
     patterns.add<CallOpConversion>(context, this->ftz);
 
-    if (mlir::applyPatternsAndFoldGreedily(mod, std::move(patterns), config)
+    if (mlir::applyPatternsGreedily(mod, std::move(patterns), config)
             .failed()) {
       signalPassFailure();
     }

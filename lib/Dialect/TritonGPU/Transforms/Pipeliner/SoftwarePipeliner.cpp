@@ -110,8 +110,7 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
         getOperation().getContext()->getLoadedDialect<arith::ArithDialect>();
     RewritePatternSet patterns(getOperation().getContext());
     arithDialect->getCanonicalizationPatterns(patterns);
-    if (applyPatternsAndFoldGreedily(getOperation(), std::move(patterns))
-            .failed())
+    if (applyPatternsGreedily(getOperation(), std::move(patterns)).failed())
       return signalPassFailure();
 
     // Try to pipeline the outer loop to overlap the prologue and epilogue of

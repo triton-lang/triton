@@ -539,7 +539,7 @@ def TT_SplitOp : TT_Op<"split", [
 
 def TT_TransOp : TT_Op<"trans", [Pure,
                                  TransposeOpInterface,
-                                 DeclareOpInterfaceMethods<InferTypeOpInterface>,
+                                 InferTypeOpAdaptorWithIsCompatible,
                                  SameOperandsAndResultElementType]> {
 
     let summary = "rearrange the dimensions of a tensor";
@@ -1099,7 +1099,7 @@ def CallOp : TT_Op<"call", [CallOpInterface, /*MemRefsNormalizable, */DeclareOpI
 
     /// Set the callee for this operation.
     void setCalleeFromCallable(CallInterfaceCallable callee) {
-      (*this)->setAttr("callee", callee.get<SymbolRefAttr>());
+      (*this)->setAttr("callee", cast<SymbolRefAttr>(callee));
     }
 
     // Required by CallOpInterface.

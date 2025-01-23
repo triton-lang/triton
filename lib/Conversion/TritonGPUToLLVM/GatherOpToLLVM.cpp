@@ -207,9 +207,9 @@ void GatherOpConversion::emitWarpLocalGather(
 
   // Compute the src and idx layouts.
   LinearLayout srcLayout =
-      *toLinearLayout(srcType.getShape(), srcType.getEncoding());
+      toLinearLayout(srcType.getShape(), srcType.getEncoding());
   LinearLayout idxLayout =
-      *toLinearLayout(idxType.getShape(), idxType.getEncoding());
+      toLinearLayout(idxType.getShape(), idxType.getEncoding());
 
   // Let `ll_src` be the source layout and `ll_idx` be the index layout.
   // Let `src_col` be a tuple of dimensions except the gather dimension,

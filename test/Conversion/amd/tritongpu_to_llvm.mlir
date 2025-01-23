@@ -252,3 +252,45 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     tt.return
   }
 }
+
+// -----
+
+#blocked5 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [1], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: atomic_runtime_lds_reduction
+  tt.func @atomic_runtime_lds_reduction(%arg0 : tensor<64x!tt.ptr<f32>, #blocked5>, %arg2 : tensor<64xf32, #blocked5>) {
+    // CHECK: ptrtoint
+
+    // loop body:
+    // CHECK: llvm.bitcast
+    // CHECK-COUNT-2: llvm.amdgcn.readfirstlane
+    // CHECK: llvm.bitcast
+    // CHECK: llvm.amdgcn.ballot
+    // CHECK: rocdl.mbcnt.lo
+    // CHECK: rocdl.mbcnt.hi
+
+    // share info:
+    // 1. address
+    // CHECK: llvm.bitcast
+    // CHECK-COUNT-2: llvm.amdgcn.ds.permute
+    // CHECK: llvm.bitcast
+    // 2. value
+    // CHECK: llvm.bitcast
+    // CHECK: llvm.amdgcn.ds.permute
+    // CHECK: llvm.bitcast
+    // 3. packed methadata
+    // CHECK: llvm.bitcast
+    // CHECK: llvm.amdgcn.ds.permute
+    // CHECK: llvm.bitcast
+
+    // CHECK: llvm.amdgcn.ballot
+
+    // reduction:
+    // CHECK-COUNT-6: llvm.amdgcn.ds.bpermute
+
+    // CHECK: inttoptr
+    // CHECK: llvm.atomicrmw
+    %0 = tt.atomic_rmw fadd, relaxed, gpu, %arg0, %arg2 {allocation.offset = 0 : i32} : (tensor<64x!tt.ptr<f32>, #blocked5>, tensor<64xf32, #blocked5>) -> tensor<64xf32, #blocked5>
+    tt.return
+  }
+}
