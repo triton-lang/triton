@@ -1,6 +1,8 @@
-#include "Utility.h"
-#include "Dialect/NVGPU/IR/Dialect.h"
+// clang-format off
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "Utility.h"
+// clang-format on
+#include "Dialect/NVGPU/IR/Dialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 
 namespace mlir {

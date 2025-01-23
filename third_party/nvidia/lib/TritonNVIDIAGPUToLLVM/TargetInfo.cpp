@@ -1,10 +1,12 @@
 #include "TargetInfo.h"
 #include "Dialect/NVGPU/IR/Dialect.h"
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
+// clang-format off
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "Utility.h"
+// clang-format on
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
-#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "llvm/Support/MathExtras.h"
 
 using namespace mlir;

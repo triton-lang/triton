@@ -1,8 +1,10 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
-#include "Utility.h"
-#include "mlir/Conversion/LLVMCommon/Pattern.h"
+// clang-format off
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "Utility.h"
+// clang-format on
+#include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/IR/PatternMatch.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
