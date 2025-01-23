@@ -24,31 +24,39 @@ struct InitLocalBufferOpConversion
   matchAndRewrite(mlir::triton::proton::InitLocalBufferOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
 
-  auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-  Location loc = UnknownLoc::get(rewriter.getContext());
-  auto ctx = moduleOp.getContext();
-  size_t contentSize = op.getBufferSize();
-  auto globalType = LLVM::LLVMArrayType::get(i8_ty, contentSize);
-
-  LLVM::GlobalOp global;
-  {
-    RewriterBase::InsertionGuard guard(rewriter);
-    rewriter.setInsertionPointToStart(moduleOp.getBody());
-   global = rewriter.create<LLVM::GlobalOp>(
-        UnknownLoc::get(ctx), globalType,
-        /*isConstant=*/false, LLVM::Linkage::External,
-        "proton_smem", /*value=*/Attribute(), /*alignment=*/16, 3);
-        
-  }
-  Value zero = i32_val(0);
-  Type globalPtrType = LLVM::LLVMPointerType::get(ctx, global.getAddrSpace());
-  Value globalPtr = rewriter.create<LLVM::AddressOfOp>(
-      UnknownLoc::get(ctx), globalPtrType, global.getSymName());
-  Value bufferStart =
-      gep(ptr_ty(ctx), i8_ty, globalPtr, SmallVector<Value>({zero}));  
-  //Store a 0 just to keep the buffer from being optimized away in the IR
-  store(i32_val(0), bufferStart);  
-  rewriter.replaceOp(op, bufferStart); 
+    auto moduleOp =
+        rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
+    Location loc = UnknownLoc::get(rewriter.getContext());
+    auto ctx = moduleOp.getContext();
+    size_t bufferSize = op.getBufferSize();
+    auto globalType = LLVM::LLVMArrayType::get(i8_ty, bufferSize);
+    SmallVector<uint8_t> buffer(bufferSize);
+    buffer.push_back(0); // zero_initalizer
+    auto dataAttrType =
+        RankedTensorType::get({static_cast<int64_t>(buffer.size())}, i8_ty);
+    auto dataAttr =
+        DenseElementsAttr::get(dataAttrType, llvm::ArrayRef(buffer));
+    auto arrayTy =
+        LLVM::LLVMArrayType::get(IntegerType::get(ctx, 8), buffer.size());	  
+    LLVM::GlobalOp global;
+    {
+      RewriterBase::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointToStart(moduleOp.getBody());
+      global = rewriter.create<LLVM::GlobalOp>(UnknownLoc::get(ctx), globalType,
+                                               /*isConstant=*/false,
+                                               LLVM::Linkage::External,
+                                               "proton_buffer", dataAttr);
+    }    
+    global.setAddrSpace(1);
+    global.setExternallyInitialized(true);
+   Value zero = i32_val(0);
+    Type globalPtrType = LLVM::LLVMPointerType::get(ctx, global.getAddrSpace());
+    Value globalPtr = rewriter.create<LLVM::AddressOfOp>(
+        UnknownLoc::get(rewriter.getContext()), globalPtrType,
+        global.getSymName());
+    Value bufferStart =
+        gep(ptr_ty(ctx), i8_ty, globalPtr, SmallVector<Value>({zero}));
+    rewriter.replaceOp(op, bufferStart);
   return success();
   }
 

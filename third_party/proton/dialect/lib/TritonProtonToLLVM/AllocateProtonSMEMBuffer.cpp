@@ -42,13 +42,10 @@ struct AllocateProtonSMEMBuffer
 	});
     if(hasProtonRecordOp){
     	b.setInsertionPointToStart(&func.getBody().front());
-	//For now just hard code the maximum shared memory we want to use. 
-	//TODO: Make this arch specific by querying the targetInfo
-	int maxSharedMemoryInBytes = 64;
-	int allocatedSharedMemoryInBytes = allocation.getSharedMemorySize();;
-    	int bufferSizeInBytes = maxSharedMemoryInBytes-allocatedSharedMemoryInBytes; //bytes
+	//For now just hard code the device buffer size we want to use. 
+        int deviceBufferSizeInBytes = 1024;										     
     	auto ptrTy = PointerType::get(IntegerType::get(context, 8), 1);
-	auto buffer = b.create<triton::proton::InitLocalBufferOp>(loc, ptrTy, bufferSizeInBytes);
+	auto buffer = b.create<triton::proton::InitLocalBufferOp>(loc, ptrTy, deviceBufferSizeInBytes);
 
     }
 
