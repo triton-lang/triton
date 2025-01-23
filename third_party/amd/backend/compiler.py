@@ -221,6 +221,10 @@ class HIPBackend(BaseBackend):
 
         stream_prefetch = os.getenv("TRITON_HIP_STREAM_PREFETCH", "0") == "1"
         use_buffer_ops = os.environ.get("AMDGCN_USE_BUFFER_OPS", "0") == "1"
+        bypass_lds = os.environ.get("TRITON_HIP_BYPASS_LDS_FOR_DOT", "0") == "1"
+
+        if bypass_lds:
+            amd.passes.ttgpuir.add_bypass_lds_for_dot_operand(pm)
 
         # The `local-prefetch` scheduling variant requires turning on buffer ops.
         if options.instruction_sched_variant == "local-prefetch":
