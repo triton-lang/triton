@@ -101,18 +101,21 @@ private:
 
     // Emit ldmatrix load operations for values packed in i32s
     SmallVector<Value> elemsI32;
-    auto shift = static_cast<int>(shape[kOrder] < (16 * 16 / bitwidth)) +
-                 static_cast<int>(shape[nonKOrder] < 16);
-    auto maxVecElems = (8 * 16 / bitwidth) >> shift;
-    auto numRegs = ldmatrixLayout.getInDimSize(str_attr("register")) >> shift;
+    auto shift = 0;
+    if (dotEnc.getOpIdx() == 0) {
+      shift = static_cast<int>(shape[kOrder] < (16 * 16 / bitwidth)) +
+              static_cast<int>(shape[nonKOrder] < 16);
+    } else {
+      shift = static_cast<int>(shape[kOrder] < (32 * 16 / bitwidth)) +
+              static_cast<int>(shape[nonKOrder] < 8);
+    }
+    auto maxVecElems = 8 * 16 / bitwidth;
     bool valid = emitTransferBetweenRegistersAndShared(
         ldmatrixLayout, srcTy, llvmElemTy,
         /*maxVecElems=*/maxVecElems, smemObj, loc, rewriter, targetInfo,
         [&](VectorType vecTy, Value vecAddr) {
-          if (elemsI32.size() * 32 >= numRegs * bitwidth)
-            return;
           auto numElems = vecTy.getNumElements();
-          auto numElemsI32 = numElems * bitwidth / 32;
+          auto numElemsI32 = (numElems * bitwidth / 32) >> shift;
           auto matTy = LLVM::LLVMStructType::getLiteral(
               ctx, SmallVector<Type>(numElemsI32, i32_ty));
           auto ldMatrixOp = rewriter.create<nvgpu::LoadMatrixOp>(
