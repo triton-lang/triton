@@ -52,42 +52,27 @@ public:
       auto kOrder = dotEnc.getOpIdx() == 0 ? rank - 1 : rank - 2;
       auto nonKOrder = dotEnc.getOpIdx() == 0 ? rank - 2 : rank - 1;
       auto needTrans = kOrder != sharedEnc.getOrder()[0];
-      // Limitation 1: Cannot use ldmatrix if we need to transpose a non-fp16
-      // matrix
-      // Limitation 2: If kWidth is greater than the vector width of the dot
+      // Limitation 1: If kWidth is greater than the vector width of the dot
       // operands of MMA, we don't use ldmatrix
-      // Limitation 3 [TODO: remove]: Shared memory with leading offset is not
+      // Limitation 2 [TODO: remove]: Shared memory with leading offset is not
       // supported yet
-      auto canUseLdmatrixLegacy =
+      auto canUseLdmatrixLL =
           (kWidth == vecWidth) && (!sharedEnc.getHasLeadingOffset());
-      if (mmaEnc.isHopper()) {
-        // Limitation 4 [TODO: remove]:
-        // I think we should be able to remove this condition, but it's here
-        // as the legacy ldmatrix path does not support it
-        canUseLdmatrixLegacy &= srcTy.getElementTypeBitWidth() * kWidth == 32 &&
-                                dotEnc.getOpIdx() == 0;
-      }
-      // Limitation 5: If we perform swizzling, it must be done within a single
-      // ldmatrix tile
       auto maxPhase = sharedEnc.getMaxPhase();
       auto perPhase = sharedEnc.getPerPhase();
       auto vecSize = sharedEnc.getVec();
-      canUseLdmatrixLegacy &=
-          (maxPhase == 1) ||
-          ((maxPhase / perPhase <= 8) && (vecSize * bitwidth >= 8 * 16));
+      canUseLdmatrixLL &= (maxPhase == 1) || (vecSize * bitwidth >= 8 * 16);
       auto shape = srcTy.getShape();
       auto allocShape = srcTy.getAllocShape();
-      // Limitation 6 [TODO: remove]: Only support 2d matrices now but we should
+      // Limitation 3 [TODO: remove]: Only support 2d matrices now but we should
       // be able to support 3D minor changes
-      auto canUseLdmatrixLL = (bitwidth <= 16 || (!needTrans)) &&
-                              shape.size() <= 2 && canUseLdmatrixLegacy;
-      canUseLdmatrixLegacy &=
-          (bitwidth == 16 || (!needTrans)) && shape.size() <= 2;
+      auto canUseLdmatrixLL =
+          (bitwidth <= 16 || (!needTrans)) && shape.size() <= 2;
       if (dotEnc.getOpIdx() == 0) {
         canUseLdmatrixLL &=
             shape[kOrder] >= (16 * 16 / bitwidth) && shape[nonKOrder] >= 16;
       } else {
-        // Limitation 8 [TODO: remove]: Due to the use of ldmatrix.x4, we need
+        // Limitation 4 [TODO: remove]: Due to the use of ldmatrix.x4, we need
         // to read 4 tiles. For opIdx=1, a single warp load four consecutive
         // tiles along the K dimension, so the minimum K size is 4 * 8 = 32.
         // The legacy path doesn't have this limitation because it reads
@@ -101,49 +86,15 @@ public:
       // If we remove this one, ldmatrix will IMA. It can probably be relaxed
       // though. Remove this constraint after all other limitations have been
       // resolved
-      canUseLdmatrixLegacy &=
-          srcTy.getShape()[0] >= 8 && srcTy.getShape()[1] >= 4 * kWidth;
       if (canUseLdmatrixLL) {
         return lowerSharedToDotOperandLL(op, adaptor, getTypeConverter(),
                                          rewriter);
-      } else if (canUseLdmatrixLegacy) {
-        return lowerSharedToDotOperandLegacy(op, adaptor, getTypeConverter(),
-                                             rewriter);
       }
     }
     return failure();
   }
 
 private:
-  LogicalResult
-  lowerSharedToDotOperandLegacy(triton::gpu::LocalLoadOp op,
-                                triton::gpu::LocalLoadOpAdaptor adaptor,
-                                const LLVMTypeConverter *typeConverter,
-                                ConversionPatternRewriter &rewriter) const {
-    auto loc = op.getLoc();
-    auto src = op.getSrc();
-    auto dstLayout = cast<DotOperandEncodingAttr>(op.getType().getEncoding());
-    auto mmaLayout = cast<NvidiaMmaEncodingAttr>(dstLayout.getParent());
-    auto llvmElemTy =
-        typeConverter->convertType(src.getType().getElementType());
-    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
-                                                         llvmElemTy, rewriter);
-    Value res;
-    if (mmaLayout.isHopper() || mmaLayout.isAmpere()) { // tensor core v2 or v3
-      if (mmaLayout.isHopper())
-        assert(dstLayout.getOpIdx() == 0 &&
-               "Operand $b in MMAv3 can only be in shared memory");
-
-      res = SharedToDotOperandMMAv2OrV3::convertLayout(
-          dstLayout.getOpIdx(), rewriter, loc, src, dstLayout, smemObj,
-          typeConverter, getThreadId(rewriter, loc));
-    } else {
-      llvm_unreachable("Unsupported mma layout found");
-    }
-    rewriter.replaceOp(op, res);
-    return success();
-  }
-
   LogicalResult
   lowerSharedToDotOperandLL(triton::gpu::LocalLoadOp op,
                             triton::gpu::LocalLoadOpAdaptor adaptor,
