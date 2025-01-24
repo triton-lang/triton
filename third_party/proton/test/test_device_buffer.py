@@ -82,4 +82,5 @@ def test_proton_buff_init(tmp_path: pathlib.Path):
     num_programs = min(num_programs, n_rows)
 
     llir = kernel.asm['llir']
+    print(llir)
     assert "@proton_buffer = local_unnamed_addr addrspace(1) externally_initialized global [1024 x i8] zeroinitializer" in llir
