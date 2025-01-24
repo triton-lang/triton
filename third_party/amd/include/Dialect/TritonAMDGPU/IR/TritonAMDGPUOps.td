@@ -236,6 +236,25 @@ def ConcatOp : TT_AMDGPU_Op<"concat", [Pure]> {
   let hasVerifier = 1;
 }
 
+def ConcatOp : TT_AMDGPU_Op<"concat", [Pure]> {
+  let summary = "concat operation";
+  let description = [{
+    The "concat" operation joins slices of a tensor together
+    in the row-major style.
+
+    TODO: complete
+    }];
+
+  let arguments = (ins Variadic<TT_Tensor>:$sources, DenseI32ArrayAttr:$dims);
+  let results = (outs AnyRankedTensor:$result);
+
+  let assemblyFormat = [{
+    $sources $dims attr-dict `:` type($sources) `->` type($result)
+  }];
+
+  let hasVerifier = 1;
+}
+
 //===----------------------------------------------------------------------===//
 // InstructionSchedHint
 //===----------------------------------------------------------------------===//

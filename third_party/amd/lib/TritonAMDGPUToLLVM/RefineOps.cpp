@@ -165,8 +165,8 @@ struct DotOpMFMAConverter {
     auto shapeC = cTensorTy.getShape();
     auto shapeD = dTensorTy.getShape();
 
-    auto numRepM = shapeA[0] / elementsPerWarp[0];
-    auto numRepN = shapeB[1] / elementsPerWarp[1];
+    int32_t numRepM = shapeA[0] / elementsPerWarp[0];
+    int32_t numRepN = shapeB[1] / elementsPerWarp[1];
 
     constexpr int M = 0;
     constexpr int N = 1;
@@ -185,8 +185,7 @@ struct DotOpMFMAConverter {
     auto refinedTensorTypeD =
         RankedTensorType::get(refinedShapeCD, elemTyD, encodeD);
 
-    auto sharedMemorySpace =
-        triton::gpu::SharedMemorySpaceAttr::get(dotOp.getContext());
+    auto sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
 
     ttg::LocalAllocOp allocOpA = allocTable.find(localLoadA)->second.first;
     Value valueSelectorA = allocTable.find(localLoadA)->second.second;
@@ -252,19 +251,16 @@ struct DotOpMFMAConverter {
       }
     }
 
-    // TODO: join results
-    for (int32_t m = 0; m < numRepM; ++m) {
-      for (int32_t n = 0; n < numRepN; ++n) {
-        Value refinedTensorC = refinedDotValues[n + numRepN * m];
-      }
-    }
+    auto concatDims = DenseI32ArrayAttr::get(ctx, {numRepM, numRepN});
+    auto joinedDotsResult = rewriter.create<triton::amdgpu::ConcatOp>(
+        loc, dTensorTy, refinedDotValues, concatDims);
 
-    // TODO: replace the use of the orig. C with the new (joined) one
+    d.replaceAllUsesWith(joinedDotsResult);
 
-    // TODO: remove old ops
-    // localLoadA.erase()
-    // localLoadB.erase()
-    // dotOp.erase()
+    // remove old ops
+    // Note: dangling localLoadA or/and localLoadB (if exist)
+    // should be removed by the dead code elimination pass
+    dotOp.erase();
   }
 };
 
