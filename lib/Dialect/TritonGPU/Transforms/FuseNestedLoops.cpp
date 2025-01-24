@@ -1,6 +1,8 @@
 #include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Dominance.h"
+#include "mlir/IR/ImplicitLocOpBuilder.h"
+#include "mlir/Transforms/RegionUtils.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "llvm/Support/Debug.h"
@@ -296,27 +298,27 @@ static unsigned getIntTypeWidth(Type type) {
 }
 
 // Generate IR to compute the number of iterations of a loop.
-static Value computeNumIters(OpBuilder &b, scf::ForOp loop) {
+static Value computeNumIters(ImplicitLocOpBuilder &b, scf::ForOp loop) {
   // len(range(lb, ub, step)) = ceildiv(ub - lb, step)
   // This works even if step is negative.
   Location loc = loop.getLoc();
   Value diff =
-      b.create<arith::SubIOp>(loc, loop.getUpperBound(), loop.getLowerBound());
+      b.create<arith::SubIOp>(loop.getUpperBound(), loop.getLowerBound());
   // Let someone else prove it can be unsigned.
-  return b.create<arith::CeilDivSIOp>(loc, diff, loop.getStep());
+  return b.create<arith::CeilDivSIOp>(diff, loop.getStep());
 }
 
 // Cast an integer or index value to an integer or index `type`, if necessary.
-static Value castIntIfNecessary(OpBuilder &b, Location loc, Value value,
+static Value castIntIfNecessary(ImplicitLocOpBuilder &b, Value value,
                                 Type type) {
   if (value.getType() == type)
     return value;
   if (isa<IndexType>(value.getType()) || isa<IndexType>(type))
-    return b.create<arith::IndexCastOp>(loc, type, value);
+    return b.create<arith::IndexCastOp>(type, value);
   if (cast<IntegerType>(value.getType()).getWidth() >
       cast<IntegerType>(type).getWidth())
-    return b.create<arith::TruncIOp>(loc, type, value);
-  return b.create<arith::ExtSIOp>(loc, type, value);
+    return b.create<arith::TruncIOp>(type, value);
+  return b.create<arith::ExtSIOp>(type, value);
 }
 
 // Given a one level loop nest in the form
@@ -345,11 +347,12 @@ static Value castIntIfNecessary(OpBuilder &b, Location loc, Value value,
 //   total_iters = len_i * inner_len
 //
 //   T = -1
-//   i = lbi
+//   i = lbi - stepi
 //   for _ in range(total_iters):
 //     T = (T + 1) % inner_len
 //
 //     if T == 0:
+//       i += stepi
 //       prologue0(i)
 //       j0 = lbj0
 //     if T >= 0 and T < len_j0:
@@ -385,7 +388,6 @@ static Value castIntIfNecessary(OpBuilder &b, Location loc, Value value,
 //
 //     if T == max(1, len_j0) + max(1, len_j1) + ... + max(1, len_jN) - (N + 1):
 //       epilogue(i)
-//       i += stepi
 //
 // This routine can be applied recursively on a loop nest tree, leaf-to-root, to
 // flatten the loop nest into a single loop. However, this routine only fuses
@@ -444,7 +446,9 @@ static Value castIntIfNecessary(OpBuilder &b, Location loc, Value value,
 //     }
 //
 // Note: the induction variables will be initialized to their lower bound to
-// avoid underflow in lbjk - stepjk.
+// avoid underflow in lbjk - stepjk, with the exception of the outer loop
+// induction variable, which needs to be incremented inside the prologue to
+// avoid a dependency on the epilogue. This helps the scheduler behave.
 //
 // Any inputs and outputs of the loop bodies would also need to be handled
 // similarly: initialized as undef if appropriate and carried through the fused
@@ -497,7 +501,8 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   unsigned intTyWidth = getIntTypeWidth(outer.getInductionVar().getType());
 
   // Generate the computations of the fused loop bounds.
-  OpBuilder b(outer);
+  Location loc = outer.getLoc();
+  ImplicitLocOpBuilder b(loc, outer);
   Value lenOuter = computeNumIters(b, outer);
   SmallVector<Value> lenInners;
   for (scf::ForOp loop : innerLoops) {
@@ -509,9 +514,8 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   intTyWidth = std::min(64u, intTyWidth * 2);
   auto intTy = b.getIntegerType(intTyWidth);
 
-  Location loc = outer.getLoc();
   auto intTyCst = [&](int64_t v) {
-    return b.create<arith::ConstantOp>(loc, IntegerAttr::get(intTy, v));
+    return b.create<arith::ConstantOp>(IntegerAttr::get(intTy, v));
   };
 
   // inner_len = max(1, len_j0) + max(1, len_j1) + ... + max(1, len_jN) - N
@@ -521,16 +525,16 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   SmallVector<Value> partialInnerSums;
   partialInnerSums.push_back(innerLen);
   for (Value lenInner : lenInners) {
-    lenInner = castIntIfNecessary(b, loc, lenInner, intTy);
-    lenInner = b.create<arith::MaxSIOp>(loc, intTyCst(1), lenInner);
-    innerLen = b.create<arith::AddIOp>(loc, innerLen, lenInner);
+    lenInner = castIntIfNecessary(b, lenInner, intTy);
+    lenInner = b.create<arith::MaxSIOp>(intTyCst(1), lenInner);
+    innerLen = b.create<arith::AddIOp>(innerLen, lenInner);
     partialInnerSums.push_back(innerLen);
   }
-  innerLen = b.create<arith::SubIOp>(loc, innerLen, intTyCst(N));
+  innerLen = b.create<arith::SubIOp>(innerLen, intTyCst(N));
 
   // total_iters = len_i * inner_len
-  Value totalIters = b.create<arith::MulIOp>(
-      loc, castIntIfNecessary(b, loc, lenOuter, intTy), innerLen);
+  Value totalIters =
+      b.create<arith::MulIOp>(castIntIfNecessary(b, lenOuter, intTy), innerLen);
 
   // The outputs of the prologue, each epilogue, and all inner loop bodies need
   // to carried through the fused loop.
@@ -561,8 +565,9 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
 
   // T = -1
   fusedInits.push_back(intTyCst(-1));
-  // i = lbi
-  fusedInits.push_back(outer.getLowerBound());
+  // i = lbi - stepi
+  fusedInits.push_back(
+      b.create<arith::SubIOp>(outer.getLowerBound(), outer.getStep()));
 
   unsigned outerArgsStartIdx = fusedInits.size();
   llvm::append_range(fusedInits, outer.getInits());
@@ -571,22 +576,22 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   unsigned ivarStartIdx = fusedInits.size();
   for (scf::ForOp loop : innerLoops) {
     fusedInits.push_back(
-        b.create<ub::PoisonOp>(loc, loop.getInductionVar().getType()));
+        b.create<ub::PoisonOp>(loop.getInductionVar().getType()));
   }
   unsigned innerOutsStartIdx = fusedInits.size();
   for (scf::ForOp loop : innerLoops) {
     for (Type resultType : loop.getResultTypes())
-      fusedInits.push_back(b.create<ub::PoisonOp>(loc, resultType));
+      fusedInits.push_back(b.create<ub::PoisonOp>(resultType));
   }
   unsigned logueOutsStartIdx = fusedInits.size();
   for (Logue &logue : logues) {
     for (Type outputType : logue.getOutputTypes())
-      fusedInits.push_back(b.create<ub::PoisonOp>(loc, outputType));
+      fusedInits.push_back(b.create<ub::PoisonOp>(outputType));
   }
 
   // for _ in range(total_iters):
-  auto fused = b.create<scf::ForOp>(loc, intTyCst(0), totalIters, intTyCst(1),
-                                    fusedInits);
+  auto fused =
+      b.create<scf::ForOp>(intTyCst(0), totalIters, intTyCst(1), fusedInits);
   // Replace the outer loop args with the args in the fused loop args.
   for (auto [arg, fusedArg] :
        llvm::zip(outer.getRegionIterArgs(),
@@ -597,12 +602,12 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
 
   // T = (T + 1) % inner_len
   Value T = fused.getRegionIterArg(0);
-  T = b.create<arith::AddIOp>(loc, T, intTyCst(1));
-  T = b.create<arith::RemSIOp>(loc, T, innerLen);
+  T = b.create<arith::AddIOp>(T, intTyCst(1));
+  T = b.create<arith::RemSIOp>(T, innerLen);
 
-  // Replace uses of `i` within the fused loop.
-  Value i = fused.getRegionIterArg(1);
-  outer.getInductionVar().replaceAllUsesWith(i);
+  // `i` is computed inside the first prologue.
+  Value curI = fused.getRegionIterArg(1);
+  Value i;
 
   assert(partialInnerSums.size() == N + 2);
   ArrayRef<BlockArgument> ivars = fused.getRegionIterArgs().slice(ivarStartIdx);
@@ -610,15 +615,16 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
       ValueRange(fused.getRegionIterArgs()).begin() + innerOutsStartIdx;
   auto logueOutsIt =
       ValueRange(fused.getRegionIterArgs()).begin() + logueOutsStartIdx;
-  SmallVector<scf::IfOp> logueIfs, bodyIfs;
+  SmallVector<scf::IfOp> prologueIfs, bodyIfs;
   for (unsigned k = 0; k <= N; ++k) {
     // if T == max(1, len_j0) + ... max(1, len_jk-1) - k
+    //   [[if k == 0]] i += stepi
     //   prologuek(i)
     //   jk = lbjk
     Value innerStartT =
-        b.create<arith::SubIOp>(loc, partialInnerSums[k], intTyCst(k));
+        b.create<arith::SubIOp>(partialInnerSums[k], intTyCst(k));
     Value prologueCond =
-        b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq, T, innerStartT);
+        b.create<arith::CmpIOp>(arith::CmpIPredicate::eq, T, innerStartT);
 
     // The `scf.if` outputs will be `jk` and the outputs of prologuek. We also
     // have to initialize the inner loop iter args.
@@ -628,12 +634,22 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
     SmallVector<Type> prologueOutTypes{inner.getInductionVar().getType()};
     llvm::append_range(prologueOutTypes, prologue.getOutputTypes());
     llvm::append_range(prologueOutTypes, inner.getInits().getTypes());
-    auto prologueIf = b.create<scf::IfOp>(loc, prologueOutTypes, prologueCond);
-    logueIfs.push_back(prologueIf);
+    if (k == 0)
+      prologueOutTypes.push_back(curI.getType());
+    auto prologueIf = b.create<scf::IfOp>(prologueOutTypes, prologueCond);
+    prologueIfs.push_back(prologueIf);
 
     // Splice prologuek into the `then` region.
     Block *thenBlock = b.createBlock(&prologueIf.getThenRegion());
     prologue.moveBefore(thenBlock, thenBlock->end());
+
+    if (k == 0) {
+      // Increment `i` and replace its uses inside the prologue.
+      b.setInsertionPointToStart(thenBlock);
+      i = b.create<arith::AddIOp>(curI, outer.getStep());
+      mlir::replaceAllUsesInRegionWith(outer.getInductionVar(), i,
+                                       prologueIf.getThenRegion());
+    }
 
     // Yield the initialized jk, the prologue outputs, and the initial values of
     // the inner loop.
@@ -641,7 +657,9 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
     SmallVector<Value> thenOuts{inner.getLowerBound()};
     llvm::append_range(thenOuts, prologue.getOutputs());
     llvm::append_range(thenOuts, inner.getInits());
-    b.create<scf::YieldOp>(loc, thenOuts);
+    if (k == 0)
+      thenOuts.push_back(i);
+    b.create<scf::YieldOp>(thenOuts);
 
     // In the `else` region, just yield the last values of jk, the outputs, and
     // the iter args.
@@ -651,8 +669,10 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
     SmallVector<Value> elseOuts{lastJk};
     elseOuts.append(logueOutsIt, logueOutsIt + numOuts);
     elseOuts.append(bodyOutsIt, bodyOutsIt + inner.getNumResults());
+    if (k == 0)
+      elseOuts.push_back(curI);
     logueOutsIt += numOuts;
-    b.create<scf::YieldOp>(loc, elseOuts);
+    b.create<scf::YieldOp>(elseOuts);
 
     // The results of the `scf.if` become the values of jk and the prologue
     // outputs for the rest of the fused loop.
@@ -665,6 +685,11 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
     for (auto [init, iterArg] :
          llvm::zip(prologueInits, inner.getRegionIterArgs()))
       iterArg.replaceAllUsesWith(init);
+    // Replace uses of `i` elsewhere with the prologue result.
+    if (k == 0) {
+      i = prologueIf.getResults().back();
+      outer.getInductionVar().replaceAllUsesWith(i);
+    }
 
     // if  T >= max(1, len_j0) + max(1, len_j1) + ... + max(1, len_jk-1) - k
     // and T <  max(1, len_j0) + max(1, len_j1) + ... + max(1, len_jk-1) - k +
@@ -673,17 +698,16 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
     //   jk += stepjk
     b.setInsertionPointAfter(prologueIf);
     Value innerEndT = b.create<arith::AddIOp>(
-        loc, innerStartT, castIntIfNecessary(b, loc, lenInners[k], intTy));
+        innerStartT, castIntIfNecessary(b, lenInners[k], intTy));
     Value ge =
-        b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sge, T, innerStartT);
-    Value lt =
-        b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt, T, innerEndT);
-    Value bodyCond = b.create<arith::AndIOp>(loc, ge, lt);
+        b.create<arith::CmpIOp>(arith::CmpIPredicate::sge, T, innerStartT);
+    Value lt = b.create<arith::CmpIOp>(arith::CmpIPredicate::slt, T, innerEndT);
+    Value bodyCond = b.create<arith::AndIOp>(ge, lt);
 
     // The outputs will be the outputs of the inner loop body and the next jk.
     SmallVector<Type> bodyOutTypes{jk.getType()};
     llvm::append_range(bodyOutTypes, inner->getResultTypes());
-    auto bodyIf = b.create<scf::IfOp>(loc, bodyOutTypes, bodyCond);
+    auto bodyIf = b.create<scf::IfOp>(bodyOutTypes, bodyCond);
     bodyIfs.push_back(bodyIf);
 
     // Splice bodyk into the `then` region.
@@ -692,7 +716,7 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
     auto yield =
         cast<scf::YieldOp>(bodyIf.getThenRegion().front().getTerminator());
     b.setInsertionPoint(yield);
-    Value nextJk = b.create<arith::AddIOp>(loc, jk, inner.getStep());
+    Value nextJk = b.create<arith::AddIOp>(jk, inner.getStep());
     yield->insertOperands(0, nextJk);
 
     // The `else` region just forwards the values.
@@ -700,7 +724,7 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
     SmallVector<Value> bodyForwardedOuts{jk};
     bodyForwardedOuts.append(bodyOutsIt, bodyOutsIt + inner.getNumResults());
     bodyOutsIt += inner->getNumResults();
-    b.create<scf::YieldOp>(loc, bodyForwardedOuts);
+    b.create<scf::YieldOp>(bodyForwardedOuts);
 
     // Now we can replace the results of the inner loop with the outputs of the
     // body if.
@@ -712,7 +736,7 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
     if (inner->hasAttr(kMustExecuteAttrName)) {
       b.setInsertionPoint(bodyIf);
       bodyIf.getConditionMutable().assign(
-          b.create<arith::ConstantOp>(loc, b.getBoolAttr(true)));
+          b.create<arith::ConstantOp>(b.getBoolAttr(true)));
     }
 
     // Move the insertion point for the next iteration.
@@ -721,35 +745,28 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
 
   // if T == len_j0 + len_j1 + ... + len_jN - N - 1:
   //   epilogue(i)
-  //   i += stepi
   Logue &epilogue = logues.back();
-  auto epilogueCond = b.create<arith::CmpIOp>(
-      loc, arith::CmpIPredicate::eq, T,
-      b.create<arith::SubIOp>(loc, innerLen, intTyCst(1)));
-  SmallVector<Type> epilogueOutTypes{i.getType()};
-  llvm::append_range(epilogueOutTypes, epilogue.getOutputTypes());
-  auto epilogueIf = b.create<scf::IfOp>(loc, epilogueOutTypes, epilogueCond);
-  logueIfs.push_back(epilogueIf);
+  auto epilogueCond =
+      b.create<arith::CmpIOp>(arith::CmpIPredicate::eq, T,
+                              b.create<arith::SubIOp>(innerLen, intTyCst(1)));
+  auto epilogueIf =
+      b.create<scf::IfOp>(epilogue.getOutputTypes(), epilogueCond);
 
   Block *thenBlock = b.createBlock(&epilogueIf.getThenRegion());
   epilogue.moveBefore(thenBlock, thenBlock->end());
 
   b.setInsertionPointToEnd(thenBlock);
-  Value nextI = b.create<arith::AddIOp>(loc, i, outer.getStep());
-  SmallVector<Value> thenOuts{nextI};
-  llvm::append_range(thenOuts, epilogue.getOutputs());
-  b.create<scf::YieldOp>(loc, thenOuts);
+  b.create<scf::YieldOp>(epilogue.getOutputs());
 
   b.createBlock(&epilogueIf.getElseRegion());
-  SmallVector<Value> elseOuts{i};
-  elseOuts.append(logueOutsIt, logueOutsIt + epilogue.getNumOutputs());
-  b.create<scf::YieldOp>(loc, elseOuts);
-  epilogue.replaceAllUsesWith(
-      epilogueIf.getResults().slice(1, epilogue.getNumOutputs()),
-      epilogueIf.getThenRegion());
+  SmallVector<Value> elseOuts(logueOutsIt,
+                              logueOutsIt + epilogue.getNumOutputs());
+  b.create<scf::YieldOp>(elseOuts);
+  epilogue.replaceAllUsesWith(epilogueIf.getResults(),
+                              epilogueIf.getThenRegion());
 
   // Finally, create the yield of the fused loop.
-  SmallVector<Value> outerOuts{T, /*i=*/epilogueIf.getResult(0)};
+  SmallVector<Value> outerOuts{T, i};
   llvm::append_range(outerOuts, outer.getYieldedValues());
   for (scf::IfOp bodyIf : bodyIfs)
     outerOuts.push_back(/*jk=*/bodyIf.getResult(0));
@@ -758,13 +775,14 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
                        bodyIf.getResults().slice(1, loop.getNumResults()));
     loop.erase();
   }
-  for (auto [logueIf, logue] : llvm::zip(logueIfs, logues)) {
+  for (auto [logueIf, logue] : llvm::zip(prologueIfs, llvm::drop_end(logues))) {
     llvm::append_range(outerOuts,
                        logueIf.getResults().slice(1, logue.getNumOutputs()));
   }
+  llvm::append_range(outerOuts, epilogue.getOutputs());
 
   b.setInsertionPointToEnd(fused.getBody());
-  b.create<scf::YieldOp>(loc, outerOuts);
+  b.create<scf::YieldOp>(outerOuts);
   outer.replaceAllUsesWith(
       fused.getResults().slice(outerArgsStartIdx, outer.getNumResults()));
   outer.erase();
@@ -796,8 +814,9 @@ static bool shouldFuse(const LoopNest &nest) {
     return false;
 
   scf::ForOp innerLoop = nest.root->children.front()->loop;
-  return llvm::any_of(innerLoop.getOps(),
-                      [](Operation &op) { return isa<DotOp>(op); });
+  return llvm::any_of(innerLoop.getOps(), [](Operation &op) {
+    return op.hasTrait<OpTrait::DotLike>();
+  });
 }
 
 // Speculate the length of the inner loop such that the loop is known to execute
@@ -827,24 +846,23 @@ static LogicalResult speculateInnerLoopLength(const LoopNest &nest,
     op->moveBefore(outerLoop);
 
   // Mark the inner loop.
-  OpBuilder b(outerLoop);
+  ImplicitLocOpBuilder b(loc, outerLoop);
   innerLoop->setAttr(kMustExecuteAttrName, b.getUnitAttr());
 
   // Speculate on whether the length of the inner loop is zero.
   Value lenInner = computeNumIters(b, innerLoop);
   auto zeroAttr = IntegerAttr::get(lenInner.getType(), 0);
   Value innerLoopEmpty =
-      b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq, lenInner,
-                              b.create<arith::ConstantOp>(loc, zeroAttr));
-  auto ifOp =
-      b.create<scf::IfOp>(loc, outerLoop.getResultTypes(), innerLoopEmpty);
+      b.create<arith::CmpIOp>(arith::CmpIPredicate::eq, lenInner,
+                              b.create<arith::ConstantOp>(zeroAttr));
+  auto ifOp = b.create<scf::IfOp>(outerLoop.getResultTypes(), innerLoopEmpty);
 
   // In the `then` branch, the inner loop does not execute. Clone the loop nest
   // into it and remove the inner loop.
   mlir::IRMapping map;
   b.createBlock(&ifOp.getThenRegion());
   auto newLoop = cast<scf::ForOp>(b.clone(*outerLoop, map));
-  b.create<scf::YieldOp>(loc, newLoop.getResults());
+  b.create<scf::YieldOp>(newLoop.getResults());
   auto newInnerLoop = cast<scf::ForOp>(map.lookup(innerLoop));
   newInnerLoop.replaceAllUsesWith(newInnerLoop.getInits());
   newInnerLoop.erase();
@@ -854,7 +872,7 @@ static LogicalResult speculateInnerLoopLength(const LoopNest &nest,
   Block *block = b.createBlock(&ifOp.getElseRegion());
   outerLoop->remove();
   b.insert(outerLoop);
-  b.create<scf::YieldOp>(loc, outerLoop.getResults());
+  b.create<scf::YieldOp>(outerLoop.getResults());
 
   return success();
 }

@@ -125,11 +125,9 @@ loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
       [&](Operation *op, Operation *finalUser, int distance) {
         if (!seen.insert(op).second || excluded.count(op))
           return;
-        op->dump();
         if (isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp>(op)) {
           if (!isPipeliningBeneficial(op, finalUser, axisInfoAnalysis))
             return;
-            op->dump();
           if (loadOpToIndLevel.count(op)) {
             int level = loadOpToIndLevel[op];
             if (level != distance) {
@@ -170,7 +168,6 @@ loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
       continue;
     seenDot = true;
     seen.clear();
-    op.dump();
     dfs(&op, &op, 0);
   }
 
@@ -232,7 +229,6 @@ DenseMap<Operation *, int> assignLatencies(ModuleOp moduleOp,
 
   DenseMap<Operation *, int> opLatency;
   for (auto forOp : loops) {
-    forOp.dump();
     if (hasLatenciesAssigned(forOp)) {
       assignUserProvidedLatencies(forOp, opLatency);
       continue;

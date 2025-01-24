@@ -259,7 +259,6 @@ def matmul_persistent(a, b):
         num_warps=configs[dtype]["num_warps"],  #
         grid=grid
     )
-    print(kernel.asm["ttir"])
     return c
 
 
@@ -610,8 +609,8 @@ if __name__ == "__main__":
     validate(32, 32, 32, dtype)
     validate(8192, 8192, 512, dtype)
 
-    #proton.start("matmul", hook="triton")
-    #for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
-    #    bench(K, dtype)
-    #proton.finalize()
-    #show_profile(args.prec, "matmul")
+    proton.start("matmul", hook="triton")
+    for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
+        bench(K, dtype)
+    proton.finalize()
+    show_profile(args.prec, "matmul")

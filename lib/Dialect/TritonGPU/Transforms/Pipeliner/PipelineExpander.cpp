@@ -248,7 +248,11 @@ bool LoopPipelinerInternal::verifySchedule() {
         continue;
       int64_t producerCycle = it->second;
       if (consumerCycle < producerCycle - numCylesPerIter * distance) {
-        consumer->emitError("operation scheduled before its operands");
+        InFlightDiagnostic diag =
+            consumer->emitError("operation scheduled before its operands");
+        diag.attachNote(producer->getLoc())
+            .append("operand defined here: ")
+            .appendOp(*producer, OpPrintingFlags().printGenericOpForm());
         return false;
       }
     }
