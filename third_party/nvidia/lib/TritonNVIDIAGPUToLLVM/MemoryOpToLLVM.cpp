@@ -61,28 +61,11 @@ public:
       canUseLdmatrixLL &= (sharedEnc.getMaxPhase() == 1) ||
                           (sharedEnc.getVec() * bitwidth >= 8 * 16);
       auto shape = srcTy.getShape();
-      auto allocShape = srcTy.getAllocShape();
       // Limitation 3 [TODO: remove]: Only support 2d matrices now but we should
       // be able to support 3D minor changes
       canUseLdmatrixLL &= (bitwidth <= 16 || !needTrans) && shape.size() <= 2;
-      if (dotEnc.getOpIdx() == 0) {
-        canUseLdmatrixLL &=
-            shape[kOrder] >= (16 * 16 / bitwidth) && shape[nonKOrder] >= 16;
-      } else {
-        // Limitation 4 [TODO: remove]: Due to the use of ldmatrix.x4, we need
-        // to read 4 tiles. For opIdx=1, a single warp load four consecutive
-        // tiles along the K dimension, so the minimum K size is 4 * 8 = 32.
-        // The legacy path doesn't have this limitation because it reads
-        // duplicated elements from shared memory and throw them away.
-        // It might be better to use ldmatrix.x2 in such a case instead of
-        // abandoning elements.
-        canUseLdmatrixLL &=
-            shape[kOrder] >= (32 * 16 / bitwidth) && shape[nonKOrder] >= 16;
-      }
-      // Limitation 9 [TODO: remove]:
-      // If we remove this one, ldmatrix will IMA. It can probably be relaxed
-      // though. Remove this constraint after all other limitations have been
-      // resolved
+      canUseLdmatrixLL &=
+          shape[kOrder] >= (8 * 16 / bitwidth) && shape[nonKOrder] >= 8;
       if (canUseLdmatrixLL) {
         return lowerSharedToDotOperandLL(op, adaptor, getTypeConverter(),
                                          rewriter);
