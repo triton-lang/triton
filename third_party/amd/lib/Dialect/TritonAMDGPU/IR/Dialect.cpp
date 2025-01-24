@@ -246,8 +246,7 @@ LogicalResult ConcatOp::verify() {
   auto sources = getSources();
   auto dims = getDims();
 
-  auto expectedNumSources =
-      std::accumulate(dims.begin(), dims.end(), 1, std::multiplies<int32_t>());
+  auto expectedNumSources = product(dims);
   if (sources.size() != expectedNumSources) {
     return emitError() << "dims spec [" << dims
                        << "] does not match the number of provided sources ["
