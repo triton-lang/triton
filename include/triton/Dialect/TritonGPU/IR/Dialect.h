@@ -178,11 +178,11 @@ unsigned getNumCTAs(Attribute layout);
 // len(shape) == rank.
 SmallVector<unsigned> getMatrixOrder(unsigned rank, bool rowMajor);
 
-// Return the order that represents that the dot operand is in kMajor
+// Return the order that represents that the dot operand is in kContig
 // (contiguous in the inner dimension) or it's contiguous on the outer
 // dimension.
 SmallVector<unsigned> getOrderForDotOperand(unsigned opIdx, unsigned rank,
-                                            bool kMajor);
+                                            bool kContig);
 
 bool isExpensiveCat(CatOp cat, Attribute targetEncoding);
 

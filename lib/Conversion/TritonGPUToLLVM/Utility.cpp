@@ -300,10 +300,9 @@ Value getSmemVecAddr(const LinearLayout &regLayout,
 } // namespace
 
 bool emitTransferBetweenRegistersAndShared(
-    RankedTensorType registerTy, triton::gpu::MemDescType sharedTy,
-    Type elemLlvmTy, std::optional<int32_t> maxVecElems,
-    const SharedMemoryObject &smemObj, Location loc, RewriterBase &rewriter,
-    const TargetInfoBase &target,
+    LinearLayout &regLayout, triton::gpu::MemDescType sharedTy, Type elemLlvmTy,
+    std::optional<int32_t> maxVecElems, const SharedMemoryObject &smemObj,
+    Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
     std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback) {
   MLIRContext *ctx = rewriter.getContext();
 
@@ -313,8 +312,6 @@ bool emitTransferBetweenRegistersAndShared(
   StringAttr kWarp = str_attr("warp");
 
   auto shape = sharedTy.getShape();
-  LinearLayout regLayout =
-      triton::gpu::toLinearLayout(shape, registerTy.getEncoding());
   LinearLayout sharedLayout = triton::gpu::toLinearLayout(
       shape, sharedTy.getEncoding(), elemLlvmTy.getIntOrFloatBitWidth());
   LinearLayout regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
@@ -360,14 +357,13 @@ bool emitTransferBetweenRegistersAndShared(
   // Thus we use `pseudoinvert` instead of `invert` here for simplicity.
   auto allocShape = sharedTy.getAllocShape();
   LinearLayout invertAllocSharedLayout =
-      triton::gpu::toLinearLayout(allocShape.take_back(registerTy.getRank()),
+      triton::gpu::toLinearLayout(allocShape.take_back(sharedTy.getRank()),
                                   sharedTy.getEncoding(),
                                   elemLlvmTy.getIntOrFloatBitWidth())
           .pseudoinvert();
 
   int numElems = regToSharedLayout.getInDimSize(kRegister);
   auto vecTy = vec_ty(elemLlvmTy, vecElems);
-  Value zero = i32_val(0);
   SmallVector<Value> ret;
   for (int i = 0; i < numElems / vecElems; i++) {
     auto regId = i32_val(i * vecElems);
@@ -377,6 +373,20 @@ bool emitTransferBetweenRegistersAndShared(
     perVectorCallback(vecTy, vecAddr);
   }
   return true;
+}
+
+bool emitTransferBetweenRegistersAndShared(
+    RankedTensorType registerTy, triton::gpu::MemDescType sharedTy,
+    Type elemLlvmTy, std::optional<int32_t> maxVecElems,
+    const SharedMemoryObject &smemObj, Location loc, RewriterBase &rewriter,
+    const TargetInfoBase &target,
+    std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback) {
+  auto regLayout = triton::gpu::toLinearLayout(
+      registerTy.getShape(), registerTy.getEncoding(),
+      elemLlvmTy.getIntOrFloatBitWidth());
+  return emitTransferBetweenRegistersAndShared(
+      regLayout, sharedTy, elemLlvmTy, maxVecElems, smemObj, loc, rewriter,
+      target, perVectorCallback);
 }
 
 SmallVector<Value> loadSharedToDistributed(RankedTensorType dstTy,

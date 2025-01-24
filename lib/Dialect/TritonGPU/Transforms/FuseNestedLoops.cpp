@@ -671,10 +671,11 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
     b.setInsertionPointAfter(prologueIf);
     Value innerEndT = b.create<arith::AddIOp>(
         loc, innerStartT, castIntIfNecessary(b, loc, lenInners[k], intTy));
-    Value bodyCond = b.create<arith::AndIOp>(
-        loc,
-        b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sge, T, innerStartT),
-        b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt, T, innerEndT));
+    Value ge =
+        b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sge, T, innerStartT);
+    Value lt =
+        b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt, T, innerEndT);
+    Value bodyCond = b.create<arith::AndIOp>(loc, ge, lt);
 
     // The outputs will be the outputs of the inner loop body and the next jk.
     SmallVector<Type> bodyOutTypes{jk.getType()};

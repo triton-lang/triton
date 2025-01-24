@@ -60,7 +60,7 @@ static void createTMAAsyncCopy(scf::ForOp &forOp,
 
   // Put wait before the local_store make the store truly async. We know
   // that we are the only user of the CopyLocalToGlobal.
-  builder.create<ttng::TMAStoreWait>(loc, 0);
+  builder.create<ttng::TMAStoreWaitOp>(loc, 0);
   builder.create<ttg::LocalStoreOp>(loc, storeOp.getSrc(), alloc);
   builder.create<ttng::FenceAsyncSharedOp>(loc, false);
   Value tmaPtr = builder.create<triton::nvidia_gpu::TensorDescToTMAPtrOp>(
@@ -102,7 +102,7 @@ bool mlir::triton::pipelineTMAStores(scf::ForOp forOp) {
   // Deallocate shared memory buffers.
   OpBuilder builder(forOp);
   builder.setInsertionPointAfter(forOp);
-  builder.create<ttng::TMAStoreWait>(forOp->getLoc(), 0);
+  builder.create<ttng::TMAStoreWaitOp>(forOp->getLoc(), 0);
   for (auto it : storeToAlloc) {
     builder.create<ttg::LocalDeallocOp>(forOp->getLoc(), it.second);
   }

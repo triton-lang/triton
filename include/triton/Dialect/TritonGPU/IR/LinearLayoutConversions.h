@@ -243,8 +243,8 @@ LinearLayout chooseStMatrixLayout(MLIRContext *ctx, RankedTensorType tensorTy,
 
 // The primary goal of this function is to efficiently store 2D tiles of a
 // tensor into shared memory using the `ldmatrix` instruction.
-LinearLayout chooseLdMatrixLayout(MLIRContext *ctx, Attribute sharedEnc,
-                                  Attribute dotEnc, ArrayRef<int64_t> shape);
+LinearLayout chooseLdMatrixLayout(Attribute enc, ArrayRef<int64_t> shape,
+                                  bool needTrans, int32_t elemBitWidth);
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H

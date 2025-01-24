@@ -498,13 +498,13 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   // getValuesFromDotOperandLayoutStruct as both a and b are K-major
   assert(dotOpA.getRepOrder() == getOrderForDotOperand(dotOpA.getOpIdx(),
                                                        aShapePerCTA.size(),
-                                                       /*kMajor=*/true));
+                                                       /*kContig=*/true));
   auto ha = getValuesFromDotOperandLayoutStruct(
       typeConverter, loc, rewriter, loadedA, repBatch, repM, repK, aTensorTy);
 
   assert(dotOpB.getRepOrder() == getOrderForDotOperand(dotOpB.getOpIdx(),
                                                        bShapePerCTA.size(),
-                                                       /*kMajor=*/true));
+                                                       /*kContig=*/true));
   auto hb = getValuesFromDotOperandLayoutStruct(
       typeConverter, loc, rewriter, loadedB, repBatch, repN, repK, bTensorTy);
 

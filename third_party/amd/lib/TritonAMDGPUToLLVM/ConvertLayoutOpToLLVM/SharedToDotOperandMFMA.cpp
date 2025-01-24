@@ -279,7 +279,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   Value smemBase;
   auto smemStrides = smemObj.getStrides(aTensorTy, loc, rewriter);
   bool isFastPath =
-      !AMD::isKMajor(order, opIdx) && !hasSwizzleEnabled(sharedLayout);
+      !AMD::isKContig(order, opIdx) && !hasSwizzleEnabled(sharedLayout);
   if (isFastPath) {
     // fast path handles tensors that are not k-major and have swizzling
     // disabled, in which case offsets computation can be simplified
