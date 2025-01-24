@@ -15,9 +15,7 @@ using namespace mlir::triton;
 namespace mlir {
 namespace triton {
 #define GEN_PASS_DEF_ALLOCATEPROTONDEVICEBUFFER
-// TODO: Remove this when passes have been moved to proton backend
 #include "../third_party/proton/dialect/include/TritonProtonToLLVM/Passes.h.inc"
-#include "triton/Conversion/TritonGPUToLLVM/Passes.h.inc"
 } // namespace triton
 } // namespace mlir
 
