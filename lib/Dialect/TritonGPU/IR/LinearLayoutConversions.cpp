@@ -1106,10 +1106,12 @@ LinearLayout chooseDotLdMatrixLayout(DotOperandEncodingAttr dot,
   StringAttr kLane = S("lane");
   StringAttr kWarp = S("warp");
   StringAttr kBlock = S("block");
-  StringAttr kInner = opIdx == 0 ? (needTrans ? S("dim0") : S("dim1"))
-                                 : (needTrans ? S("dim1") : S("dim0"));
-  StringAttr kOuter = opIdx == 0 ? (needTrans ? S("dim1") : S("dim0"))
-                                 : (needTrans ? S("dim0") : S("dim1"));
+  auto innerDim = opIdx == 0 ? (needTrans ? 0 : 1) : (needTrans ? 1 : 0);
+  auto outerDim = opIdx == 0 ? (needTrans ? 1 : 0) : (needTrans ? 0 : 1);
+  StringAttr kInner = S("dim" + std::to_string(innerDim));
+  StringAttr kOuter = S("dim" + std::to_string(outerDim));
+  auto innerDimSize = shape[innerDim];
+  auto outerDimSize = shape[outerDim];
 
   std::vector<std::vector<int>> basesReg;
   for (int logReg = 0; logReg < llvm::Log2_32(8 * 16 / elemBitWidth);
@@ -1118,7 +1120,10 @@ LinearLayout chooseDotLdMatrixLayout(DotOperandEncodingAttr dot,
     basesReg.push_back({0, reg});
   }
   std::vector<std::vector<int>> basesLane = {{1, 0}, {2, 0}, {4, 0}};
-  int numTileCols;
+  bool innerX2 = innerDimSize > 8 * 16 / elemBitWidth;
+  bool innerX4 = innerDimSize > 16 * 16 / elemBitWidth;
+  bool outerX2 = outerDimSize > 8;
+  bool outerX4 = outerDimSize > 16;
   // Construct a tile consisting of 4 8x8x16bits sub-tiles to use ldmatrix
   // efficiently. opIdx=0 and opIdx=1 are handled differently.
   if (opIdx == 0) {
@@ -1128,16 +1133,16 @@ LinearLayout chooseDotLdMatrixLayout(DotOperandEncodingAttr dot,
     //           col0       col8
     //   row0  reg[0-1]   reg[4-5]
     //   row8  reg[2-3]   reg[6-7]
+    if (innerX2)
+      basesLane.push_back({0, 8 * 16 / elemBitWidth});
+    if (outerX2)
+      basesLane.push_back({8, 0});
     if (needTrans) {
       assert(elemBitWidth <= 16 && "Only elements smaller than 16 bits are "
                                    "supported in the transposed mode");
-      basesLane.push_back({0, 8 * 16 / elemBitWidth});
-      basesLane.push_back({8, 0});
-    } else {
-      basesLane.push_back({8, 0});
-      basesLane.push_back({0, 8 * 16 / elemBitWidth});
+      std::swap(basesLane[basesLane.size() - 1],
+                basesLane[basesLane.size() - 2]);
     }
-    numTileCols = 16 * 16 / elemBitWidth;
   } else {
     // The matrix elements of thread 0 are distributed in the following pattern
     // (fp16):
@@ -1147,14 +1152,19 @@ LinearLayout chooseDotLdMatrixLayout(DotOperandEncodingAttr dot,
     if (needTrans) {
       assert(elemBitWidth <= 16 && "Only elements smaller than 16 bits are "
                                    "supported in the transposed mode");
-      basesLane.push_back({8, 0});
-      basesLane.push_back({16, 0});
+      if (outerX2)
+        basesLane.push_back({8, 0});
+      if (outerX4)
+        basesLane.push_back({16, 0});
     } else {
-      basesLane.push_back({0, 8 * 16 / elemBitWidth});
-      basesLane.push_back({0, 16 * 16 / elemBitWidth});
+      if (innerX2)
+        basesLane.push_back({0, 8 * 16 / elemBitWidth});
+      if (innerX4)
+        basesLane.push_back({0, 16 * 16 / elemBitWidth});
     }
-    numTileCols = 32 * 16 / elemBitWidth;
   }
+  int numTileCols =
+      8 << (static_cast<int>(innerX2) + static_cast<int>(innerX4));
   // Expand the `register` dimension so the size of columns matches `K`.
   auto layout =
       LinearLayout({{kReg, basesReg}, {kLane, basesLane}, {kWarp, {}}},

@@ -128,11 +128,10 @@ private:
               ctx, SmallVector<Type>(numElemsI32, i32_ty));
           auto ldMatrixOp = rewriter.create<nvgpu::LoadMatrixOp>(
               loc, matTy, vecAddr, /*needTrans=*/needTrans);
-          auto resV4 = ldMatrixOp.getResult();
-          elemsI32.push_back(extract_val(i32_ty, resV4, 0));
-          elemsI32.push_back(extract_val(i32_ty, resV4, 1));
-          elemsI32.push_back(extract_val(i32_ty, resV4, 2));
-          elemsI32.push_back(extract_val(i32_ty, resV4, 3));
+          auto res = ldMatrixOp.getResult();
+          for (auto i = 0; i < numElemsI32; ++i) {
+            elemsI32.push_back(extract_val(i32_ty, res, i));
+          }
         });
     assert(valid && "Failed to emit ldmatrix load operations");
 
