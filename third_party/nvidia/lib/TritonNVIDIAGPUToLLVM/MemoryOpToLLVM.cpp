@@ -89,6 +89,7 @@ private:
     auto shape = dstTy.getShape();
     auto rank = dstTy.getRank();
     auto kOrder = dotEnc.getOpIdx() == 0 ? rank - 1 : rank - 2;
+    auto nonKOrder = dotEnc.getOpIdx() == 0 ? rank - 2 : rank - 1;
     auto needTrans = kOrder != sharedEnc.getOrder()[0];
 
     auto llvmElemTy = typeConverter->convertType(dstTy.getElementType());
@@ -100,7 +101,9 @@ private:
 
     // Emit ldmatrix load operations for values packed in i32s
     SmallVector<Value> elemsI32;
-    auto maxVecElems = 8 * 16 / bitwidth;
+    auto shift = static_cast<int>(shape[kOrder] < (16 * 16 / bitwidth)) +
+                 static_cast<int>(shape[nonKOrder] < 16);
+    auto maxVecElems = (8 * 16 / bitwidth) >> shift;
     bool valid = emitTransferBetweenRegistersAndShared(
         ldmatrixLayout, srcTy, llvmElemTy,
         /*maxVecElems=*/maxVecElems, smemObj, loc, rewriter, targetInfo,
