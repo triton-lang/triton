@@ -1119,7 +1119,8 @@ LinearLayout chooseDotLdMatrixLayout(DotOperandEncodingAttr dot,
     auto reg = 1 << logReg;
     basesReg.push_back({0, reg});
   }
-  std::vector<std::vector<int>> basesLane = {{1, 0}, {2, 0}, {4, 0}};
+  std::vector<std::vector<int>> basesLane = {
+      {1, 0}, {2, 0}, {4, 0}, {0, 0}, {0, 0}};
   bool innerX2 = innerDimSize > 8 * 16 / elemBitWidth;
   bool innerX4 = innerDimSize > 16 * 16 / elemBitWidth;
   bool outerX2 = outerDimSize > 8;
@@ -1134,14 +1135,13 @@ LinearLayout chooseDotLdMatrixLayout(DotOperandEncodingAttr dot,
     //   row0  reg[0-1]   reg[4-5]
     //   row8  reg[2-3]   reg[6-7]
     if (innerX2)
-      basesLane.push_back({0, 8 * 16 / elemBitWidth});
+      basesLane[4] = {0, 8 * 16 / elemBitWidth};
     if (outerX2)
-      basesLane.push_back({8, 0});
+      basesLane[5] = {8, 0};
     if (needTrans) {
       assert(elemBitWidth <= 16 && "Only elements smaller than 16 bits are "
                                    "supported in the transposed mode");
-      std::swap(basesLane[basesLane.size() - 1],
-                basesLane[basesLane.size() - 2]);
+      std::swap(basesLane[4], basesLane[5]);
     }
   } else {
     // The matrix elements of thread 0 are distributed in the following pattern
@@ -1153,14 +1153,14 @@ LinearLayout chooseDotLdMatrixLayout(DotOperandEncodingAttr dot,
       assert(elemBitWidth <= 16 && "Only elements smaller than 16 bits are "
                                    "supported in the transposed mode");
       if (outerX2)
-        basesLane.push_back({8, 0});
+        basesLane[4] = {8, 0};
       if (outerX4)
-        basesLane.push_back({16, 0});
+        basesLane[5] = {16, 0};
     } else {
       if (innerX2)
-        basesLane.push_back({0, 8 * 16 / elemBitWidth});
+        basesLane[4] = {0, 8 * 16 / elemBitWidth};
       if (innerX4)
-        basesLane.push_back({0, 16 * 16 / elemBitWidth});
+        basesLane[5] = {0, 16 * 16 / elemBitWidth};
     }
   }
   int numTileCols =
