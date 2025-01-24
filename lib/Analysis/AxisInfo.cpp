@@ -1,5 +1,6 @@
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -267,6 +268,28 @@ public:
           /*knownConstantValue=*/{value});
     }
     return AxisInfo();
+  }
+};
+
+class PoisonOpAxisInfoVisitor final : public AxisInfoVisitorImpl<ub::PoisonOp> {
+public:
+  using AxisInfoVisitorImpl::AxisInfoVisitorImpl;
+
+  AxisInfo
+  getAxisInfo(ub::PoisonOp op,
+              ArrayRef<const dataflow::Lattice<AxisInfo> *> operands) override {
+    constexpr int64_t largePowerOf2 = int64_t(1) << 32;
+    // Poison values are never accessed, thus assume optimistic values.
+    if (auto shape = dyn_cast<mlir::ShapedType>(op.getType())) {
+      unsigned rank = shape.getRank();
+      return AxisInfo(
+          /*contiguity=*/AxisInfo::DimVectorT(rank, 1),
+          /*divisibility=*/AxisInfo::DimVectorT(rank, largePowerOf2),
+          /*constancy=*/AxisInfo::DimVectorT(shape.getShape()));
+    }
+
+    return AxisInfo(/*contiguity=*/{1}, /*divisibility=*/{largePowerOf2},
+                    /*constancy=*/{1});
   }
 };
 
@@ -1018,6 +1041,7 @@ AxisInfoAnalysis::AxisInfoAnalysis(DataFlowSolver &solver)
   visitors.append<MakeRangeOpAxisInfoVisitor>();
   visitors.append<ConstantOpAxisInfoVisitor<arith::ConstantOp>,
                   ConstantOpAxisInfoVisitor<LLVM::ConstantOp>>();
+  visitors.append<PoisonOpAxisInfoVisitor>();
   visitors.append<AddSubOpAxisInfoVisitor<triton::AddPtrOp>,
                   AddSubOpAxisInfoVisitor<arith::AddIOp>,
                   AddSubOpAxisInfoVisitor<arith::SubIOp>,
