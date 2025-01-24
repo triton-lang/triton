@@ -1101,17 +1101,16 @@ LinearLayout chooseDotLdMatrixLayout(DotOperandEncodingAttr dot,
   auto rank = shape.size();
   auto opIdx = dot.getOpIdx();
   int kDim = (opIdx == 0) ? rank - 1 : rank - 2;
+  int nonKDim = (opIdx == 0) ? rank - 2 : rank - 1;
 
   StringAttr kReg = S("register");
   StringAttr kLane = S("lane");
   StringAttr kWarp = S("warp");
   StringAttr kBlock = S("block");
-  auto innerDim = opIdx == 0 ? (needTrans ? 0 : 1) : (needTrans ? 1 : 0);
-  auto outerDim = opIdx == 0 ? (needTrans ? 1 : 0) : (needTrans ? 0 : 1);
-  StringAttr kInner = S("dim" + std::to_string(innerDim));
-  StringAttr kOuter = S("dim" + std::to_string(outerDim));
-  auto innerDimSize = shape[innerDim];
-  auto outerDimSize = shape[outerDim];
+  StringAttr kInner = opIdx == 0 ? (needTrans ? S("dim0") : S("dim1"))
+                                 : (needTrans ? S("dim1") : S("dim0"));
+  StringAttr kOuter = opIdx == 0 ? (needTrans ? S("dim1") : S("dim0"))
+                                 : (needTrans ? S("dim0") : S("dim1"));
 
   std::vector<std::vector<int>> basesReg;
   for (int logReg = 0; logReg < llvm::Log2_32(8 * 16 / elemBitWidth);
@@ -1121,10 +1120,9 @@ LinearLayout chooseDotLdMatrixLayout(DotOperandEncodingAttr dot,
   }
   std::vector<std::vector<int>> basesLane = {
       {1, 0}, {2, 0}, {4, 0}, {0, 0}, {0, 0}};
-  bool innerX2 = innerDimSize > 8 * 16 / elemBitWidth;
-  bool innerX4 = innerDimSize > 16 * 16 / elemBitWidth;
-  bool outerX2 = outerDimSize > 8;
-  bool outerX4 = outerDimSize > 16;
+  bool kX2 = shape[kDim] > 8 * 16 / elemBitWidth;
+  bool kX4 = shape[kDim] > 16 * 16 / elemBitWidth;
+  bool nonKX2 = shape[nonKDim] > 8;
   // Construct a tile consisting of 4 8x8x16bits sub-tiles to use ldmatrix
   // efficiently. opIdx=0 and opIdx=1 are handled differently.
   if (opIdx == 0) {
@@ -1134,9 +1132,9 @@ LinearLayout chooseDotLdMatrixLayout(DotOperandEncodingAttr dot,
     //           col0       col8
     //   row0  reg[0-1]   reg[4-5]
     //   row8  reg[2-3]   reg[6-7]
-    if (innerX2)
+    if (kX2)
       basesLane[3] = {0, 8 * 16 / elemBitWidth};
-    if (outerX2)
+    if (nonKX2)
       basesLane[4] = {8, 0};
     if (needTrans) {
       assert(elemBitWidth <= 16 && "Only elements smaller than 16 bits are "
@@ -1152,19 +1150,18 @@ LinearLayout chooseDotLdMatrixLayout(DotOperandEncodingAttr dot,
     if (needTrans) {
       assert(elemBitWidth <= 16 && "Only elements smaller than 16 bits are "
                                    "supported in the transposed mode");
-      if (outerX2)
+      if (kX2)
         basesLane[3] = {8, 0};
-      if (outerX4)
+      if (kX4)
         basesLane[4] = {16, 0};
     } else {
-      if (innerX2)
+      if (kX2)
         basesLane[3] = {0, 8 * 16 / elemBitWidth};
-      if (innerX4)
+      if (kX4)
         basesLane[4] = {0, 16 * 16 / elemBitWidth};
     }
   }
-  int numTileCols =
-      8 << (static_cast<int>(innerX2) + static_cast<int>(innerX4));
+  int numTileCols = 8 << (static_cast<int>(kX2) + static_cast<int>(kX4));
   // Expand the `register` dimension so the size of columns matches `K`.
   auto layout =
       LinearLayout({{kReg, basesReg}, {kLane, basesLane}, {kWarp, {}}},

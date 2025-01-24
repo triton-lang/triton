@@ -101,14 +101,10 @@ private:
 
     // Emit ldmatrix load operations for values packed in i32s
     SmallVector<Value> elemsI32;
-    auto shift = 0;
-    if (dotEnc.getOpIdx() == 0) {
-      shift = static_cast<int>(shape[kOrder] < (16 * 16 / bitwidth)) +
-              static_cast<int>(shape[nonKOrder] < 16);
-    } else {
-      shift = static_cast<int>(shape[kOrder] < (32 * 16 / bitwidth)) +
-              static_cast<int>(shape[nonKOrder] < 8);
-    }
+    auto shift =
+        (dotEnc.getOpIdx() == 0)
+            ? (shape[kOrder] < (16 * 16 / bitwidth)) + (shape[nonKOrder] < 16)
+            : (shape[kOrder] < (32 * 16 / bitwidth)) + (shape[nonKOrder] < 8);
     auto maxVecElems = 8 * 16 / bitwidth;
     bool valid = emitTransferBetweenRegistersAndShared(
         ldmatrixLayout, srcTy, llvmElemTy,
