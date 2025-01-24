@@ -483,8 +483,8 @@ class HIPLauncher(object):
         mod = compile_module_from_src(src, "__triton_launcher")
         self.launch = mod.launch
 
-    def __call__(self, *args, **kwargs):
-        self.launch(*args, **kwargs)
+    def __call__(self, *args):
+        self.launch(*args)
 
 
 class HIPDriver(GPUDriver):

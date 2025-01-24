@@ -56,9 +56,9 @@ Type getTypeFromConstraint(char constraint, PatternRewriter &rewriter) {
   else if (constraint == 'l')
     ty = IntegerType::get(rewriter.getContext(), 64);
   else if (constraint == 'f')
-    ty = FloatType::getF32(rewriter.getContext());
+    ty = Float32Type::get(rewriter.getContext());
   else if (constraint == 'd')
-    ty = FloatType::getF64(rewriter.getContext());
+    ty = Float64Type::get(rewriter.getContext());
   else {
     assert(false && "Unsupported constraint");
   }
@@ -370,6 +370,46 @@ protected:
   }
 };
 
+class LoadAcquireOpPattern : public OpRewritePattern<ttn::LoadAcquireOp> {
+public:
+  using OpRewritePattern<ttn::LoadAcquireOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ttn::LoadAcquireOp op,
+                                PatternRewriter &rewriter) const override {
+    auto loc = op->getLoc();
+    Type valueTy = op.getType();
+    const unsigned valueNBits = std::max(8u, valueTy.getIntOrFloatBitWidth());
+    const size_t maxWordWidth = std::max<size_t>(32, valueNBits);
+    const size_t width = std::min((size_t)valueNBits, maxWordWidth);
+
+    const std::string writeConstraint =
+        (width == 64) ? "=l" : ((width == 32) ? "=r" : "=c");
+    PTXBuilder ptxBuilder;
+    bool init = true;
+    auto *dstOpr = ptxBuilder.newOperand(writeConstraint, init); // =r operation
+    auto *addrOpr =
+        ptxBuilder.newAddrOperand(op.getAddr(), "l", 0 /* in_off */);
+    auto &ld =
+        ptxBuilder.create<>("ld")
+            ->global()
+            .o("cta", op.getScope() == triton::nvgpu::MemSyncScope::CTA)
+            .o("gpu", op.getScope() == triton::nvgpu::MemSyncScope::GPU)
+            .o("sys", op.getScope() == triton::nvgpu::MemSyncScope::SYSTEM)
+            .o("acquire", op.getSem() == triton::nvgpu::MemSemantic::ACQUIRE)
+            .o("relaxed", op.getSem() == triton::nvgpu::MemSemantic::RELAXED)
+            .b(width);
+    ld(dstOpr, addrOpr).maybePredicate(op.getMask(), "b");
+
+    // Create inline ASM signature
+    Type retTy = IntegerType::get(getContext(), width);
+    Value ret = ptxBuilder.launch(rewriter, loc, retTy);
+    ret = bitcast(ret, op.getType());
+
+    rewriter.replaceOp(op, {ret});
+    return success();
+  }
+};
+
 class WGMMAWaitGroupOpPattern : public OpRewritePattern<ttn::WGMMAWaitGroupOp> {
 public:
   using OpRewritePattern<ttn::WGMMAWaitGroupOp>::OpRewritePattern;
@@ -608,9 +648,9 @@ public:
 
     patterns.add<FenceAsyncSharedOpPattern, LoadMatrixOpPattern,
                  StoreMatrixOpPattern, ClusterArriveOpPattern, WGMMAOpPattern,
-                 WGMMAWaitGroupOpPattern>(context);
+                 LoadAcquireOpPattern, WGMMAWaitGroupOpPattern>(context);
 
-    if (applyPatternsAndFoldGreedily(mod, std::move(patterns)).failed())
+    if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
   }
 };

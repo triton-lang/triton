@@ -112,6 +112,12 @@ class HIPBackend(BaseBackend):
     def parse_options(self, opts) -> Any:
         args = {'arch': os.getenv("TRITON_OVERRIDE_ARCH", self.target.arch)}
 
+        # Enable XF32 (TF32) for CDNA3 GPUs
+        if self.target.arch in ('gfx940', 'gfx941', 'gfx942'):
+            allowed_dot_input_precisions = set(HIPOptions.allowed_dot_input_precisions)
+            allowed_dot_input_precisions.update({'tf32'})
+            args["allowed_dot_input_precisions"] = tuple(sorted(allowed_dot_input_precisions))
+
         if "supported_fp8_dtypes" not in opts:
             supported_fp8_dtypes = set(HIPOptions.supported_fp8_dtypes)
             if self.target.arch in ('gfx940', 'gfx941', 'gfx942'):
@@ -221,6 +227,10 @@ class HIPBackend(BaseBackend):
 
         stream_prefetch = os.getenv("TRITON_HIP_STREAM_PREFETCH", "0") == "1"
         use_buffer_ops = os.environ.get("AMDGCN_USE_BUFFER_OPS", "0") == "1"
+        bypass_lds = os.environ.get("TRITON_HIP_BYPASS_LDS_FOR_DOT", "0") == "1"
+
+        if bypass_lds:
+            amd.passes.ttgpuir.add_bypass_lds_for_dot_operand(pm)
 
         # The `local-prefetch` scheduling variant requires turning on buffer ops.
         if options.instruction_sched_variant == "local-prefetch":

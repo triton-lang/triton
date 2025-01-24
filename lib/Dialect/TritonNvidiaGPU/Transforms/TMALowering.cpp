@@ -101,7 +101,7 @@ public:
         loc, op.getDesc());
     rewriter.create<triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp>(
         loc, tmaPtr, op.getIndices(), alloc);
-    rewriter.create<triton::nvidia_gpu::TMAStoreWait>(loc, 0);
+    rewriter.create<triton::nvidia_gpu::TMAStoreWaitOp>(loc, 0);
     rewriter.eraseOp(op);
     return success();
   }
@@ -140,7 +140,7 @@ public:
     mlir::RewritePatternSet patterns(context);
     patterns.add<TMALoadLowering, TMAStoreLowering, TMACreateDescLowering>(
         context);
-    if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
+    if (applyPatternsGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
   }
 };

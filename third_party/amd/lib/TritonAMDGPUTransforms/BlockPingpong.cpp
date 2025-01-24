@@ -163,7 +163,8 @@ LogicalResult Pingponger::genLocalSlice(OpBuilder &builder, Value v,
   auto dotOperandEnc = ttg::DotOperandEncodingAttr::get(
       builder.getContext(), opIdx, dotEncoding, kWidth);
   auto subviewDescType = ttg::MemDescType::get(
-      shape, elementType, type.getEncoding(), type.getMemorySpace());
+      shape, elementType, type.getEncoding(), type.getMemorySpace(),
+      type.getMutableMemory(), type.getAllocShape());
   for (int i = 0; i < numSlices; i++) {
     SmallVector<Value> offsetsVal;
     SmallVector<int64_t> offsets = {0, 0};

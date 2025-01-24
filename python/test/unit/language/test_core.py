@@ -1561,19 +1561,21 @@ def test_atomic_rmw_predicate(num_ctas, device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("shape, axis, num_ctas, dtype_x_str",
-                         [(shape, axis, num_ctas, dtype_x_str)
+@pytest.mark.parametrize("shape, axis, num_ctas, dtype_x_str, check_return_val",
+                         [(shape, axis, num_ctas, dtype_x_str, check_return_val)
                           for shape in [(2, 2), (2, 8), (8, 2), (8, 8), (32, 32), (64, 64)]
                           for axis in [0, 1]
                           for num_ctas in num_ctas_list
-                          for dtype_x_str in ['float16', 'float32', 'uint64', 'int64', 'float64']])
-def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, device):
+                          for dtype_x_str in ['float16', 'float32', 'uint64', 'int64', 'float64']
+                          for check_return_val in ([True, False] if is_hip() else [True])])
+def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, check_return_val, device):
     check_type_supported(dtype_x_str, device)
     shape0, shape1 = shape
     # triton kernel
 
     @triton.jit
-    def kernel(Z, X, OLD, AXIS: tl.constexpr, SHAPE0: tl.constexpr, SHAPE1: tl.constexpr, DTYPE: tl.constexpr):
+    def kernel(Z, X, OLD, AXIS: tl.constexpr, SHAPE0: tl.constexpr, SHAPE1: tl.constexpr, DTYPE: tl.constexpr,
+               RETURN_VAL: tl.constexpr):
         off0 = tl.arange(0, SHAPE0)
         off1 = tl.arange(0, SHAPE1)
         x = tl.load(X + off0[:, None] * SHAPE1 + off1[None, :])
@@ -1590,10 +1592,12 @@ def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, device):
 
         if AXIS == 1:
             old = tl.atomic_add(Z + off0, z)
-            tl.store(OLD + off0, old)
+            if RETURN_VAL:
+                tl.store(OLD + off0, old)
         else:
             old = tl.atomic_add(Z + off1, z)
-            tl.store(OLD + off1, old)
+            if RETURN_VAL:
+                tl.store(OLD + off1, old)
 
     rs = RandomState(17)
     x = numpy_random((shape0, shape1), dtype_str=dtype_x_str, rs=rs)
@@ -1617,9 +1621,11 @@ def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, device):
             return tl.float16
         return None
 
-    kernel[(1, )](z_tri, x_tri, old_tri, axis, shape0, shape1, torch_to_triton_dtype(x_tri.dtype), num_ctas=num_ctas)
+    kernel[(1, )](z_tri, x_tri, old_tri, axis, shape0, shape1, torch_to_triton_dtype(x_tri.dtype), check_return_val,
+                  num_ctas=num_ctas)
     np.testing.assert_allclose(z_ref, to_numpy(z_tri), rtol=1e-4)
-    np.testing.assert_equal(old_ref, to_numpy(old_tri))
+    if check_return_val:
+        np.testing.assert_equal(old_ref, to_numpy(old_tri))
 
 
 @pytest.mark.interpreter
@@ -2586,20 +2592,6 @@ def test_scan2d(op, dtype_str, shape, axis, reverse, num_warps, device):
         np.testing.assert_equal(z_ref, z_tri)
 
 
-scan_layouts = [
-    BlockedLayout([1, 4], [4, THREADS_PER_WARP // 4], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([4, 1], [4, THREADS_PER_WARP // 4], [1, 4], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([2, 2], [4, THREADS_PER_WARP // 4], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([2, 2], [8, THREADS_PER_WARP // 8], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [4, THREADS_PER_WARP // 4], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([4, 1], [4, THREADS_PER_WARP // 4], [1, 4], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([2, 2], [4, THREADS_PER_WARP // 4], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([2, 2], [8, THREADS_PER_WARP // 8], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 2], [1, THREADS_PER_WARP // 1], [1, 4], [1, 0], [1, 1], [1, 1], [0, 1]),
-]
-
 # ---------------
 # test histogram
 # ---------------
@@ -2629,6 +2621,24 @@ def test_histogram(M, N, device):
     z_torch = torch.histc(x.float(), bins=N, min=0, max=N - 1)
     histogram_kernel[(1, )](x, z, M=M, N=N)
     assert (z_torch == z).all()
+
+
+@pytest.mark.parametrize("M, N", [(1, 64), (2, 32), (4, 16), (8, 8), (16, 4), (32, 2), (64, 1)])
+def test_scan_1d(M, N):
+
+    @triton.jit
+    def scan_kernel(out_ptr, in_ptr, M: tl.constexpr, N: tl.constexpr):
+        input = tl.load(in_ptr + tl.arange(0, M))
+        output = tl.cumsum(input).reshape([1, M]).broadcast_to([N, M])
+        tl.store(out_ptr + tl.arange(0, M * N), output.reshape([M * N]))
+
+    x = torch.randint(-100, 100, (M, ), dtype=torch.int32, device='cuda')
+    output = torch.empty(M * N, dtype=torch.int32, device='cuda')
+
+    scan_kernel[(1, )](output, x, M, N)
+
+    ref = torch.cumsum(x, dim=0).reshape([1, M]).broadcast_to([N, M]).reshape([M * N])
+    torch.testing.assert_close(ref.to(torch.int32), output, atol=0, rtol=0)
 
 
 @pytest.mark.interpreter
@@ -2679,6 +2689,21 @@ def test_optimize_thread_locality(op, BLOCK_N, N, num_pid_n, device):
     y_ref = numpy_op(x.cpu().numpy(), axis=1, keepdims=True)
     y_tri = numpy_op(y.cpu().numpy(), axis=1, keepdims=True)
     np.testing.assert_allclose(y_tri, y_ref, rtol=0.01, atol=1e-3)
+
+
+scan_layouts = [
+    BlockedLayout([1, 4], [4, THREADS_PER_WARP // 4], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([4, 1], [4, THREADS_PER_WARP // 4], [1, 4], [0, 1], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([2, 2], [4, THREADS_PER_WARP // 4], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([2, 2], [8, THREADS_PER_WARP // 8], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 4], [4, THREADS_PER_WARP // 4], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([4, 1], [4, THREADS_PER_WARP // 4], [1, 4], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([2, 2], [4, THREADS_PER_WARP // 4], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([2, 2], [8, THREADS_PER_WARP // 8], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 2], [1, THREADS_PER_WARP // 1], [1, 4], [1, 0], [1, 1], [1, 1], [0, 1]),
+]
 
 
 @pytest.mark.parametrize("M, N", [[32, 16], [32, 32], [32, 64], [64, 32]])
@@ -3382,9 +3407,10 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                     pytest.skip("Only test out_dtype=float16 on devices with sm >=80")
             if capability[0] < 9 and in_dtype == 'float8e4nv':
                 pytest.skip("float8e4nv not supported on sm <= 80")
+
         if is_hip() and (in_dtype == 'float8e4nv' or in_dtype == 'float8e5'):
             pytest.skip("float8e4nv and float8e5 not supported on HIP")
-        if is_hip() and (input_precision != "ieee"):
+        if is_hip() and not ((input_precision == "ieee") or (input_precision == "tf32" and is_hip_mi300())):
             pytest.skip(f"{input_precision} not supported on HIP")
         if is_hip() and (kpack == 2 and in_dtype == 'int8' and K < 64):
             pytest.skip("kpack too large for K")
@@ -3582,8 +3608,6 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
         if cc < (8, 9):
             pytest.skip("float8e4nv not supported on CUDA < 8.9")
     if is_hip():
-        if normal_type == "fp16":
-            pytest.skip("scaled_dot with fp16 input might have bugs on AMD")
         if not is_hip_cdna():
             pytest.skip("scaled_dot only implemented for HIP CDNA")
         if "e4m3" in (mxfp_type, normal_type):
