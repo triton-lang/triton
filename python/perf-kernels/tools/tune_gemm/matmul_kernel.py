@@ -24,7 +24,7 @@ def matmul_kernel(a_ptr, b_ptr, c_ptr, bias_ptr, M, N, K, stride_am, stride_ak, 
     if NUM_XCDS != 1:
         ## pid remapping on xcds
         # Number of pids per XCD in the new arrangement
-        pids_per_xcd = GRID_MN // NUM_XCDS
+        pids_per_xcd = (GRID_MN + NUM_XCDS - 1) // NUM_XCDS
         # Compute current XCD and local pid within the XCD
         xcd = pid % NUM_XCDS
         local_pid = pid // NUM_XCDS
