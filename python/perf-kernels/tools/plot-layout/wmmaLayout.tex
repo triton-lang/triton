@@ -1,0 +1,121 @@
+\newcommand{\drawWMMAOperand}[3]{
+  %%
+  %% Draw the layout of one operand of WMMA instruction
+  %%
+  %% #1: opIdx. 0 for opA, 1 for opB
+  %% #2: verbose. 1 means draw tid in each vec; 0 means draw nothing
+  %% #3: mode. 0 for w32, 1 for w64
+  %%
+  %% wmma op TL: pre defined top-left coordinates of the operand matrix
+
+  \pgfmathsetmacro{\isOpB}{#1}
+  \pgfmathsetmacro{\isOpA}{1-\isOpB}
+  \pgfmathsetmacro{\verbose}{#2}
+  \pgfmathsetmacro{\isWLarge}{#3}
+
+  \foreach \row in {0,...,15}{
+    \pgfmathsetmacro{\ratio}{\row*5+15}
+    \coordinate (vec TL) at ($(wmma op TL)+(\row*\isOpB*\elem, -\row*\elem*\isOpA)$);
+    \ifthenelse{\isWLarge=1}{
+      \pgfmathsetmacro{\tidone}{int(\row+16)}
+      \pgfmathsetmacro{\tidtwo}{int(\row+32)}
+      \pgfmathsetmacro{\tidthree}{int(\row+48)}
+      \draw [line width=0.005mm, fill=brown!\ratio!white] (vec TL)
+      rectangle ++(16*\elem*\isOpA+\elem*\isOpB, -\elem*\isOpA-16*\elem*\isOpB)
+      node [scale=0.4*\scale, pos=.5, rotate=90*\isOpB] {t\row, t\tidone, t\tidtwo, t\tidthree};
+    }{
+      \pgfmathsetmacro{\tidone}{int(\row+16)}
+      \draw [line width=0.005mm, fill=brown!\ratio!white] (vec TL)
+      rectangle ++(16*\elem*\isOpA+\elem*\isOpB, -\elem*\isOpA-16*\elem*\isOpB)
+      node [scale=0.4*\scale, pos=.5, rotate=90*\isOpB] {t\row, t\tidone};
+    }
+  }
+}
+
+\newcommand{\drawWMMAResult}[2]{
+  %%
+  %% Draw layout of WMMA result tensor
+  %%
+  %% #1: verbose. 1 means draw tid in each vec; 0 means draw nothing
+  %% #2: mode. 0 for w32, 1 for w64
+
+  \pgfmathsetmacro{\verbose}{#1}
+  \pgfmathsetmacro{\isWLarge}{#2}
+
+  \pgfmathsetmacro{\numElem}{256}
+  \pgfmathsetmacro{\maxElemId}{\numElem-1}
+
+  \foreach \elemId in {0,...,\maxElemId}{
+    %% figure out the rowID
+    \pgfmathsetmacro{\rowId}{floor(\elemId/16)}
+    %% figure out the colID
+    \pgfmathsetmacro{\colId}{mod(\elemId,16)}
+    %% figure out the tid and color
+    \ifthenelse{\isWLarge=1}{
+      \pgfmathsetmacro{\tid}{int(mod(\elemId,64))}
+      \pgfmathsetmacro{\laneId}{mod(\elemId,64)}
+    }{
+      \pgfmathsetmacro{\tid}{int(mod(\elemId,32))}
+      \pgfmathsetmacro{\laneId}{mod(\elemId,32)}
+    }
+    %% figure out the color
+    \pgfmathsetmacro{\colorId}{floor(\laneId/16)}
+    \pgfmathsetmacro{\vecColor}{\Colors[\colorId]}
+    %% Coordinate
+    \coordinate (vec TL) at ($(C TL)+(\colId*\elem, -\rowId*\elem)$);
+    \draw [line width=0.005mm, fill=\vecColor!60!white] (vec TL) rectangle ++(\elem, -\elem)
+    node [scale=.4*\scale, pos=.5] {t\tid};
+  }
+
+
+}
+
+\newcommand{\drawWMMAInstr}[2]{
+  %%
+  %% Draw wmma instruction layouts 16x16x16
+  %%
+  %% #1: mode. 0 for w32, 1 for w64
+  %% #2: verbose. 1 means draw tid in each vec; 0 means draw nothing
+  %%
+  %% C TL: pre defined top-left coordinates of output matrix
+  %% \elem: pre defined element size
+
+
+  \pgfmathsetmacro{\isWLarge}{#1}
+  \pgfmathsetmacro{\verbose}{#2}
+
+  \pgfmathsetmacro{\gap}{\elem*2}
+  \coordinate (wmma op TL) at ($(C TL)+(-\gap-16*\elem, 0)$);
+  \coordinate (wmma opA TL) at (wmma op TL);
+  \drawWMMAOperand{0}{\verbose}{\isWLarge}
+  \coordinate (wmma op TL) at ($(C TL)+(0, \gap+16*\elem)$);
+  \drawWMMAOperand{1}{\verbose}{\isWLarge}
+
+  \drawWMMAResult{1}{\isWLarge}
+
+  %% labels
+  \pgfmathsetmacro{\gap}{\elem}
+  \node [above left, scale=\scale] at (wmma opA TL) {A};
+  \node [above left, scale=\scale] at (wmma op TL) {B};
+  \node [above right, scale=\scale] at ($(C TL)+(16*\elem, 0)$) {C};
+
+  %% A k dim
+  \node [scale=.8*\scale] (k dim A) at ($(wmma opA TL)+(8*\elem,\gap)$) {16};
+  \draw [->, >=stealth] (k dim A.west) -- ($(wmma opA TL)+(0, \gap)$);
+  \draw [->, >=stealth] (k dim A.east) -- ($(wmma opA TL)+(16*\elem, \gap)$);
+
+  %% B K dim
+  \node [scale=.8*\scale, rotate=90] (k dim B) at ($(wmma op TL)+(-\gap, -8*\elem)$) {16};
+  \draw [->, >=stealth] (k dim B.east) -- ($(wmma op TL)+(-\gap, 0)$);
+  \draw [->, >=stealth] (k dim B.west) -- ($(wmma op TL)+(-\gap, -16*\elem)$);
+
+  %% C M dim
+  \node [scale=.8*\scale] (m dim) at ($(C TL)+(8*\elem,-16*\elem-\gap)$) {16};
+  \draw [->, >=stealth] (m dim.west) -- ($(C TL)+(0, -16*\elem-\gap)$);
+  \draw [->, >=stealth] (m dim.east) -- ($(C TL)+(16*\elem, -16*\elem-\gap)$);
+
+  %% C N dim
+  \node [scale=.8*\scale, rotate=-90] (n dim) at ($(C TL)+(16*\elem+\gap, -8*\elem)$) {16};
+  \draw [->, >=stealth] (n dim.west) -- ($(C TL)+(16*\elem+\gap, 0)$);
+  \draw [->, >=stealth] (n dim.east) -- ($(C TL)+(16*\elem+\gap, -16*\elem)$);
+}

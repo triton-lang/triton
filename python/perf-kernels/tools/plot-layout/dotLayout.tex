@@ -1,0 +1,444 @@
+\newcommand{\drawBlockMFMALayoutLarge}[3]{
+  %%
+  %% Draw a single block of MFMA_32x32x8xf16 or MFMA_16x16x16xf16
+  %%
+  %% block TL: pre-defined top-left coordinate of the block
+  %% \elem: pre defined variable
+  %%
+  %% #1: 1 for mfma.trans, 0 for normal mfma
+  %% #2: mfmaNonKDim
+  %% #3: verbose. 1 means draw tid in each vec; 0 means draw nothing
+
+  \pgfmathsetmacro{\trans}{#1}
+  \pgfmathsetmacro{\nonTrans}{1-#1}
+  \pgfmathsetmacro{\nonKDim}{#2}
+  \pgfmathsetmacro{\maxTID}{\nonKDim-1}
+  \pgfmathsetmacro{\groups}{64/\nonKDim}
+  \pgfmathsetmacro{\maxGID}{\groups-1}
+  \pgfmathsetmacro{\maxIVec}{\nonKDim*\nonKDim/256-1}
+  \pgfmathsetmacro{\verbose}{#3}
+  \foreach \iVec in {0,...,\maxIVec} {
+    \coordinate (wave TL) at ($(block TL)+(\trans*\iVec*\groups*4*\elem, -\nonTrans*\iVec*\groups*4*\elem)$);
+    \foreach \tg in {0,...,\maxGID}{
+      \pgfmathsetmacro{\colID}{\tg}
+      \pgfmathsetmacro{\col}{\Colors[\colID]}
+      \foreach \tid in {0,...,\maxTID} {
+        \pgfmathsetmacro{\ratio}{\tid*2.5*\groups+15}
+        \ifthenelse{\verbose=0}{
+          \draw [line width=0.005mm, fill=\col!\ratio!white]
+          ($(wave TL)+(\nonTrans*\tid*\elem+\tg*\trans*4*\elem, -\trans*\tid*\elem-\tg*\nonTrans*4*\elem)$)
+          rectangle ++(\nonTrans*\elem+\trans*4*\elem, -\nonTrans*4*\elem-\trans*\elem);
+        }{
+          \pgfmathsetmacro{\drawTid}{int(\tid+\tg*\nonKDim)}
+          \draw [line width=0.005mm, fill=\col!\ratio!white]
+          ($(wave TL)+(\nonTrans*\tid*\elem+\tg*\trans*4*\elem, -\trans*\tid*\elem-\tg*\nonTrans*4*\elem)$)
+          rectangle ++(\nonTrans*\elem+\trans*4*\elem, -\nonTrans*4*\elem-\trans*\elem)
+          node [pos=.5, scale=.35*\scale, rotate=90*\nonTrans] {t\drawTid};
+        }
+      }
+    }
+  }
+  \draw [thick] (block TL) rectangle ++(\nonKDim*\elem, -\nonKDim*\elem);
+}
+
+
+\newcommand{\drawTensorMFMALayout}[6]{
+  %%
+  %% Draw a tensor with mfma layout.
+  %%
+  %% C TL: pre defined top-left coordinates of the tensor
+  %%
+  %% #1: M
+  %% #2: N
+  %% #3: MFMA nonKDim
+  %% #4: warpsPerCTA[0]
+  %% #5: warpsPerCTA[1]
+  %% #6: 1 for mfma.trans, 0 for normal mfma
+
+  \pgfmathsetmacro{\tensorShapeH}{#1}
+  \pgfmathsetmacro{\tensorShapeW}{#2}
+  \pgfmathsetmacro{\mfmaNonKDim}{#3}
+  \pgfmathsetmacro{\warpsPerCTAH}{#4}
+  \pgfmathsetmacro{\warpsPerCTAW}{#5}
+  \pgfmathsetmacro{\mfmaTrans}{#6}
+
+  \coordinate (old TL) at (TL);
+  \coordinate (TL) at (C TL);
+
+
+  \pgfmathsetmacro{\CTARepH}{\tensorShapeH/\mfmaNonKDim/\warpsPerCTAH}
+  \pgfmathsetmacro{\CTARepW}{\tensorShapeW/\mfmaNonKDim/\warpsPerCTAW}
+  \pgfmathsetmacro{\maxCTAId}{\CTARepH*\CTARepW-1}
+  \pgfmathsetmacro{\maxWaveId}{\warpsPerCTAH*\warpsPerCTAW-1}
+  \pgfmathsetmacro{\CTASizeH}{\warpsPerCTAH*\mfmaNonKDim}
+  \pgfmathsetmacro{\CTASizeW}{\warpsPerCTAW*\mfmaNonKDim}
+
+
+  \foreach \ctaId in {0,...,\maxCTAId}{
+    \pgfmathsetmacro{\ctaCoordH}{int(\ctaId/\CTARepW)}
+    \pgfmathsetmacro{\ctaCoordW}{mod(\ctaId,\CTARepW)}
+    \coordinate (CTA TL) at ($(TL)+(\ctaCoordW*\CTASizeW*\elem, -\ctaCoordH*\CTASizeH*\elem)$);
+    %% Draw a detailed view of wave0 in each CTA
+    \coordinate (block TL) at (CTA TL);
+    \drawBlockMFMALayoutLarge{\mfmaTrans}{\mfmaNonKDim}{0}
+
+    \foreach \waveId in {0,...,\maxWaveId}{
+      \pgfmathsetmacro{\waveCoordH}{int(\waveId/\warpsPerCTAW)}
+      \pgfmathsetmacro{\waveCoordW}{mod(\waveId,\warpsPerCTAW)}
+      \coordinate (block TL) at ($(CTA TL)+(\waveCoordW*\mfmaNonKDim*\elem, -\waveCoordH*\mfmaNonKDim*\elem)$);
+      %% Inside the loop, only draw a rectangle
+      \draw [ultra thin] (block TL) rectangle ++(\mfmaNonKDim*\elem, -\mfmaNonKDim*\elem)
+      node [scale=.7*\mfmaNonKDim/32*\scale, pos=.5, fill=white, inner sep=0] {wave\waveId};
+    }
+
+    %% Draw the outline of each CTA rep
+    \draw [ultra thick] (CTA TL) rectangle ++(\CTASizeW*\elem, -\CTASizeH*\elem);
+  }
+
+  \coordinate (TL) at (old TL);
+}
+
+\newcommand{\drawMFMAOperand}[5]{
+  %%
+  %% Draw one mfma operand
+  %%
+  %% Pre-defined variables
+  %% mfma op TL: coordinates of the top-left
+  %% \elem: vertical element size of operands, element size of output
+  %% \elemW: honrizontal element size of operands
+  %%
+  %% #1: mfmNonKDim
+  %% #2: kWidth
+  %% #2: kGroup
+  %% #3: 0 for opA and 1 for opB
+  %% #4: verbose. 1 means draw tid in each vec; 0 means draw nothing
+
+  \pgfmathsetmacro{\nonKDim}{#1}
+  \pgfmathsetmacro{\maxGID}{64/\nonKDim-1}
+  \pgfmathsetmacro{\maxTID}{\nonKDim-1}
+  \pgfmathsetmacro{\kWidth}{#2}
+  \pgfmathsetmacro{\kGroup}{#3}
+  \pgfmathsetmacro{\maxGroupId}{\kGroup-1}
+  \pgfmathsetmacro{\opIdxA}{#4}
+  \pgfmathsetmacro{\opIdxB}{1-\opIdxA}
+  \pgfmathsetmacro{\verbose}{#5}
+
+  \foreach \gp in {0,...,\maxGroupId}{
+    \coordinate (group TL) at ($(mfma op TL)+(\gp*\kWidth*64*\elemW/\nonKDim*\opIdxB, -\gp*\kWidth*64*\elemW/\nonKDim*\opIdxA)$);
+    \foreach \col/\tg in {0,...,\maxGID}{
+      \pgfmathsetmacro{\col}{\Colors[\tg]}
+      \foreach \tid in {0,...,\maxTID} {
+        \ifthenelse{\verbose=0}{
+          \draw [line width=0.005mm, fill=\col]
+          ($(group TL)+(\tg*\kWidth*\elem*\opIdxB+\tid*\elem*\opIdxA, -\tid*\elem*\opIdxB-\tg*\kWidth*\elem*\opIdxA)$)
+          rectangle ++(\kWidth*\elem*\opIdxB + \elem*\opIdxA, -\elem*\opIdxB-\kWidth*\elem*\opIdxA);
+        }{
+          \pgfmathsetmacro{\drawTid}{int(\tid+\tg*\nonKDim)}
+          \draw [line width=0.005mm, fill=\col]
+          ($(group TL)+(\tg*\kWidth*\elemW*\opIdxB+\tid*\elem*\opIdxA, -\tid*\elem*\opIdxB-\tg*\kWidth*\elemW*\opIdxA)$)
+          rectangle ++(\kWidth*\elemW*\opIdxB + \elem*\opIdxA, -\elem*\opIdxB-\kWidth*\elemW*\opIdxA)
+          node [pos=.5, scale=.35*\scale, rotate=90*\opIdxA] {t\drawTid};
+        }
+      }
+    }
+  }
+}
+
+\newcommand{\drawWaveOperand}[5]{
+  %%
+  %% Draw the part of the tensor that is one operand of the wave
+  %%
+  %% Op TL: pre defined coordinates of the top-left of the operand
+  %% \elem: pre defined variable
+  %%
+  %% #1: K
+  %% #2: mfmNonKDim
+  %% #3: kWidth
+  %% #4: kGroup
+  %% #5: 0 for opA and 1 for opB
+
+  \pgfmathsetmacro{\K}{#1}
+  \pgfmathsetmacro{\nonKDim}{#2}
+  \pgfmathsetmacro{\groups}{64/\nonKDim}
+  \pgfmathsetmacro{\kWidth}{#3}
+  \pgfmathsetmacro{\kGroup}{#4}
+  \pgfmathsetmacro{\opIdx}{#5}
+  \pgfmathsetmacro{\opIdxOther}{1-\opIdx}
+
+  \coordinate (TL) at (Op TL);
+
+  \pgfmathsetmacro{\numKRep}{\K/\kWidth/\groups/\kGroup}
+  \pgfmathsetmacro{\maxKRepId}{\numKRep-1}
+
+  \foreach \repId in {0,...,\maxKRepId}{
+    \coordinate (mfma op TL) at ($(TL)+(\repId*\groups*\kWidth*\elem*\kGroup*\opIdxOther, -\repId*\groups*\kWidth*\kGroup*\elem*\opIdx)$);
+    \drawMFMAOperand{\nonKDim}{\kWidth}{\kGroup}{\opIdx}{0}
+    \draw [thick] (mfma op TL) rectangle
+    ++(\groups*\kWidth*\kGroup*\elem*\opIdxOther+\nonKDim*\opIdx*\elem, -\nonKDim*\opIdxOther*\elem-\groups*\kWidth*\kGroup*\elem*\opIdx);
+  }
+}
+
+\newcommand{\drawDotOperands}[6]{
+  %%
+  %% Draw operand tensors of dot
+  %%
+  %% A TL and B TL: pre defined top-left coordinates of A and B tensor
+  %% \elem: pre defined variable
+  %%
+  %% #1: M
+  %% #2: N
+  %% #3: K
+  %% #4: MFMA nonKDim
+  %% #5: warpsPerCTA[0]
+  %% #6: warpsPerCTA[1]
+
+  \pgfmathsetmacro{\M}{#1}
+  \pgfmathsetmacro{\N}{#2}
+  \pgfmathsetmacro{\K}{#3}
+  \pgfmathsetmacro{\mfmaNonKDim}{#4}
+  \pgfmathsetmacro{\warpsPerCTAM}{#5}
+  \pgfmathsetmacro{\warpsPerCTAN}{#6}
+
+  %% operand A
+  \pgfmathsetmacro{\CTARepM}{\M/\warpsPerCTAM/\mfmaNonKDim}
+  \pgfmathsetmacro{\maxCTAIdM}{\CTARepM-1}
+  \pgfmathsetmacro{\maxWaveId}{\warpsPerCTAM-1}
+  \foreach \ctaId in {0,...,\maxCTAIdM}{
+    \coordinate (CTA TL) at ($(A TL)+(0, -\ctaId*\warpsPerCTAM*\mfmaNonKDim*\elem)$);
+    \foreach \waveId in {0,...,\maxWaveId}{
+      \coordinate (wave TL) at ($(CTA TL)+(0, -\waveId*\mfmaNonKDim*\elem)$);
+      \draw [ultra thin] (wave TL) rectangle ++(\K*\elem, -\mfmaNonKDim*\elem);
+    }
+    %% Only draw the detailed view of the first wave in CTA
+    \coordinate (Op TL) at (CTA TL);
+    \drawWaveOperand{\K}{\mfmaNonKDim}{\kWidthA}{\kGroupA}{0}
+
+    %% Draw the outline of each CTA rep
+    \draw [ultra thick] (CTA TL) rectangle ++(\K*\elem, -\warpsPerCTAM*\mfmaNonKDim*\elem);
+  }
+  \draw [ultra thin] (A TL) rectangle ++(\K*\elem, -\M*\elem);
+
+
+  %% operand B
+  \pgfmathsetmacro{\CTARepN}{\N/\warpsPerCTAN/\mfmaNonKDim}
+  \pgfmathsetmacro{\maxCTAIdN}{\CTARepN-1}
+  \pgfmathsetmacro{\maxWaveId}{\warpsPerCTAN-1}
+  \foreach \ctaId in {0,...,\maxCTAIdN}{
+    \coordinate (CTA TL) at ($(B TL)+(\ctaId*\warpsPerCTAN*\mfmaNonKDim*\elem, 0)$);
+    \foreach \waveId in {0,...,\maxWaveId}{
+      \coordinate (wave TL) at ($(CTA TL)+(\waveId*\mfmaNonKDim*\elem ,0)$);
+      \draw [ultra thin] (wave TL) rectangle ++(\mfmaNonKDim*\elem, -\K*\elem);
+    }
+    %% Only draw the detailed view of the first wave in CTA
+    \coordinate (Op TL) at (CTA TL);
+    \drawWaveOperand{\K}{\mfmaNonKDim}{\kWidthB}{\kGroupB}{1}
+
+    %% Draw the outline of each CTA rep
+    \draw [ultra thick] (CTA TL) rectangle ++(\warpsPerCTAN*\mfmaNonKDim*\elem, -\K*\elem);
+  }
+  \draw [ultra thin] (B TL) rectangle ++(\N*\elem, -\K*\elem);
+}
+
+
+\newcommand{\drawDot}[7]{
+  %%
+  %% Draw C = dot A, B
+  %%
+  %% C TL: pre defined top-left coordinates of the result tensor
+  %% \elem: pre defined variable
+  %%
+  %% #1: M
+  %% #2: N
+  %% #3: K
+  %% #4: MFMA nonKDim
+  %% #5: warpsPerCTA[0]
+  %% #6: warpsPerCTA[1]
+  %% #7: 1 for mfma.trans, 0 for normal mfma
+
+  \pgfmathsetmacro{\M}{#1}
+  \pgfmathsetmacro{\N}{#2}
+  \pgfmathsetmacro{\K}{#3}
+  \pgfmathsetmacro{\mfmaNonKDim}{#4}
+  \pgfmathsetmacro{\groups}{64/\mfmaNonKDim}
+  \pgfmathsetmacro{\warpsPerCTAM}{#5}
+  \pgfmathsetmacro{\warpsPerCTAN}{#6}
+  \pgfmathsetmacro{\mfmaTrans}{#7}
+
+  \pgfmathsetmacro{\gap}{\elem*20}
+  \coordinate (A TL) at ($(C TL)+(-\gap-\K*\elem, 0)$);
+  \coordinate (B TL) at ($(C TL)+(0, \gap+\K*\elem)$);
+
+  %% Draw both A and B operands
+  \drawDotOperands{\M}{\N}{\K}{\mfmaNonKDim}{\warpsPerCTAM}{\warpsPerCTAN}
+
+  %% Draw result tensor
+  \drawTensorMFMALayout{\M}{\N}{\mfmaNonKDim}{\warpsPerCTAM}{\warpsPerCTAN}{\mfmaTrans}
+
+  %% Draw labels
+  \node [scale=\scale, above] at ($(A TL)+(.5*\K*\elem, 0)$) {K=\K};
+  \node [scale=\scale, above, rotate=90] at ($(A TL)+(0, -.5*\M*\elem)$) {M=\M};
+
+  \node [scale=\scale, above, rotate=90] at ($(B TL)+(0, -.5*\K*\elem)$) {K=\K};
+  \node [scale=\scale, above] at ($(B TL)+(.5*\N*\elem, 0)$) {N=\N};
+
+  \node [scale=\scale, above left] at (A TL) {A};
+  \node [scale=\scale, above left] at (B TL) {B};
+  \node [scale=\scale, above left] at (C TL) {C};
+
+  %% label nonKDim
+  \node [scale=.8*\scale, left] at ($(C TL)+(0, -.5*\mfmaNonKDim*\elem)$) {\mfmaNonKDim};
+  \node [scale=.8*\scale, above] at ($(C TL)+(.5*\mfmaNonKDim*\elem, 0)$) {\mfmaNonKDim};
+}
+
+\newcommand{\drawZoomInVec}[3]{
+  %%
+  %% Draw zoomed in view of vector of elements
+  %%
+  %% predefined variables
+  %% vec TL: top-left coordinates of the vector
+  %% orig TL: top-left coordinates of the original small vector
+  %% \elem: vertical element size of operands, element size of output
+  %% \elemW: honrizontal element size of operands
+  %% \scaleLabel: extra scale applied to labels according to kWidth
+  %%
+  %% #1: number of elements
+  %% #2: 0 for opLeft, 1 for opRight
+  %% #3: label
+
+  \pgfmathsetmacro{\kWidth}{#1}
+  \pgfmathsetmacro{\opLeft}{#2}
+  \pgfmathsetmacro{\opRight}{1-#2}
+
+  \pgfmathsetmacro{\maxVec}{\kWidth-1}
+  \foreach \vecId in {0,...,\maxVec}{
+    \draw ($(vec TL)+(\vecId*\elem*\opRight, -\vecId*\elem*\opLeft)$) rectangle ++(\elem, -\elem);
+  }
+  \draw [densely dotted] (orig TL) -- ($(vec TL)+(\elem*\opLeft, -\elem*\opRight)$);
+  \draw [densely dotted] ($(orig TL)+(\kWidth*\elemW*\opRight, -\kWidth*\elemW*\opLeft)$) -- ($(vec TL)+(\kWidth*\elem*\opRight+\elem*\opLeft, -\elem*\opRight-\kWidth*\elem*\opLeft)$);
+  \node [scale=.8*\scaleLabel, above, rotate=90*\opLeft] at ($(vec TL)+(.5*\kWidth*\elem*\opRight,  -.5*\kWidth*\elem*\opLeft)$) {#3};
+}
+
+\newcommand{\drawMFMAInstr}[6]{
+  %%
+  %% Draw layout of mfma instructions with tid labeled
+  %%
+  %% Pre-defined variables
+  %% C TL: top-left coordinates of the output matrix
+  %% \elem: vertical element size of operands, element size of output
+  %% \elemW: honrizontal element size of operands
+  %% \scaleLabel: extra scale applied to labels according to kWidth
+  %%
+  %% #1: mfmaNonKDim
+  %% #2: mfmaTrans
+  %% #3: dtype_a
+  %% #4: dtype_b
+  %% #5: outType
+  %% #6: scaling: if set, draw scaling tensors
+
+  \pgfmathsetmacro{\mfmaNonKDim}{#1}
+  \pgfmathsetmacro{\groups}{64/\mfmaNonKDim}
+  \pgfmathsetmacro{\mfmaTrans}{#2}
+  \pgfmathsetmacro{\nonTrans}{1-#2}
+  \pgfmathsetmacro{\drawScale}{#6}
+
+  \ifthenelse{\mfmaTrans=0}{
+    \pgfmathsetmacro{\kWidthLeft}{\kWidthA}
+    \pgfmathsetmacro{\kWidthRight}{\kWidthB}
+    \pgfmathsetmacro{\kGroupLeft}{\kGroupA}
+    \pgfmathsetmacro{\kGroupRight}{\kGroupB}
+  }{
+    \pgfmathsetmacro{\kWidthLeft}{\kWidthB}
+    \pgfmathsetmacro{\kWidthRight}{\kWidthA}
+    \pgfmathsetmacro{\kGroupLeft}{\kGroupB}
+    \pgfmathsetmacro{\kGroupRight}{\kGroupA}
+  }
+  \pgfmathsetmacro{\kDim}{int(\kWidthLeft*\groups*\kGroupLeft)}
+
+  %% Draw operand left
+  \pgfmathsetmacro{\gap}{\elem*5}
+  \coordinate (mfma opA TL) at ($(C TL)+(-.5*\gap-1.2*\nonTrans*\gap-\groups*\kWidthLeft*\elemW*\kGroupLeft, 0)$);
+  \coordinate (mfma op TL) at (mfma opA TL);
+  \drawMFMAOperand{\mfmaNonKDim}{\kWidthLeft}{\kGroupLeft}{0}{1}
+  %% Draw operand right
+  \coordinate (mfma opB TL) at ($(C TL)+(0, 1.5*\gap+.5*\mfmaTrans*\gap+\groups*\kWidthRight*\elemW*\kGroupRight)$);
+  \coordinate (mfma op TL) at (mfma opB TL);
+  \drawMFMAOperand{\mfmaNonKDim}{\kWidthRight}{\kGroupRight}{1}{1}
+
+  %% Draw scaling tensors if needed
+  \ifthenelse{\drawScale=1}{
+    \coordinate (left scaling TL) at ($(mfma opA TL)+(-0.3*\gap-\groups*4*\elemW, 0)$);
+    \coordinate (mfma op TL) at (left scaling TL);
+    \drawMFMAOperand{\mfmaNonKDim}{4}{1}{0}{1}
+
+    \coordinate (right scaling TL) at ($(mfma opB TL)+(0, 0.3*\gap+\groups*4*\elemW)$);
+    \coordinate (mfma op TL) at (right scaling TL);
+    \drawMFMAOperand{\mfmaNonKDim}{4}{1}{1}{1}
+  }{}
+
+  \coordinate (block TL) at (C TL);
+  \drawBlockMFMALayoutLarge{\mfmaTrans}{\mfmaNonKDim}{1}
+
+  %% Draw labels
+  %% Set data types
+  \def\opAType{#3}
+  \def\opBType{#4}
+  \def\outType{#5}
+
+  %% Draw kWidth vector and label of first operand
+  \coordinate (vec TL) at ($(mfma opA TL)+(0, 5*\elem)$);
+  \coordinate (orig TL) at (mfma opA TL);
+  \drawZoomInVec{\kWidthLeft}{0}{kWidth=\kWidthLeft}
+
+  %% Draw kWidth vector and label of second operand
+  \coordinate (vec TL) at ($(mfma opB TL)+(-5*\elem, 0)$);
+  \coordinate (orig TL) at (mfma opB TL);
+  \drawZoomInVec{\kWidthRight}{1}{kWidth=\kWidthRight}
+
+  \ifthenelse{\drawScale=1}{
+    %% Draw vec and label of scalingLeft
+    \coordinate (vec TL) at ($(left scaling TL)+(0, 5*\elem)$);
+    \coordinate (orig TL) at (left scaling TL);
+    \drawZoomInVec{4}{0}{vec=4$\times$e8m0}
+    %% Draw vec and label of scalingRight
+    \coordinate (vec TL) at ($(right scaling TL)+(-5*\elem, 0)$);
+    \coordinate (orig TL) at (right scaling TL);
+    \drawZoomInVec{4}{1}{vec=4$\times$e8m0}
+  }{}
+
+  %% Draw labels according to mfma.trans or not
+  \ifthenelse{\mfmaTrans=0}{
+    \node [scale=\scaleLabel, above left] at ($(mfma opA TL)+(\kWidthLeft*\elemW*\groups*\kGroupLeft, 0)$)
+    {inA:$\mfmaNonKDim \times \kDim \times $\opAType};
+    \node [scale=\scaleLabel, above right, rotate=90] at ($(mfma opB TL)+(0,-\groups*\kWidthRight*\elemW*\kGroupRight)$)
+    {inB:$\kDim \times \mfmaNonKDim \times $\opBType};
+    \ifthenelse{\drawScale=1}{
+      \node [scale=\scaleLabel, above] at ($(left scaling TL)+(0.5*4*\elemW*\groups, 0)$) {scaleA};
+      \node [scale=\scaleLabel, above, rotate=90] at ($(right scaling TL)+(0,-0.5*\groups*4*\elemW)$) {scaleB};
+    }{}
+    \coordinate (vec TL) at ($(block TL)+(-3*\elem-\elem,0)$);
+    \foreach \vecId in {0,1,2,3}{
+      \draw ($(vec TL)+(0, -\vecId*\elem)$) rectangle ++(\elem, -\elem);
+    }
+    \draw [densely dotted] (block TL) -- ++(-3*\elem,0);
+    \draw [densely dotted] ($(block TL)+(0, -4*\elem)$) -- ++(-3*\elem,0);
+    \node [scale=.8*\scale, above, rotate=90] at ($(vec TL)+(0, -.5*4*\elem)$) {vec=4$\times$\outType};
+    \node [scale=.8*\scale, above, align=center] at ($(block TL)+(.5*\mfmaNonKDim*\elem, 0)$) {mfmaLayout\\trans=False};
+  }{
+    \node [scale=\scaleLabel, above left] at ($(mfma opA TL)+(\kWidthLeft*\elemW*\groups*\kGroupLeft, 0)$)
+    {inB:$\kDim \times \mfmaNonKDim^T \times $\opBType};
+    \node [scale=\scaleLabel, above right, rotate=90] at ($(mfma opB TL)+(0, -\groups*\kWidthRight*\elemW*\kGroupRight)$)
+    {inA:$\mfmaNonKDim \times \kDim^T \times $\opAType};
+    \ifthenelse{\drawScale=1}{
+      \node [scale=\scaleLabel, above] at ($(left scaling TL)+(.5*4*\elemW*\groups, 0)$) {scaleB};
+      \node [scale=\scaleLabel, above, rotate=90] at ($(right scaling TL)+(0, -.5*\groups*4*\elemW)$) {scaleA};
+    }{}
+    \coordinate (vec TL) at ($(block TL)+(0, 3*\elem+\elem)$);
+    \foreach \vecId in {0,1,2,3}{
+      \draw ($(vec TL)+(\vecId*\elem, 0)$) rectangle ++(\elem, -\elem);
+    }
+    \draw [densely dotted] (block TL) -- ++(0, 3*\elem);
+    \draw [densely dotted] ($(block TL)+(4*\elem, 0)$) -- ++(0, 3*\elem);
+    \node [scale=.8*\scale, above] at ($(vec TL)+(.5*4*\elem, 0)$) {vec=4$\times$\outType};
+    \node [scale=.6*\scale, above, align=center] at ($(block TL)+(.5*\mfmaNonKDim*\elem, 0)$) {mfmaLayout\\trans=True};
+  }
+}

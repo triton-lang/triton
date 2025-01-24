@@ -1,0 +1,157 @@
+\newcommand{\drawBlockedWave}[5]{
+  %%
+  %% Draw a wave coverage with blocked layout
+  %%
+  %% Wave TL: pre defined top-left coordinate of the wave
+  %% \elem: pre defined variable
+  %%
+  %% #1: sizePerThread[0] --> sizePerThreadM
+  %% #2: sizePerThread[1] --> sizePerThreadN
+  %% #3: threadsPerWarp[0] --> threadsPerWarpM
+  %% #4: threadsPerWarp[1] --> threadsPerWarpN
+  %% #5: fastest changing dim --> order
+
+  \pgfmathsetmacro{\sizePerThreadM}{#1}
+  \pgfmathsetmacro{\sizePerThreadN}{#2}
+  \pgfmathsetmacro{\threadsPerWarpM}{#3}
+  \pgfmathsetmacro{\threadsPerWarpN}{#4}
+  \pgfmathsetmacro{\order}{#5}
+
+  \pgfmathsetmacro{\waveSizeM}{\sizePerThreadM*\threadsPerWarpM}
+  \pgfmathsetmacro{\waveSizeN}{\sizePerThreadN*\threadsPerWarpN}
+
+  \foreach \tid in {0,...,63}{
+    \pgfmathsetmacro{\tidM}{int(\tid/\threadsPerWarpN)}
+    \pgfmathsetmacro{\tidN}{mod(\tid,\threadsPerWarpN)}
+    \coordinate (Thread TL) at ($(Wave TL)+(\tidN*\sizePerThreadN*\elem, -\tidM*\sizePerThreadM*\elem)$);
+    \pgfmathsetmacro{\ratio}{\tidM*10}
+
+    \ifthenelse{\tid = 0}{
+      \draw [line width = 0.01mm, fill=red] (Thread TL)
+      rectangle ++(\sizePerThreadN*\elem, -\sizePerThreadM*\elem);
+    }{
+      \draw [line width = 0.01mm, fill=blue!\ratio!white] (Thread TL)
+      rectangle ++(\sizePerThreadN*\elem, -\sizePerThreadM*\elem);
+    }
+  }
+  \draw (Wave TL) rectangle ++(\waveSizeN*\elem, -\waveSizeM*\elem);
+}
+
+\newcommand{\drawBlockedCTA}[7]{
+  %%
+  %% Draw a CTA coverage with blocked layout
+  %%
+  %% CTA TL: pre defined top-left coordinate of the CTA
+  %% \elem: pre defined variable
+  %%
+  %% #1: sizePerThread[0] --> sizePerThreadM
+  %% #2: sizePerThread[1] --> sizePerThreadN
+  %% #3: threadsPerWarp[0] --> threadsPerWarpM
+  %% #4: threadsPerWarp[1] --> threadsPerWarpN
+  %% #5: warpsPerCTA[0] --> warpsPerCTAM
+  %% #6: warpsPerCTA[1] --> warpsPerCTAN
+  %% #7: fastest changing dim --> order
+
+  \pgfmathsetmacro{\sizePerThreadM}{#1}
+  \pgfmathsetmacro{\sizePerThreadN}{#2}
+  \pgfmathsetmacro{\threadsPerWarpM}{#3}
+  \pgfmathsetmacro{\threadsPerWarpN}{#4}
+  \pgfmathsetmacro{\warpsPerCTAM}{#5}
+  \pgfmathsetmacro{\warpsPerCTAN}{#6}
+  \pgfmathsetmacro{\order}{#7}
+
+  \pgfmathsetmacro{\CTASizeM}{\sizePerThreadM*\threadsPerWarpM*\warpsPerCTAM}
+  \pgfmathsetmacro{\CTASizeN}{\sizePerThreadN*\threadsPerWarpN*\warpsPerCTAN}
+  \pgfmathsetmacro{\waveSizeM}{\sizePerThreadM*\threadsPerWarpM}
+  \pgfmathsetmacro{\waveSizeN}{\sizePerThreadN*\threadsPerWarpN}
+
+  \pgfmathsetmacro{\maxWaveId}{\warpsPerCTAM*\warpsPerCTAN-1}
+
+  \coordinate (Wave TL) at (CTA TL);
+  \drawBlockedWave{\sizePerThreadM}{\sizePerThreadN}{\threadsPerWarpM}{\threadsPerWarpN}{\order}
+  \foreach \waveId in {0,...,\maxWaveId}{
+    \ifthenelse{\order=1}
+    {
+      \pgfmathsetmacro{\waveCoordM}{int(\waveId/\warpsPerCTAN)}
+      \pgfmathsetmacro{\waveCoordN}{mod(\waveId,\warpsPerCTAN)}
+      \pgfmathsetmacro{\rot}{0}
+    }{
+      \pgfmathsetmacro{\waveCoordM}{mod(\waveId,\warpsPerCTAM)}
+      \pgfmathsetmacro{\waveCoordN}{int(\waveId/\warpsPerCTAM)}
+      \pgfmathsetmacro{\rot}{90}
+    }
+
+    \coordinate (Wave TL) at ($(CTA TL)+(\waveCoordN*\waveSizeN*\elem, -\waveCoordM*\waveSizeM*\elem)$);
+    \draw [ultra thin] (Wave TL) rectangle ++(\waveSizeN*\elem, -\waveSizeM*\elem)
+    node [pos=.5, scale=.6*\scale, inner sep=0, fill=white, rotate=\rot] {wave\waveId};
+  }
+
+  \draw [thick] (CTA TL) rectangle ++(\CTASizeN*\elem, -\CTASizeM*\elem);
+}
+
+\newcommand{\drawBlockedTensor}[8]{
+  %%
+  %% Draw a tensor with blocked layout of the following parameters
+  %% sizePerThread[2]
+  %% threadsPerWarp[2]
+  %% warpsPerCTA[2]
+  %% order[2]
+  %%
+  %% TL: pre defined top-left coordinate of the tensor
+  %% \elem: pre defined variable
+  %% \dimColName: dim0Name
+  %% \dimRowName: dim1Name
+  %%
+  %% #1: tensorShape[0] --> M
+  %% #2: tensorShape[1] --> N
+  %% #3: sizePerThread[0] --> sizePerThreadM
+  %% #4: sizePerThread[1] --> sizePerThreadN
+  %% #5: threadsPerWarp[0] --> threadsPerWarpM
+  %%     Note that threadsPerWarp[1] is calculated by 64/threadsPerWarp[0]
+  %% #6: warpsPerCTA[0] --> warpsPerCTAM
+  %% #7: warpsPerCTA[1] --> warpsPerCTAN
+  %% #8: fastest changing dim --> order
+
+  \pgfmathsetmacro{\M}{#1}
+  \pgfmathsetmacro{\N}{#2}
+  \pgfmathsetmacro{\sizePerThreadM}{#3}
+  \pgfmathsetmacro{\sizePerThreadN}{#4}
+  \pgfmathsetmacro{\threadsPerWarpM}{#5}
+  \pgfmathsetmacro{\warpsPerCTAM}{#6}
+  \pgfmathsetmacro{\warpsPerCTAN}{#7}
+  \pgfmathsetmacro{\order}{#8}
+
+  \pgfmathsetmacro{\threadsPerWarpN}{64/\threadsPerWarpM}
+  \pgfmathsetmacro{\CTASizeM}{\sizePerThreadM*\threadsPerWarpM*\warpsPerCTAM}
+  \pgfmathsetmacro{\CTASizeN}{\sizePerThreadN*\threadsPerWarpN*\warpsPerCTAN}
+  \pgfmathsetmacro{\CTARepM}{\M/\CTASizeM}
+  \pgfmathsetmacro{\CTARepN}{\N/\CTASizeN}
+  \pgfmathsetmacro{\maxCTAId}{\CTARepM*\CTARepN-1}
+
+  \foreach \ctaId in {0,...,\maxCTAId}{
+    \pgfmathsetmacro{\ctaCoordM}{int(\ctaId/\CTARepN)}
+    \pgfmathsetmacro{\ctaCoordN}{mod(\ctaId,\CTARepN)}
+    \coordinate (CTA TL) at ($(TL)+(\ctaCoordN*\CTASizeN*\elem, -\ctaCoordM*\CTASizeM*\elem)$);
+    \drawBlockedCTA{\sizePerThreadM}{\sizePerThreadN}{\threadsPerWarpM}{\threadsPerWarpN}{\warpsPerCTAM}{\warpsPerCTAN}{\order}
+  }
+
+  \node [scale=.7*\scale, above, rotate=90] at ($(TL)+(0, -.5*\M*\elem)$) {\dimColName=\M};
+  \node [scale=.7*\scale, above] at ($(TL)+(.5*\N*\elem, 0)$) {\dimRowName=\N};
+
+  \def\zoomR{1.5}
+  \coordinate (zoomin BL) at ($(TL)+(0, .3)$);
+
+  \foreach \hl in {0,...,\sizePerThreadM}{
+    \draw ($(zoomin BL)+(0, \hl*\elem*\zoomR)$) -- ++(\sizePerThreadN*\elem*\zoomR,0);
+  }
+  \foreach \vl in {0,...,\sizePerThreadN}{
+    \draw ($(zoomin BL)+(\vl*\elem*\zoomR, 0)$) -- ++(0, \sizePerThreadM*\elem*\zoomR);
+  }
+
+  \node [scale=.6*\scale, left] at ($(zoomin BL)+(0, .5*\sizePerThreadM*\elem*\zoomR)$) {$t_0$};
+  \node [scale=.6*\scale, right] at ($(zoomin BL)+(\sizePerThreadN*\elem*\zoomR, .5*\sizePerThreadM*\elem*\zoomR)$) {\sizePerThreadM$\times$\sizePerThreadN};
+
+  \draw [densely dotted] (TL) -- (zoomin BL);
+  \draw [densely dotted] ($(TL)+(\sizePerThreadN*\elem, 0)$) -- ($(zoomin BL)+(\sizePerThreadN*\elem*\zoomR, 0)$);
+  \draw [fill=red] (TL) rectangle ++(\sizePerThreadN*\elem, -\sizePerThreadM*\elem);
+}
