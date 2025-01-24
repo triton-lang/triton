@@ -17,6 +17,8 @@ namespace gpu {
 #define GEN_PASS_DEF_TRITONGPUFUSENESTEDLOOPS
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
+static constexpr llvm::StringLiteral kMustExecuteAttrName = "ttg.must-execute";
+
 namespace {
 struct FuseNestedLoopsPass
     : public impl::TritonGPUFuseNestedLoopsBase<FuseNestedLoopsPass> {
@@ -705,6 +707,14 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
     inner.replaceAllUsesWith(
         bodyIf.getResults().slice(1, inner.getNumResults()));
 
+    // If the inner loop must execute, then its body does not have to be wrapped
+    // in a conditional.
+    if (inner->hasAttr(kMustExecuteAttrName)) {
+      b.setInsertionPoint(bodyIf);
+      bodyIf.getConditionMutable().assign(
+          b.create<arith::ConstantOp>(loc, b.getBoolAttr(true)));
+    }
+
     // Move the insertion point for the next iteration.
     b.setInsertionPointAfter(bodyIf);
   }
@@ -790,6 +800,65 @@ static bool shouldFuse(const LoopNest &nest) {
                       [](Operation &op) { return isa<DotOp>(op); });
 }
 
+// Speculate the length of the inner loop such that the loop is known to execute
+// at least once. This way, the inner loop body does not have to be placed
+// inside a conditional in the fused loop, which interacts better with the
+// pipeliner.
+static LogicalResult speculateInnerLoopLength(const LoopNest &nest,
+                                              mlir::DominanceInfo &domInfo) {
+  assert(nest.nodes.size() == 2 && nest.root->children.size() == 1);
+
+  scf::ForOp outerLoop = nest.root->loop;
+  scf::ForOp innerLoop = nest.root->children.front()->loop;
+
+  // The inner loop bounds must be outer-loop invariant to speculate from
+  // outside the loop nest.
+  Location loc = innerLoop.getLoc();
+  llvm::SetVector<Operation *> toHoist;
+  if (!isOuterLoopInvariant(domInfo, outerLoop,
+                            {innerLoop.getLowerBound(),
+                             innerLoop.getUpperBound(), innerLoop.getStep()},
+                            toHoist))
+    return failure();
+
+  // Hoist the inner loop bounds computations if necessary.
+  toHoist = topologicalSort(toHoist);
+  for (Operation *op : toHoist)
+    op->moveBefore(outerLoop);
+
+  // Mark the inner loop.
+  OpBuilder b(outerLoop);
+  innerLoop->setAttr(kMustExecuteAttrName, b.getUnitAttr());
+
+  // Speculate on whether the length of the inner loop is zero.
+  Value lenInner = computeNumIters(b, innerLoop);
+  auto zeroAttr = IntegerAttr::get(lenInner.getType(), 0);
+  Value innerLoopEmpty =
+      b.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq, lenInner,
+                              b.create<arith::ConstantOp>(loc, zeroAttr));
+  auto ifOp =
+      b.create<scf::IfOp>(loc, outerLoop.getResultTypes(), innerLoopEmpty);
+
+  // In the `then` branch, the inner loop does not execute. Clone the loop nest
+  // into it and remove the inner loop.
+  mlir::IRMapping map;
+  b.createBlock(&ifOp.getThenRegion());
+  auto newLoop = cast<scf::ForOp>(b.clone(*outerLoop, map));
+  b.create<scf::YieldOp>(loc, newLoop.getResults());
+  auto newInnerLoop = cast<scf::ForOp>(map.lookup(innerLoop));
+  newInnerLoop.replaceAllUsesWith(newInnerLoop.getInits());
+  newInnerLoop.erase();
+
+  // Move the loop nest into the `else` branch.
+  outerLoop.replaceAllUsesWith(ifOp.getResults());
+  Block *block = b.createBlock(&ifOp.getElseRegion());
+  outerLoop->remove();
+  b.insert(outerLoop);
+  b.create<scf::YieldOp>(loc, outerLoop.getResults());
+
+  return success();
+}
+
 void FuseNestedLoopsPass::runOnOperation() {
   auto &domInfo = getAnalysis<DominanceInfo>();
 
@@ -798,6 +867,8 @@ void FuseNestedLoopsPass::runOnOperation() {
     findLoopNests(func, nests);
     for (LoopNest &nest : nests) {
       if (!shouldFuse(nest))
+        continue;
+      if (failed(speculateInnerLoopLength(nest, domInfo)))
         continue;
       flattenLoopNest(nest.root, domInfo);
     }
