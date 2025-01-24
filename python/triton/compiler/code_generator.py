@@ -20,6 +20,13 @@ from .._utils import list_list_flatten, list_list_unflatten, find_paths_if, get_
 from .errors import (CompilationError, CompileTimeAssertionFailure, UnsupportedLanguageConstruct)
 
 
+def check_identifier_legality(name, type):
+    pattern = r'^[a-zA-Z_][a-zA-Z0-9_]*$'
+    if not re.match(pattern, name):
+        raise CompilationError(f"invalid {type} identifier: {name}", name)
+    return name
+
+
 def mangle_ty(ty):
     if ty.is_tuple():
         return 'T' + '_'.join(map(mangle_ty, ty.types)) + 'T'
@@ -276,6 +283,9 @@ class CodeGenerator(ast.NodeVisitor):
 
         self.lscope = {}
         self.jit_fn = jit_fn
+        # TODO: we currently generate illegal names for non-kernel functions involving constexprs!
+        if is_kernel:
+            function_name = check_identifier_legality(function_name, "function")
         self.function_name = function_name
         self.is_kernel = is_kernel
         self.cur_node = None
