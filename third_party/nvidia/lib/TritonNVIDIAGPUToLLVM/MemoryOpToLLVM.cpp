@@ -61,7 +61,7 @@ public:
       auto maxPhase = sharedEnc.getMaxPhase();
       auto perPhase = sharedEnc.getPerPhase();
       auto vecSize = sharedEnc.getVec();
-      canUseLdmatrixLL &= (maxPhase == 1) || (vecSize * bitwidth <= 8 * 16);
+      canUseLdmatrixLL &= (maxPhase == 1) || (vecSize * bitwidth >= 8 * 16);
       auto shape = srcTy.getShape();
       auto allocShape = srcTy.getAllocShape();
       // Limitation 3 [TODO: remove]: Only support 2d matrices now but we should
