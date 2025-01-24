@@ -104,10 +104,13 @@ private:
     auto shift = static_cast<int>(shape[kOrder] < (16 * 16 / bitwidth)) +
                  static_cast<int>(shape[nonKOrder] < 16);
     auto maxVecElems = (8 * 16 / bitwidth) >> shift;
+    auto numRegs = ldmatrixLayout.getInDimSize(str_attr("register")) >> shift;
     bool valid = emitTransferBetweenRegistersAndShared(
         ldmatrixLayout, srcTy, llvmElemTy,
         /*maxVecElems=*/maxVecElems, smemObj, loc, rewriter, targetInfo,
         [&](VectorType vecTy, Value vecAddr) {
+          if (elemsI32.size() * 32 >= numRegs * bitwidth)
+            return;
           auto numElems = vecTy.getNumElements();
           auto numElemsI32 = numElems * bitwidth / 32;
           auto matTy = LLVM::LLVMStructType::getLiteral(
