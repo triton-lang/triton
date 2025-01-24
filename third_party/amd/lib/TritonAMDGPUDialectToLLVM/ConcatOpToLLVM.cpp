@@ -115,3 +115,4 @@ void populateConcatOpToLLVMPatterns(mlir::LLVMTypeConverter &typeConverter,
   patterns.add<ConcatOpConversion>(typeConverter, benefit);
 }
 } // namespace mlir::triton::AMD
+
