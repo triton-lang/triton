@@ -20,9 +20,11 @@ using namespace mlir::triton::gpu;
 
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryBase;
+using ::mlir::LLVM::AMD::getContiguity;
 using ::mlir::LLVM::AMD::getVectorSize;
 using ::mlir::LLVM::AMD::llLoad;
 using ::mlir::LLVM::AMD::llStore;
+using ::mlir::triton::AMD::ISAFamily;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 
 namespace {
@@ -414,13 +416,15 @@ struct AsyncLoadOpConversion
   matchAndRewrite(triton::gpu::AsyncCopyGlobalToLocalOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
 
+    MLIRContext *ctx = rewriter.getContext();
     auto loc = op.getLoc();
     Value res = op.getResult();
     Value mask = op.getMask();
     Value other = op.getOther();
-    // assert(!mask && "GlobalLoadToLDS with mask is not implemented yet!");
-    // assert(!other && "GlobalLoadToLDS with other is not implemented yet!");
-    auto funcOp = op->getParentOfType<FunctionOpInterface>();
+    if (other) {
+      return emitError(loc, "ttg.AsyncLoad does not support other values use "
+                            "tt.load/store instead");
+    }
 
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getResult().getType();
@@ -442,7 +446,6 @@ struct AsyncLoadOpConversion
 
     // %src
     auto srcElems = unpackLLElements(loc, llSrc, rewriter);
-    // llvm::outs() << "Src elems count: " << srcElems.size() << "\n";
 
     // %dst
     auto smemObj = mlir::LLVM::getSharedMemoryObjectFromStruct(
@@ -454,37 +457,73 @@ struct AsyncLoadOpConversion
       assert(srcElems.size() == maskElems.size());
     }
 
-    // %other
-    SmallVector<Value> otherElems;
-    if (llOther) {
-      // assert(false && "Not implemented");
-      // FIXME(Keren): assume other is 0 for now.
-      //
-      // It's not necessary for now because the pipeline pass will skip
-      // generating insert_slice_async if the load op has any "other" tensor.
-      otherElems = unpackLLElements(loc, llOther, rewriter);
-      assert(srcElems.size() == otherElems.size());
-    }
+    // global.load.lds has a shared dst register so we cannot have per thread
+    // offsets This means our load size has to align with the load_width of
 
-    // We can load N elements at a time if:
-    //  1. Every group of N source pointers are contiguous.  For example, if
-    //     N=2, then the pointers should be [x, x+1, y, y+1, ...].
-    unsigned vec = getVectorSize(op.getSrc());
-    // llvm::outs() << "Vec size: " << vec << "\n";
-
-    unsigned maxVec = getContiguity(op.getSrc());
-    // llvm::outs() << "Max vec: " << maxVec << "\n";
+    unsigned maxVec = getContiguity(op.getSrc(), axisAnalysisPass);
     if (mask) {
       maxVec = std::min(maxVec, getMaskAlignment(mask));
     }
-    llvm::outs() << "Max Vec: " << maxVec << "\n";
-    llvm::outs().flush();
+
+    llvm::SmallSetVector<unsigned, 5> supportedLoadBits;
+    switch (targetInfo.getISAFamily()) {
+    case mlir::triton::AMD::ISAFamily::CDNA3:
+      supportedLoadBits.insert(8);
+      supportedLoadBits.insert(16);
+      supportedLoadBits.insert(32);
+      break;
+    case mlir::triton::AMD::ISAFamily::CDNA4:
+      supportedLoadBits.insert(8);
+      supportedLoadBits.insert(16);
+      supportedLoadBits.insert(32);
+      supportedLoadBits.insert(98);
+      supportedLoadBits.insert(128);
+      break;
+    default:
+      return emitError(loc, "Async copy not supported on target ISA");
+    }
+
+    unsigned int loadStoreBitWidth = maxVec * resElemTy.getIntOrFloatBitWidth();
+
+    if (!supportedLoadBits.contains(loadStoreBitWidth)) {
+      return emitError(loc, "Async copy does not supported the required load "
+                            "vectorization, got ")
+             << loadStoreBitWidth << "bits";
+    }
+
+    {
+
+      auto shape = dstTy.getShape();
+      LinearLayout regLayout =
+          triton::gpu::toLinearLayout(shape, srcTy.getEncoding());
+      LinearLayout sharedLayout = triton::gpu::toLinearLayout(
+          shape, dstTy.getEncoding(), resElemTy.getIntOrFloatBitWidth());
+      LinearLayout regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
+
+      // We need to check if the lane basis is contigeous because
+      // global.load.lds does not support per lane offset
+      auto kLane = str_attr("lane");
+      auto kBlock = str_attr("block");
+      auto kWarp = str_attr("warp");
+      auto kRegister = str_attr("register");
+
+      for (int inLane : llvm::seq(regToSharedLayout.getInDimSize(kLane))) {
+        auto idx = regToSharedLayout.apply(
+            {{kRegister, 0}, {kLane, inLane}, {kWarp, 0}, {kBlock, 0}});
+        int32_t offset = idx[0].second;
+        if (offset != (inLane * maxVec)) {
+          return emitError(loc, "Invalid layout in AsyncCopy: ")
+                 << "Lane: " << inLane << " is " << offset << " should be "
+                 << inLane << "\n";
+        }
+      }
+    }
 
     // Addresses to store into, one per `vecTy`.
     VectorType vecTy;
     SmallVector<Value> shmemAddrs;
     bool ok = emitTransferBetweenRegistersAndShared(
-        srcTy, dstTy, resElemTy, maxVec, smemObj, loc, rewriter, targetInfo,
+        srcTy, dstTy, resElemTy, {}, smemObj, loc, rewriter, targetInfo,
         [&](VectorType vecTy_, Value shmemAddr) {
           vecTy = vecTy_;
           shmemAddrs.push_back(shmemAddr);
@@ -495,112 +534,77 @@ struct AsyncLoadOpConversion
 
     int vecBytes = vecTy.getNumElements() * vecTy.getElementTypeBitWidth() / 8;
     assert(llvm::isPowerOf2_32(vecBytes));
-    if (vecBytes < 4) {
-      return emitError(
-                 loc,
-                 "direct load to lds does not support transfers smaller than "
-                 "4 bytes; calculated this as ")
-             << vecBytes << " bytes";
-    }
-    if (vecBytes > 8) {
-      llvm::outs() << "here\n";
-      // TODO we should probably emit a perf warning here
-      // return emitWarning(
-      //            loc,
-      //            "direct load to lds does not support transfers larger than "
-      //            "8 bytes; calculated this as ")
-      //        << vecBytes << " bytes, which means less bandwidth";
-      llvm::outs() << "There\n";
-    }
 
-    // Value zr = rewriter.create<LLVM::ConstantOp>(
-    //     op.getLoc(), IntegerType::get(op.getContext(), 32),
-    //     rewriter.getI32IntegerAttr(0));
-    // Value two = rewriter.create<LLVM::ConstantOp>(
-    //     op.getLoc(), IntegerType::get(op.getContext(), 32),
-    //     rewriter.getI32IntegerAttr(2));
-    StringRef funcName = "llvm.amdgcn.global.load.lds";
-    // Type funcType = getFunctionType(
-    //     void_ty(getContext()),
-    //     ValueRange({srcElems[0], smemObj.getBase(), zr, zr, zr}));
-    // LLVM::LLVMFuncOp llFuncOp =
-    //     appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
+    std::string intrinsic = "llvm.amdgcn.global.load.lds";
+    Value loadStoreByteWidthVal = i32_val(loadStoreBitWidth / 8);
+    llvm::outs() << "Load byte width: " << loadStoreByteWidthVal << "\n";
 
+    llvm::outs() << "Shem addr count: " << shmemAddrs.size() << "\n";
     for (int i = 0; i < shmemAddrs.size(); i++) {
-      // It's possible that vecTy is larger than 128 bits, in which case we
-      // have to use multiple cp.async instructions.
-      int wordBytes = std::min(vecBytes, 4);
-      int wordElems = wordBytes * 8 / vecTy.getElementTypeBitWidth();
-      int numWordsInVec = std::max(1, vecBytes / wordBytes);
-      llvm::outs() << "Create intrinsics\n";
-      llvm::outs().flush();
+      // Tune CG and CA.
+      // TODO Alex select correct cache modifier
+      // CacheModifier srcCacheModifier =
+      //     wordBytes == 16 ? CacheModifier::CG : CacheModifier::CA;
+      // assert(wordBytes == 16 || wordBytes == 8 || wordBytes == 4);
 
-      if (wordBytes < 1 && wordBytes > 8) {
-        return emitError(loc, "[GlobalLoadToLDS] Unsupported load size of: " +
-                                  std::to_string(wordBytes) + "bytes");
-      }
+      auto srcPtr = srcElems[i * maxVec];
 
-      // [LLVMQualPointerType<1>,            // Base global pointer to load from
-      //  LLVMQualPointerType<3>,            // LDS base pointer to store to
-      //  llvm_i32_ty,                       // Data byte size: 1/2/4 (/12/16
-      //  for gfx950) llvm_i32_ty,                       // imm offset (applied
-      //  to both global and LDS address) llvm_i32_ty],                      //
-      //  auxiliary data (imm, cachepolicy (bit 0 = sc0,
-      //                                     // bit 1 = sc1,
-      //                                     // bit 4 = scc))
-      std::string intrinsic = "llvm.amdgcn.global.load.lds";
-      llvm::outs() << "Wordbytes: " << wordBytes << "\n";
-      Value loadWidth = rewriter.create<LLVM::ConstantOp>(
-          op.getLoc(), rewriter.getI32Type(),
-          rewriter.getI32IntegerAttr(wordBytes));
+      LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, {},
+                                      {srcPtr, shmemAddrs[i],
+                                       loadStoreByteWidthVal,
+                                       /*imm
+                             offset=*/i32_val(0), i32_val(0)});
 
-      Value sizeValue = rewriter.create<LLVM::ConstantOp>(
-          op.getLoc(), IntegerType::get(op.getContext(), 32),
-          rewriter.getI32IntegerAttr(wordBytes));
+      // bool useIntrinsic = true;
+      // llvm::outs() << "Use intrinsics: " << useIntrinsic << "\n";
 
-      for (int j = 0; j < numWordsInVec; j++) {
-        llvm::outs() << "Word bytes: " << wordBytes << "\n";
-        llvm::outs() << "Word elems: " << wordElems << "\n";
-        llvm::outs() << "Word nums : " << numWordsInVec << "\n";
-        // Tune CG and CA.
-        // TODO Alex select correct cache modifier
-        // CacheModifier srcCacheModifier =
-        //     wordBytes == 16 ? CacheModifier::CG : CacheModifier::CA;
-        // assert(wordBytes == 16 || wordBytes == 8 || wordBytes == 4);
+      // auto basePtr = getPtrFromFirstLane(targetInfo, dstPtr);
+      // Value threadId = tid_val();
+      // Value laneId = urem(threadId, i32_val(64));
+      // Value offset = mul(laneId, i32_val(1));
+      // Value dstPtrWithOffset = gep(elemPtrTy, resElemTy, basePtr, offset);
 
-        Value offsetValue = rewriter.create<LLVM::ConstantOp>(
-            op.getLoc(), IntegerType::get(op.getContext(), 32),
-            // rewriter.getI32IntegerAttr(j));
-            rewriter.getI32IntegerAttr(j * wordBytes));
+      // Build blocks to bypass the global.load.lds
+      // auto *curBlock = rewriter.getInsertionBlock();
+      // auto *endBlock =
+      // curBlock->splitBlock(rewriter.getInsertionPoint()); auto
+      // *atomicBlock = rewriter.createBlock(
+      //     curBlock->getParent(), std::next(Region::iterator(curBlock)));
 
-        int elemIdx = i * vecTy.getNumElements() + j * wordElems;
-        LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, {},
-                                        {srcElems[0], shmemAddrs[0], loadWidth,
-                                         /*imm
-                              offset=*/i32_val(0), i32_val(2)});
-        // LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
-        // "llvm.amdgcn.s.waitcnt",
-        //                                 {}, {i32_val(0)});
+      // // Fill entry block with global memory barrier and conditional
+      // branch. rewriter.setInsertionPointToEnd(curBlock); auto tid =
+      // tid_val(); Value pred = icmp_eq(tid, i32_val(i));
+      // rewriter.create<LLVM::CondBrOp>(loc, pred, atomicBlock, endBlock);
 
-        // Block *currentBlock = rewriter.getInsertionBlock();
-        // Block *afterLoad =
-        //     rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
-        // Block *loadBlock = rewriter.createBlock(afterLoad);
-        // rewriter.setInsertionPointToEnd(currentBlock);
-        // rewriter.create<LLVM::CondBrOp>(loc, maskElems[elemIdx], loadBlock,
-        //                                 afterLoad);
-        // rewriter.setInsertionPointToStart(loadBlock);
-        // rewriter
-        //     .create<LLVM::CallOp>(loc, llFuncOp,
-        //                           ValueRange({srcElems[elemIdx],
-        //                           shmemAddrs[i],
-        //                                       loadWidth, offsetValue, two}))
-        //     .getResult();
-        // rewriter.create<LLVM::BrOp>(loc, afterLoad);
-        // rewriter.setInsertionPointToStart(afterLoad);
+      // Build main block with atomic_cmpxchg.
+      // rewriter.setInsertionPointToEnd(atomicBlock);
+      // Value l = load(smemObj.getBaseElemType(), dstPtrWithOffset);
+      // store(l, srcPtr);
+      // LLVM::createLLVMIntrinsicCallOp(
+      //     rewriter, loc, "llvm.amdgcn.s.waitcnt", {}, {i32_val(0)});
+      // LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
+      //                                 "llvm.amdgcn.wave.barrier", {},
+      //                                 {});
+      // LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
+      // "llvm.amdgcn.s.waitcnt",
+      //                                 {}, {i32_val(0)});
 
-        llvm::outs() << "Word nums : " << numWordsInVec << "\n";
-      }
+      // Block *currentBlock = rewriter.getInsertionBlock();
+      // Block *afterLoad =
+      //     rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+      // Block *loadBlock = rewriter.createBlock(afterLoad);
+      // rewriter.setInsertionPointToEnd(currentBlock);
+      // rewriter.create<LLVM::CondBrOp>(loc, maskElems[elemIdx], loadBlock,
+      //                                 afterLoad);
+      // rewriter.setInsertionPointToStart(loadBlock);
+      // rewriter
+      //     .create<LLVM::CallOp>(loc, llFuncOp,
+      //                           ValueRange({srcElems[elemIdx],
+      //                           shmemAddrs[i],
+      //                                       loadWidth, offsetValue, two}))
+      //     .getResult();
+      // rewriter.create<LLVM::BrOp>(loc, afterLoad);
+      // rewriter.setInsertionPointToStart(afterLoad);
     }
 
     // Drop the result token.
@@ -1688,19 +1692,9 @@ struct AsyncWaitConversion : public ConvertOpToLLVMPattern<AsyncWaitOp> {
   LogicalResult
   matchAndRewrite(AsyncWaitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    // MemBar already added the barrier for us so we can dimply drop it
     auto loc = op->getLoc();
-
-    // TODO Alex: correctly handle pending count
-    LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.s.waitcnt", {},
-                                    {i32_val(0)});
-
-    // Drop the result token.
-    Value zero = rewriter.create<LLVM::ConstantOp>(
-        op.getLoc(), IntegerType::get(op.getContext(), 32),
-        rewriter.getI32IntegerAttr(0));
-    rewriter.replaceOp(op, zero);
-    return success();
-
+    rewriter.replaceOp(op, i32_val(0));
     return success();
   }
 };
@@ -1718,18 +1712,9 @@ struct AsyncCommitGroupConversion
   LogicalResult
   matchAndRewrite(AsyncCommitGroupOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    // We do not have that concept so simply drop it
     auto loc = op->getLoc();
-
-    // TODO Alex: correctly handle pending count
-    // LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.s.waitcnt",
-    // {},
-    //                                 {i32_val(0)});
-
-    // Drop the result token.
-    Value zero = rewriter.create<LLVM::ConstantOp>(
-        op.getLoc(), IntegerType::get(op.getContext(), 32),
-        rewriter.getI32IntegerAttr(0));
-    rewriter.replaceOp(op, zero);
+    rewriter.replaceOp(op, i32_val(0));
     return success();
   }
 };
