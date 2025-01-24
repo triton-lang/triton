@@ -1131,7 +1131,7 @@ LinearLayout chooseDotLdMatrixLayout(DotOperandEncodingAttr dot,
     if (needTrans) {
       assert(elemBitWidth <= 16 && "Only elements smaller than 16 bits are "
                                    "supported in the transposed mode");
-      basesLane.push_back({0, 8});
+      basesLane.push_back({0, 8 * 16 / elemBitWidth});
       basesLane.push_back({8, 0});
     } else {
       basesLane.push_back({8, 0});
