@@ -66,8 +66,7 @@ public:
       auto allocShape = srcTy.getAllocShape();
       // Limitation 3 [TODO: remove]: Only support 2d matrices now but we should
       // be able to support 3D minor changes
-      auto canUseLdmatrixLL =
-          (bitwidth <= 16 || (!needTrans)) && shape.size() <= 2;
+      canUseLdmatrixLL = (bitwidth <= 16 || !needTrans) && shape.size() <= 2;
       if (dotEnc.getOpIdx() == 0) {
         canUseLdmatrixLL &=
             shape[kOrder] >= (16 * 16 / bitwidth) && shape[nonKOrder] >= 16;
