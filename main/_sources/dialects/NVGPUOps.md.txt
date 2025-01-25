@@ -61,6 +61,47 @@ operation ::= `nvgpu.fence_async_shared` attr-dict
 <tr><td><code>bCluster</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
 </table>
 
+### `nvgpu.ld_acquire` (triton::nvgpu::LoadAcquireOp)
+
+Syntax:
+
+```
+operation ::= `nvgpu.ld_acquire` $sem `,` $scope `,` $addr (`,` $mask^)? attr-dict `:` functional-type($addr, $result)
+```
+
+
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::SideEffects::DefaultResource}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>sem</code></td><td>::mlir::triton::nvgpu::MemSemanticAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3, 4</summary>{{% markdown %}}Enum cases:
+* relaxed (`RELAXED`)
+* acquire (`ACQUIRE`)
+* release (`RELEASE`)
+* acq_rel (`ACQUIRE_RELEASE`){{% /markdown %}}</details></td></tr>
+<tr><td><code>scope</code></td><td>::mlir::triton::nvgpu::MemSyncScopeAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3</summary>{{% markdown %}}Enum cases:
+* gpu (`GPU`)
+* cta (`CTA`)
+* sys (`SYSTEM`){{% /markdown %}}</details></td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `addr` | LLVM pointer in address space 1
+| `mask` | 1-bit signless integer
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | floating-point or integer
+
 ### `nvgpu.ldmatrix` (triton::nvgpu::LoadMatrixOp)
 
 Syntax:

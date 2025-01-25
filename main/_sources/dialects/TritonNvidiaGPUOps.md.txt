@@ -223,7 +223,7 @@ Interfaces: `MemoryEffectOpInterface`
 | :-----: | ----------- |
 | `alloc` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system
 
-### `ttng.async_tma_store_wait` (triton::nvidia_gpu::TMAStoreWait)
+### `ttng.async_tma_store_wait` (triton::nvidia_gpu::TMAStoreWaitOp)
 
 _Wait until all the inputs are read._
 
