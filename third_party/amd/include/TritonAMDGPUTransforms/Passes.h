@@ -23,7 +23,6 @@ std::unique_ptr<Pass> createTritonAMDGPUReorderInstructionsPass();
 std::unique_ptr<Pass> createTritonAMDGPUVerifier();
 
 std::unique_ptr<Pass> createTritonAMDGPUOptimizeEpiloguePass();
-std::unique_ptr<Pass> createTritonAMDGPUBypassLDSForDotOperand();
 
 std::unique_ptr<Pass> createTritonAMDGPUCanonicalizePointersPass();
 

@@ -205,8 +205,6 @@ enum class MMALoadType {
 };
 MMALoadType getMMALoadType(Operation *loadOp);
 
-// Convert \param op operands and results to layout \param encoding.
-void convertOpEncoding(Attribute encoding, Operation *op);
 } // namespace mlir
 
 #endif // TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_
