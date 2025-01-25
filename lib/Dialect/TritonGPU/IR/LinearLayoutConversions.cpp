@@ -1140,9 +1140,9 @@ LinearLayout chooseDotLdMatrixLayout(DotOperandEncodingAttr dot,
       if (kX2)
         basesLane[4] = {8 * 16 / elemBitWidth, 0};
     } else {
-      if (kX2)
-        basesLane[3] = {8, 0};
       if (nonKX2)
+        basesLane[3] = {8, 0};
+      if (kX2)
         basesLane[4] = {0, 8 * 16 / elemBitWidth};
     }
   } else {
