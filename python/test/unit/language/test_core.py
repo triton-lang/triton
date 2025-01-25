@@ -1731,7 +1731,6 @@ def test_load_scope_sem_coop_grid_cta_not_one(device):
 
 
 @pytest.mark.interpreter
-@pytest.mark.skipif(is_hip(), reason="Not implemented for AMD At this moment")
 def test_load_scope_sem_coop_grid_cta_one(device):
 
     @triton.jit
