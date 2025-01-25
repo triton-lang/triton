@@ -2421,15 +2421,14 @@ def test_reduce(op, dtype_str, shape, axis, keep_dims, num_ctas, device):
 
 scan2d_shapes = [(8, 32), (16, 32), (32, 16), (2, 1024), (1024, 2), (32, 32), (1, 1024)]
 
-scan_configs = [(op, type, shape, axis, reverse, num_warps, num_ctas)
-                for num_ctas in [1, 8]
+scan_configs = [(op, type, shape, axis, reverse, num_warps)
                 for num_warps in [4, 16]
                 for type in ['int32', 'float32', 'bfloat16']
                 for axis in [1, 0]
                 for reverse in [True, False]
                 for shape in scan2d_shapes
                 for op in ['cumsum', 'cumprod', 'get_first_element', 'linear_recurrence', 'cummax', 'roll']]
-negative_config = [('cumsum', 'float32', (32, 32), -1, False, 4, 1)]
+negative_config = [('cumsum', 'float32', (32, 32), -1, False, 4)]
 
 
 @triton.jit
@@ -2456,8 +2455,8 @@ def roll(a1, b1_last, b1_cur, a2, b2_last, b2_cur):
 
 
 @pytest.mark.interpreter
-@pytest.mark.parametrize("op, dtype_str, shape, axis, reverse, num_warps, num_ctas", scan_configs + negative_config)
-def test_scan2d(op, dtype_str, shape, axis, reverse, num_warps, num_ctas, device):
+@pytest.mark.parametrize("op, dtype_str, shape, axis, reverse, num_warps", scan_configs + negative_config)
+def test_scan2d(op, dtype_str, shape, axis, reverse, num_warps, device):
     check_type_supported(dtype_str, device)
     if dtype_str == 'bfloat16':
         if op == 'cummax':
@@ -2465,8 +2464,6 @@ def test_scan2d(op, dtype_str, shape, axis, reverse, num_warps, num_ctas, device
         if op == 'linear_recurrence':
             pytest.skip("Skipping linear_recurrence scan on bfloat16 due to accuracy issues")
     numpy_dtype_str = 'float32' if dtype_str == 'bfloat16' else dtype_str
-    if num_ctas > 1 and not is_hopper():
-        pytest.skip("num_ctas>1 only supported after sm90")
 
     # triton kernel
     @triton.jit
@@ -2582,7 +2579,7 @@ def test_scan2d(op, dtype_str, shape, axis, reverse, num_warps, num_ctas, device
     # triton result
     # we don't cast the `fp32 = bf16 op bf16` result to bfloat16 to alleviate accuracy issues
     z_tri = to_triton(z, device=device)
-    kernel[(1, )](x_tri, y_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], AXIS=axis, num_warps=num_warps, num_ctas=num_ctas)
+    kernel[(1, )](x_tri, y_tri, z_tri, BLOCK_M=shape[0], BLOCK_N=shape[1], AXIS=axis, num_warps=num_warps)
 
     z_tri = to_numpy(z_tri)
     # compare
