@@ -103,7 +103,7 @@ private:
     SmallVector<Value> elemsI32;
     auto shift =
         (dotEnc.getOpIdx() == 0)
-            ? (shape[kOrder] < (16 * 16 / bitwidth)) + (shape[nonKOrder] < 16)
+            ? (shape[nonKOrder] < 16)
             : (shape[kOrder] < (32 * 16 / bitwidth)) + (shape[nonKOrder] < 8);
     auto maxVecElems = 8 * 16 / bitwidth;
     bool valid = emitTransferBetweenRegistersAndShared(
