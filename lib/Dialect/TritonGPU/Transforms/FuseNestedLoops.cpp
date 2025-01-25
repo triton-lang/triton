@@ -321,6 +321,19 @@ static Value castIntIfNecessary(ImplicitLocOpBuilder &b, Value value,
   return b.create<arith::ExtSIOp>(type, value);
 }
 
+static Value createPoisonOrZero(ImplicitLocOpBuilder &b, Type type) {
+  Type elTy = getElementTypeOrSelf(type);
+  if (!elTy.isIntOrIndexOrFloat() ||
+      (!isa<RankedTensorType>(type) && type != elTy))
+    return b.create<ub::PoisonOp>(type);
+
+  TypedAttr attr = isa<FloatType>(elTy) ? TypedAttr(b.getFloatAttr(elTy, 0))
+                                        : b.getIntegerAttr(elTy, 0);
+  if (auto tensor = dyn_cast<RankedTensorType>(type))
+    attr = SplatElementsAttr::get(tensor, attr);
+  return b.create<arith::ConstantOp>(attr);
+}
+
 // Given a one level loop nest in the form
 //
 //   for i in range(lbi, ubi, stepi):
@@ -349,7 +362,7 @@ static Value castIntIfNecessary(ImplicitLocOpBuilder &b, Value value,
 //   T = -1
 //   i = lbi - stepi
 //   for _ in range(total_iters):
-//     T = (T + 1) % inner_len
+//     T = 0 if T == (inner_len - 1) else T + 1
 //
 //     if T == 0:
 //       i += stepi
@@ -511,7 +524,6 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
     intTyWidth = std::max(intTyWidth, getIntTypeWidth(lenInner.getType()));
     lenInners.push_back(lenInner);
   }
-  intTyWidth = std::min(64u, intTyWidth * 2);
   auto intTy = b.getIntegerType(intTyWidth);
 
   auto intTyCst = [&](int64_t v) {
@@ -576,17 +588,17 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   unsigned ivarStartIdx = fusedInits.size();
   for (scf::ForOp loop : innerLoops) {
     fusedInits.push_back(
-        b.create<ub::PoisonOp>(loop.getInductionVar().getType()));
+        createPoisonOrZero(b, loop.getInductionVar().getType()));
   }
   unsigned innerOutsStartIdx = fusedInits.size();
   for (scf::ForOp loop : innerLoops) {
     for (Type resultType : loop.getResultTypes())
-      fusedInits.push_back(b.create<ub::PoisonOp>(resultType));
+      fusedInits.push_back(createPoisonOrZero(b, resultType));
   }
   unsigned logueOutsStartIdx = fusedInits.size();
   for (Logue &logue : logues) {
     for (Type outputType : logue.getOutputTypes())
-      fusedInits.push_back(b.create<ub::PoisonOp>(outputType));
+      fusedInits.push_back(createPoisonOrZero(b, outputType));
   }
 
   // for _ in range(total_iters):
@@ -600,10 +612,13 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   }
   b.setInsertionPointToStart(fused.getBody());
 
-  // T = (T + 1) % inner_len
+  // T = 0 if T == (inner_len - 1) else T + 1
   Value T = fused.getRegionIterArg(0);
-  T = b.create<arith::AddIOp>(T, intTyCst(1));
-  T = b.create<arith::RemSIOp>(T, innerLen);
+  Value nextT = b.create<arith::AddIOp>(T, intTyCst(1));
+  Value rollover =
+      b.create<arith::CmpIOp>(arith::CmpIPredicate::eq, T,
+                              b.create<arith::SubIOp>(innerLen, intTyCst(1)));
+  T = b.create<arith::SelectOp>(rollover, intTyCst(0), nextT);
 
   // `i` is computed inside the first prologue.
   Value curI = fused.getRegionIterArg(1);
@@ -918,11 +933,11 @@ static void sinkHeavyOps(scf::ForOp outerLoop, scf::ForOp innerLoop,
   auto inInnerLoop = [&](Operation *op) {
     return innerLoop.getBodyRegion().isAncestor(op->getParentRegion());
   };
-  //sinkHeavyOps(limit, innerLoop.getBody(), innerLoop.getBody()->begin(),
-  //             {outerLoop.getBody()->begin(), innerLoop->getIterator()},
-  //             inInnerLoop, [&](size_t fanInSize, size_t fanOutSize) {
-  //               return fanInSize * 4 <= fanOutSize;
-  //             });
+  // sinkHeavyOps(limit, innerLoop.getBody(), innerLoop.getBody()->begin(),
+  //              {outerLoop.getBody()->begin(), innerLoop->getIterator()},
+  //              inInnerLoop, [&](size_t fanInSize, size_t fanOutSize) {
+  //                return fanInSize * 4 <= fanOutSize;
+  //              });
 
   // Move computations in the prologue that can be done in the epilogue. This is
   // always beneficial.
