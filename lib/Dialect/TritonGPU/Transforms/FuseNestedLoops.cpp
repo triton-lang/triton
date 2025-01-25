@@ -234,7 +234,7 @@ static Logue createLogueFrom(llvm::iterator_range<Block::iterator> ops,
 // recursively.
 static bool canHoistLoopBoundComputation(Operation *op) {
   auto isScalar = [](Type type) { return type.isIntOrIndexOrFloat(); };
-  return isMemoryEffectFree(op) &&
+  return isPure(op) && op->hasTrait<OpTrait::DotLike>() &&
          llvm::all_of(op->getOperandTypes(), isScalar) &&
          llvm::all_of(op->getResultTypes(), isScalar);
 }
@@ -819,6 +819,122 @@ static bool shouldFuse(const LoopNest &nest) {
   });
 }
 
+// Loop-invariant code motion can increase register pressure in combination with
+// loop nest fusion. Values hoisted out of the inner loop and in to the prologue
+// that are directly used inside the inner loop will need to be added as iter
+// args to the fused loop, substantially increasing their liverange.
+//
+// This function identifies a subgraph of cheap ops that can be sunk and
+// determines if doing so will reduce register pressure.
+static void sinkHeavyOps(Region &limit, Block *sinkBlock,
+                         Block::iterator sinkBefore,
+                         llvm::iterator_range<Block::iterator> prologue,
+                         function_ref<bool(Operation *)> inSinkRegion,
+                         function_ref<bool(size_t, size_t)> shouldSink) {
+  llvm::SetVector<Operation *> sunkOps;
+  auto canBeSunk = [&](Operation &op) -> std::pair<bool, bool> {
+    if (!isPure(&op) || op.hasTrait<OpTrait::DotLike>())
+      return {false, false};
+    // An op can be sunk if all its users are inside the inner loop or are
+    // marked for sinking.
+    bool isRoot = true;
+    for (Operation *user : op.getUsers()) {
+      if (inSinkRegion(user))
+        continue;
+      isRoot = false;
+      if (sunkOps.contains(user))
+        continue;
+      return {false, false};
+    }
+    return {true, isRoot};
+  };
+
+  // Find the subgraph of operations that can be sunk.
+  SmallVector<Operation *> roots;
+  for (Operation &op : llvm::reverse(prologue)) {
+    auto [canSink, isRoot] = canBeSunk(op);
+    if (canSink)
+      sunkOps.insert(&op);
+    if (isRoot)
+      roots.push_back(&op);
+  }
+  if (sunkOps.empty())
+    return;
+
+  // Analyze the sinking the whole subgraph at once. Breaking up the subgraph is
+  // a more complicated analysis.
+  //
+  // Compute the total size of the fan-ins and fan-outs as the number of
+  // registers per thread used by the value. This is a heuristic.
+  MLIRContext *ctx = sunkOps.front()->getContext();
+  auto kRegister = StringAttr::get(ctx, "register");
+  auto getSizeEstimate = [&](Type type) {
+    auto tensor = dyn_cast<RankedTensorType>(type);
+    if (!tensor)
+      return 1;
+    LinearLayout layout =
+        toLinearLayout(tensor.getShape(), tensor.getEncoding());
+    return layout.getInDimSize(kRegister);
+  };
+
+  size_t fanOutSize = 0;
+  for (Operation *root : roots) {
+    for (Value result : root->getResults()) {
+      if (result.use_empty())
+        continue;
+      fanOutSize += getSizeEstimate(result.getType());
+    }
+  }
+
+  size_t fanInSize = 0;
+  DenseSet<Value> checked;
+  for (Operation *op : sunkOps) {
+    for (Value operand : op->getOperands()) {
+      // Count each operand only once.
+      if (!checked.insert(operand).second)
+        continue;
+      if (sunkOps.contains(operand.getDefiningOp()))
+        continue;
+      if (operand.getParentRegion()->isProperAncestor(&limit))
+        continue;
+      if (llvm::any_of(operand.getUsers(), inSinkRegion))
+        continue;
+      fanInSize += getSizeEstimate(operand.getType());
+    }
+  }
+
+  // Only sink if this will lead to a large reduction.
+  if (shouldSink(fanInSize, fanOutSize)) {
+    sunkOps = topologicalSort(sunkOps);
+    for (Operation *op : sunkOps)
+      op->moveBefore(sinkBlock, sinkBefore);
+  }
+}
+
+// Sink ops into the inner loop and from the prologue into the epilogue.
+static void sinkHeavyOps(scf::ForOp outerLoop, scf::ForOp innerLoop,
+                         mlir::DominanceInfo &domInfo) {
+  Region &limit = outerLoop.getBodyRegion();
+  auto inInnerLoop = [&](Operation *op) {
+    return innerLoop.getBodyRegion().isAncestor(op->getParentRegion());
+  };
+  //sinkHeavyOps(limit, innerLoop.getBody(), innerLoop.getBody()->begin(),
+  //             {outerLoop.getBody()->begin(), innerLoop->getIterator()},
+  //             inInnerLoop, [&](size_t fanInSize, size_t fanOutSize) {
+  //               return fanInSize * 4 <= fanOutSize;
+  //             });
+
+  // Move computations in the prologue that can be done in the epilogue. This is
+  // always beneficial.
+  auto inEpilogue = [&](Operation *op) {
+    return domInfo.properlyDominates(innerLoop, op, /*enclosingOpOk=*/false);
+  };
+  sinkHeavyOps(limit, outerLoop.getBody(), std::next(innerLoop->getIterator()),
+               {outerLoop.getBody()->begin(), innerLoop->getIterator()},
+               inEpilogue,
+               [&](size_t fanInSize, size_t fanOutSize) { return true; });
+}
+
 // Speculate the length of the inner loop such that the loop is known to execute
 // at least once. This way, the inner loop body does not have to be placed
 // inside a conditional in the fused loop, which interacts better with the
@@ -829,6 +945,13 @@ static LogicalResult speculateInnerLoopLength(const LoopNest &nest,
 
   scf::ForOp outerLoop = nest.root->loop;
   scf::ForOp innerLoop = nest.root->children.front()->loop;
+
+  // Sink heavy ops first.
+  sinkHeavyOps(outerLoop, innerLoop, domInfo);
+
+  innerLoop->setAttr(kMustExecuteAttrName,
+                     UnitAttr::get(outerLoop.getContext()));
+  return success();
 
   // The inner loop bounds must be outer-loop invariant to speculate from
   // outside the loop nest.
