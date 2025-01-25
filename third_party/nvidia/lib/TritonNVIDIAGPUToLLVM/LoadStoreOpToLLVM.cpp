@@ -1,6 +1,7 @@
 #include "TargetInfo.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "llvm/Support/FormatVariadic.h"
 
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
@@ -1171,6 +1172,22 @@ struct AsyncTMACopyGlobalToLocalOpConversion
   }
 };
 
+std::string
+getStoreReduceAttrString(mlir::triton::StoreReduceEnum storeReduce) {
+  switch (storeReduce) {
+  case mlir::triton::StoreReduceEnum::NONE:
+    return "";
+  case mlir::triton::StoreReduceEnum::ADD:
+    return "add.";
+  case mlir::triton::StoreReduceEnum::MIN:
+    return "min.";
+  case mlir::triton::StoreReduceEnum::MAX:
+    return "max.";
+  default:
+    llvm_unreachable("Unsupported store reduce attr.");
+  }
+}
+
 struct AsyncTMACopyLocalToGlobalOpConversion
     : public ConvertOpToLLVMPattern<
           triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp> {
@@ -1228,8 +1245,18 @@ struct AsyncTMACopyLocalToGlobalOpConversion
       SmallVector<PTXBuilder::Operand *> operands = {
           ptxBuilderTMA.newOperand(boxPred, "b"),
           ptxBuilderTMA.newOperand(adaptor.getDescPtr(), "l")};
-      std::string tmaInst = "@$0 cp.async.bulk.tensor." + std::to_string(rank) +
-                            "d.global.shared::cta.bulk_group [$1, {";
+      std::string rankStr = std::to_string(rank);
+      std::string reduceOrEmpty =
+          op.getStoreReduceAttr() != mlir::triton::StoreReduceEnum::NONE
+              ? "reduce."
+              : "";
+      std::string tmaInst =
+          llvm::formatv(
+              "@$0 cp.{0}async.bulk.tensor.{1}d.global.shared::cta.{2}",
+              reduceOrEmpty, rankStr,
+              getStoreReduceAttrString(op.getStoreReduceAttr()))
+              .str();
+      tmaInst += "bulk_group [$1, {";
       int operandIdx = 2;
       for (int i = 0; i < rank; i++) {
         Value coord = adaptor.getCoord()[rank - i - 1];

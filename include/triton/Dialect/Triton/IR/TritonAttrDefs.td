@@ -134,4 +134,17 @@ def TT_ScaleDotElemTypeAttr : I32EnumAttr<
   let cppNamespace = "::mlir::triton";
 }
 
+// Enum for Reduction operations in ExperimentalStoreOp
+// TODO Add the inc, dec, and, or, xor
+def TT_StoreReduceAttr : I32EnumAttr<
+  "StoreReduceEnum", "",
+  [
+    I32EnumAttrCase<"NONE", 1, "none">,
+    I32EnumAttrCase<"ADD", 2, "add">,
+    I32EnumAttrCase<"MAX", 3, "max">,
+    I32EnumAttrCase<"MIN", 4, "min">
+  ]> {
+  let cppNamespace = "::mlir::triton";
+}
+
 #endif

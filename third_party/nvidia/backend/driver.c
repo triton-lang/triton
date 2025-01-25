@@ -283,29 +283,37 @@ static PyObject *fill1DTMADescriptor(PyObject *self, PyObject *args) {
   unsigned long long global_address;
   uint64_t dim;
   uint32_t tensorDim;
-  int elementSize;
+  int dataType;
   unsigned long long desc_address;
   if (!PyArg_ParseTuple(args, "KKiiK", &global_address, &dim, &tensorDim,
-                        &elementSize, &desc_address)) {
+                        &dataType, &desc_address)) {
     return NULL;
   }
   uint64_t dims[1] = {dim};
-  uint64_t globalStrides[1] = {dim * elementSize};
+  uint64_t globalStrides[1] = {dim * dataType};
   uint32_t boxDim[1] = {tensorDim};
   uint32_t elementStrides[1] = {1};
   CUtensorMapDataType type;
-  switch (elementSize) {
+  uint elementSize = 0;
+  switch (dataType) {
+  case 0:
+    type = CU_TENSOR_MAP_DATA_TYPE_FLOAT16;
+    elementSize = 2;
+    break;
   case 1:
-    type = CU_TENSOR_MAP_DATA_TYPE_UINT8;
+    type = CU_TENSOR_MAP_DATA_TYPE_BFLOAT16;
+    elementSize = 2;
     break;
   case 2:
-    type = CU_TENSOR_MAP_DATA_TYPE_UINT16;
+    type = CU_TENSOR_MAP_DATA_TYPE_FLOAT32;
+    elementSize = 4;
     break;
-  case 4:
-    type = CU_TENSOR_MAP_DATA_TYPE_UINT32;
+  case 3:
+    type = CU_TENSOR_MAP_DATA_TYPE_INT32;
+    elementSize = 4;
     break;
   default:
-    PyErr_SetString(PyExc_ValueError, "elementSize must be 1, 2, or 4");
+    PyErr_SetString(PyExc_ValueError, "dataType must be 0, 1, 2, or 3");
     return NULL;
   }
   assert((elementSize * tensorDim) >= 32 && "block size too small.");

@@ -100,7 +100,7 @@ public:
     Value tmaPtr = rewriter.create<triton::nvidia_gpu::TensorDescToTMAPtrOp>(
         loc, op.getDesc());
     rewriter.create<triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp>(
-        loc, tmaPtr, op.getIndices(), alloc);
+        loc, tmaPtr, op.getIndices(), alloc, op.getStoreReduceAttr());
     rewriter.create<triton::nvidia_gpu::TMAStoreWaitOp>(loc, 0);
     rewriter.eraseOp(op);
     return success();

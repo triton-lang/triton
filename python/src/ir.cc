@@ -199,6 +199,13 @@ void init_triton_ir(py::module &&m) {
       .value("EVICT_LAST", EvictionPolicy::EVICT_LAST)
       .export_values();
 
+  py::enum_<StoreReduceEnum>(m, "STORE_REDUCE", py::module_local())
+      .value("NONE", StoreReduceEnum::NONE)
+      .value("ADD", StoreReduceEnum::ADD)
+      .value("MAX", StoreReduceEnum::MAX)
+      .value("MIN", StoreReduceEnum::MIN)
+      .export_values();
+
   py::enum_<RMWOp>(m, "ATOMIC_OP", py::module_local())
       .value("ADD", RMWOp::ADD)
       .value("FADD", RMWOp::FADD)
@@ -1347,8 +1354,10 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_descriptor_store",
            [](TritonOpBuilder &self, Value desc, Value value,
-              std::vector<Value> &indices) -> void {
-             self.create<ExperimentalDescriptorStoreOp>(desc, value, indices);
+              std::vector<Value> &indices,
+              StoreReduceEnum storeReduceEnum) -> void {
+             self.create<ExperimentalDescriptorStoreOp>(desc, value, indices,
+                                                        storeReduceEnum);
            })
       .def("create_tensormap_create",
            [](TritonOpBuilder &self, Value desc_ptr, Value global_address,

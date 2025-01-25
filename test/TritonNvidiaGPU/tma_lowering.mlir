@@ -34,6 +34,51 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+// CHECK-LABEL: tma_store_reduce_add
+//       CHECK: ttg.local_alloc
+//       CHECK: ttng.fence_async_shared {bCluster = false}
+//       CHECK: ttng.tensor_desc_to_tma_ptr
+//       CHECK: ttng.async_tma_copy_local_to_global {{.*}} store_reduce_attr = add
+  tt.func public @tma_store_reduce_add(%arg0: !tt.tensordesc<tensor<128x256xf32>>, %arg1: i32 {tt.divisibility = 16 : i32}, %arg2: tensor<128x256xf32, #blocked>) {
+    tt.experimental_descriptor_store %arg0[%arg1, %arg1], %arg2 store_reduce_attr = add : !tt.tensordesc<tensor<128x256xf32>>, tensor<128x256xf32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+// CHECK-LABEL: tma_store_reduce_min
+//       CHECK: ttg.local_alloc
+//       CHECK: ttng.fence_async_shared {bCluster = false}
+//       CHECK: ttng.tensor_desc_to_tma_ptr
+//       CHECK: ttng.async_tma_copy_local_to_global {{.*}} store_reduce_attr = min
+  tt.func public @tma_store_reduce_min(%arg0: !tt.tensordesc<tensor<128x256xf32>>, %arg1: i32 {tt.divisibility = 16 : i32}, %arg2: tensor<128x256xf32, #blocked>) {
+    tt.experimental_descriptor_store %arg0[%arg1, %arg1], %arg2 store_reduce_attr = min : !tt.tensordesc<tensor<128x256xf32>>, tensor<128x256xf32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+// CHECK-LABEL: tma_store_reduce_max
+//       CHECK: ttg.local_alloc
+//       CHECK: ttng.fence_async_shared {bCluster = false}
+//       CHECK: ttng.tensor_desc_to_tma_ptr
+//       CHECK: ttng.async_tma_copy_local_to_global {{.*}} store_reduce_attr = max
+  tt.func public @tma_store_reduce_max(%arg0: !tt.tensordesc<tensor<128x256xf32>>, %arg1: i32 {tt.divisibility = 16 : i32}, %arg2: tensor<128x256xf32, #blocked>) {
+    tt.experimental_descriptor_store %arg0[%arg1, %arg1], %arg2 store_reduce_attr = max : !tt.tensordesc<tensor<128x256xf32>>, tensor<128x256xf32, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: make_tensor_descriptor
   // CHECK: %0 = arith.extsi %arg2 : i32 to i64
