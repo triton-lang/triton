@@ -212,3 +212,22 @@ def test_line_info_interpreter(func: str):
         expected_def_lineno = 68
     kernel.rewrite()
     assert kernel.rewriter.def_file_lineno == expected_def_lineno
+
+
+@pytest.mark.parametrize("disable_line_info", ["0", "1"])
+def test_line_info_env(disable_line_info: str):
+    if is_interpreter():
+        pytest.skip("interpreter does not support warmup compilation")
+
+    try:
+        obj_kind, command, anchor, separator = get_disassembler_command_and_debug_line_format()
+    except BaseException:
+        pytest.skip("disassembler is not available")
+
+    shape = (128, )
+    import os
+    os.environ["TRITON_DISABLE_LINE_INFO"] = disable_line_info
+    kernel_single.device_caches.clear()
+    kernel_info = kernel_single.warmup(torch.float32, torch.float32, BLOCK=shape[0], grid=(1, ))
+    file_lines = extract_file_lines(command, anchor, separator, kernel_info.asm[obj_kind])
+    assert len(file_lines) == 0 if disable_line_info == "1" else len(file_lines) > 0
