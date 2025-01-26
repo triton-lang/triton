@@ -62,7 +62,7 @@ struct CanonicalizeConvertFromReshape
 
     if (isExpensiveView(convert.getSrc().getType(), op.getType()))
       return failure();
-    if (!op.getAllowReorder())
+    if (!op.getAllowReorder() || op.getEfficientLayout())
       return failure();
 
     rewriter.replaceOpWithNewOp<triton::ReshapeOp>(
