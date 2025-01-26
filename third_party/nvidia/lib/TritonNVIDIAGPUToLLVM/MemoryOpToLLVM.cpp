@@ -52,21 +52,20 @@ public:
       auto kOrder = dotEnc.getOpIdx() == 0 ? rank - 1 : rank - 2;
       auto nonKOrder = dotEnc.getOpIdx() == 0 ? rank - 2 : rank - 1;
       auto needTrans = kOrder != sharedEnc.getOrder()[0];
-      // Limitation 1: If kWidth is greater than the vector width of the dot
-      // operands of MMA, we don't use ldmatrix
-      // Limitation 2 [TODO: remove]: Shared memory with leading offset is not
-      // supported yet
-      auto canUseLdmatrixLL =
+      // Limitation 1 [TODO: remove]: Check LL bases to verify register and
+      // address alignment
+      auto canUseLdmatrix =
           (kWidth == vecWidth) && (!sharedEnc.getHasLeadingOffset());
-      canUseLdmatrixLL &= (sharedEnc.getMaxPhase() == 1) ||
-                          (sharedEnc.getVec() * bitwidth >= 8 * 16);
+      canUseLdmatrix &= (sharedEnc.getMaxPhase() == 1) ||
+                        (sharedEnc.getVec() * bitwidth >= 8 * 16);
       auto shape = srcTy.getShape();
-      // Limitation 3 [TODO: remove]: Only support 2d matrices now but we should
+      // Limitation 2 [TODO: remove]: Only support 2d matrices now but we should
       // be able to support 3D minor changes
-      canUseLdmatrixLL &= (bitwidth <= 16 || !needTrans) && shape.size() <= 2;
-      canUseLdmatrixLL &=
+      canUseLdmatrix &= (bitwidth <= 16 || !needTrans) && shape.size() <= 2;
+      // Limitation 3: Minimum tile size 8x(8x16bits)
+      canUseLdmatrix &=
           shape[kOrder] >= (8 * 16 / bitwidth) && shape[nonKOrder] >= 8;
-      if (canUseLdmatrixLL) {
+      if (canUseLdmatrix) {
         return lowerSharedToDotOperandLL(op, adaptor, getTypeConverter(),
                                          rewriter);
       }
@@ -101,10 +100,10 @@ private:
 
     // Emit ldmatrix load operations for values packed in i32s
     SmallVector<Value> elemsI32;
-    auto shift =
-        (dotEnc.getOpIdx() == 0)
-            ? (shape[nonKOrder] < 16)
-            : (shape[kOrder] < (32 * 16 / bitwidth)) + (shape[nonKOrder] < 8);
+    // Typically we load 32x8 to use ldmatrix.x4, but the minimum tile size for
+    // opIdx=1 is 16x8. Therefore, we use ldmatrix.x2 instead of
+    // ldmatrix.x4 in this case.
+    auto shift = dotEnc.getOpIdx() == 1 && shape[kOrder] < (32 * 16 / bitwidth);
     auto maxVecElems = 8 * 16 / bitwidth;
     bool valid = emitTransferBetweenRegistersAndShared(
         ldmatrixLayout, srcTy, llvmElemTy,
