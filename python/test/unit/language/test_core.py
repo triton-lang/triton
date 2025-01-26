@@ -2240,18 +2240,16 @@ def test_reduce1d(op, dtype_str, shape, num_ctas, device):
         'min': np.min,
         'max-with-indices': np.max,
         'min-with-indices': np.min,
-        'argmin-tie-break-fast': np.argmin,
         'argmin-tie-break-left': np.argmin,
-        'argmax-tie-break-fast': np.argmax,
         'argmax-tie-break-left': np.argmax,
     }[op]
     if 'tie-break-left' in op:
         x[3:10] = x[numpy_op(x)]
     x_tri = to_triton(x, device=device)
     # numpy result
-    z_dtype_str = 'int32' if op in ('argmin', 'argmax') else dtype_str
+    z_dtype_str = 'int32' if 'tie-break-left' in op else dtype_str
     z_tri_dtype_str = z_dtype_str
-    if op not in ['argmin', 'argmax'] and dtype_str == 'bfloat16':
+    if 'tie-break-left' not in op and dtype_str == 'bfloat16':
         z_dtype_str = 'float32'
         z_ref = numpy_op(x).astype(getattr(np, z_dtype_str))
         # trunc mantissa for a fair comparison of accuracy
@@ -2267,7 +2265,7 @@ def test_reduce1d(op, dtype_str, shape, num_ctas, device):
     if op == 'sum':
         np.testing.assert_allclose(z_ref, z_tri, rtol=0.01)
     else:
-        if op in ('argmin', 'argmax'):
+        if 'tie-break-left' in op:
             # argmin and argmax can have multiple valid indices.
             # so instead we compare the values pointed by indices
             np.testing.assert_equal(x[z_ref], x[z_tri])
