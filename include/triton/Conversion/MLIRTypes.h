@@ -28,15 +28,15 @@ inline Type bf16Ty(MLIRContext *ctx) { return BFloat16Type::get(ctx); }
 
 inline bool isFloat(Type type) {
   return type.isF32() || type.isF64() || type.isF16() || type.isF128() ||
-         type.isBF16() || type.isFloat8E4M3B11FNUZ() || type.isFloat8E4M3FN() ||
-         type.isFloat8E4M3FNUZ() || type.isFloat8E5M2() ||
-         type.isFloat8E5M2FNUZ();
+         type.isBF16() || isa<Float8E4M3B11FNUZType>(type) ||
+         isa<Float8E4M3FNType>(type) || isa<Float8E4M3FNUZType>(type) ||
+         isa<Float8E5M2Type>(type) || isa<Float8E5M2FNUZType>(type);
 }
 
 inline bool isFloat8(Type type) {
-  return type.isFloat8E4M3B11FNUZ() || type.isFloat8E4M3FN() ||
-         type.isFloat8E4M3FNUZ() || type.isFloat8E5M2() ||
-         type.isFloat8E5M2FNUZ();
+  return isa<Float8E4M3B11FNUZType>(type) || isa<Float8E4M3FNType>(type) ||
+         isa<Float8E4M3FNUZType>(type) || isa<Float8E5M2Type>(type) ||
+         isa<Float8E5M2FNUZType>(type);
 }
 
 inline bool isInt(Type type) { return type.isIntOrFloat() && !isFloat(type); }
