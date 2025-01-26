@@ -214,7 +214,8 @@ def format_frames(gf, format):
     elif format == "function_line":
         gf.dataframe["name"] = gf.dataframe["name"].apply(lambda x: x.split(":")[-1])
     elif format == "file_function":
-        gf.dataframe["name"] = gf.dataframe["name"].apply(lambda x: x.split("/")[-1].split("@")[0])
+        gf.dataframe["name"] = gf.dataframe["name"].apply(
+            lambda x: f"{x.split('/')[-1].split(':')[0]}@{x.split('@')[-1].split(':')[0]}")
     return gf
 
 
