@@ -288,23 +288,6 @@ tt.func @transpose(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: i32 
 }
 }
 
-// CHECK-LABEL: @check_dot_op_idx1_propagation
-module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
-tt.func @check_dot_op_idx1_propagation(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}) {
-  // CHECK-NOT: ttg.convert_layout {{.*}} : {{.*}} -> tensor<{{.*}}, #ttg.dot_op<{opIdx = 1, parent = {{.*}}}>>
-  // CHECK: tt.load {{.+}} : tensor<{{.*}}, #ttg.dot_op<{opIdx = 1, parent = {{.*}}}>>
-  %cst_1 = arith.constant dense<1> : tensor<64x64xi32, #blocked1>
-  %splat_load_addr = tt.splat %arg0 : !tt.ptr<f32> -> tensor<64x64x!tt.ptr<f32>, #blocked1>
-  %splat_store_addr = tt.splat %arg1 : !tt.ptr<f32> -> tensor<64x64x!tt.ptr<f32>, #blocked1>
-  %1 = tt.addptr %splat_load_addr, %cst_1 : tensor<64x64x!tt.ptr<f32>, #blocked1>, tensor<64x64xi32, #blocked1>
-  %2 = ttg.convert_layout %1 : tensor<64x64x!tt.ptr<f32>, #blocked1> -> tensor<64x64x!tt.ptr<f32>, #ttg.dot_op<{opIdx = 1, parent = #blocked1}>>
-  %3 = tt.load %2 : tensor<64x64x!tt.ptr<f32>, #ttg.dot_op<{opIdx = 1, parent = #blocked1}>>
-  %4 = ttg.convert_layout %3 : tensor<64x64xf32, #ttg.dot_op<{opIdx = 1, parent = #blocked1}>> -> tensor<64x64xf32, #blocked1>
-  tt.store %splat_store_addr, %4 : tensor<64x64x!tt.ptr<f32>, #blocked1>
-  tt.return
-}
-}
-
 // CHECK-LABEL: loop
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 tt.func @loop(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: !tt.ptr<f32>, %arg3: i32, %arg4: i32) {

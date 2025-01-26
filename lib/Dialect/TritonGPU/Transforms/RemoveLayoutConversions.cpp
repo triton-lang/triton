@@ -1022,43 +1022,6 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast() {
   }
 }
 
-bool shouldPropagateConversion(ConvertLayoutOp convertOp) {
-  RankedTensorType targetType = convertOp.getType();
-  auto dotEnc = dyn_cast<DotOperandEncodingAttr>(targetType.getEncoding());
-  // If the target encoding is not DotOperandEncodingAttr, allow propagation.
-  if (!dotEnc) {
-    return true;
-  }
-  // Skip conversions to DotOperandEncodingAttr when the operand index is 0.
-  // This heuristic is applied to prevent moving the blocked->dot conversion of
-  // the Q tensor (a loop invariant in Flash Attention) outside the loop. Doing
-  // so can increase register pressure and cause spilling in some cases.
-  if (dotEnc.getOpIdx() == 0) {
-    return false;
-  }
-  // Skip conversions to DotOperandEncodingAttr when the operand index is 1 if
-  // it's not intentionally placed above a load as we have to be a bit more
-  // careful with the heuristics for both correctness and performance.
-  // TODO: Fix this logic to avoid propagating conversions backward unless
-  // it reduces the total number of conversions.
-  assert(dotEnc.getOpIdx() == 1);
-  SetVector<Operation *> slice;
-  BackwardSliceOptions opt;
-  opt.omitBlockArguments = true;
-  opt.filter = [&](Operation *op) {
-    return op->getParentRegion() == convertOp->getParentRegion();
-  };
-  getBackwardSlice(convertOp.getOperation(), &slice, opt);
-
-  for (Operation *currOp : slice) {
-    if (isa<LoadOp>(currOp)) {
-      return false;
-    }
-  }
-  // Allow propagation if no LoadOp is found.
-  return true;
-}
-
 void LayoutRematerialization::hoistConvertIntoConditionals() {
   // Go through each ConvertLayoutOp.
   SmallVector<ConvertLayoutOp> convertOps;
@@ -1077,11 +1040,11 @@ void LayoutRematerialization::hoistConvertIntoConditionals() {
 
 void LayoutRematerialization::backwardRematerialization(
     ConvertLayoutOp convertOp) {
+  // we don't handle conversions to DotOperandEncodingAttr
+  // this is a heuristic to accommodate fused attention
   RankedTensorType targetType = convertOp.getType();
-  if (!shouldPropagateConversion(convertOp)) {
+  if (isa<DotOperandEncodingAttr>(targetType.getEncoding()))
     return;
-  }
-
   Value oldV = convertOp.getSrc();
   LDBG("check backward remat with source " << oldV << " encoding "
                                            << targetType.getEncoding());
@@ -1120,10 +1083,11 @@ void LayoutRematerialization::backwardRematerialization(
 // of the convert.
 void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     ConvertLayoutOp convertOp) {
+  // we don't handle conversions to DotOperandEncodingAttr
+  // this is a heuristics to accommodate fused attention
   RankedTensorType targetType = convertOp.getType();
-  if (!shouldPropagateConversion(convertOp)) {
+  if (isa<DotOperandEncodingAttr>(targetType.getEncoding()))
     return;
-  }
 
   auto isExtOrBroadcastOp = [](Operation *op) {
     if (isa<arith::ExtSIOp, arith::ExtUIOp, arith::ExtFOp, BroadcastOp,
