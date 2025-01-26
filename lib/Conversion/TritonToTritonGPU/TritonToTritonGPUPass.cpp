@@ -567,8 +567,6 @@ void populateProtonPatterns(TritonGPUTypeConverter &typeConverter,
   MLIRContext *context = patterns.getContext();
   patterns.add<GenericOpPattern<triton::proton::RecordOp>>(typeConverter,
                                                            context);
-  patterns.add<GenericOpPattern<triton::proton::InitDeviceBufferOp>>(
-      typeConverter, context);
 }
 //
 // SCF patterns
