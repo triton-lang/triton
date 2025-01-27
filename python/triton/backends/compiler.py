@@ -89,7 +89,7 @@ class BaseBackend(metaclass=ABCMeta):
         assert isinstance(desc, str)
         ret = []
         if "D" in desc:
-            ret += [("tt.divisibility", 16)]
+            ret += [["tt.divisibility", 16]]
         return ret
 
     @staticmethod
