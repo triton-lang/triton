@@ -183,9 +183,11 @@ struct DotOpMFMAConversionHelper {
     auto elemTyA = aTensorTy.getElementType();
     auto elemTyB = bTensorTy.getElementType();
 
+    bool allowXF32 =
+        op.getInputPrecision() == InputPrecision::TF32 && mfmaVersion == 3;
     StringRef mfmaInsnName;
-    auto maybeMfmaInsn =
-        MfmaInsn::selectMfma(mDim, nDim, elemTyA, elemTyB, mfmaVersion);
+    auto maybeMfmaInsn = MfmaInsn::selectMfma(mDim, nDim, elemTyA, elemTyB,
+                                              mfmaVersion, allowXF32);
     if (failed(maybeMfmaInsn))
       llvm::report_fatal_error("No match found in MFMA database\n");
 
@@ -195,6 +197,11 @@ struct DotOpMFMAConversionHelper {
     auto aEncoding = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
     auto bEncoding = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
     int kWidth = aEncoding.getKWidth();
+
+    // If we are using XF32, the kWidth (and kBase) is double that of F32.
+    if (aTensorTy.getElementType().isF32() && allowXF32)
+      kWidth *= 2;
+
     auto rank = aTensorTy.getShape().size();
     const auto kDimOperandSize = aTensorTy.getShape()[rank - 1];
     const auto kDimInstrSize = mfmaLayout.getInstrShapeForOperand(kWidth, 0)[1];
@@ -216,17 +223,17 @@ struct DotOpMFMAConversionHelper {
 
     auto operandA = getValuesFromDotOperandLayoutStruct(
         loadedA, numRepB, numRepM, numRepK, kWidth, kBase,
-        aTensorTy.getElementType());
+        aTensorTy.getElementType(), allowXF32);
     auto operandB = getValuesFromDotOperandLayoutStruct(
         loadedB, numRepB, numRepN, numRepK, kWidth, kBase,
-        aTensorTy.getElementType());
+        aTensorTy.getElementType(), allowXF32);
 
     auto dstElemTy = dTensorTy.getElementType();
     auto fc = unpackLLElements(loc, loadedC, rewriter);
 
     unsigned warpSize = triton::gpu::getWarpSize(mfmaLayout);
     // compute number of output elements that each thread holds for one MFMA
-    // instruction. subBlocks
+    // instruction.
     const int subBlocks =
         getNumSubmatrices(aTensorTy.getElementType(), mDim, nDim);
     auto elemsPerVec = mDim * nDim * subBlocks / warpSize;
@@ -370,7 +377,8 @@ struct DotOpMFMAConversionHelper {
   /// appropriate for mfma instructions
   SmallVector<ValueTable>
   getValuesFromDotOperandLayoutStruct(Value value, int batch, int n0, int n1,
-                                      int kWidth, int kBase, Type type) const {
+                                      int kWidth, int kBase, Type type,
+                                      bool allowXF32) const {
     auto elems = unpackLLElements(loc, value, rewriter);
     int kpack = kWidth / kBase;
     SmallVector<ValueTable> dotOpVals(kpack);
@@ -388,13 +396,15 @@ struct DotOpMFMAConversionHelper {
           }
 
           Value convertedElems;
-          if (type.isF32()) {
+          if (type.isF32() && !allowXF32) {
             for (int k = 0; k < kpack; ++k)
               dotOpVals[k][{b, i, j}] =
                   extract_element(type, rawElems, i32_val(k));
           } else {
             SmallVector<Value> vals;
-            if (type.getIntOrFloatBitWidth() == 8) {
+            if (type.isF32() && allowXF32) {
+              vals = extractOperands(rawElems, kWidth, kBase, f32_ty);
+            } else if (type.getIntOrFloatBitWidth() == 8) {
               vals = extractOperands(rawElems, kWidth, kBase, i8_ty);
             } else if (type.isBF16()) {
               vals = extractOperands(rawElems, kWidth, kBase, bf16_ty);

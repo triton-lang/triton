@@ -13,6 +13,7 @@ namespace mlir {
 
 enum class MfmaTypeId : uint32_t {
   Fp32TyId = 0,
+  Xf32TyId,
   Fp16TyId,
   Bf16TyId,
   I8TyId,
@@ -79,7 +80,7 @@ private:
 public:
   static FailureOr<MfmaInsn> selectMfma(unsigned mDim, unsigned nDim,
                                         Type elementTypeA, Type elementTypeB,
-                                        int mfmaVersion);
+                                        int mfmaVersion, bool allowXF32);
   MfmaInsn(Type elementTypeA, Type elementTypeB, const MfmaInsnAttr &attr);
   unsigned getKDim();
   unsigned getMDim();
