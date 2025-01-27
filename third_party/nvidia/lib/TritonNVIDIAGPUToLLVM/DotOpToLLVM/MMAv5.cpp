@@ -61,7 +61,8 @@ enum class mxfpKind { mxf8f6f4 = 0, mxf4 = 1, mxf4nvf4 = 2 };
 inline mxfpKind getMXFPKind(ScaleDotElemType typeA, ScaleDotElemType typeB,
                             Type scaleAType, Type scaleBType) {
   if (typeA == ScaleDotElemType::E2M1 && typeB == ScaleDotElemType::E2M1) {
-    if (scaleAType.isFloat8E4M3FN() && scaleBType.isFloat8E4M3FN()) {
+    if (llvm::isa<Float8E4M3FNType>(scaleAType) &&
+        llvm::isa<Float8E4M3FNType>(scaleBType)) {
       return mxfpKind::mxf4nvf4;
     }
     return mxfpKind::mxf4;
@@ -102,9 +103,9 @@ static Value createInstDescriptor(ConversionPatternRewriter &rewriter,
       return 1;
     if (type.isF32())
       return 2;
-    if (type.isFloat8E4M3FN())
+    if (llvm::isa<Float8E4M3FNType>(type))
       return 0;
-    if (type.isFloat8E5M2())
+    if (llvm::isa<Float8E5M2Type>(type))
       return 1;
     llvm_unreachable("Unsupported type.");
   };
@@ -227,7 +228,7 @@ static void createGen5MMA(ConversionPatternRewriter &rewriter, Location loc,
     opcode += "f16";
   else if (srcElementTy.isF32())
     opcode += "tf32";
-  else if (srcElementTy.isFloat8E4M3FN() || srcElementTy.isFloat8E5M2())
+  else if (llvm::isa<Float8E4M3FNType, Float8E5M2Type>(srcElementTy))
     opcode += "f8f6f4";
   else
     assert(0 && "Unsupported type.");
