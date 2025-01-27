@@ -67,8 +67,9 @@ llvm::MapVector<StringAttr, int32_t> getFreeVariableMasks(Type type) {
 }
 
 Value maybeAnd(RewriterBase &rewriter, Location loc, Value a, Value b) {
+  auto tb = TritonLLVMOpBuilder(loc, rewriter);
   if (a && b) {
-    return and_(a, b);
+    return tb.and_(a, b);
   }
   return a ? a : b;
 }
@@ -80,6 +81,7 @@ Value emitRedundantThreadPredicate(
     ModuleOp moduleOp, const llvm::MapVector<StringAttr, int32_t> &freeVarMasks,
     ConversionPatternRewriter &rewriter, Location loc,
     const NVIDIA::TargetInfo &targetInfo) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto ctx = rewriter.getContext();
   auto kLane = str_attr("lane");
   auto kWarp = str_attr("warp");
@@ -89,7 +91,7 @@ Value emitRedundantThreadPredicate(
   auto emitBlockId = freeVarMasks.lookup(kBlock) != 0;
   auto [laneId, warpId, blockId] =
       emitHardwareTuple(loc, rewriter, targetInfo, emitBlockId, warpSize);
-  auto zero = i32_val(0);
+  auto zero = b.i32_val(0);
 
   Value pred;
   auto dimNames = {kLane, kWarp, kBlock};
@@ -97,7 +99,7 @@ Value emitRedundantThreadPredicate(
   for (auto [dimName, dimId] : llvm::zip(dimNames, dimIds)) {
     int32_t mask = freeVarMasks.lookup(dimName);
     if (mask != 0) {
-      auto dimPred = icmp_eq(and_(dimId, i32_val(mask)), zero);
+      auto dimPred = b.icmp_eq(b.and_(dimId, b.i32_val(mask)), zero);
       pred = maybeAnd(rewriter, loc, pred, dimPred);
     }
   }
@@ -177,6 +179,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
                   ConversionPatternRewriter &rewriter) const override {
     auto ctx = getContext();
     auto loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto typeConverter = getTypeConverter();
 
     // original values
@@ -307,14 +310,14 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
           size_t size = width / valueElemNBits;
 
           auto vecTy = LLVM::getFixedVectorType(valueElemTy, size);
-          Value v = undef(vecTy);
+          Value v = b.undef(vecTy);
           for (size_t s = 0; s < size; ++s) {
             Value falseVal = otherElems[vecStart + ii * size + s];
             Value sVal = createIndexAttrConstant(
                 rewriter, loc, typeConverter->getIndexType(), s);
-            v = insert_element(vecTy, v, falseVal, sVal);
+            v = b.insert_element(vecTy, v, falseVal, sVal);
           }
-          v = bitcast(v, IntegerType::get(getContext(), width));
+          v = b.bitcast(v, IntegerType::get(getContext(), width));
 
           PTXInstr::Operand *opr{};
 
@@ -376,19 +379,19 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       for (unsigned int ii = 0; ii < nWords; ++ii) {
         Value curr;
         if (isa<LLVM::LLVMStructType>(retTy)) {
-          curr = extract_val(IntegerType::get(getContext(), width), ret, ii);
+          curr = b.extract_val(IntegerType::get(getContext(), width), ret, ii);
         } else {
           curr = ret;
         }
-        curr = bitcast(curr, LLVM::getFixedVectorType(valueElemTy,
-                                                      width / valueElemNBits));
+        curr = b.bitcast(curr, LLVM::getFixedVectorType(
+                                   valueElemTy, width / valueElemNBits));
         rets.push_back(curr);
       }
       int tmp = width / valueElemNBits;
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, typeConverter->getIndexType(), ii % tmp);
-        Value loaded = extract_element(valueElemTy, rets[ii / tmp], vecIdx);
+        Value loaded = b.extract_element(valueElemTy, rets[ii / tmp], vecIdx);
         loadedVals.push_back(loaded);
       }
     } // end vec
@@ -421,6 +424,7 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
     Value llValue = adaptor.getValue();
 
     auto loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     MLIRContext *ctx = rewriter.getContext();
 
     auto valueTy = value.getType();
@@ -489,19 +493,19 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
       SmallVector<std::pair<Value, std::string>> asmArgs;
       for (size_t wordIdx = 0; wordIdx < nWords; ++wordIdx) {
         // llWord is a width-len composition
-        Value llWord = undef(wordTy);
+        Value llWord = b.undef(wordTy);
         // Insert each value element to the composition
         for (size_t elemIdx = 0; elemIdx < wordNElems; ++elemIdx) {
           const size_t elemOffset = vecStart + wordIdx * wordNElems + elemIdx;
           assert(elemOffset < valueElems.size());
           Value elem = valueElems[elemOffset];
           if (elem.getType().isInteger(1))
-            elem = sext(i8_ty, elem);
-          elem = bitcast(elem, valueElemTy);
+            elem = b.sext(i8_ty, elem);
+          elem = b.bitcast(elem, valueElemTy);
 
-          llWord = insert_element(wordTy, llWord, elem, i32_val(elemIdx));
+          llWord = b.insert_element(wordTy, llWord, elem, b.i32_val(elemIdx));
         }
-        llWord = bitcast(llWord, valArgTy);
+        llWord = b.bitcast(llWord, valArgTy);
         std::string constraint =
             (width == 64) ? "l" : ((width == 32) ? "r" : "c");
         asmArgs.emplace_back(llWord, constraint);
@@ -545,8 +549,9 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
 
 void createBarrier(ConversionPatternRewriter &rewriter, Location loc,
                    int numCTAs) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   if (numCTAs == 1) {
-    barrier();
+    b.barrier();
   } else {
     rewriter.create<triton::nvidia_gpu::ClusterArriveOp>(loc, false);
     rewriter.create<triton::nvidia_gpu::ClusterWaitOp>(loc);
@@ -567,6 +572,7 @@ struct AtomicCASOpConversion
   matchAndRewrite(triton::AtomicCASOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     MLIRContext *ctx = rewriter.getContext();
 
     auto moduleOp = op->getParentOfType<ModuleOp>();
@@ -620,11 +626,11 @@ struct AtomicCASOpConversion
         continue;
       }
 
-      Value casVal = undef(vecTy);
+      Value casVal = b.undef(vecTy);
       for (int ii = 0; ii < vec; ++ii) {
         Value iiVal = createIndexAttrConstant(
             rewriter, loc, getTypeConverter()->getIndexType(), ii);
-        casVal = insert_element(vecTy, casVal, valElements[i + ii], iiVal);
+        casVal = b.insert_element(vecTy, casVal, valElements[i + ii], iiVal);
       }
 
       Value casPtr = ptrElements[i];
@@ -652,7 +658,8 @@ struct AtomicCASOpConversion
         auto ret = ptxBuilderAtomicCAS.launch(rewriter, loc, retType);
         for (int ii = 0; ii < vec; ++ii) {
           resultVals[i + ii] =
-              vec == 1 ? ret : extract_element(valueElemTy, ret, i32_val(ii));
+              vec == 1 ? ret
+                       : b.extract_element(valueElemTy, ret, b.i32_val(ii));
         }
       } else {
         auto old = ptxBuilderAtomicCAS.launch(rewriter, loc, valueElemTy);
@@ -662,7 +669,7 @@ struct AtomicCASOpConversion
         }
         Value atomPtr = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
                                                   op.getOperation());
-        atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
+        atomPtr = b.bitcast(atomPtr, ptr_ty(ctx, 3));
         // Only threads with mask = True store the result
         PTXBuilder ptxBuilderStore;
         auto *dstOprStore = ptxBuilderStore.newAddrOperand(atomPtr, "r");
@@ -673,7 +680,7 @@ struct AtomicCASOpConversion
         auto ASMReturnTy = void_ty(ctx);
         ptxBuilderStore.launch(rewriter, loc, ASMReturnTy);
         createBarrier(rewriter, loc, numCTAs);
-        Value ret = load(valueElemTy, atomPtr);
+        Value ret = b.load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {ret});
       }
     }
@@ -756,6 +763,7 @@ struct AtomicRMWOpConversion
   matchAndRewrite(triton::AtomicRMWOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     MLIRContext *ctx = rewriter.getContext();
 
     auto moduleOp = op->getParentOfType<ModuleOp>();
@@ -865,11 +873,11 @@ struct AtomicRMWOpConversion
         }
         Value atomPtr = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
                                                   op.getOperation());
-        atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
+        atomPtr = b.bitcast(atomPtr, ptr_ty(ctx, 3));
         // Only threads with rmwMask = True store the result
         targetInfo.storeShared(rewriter, loc, atomPtr, loadAcquireOp, pred);
         createBarrier(rewriter, loc, numCTAs);
-        Value ret = load(valueElemTy, atomPtr);
+        Value ret = b.load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {ret});
         continue;
       }
@@ -901,10 +909,10 @@ struct AtomicRMWOpConversion
               ptxBuilderAtomicRMW.newOperand(valElements[i + ii], tyId));
         }
       } else if (packed > 1) {
-        Value rmwVal = undef(packedTy);
+        Value rmwVal = b.undef(packedTy);
         for (int ii = 0; ii < packed; ++ii) {
-          rmwVal = insert_element(packedTy, rmwVal, valElements[i + ii],
-                                  i32_val(ii));
+          rmwVal = b.insert_element(packedTy, rmwVal, valElements[i + ii],
+                                    b.i32_val(ii));
         }
         valOpr = ptxBuilderAtomicRMW.newOperand(rmwVal, tyId);
       } else {
@@ -974,11 +982,12 @@ struct AtomicRMWOpConversion
 
         if (vec > 1) {
           for (unsigned ii = 0; ii < vec; ++ii) {
-            resultVals[i + ii] = extract_val(valueElemTy, ret, ii);
+            resultVals[i + ii] = b.extract_val(valueElemTy, ret, ii);
           }
         } else if (packed > 1) {
           for (unsigned ii = 0; ii < packed; ++ii) {
-            resultVals[i + ii] = extract_element(valueElemTy, ret, i32_val(ii));
+            resultVals[i + ii] =
+                b.extract_element(valueElemTy, ret, b.i32_val(ii));
           }
         } else {
           resultVals[i] = ret;
@@ -994,11 +1003,11 @@ struct AtomicRMWOpConversion
         }
         Value atomPtr = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
                                                   op.getOperation());
-        atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
+        atomPtr = b.bitcast(atomPtr, ptr_ty(ctx, 3));
         // Only threads with rmwMask = True store the result
         targetInfo.storeShared(rewriter, loc, atomPtr, old, pred);
         createBarrier(rewriter, loc, numCTAs);
-        Value ret = load(valueElemTy, atomPtr);
+        Value ret = b.load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {ret});
       }
     }
@@ -1027,6 +1036,7 @@ struct AsyncCopyGlobalToLocalOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto ctx = getContext();
     auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     Value res = op.getResult();
     Value mask = op.getMask();
     Value other = op.getOther();
@@ -1144,7 +1154,7 @@ struct AsyncCopyGlobalToLocalOpConversion
           // op.getMask() and redundantDataMask() into the same predicate, the
           // way it is done for LoadOp.
           auto selectOp =
-              select(maskElems[elemIdx], i32_val(wordBytes), i32_val(0));
+              b.select(maskElems[elemIdx], b.i32_val(wordBytes), b.i32_val(0));
           srcSize = ptxBuilder.newOperand(selectOp, "r");
         }
 
@@ -1180,6 +1190,7 @@ struct AsyncTMACopyGlobalToLocalOpConversion
       return op.emitError("volatile not supported yet");
 
     auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     Type llvmElemTy =
         typeConverter->convertType(op.getResult().getType().getElementType());
     auto barrierMemObj = LLVM::getSharedMemoryObjectFromStruct(
@@ -1198,7 +1209,7 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     Value pred = adaptor.getPred();
     // Select just one thread for the TMA copy. This also helps the compiler to
     // figure out that the op is uniform.
-    pred = and_(pred, LLVM::NVIDIA::createElectPredicate(loc, rewriter));
+    pred = b.and_(pred, LLVM::NVIDIA::createElectPredicate(loc, rewriter));
 
     int elementSizeInBytes =
         op.getResult().getType().getElementType().getIntOrFloatBitWidth() / 8;
@@ -1220,16 +1231,16 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     for (int copyIdx = 0; copyIdx < numCopies; copyIdx += numWarps) {
       int numWarpsToCopy = std::min(numCopies - copyIdx, numWarps);
       if (numWarpsToCopy == 1)
-        warpID = i32_val(0);
+        warpID = b.i32_val(0);
       Value boxPred =
-          and_(pred, icmp_ult(id, i32_val(numWarpsToCopy * warpSize)));
+          b.and_(pred, b.icmp_ult(id, b.i32_val(numWarpsToCopy * warpSize)));
       ::mlir::triton::PTXBuilder ptxBuilderTMA;
       Type elemPtrTy = ptr_ty(rewriter.getContext(), 3);
-      Value copyIdxVal = add(warpID, i32_val(copyIdx));
+      Value copyIdxVal = b.add(warpID, b.i32_val(copyIdx));
       Value shMemOffset =
-          mul(copyIdxVal, i32_val(totalNumElements / numCopies));
+          b.mul(copyIdxVal, b.i32_val(totalNumElements / numCopies));
       Value shMemPtr =
-          gep(elemPtrTy, llvmElemTy, dstMemObj.getBase(), shMemOffset);
+          b.gep(elemPtrTy, llvmElemTy, dstMemObj.getBase(), shMemOffset);
       SmallVector<PTXBuilder::Operand *> operands = {
           ptxBuilderTMA.newOperand(boxPred, "b"),
           ptxBuilderTMA.newOperand(shMemPtr, "r"),
@@ -1241,8 +1252,8 @@ struct AsyncTMACopyGlobalToLocalOpConversion
       for (int i = 0; i < rank; i++) {
         Value coord = adaptor.getCoord()[rank - i - 1];
         if (i == 0) {
-          Value offset = mul(copyIdxVal, i32_val(128 / elementSizeInBytes));
-          coord = add(coord, offset);
+          Value offset = b.mul(copyIdxVal, b.i32_val(128 / elementSizeInBytes));
+          coord = b.add(coord, offset);
         }
         operands.push_back(ptxBuilderTMA.newOperand(coord, "r"));
         tmaInst += "$" + std::to_string(operandIdx++);
@@ -1272,6 +1283,7 @@ struct AsyncTMACopyLocalToGlobalOpConversion
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     Type llvmElemTy =
         typeConverter->convertType(op.getSrc().getType().getElementType());
     auto dstMemObj = LLVM::getSharedMemoryObjectFromStruct(
@@ -1305,16 +1317,16 @@ struct AsyncTMACopyLocalToGlobalOpConversion
     for (int copyIdx = 0; copyIdx < numCopies; copyIdx += numWarps) {
       int numWarpsToCopy = std::min(numCopies - copyIdx, numWarps);
       if (numWarpsToCopy == 1)
-        warpID = i32_val(0);
+        warpID = b.i32_val(0);
       Value boxPred =
-          and_(pred, icmp_ult(id, i32_val(numWarpsToCopy * warpSize)));
+          b.and_(pred, b.icmp_ult(id, b.i32_val(numWarpsToCopy * warpSize)));
       ::mlir::triton::PTXBuilder ptxBuilderTMA;
       Type elemPtrTy = ptr_ty(rewriter.getContext(), 3);
-      Value copyIdxVal = add(warpID, i32_val(copyIdx));
+      Value copyIdxVal = b.add(warpID, b.i32_val(copyIdx));
       Value shMemOffset =
-          mul(copyIdxVal, i32_val(totalNumElements / numCopies));
+          b.mul(copyIdxVal, b.i32_val(totalNumElements / numCopies));
       Value shMemPtr =
-          gep(elemPtrTy, llvmElemTy, dstMemObj.getBase(), shMemOffset);
+          b.gep(elemPtrTy, llvmElemTy, dstMemObj.getBase(), shMemOffset);
       SmallVector<PTXBuilder::Operand *> operands = {
           ptxBuilderTMA.newOperand(boxPred, "b"),
           ptxBuilderTMA.newOperand(adaptor.getDescPtr(), "l")};
@@ -1324,8 +1336,8 @@ struct AsyncTMACopyLocalToGlobalOpConversion
       for (int i = 0; i < rank; i++) {
         Value coord = adaptor.getCoord()[rank - i - 1];
         if (i == 0) {
-          Value offset = mul(copyIdxVal, i32_val(128 / elementSizeInBytes));
-          coord = add(coord, offset);
+          Value offset = b.mul(copyIdxVal, b.i32_val(128 / elementSizeInBytes));
+          coord = b.add(coord, offset);
         }
         operands.push_back(ptxBuilderTMA.newOperand(coord, "r"));
         tmaInst += "$" + std::to_string(operandIdx++);

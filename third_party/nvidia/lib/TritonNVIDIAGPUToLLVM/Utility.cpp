@@ -10,66 +10,72 @@ using namespace mlir::triton;
 
 static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter, Value val,
                                Value i, NVVM::ShflKind mode, Value clamp) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   unsigned bits = val.getType().getIntOrFloatBitWidth();
 
   if (bits == 64) {
     Type vecTy = vec_ty(f32_ty, 2);
-    Value vec = bitcast(val, vecTy);
-    Value val0 = extract_element(f32_ty, vec, i32_val(0));
-    Value val1 = extract_element(f32_ty, vec, i32_val(1));
+    Value vec = b.bitcast(val, vecTy);
+    Value val0 = b.extract_element(f32_ty, vec, b.i32_val(0));
+    Value val1 = b.extract_element(f32_ty, vec, b.i32_val(1));
     val0 = shuffleCommonImpl(loc, rewriter, val0, i, mode, clamp);
     val1 = shuffleCommonImpl(loc, rewriter, val1, i, mode, clamp);
-    vec = undef(vecTy);
-    vec = insert_element(vecTy, vec, val0, i32_val(0));
-    vec = insert_element(vecTy, vec, val1, i32_val(1));
-    return bitcast(vec, val.getType());
+    vec = b.undef(vecTy);
+    vec = b.insert_element(vecTy, vec, val0, b.i32_val(0));
+    vec = b.insert_element(vecTy, vec, val1, b.i32_val(1));
+    return b.bitcast(vec, val.getType());
   }
   Type type = val.getType();
   if (type != i32_ty) {
-    val = bitcast(val, int_ty(bits));
+    val = b.bitcast(val, int_ty(bits));
     if (bits < 32)
-      val = zext(i32_ty, val);
+      val = b.zext(i32_ty, val);
   }
-  Value mask = i32_val(0xFFFFFFFF);
+  Value mask = b.i32_val(0xFFFFFFFF);
   Value result = rewriter.create<NVVM::ShflOp>(loc, i32_ty, mask, val, i, clamp,
                                                mode, UnitAttr());
   if (type != i32_ty) {
     if (bits < 32)
-      result = trunc(int_ty(bits), result);
-    result = bitcast(result, type);
+      result = b.trunc(int_ty(bits), result);
+    result = b.bitcast(result, type);
   }
   return result;
 }
 
 static Value shuffleCommon(Location loc, RewriterBase &rewriter, Value val,
                            Value i, NVVM::ShflKind mode, Value clamp) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   // To shuffle pointers, convert them to i64.
   Type valTy = val.getType();
   if (isa<LLVM::LLVMPointerType>(valTy))
-    val = ptrtoint(i64_ty, val);
+    val = b.ptrtoint(i64_ty, val);
   Value result = shuffleCommonImpl(loc, rewriter, val, i, mode, clamp);
   if (isa<LLVM::LLVMPointerType>(valTy))
-    result = inttoptr(valTy, result);
+    result = b.inttoptr(valTy, result);
   return result;
 }
 
 Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i) {
-  return shuffleCommon(loc, rewriter, val, i32_val(i), NVVM::ShflKind::bfly,
-                       i32_val(0x1f));
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  return shuffleCommon(loc, rewriter, val, b.i32_val(i), NVVM::ShflKind::bfly,
+                       b.i32_val(0x1f));
 }
 
 Value shuffleUp(Location loc, RewriterBase &rewriter, Value val, int i) {
-  return shuffleCommon(loc, rewriter, val, i32_val(i), NVVM::ShflKind::up,
-                       i32_val(0x0));
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  return shuffleCommon(loc, rewriter, val, b.i32_val(i), NVVM::ShflKind::up,
+                       b.i32_val(0x0));
 }
 
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, int i) {
-  return shuffleIdx(loc, rewriter, val, i32_val(i));
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  return shuffleIdx(loc, rewriter, val, b.i32_val(i));
 }
 
 Value shuffleIdx(Location loc, RewriterBase &rewriter, Value val, Value i) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   return shuffleCommon(loc, rewriter, val, i, NVVM::ShflKind::idx,
-                       i32_val(0x1f));
+                       b.i32_val(0x1f));
 }
 
 Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,

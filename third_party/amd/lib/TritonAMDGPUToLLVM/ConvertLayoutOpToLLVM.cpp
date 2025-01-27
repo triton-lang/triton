@@ -48,6 +48,7 @@ public:
       return failure();
 
     auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
 
     SmallVector<Value> inVals =
         unpackLLElements(loc, adaptor.getSrc(), rewriter);
@@ -63,32 +64,32 @@ public:
     auto elemTy = int_ty(8);
     auto vecTy = vec_ty(elemTy, 4);
 
-    Value c16 = i32_val(16);
-    Value c32 = i32_val(32);
-    Value c48 = i32_val(48);
-    Value c64 = i32_val(64);
+    Value c16 = b.i32_val(16);
+    Value c32 = b.i32_val(32);
+    Value c48 = b.i32_val(48);
+    Value c64 = b.i32_val(64);
 
-    Value threadId = tid_val();
-    Value laneId = urem(threadId, c64);
+    Value threadId = b.tid_val();
+    Value laneId = b.urem(threadId, c64);
 
-    Value mask0 = icmp_slt(laneId, c32);
-    Value mask1 = icmp_slt(urem(laneId, c32), c16);
+    Value mask0 = b.icmp_slt(laneId, c32);
+    Value mask1 = b.icmp_slt(b.urem(laneId, c32), c16);
 
-    Value addrShift16 = urem(add(laneId, c16), c64);
-    Value addrShift32 = urem(add(laneId, c32), c64);
-    Value addrShift48 = urem(add(laneId, c48), c64);
+    Value addrShift16 = b.urem(b.add(laneId, c16), c64);
+    Value addrShift32 = b.urem(b.add(laneId, c32), c64);
+    Value addrShift48 = b.urem(b.add(laneId, c48), c64);
 
     SmallVector<Value> outVals;
     for (size_t startIdx = 0; startIdx < inVals.size(); startIdx += 8) {
-      Value vec0 = undef(vecTy);
+      Value vec0 = b.undef(vecTy);
       for (size_t vIdx = 0; vIdx < 4; ++vIdx) {
-        vec0 =
-            insert_element(vecTy, vec0, inVals[startIdx + vIdx], i32_val(vIdx));
+        vec0 = b.insert_element(vecTy, vec0, inVals[startIdx + vIdx],
+                                b.i32_val(vIdx));
       }
-      Value vec1 = undef(vecTy);
+      Value vec1 = b.undef(vecTy);
       for (size_t vIdx = 0; vIdx < 4; ++vIdx) {
-        vec1 = insert_element(vecTy, vec1, inVals[startIdx + vIdx + 4],
-                              i32_val(vIdx));
+        vec1 = b.insert_element(vecTy, vec1, inVals[startIdx + vIdx + 4],
+                                b.i32_val(vIdx));
       }
 
       Value resVec0, resVec1;
@@ -110,17 +111,17 @@ public:
         |____________________________________________________________||___
         */
 
-        Value shflVec0 =
-            bitcast(targetInfo.shuffleIdx(
-                        rewriter, loc, bitcast(vec0, int_ty(32)), addrShift32),
-                    vecTy);
-        Value shflVec1 =
-            bitcast(targetInfo.shuffleIdx(
-                        rewriter, loc, bitcast(vec1, int_ty(32)), addrShift32),
-                    vecTy);
+        Value shflVec0 = b.bitcast(
+            targetInfo.shuffleIdx(rewriter, loc, b.bitcast(vec0, int_ty(32)),
+                                  addrShift32),
+            vecTy);
+        Value shflVec1 = b.bitcast(
+            targetInfo.shuffleIdx(rewriter, loc, b.bitcast(vec1, int_ty(32)),
+                                  addrShift32),
+            vecTy);
 
-        resVec0 = select(mask0, vec0, shflVec1);
-        resVec1 = select(mask0, shflVec0, vec1);
+        resVec0 = b.select(mask0, vec0, shflVec1);
+        resVec1 = b.select(mask0, shflVec0, vec1);
       } else if (mfmaLayout.getMDim() == 16) {
         /*
         16x16x32 case:
@@ -139,34 +140,34 @@ public:
         |________________________________________________________________|
         */
 
-        Value shflVec0_16 =
-            bitcast(targetInfo.shuffleIdx(
-                        rewriter, loc, bitcast(vec0, int_ty(32)), addrShift16),
-                    vecTy);
-        Value shflVec0_32 =
-            bitcast(targetInfo.shuffleIdx(
-                        rewriter, loc, bitcast(vec0, int_ty(32)), addrShift32),
-                    vecTy);
-        Value shflVec1_32 =
-            bitcast(targetInfo.shuffleIdx(
-                        rewriter, loc, bitcast(vec1, int_ty(32)), addrShift32),
-                    vecTy);
-        Value shflVec1_48 =
-            bitcast(targetInfo.shuffleIdx(
-                        rewriter, loc, bitcast(vec1, int_ty(32)), addrShift48),
-                    vecTy);
+        Value shflVec0_16 = b.bitcast(
+            targetInfo.shuffleIdx(rewriter, loc, b.bitcast(vec0, int_ty(32)),
+                                  addrShift16),
+            vecTy);
+        Value shflVec0_32 = b.bitcast(
+            targetInfo.shuffleIdx(rewriter, loc, b.bitcast(vec0, int_ty(32)),
+                                  addrShift32),
+            vecTy);
+        Value shflVec1_32 = b.bitcast(
+            targetInfo.shuffleIdx(rewriter, loc, b.bitcast(vec1, int_ty(32)),
+                                  addrShift32),
+            vecTy);
+        Value shflVec1_48 = b.bitcast(
+            targetInfo.shuffleIdx(rewriter, loc, b.bitcast(vec1, int_ty(32)),
+                                  addrShift48),
+            vecTy);
 
-        resVec0 = select(mask0, select(mask1, vec0, shflVec0_16),
-                         select(mask1, shflVec1_32, shflVec1_48));
-        resVec1 = select(mask0, select(mask1, shflVec0_16, shflVec0_32),
-                         select(mask1, shflVec1_48, vec1));
+        resVec0 = b.select(mask0, b.select(mask1, vec0, shflVec0_16),
+                           b.select(mask1, shflVec1_32, shflVec1_48));
+        resVec1 = b.select(mask0, b.select(mask1, shflVec0_16, shflVec0_32),
+                           b.select(mask1, shflVec1_48, vec1));
       }
 
       for (size_t vIdx = 0; vIdx < 4; ++vIdx) {
-        outVals.push_back(extract_element(elemTy, resVec0, i32_val(vIdx)));
+        outVals.push_back(b.extract_element(elemTy, resVec0, b.i32_val(vIdx)));
       }
       for (size_t vIdx = 0; vIdx < 4; ++vIdx) {
-        outVals.push_back(extract_element(elemTy, resVec1, i32_val(vIdx)));
+        outVals.push_back(b.extract_element(elemTy, resVec1, b.i32_val(vIdx)));
       }
     }
 

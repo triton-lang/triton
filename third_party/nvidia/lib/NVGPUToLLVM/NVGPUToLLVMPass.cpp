@@ -70,17 +70,18 @@ Type getTypeFromConstraint(char constraint, PatternRewriter &rewriter) {
 // val to i32 using ptrtoint(i32_ty, val)
 Value convertToType(Value val, std::string constraint, Location loc,
                     PatternRewriter &rewriter) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto isConstraintNumber = isNumber(constraint);
   if (!isConstraintNumber) {
     auto ty = getTypeFromConstraint(constraint[0], rewriter);
     if (isa<LLVM::LLVMPointerType>(val.getType())) {
-      return ptrtoint(ty, val);
+      return b.ptrtoint(ty, val);
     } else {
       assert(val.getType().getIntOrFloatBitWidth() <=
                  ty.getIntOrFloatBitWidth() &&
              "Cannot convert to a smaller type");
       if (val.getType().getIntOrFloatBitWidth() < ty.getIntOrFloatBitWidth())
-        return zext(ty, val);
+        return b.zext(ty, val);
     }
   }
   return val;
@@ -101,6 +102,7 @@ OperandsAndConstraints
 unpackOperands(const OperandsAndConstraints &operandsAndConstraints,
                PTXBuilder &ptxBuilder, Location loc,
                PatternRewriter &rewriter) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   OperandsAndConstraints unpackedOperands;
   for (const auto &[operand, constraint] : operandsAndConstraints) {
     auto llvmStruct = llvm::dyn_cast<LLVM::LLVMStructType>(operand.getType());
@@ -114,11 +116,11 @@ unpackOperands(const OperandsAndConstraints &operandsAndConstraints,
         if (isConstraintNumber) {
           auto constraintInt = std::stoi(constraint) + i;
           unpackedOperands.push_back(
-              {extract_val(llvmStruct.getBody()[i], operand, i),
+              {b.extract_val(llvmStruct.getBody()[i], operand, i),
                std::to_string(constraintInt)});
         } else {
           unpackedOperands.push_back(
-              {extract_val(llvmStruct.getBody()[i], operand, i), constraint});
+              {b.extract_val(llvmStruct.getBody()[i], operand, i), constraint});
         }
       }
     } else {
@@ -392,6 +394,7 @@ public:
   LogicalResult matchAndRewrite(ttn::LoadAcquireOp op,
                                 PatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     Type valueTy = op.getType();
     const unsigned valueNBits = std::max(8u, valueTy.getIntOrFloatBitWidth());
     const size_t maxWordWidth = std::max<size_t>(32, valueNBits);
@@ -418,7 +421,7 @@ public:
     // Create inline ASM signature
     Type retTy = IntegerType::get(getContext(), width);
     Value ret = ptxBuilder.launch(rewriter, loc, retTy);
-    ret = bitcast(ret, op.getType());
+    ret = b.bitcast(ret, op.getType());
 
     rewriter.replaceOp(op, {ret});
     return success();
