@@ -144,7 +144,7 @@ CUpti_PCSamplingData allocPCSamplingData(size_t collectNumPCs,
       (libVersion >= CUPTI_CUDA12_4_VERSION &&
        CUPTI_API_VERSION < CUPTI_CUDA12_4_VERSION)) {
     throw std::runtime_error(
-        "CUPTI API version: " + std::to_string(CUPTI_API_VERSION) +
+        "[PROTON] CUPTI API version: " + std::to_string(CUPTI_API_VERSION) +
         " and CUPTI driver version: " + std::to_string(libVersion) +
         " are not compatible. Please set the environment variable "
         " TRITON_CUPTI_INCLUDE_PATH and TRITON_CUPTI_LIB_PATH to resolve the "
@@ -380,7 +380,7 @@ void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
         auto *stallReason = &pcData->stallReason[j];
         if (!configureData->stallReasonIndexToMetricIndex.count(
                 stallReason->pcSamplingStallReasonIndex))
-          throw std::runtime_error("Invalid stall reason index");
+          throw std::runtime_error("[PROTON] Invalid stall reason index");
         for (auto *data : dataSet) {
           auto scopeId = externId;
           if (isAPI)
