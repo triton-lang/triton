@@ -1185,20 +1185,46 @@ void BlockedEncodingAttr::print(mlir::AsmPrinter &printer) const {
   printer << "}>";
 }
 
+//===----------------------------------------------------------------------===//
+// Linear Encoding
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+bool isMemoryEncoding(const mlir::triton::LinearLayout &ll) {
+  return (ll.getInDimNames().begin()->str() == "offset");
+}
+
+bool isDistributedEncoding(const mlir::triton::LinearLayout &ll) {
+  return (ll.getInDimNames().begin()->str() == "register");
+}
+
+} // namespace
+
 // FIXME Can we take the LinearLayout by const&?
 LogicalResult
 LinearEncodingAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                            LinearLayout linearLayout) {
-  // Example of LinearEncodingAttr
+  // Examples of LinearEncodingAttr
   // <{register = [[0, 1], [8, 0], [0, 8], [64, 0]],
   //   lane = [[0, 2], [0, 4], [1, 0], [2, 0], [4, 0]],
   //   warp = [[16, 0], [32, 0]],
   //   block = []}>
-  // The input dims must be {register, lane, warp, block}
+  // <{offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [1, 0], [2, 0], [4,
+  // 0]],
+  //   block = []}>
+  // The input dims must be {register, lane, warp, block} or {offset, block}
   // The output dims of the linear layout should be dim0..dim[rank-1]
 
-  static const auto expectedInDims =
-      SmallVector<std::string>({"register", "lane", "warp", "block"});
+  SmallVector<std::string> expectedInDims;
+  // check if this is a memory of distributed layout
+  if (isMemoryEncoding(linearLayout)) {
+    expectedInDims = {"offset", "block"};
+  } else {
+    assert(isDistributedEncoding(linearLayout));
+    expectedInDims = {"register", "lane", "warp", "block"};
+  }
+
   for (const auto &[i, dims] : llvm::enumerate(
            llvm::zip(linearLayout.getInDimNames(), expectedInDims))) {
     const auto &[dim, expectedDimStr] = dims;
@@ -1266,11 +1292,19 @@ Attribute LinearEncodingAttr::parse(AsmParser &parser, Type type) {
   LinearLayout::BasesT bases;
 
   // Parse the basis names in order (the order is relevant)
-  std::vector<std::string> inDimNames = {"register", "lane", "warp", "block"};
+  std::vector<std::string> inDimNames = {"offset", "register", "lane", "warp",
+                                         "block"};
 
   for (const auto &inDimNameStr : inDimNames) {
     auto inDimName = StringAttr::get(parser.getContext(), inDimNameStr);
     Attribute value = dict.get(inDimName);
+
+    // there are two cases:
+    // memory layout: {offset, block}
+    // and distributed layout: {register, lane, warp, block}
+    // this check skips redundant fields
+    if (!value)
+      continue;
 
     // Expecting an array of arrays
     auto arrayOfArraysAttr = mlir::dyn_cast<ArrayAttr>(value);
@@ -1471,14 +1505,20 @@ SmallVector<unsigned> LinearEncodingAttr::getSizePerThread() const {
 }
 
 SmallVector<unsigned> LinearEncodingAttr::getOrder() const {
-  auto rank = getLinearLayout().getNumOutDims();
+  auto linearLayout = getLinearLayout();
+  auto rank = linearLayout.getNumOutDims();
   SmallVector<unsigned> order(rank);
   // Choose [rank-1, rank-2, ... 0] as the default order in case
   // there are dims that do not move in the register
   // This order is as good as any really
   std::iota(order.rbegin(), order.rend(), 0);
 
-  return orderPerDim(StringAttr::get(getContext(), "register"), order);
+  if (isMemoryEncoding(linearLayout)) {
+    return orderPerDim(StringAttr::get(getContext(), "offset"), order);
+  } else {
+    assert(isDistributedEncoding(linearLayout));
+    return orderPerDim(StringAttr::get(getContext(), "register"), order);
+  }
 }
 
 LinearLayout LinearEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
@@ -1486,6 +1526,11 @@ LinearLayout LinearEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   auto canonicalDims = llvm::to_vector(ll.getOutDimNames());
   llvm::SmallDenseMap<StringAttr, int64_t> namedShape;
   llvm::SmallVector<StringAttr> permutedDims;
+  if (isMemoryEncoding(ll)) {
+    // memory encoding should be 1-to-1 compatible with tensor size
+    // TODO: check layout size equal to shape
+    return ll;
+  }
   for (auto dim : getRepOrder()) {
     permutedDims.push_back(canonicalDims[dim]);
     namedShape[canonicalDims[dim]] = shape[dim];

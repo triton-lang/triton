@@ -885,7 +885,9 @@ TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
   // Layouts are distributed or shared in triton core
   // To add a new layout add an else-if clause
   LinearLayout result = LinearLayout::empty();
-  if (auto distributed = dyn_cast<DistributedEncodingTrait>(layout)) {
+  if (auto linearLayout = dyn_cast<LinearEncodingAttr>(layout)) {
+    result = linearLayout.toLinearLayout(shape);
+  } else if (auto distributed = dyn_cast<DistributedEncodingTrait>(layout)) {
     result = distributed.toLinearLayout(shape);
   } else {
     auto shared = dyn_cast<SharedEncodingTrait>(layout);

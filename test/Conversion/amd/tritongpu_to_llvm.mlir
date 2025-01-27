@@ -294,3 +294,25 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [16, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [4, 8], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#mma = #ttg.amd_mfma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [2, 2], instrShape = [32, 32], isTransposed = true}>
+#shared = #ttg.linear<{offset = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [32, 0], [64, 0], [0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32]], block = []}>
+#trasposed_in_regs = #ttg.linear<{register = [[1, 0], [2, 0], [0, 1], [0, 2], [0, 4]], lane = [[0, 8], [0, 16], [0, 32], [4, 0], [8, 0], [16, 0]], warp = [[32, 0], [64, 0]], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @custom_shared_layout(%arg0: tensor<64x128xf16, #blocked>, %arg1: tensor<128x64xf16, #blocked1>) {
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<64x64xf32, #mma>
+
+    %opA = ttg.convert_layout %arg0 : tensor<64x128xf16, #blocked> -> tensor<64x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
+
+    %trasposed_in_regs = ttg.convert_layout %arg1 : tensor<128x64xf16, #blocked1> -> tensor<128x64xf16, #trasposed_in_regs>
+    %allocated = ttg.local_alloc %trasposed_in_regs : (tensor<128x64xf16, #trasposed_in_regs>) -> !ttg.memdesc<128x64xf16, #shared, #ttg.shared_memory>
+    %opB = ttg.local_load %allocated : !ttg.memdesc<128x64xf16, #shared, #ttg.shared_memory> -> tensor<128x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+
+    %result = tt.dot %opA, %opB, %cst_0 : tensor<64x128xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>> * tensor<128x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>> -> tensor<64x64xf32, #mma>
+    tt.return
+  }
+}
