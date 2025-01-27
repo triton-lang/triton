@@ -214,16 +214,6 @@ def test_line_info_interpreter(func: str):
     assert kernel.rewriter.def_file_lineno == expected_def_lineno
 
 
-def disable_line_info(status: str):
-    import os
-    original_status = os.environ.get("TRITON_DISABLE_LINE_INFO", "0")
-    try:
-        os.environ["TRITON_DISABLE_LINE_INFO"] = status
-        yield
-    finally:
-        os.environ["TRITON_DISABLE_LINE_INFO"] = original_status
-
-
 @pytest.mark.parametrize("status", ["0", "1"])
 def test_line_info_env(status: str):
     if is_interpreter():
@@ -233,6 +223,18 @@ def test_line_info_env(status: str):
         obj_kind, command, anchor, separator = get_disassembler_command_and_debug_line_format()
     except BaseException:
         pytest.skip("disassembler is not available")
+
+    import contextlib
+
+    @contextlib.contextmanager
+    def disable_line_info(status: str):
+        import os
+        original_status = os.environ.get("TRITON_DISABLE_LINE_INFO", "0")
+        try:
+            os.environ["TRITON_DISABLE_LINE_INFO"] = status
+            yield
+        finally:
+            os.environ["TRITON_DISABLE_LINE_INFO"] = original_status
 
     shape = (128, )
     with disable_line_info(status):
