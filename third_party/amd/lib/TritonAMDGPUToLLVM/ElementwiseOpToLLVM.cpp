@@ -433,36 +433,70 @@ static Value convertBf16ToFp32(Location loc,
   return bitcast(shifted, f32_ty);
 }
 
+static Value buildGCNInstruction(Location loc, RewriterBase &rewritter,
+                                 StringRef instrName,
+                                 ArrayRef<StringRef> constraints,
+                                 ArrayRef<Value> vals, Type retType) {
+  assert(constraints.size() == vals.size() + 1);
+  assert(vals.size() == 2 || vals.size() == 3);
+  GCNBuilder builder;
+  GCNInstr &instr = *builder.create(instrName.str());
+  GCNBuilder::Operand *out = builder.newOperand(constraints[0]);
+  SmallVector<GCNBuilder::Operand *> operands;
+  for (int i = 0; i < vals.size(); ++i) {
+    operands.push_back(builder.newOperand(vals[i], constraints[i + 1]));
+  }
+
+  if (vals.size() == 2) {
+    instr(out, operands[0], operands[1]);
+  } else {
+    instr(out, operands[0], operands[1], operands[2]);
+  }
+
+  return builder.launch(rewritter, loc, retType, false);
+}
+
 static Value convertFp32ToBf16(Location loc,
                                ConversionPatternRewriter &rewriter,
                                const Value &v, const RoundingMode rounding) {
+  auto as_int32 = bitcast(v, i32_ty);
   if (rounding == RoundingMode::RTZ) {
-    auto as_int32 = bitcast(v, i32_ty);
     auto shifted = lshr(i32_ty, as_int32, i32_val(16));
     auto truncated = trunc(i16_ty, shifted);
     return bitcast(truncated, bf16_ty);
   }
-  // Otherwise it is (rounding == RoundingMode::RTNE)
-  auto as_uint32 = bitcast(v, i32_ty);
-  auto check_exponent =
-      and_(i32_ty, xor_(i32_ty, as_uint32, i32_val(0xffffffff)),
-           i32_val(0x7f800000));
-  auto exponent_not_all1s = icmp_ne(check_exponent, i32_val(0));
-  auto exponent_all1s = icmp_eq(check_exponent, i32_val(0));
-  auto rounded =
-      add(i32_ty, i32_val(0x7fff),
-          and_(i32_ty, lshr(i32_ty, as_uint32, i32_val(16)), i32_val(1)));
-  rounded = add(i32_ty, rounded, as_uint32);
-  auto res = select(exponent_not_all1s, rounded, as_uint32);
 
-  auto preserve_nan =
-      and_(i1_ty, exponent_all1s,
-           icmp_ne(and_(i32_ty, as_uint32, i32_val(0xffff)), i32_val(0)));
-  auto nan = or_(i32_ty, as_uint32, i32_val(0x10000));
-  res = select(preserve_nan, nan, res);
+  // This implementation is a faster version for fp32 to bf16 type conversion
+  // It is from CK:
+  // https://github.com/cgmillette/composable_kernel/commit/24e75bef6aa5
+  // It uses less VGPR and less number of instructions compared to the
+  // previous implementation
+  SmallVector<StringRef> constraints0 = {"=s", "v", "v"};
+  SmallVector<Value> vals0 = {v, v};
+  Value isNan = buildGCNInstruction(loc, rewriter, "v_cmp_u_f32", constraints0,
+                                    vals0, i64_ty);
 
-  auto shifted = lshr(i32_ty, res, i32_val(16));
-  auto truncated = trunc(i16_ty, shifted);
+  Value v16 = i32_val(16);
+  Value v1 = i32_val(1);
+  SmallVector<StringRef> constraints1 = {"=v", "v", "v", "v"};
+  SmallVector<Value> vals1 = {v, v16, v1};
+  Value tmp = buildGCNInstruction(loc, rewriter, "v_bfe_u32", constraints1,
+                                  vals1, i32_ty);
+
+  SmallVector<StringRef> constraints2 = {"=v", "v", "v", "v"};
+  Value v7FFF = i32_val(0x7FFF);
+  SmallVector<Value> vals2 = {v, tmp, v7FFF};
+  Value tmp1 = buildGCNInstruction(loc, rewriter, "v_add3_u32", constraints2,
+                                   vals2, i32_ty);
+
+  SmallVector<StringRef> constraints3 = {"=v", "v", "v", "s"};
+  Value vNan = i32_val(0x7FFF0000);
+  SmallVector<Value> vals3 = {tmp1, vNan, isNan};
+  Value cndMask = buildGCNInstruction(loc, rewriter, "v_cndmask_b32",
+                                      constraints3, vals3, i32_ty);
+
+  Value shifted = lshr(i32_ty, cndMask, v16);
+  Value truncated = trunc(i16_ty, shifted);
   return bitcast(truncated, bf16_ty);
 }
 
@@ -851,127 +885,6 @@ Fp16_to_Fp8E4M3FNUZ_HW(Location loc, ConversionPatternRewriter &rewriter,
 static ConverterT Fp16_to_Fp8E4M3FNUZ(AMD::ISAFamily isaFamily) {
   return isaFamily == AMD::ISAFamily::CDNA3 ? Fp16_to_Fp8E4M3FNUZ_HW
                                             : Fp16_to_Fp8E4M3FNUZ_SW;
-}
-
-// WARN: subnormal (0bs0000xxx) are not handled
-static SmallVector<Value> Fp8E4M3_to_Bf16(Location loc,
-                                          ConversionPatternRewriter &rewriter,
-                                          const SmallVector<Value> &v) {
-  auto fp8x4VecTy = vec_ty(i8_ty, 4);
-  Value a0 = undef(fp8x4VecTy);
-  a0 = insert_element(fp8x4VecTy, a0, int_val(8, 0), i32_val(0));
-  a0 = insert_element(fp8x4VecTy, a0, v[0], i32_val(1));
-  a0 = insert_element(fp8x4VecTy, a0, int_val(8, 0), i32_val(2));
-  a0 = insert_element(fp8x4VecTy, a0, v[1], i32_val(3));
-  a0 = bitcast(a0, i32_ty);
-
-  Value a1 = undef(fp8x4VecTy);
-  a1 = insert_element(fp8x4VecTy, a1, int_val(8, 0), i32_val(0));
-  a1 = insert_element(fp8x4VecTy, a1, v[2], i32_val(1));
-  a1 = insert_element(fp8x4VecTy, a1, int_val(8, 0), i32_val(2));
-  a1 = insert_element(fp8x4VecTy, a1, v[3], i32_val(3));
-  a1 = bitcast(a1, i32_ty);
-
-  Value b0 = and_(i32_ty, a0, i32_val(0x7fff7fff));
-  Value b1 = and_(i32_ty, a1, i32_val(0x7fff7fff));
-  b0 = lshr(i32_ty, b0, i32_val(4));
-  b1 = lshr(i32_ty, b1, i32_val(4));
-
-  b0 = add(i32_ty, b0, i32_val(0x3c003c00));
-  b1 = add(i32_ty, b1, i32_val(0x3c003c00));
-  Value sign0 = and_(i32_ty, a0, i32_val(0x80008000));
-  Value sign1 = and_(i32_ty, a1, i32_val(0x80008000));
-
-  auto bf16x2VecTy = vec_ty(bf16_ty, 2);
-  Value bf16x2Vec0 = or_(i32_ty, sign0, b0);
-  Value bf16x2Vec1 = or_(i32_ty, sign1, b1);
-  bf16x2Vec0 = bitcast(bf16x2Vec0, bf16x2VecTy);
-  bf16x2Vec1 = bitcast(bf16x2Vec1, bf16x2VecTy);
-
-  return {extract_element(bf16_ty, bf16x2Vec0, i32_val(0)),
-          extract_element(bf16_ty, bf16x2Vec0, i32_val(1)),
-          extract_element(bf16_ty, bf16x2Vec1, i32_val(0)),
-          extract_element(bf16_ty, bf16x2Vec1, i32_val(1))};
-}
-
-static SmallVector<Value> Bf16_to_Fp8E4M3(Location loc,
-                                          ConversionPatternRewriter &rewriter,
-                                          const SmallVector<Value> &v) {
-  auto bf16x2VecTy = vec_ty(bf16_ty, 2);
-  Value bf16x2Vec0 = undef(bf16x2VecTy);
-  Value bf16x2Vec1 = undef(bf16x2VecTy);
-  bf16x2Vec0 = insert_element(bf16x2VecTy, bf16x2Vec0, v[0], i32_val(0));
-  bf16x2Vec0 = insert_element(bf16x2VecTy, bf16x2Vec0, v[1], i32_val(1));
-  bf16x2Vec1 = insert_element(bf16x2VecTy, bf16x2Vec1, v[2], i32_val(0));
-  bf16x2Vec1 = insert_element(bf16x2VecTy, bf16x2Vec1, v[3], i32_val(1));
-  bf16x2Vec0 = bitcast(bf16x2Vec0, i32_ty);
-  bf16x2Vec1 = bitcast(bf16x2Vec1, i32_ty);
-
-  Value sign0 = and_(i32_ty, bf16x2Vec0, i32_val(0x80008000));
-  Value sign1 = and_(i32_ty, bf16x2Vec1, i32_val(0x80008000));
-  auto fp8x4VecTy = vec_ty(i8_ty, 4);
-  Value sign = undef(fp8x4VecTy);
-  sign0 = bitcast(sign0, fp8x4VecTy);
-  sign1 = bitcast(sign1, fp8x4VecTy);
-  sign = insert_element(fp8x4VecTy, sign,
-                        extract_element(i8_ty, sign0, i32_val(1)), i32_val(0));
-  sign = insert_element(fp8x4VecTy, sign,
-                        extract_element(i8_ty, sign0, i32_val(3)), i32_val(1));
-  sign = insert_element(fp8x4VecTy, sign,
-                        extract_element(i8_ty, sign1, i32_val(1)), i32_val(2));
-  sign = insert_element(fp8x4VecTy, sign,
-                        extract_element(i8_ty, sign1, i32_val(3)), i32_val(3));
-  sign = bitcast(sign, i32_ty);
-
-  Value nosign0 = and_(i32_ty, bf16x2Vec0, i32_val(0x7fff7fff));
-  Value nosign1 = and_(i32_ty, bf16x2Vec1, i32_val(0x7fff7fff));
-
-  Value nosign_0_0 = and_(i32_ty, nosign0, i32_val(0xffff0000));
-  nosign_0_0 = umax(i32_ty, nosign_0_0, i32_val(0x3c000000));
-  nosign_0_0 = umin(i32_ty, nosign_0_0, i32_val(0x43f00000));
-  Value nosign_0_1 = and_(i32_ty, nosign0, i32_val(0x0000ffff));
-  nosign_0_1 = umax(i32_ty, nosign_0_1, i32_val(0x3c00));
-  nosign_0_1 = umin(i32_ty, nosign_0_1, i32_val(0x43f0));
-  nosign0 = or_(i32_ty, nosign_0_0, nosign_0_1);
-
-  Value nosign_1_0 = and_(i32_ty, nosign1, i32_val(0xffff0000));
-  nosign_1_0 = umax(i32_ty, nosign_1_0, i32_val(0x3c000000));
-  nosign_1_0 = umin(i32_ty, nosign_1_0, i32_val(0x43f00000));
-  Value nosign_1_1 = and_(i32_ty, nosign1, i32_val(0x0000ffff));
-  nosign_1_1 = umax(i32_ty, nosign_1_1, i32_val(0x3c00));
-  nosign_1_1 = umin(i32_ty, nosign_1_1, i32_val(0x43f0));
-  nosign1 = or_(i32_ty, nosign_1_0, nosign_1_1);
-
-  nosign0 = add(i32_ty, nosign0, i32_val(0x80008));
-  nosign1 = add(i32_ty, nosign1, i32_val(0x80008));
-  nosign0 = sub(i32_ty, nosign0, i32_val(0x3c003c00));
-  nosign1 = sub(i32_ty, nosign1, i32_val(0x3c003c00));
-  nosign0 = lshr(i32_ty, nosign0, i32_val(4));
-  nosign1 = lshr(i32_ty, nosign1, i32_val(4));
-
-  nosign0 = bitcast(nosign0, fp8x4VecTy);
-  nosign1 = bitcast(nosign1, fp8x4VecTy);
-  Value nosign = undef(fp8x4VecTy);
-  nosign =
-      insert_element(fp8x4VecTy, nosign,
-                     extract_element(i8_ty, nosign0, i32_val(0)), i32_val(0));
-  nosign =
-      insert_element(fp8x4VecTy, nosign,
-                     extract_element(i8_ty, nosign0, i32_val(2)), i32_val(1));
-  nosign =
-      insert_element(fp8x4VecTy, nosign,
-                     extract_element(i8_ty, nosign1, i32_val(0)), i32_val(2));
-  nosign =
-      insert_element(fp8x4VecTy, nosign,
-                     extract_element(i8_ty, nosign1, i32_val(2)), i32_val(3));
-  nosign = bitcast(nosign, i32_ty);
-
-  Value fp8x4Vec = or_(i32_ty, nosign, sign);
-  fp8x4Vec = bitcast(fp8x4Vec, fp8x4VecTy);
-  return {extract_element(i8_ty, fp8x4Vec, i32_val(0)),
-          extract_element(i8_ty, fp8x4Vec, i32_val(1)),
-          extract_element(i8_ty, fp8x4Vec, i32_val(2)),
-          extract_element(i8_ty, fp8x4Vec, i32_val(3))};
 }
 
 template <typename SourceOp, typename DestOp>

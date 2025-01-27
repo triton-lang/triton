@@ -1101,6 +1101,7 @@ LinearLayout chooseDotLdMatrixLayout(DotOperandEncodingAttr dot,
   auto rank = shape.size();
   auto opIdx = dot.getOpIdx();
   int kDim = (opIdx == 0) ? rank - 1 : rank - 2;
+  int nonKDim = (opIdx == 0) ? rank - 2 : rank - 1;
 
   StringAttr kReg = S("register");
   StringAttr kLane = S("lane");
@@ -1117,8 +1118,11 @@ LinearLayout chooseDotLdMatrixLayout(DotOperandEncodingAttr dot,
     auto reg = 1 << logReg;
     basesReg.push_back({0, reg});
   }
-  std::vector<std::vector<int>> basesLane = {{1, 0}, {2, 0}, {4, 0}};
-  int numTileCols;
+  std::vector<std::vector<int>> basesLane = {
+      {1, 0}, {2, 0}, {4, 0}, {0, 0}, {0, 0}};
+  bool kX2 = shape[kDim] > 8 * 16 / elemBitWidth;
+  bool kX4 = shape[kDim] > 16 * 16 / elemBitWidth;
+  bool nonKX2 = shape[nonKDim] > 8;
   // Construct a tile consisting of 4 8x8x16bits sub-tiles to use ldmatrix
   // efficiently. opIdx=0 and opIdx=1 are handled differently.
   if (opIdx == 0) {
@@ -1131,13 +1135,16 @@ LinearLayout chooseDotLdMatrixLayout(DotOperandEncodingAttr dot,
     if (needTrans) {
       assert(elemBitWidth <= 16 && "Only elements smaller than 16 bits are "
                                    "supported in the transposed mode");
-      basesLane.push_back({0, 8});
-      basesLane.push_back({8, 0});
+      if (nonKX2)
+        basesLane[3] = {0, 8};
+      if (kX2)
+        basesLane[4] = {8 * 16 / elemBitWidth, 0};
     } else {
-      basesLane.push_back({8, 0});
-      basesLane.push_back({0, 8 * 16 / elemBitWidth});
+      if (nonKX2)
+        basesLane[3] = {8, 0};
+      if (kX2)
+        basesLane[4] = {0, 8 * 16 / elemBitWidth};
     }
-    numTileCols = 16 * 16 / elemBitWidth;
   } else {
     // The matrix elements of thread 0 are distributed in the following pattern
     // (fp16):
@@ -1147,14 +1154,20 @@ LinearLayout chooseDotLdMatrixLayout(DotOperandEncodingAttr dot,
     if (needTrans) {
       assert(elemBitWidth <= 16 && "Only elements smaller than 16 bits are "
                                    "supported in the transposed mode");
-      basesLane.push_back({8, 0});
-      basesLane.push_back({16, 0});
+      if (kX2)
+        basesLane[3] = {8, 0};
+      if (kX4)
+        basesLane[4] = {16, 0};
     } else {
-      basesLane.push_back({0, 8 * 16 / elemBitWidth});
-      basesLane.push_back({0, 16 * 16 / elemBitWidth});
+      if (kX2)
+        basesLane[3] = {0, 8 * 16 / elemBitWidth};
+      if (kX4)
+        basesLane[4] = {0, 16 * 16 / elemBitWidth};
     }
-    numTileCols = 32 * 16 / elemBitWidth;
   }
+  int numTileCols =
+      (8 * 16 / elemBitWidth)
+      << (static_cast<int>(kX2) + static_cast<int>(kX4 && opIdx == 1));
   // Expand the `register` dimension so the size of columns matches `K`.
   auto layout =
       LinearLayout({{kReg, basesReg}, {kLane, basesLane}, {kWarp, {}}},
