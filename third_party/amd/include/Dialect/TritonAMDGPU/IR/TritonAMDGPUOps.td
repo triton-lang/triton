@@ -126,14 +126,15 @@ def ConcatOp : TT_AMDGPU_Op<"concat", [Pure]> {
     TODO: complete
     }];
 
-  let arguments = (ins Variadic<TT_Tensor>:$sources, DenseI32ArrayAttr:$dims);
+  let arguments = (ins Variadic<TT_Tensor>:$sources, DenseI64ArrayAttr:$coords);
   let results = (outs AnyRankedTensor:$result);
 
   let assemblyFormat = [{
-    $sources $dims attr-dict `:` type($sources) `->` type($result)
+    $sources $coords attr-dict `:` type($sources) `->` type($result)
   }];
 
   let hasVerifier = 1;
+  let hasCanonicalizer = 1;
 }
 
 //===----------------------------------------------------------------------===//

@@ -11,6 +11,12 @@ using namespace mlir;
 using namespace mlir::triton;
 
 namespace {
+
+inline size_t getSourceSize(Value &source) {
+  ArrayRef<Type> types = cast<LLVM::LLVMStructType>(source.getType()).getBody();
+  return types.size();
+}
+
 struct ConcatOpConversion : public ConvertOpToLLVMPattern<amdgpu::ConcatOp> {
   explicit ConcatOpConversion(LLVMTypeConverter &typeConverter,
                               PatternBenefit benefit = 1)
@@ -23,15 +29,20 @@ struct ConcatOpConversion : public ConvertOpToLLVMPattern<amdgpu::ConcatOp> {
     auto resultTy = cast<RankedTensorType>(op.getResult().getType());
 
     auto sources = adaptor.getSources();
-    auto dims = op.getDims();
-    const size_t numSplits = product(dims);
 
-    llvm::SmallVector<Value> resultVals;
+    size_t totalNumElements = 0;
+    for (auto source : sources) {
+      totalNumElements += getSourceSize(source);
+    }
+
+    size_t currNumElements = 0;
+    llvm::SmallVector<Value> resultVals(totalNumElements);
     for (auto source : sources) {
       auto elements = unpackLLElements(loc, source, rewriter);
-      for (auto element : elements) {
-        resultVals.push_back(element);
+      for (auto [idx, element] : llvm::enumerate(elements)) {
+        resultVals[currNumElements + idx] = element;
       }
+      currNumElements += getSourceSize(source);
     }
 
     Value ret = packLLElements(loc, this->getTypeConverter(), resultVals,
