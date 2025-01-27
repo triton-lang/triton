@@ -77,10 +77,8 @@ bool WarpGroupDotOp::needsPartialAccumulator() {
   const auto &d = getD();
   auto aTensorTy = cast<triton::gpu::TensorOrMemDesc>(a.getType());
   auto aElTy = cast<triton::gpu::TensorOrMemDesc>(a.getType()).getElementType();
-  bool isFP8 = llvm::isa<Float8E5M2Type>(aElTy) ||
-               llvm::isa<Float8E4M3FNType>(aElTy) ||
-               llvm::isa<Float8E5M2FNUZType>(aElTy) ||
-               llvm::isa<Float8E4M3FNUZType>(aElTy);
+  bool isFP8 = llvm::isa<Float8E5M2Type, Float8E4M3FNType, Float8E5M2FNUZType,
+                         Float8E4M3FNUZType>(aElTy);
   bool accFP32 =
       cast<triton::gpu::TensorOrMemDesc>(d.getType()).getElementType().isF32();
   uint32_t maxNumImpreciseAcc = getMaxNumImpreciseAcc();
