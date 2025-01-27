@@ -172,7 +172,7 @@ CUpti_PCSamplingData allocPCSamplingData(size_t collectNumPCs,
     pcDataSize = sizeof(CUpti_PCSamplingPCData_WithCorrelationId);
   }
   CUpti_PCSamplingData pcSamplingData{
-      /*size=*/pcDataSize,
+      /*size=*/sizeof(CUpti_PCSamplingData),
       /*collectNumPcs=*/collectNumPCs,
       /*totalSamples=*/0,
       /*droppedSamples=*/0,
@@ -181,11 +181,12 @@ CUpti_PCSamplingData allocPCSamplingData(size_t collectNumPCs,
       /*rangeId=*/0,
       /*pPcData=*/
       static_cast<CUpti_PCSamplingPCData *>(
-          std::calloc(collectNumPCs, sizeof(CUpti_PCSamplingPCData)))};
+          std::calloc(collectNumPCs, pcDataSize))};
   for (size_t i = 0; i < collectNumPCs; ++i) {
     pcSamplingData.pPcData[i].stallReason =
         static_cast<CUpti_PCSamplingStallReason *>(std::calloc(
             numValidStallReasons, sizeof(CUpti_PCSamplingStallReason)));
+    pcSamplingData.pPcData[i].size = pcDataSize;
   }
   return pcSamplingData;
 }
