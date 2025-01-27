@@ -422,8 +422,9 @@ struct ConvertTritonLoadToBufferLoad
       rewriter.replaceOp(op, bufferLoadOp);
       return success();
     }
+
     LDBG("Failed to convert: " << op);
-    return failure();
+    return rewriter.notifyMatchFailure(op, "Failed to convert LoadOp");
   }
 
 private:
@@ -462,7 +463,7 @@ struct ConvertTritonStoreToBufferStore
       return success();
     }
     LDBG("Failed to convert: " << op);
-    return failure();
+    return rewriter.notifyMatchFailure(op, "Failed to convert StoreOp");
   }
 
 private:
