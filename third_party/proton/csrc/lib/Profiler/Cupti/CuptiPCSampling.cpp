@@ -130,46 +130,25 @@ size_t matchStallReasonsToIndices(
 #define CUPTI_CUDA12_4_VERSION 22
 #define CUPTI_CUDA12_4_PC_DATA_PADDING_SIZE sizeof(uint32_t)
 
-typedef struct PACKED_ALIGNMENT {
-  size_t size;
-  uint64_t cubinCrc;
-  uint64_t pcOffset;
-  uint32_t functionIndex;
-  uint32_t pad;
-  char *functionName;
-  size_t stallReasonCount;
-  CUpti_PCSamplingStallReason *stallReason;
-  uint32_t correlationId;
-} CUpti_PCSamplingPCData_WithCorrelationId;
-
-typedef struct PACKED_ALIGNMENT {
-  size_t size;
-  uint64_t cubinCrc;
-  uint64_t pcOffset;
-  uint32_t functionIndex;
-  uint32_t pad;
-  char *functionName;
-  size_t stallReasonCount;
-  CUpti_PCSamplingStallReason *stallReason;
-} CUpti_PCSamplingPCData_WithoutCorrelationId;
-
 CUpti_PCSamplingData allocPCSamplingData(size_t collectNumPCs,
                                          size_t numValidStallReasons) {
   uint32_t libVersion = 0;
   cupti::getVersion<true>(&libVersion);
   size_t pcDataSize = sizeof(CUpti_PCSamplingPCData);
-  // 1: Check cupti lib version < 12.4 but cupti header version >= 12.4
-  // If so, we subtract 4 bytes from the size of CUpti_PCSamplingPCData
-  // because it introduces a new field (i.e., correlationId) at the end of the
-  // struct, which is not compatible with the previous versions.
-  // 2: Check cupti lib version >= 12.4 but cupti header version < 12.4
-  // If so, we add 4 bytes to the size of CUpti_PCSamplingPCData
-  if (libVersion < CUPTI_CUDA12_4_VERSION &&
-      pcDataSize >= sizeof(CUpti_PCSamplingPCData_WithCorrelationId)) {
-    pcDataSize = sizeof(CUpti_PCSamplingPCData_WithoutCorrelationId);
-  } else if (libVersion >= CUPTI_CUDA12_4_VERSION &&
-             pcDataSize < sizeof(CUpti_PCSamplingPCData_WithCorrelationId)) {
-    pcDataSize = sizeof(CUpti_PCSamplingPCData_WithCorrelationId);
+  // Since CUPTI 12.4, a new field (i.e., correlationId) is added to
+  // CUpti_PCSamplingPCData, which breaks the ABI compatibility.
+  // Instead of using workarounds, we emit an error message and exit the
+  // application.
+  if ((libVersion < CUPTI_CUDA12_4_VERSION &&
+       CUPTI_API_VERSION >= CUPTI_CUDA12_4_VERSION) ||
+      (libVersion >= CUPTI_CUDA12_4_VERSION &&
+       CUPTI_API_VERSION < CUPTI_CUDA12_4_VERSION)) {
+    throw std::runtime_error(
+        "CUPTI API version: " + std::to_string(CUPTI_API_VERSION) +
+        " and CUPTI driver version: " + std::to_string(libVersion) +
+        " are not compatible. Please set the environment variable "
+        " TRITON_CUPTI_INCLUDE_PATH and TRITON_CUPTI_LIB_PATH to resolve the "
+        "problem.");
   }
   CUpti_PCSamplingData pcSamplingData{
       /*size=*/sizeof(CUpti_PCSamplingData),
@@ -181,12 +160,11 @@ CUpti_PCSamplingData allocPCSamplingData(size_t collectNumPCs,
       /*rangeId=*/0,
       /*pPcData=*/
       static_cast<CUpti_PCSamplingPCData *>(
-          std::calloc(collectNumPCs, pcDataSize))};
+          std::calloc(collectNumPCs, sizeof(CUpti_PCSamplingPCData)))};
   for (size_t i = 0; i < collectNumPCs; ++i) {
     pcSamplingData.pPcData[i].stallReason =
         static_cast<CUpti_PCSamplingStallReason *>(std::calloc(
             numValidStallReasons, sizeof(CUpti_PCSamplingStallReason)));
-    pcSamplingData.pPcData[i].size = pcDataSize;
   }
   return pcSamplingData;
 }
