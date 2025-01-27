@@ -257,12 +257,35 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
   Value other = loadOp.getOther();
 
   ttg::MemDescType allocTy = cast<ttg::MemDescType>(alloc.getType());
-  SmallVector<Value> copyOffsets(allocTy.getRank(), zero);
-  Operation *copy = builder.clone(*loadOp);
 
-  auto [stage, cluster] = schedule[loadOp];
-  schedule.erase(loadOp);
-  schedule.insert(copy, stage, cluster);
+  auto sharedEncodingAttr =
+      cast<ttg::SharedEncodingAttr>(allocTy.getEncoding());
+  llvm::outs() << "Shared alloc: \n";
+  alloc.print(llvm::outs());
+  llvm::outs() << "\n";
+
+  bool emitAsyncCopy = false;
+
+  auto srcTy = dyn_cast<triton::gpu::TensorOrMemDesc>(src.getType());
+  // We can use AsyncCopy if we do not swizzle into smem
+  // TODO (alex) ensure it's 2D
+  if (sharedEncodingAttr.getPerPhase() == 1 &&
+      sharedEncodingAttr.getMaxPhase() == 1 &&
+      llvm::equal(sharedEncodingAttr.getOrder(),
+                  ttg::getOrder(srcTy.getEncoding()))) {
+    emitAsyncCopy = true;
+  }
+  llvm::outs() << "Emit async: " << emitAsyncCopy << "\n";
+
+  SmallVector<Value> copyOffsets(allocTy.getRank(), zero);
+
+  Operation *newLoadOp{};
+  if (!emitAsyncCopy) {
+    newLoadOp = builder.clone(*loadOp);
+    auto [stage, cluster] = schedule[loadOp];
+    schedule.erase(loadOp);
+    schedule.insert(newLoadOp, stage, cluster);
+  }
 
   // Extract part.
   SmallVector<Value> loadOffsets(allocTy.getRank(), zero);
@@ -274,6 +297,58 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
       allocTy.getEncoding(), sharedMemorySpace, /*mutableMemory=*/true);
   auto viewLoad =
       builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, loadOffsets);
+
+  if (emitAsyncCopy) {
+    auto srcTy = dyn_cast<triton::gpu::TensorOrMemDesc>(src.getType());
+    if (!srcTy) {
+      llvm::outs() << "INVALID SRC!\n";
+    }
+    // We need to ensure we read coalesced into LDS so we adjust the blocked to
+    // read coalesced for now
+
+    auto shape = subviewTy.getShape();
+    auto order = sharedEncodingAttr.getOrder();
+    // Aim to use wider loads
+    llvm::SmallVector<unsigned, 2> sizePerThread{1, 1};
+    sizePerThread[order[0]] =
+        32 / allocTy.getElementType().getIntOrFloatBitWidth();
+    llvm::SmallVector<unsigned, 2> threadsPerWarp{1, 1};
+    assert((shape[order[0]] % sizePerThread[0]) == 0);
+    threadsPerWarp[order[0]] = shape[order[0]] / sizePerThread[order[0]];
+    unsigned warpSize = 64;
+    threadsPerWarp[order[1]] =
+        std::max<unsigned>(1, warpSize / threadsPerWarp[order[0]]);
+
+    auto srcEncoding = srcTy.getEncoding();
+    auto newLayout = ttg::BlockedEncodingAttr::get(
+        loadOp->getContext(),
+        sizePerThread, //{1, 1},  // triton::gpu::getSizePerThread(srcEncoding),
+        threadsPerWarp, //{2, 32}, //
+                        // triton::gpu::getThreadsPerWarp(srcEncoding),
+        triton::gpu::getWarpsPerCTA(srcEncoding),
+        triton::gpu::getOrder(srcEncoding),
+        triton::gpu::getCTALayout(srcEncoding));
+    llvm::outs() << "New src encoding: ";
+    newLayout.printStripped(llvm::outs());
+    llvm::outs() << "\n";
+    RankedTensorType newArgType = RankedTensorType::get(
+        srcTy.getShape(), srcTy.getElementType(), newLayout);
+    llvm::outs() << "Source encoding: ";
+    srcTy.getEncoding().print(llvm::outs());
+    llvm::outs() << "\n";
+    auto cvt =
+        builder.create<ttg::ConvertLayoutOp>(loadOp.getLoc(), newArgType, src);
+
+    newLoadOp = builder.create<ttg::AsyncCopyGlobalToLocalOp>(
+        loadOp.getLoc(), cvt.getResult(), viewLoad, mask, other,
+        loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
+
+    auto [stage, cluster] = schedule[loadOp];
+    schedule.erase(loadOp);
+    schedule.insert(cvt, stage, cluster);
+    schedule.insert(newLoadOp, stage, cluster);
+  }
+
   // Clean up old local caches.
   SmallVector<ttg::LocalAllocOp> allocsToErase;
   for (Operation *user : loadOp->getUsers()) {
@@ -286,10 +361,15 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
     alloc.erase();
 
   // Prefetch load ahead of the dot stage if is used by the dot.
-  auto storeOp =
-      builder.create<ttg::LocalStoreOp>(loc, copy->getResult(0), viewLoad);
-  scheduleOp(viewLoad, SCHED_LOCAL_STORE);
-  scheduleOp(storeOp, SCHED_LOCAL_STORE);
+  Operation *storeOp;
+  if (emitAsyncCopy) {
+    scheduleOp(newLoadOp, SCHED_LOCAL_STORE);
+  } else {
+    storeOp = builder.create<ttg::LocalStoreOp>(loc, newLoadOp->getResult(0),
+                                                viewLoad);
+    scheduleOp(viewLoad, SCHED_LOCAL_STORE);
+    scheduleOp(storeOp, SCHED_LOCAL_STORE);
+  }
 
   // Create local load
   auto sharedLoad =
@@ -304,7 +384,11 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
   // instruction scheduling hints to correctly count the emitted `ds_write`
   // instructions for each GEMM tile.
   if (auto attr = loadOp->getAttr(triton::amdgpu::OpIdxAttr::getMnemonic())) {
-    storeOp->setAttr(triton::amdgpu::OpIdxAttr::getMnemonic(), attr);
+    if (emitAsyncCopy) {
+      newLoadOp->setAttr(triton::amdgpu::OpIdxAttr::getMnemonic(), attr);
+    } else {
+      storeOp->setAttr(triton::amdgpu::OpIdxAttr::getMnemonic(), attr);
+    }
   }
 
   loadOp->replaceAllUsesWith(ValueRange{result});

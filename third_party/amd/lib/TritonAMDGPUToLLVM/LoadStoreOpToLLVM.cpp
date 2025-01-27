@@ -466,18 +466,16 @@ struct AsyncLoadOpConversion
     }
 
     llvm::SmallSetVector<unsigned, 5> supportedLoadBits;
+    // TODO look up if we support it on mi200
     switch (targetInfo.getISAFamily()) {
     case mlir::triton::AMD::ISAFamily::CDNA3:
       supportedLoadBits.insert(8);
       supportedLoadBits.insert(16);
       supportedLoadBits.insert(32);
-      break;
-    case mlir::triton::AMD::ISAFamily::CDNA4:
-      supportedLoadBits.insert(8);
-      supportedLoadBits.insert(16);
-      supportedLoadBits.insert(32);
-      supportedLoadBits.insert(98);
-      supportedLoadBits.insert(128);
+      if (targetInfo.getGPUKind() == llvm::AMDGPU::GPUKind::GK_GFX950) {
+        supportedLoadBits.insert(98);
+        supportedLoadBits.insert(128);
+      }
       break;
     default:
       return emitError(loc, "Async copy not supported on target ISA");
@@ -499,6 +497,8 @@ struct AsyncLoadOpConversion
       LinearLayout sharedLayout = triton::gpu::toLinearLayout(
           shape, dstTy.getEncoding(), resElemTy.getIntOrFloatBitWidth());
       LinearLayout regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
+      llvm::outs() << "Reg to shared: \n"
+                   << regToSharedLayout.toString() << "\n";
 
       // We need to check if the lane basis is contigeous because
       // global.load.lds does not support per lane offset
