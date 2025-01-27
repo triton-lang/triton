@@ -438,7 +438,7 @@ static Value buildGCNInstruction(Location loc, RewriterBase &rewritter,
                                  ArrayRef<StringRef> constraints,
                                  ArrayRef<Value> vals, Type retType) {
   assert(constraints.size() == vals.size() + 1);
-  assert(vals.size() == 2 or vals.size() == 3);
+  assert(vals.size() == 2 || vals.size() == 3);
   GCNBuilder builder;
   GCNInstr &instr = *builder.create(instrName.str());
   GCNBuilder::Operand *out = builder.newOperand(constraints[0]);
@@ -468,7 +468,7 @@ static Value convertFp32ToBf16(Location loc,
 
   // This implementation is a faster version for fp32 to bf16 type conversion
   // It is from CK:
-  // https://github.com/cgmillette/composable_kernel/commit/24e75bef6aa5d9a0d852a3a56ad8f382f6192e1f#diff-66b831cfd94273975f794cd0a317e60c85457a7ace604602494a1257d176fc2eR156
+  // https://github.com/cgmillette/composable_kernel/commit/24e75bef6aa5
   // It uses less VGPR and less number of instructions compared to the
   // previous implementation
   SmallVector<StringRef> constraints0 = {"=s", "v", "v"};
