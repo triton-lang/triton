@@ -1964,9 +1964,30 @@ AMDMfmaEncodingAttr::getRepOrderForOperand(int opIdx) const {
 
 SmallVector<unsigned>
 AMDMfmaEncodingAttr::getThreadsPerWarpForOperand(int opIdx) const {
-  llvm::report_fatal_error(
-      "getThreadsPerWarpForOperand not implemented for AMDMfmaEncodingAttr");
-  return {};
+  auto rank = ::getOrder(*this).size();
+  SmallVector<unsigned> threads(rank, 1);
+  unsigned kThreads;
+  unsigned nonKThreads;
+  switch (getMDim()) {
+  case 32:
+    assert(getNDim() == 32);
+    kThreads = 2;
+    nonKThreads = 32;
+    break;
+  case 16:
+    assert(getNDim() == 16);
+    kThreads = 4;
+    nonKThreads = 16;
+    break;
+  default:
+    llvm::report_fatal_error(
+        "unexpected mfma shape encountered in getThreadsPerWarpForOperand");
+  }
+  int kDimIdx = opIdx == 0 ? rank - 1 : rank - 2;
+  int nonKDimIdx = opIdx == 0 ? rank - 2 : rank - 1;
+  threads[kDimIdx] = kThreads;
+  threads[nonKDimIdx] = nonKThreads;
+  return threads;
 }
 
 SmallVector<int64_t>
@@ -2032,9 +2053,30 @@ AMDWmmaEncodingAttr::getRepOrderForOperand(int opIdx) const {
 
 SmallVector<unsigned>
 AMDWmmaEncodingAttr::getThreadsPerWarpForOperand(int opIdx) const {
-  llvm::report_fatal_error("getThreadsPerWarpForOperand not implemented for "
-                           "AMDWmmaEncodingAttr");
-  return {};
+  auto rank = ::getOrder(*this).size();
+  SmallVector<unsigned> threads(rank, 1);
+  unsigned kThreads;
+  unsigned nonKThreads;
+  switch (getVersion()) {
+  case 1:
+    // kThreads * onKThreads != 32,
+    // because values in lanes (n, n + 16) duplicates
+    kThreads = 1;
+    nonKThreads = 16;
+    break;
+  case 2:
+    kThreads = 2;
+    nonKThreads = 16;
+    break;
+  default:
+    llvm::report_fatal_error(
+        "unsupported WMMA version in getThreadsPerWarpForOperand");
+  }
+  int kDimIdx = opIdx == 0 ? rank - 1 : rank - 2;
+  int nonKDimIdx = opIdx == 0 ? rank - 2 : rank - 1;
+  threads[kDimIdx] = kThreads;
+  threads[nonKDimIdx] = nonKThreads;
+  return threads;
 }
 
 SmallVector<unsigned> AMDWmmaEncodingAttr::getCTAsPerCGA() const {
