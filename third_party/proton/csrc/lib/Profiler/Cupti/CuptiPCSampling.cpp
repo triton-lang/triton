@@ -130,18 +130,47 @@ size_t matchStallReasonsToIndices(
 #define CUPTI_CUDA12_4_VERSION 22
 #define CUPTI_CUDA12_4_PC_DATA_PADDING_SIZE sizeof(uint32_t)
 
+typedef struct PACKED_ALIGNMENT {
+  size_t size;
+  uint64_t cubinCrc;
+  uint64_t pcOffset;
+  uint32_t functionIndex;
+  uint32_t pad;
+  char *functionName;
+  size_t stallReasonCount;
+  CUpti_PCSamplingStallReason *stallReason;
+  uint32_t correlationId;
+} CUpti_PCSamplingPCData_WithCorrelationId;
+
+typedef struct PACKED_ALIGNMENT {
+  size_t size;
+  uint64_t cubinCrc;
+  uint64_t pcOffset;
+  uint32_t functionIndex;
+  uint32_t pad;
+  char *functionName;
+  size_t stallReasonCount;
+  CUpti_PCSamplingStallReason *stallReason;
+} CUpti_PCSamplingPCData_WithoutCorrelationId;
+
 CUpti_PCSamplingData allocPCSamplingData(size_t collectNumPCs,
                                          size_t numValidStallReasons) {
   uint32_t libVersion = 0;
   cupti::getVersion<true>(&libVersion);
   size_t pcDataSize = sizeof(CUpti_PCSamplingPCData);
-  // Check cupti api version < 12.4 but cupti header version >= 12.4
+  // 1: Check cupti lib version < 12.4 but cupti header version >= 12.4
   // If so, we subtract 4 bytes from the size of CUpti_PCSamplingPCData
   // because it introduces a new field (i.e., correlationId) at the end of the
   // struct, which is not compatible with the previous versions.
+  // 2: Check cupti lib version >= 12.4 but cupti header version < 12.4
+  // If so, we add 4 bytes to the size of CUpti_PCSamplingPCData
   if (libVersion < CUPTI_CUDA12_4_VERSION &&
-      CUPTI_API_VERSION >= CUPTI_CUDA12_4_VERSION)
-    pcDataSize -= CUPTI_CUDA12_4_PC_DATA_PADDING_SIZE;
+      pcDataSize >= sizeof(CUpti_PCSamplingPCData_WithCorrelationId)) {
+    pcDataSize = sizeof(CUpti_PCSamplingPCData_WithoutCorrelationId);
+  } else if (libVersion >= CUPTI_CUDA12_4_VERSION &&
+             pcDataSize < sizeof(CUpti_PCSamplingPCData_WithCorrelationId)) {
+    pcDataSize = sizeof(CUpti_PCSamplingPCData_WithCorrelationId);
+  }
   CUpti_PCSamplingData pcSamplingData{
       /*size=*/pcDataSize,
       /*collectNumPcs=*/collectNumPCs,
