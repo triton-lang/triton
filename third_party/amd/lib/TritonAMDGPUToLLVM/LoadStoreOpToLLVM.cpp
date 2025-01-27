@@ -581,7 +581,8 @@ struct BufferAtomicRMWOpConversion
     switch (memScope) {
     // System scope is not supported yet
     case MemSyncScope::SYSTEM:
-      return failure();
+      return rewriter.notifyMatchFailure(
+          op, "System memory scope is not supported for Buffer Atomic RMW");
     case MemSyncScope::GPU:
       scopeStr = "agent";
       break;
@@ -589,7 +590,8 @@ struct BufferAtomicRMWOpConversion
       scopeStr = "workgroup";
       break;
     default:
-      return failure();
+      return rewriter.notifyMatchFailure(
+          op, "Unsupported memory scope for Buffer Atomic RMW");
     }
 
     StringAttr scope = mlir::StringAttr::get(loc.getContext(), scopeStr);
@@ -815,7 +817,7 @@ struct AtomicCASOpConversion
     auto scope = op.getScope();
     auto scopeStr = getAMDGPUMemScopeStr(scope);
     if (!scopeStr)
-      return failure();
+      return rewriter.notifyMatchFailure(op, "Unknown AMDGPU memory scope");
 
     // deal with tensor or scalar
     auto valueTy = op.getResult().getType();
@@ -1143,7 +1145,7 @@ struct AtomicRMWOpConversion
 
     auto scopeStr = getAMDGPUMemScopeStr(scope);
     if (!scopeStr)
-      return failure();
+      return rewriter.notifyMatchFailure(op, "Unknown AMDGPU memory scope");
 
     auto vecTy = vec_ty(valueElemTy, vec);
     auto retType = vec == 1 ? valueElemTy : vecTy;
