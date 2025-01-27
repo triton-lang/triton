@@ -442,7 +442,7 @@ def _test_binary(dtype_x, dtype_y, expr, numpy_expr=None, mode_x='real', mode_y=
         # triton result
         x_tri = x if x_is_scalar else to_triton(x, device=device, dst_type=dtype_x)
         y_tri = y if y_is_scalar else to_triton(y, device=device, dst_type=dtype_y)
-        z_tri = to_triton(np.empty(SIZE, dtype=z_ref.dtype), device=device)
+        z_tri = to_triton(np.empty(SIZE, dtype=str(z_ref.dtype)), device=device)
         kernel_fn[(1, )](z_tri, x_tri, y_tri, SIZE=SIZE, num_warps=4, num_ctas=num_ctas)
         err_msg = f"{expr}, {kernel_fn.__name__}"
         np.testing.assert_allclose(z_ref, to_numpy(z_tri), err_msg=err_msg, atol=7e-3, rtol=0.01)

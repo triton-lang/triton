@@ -110,17 +110,11 @@ def to_triton(x: np.ndarray, device, dst_type=None) -> Union[TensorWrapper, torc
           For example: x is of type `float32`, dst_type is `bfloat16`.
           If dst_type is None, we infer dst_type from x.
     '''
-    t = x.dtype.name
-    if t in uint_dtypes:
-        signed_type_name = t.lstrip('u')  # e.g. "uint16" -> "int16"
-        x_signed = x.astype(getattr(np, signed_type_name))
-        return reinterpret(torch.tensor(x_signed, device=device), getattr(tl, t))
-    else:
-        if dst_type and 'float8' in dst_type:
-            return reinterpret(torch.tensor(x, device=device), getattr(tl, dst_type))
-        if t == 'float32' and dst_type == 'bfloat16':
-            return torch.tensor(x, device=device).bfloat16()
-        return torch.tensor(x, device=device)
+    if dst_type and 'float8' in dst_type:
+        return reinterpret(torch.tensor(x, device=device), getattr(tl, dst_type))
+    if x.dtype.name == 'float32' and dst_type == 'bfloat16':
+        return torch.tensor(x, device=device).bfloat16()
+    return torch.tensor(x, device=device)
 
 
 def str_to_triton_dtype(x: str) -> tl.dtype:
