@@ -433,17 +433,15 @@ static Value convertBf16ToFp32(Location loc,
   return bitcast(shifted, f32_ty);
 }
 
-static Value buildGCNInstruction(Location loc,
-                                 ConversionPatternRewriter &rewritter,
-                                 const std::string &instr_name,
-                                 const SmallVector<std::string> &constraints,
-                                 const SmallVector<Value> &vals,
-                                 Type ret_type) {
+static Value buildGCNInstruction(Location loc, RewriterBase &rewritter,
+                                 StringRef instrName,
+                                 ArrayRef<StringRef> constraints,
+                                 ArrayRef<Value> vals, Type retType) {
   assert(constraints.size() == vals.size() + 1);
   assert(vals.size() == 2 or vals.size() == 3);
   GCNBuilder builder;
-  auto &instr = *builder.create(instr_name);
-  auto out = builder.newOperand(constraints[0]);
+  GCNInstr &instr = *builder.create(instrName.str());
+  GCNBuilder::Operand *out = builder.newOperand(constraints[0]);
   SmallVector<GCNBuilder::Operand *> operands;
   for (int i = 0; i < vals.size(); ++i) {
     operands.push_back(builder.newOperand(vals[i], constraints[i + 1]));
@@ -455,7 +453,7 @@ static Value buildGCNInstruction(Location loc,
     instr(out, operands[0], operands[1], operands[2]);
   }
 
-  return builder.launch(rewritter, loc, ret_type, false);
+  return builder.launch(rewritter, loc, retType, false);
 }
 
 static Value convertFp32ToBf16(Location loc,
@@ -470,35 +468,35 @@ static Value convertFp32ToBf16(Location loc,
 
   // This implementation is a faster version for fp32 to bf16 type conversion
   // It is from CK:
-  // https://github.com/ROCm/composable_kernel/blob/develop/include/ck_tile/core/numeric/bfloat16.hpp#L156-L182
+  // https://github.com/cgmillette/composable_kernel/commit/24e75bef6aa5d9a0d852a3a56ad8f382f6192e1f#diff-66b831cfd94273975f794cd0a317e60c85457a7ace604602494a1257d176fc2eR156
   // It uses less VGPR and less number of instructions compared to the
   // previous implementation
-  SmallVector<std::string> constraints0 = {"=s", "v", "v"};
+  SmallVector<StringRef> constraints0 = {"=s", "v", "v"};
   SmallVector<Value> vals0 = {v, v};
-  auto is_nan_ret = buildGCNInstruction(loc, rewriter, "v_cmp_u_f32",
-                                        constraints0, vals0, i64_ty);
+  Value isNan = buildGCNInstruction(loc, rewriter, "v_cmp_u_f32", constraints0,
+                                    vals0, i64_ty);
 
-  auto val_16 = i32_val(16);
-  auto val_1 = i32_val(1);
-  SmallVector<std::string> constraints1 = {"=v", "v", "v", "v"};
-  SmallVector<Value> vals1 = {v, val_16, val_1};
-  auto tmp_ret = buildGCNInstruction(loc, rewriter, "v_bfe_u32", constraints1,
-                                     vals1, i32_ty);
+  Value v16 = i32_val(16);
+  Value v1 = i32_val(1);
+  SmallVector<StringRef> constraints1 = {"=v", "v", "v", "v"};
+  SmallVector<Value> vals1 = {v, v16, v1};
+  Value tmp = buildGCNInstruction(loc, rewriter, "v_bfe_u32", constraints1,
+                                  vals1, i32_ty);
 
-  SmallVector<std::string> constraints2 = {"=v", "v", "v", "v"};
-  auto val_7FFF = i32_val(0x7FFF);
-  SmallVector<Value> vals2 = {v, tmp_ret, val_7FFF};
-  auto tmp_ret1 = buildGCNInstruction(loc, rewriter, "v_add3_u32", constraints2,
-                                      vals2, i32_ty);
+  SmallVector<StringRef> constraints2 = {"=v", "v", "v", "v"};
+  Value v7FFF = i32_val(0x7FFF);
+  SmallVector<Value> vals2 = {v, tmp, v7FFF};
+  Value tmp1 = buildGCNInstruction(loc, rewriter, "v_add3_u32", constraints2,
+                                   vals2, i32_ty);
 
-  SmallVector<std::string> constraints3 = {"=v", "v", "v", "s"};
-  auto val_nan = i32_val(0x7FFF0000);
-  SmallVector<Value> vals3 = {tmp_ret1, val_nan, is_nan_ret};
-  auto cndmask_ret = buildGCNInstruction(loc, rewriter, "v_cndmask_b32",
-                                         constraints3, vals3, i32_ty);
+  SmallVector<StringRef> constraints3 = {"=v", "v", "v", "s"};
+  Value vNan = i32_val(0x7FFF0000);
+  SmallVector<Value> vals3 = {tmp1, vNan, isNan};
+  Value cndMask = buildGCNInstruction(loc, rewriter, "v_cndmask_b32",
+                                      constraints3, vals3, i32_ty);
 
-  auto shifted = lshr(i32_ty, cndmask_ret, val_16);
-  auto truncated = trunc(i16_ty, shifted);
+  Value shifted = lshr(i32_ty, cndMask, v16);
+  Value truncated = trunc(i16_ty, shifted);
   return bitcast(truncated, bf16_ty);
 }
 
