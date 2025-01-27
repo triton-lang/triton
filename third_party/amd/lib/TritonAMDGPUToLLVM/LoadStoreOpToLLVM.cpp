@@ -421,10 +421,6 @@ struct AsyncLoadOpConversion
     Value res = op.getResult();
     Value mask = op.getMask();
     Value other = op.getOther();
-    if (other) {
-      return emitError(loc, "ttg.AsyncLoad does not support other values use "
-                            "tt.load/store instead");
-    }
 
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getResult().getType();

@@ -314,8 +314,9 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
         32 / allocTy.getElementType().getIntOrFloatBitWidth();
     llvm::SmallVector<unsigned, 2> threadsPerWarp{1, 1};
     assert((shape[order[0]] % sizePerThread[0]) == 0);
-    threadsPerWarp[order[0]] = shape[order[0]] / sizePerThread[order[0]];
     unsigned warpSize = 64;
+    threadsPerWarp[order[0]] =
+        std::min<unsigned>(warpSize, shape[order[0]] / sizePerThread[order[0]]);
     threadsPerWarp[order[1]] =
         std::max<unsigned>(1, warpSize / threadsPerWarp[order[0]]);
 
@@ -336,16 +337,25 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
     llvm::outs() << "Source encoding: ";
     srcTy.getEncoding().print(llvm::outs());
     llvm::outs() << "\n";
-    auto cvt =
+    auto cvtSrc =
         builder.create<ttg::ConvertLayoutOp>(loadOp.getLoc(), newArgType, src);
 
+    auto maskTy =
+        dyn_cast<triton::gpu::TensorOrMemDesc>(loadOp.getMask().getType());
+    RankedTensorType newMaskTy = RankedTensorType::get(
+        maskTy.getShape(), maskTy.getElementType(), newLayout);
+    RankedTensorType newMaskType = RankedTensorType::get(
+        allocTy.getShape(), srcTy.getElementType(), newLayout);
+    auto cvtMask = builder.create<ttg::ConvertLayoutOp>(
+        loadOp->getLoc(), newMaskTy, loadOp.getMask());
+
     newLoadOp = builder.create<ttg::AsyncCopyGlobalToLocalOp>(
-        loadOp.getLoc(), cvt.getResult(), viewLoad, mask, other,
+        loadOp.getLoc(), cvtSrc.getResult(), viewLoad, cvtMask, other,
         loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
 
     auto [stage, cluster] = schedule[loadOp];
     schedule.erase(loadOp);
-    schedule.insert(cvt, stage, cluster);
+    schedule.insert(cvtSrc, stage, cluster);
     schedule.insert(newLoadOp, stage, cluster);
   }
 
