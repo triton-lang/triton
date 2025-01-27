@@ -292,7 +292,17 @@ public:
       auto eltType = dotOp.getA().getType().getElementType();
       // In MMAV3 transpose is only supported for f16 and bf16.
       bool allowTranspose = eltType.isF16() || eltType.isBF16();
-      a = getSharedMemoryMMAOperand(a, rewriter, 0, allowTranspose);
+      // a = getSharedMemoryMMAOperand(a, rewriter, 0, allowTranspose);
+      // convert A operand
+      int minBitwidth =
+          std::min(computeOrigBitWidth(a), computeOrigBitWidth(b));
+      Type minType = rewriter.getIntegerType(minBitwidth);
+      auto newAEncoding = DotOperandEncodingAttr::get(
+          oldAType.getContext(), 0, newRetType.getEncoding(),
+          minBitwidth > 0 ? minType : oldAType.getElementType());
+      auto newAType = RankedTensorType::get(
+          oldAType.getShape(), oldAType.getElementType(), newAEncoding);
+      a = rewriter.create<ConvertLayoutOp>(a.getLoc(), newAType, a);
       b = getSharedMemoryMMAOperand(b, rewriter, 1, allowTranspose);
       newDot = rewriter.create<triton::nvidia_gpu::WarpGroupDotOp>(
           dotOp.getLoc(), newRetType, a, b, newAcc, nullptr,

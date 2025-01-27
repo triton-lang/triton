@@ -1032,12 +1032,18 @@ MMALoadType getMMALoadType(Operation *loadOp) {
   if (!loadOp->hasOneUse())
     return MMALoadType::DoNotPipeline;
 
-  auto user = *loadOp->getUsers().begin();
-  while (isa<triton::TransOp>(user)) {
-    if (!user->hasOneUse())
-      return MMALoadType::DoNotPipeline;
-    user = *user->getUsers().begin();
-  }
+  auto goThroughViews = [](Operation *op) -> Operation * {
+    while (isa<triton::TransOp, triton::ReshapeOp>(op)) {
+      if (!op->hasOneUse())
+        return nullptr;
+      op = *op->getUsers().begin();
+    }
+    return op;
+  };
+
+  auto user = goThroughViews(*loadOp->getUsers().begin());
+  if (!user)
+    return MMALoadType::DoNotPipeline;
 
   if (auto alloc = dyn_cast<ttg::LocalAllocOp>(user)) {
     auto sharedEnc =
@@ -1069,7 +1075,8 @@ MMALoadType getMMALoadType(Operation *loadOp) {
 
     if (!cvt->hasOneUse())
       return MMALoadType::DoNotPipeline;
-    if (auto upcastOp = dyn_cast<ttg::UpcastMXFPOp>(*cvt->getUsers().begin())) {
+    if (auto upcastOp = dyn_cast<ttg::UpcastMXFPOp>(
+            goThroughViews(*cvt->getUsers().begin()))) {
       return MMALoadType::Registers;
     }
 
