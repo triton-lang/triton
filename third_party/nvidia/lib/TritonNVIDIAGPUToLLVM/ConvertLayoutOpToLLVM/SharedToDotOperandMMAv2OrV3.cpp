@@ -103,17 +103,18 @@ private:
 
 SmallVector<Value>
 MMA16816SmemLoader::computeLdmatrixMatOffs(Value lane, Value cSwizzleOffset) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value warpB = multiDimWarpId[0];
   Value warpId = kOrder == 2 ? multiDimWarpId[1] : multiDimWarpId[2];
   // 4x4 matrices
-  Value rowInMat = urem(lane, i32_val(8)); // row in the 8x8 matrix
-  Value matIndex =
-      udiv(lane, i32_val(8)); // linear index of the matrix in the 2x2 matrices
+  Value rowInMat = b.urem(lane, b.i32_val(8)); // row in the 8x8 matrix
+  Value matIndex = b.udiv(
+      lane, b.i32_val(8)); // linear index of the matrix in the 2x2 matrices
 
   // Decompose matIndex => s_0, s_1, that is the coordinate in 2x2 matrices in a
   // warp
-  Value matIndexY = urem(matIndex, i32_val(2));
-  Value matIndexX = udiv(matIndex, i32_val(2));
+  Value matIndexY = b.urem(matIndex, b.i32_val(2));
+  Value matIndexX = b.udiv(matIndex, b.i32_val(2));
 
   // We use different orders for a and b for better performance.
   Value kMatArr =
@@ -144,13 +145,13 @@ MMA16816SmemLoader::computeLdmatrixMatOffs(Value lane, Value cSwizzleOffset) {
   // access will be out of bound. In the future we should change this case to
   // ldmatrix.x2
   if (kOrder == 1 && nPerWarp == 8) {
-    matOff[nonKOrder] = mul(warpId, i32_val(warpMatOffset));
+    matOff[nonKOrder] = b.mul(warpId, b.i32_val(warpMatOffset));
   } else {
-    matOff[nonKOrder] = add(
-        mul(warpId, i32_val(warpMatOffset)), // warp offset (kOrder=2)
-        mul(nkMatArr,
-            i32_val(
-                inWarpMatOffset))); // matrix offset inside a warp (kOrder=2)
+    matOff[nonKOrder] = b.add(
+        b.mul(warpId, b.i32_val(warpMatOffset)), // warp offset (kOrder=2)
+        b.mul(nkMatArr,
+              b.i32_val(
+                  inWarpMatOffset))); // matrix offset inside a warp (kOrder=2)
   }
   matOff[kOrder] = kMatArr;
 
@@ -159,39 +160,41 @@ MMA16816SmemLoader::computeLdmatrixMatOffs(Value lane, Value cSwizzleOffset) {
   Value stridedMatIndex = matOff[order[1]];
   // Add the offset of the slice
   Value contiguousSliceMatOffset =
-      udiv(cSwizzleOffset, i32_val(contiguousMatShape));
+      b.udiv(cSwizzleOffset, b.i32_val(contiguousMatShape));
 
   SmallVector<Value> offs(numPtrs);
-  Value phase = urem(udiv(rowInMat, i32_val(perPhase)), i32_val(maxPhase));
+  Value phase =
+      b.urem(b.udiv(rowInMat, b.i32_val(perPhase)), b.i32_val(maxPhase));
   // To prevent out-of-bound access of B when warpsPerTile * 16 > tile_size.
   // In such a case, we need to wrap around the offset of B.
   // |0 1 2 3 0 1 2 3| -> | 0(0) 1(1) 2(2) 3(3) |
   // |0 1 2 3 0 1 2 3|    | 0(0) 1(1) 2(2) 3(3) |
   //          ~~~~~~~ out-of-bound access
 
-  Value rowOffset =
-      urem(add(rowInMat, mul(stridedMatIndex, i32_val(stridedMatShape))),
-           i32_val(tileShape[order[1]]));
+  Value rowOffset = b.urem(
+      b.add(rowInMat, b.mul(stridedMatIndex, b.i32_val(stridedMatShape))),
+      b.i32_val(tileShape[order[1]]));
   auto contiguousTileNumMats = tileShape[order[0]] / matShape[order[0]];
 
   for (int i = 0; i < numPtrs; ++i) {
     Value contiguousIndex =
-        add(contiguousMatIndex, i32_val(i * contiguousLoadMatOffset));
+        b.add(contiguousMatIndex, b.i32_val(i * contiguousLoadMatOffset));
     if (warpsPerCTA[order[0]] > contiguousTileNumMats ||
         contiguousTileNumMats % warpsPerCTA[order[0]] != 0)
-      contiguousIndex = urem(contiguousIndex, i32_val(contiguousTileNumMats));
-    contiguousIndex = add(contiguousIndex, contiguousSliceMatOffset);
-    Value contiguousIndexSwizzled = xor_(contiguousIndex, phase);
+      contiguousIndex =
+          b.urem(contiguousIndex, b.i32_val(contiguousTileNumMats));
+    contiguousIndex = b.add(contiguousIndex, contiguousSliceMatOffset);
+    Value contiguousIndexSwizzled = b.xor_(contiguousIndex, phase);
     if (tileShape[0] != 1) {
       Value batchOffset =
-          mul(warpB, i32_val(tileShape[order[0]] * tileShape[order[1]]));
-      offs[i] =
-          add(batchOffset,
-              add(mul(contiguousIndexSwizzled, i32_val(contiguousMatShape)),
-                  mul(rowOffset, stridedSmemOffset)));
+          b.mul(warpB, b.i32_val(tileShape[order[0]] * tileShape[order[1]]));
+      offs[i] = b.add(batchOffset, b.add(b.mul(contiguousIndexSwizzled,
+                                               b.i32_val(contiguousMatShape)),
+                                         b.mul(rowOffset, stridedSmemOffset)));
     } else {
-      offs[i] = add(mul(contiguousIndexSwizzled, i32_val(contiguousMatShape)),
-                    mul(rowOffset, stridedSmemOffset));
+      offs[i] =
+          b.add(b.mul(contiguousIndexSwizzled, b.i32_val(contiguousMatShape)),
+                b.mul(rowOffset, stridedSmemOffset));
     }
   }
 
@@ -224,6 +227,7 @@ MMA16816SmemLoader::computeLdmatrixMatOffs(Value lane, Value cSwizzleOffset) {
 
 SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value lane,
                                                          Value cSwizzleOffset) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value warpB = multiDimWarpId[0];
   Value warpOff = kOrder == 2 ? multiDimWarpId[1] : multiDimWarpId[2];
 
@@ -236,40 +240,44 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value lane,
   int quadHeight = laneHeight;
 
   // outer index base
-  Value iBase = udiv(lane, i32_val(laneWidth));
+  Value iBase = b.udiv(lane, b.i32_val(laneWidth));
 
   for (int rep = 0; rep < numPtrs / (2 * kWidth); ++rep)
     for (int quadId = 0; quadId < 2; ++quadId)
       for (int elemId = 0; elemId < kWidth; ++elemId) {
         // inner index base
-        Value jBase = mul(urem(lane, i32_val(laneWidth)), i32_val(kWidth));
-        jBase = add(jBase, i32_val(elemId));
+        Value jBase =
+            b.mul(b.urem(lane, b.i32_val(laneWidth)), b.i32_val(kWidth));
+        jBase = b.add(jBase, b.i32_val(elemId));
         // inner index offset
-        Value jOff = i32_val(0);
+        Value jOff = b.i32_val(0);
         if (!needTrans) {
-          jOff = add(jOff, i32_val(quadId));
-          jOff = add(jOff, i32_val(rep * contiguousLoadMatOffset));
+          jOff = b.add(jOff, b.i32_val(quadId));
+          jOff = b.add(jOff, b.i32_val(rep * contiguousLoadMatOffset));
         }
         // outer index offset
-        Value iOff = mul(warpOff, i32_val(warpMatOffset));
+        Value iOff = b.mul(warpOff, b.i32_val(warpMatOffset));
         if (needTrans) {
           int pStride = kOrder == 2 ? 1 : 2;
-          iOff = add(iOff, i32_val(quadId * inWarpMatOffset));
-          iOff = add(iOff, i32_val(rep * contiguousLoadMatOffset * pStride));
+          iOff = b.add(iOff, b.i32_val(quadId * inWarpMatOffset));
+          iOff =
+              b.add(iOff, b.i32_val(rep * contiguousLoadMatOffset * pStride));
         }
         // swizzle
         if (!needTrans) {
-          Value phase = urem(udiv(iBase, i32_val(perPhase)), i32_val(maxPhase));
-          jOff = add(jOff, udiv(cSwizzleOffset, i32_val(quadWidth)));
-          jOff = xor_(jOff, phase);
+          Value phase =
+              b.urem(b.udiv(iBase, b.i32_val(perPhase)), b.i32_val(maxPhase));
+          jOff = b.add(jOff, b.udiv(cSwizzleOffset, b.i32_val(quadWidth)));
+          jOff = b.xor_(jOff, phase);
         } else {
-          Value phase = urem(udiv(jBase, i32_val(perPhase)), i32_val(maxPhase));
-          iOff = add(iOff, udiv(cSwizzleOffset, i32_val(quadHeight)));
-          iOff = xor_(iOff, phase);
+          Value phase =
+              b.urem(b.udiv(jBase, b.i32_val(perPhase)), b.i32_val(maxPhase));
+          iOff = b.add(iOff, b.udiv(cSwizzleOffset, b.i32_val(quadHeight)));
+          iOff = b.xor_(iOff, phase);
         }
         // To prevent out-of-bound access when tile is too small.
-        Value i = add(iBase, mul(iOff, i32_val(quadHeight)));
-        Value j = add(jBase, mul(jOff, i32_val(quadWidth)));
+        Value i = b.add(iBase, b.mul(iOff, b.i32_val(quadHeight)));
+        Value j = b.add(jBase, b.mul(jOff, b.i32_val(quadWidth)));
         // Compute id of this ptr
         int idx = rep * 2 * kWidth;
         if (needTrans) {
@@ -282,14 +290,14 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value lane,
         }
 
         if (needTrans) {
-          offs[idx] = add(i, mul(j, stridedSmemOffset));
+          offs[idx] = b.add(i, b.mul(j, stridedSmemOffset));
         } else {
-          offs[idx] = add(mul(i, stridedSmemOffset), j);
+          offs[idx] = b.add(b.mul(i, stridedSmemOffset), j);
         }
         if (tileShape[0] != 1) {
-          Value batchOffset =
-              mul(warpB, i32_val(tileShape[order[0]] * tileShape[order[1]]));
-          offs[idx] = add(batchOffset, offs[idx]);
+          Value batchOffset = b.mul(
+              warpB, b.i32_val(tileShape[order[0]] * tileShape[order[1]]));
+          offs[idx] = b.add(batchOffset, offs[idx]);
         }
       }
 
@@ -299,6 +307,7 @@ SmallVector<Value> MMA16816SmemLoader::computeLdsMatOffs(Value lane,
 std::tuple<Value, Value, Value, Value>
 MMA16816SmemLoader::loadX4(int batch, int mat0, int mat1, ArrayRef<Value> ptrs,
                            Type matTy, Type shemTy) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   assert(mat0 % 2 == 0 && mat1 % 2 == 0 && "smem matrix load must be aligned");
   int matIdx[3] = {0, mat0, mat1};
 
@@ -334,18 +343,19 @@ MMA16816SmemLoader::loadX4(int batch, int mat0, int mat1, ArrayRef<Value> ptrs,
   }
 
   if (canUseLdmatrix) {
-    Value stridedOffset =
-        mul(i32_val(matIdx[order[1]] * stridedLoadMatOffset * stridedMatShape),
-            stridedSmemOffset);
+    Value stridedOffset = b.mul(
+        b.i32_val(matIdx[order[1]] * stridedLoadMatOffset * stridedMatShape),
+        stridedSmemOffset);
     if (batch != 0)
-      stridedOffset = add(
-          stridedOffset, mul(i32_val(batch * warpsPerCTA[0]), smemBatchOffset));
-    Value readPtr = gep(ptr_ty(ctx, 3), shemTy, ptr, stridedOffset);
+      stridedOffset =
+          b.add(stridedOffset,
+                b.mul(b.i32_val(batch * warpsPerCTA[0]), smemBatchOffset));
+    Value readPtr = b.gep(ptr_ty(ctx, 3), shemTy, ptr, stridedOffset);
     auto ldMatrixOp =
         rewriter.create<nvgpu::LoadMatrixOp>(loc, resTy, readPtr, needTrans);
     auto resV4 = ldMatrixOp.getResult();
-    return {extract_val(elemTy, resV4, 0), extract_val(elemTy, resV4, 1),
-            extract_val(elemTy, resV4, 2), extract_val(elemTy, resV4, 3)};
+    return {b.extract_val(elemTy, resV4, 0), b.extract_val(elemTy, resV4, 1),
+            b.extract_val(elemTy, resV4, 2), b.extract_val(elemTy, resV4, 3)};
   } else {
     // base pointers
     // ptrs[k][...] holds `vec` pointers each for (quadK == k)
@@ -362,11 +372,11 @@ MMA16816SmemLoader::loadX4(int batch, int mat0, int mat1, ArrayRef<Value> ptrs,
                                   : stridedLoadMatOffset * stridedMatShape;
     else
       _i1 += (kOrder == 2 ? 1 : stridedLoadMatOffset) * stridedMatShape;
-    Value i0 = mul(i32_val(_i0), stridedSmemOffset);
-    Value i1 = mul(i32_val(_i1), stridedSmemOffset);
+    Value i0 = b.mul(b.i32_val(_i0), stridedSmemOffset);
+    Value i1 = b.mul(b.i32_val(_i1), stridedSmemOffset);
     if (batch != 0) {
-      i0 = add(i0, mul(i32_val(batch * warpsPerCTA[0]), smemBatchOffset));
-      i1 = add(i1, mul(i32_val(batch * warpsPerCTA[0]), smemBatchOffset));
+      i0 = b.add(i0, b.mul(b.i32_val(batch * warpsPerCTA[0]), smemBatchOffset));
+      i1 = b.add(i1, b.mul(b.i32_val(batch * warpsPerCTA[0]), smemBatchOffset));
     }
     // ii[m] holds the offset for (quadM == m)
     std::array<Value, 2> ii = {i0, i1};
@@ -377,7 +387,7 @@ MMA16816SmemLoader::loadX4(int batch, int mat0, int mat1, ArrayRef<Value> ptrs,
     // i iterates the 2x2 quads, m-first
     for (int i = 0; i < 4; ++i)
       for (int j = 0; j < vecWidth; ++j) {
-        vptrs[i][j] = gep(ptr_ty(ctx, 3), shemTy, ptrs[i / 2][j], ii[i % 2]);
+        vptrs[i][j] = b.gep(ptr_ty(ctx, 3), shemTy, ptrs[i / 2][j], ii[i % 2]);
       }
     // row + trans and col + no-trans are equivalent
     bool isActualTrans =
@@ -392,20 +402,20 @@ MMA16816SmemLoader::loadX4(int batch, int mat0, int mat1, ArrayRef<Value> ptrs,
     // Hopper may not contain 32b contiguously along k-dimension
     int kBits = isHopper ? (8 * elemBytes * kWidth) : 32;
     int vecSize = kBits / canonBits;
-    retElems.fill(undef(vec_ty(canonInt, vecSize)));
+    retElems.fill(b.undef(vec_ty(canonInt, vecSize)));
     for (int r = 0; r < 2; ++r) {
       for (int em = 0; em < 2 * vecWidth; em += inc) {
         int e = em % vecWidth;
         int m = em / vecWidth;
         int idx = m * 2 + r;
-        Value ptr = bitcast(vptrs[idx][e], ptr_ty(ctx, 3));
-        Value val = load(packedTy, ptr);
-        Value canonval = bitcast(val, vec_ty(canonInt, canonWidth));
+        Value ptr = b.bitcast(vptrs[idx][e], ptr_ty(ctx, 3));
+        Value val = b.load(packedTy, ptr);
+        Value canonval = b.bitcast(val, vec_ty(canonInt, canonWidth));
         for (int w = 0; w < canonWidth; ++w) {
           int ridx = idx + w * kWidth / vecWidth;
-          retElems[ridx] =
-              insert_element(retElems[ridx],
-                             extract_element(canonval, i32_val(w)), i32_val(e));
+          retElems[ridx] = b.insert_element(
+              retElems[ridx], b.extract_element(canonval, b.i32_val(w)),
+              b.i32_val(e));
         }
       }
     }
@@ -414,8 +424,8 @@ MMA16816SmemLoader::loadX4(int batch, int mat0, int mat1, ArrayRef<Value> ptrs,
 
     auto iTy = isHopper ? int_ty(kBits) : i32_ty;
 
-    return {bitcast(retElems[0], iTy), bitcast(retElems[1], iTy),
-            bitcast(retElems[2], iTy), bitcast(retElems[3], iTy)};
+    return {b.bitcast(retElems[0], iTy), b.bitcast(retElems[1], iTy),
+            b.bitcast(retElems[2], iTy), b.bitcast(retElems[3], iTy)};
   }
 }
 
@@ -515,6 +525,7 @@ Value composeValuesToDotOperandLayoutStruct(
     const LLVMTypeConverter *typeConverter, Location loc,
     ConversionPatternRewriter &rewriter, Type eltTy, int kWidth, bool isHopper,
     bool isA) {
+  auto tb = TritonLLVMOpBuilder(loc, rewriter);
   auto bitwidth = eltTy.getIntOrFloatBitWidth();
   assert(32 >= bitwidth && "only support 32-bit or less");
   auto numElemsPerVec = isHopper ? kWidth : 32 / bitwidth;
@@ -534,9 +545,9 @@ Value composeValuesToDotOperandLayoutStruct(
   auto unpackVec = [&](int b, int m, int k) {
     for (int kIter = 0; kIter < kIters; ++kIter) {
       auto val = vals.at({b, m, (k + kIter) % kSize});
-      auto vec = bitcast(val, vecTy);
+      auto vec = tb.bitcast(val, vecTy);
       for (auto i = 0; i < numElemsPerVec; ++i) {
-        elems.push_back(extract_element(eltTy, vec, i32_val(i)));
+        elems.push_back(tb.extract_element(eltTy, vec, tb.i32_val(i)));
       }
     }
   };
@@ -577,6 +588,7 @@ getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
                 Value lane, ValueTable &vals, bool isA,
                 const LLVMTypeConverter *typeConverter,
                 ConversionPatternRewriter &rewriter, Location loc) {
+  auto tb = TritonLLVMOpBuilder(loc, rewriter);
   auto shapePerCTA = getShapePerCTA(descTy);
   Type eltTy = descTy.getElementType();
   // We assumes that the input operand of Dot should be from shared layout.
@@ -594,7 +606,7 @@ getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
   int nPerWarp =
       std::max<int>(shapePerCTA[2] / mmaLayout.getWarpsPerCTA()[2], 8);
   // (a, b) is the coordinate.
-  auto load = [=, &rewriter, &vals](int batch, int a, int b) {
+  auto load = [=, &rewriter, &vals, &tb](int batch, int a, int b) {
     MMA16816SmemLoader loader(
         nPerWarp, warpsPerTile, order, mmaLayout.getWarpsPerCTA(), kOrder,
         kWidth, strides, shapePerCTA /*tileShape*/, instrShape, matShape,
@@ -610,7 +622,7 @@ getLoadMatrixFn(MemDescType descTy, const SharedMemoryObject &smemObj,
     Type smemTy = getSharedMemTy(eltTy);
     for (int i = 0; i < numPtrs; ++i)
       ptrs[i] =
-          gep(ptr_ty(rewriter.getContext(), 3), smemTy, smemBase, offs[i]);
+          tb.gep(ptr_ty(rewriter.getContext(), 3), smemTy, smemBase, offs[i]);
     // actually load from shared memory
     auto matTy = LLVM::LLVMStructType::getLiteral(eltTy.getContext(),
                                                   SmallVector<Type>(4, i32_ty));
@@ -640,6 +652,7 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc,
               MemDescType descTy, DotOperandEncodingAttr encoding,
               const SharedMemoryObject &smemObj,
               const LLVMTypeConverter *typeConverter, Value thread, bool isA) {
+  auto tb = TritonLLVMOpBuilder(loc, rewriter);
   auto mmaLayout = mlir::cast<NvidiaMmaEncodingAttr>(encoding.getParent());
   bool isHopper = mmaLayout.getVersionMajor() == 3;
   auto shapePerCTA = getShapePerCTA(descTy);
@@ -659,15 +672,15 @@ Value loadArg(ConversionPatternRewriter &rewriter, Location loc,
 
   auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
   auto warpOrder = mmaLayout.getWarpOrder();
-  Value warp = udiv(thread, i32_val(32));
-  Value lane = urem(thread, i32_val(32));
+  Value warp = tb.udiv(thread, tb.i32_val(32));
+  Value lane = tb.urem(thread, tb.i32_val(32));
 
   SmallVector<Value> multiDimWarpId =
       delinearize(rewriter, loc, warp, warpsPerCTA, warpOrder);
-  Value warpB = urem(multiDimWarpId[0], i32_val(shapePerCTA[0]));
+  Value warpB = tb.urem(multiDimWarpId[0], tb.i32_val(shapePerCTA[0]));
   int warpsPerTile;
-  Value warpM = urem(multiDimWarpId[1], i32_val(shapePerCTA[1] / 16));
-  Value warpN = urem(multiDimWarpId[2], i32_val(shapePerCTA[2] / 8));
+  Value warpM = tb.urem(multiDimWarpId[1], tb.i32_val(shapePerCTA[1] / 16));
+  Value warpN = tb.urem(multiDimWarpId[2], tb.i32_val(shapePerCTA[2] / 8));
   if (isA)
     warpsPerTile = std::min<int>(warpsPerCTA[1], shapePerCTA[1] / 16);
   else

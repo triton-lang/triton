@@ -60,6 +60,7 @@ private:
       ConversionPatternRewriter &rewriter,
       const DotOperandEncodingAttr &dotOperandLayout) const {
     auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     Value src = op.getSrc();
     Value dst = op.getResult();
     auto llvmElemTy = typeConverter->convertType(
@@ -75,7 +76,7 @@ private:
                                     : SharedToDotOperandWMMA::convertLayout;
       res = sharedToDotConvert(dotOperandLayout.getOpIdx(), rewriter, loc, src,
                                dotOperandLayout, smemObj, typeConverter,
-                               tid_val());
+                               b.tid_val());
     } else {
       assert(false && "unsupported layout found");
     }

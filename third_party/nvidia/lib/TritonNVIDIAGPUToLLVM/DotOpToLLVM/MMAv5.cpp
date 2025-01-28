@@ -33,6 +33,7 @@ mlir::triton::NVIDIA::DotOpMmaV5TmemLoader::DotOpMmaV5TmemLoader(
 
 Value mlir::triton::NVIDIA::DotOpMmaV5TmemLoader::tmemLoad(
     int a, int b, ConversionPatternRewriter &rewriter, Location loc) {
+  auto tb = TritonLLVMOpBuilder(loc, rewriter);
   int numRows = 64;
   if (interleaved || instrShape[0] >= 128)
     numRows = 128;
@@ -40,15 +41,15 @@ Value mlir::triton::NVIDIA::DotOpMmaV5TmemLoader::tmemLoad(
       ((instrShape[0] * instrShape[1]) / numRows) / numElementsPer32b;
   Value address = base;
   int blockId = a + b * numRepM;
-  address = ptrtoint(i32_ty, address);
+  address = tb.ptrtoint(i32_ty, address);
   if (!interleaved) {
-    address = add(address, i32_val(numColPerBlock * blockId));
+    address = tb.add(address, tb.i32_val(numColPerBlock * blockId));
   } else {
     int blockIdIsOdd = blockId & 1;
     int blockIdPrevEven = blockId - blockIdIsOdd;
-    Value offset =
-        i32_val(numColPerBlock * blockIdPrevEven + ((16 * blockIdIsOdd) << 16));
-    address = add(address, offset);
+    Value offset = tb.i32_val(numColPerBlock * blockIdPrevEven +
+                              ((16 * blockIdIsOdd) << 16));
+    address = tb.add(address, offset);
   }
   return address;
 }
@@ -72,6 +73,7 @@ static Value createInstDescriptor(ConversionPatternRewriter &rewriter,
                                   triton::nvidia_gpu::TCGen5MMAOp op, int M,
                                   int N, bool transposeA, bool transposeB) {
   Location loc = op.getLoc();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   union TCGen5InstructionDescriptor {
     uint32_t descriptor;
     struct {
@@ -119,7 +121,7 @@ static Value createInstDescriptor(ConversionPatternRewriter &rewriter,
   Type dstElType = op.getD().getType().getElementType();
   assert(dstElType.isF16() || dstElType.isF32());
   desc.dType = dstElType.isF16() ? 0 : 1;
-  return int_val(32, desc.descriptor);
+  return b.int_val(32, desc.descriptor);
 }
 
 static Value createScaleInstDescriptor(ConversionPatternRewriter &rewriter,
@@ -129,6 +131,7 @@ static Value createScaleInstDescriptor(ConversionPatternRewriter &rewriter,
                                        int scaleFactorsubIdxB,
                                        mxfpKind mxfpInstKind) {
   Location loc = op.getLoc();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   union TCGen5InstructionDescriptor {
     uint32_t descriptor;
     struct {
@@ -209,7 +212,7 @@ static Value createScaleInstDescriptor(ConversionPatternRewriter &rewriter,
     }
   }
 
-  return int_val(32, desc.descriptor);
+  return b.int_val(32, desc.descriptor);
 }
 
 static void createGen5MMA(ConversionPatternRewriter &rewriter, Location loc,
@@ -276,6 +279,7 @@ static void createScaledGen5MMA(ConversionPatternRewriter &rewriter,
 static void createMMACommit(ConversionPatternRewriter &rewriter, Location loc,
                             Value barrier, Value pred, bool twoCTAs = false) {
   PTXBuilder ptxBuilder;
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<PTXBuilder::Operand *> ptxOperands;
   auto *predOperand = ptxBuilder.newOperand(pred, "b");
   ptxOperands.push_back(predOperand);
@@ -285,7 +289,7 @@ static void createMMACommit(ConversionPatternRewriter &rewriter, Location loc,
   if (twoCTAs) {
     // .multicast::cluster and mask 0x3 means the completion of UTCMMA.2CTA will
     // be boardcasted into CTAid 0 and 1
-    auto *ctaMask = ptxBuilder.newOperand(int_val(16, 0x3), "h");
+    auto *ctaMask = ptxBuilder.newOperand(b.int_val(16, 0x3), "h");
     ptxOperands.push_back(ctaMask);
     opcode = "@$0 "
              "tcgen05.commit.cta_group::2.mbarrier::arrive::one.shared::"
@@ -303,12 +307,12 @@ void convertDot(const LLVMTypeConverter *typeConverter,
                 triton::nvidia_gpu::TCGen5MMAOp op, Value a, Value b, Value d,
                 Value loadedA, Value loadedB, Value loadedD, Value useDFlag,
                 Value pred, Value barrier) {
-
+  auto tb = TritonLLVMOpBuilder(loc, rewriter);
   bool twoCTAs = op.getTwoCtas().has_value();
   // Only run mma on one thread. We currently use elect as ptxas is not able to
   // detect that tid.x == 0 is true only for 1 thread.
   Value warpId = rewriter.create<nvgpu::WarpIdOp>(loc);
-  Value wapr0 = icmp_eq(warpId, i32_val(0));
+  Value wapr0 = tb.icmp_eq(warpId, tb.i32_val(0));
   if (twoCTAs) {
     // TODO: we have to sync the two CTAs because we currently don't use remove
     // barriers for the copies.
@@ -316,10 +320,10 @@ void convertDot(const LLVMTypeConverter *typeConverter,
     rewriter.create<triton::nvidia_gpu::ClusterWaitOp>(loc);
 
     Value clusterId = rewriter.create<nvgpu::ClusterCTAIdOp>(loc);
-    Value cluster0 = icmp_eq(clusterId, i32_val(0));
-    pred = and_(pred, cluster0);
+    Value cluster0 = tb.icmp_eq(clusterId, tb.i32_val(0));
+    pred = tb.and_(pred, cluster0);
   }
-  pred = and_(pred, wapr0);
+  pred = tb.and_(pred, wapr0);
 
   // Wrap the whole mma code sequence within a IF block.
   auto *curBlock = rewriter.getInsertionBlock();
@@ -382,7 +386,7 @@ void convertDot(const LLVMTypeConverter *typeConverter,
   Value instDescriptor =
       createInstDescriptor(rewriter, op, twoCTAs ? mmaSizeM * 2 : mmaSizeM,
                            mmaSizeN, transA, transB);
-  Value zero = i32_val(0);
+  Value zero = tb.i32_val(0);
   SmallVector<int64_t> shapeA(triton::gpu::getShapePerCTA(aTensorTy));
   SmallVector<int64_t> shapeB(triton::gpu::getShapePerCTA(bTensorTy));
   SmallVector<unsigned> aOperandShape = {(unsigned)mmaSizeM,
@@ -411,7 +415,7 @@ void convertDot(const LLVMTypeConverter *typeConverter,
         b = bLoader.smemLoad(n, k, rewriter, loc);
         createGen5MMA(rewriter, loc, op, a, b, accAddress, pred, instDescriptor,
                       useInitAcc, aInTmem, twoCTAs);
-        useInitAcc = i1_val(1);
+        useInitAcc = tb.i1_val(1);
       }
     }
   }
@@ -475,6 +479,7 @@ struct TCGen5MMAScaledOpConversion
            "tensorcore op should have a barrier at this point.");
     auto typeConverter = getTypeConverter();
     Location loc = op.getLoc();
+    auto tb = TritonLLVMOpBuilder(loc, rewriter);
     auto aTensorTy = cast<MemDescType>(op.getA().getType());
     auto bTensorTy = cast<MemDescType>(op.getB().getType());
     auto dTensorTy = cast<MemDescType>(op.getD().getType());
@@ -508,15 +513,15 @@ struct TCGen5MMAScaledOpConversion
             loc, adaptor.getD(),
             typeConverter->convertType(dTensorTy.getElementType()), rewriter)
             .getBase();
-    baseD = ptrtoint(i32_ty, baseD);
+    baseD = tb.ptrtoint(i32_ty, baseD);
     Value baseScaleA = getSharedMemoryObjectFromStruct(loc, adaptor.getAScale(),
                                                        i8_ty, rewriter)
                            .getBase();
     Value baseScaleB = getSharedMemoryObjectFromStruct(loc, adaptor.getBScale(),
                                                        i8_ty, rewriter)
                            .getBase();
-    baseScaleA = ptrtoint(i32_ty, baseScaleA);
-    baseScaleB = ptrtoint(i32_ty, baseScaleB);
+    baseScaleA = tb.ptrtoint(i32_ty, baseScaleA);
+    baseScaleB = tb.ptrtoint(i32_ty, baseScaleB);
 
     unsigned int M = dTensorTy.getDimSize(0);
     unsigned int N = dTensorTy.getDimSize(1);
@@ -537,7 +542,7 @@ struct TCGen5MMAScaledOpConversion
     int numRepK = ceil<unsigned>(K, mmaSizeK);
     bool interleaved = (mmaSizeM == 64 && (numRepM > 1 || numRepN > 1));
 
-    Value zero = i32_val(0);
+    Value zero = tb.i32_val(0);
     SmallVector<int64_t> shapeA(aTensorTy.getShape());
     SmallVector<int64_t> shapeB(bTensorTy.getShape());
     if (opKindIsMXFP4) {
@@ -561,11 +566,12 @@ struct TCGen5MMAScaledOpConversion
                              numBitsPerElementB, rewriter, loc);
 
     // TODO: Support accumulator init optimization for scaled dot
-    Value useInitAcc = int_val(1, 1);
+    Value useInitAcc = tb.int_val(1, 1);
     // Only run mma on one thread. We currently use elect as ptxas is not able
     // to detect that tid.x == 0 is true only for 1 thread.
-    Value pred = and_(adaptor.getPred(),
-                      LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter));
+    Value pred =
+        tb.and_(adaptor.getPred(),
+                LLVM::NVIDIA::createElectPredicateWarp0(loc, rewriter));
     int numRows = 128;
     int colSizeInBits = 32;
     int numColPerBlock =
@@ -599,16 +605,16 @@ struct TCGen5MMAScaledOpConversion
         // Blocks are laid out along M first then N as described in
         // `TensorMemorySpace` definition.
         int blockId = m + n * numRepM;
-        Value accAddress = add(baseD, i32_val(numColPerBlock * blockId));
+        Value accAddress = tb.add(baseD, tb.i32_val(numColPerBlock * blockId));
         for (int k = 0; k < numRepK; k++) {
           Value a = aLoader->memLoad(m, k, rewriter, loc);
           Value b = bLoader.smemLoad(n, k, rewriter, loc);
           int subWordIdx = k % (4 / scaleFactorColsPerSet);
           int wordIdx = k / (4 / scaleFactorColsPerSet);
-          Value scaleA = add(baseScaleA, i32_val((m + wordIdx * numRepM) *
-                                                 numColPerScaleBlockA));
-          Value scaleB = add(baseScaleB, i32_val((n + wordIdx * numRepN) *
-                                                 numColPerScaleBlockB));
+          Value scaleA = tb.add(baseScaleA, tb.i32_val((m + wordIdx * numRepM) *
+                                                       numColPerScaleBlockA));
+          Value scaleB = tb.add(baseScaleB, tb.i32_val((n + wordIdx * numRepN) *
+                                                       numColPerScaleBlockB));
           Value instDescriptor = createScaleInstDescriptor(
               rewriter, op, mmaSizeM, mmaSizeN, transA, transB, subWordIdx,
               subWordIdx, mxfpInstKind);
