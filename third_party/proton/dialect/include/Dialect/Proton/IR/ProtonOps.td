@@ -65,7 +65,7 @@ def TT_RecordOp : TT_Proton_Op<"record", [DeclareOpInterfaceMethods<MemoryEffect
 }
 
 
-def TT_InitDeviceBufferOp : TT_Proton_Op<"init_device_buffer", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+def TT_BufferAllocOp : TT_Proton_Op<"buffer_alloc", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
   let arguments = (ins I32Attr: $bufferSize);
   let results = (outs TT_PtrLike :$basePtr);
   let builders = [

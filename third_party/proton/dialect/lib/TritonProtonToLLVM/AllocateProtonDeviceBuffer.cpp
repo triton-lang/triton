@@ -42,7 +42,7 @@ struct AllocateProtonDeviceBuffer
       // For now just hard code the device buffer size we want to use.
       int deviceBufferSizeInBytes = 1024;
       auto ptrTy = PointerType::get(IntegerType::get(context, 8), 1);
-      auto buffer = b.create<triton::proton::InitDeviceBufferOp>(
+      auto buffer = b.create<triton::proton::BufferAllocOp>(
           loc, ptrTy, deviceBufferSizeInBytes);
     }
   }

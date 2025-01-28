@@ -29,7 +29,7 @@ void RecordOp::getEffects(
                        SideEffects::DefaultResource::get());
 }
 
-void InitDeviceBufferOp::getEffects(
+void BufferAllocOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
   effects.emplace_back(MemoryEffects::Allocate::get(),

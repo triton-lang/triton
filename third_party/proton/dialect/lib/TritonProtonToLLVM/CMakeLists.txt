@@ -1,6 +1,6 @@
 add_triton_library(TritonProtonToLLVM
     RecordOpToLLVM.cpp
-    InitDeviceBufferOpToLLVM.cpp
+    BufferAllocOpToLLVM.cpp
     AllocateProtonDeviceBuffer.cpp
 
     DEPENDS

@@ -11,17 +11,17 @@
 
 namespace {
 
-struct InitDeviceBufferOpConversion
-    : public ConvertOpToLLVMPattern<mlir::triton::proton::InitDeviceBufferOp> {
-  explicit InitDeviceBufferOpConversion(LLVMTypeConverter &typeConverter,
+struct BufferAllocOpConversion
+    : public ConvertOpToLLVMPattern<mlir::triton::proton::BufferAllocOp> {
+  explicit BufferAllocOpConversion(LLVMTypeConverter &typeConverter,
                                         const TargetInfoBase &targetInfo,
                                         PatternBenefit benefit)
-      : mlir::ConvertOpToLLVMPattern<mlir::triton::proton::InitDeviceBufferOp>(
+      : mlir::ConvertOpToLLVMPattern<mlir::triton::proton::BufferAllocOp>(
             typeConverter, benefit),
         targetInfo(targetInfo) {}
 
   LogicalResult
-  matchAndRewrite(mlir::triton::proton::InitDeviceBufferOp op,
+  matchAndRewrite(mlir::triton::proton::BufferAllocOp op,
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
 
@@ -67,9 +67,9 @@ protected:
 
 } // namespace
 
-void mlir::triton::proton::populateInitDeviceBufferOpToLLVMPattern(
+void mlir::triton::proton::populateBufferAllocOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     const TargetInfoBase &targetInfo, PatternBenefit benefit) {
-  patterns.add<InitDeviceBufferOpConversion>(typeConverter, targetInfo,
+  patterns.add<BufferAllocOpConversion>(typeConverter, targetInfo,
                                              benefit);
 }

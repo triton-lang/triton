@@ -10,7 +10,7 @@ void populateRecordOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                    RewritePatternSet &patterns,
                                    const TargetInfoBase &targetInfo,
                                    PatternBenefit benefit);
-void populateInitDeviceBufferOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+void populateBufferAllocOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                              RewritePatternSet &patterns,
                                              const TargetInfoBase &targetInfo,
                                              PatternBenefit benefit);
