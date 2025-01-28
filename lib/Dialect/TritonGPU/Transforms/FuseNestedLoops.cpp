@@ -20,6 +20,7 @@ namespace gpu {
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
 static constexpr llvm::StringLiteral kMustExecuteAttrName = "ttg.must-execute";
+static constexpr llvm::StringLiteral kAlwaysFuseAttrName = "ttg.always-fuse";
 
 namespace {
 struct FuseNestedLoopsPass
@@ -234,7 +235,7 @@ static Logue createLogueFrom(llvm::iterator_range<Block::iterator> ops,
 // recursively.
 static bool canHoistLoopBoundComputation(Operation *op) {
   auto isScalar = [](Type type) { return type.isIntOrIndexOrFloat(); };
-  return isPure(op) && op->hasTrait<OpTrait::DotLike>() &&
+  return isMemoryEffectFree(op) &&
          llvm::all_of(op->getOperandTypes(), isScalar) &&
          llvm::all_of(op->getResultTypes(), isScalar);
 }
@@ -794,7 +795,7 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
     llvm::append_range(outerOuts,
                        logueIf.getResults().slice(1, logue.getNumOutputs()));
   }
-  llvm::append_range(outerOuts, epilogue.getOutputs());
+  llvm::append_range(outerOuts, epilogueIf.getResults());
 
   b.setInsertionPointToEnd(fused.getBody());
   b.create<scf::YieldOp>(outerOuts);
@@ -825,6 +826,9 @@ static void flattenLoopNest(LoopNestNode *node, mlir::DominanceInfo &domInfo) {
 // Fuse simple loop nests with a single outer and inner loop, and where the
 // inner loop has a `tt.dot` operation.
 static bool shouldFuse(const LoopNest &nest) {
+  if (nest.root->loop->hasAttr(kAlwaysFuseAttrName))
+    return true;
+
   if (nest.nodes.size() != 2 || nest.root->children.size() != 1)
     return false;
 
@@ -1024,7 +1028,8 @@ void FuseNestedLoopsPass::runOnOperation() {
     for (LoopNest &nest : nests) {
       if (!shouldFuse(nest))
         continue;
-      if (failed(speculateInnerLoopLength(nest, domInfo)))
+      if (!nest.root->loop->hasAttr(kAlwaysFuseAttrName) &&
+          failed(speculateInnerLoopLength(nest, domInfo)))
         continue;
       flattenLoopNest(nest.root, domInfo);
     }
