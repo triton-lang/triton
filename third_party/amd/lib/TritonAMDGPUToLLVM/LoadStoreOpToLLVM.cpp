@@ -399,16 +399,16 @@ struct BufferLoadOpConversion
   }
 };
 
-struct AsyncCopyToGlobalOpConversion
+struct AsyncCopyGlobalToLocalOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::AsyncCopyGlobalToLocalOp>,
       public LoadStoreConversionBase {
   using ConvertOpToLLVMPattern<
       triton::gpu::AsyncCopyGlobalToLocalOp>::ConvertOpToLLVMPattern;
 
-  AsyncCopyToGlobalOpConversion(LLVMTypeConverter &converter,
-                                const AMD::TargetInfo &targetInfo,
-                                ModuleAxisInfoAnalysis &axisAnalysisPass,
-                                PatternBenefit benefit)
+  AsyncCopyGlobalToLocalOpConversion(LLVMTypeConverter &converter,
+                                     const AMD::TargetInfo &targetInfo,
+                                     ModuleAxisInfoAnalysis &axisAnalysisPass,
+                                     PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::gpu::AsyncCopyGlobalToLocalOp>(converter,
                                                                       benefit),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
@@ -442,20 +442,16 @@ struct AsyncCopyToGlobalOpConversion
     MLIRContext *ctx = rewriter.getContext();
     auto loc = op.getLoc();
 
-    Value mask = op.getMask();
-    Value other = op.getOther();
-
     auto srcTy = op.getSrc().getType();
     auto srcEncoding = srcTy.getEncoding();
     assert((isa<BlockedEncodingAttr, SliceEncodingAttr>(srcEncoding) &&
             "Unexpected srcEncoding in AsyncCopyGlobalToLocalOpConversion"));
-
-    auto dstTy = op.getResult().getType();
-    auto resElemTy = getTypeConverter()->convertType(dstTy.getElementType());
-
     auto srcShape = srcTy.getShape();
     assert(srcShape.size() <= 2 && "Async copy only supports 1d and 2d "
                                    "tensors: Unexpected rank of %src");
+
+    auto dstTy = op.getResult().getType();
+    auto resElemTy = getTypeConverter()->convertType(dstTy.getElementType());
 
     Value llSrc = adaptor.getSrc();
 
@@ -465,21 +461,9 @@ struct AsyncCopyToGlobalOpConversion
     auto smemObj = mlir::LLVM::getSharedMemoryObjectFromStruct(
         loc, llDst, resElemTy, rewriter);
 
-    Value llMask = adaptor.getMask();
-    SmallVector<Value> maskElems;
-    if (llMask) {
-      maskElems = unpackLLElements(loc, llMask, rewriter);
-      assert(srcElems.size() == maskElems.size());
-    }
-
-    Value llOther = adaptor.getOther();
-    SmallVector<Value> otherElems;
-    if (llOther) {
-      otherElems = unpackLLElements(loc, llOther, rewriter);
-      assert(srcElems.size() == otherElems.size());
-    }
-
     unsigned maxVec = getContiguity(op.getSrc(), axisAnalysisPass);
+
+    Value mask = op.getMask();
     if (mask) {
       maxVec = std::min(maxVec, getMaskAlignment(mask));
     }
@@ -526,12 +510,24 @@ struct AsyncCopyToGlobalOpConversion
 
     int vecBytes = vecBits / 8;
     assert(llvm::isPowerOf2_32(vecBytes));
-
-    std::string intrinsic = "llvm.amdgcn.global.load.lds";
     Value vecBytesVal = i32_val(vecBytes);
 
     Value cacheModifiers = i32_val(
         getCtrlBitsForCacheModifierOnTarget(op.getCache(), false, targetInfo));
+
+    Value llMask = adaptor.getMask();
+    SmallVector<Value> maskElems;
+    if (llMask) {
+      maskElems = unpackLLElements(loc, llMask, rewriter);
+      assert(srcElems.size() == maskElems.size());
+    }
+
+    Value other = op.getOther();
+    SmallVector<Value> otherElems;
+    if (other) {
+      otherElems = unpackLLElements(loc, adaptor.getOther(), rewriter);
+      assert(srcElems.size() == otherElems.size());
+    }
 
     for (int i = 0; i < shmemAddrs.size(); i++) {
       auto srcIdx = i * maxVec;
@@ -1652,7 +1648,7 @@ struct AsyncWaitConversion : public ConvertOpToLLVMPattern<AsyncWaitOp> {
                   ConversionPatternRewriter &rewriter) const override {
 
     auto loc = op->getLoc();
-    rewriter.create<ROCDL::WaitcntOp>(loc, 0);
+    rewriter.create<ROCDL::WaitcntOp>(loc, op.getNum());
     rewriter.replaceOp(op, i32_val(0));
     return success();
   }
@@ -1671,7 +1667,7 @@ struct AsyncCommitGroupConversion
   LogicalResult
   matchAndRewrite(AsyncCommitGroupOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // We do not have that concept so simply drop it
+    // Drop the result token
     auto loc = op->getLoc();
     rewriter.replaceOp(op, i32_val(0));
     return success();
@@ -1690,7 +1686,7 @@ void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
   patterns.add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
                StoreOpConversion, BufferLoadOpConversion,
                BufferStoreOpConversion, BufferAtomicRMWOpConversion,
-               AsyncCopyToGlobalOpConversion, AsyncCommitGroupConversion,
+               AsyncCopyGlobalToLocalOpConversion, AsyncCommitGroupConversion,
                AsyncWaitConversion, AsyncCommitGroupConversion>(
       typeConverter, targetInfo, axisInfoAnalysis, benefit);
 }
