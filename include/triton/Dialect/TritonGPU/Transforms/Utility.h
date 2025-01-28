@@ -207,6 +207,14 @@ MMALoadType getMMALoadType(Operation *loadOp);
 
 // Convert \param op operands and results to layout \param encoding.
 void convertOpEncoding(Attribute encoding, Operation *op);
+
+// Returns the original memory allocation for a memdesc value
+triton::gpu::LocalAllocOp findShmemAlloc(Value operand);
+
+// Returns MMAs inside a for loop that are multi-buffered for pipeline analysis
+SmallVector<Operation *>
+getMMAsWithMultiBufferredOperands(scf::ForOp forOp,
+                                  SmallVector<Operation *> &mmaOps);
 } // namespace mlir
 
 #endif // TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_

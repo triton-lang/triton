@@ -90,6 +90,10 @@ public:
     DominanceInfo dom(m);
     llvm::MapVector<scf::IfOp, SmallVector<arith::SelectOp>> selectToIf;
     m.walk([&](arith::SelectOp selectOp) {
+      // Apply only to selects with a tensor result. Scalars are cheap enough to
+      // predicate.
+      if (!isa<RankedTensorType>(selectOp.getResult().getType()))
+        return;
       // Look if there is an if in the same block, with the same condition.
       auto *parentBlock = selectOp->getBlock();
       Value condition = selectOp.getOperand(0);

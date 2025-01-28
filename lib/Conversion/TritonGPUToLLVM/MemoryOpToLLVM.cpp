@@ -22,7 +22,6 @@ void lowerDistributedToShared(
     std::pair<size_t, Type> *const llvmOpCount = nullptr) {
   auto srcTy = cast<RankedTensorType>(src.getType());
   auto dstTy = cast<MemDescType>(dst.getType());
-  auto outOrd = mlir::cast<SharedEncodingAttr>(dstTy.getEncoding()).getOrder();
   auto elemTy = typeConverter->convertType(srcTy.getElementType());
 
   auto inVals = unpackLLElements(loc, adaptorSrc, rewriter);

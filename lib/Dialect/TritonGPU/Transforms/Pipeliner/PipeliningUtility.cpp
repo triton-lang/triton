@@ -53,6 +53,8 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     return op;
   if (isa<ttg::LocalLoadOp, ttg::LocalStoreOp>(op))
     return op;
+  if (isa<ttng::TMEMAllocOp, ttng::TMEMCopyOp>(op))
+    return op;
   if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
     rewriter.setInsertionPoint(op);
     Value cnd = getPredMask(rewriter, ifOp.getCondition().getType(),
@@ -81,11 +83,49 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     copyOp.getPredMutable().assign(mask);
     return op;
   }
+  if (auto gatherOp = dyn_cast<ttng::AsyncTMAGatherOp>(op)) {
+    rewriter.setInsertionPoint(gatherOp);
+    Value mask = getPredMask(rewriter, gatherOp.getPred().getType(),
+                             gatherOp.getPred(), pred);
+    gatherOp.getPredMutable().assign(mask);
+    return op;
+  }
   if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op)) {
     rewriter.setInsertionPoint(expectOp);
     Value mask = getPredMask(rewriter, expectOp.getPred().getType(),
                              expectOp.getPred(), pred);
     expectOp.getPredMutable().assign(mask);
+    return op;
+  }
+  if (auto mmav5Op = dyn_cast<ttng::TCGen5MMAOp>(op)) {
+    rewriter.setInsertionPoint(mmav5Op);
+    Value mask = getPredMask(rewriter, mmav5Op.getPred().getType(),
+                             mmav5Op.getPred(), pred);
+    mmav5Op.getPredMutable().assign(mask);
+    return op;
+  }
+  if (auto mmav5Op = dyn_cast<ttng::TCGen5MMAScaledOp>(op)) {
+    rewriter.setInsertionPoint(mmav5Op);
+    Value mask = getPredMask(rewriter, mmav5Op.getPred().getType(),
+                             mmav5Op.getPred(), pred);
+    mmav5Op.getPredMutable().assign(mask);
+    return op;
+  }
+  if (auto tmemStoreOp = dyn_cast<ttng::TMEMStoreOp>(op)) {
+    rewriter.setInsertionPoint(tmemStoreOp);
+    Value mask = getPredMask(rewriter, tmemStoreOp.getPred().getType(),
+                             tmemStoreOp.getPred(), pred);
+    tmemStoreOp.getPredMutable().assign(mask);
+    return op;
+  }
+  if (auto waitBarrier = dyn_cast<ttng::WaitBarrierOp>(op)) {
+    rewriter.setInsertionPoint(waitBarrier);
+    Value mask = pred;
+    Value currentPred = waitBarrier.getPred();
+    if (currentPred) {
+      mask = getPredMask(rewriter, currentPred.getType(), currentPred, pred);
+    }
+    waitBarrier.getPredMutable().assign(mask);
     return op;
   }
   if (auto storeOp = dyn_cast<tt::StoreOp>(op)) {

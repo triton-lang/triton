@@ -249,7 +249,7 @@ def parse(metrics, filename, include=None, exclude=None, threshold=None, depth=1
         gf = filter_frames(gf, include, exclude, threshold, metrics[0])
         print(gf.tree(metric_column=metrics, expand_name=True, depth=depth, render_header=False))
         if print_sorted:
-            print("Sorted kernels by metric " + metrics[0].strip("(inc)"))
+            print("Sorted kernels by metric " + metrics[0])
             sorted_df = gf.dataframe.sort_values(by=[metrics[0]], ascending=False)
             for row in range(1, len(sorted_df)):
                 kernel_name = sorted_df.iloc[row]['name'][:100] + "..." if len(
