@@ -46,7 +46,7 @@ static void tryAndPipelineOuterLoop(scf::ForOp forOp) {
       mlir::triton::pipelineForLoop(rewriter, forOp, options);
 }
 
-static bool pipelineLoop(scf::ForOp forOp, int numStages) {
+static scf::ForOp pipelineLoop(scf::ForOp forOp, int numStages) {
   mlir::triton::PipeliningOption options;
 
   bool foundSchedule = false;
@@ -54,7 +54,7 @@ static bool pipelineLoop(scf::ForOp forOp, int numStages) {
 
   // TODO: add more pipelines strategy.
   if (!foundSchedule)
-    return false;
+    return nullptr;
 
   IRRewriter rewriter(forOp->getContext());
   rewriter.setInsertionPoint(forOp);
@@ -62,9 +62,9 @@ static bool pipelineLoop(scf::ForOp forOp, int numStages) {
       mlir::triton::pipelineForLoop(rewriter, forOp, options);
 
   if (failed(newForOp))
-    return false;
+    return nullptr;
   mlir::triton::asyncLaunchDots(newForOp.value());
-  return true;
+  return newForOp.value();
 }
 
 struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
@@ -93,13 +93,22 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
       return;
 
     llvm::SmallSetVector<scf::ForOp, 8> outerLoops;
+    llvm::SmallVector<scf::ForOp> pipelinedLoops;
     for (scf::ForOp forOp : loops) {
       auto outerLoop = dyn_cast<scf::ForOp>(forOp->getParentOp());
       int loopNumStages = getNumStagesOrDefault(forOp);
-      bool pipelined = pipelineLoop(forOp, loopNumStages);
-      if (pipelined && outerLoop && getNumStagesOrDefault(outerLoop) > 1)
+      scf::ForOp pipelinedFor = pipelineLoop(forOp, loopNumStages);
+      if (pipelinedFor != nullptr)
+        pipelinedLoops.push_back(pipelinedFor);
+      if (pipelinedFor != nullptr && outerLoop &&
+          getNumStagesOrDefault(outerLoop) > 1)
         outerLoops.insert(outerLoop);
     }
+
+    // There is a hard dependency between load pipelining and the TC05MMA
+    // pipelining. We can pipeline the TC05MMA only after the loads are
+    // pipelined and buffers are allocated.
+    mlir::triton::pipelineTC05MMALoops(getOperation(), pipelinedLoops, 2);
 
     // schedule the waits
     mlir::triton::updateWaits(getOperation());
@@ -128,6 +137,10 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
 
     for (scf::ForOp forOp : loops) {
       mlir::triton::pipelineTMAStores(forOp);
+    }
+
+    for (scf::ForOp forOp : loops) {
+      mlir::triton::pipelineMMAWithScaledAcc(forOp);
     }
   }
 };

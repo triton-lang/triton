@@ -222,6 +222,21 @@ public:
   }
 };
 
+class WarpIdOpPattern : public OpRewritePattern<ttn::WarpIdOp> {
+public:
+  using OpRewritePattern<ttn::WarpIdOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ttn::WarpIdOp op,
+                                PatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    Value threadId = rewriter.create<NVVM::ThreadIdXOp>(loc, i32_ty);
+    Value warpId = udiv(threadId, i32_val(32));
+    warpId = LLVM::NVIDIA::shuffleIdx(loc, rewriter, warpId, 0);
+    rewriter.replaceOp(op, warpId);
+    return success();
+  }
+};
+
 class ClusterArriveOpPattern : public OpRewritePattern<ttn::ClusterArriveOp> {
 public:
   using OpRewritePattern<ttn::ClusterArriveOp>::OpRewritePattern;
@@ -626,6 +641,115 @@ public:
   }
 };
 
+static Value createTMAlloc(IRRewriter &rewriter, LLVM::LLVMFuncOp func,
+                           size_t size, Value pred, bool twoCTAs) {
+  PTXBuilder ptxBuilder;
+  Location loc = func.getLoc();
+  Value sharedMem = mlir::LLVM::getStackPointer(rewriter, func);
+  std::string ptxString =
+      "@$0 tcgen05.alloc.cta_group::" + std::to_string(twoCTAs ? 2 : 1) +
+      ".sync.aligned.shared::cta.b32 [$1], " + std::to_string(size) + ";";
+
+  auto &allocOp = *ptxBuilder.create<>(ptxString);
+  allocOp(
+      {ptxBuilder.newOperand(pred, "b"), ptxBuilder.newOperand(sharedMem, "r")},
+      /*onlyAttachMLIRArgs=*/true);
+  auto voidTy = void_ty(func->getContext());
+  ptxBuilder.launch(rewriter, loc, void_ty(func->getContext()));
+  rewriter.create<NVVM::Barrier0Op>(loc);
+  Value address = load(i32_ty, sharedMem);
+  rewriter.create<NVVM::Barrier0Op>(loc);
+  address = inttoptr(ptr_ty(func.getContext(), 6), address);
+  return address;
+}
+
+static void createRelinquishAlloc(IRRewriter &rewriter, Location loc,
+                                  Value pred, bool twoCTAs) {
+  PTXBuilder ptxBuilder;
+  std::string ptxString = "@$0 tcgen05.relinquish_alloc_permit.cta_group::" +
+                          std::to_string(twoCTAs ? 2 : 1) + ".sync.aligned;";
+  auto &f = *ptxBuilder.create<>(ptxString);
+  f({ptxBuilder.newOperand(pred, "b")}, /*onlyAttachMLIRArgs=*/true);
+  ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
+}
+
+void freeTMAlloc(LLVM::LLVMFuncOp func, Value alloc, size_t size, Value pred,
+                 bool twoCTAs) {
+  func.walk([&](LLVM::ReturnOp ret) {
+    OpBuilder b(ret);
+    auto ctx = ret->getContext();
+    auto loc = ret.getLoc();
+    auto voidTy = void_ty(ctx);
+    PTXBuilder ptxBuilder;
+    // Calculate the predicate in the inline asm to avoid creating long
+    // liveranges.
+    std::string ptxString =
+        "@$0 tcgen05.dealloc.cta_group::" + std::to_string(twoCTAs ? 2 : 1) +
+        ".sync.aligned.b32 $1, " + std::to_string(size) + ";";
+    auto &dealloc = *ptxBuilder.create<>(ptxString);
+    dealloc(
+        {ptxBuilder.newOperand(pred, "b"), ptxBuilder.newOperand(alloc, "r")},
+        /*onlyAttachMLIRArgs=*/true);
+    ptxBuilder.launch(b, loc, void_ty(ctx));
+  });
+}
+
+static Value initTensorMemory(LLVM::LLVMFuncOp func) {
+  auto mod = func->getParentOfType<ModuleOp>();
+  assert(mod->hasAttr("ttg.tensor_memory_size"));
+  size_t size = cast<IntegerAttr>(mod->getAttr("ttg.tensor_memory_size"))
+                    .getValue()
+                    .getZExtValue();
+  if (size == 0)
+    return Value();
+  IRRewriter rewriter(func.getContext());
+  rewriter.setInsertionPointToStart(&func.front());
+  auto ctx = mod.getContext();
+  auto loc = func.getLoc();
+  // A proper error will be raised by the frontend, but to allow compilation to
+  // continue we emit a trap.
+  if (size > 512) {
+    rewriter.create<LLVM::Trap>(loc);
+    return rewriter.create<LLVM::UndefOp>(loc, ptr_ty(ctx, 6));
+  }
+
+  int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
+  // Assume that 2CTAs is used if we have two CTAs this is pessimistic but
+  // should be fine for now.
+  bool useTwoCTAs = numCTAs == 2;
+  Value threadId = rewriter.create<NVVM::ThreadIdXOp>(loc, i32_ty);
+  Value pred = icmp_ult(threadId, i32_val(32));
+  Value alloc = createTMAlloc(rewriter, func, size, pred, useTwoCTAs);
+  createRelinquishAlloc(rewriter, loc, pred, useTwoCTAs);
+  // TODO: pred will have a long liverange, we need to check if this is a
+  // problem and how it can be fixed.
+  freeTMAlloc(func, alloc, size, pred, useTwoCTAs);
+  return alloc;
+}
+
+static void lowerTensorMemoryAlloc(ModuleOp mod) {
+  SmallVector<Operation *> baseOps;
+  LLVM::LLVMFuncOp kernel = nullptr;
+  mod.walk([&](ttn::TensorMemoryBaseAddress baseOp) {
+    baseOps.push_back(baseOp);
+    if (!kernel)
+      kernel = baseOp->getParentOfType<LLVM::LLVMFuncOp>();
+    assert(kernel == baseOp->getParentOfType<LLVM::LLVMFuncOp>() &&
+           "TODO: add support for function calls using tmem.");
+  });
+  if (baseOps.empty())
+    return;
+  // TODO: Handle cases of matmul used in noinline functions.
+  assert(LLVM::isKernel(kernel));
+  Value newBase = initTensorMemory(kernel);
+  if (!newBase)
+    return;
+  for (auto baseOp : baseOps) {
+    baseOp->getResult(0).replaceAllUsesWith(newBase);
+    baseOp->erase();
+  }
+}
+
 class ConvertNVGPUToLLVM : public ConvertNVGPUToLLVMBase<ConvertNVGPUToLLVM> {
 
 public:
@@ -646,12 +770,16 @@ public:
     patterns.add<NVGPUOpGenericPattern<ttn::ClusterCTAIdOp>>(
         context, kClusterCtaIdOp, Constraints({"=r"}), Constraints());
 
-    patterns.add<FenceAsyncSharedOpPattern, LoadMatrixOpPattern,
-                 StoreMatrixOpPattern, ClusterArriveOpPattern, WGMMAOpPattern,
-                 LoadAcquireOpPattern, WGMMAWaitGroupOpPattern>(context);
+    patterns
+        .add<FenceAsyncSharedOpPattern, LoadMatrixOpPattern,
+             StoreMatrixOpPattern, ClusterArriveOpPattern, WGMMAOpPattern,
+             LoadAcquireOpPattern, WGMMAWaitGroupOpPattern, WarpIdOpPattern>(
+            context);
 
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
+
+    lowerTensorMemoryAlloc(mod);
   }
 };
 

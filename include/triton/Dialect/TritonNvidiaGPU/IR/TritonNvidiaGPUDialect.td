@@ -56,6 +56,8 @@ def TritonNvidiaGPU_Dialect : Dialect {
       return cast<IntegerAttr>(mod->getAttr("ttg.num-ctas")).getInt();
     }
   }];
+  let useDefaultAttributePrinterParser = 1;
+  let usePropertiesForAttributes = 1;
 }
 
 #endif

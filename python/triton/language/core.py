@@ -1284,6 +1284,22 @@ class _experimental_tensor_descriptor_base(_value):
         """
         return semantic.descriptor_store(self, value, offsets, _builder)
 
+    @builtin
+    def gather(self, *args, _builder=None) -> tensor:
+        """Gather multiple descriptors worth of data"""
+        assert len(args) == 2, f"descriptor gather only supports 2D indexing, but got {len(args)}"
+        x_offsets = args[0]
+        y_offset = args[1]
+        return semantic.descriptor_gather(self, x_offsets, y_offset, "", "", _builder)
+
+    @builtin
+    def scatter(self, value, *args, _builder=None) -> tensor:
+        """Scatter multiple descriptors worth of data"""
+        assert len(args) == 2, f"descriptor scatter only supports 2D indexing, but got {len(args)}"
+        x_offsets = args[0]
+        y_offset = args[1]
+        return semantic.descriptor_scatter(self, value, x_offsets, y_offset, _builder)
+
 
 class _experimental_tensor_descriptor(_experimental_tensor_descriptor_base):
     """A descriptor representing a tensor in global memory.

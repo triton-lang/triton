@@ -14,9 +14,10 @@ using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 
-void tt::CoarseSchedule::insertDepsOfOp(Operation *op, int stage,
+bool tt::CoarseSchedule::insertDepsOfOp(Operation *op, int stage,
                                         tt::CoarseSchedule::Cluster cluster,
                                         bool includeArg) {
+  bool inserted = false;
   for (Value operand : op->getOperands()) {
     Value v = operand;
     llvm::SmallDenseSet<Value> seen;
@@ -35,10 +36,12 @@ void tt::CoarseSchedule::insertDepsOfOp(Operation *op, int stage,
     Operation *defOp = v.getDefiningOp();
     if (defOp && defOp->getBlock() == op->getBlock()) {
       if (insertIfAbsent(defOp, stage, cluster)) {
+        inserted = true;
         insertDepsOfOp(defOp, stage, cluster, includeArg);
       }
     }
   }
+  return inserted;
 }
 
 SmallVector<std::tuple<Operation *, int, tt::CoarseSchedule::Cluster>>

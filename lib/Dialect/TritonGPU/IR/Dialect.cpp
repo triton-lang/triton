@@ -13,6 +13,7 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
@@ -331,6 +332,17 @@ SmallVector<unsigned> getCTASplitNum(Attribute layout) {
   } else if (auto sharedLayout = mlir::dyn_cast<SharedEncodingAttr>(layout)) {
     res.assign(sharedLayout.getCTALayout().getCTASplitNum().begin(),
                sharedLayout.getCTALayout().getCTASplitNum().end());
+  } else if (auto tmemLayout =
+                 mlir::dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
+                     layout)) {
+    res.resize(2);
+    res[0] = tmemLayout.getCTASplitM();
+    res[1] = tmemLayout.getCTASplitN();
+  } else if (auto tmemScaleLayout = mlir::dyn_cast<
+                 triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(layout)) {
+    res.resize(2);
+    res[0] = tmemScaleLayout.getCTASplitM();
+    res[1] = tmemScaleLayout.getCTASplitN();
   } else {
     assert(false && "Unimplemented usage of getCTASplitNum");
   }
@@ -375,7 +387,13 @@ SmallVector<int64_t> getShapePerCTA(Attribute layout, ArrayRef<int64_t> shape) {
       return res;
     }
   }
-  return getShapePerCTA(getCTASplitNum(layout), shape);
+  SmallVector<unsigned> splitNum = getCTASplitNum(layout);
+  if (auto tmem = dyn_cast<nvidia_gpu::TensorMemoryEncodingAttr>(layout)) {
+    if (shape.size() > splitNum.size()) {
+      splitNum.insert(splitNum.begin(), shape.size() - splitNum.size(), 1);
+    }
+  }
+  return getShapePerCTA(splitNum, shape);
 }
 
 SmallVector<int64_t> getShapePerCTA(Type type) {

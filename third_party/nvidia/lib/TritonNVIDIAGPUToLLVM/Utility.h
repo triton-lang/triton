@@ -47,6 +47,7 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
 
 /// Create a predicate with just single active thread.
 Value createElectPredicate(Location loc, RewriterBase &rewriter);
+Value createElectPredicateWarp0(Location loc, RewriterBase &rewriter);
 
 } // namespace NVIDIA
 } // namespace LLVM
