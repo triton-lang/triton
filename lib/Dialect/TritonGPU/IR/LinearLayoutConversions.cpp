@@ -127,7 +127,7 @@ LinearLayout sharedToLinearLayoutNoLeadingOffset(ArrayRef<int64_t> shape,
   if (rank == 1) {
     return combineCtaCgaWithShape(
         LinearLayout::identity1D(shape[0], S("offset"), S("dim0")),
-        shared.getCTALayout(), shape);
+        getCTALayout(shared), shape);
   }
 
   auto outDimNames = standardOutDimNames(ctx, rank);
@@ -163,7 +163,7 @@ LinearLayout sharedToLinearLayoutNoLeadingOffset(ArrayRef<int64_t> shape,
         LinearLayout::identity1D(shape[dim], S("offset"), outDimNames[dim]);
   }
 
-  return combineCtaCgaWithShape(ctaLayout, shared.getCTALayout(), shape);
+  return combineCtaCgaWithShape(ctaLayout, getCTALayout(shared), shape);
 }
 
 } // namespace
@@ -180,7 +180,7 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
     // TODO: Not sure if this is correct.
     return combineCtaCgaWithShape(
         LinearLayout::identity1D(shape[0], S("offset"), S("dim0")),
-        shared.getCTALayout(), shape);
+        getCTALayout(shared), shape);
   }
 
   int tileWidthBytes;
@@ -244,7 +244,7 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
         LinearLayout::identity1D(shape[dim], S("offset"), outDimNames[dim]);
   }
 
-  return combineCtaCgaWithShape(tileLayout, shared.getCTALayout(), shape);
+  return combineCtaCgaWithShape(tileLayout, getCTALayout(shared), shape);
 }
 
 /// Function to generate lane and warp layout for dot operands.
