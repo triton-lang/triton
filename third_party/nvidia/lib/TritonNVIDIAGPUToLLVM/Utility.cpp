@@ -129,9 +129,10 @@ Value createElectPredicate(Location loc, RewriterBase &rewriter) {
 }
 
 Value createElectPredicateWarp0(Location loc, RewriterBase &rewriter) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value threadId = getThreadId(rewriter, loc);
-  Value warp0 = icmp_ult(threadId, i32_val(32));
-  return and_(warp0, createElectPredicate(loc, rewriter));
+  Value warp0 = b.icmp_ult(threadId, b.i32_val(32));
+  return b.and_(warp0, createElectPredicate(loc, rewriter));
 }
 
 } // namespace NVIDIA

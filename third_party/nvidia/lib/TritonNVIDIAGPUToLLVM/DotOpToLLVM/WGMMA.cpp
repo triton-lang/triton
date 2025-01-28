@@ -93,6 +93,7 @@ int64_t getSwizzlingFromLayout(const SharedEncodingAttr &layout,
 
 static Value createDescriptor(ConversionPatternRewriter &rewriter, Location loc,
                               int64_t swizzling, uint32_t stride) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   static_assert(sizeof(SMEMDescriptor) == 8,
                 "Descriptor size should be 64 bits.");
   SMEMDescriptor desc;
@@ -144,17 +145,16 @@ Value mlir::triton::NVIDIA::DotOpMmaV3SmemLoader::smemLoad(
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
   Value k = tb.i32_val(b * instrShape[1]);
   Value m = tb.add(tb.i32_val(a * dimWpt * instrShape[0]),
-                     tb.mul(warpId, tb.i32_val(instrShape[0])));
-    if (trans) {
-      std::swap(k, m);
-    }
-    Value leading_offset =
-        tb.mul(tb.udiv(k, elemsPerSwizzlingRowVal),
-               tb.i32_val(shape[ord[1]] * elemsPerSwizzlingRow));
+                   tb.mul(warpId, tb.i32_val(instrShape[0])));
+  if (trans) {
+    std::swap(k, m);
+  }
+  Value leading_offset =
+      tb.mul(tb.udiv(k, elemsPerSwizzlingRowVal),
+             tb.i32_val(shape[ord[1]] * elemsPerSwizzlingRow));
   Value stride_offset = tb.mul(m, elemsPerSwizzlingRowVal);
-  Value offset =
-      tb.add(tb.add(leading_offset, stride_offset),
-                          tb.urem(k, elemsPerSwizzlingRowVal));
+  Value offset = tb.add(tb.add(leading_offset, stride_offset),
+                        tb.urem(k, elemsPerSwizzlingRowVal));
   Value off1;
   // Avoid the runtime udiv if we know the elements are byte multiples
   if (elemBits % 8) {
@@ -168,8 +168,8 @@ Value mlir::triton::NVIDIA::DotOpMmaV3SmemLoader::smemLoad(
   // Add the base at the end to make it easier to do loop invariant code
   // motion.
   loadDesc = tb.add(
-        loadDesc, tb.lshr(tb.shl(tb.ptrtoint(i64_ty, base), tb.int_val(64, 46)),
-                          tb.int_val(64, 50)));
+      loadDesc, tb.lshr(tb.shl(tb.ptrtoint(i64_ty, base), tb.int_val(64, 46)),
+                        tb.int_val(64, 50)));
   return loadDesc;
 }
 

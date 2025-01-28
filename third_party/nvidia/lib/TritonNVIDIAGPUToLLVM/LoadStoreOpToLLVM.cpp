@@ -1384,6 +1384,7 @@ static LogicalResult iterateGatherScatterIndices(
     function_ref<void(Value, Value, Value, ArrayRef<Value>)> callback) {
   MLIRContext *ctx = op->getContext();
   Location loc = op->getLoc();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   StringAttr kDim0 = str_attr("dim0");
   StringAttr kDim1 = str_attr("dim1");
@@ -1461,24 +1462,25 @@ static LogicalResult iterateGatherScatterIndices(
 
   Value warpId = rewriter.create<nvgpu::WarpIdOp>(loc);
   // Each block has separate shared memory. Multiple CTAs don't work anyways.
-  Value blockId = i32_val(0);
+  Value blockId = b.i32_val(0);
 
   // Mask out warps with redundant x offsets.
-  pred = and_(pred, icmp_eq(i32_val(0), and_(warpId, i32_val(warpMask))));
+  pred = b.and_(pred,
+                b.icmp_eq(b.i32_val(0), b.and_(warpId, b.i32_val(warpMask))));
   // Select one thread in each warp to issue the gather4 messages.
-  pred = and_(pred, LLVM::NVIDIA::createElectPredicate(loc, rewriter));
+  pred = b.and_(pred, LLVM::NVIDIA::createElectPredicate(loc, rewriter));
 
   SmallVector<Value> xOffsets = unpackLLElements(loc, xOffsetsValue, rewriter);
   // Lane ID doesn't matter.
-  Value laneId = i32_val(0);
+  Value laneId = b.i32_val(0);
   for (auto regId : seq<unsigned>(0, xOffsets.size(), 4)) {
     // Skip redundant x offsets within a thread.
     if ((regMask & regId) != 0)
       continue;
-    Value regIdVal = i32_val(regId);
+    Value regIdVal = b.i32_val(regId);
 
     for (auto msgId : llvm::seq(numMessagesPerRow)) {
-      Value msgIdVal = i32_val(msgId);
+      Value msgIdVal = b.i32_val(msgId);
 
       auto result = applyLinearLayout(loc, rewriter, msgToShared,
                                       {{kMsg, msgIdVal},
@@ -1492,8 +1494,8 @@ static LogicalResult iterateGatherScatterIndices(
       // Because we checked that the memdesc's allocshape and shape match, we
       // can ignore the strides and directly index into the shmem object.
       Value shMemPtr =
-          gep(elemPtrTy, llvmElemTy, smemObj.getBase(), shMemOffset);
-      Value yOffset = add(yOffsetValue, i32_val(msgId * msgSize));
+          b.gep(elemPtrTy, llvmElemTy, smemObj.getBase(), shMemOffset);
+      Value yOffset = b.add(yOffsetValue, b.i32_val(msgId * msgSize));
 
       callback(pred, shMemPtr, yOffset, ArrayRef(xOffsets).slice(regId, 4));
     };
@@ -1571,6 +1573,7 @@ LogicalResult AsyncTMAScatterOpConversion::matchAndRewrite(
     triton::nvidia_gpu::AsyncTMAScatterOp op, OpAdaptor adaptor,
     ConversionPatternRewriter &rewriter) const {
   Location loc = op.getLoc();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   MLIRContext *ctx = getContext();
   LLVM::LLVMVoidType voidTy = void_ty(op->getContext());
 
@@ -1601,7 +1604,7 @@ LogicalResult AsyncTMAScatterOpConversion::matchAndRewrite(
   if (failed(iterateGatherScatterIndices(
           op, rewriter, *getTypeConverter(), op.getXOffsets(), op.getSrc(),
           adaptor.getSrc(), adaptor.getXOffsets(), adaptor.getYOffset(),
-          /*pred=*/true_val(), callback)))
+          /*pred=*/b.true_val(), callback)))
     return failure();
 
   // TODO: Separate the syncronizations operations into separate TTGIR ops to

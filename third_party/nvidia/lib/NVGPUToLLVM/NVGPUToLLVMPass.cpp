@@ -231,8 +231,10 @@ public:
   LogicalResult matchAndRewrite(ttn::WarpIdOp op,
                                 PatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
     Value threadId = rewriter.create<NVVM::ThreadIdXOp>(loc, i32_ty);
-    Value warpId = udiv(threadId, i32_val(32));
+    Value warpId = b.udiv(threadId, b.i32_val(32));
     warpId = LLVM::NVIDIA::shuffleIdx(loc, rewriter, warpId, 0);
     rewriter.replaceOp(op, warpId);
     return success();
@@ -648,6 +650,7 @@ static Value createTMAlloc(IRRewriter &rewriter, LLVM::LLVMFuncOp func,
                            size_t size, Value pred, bool twoCTAs) {
   PTXBuilder ptxBuilder;
   Location loc = func.getLoc();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value sharedMem = mlir::LLVM::getStackPointer(rewriter, func);
   std::string ptxString =
       "@$0 tcgen05.alloc.cta_group::" + std::to_string(twoCTAs ? 2 : 1) +
@@ -660,9 +663,9 @@ static Value createTMAlloc(IRRewriter &rewriter, LLVM::LLVMFuncOp func,
   auto voidTy = void_ty(func->getContext());
   ptxBuilder.launch(rewriter, loc, void_ty(func->getContext()));
   rewriter.create<NVVM::Barrier0Op>(loc);
-  Value address = load(i32_ty, sharedMem);
+  Value address = b.load(i32_ty, sharedMem);
   rewriter.create<NVVM::Barrier0Op>(loc);
-  address = inttoptr(ptr_ty(func.getContext(), 6), address);
+  address = b.inttoptr(ptr_ty(func.getContext(), 6), address);
   return address;
 }
 
@@ -709,6 +712,7 @@ static Value initTensorMemory(LLVM::LLVMFuncOp func) {
   rewriter.setInsertionPointToStart(&func.front());
   auto ctx = mod.getContext();
   auto loc = func.getLoc();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   // A proper error will be raised by the frontend, but to allow compilation to
   // continue we emit a trap.
   if (size > 512) {
@@ -721,7 +725,7 @@ static Value initTensorMemory(LLVM::LLVMFuncOp func) {
   // should be fine for now.
   bool useTwoCTAs = numCTAs == 2;
   Value threadId = rewriter.create<NVVM::ThreadIdXOp>(loc, i32_ty);
-  Value pred = icmp_ult(threadId, i32_val(32));
+  Value pred = b.icmp_ult(threadId, b.i32_val(32));
   Value alloc = createTMAlloc(rewriter, func, size, pred, useTwoCTAs);
   createRelinquishAlloc(rewriter, loc, pred, useTwoCTAs);
   // TODO: pred will have a long liverange, we need to check if this is a
