@@ -21,6 +21,7 @@ struct SplatOpConversion : public ConvertOpToLLVMPattern<triton::SplatOp> {
                                   const LLVMTypeConverter *typeConverter,
                                   ConversionPatternRewriter &rewriter,
                                   Location loc) {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto tensorTy = cast<RankedTensorType>(resType);
     // Check the converted type for the tensor as depending on the encoding the
     // converter may pick different element types.
@@ -36,13 +37,13 @@ struct SplatOpConversion : public ConvertOpToLLVMPattern<triton::SplatOp> {
       unsigned ratio = srcBitWidth / cstBitWidth;
       Type intTy = IntegerType::get(elemType.getContext(), cstBitWidth);
       VectorType vecType = VectorType::get(ratio, intTy);
-      Value intCst = bitcast(constVal, intTy);
-      Value vec = undef(vecType);
+      Value intCst = b.bitcast(constVal, intTy);
+      Value vec = b.undef(vecType);
       for (unsigned i = 0; i < ratio; ++i)
-        vec = insert_element(vecType, vec, intCst, int_val(32, i));
+        vec = b.insert_element(vecType, vec, intCst, b.int_val(32, i));
       constVal = vec;
     }
-    auto llSrc = bitcast(constVal, srcType);
+    auto llSrc = b.bitcast(constVal, srcType);
     size_t elemsPerThread = getTotalElemsPerThread(tensorTy);
     llvm::SmallVector<Value> elems(elemsPerThread, llSrc);
     return packLLElements(loc, typeConverter, elems, rewriter, resType);
@@ -366,6 +367,7 @@ struct MemDescSubviewOpConversion
   matchAndRewrite(triton::gpu::MemDescSubviewOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto srcTy = op.getSrc().getType();
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
     auto layoutOrder = getOrder(srcTy.getEncoding());
@@ -381,14 +383,14 @@ struct MemDescSubviewOpConversion
     auto destRank = op.getResult().getType().getRank();
     auto rankReduced = srcTy.getRank() - destRank;
     for (int i = rankReduced; i < opOffsetVals.size(); i++) {
-      offsetVals.push_back(add(opOffsetVals[i], smemObj.getOffsets()[i]));
+      offsetVals.push_back(b.add(opOffsetVals[i], smemObj.getOffsets()[i]));
     }
     // Compute the offset based on the original strides of the shared memory
     // object
     auto offset = dot(rewriter, loc, opOffsetVals, opSmemStrides);
     auto elemPtrTy = smemObj.getBase().getType();
     smemObj = SharedMemoryObject(
-        gep(elemPtrTy, llvmElemTy, smemObj.getBase(), offset), llvmElemTy,
+        b.gep(elemPtrTy, llvmElemTy, smemObj.getBase(), offset), llvmElemTy,
         offsetVals);
     auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
     rewriter.replaceOp(op, retVal);
