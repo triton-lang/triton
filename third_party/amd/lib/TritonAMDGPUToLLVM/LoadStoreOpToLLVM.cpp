@@ -398,19 +398,40 @@ struct BufferLoadOpConversion
   }
 };
 
-struct AsyncLoadOpConversion
+struct AsyncCopyToGlobalOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::AsyncCopyGlobalToLocalOp>,
       public LoadStoreConversionBase {
   using ConvertOpToLLVMPattern<
       triton::gpu::AsyncCopyGlobalToLocalOp>::ConvertOpToLLVMPattern;
 
-  AsyncLoadOpConversion(LLVMTypeConverter &converter,
-                        const AMD::TargetInfo &targetInfo,
-                        ModuleAxisInfoAnalysis &axisAnalysisPass,
-                        PatternBenefit benefit)
+  AsyncCopyToGlobalOpConversion(LLVMTypeConverter &converter,
+                                const AMD::TargetInfo &targetInfo,
+                                ModuleAxisInfoAnalysis &axisAnalysisPass,
+                                PatternBenefit benefit)
       : ConvertOpToLLVMPattern<triton::gpu::AsyncCopyGlobalToLocalOp>(converter,
                                                                       benefit),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+
+  bool isLoadWidthSupported(unsigned bits,
+                            const AMD::TargetInfo &targetInfo) const {
+    llvm::SmallSetVector<unsigned, 10> supportedWidths;
+    switch (targetInfo.getISAFamily()) {
+    case mlir::triton::AMD::ISAFamily::CDNA2:
+    case mlir::triton::AMD::ISAFamily::CDNA3:
+      supportedWidths.insert(8);
+      supportedWidths.insert(16);
+      supportedWidths.insert(32);
+      if (targetInfo.getGPUKind() == llvm::AMDGPU::GPUKind::GK_GFX950) {
+        supportedWidths.insert(98);
+        supportedWidths.insert(128);
+      }
+      break;
+    default:
+      return false;
+    }
+
+    return supportedWidths.contains(bits);
+  }
 
   LogicalResult
   matchAndRewrite(triton::gpu::AsyncCopyGlobalToLocalOp op, OpAdaptor adaptor,
@@ -418,109 +439,70 @@ struct AsyncLoadOpConversion
 
     MLIRContext *ctx = rewriter.getContext();
     auto loc = op.getLoc();
-    Value res = op.getResult();
+
     Value mask = op.getMask();
     Value other = op.getOther();
 
     auto srcTy = op.getSrc().getType();
+    auto srcEncoding = srcTy.getEncoding();
+    assert((isa<BlockedEncodingAttr, SliceEncodingAttr>(srcEncoding) &&
+            "Unexpected srcEncoding in AsyncCopyGlobalToLocalOpConversion"));
+
     auto dstTy = op.getResult().getType();
     auto resElemTy = getTypeConverter()->convertType(dstTy.getElementType());
-    auto srcLayout = srcTy.getEncoding();
 
-    assert((isa<BlockedEncodingAttr, SliceEncodingAttr>(srcLayout) &&
-            "Unexpected srcLayout in AsyncCopyGlobalToLocalOpConversion"));
-    auto resSharedLayout = cast<SharedEncodingAttr>(dstTy.getEncoding());
     auto srcShape = srcTy.getShape();
-    assert(
-        (srcShape.size() <= 2) &&
-        "Async copy only supports 1d and 2d tensors: Unexpected rank of %src");
+    assert(srcShape.size() <= 2 && "Async copy only supports 1d and 2d "
+                                   "tensors: Unexpected rank of %src");
 
-    Value llDst = adaptor.getResult();
     Value llSrc = adaptor.getSrc();
-    Value llMask = adaptor.getMask();
-    Value llOther = adaptor.getOther();
 
-    // %src
     auto srcElems = unpackLLElements(loc, llSrc, rewriter);
 
-    // %dst
+    Value llDst = adaptor.getResult();
     auto smemObj = mlir::LLVM::getSharedMemoryObjectFromStruct(
         loc, llDst, resElemTy, rewriter);
-    // %mask
+
+    Value llMask = adaptor.getMask();
     SmallVector<Value> maskElems;
     if (llMask) {
       maskElems = unpackLLElements(loc, llMask, rewriter);
       assert(srcElems.size() == maskElems.size());
     }
 
+    Value llOther = adaptor.getOther();
     SmallVector<Value> otherElems;
     if (llOther) {
       otherElems = unpackLLElements(loc, llOther, rewriter);
       assert(srcElems.size() == otherElems.size());
     }
 
-    // TODO check maxVec with mask alignment!
-
     // global.load.lds has a shared dst register so we cannot have per thread
     // offsets This means our load size has to align with the load_width of
 
     unsigned maxVec = getContiguity(op.getSrc(), axisAnalysisPass);
     if (mask) {
-      // TODO, if this changes maxVec we cannot use global.load.lds?
       maxVec = std::min(maxVec, getMaskAlignment(mask));
     }
 
-    llvm::SmallSetVector<unsigned, 5> supportedLoadBits;
-    // TODO look up if we support it on mi200
-    switch (targetInfo.getISAFamily()) {
-    case mlir::triton::AMD::ISAFamily::CDNA3:
-      supportedLoadBits.insert(8);
-      supportedLoadBits.insert(16);
-      supportedLoadBits.insert(32);
-      if (targetInfo.getGPUKind() == llvm::AMDGPU::GPUKind::GK_GFX950) {
-        supportedLoadBits.insert(98);
-        supportedLoadBits.insert(128);
-      }
-      break;
-    default:
-      return emitError(loc, "Async copy not supported on target ISA");
-    }
+    auto shape = dstTy.getShape();
+    LinearLayout srcLayout =
+        triton::gpu::toLinearLayout(shape, srcTy.getEncoding());
+    LinearLayout sharedLayout = triton::gpu::toLinearLayout(
+        shape, dstTy.getEncoding(), resElemTy.getIntOrFloatBitWidth());
+    LinearLayout srcToSharedLayout = srcLayout.invertAndCompose(sharedLayout);
 
-    unsigned int loadStoreBitWidth = maxVec * resElemTy.getIntOrFloatBitWidth();
+    // We need to check if the kLane basis is contigeous for the chose
+    // vectorization because global.load.lds does not support per lane offset
+    auto kLane = str_attr("lane");
 
-    if (!supportedLoadBits.contains(loadStoreBitWidth)) {
-      return emitError(loc, "Async copy does not supported the required load "
-                            "vectorization, got ")
-             << loadStoreBitWidth << "bits";
-    }
-
-    {
-
-      auto shape = dstTy.getShape();
-      LinearLayout regLayout =
-          triton::gpu::toLinearLayout(shape, srcTy.getEncoding());
-      LinearLayout sharedLayout = triton::gpu::toLinearLayout(
-          shape, dstTy.getEncoding(), resElemTy.getIntOrFloatBitWidth());
-      LinearLayout regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
-      llvm::outs() << "Reg to shared: \n"
-                   << regToSharedLayout.toString() << "\n";
-
-      // We need to check if the lane basis is contigeous because
-      // global.load.lds does not support per lane offset
-      auto kLane = str_attr("lane");
-      auto kBlock = str_attr("block");
-      auto kWarp = str_attr("warp");
-      auto kRegister = str_attr("register");
-
-      for (int inLane : llvm::seq(regToSharedLayout.getInDimSize(kLane))) {
-        auto idx = regToSharedLayout.apply(
-            {{kRegister, 0}, {kLane, inLane}, {kWarp, 0}, {kBlock, 0}});
-        int32_t offset = idx[0].second;
-        if (offset != (inLane * maxVec)) {
-          return emitError(loc, "Invalid layout in AsyncCopy: ")
-                 << "Lane: " << inLane << " is " << offset << " should be "
-                 << inLane << "\n";
-        }
+    for (int inLane : llvm::seq(srcToSharedLayout.getInDimSizeLog2(kLane))) {
+      auto basis = srcToSharedLayout.getBasis(kLane, inLane)[0];
+      unsigned expected = maxVec * (1 << inLane);
+      if (basis != expected) {
+        return emitError(loc, "Invalid layout in AsyncCopy: ")
+               << "Lane: " << 1 + inLane << " is " << basis << " should be "
+               << expected << "\n";
       }
     }
 
@@ -534,23 +516,22 @@ struct AsyncLoadOpConversion
           shmemAddrs.push_back(shmemAddr);
         });
     assert(ok);
-    llvm::outs() << "Shared to reg\n";
-    llvm::outs().flush();
 
-    int vecBytes = vecTy.getNumElements() * vecTy.getElementTypeBitWidth() / 8;
+    int vecBits = vecTy.getNumElements() * vecTy.getElementTypeBitWidth();
+    if (!isLoadWidthSupported(vecBits, targetInfo)) {
+      return emitError(loc, "Async copy does not support the required load "
+                            "vectorization, got ")
+             << vecBits << " bits";
+    }
+
+    int vecBytes = vecBits / 8;
     assert(llvm::isPowerOf2_32(vecBytes));
 
     std::string intrinsic = "llvm.amdgcn.global.load.lds";
-    Value loadStoreByteWidthVal = i32_val(loadStoreBitWidth / 8);
-    llvm::outs() << "Load byte width: " << loadStoreByteWidthVal << "\n";
+    Value vecBytesVal = i32_val(vecBytes);
 
-    llvm::outs() << "Shem addr count: " << shmemAddrs.size() << "\n";
     for (int i = 0; i < shmemAddrs.size(); i++) {
-      // Tune CG and CA.
       // TODO Alex select correct cache modifier
-      // CacheModifier srcCacheModifier =
-      //     wordBytes == 16 ? CacheModifier::CG : CacheModifier::CA;
-      // assert(wordBytes == 16 || wordBytes == 8 || wordBytes == 4);
 
       auto srcIdx = i * maxVec;
       auto srcPtr = srcElems[srcIdx];
@@ -564,9 +545,8 @@ struct AsyncLoadOpConversion
         rewriter.create<LLVM::CondBrOp>(loc, maskElems[srcIdx], loadBlock,
                                         afterLoad);
         rewriter.setInsertionPointToStart(loadBlock);
-        rewriter.create<ROCDL::GlobalLoadLDSOp>(loc, srcPtr, shmemAddrs[i],
-                                                loadStoreByteWidthVal,
-                                                i32_val(0), i32_val(0));
+        rewriter.create<ROCDL::GlobalLoadLDSOp>(
+            loc, srcPtr, shmemAddrs[i], vecBytesVal, i32_val(0), i32_val(0));
 
         rewriter.create<LLVM::BrOp>(loc, afterLoad);
         rewriter.setInsertionPointToStart(afterLoad);
@@ -578,9 +558,8 @@ struct AsyncLoadOpConversion
                   icmp_ne(maskElems[srcIdx], true_val()));
         }
       } else {
-        rewriter.create<ROCDL::GlobalLoadLDSOp>(loc, srcPtr, shmemAddrs[i],
-                                                loadStoreByteWidthVal,
-                                                i32_val(0), i32_val(0));
+        rewriter.create<ROCDL::GlobalLoadLDSOp>(
+            loc, srcPtr, shmemAddrs[i], vecBytesVal, i32_val(0), i32_val(0));
       }
     }
 
@@ -1709,7 +1688,7 @@ void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
   patterns.add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
                StoreOpConversion, BufferLoadOpConversion,
                BufferStoreOpConversion, BufferAtomicRMWOpConversion,
-               AsyncLoadOpConversion, AsyncCommitGroupConversion,
+               AsyncCopyToGlobalOpConversion, AsyncCommitGroupConversion,
                AsyncWaitConversion, AsyncCommitGroupConversion>(
       typeConverter, targetInfo, axisInfoAnalysis, benefit);
 }
