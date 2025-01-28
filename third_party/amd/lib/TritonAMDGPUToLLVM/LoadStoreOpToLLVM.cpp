@@ -555,26 +555,42 @@ struct AsyncLoadOpConversion
       auto srcIdx = i * maxVec;
       auto srcPtr = srcElems[srcIdx];
 
-      Block *currentBlock = rewriter.getInsertionBlock();
-      Block *afterLoad =
-          rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
-      Block *loadBlock = rewriter.createBlock(afterLoad);
-      rewriter.setInsertionPointToEnd(currentBlock);
-      rewriter.create<LLVM::CondBrOp>(loc, maskElems[srcIdx], loadBlock,
-                                      afterLoad);
-      rewriter.setInsertionPointToStart(loadBlock);
-      LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, {},
-                                      {srcPtr, shmemAddrs[i],
-                                       loadStoreByteWidthVal,
-                                       /*imm
-                             offset=*/i32_val(0), i32_val(0)});
-      rewriter.create<LLVM::BrOp>(loc, afterLoad);
-      rewriter.setInsertionPointToStart(afterLoad);
+      if (mask) {
+        Block *currentBlock = rewriter.getInsertionBlock();
+        Block *afterLoad =
+            rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+        Block *loadBlock = rewriter.createBlock(afterLoad);
+        rewriter.setInsertionPointToEnd(currentBlock);
+        rewriter.create<LLVM::CondBrOp>(loc, maskElems[srcIdx], loadBlock,
+                                        afterLoad);
+        rewriter.setInsertionPointToStart(loadBlock);
+        LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, {},
+                                        {srcPtr, shmemAddrs[i],
+                                         loadStoreByteWidthVal,
+                                         /*imm
+                               offset=*/i32_val(0), i32_val(0)});
+        rewriter.create<LLVM::BrOp>(loc, afterLoad);
+        rewriter.setInsertionPointToStart(afterLoad);
+        if (other) {
+          Value storeVal =
+              packElementRangeIntoVector(rewriter, this->getTypeConverter(),
+                                         loc, vecTy, otherElems, srcIdx);
+          llStore(rewriter, loc, shmemAddrs[i], storeVal,
+                  icmp_ne(maskElems[srcIdx], true_val()));
+        }
+      } else {
+        LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, {},
+                                        {srcPtr, shmemAddrs[i],
+                                         loadStoreByteWidthVal,
+                                         /*imm
+                               offset=*/i32_val(0), i32_val(0)});
 
-      Value storeVal = packElementRangeIntoVector(
-          rewriter, this->getTypeConverter(), loc, vecTy, otherElems, srcIdx);
-      llStore(rewriter, loc, shmemAddrs[i], storeVal,
-              icmp_ne(maskElems[srcIdx], true_val()));
+        LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, {},
+                                        {srcPtr, shmemAddrs[i],
+                                         loadStoreByteWidthVal,
+                                         /*imm
+                               offset=*/i32_val(0), i32_val(0)});
+      }
     }
 
     // Drop the result token.
