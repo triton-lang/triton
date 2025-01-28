@@ -165,6 +165,7 @@ private:
   SetVector<Operation *> opToDelete;
   FuncOp funcOp;
   DominanceInfo domInfo;
+  PostDominanceInfo postDomInfo;
 };
 
 void LayoutRematerialization::addRematValue(Value old, Attribute encoding,
@@ -1120,12 +1121,36 @@ void LayoutRematerialization::hoistConvertDotOperand(
     ConvertLayoutOp convertOp) {
   auto targetType = convertOp.getType();
   // The pass is targeted to Nvidia mma/wgmma dot operands
+
+  auto canBePipelined = [&](ConvertLayoutOp convertOp) {
+    // FIXME: Check that the parent is a for loop
+    auto parent = convertOp->getParentOp();
+    if (!parent)
+      return false;
+
+    // Find all the dot-like ops in the for loop that have a nvidia dot operand
+    // encoding on the lhs and check if any of them post-dominates the load +
+    // cvt
+    SmallVector<Operation *> dotLikeOps;
+    parent->walk([&](Operation *op) {
+      if (op->hasTrait<OpTrait::DotLike>()) {
+        auto opEnc = dyn_cast<RankedTensorType>(op->getOperand(0).getType())
+                         .getEncoding();
+        auto dotEnc = dyn_cast<DotOperandEncodingAttr>(opEnc);
+        if (dotEnc && isa<NvidiaMmaEncodingAttr>(dotEnc.getParent()))
+          dotLikeOps.push_back(op);
+      }
+    });
+    if (dotLikeOps.empty())
+      return false;
+    return llvm::any_of(dotLikeOps, [&](Operation *dot) {
+      return postDomInfo.postDominates(dot, convertOp);
+    });
+  };
+
   // We move convert #dot_operand next to their loads. This is done
   // so that it's then easy to pipeline these loads
-  // TODO: Perhaps we should do this whenever convertOp is within a loop
-
-  auto dotEnc = dyn_cast<DotOperandEncodingAttr>(targetType.getEncoding());
-  if (!(dotEnc && isa<NvidiaMmaEncodingAttr>(dotEnc.getParent())))
+  if (!canBePipelined(convertOp))
     return;
 
   // We hoist over any operation that can be done without data movement between
