@@ -2944,6 +2944,108 @@ tt.func @chained_if(%arg0: i1, %arg1: i1, %arg2: tensor<32x32x!tt.ptr<f32>, #blo
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+
+// CHECK-LABEL: @cvt_in_peeled_prologue
+tt.func @cvt_in_peeled_prologue(%arg0: tensor<32x32x!tt.ptr<bf16>, #blocked>, %arg1: i1, %arg2: i32, %arg3: i32, %arg4: i1) {
+  %c1_i32 = arith.constant 1 : i32
+  %cst = arith.constant dense<0.0> : tensor<32x32xbf16, #blocked1>
+
+  // CHECK: scf.if
+  %0 = scf.if %arg1 -> (tensor<32x32xbf16, #blocked1>) {
+    // CHECK-NEXT: tt.load
+    %1 = tt.load %arg0 : tensor<32x32x!tt.ptr<bf16>, #blocked>
+    %2 = ttg.convert_layout %1 : tensor<32x32xbf16, #blocked> -> tensor<32x32xbf16, #blocked1>
+    // CHECK-NEXT: yield
+    scf.yield %2 : tensor<32x32xbf16, #blocked1>
+    // CHECK-NEXT: else
+  } else {
+    // CHECK-NEXT: yield
+    scf.yield %cst : tensor<32x32xbf16, #blocked1>
+  // CHECK-NEXT: }
+  }
+
+  // CHECK: [[PEEL1:%.*]] = scf.if
+  %1 = scf.if %arg4 -> (tensor<32x32xbf16, #blocked1>) {
+    // CHECK-NEXT: tt.load
+    %2 = tt.load %arg0 : tensor<32x32x!tt.ptr<bf16>, #blocked>
+    %3 = ttg.convert_layout %2 : tensor<32x32xbf16, #blocked> -> tensor<32x32xbf16, #blocked1>
+    // CHECK-NEXT: yield
+    scf.yield %3 : tensor<32x32xbf16, #blocked1>
+    // CHECK-NEXT: else
+  } else {
+    // CHECK-NEXT: yield
+    scf.yield %0 : tensor<32x32xbf16, #blocked1>
+  // CHECK-NEXT: }
+  }
+
+  // CHECK-NEXT: [[CVT:%.*]] = ttg.convert_layout [[PEEL1]]
+  // CHECK-NEXT: scf.for {{.*}} iter_args(%{{arg[0-9]+}} = [[CVT]])
+  %3 = scf.for %i = %arg2 to %arg3 step %c1_i32 iter_args(%k = %1) -> (tensor<32x32xbf16, #blocked1>) : i32 {
+    // CHECK-NEXT: scf.if
+    %4 = scf.if %arg1 -> (tensor<32x32xbf16, #blocked1>) {
+      // CHECK-NEXT: tt.load
+      %5 = tt.load %arg0 : tensor<32x32x!tt.ptr<bf16>, #blocked>
+      // CHECK-NEXT: ttg.convert_layout
+      %6 = ttg.convert_layout %5 : tensor<32x32xbf16, #blocked> -> tensor<32x32xbf16, #blocked1>
+      scf.yield %6 : tensor<32x32xbf16, #blocked1>
+    } else {
+      scf.yield %k : tensor<32x32xbf16, #blocked1>
+    }
+    "use.it"(%4) : (tensor<32x32xbf16, #blocked1>) -> ()
+    scf.yield %4 : tensor<32x32xbf16, #blocked1>
+  }
+  // CHECK-NOT: ttg.convert_layout
+  tt.return
+}
+
+// CHECK-LABEL: @cvt_in_loop_if_slice
+tt.func @cvt_in_loop_if_slice(%arg0: tensor<32x32x!tt.ptr<bf16>, #blocked>, %arg1: i1, %arg2: i32, %arg3: i32, %arg4: i1) {
+  %c1_i32 = arith.constant 1 : i32
+  %cst = arith.constant dense<0.0> : tensor<32x32xbf16, #blocked>
+
+  // CHECK: [[IF_OUT:%.*]] = scf.if
+  %0 = scf.if %arg1 -> (tensor<32x32xbf16, #blocked>) {
+    // CHECK-NEXT: tt.load
+    %1 = tt.load %arg0 : tensor<32x32x!tt.ptr<bf16>, #blocked>
+    // CHECK-NEXT: yield
+    scf.yield %1 : tensor<32x32xbf16, #blocked>
+    // CHECK-NEXT: else
+  } else {
+    // CHECK-NEXT: yield
+    scf.yield %cst : tensor<32x32xbf16, #blocked>
+  // CHECK-NEXT: }
+  }
+
+  // CHECK-NEXT: [[CVT:%.*]] = ttg.convert_layout [[IF_OUT]]
+  // CHECK-NEXT: scf.for
+  %1 = scf.for %i = %arg2 to %arg3 step %c1_i32 iter_args(%k = %cst) -> tensor<32x32xbf16, #blocked> : i32 {
+    // CHECK-NEXT: scf.if
+    %4 = scf.if %arg4 -> (tensor<32x32xbf16, #blocked>) {
+      // CHECK-NEXT: tt.load
+      %5 = tt.load %arg0 : tensor<32x32x!tt.ptr<bf16>, #blocked>
+      // CHECK-NEXT: ttg.convert_layout
+      scf.yield %5 : tensor<32x32xbf16, #blocked>
+    } else {
+      scf.yield %k : tensor<32x32xbf16, #blocked>
+    }
+    %6 = arith.addf %4, %0 : tensor<32x32xbf16, #blocked>
+    // CHECK-NOT: ttg.convert_layout
+    %7 = ttg.convert_layout %6 : tensor<32x32xbf16, #blocked> -> tensor<32x32xbf16, #blocked1>
+    "use.it"(%7) : (tensor<32x32xbf16, #blocked1>) -> ()
+    scf.yield %6 : tensor<32x32xbf16, #blocked>
+  }
+
+  tt.return
+}
+
+}
+
+// -----
+
 #linear = #ttg.linear<{register = [[1, 0], [0, 8], [0, 16]], lane = [[2, 0], [4, 0], [8, 0], [16, 0], [0, 1]], warp = [[0, 2], [0, 4]], block = []}>
 #blocked = #ttg.blocked<{sizePerThread = [2, 4], threadsPerWarp = [16, 2], warpsPerCTA = [1, 4], order = [1, 0]}>
 
