@@ -564,11 +564,10 @@ struct AsyncLoadOpConversion
         rewriter.create<LLVM::CondBrOp>(loc, maskElems[srcIdx], loadBlock,
                                         afterLoad);
         rewriter.setInsertionPointToStart(loadBlock);
-        LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, {},
-                                        {srcPtr, shmemAddrs[i],
-                                         loadStoreByteWidthVal,
-                                         /*imm
-                               offset=*/i32_val(0), i32_val(0)});
+        rewriter.create<ROCDL::GlobalLoadLDSOp>(loc, srcPtr, shmemAddrs[i],
+                                                loadStoreByteWidthVal,
+                                                i32_val(0), i32_val(0));
+
         rewriter.create<LLVM::BrOp>(loc, afterLoad);
         rewriter.setInsertionPointToStart(afterLoad);
         if (other) {
@@ -579,17 +578,9 @@ struct AsyncLoadOpConversion
                   icmp_ne(maskElems[srcIdx], true_val()));
         }
       } else {
-        LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, {},
-                                        {srcPtr, shmemAddrs[i],
-                                         loadStoreByteWidthVal,
-                                         /*imm
-                               offset=*/i32_val(0), i32_val(0)});
-
-        LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, {},
-                                        {srcPtr, shmemAddrs[i],
-                                         loadStoreByteWidthVal,
-                                         /*imm
-                               offset=*/i32_val(0), i32_val(0)});
+        rewriter.create<ROCDL::GlobalLoadLDSOp>(loc, srcPtr, shmemAddrs[i],
+                                                loadStoreByteWidthVal,
+                                                i32_val(0), i32_val(0));
       }
     }
 
@@ -1678,8 +1669,9 @@ struct AsyncWaitConversion : public ConvertOpToLLVMPattern<AsyncWaitOp> {
   LogicalResult
   matchAndRewrite(AsyncWaitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // MemBar already added the barrier for us so we can dimply drop it
+
     auto loc = op->getLoc();
+    rewriter.create<ROCDL::WaitcntOp>(loc, 0);
     rewriter.replaceOp(op, i32_val(0));
     return success();
   }

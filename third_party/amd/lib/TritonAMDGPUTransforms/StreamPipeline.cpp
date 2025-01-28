@@ -300,6 +300,7 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
   auto viewLoad =
       builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, loadOffsets);
 
+  Operation *wait{};
   if (emitAsyncCopy) {
     auto srcTy = dyn_cast<triton::gpu::TensorOrMemDesc>(src.getType());
     if (!srcTy) {
@@ -355,6 +356,8 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
         loadOp.getLoc(), cvtSrc.getResult(), viewLoad, mask, other,
         loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
 
+    wait = builder.create<ttg::AsyncWaitOp>(loc, newLoadOp->getResult(0), 0);
+
     auto [stage, cluster] = schedule[loadOp];
     schedule.erase(loadOp);
     schedule.insert(cvtSrc, stage, cluster);
@@ -373,8 +376,11 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
     alloc.erase();
 
   // Prefetch load ahead of the dot stage if is used by the dot.
-  Operation *storeOp;
+  Operation *storeOp{};
   if (emitAsyncCopy) {
+    // FIXME: it should be scheduled as a local_load to hide latency but that
+    // currently breaks the scheduling as we require one more lds buffer to make
+    // that work
     scheduleOp(newLoadOp, SCHED_LOCAL_STORE);
   } else {
     storeOp = builder.create<ttg::LocalStoreOp>(loc, newLoadOp->getResult(0),
@@ -384,9 +390,16 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
   }
 
   // Create local load
-  auto sharedLoad =
-      builder.create<ttg::LocalLoadOp>(loc, loadOp.getType(), viewLoad);
-  Value result = sharedLoad.getResult();
+  Operation *sharedLoad{};
+  if (emitAsyncCopy) {
+    // scheduleOp(wait, SCHED_LOCAL_LOAD);
+    sharedLoad = builder.create<ttg::LocalLoadOp>(loc, loadOp.getType(),
+                                                  viewLoad, wait->getResult(0));
+  } else {
+    sharedLoad =
+        builder.create<ttg::LocalLoadOp>(loc, loadOp.getType(), viewLoad);
+  }
+  Value result = sharedLoad->getResult(0);
   if (prefetch)
     scheduleOp(sharedLoad, SCHED_LOCAL_LOAD);
 
