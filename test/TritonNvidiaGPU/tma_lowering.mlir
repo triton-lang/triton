@@ -51,3 +51,38 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return %1 : !tt.tensordesc<tensor<8x32xi8>>
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+
+// CHECK-LABEL: @tma_gather
+tt.func @tma_gather(%arg0: !tt.tensordesc<tensor<1x128xbf16>>, %arg1: tensor<32xi32, #blocked>, %arg2: i32) -> tensor<32x128xbf16, #blocked1> {
+  // CHECK: [[RESULT:%.*]] = ttg.local_alloc
+  // CHECK: [[BARRIER:%.*]] = ttg.local_alloc
+  // CHECK: ttng.init_barrier [[BARRIER]]
+  // CHECK: [[DESC_PTR:%.*]] = ttng.tensor_desc_to_tma_ptr %arg0
+  // CHECK: ttng.async_tma_gather [[DESC_PTR]][%arg1, %arg2] [[RESULT]], [[BARRIER]], %true
+  // CHECK: ttng.wait_barrier [[BARRIER]]
+  // CHECK: ttng.inval_barrier [[BARRIER]]
+  // CHECK: [[OUT:%.*]] = ttg.local_load [[RESULT]]
+  %0 = tt.experimental_descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<tensor<1x128xbf16>>, tensor<32xi32, #blocked>, i32) -> tensor<32x128xbf16, #blocked1>
+  // CHECK: return [[OUT]]
+  tt.return %0 : tensor<32x128xbf16, #blocked1>
+}
+
+// CHECK-LABEL: @tma_scatter
+tt.func @tma_scatter(%arg0: !tt.tensordesc<tensor<1x128xbf16>>, %arg1: tensor<32xi32, #blocked>, %arg2: i32, %arg3: tensor<32x128xbf16, #blocked1>) {
+  // CHECK-NEXT: [[SRC:%.*]] = ttg.local_alloc %arg3
+  // CHECK-NEXT: ttng.fence_async_shared {bCluster = false}
+  // CHECK-NEXT: [[PTR:%.*]] = ttng.tensor_desc_to_tma_ptr %arg0
+  // CHECK-NEXT: ttng.async_tma_scatter [[PTR]][%arg1, %arg2] [[SRC]]
+  // CHECK-NEXT: ttng.async_tma_store_wait
+  tt.experimental_descriptor_scatter %arg0[%arg1, %arg2], %arg3 : !tt.tensordesc<tensor<1x128xbf16>>, tensor<32xi32, #blocked>, i32, tensor<32x128xbf16, #blocked1>
+  tt.return
+}
+
+}

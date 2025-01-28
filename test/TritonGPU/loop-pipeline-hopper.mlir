@@ -719,6 +719,28 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 }
 
 // -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: tma_store_pipeline
+  tt.func public @tma_store_pipeline(%arg0: tensor<8x128xf32, #blocked>, %arg1: !tt.tensordesc<tensor<1x128xf32>>, %arg2: i32, %arg3: i32) attributes {noinline = false} {
+    %c0_i32 = arith.constant 0 : i32
+    scf.for %arg4 = %c0_i32 to %arg3 step %arg2  : i32 {
+      %1 = arith.divsi %arg4, %arg2 : i32
+      %2 = tt.splat %1 : i32 -> tensor<8xi32, #blocked1>
+      // CHECK: ttng.async_tma_store_wait {pendings = 0 : i32}
+      // CHECK-NEXT: ttg.local_store
+      // CHECK-NEXT: ttng.fence_async_shared
+      // CHECK-NEXT: ttng.tensor_desc_to_tma_ptr
+      // CHECK-NEXT: ttng.async_tma_scatter
+      tt.experimental_descriptor_scatter %arg1[%2, %1], %arg0 : !tt.tensordesc<tensor<1x128xf32>>, tensor<8xi32, #blocked1>, i32, tensor<8x128xf32, #blocked>
+    }
+    tt.return
+  }
+}
+
+// -----
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {

@@ -1,5 +1,6 @@
 #include "Dialect/NVGPU/IR/Dialect.h"
 #include "TargetInfo.h"
+#include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
 
@@ -9,7 +10,14 @@
 #include "Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Attributes.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
+
+#include <cassert>
 
 #include <cassert>
 
@@ -24,6 +32,8 @@ using ::mlir::triton::gpu::getCTALayout;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::SharedEncodingAttr;
+
+namespace ttg = mlir::triton::gpu;
 
 // Toggle this to work around Cooperative Grid Launch ld.acquire optimized path
 static constexpr bool disableLDAcquireLowering = false;
@@ -1029,9 +1039,6 @@ struct AsyncCopyGlobalToLocalOpConversion
     assert((isa<BlockedEncodingAttr, SliceEncodingAttr>(srcLayout) &&
             "Unexpected srcLayout in AsyncCopyGlobalToLocalOpConversion"));
     auto resSharedLayout = cast<SharedEncodingAttr>(dstTy.getEncoding());
-    auto srcShape = srcTy.getShape();
-    assert((srcShape.size() <= 3) &&
-           "insert_slice_async: Unexpected rank of %src");
 
     Value llDst = adaptor.getResult();
     Value llSrc = adaptor.getSrc();
@@ -1187,8 +1194,7 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     auto mod = op->getParentOfType<ModuleOp>();
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     int warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-    Value warpID = udiv(id, i32_val(warpSize));
-    warpID = LLVM::NVIDIA::shuffleIdx(loc, rewriter, warpID, 0);
+    Value warpID = rewriter.create<nvgpu::WarpIdOp>(loc);
     Value pred = adaptor.getPred();
     // Select just one thread for the TMA copy. This also helps the compiler to
     // figure out that the op is uniform.
@@ -1246,6 +1252,7 @@ struct AsyncTMACopyGlobalToLocalOpConversion
       operands.push_back(
           ptxBuilderTMA.newOperand(barrierMemObj.getBase(), "r"));
       tmaInst += "}], [$" + std::to_string(operandIdx++) + "];";
+
       auto &tma = *ptxBuilderTMA.create<>(tmaInst);
       tma(operands, /*onlyAttachMLIRArgs=*/true);
       ptxBuilderTMA.launch(rewriter, loc, voidTy);
@@ -1282,8 +1289,7 @@ struct AsyncTMACopyLocalToGlobalOpConversion
     auto mod = op->getParentOfType<ModuleOp>();
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     int warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-    Value warpID = udiv(id, i32_val(warpSize));
-    warpID = LLVM::NVIDIA::shuffleIdx(loc, rewriter, warpID, 0);
+    Value warpID = rewriter.create<nvgpu::WarpIdOp>(loc);
     int innerBlockSize = op.getSrc().getType().getShape().back();
     int contigDimSizeInByte = innerBlockSize * elementSizeInBytes;
     int numCopies = 1;
@@ -1344,6 +1350,258 @@ struct AsyncTMACopyLocalToGlobalOpConversion
     return success();
   }
 };
+
+static LinearLayout getUnswizzledLayout(triton::gpu::MemDescType type) {
+  return triton::gpu::sharedToLinearLayoutLeadingOffset(
+      type.getShape(), cast<SharedEncodingAttr>(type.getEncoding()),
+      type.getElementTypeBitWidth(), /*disableSwizzle=*/true);
+}
+
+// This function is shared between the TMA gather and scatter lowerings. It
+// handles the logic for iterating over the x offset values in groups of 4
+// consecutive indices and mapping them to the appropriate shared memory offset.
+//
+// This invokes a callback with the predicate, shared memory offset, y offset,
+// and x offsets.
+static LogicalResult iterateGatherScatterIndices(
+    Operation *op, ConversionPatternRewriter &rewriter,
+    const TypeConverter &typeConverter,
+    mlir::TypedValue<RankedTensorType> xCoords,
+    mlir::TypedValue<ttg::MemDescType> smem, Value smemObjValue,
+    Value xOffsetsValue, Value yOffsetValue, Value pred,
+    function_ref<void(Value, Value, Value, ArrayRef<Value>)> callback) {
+  MLIRContext *ctx = op->getContext();
+  Location loc = op->getLoc();
+
+  StringAttr kDim0 = str_attr("dim0");
+  StringAttr kDim1 = str_attr("dim1");
+  StringAttr kMsg = str_attr("msg");
+  StringAttr kRegister = str_attr("register");
+  StringAttr kLane = str_attr("lane");
+  StringAttr kWarp = str_attr("warp");
+  StringAttr kBlock = str_attr("block");
+
+  // Each warp can issue a distinct `gather4` instruction that loads 4 rows into
+  // consecutive shared memory. Thus, the layout of the x offsets must be such
+  // that 4 consecutive elements are broadcasted to a warp.
+  RankedTensorType xCoordsTy = xCoords.getType();
+  LinearLayout xCoordsLayout = triton::gpu::toLinearLayout(
+      xCoordsTy.getShape(), xCoordsTy.getEncoding());
+  if (xCoordsLayout.getInDimSize(kRegister) < 4)
+    return op->emitError("must have at least 4 x offsets per warp");
+  // Check that the first two bases are [1] and [2].
+  for (unsigned i : {0, 1}) {
+    if (xCoordsLayout.getBasis(kRegister, i).front() != (1 << i))
+      return op->emitError(
+          "x offsets are not grouped by 4 contiguous elements");
+  }
+
+  // TMA expects the memdesc shape to match the alloc shape.
+  triton::gpu::MemDescType smemType = smem.getType();
+  ArrayRef<int64_t> allocShape = smemType.getAllocShape();
+  if (allocShape.size() < 2 || smemType.getShape() != allocShape.take_back(2))
+    return op->emitError("memdesc shape must match alloc shape");
+  // `hasLeadingOffset` means the core matrix tiles are placed next to each
+  // other in shared memory, which lines up with how `gather4` loads data.
+  if (!cast<SharedEncodingAttr>(smemType.getEncoding()).getHasLeadingOffset())
+    return op->emitError("requires dst encoding with `hasLeadingOffset=true`");
+  Type llvmElemTy = typeConverter.convertType(smemType.getElementType());
+  Type elemPtrTy = ptr_ty(ctx, /*addrspace=*/3);
+  auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, smemObjValue,
+                                                       llvmElemTy, rewriter);
+
+  unsigned threadsPerWarp = xCoordsLayout.getInDimSize(kLane);
+  unsigned numWarps = xCoordsLayout.getInDimSize(kWarp);
+
+  // Each gather4 instructions reads 128 bytes for 4 rows at a time.
+  unsigned innerBlockSize = smemType.getShape().back();
+  unsigned contigDimSizeInBytes =
+      innerBlockSize * ceil<unsigned>(smemType.getElementTypeBitWidth(), 8);
+  unsigned numMessagesPerRow = ceil<unsigned>(contigDimSizeInBytes, 128);
+
+  // `xCoordsLayout` maps the register ID into dim0. Tile dim1 by adding a new
+  // dimension representing the TMA message ID.
+  assert(innerBlockSize % numMessagesPerRow == 0);
+  assert(llvm::isPowerOf2_32(numMessagesPerRow));
+  unsigned msgSize = innerBlockSize / numMessagesPerRow;
+  std::vector<std::vector<int>> msgBases;
+  for (unsigned msgId = 1; msgId < numMessagesPerRow; msgId *= 2)
+    msgBases.push_back({int32_t(msgId * msgSize)});
+  LinearLayout msgToCol({{{kMsg, std::move(msgBases)}}},
+                        {{kDim1, innerBlockSize}},
+                        /*requiresSurjective=*/false);
+  LinearLayout msgLayout = xCoordsLayout * msgToCol;
+
+  // `gather4` will put the 128-byte segments of the 4 rows consecutively in
+  // shared memory. However, if the 4 rows are smaller than the shared memory
+  // swizzle tile size, e.g. [4, 32] vs. [8, 32], then, for example, the address
+  // of the 0th element of row 4 will not be at the start of the segment.
+  LinearLayout sharedLayout = getUnswizzledLayout(smemType);
+  LinearLayout msgToShared = msgLayout.invertAndCompose(sharedLayout);
+
+  // If there are too few rows, warps will have redundant data. An individual
+  // thread might also have redundant indices if there is register broadcasting.
+  auto freeVars = xCoordsLayout.getFreeVariableMasks();
+  unsigned regMask = freeVars[kRegister];
+  unsigned warpMask = freeVars[kWarp];
+  if (freeVars[kLane] != (threadsPerWarp - 1))
+    return op->emitError("x offsets must be broadcasted across each warp");
+
+  Value warpId = rewriter.create<nvgpu::WarpIdOp>(loc);
+  // Each block has separate shared memory. Multiple CTAs don't work anyways.
+  Value blockId = i32_val(0);
+
+  // Mask out warps with redundant x offsets.
+  pred = and_(pred, icmp_eq(i32_val(0), and_(warpId, i32_val(warpMask))));
+  // Select one thread in each warp to issue the gather4 messages.
+  pred = and_(pred, LLVM::NVIDIA::createElectPredicate(loc, rewriter));
+
+  SmallVector<Value> xOffsets = unpackLLElements(loc, xOffsetsValue, rewriter);
+  // Lane ID doesn't matter.
+  Value laneId = i32_val(0);
+  for (auto regId : seq<unsigned>(0, xOffsets.size(), 4)) {
+    // Skip redundant x offsets within a thread.
+    if ((regMask & regId) != 0)
+      continue;
+    Value regIdVal = i32_val(regId);
+
+    for (auto msgId : llvm::seq(numMessagesPerRow)) {
+      Value msgIdVal = i32_val(msgId);
+
+      auto result = applyLinearLayout(loc, rewriter, msgToShared,
+                                      {{kMsg, msgIdVal},
+                                       {kRegister, regIdVal},
+                                       {kLane, laneId},
+                                       {kWarp, warpId},
+                                       {kBlock, blockId}});
+      assert(result.size() == 2 && result.front().first == "offset" &&
+             result.back().first == "block");
+      Value shMemOffset = result.front().second;
+      // Because we checked that the memdesc's allocshape and shape match, we
+      // can ignore the strides and directly index into the shmem object.
+      Value shMemPtr =
+          gep(elemPtrTy, llvmElemTy, smemObj.getBase(), shMemOffset);
+      Value yOffset = add(yOffsetValue, i32_val(msgId * msgSize));
+
+      callback(pred, shMemPtr, yOffset, ArrayRef(xOffsets).slice(regId, 4));
+    };
+  }
+
+  return success();
+}
+
+struct AsyncTMAGatherOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::AsyncTMAGatherOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::AsyncTMAGatherOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override;
+};
+
+LogicalResult AsyncTMAGatherOpConversion::matchAndRewrite(
+    triton::nvidia_gpu::AsyncTMAGatherOp op, OpAdaptor adaptor,
+    ConversionPatternRewriter &rewriter) const {
+  Location loc = op.getLoc();
+  MLIRContext *ctx = getContext();
+
+  LLVM::LLVMVoidType voidTy = void_ty(op->getContext());
+  auto barrierMemObj = LLVM::getSharedMemoryObjectFromStruct(
+      loc, adaptor.getBarrier(),
+      typeConverter->convertType(op.getBarrier().getType().getElementType()),
+      rewriter);
+
+  // Callback to generate the gather4 instruction.
+  auto callback = [&](Value pred, Value shMemPtr, Value yOffset,
+                      ArrayRef<Value> xOffsets) {
+    std::string tmaInst = "@$0 cp.async.bulk.tensor.2d.tile::gather4.shared"
+                          "::cluster.global.mbarrier::complete_tx::bytes "
+                          "[$1], [$2, {$3, $4, $5, $6, $7}], [$8];";
+
+    PTXBuilder ptxBuilder;
+    SmallVector<PTXBuilder::Operand *, 9> operands{
+        // clang-format off
+        ptxBuilder.newOperand(pred, "b"),
+        ptxBuilder.newOperand(shMemPtr, "r"),
+        ptxBuilder.newOperand(adaptor.getDescPtr(), "l"),
+        ptxBuilder.newOperand(yOffset, "r")
+        // clang-format on
+    };
+    for (Value xOffset : xOffsets)
+      operands.push_back(ptxBuilder.newOperand(xOffset, "r"));
+    operands.push_back(ptxBuilder.newOperand(barrierMemObj.getBase(), "r"));
+
+    auto &tma = *ptxBuilder.create<>(tmaInst);
+    tma(operands, /*attachOnlyMLIRArgs=*/true);
+    ptxBuilder.launch(rewriter, loc, voidTy);
+  };
+
+  if (failed(iterateGatherScatterIndices(
+          op, rewriter, *getTypeConverter(), op.getXOffsets(), op.getResult(),
+          adaptor.getResult(), adaptor.getXOffsets(), adaptor.getYOffset(),
+          adaptor.getPred(), callback)))
+    return failure();
+
+  rewriter.eraseOp(op);
+  return success();
+}
+
+struct AsyncTMAScatterOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::AsyncTMAScatterOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::AsyncTMAScatterOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override;
+};
+
+LogicalResult AsyncTMAScatterOpConversion::matchAndRewrite(
+    triton::nvidia_gpu::AsyncTMAScatterOp op, OpAdaptor adaptor,
+    ConversionPatternRewriter &rewriter) const {
+  Location loc = op.getLoc();
+  MLIRContext *ctx = getContext();
+  LLVM::LLVMVoidType voidTy = void_ty(op->getContext());
+
+  // Callback to generate the scatter4 instruction.
+  auto callback = [&](Value pred, Value shMemPtr, Value yOffset,
+                      ArrayRef<Value> xOffsets) {
+    std::string tmaInst = "@$0 cp.async.bulk.tensor.2d.tile::scatter4.global"
+                          ".shared::cta.bulk_group "
+                          "[$1, {$2, $3, $4, $5, $6}], [$7];";
+
+    PTXBuilder ptxBuilder;
+    SmallVector<PTXBuilder::Operand *, 8> operands{
+        // clang-format off
+        ptxBuilder.newOperand(pred, "b"),
+        ptxBuilder.newOperand(adaptor.getDescPtr(), "l"),
+        ptxBuilder.newOperand(yOffset, "r")
+        // clang-format on
+    };
+    for (Value xOffset : xOffsets)
+      operands.push_back(ptxBuilder.newOperand(xOffset, "r"));
+    operands.push_back(ptxBuilder.newOperand(shMemPtr, "r"));
+
+    auto &tma = *ptxBuilder.create<>(tmaInst);
+    tma(operands, /*attachOnlyMLIRArgs=*/true);
+    ptxBuilder.launch(rewriter, loc, voidTy);
+  };
+
+  if (failed(iterateGatherScatterIndices(
+          op, rewriter, *getTypeConverter(), op.getXOffsets(), op.getSrc(),
+          adaptor.getSrc(), adaptor.getXOffsets(), adaptor.getYOffset(),
+          /*pred=*/true_val(), callback)))
+    return failure();
+
+  // TODO: Separate the syncronizations operations into separate TTGIR ops to
+  // be able to schedule them at the high level.
+  const std::string ptx = "cp.async.bulk.commit_group";
+  PTXBuilder ptxBuilderSync;
+  ptxBuilderSync.create<>(ptx)->operator()();
+  ptxBuilderSync.launch(rewriter, op.getLoc(), void_ty(op.getContext()));
+
+  rewriter.eraseOp(op);
+  return success();
+}
 
 struct AsyncWaitOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::AsyncWaitOp> {
@@ -1426,7 +1684,9 @@ void mlir::triton::NVIDIA::populateLoadStoreOpToLLVMPatterns(
       typeConverter, targetInfo, axisInfoAnalysis, benefit);
   patterns.add<AsyncCommitGroupOpConversion>(typeConverter, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, benefit);
-  patterns.add<AsyncTMACopyGlobalToLocalOpConversion,
-               AsyncTMACopyLocalToGlobalOpConversion, TMAStoreWaitOpConversion>(
-      typeConverter, benefit);
+  patterns
+      .add<AsyncTMACopyGlobalToLocalOpConversion,
+           AsyncTMACopyLocalToGlobalOpConversion, AsyncTMAGatherOpConversion,
+           AsyncTMAScatterOpConversion, TMAStoreWaitOpConversion>(typeConverter,
+                                                                  benefit);
 }
