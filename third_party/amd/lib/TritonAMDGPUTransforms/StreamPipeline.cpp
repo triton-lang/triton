@@ -10,6 +10,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/Support/Debug.h"
 
 //===----------------------------------------------------------------------===//
@@ -269,7 +270,8 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
   auto srcTy = dyn_cast<triton::gpu::TensorOrMemDesc>(src.getType());
   // We can use AsyncCopy if we do not swizzle into smem
   // TODO (alex) ensure it's 2D
-  if (sharedEncodingAttr.getPerPhase() == 1 &&
+  if (triton::tools::getBoolEnv("AMDGCN_USE_DIRECT_TO_LDS") &&
+      sharedEncodingAttr.getPerPhase() == 1 &&
       sharedEncodingAttr.getMaxPhase() == 1 &&
       llvm::equal(sharedEncodingAttr.getOrder(),
                   ttg::getOrder(srcTy.getEncoding()))) {
