@@ -10,7 +10,6 @@
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/Support/Debug.h"
 
 //===----------------------------------------------------------------------===//
@@ -258,25 +257,12 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
   Value other = loadOp.getOther();
 
   ttg::MemDescType allocTy = cast<ttg::MemDescType>(alloc.getType());
-
-  auto sharedEncodingAttr =
-      cast<ttg::SharedEncodingAttr>(allocTy.getEncoding());
-  auto srcTy = dyn_cast<triton::gpu::TensorOrMemDesc>(src.getType());
-
-  bool useAsyncCopy = false;
-
-  // Note that we can only use AsyncCopy when have coalesced LDS writes (e.g. no
-  // swizzeling).
-  if (triton::tools::getBoolEnv("AMDGCN_USE_DIRECT_TO_LDS") &&
-      sharedEncodingAttr.getPerPhase() == 1 &&
-      sharedEncodingAttr.getMaxPhase() == 1 &&
-      sharedEncodingAttr.getOrder().size() == 2 &&
-      llvm::equal(sharedEncodingAttr.getOrder(),
-                  ttg::getOrder(srcTy.getEncoding()))) {
-    useAsyncCopy = true;
-  }
-
   SmallVector<Value> copyOffsets(allocTy.getRank(), zero);
+  Operation *copy = builder.clone(*loadOp);
+
+  auto [stage, cluster] = schedule[loadOp];
+  schedule.erase(loadOp);
+  schedule.insert(copy, stage, cluster);
 
   // Extract part.
   SmallVector<Value> loadOffsets(allocTy.getRank(), zero);
@@ -288,72 +274,6 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
       allocTy.getEncoding(), sharedMemorySpace, /*mutableMemory=*/true);
   auto viewLoad =
       builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, loadOffsets);
-
-  Operation *newLoadOp{};
-  Operation *wait{};
-
-  if (!useAsyncCopy) {
-    newLoadOp = builder.clone(*loadOp);
-    auto [stage, cluster] = schedule[loadOp];
-    schedule.erase(loadOp);
-    schedule.insert(newLoadOp, stage, cluster);
-  } else {
-    auto srcTy = dyn_cast<triton::gpu::TensorOrMemDesc>(src.getType());
-    assert(srcTy);
-
-    // We need to ensure we read coalesced into LDS so we adjust the blocked to
-    // read coalesced
-
-    auto shape = subviewTy.getShape();
-    auto order = sharedEncodingAttr.getOrder();
-    // Aim to use wider loads
-    llvm::SmallVector<unsigned, 2> sizePerThread{1, 1};
-    sizePerThread[order[0]] =
-        32 / allocTy.getElementType().getIntOrFloatBitWidth();
-    llvm::SmallVector<unsigned, 2> threadsPerWarp{1, 1};
-    assert((shape[order[0]] % sizePerThread[0]) == 0);
-    unsigned warpSize = 64;
-    threadsPerWarp[order[0]] =
-        std::min<unsigned>(warpSize, shape[order[0]] / sizePerThread[order[0]]);
-    threadsPerWarp[order[1]] =
-        std::max<unsigned>(1, warpSize / threadsPerWarp[order[0]]);
-
-    auto srcEncoding = srcTy.getEncoding();
-    auto newLayout = ttg::BlockedEncodingAttr::get(
-        loadOp->getContext(), sizePerThread, threadsPerWarp,
-        triton::gpu::getWarpsPerCTA(srcEncoding),
-        triton::gpu::getOrder(srcEncoding),
-        triton::gpu::getCTALayout(srcEncoding));
-    newLayout.printStripped(llvm::outs());
-    llvm::outs() << "\n";
-    RankedTensorType newArgType = RankedTensorType::get(
-        srcTy.getShape(), srcTy.getElementType(), newLayout);
-    srcTy.getEncoding().print(llvm::outs());
-    llvm::outs() << "\n";
-    auto cvtSrc =
-        builder.create<ttg::ConvertLayoutOp>(loadOp.getLoc(), newArgType, src);
-
-    auto mask = loadOp.getMask();
-    if (mask) {
-      auto maskTy = dyn_cast<triton::gpu::TensorOrMemDesc>(mask.getType());
-      RankedTensorType newMaskTy = RankedTensorType::get(
-          maskTy.getShape(), maskTy.getElementType(), newLayout);
-      auto cvtMask = builder.create<ttg::ConvertLayoutOp>(
-          loadOp->getLoc(), newMaskTy, loadOp.getMask());
-    }
-
-    newLoadOp = builder.create<ttg::AsyncCopyGlobalToLocalOp>(
-        loadOp.getLoc(), cvtSrc.getResult(), viewLoad, mask, other,
-        loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
-
-    wait = builder.create<ttg::AsyncWaitOp>(loc, newLoadOp->getResult(0), 0);
-
-    auto [stage, cluster] = schedule[loadOp];
-    schedule.erase(loadOp);
-    schedule.insert(cvtSrc, stage, cluster);
-    schedule.insert(newLoadOp, stage, cluster);
-  }
-
   // Clean up old local caches.
   SmallVector<ttg::LocalAllocOp> allocsToErase;
   for (Operation *user : loadOp->getUsers()) {
@@ -366,30 +286,15 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
     alloc.erase();
 
   // Prefetch load ahead of the dot stage if is used by the dot.
-  Operation *storeOp{};
-  if (useAsyncCopy) {
-    // FIXME: it should be scheduled as a local_load to hide latency but that
-    // currently breaks the scheduling as we require one more lds buffer to make
-    // that work
-    scheduleOp(newLoadOp, SCHED_LOCAL_STORE);
-  } else {
-    storeOp = builder.create<ttg::LocalStoreOp>(loc, newLoadOp->getResult(0),
-                                                viewLoad);
-    scheduleOp(viewLoad, SCHED_LOCAL_STORE);
-    scheduleOp(storeOp, SCHED_LOCAL_STORE);
-  }
+  auto storeOp =
+      builder.create<ttg::LocalStoreOp>(loc, copy->getResult(0), viewLoad);
+  scheduleOp(viewLoad, SCHED_LOCAL_STORE);
+  scheduleOp(storeOp, SCHED_LOCAL_STORE);
 
   // Create local load
-  Operation *sharedLoad{};
-  if (useAsyncCopy) {
-    // scheduleOp(wait, SCHED_LOCAL_LOAD);
-    sharedLoad = builder.create<ttg::LocalLoadOp>(loc, loadOp.getType(),
-                                                  viewLoad, wait->getResult(0));
-  } else {
-    sharedLoad =
-        builder.create<ttg::LocalLoadOp>(loc, loadOp.getType(), viewLoad);
-  }
-  Value result = sharedLoad->getResult(0);
+  auto sharedLoad =
+      builder.create<ttg::LocalLoadOp>(loc, loadOp.getType(), viewLoad);
+  Value result = sharedLoad.getResult();
   if (prefetch)
     scheduleOp(sharedLoad, SCHED_LOCAL_LOAD);
 
@@ -399,11 +304,7 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
   // instruction scheduling hints to correctly count the emitted `ds_write`
   // instructions for each GEMM tile.
   if (auto attr = loadOp->getAttr(triton::amdgpu::OpIdxAttr::getMnemonic())) {
-    if (useAsyncCopy) {
-      newLoadOp->setAttr(triton::amdgpu::OpIdxAttr::getMnemonic(), attr);
-    } else {
-      storeOp->setAttr(triton::amdgpu::OpIdxAttr::getMnemonic(), attr);
-    }
+    storeOp->setAttr(triton::amdgpu::OpIdxAttr::getMnemonic(), attr);
   }
 
   loadOp->replaceAllUsesWith(ValueRange{result});
