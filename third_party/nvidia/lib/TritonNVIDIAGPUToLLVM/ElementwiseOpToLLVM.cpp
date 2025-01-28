@@ -279,11 +279,11 @@ static ConverterT makeConverterFromPtx(const std::string &ptxAsm, Type inType,
                                        Type outType,
                                        const int inVecWidthBits = 32,
                                        const int outVecWidthBits = 32) {
-
   ConverterT converter =
       [ptxAsm, inType, outType, inVecWidthBits,
        outVecWidthBits](Location loc, ConversionPatternRewriter &rewriter,
                         const SmallVector<Value> &v) -> SmallVector<Value> {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     int numElements = v.size();
     assert(numElements == 4 || numElements == 2 && "invalid vector size");
 
@@ -293,12 +293,12 @@ static ConverterT makeConverterFromPtx(const std::string &ptxAsm, Type inType,
     // first, we pack `v` into 32-bit ints
     int inVecWidth = inVecWidthBits / inBitwidth;
     auto inVecTy = vec_ty(inType, inVecWidth);
-    SmallVector<Value> inPacked(numElements / inVecWidth, undef(inVecTy));
+    SmallVector<Value> inPacked(numElements / inVecWidth, b.undef(inVecTy));
     for (size_t i = 0; i < numElements; i++)
-      inPacked[i / inVecWidth] = insert_element(
-          inVecTy, inPacked[i / inVecWidth], v[i], i32_val(i % inVecWidth));
+      inPacked[i / inVecWidth] = b.insert_element(
+          inVecTy, inPacked[i / inVecWidth], v[i], b.i32_val(i % inVecWidth));
     for (size_t i = 0; i < inPacked.size(); i++)
-      inPacked[i] = bitcast(inPacked[i], int_ty(inVecWidthBits));
+      inPacked[i] = b.bitcast(inPacked[i], int_ty(inVecWidthBits));
 
     // then, we run the provided inline PTX
     int outVecWidth = outVecWidthBits / outBitwidth;
@@ -325,13 +325,13 @@ static ConverterT makeConverterFromPtx(const std::string &ptxAsm, Type inType,
       auto outStructTy = struct_ty(SmallVector<Type>(outNums, outVecTy));
       auto outStruct = builder.launch(rewriter, loc, outStructTy, false);
       for (int i = 0; i < outNums; i++)
-        outPacked.push_back(extract_val(outVecTy, outStruct, i));
+        outPacked.push_back(b.extract_val(outVecTy, outStruct, i));
     }
     // unpack the output
     SmallVector<Value> ret;
     for (size_t i = 0; i < numElements; i++)
-      ret.push_back(extract_element(outType, outPacked[i / outVecWidth],
-                                    i32_val(i % outVecWidth)));
+      ret.push_back(b.extract_element(outType, outPacked[i / outVecWidth],
+                                      b.i32_val(i % outVecWidth)));
     return ret;
   };
   return converter;
@@ -485,6 +485,7 @@ struct FpToFpOpConversion
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto srcElementType = getElementType(op.getSrc());
     auto dstElementType = getElementType(op.getResult());
     auto roundingMode = op.getRounding();
@@ -541,7 +542,7 @@ struct FpToFpOpConversion
     if (useFP16IntermediateSrc)
       for (Value &v : inVals)
         v = convertFp32ToFp16(loc, rewriter, v, RoundingMode::RTZ);
-    inVals.resize(numElements, undef(typeConverter->convertType(srcType)));
+    inVals.resize(numElements, b.undef(typeConverter->convertType(srcType)));
     SmallVector<Value> outVals = cvtFunc(loc, rewriter, inVals);
     assert(outVals.size() == inVals.size());
     outVals.resize(std::min(numElements, operands.size()));
@@ -787,12 +788,13 @@ struct ExpOpConversionApprox
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     // For non-FP32 input, call __nv_expf for higher-precision calculation
     if (elemTy.getIntOrFloatBitWidth() != 32)
       return {};
 
     const double log2e = 1.4426950408889634;
-    Value prod = fmul(f32_ty, operands[0][0], f32_val(log2e));
+    Value prod = b.fmul(f32_ty, operands[0][0], b.f32_val(log2e));
 
     PTXBuilder ptxBuilder;
     auto &exp2 = ptxBuilder.create<PTXInstr>("ex2")->o("approx").o("f32");

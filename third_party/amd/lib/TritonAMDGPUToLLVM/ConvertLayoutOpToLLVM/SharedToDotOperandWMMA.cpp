@@ -70,26 +70,27 @@ computeTensorElemMappingInBlockWmma1(
     const ArrayRef<int64_t> &elemsPerInstr, Value warpId, Value laneId,
     int numOfElems, ArrayRef<int64_t> reps, ArrayRef<Value> smemOffsets,
     int loadVecSize, unsigned iNonKDim, [[maybe_unused]] unsigned iKDim) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   assert(reps.size() == 3);
   assert(elemsPerInstr.size() == 2);
   auto numK = reps[2];
   const int loadsPerThread = numOfElems / loadVecSize;
   llvm::SmallVector<llvm::SmallVector<Value>> mapping(numK * loadsPerThread);
 
-  Value elemsPerInstrV = i32_val(elemsPerInstr[0]);
-  Value warpVOffset = mul(warpId, elemsPerInstrV);
-  Value sliceVOffset = add(urem(laneId, elemsPerInstrV), warpVOffset);
+  Value elemsPerInstrV = b.i32_val(elemsPerInstr[0]);
+  Value warpVOffset = b.mul(warpId, elemsPerInstrV);
+  Value sliceVOffset = b.add(b.urem(laneId, elemsPerInstrV), warpVOffset);
   auto rank = smemOffsets.size();
-  Value row = add(sliceVOffset, smemOffsets[rank - 2]);
+  Value row = b.add(sliceVOffset, smemOffsets[rank - 2]);
 
   for (int tile = 0; tile < numK; ++tile) {
-    Value tileHOffset = i32_val(tile * elemsPerInstr[1]);
+    Value tileHOffset = b.i32_val(tile * elemsPerInstr[1]);
 
     for (int loadId = 0; loadId < loadsPerThread; ++loadId) {
-      Value elemHOffset = i32_val(loadId * loadVecSize);
-      Value sliceHOffset = add(tileHOffset, elemHOffset);
+      Value elemHOffset = b.i32_val(loadId * loadVecSize);
+      Value sliceHOffset = b.add(tileHOffset, elemHOffset);
 
-      Value col = add(sliceHOffset, smemOffsets[rank - 1]);
+      Value col = b.add(sliceHOffset, smemOffsets[rank - 1]);
       mapping[loadsPerThread * tile + loadId] = {row, col};
     }
   }
@@ -103,29 +104,30 @@ computeTensorElemMappingInBlockWmma2(
     const ArrayRef<int64_t> &elemsPerInstr, Value warpId, Value laneId,
     int numOfElems, ArrayRef<int64_t> reps, ArrayRef<Value> smemOffsets,
     int loadVecSize, unsigned iNonKDim, [[maybe_unused]] unsigned iKDim) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   assert(reps.size() == 3);
   assert(elemsPerInstr.size() == 2);
   auto numK = reps[2];
   const int loadsPerThread = numOfElems / loadVecSize;
   llvm::SmallVector<llvm::SmallVector<Value>> mapping(numK * loadsPerThread);
 
-  Value rowsPerInstr = i32_val(elemsPerInstr[0]);
-  Value colsPerInstr = i32_val(elemsPerInstr[1]);
-  Value elemsPerThread = i32_val(elemsPerInstr[1] / 2);
-  Value warpVOffset = mul(warpId, rowsPerInstr);
-  Value sliceVOffset = add(urem(laneId, rowsPerInstr), warpVOffset);
+  Value rowsPerInstr = b.i32_val(elemsPerInstr[0]);
+  Value colsPerInstr = b.i32_val(elemsPerInstr[1]);
+  Value elemsPerThread = b.i32_val(elemsPerInstr[1] / 2);
+  Value warpVOffset = b.mul(warpId, rowsPerInstr);
+  Value sliceVOffset = b.add(b.urem(laneId, rowsPerInstr), warpVOffset);
 
   auto rank = smemOffsets.size();
-  Value row = add(sliceVOffset, smemOffsets[rank - 2]);
-  Value laneHOffset = mul(udiv(laneId, colsPerInstr), elemsPerThread);
+  Value row = b.add(sliceVOffset, smemOffsets[rank - 2]);
+  Value laneHOffset = b.mul(b.udiv(laneId, colsPerInstr), elemsPerThread);
 
   for (int tile = 0; tile < numK; ++tile) {
-    Value tileHOffset = add(laneHOffset, i32_val(tile * elemsPerInstr[1]));
+    Value tileHOffset = b.add(laneHOffset, b.i32_val(tile * elemsPerInstr[1]));
     for (int loadId = 0; loadId < loadsPerThread; ++loadId) {
-      Value elemHOffset = i32_val(loadId * loadVecSize);
-      Value sliceHOffset = add(tileHOffset, elemHOffset);
+      Value elemHOffset = b.i32_val(loadId * loadVecSize);
+      Value sliceHOffset = b.add(tileHOffset, elemHOffset);
 
-      Value col = add(sliceHOffset, smemOffsets[rank - 1]);
+      Value col = b.add(sliceHOffset, smemOffsets[rank - 1]);
 
       mapping[loadsPerThread * tile + loadId] = {row, col};
     }
@@ -138,6 +140,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     Location loc, Value tensor, DotOperandEncodingAttr encoding,
                     const SharedMemoryObject &smemObj,
                     const LLVMTypeConverter *typeConverter, Value thread) {
+  auto tb = TritonLLVMOpBuilder(loc, rewriter);
   assert((opIdx == 0 || opIdx == 1) && "unexpected operand idx");
   auto rank = smemObj.getOffsets().size();
   int kDimIdx = opIdx == 0 ? rank - 1 : rank - 2;
@@ -171,18 +174,18 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
 
   unsigned iWaveSize = triton::gpu::getWarpSize(wmmaLayout);
   assert(iWaveSize == 32);
-  Value waveSize = i32_val(iWaveSize);
-  Value linearWaveId = udiv(thread, waveSize);
+  Value waveSize = tb.i32_val(iWaveSize);
+  Value linearWaveId = tb.udiv(thread, waveSize);
 
   unsigned numElemsPerThreadPerRep =
       wmmaLayout.getSizePerThreadForOperand(kWidth, opIdx)[kDimIdx];
 
-  Value lane = urem(thread, waveSize);
+  Value lane = tb.urem(thread, waveSize);
   unsigned int maxNumWarps = shape[nonKDimIdx] / wmmaInstrNonK;
   int warpsPerBlockNonK = std::min(warpsPerCTA[nonKDimIdx], maxNumWarps);
   int warpsPerBatch =
       rank == 3 ? std::min<unsigned>(shape[0], warpsPerCTA[0]) : 1;
-  Value waveIdInBatch = urem(linearWaveId, i32_val(warpsPerBatch));
+  Value waveIdInBatch = tb.urem(linearWaveId, tb.i32_val(warpsPerBatch));
   elemTy = typeConverter->convertType(elemTy);
 
   SmallVector<Value> loadedValues;
@@ -215,21 +218,22 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   auto loadVecTy = vec_ty(elemTy, elemsPerLoad);
   for (int b = 0; b < repB; ++b) {
     int operandSize = shape[rank - 1] * shape[rank - 2];
-    Value batchOffset = mul(i32_val(operandSize),
-                            add(waveIdInBatch, i32_val(b * warpsPerBatch)));
+    Value batchOffset =
+        tb.mul(tb.i32_val(operandSize),
+               tb.add(waveIdInBatch, tb.i32_val(b * warpsPerBatch)));
     for (int nonK = 0; nonK < numRepNonK; ++nonK) {
       for (int k = 0; k < numRepK; ++k) {
         auto vecTy = vec_ty(resElemTy, numElemsPerThreadPerRep);
-        Value valVec = undef(vecTy);
+        Value valVec = tb.undef(vecTy);
         for (unsigned loadId = 0; loadId < loadsPerThread; ++loadId) {
           Value loadOffset = offsets[nonK * loadsPerThread * numRepK +
                                      k * loadsPerThread + loadId];
-          loadOffset = add(loadOffset, batchOffset);
-          Value loadAddress = gep(smemPtrTy, elemTy, smemBase, loadOffset);
-          Value loadedValue = load(loadVecTy, loadAddress);
+          loadOffset = tb.add(loadOffset, batchOffset);
+          Value loadAddress = tb.gep(smemPtrTy, elemTy, smemBase, loadOffset);
+          Value loadedValue = tb.load(loadVecTy, loadAddress);
           for (int elemId = 0; elemId < elemsPerLoad; ++elemId) {
             Value elemVal =
-                extract_element(elemTy, loadedValue, i32_val(elemId));
+                tb.extract_element(elemTy, loadedValue, tb.i32_val(elemId));
             loadedValues.push_back(elemVal);
           }
         }

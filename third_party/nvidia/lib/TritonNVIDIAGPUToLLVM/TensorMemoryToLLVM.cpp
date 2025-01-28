@@ -17,21 +17,22 @@ namespace {
 
 SmallVector<Value> packToI32(const SmallVector<Value> &values, Location loc,
                              ConversionPatternRewriter &rewriter) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value> packedValues;
   Type elType = values[0].getType();
   int numElementsPer32B = 32 / elType.getIntOrFloatBitWidth();
   if (numElementsPer32B == 1)
     return values;
-  Value packed = undef(vec_ty(elType, numElementsPer32B));
+  Value packed = b.undef(vec_ty(elType, numElementsPer32B));
   for (int i = 0; i < values.size(); i++) {
     Value val = values[i];
-    packed = insert_element(packed.getType(), packed, val,
-                            i32_val(i % numElementsPer32B));
+    packed = b.insert_element(packed.getType(), packed, val,
+                              b.i32_val(i % numElementsPer32B));
     if (i % numElementsPer32B == numElementsPer32B - 1 ||
         i == values.size() - 1) {
-      packed = bitcast(packed, i32_ty);
+      packed = b.bitcast(packed, i32_ty);
       packedValues.push_back(packed);
-      packed = undef(vec_ty(elType, numElementsPer32B));
+      packed = b.undef(vec_ty(elType, numElementsPer32B));
     }
   }
   return packedValues;
@@ -58,6 +59,7 @@ void calculateAddressAndEmitTmemMessage(
                              int /*secondHalfColOffset*/, bool /*unpackedb16*/,
                              int /*regsPerMessage*/,
                              bool /*useStridedMessage*/)> &createMemoryOp) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   const int numRowsPerWarp = 32;
 
   if (!nvidia_gpu::isDistributedLayoutTMemCompatible(mod, tensorType,
@@ -103,9 +105,9 @@ void calculateAddressAndEmitTmemMessage(
     numColsPerBlock *= 2;
 
   Value warpId = rewriter.create<nvgpu::WarpIdOp>(loc);
-  Value warpIdInGroup = urem(warpId, i32_val(4));
-  Value warpGroupId = udiv(warpId, i32_val(4));
-  Value rowId = mul(warpIdInGroup, i32_val(numRowsPerWarp));
+  Value warpIdInGroup = b.urem(warpId, b.i32_val(4));
+  Value warpGroupId = b.udiv(warpId, b.i32_val(4));
+  Value rowId = b.mul(warpIdInGroup, b.i32_val(numRowsPerWarp));
 
   int colsPerWarpGroup = numColsPerBlock / numWarpGroupsPerBlock;
 
@@ -121,28 +123,32 @@ void calculateAddressAndEmitTmemMessage(
   }
 
   for (int block = 0; block < numBlocks; block += numWarpGroups) {
-    Value address = ptrtoint(i32_ty, baseAddress);
+    Value address = b.ptrtoint(i32_ty, baseAddress);
     Value blockId =
-        add(i32_val(block), udiv(warpGroupId, i32_val(numWarpGroupsPerBlock)));
+        b.add(b.i32_val(block),
+              b.udiv(warpGroupId, b.i32_val(numWarpGroupsPerBlock)));
     Value blockRowId = rowId;
     Value warpGroupIdInBlock =
-        urem(warpGroupId, i32_val(numWarpGroupsPerBlock));
-    Value startColumnId = mul(warpGroupIdInBlock, i32_val(colsPerWarpGroup));
+        b.urem(warpGroupId, b.i32_val(numWarpGroupsPerBlock));
+    Value startColumnId =
+        b.mul(warpGroupIdInBlock, b.i32_val(colsPerWarpGroup));
     if (blocksInterleaved) {
-      Value blockIdIsOdd = urem(blockId, i32_val(2));
-      Value blockIdPrevEven = sub(blockId, blockIdIsOdd);
-      blockRowId = add(blockRowId, mul(blockIdIsOdd, i32_val(16)));
-      startColumnId = add(startColumnId,
-                          mul(blockIdPrevEven, i32_val(numColsPerBlock / 2)));
+      Value blockIdIsOdd = b.urem(blockId, b.i32_val(2));
+      Value blockIdPrevEven = b.sub(blockId, blockIdIsOdd);
+      blockRowId = b.add(blockRowId, b.mul(blockIdIsOdd, b.i32_val(16)));
+      startColumnId =
+          b.add(startColumnId,
+                b.mul(blockIdPrevEven, b.i32_val(numColsPerBlock / 2)));
     } else {
       startColumnId =
-          add(startColumnId, mul(blockId, i32_val(numColsPerBlock)));
+          b.add(startColumnId, b.mul(blockId, b.i32_val(numColsPerBlock)));
     }
-    address = add(add(address, shl(blockRowId, i32_val(16))), startColumnId);
+    address =
+        b.add(b.add(address, b.shl(blockRowId, b.i32_val(16))), startColumnId);
 
     for (int colStart = 0; colStart < numColsPerBlock;
          colStart += numColsPerMessage) {
-      Value startAddress = add(address, i32_val(colStart));
+      Value startAddress = b.add(address, b.i32_val(colStart));
 
       // Column offset of second half of the message in case of 16x32bx2
       // message.
@@ -218,6 +224,7 @@ static void lowerStoreToTensorMemory(Location loc, ModuleOp mod, Value src,
                                      Value dest, Value llSrc, Value pred,
                                      SharedMemoryObject smemObj,
                                      ConversionPatternRewriter &rewriter) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value> srcValues = unpackLLElements(loc, llSrc, rewriter);
   srcValues = packToI32(srcValues, loc, rewriter);
   auto dstType = cast<MemDescType>(dest.getType());
@@ -246,7 +253,7 @@ static void lowerStoreToTensorMemory(Location loc, ModuleOp mod, Value src,
 
   // Emit a barrier to ensure all threads have finished writing to tensor memory
   // before any use of the tensor memory.
-  barrier();
+  b.barrier();
 }
 
 struct TensorMemoryAllocOpConversion
@@ -257,20 +264,21 @@ struct TensorMemoryAllocOpConversion
   matchAndRewrite(triton::nvidia_gpu::TMEMAllocOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto mod = op->getParentOfType<ModuleOp>();
     Value base = rewriter.create<nvgpu::TensorMemoryBaseAddress>(loc);
-    Value baseInt = ptrtoint(i32_ty, base);
+    Value baseInt = b.ptrtoint(i32_ty, base);
     int colOffset = cast<IntegerAttr>(op->getAttr("tensor_memory_col_offset"))
                         .getValue()
                         .getZExtValue();
     int rowOffset = cast<IntegerAttr>(op->getAttr("tensor_memory_row_offset"))
                         .getValue()
                         .getZExtValue();
-    Value allocAddress = add(baseInt, i32_val(colOffset | rowOffset << 16));
+    Value allocAddress = b.add(baseInt, b.i32_val(colOffset | rowOffset << 16));
     // Cast to address space 3 as the shared memory object uses 3.
     // TODO: clean this up and use either a int or ptr address space 6
     auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(), 3);
-    Value ptr = inttoptr(ptrTy, allocAddress);
+    Value ptr = b.inttoptr(ptrTy, allocAddress);
     SmallVector<unsigned> order(op.getType().getRank());
     std::iota(order.begin(), order.end(), 0);
     std::reverse(order.begin(), order.end());
@@ -280,7 +288,7 @@ struct TensorMemoryAllocOpConversion
 
     if (op.getSrc()) {
       lowerStoreToTensorMemory(loc, mod, op.getSrc(), op.getResult(),
-                               adaptor.getSrc(), i1_val(true), smemObj,
+                               adaptor.getSrc(), b.i1_val(true), smemObj,
                                rewriter);
     }
 
@@ -333,17 +341,18 @@ static Value createTensorMemoryLoad(Location loc,
 static SmallVector<Value> unpackResults(Value packedValues, Type elemTy,
                                         int numCols, Location loc,
                                         ConversionPatternRewriter &rewriter) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value> resultVals;
   int numElementsPer32B = 32 / elemTy.getIntOrFloatBitWidth();
   Type packedType = elemTy;
   if (numElementsPer32B > 1)
     packedType = vec_ty(elemTy, numElementsPer32B);
   for (int i = 0; i < numCols; i++) {
-    Value result = extract_val(i32_ty, packedValues, i);
-    result = bitcast(result, packedType);
+    Value result = b.extract_val(i32_ty, packedValues, i);
+    result = b.bitcast(result, packedType);
     if (numElementsPer32B > 1) {
       for (int j = 0; j < numElementsPer32B; j++) {
-        Value elem = extract_element(elemTy, result, i32_val(j));
+        Value elem = b.extract_element(elemTy, result, b.i32_val(j));
         resultVals.push_back(elem);
       }
     } else {
@@ -425,6 +434,7 @@ struct TensorMemoryStoreOpConversion
 static Value
 createBlockedScalesSMEMDescriptor(ConversionPatternRewriter &rewriter,
                                   Location loc, Value baseSrc) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   static_assert(sizeof(NVIDIA::SMEMDescriptor) == 8,
                 "Descriptor size should be 64 bits.");
   NVIDIA::SMEMDescriptor desc;
@@ -434,9 +444,9 @@ createBlockedScalesSMEMDescriptor(ConversionPatternRewriter &rewriter,
   desc.strideDimensionBaseOffset = 128 >> 4; // 8 x 16 bytes
   // See matrix-descriptor-encode(x) function in the ptx doc.
   // matrix-descriptor-encode(addr) = (addr & 0x3FFFF) >> 4
-  auto smemAddr = ptrtoint(i64_ty, baseSrc);
-  return add(int_val(64, desc.descriptor),
-             lshr(shl(smemAddr, int_val(64, 46)), int_val(64, 50)));
+  auto smemAddr = b.ptrtoint(i64_ty, baseSrc);
+  return b.add(b.int_val(64, desc.descriptor),
+               b.lshr(b.shl(smemAddr, b.int_val(64, 46)), b.int_val(64, 50)));
 }
 
 static void createCommit(ConversionPatternRewriter &rewriter, Location loc,
@@ -468,6 +478,7 @@ struct TensorMemoryCopyOpConversion
   matchAndRewrite(triton::nvidia_gpu::TMEMCopyOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto srcTy = cast<MemDescType>(op.getSrc().getType());
     assert(isa<triton::gpu::SharedMemorySpaceAttr>(srcTy.getMemorySpace()));
     assert(isa<triton::gpu::SharedEncodingAttr>(srcTy.getEncoding()));
@@ -502,10 +513,11 @@ struct TensorMemoryCopyOpConversion
         for (int j = 0; j < repK; ++j) {
           // Multiple copies of 32x128b blocks are laid out along M/N first then
           // K
-          auto colOffset = int_val(32, (j * repMorN + i) * 4);
-          auto tmemAddr = add(ptrtoint(i32_ty, baseDst), colOffset);
+          auto colOffset = b.int_val(32, (j * repMorN + i) * 4);
+          auto tmemAddr = b.add(b.ptrtoint(i32_ty, baseDst), colOffset);
           createTcgen05Cp(rewriter, loc, tmemAddr, smemDesc, pred);
-          smemDesc = add(smemDesc, int_val(64, 512 >> 4)); // one chunk = 32x16B
+          smemDesc =
+              b.add(smemDesc, b.int_val(64, 512 >> 4)); // one chunk = 32x16B
         }
       }
     };
@@ -568,6 +580,7 @@ struct MemDescSubviewOpConversion
   matchAndRewrite(triton::gpu::MemDescSubviewOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getResult().getType();
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
@@ -591,13 +604,13 @@ struct MemDescSubviewOpConversion
     triton::nvidia_gpu::TMemAllocation tmemAlloc =
         triton::nvidia_gpu::getTmemAllocSizes(cast<MemDescType>(dstTy));
     int numColOffset = tmemAlloc.numCols;
-    Value newBase = ptrtoint(rewriter.getI32Type(), smemObj.getBase());
+    Value newBase = b.ptrtoint(rewriter.getI32Type(), smemObj.getBase());
     newBase = rewriter.create<LLVM::AddOp>(
         loc, newBase,
         rewriter.create<LLVM::MulOp>(loc, opOffsetVals[0],
-                                     i32_val(numColOffset)));
+                                     b.i32_val(numColOffset)));
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
-    smemObj = SharedMemoryObject(inttoptr(elemPtrTy, newBase), llvmElemTy,
+    smemObj = SharedMemoryObject(b.inttoptr(elemPtrTy, newBase), llvmElemTy,
                                  offsetVals);
     rewriter.replaceOp(op,
                        getStructFromSharedMemoryObject(loc, smemObj, rewriter));

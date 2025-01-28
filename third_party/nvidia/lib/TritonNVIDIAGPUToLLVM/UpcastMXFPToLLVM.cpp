@@ -85,6 +85,7 @@ static Value createInlineAsmUpcast(Location loc, RewriterBase &rewriter,
 static SmallVector<Value> convertFP4x2To16x2(RewriterBase &rewriter,
                                              Location loc, Type targetTy,
                                              ArrayRef<Value> values) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value> results;
   MLIRContext *ctx = rewriter.getContext();
   bool isFP16 = targetTy == f16_ty;
@@ -96,21 +97,21 @@ static SmallVector<Value> convertFP4x2To16x2(RewriterBase &rewriter,
     Value v1 = values[i + 1];
     Value v2 = values[i + 2];
     Value v3 = values[i + 3];
-    Value packedVec = undef(vec_ty(i8_ty, 4));
-    packedVec = insert_element(packedVec, v0, i32_val(0));
-    packedVec = insert_element(packedVec, v1, i32_val(1));
-    packedVec = insert_element(packedVec, v2, i32_val(2));
-    packedVec = insert_element(packedVec, v3, i32_val(3));
+    Value packedVec = b.undef(vec_ty(i8_ty, 4));
+    packedVec = b.insert_element(packedVec, v0, b.i32_val(0));
+    packedVec = b.insert_element(packedVec, v1, b.i32_val(1));
+    packedVec = b.insert_element(packedVec, v2, b.i32_val(2));
+    packedVec = b.insert_element(packedVec, v3, b.i32_val(3));
     SmallVector<Type> rets(4, i32_ty);
     Type retType = struct_ty(rets);
     const char *upcastPtx = isFP16 ? FP4ToFP16Ptx : FP4ToBF16Ptx;
     Value ret =
         createInlineAsmUpcast(loc, rewriter, retType, packedVec, upcastPtx);
     for (int i = 0; i < 4; i++) {
-      Value extractI32 = extract_val(ret, i);
-      Value vecbf16 = bitcast(extractI32, vec_ty(targetTy, 2));
-      results.push_back(extract_element(vecbf16, i32_val(0)));
-      results.push_back(extract_element(vecbf16, i32_val(1)));
+      Value extractI32 = b.extract_val(ret, i);
+      Value vecbf16 = b.bitcast(extractI32, vec_ty(targetTy, 2));
+      results.push_back(b.extract_element(vecbf16, b.i32_val(0)));
+      results.push_back(b.extract_element(vecbf16, b.i32_val(1)));
     }
   }
   return results;
@@ -118,21 +119,22 @@ static SmallVector<Value> convertFP4x2To16x2(RewriterBase &rewriter,
 
 Value mxfpScale(RewriterBase &rewriter, Location loc, Value v, Value scale,
                 Type fp_ty, bool fastMath) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value scaleFP;
   if (fp_ty == bf16_ty) {
-    scaleFP = bitcast(shl(zext(i16_ty, scale), i16_val(7)), fp_ty);
+    scaleFP = b.bitcast(b.shl(b.zext(i16_ty, scale), b.i16_val(7)), fp_ty);
   } else {
     assert(fp_ty == f16_ty);
-    scaleFP =
-        bitcast(shl(zext(i32_ty, scale), i32_val(23)), rewriter.getF32Type());
-    scaleFP = fptrunc(fp_ty, scaleFP);
+    scaleFP = b.bitcast(b.shl(b.zext(i32_ty, scale), b.i32_val(23)),
+                        rewriter.getF32Type());
+    scaleFP = b.fptrunc(fp_ty, scaleFP);
   }
-  Value scaledV = fmul(bitcast(v, fp_ty), scaleFP);
+  Value scaledV = b.fmul(b.bitcast(v, fp_ty), scaleFP);
   if (fastMath)
     return scaledV;
   // Account for NaN in the scale as per the mxfp specification.
-  Value scaleIsNan = icmp_eq(scale, i8_val(0xff));
-  return select(scaleIsNan, bitcast(i16_val(0x7fff), fp_ty), scaledV);
+  Value scaleIsNan = b.icmp_eq(scale, b.i8_val(0xff));
+  return b.select(scaleIsNan, b.bitcast(b.i16_val(0x7fff), fp_ty), scaledV);
 };
 
 namespace {
@@ -151,6 +153,7 @@ public:
                   ConversionPatternRewriter &rewriter) const override {
 
     auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto tyX = cast<RankedTensorType>(op->getOperandTypes()[0]);
     auto operands = adaptor.getOperands();
 
@@ -159,12 +162,12 @@ public:
     auto fpType = op.getFpType();
     auto outType = op.getType().getElementType();
 
-    Value tid = tid_val();
+    Value tid = b.tid_val();
     auto mod = op->getParentOfType<ModuleOp>();
     Value warpSize =
-        i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
-    Value warpId = udiv(tid, warpSize);
-    Value laneId = urem(tid, warpSize);
+        b.i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
+    Value warpId = b.udiv(tid, warpSize);
+    Value laneId = b.urem(tid, warpSize);
 
     auto kWidth =
         cast<DotOperandEncodingAttr>(op.getType().getEncoding()).getKWidth();
@@ -176,9 +179,9 @@ public:
     // Since we go from a threadShape of 8x4 to 16x2, we let c = tid / 4 * 2
     // Then, we need elements c and c + 16 for the first two mxfp vectors
     // and elements c + 1 and c + 17 for the last two mxfp vectors
-    auto c = mul(udiv(laneId, i32_val(4)), i32_val(2));
-    std::array<Value, 4> ci = {c, add(c, i32_val(16)), add(c, i32_val(1)),
-                               add(c, i32_val(17))};
+    auto c = b.mul(b.udiv(laneId, b.i32_val(4)), b.i32_val(2));
+    std::array<Value, 4> ci = {c, b.add(c, b.i32_val(16)),
+                               b.add(c, b.i32_val(1)), b.add(c, b.i32_val(17))};
 
     // TODO Move this logic to using LinearLayouts
     // Each scale in a warp has to be replicated to cover a tile of shape mxk =
