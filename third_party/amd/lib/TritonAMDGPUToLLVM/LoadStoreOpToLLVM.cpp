@@ -21,6 +21,7 @@ using namespace mlir::triton::gpu;
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryBase;
 using ::mlir::LLVM::AMD::getContiguity;
+using mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget;
 using ::mlir::LLVM::AMD::getVectorSize;
 using ::mlir::LLVM::AMD::llLoad;
 using ::mlir::LLVM::AMD::llStore;
@@ -477,14 +478,15 @@ struct AsyncCopyToGlobalOpConversion
       assert(srcElems.size() == otherElems.size());
     }
 
-    // global.load.lds has a shared dst register so we cannot have per thread
-    // offsets This means our load size has to align with the load_width of
-
     unsigned maxVec = getContiguity(op.getSrc(), axisAnalysisPass);
     if (mask) {
       maxVec = std::min(maxVec, getMaskAlignment(mask));
     }
 
+    // global.load.lds does not support per lane offsets.
+    // We need to ensure that we write coalesced into shared memory.
+    // This means that the kLane dim needs to be contigeous based on the
+    // vectorization size
     auto shape = dstTy.getShape();
     LinearLayout srcLayout =
         triton::gpu::toLinearLayout(shape, srcTy.getEncoding());
@@ -492,10 +494,7 @@ struct AsyncCopyToGlobalOpConversion
         shape, dstTy.getEncoding(), resElemTy.getIntOrFloatBitWidth());
     LinearLayout srcToSharedLayout = srcLayout.invertAndCompose(sharedLayout);
 
-    // We need to check if the kLane basis is contigeous for the chose
-    // vectorization because global.load.lds does not support per lane offset
     auto kLane = str_attr("lane");
-
     for (int inLane : llvm::seq(srcToSharedLayout.getInDimSizeLog2(kLane))) {
       auto basis = srcToSharedLayout.getBasis(kLane, inLane)[0];
       unsigned expected = maxVec * (1 << inLane);
@@ -530,13 +529,18 @@ struct AsyncCopyToGlobalOpConversion
     std::string intrinsic = "llvm.amdgcn.global.load.lds";
     Value vecBytesVal = i32_val(vecBytes);
 
-    for (int i = 0; i < shmemAddrs.size(); i++) {
-      // TODO Alex select correct cache modifier
+    Value cacheModifiers = i32_val(
+        getCtrlBitsForCacheModifierOnTarget(op.getCache(), false, targetInfo));
 
+    for (int i = 0; i < shmemAddrs.size(); i++) {
       auto srcIdx = i * maxVec;
       auto srcPtr = srcElems[srcIdx];
 
-      if (mask) {
+      if (!mask) {
+        rewriter.create<ROCDL::GlobalLoadLDSOp>(
+            loc, srcPtr, shmemAddrs[i], vecBytesVal, /*offset=*/i32_val(0),
+            cacheModifiers);
+      } else {
         Block *currentBlock = rewriter.getInsertionBlock();
         Block *afterLoad =
             rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
@@ -555,11 +559,8 @@ struct AsyncCopyToGlobalOpConversion
               packElementRangeIntoVector(rewriter, this->getTypeConverter(),
                                          loc, vecTy, otherElems, srcIdx);
           llStore(rewriter, loc, shmemAddrs[i], storeVal,
-                  icmp_ne(maskElems[srcIdx], true_val()));
+                  icmp_ne(maskElems[srcIdx], true_val()), 0, op.getCache());
         }
-      } else {
-        rewriter.create<ROCDL::GlobalLoadLDSOp>(
-            loc, srcPtr, shmemAddrs[i], vecBytesVal, i32_val(0), i32_val(0));
       }
     }
 
