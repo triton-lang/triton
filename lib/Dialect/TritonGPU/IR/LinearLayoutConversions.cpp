@@ -376,31 +376,6 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 
 LinearLayout mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
                                    ArrayRef<int64_t> shape) {
-
-  // Current linear layout conversion for dot operand is only necessary to
-  // enable LDS bypass for operand B in the MFMA dot path. To achieve
-  // performance gains from bypassing LDS, the following conditions must be met:
-  //
-  // 1) opIdx == 1: Currently, only the B tensor (e.g. weights in moe-like
-  //    kernels) bypasses LDS. This constraint is not strict and support for
-  //    bypassing operand A (e.g. Q tensor in flash attention) will be added in
-  //    the future.
-  //
-  // 2) B tensor must be column major: This is required to support vectorized
-  //    global load instructions, as MFMA instructions expect threads to hold B
-  //    operand elements along the K dimension.
-  //
-  // 3) kWidth == 8: Ensures maximum global load vectorization for fp16
-  //    operations.
-  //    TODO: Generalize conversion to handle maximum kWidth for other types
-  //    (i.e. fp8).
-  //
-  // 4) warpsPerCTA[mDim] == 1: This guarantees that every B tensor element is
-  //    held by exactly one thread, maintaining the same number of global loads
-  //    as in a blocked layout.
-  //
-  // Other use of Linear layout is a support of rare corner cases,
-  // for example one instruction tile is larger than tensor
   auto mfmaLayout = llvm::cast<AMDMfmaEncodingAttr>(dotMfmaLayout.getParent());
 
   auto rank = shape.size();
@@ -409,6 +384,8 @@ LinearLayout mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
 
   int32_t kWidth = dotMfmaLayout.getKWidth();
   auto kDim = dotMfmaLayout.getOpIdx() == 0 ? rank - 1 : rank - 2;
+  auto opIdx = dotMfmaLayout.getOpIdx();
+
   int32_t kSize = shape[kDim];
   auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
 
@@ -440,27 +417,46 @@ LinearLayout mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
   int32_t kTileSize = -1;
 
   if (mfmaLayout.getMDim() == 32) {
+    assert(!mfmaLayout.isTransOp(opIdx) &&
+           "mfma with 32 MDim is not supported with transposed LDS loads");
     // Canonical MFMA linear layout handles 4 consecutive elements along
-    // the register dimension. Dot operand handles variable kWidth consecutive
-    // elements. For lane dim, since the MFMA thread arrangement is {K, N} = {2,
-    // 32}, this means that mapping of first 5 base (up to thread 16) vectors
-    // will be an identity along N dim. Thread 32 will be mapped to element
-    // kWidth in K dimension.
+    // the register dimension. Dot operand handles variable kWidth
+    // consecutive elements. For lane dim, since the MFMA thread arrangement
+    // is {K, N} = {2, 32}, this means that mapping of first 5 base (up to
+    // thread 16) vectors will be an identity along N dim. Thread 32 will be
+    // mapped to element kWidth in K dimension.
     laneBase = {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {kWidth, 0}};
     kTileSize = kWidth * 2;
   } else {
     assert(mfmaLayout.getMDim() == 16);
-    // For lane dim, since the MFMA thread arrangement is {K, N} = {4, 16}, this
-    // means that mapping of first 4 base (up to thread 16) vectors will be an
-    // identity along N dim. Thread 16 will be mapped to element kWisth in K
-    // dimension. Thread 32 is mapped to element 2*kWidth in K dim.
-    laneBase = {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {kWidth, 0}, {kWidth * 2, 0}};
+    if (mfmaLayout.isTransOp(opIdx)) {
+      // For transpose LDS loads, each thread reads 8 bytes (4 fp16 elements)
+      // along the non-k dimension. Within a wave, lanes are organized into
+      // 4x4 blocks, with 4 blocks per wave. This 4x4 block of lanes
+      // is non-k contiguous, meaning non-k is the fastest-changing
+      // dimension. As a result, the first 2 base vectors map along the non-k
+      // dimension (where the k index is 0), while the remaining 4 vectors map
+      // along the k dimension (where the non-k index is 0).
+      laneBase = {{4, 0}, {8, 0}, {0, 1}, {0, 2}, {0, 4}, {0, 8}};
+    } else {
+      // For lane dim, since the MFMA thread arrangement is {K, N} = {4, 16},
+      // this means that mapping of first 4 base (up to thread 16) vectors will
+      // be an identity along N dim. Thread 16 will be mapped to element kWisth
+      // in K dimension. Thread 32 is mapped to element 2*kWidth in K dim.
+      laneBase = {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {kWidth, 0}, {kWidth * 2, 0}};
+    }
     kTileSize = kWidth * 4;
   }
   assert(kTileSize != -1);
-  // Add repeats of registers along K dimension to register base vectors
-  for (int32_t elem = kTileSize; elem < kSize; elem *= 2)
-    registerBase.emplace_back(std::vector<int32_t>{elem, 0});
+  if (mfmaLayout.isTransOp(opIdx)) {
+    // Add repeats of registers along non-K dimension to register base vectors
+    for (int32_t elem = kTileSize; elem < kSize; elem *= 2)
+      registerBase.emplace_back(std::vector<int32_t>{0, elem});
+  } else {
+    // Add repeats of registers along K dimension to register base vectors
+    for (int32_t elem = kTileSize; elem < kSize; elem *= 2)
+      registerBase.emplace_back(std::vector<int32_t>{elem, 0});
+  }
 
   // Base vectors above are defined in a fixed order [non-k-dim, k-dim].
   // To assign them to actual matrix dimensions `order` array is used.

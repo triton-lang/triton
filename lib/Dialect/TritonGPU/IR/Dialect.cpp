@@ -268,8 +268,14 @@ SmallVector<unsigned> getOrder(Attribute layout) {
     return getMatrixOrder(rank, /*rowMajor*/ true);
   }
   if (auto dotLayout = dyn_cast<DotOperandEncodingAttr>(layout)) {
+    bool kContig = true;
+    auto opIdx = dotLayout.getOpIdx();
+    if (auto mfmaLayout =
+            dyn_cast<AMDMfmaEncodingAttr>(dotLayout.getParent())) {
+      kContig = !mfmaLayout.isTransOp(opIdx);
+    }
     auto rank = dotLayout.getWarpsPerCTA().size();
-    return getOrderForDotOperand(dotLayout.getOpIdx(), rank, /*kContig*/ true);
+    return getOrderForDotOperand(dotLayout.getOpIdx(), rank, kContig);
   }
   if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout)) {
     SmallVector<unsigned> parentOrder = getOrder(sliceLayout.getParent());
@@ -1605,6 +1611,8 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
   SmallVector<unsigned> warpsPerCTA;
   SmallVector<unsigned> instrShape;
   bool isTransposed;
+  bool transA;
+  bool transB;
   std::optional<SmallVector<unsigned>> CTAsPerCGA;
   std::optional<SmallVector<unsigned>> CTASplitNum;
   std::optional<SmallVector<unsigned>> CTAOrder;
@@ -1628,6 +1636,14 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
     }
     if (attr.getName() == "isTransposed") {
       if (parseBool(parser, attr, isTransposed, "isTransposed").failed())
+        return {};
+    }
+    if (attr.getName() == "transA") {
+      if (parseBool(parser, attr, transA, "transA").failed())
+        return {};
+    }
+    if (attr.getName() == "transB") {
+      if (parseBool(parser, attr, transB, "transB").failed())
         return {};
     }
     if (attr.getName() == "CTAsPerCGA") {
@@ -1654,7 +1670,7 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
 
   return parser.getChecked<AMDMfmaEncodingAttr>(
       parser.getContext(), versionMajor, versionMinor, warpsPerCTA,
-      instrShape[0], instrShape[1], isTransposed, *CTALayout);
+      instrShape[0], instrShape[1], isTransposed, transA, transB, *CTALayout);
 }
 
 void AMDMfmaEncodingAttr::print(AsmPrinter &printer) const {
@@ -1663,18 +1679,18 @@ void AMDMfmaEncodingAttr::print(AsmPrinter &printer) const {
           << ", versionMinor = " << getVersionMinor()                    //
           << ", warpsPerCTA = [" << ArrayRef(getWarpsPerCTA()) << "]"    //
           << ", instrShape = [" << ArrayRef{getMDim(), getNDim()} << "]" //
-          << ", isTransposed = " << getIsTransposed();
+          << ", isTransposed = " << getIsTransposed()
+          << ", transA = " << getTransA() << ", transB = " << getTransB();
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getWarpsPerCTA().size());
   printer << "}>";
 }
 
-LogicalResult
-AMDMfmaEncodingAttr::verify(function_ref<mlir::InFlightDiagnostic()> emitError,
-                            unsigned versionMajor, unsigned versionMinor,
-                            llvm::ArrayRef<unsigned int> warpsPerCTA,
-                            unsigned mDim, unsigned nDim, bool isTransposed,
-                            mlir::triton::gpu::CTALayoutAttr) {
+LogicalResult AMDMfmaEncodingAttr::verify(
+    function_ref<mlir::InFlightDiagnostic()> emitError, unsigned versionMajor,
+    unsigned versionMinor, llvm::ArrayRef<unsigned int> warpsPerCTA,
+    unsigned mDim, unsigned nDim, bool isTransposed, bool transA, bool transB,
+    mlir::triton::gpu::CTALayoutAttr) {
   if (!(versionMajor >= 0 && versionMajor <= 3)) {
     return emitError() << "major version must be in the [0, 3] range";
   }

@@ -334,12 +334,14 @@ class BlockedToMFMA : public OpRewritePattern<tt::DotOp> {
   int mfmaVersion;
   int nonKDim;
   int kPack;
+  StringRef archGenerationName;
 
 public:
   BlockedToMFMA(MLIRContext *context, int mfmaVersion, int nonKDim, int kPack,
-                PatternBenefit benefit = 1)
+                StringRef archGenerationName, PatternBenefit benefit = 1)
       : OpRewritePattern(context, benefit), mfmaVersion(mfmaVersion),
-        nonKDim(nonKDim), kPack(kPack) {}
+        nonKDim(nonKDim), kPack(kPack), archGenerationName(archGenerationName) {
+  }
 
   bool isChainDot(tt::DotOp &dotOp) const {
     auto filter = [&dotOp](Operation *op) {
@@ -372,6 +374,86 @@ public:
         }) != slices.end())
       return true;
     return false;
+  }
+
+  Operation *findConvertToDot(Operation *dotOperand) const {
+    // Traverse the use-def chain starting from a dot operand to find the first
+    // conversion to dot encoding.
+    assert(dotOperand);
+    llvm::SmallPtrSet<Operation *, 16> visited;
+
+    std::function<Operation *(Operation *)> traverseBackward =
+        [&](Operation *op) -> Operation * {
+      if (!op || visited.contains(op))
+        return nullptr;
+
+      visited.insert(op);
+
+      if (auto convert = dyn_cast<ttg::ConvertLayoutOp>(op)) {
+        auto resTy = cast<RankedTensorType>(convert.getType());
+        if (isa<DotOperandEncodingAttr>(resTy.getEncoding())) {
+          return convert;
+        }
+      }
+
+      for (Value operand : op->getOperands()) {
+        if (Operation *definingOp = operand.getDefiningOp()) {
+          if (Operation *result = traverseBackward(definingOp))
+            return result;
+        }
+      }
+
+      return nullptr;
+    };
+
+    return traverseBackward(dotOperand);
+  }
+
+  bool setTransFlag(Operation *dotOperand, MfmaInsn &mfmaInstr) const {
+    // LDS transposed loading only works if:
+    // 1. The hardware supports transpose LDS loading instrictions.
+    // 2. The tensor we’re loading is contiguous along the non-K dimension.
+    //
+    // How the compiler handles LDS transpose loads (like the intrinsics and
+    // LL we use) depends on two things:
+    // 1. The type of data we’re working with.
+    // 2. The type of MFMA instruction.
+    //
+    // Right now, we only support transpose loads for fp16 data and mfma16x16x16
+    // instructions on gfx950.
+    // TODO (plognjen): Add support for other data types (e.g., 8-bit types) and
+    // MFMA instructions (e.g.,  mfma16x16x32).
+    // TODO (plognjen): Support transpose loading on swizzled data to avoid bank
+    // conflicts.
+    if (!archGenerationName.contains("gfx950")) {
+      return false;
+    }
+
+    // Find blocked->dot conversion to check if tensor is contiguous in non-k
+    // dim in HBM.
+    auto cvtToDot =
+        llvm::cast<ttg::ConvertLayoutOp>(findConvertToDot(dotOperand));
+    auto resTy = llvm::cast<RankedTensorType>(cvtToDot.getType());
+    auto dotEnc = llvm::cast<DotOperandEncodingAttr>(resTy.getEncoding());
+    int opIdx = dotEnc.getOpIdx();
+
+    auto srcTy = llvm::cast<RankedTensorType>(cvtToDot.getSrc().getType());
+    auto blockedEnc = llvm::dyn_cast<BlockedEncodingAttr>(srcTy.getEncoding());
+    if (!blockedEnc) {
+      return false;
+    }
+
+    bool nonKContig = (opIdx == 0 && blockedEnc.getOrder()[0] == 0) ||
+                      (opIdx == 1 && blockedEnc.getOrder()[0] == 1);
+
+    bool supportedMfma = mfmaInstr.getMDim() == 16 &&
+                         mfmaInstr.getNDim() == 16 && mfmaInstr.getKDim() == 16;
+
+    auto elementTy =
+        opIdx == 0 ? mfmaInstr.getElementTypeA() : mfmaInstr.getElementTypeB();
+    bool supportedElTy = elementTy.isF16();
+
+    return supportedMfma && supportedElTy && nonKContig;
   }
 
   LogicalResult matchAndRewrite(tt::DotOp dotOp,
@@ -418,11 +500,17 @@ public:
     auto aElemTy = mfmaInstr.getElementTypeA();
     bool isFP8 = aElemTy.isFloat8E5M2FNUZ() || aElemTy.isFloat8E4M3FNUZ();
     bool isTransposed = isChainDot(dotOp) || !isFP8;
+
+    // LDS transpose load intrinsics are used to load data from LDS when certain
+    // conditions are met. The transA/B flags signal that the dot operand will
+    // be loaded using these intrinsics, which are available on specific
+    // architectures (e.g., gfx950).
+    bool transA = setTransFlag(a.getDefiningOp(), mfmaInstr);
+    bool transB = setTransFlag(b.getDefiningOp(), mfmaInstr);
     mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
         oldRetType.getContext(),
         /*versionMajor*/ mfmaVersion, /*versionMinor*/ 0, warpsPerTile,
-        /*instrShape*/ mDim, nDim, isTransposed, CTALayout);
-
+        /*instrShape*/ mDim, nDim, isTransposed, transA, transB, CTALayout);
     Type mfmaAccType;
     if (oldRetType.getElementType().isIntOrIndex())
       mfmaAccType = rewriter.getIntegerType(32);
@@ -470,8 +558,15 @@ public:
     // to increase ds_read vector size
     // However, in FA, the second dot can only use kWidth = kBase since it's
     // limited by the result of the first dot, which is of mfmaLayout.
-    if (!isSecondDot(dotOp))
+    // Transpose LDS loads are only supported trough 64-bit reads (with
+    // exception of 6-bit element types).
+    bool useTransInst = transA || transB;
+    if (!isSecondDot(dotOp) && !useTransInst)
       kWidth *= kPack;
+
+    // TODO(plognjen): extend this assert after adding support for 8-bit types.
+    assert((!useTransInst || kWidth == 4) &&
+           "kWidth must be 4 when useTransInst is true.");
 
     auto newAEncoding =
         ttg::DotOperandEncodingAttr::get(ctx, 0, mfmaEnc, kWidth);
@@ -499,12 +594,15 @@ class ScaledBlockedToMFMA final : public OpRewritePattern<triton::DotScaledOp> {
   int mfmaVersion;
   int nonKDim;
   int kPack;
+  StringRef archGenerationName;
 
 public:
   ScaledBlockedToMFMA(MLIRContext *context, int mfmaVersion, int nonKDim,
-                      int kPack, PatternBenefit benefit = 1)
+                      int kPack, StringRef archGenerationName,
+                      PatternBenefit benefit = 1)
       : OpRewritePattern(context, benefit), mfmaVersion(mfmaVersion),
-        nonKDim(nonKDim), kPack(kPack) {}
+        nonKDim(nonKDim), kPack(kPack), archGenerationName(archGenerationName) {
+  }
 
   LogicalResult matchAndRewrite(triton::DotScaledOp dotOp,
                                 PatternRewriter &rewriter) const override {
@@ -588,7 +686,8 @@ public:
     // for global store instructions.
     auto mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
         ctx, /*versionMajor=*/mfmaVersion, /*versionMinor=*/0, mfmaWarpsPerCTA,
-        /*instrShape=*/mDim, nDim, /*isTransposed=*/true, ctaLayout);
+        /*instrShape=*/mDim, nDim, /*isTransposed=*/true, false, false,
+        ctaLayout);
 
     auto newRetType = RankedTensorType::get(
         oldRetType.getShape(), oldRetType.getElementType(), mfmaEnc);
@@ -894,7 +993,8 @@ public:
     case ISAFamily::CDNA2:
     case ISAFamily::CDNA3:
       patterns.add<::BlockedToMFMA, ::ScaledBlockedToMFMA>(
-          context, getMfmaVersion(isaFamily), matrixInstructionSize, kPack);
+          context, getMfmaVersion(isaFamily), matrixInstructionSize, kPack,
+          archGenerationName);
       break;
     case ISAFamily::RDNA3:
       patterns.add<::BlockedToWMMA>(context,

@@ -402,17 +402,33 @@ SmallVector<Value> loadSharedToDistributed(RankedTensorType dstTy,
                                            const TargetInfoBase &target) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value> ret;
+  std::function<void(VectorType, Value)> loadCallbackFunc;
+
+  if (isAMDTransLoad(dstTy)) {
+    loadCallbackFunc = [&](VectorType vecTy, Value vecAddr) {
+      auto intrCall = LLVM::createLLVMIntrinsicCallOp(
+          rewriter, loc, "llvm.amdgcn.ds.read.tr16.b64.v4f16.p3", vecTy,
+          vecAddr);
+      Value vecVal = intrCall.getResult(0);
+      for (int v = 0; v < vecTy.getNumElements(); v++) {
+        ret.push_back(b.extract_element(elemLlvmTy, vecVal, b.i32_val(v)));
+      }
+    };
+  } else {
+    loadCallbackFunc = [&](VectorType vecTy, Value vecAddr) {
+      auto vecVal = b.load(vecTy, vecAddr);
+      vecVal.setAlignment(vecTy.getNumElements() *
+                          elemLlvmTy.getIntOrFloatBitWidth() / 8);
+      for (int v = 0; v < vecTy.getNumElements(); v++) {
+        ret.push_back(b.extract_element(elemLlvmTy, vecVal, b.i32_val(v)));
+      }
+    };
+  }
+
   bool success = emitTransferBetweenRegistersAndShared(
       dstTy, srcTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemObj, loc,
-      rewriter, target, [&](VectorType vecTy, Value vecAddr) {
-        auto vecVal = b.load(vecTy, vecAddr);
-        vecVal.setAlignment(vecTy.getNumElements() *
-                            elemLlvmTy.getIntOrFloatBitWidth() / 8);
+      rewriter, target, loadCallbackFunc);
 
-        for (int v = 0; v < vecTy.getNumElements(); v++) {
-          ret.push_back(b.extract_element(elemLlvmTy, vecVal, b.i32_val(v)));
-        }
-      });
   if (!success)
     llvm::report_fatal_error("Failed to emit transfer from shared to register");
 

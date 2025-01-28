@@ -275,6 +275,9 @@ multiRootGetSlice(Operation *op, TransitiveFilter backwardFilter = nullptr,
 /// Create a basic DataFlowSolver with constant and dead code analysis included.
 std::unique_ptr<DataFlowSolver> createDataFlowSolver();
 
+// Checks if dstTy is in MFMA dot encoding with transA/B flags on.
+bool isAMDTransLoad(RankedTensorType dstTy);
+
 /// This class represents a call graph for a given ModuleOp and holds
 /// data of type T associated with each FunctionOpInterface.
 template <typename T> class CallGraph {

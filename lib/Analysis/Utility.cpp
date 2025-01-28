@@ -922,7 +922,24 @@ LinearLayout minimalCvtLayout(RankedTensorType srcTy, RankedTensorType dstTy) {
   return comp;
 }
 
+bool isAMDTransLoad(RankedTensorType dstTy) {
+  auto dotOperandLayout = dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
+  if (!dotOperandLayout) {
+    return false;
+  }
+
+  auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(dotOperandLayout.getParent());
+  if (!mfmaLayout) {
+    return false;
+  }
+
+  return mfmaLayout.isTransOp(dotOperandLayout.getOpIdx());
+}
+
 bool cvtReordersRegisters(RankedTensorType srcTy, RankedTensorType dstTy) {
+  if (isAMDTransLoad(dstTy))
+    return true;
+
   auto layout = minimalCvtLayout(srcTy, dstTy);
   MLIRContext *ctx = srcTy.getContext();
   auto kRegister = StringAttr::get(ctx, "register");

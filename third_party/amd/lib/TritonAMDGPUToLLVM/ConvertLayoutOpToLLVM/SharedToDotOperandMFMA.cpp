@@ -208,6 +208,12 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   int nonKDimIdx = opIdx == 0 ? rank - 2 : rank - 1;
 
   auto mfmaLayout = cast<AMDMfmaEncodingAttr>(encoding.getParent());
+
+  // LDS transposed loads are only supported trough LL path.
+  if (mfmaLayout.isTransOp(opIdx)) {
+    return Value();
+  }
+
   auto mDim = mfmaLayout.getMDim();
   auto nDim = mfmaLayout.getNDim();
   assert((mDim == nDim && (mDim == 32 || mDim == 16 || mDim == 4)) ||

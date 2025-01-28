@@ -928,10 +928,15 @@ V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,
     "unsigned":$MDim,
     "unsigned":$NDim,
     "bool":$isTransposed,
+    "bool":$transA,
+    "bool":$transB,
     "CTALayoutAttr":$CTALayout
   );
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
+    bool isTransOp(int opIdx) {
+        return (opIdx == 0 && getTransA()) || (opIdx == 1 && getTransB());
+    }
     bool supportReduction() const {
       return true;
     }

@@ -298,14 +298,14 @@ public:
                                               ArrayRef<unsigned> warpsPerCTA) {
     return triton::gpu::AMDMfmaEncodingAttr::get(
         &ctx, /*versionMajor=*/2, /*versionMinor=*/0, warpsPerCTA, mDim, nDim,
-        /*isTransposed=*/false, ctaLayout);
+        /*isTransposed=*/false, false, false, ctaLayout);
   }
 
   triton::gpu::AMDMfmaEncodingAttr
   createTransposedMFMA(int mDim, int nDim, ArrayRef<unsigned> warpsPerCTA) {
     return triton::gpu::AMDMfmaEncodingAttr::get(
         &ctx, /*versionMajor=*/2, /*versionMinor=*/0, warpsPerCTA, mDim, nDim,
-        /*isTransposed=*/true, ctaLayout);
+        /*isTransposed=*/true, false, false, ctaLayout);
   }
 };
 
