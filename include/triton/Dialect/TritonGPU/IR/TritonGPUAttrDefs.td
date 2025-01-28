@@ -149,8 +149,26 @@ addition, if there's only one CTA per CGA, then Triton canonicalizes CTAOrder to
 //===----------------------------------------------------------------------===//
 // Shared Layout Encoding
 //===----------------------------------------------------------------------===//
+def SharedEncodingTrait : AttrInterface<"SharedEncodingTrait"> {
+  let cppNamespace = "::mlir::triton::gpu";
 
-def SharedEncodingAttr : TritonGPU_Attr<"SharedEncoding", "shared_encoding"> {
+  let description = [{
+  }];
+
+  let methods = [
+  ];
+}
+
+class SharedEncoding<list<Trait> traits = [],
+                     Dialect dialect = TritonGPU_Dialect>
+  : TritonGPU_Attr<"SharedEncoding", "shared_encoding", !listconcat([SharedEncodingTrait], traits), dialect> {
+
+  let description = [{
+  }];
+}
+
+// def SharedEncodingAttr : TritonGPU_Attr<"SharedEncoding", "shared_encoding"> {
+def SharedEncodingAttr : SharedEncoding {
   let mnemonic = "shared";
 
   let description = [{
