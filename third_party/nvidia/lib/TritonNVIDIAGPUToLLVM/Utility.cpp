@@ -122,6 +122,12 @@ Value createElectPredicate(Location loc, RewriterBase &rewriter) {
   return ptxBuilder.launch(rewriter, loc, i1_ty, /*hasSideEffect=*/false);
 }
 
+Value createElectPredicateWarp0(Location loc, RewriterBase &rewriter) {
+  Value threadId = getThreadId(rewriter, loc);
+  Value warp0 = icmp_ult(threadId, i32_val(32));
+  return and_(warp0, createElectPredicate(loc, rewriter));
+}
+
 } // namespace NVIDIA
 } // namespace LLVM
 } // namespace mlir

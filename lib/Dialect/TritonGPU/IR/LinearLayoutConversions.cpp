@@ -166,9 +166,12 @@ LinearLayout sharedToLinearLayoutNoLeadingOffset(ArrayRef<int64_t> shape,
   return combineCtaCgaWithShape(ctaLayout, shared.getCTALayout(), shape);
 }
 
+} // namespace
+
 LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
                                                SharedEncodingAttr shared,
-                                               int32_t elemBitWidth) {
+                                               int32_t elemBitWidth,
+                                               bool disableSwizzle) {
   assert(shared.getHasLeadingOffset());
 
   MLIRContext *ctx = shared.getContext();
@@ -223,6 +226,10 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
   }
   for (int logRow = 0; logRow < llvm::Log2_32(tileRows); logRow++) {
     int row = 1 << logRow;
+    if (disableSwizzle) {
+      bases2D.push_back({row, 0});
+      continue;
+    }
     int perPhase = shared.getPerPhase();
     int maxPhase = shared.getMaxPhase();
     bases2D.push_back({row, vec * ((row / perPhase) % maxPhase)});
@@ -241,10 +248,11 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
 }
 
 /// Function to generate lane and warp layout for dot operands.
-LinearLayout broadcastedDotOperandLayout(MLIRContext *ctx,
-                                         ArrayRef<unsigned> shape,
-                                         ArrayRef<unsigned> order,
-                                         unsigned kDim, StringAttr inDimName) {
+static LinearLayout broadcastedDotOperandLayout(MLIRContext *ctx,
+                                                ArrayRef<unsigned> shape,
+                                                ArrayRef<unsigned> order,
+                                                unsigned kDim,
+                                                StringAttr inDimName) {
   // Let warpsPerCTAMma = {2, 2}, then
   // warpsPerCTA = {2, 1} for opA and warpsPerCTA = {1, 2} for opB
   // assume warpOrder = {1, 0}
@@ -277,8 +285,6 @@ LinearLayout broadcastedDotOperandLayout(MLIRContext *ctx,
   }
   return layout;
 }
-
-} // anonymous namespace
 
 LinearLayout
 AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {

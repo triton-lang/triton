@@ -25,6 +25,8 @@ namespace triton {
 constexpr int patternBenefitDefault = 1;
 constexpr int patternBenefitPrioritizeOverLLVMConversions = 10;
 constexpr int patternBenefitClampOptimizedPattern = 20;
+constexpr int patternBenefitConvertLayoutOptimizedPattern = 20;
+constexpr int patternBenefitNvidiaTensorCoreSubviewPattern = 20;
 
 struct BackendCallbacks {
   /**

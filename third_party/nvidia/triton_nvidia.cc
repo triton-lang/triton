@@ -32,8 +32,16 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
                      mlir::createTritonNvidiaGPUFenceInsertionPass);
   ADD_PASS_WRAPPER_0("add_tma_lowering",
                      mlir::createTritonNvidiaGPUTMALoweringPass);
+  ADD_PASS_WRAPPER_0("add_keep_acc_in_tmem",
+                     mlir::createTritonNvidiaGPUKeepAccInTMemPass);
+  ADD_PASS_WRAPPER_0("add_promote_lhs_to_tmem",
+                     mlir::createTritonNvidiaGPUPromoteLHSToTMemPass);
   ADD_PASS_WRAPPER_0("add_nvgpu_to_llvm",
                      mlir::triton::createConvertNVGPUToLLVMPass);
+  ADD_PASS_WRAPPER_0("add_allocate_tensor_memory",
+                     mlir::createTensorMemoryAllocationPass);
+  ADD_PASS_WRAPPER_0("add_lower_mma",
+                     mlir::createTritonNvidiaGPUMMALoweringPass);
 }
 
 void init_triton_nvidia(py::module &&m) {
