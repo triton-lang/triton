@@ -166,7 +166,7 @@ module {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @load_5D(%arg: !tt.ptr<i8> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
     %50 = tt.splat %arg : !tt.ptr<i8> -> tensor<32x4x4x!tt.ptr<i8>, #blocked>
-    // CHECK: order = [2, 1, 0]
+    // CHECK:  tt.load %1 : tensor<32x4x4x!tt.ptr<i8>, #blocked>
     %108 = tt.load %50 : tensor<32x4x4x!tt.ptr<i8>, #blocked>
     tt.return
   }
