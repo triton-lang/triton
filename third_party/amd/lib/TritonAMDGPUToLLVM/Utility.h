@@ -54,8 +54,9 @@ void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
 // Get flags <volatile, nontemporal> for a predicated Load or Store
 std::pair<bool, bool> getCacheModifierFlagsForPredicatedCall(LLVM::CallOp);
 // Get the cachepolicy value for a cache modifier
-int32_t getCtrlBitsForCacheModifierOnTarget(triton::CacheModifier, bool,
-                                            mlir::triton::AMD::TargetInfo &);
+int32_t
+getCtrlBitsForCacheModifierOnTarget(triton::CacheModifier, bool,
+                                    const mlir::triton::AMD::TargetInfo &);
 
 // Get cache modifier information for buffer atomics
 int32_t getCtrlBitsForBufferAtomicsOnGFX942(bool setSC0, bool setSC1,
