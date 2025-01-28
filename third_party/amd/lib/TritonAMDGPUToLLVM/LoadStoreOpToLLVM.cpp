@@ -453,11 +453,20 @@ struct AsyncLoadOpConversion
       assert(srcElems.size() == maskElems.size());
     }
 
+    SmallVector<Value> otherElems;
+    if (llOther) {
+      otherElems = unpackLLElements(loc, llOther, rewriter);
+      assert(srcElems.size() == otherElems.size());
+    }
+
+    // TODO check maxVec with mask alignment!
+
     // global.load.lds has a shared dst register so we cannot have per thread
     // offsets This means our load size has to align with the load_width of
 
     unsigned maxVec = getContiguity(op.getSrc(), axisAnalysisPass);
     if (mask) {
+      // TODO, if this changes maxVec we cannot use global.load.lds?
       maxVec = std::min(maxVec, getMaskAlignment(mask));
     }
 
@@ -543,64 +552,29 @@ struct AsyncLoadOpConversion
       //     wordBytes == 16 ? CacheModifier::CG : CacheModifier::CA;
       // assert(wordBytes == 16 || wordBytes == 8 || wordBytes == 4);
 
-      auto srcPtr = srcElems[i * maxVec];
+      auto srcIdx = i * maxVec;
+      auto srcPtr = srcElems[srcIdx];
 
+      Block *currentBlock = rewriter.getInsertionBlock();
+      Block *afterLoad =
+          rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+      Block *loadBlock = rewriter.createBlock(afterLoad);
+      rewriter.setInsertionPointToEnd(currentBlock);
+      rewriter.create<LLVM::CondBrOp>(loc, maskElems[srcIdx], loadBlock,
+                                      afterLoad);
+      rewriter.setInsertionPointToStart(loadBlock);
       LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, {},
                                       {srcPtr, shmemAddrs[i],
                                        loadStoreByteWidthVal,
                                        /*imm
                              offset=*/i32_val(0), i32_val(0)});
+      rewriter.create<LLVM::BrOp>(loc, afterLoad);
+      rewriter.setInsertionPointToStart(afterLoad);
 
-      // bool useIntrinsic = true;
-      // llvm::outs() << "Use intrinsics: " << useIntrinsic << "\n";
-
-      // auto basePtr = getPtrFromFirstLane(targetInfo, dstPtr);
-      // Value threadId = tid_val();
-      // Value laneId = urem(threadId, i32_val(64));
-      // Value offset = mul(laneId, i32_val(1));
-      // Value dstPtrWithOffset = gep(elemPtrTy, resElemTy, basePtr, offset);
-
-      // Build blocks to bypass the global.load.lds
-      // auto *curBlock = rewriter.getInsertionBlock();
-      // auto *endBlock =
-      // curBlock->splitBlock(rewriter.getInsertionPoint()); auto
-      // *atomicBlock = rewriter.createBlock(
-      //     curBlock->getParent(), std::next(Region::iterator(curBlock)));
-
-      // // Fill entry block with global memory barrier and conditional
-      // branch. rewriter.setInsertionPointToEnd(curBlock); auto tid =
-      // tid_val(); Value pred = icmp_eq(tid, i32_val(i));
-      // rewriter.create<LLVM::CondBrOp>(loc, pred, atomicBlock, endBlock);
-
-      // Build main block with atomic_cmpxchg.
-      // rewriter.setInsertionPointToEnd(atomicBlock);
-      // Value l = load(smemObj.getBaseElemType(), dstPtrWithOffset);
-      // store(l, srcPtr);
-      // LLVM::createLLVMIntrinsicCallOp(
-      //     rewriter, loc, "llvm.amdgcn.s.waitcnt", {}, {i32_val(0)});
-      // LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
-      //                                 "llvm.amdgcn.wave.barrier", {},
-      //                                 {});
-      // LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
-      // "llvm.amdgcn.s.waitcnt",
-      //                                 {}, {i32_val(0)});
-
-      // Block *currentBlock = rewriter.getInsertionBlock();
-      // Block *afterLoad =
-      //     rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
-      // Block *loadBlock = rewriter.createBlock(afterLoad);
-      // rewriter.setInsertionPointToEnd(currentBlock);
-      // rewriter.create<LLVM::CondBrOp>(loc, maskElems[elemIdx], loadBlock,
-      //                                 afterLoad);
-      // rewriter.setInsertionPointToStart(loadBlock);
-      // rewriter
-      //     .create<LLVM::CallOp>(loc, llFuncOp,
-      //                           ValueRange({srcElems[elemIdx],
-      //                           shmemAddrs[i],
-      //                                       loadWidth, offsetValue, two}))
-      //     .getResult();
-      // rewriter.create<LLVM::BrOp>(loc, afterLoad);
-      // rewriter.setInsertionPointToStart(afterLoad);
+      Value storeVal = packElementRangeIntoVector(
+          rewriter, this->getTypeConverter(), loc, vecTy, otherElems, srcIdx);
+      llStore(rewriter, loc, shmemAddrs[i], storeVal,
+              icmp_ne(maskElems[srcIdx], true_val()));
     }
 
     // Drop the result token.

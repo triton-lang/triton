@@ -342,17 +342,17 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
     auto cvtSrc =
         builder.create<ttg::ConvertLayoutOp>(loadOp.getLoc(), newArgType, src);
 
-    auto maskTy =
-        dyn_cast<triton::gpu::TensorOrMemDesc>(loadOp.getMask().getType());
-    RankedTensorType newMaskTy = RankedTensorType::get(
-        maskTy.getShape(), maskTy.getElementType(), newLayout);
-    RankedTensorType newMaskType = RankedTensorType::get(
-        allocTy.getShape(), srcTy.getElementType(), newLayout);
-    auto cvtMask = builder.create<ttg::ConvertLayoutOp>(
-        loadOp->getLoc(), newMaskTy, loadOp.getMask());
+    auto mask = loadOp.getMask();
+    if (mask) {
+      auto maskTy = dyn_cast<triton::gpu::TensorOrMemDesc>(mask.getType());
+      RankedTensorType newMaskTy = RankedTensorType::get(
+          maskTy.getShape(), maskTy.getElementType(), newLayout);
+      auto cvtMask = builder.create<ttg::ConvertLayoutOp>(
+          loadOp->getLoc(), newMaskTy, loadOp.getMask());
+    }
 
     newLoadOp = builder.create<ttg::AsyncCopyGlobalToLocalOp>(
-        loadOp.getLoc(), cvtSrc.getResult(), viewLoad, cvtMask, other,
+        loadOp.getLoc(), cvtSrc.getResult(), viewLoad, mask, other,
         loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
 
     auto [stage, cluster] = schedule[loadOp];
