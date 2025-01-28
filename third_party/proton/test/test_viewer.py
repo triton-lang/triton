@@ -50,13 +50,13 @@ def test_format_frames(option):
         gf, _, _, _ = get_raw_metrics(f)
         gf = format_frames(gf, option)
         if option == "full":
-            idx = gf.dataframe["name"] == "/home/user/projects/example.py/test.py:foo@1"
+            idx = gf.dataframe["name"] == "/home/user/projects/example.py/test.py:1@foo"
         elif option == "file_function_line":
-            idx = gf.dataframe["name"] == "test.py:foo@1"
+            idx = gf.dataframe["name"] == "test.py:1@foo"
         elif option == "function_line":
-            idx = gf.dataframe["name"] == "foo@1"
+            idx = gf.dataframe["name"] == "1@foo"
         elif option == "file_function":
-            idx = gf.dataframe["name"] == "test.py:foo"
+            idx = gf.dataframe["name"] == "test.py@foo"
         assert idx.sum() == 1
 
 
