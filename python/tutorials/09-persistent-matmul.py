@@ -242,9 +242,9 @@ def matmul_kernel_persistent(a_ptr, b_ptr, c_ptr,  #
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
     k_tiles = tl.cdiv(K, BLOCK_SIZE_K)
     num_tiles = num_pid_m * num_pid_n
-    num_pid_in_group = GROUP_SIZE_M * num_pid_n
 
     offs_k_for_mask = tl.arange(0, BLOCK_SIZE_K)
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n
 
     for tile_id in range(start_pid, num_tiles, NUM_SMS):
         group_id = tile_id // num_pid_in_group
@@ -295,7 +295,6 @@ def matmul_persistent(a, b):
     c = torch.empty((M, N), device=a.device, dtype=dtype)
     # 1D launch kernel where each block gets its own program.
     grid = lambda META: (min(NUM_SMS, triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"])), )
-
     matmul_kernel_persistent[grid](
         a, b, c,  #
         M, N, K,  #
@@ -339,11 +338,11 @@ def matmul_kernel_tma_persistent(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
     k_tiles = tl.cdiv(K, BLOCK_SIZE_K)
     num_tiles = num_pid_m * num_pid_n
-    num_pid_in_group = GROUP_SIZE_M * num_pid_n
 
     # tile_id_c is used in the epilogue to break the dependency between
     # the prologue and the epilogue
     tile_id_c = start_pid - NUM_SMS
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n
 
     for tile_id in range(start_pid, num_tiles, NUM_SMS):
         group_id = tile_id // num_pid_in_group
@@ -483,7 +482,6 @@ def matmul_kernel_descriptor_persistent(a_ptr, b_ptr, c_ptr,  #
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
     k_tiles = tl.cdiv(K, BLOCK_SIZE_K)
     num_tiles = num_pid_m * num_pid_n
-    num_pid_in_group = GROUP_SIZE_M * num_pid_n
 
     a_desc = tl._experimental_make_tensor_descriptor(
         a_ptr,
@@ -504,6 +502,8 @@ def matmul_kernel_descriptor_persistent(a_ptr, b_ptr, c_ptr,  #
         block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_N if not EPILOGUE_SUBTILE else BLOCK_SIZE_N // 2],
     )
 
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n
+
     for tile_id in range(start_pid, num_tiles, NUM_SMS):
         group_id = tile_id // num_pid_in_group
         first_pid_m = group_id * GROUP_SIZE_M
@@ -521,8 +521,6 @@ def matmul_kernel_descriptor_persistent(a_ptr, b_ptr, c_ptr,  #
             a = a_desc.load([offs_am, offs_k])
             b = b_desc.load([offs_bn, offs_k])
             accumulator = tl.dot(a, b.T, accumulator)
-
-        c = accumulator.to(dtype)
 
         if EPILOGUE_SUBTILE:
             acc = tl.reshape(accumulator, (BLOCK_SIZE_M, 2, BLOCK_SIZE_N // 2))
