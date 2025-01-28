@@ -7,7 +7,7 @@
 // RUN: triton-tensor-layout -i %s -alias-names="mfma" -t "tensor<16x16xf16>" -use-hw-view | FileCheck %s --check-prefix=CHECK-HW
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
-#mfma = #ttg.amd_mfma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 16], isTransposed = true}>
+#mfma = #ttg.amd_mfma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 16], isTransposed = true, transA = false, transB = false}>
 tt.func @print(%A : !tt.ptr<f16>) {
   %cst0 = arith.constant dense<0.000000e+00> : tensor<16x16xf16, #blocked>
   %cst1 = arith.constant dense<0.00e+00> : tensor<16x16xf16, #mfma>
