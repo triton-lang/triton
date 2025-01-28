@@ -156,6 +156,24 @@ def SharedEncodingTrait : AttrInterface<"SharedEncodingTrait"> {
   }];
 
   let methods = [
+    InterfaceMethod<"",
+                    "unsigned",
+                    "getVec">,
+    InterfaceMethod<"",
+                    "unsigned",
+                    "getPerPhase">,
+    InterfaceMethod<"",
+                    "unsigned",
+                    "getMaxPhase">,
+    InterfaceMethod<"",
+                    "ArrayRef<unsigned>",
+                    "getOrder">,
+    // InterfaceMethod<"",
+    //                 "CTALayoutAttr",
+    //                 "getCTALayout">,
+    InterfaceMethod<"",
+                    "bool",
+                    "getHasLeadingOffset">
   ];
 }
 
@@ -164,6 +182,15 @@ class SharedEncoding<list<Trait> traits = [],
   : TritonGPU_Attr<"SharedEncoding", "shared_encoding", !listconcat([SharedEncodingTrait], traits), dialect> {
 
   let description = [{
+  }];
+
+  code extraSharedEncodingDeclaration = extraBaseClassDeclaration # [{
+     unsigned getVec() const;
+     unsigned getPerPhase() const;
+     unsigned getMaxPhase() const;
+     ArrayRef<unsigned> getOrder() const;
+     // CTALayoutAttr getCTALayout();
+     bool getHasLeadingOffset() const;
   }];
 }
 
@@ -257,12 +284,12 @@ compared to 1*64 when the hasLeadingOffset is false.
   // order: the fastest-changing axis first
   let parameters = (
     ins
-    "unsigned":$vec,
-    "unsigned":$perPhase,
-    "unsigned":$maxPhase,
-    ArrayRefParameter<"unsigned">:$order,
+    "unsigned":$vec__,
+    "unsigned":$perPhase__,
+    "unsigned":$maxPhase__,
+     ArrayRefParameter<"unsigned">:$order__,
     "CTALayoutAttr":$CTALayout,
-    "bool":$hasLeadingOffset
+    "bool":$hasLeadingOffset__
   );
 
   let builders = [
@@ -450,7 +477,8 @@ compared to 1*64 when the hasLeadingOffset is false.
     }]>
   ];
 
-  let extraClassDeclaration = extraBaseClassDeclaration # [{
+  let extraClassDeclaration = extraSharedEncodingDeclaration # [{
+    // TODO: Should this be part of the interface?
     int32_t getAlignment() const;
   }];
   let hasCustomAssemblyFormat = 1;

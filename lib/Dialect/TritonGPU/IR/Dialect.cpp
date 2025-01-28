@@ -18,6 +18,7 @@
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 // Include TableGen'erated code
@@ -885,6 +886,16 @@ unsigned SharedEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
   llvm_unreachable("getElemsPerThread is not supported for shared layout");
   return 0;
 }
+
+unsigned SharedEncodingAttr::getVec() const { return getVec__(); }
+unsigned SharedEncodingAttr::getPerPhase() const { return getPerPhase__(); }
+unsigned SharedEncodingAttr::getMaxPhase() const { return getMaxPhase__(); }
+ArrayRef<unsigned> SharedEncodingAttr::getOrder() const { return getOrder__(); }
+
+bool SharedEncodingAttr::getHasLeadingOffset() const {
+  return getHasLeadingOffset__();
+}
+
 int32_t SharedEncodingAttr::getAlignment() const {
   if (getHasLeadingOffset())
     return 128 * getMaxPhase();
@@ -1872,7 +1883,7 @@ void SharedEncodingAttr::print(AsmPrinter &printer) const {
           << "vec = " << getVec() //
           << ", perPhase = " << getPerPhase()
           << ", maxPhase = " << getMaxPhase() //
-          << ", order = [" << getOrder() << "]";
+          << ", order = [" << ArrayRef<unsigned>(getOrder()) << "]";
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getOrder().size());
   printer << ", hasLeadingOffset = " << getHasLeadingOffset() << "}>";
