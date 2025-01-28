@@ -109,8 +109,13 @@ public:
   unsigned getNonAxisNumElementsPerThread();
   // Return the number of threads per warp along non-axis dims.
   unsigned getNonAxisNumThreadsPerWarp();
+  // Return the number of warps per CTA along non-axis dims.
+  unsigned getNonAxisNumWarpsPerCTA();
+  // Return the number of CTAs per CGA along non-axis dims.
+  unsigned getNonAxisNumCTAsPerCGA();
   // Return the flat numbers of threads computing independent scan results.
-  unsigned getNonAxisNumThreadsPerCTA();
+  unsigned getNonAxisNumThreadsPerCTA(); // per CTA
+  unsigned getNonAxisNumThreadsPerCGA(); // per CGA
   // Return the number of warps per CTA along axis dim.
   unsigned getAxisNumWarps();
   // Return the number of warps per CTA along axis dim with unique data.
