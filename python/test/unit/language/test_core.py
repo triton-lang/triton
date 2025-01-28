@@ -2761,6 +2761,16 @@ scan_layouts = [
 @pytest.mark.parametrize("add_overflow_check", [False, True])
 def test_scan_layouts(M, N, src_layout, axis, add_overflow_check, device, tmp_path: pathlib.Path):
 
+    num_wraps = int(np.prod(src_layout.warps_per_cta))
+    num_ctas = int(np.prod(src_layout.ctas_per_cga))
+    cluster_dims = tuple((src_layout.ctas_per_cga[i] if i < len(src_layout.ctas_per_cga) else 1) for i in range(3))
+
+    if num_ctas > 1 and not is_hopper():
+        return pytest.skip(f"num_ctas > 1 is only supported after sm90.")
+    
+    if cluster_dims[axis] > 1:
+        return pytest.skip(f"scan axis accross CTAs is not supported (cluster_dims[axis]={cluster_dims[axis]}).")
+
     overflow_check = """
         %17 = arith.extsi %arg2 : i32 to i64
         %18 = arith.extsi %arg3 : i32 to i64
@@ -2772,13 +2782,6 @@ def test_scan_layouts(M, N, src_layout, axis, add_overflow_check, device, tmp_pa
         %22 = arith.andi %20, %21 : i1
         tt.assert %22, "overflow detected" : i1
     """
-
-    num_wraps = int(np.prod(src_layout.warps_per_cta))
-    num_ctas = int(np.prod(src_layout.ctas_per_cga))
-    cluster_dims = tuple((src_layout.ctas_per_cga[i] if i < len(src_layout.ctas_per_cga) else 1) for i in range(3))
-
-    if cluster_dims[axis] > 1:
-        return pytest.skip(f"Scan axis accross CTAs is not supported (cluster_dims[axis]={cluster_dims[axis]}).")
 
     ir = f"""
     #blocked = {src_layout}
