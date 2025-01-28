@@ -106,7 +106,7 @@ if __name__ == "__main__":
     # compile ast into cubin
     for h in hints.values():
         assert h in [1, 16], f"Only 1 and 16 are valid hints, got {h}"
-    attrs = {k: [("tt.divisibility", 16)] for k, v in hints.items() if v == 16}
+    attrs = {k: [["tt.divisibility", 16]] for k, v in hints.items() if v == 16}
     src = triton.compiler.ASTSource(fn=kernel, constexprs=constants, signature=signature, attrs=attrs)
     opts = {"num_warps": args.num_warps, "num_stages": args.num_stages}
     ccinfo = triton.compile(src, options=opts)

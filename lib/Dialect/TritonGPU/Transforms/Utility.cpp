@@ -793,10 +793,11 @@ LogicalResult getConvertBackwardSlice(
   auto updateLayout = [&](Value value, Attribute encoding) {
     assert((isa<RankedTensorType>(value.getType())));
     slice.insert(value);
-    Attribute &existing = layout[value];
-    if (existing && existing != encoding)
-      return failure();
-    existing = encoding;
+    if (layout.find(value) != layout.end()) {
+      if (layout[value] != encoding)
+        return failure();
+    }
+    layout[value] = encoding;
     return success();
   };
 
@@ -822,8 +823,6 @@ LogicalResult getConvertBackwardSlice(
     }
 
     if (auto ifOp = currentValue.getDefiningOp<scf::IfOp>()) {
-      if (stopPropagation && stopPropagation(ifOp))
-        continue;
       unsigned argIdx = mlir::cast<OpResult>(currentValue).getResultNumber();
 
       OpOperand &thenValue = ifOp.thenYield()->getOpOperand(argIdx);
@@ -1055,54 +1054,6 @@ MMALoadType getMMALoadType(Operation *loadOp) {
   } else {
     return MMALoadType::DoNotPipeline;
   }
-}
-
-static Type getNewType(Type type, Attribute encoding) {
-  RankedTensorType tensorType = cast<RankedTensorType>(type);
-  return RankedTensorType::get(tensorType.getShape(),
-                               tensorType.getElementType(), encoding);
-}
-
-void convertOpEncoding(Attribute encoding, Operation *op) {
-  OpBuilder builder(op);
-  // Convert operands
-  // For load/store with tensor pointers, we don't have to change the
-  // operands' type, we do this by changing the outputs' type of
-  // `make_tensor_ptr`
-  SmallVector<Value, 4> newArgs;
-  for (auto operand : op->getOperands()) {
-    auto tensorType = dyn_cast<RankedTensorType>(operand.getType());
-    if (tensorType &&
-        !isa<triton::gpu::SharedEncodingAttr>(tensorType.getEncoding())) {
-      Type newType = getNewType(tensorType, encoding);
-      newArgs.push_back(builder.create<triton::gpu::ConvertLayoutOp>(
-          op->getLoc(), newType, operand));
-    } else {
-      newArgs.push_back(operand);
-    }
-  }
-
-  // Convert output types
-  SmallVector<Type, 4> newTypes;
-  for (auto t : op->getResultTypes()) {
-    bool isAsync = isa<triton::gpu::AsyncCopyGlobalToLocalOp>(op);
-    newTypes.push_back(isAsync ? t : getNewType(t, encoding));
-  }
-
-  // Construct new op with the new encoding
-  Operation *newOp = builder.create(op->getLoc(), op->getName().getIdentifier(),
-                                    newArgs, newTypes, op->getAttrs());
-
-  // Cast the results back to the original layout
-  for (size_t i = 0; i < op->getNumResults(); i++) {
-    Value newResult = newOp->getResult(i);
-    if (newTypes[i] != op->getResultTypes()[i]) {
-      newResult = builder.create<triton::gpu::ConvertLayoutOp>(
-          op->getLoc(), op->getResult(i).getType(), newResult);
-    }
-    op->getResult(i).replaceAllUsesWith(newResult);
-  }
-  op->erase();
 }
 
 namespace {

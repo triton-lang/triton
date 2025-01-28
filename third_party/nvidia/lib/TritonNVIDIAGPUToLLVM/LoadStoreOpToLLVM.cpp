@@ -1,3 +1,4 @@
+#include "Dialect/NVGPU/IR/Dialect.h"
 #include "TargetInfo.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -23,6 +24,9 @@ using ::mlir::triton::gpu::getCTALayout;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::SharedEncodingAttr;
+
+// Toggle this to work around Cooperative Grid Launch ld.acquire optimized path
+static constexpr bool disableLDAcquireLowering = false;
 
 namespace {
 
@@ -696,6 +700,48 @@ struct AtomicRMWOpConversion
            (elementType.isF16() || elementType.isBF16() || elementType.isF32());
   }
 
+  bool isPromotableToNVPTXLD(triton::AtomicRMWOp op) const {
+    if (disableLDAcquireLowering)
+      return false;
+
+    Type valueTy =
+        getTypeConverter()->convertType(getElementTypeOrSelf(op.getType()));
+
+    if (!valueTy.isIntOrFloat())
+      return false;
+    if (op.getSem() != triton::MemSemantic::ACQUIRE &&
+        op.getSem() != triton::MemSemantic::RELAXED)
+      return false;
+    if (op.getScope() != triton::MemSyncScope::CTA &&
+        op.getScope() != triton::MemSyncScope::GPU &&
+        op.getScope() != triton::MemSyncScope::SYSTEM)
+      return false;
+
+    if (op.getAtomicRmwOp() != RMWOp::ADD && op.getAtomicRmwOp() != RMWOp::FADD)
+      return false;
+    if (isa<RankedTensorType>(op.getType()))
+      return false;
+    if (!op.getVal().getDefiningOp())
+      return false;
+    if (!isa<arith::ConstantOp>(op.getVal().getDefiningOp()))
+      return false;
+
+    auto constOp = cast<arith::ConstantOp>(op.getVal().getDefiningOp());
+    if (!isa<FloatAttr>(constOp.getValueAttr()) &&
+        !isa<IntegerAttr>(constOp.getValueAttr()))
+      return false;
+
+    if (auto attr = dyn_cast_or_null<FloatAttr>(constOp.getValueAttr()))
+      if (!attr.getValue().isZero())
+        return false;
+
+    if (auto attr = dyn_cast_or_null<IntegerAttr>(constOp.getValueAttr()))
+      if (!attr.getValue().isZero())
+        return false;
+
+    return true;
+  }
+
   LogicalResult
   matchAndRewrite(triton::AtomicRMWOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -767,6 +813,17 @@ struct AtomicRMWOpConversion
 
     auto packedTy = vec_ty(valueElemTy, packed);
     SmallVector<Value> resultVals(elemsPerThread);
+
+    // Lower AtomicRMWOp to a ld.acquire if possible
+    std::unordered_map<triton::MemSyncScope, triton::nvgpu::MemSyncScope>
+        ScopeMap = {
+            {triton::MemSyncScope::CTA, triton::nvgpu::MemSyncScope::CTA},
+            {triton::MemSyncScope::GPU, triton::nvgpu::MemSyncScope::GPU},
+            {triton::MemSyncScope::SYSTEM,
+             triton::nvgpu::MemSyncScope::SYSTEM}};
+    const bool doPTXLDPromotion = isPromotableToNVPTXLD(op) && vec == 1 &&
+                                  packed == 1 && ScopeMap.count(op.getScope());
+
     for (size_t i = 0; i < elemsPerThread; i += vec * packed) {
       if (auto canonicalStart = getCanonicalIndex(i, regMask);
           canonicalStart != i) {
@@ -780,6 +837,33 @@ struct AtomicRMWOpConversion
       Value rmwPtr = ptrElements[i];
       Value pred = llMask ? maybeAnd(rewriter, loc, threadPred, maskElements[i])
                           : threadPred;
+
+      if (doPTXLDPromotion) {
+        Type covertedValueTy =
+            getTypeConverter()->convertType(getElementTypeOrSelf(op.getType()));
+        auto loadAcquireOp = rewriter.create<triton::nvgpu::LoadAcquireOp>(
+            op.getLoc(), covertedValueTy, rmwPtr, pred,
+            op.getSem() == triton::MemSemantic::ACQUIRE
+                ? triton::nvgpu::MemSemantic::ACQUIRE
+                : triton::nvgpu::MemSemantic::RELAXED,
+            ScopeMap[op.getScope()]);
+
+        auto ASMReturnTy = void_ty(ctx);
+        if (!atomicNeedsSharedMemory(op.getResult())) {
+          rewriter.eraseOp(op);
+          return success();
+        }
+        Value atomPtr = LLVM::getSharedMemoryBase(loc, rewriter, targetInfo,
+                                                  op.getOperation());
+        atomPtr = bitcast(atomPtr, ptr_ty(ctx, 3));
+        // Only threads with rmwMask = True store the result
+        targetInfo.storeShared(rewriter, loc, atomPtr, loadAcquireOp, pred);
+        createBarrier(rewriter, loc, numCTAs);
+        Value ret = load(valueElemTy, atomPtr);
+        rewriter.replaceOp(op, {ret});
+        continue;
+      }
+
       std::string sTy;
       PTXBuilder ptxBuilderAtomicRMW;
       // 16-bit -> "h", 32-bit -> "r", 64-bit -> "l"
@@ -1310,12 +1394,12 @@ struct AsyncCommitGroupOpConversion
   }
 };
 
-struct TMAStoreWaitConversion
-    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::TMAStoreWait> {
+struct TMAStoreWaitOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::TMAStoreWaitOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
   LogicalResult
-  matchAndRewrite(triton::nvidia_gpu::TMAStoreWait op, OpAdaptor adaptor,
+  matchAndRewrite(triton::nvidia_gpu::TMAStoreWaitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     PTXBuilder ptxBuilder;
     auto &asyncWaitOp = *ptxBuilder.create<>("cp.async.bulk.wait_group.read");
@@ -1343,6 +1427,6 @@ void mlir::triton::NVIDIA::populateLoadStoreOpToLLVMPatterns(
   patterns.add<AsyncCommitGroupOpConversion>(typeConverter, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, benefit);
   patterns.add<AsyncTMACopyGlobalToLocalOpConversion,
-               AsyncTMACopyLocalToGlobalOpConversion, TMAStoreWaitConversion>(
+               AsyncTMACopyLocalToGlobalOpConversion, TMAStoreWaitOpConversion>(
       typeConverter, benefit);
 }
