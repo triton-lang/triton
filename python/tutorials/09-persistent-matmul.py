@@ -26,7 +26,6 @@ import triton
 import triton.language as tl
 import triton.tools.experimental_descriptor
 import triton.profiler as proton
-import pathlib
 from contextlib import contextmanager
 
 from typing import Optional
