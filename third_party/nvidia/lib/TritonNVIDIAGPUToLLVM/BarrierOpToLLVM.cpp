@@ -148,18 +148,33 @@ struct WaitBarrierOpConversion
         typeConverter->convertType(op.getAlloc().getType().getElementType()),
         rewriter);
     auto loc = op.getLoc();
-    const std::string ptx =
+    const std::string ptxNoPred =
         "{                                                           \n\t"
         ".reg .pred P1;                                              \n\t"
         "waitLoop:                                                   \n\t"
         "mbarrier.try_wait.parity.shared.b64 P1, [$0], $1;           \n\t"
         "@!P1 bra.uni waitLoop;                                      \n\t"
         "}                                                           \n\t";
+    const std::string ptxPred =
+        "{                                                           \n\t"
+        "@!$2 bra.uni skipWait;                                      \n\t"
+        ".reg .pred P1;                                              \n\t"
+        "waitLoop:                                                   \n\t"
+        "mbarrier.try_wait.parity.shared.b64 P1, [$0], $1;           \n\t"
+        "@!P1 bra.uni waitLoop;                                      \n\t"
+        "skipWait:                                                   \n\t"
+        "}                                                           \n\t";
     ::mlir::triton::PTXBuilder ptxBuilder;
+    bool predicated = adaptor.getPred() != nullptr;
+    std::string ptx = predicated ? ptxPred : ptxNoPred;
     auto &waitLoop = *ptxBuilder.create<>(ptx);
-    waitLoop({ptxBuilder.newOperand(smemObj.getBase(), "r"),
-              ptxBuilder.newOperand(adaptor.getPhase(), "r")},
-             /*onlyAttachMLIRArgs=*/true);
+    SmallVector<::mlir::triton::PTXBuilder::Operand *, 3> operands = {
+        ptxBuilder.newOperand(smemObj.getBase(), "r"),
+        ptxBuilder.newOperand(adaptor.getPhase(), "r")};
+    if (predicated)
+      operands.push_back(ptxBuilder.newOperand(adaptor.getPred(), "b"));
+
+    waitLoop(operands, /*onlyAttachMLIRArgs=*/true);
     auto voidTy = void_ty(op->getContext());
     ptxBuilder.launch(rewriter, op->getLoc(), voidTy);
     rewriter.eraseOp(op);

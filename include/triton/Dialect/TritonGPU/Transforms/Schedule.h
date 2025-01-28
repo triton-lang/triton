@@ -34,8 +34,18 @@ bool preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
 bool getOuterLoopSchedule(scf::ForOp &forOp, int numStages,
                           mlir::triton::PipeliningOption &options);
 
+/// Pipeline the Tensor Core Gen 05 MMA ops in `forOps` with `numStages` stages.
+/// This will pre-process the loops, lowering the ops related to TG Gen5 MMA,
+/// and then pipeline the loops using expander.
+void pipelineTC05MMALoops(ModuleOp module,
+                          const SmallVector<scf::ForOp> &forOps, int numStages,
+                          bool disableExpander = false);
+
 /// Pipeline the TMA stores in the loop.
 bool pipelineTMAStores(scf::ForOp forOp);
+
+/// Simple pipelining for the MMA ops which accumulator is modified in the loop.
+scf::ForOp pipelineMMAWithScaledAcc(scf::ForOp forOp);
 
 /// This does post-processing on the pipelined loop to try to pipeline wgmma
 /// ops.
@@ -96,7 +106,26 @@ public:
     return true;
   }
 
-  void insertDepsOfOp(Operation *op, int stage, CoarseSchedule::Cluster cluster,
+  void insertMinimum(Operation *op, int stage, Cluster cluster) {
+    auto res = opToStageAndCluster.insert({op, {stage, cluster}});
+    if (res.second) {
+      return;
+    }
+    auto &[existingStage, existingCluster] = res.first->second;
+    existingStage = std::min(stage, existingStage);
+
+    // If existingCluster is reachable from cluster,
+    // then cluster is earlier in the list
+    auto it = cluster;
+    for (auto it = cluster; it != clusters.end(); ++it) {
+      if (it == existingCluster) {
+        existingCluster = cluster;
+        return;
+      }
+    }
+  }
+
+  bool insertDepsOfOp(Operation *op, int stage, CoarseSchedule::Cluster cluster,
                       bool includeArg);
 
   void erase(Operation *op) { opToStageAndCluster.erase(op); }
@@ -106,6 +135,8 @@ public:
   std::pair<int, Cluster> operator[](Operation *op) {
     return opToStageAndCluster[op];
   }
+
+  auto find(Operation *op) const { return opToStageAndCluster.find(op); }
 
   SmallVector<std::tuple<Operation *, int, Cluster>>
   getOpsInOrder(scf::ForOp forOp);

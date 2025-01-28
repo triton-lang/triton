@@ -167,6 +167,12 @@ template <typename VecT> bool isConsecutive(const VecT &vec) {
   return isConsecutive(ArrayRef(vec));
 }
 
+template <typename T> auto seq(T start, T end, T step) {
+  auto len = ceil<T>(end - start, step);
+  return llvm::map_range(llvm::seq<T>(0, len),
+                         [=](T i) { return start + i * step; });
+}
+
 } // namespace triton
 } // namespace mlir
 

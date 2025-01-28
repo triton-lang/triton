@@ -13,12 +13,56 @@ namespace gpu {
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
 namespace {
+class TMEMAllocWithUnusedInit
+    : public OpRewritePattern<triton::nvidia_gpu::TMEMAllocOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(triton::nvidia_gpu::TMEMAllocOp op,
+                                PatternRewriter &rewriter) const override {
+    MLIRContext *ctx = op.getContext();
+    Location loc = op.getLoc();
+    if (op.getSrc() == nullptr)
+      return failure();
+    SmallVector<Operation *> users(op.getResult().getUsers().begin(),
+                                   op.getResult().getUsers().end());
+    if (users.size() > 2)
+      return failure();
+    triton::nvidia_gpu::TCGen5MMAOp mmaOp = nullptr;
+    triton::nvidia_gpu::TMEMLoadOp tmemLoad = nullptr;
+    for (auto user : users) {
+      if (auto load = dyn_cast<triton::nvidia_gpu::TMEMLoadOp>(user)) {
+        tmemLoad = load;
+      } else if (auto mma = dyn_cast<triton::nvidia_gpu::TCGen5MMAOp>(user)) {
+        mmaOp = mma;
+      }
+    }
+    if (!mmaOp)
+      return failure();
+    if (tmemLoad && !mmaOp->isBeforeInBlock(tmemLoad))
+      return failure();
+    Value useAccFlag = mmaOp.getUseD();
+    if (!useAccFlag)
+      return failure();
+    auto flagConstOp = useAccFlag.getDefiningOp<arith::ConstantOp>();
+    if (!flagConstOp)
+      return failure();
+    if (cast<IntegerAttr>(flagConstOp.getValue()).getInt() != 0)
+      return failure();
+    op.getSrcMutable().clear();
+    return success();
+  }
+};
+
 bool dotSupportsAccInitFlag(Operation *op) {
   assert(op->hasTrait<OpTrait::DotLike>() && "Expected a dot-like operation");
   if (auto wgDotOp = dyn_cast<triton::nvidia_gpu::WarpGroupDotOp>(op)) {
     // Partial accumulation would require a select op to handle the
     // initialization that would degrade the performance.
     return !wgDotOp.needsPartialAccumulator();
+  }
+  if (isa<triton::nvidia_gpu::TCGen5MMAOp>(op)) {
+    return true;
   }
   return false;
 }
@@ -28,6 +72,25 @@ std::pair<Value, Operation *> getAccumulatorUseAndDef(Operation *op) {
   if (auto wgDotOp = dyn_cast<triton::nvidia_gpu::WarpGroupDotOp>(op)) {
     return std::make_pair(wgDotOp.getC(), wgDotOp);
   }
+  if (auto tc05MmaOp = dyn_cast<triton::nvidia_gpu::TCGen5MMAOp>(op)) {
+    auto accVal = tc05MmaOp.getD();
+    auto tmemAlloc = accVal.getDefiningOp<triton::nvidia_gpu::TMEMAllocOp>();
+    if (!tmemAlloc ||
+        tmemAlloc->getParentRegion() != tc05MmaOp->getParentRegion())
+      return std::make_pair(nullptr, nullptr);
+    triton::nvidia_gpu::TMEMLoadOp tmemLoad = nullptr;
+    for (auto user : tmemAlloc.getResult().getUsers()) {
+      if (auto load = dyn_cast<triton::nvidia_gpu::TMEMLoadOp>(user)) {
+        tmemLoad = load;
+        break;
+      }
+    }
+    if (!tmemLoad ||
+        tmemLoad->getParentRegion() != tc05MmaOp->getParentRegion())
+      return std::make_pair(nullptr, nullptr);
+    return std::make_pair(tmemAlloc.getSrc(), tmemLoad);
+  }
+  assert(false && "Unexpected dot-like operation");
   return std::make_pair(nullptr, nullptr);
 }
 
@@ -35,6 +98,10 @@ void setUseAccFlag(Operation *op, Value useAcc) {
   assert(op->hasTrait<OpTrait::DotLike>() && "Expected a dot-like operation");
   if (auto wgDotOp = dyn_cast<triton::nvidia_gpu::WarpGroupDotOp>(op)) {
     wgDotOp.getUseCMutable().assign(useAcc);
+  } else if (auto tc05MmaOp = dyn_cast<triton::nvidia_gpu::TCGen5MMAOp>(op)) {
+    tc05MmaOp.getUseDMutable().assign(useAcc);
+  } else {
+    assert(false && "Unexpected dot-like operation");
   }
 }
 
@@ -42,10 +109,8 @@ bool isConstantZeroTensor(Value v) {
   return (matchPattern(v, m_Zero()) || matchPattern(v, m_AnyZeroFloat()));
 }
 
-std::optional<std::pair<Operation *, int>> findZeroInitOp(Value accUse,
-                                                          Operation *accDef,
-                                                          scf::ForOp forOp,
-                                                          bool &loopArgIsZero) {
+std::optional<std::pair<Operation *, int>>
+findZeroInitOp(Value accUse, scf::ForOp forOp, bool &loopArgIsZero) {
   Value v = accUse;
   if (auto arg = dyn_cast<BlockArgument>(v)) {
     assert(arg.getOwner() == forOp.getBody());
@@ -68,11 +133,7 @@ std::optional<std::pair<Operation *, int>> findZeroInitOp(Value accUse,
     }
   }
   if (auto ifOp = dyn_cast<scf::IfOp>(defOp)) {
-    unsigned resultIndex = 0;
-    for (; resultIndex < ifOp.getNumResults(); ++resultIndex) {
-      if (ifOp.getResult(resultIndex) == v)
-        break;
-    }
+    unsigned resultIndex = cast<OpResult>(v).getResultNumber();
     Value thenVal = ifOp.thenYield()->getOperand(resultIndex);
     Value elseVal = ifOp.elseYield()->getOperand(resultIndex);
     if (isConstantZeroTensor(thenVal) || isConstantZeroTensor(elseVal)) {
@@ -137,7 +198,7 @@ public:
 
       bool loopArgIsZero = false;
       std::optional<std::pair<Operation *, int>> zeroInitOp =
-          findZeroInitOp(accUse, accDef, forOp, loopArgIsZero);
+          findZeroInitOp(accUse, forOp, loopArgIsZero);
       if (!zeroInitOp) {
         continue;
       }
@@ -199,6 +260,12 @@ public:
         zeroingYield.setOperand(resultIndex, oldValue);
       }
     }
+
+    // Cleanup unused init values in tmem allocs
+    mlir::RewritePatternSet patterns(m.getContext());
+    patterns.add<TMEMAllocWithUnusedInit>(m.getContext());
+    if (applyPatternsGreedily(m, std::move(patterns)).failed())
+      signalPassFailure();
   }
 };
 
