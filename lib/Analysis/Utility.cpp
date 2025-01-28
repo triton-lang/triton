@@ -726,6 +726,24 @@ bool supportMMA(triton::DotOp op, int version) {
   // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#warp-level-matrix-fragment-mma-884-f16
   auto aElemTy = op.getA().getType().getElementType();
   auto bElemTy = op.getB().getType().getElementType();
+  if (version == 5) {
+    if (triton::tools::getBoolEnv("DISABLE_MMA_V5"))
+      return false;
+    auto retType = op.getType();
+    auto retShapePerCTA = getShapePerCTA(retType);
+    auto rank = retShapePerCTA.size();
+    auto mod = op->getParentOfType<ModuleOp>();
+    int numWarps = TritonGPUDialect::getNumWarps(mod);
+    if (aElemTy.isInteger() || bElemTy.isInteger() ||
+        retType.getElementType().isInteger())
+      return false;
+    if (op.getType().getRank() != 2)
+      return false;
+    if (!(numWarps % 4 == 0 && retShapePerCTA[rank - 2] % 64 == 0 &&
+          retShapePerCTA[rank - 1] % 8 == 0))
+      return false;
+    return true;
+  }
   if (version == 3) {
     if (triton::tools::getBoolEnv("DISABLE_MMA_V3"))
       return false;

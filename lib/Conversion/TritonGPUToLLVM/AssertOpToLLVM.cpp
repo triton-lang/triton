@@ -18,17 +18,18 @@ struct AssertOpConversion : public ConvertOpToLLVMPattern<triton::AssertOp> {
   matchAndRewrite(triton::AssertOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto ctx = rewriter.getContext();
     auto typeConverter = getTypeConverter();
     auto elems = unpackLLElements(loc, adaptor.getCondition(), rewriter);
     auto elemTy = elems[0].getType();
-    Value condition = int_val(elemTy.getIntOrFloatBitWidth(), 0);
+    Value condition = b.int_val(elemTy.getIntOrFloatBitWidth(), 0);
     for (auto elem : elems) {
       if (elemTy.isSignedInteger() || elemTy.isSignlessInteger()) {
-        condition =
-            or_(condition,
-                icmp_eq(elem, rewriter.create<LLVM::ConstantOp>(
-                                  loc, elemTy, rewriter.getZeroAttr(elemTy))));
+        condition = b.or_(
+            condition,
+            b.icmp_eq(elem, rewriter.create<LLVM::ConstantOp>(
+                                loc, elemTy, rewriter.getZeroAttr(elemTy))));
       } else {
         assert(false && "Unsupported type for assert");
         return failure();
@@ -41,7 +42,7 @@ struct AssertOpConversion : public ConvertOpToLLVMPattern<triton::AssertOp> {
       // tensor in those two operations may have different layout we need to
       // make sure all the threads are done executing the assert before going to
       // the next op.
-      barrier();
+      b.barrier();
     }
     rewriter.eraseOp(op);
     return success();

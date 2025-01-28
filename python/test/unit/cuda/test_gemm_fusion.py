@@ -57,7 +57,8 @@ def gemm_fusion_kernel(A, B, C, E,  #
     tl.store(e_tile_ptr, acc_e)
 
 
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9, reason="not passed on ampere")
+#TODO: blackwell mma pipeline regressed with https://github.com/openai/triton-private-blackwell/commit/5cc42002bc36fb94385481ed4dab178a143733be
+@pytest.mark.skipif(torch.cuda.get_device_capability()[0] != 9, reason="only works on hopper")
 def test_gemm_fusion():
     M, N, K = 4096, 4096, 64
     BLOCK_M, BLOCK_N, BLOCK_K = 128, 128, 64

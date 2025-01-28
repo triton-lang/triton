@@ -6,7 +6,7 @@
           {
             "children": [],
             "frame": {
-              "name": "/home/user/projects/example.py/test.py:foo@1",
+              "name": "/home/user/projects/example.py/test.py:1@foo",
               "type": "function"
             },
             "metrics": {

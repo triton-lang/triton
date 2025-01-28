@@ -1345,10 +1345,22 @@ void init_triton_ir(py::module &&m) {
              return self.create<ExperimentalDescriptorLoadOp>(
                  resTy, desc, indices, cacheModifier, evictionPolicy);
            })
+      .def("create_descriptor_gather",
+           [](TritonOpBuilder &self, Value desc, Value x_indices, Value y_index,
+              Type type) -> Value {
+             return self.create<ExperimentalDescriptorGatherOp>(
+                 type, desc, x_indices, y_index);
+           })
       .def("create_descriptor_store",
            [](TritonOpBuilder &self, Value desc, Value value,
               std::vector<Value> &indices) -> void {
              self.create<ExperimentalDescriptorStoreOp>(desc, value, indices);
+           })
+      .def("create_descriptor_scatter",
+           [](TritonOpBuilder &self, Value desc, Value value, Value x_indices,
+              Value y_index) -> void {
+             self.create<ExperimentalDescriptorScatterOp>(desc, x_indices,
+                                                          y_index, value);
            })
       .def("create_tensormap_create",
            [](TritonOpBuilder &self, Value desc_ptr, Value global_address,

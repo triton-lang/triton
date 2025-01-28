@@ -17,6 +17,7 @@ using ValueTableV2 = std::map<std::array<int, 3>, Value>;
 Value loadC(Value tensor, Value llTensor,
             const LLVMTypeConverter *typeConverter, Location loc,
             ConversionPatternRewriter &rewriter) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   MLIRContext *ctx = tensor.getContext();
   auto tensorTy = cast<RankedTensorType>(tensor.getType());
   size_t fcSize = triton::gpu::getTotalElemsPerThread(tensor.getType());
@@ -42,8 +43,9 @@ Value loadC(Value tensor, Value llTensor,
     for (int i = 0; i < fcSize; i += numCPackedElem) {
       Value pack = rewriter.create<LLVM::UndefOp>(loc, cPackTy);
       for (int j = 0; j < numCPackedElem; ++j) {
-        pack = insert_element(
-            cPackTy, pack, extract_val(cElemTy, llTensor, i + j), i32_val(j));
+        pack = b.insert_element(cPackTy, pack,
+                                b.extract_val(cElemTy, llTensor, i + j),
+                                b.i32_val(j));
       }
       cPack.push_back(pack);
     }
@@ -62,6 +64,7 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
     const LLVMTypeConverter *typeConverter, Location loc,
     ConversionPatternRewriter &rewriter, Value value, int batch, int repOuter,
     int repK, RankedTensorType type) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto elems = unpackLLElements(loc, value, rewriter);
   auto eltTy = typeConverter->convertType(type.getElementType());
   int offset{};
@@ -71,11 +74,12 @@ ValueTableV2 getValuesFromDotOperandLayoutStruct(
   auto vecTy = vec_ty(eltTy, numElemsPerVec);
 
   auto packVec = [&](std::array<int, 3> dstIdx) {
-    Value vec = undef(vecTy);
+    Value vec = b.undef(vecTy);
     for (auto i = 0; i < numElemsPerVec; ++i) {
-      vec = insert_element(vec, bitcast(elems[offset + i], eltTy), i32_val(i));
+      vec = b.insert_element(vec, b.bitcast(elems[offset + i], eltTy),
+                             b.i32_val(i));
     }
-    vals[dstIdx] = bitcast(vec, i32_ty);
+    vals[dstIdx] = b.bitcast(vec, i32_ty);
     offset += numElemsPerVec;
   };
 
@@ -469,6 +473,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                          Value a, Value b, Value c, Value d, Value loadedA,
                          Value loadedB, Value loadedC, DotOp op,
                          DotOpAdaptor adaptor, bool isTuring) {
+  auto tb = TritonLLVMOpBuilder(loc, rewriter);
   MLIRContext *ctx = c.getContext();
   auto aTensorTy = cast<RankedTensorType>(a.getType());
   auto bTensorTy = cast<RankedTensorType>(b.getType());
@@ -498,13 +503,13 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   // getValuesFromDotOperandLayoutStruct as both a and b are K-major
   assert(dotOpA.getRepOrder() == getOrderForDotOperand(dotOpA.getOpIdx(),
                                                        aShapePerCTA.size(),
-                                                       /*kMajor=*/true));
+                                                       /*kContig=*/true));
   auto ha = getValuesFromDotOperandLayoutStruct(
       typeConverter, loc, rewriter, loadedA, repBatch, repM, repK, aTensorTy);
 
   assert(dotOpB.getRepOrder() == getOrderForDotOperand(dotOpB.getOpIdx(),
                                                        bShapePerCTA.size(),
-                                                       /*kMajor=*/true));
+                                                       /*kContig=*/true));
   auto hb = getValuesFromDotOperandLayoutStruct(
       typeConverter, loc, rewriter, loadedB, repBatch, repN, repK, bTensorTy);
 
@@ -551,7 +556,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
     Type elemTy = cast<LLVM::LLVMStructType>(mmaOut.getType()).getBody()[0];
     for (int i = 0; i < numMmaRets; ++i) {
       fc[(m * colsPerThread + 4 * n) / numCPackedElem + i + batchOffset * b] =
-          extract_val(elemTy, mmaOut, i);
+          tb.extract_val(elemTy, mmaOut, i);
     }
   };
 
@@ -571,8 +576,8 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
     for (int j = 0; j < numCPackedElem; ++j) {
       results[i * numCPackedElem + j] =
           numCPackedElem > 1
-              ? bitcast(extract_element(fc[i], i32_val(j)), resElemTy)
-              : bitcast(fc[i], resElemTy);
+              ? tb.bitcast(tb.extract_element(fc[i], tb.i32_val(j)), resElemTy)
+              : tb.bitcast(fc[i], resElemTy);
     }
   }
   Value res = packLLElements(loc, typeConverter, results, rewriter, structTy);

@@ -1,8 +1,9 @@
 {
+  "ptxas-blackwell": "12.8.61",
   "ptxas": "12.4.99",
-  "cuobjdump": "12.4.99",
-  "nvdisasm": "12.4.99",
-  "cudacrt": "12.4.99",
-  "cudart": "12.4.99",
-  "cupti": "12.4.99"
+  "cuobjdump": "12.8.55",
+  "nvdisasm": "12.8.55",
+  "cudacrt": "12.8.61",
+  "cudart": "12.8.57",
+  "cupti": "12.8.57"
 }

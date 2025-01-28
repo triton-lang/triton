@@ -225,7 +225,7 @@ def make_launcher(constants, signature, warp_size):
         }[ty_to_cpp(ty)]
 
     args_format = ''.join([format_of(ty) for ty in signature.values()])
-    format = "iiiKKOOOO" + args_format
+    format = "piiiKKOOOO" + args_format
     signature = ','.join(map(_serialize_signature, signature.values()))
     signature = list(filter(bool, signature.split(',')))
     signature = {i: s for i, s in enumerate(signature)}
@@ -262,6 +262,12 @@ static const char *hipLibSearchPaths[] = {{"{libhip_path}"}};
 #define HIP_SYMBOL_LIST(FOR_EACH_ERR_FN, FOR_EACH_STR_FN)                     \\
   FOR_EACH_STR_FN(hipGetErrorString, hipError_t hipError)                     \\
   FOR_EACH_ERR_FN(hipModuleLaunchKernel, hipFunction_t f,                     \\
+                  unsigned int gridDimX, unsigned int gridDimY,               \\
+                  unsigned int gridDimZ, unsigned int blockDimX,              \\
+                  unsigned int blockDimY, unsigned int blockDimZ,             \\
+                  unsigned int sharedMemBytes, hipStream_t stream,            \\
+                  void **kernelParams, void **extra)                          \\
+  FOR_EACH_ERR_FN(hipModuleLaunchCooperativeKernel, hipFunction_t f,          \\
                   unsigned int gridDimX, unsigned int gridDimY,               \\
                   unsigned int gridDimZ, unsigned int blockDimX,              \\
                   unsigned int blockDimY, unsigned int blockDimZ,             \\
@@ -338,14 +344,18 @@ static inline void gpuAssert(hipError_t code, const char *file, int line)
 
 #define HIP_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
 
-static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int clusterDimX, int clusterDimY, int clusterDimZ, int shared_memory, hipStream_t stream, hipFunction_t function{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
+static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int launch_cooperative_grid, int clusterDimX, int clusterDimY, int clusterDimZ, int shared_memory, hipStream_t stream, hipFunction_t function{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
   // printf("_launch hip kernel\\n");
   hipDeviceptr_t global_scratch = 0;
   void *params[] = {{ {', '.join(params)} }};
-  if (gridX*gridY*gridZ > 0) {{
-      HIP_CHECK(hipSymbolTable.hipModuleLaunchKernel(function, gridX, gridY, gridZ, {warp_size}*num_warps, 1, 1, shared_memory, stream, params, 0));
-    }}
+  if (gridX*gridY*gridZ > 0 && launch_cooperative_grid) {{
+    HIP_CHECK(hipSymbolTable.hipModuleLaunchCooperativeKernel(function, gridX, gridY, gridZ, {warp_size}*num_warps, 1, 1, shared_memory, stream, params, 0));
+    return;
   }}
+  if (gridX*gridY*gridZ > 0) {{
+    HIP_CHECK(hipSymbolTable.hipModuleLaunchKernel(function, gridX, gridY, gridZ, {warp_size}*num_warps, 1, 1, shared_memory, stream, params, 0));
+  }}
+}}
 
 typedef struct _DevicePtrInfo {{
     hipDeviceptr_t dev_ptr;
@@ -398,12 +408,14 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   int gridX, gridY, gridZ;
   uint64_t _stream;
   uint64_t _function;
+  int launch_cooperative_grid;
   PyObject *launch_enter_hook = NULL;
   PyObject *launch_exit_hook = NULL;
   PyObject *kernel_metadata = NULL;
   PyObject *launch_metadata = NULL;
   {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
-  if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ, &_stream, &_function,
+  if(!PyArg_ParseTuple(args, \"{format}\", &launch_cooperative_grid,
+                                           &gridX, &gridY, &gridZ, &_stream, &_function,
                                            &kernel_metadata, &launch_metadata,
                                            &launch_enter_hook, &launch_exit_hook {args_list})) {{
     return NULL;
@@ -426,7 +438,7 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
 
   // raise exception asap
   {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
-  _launch(gridX, gridY, gridZ, num_warps, num_ctas, clusterDimX, clusterDimY, clusterDimZ, shared_memory, (hipStream_t)_stream, (hipFunction_t)_function{', ' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
+  _launch(gridX, gridY, gridZ, num_warps, num_ctas, launch_cooperative_grid, clusterDimX, clusterDimY, clusterDimZ, shared_memory, (hipStream_t)_stream, (hipFunction_t)_function{', ' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
 
   if(launch_exit_hook != Py_None){{
     PyObject* args = Py_BuildValue("(O)", launch_metadata);
@@ -482,9 +494,10 @@ class HIPLauncher(object):
         src = make_launcher(constants, signature, metadata.warp_size)
         mod = compile_module_from_src(src, "__triton_launcher")
         self.launch = mod.launch
+        self.launch_cooperative_grid = metadata.launch_cooperative_grid
 
-    def __call__(self, *args, **kwargs):
-        self.launch(*args, **kwargs)
+    def __call__(self, *args):
+        self.launch(self.launch_cooperative_grid, *args)
 
 
 class HIPDriver(GPUDriver):

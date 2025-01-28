@@ -20,6 +20,13 @@ from .._utils import list_list_flatten, list_list_unflatten, find_paths_if, get_
 from .errors import (CompilationError, CompileTimeAssertionFailure, UnsupportedLanguageConstruct)
 
 
+def check_identifier_legality(name, type):
+    pattern = r'^[a-zA-Z_][a-zA-Z0-9_]*$'
+    if not re.match(pattern, name):
+        raise CompilationError(f"invalid {type} identifier: {name}", name)
+    return name
+
+
 def mangle_ty(ty):
     if ty.is_tuple():
         return 'T' + '_'.join(map(mangle_ty, ty.types)) + 'T'
@@ -276,6 +283,9 @@ class CodeGenerator(ast.NodeVisitor):
 
         self.lscope = {}
         self.jit_fn = jit_fn
+        # TODO: we currently generate illegal names for non-kernel functions involving constexprs!
+        if is_kernel:
+            function_name = check_identifier_legality(function_name, "function")
         self.function_name = function_name
         self.is_kernel = is_kernel
         self.cur_node = None
@@ -1143,7 +1153,7 @@ class CodeGenerator(ast.NodeVisitor):
         args = inspect.getcallargs(fn.fn, *args, **kwargs)
         args = [args[name] for name in fn.arg_names]
         for i, arg in enumerate(args):
-            if isinstance(arg, (language.dtype, float, int, bool)):
+            if isinstance(arg, (language.dtype, float, int, bool, JITFunction)):
                 args[i] = language.core.constexpr(arg)
         args_cst = find_paths_if(args, lambda _, x: _is_constexpr(x))
         args_cst = {path: get_iterable_path(args, path) for path in args_cst}
