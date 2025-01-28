@@ -975,6 +975,20 @@ def _str_to_store_cache_modifier(cache_modifier):
     return cache
 
 
+def _str_to_store_reduce(store_reduce):
+    reduce_op = ir.STORE_REDUCE.NONE  # default
+    if store_reduce:
+        if store_reduce == "add":
+            reduce_op = ir.STORE_REDUCE.ADD
+        elif store_reduce == "max":
+            reduce_op = ir.STORE_REDUCE.MAX
+        elif store_reduce == "min":
+            reduce_op = ir.STORE_REDUCE.MIN
+        else:
+            raise ValueError(f"Reduce op {store_reduce} not supported")
+    return reduce_op
+
+
 def _str_to_eviction_policy(eviction_policy):
     eviction = ir.EVICTION_POLICY.NORMAL  # default
     if eviction_policy:
@@ -1169,13 +1183,23 @@ def descriptor_load(desc: tl._experimental_tensor_desciptor_base, offsets, cache
     return tl.tensor(x, desc.type)
 
 
-def descriptor_store(desc: tl._experimental_tensor_descriptor_base, value: tl.tensor, offsets,
-                     builder: ir.builder) -> tl.tensor:
+def descriptor_store(
+    desc: tl._experimental_tensor_descriptor_base,
+    value: tl.tensor,
+    offsets,
+    store_reduce: str,
+    builder: ir.builder,
+) -> tl.tensor:
     assert isinstance(desc, tl._experimental_tensor_descriptor_base)
     validate_descriptor_block(desc.block_shape, desc.type.element_ty)
 
     offsets = _convert_to_ir_values(builder, offsets, require_i64=False)
-    return tl.tensor(builder.create_descriptor_store(desc.handle, value.handle, offsets), tl.void)
+    return tl.tensor(
+        builder.create_descriptor_store(
+            desc.handle, value.handle, offsets, _str_to_store_reduce(store_reduce)
+        ),
+        tl.void,
+    )
 
 
 def tensormap_create(

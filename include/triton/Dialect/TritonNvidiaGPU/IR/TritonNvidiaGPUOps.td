@@ -250,10 +250,13 @@ def TTNG_AsyncTMACopyLocalToGlobalOp : TTNG_Op<"async_tma_copy_local_to_global",
   let arguments = (
     ins TT_PtrType:$desc_ptr,
     Variadic<I32>:$coord,
-    TTG_MemDescType:$src);
+    TTG_MemDescType:$src,
+    DefaultValuedAttr<TT_StoreReduceAttr, "::mlir::triton::StoreReduceEnum::NONE">:$store_reduce_attr
+  );
 
   let assemblyFormat = [{
     $desc_ptr `[` $coord `]` $src
+    oilist(`store_reduce_attr` `=` $store_reduce_attr)
     attr-dict `:` qualified(type($desc_ptr)) `,` qualified(type($src))
   }];
 }

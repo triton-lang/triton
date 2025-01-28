@@ -1286,11 +1286,13 @@ def TT_ExperimentalDescriptorStoreOp : TT_Op<"experimental_descriptor_store", [
   let arguments = (ins
     TT_TensorDescType:$desc,
     TT_Tensor:$src,
-    Variadic<I32>:$indices
+    Variadic<I32>:$indices,
+    DefaultValuedAttr<TT_StoreReduceAttr, "::mlir::triton::StoreReduceEnum::NONE">:$store_reduce_attr
   );
 
   let assemblyFormat = [{
     $desc `[` $indices `]` `,` $src
+    oilist(`store_reduce_attr` `=` $store_reduce_attr)
     attr-dict `:` qualified(type($desc)) `,` type($src)
   }];
 
