@@ -496,7 +496,6 @@ def bench(K, dtype, reps=1000, warmup_reps=10000):
     if dtype == torch.float16:
         bench_fn(reps, warmup_reps, torch_matmul, a, b)
     bench_fn(reps, warmup_reps, matmul, a, b.T)
-    bench_fn(reps, warmup_reps, matmul_persistent_fused, a, b.T)
     bench_fn(reps, warmup_reps, matmul_persistent, a, b.T)
     if supports_tma():
         bench_fn(reps, warmup_reps, matmul_tma_persistent, a, b)
