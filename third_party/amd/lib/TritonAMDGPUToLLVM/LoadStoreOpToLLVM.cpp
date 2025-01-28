@@ -417,6 +417,7 @@ struct AsyncCopyToGlobalOpConversion
                             const AMD::TargetInfo &targetInfo) const {
     llvm::SmallSetVector<unsigned, 10> supportedWidths;
     switch (targetInfo.getISAFamily()) {
+    case mlir::triton::AMD::ISAFamily::CDNA1:
     case mlir::triton::AMD::ISAFamily::CDNA2:
     case mlir::triton::AMD::ISAFamily::CDNA3:
       supportedWidths.insert(8);
