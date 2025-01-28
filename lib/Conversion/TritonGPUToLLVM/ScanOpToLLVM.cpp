@@ -424,9 +424,9 @@ ScanOpConversion::getDelinearizedIds(ConversionPatternRewriter &rewriter,
   Value cctaIdParallel =
       linearize(rewriter, loc, multiDimCCTAId, CTAsPerCGA, CTAOrder);
 
-  Value flatIdParallel =
-      b.add(laneIdParallel,
-          b.mul(warpIdParallel, b.i32_val(helper.getNonAxisNumThreadsPerWarp())));
+  Value flatIdParallel = b.add(
+      laneIdParallel,
+      b.mul(warpIdParallel, b.i32_val(helper.getNonAxisNumThreadsPerWarp())));
   return std::make_tuple(laneIdAxis, warpIdAxis, flatIdParallel, cctaIdAxis,
                          cctaIdParallel);
 }
@@ -507,9 +507,9 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   rewriter.create<triton::AssertOp>(
       loc, b.icmp_eq(cctaIdAxis, b.i32_val(0)),
       StringRef("(cctaIdAxis==0) && Scan axis accross CTAs is not supported."));
-  flatIdParallel =
-      b.add(flatIdParallel,
-          b.mul(cctaIdParallel, b.i32_val(helper.getNonAxisNumThreadsPerCTA())));
+  flatIdParallel = b.add(
+      flatIdParallel,
+      b.mul(cctaIdParallel, b.i32_val(helper.getNonAxisNumThreadsPerCTA())));
 
   auto axisNumWarps = helper.getAxisNumWarpsWithUniqueData();
   warpIdAxis = b.urem(warpIdAxis, b.i32_val(axisNumWarps));

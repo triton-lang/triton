@@ -2763,8 +2763,8 @@ def test_scan_layouts(M, N, src_layout, axis, add_overflow_check, device, tmp_pa
     cluster_dims = tuple((src_layout.ctas_per_cga[i] if i < len(src_layout.ctas_per_cga) else 1) for i in range(3))
 
     if num_ctas > 1 and not is_hopper():
-        return pytest.skip(f"num_ctas > 1 is only supported after sm90.")
-    
+        return pytest.skip("num_ctas > 1 is only supported after sm90.")
+
     if cluster_dims[axis] > 1:
         return pytest.skip(f"scan axis accross CTAs is not supported (cluster_dims[axis]={cluster_dims[axis]}).")
 
