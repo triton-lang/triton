@@ -1035,7 +1035,7 @@ MMALoadType getMMALoadType(Operation *loadOp) {
     auto sharedEnc =
         cast<ttg::SharedEncodingAttr>(alloc.getType().getEncoding());
 
-    if (!sharedEnc.getHasLeadingOffset())
+    if (!sharedEnc.hasLeadingOffset())
       return MMALoadType::DoNotPipeline;
 
     // MMA V3 case.

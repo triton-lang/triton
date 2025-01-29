@@ -909,12 +909,12 @@ SmallVector<unsigned> SharedEncodingAttr::getCTASplitNum() const {
   return SmallVector<unsigned>(getCTALayout().getCTASplitNum());
 }
 
-bool SharedEncodingAttr::getHasLeadingOffset() const {
+bool SharedEncodingAttr::hasLeadingOffset() const {
   return getHasLeadingOffset__();
 }
 
 int32_t SharedEncodingAttr::getAlignment() const {
-  if (getHasLeadingOffset())
+  if (hasLeadingOffset())
     return 128 * getMaxPhase();
   return 16;
 }
@@ -1903,7 +1903,7 @@ void SharedEncodingAttr::print(AsmPrinter &printer) const {
           << ", order = [" << ArrayRef<unsigned>(getOrder()) << "]";
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/getOrder().size());
-  printer << ", hasLeadingOffset = " << getHasLeadingOffset() << "}>";
+  printer << ", hasLeadingOffset = " << hasLeadingOffset() << "}>";
 }
 
 //===----------------------------------------------------------------------===//
@@ -2529,7 +2529,7 @@ struct TritonGPUInferLayoutInterface
         resultEncoding = SharedEncodingAttr::get(
             ctx, enc.getVec(), enc.getPerPhase(), enc.getMaxPhase(),
             applyPermutation(invOrderUnsigned, enc.getOrder()), *ctaLayout,
-            enc.getHasLeadingOffset());
+            enc.hasLeadingOffset());
       } else {
         llvm_unreachable("Unsupported shared encoding");
       }

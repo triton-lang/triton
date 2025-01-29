@@ -47,7 +47,7 @@ public:
       // Limitation 1 [TODO: remove]: Check LL bases to verify register and
       // address alignment
       auto canUseLdmatrix =
-          (kWidth == vecWidth) && (!sharedEnc.getHasLeadingOffset());
+          (kWidth == vecWidth) && (!sharedEnc.hasLeadingOffset());
       canUseLdmatrix &= (sharedEnc.getMaxPhase() == 1) ||
                         (sharedEnc.getVec() * bitwidth >= 8 * 16);
       auto shape = srcTy.getShape();
@@ -147,7 +147,7 @@ LogicalResult lowerDistributedToSharedStmatrix(
     return failure();
   auto sharedLayout =
       cast<triton::gpu::SharedEncodingTrait>(memDescType.getEncoding());
-  if (!sharedLayout.getHasLeadingOffset())
+  if (!sharedLayout.hasLeadingOffset())
     return failure();
   int swizzleByteSize = 0;
   if (sharedLayout.getPerPhase() == 4 && sharedLayout.getMaxPhase() == 2)

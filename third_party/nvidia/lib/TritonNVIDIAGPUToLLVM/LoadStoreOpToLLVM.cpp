@@ -1412,7 +1412,7 @@ static LogicalResult iterateGatherScatterIndices(
     return op->emitError("memdesc shape must match alloc shape");
   // `hasLeadingOffset` means the core matrix tiles are placed next to each
   // other in shared memory, which lines up with how `gather4` loads data.
-  if (!cast<SharedEncodingTrait>(smemType.getEncoding()).getHasLeadingOffset())
+  if (!cast<SharedEncodingTrait>(smemType.getEncoding()).hasLeadingOffset())
     return op->emitError("requires dst encoding with `hasLeadingOffset=true`");
   Type llvmElemTy = typeConverter.convertType(smemType.getElementType());
   Type elemPtrTy = ptr_ty(ctx, /*addrspace=*/3);

@@ -182,7 +182,7 @@ def SharedEncodingTrait : AttrInterface<"SharedEncodingTrait"> {
                     "getAlignment">,
     InterfaceMethod<"",
                     "bool",
-                    "getHasLeadingOffset">
+                    "hasLeadingOffset">
   ];
 }
 
@@ -201,7 +201,7 @@ class SharedEncoding<list<Trait> traits = [],
      SmallVector<unsigned> getCTAsPerCGA() const;
      SmallVector<unsigned> getCTASplitNum() const;
      SmallVector<unsigned> getCTAOrder() const;
-     bool getHasLeadingOffset() const;
+     bool hasLeadingOffset() const;
      int32_t getAlignment() const;
   }];
 }
