@@ -63,9 +63,9 @@ test: test-lit test-cpp test-python
 .PHONY: dev-install
 dev-install:
 	# build-time dependencies
-	$(PYTHON) -m pip install ninja cmake wheel pybind11 llnl-hatchet
+	$(PYTHON) -m pip install ninja cmake wheel pybind11
 	# test dependencies
-	$(PYTHON) -m pip install scipy numpy torch pytest lit pandas matplotlib
+	$(PYTHON) -m pip install scipy numpy torch pytest lit pandas matplotlib llnl-hatchet
 	$(PYTHON) -m pip install -e python --no-build-isolation -v
 
 .PHONY: golden-samples

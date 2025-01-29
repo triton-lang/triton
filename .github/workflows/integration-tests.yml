@@ -242,9 +242,8 @@ jobs:
           CUDA_HOME: "/usr/local/cuda"
         run: |
           echo "PATH is '$PATH'"
-          cd python
           ccache --zero-stats
-          python3 -m pip install -v '.[tests]' --no-build-isolation
+          make dev-install
       - name: CCache Stats
         run: ccache --print-stats
       - name: Run lit tests
@@ -370,9 +369,8 @@ jobs:
         run: |
           echo "PATH is '$PATH'"
           pip uninstall -y triton pytorch-triton-rocm
-          cd python
           ccache --zero-stats
-          pip install -v -e '.[tests]' --no-build-isolation
+          make dev-install
       - name: CCache Stats
         run: ccache --print-stats
       - name: Run lit tests
@@ -543,9 +541,8 @@ jobs:
         run: |
           source ~/.venv/bin/activate
           echo "PATH is '$PATH'"
-          cd python
           ccache --zero-stats
-          python3 -m pip install -v --no-build-isolation .
+          make dev-install
       - name: CCache Stats
         run: ccache --print-stats
       - name: Inspect cache directories
