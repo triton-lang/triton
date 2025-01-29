@@ -256,7 +256,7 @@ def test_pcsampling(tmp_path: pathlib.Path):
             tl.store(y + offs, tl.load(x + offs))
 
     temp_file = tmp_path / "test_pcsampling.hatchet"
-    proton.start(str(temp_file.with_suffix("")), hook="triton", backend="cupti_pcsampling")
+    proton.start(str(temp_file.with_suffix("")), hook="triton", backend="cupti", mode="pcsampling")
     with proton.scope("init"):
         x = torch.ones((1024, ), device="cuda", dtype=torch.float32)
         y = torch.zeros_like(x)
