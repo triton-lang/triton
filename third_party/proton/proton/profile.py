@@ -29,7 +29,7 @@ def _get_backend_default_path(backend: str) -> str:
         if lib_path is None:
             # Get the default path for the cupti backend,
             # which is the most compatible with the current CUPTI header file triton is compiled with
-            lib_path = str(pathlib.Path(__file__).parent / "backends" / "nvidia" / "lib" / "cupti")
+            lib_path = str(pathlib.Path(__file__).parent.parent / "backends" / "nvidia" / "lib" / "cupti")
     return lib_path
 
 
