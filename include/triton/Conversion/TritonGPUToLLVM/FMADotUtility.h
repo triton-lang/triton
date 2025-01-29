@@ -20,11 +20,11 @@ public:
   virtual ~FMAVectorMultiplier() = default;
 };
 
-/// Implements an framework for FMA dot conversion to llvm.
+/// Implements a framework for FMA dot conversion to llvm.
 ///
 /// This function implements architecture independent part of FMA dot
-/// conversion and calls "multiplier" object, which isdefined by caller
-// and implements architecture dependant conversion.
+/// conversion and calls "multiplier" object, which is defined by caller
+/// and implements architecture dependant part of conversion.
 LogicalResult parametricConvertFMADot(DotOp op, DotOp::Adaptor adaptor,
                                       const LLVMTypeConverter *typeConverter,
                                       ConversionPatternRewriter &rewriter,
