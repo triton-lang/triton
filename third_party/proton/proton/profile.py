@@ -30,12 +30,25 @@ def _check_env(backend: str) -> None:
                 )
 
 
+def _check_mode(backend: str, mode: Optional[str]) -> None:
+    # TODO(Keren): Need a better mode registration mechanism
+    backend_modes = {
+        "cupti": [None, "pcsampling"],
+        "roctracer": [None],
+        "instrumentation": [None],
+    }
+
+    if mode not in backend_modes[backend]:
+        raise ValueError(f"Invalid mode {mode} for backend {backend}")
+
+
 def start(
     name: Optional[str] = None,
     *,
     context: Optional[str] = "shadow",
     data: Optional[str] = "tree",
     backend: Optional[str] = None,
+    mode: Optional[str] = None,
     hook: Optional[str] = None,
 ):
     """
@@ -52,15 +65,20 @@ def start(
     Args:
         name (str, optional): The name (with path) of the profiling session.
                               If not provided, the default name is "~/proton.hatchet".
-        backend (str, optional): The backend to use for profiling.
-                                 Available options are [None, "cupti", "cupti_pcsampling", "roctracer"].
-                                 Defaults to None, which automatically selects the backend matching the current active runtime.
         context (str, optional): The context to use for profiling.
                                  Available options are ["shadow", "python"].
                                  Defaults to "shadow".
         data (str, optional): The data structure to use for profiling.
                               Available options are ["tree"].
                               Defaults to "tree".
+        backend (str, optional): The backend to use for profiling.
+                                 Available options are [None, "cupti", "roctracer", "instrumentation"].
+                                 Defaults to None, which automatically selects the backend matching the current active runtime.
+        mode (str, optional): The "mode" to use for profiling, which is specific to the backend.
+                              Defaults to None.
+                              For "cupti", available options are [None, "pcsampling"].
+                              For "roctracer", available options are [None].
+                              For "instrumentation", available options are [None].
         hook (str, optional): The hook to use for profiling.
                               Available options are [None, "triton"].
                               Defaults to None.
@@ -78,6 +96,8 @@ def start(
         backend = _select_backend()
 
     _check_env(backend)
+
+    _check_mode(backend, mode)
 
     set_profiling_on()
     if hook and hook == "triton":
@@ -152,6 +172,7 @@ def _profiling(
     context: Optional[str] = "shadow",
     data: Optional[str] = "tree",
     backend: Optional[str] = None,
+    mode: Optional[str] = None,
     hook: Optional[str] = None,
 ):
     """
@@ -166,7 +187,7 @@ def _profiling(
 
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        session = start(name, context=context, data=data, backend=backend, hook=hook)
+        session = start(name, context=context, data=data, backend=backend, mode=mode, hook=hook)
         ret = func(*args, **kwargs)
         deactivate(session)
         return ret
@@ -181,6 +202,7 @@ def profile(
     context: Optional[str] = "shadow",
     data: Optional[str] = "tree",
     backend: Optional[str] = None,
+    mode: Optional[str] = None,
     hook: Optional[str] = None,
 ):
     """
@@ -203,9 +225,9 @@ def profile(
     if func is None:
         # It's being used with parentheses, so return a decorator
         def decorator(f):
-            return _profiling(f, name=name, context=context, data=data, backend=backend, hook=hook)
+            return _profiling(f, name=name, context=context, data=data, backend=backend, mode=mode, hook=hook)
 
         return decorator
     else:
         # It's being used without parentheses, so apply the decorator directly
-        return _profiling(func, name=name, context=context, data=data, backend=backend, hook=hook)
+        return _profiling(func, name=name, context=context, data=data, backend=backend, mode=mode, hook=hook)
