@@ -840,18 +840,20 @@ public:
     auto newAcc =
         convertAndCastTensor(rewriter, oldAcc, wmmaEnc, operandTypes[2]);
 
-    auto newAType =
-        RankedTensorType::get(aShape, operandTypes[0],
-                              ttg::DotOperandEncodingAttr::get(
-                                  ctx, 0, wmmaEnc,
-                                  wmmaEnc.getSizePerThreadForOperand(
-                                      /*kWidth=*/0, /*opIdx=*/0)[rank - 1]));
-    auto newBType =
-        RankedTensorType::get(bShape, operandTypes[1],
-                              ttg::DotOperandEncodingAttr::get(
-                                  ctx, 1, wmmaEnc,
-                                  wmmaEnc.getSizePerThreadForOperand(
-                                      /*kWidth=*/0, /*opIdx=*/1)[rank - 2]));
+    auto perThreadInstrElems =
+        ttg::AMDWmmaEncodingAttr::getMNKDimPerInstrPerThread(wmmaVersion);
+    // consider to have one instruction per repetition
+    auto kWidth = perThreadInstrElems[2];
+    auto newAType = RankedTensorType::get(
+        aShape, operandTypes[0],
+        ttg::DotOperandEncodingAttr::get(
+            ctx, 0, wmmaEnc,
+            wmmaEnc.getSizePerThreadForOperand(kWidth, /*opIdx=*/0)[rank - 1]));
+    auto newBType = RankedTensorType::get(
+        bShape, operandTypes[1],
+        ttg::DotOperandEncodingAttr::get(
+            ctx, 1, wmmaEnc,
+            wmmaEnc.getSizePerThreadForOperand(kWidth, /*opIdx=*/1)[rank - 2]));
 
     Value castedA = convertAndCastTensor(rewriter, a, newAType.getEncoding(),
                                          operandTypes[0]);
