@@ -8,22 +8,24 @@
 
 namespace mlir::triton::gpu {
 
-/// \brief Abstract interface for scalar multiplication of Value vectors.
+/// Abstract interface for scalar multiplication of Value vectors.
 ///
 /// Enable generation of hardware specific code in different backends.
 class FMAVectorMultiplier {
 public:
   /// \returns scalar product of two arrays, plus c: a·b + c
-  virtual mlir::Value multiplyVectors(mlir::ArrayRef<mlir::Value> a,
-                                      mlir::ArrayRef<mlir::Value> b,
-                                      mlir::Value c) = 0;
+  virtual Value multiplyVectors(ArrayRef<Value> a, ArrayRef<Value> b,
+                                Value c) = 0;
 
   virtual ~FMAVectorMultiplier() = default;
 };
 
-/// \brief Implements an abstract framework for dot conversion to llvm.
-LogicalResult parametricConvertFMADot(triton::DotOp op,
-                                      triton::DotOp::Adaptor adaptor,
+/// Implements an framework for FMA dot conversion to llvm.
+///
+/// This function implements architecture independent part of FMA dot
+/// conversion and calls "multiplier" object, which isdefined by caller
+// and implements architecture dependant conversion.
+LogicalResult parametricConvertFMADot(DotOp op, DotOp::Adaptor adaptor,
                                       const LLVMTypeConverter *typeConverter,
                                       ConversionPatternRewriter &rewriter,
                                       FMAVectorMultiplier &multiplier);

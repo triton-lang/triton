@@ -7,28 +7,27 @@ using namespace ::mlir::triton::gpu;
 
 namespace {
 class GenericFMAVectorMultiplier : public FMAVectorMultiplier {
-  ConversionPatternRewriter &rewriter;
+  OpBuilder &builder;
   Location loc;
 
 public:
-  GenericFMAVectorMultiplier(ConversionPatternRewriter &rewriter, Location loc)
-      : rewriter(rewriter), loc(loc) {}
+  GenericFMAVectorMultiplier(OpBuilder &builder, Location loc)
+      : builder(builder), loc(loc) {}
 
-  mlir::Value multiplyVectors(mlir::ArrayRef<mlir::Value> a,
-                              mlir::ArrayRef<mlir::Value> b,
-                              mlir::Value c) override {
+  Value multiplyVectors(ArrayRef<Value> a, ArrayRef<Value> b,
+                        Value c) override {
     auto K = a.size();
     assert(b.size() == K);
-    mlir::Value accum = c;
-    for (int k = 0; k < K; ++k)
-      accum = rewriter.create<LLVM::FMulAddOp>(loc, a[k], b[k], accum);
+    Value accum = c;
+    for (auto [aElem, bElem] : llvm::zip(a, b))
+      accum = builder.create<LLVM::FMulAddOp>(loc, aElem, bElem, accum);
     return accum;
   }
 };
 
 } // namespace
 
-LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
+LogicalResult convertFMADot(DotOp op, DotOp::Adaptor adaptor,
                             const LLVMTypeConverter *typeConverter,
                             ConversionPatternRewriter &rewriter) {
   auto *ctx = rewriter.getContext();

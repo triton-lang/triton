@@ -426,7 +426,7 @@ struct DotOpMFMAConversionHelper {
 } // namespace
 
 namespace mlir::triton::AMD {
-LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
+LogicalResult convertMFMA(DotOp op, DotOp::Adaptor adaptor,
                           const LLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter) {
   auto rankedTType = [](Value tensor) {

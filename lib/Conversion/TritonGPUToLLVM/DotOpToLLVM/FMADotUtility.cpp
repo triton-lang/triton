@@ -5,7 +5,20 @@ using namespace mlir;
 
 namespace {
 
-/// \brief spatial position of repetition and register of a given value
+/// OperandValueKey structure represents compile time part
+/// of spatial coordinates of a value in a tensor.
+///
+/// Every Value spatial coordinates(i.e. [batch;nonK;k]) in tensor can be
+/// defined as:
+///
+/// batch = (bRepIdx * CTABSize + bIdx) + (laneBCoord + warpBCoord)
+/// nonK = (nonKRepIdx * CTANKSize + nonKIdx) + (laneNonKCoord + warpNonKCoord)
+/// k = kIdx
+///
+/// Where:
+/// CTABSize, CTANKSize: constants;
+/// laneBCoord, warpBCoord, laneNonKCoord, warpNonKCoord: runtime components;
+/// bRepIdx, nonKRepIdx, bIdx, nonKIdx, kIdx: compile time components.
 struct OperandValueKey {
   unsigned bRepIdx, nonKRepIdx;
   unsigned bIdx, nonKIdx, kIdx;
@@ -62,8 +75,7 @@ ValueTableFMA getValueTableFromStructFMA(
 
 namespace mlir::triton::gpu {
 
-LogicalResult parametricConvertFMADot(triton::DotOp op,
-                                      triton::DotOp::Adaptor adaptor,
+LogicalResult parametricConvertFMADot(DotOp op, DotOp::Adaptor adaptor,
                                       const LLVMTypeConverter *typeConverter,
                                       ConversionPatternRewriter &rewriter,
                                       FMAVectorMultiplier &multiplier) {
@@ -124,11 +136,11 @@ LogicalResult parametricConvertFMADot(triton::DotOp op,
           for (unsigned m = 0; m < sizePerThread[1]; ++m)
             for (unsigned n = 0; n < sizePerThread[2]; ++n) {
               SmallVector<unsigned> multiDimAccumIdx = {b, m, n};
-              unsigned linearInRepIdx = mlir::LLVM::linearize(
-                  multiDimAccumIdx, sizePerThread, inRepOrder);
+              unsigned linearInRepIdx =
+                  LLVM::linearize(multiDimAccumIdx, sizePerThread, inRepOrder);
               SmallVector<unsigned> multiDimRepIdx = {bRep, mRep, nRep};
               unsigned linearRepIdx =
-                  mlir::LLVM::linearize(multiDimRepIdx, repetitions, repOrder);
+                  LLVM::linearize(multiDimRepIdx, repetitions, repOrder);
               unsigned linearAccumIdx =
                   linearInRepIdx + linearRepIdx * numElemsPerThread;
 
