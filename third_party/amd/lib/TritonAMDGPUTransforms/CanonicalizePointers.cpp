@@ -149,7 +149,6 @@ std::optional<Value> maybeGetOrCreateScalarConstant(RewriterBase &rewriter,
 // Narrowing logic
 // For now we allow to narrow down to 32 bits only in the following case:
 // - `baseOffset` is 32-bits and `addOffset`(64-bits) is zero
-// TODO(max): is this correct?
 bool canNarrowOffset(Value baseOffset, Value addOffset) {
   Type addOffsetType = getElementTypeOrSelf(addOffset);
   auto baseSplatOp = baseOffset.getDefiningOp<tt::SplatOp>();
@@ -320,7 +319,8 @@ private:
   DenseMapT pointerAttrs;
 };
 
-// TODO(max): this is not a good way to do this...
+// TODO(max): reconsider this approach, specifically how narrowing and
+// attributes are propagated starting from a tt.ptr.
 void FatPointers::collectFatPointerAttributes(const KeyT &k) {
   auto [base, offset] = k;
   // If it is the i-th block argument, then look if the operation defined some
@@ -352,21 +352,9 @@ void FatPointers::collectFatPointerAttributes(const KeyT &k) {
     return;
   }
 
-  // TODO(max): this doesn't make sense - ops have all sorts of dialect
-  // attributes?
-  //
-  // Otherwise add the attributes of the operation to the fat
-  // pointer auto baseAttrs = base.getDefiningOp()->getAttrs(); auto offsetAttrs
-  // = offset.getDefiningOp()->getAttrs(); assert(baseAttrs.size() ==
-  // offsetAttrs.size() &&
-  //        "expected base and offset attr dicts to be same size");
-  // for (auto [baseAttr, offsetAttr] : llvm::zip(baseAttrs, offsetAttrs)) {
-  //   assert(baseAttr.getName() == offsetAttr.getName() &&
-  //          "expected base attr name == offset attr name");
-  //   assert(baseAttr.getValue() == offsetAttr.getValue() &&
-  //          "expected base attr value == offset attr value");
-  //   pointerAttrs[k].attributes[baseAttr.getName()] = baseAttr.getValue();
-  // }
+  // Otherwise add the attributes of the base to the fat pointer
+  for (auto baseAttr : base.getDefiningOp()->getAttrs())
+    pointerAttrs[k].attributes[baseAttr.getName()] = baseAttr.getValue();
 }
 
 Value createTensorPointer(RewriterBase &rewriter, Value basePtr, Value offset,
@@ -483,8 +471,7 @@ public:
     tt::SplatOp offset = rewriter.create<tt::SplatOp>(
         splatOp.getLoc(), newOffsetType, fatPtrOffset);
     rewriter.replaceOpWithMultiple(splatOp, {{fatPtrBase, offset}});
-    fatPtrs[{fatPtrBase, offset}].canNarrow =
-        fatPtrs.at({fatPtrBase, fatPtrOffset}).canNarrow;
+    fatPtrs[{fatPtrBase, offset}] = fatPtrs.at({fatPtrBase, fatPtrOffset});
 
     return success();
   }
@@ -522,8 +509,7 @@ public:
     tt::BroadcastOp newOffset = rewriter.create<tt::BroadcastOp>(
         broadcastOp.getLoc(), newOffsetType, fatPtrOffset);
     rewriter.replaceOpWithMultiple(broadcastOp, {{fatPtrBase, newOffset}});
-    fatPtrs[{fatPtrBase, newOffset}].canNarrow =
-        fatPtrs.at({fatPtrBase, fatPtrOffset}).canNarrow;
+    fatPtrs[{fatPtrBase, newOffset}] = fatPtrs.at({fatPtrBase, fatPtrOffset});
     return success();
   }
 };
@@ -563,8 +549,8 @@ public:
       auto newAddPtrOp = rewriter.create<tt::AddPtrOp>(
           curLoc, fatPtrBase.getType(), fatPtrBase, origOffset);
       rewriter.replaceOpWithMultiple(addPtrOp, {{newAddPtrOp, fatPtrOffset}});
-      fatPtrs[{newAddPtrOp, fatPtrOffset}].canNarrow =
-          fatPtrs.at({fatPtrBase, fatPtrOffset}).canNarrow;
+      fatPtrs[{newAddPtrOp, fatPtrOffset}] =
+          fatPtrs.at({fatPtrBase, fatPtrOffset});
       return success();
     }
 
@@ -579,8 +565,8 @@ public:
       rewriter.replaceOpWithMultiple(addPtrOp, {{newAddPtrOp, fatPtrOffset}});
       // If we are updating the tensor pointer with a constant value, we can
       // propagate the attributes of the tensor pointer to the fat pointer.
-      fatPtrs[{newAddPtrOp, fatPtrOffset}].canNarrow =
-          fatPtrs.at({fatPtrBase, fatPtrOffset}).canNarrow;
+      fatPtrs[{newAddPtrOp, fatPtrOffset}] =
+          fatPtrs.at({fatPtrBase, fatPtrOffset});
       return success();
     }
 
@@ -599,7 +585,6 @@ public:
     if (!isZeroConst(nonUniformOffset)) {
       Type addPtrOffsetType = getElementTypeOrSelf(nonUniformOffset);
       Type fatPtrOffsetType = getElementTypeOrSelf(fatPtrOffset);
-      // TODO(max): why is this inside this condition?
       canNarrow = canNarrow && canNarrowOffset(fatPtrOffset, nonUniformOffset);
       // Upcast or downcast the offset accordingly
       if (addPtrOffsetType.isInteger(32) && fatPtrOffsetType.isInteger(64))
@@ -777,8 +762,8 @@ static void convertSimpleBlockSignature(Block *oldBlock,
       assert(fatPtrs.contains({operands[0], operands[1]}) &&
              "expected fatPtrs to contain existing (op0, op1) fat pointer");
       fatPtrs[{newBlock->getArgument(offset),
-               newBlock->getArgument(offset + 1)}]
-          .canNarrow = fatPtrs.at({operands[0], operands[1]}).canNarrow;
+               newBlock->getArgument(offset + 1)}] =
+          fatPtrs.at({operands[0], operands[1]});
     }
     offset += operands.size();
   }
@@ -920,8 +905,8 @@ public:
           selectOp.getLoc(), selectOp.getType(), selectOp.getCondition(),
           fatPtrTrue[0], selectOp.getFalseValue());
       rewriter.replaceOpWithMultiple(selectOp, {{newSelectOp, fatPtrTrue[1]}});
-      fatPtrs[{newSelectOp, /*fatPtrOffset*/ fatPtrTrue[1]}].canNarrow =
-          fatPtrs.at({fatPtrTrue[0], fatPtrTrue[1]}).canNarrow;
+      fatPtrs[{newSelectOp, /*fatPtrOffset*/ fatPtrTrue[1]}] =
+          fatPtrs.at({fatPtrTrue[0], fatPtrTrue[1]});
       return success();
     }
 
@@ -933,13 +918,12 @@ public:
         selectOp.getLoc(), selectOp.getCondition(), fatPtrTrue[1],
         fatPtrFalse[1]);
 
-    assert((fatPtrs.at({fatPtrTrue[0], fatPtrTrue[1]}).canNarrow ==
-            fatPtrs.at({fatPtrFalse[0], fatPtrFalse[1]}).canNarrow) &&
+    assert((fatPtrs.at({fatPtrTrue[0], fatPtrTrue[1]}) ==
+            fatPtrs.at({fatPtrFalse[0], fatPtrFalse[1]})) &&
            "expected can narrow to be the same for both fatPtrT and fatPtrF");
 
     rewriter.replaceOpWithMultiple(selectOp, {{newBase, newOffset}});
-    fatPtrs[{newBase, newOffset}].canNarrow =
-        fatPtrs.at({fatPtrTrue[0], fatPtrTrue[1]}).canNarrow;
+    fatPtrs[{newBase, newOffset}] = fatPtrs.at({fatPtrTrue[0], fatPtrTrue[1]});
 
     return success();
   }
@@ -991,8 +975,8 @@ public:
           Value thenFatPtrOffset = ifOp.thenYield().getOperand(i + 1);
           Value elseFatPtrBase = ifOp.elseYield().getOperand(i);
           Value elseFatPtrOffset = ifOp.elseYield().getOperand(i + 1);
-          assert((fatPtrs.at({thenFatPtrBase, thenFatPtrOffset}).canNarrow ==
-                  fatPtrs.at({elseFatPtrBase, elseFatPtrOffset}).canNarrow) &&
+          assert((fatPtrs.at({thenFatPtrBase, thenFatPtrOffset}) ==
+                  fatPtrs.at({elseFatPtrBase, elseFatPtrOffset})) &&
                  "expected then fat ptr canNarrow and else fat ptr canNarrow "
                  "to be equal");
         }
@@ -1017,8 +1001,8 @@ public:
              .asArrayRef()) {
       Value thenFatPtrBase = newIfOp.thenYield().getOperand(idx);
       Value thenFatPtrOffset = newIfOp.thenYield().getOperand(idx + 1);
-      fatPtrs[{newIfOp.getResult(idx), newIfOp.getResult(idx + 1)}].canNarrow =
-          fatPtrs.at({thenFatPtrBase, thenFatPtrOffset}).canNarrow;
+      fatPtrs[{newIfOp.getResult(idx), newIfOp.getResult(idx + 1)}] =
+          fatPtrs.at({thenFatPtrBase, thenFatPtrOffset});
     }
 
     return success();
@@ -1140,7 +1124,6 @@ struct InitFuncPtrArgs : OpRewritePattern<tt::FuncOp> {
       auto dummyCast = rewriter.create<UnrealizedConversionCastOp>(
           arg.getLoc(), TypeRange{arg.getType()}, ValueRange{arg, zeroOffset});
       rewriter.replaceAllUsesExcept(arg, dummyCast.getResult(0), dummyCast);
-      // TODO(max): why is this true?
       fatPtrs[{arg, zeroOffset}].canNarrow = true;
     }
 
