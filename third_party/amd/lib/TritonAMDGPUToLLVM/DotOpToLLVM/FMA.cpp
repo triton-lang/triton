@@ -20,7 +20,7 @@ class AMDFMAVectorMultiplier : public FMAVectorMultiplier {
   Location loc;
   DotIntrinsic intrinsic;
 
-  DotIntrinsic chooseIntrinsic(triton::DotOp op) {
+  DotIntrinsic chooseIntrinsic(DotOp op) {
     auto aOpTy = cast<RankedTensorType>(op.getA().getType());
     auto aElemTy = aOpTy.getElementType();
     auto bOpTy = cast<RankedTensorType>(op.getA().getType());
@@ -100,15 +100,14 @@ class AMDFMAVectorMultiplier : public FMAVectorMultiplier {
   }
 
 public:
-  AMDFMAVectorMultiplier(ConversionPatternRewriter &rewriter, triton::DotOp op)
+  AMDFMAVectorMultiplier(ConversionPatternRewriter &rewriter, DotOp op)
       : rewriter(rewriter), loc(op.getLoc()), intrinsic(chooseIntrinsic(op)) {}
 
-  mlir::Value multiplyVectors(mlir::ArrayRef<mlir::Value> a,
-                              mlir::ArrayRef<mlir::Value> b,
-                              mlir::Value c) override {
+  Value multiplyVectors(ArrayRef<Value> a, ArrayRef<Value> b,
+                        Value c) override {
     auto kSize = a.size();
     assert(b.size() == kSize);
-    mlir::Value accum = c;
+    Value accum = c;
     for (int k = 0; k < kSize; k += intrinsic.vectorSize) {
       auto aOp = packOperand(a, k, intrinsic.vectorSize);
       auto bOp = packOperand(b, k, intrinsic.vectorSize);
@@ -122,7 +121,7 @@ public:
 
 namespace mlir::triton::AMD {
 
-LogicalResult convertAMDFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
+LogicalResult convertAMDFMADot(DotOp op, DotOp::Adaptor adaptor,
                                const LLVMTypeConverter *typeConverter,
                                ConversionPatternRewriter &rewriter) {
   AMDFMAVectorMultiplier multiplier(rewriter, op);

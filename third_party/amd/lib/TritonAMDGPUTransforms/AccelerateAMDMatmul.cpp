@@ -818,17 +818,17 @@ public:
   }
 };
 
-class AccelerateBlocked : public mlir::RewritePattern {
+class AccelerateBlocked : public OpRewritePattern<DotOp> {
   StringRef arch;
 
 public:
-  AccelerateBlocked(mlir::MLIRContext *context, StringRef arch)
-      : mlir::RewritePattern(tt::DotOp::getOperationName(), 1, context),
-        arch(arch) {}
+  AccelerateBlocked(MLIRContext *context, StringRef arch,
+                    PatternBenefit benefit = 1)
+      : OpRewritePattern(context, benefit), arch(arch) {}
 
   bool isFloat(Type t) const { return t.isIntOrFloat() && !t.isIntOrIndex(); }
 
-  Value castToElTy(mlir::PatternRewriter &rewriter, Value v, Type elTy) const {
+  Value castToElTy(PatternRewriter &rewriter, Value v, Type elTy) const {
     Location loc = v.getLoc();
     auto srcTy = cast<RankedTensorType>(v.getType());
     auto dstTy = srcTy.cloneWith(std::nullopt, elTy);
@@ -837,16 +837,16 @@ public:
     auto srcElTy = srcTy.getElementType();
     auto dstElTy = dstTy.getElementType();
     if (isFloat(srcElTy) && isFloat(dstElTy))
-      return rewriter.create<triton::FpToFpOp>(loc, dstTy, v);
+      return rewriter.create<FpToFpOp>(loc, dstTy, v);
     if (!isFloat(srcElTy) && isFloat(dstElTy))
-      return rewriter.create<mlir::arith::SIToFPOp>(loc, dstTy, v);
+      return rewriter.create<arith::SIToFPOp>(loc, dstTy, v);
     if (isFloat(srcElTy) && !isFloat(dstElTy))
-      return rewriter.create<mlir::arith::FPToSIOp>(loc, dstTy, v);
+      return rewriter.create<arith::FPToSIOp>(loc, dstTy, v);
     assert(false && "int -> int cast is unexpected in FMA legalization");
     return Value();
   }
 
-  bool legalFMAForm(tt::DotOp dotOp) const {
+  bool isLegalFMAForm(DotOp dotOp) const {
     auto expectedElTy = dotOp.getA().getType().getElementType();
     for (auto operand : dotOp.getOperands()) {
       auto opTy = cast<RankedTensorType>(operand.getType());
@@ -859,16 +859,14 @@ public:
     return true;
   }
 
-  mlir::LogicalResult
-  matchAndRewrite(mlir::Operation *op,
-                  mlir::PatternRewriter &rewriter) const override {
-    auto dotOp = cast<tt::DotOp>(op);
+  LogicalResult matchAndRewrite(DotOp dotOp,
+                                PatternRewriter &rewriter) const override {
     auto a = dotOp.getA();
     auto b = dotOp.getB();
     auto c = dotOp.getC();
     auto d = dotOp.getD();
 
-    if (!llvm::isa<triton::gpu::BlockedEncodingAttr>(d.getType().getEncoding()))
+    if (!isa<BlockedEncodingAttr>(d.getType().getEncoding()))
       return failure();
 
     Type aElTy = a.getType().getElementType();
@@ -903,7 +901,7 @@ public:
     }
 
     // check that dot is not legalized already
-    if (legalFMAForm(dotOp)) {
+    if (isLegalFMAForm(dotOp)) {
       return failure();
     }
 
@@ -937,9 +935,9 @@ public:
     auto newB = castToElTy(rewriter, b, commonTy);
     auto newC = castToElTy(rewriter, c, commonTy);
 
-    auto newDot = rewriter.create<tt::DotOp>(
-        dotOp.getLoc(), newC.getType(), newA, newB, newC,
-        dotOp.getInputPrecision(), dotOp.getMaxNumImpreciseAcc());
+    auto newDot = rewriter.create<DotOp>(dotOp.getLoc(), newC.getType(), newA,
+                                         newB, newC, dotOp.getInputPrecision(),
+                                         dotOp.getMaxNumImpreciseAcc());
     auto newD = castToElTy(rewriter, newDot.getResult(), dElTy);
     d.replaceAllUsesWith(newD);
     dotOp.erase();
@@ -974,16 +972,17 @@ public:
     case ISAFamily::CDNA2:
     case ISAFamily::CDNA3:
       patterns.add<::BlockedToMFMA, ::ScaledBlockedToMFMA>(
-          context, getMfmaVersion(isaFamily), matrixInstructionSize, kPack);
+          context, getMfmaVersion(isaFamily), matrixInstructionSize, kPack,
+          /*benefit*/ 2);
       break;
     case ISAFamily::RDNA3:
-      patterns.add<::BlockedToWMMA>(context,
-                                    getWmmaVersion(archGenerationName));
+      patterns.add<::BlockedToWMMA>(context, getWmmaVersion(archGenerationName),
+                                    /*benefit*/ 2);
       break;
     default:
       break;
     }
-    patterns.add<AccelerateBlocked>(context, archGenerationName);
+    patterns.add<AccelerateBlocked>(context, archGenerationName, /*benefit*/ 1);
     if (applyPatternsGreedily(m, std::move(patterns)).failed()) {
       signalPassFailure();
     }
