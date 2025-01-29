@@ -152,38 +152,38 @@ LogicalResult Pingponger::genLocalSlice(OpBuilder &builder, Value v,
   SmallVector<Operation *> slices;
   SmallVector<Operation *> subviews;
   // TODO: support transformed input to dot
-  if (auto maybeLocal = v.getDefiningOp<ttg::LocalLoadOp>()) {
-    auto memDesc = maybeLocal.getSrc();
-    auto type = cast<ttg::MemDescType>(memDesc.getType());
-    SmallVector<int64_t> shape = llvm::to_vector(type.getShape());
-    Type elementType = type.getElementType();
-    int64_t kIdx = opIdx == 0 ? 1 : 0;
-    shape[kIdx] = sliceWidth;
-    // Each slice cannot be smaller than the smallest supported mfma width.
-    if (sliceWidth < 16)
-      return failure();
-    auto dotOperandEnc = ttg::DotOperandEncodingAttr::get(
-        builder.getContext(), opIdx, dotEncoding, kWidth);
-    auto subviewDescType = ttg::MemDescType::get(
-        shape, elementType, type.getEncoding(), type.getMemorySpace(),
-        type.getMutableMemory(), type.getAllocShape());
-    for (int i = 0; i < numSlices; i++) {
-      SmallVector<Value> offsetsVal;
-      SmallVector<int64_t> offsets = {0, 0};
-      offsets[kIdx] = i;
-      for (int64_t off : offsets) {
-        offsetsVal.push_back(constOffsets[off]);
-      }
-      Value newSmem = builder.create<ttg::MemDescSubviewOp>(
-          v.getLoc(), subviewDescType, memDesc, offsetsVal);
-      Value prefetchSlice = builder.create<ttg::LocalLoadOp>(
-          v.getLoc(), RankedTensorType::get(shape, elementType, dotOperandEnc),
-          newSmem);
-      subviews.push_back(newSmem.getDefiningOp());
-      slices.push_back(prefetchSlice.getDefiningOp());
-    }
-  } else
+  ttg::LocalLoadOp localLoad;
+  if !(localLoad = v.getDefiningOp<ttg::LocalLoadOp>())
     return failure();
+  auto memDesc = localLoad.getSrc();
+  auto type = cast<ttg::MemDescType>(memDesc.getType());
+  SmallVector<int64_t> shape = llvm::to_vector(type.getShape());
+  Type elementType = type.getElementType();
+  int64_t kIdx = opIdx == 0 ? 1 : 0;
+  shape[kIdx] = sliceWidth;
+  // Each slice cannot be smaller than the smallest supported mfma width.
+  if (sliceWidth < 16)
+    return failure();
+  auto dotOperandEnc = ttg::DotOperandEncodingAttr::get(
+      builder.getContext(), opIdx, dotEncoding, kWidth);
+  auto subviewDescType = ttg::MemDescType::get(
+      shape, elementType, type.getEncoding(), type.getMemorySpace(),
+      type.getMutableMemory(), type.getAllocShape());
+  for (int i = 0; i < numSlices; i++) {
+    SmallVector<Value> offsetsVal;
+    SmallVector<int64_t> offsets = {0, 0};
+    offsets[kIdx] = i;
+    for (int64_t off : offsets) {
+      offsetsVal.push_back(constOffsets[off]);
+    }
+    Value newSmem = builder.create<ttg::MemDescSubviewOp>(
+        v.getLoc(), subviewDescType, memDesc, offsetsVal);
+    Value prefetchSlice = builder.create<ttg::LocalLoadOp>(
+        v.getLoc(), RankedTensorType::get(shape, elementType, dotOperandEnc),
+        newSmem);
+    subviews.push_back(newSmem.getDefiningOp());
+    slices.push_back(prefetchSlice.getDefiningOp());
+  }
   subViewOps.push_back(subviews);
   loadSliceOps.push_back(slices);
   return success();
