@@ -123,6 +123,12 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
 
   std::tie(scratchConfig.inVec, scratchConfig.outVec) =
       getScratchCvtInOutVecLengths(srcTy, dstTy);
+  // We can't write a longer vector than the shape of shared memory.
+  // This shape might be smaller than the tensor shape in case we decided to
+  // do the conversion in multiple iterations.
+  unsigned contiguousShapeDim = scratchConfig.repShape[scratchConfig.order[0]];
+  scratchConfig.inVec = std::min(scratchConfig.inVec, contiguousShapeDim);
+  scratchConfig.outVec = std::min(scratchConfig.outVec, contiguousShapeDim);
 
   // No padding is required if the tensor is 1-D, or if all dimensions except
   // the first accessed dimension have a size of 1.

@@ -93,6 +93,8 @@ def get_min_time_flops(df, device_info):
                     elif arch == "90":
                         # 114 sms and 1755mhz is the base number of sms and clock rate of H100 pcie
                         max_flops = ((num_sms / 114 * clock_rate / (1755 * 1e3) * 1513) * 1e12) / (width / 8)
+                    elif arch == "100":
+                        max_flops = (num_sms * 16384 * (clock_rate / 1e3) * 1e6) / (width / 8)
                 elif device_type == "HIP":
                     if arch == "gfx90a":
                         max_flops = 383e12 / (width / 8)
@@ -214,7 +216,8 @@ def format_frames(gf, format):
     elif format == "function_line":
         gf.dataframe["name"] = gf.dataframe["name"].apply(lambda x: x.split(":")[-1])
     elif format == "file_function":
-        gf.dataframe["name"] = gf.dataframe["name"].apply(lambda x: x.split("/")[-1].split("@")[0])
+        gf.dataframe["name"] = gf.dataframe["name"].apply(
+            lambda x: f"{x.split('/')[-1].split(':')[0]}@{x.split('@')[-1].split(':')[0]}")
     return gf
 
 
@@ -249,7 +252,7 @@ def parse(metrics, filename, include=None, exclude=None, threshold=None, depth=1
         gf = filter_frames(gf, include, exclude, threshold, metrics[0])
         print(gf.tree(metric_column=metrics, expand_name=True, depth=depth, render_header=False))
         if print_sorted:
-            print("Sorted kernels by metric " + metrics[0].strip("(inc)"))
+            print("Sorted kernels by metric " + metrics[0])
             sorted_df = gf.dataframe.sort_values(by=[metrics[0]], ascending=False)
             for row in range(1, len(sorted_df)):
                 kernel_name = sorted_df.iloc[row]['name'][:100] + "..." if len(

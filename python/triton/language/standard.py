@@ -59,14 +59,14 @@ def softmax(x, ieee_rounding=False):
 
 @core._tensor_member_fn
 @jit
-def ravel(x):
+def ravel(x, can_reorder=False):
     """
     Returns a contiguous flattened view of :code:`x`.
 
     :param x: the input tensor
     :type x: Block
     """
-    return core.reshape(x, [x.numel], can_reorder=True)
+    return core.reshape(x, [x.numel], can_reorder=can_reorder)
 
 
 @jit

@@ -31,6 +31,34 @@ include "NVGPUAttrDefs.td"
 
 def LLVM_PointerGlobal : LLVM_PointerInAddressSpace<1>;
 def LLVM_PointerShared : LLVM_PointerInAddressSpace<3>;
+def LLVM_PointerTensorMemory : LLVM_PointerInAddressSpace<6>;
+
+
+def NVGPU_Float : AnyTypeOf<[F8E4M3FN, F8E4M3FNUZ, F8E5M2, F8E5M2FNUZ, F16, BF16, F32, F64], "floating-point">;
+def NVGPU_Int : AnyTypeOf<[I1, I8, I16, I32, I64], "integer">;
+def NVGPU_ScalarLike : AnyTypeOf<[NVGPU_Float, NVGPU_Int]>;
+
+
+def NVGPU_MemSemanticAttr : I32EnumAttr<
+    "MemSemantic", "",
+    [
+      I32EnumAttrCase<"RELAXED", 1, "relaxed">,
+      I32EnumAttrCase<"ACQUIRE", 2, "acquire">,
+      I32EnumAttrCase<"RELEASE", 3, "release">,
+      I32EnumAttrCase<"ACQUIRE_RELEASE", 4, "acq_rel">,
+    ]> {
+    let cppNamespace = "::mlir::triton::nvgpu";
+}
+
+def NVGPU_MemSyncScopeAttr : I32EnumAttr<
+    "MemSyncScope", "",
+    [
+      I32EnumAttrCase<"GPU", 1, "gpu">,
+      I32EnumAttrCase<"CTA", 2, "cta">,
+      I32EnumAttrCase<"SYSTEM", 3, "sys">,
+    ]> {
+    let cppNamespace = "::mlir::triton::nvgpu";
+}
 
 class NVGPU_Op<string mnemonic, list<Trait> traits = []> :
     LLVM_OpBase<NVGPU_Dialect, mnemonic, traits>;
@@ -122,5 +150,31 @@ def NVGPU_ClusterCTAIdOp : NVGPU_Op<"cluster_id", [Pure]> {
   let results = (outs I32:$result);
   let assemblyFormat = "attr-dict";
 }
+
+def NVGPU_LoadAcquireOp : NVGPU_Op<"ld_acquire", [MemoryEffects<[MemRead]>]> {
+  let arguments = (
+    ins LLVM_PointerGlobal:$addr,
+    Optional<I1>:$mask,
+    NVGPU_MemSemanticAttr:$sem,
+    NVGPU_MemSyncScopeAttr:$scope
+  );
+  let results = (outs NVGPU_ScalarLike:$result);
+  let assemblyFormat = "$sem `,` $scope `,` $addr (`,` $mask^)? attr-dict `:` functional-type($addr, $result)";
+}
+
+def NVGPU_WarpIdOp : NVGPU_Op<"warp_id", [Pure]> {
+  let results = (outs I32:$result);
+  let assemblyFormat = "attr-dict";
+}
+
+def NVGPU_TensorMemoryBaseAddress : NVGPU_Op<"tensor_memory_base", [Pure]> {
+  let description = [{
+    Op to represent base address of tensor memory in a kernel.
+    This is used to simplify lowering from TritonGPU to LLVM.
+  }];
+  let results = (outs LLVM_PointerTensorMemory:$result);
+  let assemblyFormat = "attr-dict";
+}
+
 
 #endif

@@ -235,26 +235,6 @@ LogicalResult TransOp::inferReturnTypes(
   return success();
 }
 
-bool TransOp::isCompatibleReturnTypes(TypeRange lhs, TypeRange rhs) {
-  assert(lhs.size() == rhs.size());
-  assert(lhs.size() == 1);
-  auto lhsType = cast<RankedTensorType>(lhs[0]);
-  auto rhsType = cast<RankedTensorType>(rhs[0]);
-
-  if (lhsType.getShape() != rhsType.getShape())
-    return false;
-
-  auto lhsEnc = lhsType.getEncoding();
-  auto rhsEnc = rhsType.getEncoding();
-  // If there's no encoding or the encodings are the same
-  if (lhsEnc == rhsEnc)
-    return true;
-
-  return cast<DialectInferLayoutInterface>(&lhsEnc.getDialect())
-      ->verifyLayoutsAreEqual(lhsType.getShape(), lhsEnc, rhsEnc, {})
-      .succeeded();
-}
-
 //-- DotOp --
 LogicalResult
 DotOp::inferReturnTypes(MLIRContext *context, std::optional<Location> location,
@@ -700,7 +680,7 @@ LogicalResult ReshapeOp::canonicalize(ReshapeOp op, PatternRewriter &rewriter) {
 }
 
 OpFoldResult ReshapeOp::fold(FoldAdaptor adaptor) {
-  if (getType() == getSrc().getType() && !getAllowReorder()) {
+  if (getType() == getSrc().getType()) {
     // no-op
     return getSrc();
   }
@@ -1135,6 +1115,71 @@ LogicalResult GatherOp::inferReturnTypes(
   inferredReturnTypes.push_back(
       RankedTensorType::get(indicesType.getShape(), srcType.getElementType(),
                             indicesType.getEncoding()));
+  return success();
+}
+
+// -- ExperimentalDescriptorGatherOp
+LogicalResult
+ExperimentalDescriptorGatherOp::verifyResultType(Operation *op,
+                                                 mlir::ShapedType type) {
+  if (type.getRank() != 2)
+    return op->emitOpError("result must be a 2D tensor, but got ") << type;
+
+  // The swizzling of TMA accesses matches that of the MMAv3 shared memory
+  // layouts. However, these have minimum size requirements.
+  // TODO: We can support smaller gather sizes by padding the `local_alloc` this
+  // lowers to to the nearest minimum tile size.
+  if (unsigned rows = type.getShape()[0]; rows < 8) {
+    return op->emitOpError("gather must have at least 8 rows, but got ")
+           << rows;
+  }
+
+  Type dtype = type.getElementType();
+  if (dtype.getIntOrFloatBitWidth() > 32)
+    return op->emitOpError("TMA dtype cannot be greater than 32 bits");
+
+  unsigned minCols = 32 / dtype.getIntOrFloatBitWidth() * 8;
+  if (unsigned cols = type.getShape()[1]; cols < minCols) {
+    return op->emitOpError("gather of ")
+           << dtype << " must have at least " << minCols << " columns, but got "
+           << cols;
+  }
+
+  return success();
+}
+
+LogicalResult ExperimentalDescriptorGatherOp::verify() {
+  RankedTensorType blockType = getDesc().getType().getBlockType();
+  // Gather from `!tt.tensordesc<tensor<1xMxdtype>>`.
+  if (blockType.getRank() != 2)
+    return emitOpError("block must be a 2D tensor, but got ") << blockType;
+  if (blockType.getShape()[0] != 1)
+    return emitOpError("block must have exactly 1 row, but got ") << blockType;
+
+  // With x offsets `tensor<Nxinttype>`.
+  RankedTensorType indicesType = getXOffsets().getType();
+  if (indicesType.getRank() != 1)
+    return emitOpError("x offsets must be a 1D tensor, but got ")
+           << indicesType;
+
+  // Into `tensor<NxMxdtype>`.
+  RankedTensorType resultType = getType();
+  if (failed(verifyResultType(*this, resultType)))
+    return failure();
+
+  if (resultType.getShape()[0] != indicesType.getShape()[0]) {
+    return emitOpError("result tensor must have as many rows as indices (")
+           << indicesType.getShape()[0] << "), but got " << resultType;
+  }
+  if (resultType.getShape()[1] != blockType.getShape()[1]) {
+    return emitOpError("result tensor number of columns must match block (")
+           << blockType.getShape()[1] << "), but got " << resultType;
+  }
+  if (resultType.getElementType() != blockType.getElementType()) {
+    return emitOpError("result tensor element type must match block (")
+           << blockType.getElementType() << "), but got " << resultType;
+  }
+
   return success();
 }
 

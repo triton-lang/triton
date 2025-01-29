@@ -22,7 +22,6 @@ void lowerDistributedToShared(
     std::pair<size_t, Type> *const llvmOpCount = nullptr) {
   auto srcTy = cast<RankedTensorType>(src.getType());
   auto dstTy = cast<MemDescType>(dst.getType());
-  auto outOrd = mlir::cast<SharedEncodingAttr>(dstTy.getEncoding()).getOrder();
   auto elemTy = typeConverter->convertType(srcTy.getElementType());
 
   auto inVals = unpackLLElements(loc, adaptorSrc, rewriter);
@@ -40,6 +39,7 @@ struct GlobalScratchAllocOpConversion
   matchAndRewrite(triton::gpu::GlobalScratchAllocOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
 
     auto opOffsetAttr = op->getAttrOfType<mlir::IntegerAttr>(
         "ttg.global_scratch_memory_offset");
@@ -51,7 +51,7 @@ struct GlobalScratchAllocOpConversion
       return failure();
     }
     Value ptr =
-        LLVM::getGlobalScratchPtr(loc, rewriter, funcOp, i32_val(opOffset));
+        LLVM::getGlobalScratchPtr(loc, rewriter, funcOp, b.i32_val(opOffset));
 
     rewriter.replaceOp(op, ptr);
     return success();

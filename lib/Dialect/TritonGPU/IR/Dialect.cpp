@@ -13,6 +13,7 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
@@ -331,6 +332,17 @@ SmallVector<unsigned> getCTASplitNum(Attribute layout) {
   } else if (auto sharedLayout = mlir::dyn_cast<SharedEncodingAttr>(layout)) {
     res.assign(sharedLayout.getCTALayout().getCTASplitNum().begin(),
                sharedLayout.getCTALayout().getCTASplitNum().end());
+  } else if (auto tmemLayout =
+                 mlir::dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
+                     layout)) {
+    res.resize(2);
+    res[0] = tmemLayout.getCTASplitM();
+    res[1] = tmemLayout.getCTASplitN();
+  } else if (auto tmemScaleLayout = mlir::dyn_cast<
+                 triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(layout)) {
+    res.resize(2);
+    res[0] = tmemScaleLayout.getCTASplitM();
+    res[1] = tmemScaleLayout.getCTASplitN();
   } else {
     assert(false && "Unimplemented usage of getCTASplitNum");
   }
@@ -375,7 +387,13 @@ SmallVector<int64_t> getShapePerCTA(Attribute layout, ArrayRef<int64_t> shape) {
       return res;
     }
   }
-  return getShapePerCTA(getCTASplitNum(layout), shape);
+  SmallVector<unsigned> splitNum = getCTASplitNum(layout);
+  if (auto tmem = dyn_cast<nvidia_gpu::TensorMemoryEncodingAttr>(layout)) {
+    if (shape.size() > splitNum.size()) {
+      splitNum.insert(splitNum.begin(), shape.size() - splitNum.size(), 1);
+    }
+  }
+  return getShapePerCTA(splitNum, shape);
 }
 
 SmallVector<int64_t> getShapePerCTA(Type type) {
@@ -1964,9 +1982,30 @@ AMDMfmaEncodingAttr::getRepOrderForOperand(int opIdx) const {
 
 SmallVector<unsigned>
 AMDMfmaEncodingAttr::getThreadsPerWarpForOperand(int opIdx) const {
-  llvm::report_fatal_error(
-      "getThreadsPerWarpForOperand not implemented for AMDMfmaEncodingAttr");
-  return {};
+  auto rank = ::getOrder(*this).size();
+  SmallVector<unsigned> threads(rank, 1);
+  unsigned kThreads;
+  unsigned nonKThreads;
+  switch (getMDim()) {
+  case 32:
+    assert(getNDim() == 32);
+    kThreads = 2;
+    nonKThreads = 32;
+    break;
+  case 16:
+    assert(getNDim() == 16);
+    kThreads = 4;
+    nonKThreads = 16;
+    break;
+  default:
+    llvm::report_fatal_error(
+        "unexpected mfma shape encountered in getThreadsPerWarpForOperand");
+  }
+  int kDimIdx = opIdx == 0 ? rank - 1 : rank - 2;
+  int nonKDimIdx = opIdx == 0 ? rank - 2 : rank - 1;
+  threads[kDimIdx] = kThreads;
+  threads[nonKDimIdx] = nonKThreads;
+  return threads;
 }
 
 SmallVector<int64_t>
@@ -2032,9 +2071,30 @@ AMDWmmaEncodingAttr::getRepOrderForOperand(int opIdx) const {
 
 SmallVector<unsigned>
 AMDWmmaEncodingAttr::getThreadsPerWarpForOperand(int opIdx) const {
-  llvm::report_fatal_error("getThreadsPerWarpForOperand not implemented for "
-                           "AMDWmmaEncodingAttr");
-  return {};
+  auto rank = ::getOrder(*this).size();
+  SmallVector<unsigned> threads(rank, 1);
+  unsigned kThreads;
+  unsigned nonKThreads;
+  switch (getVersion()) {
+  case 1:
+    // kThreads * onKThreads != 32,
+    // because values in lanes (n, n + 16) duplicates
+    kThreads = 1;
+    nonKThreads = 16;
+    break;
+  case 2:
+    kThreads = 2;
+    nonKThreads = 16;
+    break;
+  default:
+    llvm::report_fatal_error(
+        "unsupported WMMA version in getThreadsPerWarpForOperand");
+  }
+  int kDimIdx = opIdx == 0 ? rank - 1 : rank - 2;
+  int nonKDimIdx = opIdx == 0 ? rank - 2 : rank - 1;
+  threads[kDimIdx] = kThreads;
+  threads[nonKDimIdx] = nonKThreads;
+  return threads;
 }
 
 SmallVector<unsigned> AMDWmmaEncodingAttr::getCTAsPerCGA() const {

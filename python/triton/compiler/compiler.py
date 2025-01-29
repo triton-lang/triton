@@ -271,11 +271,11 @@ def compile(src, target=None, options=None):
 
     codegen_fns = backend.get_codegen_implementation(options)
     module_map = backend.get_module_map()
-    # try:
-    module = src.make_ir(options, codegen_fns, module_map, context)
-    # except Exception as e:
-    #     filter_traceback(e)
-    #     raise
+    try:
+        module = src.make_ir(options, codegen_fns, module_map, context)
+    except Exception as e:
+        filter_traceback(e)
+        raise
     use_ir_loc = os.environ.get("USE_IR_LOC", None)
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
@@ -394,6 +394,11 @@ class CompiledKernel:
         max_shared = driver.active.utils.get_device_properties(device)["max_shared_mem"]
         if self.metadata.shared > max_shared:
             raise OutOfResources(self.metadata.shared, max_shared, "shared memory")
+        if hasattr(self.metadata, "tmem_size") and self.metadata.tmem_size is not None:
+            # Use blackwell max tmem size for now, this should be moved in device properties
+            max_tmem_size = 512  # tmem size in number of columns
+            if self.metadata.tmem_size > max_tmem_size:
+                raise OutOfResources(self.metadata.tmem_size, max_tmem_size, "tensor memory")
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
         self.module, self.function, self.n_regs, self.n_spills = driver.active.utils.load_binary(
             self.name, self.kernel, self.metadata.shared, device)

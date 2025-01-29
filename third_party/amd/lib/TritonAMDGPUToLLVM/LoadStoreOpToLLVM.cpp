@@ -30,9 +30,10 @@ namespace {
 // Used to mask out the redundant data accessed by threads.
 Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
                         Location loc, const AMD::TargetInfo &targetInfo) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
-  Value mask = int_val(1, 1);
-  auto tid = tid_val();
+  Value mask = b.int_val(1, 1);
+  auto tid = b.tid_val();
   auto clusterCTAId = targetInfo.getClusterCTAId(rewriter, loc);
   if (tensorTy) {
     auto layout = tensorTy.getEncoding();
@@ -50,9 +51,9 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
       warpOrder = triton::gpu::getWarpOrder(layout);
     }
     auto shapePerCTATile = triton::gpu::getShapePerCTATile(layout);
-    Value warpSize = i32_val(triton::gpu::getWarpSize(layout));
-    Value laneId = urem(tid, warpSize);
-    Value warpId = udiv(tid, warpSize);
+    Value warpSize = b.i32_val(triton::gpu::getWarpSize(layout));
+    Value laneId = b.urem(tid, warpSize);
+    Value warpId = b.udiv(tid, warpSize);
     // TODO: [DOT LL]
     // The delinearize function is not entirely correct for certain layouts,
     // such as wgmma. The correct approach is to convert a legacy layout to its
@@ -69,14 +70,15 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
       // Otherwise, we need to mask threads that will replicate data on this
       // dimension. Calculate the thread index on this dimension for the CTA
       Value threadDim =
-          add(mul(multiDimWarpId[dim], i32_val(threadsPerWarp[dim])),
-              multiDimThreadId[dim]);
-      mask = and_(mask, icmp_slt(mul(threadDim, i32_val(sizePerThread[dim])),
-                                 i32_val(shape[dim])));
+          b.add(b.mul(multiDimWarpId[dim], b.i32_val(threadsPerWarp[dim])),
+                multiDimThreadId[dim]);
+      mask = b.and_(mask,
+                    b.icmp_slt(b.mul(threadDim, b.i32_val(sizePerThread[dim])),
+                               b.i32_val(shape[dim])));
     }
     // Do not write duplicated data when multicast is enabled
     if (triton::gpu::getNumCTAs(layout) > 1) {
-      auto _0 = i32_val(0);
+      auto _0 = b.i32_val(0);
       auto CTAsPerCGA = triton::gpu::getCTAsPerCGA(layout);
       auto CTASplitNum = triton::gpu::getCTASplitNum(layout);
       auto CTAOrder = triton::gpu::getCTAOrder(layout);
@@ -90,7 +92,7 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
           continue;
         // This wrapping rule must be consistent with emitCTAOffsetForLayout
         unsigned splitNum = std::min<unsigned>(shape[dim], CTASplitNum[dim]);
-        Value repId = udiv(multiDimClusterCTAId[dim], i32_val(splitNum));
+        Value repId = b.udiv(multiDimClusterCTAId[dim], b.i32_val(splitNum));
         // Consider the example where CTAsPerCGA = [4] and CTASplitNum = [2]:
         //     CTA0 and CTA2 holds data of block0,
         //     CTA1 and CTA3 holds data of block1.
@@ -100,14 +102,14 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
         // Actually in all existing cases of multicast, splitNum is always 1.
         // The mask is equivalent to:
         //     multiDimClusterCTAId[dim] == 0
-        mask = and_(mask, icmp_eq(repId, _0));
+        mask = b.and_(mask, b.icmp_eq(repId, _0));
       }
     }
   } else {
     // If the tensor is not ranked, then it is a scalar and only thread 0 of
     // CTA0 can write
-    mask = and_(mask, icmp_eq(clusterCTAId, i32_val(0)));
-    mask = and_(mask, icmp_eq(tid, i32_val(0)));
+    mask = b.and_(mask, b.icmp_eq(clusterCTAId, b.i32_val(0)));
+    mask = b.and_(mask, b.icmp_eq(tid, b.i32_val(0)));
   }
   return mask;
 }
@@ -135,14 +137,15 @@ struct LoadStoreConversionBase {
                                    const LLVMTypeConverter *typeConverter,
                                    Location loc, VectorType vecTy,
                                    ArrayRef<Value> elems, int64_t start) const {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     int64_t vec = vecTy.getNumElements();
     // If we need to mask the loaded value with other elements
-    Value v = undef(vecTy);
+    Value v = b.undef(vecTy);
     for (size_t s = 0; s < vec; ++s) {
       Value otherElem = elems[start + s];
       Value indexVal =
           LLVM::createIndexConstant(rewriter, loc, typeConverter, s);
-      v = insert_element(vecTy, v, otherElem, indexVal);
+      v = b.insert_element(vecTy, v, otherElem, indexVal);
     }
     return v;
   }
@@ -220,6 +223,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
   matchAndRewrite(triton::LoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
 
     // original values
     Value ptr = op.getPtr();
@@ -272,7 +276,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       const size_t movWidth = width < 16 ? 16 : width;
       assert(wordNElems * nWords * numVecs == numElems);
 
-      Value pred = mask ? maskElems[vecStart] : int_val(1, 1);
+      Value pred = mask ? maskElems[vecStart] : b.int_val(1, 1);
       Value ptr = ptrElems[vecStart];
 
       Value falseVal = createZeroVector(rewriter, loc, cast<VectorType>(vecTy));
@@ -287,7 +291,7 @@ struct LoadOpConversion : public ConvertOpToLLVMPattern<triton::LoadOp>,
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, getTypeConverter()->getIndexType(), ii);
-        Value loaded = extract_element(valueElemTy, loadVal, vecIdx);
+        Value loaded = b.extract_element(valueElemTy, loadVal, vecIdx);
         loadedVals.push_back(loaded);
       }
     } // end vec
@@ -321,6 +325,7 @@ struct BufferLoadOpConversion
   matchAndRewrite(triton::amdgpu::BufferLoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo);
 
     // original values
@@ -363,7 +368,7 @@ struct BufferLoadOpConversion
     SmallVector<Value> loadedVals;
     Type vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
-      Value pred = mask ? maskElems[vecStart] : int_val(1, 1);
+      Value pred = mask ? maskElems[vecStart] : b.int_val(1, 1);
       Value falseVal = createZeroVector(rewriter, loc, cast<VectorType>(vecTy));
       if (otherElems.size() != 0)
         falseVal = packElementRangeIntoVector(
@@ -374,7 +379,7 @@ struct BufferLoadOpConversion
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, getTypeConverter()->getIndexType(), ii);
-        Value loaded = extract_element(valueElemTy, loadVal, vecIdx);
+        Value loaded = b.extract_element(valueElemTy, loadVal, vecIdx);
         loadedVals.push_back(loaded);
       }
     } // end vec
@@ -414,6 +419,7 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
     Value llValue = adaptor.getValue();
 
     auto loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     MLIRContext *ctx = rewriter.getContext();
 
     auto valueTy = value.getType();
@@ -440,7 +446,7 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
     const int numVecs = elemsPerThread / vec;
     Value rDataMask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
     for (size_t vecStart = 0; vecStart < elemsPerThread; vecStart += vec) {
-      Value pred = mask ? and_(maskElems[vecStart], rDataMask) : rDataMask;
+      Value pred = mask ? b.and_(maskElems[vecStart], rDataMask) : rDataMask;
       auto vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
 
       const size_t maxWordWidth = std::max<size_t>(32, valueElemNBits);
@@ -498,6 +504,7 @@ struct BufferAtomicRMWOpConversion
   matchAndRewrite(triton::amdgpu::BufferAtomicRMWOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo);
 
     // original values
@@ -581,7 +588,8 @@ struct BufferAtomicRMWOpConversion
     switch (memScope) {
     // System scope is not supported yet
     case MemSyncScope::SYSTEM:
-      return failure();
+      return rewriter.notifyMatchFailure(
+          op, "System memory scope is not supported for Buffer Atomic RMW");
     case MemSyncScope::GPU:
       scopeStr = "agent";
       break;
@@ -589,7 +597,8 @@ struct BufferAtomicRMWOpConversion
       scopeStr = "workgroup";
       break;
     default:
-      return failure();
+      return rewriter.notifyMatchFailure(
+          op, "Unsupported memory scope for Buffer Atomic RMW");
     }
 
     StringAttr scope = mlir::StringAttr::get(loc.getContext(), scopeStr);
@@ -670,7 +679,7 @@ struct BufferAtomicRMWOpConversion
 
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
       Type vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
-      Value pred = mask ? and_(maskElems[vecStart], rDataMask) : rDataMask;
+      Value pred = mask ? b.and_(maskElems[vecStart], rDataMask) : rDataMask;
       Value falseVal = createZeroVector(rewriter, loc, cast<VectorType>(vecTy));
       // Create the store val
       Value storeVal = packElementRangeIntoVector(
@@ -694,7 +703,7 @@ struct BufferAtomicRMWOpConversion
       for (size_t ii = 0; ii < vec; ++ii) {
         Value vecIdx = createIndexAttrConstant(
             rewriter, loc, getTypeConverter()->getIndexType(), ii);
-        Value loaded = extract_element(valueElemTy, loadVal, vecIdx);
+        Value loaded = b.extract_element(valueElemTy, loadVal, vecIdx);
         loadedVals.push_back(loaded);
       }
     } // end vec
@@ -731,6 +740,7 @@ struct BufferStoreOpConversion
   matchAndRewrite(triton::amdgpu::BufferStoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo);
 
     // original values
@@ -767,7 +777,7 @@ struct BufferStoreOpConversion
     Value rDataMask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
       Type vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
-      Value pred = mask ? and_(maskElems[vecStart], rDataMask) : rDataMask;
+      Value pred = mask ? b.and_(maskElems[vecStart], rDataMask) : rDataMask;
       // Create the store val
       Value storeVal = packElementRangeIntoVector(
           rewriter, this->getTypeConverter(), loc, cast<VectorType>(vecTy),
@@ -798,6 +808,7 @@ struct AtomicCASOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     // extract relevant info from Module
     auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     MLIRContext *ctx = rewriter.getContext();
     Value ptr = op.getPtr();
 
@@ -815,7 +826,7 @@ struct AtomicCASOpConversion
     auto scope = op.getScope();
     auto scopeStr = getAMDGPUMemScopeStr(scope);
     if (!scopeStr)
-      return failure();
+      return rewriter.notifyMatchFailure(op, "Unknown AMDGPU memory scope");
 
     // deal with tensor or scalar
     auto valueTy = op.getResult().getType();
@@ -839,11 +850,11 @@ struct AtomicCASOpConversion
 
     // atomic ops
     for (size_t i = 0; i < elemsPerThread; i += vec) {
-      Value casVal = undef(vecTy);
+      Value casVal = b.undef(vecTy);
       for (int ii = 0; ii < vec; ++ii) {
         Value iiVal = createIndexAttrConstant(
             rewriter, loc, getTypeConverter()->getIndexType(), ii);
-        casVal = insert_element(vecTy, casVal, valElements[i + ii], iiVal);
+        casVal = b.insert_element(vecTy, casVal, valElements[i + ii], iiVal);
       }
 
       Value casPtr = ptrElements[i];
@@ -861,11 +872,12 @@ struct AtomicCASOpConversion
             StringRef(scopeStr.value()));
 
         // Extract the new_loaded value from the pair.
-        Value ret = extract_val(valueElemTy, cmpxchg, i);
+        Value ret = b.extract_val(valueElemTy, cmpxchg, i);
 
         for (int ii = 0; ii < vec; ++ii) {
           resultVals[i + ii] =
-              vec == 1 ? ret : extract_element(valueElemTy, ret, i32_val(ii));
+              vec == 1 ? ret
+                       : b.extract_element(valueElemTy, ret, b.i32_val(ii));
         }
       } else { // for scalar
         // Build blocks to bypass the atomic instruction for ~rmwMask.
@@ -876,8 +888,8 @@ struct AtomicCASOpConversion
 
         // Fill entry block with global memory barrier and conditional branch.
         rewriter.setInsertionPointToEnd(curBlock);
-        auto tid = tid_val();
-        Value pred = icmp_eq(tid, i32_val(i));
+        auto tid = b.tid_val();
+        Value pred = b.icmp_eq(tid, b.i32_val(i));
         rewriter.create<LLVM::CondBrOp>(loc, pred, atomicBlock, endBlock);
 
         // Build main block with atomic_cmpxchg.
@@ -891,10 +903,10 @@ struct AtomicCASOpConversion
 
         if (atomicNeedsSharedMemory(op.getResult())) {
           // Extract the new_loaded value from the pair.
-          Value newLoaded = extract_val(valueElemTy, cmpxchg, 0);
+          Value newLoaded = b.extract_val(valueElemTy, cmpxchg, 0);
           Value atomPtr =
               getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
-          store(newLoaded, atomPtr);
+          b.store(newLoaded, atomPtr);
         }
 
         rewriter.create<LLVM::BrOp>(loc, ValueRange(), endBlock);
@@ -910,10 +922,10 @@ struct AtomicCASOpConversion
         GCNBuilder BuilderMemfenceLDS;
         BuilderMemfenceLDS.create<>("s_waitcnt lgkmcnt(0)")->operator()();
         BuilderMemfenceLDS.launch(rewriter, loc, void_ty(ctx));
-        barrier();
+        b.barrier();
         Value atomPtr =
             getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
-        Value ret = load(valueElemTy, atomPtr);
+        Value ret = b.load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {ret});
       }
     }
@@ -938,7 +950,8 @@ bool supportsGlobalAtomicF16PackedAndDpp(triton::AMD::ISAFamily isaFamily) {
 Value generateI32DppMove(PatternRewriter &rewriter, Value val, int dppCtrl) {
   assert(val.getType().isInteger(32));
   auto loc = val.getLoc();
-  Value old = i32_val(0);
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value old = b.i32_val(0);
   int rowMask = 0b1111;  // enable all rows
   int bankMask = 0b1111; // enable all banks
   bool boundCtrl = false;
@@ -957,19 +970,20 @@ Value shiftRightI32ByDpp(PatternRewriter &rewriter, Value val) {
 
 Value generatePopcount64(PatternRewriter &rewriter, Value val) {
   auto loc = val.getLoc();
-  Value m1 = i64_val(0x5555555555555555); // binary: 0101 0101..
-  Value m2 = i64_val(0x3333333333333333); // binary: 0011 0011..
-  Value m4 = i64_val(0x0f0f0f0f0f0f0f0f); // binary: 0000 1111..
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value m1 = b.i64_val(0x5555555555555555); // binary: 0101 0101..
+  Value m2 = b.i64_val(0x3333333333333333); // binary: 0011 0011..
+  Value m4 = b.i64_val(0x0f0f0f0f0f0f0f0f); // binary: 0000 1111..
   // binary: 0000 0001 0000 0001..
-  Value h01 = i64_val(0x0101010101010101);
+  Value h01 = b.i64_val(0x0101010101010101);
   // put count of each 2 bits into those 2 bits
-  val = sub(val, and_(m1, lshr(val, i64_val(1))));
+  val = b.sub(val, b.and_(m1, b.lshr(val, b.i64_val(1))));
   // put count of each 4 bits into those 4 bits
-  val = add(and_(val, m2), and_(lshr(val, i64_val(2)), m2));
+  val = b.add(b.and_(val, m2), b.and_(b.lshr(val, b.i64_val(2)), m2));
   // put count of each 8 bits into those 8 bits
-  val = and_(add(val, lshr(val, i64_val(4))), m4);
+  val = b.and_(b.add(val, b.lshr(val, b.i64_val(4))), m4);
   // left 8 bits of x + (x<<8) + (x<<16) + (x<<24) + ...
-  return lshr(mul(val, h01), i64_val(56));
+  return b.lshr(b.mul(val, h01), b.i64_val(56));
 }
 
 Value genReadFirstLane(PatternRewriter &rewriter, Value v) {
@@ -999,6 +1013,7 @@ template <typename Generator, typename... Values>
 Value genI32TiledOp(PatternRewriter &rewriter, Generator genCall,
                     Value argToSplit, Values... args) {
   auto loc = argToSplit.getLoc();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   Type ty = argToSplit.getType();
   size_t tySize = ty.getIntOrFloatBitWidth();
   size_t i32Size = i32_ty.getIntOrFloatBitWidth();
@@ -1006,14 +1021,14 @@ Value genI32TiledOp(PatternRewriter &rewriter, Generator genCall,
   assert(tySize % i32Size == 0 && count > 0 &&
          "Unalligned types are not supported yet.");
   Type i32VecValTy = vec_ty(i32_ty, count);
-  Value vec = undef(i32VecValTy);
-  Value valCasted = bitcast(argToSplit, i32VecValTy);
+  Value vec = b.undef(i32VecValTy);
+  Value valCasted = b.bitcast(argToSplit, i32VecValTy);
   for (int i = 0; i < count; i++) {
-    Value subVal = extract_element(i32_ty, valCasted, i32_val(i));
+    Value subVal = b.extract_element(i32_ty, valCasted, b.i32_val(i));
     Value result = genCall(rewriter, subVal, args...);
-    vec = insert_element(i32VecValTy, vec, result, i32_val(i));
+    vec = b.insert_element(i32VecValTy, vec, result, b.i32_val(i));
   }
-  return bitcast(vec, ty);
+  return b.bitcast(vec, ty);
 }
 
 struct AtomicRMWOpConversion
@@ -1061,6 +1076,7 @@ struct AtomicRMWOpConversion
   matchAndRewrite(triton::AtomicRMWOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     MLIRContext *ctx = rewriter.getContext();
 
     auto atomicRmwAttr = op.getAtomicRmwOp();
@@ -1130,12 +1146,12 @@ struct AtomicRMWOpConversion
       // mask
       numElems = tensorTy.getNumElements();
     }
-    Value mask = int_val(1, 1);
-    auto tid = tid_val();
-    mask = and_(mask,
-                icmp_slt(mul(tid, i32_val(elemsPerThread)), i32_val(numElems)));
+    Value mask = b.int_val(1, 1);
+    auto tid = b.tid_val();
+    mask = b.and_(mask, b.icmp_slt(b.mul(tid, b.i32_val(elemsPerThread)),
+                                   b.i32_val(numElems)));
     if (useDppForPackedF16)
-      mask = and_(mask, icmp_eq(urem(tid, i32_val(2)), i32_val(0)));
+      mask = b.and_(mask, b.icmp_eq(b.urem(tid, b.i32_val(2)), b.i32_val(0)));
 
     auto memOrdering = op.getSem();
     auto scope = op.getScope();
@@ -1143,7 +1159,7 @@ struct AtomicRMWOpConversion
 
     auto scopeStr = getAMDGPUMemScopeStr(scope);
     if (!scopeStr)
-      return failure();
+      return rewriter.notifyMatchFailure(op, "Unknown AMDGPU memory scope");
 
     auto vecTy = vec_ty(valueElemTy, vec);
     auto retType = vec == 1 ? valueElemTy : vecTy;
@@ -1153,36 +1169,36 @@ struct AtomicRMWOpConversion
       Value rmwPtr = ptrElements[i];
       // TODO: in case llMask is zero we can create only one branch for all
       // elemsPerThread.
-      Value rmwMask = llMask ? and_(mask, maskElements[i]) : mask;
+      Value rmwMask = llMask ? b.and_(mask, maskElements[i]) : mask;
 
       Value operand;
       if (useDppForPackedF16) {
         // Move %val to left neighbour to proceed packed atomic further.
-        Value packedVal = null(packF16Ty);
-        packedVal =
-            insert_element(packF16Ty, packedVal, valElements[i], i32_val(0));
+        Value packedVal = b.null(packF16Ty);
+        packedVal = b.insert_element(packF16Ty, packedVal, valElements[i],
+                                     b.i32_val(0));
         // Pack to i32 type to simplify transaction
-        packedVal = bitcast(packedVal, i32_ty);
+        packedVal = b.bitcast(packedVal, i32_ty);
         Value dppMoveRes = shiftLeftI32ByDpp(rewriter, packedVal);
         // Unpack results back
-        Value unpackedDppRes = bitcast(dppMoveRes, packF16Ty);
-        operand = undef(packF16Ty);
+        Value unpackedDppRes = b.bitcast(dppMoveRes, packF16Ty);
+        operand = b.undef(packF16Ty);
         operand =
-            insert_element(packF16Ty, operand, valElements[i], i32_val(0));
-        operand = insert_element(
+            b.insert_element(packF16Ty, operand, valElements[i], b.i32_val(0));
+        operand = b.insert_element(
             packF16Ty, operand,
-            extract_element(valueElemTy, unpackedDppRes, i32_val(0)),
-            i32_val(1));
+            b.extract_element(valueElemTy, unpackedDppRes, b.i32_val(0)),
+            b.i32_val(1));
       } else if (vec == 1) {
         operand = valElements[i];
       } else {
-        operand = undef(vecTy);
+        operand = b.undef(vecTy);
         for (size_t ii = 0; ii < vec; ++ii)
-          operand =
-              insert_element(vecTy, operand, valElements[i + ii], i32_val(ii));
+          operand = b.insert_element(vecTy, operand, valElements[i + ii],
+                                     b.i32_val(ii));
       }
 
-      Value undefVal = undef(retType);
+      Value undefVal = b.undef(retType);
       // Build blocks to bypass the atomic instruction for ~rmwMask.
       auto *curBlock = rewriter.getInsertionBlock();
       auto *endBlock = curBlock->splitBlock(rewriter.getInsertionPoint());
@@ -1212,7 +1228,7 @@ struct AtomicRMWOpConversion
         if (atomicNeedsSharedMemory(op.getResult())) {
           Value atomPtr =
               getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
-          store(atom, atomPtr);
+          b.store(atom, atomPtr);
         }
       }
       rewriter.create<LLVM::BrOp>(loc, atom, endBlock);
@@ -1223,21 +1239,22 @@ struct AtomicRMWOpConversion
         if (useDppForPackedF16) {
           // Return packed to i32 result after atomic operation back from master
           // lane.
-          auto packedRet = bitcast(retVal, i32_ty);
+          auto packedRet = b.bitcast(retVal, i32_ty);
           Value dppMovRes = shiftRightI32ByDpp(rewriter, packedRet);
           // Unpack results back
-          Value unpackedDppRes = bitcast(dppMovRes, packF16Ty);
-          retVal = insert_element(
+          Value unpackedDppRes = b.bitcast(dppMovRes, packF16Ty);
+          retVal = b.insert_element(
               packF16Ty, retVal,
-              extract_element(valueElemTy, unpackedDppRes, i32_val(1)),
-              i32_val(1));
+              b.extract_element(valueElemTy, unpackedDppRes, b.i32_val(1)),
+              b.i32_val(1));
           resultVals[i] =
-              extract_element(valueElemTy, retVal, urem(tid, i32_val(2)));
+              b.extract_element(valueElemTy, retVal, b.urem(tid, b.i32_val(2)));
         } else {
           for (int ii = 0; ii < vec; ++ii) {
             resultVals[i + ii] =
-                vec == 1 ? retVal
-                         : extract_element(valueElemTy, retVal, i32_val(ii));
+                vec == 1
+                    ? retVal
+                    : b.extract_element(valueElemTy, retVal, b.i32_val(ii));
           }
         }
       } else {
@@ -1247,8 +1264,8 @@ struct AtomicRMWOpConversion
         }
         Value atomPtr =
             getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
-        barrier();
-        Value ret = load(valueElemTy, atomPtr);
+        b.barrier();
+        Value ret = b.load(valueElemTy, atomPtr);
         rewriter.replaceOp(op, {ret});
       }
     }
@@ -1284,10 +1301,11 @@ private:
     //    to consolidate group data into leader threads.
     // 5. Perform global atomic operations by leader threads.
     auto loc = operand.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     Type operandElemType = operand.getType();
     Type origPtrType = rmwPtr.getType();
 
-    rmwPtr = ptrtoint(i64_ty, rmwPtr);
+    rmwPtr = b.ptrtoint(i64_ty, rmwPtr);
 
     auto *curBlock = rewriter.getInsertionBlock();
     auto *afterLoopBlock = curBlock->splitBlock(rewriter.getInsertionPoint());
@@ -1298,7 +1316,7 @@ private:
         curBlock->getParent(), std::next(Region::iterator(curBlock)));
     loopBody->addArgument(i32_ty, loc); // base
     rewriter.setInsertionPointToEnd(curBlock);
-    rewriter.create<LLVM::BrOp>(loc, i32_val(0), loopBody);
+    rewriter.create<LLVM::BrOp>(loc, b.i32_val(0), loopBody);
 
     // Greed search of same addr within wavefront. Also collect auxiliary
     // information about relative position:
@@ -1311,20 +1329,20 @@ private:
     Value chosen = genI32TiledOp(rewriter, genReadFirstLane, rmwPtr);
     // this flag is required to disable thread if we have already checked its
     // pointer
-    Value done = icmp_eq(chosen, rmwPtr);
+    Value done = b.icmp_eq(chosen, rmwPtr);
     Value mask = targetInfo.ballot(rewriter, loc, i64_ty, done);
     Value start = loopBody->getArgument(0);
-    Value cnt = trunc(i32_ty, generatePopcount64(rewriter, mask));
+    Value cnt = b.trunc(i32_ty, generatePopcount64(rewriter, mask));
     Value mbcntLoRes = rewriter
                            .create<ROCDL::MbcntLoOp>(
-                               loc, i32_ty, trunc(i32_ty, mask), i32_val(0))
+                               loc, i32_ty, b.trunc(i32_ty, mask), b.i32_val(0))
                            ->getResult(0);
     Value idx = rewriter.create<ROCDL::MbcntHiOp>(
-        loc, i32_ty, trunc(i32_ty, lshr(mask, i64_val(32))), mbcntLoRes);
-    Value base = add(start, cnt);
-    Value leader = icmp_eq(idx, i32_val(0));
-    cnt = sub(cnt, idx);
-    idx = add(idx, start);
+        loc, i32_ty, b.trunc(i32_ty, b.lshr(mask, b.i64_val(32))), mbcntLoRes);
+    Value base = b.add(start, cnt);
+    Value leader = b.icmp_eq(idx, b.i32_val(0));
+    cnt = b.sub(cnt, idx);
+    idx = b.add(idx, start);
     rewriter.create<LLVM::CondBrOp>(loc, done, afterLoopBlock,
                                     ValueRange({idx, cnt, leader}), loopBody,
                                     ValueRange({base}));
@@ -1334,20 +1352,20 @@ private:
     Value idxRes = afterLoopBlock->getArgument(0);
     Value cntRes = afterLoopBlock->getArgument(1);
     Value leaderRes = afterLoopBlock->getArgument(2);
-    Value idxScaledForPermute = mul(idxRes, i32_val(4));
+    Value idxScaledForPermute = b.mul(idxRes, b.i32_val(4));
 
     // Make groups continuous
     rmwPtr = genI32TiledOp(rewriter, genPermute, rmwPtr, idxScaledForPermute);
     operand = genI32TiledOp(rewriter, genPermute, operand, idxScaledForPermute);
     // Actualize auxiliary info as well
-    Value packedRoleInfo =
-        genI32TiledOp(rewriter, genPermute,
-                      or_(zext(i32_ty, leaderRes),
-                          or_(idxScaledForPermute, shl(cntRes, i32_val(8)))),
-                      idxScaledForPermute);
+    Value packedRoleInfo = genI32TiledOp(
+        rewriter, genPermute,
+        b.or_(b.zext(i32_ty, leaderRes),
+              b.or_(idxScaledForPermute, b.shl(cntRes, b.i32_val(8)))),
+        idxScaledForPermute);
     idxScaledForPermute = packedRoleInfo;
-    cntRes = and_(lshr(packedRoleInfo, i32_val(8)), i32_val(0xff));
-    leaderRes = icmp_ne(and_(packedRoleInfo, i32_val(1)), i32_val(0));
+    cntRes = b.and_(b.lshr(packedRoleInfo, b.i32_val(8)), b.i32_val(0xff));
+    leaderRes = b.icmp_ne(b.and_(packedRoleInfo, b.i32_val(1)), b.i32_val(0));
 
     auto *afterRedBlock =
         afterLoopBlock->splitBlock(rewriter.getInsertionPoint());
@@ -1356,9 +1374,10 @@ private:
         rewriter.createBlock(afterLoopBlock->getParent(),
                              std::next(Region::iterator(afterLoopBlock)));
     rewriter.setInsertionPointToEnd(afterLoopBlock);
-    Value reductionCond = icmp_ne(
-        targetInfo.ballot(rewriter, loc, i64_ty, icmp_ne(cntRes, i32_val(1))),
-        i64_val(0));
+    Value reductionCond =
+        b.icmp_ne(targetInfo.ballot(rewriter, loc, i64_ty,
+                                    b.icmp_ne(cntRes, b.i32_val(1))),
+                  b.i64_val(0));
     rewriter.create<LLVM::CondBrOp>(loc, reductionCond, partialReductionBlock,
                                     afterRedBlock, operand);
     rewriter.setInsertionPointToEnd(partialReductionBlock);
@@ -1366,39 +1385,42 @@ private:
     auto performOpIfCond = [&](Value res, Value v, Value cond) -> Value {
       Type ty = v.getType();
       assert(ty == res.getType());
-      Value notCond = icmp_eq(cond, false_val());
+      Value notCond = b.icmp_eq(cond, b.false_val());
       switch (opKind) {
       case LLVM::AtomicBinOp::_and:
         // res &= cond ? v : 1111..
-        return and_(res, or_(v, sub(int_val(ty.getIntOrFloatBitWidth(), 0),
-                                    zext(ty, notCond))));
+        return b.and_(res,
+                      b.or_(v, b.sub(b.int_val(ty.getIntOrFloatBitWidth(), 0),
+                                     b.zext(ty, notCond))));
       case LLVM::AtomicBinOp::_or:
         // res |= cond ? v : 0
-        return or_(res, mul(v, zext(ty, cond)));
+        return b.or_(res, b.mul(v, b.zext(ty, cond)));
       case LLVM::AtomicBinOp::_xor:
         // res ^= cond ? v : 0
-        return xor_(res, mul(v, zext(ty, cond)));
+        return b.xor_(res, b.mul(v, b.zext(ty, cond)));
       case LLVM::AtomicBinOp::add:
         // res += cond ? v : 0
-        return add(res, mul(v, zext(ty, cond)));
+        return b.add(res, b.mul(v, b.zext(ty, cond)));
       case LLVM::AtomicBinOp::fadd:
         // res += cond ? v : 0
-        return fadd(
-            res, fmul(v, inttofloat(ty, zext(int_ty(ty.getIntOrFloatBitWidth()),
-                                             cond))));
+        return b.fadd(
+            res, b.fmul(v, b.inttofloat(
+                               ty, b.zext(int_ty(ty.getIntOrFloatBitWidth()),
+                                          cond))));
       case LLVM::AtomicBinOp::max:
       case LLVM::AtomicBinOp::umax:
         // res = cond ? umax(v, res) : res
-        return or_(mul(res, zext(ty, notCond)),
-                   mul(umax(v, res), zext(ty, cond)));
+        return b.or_(b.mul(res, b.zext(ty, notCond)),
+                     b.mul(b.umax(v, res), b.zext(ty, cond)));
       case LLVM::AtomicBinOp::min:
       case LLVM::AtomicBinOp::umin:
         // res = cond ? umin(v, res) : res
-        return or_(mul(res, zext(ty, notCond)),
-                   mul(umin(v, res), zext(ty, cond)));
+        return b.or_(b.mul(res, b.zext(ty, notCond)),
+                     b.mul(b.umin(v, res), b.zext(ty, cond)));
       case LLVM::AtomicBinOp::xchg:
         // res = cond ? v : res
-        return or_(mul(res, zext(ty, notCond)), mul(v, zext(ty, cond)));
+        return b.or_(b.mul(res, b.zext(ty, notCond)),
+                     b.mul(v, b.zext(ty, cond)));
       default:
         llvm_unreachable("Unsupported atomic binary operation.");
       }
@@ -1407,8 +1429,8 @@ private:
     // Reduce to leader thread
     for (int i = 32; i != 0; i /= 2) {
       Value tmp = genI32TiledOp(rewriter, genBPermute, acc,
-                                add(idxScaledForPermute, i32_val(i * 4)));
-      acc = performOpIfCond(acc, tmp, icmp_ult(i32_val(i), cntRes));
+                                b.add(idxScaledForPermute, b.i32_val(i * 4)));
+      acc = performOpIfCond(acc, tmp, b.icmp_ult(b.i32_val(i), cntRes));
     }
 
     rewriter.create<LLVM::BrOp>(loc, acc, afterRedBlock);
@@ -1420,12 +1442,12 @@ private:
         afterRedBlock->getParent(), std::next(Region::iterator(afterRedBlock)));
     rewriter.setInsertionPointToEnd(afterRedBlock);
     Value leaderCond = leaderRes;
-    Value defaultRes = undef(operandElemType);
+    Value defaultRes = b.undef(operandElemType);
     rewriter.create<LLVM::CondBrOp>(loc, leaderCond, leaderBlock, endBlock,
                                     defaultRes);
     rewriter.setInsertionPointToEnd(leaderBlock);
     // Utilize global atomic only by leader threads
-    rmwPtr = inttoptr(origPtrType, rmwPtr);
+    rmwPtr = b.inttoptr(origPtrType, rmwPtr);
     Value atom = rewriter
                      .create<LLVM::AtomicRMWOp>(loc, opKind, rmwPtr,
                                                 afterRedBlock->getArgument(0),
