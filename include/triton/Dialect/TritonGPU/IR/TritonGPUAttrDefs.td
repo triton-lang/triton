@@ -168,9 +168,15 @@ def SharedEncodingTrait : AttrInterface<"SharedEncodingTrait"> {
     InterfaceMethod<"",
                     "ArrayRef<unsigned>",
                     "getOrder">,
-    // InterfaceMethod<"",
-    //                 "CTALayoutAttr",
-    //                 "getCTALayout">,
+    InterfaceMethod<"Get the shape of the CTAs per CGA.",
+                    "SmallVector<unsigned>",
+                    "getCTAsPerCGA">,
+    InterfaceMethod<"Each CTA processes 1/CTASplitNum of the tensor.",
+                    "SmallVector<unsigned>",
+                    "getCTASplitNum">,
+    InterfaceMethod<"Get the order of the CTAs per CGA. The fastest-changing axis first",
+                    "SmallVector<unsigned>",
+                    "getCTAOrder">,
     InterfaceMethod<"",
                     "bool",
                     "getHasLeadingOffset">
@@ -188,8 +194,11 @@ class SharedEncoding<list<Trait> traits = [],
      unsigned getVec() const;
      unsigned getPerPhase() const;
      unsigned getMaxPhase() const;
+     // TODO: make ArrayRef vs SmallVector consistent
      ArrayRef<unsigned> getOrder() const;
-     // CTALayoutAttr getCTALayout();
+     SmallVector<unsigned> getCTAsPerCGA() const;
+     SmallVector<unsigned> getCTASplitNum() const;
+     SmallVector<unsigned> getCTAOrder() const;
      bool getHasLeadingOffset() const;
   }];
 }

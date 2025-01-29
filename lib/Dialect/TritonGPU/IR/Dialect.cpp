@@ -11,6 +11,7 @@
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+#include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -20,6 +21,7 @@
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/ErrorHandling.h"
 
 // Include TableGen'erated code
 #include "triton/Dialect/TritonGPU/IR/Dialect.cpp.inc"
@@ -307,8 +309,10 @@ CTALayoutAttr getCTALayout(Attribute layout) {
     return CTALayoutAttr::get(
         layout.getContext(), getCTAsPerCGA(distributedLayout),
         getCTASplitNum(distributedLayout), getCTAOrder(distributedLayout));
-  } else if (auto sharedLayout = mlir::dyn_cast<SharedEncodingAttr>(layout))
-    return sharedLayout.getCTALayout();
+  } else if (auto sharedLayout = mlir::dyn_cast<SharedEncodingTrait>(layout))
+    return CTALayoutAttr::get(layout.getContext(), getCTAsPerCGA(sharedLayout),
+                              getCTASplitNum(sharedLayout),
+                              getCTAOrder(sharedLayout));
   else
     llvm::report_fatal_error("Unimplemented usage of getCTALayout");
   return {};
@@ -318,8 +322,8 @@ SmallVector<unsigned> getCTAsPerCGA(Attribute layout) {
   ArrayRef<unsigned> ref;
   if (auto distributedLayout = mlir::dyn_cast<DistributedEncodingTrait>(layout))
     return distributedLayout.getCTAsPerCGA();
-  else if (auto sharedLayout = mlir::dyn_cast<SharedEncodingAttr>(layout))
-    ref = sharedLayout.getCTALayout().getCTAsPerCGA();
+  else if (auto sharedLayout = mlir::dyn_cast<SharedEncodingTrait>(layout))
+    ref = sharedLayout.getCTAsPerCGA();
   else
     llvm::report_fatal_error("Unimplemented usage of getCTAsPerCGA");
   return SmallVector<unsigned>(ref.begin(), ref.end());
@@ -330,9 +334,8 @@ SmallVector<unsigned> getCTASplitNum(Attribute layout) {
   if (auto distributedLayout =
           mlir::dyn_cast<DistributedEncodingTrait>(layout)) {
     return distributedLayout.getCTASplitNum();
-  } else if (auto sharedLayout = mlir::dyn_cast<SharedEncodingAttr>(layout)) {
-    res.assign(sharedLayout.getCTALayout().getCTASplitNum().begin(),
-               sharedLayout.getCTALayout().getCTASplitNum().end());
+  } else if (auto sharedLayout = mlir::dyn_cast<SharedEncodingTrait>(layout)) {
+    return sharedLayout.getCTASplitNum();
   } else if (auto tmemLayout =
                  mlir::dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
                      layout)) {
@@ -351,16 +354,15 @@ SmallVector<unsigned> getCTASplitNum(Attribute layout) {
 }
 
 SmallVector<unsigned> getCTAOrder(Attribute layout) {
-  SmallVector<unsigned> res;
   if (auto distributedLayout =
           mlir::dyn_cast<DistributedEncodingTrait>(layout)) {
-    res = distributedLayout.getCTAOrder();
-  } else if (auto sharedLayout = mlir::dyn_cast<SharedEncodingAttr>(layout)) {
-    res = SmallVector<unsigned>(sharedLayout.getCTALayout().getCTAOrder());
+    return distributedLayout.getCTAOrder();
+  } else if (auto sharedLayout = mlir::dyn_cast<SharedEncodingTrait>(layout)) {
+    return sharedLayout.getCTAOrder();
   } else {
     llvm::report_fatal_error("Unimplemented usage of getCTAOrder");
   }
-  return res;
+  llvm_unreachable("Unhandled case");
 }
 
 SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
@@ -891,6 +893,18 @@ unsigned SharedEncodingAttr::getVec() const { return getVec__(); }
 unsigned SharedEncodingAttr::getPerPhase() const { return getPerPhase__(); }
 unsigned SharedEncodingAttr::getMaxPhase() const { return getMaxPhase__(); }
 ArrayRef<unsigned> SharedEncodingAttr::getOrder() const { return getOrder__(); }
+
+SmallVector<unsigned> SharedEncodingAttr::getCTAsPerCGA() const {
+  return SmallVector<unsigned>(getCTALayout().getCTAsPerCGA());
+}
+
+SmallVector<unsigned> SharedEncodingAttr::getCTAOrder() const {
+  return SmallVector<unsigned>(getCTALayout().getCTAOrder());
+}
+
+SmallVector<unsigned> SharedEncodingAttr::getCTASplitNum() const {
+  return SmallVector<unsigned>(getCTALayout().getCTASplitNum());
+}
 
 bool SharedEncodingAttr::getHasLeadingOffset() const {
   return getHasLeadingOffset__();
