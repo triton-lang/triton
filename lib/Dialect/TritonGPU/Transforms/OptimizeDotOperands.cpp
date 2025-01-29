@@ -10,6 +10,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "llvm/Support/ErrorHandling.h"
 #include <memory>
 
 namespace mlir {
@@ -331,7 +332,6 @@ public:
       return failure();
 
     MemDescType allocType = allocOp.getType();
-    auto allocEncoding = cast<SharedEncodingAttr>(allocType.getEncoding());
     RankedTensorType srcTy = trans.getSrc().getType();
 
     // MMAv3 with transpose only supports f16 and bf16.  Fall back to MMAv3
@@ -352,9 +352,15 @@ public:
     // TODO(Qingyi): need to check whether the CTALayout of innerCvtEnc should
     // be used here. For tests where numCTAs = 1, this is not a problem since
     // all CTALayouts are the same.
-    auto newInnerEnc = SharedEncodingAttr::get(
-        getContext(), srcTy.getShape(), newInnerCvtOrder,
-        allocEncoding.getCTALayout(), srcTy.getElementType());
+    SharedEncodingTrait newInnerEnc;
+    if (auto allocEncoding =
+            dyn_cast<SharedEncodingAttr>(allocType.getEncoding())) {
+      newInnerEnc = SharedEncodingAttr::get(
+          getContext(), srcTy.getShape(), newInnerCvtOrder,
+          allocEncoding.getCTALayout(), srcTy.getElementType());
+    } else {
+      llvm_unreachable("Unsupported shared encoding");
+    }
 
     MemDescType innerTy =
         MemDescType::get(srcTy.getShape(), srcTy.getElementType(), newInnerEnc,

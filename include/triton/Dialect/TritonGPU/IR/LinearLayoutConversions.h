@@ -9,7 +9,7 @@
 #include "triton/Tools/LinearLayout.h"
 
 namespace mlir::triton::gpu {
-class SharedEncodingAttr;
+class SharedEncodingTrait;
 
 // - BlockedEncodingAttrs have the following input dimensions.
 //
@@ -48,7 +48,7 @@ LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
 // If `disableSwizzle` is set, then the resulting layout does not include
 // swizzling.
 LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
-                                               SharedEncodingAttr shared,
+                                               SharedEncodingTrait shared,
                                                int32_t elemBitWidth,
                                                bool disableSwizzle = false);
 

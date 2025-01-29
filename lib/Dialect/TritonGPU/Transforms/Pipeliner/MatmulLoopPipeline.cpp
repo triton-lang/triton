@@ -37,7 +37,7 @@ namespace {
 
 struct LoadInfo {
   // Layout of the data in shared memory.
-  ttg::SharedEncodingAttr sharedEncoding = nullptr;
+  ttg::SharedEncodingTrait sharedEncoding = nullptr;
   // Blocked encoding is used for loads not used by the dot.
   ttg::BlockedEncodingAttr blockedEncoding = nullptr;
   bool isMMAv3Shared = false;
@@ -578,7 +578,7 @@ assignMemoryLayouts(scf::ForOp &forOp,
 
 // Create an allocation that can hold distance number of loadOp shapes.
 static Value createAlloc(scf::ForOp &forOp, Operation *loadOp,
-                         ttg::SharedEncodingAttr sharedEnc, unsigned distance) {
+                         ttg::SharedEncodingTrait sharedEnc, unsigned distance) {
   OpBuilder builder(forOp);
   Attribute sharedMemorySpace =
       ttg::SharedMemorySpaceAttr::get(forOp.getContext());

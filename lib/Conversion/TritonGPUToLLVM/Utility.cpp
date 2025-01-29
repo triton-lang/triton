@@ -208,7 +208,7 @@ Value getSmemVecAddr(const LinearLayout &regLayout,
   auto allocShape = sharedTy.getAllocShape();
   auto rank = shape.size();
   auto sharedEnc =
-      dyn_cast<triton::gpu::SharedEncodingAttr>(sharedTy.getEncoding());
+      dyn_cast<triton::gpu::SharedEncodingTrait>(sharedTy.getEncoding());
 
   auto smemBase = smemObj.getBase();
   auto smemOffsets = smemObj.getOffsets();

@@ -194,7 +194,7 @@ bool isPureUnaryInlineAsm(Operation *op);
 // read the compute capability from the module attributes
 int getNVIDIAComputeCapability(Operation *module);
 
-std::optional<mlir::triton::gpu::SharedEncodingAttr>
+std::optional<mlir::triton::gpu::SharedEncodingTrait>
 getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible);
 
 enum class MMALoadType {

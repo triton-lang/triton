@@ -14,7 +14,7 @@ using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getShapePerCTATile;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
-using ::mlir::triton::gpu::SharedEncodingAttr;
+using ::mlir::triton::gpu::SharedEncodingTrait;
 
 mlir::triton::NVIDIA::DotOpMmaV5TmemLoader::DotOpMmaV5TmemLoader(
     Value tensor, Value base, SmallVector<unsigned int> instrShape,
@@ -344,12 +344,12 @@ void convertDot(const LLVMTypeConverter *typeConverter,
   bool aInTmem = true;
   bool transA = false;
   if (auto aSharedLayout =
-          dyn_cast<SharedEncodingAttr>(aTensorTy.getEncoding())) {
+          dyn_cast<SharedEncodingTrait>(aTensorTy.getEncoding())) {
     auto aOrd = aSharedLayout.getOrder();
     transA = aOrd[0] == 0;
     aInTmem = false;
   }
-  auto bSharedLayout = cast<SharedEncodingAttr>(bTensorTy.getEncoding());
+  auto bSharedLayout = cast<SharedEncodingTrait>(bTensorTy.getEncoding());
   auto bOrd = bSharedLayout.getOrder();
   bool transB = bOrd[0] == 1;
   Value baseA =
@@ -491,12 +491,12 @@ struct TCGen5MMAScaledOpConversion
     bool aInTmem = true;
     bool transA = false;
     if (auto aSharedLayout =
-            dyn_cast<SharedEncodingAttr>(aTensorTy.getEncoding())) {
+            dyn_cast<SharedEncodingTrait>(aTensorTy.getEncoding())) {
       auto aOrd = aSharedLayout.getOrder();
       transA = aOrd[0] == 0;
       aInTmem = false;
     }
-    auto bSharedLayout = cast<SharedEncodingAttr>(bTensorTy.getEncoding());
+    auto bSharedLayout = cast<SharedEncodingTrait>(bTensorTy.getEncoding());
     auto bOrd = bSharedLayout.getOrder();
     bool transB = bOrd[0] == 1;
     Value baseA =

@@ -985,7 +985,7 @@ int getNVIDIAComputeCapability(Operation *module) {
 // the same dot operand encoding, return the shared encoding that needs to be
 // used to be compatible with users' layouts. If there are incompatible shared
 // encodings, set incompatible to true.
-std::optional<ttg::SharedEncodingAttr>
+std::optional<ttg::SharedEncodingTrait>
 getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
   ttg::SharedEncodingAttr attr;
   incompatible = false;
