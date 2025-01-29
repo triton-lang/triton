@@ -257,8 +257,6 @@ class HIPBackend(BaseBackend):
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
 
-        proton.passes.ttgpuir.add_allocate_device_buffer(pm)
-
         pm.run(mod)
         return mod
 
