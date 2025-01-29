@@ -5,7 +5,7 @@ import math
 import triton.profiler as proton
 import argparse
 
-mode = "torch"
+engine = "torch"
 
 
 class DynamicNet(torch.nn.Module):
@@ -53,7 +53,7 @@ def run():
 
         # Construct our model by instantiating the class defined above
         model = DynamicNet().to("cuda")
-        if mode == "torchinductor":
+        if engine == "torchinductor":
             model = torch.compile(model)
 
         # Construct our loss function and an Optimizer. Training this strange model with
@@ -83,16 +83,17 @@ def run():
 
 argparser = argparse.ArgumentParser()
 argparser.add_argument("--profile", action="store_true")
-argparser.add_argument("--mode", default="torch", choices=["torch", "torchinductor"])
+argparser.add_argument("--engine", default="torch", choices=["torch", "torchinductor"])
 argparser.add_argument("--context", default="shadow", choices=["shadow", "python"])
-argparser.add_argument("--backend", default=None, choices=["cupti", "roctracer", "cupti_pcsampling"])
+argparser.add_argument("--backend", default=None, choices=["cupti", "roctracer"])
+argparser.add_argument("--mode", default=None)
 
 args = argparser.parse_args()
 
-mode = args.mode
+engine = args.engine
 
 if args.profile:
-    func = proton.profile(run, name="dynamic_net", context=args.context, backend=args.backend)
+    func = proton.profile(run, name="dynamic_net", context=args.context, backend=args.backend, mode=args.mode)
 else:
     func = run
 
