@@ -218,7 +218,7 @@ struct CanonicalizeConvertFromConvert
       return failure();
 
     // for hopper MMAv3
-    if (mlir::isa<SharedEncodingAttr>(dstType.getEncoding()) &&
+    if (mlir::isa<SharedEncodingTrait>(dstType.getEncoding()) &&
         mlir::isa<NvidiaMmaEncodingAttr>(srcType.getEncoding()) &&
         llvm::any_of(op.getResult().getUsers(), [](Operation *dot) {
           return dot->hasTrait<OpTrait::DotLike>();
@@ -606,11 +606,11 @@ LogicalResult MemDescSubviewOp::verify() {
     return emitError("src and result must both have or not have an encoding");
   }
 
-  if (!isa<SharedEncodingAttr>(srcEnc) &&
+  if (!isa<SharedEncodingTrait>(srcEnc) &&
       !isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(srcEnc)) {
     return emitError("src encoding must be SharedEncodingAttr");
   }
-  if (!isa<SharedEncodingAttr>(dstEnc) &&
+  if (!isa<SharedEncodingTrait>(dstEnc) &&
       !isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(srcEnc)) {
     return emitError("result encoding must be SharedEncodingAttr");
   }

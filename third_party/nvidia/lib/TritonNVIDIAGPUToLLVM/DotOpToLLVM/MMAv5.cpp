@@ -435,10 +435,10 @@ struct TCGen5MMAOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto AEnc = op.getA().getType().getEncoding();
     auto BEnc = op.getB().getType().getEncoding();
-    assert(mlir::isa<SharedEncodingAttr>(AEnc) ||
+    assert(mlir::isa<SharedEncodingTrait>(AEnc) ||
            mlir::isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(AEnc) &&
                "Operand A should use Shared or Tensor memory layout.");
-    assert(mlir::isa<SharedEncodingAttr>(BEnc) &&
+    assert(mlir::isa<SharedEncodingTrait>(BEnc) &&
            "Operand B should use Shared layout.");
     assert(op.getBarrier() &&
            "tensorcore op should have a barrier at this point.");

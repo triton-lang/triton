@@ -385,7 +385,7 @@ struct MMAV3UseRegOperand
       return cast<TensorOrMemDesc>(v.getType()).getEncoding();
     };
 
-    if (!isa<SharedEncodingAttr>(getEncoding(dotOp.getOperand(0))))
+    if (!isa<SharedEncodingTrait>(getEncoding(dotOp.getOperand(0))))
       return failure();
     auto srcEnc = dyn_cast<NvidiaMmaEncodingAttr>(getEncoding(alloc.getSrc()));
     auto dstEnc =
@@ -444,7 +444,7 @@ struct MMAV3HoistLayoutConversion
       return cast<TensorOrMemDesc>(v.getType()).getEncoding();
     };
 
-    if (!isa<SharedEncodingAttr>(getEncoding(dotOp.getOperand(0))))
+    if (!isa<SharedEncodingTrait>(getEncoding(dotOp.getOperand(0))))
       return rewriter.notifyMatchFailure(
           dotOp, "requires Shared encoding for operand A");
 

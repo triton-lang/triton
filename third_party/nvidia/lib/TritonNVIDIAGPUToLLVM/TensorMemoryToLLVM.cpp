@@ -481,7 +481,7 @@ struct TensorMemoryCopyOpConversion
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto srcTy = cast<MemDescType>(op.getSrc().getType());
     assert(isa<triton::gpu::SharedMemorySpaceAttr>(srcTy.getMemorySpace()));
-    assert(isa<triton::gpu::SharedEncodingAttr>(srcTy.getEncoding()));
+    assert(isa<triton::gpu::SharedEncodingTrait>(srcTy.getEncoding()));
 
     auto sharedEnc = cast<triton::gpu::SharedEncodingAttr>(srcTy.getEncoding());
     assert(
