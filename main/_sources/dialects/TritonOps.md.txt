@@ -577,7 +577,7 @@ operation ::= `tt.dot_scaled` $lhs (`scale` $lhs_scale^)? `,` $rhs (`scale` $rhs
               `:` type($lhs) (`,` type($lhs_scale)^)? `*` type($rhs) (`,` type($rhs_scale)^)? `->` type($d)
 ```
 
-$d = matrix_multiply(scale($lhs, $lhs_scale), scale($rhs, $rhs_scale)) + $c.
+$d = matrix_multiply(scale($lhs, $lhs_scale), scale(rlhs, $rhs_scale)) + $c.
 Where scale(x, s) is a function that applies the scale per block following microscaling spec.
 
 Traits: `AlwaysSpeculatableImplTrait`, `AttrSizedOperandSegments`, `DotLike`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
@@ -616,8 +616,8 @@ Effects: `MemoryEffects::Effect{}`
 | `lhs` | ranked tensor of floating-point or 8-bit signless integer values
 | `rhs` | ranked tensor of floating-point or 8-bit signless integer values
 | `c` | ranked tensor of floating-point values
-| `lhs_scale` | ranked tensor of 8-bit signless integer values
-| `rhs_scale` | ranked tensor of 8-bit signless integer values
+| `lhs_scale` | ranked tensor of floating-point or 8-bit signless integer values
+| `rhs_scale` | ranked tensor of floating-point or 8-bit signless integer values
 
 #### Results:
 
@@ -704,6 +704,48 @@ Effects: `MemoryEffects::Effect{}`
 | :----: | ----------- |
 | `result` | ranked tensor of floating-point or integer or ptr values
 
+### `tt.experimental_descriptor_gather` (triton::ExperimentalDescriptorGatherOp)
+
+_Gather multiple rows from a descriptor into a single tensor_
+
+
+Syntax:
+
+```
+operation ::= `tt.experimental_descriptor_gather` $desc `[` $x_offsets `,` $y_offset `]`
+              attr-dict `:` functional-type(operands, results)
+```
+
+The `tt.experimental_desciptor_gather` op will be lowered to NVIDIA TMA
+load operations on targets that support it.
+
+`desc_ptr` is a pointer to the TMA descriptor allocated in global memory.
+The descriptor block must have 1 row and the indices must be a 1D tensor.
+Accordingly, the result is a 2D tensor multiple rows.
+
+This is an escape hatch and is only there for testing/experimenting. This
+op will be removed in the future.
+
+Traits: `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMemory}`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `desc` | Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system
+| `x_offsets` | ranked tensor of 32-bit signless integer values
+| `y_offset` | 32-bit signless integer
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | ranked tensor of floating-point or integer or ptr values
+
 ### `tt.experimental_descriptor_load` (triton::ExperimentalDescriptorLoadOp)
 
 _Load from descriptor_
@@ -763,6 +805,31 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMem
 | Result | Description |
 | :----: | ----------- |
 | `result` | ranked tensor of floating-point or integer or ptr values
+
+### `tt.experimental_descriptor_scatter` (triton::ExperimentalDescriptorScatterOp)
+
+Syntax:
+
+```
+operation ::= `tt.experimental_descriptor_scatter` $desc `[` $x_offsets `,` $y_offset `]` `,` $src
+              attr-dict `:` type(operands)
+```
+
+
+Traits: `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMemory, MemoryEffects::Write on ::mlir::triton::GlobalMemory}`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `desc` | Tensor descriptor type (`::mlir::triton::TensorDescType`) in Triton IR type system
+| `x_offsets` | ranked tensor of 32-bit signless integer values
+| `y_offset` | 32-bit signless integer
+| `src` | ranked tensor of floating-point or integer or ptr values
 
 ### `tt.experimental_descriptor_store` (triton::ExperimentalDescriptorStoreOp)
 

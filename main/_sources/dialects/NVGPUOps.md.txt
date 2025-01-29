@@ -161,6 +161,29 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::Def
 | `addr` | LLVM pointer in address space 3
 | `vals` | variadic of 32-bit signless integer
 
+### `nvgpu.tensor_memory_base` (triton::nvgpu::TensorMemoryBaseAddress)
+
+Syntax:
+
+```
+operation ::= `nvgpu.tensor_memory_base` attr-dict
+```
+
+Op to represent base address of tensor memory in a kernel.
+This is used to simplify lowering from TritonGPU to LLVM.
+
+Traits: `AlwaysSpeculatableImplTrait`
+
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | LLVM pointer in address space 6
+
 ### `nvgpu.wgmma_commit_group` (triton::nvgpu::WGMMACommitGroupOp)
 
 Syntax:
@@ -274,4 +297,25 @@ Interfaces: `InferTypeOpInterface`
 | Result | Description |
 | :----: | ----------- |
 | `output` | LLVM structure type
+
+### `nvgpu.warp_id` (triton::nvgpu::WarpIdOp)
+
+Syntax:
+
+```
+operation ::= `nvgpu.warp_id` attr-dict
+```
+
+
+Traits: `AlwaysSpeculatableImplTrait`
+
+Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | 32-bit signless integer
 
