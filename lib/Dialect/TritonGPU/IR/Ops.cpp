@@ -654,7 +654,7 @@ int32_t LocalAllocOp::getAlignmentOrDefault() {
   }
 
   auto ty = getType();
-  auto enc = dyn_cast<SharedEncodingAttr>(ty.getEncoding());
+  auto enc = dyn_cast<SharedEncodingTrait>(ty.getEncoding());
   return enc ? enc.getAlignment() : 16;
 }
 
