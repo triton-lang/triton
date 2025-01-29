@@ -14,20 +14,20 @@ namespace {
 struct BufferAllocOpConversion
     : public ConvertOpToLLVMPattern<mlir::triton::proton::BufferAllocOp> {
   explicit BufferAllocOpConversion(LLVMTypeConverter &typeConverter,
-                                        const TargetInfoBase &targetInfo,
-                                        PatternBenefit benefit)
+                                   const TargetInfoBase &targetInfo,
+                                   PatternBenefit benefit)
       : mlir::ConvertOpToLLVMPattern<mlir::triton::proton::BufferAllocOp>(
             typeConverter, benefit),
         targetInfo(targetInfo) {}
 
   LogicalResult
-  matchAndRewrite(mlir::triton::proton::BufferAllocOp op,
-                  OpAdaptor adaptor,
+  matchAndRewrite(mlir::triton::proton::BufferAllocOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
 
     auto moduleOp =
         rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
     Location loc = UnknownLoc::get(rewriter.getContext());
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto ctx = moduleOp.getContext();
     size_t bufferSize = op.getBufferSize();
     auto globalType = LLVM::LLVMArrayType::get(i8_ty, bufferSize);
@@ -50,13 +50,13 @@ struct BufferAllocOpConversion
     }
     global.setAddrSpace(1);
     global.setExternallyInitialized(true);
-    Value zero = i32_val(0);
+    Value zero = b.i32_val(0);
     Type globalPtrType = LLVM::LLVMPointerType::get(ctx, global.getAddrSpace());
     Value globalPtr = rewriter.create<LLVM::AddressOfOp>(
         UnknownLoc::get(rewriter.getContext()), globalPtrType,
         global.getSymName());
     Value bufferStart =
-        gep(ptr_ty(ctx), i8_ty, globalPtr, SmallVector<Value>({zero}));
+        b.gep(ptr_ty(ctx), i8_ty, globalPtr, SmallVector<Value>({zero}));
     rewriter.replaceOp(op, bufferStart);
     return success();
   }
@@ -70,6 +70,5 @@ protected:
 void mlir::triton::proton::populateBufferAllocOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     const TargetInfoBase &targetInfo, PatternBenefit benefit) {
-  patterns.add<BufferAllocOpConversion>(typeConverter, targetInfo,
-                                             benefit);
+  patterns.add<BufferAllocOpConversion>(typeConverter, targetInfo, benefit);
 }
