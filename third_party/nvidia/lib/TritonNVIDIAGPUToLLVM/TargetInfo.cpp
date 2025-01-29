@@ -134,12 +134,11 @@ Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
 
 static Value mapa(RewriterBase &rewriter, Location loc, Value ptr, Value ctaid,
                   Value pred) {
-  PTXBuilder builder;
-  (*builder.create<>("mapa.shared::cluster.u32"))(
-      builder.newOperand("=r"), //
-      builder.newAddrOperand(ptr, "r"), builder.newAddrOperand(ctaid, "r"))
-      .predicate(pred, "b");
-  return builder.launch(rewriter, loc, i32_ty, /*hasSideEffects=*/false);
+  Value args[] = {ptr, ctaid};
+  StringRef name = "llvm.nvvm.mapa.shared.cluster";
+  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, name, ptr.getType(),
+                                         args)
+      .getResult(0);
 }
 
 static std::string getConstraintForBitwidth(unsigned bitwidth) {
