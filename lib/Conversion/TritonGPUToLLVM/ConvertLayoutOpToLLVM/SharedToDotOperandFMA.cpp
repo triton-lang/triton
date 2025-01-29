@@ -32,7 +32,9 @@ Value getStructFromValueTable(ArrayRef<Value> vals,
   return packLLElements(loc, typeConverter, elems, rewriter, structTy);
 }
 
-bool isSwizzled(SharedEncodingTrait layout) { return layout.getMaxPhase() != 1; }
+bool isSwizzled(SharedEncodingTrait layout) {
+  return layout.getMaxPhase() != 1;
+}
 
 SmallVector<Value> swizzleIndices(ConversionPatternRewriter &rewriter,
                                   Location loc, SmallVector<Value> rawIndices,
