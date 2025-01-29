@@ -285,59 +285,25 @@ jobs:
 
       - &run-lit-tests-step
         name: Run lit tests
-        run: |
-          cd python
-          LIT_TEST_DIR="build/$(ls build | grep -i cmake)/test"
-          if [ ! -d "${LIT_TEST_DIR}" ]; then
-            echo "Could not find '${LIT_TEST_DIR}'" ; exit -1
-          fi
-          lit -v "${LIT_TEST_DIR}"
+        run: make test-lit
 
       - name: Run python tests on CUDA
-        run: |
-          INSTRUMENTATION_LIB_DIR="${GITHUB_WORKSPACE}/python/build/$(ls python/build | grep -i lib)/triton/instrumentation"
-          if [ ! -d "${INSTRUMENTATION_LIB_DIR}" ]; then
-            echo "Could not find '${INSTRUMENTATION_LIB_DIR}'" ; exit -1
-          fi
-          cd python/test/unit
-          python3 -m pytest -s -n 8 --ignore=cuda/test_flashattention.py --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=test_debug.py
-          python3 -m pytest -s -n 8 language/test_subprocess.py
-          python3 -m pytest -s -n 8 test_debug.py --forked
-          # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s language/test_line_info.py
-          # Run cuda/test_flashattention.py separately to avoid out of gpu memory
-          python3 -m pytest -s cuda/test_flashattention.py
-          TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${INSTRUMENTATION_LIB_DIR}/libGPUInstrumentationTestLib.so \
-          python3 -m pytest --capture=tee-sys -rfs -vvv instrumentation/test_gpuhello.py
+        run: make test-unit PYTHON=python3
+
       - name: Run interpreter tests
         if: ${{ matrix.runner[0] == 'h100-runner-set' }}
-        env:
-          TRITON_INTERPRET: "1"
-        run: |
-          cd python/test/unit
-          python3 -m pytest -s -n 16 -m interpreter language/test_core.py language/test_standard.py \
-           language/test_random.py language/test_block_pointer.py language/test_subprocess.py language/test_line_info.py \
-           runtime/test_autotuner.py::test_kwargs[False]\
-           ../../tutorials/06-fused-attention.py::test_op --device cpu
+        run: make test-intrepet PYTHON=python3
 
       - name: Run regression tests
-        run: |
-          cd python/test/regression
-          python3 -m pytest -s -n 8 .
+        run: make test-regression PYTHON=python3
 
       - &run-cpp-unittests-step
         name: Run C++ unittests
-        run: |
-          cd python
-          cd "build/$(ls build | grep -i cmake)"
-          ctest -j32
+        run: make test-cpp
 
       - &run-proton-tests-step
         name: Run Proton tests
-        run: |
-          cd third_party/proton/test
-          python3 -m pytest -s .
-          cd ..
+        run: make test-proton PYTHON=python3
 
       - *inspect-cache-directories-step
 
