@@ -316,7 +316,7 @@ def download_and_copy(name, src_func, dst_path, variable, version, url_func):
     system = platform.system()
     arch = platform.machine()
     # NOTE: This might be wrong for jetson if both grace chips and jetson chips return aarch64
-    arch = {"aarch64": "sbsa"}.get(arch, arch)
+    arch = {"arm64": "sbsa", "aarch64": "sbsa"}.get(arch, arch)
     supported = {"Linux": "linux", "Darwin": "linux"}
     url = url_func(supported[system], arch, version)
     src_path = src_func(supported[system], arch, version)
