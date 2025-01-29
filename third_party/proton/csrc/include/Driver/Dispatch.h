@@ -44,13 +44,13 @@ namespace proton {
 
 struct ExternLibBase {
   using RetType = int; // Generic type, can be overridden in derived structs
-  static constexpr const char *name = "";       // Placeholder
-  static constexpr const char *defaultDir = ""; // Placeholder
-  static constexpr RetType success = 0;         // Placeholder
+  static constexpr const char *name = ""; // Placeholder
+  static constexpr RetType success = 0;   // Placeholder
   ExternLibBase() = delete;
   ExternLibBase(const ExternLibBase &) = delete;
   ExternLibBase &operator=(const ExternLibBase &) = delete;
   static inline void *lib{nullptr};
+  static inline std::string defaultDir{""};
 };
 
 template <typename ExternLib> class Dispatch {

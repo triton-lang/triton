@@ -1,6 +1,7 @@
 import functools
 import triton
 import os
+import pathlib
 
 from triton._C.libproton import proton as libproton
 from .hook import register_triton_hook, unregister_triton_hook
@@ -18,6 +19,14 @@ def _select_backend() -> str:
         return "roctracer"
     else:
         raise ValueError("No backend is available for the current target.")
+
+
+def _get_backend_default_path(backend: str) -> str:
+    if backend == "cupti":
+        # Get the default path for the cupti backend,
+        # which is the most compatible with the current CUPTI header file triton is compiled with
+        return pathlib.Path(__file__).parent / "backends" / "nvidia" / "lib" / "cupti" / "libcupti.so"
+    return ""
 
 
 def _check_env(backend: str) -> None:
@@ -79,10 +88,12 @@ def start(
 
     _check_env(backend)
 
+    backend_path = _get_backend_default_path(backend)
+
     set_profiling_on()
     if hook and hook == "triton":
         register_triton_hook()
-    return libproton.start(name, context, data, backend)
+    return libproton.start(name, context, data, backend, backend_path)
 
 
 def activate(session: Optional[int] = None) -> None:
