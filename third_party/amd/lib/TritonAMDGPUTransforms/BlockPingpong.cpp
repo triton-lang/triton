@@ -152,8 +152,8 @@ LogicalResult Pingponger::genLocalSlice(OpBuilder &builder, Value v,
   SmallVector<Operation *> slices;
   SmallVector<Operation *> subviews;
   // TODO: support transformed input to dot
-  ttg::LocalLoadOp localLoad;
-  if !(localLoad = v.getDefiningOp<ttg::LocalLoadOp>())
+  auto localLoad = v.getDefiningOp<ttg::LocalLoadOp>();
+  if (!localLoad)
     return failure();
   auto memDesc = localLoad.getSrc();
   auto type = cast<ttg::MemDescType>(memDesc.getType());
