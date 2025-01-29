@@ -11,8 +11,8 @@
 using namespace mlir;
 
 LogicalResult verifyEquivalentType(Type typeA, Type typeB) {
-  auto tensorTypeA = typeA.dyn_cast<RankedTensorType>();
-  auto tensorTypeB = typeB.dyn_cast<RankedTensorType>();
+  auto tensorTypeA = dyn_cast<RankedTensorType>(typeA);
+  auto tensorTypeB = dyn_cast<RankedTensorType>(typeB);
   if (!(bool(tensorTypeA) && bool(tensorTypeB)))
     return typeA == typeB ? success() : failure();
   auto encodingA = tensorTypeA.getEncoding();
@@ -26,9 +26,8 @@ LogicalResult verifyEquivalentType(Type typeA, Type typeB) {
   if (encodingA == encodingB)
     return success();
 
-  return cast<DialectInferLayoutInterface>(&encodingA.getDialect())
-      ->verifyLayoutsAreEqual(shapeA, encodingA, encodingB, {})
-      .succeeded();
+  return cast<triton::DialectInferLayoutInterface>(&encodingA.getDialect())
+      ->verifyLayoutsAreEqual(shapeA, encodingA, encodingB, {});
 }
 
 static LogicalResult verifySameEncoding(Type typeA, Type typeB,

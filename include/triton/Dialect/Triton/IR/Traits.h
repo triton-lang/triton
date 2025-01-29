@@ -161,19 +161,6 @@ public:
   }
 };
 
-// A trait equivalent to InferTypeOpAdaptor, but that checks for structural
-// equivalence of the layouts of the result rather than just layout equality.
-template <typename ConcreteOp>
-struct InferTypeOpWithLayoutEquivalence
-    : public mlir::InferTypeOpAdaptorWithIsCompatible<ConcreteOp> {
-  static bool isCompatibleReturnTypes(mlir::TypeRange lhs,
-                                      mlir::TypeRange rhs) {
-    if (lhs.size() != rhs.size())
-      return false;
-    return llvm::all_of(llvm::zip(lhs, rhs), impl::verifyEquivalentType);
-  }
-};
-
 } // namespace OpTrait
 } // namespace mlir
 
