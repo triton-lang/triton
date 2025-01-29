@@ -411,7 +411,7 @@ class CMakeBuild(build_ext):
         if cupti_lib_dir == "":
             cupti_lib_dir = os.path.join(get_base_dir(), "third_party", "nvidia", "backend", "lib", "cupti")
         cmake_args += ["-DCUPTI_LIB_DIR=" + cupti_lib_dir]
-        roctracer_include_dir = get_env_with_keys(["TRITON_ROCTRACER_INCLUDE_PATH"])
+        roctracer_include_dir = get_env_with_keys(["ROCTRACER_INCLUDE_PATH"])
         if roctracer_include_dir == "":
             roctracer_include_dir = os.path.join(get_base_dir(), "third_party", "amd", "backend", "include")
         cmake_args += ["-DROCTRACER_INCLUDE_DIR=" + roctracer_include_dir]
