@@ -439,16 +439,15 @@ struct AsyncCopyGlobalToLocalOpConversion
   matchAndRewrite(triton::gpu::AsyncCopyGlobalToLocalOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
 
-    MLIRContext *ctx = rewriter.getContext();
     auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
 
     auto srcTy = op.getSrc().getType();
     auto srcEncoding = srcTy.getEncoding();
     assert((isa<BlockedEncodingAttr, SliceEncodingAttr>(srcEncoding) &&
             "Unexpected srcEncoding in AsyncCopyGlobalToLocalOpConversion"));
-    auto srcShape = srcTy.getShape();
-    assert(srcShape.size() <= 2 && "Async copy only supports 1d and 2d "
-                                   "tensors: Unexpected rank of %src");
+    assert(srcTy.getShape().size() <= 2 && "Async copy only supports 1d and 2d "
+                                           "tensors: Unexpected rank of %src");
 
     auto dstTy = op.getResult().getType();
     auto resElemTy = getTypeConverter()->convertType(dstTy.getElementType());
@@ -479,7 +478,7 @@ struct AsyncCopyGlobalToLocalOpConversion
         shape, dstTy.getEncoding(), resElemTy.getIntOrFloatBitWidth());
     LinearLayout srcToSharedLayout = srcLayout.invertAndCompose(sharedLayout);
 
-    auto kLane = str_attr("lane");
+    StringAttr kLane = rewriter.getStringAttr("lane");
     for (int inLane : llvm::seq(srcToSharedLayout.getInDimSizeLog2(kLane))) {
       auto basis = srcToSharedLayout.getBasis(kLane, inLane)[0];
       unsigned expected = maxVec * (1 << inLane);
@@ -510,9 +509,9 @@ struct AsyncCopyGlobalToLocalOpConversion
 
     int vecBytes = vecBits / 8;
     assert(llvm::isPowerOf2_32(vecBytes));
-    Value vecBytesVal = i32_val(vecBytes);
+    Value vecBytesVal = b.i32_val(vecBytes);
 
-    Value cacheModifiers = i32_val(
+    Value cacheModifiers = b.i32_val(
         getCtrlBitsForCacheModifierOnTarget(op.getCache(), false, targetInfo));
 
     Value llMask = adaptor.getMask();
@@ -535,7 +534,7 @@ struct AsyncCopyGlobalToLocalOpConversion
 
       if (!mask) {
         rewriter.create<ROCDL::GlobalLoadLDSOp>(
-            loc, srcPtr, shmemAddrs[i], vecBytesVal, /*offset=*/i32_val(0),
+            loc, srcPtr, shmemAddrs[i], vecBytesVal, /*offset=*/b.i32_val(0),
             cacheModifiers);
       } else {
         Block *currentBlock = rewriter.getInsertionBlock();
@@ -546,8 +545,9 @@ struct AsyncCopyGlobalToLocalOpConversion
         rewriter.create<LLVM::CondBrOp>(loc, maskElems[srcIdx], loadBlock,
                                         afterLoad);
         rewriter.setInsertionPointToStart(loadBlock);
-        rewriter.create<ROCDL::GlobalLoadLDSOp>(
-            loc, srcPtr, shmemAddrs[i], vecBytesVal, i32_val(0), i32_val(0));
+        rewriter.create<ROCDL::GlobalLoadLDSOp>(loc, srcPtr, shmemAddrs[i],
+                                                vecBytesVal, b.i32_val(0),
+                                                cacheModifiers);
 
         rewriter.create<LLVM::BrOp>(loc, afterLoad);
         rewriter.setInsertionPointToStart(afterLoad);
@@ -556,7 +556,7 @@ struct AsyncCopyGlobalToLocalOpConversion
               packElementRangeIntoVector(rewriter, this->getTypeConverter(),
                                          loc, vecTy, otherElems, srcIdx);
           llStore(rewriter, loc, shmemAddrs[i], storeVal,
-                  icmp_ne(maskElems[srcIdx], true_val()), 0, op.getCache());
+                  b.icmp_ne(maskElems[srcIdx], b.true_val()), 0, op.getCache());
         }
       }
     }
@@ -1648,8 +1648,9 @@ struct AsyncWaitConversion : public ConvertOpToLLVMPattern<AsyncWaitOp> {
                   ConversionPatternRewriter &rewriter) const override {
 
     auto loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     rewriter.create<ROCDL::WaitcntOp>(loc, op.getNum());
-    rewriter.replaceOp(op, i32_val(0));
+    rewriter.replaceOp(op, b.i32_val(0));
     return success();
   }
 };
@@ -1669,7 +1670,8 @@ struct AsyncCommitGroupConversion
                   ConversionPatternRewriter &rewriter) const override {
     // Drop the result token
     auto loc = op->getLoc();
-    rewriter.replaceOp(op, i32_val(0));
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    rewriter.replaceOp(op, b.i32_val(0));
     return success();
   }
 };
