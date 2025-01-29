@@ -1028,67 +1028,44 @@ public:
   }
 };
 
-class ConvertLoadOp : public PointerCanonicalizationPattern<tt::LoadOp> {
+template <typename SourceOp, int PtrLikeIdx = 0>
+class MaterializeFatPointer : public PointerCanonicalizationPattern<SourceOp> {
 public:
-  using PointerCanonicalizationPattern::PointerCanonicalizationPattern;
+  using PointerCanonicalizationPattern<
+      SourceOp>::PointerCanonicalizationPattern;
 
-  LogicalResult
-  matchAndRewrite_(tt::LoadOp loadOp, OneToNOpAdaptor adaptor,
-                   ConversionPatternRewriter &rewriter) const override {
-    ValueRange fatPtr = adaptor.getPtr();
+  LogicalResult matchAndRewrite_(
+      SourceOp op,
+      typename PointerCanonicalizationPattern<SourceOp>::OneToNOpAdaptor
+          adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    ValueRange fatPtr = adaptor.getOperands()[PtrLikeIdx];
     if (fatPtr.size() != 2)
       return rewriter.notifyMatchFailure(
-          loadOp, "expected LoadOp ptr to have already been remapped");
+          op, "expected op ptr to have already been remapped");
     Value fatPtrBase = fatPtr[0];
     Value fatPtrOffset = fatPtr[1];
-    Location curLoc = loadOp.getLoc();
+    Location curLoc = op.getLoc();
 
     llvm::SmallDenseMap<StringAttr, Attribute> attributes{};
     Value newPtr = fatPtrBase;
-    if (llvm::isa<RankedTensorType>(loadOp.getPtr().getType())) {
+    if (llvm::isa<RankedTensorType>(op->getOperandTypes()[PtrLikeIdx])) {
       const FatPointers::FatPtrAttrs &fatPtrAttrs =
-          fatPtrs.at({fatPtrBase, fatPtrOffset});
+          this->fatPtrs.at({fatPtrBase, fatPtrOffset});
       newPtr = createTensorPointer(rewriter, fatPtrBase, fatPtrOffset, curLoc,
                                    fatPtrAttrs);
     }
-    SmallVector<Value> operands =
-        loadOp.getOperands().take_back(loadOp.getNumOperands() - 1);
-    operands.insert(operands.begin(), newPtr);
-    SmallVector<NamedAttribute> attrs = llvm::to_vector(loadOp->getAttrs());
-    rewriter.replaceOpWithNewOp<tt::LoadOp>(loadOp, operands, attrs);
-    return success();
-  }
-};
-
-class ConvertStoreOp : public PointerCanonicalizationPattern<tt::StoreOp> {
-public:
-  using PointerCanonicalizationPattern::PointerCanonicalizationPattern;
-
-  LogicalResult
-  matchAndRewrite_(tt::StoreOp storeOp, OneToNOpAdaptor adaptor,
-                   ConversionPatternRewriter &rewriter) const override {
-    ValueRange fatPtr = adaptor.getPtr();
-    if (fatPtr.size() != 2)
-      return rewriter.notifyMatchFailure(
-          storeOp, "expected StoreOp ptr to have already been remapped");
-    Value fatPtrBase = fatPtr[0];
-    Value fatPtrOffset = fatPtr[1];
-    Location curLoc = storeOp.getLoc();
-
-    llvm::SmallDenseMap<StringAttr, Attribute> attributes{};
-    Value newPtr = fatPtrBase;
-    if (llvm::isa<RankedTensorType>(storeOp.getPtr().getType())) {
-      const FatPointers::FatPtrAttrs &fatPtrAttrs =
-          fatPtrs.at({fatPtrBase, fatPtrOffset});
-      newPtr = createTensorPointer(rewriter, fatPtrBase, fatPtrOffset, curLoc,
-                                   fatPtrAttrs);
-    }
-    SmallVector<Value> operands =
-        storeOp.getOperands().take_back(storeOp.getNumOperands() - 1);
-    operands.insert(operands.begin(), newPtr);
-    SmallVector<NamedAttribute> attrs = llvm::to_vector(storeOp->getAttrs());
-    rewriter.replaceOpWithNewOp<tt::StoreOp>(storeOp, TypeRange{},
-                                             ValueRange{operands}, attrs);
+    SmallVector<Value> operands = op->getOperands();
+    assert(llvm::isa<tt::PointerType>(
+               getElementTypeOrSelf(operands[PtrLikeIdx])) &&
+           "expected operand to be tt.ptr-like");
+    operands[PtrLikeIdx] = newPtr;
+    if (op->getNumResults())
+      rewriter.replaceOpWithNewOp<SourceOp>(
+          op, op->getResultTypes(), ValueRange{operands}, op->getAttrs());
+    else
+      rewriter.replaceOpWithNewOp<SourceOp>(
+          op, TypeRange{}, ValueRange{operands}, op->getAttrs());
     return success();
   }
 };
@@ -1387,12 +1364,17 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   // ConvertFuncOpArgsUnrealizedCasts because that is necessary for
   // "initializing" the chain of fat pointers starting from tt.func tt.ptr args.
   patterns.clear();
-  patterns.add<ConvertFuncOpArgsUnrealizedCasts, ConvertBroadcastOp,
-               ConvertSplatOp, ConvertAddPtrOp, ConvertLoadOp, ConvertStoreOp,
-               ConvertSCFForOp, ConvertSCFYieldOp, ConvertSCFIfOp,
-               ConvertSCFConditionOp, ConvertSCFWhileOp, ConvertCFCondBranch,
-               ConvertCFBranch, ConvertArithSelectOp, ConvertReturnOp>(
-      patterns.getContext(), opsToRewrite, fatPrs);
+  patterns
+      .add<ConvertFuncOpArgsUnrealizedCasts, ConvertBroadcastOp, ConvertSplatOp,
+           ConvertAddPtrOp, MaterializeFatPointer<tt::LoadOp>,
+           MaterializeFatPointer<tt::StoreOp>,
+           MaterializeFatPointer<tt::AtomicCASOp>,
+           MaterializeFatPointer<tt::AtomicRMWOp, 1>,
+           MaterializeFatPointer<tt::PtrToIntOp>, ConvertSCFForOp,
+           ConvertSCFYieldOp, ConvertSCFIfOp, ConvertSCFConditionOp,
+           ConvertSCFWhileOp, ConvertCFCondBranch, ConvertCFBranch,
+           ConvertArithSelectOp, ConvertReturnOp>(patterns.getContext(),
+                                                  opsToRewrite, fatPrs);
   if (failed(
           applyPartialConversion(*func, target, std::move(patterns), config)))
     return signalPassFailure();
