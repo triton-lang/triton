@@ -113,6 +113,8 @@ def start(
 
     backend_path = _get_backend_default_path(backend)
 
+    _check_mode(backend, mode)
+
     set_profiling_on()
     if hook and hook == "triton":
         register_triton_hook()
