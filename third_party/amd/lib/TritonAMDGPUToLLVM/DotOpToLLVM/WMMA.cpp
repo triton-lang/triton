@@ -54,6 +54,7 @@ getValuesFromDotOperandLayoutStruct(ConversionPatternRewriter &rewriter,
                                     const LLVMTypeConverter *typeConverter,
                                     Value value, int batch, int n0, int n1,
                                     int kWidth, Type type, Location loc) {
+  auto tb = TritonLLVMOpBuilder(loc, rewriter);
   auto elems = unpackLLElements(loc, value, rewriter);
   ValueTable vals;
   for (int b = 0; b < batch; b++) {
@@ -61,21 +62,21 @@ getValuesFromDotOperandLayoutStruct(ConversionPatternRewriter &rewriter,
       for (int j = 0; j < n1; j++) {
         Type elemTy = typeConverter->convertType(type);
         Type ty = vec_ty(elemTy, kWidth);
-        Value rawElems = undef(ty);
+        Value rawElems = tb.undef(ty);
         for (int k = 0; k < kWidth; ++k) {
-          rawElems = insert_element(
+          rawElems = tb.insert_element(
               ty, rawElems,
               elems[n0 * n1 * kWidth * b + kWidth * (n1 * i + j) + k],
-              i32_val(k));
+              tb.i32_val(k));
         }
 
         Value convertedElems;
         if (type.isF16()) {
           convertedElems = rawElems;
         } else if (type.isBF16()) {
-          convertedElems = bitcast(rawElems, vec_ty(i16_ty, kWidth));
+          convertedElems = tb.bitcast(rawElems, vec_ty(i16_ty, kWidth));
         } else {
-          convertedElems = bitcast(
+          convertedElems = tb.bitcast(
               rawElems, vec_ty(i32_ty, kWidth * type.getIntOrFloatBitWidth() /
                                            i32_ty.getIntOrFloatBitWidth()));
         }
@@ -121,8 +122,9 @@ static WMMAInstrType getWMMAInstrTypeFromDot(DotOp op) {
 Value generateROCDLOp(ConversionPatternRewriter &rewriter, Location loc,
                       WMMAInstrType wmmaType, Value valA, Value valB,
                       Value valC, Type aElType, Type bElType) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto resType = valC.getType();
-  Value falseFlag = int_val(1, false);
+  Value falseFlag = b.int_val(1, false);
   switch (wmmaType) {
   case WMMAInstrType::FP32_FP16:
     return rewriter.create<ROCDL::wmma_f32_16x16x16_f16>(
@@ -139,14 +141,14 @@ Value generateROCDLOp(ConversionPatternRewriter &rewriter, Location loc,
   case WMMAInstrType::I32_I8:
     return rewriter.create<ROCDL::wmma_i32_16x16x16_iu8>(
         loc, TypeRange{resType},
-        ValueRange{int_val(1, !aElType.isUnsignedInteger()), valA,
-                   int_val(1, !bElType.isUnsignedInteger()), valB, valC,
+        ValueRange{b.int_val(1, !aElType.isUnsignedInteger()), valA,
+                   b.int_val(1, !bElType.isUnsignedInteger()), valB, valC,
                    falseFlag});
   case WMMAInstrType::I32_I4:
     return rewriter.create<ROCDL::wmma_i32_16x16x16_iu4>(
         loc, TypeRange{resType},
-        ValueRange{int_val(1, !aElType.isUnsignedInteger()), valA,
-                   int_val(1, !bElType.isUnsignedInteger()), valB, valC,
+        ValueRange{b.int_val(1, !aElType.isUnsignedInteger()), valA,
+                   b.int_val(1, !bElType.isUnsignedInteger()), valB, valC,
                    falseFlag});
   default:
     llvm::report_fatal_error("WMMA data type not supported");
@@ -205,21 +207,22 @@ Value generateWMMAIntrinsic(ConversionPatternRewriter &rewriter, Location loc,
                             WMMAInstrType wmmaType, Value valA, Value valB,
                             Value valC, Type aElType, Type bElType,
                             Type dElType) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto name = getWmmaIntrinsicName(aElType, bElType, dElType, valA.getType(),
                                    valC.getType());
   LLVM::FastmathFlagsAttr defaultFlags{};
   SmallVector<Value> operands;
   if (aElType.isInteger())
-    operands.push_back(int_val(1, !aElType.isUnsignedInteger()));
+    operands.push_back(b.int_val(1, !aElType.isUnsignedInteger()));
   operands.push_back(valA);
   if (bElType.isInteger())
-    operands.push_back(int_val(1, !bElType.isUnsignedInteger()));
+    operands.push_back(b.int_val(1, !bElType.isUnsignedInteger()));
   operands.push_back(valB);
   operands.push_back(valC);
   // Flag for using low bits in registers. Result could be already packed to
   // int32. Set low bits by default for now.
   if (32 / dElType.getIntOrFloatBitWidth() > 1 || dElType.isInteger(32)) {
-    operands.push_back(int_val(1, false));
+    operands.push_back(b.int_val(1, false));
   }
   auto wmmaIntrinsic = LLVM::createLLVMIntrinsicCallOp(
       rewriter, loc, name, valC.getType(), operands);
@@ -251,6 +254,7 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   auto wmmaInstrType = getWMMAInstrTypeFromDot(op);
 
   auto loc = op.getLoc();
+  auto tb = TritonLLVMOpBuilder(loc, rewriter);
   Value a = op.getA();
   Value b = op.getB();
   Value d = op.getD();
@@ -304,10 +308,10 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
         auto nRepOffId = n * dElemsToStorePerThread;
         auto fcThreadOffIdx = batchOffIdx + mRepOffId + nRepOffId;
 
-        Value acc = undef(vecTy);
+        Value acc = tb.undef(vecTy);
         for (unsigned v = 0; v < dElemsToStorePerThread; ++v) {
-          acc = insert_element(vecTy, acc, fc[fcThreadOffIdx + v],
-                               i32_val(v * paddedOutputElemSize));
+          acc = tb.insert_element(vecTy, acc, fc[fcThreadOffIdx + v],
+                                  tb.i32_val(v * paddedOutputElemSize));
         }
         for (size_t k = 0; k < numRepK; k++) {
           acc = wmmaLayout.getIsTransposed()
@@ -321,8 +325,8 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
                           bTensorTy.getElementType(), dstElemTy, wmmaVer);
         }
         for (unsigned v = 0; v < dElemsToStorePerThread; ++v) {
-          fc[fcThreadOffIdx + v] = extract_element(
-              dstElemTy, acc, i32_val(v * paddedOutputElemSize));
+          fc[fcThreadOffIdx + v] = tb.extract_element(
+              dstElemTy, acc, tb.i32_val(v * paddedOutputElemSize));
         }
       }
     }

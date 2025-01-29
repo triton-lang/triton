@@ -18,6 +18,7 @@ struct MakeRangeOpConversion
   matchAndRewrite(triton::MakeRangeOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     RankedTensorType ty = op.getType();
     auto shape = ty.getShape();
     auto layout = ty.getEncoding();
@@ -32,7 +33,7 @@ struct MakeRangeOpConversion
     // expand dims + broadcast. very weird behavior otherwise potentially.
     for (const auto &multiDim : llvm::enumerate(idxs)) {
       assert(multiDim.value().size() == 1);
-      retVals[multiDim.index()] = add(multiDim.value()[0], start);
+      retVals[multiDim.index()] = b.add(multiDim.value()[0], start);
     }
     auto typeConverter = getTypeConverter();
     Value result = packLLElements(loc, typeConverter, retVals, rewriter, ty);

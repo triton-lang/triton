@@ -144,3 +144,42 @@ def test_prune_configs(with_perf_model: bool, device: str):
         assert records['run_early_config_prune']
         assert records['capture_kwargs']
         assert records['capture_named_args']
+
+
+def test_exceed_tmem(device):
+    if not torch.cuda.is_available() or not torch.cuda.get_device_capability()[0] == 10:
+        pytest.skip("Test requires tensor memory.")
+    N = 512
+    dst = torch.empty((N, ), device=device, dtype=torch.float32)
+    configs = [triton.Config(kwargs={'BLOCK_SIZE': 128}), triton.Config(kwargs={'BLOCK_SIZE': 32})]
+    exception_out_of_resource = None
+
+    def _post_hook(*args, exception):
+        nonlocal exception_out_of_resource
+        if exception is not None:
+            exception_out_of_resource = exception
+
+    @triton.autotune(configs=configs, key=['N'], do_bench=do_bench, pre_hook=None, post_hook=_post_hook)
+    @triton.jit
+    def dot_kernel(dst, BLOCK_SIZE: tl.constexpr):
+        a = tl.full((BLOCK_SIZE, BLOCK_SIZE), 0.0, tl.float16)
+        b = tl.full((BLOCK_SIZE, BLOCK_SIZE), 0.0, tl.float16)
+        c0 = tl.zeros((BLOCK_SIZE, BLOCK_SIZE), dtype=tl.float32)
+        c1 = tl.zeros((BLOCK_SIZE, BLOCK_SIZE), dtype=tl.float32)
+        c2 = tl.zeros((BLOCK_SIZE, BLOCK_SIZE), dtype=tl.float32)
+        c3 = tl.zeros((BLOCK_SIZE, BLOCK_SIZE), dtype=tl.float32)
+        c4 = tl.zeros((BLOCK_SIZE, BLOCK_SIZE), dtype=tl.float32)
+        for i in range(0, 100):
+            c0 = tl.dot(a, b, c0)
+            c1 = tl.dot(a, b, c1)
+            c2 = tl.dot(a, b, c2)
+            c3 = tl.dot(a, b, c3)
+            c4 = tl.dot(a, b, c4)
+        c = c4 + c3 + c2 + c1 + c0
+        c = c.reshape([BLOCK_SIZE * BLOCK_SIZE])
+        tl.store(dst + tl.arange(0, BLOCK_SIZE * BLOCK_SIZE), c)
+
+    dot_kernel[(1, )](dst)
+    assert exception_out_of_resource is not None and str(
+        exception_out_of_resource
+    ) == "out of resource: tensor memory, Required: 640, Hardware limit: 512. Reducing block sizes or `num_stages` may help."

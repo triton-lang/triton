@@ -11,6 +11,8 @@
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 
+#include <unordered_map>
+
 // LinearLayoutCache Utils
 using CacheKey =
     std::tuple<std::vector<int64_t>, mlir::Attribute, std::optional<int32_t>>;

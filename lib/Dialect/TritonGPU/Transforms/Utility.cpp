@@ -19,6 +19,7 @@
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
+namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace mlir {
 
@@ -69,6 +70,15 @@ SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
 
     assert(false && "type not supported");
     return {0, 0, 0};
+  } else if (version == 5) {
+    unsigned m = shape[0] >= 128 ? 128 : 64;
+    // Right now default to distributing along N. TODO: For cases where we have
+    // dot followed by reduction we need to be able to distribute along M.
+    //    if (numWarps > 4)
+    //      m = 64;
+    unsigned n = shape[1] >= 256 ? 256 : shape[1];
+    unsigned k = 256 / eltType.getIntOrFloatBitWidth();
+    return {m, n, k};
   } else {
     assert(false && "version not supported");
     return {0, 0};
@@ -79,9 +89,11 @@ bool isLoadFromTensorPtr(triton::LoadOp op) {
   return mlir::triton::isTensorPointerType(op.getPtr().getType());
 }
 
-SmallVector<unsigned, 4> argSort(const SmallVector<int64_t> &arr) {
+SmallVector<unsigned, 4>
+getOrderFromContiguity(const SmallVector<int64_t> &arr) {
   SmallVector<unsigned, 4> ret(arr.size());
   std::iota(ret.begin(), ret.end(), 0);
+  std::reverse(ret.begin(), ret.end());
   std::stable_sort(ret.begin(), ret.end(),
                    [&](unsigned x, unsigned y) { return arr[x] > arr[y]; });
   return ret;
@@ -793,10 +805,11 @@ LogicalResult getConvertBackwardSlice(
   auto updateLayout = [&](Value value, Attribute encoding) {
     assert((isa<RankedTensorType>(value.getType())));
     slice.insert(value);
-    Attribute &existing = layout[value];
-    if (existing && existing != encoding)
-      return failure();
-    existing = encoding;
+    if (layout.find(value) != layout.end()) {
+      if (layout[value] != encoding)
+        return failure();
+    }
+    layout[value] = encoding;
     return success();
   };
 
@@ -822,8 +835,6 @@ LogicalResult getConvertBackwardSlice(
     }
 
     if (auto ifOp = currentValue.getDefiningOp<scf::IfOp>()) {
-      if (stopPropagation && stopPropagation(ifOp))
-        continue;
       unsigned argIdx = mlir::cast<OpResult>(currentValue).getResultNumber();
 
       OpOperand &thenValue = ifOp.thenYield()->getOpOperand(argIdx);
@@ -1057,54 +1068,6 @@ MMALoadType getMMALoadType(Operation *loadOp) {
   }
 }
 
-static Type getNewType(Type type, Attribute encoding) {
-  RankedTensorType tensorType = cast<RankedTensorType>(type);
-  return RankedTensorType::get(tensorType.getShape(),
-                               tensorType.getElementType(), encoding);
-}
-
-void convertOpEncoding(Attribute encoding, Operation *op) {
-  OpBuilder builder(op);
-  // Convert operands
-  // For load/store with tensor pointers, we don't have to change the
-  // operands' type, we do this by changing the outputs' type of
-  // `make_tensor_ptr`
-  SmallVector<Value, 4> newArgs;
-  for (auto operand : op->getOperands()) {
-    auto tensorType = dyn_cast<RankedTensorType>(operand.getType());
-    if (tensorType &&
-        !isa<triton::gpu::SharedEncodingAttr>(tensorType.getEncoding())) {
-      Type newType = getNewType(tensorType, encoding);
-      newArgs.push_back(builder.create<triton::gpu::ConvertLayoutOp>(
-          op->getLoc(), newType, operand));
-    } else {
-      newArgs.push_back(operand);
-    }
-  }
-
-  // Convert output types
-  SmallVector<Type, 4> newTypes;
-  for (auto t : op->getResultTypes()) {
-    bool isAsync = isa<triton::gpu::AsyncCopyGlobalToLocalOp>(op);
-    newTypes.push_back(isAsync ? t : getNewType(t, encoding));
-  }
-
-  // Construct new op with the new encoding
-  Operation *newOp = builder.create(op->getLoc(), op->getName().getIdentifier(),
-                                    newArgs, newTypes, op->getAttrs());
-
-  // Cast the results back to the original layout
-  for (size_t i = 0; i < op->getNumResults(); i++) {
-    Value newResult = newOp->getResult(i);
-    if (newTypes[i] != op->getResultTypes()[i]) {
-      newResult = builder.create<triton::gpu::ConvertLayoutOp>(
-          op->getLoc(), op->getResult(i).getType(), newResult);
-    }
-    op->getResult(i).replaceAllUsesWith(newResult);
-  }
-  op->erase();
-}
-
 namespace {
 
 /// Detect dead arguments in scf.for op by assuming all the values are dead and
@@ -1240,6 +1203,54 @@ struct ForOpDeadArgElimination : public OpRewritePattern<scf::ForOp> {
 
 void populateForOpDeadArgumentElimination(RewritePatternSet &patterns) {
   patterns.add<ForOpDeadArgElimination>(patterns.getContext());
+}
+
+ttg::LocalAllocOp findShmemAlloc(Value operand) {
+  // If it's a shmem operand, it must either be defined outside the loop, or
+  // come from an MemDescSubview op. Only ConvertLayout and Trans ops are
+  // allowed in between.
+  Value transitiveOperand = operand;
+  while (
+      isa_and_nonnull<ttg::ConvertLayoutOp, tt::TransOp, ttg::MemDescTransOp>(
+          transitiveOperand.getDefiningOp()) ||
+      isa<BlockArgument>(transitiveOperand)) {
+    if (auto blockArg = dyn_cast<BlockArgument>(transitiveOperand)) {
+      assert(isa<scf::ForOp>(blockArg.getOwner()->getParentOp()) &&
+             "Block argument must come from a for loop");
+      transitiveOperand =
+          cast<scf::YieldOp>(blockArg.getOwner()->getTerminator())
+              .getOperand(blockArg.getArgNumber() - 1);
+    } else {
+      transitiveOperand = transitiveOperand.getDefiningOp()->getOperand(0);
+    }
+  }
+  if (auto subView =
+          dyn_cast<ttg::MemDescSubviewOp>(transitiveOperand.getDefiningOp())) {
+    // Multi-buffered operand
+    return dyn_cast<ttg::LocalAllocOp>(subView.getSrc().getDefiningOp());
+  } else {
+    // Single bufferred operand that does not require a subview (not loaded in
+    // the loop)
+    return dyn_cast<ttg::LocalAllocOp>(transitiveOperand.getDefiningOp());
+  }
+  return nullptr;
+}
+
+SmallVector<Operation *>
+getMMAsWithMultiBufferredOperands(scf::ForOp forOp,
+                                  SmallVector<Operation *> &mmaOps) {
+  // The A and B operands of the mmaOp should be multi-buffered
+  SmallVector<Operation *> eligible;
+  for (auto mmaOp : mmaOps) {
+    auto a = findShmemAlloc(mmaOp->getOperand(0));
+    auto b = findShmemAlloc(mmaOp->getOperand(1));
+    if (a && forOp.isDefinedOutsideOfLoop(a) && b &&
+        forOp.isDefinedOutsideOfLoop(b)) {
+      eligible.push_back(mmaOp);
+    }
+  }
+
+  return eligible;
 }
 
 } // namespace mlir
