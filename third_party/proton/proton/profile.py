@@ -22,14 +22,15 @@ def _select_backend() -> str:
 
 
 def _get_backend_default_path(backend: str) -> str:
+    lib_path = ""
     if backend == "cupti":
         # First try to get the path from the environment variable that overrides the default path
-        if lib_path := os.getenv("TRITON_CUPTI_LIB_PATH", None) is not None:
-            return lib_path
-        # Get the default path for the cupti backend,
-        # which is the most compatible with the current CUPTI header file triton is compiled with
-        return str(pathlib.Path(__file__).parent / "backends" / "nvidia" / "lib" / "cupti" / "libcupti.so")
-    return ""
+        lib_path = os.getenv("TRITON_CUPTI_LIB_PATH", None)
+        if lib_path is None:
+            # Get the default path for the cupti backend,
+            # which is the most compatible with the current CUPTI header file triton is compiled with
+            lib_path = str(pathlib.Path(__file__).parent / "backends" / "nvidia" / "lib" / "cupti")
+    return lib_path
 
 
 def _check_env(backend: str) -> None:
