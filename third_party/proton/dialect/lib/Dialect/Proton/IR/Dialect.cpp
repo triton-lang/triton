@@ -9,6 +9,12 @@
 using namespace mlir;
 using namespace mlir::triton::proton;
 
+const int mlir::triton::proton::getGroupSize() { return 4; }
+
+const int mlir::triton::proton::getBytesPerEntry() { return 8; }
+
+const int mlir::triton::proton::getHeaderSize() { return 32; }
+
 void mlir::triton::proton::ProtonDialect::initialize() {
   addAttributes<
 #define GET_ATTRDEF_LIST
