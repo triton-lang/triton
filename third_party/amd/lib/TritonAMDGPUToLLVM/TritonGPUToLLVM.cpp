@@ -150,6 +150,7 @@ struct ConvertTritonAMDGPUToLLVM
     OpBuilder::InsertPoint indexInsertPoint;
 
     RewritePatternSet patterns(context);
+
     int commonBenefit = patternBenefitPrioritizeOverLLVMConversions;
     // Make benefit for AMD specific patterns higher so they apply before common
     // patterns
@@ -230,6 +231,9 @@ struct ConvertTritonAMDGPUToLLVM
                                                           patterns);
     mlir::triton::populatePrintOpToLLVMPattern(typeConverter, patterns,
                                                targetInfo, commonBenefit);
+
+    mlir::triton::proton::populateBufferAllocOpToLLVMPattern(
+        typeConverter, patterns, targetInfo, commonBenefit);
 
     mlir::triton::proton::populateRecordOpToLLVMPattern(
         typeConverter, patterns, targetInfo, commonBenefit);

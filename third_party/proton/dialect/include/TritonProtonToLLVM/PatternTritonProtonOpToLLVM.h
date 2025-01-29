@@ -10,6 +10,11 @@ void populateRecordOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                    RewritePatternSet &patterns,
                                    const TargetInfoBase &targetInfo,
                                    PatternBenefit benefit);
+void populateBufferAllocOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+                                        RewritePatternSet &patterns,
+                                        const TargetInfoBase &targetInfo,
+                                        PatternBenefit benefit);
+
 } // namespace proton
 } // namespace mlir::triton
 
