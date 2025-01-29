@@ -201,7 +201,7 @@ public:
     if (reshapeOp.getType().getRank() != 1)
       return failure();
     for (Operation *user : reshapeOp->getUsers()) {
-      if (!isa<triton::ReduceOp>(user))
+      if (!isa<triton::ReduceOp, triton::HistogramOp>(user))
         return failure();
     }
     rewriter.modifyOpInPlace(reshapeOp,
