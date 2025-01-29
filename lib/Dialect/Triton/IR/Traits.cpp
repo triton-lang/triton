@@ -10,7 +10,7 @@
 
 using namespace mlir;
 
-LogicalResult verifyEquivalentType(Type typeA, Type typeB) {
+LogicalResult OpTrait::impl::verifyEquivalentType(Type typeA, Type typeB) {
   auto tensorTypeA = dyn_cast<RankedTensorType>(typeA);
   auto tensorTypeB = dyn_cast<RankedTensorType>(typeB);
   if (!(bool(tensorTypeA) && bool(tensorTypeB)))
