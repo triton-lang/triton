@@ -166,4 +166,21 @@ def TritonAMDGPUBlockPingpong: Pass<"tritonamdgpu-block-pingpong", "mlir::Module
   let dependentDialects = ["mlir::ROCDL::ROCDLDialect, mlir::triton::amdgpu::TritonAMDGPUDialect"];
 }
 
+def TritonAMDGPUInThreadTranspose: Pass<"tritonamdgpu-in-thread-transpose", "mlir::ModuleOp"> {
+  let summary = "Transpose K-outer dot operand while data is loaded into register right before writing to LDS";
+
+  let description = [{
+    Transpose K-outer dot operand (not consecutive on K dimension) right before writing data into LDS. This feature
+    happens right after data has been loaded from global memory to register-local registers. This feature will
+    allow coalesced global loading while still maintaining vectorized LDS write/read, by adding few VALU instructions
+    to perform in-thread transpose
+  }];
+
+  let constructor = "mlir::createTritonAMDGPUInThreadTransposePass()";
+
+  let dependentDialects = [];
+}
+
+
+
 #endif
