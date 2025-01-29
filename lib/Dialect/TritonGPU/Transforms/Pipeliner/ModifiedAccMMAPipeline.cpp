@@ -121,7 +121,7 @@ scf::ForOp mlir::triton::pipelineMMAWithScaledAcc(scf::ForOp forOp) {
     dotOps.push_back(mmaOp);
   });
 
-  dotOps = getMMAsWithMultiBufferredOperands(forOp, dotOps);
+  // dotOps = getMMAsWithMultiBufferredOperands(forOp, dotOps);
 
   for (auto op : dotOps) {
     auto dotOp = llvm::cast<ttng::TCGen5MMAOp>(op);
