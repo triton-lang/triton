@@ -1,5 +1,5 @@
 from triton.backends.compiler import BaseBackend, GPUTarget
-from triton._C.libtriton import ir, passes, llvm, nvidia, proton
+from triton._C.libtriton import ir, passes, llvm, nvidia
 from triton.runtime.errors import PTXASError
 
 from dataclasses import dataclass
