@@ -892,7 +892,10 @@ unsigned SharedEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
 unsigned SharedEncodingAttr::getVec() const { return getVec__(); }
 unsigned SharedEncodingAttr::getPerPhase() const { return getPerPhase__(); }
 unsigned SharedEncodingAttr::getMaxPhase() const { return getMaxPhase__(); }
-ArrayRef<unsigned> SharedEncodingAttr::getOrder() const { return getOrder__(); }
+
+SmallVector<unsigned> SharedEncodingAttr::getOrder() const {
+  return SmallVector<unsigned>(getOrder__());
+}
 
 SmallVector<unsigned> SharedEncodingAttr::getCTAsPerCGA() const {
   return SmallVector<unsigned>(getCTALayout().getCTAsPerCGA());

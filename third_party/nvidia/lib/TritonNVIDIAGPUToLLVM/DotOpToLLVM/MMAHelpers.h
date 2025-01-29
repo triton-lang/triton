@@ -58,7 +58,7 @@ private:
   bool trans;
   Value elemsPerSwizzlingRowVal;
   SmallVector<unsigned int> instrShape;
-  ArrayRef<unsigned> ord;
+  SmallVector<unsigned> ord;
   int elemsPerSwizzlingRow;
   int64_t elemBits;
   Value descriptor;

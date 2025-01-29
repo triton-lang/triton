@@ -166,7 +166,7 @@ def SharedEncodingTrait : AttrInterface<"SharedEncodingTrait"> {
                     "unsigned",
                     "getMaxPhase">,
     InterfaceMethod<"",
-                    "ArrayRef<unsigned>",
+                    "SmallVector<unsigned>",
                     "getOrder">,
     InterfaceMethod<"Get the shape of the CTAs per CGA.",
                     "SmallVector<unsigned>",
@@ -194,8 +194,7 @@ class SharedEncoding<list<Trait> traits = [],
      unsigned getVec() const;
      unsigned getPerPhase() const;
      unsigned getMaxPhase() const;
-     // TODO: make ArrayRef vs SmallVector consistent
-     ArrayRef<unsigned> getOrder() const;
+     SmallVector<unsigned> getOrder() const;
      SmallVector<unsigned> getCTAsPerCGA() const;
      SmallVector<unsigned> getCTASplitNum() const;
      SmallVector<unsigned> getCTAOrder() const;
