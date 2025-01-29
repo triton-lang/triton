@@ -244,7 +244,7 @@ jobs:
           echo "PATH is '$PATH'"
           cd python
           ccache --zero-stats
-          python3 -m pip install -v '.[tests]'
+          python3 -m pip install -v '.[tests]' --no-build-isolation
       - name: CCache Stats
         run: ccache --print-stats
       - name: Run lit tests
@@ -372,7 +372,7 @@ jobs:
           pip uninstall -y triton pytorch-triton-rocm
           cd python
           ccache --zero-stats
-          pip install -v -e '.[tests]'
+          pip install -v -e '.[tests]' --no-build-isolation
       - name: CCache Stats
         run: ccache --print-stats
       - name: Run lit tests
