@@ -3,6 +3,7 @@
 
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/OpDefinition.h"
+#include "mlir/Interfaces/InferTypeOpInterface.h"
 #include "mlir/Support/LogicalResult.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 
@@ -27,7 +28,7 @@ LogicalResult verifyTensorLayouts(Operation *op);
 
 LogicalResult verifySameOperandsEncoding(Operation *op,
                                          bool allowTensorPointerType = false);
-
+LogicalResult verifyEquivalentType(Type typeA, Type typeB);
 LogicalResult
 verifySameOperandsAndResultEncoding(Operation *op,
                                     bool allowTensorPointerType = false);
@@ -157,6 +158,19 @@ public:
   static LogicalResult verifyTrait(Operation *op) {
     return impl::verifySameOperandsAndResultEncoding(
         op, /*allowTensorPointerType=*/true);
+  }
+};
+
+// A trait equivalent to InferTypeOpAdaptor, but that checks for structural
+// equivalence of the layouts of the result rather than just layout equality.
+template <typename ConcreteOp>
+struct InferTypeOpWithLayoutEquivalence
+    : public mlir::InferTypeOpAdaptorWithIsCompatible<ConcreteOp> {
+  static bool isCompatibleReturnTypes(mlir::TypeRange lhs,
+                                      mlir::TypeRange rhs) {
+    if (lhs.size() != rhs.size())
+      return false;
+    return llvm::all_of(llvm::zip(lhs, rhs), impl::verifyEquivalentType);
   }
 };
 

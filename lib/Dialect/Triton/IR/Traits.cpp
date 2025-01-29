@@ -3,11 +3,33 @@
 #include <numeric>
 
 #include "mlir/IR/TypeUtilities.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "llvm/Support/ErrorHandling.h"
 
 using namespace mlir;
+
+LogicalResult verifyEquivalentType(Type typeA, Type typeB) {
+  auto tensorTypeA = typeA.dyn_cast<RankedTensorType>();
+  auto tensorTypeB = typeB.dyn_cast<RankedTensorType>();
+  if (!(bool(tensorTypeA) && bool(tensorTypeB)))
+    return typeA == typeB ? success() : failure();
+  auto encodingA = tensorTypeA.getEncoding();
+  auto encodingB = tensorTypeB.getEncoding();
+  auto shapeA = tensorTypeA.getShape();
+  auto shapeB = tensorTypeB.getShape();
+  if (shapeA != shapeB)
+    return failure();
+
+  // If there's no encoding or the encodings are the same
+  if (encodingA == encodingB)
+    return success();
+
+  return cast<DialectInferLayoutInterface>(&encodingA.getDialect())
+      ->verifyLayoutsAreEqual(shapeA, encodingA, encodingB, {})
+      .succeeded();
+}
 
 static LogicalResult verifySameEncoding(Type typeA, Type typeB,
                                         bool allowTensorPointerType) {
