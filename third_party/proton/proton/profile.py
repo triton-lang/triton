@@ -23,6 +23,9 @@ def _select_backend() -> str:
 
 def _get_backend_default_path(backend: str) -> str:
     if backend == "cupti":
+        # First try to get the path from the environment variable that overrides the default path
+        if lib_path := os.getenv("TRITON_CUPTI_LIB_PATH", None) is not None:
+            return lib_path
         # Get the default path for the cupti backend,
         # which is the most compatible with the current CUPTI header file triton is compiled with
         return str(pathlib.Path(__file__).parent / "backends" / "nvidia" / "lib" / "cupti" / "libcupti.so")
