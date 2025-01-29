@@ -284,7 +284,7 @@ SmallVector<unsigned> getOrder(Attribute layout) {
     }
     return order;
   }
-  if (auto sharedLayout = mlir::dyn_cast<SharedEncodingAttr>(layout)) {
+  if (auto sharedLayout = mlir::dyn_cast<SharedEncodingTrait>(layout)) {
     return llvm::to_vector(sharedLayout.getOrder());
   }
   if (auto linearLayout = mlir::dyn_cast<LinearEncodingAttr>(layout)) {
@@ -378,12 +378,12 @@ SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
 }
 
 SmallVector<int64_t> getShapePerCTA(Attribute layout, ArrayRef<int64_t> shape) {
-  if (auto sharedLayout = mlir::dyn_cast<SharedEncodingAttr>(layout)) {
+  if (auto sharedLayout = mlir::dyn_cast<SharedEncodingTrait>(layout)) {
     // Special logic for pipeline pass, where shape is 3D and CTALayout is 2D.
     // The first dim of shape is numStages. This is a work around, otherwise
     // too many places would have to be modified in pipeline pass. Maybe we
     // need to refactor this logic in the future.
-    auto CTASplitNum = sharedLayout.getCTALayout().getCTASplitNum();
+    auto CTASplitNum = sharedLayout.getCTASplitNum();
     if (shape.size() == CTASplitNum.size() + 1) {
       auto res = getShapePerCTA(CTASplitNum, shape.drop_front());
       res.insert(res.begin(), shape.front());
@@ -421,8 +421,8 @@ unsigned getNumWarpsPerCTA(Attribute layout) {
     warpsPerCTA = wmmaLayout.getWarpsPerCTA();
   else if (auto dotLayout = dyn_cast<DotOperandEncodingAttr>(layout))
     warpsPerCTA = dotLayout.getWarpsPerCTA();
-  else if (auto sharedLayout = dyn_cast<SharedEncodingAttr>(layout))
-    llvm::report_fatal_error("Cannot get numWarps from SharedEncodingAttr");
+  else if (auto sharedLayout = dyn_cast<SharedEncodingTrait>(layout))
+    llvm::report_fatal_error("Cannot get numWarps from SharedEncodingTrait");
   else
     llvm::report_fatal_error("Unimplemented usage of getNumWarpsPerCTA");
   return product<unsigned>(warpsPerCTA);
@@ -2423,6 +2423,8 @@ public:
     } else if (auto sharedAttr = mlir::dyn_cast<SharedEncodingAttr>(attr)) {
       os << "shared";
       return AliasResult::FinalAlias;
+    } else if (auto sharedAttr = mlir::dyn_cast<SharedEncodingTrait>(attr)) {
+      llvm_unreachable("Unsupported shared encoding");
     } else if (auto blockedAttr = mlir::dyn_cast<BlockedEncodingAttr>(attr)) {
       os << "blocked";
       return AliasResult::FinalAlias;
@@ -2515,18 +2517,22 @@ struct TritonGPUInferLayoutInterface
           applyPermutation(invOrderUnsigned, layout.getCTAOrder()));
     };
 
-    if (auto enc = mlir::dyn_cast<SharedEncodingAttr>(operandEncoding)) {
+    if (auto enc = mlir::dyn_cast<SharedEncodingTrait>(operandEncoding)) {
       if (enc.getOrder().size() != order.size()) {
         return failure();
       }
-      FailureOr<CTALayoutAttr> ctaLayout = permuteCTALayout(enc.getCTALayout());
+      FailureOr<CTALayoutAttr> ctaLayout = permuteCTALayout(getCTALayout(enc));
       if (failed(ctaLayout)) {
         return failure();
       }
-      resultEncoding = SharedEncodingAttr::get(
-          ctx, enc.getVec(), enc.getPerPhase(), enc.getMaxPhase(),
-          applyPermutation(invOrderUnsigned, enc.getOrder()), *ctaLayout,
-          enc.getHasLeadingOffset());
+      if (isa<SharedEncodingAttr>(enc)) {
+        resultEncoding = SharedEncodingAttr::get(
+            ctx, enc.getVec(), enc.getPerPhase(), enc.getMaxPhase(),
+            applyPermutation(invOrderUnsigned, enc.getOrder()), *ctaLayout,
+            enc.getHasLeadingOffset());
+      } else {
+        llvm_unreachable("Unsupported shared encoding");
+      }
       return success();
     }
 

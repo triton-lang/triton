@@ -4,7 +4,10 @@
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Patterns.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
+#include "llvm/Support/ErrorHandling.h"
 
 using namespace mlir;
 
@@ -35,7 +38,7 @@ public:
     auto dstDotOp = dyn_cast<triton::gpu::DotOperandEncodingAttr>(
         op.getType().getEncoding());
     MemDescType srcType = op.getSrc().getType();
-    auto sharedEncoding = dyn_cast<SharedEncodingAttr>(srcType.getEncoding());
+    auto sharedEncoding = dyn_cast<SharedEncodingTrait>(srcType.getEncoding());
     if (!dstDotOp || !sharedEncoding || !sharedEncoding.getHasLeadingOffset())
       return failure();
     RankedTensorType type = op.getType();
@@ -50,13 +53,19 @@ public:
                                          blockEncoding);
     Value load =
         rewriter.create<LocalLoadOp>(op.getLoc(), tmpType, op.getSrc());
-    auto newSharedDescTy = MemDescType::get(
-        type.getShape(), type.getElementType(),
-        triton::gpu::SharedEncodingAttr::get(
-            op.getContext(), dstDotOp, type.getShape(),
-            triton::gpu::getOrder(parentEnc),
-            triton::gpu::getCTALayout(parentEnc), type.getElementType()),
-        srcType.getMemorySpace());
+
+    SharedEncodingTrait newSharedEnc;
+    if (isa<SharedEncodingAttr>(sharedEncoding)) {
+      newSharedEnc = triton::gpu::SharedEncodingAttr::get(
+          op.getContext(), dstDotOp, type.getShape(),
+          triton::gpu::getOrder(parentEnc),
+          triton::gpu::getCTALayout(parentEnc), type.getElementType());
+    } else {
+      llvm_unreachable("Unsupporeted shared encoding");
+    }
+    auto newSharedDescTy =
+        MemDescType::get(type.getShape(), type.getElementType(), newSharedEnc,
+                         srcType.getMemorySpace());
     auto tmp = rewriter.create<triton::gpu::LocalAllocOp>(
         op.getLoc(), newSharedDescTy, load);
     auto newConvert =

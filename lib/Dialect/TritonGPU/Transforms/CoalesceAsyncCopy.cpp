@@ -45,7 +45,7 @@ struct ClipAsyncCopySizePerThread
     if (!blockedEnc)
       return rewriter.notifyMatchFailure(copyOp,
                                          "src must be of blocked encoding");
-    auto sharedEnc = cast<SharedEncodingAttr>(dstTy.getEncoding());
+    auto sharedEnc = cast<SharedEncodingTrait>(dstTy.getEncoding());
     auto sharedVec = sharedEnc.getVec();
 
     // obtain max contiguous copy size

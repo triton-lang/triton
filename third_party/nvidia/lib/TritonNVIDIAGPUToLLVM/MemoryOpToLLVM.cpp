@@ -36,7 +36,7 @@ public:
             cast<DotOperandEncodingAttr>(dstLayout).getParent())) {
       auto dotEnc = cast<DotOperandEncodingAttr>(dstLayout);
       auto mmaEnc = cast<NvidiaMmaEncodingAttr>(dotEnc.getParent());
-      auto sharedEnc = cast<SharedEncodingAttr>(srcLayout);
+      auto sharedEnc = cast<SharedEncodingTrait>(srcLayout);
       auto bitwidth = dstTy.getElementTypeBitWidth();
       auto vecWidth = 32 / bitwidth;
       auto kWidth = dotEnc.getKWidth();
@@ -77,7 +77,7 @@ private:
     auto dstTy = cast<RankedTensorType>(op.getType());
     auto srcTy = cast<MemDescType>(op.getSrc().getType());
     auto dotEnc = cast<DotOperandEncodingAttr>(dstTy.getEncoding());
-    auto sharedEnc = cast<SharedEncodingAttr>(srcTy.getEncoding());
+    auto sharedEnc = cast<SharedEncodingTrait>(srcTy.getEncoding());
     auto shape = dstTy.getShape();
     auto rank = dstTy.getRank();
     auto kOrder = dotEnc.getOpIdx() == 0 ? rank - 1 : rank - 2;
@@ -146,7 +146,7 @@ LogicalResult lowerDistributedToSharedStmatrix(
   if (!mmaEncoding)
     return failure();
   auto sharedLayout =
-      cast<triton::gpu::SharedEncodingAttr>(memDescType.getEncoding());
+      cast<triton::gpu::SharedEncodingTrait>(memDescType.getEncoding());
   if (!sharedLayout.getHasLeadingOffset())
     return failure();
   int swizzleByteSize = 0;
@@ -223,7 +223,7 @@ struct LocalAllocOpConversion
       return failure();
     MemDescType memDescType = op.getType();
     auto sharedLayout =
-        cast<triton::gpu::SharedEncodingAttr>(memDescType.getEncoding());
+        cast<triton::gpu::SharedEncodingTrait>(memDescType.getEncoding());
     RankedTensorType srcTy = op.getSrc().getType();
     Type llvmElemTy = typeConverter->convertType(srcTy.getElementType());
     Value smemBase =

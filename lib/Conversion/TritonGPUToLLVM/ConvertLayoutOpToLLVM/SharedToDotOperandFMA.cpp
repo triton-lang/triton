@@ -15,7 +15,7 @@ using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getSizePerThread;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::MemDescType;
-using ::mlir::triton::gpu::SharedEncodingAttr;
+using ::mlir::triton::gpu::SharedEncodingTrait;
 
 Value getStructFromValueTable(ArrayRef<Value> vals,
                               ConversionPatternRewriter &rewriter, Location loc,
@@ -32,11 +32,11 @@ Value getStructFromValueTable(ArrayRef<Value> vals,
   return packLLElements(loc, typeConverter, elems, rewriter, structTy);
 }
 
-bool isSwizzled(SharedEncodingAttr layout) { return layout.getMaxPhase() != 1; }
+bool isSwizzled(SharedEncodingTrait layout) { return layout.getMaxPhase() != 1; }
 
 SmallVector<Value> swizzleIndices(ConversionPatternRewriter &rewriter,
                                   Location loc, SmallVector<Value> rawIndices,
-                                  SharedEncodingAttr layout) {
+                                  SharedEncodingTrait layout) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   const auto &order = layout.getOrder();
   auto rank = order.size();
@@ -154,7 +154,7 @@ Value computeSwizzledOffset(ConversionPatternRewriter &rewriter, Location loc,
                             Value bTileOffset, Value nonKTileOffset,
                             unsigned shapePerCTABTile,
                             unsigned shapePerCTANonKTile,
-                            SharedEncodingAttr sharedLayout,
+                            SharedEncodingTrait sharedLayout,
                             ArrayRef<int64_t> opTensorShape,
                             ArrayRef<Value> strides) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -229,7 +229,7 @@ Value loadFMAOp(Value srcVal, Value llVal, BlockedEncodingAttr dLayout,
   dim.nonK = dotOpNo == 0 ? 1 : 2;
   auto opTensorTy = cast<MemDescType>(srcVal.getType());
   auto opTensorShape = expandMatrixShapeWithBatch(opTensorTy.getShape());
-  auto sharedLayout = cast<SharedEncodingAttr>(opTensorTy.getEncoding());
+  auto sharedLayout = cast<SharedEncodingTrait>(opTensorTy.getEncoding());
 
   auto opOrder = expandMatrixOrderWithBatch(dLayout.getOrder());
 

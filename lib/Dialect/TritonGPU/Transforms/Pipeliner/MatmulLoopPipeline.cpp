@@ -402,30 +402,6 @@ getSharedEncoding(Operation *loadOp, bool isTMALoad) {
                                       ctaLayout);
 }
 
-static bool hasSharedEncodingHelper(Operation *loadOp) {
-  // If the load is used by a LocalAllocOp, use the same encoding as the allocs.
-  // If the allocs don't all have the same encoding, bail.
-  if (llvm::any_of(loadOp->getUsers(), [&](Operation *user) {
-        return isa<ttg::LocalAllocOp>(user);
-      })) {
-    ttg::SharedEncodingAttr localAllocEnc;
-    for (auto user : loadOp->getUsers()) {
-      auto localAlloc = dyn_cast<ttg::LocalAllocOp>(user);
-      if (!localAlloc)
-        continue;
-      auto enc = mlir::cast<ttg::SharedEncodingAttr>(
-          localAlloc.getType().getEncoding());
-      if (!localAllocEnc) {
-        localAllocEnc = enc;
-      }
-      if (enc != localAllocEnc)
-        return false;
-    }
-    return true;
-  }
-  return true;
-}
-
 static llvm::SmallVector<Operation *> getDirectUserInBlock(Operation *loadOp) {
   llvm::SmallVector<Operation *> users;
   DenseSet<Operation *> seen;

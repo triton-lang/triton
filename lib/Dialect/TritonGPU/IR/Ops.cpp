@@ -608,11 +608,11 @@ LogicalResult MemDescSubviewOp::verify() {
 
   if (!isa<SharedEncodingTrait>(srcEnc) &&
       !isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(srcEnc)) {
-    return emitError("src encoding must be SharedEncodingAttr");
+    return emitError("src encoding must be SharedEncodingTrait");
   }
   if (!isa<SharedEncodingTrait>(dstEnc) &&
       !isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(srcEnc)) {
-    return emitError("result encoding must be SharedEncodingAttr");
+    return emitError("result encoding must be SharedEncodingTrait");
   }
 
   if (isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(srcEnc)) {

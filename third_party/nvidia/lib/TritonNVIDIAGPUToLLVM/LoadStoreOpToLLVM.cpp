@@ -30,7 +30,7 @@ using ::mlir::LLVM::linearize;
 using ::mlir::triton::gpu::getCTALayout;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
-using ::mlir::triton::gpu::SharedEncodingAttr;
+using ::mlir::triton::gpu::SharedEncodingTrait;
 
 namespace ttg = mlir::triton::gpu;
 
@@ -1047,7 +1047,7 @@ struct AsyncCopyGlobalToLocalOpConversion
     auto srcLayout = srcTy.getEncoding();
     assert((isa<BlockedEncodingAttr, SliceEncodingAttr>(srcLayout) &&
             "Unexpected srcLayout in AsyncCopyGlobalToLocalOpConversion"));
-    auto resSharedLayout = cast<SharedEncodingAttr>(dstTy.getEncoding());
+    auto resSharedLayout = cast<SharedEncodingTrait>(dstTy.getEncoding());
 
     Value llDst = adaptor.getResult();
     Value llSrc = adaptor.getSrc();
@@ -1361,7 +1361,7 @@ struct AsyncTMACopyLocalToGlobalOpConversion
 
 static LinearLayout getUnswizzledLayout(triton::gpu::MemDescType type) {
   return triton::gpu::sharedToLinearLayoutLeadingOffset(
-      type.getShape(), cast<SharedEncodingAttr>(type.getEncoding()),
+      type.getShape(), cast<SharedEncodingTrait>(type.getEncoding()),
       type.getElementTypeBitWidth(), /*disableSwizzle=*/true);
 }
 
@@ -1412,7 +1412,7 @@ static LogicalResult iterateGatherScatterIndices(
     return op->emitError("memdesc shape must match alloc shape");
   // `hasLeadingOffset` means the core matrix tiles are placed next to each
   // other in shared memory, which lines up with how `gather4` loads data.
-  if (!cast<SharedEncodingAttr>(smemType.getEncoding()).getHasLeadingOffset())
+  if (!cast<SharedEncodingTrait>(smemType.getEncoding()).getHasLeadingOffset())
     return op->emitError("requires dst encoding with `hasLeadingOffset=true`");
   Type llvmElemTy = typeConverter.convertType(smemType.getElementType());
   Type elemPtrTy = ptr_ty(ctx, /*addrspace=*/3);
