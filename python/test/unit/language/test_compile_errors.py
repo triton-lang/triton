@@ -10,6 +10,11 @@ import traceback
 from triton._internal_testing import is_interpreter, is_cuda, is_hip, is_hip_mi300, is_hip_mi200
 
 
+def format_exception(type, value, tb):
+    list_msg = traceback.format_exception(type, value, tb, chain=False)
+    return "\n".join(list_msg)
+
+
 def test_err_undefined_variable():
 
     @triton.jit
@@ -20,7 +25,9 @@ def test_err_undefined_variable():
         triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constexprs={}))
 
     try:
-        assert "is not defined" in str(e.value), "error should mention the undefined variable"
+        err_msg = format_exception(e.type, value=e.value, tb=e.tb)
+        assert "is not defined" in err_msg, "error should mention the undefined variable"
+        assert "code_generator.py" not in err_msg
     except AssertionError as assertion_err:
         raise assertion_err from e.value
 
@@ -35,7 +42,9 @@ def test_err_in_binary_operator():
         triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constexprs={}))
 
     try:
-        assert "at 2:4:" in str(e.value), "error should point to the 0"
+        err_msg = format_exception(e.type, value=e.value, tb=e.tb)
+        assert "at 2:4:" in err_msg, "error should point to the 0"
+        assert "code_generator.py" not in err_msg
     except AssertionError as assertion_err:
         raise assertion_err from e.value
 
@@ -52,8 +61,11 @@ def test_err_static_assert():
     try:
         assert isinstance(e.value, CompileTimeAssertionFailure)
         assert e.value.__cause__ is None
-        assert "at 2:4:" in str(e.value), "error should point to the static_assert call"
-        assert "<source unavailable>" not in str(e.value)
+        err_msg = format_exception(e.type, value=e.value, tb=e.tb)
+        print(err_msg)
+        assert "at 2:4:" in err_msg, "error should point to the static_assert call"
+        assert "<source unavailable>" not in err_msg
+        assert "code_generator.py" not in err_msg
     except AssertionError as assertion_err:
         raise assertion_err from e.value
 
@@ -70,8 +82,10 @@ def test_err_in_unary_op():
 
     try:
         assert e.value.__cause__ is None
-        assert "at 2:4:" in str(e.value), "error should point to the `not`"
-        assert "<source unavailable>" not in str(e.value)
+        err_msg = format_exception(e.type, value=e.value, tb=e.tb)
+        assert "at 2:4:" in err_msg, "error should point to the `not`"
+        assert "<source unavailable>" not in err_msg
+        assert "code_generator.py" not in err_msg
     except AssertionError as assertion_err:
         raise assertion_err from e.value
 
@@ -86,8 +100,10 @@ def test_err_in_binary_op():
         triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constexprs={}))
 
     try:
-        assert "at 2:4:" in str(e.value), "error should point to the 1.0"
-        assert "<source unavailable>" not in str(e.value)
+        err_msg = format_exception(e.type, value=e.value, tb=e.tb)
+        assert "at 2:4:" in err_msg, "error should point to the 1.0"
+        assert "<source unavailable>" not in err_msg
+        assert "code_generator.py" not in err_msg
     except AssertionError as assertion_err:
         raise assertion_err from e.value
 
@@ -110,13 +126,16 @@ def test_err_in_nested_call():
         triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constexprs={}))
 
     try:
-        inner = e.value.__cause__
-        outer = e.value
-        assert "at 2:4:" in str(inner), "error should point to xyz"
-        assert "<source unavailable>" not in str(inner)
+        inner_exc = e.value.__cause__
+        inner = format_exception(inner_exc.__class__, inner_exc, inner_exc.__traceback__)
+        assert "at 2:4:" in inner, "error should point to xyz"
+        assert "<source unavailable>" not in inner
+        assert "code_generator.py" not in inner
 
-        assert "at 3:4" in str(outer), "error should point to the nested_call"
-        assert "<source unavailable>" not in str(outer)
+        outer = format_exception(e.type, value=e.value, tb=e.tb)
+        assert "at 3:4" in outer, "error should point to the nested_call"
+        assert "<source unavailable>" not in outer
+        assert "code_generator.py" not in outer
     except AssertionError as assertion_err:
         raise assertion_err from e.value
 
@@ -133,13 +152,15 @@ def test_err_in_builtin():
         triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constexprs={}))
 
     try:
-        inner = e.value.__cause__
-        outer = e.value
-        assert f"{os.sep}core.py" in '\n'.join(traceback.format_tb(
-            inner.__traceback__)), "error should point inside core.py"
+        inner_exc = e.value.__cause__
+        inner = format_exception(inner_exc.__class__, inner_exc, inner_exc.__traceback__)
+        assert f"{os.sep}core.py" in inner, "error should point inside core.py"
+        assert "code_generator.py" not in inner
 
-        assert "at 2:4:" in str(outer), "error should point to expand_dims call"
-        assert "<source unavailable>" not in str(outer)
+        outer = format_exception(e.type, value=e.value, tb=e.tb)
+        assert "at 2:4:" in outer, "error should point to expand_dims call"
+        assert "<source unavailable>" not in outer
+        assert "code_generator.py" not in outer
     except AssertionError as assertion_err:
         raise assertion_err from e.value
 

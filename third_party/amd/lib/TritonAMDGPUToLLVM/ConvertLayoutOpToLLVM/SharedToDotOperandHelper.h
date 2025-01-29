@@ -36,7 +36,7 @@ Value computeBasePtr(ConversionPatternRewriter &rewriter, Location loc,
                      const SharedMemoryObject &smemObj,
                      ArrayRef<Value> strides);
 
-bool isKMajor(llvm::ArrayRef<unsigned> order, int opIdx);
+bool isKContig(llvm::ArrayRef<unsigned> order, int opIdx);
 
 using computeTensorElemMappingInBlockT =
     std::function<llvm::SmallVector<llvm::SmallVector<Value>>(

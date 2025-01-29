@@ -208,6 +208,27 @@ protected:
   ModuleAxisInfoAnalysis &axisAnalysisPass;
 };
 
+// Trivial case where we map elementwise to an existing LLVM operator
+template <typename SourceOp, typename DestOp>
+struct ElementwiseOpConversion
+    : public ElementwiseOpConversionBase<
+          SourceOp, ElementwiseOpConversion<SourceOp, DestOp>> {
+  using Base =
+      ElementwiseOpConversionBase<SourceOp,
+                                  ElementwiseOpConversion<SourceOp, DestOp>>;
+  using Base::Base;
+  using OpAdaptor = typename Base::OpAdaptor;
+
+  // An interface to support variant DestOp builder.
+  SmallVector<DestOp> createDestOps(SourceOp op, OpAdaptor adaptor,
+                                    ConversionPatternRewriter &rewriter,
+                                    Type elemTy, MultipleOperandsRange operands,
+                                    Location loc) const {
+    return {rewriter.create<DestOp>(loc, elemTy, operands[0],
+                                    adaptor.getAttributes().getValue())};
+  }
+};
+
 } // namespace gpu
 
 } // namespace mlir::triton
