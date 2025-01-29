@@ -431,8 +431,8 @@ public:
 
     // TODO: This should be kWidth = 2 once MMAv2 supports kWidth=1 for 1 byte
     // types
-    auto aKWidth = mmaEnc.isHopper() ? 2 : 8;
-    auto bKWidth = mmaEnc.isHopper() ? 2 : 8;
+    auto aKWidth = 8;
+    auto bKWidth = 8;
     if (isFp4) {
       // Load 2x4-bit elements per thread
       aKWidth /= 2;

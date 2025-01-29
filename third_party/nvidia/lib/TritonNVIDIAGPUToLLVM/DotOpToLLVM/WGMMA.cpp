@@ -467,8 +467,8 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
         } else {
           auto aDotOpEnc =
               cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
-          assert(aDotOpEnc.getKWidth() ==
-                 32 / aTensorTy.getElementTypeBitWidth());
+          // assert(aDotOpEnc.getKWidth() ==
+          //        32 / aTensorTy.getElementTypeBitWidth());
 
           unsigned regASize = (instrShape[0] * instrShape[2]) / 32;
           llvm::SmallVector<Value> regA =

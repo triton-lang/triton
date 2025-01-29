@@ -14,6 +14,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
@@ -885,9 +886,9 @@ createAsyncOps(scf::ForOp &forOp,
     int numBuffers = info.distToUse;
     // For MMAv3, we need an extra buffer as this is assumed in the wgmma
     // pipelining post-processing.
-    if (info.isMMAv3Shared || info.isMMAv3Registers) {
-      ++numBuffers;
-    }
+    // if (info.isMMAv3Shared) {
+    //   ++numBuffers;
+    // }
     if (isa<tt::ExperimentalDescriptorLoadOp>(loadOp)) {
       isTMALoad = true;
       asyncLoad.isTMALoad = isTMALoad;
@@ -1587,6 +1588,9 @@ static void insertAsyncWarpGroupDotWaitInLoop(
 // dot op in the loop can have at most 2 warp_group_dot ops in flight at once.
 // (Each warp_group_dot op usually corresponds to a series of wgmma.async ops.)
 void triton::asyncLaunchDots(scf::ForOp forOp) {
+  if (::triton::tools::getBoolEnv("DISABLE_WGMMA_PIPELINE")) {
+    return;
+  }
   LDBG("Original loop:\n" << *forOp);
 
   // First, change every MMAv3 ttng.warp_group_dot {isAsync=false}

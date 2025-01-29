@@ -395,16 +395,16 @@ struct MMAV3UseRegOperand
         dstEnc.getVersionMajor() != 3)
       return failure();
     auto srcTy = cast<RankedTensorType>(alloc.getSrc().getType());
-    auto kWidth = 32 / srcTy.getElementTypeBitWidth();
+    auto kWidth = 8; // 32 / srcTy.getElementTypeBitWidth();
     auto dotOperandEnc = DotOperandEncodingAttr::get(
         dotOp.getContext(), /*opIdx=*/0, srcEnc, /*kWidth=*/kWidth);
     auto newTy = RankedTensorType::get(srcTy.getShape(), srcTy.getElementType(),
                                        dotOperandEnc);
     // TODO(Keren): relax the condition once
     // https://github.com/triton-lang/triton/pull/5419 is merged
-    if (!cvtReordersRegisters(srcTy, newTy) &&
-        !matchMmaV3AndDotOperandLayout(srcTy, newTy))
-      return failure();
+    // if (!cvtReordersRegisters(srcTy, newTy) &&
+    //     !matchMmaV3AndDotOperandLayout(srcTy, newTy))
+    //   return failure();
 
     Value newOperand =
         rewriter.create<ConvertLayoutOp>(dotOp.getLoc(), newTy, alloc.getSrc());

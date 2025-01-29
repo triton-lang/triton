@@ -36,6 +36,7 @@ inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
     "TRITON_OVERRIDE_ARCH",
     "USE_IR_LOC",
     "NVPTX_ENABLE_DUMP",
+    "DISABLE_WGMMA_PIPELINE",
     // clang-format on
 };
 
