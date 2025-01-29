@@ -669,8 +669,8 @@ OpFoldResult ExpandDimsOp::fold(FoldAdaptor adaptor) {
 
 //-- ReshapeOp --
 template <typename OpType>
-LogicalResult canonicalizeViewOrBroadcast(OpType op,
-                                          PatternRewriter &rewriter) {
+LogicalResult canonicalizeReshapeOrBroadcast(OpType op,
+                                             PatternRewriter &rewriter) {
   auto definingOp = op.getSrc().getDefiningOp();
   if (!definingOp) {
     return failure();
@@ -694,9 +694,9 @@ LogicalResult canonicalizeViewOrBroadcast(OpType op,
 }
 
 LogicalResult ReshapeOp::canonicalize(ReshapeOp op, PatternRewriter &rewriter) {
-  if (!op.getAllowReorder() || op.getEfficientLayout())
+  if (op.getEfficientLayout())
     return failure();
-  return canonicalizeViewOrBroadcast(op, rewriter);
+  return canonicalizeReshapeOrBroadcast(op, rewriter);
 }
 
 OpFoldResult ReshapeOp::fold(FoldAdaptor adaptor) {
@@ -785,7 +785,7 @@ LogicalResult FpToFpOp::verify() {
 //-- BroadcastOp --
 LogicalResult BroadcastOp::canonicalize(BroadcastOp op,
                                         PatternRewriter &rewriter) {
-  return canonicalizeViewOrBroadcast(op, rewriter);
+  return canonicalizeReshapeOrBroadcast(op, rewriter);
 }
 
 OpFoldResult BroadcastOp::fold(FoldAdaptor adaptor) {
