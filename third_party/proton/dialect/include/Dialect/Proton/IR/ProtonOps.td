@@ -39,13 +39,13 @@ def GranularityAttr : I32EnumAttr<
 }
 
 def PT_RecordOp : PT_Op<"record", [
-  MemoryEffects<[MemRead<DefaultResource>]>, 
+  MemoryEffects<[MemRead<DefaultResource>]>,
   MemoryEffects<[MemWrite<DefaultResource>]>
   ]> {
   let summary = "Record a GPU metric event";
 
   let description = [{
-    The operator records GPU event of a particular metric. 
+    The operator records GPU event of a particular metric.
     Essentially a marker with a region id.
 
     Example:
@@ -65,14 +65,14 @@ def PT_RecordOp : PT_Op<"record", [
 }
 
 def PT_CircularRecordOp : PT_Op<"circular_record", [
-  MemoryEffects<[MemRead<DefaultResource>]>, 
+  MemoryEffects<[MemRead<DefaultResource>]>,
   MemoryEffects<[MemWrite<DefaultResource>]>
   ]> {
   let summary = "Record a GPU metric event into a circular buffer";
 
   let description = [{
     Records a metric event into a circular buffer backed by the internal memory `data`.
-    The circular buffer indexing `indexPtr` is automatically maintained. Older events 
+    The circular buffer indexing `indexPtr` is automatically maintained. Older events
     get dropped if the `data` is full.
   }];
   let arguments = (
@@ -89,7 +89,7 @@ def PT_CircularRecordOp : PT_Op<"circular_record", [
 }
 
 def PT_FinalizeOp : PT_Op<"finalize", [
-  MemoryEffects<[MemRead<SharedMemory>]>, 
+  MemoryEffects<[MemRead<SharedMemory>]>,
   MemoryEffects<[MemRead<GlobalMemory>]>,
   MemoryEffects<[MemWrite<GlobalMemory>]>
   ]> {
