@@ -393,11 +393,11 @@ proton-viewer -e ".*test.*" path/to/file.json
     if args.list:
         show_metrics(file_name)
     elif metrics:
-        gf, metrics = parse(metrics, file_name, include, exclude, threshold)
+        gf, derived_metrics = parse(metrics, file_name, include, exclude, threshold)
         if diff:
             gf2, _ = parse(metrics, diff, include, exclude, threshold)
             gf = gf.sub(gf2)
-        print_tree(gf, metrics, depth, format, print_sorted)
+        print_tree(gf, derived_metrics, depth, format, print_sorted)
 
 
 if __name__ == "__main__":
