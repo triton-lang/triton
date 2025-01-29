@@ -3,6 +3,7 @@
 
 #include "cupti.h"
 #include "cupti_pcsampling.h"
+#include <string>
 
 namespace proton {
 
