@@ -32,11 +32,15 @@ struct AllocateProtonDeviceBuffer
     auto loc = mod.getLoc();
 
     bool hasProtonRecordOp = false;
+    bool useDeviceBuffer = false;
     mod.walk([&](FunctionOpInterface funcOp) {
-      funcOp.walk(
-          [&](mlir::triton::proton::RecordOp op) { hasProtonRecordOp = true; });
+      funcOp.walk([&](mlir::triton::proton::RecordOp op) {
+        hasProtonRecordOp = true;
+        if (useDeviceBuffer == false && op.getUseDeviceBuffer() == true)
+          useDeviceBuffer = true;
+      });
     });
-    if (hasProtonRecordOp) {
+    if (hasProtonRecordOp && useDeviceBuffer) {
       FuncOp func = *mod.getOps<triton::FuncOp>().begin();
       b.setInsertionPointToStart(&func.getBody().front());
       // For now just hard code the device buffer size we want to use.

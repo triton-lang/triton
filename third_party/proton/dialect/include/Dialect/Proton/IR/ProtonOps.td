@@ -50,6 +50,10 @@ def TT_RecordOp : TT_Proton_Op<"record", [DeclareOpInterfaceMethods<MemoryEffect
     ...
     proton.record() {isStart = false, regionId = 4 : i32}
     ...
+    proton.record() {isStart = true, regionId = 4 : i32, useDeviceBuffer=true}
+    ...
+    proton.record() {isStart = false, regionId = 4 : i32, useDeviceBuffer=true}
+    ...
     proton.record() {isStart = true, regionId = 1 : i32, granularity = 1 : i32}
     ...
     proton.record() {isStart = false, regionId = 1 : i32, granularity = 1 : i32}
@@ -58,6 +62,7 @@ def TT_RecordOp : TT_Proton_Op<"record", [DeclareOpInterfaceMethods<MemoryEffect
   let arguments = (
     ins BoolAttr: $isStart,
     ConfinedAttr<I32Attr, [IntNonNegative]>:$regionId,
+    DefaultValuedAttr<BoolAttr, "false">: $useDeviceBuffer,
     DefaultValuedAttr<MetricAttr, "Metric::CYCLE">:$metric,
     DefaultValuedAttr<GranularityAttr, "Granularity::WARPGROUP">:$granularity
   );
