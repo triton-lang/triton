@@ -2,7 +2,19 @@ project(Proton CXX)
 
 set(PROTON_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/csrc)
 set(PROTON_EXTERN_DIR ${CMAKE_CURRENT_SOURCE_DIR}/extern)
-file(GLOB_RECURSE PROTON_SRC ${PROTON_SRC_DIR}/lib/*.cpp)
+
+set_property(GLOBAL PROPERTY PROTON_LIBS "")
+function(add_proton_library name)
+  set_property(GLOBAL APPEND PROPERTY PROTON_LIBS ${name})
+  add_library(${name} OBJECT)
+  target_sources(${name}
+    PRIVATE ${ARG_UNPARSED_ARGUMENTS}
+    INTERFACE $<TARGET_OBJECTS:${name}>
+  )
+endfunction()
+
+add_subdirectory(${PROTON_SRC_DIR})
+
 add_library(proton SHARED ${PROTON_SRC} ${PROTON_SRC_DIR}/${PROJECT_NAME}.cpp)
 
 if(NOT CUPTI_INCLUDE_DIR)
