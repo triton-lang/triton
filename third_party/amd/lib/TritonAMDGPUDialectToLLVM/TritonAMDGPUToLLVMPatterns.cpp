@@ -6,5 +6,6 @@ void populateTritonAMDGPUToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                         RewritePatternSet &patterns,
                                         PatternBenefit benefit) {
   populateExtractSliceOpToLLVMPatterns(typeConverter, patterns, benefit);
+  populateConcatOpToLLVMPatterns(typeConverter, patterns, benefit);
 }
 } // namespace mlir::triton::AMD

@@ -117,6 +117,36 @@ def ExtractSliceOp
   let hasVerifier = 1;
 }
 
+def ConcatOp : TT_AMDGPU_Op<"concat", [Pure]> {
+  let summary = "concat operation";
+  let description = [{
+    The "concat" operation joins slices of a tensor together
+    in the row-major style.
+
+    * sources: a list of the input tensors which are supposed to have the same type
+    * coords: a list values showing how input tensors need to be assembled to
+              obtain the final result
+
+    Example 1:
+
+    ```mlir
+    #blocked = #ttg.blocked<{sizePerThread = [1, 8],
+        threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+    %0 = amdgpu.concat %arg0, %arg1 [2, 1] : tensor<32x64xf32, #blocked>,tensor<32x64xf32, #blocked>,
+      -> tensor<64x64xf32, #blocked>
+    ```
+    }];
+
+  let arguments = (ins Variadic<TT_Tensor>:$sources, DenseI64ArrayAttr:$coords);
+  let results = (outs AnyRankedTensor:$result);
+
+  let assemblyFormat = [{
+    $sources $coords attr-dict `:` type($sources) `->` type($result)
+  }];
+
+  let hasVerifier = 1;
+}
+
 def InstructionSchedHint : TT_AMDGPU_Op<"instruction_sched_hint", []> {
   let summary = "A placeholder op for instruction scheduling hints within a basic block";
   let description = [{
