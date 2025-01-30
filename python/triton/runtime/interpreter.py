@@ -712,7 +712,7 @@ def _patch_lang_tensor(tensor):
     tensor.T = property(_get_transpose)
 
 
-class ReduceScanOpIneterface:
+class ReduceScanOpInterface:
 
     def __init__(self, axis, combine_fn):
         self.axis = axis
@@ -748,11 +748,12 @@ class ReduceScanOpIneterface:
         raise NotImplementedError("apply_impl not implemented")
 
 
-class ReduceOps(ReduceScanOpIneterface):
+class ReduceOps(ReduceScanOpInterface):
 
-    def __init__(self, axis, combine_fn, keep_dims):
+    def __init__(self, axis, combine_fn, keep_dims, dtype):
         super().__init__(axis, combine_fn)
         self.keep_dims = keep_dims
+        self.dtype = dtype
 
     def unravel(self, input, axis):
         ret = []
@@ -829,6 +830,9 @@ class ReduceOps(ReduceScanOpIneterface):
         return self.to_tensor(np.sum(input.handle.data, axis=self.axis, keepdims=self.keep_dims), input.dtype)
 
     def apply_impl(self, input):
+        if self.dtype is not None:
+            input = input.astype(getattr(np, str(self.dtype)))
+
         if self.combine_fn == tl.standard._argmin_combine_tie_break_left:
             return self.min_max(input[0], val_reduce_op=np.min, idx_reduce_op=np.argmin)
         elif self.combine_fn == tl.standard._argmax_combine_tie_break_left:
@@ -844,7 +848,7 @@ class ReduceOps(ReduceScanOpIneterface):
             return self.generic_reduce(input)
 
 
-class ScanOps(ReduceScanOpIneterface):
+class ScanOps(ReduceScanOpInterface):
 
     def __init__(self, axis, combine_fn, reverse):
         super().__init__(axis, combine_fn)
@@ -910,8 +914,8 @@ def _patch_reduce_scan():
     # Because interpreter doesn't support region_builder_fn, we cannot patch the builder
     # to use the new reduce and scan functions.
     # Instead, we need to patch reduce and reduce functions in tl and tl.core
-    def _new_reduce(input, axis, combine_fn, keep_dims=False, **kwargs):
-        return ReduceOps(axis, combine_fn, keep_dims).apply(input)
+    def _new_reduce(input, axis, combine_fn, keep_dims=False, dtype=None, **kwargs):
+        return ReduceOps(axis, combine_fn, keep_dims, dtype).apply(input)
 
     def _new_scan(input, axis, combine_fn, reverse=False, **kwargs):
         return ScanOps(axis, combine_fn, reverse).apply(input)
