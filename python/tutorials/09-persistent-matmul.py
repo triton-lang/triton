@@ -719,13 +719,14 @@ def validate(M, N, K, dtype):
 
 def show_profile(precision, profile_name):
     import triton.profiler.viewer as proton_viewer
-    metrics = ["time/ms"]
+    metric_names = ["time/ms"]
     if precision == 'fp8':
-        metrics = ["tflop8/s"] + metrics
+        metric_names = ["tflop8/s"] + metric_names
     elif precision == 'fp16':
-        metrics = ["tflop16/s"] + metrics
+        metric_names = ["tflop16/s"] + metric_names
     file_name = f"{profile_name}.hatchet"
-    proton_viewer.parse(metrics, file_name, depth=100)
+    tree, metrics = proton_viewer.parse(metric_names, file_name)
+    proton_viewer.print_tree(tree, metrics)
 
 
 if __name__ == "__main__":
