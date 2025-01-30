@@ -243,7 +243,8 @@ jobs:
         run: |
           echo "PATH is '$PATH'"
           ccache --zero-stats
-          make dev-install
+          python3 -m pip install -r python/requirements.txt
+          python3 -m pip install -e 'python[tests]' --no-build-isolation -v
       - name: CCache Stats
         run: ccache --print-stats
       - name: Run lit tests
@@ -370,7 +371,8 @@ jobs:
           echo "PATH is '$PATH'"
           pip uninstall -y triton pytorch-triton-rocm
           ccache --zero-stats
-          make dev-install
+          python3 -m pip install -r python/requirements.txt
+          python3 -m pip install -e 'python[tests]' --no-build-isolation -v
       - name: CCache Stats
         run: ccache --print-stats
       - name: Run lit tests
@@ -542,7 +544,8 @@ jobs:
           source ~/.venv/bin/activate
           echo "PATH is '$PATH'"
           ccache --zero-stats
-          make dev-install
+          python3 -m pip install -r python/requirements.txt
+          python3 -m pip install -e 'python[tests]' --no-build-isolation -v
       - name: CCache Stats
         run: ccache --print-stats
       - name: Inspect cache directories

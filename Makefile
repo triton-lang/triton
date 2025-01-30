@@ -62,10 +62,11 @@ test: test-lit test-cpp test-python
 
 .PHONY: dev-install
 dev-install:
+	cd python
 	# build-time dependencies
-	$(PYTHON) -m pip install ninja cmake wheel pybind11 setuptools
-	# test dependencies
-	$(PYTHON) -m pip install torch lit
+	$(PYTHON) -m pip install python/requirements.txt
+	# runtime dependencies
+	$(PYTHON) -m pip install torch
 	$(PYTHON) -m pip uninstall triton pytorch-triton -y
 	$(PYTHON) -m pip install -e 'python[tests]' --no-build-isolation -v
 
