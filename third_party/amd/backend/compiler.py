@@ -37,12 +37,8 @@ def min_dot_size(target: GPUTarget):
 
 
 def is_pingpong_enabled(arch):
-    if arch == 'gfx942':
-        use_block_pingpong = os.getenv("TRITON_HIP_USE_BLOCK_PINGPONG", "1") == "1"
-    else:
-        use_block_pingpong = os.getenv("TRITON_HIP_USE_BLOCK_PINGPONG", "0") == "1"
-    return use_block_pingpong
-
+    default = "1" if arch == "gfx942" else "0"
+    return os.getenv("TRITON_HIP_USE_BLOCK_PINGPONG", default) == "1"
 
 @dataclass(frozen=True)
 class HIPOptions:
