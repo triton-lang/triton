@@ -1106,22 +1106,50 @@ public:
     Value fatPtrOffset = fatPtr[1];
     Location curLoc = op.getLoc();
 
-    llvm::SmallDenseMap<StringAttr, Attribute> attributes{};
-    Value newPtr = fatPtrBase;
-    if (llvm::isa<RankedTensorType>(op->getOperandTypes()[PtrLikeIdx])) {
-      const FatPointers::FatPtrAttrs &fatPtrAttrs =
-          this->fatPtrs.at({fatPtrBase, fatPtrOffset});
-      newPtr = createTensorPointer(rewriter, fatPtrBase, fatPtrOffset, curLoc,
-                                   fatPtrAttrs);
-    }
+    const FatPointers::FatPtrAttrs &fatPtrAttrs =
+        this->fatPtrs.at({fatPtrBase, fatPtrOffset});
     SmallVector<Value> operands = op->getOperands();
-    operands[PtrLikeIdx] = newPtr;
+    operands[PtrLikeIdx] = createTensorPointer(
+        rewriter, fatPtrBase, fatPtrOffset, curLoc, fatPtrAttrs);
+
     if (op->getNumResults())
       rewriter.replaceOpWithNewOp<SourceOp>(
           op, op->getResultTypes(), ValueRange{operands}, op->getAttrs());
     else
       rewriter.replaceOpWithNewOp<SourceOp>(
           op, TypeRange{}, ValueRange{operands}, op->getAttrs());
+    return success();
+  }
+};
+
+class ConvertCallOp : public PointerCanonicalizationPattern<tt::CallOp> {
+public:
+  using PointerCanonicalizationPattern<
+      tt::CallOp>::PointerCanonicalizationPattern;
+
+  LogicalResult matchAndRewrite_(
+      tt::CallOp callOp,
+      typename PointerCanonicalizationPattern<tt::CallOp>::OneToNOpAdaptor
+          adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    Location curLoc = callOp.getLoc();
+    SmallVector<Value> operands = callOp->getOperands();
+    for (auto [i, maybeFatPtr] : llvm::enumerate(adaptor.getOperands())) {
+      if (maybeFatPtr.size() != 2)
+        continue;
+      Value fatPtrBase = maybeFatPtr[0];
+      Value fatPtrOffset = maybeFatPtr[1];
+
+      const FatPointers::FatPtrAttrs &fatPtrAttrs =
+          this->fatPtrs.at({fatPtrBase, fatPtrOffset});
+      Value newPtr = createTensorPointer(rewriter, fatPtrBase, fatPtrOffset,
+                                         curLoc, fatPtrAttrs);
+      operands[i] = newPtr;
+    }
+
+    rewriter.replaceOpWithNewOp<tt::CallOp>(callOp, callOp->getResultTypes(),
+                                            ValueRange{operands},
+                                            callOp->getAttrs());
     return success();
   }
 };
@@ -1430,8 +1458,8 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
            MaterializeFatPointer<tt::BitcastOp>, ConvertSCFForOp,
            ConvertExpandDims, ConvertSCFYieldOp, ConvertSCFIfOp,
            ConvertSCFConditionOp, ConvertSCFWhileOp, ConvertCFCondBranch,
-           ConvertCFBranch, ConvertArithSelectOp, ConvertReturnOp>(
-          patterns.getContext(), opsToRewrite, fatPrs);
+           ConvertCFBranch, ConvertArithSelectOp, ConvertCallOp,
+           ConvertReturnOp>(patterns.getContext(), opsToRewrite, fatPrs);
   if (failed(applyPartialConversion(func, target, std::move(patterns), config)))
     return signalPassFailure();
 

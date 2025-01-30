@@ -856,15 +856,19 @@ module attributes {"ttg.num-warps" = 4 : i32} {
   }
 }
 
-// CHECK:   tt.func @scalar_cond_branch(%[[VAL_0:.*]]: !tt.ptr<f32>, %[[VAL_1:.*]]: !tt.ptr<f32>, %[[VAL_2:.*]]: i1) -> f32 {
-// CHECK:     cf.cond_br %[[VAL_2]], ^bb1(%[[VAL_0]] : !tt.ptr<f32>), ^bb2(%[[VAL_1]] : !tt.ptr<f32>)
-// CHECK:   ^bb1(%[[VAL_3:.*]]: !tt.ptr<f32>):
-// CHECK:     %[[VAL_4:.*]] = tt.load %[[VAL_3]] : !tt.ptr<f32>
-// CHECK:     tt.return %[[VAL_4]] : f32
-// CHECK:   ^bb2(%[[VAL_5:.*]]: !tt.ptr<f32>):
-// CHECK:     %[[VAL_6:.*]] = tt.load %[[VAL_5]] : !tt.ptr<f32>
-// CHECK:     tt.return %[[VAL_6]] : f32
-// CHECK:   }
+// CHECK-LABEL:   tt.func @scalar_cond_branch(
+// CHECK-SAME:      %[[VAL_0:.*]]: !tt.ptr<f32>, %[[VAL_1:.*]]: !tt.ptr<f32>, %[[VAL_2:.*]]: i1) -> f32 {
+// CHECK:           %[[VAL_3:.*]] = arith.constant 0 : i64
+// CHECK:           cf.cond_br %[[VAL_2]], ^bb1(%[[VAL_0]], %[[VAL_3]] : !tt.ptr<f32>, i64), ^bb2(%[[VAL_1]], %[[VAL_3]] : !tt.ptr<f32>, i64)
+// CHECK:         ^bb1(%[[VAL_4:.*]]: !tt.ptr<f32>, %[[VAL_5:.*]]: i64):
+// CHECK:           %[[VAL_6:.*]] = tt.addptr %[[VAL_4]], %[[VAL_5]] : !tt.ptr<f32>, i64
+// CHECK:           %[[VAL_7:.*]] = tt.load %[[VAL_6]] : !tt.ptr<f32>
+// CHECK:           tt.return %[[VAL_7]] : f32
+// CHECK:         ^bb2(%[[VAL_8:.*]]: !tt.ptr<f32>, %[[VAL_9:.*]]: i64):
+// CHECK:           %[[VAL_10:.*]] = tt.addptr %[[VAL_8]], %[[VAL_9]] : !tt.ptr<f32>, i64
+// CHECK:           %[[VAL_11:.*]] = tt.load %[[VAL_10]] : !tt.ptr<f32>
+// CHECK:           tt.return %[[VAL_11]] : f32
+// CHECK:         }
 
 // -----
 
