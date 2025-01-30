@@ -247,6 +247,11 @@ def compile(src, target=None, options=None):
     if not always_compile and metadata_path is not None:
         # cache hit!
         return CompiledKernel(src, metadata_group, hash)
+    compile_time_stats_path = os.environ.get("TRITON_COMPILE_TIME_LOG_PATH", "")
+    report_time_stats = compile_time_stats_path is not ""
+    if report_time_stats:
+        import time
+        start_time = time.perf_counter()
     # initialize metadata
     metadata = {
         "hash": hash,
@@ -307,6 +312,12 @@ def compile(src, target=None, options=None):
     # multithreading in the MLIR context
     if not os.environ.get("TRITON_ENABLE_ASAN", "0") == "1":
         context.disable_multithreading()
+    if report_time_stats:
+        import time
+        end_time = time.perf_counter()
+        total_time = end_time - start_time
+        with open(compile_time_stats_path, "a") as file:
+            file.write(f"{src.name}: {total_time:.6f}\n")
     # return handle to compiled kernel
     return CompiledKernel(src, metadata_group, hash)
 
