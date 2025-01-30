@@ -186,9 +186,9 @@ def SharedEncodingTrait : AttrInterface<"SharedEncodingTrait"> {
   ];
 }
 
-class SharedEncoding<list<Trait> traits = [],
+class SharedEncoding<string name, string attrMnemonic, list<Trait> traits = [],
                      Dialect dialect = TritonGPU_Dialect>
-  : TritonGPU_Attr<"SharedEncoding", "shared_encoding", !listconcat([SharedEncodingTrait], traits), dialect> {
+  : TritonGPU_Attr<name, attrMnemonic, !listconcat([SharedEncodingTrait], traits), dialect> {
 
   let description = [{
   }];
@@ -206,8 +206,7 @@ class SharedEncoding<list<Trait> traits = [],
   }];
 }
 
-// def SharedEncodingAttr : TritonGPU_Attr<"SharedEncoding", "shared_encoding"> {
-def SharedEncodingAttr : SharedEncoding {
+def SharedEncodingAttr : SharedEncoding<"SharedEncoding", "shared_encoding"> {
   let mnemonic = "shared";
 
   let description = [{
