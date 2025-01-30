@@ -572,5 +572,9 @@ class CudaDriver(GPUDriver):
         cache_size = 256 * 1024 * 1024
         return torch.empty(int(cache_size // 4), dtype=torch.int, device='cuda')
 
+    def get_sleep_kernel(self):
+        from torch.cuda import _sleep
+        return _sleep
+
     def clear_cache(self, cache):
         cache.zero_()

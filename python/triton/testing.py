@@ -4,6 +4,7 @@ import os
 import statistics
 import subprocess
 import sys
+import time
 from contextlib import contextmanager
 from typing import Any, Dict, List
 from . import language as tl
@@ -150,19 +151,23 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
     # Estimate the runtime of the function
     start_event = di.Event(enable_timing=True)
     end_event = di.Event(enable_timing=True)
+    estimate_iterations = 5
+    start_cpu = time.time()
     start_event.record()
-    for _ in range(5):
+    for _ in range(estimate_iterations):
         runtime.driver.active.clear_cache(cache)
         fn()
     end_event.record()
+    estimate_cpu_ms = ((time.time() - start_cpu) / estimate_iterations) * 1000
     di.synchronize()
-    estimate_ms = start_event.elapsed_time(end_event) / 5
+    estimate_gpu_ms = start_event.elapsed_time(end_event) / estimate_iterations
 
     # compute number of warmup and repeat
-    n_warmup = max(1, int(warmup / estimate_ms))
-    n_repeat = max(1, int(rep / estimate_ms))
+    n_warmup = max(1, int(warmup / estimate_gpu_ms))
+    n_repeat = max(1, int(rep / estimate_gpu_ms))
     start_event = [di.Event(enable_timing=True) for i in range(n_repeat)]
     end_event = [di.Event(enable_timing=True) for i in range(n_repeat)]
+    sleep_kernel = runtime.driver.active.get_sleep_kernel()
     # Warm-up
     for _ in range(n_warmup):
         fn()
@@ -174,6 +179,11 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
         if grad_to_none is not None:
             for x in grad_to_none:
                 x.grad = None
+        # For fast kernels we need to keep the GPU busy or we will measure the cpu time between the timing event and the kernel launch
+        # We do this conservatively because estimate_gpu_ms is an overestimation
+        sleep_ms = estimate_cpu_ms - (0.5 * estimate_gpu_ms)
+        if sleep_ms > 0.0:
+            sleep_kernel(int(estimate_cpu_ms * 1_000_000))
         # we clear the L2 cache before each run
         runtime.driver.active.clear_cache(cache)
         # record time of `fn`
