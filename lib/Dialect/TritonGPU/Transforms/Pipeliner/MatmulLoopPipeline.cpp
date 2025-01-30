@@ -926,7 +926,7 @@ createAsyncOps(scf::ForOp &forOp,
     // For MMAv3, we need an extra buffer as this is assumed in the wgmma
     // pipelining post-processing. Additionally, SMEM for scales in MMAv5
     // should get the same number of buffers as the operand SMEM.
-    if (info.isMMAv3Shared || info.isMMAv3Registers || info.isMMAv5Scale) {
+    if (info.isMMAv3Shared || info.isMMAv5Scale) {
       ++numBuffers;
     }
     if (isa<tt::ExperimentalDescriptorLoadOp,
