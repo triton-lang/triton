@@ -512,6 +512,33 @@ public:
 };
 
 Value addSmemStageToScaleLoad(Value scale) {
+  // rewrite load(scale) -> local_load(local_alloc(load(scale)))
+  struct AddLocalAllocAndLoad : public mlir::OpRewritePattern<triton::LoadOp> {
+    using OpRewritePattern::OpRewritePattern;
+
+    mlir::LogicalResult
+    matchAndRewrite(triton::LoadOp loadOp,
+                    mlir::PatternRewriter &rewriter) const override {
+      auto res = loadOp.getResult();
+      auto scaleSmem = getSharedMemoryScale(res, rewriter);
+      auto localLoad =
+          rewriter.create<LocalLoadOp>(res.getLoc(), res.getType(), scaleSmem);
+      rewriter.replaceOp(loadOp, localLoad);
+      llvm::outs() << "foo";
+      return success();
+    }
+  };
+
+  llvm::outs() << "before\n";
+  scale.dump();
+  mlir::RewritePatternSet patterns(scale.getContext());
+  patterns.add<AddLocalAllocAndLoad>(scale.getContext());
+  if (applyPatternsGreedily(scale.getDefiningOp(), std::move(patterns)).failed()) {
+    llvm::outs() << "failed\n";
+    return scale;
+  }
+  llvm::outs() << "after\n";
+  scale.dump();
   return scale;
 }
 
