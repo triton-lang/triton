@@ -28,6 +28,7 @@ test-cpp:
 	ninja -C $(BUILD_DIR) check-triton-unit-tests
 
 .PHONY: test-python
+.ONESHELL:
 test-unit: all
 	cd python/test/unit
 	$(PYTEST) -s -n 8 --ignore=cuda/test_flashattention.py --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=test_debug.py
@@ -44,6 +45,7 @@ test-regression: all
 	$(PYTEST) -s -n 8 python/test/regression
 
 .PHONY: test-interpret
+.ONESHELL:
 test-interpret: all
 	cd python/test/unit
 	TRITON_INTERPRET=1 $(PYTEST) -s -n 16 -m interpreter language/test_core.py language/test_standard.py \

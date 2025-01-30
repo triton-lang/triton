@@ -249,7 +249,7 @@ jobs:
         run: make test-unit
       - name: Run interpreter tests
         if: ${{ matrix.runner[0] == 'h100-runner-set' }}
-        run: make test-intrepet
+        run: make test-interpret
       - name: Run regression tests
         run: make test-regression
       - name: Run C++ unittests
