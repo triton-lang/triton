@@ -2458,6 +2458,9 @@ def test_sum_dtype():
     kernel_dtype[(1, )](out, init=7, in_dtype=tl.int8, out_dtype=tl.int8)
     assert out[0] == (7 * 32 * 32) % 256
 
+    kernel_dtype[(1, )](out, init=1, in_dtype=tl.int32, out_dtype=None)
+    assert out[0] == 32 * 32
+
     kernel_default_int[(1, )](out)
     assert out[0] == 32 * 32
 
