@@ -3,6 +3,7 @@
 
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/OpDefinition.h"
+#include "mlir/Interfaces/InferTypeOpInterface.h"
 #include "mlir/Support/LogicalResult.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 
@@ -27,7 +28,7 @@ LogicalResult verifyTensorLayouts(Operation *op);
 
 LogicalResult verifySameOperandsEncoding(Operation *op,
                                          bool allowTensorPointerType = false);
-
+LogicalResult verifyEquivalentType(Type typeA, Type typeB);
 LogicalResult
 verifySameOperandsAndResultEncoding(Operation *op,
                                     bool allowTensorPointerType = false);

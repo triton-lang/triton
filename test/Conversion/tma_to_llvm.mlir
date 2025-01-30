@@ -22,8 +22,9 @@ tt.func @tma_gather_simple(%arg0: !tt.ptr<i8>, %arg1: !ttg.memdesc<1xi64, #share
   // CHECK: [[WIDX:%.*]] = lshr i32 [[TIDX]], 5
   // CHECK: [[WARP_ID:%.*]] = tail call i32 @llvm.nvvm.shfl.sync.idx.i32(i32 -1, i32 [[WIDX]],
 
-  // CHECK: [[ELECT:%.*]] = tail call i1 asm "elect.sync
-  // CHECK: [[PRED:%.*]] = and i1 %5, [[ELECT]]
+  // CHECK: [[ELECT:%.*]] = tail call { i32, i1 } @llvm.nvvm.elect.sync
+  // CHECK: [[ELECT_PRED:%.*]] = extractvalue { i32, i1 } [[ELECT]], 1
+  // CHECK: [[PRED:%.*]] = and i1 %5, [[ELECT_PRED]]
 
   // CHECK: [[IDX0:%.*]] = extractvalue {{.*}} %2, 0
   // CHECK: [[IDX1:%.*]] = extractvalue {{.*}} %2, 1
@@ -142,8 +143,9 @@ tt.func @tma_gather_redundant_warps(%arg0: !tt.ptr<i8>, %arg1: !ttg.memdesc<1xi6
   // CHECK: [[WARP_SELECT:%.*]] = and i32 [[WARP_ID]], 2
   // CHECK: [[WARP_PRED:%.*]] = icmp eq i32 [[WARP_SELECT]], 0
   // CHECK: [[PRED_TMP:%.*]] = and i1 %5, [[WARP_PRED]]
-  // CHECK: [[ELECT:%.*]] = tail call i1 asm "elect.sync
-  // CHECK: [[PRED:%.*]] = and i1 [[ELECT]], [[PRED_TMP]]
+  // CHECK: [[ELECT:%.*]] = tail call { i32, i1 } @llvm.nvvm.elect.sync
+  // CHECK: [[ELECT_PRED:%.*]] = extractvalue { i32, i1 } [[ELECT]], 1
+  // CHECK: [[PRED:%.*]] = and i1 [[ELECT_PRED]], [[PRED_TMP]]
 
   // CHECK-COUNT-8: cp.async.bulk.tensor{{.*}}(i1 [[PRED]],
   ttng.async_tma_gather %arg0[%arg2, %arg3] %arg4, %arg1, %arg5 : !tt.ptr<i8>, tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked2}>>, i32, !ttg.memdesc<1xi64, #shared, #smem, mutable>, !ttg.memdesc<32x128xbf16, #shared1, #smem, mutable>, i1
@@ -158,14 +160,15 @@ tt.func @tma_scatter(%arg0: !tt.ptr<i8>, %arg1: tensor<32xi32, #ttg.slice<{dim =
   // with `async_tma_gather`, so we don't need to re-test the indexing logic.
 
   // CHECK: [[BASE_PTR:%.*]] = extractvalue {{.*}} %3, 0
-  // CHECK: [[PRED:%.*]] = tail call i1 asm "elect.sync
+  // CHECK: [[ELECT:%.*]] = tail call { i32, i1 } @llvm.nvvm.elect.sync
+  // CHECK: [[PRED:%.*]] = extractvalue { i32, i1 } [[ELECT]], 1
 
   // CHECK: [[PTR:%.*]] = getelementptr {{.*}} [[BASE_PTR]]
   // CHECK-NEXT: "@$0 cp.async.bulk.tensor.2d.tile::scatter4.global.shared::cta.bulk_group [$1, {$2, $3, $4, $5, $6}], [$7];"
   // CHECK-SAME: (i1 [[PRED]], ptr addrspace(1) %0, i32 %2, i32 {{%[0-9]+}}, i32 {{%[0-9]+}}, i32 {{%[0-9]+}}, i32 {{%[0-9]+}}, ptr addrspace(3) [[PTR]])
   ttng.async_tma_scatter %arg0[%arg1, %arg2] %arg3 : !tt.ptr<i8>, tensor<32xi32, #ttg.slice<{dim = 0, parent = #blocked}>>, i32, !ttg.memdesc<32x128xbf16, #shared1, #smem, mutable>
 
-  // CHECK: asm sideeffect "cp.async.bulk.commit_group ;", ""()
+  // CHECK: nvvm.cp.async.bulk.commit.group()
 
   // CHECK-NEXT: ret void
   tt.return

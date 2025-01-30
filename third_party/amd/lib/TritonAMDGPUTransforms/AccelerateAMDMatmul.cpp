@@ -416,7 +416,7 @@ public:
     // store instructions, except for fp8 matmul kernels due to regression
     // TODO (lixun): investigate the regression and enable this feature again
     auto aElemTy = mfmaInstr.getElementTypeA();
-    bool isFP8 = aElemTy.isFloat8E5M2FNUZ() || aElemTy.isFloat8E4M3FNUZ();
+    bool isFP8 = llvm::isa<Float8E5M2FNUZType, Float8E4M3FNUZType>(aElemTy);
     bool isTransposed = isChainDot(dotOp) || !isFP8;
     mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
         oldRetType.getContext(),
