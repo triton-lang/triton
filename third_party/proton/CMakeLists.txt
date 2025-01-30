@@ -66,8 +66,7 @@ endforeach()
 
 add_library(proton SHARED ${_proton_obj_sources})
 
-target_link_libraries(${name} PRIVATE Python3::Module)
-
+target_link_libraries(proton PRIVATE Python3::Module)
 # Apply any macOS linker flags or extra link options
 if(PROTON_PYTHON_LDFLAGS)
   target_link_options(proton PRIVATE ${PROTON_PYTHON_LDFLAGS})
