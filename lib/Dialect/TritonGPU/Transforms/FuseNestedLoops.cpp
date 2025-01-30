@@ -335,6 +335,37 @@ static Value createPoisonOrZero(ImplicitLocOpBuilder &b, Type type) {
   return b.create<arith::ConstantOp>(attr);
 }
 
+static scf::YieldOp getYield(Region &body) {
+  return cast<scf::YieldOp>(body.front().back());
+}
+
+static scf::IfOp eraseIfResults(ImplicitLocOpBuilder &b, scf::IfOp ifOp,
+                                llvm::BitVector indices,
+                                SmallVector<Value> replaceWith) {
+  OpBuilder::InsertionGuard guard(b);
+  b.setInsertionPoint(ifOp);
+  while (indices.size() < ifOp.getNumResults())
+    indices.push_back(false);
+
+  getYield(ifOp.getThenRegion())->eraseOperands(indices);
+  getYield(ifOp.getElseRegion())->eraseOperands(indices);
+
+  TypeRange newTypes = getYield(ifOp.getThenRegion()).getOperandTypes();
+  auto newIf = b.create<scf::IfOp>(newTypes, ifOp.getCondition());
+  newIf.getThenRegion().takeBody(ifOp.getThenRegion());
+  newIf.getElseRegion().takeBody(ifOp.getElseRegion());
+
+  SmallVector<Value> replacements;
+  auto replIt = replaceWith.begin();
+  auto resIt = newIf->result_begin();
+  for (unsigned i : llvm::seq(ifOp.getNumResults()))
+    replacements.push_back(indices[i] ? *replIt++ : *resIt++);
+  assert(ValueRange(replacements).getTypes() == ifOp.getResultTypes());
+  ifOp.replaceAllUsesWith(replacements);
+  ifOp.erase();
+  return newIf;
+}
+
 // Given a one level loop nest in the form
 //
 //   for i in range(lbi, ubi, stepi):
@@ -597,7 +628,7 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
       fusedInits.push_back(createPoisonOrZero(b, resultType));
   }
   unsigned logueOutsStartIdx = fusedInits.size();
-  for (Logue &logue : logues) {
+  for (Logue &logue : llvm::drop_end(logues)) {
     for (Type outputType : logue.getOutputTypes())
       fusedInits.push_back(createPoisonOrZero(b, outputType));
   }
@@ -729,8 +760,7 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
     // Splice bodyk into the `then` region.
     inner.getBody()->eraseArguments([](Value arg) { return true; });
     bodyIf.getThenRegion().takeBody(inner.getBodyRegion());
-    auto yield =
-        cast<scf::YieldOp>(bodyIf.getThenRegion().front().getTerminator());
+    auto yield = getYield(bodyIf.getThenRegion());
     b.setInsertionPoint(yield);
     Value nextJk = b.create<arith::AddIOp>(jk, inner.getStep());
     yield->insertOperands(0, nextJk);
@@ -766,44 +796,92 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
       b.create<arith::CmpIOp>(arith::CmpIPredicate::eq, T,
                               b.create<arith::SubIOp>(innerLen, intTyCst(1)));
   auto epilogueIf =
-      b.create<scf::IfOp>(epilogue.getOutputTypes(), epilogueCond);
+      b.create<scf::IfOp>(outer.getYieldedValues().getTypes(), epilogueCond);
 
   Block *thenBlock = b.createBlock(&epilogueIf.getThenRegion());
   epilogue.moveBefore(thenBlock, thenBlock->end());
 
   b.setInsertionPointToEnd(thenBlock);
-  b.create<scf::YieldOp>(epilogue.getOutputs());
+  b.create<scf::YieldOp>(outer.getYieldedValues());
 
   b.createBlock(&epilogueIf.getElseRegion());
-  SmallVector<Value> elseOuts(logueOutsIt,
-                              logueOutsIt + epilogue.getNumOutputs());
-  b.create<scf::YieldOp>(elseOuts);
-  epilogue.replaceAllUsesWith(epilogueIf.getResults(),
-                              epilogueIf.getThenRegion());
+  b.create<scf::YieldOp>(fused.getRegionIterArgs().slice(
+      outerArgsStartIdx, outer.getNumRegionIterArgs()));
 
   // Finally, create the yield of the fused loop.
   SmallVector<Value> outerOuts{T, i};
-  llvm::append_range(outerOuts, outer.getYieldedValues());
+  llvm::append_range(outerOuts, epilogueIf.getResults());
   for (scf::IfOp bodyIf : bodyIfs)
     outerOuts.push_back(/*jk=*/bodyIf.getResult(0));
   for (auto [bodyIf, loop] : llvm::zip(bodyIfs, innerLoops)) {
     llvm::append_range(outerOuts,
                        bodyIf.getResults().slice(1, loop.getNumResults()));
-    loop.erase();
   }
   for (auto [logueIf, logue] : llvm::zip(prologueIfs, llvm::drop_end(logues))) {
     llvm::append_range(outerOuts,
                        logueIf.getResults().slice(1, logue.getNumOutputs()));
   }
-  llvm::append_range(outerOuts, epilogueIf.getResults());
 
   b.setInsertionPointToEnd(fused.getBody());
-  b.create<scf::YieldOp>(outerOuts);
+  auto outerYield = b.create<scf::YieldOp>(outerOuts);
   outer.replaceAllUsesWith(
       fused.getResults().slice(outerArgsStartIdx, outer.getNumResults()));
-  outer.erase();
+
+  // Reduce dependencies across inner loops by hoisting the initialization of
+  // inner loop iter args to the outer loop when possible, and then placing the
+  // reset of these values in the epilogue.
+  auto fusedInitsIt = fused.getInitsMutable().begin() + innerOutsStartIdx;
+  auto fusedArgsIt = fused.getRegionIterArgs().begin() + innerOutsStartIdx;
+  auto fusedYieldIt = getYield(fused.getBodyRegion())->getOpOperands().begin() +
+                      innerOutsStartIdx;
+  SmallVector<OpOperand *> yieldsToUpdate;
+  SmallVector<Value> reset, forwarded;
+  for (auto [loop, ifOp, bodyIf, prologue] :
+       llvm::zip(innerLoops, prologueIfs, bodyIfs, logues)) {
+    unsigned numResults = loop.getNumResults();
+    unsigned prologueSkip = 1 + prologue.getNumOutputs();
+
+    llvm::BitVector removeIndices(prologueSkip + numResults);
+    SmallVector<Value> replaceWith;
+    for (auto [i, init] : llvm::enumerate(loop.getInits())) {
+      if (init.getParentRegion() == &loop.getBodyRegion())
+        continue;
+      // Initialize this in the outer loop.
+      fusedInitsIt[i].assign(init);
+      replaceWith.push_back(fusedArgsIt[i]);
+      removeIndices.set(prologueSkip + i);
+      yieldsToUpdate.push_back(&fusedYieldIt[i]);
+      forwarded.push_back(bodyIf.getResult(1 + i));
+      reset.push_back(init);
+    }
+    // Remove the initializers in the corresponding prologue.
+    eraseIfResults(b, ifOp, removeIndices, replaceWith);
+
+    fusedInitsIt += numResults;
+    fusedArgsIt += numResults;
+    fusedYieldIt += numResults;
+  }
+  if (!yieldsToUpdate.empty()) {
+    MutableOperandRange(getYield(epilogueIf.getThenRegion())).append(reset);
+    MutableOperandRange(getYield(epilogueIf.getElseRegion())).append(forwarded);
+    b.setInsertionPoint(epilogueIf);
+    TypeRange newTypes = getYield(epilogueIf.getThenRegion()).getOperandTypes();
+    auto newIf = b.create<scf::IfOp>(newTypes, epilogueIf.getCondition());
+    newIf.getThenRegion().takeBody(epilogueIf.getThenRegion());
+    newIf.getElseRegion().takeBody(epilogueIf.getElseRegion());
+    epilogueIf.replaceAllUsesWith(
+        newIf.getResults().take_front(epilogueIf.getNumResults()));
+    ResultRange newResults =
+        newIf.getResults().drop_front(epilogueIf.getNumResults());
+    for (auto [i, yieldOperand] : llvm::enumerate(yieldsToUpdate))
+      yieldOperand->set(newResults[i]);
+    epilogueIf.erase();
+  }
 
   // Update the parent's loop to the fused loop.
+  for (scf::ForOp loop : innerLoops)
+    loop.erase();
+  outer.erase();
   parent->loop = fused;
 }
 
@@ -838,18 +916,12 @@ static bool shouldFuse(const LoopNest &nest) {
   });
 }
 
-// Loop-invariant code motion can increase register pressure in combination with
-// loop nest fusion. Values hoisted out of the inner loop and in to the prologue
-// that are directly used inside the inner loop will need to be added as iter
-// args to the fused loop, substantially increasing their liverange.
-//
-// This function identifies a subgraph of cheap ops that can be sunk and
-// determines if doing so will reduce register pressure.
+// This function identifies a subgraph of cheap ops that can be sunk between two
+// regions in the loop nest and moves them, reducing their liveranges.
 static void sinkHeavyOps(Region &limit, Block *sinkBlock,
                          Block::iterator sinkBefore,
                          llvm::iterator_range<Block::iterator> prologue,
-                         function_ref<bool(Operation *)> inSinkRegion,
-                         function_ref<bool(size_t, size_t)> shouldSink) {
+                         function_ref<bool(Operation *)> inSinkRegion) {
   llvm::SetVector<Operation *> sunkOps;
   auto canBeSunk = [&](Operation &op) -> std::pair<bool, bool> {
     if (!isPure(&op) || op.hasTrait<OpTrait::DotLike>())
@@ -880,94 +952,30 @@ static void sinkHeavyOps(Region &limit, Block *sinkBlock,
   if (sunkOps.empty())
     return;
 
-  // Analyze the sinking the whole subgraph at once. Breaking up the subgraph is
-  // a more complicated analysis.
-  //
-  // Compute the total size of the fan-ins and fan-outs as the number of
-  // registers per thread used by the value. This is a heuristic.
-  MLIRContext *ctx = sunkOps.front()->getContext();
-  auto kRegister = StringAttr::get(ctx, "register");
-  auto getSizeEstimate = [&](Type type) {
-    auto tensor = dyn_cast<RankedTensorType>(type);
-    if (!tensor)
-      return 1;
-    LinearLayout layout =
-        toLinearLayout(tensor.getShape(), tensor.getEncoding());
-    return layout.getInDimSize(kRegister);
-  };
-
-  size_t fanOutSize = 0;
-  for (Operation *root : roots) {
-    for (Value result : root->getResults()) {
-      if (result.use_empty())
-        continue;
-      fanOutSize += getSizeEstimate(result.getType());
-    }
-  }
-
-  size_t fanInSize = 0;
-  DenseSet<Value> checked;
-  for (Operation *op : sunkOps) {
-    for (Value operand : op->getOperands()) {
-      // Count each operand only once.
-      if (!checked.insert(operand).second)
-        continue;
-      if (sunkOps.contains(operand.getDefiningOp()))
-        continue;
-      if (operand.getParentRegion()->isProperAncestor(&limit))
-        continue;
-      if (llvm::any_of(operand.getUsers(), inSinkRegion))
-        continue;
-      fanInSize += getSizeEstimate(operand.getType());
-    }
-  }
-
-  // Only sink if this will lead to a large reduction.
-  if (shouldSink(fanInSize, fanOutSize)) {
-    sunkOps = topologicalSort(sunkOps);
-    for (Operation *op : sunkOps)
-      op->moveBefore(sinkBlock, sinkBefore);
-  }
+  sunkOps = topologicalSort(sunkOps);
+  for (Operation *op : sunkOps)
+    op->moveBefore(sinkBlock, sinkBefore);
 }
 
-// Sink ops into the inner loop and from the prologue into the epilogue.
+// Sink ops from the prologue into the epilogue when possible.
 static void sinkHeavyOps(scf::ForOp outerLoop, scf::ForOp innerLoop,
                          mlir::DominanceInfo &domInfo) {
-  Region &limit = outerLoop.getBodyRegion();
-  auto inInnerLoop = [&](Operation *op) {
-    return innerLoop.getBodyRegion().isAncestor(op->getParentRegion());
-  };
-  // sinkHeavyOps(limit, innerLoop.getBody(), innerLoop.getBody()->begin(),
-  //              {outerLoop.getBody()->begin(), innerLoop->getIterator()},
-  //              inInnerLoop, [&](size_t fanInSize, size_t fanOutSize) {
-  //                return fanInSize * 4 <= fanOutSize;
-  //              });
-
-  // Move computations in the prologue that can be done in the epilogue. This is
-  // always beneficial.
   auto inEpilogue = [&](Operation *op) {
     return domInfo.properlyDominates(innerLoop, op, /*enclosingOpOk=*/false);
   };
+  Region &limit = outerLoop.getBodyRegion();
   sinkHeavyOps(limit, outerLoop.getBody(), std::next(innerLoop->getIterator()),
                {outerLoop.getBody()->begin(), innerLoop->getIterator()},
-               inEpilogue,
-               [&](size_t fanInSize, size_t fanOutSize) { return true; });
+               inEpilogue);
 }
 
 // Speculate the length of the inner loop such that the loop is known to execute
 // at least once. This way, the inner loop body does not have to be placed
 // inside a conditional in the fused loop, which interacts better with the
 // pipeliner.
-static LogicalResult speculateInnerLoopLength(const LoopNest &nest,
+static LogicalResult speculateInnerLoopLength(scf::ForOp outerLoop,
+                                              scf::ForOp innerLoop,
                                               mlir::DominanceInfo &domInfo) {
-  assert(nest.nodes.size() == 2 && nest.root->children.size() == 1);
-
-  scf::ForOp outerLoop = nest.root->loop;
-  scf::ForOp innerLoop = nest.root->children.front()->loop;
-
-  // Sink heavy ops first.
-  sinkHeavyOps(outerLoop, innerLoop, domInfo);
-
   innerLoop->setAttr(kMustExecuteAttrName,
                      UnitAttr::get(outerLoop.getContext()));
   return success();
@@ -1019,6 +1027,17 @@ static LogicalResult speculateInnerLoopLength(const LoopNest &nest,
   return success();
 }
 
+static LogicalResult preprocessLoopNest(const LoopNest &nest,
+                                        mlir::DominanceInfo &domInfo) {
+  assert(nest.nodes.size() == 2 && nest.root->children.size() == 1);
+
+  scf::ForOp &outerLoop = nest.root->loop;
+  scf::ForOp &innerLoop = nest.root->children.front()->loop;
+
+  sinkHeavyOps(outerLoop, innerLoop, domInfo);
+  return speculateInnerLoopLength(outerLoop, innerLoop, domInfo);
+}
+
 void FuseNestedLoopsPass::runOnOperation() {
   auto &domInfo = getAnalysis<DominanceInfo>();
 
@@ -1029,7 +1048,7 @@ void FuseNestedLoopsPass::runOnOperation() {
       if (!shouldFuse(nest))
         continue;
       if (!nest.root->loop->hasAttr(kAlwaysFuseAttrName) &&
-          failed(speculateInnerLoopLength(nest, domInfo)))
+          failed(preprocessLoopNest(nest, domInfo)))
         continue;
       flattenLoopNest(nest.root, domInfo);
     }

@@ -273,8 +273,6 @@ class CUDABackend(BaseBackend):
             passes.common.add_canonicalizer(pm)
             passes.common.add_licm(pm)
             passes.ttgpuir.add_optimize_accumulator_init(pm)
-            passes.common.add_canonicalizer(pm)
-            passes.ttgpuir.add_combine_tensor_select_and_if(pm)
             passes.ttgpuir.add_loop_scheduling(pm, opt.num_stages)
             passes.ttgpuir.add_pipeline(pm, opt.num_stages)
             passes.ttgpuir.add_combine_tensor_select_and_if(pm)
