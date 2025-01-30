@@ -910,8 +910,8 @@ def _patch_reduce_scan():
     # Because interpreter doesn't support region_builder_fn, we cannot patch the builder
     # to use the new reduce and scan functions.
     # Instead, we need to patch reduce and reduce functions in tl and tl.core
-    def _new_reduce(input, axis, combine_fn, keep_dims=False, dtype=None, **kwargs):
-        return ReduceOps(axis, combine_fn, keep_dims, dtype).apply(input)
+    def _new_reduce(input, axis, combine_fn, keep_dims=False, **kwargs):
+        return ReduceOps(axis, combine_fn, keep_dims).apply(input)
 
     def _new_scan(input, axis, combine_fn, reverse=False, **kwargs):
         return ScanOps(axis, combine_fn, reverse).apply(input)
