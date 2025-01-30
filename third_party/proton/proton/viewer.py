@@ -205,6 +205,14 @@ def derive_metrics(gf, metrics, inclusive_metrics, exclusive_metrics, device_inf
             else:
                 matched_metric_name = match_available_metrics(metric_name, inclusive_metrics, exclusive_metrics)[0]
                 derived_metrics.append(matched_metric_name)
+
+    # Update derived metrics to the graph frame
+    for derived_metric in derived_metrics:
+        if derive_metrics.endswith("(inc)"):
+            gf.inc_metrics.append(derived_metric)
+        else:
+            gf.exc_metrics.append(derived_metric)
+
     return derived_metrics
 
 
