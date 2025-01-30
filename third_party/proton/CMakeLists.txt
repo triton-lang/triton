@@ -18,18 +18,15 @@ find_package(Python3 REQUIRED Interpreter Development.Module)
 find_package(pybind11 CONFIG REQUIRED HINTS "${Python3_SITELIB}")
 
 # ============ Define a GLOBAL property to store object-libraries ============
-# This ensures any subdirectory can append to a single, project-wide property.
 set_property(GLOBAL PROPERTY PROTON_LIBS "")
 
 # ============ Define a function to create object libraries ============
 function(add_proton_library name)
-  # Create an OBJECT library from the given sources
   add_library(${name} OBJECT ${ARGN})
 
   # Link to pybind11 headers (so we have #include <pybind11/...>)
   target_link_libraries(${name} PRIVATE pybind11::headers)
 
-  # Attach required include directories to this target
   target_include_directories(${name}
     PRIVATE
       "${Python3_INCLUDE_DIRS}"
@@ -51,7 +48,6 @@ add_subdirectory("${PROTON_SRC_DIR}")
 
 # ============ Possibly handle macOS specifics ============
 if(APPLE)
-  # Overwrite the default .dylib with .so so Python can load it easily
   set(CMAKE_SHARED_LIBRARY_SUFFIX ".so")
   # Other platforms build with -flto, but we found that this adds significant overhead to our macos CI without providing a major benefit.
   set(PROTON_PYTHON_LDFLAGS "-undefined dynamic_lookup")
