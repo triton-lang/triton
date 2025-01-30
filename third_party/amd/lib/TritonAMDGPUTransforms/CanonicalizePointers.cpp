@@ -1046,6 +1046,10 @@ public:
       typename PointerCanonicalizationPattern<SourceOp>::OneToNOpAdaptor
           adaptor,
       ConversionPatternRewriter &rewriter) const override {
+    if (!llvm::isa<tt::PointerType>(
+            getElementTypeOrSelf(op->getOperandTypes()[PtrLikeIdx])))
+      return rewriter.notifyMatchFailure(op,
+                                         "expected operand to be pointer-like");
     ValueRange fatPtr = adaptor.getOperands()[PtrLikeIdx];
     if (fatPtr.size() != 2)
       return rewriter.notifyMatchFailure(
@@ -1379,7 +1383,8 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
            MaterializeFatPointer<tt::StoreOp>,
            MaterializeFatPointer<tt::AtomicCASOp>,
            MaterializeFatPointer<tt::AtomicRMWOp, 1>,
-           MaterializeFatPointer<tt::PtrToIntOp>, ConvertSCFForOp,
+           MaterializeFatPointer<tt::PtrToIntOp>,
+           MaterializeFatPointer<tt::BitcastOp>, ConvertSCFForOp,
            ConvertSCFYieldOp, ConvertSCFIfOp, ConvertSCFConditionOp,
            ConvertSCFWhileOp, ConvertCFCondBranch, ConvertCFBranch,
            ConvertArithSelectOp, ConvertReturnOp>(patterns.getContext(),
