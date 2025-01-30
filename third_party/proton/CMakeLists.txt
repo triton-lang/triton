@@ -1,6 +1,6 @@
 project(Proton LANGUAGES CXX)
 
-set(PROTON_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/csrc)
+set(PROTON_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/csrc")
 
 # ============ Check for includes =============
 if(NOT CUPTI_INCLUDE_DIR)
@@ -17,50 +17,64 @@ endif()
 find_package(Python3 REQUIRED Interpreter Development.Module)
 find_package(pybind11 CONFIG REQUIRED HINTS "${Python3_SITELIB}")
 
-# ============ Setup a list for object libraries ============
-set(PROTON_OBJ_LIBS "")
+# ============ Define a GLOBAL property to store object-libraries ============
+# This ensures any subdirectory can append to a single, project-wide property.
+set_property(GLOBAL PROPERTY PROTON_LIBS "")
 
+# ============ Define a function to create object libraries ============
 function(add_proton_library name)
+  # Create an OBJECT library from the given sources
   add_library(${name} OBJECT ${ARGN})
 
+  # Link to pybind11 headers (so we have #include <pybind11/...>)
   target_link_libraries(${name} PRIVATE pybind11::headers)
 
+  # Attach required include directories to this target
   target_include_directories(${name}
     PRIVATE
-      ${CUPTI_INCLUDE_DIR}
-      ${ROCTRACER_INCLUDE_DIR}
-      ${JSON_INCLUDE_DIR}
-      ${PROTON_SRC_DIR}/include
+      "${CUPTI_INCLUDE_DIR}"
+      "${ROCTRACER_INCLUDE_DIR}"
+      "${JSON_INCLUDE_DIR}"
+      "${PROTON_SRC_DIR}/include"
   )
 
+  # If HIP is AMD-based
   target_compile_definitions(${name} PRIVATE __HIP_PLATFORM_AMD__)
 
-  list(APPEND PROTON_OBJ_LIBS ${name})
-  set(PROTON_OBJ_LIBS "${PROTON_OBJ_LIBS}" PARENT_SCOPE)
+  # Append this library name to the GLOBAL property "PROTON_LIBS"
+  set_property(GLOBAL APPEND PROPERTY PROTON_LIBS ${name})
 endfunction()
 
-add_subdirectory(${PROTON_SRC_DIR})
+# ============ Add subdirectory with actual code that calls add_proton_library ============
+add_subdirectory("${PROTON_SRC_DIR}")
 
-# ============ Possibly handle Mac suffixes ============
+# ============ Possibly handle macOS specifics ============
 if(APPLE)
+  # Overwrite the default .dylib with .so so Python can load it easily
   set(CMAKE_SHARED_LIBRARY_SUFFIX ".so")
+  # Other platforms build with -flto, but we found that this adds significant overhead to our macos CI without providing a major benefit.
   set(PROTON_PYTHON_LDFLAGS "-undefined dynamic_lookup")
 endif()
 
-# ============ Create final SHARED library from object libs ============
-if(NOT PROTON_OBJ_LIBS)
-  message(WARNING "No object libraries were defined!")
+# ============ Collect all object libraries from property and build final shared lib ============
+get_property(_proton_obj_libs GLOBAL PROPERTY PROTON_LIBS)
+
+if(NOT _proton_obj_libs)
+  message(WARNING "No object libraries were defined in 'PROTON_LIBS'!")
 endif()
 
-set(PROTON_OBJ_SOURCES "")
-foreach(_lib IN LISTS PROTON_OBJ_LIBS)
-  list(APPEND PROTON_OBJ_SOURCES $<TARGET_OBJECTS:${_lib}>)
+set(_proton_obj_sources "")
+foreach(_lib IN LISTS _proton_obj_libs)
+  list(APPEND _proton_obj_sources $<TARGET_OBJECTS:${_lib}>)
   message(STATUS "Collecting object files from ${_lib}")
 endforeach()
 
-add_library(proton SHARED ${PROTON_OBJ_SOURCES})
+add_library(proton SHARED ${_proton_obj_sources})
 
+# Link to Python (pybind11::headers is already on each object library)
 target_link_libraries(proton PRIVATE Python3::Module)
+
+# Apply any macOS linker flags or extra link options
 if(PROTON_PYTHON_LDFLAGS)
   target_link_options(proton PRIVATE ${PROTON_PYTHON_LDFLAGS})
 endif()
