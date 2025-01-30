@@ -32,6 +32,7 @@ function(add_proton_library name)
   # Attach required include directories to this target
   target_include_directories(${name}
     PRIVATE
+      "${Python3_INCLUDE_DIRS}"
       "${CUPTI_INCLUDE_DIR}"
       "${ROCTRACER_INCLUDE_DIR}"
       "${JSON_INCLUDE_DIR}"
