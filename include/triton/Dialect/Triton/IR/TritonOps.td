@@ -481,7 +481,7 @@ def TT_BroadcastOp : TT_Op<"broadcast", [Pure,
 
     let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
 
-    let hasCanonicalizeMethod = 1;
+    let hasCanonicalizer = 1;
     let hasFolder = 1;
     let hasVerifier = 1;
 }

@@ -279,9 +279,8 @@ tt.func @test_canonicalize_expand_dims(%arg0: tensor<f32>, %arg1: tensor<1xf32>)
     tt.return %ed, %bc2 : tensor<1x8xf32>, tensor<8x8xf32>
 }
 
-
 // CHECK-LABEL: @test_canonicalize_view
-tt.func @test_canonicalize_view(%arg0: tensor<8xf32>, %arg1: tensor<f32>) -> (tensor<4x2xf32>, tensor<2x2x2xf32>, tensor<8xf32>) {
+tt.func @test_canonicalize_view(%arg0: tensor<8xf32>, %arg1: tensor<f32>) -> (tensor<4x2xf32>, tensor<2x2x2xf32>, tensor<8xf32>, tensor<2x2x2xf32>) {
     %view0 = tt.reshape %arg0 allow_reorder : tensor<8xf32> -> tensor<2x4xf32>
     // CHECK: %{{.*}} = tt.reshape %arg0 allow_reorder : tensor<8xf32> -> tensor<4x2xf32>
     %view1 = tt.reshape %view0 allow_reorder : tensor<2x4xf32> -> tensor<4x2xf32>
@@ -294,11 +293,14 @@ tt.func @test_canonicalize_view(%arg0: tensor<8xf32>, %arg1: tensor<f32>) -> (te
     // CHECK: %{{.*}} = arith.addf %arg0, %arg0 : tensor<8xf32>
     %add = arith.addf %view3, %arg0 : tensor<8xf32>
 
-    tt.return %view1, %view2, %add : tensor<4x2xf32>, tensor<2x2x2xf32>, tensor<8xf32>
+    // CHECK: %{{.*}} = tt.reshape %arg0 allow_reorder : tensor<8xf32> -> tensor<2x2x2xf32>
+    %reshape = tt.reshape %view0 : tensor<2x4xf32> -> tensor<2x2x2xf32>
+
+    tt.return %view1, %view2, %add, %reshape : tensor<4x2xf32>, tensor<2x2x2xf32>, tensor<8xf32>, tensor<2x2x2xf32>
 }
 
 // CHECK-LABEL: @test_canonicalize_reshape
-tt.func @test_canonicalize_reshape(%arg0: tensor<8xf32>, %arg1: tensor<f32>) -> (tensor<4x2xf32>, tensor<2x2x2xf32>, tensor<8xf32>) {
+tt.func @test_canonicalize_reshape(%arg0: tensor<8xf32>, %arg1: tensor<f32>) -> (tensor<4x2xf32>, tensor<2x2x2xf32>, tensor<8xf32>, tensor<2x2x2xf32>) {
     %reshape0 = tt.reshape %arg0 : tensor<8xf32> -> tensor<2x4xf32>
     // CHECK: %{{.*}} = tt.reshape %arg0 : tensor<8xf32> -> tensor<4x2xf32>
     %reshape1 = tt.reshape %reshape0 : tensor<2x4xf32> -> tensor<4x2xf32>
@@ -311,7 +313,10 @@ tt.func @test_canonicalize_reshape(%arg0: tensor<8xf32>, %arg1: tensor<f32>) -> 
     // CHECK: %{{.*}} = arith.addf %arg0, %arg0 : tensor<8xf32>
     %add = arith.addf %reshape3, %arg0 : tensor<8xf32>
 
-    tt.return %reshape1, %reshape2, %add : tensor<4x2xf32>, tensor<2x2x2xf32>, tensor<8xf32>
+    // CHECK: %{{.*}} = tt.reshape %arg0 allow_reorder : tensor<8xf32> -> tensor<2x2x2xf32>
+    %view = tt.reshape %reshape0 allow_reorder : tensor<2x4xf32> -> tensor<2x2x2xf32>
+
+    tt.return %reshape1, %reshape2, %add, %view : tensor<4x2xf32>, tensor<2x2x2xf32>, tensor<8xf32>, tensor<2x2x2xf32>
 }
 
 // CHECK-LABEL: @test_canonicalize_broadcast
