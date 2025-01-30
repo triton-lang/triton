@@ -25,7 +25,7 @@ enum class MfmaTypeId : uint32_t {
 };
 
 struct MfmaInsnGroupSelectKey {
-  unsigned mDim, nDim;
+  unsigned mDim, nDim, kDim;
   MfmaTypeId elemType;
   int mfmaVersion;
 };
@@ -51,21 +51,23 @@ constexpr typename std::underlying_type<T>::type cast_as_underlying(T t) {
 struct MfmaInsnGroupSelectKeyInfo
     : public llvm::DenseMapInfo<MfmaInsnGroupSelectKey> {
   static inline MfmaInsnGroupSelectKey getEmptyKey() {
-    return {32, 32, MfmaTypeId::Fp32TyId, 0};
+    return {32, 32, 0, MfmaTypeId::Fp32TyId, 0};
   }
 
   static inline MfmaInsnGroupSelectKey getTombstoneKey() {
-    return {32, 32, MfmaTypeId::Fp32TyId, -1};
+    return {32, 32, 0, MfmaTypeId::Fp32TyId, -1};
   }
 
   static inline bool isEqual(const MfmaInsnGroupSelectKey &lhs,
                              const MfmaInsnGroupSelectKey &rhs) {
     return lhs.mDim == rhs.mDim && lhs.nDim == rhs.nDim &&
-           lhs.elemType == rhs.elemType && lhs.mfmaVersion == rhs.mfmaVersion;
+           lhs.kDim == rhs.kDim && lhs.elemType == rhs.elemType &&
+           lhs.mfmaVersion == rhs.mfmaVersion;
   }
 
   static unsigned getHashValue(const MfmaInsnGroupSelectKey &key) {
     auto dimHash = llvm::detail::combineHashValue(key.mDim, key.nDim);
+    dimHash = llvm::detail::combineHashValue(dimHash, key.kDim);
     auto verHash = llvm::detail::combineHashValue(dimHash, key.mfmaVersion);
     auto elemHash = cast_as_underlying(key.elemType);
     return llvm::detail::combineHashValue(elemHash, verHash);
@@ -80,8 +82,9 @@ private:
 
 public:
   static FailureOr<MfmaInsn> selectMfma(unsigned mDim, unsigned nDim,
-                                        Type elementTypeA, Type elementTypeB,
-                                        int mfmaVersion, bool allowXF32);
+                                        unsigned kDim, Type elementTypeA,
+                                        Type elementTypeB, int mfmaVersion,
+                                        bool allowXF32);
   MfmaInsn(Type elementTypeA, Type elementTypeB, const MfmaInsnAttr &attr);
   unsigned getKDim();
   unsigned getMDim();
