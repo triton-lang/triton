@@ -24,12 +24,10 @@ set_property(GLOBAL PROPERTY PROTON_LIBS "")
 function(add_proton_library name)
   add_library(${name} OBJECT ${ARGN})
 
-  # Link to pybind11 headers (so we have #include <pybind11/...>)
-  target_link_libraries(${name} PRIVATE pybind11::headers)
+  target_link_libraries(${name} PRIVATE Python3::Module pybind11::headers)
 
   target_include_directories(${name}
     PRIVATE
-      "${Python3_INCLUDE_DIRS}"
       "${CUPTI_INCLUDE_DIR}"
       "${ROCTRACER_INCLUDE_DIR}"
       "${JSON_INCLUDE_DIR}"
@@ -67,9 +65,6 @@ foreach(_lib IN LISTS _proton_obj_libs)
 endforeach()
 
 add_library(proton SHARED ${_proton_obj_sources})
-
-# Link to Python (pybind11::headers is already on each object library)
-target_link_libraries(proton PRIVATE Python3::Module)
 
 # Apply any macOS linker flags or extra link options
 if(PROTON_PYTHON_LDFLAGS)
