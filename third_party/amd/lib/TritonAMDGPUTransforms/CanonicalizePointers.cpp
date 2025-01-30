@@ -465,9 +465,12 @@ public:
   matchAndRewrite_(tt::SplatOp splatOp, OneToNOpAdaptor adaptor,
                    ConversionPatternRewriter &rewriter) const override {
     ValueRange remappedOperands = adaptor.getSrc();
-    if (remappedOperands.size() != 2)
-      return rewriter.notifyMatchFailure(
-          splatOp, "expected SplatOp src to have already been remapped");
+    if (remappedOperands.size() != 2) {
+      // some prior op materialized the fat ptr, e.g.:
+      // %3 = tt.bitcast %2
+      // %4 = tt.splat %3
+      return success();
+    }
     Value fatPtrBase = remappedOperands[0];
     Value fatPtrOffset = remappedOperands[1];
     if (!llvm::isa<tt::PointerType>(fatPtrBase.getType()))
@@ -499,10 +502,12 @@ public:
   matchAndRewrite_(tt::BroadcastOp broadcastOp, OneToNOpAdaptor adaptor,
                    ConversionPatternRewriter &rewriter) const override {
     ValueRange remappedOperands = adaptor.getSrc();
-    if (remappedOperands.size() != 2)
-      return rewriter.notifyMatchFailure(
-          broadcastOp,
-          "expected BroadcastOp src to have already been remapped");
+    if (remappedOperands.size() != 2) {
+      // some prior op materialized the fat ptr, e.g.:
+      // %3 = tt.bitcast %2
+      // %4 = tt.broadcast %3
+      return success();
+    }
 
     Value fatPtrBase = remappedOperands[0];
     Value fatPtrOffset = remappedOperands[1];
@@ -539,9 +544,12 @@ public:
   matchAndRewrite_(tt::AddPtrOp addPtrOp, OneToNOpAdaptor adaptor,
                    ConversionPatternRewriter &rewriter) const override {
     ValueRange remappedPtr = adaptor.getPtr();
-    if (remappedPtr.size() != 2)
-      return rewriter.notifyMatchFailure(
-          addPtrOp, "expected AddPtrOp Ptr to have already been remapped");
+    if (remappedPtr.size() != 2) {
+      // some prior op materialized the fat ptr, e.g.:
+      // %3 = tt.bitcast %2
+      // %4 = tt.addptr %3
+      return success();
+    }
     ValueRange nonRemappedOffset = adaptor.getOffset();
     if (nonRemappedOffset.size() != 1)
       return rewriter.notifyMatchFailure(
@@ -898,10 +906,11 @@ public:
   matchAndRewrite_(arith::SelectOp selectOp, OneToNOpAdaptor adaptor,
                    ConversionPatternRewriter &rewriter) const override {
     if (adaptor.getTrueValue().size() != 2 ||
-        adaptor.getFalseValue().size() != 2)
-      return rewriter.notifyMatchFailure(
-          selectOp, "expected adaptor to have had both true and false operands "
-                    "already remapped");
+        adaptor.getFalseValue().size() != 2) {
+      assert(adaptor.getTrueValue().size() == adaptor.getFalseValue().size() &&
+             "expected both true and false operands to be the same size");
+      return success();
+    }
     // If both have been traversed, then we can rewrite select of pointers as a
     // select of base and offset
     ValueRange fatPtrFalse = adaptor.getFalseValue();
@@ -1030,6 +1039,41 @@ public:
                                               trueOperands);
     convertSimpleBlockSignature(branchOp.getDest(), remappedDestOperands,
                                 rewriter, fatPtrs);
+    return success();
+  }
+};
+
+/// Rewrite to expand(base, offset) -> base, expand(offset)
+class ConvertExpandDims
+    : public PointerCanonicalizationPattern<tt::ExpandDimsOp> {
+public:
+  using PointerCanonicalizationPattern::PointerCanonicalizationPattern;
+  LogicalResult
+  matchAndRewrite_(tt::ExpandDimsOp expandOp, OneToNOpAdaptor adaptor,
+                   ConversionPatternRewriter &rewriter) const override {
+    ValueRange remappedOperands = adaptor.getSrc();
+    if (remappedOperands.size() != 2)
+      return success();
+    Value fatPtrBase = remappedOperands[0];
+    if (!llvm::isa<tt::PointerType>(fatPtrBase.getType()))
+      return rewriter.notifyMatchFailure(
+          expandOp, "only scalar base currently supported");
+    Value fatPtrOffset = remappedOperands[1];
+
+    RankedTensorType result =
+        llvm::cast<RankedTensorType>(expandOp->getResultTypes().front());
+    if (!llvm::isa<tt::PointerType>(result.getElementType()))
+      return rewriter.notifyMatchFailure(
+          expandOp, "expected expand_dim result to be tensor of tt.ptr");
+
+    RankedTensorType newResult = RankedTensorType::get(
+        result.getShape(),
+        llvm::cast<RankedTensorType>(fatPtrOffset.getType()).getElementType(),
+        result.getEncoding());
+    auto newOffset = rewriter.create<tt::ExpandDimsOp>(
+        expandOp.getLoc(), newResult, fatPtrOffset, adaptor.getAxis());
+    rewriter.replaceOpWithMultiple(expandOp, {{fatPtrBase, newOffset}});
+    fatPtrs[{fatPtrBase, newOffset}] = fatPtrs.at({fatPtrBase, fatPtrOffset});
 
     return success();
   }
@@ -1051,9 +1095,13 @@ public:
       return rewriter.notifyMatchFailure(op,
                                          "expected operand to be pointer-like");
     ValueRange fatPtr = adaptor.getOperands()[PtrLikeIdx];
-    if (fatPtr.size() != 2)
-      return rewriter.notifyMatchFailure(
-          op, "expected op ptr to have already been remapped");
+    if (fatPtr.size() != 2) {
+      // some prior op materialized the fat ptr, e.g.:
+      // %3 = tt.bitcast %2
+      // %4 = tt.load %3
+      return success();
+    }
+
     Value fatPtrBase = fatPtr[0];
     Value fatPtrOffset = fatPtr[1];
     Location curLoc = op.getLoc();
@@ -1067,9 +1115,6 @@ public:
                                    fatPtrAttrs);
     }
     SmallVector<Value> operands = op->getOperands();
-    assert(llvm::isa<tt::PointerType>(
-               getElementTypeOrSelf(operands[PtrLikeIdx])) &&
-           "expected operand to be tt.ptr-like");
     operands[PtrLikeIdx] = newPtr;
     if (op->getNumResults())
       rewriter.replaceOpWithNewOp<SourceOp>(
@@ -1144,9 +1189,13 @@ public:
   LogicalResult
   matchAndRewrite_(UnrealizedConversionCastOp castOp, OneToNOpAdaptor adaptor,
                    ConversionPatternRewriter &rewriter) const override {
+    if (castOp.use_empty()) {
+      castOp->getParentOfType<tt::FuncOp>().emitRemark(
+          "expected at least 1 use of unrealized_cast");
+      return success();
+    }
     // Exhaustive checking we're converting ONLY unrealized_casts inserted (by
     // the 1:N conversion) in ConvertFuncOp.
-    assert(!castOp.use_empty() && "expected at least 1 use of unrealized_cast");
     ArrayRef<ValueRange> remappedOperands = adaptor.getOperands();
     if (remappedOperands.size() != 2 || remappedOperands[0].size() != 1 ||
         remappedOperands[1].size() != 1)
@@ -1188,7 +1237,10 @@ public:
   LogicalResult
   matchAndRewrite_(UnrealizedConversionCastOp castOp, OneToNOpAdaptor adaptor,
                    ConversionPatternRewriter &rewriter) const override {
-    assert(!castOp.use_empty() && "expected at least 1 use of unrealized_cast");
+    if (castOp.use_empty()) {
+      castOp.erase();
+      return success();
+    }
     ArrayRef<ValueRange> remappedOperands = adaptor.getOperands();
     if (remappedOperands.size() != 2)
       return rewriter.notifyMatchFailure(
@@ -1310,33 +1362,24 @@ static void getForwardSliceImpl(OpOperand *use, Operation *op,
   forwardSlice->insert(op);
 }
 
-static FailureOr<tt::FuncOp> getFunc(Operation *moduleOp) {
-  SmallVector<tt::FuncOp> funcOps;
-  moduleOp->walk<WalkOrder::PreOrder>(
-      [&funcOps](tt::FuncOp op) { funcOps.push_back(op); });
-  if (funcOps.size() != 1) {
-    moduleOp->emitError("only one tt.func supported");
-    return {};
-  }
-
-  return {funcOps[0]};
-}
-
 void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
+  LLVM_DEBUG({
+    llvm::dbgs() << "before tritonamdgpu-canonicalize-pointers\n";
+    getOperation()->getParentOfType<ModuleOp>()->dump();
+    llvm::dbgs() << "\n";
+  });
 
-  auto func = getFunc(getOperation());
-  if (failed(func))
-    return signalPassFailure();
+  auto func = getOperation();
 
   FatPointers fatPrs;
-  RewritePatternSet patterns(&getContext());
+  PatternRewriter rewriter(&getContext());
   // Convert tt.func; %1 = unrealize_cast(%arg0: tt.ptr, c0: i32) -> tt.ptr
-  patterns.add<InitFuncPtrArgs>(patterns.getContext(), fatPrs);
-  walkAndApplyPatterns(getOperation(), std::move(patterns));
-  patterns.clear();
+  InitFuncPtrArgs pat(&getContext(), fatPrs);
+  if (failed(pat.matchAndRewrite(func, rewriter)))
+    return signalPassFailure();
 
   llvm::SetVector<Operation *> opsToRewrite;
-  for (auto arg : func->getArguments()) {
+  for (auto arg : func.getArguments()) {
     if (llvm::isa<tt::PointerType>(arg.getType())) {
       // NB: reusing the same SetVector invalidates the topo order implied by
       // getForwardSlice
@@ -1376,21 +1419,20 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   // ConvertUnimplementedOpUnrealizedCasts below). Note we *do* add
   // ConvertFuncOpArgsUnrealizedCasts because that is necessary for
   // "initializing" the chain of fat pointers starting from tt.func tt.ptr args.
-  patterns.clear();
+  RewritePatternSet patterns(&getContext());
   patterns
       .add<ConvertFuncOpArgsUnrealizedCasts, ConvertBroadcastOp, ConvertSplatOp,
            ConvertAddPtrOp, MaterializeFatPointer<tt::LoadOp>,
            MaterializeFatPointer<tt::StoreOp>,
            MaterializeFatPointer<tt::AtomicCASOp>,
-           MaterializeFatPointer<tt::AtomicRMWOp, 1>,
+           MaterializeFatPointer<tt::AtomicRMWOp>,
            MaterializeFatPointer<tt::PtrToIntOp>,
            MaterializeFatPointer<tt::BitcastOp>, ConvertSCFForOp,
-           ConvertSCFYieldOp, ConvertSCFIfOp, ConvertSCFConditionOp,
-           ConvertSCFWhileOp, ConvertCFCondBranch, ConvertCFBranch,
-           ConvertArithSelectOp, ConvertReturnOp>(patterns.getContext(),
-                                                  opsToRewrite, fatPrs);
-  if (failed(
-          applyPartialConversion(*func, target, std::move(patterns), config)))
+           ConvertExpandDims, ConvertSCFYieldOp, ConvertSCFIfOp,
+           ConvertSCFConditionOp, ConvertSCFWhileOp, ConvertCFCondBranch,
+           ConvertCFBranch, ConvertArithSelectOp, ConvertReturnOp>(
+          patterns.getContext(), opsToRewrite, fatPrs);
+  if (failed(applyPartialConversion(func, target, std::move(patterns), config)))
     return signalPassFailure();
 
   // Rewrite any lingering unrealized_casts that *should* only be the result of
@@ -1399,8 +1441,7 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   patterns.clear();
   patterns.add<ConvertUnimplementedOpUnrealizedCasts>(patterns.getContext(),
                                                       opsToRewrite, fatPrs);
-  if (failed(
-          applyPartialConversion(*func, target, std::move(patterns), config)))
+  if (failed(applyPartialConversion(func, target, std::move(patterns), config)))
     return signalPassFailure();
 
   func->walk<WalkOrder::PreOrder>([](Operation *op) {
