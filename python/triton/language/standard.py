@@ -277,7 +277,8 @@ def sum(input, axis=None, keep_dims=False, dtype=None, _builder=None, _generator
             dtype = core.float32 if input.dtype.primitive_bitwidth < 32 else None
 
     input = core._promote_bfloat16_to_float32(input, _builder=_builder)
-    return core.reduce(input, axis, _sum_combine, keep_dims=keep_dims, dtype=dtype, _builder=_builder, _generator=_generator)
+    return core.reduce(input, axis, _sum_combine, keep_dims=keep_dims, dtype=dtype, _builder=_builder,
+                       _generator=_generator)
 
 
 @jit

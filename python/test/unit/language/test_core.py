@@ -2429,6 +2429,7 @@ negative_config = [('cumsum', 'float32', (32, 32), -1, False, 4)]
 
 
 def test_sum_dtype():
+
     @triton.jit
     def kernel(out_ptr):
         x = tl.full((32, 32), 1, dtype=tl.int1)
@@ -2436,7 +2437,7 @@ def test_sum_dtype():
         tl.store(out_ptr, x.to(tl.int32))
 
     out = torch.empty(1, dtype=torch.int32, device='cuda')
-    kernel[(1,)](out)
+    kernel[(1, )](out)
     assert out[0] == 32 * 32
 
 

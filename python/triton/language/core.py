@@ -2276,7 +2276,8 @@ def clamp(x, min, max, propagate_nan: constexpr = PropagateNan.NONE, _builder=No
 # -----------------------
 
 
-def _add_reduction_docstr(name: str, return_indices_arg: str = None, tie_break_arg: str = None, dtype_arg: str = None) -> Callable[[T], T]:
+def _add_reduction_docstr(name: str, return_indices_arg: str = None, tie_break_arg: str = None,
+                          dtype_arg: str = None) -> Callable[[T], T]:
 
     def _decorator(func: T) -> T:
         docstr = """
@@ -2331,7 +2332,8 @@ def reduce(input, axis, combine_fn, keep_dims=False, dtype=None, _builder=None, 
 
     """
     if isinstance(input, tensor):
-        return reduce((input, ), axis, combine_fn, keep_dims=keep_dims, dtype=dtype, _builder=_builder, _generator=_generator)[0]
+        return reduce((input, ), axis, combine_fn, keep_dims=keep_dims, dtype=dtype, _builder=_builder,
+                      _generator=_generator)[0]
 
     def make_combine_region(reduce_op):
         param_types = [t.type.scalar for t in input] * 2
