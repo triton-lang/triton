@@ -63,10 +63,11 @@ test: test-lit test-cpp test-python
 .PHONY: dev-install
 dev-install:
 	# build-time dependencies
-	$(PYTHON) -m pip install ninja cmake wheel pybind11
+	$(PYTHON) -m pip install ninja cmake wheel pybind11 setuptools
 	# test dependencies
-	$(PYTHON) -m pip install scipy numpy torch pytest lit pandas matplotlib llnl-hatchet
-	$(PYTHON) -m pip install -e python --no-build-isolation -v
+	$(PYTHON) -m pip install torch lit
+	$(PYTHON) -m pip uninstall triton pytorch-triton -y
+	$(PYTHON) -m pip install -e 'python[tests]' --no-build-isolation -v
 
 .PHONY: golden-samples
 golden-samples: triton-opt
