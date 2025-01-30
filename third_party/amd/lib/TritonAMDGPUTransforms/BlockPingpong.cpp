@@ -120,6 +120,12 @@ void Pingponger::appendOpWithPrio(OpBuilder &builder, Operation *op,
 // instruction scheduling boundary, too.
 void Pingponger::transformOnePPClusters(OpBuilder &builder, Location loc) {
   auto dotLoc = dotOps[0]->getPrevNode();
+  // sched barrier to prevent memory ops from cross but leave other ops to be
+  // scheduled across the barrier.
+  auto preDotBar = builder.create<ROCDL::SchedBarrier>(loc, 1);
+  updateOpInsertion(dotLoc);
+  appendOp(preDotBar);
+
   // Memory cluster #0
   updateOpInsertion(lLoadOps[0]);
   appendOp(builder.create<ROCDL::SetPrioOp>(loc, highPriority));
@@ -128,10 +134,9 @@ void Pingponger::transformOnePPClusters(OpBuilder &builder, Location loc) {
   appendOp(lLoadOps[1]);
   appendOp(builder.create<ROCDL::SetPrioOp>(loc, lowPriority));
   appendOp(gLoadOps[1]);
-  appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
 
   // Dot cluster #0
-  updateOpInsertion(dotLoc);
+  updateOpInsertion(preDotBar);
   appendOpWithPrio(builder, dotOps[0], loc);
 }
 
