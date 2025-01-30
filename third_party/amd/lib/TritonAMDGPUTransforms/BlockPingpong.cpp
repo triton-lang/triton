@@ -119,6 +119,7 @@ void Pingponger::appendOpWithPrio(OpBuilder &builder, Operation *op,
 // high-level operations, inserting `setPrio` also has a same effect of
 // instruction scheduling boundary, too.
 void Pingponger::transformOnePPClusters(OpBuilder &builder, Location loc) {
+  auto dotLoc = dotOps[0]->getPrevNode();
   // Memory cluster #0
   updateOpInsertion(lLoadOps[0]);
   appendOp(builder.create<ROCDL::SetPrioOp>(loc, highPriority));
@@ -130,6 +131,7 @@ void Pingponger::transformOnePPClusters(OpBuilder &builder, Location loc) {
   appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
 
   // Dot cluster #0
+  updateOpInsertion(dotLoc);
   appendOpWithPrio(builder, dotOps[0], loc);
 }
 
