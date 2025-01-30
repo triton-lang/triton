@@ -9,14 +9,6 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
-namespace SharedToDotOperandMMAv2OrV3 {
-Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
-                    Location loc, Value tensor,
-                    DotOperandEncodingAttr bEncoding,
-                    const SharedMemoryObject &smemObj,
-                    const LLVMTypeConverter *typeConverter, Value thread);
-} // namespace SharedToDotOperandMMAv2OrV3
-
 namespace {
 
 using namespace mlir;
@@ -66,8 +58,8 @@ public:
       canUseLdmatrix &=
           shape[kOrder] >= (8 * 16 / bitwidth) && shape[nonKOrder] >= 8;
       if (canUseLdmatrix) {
-        return lowerSharedToDotOperandLL(op, adaptor, getTypeConverter(),
-                                         rewriter);
+        return lowerSharedToDotOperand(op, adaptor, getTypeConverter(),
+                                       rewriter);
       }
     }
     return failure();
@@ -75,10 +67,10 @@ public:
 
 private:
   LogicalResult
-  lowerSharedToDotOperandLL(triton::gpu::LocalLoadOp op,
-                            triton::gpu::LocalLoadOpAdaptor adaptor,
-                            const LLVMTypeConverter *typeConverter,
-                            ConversionPatternRewriter &rewriter) const {
+  lowerSharedToDotOperand(triton::gpu::LocalLoadOp op,
+                          triton::gpu::LocalLoadOpAdaptor adaptor,
+                          const LLVMTypeConverter *typeConverter,
+                          ConversionPatternRewriter &rewriter) const {
     auto ctx = rewriter.getContext();
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);

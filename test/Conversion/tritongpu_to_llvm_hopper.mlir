@@ -182,7 +182,7 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
     %cst = arith.constant dense<0.000000e+00> : tensor<1024xf32, #blocked>
     %neg_limit = arith.subf %cst, %limit : tensor<1024xf32, #blocked>
 
-    // CHECK: "min.xorsign.abs.f32 $0, $1, $2;", "=f,f,f"
+    // CHECK-COUNT-8: nvvm.fmin.xorsign.abs.f
     %12 = tt.clampf %x, %neg_limit, %limit, propagateNan = none : tensor<1024xf32, #blocked>
     tt.return
   }
@@ -208,12 +208,12 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 #shared = #ttg.shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1], hasLeadingOffset = true}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // CHECK-LABEL: cvt_mma_to_dot_fp8
-// CHECK: prmt.b32
-// CHECK: prmt.b32
+// CHECK: nvvm.prmt
+// CHECK: nvvm.prmt
 // CHECK: nvvm.shfl.sync
 // CHECK: nvvm.shfl.sync
-// CHECK: prmt.b32
-// CHECK: prmt.b32
+// CHECK: nvvm.prmt
+// CHECK: nvvm.prmt
   tt.func @cvt_mma_to_dot_fp8(%a: tensor<128x64xf8E5M2, #mma>) {
     %opA = ttg.convert_layout %a : tensor<128x64xf8E5M2, #mma> -> tensor<128x64xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
     tt.return

@@ -2,6 +2,7 @@
 #include "Dialect/NVGPU/IR/Dialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 namespace mlir {
 namespace LLVM {
@@ -90,42 +91,38 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
   // "%clusterid".
   int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(moduleOp);
 
-  std::string sreg = numCTAs == 1 ? "%ctaid." : "%clusterid.";
+  std::string sreg = numCTAs == 1 ? "ctaid." : "clusterid.";
   sreg.append(1, 'x' + axis); // 0 -> 'x', 1 -> 'y', 2 -> 'z'
   return getSRegValue(rewriter, loc, sreg);
 }
 
-Value getSRegValue(OpBuilder &b, Location loc, const std::string &sRegStr) {
-  PTXBuilder builder;
-  auto &mov = builder.create("mov")->o("u32");
-  auto *destOpr = builder.newOperand("=r");
-  auto *sRegOpr = builder.newConstantOperand(sRegStr);
-  mov(destOpr, sRegOpr);
-  Value val = builder.launch(b, loc, b.getIntegerType(32), false);
-  return val;
+Value getSRegValue(OpBuilder &rewriter, Location loc, StringRef sRegStr) {
+  ValueRange args;
+  auto intrName = Twine("llvm.nvvm.read.ptx.sreg.") + sRegStr;
+  auto callOp =
+      createLLVMIntrinsicCallOp(rewriter, loc, intrName.str(), i32_ty, args);
+  return callOp.getResult(0);
 }
 
 Value permute(Location loc, RewriterBase &rewriter, Value a, Value b,
               Value mask) {
-  PTXBuilder builder;
-  auto &prmt = builder.create("prmt")->o("b32");
-  auto *destOpr = builder.newOperand("=r");
-  auto *aOperand = builder.newOperand(a, "r");
-  auto *bOperand = builder.newOperand(b, "r");
-  auto *maskOperand = builder.newOperand(mask, "r");
-  prmt(destOpr, aOperand, bOperand, maskOperand);
-  return builder.launch(rewriter, loc, rewriter.getIntegerType(32), false);
+  Value args[] = {a, b, mask};
+  auto op =
+      createLLVMIntrinsicCallOp(rewriter, loc, "llvm.nvvm.prmt", i32_ty, args);
+  return op.getResult(0);
 }
 
 /// Create a predicate with just single active thread.
 Value createElectPredicate(Location loc, RewriterBase &rewriter) {
-  PTXBuilder ptxBuilder;
-  auto &elect = *ptxBuilder.create<>("elect.sync _|$0, 0xffffffff;");
-  elect({ptxBuilder.newOperand("=b")}, /*onlyAttachMLIRArgs=*/true);
-  // The instruction is technically not pure as it depends on simt control flow
-  // however since we it outside of simt control flow in triton we can consider
-  // it as pure to allow cse to work on it.
-  return ptxBuilder.launch(rewriter, loc, i1_ty, /*hasSideEffect=*/false);
+  return rewriter.create<NVVM::ElectSyncOp>(loc, i1_ty);
+}
+
+void createSyncWarp(Location loc, OpBuilder &rewriter) {
+  TritonLLVMOpBuilder b(loc, rewriter);
+  Type resultTy = void_ty(rewriter.getContext());
+  Value args[] = {b.i32_val(0xffffffff)};
+  createLLVMIntrinsicCallOp(rewriter, loc, "llvm.nvvm.bar.warp.sync", resultTy,
+                            args);
 }
 
 Value createElectPredicateWarp0(Location loc, RewriterBase &rewriter) {

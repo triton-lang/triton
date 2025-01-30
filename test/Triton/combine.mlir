@@ -290,7 +290,7 @@ tt.func @test_canonicalize_view(%arg0: tensor<8xf32>, %arg1: tensor<f32>) -> (te
     // CHECK: %{{.*}} = tt.splat %arg1 : tensor<f32> -> tensor<2x2x2xf32>
     %view2 = tt.reshape %splat allow_reorder : tensor<8xf32> -> tensor<2x2x2xf32>
 
-    %view3 = tt.reshape %arg0 allow_reorder : tensor<8xf32> -> tensor<8xf32>
+    %view3 = tt.reshape %arg0 : tensor<8xf32> -> tensor<8xf32>
     // CHECK: %{{.*}} = arith.addf %arg0, %arg0 : tensor<8xf32>
     %add = arith.addf %view3, %arg0 : tensor<8xf32>
 
@@ -344,4 +344,17 @@ tt.func @test_nested_transpose(%arg0: tensor<2x4x8xf32>) -> (tensor<8x2x4xf32>) 
     // CHECK: %[[res:.*]] = tt.trans %arg0 {order = array<i32: 2, 0, 1>}
     // CHECK: tt.return %[[res]]
     tt.return %b : tensor<8x2x4xf32>
+}
+
+// CHECK-LABEL: test_reshape_reduce
+tt.func @test_reshape_reduce(%0: tensor<32x4x2xi32>) -> (i32, tensor<16xi32>) {
+  // CHECK: tt.reshape %{{.+}} allow_reorder : tensor<32x4x2xi32> -> tensor<256xi32>
+  %1 = tt.reshape %0 : tensor<32x4x2xi32> -> tensor<256xi32>
+  %2 = "tt.reduce" (%1) ({
+    ^bb0(%arg7: i32, %arg8: i32):
+      %add = arith.addi %arg7, %arg8 : i32
+      tt.reduce.return %add : i32
+    }) {axis = 0 : i32} : (tensor<256xi32>) -> i32
+  %3 = tt.histogram %1 : tensor<256xi32> -> tensor<16xi32>
+  tt.return %2, %3 : i32, tensor<16xi32>
 }

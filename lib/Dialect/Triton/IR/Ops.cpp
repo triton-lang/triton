@@ -235,26 +235,6 @@ LogicalResult TransOp::inferReturnTypes(
   return success();
 }
 
-bool TransOp::isCompatibleReturnTypes(TypeRange lhs, TypeRange rhs) {
-  assert(lhs.size() == rhs.size());
-  assert(lhs.size() == 1);
-  auto lhsType = cast<RankedTensorType>(lhs[0]);
-  auto rhsType = cast<RankedTensorType>(rhs[0]);
-
-  if (lhsType.getShape() != rhsType.getShape())
-    return false;
-
-  auto lhsEnc = lhsType.getEncoding();
-  auto rhsEnc = rhsType.getEncoding();
-  // If there's no encoding or the encodings are the same
-  if (lhsEnc == rhsEnc)
-    return true;
-
-  return cast<DialectInferLayoutInterface>(&lhsEnc.getDialect())
-      ->verifyLayoutsAreEqual(lhsType.getShape(), lhsEnc, rhsEnc, {})
-      .succeeded();
-}
-
 //-- DotOp --
 LogicalResult
 DotOp::inferReturnTypes(MLIRContext *context, std::optional<Location> location,
@@ -700,7 +680,7 @@ LogicalResult ReshapeOp::canonicalize(ReshapeOp op, PatternRewriter &rewriter) {
 }
 
 OpFoldResult ReshapeOp::fold(FoldAdaptor adaptor) {
-  if (getType() == getSrc().getType()) {
+  if (getType() == getSrc().getType() && !getAllowReorder()) {
     // no-op
     return getSrc();
   }
