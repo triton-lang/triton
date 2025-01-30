@@ -836,8 +836,11 @@ public:
       return v;
     auto srcElTy = srcTy.getElementType();
     auto dstElTy = dstTy.getElementType();
-    if (isFloat(srcElTy) && isFloat(dstElTy))
-      return rewriter.create<FpToFpOp>(loc, dstTy, v);
+    if (isFloat(srcElTy) && isFloat(dstElTy)) {
+      auto rmode =
+          RoundingModeAttr::get(rewriter.getContext(), RoundingMode::RTNE);
+      return rewriter.create<FpToFpOp>(loc, dstTy, v, rmode);
+    }
     if (!isFloat(srcElTy) && isFloat(dstElTy))
       return rewriter.create<arith::SIToFPOp>(loc, dstTy, v);
     if (isFloat(srcElTy) && !isFloat(dstElTy))
@@ -846,35 +849,40 @@ public:
     return Value();
   }
 
-  bool isLegalFMAForm(DotOp dotOp) const {
-    if (AMD::isVDotSupported(arch)) {
-      auto a = dotOp.getA();
-      auto b = dotOp.getB();
-      auto c = dotOp.getC();
-      auto d = dotOp.getD();
+  struct DotElTypes {
+    Type a, b, c, d;
+  };
 
-      Type aElTy = a.getType().getElementType();
-      Type bElTy = b.getType().getElementType();
-      Type cElTy = c.getType().getElementType();
-      Type dElTy = d.getType().getElementType();
-      int rank = a.getType().getRank();
-      int k = a.getType().getShape()[rank - 1];
+  bool isLegalFMAForm(DotOp dotOp, const DotElTypes &dotTypes) const {
+    if (AMD::isVDotSupported(arch)) {
+      auto aOpType = dotOp.getA().getType();
+      int rank = aOpType.getRank();
+      int k = aOpType.getShape()[rank - 1];
       // Try Fp16 x Fp16 -> Fp32 v_dot
       // if k % 2 != 0: can not use fp V_DOT instruction
-      if (aElTy.isF16() && bElTy.isF16() && cElTy.isF32() &&
-          dElTy.isF32() && k % 2 == 0) {
+      if (dotTypes.a.isF16() && dotTypes.b.isF16() && dotTypes.c.isF32() &&
+          dotTypes.d.isF32() && k % 2 == 0) {
         return true;
+      }
+
+      // Consider this case as non legal,
+      // despite this case is covered by fp16 FMA.
+      // because v_dot expected to give
+      // both better performance and computational precision
+      if (dotTypes.a.isF16() && dotTypes.b.isF16() && dotTypes.c.isF16() &&
+          dotTypes.d.isF16() && k % 2 == 0) {
+        return false;
       }
 
       // Try I8 x I8 -> I32 v_dot
       // if k % 4 != 0: can not use integer V_DOT instruction
-      if (aElTy.isInteger(8) && bElTy.isInteger(8) &&
-          cElTy.isInteger(32) && dElTy.isInteger(32) && k % 4 == 0) {
+      if (dotTypes.a.isInteger(8) && dotTypes.b.isInteger(8) &&
+          dotTypes.c.isInteger(32) && dotTypes.d.isInteger(32) && k % 4 == 0) {
         return true;
       }
     }
 
-    auto expectedElTy = dotOp.getA().getType().getElementType();
+    auto expectedElTy = dotTypes.a;
     for (auto operand : dotOp.getOperands()) {
       auto opTy = cast<RankedTensorType>(operand.getType());
       auto elTy = opTy.getElementType();
@@ -886,31 +894,34 @@ public:
     return true;
   }
 
-  LogicalResult matchAndRewrite(DotOp dotOp,
-                                PatternRewriter &rewriter) const override {
-    auto a = dotOp.getA();
-    auto b = dotOp.getB();
-    auto c = dotOp.getC();
-    auto d = dotOp.getD();
-
-    if (!isa<BlockedEncodingAttr>(d.getType().getEncoding()))
-      return failure();
-
-    Type aElTy = a.getType().getElementType();
-    Type bElTy = b.getType().getElementType();
-    Type cElTy = c.getType().getElementType();
-    Type dElTy = d.getType().getElementType();
-
-    // check that dot is not legalized already
-    if (isLegalFMAForm(dotOp)) {
-      return failure();
+  LogicalResult tryAccelerateF16WithVDot(DotOp dotOp, PatternRewriter &rewriter,
+                                         const DotElTypes &dotTypes) const {
+    if (AMD::isVDotSupported(arch)) {
+      // If this is fp16 x fp16 ->fp16 case prioritize using v_dot
+      auto aOpType = dotOp.getA().getType();
+      int rank = aOpType.getRank();
+      int k = aOpType.getShape()[rank - 1];
+      if (dotTypes.a.isF16() && dotTypes.b.isF16() && dotTypes.c.isF16() &&
+          dotTypes.d.isF16() && k % 2 == 0) {
+        auto newC = castToElTy(rewriter, dotOp.getC(), f32_ty);
+        auto newDot = rewriter.create<DotOp>(
+            dotOp.getLoc(), newC.getType(), dotOp.getA(), dotOp.getB(), newC,
+            dotOp.getInputPrecision(), dotOp.getMaxNumImpreciseAcc());
+        auto newD = castToElTy(rewriter, newDot.getResult(), f16_ty);
+        rewriter.replaceOp(dotOp, newD);
+        return success();
+      }
     }
+    return failure();
+  }
 
-    // Legalize dot for simple FMA case,
-    // i.e. operands type is equal output type
+  LogicalResult tryLegalizeFMA(DotOp dotOp, PatternRewriter &rewriter,
+                               const DotElTypes &dotTypes) const {
+    // Legalize dot for plain FMA case,
+    // i.e. operands type is equal to output type
 
     // find common type, larger or equal of all operand types
-    SmallVector<Type> opElTy{aElTy, bElTy, cElTy, dElTy};
+    SmallVector<Type> opElTy{dotTypes.a, dotTypes.b, dotTypes.c, dotTypes.d};
     unsigned maxBitsize = 8;
     for (auto elTy : opElTy)
       maxBitsize = std::max(maxBitsize, elTy.getIntOrFloatBitWidth());
@@ -933,17 +944,40 @@ public:
       }
     }
 
-    auto newA = castToElTy(rewriter, a, commonTy);
-    auto newB = castToElTy(rewriter, b, commonTy);
-    auto newC = castToElTy(rewriter, c, commonTy);
+    auto newA = castToElTy(rewriter, dotOp.getA(), commonTy);
+    auto newB = castToElTy(rewriter, dotOp.getB(), commonTy);
+    auto newC = castToElTy(rewriter, dotOp.getC(), commonTy);
 
     auto newDot = rewriter.create<DotOp>(dotOp.getLoc(), newC.getType(), newA,
                                          newB, newC, dotOp.getInputPrecision(),
                                          dotOp.getMaxNumImpreciseAcc());
-    auto newD = castToElTy(rewriter, newDot.getResult(), dElTy);
+    auto newD = castToElTy(rewriter, newDot.getResult(), dotTypes.d);
 
     rewriter.replaceOp(dotOp, newD);
     return success();
+  }
+
+  LogicalResult matchAndRewrite(DotOp dotOp,
+                                PatternRewriter &rewriter) const override {
+    if (!isa<BlockedEncodingAttr>(dotOp.getD().getType().getEncoding()))
+      return failure();
+
+    DotElTypes dotTypes;
+    dotTypes.a = dotOp.getA().getType().getElementType();
+    dotTypes.b = dotOp.getB().getType().getElementType();
+    dotTypes.c = dotOp.getC().getType().getElementType();
+    dotTypes.d = dotOp.getD().getType().getElementType();
+
+    // check that dot is not legalized already
+    if (isLegalFMAForm(dotOp, dotTypes)) {
+      return failure();
+    }
+
+    if (tryAccelerateF16WithVDot(dotOp, rewriter, dotTypes).succeeded()) {
+      return success();
+    }
+
+    return tryLegalizeFMA(dotOp, rewriter, dotTypes);
   }
 };
 
@@ -975,16 +1009,16 @@ public:
     case ISAFamily::CDNA3:
       patterns.add<::BlockedToMFMA, ::ScaledBlockedToMFMA>(
           context, getMfmaVersion(isaFamily), matrixInstructionSize, kPack,
-          /*benefit=*/ 2);
+          /*benefit=*/2);
       break;
     case ISAFamily::RDNA3:
       patterns.add<::BlockedToWMMA>(context, getWmmaVersion(archGenerationName),
-                                    /*benefit=*/ 2);
+                                    /*benefit=*/2);
       break;
     default:
       break;
     }
-    patterns.add<AccelerateBlocked>(context, archGenerationName, /*benefit=*/ 1);
+    patterns.add<AccelerateBlocked>(context, archGenerationName, /*benefit=*/1);
     if (applyPatternsGreedily(m, std::move(patterns)).failed()) {
       signalPassFailure();
     }
