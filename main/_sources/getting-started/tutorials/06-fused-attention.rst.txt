@@ -66,25 +66,25 @@ Extra Credits:
     TMA benchmarks will be running with experimental grid constant TMA descriptor.
     fused-attention-batch4-head32-d64-fwd-causal=True:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0     107.946403     79.468735
-    1   2048.0     135.580486     92.726416
-    2   4096.0     152.319809     98.332243
-    3   8192.0     162.173903    102.234079
-    4  16384.0     172.352520    104.207575
+    0   1024.0     108.154372     79.642575
+    1   2048.0     136.267899     92.044680
+    2   4096.0     152.019492     99.119295
+    3   8192.0     162.025324    102.043004
+    4  16384.0     171.050631    103.369891
     fused-attention-batch4-head32-d64-fwd-causal=False:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0     140.854607     99.223271
-    1   2048.0     152.352214     98.649727
-    2   4096.0     155.425231    101.943589
-    3   8192.0     159.120010    105.616978
-    4  16384.0     158.781760    106.045961
+    0   1024.0     140.790259     99.046059
+    1   2048.0     151.195469     97.508806
+    2   4096.0     154.302303    102.061009
+    3   8192.0     158.572812    105.642958
+    4  16384.0     157.379571    105.739186
     fused-attention-batch4-head32-d64-bwd-causal=True:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0      73.241630     72.629113
-    1   2048.0      96.774810     95.797547
-    2   4096.0     113.842726    113.770351
-    3   8192.0     123.233044    125.454715
-    4  16384.0     128.866539    130.869114
+    0   1024.0      72.751145     72.326138
+    1   2048.0      96.874748     95.757151
+    2   4096.0     113.707701    113.710110
+    3   8192.0     122.402798    125.744145
+    4  16384.0     128.659629    132.003377
 
 
 
@@ -984,7 +984,7 @@ Extra Credits:
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 56.705 seconds)
+   **Total running time of the script:** (0 minutes 55.259 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_06-fused-attention.py:
