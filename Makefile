@@ -2,7 +2,7 @@
 # Make sure to first initialize the build system with:
 #     make dev-install
 
-PYTHON := python
+PYTHON := python3
 BUILD_DIR := $(shell cd python; $(PYTHON) -c 'from build_helpers import get_cmake_dir; print(get_cmake_dir())')
 TRITON_OPT := $(BUILD_DIR)/bin/triton-opt
 PYTEST := $(PYTHON) -m pytest

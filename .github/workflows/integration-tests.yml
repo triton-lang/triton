@@ -247,18 +247,18 @@ jobs:
       - name: CCache Stats
         run: ccache --print-stats
       - name: Run lit tests
-        run: make test-lit PYTHON=python3
+        run: make test-lit
       - name: Run python tests on CUDA
-        run: make test-unit PYTHON=python3
+        run: make test-unit
       - name: Run interpreter tests
         if: ${{ matrix.runner[0] == 'h100-runner-set' }}
-        run: make test-intrepet PYTHON=python3
+        run: make test-intrepet
       - name: Run regression tests
-        run: make test-regression PYTHON=python3
+        run: make test-regression
       - name: Run C++ unittests
-        run: make test-cpp PYTHON=python3
+        run: make test-cpp
       - name: Run Proton tests
-        run: make test-proton PYTHON=python3
+        run: make test-proton
       - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
@@ -374,7 +374,7 @@ jobs:
       - name: CCache Stats
         run: ccache --print-stats
       - name: Run lit tests
-        run: make test-lit PYTHON=python3
+        run: make test-lit
       - name: Run python tests on HIP
         run: |
           INSTRUMENTATION_LIB_DIR="${GITHUB_WORKSPACE}/python/triton/instrumentation"
@@ -412,9 +412,9 @@ jobs:
           cd python/test/regression
           python3 -m pytest -s -n 8 ./test_cast_matmul.py
       - name: Run Proton tests
-        run: make test-proton PYTHON=python3
+        run: make test-proton
       - name: Run C++ unittests
-        run: make test-cpp PYTHON=python3
+        run: make test-cpp
       - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton

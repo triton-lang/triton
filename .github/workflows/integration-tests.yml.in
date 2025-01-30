@@ -284,25 +284,25 @@ jobs:
 
       - &run-lit-tests-step
         name: Run lit tests
-        run: make test-lit PYTHON=python3
+        run: make test-lit
 
       - name: Run python tests on CUDA
-        run: make test-unit PYTHON=python3
+        run: make test-unit
 
       - name: Run interpreter tests
         if: ${{ matrix.runner[0] == 'h100-runner-set' }}
-        run: make test-intrepet PYTHON=python3
+        run: make test-intrepet
 
       - name: Run regression tests
-        run: make test-regression PYTHON=python3
+        run: make test-regression
 
       - &run-cpp-unittests-step
         name: Run C++ unittests
-        run: make test-cpp PYTHON=python3
+        run: make test-cpp
 
       - &run-proton-tests-step
         name: Run Proton tests
-        run: make test-proton PYTHON=python3
+        run: make test-proton
 
       - *inspect-cache-directories-step
 
