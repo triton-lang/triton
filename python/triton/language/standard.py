@@ -262,7 +262,7 @@ def _sum_combine(a, b):
 @core._tensor_member_fn
 @core.builtin
 @core._add_reduction_docstr("sum", dtype_arg="dtype")
-def sum(input, axis=None, keep_dims=False, dtype: core.constexpr = None, _builder=None, _generator=None):
+def sum(input, axis=None, keep_dims=False, dtype: core.constexpr = None, _builder=None):
     # Pick a default dtype for the reduction if one was not specified.
     dtype = core._unwrap_if_constexpr(dtype)
     if dtype is None:
@@ -279,7 +279,7 @@ def sum(input, axis=None, keep_dims=False, dtype: core.constexpr = None, _builde
 
     if dtype is not None:
         input = input.to(dtype, _builder=_builder)
-    return core.reduce(input, axis, _sum_combine, keep_dims=keep_dims, _builder=_builder, _generator=_generator)
+    return core.reduce(input, axis, _sum_combine, keep_dims=keep_dims, _builder=_builder, _generator=None)
 
 
 @jit
@@ -441,7 +441,7 @@ def flip(x, dim=None):
         for j in core.static_range(0, steps + 1):
             if j != i and j != i + 1:
                 flip2 = core.expand_dims(flip2, j)
-        y = sum(y * flip2, i + 1, keep_dims=True)
+        y = sum(y * flip2, i + 1, keep_dims=True, dtype=y.dtype)
     x = core.reshape(y, x.shape).to(x.dtype, bitcast=True)
     return x
 
