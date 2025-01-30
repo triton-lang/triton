@@ -119,15 +119,14 @@ tt.func @fuse_one_level_simple(%lbi: i64, %ubi: i64, %stepi: i64, %lbj: i64, %ub
 // CHECK-SAME: [[INOUT:%.*]]: index
 tt.func @fuse_one_level_inouts(%lbi: i64, %ubi: i64, %stepi: i64, %lbj: i64, %ubj: i64, %stepj: i64, %inout: index) -> index {
   // CHECK: [[I_INIT:%.*]] = arith.subi [[LBI]], [[STEPI]]
-  // CHECK: [[OUTER_OUTS:%.*]]:7 = scf.for %{{.*}} = %c0_i64 to [[TOTAL_ITERS:%.*]] step %c1_i64 iter_args(
+  // CHECK: [[OUTER_OUTS:%.*]]:6 = scf.for %{{.*}} = %c0_i64 to [[TOTAL_ITERS:%.*]] step %c1_i64 iter_args(
   // CHECK-SAME: [[T_ARG:%arg[0-9]+]] = %c-1_i64,
   // CHECK-SAME: [[I_ARG:%arg[0-9]+]] = [[I_INIT]]
   // CHECK-SAME: [[M:%arg[0-9]+]] = [[INOUT]]
   // CHECK-SAME: [[J_ARG:%arg[0-9]+]] = %c0_i64
   // CHECK-SAME: [[K_ARG:%arg[0-9]+]] = %c0
   // CHECK-SAME: [[PROLOGUE_OUT_ARG:%arg[0-9]+]] = %c0
-  // CHECK-SAME: [[EPILOGUE_OUT_ARG:%arg[0-9]+]] = %c0
-  // CHECK-SAME: ) -> (i64, i64, index, i64, index, index, index) : i64 {
+  // CHECK-SAME: ) -> (i64, i64, index, i64, index, index) : i64 {
   %outer_out = scf.for %i = %lbi to %ubi step %stepi iter_args(%m = %inout) -> index : i64 {
     // if T == 0:
     //   i += stepi
@@ -172,11 +171,11 @@ tt.func @fuse_one_level_inouts(%lbi: i64, %ubi: i64, %stepi: i64, %lbj: i64, %ub
     // CHECK-NEXT:   [[EPILOGUE_OUT:%.*]] = "epilogue"([[PROLOGUE_OUTS]]#3, [[PROLOGUE_OUTS]]#1, [[BODY_OUTS]]#1, [[M]]) : (i64, index, index, index) -> index
     // CHECK-NEXT:   yield [[EPILOGUE_OUT]]
     // CHECK-NEXT: } else {
-    // CHECK-NEXT:   yield [[EPILOGUE_OUT_ARG]]
+    // CHECK-NEXT:   yield [[M]]
     // CHECK-NEXT: }
     %epilogue_out = "epilogue"(%i, %prologue_out, %inner_out, %m) : (i64, index, index, index) -> index
 
-    // CHECK-NEXT: yield %{{.*}}, [[PROLOGUE_OUTS]]#3, [[EPILOGUE_OUTS]], [[BODY_OUTS]]#0, [[BODY_OUTS]]#1, [[PROLOGUE_OUTS]]#1, [[EPILOGUE_OUTS]] : i64, i64, index, i64, index, index, index
+    // CHECK-NEXT: yield %{{.*}}, [[PROLOGUE_OUTS]]#3, [[EPILOGUE_OUTS]], [[BODY_OUTS]]#0, [[BODY_OUTS]]#1, [[PROLOGUE_OUTS]]#1 : i64, i64, index, i64, index, index
     scf.yield %epilogue_out : index
   } {"ttg.always-fuse"}
   // CHECK: return [[OUTER_OUTS]]#2
@@ -215,7 +214,7 @@ tt.func @multiple_loops(
   // CHECK-NEXT: [[TOTAL_ITERS:%.*]] = arith.muli [[LEN_I]], [[INNER_LEN]]
 
   // CHECK:      [[I_INIT:%.*]] = arith.subi [[LBI]], [[STEPI]]
-  // CHECK:      [[OUTS:%.*]]:13 = scf.for %{{.*}} = %c0_i64 to [[TOTAL_ITERS]] step %c1_i64 iter_args(
+  // CHECK:      [[OUTS:%.*]]:12 = scf.for %{{.*}} = %c0_i64 to [[TOTAL_ITERS]] step %c1_i64 iter_args(
   // CHECK-SAME: [[T_ARG:%arg[0-9]+]] = %c-1_i64,
   // CHECK-SAME: [[I_ARG:%arg[0-9]+]] = [[I_INIT]],
   // CHECK-SAME: [[M:%arg[0-9]+]] = [[M0]],
@@ -227,8 +226,7 @@ tt.func @multiple_loops(
   // CHECK-SAME: [[BODY2_ARG:%arg[0-9]+]] = %cst,
   // CHECK-SAME: [[PROLOGUE0_ARG:%arg[0-9]+]] = %cst,
   // CHECK-SAME: [[PROLOGUE1_ARG:%arg[0-9]+]] = %cst,
-  // CHECK-SAME: [[PROLOGUE2_ARG:%arg[0-9]+]] = %cst,
-  // CHECK-SAME: [[EPILOGUE_ARG:%arg[0-9]+]] = %cst)
+  // CHECK-SAME: [[PROLOGUE2_ARG:%arg[0-9]+]] = %cst)
   %mN = scf.for %i = %lbi to %ubi step %stepi iter_args(%m = %m0) -> f32 : i64 {
 
     // CHECK:      [[T_PLUS_1:%.*]] = arith.addi [[T_ARG]], %c1_i64
@@ -314,12 +312,12 @@ tt.func @multiple_loops(
     // CHECK-NEXT:   [[RES:%.*]] = "epilogue"([[PROLOGUE0_OUTS]]#3, [[BODY2_OUTS]]#1)
     // CHECK-NEXT:   yield [[RES]]
     // CHECK-NEXT:  else
-    // CHECK-NEXT:   yield [[EPILOGUE_ARG]]
+    // CHECK-NEXT:   yield [[M]]
     %out = "epilogue"(%i, %k2N) : (i64, f32) -> f32
 
     // CHECK:      scf.yield [[T]], [[PROLOGUE0_OUTS]]#3, [[EPILOGUE_OUTS]],
     // CHECK-SAME:           [[BODY0_OUTS]]#0, [[BODY1_OUTS]]#0, [[BODY2_OUTS]]#0,
-    // CHECK-SAME:           [[PROLOGUE0_OUTS]]#1, [[PROLOGUE1_OUTS]]#1, [[PROLOGUE2_OUTS]]#1, [[EPILOGUE_OUTS]] :
+    // CHECK-SAME:           [[PROLOGUE0_OUTS]]#1, [[PROLOGUE1_OUTS]]#1, [[PROLOGUE2_OUTS]]#1 :
     scf.yield %out : f32
   } {"ttg.always-fuse"}
   // CHECK: return [[OUTS]]#2

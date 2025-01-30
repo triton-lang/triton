@@ -844,7 +844,7 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
     llvm::BitVector removeIndices(prologueSkip + numResults);
     SmallVector<Value> replaceWith;
     for (auto [i, init] : llvm::enumerate(loop.getInits())) {
-      if (init.getParentRegion() == &loop.getBodyRegion())
+      if (init.getParentRegion() == &fused.getBodyRegion())
         continue;
       // Initialize this in the outer loop.
       fusedInitsIt[i].assign(init);
