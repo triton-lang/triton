@@ -95,11 +95,8 @@ bool isKContig(llvm::ArrayRef<unsigned> order, int opIdx) {
 /// \returns bool
 bool isSwizzlePatternFitsIntoBlock(const SharedEncodingAttr sharedLayout,
                                    int opIdx, const ArrayRef<int64_t> reps,
-                                   const ArrayRef<int64_t> elemsPerInstr,
+                                   int nonKDimRepSize, int kDimRepSize,
                                    unsigned warpsPerBlockNonK) {
-  assert(elemsPerInstr.size() == 2);
-  unsigned mfmaInstrNonK = elemsPerInstr[opIdx == 0 ? 0 : 1];
-  unsigned mfmaInstrK = elemsPerInstr[opIdx == 0 ? 1 : 0];
   auto order = sharedLayout.getOrder();
   const auto swizzleFastDimSize =
       sharedLayout.getMaxPhase() * sharedLayout.getVec();
@@ -110,20 +107,19 @@ bool isSwizzlePatternFitsIntoBlock(const SharedEncodingAttr sharedLayout,
   const auto swizzlePatternSizeNonK =
       !isKContig(order, opIdx) ? swizzleFastDimSize : swizzleSlowDimSize;
 
-  const auto blockSizeK = mfmaInstrK * reps[reps.size() - 1];
-  const auto blockSizeNonK = mfmaInstrNonK * warpsPerBlockNonK;
+  const auto blockSizeK = kDimRepSize * reps[reps.size() - 1];
+  const auto blockSizeNonK = nonKDimRepSize * warpsPerBlockNonK;
   return blockSizeK % swizzlePatternSizeK == 0 &&
          blockSizeNonK % swizzlePatternSizeNonK == 0;
 }
 
 llvm::SmallVector<Value>
 computeOffsetsAType(ConversionPatternRewriter &rewriter, Location loc,
-                    computeTensorElemMappingInBlockT fn,
-                    const ArrayRef<int64_t> &elemsPerInstr, Value warpId,
+                    computeTensorElemMappingInBlockT fn, Value warpId,
                     Value laneId, int warpsPerBlock, int numOfElems,
                     ArrayRef<int64_t> reps, SharedMemoryObject smemObj,
                     ArrayRef<Value> smemStrides, SharedEncodingAttr srcLayout,
-                    unsigned nonKDim, unsigned kDim) {
+                    unsigned nonKElemsPerRep, unsigned kElemsPerRep) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value> offsets = smemObj.getOffsets();
   auto order = srcLayout.getOrder();
@@ -137,16 +133,16 @@ computeOffsetsAType(ConversionPatternRewriter &rewriter, Location loc,
       vectorSize = numOfElems;
   }
 
-  auto mapping = fn(rewriter, loc, elemsPerInstr, warpId, laneId, numOfElems,
-                    reps, offsets, vectorSize, nonKDim, kDim);
+  auto mapping = fn(rewriter, loc, warpId, laneId, numOfElems, reps, offsets,
+                    vectorSize, nonKElemsPerRep, kElemsPerRep);
   const auto numBlocks = reps[reps.size() - 2];
   const auto blockSize = mapping.size();
   llvm::SmallVector<Value> aOffsets(blockSize * numBlocks);
 
-  if (!isSwizzlePatternFitsIntoBlock(srcLayout, 0, reps, elemsPerInstr,
-                                     warpsPerBlock)) {
+  if (!isSwizzlePatternFitsIntoBlock(srcLayout, 0, reps, nonKElemsPerRep,
+                                     kElemsPerRep, warpsPerBlock)) {
     for (int block = 0; block < numBlocks; ++block) {
-      int blockNonKOffset = block * nonKDim * warpsPerBlock;
+      int blockNonKOffset = block * nonKElemsPerRep * warpsPerBlock;
       for (int i = 0; i < blockSize; ++i) {
         Value row = b.add(mapping[i][0], b.i32_val(blockNonKOffset));
         Value col = mapping[i][1];
@@ -164,7 +160,7 @@ computeOffsetsAType(ConversionPatternRewriter &rewriter, Location loc,
                                        smemStrides, srcLayout);
     }
     for (int block = 0; block < numBlocks; ++block) {
-      int blockNonKOffset = block * nonKDim * warpsPerBlock;
+      int blockNonKOffset = block * nonKElemsPerRep * warpsPerBlock;
       Value offAdjust =
           b.mul(b.i32_val(blockNonKOffset), smemStrides[rank - 2]);
       for (int i = 0; i < blockSize; ++i)
@@ -187,19 +183,17 @@ transposeSpatialDims(const Container &vec) {
 
 llvm::SmallVector<Value>
 computeOffsetsBType(ConversionPatternRewriter &rewriter, Location loc,
-                    computeTensorElemMappingInBlockT fn,
-                    const ArrayRef<int64_t> &elemsPerInstr, Value warpId,
+                    computeTensorElemMappingInBlockT fn, Value warpId,
                     Value laneId, int warpsPerBlock, int numOfElems,
                     ArrayRef<int64_t> reps, SharedMemoryObject smemObj,
                     ArrayRef<Value> smemStrides, SharedEncodingAttr srcLayout,
-                    unsigned nonKDim, unsigned kDim) {
+                    unsigned nonKElemsPerRep, unsigned kElemsPerRep) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   // transpose reps and offsets, because operand B has layout equal to
   // transposed operand A layout
   // this unifies axis order, so non-K dim is 0, k dim is 1
   auto rank = smemObj.getOffsets().size();
   auto order = srcLayout.getOrder();
-  SmallVector<int64_t> tElemsPerInstr{elemsPerInstr[1], elemsPerInstr[0]};
   SmallVector<int64_t> tReps = transposeSpatialDims(reps);
   SmallVector<Value> tOffsets = transposeSpatialDims(smemObj.getOffsets());
   SmallVector<Value> tStrides = transposeSpatialDims(smemStrides);
@@ -212,16 +206,16 @@ computeOffsetsBType(ConversionPatternRewriter &rewriter, Location loc,
       vectorSize = numOfElems;
   }
 
-  auto mapping = fn(rewriter, loc, tElemsPerInstr, warpId, laneId, numOfElems,
-                    tReps, tOffsets, vectorSize, nonKDim, kDim);
+  auto mapping = fn(rewriter, loc, warpId, laneId, numOfElems, tReps, tOffsets,
+                    vectorSize, nonKElemsPerRep, kElemsPerRep);
   const auto numBlocks = tReps[tReps.size() - 2];
   const auto blockSize = mapping.size();
   llvm::SmallVector<Value> bOffsets(blockSize * numBlocks);
 
-  if (!isSwizzlePatternFitsIntoBlock(srcLayout, 0, reps, elemsPerInstr,
-                                     warpsPerBlock)) {
+  if (!isSwizzlePatternFitsIntoBlock(srcLayout, 0, reps, nonKElemsPerRep,
+                                     kElemsPerRep, warpsPerBlock)) {
     for (int block = 0; block < numBlocks; ++block) {
-      int blockNonKOffset = block * nonKDim * warpsPerBlock;
+      int blockNonKOffset = block * nonKElemsPerRep * warpsPerBlock;
       for (int i = 0; i < mapping.size(); ++i) {
         // swap row and col, because operand B layout is
         // a transposed operand A layout
@@ -243,7 +237,7 @@ computeOffsetsBType(ConversionPatternRewriter &rewriter, Location loc,
                                        smemStrides, srcLayout);
     }
     for (int block = 0; block < numBlocks; ++block) {
-      int blockNonKOffset = block * nonKDim * warpsPerBlock;
+      int blockNonKOffset = block * nonKElemsPerRep * warpsPerBlock;
       Value offAdjust = b.mul(b.i32_val(blockNonKOffset), tStrides[rank - 2]);
       for (int i = 0; i < mapping.size(); ++i)
         bOffsets[block * blockSize + i] = b.add(offAdjust, inblockOffset[i]);

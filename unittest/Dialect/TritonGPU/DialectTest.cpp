@@ -267,64 +267,87 @@ INSTANTIATE_TEST_SUITE_P(
          R"(T<2x2xf32,   #B<{spt=[2,1],   tpw=[2,2],   wpc=[4,8],   ord=[1,0]}>>)"},
     })));
 
-class AMDLayoutTest : public ::testing::Test {
+class AMDLayoutHelper {
 public:
-  AMDLayoutTest() {
-    ctx.getOrLoadDialect<TritonGPUDialect>();
-    ctaLayout =
-        triton::gpu::CTALayoutAttr::get(&ctx, ctaPerCGA, ctaSplit, ctaOrder);
-    f16Ty = Float16Type::get(&ctx);
+  void commonInitialization() {
+    ctx->getOrLoadDialect<TritonGPUDialect>();
+    ctaLayout3d = triton::gpu::CTALayoutAttr::get(ctx, /*ctaPerCGA*/ {1, 1, 1},
+                                                  /*ctaSplit*/ {1, 1, 1},
+                                                  /*ctaOrder*/ {2, 1, 0});
+    ctaLayout2d = triton::gpu::CTALayoutAttr::get(
+        ctx, /*ctaPerCGA*/ {1, 1}, /*ctaSplit*/ {1, 1}, /*ctaOrder*/ {1, 0});
+    f16Ty = Float16Type::get(ctx);
+  }
+
+  AMDLayoutHelper(MLIRContext *externalCtx) {
+    ctx = externalCtx;
+    commonInitialization();
+  }
+
+  // This constructor creates MLIR context internally,
+  // pointer hold by unique_ptr, so destructor will automatically delete it.
+  AMDLayoutHelper() {
+    guardCtx = std::make_unique<MLIRContext>();
+    ctx = guardCtx.get();
+    commonInitialization();
+  }
+
+  triton::gpu::CTALayoutAttr getCTALayout(ArrayRef<unsigned> warpsPerCTA) {
+    switch (warpsPerCTA.size()) {
+    case 3:
+      return ctaLayout3d;
+    case 2:
+      return ctaLayout2d;
+    default:
+      assert(false && "unsupported rank for mma layout");
+    }
+    return nullptr;
   }
 
   triton::gpu::DotOperandEncodingAttr
   createDotOperand(int idx, Attribute parent, int kWidth) {
-    return triton::gpu::DotOperandEncodingAttr::get(&ctx, idx, parent, kWidth);
+    return triton::gpu::DotOperandEncodingAttr::get(ctx, idx, parent, kWidth);
   }
-
-protected:
-  MLIRContext ctx;
-  const SmallVector<unsigned> ctaPerCGA{1, 1, 1};
-  const SmallVector<unsigned> ctaSplit{1, 1, 1};
-  const SmallVector<unsigned> ctaOrder{2, 1, 0};
-  triton::gpu::CTALayoutAttr ctaLayout;
-  Type f16Ty;
-};
-
-class AMDMfmaLayoutTest : public AMDLayoutTest {
-public:
-  AMDMfmaLayoutTest() = default;
 
   triton::gpu::AMDMfmaEncodingAttr createMFMA(int mDim, int nDim,
                                               ArrayRef<unsigned> warpsPerCTA) {
     return triton::gpu::AMDMfmaEncodingAttr::get(
-        &ctx, /*versionMajor=*/2, /*versionMinor=*/0, warpsPerCTA, mDim, nDim,
-        /*isTransposed=*/false, ctaLayout);
+        ctx, /*versionMajor=*/2, /*versionMinor=*/0, warpsPerCTA, mDim, nDim,
+        /*isTransposed=*/false, getCTALayout(warpsPerCTA));
   }
 
   triton::gpu::AMDMfmaEncodingAttr
   createTransposedMFMA(int mDim, int nDim, ArrayRef<unsigned> warpsPerCTA) {
     return triton::gpu::AMDMfmaEncodingAttr::get(
-        &ctx, /*versionMajor=*/2, /*versionMinor=*/0, warpsPerCTA, mDim, nDim,
-        /*isTransposed=*/true, ctaLayout);
+        ctx, /*versionMajor=*/2, /*versionMinor=*/0, warpsPerCTA, mDim, nDim,
+        /*isTransposed=*/true, getCTALayout(warpsPerCTA));
   }
-};
-
-class AMDWmmaLayoutTest : public AMDLayoutTest {
-public:
-  AMDWmmaLayoutTest() = default;
 
   triton::gpu::AMDWmmaEncodingAttr
   createWMMAv1(ArrayRef<unsigned> warpsPerCTA) {
     return triton::gpu::AMDWmmaEncodingAttr::get(
-        &ctx, /*version=*/1, /*isTransposed=*/false, warpsPerCTA, ctaLayout);
+        ctx, /*version=*/1, /*isTransposed=*/false, warpsPerCTA,
+        getCTALayout(warpsPerCTA));
   }
 
   triton::gpu::AMDWmmaEncodingAttr
   createWMMAv2(bool isTransposed, ArrayRef<unsigned> warpsPerCTA) {
-    return triton::gpu::AMDWmmaEncodingAttr::get(
-        &ctx, /*version=*/2, isTransposed, warpsPerCTA, ctaLayout);
+    return triton::gpu::AMDWmmaEncodingAttr::get(ctx, /*version=*/2,
+                                                 isTransposed, warpsPerCTA,
+                                                 getCTALayout(warpsPerCTA));
   }
+
+protected:
+  std::unique_ptr<MLIRContext> guardCtx;
+  MLIRContext *ctx;
+  triton::gpu::CTALayoutAttr ctaLayout2d;
+  triton::gpu::CTALayoutAttr ctaLayout3d;
+  Type f16Ty;
 };
+
+class AMDMfmaLayoutTest : public ::testing::Test, public AMDLayoutHelper {};
+
+class AMDWmmaLayoutTest : public ::testing::Test, public AMDLayoutHelper {};
 
 TEST_F(AMDMfmaLayoutTest, mfma32) {
   auto mfma2d = createMFMA(32, 32, {2, 4});
@@ -538,6 +561,44 @@ TEST_F(LinearEncodingTest, DistributedEncodingToLinearEncoding) {
     }
   }
 
+  // Create an MFMA and DotOperandEncodingAttr
+  {
+    AMDLayoutHelper h(&ctx);
+    auto mfma16 = h.createMFMA(16, 16, {2, 2});
+    auto mfma32 = h.createMFMA(32, 32, {1, 2});
+    auto mfma16t = h.createTransposedMFMA(16, 16, {2, 2});
+    auto mfma32t = h.createTransposedMFMA(32, 32, {1, 2});
+    distributedEncodings.push_back(mfma16);
+    distributedEncodings.push_back(mfma32);
+    distributedEncodings.push_back(mfma16t);
+    distributedEncodings.push_back(mfma32t);
+    // Create an opIdx=0 and opIdx=1 encoding
+    for (unsigned opIdx = 0; opIdx < 2; ++opIdx) {
+      distributedEncodings.push_back(h.createDotOperand(opIdx, mfma16, 8));
+      distributedEncodings.push_back(h.createDotOperand(opIdx, mfma32, 4));
+      // Skip operands for transposed layouts,
+      // because they have same layout as non transpose variant
+    }
+  }
+
+  // Create an WMMA and DotOperandEncodingAttr
+  {
+    AMDLayoutHelper h(&ctx);
+    auto wmma1 = h.createWMMAv1({2, 2});
+    auto wmma2 = h.createWMMAv2(false, {2, 2});
+    auto wmma2t = h.createWMMAv2(true, {2, 2});
+    distributedEncodings.push_back(wmma1);
+    distributedEncodings.push_back(wmma2);
+    distributedEncodings.push_back(wmma2t);
+    // Create an opIdx=0 and opIdx=1 encoding
+    for (unsigned opIdx = 0; opIdx < 2; ++opIdx) {
+      distributedEncodings.push_back(h.createDotOperand(opIdx, wmma1, 16));
+      distributedEncodings.push_back(h.createDotOperand(opIdx, wmma2, 16));
+      // Skip operands for transposed layouts,
+      // because they have same layout as non transpose variant
+    }
+  }
+
   for (const auto &distributedEncoding : distributedEncodings) {
     for (auto shape : shapes) {
       if (auto sliceEncoding =
@@ -558,19 +619,40 @@ TEST_F(LinearEncodingTest, DistributedEncodingToLinearEncoding) {
       // Test that methods of DistributedEncoding return the same values
       Type eltTy = Float32Type::get(&ctx);
 
-      ASSERT_EQ(getOrder(distributedEncoding), linearEncoding.getRepOrder());
+      // LinearLayout::getRepOrder works for some layouts,
+      // but gives unexpected order for MFMA and WMMA layouts
+      // TODO remove or rework this check
+      if (!mlir::isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>(
+              distributedEncoding)) {
+        ASSERT_EQ(getOrder(distributedEncoding), linearEncoding.getRepOrder());
+        ASSERT_EQ(distributedEncoding.getRepOrder(),
+                  linearEncoding.getRepOrder());
+      }
+
       ASSERT_EQ(cast<triton::gpu::TritonGPU_AttrTrait>(distributedEncoding)
                     .getTotalElemsPerThread(shape, eltTy),
                 linearEncoding.getTotalElemsPerThread(shape, eltTy));
       ASSERT_EQ(cast<triton::gpu::TritonGPU_AttrTrait>(distributedEncoding)
                     .getElemsPerThread(shape, eltTy),
                 linearEncoding.getElemsPerThread(shape, eltTy));
-      ASSERT_EQ(distributedEncoding.getRepOrder(),
-                linearEncoding.getRepOrder());
-      ASSERT_EQ(distributedEncoding.getContigPerThread(),
-                linearEncoding.getContigPerThread());
+
+      auto dotOperand =
+          mlir::dyn_cast<DotOperandEncodingAttr>(distributedEncoding);
+      // Current implementation of WMMA v1 dot operand requires kWidth to be
+      // equal to number of elements processed by one WMMA instruction, which is
+      // a fixed number. At the same time, dot operand goes continuously along K
+      // dim, which depends on shape.
+      bool wmmaV1DotOp = false;
+      if (dotOperand) {
+        auto wmma = mlir::dyn_cast<AMDWmmaEncodingAttr>(dotOperand.getParent());
+        wmmaV1DotOp = wmma && wmma.getVersion() == 1;
+      }
+      if (!wmmaV1DotOp) {
+        ASSERT_EQ(distributedEncoding.getContigPerThread(),
+                  linearEncoding.getContigPerThread());
+      }
       // DotOperandEncodingAttr::getWarpOrder() is not defined
-      if (!isa<triton::gpu::DotOperandEncodingAttr>(distributedEncoding)) {
+      if (!dotOperand) {
         ASSERT_EQ(distributedEncoding.getWarpOrder(),
                   linearEncoding.getWarpOrder());
       }

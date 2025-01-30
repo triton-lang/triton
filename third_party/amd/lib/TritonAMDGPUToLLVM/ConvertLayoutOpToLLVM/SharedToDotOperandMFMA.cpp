@@ -69,10 +69,10 @@ namespace SharedToDotOperandMFMA {
 /// \returns vector (i-th element corresponds to i-th load instruction) of
 /// 2-element vectors(tensor row and col).
 llvm::SmallVector<llvm::SmallVector<Value>> computeTensorElemMappingInBlock(
-    ConversionPatternRewriter &rewriter, Location loc,
-    const ArrayRef<int64_t> &elemsPerInstr, Value warpId, Value laneId,
-    int numOfElems, ArrayRef<int64_t> reps, ArrayRef<Value> smemOffsets,
-    int loadVecSize, unsigned iNonKDim, unsigned iKDim) {
+    ConversionPatternRewriter &rewriter, Location loc, Value warpId,
+    Value laneId, int numOfElems, ArrayRef<int64_t> reps,
+    ArrayRef<Value> smemOffsets, int loadVecSize, unsigned nonKElemsPerRep,
+    unsigned kElemsPerRep) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto numM = reps[1];
   auto numK = reps[2];
@@ -81,26 +81,26 @@ llvm::SmallVector<llvm::SmallVector<Value>> computeTensorElemMappingInBlock(
 
   Value _0 = b.i32_val(0);
   Value _32 = b.i32_val(32);
-  Value nonKDim = b.i32_val(iNonKDim);
-  Value warpVOffset = b.mul(warpId, b.i32_val(elemsPerInstr[0]));
+  Value nonKDim = b.i32_val(nonKElemsPerRep);
+  Value warpVOffset = b.mul(warpId, b.i32_val(nonKElemsPerRep));
 
   auto rank = smemOffsets.size();
 
   for (int tile = 0; tile < numK; ++tile) {
     Value tileVOffset = _0;
-    Value tileHOffset = b.i32_val(tile * elemsPerInstr[1]);
+    Value tileHOffset = b.i32_val(tile * kElemsPerRep);
 
     Value laneVOffset = b.urem(laneId, nonKDim);
     Value laneHOffset;
-    if (iNonKDim == 32) {
+    if (nonKElemsPerRep == 32) {
       laneHOffset =
           b.select(b.icmp_uge(laneId, _32), b.i32_val(numOfElems), _0);
     } else {
       // In this configuration warp contains 16 copies of same data
-      if ((iKDim == 1 || iKDim == 4) && iNonKDim == 4) {
+      if ((kElemsPerRep == 1 || kElemsPerRep == 4) && nonKElemsPerRep == 4) {
         laneHOffset = b.i32_val(0);
       } else {
-        assert(iKDim * iNonKDim / numOfElems == 64 &&
+        assert(kElemsPerRep * nonKElemsPerRep / numOfElems == 64 &&
                "seems no all threads in warp contain unique elements");
         laneHOffset = b.mul(b.udiv(laneId, nonKDim), b.i32_val(numOfElems));
       }
@@ -321,15 +321,15 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
     //   3. non k-major + swizzling is enabled <-- for testing purpose only
     if (opIdx == 0) {
       offsets = AMD::computeOffsetsAType(
-          rewriter, loc, computeTensorElemMappingInBlock, elemsPerInstr,
-          spatialWarpId, lane, warpsPerBlockNonK, numOfElems, numReps, smemObj,
-          smemStrides, sharedLayout, mDim, mfmaInstrK);
+          rewriter, loc, computeTensorElemMappingInBlock, spatialWarpId, lane,
+          warpsPerBlockNonK, numOfElems, numReps, smemObj, smemStrides,
+          sharedLayout, mDim, mfmaInstrK);
     } else {
       assert(opIdx == 1);
       offsets = AMD::computeOffsetsBType(
-          rewriter, loc, computeTensorElemMappingInBlock, elemsPerInstr,
-          spatialWarpId, lane, warpsPerBlockNonK, numOfElems, numReps, smemObj,
-          smemStrides, sharedLayout, nDim, mfmaInstrK);
+          rewriter, loc, computeTensorElemMappingInBlock, spatialWarpId, lane,
+          warpsPerBlockNonK, numOfElems, numReps, smemObj, smemStrides,
+          sharedLayout, nDim, mfmaInstrK);
     }
     smemBase = AMD::computeBasePtr(rewriter, loc, smemObj, smemStrides);
   }
