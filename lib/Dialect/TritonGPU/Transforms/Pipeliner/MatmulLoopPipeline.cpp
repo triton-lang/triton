@@ -177,15 +177,12 @@ static int createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
   Operation *wait = builder.createWithStage<ttg::AsyncWaitOp>(
       loc, stageForFirstUse, clusterForFirstUse, commit->getResult(0), 0);
 
-  auto loadIsMMAv3Shared = loadToInfo[loadOp].isMMAv3Shared;
-
   // Extract part.
   SmallVector<Value> loadOffsets(allocTy.getRank(), zero);
   loadOffsets[0] = extractIdx;
   auto viewLoad = builder.createWithStage<ttg::MemDescSubviewOp>(
       loc, stageForFirstUse, clusterForFirstUse, subviewTy, alloc, loadOffsets);
-  if (loadIsMMAv3Shared) {
-    auto alloc = cast<ttg::LocalAllocOp>((*loadOp->getUsers().begin()));
+  if (auto alloc = dyn_cast<ttg::LocalAllocOp>((*loadOp->getUsers().begin()))) {
     tt::replaceUsesAndPropagateType(builder, alloc, viewLoad.getResult());
     alloc.erase();
   } else {

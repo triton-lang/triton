@@ -173,6 +173,25 @@ static Value getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter,
   return rewriter.create<LocalAllocOp>(arg.getLoc(), newType, arg);
 }
 
+static Value getSharedMemoryScale(Value v, mlir::PatternRewriter &rewriter) {
+  OpBuilder::InsertionGuard g(rewriter);
+  Value arg = v;
+  auto argType = cast<RankedTensorType>(arg.getType());
+  assert(argType.getEncoding() && "unexpected tensor type");
+  auto newOrder = getOrder(argType.getEncoding());
+
+  Attribute SharedMemorySpace =
+      SharedMemorySpaceAttr::get(argType.getContext());
+  auto CTALayout = getCTALayout(argType.getEncoding());
+  // No swizzling for scale for now
+  auto newLayout = SharedEncodingAttr::get(argType.getContext(), 1, 1, 1,
+                                           newOrder, CTALayout);
+  auto newType = MemDescType::get(argType.getShape(), argType.getElementType(),
+                                  newLayout, SharedMemorySpace);
+  rewriter.setInsertionPointAfterValue(arg);
+  return rewriter.create<LocalAllocOp>(arg.getLoc(), newType, arg);
+}
+
 SmallVector<unsigned, 3>
 getWarpsPerTile(DotOp dotOp, const ArrayRef<int64_t> shape, int version,
                 int numWarps, const SmallVector<unsigned, 3> &instrShape) {
@@ -492,6 +511,10 @@ public:
   }
 };
 
+Value addSmemStageToScaleLoad(Value scale) {
+  return scale;
+}
+
 class ScaledBlockedToMMAv5
     : public mlir::OpRewritePattern<triton::DotScaledOp> {
   int computeCapability;
@@ -593,10 +616,13 @@ public:
         oldScaleAType.getShape(), oldScaleAType.getElementType(), scaleALayout);
     RankedTensorType newScaleBType = RankedTensorType::get(
         oldScaleBType.getShape(), oldScaleBType.getElementType(), scaleBLayout);
-    Value newScaleA = rewriter.create<ConvertLayoutOp>(loc, newScaleAType,
-                                                       dotOp.getLhsScale());
-    Value newScaleB = rewriter.create<ConvertLayoutOp>(loc, newScaleBType,
-                                                       dotOp.getRhsScale());
+
+    auto lhsScale = addSmemStageToScaleLoad(dotOp.getLhsScale());
+    auto rhsScale = addSmemStageToScaleLoad(dotOp.getRhsScale());
+    Value newScaleA =
+        rewriter.create<ConvertLayoutOp>(loc, newScaleAType, lhsScale);
+    Value newScaleB =
+        rewriter.create<ConvertLayoutOp>(loc, newScaleBType, rhsScale);
     Value scaleA = rewriter.create<triton::nvidia_gpu::TMEMAllocOp>(
         loc, scaleAType, newScaleA);
     Value scaleB = rewriter.create<triton::nvidia_gpu::TMEMAllocOp>(
