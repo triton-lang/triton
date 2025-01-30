@@ -208,7 +208,7 @@ def derive_metrics(gf, metrics, inclusive_metrics, exclusive_metrics, device_inf
 
     # Update derived metrics to the graph frame
     for derived_metric in derived_metrics:
-        if derive_metrics.endswith("(inc)"):
+        if derived_metric.endswith("(inc)"):
             gf.inc_metrics.append(derived_metric)
         else:
             gf.exc_metrics.append(derived_metric)
