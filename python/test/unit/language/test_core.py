@@ -2431,14 +2431,39 @@ negative_config = [('cumsum', 'float32', (32, 32), -1, False, 4)]
 def test_sum_dtype():
 
     @triton.jit
-    def kernel(out_ptr):
-        x = tl.full((32, 32), 1, dtype=tl.int1)
-        x = tl.sum(x)
+    def kernel_dtype(out_ptr, init, in_dtype: tl.constexpr, out_dtype: tl.constexpr):
+        x = tl.full((32, 32), init, dtype=in_dtype)
+        x = tl.sum(x, dtype=out_dtype)
         tl.store(out_ptr, x.to(tl.int32))
 
+    @triton.jit
+    def kernel_default_int(out_ptr):
+        x = tl.full((32, 32), 1, dtype=tl.int1)
+        x = tl.sum(x)
+        tl.store(out_ptr, x)
+
+    @triton.jit
+    def kernel_default_float(out_ptr):
+        x = tl.full((32, 32), 1.0, dtype=tl.bfloat16)
+        x = tl.sum(x)
+        tl.store(out_ptr, x)
+
     out = torch.empty(1, dtype=torch.int32, device='cuda')
-    kernel[(1, )](out)
+    kernel_dtype[(1, )](out, init=1, in_dtype=tl.int1, out_dtype=None)
     assert out[0] == 32 * 32
+
+    kernel_dtype[(1, )](out, init=1, in_dtype=tl.int1, out_dtype=tl.int1)
+    assert out[0] == 0
+
+    kernel_dtype[(1, )](out, init=7, in_dtype=tl.int8, out_dtype=tl.int8)
+    assert out[0] == (7 * 32 * 32) % 256
+
+    kernel_default_int[(1, )](out)
+    assert out[0] == 32 * 32
+
+    out = torch.empty(1, dtype=torch.float32, device='cuda')
+    kernel_default_float[(1, )](out)
+    torch.testing.assert_close(out[0], torch.tensor(32 * 32, dtype=torch.float32, device='cuda'))
 
 
 @triton.jit

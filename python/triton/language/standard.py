@@ -262,8 +262,9 @@ def _sum_combine(a, b):
 @core._tensor_member_fn
 @core.builtin
 @core._add_reduction_docstr("sum", dtype_arg="dtype")
-def sum(input, axis=None, keep_dims=False, dtype=None, _builder=None, _generator=None):
+def sum(input, axis=None, keep_dims=False, dtype: core.constexpr = None, _builder=None, _generator=None):
     # Pick a default dtype for the reduction if one was not specified.
+    dtype = core._unwrap_if_constexpr(dtype)
     if dtype is None:
         # For integer bitwidths less than 32, pick int32 with the same sign to
         # avoid overflow.
@@ -276,9 +277,8 @@ def sum(input, axis=None, keep_dims=False, dtype=None, _builder=None, _generator
         elif input.dtype.is_floating():
             dtype = core.float32 if input.dtype.primitive_bitwidth < 32 else None
 
-    input = core._promote_bfloat16_to_float32(input, _builder=_builder)
-    return core.reduce(input, axis, _sum_combine, keep_dims=keep_dims, dtype=dtype, _builder=_builder,
-                       _generator=_generator)
+    input = input.to(dtype, _builder=_builder)
+    return core.reduce(input, axis, _sum_combine, keep_dims=keep_dims, _builder=_builder, _generator=_generator)
 
 
 @jit

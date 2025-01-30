@@ -1107,7 +1107,7 @@ class tensor(_value):
     def abs(self) -> tensor:
         ...
 
-    def reduce(self, axis, combine_fn, keep_dims=False, dtype=None) -> tensor:
+    def reduce(self, axis, combine_fn, keep_dims=False) -> tensor:
         ...
 
     def associative_scan(self, axis, combine_fn, reverse=False) -> tensor:
@@ -2317,7 +2317,7 @@ def _insertion_guard(builder):
 
 @_tensor_member_fn
 @builtin
-def reduce(input, axis, combine_fn, keep_dims=False, dtype=None, _builder=None, _generator=None):
+def reduce(input, axis, combine_fn, keep_dims=False, _builder=None, _generator=None):
     """Applies the combine_fn to all elements in :code:`input` tensors along the provided :code:`axis`
 
     :param input: the input tensor, or tuple of tensors
@@ -2328,12 +2328,10 @@ def reduce(input, axis, combine_fn, keep_dims=False, dtype=None, _builder=None, 
     :type combine_fn: Callable
     :param keep_dims: if true, keep the reduced dimensions with length 1
     :type keep_dims: bool
-    :param dtype: the desired data type of the returned tensor. If specified, the input tensor is casted to :code:`dtype` before the operation. This is useful for preventing data overflows.
 
     """
     if isinstance(input, tensor):
-        return reduce((input, ), axis, combine_fn, keep_dims=keep_dims, dtype=dtype, _builder=_builder,
-                      _generator=_generator)[0]
+        return reduce((input, ), axis, combine_fn, keep_dims=keep_dims, _builder=_builder, _generator=_generator)[0]
 
     def make_combine_region(reduce_op):
         param_types = [t.type.scalar for t in input] * 2
@@ -2358,8 +2356,6 @@ def reduce(input, axis, combine_fn, keep_dims=False, dtype=None, _builder=None, 
     keep_dims = _constexpr_to_value(keep_dims)
     if axis is not None:
         axis = _wrap_axis(axis, len(input[0].shape))
-    if dtype is not None:
-        input = tuple(t.to(dtype, _builder=_builder) for t in input)
     ret = semantic.reduction(input, axis, make_combine_region, _builder)
     if keep_dims:
         if axis is not None:

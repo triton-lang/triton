@@ -750,10 +750,9 @@ class ReduceScanOpInterface:
 
 class ReduceOps(ReduceScanOpInterface):
 
-    def __init__(self, axis, combine_fn, keep_dims, dtype):
+    def __init__(self, axis, combine_fn, keep_dims):
         super().__init__(axis, combine_fn)
         self.keep_dims = keep_dims
-        self.dtype = dtype
 
     def unravel(self, input, axis):
         ret = []
@@ -830,9 +829,6 @@ class ReduceOps(ReduceScanOpInterface):
         return self.to_tensor(np.sum(input.handle.data, axis=self.axis, keepdims=self.keep_dims), input.dtype)
 
     def apply_impl(self, input):
-        if self.dtype is not None:
-            input = input.astype(getattr(np, str(self.dtype)))
-
         if self.combine_fn == tl.standard._argmin_combine_tie_break_left:
             return self.min_max(input[0], val_reduce_op=np.min, idx_reduce_op=np.argmin)
         elif self.combine_fn == tl.standard._argmax_combine_tie_break_left:
