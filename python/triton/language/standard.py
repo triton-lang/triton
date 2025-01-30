@@ -259,27 +259,35 @@ def _sum_combine(a, b):
 # sum
 
 
-@core._tensor_member_fn
-@core.builtin
-@core._add_reduction_docstr("sum", dtype_arg="dtype")
-def sum(input, axis=None, keep_dims=False, dtype: core.constexpr = None, _builder=None, _generator=None):
-    # Pick a default dtype for the reduction if one was not specified.
-    dtype = core._unwrap_if_constexpr(dtype)
-    if dtype is None:
-        # For integer bitwidths less than 32, pick int32 with the same sign to
-        # avoid overflow.
-        if input.dtype.is_int_signed():
-            dtype = core.int32 if input.dtype.int_bitwidth < 32 else None
-        elif input.dtype.is_int_unsigned():
-            dtype = core.uint32 if input.dtype.int_bitwidth < 32 else None
-        # For float bitwidths less than 32, pick float32 to avoid overflow or
-        # precision loss.
-        elif input.dtype.is_floating():
-            dtype = core.float32 if input.dtype.primitive_bitwidth < 32 else None
+def _pick_sum_dtype(in_dtype: core.constexpr, dtype: core.constexpr):
+    if dtype.value is not None:
+        return dtype
 
-    if dtype is not None:
-        input = input.to(dtype, _builder=_builder)
-    return core.reduce(input, axis, _sum_combine, keep_dims=keep_dims, _builder=_builder, _generator=_generator)
+    # For integer bitwidths less than 32, pick int32 with the same sign to
+    # avoid overflow.
+    out_dtype = None
+    if in_dtype.is_int_signed():
+        out_dtype = core.int32 if in_dtype.int_bitwidth < 32 else None
+    elif in_dtype.is_int_unsigned():
+        out_dtype = core.uint32 if in_dtype.int_bitwidth < 32 else None
+    # For float bitwidths less than 32, pick float32 to avoid overflow or
+    # precision loss.
+    elif in_dtype.is_floating():
+        out_dtype = core.float32 if in_dtype.primitive_bitwidth < 32 else None
+
+    return core.constexpr(out_dtype)
+
+
+@core._tensor_member_fn
+@jit
+@core._add_reduction_docstr("sum", dtype_arg="dtype")
+def sum(input, axis=None, keep_dims=False, dtype: core.constexpr = None):
+    # Pick a default dtype for the reduction if one was not specified.
+    out_dtype: core.constexpr = _pick_sum_dtype(input.dtype, dtype)
+
+    if out_dtype is not None:
+        input = input.to(out_dtype)
+    return core.reduce(input, axis, _sum_combine, keep_dims=keep_dims)
 
 
 @jit
