@@ -1,5 +1,7 @@
 project(Proton LANGUAGES CXX)
 
+set(PROTON_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/csrc)
+
 # ============ Check for includes =============
 if(NOT CUPTI_INCLUDE_DIR)
   message(FATAL_ERROR "CUPTI include directory not defined")
@@ -28,7 +30,7 @@ function(add_proton_library name)
       ${CUPTI_INCLUDE_DIR}
       ${ROCTRACER_INCLUDE_DIR}
       ${JSON_INCLUDE_DIR}
-      ${PROJECT_SOURCE_DIR}/csrc/include
+      ${PROTON_SRC_DIR}/include
   )
 
   target_compile_definitions(${name} PRIVATE __HIP_PLATFORM_AMD__)
@@ -37,7 +39,7 @@ function(add_proton_library name)
   set(PROTON_OBJ_LIBS "${PROTON_OBJ_LIBS}" PARENT_SCOPE)
 endfunction()
 
-add_subdirectory(${PROJECT_SOURCE_DIR}/csrc)
+add_subdirectory(${PROJECT_SOURCE_DIR})
 
 # ============ Possibly handle Mac suffixes ============
 if(APPLE)
