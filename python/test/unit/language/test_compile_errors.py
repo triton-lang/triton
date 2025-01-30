@@ -408,7 +408,7 @@ def test_min_dot_size(dtype):
             error_msg += "M >= 16, N >= 16 and K >= 32"
         else:
             error_msg = "M >= 16, N >= 16 and K >= 16"
-    if is_hip():
+    elif is_hip():
         # hip supports arbitrary sizes
         error_msg = None
     else:

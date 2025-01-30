@@ -1,3 +1,4 @@
+#include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "triton/Conversion/TritonGPUToLLVM/FMADotUtility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -31,9 +32,8 @@ class AMDFMAVectorMultiplier : public FMAVectorMultiplier {
     auto mod = op->getParentOfType<ModuleOp>();
     auto arch = getAMDArch(mod);
     DotIntrinsic chosenOp;
-    bool dotAvailable = arch == "gfx908" || arch == "gfx90a" ||
-                        arch.starts_with("gfx94") ||
-                        arch.starts_with("gfx11") || arch.starts_with("gfx103");
+
+    bool dotAvailable = AMD::isVDotSupported(arch);
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     if (dotAvailable) {
       if (aElemTy.isF16() && dElemTy.isF32()) {

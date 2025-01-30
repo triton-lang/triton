@@ -847,6 +847,33 @@ public:
   }
 
   bool isLegalFMAForm(DotOp dotOp) const {
+    if (AMD::isVDotSupported(arch)) {
+      auto a = dotOp.getA();
+      auto b = dotOp.getB();
+      auto c = dotOp.getC();
+      auto d = dotOp.getD();
+
+      Type aElTy = a.getType().getElementType();
+      Type bElTy = b.getType().getElementType();
+      Type cElTy = c.getType().getElementType();
+      Type dElTy = d.getType().getElementType();
+      int rank = a.getType().getRank();
+      int k = a.getType().getShape()[rank - 1];
+      // Try Fp16 x Fp16 -> Fp32 v_dot
+      // if k % 2 != 0: can not use fp V_DOT instruction
+      if (aElTy.isF16() && bElTy.isF16() && cElTy.isF32() &&
+          dElTy.isF32() && k % 2 == 0) {
+        return true;
+      }
+
+      // Try I8 x I8 -> I32 v_dot
+      // if k % 4 != 0: can not use integer V_DOT instruction
+      if (aElTy.isInteger(8) && bElTy.isInteger(8) &&
+          cElTy.isInteger(32) && dElTy.isInteger(32) && k % 4 == 0) {
+        return true;
+      }
+    }
+
     auto expectedElTy = dotOp.getA().getType().getElementType();
     for (auto operand : dotOp.getOperands()) {
       auto opTy = cast<RankedTensorType>(operand.getType());
@@ -874,38 +901,13 @@ public:
     Type cElTy = c.getType().getElementType();
     Type dElTy = d.getType().getElementType();
 
-    int rank = a.getType().getShape().size();
-    int k = a.getType().getShape()[rank - 1];
-
-    bool dotAvailable = arch == "gfx908" || arch == "gfx90a" ||
-                        arch.starts_with("gfx94") ||
-                        arch.starts_with("gfx11") || arch.starts_with("gfx103");
-
-    // Try Fp16 x Fp16 -> Fp32 dot
-    if (dotAvailable && aElTy.isF16() && bElTy.isF16() && cElTy.isF32() &&
-        dElTy.isF32()) {
-      if (k % 2 == 0) {
-        // nothing to do for this dot
-        return failure();
-      }
-      // if k % 2 != 0: can not use DOT instruction, continue with FMA
-    }
-    // Try I8 x I8 -> I32 dot
-    if (dotAvailable && aElTy.isInteger(8) && bElTy.isInteger(8) &&
-        cElTy.isInteger(32) && dElTy.isInteger(32)) {
-      if (k % 4 == 0) {
-        // nothing to do for this dot
-        return failure();
-      }
-      // if k % 4 != 0: can not use DOT instruction, continue with FMA
-    }
-
     // check that dot is not legalized already
     if (isLegalFMAForm(dotOp)) {
       return failure();
     }
 
-    // Legalize dot for FMA case
+    // Legalize dot for simple FMA case,
+    // i.e. operands type is equal output type
 
     // find common type, larger or equal of all operand types
     SmallVector<Type> opElTy{aElTy, bElTy, cElTy, dElTy};
@@ -939,8 +941,8 @@ public:
                                          newB, newC, dotOp.getInputPrecision(),
                                          dotOp.getMaxNumImpreciseAcc());
     auto newD = castToElTy(rewriter, newDot.getResult(), dElTy);
-    d.replaceAllUsesWith(newD);
-    dotOp.erase();
+
+    rewriter.replaceOp(dotOp, newD);
     return success();
   }
 };
@@ -973,16 +975,16 @@ public:
     case ISAFamily::CDNA3:
       patterns.add<::BlockedToMFMA, ::ScaledBlockedToMFMA>(
           context, getMfmaVersion(isaFamily), matrixInstructionSize, kPack,
-          /*benefit*/ 2);
+          /*benefit=*/ 2);
       break;
     case ISAFamily::RDNA3:
       patterns.add<::BlockedToWMMA>(context, getWmmaVersion(archGenerationName),
-                                    /*benefit*/ 2);
+                                    /*benefit=*/ 2);
       break;
     default:
       break;
     }
-    patterns.add<AccelerateBlocked>(context, archGenerationName, /*benefit*/ 1);
+    patterns.add<AccelerateBlocked>(context, archGenerationName, /*benefit=*/ 1);
     if (applyPatternsGreedily(m, std::move(patterns)).failed()) {
       signalPassFailure();
     }

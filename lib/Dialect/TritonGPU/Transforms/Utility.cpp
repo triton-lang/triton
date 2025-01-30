@@ -966,7 +966,7 @@ int getNVIDIAComputeCapability(Operation *module) {
          "Expected a target attribute on the module operation");
 
   StringAttr targetAttr =
-      cast<StringAttr>(module->getAttr(triton::AttrTargetName));
+      module->getAttrOfType<StringAttr>(triton::AttrTargetName);
 
   StringRef ref = targetAttr.strref();
   assert(ref.starts_with("cuda:") &&
@@ -986,11 +986,11 @@ StringRef getAMDArch(Operation *module) {
          "Expected a target attribute on the module operation");
 
   StringAttr targetAttr =
-      cast<StringAttr>(module->getAttr(triton::AttrTargetName));
+      module->getAttrOfType<StringAttr>(triton::AttrTargetName);
 
   StringRef ref = targetAttr.strref();
   assert(ref.starts_with("hip:") &&
-         "expected target attribute to be prefixed with \"cuda:\"");
+         "expected target attribute to be prefixed with \"hip:\"");
 
   StringRef archStr = ref.drop_front(4); // drop the "hip:"
   return archStr;

@@ -16,6 +16,9 @@ enum class ISAFamily {
   RDNA3,
 };
 
+// Retursn true if given architecture support V_DOT instruction.
+bool isVDotSupported(llvm::StringRef arch);
+
 // Deduces the corresponding ISA family for the given target gfx |arch|.
 ISAFamily deduceISAFamily(llvm::StringRef arch);
 

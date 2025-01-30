@@ -3,6 +3,16 @@
 
 namespace mlir::triton::AMD {
 
+bool isVDotSupported(llvm::StringRef arch) {
+  auto isaFamily = triton::AMD::deduceISAFamily(arch);
+  bool dotAvailable = isaFamily == AMD::ISAFamily::CDNA1 ||
+                      isaFamily == AMD::ISAFamily::CDNA2 ||
+                      isaFamily == AMD::ISAFamily::CDNA3 ||
+                      isaFamily == AMD::ISAFamily::RDNA2 ||
+                      isaFamily == AMD::ISAFamily::RDNA3;
+  return dotAvailable;
+}
+
 ISAFamily deduceISAFamily(llvm::StringRef arch) {
   llvm::AMDGPU::GPUKind kind = llvm::AMDGPU::parseArchAMDGCN(arch);
 
