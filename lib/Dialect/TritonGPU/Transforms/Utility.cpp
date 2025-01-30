@@ -1033,7 +1033,7 @@ MMALoadType getMMALoadType(Operation *loadOp) {
 
   if (auto alloc = dyn_cast<ttg::LocalAllocOp>(*loadOp->getUsers().begin())) {
     auto sharedEnc =
-        cast<ttg::SharedEncodingAttr>(alloc.getType().getEncoding());
+        cast<ttg::SharedEncodingTrait>(alloc.getType().getEncoding());
 
     if (!sharedEnc.hasLeadingOffset())
       return MMALoadType::DoNotPipeline;
