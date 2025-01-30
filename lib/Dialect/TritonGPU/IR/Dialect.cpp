@@ -362,7 +362,7 @@ SmallVector<unsigned> getCTAOrder(Attribute layout) {
   } else {
     llvm::report_fatal_error("Unimplemented usage of getCTAOrder");
   }
-  llvm_unreachable("Unhandled case");
+  llvm_unreachable("Unhandled case in getCTAOrder");
 }
 
 SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
@@ -2424,7 +2424,8 @@ public:
       os << "shared";
       return AliasResult::FinalAlias;
     } else if (auto sharedAttr = mlir::dyn_cast<SharedEncodingTrait>(attr)) {
-      llvm_unreachable("Unsupported shared encoding");
+      llvm_unreachable(
+          "Unsupported shared encoding in TritonGPUOpAsmInterface::getAlias");
     } else if (auto blockedAttr = mlir::dyn_cast<BlockedEncodingAttr>(attr)) {
       os << "blocked";
       return AliasResult::FinalAlias;
@@ -2531,7 +2532,8 @@ struct TritonGPUInferLayoutInterface
             applyPermutation(invOrderUnsigned, enc.getOrder()), *ctaLayout,
             enc.hasLeadingOffset());
       } else {
-        llvm_unreachable("Unsupported shared encoding");
+        llvm_unreachable("Unsupported shared encoding in "
+                         "TritonGPUInferLayoutInterface::inferTransOpEncoding");
       }
       return success();
     }

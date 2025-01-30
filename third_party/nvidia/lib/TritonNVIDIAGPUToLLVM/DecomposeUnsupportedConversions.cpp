@@ -61,7 +61,8 @@ public:
           triton::gpu::getOrder(parentEnc),
           triton::gpu::getCTALayout(parentEnc), type.getElementType());
     } else {
-      llvm_unreachable("Unsupporeted shared encoding");
+      llvm_unreachable(
+          "Unsupporeted shared encoding in DecomposeLocalLoadToDotOperand");
     }
     auto newSharedDescTy =
         MemDescType::get(type.getShape(), type.getElementType(), newSharedEnc,

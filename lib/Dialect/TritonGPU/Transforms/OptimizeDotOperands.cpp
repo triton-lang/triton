@@ -359,7 +359,7 @@ public:
           getContext(), srcTy.getShape(), newInnerCvtOrder,
           allocEncoding.getCTALayout(), srcTy.getElementType());
     } else {
-      llvm_unreachable("Unsupported shared encoding");
+      llvm_unreachable("Unsupported shared encoding in FuseTransMMAV3Plus");
     }
 
     MemDescType innerTy =
