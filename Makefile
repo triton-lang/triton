@@ -34,7 +34,7 @@ test-unit: all
 	$(PYTEST) -s -n 8 --ignore=cuda/test_flashattention.py --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=test_debug.py
 	$(PYTEST) -s -n 8 language/test_subprocess.py
 	$(PYTEST) -s -n 8 test_debug.py --forked
-	# TRITON_DISABLE_LINE_INFO=0 $(PYTEST) -s language/test_line_info.py
+	TRITON_DISABLE_LINE_INFO=0 $(PYTEST) -s language/test_line_info.py
 	# Run cuda/test_flashattention.py separately to avoid out of gpu memory
 	$(PYTEST) -s cuda/test_flashattention.py
 	TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=../../triton/instrumentation/libGPUInstrumentationTestLib.so \
