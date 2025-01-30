@@ -39,7 +39,7 @@ function(add_proton_library name)
   set(PROTON_OBJ_LIBS "${PROTON_OBJ_LIBS}" PARENT_SCOPE)
 endfunction()
 
-add_subdirectory(${PROJECT_SOURCE_DIR})
+add_subdirectory(${PROTON_SRC_DIR})
 
 # ============ Possibly handle Mac suffixes ============
 if(APPLE)
