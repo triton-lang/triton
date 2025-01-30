@@ -26,6 +26,7 @@ env:
   TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
   TRITON_DISABLE_LINE_INFO: 1
   PROTON_SKIP_PC_SAMPLING_TEST: 1
+  PYTHON: "python3"
   CCACHE_COMPRESS: "true"
 jobs:
   Runner-Preparation:
@@ -233,18 +234,13 @@ jobs:
       - name: Update PATH
         run: |
           echo "$HOME/.local/bin" >> $GITHUB_PATH
-      - name: Install pip dependencies
-        run: |
-          python3 -m pip install --upgrade pip
-          python3 -m pip install cython setuptools wheel cmake==3.24 ninja lit
       - name: Install Triton
         env:
           CUDA_HOME: "/usr/local/cuda"
         run: |
           echo "PATH is '$PATH'"
           ccache --zero-stats
-          python3 -m pip install -r python/requirements.txt
-          python3 -m pip install -e 'python[tests]' --no-build-isolation -v
+          make dev-install
       - name: CCache Stats
         run: ccache --print-stats
       - name: Run lit tests
@@ -371,8 +367,7 @@ jobs:
           echo "PATH is '$PATH'"
           pip uninstall -y triton pytorch-triton-rocm
           ccache --zero-stats
-          python3 -m pip install -r python/requirements.txt
-          python3 -m pip install -e 'python[tests]' --no-build-isolation -v
+          make dev-install
       - name: CCache Stats
         run: ccache --print-stats
       - name: Run lit tests
@@ -528,12 +523,11 @@ jobs:
         run: |
           echo "$HOME/.local/bin" >> $GITHUB_PATH
           echo "/opt/homebrew/opt/llvm/bin" >> $GITHUB_PATH
-      - name: Install pip dependencies
+      - name: Create venv
         run: |
           python3 -m venv ~/.venv
           source ~/.venv/bin/activate
           python3 -m pip install --upgrade pip
-          python3 -m pip install cython setuptools wheel cmake==3.24 ninja lit pybind11
       - name: Install Triton
         env:
           TRITON_BUILD_WITH_O1: "true"
@@ -544,8 +538,7 @@ jobs:
           source ~/.venv/bin/activate
           echo "PATH is '$PATH'"
           ccache --zero-stats
-          python3 -m pip install -r python/requirements.txt
-          python3 -m pip install -e 'python[tests]' --no-build-isolation -v
+          make dev-install
       - name: CCache Stats
         run: ccache --print-stats
       - name: Inspect cache directories

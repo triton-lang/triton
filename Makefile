@@ -2,10 +2,12 @@
 # Make sure to first initialize the build system with:
 #     make dev-install
 
-PYTHON := python3
+PYTHON ?= python
 BUILD_DIR := $(shell cd python; $(PYTHON) -c 'from build_helpers import get_cmake_dir; print(get_cmake_dir())')
 TRITON_OPT := $(BUILD_DIR)/bin/triton-opt
 PYTEST := $(PYTHON) -m pytest
+
+# Incremental builds
 
 .PHONY: all
 all:
@@ -14,6 +16,8 @@ all:
 .PHONY: triton-opt
 triton-opt:
 	ninja -C $(BUILD_DIR) triton-opt
+
+# Testing
 
 .PHONY: test-lit
 test-lit:
@@ -60,15 +64,29 @@ test-nogpu: test-lit test-cpp
 .PHONY: test
 test: test-lit test-cpp test-python
 
-.PHONY: dev-install
-dev-install:
-	cd python
-	# build-time dependencies
-	$(PYTHON) -m pip install python/requirements.txt
-	# runtime dependencies
+# pip install-ing
+
+.PHONY: dev-install-requires
+dev-install-requires:
+	$(PYTHON) -m pip install -r python/requirements.txt
+	$(PYTHON) -m pip install -r python/test-requirements.txt
+
+
+.PHONY: dev-install-torch
+dev-install-torch:
+	# install torch but ensure pytorch-triton isn't installed
 	$(PYTHON) -m pip install torch
 	$(PYTHON) -m pip uninstall triton pytorch-triton -y
-	$(PYTHON) -m pip install -e 'python[tests]' --no-build-isolation -v
+
+.PHONY: dev-install-triton
+dev-install-triton:
+	$(PYTHON) -m pip install -e python --no-build-isolation -v
+
+.PHONY: dev-install
+.NOPARALLEL: dev-install
+dev-install: dev-install-requires dev-install-triton
+
+# Updating lit tests
 
 .PHONY: golden-samples
 golden-samples: triton-opt
