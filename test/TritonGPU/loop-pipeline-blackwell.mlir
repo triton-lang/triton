@@ -285,8 +285,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %118 = ttg.local_alloc %117 : (tensor<128x256xf8E5M2, #blocked>) -> !ttg.memdesc<128x256xf8E5M2, #shared, #ttg.shared_memory>
       %119 = tt.load %arg17 : tensor<256x128x!tt.ptr<f8E5M2>, #blocked1>
       %120 = ttg.local_alloc %119 : (tensor<256x128xf8E5M2, #blocked1>) -> !ttg.memdesc<256x128xf8E5M2, #shared, #ttg.shared_memory>
-      %121 = tt.load %arg18 {loop.cluster = 3 : i32, loop.stage = 0 : i32} : tensor<1x2x32x4x4x!tt.ptr<i8>, #blocked2>
-      %122 = tt.load %arg19 {loop.cluster = 3 : i32, loop.stage = 0 : i32} : tensor<1x2x32x4x4x!tt.ptr<i8>, #blocked2>
+      %121 = tt.load %arg18 : tensor<1x2x32x4x4x!tt.ptr<i8>, #blocked2>
+      %122 = tt.load %arg19 : tensor<1x2x32x4x4x!tt.ptr<i8>, #blocked2>
       %123 = tt.trans %121 {order = array<i32: 0, 3, 2, 1, 4>} : tensor<1x2x32x4x4xi8, #blocked2> -> tensor<1x4x32x2x4xi8, #blocked3>
       %124 = tt.reshape %123 : tensor<1x4x32x2x4xi8, #blocked3> -> tensor<128x8xi8, #linear>
       %125 = tt.trans %122 {order = array<i32: 0, 3, 2, 1, 4>} : tensor<1x2x32x4x4xi8, #blocked2> -> tensor<1x4x32x2x4xi8, #blocked3>

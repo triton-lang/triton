@@ -511,35 +511,28 @@ public:
   }
 };
 
-Value addSmemStageToScaleLoad(Value scale) {
+Value addSmemStageToScaleLoad(Value scale, mlir::PatternRewriter &rewriter) {
   // rewrite load(scale) -> local_load(local_alloc(load(scale)))
-  struct AddLocalAllocAndLoad : public mlir::OpRewritePattern<triton::LoadOp> {
-    using OpRewritePattern::OpRewritePattern;
-
-    mlir::LogicalResult
-    matchAndRewrite(triton::LoadOp loadOp,
-                    mlir::PatternRewriter &rewriter) const override {
-      auto res = loadOp.getResult();
-      auto scaleSmem = getSharedMemoryScale(res, rewriter);
-      auto localLoad =
-          rewriter.create<LocalLoadOp>(res.getLoc(), res.getType(), scaleSmem);
-      rewriter.replaceOp(loadOp, localLoad);
-      llvm::outs() << "foo";
-      return success();
+  auto op = scale.getDefiningOp();
+  assert(op);
+  while (!isa<LoadOp>(op)) {
+    if (auto reshape = dyn_cast<ReshapeOp>(op)) {
+      op = reshape.getSrc().getDefiningOp();
     }
-  };
-
-  llvm::outs() << "before\n";
-  scale.dump();
-  mlir::RewritePatternSet patterns(scale.getContext());
-  patterns.add<AddLocalAllocAndLoad>(scale.getContext());
-  if (applyPatternsGreedily(scale.getDefiningOp(), std::move(patterns)).failed()) {
-    llvm::outs() << "failed\n";
-    return scale;
+    if (auto trans = dyn_cast<TransOp>(op)) {
+      op = trans.getSrc().getDefiningOp();
+    }
   }
-  llvm::outs() << "after\n";
-  scale.dump();
-  return scale;
+  auto scaleAfterLoad = op->getResult(0);
+  auto scaleSmem = getSharedMemoryScale(scaleAfterLoad, rewriter);
+  auto res = scaleAfterLoad;
+  auto localLoad =
+          rewriter.create<LocalLoadOp>(res.getLoc(), res.getType(), scaleSmem);
+  // rewriter.replaceOp(op, localLoad);
+  // rewriter.replaceOpWithNewOp<LocalLoadOp>(op, scaleAfterLoad.getType(), scaleSmem);
+  // assert(op);
+  // op.dump();
+  return localLoad;
 }
 
 class ScaledBlockedToMMAv5
@@ -644,8 +637,11 @@ public:
     RankedTensorType newScaleBType = RankedTensorType::get(
         oldScaleBType.getShape(), oldScaleBType.getElementType(), scaleBLayout);
 
-    auto lhsScale = addSmemStageToScaleLoad(dotOp.getLhsScale());
-    auto rhsScale = addSmemStageToScaleLoad(dotOp.getRhsScale());
+    auto lhsScale = dotOp.getLhsScale();
+    auto rhsScale = dotOp.getRhsScale();
+    // addSmemStageToScaleLoad(lhsScale, rewriter);
+    // addSmemStageToScaleLoad(rhsScale, rewriter);
+
     Value newScaleA =
         rewriter.create<ConvertLayoutOp>(loc, newScaleAType, lhsScale);
     Value newScaleB =
