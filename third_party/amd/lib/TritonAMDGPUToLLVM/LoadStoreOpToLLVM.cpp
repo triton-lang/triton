@@ -424,7 +424,7 @@ struct AsyncCopyGlobalToLocalOpConversion
       supportedWidths.insert(16);
       supportedWidths.insert(32);
       if (targetInfo.getGPUKind() == llvm::AMDGPU::GPUKind::GK_GFX950) {
-        supportedWidths.insert(98);
+        supportedWidths.insert(96);
         supportedWidths.insert(128);
       }
       break;
@@ -545,9 +545,9 @@ struct AsyncCopyGlobalToLocalOpConversion
         rewriter.create<LLVM::CondBrOp>(loc, maskElems[srcIdx], loadBlock,
                                         afterLoad);
         rewriter.setInsertionPointToStart(loadBlock);
-        rewriter.create<ROCDL::GlobalLoadLDSOp>(loc, srcPtr, shmemAddrs[i],
-                                                vecBytesVal, b.i32_val(0),
-                                                cacheModifiers);
+        rewriter.create<ROCDL::GlobalLoadLDSOp>(
+            loc, srcPtr, shmemAddrs[i], vecBytesVal, /*offset=*/b.i32_val(0),
+            cacheModifiers);
 
         rewriter.create<LLVM::BrOp>(loc, afterLoad);
         rewriter.setInsertionPointToStart(afterLoad);
