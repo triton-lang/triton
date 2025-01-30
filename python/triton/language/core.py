@@ -2331,7 +2331,7 @@ def reduce(input, axis, combine_fn, keep_dims=False, dtype=None, _builder=None, 
 
     """
     if isinstance(input, tensor):
-        return reduce((input, ), axis, combine_fn, keep_dims=keep_dims, _builder=_builder, _generator=_generator)[0]
+        return reduce((input, ), axis, combine_fn, keep_dims=keep_dims, dtype=dtype, _builder=_builder, _generator=_generator)[0]
 
     def make_combine_region(reduce_op):
         param_types = [t.type.scalar for t in input] * 2
@@ -2357,7 +2357,7 @@ def reduce(input, axis, combine_fn, keep_dims=False, dtype=None, _builder=None, 
     if axis is not None:
         axis = _wrap_axis(axis, len(input[0].shape))
     if dtype is not None:
-        input = input.to(dtype)
+        input = tuple(t.to(dtype, _builder=_builder) for t in input)
     ret = semantic.reduction(input, axis, make_combine_region, _builder)
     if keep_dims:
         if axis is not None:
