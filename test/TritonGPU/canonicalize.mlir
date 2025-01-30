@@ -40,6 +40,27 @@ tt.func @test_canonicalize_convert_expensive_view(%arg0: tensor<256x16xf32, #blo
 
 // -----
 
+// test that the convert does get combined with the view even if the resulting operation
+// is an efficient view.
+// CHECK-LABEL: @test_canonicalize_convert_view
+// CHECK-SAME: (%[[ARG:.+]]: tensor<64x64xf32
+//   CHECK-NOT:   ttg.convert_layout
+//       CHECK:   %[[V:.+]] = tt.reshape %[[ARG]] allow_reorder
+//       CHECK:   tt.return %[[V]]
+#blocked0 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [8], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [8, 1], order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>
+
+module attributes {"ttg.num-warps" = 8 : i32, "ttg.num-ctas" = 1 : i32, "ttg.target" = "cuda:80"} {
+tt.func @test_canonicalize_convert_view(%arg0: tensor<64x64xf32, #blocked0>) -> tensor<4096xf32, #blocked1> {
+    %c = ttg.convert_layout %arg0 : tensor<64x64xf32, #blocked0> -> tensor<64x64xf32, #blocked2>
+    %r = tt.reshape %c allow_reorder efficient_layout : tensor<64x64xf32, #blocked2> -> tensor<4096xf32, #blocked1>
+    tt.return %r : tensor<4096xf32, #blocked1>
+}
+}  // end module
+
+// -----
+
 // CHECK-LABEL: @test_canonicalize_convert_histogram
 // CHECK-SAME: (%[[ARG:.+]]: tensor<256xi32
 //   CHECK-NOT:   ttg.convert_layout
