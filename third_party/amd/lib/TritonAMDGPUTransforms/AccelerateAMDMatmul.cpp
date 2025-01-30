@@ -854,7 +854,7 @@ public:
   };
 
   bool isLegalFMAForm(DotOp dotOp, const DotElTypes &dotTypes) const {
-    if (AMD::isVDotSupported(arch)) {
+    if (AMD::supportsVDot(arch)) {
       auto aOpType = dotOp.getA().getType();
       int rank = aOpType.getRank();
       int k = aOpType.getShape()[rank - 1];
@@ -866,10 +866,9 @@ public:
       }
 
       // TODO: enable this condition, when fp32 -> fp16 cast works correctly
-      // Consider this case as non legal,
-      // despite this case is covered by fp16 FMA.
-      // because v_dot expected to give
-      // both better performance and computational precision
+      // Consider this case as non legal, despite this case is covered by fp16
+      // FMA. Because v_dot expected to give both better performance and
+      // computational precision.
       if (false && dotTypes.a.isF16() && dotTypes.b.isF16() &&
           dotTypes.c.isF16() && dotTypes.d.isF16() && k % 2 == 0) {
         return false;
@@ -897,31 +896,31 @@ public:
 
   LogicalResult tryAccelerateF16WithVDot(DotOp dotOp, PatternRewriter &rewriter,
                                          const DotElTypes &dotTypes) const {
-    if (AMD::isVDotSupported(arch)) {
-      // If this is fp16 x fp16 ->fp16 case prioritize using v_dot
-      auto aOpType = dotOp.getA().getType();
-      int rank = aOpType.getRank();
-      int k = aOpType.getShape()[rank - 1];
-      if (dotTypes.a.isF16() && dotTypes.b.isF16() && dotTypes.c.isF16() &&
-          dotTypes.d.isF16() && k % 2 == 0) {
-        auto newC = castToElTy(rewriter, dotOp.getC(), f32_ty);
-        auto newDot = rewriter.create<DotOp>(
-            dotOp.getLoc(), newC.getType(), dotOp.getA(), dotOp.getB(), newC,
-            dotOp.getInputPrecision(), dotOp.getMaxNumImpreciseAcc());
-        auto newD = castToElTy(rewriter, newDot.getResult(), f16_ty);
-        rewriter.replaceOp(dotOp, newD);
-        return success();
-      }
+    if (!AMD::supportsVDot(arch))
+      return failure();
+
+    // If this is fp16 x fp16 ->fp16 case prioritize using v_dot.
+    auto aOpType = dotOp.getA().getType();
+    int rank = aOpType.getRank();
+    int k = aOpType.getShape()[rank - 1];
+    if (dotTypes.a.isF16() && dotTypes.b.isF16() && dotTypes.c.isF16() &&
+        dotTypes.d.isF16() && k % 2 == 0) {
+      auto newC = castToElTy(rewriter, dotOp.getC(), f32_ty);
+      auto newDot = rewriter.create<DotOp>(
+          dotOp.getLoc(), newC.getType(), dotOp.getA(), dotOp.getB(), newC,
+          dotOp.getInputPrecision(), dotOp.getMaxNumImpreciseAcc());
+      auto newD = castToElTy(rewriter, newDot.getResult(), f16_ty);
+      rewriter.replaceOp(dotOp, newD);
+      return success();
     }
     return failure();
   }
 
   LogicalResult tryLegalizeFMA(DotOp dotOp, PatternRewriter &rewriter,
                                const DotElTypes &dotTypes) const {
-    // Legalize dot for plain FMA case,
-    // i.e. operands type is equal to output type
+    // Legalize dot for plain FMA case, i.e. same operands and result type.
 
-    // find common type, larger or equal of all operand types
+    // Find common type, larger or equal of all operand types
     SmallVector<Type> opElTy{dotTypes.a, dotTypes.b, dotTypes.c, dotTypes.d};
     unsigned maxBitsize = 8;
     for (auto elTy : opElTy)
@@ -930,8 +929,7 @@ public:
     Type commonTy =
         maxBitsize <= 16 ? rewriter.getF16Type() : rewriter.getF32Type();
 
-    // check that type is compatible with all operands
-    // fallback to fp32 if not
+    // Check that type is compatible with all operands; fallback to fp32 if not.
     if (commonTy.isF16()) {
       for (auto elTy : opElTy) {
         if (elTy.isInteger() && elTy.getIntOrFloatBitWidth() > 8) {
@@ -969,7 +967,7 @@ public:
     dotTypes.c = dotOp.getC().getType().getElementType();
     dotTypes.d = dotOp.getD().getType().getElementType();
 
-    // check that dot is not legalized already
+    // Check that dot is not legalized already
     if (isLegalFMAForm(dotOp, dotTypes)) {
       return failure();
     }

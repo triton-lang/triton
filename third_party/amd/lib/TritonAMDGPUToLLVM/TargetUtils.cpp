@@ -3,16 +3,6 @@
 
 namespace mlir::triton::AMD {
 
-bool isVDotSupported(llvm::StringRef arch) {
-  auto isaFamily = triton::AMD::deduceISAFamily(arch);
-  bool dotAvailable = isaFamily == AMD::ISAFamily::CDNA1 ||
-                      isaFamily == AMD::ISAFamily::CDNA2 ||
-                      isaFamily == AMD::ISAFamily::CDNA3 ||
-                      isaFamily == AMD::ISAFamily::RDNA2 ||
-                      isaFamily == AMD::ISAFamily::RDNA3;
-  return dotAvailable;
-}
-
 ISAFamily deduceISAFamily(llvm::StringRef arch) {
   llvm::AMDGPU::GPUKind kind = llvm::AMDGPU::parseArchAMDGCN(arch);
 
@@ -43,6 +33,20 @@ ISAFamily deduceISAFamily(llvm::StringRef arch) {
     return ISAFamily::RDNA1;
 
   return ISAFamily::Unknown;
+}
+
+bool supportsVDot(llvm::StringRef arch) {
+  switch (deduceISAFamily(arch)) {
+  case AMD::ISAFamily::CDNA1:
+  case AMD::ISAFamily::CDNA2:
+  case AMD::ISAFamily::CDNA3:
+  case AMD::ISAFamily::RDNA2:
+  case AMD::ISAFamily::RDNA3:
+    return true;
+  default:
+    break;
+  }
+  return false;
 }
 
 } // namespace mlir::triton::AMD

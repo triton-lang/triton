@@ -992,8 +992,7 @@ StringRef getAMDArch(Operation *module) {
   assert(ref.starts_with("hip:") &&
          "expected target attribute to be prefixed with \"hip:\"");
 
-  StringRef archStr = ref.drop_front(4); // drop the "hip:"
-  return archStr;
+  return ref.drop_front(4); // drop the "hip:"
 }
 
 // If all the transitive uses of the given value have are used by a convert to
