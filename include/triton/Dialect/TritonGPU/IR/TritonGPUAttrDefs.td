@@ -153,63 +153,6 @@ def SharedEncodingTrait : AttrInterface<"SharedEncodingTrait"> {
   let cppNamespace = "::mlir::triton::gpu";
 
   let description = [{
-  }];
-
-  let methods = [
-    InterfaceMethod<"",
-                    "unsigned",
-                    "getVec">,
-    InterfaceMethod<"",
-                    "unsigned",
-                    "getPerPhase">,
-    InterfaceMethod<"",
-                    "unsigned",
-                    "getMaxPhase">,
-    InterfaceMethod<"",
-                    "SmallVector<unsigned>",
-                    "getOrder">,
-    InterfaceMethod<"Get the shape of the CTAs per CGA.",
-                    "SmallVector<unsigned>",
-                    "getCTAsPerCGA">,
-    InterfaceMethod<"Each CTA processes 1/CTASplitNum of the tensor.",
-                    "SmallVector<unsigned>",
-                    "getCTASplitNum">,
-    InterfaceMethod<"Get the order of the CTAs per CGA. The fastest-changing axis first",
-                    "SmallVector<unsigned>",
-                    "getCTAOrder">,
-    InterfaceMethod<"",
-                    "int32_t",
-                    "getAlignment">,
-    InterfaceMethod<"",
-                    "bool",
-                    "hasLeadingOffset">
-  ];
-}
-
-class SharedEncoding<string name, string attrMnemonic, list<Trait> traits = [],
-                     Dialect dialect = TritonGPU_Dialect>
-  : TritonGPU_Attr<name, attrMnemonic, !listconcat([SharedEncodingTrait], traits), dialect> {
-
-  let description = [{
-  }];
-
-  code extraSharedEncodingDeclaration = extraBaseClassDeclaration # [{
-     unsigned getVec() const;
-     unsigned getPerPhase() const;
-     unsigned getMaxPhase() const;
-     SmallVector<unsigned> getOrder() const;
-     SmallVector<unsigned> getCTAsPerCGA() const;
-     SmallVector<unsigned> getCTASplitNum() const;
-     SmallVector<unsigned> getCTAOrder() const;
-     bool hasLeadingOffset() const;
-     int32_t getAlignment() const;
-  }];
-}
-
-def SharedEncodingAttr : SharedEncoding<"SharedEncoding", "shared_encoding"> {
-  let mnemonic = "shared";
-
-  let description = [{
 An encoding for tensors whose elements may be simultaneously accessed by
 different cuda threads in the programs, via shared memory. In other words,
 for all indices i \in Z^d, \mathcal{L}(i) = {0, 1, ..., 32*num_warps - 1}.
@@ -289,6 +232,65 @@ only in the stride dimension, but also in the leading dimension. For example,
 a matrix of size 16x128 and data type I8 is stored in the shared memory with
 64B-swizzle mode. The offset of the element with index (0, 64) will be 16*64,
 compared to 1*64 when the hasLeadingOffset is false.
+  }];
+
+  let methods = [
+    InterfaceMethod<"Get 'vec', one of properties of swizzling.",
+                    "unsigned",
+                    "getVec">,
+    InterfaceMethod<"Get 'per phase', one of properties of swizzling.",
+                    "unsigned",
+                    "getPerPhase">,
+    InterfaceMethod<"Get 'max phase', one of properties of swizzling.",
+                    "unsigned",
+                    "getMaxPhase">,
+    InterfaceMethod<"Get the order of this SMEM encoding.",
+                    "SmallVector<unsigned>",
+                    "getOrder">,
+    InterfaceMethod<"Get the shape of the CTAs per CGA.",
+                    "SmallVector<unsigned>",
+                    "getCTAsPerCGA">,
+    InterfaceMethod<"Each CTA processes 1/CTASplitNum of the tensor.",
+                    "SmallVector<unsigned>",
+                    "getCTASplitNum">,
+    InterfaceMethod<"Get the order of the CTAs per CGA. The fastest-changing axis first",
+                    "SmallVector<unsigned>",
+                    "getCTAOrder">,
+    InterfaceMethod<"Get the size of the address alignment in bytes.",
+                    "int32_t",
+                    "getAlignment">,
+    InterfaceMethod<"True if the SMEM layout is in the core-matrices format.",
+                    "bool",
+                    "hasLeadingOffset">
+  ];
+}
+
+class SharedEncoding<string name, string attrMnemonic, list<Trait> traits = [],
+                     Dialect dialect = TritonGPU_Dialect>
+  : TritonGPU_Attr<name, attrMnemonic, !listconcat([SharedEncodingTrait], traits), dialect> {
+
+  let description = [{
+The interface which can be inherited by various representations of an SMEM encoding.
+  }];
+
+  code extraSharedEncodingDeclaration = extraBaseClassDeclaration # [{
+     unsigned getVec() const;
+     unsigned getPerPhase() const;
+     unsigned getMaxPhase() const;
+     SmallVector<unsigned> getOrder() const;
+     SmallVector<unsigned> getCTAsPerCGA() const;
+     SmallVector<unsigned> getCTASplitNum() const;
+     SmallVector<unsigned> getCTAOrder() const;
+     bool hasLeadingOffset() const;
+     int32_t getAlignment() const;
+  }];
+}
+
+def SharedEncodingAttr : SharedEncoding<"SharedEncoding", "shared_encoding"> {
+  let mnemonic = "shared";
+
+  let description = [{
+The concrete attribute class for an SMEM encoding, used by multiple GPU backends.
   }];
 
   // swizzle info: vec, perPhase, maxPhase
