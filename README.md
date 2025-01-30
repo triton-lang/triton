@@ -232,8 +232,14 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
 - `MLIR_ENABLE_TIMING` dumps the timing information for each MLIR pass.
 - `LLVM_ENABLE_TIMING` dumps the timing information for each LLVM pass.
 - `TRITON_DEFAULT_FP_FUSION` overrides the default behavior of allowing fp fusion (mul+add->fma).
-- `MLIR_ENABLE_DIAGNOSTICS` enables dumping the stack trace and the related IR operation of diagnostics (e.g., errors and warnings).
-- `MLIR_ENABLE_REMARK` enables the performance warnings that are emitted as remarks.
+- `MLIR_ENABLE_DIAGNOSTICS=<comma-separated>` controls diagnostic emission in MLIR.
+  Options are: `warnings`, `remarks`, `stacktraces`, `operations`.
+  Use comma-separated values to customize output. For example,
+  `MLIR_ENABLE_DIAGNOSTICS=remarks,operations` enables remarks and IR operations,
+  while `MLIR_ENABLE_DIAGNOSTICS=warnings,stacktraces` enables warnings with
+  stacktraces. By default, only errors are shown. Setting `warnings` includes
+  errors and warnings; `remarks` includes errors, warnings, and remarks.
+- `MLIR_ENABLE_REMARK` is deprecated. Please use `MLIR_ENABLE_DIAGNOSTICS=remarks`.
 - `TRITON_KERNEL_DUMP` enables the dumping of the IR from each compilation stage and the final ptx/amdgcn.
 - `TRITON_DUMP_DIR` specifies the directory to save the dumped IR and ptx/amdgcn when `TRITON_KERNEL_DUMP` is set to 1.
 - `TRITON_KERNEL_OVERRIDE` enables the override of the compiled kernel with a user-specified IR/ptx/amdgcn at the beginning of each compilation stage.

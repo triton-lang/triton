@@ -151,7 +151,11 @@ LogicalResult Pingponger::genLocalSlice(OpBuilder &builder, Value v,
                                         int64_t sliceWidth) {
   SmallVector<Operation *> slices;
   SmallVector<Operation *> subviews;
-  auto memDesc = v.getDefiningOp()->getOperand(0);
+  // TODO: support transformed input to dot
+  auto localLoad = v.getDefiningOp<ttg::LocalLoadOp>();
+  if (!localLoad)
+    return failure();
+  auto memDesc = localLoad.getSrc();
   auto type = cast<ttg::MemDescType>(memDesc.getType());
   SmallVector<int64_t> shape = llvm::to_vector(type.getShape());
   Type elementType = type.getElementType();

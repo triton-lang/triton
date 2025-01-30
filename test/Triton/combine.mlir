@@ -345,3 +345,16 @@ tt.func @test_nested_transpose(%arg0: tensor<2x4x8xf32>) -> (tensor<8x2x4xf32>) 
     // CHECK: tt.return %[[res]]
     tt.return %b : tensor<8x2x4xf32>
 }
+
+// CHECK-LABEL: test_reshape_reduce
+tt.func @test_reshape_reduce(%0: tensor<32x4x2xi32>) -> (i32, tensor<16xi32>) {
+  // CHECK: tt.reshape %{{.+}} allow_reorder : tensor<32x4x2xi32> -> tensor<256xi32>
+  %1 = tt.reshape %0 : tensor<32x4x2xi32> -> tensor<256xi32>
+  %2 = "tt.reduce" (%1) ({
+    ^bb0(%arg7: i32, %arg8: i32):
+      %add = arith.addi %arg7, %arg8 : i32
+      tt.reduce.return %add : i32
+    }) {axis = 0 : i32} : (tensor<256xi32>) -> i32
+  %3 = tt.histogram %1 : tensor<256xi32> -> tensor<16xi32>
+  tt.return %2, %3 : i32, tensor<16xi32>
+}

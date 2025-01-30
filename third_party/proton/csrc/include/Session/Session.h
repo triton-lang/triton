@@ -72,6 +72,7 @@ public:
   ~SessionManager() = default;
 
   size_t addSession(const std::string &path, const std::string &profilerName,
+                    const std::string &profilerPath,
                     const std::string &contextSourceName,
                     const std::string &dataName);
 
@@ -103,6 +104,7 @@ public:
 private:
   std::unique_ptr<Session> makeSession(size_t id, const std::string &path,
                                        const std::string &profilerName,
+                                       const std::string &profilerPath,
                                        const std::string &contextSourceName,
                                        const std::string &dataName);
 

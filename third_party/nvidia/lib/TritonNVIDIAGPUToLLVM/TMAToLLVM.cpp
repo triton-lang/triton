@@ -11,6 +11,8 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 
+#include "Utility.h"
+
 using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::nvidia_gpu;
@@ -231,13 +233,7 @@ void zero_fill_tma(Location loc, MLIRContext *ctx,
   auto writeAddr =
       b.gep(descPtr.getType(), fillVal.getType(), descPtr, threadId);
   targetInfo.storeShared(rewriter, loc, writeAddr, fillVal, pred);
-
-  // Sync warp
-  PTXBuilder ptxBuilder;
-  auto &bar = *ptxBuilder.create<>("bar.warp.sync");
-  auto *maskOpr = ptxBuilder.newConstantOperand(0xffffffff);
-  bar(maskOpr).predicate(pred);
-  ptxBuilder.launch(rewriter, loc, void_ty(ctx));
+  LLVM::NVIDIA::createSyncWarp(loc, rewriter);
 }
 
 struct ExperimentalTensormapCreateOpConversion

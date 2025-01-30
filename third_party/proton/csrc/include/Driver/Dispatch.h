@@ -44,13 +44,13 @@ namespace proton {
 
 struct ExternLibBase {
   using RetType = int; // Generic type, can be overridden in derived structs
-  static constexpr const char *name = "";       // Placeholder
-  static constexpr const char *defaultDir = ""; // Placeholder
-  static constexpr RetType success = 0;         // Placeholder
+  static constexpr const char *name = ""; // Placeholder
+  static constexpr RetType success = 0;   // Placeholder
   ExternLibBase() = delete;
   ExternLibBase(const ExternLibBase &) = delete;
   ExternLibBase &operator=(const ExternLibBase &) = delete;
   static inline void *lib{nullptr};
+  static inline std::string defaultDir{""};
 };
 
 template <typename ExternLib> class Dispatch {
@@ -59,25 +59,24 @@ public:
 
   static void init(const char *name, void **lib) {
     if (*lib == nullptr) {
-      // First reuse the existing handle
-      *lib = dlopen(name, RTLD_NOLOAD);
-    }
-    if (*lib == nullptr) {
-      // If not found, try to load it from LD_LIBRARY_PATH
-      *lib = dlopen(name, RTLD_LOCAL | RTLD_LAZY);
-    }
-    if (*lib == nullptr) {
-      // If still not found, try to load it from the default path
+      // If not found, try to load it from the default path
       auto dir = std::string(ExternLib::defaultDir);
       if (dir.length() > 0) {
         auto fullPath = dir + "/" + name;
         *lib = dlopen(fullPath.c_str(), RTLD_LOCAL | RTLD_LAZY);
+      } else {
+        // Only if the default path is not set, we try to load it from the
+        // system.
+        // First reuse the existing handle
+        *lib = dlopen(name, RTLD_NOLOAD);
+        if (*lib == nullptr) {
+          // If not found, try to load it from LD_LIBRARY_PATH
+          *lib = dlopen(name, RTLD_LOCAL | RTLD_LAZY);
+        }
       }
     }
     if (*lib == nullptr) {
-      throw std::runtime_error("Could not find `" + std::string(name) +
-                               "`. Make sure it is in your "
-                               "LD_LIBRARY_PATH.");
+      throw std::runtime_error("Could not load `" + std::string(name) + "`");
     }
   }
 
