@@ -290,7 +290,7 @@ tt.func @test_canonicalize_view(%arg0: tensor<8xf32>, %arg1: tensor<f32>) -> (te
     // CHECK: %{{.*}} = tt.splat %arg1 : tensor<f32> -> tensor<2x2x2xf32>
     %view2 = tt.reshape %splat allow_reorder : tensor<8xf32> -> tensor<2x2x2xf32>
 
-    %view3 = tt.reshape %arg0 allow_reorder : tensor<8xf32> -> tensor<8xf32>
+    %view3 = tt.reshape %arg0 : tensor<8xf32> -> tensor<8xf32>
     // CHECK: %{{.*}} = arith.addf %arg0, %arg0 : tensor<8xf32>
     %add = arith.addf %view3, %arg0 : tensor<8xf32>
 
