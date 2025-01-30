@@ -18,14 +18,12 @@ namespace mlir {
 namespace triton {
 namespace proton {
 
-// -- RecordOp --
-void RecordOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  effects.emplace_back(MemoryEffects::Write::get(),
-                       SideEffects::DefaultResource::get());
-  effects.emplace_back(MemoryEffects::Read::get(),
-                       SideEffects::DefaultResource::get());
+// -- CircularRecordOp --
+LogicalResult CircularRecordOp::verify() {
+  // TODO(fywkevin): checks the following:
+  // 1. circular buffer size power of 2.
+  // 2. function's noinline is false.
+  return success();
 }
 
 } // namespace proton
