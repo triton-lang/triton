@@ -110,7 +110,9 @@ def test_experimental_tma_matmul(num_stages, BLOCK_M, BLOCK_N, BLOCK_K, byval_tm
                                     num_warps=8, num_stages=num_stages, dtype=tl.float16)
     ref_out = torch.matmul(A.to(torch.float32), B.to(torch.float32)).to(torch.float16)
     torch.testing.assert_close(ref_out, C, rtol=1e-3, atol=1e-3)
-    if BLOCK_M >= 64 and BLOCK_N >= 64:
+    if BLOCK_M >= 64 and BLOCK_N >= 64 and torch.cuda.get_device_capability()[0] == 9:
+        # TODO: The use of stmatrix for Blackwell is currently not supported.
+        # Only a subset of TMEM and stmatrix layout pairs are compatible, for example 16x256bx2 and m8n8x4.
         assert "stmatrix.sync.aligned.m8n8.x4.shared.b16" in kernel.asm["ptx"]
     if byval_tma:
         assert ".param .align 64 .b8" in kernel.asm["ptx"]
@@ -462,7 +464,9 @@ def test_experimental_make_tensor_descriptor_matmul(num_stages, BLOCK_M, BLOCK_N
     ref_out = torch.matmul(A.to(torch.float32), B.to(torch.float32)).to(torch.float16)
     torch.testing.assert_close(ref_out, C, rtol=1e-3, atol=1e-3)
     assert "tensormap.cp_fenceproxy.global.shared::cta.tensormap::generic.release.gpu.sync.aligned" in kernel.asm["ptx"]
-    if BLOCK_M >= 64 and BLOCK_N >= 64:
+    if BLOCK_M >= 64 and BLOCK_N >= 64 and torch.cuda.get_device_capability()[0] == 9:
+        # TODO: The use of stmatrix for Blackwell is currently not supported.
+        # Only a subset of TMEM and stmatrix layout pairs are compatible, for example 16x256bx2 and m8n8x4.
         assert "stmatrix.sync.aligned.m8n8.x4.shared.b16" in kernel.asm["ptx"]
 
 
@@ -642,3 +646,144 @@ def test_tensor_descriptor_batched_gemm():
     torch.cuda.synchronize()
 
     torch.testing.assert_close(c, expect, rtol=1e-3, atol=1e-3)
+
+
+@triton.jit
+def tma_gather_rows_kernel(out_ptr, in_ptr, idx_ptr, y, X: tl.constexpr, Y: tl.constexpr, BLOCK_X: tl.constexpr,
+                           BLOCK_Y: tl.constexpr):
+    idx = tl.load(idx_ptr + tl.arange(0, BLOCK_X))
+    desc = tl._experimental_make_tensor_descriptor(in_ptr, [X, Y], [Y, 1], [1, BLOCK_Y])
+    out = desc.gather(idx, y)
+    tl.store(out_ptr + tl.arange(0, BLOCK_X)[:, None] * BLOCK_Y + tl.arange(0, BLOCK_Y)[None, :], out)
+
+
+def torch_gather_rows(input, idx, y, block_y):
+    out = torch.empty(0, device=input.device, dtype=input.dtype)
+    for i in idx:
+        x = input[i][y:y + block_y]
+        out = torch.cat((out, x.reshape(1, x.shape[0])), dim=0)
+    return out
+
+
+@pytest.mark.parametrize("X, Y", [(128, 128), (64, 256)])
+@pytest.mark.parametrize("BLOCK_X, BLOCK_Y", [(32, 32), (64, 128), (16, 128)])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.int8])
+@pytest.mark.parametrize("y", [0, 32, 48])
+@pytest.mark.skipif(torch.cuda.get_device_capability()[0] != 10,
+                    reason="TMA Gather only works on cloud Blackwell Chips")
+def test_tma_gather(X, Y, BLOCK_X, BLOCK_Y, dtype, y, device):
+    if BLOCK_X > X or y + BLOCK_Y > Y:
+        pytest.skip()
+
+    torch.manual_seed(42)
+    if dtype != torch.int8:
+        input = torch.rand((X, Y), dtype=dtype, device=device)
+    else:
+        input = torch.arange(X * Y, dtype=dtype, device=device).reshape(X, Y)
+    output = torch.empty((BLOCK_X, BLOCK_Y), dtype=dtype, device=device)
+
+    idx = torch.randint(BLOCK_X, (BLOCK_X, ), dtype=torch.int32, device=device)
+
+    def alloc_fn(size: int, align: int, steam):
+        return torch.empty(size, dtype=torch.int8, device=device)
+
+    triton.set_allocator(alloc_fn)
+
+    tma_gather_rows_kernel[(1, )](output, input, idx, y, X, Y, BLOCK_X, BLOCK_Y)
+
+    ref = torch_gather_rows(input, idx, y, BLOCK_Y)
+    torch.testing.assert_close(ref, output, atol=0, rtol=0)
+
+
+@triton.jit
+def tma_gather_dot_pipeline(  #
+        a_ptr, b_ptr, output_ptr,  #
+        stride_am, stride_ak,  #
+        stride_bk, stride_bn,  #
+        stride_cm, stride_cn,  #
+        K: tl.constexpr,  #
+        BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
+):
+    a_desc = tl._experimental_make_tensor_descriptor(a_ptr, [BLOCK_M, K], [K, 1], [1, BLOCK_K])
+    b_desc = tl._experimental_make_tensor_descriptor(b_ptr, [K, BLOCK_N], [BLOCK_N, 1], [1, BLOCK_N])
+
+    accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=output_ptr.dtype.element_ty)
+    for k in range(0, K, BLOCK_K):
+        a = a_desc.gather(tl.arange(0, BLOCK_M), k)
+        b = b_desc.gather(tl.arange(0, BLOCK_K) + k, 0)
+        accumulator = tl.dot(a, b, acc=accumulator)
+
+    offs_cm = tl.arange(0, BLOCK_M)
+    offs_cn = tl.arange(0, BLOCK_N)
+    output_ptrs = output_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
+    tl.store(output_ptrs, accumulator)
+
+
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(16, 16, 16)])
+@pytest.mark.parametrize("K", [128])
+@pytest.mark.skipif(torch.cuda.get_device_capability()[0] != 10,
+                    reason="TMA Gather only works on cloud Blackwell Chips")
+def test_tma_gather_dot_pipeline(BLOCK_M, BLOCK_N, BLOCK_K, K, device):
+
+    def alloc_fn(size: int, align: int, steam):
+        return torch.empty(size, dtype=torch.int8, device=device)
+
+    triton.set_allocator(alloc_fn)
+
+    a = torch.arange(BLOCK_M * K, device=device).reshape(BLOCK_M, K).float()
+    b = torch.arange(K * BLOCK_N, device=device).reshape(K, BLOCK_N).float()
+
+    c = a @ b
+
+    output = torch.zeros((BLOCK_M, BLOCK_N), dtype=torch.float32, device=device)
+    kernel = tma_gather_dot_pipeline.warmup(a, b, output, a.stride(0), a.stride(1), b.stride(0), b.stride(1),
+                                            output.stride(0), output.stride(1), K, BLOCK_M, BLOCK_N, BLOCK_K,
+                                            grid=(1, ))
+    assert kernel.asm["ttgir"].count("ttng.async_tma_gather") == 6
+    kernel[(1, 1, 1)](a, b, output, a.stride(0), a.stride(1), b.stride(0), b.stride(1), output.stride(0),
+                      output.stride(1), K, BLOCK_M, BLOCK_N, BLOCK_K)
+
+    torch.testing.assert_close(c, output)
+
+
+def torch_scatter_rows(input, idx, y, block_y, X, Y):
+    out = torch.zeros((X, Y), dtype=input.dtype, device=input.device)
+    for i, j in enumerate(idx):
+        out[j][y:y + block_y] = input[i]
+    return out
+
+
+@triton.jit
+def tma_scatter_rows_kernel(out_ptr, in_ptr, idx_ptr, y, X: tl.constexpr, Y: tl.constexpr, BLOCK_X: tl.constexpr,
+                            BLOCK_Y: tl.constexpr):
+    idx = tl.load(idx_ptr + tl.arange(0, BLOCK_X))
+    data = tl.load(in_ptr + tl.arange(0, BLOCK_X)[:, None] * BLOCK_Y + tl.arange(0, BLOCK_Y)[None, :])
+    desc = tl._experimental_make_tensor_descriptor(out_ptr, [X, Y], [Y, 1], [1, BLOCK_Y])
+    desc.scatter(data, idx, y)
+
+
+@pytest.mark.parametrize("X, Y", [(128, 128), (64, 256)])
+@pytest.mark.parametrize("BLOCK_X, BLOCK_Y", [(32, 32), (64, 128), (16, 128)])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.int8])
+@pytest.mark.parametrize("y", [0, 32, 48])
+@pytest.mark.skipif(torch.cuda.get_device_capability()[0] != 10,
+                    reason="TMA Gather only works on cloud Blackwell Chips")
+def test_tma_scatter(X, Y, BLOCK_X, BLOCK_Y, dtype, y):
+    if BLOCK_X > X or y + BLOCK_Y > Y:
+        pytest.skip()
+
+    torch.manual_seed(42)
+    input = torch.arange(BLOCK_X * BLOCK_Y, dtype=dtype, device='cuda').reshape(BLOCK_X, BLOCK_Y)
+    output = torch.zeros((X, Y), dtype=dtype, device='cuda')
+
+    idx = torch.randperm(BLOCK_X, dtype=torch.int32, device='cuda')
+
+    def alloc_fn(size: int, align: int, steam):
+        return torch.empty(size, dtype=torch.int8, device='cuda')
+
+    triton.set_allocator(alloc_fn)
+
+    tma_scatter_rows_kernel[(1, )](output, input, idx, y, X, Y, BLOCK_X, BLOCK_Y)
+
+    ref = torch_scatter_rows(input, idx, y, BLOCK_Y, X, Y)
+    torch.testing.assert_close(ref, output, atol=0, rtol=0)

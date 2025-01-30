@@ -52,8 +52,17 @@ createTritonNvidiaGPUFenceInsertionPass(int computeCapability = 90);
 
 std::unique_ptr<Pass> createTritonNvidiaGPUTMALoweringPass();
 
+std::unique_ptr<Pass> createTensorMemoryAllocationPass();
+
+std::unique_ptr<Pass> createTritonNvidiaGPUMMALoweringPass();
+
+std::unique_ptr<Pass> createTritonNvidiaGPUKeepAccInTMemPass();
+
+std::unique_ptr<Pass> createTritonNvidiaGPUPromoteLHSToTMemPass();
+
 /// Generate the code for registering passes.
 #define GEN_PASS_REGISTRATION
+#define GEN_PASS_DECL_TRITONNVIDIAGPULEGALIZETMALAYOUTS
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
 
 } // namespace mlir

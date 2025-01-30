@@ -54,6 +54,7 @@ private:
                               const TargetInfoBase &targetInfo) const {
     MLIRContext *ctx = rewriter.getContext();
     auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto typeConverter = getTypeConverter();
     auto srcTy = op.getSrc().getType();
     auto dstTy = op.getType();
@@ -69,7 +70,7 @@ private:
 
     Value smemBase =
         LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
-    smemBase = bitcast(smemBase, elemPtrTy);
+    smemBase = b.bitcast(smemBase, elemPtrTy);
     auto smemShape = convertType<unsigned, int64_t>(srcShapePerCTA);
 
     // Store to local shared memory
@@ -83,8 +84,8 @@ private:
 
       for (unsigned i = 0; i < inIndices.size(); ++i) {
         Value offset = LLVM::linearize(rewriter, loc, inIndices[i], smemShape);
-        Value ptr = gep(elemPtrTy, llvmElemTy, smemBase, offset);
-        store(inVals[i], ptr);
+        Value ptr = b.gep(elemPtrTy, llvmElemTy, smemBase, offset);
+        b.store(inVals[i], ptr);
       }
     }
 
@@ -96,7 +97,7 @@ private:
     {
       SmallVector<Value> srcShapePerCTACache;
       for (unsigned i = 0; i < rank; ++i)
-        srcShapePerCTACache.push_back(i32_val(srcShapePerCTA[i]));
+        srcShapePerCTACache.push_back(b.i32_val(srcShapePerCTA[i]));
 
       SmallVector<Value> outVals;
       auto outIndices = emitIndices(loc, rewriter, targetInfo, dstLayout, dstTy,
@@ -108,8 +109,8 @@ private:
 
         SmallVector<Value> multiDimCTAId, localCoord;
         for (unsigned d = 0; d < rank; ++d) {
-          multiDimCTAId.push_back(udiv(coord[d], srcShapePerCTACache[d]));
-          localCoord.push_back(urem(coord[d], srcShapePerCTACache[d]));
+          multiDimCTAId.push_back(b.udiv(coord[d], srcShapePerCTACache[d]));
+          localCoord.push_back(b.urem(coord[d], srcShapePerCTACache[d]));
         }
 
         Value remoteCTAId = LLVM::linearize(rewriter, loc, multiDimCTAId,
@@ -117,9 +118,10 @@ private:
         Value localOffset =
             LLVM::linearize(rewriter, loc, localCoord, smemShape);
 
-        Value ptr = gep(elemPtrTy, llvmElemTy, smemBase, localOffset);
-        outVals.push_back(targetInfo.loadDShared(
-            rewriter, loc, ptr, remoteCTAId, llvmElemTy, /*pred=*/true_val()));
+        Value ptr = b.gep(elemPtrTy, llvmElemTy, smemBase, localOffset);
+        outVals.push_back(targetInfo.loadDShared(rewriter, loc, ptr,
+                                                 remoteCTAId, llvmElemTy,
+                                                 /*pred=*/b.true_val()));
       }
 
       Value result =
@@ -142,51 +144,52 @@ private:
                                 OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const {
     auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto dstTy = op.getType();
     auto vals = unpackLLElements(loc, adaptor.getSrc(), rewriter);
     SmallVector<Value> retVals;
     for (int i = 0; i < vals.size(); i += 8) {
-      Value upper = undef(vec_ty(i8_ty, 4));
+      Value upper = b.undef(vec_ty(i8_ty, 4));
       for (int j = 0; j < 4; j++) {
-        upper =
-            insert_element(vec_ty(i8_ty, 4), upper, vals[i + j], i32_val(j));
+        upper = b.insert_element(vec_ty(i8_ty, 4), upper, vals[i + j],
+                                 b.i32_val(j));
       }
-      upper = bitcast(upper, i32_ty);
-      Value lower = undef(vec_ty(i8_ty, 4));
+      upper = b.bitcast(upper, i32_ty);
+      Value lower = b.undef(vec_ty(i8_ty, 4));
       for (int j = 0; j < 4; j++) {
-        lower = insert_element(vec_ty(i8_ty, 4), lower, vals[i + 4 + j],
-                               i32_val(j));
+        lower = b.insert_element(vec_ty(i8_ty, 4), lower, vals[i + 4 + j],
+                                 b.i32_val(j));
       }
-      lower = bitcast(lower, i32_ty);
+      lower = b.bitcast(lower, i32_ty);
 
-      Value threadIdMod4 = urem(getThreadId(rewriter, loc), i32_val(4));
-      Value cnd = or_(icmp_eq(threadIdMod4, i32_val(0)),
-                      icmp_eq(threadIdMod4, i32_val(3)));
-      Value selectorEx0 = select(cnd, i32_val(0x3210), i32_val(0x7654));
-      Value selectorEx1 = select(cnd, i32_val(0x7654), i32_val(0x3210));
-      Value selectorEx4 = select(cnd, i32_val(0x5410), i32_val(0x1054));
-      Value selectorEx5 = select(cnd, i32_val(0x7632), i32_val(0x3276));
+      Value threadIdMod4 = b.urem(getThreadId(rewriter, loc), b.i32_val(4));
+      Value cnd = b.or_(b.icmp_eq(threadIdMod4, b.i32_val(0)),
+                        b.icmp_eq(threadIdMod4, b.i32_val(3)));
+      Value selectorEx0 = b.select(cnd, b.i32_val(0x3210), b.i32_val(0x7654));
+      Value selectorEx1 = b.select(cnd, b.i32_val(0x7654), b.i32_val(0x3210));
+      Value selectorEx4 = b.select(cnd, b.i32_val(0x5410), b.i32_val(0x1054));
+      Value selectorEx5 = b.select(cnd, b.i32_val(0x7632), b.i32_val(0x3276));
 
-      Value isOne = icmp_eq(threadIdMod4, i32_val(1));
-      Value isTwo = icmp_eq(threadIdMod4, i32_val(2));
-      Value isThree = icmp_eq(threadIdMod4, i32_val(3));
-      Value upperIdx = i32_val(0);
-      upperIdx = select(isOne, i32_val(3), upperIdx);
-      upperIdx = select(isTwo, i32_val(1), upperIdx);
-      upperIdx = select(isThree, i32_val(2), upperIdx);
+      Value isOne = b.icmp_eq(threadIdMod4, b.i32_val(1));
+      Value isTwo = b.icmp_eq(threadIdMod4, b.i32_val(2));
+      Value isThree = b.icmp_eq(threadIdMod4, b.i32_val(3));
+      Value upperIdx = b.i32_val(0);
+      upperIdx = b.select(isOne, b.i32_val(3), upperIdx);
+      upperIdx = b.select(isTwo, b.i32_val(1), upperIdx);
+      upperIdx = b.select(isThree, b.i32_val(2), upperIdx);
 
-      Value lowerIdx = i32_val(1);
-      lowerIdx = select(isOne, i32_val(2), lowerIdx);
-      lowerIdx = select(isTwo, i32_val(0), lowerIdx);
-      lowerIdx = select(isThree, i32_val(3), lowerIdx);
+      Value lowerIdx = b.i32_val(1);
+      lowerIdx = b.select(isOne, b.i32_val(2), lowerIdx);
+      lowerIdx = b.select(isTwo, b.i32_val(0), lowerIdx);
+      lowerIdx = b.select(isThree, b.i32_val(3), lowerIdx);
 
       Value upper0 =
           LLVM::NVIDIA::permute(loc, rewriter, upper, lower, selectorEx0);
       Value lower0 =
           LLVM::NVIDIA::permute(loc, rewriter, upper, lower, selectorEx1);
-      Value mask = i32_val(0xFFFFFFFF);
+      Value mask = b.i32_val(0xFFFFFFFF);
       // Set clamp tp shuffle only within 4 lanes.
-      Value clamp = i32_val(0x1C1F);
+      Value clamp = b.i32_val(0x1C1F);
       upper0 =
           rewriter.create<NVVM::ShflOp>(loc, i32_ty, mask, upper0, upperIdx,
                                         clamp, NVVM::ShflKind::idx, UnitAttr());
@@ -195,15 +198,15 @@ private:
                                         clamp, NVVM::ShflKind::idx, UnitAttr());
       Value upper1 =
           LLVM::NVIDIA::permute(loc, rewriter, upper0, lower0, selectorEx4);
-      Value vecVal = bitcast(upper1, vec_ty(i8_ty, 4));
+      Value vecVal = b.bitcast(upper1, vec_ty(i8_ty, 4));
       for (int i = 0; i < 4; i++) {
-        retVals.push_back(extract_element(i8_ty, vecVal, i32_val(i)));
+        retVals.push_back(b.extract_element(i8_ty, vecVal, b.i32_val(i)));
       }
       Value lower1 =
           LLVM::NVIDIA::permute(loc, rewriter, upper0, lower0, selectorEx5);
-      vecVal = bitcast(lower1, vec_ty(i8_ty, 4));
+      vecVal = b.bitcast(lower1, vec_ty(i8_ty, 4));
       for (int i = 0; i < 4; i++) {
-        retVals.push_back(extract_element(i8_ty, vecVal, i32_val(i)));
+        retVals.push_back(b.extract_element(i8_ty, vecVal, b.i32_val(i)));
       }
     }
     Value result =

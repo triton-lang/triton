@@ -13,6 +13,7 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
 #include "triton/Tools/StrUtil.h"
@@ -331,6 +332,17 @@ SmallVector<unsigned> getCTASplitNum(Attribute layout) {
   } else if (auto sharedLayout = mlir::dyn_cast<SharedEncodingAttr>(layout)) {
     res.assign(sharedLayout.getCTALayout().getCTASplitNum().begin(),
                sharedLayout.getCTALayout().getCTASplitNum().end());
+  } else if (auto tmemLayout =
+                 mlir::dyn_cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
+                     layout)) {
+    res.resize(2);
+    res[0] = tmemLayout.getCTASplitM();
+    res[1] = tmemLayout.getCTASplitN();
+  } else if (auto tmemScaleLayout = mlir::dyn_cast<
+                 triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(layout)) {
+    res.resize(2);
+    res[0] = tmemScaleLayout.getCTASplitM();
+    res[1] = tmemScaleLayout.getCTASplitN();
   } else {
     assert(false && "Unimplemented usage of getCTASplitNum");
   }
@@ -375,7 +387,13 @@ SmallVector<int64_t> getShapePerCTA(Attribute layout, ArrayRef<int64_t> shape) {
       return res;
     }
   }
-  return getShapePerCTA(getCTASplitNum(layout), shape);
+  SmallVector<unsigned> splitNum = getCTASplitNum(layout);
+  if (auto tmem = dyn_cast<nvidia_gpu::TensorMemoryEncodingAttr>(layout)) {
+    if (shape.size() > splitNum.size()) {
+      splitNum.insert(splitNum.begin(), shape.size() - splitNum.size(), 1);
+    }
+  }
+  return getShapePerCTA(splitNum, shape);
 }
 
 SmallVector<int64_t> getShapePerCTA(Type type) {
@@ -893,7 +911,8 @@ DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
     elemsPerThread[rank - 2] = (idx == 0) ? rep[1] : rep[1] * kWidth;
     elemsPerThread[rank - 1] = (idx == 0) ? rep[2] * kWidth : rep[2];
     return elemsPerThread;
-  } else if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent)) {
+  }
+  if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent)) {
     assert(getCTALayout(*this) ==
                CTALayoutAttr::getDefault(getContext(), rank) &&
            "NYI");
@@ -906,6 +925,37 @@ DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
       regs.push_back(std::max<int64_t>(nsize, n / (nThread * nWarp)));
     }
     return regs;
+  }
+  if (auto blocked = mlir::dyn_cast<BlockedEncodingAttr>(parent)) {
+    auto shapePerCTA =
+        expandMatrixShapeWithBatch(ArrayRef(getShapePerCTA(*this, shape)));
+    auto shapePerCTATile =
+        expandMatrixShapeWithBatch(ArrayRef(getShapePerCTATile(blocked)));
+    auto sizePerThread =
+        expandMatrixShapeWithBatch(ArrayRef(blocked.getSizePerThread()));
+
+    int batchDim = 0;
+    int kDim = getOpIdx() == 0 ? 2 : 1;
+    int nonKDim = getOpIdx() == 0 ? 1 : 2;
+
+    int batchSize =
+        std::max<int>(shapePerCTA[batchDim] / shapePerCTATile[batchDim], 1) *
+        sizePerThread[batchDim];
+    int kSize = shapePerCTA[kDim];
+    int nonKSize =
+        std::max<int>(shapePerCTA[nonKDim] / shapePerCTATile[nonKDim], 1) *
+        sizePerThread[nonKDim];
+
+    SmallVector<unsigned> elemsPerThread(rank);
+    if (rank == 3) {
+      elemsPerThread[batchDim] = batchSize;
+      elemsPerThread[kDim] = kSize;
+      elemsPerThread[nonKDim] = nonKSize;
+    } else {
+      elemsPerThread[kDim - 1] = kSize;
+      elemsPerThread[nonKDim - 1] = nonKSize;
+    }
+    return elemsPerThread;
   }
 
   llvm_unreachable("getElemsPerThread is not supported for dot operand");

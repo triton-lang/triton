@@ -3419,7 +3419,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     if num_ctas > 1 and in_dtype == 'int8':
         # FIXME: mma v2 with num_ctas > 1 does not work
         pytest.skip()
-
     # triton kernel
     @triton.jit
     def kernel(X, stride_xm, stride_xk, Y, stride_yk, stride_yn, W, stride_wn, stride_wl, Z, stride_zm, stride_zn,
@@ -3564,15 +3563,25 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
             assert 'st.global.v2' in ptx
         else:
             assert 'st.global.v4' in ptx
+
+    is_tcgen5 = (capability[0] == 10) and (num_warps % 4) == 0 and (M % 64) == 0 and (N % 8) == 0
+
     if in_dtype == 'float32' and input_precision != "ieee":
-        assert re.search(r'[mma|wgmma.mma_async].sync.aligned.m\d+n\d+k8(?:.row.col)?.f32.tf32.tf32', ptx)
+        if is_tcgen5:
+            assert re.search(r'tcgen05.mma.cta_group::1.kind::tf32', ptx)
+        else:
+            assert re.search(r'[mma|wgmma.mma_async].sync.aligned.m\d+n\d+k8(?:.row.col)?.f32.tf32.tf32', ptx)
     elif in_dtype == 'float16' and out_dtype == tl.float32:
-        if capability[0] == 7 and capability[1] == 5:  # Turing
+        if is_tcgen5:
+            assert re.search(r'tcgen05.mma.cta_group::1.kind::f16', ptx)
+        elif capability[0] == 7 and capability[1] == 5:  # Turing
             assert re.search(r'mma.sync.aligned.m\d+n\d+k8(?:.row.col)?.f32.f16.f16', ptx)
         else:
             assert re.search(r'[mma|wgmma.mma_async].sync.aligned.m\d+n\d+k16(?:.row.col)?.f32.f16.f16', ptx)
     elif in_dtype == 'float16' and out_dtype == tl.float16:
-        if capability[0] == 7 and capability[1] == 5:  # Turing
+        if is_tcgen5:
+            assert re.search(r'tcgen05.mma.cta_group::1.kind::f16', ptx)
+        elif capability[0] == 7 and capability[1] == 5:  # Turing
             assert re.search(r'mma.sync.aligned.m\d+n\d+k8(?:.row.col)?.f16.f16.f16', ptx)
         else:
             assert re.search(r'[mma|wgmma.mma_async].sync.aligned.m\d+n\d+k16(?:.row.col)?.f16.f16.f16', ptx)
@@ -4029,7 +4038,7 @@ def test_dot_mulbroadcasted(in_dtype, device):
     # When using MMAv3, we will not pipeline the load op for Y, as the loaded
     # value is in rowmajor. But MMAv3 requires its second operand is in colmajor
     # because transpose is not supported for MMAv3 with float32 input.
-    if capability[0] >= 9:
+    if capability[0] == 9:
         assert re.search(r"ttg.async_wait %.* {num = 1 : i32}", h.asm["ttgir"]) is not None
     else:
         assert re.search(r"ttg.async_wait %.* {num = 2 : i32}", h.asm["ttgir"]) is not None
@@ -6210,7 +6219,7 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
         torch.testing.assert_close(ref_out, C, rtol=0.01, atol=0.01)
     else:
         torch.testing.assert_close(ref_out, C, rtol=1e-3, atol=1e-3)
-    if is_cuda() and low_precision_acc > 0 and torch.cuda.get_device_capability()[0] >= 9:
+    if is_cuda() and low_precision_acc > 0 and torch.cuda.get_device_capability()[0] == 9:
         assert h.asm["ptx"].count("add.f32") == (BLOCK_M * BLOCK_N) // (32 * num_warps) * (BLOCK_K // low_precision_acc)
 
 
@@ -6357,7 +6366,7 @@ def test_clamp(dtype, device):
 # Test for symmetric clamp(x, -limit, limit), as it may go through optimized
 # codegen in the backends
 @pytest.mark.interpreter
-@pytest.mark.parametrize("dtype", ['float16', 'float32'])
+@pytest.mark.parametrize("dtype", ['bfloat16', 'float16', 'float32'])
 def test_clamp_symmetric(dtype, device):
 
     @triton.jit
@@ -6436,7 +6445,7 @@ def test_tl_range(device):
             if capability[0] >= 8:
                 ptx = pgm.asm['ptx']
                 # check that the loop got pipelined with the right number of stages.
-                assert 'cp.async.wait_group 0x6' in ptx
+                assert 'cp.async.wait_group 6' in ptx
 
 
 @triton.jit(noinline=True)
@@ -6822,6 +6831,35 @@ def test_gather_warp_shuffle(src_shape, indices_shape, axis, src_layout, indices
     kernel[(1, 1, 1)](src, indices, output)
 
     torch.testing.assert_close(output, ref, rtol=0, atol=0)
+
+
+@triton.jit
+def mul_jit_function(x, y):
+    return x * y
+
+
+@triton.jit
+def apply_binary_op(x, combine_op):
+    return combine_op(x, x)
+
+
+def test_jit_function_arg(device):
+
+    @triton.jit
+    def square_kernel_jit_function(in_ptr, out_ptr, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.arange(0, BLOCK_SIZE)
+        in_data = tl.load(in_ptr + offsets)
+        out_data = apply_binary_op(in_data, mul_jit_function)  # pass a JITFunction into another JITFunction
+        tl.store(out_ptr + offsets, out_data)
+
+    BLOCK_SIZE = 16
+    x = torch.full((BLOCK_SIZE, ), 3.0, device=device)
+    out = torch.empty((BLOCK_SIZE, ), device=device)
+    expect = torch.full((BLOCK_SIZE, ), 9.0, dtype=x.dtype, device=device)
+
+    square_kernel_jit_function[(1, )](x, out, BLOCK_SIZE)
+
+    torch.testing.assert_close(out, expect)
 
 
 @pytest.mark.interpreter

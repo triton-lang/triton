@@ -17,6 +17,7 @@ inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
     "DISABLE_FAST_REDUCTION",
     "DISABLE_LLVM_OPT",
     "DISABLE_MMA_V3",
+    "DISABLE_MMA_V5",
     "DISABLE_PTXAS_OPT",
     "LLVM_IR_ENABLE_DUMP",
     "LLVM_ENABLE_TIMING",
@@ -36,6 +37,9 @@ inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
     "TRITON_OVERRIDE_ARCH",
     "USE_IR_LOC",
     "NVPTX_ENABLE_DUMP",
+    "STORE_TMEM_TO_GLOBAL_BYPASS_SMEM",
+    "ALLOW_LHS_TMEM_LAYOUT_CONVERSION",
+    "ENABLE_LHS_TO_TMEM",
     // clang-format on
 };
 

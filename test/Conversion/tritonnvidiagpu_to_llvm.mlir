@@ -53,7 +53,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK: elect.sync
   // CHECK: "@$0 cp.async.bulk.tensor.2d.global.shared::cta.bulk_group [$1, {$2, $3}], [$4];", "b,l,r,r,r" {{.*}} : (i1, !llvm.ptr<1>, i32, i32, !llvm.ptr<3>) -> !llvm.void
   // CHECK-NOT: cp.async.bulk.tensor.2d.global.shared::cta.bulk_group
-  // CHECK: cp.async.bulk.commit_group
+  // CHECK: nvvm.cp.async.bulk.commit.group
   tt.func @tma_copy_local_to_global(%tma: !tt.ptr<i64>, %alloc: !ttg.memdesc<128x128xf32, #shared1, #smem>, %x: i32) {
     ttng.async_tma_copy_local_to_global %tma[%x, %x] %alloc : !tt.ptr<i64>, !ttg.memdesc<128x128xf32, #shared1, #smem>
     tt.return
@@ -65,7 +65,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #shared1 = #ttg.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: async_tma_store_wait
-  // CHECK: "cp.async.bulk.wait_group.read 0x0;", ""  : () -> !llvm.void
+  // CHECK: nvvm.cp.async.bulk.wait_group 0 {read}
   tt.func @async_tma_store_wait() {
     ttng.async_tma_store_wait {pendings = 0 : i32}
     tt.return

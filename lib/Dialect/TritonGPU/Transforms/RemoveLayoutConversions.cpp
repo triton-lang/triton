@@ -131,6 +131,8 @@ public:
   void backwardRematerialization(ConvertLayoutOp convertOp);
   void hoistConvertOnTopOfExtOrBroadcast();
   void hoistConvertOnTopOfExtOrBroadcast(ConvertLayoutOp convertOp);
+  void hoistConvertIntoConditionals();
+  void hoistConvertIntoConditionals(ConvertLayoutOp convertOp);
   void rewriteSlice(SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
                     ConvertLayoutOp convertOp, IRMapping &mapping);
   void rewriteSlice(SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
@@ -173,7 +175,8 @@ void LayoutRematerialization::cleanup() {
 bool isLayoutAnchor(Operation *op) {
   if (isa<LoadOp, StoreOp>(op))
     return isExpensiveLoadOrStore(op);
-  if (isa<DotOp, nvidia_gpu::WarpGroupDotOp, AtomicRMWOp, AtomicCASOp>(op))
+  if (isa<DotOp, nvidia_gpu::WarpGroupDotOp, AtomicRMWOp, AtomicCASOp,
+          triton::nvidia_gpu::TMEMLoadOp>(op))
     return true;
   if (auto gatherOp = dyn_cast<GatherOp>(op))
     return gatherOp.getEfficientLayout();
@@ -1020,6 +1023,22 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast() {
   }
 }
 
+void LayoutRematerialization::hoistConvertIntoConditionals() {
+  // Go through each ConvertLayoutOp.
+  SmallVector<ConvertLayoutOp> convertOps;
+  funcOp.walk(
+      [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
+  for (ConvertLayoutOp convertOp : convertOps) {
+    hoistConvertIntoConditionals(convertOp);
+    if (!opToDelete.contains(convertOp)) {
+      // If the conversion didn't get removed, consider it for reuse in future
+      // backward slices.
+      addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
+                    convertOp.getResult());
+    }
+  }
+}
+
 void LayoutRematerialization::backwardRematerialization(
     ConvertLayoutOp convertOp) {
   // we don't handle conversions to DotOperandEncodingAttr
@@ -1151,6 +1170,155 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
   rewriteSlice(slice, layout, convertOp, mapping);
 }
 
+void LayoutRematerialization::hoistConvertIntoConditionals(
+    ConvertLayoutOp convertOp) {
+  // Take the backward slice of tensor dependencies rooted at the conversion,
+  // stopping at conditionals. This subslice is used to initialize the analysis.
+  SetVector<Value> slice;
+  DenseMap<Value, Attribute> layout;
+  auto isIfOp = [](Operation *op) { return isa<scf::IfOp>(op); };
+  if (failed(getRematerializableSlice(convertOp.getSrcMutable(),
+                                      convertOp.getType().getEncoding(), slice,
+                                      layout, isIfOp)))
+    return;
+
+  // These are the conditional edges above which conversions should be hoisted.
+  // The value represents the `scf.if` op result and the operand represents the
+  // edge into one of the branches.
+  SmallVector<std::pair<OpResult, OpOperand *>> hoistAbove;
+
+  // The list of `scf.if` op results in the slice that are not rematerializable.
+  // Hoisting is terminated at these values.
+  SmallVector<OpResult> terminals;
+
+  // Process the whole backward slice in subslices that stop at each condtional.
+  // This is so we can apply more specific rules about when to hoist.
+  struct Subslice {
+    OpResult v;
+    OpOperand *edge;
+    SetVector<Value> slice;
+    DenseMap<Value, Attribute> layout;
+  };
+  SmallVector<Subslice> subslices;
+
+  // Check a value in the subslice.
+  auto visitValue = [&](OpResult v) {
+    auto ifOp = v.getDefiningOp<scf::IfOp>();
+    if (!ifOp)
+      return;
+
+    Attribute rootLayout = layout.at(v);
+    unsigned resIdx = cast<OpResult>(v).getResultNumber();
+
+    // Take the backward slice along each branch.
+    auto thenYield =
+        cast<scf::YieldOp>(ifOp.getThenRegion().front().getTerminator());
+    auto elseYield =
+        cast<scf::YieldOp>(ifOp.getElseRegion().front().getTerminator());
+
+    OpOperand &thenRes = thenYield.getResultsMutable()[resIdx];
+    OpOperand &elseRes = elseYield.getResultsMutable()[resIdx];
+
+    SetVector<Value> thenSlice, elseSlice;
+    DenseMap<Value, Attribute> thenLayout, elseLayout;
+
+    LogicalResult thenResult = getRematerializableSlice(
+        thenRes, rootLayout, thenSlice, thenLayout, isIfOp);
+    LogicalResult elseResult = getRematerializableSlice(
+        elseRes, rootLayout, elseSlice, elseLayout, isIfOp);
+
+    // If propagation across both edges of this conditional succeeded, then we
+    // don't need to hoist across it. Merge into the current slice.
+    if (succeeded(thenResult) && succeeded(elseResult)) {
+      slice.insert(thenSlice.begin(), thenSlice.end());
+      slice.insert(elseSlice.begin(), elseSlice.end());
+      layout.insert(thenLayout.begin(), thenLayout.end());
+      layout.insert(elseLayout.begin(), elseLayout.end());
+      return;
+    }
+
+    // If propagation across both edges failed, then this conditional
+    // terminates backwards rematerialization.
+    if (failed(thenResult) && failed(elseResult)) {
+      terminals.push_back(v);
+      return;
+    }
+
+    // The layout conversion can be rematerialized along one edge but not the
+    // other. We can hoist the conversion into the other branch. Push this
+    // into the subslice list for analysis.
+    if (succeeded(thenResult)) {
+      subslices.push_back(
+          {v, &elseRes, std::move(thenSlice), std::move(thenLayout)});
+    } else {
+      subslices.push_back(
+          {v, &thenRes, std::move(elseSlice), std::move(elseLayout)});
+    }
+  };
+
+  // Process the whole slice in subslices.
+  unsigned i = 0;
+  bool isLoneHoist = false;
+  do {
+    // Visit values in the current subslice.
+    for (; i != slice.size(); ++i) {
+      if (auto v = dyn_cast<OpResult>(slice[i]))
+        visitValue(v);
+    }
+    // Check the next chunk of subslices. When a condtional is marked as being
+    // valid to be hoisted across, we have to recurse on a new subslice rooted
+    // at the corresopnding yield operand.
+    //
+    // Hoist across condtionals when:
+    // 1. The conditional is directly inside a loop.
+    // 2. The whole slice contains only one conditional.
+    for (auto &[v, edge, subslice, layouts] : subslices) {
+      bool oneHoist = false;
+      if (isa<LoopLikeOpInterface>(v.getDefiningOp()->getParentOp()) ||
+          (oneHoist = subslices.size() == 1 && hoistAbove.empty())) {
+        isLoneHoist |= oneHoist;
+        hoistAbove.push_back({v, edge});
+        // Recurse on the subslice.
+        slice.insert(subslice.begin(), subslice.end());
+        layout.insert(layouts.begin(), layouts.end());
+      } else {
+        terminals.push_back(v);
+      }
+    }
+    subslices.clear();
+  } while (i != slice.size());
+
+  // Exit early if there is nothing to do.
+  if (hoistAbove.empty())
+    return;
+  // Check if this is a lone hoist. There should be no other terminals.
+  if (isLoneHoist && !terminals.empty())
+    return;
+
+  // Rematerialize failed hoists right before the condtional, and hoist those
+  // that succeeded into the branch and then rewrite the slice.
+  IRMapping mapping;
+  auto hoistRemat = [&](OpBuilder &b, Value v, Attribute encoding) {
+    auto tensorType = cast<RankedTensorType>(v.getType());
+    auto newType = RankedTensorType::get(tensorType.getShape(),
+                                         tensorType.getElementType(), encoding);
+    Value newCvt = b.create<ConvertLayoutOp>(convertOp.getLoc(), newType, v);
+
+    mapping.map(v, newCvt);
+    slice.remove(v);
+  };
+  for (Value v : terminals) {
+    OpBuilder b(v.getContext());
+    b.setInsertionPointAfter(v.getDefiningOp());
+    hoistRemat(b, v, layout.at(v));
+  }
+  for (auto [result, edge] : hoistAbove) {
+    OpBuilder b(edge->getOwner());
+    hoistRemat(b, edge->get(), layout.at(result));
+  }
+  rewriteSlice(slice, layout, convertOp, mapping);
+}
+
 void backwardRematerialization(ModuleOp module) {
   module.walk([](FuncOp funcOp) {
     LayoutRematerialization layoutRemat(funcOp);
@@ -1164,6 +1332,10 @@ void hoistConvert(ModuleOp module) {
   module.walk([](FuncOp funcOp) {
     LayoutRematerialization layoutRemat(funcOp);
     layoutRemat.hoistConvertOnTopOfExtOrBroadcast();
+    layoutRemat.cleanup();
+
+    layoutRemat = LayoutRematerialization(funcOp);
+    layoutRemat.hoistConvertIntoConditionals();
     layoutRemat.cleanup();
   });
 }

@@ -9,14 +9,6 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
-namespace SharedToDotOperandMMAv2OrV3 {
-Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
-                    Location loc, Value tensor,
-                    DotOperandEncodingAttr bEncoding,
-                    const SharedMemoryObject &smemObj,
-                    const LLVMTypeConverter *typeConverter, Value thread);
-} // namespace SharedToDotOperandMMAv2OrV3
-
 namespace {
 
 using namespace mlir;
@@ -66,8 +58,8 @@ public:
       canUseLdmatrix &=
           shape[kOrder] >= (8 * 16 / bitwidth) && shape[nonKOrder] >= 8;
       if (canUseLdmatrix) {
-        return lowerSharedToDotOperandLL(op, adaptor, getTypeConverter(),
-                                         rewriter);
+        return lowerSharedToDotOperand(op, adaptor, getTypeConverter(),
+                                       rewriter);
       }
     }
     return failure();
@@ -75,12 +67,13 @@ public:
 
 private:
   LogicalResult
-  lowerSharedToDotOperandLL(triton::gpu::LocalLoadOp op,
-                            triton::gpu::LocalLoadOpAdaptor adaptor,
-                            const LLVMTypeConverter *typeConverter,
-                            ConversionPatternRewriter &rewriter) const {
+  lowerSharedToDotOperand(triton::gpu::LocalLoadOp op,
+                          triton::gpu::LocalLoadOpAdaptor adaptor,
+                          const LLVMTypeConverter *typeConverter,
+                          ConversionPatternRewriter &rewriter) const {
     auto ctx = rewriter.getContext();
     auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto dstTy = cast<RankedTensorType>(op.getType());
     auto srcTy = cast<MemDescType>(op.getSrc().getType());
     auto dotEnc = cast<DotOperandEncodingAttr>(dstTy.getEncoding());
@@ -97,7 +90,6 @@ private:
         chooseLdMatrixLayout(dotEnc, shape, needTrans, bitwidth);
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                          llvmElemTy, rewriter);
-
     // Emit ldmatrix load operations for values packed in i32s
     SmallVector<Value> elemsI32;
     // Typically we load 32x8 to use ldmatrix.x4, but the minimum tile size for
@@ -117,7 +109,7 @@ private:
               loc, matTy, vecAddr, /*needTrans=*/needTrans);
           auto res = ldMatrixOp.getResult();
           for (auto i = 0; i < numElemsI32; ++i) {
-            elemsI32.push_back(extract_val(i32_ty, res, i));
+            elemsI32.push_back(b.extract_val(i32_ty, res, i));
           }
         });
     assert(valid && "Failed to emit ldmatrix load operations");
@@ -127,9 +119,9 @@ private:
     auto numElemsPerVec = 32 / bitwidth;
     auto vecTy = vec_ty(llvmElemTy, numElemsPerVec);
     for (int v = 0; v < static_cast<int>(elemsI32.size()); ++v) {
-      auto vec = bitcast(elemsI32[v], vecTy);
+      auto vec = b.bitcast(elemsI32[v], vecTy);
       for (int i = 0; i < numElemsPerVec; ++i)
-        elems.push_back(extract_element(llvmElemTy, vec, i32_val(i)));
+        elems.push_back(b.extract_element(llvmElemTy, vec, b.i32_val(i)));
     }
 
     auto structTy = LLVM::LLVMStructType::getLiteral(
@@ -148,6 +140,7 @@ LogicalResult lowerDistributedToSharedStmatrix(
     Value adaptorSrc, Value smemBase, const TypeConverter *typeConverter,
     ConversionPatternRewriter &rewriter, const TargetInfoBase &targetInfo,
     std::pair<size_t, Type> *const llvmOpCount = nullptr) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto mmaEncoding =
       dyn_cast<triton::gpu::NvidiaMmaEncodingAttr>(src.getType().getEncoding());
   if (!mmaEncoding)
@@ -187,15 +180,15 @@ LogicalResult lowerDistributedToSharedStmatrix(
   auto kBlock = str_attr("block");
 
   Value threadId = getThreadId(rewriter, loc);
-  Value threadsPerWarp = i32_val(layout.getInDimSize(kLane));
-  Value laneId = urem(threadId, threadsPerWarp);
-  Value warpId = udiv(threadId, threadsPerWarp);
+  Value threadsPerWarp = b.i32_val(layout.getInDimSize(kLane));
+  Value laneId = b.urem(threadId, threadsPerWarp);
+  Value warpId = b.udiv(threadId, threadsPerWarp);
 
   auto regBase = applyLinearLayout(loc, rewriter, layout,
-                                   {{kRegister, i32_val(0)},
+                                   {{kRegister, b.i32_val(0)},
                                     {kLane, laneId},
                                     {kWarp, warpId},
-                                    {kBlock, i32_val(0)}})[0]
+                                    {kBlock, b.i32_val(0)}})[0]
                      .second;
   auto srcVals = unpackLLElements(loc, adaptorSrc, rewriter);
   auto srcVec = layout.getNumConsecutiveInOut();
@@ -203,8 +196,8 @@ LogicalResult lowerDistributedToSharedStmatrix(
     auto regIdx =
         layout.apply({{kRegister, i}, {kLane, 0}, {kWarp, 0}, {kBlock, 0}})[0]
             .second;
-    Value offset = xor_(regBase, i32_val(regIdx));
-    auto vecAddr = gep(smemPtrTy, llvmElemTy, smemBase, offset);
+    Value offset = b.xor_(regBase, b.i32_val(regIdx));
+    auto vecAddr = b.gep(smemPtrTy, llvmElemTy, smemBase, offset);
     vecAddr.setInbounds(true);
     SmallVector<Value> inValsVec;
     for (int j = 0; j < srcVec; j++)

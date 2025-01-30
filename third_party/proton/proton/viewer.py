@@ -93,6 +93,8 @@ def get_min_time_flops(df, device_info):
                     elif arch == "90":
                         # 114 sms and 1755mhz is the base number of sms and clock rate of H100 pcie
                         max_flops = ((num_sms / 114 * clock_rate / (1755 * 1e3) * 1513) * 1e12) / (width / 8)
+                    elif arch == "100":
+                        max_flops = (num_sms * 16384 * (clock_rate / 1e3) * 1e6) / (width / 8)
                 elif device_type == "HIP":
                     if arch == "gfx90a":
                         max_flops = 383e12 / (width / 8)
@@ -205,6 +207,14 @@ def derive_metrics(gf, metrics, inclusive_metrics, exclusive_metrics, device_inf
             else:
                 matched_metric_name = match_available_metrics(metric_name, inclusive_metrics, exclusive_metrics)[0]
                 derived_metrics.append(matched_metric_name)
+
+    # Update derived metrics to the graph frame
+    for derived_metric in derived_metrics:
+        if derived_metric.endswith("(inc)"):
+            gf.inc_metrics.append(derived_metric)
+        else:
+            gf.exc_metrics.append(derived_metric)
+
     return derived_metrics
 
 
@@ -214,7 +224,8 @@ def format_frames(gf, format):
     elif format == "function_line":
         gf.dataframe["name"] = gf.dataframe["name"].apply(lambda x: x.split(":")[-1])
     elif format == "file_function":
-        gf.dataframe["name"] = gf.dataframe["name"].apply(lambda x: x.split("/")[-1].split("@")[0])
+        gf.dataframe["name"] = gf.dataframe["name"].apply(
+            lambda x: f"{x.split('/')[-1].split(':')[0]}@{x.split('@')[-1].split(':')[0]}")
     return gf
 
 
@@ -238,32 +249,37 @@ WHERE p."name" =~ "{exclude}"
     return gf
 
 
-def parse(metrics, filename, include=None, exclude=None, threshold=None, depth=100, format=None, print_sorted=False):
-    with open(filename, "r") as f:
-        gf, inclusive_metrics, exclusive_metrics, device_info = get_raw_metrics(f)
-        gf = format_frames(gf, format)
-        assert len(inclusive_metrics + exclusive_metrics) > 0, "No metrics found in the input file"
-        gf.update_inclusive_columns()
-        metrics = derive_metrics(gf, metrics, inclusive_metrics, exclusive_metrics, device_info)
-        # TODO: generalize to support multiple metrics, not just the first one
-        gf = filter_frames(gf, include, exclude, threshold, metrics[0])
-        print(gf.tree(metric_column=metrics, expand_name=True, depth=depth, render_header=False))
-        if print_sorted:
-            print("Sorted kernels by metric " + metrics[0].strip("(inc)"))
-            sorted_df = gf.dataframe.sort_values(by=[metrics[0]], ascending=False)
-            for row in range(1, len(sorted_df)):
-                kernel_name = sorted_df.iloc[row]['name'][:100] + "..." if len(
-                    sorted_df.iloc[row]['name']) > 100 else sorted_df.iloc[row]['name']
-                print("{:105} {:.4}".format(kernel_name, sorted_df.iloc[row][metrics[0]]))
-        emit_warnings(gf, metrics)
-
-
 def emit_warnings(gf, metrics):
     if "bytes (inc)" in metrics:
         byte_values = gf.dataframe["bytes (inc)"].values
         min_byte_value = np.nanmin(byte_values)
         if min_byte_value < 0:
             print("Warning: Negative byte values detected, this is usually the result of a datatype overflow\n")
+
+
+def print_tree(gf, metrics, depth=100, format=None, print_sorted=False):
+    gf = format_frames(gf, format)
+    print(gf.tree(metric_column=metrics, expand_name=True, depth=depth, render_header=False))
+
+    if print_sorted:
+        print("Sorted kernels by metric " + metrics[0])
+        sorted_df = gf.dataframe.sort_values(by=[metrics[0]], ascending=False)
+        for row in range(1, len(sorted_df)):
+            kernel_name = sorted_df.iloc[row]['name'][:100] + "..." if len(
+                sorted_df.iloc[row]['name']) > 100 else sorted_df.iloc[row]['name']
+            print("{:105} {:.4}".format(kernel_name, sorted_df.iloc[row][metrics[0]]))
+    emit_warnings(gf, metrics)
+
+
+def parse(metrics, filename, include=None, exclude=None, threshold=None):
+    with open(filename, "r") as f:
+        gf, inclusive_metrics, exclusive_metrics, device_info = get_raw_metrics(f)
+        assert len(inclusive_metrics + exclusive_metrics) > 0, "No metrics found in the input file"
+        gf.update_inclusive_columns()
+        metrics = derive_metrics(gf, metrics, inclusive_metrics, exclusive_metrics, device_info)
+        # TODO: generalize to support multiple metrics, not just the first one
+        gf = filter_frames(gf, include, exclude, threshold, metrics[0])
+        return gf, metrics
 
 
 def show_metrics(file_name):
@@ -365,6 +381,10 @@ proton-viewer -e ".*test.*" path/to/file.json
         default=False,
         help="Sort output by metric value instead of chronologically",
     )
+    argparser.add_argument(
+        "--diff-profile", "-diff", type=str, default=None,
+        help="Compare two profiles. When used as 'proton-viewer -m time -diff file1.log file2.log', "
+        "computes the difference: file2['time'] - file1['time']")
 
     args, target_args = argparser.parse_known_args()
     assert len(target_args) == 1, "Must specify a file to read"
@@ -376,13 +396,18 @@ proton-viewer -e ".*test.*" path/to/file.json
     threshold = args.threshold
     depth = args.depth
     format = args.format
+    diff = args.diff_profile
     print_sorted = args.print_sorted
     if include and exclude:
         raise ValueError("Cannot specify both include and exclude")
     if args.list:
         show_metrics(file_name)
     elif metrics:
-        parse(metrics, file_name, include, exclude, threshold, depth, format, print_sorted)
+        gf, derived_metrics = parse(metrics, file_name, include, exclude, threshold)
+        if diff:
+            gf2, _ = parse(metrics, diff, include, exclude, threshold)
+            gf = gf.sub(gf2)
+        print_tree(gf, derived_metrics, depth, format, print_sorted)
 
 
 if __name__ == "__main__":

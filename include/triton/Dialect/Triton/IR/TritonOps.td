@@ -481,7 +481,7 @@ def TT_BroadcastOp : TT_Op<"broadcast", [Pure,
 
     let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
 
-    let hasCanonicalizeMethod = 1;
+    let hasCanonicalizer = 1;
     let hasFolder = 1;
     let hasVerifier = 1;
 }
@@ -539,7 +539,7 @@ def TT_SplitOp : TT_Op<"split", [
 
 def TT_TransOp : TT_Op<"trans", [Pure,
                                  TransposeOpInterface,
-                                 InferTypeOpAdaptorWithIsCompatible,
+                                 InferTypeOpWithLayoutEquivalence,
                                  SameOperandsAndResultElementType]> {
 
     let summary = "rearrange the dimensions of a tensor";
@@ -669,14 +669,14 @@ def TT_DotOp : TT_Op<"dot", [Pure,
 // DotScaled Op
 //
 def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
-                                          AttrSizedOperandSegments,
-                                          DotLike,
-                                          TypesMatchWith<"result's type matches accumulator's type",
-                                                         "d", "c", "$_self">]> {
+                             AttrSizedOperandSegments,
+                             DotLike,
+                             TypesMatchWith<"result's type matches accumulator's type",
+                                            "d", "c", "$_self">]> {
     let summary = "dot_scaled";
 
     let description = [{
-        $d = matrix_multiply(scale($lhs, $lhs_scale), scale($rhs, $rhs_scale)) + $c.
+        $d = matrix_multiply(scale($lhs, $lhs_scale), scale(rlhs, $rhs_scale)) + $c.
         Where scale(x, s) is a function that applies the scale per block following microscaling spec.
     }];
 
@@ -687,8 +687,8 @@ def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
       RankedTensorOf<[TT_Float,I8]>:$lhs,
       RankedTensorOf<[TT_Float,I8]>:$rhs,
       TT_FloatTensor:$c,
-      Optional<RankedTensorOf<[I8]>>:$lhs_scale,
-      Optional<RankedTensorOf<[I8]>>:$rhs_scale,
+      Optional<RankedTensorOf<[TT_Float, I8]>>:$lhs_scale,
+      Optional<RankedTensorOf<[TT_Float, I8]>>:$rhs_scale,
       TT_ScaleDotElemTypeAttr:$lhs_type,
       TT_ScaleDotElemTypeAttr:$rhs_type,
       BoolAttr:$fastMath
@@ -696,7 +696,6 @@ def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
 
     let results = (outs TT_FloatTensor:$d);
 
-    // Not sure why I need to fully specify the optional group, but otherwise it complains when loading the mlir file
     let assemblyFormat = [{
       $lhs (`scale` $lhs_scale^)? `,` $rhs (`scale` $rhs_scale^)? `,` $c `lhs` `=` $lhs_type `rhs` `=` $rhs_type attr-dict
       `:` type($lhs) (`,` type($lhs_scale)^)? `*` type($rhs) (`,` type($rhs_scale)^)? `->` type($d)
@@ -1295,6 +1294,57 @@ def TT_ExperimentalDescriptorStoreOp : TT_Op<"experimental_descriptor_store", [
   }];
 
   let hasVerifier = 1;
+}
+
+def TT_ExperimentalDescriptorGatherOp : TT_Op<"experimental_descriptor_gather", [MemoryEffects<[MemRead<GlobalMemory>]>]> {
+  let summary = "gather multiple rows from a descriptor into a single tensor";
+  let description = [{
+    The `tt.experimental_desciptor_gather` op will be lowered to NVIDIA TMA
+    load operations on targets that support it.
+
+    `desc_ptr` is a pointer to the TMA descriptor allocated in global memory.
+    The descriptor block must have 1 row and the indices must be a 1D tensor.
+    Accordingly, the result is a 2D tensor multiple rows.
+
+    This is an escape hatch and is only there for testing/experimenting. This
+    op will be removed in the future.
+  }];
+
+  let arguments = (ins
+    TT_TensorDescType:$desc,
+    RankedTensorOf<[I32]>:$x_offsets,
+    I32:$y_offset
+  );
+  let results = (outs TT_Tensor:$result);
+
+  let assemblyFormat = [{
+    $desc `[` $x_offsets `,` $y_offset `]`
+    attr-dict `:` functional-type(operands, results)
+  }];
+
+  let hasVerifier = 1;
+
+  let extraClassDeclaration = [{
+    // TMA gathers have resstrictions on the minimum size of the gather result.
+    // This function verifies the result type.
+    static LogicalResult verifyResultType(Operation *op, mlir::ShapedType type);
+  }];
+}
+
+def TT_ExperimentalDescriptorScatterOp : TT_Op<"experimental_descriptor_scatter", [
+    MemoryEffects<[MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>,
+]> {
+  let arguments = (ins
+    TT_TensorDescType:$desc,
+    RankedTensorOf<[I32]>:$x_offsets,
+    I32:$y_offset,
+    TT_Tensor:$src
+  );
+
+  let assemblyFormat = [{
+    $desc `[` $x_offsets `,` $y_offset `]` `,` $src
+    attr-dict `:` type(operands)
+  }];
 }
 
 def TT_ExperimentalTensormapCreateOp: TT_Op<

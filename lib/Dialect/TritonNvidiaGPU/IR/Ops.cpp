@@ -77,8 +77,8 @@ bool WarpGroupDotOp::needsPartialAccumulator() {
   const auto &d = getD();
   auto aTensorTy = cast<triton::gpu::TensorOrMemDesc>(a.getType());
   auto aElTy = cast<triton::gpu::TensorOrMemDesc>(a.getType()).getElementType();
-  bool isFP8 = aElTy.isFloat8E5M2() || aElTy.isFloat8E4M3FN() ||
-               aElTy.isFloat8E5M2FNUZ() || aElTy.isFloat8E4M3FNUZ();
+  bool isFP8 = llvm::isa<Float8E5M2Type, Float8E4M3FNType, Float8E5M2FNUZType,
+                         Float8E4M3FNUZType>(aElTy);
   bool accFP32 =
       cast<triton::gpu::TensorOrMemDesc>(d.getType()).getElementType().isF32();
   uint32_t maxNumImpreciseAcc = getMaxNumImpreciseAcc();
@@ -206,6 +206,150 @@ void AsyncTMACopyLocalToGlobalOp::getEffects(
                        mlir::triton::GlobalMemory::get());
   effects.emplace_back(MemoryEffects::Read::get(), &getSrcMutable(),
                        mlir::triton::gpu::SharedMemory::get());
+}
+
+// -- AsyncTMAGatherOp --
+LogicalResult AsyncTMAGatherOp::verify() {
+  if (failed(verifyBarrierType(*this, getBarrier().getType())))
+    return failure();
+
+  triton::gpu::MemDescType resultType = getResult().getType();
+  if (!resultType.getMutableMemory())
+    return emitOpError("cannot store into immutable memory");
+  return ExperimentalDescriptorGatherOp::verifyResultType(*this, resultType);
+}
+
+void AsyncTMAGatherOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Read::get(), &getDescPtrMutable(),
+                       mlir::triton::GlobalMemory::get());
+  effects.emplace_back(MemoryEffects::Write::get(), &getBarrierMutable(),
+                       mlir::triton::gpu::SharedMemory::get());
+  effects.emplace_back(MemoryEffects::Write::get(), &getResultMutable(),
+                       mlir::triton::gpu::SharedMemory::get());
+}
+
+// -- AsyncTMAScatter --
+void AsyncTMAScatterOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Write::get(), &getDescPtrMutable(),
+                       mlir::triton::GlobalMemory::get());
+  effects.emplace_back(MemoryEffects::Read::get(), &getSrcMutable(),
+                       mlir::triton::gpu::SharedMemory::get());
+}
+
+// -- TCGen5MMAOp --
+void TCGen5MMAOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Write::get(), &getDMutable(),
+                       mlir::triton::nvidia_gpu::TensorMemory::get());
+  if (isa<triton::gpu::SharedMemorySpaceAttr>(
+          getA().getType().getMemorySpace())) {
+    effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
+                         mlir::triton::gpu::SharedMemory::get());
+
+  } else {
+    effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
+                         mlir::triton::nvidia_gpu::TensorMemory::get());
+  }
+  effects.emplace_back(MemoryEffects::Read::get(), &getBMutable(),
+                       mlir::triton::gpu::SharedMemory::get());
+}
+
+// -- TMEMStoreOp --
+LogicalResult TMEMStoreOp::verify() {
+  if (!isa<triton::nvidia_gpu::TensorMemorySpaceAttr>(
+          getDst().getType().getMemorySpace()))
+    return emitOpError("destination must be a tensor memory buffer.");
+  if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr,
+           TensorMemoryScalesEncodingAttr>(getDst().getType().getEncoding()))
+    return emitOpError("should use tensor memory encoding.");
+  return success();
+}
+
+// -- TCGen5MMAScaledOp --
+void TCGen5MMAScaledOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Write::get(), &getDMutable(),
+                       mlir::triton::nvidia_gpu::TensorMemory::get());
+  if (isa<triton::gpu::SharedMemorySpaceAttr>(
+          getA().getType().getMemorySpace())) {
+    effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
+                         mlir::triton::gpu::SharedMemory::get());
+
+  } else {
+    effects.emplace_back(MemoryEffects::Read::get(), &getAMutable(),
+                         mlir::triton::nvidia_gpu::TensorMemory::get());
+  }
+  effects.emplace_back(MemoryEffects::Read::get(), &getBMutable(),
+                       mlir::triton::gpu::SharedMemory::get());
+}
+
+// -- TMEMLoadOp --
+LogicalResult TMEMLoadOp::verify() {
+  if (!isa<triton::nvidia_gpu::TensorMemorySpaceAttr>(
+          getSrc().getType().getMemorySpace()))
+    return emitOpError("source must be a tensor memory buffer.");
+  if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
+          getSrc().getType().getEncoding()))
+    return emitOpError("should use tensor memory encoding.");
+  return success();
+}
+
+// -- TMEMAllocOp --
+LogicalResult TMEMAllocOp::verify() {
+  if (!isa<triton::nvidia_gpu::TensorMemorySpaceAttr>(
+          getType().getMemorySpace()))
+    return emitOpError("should create a buffer of tensor memory.");
+  if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr,
+           TensorMemoryScalesEncodingAttr>(getType().getEncoding()))
+    return emitOpError("should use tensor memory encoding.");
+  return success();
+}
+
+bool isDescendingOrder(triton::gpu::MemDescType type) {
+  auto order = triton::gpu::getOrder(type.getEncoding());
+  auto rank = type.getRank();
+  for (int i = 0; i < rank; ++i) {
+    if (order[i] != rank - 1 - i)
+      return false;
+  }
+  return true;
+}
+
+// -- TMEMCopyOp --
+LogicalResult TMEMCopyOp::verify() {
+  if (!isa<triton::gpu::SharedMemorySpaceAttr>(
+          getSrc().getType().getMemorySpace()))
+    return emitOpError("The source must be a shared memory buffer");
+  if (!isa<TensorMemoryEncodingAttr, TensorMemoryScalesEncodingAttr>(
+          getDst().getType().getEncoding()))
+    return emitOpError("The destination must be a tensor memory buffer.");
+
+  if (getBarrier() && !isa<triton::gpu::SharedMemorySpaceAttr>(
+                          getBarrier().getType().getMemorySpace())) {
+    return emitOpError("The optional barrier should be a shared memory buffer");
+  }
+
+  auto srcTy = cast<triton::gpu::MemDescType>(getSrc().getType());
+  auto sharedEnc = cast<triton::gpu::SharedEncodingAttr>(srcTy.getEncoding());
+
+  if (sharedEnc.getMaxPhase() != 1 || sharedEnc.getPerPhase() != 1 ||
+      sharedEnc.getVec() != 1)
+    return emitOpError("The source should not have swizzling applied for now");
+
+  if (!isDescendingOrder(srcTy)) {
+    return emitOpError("The source must be in a row-major order.");
+  }
+
+  // Given that we want to support flexible input SMEM shapes, kinds of shape
+  // checking we can do here are limited. For simplicity, shape checking is
+  // omitted.
+  return success();
 }
 
 } // namespace nvidia_gpu
