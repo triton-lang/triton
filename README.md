@@ -172,7 +172,7 @@ $ make dev-install
 $ make test
 
 # Or, to run tests without a gpu
-$ make test-cpp test-lit
+$ make test-nogpu
 ```
 
 # Tips for hacking
