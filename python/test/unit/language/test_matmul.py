@@ -352,12 +352,8 @@ def test_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, device):
     rtol = 0.0001
     torch.testing.assert_close(ref_out, output, atol=atol, rtol=rtol)
 
-    if NUM_STAGES > 1:
-        # TODO: Remove this check once MMA pipelining is working for these cases
-        if M >= BLOCK_M and N >= BLOCK_N and K >= BLOCK_K:
-            # Verify that MMA pipelining has been applied
-            # FIXME: Scaled dot pipelining is DISABLED
-            assert "ttng.wait_barrier" not in out.asm["ttgir"]
+    # This test does not use tmem_copy, so MMA pipelining does not apply.
+    assert "ttng.wait_barrier" not in out.asm["ttgir"]
 
 
 def _knob_promote_lhs_to_tmem(monkeypatch):
@@ -490,6 +486,7 @@ def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_
 
     if NUM_STAGES > 1:
         ttgir = out.asm["ttgir"]
+        print(ttgir)
 
         if BLOCK_M == BLOCK_K and BLOCK_N == BLOCK_K:
             load_pipelined = ttgir.count(f"ttg.local_alloc  : () -> !ttg.memdesc<{NUM_STAGES}x{BLOCK_M}x{BLOCK_K}") == 2
@@ -497,20 +494,22 @@ def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_
             load_pipelined = (ttgir.count(f"ttg.local_alloc  : () -> !ttg.memdesc<{NUM_STAGES}x{BLOCK_M}x{BLOCK_K}") and
                               ttgir.count(f"ttg.local_alloc  : () -> !ttg.memdesc<{NUM_STAGES}x{BLOCK_K}x{BLOCK_N}"))
 
-        if load_pipelined:
-            # If load is pipelined, MMA pipelining should also kick in
-            # FIXME: Scaled dot pipelining is DISABLED
-            assert "ttng.wait_barrier" not in ttgir
-        else:
-            # The behavior of load pipelining seems to depend on the size of input tensors.
-            # In this test, it fails to pipeline the RHS tensor when N is not a multiple of 128. Pipelining of the LHS tensor
-            # does not seem to be affected by the value of M, though.
-            print(f"SWP failed for M = {M}, N = {N}")
-
         if USE_2D_SCALE_LOAD:
             # Due to an issue in the coalescing pass, tmem_copy can not be generated for the 5D load.
             # The issue is fixed using the patch from https://github.com/triton-lang/triton/pull/4914
             assert "tmem_copy" in ttgir
+
+            if load_pipelined:
+                # If load is pipelined and tmem_copy is used,  MMA pipelining should also kick in
+                assert "ttng.wait_barrier" in ttgir
+            else:
+                # The behavior of load pipelining seems to depend on the size of input tensors.
+                # In this test, it fails to pipeline the RHS tensor when N is not a multiple of 128. Pipelining of the LHS tensor
+                # does not seem to be affected by the value of M, though.
+                print(f"SWP failed for M = {M}, N = {N}")
+
+
+test_blocked_scale_mxfp(1024, 1024, 1024, 128, 128, 128, 3, True, "cuda")
 
 
 @triton.jit
