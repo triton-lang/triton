@@ -182,7 +182,13 @@ static int createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
   loadOffsets[0] = extractIdx;
   auto viewLoad = builder.createWithStage<ttg::MemDescSubviewOp>(
       loc, stageForFirstUse, clusterForFirstUse, subviewTy, alloc, loadOffsets);
-  if (auto alloc = dyn_cast<ttg::LocalAllocOp>((*loadOp->getUsers().begin()))) {
+
+  if (loadToInfo[loadOp].isMMAv3Shared || loadToInfo[loadOp].isMMAv5Scale) {
+    auto user = *loadOp->getUsers().begin();
+    assert(isa<triton::gpu::LocalAllocOp>(user) &&
+           "Loading of MMAv3 operands and MMAv5 scale is expected to be "
+           "consumed by LocalAlloc.");
+    auto alloc = cast<ttg::LocalAllocOp>(user);
     tt::replaceUsesAndPropagateType(builder, alloc, viewLoad.getResult());
     alloc.erase();
   } else {
