@@ -214,7 +214,11 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
          (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64));
   auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
 
-  auto sharedLayout = cast<SharedEncodingAttr>(aTensorTy.getEncoding());
+  auto sharedLayout = dyn_cast<SharedEncodingAttr>(aTensorTy.getEncoding());
+  if (!sharedLayout) {
+    // this converter supports only shared encoding
+    return Value();
+  }
   auto order = sharedLayout.getOrder();
   assert((rank == 2 || order[2] == 0) &&
          "expect batch to be the slowest dimension");

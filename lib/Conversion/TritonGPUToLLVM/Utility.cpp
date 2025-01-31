@@ -244,7 +244,8 @@ Value getSmemVecAddr(const LinearLayout &regLayout,
   // We propose case 2 (see comments below), which provides a more general
   // solution for all swizzled shared memory scenarios, including the edge case
   // mentioned above.
-  if (isSimpleSharedMemoryAccess(shape, allocShape, sharedEnc)) { // Case 1
+  if (sharedEnc &&
+      isSimpleSharedMemoryAccess(shape, allocShape, sharedEnc)) { // Case 1
     smemOffset = applyLinearLayout(loc, rewriter, regToSharedLayout,
                                    {{kRegister, regId},
                                     {kLane, laneId},
@@ -253,8 +254,9 @@ Value getSmemVecAddr(const LinearLayout &regLayout,
                      .second;
   } else { // Case 2 -> rank-reduced swizzling
     assert(rank >= 2 && "Swizzling only applies to tensors with rank >= 2");
-    assert(!sharedEnc.getHasLeadingOffset() &&
-           "Leading offsets are not supported for sliced tensors");
+    assert(!sharedEnc ||
+           !sharedEnc.getHasLeadingOffset() &&
+               "Leading offsets are not supported for sliced tensors");
     // We define both tensor offsets and shared memory offsets:
     //
     //   - Tensor offsets: Relative offsets within a given tensor.
