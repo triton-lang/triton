@@ -666,6 +666,34 @@ def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding"
   let hasCustomAssemblyFormat = 1;
 }
 
+//===----------------------------------------------------------------------===//
+// Shared Linear Encoding
+//===----------------------------------------------------------------------===//
+
+def SharedLinearEncodingAttr : SharedEncoding<"SharedLinearEncoding", "shared_linear_encoding"> {
+  let mnemonic = "shared_linear";
+
+  let description = [{
+    See the docs in LinearLayout.h for the definition of linear layouts.
+  }];
+
+  let parameters = (
+    ins
+    LinearLayoutParam:$linearLayout,
+    "int32_t":$alignment__
+  );
+
+  let extraClassDeclaration = extraSharedEncodingDeclaration;
+
+  let genVerifyDecl = 1;
+  // Example of assembly format:
+  // <{register = [[0, 1], [8, 0], [0, 8], [64, 0]],
+  //   lane = [[0, 2], [0, 4], [1, 0], [2, 0], [4, 0]],
+  //   warp = [[16, 0], [32, 0]],
+  //   block = []}>
+  let hasCustomAssemblyFormat = 1;
+}
+
 
 //===----------------------------------------------------------------------===//
 // Blocked Layout Encoding

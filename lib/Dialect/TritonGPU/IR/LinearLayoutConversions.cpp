@@ -890,12 +890,17 @@ TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
   } else if (auto distributed = dyn_cast<DistributedEncodingTrait>(layout)) {
     result = distributed.toLinearLayout(shape);
   } else {
-    auto shared = dyn_cast<SharedEncodingTrait>(layout);
-    if (shared.hasLeadingOffset()) {
-      assert(elemBitWidth.has_value());
-      result = sharedToLinearLayoutLeadingOffset(shape, shared, *elemBitWidth);
+    if (auto linearEncoding = dyn_cast<SharedLinearEncodingAttr>(layout)) {
+      result = linearEncoding.getLinearLayout();
     } else {
-      result = sharedToLinearLayoutNoLeadingOffset(shape, shared);
+      auto shared = dyn_cast<SharedEncodingTrait>(layout);
+      if (shared.hasLeadingOffset()) {
+        assert(elemBitWidth.has_value());
+        result =
+            sharedToLinearLayoutLeadingOffset(shape, shared, *elemBitWidth);
+      } else {
+        result = sharedToLinearLayoutNoLeadingOffset(shape, shared);
+      }
     }
   }
 
