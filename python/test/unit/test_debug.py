@@ -114,7 +114,6 @@ def test_sanitize_int_add_overflow(x, y, x_dtype, y_dtype, debug, should_overflo
 ])
 @pytest.mark.forked
 def test_sanitize_int_mul_overflow(x, y, x_dtype, y_dtype, debug, should_overflow, device):
-    assert False
 
     @triton.jit
     def _kernel_mul(X, Y, Z):
