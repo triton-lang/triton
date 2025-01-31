@@ -593,6 +593,29 @@ void createBarrierAndWaitOps(IRRewriter &builder, scf::ForOp forOp,
   annotateWithPipelineStage(builder, info.phase.getDefiningOp(), 0);
 }
 
+bool isSafeToPipeline(ttng::TCGen5MMAScaledOp scaledDot) {
+  auto getNumUsers = [](Value value) {
+    return std::distance(value.user_begin(), value.user_end());
+  };
+
+  auto isScaleCopiedByTMEMCopy = [=](Value scale) {
+    for (auto user : scale.getUsers()) {
+      if (isa<ttng::TMEMCopyOp>(user)) {
+        // If the scale is used by TMEM copy and the only other user is the
+        // scaled dot op, MMA pipeline is safe to apply due to the pipelined
+        // execution of MMA -> TMEM_Copy guaranteed by HW.
+        if (getNumUsers(scale) == 2) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+
+  return isScaleCopiedByTMEMCopy(scaledDot.getAScale()) &&
+         isScaleCopiedByTMEMCopy(scaledDot.getBScale());
+}
+
 // Find MMAs eligible for pipelining and lower them by:
 // 1. Hoisting the accumulator allocation outside of the loop.
 // 2. Creating a barrier alloc and lowering the MMA to MMA + wait barrier.
@@ -607,7 +630,7 @@ FailureOr<scf::ForOp> preProcessLoopForTC05MMAPipelining(scf::ForOp forOp,
       if (isa<ttng::TCGen5MMAOp>(op)) {
         mmaOps.push_back(op);
       } else if (auto scaledDot = dyn_cast<ttng::TCGen5MMAScaledOp>(op)) {
-        if (true) {
+        if (isSafeToPipeline(scaledDot)) {
           mmaOps.push_back(op);
         }
       }
