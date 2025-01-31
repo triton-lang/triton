@@ -36,7 +36,7 @@ test-unit: all
 	TRITON_DISABLE_LINE_INFO=0 $(PYTEST) -s python/test/unit/language/test_line_info.py
 	# Run cuda/test_flashattention.py separately to avoid out of gpu memory
 	$(PYTEST) -s python/test/unit/cuda/test_flashattention.py
-	TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=../../triton/instrumentation/libGPUInstrumentationTestLib.so \
+	TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=python/triton/instrumentation/libGPUInstrumentationTestLib.so \
 		$(PYTEST) --capture=tee-sys -rfs -vvv python/test/unit/instrumentation/test_gpuhello.py
 
 .PHONY: test-regression
