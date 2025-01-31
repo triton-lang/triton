@@ -139,7 +139,7 @@ CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
 // but in the cluster before the current op.
 void scheduleDistanceOneDependencies(scf::ForOp forOp,
                                      CoarseSchedule &schedule) {
-  int numStages = schedule.numStages;
+  int numStages = schedule.getNumStages();
   auto getNestedOperands = [](Operation *op) -> SmallVector<Value> {
     SmallVector<Value> operands;
     op->walk([&](Operation *nestedOp) {
@@ -192,7 +192,7 @@ void scheduleDistanceOneDependencies(scf::ForOp forOp,
 // prologue (or the beginning of the loop if there is no prologue).
 CoarseSchedule::Cluster schedulePrologueAndEpilogue(scf::ForOp forOp,
                                                     CoarseSchedule &schedule) {
-  int numStages = schedule.numStages;
+  int numStages = schedule.getNumStages();
   CoarseSchedule::Cluster afterPrologue = schedule.clusters.begin();
 
   // Look for the IfOp that is in the backward slice any of the currently
@@ -237,7 +237,7 @@ CoarseSchedule::Cluster schedulePrologueAndEpilogue(scf::ForOp forOp,
 
 void scheduleRemainingToLastStage(scf::ForOp forOp, CoarseSchedule &schedule,
                                   CoarseSchedule::Cluster afterPrologue) {
-  int numStages = schedule.numStages;
+  int numStages = schedule.getNumStages();
   // Assign the rest of the ops to the last stage.
   // Take care of the ordering of the ops - uses cannot be scheduled to the
   // cluster before the definition.
@@ -276,8 +276,6 @@ void scheduleRemainingToLastStage(scf::ForOp forOp, CoarseSchedule &schedule,
     schedule.insert(op, numStages - 1, cluster);
   }
 }
-
-}; // namespace
 
 void scheduleLoop(scf::ForOp forOp,
                   const DenseMap<Operation *, int> &opLatency) {
@@ -318,21 +316,69 @@ void scheduleLoop(scf::ForOp forOp,
   schedule.serialize(forOp);
 }
 
+/////////////////////////////////////////////////////////////////////////////////////
+// LOWERING
+/////////////////////////////////////////////////////////////////////////////////////
+
+int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
+                       CoarseSchedule &schedule) {
+  assert(schedule.count(op) && "LoadOp not found in the schedule");
+  auto [defStage, _] = schedule[op];
+  int useStage = -1;
+  for (auto user : op->getUsers()) {
+    Operation *topLevelUser = forOp.getBody()->findAncestorOpInBlock(*user);
+    assert(schedule.count(topLevelUser) && "op user not found in the schedule");
+    auto [_useStage, _] = schedule[topLevelUser];
+    if (useStage == -1) {
+      useStage = _useStage;
+    }
+    assert(useStage == _useStage && "LoadOp used in different stages");
+  }
+  assert(useStage >= defStage && "LoadOp used before defined");
+  return useStage - defStage;
+}
+
+void lowerLoad(tt::LoadOp loadO, int stageDiff) { auto loc = loadOp.getLoc(); }
+
+void lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
+  forOp->walk<mlir::WalkOrder::PreOrder>([&](Operation *op) {
+    if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
+      int stageDiff = getDefUseStageDiff(loadOp, forOp, schedule);
+      if (stageDiff > 0) {
+        lowerLoad(loadOp, stageDiff);
+      }
+    } else if (isa<scf::ForOp>(op)) {
+      // Skip nested loops.
+      return WalkResult::skip();
+    }
+    return WalkResult::advance();
+  });
+}
+
+void lowerLoop(scf::ForOp forOp) {
+  CoarseSchedule schedule;
+  schedule.deSerialize(forOp);
+  lowerLoads(forOp, schedule);
+}
+
+}; // namespace
+
+void scheduleLoops(ModuleOp moduleOp,
+                   const DenseMap<Operation *, int> &opLatency) {
+  SmallVector<scf::ForOp> loops;
+  moduleOp->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
+  if (loops.empty())
+    return;
+  for (auto forOp : loops) {
+    scheduleLoop(forOp, opLatency);
+  }
+}
+
 class TritonGPULoopSchedulingPass
     : public impl::TritonGPULoopSchedulingBase<TritonGPULoopSchedulingPass> {
 public:
   using impl::TritonGPULoopSchedulingBase<
       TritonGPULoopSchedulingPass>::TritonGPULoopSchedulingBase;
-
-  int getNumStagesOrDefault(scf::ForOp forOp) {
-    // Use the attribute attached to the loop if it exists otherwise use the
-    // global control.
-    if (!forOp->hasAttr(mlir::triton::kNumStagesAttrName))
-      return numStages;
-    return mlir::cast<IntegerAttr>(
-               forOp->getAttr(mlir::triton::kNumStagesAttrName))
-        .getInt();
-  }
 
   void runOnOperation() override {
     // Go over the interesting ops and assign latencies (based on the
@@ -345,18 +391,7 @@ public:
     // based on the assigned stages
 
     // Schedule the loops
-    SmallVector<scf::ForOp> loops;
-    getOperation()->walk([&](scf::ForOp forOp) {
-      // Bail out for loops with num_stage <= 1.
-      if (getNumStagesOrDefault(forOp) > 1)
-        loops.push_back(forOp);
-    });
-    if (loops.empty())
-      return;
-
-    for (auto forOp : loops) {
-      scheduleLoop(forOp, opLatency);
-    }
+    scheduleLoops(getOperation(), opLatency);
   }
 };
 

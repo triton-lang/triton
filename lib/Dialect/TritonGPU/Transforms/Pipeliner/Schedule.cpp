@@ -82,6 +82,7 @@ tt::CoarseSchedule::createFinalSchedule(scf::ForOp forOp) {
 }
 
 void tt::CoarseSchedule::dump() {
+  assert(numStages > 0 && "Invalid number of stages");
   for (int i = 0; i < numStages; i++) {
     llvm::dbgs() << "\n---- Ops in stage " << i << "\n";
     for (auto &[op, stageAndCluster] : opToStageAndCluster) {
@@ -103,6 +104,7 @@ void tt::CoarseSchedule::serialize(scf::ForOp &forOp) {
 // Create a CoarseSchedule based on forOp's <stage, cluster>.
 void tt::CoarseSchedule::deSerialize(scf::ForOp &forOp) {
   auto [minClusterId, maxClusterId] = tt::getMinMaxCluster(forOp);
+  numStages = tt::getMaxStage(forOp) + 1;
 
   DenseMap<int, tt::CoarseSchedule::Cluster> clustersMap;
   for (int i = minClusterId; i < maxClusterId + 1; i++) {
@@ -120,7 +122,7 @@ void tt::CoarseSchedule::deSerialize(scf::ForOp &forOp) {
 // Add dependencies of anchor ops to the coarse schedule. Schedule them to
 // the same stage and ordering cluster as the anchor op.
 void tt::scheduleDependencies(scf::ForOp forOp, tt::CoarseSchedule &schedule) {
-  int numStages = schedule.numStages;
+  int numStages = schedule.getNumStages();
   SmallVector<std::tuple<Operation *, int, tt::CoarseSchedule::Cluster>>
       opsInOrder = schedule.getOpsInOrder(forOp);
   // Schedule dependencies stage by stage.

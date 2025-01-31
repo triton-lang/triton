@@ -15,11 +15,11 @@ namespace gpu {
 
 /// Discover operations that should become async and assign latencies to them
 /// based on the numStages value provided by the user.
-DenseMap<Operation *, int> assignLatencies(ModuleOp forOp, int numStages);
+DenseMap<Operation *, int> assignLatencies(ModuleOp moduleOp, int numStages);
 
-/// Schedule the loop based on the latencies assigned to the operations.
-void scheduleLoop(scf::ForOp forOp,
-                  const DenseMap<Operation *, int> &opLatency);
+/// Schedule the loops based on the latencies assigned to the operations.
+void scheduleLoops(ModuleOp moduleOp,
+                   const DenseMap<Operation *, int> &opLatency);
 
 }; // namespace gpu
 
@@ -88,14 +88,18 @@ public:
     }
   };
 
+  CoarseSchedule() = default;
   CoarseSchedule(int numStages) : numStages(numStages) {}
-  int numStages;
   ClusterList clusters;
   using Cluster = decltype(clusters)::iterator;
 
   DenseMap<Operation *, std::pair<int, Cluster>> opToStageAndCluster;
 
+  void setNumStages(int numStages) { this->numStages = numStages; }
+  int getNumStages() { return numStages; }
+
   void insert(Operation *op, int stage, Cluster cluster) {
+    assert(stage < numStages && "Invalid stage");
     opToStageAndCluster[op] = {stage, cluster};
   }
 
@@ -147,6 +151,9 @@ public:
   void serialize(scf::ForOp &forOp);
   // Create a CoarseSchedule based on forOp's <stage, cluster>.
   void deSerialize(scf::ForOp &forOp);
+
+private:
+  int numStages = 0;
 };
 
 // Add dependencies of anchor ops to the coarse schedule. Schedule them to

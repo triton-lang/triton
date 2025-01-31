@@ -38,12 +38,7 @@ struct TestPipelineScheduleLoop
       }
     });
 
-    SmallVector<scf::ForOp> loops;
-    m.walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
-
-    for (auto forOp : loops) {
-      scheduleLoop(forOp, opLatencies);
-    }
+    scheduleLoops(m, opLatencies);
   }
 };
 

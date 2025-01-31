@@ -39,6 +39,7 @@ void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
 
 // Return the minClusterId and maxClusterId for the given ForOp.
 std::pair<int, int> getMinMaxCluster(scf::ForOp &forOp);
+int getMaxStage(scf::ForOp &forOp);
 std::pair<int, int> getStageCluster(Operation *op);
 std::optional<std::pair<int, int>> maybeGetStageCluster(Operation *op);
 void setStageCluster(Operation *op, int stage, int cluster);
