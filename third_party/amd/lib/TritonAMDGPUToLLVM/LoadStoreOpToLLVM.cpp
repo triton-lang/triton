@@ -1647,7 +1647,28 @@ struct AsyncWaitConversion : public ConvertOpToLLVMPattern<AsyncWaitOp> {
 
     auto loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    rewriter.create<ROCDL::WaitcntOp>(loc, op.getNum());
+
+    // global.load.lds uses vmcnt to synchronize
+    // The rocdl op stores all possible coutners in a single int32 value (v)
+    // The vmcnt (6 bits) is split into a lower 3:0 and higher part 5:4
+    // The lower parts is stored in 3:0 of v and the higher part in bits 15:14
+    // We have to set all other bits in v to 1 to signal we are not interested
+    // in those
+
+    int vmCnt = op.getNum();
+    if (vmCnt >= 64) {
+      return emitError(loc, "AsyncWait does not support values >= 64");
+    }
+
+    // Extract low and high bits and combine while setting all other bits to 1
+    unsigned lowBits = vmCnt & 0xF;
+    unsigned highBits = vmCnt >> 4 << 14;
+    unsigned otherCnts = ~0xC00F; // C00F has bits 15:14 and 3:0 set
+    unsigned waitValue = lowBits | highBits | otherCnts;
+
+    rewriter.create<ROCDL::WaitcntOp>(loc, waitValue);
+
+    // Drop the result AsyncToken
     rewriter.replaceOp(op, b.i32_val(0));
     return success();
   }
@@ -1660,7 +1681,7 @@ struct AsyncCommitGroupConversion
   LogicalResult
   matchAndRewrite(AsyncCommitGroupOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // Drop the result token
+    // Drop the result AsyncToken
     auto loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     rewriter.replaceOp(op, b.i32_val(0));
