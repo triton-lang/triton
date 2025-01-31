@@ -1037,12 +1037,6 @@ void ElementwiseInlineAsmOp::getEffects(
                        SideEffects::DefaultResource::get());
 }
 
-Speculation::Speculatability ElementwiseInlineAsmOp::getSpeculatability() {
-  if (getPure())
-    return Speculation::Speculatable;
-  return Speculation::NotSpeculatable;
-}
-
 LogicalResult ElementwiseInlineAsmOp::verify() {
   if (getNumOperands() >= 1) {
     auto tensorType = dyn_cast<RankedTensorType>(getOperand(0).getType());
