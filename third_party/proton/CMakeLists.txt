@@ -26,12 +26,16 @@ function(add_proton_library name)
 
   target_link_libraries(${name} PRIVATE Python3::Module pybind11::headers)
 
+  # Use system to skip warnings caused by legacy clang compilers
+  target_include_directories(${name}
+    SYSTEM PRIVATE
+      "${ROCTRACER_INCLUDE_DIR}"
+  )
+
   target_include_directories(${name}
     PRIVATE
       "${CUPTI_INCLUDE_DIR}"
-      "${ROCTRACER_INCLUDE_DIR}"
       "${JSON_INCLUDE_DIR}"
-      "${PROTON_SRC_DIR}/include"
   )
 
   # If HIP is AMD-based
