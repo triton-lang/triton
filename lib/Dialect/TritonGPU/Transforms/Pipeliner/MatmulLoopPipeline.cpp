@@ -497,6 +497,10 @@ assignMemoryLayouts(scf::ForOp &forOp,
     if (!op.hasAttr(mlir::triton::kLoopStageAttrName))
       continue;
 
+    // Never pipeline scalar loads.
+    if (!isa<RankedTensorType>(op.getResultTypes().front()))
+      continue;
+
     // Check stage for uses. If any direct use is in a different stage, treat it
     // as a pipelined load.
     bool isPipelined = false;
