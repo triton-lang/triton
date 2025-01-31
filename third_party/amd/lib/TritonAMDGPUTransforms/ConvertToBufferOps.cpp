@@ -488,467 +488,51 @@ static LogicalResult collectRanges(DataFlowSolver &solver, ValueRange values,
 
 namespace {
 
-#undef smax
-#undef smin
-
-struct MyIntegerRangeAnalysis : DataFlowAnalysis {
-  LogicalResult initialize(Operation *top) override;
-  LogicalResult visit(ProgramPoint *point) override;
-  explicit MyIntegerRangeAnalysis(DataFlowSolver &solver);
-
-  void join(dataflow::IntegerValueRangeLattice *lhs,
-            const dataflow::IntegerValueRangeLattice &rhs) {
-    propagateIfChanged(lhs, lhs->join(rhs));
-  }
-
-  LogicalResult initializeRecursively(Operation *op);
-
-  void visitBlock(Block *block);
-
-  void visitRegionSuccessors(
-      ProgramPoint *point, RegionBranchOpInterface branch,
-      RegionBranchPoint successor,
-      ArrayRef<dataflow::IntegerValueRangeLattice *> lattices);
-
-  using StateT = dataflow::IntegerValueRangeLattice;
-
-  virtual void visitExternalCall(CallOpInterface call,
-                                 ArrayRef<const StateT *> argumentLattices,
-                                 ArrayRef<StateT *> resultLattices) {
-    setAllToEntryStates(resultLattices);
-  }
-
-  void visitNonControlFlowArguments(Operation *op,
-                                    const RegionSuccessor &successor,
-                                    ArrayRef<StateT *> argLattices,
-                                    unsigned firstIndex);
-
-  StateT *getLatticeElement(Value value) { return getOrCreate<StateT>(value); }
-
-  const StateT *getLatticeElementFor(ProgramPoint *point, Value value) {
-    dataflow::IntegerValueRangeLattice *state = getLatticeElement(value);
-    addDependency(state, point);
-    return state;
-  }
-
-  void setAllToEntryStates(ArrayRef<StateT *> lattices) {
-    for (dataflow::IntegerValueRangeLattice *lattice : lattices)
-      setToEntryState(lattice);
-  }
-
-  LogicalResult visitOperation(Operation *op);
-  LogicalResult
-  visitOperation(Operation *op,
-                 ArrayRef<const dataflow::IntegerValueRangeLattice *> operands,
-                 ArrayRef<dataflow::IntegerValueRangeLattice *> results);
-
-  void visitExternalCallImpl(
-      CallOpInterface call,
-      ArrayRef<const dataflow::IntegerValueRangeLattice *> argumentLattices,
-      ArrayRef<dataflow::IntegerValueRangeLattice *> resultLattices) {
-    visitExternalCall(
-        call,
-        {reinterpret_cast<const StateT *const *>(argumentLattices.begin()),
-         argumentLattices.size()},
-        {reinterpret_cast<StateT *const *>(resultLattices.begin()),
-         resultLattices.size()});
-  }
-
-  void setToEntryState(dataflow::IntegerValueRangeLattice *lattice) {
-    propagateIfChanged(lattice, lattice->join(IntegerValueRange::getMaxRange(
-                                    lattice->getAnchor())));
-  }
-};
-
-MyIntegerRangeAnalysis::MyIntegerRangeAnalysis(DataFlowSolver &solver)
-    : DataFlowAnalysis(solver) {
-  registerAnchorKind<dataflow::CFGEdge>();
+std::optional<int64_t> maybeGetTripCount(LoopLikeOpInterface loop) {
+  std::optional<OpFoldResult> lowerBound = loop.getSingleLowerBound();
+  std::optional<OpFoldResult> upperBound = loop.getSingleUpperBound();
+  std::optional<OpFoldResult> step = loop.getSingleStep();
+  assert(lowerBound && upperBound && step);
+  return constantTripCount(*lowerBound, *upperBound, *step);
 }
 
-LogicalResult MyIntegerRangeAnalysis::initialize(Operation *top) {
-  // Mark the entry block arguments as having reached their pessimistic
-  // fixpoints.
-  for (Region &region : top->getRegions()) {
-    if (region.empty())
-      continue;
-    for (Value argument : region.front().getArguments())
-      setToEntryState(getLatticeElement(argument));
-  }
+struct MyIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
+  using dataflow::IntegerRangeAnalysis::IntegerRangeAnalysis;
 
-  return initializeRecursively(top);
-}
+  llvm::SmallDenseMap<
+      std::pair<LoopLikeOpInterface, dataflow::IntegerValueRangeLattice *>,
+      int64_t>
+      loopTripCounts;
+  llvm::SmallDenseMap<
+      std::pair<LoopLikeOpInterface, dataflow::IntegerValueRangeLattice *>,
+      int64_t>
+      loopVisits;
 
-LogicalResult MyIntegerRangeAnalysis::initializeRecursively(Operation *op) {
-  // Initialize the analysis by visiting every owner of an SSA value (all
-  // operations and blocks).
-  if (failed(visitOperation(op)))
-    return failure();
-
-  for (Region &region : op->getRegions()) {
-    for (Block &block : region) {
-      getOrCreate<dataflow::Executable>(getProgramPointBefore(&block))
-          ->blockContentSubscribe(this);
-      visitBlock(&block);
-      for (Operation &op : block)
-        if (failed(initializeRecursively(&op)))
-          return failure();
-    }
-  }
-
-  return success();
-}
-
-LogicalResult MyIntegerRangeAnalysis::visit(ProgramPoint *point) {
-  if (!point->isBlockStart())
-    return visitOperation(point->getPrevOp());
-  visitBlock(point->getBlock());
-  return success();
-}
-
-static int visits = 0;
-
-int64_t maybeGetTripCount(Operation *op) {
-  int64_t tripCount = 2 << 20;
-  if (LoopLikeOpInterface loop = dyn_cast<LoopLikeOpInterface>(op)) {
-    std::optional<OpFoldResult> lowerBound = loop.getSingleLowerBound();
-    std::optional<OpFoldResult> upperBound = loop.getSingleUpperBound();
-    std::optional<OpFoldResult> step = loop.getSingleStep();
-    assert(lowerBound && upperBound && step);
-    auto maybeTripCout = constantTripCount(*lowerBound, *upperBound, *step);
-    assert(maybeTripCout);
-    tripCount = *maybeTripCout;
-  }
-  return tripCount;
-}
-
-LogicalResult MyIntegerRangeAnalysis::visitOperation(Operation *op) {
-  // Exit early on operations with no results.
-  if (op->getNumResults() == 0)
-    return success();
-
-  // If the containing block is not executable, bail out.
-  if (op->getBlock() != nullptr &&
-      !getOrCreate<dataflow::Executable>(getProgramPointBefore(op->getBlock()))
-           ->isLive())
-    return success();
-
-  // Get the result lattices.
-  SmallVector<dataflow::IntegerValueRangeLattice *> resultLattices;
-  resultLattices.reserve(op->getNumResults());
-  for (Value result : op->getResults()) {
-    dataflow::IntegerValueRangeLattice *resultLattice =
-        getLatticeElement(result);
-    resultLattices.push_back(resultLattice);
-  }
-
-  // The results of a region branch operation are determined by control-flow.
-  if (auto branch = dyn_cast<RegionBranchOpInterface>(op)) {
-    LLVM_DEBUG(llvm::dbgs() << "visits : " << visits << "\n");
-    if (visits < maybeGetTripCount(op)) {
-      visitRegionSuccessors(getProgramPointAfter(branch), branch,
-                            /*successor=*/RegionBranchPoint::parent(),
-                            resultLattices);
-      ++visits;
-    }
-    return success();
-  }
-
-  // Grab the lattice elements of the operands.
-  SmallVector<const dataflow::IntegerValueRangeLattice *> operandLattices;
-  operandLattices.reserve(op->getNumOperands());
-  for (Value operand : op->getOperands()) {
-    dataflow::IntegerValueRangeLattice *operandLattice =
-        getLatticeElement(operand);
-    operandLattice->useDefSubscribe(this);
-    operandLattices.push_back(operandLattice);
-  }
-
-  if (auto call = dyn_cast<CallOpInterface>(op)) {
-    // If the call operation is to an external function, attempt to infer the
-    // results from the call arguments.
-    auto callable =
-        dyn_cast_if_present<CallableOpInterface>(call.resolveCallable());
-    if (!getSolverConfig().isInterprocedural() ||
-        (callable && !callable.getCallableRegion())) {
-      visitExternalCallImpl(call, operandLattices, resultLattices);
+  LogicalResult visitOperation(
+      Operation *op,
+      ArrayRef<const dataflow::IntegerValueRangeLattice *> operands,
+      ArrayRef<dataflow::IntegerValueRangeLattice *> results) override {
+    auto inferrable = dyn_cast<InferIntRangeInterface>(op);
+    if (!inferrable) {
+      setAllToEntryStates(results);
       return success();
     }
 
-    // Otherwise, the results of a call operation are determined by the
-    // callgraph.
-    const auto *predecessors = getOrCreateFor<dataflow::PredecessorState>(
-        getProgramPointAfter(op), getProgramPointAfter(call));
-    // If not all return sites are known, then conservatively assume we can't
-    // reason about the data-flow.
-    if (!predecessors->allPredecessorsKnown()) {
-      setAllToEntryStates(resultLattices);
-      return success();
-    }
-    for (Operation *predecessor : predecessors->getKnownPredecessors())
-      for (auto &&[operand, resLattice] :
-           llvm::zip(predecessor->getOperands(), resultLattices))
-        join(resLattice,
-             *getLatticeElementFor(getProgramPointAfter(op), operand));
-    return success();
-  }
-
-  // Invoke the operation transfer function.
-  return visitOperation(op, operandLattices, resultLattices);
-}
-
-void MyIntegerRangeAnalysis::visitBlock(Block *block) {
-  // Exit early on blocks with no arguments.
-  if (block->getNumArguments() == 0)
-    return;
-
-  // If the block is not executable, bail out.
-  // executable == not DCE
-  if (!getOrCreate<dataflow::Executable>(getProgramPointBefore(block))
-           ->isLive())
-    return;
-
-  // Get the argument lattices.
-  SmallVector<dataflow::IntegerValueRangeLattice *> argLattices;
-  argLattices.reserve(block->getNumArguments());
-  for (BlockArgument argument : block->getArguments()) {
-    dataflow::IntegerValueRangeLattice *argLattice =
-        getLatticeElement(argument);
-    argLattices.push_back(argLattice);
-  }
-
-  // The argument lattices of entry blocks are set by region control-flow or the
-  // callgraph.
-  if (block->isEntryBlock()) {
-    // Check if this block is the entry block of a callable region.
-    auto callable = dyn_cast<CallableOpInterface>(block->getParentOp());
-    if (callable && callable.getCallableRegion() == block->getParent()) {
-      const auto *callsites = getOrCreateFor<dataflow::PredecessorState>(
-          getProgramPointBefore(block), getProgramPointAfter(callable));
-      // If not all callsites are known, conservatively mark all lattices as
-      // having reached their pessimistic fixpoints.
-      if (!callsites->allPredecessorsKnown() ||
-          !getSolverConfig().isInterprocedural()) {
-        return setAllToEntryStates(argLattices);
-      }
-      for (Operation *callsite : callsites->getKnownPredecessors()) {
-        auto call = cast<CallOpInterface>(callsite);
-        for (auto it : llvm::zip(call.getArgOperands(), argLattices))
-          join(std::get<1>(it),
-               *getLatticeElementFor(getProgramPointBefore(block),
-                                     std::get<0>(it)));
-      }
-      return;
-    }
-
-    // Check if the lattices can be determined from region control flow.
-    if (auto branch = dyn_cast<RegionBranchOpInterface>(block->getParentOp())) {
-      LLVM_DEBUG(llvm::dbgs() << "visits : " << visits << "\n");
-      if (visits < maybeGetTripCount(branch.getOperation())) {
-        visitRegionSuccessors(getProgramPointBefore(block), branch,
-                              /*successor*/ block->getParent(), argLattices);
-      }
-    }
-
-    // Otherwise, we can't reason about the data-flow.
-    return visitNonControlFlowArguments(block->getParentOp(),
-                                        RegionSuccessor(block->getParent()),
-                                        argLattices, /*firstIndex=*/0);
-  }
-
-  // Iterate over the predecessors of the non-entry block.
-  for (Block::pred_iterator it = block->pred_begin(), e = block->pred_end();
-       it != e; ++it) {
-    Block *predecessor = *it;
-
-    // If the edge from the predecessor block to the current block is not live,
-    // bail out.
-    auto *edgeExecutable = getOrCreate<dataflow::Executable>(
-        getLatticeAnchor<dataflow::CFGEdge>(predecessor, block));
-    edgeExecutable->blockContentSubscribe(this);
-    if (!edgeExecutable->isLive())
-      continue;
-
-    // Check if we can reason about the data-flow from the predecessor.
-    if (auto branch =
-            dyn_cast<BranchOpInterface>(predecessor->getTerminator())) {
-      SuccessorOperands operands =
-          branch.getSuccessorOperands(it.getSuccessorIndex());
-      for (auto [idx, lattice] : llvm::enumerate(argLattices)) {
-        if (Value operand = operands[idx]) {
-          join(lattice,
-               *getLatticeElementFor(getProgramPointBefore(block), operand));
-        } else {
-          // Conservatively consider internally produced arguments as entry
-          // points.
-          setAllToEntryStates(lattice);
-        }
-      }
-    } else {
-      return setAllToEntryStates(argLattices);
-    }
-  }
-}
-
-void MyIntegerRangeAnalysis::visitRegionSuccessors(
-    ProgramPoint *point, RegionBranchOpInterface branch,
-    RegionBranchPoint successor,
-    ArrayRef<dataflow::IntegerValueRangeLattice *> lattices) {
-  const auto *predecessors =
-      getOrCreateFor<dataflow::PredecessorState>(point, point);
-  LLVM_DEBUG({
-    llvm::dbgs() << "*************entering visitRegionSuccessors************\n";
-    llvm::dbgs() << "point: " << *point << "\n";
-    if (auto succ = successor.getRegionOrNull()) {
-      llvm::dbgs() << "successor: ";
-      succ->getParentOp()->print(llvm::dbgs(), OpPrintingFlags().skipRegions());
-      llvm::dbgs() << "\n";
-    }
-  });
-
-  assert(predecessors->allPredecessorsKnown() &&
-         "unexpected unresolved region successors");
-  LLVM_DEBUG(llvm::dbgs() << "num preds: "
-                          << predecessors->getKnownPredecessors().size()
-                          << "\n\n");
-
-  for (Operation *op : predecessors->getKnownPredecessors()) {
-    // Get the incoming successor operands.
-    std::optional<OperandRange> operands;
-
-    // Check if the predecessor is the parent op.
-    if (op == branch) {
-      operands = branch.getEntrySuccessorOperands(successor);
-      // Otherwise, try to deduce the operands from a region return-like op.
-    } else if (auto regionTerminator =
-                   dyn_cast<RegionBranchTerminatorOpInterface>(op)) {
-      operands = regionTerminator.getSuccessorOperands(successor);
-    }
-
-    if (!operands) {
-      // We can't reason about the data-flow.
-      return setAllToEntryStates(lattices);
-    }
-
-    ValueRange inputs = predecessors->getSuccessorInputs(op);
-    assert(inputs.size() == operands->size() &&
-           "expected the same number of successor inputs as operands");
-
-    unsigned firstIndex = 0;
-    if (inputs.size() != lattices.size()) {
-      if (!point->isBlockStart()) {
-        if (!inputs.empty())
-          firstIndex = cast<OpResult>(inputs.front()).getResultNumber();
-        visitNonControlFlowArguments(branch,
-                                     RegionSuccessor(branch->getResults().slice(
-                                         firstIndex, inputs.size())),
-                                     lattices, firstIndex);
-      } else {
-        if (!inputs.empty())
-          firstIndex = cast<BlockArgument>(inputs.front()).getArgNumber();
-        Region *region = point->getBlock()->getParent();
-        visitNonControlFlowArguments(
-            branch,
-            RegionSuccessor(region, region->getArguments().slice(
-                                        firstIndex, inputs.size())),
-            lattices, firstIndex);
-      }
-    }
-
-    LLVM_DEBUG({
-      llvm::dbgs() << "pred: ";
-      op->print(llvm::dbgs(), OpPrintingFlags().skipRegions());
-      llvm::dbgs() << "\n";
-    });
-    for (auto [oper, argLat] :
-         llvm::zip(*operands, lattices.drop_front(firstIndex))) {
-      LLVM_DEBUG({
-        llvm::dbgs() << "oper: " << oper << "\n";
-        llvm::dbgs() << "argLat anchor: ";
-        if (auto res = llvm::dyn_cast<OpResult>(argLat->getAnchor())) {
-          res.printAsOperand(llvm::dbgs(), OpPrintingFlags().skipRegions());
-        } else {
-          argLat->getAnchor().print(llvm::dbgs(),
-                                    OpPrintingFlags().skipRegions());
-        }
-        llvm::dbgs() << "\n";
-      });
-      join(argLat, *getLatticeElementFor(point, oper));
-    }
-    LLVM_DEBUG(llvm::dbgs() << "\n");
-  }
-  LLVM_DEBUG(llvm::dbgs()
-             << "************leaving visitRegionSuccessors*************\n");
-}
-
-LogicalResult MyIntegerRangeAnalysis::visitOperation(
-    Operation *op,
-    ArrayRef<const dataflow::IntegerValueRangeLattice *> operands,
-    ArrayRef<dataflow::IntegerValueRangeLattice *> results) {
-  auto inferrable = dyn_cast<InferIntRangeInterface>(op);
-  if (!inferrable) {
-    setAllToEntryStates(results);
-    return success();
-  }
-
-  LLVM_DEBUG(llvm::dbgs() << "Inferring ranges for " << *op << "\n");
-  auto argRanges = llvm::map_to_vector(
-      operands, [](const dataflow::IntegerValueRangeLattice *lattice) {
-        return lattice->getValue();
-      });
-
-  auto joinCallback = [&](Value v, const IntegerValueRange &attrs) {
-    auto result = dyn_cast<OpResult>(v);
-    if (!result)
-      return;
-    assert(llvm::is_contained(op->getResults(), result));
-
-    LLVM_DEBUG(llvm::dbgs() << "Inferred range " << attrs << "\n");
-    dataflow::IntegerValueRangeLattice *lattice =
-        results[result.getResultNumber()];
-    IntegerValueRange oldRange = lattice->getValue();
-
-    ChangeResult changed = lattice->join(attrs);
-
-    // Catch loop results with loop variant bounds and conservatively make
-    // them [-inf, inf] so we don't circle around infinitely often (because
-    // the dataflow analysis in MLIR doesn't attempt to work out trip counts
-    // and often can't).
-    bool isYieldedResult = llvm::any_of(v.getUsers(), [](Operation *op) {
-      return op->hasTrait<OpTrait::IsTerminator>();
-    });
-    if (isYieldedResult && !oldRange.isUninitialized() &&
-        !(lattice->getValue() == oldRange)) {
-      LLVM_DEBUG(llvm::dbgs() << "Loop variant loop result detected\n");
-      // changed |= lattice->join(IntegerValueRange::getMaxRange(v));
-    }
-    propagateIfChanged(lattice, changed);
-  };
-
-  inferrable.inferResultRangesFromOptional(argRanges, joinCallback);
-  return success();
-}
-
-void MyIntegerRangeAnalysis::visitNonControlFlowArguments(
-    Operation *op, const RegionSuccessor &successor,
-    ArrayRef<dataflow::IntegerValueRangeLattice *> argLattices,
-    unsigned firstIndex) {
-  if (auto inferrable = dyn_cast<InferIntRangeInterface>(op)) {
     LLVM_DEBUG(llvm::dbgs() << "Inferring ranges for " << *op << "\n");
-
-    auto argRanges = llvm::map_to_vector(op->getOperands(), [&](Value value) {
-      return getLatticeElementFor(getProgramPointAfter(op), value)->getValue();
-    });
+    auto argRanges = llvm::map_to_vector(
+        operands, [](const dataflow::IntegerValueRangeLattice *lattice) {
+          return lattice->getValue();
+        });
 
     auto joinCallback = [&](Value v, const IntegerValueRange &attrs) {
-      auto arg = dyn_cast<BlockArgument>(v);
-      if (!arg)
+      auto result = dyn_cast<OpResult>(v);
+      if (!result)
         return;
-      if (!llvm::is_contained(successor.getSuccessor()->getArguments(), arg))
-        return;
+      assert(llvm::is_contained(op->getResults(), result));
 
       LLVM_DEBUG(llvm::dbgs() << "Inferred range " << attrs << "\n");
       dataflow::IntegerValueRangeLattice *lattice =
-          argLattices[arg.getArgNumber()];
+          results[result.getResultNumber()];
       IntegerValueRange oldRange = lattice->getValue();
 
       ChangeResult changed = lattice->join(attrs);
@@ -957,84 +541,106 @@ void MyIntegerRangeAnalysis::visitNonControlFlowArguments(
       // them [-inf, inf] so we don't circle around infinitely often (because
       // the dataflow analysis in MLIR doesn't attempt to work out trip counts
       // and often can't).
-      bool isYieldedValue = llvm::any_of(v.getUsers(), [](Operation *op) {
+      bool isYieldedResult = llvm::any_of(v.getUsers(), [](Operation *op) {
         return op->hasTrait<OpTrait::IsTerminator>();
       });
-      if (isYieldedValue && !oldRange.isUninitialized() &&
+      if (isYieldedResult && !oldRange.isUninitialized() &&
           !(lattice->getValue() == oldRange)) {
         LLVM_DEBUG(llvm::dbgs() << "Loop variant loop result detected\n");
-        changed |= lattice->join(IntegerValueRange::getMaxRange(v));
+        // changed |= lattice->join(IntegerValueRange::getMaxRange(v));
       }
       propagateIfChanged(lattice, changed);
     };
 
     inferrable.inferResultRangesFromOptional(argRanges, joinCallback);
-    return;
+    return success();
   }
 
-  /// Given the results of getConstant{Lower,Upper}Bound() or getConstantStep()
-  /// on a LoopLikeInterface return the lower/upper bound for that result if
-  /// possible.
-  auto getLoopBoundFromFold = [&](std::optional<OpFoldResult> loopBound,
-                                  Type boundType, bool getUpper) {
-    unsigned int width = ConstantIntRanges::getStorageBitwidth(boundType);
-    if (loopBound.has_value()) {
-      if (auto attr = dyn_cast<Attribute>(*loopBound)) {
-        if (auto bound = dyn_cast_or_null<IntegerAttr>(attr))
-          return bound.getValue();
-      } else if (auto value = llvm::dyn_cast_if_present<Value>(*loopBound)) {
-        const dataflow::IntegerValueRangeLattice *lattice =
-            getLatticeElementFor(getProgramPointAfter(op), value);
-        if (lattice != nullptr && !lattice->getValue().isUninitialized())
-          return getUpper ? lattice->getValue().getValue().smax()
-                          : lattice->getValue().getValue().smin();
+  void visitRegionSuccessors(
+      ProgramPoint *point, RegionBranchOpInterface branch,
+      RegionBranchPoint successor,
+      ArrayRef<dataflow::AbstractSparseLattice *> abstractLattices) override {
+    SmallVector<dataflow::IntegerValueRangeLattice *> lattices;
+    for (auto abstractLat : abstractLattices) {
+      lattices.push_back(
+          static_cast<dataflow::IntegerValueRangeLattice *>(abstractLat));
+    }
+    LoopLikeOpInterface loop =
+        dyn_cast<LoopLikeOpInterface>(branch.getOperation());
+    if (loop) {
+      for (auto argLat : lattices) {
+        if (!loopTripCounts.contains({loop, argLat})) {
+          loopTripCounts[{loop, argLat}] =
+              maybeGetTripCount(loop).value_or(2 << 20);
+          loopVisits[{loop, argLat}] = 0;
+        }
       }
     }
-    // Given the results of getConstant{Lower,Upper}Bound()
-    // or getConstantStep() on a LoopLikeInterface return the lower/upper
-    // bound
-    return getUpper ? APInt::getSignedMaxValue(width)
-                    : APInt::getSignedMinValue(width);
-  };
 
-  // Infer bounds for loop arguments that have static bounds
-  if (auto loop = dyn_cast<LoopLikeOpInterface>(op)) {
-    std::optional<Value> iv = loop.getSingleInductionVar();
-    assert(iv);
-    std::optional<OpFoldResult> lowerBound = loop.getSingleLowerBound();
-    std::optional<OpFoldResult> upperBound = loop.getSingleUpperBound();
-    std::optional<OpFoldResult> step = loop.getSingleStep();
-    APInt min = getLoopBoundFromFold(lowerBound, iv->getType(),
-                                     /*getUpper=*/false);
-    APInt max = getLoopBoundFromFold(upperBound, iv->getType(),
-                                     /*getUpper=*/true);
-    // Assume positivity for uniscoverable steps by way of getUpper = true.
-    APInt stepVal =
-        getLoopBoundFromFold(step, iv->getType(), /*getUpper=*/true);
+    const auto *predecessors =
+        getOrCreateFor<dataflow::PredecessorState>(point, point);
+    assert(predecessors->allPredecessorsKnown() &&
+           "unexpected unresolved region successors");
+    for (Operation *op : predecessors->getKnownPredecessors()) {
+      // Get the incoming successor operands.
+      std::optional<OperandRange> operands;
 
-    if (stepVal.isNegative()) {
-      std::swap(min, max);
-    } else {
-      // Correct the upper bound by subtracting 1 so that it becomes a <=
-      // bound, because loops do not generally include their upper bound.
-      max -= 1;
+      // Check if the predecessor is the parent op.
+      if (op == branch) {
+        operands = branch.getEntrySuccessorOperands(successor);
+        // Otherwise, try to deduce the operands from a region return-like op.
+      } else if (auto regionTerminator =
+                     dyn_cast<RegionBranchTerminatorOpInterface>(op)) {
+        operands = regionTerminator.getSuccessorOperands(successor);
+      }
+
+      if (!operands) {
+        // We can't reason about the data-flow.
+        return setAllToEntryStates(lattices);
+      }
+
+      ValueRange inputs = predecessors->getSuccessorInputs(op);
+      assert(inputs.size() == operands->size() &&
+             "expected the same number of successor inputs as operands");
+
+      unsigned firstIndex = 0;
+      if (inputs.size() != lattices.size()) {
+        if (!point->isBlockStart()) {
+          if (!inputs.empty())
+            firstIndex = cast<OpResult>(inputs.front()).getResultNumber();
+          visitNonControlFlowArguments(
+              branch,
+              RegionSuccessor(
+                  branch->getResults().slice(firstIndex, inputs.size())),
+              lattices, firstIndex);
+        } else {
+          if (!inputs.empty())
+            firstIndex = cast<BlockArgument>(inputs.front()).getArgNumber();
+          Region *region = point->getBlock()->getParent();
+          visitNonControlFlowArguments(
+              branch,
+              RegionSuccessor(region, region->getArguments().slice(
+                                          firstIndex, inputs.size())),
+              lattices, firstIndex);
+        }
+      }
+
+      for (auto [oper, argLat] :
+           llvm::zip(*operands, ArrayRef(lattices).drop_front(firstIndex))) {
+        std::pair loopArgLat = {loop, argLat};
+        if (loop && loopVisits[loopArgLat] >= loopTripCounts[loopArgLat])
+          continue;
+
+        auto rhs = getLatticeElementFor(point, oper);
+        auto changed = argLat->join(*rhs);
+        propagateIfChanged(argLat, changed);
+
+        if (loop && changed == ChangeResult::Change)
+          ++loopVisits[loopArgLat];
+      }
     }
-
-    // If we infer the lower bound to be larger than the upper bound, the
-    // resulting range is meaningless and should not be used in further
-    // inferences.
-    if (max.sge(min)) {
-      dataflow::IntegerValueRangeLattice *ivEntry = getLatticeElement(*iv);
-      auto ivRange = ConstantIntRanges::fromSigned(min, max);
-      propagateIfChanged(ivEntry, ivEntry->join(IntegerValueRange{ivRange}));
-    }
-    return;
   }
-
-  setAllToEntryStates(argLattices.take_front(firstIndex));
-  setAllToEntryStates(argLattices.drop_front(
-      firstIndex + successor.getSuccessorInputs().size()));
-}
+};
 
 } // end anonymous namespace
 
@@ -1073,7 +679,6 @@ public:
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
 
-    visits = 0;
     std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
     solver->load<MyIntegerRangeAnalysis>();
     if (failed(solver->initializeAndRun(getOperation())))
