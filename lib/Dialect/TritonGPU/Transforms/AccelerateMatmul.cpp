@@ -173,9 +173,8 @@ static Value getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter,
   return rewriter.create<LocalAllocOp>(arg.getLoc(), newType, arg);
 }
 
-static Value getSharedMemoryScale(Value v, mlir::PatternRewriter &rewriter) {
+static LocalAllocOp getSharedMemoryScale(Value arg, mlir::PatternRewriter &rewriter, Location loc) {
   OpBuilder::InsertionGuard g(rewriter);
-  Value arg = v;
   auto argType = cast<RankedTensorType>(arg.getType());
   assert(argType.getEncoding() && "unexpected tensor type");
   auto newOrder = getOrder(argType.getEncoding());
@@ -189,7 +188,7 @@ static Value getSharedMemoryScale(Value v, mlir::PatternRewriter &rewriter) {
   auto newType = MemDescType::get(argType.getShape(), argType.getElementType(),
                                   newLayout, SharedMemorySpace);
   rewriter.setInsertionPointAfterValue(arg);
-  return rewriter.create<LocalAllocOp>(arg.getLoc(), newType, arg);
+  return rewriter.create<LocalAllocOp>(loc, newType, arg);
 }
 
 SmallVector<unsigned, 3>
@@ -513,26 +512,34 @@ public:
 
 Value addSmemStageToScaleLoad(Value scale, mlir::PatternRewriter &rewriter) {
   // rewrite load(scale) -> local_load(local_alloc(load(scale)))
+  OpBuilder::InsertionGuard g(rewriter);
   auto op = scale.getDefiningOp();
-  assert(op);
+  Operation* loadConsumer = nullptr;
+
   while (!isa<LoadOp>(op)) {
     if (auto reshape = dyn_cast<ReshapeOp>(op)) {
       op = reshape.getSrc().getDefiningOp();
+      loadConsumer = reshape;
     }
     if (auto trans = dyn_cast<TransOp>(op)) {
       op = trans.getSrc().getDefiningOp();
+      loadConsumer = trans;
     }
   }
+
   auto scaleAfterLoad = op->getResult(0);
-  auto scaleSmem = getSharedMemoryScale(scaleAfterLoad, rewriter);
-  auto res = scaleAfterLoad;
-  auto localLoad =
-          rewriter.create<LocalLoadOp>(res.getLoc(), res.getType(), scaleSmem);
-  // rewriter.replaceOp(op, localLoad);
-  // rewriter.replaceOpWithNewOp<LocalLoadOp>(op, scaleAfterLoad.getType(), scaleSmem);
-  // assert(op);
-  // op.dump();
-  return localLoad;
+  auto scaleSmemAlloc = getSharedMemoryScale(scaleAfterLoad, rewriter, op->getLoc());
+  rewriter.setInsertionPointAfterValue(scaleSmemAlloc);
+  auto localLoad = rewriter.create<LocalLoadOp>(
+      op->getLoc(), scaleAfterLoad.getType(), scaleSmemAlloc);
+
+  rewriter.replaceAllUsesExcept(scaleAfterLoad, localLoad.getResult(), scaleSmemAlloc);
+
+  if (loadConsumer) {
+    return scale;
+  } else {
+    return localLoad;
+  }
 }
 
 class ScaledBlockedToMMAv5
@@ -637,10 +644,8 @@ public:
     RankedTensorType newScaleBType = RankedTensorType::get(
         oldScaleBType.getShape(), oldScaleBType.getElementType(), scaleBLayout);
 
-    auto lhsScale = dotOp.getLhsScale();
-    auto rhsScale = dotOp.getRhsScale();
-    // addSmemStageToScaleLoad(lhsScale, rewriter);
-    // addSmemStageToScaleLoad(rhsScale, rewriter);
+    auto lhsScale = addSmemStageToScaleLoad(dotOp.getLhsScale(), rewriter);
+    auto rhsScale = addSmemStageToScaleLoad(dotOp.getRhsScale(), rewriter);
 
     Value newScaleA =
         rewriter.create<ConvertLayoutOp>(loc, newScaleAType, lhsScale);
