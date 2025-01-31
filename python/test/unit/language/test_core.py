@@ -3599,6 +3599,20 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
             assert 'wgmma.mma_async.sync.aligned.m64n128k32.f32.e4m3.e4m3' in ptx
 
 
+@triton.jit
+def unshuffle(x, op_idx: tl.constexpr):
+    if op_idx == 1:
+        x = x.trans(1, 0)
+    M: tl.constexpr = x.shape[0]
+    K: tl.constexpr = x.shape[1]
+    x = x.reshape(M // 8, 8, K // (4 * 8 * 2), 4, 8, 2)
+    x = x.trans(0, 5, 1, 2, 4, 3)
+    x = x.reshape(M * 2, K // 2)
+    if op_idx == 1:
+        x = x.trans(1, 0)
+    return x
+
+
 @pytest.mark.parametrize("M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, num_warps, mma, kpack",
                          [(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, 4, mma, kpack)
                           for M, N, K in itertools.product([32, 64, 128], [32, 64, 128], [64, 128])
@@ -3622,6 +3636,51 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
         if mma == 16 and K == 64:
             pytest.skip(f"K == {K} too small for mfma {mma} in scaled_dot")
 
+    def shuffle(x, op_idx):
+        """
+        Given a uint8 tensor of shape (B, M, N), returns a tensor of shape
+        (B, M // 2, N // 2) of type int32 that implements this data movement:
+        https://neuralmagic.com/wp-content/uploads/2024/10/animation_4.gif
+        """
+        assert x.dtype == torch.uint8
+        assert op_idx in (0, 1)
+        batch = x.ndim - 2
+        assert batch >= 0
+
+        if op_idx == 1:
+            x = x.mT
+        init_shape = x.shape
+
+        # Pack the 4 subtiles into a single u32
+        micro_tile = (8, 4)
+        warp_tile = (2, 2)
+        k_tile = (1, 4)
+
+        sizes = list(x.shape[:-2])
+        # [rest, K, tile, microtile] per dimension
+        for i, (a, b, c) in enumerate(zip(k_tile, warp_tile, micro_tile)):
+            pack = a * b * c
+            assert x.shape[batch + i] % pack == 0, (f"Shape should be divisible by {pack}. Got {x.shape[batch + i]}")
+            sizes.append(x.shape[batch + i] // pack)
+            sizes += [a, b, c]
+        x = x.view(*sizes)
+        # Want [rest[0], microtile[0], rest[1], microtile[1], K[1], K[0], tile[1], tile[0]]
+        # And then flatten the first 2 dimensions and the last 6
+        perm = [0, 3, 4, 7, 5, 1, 6, 2]
+        perm = list(range(batch)) + [batch + p for p in perm]
+        x = x.permute(*perm)
+        x = x.contiguous()
+        # These are views
+        x = x.flatten(-6, -1)
+        x = x.flatten(-3, -2)
+        assert x.is_contiguous()
+        assert x.shape[-2] == init_shape[-2] // 2
+        assert x.shape[-1] == init_shape[-1] * 2
+        if op_idx == 1:
+            x = x.mT
+
+        return x
+
     @triton.jit
     def dot_scale_kernel(a_base, stride_a0, stride_a1, a_scale, b_base, stride_b0, stride_b1, b_scale, out,
                          BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr, type_a: tl.constexpr,
@@ -3632,8 +3691,12 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
         PACKED_BLOCK_K_B: tl.constexpr = BLOCK_K // DIV_FACTOR_B
         a_ptr = a_base + tl.arange(0, BLOCK_M)[:, None] * stride_a0 + tl.arange(0,
                                                                                 PACKED_BLOCK_K_A)[None, :] * stride_a1
-        b_ptr = b_base + tl.arange(0, PACKED_BLOCK_K_B)[:, None] * stride_b0 + tl.arange(0,
-                                                                                         BLOCK_N)[None, :] * stride_b1
+        if type_b == "e2m1":
+            b_ptr = b_base + tl.arange(0, BLOCK_K)[:, None] * stride_b0 + tl.arange(0,
+                                                                                    BLOCK_N // 2)[None, :] * stride_b1
+        else:
+            b_ptr = b_base + tl.arange(0, PACKED_BLOCK_K_B)[:, None] * stride_b0 + tl.arange(
+                0, BLOCK_N)[None, :] * stride_b1
 
         a = tl.load(a_ptr)
         b = tl.load(b_ptr)
@@ -3646,6 +3709,8 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
             scale_b_ptr = b_scale + tl.arange(0, BLOCK_N)[:, None] * SCALE_BLOCK_K + tl.arange(0,
                                                                                                SCALE_BLOCK_K)[None, :]
             b_scale = tl.load(scale_b_ptr)
+        if type_b == "e2m1":
+            b = unshuffle(b, op_idx=1)
         c = tl.dot_scaled(a, a_scale, type_a, b, b_scale, type_b)
         out_ptr = out + tl.arange(0, BLOCK_M)[:, None] * BLOCK_N + tl.arange(0, BLOCK_N)[None, :]
         tl.store(out_ptr, c.to(tl.bfloat16))
@@ -3832,9 +3897,11 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
         kernel_kwargs["kpack"] = kpack
         kernel_kwargs["matrix_instr_nonkdim"] = mma
     z = x.new_empty((M, N), dtype=comp_dtype)
+    z_ref = dot_scale_ref(x, scale_x, y, scale_y, type_a, type_b)
+    if type_b == "e2m1":
+        y = shuffle(y, op_idx=1)
     pgm = dot_scale_kernel[(1, )](x, *x.stride(), scale_x, y, *y.stride(), scale_y, z, M, N, K, type_a, type_b,
                                   **kernel_kwargs)
-    z_ref = dot_scale_ref(x, scale_x, y, scale_y, type_a, type_b)
     # Bigger tolerance for AMD MI200 devices.
     # MI200 devices use reduced precision fp16 and bf16 and flush input and output denormal values
     # to zero. Detailed info is at:
