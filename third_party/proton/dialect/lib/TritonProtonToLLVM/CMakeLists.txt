@@ -1,7 +1,7 @@
 add_triton_library(TritonProtonToLLVM
     RecordOpToLLVM.cpp
     BufferAllocOpToLLVM.cpp
-    AllocateProtonDeviceBuffer.cpp
+    ProtonLoweringPass.cpp
 
     DEPENDS
     TritonProtonConversionPassIncGen

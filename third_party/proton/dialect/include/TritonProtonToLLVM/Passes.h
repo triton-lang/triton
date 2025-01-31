@@ -13,7 +13,7 @@ template <typename T> class OperationPass;
 } // namespace mlir
 
 namespace mlir::triton {
-std::unique_ptr<OperationPass<ModuleOp>> createAllocateProtonDeviceBuffer();
+std::unique_ptr<OperationPass<ModuleOp>> createProtonLoweringPass();
 
 #define GEN_PASS_REGISTRATION
 #include "../third_party/proton/dialect/include/TritonProtonToLLVM/Passes.h.inc"

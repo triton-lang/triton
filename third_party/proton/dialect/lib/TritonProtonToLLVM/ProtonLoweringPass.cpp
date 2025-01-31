@@ -14,15 +14,15 @@ using namespace mlir::triton;
 
 namespace mlir {
 namespace triton {
-#define GEN_PASS_DEF_ALLOCATEPROTONDEVICEBUFFER
+#define GEN_PASS_DEF_PROTONLOWERINGPASS
 #include "../third_party/proton/dialect/include/TritonProtonToLLVM/Passes.h.inc"
 } // namespace triton
 } // namespace mlir
 
 namespace {
-struct AllocateProtonDeviceBuffer
-    : public mlir::triton::impl::AllocateProtonDeviceBufferBase<
-          AllocateProtonDeviceBuffer> {
+struct ProtonLoweringPass
+    : public mlir::triton::impl::ProtonLoweringPassBase<
+          ProtonLoweringPass> {
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     ModuleAllocation allocation(mod);
@@ -31,6 +31,7 @@ struct AllocateProtonDeviceBuffer
     MLIRContext *context = &getContext();
     auto loc = mod.getLoc();
 
+    /*BufferAllocOp Lowering*/
     bool hasProtonRecordOp = false;
     bool useDeviceBuffer = false;
     mod.walk([&](FunctionOpInterface funcOp) {
@@ -58,8 +59,8 @@ namespace mlir {
 
 namespace triton {
 
-std::unique_ptr<OperationPass<ModuleOp>> createAllocateProtonDeviceBuffer() {
-  return std::make_unique<AllocateProtonDeviceBuffer>();
+std::unique_ptr<OperationPass<ModuleOp>> createProtonLoweringPass() {
+  return std::make_unique<ProtonLoweringPass>();
 }
 
 } // namespace triton

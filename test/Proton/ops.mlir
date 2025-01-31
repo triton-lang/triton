@@ -1,4 +1,4 @@
-// RUN: triton-opt --split-input-file --allocate-proton-device-buffer %s | FileCheck %s
+// RUN: triton-opt --split-input-file --proton-lowering-pass %s | FileCheck %s
 
 module {
   tt.func @proton_record() {
