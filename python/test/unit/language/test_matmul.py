@@ -464,6 +464,7 @@ def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_
                                         b.stride(1), output.stride(0), output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K,
                                         NUM_STAGES=NUM_STAGES, USE_2D_SCALE_LOAD=USE_2D_SCALE_LOAD)
     ttgir = out.asm["ttgir"]
+    ptx = out.asm["ptx"]
     print(ttgir)
 #    return
 
@@ -511,8 +512,8 @@ def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_
                 print(f"SWP failed for M = {M}, N = {N}")
 
 
-# test_blocked_scale_mxfp(128, 256, 256, 128, 256, 256, 1, True, "cuda")
-test_blocked_scale_mxfp(1024, 1024, 512, 128, 128, 256, 3, True, "cuda")
+test_blocked_scale_mxfp(128, 256, 256, 128, 256, 256, 1, True, "cuda")
+# test_blocked_scale_mxfp(1024, 1024, 512, 128, 128, 256, 3, True, "cuda")
 
 
 @triton.jit
