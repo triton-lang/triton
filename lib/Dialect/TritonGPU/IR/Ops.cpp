@@ -463,15 +463,17 @@ OpFoldResult MemDescTransOp::fold(FoldAdaptor adaptor) {
   return {};
 }
 
-LogicalResult MemDescTransOp::inferReturnTypes(
-    MLIRContext *context, std::optional<Location> location, ValueRange operands,
-    DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
-    SmallVectorImpl<Type> &inferredReturnTypes) {
+LogicalResult
+MemDescTransOp::inferReturnTypes(MLIRContext *context,
+                                 std::optional<Location> location,
+                                 MemDescTransOp::Adaptor adaptor,
+                                 SmallVectorImpl<Type> &inferredReturnTypes) {
+
   // type is the same as the input
-  auto argTy = cast<MemDescType>(operands[0].getType());
-  auto argShape = argTy.getShape();
-  auto order = properties.as<Properties *>()->order.asArrayRef();
-  SmallVector<int64_t> retShape = applyPermutation(argTy.getShape(), order);
+  auto argTy = cast<MemDescType>(adaptor.getSrc().getType());
+  auto shape = argTy.getShape();
+  auto order = adaptor.getOrder();
+  SmallVector<int64_t> retShape = applyPermutation(shape, order);
 
   auto retEltTy = argTy.getElementType();
   Attribute argEncoding = argTy.getEncoding();
@@ -480,17 +482,17 @@ LogicalResult MemDescTransOp::inferReturnTypes(
     Dialect &dialect = argEncoding.getDialect();
     auto inferLayoutInterface = cast<DialectInferLayoutInterface>(&dialect);
     if (inferLayoutInterface
-            ->inferTransOpEncoding(argEncoding, argShape, order, retEncoding)
+            ->inferTransOpEncoding(argEncoding, shape, order, retEncoding)
             .failed()) {
       return failure();
     }
   }
-  auto memDescTy = cast<MemDescType>(argTy);
-  inferredReturnTypes.push_back(MemDescType::get(
-      retShape, retEltTy, retEncoding, memDescTy.getMemorySpace(),
-      memDescTy.getMutableMemory()));
+  inferredReturnTypes.push_back(
+      MemDescType::get(retShape, retEltTy, retEncoding, argTy.getMemorySpace(),
+                       argTy.getMutableMemory()));
   return success();
 }
+
 // LocalAllocOp
 void LocalAllocOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
