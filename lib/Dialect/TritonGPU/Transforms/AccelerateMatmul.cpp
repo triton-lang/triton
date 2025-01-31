@@ -294,12 +294,8 @@ public:
       bool allowTranspose = eltType.isF16() || eltType.isBF16();
       // a = getSharedMemoryMMAOperand(a, rewriter, 0, allowTranspose);
       // convert A operand
-      int minBitwidth =
-          std::min(computeOrigBitWidth(a), computeOrigBitWidth(b));
-      Type minType = rewriter.getIntegerType(minBitwidth);
       auto newAEncoding = DotOperandEncodingAttr::get(
-          oldAType.getContext(), 0, newRetType.getEncoding(),
-          minBitwidth > 0 ? minType : oldAType.getElementType());
+          oldAType.getContext(), 0, newRetType.getEncoding(), 2);
       auto newAType = RankedTensorType::get(
           oldAType.getShape(), oldAType.getElementType(), newAEncoding);
       a = rewriter.create<ConvertLayoutOp>(a.getLoc(), newAType, a);
