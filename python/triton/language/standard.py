@@ -260,7 +260,6 @@ def _sum_combine(a, b):
 
 
 def _pick_sum_dtype(in_dtype: core.constexpr, dtype: core.constexpr):
-    # FIXME: Workaround the interpreter not wrapping constexpr args.
     dtype = core._unwrap_if_constexpr(dtype)
     if dtype is not None:
         return dtype
@@ -272,11 +271,6 @@ def _pick_sum_dtype(in_dtype: core.constexpr, dtype: core.constexpr):
         out_dtype = core.int32 if in_dtype.int_bitwidth < 32 else None
     elif in_dtype.is_int_unsigned():
         out_dtype = core.uint32 if in_dtype.int_bitwidth < 32 else None
-    # For float bitwidths less than 32, pick float32 to avoid overflow or
-    # precision loss.
-    elif in_dtype.is_floating():
-        out_dtype = core.float32 if in_dtype.primitive_bitwidth < 32 else None
-
     return out_dtype
 
 
