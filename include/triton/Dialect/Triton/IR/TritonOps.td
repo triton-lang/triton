@@ -830,8 +830,7 @@ def TT_MakeRangeOp : TT_Op<"make_range", [Pure]> {
 def TT_ElementwiseInlineAsmOp : TT_Op<"elementwise_inline_asm", [
   Elementwise,
   SameOperandsAndResultEncoding,
-  DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
-  DeclareOpInterfaceMethods<ConditionallySpeculatable>
+  DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
 ]> {
   let summary = "inline assembly applying an elementwise operation to a group of packed elements.";
   let description = [{
