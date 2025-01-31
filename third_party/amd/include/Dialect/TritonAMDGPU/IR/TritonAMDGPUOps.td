@@ -145,6 +145,7 @@ def ConcatOp : TT_AMDGPU_Op<"concat", [Pure]> {
   }];
 
   let hasVerifier = 1;
+  let hasCanonicalizer = 1;
 }
 
 def InstructionSchedHint : TT_AMDGPU_Op<"instruction_sched_hint", []> {
