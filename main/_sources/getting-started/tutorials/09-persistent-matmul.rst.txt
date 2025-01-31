@@ -37,7 +37,7 @@ Users can pass command-line arguments to specify matrix dimensions and iteration
 
 Note that currently this tutorial will fail on devices with a small shared memory size, such as RTX-4090.
 
-.. GENERATED FROM PYTHON SOURCE LINES 21-759
+.. GENERATED FROM PYTHON SOURCE LINES 21-760
 
 
 
@@ -49,15 +49,15 @@ Note that currently this tutorial will fail on devices with a small shared memor
     TMA benchmarks will be running with experimental grid constant TMA descriptor.
     M=32, N=32, K=32 verification naive vs: torch: ✅ cublas: ✅ persistent: ✅ 
     M=8192, N=8192, K=512 verification naive vs: torch: ✅ cublas: ✅ persistent: ✅ 
-    175.151 5492.820 ROOT
+    174.945 5499.292 ROOT
     ├─ nan 0.051 _ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastIZZZNS0_23direct_copy_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE1_clEvENKUlvE8_clEvEUlN3c104HalfEE_EEvS4_RKT_EUliE_EEviT1_
     ├─ nan 0.046 _ZN2at6native54_GLOBAL__N__d8ceb000_21_DistributionNormal_cu_0c5b6e8543distribution_elementwise_grid_stride_kernelIfLi4EZNS0_9templates4cuda20normal_and_transformIN3c104HalfEfPNS_17CUDAGeneratorImplEZZZNS4_13normal_kernelIS9_EEvRKNS_10TensorBaseEddT_ENKUlvE_clEvENKUlvE1_clEvEUlfE_EEvRNS_18TensorIteratorBaseET1_T2_EUlP24curandStatePhilox4_32_10E0_ZNS1_27distribution_nullary_kernelIS7_f6float4S9_SO_SH_EEvSJ_SL_RKT3_T4_EUlifE_EEviNS_15PhiloxCudaStateESK_SL_
-    ├─ 177.356 4262.122 cublas [M=8192, N=8192, K=512]
-    │  └─ nan 4262.122 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
-    ├─ 155.363 442.316 matmul_kernel [M=8192, N=8192, K=512]
-    ├─ 169.841 404.611 matmul_kernel_persistent [M=8192, N=8192, K=512]
-    └─ 179.109 383.673 torch [M=8192, N=8192, K=512]
-       └─ nan 383.673 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+    ├─ 177.096 4268.394 cublas [M=8192, N=8192, K=512]
+    │  └─ nan 4268.394 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+    ├─ 155.084 443.112 matmul_kernel [M=8192, N=8192, K=512]
+    ├─ 169.900 404.469 matmul_kernel_persistent [M=8192, N=8192, K=512]
+    └─ 179.321 383.221 torch [M=8192, N=8192, K=512]
+       └─ nan 383.221 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
 
 
 
@@ -770,13 +770,14 @@ Note that currently this tutorial will fail on devices with a small shared memor
 
     def show_profile(precision, profile_name):
         import triton.profiler.viewer as proton_viewer
-        metrics = ["time/ms"]
+        metric_names = ["time/ms"]
         if precision == 'fp8':
-            metrics = ["tflop8/s"] + metrics
+            metric_names = ["tflop8/s"] + metric_names
         elif precision == 'fp16':
-            metrics = ["tflop16/s"] + metrics
+            metric_names = ["tflop16/s"] + metric_names
         file_name = f"{profile_name}.hatchet"
-        proton_viewer.parse(metrics, file_name, depth=100)
+        tree, metrics = proton_viewer.parse(metric_names, file_name)
+        proton_viewer.print_tree(tree, metrics)
 
 
     if __name__ == "__main__":
@@ -811,7 +812,7 @@ Note that currently this tutorial will fail on devices with a small shared memor
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (1 minutes 11.049 seconds)
+   **Total running time of the script:** (1 minutes 4.892 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_09-persistent-matmul.py:
