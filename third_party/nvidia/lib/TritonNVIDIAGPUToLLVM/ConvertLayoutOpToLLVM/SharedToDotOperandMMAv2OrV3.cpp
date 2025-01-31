@@ -2,6 +2,7 @@
 #include "Utility.h"
 #include "mlir/Support/LLVM.h"
 #include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 using namespace mlir;
 

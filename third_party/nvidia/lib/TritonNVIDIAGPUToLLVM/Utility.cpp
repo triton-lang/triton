@@ -2,6 +2,7 @@
 #include "Dialect/NVGPU/IR/Dialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 namespace mlir {
 namespace LLVM {

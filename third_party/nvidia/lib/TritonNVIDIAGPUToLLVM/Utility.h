@@ -3,8 +3,6 @@
 
 #include "nvidia/include/TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 
-#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"

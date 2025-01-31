@@ -1019,17 +1019,17 @@ struct FpToFpOpConversion
       return outVals;
     }
     size_t numElements = 4;
-    if (srcElementType.isFloat8E4M3FN() || dstElementType.isFloat8E4M3FN() ||
-        srcElementType.isFloat8E4M3FNUZ() ||
-        dstElementType.isFloat8E4M3FNUZ() ||
-        srcElementType.isFloat8E5M2FNUZ() ||
-        dstElementType.isFloat8E5M2FNUZ()) {
+    if (llvm::isa<mlir::Float8E4M3FNType, mlir::Float8E4M3FNUZType,
+                  mlir::Float8E5M2FNUZType>(srcElementType) ||
+        llvm::isa<mlir::Float8E4M3FNType, mlir::Float8E4M3FNUZType,
+                  mlir::Float8E5M2FNUZType>(dstElementType)) {
       numElements = 2;
     }
     bool useFP16IntermediateSrc =
-        srcElementType.isF32() && !(isaFamily == AMD::ISAFamily::CDNA3 &&
-                                    (dstElementType.isFloat8E4M3FNUZ() ||
-                                     dstElementType.isFloat8E5M2FNUZ()));
+        srcElementType.isF32() &&
+        !(isaFamily == AMD::ISAFamily::CDNA3 &&
+          (llvm::isa<mlir::Float8E4M3FNUZType, mlir::Float8E5M2FNUZType>(
+              dstElementType)));
     bool isDstFP32 = dstElementType.isF32();
     Type srcType = useFP16IntermediateSrc ? f16_ty : srcElementType;
     Type dstType = isDstFP32 ? f16_ty : dstElementType;

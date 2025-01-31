@@ -20,19 +20,24 @@ static MfmaTypeId chooseAppropriateMfmaId(mlir::Type dataTypeA,
   if (dataTypeA.isInteger(8) && dataTypeB.isInteger(8)) {
     return MfmaTypeId::I8TyId;
   }
-  if (dataTypeA.isFloat8E4M3FNUZ() && dataTypeB.isFloat8E4M3FNUZ()) {
+  if (llvm::isa<mlir::Float8E4M3FNUZType>(dataTypeA) &&
+      llvm::isa<mlir::Float8E4M3FNUZType>(dataTypeB)) {
     return MfmaTypeId::Fp8Fp8TyId;
   }
-  if (dataTypeA.isFloat8E4M3FNUZ() && dataTypeB.isFloat8E5M2FNUZ()) {
+  if (llvm::isa<mlir::Float8E4M3FNUZType>(dataTypeA) &&
+      llvm::isa<mlir::Float8E5M2FNUZType>(dataTypeB)) {
     return MfmaTypeId::Fp8Bf8TyId;
   }
-  if (dataTypeA.isFloat8E5M2FNUZ() && dataTypeB.isFloat8E4M3FNUZ()) {
+  if (llvm::isa<mlir::Float8E5M2FNUZType>(dataTypeA) &&
+      llvm::isa<mlir::Float8E4M3FNUZType>(dataTypeB)) {
     return MfmaTypeId::Bf8Fp8TyId;
   }
-  if (dataTypeA.isFloat8E5M2FNUZ() && dataTypeB.isFloat8E5M2FNUZ()) {
+  if (llvm::isa<mlir::Float8E5M2FNUZType>(dataTypeA) &&
+      llvm::isa<mlir::Float8E5M2FNUZType>(dataTypeB)) {
     return MfmaTypeId::Bf8Bf8TyId;
   }
-  if (dataTypeA.isFloat8E5M2() && dataTypeB.isFloat8E5M2()) {
+  if (llvm::isa<mlir::Float8E5M2Type>(dataTypeA) &&
+      llvm::isa<mlir::Float8E5M2Type>(dataTypeB)) {
     return MfmaTypeId::Fp16TyId;
   }
   llvm_unreachable("Unsupported input argument type.");
