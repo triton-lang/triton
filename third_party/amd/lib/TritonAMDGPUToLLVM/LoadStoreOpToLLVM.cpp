@@ -20,12 +20,9 @@ using namespace mlir::triton::gpu;
 
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryBase;
-using ::mlir::LLVM::AMD::getContiguity;
-using mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget;
 using ::mlir::LLVM::AMD::getVectorSize;
 using ::mlir::LLVM::AMD::llLoad;
 using ::mlir::LLVM::AMD::llStore;
-using ::mlir::triton::AMD::ISAFamily;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 
 namespace {
@@ -402,24 +399,21 @@ struct BufferLoadOpConversion
 struct AsyncCopyGlobalToLocalOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::AsyncCopyGlobalToLocalOp>,
       public LoadStoreConversionBase {
-  using ConvertOpToLLVMPattern<
-      triton::gpu::AsyncCopyGlobalToLocalOp>::ConvertOpToLLVMPattern;
-
   AsyncCopyGlobalToLocalOpConversion(LLVMTypeConverter &converter,
                                      const AMD::TargetInfo &targetInfo,
                                      ModuleAxisInfoAnalysis &axisAnalysisPass,
                                      PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<triton::gpu::AsyncCopyGlobalToLocalOp>(converter,
-                                                                      benefit),
+      : ConvertOpToLLVMPattern(converter, benefit),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
 
-  bool isLoadWidthSupported(unsigned bits,
-                            const AMD::TargetInfo &targetInfo) const {
+  bool supportsLoadWidth(unsigned bits,
+                         const AMD::TargetInfo &targetInfo) const {
     llvm::SmallSetVector<unsigned, 10> supportedWidths;
+    using mlir::triton::AMD::ISAFamily;
     switch (targetInfo.getISAFamily()) {
-    case mlir::triton::AMD::ISAFamily::CDNA1:
-    case mlir::triton::AMD::ISAFamily::CDNA2:
-    case mlir::triton::AMD::ISAFamily::CDNA3:
+    case ISAFamily::CDNA1:
+    case ISAFamily::CDNA2:
+    case ISAFamily::CDNA3:
       supportedWidths.insert(8);
       supportedWidths.insert(16);
       supportedWidths.insert(32);
@@ -444,10 +438,12 @@ struct AsyncCopyGlobalToLocalOpConversion
 
     auto srcTy = op.getSrc().getType();
     auto srcEncoding = srcTy.getEncoding();
-    assert((isa<BlockedEncodingAttr, SliceEncodingAttr>(srcEncoding) &&
-            "Unexpected srcEncoding in AsyncCopyGlobalToLocalOpConversion"));
-    assert(srcTy.getShape().size() <= 2 && "Async copy only supports 1d and 2d "
-                                           "tensors: Unexpected rank of %src");
+
+    if (!isa<BlockedEncodingAttr, SliceEncodingAttr>(srcEncoding))
+      return rewriter.notifyMatchFailure(
+          op, "requires Blocked or Slice encoding for src");
+    if (srcTy.getShape().size() != 2)
+      return rewriter.notifyMatchFailure(op, "only supports 2d tensors");
 
     auto dstTy = op.getResult().getType();
     auto resElemTy = getTypeConverter()->convertType(dstTy.getElementType());
@@ -460,8 +456,14 @@ struct AsyncCopyGlobalToLocalOpConversion
     auto smemObj = mlir::LLVM::getSharedMemoryObjectFromStruct(
         loc, llDst, resElemTy, rewriter);
 
-    unsigned maxVec = getContiguity(op.getSrc(), axisAnalysisPass);
-
+    // We can load N elements at a time if:
+    //  1. Every group of N source pointers are contiguous.  For example, if
+    //     N=2, then the pointers should be [x, x+1, y, y+1, ...].
+    //  2. The mask (if present) has "alignment" N, meaning that each group of N
+    //     mask bits are the same.  For example if N=2, the mask must be
+    //     [x, x, y, y, ...].
+    unsigned maxVec =
+        mlir::LLVM::AMD::getContiguity(op.getSrc(), axisAnalysisPass);
     Value mask = op.getMask();
     if (mask) {
       maxVec = std::min(maxVec, getMaskAlignment(mask));
@@ -483,9 +485,12 @@ struct AsyncCopyGlobalToLocalOpConversion
       auto basis = srcToSharedLayout.getBasis(kLane, inLane)[0];
       unsigned expected = maxVec * (1 << inLane);
       if (basis != expected) {
-        return emitError(loc, "Invalid layout in AsyncCopy: ")
-               << "Lane: " << 1 + inLane << " is " << basis << " should be "
-               << expected << "\n";
+        LDBG("detected uncoalesced layout from blocked to shared in async copy "
+             "for lane "
+             << 1 + inLane << "; given " << basis << " but expected "
+             << expected);
+        return rewriter.notifyMatchFailure(op,
+                                           "does not write coalesced into LDS");
       }
     }
 
@@ -501,18 +506,18 @@ struct AsyncCopyGlobalToLocalOpConversion
     assert(ok);
 
     int vecBits = vecTy.getNumElements() * vecTy.getElementTypeBitWidth();
-    if (!isLoadWidthSupported(vecBits, targetInfo)) {
-      return emitError(loc, "Async copy does not support the required load "
-                            "vectorization, got ")
-             << vecBits << " bits";
+    if (!supportsLoadWidth(vecBits, targetInfo)) {
+      return rewriter.notifyMatchFailure(
+          op, "Async copy does not support the required load vectorization");
     }
 
     int vecBytes = vecBits / 8;
     assert(llvm::isPowerOf2_32(vecBytes));
     Value vecBytesVal = b.i32_val(vecBytes);
 
-    Value cacheModifiers = b.i32_val(
-        getCtrlBitsForCacheModifierOnTarget(op.getCache(), false, targetInfo));
+    Value cacheModifiers =
+        b.i32_val(mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
+            op.getCache(), false, targetInfo));
 
     Value llMask = adaptor.getMask();
     SmallVector<Value> maskElems;
@@ -536,28 +541,28 @@ struct AsyncCopyGlobalToLocalOpConversion
         rewriter.create<ROCDL::GlobalLoadLDSOp>(
             loc, srcPtr, shmemAddrs[i], vecBytesVal, /*offset=*/b.i32_val(0),
             cacheModifiers);
-      } else {
-        Block *currentBlock = rewriter.getInsertionBlock();
-        Block *afterLoad =
-            rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
-        Block *loadBlock = rewriter.createBlock(afterLoad);
-        rewriter.setInsertionPointToEnd(currentBlock);
-        rewriter.create<LLVM::CondBrOp>(loc, maskElems[srcIdx], loadBlock,
-                                        afterLoad);
-        rewriter.setInsertionPointToStart(loadBlock);
-        rewriter.create<ROCDL::GlobalLoadLDSOp>(
-            loc, srcPtr, shmemAddrs[i], vecBytesVal, /*offset=*/b.i32_val(0),
-            cacheModifiers);
+        continue;
+      }
 
-        rewriter.create<LLVM::BrOp>(loc, afterLoad);
-        rewriter.setInsertionPointToStart(afterLoad);
-        if (other) {
-          Value storeVal =
-              packElementRangeIntoVector(rewriter, this->getTypeConverter(),
-                                         loc, vecTy, otherElems, srcIdx);
-          llStore(rewriter, loc, shmemAddrs[i], storeVal,
-                  b.icmp_ne(maskElems[srcIdx], b.true_val()), 0, op.getCache());
-        }
+      Block *currentBlock = rewriter.getInsertionBlock();
+      Block *afterLoad =
+          rewriter.splitBlock(currentBlock, rewriter.getInsertionPoint());
+      Block *loadBlock = rewriter.createBlock(afterLoad);
+      rewriter.setInsertionPointToEnd(currentBlock);
+      rewriter.create<LLVM::CondBrOp>(loc, maskElems[srcIdx], loadBlock,
+                                      afterLoad);
+      rewriter.setInsertionPointToStart(loadBlock);
+      rewriter.create<ROCDL::GlobalLoadLDSOp>(
+          loc, srcPtr, shmemAddrs[i], vecBytesVal, /*offset=*/b.i32_val(0),
+          cacheModifiers);
+
+      rewriter.create<LLVM::BrOp>(loc, afterLoad);
+      rewriter.setInsertionPointToStart(afterLoad);
+      if (other) {
+        Value storeVal = packElementRangeIntoVector(
+            rewriter, this->getTypeConverter(), loc, vecTy, otherElems, srcIdx);
+        llStore(rewriter, loc, shmemAddrs[i], storeVal,
+                b.icmp_ne(maskElems[srcIdx], b.true_val()), 0, op.getCache());
       }
     }
 
@@ -1636,13 +1641,6 @@ private:
 
 struct AsyncWaitConversion : public ConvertOpToLLVMPattern<AsyncWaitOp> {
   using ConvertOpToLLVMPattern<AsyncWaitOp>::ConvertOpToLLVMPattern;
-
-  AsyncWaitConversion(LLVMTypeConverter &converter,
-                      const AMD::TargetInfo &targetInfo,
-                      ModuleAxisInfoAnalysis &axisAnalysisPass,
-                      PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<AsyncWaitOp>(converter, benefit) {}
-
   LogicalResult
   matchAndRewrite(AsyncWaitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -1658,12 +1656,6 @@ struct AsyncWaitConversion : public ConvertOpToLLVMPattern<AsyncWaitOp> {
 struct AsyncCommitGroupConversion
     : public ConvertOpToLLVMPattern<AsyncCommitGroupOp> {
   using ConvertOpToLLVMPattern<AsyncCommitGroupOp>::ConvertOpToLLVMPattern;
-
-  AsyncCommitGroupConversion(LLVMTypeConverter &converter,
-                             const AMD::TargetInfo &targetInfo,
-                             ModuleAxisInfoAnalysis &axisAnalysisPass,
-                             PatternBenefit benefit)
-      : ConvertOpToLLVMPattern<AsyncCommitGroupOp>(converter, benefit) {}
 
   LogicalResult
   matchAndRewrite(AsyncCommitGroupOp op, OpAdaptor adaptor,
@@ -1685,11 +1677,12 @@ void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        int numWarps,
                                        ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                        PatternBenefit benefit) {
-  patterns.add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
-               StoreOpConversion, BufferLoadOpConversion,
-               BufferStoreOpConversion, BufferAtomicRMWOpConversion,
-               AsyncCopyGlobalToLocalOpConversion, AsyncCommitGroupConversion,
-               AsyncWaitConversion, AsyncCommitGroupConversion>(
-      typeConverter, targetInfo, axisInfoAnalysis, benefit);
+  patterns
+      .add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
+           StoreOpConversion, BufferLoadOpConversion, BufferStoreOpConversion,
+           BufferAtomicRMWOpConversion, AsyncCopyGlobalToLocalOpConversion>(
+          typeConverter, targetInfo, axisInfoAnalysis, benefit);
+  patterns.add<AsyncWaitConversion, AsyncCommitGroupConversion>(typeConverter,
+                                                                benefit);
 }
 } // namespace mlir::triton::AMD
