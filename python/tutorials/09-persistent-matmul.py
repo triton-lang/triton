@@ -541,10 +541,9 @@ def matmul_kernel_descriptor_persistent(a_ptr, b_ptr, c_ptr,  #
         tiles_per_SM += 1
 
     tile_id = start_pid - NUM_SMS
+    tile_id_c = start_pid - NUM_SMS
     ki = -1
 
-    pid_m = 0
-    pid_n = 0
     offs_am = 0
     offs_bn = 0
 
@@ -574,17 +573,26 @@ def matmul_kernel_descriptor_persistent(a_ptr, b_ptr, c_ptr,  #
 
         if ki == k_tiles - 1:
 
+            tile_id_c += NUM_SMS
+            group_id = tile_id_c // num_pid_in_group
+            first_pid_m = group_id * GROUP_SIZE_M
+            group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+            pid_m = first_pid_m + (tile_id_c % group_size_m)
+            pid_n = (tile_id_c % num_pid_in_group) // group_size_m
+            offs_cm = pid_m * BLOCK_SIZE_M
+            offs_cn = pid_n * BLOCK_SIZE_N
+
             if EPILOGUE_SUBTILE:
                 acc = tl.reshape(accumulator, (BLOCK_SIZE_M, 2, BLOCK_SIZE_N // 2))
                 acc = tl.permute(acc, (0, 2, 1))
                 acc0, acc1 = tl.split(acc)
                 c0 = acc0.to(dtype)
-                c_desc.store([offs_am, offs_bn], c0)
+                c_desc.store([offs_cm, offs_cn], c0)
                 c1 = acc1.to(dtype)
-                c_desc.store([offs_am, offs_bn + BLOCK_SIZE_N // 2], c1)
+                c_desc.store([offs_cm, offs_cn + BLOCK_SIZE_N // 2], c1)
             else:
                 c = accumulator.to(dtype)
-                c_desc.store([offs_am, offs_bn], c)
+                c_desc.store([offs_cm, offs_cn], c)
 
             accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
