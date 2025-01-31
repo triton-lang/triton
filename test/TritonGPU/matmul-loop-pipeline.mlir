@@ -38,9 +38,10 @@ tt.func public @scalar_load(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: i32, %arg3: 
   %c1_i32 = arith.constant 1 : i32
   %2 = scf.for %i = %arg1 to %arg2 step %c1_i32 iter_args(%k = %arg3) -> f32 : i32 {
     // CHECK: tt.load %arg0
-    %0 = tt.load %arg0 {loop.cluster = 0 : i64, loop.stage = 1 : i64} : !tt.ptr<f32>
-    %1 = arith.addf %0, %k {loop.cluster = 1 : i64, loop.stage = 0 : i64} : f32
-    scf.yield %1 : f32
+    %0 = tt.load %arg0 {loop.cluster = 1 : i32, loop.stage = 0 : i32} : !tt.ptr<f32>
+    %1 = arith.addf %0, %k {loop.cluster = 1 : i32, loop.stage = 0 : i32} : f32
+    %2 = arith.addf %1, %k {loop.cluster = 0 : i32, loop.stage = 1 : i32} : f32
+    scf.yield %2 : f32
   } {num_stages = 2 : i32}
   tt.return %2 : f32
 }
