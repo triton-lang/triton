@@ -36,6 +36,7 @@ function(add_proton_library name)
     PRIVATE
       "${CUPTI_INCLUDE_DIR}"
       "${JSON_INCLUDE_DIR}"
+      "${PROTON_SRC_DIR}/include"
   )
 
   # If HIP is AMD-based
