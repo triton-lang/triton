@@ -603,9 +603,14 @@ FailureOr<scf::ForOp> preProcessLoopForTC05MMAPipelining(scf::ForOp forOp,
   SmallVector<Operation *> mmaOps;
   forOp.walk([&](Operation *op) {
     // Skip MMA nested in another forOp
-    if (isa<ttng::TCGen5MMAOp>(op) &&
-        op->getParentOfType<scf::ForOp>() == forOp) {
-      mmaOps.push_back(op);
+    if (op->getParentOfType<scf::ForOp>() != forOp) {
+      if (isa<ttng::TCGen5MMAOp>(op)) {
+        mmaOps.push_back(op);
+      } else if (auto scaledDot = dyn_cast<ttng::TCGen5MMAScaledOp>(op)) {
+	if (true) {
+	  mmaOps.push_back(op);
+	}
+      }
     }
   });
 

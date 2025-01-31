@@ -173,7 +173,8 @@ static Value getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter,
   return rewriter.create<LocalAllocOp>(arg.getLoc(), newType, arg);
 }
 
-static LocalAllocOp getSharedMemoryScale(Value arg, mlir::PatternRewriter &rewriter, Location loc) {
+static LocalAllocOp
+getSharedMemoryScale(Value arg, mlir::PatternRewriter &rewriter, Location loc) {
   OpBuilder::InsertionGuard g(rewriter);
   auto argType = cast<RankedTensorType>(arg.getType());
   assert(argType.getEncoding() && "unexpected tensor type");
@@ -514,7 +515,7 @@ Value addSmemStageToScaleLoad(Value scale, mlir::PatternRewriter &rewriter) {
   // rewrite load(scale) -> local_load(local_alloc(load(scale)))
   OpBuilder::InsertionGuard g(rewriter);
   auto op = scale.getDefiningOp();
-  Operation* loadConsumer = nullptr;
+  Operation *loadConsumer = nullptr;
 
   while (!isa<LoadOp>(op)) {
     if (auto reshape = dyn_cast<ReshapeOp>(op)) {
@@ -528,12 +529,15 @@ Value addSmemStageToScaleLoad(Value scale, mlir::PatternRewriter &rewriter) {
   }
 
   auto scaleAfterLoad = op->getResult(0);
-  auto scaleSmemAlloc = getSharedMemoryScale(scaleAfterLoad, rewriter, op->getLoc());
+  auto scaleSmemAlloc =
+      getSharedMemoryScale(scaleAfterLoad, rewriter, op->getLoc());
+
   rewriter.setInsertionPointAfterValue(scaleSmemAlloc);
   auto localLoad = rewriter.create<LocalLoadOp>(
       op->getLoc(), scaleAfterLoad.getType(), scaleSmemAlloc);
 
-  rewriter.replaceAllUsesExcept(scaleAfterLoad, localLoad.getResult(), scaleSmemAlloc);
+  rewriter.replaceAllUsesExcept(scaleAfterLoad, localLoad.getResult(),
+                                scaleSmemAlloc);
 
   if (loadConsumer) {
     return scale;
