@@ -865,12 +865,13 @@ public:
         return true;
       }
 
+      // TODO: enable this condition, when fp32 -> fp16 cast works correctly
       // Consider this case as non legal,
       // despite this case is covered by fp16 FMA.
       // because v_dot expected to give
       // both better performance and computational precision
-      if (dotTypes.a.isF16() && dotTypes.b.isF16() && dotTypes.c.isF16() &&
-          dotTypes.d.isF16() && k % 2 == 0) {
+      if (false && dotTypes.a.isF16() && dotTypes.b.isF16() &&
+          dotTypes.c.isF16() && dotTypes.d.isF16() && k % 2 == 0) {
         return false;
       }
 
@@ -973,7 +974,9 @@ public:
       return failure();
     }
 
-    if (tryAccelerateF16WithVDot(dotOp, rewriter, dotTypes).succeeded()) {
+    // TODO: enable this condition, when fp32 -> fp16 cast works correctly
+    if (false &&
+        tryAccelerateF16WithVDot(dotOp, rewriter, dotTypes).succeeded()) {
       return success();
     }
 
