@@ -464,6 +464,12 @@ getTransitiveUserInBlock(Operation *baseOp, scf::ForOp &forOp) {
         for (Operation *user : op->getUsers())
           if (user->getBlock() == op->getBlock())
             dfs(user, baseOp, anyOp);
+        if (auto tmemCopy = dyn_cast<triton::nvidia_gpu::TMEMCopyOp>(op)) {
+          auto tmemAlloc =
+              tmemCopy.getDst()
+                  .getDefiningOp<triton::nvidia_gpu::TMEMAllocOp>();
+          dfs(tmemAlloc, baseOp, anyOp);
+        }
       };
   // We are matching the behavior before refactoring:
   //   For loops without num_stage attributes, we check for dot users.
