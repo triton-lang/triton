@@ -503,8 +503,8 @@ assignMemoryLayouts(scf::ForOp &forOp,
     Operation *firstUse = getFirstUseOfPipelinedLoad(&op);
     LDBG("first use for load " << op);
     LDBG("  - use: " << *firstUse);
-    auto [stageForFirstUse, clusterForFirstUse] = tt::getStageCluster(firstUse);
-    if (stageForFirstUse == sLoad)
+    auto firstUseStageCluster = tt::maybeGetStageCluster(firstUse);
+    if (!firstUseStageCluster || firstUseStageCluster->first == sLoad)
       continue;
 
     // Try to set shared encoding etc for the pipelined load.
