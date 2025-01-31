@@ -21,11 +21,13 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#include "MMAHelpers.h"
 #include "Utility.h"
 #include "mlir/Support/LLVM.h"
 
 using namespace mlir;
 using namespace mlir::triton;
+using namespace mlir::triton::NVIDIA;
 
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::triton::gpu::getShapePerCTA;
@@ -57,9 +59,9 @@ triton::nvgpu::WGMMAEltType getMmaOperandType(Value a, bool allowTF32) {
     return triton::nvgpu::WGMMAEltType::tf32;
   } else if (aTy.isInteger(8)) {
     return triton::nvgpu::WGMMAEltType::s8;
-  } else if (aTy.isFloat8E5M2()) {
+  } else if (llvm::isa<Float8E5M2Type>(aTy)) {
     return triton::nvgpu::WGMMAEltType::e5m2;
-  } else if (aTy.isFloat8E4M3FN()) {
+  } else if (llvm::isa<Float8E4M3FNType>(aTy)) {
     return triton::nvgpu::WGMMAEltType::e4m3;
   } else {
     llvm::report_fatal_error("Unsupported mma operand type found");
@@ -91,25 +93,10 @@ int64_t getSwizzlingFromLayout(const SharedEncodingAttr &layout,
 
 static Value createDescriptor(ConversionPatternRewriter &rewriter, Location loc,
                               int64_t swizzling, uint32_t stride) {
-  // Create descriptor based on the format described in the spec:
-  // https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#asynchronous-warpgroup-level-matrix-shared-memory-layout-matrix-descriptor
-  union WGMMADescriptor {
-    uint64_t descriptor;
-    struct {
-      uint64_t baseAddress : 14;
-      uint64_t : 2;
-      uint64_t leadDimensionBaseOffset : 14;
-      uint64_t : 2;
-      uint64_t strideDimensionBaseOffset : 14;
-      uint64_t : 3;
-      uint64_t matrixBaseOffset : 3;
-      uint64_t : 10;
-      uint64_t swizzlingMode : 2;
-    };
-  };
-  static_assert(sizeof(WGMMADescriptor) == 8,
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  static_assert(sizeof(SMEMDescriptor) == 8,
                 "Descriptor size should be 64 bits.");
-  WGMMADescriptor desc;
+  SMEMDescriptor desc;
   desc.descriptor = 0;
   switch (swizzling) {
   case 0:
@@ -129,75 +116,68 @@ static Value createDescriptor(ConversionPatternRewriter &rewriter, Location loc,
   }
   desc.strideDimensionBaseOffset = swizzling >> 1;
   desc.leadDimensionBaseOffset = (swizzling * stride) >> 4;
-  return int_val(64, desc.descriptor);
+  return b.int_val(64, desc.descriptor);
 }
 
-class DotOpMmaV3SmemLoader {
-public:
-  DotOpMmaV3SmemLoader() {}
-  DotOpMmaV3SmemLoader(Value tensor, Value base, SmallVector<int64_t> shape,
-                       Value warpId, unsigned int dimWpt, bool trans,
-                       SmallVector<unsigned int> instrShape,
-                       ConversionPatternRewriter &rewriter, Location loc)
-      : base(base), shape(shape), warpId(warpId), dimWpt(dimWpt), trans(trans),
-        instrShape(instrShape) {
-    auto ty = cast<MemDescType>(tensor.getType());
-    auto sharedLayout = cast<SharedEncodingAttr>(ty.getEncoding());
-    ord = sharedLayout.getOrder();
-    const int perPhase = sharedLayout.getPerPhase();
-    const int maxPhase = sharedLayout.getMaxPhase();
-    elemBytes = ty.getElementTypeBitWidth() / 8;
-    elemsPerSwizzlingRow = 128 / perPhase / elemBytes;
-    elemsPerSwizzlingRowVal = i32_val(elemsPerSwizzlingRow);
+mlir::triton::NVIDIA::DotOpMmaV3SmemLoader::DotOpMmaV3SmemLoader(
+    Value tensor, Value base, SmallVector<int64_t> shape, Value warpId,
+    unsigned int dimWpt, bool trans, SmallVector<unsigned int> instrShape,
+    int64_t elementBitwidth, ConversionPatternRewriter &rewriter, Location loc)
+    : base(base), shape(shape), warpId(warpId), dimWpt(dimWpt), trans(trans),
+      instrShape(instrShape), elemBits(elementBitwidth) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto ty = cast<MemDescType>(tensor.getType());
+  auto sharedLayout = cast<SharedEncodingAttr>(ty.getEncoding());
+  ord = sharedLayout.getOrder();
+  const int perPhase = sharedLayout.getPerPhase();
+  const int maxPhase = sharedLayout.getMaxPhase();
+  elemsPerSwizzlingRow = 128 * 8 / perPhase / elemBits;
+  elemsPerSwizzlingRowVal = b.i32_val(elemsPerSwizzlingRow);
 
-    uint32_t widthInByte = shape[ord[0]] * elemBytes;
-    int64_t swizzling = getSwizzlingFromLayout(sharedLayout, widthInByte);
+  uint32_t widthInByte = shape[ord[0]] * elemBits / 8;
+  int64_t swizzling = getSwizzlingFromLayout(sharedLayout, widthInByte);
 
-    descriptor = createDescriptor(rewriter, loc, swizzling, shape[ord[1]]);
+  descriptor = createDescriptor(rewriter, loc, swizzling, shape[ord[1]]);
+}
+
+Value mlir::triton::NVIDIA::DotOpMmaV3SmemLoader::smemLoad(
+    int a, int b, ConversionPatternRewriter &rewriter, Location loc) {
+  auto tb = TritonLLVMOpBuilder(loc, rewriter);
+  Value k = tb.i32_val(b * instrShape[1]);
+  Value m = tb.add(tb.i32_val(a * dimWpt * instrShape[0]),
+                   tb.mul(warpId, tb.i32_val(instrShape[0])));
+  if (trans) {
+    std::swap(k, m);
   }
-
-  Value smemLoad(int a, int b, ConversionPatternRewriter &rewriter,
-                 Location loc) {
-    Value k = i32_val(b * instrShape[1]);
-    Value m = add(i32_val(a * dimWpt * instrShape[0]),
-                  mul(warpId, i32_val(instrShape[0])));
-    if (trans) {
-      std::swap(k, m);
-    }
-    Value leading_offset = mul(udiv(k, elemsPerSwizzlingRowVal),
-                               i32_val(shape[ord[1]] * elemsPerSwizzlingRow));
-    Value stride_offset = mul(m, elemsPerSwizzlingRowVal);
-    Value offset = add(add(leading_offset, stride_offset),
-                       urem(k, elemsPerSwizzlingRowVal));
-    Value off1 = mul(i32_val(elemBytes), offset);
-    Value off_ = zext(i64_ty, udiv(off1, i32_val(16)));
-
-    Value loadDesc = add(descriptor, off_);
-    // Add the base at the end to make it easier to do loop invariant code
-    // motion.
-    loadDesc = add(loadDesc, lshr(shl(ptrtoint(i64_ty, base), int_val(64, 46)),
-                                  int_val(64, 50)));
-    return loadDesc;
+  Value leading_offset =
+      tb.mul(tb.udiv(k, elemsPerSwizzlingRowVal),
+             tb.i32_val(shape[ord[1]] * elemsPerSwizzlingRow));
+  Value stride_offset = tb.mul(m, elemsPerSwizzlingRowVal);
+  Value offset = tb.add(tb.add(leading_offset, stride_offset),
+                        tb.urem(k, elemsPerSwizzlingRowVal));
+  Value off1;
+  // Avoid the runtime udiv if we know the elements are byte multiples
+  if (elemBits % 8) {
+    off1 = tb.udiv(tb.mul(tb.i32_val(elemBits), offset), tb.i32_val(8));
+  } else {
+    off1 = tb.mul(tb.i32_val(elemBits / 8), offset);
   }
+  Value off_ = tb.zext(i64_ty, tb.udiv(off1, tb.i32_val(16)));
 
-private:
-  Value base;
-  SmallVector<int64_t> shape;
-  Value warpId;
-  int dimWpt;
-  bool trans;
-  Value elemsPerSwizzlingRowVal;
-  SmallVector<unsigned int> instrShape;
-  ArrayRef<unsigned> ord;
-  int elemsPerSwizzlingRow;
-  int elemBytes;
-  Value descriptor;
-};
+  Value loadDesc = tb.add(descriptor, off_);
+  // Add the base at the end to make it easier to do loop invariant code
+  // motion.
+  loadDesc = tb.add(
+      loadDesc, tb.lshr(tb.shl(tb.ptrtoint(i64_ty, base), tb.int_val(64, 46)),
+                        tb.int_val(64, 50)));
+  return loadDesc;
+}
 
 DotOpMmaV3SmemLoader loadA(const LLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Location loc,
                            const NvidiaMmaEncodingAttr &mmaEncoding,
                            Value tensor, Value smemObjBase, Value thread) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto aTy = cast<triton::gpu::TensorOrMemDesc>(tensor.getType());
   auto aSharedLayout = dyn_cast<SharedEncodingAttr>(aTy.getEncoding());
   assert(aSharedLayout && "only support load dot operand from shared.");
@@ -207,18 +187,15 @@ DotOpMmaV3SmemLoader loadA(const LLVMTypeConverter *typeConverter,
   bool transA = aOrd[0] == 0;
   auto shapePerCTA = getShapePerCTA(aTy);
 
-  int numRepM = ceil<unsigned>(shapePerCTA[0], instrShape[0] * wpt[0]);
-  int numRepK = ceil<unsigned>(shapePerCTA[1], instrShape[2]);
-
   // The descriptor should be calculated based on the first warp of the
   // warpgroup.
-  Value warp = and_(udiv(thread, i32_val(32)), i32_val(0xFFFFFFFC));
+  Value warp = b.and_(b.udiv(thread, b.i32_val(32)), b.i32_val(0xFFFFFFFC));
   // Workaround for a bug in ptxas 12.3 that cause a failure in
   // test_core.py::test_dot. The shuffle will force the compiler to treat the
   // value as uniform and prevent wrong optimizations.
   warp = mlir::LLVM::NVIDIA::shuffleIdx(loc, rewriter, warp, 0);
-  Value warpM = urem(warp, i32_val(wpt[0]));
-  Value warpId = urem(warpM, i32_val(shapePerCTA[0] / instrShape[0]));
+  Value warpM = b.urem(warp, b.i32_val(wpt[0]));
+  Value warpId = b.urem(warpM, b.i32_val(shapePerCTA[0] / instrShape[0]));
 
   return {tensor,
           smemObjBase,
@@ -227,6 +204,7 @@ DotOpMmaV3SmemLoader loadA(const LLVMTypeConverter *typeConverter,
           wpt[0],
           transA,
           {instrShape[0], instrShape[2]},
+          aTy.getElementTypeBitWidth(),
           rewriter,
           loc};
 }
@@ -235,6 +213,7 @@ DotOpMmaV3SmemLoader loadB(const LLVMTypeConverter *typeConverter,
                            ConversionPatternRewriter &rewriter, Location loc,
                            NvidiaMmaEncodingAttr &mmaEncoding, Value tensor,
                            Value base, Value thread) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto bTy = cast<MemDescType>(tensor.getType());
   auto bSharedLayout = cast<SharedEncodingAttr>(bTy.getEncoding());
   assert(bSharedLayout && "only support load B from shared.");
@@ -244,13 +223,10 @@ DotOpMmaV3SmemLoader loadB(const LLVMTypeConverter *typeConverter,
   bool transB = bOrd[0] == 1;
   auto shapePerCTA = triton::gpu::getShapePerCTA(bTy);
 
-  int numRepK = ceil<unsigned>(shapePerCTA[0], instrShape[2]);
-  int numRepN = ceil<unsigned>(shapePerCTA[1], instrShape[1] * wpt[1]);
-
-  Value warp = and_(udiv(thread, i32_val(32)), i32_val(0xFFFFFFFC));
-  Value warpMN = udiv(warp, i32_val(wpt[0]));
-  Value warpN = urem(warpMN, i32_val(wpt[1]));
-  Value warpId = urem(warpN, i32_val(shapePerCTA[1] / instrShape[1]));
+  Value warp = b.and_(b.udiv(thread, b.i32_val(32)), b.i32_val(0xFFFFFFFC));
+  Value warpMN = b.udiv(warp, b.i32_val(wpt[0]));
+  Value warpN = b.urem(warpMN, b.i32_val(wpt[1]));
+  Value warpId = b.urem(warpN, b.i32_val(shapePerCTA[1] / instrShape[1]));
 
   return {tensor,
           base,
@@ -259,6 +235,7 @@ DotOpMmaV3SmemLoader loadB(const LLVMTypeConverter *typeConverter,
           wpt[1],
           transB,
           {instrShape[1], instrShape[2]},
+          bTy.getElementTypeBitWidth(),
           rewriter,
           loc};
 }
@@ -292,6 +269,7 @@ llvm::SmallVector<Value> loadReg(ConversionPatternRewriter &rewriter,
                                  const SmallVector<Value> &elements,
                                  int startIndex, int numElements,
                                  Operation *insertBefore) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   OpBuilder::InsertionGuard g(rewriter);
   rewriter.setInsertionPoint(insertBefore);
 
@@ -313,9 +291,9 @@ llvm::SmallVector<Value> loadReg(ConversionPatternRewriter &rewriter,
     Value pack = rewriter.create<LLVM::UndefOp>(loc, packTy);
     for (int j = 0; j < numElemsPer32Bits; ++j) {
       Value element = elements[startIndex + i * numElemsPer32Bits + j];
-      pack = insert_element(packTy, pack, element, i32_val(j));
+      pack = b.insert_element(packTy, pack, element, b.i32_val(j));
     }
-    pack = bitcast(pack, rewriter.getIntegerType(32));
+    pack = b.bitcast(pack, rewriter.getIntegerType(32));
     mmaOut[i] = pack;
   }
   return mmaOut;
@@ -326,15 +304,18 @@ SmallVector<Value> unpackAccumulator(ConversionPatternRewriter &rewriter,
                                      Location loc,
                                      const SmallVector<Value> &packed,
                                      RankedTensorType tensorTy) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   if (!tensorTy.getElementType().isF16())
     return packed;
   // For fp16 the accumulator is pack into 32-bit integers so we need to unpack
   // it.
   SmallVector<Value> results;
   for (Value elem : packed) {
-    elem = bitcast(elem, vec_ty(rewriter.getF16Type(), 2));
-    results.push_back(extract_element(rewriter.getF16Type(), elem, i32_val(0)));
-    results.push_back(extract_element(rewriter.getF16Type(), elem, i32_val(1)));
+    elem = b.bitcast(elem, vec_ty(rewriter.getF16Type(), 2));
+    results.push_back(
+        b.extract_element(rewriter.getF16Type(), elem, b.i32_val(0)));
+    results.push_back(
+        b.extract_element(rewriter.getF16Type(), elem, b.i32_val(1)));
   }
   return results;
 }
@@ -355,19 +336,20 @@ static Value faddAccumulate(ConversionPatternRewriter &rewriter, Location loc,
 static SmallVector<Value> emitWait(ConversionPatternRewriter &rewriter,
                                    Location loc, SmallVector<Value> acc,
                                    int pendings) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Type> types(acc.size(), acc[0].getType());
   auto structTy =
       LLVM::LLVMStructType::getLiteral(rewriter.getContext(), types);
   Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structTy);
   int i = 0;
   for (Value v : acc) {
-    llvmStruct = insert_val(structTy, llvmStruct, v, i++);
+    llvmStruct = b.insert_val(structTy, llvmStruct, v, i++);
   }
   Value res = rewriter.create<triton::nvgpu::WGMMAWaitGroupOp>(loc, llvmStruct,
                                                                pendings);
   SmallVector<Value> results;
   for (int i = 0; i < acc.size(); ++i) {
-    results.push_back(extract_val(types[0], res, i));
+    results.push_back(b.extract_val(types[0], res, i));
   }
   return results;
 }
@@ -379,6 +361,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                          Value loadedC, bool allowTF32,
                          bool needsPartialAccumulator,
                          uint32_t maxNumImpreciseAcc, bool sync, Value thread) {
+  auto tb = TritonLLVMOpBuilder(loc, rewriter);
   auto aTensorTy = cast<triton::gpu::TensorOrMemDesc>(a.getType());
   auto bTensorTy = cast<triton::gpu::TensorOrMemDesc>(b.getType());
   auto dTensorTy = cast<RankedTensorType>(d.getType());
@@ -451,13 +434,13 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
       auto accTy =
           LLVM::LLVMStructType::getLiteral(rewriter.getContext(), elemTypes);
       Value d;
-      Value useC = i1_val(0);
+      Value useC = tb.i1_val(0);
       if (!zeroAcc) {
         d = packLLElements(loc, typeConverter, mmaOut, rewriter, accTy);
-        useC = i1_val(1);
+        useC = tb.i1_val(1);
       }
       if (useCOperand)
-        useC = and_(useC, useCOperand);
+        useC = tb.and_(useC, useCOperand);
       uint32_t numLowPrecisionAcc = 0;
       Value partialAcc;
       for (int k = 0; k < numRepK; ++k) {
@@ -490,7 +473,7 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
         mmaAcc = rewriter.create<triton::nvgpu::WGMMAOp>(
             loc, accTy, a, b, useC, mmaAcc, M, N, K, eltTypeC, eltTypeA,
             eltTypeB, layoutA, layoutB);
-        useC = i1_val(1);
+        useC = tb.i1_val(1);
         if (needsPartialAccumulator)
           partialAcc = mmaAcc;
         else

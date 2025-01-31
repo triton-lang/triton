@@ -50,14 +50,15 @@ GatherOpConversion::matchAndRewrite(GatherOp op, OpAdaptor adaptor,
 
 static Value convertIndexToI32(Location loc, Value index,
                                ConversionPatternRewriter &rewriter) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   unsigned idxWidth = index.getType().getIntOrFloatBitWidth();
   // The LL index computations are performed with 32 bit integers. If the
   // indices are something else, cast them to i32.
   if (idxWidth > 32) {
-    index = trunc(i32_ty, index);
+    index = b.trunc(i32_ty, index);
   } else if (idxWidth < 32) {
     // Negative indices don't make sense, so zero-extend.
-    index = zext(i32_ty, index);
+    index = b.zext(i32_ty, index);
   }
   return index;
 }
@@ -65,6 +66,7 @@ static Value convertIndexToI32(Location loc, Value index,
 void GatherOpConversion::emitGatherInShared(
     GatherOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const {
   Location loc = op.getLoc();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   RankedTensorType srcType = op.getSrc().getType();
 
   // Compute the src subtensor shape owned by this CTA.
@@ -95,12 +97,12 @@ void GatherOpConversion::emitGatherInShared(
     // tensor.
     Value offset = LLVM::linearize(rewriter, loc, indices, srcShapePerCTA);
     // Emit the offset into the shared memory and then store the value.
-    Value ptr = gep(smemBase.getType(), elemType, smemBase, offset);
-    store(value, ptr);
+    Value ptr = b.gep(smemBase.getType(), elemType, smemBase, offset);
+    b.store(value, ptr);
   }
 
   // Synchronize the whole CTA.
-  barrier();
+  b.barrier();
 
   // Grab the index values owned by this thread.
   SmallVector<Value> idxValues =
@@ -124,8 +126,8 @@ void GatherOpConversion::emitGatherInShared(
   for (auto [i, idx, indices] : llvm::enumerate(idxValues, dstIndices)) {
     indices[axis] = convertIndexToI32(loc, idx, rewriter);
     Value offset = LLVM::linearize(rewriter, loc, indices, srcShapePerCTA);
-    Value ptr = gep(smemBase.getType(), elemType, smemBase, offset);
-    results[i] = load(elemType, ptr);
+    Value ptr = b.gep(smemBase.getType(), elemType, smemBase, offset);
+    results[i] = b.load(elemType, ptr);
   }
 
   Value packed =
@@ -188,6 +190,7 @@ void GatherOpConversion::emitWarpLocalGather(
     GatherOp op, OpAdaptor adaptor, ConversionPatternRewriter &rewriter) const {
   MLIRContext *ctx = op.getContext();
   Location loc = op.getLoc();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   RankedTensorType srcType = op.getSrc().getType();
   RankedTensorType idxType = op.getIndices().getType();
 
@@ -299,7 +302,7 @@ void GatherOpConversion::emitWarpLocalGather(
                           {{kBlock, blockId},
                            {kWarp, warpId},
                            {kLane, laneId},
-                           {kRegister, i32_val(idxReg)}});
+                           {kRegister, b.i32_val(idxReg)}});
     assert(column.size() == otherDims.size());
 
     // Combine the computed column with the data-dependent gather index.
@@ -320,7 +323,7 @@ void GatherOpConversion::emitWarpLocalGather(
     int32_t srcBase =
         invertSrcRegMapColPart.apply(normalizedColumn).front().second;
 
-    Value result = undef(srcValues.front().getType());
+    Value result = b.undef(srcValues.front().getType());
     for (unsigned i = 0; i != numRegsPerColumn; ++i) {
       int32_t rest =
           invertSrcRegMapRest.apply({{kGatherDim, i}}).front().second;
@@ -328,7 +331,7 @@ void GatherOpConversion::emitWarpLocalGather(
 
       Value value =
           targetInfo.shuffleIdx(rewriter, loc, srcValues[srcRegIdx], srcLane);
-      result = select(icmp_eq(i32_val(srcRegIdx), srcReg), value, result);
+      result = b.select(b.icmp_eq(b.i32_val(srcRegIdx), srcReg), value, result);
     }
 
     results.push_back(result);

@@ -1,6 +1,6 @@
 import pytest
 import subprocess
-from triton.profiler.viewer import get_min_time_flops, get_min_time_bytes, get_raw_metrics, format_frames, derive_metrics, filter_frames
+from triton.profiler.viewer import get_min_time_flops, get_min_time_bytes, get_raw_metrics, format_frames, derive_metrics, filter_frames, parse
 from triton.profiler.hook import COMPUTE_METADATA_SCOPE_NAME
 import numpy as np
 
@@ -50,13 +50,13 @@ def test_format_frames(option):
         gf, _, _, _ = get_raw_metrics(f)
         gf = format_frames(gf, option)
         if option == "full":
-            idx = gf.dataframe["name"] == "/home/user/projects/example.py/test.py:foo@1"
+            idx = gf.dataframe["name"] == "/home/user/projects/example.py/test.py:1@foo"
         elif option == "file_function_line":
-            idx = gf.dataframe["name"] == "test.py:foo@1"
+            idx = gf.dataframe["name"] == "test.py:1@foo"
         elif option == "function_line":
-            idx = gf.dataframe["name"] == "foo@1"
+            idx = gf.dataframe["name"] == "1@foo"
         elif option == "file_function":
-            idx = gf.dataframe["name"] == "test.py:foo"
+            idx = gf.dataframe["name"] == "test.py@foo"
         assert idx.sum() == 1
 
 
@@ -86,16 +86,25 @@ def test_filter_metadata():
         assert "triton_kernel" in gf.dataframe["name"].tolist()
 
 
+def test_parse():
+    gf, derived_metrics = parse(["time/s"], triton_example_file)
+    for derived_metric in derived_metrics:
+        assert derived_metric in gf.inc_metrics or derived_metric in gf.exc_metrics
+
+
 def test_min_time_flops():
     with open(cuda_example_file, "r") as f:
         gf, _, _, device_info = get_raw_metrics(f)
         ret = get_min_time_flops(gf.dataframe, device_info)
         device0_idx = gf.dataframe["device_id"] == "0"
         device1_idx = gf.dataframe["device_id"] == "1"
+        device2_idx = gf.dataframe["device_id"] == "2"
         # sm89
         np.testing.assert_allclose(ret[device0_idx].to_numpy(), [[0.000025]], atol=1e-5)
         # sm90
         np.testing.assert_allclose(ret[device1_idx].to_numpy(), [[0.00005]], atol=1e-5)
+        # sm100
+        np.testing.assert_allclose(ret[device2_idx].to_numpy(), [[0.000025]], atol=1e-5)
     with open(hip_example_file, "r") as f:
         gf, _, _, device_info = get_raw_metrics(f)
         ret = get_min_time_flops(gf.dataframe, device_info)
@@ -146,33 +155,35 @@ def derivation_metrics_test(metrics, expected_data, sample_file, rtol=1e-7, atol
 def test_avg_time_derivation():
     derivation_metrics_test(
         metrics=["avg_time/s", "avg_time/ms", "avg_time/us", "avg_time/ns"], expected_data={
-            "avg_time/s (inc)": [0.0000372, 0.0000205, 0.000205], "avg_time/ms (inc)": [0.037236, 0.02048, 0.2048],
-            "avg_time/us (inc)": [37.236364, 20.48, 204.8], "avg_time/ns (inc)": [37236.363636, 20480.0, 204800.0]
+            "avg_time/s (inc)": [0.0000512, 0.0000205, 0.000205,
+                                 0.000205], "avg_time/ms (inc)": [0.0512, 0.02048, 0.2048, 0.2048], "avg_time/us (inc)":
+            [51.2, 20.48, 204.8, 204.8], "avg_time/ns (inc)": [51200.0, 20480.0, 204800.0, 204800.0]
         }, sample_file=cuda_example_file)
 
 
 def test_util():
     derivation_metrics_test(metrics=["util"], expected_data={
-        "util": [np.nan, 0.247044, 0.147830],
+        "util": [np.nan, 0.247044, 0.147830, 0.118451],
     }, sample_file=cuda_example_file)
 
 
 def test_time_derivation():
     derivation_metrics_test(
         metrics=["time/s", "time/ms", "time/us", "time/ns"], expected_data={
-            "time/s (inc)": [0.0004096, 0.0002048, 0.0002048],
-            "time/ms (inc)": [0.4096, 0.2048, 0.2048],
-            "time/us (inc)": [409.6, 204.8, 204.8],
-            "time/ns (inc)": [409600.0, 204800.0, 204800.0],
-            "time/% (inc)": [100.0, 50.0, 50.0],
+            "time/s (inc)": [0.000614, 0.0002048, 0.0002048, 0.0002048],
+            "time/ms (inc)": [0.6144, 0.2048, 0.2048, 0.2048],
+            "time/us (inc)": [614.4, 204.8, 204.8, 204.8],
+            "time/ns (inc)": [614400.0, 204800.0, 204800.0, 204800.0],
+            "time/% (inc)": [100.0, 50.0, 50.0, 50.0],
         }, sample_file=cuda_example_file)
 
 
 def test_bytes_derivation():
     derivation_metrics_test(
         metrics=["byte/s", "gbyte/s", "tbyte/s"], expected_data={
-            "byte/s (inc)": [2.68554687e+11, 4.88281250e+11, 4.88281250e+10], "gbyte/s (inc)":
-            [268.5546875, 488.28125, 48.828125], "tbyte/s (inc)": [0.26855469, 0.48828125, 0.04882812]
+            "byte/s (inc)": [1.953125e+11, 4.88281250e+11, 4.88281250e+10,
+                             4.88281250e+10], "gbyte/s (inc)": [195.3125, 488.28125, 48.828125, 48.828125],
+            "tbyte/s (inc)": [0.195312, 0.48828125, 0.04882812, 0.04882812]
         }, sample_file=cuda_example_file)
 
 
@@ -180,8 +191,9 @@ def test_flops_derivation():
     derivation_metrics_test(
         metrics=["flop8/s", "gflop8/s", "tflop8/s"],
         expected_data={
-            "flop8/s (inc)": [2.68554687e+14, 4.88281250e+14, 4.88281250e+13], "gflop8/s (inc)":
-            [268554.6875, 488281.25, 48828.125], "tflop8/s (inc)": [268.554687, 488.28125, 48.828125]
+            "flop8/s (inc)": [3.417969e+14, 4.88281250e+14, 4.88281250e+13,
+                              4.88281250e+14], "gflop8/s (inc)": [341796.875, 488281.25, 48828.125, 488281.25],
+            "tflop8/s (inc)": [341.796875, 488.28125, 48.828125, 488.28125]
         },
         sample_file=cuda_example_file,
     )

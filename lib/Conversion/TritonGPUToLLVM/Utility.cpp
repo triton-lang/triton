@@ -15,7 +15,7 @@
 static int __builtin_clz(unsigned x) {
   unsigned long r;
   _BitScanReverse(&r, x);
-  return static_cast<int>(r);
+  return static_cast<int>(r ^ 31);
 }
 
 static int __builtin_ctz(unsigned x) {
@@ -62,6 +62,7 @@ SmallVector<std::pair<StringAttr, Value>>
 applyLinearLayout(Location loc, RewriterBase &rewriter,
                   const LinearLayout &layout,
                   ArrayRef<std::pair<StringAttr, Value>> indices) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   assert(layout.getNumInDims() == indices.size());
   for (auto [inDimName, idx] : indices) {
     assert(layout.hasInDim(inDimName) && "Invalid inDimName");
@@ -88,13 +89,13 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
   SmallVector<int32_t> constantComponent =
       llvm::to_vector(llvm::make_second_range(layout.apply(constantIns)));
 
-  Value zero = i32_val(0);
+  Value zero = b.i32_val(0);
   SmallVector<std::pair<StringAttr, Value>> outIndices;
   for (auto [i, outDimName] : llvm::enumerate(layout.getOutDimNames())) {
     if (constantComponent[i] == 0)
       outIndices.push_back({outDimName, zero});
     else
-      outIndices.push_back({outDimName, i32_val(constantComponent[i])});
+      outIndices.push_back({outDimName, b.i32_val(constantComponent[i])});
   }
 
   for (auto [inDimName, idx] : indices) {
@@ -104,13 +105,13 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
 
     int nBits = layout.getInDimSizeLog2(inDimName);
     for (int i = 0; i < nBits; i++) {
-      Value bit = and_(idx, i32_val(1 << i));
-      Value bit_is_zero = icmp_eq(bit, zero);
+      Value bit = b.and_(idx, b.i32_val(1 << i));
+      Value bit_is_zero = b.icmp_eq(bit, zero);
       for (auto &[outDimName, outIdx] : outIndices) {
         int32_t basis = layout.getBasis(inDimName, i, outDimName);
         if (basis == 0)
           continue;
-        outIdx = xor_(outIdx, select(bit_is_zero, zero, i32_val(basis)));
+        outIdx = b.xor_(outIdx, b.select(bit_is_zero, zero, b.i32_val(basis)));
       }
     }
   }
@@ -123,18 +124,20 @@ std::tuple<Value, Value, Value> emitHardwareTuple(Location loc,
                                                   const TargetInfoBase &target,
                                                   bool withCTAOffset,
                                                   unsigned threadsPerWarpCst) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value threadId = getThreadId(rewriter, loc);
-  Value threadsPerWarp = i32_val(threadsPerWarpCst);
-  Value laneId = urem(threadId, threadsPerWarp);
-  Value warpId = udiv(threadId, threadsPerWarp);
+  Value threadsPerWarp = b.i32_val(threadsPerWarpCst);
+  Value laneId = b.urem(threadId, threadsPerWarp);
+  Value warpId = b.udiv(threadId, threadsPerWarp);
   Value blockId =
-      withCTAOffset ? target.getClusterCTAId(rewriter, loc) : i32_val(0);
+      withCTAOffset ? target.getClusterCTAId(rewriter, loc) : b.i32_val(0);
   return {laneId, warpId, blockId};
 }
 
 SmallVector<SmallVector<Value>>
 emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
             Attribute layout, RankedTensorType type, bool withCTAOffset) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   MLIRContext *ctx = rewriter.getContext();
   auto shape = type.getShape();
 
@@ -161,7 +164,7 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
   // This approach produces code with lower register pressure and
   // less computations, compared to fused L(r,t,w,b) method.
   auto idxsBase = applyLinearLayout(loc, rewriter, ll,
-                                    {{kRegister, i32_val(0)},
+                                    {{kRegister, b.i32_val(0)},
                                      {kLane, laneId},
                                      {kWarp, warpId},
                                      {kBlock, blockId}});
@@ -173,7 +176,7 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
       auto dimName = idxBase.first;
       assert(dimName == idxReg.first &&
              "dim names of block+warp+thread and register idx should be equal");
-      auto idx = xor_(idxBase.second, i32_val(idxReg.second));
+      auto idx = b.xor_(idxBase.second, b.i32_val(idxReg.second));
       idxs.emplace_back(dimName, idx);
     }
     assert(idxs.size() == rank);
@@ -195,6 +198,7 @@ Value getSmemVecAddr(const LinearLayout &regLayout,
                      triton::gpu::MemDescType sharedTy, Type elemLlvmTy,
                      Value regId, Value laneId, Value warpId, Value blockId,
                      Location loc, RewriterBase &rewriter) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   MLIRContext *ctx = rewriter.getContext();
   StringAttr kBlock = str_attr("block");
   StringAttr kRegister = str_attr("register");
@@ -283,16 +287,16 @@ Value getSmemVecAddr(const LinearLayout &regLayout,
                                            {kBlock, blockId}}));
     for (auto i = 0; i < rank; i++) {
       multiDimTensorOffsets[i].second =
-          add(multiDimTensorOffsets[i].second, smemOffsets[i]);
+          b.add(multiDimTensorOffsets[i].second, smemOffsets[i]);
     }
     smemOffset = applyLinearLayout(loc, rewriter, invertAllocSharedLayout,
                                    multiDimTensorOffsets)[0]
                      .second;
     Value baseToAllocBaseDist = dot(rewriter, loc, smemOffsets, smemStrides);
-    smemOffset = sub(smemOffset, baseToAllocBaseDist);
+    smemOffset = b.sub(smemOffset, baseToAllocBaseDist);
   }
   auto ptrTy = smemBase.getType();
-  auto vecAddr = gep(ptrTy, elemLlvmTy, smemBase, smemOffset);
+  auto vecAddr = b.gep(ptrTy, elemLlvmTy, smemBase, smemOffset);
   vecAddr.setInbounds(true);
   return vecAddr;
 }
@@ -300,12 +304,12 @@ Value getSmemVecAddr(const LinearLayout &regLayout,
 } // namespace
 
 bool emitTransferBetweenRegistersAndShared(
-    RankedTensorType registerTy, triton::gpu::MemDescType sharedTy,
-    Type elemLlvmTy, std::optional<int32_t> maxVecElems,
-    const SharedMemoryObject &smemObj, Location loc, RewriterBase &rewriter,
-    const TargetInfoBase &target,
+    LinearLayout &regLayout, triton::gpu::MemDescType sharedTy, Type elemLlvmTy,
+    std::optional<int32_t> maxVecElems, const SharedMemoryObject &smemObj,
+    Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
     std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback) {
   MLIRContext *ctx = rewriter.getContext();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   StringAttr kBlock = str_attr("block");
   StringAttr kRegister = str_attr("register");
@@ -313,8 +317,6 @@ bool emitTransferBetweenRegistersAndShared(
   StringAttr kWarp = str_attr("warp");
 
   auto shape = sharedTy.getShape();
-  LinearLayout regLayout =
-      triton::gpu::toLinearLayout(shape, registerTy.getEncoding());
   LinearLayout sharedLayout = triton::gpu::toLinearLayout(
       shape, sharedTy.getEncoding(), elemLlvmTy.getIntOrFloatBitWidth());
   LinearLayout regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
@@ -360,17 +362,16 @@ bool emitTransferBetweenRegistersAndShared(
   // Thus we use `pseudoinvert` instead of `invert` here for simplicity.
   auto allocShape = sharedTy.getAllocShape();
   LinearLayout invertAllocSharedLayout =
-      triton::gpu::toLinearLayout(allocShape.take_back(registerTy.getRank()),
+      triton::gpu::toLinearLayout(allocShape.take_back(sharedTy.getRank()),
                                   sharedTy.getEncoding(),
                                   elemLlvmTy.getIntOrFloatBitWidth())
           .pseudoinvert();
 
   int numElems = regToSharedLayout.getInDimSize(kRegister);
   auto vecTy = vec_ty(elemLlvmTy, vecElems);
-  Value zero = i32_val(0);
   SmallVector<Value> ret;
   for (int i = 0; i < numElems / vecElems; i++) {
-    auto regId = i32_val(i * vecElems);
+    auto regId = b.i32_val(i * vecElems);
     auto vecAddr = getSmemVecAddr(
         regLayout, regToSharedLayout, invertAllocSharedLayout, smemObj,
         sharedTy, elemLlvmTy, regId, laneId, warpId, blockId, loc, rewriter);
@@ -379,22 +380,37 @@ bool emitTransferBetweenRegistersAndShared(
   return true;
 }
 
+bool emitTransferBetweenRegistersAndShared(
+    RankedTensorType registerTy, triton::gpu::MemDescType sharedTy,
+    Type elemLlvmTy, std::optional<int32_t> maxVecElems,
+    const SharedMemoryObject &smemObj, Location loc, RewriterBase &rewriter,
+    const TargetInfoBase &target,
+    std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback) {
+  auto regLayout = triton::gpu::toLinearLayout(
+      registerTy.getShape(), registerTy.getEncoding(),
+      elemLlvmTy.getIntOrFloatBitWidth());
+  return emitTransferBetweenRegistersAndShared(
+      regLayout, sharedTy, elemLlvmTy, maxVecElems, smemObj, loc, rewriter,
+      target, perVectorCallback);
+}
+
 SmallVector<Value> loadSharedToDistributed(RankedTensorType dstTy,
                                            triton::gpu::MemDescType srcTy,
                                            Type elemLlvmTy,
                                            const SharedMemoryObject &smemObj,
                                            Location loc, RewriterBase &rewriter,
                                            const TargetInfoBase &target) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value> ret;
   bool success = emitTransferBetweenRegistersAndShared(
       dstTy, srcTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemObj, loc,
       rewriter, target, [&](VectorType vecTy, Value vecAddr) {
-        auto vecVal = load(vecTy, vecAddr);
+        auto vecVal = b.load(vecTy, vecAddr);
         vecVal.setAlignment(vecTy.getNumElements() *
                             elemLlvmTy.getIntOrFloatBitWidth() / 8);
 
         for (int v = 0; v < vecTy.getNumElements(); v++) {
-          ret.push_back(extract_element(elemLlvmTy, vecVal, i32_val(v)));
+          ret.push_back(b.extract_element(elemLlvmTy, vecVal, b.i32_val(v)));
         }
       });
   if (!success)
@@ -410,17 +426,18 @@ void storeDistributedToShared(triton::gpu::MemDescType dstTy,
                               RewriterBase &rewriter,
                               const TargetInfoBase &target,
                               std::pair<size_t, Type> *const llvmOpCount) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   bool success = emitTransferBetweenRegistersAndShared(
       srcTy, dstTy, elemLlvmTy, /*maxVecElems=*/std::nullopt, smemObj, loc,
       rewriter, target, [&](VectorType vecTy, Value vecAddr) {
         ArrayRef<Value> vals = srcVals.take_front(vecTy.getNumElements());
         srcVals = srcVals.drop_front(vecTy.getNumElements());
 
-        Value vec = undef(vecTy);
+        Value vec = b.undef(vecTy);
         for (int i = 0; i < vals.size(); i++) {
-          vec = insert_element(vec, vals[i], i32_val(i));
+          vec = b.insert_element(vec, vals[i], b.i32_val(i));
         }
-        store(vec, vecAddr)
+        b.store(vec, vecAddr)
             .setAlignment(vecTy.getNumElements() *
                           elemLlvmTy.getIntOrFloatBitWidth() / 8);
         if (llvmOpCount) {
@@ -486,6 +503,15 @@ Value createConstantF16(Location loc, OpBuilder &rewriter, float v) {
   auto type = type::f16Ty(rewriter.getContext());
   return rewriter.create<LLVM::ConstantOp>(loc, type,
                                            rewriter.getF16FloatAttr(v));
+}
+
+Value createConstantBF16(Location loc, OpBuilder &rewriter, float v) {
+  APFloat apf(v);
+  bool ignored;
+  apf.convert(APFloat::BFloat(), APFloat::rmNearestTiesToEven, &ignored);
+  auto type = type::bf16Ty(rewriter.getContext());
+  auto attr = FloatAttr::get(type, apf);
+  return rewriter.create<LLVM::ConstantOp>(loc, type, attr);
 }
 
 Value createConstantF32(Location loc, OpBuilder &rewriter, float v) {
@@ -557,6 +583,7 @@ bool isConstantZero(Value v) {
 Value getStructFromSharedMemoryObject(Location loc,
                                       const SharedMemoryObject &smemObj,
                                       RewriterBase &rewriter) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto elems = smemObj.getElems();
   auto types = smemObj.getTypes();
   auto structTy =
@@ -565,7 +592,7 @@ Value getStructFromSharedMemoryObject(Location loc,
   Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structTy);
   for (const auto &v : llvm::enumerate(elems)) {
     assert(v.value() && "can not insert null values");
-    llvmStruct = insert_val(structTy, llvmStruct, v.value(), v.index());
+    llvmStruct = b.insert_val(structTy, llvmStruct, v.value(), v.index());
   }
   return llvmStruct;
 }
@@ -574,12 +601,13 @@ SharedMemoryObject getSharedMemoryObjectFromStruct(Location loc,
                                                    Value llvmStruct,
                                                    Type elemTy,
                                                    RewriterBase &rewriter) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   ArrayRef<Type> types =
       cast<LLVM::LLVMStructType>(llvmStruct.getType()).getBody();
   SmallVector<Value> elems(types.size());
   for (unsigned i = 0; i < types.size(); ++i) {
     Type type = types[i];
-    elems[i] = extract_val(type, llvmStruct, i);
+    elems[i] = b.extract_val(type, llvmStruct, i);
   }
   return {/*base=*/elems[0],
           /*baseElemType=*/elemTy,
@@ -588,6 +616,7 @@ SharedMemoryObject getSharedMemoryObjectFromStruct(Location loc,
 
 // Extract the bits of `a` that are set in `mask`
 Value pext_i32(RewriterBase &rewriter, Location loc, Value a, uint32_t mask) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   assert(a.getType() == i32_ty && "a must be i32");
   // Handle width = 32 to avoid doing 1 << 32
   if (mask == 0xFFFFFFFF)
@@ -597,7 +626,7 @@ Value pext_i32(RewriterBase &rewriter, Location loc, Value a, uint32_t mask) {
   // https://forums.developer.nvidia.com/t/pdep-and-pext-functionality-for-cuda/270973
   uint32_t mskConst = mask;
   uint32_t extcnt = 0;
-  Value result = i32_val(0);
+  Value result = b.i32_val(0);
   while (mskConst) {
     uint32_t oldmsk = mskConst;
     uint32_t bitgrplsb = mskConst & (-mskConst);
@@ -608,7 +637,8 @@ Value pext_i32(RewriterBase &rewriter, Location loc, Value a, uint32_t mask) {
     uint32_t grplen = __builtin_ctz(~(bitgrp >> lsbpos));
     uint32_t shift = lsbpos - extcnt;
     extcnt += grplen;
-    result = or_(result, lshr(and_(i32_val(bitgrp), a), i32_val(shift)));
+    result =
+        b.or_(result, b.lshr(b.and_(b.i32_val(bitgrp), a), b.i32_val(shift)));
   }
   return result;
 }
@@ -617,14 +647,16 @@ std::tuple<SmallVector<Value>, Value>
 delinearize(RewriterBase &rewriter, Location loc,
             triton::gpu::DistributedEncodingTrait layout,
             ArrayRef<int64_t> shape, StringAttr dimName, Value linear) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto ll = triton::gpu::toLinearLayout(shape, layout);
   auto linearLayout =
       triton::gpu::LinearEncodingAttr::get(rewriter.getContext(), ll);
   assert(ll.hasInDim(dimName));
   int32_t freeVarMask = ll.getFreeVariableMasks()[dimName];
-  auto isRepresentative = true_val();
+  auto isRepresentative = b.true_val();
   if (freeVarMask != 0) {
-    isRepresentative = icmp_eq(and_(i32_val(freeVarMask), linear), i32_val(0));
+    isRepresentative =
+        b.icmp_eq(b.and_(b.i32_val(freeVarMask), linear), b.i32_val(0));
     // We remove the bits of linear that are set to one in freeVarMask
     int32_t nonFreeVarMask = ~freeVarMask & (ll.getInDimSize(dimName) - 1);
     linear = pext_i32(rewriter, loc, linear, nonFreeVarMask);
@@ -663,13 +695,14 @@ SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
 
 SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
                                unsigned linear, ArrayRef<unsigned> shape) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   unsigned rank = shape.size();
   assert(rank > 0);
   SmallVector<Value> multiDim(rank);
   unsigned remained = linear;
   for (auto &&en : llvm::enumerate(shape)) {
     unsigned dimSize = en.value();
-    multiDim[en.index()] = i32_val(remained % dimSize);
+    multiDim[en.index()] = b.i32_val(remained % dimSize);
     remained = remained / dimSize;
   }
   return multiDim;
@@ -677,14 +710,15 @@ SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
 
 SmallVector<Value> delinearize(RewriterBase &rewriter, Location loc,
                                Value linear, ArrayRef<unsigned> shape) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   unsigned rank = shape.size();
   assert(rank > 0);
   SmallVector<Value> multiDim(rank);
   Value remained = linear;
   for (auto &&en : llvm::enumerate(shape)) {
-    Value dimSize = i32_val(en.value());
-    multiDim[en.index()] = urem(remained, dimSize);
-    remained = udiv(remained, dimSize);
+    Value dimSize = b.i32_val(en.value());
+    multiDim[en.index()] = b.urem(remained, dimSize);
+    remained = b.udiv(remained, dimSize);
   }
   return multiDim;
 }
@@ -710,14 +744,15 @@ Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
 
 Value linearize(RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDim,
                 ArrayRef<unsigned> shape) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto rank = multiDim.size();
-  Value linear = i32_val(0);
+  Value linear = b.i32_val(0);
   if (rank > 0) {
     linear = multiDim.back();
     for (auto [dim, dimShape] :
          llvm::reverse(llvm::zip(multiDim.drop_back(), shape.drop_back()))) {
-      Value dimSize = i32_val(dimShape);
-      linear = add(mul(linear, dimSize), dim);
+      Value dimSize = b.i32_val(dimShape);
+      linear = b.add(b.mul(linear, dimSize), dim);
     }
   }
   return linear;
@@ -733,6 +768,7 @@ size_t linearize(ArrayRef<unsigned> multiDim, ArrayRef<unsigned> shape,
 
 Value addStringToModule(Location loc, RewriterBase &rewriter, StringRef key,
                         StringRef content) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   auto ctx = moduleOp.getContext();
   unsigned stringNumber = 0;
@@ -756,12 +792,12 @@ Value addStringToModule(Location loc, RewriterBase &rewriter, StringRef key,
         rewriter.getStringAttr(contentStr));
   }
 
-  Value zero = i32_val(0);
+  Value zero = b.i32_val(0);
   Type globalPtrType = LLVM::LLVMPointerType::get(ctx, global.getAddrSpace());
   Value globalPtr = rewriter.create<LLVM::AddressOfOp>(
       UnknownLoc::get(ctx), globalPtrType, global.getSymName());
   Value stringStart =
-      gep(ptr_ty(ctx), i8_ty, globalPtr, SmallVector<Value>({zero}));
+      b.gep(ptr_ty(ctx), i8_ty, globalPtr, SmallVector<Value>({zero}));
   return stringStart;
 }
 
@@ -771,6 +807,7 @@ SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
                                      unsigned elemId, RankedTensorType type,
                                      ArrayRef<unsigned> multiDimCTAInRepId,
                                      ArrayRef<unsigned> shapePerCTATile) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto shape = type.getShape();
   unsigned rank = shape.size();
   if (auto blockedLayout = dyn_cast<BlockedEncodingAttr>(layout)) {
@@ -781,9 +818,9 @@ SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
         elemId, getSizePerThread(layout), getOrder(layout));
     for (unsigned d = 0; d < rank; ++d) {
       multiDimOffset[d] =
-          add(multiDimOffsetFirstElem[d],
-              i32_val(multiDimCTAInRepId[d] * shapePerCTATile[d] +
-                      multiDimElemId[d]));
+          b.add(multiDimOffsetFirstElem[d],
+                b.i32_val(multiDimCTAInRepId[d] * shapePerCTATile[d] +
+                          multiDimElemId[d]));
     }
     return multiDimOffset;
   }
@@ -829,32 +866,34 @@ SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
     auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
     auto warpOrder = triton::gpu::getWarpOrder(mmaLayout);
     multiDimWarpId = delinearize(rewriter, loc, warpId, warpsPerCTA, warpOrder);
-    Value _1 = i32_val(1);
-    Value _2 = i32_val(2);
-    Value _4 = i32_val(4);
-    Value _8 = i32_val(8);
-    Value _16 = i32_val(16);
+    Value _1 = b.i32_val(1);
+    Value _2 = b.i32_val(2);
+    Value _4 = b.i32_val(4);
+    Value _8 = b.i32_val(8);
+    Value _16 = b.i32_val(16);
     if (mmaLayout.isAmpere() || mmaLayout.isHopper()) {
-      multiDimWarpId[rank - 1] = urem(
-          multiDimWarpId[rank - 1],
-          i32_val(ceil<unsigned>(shapePerCTA[rank - 1], instrShape[rank - 1])));
-      multiDimWarpId[rank - 2] = urem(
-          multiDimWarpId[rank - 2],
-          i32_val(ceil<unsigned>(shapePerCTA[rank - 2], instrShape[rank - 2])));
+      multiDimWarpId[rank - 1] =
+          b.urem(multiDimWarpId[rank - 1],
+                 b.i32_val(ceil<unsigned>(shapePerCTA[rank - 1],
+                                          instrShape[rank - 1])));
+      multiDimWarpId[rank - 2] =
+          b.urem(multiDimWarpId[rank - 2],
+                 b.i32_val(ceil<unsigned>(shapePerCTA[rank - 2],
+                                          instrShape[rank - 2])));
 
-      Value mmaGrpId = udiv(laneId, _4);
-      Value mmaGrpIdP8 = add(mmaGrpId, _8);
-      Value mmaThreadIdInGrp = urem(laneId, _4);
-      Value mmaThreadIdInGrpM2 = mul(mmaThreadIdInGrp, _2);
-      Value mmaThreadIdInGrpM2P1 = add(mmaThreadIdInGrpM2, _1);
+      Value mmaGrpId = b.udiv(laneId, _4);
+      Value mmaGrpIdP8 = b.add(mmaGrpId, _8);
+      Value mmaThreadIdInGrp = b.urem(laneId, _4);
+      Value mmaThreadIdInGrpM2 = b.mul(mmaThreadIdInGrp, _2);
+      Value mmaThreadIdInGrpM2P1 = b.add(mmaThreadIdInGrpM2, _1);
       Value rowWarpOffset =
-          mul(multiDimWarpId[rank - 2], i32_val(instrShape[rank - 2]));
-      mmaRowIdx[0] = add(mmaGrpId, rowWarpOffset);
-      mmaRowIdx[1] = add(mmaGrpIdP8, rowWarpOffset);
+          b.mul(multiDimWarpId[rank - 2], b.i32_val(instrShape[rank - 2]));
+      mmaRowIdx[0] = b.add(mmaGrpId, rowWarpOffset);
+      mmaRowIdx[1] = b.add(mmaGrpIdP8, rowWarpOffset);
       Value colWarpOffset =
-          mul(multiDimWarpId[rank - 1], i32_val(instrShape[rank - 1]));
-      mmaColIdx[0] = add(mmaThreadIdInGrpM2, colWarpOffset);
-      mmaColIdx[1] = add(mmaThreadIdInGrpM2P1, colWarpOffset);
+          b.mul(multiDimWarpId[rank - 1], b.i32_val(instrShape[rank - 1]));
+      mmaColIdx[0] = b.add(mmaThreadIdInGrpM2, colWarpOffset);
+      mmaColIdx[1] = b.add(mmaThreadIdInGrpM2P1, colWarpOffset);
     } else {
       llvm_unreachable("Unexpected MMALayout version");
     }
@@ -865,24 +904,26 @@ SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
       unsigned nGrpId = elemId / 4;
       multiDimOffset[0] = elemIdRem4 < 2 ? mmaRowIdx[0] : mmaRowIdx[1];
       multiDimOffset[1] = elemIdRem4 % 2 == 0 ? mmaColIdx[0] : mmaColIdx[1];
-      multiDimOffset[1] = add(multiDimOffset[1], i32_val(8 * nGrpId));
-      multiDimOffset[0] = add(multiDimOffset[0], i32_val(multiDimCTAInRepId[0] *
-                                                         shapePerCTATile[0]));
-      multiDimOffset[1] = add(multiDimOffset[1], i32_val(multiDimCTAInRepId[1] *
-                                                         shapePerCTATile[1]));
+      multiDimOffset[1] = b.add(multiDimOffset[1], b.i32_val(8 * nGrpId));
+      multiDimOffset[0] =
+          b.add(multiDimOffset[0],
+                b.i32_val(multiDimCTAInRepId[0] * shapePerCTATile[0]));
+      multiDimOffset[1] =
+          b.add(multiDimOffset[1],
+                b.i32_val(multiDimCTAInRepId[1] * shapePerCTATile[1]));
     } else if (mmaLayout.isAmpere()) {
       if (rank == 3)
         multiDimOffset[0] =
-            add(multiDimWarpId[0],
-                i32_val(multiDimCTAInRepId[0] * shapePerCTATile[0]));
+            b.add(multiDimWarpId[0],
+                  b.i32_val(multiDimCTAInRepId[0] * shapePerCTATile[0]));
       multiDimOffset[rank - 2] = elemId < 2 ? mmaRowIdx[0] : mmaRowIdx[1];
       multiDimOffset[rank - 1] = elemId % 2 == 0 ? mmaColIdx[0] : mmaColIdx[1];
-      multiDimOffset[rank - 2] =
-          add(multiDimOffset[rank - 2], i32_val(multiDimCTAInRepId[rank - 2] *
-                                                shapePerCTATile[rank - 2]));
-      multiDimOffset[rank - 1] =
-          add(multiDimOffset[rank - 1], i32_val(multiDimCTAInRepId[rank - 1] *
-                                                shapePerCTATile[rank - 1]));
+      multiDimOffset[rank - 2] = b.add(
+          multiDimOffset[rank - 2],
+          b.i32_val(multiDimCTAInRepId[rank - 2] * shapePerCTATile[rank - 2]));
+      multiDimOffset[rank - 1] = b.add(
+          multiDimOffset[rank - 1],
+          b.i32_val(multiDimCTAInRepId[rank - 1] * shapePerCTATile[rank - 1]));
     } else {
       llvm_unreachable("Unexpected MMALayout version");
     }
@@ -901,8 +942,8 @@ SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
       emitWmmaOffsetForCTA(wmmaLayout, offsets, 0, multiDimCTAInRepId[0],
                            multiDimCTAInRepId[1]);
     }
-    multiDimOffset[0] = add(multiDimBase[0], i32_val(offsets[elemId][0]));
-    multiDimOffset[1] = add(multiDimBase[1], i32_val(offsets[elemId][1]));
+    multiDimOffset[0] = b.add(multiDimBase[0], b.i32_val(offsets[elemId][0]));
+    multiDimOffset[1] = b.add(multiDimBase[1], b.i32_val(offsets[elemId][1]));
     return multiDimOffset;
   }
   llvm_unreachable("unexpected layout in getMultiDimOffset");
@@ -912,11 +953,12 @@ SmallVector<Value> getWrappedMultiDimOffset(
     RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDimOffset,
     ArrayRef<unsigned> shape, SmallVector<unsigned> shapePerCTATile,
     SmallVector<int64_t> shapePerCTA) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   unsigned rank = shape.size();
   SmallVector<Value> multiDimOffsetWrapped(rank);
   for (unsigned d = 0; d < rank; ++d) {
     if (shapePerCTATile[d] > shapePerCTA[d])
-      multiDimOffsetWrapped[d] = urem(multiDimOffset[d], i32_val(shape[d]));
+      multiDimOffsetWrapped[d] = b.urem(multiDimOffset[d], b.i32_val(shape[d]));
     else
       multiDimOffsetWrapped[d] = multiDimOffset[d];
   }
@@ -929,13 +971,14 @@ SharedMemoryObject
 getExpandedSharedMemoryObject(ConversionPatternRewriter &rewriter, Location loc,
                               SharedMemoryObject smemObj,
                               ArrayRef<int64_t> shape) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   assert(shape.size() == 2 || shape.size() == 3);
   auto offsets = smemObj.getOffsets();
   auto rank = offsets.size();
   assert(rank == shape.size());
   if (rank == 3)
     return smemObj;
-  offsets.insert(offsets.begin(), i32_val(0));
+  offsets.insert(offsets.begin(), b.i32_val(0));
   auto expandedSmemObj =
       SharedMemoryObject(smemObj.getBase(), smemObj.getBaseElemType(), offsets);
   return expandedSmemObj;

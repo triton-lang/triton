@@ -73,47 +73,49 @@ llvm::SmallVector<llvm::SmallVector<Value>> computeTensorElemMappingInBlock(
     const ArrayRef<int64_t> &elemsPerInstr, Value warpId, Value laneId,
     int numOfElems, ArrayRef<int64_t> reps, ArrayRef<Value> smemOffsets,
     int loadVecSize, unsigned iNonKDim, unsigned iKDim) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto numM = reps[1];
   auto numK = reps[2];
   const int loadsPerThread = numOfElems / loadVecSize;
   llvm::SmallVector<llvm::SmallVector<Value>> mapping(numK * loadsPerThread);
 
-  Value _0 = i32_val(0);
-  Value _32 = i32_val(32);
-  Value nonKDim = i32_val(iNonKDim);
-  Value warpVOffset = mul(warpId, i32_val(elemsPerInstr[0]));
+  Value _0 = b.i32_val(0);
+  Value _32 = b.i32_val(32);
+  Value nonKDim = b.i32_val(iNonKDim);
+  Value warpVOffset = b.mul(warpId, b.i32_val(elemsPerInstr[0]));
 
   auto rank = smemOffsets.size();
 
   for (int tile = 0; tile < numK; ++tile) {
     Value tileVOffset = _0;
-    Value tileHOffset = i32_val(tile * elemsPerInstr[1]);
+    Value tileHOffset = b.i32_val(tile * elemsPerInstr[1]);
 
-    Value laneVOffset = urem(laneId, nonKDim);
+    Value laneVOffset = b.urem(laneId, nonKDim);
     Value laneHOffset;
     if (iNonKDim == 32) {
-      laneHOffset = select(icmp_uge(laneId, _32), i32_val(numOfElems), _0);
+      laneHOffset =
+          b.select(b.icmp_uge(laneId, _32), b.i32_val(numOfElems), _0);
     } else {
       // In this configuration warp contains 16 copies of same data
       if ((iKDim == 1 || iKDim == 4) && iNonKDim == 4) {
-        laneHOffset = i32_val(0);
+        laneHOffset = b.i32_val(0);
       } else {
         assert(iKDim * iNonKDim / numOfElems == 64 &&
                "seems no all threads in warp contain unique elements");
-        laneHOffset = mul(udiv(laneId, nonKDim), i32_val(numOfElems));
+        laneHOffset = b.mul(b.udiv(laneId, nonKDim), b.i32_val(numOfElems));
       }
     }
 
     for (int loadId = 0; loadId < loadsPerThread; ++loadId) {
       Value elemVOffset = _0;
-      Value elemHOffset = i32_val(loadId * loadVecSize);
+      Value elemHOffset = b.i32_val(loadId * loadVecSize);
 
-      Value sliceVOffset =
-          add(add(add(tileVOffset, laneVOffset), elemVOffset), warpVOffset);
-      Value sliceHOffset = add(add(tileHOffset, laneHOffset), elemHOffset);
+      Value sliceVOffset = b.add(
+          b.add(b.add(tileVOffset, laneVOffset), elemVOffset), warpVOffset);
+      Value sliceHOffset = b.add(b.add(tileHOffset, laneHOffset), elemHOffset);
 
-      Value row = add(sliceVOffset, smemOffsets[rank - 2]);
-      Value col = add(sliceHOffset, smemOffsets[rank - 1]);
+      Value row = b.add(sliceVOffset, smemOffsets[rank - 2]);
+      Value col = b.add(sliceHOffset, smemOffsets[rank - 1]);
 
       mapping[loadsPerThread * tile + loadId] = {row, col};
     }
@@ -142,6 +144,7 @@ fastPathComputeOffsets(ConversionPatternRewriter &rewriter, Location loc,
                        const ArrayRef<int64_t> &elemsPerInstr, Value warpId,
                        Value laneId, int warpsPerBlock, int numOfElems,
                        ArrayRef<int64_t> reps, Value cSwizzleOffset) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto numK = reps[1];
   auto numN = reps[2];
   SmallVector<Value> offsets(numK * numN * numOfElems);
@@ -149,14 +152,14 @@ fastPathComputeOffsets(ConversionPatternRewriter &rewriter, Location loc,
   auto iKDim = elemsPerInstr[0];
   auto iNonKDim = elemsPerInstr[1];
   int lineSize = warpsPerBlock * iNonKDim * numN;
-  Value _nonKDim = i32_val(iNonKDim);
-  Value warpOffset = mul(warpId, i32_val(iNonKDim));
-  Value colOffset = urem(laneId, _nonKDim);
+  Value _nonKDim = b.i32_val(iNonKDim);
+  Value warpOffset = b.mul(warpId, b.i32_val(iNonKDim));
+  Value colOffset = b.urem(laneId, _nonKDim);
 
   for (int block = 0; block < numN; ++block) {
-    Value blockOffset = i32_val(block * iNonKDim * warpsPerBlock);
+    Value blockOffset = b.i32_val(block * iNonKDim * warpsPerBlock);
     for (int tile = 0; tile < numK; ++tile) {
-      Value tileOffset = i32_val(tile * iKDim * lineSize);
+      Value tileOffset = b.i32_val(tile * iKDim * lineSize);
       for (int elem = 0; elem < numOfElems; ++elem) {
         // halfOffset is an offset related to wrapping of warp in the tile.
         // for example, mfma 32 case (mapping of tensor elements to lane ids in
@@ -172,14 +175,14 @@ fastPathComputeOffsets(ConversionPatternRewriter &rewriter, Location loc,
         // 32 33 34 35 ... 63
         Value halfOffset;
         if ((iKDim == 1 || iKDim == 4) && iNonKDim == 4)
-          halfOffset = i32_val(0);
+          halfOffset = b.i32_val(0);
         else
           halfOffset =
-              mul(udiv(laneId, _nonKDim), i32_val(numOfElems * lineSize));
-        Value rowOffset = add(i32_val(elem * lineSize), halfOffset);
-        Value elemOffset = add(rowOffset, colOffset);
-        Value offset =
-            add(add(add(warpOffset, blockOffset), tileOffset), elemOffset);
+              b.mul(b.udiv(laneId, _nonKDim), b.i32_val(numOfElems * lineSize));
+        Value rowOffset = b.add(b.i32_val(elem * lineSize), halfOffset);
+        Value elemOffset = b.add(rowOffset, colOffset);
+        Value offset = b.add(b.add(b.add(warpOffset, blockOffset), tileOffset),
+                             elemOffset);
         offsets[numK * numOfElems * block + numOfElems * tile + elem] = offset;
       }
     }
@@ -196,6 +199,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     Location loc, Value tensor, DotOperandEncodingAttr encoding,
                     const SharedMemoryObject &smemObj,
                     const LLVMTypeConverter *typeConverter, Value thread) {
+  auto tb = TritonLLVMOpBuilder(loc, rewriter);
   assert((opIdx == 0 || opIdx == 1) && "unexpected operand idx");
   auto aTensorTy = cast<triton::gpu::MemDescType>(tensor.getType());
   ArrayRef<int64_t> shape = aTensorTy.getShape();
@@ -250,9 +254,9 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
 
   unsigned iWarpSize = triton::gpu::getWarpSize(mfmaLayout);
   assert(iWarpSize == 64);
-  Value warpSize = i32_val(iWarpSize);
-  Value linearWarpId = udiv(thread, warpSize);
-  Value lane = urem(thread, warpSize);
+  Value warpSize = tb.i32_val(iWarpSize);
+  Value linearWarpId = tb.udiv(thread, warpSize);
+  Value lane = tb.urem(thread, warpSize);
 
   Value spatialWarpId = AMD::getWarpIdInBlock(
       rewriter, loc, linearWarpId, warpsPerCTA, mfmaInstrNonK,
@@ -271,7 +275,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   int warpsPerBlockNonK = std::min(warpsPerCTA[nonKDimIdx], maxNumWarps);
   int warpsPerBatch =
       rank == 3 ? std::min<unsigned>(shape[0], warpsPerCTA[0]) : 1;
-  Value warpIdInBatch = urem(linearWarpId, i32_val(warpsPerBatch));
+  Value warpIdInBatch = tb.urem(linearWarpId, tb.i32_val(warpsPerBatch));
   elemTy = typeConverter->convertType(elemTy);
 
   SmallVector<Value> loadedValues;
@@ -279,7 +283,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   Value smemBase;
   auto smemStrides = smemObj.getStrides(aTensorTy, loc, rewriter);
   bool isFastPath =
-      !AMD::isKMajor(order, opIdx) && !hasSwizzleEnabled(sharedLayout);
+      !AMD::isKContig(order, opIdx) && !hasSwizzleEnabled(sharedLayout);
   if (isFastPath) {
     // fast path handles tensors that are not k-major and have swizzling
     // disabled, in which case offsets computation can be simplified
@@ -340,23 +344,24 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   VectorType loadVecTy = vec_ty(elemTy, elemsPerLoad);
   for (int b = 0; b < repB; ++b) {
     int operandSize = shape[rank - 1] * shape[rank - 2];
-    Value batchOffset = mul(i32_val(operandSize),
-                            add(warpIdInBatch, i32_val(b * warpsPerBatch)));
+    Value batchOffset =
+        tb.mul(tb.i32_val(operandSize),
+               tb.add(warpIdInBatch, tb.i32_val(b * warpsPerBatch)));
     for (int nonK = 0; nonK < numRepNonK; ++nonK) {
       int blockNonKOffset = nonK * mfmaInstrNonK * warpsPerBlockNonK;
-      Value warpBlockOffAdjust = i32_val(blockNonKOffset * shape[order[0]]);
+      Value warpBlockOffAdjust = tb.i32_val(blockNonKOffset * shape[order[0]]);
       for (int k = 0; k < numRepK; ++k) {
         auto vecTy = vec_ty(resElemTy, numOfElems);
         for (unsigned loadId = 0; loadId < loadsPerThread; ++loadId) {
           Value loadOffset;
           loadOffset = offsets[nonK * loadsPerThread * numRepK +
                                k * loadsPerThread + loadId];
-          loadOffset = add(loadOffset, batchOffset);
-          Value loadAddress = gep(smemPtrTy, elemTy, smemBase, loadOffset);
-          Value loadedValue = load(loadVecTy, loadAddress);
+          loadOffset = tb.add(loadOffset, batchOffset);
+          Value loadAddress = tb.gep(smemPtrTy, elemTy, smemBase, loadOffset);
+          Value loadedValue = tb.load(loadVecTy, loadAddress);
           for (int elemId = 0; elemId < elemsPerLoad; ++elemId) {
             Value elemVal =
-                extract_element(elemTy, loadedValue, i32_val(elemId));
+                tb.extract_element(elemTy, loadedValue, tb.i32_val(elemId));
             loadedValues.push_back(elemVal);
           }
         }

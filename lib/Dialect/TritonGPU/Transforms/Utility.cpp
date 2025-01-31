@@ -19,6 +19,7 @@
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
+namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace mlir {
 
@@ -44,9 +45,9 @@ SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
     SmallVector<unsigned> validN;
 
     // MMAv3 with larger instruction shape is preferred.
-    if (eltType.isFloat8E5M2() || eltType.isFloat8E4M3FN() ||
-        eltType.isFloat8E4M3FNUZ() || eltType.isF16() || eltType.isBF16() ||
-        eltType.isF32()) {
+    if (llvm::isa<Float8E5M2Type, Float8E4M3FNType, Float8E4M3FNUZType>(
+            eltType) ||
+        eltType.isF16() || eltType.isBF16() || eltType.isF32()) {
       validN.assign({256, 248, 240, 232, 224, 216, 208, 200, 192, 184, 176,
                      168, 160, 152, 144, 136, 128, 120, 112, 104, 96,  88,
                      80,  72,  64,  56,  48,  40,  32,  24,  16,  8});
@@ -69,6 +70,15 @@ SmallVector<unsigned, 3> mmaVersionToInstrShape(int version,
 
     assert(false && "type not supported");
     return {0, 0, 0};
+  } else if (version == 5) {
+    unsigned m = shape[0] >= 128 ? 128 : 64;
+    // Right now default to distributing along N. TODO: For cases where we have
+    // dot followed by reduction we need to be able to distribute along M.
+    //    if (numWarps > 4)
+    //      m = 64;
+    unsigned n = shape[1] >= 256 ? 256 : shape[1];
+    unsigned k = 256 / eltType.getIntOrFloatBitWidth();
+    return {m, n, k};
   } else {
     assert(false && "version not supported");
     return {0, 0};
@@ -957,7 +967,7 @@ int getNVIDIAComputeCapability(Operation *module) {
          "Expected a target attribute on the module operation");
 
   StringAttr targetAttr =
-      cast<StringAttr>(module->getAttr(triton::AttrTargetName));
+      module->getAttrOfType<StringAttr>(triton::AttrTargetName);
 
   StringRef ref = targetAttr.strref();
   assert(ref.starts_with("cuda:") &&
@@ -970,6 +980,20 @@ int getNVIDIAComputeCapability(Operation *module) {
          "invalid compute capability string in target attribute");
 
   return computeCapability;
+}
+
+StringRef getAMDArch(Operation *module) {
+  assert(module->hasAttr(triton::AttrTargetName) &&
+         "Expected a target attribute on the module operation");
+
+  StringAttr targetAttr =
+      module->getAttrOfType<StringAttr>(triton::AttrTargetName);
+
+  StringRef ref = targetAttr.strref();
+  assert(ref.starts_with("hip:") &&
+         "expected target attribute to be prefixed with \"hip:\"");
+
+  return ref.drop_front(4); // drop the "hip:"
 }
 
 // If all the transitive uses of the given value have are used by a convert to
@@ -1192,6 +1216,54 @@ struct ForOpDeadArgElimination : public OpRewritePattern<scf::ForOp> {
 
 void populateForOpDeadArgumentElimination(RewritePatternSet &patterns) {
   patterns.add<ForOpDeadArgElimination>(patterns.getContext());
+}
+
+ttg::LocalAllocOp findShmemAlloc(Value operand) {
+  // If it's a shmem operand, it must either be defined outside the loop, or
+  // come from an MemDescSubview op. Only ConvertLayout and Trans ops are
+  // allowed in between.
+  Value transitiveOperand = operand;
+  while (
+      isa_and_nonnull<ttg::ConvertLayoutOp, tt::TransOp, ttg::MemDescTransOp>(
+          transitiveOperand.getDefiningOp()) ||
+      isa<BlockArgument>(transitiveOperand)) {
+    if (auto blockArg = dyn_cast<BlockArgument>(transitiveOperand)) {
+      assert(isa<scf::ForOp>(blockArg.getOwner()->getParentOp()) &&
+             "Block argument must come from a for loop");
+      transitiveOperand =
+          cast<scf::YieldOp>(blockArg.getOwner()->getTerminator())
+              .getOperand(blockArg.getArgNumber() - 1);
+    } else {
+      transitiveOperand = transitiveOperand.getDefiningOp()->getOperand(0);
+    }
+  }
+  if (auto subView =
+          dyn_cast<ttg::MemDescSubviewOp>(transitiveOperand.getDefiningOp())) {
+    // Multi-buffered operand
+    return dyn_cast<ttg::LocalAllocOp>(subView.getSrc().getDefiningOp());
+  } else {
+    // Single bufferred operand that does not require a subview (not loaded in
+    // the loop)
+    return dyn_cast<ttg::LocalAllocOp>(transitiveOperand.getDefiningOp());
+  }
+  return nullptr;
+}
+
+SmallVector<Operation *>
+getMMAsWithMultiBufferredOperands(scf::ForOp forOp,
+                                  SmallVector<Operation *> &mmaOps) {
+  // The A and B operands of the mmaOp should be multi-buffered
+  SmallVector<Operation *> eligible;
+  for (auto mmaOp : mmaOps) {
+    auto a = findShmemAlloc(mmaOp->getOperand(0));
+    auto b = findShmemAlloc(mmaOp->getOperand(1));
+    if (a && forOp.isDefinedOutsideOfLoop(a) && b &&
+        forOp.isDefinedOutsideOfLoop(b)) {
+      eligible.push_back(mmaOp);
+    }
+  }
+
+  return eligible;
 }
 
 } // namespace mlir

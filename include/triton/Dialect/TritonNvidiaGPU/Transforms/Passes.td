@@ -62,7 +62,6 @@ def TritonGPUFenceInsertion : Pass<"triton-nvidia-gpu-fence-insertion", "mlir::M
   ];
 }
 
-
 def TritonNvidiaGPUTMALoweringPass : Pass<"triton-nvidia-tma-lowering", "mlir::ModuleOp"> {
   let summary = "lower to TMA load/store operations";
 
@@ -75,6 +74,64 @@ def TritonNvidiaGPUTMALoweringPass : Pass<"triton-nvidia-tma-lowering", "mlir::M
   let dependentDialects = [
     "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
   ];
+}
+
+def TritionTensorMemoryAllocationPass : Pass<"triton-tensor-memory-allocation", "mlir::ModuleOp"> {
+  let summary = "Assign tensor memory allocation";
+
+  let description = [{
+    Decide on tensor memory allocation and assign attributes to each allocation.
+  }];
+
+  let constructor = "mlir::createTensorMemoryAllocationPass()";
+
+  let dependentDialects = [
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+}
+
+def TritonNvidiaGPUMMALoweringPass : Pass<"triton-nvidia-mma-lowering", "mlir::ModuleOp"> {
+  let summary = "lower mma operations if needed";
+
+  let description = [{
+    Lower MMA ops to prepare for conversion to LLVM.
+  }];
+
+  let constructor = "mlir::createTritonNvidiaGPUMMALoweringPass()";
+
+  let dependentDialects = [
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+}
+
+def TritonNvidiaGPUKeepAccInTMemPass : Pass<"tritongpu-keep-acc-in-tmem", "mlir::ModuleOp"> {
+  let summary = "Keep accumulator in Tensor Memory";
+
+  let description = [{
+    For Tensor Core Gen 05 Dot operations called in the loop, where the accumulator is reused
+    in the next iteration, we want to keep the accumulator in Tensor Memory, so that we can
+    avoid the cost of loading the accumulator from registers to Tensor Memory.
+  }];
+
+  let constructor = "mlir::createTritonNvidiaGPUKeepAccInTMemPass()";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
+                           "mlir::triton::TritonDialect"];
+}
+
+def TritonNvidiaGPUPromoteLHSToTMemPass : Pass<"tritongpu-promote-lhs-to-tmem", "mlir::ModuleOp"> {
+  let summary = "Promote LHS operand of MMAv5 op to Tensor Memory";
+
+  let description = [{
+    Promote LHS operand of MMAv5 op to Tensor Memory.
+  }];
+
+  let constructor = "mlir::createTritonNvidiaGPUPromoteLHSToTMemPass()";
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
+                           "mlir::triton::TritonDialect"];
 }
 
 #endif

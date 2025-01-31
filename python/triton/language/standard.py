@@ -59,14 +59,14 @@ def softmax(x, ieee_rounding=False):
 
 @core._tensor_member_fn
 @jit
-def ravel(x):
+def ravel(x, can_reorder=False):
     """
     Returns a contiguous flattened view of :code:`x`.
 
     :param x: the input tensor
     :type x: Block
     """
-    return core.reshape(x, [x.numel], can_reorder=True)
+    return core.reshape(x, [x.numel], can_reorder=can_reorder)
 
 
 @jit
@@ -276,15 +276,11 @@ def _xor_combine(a, b):
 
 
 @core._tensor_member_fn
-@core.builtin
+@jit
 @core._add_reduction_docstr("xor sum")
-def xor_sum(input, axis=None, keep_dims=False, _builder=None, _generator=None):
-    scalar_ty = input.type.scalar
-    if not scalar_ty.is_int():
-        raise ValueError("xor_sum only supported for integers")
-
-    input = core._promote_bfloat16_to_float32(input, _builder=_builder)
-    return core.reduce(input, axis, _xor_combine, keep_dims=keep_dims, _builder=_builder, _generator=_generator)
+def xor_sum(input, axis=None, keep_dims=False):
+    core.static_assert(input.type.scalar.is_int(), "xor_sum only supported for integers")
+    return core.reduce(input, axis, _xor_combine, keep_dims=keep_dims)
 
 
 # cumsum

@@ -175,7 +175,8 @@ void LayoutRematerialization::cleanup() {
 bool isLayoutAnchor(Operation *op) {
   if (isa<LoadOp, StoreOp>(op))
     return isExpensiveLoadOrStore(op);
-  if (isa<DotOp, nvidia_gpu::WarpGroupDotOp, AtomicRMWOp, AtomicCASOp>(op))
+  if (isa<DotOp, nvidia_gpu::WarpGroupDotOp, AtomicRMWOp, AtomicCASOp,
+          triton::nvidia_gpu::TMEMLoadOp>(op))
     return true;
   if (auto gatherOp = dyn_cast<GatherOp>(op))
     return gatherOp.getEfficientLayout();
@@ -1171,7 +1172,8 @@ void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
 
 void LayoutRematerialization::hoistConvertIntoConditionals(
     ConvertLayoutOp convertOp) {
-  // Take the backward slice of tensor dependencies, stopping at conditionals.
+  // Take the backward slice of tensor dependencies rooted at the conversion,
+  // stopping at conditionals. This subslice is used to initialize the analysis.
   SetVector<Value> slice;
   DenseMap<Value, Attribute> layout;
   auto isIfOp = [](Operation *op) { return isa<scf::IfOp>(op); };
@@ -1180,16 +1182,30 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
                                       layout, isIfOp)))
     return;
 
-  // Find conditional edges above which the conversion can be hoisted.
-  SmallVector<std::pair<Value, OpOperand *>> hoistAbove;
-  unsigned sliceSize = slice.size();
-  // The routine will recurse through backward slices, e.g. to handle loops and
-  // conditional chains. Thus, we re-query the size of `slice`.
-  for (unsigned i = 0; i < slice.size(); i++) {
-    Value v = slice[i];
+  // These are the conditional edges above which conversions should be hoisted.
+  // The value represents the `scf.if` op result and the operand represents the
+  // edge into one of the branches.
+  SmallVector<std::pair<OpResult, OpOperand *>> hoistAbove;
+
+  // The list of `scf.if` op results in the slice that are not rematerializable.
+  // Hoisting is terminated at these values.
+  SmallVector<OpResult> terminals;
+
+  // Process the whole backward slice in subslices that stop at each condtional.
+  // This is so we can apply more specific rules about when to hoist.
+  struct Subslice {
+    OpResult v;
+    OpOperand *edge;
+    SetVector<Value> slice;
+    DenseMap<Value, Attribute> layout;
+  };
+  SmallVector<Subslice> subslices;
+
+  // Check a value in the subslice.
+  auto visitValue = [&](OpResult v) {
     auto ifOp = v.getDefiningOp<scf::IfOp>();
     if (!ifOp)
-      continue;
+      return;
 
     Attribute rootLayout = layout.at(v);
     unsigned resIdx = cast<OpResult>(v).getResultNumber();
@@ -1212,53 +1228,93 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
         elseRes, rootLayout, elseSlice, elseLayout, isIfOp);
 
     // If propagation across both edges of this conditional succeeded, then we
-    // don't need to hoist across it.
+    // don't need to hoist across it. Merge into the current slice.
     if (succeeded(thenResult) && succeeded(elseResult)) {
       slice.insert(thenSlice.begin(), thenSlice.end());
       slice.insert(elseSlice.begin(), elseSlice.end());
       layout.insert(thenLayout.begin(), thenLayout.end());
       layout.insert(elseLayout.begin(), elseLayout.end());
-      continue;
+      return;
     }
 
-    // If propagation across both edges failed, then there is nothing to do
-    // for this one.
-    if (failed(thenResult) && failed(elseResult))
-      continue;
+    // If propagation across both edges failed, then this conditional
+    // terminates backwards rematerialization.
+    if (failed(thenResult) && failed(elseResult)) {
+      terminals.push_back(v);
+      return;
+    }
 
     // The layout conversion can be rematerialized along one edge but not the
-    // other. We can hoist the conversion into the other branch.
-    if (succeeded(elseResult)) {
-      std::swap(thenSlice, elseSlice);
-      std::swap(thenLayout, elseLayout);
-      hoistAbove.push_back({v, &thenRes});
+    // other. We can hoist the conversion into the other branch. Push this
+    // into the subslice list for analysis.
+    if (succeeded(thenResult)) {
+      subslices.push_back(
+          {v, &elseRes, std::move(thenSlice), std::move(thenLayout)});
     } else {
-      hoistAbove.push_back({v, &elseRes});
+      subslices.push_back(
+          {v, &thenRes, std::move(elseSlice), std::move(elseLayout)});
     }
-    slice.insert(thenSlice.begin(), thenSlice.end());
-    layout.insert(thenLayout.begin(), thenLayout.end());
-  }
+  };
 
-  // It's hard to know if duplicating the conversion into separate branches is
-  // profitable without more analysis. For now, hoist at most one.
-  if (hoistAbove.size() != 1)
+  // Process the whole slice in subslices.
+  unsigned i = 0;
+  bool isLoneHoist = false;
+  do {
+    // Visit values in the current subslice.
+    for (; i != slice.size(); ++i) {
+      if (auto v = dyn_cast<OpResult>(slice[i]))
+        visitValue(v);
+    }
+    // Check the next chunk of subslices. When a condtional is marked as being
+    // valid to be hoisted across, we have to recurse on a new subslice rooted
+    // at the corresopnding yield operand.
+    //
+    // Hoist across condtionals when:
+    // 1. The conditional is directly inside a loop.
+    // 2. The whole slice contains only one conditional.
+    for (auto &[v, edge, subslice, layouts] : subslices) {
+      bool oneHoist = false;
+      if (isa<LoopLikeOpInterface>(v.getDefiningOp()->getParentOp()) ||
+          (oneHoist = subslices.size() == 1 && hoistAbove.empty())) {
+        isLoneHoist |= oneHoist;
+        hoistAbove.push_back({v, edge});
+        // Recurse on the subslice.
+        slice.insert(subslice.begin(), subslice.end());
+        layout.insert(layouts.begin(), layouts.end());
+      } else {
+        terminals.push_back(v);
+      }
+    }
+    subslices.clear();
+  } while (i != slice.size());
+
+  // Exit early if there is nothing to do.
+  if (hoistAbove.empty())
+    return;
+  // Check if this is a lone hoist. There should be no other terminals.
+  if (isLoneHoist && !terminals.empty())
     return;
 
+  // Rematerialize failed hoists right before the condtional, and hoist those
+  // that succeeded into the branch and then rewrite the slice.
   IRMapping mapping;
-  for (auto [result, edge] : hoistAbove) {
-    // Hoist the convert into the conditional and rewrite the slice.
-    OpBuilder b(edge->getOwner());
-    Value v = edge->get();
-    Attribute encoding = layout.at(result);
-
+  auto hoistRemat = [&](OpBuilder &b, Value v, Attribute encoding) {
     auto tensorType = cast<RankedTensorType>(v.getType());
     auto newType = RankedTensorType::get(tensorType.getShape(),
                                          tensorType.getElementType(), encoding);
-
     Value newCvt = b.create<ConvertLayoutOp>(convertOp.getLoc(), newType, v);
 
     mapping.map(v, newCvt);
     slice.remove(v);
+  };
+  for (Value v : terminals) {
+    OpBuilder b(v.getContext());
+    b.setInsertionPointAfter(v.getDefiningOp());
+    hoistRemat(b, v, layout.at(v));
+  }
+  for (auto [result, edge] : hoistAbove) {
+    OpBuilder b(edge->getOwner());
+    hoistRemat(b, edge->get(), layout.at(result));
   }
   rewriteSlice(slice, layout, convertOp, mapping);
 }

@@ -106,7 +106,7 @@ if __name__ == "__main__":
     # compile ast into cubin
     for h in hints.values():
         assert h in [1, 16], f"Only 1 and 16 are valid hints, got {h}"
-    attrs = {k: [("tt.divisibility", 16)] for k, v in hints.items() if v == 16}
+    attrs = {k: [["tt.divisibility", 16]] for k, v in hints.items() if v == 16}
     src = triton.compiler.ASTSource(fn=kernel, constexprs=constants, signature=signature, attrs=attrs)
     opts = {"num_warps": args.num_warps, "num_stages": args.num_stages}
     ccinfo = triton.compile(src, options=opts)
@@ -136,11 +136,12 @@ if __name__ == "__main__":
         if hints.get((i, ), None) == 16:
             suffix += 'd'
     func_name = '_'.join([out_name, sig_hash, suffix])
-    hex_ = str(binascii.hexlify(ccinfo.asm["cubin"]))[2:-1]
+    asm = ccinfo.asm["cubin"]  # store binary data once
+    hex_ = str(binascii.hexlify(asm))[2:-1]
     params = {
         "kernel_name": func_name,
         "triton_kernel_name": args.kernel_name,
-        "bin_size": len(hex_),
+        "bin_size": len(asm),
         "bin_data": ", ".join([f"0x{x}{y}" for x, y in zip(hex_[::2], hex_[1::2])]),
         "signature": ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names_not_1, arg_types_not_1)]),
         "full_signature": ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names, arg_types)]),

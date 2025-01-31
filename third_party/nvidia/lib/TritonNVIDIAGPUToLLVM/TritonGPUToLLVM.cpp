@@ -97,7 +97,7 @@ struct ConvertTritonGPUToLLVM
 
     // Allocate shared memory and set barrier
     ModuleAllocation allocation(mod);
-    ModuleMembarAnalysis membarPass(&allocation, NVIDIA::canSkipBarSync);
+    ModuleMembarAnalysis membarPass(&allocation);
     membarPass.run();
 
     // Lower functions
@@ -127,6 +127,8 @@ struct ConvertTritonGPUToLLVM
     int benefit = patternBenefitPrioritizeOverLLVMConversions;
     mlir::triton::NVIDIA::populateConvertLayoutOpToLLVMPatterns(
         typeConverter, targetInfo, patterns, benefit);
+    mlir::triton::NVIDIA::populateTensorMemorySubviewOpToLLVMPattern(
+        typeConverter, patterns, patternBenefitNvidiaTensorCoreSubviewPattern);
     mlir::triton::NVIDIA::populateTMAToLLVMPatterns(typeConverter, targetInfo,
                                                     patterns, benefit);
     populateDotOpToLLVMPatterns(typeConverter, patterns, benefit);
@@ -174,8 +176,11 @@ struct ConvertTritonGPUToLLVM
                                                 targetInfo, benefit);
     mlir::triton::NVIDIA::populateMemoryOpToLLVMPatterns(
         typeConverter, targetInfo, patterns, benefit);
+    mlir::triton::NVIDIA::populateTensorMemoryOpToLLVMPattern(
+        typeConverter, patterns, benefit);
     mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
                                                    patterns, benefit);
+    populateTCGen5MMAOpToLLVMPattern(typeConverter, patterns, benefit);
     mlir::triton::NVIDIA::populateUpcastMXFPToLLVMPatterns(
         typeConverter, patterns, targetInfo, benefit);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
@@ -263,9 +268,11 @@ bool NVIDIA::canSkipBarSync(Operation *before, Operation *after) {
   // we don't need a barrier between those operations.
   if (isa<triton::nvidia_gpu::WaitBarrierOp,
           triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp,
+          triton::nvidia_gpu::AsyncTMAGatherOp,
           triton::nvidia_gpu::BarrierExpectOp>(before) &&
       isa<triton::nvidia_gpu::WaitBarrierOp,
           triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp,
+          triton::nvidia_gpu::AsyncTMAGatherOp,
           triton::nvidia_gpu::BarrierExpectOp>(after))
     return true;
 
@@ -273,6 +280,7 @@ bool NVIDIA::canSkipBarSync(Operation *before, Operation *after) {
   // therefore any thread can access the memory after the barrier even if some
   // threads haven't reached the mbarrier wait.
   if (isa<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp,
+          triton::nvidia_gpu::AsyncTMAGatherOp,
           triton::nvidia_gpu::WaitBarrierOp>(before) &&
       !isa<triton::nvidia_gpu::InvalBarrierOp>(after))
     return true;

@@ -135,15 +135,23 @@ CUpti_PCSamplingData allocPCSamplingData(size_t collectNumPCs,
   uint32_t libVersion = 0;
   cupti::getVersion<true>(&libVersion);
   size_t pcDataSize = sizeof(CUpti_PCSamplingPCData);
-  // Check cupti api version < 12.4 but cupti header version >= 12.4
-  // If so, we subtract 4 bytes from the size of CUpti_PCSamplingPCData
-  // because it introduces a new field (i.e., correlationId) at the end of the
-  // struct, which is not compatible with the previous versions.
-  if (libVersion < CUPTI_CUDA12_4_VERSION &&
-      CUPTI_API_VERSION >= CUPTI_CUDA12_4_VERSION)
-    pcDataSize -= CUPTI_CUDA12_4_PC_DATA_PADDING_SIZE;
+  // Since CUPTI 12.4, a new field (i.e., correlationId) is added to
+  // CUpti_PCSamplingPCData, which breaks the ABI compatibility.
+  // Instead of using workarounds, we emit an error message and exit the
+  // application.
+  if ((libVersion < CUPTI_CUDA12_4_VERSION &&
+       CUPTI_API_VERSION >= CUPTI_CUDA12_4_VERSION) ||
+      (libVersion >= CUPTI_CUDA12_4_VERSION &&
+       CUPTI_API_VERSION < CUPTI_CUDA12_4_VERSION)) {
+    throw std::runtime_error(
+        "[PROTON] CUPTI API version: " + std::to_string(CUPTI_API_VERSION) +
+        " and CUPTI driver version: " + std::to_string(libVersion) +
+        " are not compatible. Please set the environment variable "
+        " TRITON_CUPTI_INCLUDE_PATH and TRITON_CUPTI_LIB_PATH to resolve the "
+        "problem.");
+  }
   CUpti_PCSamplingData pcSamplingData{
-      /*size=*/pcDataSize,
+      /*size=*/sizeof(CUpti_PCSamplingData),
       /*collectNumPcs=*/collectNumPCs,
       /*totalSamples=*/0,
       /*droppedSamples=*/0,
@@ -372,16 +380,16 @@ void CuptiPCSampling::processPCSamplingData(ConfigureData *configureData,
         auto *stallReason = &pcData->stallReason[j];
         if (!configureData->stallReasonIndexToMetricIndex.count(
                 stallReason->pcSamplingStallReasonIndex))
-          throw std::runtime_error("Invalid stall reason index");
+          throw std::runtime_error("[PROTON] Invalid stall reason index");
         for (auto *data : dataSet) {
           auto scopeId = externId;
           if (isAPI)
             scopeId = data->addOp(externId, lineInfo.functionName);
           if (lineInfo.fileName.size())
-            scopeId = data->addOp(scopeId,
-                                  lineInfo.dirName + "/" + lineInfo.fileName +
-                                      ":" + lineInfo.functionName + "@" +
-                                      std::to_string(lineInfo.lineNumber));
+            scopeId = data->addOp(
+                scopeId, lineInfo.dirName + "/" + lineInfo.fileName + ":" +
+                             std::to_string(lineInfo.lineNumber) + "@" +
+                             lineInfo.functionName);
           auto metricKind = static_cast<PCSamplingMetric::PCSamplingMetricKind>(
               configureData->stallReasonIndexToMetricIndex
                   [stallReason->pcSamplingStallReasonIndex]);

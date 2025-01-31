@@ -29,89 +29,268 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-// Shortcuts for some commonly used LLVM ops to keep code simple and intuitive
-// Operators
-#define inttofloat(...) rewriter.create<LLVM::SIToFPOp>(loc, __VA_ARGS__)
-#define inttoptr(...) rewriter.create<LLVM::IntToPtrOp>(loc, __VA_ARGS__)
-#define ptrtoint(...) rewriter.create<LLVM::PtrToIntOp>(loc, __VA_ARGS__)
-#define zext(...) rewriter.create<LLVM::ZExtOp>(loc, __VA_ARGS__)
-#define sext(...) rewriter.create<LLVM::SExtOp>(loc, __VA_ARGS__)
-#define fpext(...) rewriter.create<LLVM::FPExtOp>(loc, __VA_ARGS__)
-#define fptrunc(...) rewriter.create<LLVM::FPTruncOp>(loc, __VA_ARGS__)
-#define trunc(...) rewriter.create<LLVM::TruncOp>(loc, __VA_ARGS__)
-#define udiv(...) rewriter.create<LLVM::UDivOp>(loc, __VA_ARGS__)
-#define sdiv(...) rewriter.create<LLVM::SDivOp>(loc, __VA_ARGS__)
-#define urem(...) rewriter.create<LLVM::URemOp>(loc, __VA_ARGS__)
-#define add(...) rewriter.create<LLVM::AddOp>(loc, __VA_ARGS__)
-#define sub(...) rewriter.create<LLVM::SubOp>(loc, __VA_ARGS__)
-#define fadd(...) rewriter.create<LLVM::FAddOp>(loc, __VA_ARGS__)
-#define mul(...) rewriter.create<LLVM::MulOp>(loc, __VA_ARGS__)
-#define fmul(...) rewriter.create<LLVM::FMulOp>(loc, __VA_ARGS__)
-#define fma(...) rewriter.create<LLVM::FMAOp>(loc, __VA_ARGS__)
-#define neg(...) rewriter.create<LLVM::FNegOp>(loc, __VA_ARGS__)
-#define smax(...) rewriter.create<LLVM::SMaxOp>(loc, __VA_ARGS__)
-#define umax(...) rewriter.create<LLVM::UMaxOp>(loc, __VA_ARGS__)
-#define fmax(...) rewriter.create<LLVM::MaxNumOp>(loc, __VA_ARGS__)
-#define smin(...) rewriter.create<LLVM::SMinOp>(loc, __VA_ARGS__)
-#define umin(...) rewriter.create<LLVM::UMinOp>(loc, __VA_ARGS__)
-#define fmin(...) rewriter.create<LLVM::MinNumOp>(loc, __VA_ARGS__)
-#define shl(...) rewriter.create<LLVM::ShlOp>(loc, __VA_ARGS__)
-#define lshr(...) rewriter.create<LLVM::LShrOp>(loc, __VA_ARGS__)
-#define ashr(...) rewriter.create<LLVM::AShrOp>(loc, __VA_ARGS__)
-#define and_(...) rewriter.create<LLVM::AndOp>(loc, __VA_ARGS__)
-#define xor_(...) rewriter.create<LLVM::XOrOp>(loc, __VA_ARGS__)
-#define or_(...) rewriter.create<LLVM::OrOp>(loc, __VA_ARGS__)
-#define bitcast(val__, type__)                                                 \
-  rewriter.create<LLVM::BitcastOp>(loc, type__, val__)
-#define addrspacecast(...)                                                     \
-  rewriter.create<LLVM::AddrSpaceCastOp>(loc, __VA_ARGS__)
-#define gep(...) rewriter.create<LLVM::GEPOp>(loc, __VA_ARGS__)
-#define ptr_ty(...) LLVM::LLVMPointerType::get(__VA_ARGS__)
-#define insert_val(...) rewriter.create<LLVM::InsertValueOp>(loc, __VA_ARGS__)
-#define extract_val(...) rewriter.create<LLVM::ExtractValueOp>(loc, __VA_ARGS__)
-#define insert_element(...)                                                    \
-  rewriter.create<LLVM::InsertElementOp>(loc, __VA_ARGS__)
-#define extract_element(...)                                                   \
-  rewriter.create<LLVM::ExtractElementOp>(loc, __VA_ARGS__)
-#define load(...) rewriter.create<LLVM::LoadOp>(loc, __VA_ARGS__)
-#define store(...) rewriter.create<LLVM::StoreOp>(loc, __VA_ARGS__)
-#define fcmp_ogt(lhs, rhs)                                                     \
-  rewriter.create<LLVM::FCmpOp>(loc, rewriter.getI1Type(),                     \
-                                LLVM::FCmpPredicate::ogt, lhs, rhs)
-#define fcmp_olt(lhs, rhs)                                                     \
-  rewriter.create<LLVM::FCmpOp>(loc, rewriter.getI1Type(),                     \
-                                LLVM::FCmpPredicate::olt, lhs, rhs)
-#define fcmp_eq(lhs, rhs)                                                      \
-  rewriter.create<LLVM::FCmpOp>(loc, rewriter.getI1Type(),                     \
-                                LLVM::FCmpPredicate::oeq, lhs, rhs)
-#define icmp_eq(...)                                                           \
-  rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::eq, __VA_ARGS__)
-#define icmp_ne(...)                                                           \
-  rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::ne, __VA_ARGS__)
-#define icmp_slt(...)                                                          \
-  rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::slt, __VA_ARGS__)
-#define icmp_sle(...)                                                          \
-  rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::sle, __VA_ARGS__)
-#define icmp_sgt(...)                                                          \
-  rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::sgt, __VA_ARGS__)
-#define icmp_sge(...)                                                          \
-  rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::sge, __VA_ARGS__)
-#define icmp_ult(...)                                                          \
-  rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::ult, __VA_ARGS__)
-#define icmp_ule(...)                                                          \
-  rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::ule, __VA_ARGS__)
-#define icmp_ugt(...)                                                          \
-  rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::ugt, __VA_ARGS__)
-#define icmp_uge(...)                                                          \
-  rewriter.create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::uge, __VA_ARGS__)
-#define select(...) rewriter.create<LLVM::SelectOp>(loc, __VA_ARGS__)
-#define address_of(...) rewriter.create<LLVM::AddressOfOp>(loc, __VA_ARGS__)
-#define barrier() rewriter.create<mlir::gpu::BarrierOp>(loc)
-#define undef(...) rewriter.create<LLVM::UndefOp>(loc, __VA_ARGS__)
-#define null(...) rewriter.create<LLVM::ZeroOp>(loc, __VA_ARGS__)
-#define call(...) LLVM::createLLVMCallOp(rewriter, loc, __VA_ARGS__)
+namespace mlir::LLVM {
+using namespace mlir::triton;
+
+Value createConstantI1(Location loc, OpBuilder &rewriter, bool v);
+Value createConstantI32(Location loc, OpBuilder &rewriter, int32_t v);
+Value createConstantI64(Location loc, OpBuilder &rewriter, int64_t v);
+Value createConstantF16(Location loc, OpBuilder &rewriter, float v);
+Value createConstantBF16(Location loc, OpBuilder &rewriter, float v);
+Value createConstantF32(Location loc, OpBuilder &rewriter, float v);
+Value createConstantF64(Location loc, OpBuilder &rewriter, double v);
+Value createNaNConstant(Location loc, OpBuilder &rewriter, Type type);
+Value createIndexConstant(OpBuilder &builder, Location loc,
+                          const TypeConverter *converter, int64_t value);
+Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
+                                int64_t value);
+
+LLVM::CallOp createLLVMCallOp(OpBuilder &builder, Location loc,
+                              LLVMFuncOp funcOp, ValueRange args);
+LLVM::CallIntrinsicOp
+createLLVMIntrinsicCallOp(OpBuilder &builder, Location loc, StringRef intrinsic,
+                          TypeRange types, ValueRange args);
+} // namespace mlir::LLVM
+
+// Is v an integer or floating-point scalar constant equal to 0?
+bool isConstantZero(Value v);
+
+namespace mlir::triton {
+
+// Returns CTA level thread idx
+inline Value getThreadId(OpBuilder &rewriter, Location loc) {
+  Value tid =
+      rewriter.create<::mlir::gpu::ThreadIdOp>(loc, ::mlir::gpu::Dimension::x);
+  Type i32_ty = rewriter.getIntegerType(32);
+  return rewriter.create<arith::IndexCastOp>(loc, i32_ty, tid);
+}
+
+struct TritonLLVMOpBuilder {
+  TritonLLVMOpBuilder(const Location &loc, OpBuilder &builder)
+      : loc(loc), builder(&builder) {}
+  // Shortcuts for some commonly used LLVM ops to keep code simple and intuitive
+  // Operators
+  template <typename... Args> LLVM::SIToFPOp inttofloat(Args &&...args) {
+    return builder->create<LLVM::SIToFPOp>(loc, std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::IntToPtrOp inttoptr(Args &&...args) {
+    return builder->create<LLVM::IntToPtrOp>(loc, std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::PtrToIntOp ptrtoint(Args &&...args) {
+    return builder->create<LLVM::PtrToIntOp>(loc, std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::ZExtOp zext(Args &&...args) {
+    return builder->create<LLVM::ZExtOp>(loc, std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::SExtOp sext(Args &&...args) {
+    return builder->create<LLVM::SExtOp>(loc, std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::FPExtOp fpext(Args &&...args) {
+    return builder->create<LLVM::FPExtOp>(loc, std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::FPTruncOp fptrunc(Args &&...args) {
+    return builder->create<LLVM::FPTruncOp>(loc, std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::TruncOp trunc(Args &&...args) {
+    return builder->create<LLVM::TruncOp>(loc, std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::UDivOp udiv(Args &&...args) {
+    return builder->create<LLVM::UDivOp>(loc, std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::SDivOp sdiv(Args &&...args) {
+    return builder->create<LLVM::SDivOp>(loc, std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::URemOp urem(Args &&...args) {
+    return builder->create<LLVM::URemOp>(loc, std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::AddOp add(Args &&...args) {
+    return builder->create<LLVM::AddOp>(loc, std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::SubOp sub(Args &&...args) {
+    return builder->create<LLVM::SubOp>(loc, std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::FAddOp fadd(Args &&...args) {
+    return builder->create<LLVM::FAddOp>(loc, std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::MulOp mul(Args &&...args) {
+    return builder->create<LLVM::MulOp>(loc, std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::FMulOp fmul(Args &&...args) {
+    return builder->create<LLVM::FMulOp>(loc, std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::FMAOp fma(Args &&...args) {
+    return builder->create<LLVM::FMAOp>(loc, std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::FNegOp neg(Args &&...args) {
+    return builder->create<LLVM::FNegOp>(loc, std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::SMaxOp smax(Args &&...args) {
+    return builder->create<LLVM::SMaxOp>(loc, std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::UMaxOp umax(Args &&...args) {
+    return builder->create<LLVM::UMaxOp>(loc, std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::MaxNumOp fmax(Args &&...args) {
+    return builder->create<LLVM::MaxNumOp>(loc, std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::SMinOp smin(Args &&...args) {
+    return builder->create<LLVM::SMinOp>(loc, std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::UMinOp umin(Args &&...args) {
+    return builder->create<LLVM::UMinOp>(loc, std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::MinNumOp fmin(Args &&...args) {
+    return builder->create<LLVM::MinNumOp>(loc, std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::ShlOp shl(Args &&...args) {
+    return builder->create<LLVM::ShlOp>(loc, std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::LShrOp lshr(Args &&...args) {
+    return builder->create<LLVM::LShrOp>(loc, std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::AShrOp ashr(Args &&...args) {
+    return builder->create<LLVM::AShrOp>(loc, std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::AndOp and_(Args &&...args) {
+    return builder->create<LLVM::AndOp>(loc, std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::XOrOp xor_(Args &&...args) {
+    return builder->create<LLVM::XOrOp>(loc, std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::OrOp or_(Args &&...args) {
+    return builder->create<LLVM::OrOp>(loc, std::forward<Args>(args)...);
+  }
+  LLVM::BitcastOp bitcast(Value val, Type type) {
+    return builder->create<LLVM::BitcastOp>(loc, type, val);
+  }
+  template <typename... Args>
+  LLVM::AddrSpaceCastOp addrspacecast(Args &&...args) {
+    return builder->create<LLVM::AddrSpaceCastOp>(loc,
+                                                  std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::GEPOp gep(Args &&...args) {
+    return builder->create<LLVM::GEPOp>(loc, std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::InsertValueOp insert_val(Args &&...args) {
+    return builder->create<LLVM::InsertValueOp>(loc,
+                                                std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::ExtractValueOp extract_val(Args &&...args) {
+    return builder->create<LLVM::ExtractValueOp>(loc,
+                                                 std::forward<Args>(args)...);
+  }
+  template <typename... Args>
+  LLVM::InsertElementOp insert_element(Args &&...args) {
+    return builder->create<LLVM::InsertElementOp>(loc,
+                                                  std::forward<Args>(args)...);
+  }
+  template <typename... Args>
+  LLVM::ExtractElementOp extract_element(Args &&...args) {
+    return builder->create<LLVM::ExtractElementOp>(loc,
+                                                   std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::LoadOp load(Args &&...args) {
+    return builder->create<LLVM::LoadOp>(loc, std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::StoreOp store(Args &&...args) {
+    return builder->create<LLVM::StoreOp>(loc, std::forward<Args>(args)...);
+  }
+  LLVM::FCmpOp fcmp_ogt(Value lhs, Value rhs) {
+    return builder->create<LLVM::FCmpOp>(loc, builder->getI1Type(),
+                                         LLVM::FCmpPredicate::ogt, lhs, rhs);
+  }
+  LLVM::FCmpOp fcmp_olt(Value lhs, Value rhs) {
+    return builder->create<LLVM::FCmpOp>(loc, builder->getI1Type(),
+                                         LLVM::FCmpPredicate::olt, lhs, rhs);
+  }
+  LLVM::FCmpOp fcmp_eq(Value lhs, Value rhs) {
+    return builder->create<LLVM::FCmpOp>(loc, builder->getI1Type(),
+                                         LLVM::FCmpPredicate::oeq, lhs, rhs);
+  }
+  template <typename... Args> LLVM::ICmpOp icmp_eq(Args &&...args) {
+    return builder->create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::eq,
+                                         std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::ICmpOp icmp_ne(Args &&...args) {
+    return builder->create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::ne,
+                                         std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::ICmpOp icmp_slt(Args &&...args) {
+    return builder->create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::slt,
+                                         std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::ICmpOp icmp_sle(Args &&...args) {
+    return builder->create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::sle,
+                                         std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::ICmpOp icmp_sgt(Args &&...args) {
+    return builder->create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::sgt,
+                                         std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::ICmpOp icmp_sge(Args &&...args) {
+    return builder->create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::sge,
+                                         std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::ICmpOp icmp_ult(Args &&...args) {
+    return builder->create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::ult,
+                                         std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::ICmpOp icmp_ule(Args &&...args) {
+    return builder->create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::ule,
+                                         std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::ICmpOp icmp_ugt(Args &&...args) {
+    return builder->create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::ugt,
+                                         std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::ICmpOp icmp_uge(Args &&...args) {
+    return builder->create<LLVM::ICmpOp>(loc, LLVM::ICmpPredicate::uge,
+                                         std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::SelectOp select(Args &&...args) {
+    return builder->create<LLVM::SelectOp>(loc, std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::AddressOfOp address_of(Args &&...args) {
+    return builder->create<LLVM::AddressOfOp>(loc, std::forward<Args>(args)...);
+  }
+  mlir::gpu::BarrierOp barrier() {
+    return builder->create<mlir::gpu::BarrierOp>(loc);
+  }
+  template <typename... Args> LLVM::UndefOp undef(Args &&...args) {
+    return builder->create<LLVM::UndefOp>(loc, std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::ZeroOp null(Args &&...args) {
+    return builder->create<LLVM::ZeroOp>(loc, std::forward<Args>(args)...);
+  }
+  template <typename... Args> LLVM::CallOp call(Args &&...args) {
+    return builder->create<LLVM::CallOp>(loc, std::forward<Args>(args)...);
+  }
+  // Constants
+  Value int_val(short bitwidth, int64_t val) {
+    Type ty = builder->getIntegerType(bitwidth);
+    return builder->create<LLVM::ConstantOp>(loc, ty,
+                                             builder->getIntegerAttr(ty, val));
+  }
+  Value i1_val(int64_t val) { return int_val(1, val); }
+  Value true_val() { return int_val(1, true); }
+  Value false_val() { return int_val(1, false); }
+  Value f16_val(float v) { return LLVM::createConstantF16(loc, *builder, v); }
+  Value bf16_val(float v) { return LLVM::createConstantBF16(loc, *builder, v); }
+  Value f32_val(float v) { return LLVM::createConstantF32(loc, *builder, v); }
+  Value f64_val(double v) { return LLVM::createConstantF64(loc, *builder, v); }
+  Value i8_val(int64_t val) { return int_val(8, val); }
+  Value i16_val(int64_t val) { return int_val(16, val); }
+  Value i32_val(int64_t val) { return int_val(32, val); }
+  Value i64_val(int64_t val) { return int_val(64, val); }
+  Value tid_val() { return getThreadId(*builder, loc); }
+
+  Location loc;
+  OpBuilder *builder;
+};
+} // namespace mlir::triton
 
 // Types
+#define ptr_ty(...) LLVM::LLVMPointerType::get(__VA_ARGS__)
 #define int_ty(width) rewriter.getIntegerType(width)
 #define i64_ty rewriter.getIntegerType(64)
 #define i32_ty rewriter.getIntegerType(32)
@@ -130,21 +309,6 @@ using namespace mlir::triton;
 #define void_ty(ctx) LLVM::LLVMVoidType::get(ctx)
 #define struct_ty(...) LLVM::LLVMStructType::getLiteral(ctx, __VA_ARGS__)
 #define array_ty(elemTy, count) LLVM::LLVMArrayType::get(elemTy, count)
-
-// Constants
-#define int_val(bitwidth, val)                                                 \
-  LLVM::createLLVMIntegerConstant(rewriter, loc, bitwidth, val)
-#define i1_val(val) LLVM::createConstantI1(loc, rewriter, val)
-#define true_val() i1_val(true)
-#define false_val() i1_val(false)
-#define f16_val(...) LLVM::createConstantF16(loc, rewriter, __VA_ARGS__)
-#define f32_val(...) LLVM::createConstantF32(loc, rewriter, __VA_ARGS__)
-#define f64_val(...) LLVM::createConstantF64(loc, rewriter, __VA_ARGS__)
-#define i8_val(val) int_val(8, val)
-#define i16_val(val) int_val(16, val)
-#define i32_val(...) LLVM::createConstantI32(loc, rewriter, __VA_ARGS__)
-#define i64_val(...) LLVM::createConstantI64(loc, rewriter, __VA_ARGS__)
-#define tid_val() getThreadId(rewriter, loc)
 
 // Attributes
 #define i32_arr_attr(...) rewriter.getI32ArrayAttr({__VA_ARGS__})
@@ -226,24 +390,6 @@ LLVM::LLVMFuncOp appendOrGetExternFuncOp(RewriterBase &rewriter, Operation *op,
 namespace LLVM {
 using namespace mlir::triton;
 
-Value createConstantI1(Location loc, OpBuilder &rewriter, bool v);
-Value createConstantI32(Location loc, OpBuilder &rewriter, int32_t v);
-Value createConstantI64(Location loc, OpBuilder &rewriter, int64_t v);
-Value createConstantF16(Location loc, OpBuilder &rewriter, float v);
-Value createConstantF32(Location loc, OpBuilder &rewriter, float v);
-Value createConstantF64(Location loc, OpBuilder &rewriter, double v);
-Value createNaNConstant(Location loc, OpBuilder &rewriter, Type type);
-Value createIndexConstant(OpBuilder &builder, Location loc,
-                          const TypeConverter *converter, int64_t value);
-Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
-                                int64_t value);
-
-LLVM::CallOp createLLVMCallOp(OpBuilder &builder, Location loc,
-                              LLVMFuncOp funcOp, ValueRange args);
-LLVM::CallIntrinsicOp
-createLLVMIntrinsicCallOp(OpBuilder &builder, Location loc, StringRef intrinsic,
-                          TypeRange types, ValueRange args);
-
 // Is v an integer or floating-point scalar constant equal to 0?
 bool isConstantZero(Value v);
 
@@ -256,7 +402,8 @@ public:
   SharedMemoryObject(Value base, Type baseElemType, int64_t rank, Location loc,
                      RewriterBase &rewriter)
       : base(base), baseElemType(baseElemType) {
-    offsets.append(rank, i32_val(0));
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    offsets.append(rank, b.i32_val(0));
   }
 
   SmallVector<Value> getOffsets() const { return offsets; }
@@ -298,10 +445,11 @@ public:
   // TODO(Keren): deprecate the method once AMD backend has cleaned up
   Value getBaseBeforeSlice(int dim, Location loc,
                            RewriterBase &rewriter) const {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     Value cSwizzleOffset = getCSwizzleOffset(dim);
-    Value offset = sub(i32_val(0), cSwizzleOffset);
+    Value offset = b.sub(b.i32_val(0), cSwizzleOffset);
     Type type = base.getType();
-    return gep(type, baseElemType, base, offset);
+    return b.gep(type, baseElemType, base, offset);
   }
 
 private:
@@ -332,8 +480,9 @@ private:
     SmallVector<Value> strides(shape.size());
     auto order = SharedMemoryObject::getOrderForShape(shape, layoutOrder);
     int64_t stride = 1;
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     for (auto idx : order) {
-      strides[idx] = i32_val(stride);
+      strides[idx] = b.i32_val(stride);
       stride *= shape[idx];
     }
     return strides;
@@ -439,7 +588,8 @@ inline Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
     }
 
     auto ptrTy = mlir::LLVM::LLVMPointerType::get(rewriter.getContext(), 1);
-    return gep(ptrTy, i8_ty, gmemBase, allocOffset);
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    return b.gep(ptrTy, i8_ty, gmemBase, allocOffset);
   }
 
   // Base for entire kernel
@@ -461,21 +611,22 @@ inline Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
     gridDim[k] = rewriter.create<GetNumProgramsOp>(loc, k);
   }
 
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value linearId = gridIdx[2];
   for (int k = 0; k < 2; ++k) {
-    linearId = add(gridIdx[1 - k], mul(linearId, gridDim[1 - k]));
+    linearId = b.add(gridIdx[1 - k], b.mul(linearId, gridDim[1 - k]));
   }
 
   auto allocSize = allocSizeAttr.getValue().getZExtValue();
 
-  Value offset = mul(linearId, i32_val(allocSize));
+  Value offset = b.mul(linearId, b.i32_val(allocSize));
   if (allocOffset) {
-    offset = add(offset, allocOffset);
+    offset = b.add(offset, allocOffset);
   }
 
   auto *ctx = rewriter.getContext();
   auto res =
-      gep(mlir::LLVM::LLVMPointerType::get(ctx, 1), i8_ty, gmemBase, offset);
+      b.gep(mlir::LLVM::LLVMPointerType::get(ctx, 1), i8_ty, gmemBase, offset);
   return res;
 }
 
@@ -489,8 +640,10 @@ inline Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
   size_t offset = cast<IntegerAttr>(op->getAttr("allocation.offset"))
                       .getValue()
                       .getZExtValue();
-  Value offVal = i32_val(offset);
-  Value base = gep(ptrTy, i8_ty, LLVM::getStackPointer(rewriter, func), offVal);
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value offVal = b.i32_val(offset);
+  Value base =
+      b.gep(ptrTy, i8_ty, LLVM::getStackPointer(rewriter, func), offVal);
   return base;
 }
 
@@ -503,14 +656,6 @@ Value mxfpScaleBf16(RewriterBase &rewriter, Location loc, Value v, Value scale,
                     bool fastMath);
 
 } // namespace LLVM
-
-/* ------------------------------------ */
-// Returns CTA level thread idx
-inline Value getThreadId(RewriterBase &rewriter, Location loc) {
-  Value tid =
-      rewriter.create<::mlir::gpu::ThreadIdOp>(loc, ::mlir::gpu::Dimension::x);
-  return rewriter.create<arith::IndexCastOp>(loc, i32_ty, tid);
-}
 
 // -----------------------------------------------------------------------
 // Shared memory utilities
@@ -530,9 +675,10 @@ using ::mlir::triton::gpu::SliceEncodingAttr;
 inline Value dot(RewriterBase &rewriter, Location loc, ArrayRef<Value> offsets,
                  ArrayRef<Value> strides) {
   assert(offsets.size() == strides.size());
-  Value ret = i32_val(0);
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value ret = b.i32_val(0);
   for (auto [offset, stride] : llvm::zip(offsets, strides)) {
-    ret = add(ret, mul(offset, stride));
+    ret = b.add(ret, b.mul(offset, stride));
   }
   return ret;
 }
@@ -576,9 +722,10 @@ emitBaseIndexWithinCTAForBlockedLayout(Location loc, RewriterBase &rewriter,
   MLIRContext *ctx = rewriter.getContext();
   auto shape = type.getShape();
   Value threadId = getThreadId(rewriter, loc);
-  Value warpSize = i32_val(triton::gpu::getWarpSize(blockedLayout));
-  Value laneId = urem(threadId, warpSize);
-  Value warpId = udiv(threadId, warpSize);
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value warpSize = b.i32_val(triton::gpu::getWarpSize(blockedLayout));
+  Value laneId = b.urem(threadId, warpSize);
+  Value warpId = b.udiv(threadId, warpSize);
   auto sizePerThread = blockedLayout.getSizePerThread();
   auto threadsPerWarp = blockedLayout.getThreadsPerWarp();
   auto warpsPerCTA = blockedLayout.getWarpsPerCTA();
@@ -600,16 +747,16 @@ emitBaseIndexWithinCTAForBlockedLayout(Location loc, RewriterBase &rewriter,
     auto maxWarps =
         ceil<unsigned>(shapePerCTA[k], sizePerThread[k] * threadsPerWarp[k]);
     auto maxThreads = ceil<unsigned>(shapePerCTA[k], sizePerThread[k]);
-    multiDimWarpId[k] = urem(multiDimWarpId[k], i32_val(maxWarps));
-    multiDimThreadId[k] = urem(multiDimThreadId[k], i32_val(maxThreads));
+    multiDimWarpId[k] = b.urem(multiDimWarpId[k], b.i32_val(maxWarps));
+    multiDimThreadId[k] = b.urem(multiDimThreadId[k], b.i32_val(maxThreads));
     // multiDimBase[k] = (multiDimThreadId[k] +
     //                    multiDimWarpId[k] * threadsPerWarp[k]) *
     //                   sizePerThread[k];
-    Value threadsPerWarpK = i32_val(threadsPerWarp[k]);
-    Value sizePerThreadK = i32_val(sizePerThread[k]);
+    Value threadsPerWarpK = b.i32_val(threadsPerWarp[k]);
+    Value sizePerThreadK = b.i32_val(sizePerThread[k]);
     multiDimBase[k] =
-        mul(sizePerThreadK,
-            add(multiDimThreadId[k], mul(multiDimWarpId[k], threadsPerWarpK)));
+        b.mul(sizePerThreadK, b.add(multiDimThreadId[k],
+                                    b.mul(multiDimWarpId[k], threadsPerWarpK)));
   }
 
   return multiDimBase;
@@ -632,14 +779,15 @@ emitBaseIndexWithinCTAForMmaLayoutV2V3(Location loc, RewriterBase &rewriter,
   auto warpOrder = triton::gpu::getWarpOrder(mmaLayout);
   ArrayRef<unsigned int> instrShape = mmaLayout.getInstrShape();
   SmallVector<Value> warpsPerCTA;
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   for (unsigned i = 0; i < rank; ++i)
-    warpsPerCTA.push_back(i32_val(_warpsPerCTA[i]));
+    warpsPerCTA.push_back(b.i32_val(_warpsPerCTA[i]));
   auto shapePerCTA = getShapePerCTA(mmaLayout, shape);
 
   Value threadId = getThreadId(rewriter, loc);
-  Value warpSize = i32_val(32);
-  Value laneId = urem(threadId, warpSize);
-  Value warpId = udiv(threadId, warpSize);
+  Value warpSize = b.i32_val(32);
+  Value laneId = b.urem(threadId, warpSize);
+  Value warpId = b.udiv(threadId, warpSize);
 
   uint32_t repM =
       (_warpsPerCTA[rank - 2] * instrShape[rank - 2]) / shapePerCTA[rank - 2];
@@ -660,11 +808,11 @@ emitBaseIndexWithinCTAForMmaLayoutV2V3(Location loc, RewriterBase &rewriter,
 
   SmallVector<Value> multiDimWarpId(rank);
   multiDimWarpId = delinearize(rewriter, loc, warpId, _warpsPerCTA, warpOrder);
-  Value warpIdM = urem(multiDimWarpId[rank - 2], i32_val(warpsM));
-  Value warpIdN = urem(multiDimWarpId[rank - 1], i32_val(warpsN));
+  Value warpIdM = b.urem(multiDimWarpId[rank - 2], b.i32_val(warpsM));
+  Value warpIdN = b.urem(multiDimWarpId[rank - 1], b.i32_val(warpsN));
 
-  Value offWarpM = mul(warpIdM, i32_val(instrShape[rank - 2]));
-  Value offWarpN = mul(warpIdN, i32_val(instrShape[rank - 1]));
+  Value offWarpM = b.mul(warpIdM, b.i32_val(instrShape[rank - 2]));
+  Value offWarpN = b.mul(warpIdN, b.i32_val(instrShape[rank - 1]));
 
   SmallVector<Value> multiDimBase(rank);
   if (rank == 3)
@@ -676,10 +824,10 @@ emitBaseIndexWithinCTAForMmaLayoutV2V3(Location loc, RewriterBase &rewriter,
   // we rely on the caller to check.  Worst case we crash, which is better than
   // silently producing bad code.
   if (warpsM != 0)
-    multiDimBase[rank - 2] = add(udiv(laneId, i32_val(4)), offWarpM);
+    multiDimBase[rank - 2] = b.add(b.udiv(laneId, b.i32_val(4)), offWarpM);
   if (warpsN != 0)
     multiDimBase[rank - 1] =
-        add(mul(i32_val(2), urem(laneId, i32_val(4))), offWarpN);
+        b.add(b.mul(b.i32_val(2), b.urem(laneId, b.i32_val(4))), offWarpN);
 
   return multiDimBase;
 }
@@ -693,55 +841,56 @@ emitBaseIndexForMfmaLayout(Location loc, RewriterBase &rewriter,
   assert(rank == 2 || rank == 3);
   auto _warpsPerCTA = mfmaLayout.getWarpsPerCTA();
   SmallVector<Value> warpsPerCTA;
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   for (unsigned i = 0; i < rank; ++i)
-    warpsPerCTA.push_back(i32_val(_warpsPerCTA[i]));
+    warpsPerCTA.push_back(b.i32_val(_warpsPerCTA[i]));
   unsigned mDim = mfmaLayout.getMDim();
   unsigned nDim = mfmaLayout.getNDim();
   assert((mDim == nDim && (mDim == 32 || mDim == 16 || mDim == 4)) ||
          (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64));
 
   Value threadId = getThreadId(rewriter, loc);
-  Value warpSize = i32_val(triton::gpu::getWarpSize(mfmaLayout));
+  Value warpSize = b.i32_val(triton::gpu::getWarpSize(mfmaLayout));
   Value effectiveWarpSize = warpSize;
   if (mDim == 4 && nDim == 4) {
     const int uniqueValuesPerWarp = 4;
-    effectiveWarpSize = i32_val(uniqueValuesPerWarp);
+    effectiveWarpSize = b.i32_val(uniqueValuesPerWarp);
   }
-  Value laneId = urem(threadId, effectiveWarpSize);
-  Value warpId = udiv(threadId, warpSize);
+  Value laneId = b.urem(threadId, effectiveWarpSize);
+  Value warpId = b.udiv(threadId, warpSize);
   SmallVector<Value> multiDimWarpId =
       delinearize(rewriter, loc, warpId, _warpsPerCTA,
                   triton::gpu::getWarpOrder(mfmaLayout));
   if (shape[rank - 2] >= mDim) {
     assert(shape[rank - 2] % mDim == 0);
     multiDimWarpId[rank - 2] =
-        urem(multiDimWarpId[rank - 2],
-             i32_val(ceil<unsigned>(shape[rank - 2], mDim)));
+        b.urem(multiDimWarpId[rank - 2],
+               b.i32_val(ceil<unsigned>(shape[rank - 2], mDim)));
   }
   if (shape[rank - 1] >= nDim) {
     assert(shape[rank - 1] % nDim == 0);
     multiDimWarpId[rank - 1] =
-        urem(multiDimWarpId[rank - 1],
-             i32_val(ceil<unsigned>(shape[rank - 1], nDim)));
+        b.urem(multiDimWarpId[rank - 1],
+               b.i32_val(ceil<unsigned>(shape[rank - 1], nDim)));
   }
-  Value offWarp0 = mul(multiDimWarpId[rank - 2], i32_val(mDim));
-  Value offWarp1 = mul(multiDimWarpId[rank - 1], i32_val(nDim));
+  Value offWarp0 = b.mul(multiDimWarpId[rank - 2], b.i32_val(mDim));
+  Value offWarp1 = b.mul(multiDimWarpId[rank - 1], b.i32_val(nDim));
 
   SmallVector<Value> multiDimBase(rank);
   if (mfmaLayout.getIsTransposed()) {
     multiDimBase[rank - 1] =
-        add(mul(i32_val(4), udiv(laneId, i32_val(mDim))), offWarp1);
-    multiDimBase[rank - 2] = add(urem(laneId, i32_val(mDim)), offWarp0);
+        b.add(b.mul(b.i32_val(4), b.udiv(laneId, b.i32_val(mDim))), offWarp1);
+    multiDimBase[rank - 2] = b.add(b.urem(laneId, b.i32_val(mDim)), offWarp0);
   } else {
     multiDimBase[rank - 2] =
-        add(mul(i32_val(4), udiv(laneId, i32_val(nDim))), offWarp0);
-    multiDimBase[rank - 1] = add(urem(laneId, i32_val(nDim)), offWarp1);
+        b.add(b.mul(b.i32_val(4), b.udiv(laneId, b.i32_val(nDim))), offWarp0);
+    multiDimBase[rank - 1] = b.add(b.urem(laneId, b.i32_val(nDim)), offWarp1);
   }
   // TODO(Lixun): It is assumed when rank = 3, warpsPerCTA is set to
   // {numWarps, 1, 1}. We need to generalize the offset computation.
   if (rank == 3) {
     assert(_warpsPerCTA[1] == 1 && _warpsPerCTA[2] == 1);
-    multiDimBase[0] = urem(warpId, i32_val(shape[0]));
+    multiDimBase[0] = b.urem(warpId, b.i32_val(shape[0]));
   }
   return multiDimBase;
 }
@@ -821,64 +970,65 @@ emitBaseIndexForWmmaLayout(Location loc, RewriterBase &rewriter,
   auto rank = _warpsPerCTA.size();
   assert(rank == 2 || rank == 3);
   SmallVector<Value> warpsPerCTA;
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   for (unsigned i = 0; i < rank; ++i)
-    warpsPerCTA.push_back(i32_val(_warpsPerCTA[i]));
+    warpsPerCTA.push_back(b.i32_val(_warpsPerCTA[i]));
   auto mnkDim = AMDWmmaEncodingAttr::getMNKDimPerInstr();
 
   Value threadId = getThreadId(rewriter, loc);
-  Value warpSize = i32_val(triton::gpu::getWarpSize(wmmaLayout));
+  Value warpSize = b.i32_val(triton::gpu::getWarpSize(wmmaLayout));
   Value laneId =
-      urem(threadId, i32_val(triton::gpu::getWarpSize(wmmaLayout) / 2));
-  Value threadIdPerWarp = urem(threadId, warpSize);
+      b.urem(threadId, b.i32_val(triton::gpu::getWarpSize(wmmaLayout) / 2));
+  Value threadIdPerWarp = b.urem(threadId, warpSize);
 
-  Value warpId = udiv(threadId, warpSize);
+  Value warpId = b.udiv(threadId, warpSize);
   SmallVector<Value> multiDimWarpId =
       delinearize(rewriter, loc, warpId, _warpsPerCTA,
                   triton::gpu::getWarpOrder(wmmaLayout));
   if (shape[rank - 2] >= mnkDim[0]) {
     assert(shape[rank - 2] % mnkDim[0] == 0);
     multiDimWarpId[rank - 2] =
-        urem(multiDimWarpId[rank - 2],
-             i32_val(ceil<unsigned>(shape[rank - 2], mnkDim[0])));
+        b.urem(multiDimWarpId[rank - 2],
+               b.i32_val(ceil<unsigned>(shape[rank - 2], mnkDim[0])));
   }
   if (shape[rank - 1] >= mnkDim[1]) {
     assert(shape[rank - 1] % mnkDim[1] == 0);
     multiDimWarpId[rank - 1] =
-        urem(multiDimWarpId[rank - 1],
-             i32_val(ceil<unsigned>(shape[rank - 1], mnkDim[1])));
+        b.urem(multiDimWarpId[rank - 1],
+               b.i32_val(ceil<unsigned>(shape[rank - 1], mnkDim[1])));
   }
-  Value offWarp0 = mul(multiDimWarpId[rank - 2], i32_val(mnkDim[0]));
-  Value offWarp1 = mul(multiDimWarpId[rank - 1], i32_val(mnkDim[1]));
+  Value offWarp0 = b.mul(multiDimWarpId[rank - 2], b.i32_val(mnkDim[0]));
+  Value offWarp1 = b.mul(multiDimWarpId[rank - 1], b.i32_val(mnkDim[1]));
 
   SmallVector<Value> multiDimBase(rank);
 
   auto ver = wmmaLayout.getVersion();
   if (ver == 1) {
     multiDimBase[rank - 2] =
-        add(udiv(threadIdPerWarp, i32_val(mnkDim[2])), offWarp0);
+        b.add(b.udiv(threadIdPerWarp, b.i32_val(mnkDim[2])), offWarp0);
   } else {
     assert(ver == 2);
     if (wmmaLayout.getIsTransposed()) {
       multiDimBase[rank - 1] =
-          add(mul(udiv(threadIdPerWarp, i32_val(16)),
-                  i32_val(wmmaLayout.getSizePerThread()[rank - 1])),
-              offWarp1);
-      multiDimBase[rank - 2] = add(laneId, offWarp0);
+          b.add(b.mul(b.udiv(threadIdPerWarp, b.i32_val(16)),
+                      b.i32_val(wmmaLayout.getSizePerThread()[rank - 1])),
+                offWarp1);
+      multiDimBase[rank - 2] = b.add(laneId, offWarp0);
     } else {
       multiDimBase[rank - 2] =
-          add(mul(udiv(threadIdPerWarp, i32_val(16)),
-                  i32_val(wmmaLayout.getSizePerThread()[rank - 2])),
-              offWarp0);
-      multiDimBase[rank - 1] = add(laneId, offWarp1);
+          b.add(b.mul(b.udiv(threadIdPerWarp, b.i32_val(16)),
+                      b.i32_val(wmmaLayout.getSizePerThread()[rank - 2])),
+                offWarp0);
+      multiDimBase[rank - 1] = b.add(laneId, offWarp1);
     }
   }
-  multiDimBase[rank - 1] = add(laneId, offWarp1);
+  multiDimBase[rank - 1] = b.add(laneId, offWarp1);
 
   // TODO: It is assumed when rank = 3, warpsPerCTA is set to
   // {numWarps, 1, 1}. We need to generalize the offset computation.
   if (rank == 3) {
     assert(_warpsPerCTA[1] == 1 && _warpsPerCTA[2] == 1);
-    multiDimBase[0] = urem(warpId, i32_val(shape[0]));
+    multiDimBase[0] = b.urem(warpId, b.i32_val(shape[0]));
   }
   return multiDimBase;
 }
@@ -907,16 +1057,18 @@ inline SmallVector<Value> emitCTAOffsetForLayout(Location loc,
   SmallVector<Value> multiDimClusterCTAId =
       delinearize(rewriter, loc, clusterCTAId, CTAsPerCGA, CTAOrder);
 
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   // CTA Wrapping
   for (unsigned i = 0; i < rank; ++i) {
     // This wrapping rule must be consistent with getShapePerCTA
     unsigned splitNum = std::min<unsigned>(shape[i], CTASplitNum[i]);
-    multiDimClusterCTAId[i] = urem(multiDimClusterCTAId[i], i32_val(splitNum));
+    multiDimClusterCTAId[i] =
+        b.urem(multiDimClusterCTAId[i], b.i32_val(splitNum));
   }
 
   SmallVector<Value> CTAOffset(rank);
   for (unsigned i = 0; i < rank; ++i)
-    CTAOffset[i] = mul(multiDimClusterCTAId[i], i32_val(shapePerCTA[i]));
+    CTAOffset[i] = b.mul(multiDimClusterCTAId[i], b.i32_val(shapePerCTA[i]));
 
   return CTAOffset;
 }
@@ -954,6 +1106,7 @@ emitBaseIndexForLayoutImpl(Location loc, RewriterBase &rewriter,
   } else {
     llvm_unreachable("unsupported emitBaseIndexForLayout");
   }
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   if (withCTAOffset) {
     auto CTAOffset =
         emitCTAOffsetForLayout(loc, rewriter, target, layout, shape);
@@ -964,7 +1117,7 @@ emitBaseIndexForLayoutImpl(Location loc, RewriterBase &rewriter,
       // off.
       if (!result[k])
         continue;
-      result[k] = add(result[k], CTAOffset[k]);
+      result[k] = b.add(result[k], CTAOffset[k]);
     }
   }
   return result;
@@ -1029,6 +1182,12 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
     const TargetInfoBase &target,
     std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback);
 
+[[nodiscard]] bool emitTransferBetweenRegistersAndShared(
+    LinearLayout &regLayout, triton::gpu::MemDescType sharedTy, Type elemLlvmTy,
+    std::optional<int32_t> maxVecElems, const SharedMemoryObject &smemObj,
+    Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
+    std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback);
+
 SmallVector<Value> loadSharedToDistributed(RankedTensorType dstTy,
                                            triton::gpu::MemDescType srcTy,
                                            Type elemLlvmTy,
@@ -1052,9 +1211,10 @@ inline SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
   ArrayRef<Type> types =
       cast<LLVM::LLVMStructType>(llvmStruct.getType()).getBody();
   SmallVector<Value> results(types.size());
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   for (unsigned i = 0; i < types.size(); ++i) {
     Type type = types[i];
-    results[i] = extract_val(type, llvmStruct, i);
+    results[i] = b.extract_val(type, llvmStruct, i);
   }
   return results;
 }
@@ -1077,6 +1237,7 @@ inline Value packLLElements(Location loc,
                    << resultVals.size();
   }
   Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structType);
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   for (const auto &v : llvm::enumerate(resultVals)) {
     if (!v.value()) {
       emitError(loc)
@@ -1090,7 +1251,7 @@ inline Value packLLElements(Location loc,
                      << elementTypes[v.index()] << " but got "
                      << v.value().getType();
     }
-    llvmStruct = insert_val(structType, llvmStruct, v.value(), v.index());
+    llvmStruct = b.insert_val(structType, llvmStruct, v.value(), v.index());
   }
   return llvmStruct;
 }
@@ -1103,10 +1264,11 @@ inline SmallVector<Value> unpackLLVector(Location loc, Value llvmVec,
       isa<LLVM::LLVMPointerType>(llvmVec.getType()))
     return {llvmVec};
 
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value> results;
   for (int i = 0; i < cast<VectorType>(llvmVec.getType()).getNumElements();
        i++) {
-    results.push_back(extract_element(llvmVec, i32_val(i)));
+    results.push_back(b.extract_element(llvmVec, b.i32_val(i)));
   }
   return results;
 }
@@ -1115,9 +1277,10 @@ inline Value packLLVector(Location loc, ValueRange vals,
                           RewriterBase &rewriter) {
   assert(vals.size() > 0);
   auto vecType = vec_ty(vals[0].getType(), vals.size());
-  Value vec = undef(vecType);
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value vec = b.undef(vecType);
   for (int i = 0; i < vals.size(); i++) {
-    vec = insert_element(vec, vals[i], i32_val(i));
+    vec = b.insert_element(vec, vals[i], b.i32_val(i));
   }
   return vec;
 }
