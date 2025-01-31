@@ -19,6 +19,9 @@ enum class ISAFamily {
 // Deduces the corresponding ISA family for the given target gfx |arch|.
 ISAFamily deduceISAFamily(llvm::StringRef arch);
 
+// Retursn true if given architecture support V_DOT instruction.
+bool supportsVDot(llvm::StringRef arch);
+
 // Here is a partial definition of DppCtrl enums. For the complete definition,
 // please check:
 // https://github.com/llvm/llvm-project/blob/8c75290/llvm/lib/Target/AMDGPU/SIDefines.h#L939

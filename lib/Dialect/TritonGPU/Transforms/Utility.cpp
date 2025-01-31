@@ -967,7 +967,7 @@ int getNVIDIAComputeCapability(Operation *module) {
          "Expected a target attribute on the module operation");
 
   StringAttr targetAttr =
-      cast<StringAttr>(module->getAttr(triton::AttrTargetName));
+      module->getAttrOfType<StringAttr>(triton::AttrTargetName);
 
   StringRef ref = targetAttr.strref();
   assert(ref.starts_with("cuda:") &&
@@ -980,6 +980,20 @@ int getNVIDIAComputeCapability(Operation *module) {
          "invalid compute capability string in target attribute");
 
   return computeCapability;
+}
+
+StringRef getAMDArch(Operation *module) {
+  assert(module->hasAttr(triton::AttrTargetName) &&
+         "Expected a target attribute on the module operation");
+
+  StringAttr targetAttr =
+      module->getAttrOfType<StringAttr>(triton::AttrTargetName);
+
+  StringRef ref = targetAttr.strref();
+  assert(ref.starts_with("hip:") &&
+         "expected target attribute to be prefixed with \"hip:\"");
+
+  return ref.drop_front(4); // drop the "hip:"
 }
 
 // If all the transitive uses of the given value have are used by a convert to
