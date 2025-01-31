@@ -1122,18 +1122,20 @@ public:
   }
 };
 
-class ConvertCallOp : public PointerCanonicalizationPattern<tt::CallOp> {
+template <typename SourceOp>
+class MaterializeFatPointerVariadic
+    : public PointerCanonicalizationPattern<SourceOp> {
 public:
   using PointerCanonicalizationPattern<
-      tt::CallOp>::PointerCanonicalizationPattern;
+      SourceOp>::PointerCanonicalizationPattern;
 
   LogicalResult matchAndRewrite_(
-      tt::CallOp callOp,
-      typename PointerCanonicalizationPattern<tt::CallOp>::OneToNOpAdaptor
+      SourceOp op,
+      typename PointerCanonicalizationPattern<SourceOp>::OneToNOpAdaptor
           adaptor,
       ConversionPatternRewriter &rewriter) const override {
-    Location curLoc = callOp.getLoc();
-    SmallVector<Value> operands = callOp->getOperands();
+    Location curLoc = op.getLoc();
+    SmallVector<Value> operands = op->getOperands();
     for (auto [i, maybeFatPtr] : llvm::enumerate(adaptor.getOperands())) {
       if (maybeFatPtr.size() != 2)
         continue;
@@ -1147,9 +1149,8 @@ public:
       operands[i] = newPtr;
     }
 
-    rewriter.replaceOpWithNewOp<tt::CallOp>(callOp, callOp->getResultTypes(),
-                                            ValueRange{operands},
-                                            callOp->getAttrs());
+    rewriter.replaceOpWithNewOp<SourceOp>(op, op->getResultTypes(),
+                                          ValueRange{operands}, op->getAttrs());
     return success();
   }
 };
@@ -1448,18 +1449,18 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   // ConvertFuncOpArgsUnrealizedCasts because that is necessary for
   // "initializing" the chain of fat pointers starting from tt.func tt.ptr args.
   RewritePatternSet patterns(&getContext());
-  patterns
-      .add<ConvertFuncOpArgsUnrealizedCasts, ConvertBroadcastOp, ConvertSplatOp,
-           ConvertAddPtrOp, MaterializeFatPointer<tt::LoadOp>,
-           MaterializeFatPointer<tt::StoreOp>,
-           MaterializeFatPointer<tt::AtomicCASOp>,
-           MaterializeFatPointer<tt::AtomicRMWOp>,
-           MaterializeFatPointer<tt::PtrToIntOp>,
-           MaterializeFatPointer<tt::BitcastOp>, ConvertSCFForOp,
-           ConvertExpandDims, ConvertSCFYieldOp, ConvertSCFIfOp,
-           ConvertSCFConditionOp, ConvertSCFWhileOp, ConvertCFCondBranch,
-           ConvertCFBranch, ConvertArithSelectOp, ConvertCallOp,
-           ConvertReturnOp>(patterns.getContext(), opsToRewrite, fatPrs);
+  patterns.add<
+      ConvertFuncOpArgsUnrealizedCasts, ConvertBroadcastOp, ConvertSplatOp,
+      ConvertAddPtrOp, MaterializeFatPointer<tt::AtomicCASOp>,
+      MaterializeFatPointer<tt::AtomicRMWOp>,
+      MaterializeFatPointer<tt::BitcastOp>, MaterializeFatPointer<tt::LoadOp>,
+      MaterializeFatPointer<tt::PtrToIntOp>, MaterializeFatPointer<tt::StoreOp>,
+      MaterializeFatPointerVariadic<tt::CallOp>,
+      MaterializeFatPointerVariadic<tt::PrintOp>, ConvertSCFForOp,
+      ConvertExpandDims, ConvertSCFYieldOp, ConvertSCFIfOp,
+      ConvertSCFConditionOp, ConvertSCFWhileOp, ConvertCFCondBranch,
+      ConvertCFBranch, ConvertArithSelectOp, ConvertReturnOp>(
+      patterns.getContext(), opsToRewrite, fatPrs);
   if (failed(applyPartialConversion(func, target, std::move(patterns), config)))
     return signalPassFailure();
 
