@@ -930,7 +930,6 @@ struct ElementwiseOpConversion
   }
 };
 
-
 // Attempts to use vectorized conversions via inline PTX when possible.
 struct FpToFpOpConversion
     : public ElementwiseOpConversionBase<triton::FpToFpOp, FpToFpOpConversion> {
@@ -1308,13 +1307,12 @@ struct TruncFOpConversion
   using Base::Base;
   using Adaptor = typename Base::OpAdaptor;
 
-    explicit TruncFOpConversion(LLVMTypeConverter &typeConverter,
+  explicit TruncFOpConversion(LLVMTypeConverter &typeConverter,
                               ModuleAxisInfoAnalysis &axisAnalysisPass,
- 			      llvm::AMDGPU::GPUKind gpuKind,
+                              llvm::AMDGPU::GPUKind gpuKind,
                               PatternBenefit benefit = patternBenefitDefault)
       : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
         gpuKind(gpuKind) {}
-    
 
   SmallVector<Value> createDestOps(mlir::arith::TruncFOp op, OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
@@ -1330,9 +1328,9 @@ struct TruncFOpConversion
       return {rewriter.create<LLVM::FPTruncOp>(loc, elemTy, operands[0][0])};
     }
   }
+
 private:
-   llvm::AMDGPU::GPUKind gpuKind;
-  
+  llvm::AMDGPU::GPUKind gpuKind;
 };
 
 struct ExpOpConversionApprox
@@ -1626,7 +1624,8 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<FMulOpConversion>(typeConverter, axisInfoAnalysis, benefit);
 
   patterns.add<ExtFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<TruncFOpConversion>(typeConverter, axisInfoAnalysis, targetInfo.getGPUKind(), benefit);
+  patterns.add<TruncFOpConversion>(typeConverter, axisInfoAnalysis,
+                                   targetInfo.getGPUKind(), benefit);
   patterns.add<FPToSIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SIToFPOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis,
