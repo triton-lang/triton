@@ -280,8 +280,6 @@ def _xor_combine(a, b):
 @core._add_reduction_docstr("xor sum")
 def xor_sum(input, axis=None, keep_dims=False):
     core.static_assert(input.type.scalar.is_int(), "xor_sum only supported for integers")
-
-    input = core._promote_bfloat16_to_float32(input)
     return core.reduce(input, axis, _xor_combine, keep_dims=keep_dims)
 
 
