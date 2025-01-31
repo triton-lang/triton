@@ -285,6 +285,7 @@ public:
     if (!foundInitializer)
       return failure();
 
+    rewriter.setInsertionPointAfter(src);
     SmallVector<ConvertLayoutOp> newOperands;
     for (auto operand : src->getOperands()) {
       // We checked earlier that all operands are ranked tensors.
