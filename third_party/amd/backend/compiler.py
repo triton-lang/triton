@@ -40,6 +40,7 @@ def is_pingpong_enabled(arch):
     default = "1" if arch == "gfx942" else "0"
     return os.getenv("TRITON_HIP_USE_BLOCK_PINGPONG", default) == "1"
 
+
 @dataclass(frozen=True)
 class HIPOptions:
     num_warps: int = 4
