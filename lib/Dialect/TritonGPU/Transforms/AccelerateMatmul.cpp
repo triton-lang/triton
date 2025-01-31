@@ -521,10 +521,17 @@ Value addSmemStageToScaleLoad(Value scale, mlir::PatternRewriter &rewriter) {
     if (auto reshape = dyn_cast<ReshapeOp>(op)) {
       op = reshape.getSrc().getDefiningOp();
       loadConsumer = reshape;
-    }
-    if (auto trans = dyn_cast<TransOp>(op)) {
+    } else if (auto trans = dyn_cast<TransOp>(op)) {
       op = trans.getSrc().getDefiningOp();
       loadConsumer = trans;
+    } else if (auto cvt = dyn_cast<ConvertLayoutOp>(op)) {
+      op = cvt.getSrc().getDefiningOp();
+      loadConsumer = cvt;
+    } else {
+      // Unrecognized pattern, bail out. In practice, this implies that MMA
+      // pipelining will not apply to the scaled dot op, since tmem_copy would
+      // not be inserted before the pipeline pass.
+      return scale;
     }
   }
 

@@ -162,6 +162,16 @@ loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
             dfs(defOp, finalUser, distance);
           }
         }
+	if (auto tmemAlloc = dyn_cast<nvidia_gpu::TMEMAllocOp>(op)) {
+	  if (!tmemAlloc.getSrc()) {
+	    for (auto user: tmemAlloc.getResult().getUsers()) {
+	      if (auto tmemCopy = dyn_cast<nvidia_gpu::TMEMCopyOp>(user)) {
+		dfs(tmemCopy.getSrc().getDefiningOp(), finalUser, distance);
+		break;
+	      }
+	    }
+	  }
+	}
       };
 
   bool seenDot = false;
