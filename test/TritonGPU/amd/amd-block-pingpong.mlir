@@ -4,11 +4,11 @@
 //CHECK: ttg.local_load
 //CHECK: rocdl.s.setprio 1
 //CHECK: tt.load
-//CHECK: rocdl.sched.barrier 0
+//CHECK: rocdl.sched.barrier
 //CHECK: ttg.local_load
 //CHECK: rocdl.s.setprio 0
 //CHECK: tt.load
-//CHECK: rocdl.sched.barrier 0
+//CHECK: rocdl.sched.barrier
 //CHECK: rocdl.s.setprio 1
 //CHECK: tt.dot
 //CHECK: rocdl.s.setprio 0
