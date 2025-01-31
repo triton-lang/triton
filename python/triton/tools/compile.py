@@ -136,11 +136,12 @@ if __name__ == "__main__":
         if hints.get((i, ), None) == 16:
             suffix += 'd'
     func_name = '_'.join([out_name, sig_hash, suffix])
-    hex_ = str(binascii.hexlify(ccinfo.asm["cubin"]))[2:-1]
+    asm = ccinfo.asm["cubin"]  # store binary data once
+    hex_ = str(binascii.hexlify(asm))[2:-1]
     params = {
         "kernel_name": func_name,
         "triton_kernel_name": args.kernel_name,
-        "bin_size": len(hex_),
+        "bin_size": len(asm),
         "bin_data": ", ".join([f"0x{x}{y}" for x, y in zip(hex_[::2], hex_[1::2])]),
         "signature": ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names_not_1, arg_types_not_1)]),
         "full_signature": ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names, arg_types)]),

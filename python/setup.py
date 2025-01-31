@@ -315,7 +315,8 @@ def download_and_copy(name, src_func, dst_path, variable, version, url_func):
     base_dir = os.path.dirname(__file__)
     system = platform.system()
     arch = platform.machine()
-    arch = {"arm64": "aarch64"}.get(arch, arch)
+    # NOTE: This might be wrong for jetson if both grace chips and jetson chips return aarch64
+    arch = {"arm64": "sbsa", "aarch64": "sbsa"}.get(arch, arch)
     supported = {"Linux": "linux", "Darwin": "linux"}
     url = url_func(supported[system], arch, version)
     src_path = src_func(supported[system], arch, version)
@@ -407,11 +408,7 @@ class CMakeBuild(build_ext):
         if cupti_include_dir == "":
             cupti_include_dir = os.path.join(get_base_dir(), "third_party", "nvidia", "backend", "include")
         cmake_args += ["-DCUPTI_INCLUDE_DIR=" + cupti_include_dir]
-        cupti_lib_dir = get_env_with_keys(["TRITON_CUPTI_LIB_PATH"])
-        if cupti_lib_dir == "":
-            cupti_lib_dir = os.path.join(get_base_dir(), "third_party", "nvidia", "backend", "lib", "cupti")
-        cmake_args += ["-DCUPTI_LIB_DIR=" + cupti_lib_dir]
-        roctracer_include_dir = get_env_with_keys(["ROCTRACER_INCLUDE_PATH"])
+        roctracer_include_dir = get_env_with_keys(["TRITON_ROCTRACER_INCLUDE_PATH"])
         if roctracer_include_dir == "":
             roctracer_include_dir = os.path.join(get_base_dir(), "third_party", "amd", "backend", "include")
         cmake_args += ["-DROCTRACER_INCLUDE_DIR=" + roctracer_include_dir]

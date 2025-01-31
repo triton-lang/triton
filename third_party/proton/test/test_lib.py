@@ -32,7 +32,7 @@ def test_op():
 
 def test_session(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_session.hatchet"
-    session_id = libproton.start(str(temp_file.with_suffix("")), "shadow", "tree", _select_backend())
+    session_id = libproton.start(str(temp_file.with_suffix("")), "shadow", "tree", _select_backend(), "")
     libproton.deactivate(session_id)
     libproton.activate(session_id)
     libproton.finalize(session_id, "hatchet")
@@ -42,7 +42,7 @@ def test_session(tmp_path: pathlib.Path):
 
 def test_add_metrics(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_add_metrics.hatchet"
-    libproton.start(str(temp_file.with_suffix("")), "shadow", "tree", _select_backend())
+    libproton.start(str(temp_file.with_suffix("")), "shadow", "tree", _select_backend(), "")
     id1 = libproton.record_scope()
     libproton.enter_scope(id1, "one")
     libproton.add_metrics(id1, {"a": 1.0, "b": 2.0})

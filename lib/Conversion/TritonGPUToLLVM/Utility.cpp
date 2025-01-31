@@ -15,7 +15,7 @@
 static int __builtin_clz(unsigned x) {
   unsigned long r;
   _BitScanReverse(&r, x);
-  return static_cast<int>(r);
+  return static_cast<int>(r ^ 31);
 }
 
 static int __builtin_ctz(unsigned x) {
