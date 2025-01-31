@@ -261,8 +261,8 @@ def _sum_combine(a, b):
 
 def _pick_sum_dtype(in_dtype: core.constexpr, dtype: core.constexpr):
     # FIXME: Workaround the interpreter not wrapping constexpr args.
-    is_wrapped = isinstance(dtype, core.constexpr)
-    if (is_wrapped and dtype.value is not None) or (not is_wrapped and dtype is not None):
+    dtype = core._unwrap_if_constexpr(dtype)
+    if dtype is not None:
         return dtype
 
     # For integer bitwidths less than 32, pick int32 with the same sign to
@@ -277,7 +277,7 @@ def _pick_sum_dtype(in_dtype: core.constexpr, dtype: core.constexpr):
     elif in_dtype.is_floating():
         out_dtype = core.float32 if in_dtype.primitive_bitwidth < 32 else None
 
-    return core.constexpr(out_dtype) if is_wrapped else out_dtype
+    return out_dtype
 
 
 @core._tensor_member_fn
