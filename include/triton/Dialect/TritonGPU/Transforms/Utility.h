@@ -194,6 +194,9 @@ bool isPureUnaryInlineAsm(Operation *op);
 // read the compute capability from the module attributes
 int getNVIDIAComputeCapability(Operation *module);
 
+// Read the amd target from the module attributes
+StringRef getAMDArch(Operation *module);
+
 std::optional<mlir::triton::gpu::SharedEncodingAttr>
 getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible);
 

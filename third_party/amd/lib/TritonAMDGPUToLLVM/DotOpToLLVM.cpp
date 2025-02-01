@@ -7,6 +7,10 @@ using ::mlir::triton::gpu::AMDWmmaEncodingAttr;
 using ::mlir::triton::gpu::getShapePerCTA;
 
 namespace mlir::triton::AMD {
+LogicalResult convertAMDFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
+                               const LLVMTypeConverter *typeConverter,
+                               ConversionPatternRewriter &rewriter);
+
 LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                           const LLVMTypeConverter *typeConverter,
                           ConversionPatternRewriter &rewriter);
@@ -37,7 +41,7 @@ struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
 
     if (isa<BlockedEncodingAttr>(
             cast<RankedTensorType>(D.getType()).getEncoding()))
-      return convertFMADot(op, adaptor, getTypeConverter(), rewriter);
+      return AMD::convertAMDFMADot(op, adaptor, getTypeConverter(), rewriter);
 
     llvm::report_fatal_error(
         "Unsupported DotOp found when converting TritonGPU to LLVM.");

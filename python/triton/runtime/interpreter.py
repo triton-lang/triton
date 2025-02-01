@@ -712,7 +712,7 @@ def _patch_lang_tensor(tensor):
     tensor.T = property(_get_transpose)
 
 
-class ReduceScanOpIneterface:
+class ReduceScanOpInterface:
 
     def __init__(self, axis, combine_fn):
         self.axis = axis
@@ -748,7 +748,7 @@ class ReduceScanOpIneterface:
         raise NotImplementedError("apply_impl not implemented")
 
 
-class ReduceOps(ReduceScanOpIneterface):
+class ReduceOps(ReduceScanOpInterface):
 
     def __init__(self, axis, combine_fn, keep_dims):
         super().__init__(axis, combine_fn)
@@ -844,7 +844,7 @@ class ReduceOps(ReduceScanOpIneterface):
             return self.generic_reduce(input)
 
 
-class ScanOps(ReduceScanOpIneterface):
+class ScanOps(ReduceScanOpInterface):
 
     def __init__(self, axis, combine_fn, reverse):
         super().__init__(axis, combine_fn)

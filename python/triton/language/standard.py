@@ -259,11 +259,30 @@ def _sum_combine(a, b):
 # sum
 
 
+def _pick_sum_dtype(in_dtype: core.constexpr, dtype: core.constexpr):
+    dtype = core._unwrap_if_constexpr(dtype)
+    if dtype is not None:
+        return dtype
+
+    # For integer bitwidths less than 32, pick int32 with the same sign to
+    # avoid overflow.
+    out_dtype = None
+    if in_dtype.is_int_signed():
+        out_dtype = core.int32 if in_dtype.int_bitwidth < 32 else None
+    elif in_dtype.is_int_unsigned():
+        out_dtype = core.uint32 if in_dtype.int_bitwidth < 32 else None
+    return out_dtype
+
+
 @core._tensor_member_fn
 @jit
-@core._add_reduction_docstr("sum")
-def sum(input, axis=None, keep_dims=False):
-    input = core._promote_bfloat16_to_float32(input)
+@core._add_reduction_docstr("sum", dtype_arg="dtype")
+def sum(input, axis=None, keep_dims=False, dtype: core.constexpr = None):
+    # Pick a default dtype for the reduction if one was not specified.
+    out_dtype: core.constexpr = _pick_sum_dtype(input.dtype, dtype)
+
+    if out_dtype is not None:
+        input = input.to(out_dtype)
     return core.reduce(input, axis, _sum_combine, keep_dims=keep_dims)
 
 
@@ -422,7 +441,7 @@ def flip(x, dim=None):
         for j in core.static_range(0, steps + 1):
             if j != i and j != i + 1:
                 flip2 = core.expand_dims(flip2, j)
-        y = sum(y * flip2, i + 1, keep_dims=True)
+        y = sum(y * flip2, i + 1, keep_dims=True, dtype=y.dtype)
     x = core.reshape(y, x.shape).to(x.dtype, bitcast=True)
     return x
 
