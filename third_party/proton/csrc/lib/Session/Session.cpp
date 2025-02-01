@@ -12,9 +12,11 @@ namespace {
 Profiler *getProfiler(const std::string &name, const std::string &path,
                       const std::string &mode) {
   if (proton::toLower(name) == "cupti") {
+    auto *profiler = &CuptiProfiler::instance();
+    profiler->setLibPath(path);
     if (proton::toLower(mode) == "pcsampling")
-      return &CuptiProfiler::instance().setLibPath(path).enablePCSampling();
-    return &CuptiProfiler::instance().setLibPath(path);
+      profiler->enablePCSampling();
+    return profiler;
   }
   if (proton::toLower(name) == "roctracer") {
     return &RoctracerProfiler::instance();
