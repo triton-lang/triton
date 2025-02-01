@@ -1288,9 +1288,12 @@ inline Value packLLVector(Location loc, ValueRange vals,
 inline bool
 isSimpleSharedMemoryAccess(ArrayRef<int64_t> shape,
                            ArrayRef<int64_t> allocShape,
-                           triton::gpu::SharedEncodingAttr sharedEnc) {
+                           triton::gpu::SharedEncodingTrait sharedEnc) {
   auto rank = shape.size();
-  return /*no swizzling*/ sharedEnc.getMaxPhase() == 1 ||
+  auto swizzledLayout =
+      dyn_cast<triton::gpu::SwizzledSharedEncodingAttr>(sharedEnc);
+  bool noSwizzling = swizzledLayout && swizzledLayout.getMaxPhase() == 1;
+  return /*no swizzling*/ noSwizzling ||
          /*swizzling but same shape*/ shape == allocShape ||
          /*swizzling and rank-reduced and rank >= 2*/
          (shape == allocShape.take_back(rank) && rank >= 2);
