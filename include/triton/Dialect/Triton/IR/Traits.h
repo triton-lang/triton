@@ -64,6 +64,7 @@ public:
 // should have the dimensions of the two operands that are not shared.
 // A dot-like operation can be either 2d or 3d.
 // In the 3d case, the first dimension of operands is the batch dimension.
+/*
 template <class ConcreteType>
 class DotLike : public TraitBase<ConcreteType, DotLike> {
 public:
@@ -104,6 +105,7 @@ public:
     return success();
   }
 };
+*/
 
 template <typename ConcreteType>
 class SameOperandsAndResultEncoding

@@ -404,10 +404,10 @@ void StreamPipeliner::computeLoadOpsToIndirectionLevelAndUse() {
       };
 
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (!op.hasTrait<OpTrait::DotLike>())
-      continue;
-    seen.clear();
-    dfs(&op, 0, &op);
+    if (dyn_cast<mlir::triton::DotOpInterface>(op)) {
+      seen.clear();
+      dfs(&op, 0, &op);
+    }
   }
 
   // If the loop has numStages attribute, also consider pipelining other loads
@@ -454,7 +454,7 @@ void StreamPipeliner::assignMemoryLayouts() {
       continue;
     }
 
-    if (use->hasTrait<OpTrait::DotLike>()) {
+    if (dyn_cast<mlir::triton::DotOpInterface>(use)) {
       // Only use shared memory when feeding into a dot op.
       loadInfo.usedByDot = true;
       loadInfo.sharedEncoding =

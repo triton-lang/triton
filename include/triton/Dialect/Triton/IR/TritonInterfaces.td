@@ -6,7 +6,6 @@ include "mlir/Interfaces/InferTypeOpInterface.td"
 
 def TensorSizeTrait : NativeOpTrait<"TensorSizeTrait">;
 def VerifyTensorLayoutsTrait : NativeOpTrait<"VerifyTensorLayoutsTrait">;
-def DotLike : NativeOpTrait<"DotLike">;
 def SameOperandsEncoding : NativeOpTrait<"SameOperandsEncoding">;
 def SameOperandsAndResultEncoding : NativeOpTrait<"SameOperandsAndResultEncoding">;
 def SameLoadStoreOperandsShape : NativeOpTrait<"SameLoadStoreOperandsShape">;

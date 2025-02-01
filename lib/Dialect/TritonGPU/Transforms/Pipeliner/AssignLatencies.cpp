@@ -151,9 +151,9 @@ loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
           distance++;
         }
         for (Value operand : op->getOperands()) {
-          if (op->hasTrait<OpTrait::DotLike>()) {
+          if (auto dotOp = dyn_cast<mlir::triton::DotOpInterface>(op)) {
             // Heuristic: only pipeline A and B operands of the dot op.
-            if (operand == op->getOperand(2))
+            if (operand == dotOp->getOperand(2))
               continue;
           }
           Value v = operand;
@@ -166,11 +166,11 @@ loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
 
   bool seenDot = false;
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (!op.hasTrait<OpTrait::DotLike>())
-      continue;
-    seenDot = true;
-    seen.clear();
-    dfs(&op, &op, 0);
+    if (dyn_cast<mlir::triton::DotOpInterface>(op)) {
+      seenDot = true;
+      seen.clear();
+      dfs(&op, &op, 0);
+    }
   }
 
   // If the loop has numStages attribute, also consider pipelining other loads
