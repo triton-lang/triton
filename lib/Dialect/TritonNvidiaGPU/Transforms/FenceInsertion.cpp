@@ -21,8 +21,6 @@ namespace ttng = ::mlir::triton::nvidia_gpu;
 #define GEN_PASS_CLASSES
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h.inc"
 
-using ::mlir::triton::gpu::SharedEncodingAttr;
-
 namespace {
 
 struct FenceInsertionPass

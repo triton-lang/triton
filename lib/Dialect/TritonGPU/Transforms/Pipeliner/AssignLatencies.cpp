@@ -45,12 +45,12 @@ bool canHaveSharedEncoding(tt::LoadOp op) {
   if (llvm::any_of(op->getUsers(), [&](Operation *user) {
         return isa<ttg::LocalAllocOp>(user);
       })) {
-    ttg::SharedEncodingAttr localAllocEnc;
+    ttg::SharedEncodingTrait localAllocEnc;
     for (auto user : op->getUsers()) {
       auto localAlloc = dyn_cast<ttg::LocalAllocOp>(user);
       if (!localAlloc)
         continue;
-      auto enc = mlir::cast<ttg::SharedEncodingAttr>(
+      auto enc = mlir::cast<ttg::SharedEncodingTrait>(
           localAlloc.getType().getEncoding());
       if (!localAllocEnc) {
         localAllocEnc = enc;

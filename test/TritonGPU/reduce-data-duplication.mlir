@@ -1,6 +1,6 @@
 // RUN: triton-opt %s -split-input-file -tritongpu-reduce-data-duplication | FileCheck %s
 
-//       CHECK:   #[[$SHARED:.*]] = #ttg.shared<{vec = 8, perPhase = 8, maxPhase = 2, order = [0, 1], hasLeadingOffset = false}
+//       CHECK:   #[[$SHARED:.*]] = #ttg.swizzled_shared<{vec = 8, perPhase = 8, maxPhase = 2, order = [0, 1]}
 //       CHECK-LABEL: apply_swizzle
 //       CHECK:   %{{.*}} = ttg.local_alloc %{{.*}} : (tensor<16x256xf16, #{{.*}}>) -> !ttg.memdesc<16x256xf16, #[[$SHARED]], #smem>
 

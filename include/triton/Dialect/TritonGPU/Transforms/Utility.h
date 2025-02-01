@@ -17,7 +17,7 @@ class LoadOp;
 class StoreOp;
 class FuncOp;
 namespace gpu {
-class SharedEncodingAttr;
+class SwizzledSharedEncodingAttr;
 }
 } // namespace triton
 
@@ -197,7 +197,7 @@ int getNVIDIAComputeCapability(Operation *module);
 // Read the amd target from the module attributes
 StringRef getAMDArch(Operation *module);
 
-std::optional<mlir::triton::gpu::SharedEncodingAttr>
+std::optional<mlir::triton::gpu::SwizzledSharedEncodingAttr>
 getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible);
 
 enum class MMALoadType {
