@@ -9,12 +9,12 @@
 namespace proton {
 
 namespace {
-Profiler *getProfiler(const std::string &name, const std::string &path) {
+Profiler *getProfiler(const std::string &name, const std::string &path,
+                      const std::string &mode) {
   if (proton::toLower(name) == "cupti") {
+    if (proton::toLower(mode) == "pcsampling")
+      return &CuptiProfiler::instance().setLibPath(path).enablePCSampling();
     return &CuptiProfiler::instance().setLibPath(path);
-  }
-  if (proton::toLower(name) == "cupti_pcsampling") {
-    return &CuptiProfiler::instance().setLibPath(path).enablePCSampling();
   }
   if (proton::toLower(name) == "roctracer") {
     return &RoctracerProfiler::instance();
@@ -72,8 +72,8 @@ void Session::finalize(OutputFormat outputFormat) {
 std::unique_ptr<Session> SessionManager::makeSession(
     size_t id, const std::string &path, const std::string &profilerName,
     const std::string &profilerPath, const std::string &contextSourceName,
-    const std::string &dataName) {
-  auto profiler = getProfiler(profilerName, profilerPath);
+    const std::string &dataName, const std::string &mode) {
+  auto profiler = getProfiler(profilerName, profilerPath, mode);
   auto contextSource = makeContextSource(contextSourceName);
   auto data = makeData(dataName, path, contextSource.get());
   auto *session = new Session(id, path, profiler, std::move(contextSource),
@@ -142,7 +142,8 @@ size_t SessionManager::addSession(const std::string &path,
                                   const std::string &profilerName,
                                   const std::string &profilerPath,
                                   const std::string &contextSourceName,
-                                  const std::string &dataName) {
+                                  const std::string &dataName,
+                                  const std::string &mode) {
   std::lock_guard<std::mutex> lock(mutex);
   if (hasSession(path)) {
     auto sessionId = getSessionId(path);
@@ -152,7 +153,7 @@ size_t SessionManager::addSession(const std::string &path,
   auto sessionId = nextSessionId++;
   sessionPaths[path] = sessionId;
   sessions[sessionId] = makeSession(sessionId, path, profilerName, profilerPath,
-                                    contextSourceName, dataName);
+                                    contextSourceName, dataName, mode);
   return sessionId;
 }
 

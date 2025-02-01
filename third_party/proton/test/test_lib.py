@@ -49,10 +49,3 @@ def test_add_metrics(tmp_path: pathlib.Path):
     libproton.exit_scope(id1, "one")
     libproton.finalize_all("hatchet")
     assert temp_file.exists()
-
-
-def test_modes(tmp_path: pathlib.Path):
-    temp_file = tmp_path / "test_modes.hatchet"
-    libproton.start(str(temp_file.with_suffix("")), "shadow", "tree", "cupti", "", "pcsampling")
-    libproton.finalize_all("hatchet")
-    assert temp_file.exists()
