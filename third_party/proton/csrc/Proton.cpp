@@ -16,9 +16,10 @@ static void initProton(pybind11::module &&m) {
   m.def("start",
         [](const std::string &path, const std::string &contextSourceName,
            const std::string &dataName, const std::string &profilerName,
-           const std::string &profilerPath) {
+           const std::string &profilerPath, const std::string &mode) {
           auto sessionId = SessionManager::instance().addSession(
-              path, profilerName, profilerPath, contextSourceName, dataName);
+              path, profilerName, profilerPath, contextSourceName, dataName,
+              mode);
           SessionManager::instance().activateSession(sessionId);
           return sessionId;
         });
