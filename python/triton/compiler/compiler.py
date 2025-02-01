@@ -188,11 +188,11 @@ def filter_traceback(e: BaseException):
         filter_traceback(e.__context__)
 
     # If a user has a file that matches one of these, they're out of luck.
-    sep = os.sep
     BAD_FILES = [
-        f"{sep}triton{sep}compiler{sep}code_generator.py",
-        f"{sep}ast.py",
+        "/triton/compiler/code_generator.py",
+        "/ast.py",
     ]
+    BAD_FILES = [bad_file.replace("/", os.sep) for bad_file in BAD_FILES]
 
     tb = e.__traceback__
     frames = []
