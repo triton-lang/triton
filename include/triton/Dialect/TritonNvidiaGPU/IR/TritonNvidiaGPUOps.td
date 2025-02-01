@@ -94,6 +94,7 @@ def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [DeclareOpInterfaceMethods<I
     let assemblyFormat = "$a`,` $b`,` $c (`,` $useC^)? attr-dict `:` type($a) `*` type($b) `->` type($d)";
 
     let extraClassDeclaration = [{
+      LogicalResult verifyDims(Operation*) { return success(); }
       bool needsPartialAccumulator();
     }];
 }
@@ -344,6 +345,11 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [DeclareOpInterfaceMethods<MemoryE
                          I1:$pred,
                          Optional<TTG_MemDescType>:$barrier,
                          OptionalAttr<UnitAttr>:$two_ctas);
+
+    let extraClassDeclaration = [{
+      LogicalResult verifyDims(Operation*) { return success(); }
+    }];
+
     // TODO: improve printing format.
     let assemblyFormat = "$a`,` $b`,` $d`,` $useD`,` $pred (`,` $barrier^)? attr-dict `:` functional-type(operands, results)";
 }
@@ -367,6 +373,11 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [DeclareOpInterfaceMe
                          I1:$useD,
                          I1:$pred,
                          Optional<TTG_MemDescType>:$barrier);
+
+    let extraClassDeclaration = [{
+      LogicalResult verifyDims(Operation*) { return success(); }
+    }];
+
     // TODO: improve printing format.
     let assemblyFormat = "$a `,` $b `,` $d `,` $a_scale `,` $b_scale `,` $useD`,` $pred `lhs` `=` $a_type `rhs` `=` $b_type (`,` $barrier^)? attr-dict `:` functional-type(operands, results)";
 }

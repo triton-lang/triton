@@ -39,7 +39,15 @@ def DotOpInterface : OpInterface<"DotOpInterface"> {
 
   let cppNamespace = "::mlir::triton";
 
-  let methods = [];
+  let methods = [
+	InterfaceMethod<
+			/*desc=*/[{
+			  Verifies the dimensions of DotOp operands.
+		  }],
+			/*retType=*/"::mlir::LogicalResult",
+			/*methodName=*/"verifyDims",
+			/*args=*/(ins "Operation*":$op)>
+	];
 
   let verify = [{ return ::mlir::triton::impl::verifyDotOpInterface($_op); }];
 }

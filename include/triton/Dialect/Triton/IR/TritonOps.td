@@ -655,6 +655,11 @@ def TT_DotOp : TT_Op<"dot", [Pure,
 
     let results = (outs TT_FpIntTensor:$d);
 
+
+    let extraClassDeclaration = [{
+      LogicalResult verifyDims(Operation*) { return success(); }
+    }];
+
     // attr-dict prints enums as integers.  To get inputPrecision printed as a
     // string, we need to specify it explicitly.
     let assemblyFormat = [{
@@ -695,6 +700,10 @@ def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
     );
 
     let results = (outs TT_FloatTensor:$d);
+
+    let extraClassDeclaration = [{
+      LogicalResult verifyDims(Operation*) { return success(); }
+    }];
 
     let assemblyFormat = [{
       $lhs (`scale` $lhs_scale^)? `,` $rhs (`scale` $rhs_scale^)? `,` $c `lhs` `=` $lhs_type `rhs` `=` $rhs_type attr-dict
