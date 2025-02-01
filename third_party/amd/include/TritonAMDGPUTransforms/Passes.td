@@ -62,7 +62,7 @@ def TritonAMDGPUOptimizeEpilogue : Pass<"tritonamdgpu-optimize-epilogue", "mlir:
 
 }
 
-def TritonAMDGPUCanonicalizePointers : Pass<"tritonamdgpu-canonicalize-pointers", "mlir::ModuleOp"> {
+def TritonAMDGPUCanonicalizePointers : Pass<"tritonamdgpu-canonicalize-pointers", "mlir::triton::FuncOp"> {
   let summary = "Canonicalize pointers: rewrite pointers passed to load/store operation as a `<basePtr, offset>` pair.";
 
   let description = [{
