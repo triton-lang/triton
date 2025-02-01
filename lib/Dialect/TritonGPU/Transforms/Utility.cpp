@@ -1057,9 +1057,7 @@ MMALoadType getMMALoadType(Operation *loadOp) {
       return MMALoadType::DoNotPipeline;
 
     // MMA V3 case.
-    SmallVector<unsigned> newOrder = sharedEnc.getTransposed()
-                                         ? SmallVector<unsigned>({0, 1})
-                                         : SmallVector<unsigned>({1, 0});
+    SmallVector<unsigned> newOrder = getOrder(sharedEnc);
     auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
     auto oldOrder = ttg::getOrder(ty.getEncoding());
 
