@@ -246,6 +246,10 @@ def test_pcsampling(tmp_path: pathlib.Path):
     if is_hip():
         pytest.skip("HIP backend does not support pc sampling")
 
+    import os
+    if os.environ.get("PROTON_SKIP_PC_SAMPLING_TEST", "0") == "1":
+        pytest.skip("PC sampling test is disabled")
+
     @triton.jit
     def foo(x, y, size: tl.constexpr):
         offs = tl.arange(0, size)
