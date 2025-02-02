@@ -31,12 +31,12 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
   auto loc = op->getLoc();
   auto order = getOrder(tensorType.getEncoding());
   auto ctaLayout = getCTALayout(tensorType.getEncoding());
-  Attribute encoding = SharedEncodingAttr::get(tensorType.getContext(), 1, 1, 1,
-                                               order, ctaLayout);
+  Attribute encoding = SwizzledSharedEncodingAttr::get(
+      tensorType.getContext(), 1, 1, 1, order, ctaLayout);
   if (tensorType.getRank() > 1) {
-    encoding =
-        SharedEncodingAttr::get(tensorType.getContext(), tensorType.getShape(),
-                                order, ctaLayout, tensorType.getElementType());
+    encoding = NVMMASharedEncodingAttr::get(
+        tensorType.getContext(), tensorType.getShape(), order, ctaLayout,
+        tensorType.getElementType());
   }
   MemDescType memDescType =
       MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
@@ -45,8 +45,8 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
   auto barrierCTALayout = CTALayoutAttr::get(
       /*context=*/tensorType.getContext(), /*CTAsPerCGA=*/{1},
       /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
-  auto barrierEncoding = SharedEncodingAttr::get(tensorType.getContext(), 1, 1,
-                                                 1, {0}, barrierCTALayout);
+  auto barrierEncoding = SwizzledSharedEncodingAttr::get(
+      tensorType.getContext(), 1, 1, 1, {0}, barrierCTALayout);
   MemDescType barrierMemDescType =
       MemDescType::get({1}, rewriter.getI64Type(), barrierEncoding,
                        sharedMemorySpace, /*mutableMemory=*/true);
@@ -109,12 +109,12 @@ static void lowerTMAStore(Operation *op, mlir::TypedValue<RankedTensorType> src,
   auto tensorType = src.getType();
   auto order = getOrder(tensorType.getEncoding());
   auto ctaLayout = getCTALayout(tensorType.getEncoding());
-  Attribute encoding = SharedEncodingAttr::get(tensorType.getContext(), 1, 1, 1,
-                                               order, ctaLayout);
+  Attribute encoding = SwizzledSharedEncodingAttr::get(
+      tensorType.getContext(), 1, 1, 1, order, ctaLayout);
   if (tensorType.getRank() > 1) {
-    encoding =
-        SharedEncodingAttr::get(tensorType.getContext(), tensorType.getShape(),
-                                order, ctaLayout, tensorType.getElementType());
+    encoding = NVMMASharedEncodingAttr::get(
+        tensorType.getContext(), tensorType.getShape(), order, ctaLayout,
+        tensorType.getElementType());
   }
   MemDescType memDescType =
       MemDescType::get(tensorType.getShape(), tensorType.getElementType(),

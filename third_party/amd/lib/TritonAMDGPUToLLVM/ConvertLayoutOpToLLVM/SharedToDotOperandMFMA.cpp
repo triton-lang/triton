@@ -29,7 +29,7 @@ using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::getOrder;
 using ::mlir::triton::gpu::getShapePerCTA;
-using ::mlir::triton::gpu::SharedEncodingAttr;
+using ::mlir::triton::gpu::SwizzledSharedEncodingAttr;
 
 namespace SharedToDotOperandMFMA {
 
@@ -123,7 +123,7 @@ llvm::SmallVector<llvm::SmallVector<Value>> computeTensorElemMappingInBlock(
   return mapping;
 }
 
-bool hasSwizzleEnabled(const SharedEncodingAttr &srcEncoding) {
+bool hasSwizzleEnabled(const SwizzledSharedEncodingAttr &srcEncoding) {
   return srcEncoding.getMaxPhase() > 1;
 }
 
@@ -214,7 +214,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
          (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64));
   auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
 
-  auto sharedLayout = cast<SharedEncodingAttr>(aTensorTy.getEncoding());
+  auto sharedLayout = cast<SwizzledSharedEncodingAttr>(aTensorTy.getEncoding());
   auto order = sharedLayout.getOrder();
   assert((rank == 2 || order[2] == 0) &&
          "expect batch to be the slowest dimension");

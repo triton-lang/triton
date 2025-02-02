@@ -284,7 +284,7 @@ std::string GraphLayoutMarker::getColor(const Type &type) const {
       return "lightslateblue";
     else if (isa<triton::gpu::DotOperandEncodingAttr>(layout))
       return "orange";
-    else if (isa<triton::gpu::SharedEncodingAttr>(layout))
+    else if (isa<triton::gpu::SharedEncodingTrait>(layout))
       return "orangered";
     else {
       llvm::report_fatal_error("Unrecognized layout");
@@ -1000,19 +1000,22 @@ StringRef getAMDArch(Operation *module) {
 // the same dot operand encoding, return the shared encoding that needs to be
 // used to be compatible with users' layouts. If there are incompatible shared
 // encodings, set incompatible to true.
-std::optional<ttg::SharedEncodingAttr>
+std::optional<ttg::SwizzledSharedEncodingAttr>
 getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
-  ttg::SharedEncodingAttr attr;
+  ttg::SwizzledSharedEncodingAttr attr;
   incompatible = false;
   for (Operation *user : val.getUsers()) {
-    ttg::SharedEncodingAttr tempAttr;
+    ttg::SwizzledSharedEncodingAttr tempAttr;
     if (user->getNumResults() != 1)
       return std::nullopt;
     if (auto memDesc =
             dyn_cast<triton::gpu::MemDescType>(user->getResult(0).getType())) {
       // First time we find a shared encoding in the chain, save it and try to
       // use it if it is compatible with the other users.
-      tempAttr = cast<ttg::SharedEncodingAttr>(memDesc.getEncoding());
+      tempAttr =
+          dyn_cast<ttg::SwizzledSharedEncodingAttr>(memDesc.getEncoding());
+      if (!tempAttr)
+        return std::nullopt;
       if (!getSharedEncIfAllUsersAreDotEnc(user->getResult(0), incompatible)
                .has_value())
         return std::nullopt;
@@ -1028,7 +1031,7 @@ getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
       auto CTALayout = ttg::getCTALayout(srcTy.getEncoding());
       auto order = ttg::getOrder(srcTy.getEncoding());
       unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
-      tempAttr = ttg::SharedEncodingAttr::get(
+      tempAttr = ttg::SwizzledSharedEncodingAttr::get(
           val.getContext(), dotOpEnc, srcTy.getShape(), order, CTALayout,
           bitWidth, /*needTrans=*/false);
     }
@@ -1048,13 +1051,13 @@ MMALoadType getMMALoadType(Operation *loadOp) {
 
   if (auto alloc = dyn_cast<ttg::LocalAllocOp>(*loadOp->getUsers().begin())) {
     auto sharedEnc =
-        cast<ttg::SharedEncodingAttr>(alloc.getType().getEncoding());
+        dyn_cast<ttg::NVMMASharedEncodingAttr>(alloc.getType().getEncoding());
 
-    if (!sharedEnc.getHasLeadingOffset())
+    if (!sharedEnc)
       return MMALoadType::DoNotPipeline;
 
     // MMA V3 case.
-    auto newOrder = sharedEnc.getOrder();
+    SmallVector<unsigned> newOrder = getOrder(sharedEnc);
     auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
     auto oldOrder = ttg::getOrder(ty.getEncoding());
 

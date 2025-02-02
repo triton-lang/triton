@@ -9,7 +9,8 @@
 #include "triton/Tools/LinearLayout.h"
 
 namespace mlir::triton::gpu {
-class SharedEncodingAttr;
+class SwizzledSharedEncodingAttr;
+class NVMMASharedEncodingAttr;
 
 // - BlockedEncodingAttrs have the following input dimensions.
 //
@@ -18,7 +19,8 @@ class SharedEncodingAttr;
 //   "warp": warps in a block/CTA
 //   "block": blocks in a cluster
 //
-// - An n-dimensional SharedEncodingAttr has the following input dimensions.
+// - An n-dimensional SwizzledSharedEncodingAttr has the following input
+// dimensions.
 //
 //   "offset": the n'th element in the allocation, within a particular thread
 //      block (i.e. within a CTA).  The offset is measured in elements, not
@@ -36,19 +38,19 @@ class SharedEncodingAttr;
 //
 // elemBitWidth is the bit width of one element in the layout.  This is required
 // to compute the linear layout for MMAv3 (i.e. Hopper) shared layouts (i.e.
-// shared layouts with hasLeadingOffset == true) but is otherwise unused.
+// shared layouts with nvmma_shared layout) but is otherwise unused.
 //
 // Returns std::nullopt if the given layout can't be converted to an LL.
 LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
                             std::optional<int32_t> elemBitWidth = std::nullopt);
 
-// Convert the shared encoding of a tensor with `hasLeadingOffset=true` to a
+// Convert the shared encoding of a tensor with `nvmma_shared` layout to a
 // LinearLayout that maps from a linear shared memory offset to tensor index.
 //
 // If `disableSwizzle` is set, then the resulting layout does not include
 // swizzling.
 LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
-                                               SharedEncodingAttr shared,
+                                               NVMMASharedEncodingAttr shared,
                                                int32_t elemBitWidth,
                                                bool disableSwizzle = false);
 

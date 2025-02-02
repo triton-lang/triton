@@ -201,9 +201,10 @@ static void setOptimizedGatherLayout(GatherOp op, mlir::RewriterBase &b) {
 
   // Construct the new layout.
   MLIRContext *ctx = srcType.getContext();
-  auto ctaLayout = CTALayoutAttr::get(ctx, distributedItf.getCTAsPerCGA(),
-                                      distributedItf.getCTASplitNum(),
-                                      distributedItf.getCTAOrder());
+  auto baseLayout = cast<LayoutEncodingTrait>(srcType.getEncoding());
+  auto ctaLayout =
+      CTALayoutAttr::get(ctx, baseLayout.getCTAsPerCGA(),
+                         baseLayout.getCTASplitNum(), baseLayout.getCTAOrder());
   auto newLayout = BlockedEncodingAttr::get(ctx, sizePerThread, threadsPerWarp,
                                             warpsPerCTA, order, ctaLayout);
 

@@ -118,10 +118,9 @@ LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
   return ret;
 }
 
-LinearLayout sharedToLinearLayoutNoLeadingOffset(ArrayRef<int64_t> shape,
-                                                 SharedEncodingAttr shared) {
-  assert(!shared.getHasLeadingOffset());
-
+LinearLayout
+sharedToLinearLayoutNoLeadingOffset(ArrayRef<int64_t> shape,
+                                    SwizzledSharedEncodingAttr shared) {
   MLIRContext *ctx = shared.getContext();
   int rank = shape.size();
   if (rank == 1) {
@@ -169,11 +168,9 @@ LinearLayout sharedToLinearLayoutNoLeadingOffset(ArrayRef<int64_t> shape,
 } // namespace
 
 LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
-                                               SharedEncodingAttr shared,
+                                               NVMMASharedEncodingAttr shared,
                                                int32_t elemBitWidth,
                                                bool disableSwizzle) {
-  assert(shared.getHasLeadingOffset());
-
   MLIRContext *ctx = shared.getContext();
   int rank = shape.size();
   if (rank == 1) {
@@ -183,27 +180,26 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
         shared.getCTALayout(), shape);
   }
 
-  int tileWidthBytes;
-  if (shared.getPerPhase() == 4 && shared.getMaxPhase() == 2) {
-    tileWidthBytes = 32;
-  } else if (shared.getPerPhase() == 2 && shared.getMaxPhase() == 4) {
-    tileWidthBytes = 64;
-  } else if (shared.getPerPhase() == 1 && shared.getMaxPhase() == 8) {
-    tileWidthBytes = 128;
-  } else {
-    llvm::errs()
-        << "Illegal shared encoding.  If hasLeadingOffset is true, "
-           "then (perPhase, maxPhase) must be either (4,2), (2,4), or (1,8): "
-        << shared << "\n";
-    llvm_unreachable("Illegal shared encoding");
+  int tileWidthBytes = shared.getSwizzlingByteWidth();
+  int vec = 128 / elemBitWidth;
+  int perPhase = 0;
+  int maxPhase = 0;
+  if (tileWidthBytes == 32) {
+    perPhase = 4;
+    maxPhase = 2;
+  } else if (tileWidthBytes == 64) {
+    perPhase = 2;
+    maxPhase = 4;
+  } else if (tileWidthBytes == 128) {
+    perPhase = 1;
+    maxPhase = 8;
   }
-
   auto outDimNames = standardOutDimNames(ctx, rank);
 
   // Construct bases for a the layout's 2-dimensional tile.
   assert(shape.size() >= 2);
-  int colDim = shared.getOrder()[0];
-  int rowDim = shared.getOrder()[1];
+  int colDim = shared.getTransposed() ? 0 : 1;
+  int rowDim = shared.getTransposed() ? 1 : 0;
 
   int tileRows = 8;
   int tileCols = 8 * tileWidthBytes / elemBitWidth;
@@ -214,8 +210,6 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
                  << shape[rowDim] << ", " << shape[colDim] << "]\n";
     llvm::report_fatal_error("Illegal shared layout");
   }
-
-  int vec = shared.getVec();
 
   StringAttr colDimName = outDimNames[colDim];
   StringAttr rowDimName = outDimNames[rowDim];
@@ -230,8 +224,6 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
       bases2D.push_back({row, 0});
       continue;
     }
-    int perPhase = shared.getPerPhase();
-    int maxPhase = shared.getMaxPhase();
     bases2D.push_back({row, vec * ((row / perPhase) % maxPhase)});
   }
   LinearLayout tileLayout =
@@ -239,7 +231,7 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
 
   // Add the remaining dimensions.
   for (int i = 2; i < rank; i++) {
-    int dim = shared.getOrder()[i];
+    int dim = shared.getTransposed() ? i : 1 - i;
     tileLayout *=
         LinearLayout::identity1D(shape[dim], S("offset"), outDimNames[dim]);
   }
@@ -888,12 +880,13 @@ TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
   if (auto distributed = dyn_cast<DistributedEncodingTrait>(layout)) {
     result = distributed.toLinearLayout(shape);
   } else {
-    auto shared = dyn_cast<SharedEncodingAttr>(layout);
-    if (shared.getHasLeadingOffset()) {
+    if (auto shared = dyn_cast<SwizzledSharedEncodingAttr>(layout)) {
+      result = sharedToLinearLayoutNoLeadingOffset(shape, shared);
+    } else if (auto shared = dyn_cast<NVMMASharedEncodingAttr>(layout)) {
       assert(elemBitWidth.has_value());
       result = sharedToLinearLayoutLeadingOffset(shape, shared, *elemBitWidth);
     } else {
-      result = sharedToLinearLayoutNoLeadingOffset(shape, shared);
+      assert(0 && "unknown layout");
     }
   }
 

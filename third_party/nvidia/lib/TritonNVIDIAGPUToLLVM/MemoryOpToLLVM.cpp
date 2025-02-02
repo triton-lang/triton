@@ -36,7 +36,9 @@ public:
             cast<DotOperandEncodingAttr>(dstLayout).getParent())) {
       auto dotEnc = cast<DotOperandEncodingAttr>(dstLayout);
       auto mmaEnc = cast<NvidiaMmaEncodingAttr>(dotEnc.getParent());
-      auto sharedEnc = cast<SharedEncodingAttr>(srcLayout);
+      auto sharedEnc = dyn_cast<SwizzledSharedEncodingAttr>(srcLayout);
+      if (!sharedEnc)
+        return failure();
       auto bitwidth = dstTy.getElementTypeBitWidth();
       auto vecWidth = 32 / bitwidth;
       auto kWidth = dotEnc.getKWidth();
@@ -46,8 +48,7 @@ public:
       auto needTrans = kOrder != sharedEnc.getOrder()[0];
       // Limitation 1 [TODO: remove]: Check LL bases to verify register and
       // address alignment
-      auto canUseLdmatrix =
-          (kWidth == vecWidth) && (!sharedEnc.getHasLeadingOffset());
+      auto canUseLdmatrix = (kWidth == vecWidth);
       canUseLdmatrix &= (sharedEnc.getMaxPhase() == 1) ||
                         (sharedEnc.getVec() * bitwidth >= 8 * 16);
       auto shape = srcTy.getShape();
@@ -77,7 +78,7 @@ private:
     auto dstTy = cast<RankedTensorType>(op.getType());
     auto srcTy = cast<MemDescType>(op.getSrc().getType());
     auto dotEnc = cast<DotOperandEncodingAttr>(dstTy.getEncoding());
-    auto sharedEnc = cast<SharedEncodingAttr>(srcTy.getEncoding());
+    auto sharedEnc = cast<SwizzledSharedEncodingAttr>(srcTy.getEncoding());
     auto shape = dstTy.getShape();
     auto rank = dstTy.getRank();
     auto kOrder = dotEnc.getOpIdx() == 0 ? rank - 1 : rank - 2;
@@ -146,23 +147,17 @@ LogicalResult lowerDistributedToSharedStmatrix(
   if (!mmaEncoding)
     return failure();
   auto sharedLayout =
-      cast<triton::gpu::SharedEncodingAttr>(memDescType.getEncoding());
-  if (!sharedLayout.getHasLeadingOffset())
+      dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(memDescType.getEncoding());
+  if (!sharedLayout)
     return failure();
-  int swizzleByteSize = 0;
-  if (sharedLayout.getPerPhase() == 4 && sharedLayout.getMaxPhase() == 2)
-    swizzleByteSize = 32;
-  else if (sharedLayout.getPerPhase() == 2 && sharedLayout.getMaxPhase() == 4)
-    swizzleByteSize = 64;
-  else if (sharedLayout.getPerPhase() == 1 && sharedLayout.getMaxPhase() == 8)
-    swizzleByteSize = 128;
-  else
-    return failure();
+  int swizzleByteSize = sharedLayout.getSwizzlingByteWidth();
 
   RankedTensorType srcTy = src.getType();
   SmallVector<unsigned> shape =
       convertType<unsigned, int64_t>(srcTy.getShape());
-  auto order = sharedLayout.getOrder();
+  SmallVector<unsigned> order = sharedLayout.getTransposed()
+                                    ? SmallVector<unsigned>({0, 1})
+                                    : SmallVector<unsigned>({1, 0});
   if (!targetInfo.canUseStMatrix(srcTy, shape, shape, order, swizzleByteSize)) {
     return failure();
   }
@@ -222,8 +217,6 @@ struct LocalAllocOpConversion
     if (!op.getSrc())
       return failure();
     MemDescType memDescType = op.getType();
-    auto sharedLayout =
-        cast<triton::gpu::SharedEncodingAttr>(memDescType.getEncoding());
     RankedTensorType srcTy = op.getSrc().getType();
     Type llvmElemTy = typeConverter->convertType(srcTy.getElementType());
     Value smemBase =
