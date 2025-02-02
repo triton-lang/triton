@@ -216,16 +216,17 @@ class SharedLayout:
 
 class NVMMASharedLayout:
 
-    def __init__(self, swizzle, transpose, ctas_per_cga, cta_split_num, cta_order):
+    def __init__(self, swizzle, transpose, element_bit_width, ctas_per_cga, cta_split_num, cta_order):
         self.swizzle = swizzle
         self.transpose = transpose
+        self.element_bit_width = element_bit_width
         self.ctas_per_cga = ctas_per_cga
         self.cta_split_num = cta_split_num
         self.cta_order = cta_order
 
     def __str__(self):
         transpose_str = "true" if self.transpose else "false"
-        return f"#{GPU_DIALECT}.nvmma_shared<{{swizzlingByteWidth={self.swizzle}, transposed={transpose_str}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
+        return f"#{GPU_DIALECT}.nvmma_shared<{{swizzlingByteWidth={self.swizzle}, transposed={transpose_str}, elementBitWidth={self.element_bit_width}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
 
 
 class LinearLayout:
@@ -5833,8 +5834,8 @@ mma_layouts = [
 
 shared_layouts = [
     SharedLayout(8, 1, 1, [1, 0], [1, 1], [1, 1], [0, 1]),
-    NVMMASharedLayout(64, False, [1, 1], [1, 1], [0, 1]),
-    NVMMASharedLayout(128, False, [1, 1], [1, 1], [0, 1]),
+    NVMMASharedLayout(64, False, 16, [1, 1], [1, 1], [0, 1]),
+    NVMMASharedLayout(128, False, 16, [1, 1], [1, 1], [0, 1]),
 ]
 
 

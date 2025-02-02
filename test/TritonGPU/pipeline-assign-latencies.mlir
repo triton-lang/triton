@@ -5,9 +5,9 @@
 #C = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1]}>
 #A = #ttg.dot_op<{opIdx = 0, parent = #C, kWidth=2}>
 #B = #ttg.dot_op<{opIdx = 1, parent = #C, kWidth=2}>
-#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false}>
-#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false}>
-#shared2 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
+#shared2 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 16}>
 #mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [8, 1], instrShape = [16, 128, 32]}>
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
