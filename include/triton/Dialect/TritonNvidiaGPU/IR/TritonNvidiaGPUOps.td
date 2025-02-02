@@ -94,7 +94,13 @@ def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [DeclareOpInterfaceMethods<I
     let assemblyFormat = "$a`,` $b`,` $c (`,` $useC^)? attr-dict `:` type($a) `*` type($b) `->` type($d)";
 
     let extraClassDeclaration = [{
-      LogicalResult verifyDims(Operation*) { return success(); }
+      bool verifyDims() {
+        auto aShape = cast<RankedTensorType>(this->getOperand(0).getType()).getShape();
+        auto bShape = cast<RankedTensorType>(this->getOperand(1).getType()).getShape();
+        if (aShape[aShape.size() - 1] != bShape[aShape.size() - 2])
+           return false;
+        return true;
+      }
       bool needsPartialAccumulator();
     }];
 }
@@ -347,7 +353,13 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [DeclareOpInterfaceMethods<MemoryE
                          OptionalAttr<UnitAttr>:$two_ctas);
 
     let extraClassDeclaration = [{
-      LogicalResult verifyDims(Operation*) { return success(); }
+       bool verifyDims() {
+        auto aShape = cast<RankedTensorType>(this->getOperand(0).getType()).getShape();
+        auto bShape = cast<RankedTensorType>(this->getOperand(1).getType()).getShape();
+        if (aShape[aShape.size() - 1] != bShape[aShape.size() - 2])
+           return false;
+        return true;
+      }
     }];
 
     // TODO: improve printing format.
@@ -375,7 +387,13 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [DeclareOpInterfaceMe
                          Optional<TTG_MemDescType>:$barrier);
 
     let extraClassDeclaration = [{
-      LogicalResult verifyDims(Operation*) { return success(); }
+      bool verifyDims() {
+        auto aShape = cast<RankedTensorType>(this->getOperand(0).getType()).getShape();
+        auto bShape = cast<RankedTensorType>(this->getOperand(1).getType()).getShape();
+        if (aShape[aShape.size() - 1] * 2 != bShape[aShape.size() - 2])
+           return false;
+        return true;
+      }
     }];
 
     // TODO: improve printing format.

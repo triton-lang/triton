@@ -657,7 +657,13 @@ def TT_DotOp : TT_Op<"dot", [Pure,
 
 
     let extraClassDeclaration = [{
-      LogicalResult verifyDims(Operation*) { return success(); }
+      bool verifyDims() {
+        auto aShape = cast<RankedTensorType>(this->getOperand(0).getType()).getShape();
+        auto bShape = cast<RankedTensorType>(this->getOperand(1).getType()).getShape();
+        if (aShape[aShape.size() - 1] != bShape[aShape.size() - 2])
+           return false;
+        return true;
+      }
     }];
 
     // attr-dict prints enums as integers.  To get inputPrecision printed as a
@@ -702,7 +708,13 @@ def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
     let results = (outs TT_FloatTensor:$d);
 
     let extraClassDeclaration = [{
-      LogicalResult verifyDims(Operation*) { return success(); }
+      bool verifyDims() {
+        auto aShape = cast<RankedTensorType>(this->getOperand(0).getType()).getShape();
+        auto bShape = cast<RankedTensorType>(this->getOperand(1).getType()).getShape();
+        if (aShape[aShape.size() - 1] * 2 != bShape[aShape.size() - 2])
+           return false;
+        return true;
+      }
     }];
 
     let assemblyFormat = [{

@@ -54,9 +54,13 @@ LogicalResult verifyDotOpInterface(Operation *op) {
 
   // Check if the first two operands share a common dimension
 
+  if (!dotOp.verifyDims())
+    return dotOp->emitOpError(
+        "expected the last dimension of thae first operand "
+        "to be equal to the second-to-last dimension of "
+        "the second operand");
   /*
-  auto scaledDotOp = dyn_cast<triton::ScaledDotOp>(dotOp);
-  if (!scaledDotOp && aShape[aShape.size() - 1] != bShape[aShape.size() - 2])
+  if (aShape[aShape.size() - 1] != bShape[aShape.size() - 2])
     return dotOp->emitOpError(
         "expected the last dimension of thae first operand "
         "to be equal to the second-to-last dimension of "

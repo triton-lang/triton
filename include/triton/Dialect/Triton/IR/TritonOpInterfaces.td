@@ -44,9 +44,9 @@ def DotOpInterface : OpInterface<"DotOpInterface"> {
 			/*desc=*/[{
 			  Verifies the dimensions of DotOp operands.
 		  }],
-			/*retType=*/"::mlir::LogicalResult",
+			/*retType=*/"bool",
 			/*methodName=*/"verifyDims",
-			/*args=*/(ins "Operation*":$op)>
+			/*args=*/(ins)>
 	];
 
   let verify = [{ return ::mlir::triton::impl::verifyDotOpInterface($_op); }];
