@@ -47,9 +47,9 @@ def _check_env(backend: str) -> None:
 def _check_mode(backend: str, mode: Optional[str]) -> None:
     # TODO(Keren): Need a better mode registration mechanism
     backend_modes = {
-        "cupti": [None, "pcsampling"],
-        "roctracer": [None],
-        "instrumentation": [None],
+        "cupti": ["", "pcsampling"],
+        "roctracer": [""],
+        "instrumentation": [""],
     }
 
     if mode not in backend_modes[backend]:
@@ -103,28 +103,21 @@ def start(
         # Ignore the start() call if the script is run from the command line.
         return
 
-    if name is None:
-        name = DEFAULT_PROFILE_NAME
-
-    if backend is None:
-        backend = _select_backend()
+    name = DEFAULT_PROFILE_NAME if name is None else name
+    backend = _select_backend() if backend is None else backend
+    mode = "" if mode is None else mode
 
     _check_env(backend)
     _check_mode(backend, mode)
 
     backend_path = _get_backend_default_path(backend)
 
-    _check_mode(backend, mode)
-
-    if mode is None:
-        mode = ""
-
-    backend_path = _get_backend_default_path(backend)
-
     set_profiling_on()
-    if hook and hook == "triton":
+
+    if hook == "triton":
         register_triton_hook()
-    return libproton.start(name, context, data, backend, backend_path, mode)
+
+    return libproton.start(name, context, data, backend, mode, backend_path)
 
 
 def activate(session: Optional[int] = None) -> None:
