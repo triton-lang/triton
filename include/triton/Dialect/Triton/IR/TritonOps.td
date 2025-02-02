@@ -658,8 +658,9 @@ def TT_DotOp : TT_Op<"dot", [Pure,
 
     let extraClassDeclaration = [{
       bool verifyDims() {
-        auto aShape = cast<RankedTensorType>(this->getOperand(0).getType()).getShape();
-        auto bShape = cast<RankedTensorType>(this->getOperand(1).getType()).getShape();
+        auto aShape = this->getA().getType().getShape();
+        auto bShape = this->getB().getType().getShape();
+
         if (aShape[aShape.size() - 1] != bShape[aShape.size() - 2])
            return false;
         return true;
@@ -709,9 +710,17 @@ def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
 
     let extraClassDeclaration = [{
       bool verifyDims() {
-        auto aShape = cast<RankedTensorType>(this->getOperand(0).getType()).getShape();
-        auto bShape = cast<RankedTensorType>(this->getOperand(1).getType()).getShape();
-        if (aShape[aShape.size() - 1] * 2 != bShape[aShape.size() - 2])
+        auto aShape = this->getLhs().getType().getShape();
+        auto bShape = this->getRhs().getType().getShape();
+
+        auto aKdim = aShape[aShape.size() - 1];
+        auto bKdim = bShape[aShape.size() - 2];
+        if (this->getLhsType() == ScaleDotElemType::E2M1)
+            aKdim *= 2;
+        if (this->getRhsType() == ScaleDotElemType::E2M1)
+            bKdim *= 2;
+
+        if (aKdim != bKdim)
            return false;
         return true;
       }

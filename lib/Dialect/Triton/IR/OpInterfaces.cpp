@@ -56,16 +56,9 @@ LogicalResult verifyDotOpInterface(Operation *op) {
 
   if (!dotOp.verifyDims())
     return dotOp->emitOpError(
-        "expected the last dimension of thae first operand "
+        "expected the last dimension of the first operand "
         "to be equal to the second-to-last dimension of "
         "the second operand");
-  /*
-  if (aShape[aShape.size() - 1] != bShape[aShape.size() - 2])
-    return dotOp->emitOpError(
-        "expected the last dimension of thae first operand "
-        "to be equal to the second-to-last dimension of "
-        "the second operand");
-    */
 
   // Check the batch dimension
   if (aShape.size() == 3 && (aShape[0] != cShape[0] || bShape[0] != cShape[0]))

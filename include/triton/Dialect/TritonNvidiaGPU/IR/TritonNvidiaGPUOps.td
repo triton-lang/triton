@@ -94,9 +94,10 @@ def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [DeclareOpInterfaceMethods<I
     let assemblyFormat = "$a`,` $b`,` $c (`,` $useC^)? attr-dict `:` type($a) `*` type($b) `->` type($d)";
 
     let extraClassDeclaration = [{
-      bool verifyDims() {
-        auto aShape = cast<RankedTensorType>(this->getOperand(0).getType()).getShape();
-        auto bShape = cast<RankedTensorType>(this->getOperand(1).getType()).getShape();
+       bool verifyDims() {
+        auto aShape = this->getA().getType().getShape();
+        auto bShape = this->getB().getType().getShape();
+
         if (aShape[aShape.size() - 1] != bShape[aShape.size() - 2])
            return false;
         return true;
@@ -353,9 +354,10 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [DeclareOpInterfaceMethods<MemoryE
                          OptionalAttr<UnitAttr>:$two_ctas);
 
     let extraClassDeclaration = [{
-       bool verifyDims() {
-        auto aShape = cast<RankedTensorType>(this->getOperand(0).getType()).getShape();
-        auto bShape = cast<RankedTensorType>(this->getOperand(1).getType()).getShape();
+      bool verifyDims() {
+        auto aShape = this->getA().getType().getShape();
+        auto bShape = this->getB().getType().getShape();
+
         if (aShape[aShape.size() - 1] != bShape[aShape.size() - 2])
            return false;
         return true;
@@ -388,9 +390,17 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [DeclareOpInterfaceMe
 
     let extraClassDeclaration = [{
       bool verifyDims() {
-        auto aShape = cast<RankedTensorType>(this->getOperand(0).getType()).getShape();
-        auto bShape = cast<RankedTensorType>(this->getOperand(1).getType()).getShape();
-        if (aShape[aShape.size() - 1] * 2 != bShape[aShape.size() - 2])
+        auto aShape = this->getA().getType().getShape();
+        auto bShape = this->getB().getType().getShape();
+
+        auto aKdim = aShape[aShape.size() - 1];
+        auto bKdim = bShape[aShape.size() - 2];
+        if (this->getAType() == ScaleDotElemType::E2M1)
+            aKdim *= 2;
+        if (this->getBType() == ScaleDotElemType::E2M1)
+            bKdim *= 2;
+
+        if (aKdim != bKdim)
            return false;
         return true;
       }
