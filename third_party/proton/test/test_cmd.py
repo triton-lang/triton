@@ -18,7 +18,7 @@ def is_hip():
 def test_exec(mode, tmp_path: pathlib.Path):
     file_path = __file__
     helper_file = file_path.replace("test_cmd.py", "helper.py")
-    temp_file = tmp_path / "test_exec.hatchet"
+    temp_file = tmp_path / f"test_exec_{mode}.hatchet"
     name = str(temp_file.with_suffix(""))
     if mode == "script":
         subprocess.check_call(["proton", "-n", name, helper_file, "test"], stdout=subprocess.DEVNULL)

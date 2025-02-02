@@ -16,7 +16,7 @@ def is_hip():
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
 def test_torch(context, tmp_path: pathlib.Path):
-    temp_file = tmp_path / "test_torch.hatchet"
+    temp_file = tmp_path / f"test_torch_{context}.hatchet"
     proton.start(str(temp_file.with_suffix("")), context=context)
     proton.enter_scope("test")
     torch.ones((2, 2), device="cuda")
