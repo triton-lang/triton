@@ -56,7 +56,7 @@ public:
 
 bool dotSupportsAccInitFlag(Operation *op) {
   if (!dyn_cast<DotOpInterface>(op))
-    assert("Expected a dot-like operation");
+    assert("Expected an op which implements a DotOpInterface");
 
   if (auto wgDotOp = dyn_cast<triton::nvidia_gpu::WarpGroupDotOp>(op)) {
     // Partial accumulation would require a select op to handle the
@@ -71,7 +71,7 @@ bool dotSupportsAccInitFlag(Operation *op) {
 
 std::pair<Value, Operation *> getAccumulatorUseAndDef(Operation *op) {
   if (!dyn_cast<DotOpInterface>(op))
-    assert("Expected a dot-like operation");
+    assert("Expected an op which implements a DotOpInterface");
 
   if (auto wgDotOp = dyn_cast<triton::nvidia_gpu::WarpGroupDotOp>(op)) {
     return std::make_pair(wgDotOp.getC(), wgDotOp);
@@ -94,20 +94,20 @@ std::pair<Value, Operation *> getAccumulatorUseAndDef(Operation *op) {
       return std::make_pair(nullptr, nullptr);
     return std::make_pair(tmemAlloc.getSrc(), tmemLoad);
   }
-  assert(false && "Unexpected dot-like operation");
+  assert(false && "Unexpected op which implements a DotOpInterface");
   return std::make_pair(nullptr, nullptr);
 }
 
 void setUseAccFlag(Operation *op, Value useAcc) {
   if (!dyn_cast<DotOpInterface>(op))
-    assert("Expected a dot-like operation");
+    assert("Expected an op which implements a DotOpInterface");
 
   if (auto wgDotOp = dyn_cast<triton::nvidia_gpu::WarpGroupDotOp>(op)) {
     wgDotOp.getUseCMutable().assign(useAcc);
   } else if (auto tc05MmaOp = dyn_cast<triton::nvidia_gpu::TCGen5MMAOp>(op)) {
     tc05MmaOp.getUseDMutable().assign(useAcc);
   } else {
-    assert(false && "Unexpected dot-like operation");
+    assert(false && "Unexpected op which implements a DotOpInterface");
   }
 }
 

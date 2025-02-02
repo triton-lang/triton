@@ -166,11 +166,11 @@ loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
 
   bool seenDot = false;
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (dyn_cast<mlir::triton::DotOpInterface>(op)) {
-      seenDot = true;
-      seen.clear();
-      dfs(&op, &op, 0);
-    }
+    if (!dyn_cast<mlir::triton::DotOpInterface>(op))
+      continue;
+    seenDot = true;
+    seen.clear();
+    dfs(&op, &op, 0);
   }
 
   // If the loop has numStages attribute, also consider pipelining other loads

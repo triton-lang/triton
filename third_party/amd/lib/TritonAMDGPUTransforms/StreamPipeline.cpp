@@ -404,10 +404,10 @@ void StreamPipeliner::computeLoadOpsToIndirectionLevelAndUse() {
       };
 
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (dyn_cast<mlir::triton::DotOpInterface>(op)) {
-      seen.clear();
-      dfs(&op, 0, &op);
-    }
+    if (!dyn_cast<mlir::triton::DotOpInterface>(op))
+      continue;
+    seen.clear();
+    dfs(&op, 0, &op);
   }
 
   // If the loop has numStages attribute, also consider pipelining other loads
