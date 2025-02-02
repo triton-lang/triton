@@ -37,7 +37,7 @@ Users can pass command-line arguments to specify matrix dimensions and iteration
 
 Note that currently this tutorial will fail on devices with a small shared memory size, such as RTX-4090.
 
-.. GENERATED FROM PYTHON SOURCE LINES 21-760
+.. GENERATED FROM PYTHON SOURCE LINES 21-752
 
 
 
@@ -49,15 +49,15 @@ Note that currently this tutorial will fail on devices with a small shared memor
     TMA benchmarks will be running with experimental grid constant TMA descriptor.
     M=32, N=32, K=32 verification naive vs: torch: ✅ cublas: ✅ persistent: ✅ 
     M=8192, N=8192, K=512 verification naive vs: torch: ✅ cublas: ✅ persistent: ✅ 
-    174.596 5510.268 ROOT
-    ├─ nan 0.050 _ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastIZZZNS0_23direct_copy_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE1_clEvENKUlvE8_clEvEUlN3c104HalfEE_EEvS4_RKT_EUliE_EEviT1_
+    174.928 5499.824 ROOT
+    ├─ nan 0.051 _ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastIZZZNS0_23direct_copy_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE1_clEvENKUlvE8_clEvEUlN3c104HalfEE_EEvS4_RKT_EUliE_EEviT1_
     ├─ nan 0.046 _ZN2at6native54_GLOBAL__N__d8ceb000_21_DistributionNormal_cu_0c5b6e8543distribution_elementwise_grid_stride_kernelIfLi4EZNS0_9templates4cuda20normal_and_transformIN3c104HalfEfPNS_17CUDAGeneratorImplEZZZNS4_13normal_kernelIS9_EEvRKNS_10TensorBaseEddT_ENKUlvE_clEvENKUlvE1_clEvEUlfE_EEvRNS_18TensorIteratorBaseET1_T2_EUlP24curandStatePhilox4_32_10E0_ZNS1_27distribution_nullary_kernelIS7_f6float4S9_SO_SH_EEvSJ_SL_RKT3_T4_EUlifE_EEviNS_15PhiloxCudaStateESK_SL_
-    ├─ 176.888 4273.405 cublas [M=8192, N=8192, K=512]
-    │  └─ nan 4273.405 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
-    ├─ 153.188 448.595 matmul_kernel [M=8192, N=8192, K=512]
-    ├─ 170.118 403.953 matmul_kernel_persistent [M=8192, N=8192, K=512]
-    └─ 178.854 384.221 torch [M=8192, N=8192, K=512]
-       └─ nan 384.221 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+    ├─ 177.154 4266.998 cublas [M=8192, N=8192, K=512]
+    │  └─ nan 4266.998 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+    ├─ 154.323 445.296 matmul_kernel [M=8192, N=8192, K=512]
+    ├─ 170.097 404.001 matmul_kernel_persistent [M=8192, N=8192, K=512]
+    └─ 179.222 383.433 torch [M=8192, N=8192, K=512]
+       └─ nan 383.433 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
 
 
 
@@ -272,6 +272,17 @@ Note that currently this tutorial will fail on devices with a small shared memor
         return c
 
 
+    @triton.jit
+    def _compute_tile_and_pid(tile_id, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS):
+        tile_id += NUM_SMS
+        group_id = tile_id // num_pid_in_group
+        first_pid_m = group_id * GROUP_SIZE_M
+        group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+        pid_m = first_pid_m + (tile_id % group_size_m)
+        pid_n = (tile_id % num_pid_in_group) // group_size_m
+        return tile_id, pid_m, pid_n
+
+
     @triton.autotune(
         configs=matmul_get_configs(),
         key=["M", "N", "K"],
@@ -315,13 +326,7 @@ Note that currently this tutorial will fail on devices with a small shared memor
         for _ in range(0, k_tiles * tiles_per_SM):
             ki = tl.where(ki == k_tiles - 1, 0, ki + 1)
             if ki == 0:
-                tile_id += NUM_SMS
-                group_id = tile_id // num_pid_in_group
-                first_pid_m = group_id * GROUP_SIZE_M
-                group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-                pid_m = first_pid_m + (tile_id % group_size_m)
-                pid_n = (tile_id % num_pid_in_group) // group_size_m
-
+                tile_id, pid_m, pid_n = _compute_tile_and_pid(tile_id, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS)
                 start_m = pid_m * BLOCK_SIZE_M
                 start_n = pid_n * BLOCK_SIZE_N
                 offs_am = start_m + tl.arange(0, BLOCK_SIZE_M)
@@ -428,13 +433,7 @@ Note that currently this tutorial will fail on devices with a small shared memor
         for _ in range(0, k_tiles * tiles_per_SM):
             ki = tl.where(ki == k_tiles - 1, 0, ki + 1)
             if ki == 0:
-                tile_id += NUM_SMS
-                group_id = tile_id // num_pid_in_group
-                first_pid_m = group_id * GROUP_SIZE_M
-                group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-                pid_m = first_pid_m + (tile_id % group_size_m)
-                pid_n = (tile_id % num_pid_in_group) // group_size_m
-
+                tile_id, pid_m, pid_n = _compute_tile_and_pid(tile_id, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS)
                 offs_am = pid_m * BLOCK_SIZE_M
                 offs_bn = pid_n * BLOCK_SIZE_N
 
@@ -445,12 +444,8 @@ Note that currently this tutorial will fail on devices with a small shared memor
             accumulator = tl.dot(a, b.T, accumulator)
 
             if ki == k_tiles - 1:
-                tile_id_c += NUM_SMS
-                group_id = tile_id_c // num_pid_in_group
-                first_pid_m = group_id * GROUP_SIZE_M
-                group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-                pid_m = first_pid_m + (tile_id_c % group_size_m)
-                pid_n = (tile_id_c % num_pid_in_group) // group_size_m
+                tile_id_c, pid_m, pid_n = _compute_tile_and_pid(tile_id_c, num_pid_in_group, num_pid_m, GROUP_SIZE_M,
+                                                                NUM_SMS)
 
                 offs_am_c = pid_m * BLOCK_SIZE_M
                 offs_bn_c = pid_n * BLOCK_SIZE_N
@@ -592,10 +587,9 @@ Note that currently this tutorial will fail on devices with a small shared memor
             tiles_per_SM += 1
 
         tile_id = start_pid - NUM_SMS
+        tile_id_c = start_pid - NUM_SMS
         ki = -1
 
-        pid_m = 0
-        pid_n = 0
         offs_am = 0
         offs_bn = 0
 
@@ -606,13 +600,7 @@ Note that currently this tutorial will fail on devices with a small shared memor
         for _ in range(0, k_tiles * tiles_per_SM):
             ki = tl.where(ki == k_tiles - 1, 0, ki + 1)
             if ki == 0:
-
-                tile_id += NUM_SMS
-                group_id = tile_id // num_pid_in_group
-                first_pid_m = group_id * GROUP_SIZE_M
-                group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-                pid_m = first_pid_m + (tile_id % group_size_m)
-                pid_n = (tile_id % num_pid_in_group) // group_size_m
+                tile_id, pid_m, pid_n = _compute_tile_and_pid(tile_id, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS)
 
                 offs_am = pid_m * BLOCK_SIZE_M
                 offs_bn = pid_n * BLOCK_SIZE_N
@@ -624,18 +612,22 @@ Note that currently this tutorial will fail on devices with a small shared memor
             accumulator = tl.dot(a, b.T, accumulator)
 
             if ki == k_tiles - 1:
+                tile_id_c, pid_m, pid_n = _compute_tile_and_pid(tile_id_c, num_pid_in_group, num_pid_m, GROUP_SIZE_M,
+                                                                NUM_SMS)
+                offs_cm = pid_m * BLOCK_SIZE_M
+                offs_cn = pid_n * BLOCK_SIZE_N
 
                 if EPILOGUE_SUBTILE:
                     acc = tl.reshape(accumulator, (BLOCK_SIZE_M, 2, BLOCK_SIZE_N // 2))
                     acc = tl.permute(acc, (0, 2, 1))
                     acc0, acc1 = tl.split(acc)
                     c0 = acc0.to(dtype)
-                    c_desc.store([offs_am, offs_bn], c0)
+                    c_desc.store([offs_cm, offs_cn], c0)
                     c1 = acc1.to(dtype)
-                    c_desc.store([offs_am, offs_bn + BLOCK_SIZE_N // 2], c1)
+                    c_desc.store([offs_cm, offs_cn + BLOCK_SIZE_N // 2], c1)
                 else:
                     c = accumulator.to(dtype)
-                    c_desc.store([offs_am, offs_bn], c)
+                    c_desc.store([offs_cm, offs_cn], c)
 
                 accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
@@ -812,7 +804,7 @@ Note that currently this tutorial will fail on devices with a small shared memor
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (1 minutes 4.534 seconds)
+   **Total running time of the script:** (1 minutes 4.694 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_09-persistent-matmul.py:

@@ -360,7 +360,7 @@ async_tma_copy_global_to_local except that each row is indexed independently.</p
 <p>The <code class="docutils literal notranslate"><span class="pre">ttng.async_tma_scatter</span></code> operation scatters multiple separately-indexed
 rows of data from local memory into global memory asynchronously. The
 operation scatters a 2D tensor in shared memory, laid out by core tensor
-tiles (<code class="docutils literal notranslate"><span class="pre">hasLeadingOffset=true</span></code>) into separately indexed rows in global
+tiles nvmma_shared layout into separately indexed rows in global
 memory at a given <code class="docutils literal notranslate"><span class="pre">y</span></code> offset.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
