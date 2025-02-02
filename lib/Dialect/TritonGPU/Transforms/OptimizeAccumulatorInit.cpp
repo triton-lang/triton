@@ -55,8 +55,8 @@ public:
 };
 
 bool dotSupportsAccInitFlag(Operation *op) {
-  if (!dyn_cast<DotOpInterface>(op))
-    assert("Expected an op which implements a DotOpInterface");
+  assert(dyn_cast<DotOpInterface>(op) &&
+         "Expected an op which implements a DotOpInterface");
 
   if (auto wgDotOp = dyn_cast<triton::nvidia_gpu::WarpGroupDotOp>(op)) {
     // Partial accumulation would require a select op to handle the
@@ -70,8 +70,8 @@ bool dotSupportsAccInitFlag(Operation *op) {
 }
 
 std::pair<Value, Operation *> getAccumulatorUseAndDef(Operation *op) {
-  if (!dyn_cast<DotOpInterface>(op))
-    assert("Expected an op which implements a DotOpInterface");
+  assert(dyn_cast<DotOpInterface>(op) &&
+         "Expected an op which implements a DotOpInterface");
 
   if (auto wgDotOp = dyn_cast<triton::nvidia_gpu::WarpGroupDotOp>(op)) {
     return std::make_pair(wgDotOp.getC(), wgDotOp);
@@ -99,8 +99,8 @@ std::pair<Value, Operation *> getAccumulatorUseAndDef(Operation *op) {
 }
 
 void setUseAccFlag(Operation *op, Value useAcc) {
-  if (!dyn_cast<DotOpInterface>(op))
-    assert("Expected an op which implements a DotOpInterface");
+  assert(dyn_cast<DotOpInterface>(op) &&
+         "Expected an op which implements a DotOpInterface");
 
   if (auto wgDotOp = dyn_cast<triton::nvidia_gpu::WarpGroupDotOp>(op)) {
     wgDotOp.getUseCMutable().assign(useAcc);
@@ -165,10 +165,8 @@ public:
     ModuleOp m = getOperation();
     SmallVector<Operation *> mmaOps;
     m.walk([&](Operation *op) {
-      auto dotOp = dyn_cast<DotOpInterface>(op);
-      if (dotOp && dotSupportsAccInitFlag(dotOp)) {
-        mmaOps.push_back(dotOp);
-      }
+      if (isa<DotOpInterface>(op) && dotSupportsAccInitFlag(op))
+        mmaOps.push_back(op);
     });
 
     // for each mma op, find where the accumulator is initialized with zero
