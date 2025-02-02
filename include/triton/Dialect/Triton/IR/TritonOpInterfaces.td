@@ -34,7 +34,7 @@ def TransposeOpInterface : OpInterface<"TransposeOpInterface"> {
 
 def DotOpInterface : OpInterface<"DotOpInterface"> {
   let description = [{
-	TODO: This interface is implemented by operations that perform a dot product.
+	This interface is implemented by operations that perform a dot product.
   }];
 
   let cppNamespace = "::mlir::triton";
@@ -42,7 +42,7 @@ def DotOpInterface : OpInterface<"DotOpInterface"> {
   let methods = [
 	InterfaceMethod<
 			/*desc=*/[{
-			  Verifies the dimensions of DotOp operands.
+			  Verifies the dimensions of the A and B DotOp operands.
 		  }],
 			/*retType=*/"bool",
 			/*methodName=*/"verifyDims",

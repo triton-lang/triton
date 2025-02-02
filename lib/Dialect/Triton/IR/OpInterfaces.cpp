@@ -29,7 +29,6 @@ LogicalResult verifyTransposeOpInterface(Operation *op) {
   return success();
 }
 
-// Verify if the op is a dot-like operation.
 // A DotOpInterface operation should have three operands.
 // The first two operands should share a common dimension, and the result
 // should have the dimensions of the two operands that are not shared.
@@ -52,8 +51,7 @@ LogicalResult verifyDotOpInterface(Operation *op) {
   if (aShape.size() != bShape.size() || aShape.size() != cShape.size())
     return dotOp->emitOpError("expected all operands to have the same rank");
 
-  // Check if the first two operands share a common dimension
-
+  // Check for valid A, B input shapes for dot
   if (!dotOp.verifyDims())
     return dotOp->emitOpError(
         "expected the last dimension of the first operand "
