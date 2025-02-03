@@ -209,6 +209,23 @@ OpFoldResult TransOp::fold(FoldAdaptor adaptor) {
   return {};
 }
 
+LogicalResult TransOp::verify() {
+  auto order = getOrder();
+  auto srcTy = cast<RankedTensorType>(getSrc().getType());
+  if (order.size() != srcTy.getShape().size()) {
+    return emitError("order must have the same size as the source tensor");
+  }
+  if (!isPermutationOfIota(order)) {
+    return emitError("order must be a permutation of 0..n-1");
+  }
+  SmallVector<int64_t> retShape = applyPermutation(srcTy.getShape(), order);
+  if (retShape != getType().getShape()) {
+    return emitError(
+        "result shape must match the permutation of the source shape");
+  }
+  return success();
+}
+
 LogicalResult TransOp::inferReturnTypes(
     MLIRContext *context, std::optional<Location> location,
     TransOp::Adaptor adaptor, SmallVectorImpl<Type> &inferredReturnTypes) {
