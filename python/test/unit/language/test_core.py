@@ -5829,10 +5829,12 @@ def test_local_load_store(M, N, K, dist_layout, shared_layout, device, tmp_path:
 
 
 dot_layouts = [
-    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [0, 1], [16, 8]), op_idx=0, k_width=4),
-    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=1, k_width=4),
-    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=0, k_width=2),
-    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [0, 1], [16, 8]), op_idx=1, k_width=2),
+    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=0, k_width=4),
+    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [0, 1], [16, 8]), op_idx=1, k_width=4),
+    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [0, 1], [16, 8]), op_idx=0, k_width=2),
+    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=1, k_width=2),
+    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [0, 1], [16, 8]), op_idx=0, k_width=1),
+    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=1, k_width=1),
 ]
 
 shared_layouts = [
@@ -5843,11 +5845,13 @@ shared_layouts = [
 
 
 @pytest.mark.parametrize("M, N", [[16, 32]])
-@pytest.mark.parametrize("dtype", ['float16', 'float8e5'])
+@pytest.mark.parametrize("dtype", ['float16', 'float8e5', 'float32'])
 @pytest.mark.parametrize("shared_layout", shared_layouts)
-@pytest.mark.parametrize("dist_layout", filter_layouts(layouts))
+@pytest.mark.parametrize("dist_layout", filter_layouts(dot_layouts))
 def test_local_load_store_dot(M, N, dtype, dist_layout, shared_layout, device, tmp_path: pathlib.Path):
-    if dtype == "float16":
+    if dtype == "float32":
+        mlir_dtype = "f32"
+    elif dtype == "float16":
         mlir_dtype = "f16"
     elif dtype == "float8e5":
         mlir_dtype = "f8E5M2"
