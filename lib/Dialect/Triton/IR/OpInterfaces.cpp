@@ -29,7 +29,7 @@ LogicalResult verifyTransposeOpInterface(Operation *op) {
   return success();
 }
 
-// A DotOpInterface operation should have three operands.
+// A DotOpInterface operation should have at least three operands.
 // The first two operands should share a common dimension, and the result
 // should have the dimensions of the two operands that are not shared.
 // A DotOpInterface operation can be either 2d or 3d.
