@@ -4816,6 +4816,7 @@ def test_reshape_err(device):
     assert "reshape" in str(exc_info.value)
 
 
+@pytest.mark.intepreter
 def test_tma_load_block_shape_err():
 
     @triton.jit
@@ -4830,6 +4831,7 @@ def test_tma_load_block_shape_err():
     assert "tensor descriptor block shape must have at least 8 rows" in str(e.value.__cause__)
 
 
+@pytest.mark.intepreter
 def test_tma_store_block_shape_err():
 
     @triton.jit

@@ -4,7 +4,7 @@ import torch
 import triton
 import triton.language as tl
 from triton.tools.experimental_descriptor import (create_1d_tma_descriptor, create_2d_tma_descriptor)
-from triton._internal_testing import dtypes_with_bfloat16, numpy_random, to_triton, requires_tma, supports_tma, tma_skip_msg
+from triton._internal_testing import dtypes_with_bfloat16, is_interpreter, numpy_random, to_triton, requires_tma, supports_tma, tma_skip_msg
 
 from typing import Optional
 
@@ -665,11 +665,12 @@ def torch_gather_rows(input, idx, y, block_y):
     return out
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("X, Y", [(128, 128), (64, 256)])
 @pytest.mark.parametrize("BLOCK_X, BLOCK_Y", [(32, 32), (64, 128), (16, 128)])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.int8])
 @pytest.mark.parametrize("y", [0, 32, 48])
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] != 10,
+@pytest.mark.skipif(not is_interpreter() and torch.cuda.get_device_capability()[0] != 10,
                     reason="TMA Gather only works on cloud Blackwell Chips")
 def test_tma_gather(X, Y, BLOCK_X, BLOCK_Y, dtype, y, device):
     if BLOCK_X > X or y + BLOCK_Y > Y:
@@ -762,11 +763,12 @@ def tma_scatter_rows_kernel(out_ptr, in_ptr, idx_ptr, y, X: tl.constexpr, Y: tl.
     desc.scatter(data, idx, y)
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("X, Y", [(128, 128), (64, 256)])
 @pytest.mark.parametrize("BLOCK_X, BLOCK_Y", [(32, 32), (64, 128), (16, 128)])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.int8])
 @pytest.mark.parametrize("y", [0, 32, 48])
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] != 10,
+@pytest.mark.skipif(not is_interpreter() and torch.cuda.get_device_capability()[0] != 10,
                     reason="TMA Gather only works on cloud Blackwell Chips")
 def test_tma_scatter(X, Y, BLOCK_X, BLOCK_Y, dtype, y):
     if BLOCK_X > X or y + BLOCK_Y > Y:
