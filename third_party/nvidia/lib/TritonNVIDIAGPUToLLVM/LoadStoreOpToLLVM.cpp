@@ -1361,7 +1361,7 @@ struct AsyncTMACopyLocalToGlobalOpConversion
 static LinearLayout getUnswizzledLayout(triton::gpu::MemDescType type) {
   return triton::gpu::sharedToLinearLayoutLeadingOffset(
       type.getShape(), cast<NVMMASharedEncodingAttr>(type.getEncoding()),
-      type.getElementTypeBitWidth(), /*disableSwizzle=*/true);
+      /*disableSwizzle=*/true);
 }
 
 // This function is shared between the TMA gather and scatter lowerings. It

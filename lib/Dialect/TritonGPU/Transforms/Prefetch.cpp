@@ -31,6 +31,11 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
+#include "llvm/Support/Debug.h"
+
+#define DEBUG_TYPE "tritongpu-prefetch"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace mlir {
 namespace triton {
@@ -186,6 +191,7 @@ LogicalResult Prefetcher::initialize() {
     bool foundConvertFromShared = false;
     SmallVector<Value> rets;
     rets.push_back(op->getResult(0));
+    LDBG("Prefetch src: " << *op);
     while (op) {
       if (op->getNumOperands() != 1)
         break;
@@ -193,10 +199,15 @@ LogicalResult Prefetcher::initialize() {
         break;
       rets.push_back(op->getOperand(0));
       if (auto cvt = dyn_cast<triton::gpu::LocalLoadOp>(op)) {
-        foundConvertFromShared = true;
+        // NYI for other encodings, for example if we have transpose
+        // in the chain
+        if (isa<DotOperandEncodingAttr>(cvt.getType().getEncoding()))
+          foundConvertFromShared = true;
         break;
       }
       op = op->getOperand(0).getDefiningOp();
+      if (op)
+        LDBG("op: " << *op);
     }
     std::reverse(rets.begin(), rets.end());
 
