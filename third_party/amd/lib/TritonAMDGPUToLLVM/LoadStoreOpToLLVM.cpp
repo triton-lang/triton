@@ -1639,17 +1639,33 @@ private:
   }
 };
 
-struct AsyncWaitConversion : public ConvertOpToLLVMPattern<AsyncWaitOp> {
-  using ConvertOpToLLVMPattern<AsyncWaitOp>::ConvertOpToLLVMPattern;
+struct AsyncWaitOpConversion : public ConvertOpToLLVMPattern<AsyncWaitOp> {
+  AsyncWaitOpConversion(LLVMTypeConverter &converter,
+                        const AMD::TargetInfo &targetInfo,
+                        PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
+
   LogicalResult
   matchAndRewrite(AsyncWaitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+
+    using mlir::triton::AMD::ISAFamily;
+
+    switch (targetInfo.getISAFamily()) {
+    case ISAFamily::CDNA1:
+    case ISAFamily::CDNA2:
+    case ISAFamily::CDNA3:
+      break;
+    default:
+      return rewriter.notifyMatchFailure(
+          op, "Only supported on target architecture");
+    }
 
     auto loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
     // global.load.lds uses vmcnt to synchronize
-    // The rocdl op stores all possible coutners in a single int32 value (v)
+    // The rocdl op stores all available counters in a single int32 value (v)
     // The vmcnt (6 bits) is split into a lower 3:0 and higher part 5:4
     // The lower parts is stored in 3:0 of v and the higher part in bits 15:14
     // We have to set all other bits in v to 1 to signal we are not interested
@@ -1672,9 +1688,12 @@ struct AsyncWaitConversion : public ConvertOpToLLVMPattern<AsyncWaitOp> {
     rewriter.replaceOp(op, b.i32_val(0));
     return success();
   }
+
+private:
+  const AMD::TargetInfo &targetInfo;
 };
 
-struct AsyncCommitGroupConversion
+struct AsyncCommitGroupOpConversion
     : public ConvertOpToLLVMPattern<AsyncCommitGroupOp> {
   using ConvertOpToLLVMPattern<AsyncCommitGroupOp>::ConvertOpToLLVMPattern;
 
@@ -1703,7 +1722,7 @@ void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
            StoreOpConversion, BufferLoadOpConversion, BufferStoreOpConversion,
            BufferAtomicRMWOpConversion, AsyncCopyGlobalToLocalOpConversion>(
           typeConverter, targetInfo, axisInfoAnalysis, benefit);
-  patterns.add<AsyncWaitConversion, AsyncCommitGroupConversion>(typeConverter,
-                                                                benefit);
+  patterns.add<AsyncWaitOpConversion>(typeConverter, targetInfo, benefit);
+  patterns.add<AsyncCommitGroupOpConversion>(typeConverter, benefit);
 }
 } // namespace mlir::triton::AMD
