@@ -173,9 +173,9 @@ def rsqrt(x, _builder=None):
     return core.tensor(_builder.create_rsqrt(x.handle), x.type)
 
 
+@core._tensor_member_fn
 @core.builtin
 @_add_math_1arg_docstr("absolute value")
-@core._tensor_member_fn
 def abs(x, _builder=None):
     x = semantic.to_tensor(x, _builder)
     dtype = x.dtype

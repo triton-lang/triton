@@ -45,14 +45,14 @@ test-regression: all
 
 .PHONY: test-interpret
 test-interpret: all
-	cd python/test/unit && TRITON_INTERPRET=1 $(PYTEST) -s -n 16 -m interpreter language/test_core.py language/test_standard.py \
+	cd python/test/unit && TRITON_INTERPRET=1 $(PYTEST) -s -n 16 -m interpreter cuda language/test_core.py language/test_standard.py \
 		language/test_random.py language/test_block_pointer.py language/test_subprocess.py language/test_line_info.py \
 		runtime/test_autotuner.py::test_kwargs[False] \
 		../../tutorials/06-fused-attention.py::test_op --device=cpu
 
 .PHONY: test-proton
 test-proton: all
-	$(PYTEST) -s third_party/proton/test
+	$(PYTEST) -s -n 8 third_party/proton/test
 
 .PHONY: test-python
 test-python: test-unit test-regression test-interpret test-proton
