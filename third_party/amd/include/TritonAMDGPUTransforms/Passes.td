@@ -145,4 +145,13 @@ def TritonAMDGPUBlockPingpong: Pass<"tritonamdgpu-block-pingpong", "mlir::Module
   let dependentDialects = ["mlir::ROCDL::ROCDLDialect, mlir::triton::amdgpu::TritonAMDGPUDialect"];
 }
 
+def TritonAMDGPUMembarAnalysis : Pass<"triton-amdgpu-membar-analysis", "mlir::ModuleOp"> {
+    let summary = "Perform the memory-barrier analysis";
+    let description = [{
+      This pass allocates shared memory and set barriers.
+     }];
+
+    let constructor = "mlir::createTritonAMDGPUMembarAnalysisPass()";
+}
+
 #endif
