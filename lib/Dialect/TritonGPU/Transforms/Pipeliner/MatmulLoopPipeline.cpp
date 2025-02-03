@@ -17,7 +17,6 @@
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
-#include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "triton-matmul-loop-pipeline"
@@ -373,7 +372,6 @@ getSharedEncoding(Operation *loadOp, bool isTMALoad) {
   if (llvm::any_of(loadOp->getUsers(), [&](Operation *user) {
         return isa<ttg::LocalAllocOp>(user);
       })) {
-
     for (auto user : loadOp->getUsers()) {
       auto localAlloc = dyn_cast<ttg::LocalAllocOp>(user);
       if (!localAlloc)
@@ -397,7 +395,7 @@ getSharedEncoding(Operation *loadOp, bool isTMALoad) {
       if (auto sharedMMALayout =
               dyn_cast<ttg::NVMMASharedEncodingAttr>(localAllocEnc)) {
         assert(!sharedMMALayout.getFp4Padded() &&
-               "TMA load for  mixed precision MMAv5 is not supported yet.");
+               "TMA load for mixed precision MMAv5 is not supported yet.");
       }
     }
     return ttg::NVMMASharedEncodingAttr::get(
