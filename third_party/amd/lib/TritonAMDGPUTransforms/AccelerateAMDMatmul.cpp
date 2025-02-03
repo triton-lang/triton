@@ -56,7 +56,7 @@ warpsPerTile(Operation *dotOp, ArrayRef<int64_t> shape, int numWarps,
   bwdOpt.filter = filter;
   auto slices = getSlice(dotOp, bwdOpt, fwdOpt);
   for (Operation *op : slices) {
-    if (dyn_cast<mlir::triton::DotOpInterface>(op) && (op != dotOp))
+    if (isa<mlir::triton::DotOpInterface>(op) && (op != dotOp))
       return {(unsigned)numWarps, 1};
   }
 

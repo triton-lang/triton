@@ -151,9 +151,9 @@ loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
           distance++;
         }
         for (Value operand : op->getOperands()) {
-          if (auto dotOp = dyn_cast<mlir::triton::DotOpInterface>(op)) {
+          if (isa<mlir::triton::DotOpInterface>(op)) {
             // Heuristic: only pipeline A and B operands of the dot op.
-            if (operand == dotOp->getOperand(2))
+            if (operand == op->getOperand(2))
               continue;
           }
           Value v = operand;
@@ -166,7 +166,7 @@ loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
 
   bool seenDot = false;
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (!dyn_cast<mlir::triton::DotOpInterface>(op))
+    if (!isa<mlir::triton::DotOpInterface>(op))
       continue;
     seenDot = true;
     seen.clear();

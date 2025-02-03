@@ -404,7 +404,7 @@ void StreamPipeliner::computeLoadOpsToIndirectionLevelAndUse() {
       };
 
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (!dyn_cast<mlir::triton::DotOpInterface>(op))
+    if (!isa<mlir::triton::DotOpInterface>(op))
       continue;
     seen.clear();
     dfs(&op, 0, &op);
@@ -454,7 +454,7 @@ void StreamPipeliner::assignMemoryLayouts() {
       continue;
     }
 
-    if (dyn_cast<mlir::triton::DotOpInterface>(use)) {
+    if (isa<mlir::triton::DotOpInterface>(use)) {
       // Only use shared memory when feeding into a dot op.
       loadInfo.usedByDot = true;
       loadInfo.sharedEncoding =

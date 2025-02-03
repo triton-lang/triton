@@ -432,10 +432,9 @@ getTransitiveUserInBlock(Operation *baseOp, scf::ForOp &forOp) {
             users.push_back(op);
             return;
           }
-          auto dotOp = dyn_cast<mlir::triton::DotOpInterface>(op);
           if (isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp,
                   tt::ExperimentalDescriptorGatherOp>(op) ||
-              dotOp) {
+              isa<mlir::triton::DotOpInterface>(op)) {
             // Stop recursion when hitting a LoadOp or a DotOp.
             users.push_back(op);
             return;
@@ -498,9 +497,9 @@ assignMemoryLayouts(scf::ForOp &forOp,
     loadsToPipeline.insert(&op);
     LoadInfo loadInfo;
     for (auto use : users) {
-      if (auto op = dyn_cast<mlir::triton::DotOpInterface>(use)) {
+      if (isa<mlir::triton::DotOpInterface>(use)) {
         LDBG("set shared encoding with dot user: " << *use);
-        auto mmaLoadType = getMMALoadType(use);
+        auto mmaLoadType = getMMALoadType(&op);
         auto dot = dyn_cast<tt::DotOp>(use);
         auto warpGroupDot = dyn_cast<ttng::WarpGroupDotOp>(use);
 
@@ -511,12 +510,12 @@ assignMemoryLayouts(scf::ForOp &forOp,
 
         if (loadInfo.isMMAv3Shared || isTMALoad) {
           loadInfo.sharedEncoding =
-              getSharedEncoding(use, isTMALoad).value_or(nullptr);
+              getSharedEncoding(&op, isTMALoad).value_or(nullptr);
         } else if (loadInfo.isMMAv3Registers || dot) {
           bool incompatible = false;
 
           loadInfo.sharedEncoding =
-              getSharedEncIfAllUsersAreDotEnc(use->getResult(0), incompatible)
+              getSharedEncIfAllUsersAreDotEnc(op.getResult(0), incompatible)
                   .value_or(nullptr);
         }
       }

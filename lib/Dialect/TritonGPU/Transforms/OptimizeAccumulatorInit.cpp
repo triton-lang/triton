@@ -55,7 +55,7 @@ public:
 };
 
 bool dotSupportsAccInitFlag(Operation *op) {
-  assert(dyn_cast<DotOpInterface>(op) &&
+  assert(isa<DotOpInterface>(op) &&
          "Expected an op which implements a DotOpInterface");
 
   if (auto wgDotOp = dyn_cast<triton::nvidia_gpu::WarpGroupDotOp>(op)) {
@@ -70,7 +70,7 @@ bool dotSupportsAccInitFlag(Operation *op) {
 }
 
 std::pair<Value, Operation *> getAccumulatorUseAndDef(Operation *op) {
-  assert(dyn_cast<DotOpInterface>(op) &&
+  assert(isa<DotOpInterface>(op) &&
          "Expected an op which implements a DotOpInterface");
 
   if (auto wgDotOp = dyn_cast<triton::nvidia_gpu::WarpGroupDotOp>(op)) {
@@ -99,7 +99,7 @@ std::pair<Value, Operation *> getAccumulatorUseAndDef(Operation *op) {
 }
 
 void setUseAccFlag(Operation *op, Value useAcc) {
-  assert(dyn_cast<DotOpInterface>(op) &&
+  assert(isa<DotOpInterface>(op) &&
          "Expected an op which implements a DotOpInterface");
 
   if (auto wgDotOp = dyn_cast<triton::nvidia_gpu::WarpGroupDotOp>(op)) {
