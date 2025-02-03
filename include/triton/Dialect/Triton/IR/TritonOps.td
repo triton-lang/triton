@@ -630,7 +630,7 @@ def TT_GetNumProgramsOp : TT_Op<"get_num_programs", [Pure]> {
 //
 def TT_DotOp : TT_Op<"dot", [Pure,
                              DeclareOpInterfaceMethods<InferTypeOpInterface>,
-                             DotOpInterface,
+                             DeclareOpInterfaceMethods<DotOpInterface>,
                              TypesMatchWith<"result's type matches accumulator's type",
                                             "d", "c", "$_self">]> {
     let summary = "dot";
@@ -655,18 +655,6 @@ def TT_DotOp : TT_Op<"dot", [Pure,
 
     let results = (outs TT_FpIntTensor:$d);
 
-
-    let extraClassDeclaration = [{
-      bool verifyDims() {
-        auto aShape = this->getA().getType().getShape();
-        auto bShape = this->getB().getType().getShape();
-
-        if (aShape[aShape.size() - 1] != bShape[aShape.size() - 2])
-           return false;
-        return true;
-      }
-    }];
-
     // attr-dict prints enums as integers.  To get inputPrecision printed as a
     // string, we need to specify it explicitly.
     let assemblyFormat = [{
@@ -682,7 +670,7 @@ def TT_DotOp : TT_Op<"dot", [Pure,
 //
 def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
                              AttrSizedOperandSegments,
-                             DotOpInterface,
+                             DeclareOpInterfaceMethods<DotOpInterface>,
                              TypesMatchWith<"result's type matches accumulator's type",
                                             "d", "c", "$_self">]> {
     let summary = "dot_scaled";
@@ -707,24 +695,6 @@ def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
     );
 
     let results = (outs TT_FloatTensor:$d);
-
-    let extraClassDeclaration = [{
-      bool verifyDims() {
-        auto aShape = this->getLhs().getType().getShape();
-        auto bShape = this->getRhs().getType().getShape();
-
-        auto aKdim = aShape[aShape.size() - 1];
-        auto bKdim = bShape[aShape.size() - 2];
-        if (this->getLhsType() == ScaleDotElemType::E2M1)
-            aKdim *= 2;
-        if (this->getRhsType() == ScaleDotElemType::E2M1)
-            bKdim *= 2;
-
-        if (aKdim != bKdim)
-           return false;
-        return true;
-      }
-    }];
 
     let assemblyFormat = [{
       $lhs (`scale` $lhs_scale^)? `,` $rhs (`scale` $rhs_scale^)? `,` $c `lhs` `=` $lhs_type `rhs` `=` $rhs_type attr-dict

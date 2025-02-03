@@ -72,7 +72,7 @@ def TTNG_ClusterWaitOp : TTNG_Op<"cluster_wait", []> {
 //
 def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [DeclareOpInterfaceMethods<InferTypeOpInterface>,
                                                      DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
-                                                     DotOpInterface,
+                                                     DeclareOpInterfaceMethods<DotOpInterface>,
                                                      TypesMatchWith<"result's type matches accumulator's type",
                                                                      "d", "c", "$_self">]> {
     let summary = "warp group dot";
@@ -94,14 +94,6 @@ def TTNG_WarpGroupDotOp : TTNG_Op<"warp_group_dot", [DeclareOpInterfaceMethods<I
     let assemblyFormat = "$a`,` $b`,` $c (`,` $useC^)? attr-dict `:` type($a) `*` type($b) `->` type($d)";
 
     let extraClassDeclaration = [{
-       bool verifyDims() {
-        auto aShape = this->getA().getType().getShape();
-        auto bShape = this->getB().getType().getShape();
-
-        if (aShape[aShape.size() - 1] != bShape[aShape.size() - 2])
-           return false;
-        return true;
-      }
       bool needsPartialAccumulator();
     }];
 }
@@ -334,7 +326,7 @@ def TTNG_TMAStoreWaitOp : TTNG_Op<"async_tma_store_wait"> {
   let assemblyFormat = "attr-dict";
 }
 
-def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>, DotOpInterface]> {
+def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>, DeclareOpInterfaceMethods<DotOpInterface>]> {
     let summary = "block level op mapping to tensorcore gen5 mma";
 
     let description = [{
@@ -353,22 +345,11 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [DeclareOpInterfaceMethods<MemoryE
                          Optional<TTG_MemDescType>:$barrier,
                          OptionalAttr<UnitAttr>:$two_ctas);
 
-    let extraClassDeclaration = [{
-      bool verifyDims() {
-        auto aShape = this->getA().getType().getShape();
-        auto bShape = this->getB().getType().getShape();
-
-        if (aShape[aShape.size() - 1] != bShape[aShape.size() - 2])
-           return false;
-        return true;
-      }
-    }];
-
     // TODO: improve printing format.
     let assemblyFormat = "$a`,` $b`,` $d`,` $useD`,` $pred (`,` $barrier^)? attr-dict `:` functional-type(operands, results)";
 }
 
-def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>, DotOpInterface]> {
+def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>, DeclareOpInterfaceMethods<DotOpInterface>]> {
     let summary = "block level op mapping to tensorcore gen5 mma";
 
     let description = [{
@@ -387,24 +368,6 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [DeclareOpInterfaceMe
                          I1:$useD,
                          I1:$pred,
                          Optional<TTG_MemDescType>:$barrier);
-
-    let extraClassDeclaration = [{
-      bool verifyDims() {
-        auto aShape = this->getA().getType().getShape();
-        auto bShape = this->getB().getType().getShape();
-
-        auto aKdim = aShape[aShape.size() - 1];
-        auto bKdim = bShape[aShape.size() - 2];
-        if (this->getAType() == ScaleDotElemType::E2M1)
-            aKdim *= 2;
-        if (this->getBType() == ScaleDotElemType::E2M1)
-            bKdim *= 2;
-
-        if (aKdim != bKdim)
-           return false;
-        return true;
-      }
-    }];
 
     // TODO: improve printing format.
     let assemblyFormat = "$a `,` $b `,` $d `,` $a_scale `,` $b_scale `,` $useD`,` $pred `lhs` `=` $a_type `rhs` `=` $b_type (`,` $barrier^)? attr-dict `:` functional-type(operands, results)";

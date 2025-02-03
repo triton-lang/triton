@@ -85,6 +85,15 @@ bool WarpGroupDotOp::needsPartialAccumulator() {
   return isFP8 && accFP32 && maxNumImpreciseAcc <= aTensorTy.getShape()[1];
 }
 
+bool WarpGroupDotOp::verifyDims() {
+  auto aShape = this->getA().getType().getShape();
+  auto bShape = this->getB().getType().getShape();
+
+  if (aShape[aShape.size() - 1] != bShape[aShape.size() - 2])
+    return false;
+  return true;
+}
+
 // -- WarpGroupDotWaitOp --
 LogicalResult WarpGroupDotWaitOp::inferReturnTypes(
     ::mlir::MLIRContext *context, ::std::optional<::mlir::Location> location,
@@ -259,6 +268,15 @@ void TCGen5MMAOp::getEffects(
                        mlir::triton::gpu::SharedMemory::get());
 }
 
+bool TCGen5MMAOp::verifyDims() {
+  auto aShape = this->getA().getType().getShape();
+  auto bShape = this->getB().getType().getShape();
+
+  if (aShape[aShape.size() - 1] != bShape[aShape.size() - 2])
+    return false;
+  return true;
+}
+
 // -- TMEMStoreOp --
 LogicalResult TMEMStoreOp::verify() {
   if (!isa<triton::nvidia_gpu::TensorMemorySpaceAttr>(
@@ -287,6 +305,22 @@ void TCGen5MMAScaledOp::getEffects(
   }
   effects.emplace_back(MemoryEffects::Read::get(), &getBMutable(),
                        mlir::triton::gpu::SharedMemory::get());
+}
+
+bool TCGen5MMAScaledOp::verifyDims() {
+  auto aShape = this->getA().getType().getShape();
+  auto bShape = this->getB().getType().getShape();
+
+  auto aKdim = aShape[aShape.size() - 1];
+  auto bKdim = bShape[aShape.size() - 2];
+  if (this->getAType() == ScaleDotElemType::E2M1)
+    aKdim *= 2;
+  if (this->getBType() == ScaleDotElemType::E2M1)
+    bKdim *= 2;
+
+  if (aKdim != bKdim)
+    return false;
+  return true;
 }
 
 // -- TMEMLoadOp --
