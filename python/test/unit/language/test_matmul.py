@@ -433,13 +433,22 @@ def block_scale_mxfp_matmul(  #
     tl.store(output_ptrs, accumulator, mask=c_mask)
 
 
+def _knob_disable_ptxas_opt(monkeypatch):
+    monkeypatch.setenv("DISABLE_PTXAS_OPT", "1")
+
+
 @pytest.mark.parametrize("M, N, K", [(1024, 512, 512), (998, 111, 512), (63, 128, 512)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (256, 128, 128), (128, 256, 128),
                                                        (128, 128, 256), (128, 256, 256)])
 @pytest.mark.parametrize("NUM_STAGES", [1, 2, 4])
 @pytest.mark.parametrize("USE_2D_SCALE_LOAD", [False, True])
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 10, reason="Requires compute capability >= 10")
-def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_2D_SCALE_LOAD, device):
+def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_2D_SCALE_LOAD, device, monkeypatch):
+    if NUM_STAGES == 1 and USE_2D_SCALE_LOAD:
+        # It seems tcgen05.cp gets corrupted unless cpasync or TMA is used to load scales.
+        # Disabling ptxas optimization fixes the issue for now.
+        _knob_disable_ptxas_opt(monkeypatch)
+
     if BLOCK_N == 256 and BLOCK_K == 256:
         NUM_STAGES = min(NUM_STAGES, 2)
     elif BLOCK_K == 256:
@@ -464,7 +473,6 @@ def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_
                                         b.stride(1), output.stride(0), output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K,
                                         NUM_STAGES=NUM_STAGES, USE_2D_SCALE_LOAD=USE_2D_SCALE_LOAD)
     ttgir = out.asm["ttgir"]
-    # print(ttgir)
 
     def flatten_scale(scale):
         num_chunk_m, num_chunk_k, _, _, _ = scale.shape
@@ -484,8 +492,6 @@ def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_
     output = output.to(torch.float32)
     atol = 0.0001
     rtol = 0.0001
-    print(torch.sum(ref_out))
-    print(torch.sum(output))
     torch.testing.assert_close(ref_out, output, atol=atol, rtol=rtol)
 
     if USE_2D_SCALE_LOAD:
@@ -508,10 +514,6 @@ def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_
             # In this test, it fails to pipeline the RHS tensor when N is not a multiple of 128. Pipelining of the LHS tensor
             # does not seem to be affected by the value of M, though.
             print(f"SWP failed for M = {M}, N = {N}")
-
-
-test_blocked_scale_mxfp(1024, 1024, 512, 128, 128, 256, 1, True, "cuda")
-# test_blocked_scale_mxfp(1024, 1024, 512, 128, 128, 256, 3, True, "cuda")
 
 
 @triton.jit
