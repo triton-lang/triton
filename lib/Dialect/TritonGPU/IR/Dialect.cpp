@@ -2624,7 +2624,7 @@ struct TritonGPUInferLayoutInterface
       }
       resultEncoding = NVMMASharedEncodingAttr::get(
           ctx, enc.getSwizzlingByteWidth(), !enc.getTransposed(),
-          enc.getFp4Padded(), enc.getElementBitWidth(), *ctaLayout);
+          enc.getElementBitWidth(), enc.getFp4Padded(), *ctaLayout);
       return success();
     }
 
