@@ -1,3 +1,7 @@
+set(LLVM_TARGET_DEFINITIONS Canonicalize.td)
+mlir_tablegen(TritonCanonicalize.inc -gen-rewriters)
+add_public_tablegen_target(TritonCanonicalizeIncGen)
+
 add_triton_library(TritonIR
   Dialect.cpp
   Ops.cpp
@@ -7,6 +11,7 @@ add_triton_library(TritonIR
 
   DEPENDS
   TritonTableGen
+  TritonCanonicalizeIncGen
 
   LINK_LIBS PUBLIC
   MLIRIR

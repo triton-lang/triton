@@ -72,7 +72,7 @@ void decomposeBlockedToDotLayoutConversion(ModuleOp module) {
           triton::gpu::SharedMemorySpaceAttr::get(srcType.getContext());
       auto tmpType = MemDescType::get(
           dstType.getShape(), dstType.getElementType(),
-          triton::gpu::SharedEncodingAttr::get(
+          triton::gpu::SwizzledSharedEncodingAttr::get(
               module.getContext(), dstDotOp, srcType.getShape(),
               srcBlocked.getOrder(), srcBlocked.getCTALayout(),
               srcType.getElementType()),

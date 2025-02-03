@@ -1,6 +1,6 @@
 import pytest
 import subprocess
-from triton.profiler.viewer import get_min_time_flops, get_min_time_bytes, get_raw_metrics, format_frames, derive_metrics, filter_frames
+from triton.profiler.viewer import get_min_time_flops, get_min_time_bytes, get_raw_metrics, format_frames, derive_metrics, filter_frames, parse
 from triton.profiler.hook import COMPUTE_METADATA_SCOPE_NAME
 import numpy as np
 
@@ -84,6 +84,12 @@ def test_filter_metadata():
         assert "cuda_kernel" not in gf.dataframe["name"].tolist()
         assert "scope" in gf.dataframe["name"].tolist()
         assert "triton_kernel" in gf.dataframe["name"].tolist()
+
+
+def test_parse():
+    gf, derived_metrics = parse(["time/s"], triton_example_file)
+    for derived_metric in derived_metrics:
+        assert derived_metric in gf.inc_metrics or derived_metric in gf.exc_metrics
 
 
 def test_min_time_flops():

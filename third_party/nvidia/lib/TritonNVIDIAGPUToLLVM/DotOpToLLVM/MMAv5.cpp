@@ -14,7 +14,7 @@ using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getShapePerCTATile;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
-using ::mlir::triton::gpu::SharedEncodingAttr;
+using ::mlir::triton::gpu::NVMMASharedEncodingAttr;
 
 mlir::triton::NVIDIA::DotOpMmaV5TmemLoader::DotOpMmaV5TmemLoader(
     Value tensor, Value base, SmallVector<unsigned int> instrShape,
@@ -344,14 +344,12 @@ void convertDot(const LLVMTypeConverter *typeConverter,
   bool aInTmem = true;
   bool transA = false;
   if (auto aSharedLayout =
-          dyn_cast<SharedEncodingAttr>(aTensorTy.getEncoding())) {
-    auto aOrd = aSharedLayout.getOrder();
-    transA = aOrd[0] == 0;
+          dyn_cast<NVMMASharedEncodingAttr>(aTensorTy.getEncoding())) {
+    transA = aSharedLayout.getTransposed();
     aInTmem = false;
   }
-  auto bSharedLayout = cast<SharedEncodingAttr>(bTensorTy.getEncoding());
-  auto bOrd = bSharedLayout.getOrder();
-  bool transB = bOrd[0] == 1;
+  auto bSharedLayout = cast<NVMMASharedEncodingAttr>(bTensorTy.getEncoding());
+  bool transB = !bSharedLayout.getTransposed();
   Value baseA =
       getSharedMemoryObjectFromStruct(
           loc, loadedA, typeConverter->convertType(aTensorTy.getElementType()),
@@ -435,10 +433,10 @@ struct TCGen5MMAOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto AEnc = op.getA().getType().getEncoding();
     auto BEnc = op.getB().getType().getEncoding();
-    assert(mlir::isa<SharedEncodingAttr>(AEnc) ||
+    assert(mlir::isa<NVMMASharedEncodingAttr>(AEnc) ||
            mlir::isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(AEnc) &&
                "Operand A should use Shared or Tensor memory layout.");
-    assert(mlir::isa<SharedEncodingAttr>(BEnc) &&
+    assert(mlir::isa<NVMMASharedEncodingAttr>(BEnc) &&
            "Operand B should use Shared layout.");
     assert(op.getBarrier() &&
            "tensorcore op should have a barrier at this point.");
@@ -491,14 +489,12 @@ struct TCGen5MMAScaledOpConversion
     bool aInTmem = true;
     bool transA = false;
     if (auto aSharedLayout =
-            dyn_cast<SharedEncodingAttr>(aTensorTy.getEncoding())) {
-      auto aOrd = aSharedLayout.getOrder();
-      transA = aOrd[0] == 0;
+            dyn_cast<NVMMASharedEncodingAttr>(aTensorTy.getEncoding())) {
+      transA = aSharedLayout.getTransposed();
       aInTmem = false;
     }
-    auto bSharedLayout = cast<SharedEncodingAttr>(bTensorTy.getEncoding());
-    auto bOrd = bSharedLayout.getOrder();
-    bool transB = bOrd[0] == 1;
+    auto bSharedLayout = cast<NVMMASharedEncodingAttr>(bTensorTy.getEncoding());
+    bool transB = !bSharedLayout.getTransposed();
     Value baseA =
         getSharedMemoryObjectFromStruct(
             loc, adaptor.getA(),

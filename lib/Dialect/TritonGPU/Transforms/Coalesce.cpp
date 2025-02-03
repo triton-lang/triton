@@ -120,7 +120,7 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
     for (auto operand : op->getOperands()) {
       auto tensorType = dyn_cast<RankedTensorType>(operand.getType());
       if (tensorType &&
-          !isa<triton::gpu::SharedEncodingAttr>(tensorType.getEncoding())) {
+          !isa<triton::gpu::SharedEncodingTrait>(tensorType.getEncoding())) {
         Type newType = getNewType(tensorType, encoding);
         newArgs.push_back(builder.create<triton::gpu::ConvertLayoutOp>(
             op->getLoc(), newType, operand));

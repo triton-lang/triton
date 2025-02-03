@@ -15,7 +15,7 @@
 static int __builtin_clz(unsigned x) {
   unsigned long r;
   _BitScanReverse(&r, x);
-  return static_cast<int>(r);
+  return static_cast<int>(r ^ 31);
 }
 
 static int __builtin_ctz(unsigned x) {
@@ -208,7 +208,7 @@ Value getSmemVecAddr(const LinearLayout &regLayout,
   auto allocShape = sharedTy.getAllocShape();
   auto rank = shape.size();
   auto sharedEnc =
-      dyn_cast<triton::gpu::SharedEncodingAttr>(sharedTy.getEncoding());
+      cast<triton::gpu::SharedEncodingTrait>(sharedTy.getEncoding());
 
   auto smemBase = smemObj.getBase();
   auto smemOffsets = smemObj.getOffsets();
@@ -253,8 +253,8 @@ Value getSmemVecAddr(const LinearLayout &regLayout,
                      .second;
   } else { // Case 2 -> rank-reduced swizzling
     assert(rank >= 2 && "Swizzling only applies to tensors with rank >= 2");
-    assert(!sharedEnc.getHasLeadingOffset() &&
-           "Leading offsets are not supported for sliced tensors");
+    assert(isa<triton::gpu::SwizzledSharedEncodingAttr>(sharedEnc) &&
+           "NVMMA layout not supported for sliced tensors");
     // We define both tensor offsets and shared memory offsets:
     //
     //   - Tensor offsets: Relative offsets within a given tensor.

@@ -217,15 +217,6 @@ struct CanonicalizeConvertFromConvert
         mlir::isa<NvidiaMmaEncodingAttr>(srcType.getEncoding()))
       return failure();
 
-    // for hopper MMAv3
-    if (mlir::isa<SharedEncodingAttr>(dstType.getEncoding()) &&
-        mlir::isa<NvidiaMmaEncodingAttr>(srcType.getEncoding()) &&
-        llvm::any_of(op.getResult().getUsers(), [](Operation *dot) {
-          return dot->hasTrait<OpTrait::DotLike>();
-        })) {
-      return failure();
-    }
-
     Operation *arg = op.getSrc().getDefiningOp();
     if (!arg)
       return failure();
@@ -606,13 +597,13 @@ LogicalResult MemDescSubviewOp::verify() {
     return emitError("src and result must both have or not have an encoding");
   }
 
-  if (!isa<SharedEncodingAttr>(srcEnc) &&
+  if (!isa<SharedEncodingTrait>(srcEnc) &&
       !isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(srcEnc)) {
-    return emitError("src encoding must be SharedEncodingAttr");
+    return emitError("src encoding must be SharedEncodingTrait");
   }
-  if (!isa<SharedEncodingAttr>(dstEnc) &&
+  if (!isa<SharedEncodingTrait>(dstEnc) &&
       !isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(srcEnc)) {
-    return emitError("result encoding must be SharedEncodingAttr");
+    return emitError("result encoding must be SharedEncodingTrait");
   }
 
   if (isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(srcEnc)) {
@@ -654,7 +645,7 @@ int32_t LocalAllocOp::getAlignmentOrDefault() {
   }
 
   auto ty = getType();
-  auto enc = dyn_cast<SharedEncodingAttr>(ty.getEncoding());
+  auto enc = dyn_cast<SharedEncodingTrait>(ty.getEncoding());
   return enc ? enc.getAlignment() : 16;
 }
 
