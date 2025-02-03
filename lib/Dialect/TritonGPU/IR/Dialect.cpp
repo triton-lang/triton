@@ -228,6 +228,10 @@ SmallVector<unsigned> getOrder(SharedEncodingTrait layout,
   if (auto sharedLayout = mlir::dyn_cast<NVMMASharedEncodingAttr>(layout)) {
     return sharedLayout.getOrder();
   }
+  if (auto sharedLayout =
+          mlir::dyn_cast<SwizzledBlocksSharedEncodingAttr>(layout)) {
+    return llvm::to_vector(sharedLayout.getOrder());
+  }
   llvm::report_fatal_error("Unimplemented usage of getOrder for MemDescType");
   return {};
 }
@@ -797,6 +801,18 @@ SmallVector<unsigned> NVMMASharedEncodingAttr::getCTAOrder() const {
   return SmallVector<unsigned>(getCTALayout().getCTAOrder());
 }
 SmallVector<unsigned> NVMMASharedEncodingAttr::getCTASplitNum() const {
+  return SmallVector<unsigned>(getCTALayout().getCTASplitNum());
+}
+
+int32_t SwizzledBlocksSharedEncodingAttr::getAlignment() const { return 16; }
+
+SmallVector<unsigned> SwizzledBlocksSharedEncodingAttr::getCTAsPerCGA() const {
+  return SmallVector<unsigned>(getCTALayout().getCTAsPerCGA());
+}
+SmallVector<unsigned> SwizzledBlocksSharedEncodingAttr::getCTAOrder() const {
+  return SmallVector<unsigned>(getCTALayout().getCTAOrder());
+}
+SmallVector<unsigned> SwizzledBlocksSharedEncodingAttr::getCTASplitNum() const {
   return SmallVector<unsigned>(getCTALayout().getCTASplitNum());
 }
 
@@ -1660,10 +1676,11 @@ void SliceEncodingAttr::print(mlir::AsmPrinter &printer) const {
 }
 
 //===----------------------------------------------------------------------===//
-// SwizzledShared encoding
+// Helper shared encoding functions
 //===----------------------------------------------------------------------===//
 
-Attribute SwizzledSharedEncodingAttr::parse(AsmParser &parser, Type type) {
+template <typename SpecificEncoding>
+Attribute parseSwizzledEncoding(AsmParser &parser, Type type) {
   if (parser.parseLess().failed())
     return {};
   // Parse the data as a dictionary
@@ -1717,8 +1734,16 @@ Attribute SwizzledSharedEncodingAttr::parse(AsmParser &parser, Type type) {
   if (!CTALayout.has_value())
     return {};
 
-  return parser.getChecked<SwizzledSharedEncodingAttr>(
-      parser.getContext(), vec, perPhase, maxPhase, order, *CTALayout);
+  return parser.getChecked<SpecificEncoding>(parser.getContext(), vec, perPhase,
+                                             maxPhase, order, *CTALayout);
+}
+
+//===----------------------------------------------------------------------===//
+// SwizzledShared encoding
+//===----------------------------------------------------------------------===//
+
+Attribute SwizzledSharedEncodingAttr::parse(AsmParser &parser, Type type) {
+  return parseSwizzledEncoding<SwizzledSharedEncodingAttr>(parser, type);
 }
 
 void SwizzledSharedEncodingAttr::print(AsmPrinter &printer) const {
@@ -1807,6 +1832,26 @@ void NVMMASharedEncodingAttr::print(AsmPrinter &printer) const {
   }
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/2);
+  printer << "}>";
+}
+
+//===----------------------------------------------------------------------===//
+// SwizzledBlocksShared encoding
+//===----------------------------------------------------------------------===//
+
+Attribute SwizzledBlocksSharedEncodingAttr::parse(AsmParser &parser,
+                                                  Type type) {
+  return parseSwizzledEncoding<SwizzledBlocksSharedEncodingAttr>(parser, type);
+}
+
+void SwizzledBlocksSharedEncodingAttr::print(AsmPrinter &printer) const {
+  printer << "<{"
+          << "vec = " << getVec() //
+          << ", perPhase = " << getPerPhase()
+          << ", maxPhase = " << getMaxPhase() //
+          << ", order = [" << getOrder() << "]";
+  maybePrintCTALayout(getContext(), printer, getCTALayout(),
+                      /*rank=*/getOrder().size());
   printer << "}>";
 }
 

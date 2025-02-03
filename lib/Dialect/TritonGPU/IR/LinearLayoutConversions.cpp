@@ -121,9 +121,15 @@ LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
   return ret;
 }
 
+// Make a LinearLayout from swizzled shared layout defined by
+// "vec", "maxPhase", "perPhase" attributes.
+// swizzleBlocks argument controls if swizzling pattern changes
+// between blocks of maxPhase*perPhase rows.
+template <typename SwizzledSharedEncodingType>
 LinearLayout
 sharedToLinearLayoutNoLeadingOffset(ArrayRef<int64_t> shape,
-                                    SwizzledSharedEncodingAttr shared) {
+                                    SwizzledSharedEncodingType shared,
+                                    bool swizzleBlocks) {
   MLIRContext *ctx = shared.getContext();
   int rank = shape.size();
   if (rank == 1) {
@@ -153,7 +159,13 @@ sharedToLinearLayoutNoLeadingOffset(ArrayRef<int64_t> shape,
     int vec = shared.getVec();
     int perPhase = shared.getPerPhase();
     int maxPhase = shared.getMaxPhase();
-    bases2D.push_back({row, (vec * ((row / perPhase) % maxPhase)) % numCols});
+
+    int phase = (row / perPhase) % maxPhase;
+    if (swizzleBlocks) {
+      int blockNo = row / maxPhase / perPhase;
+      int phase = (phase ^ blockNo) % maxPhase;
+    }
+    bases2D.push_back({row, (vec * phase) % numCols});
   }
   LinearLayout ctaLayout =
       LinearLayout({{S("offset"), bases2D}}, {rowDimName, colDimName});
@@ -1038,9 +1050,13 @@ LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
     result = distributed.toLinearLayout(shape);
   } else {
     if (auto shared = dyn_cast<SwizzledSharedEncodingAttr>(layout)) {
-      result = sharedToLinearLayoutNoLeadingOffset(shape, shared);
+      result = sharedToLinearLayoutNoLeadingOffset(shape, shared,
+                                                   /*swizzleBlocks=*/false);
     } else if (auto shared = dyn_cast<NVMMASharedEncodingAttr>(layout)) {
       result = sharedToLinearLayoutLeadingOffset(shape, shared);
+    } else if (auto sbl = dyn_cast<SwizzledBlocksSharedEncodingAttr>(layout)) {
+      result = sharedToLinearLayoutNoLeadingOffset(shape, sbl,
+                                                   /*swizzleBlocks=*/true);
     } else {
       assert(0 && "unknown layout");
     }
