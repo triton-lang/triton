@@ -5832,7 +5832,7 @@ def test_local_load_store(M, N, K, dtype, dist_layout, shared_layout, device, tm
 }}
 """
 
-    x = torch.arange(0, M * N * K, device=device, dtype=dtype).reshape(M, N, K)
+    x = torch.arange(0, M * N * K, device=device, dtype=torch.int32).reshape(M, N, K).to(dtype)
     z = torch.empty_like(x, device=device)
 
     temp_file = tmp_path / "test_local_load_store.ttgir"
