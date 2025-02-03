@@ -157,4 +157,43 @@ def TritonAMDGPUMembarAnalysis : Pass<"triton-amdgpu-membar-analysis", "mlir::Mo
     let constructor = "mlir::createTritonAMDGPUMembarAnalysisPass()";
 }
 
+
+def TritonAMDGPURefineOps : Pass<"triton-amdgpu-refine-ops", "mlir::ModuleOp"> {
+    let summary = "Convert Triton Ops to fine-grain ones";
+    let constructor = "mlir::createTritonAMDGPURefineOpsPass(\"\")";
+
+    let dependentDialects = ["mlir::arith::ArithDialect",
+                             "mlir::math::MathDialect",
+                             "mlir::gpu::GPUDialect",
+                             "mlir::scf::SCFDialect",
+                             "mlir::triton::TritonDialect",
+                             "mlir::triton::amdgpu::TritonAMDGPUDialect",
+                             "mlir::triton::gpu::TritonGPUDialect",
+                             "mlir::ROCDL::ROCDLDialect"];
+
+    let options = [
+        Option<"arch", "arch", "std::string", /*default*/"\"\"",
+               "gfx target device architecture, e.g., gfx942">
+    ];
+}
+
+def TritonAMDGPURescheduleOps : Pass<"triton-amdgpu-reschedule-ops", "mlir::ModuleOp"> {
+    let summary = "Reschedule fine-grain triton ops ones";
+    let constructor = "mlir::createTritonAMDGPURescheduleOpsPass(\"\")";
+
+    let dependentDialects = ["mlir::arith::ArithDialect",
+                             "mlir::math::MathDialect",
+                             "mlir::gpu::GPUDialect",
+                             "mlir::scf::SCFDialect",
+                             "mlir::triton::TritonDialect",
+                             "mlir::triton::amdgpu::TritonAMDGPUDialect",
+                             "mlir::triton::gpu::TritonGPUDialect",
+                             "mlir::ROCDL::ROCDLDialect"];
+
+    let options = [
+        Option<"arch", "arch", "std::string", /*default*/"\"\"",
+               "gfx target device architecture, e.g., gfx942">
+    ];
+}
+
 #endif

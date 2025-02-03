@@ -88,4 +88,8 @@ def TritonAMDGPU_SchedHintsEnum : TritonAMDGPU_I32Enum<
 def TritonAMDGPU_SchedHintVariantAttr :
   TritonAMDGPU_I32EnumAttr<"SchedHintVariant", TritonAMDGPU_SchedHintsEnum>;
 
+def TritonAMDGPU_RefinedRegionAttr : TritonAMDGPU_Attr<"RefinedRegion"> {
+  let mnemonic = "refined_region";
+}
+
 #endif

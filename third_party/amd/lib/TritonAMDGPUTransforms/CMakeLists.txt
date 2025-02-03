@@ -8,6 +8,8 @@ add_triton_library(TritonAMDGPUTransforms
   StreamPipeline.cpp
   MfmaGroup.cpp
   MembarAnalysis.cpp
+  RefineOps.cpp
+  RescheduleOps.cpp
 
   DEPENDS
   TritonAMDGPUIR

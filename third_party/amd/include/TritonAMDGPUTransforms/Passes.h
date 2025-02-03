@@ -34,6 +34,12 @@ std::unique_ptr<Pass> createTritonAMDGPUBlockPingpongPass();
 
 std::unique_ptr<Pass> createTritonAMDGPUMembarAnalysisPass();
 
+std::unique_ptr<OperationPass<ModuleOp>>
+createTritonAMDGPURefineOpsPass(StringRef targetArch);
+
+std::unique_ptr<OperationPass<ModuleOp>>
+createTritonAMDGPURescheduleOpsPass(StringRef targetArch);
+
 /// Generate the code for registering passes.
 #define GEN_PASS_REGISTRATION
 #include "TritonAMDGPUTransforms/Passes.h.inc"

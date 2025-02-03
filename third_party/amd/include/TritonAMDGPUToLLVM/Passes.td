@@ -87,23 +87,5 @@ def TritonAMDGPULowerInstructionSchedHints : Pass<"triton-amdgpu-lower-insert-in
     ];
 }
 
-def TritonAMDGPURefineOps : Pass<"triton-amdgpu-refine-ops", "mlir::ModuleOp"> {
-    let summary = "Convert Triton Ops to fine-grain ones";
-    let constructor = "mlir::triton::createTritonAMDGPURefineOpsPass(\"\")";
-
-    let dependentDialects = ["mlir::arith::ArithDialect",
-                             "mlir::math::MathDialect",
-                             "mlir::gpu::GPUDialect",
-                             "mlir::scf::SCFDialect",
-                             "mlir::triton::TritonDialect",
-                             "mlir::triton::amdgpu::TritonAMDGPUDialect",
-                             "mlir::triton::gpu::TritonGPUDialect",
-                             "mlir::ROCDL::ROCDLDialect"];
-
-    let options = [
-        Option<"arch", "arch", "std::string", /*default*/"\"\"",
-               "gfx target device architecture, e.g., gfx942">
-    ];
-}
 
 #endif
