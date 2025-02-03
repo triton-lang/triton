@@ -41,8 +41,7 @@ class NVMMASharedEncodingAttr;
 // shared layouts with nvmma_shared layout) but is otherwise unused.
 //
 // Returns std::nullopt if the given layout can't be converted to an LL.
-LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
-                            std::optional<int32_t> elemBitWidth = std::nullopt);
+LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout);
 
 // Convert the shared encoding of a tensor with `nvmma_shared` layout to a
 // LinearLayout that maps from a linear shared memory offset to tensor index.
@@ -51,7 +50,6 @@ LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
 // swizzling.
 LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
                                                NVMMASharedEncodingAttr shared,
-                                               int32_t elemBitWidth,
                                                bool disableSwizzle = false);
 
 // Given a linear layout where the input dimensions contain a "block" dimension,
