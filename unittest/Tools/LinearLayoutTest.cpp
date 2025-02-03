@@ -807,8 +807,7 @@ TEST_F(LinearLayoutTest, BlackwellMixedPrecisionDotScaledSMEM) {
   }
 }
 
-TEST_F(LinearLayoutTest,
-       BlackwellMixedPrecisionDotScaledSMEMSwizzled) {
+TEST_F(LinearLayoutTest, BlackwellMixedPrecisionDotScaledSMEMSwizzled) {
   int M = 16;
   int KPadded8b = 128;
   int numFp4Elems = M * KPadded8b;

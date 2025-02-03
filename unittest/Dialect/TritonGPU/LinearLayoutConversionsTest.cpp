@@ -99,13 +99,11 @@ public:
         CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd));
   }
 
-  NVMMASharedEncodingAttr nvmmaShared(unsigned swizzleSizeInBytes,
-                                      bool transposed, unsigned elementBitWidth,
-                                      ArrayRef<unsigned> cpg,
-                                      ArrayRef<unsigned> cSplit,
-                                      ArrayRef<unsigned> ord,
-                                      ArrayRef<unsigned> cOrd,
-				      bool fp4Padded = false) {
+  NVMMASharedEncodingAttr
+  nvmmaShared(unsigned swizzleSizeInBytes, bool transposed,
+              unsigned elementBitWidth, ArrayRef<unsigned> cpg,
+              ArrayRef<unsigned> cSplit, ArrayRef<unsigned> ord,
+              ArrayRef<unsigned> cOrd, bool fp4Padded = false) {
     return NVMMASharedEncodingAttr::get(
         &ctx, swizzleSizeInBytes, transposed, elementBitWidth, fp4Padded,
         CTALayoutAttr::get(&ctx, cpg, cSplit, cOrd));
@@ -2436,21 +2434,22 @@ TEST_F(LinearLayoutConversionsTest, ChooseShmemLayout_Multidim) {
 TEST_F(LinearLayoutConversionsTest, MMAv5Fp4Padded) {
   auto ll = toLinearLayout({32, 64}, nvmmaShared(128, false, 8, {1, 1}, {1, 1},
                                                  {1, 0}, {1, 0}, true));
-  EXPECT_EQ(ll, LinearLayout({{S("offset"),
-                               {{0, 1},
-                                {0, 2},
-                                {0, 4},
-                                {0, 0}, // offset 8 maps to the same indices as offset 0
-                                {0, 8},
-                                {0, 16},
-                                {0, 32},
-                                {1, 8},
-                                {2, 16},
-                                {4, 32},
-                                {8, 0},
-                                {16, 0}}},
-                              {S("block"), {}}},
-                             {S("dim0"), S("dim1")}));
+  EXPECT_EQ(ll, LinearLayout(
+                    {{S("offset"),
+                      {{0, 1},
+                       {0, 2},
+                       {0, 4},
+                       {0, 0}, // offset 8 maps to the same indices as offset 0
+                       {0, 8},
+                       {0, 16},
+                       {0, 32},
+                       {1, 8},
+                       {2, 16},
+                       {4, 32},
+                       {8, 0},
+                       {16, 0}}},
+                     {S("block"), {}}},
+                    {S("dim0"), S("dim1")}));
 }
 
 } // anonymous namespace
