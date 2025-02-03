@@ -192,6 +192,7 @@ def filter_traceback(e: BaseException):
         "/triton/compiler/code_generator.py",
         "/ast.py",
     ]
+    BAD_FILES = [bad_file.replace("/", os.sep) for bad_file in BAD_FILES]
 
     tb = e.__traceback__
     frames = []

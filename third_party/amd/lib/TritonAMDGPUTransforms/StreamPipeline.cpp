@@ -119,7 +119,8 @@ private:
 
   LogicalResult preprocessLoopAndBuildSchedule();
 
-  Value createAlloc(Operation *loadOp, ttg::SharedEncodingAttr sharedEnc,
+  Value createAlloc(Operation *loadOp,
+                    ttg::SwizzledSharedEncodingAttr sharedEnc,
                     unsigned numBuffers);
   void createStreamCopy(tt::LoadOp loadOp, Value alloc, Value extractIdx);
   void createStreamOps();
@@ -168,7 +169,7 @@ private:
 
   struct LoadInfo {
     // Shared layout is used for loads feeding into dot ops.
-    ttg::SharedEncodingAttr sharedEncoding = nullptr;
+    ttg::SwizzledSharedEncodingAttr sharedEncoding = nullptr;
     // The distance of this load's stage to its use' stage.
     int distToUse = 0;
     bool usedByDot = false;
@@ -320,18 +321,18 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
 // If all the transitive uses of the given value have are used by a convert to
 // the same dot operand encoding, return true and get the shared encoding that
 // needs to be used to be compatible with users' layouts.
-static std::optional<ttg::SharedEncodingAttr>
+static std::optional<ttg::SwizzledSharedEncodingAttr>
 getSharedEncIfAllUsersAreDotEnc(Value val) {
-  ttg::SharedEncodingAttr attr;
+  ttg::SwizzledSharedEncodingAttr attr;
   for (Operation *user : val.getUsers()) {
-    ttg::SharedEncodingAttr tempAttr;
+    ttg::SwizzledSharedEncodingAttr tempAttr;
     if (user->getNumResults() != 1)
       return std::nullopt;
     if (auto memDesc =
             dyn_cast<triton::gpu::MemDescType>(user->getResult(0).getType())) {
       // First time we find a shared encoding in the chain, save it and try to
       // use it if it is compatible with the other users.
-      tempAttr = cast<ttg::SharedEncodingAttr>(memDesc.getEncoding());
+      tempAttr = cast<ttg::SwizzledSharedEncodingAttr>(memDesc.getEncoding());
       if (!getSharedEncIfAllUsersAreDotEnc(user->getResult(0)).has_value())
         return std::nullopt;
     } else {
@@ -360,7 +361,7 @@ getSharedEncIfAllUsersAreDotEnc(Value val) {
       } else {
         sharedOrder = order;
       }
-      tempAttr = ttg::SharedEncodingAttr::get(
+      tempAttr = ttg::SwizzledSharedEncodingAttr::get(
           val.getContext(), dotOpEnc, srcTy.getShape(), sharedOrder, CTALayout,
           bitWidth, /*needTrans=*/false);
     }
@@ -659,7 +660,7 @@ void StreamPipeliner::scheduleRemainingToLastStage() {
 
 // Create an allocation that can hold distance number of loadOp shapes.
 Value StreamPipeliner::createAlloc(Operation *loadOp,
-                                   ttg::SharedEncodingAttr sharedEnc,
+                                   ttg::SwizzledSharedEncodingAttr sharedEnc,
                                    unsigned numBuffers) {
   OpBuilder builder(forOp);
   Attribute sharedMemorySpace =

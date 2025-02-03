@@ -34,7 +34,7 @@ namespace {
 using ::mlir::LLVM::AMD::shuffleXor;
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
-using ::mlir::triton::gpu::SharedEncodingAttr;
+using ::mlir::triton::gpu::SwizzledSharedEncodingAttr;
 
 using ValueTable = std::map<std::array<int, 3>, Value>;
 

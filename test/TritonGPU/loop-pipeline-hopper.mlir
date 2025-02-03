@@ -273,88 +273,12 @@ tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
 
 // -----
 
-// TODO: MCast is not supported yet
-//// 4 warps, TMA Load
-//// matmul: 128x32 @ 32x128 -> 128x128
-//#C = #ttg.nvidia_mma<{versionMajor = 3, warpsPerCTA = [4, 1]}>
-//#SA = #ttg.shared<{vec = 8, perPhase = 2, maxPhase = 4, order = [1, 0], hasLeadingOffset=true}>
-//#SB = #ttg.shared<{vec = 8, perPhase = 2, maxPhase = 4, order = [0, 1], hasLeadingOffset=true}>
-//#BA = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [16, 2], warpsPerCTA = [4, 1], order = [1, 0]}>
-//#BB = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [0, 1]}>
-//// C-HECK: func @matmul_loop
-//// C-HECK-DAG: %[[CONSTANT_0:.*]] = arith.constant 0 : i32
-//// C-HECK-DAG: %[[CONSTANT_1:.*]] = arith.constant 1 : i32
-//// C-HECK-DAG: %[[CONSTANT_2:.*]] = arith.constant 2 : i32
-//// C-HECK-DAG: %[[CONSTANT_3:.*]] = arith.constant 3 : i32
-//// C-HECK: %[[MBARRIER_AB:.*]] = ttng.alloc_mbarrier {count = 1 : i32}
-//// C-HECK: %[[EMPTY_BARRIER_B:.*]] = ttng.alloc_mbarrier {count = 2 : i32}
-//// C-HECK: %[[ABUFFER:.*]] = ttg.alloc
-//// C-HECK: %[[MBARRIER_AB0:.*]] = ttng.extract_mbarrier %[[MBARRIER_AB]][%c0_i32]
-//// C-HECK: ttng.mbarrier_arrive %[[MBARRIER_AB0]]
-//// C-HECK: %[[A0BUFFER:.*]] = ttng.insert_slice_tma {{.*}}, {{.*}}, %[[CONSTANT_0]], %[[MBARRIER_AB0]]
-//// C-HECK: %[[BBUFFER:.*]] = ttg.alloc
-//// C-HECK: %[[EMPTY_BARRIER_B0:.*]] = ttng.extract_mbarrier %[[EMPTY_BARRIER_B]][%c0_i32]
-//// C-HECK: ttng.mbarrier_wait %[[EMPTY_BARRIER_B0]], %true
-//// C-HECK: %[[B0BUFFER:.*]] = ttng.insert_slice_tma {{.*}}, {{.*}}, %[[CONSTANT_0]], %[[MBARRIER_AB0]]
-//// C-HECK: %[[MBARRIER_AB1:.*]] = ttng.extract_mbarrier %[[MBARRIER_AB]][%c1_i32]
-//// C-HECK: ttng.mbarrier_arrive %[[MBARRIER_AB1]]
-//// C-HECK: %[[A1BUFFER:.*]] = ttng.insert_slice_tma {{.*}}, {{.*}}, %[[CONSTANT_1]], %[[MBARRIER_AB1]]
-//// C-HECK: %[[B1BUFFER:.*]] = ttng.insert_slice_tma {{.*}}, {{.*}}, %[[CONSTANT_1]], %[[MBARRIER_AB1]]
-//// C-HECK: %[[A0:.*]] = ttg.extract_slice %[[A1BUFFER]][0, 0, 0]
-//// C-HECK: %[[B0:.*]] = ttg.extract_slice %[[B1BUFFER]][0, 0, 0]
-//// C-HECK: scf.for {{.*}} iter_args({{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[arg_a0:.*]] = %[[A0]], %[[arg_b0:.*]] = %[[B0]], {{.*}}, {{.*}}, {{.*}}, %[[PIPELINE_IDX:.*]] = %[[CONSTANT_2]], %[[LOOP_IDX:.*]] = %[[CONSTANT_0]]
-//  // C-HECK: %[[MBARRIER_AB_ITER:.*]] = ttng.extract_mbarrier %[[MBARRIER_AB]][{{.*}}]
-//  // C-HECK: ttng.mbarrier_wait %[[MBARRIER_AB_ITER]], {{.*}}
-//  // C-HECK: ttng.warp_group_dot %[[arg_a0]], %[[arg_b0]], {{.*}}
-//  // C-HECK: ttng.warp_group_dot_wait {{.*}}
-//  // C-HECK: %[[EMPTY_BARRIER_B_ITER_ARRIVE:.*]] = ttng.extract_mbarrier %[[EMPTY_BARRIER_B]][{{.*}}]
-//  // C-HECK: ttng.mbarrier_arrive %[[EMPTY_BARRIER_B_ITER_ARRIVE]]
-//  // C-HECK: %[[MBARRIER_AB_NEXT_ITER:.*]] = ttng.extract_mbarrier %[[MBARRIER_AB]][{{.*}}]
-//  // C-HECK: %[[NEXT_A_BUFFER:.*]] = ttng.insert_slice_tma {{.*}}, {{.*}}, {{.*}}, %[[MBARRIER_AB_NEXT_ITER]]
-//  // C-HECK: %[[NEXT_A:.*]] = ttg.extract_slice %[[NEXT_A_BUFFER]][{{.*}}, 0, 0]
-//  // C-HECK: %[[EMPTY_BARRIER_B_ITER_WAIT:.*]] = ttng.extract_mbarrier %[[EMPTY_BARRIER_B]][{{.*}}]
-//  // C-HECK: ttng.mbarrier_wait %[[EMPTY_BARRIER_B_ITER_WAIT]], {{.*}}
-//  // C-HECK: %[[NEXT_B_BUFFER:.*]] = ttng.insert_slice_tma {{.*}}, {{.*}}, {{.*}}, %[[MBARRIER_AB_NEXT_ITER]]
-//  // C-HECK: %[[NEXT_B:.*]] = ttg.extract_slice %[[NEXT_B_BUFFER]][{{.*}}, 0, 0]
-//  // C-HECK: scf.yield {{.*}}, {{.*}}, {{.*}}, %[[NEXT_A_BUFFER]], %[[NEXT_B_BUFFER]], %[[NEXT_A]], %[[NEXT_B]], {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}
-//module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32} {
-//  tt.func @matmul_loop(%lb : index, %ub : index, %step : index,
-//                         %A : !tt.ptr<f16> {tt.divisibility = 16 : i32},
-//                         %B : !tt.ptr<f16> {tt.divisibility = 16 : i32}) -> (!tt.ptr<tensor<128x32xf16>, 1>, !tt.ptr<tensor<32x128xf16>, 1>, tensor<128x128xf32, #C>) {
-//    %c0 = arith.constant 0 : i32
-//    %c32_i32 = arith.constant 32 : i32
-//    %c1 = arith.constant 1 : i64
-//    %c32 = arith.constant 32 : i64
-//    %c128 = arith.constant 128 : i64
-//    %a_tileptr_init = tt.make_tensor_ptr %A, [%c128, %c32], [%c32, %c1], [%c0, %c0] { order = array<i32: 1, 0> } : !tt.ptr<tensor<128x32xf16>, 1>
-//    %b_tileptr_init = tt.make_tensor_ptr %B, [%c32, %c128], [%c1, %c32], [%c0, %c0] { order = array<i32: 0, 1> } : !tt.ptr<tensor<32x128xf16>, 1>
-//    %c_init = arith.constant dense<0.00e+00> : tensor<128x128xf32, #C>
-//
-//    %res:3 = scf.for %iv = %lb to %ub step %step iter_args(%a_tileptr = %a_tileptr_init, %b_tileptr = %b_tileptr_init, %prev_c = %c_init) -> (!tt.ptr<tensor<128x32xf16>, 1>, !tt.ptr<tensor<32x128xf16>, 1>, tensor<128x128xf32, #C>) {
-//      %a = tt.load %a_tileptr  : !tt.ptr<tensor<128x32xf16>, 1>
-//      %b = tt.load %b_tileptr  : !tt.ptr<tensor<32x128xf16>, 1>
-//
-//      %sa = ttg.local_alloc %a : (tensor<128x32xf16, #BA>) -> !ttg.memdesc<128x32xf16, #SA, #smem>
-//      %sb = ttg.local_alloc %b : (tensor<32x128xf16, #BB>) -> !ttg.memdesc<32x128xf16, #SB, #smem>
-//      %c = ttng.warp_group_dot %sa, %sb, %prev_c : tensor<128x32xf16, #SA> * tensor<32x128xf16, #SB> -> tensor<128x128xf32, #C>
-//
-//      %a_tileptr_next = tt.advance %a_tileptr, [%c0, %c32_i32] : !tt.ptr<tensor<128x32xf16>, 1>
-//      %b_tileptr_next = tt.advance %b_tileptr, [%c32_i32, %c0] : !tt.ptr<tensor<32x128xf16>, 1>
-//
-//      scf.yield %a_tileptr_next, %b_tileptr_next, %c : !tt.ptr<tensor<128x32xf16>, 1>, !tt.ptr<tensor<32x128xf16>, 1>, tensor<128x128xf32, #C>
-//    }
-//    tt.return %res#0, %res#1, %res#2 : !tt.ptr<tensor<128x32xf16>, 1>, !tt.ptr<tensor<32x128xf16>, 1>, tensor<128x128xf32, #C>
-//  }
-//}
-
-// -----
-
 #blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 4], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 64, 16]}>
 #mma1 = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 16, 16]}>
-#shared = #ttg.shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0], hasLeadingOffset = true}>
-#shared1 = #ttg.shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [0, 1], hasLeadingOffset = true}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 16}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
 // CHECK-LABEL: dot_chained_single_load
@@ -471,8 +395,8 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 64, 16]}>
 #mma1 = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 16, 16]}>
-#shared = #ttg.shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0], hasLeadingOffset = true}>
-#shared1 = #ttg.shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [0, 1], hasLeadingOffset = true}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 16}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
 // CHECK-LABEL: two_accumulator_escape
@@ -536,8 +460,8 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [8, 4], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [2, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
 #mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [8, 1], instrShape = [16, 256, 32]}>
-#shared = #ttg.shared<{vec = 16, perPhase = 2, maxPhase = 4, order = [1, 0], hasLeadingOffset = true}>
-#shared1 = #ttg.shared<{vec = 16, perPhase = 2, maxPhase = 4, order = [0, 1], hasLeadingOffset = true}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 8}>
 #smem = #ttg.shared_memory
 
 // Make sure that if one of the load dot operand is not pipelined (and therefore not double buffered) we won't use
@@ -616,8 +540,8 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 64, 16]}>
 #mma1 = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 16, 16]}>
-#shared = #ttg.shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0], hasLeadingOffset = true}>
-#shared1 = #ttg.shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [0, 1], hasLeadingOffset = true}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 16}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
 // CHECK-LABEL: async_following_sync
@@ -775,8 +699,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [16, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 8], order = [0, 1]}>
 #mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [8, 1], instrShape = [16, 128, 32]}>
-#shared = #ttg.shared<{vec = 16, perPhase = 1, maxPhase = 8, order = [1, 0], hasLeadingOffset = true}>
-#shared1 = #ttg.shared<{vec = 16, perPhase = 1, maxPhase = 8, order = [0, 1], hasLeadingOffset = true}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 8}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 8}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: _kernel_matmul_dependency
@@ -833,8 +757,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 64, 16]}>
 #mma1 = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 16, 16]}>
-#shared = #ttg.shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0], hasLeadingOffset = true}>
-#shared1 = #ttg.shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [0, 1], hasLeadingOffset = true}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 16}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // COMMON-LABEL: dot_prologue_epilogue
@@ -906,8 +830,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 64, 16]}>
 #mma1 = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 16, 16]}>
-#shared = #ttg.shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0], hasLeadingOffset = true}>
-#shared1 = #ttg.shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [0, 1], hasLeadingOffset = true}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 16}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-NOCANON-LABEL: pipeline_downstream_dependencies
@@ -971,8 +895,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 #blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 4], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 16, 16]}>
-#shared = #ttg.shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0], hasLeadingOffset = true}>
-#shared1 = #ttg.shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [0, 1], hasLeadingOffset = true}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 16}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
 // CHECK-LABEL: dot_lhs_registers
@@ -1032,8 +956,8 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 
 // -----
 
-#shared = #ttg.shared<{vec = 16, perPhase = 2, maxPhase = 4, order = [1, 0], hasLeadingOffset = true}>
-#shared1 = #ttg.shared<{vec = 16, perPhase = 2, maxPhase = 4, order = [0, 1], hasLeadingOffset = true}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 8}>
+#shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = true, elementBitWidth = 8}>
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 2], order = [1, 0]}>
 #mma = #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [8, 1], instrShape = [16, 64, 32]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
