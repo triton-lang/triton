@@ -241,6 +241,7 @@ def test_device_tensormap1d(dtype_str):
 
 
 @requires_tma
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
 def test_tensor_descriptor_load(dtype_str):
 
@@ -284,6 +285,7 @@ def test_tensor_descriptor_load(dtype_str):
 
 
 @requires_tma
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
 def test_tensor_descriptor_store(dtype_str):
 
@@ -356,6 +358,7 @@ def tensor_descriptor_in_function_helper(out_ptr, in_ptr, M, N, M_BLOCK: tl.cons
 
 
 @requires_tma
+@pytest.mark.interpreter
 def test_tensor_descriptor_in_function():
 
     @triton.jit
@@ -429,6 +432,7 @@ def matmul_kernel_make_tensor_desciptor(a_ptr, b_ptr, c_ptr,  #
 
 
 @requires_tma
+@pytest.mark.interpreter
 @pytest.mark.parametrize("num_stages", [1, 4])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(32, 32, 32), (128, 64, 64), (128, 128, 64), (128, 256, 64)])
 def test_experimental_make_tensor_descriptor_matmul(num_stages, BLOCK_M, BLOCK_N, BLOCK_K):
@@ -516,6 +520,7 @@ def kernel_make_tensor_desciptor_loop_carried(a_ptr, M, N, MBLOCK: tl.constexpr,
 
 
 @requires_tma
+@pytest.mark.interpreter
 def test_experimental_make_tensor_descriptor_loop_carried():
     device = "cuda"
     M, N = 8192, 8192
@@ -611,6 +616,7 @@ def batched_gemm_kernel(a_ptr, b_ptr, c_ptr,  #
 
 
 @requires_tma
+@pytest.mark.interpreter
 def test_tensor_descriptor_batched_gemm():
     device = "cuda"
     B, M, N, K = 2, 1024, 1024, 128
@@ -720,9 +726,10 @@ def tma_gather_dot_pipeline(  #
     tl.store(output_ptrs, accumulator)
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(16, 16, 16)])
 @pytest.mark.parametrize("K", [128])
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] != 10,
+@pytest.mark.skipif(not is_interpreter() and torch.cuda.get_device_capability()[0] != 10,
                     reason="TMA Gather only works on cloud Blackwell Chips")
 def test_tma_gather_dot_pipeline(BLOCK_M, BLOCK_N, BLOCK_K, K, device):
 
