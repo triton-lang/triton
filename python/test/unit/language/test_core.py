@@ -5832,7 +5832,7 @@ def test_local_load_store(M, N, K, dtype, dist_layout, shared_layout, device, tm
 }}
 """
 
-    x = torch.arange(0, M * N * K, device=device, dtype=torch.int32).reshape(M, N, K).to(dtype)
+    x = to_triton(numpy_random((M, N, K), dtype_str=dtype), device=device)
     z = torch.empty_like(x, device=device)
 
     temp_file = tmp_path / "test_local_load_store.ttgir"
