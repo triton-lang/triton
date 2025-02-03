@@ -184,7 +184,7 @@ getSharedMemoryScale(Value arg, mlir::PatternRewriter &rewriter, Location loc) {
       SharedMemorySpaceAttr::get(argType.getContext());
   auto CTALayout = getCTALayout(argType.getEncoding());
   // No swizzling for scale for now
-  auto newLayout = SharedEncodingAttr::get(argType.getContext(), 1, 1, 1,
+  auto newLayout = SwizzledSharedEncodingAttr::get(argType.getContext(), 1, 1, 1,
                                            newOrder, CTALayout);
   auto newType = MemDescType::get(argType.getShape(), argType.getElementType(),
                                   newLayout, SharedMemorySpace);
