@@ -183,6 +183,21 @@ void PipelineErrorReporter::printSchedulingError(int64_t distance,
   // mainError.attachNote() << "However, " << firstRootUserOpName << "must be updated before its use in iteration i:";
   for (auto op : rootUserOps) {
     // op->emitError() << "[root consumer]";
-    mainError.attachNote(op->getLoc()) << "`" << op->getName() << "` is used here:";
+    auto loc = op->getLoc();
+    // check if los is unknown
+    if (isa<UnknownLoc>(loc)) {
+      auto parentOpLoc = op->getParentOp()->getLoc();
+      if (isa<IfOp>(op->getParentOp())) {
+        mainError.attachNote(parentOpLoc) << "Value is implicitly used here when the condition is false in TTIR, because the variable is updated when the condition is true.";
+        // TODO: we can actually find the statement that updates the variable when the condition is true.
+      } else {
+        mainError.attachNote(parentOpLoc) << "Value is implicitly used here. ";
+      }
+
+    } else {
+      mainError.attachNote(op->getLoc()) << "`" << op->getName() << "` is used here:";
+    }
+    
   }
+  // TODO: we can also add more detailed debug information for more advanced users.
 }
