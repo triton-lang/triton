@@ -11,6 +11,7 @@
 namespace mlir::triton::gpu {
 class SwizzledSharedEncodingAttr;
 class NVMMASharedEncodingAttr;
+class SwizzledBlocksSharedEncodingAttr;
 
 // - BlockedEncodingAttrs have the following input dimensions.
 //
