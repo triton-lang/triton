@@ -217,7 +217,7 @@ public:
     // all CTALayouts are the same.
     auto newInnerEnc = NVMMASharedEncodingAttr::get(
         getContext(), srcTy.getShape(), newInnerCvtOrder,
-        allocEncoding.getCTALayout(), srcTy.getElementType());
+        allocEncoding.getCTALayout(), srcTy.getElementType(), allocEncoding.getFp4Padded());
 
     MemDescType innerTy =
         MemDescType::get(srcTy.getShape(), srcTy.getElementType(), newInnerEnc,

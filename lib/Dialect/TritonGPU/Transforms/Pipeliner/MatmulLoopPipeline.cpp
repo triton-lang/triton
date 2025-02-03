@@ -17,6 +17,7 @@
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "triton-matmul-loop-pipeline"
@@ -368,19 +369,11 @@ getSharedEncoding(Operation *loadOp, bool isTMALoad) {
     order = blockedOrder;
   }
 
-  if (isTMALoad) {
-    // For TMA, the encoding compatible with it takes precedence over local
-    // alloc created for the MMA operand.
-    return ttg::NVMMASharedEncodingAttr::get(
-        ty.getContext(), ty.getShape(), order, ctaLayout, ty.getElementType());
-  }
-
-  // If the load is used by a LocalAllocOp, use the same encoding as the allocs.
-  // If the allocs don't all have the same encoding, bail.
+  ttg::SharedEncodingTrait localAllocEnc;
   if (llvm::any_of(loadOp->getUsers(), [&](Operation *user) {
         return isa<ttg::LocalAllocOp>(user);
       })) {
-    ttg::SharedEncodingTrait localAllocEnc;
+
     for (auto user : loadOp->getUsers()) {
       auto localAlloc = dyn_cast<ttg::LocalAllocOp>(user);
       if (!localAlloc)
@@ -390,9 +383,27 @@ getSharedEncoding(Operation *loadOp, bool isTMALoad) {
       if (!localAllocEnc) {
         localAllocEnc = enc;
       }
-      if (enc != localAllocEnc)
+      if (enc != localAllocEnc) {
+	// If the allocs don't all have the same encoding, bail.
         return std::nullopt;
+      }
     }
+  }
+
+  if (isTMALoad) {
+    // For TMA, the encoding compatible with it takes precedence over local
+    // alloc created for the MMA operand.
+    if (localAllocEnc) {
+      if (auto sharedMMALayout = dyn_cast<ttg::NVMMASharedEncodingAttr>(localAllocEnc)) {
+	assert(!sharedMMALayout.getFp4Padded() && "TMA load for  mixed precision MMAv5 is not supported yet.");
+      }
+    }
+    return ttg::NVMMASharedEncodingAttr::get(
+					     ty.getContext(), ty.getShape(), order, ctaLayout, ty.getElementType(), /*fp4Padded*/false);
+  }
+
+  // If the load is used by a LocalAllocOp, use the same encoding as the allocs.
+  if (localAllocEnc) {
     return localAllocEnc;
   }
 
@@ -456,6 +467,17 @@ getTransitiveUserInBlock(Operation *baseOp, scf::ForOp &forOp) {
   return users;
 }
 
+int getCopyVecBytes(RankedTensorType registerTy,
+                    ttg::SharedEncodingTrait sharedEnc) {
+  auto regLayout = triton::gpu::toLinearLayout(registerTy.getShape(),
+                                               registerTy.getEncoding());
+  auto sharedLayout =
+      triton::gpu::toLinearLayout(registerTy.getShape(), sharedEnc);
+  auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
+  const int vecElems = regToSharedLayout.getNumConsecutiveInOut();
+  return vecElems * registerTy.getElementTypeBitWidth() / 8;
+}
+
 static llvm::MapVector<Operation *, LoadInfo>
 assignMemoryLayouts(scf::ForOp &forOp,
                     tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
@@ -494,7 +516,6 @@ assignMemoryLayouts(scf::ForOp &forOp,
 
     bool isTMALoad = isa<tt::ExperimentalDescriptorLoadOp,
                          tt::ExperimentalDescriptorGatherOp>(op);
-    loadsToPipeline.insert(&op);
     LoadInfo loadInfo;
     for (auto use : users) {
       if (use->hasTrait<OpTrait::DotLike>()) {
@@ -533,6 +554,20 @@ assignMemoryLayouts(scf::ForOp &forOp,
               getBlockedEncoding(loadOp, axisInfoAnalysis);
       }
     }
+
+    if (loadInfo.sharedEncoding && !isTMALoad) {
+      auto registerTy = cast<RankedTensorType>(op.getResultTypes()[0]);
+      auto vecBytes = getCopyVecBytes(registerTy, loadInfo.sharedEncoding);
+
+      if (vecBytes < 4) {
+        // At least 4 bytes need to be consecutive for cp.async
+        loadInfo.sharedEncoding = nullptr;
+        continue;
+      }
+    } else {
+      loadsToPipeline.insert(&op);
+    }
+
     loadToInfo[&op] = loadInfo;
   }
   // Make sure all loads in loadsToPipeline are in loadToInfo.

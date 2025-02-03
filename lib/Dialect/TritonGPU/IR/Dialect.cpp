@@ -366,15 +366,29 @@ SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
   return shapePerCTA;
 }
 
-SmallVector<int64_t> getShapePerCTA(Attribute layout, ArrayRef<int64_t> shape) {
-  if (mlir::isa<SharedEncodingTrait>(layout)) {
+SmallVector<int64_t> getShapePerCTA(Attribute layout,
+                                    ArrayRef<int64_t> shapeOrig) {
+  SmallVector<int64_t> shape(shapeOrig);
+  if (auto sharedMMALayout = mlir::dyn_cast<NVMMASharedEncodingAttr>(layout)) {
+    if (sharedMMALayout.getFp4Padded()) {
+      auto packedAxis = getOrder(sharedMMALayout)[0];
+      if (shape.size() == 3) {
+        // Take into account multi buffering
+        shape[1 + packedAxis] *= 2;
+      } else {
+        shape[packedAxis] *= 2;
+      }
+    }
+  }
+  if (auto sharedLayout = mlir::dyn_cast<SharedEncodingTrait>(layout)) {
     // Special logic for pipeline pass, where shape is 3D and CTALayout is 2D.
     // The first dim of shape is numStages. This is a work around, otherwise
     // too many places would have to be modified in pipeline pass. Maybe we
     // need to refactor this logic in the future.
     auto CTASplitNum = cast<LayoutEncodingTrait>(layout).getCTASplitNum();
     if (shape.size() == CTASplitNum.size() + 1) {
-      auto res = getShapePerCTA(CTASplitNum, shape.drop_front());
+      auto res =
+          getShapePerCTA(CTASplitNum, ArrayRef<int64_t>(shape).drop_front());
       res.insert(res.begin(), shape.front());
       return res;
     }
@@ -1913,7 +1927,8 @@ Attribute NVMMASharedEncodingAttr::parse(AsmParser &parser, Type type) {
     return {};
 
   unsigned swizzlingByteWidth;
-  bool transposed;
+  bool transposed = false;
+  bool fp4Padded = false;
   unsigned elementBitWidth;
   std::optional<SmallVector<unsigned>> CTAsPerCGA;
   std::optional<SmallVector<unsigned>> CTASplitNum;
@@ -1928,6 +1943,9 @@ Attribute NVMMASharedEncodingAttr::parse(AsmParser &parser, Type type) {
         return {};
     } else if (attr.getName() == "elementBitWidth") {
       if (parseUInt(parser, attr, elementBitWidth, "elementBitWidth").failed())
+        return {};
+    } else if (attr.getName() == "fp4Padded") {
+      if (parseBool(parser, attr, fp4Padded, "fp4Padded").failed())
         return {};
     } else if (attr.getName() == "CTAsPerCGA") {
       if (parseIntArrayAttr(parser, attr, CTAsPerCGA.emplace(), "CTAsPerCGA")
@@ -1955,7 +1973,7 @@ Attribute NVMMASharedEncodingAttr::parse(AsmParser &parser, Type type) {
 
   return parser.getChecked<NVMMASharedEncodingAttr>(
       parser.getContext(), swizzlingByteWidth, transposed, elementBitWidth,
-      *CTALayout);
+      fp4Padded, *CTALayout);
 }
 
 void NVMMASharedEncodingAttr::print(AsmPrinter &printer) const {
@@ -1963,6 +1981,10 @@ void NVMMASharedEncodingAttr::print(AsmPrinter &printer) const {
           << "swizzlingByteWidth = " << getSwizzlingByteWidth() //
           << ", transposed = " << getTransposed()               //
           << ", elementBitWidth = " << getElementBitWidth();
+  if (getFp4Padded()) {
+    // Print only in this case to reduce the noise for the more common case.
+    printer << ", fp4Padded = true";
+  }
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/2);
   printer << "}>";
@@ -2602,7 +2624,7 @@ struct TritonGPUInferLayoutInterface
       }
       resultEncoding = NVMMASharedEncodingAttr::get(
           ctx, enc.getSwizzlingByteWidth(), !enc.getTransposed(),
-          enc.getElementBitWidth(), *ctaLayout);
+          enc.getFp4Padded(), enc.getElementBitWidth(), *ctaLayout);
       return success();
     }
 

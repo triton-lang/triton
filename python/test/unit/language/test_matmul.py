@@ -750,3 +750,93 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, scale_typ
                                  BLOCK_N, BLOCK_K, NUM_STAGES=NUM_STAGES)
 
     torch.testing.assert_close(ref_out, output, atol=1e-2, rtol=1e-2)
+
+
+@triton.jit
+def mxfp8_mxfp4_matmul(  #
+        a_ptr, b_ptr, output_ptr,  #
+        a_scale, b_scale,  #
+        M, N, K,  #
+        stride_scale,  #
+        stride_am, stride_ak,  #
+        stride_bk, stride_bn,  #
+        stride_cm, stride_cn,  #
+        BLOCK_M: tl.constexpr,  #
+        BLOCK_N: tl.constexpr,  #
+        BLOCK_K: tl.constexpr,  #
+        NUM_STAGES: tl.constexpr):  #
+    pid = tl.program_id(axis=0)
+    num_pid_m = tl.cdiv(M, BLOCK_M)
+    pid_m = pid % num_pid_m
+    pid_n = pid // num_pid_m
+    offs_am = (pid_m * BLOCK_M + tl.arange(0, BLOCK_M)) % M
+    offs_bn = (pid_n * BLOCK_N + tl.arange(0, BLOCK_N)) % N
+    offs_ak = tl.arange(0, BLOCK_K)
+    offs_bk = tl.arange(0, BLOCK_K // 2)
+    offs_scale_k = tl.arange(0, BLOCK_K // 32)
+
+    a_scale_ptr = a_scale + offs_am[:, None] * stride_scale + offs_scale_k[None, :]
+    b_scale_ptr = b_scale + offs_bn[:, None] * stride_scale + offs_scale_k[None, :]
+    a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_ak[None, :] * stride_ak)
+    b_ptrs = b_ptr + (offs_bk[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
+
+    accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=output_ptr.dtype.element_ty)
+
+    for k in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES):
+        a = tl.load(a_ptrs)
+        b = tl.load(b_ptrs)
+        scale_a = tl.load(a_scale_ptr)
+        scale_b = tl.load(b_scale_ptr)
+        accumulator = tl.dot_scaled(a, scale_a, "e5m2", b, scale_b, "e2m1", accumulator)
+        a_ptrs += BLOCK_K * stride_ak
+        b_ptrs += (BLOCK_K // 2) * stride_bk
+        a_scale_ptr += BLOCK_K // 32
+        b_scale_ptr += BLOCK_K // 32
+
+    offs_cm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_cn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    output_ptrs = output_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
+    c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
+    tl.store(output_ptrs, accumulator, mask=c_mask)
+
+
+@pytest.mark.parametrize("M, N, K", [(1024, 512, 512), (128, 256, 256)])
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (256, 128, 128), (128, 256, 128),
+                                                       (128, 256, 256), (128, 128, 64), (128, 64, 128)])
+@pytest.mark.parametrize("NUM_STAGES", [1, 3])
+@pytest.mark.parametrize("B_TRANS", [True, False])
+def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TRANS, device):
+    if BLOCK_N == 256 and BLOCK_K == 256:
+        NUM_STAGES = 2
+
+    a = torch.randint(20, 40, (M, K), dtype=torch.uint8).view(torch.float8_e5m2).to(device)
+
+    dtype_src_str = "float8e5"
+    a_ref = f8_to_f16(a.view(torch.float8_e5m2), dtype_src_str).to(torch.float32)
+
+    if B_TRANS:
+        b_mxfp4 = MXFP4Tensor(size=(K, N), device=device).random()
+        b = b_mxfp4.to_packed_tensor(dim=0)
+        b_ref = b_mxfp4.to(torch.float32)
+    else:
+        b_mxfp4 = MXFP4Tensor(size=(N, K), device=device).random()
+        b = b_mxfp4.to_packed_tensor(dim=1).T
+        b_ref = b_mxfp4.to(torch.float32).T
+
+    a_scale_mxfp4 = MXScaleTensor(size=(M, (K + 32 - 1) // 32), device=device).random(high=64.0)
+    b_scale_mxfp4 = MXScaleTensor(size=(N, (K + 32 - 1) // 32), device=device).random(high=64.0)
+    a_scale = a_scale_mxfp4.data
+    b_scale = b_scale_mxfp4.data
+
+    a_scale_ref = a_scale_mxfp4.to(torch.float32).repeat_interleave(32, dim=1)[:M, :K]
+    b_scale_ref = b_scale_mxfp4.to(torch.float32).repeat_interleave(32, dim=1).T.contiguous()[:K, :N]
+    ref_out = torch.matmul(a_ref * a_scale_ref, b_ref * b_scale_ref)
+
+    output = a.new_empty((M, N), dtype=torch.float32)
+    grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
+    out = mxfp8_mxfp4_matmul[grid](a, b, output, a_scale, b_scale, M, N, K, a_scale.stride(0), a.stride(0), a.stride(1),
+                                   b.stride(0), b.stride(1), output.stride(0), output.stride(1), BLOCK_M, BLOCK_N,
+                                   BLOCK_K, NUM_STAGES=NUM_STAGES)
+    ttgir = out.asm["ttgir"]
+    assert "fp4Padded = true" in ttgir
+    torch.testing.assert_close(ref_out, output, atol=1e-3, rtol=1e-3)

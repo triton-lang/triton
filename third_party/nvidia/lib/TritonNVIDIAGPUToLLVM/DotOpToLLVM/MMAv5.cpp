@@ -540,8 +540,8 @@ struct TCGen5MMAScaledOpConversion
     bool interleaved = (mmaSizeM == 64 && (numRepM > 1 || numRepN > 1));
 
     Value zero = tb.i32_val(0);
-    SmallVector<int64_t> shapeA(aTensorTy.getShape());
-    SmallVector<int64_t> shapeB(bTensorTy.getShape());
+    SmallVector<int64_t> shapeA(triton::gpu::getShapePerCTA(aTensorTy));
+    SmallVector<int64_t> shapeB(triton::gpu::getShapePerCTA(bTensorTy));
     if (opKindIsMXFP4) {
       shapeA[1] *= 2;
       shapeB[0] *= 2;

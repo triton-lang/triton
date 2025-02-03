@@ -424,6 +424,7 @@ def NVMMASharedEncodingAttr :
     "unsigned":$swizzlingByteWidth,
     "bool":$transposed,
     "unsigned":$elementBitWidth,
+    "bool":$fp4Padded,
     "CTALayoutAttr":$CTALayout
   );
 
@@ -431,14 +432,16 @@ def NVMMASharedEncodingAttr :
     AttrBuilder<(ins "ArrayRef<int64_t>":$shape,
                      "ArrayRef<unsigned>":$order,
                      "CTALayoutAttr":$CTALayout,
-                     "Type":$eltTy), [{
+                     "Type":$eltTy,
+                     "bool": $fp4Padded), [{
         auto shapePerCTA = getShapePerCTA(CTALayout.getCTASplitNum(), shape);
         int32_t swizzlingByteWidth = 0;
         unsigned eleBitWidth = eltTy.getIntOrFloatBitWidth();
+        int packingFactor = fp4Padded ? 2 : 1;
 
         // get proper shared memory swizzling mode from the contiguous dimension
         // size of the origin blocked layout.
-        auto contigDimSizeInByte = shapePerCTA[order[0]] * eleBitWidth / 8;
+        auto contigDimSizeInByte = shapePerCTA[order[0]] * packingFactor * eleBitWidth / 8;
         if (contigDimSizeInByte >= 128 && contigDimSizeInByte % 128 == 0) {
           swizzlingByteWidth = 128;
         } else if (contigDimSizeInByte >= 64 && contigDimSizeInByte % 64 == 0) {
@@ -449,7 +452,7 @@ def NVMMASharedEncodingAttr :
           llvm_unreachable("unsupported shared memory layout for MMAv3");
         }
         bool transposed = order[0] == 0;
-        return $_get(context, swizzlingByteWidth, transposed, eleBitWidth, CTALayout);
+        return $_get(context, swizzlingByteWidth, transposed, eleBitWidth, fp4Padded, CTALayout);
     }]>
   ];
 
