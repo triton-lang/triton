@@ -255,4 +255,13 @@ def TritonAMDFoldTrueCmpI: Pass<"tritonamdgpu-fold-true-cmpi", "mlir::ModuleOp">
 }
 
 
+def TritonAMDGPUMembarAnalysis : Pass<"triton-amdgpu-membar-analysis", "mlir::ModuleOp"> {
+    let summary = "Perform the memory-barrier analysis";
+    let description = [{
+      This pass allocates shared memory and set barriers.
+     }];
+
+    let constructor = "mlir::createTritonAMDGPUMembarAnalysisPass()";
+}
+
 #endif

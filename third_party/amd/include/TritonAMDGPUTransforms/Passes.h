@@ -11,6 +11,8 @@ namespace mlir {
 #define GEN_PASS_DECL
 #include "TritonAMDGPUTransforms/Passes.h.inc"
 
+std::unique_ptr<Pass> createTritonAMDGPUMembarAnalysisPass();
+
 /// Generate the code for registering passes.
 #define GEN_PASS_REGISTRATION
 #include "TritonAMDGPUTransforms/Passes.h.inc"
