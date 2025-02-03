@@ -177,11 +177,11 @@ public:
     // type inference of MemDescTransOp simply swap the order but doesn't fix
     // the vec and maxPhase for the YType, hence it would causing incorrect
     // swizzling code.
-    auto newInnerCvtEnc =
-        SharedEncodingAttr::get(getContext(), cvtEncoding, srcTy.getShape(),
-                                /*order=*/getOrder(srcTy.getEncoding()),
-                                triton::gpu::getCTALayout(srcTy.getEncoding()),
-                                srcTy.getElementType(), /*needTrans=*/true);
+    auto newInnerCvtEnc = SwizzledSharedEncodingAttr::get(
+        getContext(), cvtEncoding, srcTy.getShape(),
+        /*order=*/getOrder(srcTy.getEncoding()),
+        triton::gpu::getCTALayout(srcTy.getEncoding()), srcTy.getElementType(),
+        /*needTrans=*/true);
     if (newInnerCvtEnc == cvtEncoding)
       return failure();
     rewriter.setInsertionPoint(trans);
@@ -334,7 +334,7 @@ public:
       return failure();
 
     MemDescType allocType = allocOp.getType();
-    auto allocEncoding = cast<SharedEncodingAttr>(allocType.getEncoding());
+    auto allocEncoding = cast<NVMMASharedEncodingAttr>(allocType.getEncoding());
     RankedTensorType srcTy = trans.getSrc().getType();
 
     // MMAv3 with transpose only supports f16 and bf16.  Fall back to MMAv3
@@ -355,7 +355,7 @@ public:
     // TODO(Qingyi): need to check whether the CTALayout of innerCvtEnc should
     // be used here. For tests where numCTAs = 1, this is not a problem since
     // all CTALayouts are the same.
-    auto newInnerEnc = SharedEncodingAttr::get(
+    auto newInnerEnc = NVMMASharedEncodingAttr::get(
         getContext(), srcTy.getShape(), newInnerCvtOrder,
         allocEncoding.getCTALayout(), srcTy.getElementType());
 
@@ -388,7 +388,7 @@ struct MMAV3UseRegOperand
       return cast<TensorOrMemDesc>(v.getType()).getEncoding();
     };
 
-    if (!isa<SharedEncodingAttr>(getEncoding(dotOp.getOperand(0))))
+    if (!isa<NVMMASharedEncodingAttr>(getEncoding(dotOp.getOperand(0))))
       return failure();
     auto srcEnc = dyn_cast<NvidiaMmaEncodingAttr>(getEncoding(alloc.getSrc()));
     auto dstEnc =
@@ -447,7 +447,7 @@ struct MMAV3HoistLayoutConversion
       return cast<TensorOrMemDesc>(v.getType()).getEncoding();
     };
 
-    if (!isa<SharedEncodingAttr>(getEncoding(dotOp.getOperand(0))))
+    if (!isa<NVMMASharedEncodingAttr>(getEncoding(dotOp.getOperand(0))))
       return rewriter.notifyMatchFailure(
           dotOp, "requires Shared encoding for operand A");
 
@@ -655,7 +655,7 @@ private:
       return false;
 
     auto sharedEnc =
-        cast<triton::gpu::SharedEncodingAttr>(scaleType.getEncoding());
+        cast<triton::gpu::SwizzledSharedEncodingAttr>(scaleType.getEncoding());
     if (sharedEnc.getMaxPhase() != 1 || sharedEnc.getPerPhase() != 1 ||
         sharedEnc.getVec() != 1) {
       // For now, we do not expect swizzling to be applied to the scale SMEM.
