@@ -1,8 +1,8 @@
-#include "TritonAMDGPUToLLVM/Passes.h"
+// #include "TritonAMDGPUToLLVM/Passes.h"
 
-#include "PatternTritonGPUOpToLLVM.h"
-#include "TargetInfo.h"
+// #include "PatternTritonGPUOpToLLVM.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
+#include "third_party/amd/lib/TritonAMDGPUToLLVM/TargetInfo.h"
 // #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 // #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
 #include "mlir/Conversion/GPUToROCDL/GPUToROCDLPass.h"
@@ -25,10 +25,8 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
-namespace mlir::triton {
-#define GEN_PASS_DEF_TRITONAMDGPUREFINEOPS
-#include "TritonAMDGPUToLLVM/Passes.h.inc"
-} // namespace mlir::triton
+#define GEN_PASS_CLASSES
+#include "TritonAMDGPUTransforms/Passes.h"
 
 #undef DEBUG_TYPE
 #define DEBUG_TYPE "tritonamdgpu-stream-pipeline"
@@ -443,7 +441,7 @@ LogicalResult rewriteLocalStoreOp(OpBuilder &rewriter,
 }
 
 struct TritonAMDGPURefineOps
-    : public triton::impl::TritonAMDGPURefineOpsBase<TritonAMDGPURefineOps> {
+    : public TritonAMDGPURefineOpsBase<TritonAMDGPURefineOps> {
   explicit TritonAMDGPURefineOps(StringRef targetArch) {
     this->arch = targetArch.str();
   }
@@ -462,30 +460,42 @@ struct TritonAMDGPURefineOps
       SmallVector<scf::ForOp> forOps = getLeafForOps(funcOp);
       for (auto forOp : forOps) {
 
+        bool isRefined = false;
         forOp.walk([&](triton::DotOp dotOp) {
           OpBuilder rewriter(dotOp->getContext());
 
           // TODO: extend to WMMA instructions
           if (failed(rewriteMFMA(rewriter, dotOp))) {
             LDBG("failed to refine tt.dotOp: " << *dotOp);
+          } else {
+            isRefined |= true;
           }
         });
 
         forOp->walk([&](triton::LoadOp loadOp) {
           OpBuilder rewriter(loadOp->getContext());
-          if (loadOp->getNumOperands() == 1)
+          if (loadOp->getNumOperands() == 1) {
             if (failed(rewriteLoadOp(rewriter, loadOp))) {
               LDBG("failed to refine tt.loadOp: " << *loadOp);
-            }
+            } else
+              isRefined |= true;
+          }
         });
 
         forOp->walk([&](triton::gpu::LocalStoreOp storeOp) {
           OpBuilder rewriter(storeOp->getContext());
-          if (storeOp->getNumOperands() == 2)
+          if (storeOp->getNumOperands() == 2) {
             if (failed(rewriteLocalStoreOp(rewriter, storeOp))) {
               LDBG("failed to refine ttg.localLoadOp: " << *storeOp);
-            }
+            } else
+              isRefined |= true;
+          }
         });
+
+        if (isRefined) {
+          forOp->setAttr(amdgpu::RefinedRegionAttr::getMnemonic(),
+                         mlir::UnitAttr::get(context));
+        }
       }
     });
   }
@@ -495,11 +505,11 @@ private:
 
 } // namespace
 
-namespace mlir::triton {
+namespace mlir {
 
 std::unique_ptr<OperationPass<ModuleOp>>
 createTritonAMDGPURefineOpsPass(StringRef targetArch) {
   return std::make_unique<TritonAMDGPURefineOps>(targetArch);
 }
 
-} // namespace mlir::triton
+} // namespace mlir
