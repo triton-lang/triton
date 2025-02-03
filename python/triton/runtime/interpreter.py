@@ -780,7 +780,12 @@ def _patch_lang_tensor(tensor):
         return bool(data) if data.size == 1 else True
 
     def _get_transpose(self):
-        return tl.core.tensor(TensorHandle(np.transpose(self.handle.data), self.handle.dtype), self.dtype.scalar)
+        handle = TensorHandle(np.transpose(self.handle.data), self.handle.dtype)
+        assert self.type.is_block()
+        block_shape = list(self.type.shape)
+        block_shape[-1], block_shape[-2] = block_shape[-2], block_shape[-1]
+        res_ty = tl.core.block_type(self.dtype, block_shape)
+        return tl.core.tensor(handle, res_ty)
 
     tensor.__index__ = lambda self: int(self.handle.data)
     tensor.__bool__ = lambda self: _get_bool(self)
@@ -1087,7 +1092,7 @@ def _patch_lang(fn):
             _patch_builtin(lang.math, interpreter_builder)
         _patch_lang_tensor(lang.tensor)
         _patch_lang_core(lang)
-    _patch_builtin(tl.core._experimental_tensor_descriptor, interpreter_builder)
+    _patch_builtin(tl.core._experimental_tensor_descriptor_base, interpreter_builder)
 
 
 # TODO: wrap everything in triton tensors
