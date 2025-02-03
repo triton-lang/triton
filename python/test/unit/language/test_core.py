@@ -43,6 +43,7 @@ from triton._internal_testing import (
     torch_dtype_name,
     to_numpy,
 )
+from triton.runtime.errors import InterpreterError
 
 
 @contextlib.contextmanager
@@ -201,8 +202,7 @@ class BlockedLayout:
 
 class SharedLayout:
 
-    def __init__(self, vec, per_phase, max_phase, order, ctas_per_cga, cta_split_num, cta_order,
-                 has_leading_offset=False):
+    def __init__(self, vec, per_phase, max_phase, order, ctas_per_cga, cta_split_num, cta_order):
         self.vec = vec
         self.per_phase = per_phase
         self.max_phase = max_phase
@@ -210,11 +210,24 @@ class SharedLayout:
         self.ctas_per_cga = ctas_per_cga
         self.cta_split_num = cta_split_num
         self.cta_order = cta_order
-        self.has_leading_offset = has_leading_offset
 
     def __str__(self):
-        has_leading_offset_str = "true" if self.has_leading_offset else "false"
-        return f"#{GPU_DIALECT}.shared<{{vec={self.vec}, perPhase={self.per_phase}, maxPhase={self.max_phase}, order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}, hasLeadingOffset={has_leading_offset_str}}}>"
+        return f"#{GPU_DIALECT}.swizzled_shared<{{vec={self.vec}, perPhase={self.per_phase}, maxPhase={self.max_phase}, order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
+
+
+class NVMMASharedLayout:
+
+    def __init__(self, swizzle, transpose, element_bit_width, ctas_per_cga, cta_split_num, cta_order):
+        self.swizzle = swizzle
+        self.transpose = transpose
+        self.element_bit_width = element_bit_width
+        self.ctas_per_cga = ctas_per_cga
+        self.cta_split_num = cta_split_num
+        self.cta_order = cta_order
+
+    def __str__(self):
+        transpose_str = "true" if self.transpose else "false"
+        return f"#{GPU_DIALECT}.nvmma_shared<{{swizzlingByteWidth={self.swizzle}, transposed={transpose_str}, elementBitWidth={self.element_bit_width}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
 
 
 class LinearLayout:
@@ -2426,6 +2439,47 @@ scan_configs = [(op, type, shape, axis, reverse, num_warps)
                 for shape in scan2d_shapes
                 for op in ['cumsum', 'cumprod', 'get_first_element', 'linear_recurrence', 'cummax', 'roll']]
 negative_config = [('cumsum', 'float32', (32, 32), -1, False, 4)]
+
+
+def test_sum_dtype():
+
+    @triton.jit
+    def kernel_dtype(out_ptr, init, in_dtype: tl.constexpr, out_dtype: tl.constexpr):
+        x = tl.full((32, 32), init, dtype=in_dtype)
+        x = tl.sum(x, dtype=out_dtype)
+        tl.store(out_ptr, x.to(tl.int32))
+
+    @triton.jit
+    def kernel_default_int(out_ptr):
+        x = tl.full((32, 32), 1, dtype=tl.int1)
+        x = tl.sum(x)
+        tl.store(out_ptr, x)
+
+    @triton.jit
+    def kernel_default_float(out_ptr):
+        x = tl.full((32, 32), 1.0, dtype=tl.bfloat16)
+        x = tl.sum(x)
+        tl.store(out_ptr, x)
+
+    out = torch.empty(1, dtype=torch.int32, device='cuda')
+    kernel_dtype[(1, )](out, init=1, in_dtype=tl.int1, out_dtype=None)
+    assert out[0] == 32 * 32
+
+    kernel_dtype[(1, )](out, init=1, in_dtype=tl.int1, out_dtype=tl.int1)
+    assert out[0] == 0
+
+    kernel_dtype[(1, )](out, init=7, in_dtype=tl.int8, out_dtype=tl.int8)
+    assert out[0] == (7 * 32 * 32) % 256
+
+    kernel_dtype[(1, )](out, init=1, in_dtype=tl.int32, out_dtype=None)
+    assert out[0] == 32 * 32
+
+    kernel_default_int[(1, )](out)
+    assert out[0] == 32 * 32
+
+    out = torch.empty(1, dtype=torch.bfloat16, device='cuda')
+    kernel_default_float[(1, )](out)
+    torch.testing.assert_close(out[0], torch.tensor(32 * 32, dtype=torch.bfloat16, device='cuda'))
 
 
 @triton.jit
@@ -4764,6 +4818,7 @@ def test_reshape_err(device):
     assert "reshape" in str(exc_info.value)
 
 
+@pytest.mark.interpreter
 def test_tma_load_block_shape_err():
 
     @triton.jit
@@ -4772,12 +4827,14 @@ def test_tma_load_block_shape_err():
         desc.load([0, 0])
 
     input = torch.empty((128, 128), dtype=torch.int32, device='cuda')
-    with pytest.raises(triton.CompilationError) as e:
+    errc = triton.CompilationError if not is_interpreter() else InterpreterError
+    with pytest.raises(errc) as e:
         kernel[(1, )](input)
 
     assert "tensor descriptor block shape must have at least 8 rows" in str(e.value.__cause__)
 
 
+@pytest.mark.interpreter
 def test_tma_store_block_shape_err():
 
     @triton.jit
@@ -4786,7 +4843,8 @@ def test_tma_store_block_shape_err():
         desc.store([0, 0], tl.zeros((1, 32), dtype=tl.int16))
 
     input = torch.empty((128, 128), dtype=torch.int16, device='cuda')
-    with pytest.raises(triton.CompilationError) as e:
+    errc = triton.CompilationError if not is_interpreter() else InterpreterError
+    with pytest.raises(errc) as e:
         kernel[(1, )](input)
 
     assert "int16 tensor descriptor block shape must have at least 16 columns" in str(e.value.__cause__)
@@ -5781,8 +5839,8 @@ mma_layouts = [
 
 shared_layouts = [
     SharedLayout(8, 1, 1, [1, 0], [1, 1], [1, 1], [0, 1]),
-    SharedLayout(8, 2, 4, [1, 0], [1, 1], [1, 1], [0, 1], has_leading_offset=True),  # small contiguous bytes
-    SharedLayout(8, 1, 8, [1, 0], [1, 1], [1, 1], [0, 1], has_leading_offset=True),  # maximum contiguous bytes
+    NVMMASharedLayout(64, False, 16, [1, 1], [1, 1], [0, 1]),
+    NVMMASharedLayout(128, False, 16, [1, 1], [1, 1], [0, 1]),
 ]
 
 
@@ -5832,7 +5890,7 @@ def test_local_load_store_mma(M, N, mma_layout, shared_layout, device, tmp_path:
     kernel[(1, 1, 1)](x, z)
     assert torch.equal(z, x)
 
-    if shared_layout.has_leading_offset == "true" and mma_layout.version[0] >= 3:
+    if isinstance(shared_layout, NVMMASharedLayout) and mma_layout.version[0] >= 3:
         assert "stmatrix" in kernel.asm["ptx"]
 
 

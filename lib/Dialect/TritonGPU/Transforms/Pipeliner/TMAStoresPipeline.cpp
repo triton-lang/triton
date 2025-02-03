@@ -38,10 +38,10 @@ static Value createAlloc(scf::ForOp &forOp, const TMAStore &store) {
   RankedTensorType ty = store.src.getType();
   auto order = ttg::getOrder(ty.getEncoding());
   auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
-  Attribute encoding =
-      ttg::SharedEncodingAttr::get(ty.getContext(), 1, 1, 1, order, ctaLayout);
+  Attribute encoding = ttg::SwizzledSharedEncodingAttr::get(
+      ty.getContext(), 1, 1, 1, order, ctaLayout);
   if (ty.getRank() > 1) {
-    encoding = ttg::SharedEncodingAttr::get(
+    encoding = ttg::NVMMASharedEncodingAttr::get(
         ty.getContext(), ty.getShape(), order, ctaLayout, ty.getElementType());
   }
   Attribute sharedMemorySpace =

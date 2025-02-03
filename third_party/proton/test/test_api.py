@@ -147,7 +147,7 @@ def test_scope_metrics(tmp_path: pathlib.Path):
 
 
 def test_scope_properties(tmp_path: pathlib.Path):
-    temp_file = tmp_path / "test.hatchet"
+    temp_file = tmp_path / "test_scope_properties.hatchet"
     proton.start(str(temp_file.with_suffix("")))
     # Test different scope creation methods
     # Different from metrics, properties could be str
@@ -179,7 +179,7 @@ def test_scope_properties(tmp_path: pathlib.Path):
 
 
 def test_scope_exclusive(tmp_path: pathlib.Path):
-    temp_file = tmp_path / "test.hatchet"
+    temp_file = tmp_path / "test_scope_exclusive.hatchet"
     proton.start(str(temp_file.with_suffix("")))
     # metric a only appears in the outermost scope
     # metric b only appears in the innermost scope

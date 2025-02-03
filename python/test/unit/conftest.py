@@ -3,6 +3,10 @@ import pytest
 import tempfile
 
 
+def pytest_configure(config):
+    config.addinivalue_line("markers", "interpreter: indicate whether interpreter supports the test")
+
+
 def pytest_addoption(parser):
     parser.addoption("--device", action="store", default="cuda")
 

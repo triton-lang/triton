@@ -297,7 +297,7 @@ def TTNG_AsyncTMAScatterOp : TTNG_Op<"async_tma_scatter", [DeclareOpInterfaceMet
     The `ttng.async_tma_scatter` operation scatters multiple separately-indexed
     rows of data from local memory into global memory asynchronously. The
     operation scatters a 2D tensor in shared memory, laid out by core tensor
-    tiles (`hasLeadingOffset=true`) into separately indexed rows in global
+    tiles nvmma_shared layout into separately indexed rows in global
     memory at a given `y` offset.
   }];
 

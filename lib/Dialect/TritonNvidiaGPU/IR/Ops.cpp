@@ -336,7 +336,8 @@ LogicalResult TMEMCopyOp::verify() {
   }
 
   auto srcTy = cast<triton::gpu::MemDescType>(getSrc().getType());
-  auto sharedEnc = cast<triton::gpu::SharedEncodingAttr>(srcTy.getEncoding());
+  auto sharedEnc =
+      cast<triton::gpu::SwizzledSharedEncodingAttr>(srcTy.getEncoding());
 
   if (sharedEnc.getMaxPhase() != 1 || sharedEnc.getPerPhase() != 1 ||
       sharedEnc.getVec() != 1)
