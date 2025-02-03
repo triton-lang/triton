@@ -43,6 +43,7 @@ from triton._internal_testing import (
     torch_dtype_name,
     to_numpy,
 )
+from triton.runtime.errors import InterpreterError
 
 
 @contextlib.contextmanager
@@ -4816,6 +4817,7 @@ def test_reshape_err(device):
     assert "reshape" in str(exc_info.value)
 
 
+@pytest.mark.interpreter
 def test_tma_load_block_shape_err():
 
     @triton.jit
@@ -4824,12 +4826,14 @@ def test_tma_load_block_shape_err():
         desc.load([0, 0])
 
     input = torch.empty((128, 128), dtype=torch.int32, device='cuda')
-    with pytest.raises(triton.CompilationError) as e:
+    errc = triton.CompilationError if not is_interpreter() else InterpreterError
+    with pytest.raises(errc) as e:
         kernel[(1, )](input)
 
     assert "tensor descriptor block shape must have at least 8 rows" in str(e.value.__cause__)
 
 
+@pytest.mark.interpreter
 def test_tma_store_block_shape_err():
 
     @triton.jit
@@ -4838,7 +4842,8 @@ def test_tma_store_block_shape_err():
         desc.store([0, 0], tl.zeros((1, 32), dtype=tl.int16))
 
     input = torch.empty((128, 128), dtype=torch.int16, device='cuda')
-    with pytest.raises(triton.CompilationError) as e:
+    errc = triton.CompilationError if not is_interpreter() else InterpreterError
+    with pytest.raises(errc) as e:
         kernel[(1, )](input)
 
     assert "int16 tensor descriptor block shape must have at least 16 columns" in str(e.value.__cause__)
