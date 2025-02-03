@@ -40,6 +40,7 @@
 
 // FIXME: PipelineExpander should not depend on Triton-specific headers!
 #include "triton/Dialect/TritonGPU/IR/Types.h"
+
 #define DEBUG_TYPE "triton-loop-pipelining"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
@@ -259,7 +260,7 @@ bool LoopPipelinerInternal::verifySchedule() {
         continue;
       int64_t producerCycle = it->second;
       if (consumerCycle < producerCycle - numCylesPerIter * distance) {
-        PipelineErrorReporter errorReporter(forOp);
+        PipelineErrorReporter errorReporter(forOp, maxStage + 1, stages);
         errorReporter.printSchedulingError(distance, consumer, producer,
                                            operand);
         return false;

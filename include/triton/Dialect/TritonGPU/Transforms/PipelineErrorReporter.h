@@ -13,6 +13,10 @@ using namespace mlir::scf;
 class PipelineErrorReporter {
 protected:
   ForOp forOp;
+
+  unsigned numStages = 0;
+  const DenseMap<Operation *, unsigned int> &stages;
+
   /// Collect the root defining ops in IfOps. There could be multiple root
   /// defining ops in IfOps, as there are then branches and else branches.
   DenseSet<Operation *> rootDefiningOps;
@@ -20,6 +24,12 @@ protected:
   /// Recursively find the root defining op of the value in IfOps by traversing
   /// back the index of an OpResult and yielded values.
   void findRootDefiningOp(Operation *op, unsigned int resultNumber);
+
+  DenseSet<Operation *> rootUserOps;
+
+  void findRootUserOp(Operation *op, const DenseSet<Operation *> &userOps);
+
+  std::optional<unsigned int> findStage(Operation *op);
 
   /// Get the operand from the yield operation of the loop, which is the real
   /// value of the loop-carried dependency.
@@ -31,7 +41,8 @@ protected:
                                            Operation *producer, Value operand);
 
 public:
-  explicit PipelineErrorReporter(ForOp forOp) : forOp(forOp) {}
+  // explicit PipelineErrorReporter(ForOp forOp) : forOp(forOp) {}
+  explicit PipelineErrorReporter(ForOp forOp, unsigned numStages, const DenseMap<Operation *, unsigned int> &stages) : forOp(forOp), numStages(numStages), stages(stages) {}
   PipelineErrorReporter(const PipelineErrorReporter &) = delete;
   PipelineErrorReporter &operator=(const PipelineErrorReporter &) = delete;
   PipelineErrorReporter(PipelineErrorReporter &&) = delete;

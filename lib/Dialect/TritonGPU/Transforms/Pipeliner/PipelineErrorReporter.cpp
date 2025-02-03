@@ -4,6 +4,7 @@
 #include "mlir/IR/Operation.h"
 #include "llvm/Support/Debug.h"
 #include <cstdint>
+#include <iostream>
 
 #include "triton/Dialect/TritonGPU/Transforms/PipelineErrorReporter.h"
 
@@ -55,20 +56,62 @@ PipelineErrorReporter::getBlockArgYieldValueFromForLoop(BlockArgument arg) {
   return forOp.getBody()->getTerminator()->getOperand(arg.getArgNumber() - 1);
 }
 
+
+DenseSet<Operation *> findUsersInScfIfHierarchy(BlockArgument arg, Operation *consumerOp) {
+
+  DenseSet<Operation *> usersInScfIfHierarchy;
+
+  scf::IfOp consumerIfOp = llvm::dyn_cast<scf::IfOp>(consumerOp);
+
+  // case 1: consumer is a simple op. arg's user directly matches the consumer.
+  if (!consumerIfOp) {
+    for (Operation *user : arg.getUsers()) {
+      if (user == consumerOp) {
+        usersInScfIfHierarchy.insert(user);
+      }
+    }
+    return usersInScfIfHierarchy;
+  }
+
+  // case 2: consumer is an IfOp, and the arg's user is the condition of an ifop.
+  // the user happens to be the consumer. This is easily covered in the loop of case 3.
+  // case 3: consumer is an ifop, and the user is a simple op.
+  // we iteratively find in the if hierarchy and check if any users' parent op matches the consumer.
+  for (Operation *user : arg.getUsers()) {
+    Operation *currentOp = user;
+    // Traverse up the parent operations of `user` to find matches to consumer
+    while (currentOp) {
+      // Check if the current operation is an scf.if
+      if (auto currentIfOp = dyn_cast<scf::IfOp>(currentOp)) {
+        if (currentIfOp == consumerIfOp) {
+          usersInScfIfHierarchy.insert(user);
+          break; // Exit the loop once the consumerIfOp is found
+        }
+      }
+      // Move to the parent operation
+      currentOp = currentOp->getParentOp();
+    }
+  }
+  return usersInScfIfHierarchy;
+}
+
 void PipelineErrorReporter::findRootSchedulingErrorLoopCarryDep(
     Operation *consumer, Operation *producer, Value operand) {
-  DenseSet<Operation *> rootDefiningOps;
   LDBG("findRootSchedulingErrorLoopCarryDep: this operand is not ready at "
        "the consumer: "
        << operand << "\n");
+  
   if (auto arg = dyn_cast<BlockArgument>(operand)) {
-    LDBG("operand is a block arg. Arg number: " << arg.getArgNumber() << "\n");
+
     // This is a loop-carried dependency. Find which value yields the arg.
     auto yieldValue = getBlockArgYieldValueFromForLoop(arg);
     if (!yieldValue) {
       LDBG("no yield value for arg " << arg << " -> BAIL");
       return;
     }
+
+    // first find the root consumer.
+    rootUserOps = std::move(findUsersInScfIfHierarchy(arg, consumer));
 
     assert(producer == yieldValue->getDefiningOp() &&
            "producer should be the def of the yield value of operand");
@@ -83,13 +126,23 @@ void PipelineErrorReporter::findRootSchedulingErrorLoopCarryDep(
   }
 }
 
+std::optional<unsigned int> PipelineErrorReporter::findStage(Operation *op) {
+  auto it = stages.find(op);
+  if (it != stages.end()) {
+    return it->second;
+  }
+  return std::nullopt; 
+}
+
 void PipelineErrorReporter::printSchedulingError(int64_t distance,
                                                  Operation *consumer,
                                                  Operation *producer,
                                                  Value operand) {
-
-  std::string errorMessage = "operation scheduled before its operands.";
-  std::string likelyBuggyMessage = "This is likely to be a bug. Please "
+  llvm::dbgs() << "printSchedulingError: distance: " << distance << "\n";
+  LDBG("printSchedulingError: distance: " << distance << "\n");
+  std::cout << "printSchedulingError: distance: " << distance << "\n";
+  const char *errorMessage = "The software pipeliner failed due to a dependency conflict, resulting in suboptimal loop performance.";
+  const char *likelyBuggyMessage = "This is likely to be a bug. Please "
                                    "report it.";
   // We only find the root defining ops for loop-carried dependencies.
   // When distance is 0, we let the set of root defining ops to be empty.
@@ -103,12 +156,33 @@ void PipelineErrorReporter::printSchedulingError(int64_t distance,
     // not, an empty set means we have some bugs in the pipeline expander. We
     // should let the user help report the bug.
     consumer->emitError() << errorMessage << " " << likelyBuggyMessage;
-  } else {
-    consumer->emitError() << errorMessage;
-    for (auto op : rootDefiningOps) {
-      op->emitError() << "This line likely causes scheduling conflict. "
-                         "Consider moving it "
-                         "to an earlier position within the loop body.";
-    }
+    return;
+  }
+  // find the stage of the consumer and the producer.
+  auto consumerStage = findStage(consumer);
+  auto producerStage = findStage(producer);
+  if (!consumerStage || !producerStage) {
+    // We failed to find the stage of the consumer or the producer. This is
+    // likely to be a bug. We should let the user help report the bug.
+    consumer->emitError() << errorMessage << " " << likelyBuggyMessage;
+    return;
+  }
+  auto mainError = forOp->emitError() << errorMessage;
+  mainError.attachNote() << "The loop body is divided into " << numStages <<
+    " stages to optimize GPU I/O and computation resources. Different parts of the loop body are computed in different iterations. "
+    << "In iteration i, the update of the following variable is rescheduled to execute in iteration i + " << *producerStage - *consumerStage << ". However, it must be updated before its use in iteration i.";
+  auto firstRootDefiningOp = *rootDefiningOps.begin();
+  auto firstRootDefiningOpName = firstRootDefiningOp->getName().getStringRef();
+
+  for (auto op : rootDefiningOps) {
+    mainError.attachNote(op->getLoc()) << "`" << op->getName() << "` is updated here:";
+  }
+  // mainError.attachNote() << "However, 'tile_id' must be updated before its use in iteration i:
+  auto firstRootUserOp = *rootUserOps.begin();
+  auto firstRootUserOpName = firstRootUserOp->getName().getStringRef();
+  // mainError.attachNote() << "However, " << firstRootUserOpName << "must be updated before its use in iteration i:";
+  for (auto op : rootUserOps) {
+    // op->emitError() << "[root consumer]";
+    mainError.attachNote(op->getLoc()) << "`" << op->getName() << "` is used here:";
   }
 }
