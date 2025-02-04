@@ -598,7 +598,7 @@ bool isSafeToPipeline(ttng::TCGen5MMAScaledOp scaledDot) {
     return std::distance(value.user_begin(), value.user_end());
   };
 
-  auto isScaleCopiedByTMEMCopy = [=](Value scale) {
+  auto isCopiedByTMEMCopy = [=](Value scale) {
     for (auto user : scale.getUsers()) {
       if (isa<ttng::TMEMCopyOp>(user)) {
         // If the scale is used by TMEM copy and the only other user is the
@@ -612,8 +612,8 @@ bool isSafeToPipeline(ttng::TCGen5MMAScaledOp scaledDot) {
     return false;
   };
 
-  return isScaleCopiedByTMEMCopy(scaledDot.getAScale()) &&
-         isScaleCopiedByTMEMCopy(scaledDot.getBScale());
+  return isCopiedByTMEMCopy(scaledDot.getAScale()) &&
+         isCopiedByTMEMCopy(scaledDot.getBScale());
 }
 
 // Find MMAs eligible for pipelining and lower them by:
