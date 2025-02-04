@@ -283,12 +283,22 @@ public:
     // otherwise the reg-smem roundtrip will tank the MMAv3 performance
     auto comesFromLoadOrBlockArg = [](Value v) -> bool {
       // Peel out the original cvt dot_op<..., #blocked>
-      // and any other potential cvt
-      while (auto cvtOp = v.getDefiningOp<ConvertLayoutOp>())
-        v = cvtOp.getSrc();
-      // We also accept block arguments as they appear in some MLIR tests
+      // and any other potential cvt/trans ops
+      while (true) {
+        if (auto cvtOp = v.getDefiningOp<ConvertLayoutOp>()) {
+          v = cvtOp.getSrc();
+          continue;
+        }
+        if (auto transOp = v.getDefiningOp<TransOp>()) {
+          v = transOp.getSrc();
+          continue;
+        }
+        break;
+      }
+      // We also accept block arguments as they appear in many MLIR tests
       // If this is problematic we can totally drop them
-      return v.getDefiningOp<LoadOp>() || isa<BlockArgument>(v);
+      return isa<LoadOp, ExperimentalDescriptorLoadOp>(v.getDefiningOp()) ||
+             isa<BlockArgument>(v);
     };
 
     bool aFromLoad = comesFromLoadOrBlockArg(dotOp.getA());
