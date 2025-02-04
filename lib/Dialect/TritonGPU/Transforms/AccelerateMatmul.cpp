@@ -196,8 +196,10 @@ static bool bwdFilter(Operation *op) {
 }
 
 static SmallVector<int, 2> getTransposeOrder(int rank) {
-  auto transOrder = llvm::to_vector<2>(llvm::reverse(llvm::seq<int>(rank)));
-  std::swap(transOrder[rank - 1], transOrder[rank - 2]);
+  assert(rank >= 2);
+  auto transOrder = llvm::to_vector<2>(llvm::seq<int>(rank - 2));
+  transOrder.push_back(rank - 1);
+  transOrder.push_back(rank - 2);
   return transOrder;
 }
 
@@ -391,7 +393,7 @@ public:
                                         transOrder);
     }
     // convert dot instruction
-    rewriter.replaceOpWithNewOp<ConvertLayoutOp>(origDotOp, oldRetType,
+    rewriter.replaceOpWithNewOp<ConvertLayoutOp>(origDotOp, origDotOp.getType(),
                                                  newDot->getResult(0));
     return success();
   }
