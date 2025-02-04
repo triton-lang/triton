@@ -608,7 +608,7 @@ bool isSafeToPipeline(ttng::TCGen5MMAScaledOp scaledDot) {
       if (isa<ttng::TMEMCopyOp>(user)) {
         // If the scale is used by TMEM copy and the only other user is the
         // scaled dot op, MMA pipelining is safe to apply.
-	return true;
+        return true;
       }
     }
     return false;
