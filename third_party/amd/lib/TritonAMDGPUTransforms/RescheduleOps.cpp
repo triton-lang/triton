@@ -19,8 +19,26 @@ struct TritonAMDGPURescheduleOps
   explicit TritonAMDGPURescheduleOps(StringRef targetArch) {
     this->arch = targetArch.str();
   }
+  void reschedule(Block *block) {
+    // TODO: build dependency graph
+    // TODO: use gpu.barrier as havy-edges
+    // TODO: move ops around to improve ILP
+  }
 
-  void runOnOperation() override {}
+  void runOnOperation() override {
+    ModuleOp mod = getOperation();
+    llvm::SmallVector<Block *> blocks;
+    mod.walk([&](amdgpu::InstructionSchedHint hint) {
+      if (hint.getVariant() == amdgpu::SchedHint::refine_ops) {
+        blocks.push_back(hint->getBlock());
+        hint->erase();
+      }
+    });
+
+    for (auto block : blocks) {
+      reschedule(block);
+    }
+  }
 };
 } // namespace
 

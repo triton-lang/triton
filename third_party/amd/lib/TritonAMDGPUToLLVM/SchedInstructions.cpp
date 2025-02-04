@@ -6,6 +6,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Pass/Pass.h"
+#include "third_party/amd/include/Dialect/TritonAMDGPU/Utility/CommonUtils.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 namespace mlir::triton {
@@ -521,6 +522,19 @@ struct TritonAMDGPUInsertInstructionSchedHints
            "unknown instruction scheduling variant has been provided");
       return;
     }
+
+    if (schedHint == mlir::triton::amdgpu::SchedHint::refine_ops) {
+      mod->walk([&](triton::FuncOp funcOp) {
+        auto forOps = AMD::getLeafForOps(funcOp);
+        for (auto forOp : forOps) {
+          OpBuilder rewriter(ctx);
+          rewriter.setInsertionPointToStart(forOp.getBody());
+          rewriter.create<triton::amdgpu::InstructionSchedHint>(forOp->getLoc(),
+                                                                schedHint);
+        }
+      });
+    }
+    return;
 
     switch (schedHint) {
     case mlir::triton::amdgpu::SchedHint::local_prefetch:

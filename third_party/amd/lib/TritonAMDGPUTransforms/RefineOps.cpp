@@ -456,47 +456,38 @@ struct TritonAMDGPURefineOps
       return signalPassFailure();
     }
 
-    mod->walk([&](triton::FuncOp funcOp) {
-      SmallVector<scf::ForOp> forOps = getLeafForOps(funcOp);
-      for (auto forOp : forOps) {
-
-        bool isRefined = false;
-        forOp.walk([&](triton::DotOp dotOp) {
-          OpBuilder rewriter(dotOp->getContext());
-
-          // TODO: extend to WMMA instructions
-          if (failed(rewriteMFMA(rewriter, dotOp))) {
-            LDBG("failed to refine tt.dotOp: " << *dotOp);
-          } else {
-            isRefined |= true;
-          }
-        });
-
-        forOp->walk([&](triton::LoadOp loadOp) {
-          OpBuilder rewriter(loadOp->getContext());
-          if (loadOp->getNumOperands() == 1) {
-            if (failed(rewriteLoadOp(rewriter, loadOp))) {
-              LDBG("failed to refine tt.loadOp: " << *loadOp);
-            } else
-              isRefined |= true;
-          }
-        });
-
-        forOp->walk([&](triton::gpu::LocalStoreOp storeOp) {
-          OpBuilder rewriter(storeOp->getContext());
-          if (storeOp->getNumOperands() == 2) {
-            if (failed(rewriteLocalStoreOp(rewriter, storeOp))) {
-              LDBG("failed to refine ttg.localLoadOp: " << *storeOp);
-            } else
-              isRefined |= true;
-          }
-        });
-
-        if (isRefined) {
-          forOp->setAttr(amdgpu::RefinedRegionAttr::getMnemonic(),
-                         mlir::UnitAttr::get(context));
-        }
+    mod->walk([&](amdgpu::InstructionSchedHint hint) {
+      if (hint.getVariant() != amdgpu::SchedHint::refine_ops) {
+        return WalkResult::advance();
       }
+
+      auto *block = hint->getBlock();
+      block->walk([&](triton::DotOp dotOp) {
+        OpBuilder rewriter(dotOp->getContext());
+        // TODO: extend to WMMA instructions
+        if (failed(rewriteMFMA(rewriter, dotOp))) {
+          LDBG("failed to refine tt.dotOp: " << *dotOp);
+        }
+      });
+
+      block->walk([&](triton::LoadOp loadOp) {
+        OpBuilder rewriter(loadOp->getContext());
+        if (loadOp->getNumOperands() == 1) {
+          if (failed(rewriteLoadOp(rewriter, loadOp))) {
+            LDBG("failed to refine tt.loadOp: " << *loadOp);
+          }
+        }
+      });
+
+      block->walk([&](triton::gpu::LocalStoreOp storeOp) {
+        OpBuilder rewriter(storeOp->getContext());
+        if (storeOp->getNumOperands() == 2) {
+          if (failed(rewriteLocalStoreOp(rewriter, storeOp))) {
+            LDBG("failed to refine ttg.localLoadOp: " << *storeOp);
+          }
+        }
+      });
+      return WalkResult::advance();
     });
   }
 
