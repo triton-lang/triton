@@ -363,7 +363,7 @@ operation ::= `ttg.memdesc_trans` $src attr-dict `:` qualified(type($src)) `->` 
 This operation returns a new descriptor
 representing a transposed view of the buffer.
 
-Traits: `AlwaysSpeculatableImplTrait`, `SameOperandsAndResultElementType`, `VerifyTensorLayoutsTrait`
+Traits: `AlwaysSpeculatableImplTrait`, `InferTypeOpAdaptor`, `SameOperandsAndResultElementType`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`, `TransposeOpInterface`
 
