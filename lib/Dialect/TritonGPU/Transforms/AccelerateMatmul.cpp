@@ -282,6 +282,10 @@ public:
     // If both of the operands are not loads, we fallback to MMAv2
     // otherwise the reg-smem roundtrip will tank the MMAv3 performance
     auto comesFromLoadOrBlockArg = [](Value v) -> bool {
+      // Peel out the original cvt dot_op<..., #blocked>
+      // and any other potential cvt
+      while (auto cvtOp = v.getDefiningOp<ConvertLayoutOp>())
+        v = cvtOp.getSrc();
       // We also accept block arguments as they appear in some MLIR tests
       // If this is problematic we can totally drop them
       return v.getDefiningOp<LoadOp>() || isa<BlockArgument>(v);
