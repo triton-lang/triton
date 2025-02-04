@@ -5828,6 +5828,75 @@ def test_local_load_store(M, N, K, dist_layout, shared_layout, device, tmp_path:
     assert torch.equal(z, x)
 
 
+dot_layouts = [
+    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=0, k_width=4),
+    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [0, 1], [16, 8]), op_idx=1, k_width=4),
+    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [0, 1], [16, 8]), op_idx=0, k_width=2),
+    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=1, k_width=2),
+    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [0, 1], [16, 8]), op_idx=0, k_width=1),
+    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=1, k_width=1),
+]
+
+shared_layouts = [
+    SharedLayout(4, 2, 4, [0, 1], [1, 1], [1, 1], [0, 1]),
+    SharedLayout(8, 1, 8, [1, 0], [1, 1], [1, 1], [0, 1]),
+    SharedLayout(16, 1, 16, [1, 0], [1, 1], [1, 1], [0, 1]),
+]
+
+
+@pytest.mark.parametrize("M, N", [[16, 32]])
+@pytest.mark.parametrize("dtype", ['float16', 'float8e5', 'float32'])
+@pytest.mark.parametrize("shared_layout", shared_layouts)
+@pytest.mark.parametrize("dist_layout", filter_layouts(dot_layouts))
+def test_local_load_store_dot(M, N, dtype, dist_layout, shared_layout, device, tmp_path: pathlib.Path):
+    if dtype == "float32":
+        mlir_dtype = "f32"
+    elif dtype == "float16":
+        mlir_dtype = "f16"
+    elif dtype == "float8e5":
+        mlir_dtype = "f8E5M2"
+
+    layouts = f"""
+    #dist = {dist_layout}
+    #shared = {shared_layout}
+    #smem = #ttg.shared_memory
+    """
+    ir = layouts + f"""
+  module attributes {{"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32}} {{
+  tt.func public @kernel(%arg0: !tt.ptr<{mlir_dtype}> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<{mlir_dtype}> {{tt.divisibility = 16 : i32}}) attributes {{noinline = false}} {{
+    %cst = arith.constant dense<{N}> : tensor<{M}x1xi32, #dist>
+    %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #ttg.slice<{{dim = 1, parent = #dist}}>>
+    %1 = tt.make_range {{end = {N} : i32, start = 0 : i32}} : tensor<{N}xi32, #ttg.slice<{{dim = 0, parent = #dist}}>>
+    %2 = tt.splat %arg0 : !tt.ptr<{mlir_dtype}> -> tensor<{M}x{N}x!tt.ptr<{mlir_dtype}>, #dist>
+    %3 = tt.splat %arg1 : !tt.ptr<{mlir_dtype}> -> tensor<{M}x{N}x!tt.ptr<{mlir_dtype}>, #dist>
+    %4 = tt.expand_dims %0 {{axis = 1 : i32}} : tensor<{M}xi32, #ttg.slice<{{dim = 1, parent = #dist}}>> -> tensor<{M}x1xi32, #dist>
+    %5 = arith.muli %4, %cst : tensor<{M}x1xi32, #dist>
+    %6 = tt.expand_dims %1 {{axis = 0 : i32}} : tensor<{N}xi32, #ttg.slice<{{dim = 0, parent = #dist}}>> -> tensor<1x{N}xi32, #dist>
+    %7 = tt.broadcast %6 : tensor<1x{N}xi32, #dist> -> tensor<{M}x{N}xi32, #dist>
+    %8 = tt.broadcast %5 : tensor<{M}x1xi32, #dist> -> tensor<{M}x{N}xi32, #dist>
+    %9 = arith.addi %8, %7 : tensor<{M}x{N}xi32, #dist>
+    %10 = tt.addptr %2, %9 : tensor<{M}x{N}x!tt.ptr<{mlir_dtype}>, #dist>, tensor<{M}x{N}xi32, #dist>
+    %11 = tt.load %10 : tensor<{M}x{N}x!tt.ptr<{mlir_dtype}>, #dist>
+    %12 = ttg.local_alloc %11 : (tensor<{M}x{N}x{mlir_dtype}, #dist>) -> !ttg.memdesc<{M}x{N}x{mlir_dtype}, #shared, #smem>
+    %13 = ttg.local_load %12 : !ttg.memdesc<{M}x{N}x{mlir_dtype}, #shared, #smem> -> tensor<{M}x{N}x{mlir_dtype}, #dist>
+    %14 = tt.addptr %3, %9 : tensor<{M}x{N}x!tt.ptr<{mlir_dtype}>, #dist>, tensor<{M}x{N}xi32, #dist>
+    tt.store %14, %13 : tensor<{M}x{N}x!tt.ptr<{mlir_dtype}>, #dist>
+    tt.return
+  }}
+}}
+"""
+
+    x = to_triton(numpy_random((M, N), dtype_str=dtype), device=device)
+    z = torch.empty_like(x, device=device)
+
+    temp_file = tmp_path / "test_local_load_store_dot.ttgir"
+    temp_file.write_text(ir)
+    kernel = triton.compile(str(temp_file))
+
+    kernel[(1, 1, 1)](x, z)
+    assert torch.equal(z, x)
+
+
 mma_layouts = [
     MmaLayout((2, 0), [1, 4], [1, 1], [1, 1], [0, 1], [16, 8]),
     MmaLayout((3, 0), [4, 1], [1, 1], [1, 1], [0, 1], [16, 128, 16]),  # simple 4 warps case

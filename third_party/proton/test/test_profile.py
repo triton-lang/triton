@@ -210,7 +210,6 @@ def test_hook(tmp_path: pathlib.Path):
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
 def test_hook_gpu_kernel(tmp_path: pathlib.Path, context: str):
-    tmp_path = pathlib.Path("./")
 
     def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
         x = args["x"]
