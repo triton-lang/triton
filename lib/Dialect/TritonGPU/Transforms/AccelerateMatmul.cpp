@@ -591,8 +591,8 @@ Value addSmemStageToScaleLoad(Value scale, mlir::PatternRewriter &rewriter) {
 
     Since scales are stored in TMEM for MMAv5 scaled dot, loading of scales do
     not needs to be put into SMEM. But in practice, the software pipeliner puts
-    loading of scales into multi-buffered SMEM. At that point, local_alloc and
-    local_load created here are eliminated.
+    loading of scales into multi-buffered SMEM. At that point, the SMEM
+    allocation created here is eliminated.
    */
   OpBuilder::InsertionGuard g(rewriter);
   auto op = scale.getDefiningOp();
