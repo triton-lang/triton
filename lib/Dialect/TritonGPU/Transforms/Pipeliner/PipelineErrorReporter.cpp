@@ -56,8 +56,8 @@ PipelineErrorReporter::getBlockArgYieldValueFromForLoop(BlockArgument arg) {
   return forOp.getBody()->getTerminator()->getOperand(arg.getArgNumber() - 1);
 }
 
-
-DenseSet<Operation *> findUsersInScfIfHierarchy(BlockArgument arg, Operation *consumerOp) {
+DenseSet<Operation *> findUsersInScfIfHierarchy(BlockArgument arg,
+                                                Operation *consumerOp) {
 
   DenseSet<Operation *> usersInScfIfHierarchy;
 
@@ -73,10 +73,11 @@ DenseSet<Operation *> findUsersInScfIfHierarchy(BlockArgument arg, Operation *co
     return usersInScfIfHierarchy;
   }
 
-  // case 2: consumer is an IfOp, and the arg's user is the condition of an ifop.
-  // the user happens to be the consumer. This is easily covered in the loop of case 3.
-  // case 3: consumer is an ifop, and the user is a simple op.
-  // we iteratively find in the if hierarchy and check if any users' parent op matches the consumer.
+  // case 2: consumer is an IfOp, and the arg's user is the condition of an
+  // ifop. the user happens to be the consumer. This is easily covered in the
+  // loop of case 3. case 3: consumer is an ifop, and the user is a simple op.
+  // we iteratively find in the if hierarchy and check if any users' parent op
+  // matches the consumer.
   for (Operation *user : arg.getUsers()) {
     Operation *currentOp = user;
     // Traverse up the parent operations of `user` to find matches to consumer
@@ -100,7 +101,7 @@ void PipelineErrorReporter::findRootSchedulingErrorLoopCarryDep(
   LDBG("findRootSchedulingErrorLoopCarryDep: this operand is not ready at "
        "the consumer: "
        << operand << "\n");
-  
+
   if (auto arg = dyn_cast<BlockArgument>(operand)) {
 
     // This is a loop-carried dependency. Find which value yields the arg.
@@ -131,24 +132,51 @@ std::optional<unsigned int> PipelineErrorReporter::findStage(Operation *op) {
   if (it != stages.end()) {
     return it->second;
   }
-  return std::nullopt; 
+  return std::nullopt;
+}
+
+void printImplicitUse(Operation *op, InFlightDiagnostic &mainError) {
+      auto parentOpLoc = op->getParentOp()->getLoc();
+      if (isa<IfOp>(op->getParentOp())) {
+        mainError.attachNote(parentOpLoc)
+            << "Value is implicitly used here when the condition is false in "
+               "TTIR, because the variable is updated when the condition is "
+               "true.";
+        // TODO: we can actually find the statement that updates the variable
+        // when the condition is true.
+      } else {
+        mainError.attachNote(parentOpLoc) << "Value is implicitly used here. ";
+      }
+
+}
+
+// Comparator for sorting FileLineColLoc operations
+bool compareFileLineColLoc(Operation *a, Operation *b) {
+  auto locA = a->getLoc();
+  auto locB = b->getLoc();
+  if (!isa<FileLineColLoc>(locA)) return false;
+  if (!isa<FileLineColLoc>(locB)) return true;
+  auto fileLineLocA = dyn_cast<FileLineColLoc>(a->getLoc());
+  auto fileLineLocB = dyn_cast<FileLineColLoc>(b->getLoc());
+  if (!fileLineLocA || !fileLineLocB) return false; // Should not happen if used correctly
+  if (fileLineLocA.getLine() != fileLineLocB.getLine())
+    return fileLineLocA.getLine() < fileLineLocB.getLine();
+  return fileLineLocA.getColumn() < fileLineLocB.getColumn();
 }
 
 void PipelineErrorReporter::printSchedulingError(int64_t distance,
                                                  Operation *consumer,
                                                  Operation *producer,
                                                  Value operand) {
-  llvm::dbgs() << "printSchedulingError: distance: " << distance << "\n";
   LDBG("printSchedulingError: distance: " << distance << "\n");
-  std::cout << "printSchedulingError: distance: " << distance << "\n";
-  const char *errorMessage = "The software pipeliner failed due to a dependency conflict, resulting in suboptimal loop performance.";
+  const char *errorMessage =
+      "The software pipeliner failed due to a dependency conflict, resulting "
+      "in suboptimal loop performance.";
   const char *likelyBuggyMessage = "This is likely to be a bug. Please "
                                    "report it.";
   // We only find the root defining ops for loop-carried dependencies.
   // When distance is 0, we let the set of root defining ops to be empty.
   if (distance > 0) {
-    // TODO: I only find the root defining ops of the producer. We should also
-    // find the root user ops of the consumer.
     findRootSchedulingErrorLoopCarryDep(consumer, producer, operand);
   }
   if (rootDefiningOps.empty()) {
@@ -167,37 +195,39 @@ void PipelineErrorReporter::printSchedulingError(int64_t distance,
     consumer->emitError() << errorMessage << " " << likelyBuggyMessage;
     return;
   }
-  auto mainError = forOp->emitError() << errorMessage;
-  mainError.attachNote() << "The loop body is divided into " << numStages <<
-    " stages to optimize GPU I/O and computation resources. Different parts of the loop body are computed in different iterations. "
-    << "In iteration i, the update of the following variable is rescheduled to execute in iteration i + " << *producerStage - *consumerStage << ". However, it must be updated before its use in iteration i.";
+  InFlightDiagnostic mainError = forOp->emitError() << errorMessage;
+  mainError.attachNote()
+      << "The loop body is divided into " << numStages
+      << " stages to optimize GPU I/O and computation resources. Different "
+         "parts of the loop body are computed in different iterations. "
+      << "In iteration i, the update of the following variable is rescheduled "
+         "to execute in iteration i + "
+      << *producerStage - *consumerStage
+      << ". However, it must be updated before its use in iteration i.";
   auto firstRootDefiningOp = *rootDefiningOps.begin();
   auto firstRootDefiningOpName = firstRootDefiningOp->getName().getStringRef();
 
   for (auto op : rootDefiningOps) {
-    mainError.attachNote(op->getLoc()) << "`" << op->getName() << "` is updated here:";
+    mainError.attachNote(op->getLoc())
+        << "`" << op->getName() << "` is updated here:";
   }
-  // mainError.attachNote() << "However, 'tile_id' must be updated before its use in iteration i:
+
   auto firstRootUserOp = *rootUserOps.begin();
   auto firstRootUserOpName = firstRootUserOp->getName().getStringRef();
-  // mainError.attachNote() << "However, " << firstRootUserOpName << "must be updated before its use in iteration i:";
-  for (auto op : rootUserOps) {
-    // op->emitError() << "[root consumer]";
-    auto loc = op->getLoc();
-    // check if los is unknown
-    if (isa<UnknownLoc>(loc)) {
-      auto parentOpLoc = op->getParentOp()->getLoc();
-      if (isa<IfOp>(op->getParentOp())) {
-        mainError.attachNote(parentOpLoc) << "Value is implicitly used here when the condition is false in TTIR, because the variable is updated when the condition is true.";
-        // TODO: we can actually find the statement that updates the variable when the condition is true.
-      } else {
-        mainError.attachNote(parentOpLoc) << "Value is implicitly used here. ";
-      }
 
+  // Sort rootUserOps using the custom comparator
+  std::vector<Operation *> sortedRootUserOps(rootUserOps.begin(), rootUserOps.end());
+  std::sort(sortedRootUserOps.begin(), sortedRootUserOps.end(), compareFileLineColLoc);
+  // Print sorted operations
+  for (auto op : sortedRootUserOps) {
+    auto loc = op->getLoc();
+    if (isa<UnknownLoc>(loc)) {
+      printImplicitUse(op, mainError);
     } else {
-      mainError.attachNote(op->getLoc()) << "`" << op->getName() << "` is used here:";
+      mainError.attachNote(op->getLoc())
+          << "`" << op->getName() << "` is used here:";
     }
-    
   }
-  // TODO: we can also add more detailed debug information for more advanced users.
+  // TODO: we can also add more detailed debug information for more advanced
+  // users.
 }

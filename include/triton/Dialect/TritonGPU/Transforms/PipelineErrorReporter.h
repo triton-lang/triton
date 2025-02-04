@@ -42,7 +42,10 @@ protected:
 
 public:
   // explicit PipelineErrorReporter(ForOp forOp) : forOp(forOp) {}
-  explicit PipelineErrorReporter(ForOp forOp, unsigned numStages, const DenseMap<Operation *, unsigned int> &stages) : forOp(forOp), numStages(numStages), stages(stages) {}
+  explicit PipelineErrorReporter(
+      ForOp forOp, unsigned numStages,
+      const DenseMap<Operation *, unsigned int> &stages)
+      : forOp(forOp), numStages(numStages), stages(stages) {}
   PipelineErrorReporter(const PipelineErrorReporter &) = delete;
   PipelineErrorReporter &operator=(const PipelineErrorReporter &) = delete;
   PipelineErrorReporter(PipelineErrorReporter &&) = delete;

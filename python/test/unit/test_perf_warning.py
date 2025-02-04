@@ -268,7 +268,7 @@ def test_remark_swp_op_before_operands_persistent_matmul(capfd, fresh_triton_cac
                 accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
                 tile_id += NUM_SMS  # this line is newly added
 
-    with enable_remark_context():
+    with enable_diagnostics_context(''):
         dtype = torch.float16
 
         M = 8192
@@ -315,8 +315,9 @@ def test_remark_swp_op_before_operands_persistent_matmul(capfd, fresh_triton_cac
     lines = err.splitlines()
     # Define the expected strings in order
     expected_strings = [
-        "error: operation scheduled before its operands.", "if ki == 0:",
-        "error: This line likely causes scheduling conflict.  Consider moving it", "tile_id += NUM_SMS"
+        "error: The software pipeliner failed due to a dependency conflict", "for _ in range",
+        "note: The loop body is divided into 3 stages to optimize GPU I/O and computation resources.", "tile_id += NUM_SMS",
+        "group_id = tile_id", "pid_m = first_pid_m + (tile_id % group_size_m)",          "pid_n = (tile_id % num_pid_in_group)"
     ]
     # Initialize an index to track the position in expected_strings
     index = 0
@@ -329,6 +330,9 @@ def test_remark_swp_op_before_operands_persistent_matmul(capfd, fresh_triton_cac
             # If all expected strings have been found, break out of the loop
             if index == len(expected_strings):
                 break
+        else:
+            print("line: ", line)
+            print("expected strings: ", expected_strings[index])
     # Check if all expected strings were found
     if index != len(expected_strings):
         missing_string = expected_strings[index]
