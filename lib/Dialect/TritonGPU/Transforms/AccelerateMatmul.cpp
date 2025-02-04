@@ -984,6 +984,14 @@ private:
     if (!scale)
       return v;
 
+    // For some weird reason, we take the scale with shape as if it were coming
+    // from the lhs even when it's the rhs. In a normal world, we should accept
+    // this parametre transposed, as we do with the mxfp.
+    if (opIdx == 1) {
+      auto order = getTransposeOrder(rank);
+      scale = rewriter.create<TransOp>(loc, scale, order);
+    }
+
     // 1) Cast scale to compute type (fp16/bf16)
     auto scale16 = scaleTo16(rewriter, scale, computeType);
 
