@@ -169,7 +169,6 @@ sharedToLinearLayoutNoLeadingOffset(ArrayRef<int64_t> shape,
 
 LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
                                                NVMMASharedEncodingAttr shared,
-                                               int32_t elemBitWidth,
                                                bool disableSwizzle) {
   MLIRContext *ctx = shared.getContext();
   int rank = shape.size();
@@ -179,7 +178,7 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
         LinearLayout::identity1D(shape[0], S("offset"), S("dim0")),
         shared.getCTALayout(), shape);
   }
-
+  int elemBitWidth = shared.getElementBitWidth();
   int tileWidthBytes = shared.getSwizzlingByteWidth();
   int vec = 128 / elemBitWidth;
   int perPhase = 0;
@@ -865,11 +864,9 @@ LinearLayout SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   return ret;
 }
 
-LinearLayout
-TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
-                                 std::optional<int32_t> elemBitWidth) {
-  CacheKey key{std::vector<int64_t>(shape.begin(), shape.end()), layout,
-               elemBitWidth};
+LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
+                                              Attribute layout) {
+  CacheKey key{std::vector<int64_t>(shape.begin(), shape.end()), layout};
   if (auto result = llCache.get(key)) {
     return *result;
   }
@@ -883,8 +880,7 @@ TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
     if (auto shared = dyn_cast<SwizzledSharedEncodingAttr>(layout)) {
       result = sharedToLinearLayoutNoLeadingOffset(shape, shared);
     } else if (auto shared = dyn_cast<NVMMASharedEncodingAttr>(layout)) {
-      assert(elemBitWidth.has_value());
-      result = sharedToLinearLayoutLeadingOffset(shape, shared, *elemBitWidth);
+      result = sharedToLinearLayoutLeadingOffset(shape, shared);
     } else {
       assert(0 && "unknown layout");
     }
@@ -894,12 +890,10 @@ TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
   return result;
 }
 
-LinearLayout
-toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
-               std::optional<int32_t> elemBitWidth /*= std::nullopt*/) {
+LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout) {
   auto *ctx = layout.getContext();
-  return ctx->getLoadedDialect<TritonGPUDialect>()->toLinearLayout(
-      shape, layout, elemBitWidth);
+  return ctx->getLoadedDialect<TritonGPUDialect>()->toLinearLayout(shape,
+                                                                   layout);
 }
 
 LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {

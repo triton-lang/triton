@@ -225,7 +225,7 @@ def TTG_MemDescSubviewOp : TTG_Op<"memdesc_subview", [Pure]> {
 
 def TTG_MemDescTransOp : TTG_Op<"memdesc_trans", [Pure,
                                                   TransposeOpInterface,
-                                                  DeclareOpInterfaceMethods<InferTypeOpInterface>,
+                                                  InferTypeOpWithLayoutEquivalence,
                                                   SameOperandsAndResultElementType]> {
   let summary = "transpose the descriptor";
 

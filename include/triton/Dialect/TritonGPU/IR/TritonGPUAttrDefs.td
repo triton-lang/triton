@@ -423,6 +423,7 @@ def NVMMASharedEncodingAttr :
     ins
     "unsigned":$swizzlingByteWidth,
     "bool":$transposed,
+    "unsigned":$elementBitWidth,
     "CTALayoutAttr":$CTALayout
   );
 
@@ -433,7 +434,7 @@ def NVMMASharedEncodingAttr :
                      "Type":$eltTy), [{
         auto shapePerCTA = getShapePerCTA(CTALayout.getCTASplitNum(), shape);
         int32_t swizzlingByteWidth = 0;
-        int32_t eleBitWidth = eltTy.getIntOrFloatBitWidth();
+        unsigned eleBitWidth = eltTy.getIntOrFloatBitWidth();
 
         // get proper shared memory swizzling mode from the contiguous dimension
         // size of the origin blocked layout.
@@ -448,7 +449,7 @@ def NVMMASharedEncodingAttr :
           llvm_unreachable("unsupported shared memory layout for MMAv3");
         }
         bool transposed = order[0] == 0;
-        return $_get(context, swizzlingByteWidth, transposed, CTALayout);
+        return $_get(context, swizzlingByteWidth, transposed, eleBitWidth, CTALayout);
     }]>
   ];
 
