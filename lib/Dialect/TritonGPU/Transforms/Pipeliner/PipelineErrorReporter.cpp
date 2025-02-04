@@ -136,29 +136,31 @@ std::optional<unsigned int> PipelineErrorReporter::findStage(Operation *op) {
 }
 
 void printImplicitUse(Operation *op, InFlightDiagnostic &mainError) {
-      auto parentOpLoc = op->getParentOp()->getLoc();
-      if (isa<IfOp>(op->getParentOp())) {
-        mainError.attachNote(parentOpLoc)
-            << "Value is implicitly used here when the condition is false in "
-               "TTIR, because the variable is updated when the condition is "
-               "true.";
-        // TODO: we can actually find the statement that updates the variable
-        // when the condition is true.
-      } else {
-        mainError.attachNote(parentOpLoc) << "Value is implicitly used here. ";
-      }
-
+  auto parentOpLoc = op->getParentOp()->getLoc();
+  if (isa<IfOp>(op->getParentOp())) {
+    mainError.attachNote(parentOpLoc)
+        << "Value is implicitly used here when the condition is false in "
+           "TTIR, because the variable is updated when the condition is "
+           "true.";
+    // TODO: we can actually find the statement that updates the variable
+    // when the condition is true.
+  } else {
+    mainError.attachNote(parentOpLoc) << "Value is implicitly used here. ";
+  }
 }
 
 // Comparator for sorting FileLineColLoc operations
 bool compareFileLineColLoc(Operation *a, Operation *b) {
   auto locA = a->getLoc();
   auto locB = b->getLoc();
-  if (!isa<FileLineColLoc>(locA)) return false;
-  if (!isa<FileLineColLoc>(locB)) return true;
+  if (!isa<FileLineColLoc>(locA))
+    return false;
+  if (!isa<FileLineColLoc>(locB))
+    return true;
   auto fileLineLocA = dyn_cast<FileLineColLoc>(a->getLoc());
   auto fileLineLocB = dyn_cast<FileLineColLoc>(b->getLoc());
-  if (!fileLineLocA || !fileLineLocB) return false; // Should not happen if used correctly
+  if (!fileLineLocA || !fileLineLocB)
+    return false; // Should not happen if used correctly
   if (fileLineLocA.getLine() != fileLineLocB.getLine())
     return fileLineLocA.getLine() < fileLineLocB.getLine();
   return fileLineLocA.getColumn() < fileLineLocB.getColumn();
@@ -216,8 +218,10 @@ void PipelineErrorReporter::printSchedulingError(int64_t distance,
   auto firstRootUserOpName = firstRootUserOp->getName().getStringRef();
 
   // Sort rootUserOps using the custom comparator
-  std::vector<Operation *> sortedRootUserOps(rootUserOps.begin(), rootUserOps.end());
-  std::sort(sortedRootUserOps.begin(), sortedRootUserOps.end(), compareFileLineColLoc);
+  std::vector<Operation *> sortedRootUserOps(rootUserOps.begin(),
+                                             rootUserOps.end());
+  std::sort(sortedRootUserOps.begin(), sortedRootUserOps.end(),
+            compareFileLineColLoc);
   // Print sorted operations
   for (auto op : sortedRootUserOps) {
     auto loc = op->getLoc();

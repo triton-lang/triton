@@ -316,8 +316,9 @@ def test_remark_swp_op_before_operands_persistent_matmul(capfd, fresh_triton_cac
     # Define the expected strings in order
     expected_strings = [
         "error: The software pipeliner failed due to a dependency conflict", "for _ in range",
-        "note: The loop body is divided into 3 stages to optimize GPU I/O and computation resources.", "tile_id += NUM_SMS",
-        "group_id = tile_id", "pid_m = first_pid_m + (tile_id % group_size_m)",          "pid_n = (tile_id % num_pid_in_group)"
+        "note: The loop body is divided into 3 stages to optimize GPU I/O and computation resources.",
+        "tile_id += NUM_SMS", "group_id = tile_id", "pid_m = first_pid_m + (tile_id % group_size_m)",
+        "pid_n = (tile_id % num_pid_in_group)"
     ]
     # Initialize an index to track the position in expected_strings
     index = 0
