@@ -132,6 +132,14 @@ Value createElectPredicateWarp0(Location loc, RewriterBase &rewriter) {
   return b.and_(warp0, createElectPredicate(loc, rewriter));
 }
 
+Value getTensorMemoryBase(Location loc, Value llvmStruct,
+                          RewriterBase &rewriter) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  ArrayRef<Type> types =
+      cast<LLVM::LLVMStructType>(llvmStruct.getType()).getBody();
+  return b.extract_val(types[0], llvmStruct, 0);
+}
+
 } // namespace NVIDIA
 } // namespace LLVM
 } // namespace mlir

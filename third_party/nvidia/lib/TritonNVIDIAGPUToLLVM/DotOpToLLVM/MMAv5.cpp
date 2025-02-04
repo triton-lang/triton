@@ -11,9 +11,7 @@ using namespace mlir::triton::gpu;
 using namespace mlir::triton::NVIDIA;
 
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-using ::mlir::triton::gpu::getShapePerCTA;
-using ::mlir::triton::gpu::getShapePerCTATile;
-using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
+using ::mlir::LLVM::NVIDIA::getTensorMemoryBase;
 using ::mlir::triton::gpu::NVMMASharedEncodingAttr;
 
 mlir::triton::NVIDIA::DotOpMmaV5TmemLoader::DotOpMmaV5TmemLoader(
@@ -360,11 +358,7 @@ void convertDot(const LLVMTypeConverter *typeConverter,
           loc, loadedB, typeConverter->convertType(bTensorTy.getElementType()),
           rewriter)
           .getBase();
-  Value baseD =
-      getSharedMemoryObjectFromStruct(
-          loc, loadedD, typeConverter->convertType(dTensorTy.getElementType()),
-          rewriter)
-          .getBase();
+  Value baseD = getTensorMemoryBase(loc, loadedD, rewriter);
 
   SmallVector<int64_t> dstPerCTA = triton::gpu::getShapePerCTA(dTensorTy);
   unsigned int M = dstPerCTA[0];
@@ -505,18 +499,10 @@ struct TCGen5MMAScaledOpConversion
             loc, adaptor.getB(),
             typeConverter->convertType(bTensorTy.getElementType()), rewriter)
             .getBase();
-    Value baseD =
-        getSharedMemoryObjectFromStruct(
-            loc, adaptor.getD(),
-            typeConverter->convertType(dTensorTy.getElementType()), rewriter)
-            .getBase();
+    Value baseD = getTensorMemoryBase(loc, adaptor.getD(), rewriter);
     baseD = tb.ptrtoint(i32_ty, baseD);
-    Value baseScaleA = getSharedMemoryObjectFromStruct(loc, adaptor.getAScale(),
-                                                       i8_ty, rewriter)
-                           .getBase();
-    Value baseScaleB = getSharedMemoryObjectFromStruct(loc, adaptor.getBScale(),
-                                                       i8_ty, rewriter)
-                           .getBase();
+    Value baseScaleA = getTensorMemoryBase(loc, adaptor.getAScale(), rewriter);
+    Value baseScaleB = getTensorMemoryBase(loc, adaptor.getBScale(), rewriter);
     baseScaleA = tb.ptrtoint(i32_ty, baseScaleA);
     baseScaleB = tb.ptrtoint(i32_ty, baseScaleB);
 

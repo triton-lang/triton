@@ -222,7 +222,7 @@ static void reorderScales(SmallVector<Value> &srcValues, int64_t k) {
 
 static void lowerStoreToTensorMemory(Location loc, ModuleOp mod, Value src,
                                      Value dest, Value llSrc, Value pred,
-                                     SharedMemoryObject smemObj,
+                                     Value tmemBase,
                                      ConversionPatternRewriter &rewriter) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value> srcValues = unpackLLElements(loc, llSrc, rewriter);
@@ -236,7 +236,7 @@ static void lowerStoreToTensorMemory(Location loc, ModuleOp mod, Value src,
   }
   int regIdx = 0;
   calculateAddressAndEmitTmemMessage(
-      loc, mod, smemObj.getBase(), cast<RankedTensorType>(src.getType()),
+      loc, mod, tmemBase, cast<RankedTensorType>(src.getType()),
       cast<MemDescType>(dest.getType()), rewriter,
       [&](Value startAddress, int secondHalfColOffset, bool unpackedb16,
           int regsPerMessage, bool useStridedMessage) {
@@ -288,7 +288,7 @@ struct TensorMemoryAllocOpConversion
 
     if (op.getSrc()) {
       lowerStoreToTensorMemory(loc, mod, op.getSrc(), op.getResult(),
-                               adaptor.getSrc(), b.i1_val(true), smemObj,
+                               adaptor.getSrc(), b.i1_val(true), smemObj.getBase(),
                                rewriter);
     }
 
@@ -381,13 +381,12 @@ struct TensorMemoryLoadOpConversion
     auto mod = op->getParentOfType<ModuleOp>();
     auto llvmElemTy =
         getTypeConverter()->convertType(op.getSrc().getType().getElementType());
-    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
-        op.getLoc(), adaptor.getSrc(), llvmElemTy, rewriter);
+    auto tmemBase = LLVM::NVIDIA::getTensorMemoryBase(
+        op.getLoc(), adaptor.getSrc(), rewriter);
 
     SmallVector<Value> resultVals;
     calculateAddressAndEmitTmemMessage(
-        loc, mod, smemObj.getBase(), op.getType(), op.getSrc().getType(),
-        rewriter,
+        loc, mod, tmemBase, op.getType(), op.getSrc().getType(), rewriter,
         [&](Value startAddress, int secondHalfColOffset, bool unpackedb16,
             int regsPerMessage, bool useStridedMessage) {
           Value packedValues = createTensorMemoryLoad(
@@ -420,11 +419,11 @@ struct TensorMemoryStoreOpConversion
     auto mod = op->getParentOfType<ModuleOp>();
     auto llvmElemTy =
         getTypeConverter()->convertType(op.getDst().getType().getElementType());
-    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
-        op.getLoc(), adaptor.getDst(), llvmElemTy, rewriter);
+    auto tmemBase = LLVM::NVIDIA::getTensorMemoryBase(
+        op.getLoc(), adaptor.getDst(), rewriter);
     Value pred = adaptor.getPred();
     lowerStoreToTensorMemory(loc, mod, op.getSrc(), op.getDst(),
-                             adaptor.getSrc(), pred, smemObj, rewriter);
+                             adaptor.getSrc(), pred, tmemBase, rewriter);
 
     rewriter.eraseOp(op);
     return success();
@@ -497,10 +496,7 @@ struct TensorMemoryCopyOpConversion
             .getBase();
 
     Value baseDst =
-        LLVM::getSharedMemoryObjectFromStruct(
-            loc, adaptor.getDst(),
-            typeConverter->convertType(srcTy.getElementType()), rewriter)
-            .getBase();
+        LLVM::NVIDIA::getTensorMemoryBase(loc, adaptor.getDst(), rewriter);
 
     // The following codegen assumes that we use tcgen05.cp only with
     // the warpx4.32x128b mode, to load blocked scales from MXFP.
