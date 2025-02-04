@@ -496,6 +496,9 @@ def matmul_kernel_descriptor_persistent(a_ptr, b_ptr, c_ptr,  #
         block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_N if not EPILOGUE_SUBTILE else BLOCK_SIZE_N // 2],
     )
 
+    # tile_id_c is used in the epilogue to break the dependency between
+    # the prologue and the epilogue
+    tile_id_c = start_pid - NUM_SMS
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
 
     for tile_id in range(start_pid, num_tiles, NUM_SMS):
