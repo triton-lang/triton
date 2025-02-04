@@ -234,7 +234,7 @@ private:
         // Bytes could be a different value once we support padding or other
         // allocation policies.
         auto allocType = alloc.getType();
-        auto shapePerCTA = gpu::getShapePerCTA(allocType);
+        auto shapePerCTA = gpu::getAllocationShapePerCTA(allocType);
         auto bytes = product<int64_t>(shapePerCTA) *
                      allocType.getElementTypeBitWidth() / 8;
 

@@ -366,29 +366,15 @@ SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
   return shapePerCTA;
 }
 
-SmallVector<int64_t> getShapePerCTA(Attribute layout,
-                                    ArrayRef<int64_t> shapeOrig) {
-  SmallVector<int64_t> shape(shapeOrig);
-  if (auto sharedMMALayout = mlir::dyn_cast<NVMMASharedEncodingAttr>(layout)) {
-    if (sharedMMALayout.getFp4Padded()) {
-      auto packedAxis = getOrder(sharedMMALayout)[0];
-      if (shape.size() == 3) {
-        // Take into account multi buffering
-        shape[1 + packedAxis] *= 2;
-      } else {
-        shape[packedAxis] *= 2;
-      }
-    }
-  }
-  if (auto sharedLayout = mlir::dyn_cast<SharedEncodingTrait>(layout)) {
+SmallVector<int64_t> getShapePerCTA(Attribute layout, ArrayRef<int64_t> shape) {
+  if (mlir::isa<SharedEncodingTrait>(layout)) {
     // Special logic for pipeline pass, where shape is 3D and CTALayout is 2D.
     // The first dim of shape is numStages. This is a work around, otherwise
     // too many places would have to be modified in pipeline pass. Maybe we
     // need to refactor this logic in the future.
     auto CTASplitNum = cast<LayoutEncodingTrait>(layout).getCTASplitNum();
     if (shape.size() == CTASplitNum.size() + 1) {
-      auto res =
-          getShapePerCTA(CTASplitNum, ArrayRef<int64_t>(shape).drop_front());
+      auto res = getShapePerCTA(CTASplitNum, shape.drop_front());
       res.insert(res.begin(), shape.front());
       return res;
     }
@@ -402,9 +388,32 @@ SmallVector<int64_t> getShapePerCTA(Attribute layout,
   return getShapePerCTA(splitNum, shape);
 }
 
+SmallVector<int64_t> getAllocationShapePerCTA(Attribute layout,
+                                              ArrayRef<int64_t> shapeLogical) {
+  SmallVector<int64_t> shape(shapeLogical);
+  if (auto sharedMMALayout = mlir::dyn_cast<NVMMASharedEncodingAttr>(layout)) {
+    if (sharedMMALayout.getFp4Padded()) {
+      auto packedAxis = getOrder(sharedMMALayout)[0];
+      if (shape.size() == 3) {
+        // Take into account multi buffering
+        shape[1 + packedAxis] *= 2;
+      } else {
+        shape[packedAxis] *= 2;
+      }
+    }
+  }
+  return getShapePerCTA(layout, shape);
+}
+
 SmallVector<int64_t> getShapePerCTA(Type type) {
   auto tensorType = cast<TensorOrMemDesc>(type);
   return getShapePerCTA(tensorType.getEncoding(), tensorType.getShape());
+}
+
+SmallVector<int64_t> getAllocationShapePerCTA(Type type) {
+  auto tensorType = cast<TensorOrMemDesc>(type);
+  return getAllocationShapePerCTA(tensorType.getEncoding(),
+                                  tensorType.getShape());
 }
 
 unsigned getNumWarpsPerCTA(Attribute layout) {
