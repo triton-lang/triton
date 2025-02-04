@@ -447,6 +447,8 @@ def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_
     if NUM_STAGES == 1 and USE_2D_SCALE_LOAD:
         # It seems tcgen05.cp gets corrupted unless cpasync or TMA is used to load scales.
         # Disabling ptxas optimization fixes the issue for now.
+        # tcgen05.cp exhibits some racy behavior unless cpasync or TMA is used to load scales.
+        # Fixing this issue internally, but disabling ptxas optimization as a workaround.
         _knob_disable_ptxas_opt(monkeypatch)
 
     if BLOCK_N == 256 and BLOCK_K == 256:
