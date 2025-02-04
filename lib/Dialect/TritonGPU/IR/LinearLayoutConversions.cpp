@@ -202,8 +202,16 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
 
   int tileRows = 8;
   int tileCols = 8 * tileWidthBytes / elemBitWidth;
+  bool isFp4Padded = false;
+  if (auto sharedMMALayout =
+          dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(shared)) {
+    if (sharedMMALayout.getFp4Padded()) {
+      isFp4Padded = true;
+    }
+  }
+  int packingFactor = isFp4Padded ? 2 : 1;
 
-  if (shape[colDim] < tileCols || shape[rowDim] < tileRows) {
+  if (shape[colDim] * packingFactor < tileCols || shape[rowDim] < tileRows) {
     llvm::errs() << "Illegal shared layout; expected shape to be at least ["
                  << tileRows << ", " << tileCols << "], shape: ["
                  << shape[rowDim] << ", " << shape[colDim] << "]\n";
@@ -215,7 +223,18 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
 
   std::vector<std::vector<int>> bases2D;
   for (int logCol = 0; logCol < llvm::Log2_32(tileCols); logCol++) {
-    bases2D.push_back({0, 1 << logCol});
+    if (isFp4Padded) {
+      int colPadded = 1 << logCol;
+      // Each group of 16 offsets consists of 8 "real" and 8 "padded" offsets.
+      // We represent the padded layout by mapping 8 padded offsets to the same
+      // coordinates as the real ones. When computing the inverse of this LL,
+      // the offsets correspoding to the real ones are picked in the image by
+      // invertAndCompose.
+      int colPacked = colPadded / 16 * 8 + colPadded % 8;
+      bases2D.push_back({0, colPacked});
+    } else {
+      bases2D.push_back({0, 1 << logCol});
+    }
   }
   for (int logRow = 0; logRow < llvm::Log2_32(tileRows); logRow++) {
     int row = 1 << logRow;
@@ -223,7 +242,13 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
       bases2D.push_back({row, 0});
       continue;
     }
-    bases2D.push_back({row, vec * ((row / perPhase) % maxPhase)});
+    if (isFp4Padded) {
+      int colPadded = vec * ((row / perPhase) % maxPhase);
+      int colPacked = colPadded / 16 * 8 + colPadded % 8;
+      bases2D.push_back({row, colPacked});
+    } else {
+      bases2D.push_back({row, vec * ((row / perPhase) % maxPhase)});
+    }
   }
   LinearLayout tileLayout =
       LinearLayout({{S("offset"), bases2D}}, {rowDimName, colDimName});

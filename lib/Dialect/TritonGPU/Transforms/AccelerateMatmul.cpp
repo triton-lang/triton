@@ -141,8 +141,10 @@ warpsPerTileV3(DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps,
 
 // Returns a shared memory allocation that can be used by a dotMMA op for the
 // given value.
-static Value getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter,
-                                       int opIdx, bool allowTranspose) {
+static Value
+getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter, int opIdx,
+                          bool allowTranspose, bool isMMAv5Fp4Padded = false,
+                          Operation *op = nullptr /*only for diagnostic*/) {
   OpBuilder::InsertionGuard g(rewriter);
   Value arg = v;
   if (auto cvtOp = v.getDefiningOp<ConvertLayoutOp>())
@@ -161,12 +163,21 @@ static Value getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter,
     }
   }
 
+  if (newOrder != getOrder(argType.getEncoding()) && op) {
+    op->emitWarning("Warning: Forcing a different order [")
+        << newOrder[0] << ", " << newOrder[1]
+        << "] on SMEM than the register order for the opreand " << opIdx
+        << ". Registers will be transposed before SMEM store and the pipelined "
+           "load for this operand will be disabled, so poor performance is "
+           "expected.";
+  }
+
   Attribute SharedMemorySpace =
       SharedMemorySpaceAttr::get(argType.getContext());
   auto CTALayout = getCTALayout(argType.getEncoding());
   auto newLayout = NVMMASharedEncodingAttr::get(
       argType.getContext(), argType.getShape(), newOrder, CTALayout,
-      argType.getElementType());
+      argType.getElementType(), isMMAv5Fp4Padded);
   auto newType = MemDescType::get(argType.getShape(), argType.getElementType(),
                                   newLayout, SharedMemorySpace);
   rewriter.setInsertionPointAfterValue(arg);
@@ -652,11 +663,6 @@ public:
         mlir::isa<NvidiaMmaEncodingAttr>(oldRetType.getEncoding()))
       return failure();
 
-    if (dotOp.getLhsType() != dotOp.getRhsType()) {
-      // Mixed precision is not supported yet.
-      return failure();
-    }
-
     if (dotOp.getLhsScale() == nullptr || dotOp.getRhsScale() == nullptr) {
       return failure();
     }
@@ -677,8 +683,25 @@ public:
     auto oldAType = dotOp.getLhs().getType();
     auto oldBType = dotOp.getRhs().getType();
 
-    a = getSharedMemoryMMAOperand(a, rewriter, 0, /*allowTranspose=*/true);
-    b = getSharedMemoryMMAOperand(b, rewriter, 1, /*allowTranspose=*/true);
+    bool IsAMixedPrecFp4 = false;
+    bool IsBMixedPrecFp4 = false;
+
+    if (dotOp.getLhsType() != dotOp.getRhsType()) {
+      if (dotOp.getLhsType() == ScaleDotElemType::E2M1)
+        IsAMixedPrecFp4 = true;
+      else if (dotOp.getRhsType() == ScaleDotElemType::E2M1)
+        IsBMixedPrecFp4 = true;
+    }
+
+    // For mixed-precision fp4 operands, set allowTranspose = false, to force
+    // the packed axis, K, to be contiguous in SMEM
+    a = getSharedMemoryMMAOperand(a, rewriter, 0,
+                                  /*allowTranspose=*/!IsAMixedPrecFp4,
+                                  IsAMixedPrecFp4, dotOp);
+    b = getSharedMemoryMMAOperand(b, rewriter, 1,
+                                  /*allowTranspose=*/!IsBMixedPrecFp4,
+                                  IsBMixedPrecFp4, dotOp);
+
     MLIRContext *context = dotOp->getContext();
     unsigned m = 128;
     unsigned n = retShapePerCTA[1] >= 256 ? 256 : retShapePerCTA[1];

@@ -1,4 +1,5 @@
 #include "triton/Tools/LinearLayout.h"
+#include "triton/Tools/LayoutUtils.h"
 
 #include "mlir/Support/LLVM.h"
 #include "llvm/Support/Signals.h"
@@ -753,6 +754,109 @@ TEST_F(LinearLayoutTest, QuotientIdentityMultipleDimensions) {
   ASSERT_TRUE(quotientLayout.has_value());
   ASSERT_TRUE(quotientLayout->quotient({S("dim2")}).has_value());
 }
+
+LinearLayout getPackedCoordtoPaddedOffset(int M, int KPacked8b, StringAttr row,
+                                          StringAttr col, StringAttr offset) {
+  std::vector<std::vector<int>> basesRows, basesCols;
+  for (int i = 0; i < llvm::Log2_32(M); ++i) {
+    int row = 1 << i;
+    int col = 0;
+    int linearCoord = row * KPacked8b + col;
+    int offset = (linearCoord / 8) * 16 + (linearCoord % 8);
+    basesRows.push_back({offset});
+  }
+
+  for (int j = 0; j < llvm::Log2_32(KPacked8b); ++j) {
+    int row = 0;
+    int col = 1 << j;
+    int linearCoord = row * KPacked8b + col;
+    int offset = (linearCoord / 8) * 16 + (linearCoord % 8);
+    basesCols.push_back({offset});
+  }
+
+  return LinearLayout({{row, basesRows}, {col, basesCols}},
+                      {{offset, M * KPacked8b * 2}}, /*surjective*/ false);
+}
+
+TEST_F(LinearLayoutTest, BlackwellMixedPrecisionDotScaledSMEM) {
+  std::vector<std::vector<int>> basesRows, basesCols, basesOffset;
+  int numFp4Elems = 128;
+  int M = 16;
+  int KPacked8b = numFp4Elems / M / 2;
+  int KPadded8b = numFp4Elems / M;
+
+  for (int i = 0; i < llvm::Log2_32(M * KPadded8b); ++i) {
+    int offset = 1 << i;
+    int linearCoordPacked = offset / 16 * 8 + offset % 8;
+    int row = linearCoordPacked / KPacked8b;
+    int col = linearCoordPacked % KPacked8b;
+    basesOffset.push_back({row, col});
+  }
+
+  LinearLayout layout({{S("offset"), basesOffset}}, {S("row"), S("col")});
+  LinearLayout layoutInverseComputed = layout.pseudoinvert();
+  LinearLayout layoutInverseManual = getPackedCoordtoPaddedOffset(
+      M, KPacked8b, S("row"), S("col"), S("offset"));
+
+  for (int i = 0; i < M; ++i) {
+    for (int j = 0; j < KPacked8b; ++j) {
+      auto off1 = layoutInverseManual.apply({{S("row"), i}, {S("col"), j}});
+      auto off2 = layoutInverseComputed.apply({{S("row"), i}, {S("col"), j}});
+      EXPECT_EQ(off1[0].second, off2[0].second);
+    }
+  }
+}
+
+TEST_F(LinearLayoutTest, BlackwellMixedPrecisionDotScaledSMEMSwizzled) {
+  int M = 16;
+  int KPadded8b = 128;
+  int numFp4Elems = M * KPadded8b;
+  int KPacked8b = KPadded8b / 2;
+  int elemBitWidth = 8;
+  int tileWidthBytes = 128;
+  int tileRows = 8;
+  int tileCols = 8 * tileWidthBytes / elemBitWidth;
+  int vec = 16;
+
+  std::vector<std::vector<int>> bases2D;
+  for (int logCol = 0; logCol < llvm::Log2_32(tileCols); logCol++) {
+    int colPadded = 1 << logCol;
+    int colPacked = colPadded / 16 * 8 + colPadded % 8;
+    bases2D.push_back({0, colPacked});
+  }
+  for (int logRow = 0; logRow < llvm::Log2_32(tileRows); logRow++) {
+    int row = 1 << logRow;
+    int perPhase = 1;
+    int maxPhase = 8;
+    int colPadded = vec * ((row / perPhase) % maxPhase);
+    int colPacked = colPadded / 16 * 8 + colPadded % 8;
+    bases2D.push_back({row, colPacked});
+  }
+
+  LinearLayout layoutSwizzled({{S("offset"), bases2D}}, {S("row"), S("col")});
+  layoutSwizzled = ensureLayoutNotSmallerThan(
+      layoutSwizzled, {{S("row"), M}, {S("col"), KPacked8b}});
+
+  auto layoutInverseSwizzled = layoutSwizzled.pseudoinvert();
+
+  LinearLayout layoutInverseNoSwizzle = getPackedCoordtoPaddedOffset(
+      M, KPacked8b, S("row"), S("col"), S("offset"));
+
+  for (int i = 0; i < M; ++i) {
+    for (int j = 0; j < KPacked8b; ++j) {
+      auto nonSwizzleOffset =
+          layoutInverseNoSwizzle.apply({{S("row"), i}, {S("col"), j}})[0]
+              .second;
+      auto swizzledOffset =
+          layoutInverseSwizzled.apply({{S("row"), i}, {S("col"), j}})[0].second;
+      int row = nonSwizzleOffset / KPadded8b;
+      int col = nonSwizzleOffset % KPadded8b;
+      int colSwizzled = ((col / 16) ^ (row % 8)) * 16 + col % 16;
+      EXPECT_EQ(row * KPadded8b + colSwizzled, swizzledOffset);
+    }
+  }
+}
+
 } // anonymous namespace
 } // namespace mlir::triton
 
