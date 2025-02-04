@@ -210,7 +210,7 @@ static DotOp transposeDotOp(PatternRewriter &rewriter, DotOp dotOp) {
   a = rewriter.create<TransOp>(a.getLoc(), a, transOrder);
   b = rewriter.create<TransOp>(b.getLoc(), b, transOrder);
   c = rewriter.create<TransOp>(c.getLoc(), c, transOrder);
-  return rewriter.create<DotOp>(dotOp.getLoc(), c.getType(), a, b, c,
+  return rewriter.create<DotOp>(dotOp.getLoc(), c.getType(), b, a, c,
                                 dotOp.getInputPrecision(),
                                 dotOp.getMaxNumImpreciseAcc());
 }
@@ -305,6 +305,7 @@ public:
     bool aFromLoad = comesFromLoadOrBlockArg(dotOp.getA());
     bool bFromLoad = comesFromLoadOrBlockArg(dotOp.getB());
     bool transpose = false;
+    auto origDotOp = dotOp;
     if (aFromLoad && !bFromLoad) {
       // If the lhs is not a load and the rhs is, we transpose the inputs
       // and the result provided this allows us to use mmav3
@@ -390,7 +391,7 @@ public:
                                         transOrder);
     }
     // convert dot instruction
-    rewriter.replaceOpWithNewOp<ConvertLayoutOp>(dotOp, oldRetType,
+    rewriter.replaceOpWithNewOp<ConvertLayoutOp>(origDotOp, oldRetType,
                                                  newDot->getResult(0));
     return success();
   }
