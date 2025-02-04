@@ -290,9 +290,7 @@ bool DotOp::verifyDims() {
   auto aShape = this->getA().getType().getShape();
   auto bShape = this->getB().getType().getShape();
 
-  if (aShape[aShape.size() - 1] != bShape[aShape.size() - 2])
-    return false;
-  return true;
+  return aShape[aShape.size() - 1] == bShape[aShape.size() - 2];
 }
 
 //-- DotScaledOp --
@@ -307,9 +305,7 @@ bool DotScaledOp::verifyDims() {
   if (this->getRhsType() == ScaleDotElemType::E2M1)
     bKdim *= 2;
 
-  if (aKdim != bKdim)
-    return false;
-  return true;
+  return aKdim == bKdim;
 }
 
 //-- MakeRangeOp --

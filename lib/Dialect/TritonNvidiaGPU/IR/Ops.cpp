@@ -89,9 +89,7 @@ bool WarpGroupDotOp::verifyDims() {
   auto aShape = this->getA().getType().getShape();
   auto bShape = this->getB().getType().getShape();
 
-  if (aShape[aShape.size() - 1] != bShape[aShape.size() - 2])
-    return false;
-  return true;
+  return aShape[aShape.size() - 1] == bShape[aShape.size() - 2];
 }
 
 // -- WarpGroupDotWaitOp --
@@ -272,9 +270,7 @@ bool TCGen5MMAOp::verifyDims() {
   auto aShape = this->getA().getType().getShape();
   auto bShape = this->getB().getType().getShape();
 
-  if (aShape[aShape.size() - 1] != bShape[aShape.size() - 2])
-    return false;
-  return true;
+  return aShape[aShape.size() - 1] == bShape[aShape.size() - 2];
 }
 
 // -- TMEMStoreOp --
@@ -318,9 +314,7 @@ bool TCGen5MMAScaledOp::verifyDims() {
   if (this->getBType() == ScaleDotElemType::E2M1)
     bKdim *= 2;
 
-  if (aKdim != bKdim)
-    return false;
-  return true;
+  return aKdim == bKdim;
 }
 
 // -- TMEMLoadOp --
