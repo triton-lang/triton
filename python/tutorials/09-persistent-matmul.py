@@ -221,6 +221,16 @@ def matmul(a, b):
     return c
 
 
+@triton.jit
+def _compute_pid(tile_id, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS):
+    group_id = tile_id // num_pid_in_group
+    first_pid_m = group_id * GROUP_SIZE_M
+    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+    pid_m = first_pid_m + (tile_id % group_size_m)
+    pid_n = (tile_id % num_pid_in_group) // group_size_m
+    return pid_m, pid_n
+
+
 @triton.autotune(
     configs=matmul_get_configs(),
     key=["M", "N", "K"],
@@ -247,12 +257,7 @@ def matmul_kernel_persistent(a_ptr, b_ptr, c_ptr,  #
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
 
     for tile_id in range(start_pid, num_tiles, NUM_SMS):
-        group_id = tile_id // num_pid_in_group
-        first_pid_m = group_id * GROUP_SIZE_M
-        group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-        pid_m = first_pid_m + (tile_id % group_size_m)
-        pid_n = (tile_id % num_pid_in_group) // group_size_m
-
+        pid_m, pid_n = _compute_pid(tile_id, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS)
         start_m = pid_m * BLOCK_SIZE_M
         start_n = pid_n * BLOCK_SIZE_N
         offs_am = start_m + tl.arange(0, BLOCK_SIZE_M)
@@ -345,30 +350,19 @@ def matmul_kernel_tma_persistent(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
 
     for tile_id in range(start_pid, num_tiles, NUM_SMS):
-        group_id = tile_id // num_pid_in_group
-        first_pid_m = group_id * GROUP_SIZE_M
-        group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-        pid_m = first_pid_m + (tile_id % group_size_m)
-        pid_n = (tile_id % num_pid_in_group) // group_size_m
-
+        pid_m, pid_n = _compute_pid(tile_id, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS)
         offs_am = pid_m * BLOCK_SIZE_M
         offs_bn = pid_n * BLOCK_SIZE_N
 
         accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
         for ki in range(k_tiles):
             offs_k = ki * BLOCK_SIZE_K
-
             a = tl._experimental_descriptor_load(a_desc_ptr, [offs_am, offs_k], [BLOCK_SIZE_M, BLOCK_SIZE_K], dtype)
             b = tl._experimental_descriptor_load(b_desc_ptr, [offs_bn, offs_k], [BLOCK_SIZE_N, BLOCK_SIZE_K], dtype)
             accumulator = tl.dot(a, b.T, accumulator)
 
         tile_id_c += NUM_SMS
-        group_id = tile_id_c // num_pid_in_group
-        first_pid_m = group_id * GROUP_SIZE_M
-        group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-        pid_m = first_pid_m + (tile_id_c % group_size_m)
-        pid_n = (tile_id_c % num_pid_in_group) // group_size_m
-
+        pid_m, pid_n = _compute_pid(tile_id_c, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS)
         offs_am_c = pid_m * BLOCK_SIZE_M
         offs_bn_c = pid_n * BLOCK_SIZE_N
 
@@ -505,34 +499,33 @@ def matmul_kernel_descriptor_persistent(a_ptr, b_ptr, c_ptr,  #
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
 
     for tile_id in range(start_pid, num_tiles, NUM_SMS):
-        group_id = tile_id // num_pid_in_group
-        first_pid_m = group_id * GROUP_SIZE_M
-        group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-        pid_m = first_pid_m + (tile_id % group_size_m)
-        pid_n = (tile_id % num_pid_in_group) // group_size_m
-
+        pid_m, pid_n = _compute_pid(tile_id, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS)
         offs_am = pid_m * BLOCK_SIZE_M
         offs_bn = pid_n * BLOCK_SIZE_N
 
         accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
         for ki in range(k_tiles):
             offs_k = ki * BLOCK_SIZE_K
-
             a = a_desc.load([offs_am, offs_k])
             b = b_desc.load([offs_bn, offs_k])
             accumulator = tl.dot(a, b.T, accumulator)
+
+        tile_id_c += NUM_SMS
+        pid_m, pid_n = _compute_pid(tile_id_c, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS)
+        offs_cm = pid_m * BLOCK_SIZE_M
+        offs_cn = pid_n * BLOCK_SIZE_N
 
         if EPILOGUE_SUBTILE:
             acc = tl.reshape(accumulator, (BLOCK_SIZE_M, 2, BLOCK_SIZE_N // 2))
             acc = tl.permute(acc, (0, 2, 1))
             acc0, acc1 = tl.split(acc)
             c0 = acc0.to(dtype)
-            c_desc.store([offs_am, offs_bn], c0)
+            c_desc.store([offs_cm, offs_cn], c0)
             c1 = acc1.to(dtype)
-            c_desc.store([offs_am, offs_bn + BLOCK_SIZE_N // 2], c1)
+            c_desc.store([offs_cm, offs_cn + BLOCK_SIZE_N // 2], c1)
         else:
             c = accumulator.to(dtype)
-            c_desc.store([offs_am, offs_bn], c)
+            c_desc.store([offs_cm, offs_cn], c)
 
 
 def matmul_descriptor_persistent(a, b):
@@ -665,13 +658,14 @@ def validate(M, N, K, dtype):
 
 def show_profile(precision, profile_name):
     import triton.profiler.viewer as proton_viewer
-    metrics = ["time/ms"]
+    metric_names = ["time/ms"]
     if precision == 'fp8':
-        metrics = ["tflop8/s"] + metrics
+        metric_names = ["tflop8/s"] + metric_names
     elif precision == 'fp16':
-        metrics = ["tflop16/s"] + metrics
+        metric_names = ["tflop16/s"] + metric_names
     file_name = f"{profile_name}.hatchet"
-    proton_viewer.parse(metrics, file_name, depth=100)
+    tree, metrics = proton_viewer.parse(metric_names, file_name)
+    proton_viewer.print_tree(tree, metrics)
 
 
 if __name__ == "__main__":

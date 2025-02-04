@@ -1,6 +1,6 @@
 #include "SharedToDotOperandHelper.h"
 
-using ::mlir::triton::gpu::SharedEncodingAttr;
+using ::mlir::triton::gpu::SwizzledSharedEncodingAttr;
 
 namespace mlir::triton::AMD {
 
@@ -17,11 +17,14 @@ Value getWarpIdInBlock(ConversionPatternRewriter &rewriter, Location loc,
                 b.i32_val(tensorSizeNonK / elemPerInstrNonK));
 }
 
-bool isSwizzled(SharedEncodingAttr layout) { return layout.getMaxPhase() != 1; }
+bool isSwizzled(SwizzledSharedEncodingAttr layout) {
+  return layout.getMaxPhase() != 1;
+}
 
 std::pair<mlir::Value, mlir::Value>
 swizzleIndexes(ConversionPatternRewriter &rewriter, Location loc, Value row,
-               Value col, SharedMemoryObject smemObj, SharedEncodingAttr attr) {
+               Value col, SharedMemoryObject smemObj,
+               SwizzledSharedEncodingAttr attr) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   (void)smemObj; // unused in current pattern
   const auto &order = attr.getOrder();
@@ -52,7 +55,8 @@ swizzleIndexes(ConversionPatternRewriter &rewriter, Location loc, Value row,
 
 Value computeOffset(ConversionPatternRewriter &rewriter, Location loc,
                     Value row, Value col, SharedMemoryObject smemObj,
-                    ArrayRef<Value> smemStrides, SharedEncodingAttr srcLayout) {
+                    ArrayRef<Value> smemStrides,
+                    SwizzledSharedEncodingAttr srcLayout) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto [swizzledRow, swizzledCol] =
       swizzleIndexes(rewriter, loc, row, col, smemObj, srcLayout);
@@ -93,10 +97,10 @@ bool isKContig(llvm::ArrayRef<unsigned> order, int opIdx) {
 /// \param elemsPerInstr one instruction size
 /// \param warpsPerBlockNonK number of warps along non-k Dim
 /// \returns bool
-bool isSwizzlePatternFitsIntoBlock(const SharedEncodingAttr sharedLayout,
-                                   int opIdx, const ArrayRef<int64_t> reps,
-                                   const ArrayRef<int64_t> elemsPerInstr,
-                                   unsigned warpsPerBlockNonK) {
+bool isSwizzlePatternFitsIntoBlock(
+    const SwizzledSharedEncodingAttr sharedLayout, int opIdx,
+    const ArrayRef<int64_t> reps, const ArrayRef<int64_t> elemsPerInstr,
+    unsigned warpsPerBlockNonK) {
   assert(elemsPerInstr.size() == 2);
   unsigned mfmaInstrNonK = elemsPerInstr[opIdx == 0 ? 0 : 1];
   unsigned mfmaInstrK = elemsPerInstr[opIdx == 0 ? 1 : 0];
@@ -116,14 +120,13 @@ bool isSwizzlePatternFitsIntoBlock(const SharedEncodingAttr sharedLayout,
          blockSizeNonK % swizzlePatternSizeNonK == 0;
 }
 
-llvm::SmallVector<Value>
-computeOffsetsAType(ConversionPatternRewriter &rewriter, Location loc,
-                    computeTensorElemMappingInBlockT fn,
-                    const ArrayRef<int64_t> &elemsPerInstr, Value warpId,
-                    Value laneId, int warpsPerBlock, int numOfElems,
-                    ArrayRef<int64_t> reps, SharedMemoryObject smemObj,
-                    ArrayRef<Value> smemStrides, SharedEncodingAttr srcLayout,
-                    unsigned nonKDim, unsigned kDim) {
+llvm::SmallVector<Value> computeOffsetsAType(
+    ConversionPatternRewriter &rewriter, Location loc,
+    computeTensorElemMappingInBlockT fn, const ArrayRef<int64_t> &elemsPerInstr,
+    Value warpId, Value laneId, int warpsPerBlock, int numOfElems,
+    ArrayRef<int64_t> reps, SharedMemoryObject smemObj,
+    ArrayRef<Value> smemStrides, SwizzledSharedEncodingAttr srcLayout,
+    unsigned nonKDim, unsigned kDim) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value> offsets = smemObj.getOffsets();
   auto order = srcLayout.getOrder();
@@ -185,14 +188,13 @@ transposeSpatialDims(const Container &vec) {
   return res;
 }
 
-llvm::SmallVector<Value>
-computeOffsetsBType(ConversionPatternRewriter &rewriter, Location loc,
-                    computeTensorElemMappingInBlockT fn,
-                    const ArrayRef<int64_t> &elemsPerInstr, Value warpId,
-                    Value laneId, int warpsPerBlock, int numOfElems,
-                    ArrayRef<int64_t> reps, SharedMemoryObject smemObj,
-                    ArrayRef<Value> smemStrides, SharedEncodingAttr srcLayout,
-                    unsigned nonKDim, unsigned kDim) {
+llvm::SmallVector<Value> computeOffsetsBType(
+    ConversionPatternRewriter &rewriter, Location loc,
+    computeTensorElemMappingInBlockT fn, const ArrayRef<int64_t> &elemsPerInstr,
+    Value warpId, Value laneId, int warpsPerBlock, int numOfElems,
+    ArrayRef<int64_t> reps, SharedMemoryObject smemObj,
+    ArrayRef<Value> smemStrides, SwizzledSharedEncodingAttr srcLayout,
+    unsigned nonKDim, unsigned kDim) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   // transpose reps and offsets, because operand B has layout equal to
   // transposed operand A layout

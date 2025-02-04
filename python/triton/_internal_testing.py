@@ -150,6 +150,8 @@ def to_numpy(x):
 
 
 def supports_tma(byval_only=False):
+    if is_interpreter():
+        return True
     if not is_cuda():
         return False
     _, cuda_version = _path_to_binary("ptxas")

@@ -80,11 +80,11 @@ static cl::opt<std::string> TensorStr(
 //===--------------------------------------------------------------------===//
 
 LogicalResult layoutPrint(RankedTensorType tensorType, raw_ostream &os) {
-  // DistributedEncodingTrait and SharedEncodingAttr implements the
+  // DistributedEncodingTrait and SharedEncodingTrait implements the
   // toLinearLayout interface.
   mlir::Attribute layout = tensorType.getEncoding();
   if (isa<mlir::triton::gpu::DistributedEncodingTrait,
-          mlir::triton::gpu::SharedEncodingAttr>(layout)) {
+          mlir::triton::gpu::SharedEncodingTrait>(layout)) {
     os << triton::gpu::getLayoutStr(tensorType, UseHWPointOfView);
     return success();
   }

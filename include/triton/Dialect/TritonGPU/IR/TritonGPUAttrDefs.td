@@ -12,17 +12,6 @@ def TritonGPU_AttrTrait : AttrInterface<"TritonGPU_AttrTrait"> {
   let cppNamespace = "::mlir::triton::gpu";
 
   let methods = [
-    InterfaceMethod<"Return total element size per thread.",
-                    "unsigned",
-                    "getTotalElemsPerThread",
-                     (ins "ArrayRef<int64_t>":$tensorShape,
-                          "Type":$eltTy)>,
-
-    InterfaceMethod<"Return element size per thread in each dimension.",
-                    "SmallVector<unsigned>",
-                    "getElemsPerThread",
-                     (ins "ArrayRef<int64_t>":$tensorShape,
-                          "Type":$eltTy)>,
   ];
 }
 
@@ -54,8 +43,6 @@ Right now, Triton implements two main classes of layouts: shared, and distribute
   let attrName = "triton.gpu." # attrMnemonic;
 
   code extraBaseClassDeclaration = [{
-    unsigned getTotalElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const;
-    SmallVector<unsigned> getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const;
   }];
 }
 
@@ -124,15 +111,6 @@ addition, if there's only one CTA per CGA, then Triton canonicalizes CTAOrder to
   ];
 
   let extraClassDeclaration = [{
-    SmallVector<unsigned> getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const {
-      llvm::report_fatal_error(
-        "Unsupported getElemsPerThread in CTALayoutAttr.");
-    }
-    unsigned getTotalElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const {
-      llvm::report_fatal_error(
-        "Unsupported getTotalElemsPerThread in CTALayoutAttr.");
-    }
-
     static CTALayoutAttr getDefault(MLIRContext *context, int rank) {
       SmallVector<unsigned> CTAsPerCGA(rank, 1);
       SmallVector<unsigned> CTASplitNum(rank, 1);
@@ -146,12 +124,46 @@ addition, if there's only one CTA per CGA, then Triton canonicalizes CTAOrder to
   let genVerifyDecl = 1;
   let skipDefaultBuilders = 1;
 }
+
+
+def LayoutEncodingTrait : AttrInterface<"LayoutEncodingTrait"> {
+  let cppNamespace = "::mlir::triton::gpu";
+  let description = [{
+    Common trait for all TTGIR layouts.
+  }];
+  let methods = [
+    InterfaceMethod<"Get the shape of the CTAs per CGA.",
+                    "SmallVector<unsigned>",
+                    "getCTAsPerCGA">,
+    InterfaceMethod<"Get the order of the CTAs per CGA. The fastest-changing axis first",
+                    "SmallVector<unsigned>",
+                    "getCTAOrder">,
+    InterfaceMethod<"Each CTA processes 1/CTASplitNum of the tensor.",
+                    "SmallVector<unsigned>",
+                    "getCTASplitNum">,
+  ];
+}
+
 //===----------------------------------------------------------------------===//
 // Shared Layout Encoding
 //===----------------------------------------------------------------------===//
 
-def SharedEncodingAttr : TritonGPU_Attr<"SharedEncoding", "shared_encoding"> {
-  let mnemonic = "shared";
+def SharedEncodingTrait : AttrInterface<"SharedEncodingTrait"> {
+  let cppNamespace = "::mlir::triton::gpu";
+
+  let description = [{
+    Common trait describing shared memory.
+  }];
+  let methods = [
+    InterfaceMethod<"Return the default alignment for the layout.",
+                    "int32_t",
+                    "getAlignment">,
+  ];
+}
+
+def SwizzledSharedEncodingAttr :
+  TritonGPU_Attr<"SwizzledSharedEncoding", "swizzled_shared_encoding", [SharedEncodingTrait, LayoutEncodingTrait]> {
+  let mnemonic = "swizzled_shared";
 
   let description = [{
 An encoding for tensors whose elements may be simultaneously accessed by
@@ -226,13 +238,6 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
 (r,c) has value
 
   ((c / 2) ^ r) * 2 + (c % 2).
-
-For MMAv3 eg Hopper GMMA, hasLeadingOffset should be true. In this case,
-when the matrix is stored in shared memory, there will be an offset not
-only in the stride dimension, but also in the leading dimension. For example,
-a matrix of size 16x128 and data type I8 is stored in the shared memory with
-64B-swizzle mode. The offset of the element with index (0, 64) will be 16*64,
-compared to 1*64 when the hasLeadingOffset is false.
   }];
 
   // swizzle info: vec, perPhase, maxPhase
@@ -243,20 +248,10 @@ compared to 1*64 when the hasLeadingOffset is false.
     "unsigned":$perPhase,
     "unsigned":$maxPhase,
     ArrayRefParameter<"unsigned">:$order,
-    "CTALayoutAttr":$CTALayout,
-    "bool":$hasLeadingOffset
+    "CTALayoutAttr":$CTALayout
   );
 
   let builders = [
-    AttrBuilder<(ins "unsigned":$vec,
-                     "unsigned":$perPhase,
-                     "unsigned":$maxPhase,
-                     "ArrayRef<unsigned>":$order,
-                     "CTALayoutAttr":$CTALayout), [{
-        bool hasLeadingOffset = false; // default value
-        return $_get(context, vec, perPhase, maxPhase, order, CTALayout, hasLeadingOffset);
-    }]>,
-
     AttrBuilder<(ins "DotOperandEncodingAttr":$dotOpEnc,
                      "ArrayRef<int64_t>":$shape,
                      "ArrayRef<unsigned>":$order,
@@ -267,7 +262,7 @@ compared to 1*64 when the hasLeadingOffset is false.
     }]>,
 
     // TODO(jlebar): This should not be an overload of
-    // SharedEncodingAttr::get().  It's misleading, because it does a bunch of
+    // SwizzledSharedEncodingAttr::get().  It's misleading, because it does a bunch of
     // nontrivial work based on the given dotOpEnc.
     AttrBuilder<(ins "DotOperandEncodingAttr":$dotOpEnc,
                      "ArrayRef<int64_t>":$shape,
@@ -402,38 +397,67 @@ compared to 1*64 when the hasLeadingOffset is false.
       unsigned bitwidth = eltTy.getIntOrFloatBitWidth();
       return get(context, dotOpEnc, shape, order, CTALayout, bitwidth, needTrans);
     }]>,
+  ];
 
+  let extraClassDeclaration = extraBaseClassDeclaration # [{
+    int32_t getAlignment() const;
+    SmallVector<unsigned> getCTAsPerCGA() const;
+    SmallVector<unsigned> getCTAOrder() const;
+    SmallVector<unsigned> getCTASplitNum() const;
+  }];
+  let hasCustomAssemblyFormat = 1;
+}
+
+def NVMMASharedEncodingAttr :
+  TritonGPU_Attr<"NVMMASharedEncoding", "nvmma_shared_encoding", [SharedEncodingTrait, LayoutEncodingTrait]> {
+  let mnemonic = "nvmma_shared";
+
+  let description = [{
+    Represent blocked shared memory matching MMAv3/MMAv5 shared memory input.
+    This is meant to represent 2d tiled blocked layout.
+    The full layout representation is described here:
+    https://docs.nvidia.com/cuda/parallel-thread-execution/#asynchronous-warpgroup-level-matrix-shared-memory-layout
+  }];
+
+  let parameters = (
+    ins
+    "unsigned":$swizzlingByteWidth,
+    "bool":$transposed,
+    "unsigned":$elementBitWidth,
+    "CTALayoutAttr":$CTALayout
+  );
+
+  let builders = [
     AttrBuilder<(ins "ArrayRef<int64_t>":$shape,
                      "ArrayRef<unsigned>":$order,
                      "CTALayoutAttr":$CTALayout,
                      "Type":$eltTy), [{
         auto shapePerCTA = getShapePerCTA(CTALayout.getCTASplitNum(), shape);
-
-        int32_t eleBitWidth = eltTy.getIntOrFloatBitWidth();
-        int32_t vec = 128 / eleBitWidth, perPhase = 1, maxPhase = 1;
+        int32_t swizzlingByteWidth = 0;
+        unsigned eleBitWidth = eltTy.getIntOrFloatBitWidth();
 
         // get proper shared memory swizzling mode from the contiguous dimension
         // size of the origin blocked layout.
         auto contigDimSizeInByte = shapePerCTA[order[0]] * eleBitWidth / 8;
         if (contigDimSizeInByte >= 128 && contigDimSizeInByte % 128 == 0) {
-          perPhase = 1;
-          maxPhase = 8;
+          swizzlingByteWidth = 128;
         } else if (contigDimSizeInByte >= 64 && contigDimSizeInByte % 64 == 0) {
-          perPhase = 2;
-          maxPhase = 4;
+          swizzlingByteWidth = 64;
         } else if (contigDimSizeInByte >= 32 && contigDimSizeInByte % 32 == 0) {
-          perPhase = 4;
-          maxPhase = 2;
+          swizzlingByteWidth = 32;
         } else {
           llvm_unreachable("unsupported shared memory layout for MMAv3");
         }
-
-        return $_get(context, vec, perPhase, maxPhase, order, CTALayout, true);
+        bool transposed = order[0] == 0;
+        return $_get(context, swizzlingByteWidth, transposed, eleBitWidth, CTALayout);
     }]>
   ];
 
   let extraClassDeclaration = extraBaseClassDeclaration # [{
     int32_t getAlignment() const;
+    SmallVector<unsigned> getCTAsPerCGA() const;
+    SmallVector<unsigned> getCTAOrder() const;
+    SmallVector<unsigned> getCTASplitNum() const;
   }];
   let hasCustomAssemblyFormat = 1;
 }
@@ -468,16 +492,17 @@ We call each individual tile "rep".
     InterfaceMethod<"Get the order of reps (tiles of this layout that tile the whole tensor). The fastest-changing axis first",
                     "SmallVector<unsigned>",
                     "getRepOrder">,
-
+    InterfaceMethod<"Return total element size per thread.",
+                    "unsigned",
+                    "getTotalElemsPerThread",
+                     (ins "ArrayRef<int64_t>":$tensorShape,
+                          "Type":$eltTy)>,
+    InterfaceMethod<"Return element size per thread in each dimension.",
+                    "SmallVector<unsigned>",
+                    "getElemsPerThread",
+                     (ins "ArrayRef<int64_t>":$tensorShape,
+                          "Type":$eltTy)>,
     // Interface for the meta information about the multiple thread hierarchy.
-    InterfaceMethod<"Get the shape of the CTAs per CGA.",
-                    "SmallVector<unsigned>",
-                    "getCTAsPerCGA">,
-
-    InterfaceMethod<"Get the order of the CTAs per CGA. The fastest-changing axis first",
-                    "SmallVector<unsigned>",
-                    "getCTAOrder">,
-
     InterfaceMethod<"Get the shape of the warps per CTA.",
                     "SmallVector<unsigned>",
                     "getWarpsPerCTA">,
@@ -498,10 +523,6 @@ We call each individual tile "rep".
                     "SmallVector<unsigned>",
                     "getSizePerThread">,
 
-    InterfaceMethod<"Each CTA processes 1/CTASplitNum of the tensor.",
-                    "SmallVector<unsigned>",
-                    "getCTASplitNum">,
-
     InterfaceMethod<"Gets the number of contiguous elements per thread.",
                     "SmallVector<unsigned>",
                     "getContigPerThread">,
@@ -514,7 +535,7 @@ We call each individual tile "rep".
 
 class DistributedEncoding<string name, string attrMnemonic, list<Trait> traits = [],
                      Dialect dialect = TritonGPU_Dialect>
-  : TritonGPU_Attr<name, attrMnemonic, !listconcat([DistributedEncodingTrait], traits), dialect> {
+  : TritonGPU_Attr<name, attrMnemonic, !listconcat([DistributedEncodingTrait, LayoutEncodingTrait], traits), dialect> {
 
   let description = [{
 Distributed encodings have a layout function L that is entirely characterized
@@ -550,6 +571,8 @@ L(T) = [ {0,8} , {1,9} , {2,10}, {3,11}, {0,8} , {1, 9} , {2, 10}, {3, 11},
   }];
 
   code extraDistributedDeclaration  = extraBaseClassDeclaration # [{
+    unsigned getTotalElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const;
+    SmallVector<unsigned> getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const;
     SmallVector<unsigned> getRepOrder() const;
     SmallVector<unsigned> getCTAsPerCGA() const;
     SmallVector<unsigned> getCTAOrder() const;

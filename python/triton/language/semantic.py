@@ -1923,8 +1923,9 @@ def make_tensor_descriptor(
     if len(block_shape) != ndim:
         raise ValueError(f"Expected block_shape to have {ndim} dimensions but got {len(strides)}")
 
-    if not (isinstance(strides[-1], tl.constexpr) and strides[-1].value == 1):
-        raise ValueError(f"Tensor descriptor last dim must tl.constexpr(1) but got {strides[-1]}")
+    strides[-1] = tl._constexpr_to_value(strides[-1])
+    if strides[-1] != 1:
+        raise ValueError(f"Tensor descriptor last dim must be 1 but got {strides[-1]}")
 
     shape = [to_tensor(x, builder) for x in shape]
     strides = [to_tensor(x, builder).to(tl.int64, _builder=builder) for x in strides]

@@ -7,7 +7,12 @@ import triton
 import triton.language as tl
 from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
 import traceback
-from triton._internal_testing import is_interpreter, is_cuda, is_hip, is_hip_mi300, is_hip_mi200
+from triton._internal_testing import is_interpreter, is_cuda, is_hip, is_hip_mi300
+
+
+def format_exception(type, value, tb):
+    list_msg = traceback.format_exception(type, value, tb, chain=False)
+    return "\n".join(list_msg)
 
 
 def test_err_undefined_variable():
@@ -20,7 +25,9 @@ def test_err_undefined_variable():
         triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constexprs={}))
 
     try:
-        assert "is not defined" in str(e.value), "error should mention the undefined variable"
+        err_msg = format_exception(e.type, value=e.value, tb=e.tb)
+        assert "is not defined" in err_msg, "error should mention the undefined variable"
+        assert "code_generator.py" not in err_msg
     except AssertionError as assertion_err:
         raise assertion_err from e.value
 
@@ -35,7 +42,9 @@ def test_err_in_binary_operator():
         triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constexprs={}))
 
     try:
-        assert "at 2:4:" in str(e.value), "error should point to the 0"
+        err_msg = format_exception(e.type, value=e.value, tb=e.tb)
+        assert "at 2:4:" in err_msg, "error should point to the 0"
+        assert "code_generator.py" not in err_msg
     except AssertionError as assertion_err:
         raise assertion_err from e.value
 
@@ -52,8 +61,11 @@ def test_err_static_assert():
     try:
         assert isinstance(e.value, CompileTimeAssertionFailure)
         assert e.value.__cause__ is None
-        assert "at 2:4:" in str(e.value), "error should point to the static_assert call"
-        assert "<source unavailable>" not in str(e.value)
+        err_msg = format_exception(e.type, value=e.value, tb=e.tb)
+        print(err_msg)
+        assert "at 2:4:" in err_msg, "error should point to the static_assert call"
+        assert "<source unavailable>" not in err_msg
+        assert "code_generator.py" not in err_msg
     except AssertionError as assertion_err:
         raise assertion_err from e.value
 
@@ -70,8 +82,10 @@ def test_err_in_unary_op():
 
     try:
         assert e.value.__cause__ is None
-        assert "at 2:4:" in str(e.value), "error should point to the `not`"
-        assert "<source unavailable>" not in str(e.value)
+        err_msg = format_exception(e.type, value=e.value, tb=e.tb)
+        assert "at 2:4:" in err_msg, "error should point to the `not`"
+        assert "<source unavailable>" not in err_msg
+        assert "code_generator.py" not in err_msg
     except AssertionError as assertion_err:
         raise assertion_err from e.value
 
@@ -86,8 +100,10 @@ def test_err_in_binary_op():
         triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constexprs={}))
 
     try:
-        assert "at 2:4:" in str(e.value), "error should point to the 1.0"
-        assert "<source unavailable>" not in str(e.value)
+        err_msg = format_exception(e.type, value=e.value, tb=e.tb)
+        assert "at 2:4:" in err_msg, "error should point to the 1.0"
+        assert "<source unavailable>" not in err_msg
+        assert "code_generator.py" not in err_msg
     except AssertionError as assertion_err:
         raise assertion_err from e.value
 
@@ -110,13 +126,16 @@ def test_err_in_nested_call():
         triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constexprs={}))
 
     try:
-        inner = e.value.__cause__
-        outer = e.value
-        assert "at 2:4:" in str(inner), "error should point to xyz"
-        assert "<source unavailable>" not in str(inner)
+        inner_exc = e.value.__cause__
+        inner = format_exception(inner_exc.__class__, inner_exc, inner_exc.__traceback__)
+        assert "at 2:4:" in inner, "error should point to xyz"
+        assert "<source unavailable>" not in inner
+        assert "code_generator.py" not in inner
 
-        assert "at 3:4" in str(outer), "error should point to the nested_call"
-        assert "<source unavailable>" not in str(outer)
+        outer = format_exception(e.type, value=e.value, tb=e.tb)
+        assert "at 3:4" in outer, "error should point to the nested_call"
+        assert "<source unavailable>" not in outer
+        assert "code_generator.py" not in outer
     except AssertionError as assertion_err:
         raise assertion_err from e.value
 
@@ -133,13 +152,15 @@ def test_err_in_builtin():
         triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constexprs={}))
 
     try:
-        inner = e.value.__cause__
-        outer = e.value
-        assert f"{os.sep}core.py" in '\n'.join(traceback.format_tb(
-            inner.__traceback__)), "error should point inside core.py"
+        inner_exc = e.value.__cause__
+        inner = format_exception(inner_exc.__class__, inner_exc, inner_exc.__traceback__)
+        assert f"{os.sep}core.py" in inner, "error should point inside core.py"
+        assert "code_generator.py" not in inner
 
-        assert "at 2:4:" in str(outer), "error should point to expand_dims call"
-        assert "<source unavailable>" not in str(outer)
+        outer = format_exception(e.type, value=e.value, tb=e.tb)
+        assert "at 2:4:" in outer, "error should point to expand_dims call"
+        assert "<source unavailable>" not in outer
+        assert "code_generator.py" not in outer
     except AssertionError as assertion_err:
         raise assertion_err from e.value
 
@@ -387,23 +408,9 @@ def test_min_dot_size(dtype):
             error_msg += "M >= 16, N >= 16 and K >= 32"
         else:
             error_msg = "M >= 16, N >= 16 and K >= 16"
-    elif is_hip_mi300():
-        if dtype == tl.float16:
-            pytest.skip("fp16 FMA path supports all sizes")
-        elif dtype == tl.int8:
-            error_msg += "M >= 16, N >= 16 and K >= 1"
-        else:
-            error_msg += "M >= 16, N >= 16 and K >= 1"
-    elif is_hip_mi200():
-        if dtype == tl.float16:
-            pytest.skip("fp16 FMA path supports all sizes")
-        else:
-            error_msg += "M >= 16, N >= 16 and K >= 1"
     elif is_hip():
-        if dtype == tl.float16:
-            pytest.skip("fp16 FMA path supports all sizes")
-        else:
-            error_msg = "M >= 16, N >= 16 and K >= 16"
+        # hip supports arbitrary sizes
+        error_msg = None
     else:
         pytest.skip("Test only supported on CUDA and HIP")
 
@@ -414,13 +421,17 @@ def test_min_dot_size(dtype):
         b = tl.full((SIZE, SIZE), 0.0, dtype)
         tl.dot(a, b)
 
-    with pytest.raises(CompilationError) as e:
+    if error_msg is None:
         triton.compile(
             triton.compiler.ASTSource(fn=dot_kernel, signature={"dtype": "constexpr"}, constexprs={"dtype": dtype}))
-    try:
-        assert (error_msg in str(e.value.__cause__))
-    except AssertionError as assertion_err:
-        raise assertion_err from e.value
+    else:
+        with pytest.raises(CompilationError) as e:
+            triton.compile(
+                triton.compiler.ASTSource(fn=dot_kernel, signature={"dtype": "constexpr"}, constexprs={"dtype": dtype}))
+        try:
+            assert (error_msg in str(e.value.__cause__))
+        except AssertionError as assertion_err:
+            raise assertion_err from e.value
 
 
 def test_max_num_imprecise_acc_limit():

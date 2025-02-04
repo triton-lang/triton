@@ -1,13 +1,15 @@
 #include "Dialect/NVGPU/IR/Dialect.h"
 #include "TargetInfo.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeUtilities.h"
 
-#include "PatternTritonGPUOpToLLVM.h"
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 
+#include "PatternTritonGPUOpToLLVM.h"
 #include "Utility.h"
+#include "triton/Analysis/AxisInfo.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
@@ -15,9 +17,6 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
-
-#include <cassert>
 
 #include <cassert>
 
@@ -31,7 +30,7 @@ using ::mlir::LLVM::linearize;
 using ::mlir::triton::gpu::getCTALayout;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
-using ::mlir::triton::gpu::SharedEncodingAttr;
+using ::mlir::triton::gpu::NVMMASharedEncodingAttr;
 
 namespace ttg = mlir::triton::gpu;
 
@@ -1048,7 +1047,6 @@ struct AsyncCopyGlobalToLocalOpConversion
     auto srcLayout = srcTy.getEncoding();
     assert((isa<BlockedEncodingAttr, SliceEncodingAttr>(srcLayout) &&
             "Unexpected srcLayout in AsyncCopyGlobalToLocalOpConversion"));
-    auto resSharedLayout = cast<SharedEncodingAttr>(dstTy.getEncoding());
 
     Value llDst = adaptor.getResult();
     Value llSrc = adaptor.getSrc();
@@ -1353,10 +1351,7 @@ struct AsyncTMACopyLocalToGlobalOpConversion
 
     // TODO: Separate the syncronizations operations into separate TTGIR ops to
     // be able to schedule them at the high level.
-    const std::string ptx = "cp.async.bulk.commit_group";
-    PTXBuilder ptxBuilderSync;
-    ptxBuilderSync.create<>(ptx)->operator()();
-    ptxBuilderSync.launch(rewriter, op.getLoc(), void_ty(op.getContext()));
+    rewriter.create<NVVM::CpAsyncBulkCommitGroupOp>(loc);
 
     rewriter.eraseOp(op);
     return success();
@@ -1365,8 +1360,8 @@ struct AsyncTMACopyLocalToGlobalOpConversion
 
 static LinearLayout getUnswizzledLayout(triton::gpu::MemDescType type) {
   return triton::gpu::sharedToLinearLayoutLeadingOffset(
-      type.getShape(), cast<SharedEncodingAttr>(type.getEncoding()),
-      type.getElementTypeBitWidth(), /*disableSwizzle=*/true);
+      type.getShape(), cast<NVMMASharedEncodingAttr>(type.getEncoding()),
+      /*disableSwizzle=*/true);
 }
 
 // This function is shared between the TMA gather and scatter lowerings. It
@@ -1414,10 +1409,10 @@ static LogicalResult iterateGatherScatterIndices(
   ArrayRef<int64_t> allocShape = smemType.getAllocShape();
   if (allocShape.size() < 2 || smemType.getShape() != allocShape.take_back(2))
     return op->emitError("memdesc shape must match alloc shape");
-  // `hasLeadingOffset` means the core matrix tiles are placed next to each
-  // other in shared memory, which lines up with how `gather4` loads data.
-  if (!cast<SharedEncodingAttr>(smemType.getEncoding()).getHasLeadingOffset())
-    return op->emitError("requires dst encoding with `hasLeadingOffset=true`");
+  // `NVMMASharedEncodingAttr` means the core matrix tiles are placed next to
+  // each other in shared memory, which lines up with how `gather4` loads data.
+  if (!isa<NVMMASharedEncodingAttr>(smemType.getEncoding()))
+    return op->emitError("requires dst encoding NVMMASharedEncodingAttr");
   Type llvmElemTy = typeConverter.convertType(smemType.getElementType());
   Type elemPtrTy = ptr_ty(ctx, /*addrspace=*/3);
   auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, smemObjValue,
@@ -1609,10 +1604,7 @@ LogicalResult AsyncTMAScatterOpConversion::matchAndRewrite(
 
   // TODO: Separate the syncronizations operations into separate TTGIR ops to
   // be able to schedule them at the high level.
-  const std::string ptx = "cp.async.bulk.commit_group";
-  PTXBuilder ptxBuilderSync;
-  ptxBuilderSync.create<>(ptx)->operator()();
-  ptxBuilderSync.launch(rewriter, op.getLoc(), void_ty(op.getContext()));
+  rewriter.create<NVVM::CpAsyncBulkCommitGroupOp>(loc);
 
   rewriter.eraseOp(op);
   return success();
@@ -1626,21 +1618,13 @@ struct AsyncWaitOpConversion
   LogicalResult
   matchAndRewrite(triton::gpu::AsyncWaitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    PTXBuilder ptxBuilder;
-    auto &asyncWaitOp = *ptxBuilder.create<>("cp.async.wait_group");
-    auto num = op->getAttrOfType<IntegerAttr>("num").getInt();
-    asyncWaitOp(ptxBuilder.newConstantOperand(num));
-
-    auto ctx = op.getContext();
     auto loc = op.getLoc();
-    auto voidTy = void_ty(ctx);
-    ptxBuilder.launch(rewriter, loc, voidTy);
+    auto num = op->getAttrOfType<IntegerAttr>("num");
+    rewriter.create<NVVM::CpAsyncWaitGroupOp>(loc, num);
 
     // Drop the result token.
-    Value zero = rewriter.create<LLVM::ConstantOp>(
-        op.getLoc(), IntegerType::get(op.getContext(), 32),
-        rewriter.getI32IntegerAttr(0));
-    rewriter.replaceOp(op, zero);
+    TritonLLVMOpBuilder b(loc, rewriter);
+    rewriter.replaceOp(op, b.i32_val(0));
     return success();
   }
 };
@@ -1653,16 +1637,12 @@ struct AsyncCommitGroupOpConversion
   LogicalResult
   matchAndRewrite(triton::gpu::AsyncCommitGroupOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-
-    PTXBuilder ptxBuilder;
-    ptxBuilder.create<>("cp.async.commit_group")->operator()();
-    ptxBuilder.launch(rewriter, op.getLoc(), void_ty(op.getContext()));
+    auto loc = op.getLoc();
+    rewriter.create<NVVM::CpAsyncCommitGroupOp>(loc);
 
     // Drop the result token.
-    Value zero = rewriter.create<LLVM::ConstantOp>(
-        op.getLoc(), IntegerType::get(op.getContext(), 32),
-        rewriter.getI32IntegerAttr(0));
-    rewriter.replaceOp(op, zero);
+    TritonLLVMOpBuilder b(loc, rewriter);
+    rewriter.replaceOp(op, b.i32_val(0));
     return success();
   }
 };
@@ -1674,16 +1654,10 @@ struct TMAStoreWaitOpConversion
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::TMAStoreWaitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    PTXBuilder ptxBuilder;
-    auto &asyncWaitOp = *ptxBuilder.create<>("cp.async.bulk.wait_group.read");
-    auto num = op.getPendings();
-    asyncWaitOp(ptxBuilder.newConstantOperand(num));
-
     auto ctx = op.getContext();
-    auto loc = op.getLoc();
-    auto voidTy = void_ty(ctx);
-    ptxBuilder.launch(rewriter, loc, voidTy);
-    rewriter.eraseOp(op);
+    auto isRead = UnitAttr::get(ctx);
+    rewriter.replaceOpWithNewOp<NVVM::CpAsyncBulkWaitGroupOp>(
+        op, op.getPendingsAttr(), isRead);
     return success();
   }
 };
