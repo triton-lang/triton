@@ -42,7 +42,8 @@ static Value createAlloc(scf::ForOp &forOp, const TMAStore &store) {
       ty.getContext(), 1, 1, 1, order, ctaLayout);
   if (ty.getRank() > 1) {
     encoding = ttg::NVMMASharedEncodingAttr::get(
-        ty.getContext(), ty.getShape(), order, ctaLayout, ty.getElementType());
+        ty.getContext(), ty.getShape(), order, ctaLayout, ty.getElementType(),
+        /*fp4Padded*/ false);
   }
   Attribute sharedMemorySpace =
       triton::gpu::SharedMemorySpaceAttr::get(ty.getContext());

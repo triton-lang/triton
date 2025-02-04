@@ -38,29 +38,7 @@ bool canHaveSharedEncoding(tt::LoadOp op) {
   // If used by an user with DotOp encoding, all the uses must be compatible.
   bool incompatible = false;
   getSharedEncIfAllUsersAreDotEnc(op.getResult(), incompatible);
-  if (incompatible)
-    return false;
-  // If the load is used by a LocalAllocOp, all the users need to have the same
-  // encoding.
-  if (llvm::any_of(op->getUsers(), [&](Operation *user) {
-        return isa<ttg::LocalAllocOp>(user);
-      })) {
-    ttg::SharedEncodingTrait localAllocEnc;
-    for (auto user : op->getUsers()) {
-      auto localAlloc = dyn_cast<ttg::LocalAllocOp>(user);
-      if (!localAlloc)
-        continue;
-      auto enc = mlir::cast<ttg::SharedEncodingTrait>(
-          localAlloc.getType().getEncoding());
-      if (!localAllocEnc) {
-        localAllocEnc = enc;
-      }
-      if (enc != localAllocEnc)
-        return false;
-    }
-    return true;
-  }
-  return true;
+  return !incompatible;
 }
 
 bool isSmallLoad(tt::LoadOp loadOp,
@@ -87,6 +65,17 @@ bool isSmallLoad(tt::LoadOp loadOp,
   return width < 32;
 }
 
+int getCopyVecBytes(RankedTensorType registerTy,
+                    ttg::SharedEncodingTrait sharedEnc) {
+  auto regLayout = triton::gpu::toLinearLayout(registerTy.getShape(),
+                                               registerTy.getEncoding());
+  auto sharedLayout =
+      triton::gpu::toLinearLayout(registerTy.getShape(), sharedEnc);
+  auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
+  const int vecElems = regToSharedLayout.getNumConsecutiveInOut();
+  return vecElems * registerTy.getElementTypeBitWidth() / 8;
+}
+
 bool isPipeliningBeneficial(Operation *op, Operation *finalUser,
                             tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
@@ -101,6 +90,36 @@ bool isPipeliningBeneficial(Operation *op, Operation *finalUser,
   if (!canHaveSharedEncoding(cast<tt::LoadOp>(op))) {
     LDBG("Load " << *op << " cannot have shared encoding");
     return false;
+  }
+
+  ttg::SharedEncodingTrait localAllocEnc;
+  if (llvm::any_of(op->getUsers(), [&](Operation *user) {
+        return isa<ttg::LocalAllocOp>(user);
+      })) {
+    for (auto user : op->getUsers()) {
+      auto localAlloc = dyn_cast<ttg::LocalAllocOp>(user);
+      if (!localAlloc)
+        continue;
+      auto enc = mlir::cast<ttg::SharedEncodingTrait>(
+          localAlloc.getType().getEncoding());
+      if (!localAllocEnc) {
+        localAllocEnc = enc;
+      }
+      if (enc != localAllocEnc) {
+        // If the load is used by a LocalAllocOp, all the users need to have the
+        // same encoding.
+        return false;
+      }
+    }
+  }
+
+  if (localAllocEnc) {
+    auto registerTy = cast<RankedTensorType>(op->getResultTypes()[0]);
+    auto vecBytes = getCopyVecBytes(registerTy, localAllocEnc);
+    if (vecBytes < 4) {
+      // At least 4 bytes need to be consecutive for cp.async
+      return false;
+    }
   }
 
   return true;

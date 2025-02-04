@@ -54,7 +54,7 @@ public:
       auto shape = srcTy.getShape();
       // Limitation 2 [TODO: remove]: Only support 2d matrices now but we should
       // be able to support 3D minor changes
-      canUseLdmatrix &= (bitwidth <= 16 || !needTrans) && shape.size() <= 2;
+      canUseLdmatrix &= (bitwidth == 16 || !needTrans) && shape.size() <= 2;
       // Limitation 3: Minimum tile size (8)x(8x16bits)
       canUseLdmatrix &=
           shape[kOrder] >= (8 * 16 / bitwidth) && shape[nonKOrder] >= 8;
