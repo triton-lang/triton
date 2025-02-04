@@ -1045,29 +1045,22 @@ getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
   return attr;
 }
 
-MMALoadType getMMALoadType(Operation *loadOp) {
-  if (!loadOp->hasOneUse())
-    return MMALoadType::DoNotPipeline;
-
-  auto skipViewOps = [](Operation *op) -> Operation * {
-    while (isa<triton::TransOp, triton::ReshapeOp>(op)) {
-      if (!op->hasOneUse())
-        return nullptr;
-      op = *op->getUsers().begin();
-    }
-    return op;
-  };
-
-  Operation *user = skipViewOps(*loadOp->getUsers().begin());
+bool canUseMMAv3Pipelining(Operation *loadOp) {
+  Operation *user = *loadOp->getUsers().begin();
+  while (isa<triton::TransOp, triton::ReshapeOp>(user)) {
+    if (!user->hasOneUse())
+      return false;
+    user = *user->getUsers().begin();
+  }
   if (!user)
-    return MMALoadType::DoNotPipeline;
+    return false;
 
   if (auto alloc = dyn_cast<ttg::LocalAllocOp>(user)) {
     auto sharedEnc =
         dyn_cast<ttg::NVMMASharedEncodingAttr>(alloc.getType().getEncoding());
 
     if (!sharedEnc)
-      return MMALoadType::DoNotPipeline;
+      return false;
 
     // MMA V3 case.
     SmallVector<unsigned> newOrder = getOrder(sharedEnc);
@@ -1078,10 +1071,9 @@ MMALoadType getMMALoadType(Operation *loadOp) {
     // be changed after FuseTranspositions Pass. So we only pipeline the
     // load if the order of the loaded BlockedEncoding is the same as the
     // order of the SharedEncoding it is converted to.
-    return oldOrder == newOrder ? MMALoadType::SharedV3
-                                : MMALoadType::DoNotPipeline;
+    return oldOrder == newOrder;
   } else {
-    return MMALoadType::Registers;
+    return false;
   }
 }
 

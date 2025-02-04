@@ -98,11 +98,6 @@ bool isPipeliningBeneficial(Operation *op, Operation *finalUser,
   if (isa<tt::ExperimentalDescriptorLoadOp, tt::ExperimentalDescriptorGatherOp>(
           op))
     return true;
-  if (isa<ttng::WarpGroupDotOp>(finalUser) &&
-      getMMALoadType(op) == MMALoadType::DoNotPipeline) {
-    LDBG("Load " << *op << " used by WarpGroupDotOp with incompatible layout");
-    return false;
-  }
   if (!canHaveSharedEncoding(cast<tt::LoadOp>(op))) {
     LDBG("Load " << *op << " cannot have shared encoding");
     return false;
