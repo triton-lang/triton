@@ -352,7 +352,8 @@ def test_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, device):
     rtol = 0.0001
     torch.testing.assert_close(ref_out, output, atol=atol, rtol=rtol)
 
-    # This test does not use tmem_copy, so MMA pipelining does not apply.
+    # Pipelining of dot_scaled requires tmem_copy to be used, which in turn
+    # requires the scales to be in the blocked layout in global memory.
     assert "ttng.wait_barrier" not in out.asm["ttgir"]
 
 

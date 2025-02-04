@@ -514,13 +514,13 @@ public:
 Value addSmemStageToScaleLoad(Value scale, mlir::PatternRewriter &rewriter) {
   /*
     Rewrite load(scale) -> local_load(local_alloc(load(scale))).
-    Doing so makes it easy to apply TMEM copy rewriting later.
+    This function does not add anything to the final IR when num_stages > 1,
+    but it makes it easy to apply TMEM copy rewriting later.
 
     Since scales are stored in TMEM for MMAv5 scaled dot, loading of scales do
-    not needs to be put into SMEM. In practice, the software pipeliner puts
+    not needs to be put into SMEM. But in practice, the software pipeliner puts
     loading of scales into multi-buffered SMEM. At that point, local_alloc and
-    local_load created here are eliminated, so this function does not add
-    anything to the final IR when num_stages > 1.
+    local_load created here are eliminated.
    */
   OpBuilder::InsertionGuard g(rewriter);
   auto op = scale.getDefiningOp();

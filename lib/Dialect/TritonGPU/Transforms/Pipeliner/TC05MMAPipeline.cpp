@@ -599,14 +599,16 @@ bool isSafeToPipeline(ttng::TCGen5MMAScaledOp scaledDot) {
   };
 
   auto isCopiedByTMEMCopy = [=](Value scale) {
+    if (getNumUsers(scale) == 2) {
+      // MMA and TMEM copy must be the only users
+      return false;
+    }
+
     for (auto user : scale.getUsers()) {
       if (isa<ttng::TMEMCopyOp>(user)) {
         // If the scale is used by TMEM copy and the only other user is the
-        // scaled dot op, MMA pipeline is safe to apply due to the pipelined
-        // execution of MMA -> TMEM_Copy guaranteed by HW.
-        if (getNumUsers(scale) == 2) {
-          return true;
-        }
+        // scaled dot op, MMA pipelining is safe to apply.
+	return true;
       }
     }
     return false;
@@ -632,6 +634,9 @@ FailureOr<scf::ForOp> preProcessLoopForTC05MMAPipelining(scf::ForOp forOp,
       } else if (auto scaledDot = dyn_cast<ttng::TCGen5MMAScaledOp>(op)) {
         if (isSafeToPipeline(scaledDot)) {
           mmaOps.push_back(op);
+        } else {
+          op->emitWarning("Skipping pipelining of an MMAv5 scaled op because "
+                          "TMEM copy is not used.");
         }
       }
     }
