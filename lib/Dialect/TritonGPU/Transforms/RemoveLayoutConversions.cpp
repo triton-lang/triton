@@ -1133,13 +1133,16 @@ void LayoutRematerialization::hoistConvertDotOperand(
     // cvt
     SmallVector<Operation *> dotLikeOps;
     parent->walk([&](Operation *op) {
-      if (op->hasTrait<OpTrait::DotLike>()) {
-        auto opEnc = dyn_cast<RankedTensorType>(op->getOperand(0).getType())
-                         .getEncoding();
-        auto dotEnc = dyn_cast<DotOperandEncodingAttr>(opEnc);
-        if (dotEnc && isa<NvidiaMmaEncodingAttr>(dotEnc.getParent()))
-          dotLikeOps.push_back(op);
-      }
+      if (!isa<mlir::triton::DotOpInterface>(op))
+        return;
+      auto opType = dyn_cast<RankedTensorType>(op->getOperand(0).getType());
+      if (!opType)
+        return;
+      auto dotEnc = dyn_cast<DotOperandEncodingAttr>(opType.getEncoding());
+      if (!dotEnc)
+        return;
+      if (isa<NvidiaMmaEncodingAttr>(dotEnc.getParent()))
+        dotLikeOps.push_back(op);
     });
     if (dotLikeOps.empty())
       return false;
