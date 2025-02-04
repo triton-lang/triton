@@ -154,8 +154,8 @@ getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter, int opIdx,
   auto newOrder = getOrder(argType.getEncoding());
 
   // If the MMA op doesn't support transpose pick the layout expected by the MMA
-  // op. For MMAv5 fp4, force the packed axis, K, to be contiguous in SMEM
-  if (!allowTranspose || isMMAv5Fp4Padded) {
+  // op.
+  if (!allowTranspose) {
     if (opIdx == 1) {
       newOrder = {0, 1};
     } else {
@@ -551,9 +551,13 @@ public:
         IsBMixedPrecFp4 = true;
     }
 
-    a = getSharedMemoryMMAOperand(a, rewriter, 0, /*allowTranspose=*/true,
+    // For mixed-precision fp4 operands, set allowTranspose = false, to force
+    // the packed axis, K, to be contiguous in SMEM
+    a = getSharedMemoryMMAOperand(a, rewriter, 0,
+                                  /*allowTranspose=*/!IsAMixedPrecFp4,
                                   IsAMixedPrecFp4, dotOp);
-    b = getSharedMemoryMMAOperand(b, rewriter, 1, /*allowTranspose=*/true,
+    b = getSharedMemoryMMAOperand(b, rewriter, 1,
+                                  /*allowTranspose=*/!IsBMixedPrecFp4,
                                   IsBMixedPrecFp4, dotOp);
 
     MLIRContext *context = dotOp->getContext();
