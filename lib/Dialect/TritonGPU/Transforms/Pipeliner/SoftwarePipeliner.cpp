@@ -33,19 +33,6 @@ namespace gpu {
 #define GEN_PASS_DEF_TRITONGPUPIPELINE
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
-static void tryAndPipelineOuterLoop(scf::ForOp forOp) {
-  mlir::triton::PipeliningOption options;
-  bool foundSchedule = false;
-  // Limit 2 stages to not require extra shared memory.
-  foundSchedule = getOuterLoopSchedule(forOp, /*numStage=*/2, options);
-  if (!foundSchedule)
-    return;
-  IRRewriter rewriter(forOp->getContext());
-  rewriter.setInsertionPoint(forOp);
-  FailureOr<scf::ForOp> newForOp =
-      mlir::triton::pipelineForLoop(rewriter, forOp, options);
-}
-
 static scf::ForOp pipelineLoop(scf::ForOp forOp, int numStages) {
   mlir::triton::PipeliningOption options;
 
@@ -92,17 +79,12 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
     if (loops.empty())
       return;
 
-    llvm::SmallSetVector<scf::ForOp, 8> outerLoops;
     llvm::SmallVector<scf::ForOp> pipelinedLoops;
     for (scf::ForOp forOp : loops) {
-      auto outerLoop = dyn_cast<scf::ForOp>(forOp->getParentOp());
       int loopNumStages = getNumStagesOrDefault(forOp);
       scf::ForOp pipelinedFor = pipelineLoop(forOp, loopNumStages);
       if (pipelinedFor != nullptr)
         pipelinedLoops.push_back(pipelinedFor);
-      if (pipelinedFor != nullptr && outerLoop &&
-          getNumStagesOrDefault(outerLoop) > 1)
-        outerLoops.insert(outerLoop);
     }
 
     // There is a hard dependency between load pipelining and the TC05MMA
@@ -121,11 +103,6 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
     arithDialect->getCanonicalizationPatterns(patterns);
     if (applyPatternsGreedily(getOperation(), std::move(patterns)).failed())
       return signalPassFailure();
-
-    // Try to pipeline the outer loop to overlap the prologue and epilogue of
-    // the inner loop.
-    for (scf::ForOp outerLoop : outerLoops)
-      tryAndPipelineOuterLoop(outerLoop);
 
     // Re-collect loop ops
     loops.clear();
