@@ -599,7 +599,7 @@ bool isSafeToPipeline(ttng::TCGen5MMAScaledOp scaledDot) {
   };
 
   auto isCopiedByTMEMCopy = [=](Value scale) {
-    if (getNumUsers(scale) == 2) {
+    if (getNumUsers(scale) != 2) {
       // MMA and TMEM copy must be the only users
       return false;
     }
