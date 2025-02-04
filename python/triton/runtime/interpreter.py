@@ -1095,6 +1095,15 @@ def _patch_lang(fn):
     _patch_builtin(tl.core._experimental_tensor_descriptor_base, interpreter_builder)
 
 
+def _tuple_create(arg, contents):
+    # NamedTuples and tuples have different construction semantics. NamedTuple
+    # has a constructor that takes individual arguments, while tuple takes an
+    # iterable. Both have type "tuple" making it difficult to distinguish
+    # between them, but only NamedTuple has "_fields" and apparently this is how
+    # everyone does the check.
+    return type(arg)(*contents) if hasattr(arg, "_fields") else type(arg)(contents)
+
+
 # TODO: wrap everything in triton tensors
 def _implicit_cvt(arg):
     if isinstance(arg, int):
@@ -1116,6 +1125,8 @@ def _implicit_cvt(arg):
         ty = tl.str_to_ty(triton.runtime.jit.mangle_type(arg))
         handle = TensorHandle(np.array([arg.data_ptr()], dtype=np.uint64), ty)
         return tl.tensor(handle, ty)
+    elif isinstance(arg, tuple):
+        return _tuple_create(arg, map(_implicit_cvt, arg))
     return arg
 
 
@@ -1148,7 +1159,9 @@ class GridExecutor:
     def _init_args_hst(self, args_dev, kwargs):
 
         def _to_cpu(arg):
-            if not hasattr(arg, "data_ptr"):
+            if isinstance(arg, tuple):
+                return _tuple_create(arg, map(_to_cpu, arg))
+            elif not hasattr(arg, "data_ptr"):
                 return arg
             unwrapped_arg = _unwrap_tensor(arg)
             cpu_arg = unwrapped_arg.new_empty(0, device='cpu')
@@ -1164,22 +1177,30 @@ class GridExecutor:
         for key, value in kwargs.items():
             if hasattr(value, "data_ptr"):
                 kwargs_hst[key] = value.cpu()
+            elif isinstance(value, tuple):
+                return _tuple_create(value, map(_to_cpu, value))
             else:
                 kwargs_hst[key] = value
         return args_hst, kwargs_hst
 
     def _restore_args_dev(self, args_dev, args_hst, kwargs, kwargs_hst):
-        for arg_dev, arg_hst in zip(args_dev, args_hst):
+
+        def _from_cpu(arg_dev, arg_hst):
             if hasattr(arg_dev, "data_ptr"):
                 # No need to rewrap because this just modifies internal
                 arg_dev, arg_hst = _unwrap_tensor(arg_dev), _unwrap_tensor(arg_hst)
                 arg_dev.untyped_storage().copy_(arg_hst.untyped_storage())
+            elif isinstance(arg_dev, tuple):
+                for (arg_dev, arg_hst) in zip(arg_dev, arg_hst):
+                    _from_cpu(arg_dev, arg_hst)
+
+        for arg_dev, arg_hst in zip(args_dev, args_hst):
+            _from_cpu(arg_dev, arg_hst)
 
         # Restore keyword arguments
         for key, kwarg_dev in kwargs.items():
             kwarg_hst = kwargs_hst[key]
-            if hasattr(kwarg_dev, "data_ptr"):
-                kwarg_dev.data.copy_(kwarg_hst.to(kwarg_dev.device).data)
+            _from_cpu(kwarg_dev, kwarg_hst)
 
     def __call__(self, *args_dev, **kwargs):
         if kwargs.pop("warmup", False):

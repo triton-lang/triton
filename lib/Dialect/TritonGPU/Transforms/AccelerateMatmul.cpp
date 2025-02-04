@@ -206,6 +206,28 @@ static bool bwdFilter(Operation *op) {
               mlir::TypeID::get<arith::ArithDialect>());
 }
 
+static SmallVector<int, 2> getTransposeOrder(int rank) {
+  assert(rank >= 2);
+  auto transOrder = llvm::to_vector<2>(llvm::seq<int>(rank - 2));
+  transOrder.push_back(rank - 1);
+  transOrder.push_back(rank - 2);
+  return transOrder;
+}
+
+static DotOp transposeDotOp(PatternRewriter &rewriter, DotOp dotOp) {
+  auto rank = dotOp.getResult().getType().getRank();
+  Value a = dotOp.getA();
+  Value b = dotOp.getB();
+  Value c = dotOp.getC();
+  auto transOrder = getTransposeOrder(rank);
+  a = rewriter.create<TransOp>(a.getLoc(), a, transOrder);
+  b = rewriter.create<TransOp>(b.getLoc(), b, transOrder);
+  c = rewriter.create<TransOp>(c.getLoc(), c, transOrder);
+  return rewriter.create<DotOp>(dotOp.getLoc(), c.getType(), b, a, c,
+                                dotOp.getInputPrecision(),
+                                dotOp.getMaxNumImpreciseAcc());
+}
+
 // Finds the first different bitwidth in the chain of shape-preserving
 // unary ops that x depends on.
 // There are two primary scenarios:
@@ -260,29 +282,69 @@ public:
       return failure();
     }
     // TODO: Check data-types and SM compatibility
-    RankedTensorType oldRetType = dotOp.getType();
-    if (!oldRetType.getEncoding() ||
-        mlir::isa<NvidiaMmaEncodingAttr>(oldRetType.getEncoding()))
+    if (!dotOp.getType().getEncoding() ||
+        mlir::isa<NvidiaMmaEncodingAttr>(dotOp.getType().getEncoding()))
       return failure();
 
-    // get MMA encoding for the given number of warps
-    auto retShapePerCTA = getShapePerCTA(oldRetType);
     auto mod = dotOp->getParentOfType<mlir::ModuleOp>();
     int numWarps = TritonGPUDialect::getNumWarps(mod);
-    auto CTALayout = getCTALayout(oldRetType.getEncoding());
-
     int versionMajor = getMMAVersionSafe(computeCapability, dotOp);
     if (!(versionMajor >= 1 && versionMajor <= 3))
       return failure();
 
-    auto instrShape = mmaVersionToInstrShape(
-        versionMajor, retShapePerCTA, dotOp.getA().getType().getElementType(),
-        numWarps);
-    // operands
+    // If both of the operands are not loads, we fallback to MMAv2
+    // otherwise the reg-smem roundtrip will tank the MMAv3 performance
+    auto comesFromLoadOrBlockArg = [](Value v) -> bool {
+      // Peel out the original cvt dot_op<..., #blocked>
+      // and any other potential cvt/trans ops
+      while (true) {
+        if (auto cvtOp = v.getDefiningOp<ConvertLayoutOp>()) {
+          v = cvtOp.getSrc();
+          continue;
+        }
+        if (auto transOp = v.getDefiningOp<TransOp>()) {
+          v = transOp.getSrc();
+          continue;
+        }
+        break;
+      }
+      // We also accept block arguments as they appear in many MLIR tests
+      // If this is problematic we can totally drop them
+      return isa<BlockArgument>(v) ||
+             (v.getDefiningOp() &&
+              isa<LoadOp, ExperimentalDescriptorLoadOp>(v.getDefiningOp()));
+    };
+
+    bool aFromLoad = comesFromLoadOrBlockArg(dotOp.getA());
+    bool bFromLoad = comesFromLoadOrBlockArg(dotOp.getB());
+    bool transpose = false;
+    auto origDotOp = dotOp;
+    if (aFromLoad && !bFromLoad) {
+      // If the lhs is not a load and the rhs is, we transpose the inputs
+      // and the result provided this allows us to use mmav3
+      // We transpose the result at the end of the rewrite
+      DotOp transDot = transposeDotOp(rewriter, dotOp);
+      if (getMMAVersionSafe(computeCapability, transDot) == 3) {
+        dotOp = transDot;
+        versionMajor = 3;
+        transpose = true;
+      }
+      std::swap(aFromLoad, bFromLoad);
+    }
+    // If !aFromLoad && !bFromLoad, we just accept a shmem roundtrip
+    // for versionMajor == 3
+
     Value a = dotOp.getA();
     Value b = dotOp.getB();
-    auto oldAType = dotOp.getA().getType();
-    auto oldBType = dotOp.getB().getType();
+    auto oldAType = cast<RankedTensorType>(a.getType());
+    auto oldBType = cast<RankedTensorType>(b.getType());
+    auto oldRetType = cast<RankedTensorType>(dotOp.getType());
+
+    // get MMA encoding for the given number of warps
+    auto CTALayout = getCTALayout(oldRetType.getEncoding());
+    auto retShapePerCTA = getShapePerCTA(oldRetType);
+    auto instrShape = mmaVersionToInstrShape(
+        versionMajor, retShapePerCTA, oldAType.getElementType(), numWarps);
 
     assert(versionMajor == 2 || versionMajor == 3);
     int versionMinor = computeCapability == 75 ? 1 : 0;
@@ -298,12 +360,28 @@ public:
     auto newAcc =
         rewriter.create<ConvertLayoutOp>(oldAcc.getLoc(), newRetType, oldAcc);
 
+    auto getDotOperand = [&](Value v, int opIdx, int bitwidth) {
+      auto minType =
+          bitwidth > 0 ? rewriter.getIntegerType(bitwidth) : v.getType();
+      auto vType = cast<RankedTensorType>(v.getType());
+      auto newVEncoding = DotOperandEncodingAttr::get(
+          v.getContext(), opIdx, newRetType.getEncoding(), minType);
+      auto newVType = RankedTensorType::get(
+          vType.getShape(), vType.getElementType(), newVEncoding);
+      return rewriter.create<ConvertLayoutOp>(v.getLoc(), newVType, v);
+    };
+
     Operation *newDot = nullptr;
     if (versionMajor == 3) {
       auto eltType = dotOp.getA().getType().getElementType();
       // In MMAV3 transpose is only supported for f16 and bf16.
       bool allowTranspose = eltType.isF16() || eltType.isBF16();
-      a = getSharedMemoryMMAOperand(a, rewriter, 0, allowTranspose);
+      if (!aFromLoad) {
+        int bitwidth = getElementTypeOrSelf(a).getIntOrFloatBitWidth();
+        a = getDotOperand(a, 0, bitwidth);
+      } else {
+        a = getSharedMemoryMMAOperand(a, rewriter, 0, allowTranspose);
+      }
       b = getSharedMemoryMMAOperand(b, rewriter, 1, allowTranspose);
       newDot = rewriter.create<triton::nvidia_gpu::WarpGroupDotOp>(
           dotOp.getLoc(), newRetType, a, b, newAcc, nullptr,
@@ -312,27 +390,21 @@ public:
       // convert operands
       int minBitwidth =
           std::min(computeOrigBitWidth(a), computeOrigBitWidth(b));
-      Type minType = rewriter.getIntegerType(minBitwidth);
-      // convert A operand
-      auto newAEncoding = DotOperandEncodingAttr::get(
-          oldAType.getContext(), 0, newRetType.getEncoding(),
-          minBitwidth > 0 ? minType : oldAType.getElementType());
-      auto newAType = RankedTensorType::get(
-          oldAType.getShape(), oldAType.getElementType(), newAEncoding);
-      a = rewriter.create<ConvertLayoutOp>(a.getLoc(), newAType, a);
-      // convert B operand
-      auto newBEncoding = DotOperandEncodingAttr::get(
-          oldBType.getContext(), 1, newRetType.getEncoding(),
-          minBitwidth > 0 ? minType : oldBType.getElementType());
-      auto newBType = RankedTensorType::get(
-          oldBType.getShape(), oldBType.getElementType(), newBEncoding);
-      b = rewriter.create<ConvertLayoutOp>(b.getLoc(), newBType, b);
+
+      a = getDotOperand(a, 0, minBitwidth);
+      b = getDotOperand(b, 1, minBitwidth);
       newDot = rewriter.create<DotOp>(dotOp.getLoc(), newRetType, a, b, newAcc,
                                       dotOp.getInputPrecision(),
                                       dotOp.getMaxNumImpreciseAcc());
     }
+    if (transpose) {
+      auto rank = dotOp.getResult().getType().getRank();
+      auto transOrder = getTransposeOrder(rank);
+      newDot = rewriter.create<TransOp>(newDot->getLoc(), newDot->getResult(0),
+                                        transOrder);
+    }
     // convert dot instruction
-    rewriter.replaceOpWithNewOp<ConvertLayoutOp>(dotOp, oldRetType,
+    rewriter.replaceOpWithNewOp<ConvertLayoutOp>(origDotOp, origDotOp.getType(),
                                                  newDot->getResult(0));
     return success();
   }
