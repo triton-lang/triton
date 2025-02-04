@@ -1049,7 +1049,20 @@ MMALoadType getMMALoadType(Operation *loadOp) {
   if (!loadOp->hasOneUse())
     return MMALoadType::DoNotPipeline;
 
-  if (auto alloc = dyn_cast<ttg::LocalAllocOp>(*loadOp->getUsers().begin())) {
+  auto skipViewOps = [](Operation *op) -> Operation * {
+    while (isa<triton::TransOp, triton::ReshapeOp>(op)) {
+      if (!op->hasOneUse())
+        return nullptr;
+      op = *op->getUsers().begin();
+    }
+    return op;
+  };
+
+  Operation *user = skipViewOps(*loadOp->getUsers().begin());
+  if (!user)
+    return MMALoadType::DoNotPipeline;
+
+  if (auto alloc = dyn_cast<ttg::LocalAllocOp>(user)) {
     auto sharedEnc =
         dyn_cast<ttg::NVMMASharedEncodingAttr>(alloc.getType().getEncoding());
 
@@ -1067,20 +1080,8 @@ MMALoadType getMMALoadType(Operation *loadOp) {
     // order of the SharedEncoding it is converted to.
     return oldOrder == newOrder ? MMALoadType::SharedV3
                                 : MMALoadType::DoNotPipeline;
-  } else if (auto cvt =
-                 dyn_cast<ttg::ConvertLayoutOp>(*loadOp->getUsers().begin())) {
-    auto resTy = dyn_cast<RankedTensorType>(cvt->getResultTypes()[0]);
-    if (!resTy) {
-      return MMALoadType::DoNotPipeline;
-    }
-
-    if (isa<ttg::DotOperandEncodingAttr>(resTy.getEncoding())) {
-      return MMALoadType::Registers;
-    }
-
-    return MMALoadType::DoNotPipeline;
   } else {
-    return MMALoadType::DoNotPipeline;
+    return MMALoadType::Registers;
   }
 }
 

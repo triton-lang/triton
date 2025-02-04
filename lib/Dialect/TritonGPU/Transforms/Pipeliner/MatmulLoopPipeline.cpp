@@ -497,9 +497,12 @@ assignMemoryLayouts(scf::ForOp &forOp,
     loadsToPipeline.insert(&op);
     LoadInfo loadInfo;
     for (auto use : users) {
+      // By default we will try pipelining with load to registers at the end.
+      // For mmav3 we can try leaving the operands in shared memory.
+      MMALoadType mmaLoadType = MMALoadType::Registers;
       if (use->hasTrait<OpTrait::DotLike>()) {
         LDBG("set shared encoding with dot user: " << *use);
-        auto mmaLoadType = getMMALoadType(&op);
+        mmaLoadType = getMMALoadType(&op);
         auto dot = dyn_cast<tt::DotOp>(use);
         auto warpGroupDot = dyn_cast<ttng::WarpGroupDotOp>(use);
 
@@ -521,7 +524,7 @@ assignMemoryLayouts(scf::ForOp &forOp,
 
       // If we still don't have a shared encoding, try a "generic" shared
       // encoding.
-      if (!loadInfo.sharedEncoding && !isa<ttng::WarpGroupDotOp>(use)) {
+      if (!loadInfo.sharedEncoding && mmaLoadType == MMALoadType::Registers) {
         LDBG("try generic shared encoding");
         loadInfo.sharedEncoding =
             getSharedEncoding(&op, isTMALoad).value_or(nullptr);
