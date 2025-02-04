@@ -368,19 +368,10 @@ getSharedEncoding(Operation *loadOp, bool isTMALoad) {
     order = blockedOrder;
   }
 
-  if (isTMALoad) {
-    // For TMA, the encoding compatible with it takes precedence over local
-    // alloc created for the MMA operand.
-    return ttg::NVMMASharedEncodingAttr::get(
-        ty.getContext(), ty.getShape(), order, ctaLayout, ty.getElementType());
-  }
-
-  // If the load is used by a LocalAllocOp, use the same encoding as the allocs.
-  // If the allocs don't all have the same encoding, bail.
+  ttg::SharedEncodingTrait localAllocEnc;
   if (llvm::any_of(loadOp->getUsers(), [&](Operation *user) {
         return isa<ttg::LocalAllocOp>(user);
       })) {
-    ttg::SharedEncodingTrait localAllocEnc;
     for (auto user : loadOp->getUsers()) {
       auto localAlloc = dyn_cast<ttg::LocalAllocOp>(user);
       if (!localAlloc)
@@ -390,9 +381,30 @@ getSharedEncoding(Operation *loadOp, bool isTMALoad) {
       if (!localAllocEnc) {
         localAllocEnc = enc;
       }
-      if (enc != localAllocEnc)
+      if (enc != localAllocEnc) {
+        // If the allocs don't all have the same encoding, bail.
         return std::nullopt;
+      }
     }
+  }
+
+  if (isTMALoad) {
+    // For TMA, the encoding compatible with it takes precedence over local
+    // alloc created for the MMA operand.
+    if (localAllocEnc) {
+      if (auto sharedMMALayout =
+              dyn_cast<ttg::NVMMASharedEncodingAttr>(localAllocEnc)) {
+        assert(!sharedMMALayout.getFp4Padded() &&
+               "TMA load for mixed precision MMAv5 is not supported yet.");
+      }
+    }
+    return ttg::NVMMASharedEncodingAttr::get(
+        ty.getContext(), ty.getShape(), order, ctaLayout, ty.getElementType(),
+        /*fp4Padded*/ false);
+  }
+
+  // If the load is used by a LocalAllocOp, use the same encoding as the allocs.
+  if (localAllocEnc) {
     return localAllocEnc;
   }
 
