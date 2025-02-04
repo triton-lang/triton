@@ -297,8 +297,9 @@ public:
       }
       // We also accept block arguments as they appear in many MLIR tests
       // If this is problematic we can totally drop them
-      return isa<LoadOp, ExperimentalDescriptorLoadOp>(v.getDefiningOp()) ||
-             isa<BlockArgument>(v);
+      return isa<BlockArgument>(v) ||
+             (v.getDefiningOp() &&
+              isa<LoadOp, ExperimentalDescriptorLoadOp>(v.getDefiningOp()));
     };
 
     bool aFromLoad = comesFromLoadOrBlockArg(dotOp.getA());
