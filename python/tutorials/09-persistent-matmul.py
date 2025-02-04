@@ -281,6 +281,7 @@ def matmul_kernel_persistent(a_ptr, b_ptr, c_ptr,  #
             b = tl.load(b_ptrs, mask=offs_k_for_mask[:, None] < K - ki * BLOCK_SIZE_K, other=0.0)
             accumulator = tl.dot(a, b, accumulator)
 
+        tile_id_c += NUM_SMS
         pid_m, pid_n = _compute_pid(tile_id_c, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS)
         offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
         offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
