@@ -36,7 +36,7 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
   if (tensorType.getRank() > 1) {
     encoding = NVMMASharedEncodingAttr::get(
         tensorType.getContext(), tensorType.getShape(), order, ctaLayout,
-        tensorType.getElementType());
+        tensorType.getElementType(), /*fp4Padded*/ false);
   }
   MemDescType memDescType =
       MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
@@ -114,7 +114,7 @@ static void lowerTMAStore(Operation *op, mlir::TypedValue<RankedTensorType> src,
   if (tensorType.getRank() > 1) {
     encoding = NVMMASharedEncodingAttr::get(
         tensorType.getContext(), tensorType.getShape(), order, ctaLayout,
-        tensorType.getElementType());
+        tensorType.getElementType(), /*fp4Padded*/ false);
   }
   MemDescType memDescType =
       MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
