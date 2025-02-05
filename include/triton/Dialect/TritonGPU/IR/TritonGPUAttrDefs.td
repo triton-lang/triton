@@ -471,6 +471,46 @@ def NVMMASharedEncodingAttr :
   let hasCustomAssemblyFormat = 1;
 }
 
+def SwizzledBlocksSharedEncodingAttr :
+  TritonGPU_Attr<"SwizzledBlocksSharedEncoding", "swizzled_blocks_shared_encoding", [SharedEncodingTrait, LayoutEncodingTrait]> {
+  let mnemonic = "swizzled_blocks_shared";
+
+  let description = [{
+Shared encoding similar to SwizzledSharedEncodingAttr,
+but with additional swizzling pattern change in blocks of maxPhase * perPhase rows:
+
+  #shared<{vec=1, perPhase=1, maxPhase=4, order=[1, 0]}>
+  [ 0,  1,  2,  3],  // xor with 0  (phase = 0 ^ block no = 0)
+  [ 5,  4,  7,  6],  // xor with 1  (phase = 1 ^ block no = 0)
+  [10, 11,  8,  9],  // xor with 2  (phase = 2 ^ block no = 0)
+  [15, 14, 13, 12]   // xor with 3  (phase = 3 ^ block no = 0)
+  [17, 16, 19, 18],  // xor with 1  (phase = 0 ^ block no = 1)
+  [20, 21, 22, 23],  // xor with 0  (phase = 1 ^ block no = 1)
+  [27, 26, 25, 24],  // xor with 3  (phase = 2 ^ block no = 1)
+  [30, 31, 28, 29]   // xor with 2  (phase = 3 ^ block no = 1)
+
+Used to minimize bank conflicts while loading MFMA operand B in TN GEMM case
+  }];
+
+  let parameters = (
+    ins
+    "unsigned":$vec,
+    "unsigned":$perPhase,
+    "unsigned":$maxPhase,
+    ArrayRefParameter<"unsigned">:$order,
+    "CTALayoutAttr":$CTALayout
+  );
+
+  let extraClassDeclaration = extraBaseClassDeclaration # [{
+    int32_t getAlignment() const;
+    SmallVector<unsigned> getCTAsPerCGA() const;
+    SmallVector<unsigned> getCTAOrder() const;
+    SmallVector<unsigned> getCTASplitNum() const;
+  }];
+  let hasCustomAssemblyFormat = 1;
+}
+
+
 //===----------------------------------------------------------------------===//
 // Distributed Layout Encoding
 //===----------------------------------------------------------------------===//
