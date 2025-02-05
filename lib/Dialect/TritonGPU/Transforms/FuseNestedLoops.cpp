@@ -935,7 +935,7 @@ static void sinkOps(Region &limit, Block *sinkBlock, Block::iterator sinkBefore,
                     function_ref<bool(Operation *)> inSinkRegion) {
   llvm::SetVector<Operation *> sunkOps;
   auto canBeSunk = [&](Operation &op) -> std::pair<bool, bool> {
-    if (!isPure(&op) || op.hasTrait<OpTrait::DotLike>())
+    if (!isPure(&op) || isa<DotOpInterface>(op))
       return {false, false};
     // An op can be sunk if all its users are inside the inner loop or are
     // marked for sinking.
