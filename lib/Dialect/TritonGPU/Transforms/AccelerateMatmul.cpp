@@ -609,6 +609,9 @@ Value addSmemStageToScaleLoad(Value scale, mlir::PatternRewriter &rewriter) {
   auto op = scale.getDefiningOp();
   Operation *loadConsumer = nullptr;
 
+  if (!op)
+    return scale;
+
   while (!isa<LoadOp>(op)) {
     if (auto reshape = dyn_cast<ReshapeOp>(op)) {
       op = reshape.getSrc().getDefiningOp();
