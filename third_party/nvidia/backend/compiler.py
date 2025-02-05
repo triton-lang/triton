@@ -278,7 +278,7 @@ class CUDABackend(BaseBackend):
             nvidia.passes.ttnvgpuir.add_promote_lhs_to_tmem(pm)
             nvidia.passes.ttnvgpuir.add_keep_acc_in_tmem(pm)
             passes.common.add_canonicalizer(pm)
-        elif:
+        else:
             passes.common.add_licm(pm)
         passes.ttgpuir.add_prefetch(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, capability >= 80)
