@@ -184,19 +184,20 @@ def mxfp_to_bf16_kernel(
 
 def dot_scale_ref(x, scale, y, type_x, type_y):
     e_bits, m_bits = {"e2m1": (2, 1), "e4m3": (4, 3), "e5m2": (5, 2)}[type_x]
-    type_fp8_y = {"e4m3": torch.float8_e4m3fn, "e5m2": torch.float8_e5m2}[type_y]
+    type_fp8_y = {"e4m3": torch.float8_e4m3fn, "e5m2": torch.float8_e5m2, "bf16": torch.bfloat16}[type_y]
 
-    comp_dtype = torch.float32
     out_dtype = torch.bfloat16
 
     x = x.contiguous()
-    x_upcast = x.new_empty(scale.shape[:-1] + (32 * scale.shape[-1], ), dtype=comp_dtype)
+    x_upcast = x.new_empty(scale.shape[:-1] + (32 * scale.shape[-1], ), dtype=out_dtype)
 
     N = x_upcast.numel()
     BLOCK_SIZE = 512
     grid = ((N + BLOCK_SIZE - 1) // BLOCK_SIZE, )
     mxfp_to_bf16_kernel[grid](x, scale, x_upcast, scale.numel(), e_bits, m_bits, BLOCK_SIZE, num_warps=4)
-    y_upcast = y.view(type_fp8_y)
+    y_upcast = y if type_y == "bf16" else y.view(type_fp8_y).to(out_dtype)
+    assert x_upcast.dtype == out_dtype
+    assert y_upcast.dtype == out_dtype
 
     class AccumulateInFp32:
 
@@ -208,7 +209,7 @@ def dot_scale_ref(x, scale, y, type_x, type_y):
             torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = self.prev_value
 
     with AccumulateInFp32():
-        return torch.matmul(x_upcast.to(out_dtype), y_upcast.to(out_dtype))
+        return torch.matmul(x_upcast, y_upcast)
 
 
 @pytest.mark.parametrize("scale", [True, False])
@@ -221,7 +222,6 @@ def test_pipeline_matmul(scale, device):
     NUM_STAGES = 4
 
     if scale:
-        # TODO Use e5m2 for Ampere, as it does not support fp_to_fp conversions for fp8e4m3
         BLOCK_K = 64  # 32 NYI
         K = BLOCK_K * NUM_STAGES
         a_type = "e2m1"
@@ -229,12 +229,15 @@ def test_pipeline_matmul(scale, device):
         a = torch.randint(256, (M, K // DIV_FACTOR), device=device, dtype=torch.uint8)
         # Sample small-ish scales to avoid overflow
         scale_a = torch.randint(74, (M, K // 32), device=device, dtype=torch.uint8)
-        # Ampere does not support fp8e4m3
-        b_type = "e4m3" if is_hopper() else "e5m2"
-        b = torch.randint(256, (K, N), device=device, dtype=torch.uint8)
-        # e5m2 has too many non-finite values when sampled uniformly (1 / 32) and
-        # Fp8E5M2_to_Bf16 doesn't preserve NaNs (fixme)
-        if b_type == "e5m2":
+        # Use e5m2 for Ampere, as it does not support fp_to_fp conversions for fp8e4m3
+        # Use bf16 for Hopper as the rhs must come from shmem
+        b_type = "bf16" if is_hopper() else "e5m2"
+        if b_type == "bf16":
+            b = torch.randn((K, N), device=device, dtype=torch.bfloat16)
+        else:
+            b = torch.randint(256, (K, N), device=device, dtype=torch.uint8)
+            # e5m2 has too many non-finite values when sampled uniformly (1 / 32) and
+            # Fp8E5M2_to_Bf16 doesn't preserve NaNs (fixme)
             finite = torch.arange(K * N, device=device, dtype=torch.uint8).reshape(K, N) % 0x7C
             b = torch.where(b & 0x7C == 0x7C, finite | (0x80 & b), b)
         output = torch.empty((M, N), dtype=torch.bfloat16, device=device)
