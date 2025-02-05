@@ -309,6 +309,28 @@ LogicalResult DotOp::verify() {
                                                      bEncoding);
 }
 
+bool DotOp::verifyDims() {
+  auto aShape = this->getA().getType().getShape();
+  auto bShape = this->getB().getType().getShape();
+
+  return aShape[aShape.size() - 1] == bShape[aShape.size() - 2];
+}
+
+//-- DotScaledOp --
+bool DotScaledOp::verifyDims() {
+  auto aShape = this->getLhs().getType().getShape();
+  auto bShape = this->getRhs().getType().getShape();
+
+  auto aKdim = aShape[aShape.size() - 1];
+  auto bKdim = bShape[aShape.size() - 2];
+  if (this->getLhsType() == ScaleDotElemType::E2M1)
+    aKdim *= 2;
+  if (this->getRhsType() == ScaleDotElemType::E2M1)
+    bKdim *= 2;
+
+  return aKdim == bKdim;
+}
+
 //-- MakeRangeOp --
 OpFoldResult MakeRangeOp::fold(FoldAdaptor adaptor) {
   // make_range(start, start + 1) -> constant(start)
