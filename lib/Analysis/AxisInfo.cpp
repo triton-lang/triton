@@ -282,7 +282,7 @@ public:
     if (auto shape = dyn_cast<mlir::ShapedType>(op.getType())) {
       unsigned rank = shape.getRank();
       return AxisInfo(
-          /*contiguity=*/AxisInfo::DimVectorT(rank, 1),
+          /*contiguity=*/AxisInfo::DimVectorT(rank, largePowerOf2),
           /*divisibility=*/AxisInfo::DimVectorT(rank, largePowerOf2),
           /*constancy=*/AxisInfo::DimVectorT(shape.getShape()));
     }
