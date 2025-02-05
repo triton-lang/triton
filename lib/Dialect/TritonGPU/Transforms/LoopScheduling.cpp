@@ -335,17 +335,97 @@ int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
   return useStage - defStage;
 }
 
-void lowerLoad(tt::LoadOp loadOp, int stageDiff) {
-  auto loc = loadOp.getLoc();
-  auto sharedEncoding = getSharedEncoding(loadOp);
+ttg::SharedEncodingTrait getSharedEncoding(tt::LoadOp loadOp) {
+  // Try to use local alloc encoding if possible.
+  ttg::SharedEncodingTrait localAllocEnc;
+  if (llvm::any_of(loadOp->getUsers(), [&](Operation *user) {
+        return isa<ttg::LocalAllocOp>(user);
+      })) {
+    for (auto user : loadOp->getUsers()) {
+      auto localAlloc = dyn_cast<ttg::LocalAllocOp>(user);
+      if (!localAlloc)
+        continue;
+      auto enc = mlir::cast<ttg::SharedEncodingTrait>(
+          localAlloc.getType().getEncoding());
+      if (!localAllocEnc) {
+        localAllocEnc = enc;
+      }
+      if (enc != localAllocEnc) {
+        // Some users have different encoding than others.
+        // Use one of the encodings, and warn about the performance issue.
+        // TODO pawel: report the warning.
+        return localAllocEnc;
+      }
+    }
+  }
+
+  // TODO pawel: Add the case for TMA loads.
+
+  // Try to use dot encoding if possible.
+  bool incompatible = false;
+  localAllocEnc =
+      getSharedEncIfAllUsersAreDotEnc(loadOp.getResult(), incompatible)
+          .value_or(nullptr);
+
+  if (!localAllocEnc) {
+    // Use generic layout. This won't be optimal for 2D tensors.
+    auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
+    auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
+    auto blockedOrder = ttg::getOrder(ty.getEncoding());
+    SmallVector<unsigned> order;
+    if (blockedOrder.size() == 3) {
+      for (unsigned i = 0; i < blockedOrder.size(); ++i) {
+        if (blockedOrder[i] == 0)
+          continue;
+        order.push_back(blockedOrder[i]);
+      }
+      order.push_back(0);
+    } else {
+      order = blockedOrder;
+    }
+    localAllocEnc = ttg::SwizzledSharedEncodingAttr::get(ty.getContext(), 1, 1,
+                                                         1, order, ctaLayout);
+  }
+  return localAllocEnc;
+}
+
+// Create an allocation that can hold distance number of loadOp shapes.
+static Value createAlloc(scf::ForOp &forOp, Operation *loadOp,
+                         ttg::SharedEncodingTrait sharedEnc,
+                         unsigned distance) {
+  OpBuilder builder(forOp);
+  Attribute sharedMemorySpace =
+      ttg::SharedMemorySpaceAttr::get(forOp.getContext());
+  auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
+  SmallVector<int64_t> bufferShape(ty.getShape().begin(), ty.getShape().end());
+  bufferShape.insert(bufferShape.begin(), distance);
+  Type memdescType = ttg::MemDescType::get(bufferShape, ty.getElementType(),
+                                           sharedEnc, sharedMemorySpace,
+                                           /*mutableMemory=*/true);
+  Value alloc =
+      builder.create<ttg::LocalAllocOp>(loadOp->getLoc(), memdescType);
+  return alloc;
 }
 
 void lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
+  struct AsyncLoad {
+    int stageDiff;
+    Value alloc;
+    Value barrier;
+  };
+  struct LoadGroupInfo {
+    Value insertIdx;
+    Value extractIdx;
+    Value phase;
+    bool hasTMALoad = false;
+  };
+  llvm::MapVector<tt::LoadOp, AsyncLoad> asyncLoads;
+  llvm::MapVector<int, LoadGroupInfo> loadGroups;
   forOp->walk<mlir::WalkOrder::PreOrder>([&](Operation *op) {
     if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
       int stageDiff = getDefUseStageDiff(loadOp, forOp, schedule);
       if (stageDiff > 0) {
-        lowerLoad(loadOp, stageDiff);
+        asyncLoads[loadOp] = {.stageDiff = stageDiff};
       }
     } else if (isa<scf::ForOp>(op)) {
       // Skip nested loops.
@@ -353,6 +433,14 @@ void lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
     }
     return WalkResult::advance();
   });
+
+  for (auto &[loadOp, asyncLoad] : asyncLoads) {
+    SharedEncodingTrait sharedEncoding = getSharedEncoding(loadOp);
+    Value alloc =
+        createAlloc(forOp, loadOp, sharedEncoding, asyncLoad.stageDiff);
+    asyncLoad.alloc = alloc;
+    loadGroups.insert({asyncLoad.stageDiff, {}});
+  }
 }
 
 void lowerLoop(scf::ForOp forOp) {
