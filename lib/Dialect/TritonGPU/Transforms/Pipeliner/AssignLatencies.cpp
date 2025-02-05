@@ -165,7 +165,7 @@ loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
           distance++;
         }
         for (Value operand : op->getOperands()) {
-          if (op->hasTrait<OpTrait::DotLike>()) {
+          if (isa<mlir::triton::DotOpInterface>(op)) {
             // Heuristic: only pipeline A and B operands of the dot op.
             if (operand == op->getOperand(2))
               continue;
@@ -176,11 +176,21 @@ loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
             dfs(defOp, finalUser, distance);
           }
         }
+        if (auto tmemAlloc = dyn_cast<nvidia_gpu::TMEMAllocOp>(op)) {
+          if (!tmemAlloc.getSrc()) {
+            for (auto user : tmemAlloc.getResult().getUsers()) {
+              if (auto tmemCopy = dyn_cast<nvidia_gpu::TMEMCopyOp>(user)) {
+                dfs(tmemCopy.getSrc().getDefiningOp(), finalUser, distance);
+                break;
+              }
+            }
+          }
+        }
       };
 
   bool seenDot = false;
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (!op.hasTrait<OpTrait::DotLike>())
+    if (!isa<mlir::triton::DotOpInterface>(op))
       continue;
     seenDot = true;
     seen.clear();
