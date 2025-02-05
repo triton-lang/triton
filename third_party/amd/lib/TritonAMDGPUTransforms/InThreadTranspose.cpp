@@ -6,6 +6,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Tools/LayoutUtils.h"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "tritonamdgpu-in-thread-transpose"
@@ -18,6 +19,8 @@
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
+
+namespace {
 
 static Type getNewType(Type type, Attribute encoding) {
   RankedTensorType tensorType = dyn_cast<RankedTensorType>(type);
@@ -67,95 +70,464 @@ void convertLayout(Attribute encoding, Operation *op) {
   op->erase();
 }
 
-SmallVector<Operation *> getLoadInsts(Operation *op) {
-  SmallVector<Operation *> ret;
-  auto v = op->getOperand(0);
-  auto prevOp = v.getDefiningOp();
-  if (isa<RegionBranchOpInterface>(prevOp)) {
-    // Deal with the case that convert_layout intakes from scf.if, etc.
-    LDBG("Dealing with scf blocks");
-    auto idx = cast<OpResult>(v).getResultNumber();
-    llvm::SmallVector<scf::YieldOp> yieldOps;
-    prevOp->walk([&](Operation *op) {
-      if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
-        yieldOps.push_back(yieldOp);
-      }
-    });
+ttg::LinearEncodingAttr
+createInThreadTransposedEncoding(ArrayRef<int64_t> shape,
+                                 ttg::BlockedEncodingAttr srcEncoding) {
+  auto srcLL = srcEncoding.toLinearLayout(shape);
+  SmallVector<unsigned> newInRegOrder(srcEncoding.getOrder());
+  int rank = shape.size();
+  std::swap(newInRegOrder[rank - 2], newInRegOrder[rank - 1]);
 
-    for (auto yieldOp : yieldOps) {
-      auto maybeLoadOp = yieldOp.getOperand(idx).getDefiningOp();
-      getLoadInsts(maybeLoadOp);
-    }
-  } else if (isa<tt::LoadOp>(prevOp)) {
-    // regular case
-    ret.push_back(prevOp);
-  } else if (isa<ttg::LocalLoadOp>(op)) {
-    auto localAlloc = cast<ttg::LocalAllocOp>(prevOp);
-    ret.push_back(localAlloc.getSrc().getDefiningOp());
-  } else {
-    // can't find any loadOp
-    LDBG("we assume load->convert_layout->dot chain but we cannot find it.");
-  }
-  return ret;
+  // Make in-register transposed tile
+  auto ctx = srcEncoding.getContext();
+  auto regDimName = StringAttr::get(ctx, "register");
+  auto inRegTransposeTile = tt::identityStandardND(
+      regDimName, srcEncoding.getSizePerThread(), newInRegOrder);
+  // make sure basis in same order as in srcLayout
+  SmallVector<StringAttr> outDimNames(srcLL.getOutDimNames());
+  inRegTransposeTile = inRegTransposeTile.transposeOuts(outDimNames);
+
+  // Copy original bases, and replace register tile with transposed one
+  tt::LinearLayout::BasesT bases = srcLL.getBases();
+  auto &regBase = *bases.find(regDimName);
+  int regsTransposed = inRegTransposeTile.getInDimSizeLog2(regDimName);
+  for (int i = 0; i < regsTransposed; ++i)
+    regBase.second[i] = inRegTransposeTile.getBasis(regDimName, i);
+
+  tt::LinearLayout transposedLL(bases, SmallVector<StringAttr>(outDimNames));
+  return ttg::LinearEncodingAttr::get(ctx, transposedLL);
 }
 
-bool ableToConvertToThreadRaked(Value operand) {
+void transposeInRegsitersBeforeStoreInLocalMemory(
+    Operation *memStoreOp, Attribute transposedEncoding) {
+  if (memStoreOp->getNumOperands() == 0)
+    return;
+  auto data = memStoreOp->getOperand(0);
+  OpBuilder builder(memStoreOp);
+
+  // local alloc has optional src
+  // if it is not provided, nothing to do
+  if (!data)
+    return;
+
+  auto newType = getNewType(data.getType(), transposedEncoding);
+  auto inThreadTransposed =
+      builder.create<ttg::ConvertLayoutOp>(memStoreOp->getLoc(), newType, data);
+  memStoreOp->setOperand(0, inThreadTransposed);
+}
+
+Attribute createNewSharedEncoding(RankedTensorType operandType) {
+  auto ctx = operandType.getContext();
+  auto dotOperandEnc =
+      cast<ttg::DotOperandEncodingAttr>(operandType.getEncoding());
+  auto ctaLayout = ttg::getCTALayout(dotOperandEnc);
+  auto bitWidth = operandType.getElementTypeBitWidth();
+  SmallVector<unsigned> order{1, 0};
+  if (dotOperandEnc.getOpIdx() == 1)
+    std::swap(order[0], order[1]);
+
+  auto tempAttr = ttg::SwizzledSharedEncodingAttr::get(
+      ctx, dotOperandEnc, operandType.getShape(), order, ctaLayout, bitWidth,
+      /*needTrans=*/false);
+
+  auto sharedVec = tempAttr.getVec();
+  auto perPhase = tempAttr.getPerPhase();
+  auto maxPhase = tempAttr.getMaxPhase();
+
+  auto newSharedEnc = ttg::AMDRotatingSharedEncodingAttr::get(
+      ctx, sharedVec, perPhase, maxPhase, order, ctaLayout);
+
+  return newSharedEnc;
+}
+
+void changeSharedEncoding(Value memVal, Attribute newEncoding) {
+  auto originalType = cast<ttg::MemDescType>(memVal.getType());
+  auto sharedEnc =
+      dyn_cast<ttg::SwizzledSharedEncodingAttr>(originalType.getEncoding());
+  // Already transformed this value
+  if (!sharedEnc)
+    return;
+
+  auto newType = ttg::MemDescType::get(
+      originalType.getShape(), originalType.getElementType(), newEncoding,
+      originalType.getMemorySpace(), originalType.getMutableMemory());
+
+  memVal.setType(newType);
+}
+
+/// Structure describes operations involved in local_alloc->local_load pattern
+struct loadStoreLoadPatternComponents {
+  SmallVector<tt::LoadOp> globalLoads;
+  // list of localAllocOp and localStoreOp operations
+  SmallVector<Operation *> localMemStores;
+  // list of MemDescSubviewOp, control flow results and block operands
+  SmallVector<Value> sharedMemVals;
+};
+
+/// For a given value return all operations that define it.
+///
+/// If val is a result of operation, return definingOp.
+/// If val is a result of some control flow operation or block argument,
+/// traverse control flow instructions.
+FailureOr<SmallVector<Value>> traverseCFForValueDefs(Value val) {
+  SmallVector<Value> totalDefs{val};
+  LDBG("    traverseCFForValueDefs processing " << val);
+  if (auto blockArg = dyn_cast<BlockArgument>(val)) {
+    Block *block = blockArg.getOwner();
+
+    // Get parent operation (e.g., scf.for, scf.if, scf.while)
+    Operation *parentOp = block->getParentOp();
+    if (!parentOp) {
+      LDBG("    block without parent op, can not analyze further");
+      return failure();
+    }
+
+    // If block belongs to a function, stop tracking (function arguments)
+    if (isa<triton::FuncOp>(parentOp)) {
+      LDBG("    can not traverse def-use chains, found function argument");
+      return failure();
+    }
+
+    int argIdx = blockArg.getArgNumber();
+
+    if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
+      // Handle `scf.for`
+      // Continue traversing this op, even if it is visited
+      // It could be visited with different arg idx
+      int iterArgIdx = argIdx - 1; // Skip induction variable
+      if (iterArgIdx >= 0) {
+        Value yieldVal =
+            forOp.getBody()->getTerminator()->getOperand(iterArgIdx);
+        // look inside of a loop
+        auto inLoop = traverseCFForValueDefs(yieldVal);
+        // look outside of a loop
+        int forOpArgIdx = iterArgIdx + forOp.getNumControlOperands();
+        auto outLoop = traverseCFForValueDefs(forOp.getOperand(forOpArgIdx));
+        if (failed(inLoop) || failed(outLoop))
+          return failure();
+
+        totalDefs.append(inLoop.value());
+        totalDefs.append(outLoop.value());
+      } else {
+        // Induction variable
+        auto search = traverseCFForValueDefs(forOp.getOperand(0));
+        if (failed(search))
+          return failure();
+        totalDefs.append(search.value());
+      }
+    } else if (auto ifOp = dyn_cast<scf::IfOp>(parentOp)) {
+      // Handle `scf.if`
+      auto thenYield = ifOp.thenYield();
+      auto elseYield = ifOp.elseYield();
+
+      // Track all possible yielded values from then/else blocks
+      if (thenYield) {
+        auto ops = traverseCFForValueDefs(thenYield->getOperand(argIdx));
+        if (failed(ops))
+          return failure();
+        totalDefs.append(ops.value());
+      }
+      if (elseYield) {
+        auto ops = traverseCFForValueDefs(elseYield->getOperand(argIdx));
+        if (failed(ops))
+          return failure();
+        totalDefs.append(ops.value());
+      }
+    } else if (auto whileOp = dyn_cast<scf::WhileOp>(parentOp)) {
+      // Handle `scf.while`
+      auto terminator = whileOp.getBefore().front().getTerminator();
+      auto search = traverseCFForValueDefs(terminator->getOperand(argIdx));
+      if (failed(search))
+        return failure();
+      totalDefs.append(search.value());
+    } else if (isa<RegionBranchOpInterface>(parentOp)) {
+      // Deal with the case that convert_layout intakes from scf.if, etc.
+      llvm::SmallVector<scf::YieldOp> yieldOps;
+      parentOp->walk([&](Operation *op) {
+        if (auto yieldOp = dyn_cast<scf::YieldOp>(op)) {
+          yieldOps.push_back(yieldOp);
+        }
+      });
+
+      for (auto yieldOp : yieldOps) {
+        auto ops = traverseCFForValueDefs(yieldOp->getOperand(argIdx));
+        if (failed(ops))
+          return failure();
+        totalDefs.append(ops.value());
+      }
+    } else {
+      assert(false && "unexpected control flow operation");
+    }
+  }
+  return totalDefs;
+}
+
+struct ForwardSearchAnalysis {
+  SmallVector<Operation *> ops;
+  SmallVector<Value> transitiveCF;
+};
+
+/// For a given value return all operations that uses it.
+///
+/// Traverses control flow instructions forward.
+FailureOr<ForwardSearchAnalysis> traverseCFForValueUses(Value val) {
+  LDBG("    traverseCFForValueUses processing " << val);
+  ForwardSearchAnalysis result;
+  for (auto &use : val.getUses()) {
+    auto user = use.getOwner();
+    LDBG("      processing user " << *user);
+    if (isa<triton::ReturnOp>(user)) {
+      LDBG("    Reached return from function");
+      return failure();
+    } else if (isa<scf::YieldOp>(user)) {
+      auto opIdx = use.getOperandNumber();
+      auto parent = user->getParentOp();
+      // traverse outside data flow
+      auto parentResult = parent->getResult(opIdx);
+      auto cfSearch = traverseCFForValueUses(parentResult);
+      if (failed(cfSearch))
+        return failure();
+      result.ops.append(cfSearch.value().ops);
+      result.transitiveCF.push_back(parentResult);
+      result.transitiveCF.append(cfSearch.value().transitiveCF);
+
+      // traverse loop internal data flow
+      if (auto forOp = dyn_cast<scf::ForOp>(parent)) {
+        int forBodyOperandIdx = opIdx + forOp.getNumInductionVars();
+        auto blockArg = forOp.getBody()->getArgument(forBodyOperandIdx);
+        auto cfSearch = traverseCFForValueUses(blockArg);
+        if (failed(cfSearch))
+          return failure();
+        result.ops.append(cfSearch.value().ops);
+        result.transitiveCF.push_back(blockArg);
+        result.transitiveCF.append(cfSearch.value().transitiveCF);
+      }
+    } else if (auto forOp = dyn_cast<scf::ForOp>(user)) {
+      LDBG("      for op num operands: " << forOp.getNumOperands());
+      LDBG("      for op body num operands: "
+           << forOp.getBody()->getNumArguments());
+      assert(use.getOperandNumber() >= forOp.getNumControlOperands());
+      int blockArgIdx = use.getOperandNumber() - forOp.getNumControlOperands() +
+                        forOp.getNumInductionVars();
+      auto blockArg = forOp.getBody()->getArgument(blockArgIdx);
+      auto cfSearch = traverseCFForValueUses(blockArg);
+      if (failed(cfSearch))
+        return failure();
+      result.ops.append(cfSearch.value().ops);
+      result.transitiveCF.push_back(blockArg);
+      result.transitiveCF.append(cfSearch.value().transitiveCF);
+    } else {
+      result.ops.push_back(user);
+    }
+  }
+  return result;
+}
+
+/// Look for defining operation, hopping over control flow.
+///
+/// Gather all operations of type T within one def-use hop from val,
+/// control flow constructions are not considered as an operations.
+/// \returns true on success, false if analysis failed
+template <typename Op>
+FailureOr<SmallVector<Op>> findAllDefiningOps(Value val) {
+  auto candidates = traverseCFForValueDefs(val);
+  if (failed(candidates))
+    return failure();
+  SmallVector<Op> result;
+  for (auto candidateValue : candidates.value()) {
+    auto op = candidateValue.getDefiningOp();
+    if (!op)
+      continue;
+    if (auto typedOp = dyn_cast<Op>(op))
+      result.push_back(typedOp);
+  }
+  return result;
+}
+
+/// Look for all operations with one of OpTy types in def-use chains in both
+/// forward and backward directions.
+///
+/// Traversal goes through control flow operations and and stops at non OpTy
+/// operation. For example: findAllDefUseOps<local_load, mem_subview,
+/// local_store>(dot_operand)
+///
+///                                                    ----------------->
+///                                                    local_store | traversed
+/// global_load -> local_store -> mem_subview -> local_load -> dot
+///                 traversed      traversed      traversed
+///
+/// \returns true on success, false if analysis failed
+FailureOr<loadStoreLoadPatternComponents>
+findReachableSMemOps(ttg::LocalLoadOp root,
+                     SetVector<mlir::Operation *> &visited) {
+  // breadth-first search for reachable opeations
+  loadStoreLoadPatternComponents foundNetwork;
+  SmallVector<Operation *> traversalStep{root};
+  while (!traversalStep.empty()) {
+    LDBG("begin new step in smem op analysis");
+    SmallVector<Operation *> nextTraversalStep;
+    for (auto candidate : traversalStep) {
+      if (visited.contains(candidate))
+        continue;
+      visited.insert(candidate);
+      LDBG("  processing in smem op analysis: " << *candidate);
+
+      int forwardIdx = -1;
+      int backwardIdx = -1;
+      if (isa<ttg::LocalAllocOp>(candidate)) {
+        foundNetwork.localMemStores.push_back(candidate);
+        forwardIdx = 0;
+      } else if (isa<ttg::LocalStoreOp>(candidate)) {
+        foundNetwork.localMemStores.push_back(candidate);
+        backwardIdx = 1;
+      } else if (isa<ttg::MemDescSubviewOp>(candidate)) {
+        forwardIdx = 0;
+        backwardIdx = 0;
+      } else if (isa<ttg::LocalLoadOp, ttg::LocalDeallocOp>(candidate)) {
+        backwardIdx = 0;
+      } else {
+        // this operation is not part of shared memory def-use network,
+        // algorithm should not reach this point
+        assert(false);
+        continue;
+      }
+
+      // Look backward
+      if (backwardIdx != -1) {
+        auto backwardSearch =
+            traverseCFForValueDefs(candidate->getOperand(backwardIdx));
+        if (failed(backwardSearch))
+          return failure();
+        for (auto def : backwardSearch.value()) {
+          foundNetwork.sharedMemVals.push_back(def);
+          if (Operation *op = def.getDefiningOp()) {
+            // additional check, to ignore control flow operations
+            if (isa<ttg::MemDescSubviewOp, ttg::LocalAllocOp>(op))
+              nextTraversalStep.push_back(op);
+          }
+        }
+      }
+
+      // Look forward
+      if (forwardIdx != -1) {
+        auto forwardSearch =
+            traverseCFForValueUses(candidate->getResult(forwardIdx));
+        if (failed(forwardSearch))
+          return failure();
+        foundNetwork.sharedMemVals.append(forwardSearch.value().transitiveCF);
+        nextTraversalStep.append(forwardSearch.value().ops);
+      }
+    }
+    traversalStep = std::move(nextTraversalStep);
+  }
+  return foundNetwork;
+}
+
+llvm::FailureOr<loadStoreLoadPatternComponents>
+matchThreadRakePattern(Value operand) {
+  // TODO implement general heuristic,
+  // analyzing local load/store vectorization and estimating bank conflicts
   auto opTensorTy = cast<RankedTensorType>(operand.getType());
   auto opEnc = opTensorTy.getEncoding();
   auto opDotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(opEnc);
   if (!opDotOpEnc)
-    return false;
-  if (!isa<ttg::AMDMfmaEncodingAttr>(opDotOpEnc.getParent())) {
-    LDBG("Operand's parent encoding is not MFMA");
-    return false;
-  }
-  Operation *operandDef = operand.getDefiningOp();
-  Value loaded;
-  if (auto localLoad = dyn_cast<ttg::LocalLoadOp>(operandDef)) {
-    auto localAlloc =
-        dyn_cast<ttg::LocalAllocOp>(localLoad.getSrc().getDefiningOp());
-    if (!localAlloc) {
-      LDBG("Unsupported operand's defining operation");
-      return false;
-    }
-    loaded = localAlloc.getSrc();
-  } else if (auto cvtOp = dyn_cast<ttg::ConvertLayoutOp>(operandDef)) {
-    loaded = cvtOp.getSrc();
-  } else {
-    LDBG("Unsupported operand's defining operation");
-    return false;
-  }
+    return failure();
 
-  auto loadedEnc = cast<RankedTensorType>(loaded.getType()).getEncoding();
-  auto blockedEnc = dyn_cast<ttg::BlockedEncodingAttr>(loadedEnc);
-  if (!blockedEnc)
-    return false;
   int kDimNum = opDotOpEnc.getOpIdx() == 0 ? 1 : 0;
-  auto order = blockedEnc.getOrder();
-  if (order[0] != kDimNum) {
-    return true;
+  // TODO: support wmma
+  if (!isa<ttg::AMDMfmaEncodingAttr, ttg::AMDWmmaEncodingAttr>(
+          opDotOpEnc.getParent())) {
+    LDBG("Operand's parent encoding is not MFMA");
+    return failure();
   }
 
-  return false;
+  // Find nearest local_load
+  auto localLoadSearch = findAllDefiningOps<ttg::LocalLoadOp>(operand);
+  if (failed(localLoadSearch)) {
+    LDBG("Failed to traverse local loads");
+    return failure();
+  }
+
+  if (localLoadSearch.value().size() == 0) {
+    LDBG("Did not find local load operation");
+    return failure();
+  }
+
+  loadStoreLoadPatternComponents pattern;
+
+  SetVector<Operation *> visited;
+  for (auto lLoad : localLoadSearch.value()) {
+    // find local_alloc, local_store, local_load and ttg.memdesc_subview
+    // operations
+    auto sharedMemSearch = findReachableSMemOps(lLoad, visited);
+    if (failed(sharedMemSearch)) {
+      LDBG("Failed to traverse shared memmory operation network");
+      return failure();
+    }
+    pattern = sharedMemSearch.value();
+  }
+
+  if (pattern.localMemStores.empty()) {
+    LDBG("Did not find local alloc or store operations");
+    return failure();
+  }
+
+  for (auto localMemStore : pattern.localMemStores) {
+    LDBG("processing local mem store operation: " << *localMemStore);
+    // check if it is a local alloc with no predecessor
+    if (localMemStore->getNumOperands() == 0)
+      continue;
+    Value loadCandidate = localMemStore->getOperand(0);
+    auto loadedEnc =
+        cast<RankedTensorType>(loadCandidate.getType()).getEncoding();
+    auto blockedEnc = dyn_cast<ttg::BlockedEncodingAttr>(loadedEnc);
+    if (!blockedEnc)
+      return failure();
+    auto order = blockedEnc.getOrder();
+    if (order[0] == kDimNum) {
+      return failure();
+    }
+    auto globalLoadSearch = findAllDefiningOps<triton::LoadOp>(loadCandidate);
+    if (failed(globalLoadSearch)) {
+      LDBG("Failed to traverse path to global loads");
+      return failure();
+    }
+    pattern.globalLoads.append(globalLoadSearch.value());
+  }
+  if (pattern.globalLoads.empty()) {
+    LDBG("Did not find global load operation");
+    return failure();
+  }
+  // check that all global loads have same type(i.e. shape and layout),
+  // otherwise can not guarantee transformation overhead is cheap
+  auto expectedLoadType = pattern.globalLoads.front()->getResult(0).getType();
+
+  for (auto load : pattern.globalLoads) {
+    if (load->getResult(0).getType() != expectedLoadType) {
+      LDBG("Mismatch between global loads result types");
+      return failure();
+    }
+  }
+
+  return pattern;
 }
 
-ttg::BlockedEncodingAttr getThreadRakedBlockedEnc(Value operand,
+ttg::BlockedEncodingAttr getThreadRakedBlockedEnc(Value dotOperand,
+                                                  RankedTensorType loadType,
                                                   ModuleOp &mod) {
   // get the K dim according to dotOp operand's index
-  auto tensorTy = cast<RankedTensorType>(operand.getType());
+  auto tensorTy = cast<RankedTensorType>(dotOperand.getType());
   auto shape = tensorTy.getShape();
   auto opEnc = tensorTy.getEncoding();
   auto opDotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(opEnc);
   int kDimNum = opDotOpEnc.getOpIdx() == 0 ? 1 : 0;
   // get the current blocked encoding
-  auto cvtOperand = operand.getDefiningOp()->getOperand(0);
-  auto cvtOperandEnc =
-      cast<RankedTensorType>(cvtOperand.getType()).getEncoding();
-  auto blockedEnc = dyn_cast<ttg::BlockedEncodingAttr>(cvtOperandEnc);
+  auto loadEnc = cast<RankedTensorType>(loadType).getEncoding();
+  auto blockedEnc = dyn_cast<ttg::BlockedEncodingAttr>(loadEnc);
   // compute the sizePerThread for the new encoding
   auto sizePerThread = blockedEnc.getSizePerThread();
   auto elemsPerIter = product(sizePerThread);
-  auto elemsTotal = blockedEnc.getTotalElemsPerThread(shape, tensorTy);
+  auto elemsTotal = ttg::getTotalElemsPerThread(loadType);
   // we need to know how many iteration each thread will load
   LDBG("elemsPerIter = " << elemsPerIter << "; elemsTotal = " << elemsTotal);
   auto numMaxIters = elemsTotal / elemsPerIter;
@@ -170,13 +542,15 @@ ttg::BlockedEncodingAttr getThreadRakedBlockedEnc(Value operand,
 
   // return the new blocked encoding
   auto order = blockedEnc.getOrder();
-  int numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
+  int numWarps = ttg::lookupNumWarps(mod.getOperation());
   int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
   int numCTAs = ttg::TritonGPUDialect::getNumCTAs(mod);
   return ttg::BlockedEncodingAttr::get(mod.getContext(), shape,
                                        newSizePerThread, order, numWarps,
                                        threadsPerWarp, numCTAs);
 }
+
+} // namespace
 
 class TritonAMDGPUInThreadTransposePass
     : public TritonAMDGPUInThreadTransposeBase<
@@ -194,19 +568,35 @@ public:
 
       auto tryToConvertToThreadRaked = [&](Value operand) {
         LDBG("Consider " << operand);
-        bool performCvt = ableToConvertToThreadRaked(operand);
-        if (performCvt) {
-          LDBG("operand is K-outer");
-          auto loadOps = getLoadInsts(operand.getDefiningOp());
-          if (!loadOps.size())
-            return;
-          auto newBlockedEnc = getThreadRakedBlockedEnc(operand, mod);
-          LDBG("operand newBlockedEnc = " << newBlockedEnc);
-          for (auto loadOp : loadOps)
-            convertLayout(newBlockedEnc, (Operation *)loadOp);
-        } else {
-          LDBG("operand is K-inner and nothing to be done");
+        // Dot operand
+        auto matchResult = matchThreadRakePattern(operand);
+        if (!llvm::succeeded(matchResult)) {
+          LDBG("Failed to match threadRake pattern and nothing to be done");
+          return;
         }
+        auto pattern = matchResult.value();
+
+        LDBG("Adjusting global loads");
+        RankedTensorType loadResultType = cast<RankedTensorType>(
+            pattern.globalLoads[0].getResult().getType());
+        auto newBlockedEnc =
+            getThreadRakedBlockedEnc(operand, loadResultType, mod);
+        for (auto gLoad : pattern.globalLoads) {
+          LDBG("operand newBlockedEnc = " << newBlockedEnc);
+          convertLayout(newBlockedEnc, (Operation *)gLoad);
+        }
+
+        LDBG("Inserting transpose in registers before store in LDS");
+        Attribute transposedLayout = createInThreadTransposedEncoding(
+            loadResultType.getShape(), newBlockedEnc);
+        for (auto memOp : pattern.localMemStores)
+          transposeInRegsitersBeforeStoreInLocalMemory(memOp, transposedLayout);
+
+        LDBG("Adjust shared encoding");
+        auto newSharedEncoding =
+            createNewSharedEncoding(cast<RankedTensorType>(operand.getType()));
+        for (auto memVal : pattern.sharedMemVals)
+          changeSharedEncoding(memVal, newSharedEncoding);
       };
       // Check opA
       tryToConvertToThreadRaked(dotOp.getA());

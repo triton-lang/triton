@@ -63,6 +63,9 @@ class HIPOptions:
     #                 and a special software pipelining style - i.e., 1x LDS and 1x register
     #                 prefetch buffers for each GEMM tile.
     instruction_sched_variant: str = 'none'
+    # The following option is an experimental option to control optimization of shared memory accesses.
+    # Will be removed when proper heuristic is implemented.
+    enable_thread_rake: bool = False
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -231,8 +234,6 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         amd.passes.ttgpuir.add_hoist_layout_conversions(pm)
-        amd.passes.ttgpuir.add_in_thread_transpose(pm)
-        passes.ttgpuir.add_remove_layout_conversions(pm)
 
         global_prefetch = int(os.getenv("TRITON_HIP_GLOBAL_PREFETCH", "0"))
         local_prefetch = int(os.getenv("TRITON_HIP_LOCAL_PREFETCH", "0"))
@@ -254,6 +255,9 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
+        if options.enable_thread_rake:
+            amd.passes.ttgpuir.add_in_thread_transpose(pm)
+            passes.ttgpuir.add_remove_layout_conversions(pm)
         if amd.has_matrix_core_feature(options.arch):
             amd.passes.ttgpuir.add_reorder_instructions(pm)
             use_block_pingpong = is_pingpong_enabled(options.arch)
