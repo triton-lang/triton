@@ -1,4 +1,3 @@
-#include "mlir/Analysis/DataFlow/ConstantPropagationAnalysis.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/Analysis/DataFlow/DenseAnalysis.h"
 #include "mlir/Analysis/DataFlow/IntegerRangeAnalysis.h"
@@ -10,10 +9,8 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/MLIRContext.h"
-#include "mlir/Interfaces/ValueBoundsOpInterface.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
-#include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "third_party/amd/lib/TritonAMDGPUToLLVM/Utility.h"
@@ -23,13 +20,10 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/TypeSwitch.h"
-#include <deque>
 #include <optional>
 
 #define GEN_PASS_CLASSES
 #include "TritonAMDGPUTransforms/Passes.h"
-
-#include <mlir/Dialect/SCF/Utils/Utils.h>
 
 #undef DEBUG_TYPE
 #define DEBUG_TYPE "tritonamdgpu-convert-buffer-ops"
@@ -44,6 +38,10 @@ namespace ttg = mlir::triton::gpu;
 namespace tt = mlir::triton;
 
 namespace {
+
+constexpr int64_t kDefaultMaxTripCount = 0;
+const std::string kConvertBufferOpsPrefix = "__amdgpuconvertbufferops.";
+const std::string kOutputRange = kConvertBufferOpsPrefix + "output_range";
 
 std::optional<int64_t> maybeGetTripCount(LoopLikeOpInterface loop) {
   std::optional<OpFoldResult> lowerBound = loop.getSingleLowerBound();
@@ -62,9 +60,35 @@ void getEnclosingLoops(Operation &op, SmallVector<LoopLikeOpInterface> &ops) {
   }
 }
 
-const int64_t kMaxTripCount = 0;
-const std::string kConvertBufferOpsPrefix = "__amdgpuconvertbufferops.";
-const std::string kOutputRange = kConvertBufferOpsPrefix + "output_range";
+void inferResultRanges(GetProgramIdOp *op, SetIntRangeFn setResultRange) {
+  constexpr int64_t kDefaultMaxProgramID = 2048;
+  setResultRange(
+      op->getResult(),
+      ConstantIntRanges::range(
+          /*min*/ {/*numBits*/ 32, /*val*/ 0, /*isSigned*/ true},
+          /*max*/
+          {/*numBits*/ 32, /*val*/ kDefaultMaxProgramID, /*isSigned*/ true},
+          /*isSigned*/ true));
+}
+
+void inferResultRanges(MakeRangeOp *op, SetIntRangeFn setResultRange) {
+  setResultRange(
+      op->getResult(),
+      ConstantIntRanges::range(
+          /*min*/ {/*numBits*/ 32, /*val*/ op->getStart(), /*isSigned*/ true},
+          /*max*/ {/*numBits*/ 32, /*val*/ op->getEnd(), /*isSigned*/ true},
+          /*isSigned*/ true));
+}
+
+void inferResultRanges(SplatOp *op, ArrayRef<ConstantIntRanges> argRanges,
+                       SetIntRangeFn setResultRange) {
+  setResultRange(op->getResult(), argRanges[0]);
+}
+
+void inferResultRanges(ExpandDimsOp *op, ArrayRef<ConstantIntRanges> argRanges,
+                       SetIntRangeFn setResultRange) {
+  setResultRange(op->getResult(), argRanges[0]);
+}
 
 struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
   using dataflow::IntegerRangeAnalysis::IntegerRangeAnalysis;
@@ -79,25 +103,15 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
       Operation *op,
       ArrayRef<const dataflow::IntegerValueRangeLattice *> operands,
       ArrayRef<dataflow::IntegerValueRangeLattice *> results) override {
-    auto inferrable = dyn_cast<InferIntRangeInterface>(op);
-    if (!inferrable) {
-      setAllToEntryStates(results);
-      return success();
-    }
-
-    LLVM_DEBUG(llvm::dbgs() << "Inferring ranges for " << *op << "\n");
-    auto argRanges = llvm::map_to_vector(
-        operands, [](const dataflow::IntegerValueRangeLattice *lattice) {
-          return lattice->getValue();
-        });
-
-    auto joinCallback = [&](Value v, const IntegerValueRange &attrs) {
+    LDBG("  Inferring ranges for " << *op << "\n");
+    auto joinCallback = [&op, &results, this](Value v,
+                                              const IntegerValueRange &attrs) {
       auto result = dyn_cast<OpResult>(v);
       if (!result)
         return;
       assert(llvm::is_contained(op->getResults(), result));
 
-      LLVM_DEBUG(llvm::dbgs() << "Inferred range " << attrs << "\n");
+      LDBG("  Inferred range " << attrs << "\n");
       dataflow::IntegerValueRangeLattice *lattice =
           results[result.getResultNumber()];
       IntegerValueRange oldRange = lattice->getValue();
@@ -105,6 +119,39 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
       ChangeResult changed = lattice->join(attrs);
       propagateIfChanged(lattice, changed);
     };
+
+    if (llvm::isa<GetProgramIdOp, MakeRangeOp, SplatOp, ExpandDimsOp>(op)) {
+      SmallVector<ConstantIntRanges> argRanges;
+      for (auto lattice : operands) {
+        if (lattice->getValue().isUninitialized()) {
+          setAllToEntryStates(results);
+          return success();
+        }
+        argRanges.push_back(lattice->getValue().getValue());
+      }
+      if (auto op_ = llvm::dyn_cast<GetProgramIdOp>(op))
+        inferResultRanges(&op_, joinCallback);
+      else if (auto op_ = llvm::dyn_cast<SplatOp>(op))
+        inferResultRanges(&op_, argRanges, joinCallback);
+      else if (auto op_ = llvm::dyn_cast<ExpandDimsOp>(op))
+        inferResultRanges(&op_, argRanges, joinCallback);
+      else if (auto op_ = llvm::dyn_cast<MakeRangeOp>(op))
+        inferResultRanges(&op_, joinCallback);
+      else {
+        llvm_unreachable("Unsupported operation");
+      }
+      return success();
+    }
+
+    auto inferrable = dyn_cast<InferIntRangeInterface>(op);
+    if (!inferrable) {
+      setAllToEntryStates(results);
+      return success();
+    }
+    SmallVector<IntegerValueRange> argRanges = llvm::map_to_vector(
+        operands, [](const dataflow::IntegerValueRangeLattice *lattice) {
+          return lattice->getValue();
+        });
 
     inferrable.inferResultRangesFromOptional(argRanges, joinCallback);
     return success();
@@ -125,11 +172,12 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
       if (!loopTripCounts.contains(loop)) {
         SmallVector loops{loop};
         getEnclosingLoops(*loop, loops);
-        int loopTripCount = std::accumulate(
-            loops.begin(), loops.end(), 1,
-            [](int accum, LoopLikeOpInterface loop) {
-              return accum * maybeGetTripCount(loop).value_or(kMaxTripCount);
-            });
+        int loopTripCount =
+            std::accumulate(loops.begin(), loops.end(), 1,
+                            [](int accum, LoopLikeOpInterface loop) {
+                              return accum * maybeGetTripCount(loop).value_or(
+                                                 kDefaultMaxTripCount);
+                            });
         loopTripCounts[loop] = loopTripCount;
       }
       for (auto argLat : lattices) {
@@ -144,9 +192,7 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
     assert(predecessors->allPredecessorsKnown() &&
            "unexpected unresolved region successors");
     for (Operation *op : predecessors->getKnownPredecessors()) {
-      // Get the incoming successor operands.
       std::optional<OperandRange> operands;
-
       // Check if the predecessor is the parent op.
       if (op == branch) {
         operands = branch.getEntrySuccessorOperands(successor);
@@ -155,7 +201,6 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
                      dyn_cast<RegionBranchTerminatorOpInterface>(op)) {
         operands = regionTerminator.getSuccessorOperands(successor);
       }
-
       if (!operands) {
         // We can't reason about the data-flow.
         return setAllToEntryStates(lattices);
@@ -168,16 +213,18 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
       unsigned firstIndex = 0;
       if (inputs.size() != lattices.size()) {
         if (!point->isBlockStart()) {
-          if (!inputs.empty())
+          if (!inputs.empty()) {
             firstIndex = cast<OpResult>(inputs.front()).getResultNumber();
+          }
           visitNonControlFlowArguments(
               branch,
               RegionSuccessor(
                   branch->getResults().slice(firstIndex, inputs.size())),
               lattices, firstIndex);
         } else {
-          if (!inputs.empty())
+          if (!inputs.empty()) {
             firstIndex = cast<BlockArgument>(inputs.front()).getArgNumber();
+          }
           Region *region = point->getBlock()->getParent();
           visitNonControlFlowArguments(
               branch,
@@ -192,17 +239,47 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
         std::pair loopArgLat = {loop, argLat};
         if (loop && loopVisits[loopArgLat] >= loopTripCounts[loop])
           continue;
-
-        auto rhs = getLatticeElementFor(point, oper);
-        auto changed = argLat->join(*rhs);
+        const dataflow::IntegerValueRangeLattice *rhs =
+            getLatticeElementFor(point, oper);
+        ChangeResult changed = argLat->join(*rhs);
         propagateIfChanged(argLat, changed);
-
         if (loop && changed == ChangeResult::Change)
           ++loopVisits[loopArgLat];
       }
     }
   }
 };
+
+void collectRanges(DataFlowSolver &solver, ValueRange values,
+                   SmallVectorImpl<ConstantIntRanges> &ranges) {
+  for (Value val : values) {
+    auto *maybeInferredRange =
+        solver.lookupState<dataflow::IntegerValueRangeLattice>(val);
+    if (!maybeInferredRange || maybeInferredRange->getValue().isUninitialized())
+      return;
+    const ConstantIntRanges &inferredRange =
+        maybeInferredRange->getValue().getValue();
+    ranges.push_back(inferredRange);
+  }
+}
+
+void collectRanges(std::shared_ptr<DataFlowSolver> solver, ModuleOp mod) {
+  mod->walk<WalkOrder::PreOrder>([&solver, &mod](Operation *op) {
+    SmallVector<ConstantIntRanges> outputRange;
+    collectRanges(*solver, op->getResults(), outputRange);
+    if (outputRange.size()) {
+      APInt min = outputRange[0].smin();
+      APInt max = outputRange[0].smax();
+      IntegerType i64ty =
+          IntegerType::get(mod.getContext(), 64, IntegerType::Signless);
+      SmallVector<Attribute> range = {
+          IntegerAttr::get(i64ty, min.getSExtValue()),
+          IntegerAttr::get(i64ty, max.getSExtValue()),
+      };
+      op->setAttr(kOutputRange, ArrayAttr::get(mod.getContext(), range));
+    }
+  });
+}
 
 bool verifyNonSmallerByAssumption(
     Value expr, const DenseSet<Value> &assumptions,
@@ -642,23 +719,6 @@ private:
   DenseSet<Value> assumptions;
 };
 
-/// Gather ranges for all the values in `values`. Appends to the existing
-/// vector.
-static LogicalResult collectRanges(DataFlowSolver &solver, ValueRange values,
-                                   SmallVectorImpl<ConstantIntRanges> &ranges) {
-  for (Value val : values) {
-    auto *maybeInferredRange =
-        solver.lookupState<dataflow::IntegerValueRangeLattice>(val);
-    if (!maybeInferredRange || maybeInferredRange->getValue().isUninitialized())
-      return failure();
-
-    const ConstantIntRanges &inferredRange =
-        maybeInferredRange->getValue().getValue();
-    ranges.push_back(inferredRange);
-  }
-  return success();
-}
-
 class TritonAMDGPUConvertToBufferOpsPass
     : public TritonAMDGPUConvertToBufferOpsBase<
           TritonAMDGPUConvertToBufferOpsPass> {
@@ -680,26 +740,11 @@ public:
         assumptions.insert(op->getOperand(0));
     });
 
-    std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
+    std::shared_ptr<DataFlowSolver> solver = createDataFlowSolver();
     solver->load<TritonIntegerRangeAnalysis>();
     if (failed(solver->initializeAndRun(getOperation())))
       return signalPassFailure();
-
-    mod->walk<WalkOrder::PreOrder>([this, &solver](Operation *op) {
-      SmallVector<ConstantIntRanges> outputRange;
-      (void)collectRanges(*solver, op->getResults(), outputRange);
-
-      if (outputRange.size()) {
-        auto min = outputRange[0].smin();
-        auto max = outputRange[0].smax();
-        auto i64ty = IntegerType::get(&getContext(), 64, IntegerType::Signless);
-        SmallVector<Attribute> range = {
-            IntegerAttr::get(i64ty, min.getSExtValue()),
-            IntegerAttr::get(i64ty, max.getSExtValue()),
-        };
-        op->setAttr(kOutputRange, ArrayAttr::get(&getContext(), range));
-      }
-    });
+    collectRanges(solver, mod);
 
     ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
     patterns.add<ConvertTritonLoadToBufferLoad>(context, assumptions);

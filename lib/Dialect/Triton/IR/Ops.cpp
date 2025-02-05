@@ -363,13 +363,6 @@ LogicalResult MakeRangeOp::verify() {
   return success();
 }
 
-void MakeRangeOp::inferResultRanges(ArrayRef<ConstantIntRanges> argRanges,
-                                    SetIntRangeFn setResultRange) {
-  setResultRange(getResult(),
-                 ConstantIntRanges::range({32, this->getStart(), true},
-                                          {32, this->getEnd(), true}, true));
-}
-
 //-- ReduceOp --
 static LogicalResult
 inferReduceReturnShape(RankedTensorType argTy, Type retEltTy, int axis,
@@ -602,11 +595,6 @@ OpFoldResult SplatOp::fold(FoldAdaptor adaptor) {
   return ret;
 }
 
-void SplatOp::inferResultRanges(ArrayRef<ConstantIntRanges> argRanges,
-                                SetIntRangeFn setResultRange) {
-  setResultRange(getResult(), argRanges[0]);
-}
-
 //-- ExpandDimsOp --
 LogicalResult ExpandDimsOp::inferReturnTypes(
     MLIRContext *context, std::optional<Location> loc, ValueRange operands,
@@ -635,11 +623,6 @@ LogicalResult ExpandDimsOp::inferReturnTypes(
   inferredReturnTypes.push_back(
       RankedTensorType::get(retShape, argEltTy, retEncoding));
   return success();
-}
-
-void ExpandDimsOp::inferResultRanges(ArrayRef<ConstantIntRanges> argRanges,
-                                     SetIntRangeFn setResultRange) {
-  setResultRange(getResult(), argRanges[0]);
 }
 
 LogicalResult ExpandDimsOp::canonicalize(ExpandDimsOp op,
@@ -1287,13 +1270,6 @@ LogicalResult ExperimentalTensormapCreateOp::verify() {
            << getElementStride().size() << " but expected " << rank;
   }
   return success();
-}
-
-// -- GetProgramIdOp --
-void GetProgramIdOp::inferResultRanges(ArrayRef<ConstantIntRanges> argRanges,
-                                       SetIntRangeFn setResultRange) {
-  setResultRange(getResult(), ConstantIntRanges::range({32, 0, true},
-                                                       {32, 2048, true}, true));
 }
 
 } // namespace triton
