@@ -987,7 +987,9 @@ def test_tensor_descriptor_batched_gemm_3d_tma():
     torch.cuda.synchronize()
 
     if not is_interpreter():
-        assert "warp_group_dot" in h.asm["ttgir"]
+        capability = torch.cuda.get_device_capability(0)[0]
+        dot_op = {9: "warp_group_dot", 10: "tc_gen5_mma"}
+        assert dot_op[capability] in h.asm["ttgir"]
 
     torch.testing.assert_close(c, expect, rtol=1e-3, atol=1e-3)
 
