@@ -77,7 +77,7 @@ private:
     static DenseSet<std::pair<Operation *, unsigned>> trace;
     auto op = operand.getDefiningOp();
     // avoid redundant insertion
-    if (op && op->hasTrait<OpTrait::DotLike>())
+    if (op && isa<mlir::triton::DotOpInterface>(op))
       return false;
     // reach convertlayout
     if (op && isa<ttg::LocalAllocOp>(op) &&

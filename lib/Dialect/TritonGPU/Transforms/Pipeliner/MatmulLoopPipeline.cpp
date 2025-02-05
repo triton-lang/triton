@@ -177,15 +177,18 @@ static int createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
   Operation *wait = builder.createWithStage<ttg::AsyncWaitOp>(
       loc, stageForFirstUse, clusterForFirstUse, commit->getResult(0), 0);
 
-  auto loadIsMMAv3Shared = loadToInfo[loadOp].isMMAv3Shared;
-
   // Extract part.
   SmallVector<Value> loadOffsets(allocTy.getRank(), zero);
   loadOffsets[0] = extractIdx;
   auto viewLoad = builder.createWithStage<ttg::MemDescSubviewOp>(
       loc, stageForFirstUse, clusterForFirstUse, subviewTy, alloc, loadOffsets);
-  if (loadIsMMAv3Shared) {
-    auto alloc = cast<ttg::LocalAllocOp>((*loadOp->getUsers().begin()));
+
+  if (loadToInfo[loadOp].isMMAv3Shared || loadToInfo[loadOp].isMMAv5Scale) {
+    auto user = *loadOp->getUsers().begin();
+    assert(isa<triton::gpu::LocalAllocOp>(user) &&
+           "Loading of MMAv3 operands and MMAv5 scale is expected to be "
+           "consumed by LocalAlloc.");
+    auto alloc = cast<ttg::LocalAllocOp>(user);
     tt::replaceUsesAndPropagateType(builder, alloc, viewLoad.getResult());
     alloc.erase();
   } else {
@@ -446,7 +449,7 @@ getTransitiveUserInBlock(Operation *baseOp, scf::ForOp &forOp) {
           }
           if (isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp,
                   tt::ExperimentalDescriptorGatherOp>(op) ||
-              op->hasTrait<OpTrait::DotLike>()) {
+              isa<mlir::triton::DotOpInterface>(op)) {
             // Stop recursion when hitting a LoadOp or a DotOp.
             users.push_back(op);
             return;
@@ -455,6 +458,12 @@ getTransitiveUserInBlock(Operation *baseOp, scf::ForOp &forOp) {
         for (Operation *user : op->getUsers())
           if (user->getBlock() == op->getBlock())
             dfs(user, baseOp, anyOp);
+        if (auto tmemCopy = dyn_cast<triton::nvidia_gpu::TMEMCopyOp>(op)) {
+          auto tmemAlloc =
+              tmemCopy.getDst()
+                  .getDefiningOp<triton::nvidia_gpu::TMEMAllocOp>();
+          dfs(tmemAlloc, baseOp, anyOp);
+        }
       };
   // We are matching the behavior before refactoring:
   //   For loops without num_stage attributes, we check for dot users.
@@ -509,7 +518,7 @@ assignMemoryLayouts(scf::ForOp &forOp,
     loadsToPipeline.insert(&op);
     LoadInfo loadInfo;
     for (auto use : users) {
-      if (use->hasTrait<OpTrait::DotLike>()) {
+      if (isa<mlir::triton::DotOpInterface>(use)) {
         LDBG("set shared encoding with dot user: " << *use);
         auto mmaLoadType = getMMALoadType(&op);
         auto dot = dyn_cast<tt::DotOp>(use);
@@ -525,6 +534,7 @@ assignMemoryLayouts(scf::ForOp &forOp,
               getSharedEncoding(&op, isTMALoad).value_or(nullptr);
         } else if (loadInfo.isMMAv3Registers || dot) {
           bool incompatible = false;
+
           loadInfo.sharedEncoding =
               getSharedEncIfAllUsersAreDotEnc(op.getResult(0), incompatible)
                   .value_or(nullptr);

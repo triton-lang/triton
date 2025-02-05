@@ -517,9 +517,9 @@ static int32_t getDefaultCtrlBitsForCacheModifier(triton::CacheModifier cm) {
 // .cv: don't cache and fetch again
 // .wb: write-back, writes back data at all cache levels
 // .wt: write-through, write data directly to system memory
-int32_t
-getCtrlBitsForCacheModifierOnTarget(triton::CacheModifier cm, bool isBufferLoad,
-                                    mlir::triton::AMD::TargetInfo &targetInfo) {
+int32_t getCtrlBitsForCacheModifierOnTarget(
+    triton::CacheModifier cm, bool isBufferLoad,
+    const mlir::triton::AMD::TargetInfo &targetInfo) {
   if (targetInfo.getGPUKind() == llvm::AMDGPU::GK_GFX942) // gfx942
     return getCtrlBitsForCacheModifierOnGFX942(cm, isBufferLoad);
   else

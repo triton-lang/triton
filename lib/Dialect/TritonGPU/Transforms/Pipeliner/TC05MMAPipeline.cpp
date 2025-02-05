@@ -593,6 +593,31 @@ void createBarrierAndWaitOps(IRRewriter &builder, scf::ForOp forOp,
   annotateWithPipelineStage(builder, info.phase.getDefiningOp(), 0);
 }
 
+bool isSafeToPipeline(ttng::TCGen5MMAScaledOp scaledDot) {
+  auto getNumUsers = [](Value value) {
+    return std::distance(value.user_begin(), value.user_end());
+  };
+
+  auto isCopiedByTMEMCopy = [=](Value scale) {
+    if (getNumUsers(scale) != 2) {
+      // MMA and TMEM copy must be the only users
+      return false;
+    }
+
+    for (auto user : scale.getUsers()) {
+      if (!isa<ttng::TMEMCopyOp, ttng::TCGen5MMAScaledOp>(user)) {
+        // If the scale is used by TMEM copy and the only other user is the
+        // scaled dot op, MMA pipelining is safe to apply.
+        return false;
+      }
+    }
+    return true;
+  };
+
+  return isCopiedByTMEMCopy(scaledDot.getAScale()) &&
+         isCopiedByTMEMCopy(scaledDot.getBScale());
+}
+
 // Find MMAs eligible for pipelining and lower them by:
 // 1. Hoisting the accumulator allocation outside of the loop.
 // 2. Creating a barrier alloc and lowering the MMA to MMA + wait barrier.
@@ -603,9 +628,17 @@ FailureOr<scf::ForOp> preProcessLoopForTC05MMAPipelining(scf::ForOp forOp,
   SmallVector<Operation *> mmaOps;
   forOp.walk([&](Operation *op) {
     // Skip MMA nested in another forOp
-    if (isa<ttng::TCGen5MMAOp>(op) &&
-        op->getParentOfType<scf::ForOp>() == forOp) {
-      mmaOps.push_back(op);
+    if (op->getParentOfType<scf::ForOp>() == forOp) {
+      if (isa<ttng::TCGen5MMAOp>(op)) {
+        mmaOps.push_back(op);
+      } else if (auto scaledDot = dyn_cast<ttng::TCGen5MMAScaledOp>(op)) {
+        if (isSafeToPipeline(scaledDot)) {
+          mmaOps.push_back(op);
+        } else {
+          op->emitWarning("Skipping pipelining of an MMAv5 scaled op because "
+                          "TMEM copy is not used.");
+        }
+      }
     }
   });
 

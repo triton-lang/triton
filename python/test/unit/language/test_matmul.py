@@ -352,12 +352,9 @@ def test_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, device):
     rtol = 0.0001
     torch.testing.assert_close(ref_out, output, atol=atol, rtol=rtol)
 
-    if NUM_STAGES > 1:
-        # TODO: Remove this check once MMA pipelining is working for these cases
-        if M >= BLOCK_M and N >= BLOCK_N and K >= BLOCK_K:
-            # Verify that MMA pipelining has been applied
-            # FIXME: Scaled dot pipelining is DISABLED
-            assert "ttng.wait_barrier" not in out.asm["ttgir"]
+    # Pipelining of dot_scaled requires tmem_copy to be used, which in turn
+    # requires the scales to be in the blocked layout in global memory.
+    assert "ttng.wait_barrier" not in out.asm["ttgir"]
 
 
 def _knob_promote_lhs_to_tmem(monkeypatch):
@@ -437,13 +434,21 @@ def block_scale_mxfp_matmul(  #
     tl.store(output_ptrs, accumulator, mask=c_mask)
 
 
+def _knob_disable_ptxas_opt(monkeypatch):
+    monkeypatch.setenv("DISABLE_PTXAS_OPT", "1")
+
+
 @pytest.mark.parametrize("M, N, K", [(1024, 512, 512), (998, 111, 512), (63, 128, 512)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (256, 128, 128), (128, 256, 128),
                                                        (128, 128, 256), (128, 256, 256)])
 @pytest.mark.parametrize("NUM_STAGES", [1, 2, 4])
 @pytest.mark.parametrize("USE_2D_SCALE_LOAD", [False, True])
 @pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 10, reason="Requires compute capability >= 10")
-def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_2D_SCALE_LOAD, device):
+def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_2D_SCALE_LOAD, device, monkeypatch):
+    if NUM_STAGES == 1 and USE_2D_SCALE_LOAD:
+        # Disabling ptxas optimization as a temporary workaround, otherwise the test does not pass
+        _knob_disable_ptxas_opt(monkeypatch)
+
     if BLOCK_N == 256 and BLOCK_K == 256:
         NUM_STAGES = min(NUM_STAGES, 2)
     elif BLOCK_K == 256:
@@ -467,6 +472,7 @@ def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_
                                         a_scale.stride(2), a_scale.stride(3), a.stride(0), a.stride(1), b.stride(0),
                                         b.stride(1), output.stride(0), output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K,
                                         NUM_STAGES=NUM_STAGES, USE_2D_SCALE_LOAD=USE_2D_SCALE_LOAD)
+    ttgir = out.asm["ttgir"]
 
     def flatten_scale(scale):
         num_chunk_m, num_chunk_k, _, _, _ = scale.shape
@@ -488,29 +494,26 @@ def test_blocked_scale_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, USE_
     rtol = 0.0001
     torch.testing.assert_close(ref_out, output, atol=atol, rtol=rtol)
 
-    if NUM_STAGES > 1:
-        ttgir = out.asm["ttgir"]
+    if USE_2D_SCALE_LOAD:
+        # Due to an issue in the coalescing pass, tmem_copy can not be generated for the 5D load.
+        # The issue is fixed using the patch from https://github.com/triton-lang/triton/pull/4914
+        assert "tmem_copy" in ttgir
 
+    if NUM_STAGES > 1:
         if BLOCK_M == BLOCK_K and BLOCK_N == BLOCK_K:
             load_pipelined = ttgir.count(f"ttg.local_alloc  : () -> !ttg.memdesc<{NUM_STAGES}x{BLOCK_M}x{BLOCK_K}") == 2
         else:
             load_pipelined = (ttgir.count(f"ttg.local_alloc  : () -> !ttg.memdesc<{NUM_STAGES}x{BLOCK_M}x{BLOCK_K}") and
                               ttgir.count(f"ttg.local_alloc  : () -> !ttg.memdesc<{NUM_STAGES}x{BLOCK_K}x{BLOCK_N}"))
 
-        if load_pipelined:
-            # If load is pipelined, MMA pipelining should also kick in
-            # FIXME: Scaled dot pipelining is DISABLED
-            assert "ttng.wait_barrier" not in ttgir
-        else:
+        if load_pipelined and USE_2D_SCALE_LOAD:
+            # If load is pipelined and tmem_copy is used,  MMA pipelining should also kick in
+            assert "ttng.wait_barrier" in ttgir
+        elif not load_pipelined:
             # The behavior of load pipelining seems to depend on the size of input tensors.
             # In this test, it fails to pipeline the RHS tensor when N is not a multiple of 128. Pipelining of the LHS tensor
             # does not seem to be affected by the value of M, though.
             print(f"SWP failed for M = {M}, N = {N}")
-
-        if USE_2D_SCALE_LOAD:
-            # Due to an issue in the coalescing pass, tmem_copy can not be generated for the 5D load.
-            # The issue is fixed using the patch from https://github.com/triton-lang/triton/pull/4914
-            assert "tmem_copy" in ttgir
 
 
 @triton.jit
