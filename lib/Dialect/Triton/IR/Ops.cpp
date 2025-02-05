@@ -191,7 +191,13 @@ void StoreOp::getCanonicalizationPatterns(RewritePatternSet &results,
 OpFoldResult TransOp::fold(FoldAdaptor adaptor) {
   // transpose(x, order=[0, 1, ...]) -> x
   if (isIota(getOrder())) {
-    return getSrc();
+    // If the source and result types are the same, we can return the source
+    // If their layout is different (even if structurally equivalent), we need
+    // to insert a convert_layout in between as otherwise ::fold complains
+    // We do this in CanonicalizeConvertFromTranspose
+    if (getSrc().getType() == getType()) {
+      return getSrc();
+    }
   }
 
   // transpose(transpose(x)) -> transpose(x)
@@ -301,6 +307,28 @@ LogicalResult DotOp::verify() {
   auto interface = cast<DialectInferLayoutInterface>(&dialect);
   return interface->verifyDotOpEncodingCompatibility(getOperation(), aEncoding,
                                                      bEncoding);
+}
+
+bool DotOp::verifyDims() {
+  auto aShape = this->getA().getType().getShape();
+  auto bShape = this->getB().getType().getShape();
+
+  return aShape[aShape.size() - 1] == bShape[aShape.size() - 2];
+}
+
+//-- DotScaledOp --
+bool DotScaledOp::verifyDims() {
+  auto aShape = this->getLhs().getType().getShape();
+  auto bShape = this->getRhs().getType().getShape();
+
+  auto aKdim = aShape[aShape.size() - 1];
+  auto bKdim = bShape[aShape.size() - 2];
+  if (this->getLhsType() == ScaleDotElemType::E2M1)
+    aKdim *= 2;
+  if (this->getRhsType() == ScaleDotElemType::E2M1)
+    bKdim *= 2;
+
+  return aKdim == bKdim;
 }
 
 //-- MakeRangeOp --

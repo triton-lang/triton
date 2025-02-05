@@ -165,10 +165,18 @@ SmallVector<unsigned> getCTAOrder(Attribute layout);
  */
 SmallVector<unsigned> getShapePerCTATile(Attribute layout);
 
+// Returns the "logical" shape per CTA
 SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
                                     ArrayRef<int64_t> shape);
 SmallVector<int64_t> getShapePerCTA(Attribute layout, ArrayRef<int64_t> shape);
 SmallVector<int64_t> getShapePerCTA(Type type);
+
+// Returns the shape per CTA, which is "physically" allocated
+// Such shapes may be bigger than the logical one due to, for example, padding
+// in shared memory.
+SmallVector<int64_t> getAllocationShapePerCTA(Attribute layout,
+                                              ArrayRef<int64_t> shape);
+SmallVector<int64_t> getAllocationShapePerCTA(Type type);
 
 unsigned getNumWarpsPerCTA(Attribute layout);
 
