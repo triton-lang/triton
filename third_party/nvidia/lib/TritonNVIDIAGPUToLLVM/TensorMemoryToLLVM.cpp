@@ -286,8 +286,7 @@ struct TensorMemoryAllocOpConversion
 
     if (op.getSrc()) {
       lowerStoreToTensorMemory(loc, mod, op.getSrc(), op.getResult(),
-                               adaptor.getSrc(), b.i1_val(true), ptr,
-                               rewriter);
+                               adaptor.getSrc(), b.i1_val(true), ptr, rewriter);
     }
 
     rewriter.replaceOp(op, ptr);
