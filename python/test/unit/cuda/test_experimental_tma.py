@@ -337,6 +337,231 @@ def test_tensor_descriptor_store(dtype_str):
     torch.testing.assert_close(unwrap_tensor(inp), unwrap_tensor(out))
 
 
+@requires_tma
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype_str", tma_dtypes)
+@pytest.mark.parametrize("K_BLOCK", [16, 32, 64, 128])
+def test_tensor_descriptor_load3d(dtype_str, K_BLOCK):
+
+    @triton.jit
+    def kernel(out_ptr, a_ptr, M, N, K, stride_m, stride_n, stride_k, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr,
+               K_BLOCK: tl.constexpr):
+        desc = tl._experimental_make_tensor_descriptor(
+            a_ptr,
+            shape=[M, N, K],
+            strides=[stride_m, stride_n, stride_k],
+            block_shape=[M_BLOCK, N_BLOCK, K_BLOCK],
+        )
+
+        pid_m, pid_n, pid_k = tl.program_id(0), tl.program_id(1), tl.program_id(2)
+        offs = pid_m * M_BLOCK, pid_n * N_BLOCK, pid_k * K_BLOCK
+
+        block = desc.load(offs)
+
+        idx_m = offs[0] + tl.arange(0, M_BLOCK)[:, None, None]
+        idx_n = offs[1] + tl.arange(0, N_BLOCK)[None, :, None]
+        idx_k = offs[2] + tl.arange(0, K_BLOCK)[None, None, :]
+        idx = idx_m * N * K + idx_n * K + idx_k
+        mask = (idx_m < M) & (idx_n < N) & (idx_k < K)
+        tl.store(out_ptr + idx, block, mask)
+
+    def alloc_fn(size: int, align: int, stream: Optional[int]):
+        return torch.empty(size, dtype=torch.int8, device="cuda")
+
+    triton.set_allocator(alloc_fn)
+
+    inp = to_triton(numpy_random((10, 64, 128), dtype_str), device="cuda", dst_type=dtype_str)
+    inp.data = inp.data[:, :50, :119]
+
+    if K_BLOCK * inp.element_size() < 32:
+        return pytest.skip("Invalid last dim size")
+
+    M_BLOCK, N_BLOCK = 8, 8
+    out = inp.new_empty(inp.shape)
+
+    grid = tuple(triton.cdiv(size, block) for size, block in zip(inp.shape, (M_BLOCK, N_BLOCK, K_BLOCK)))
+    kernel[grid](out, inp, *inp.shape, *inp.stride(), M_BLOCK, N_BLOCK, K_BLOCK)
+
+    actual = unwrap_tensor(out)
+    expect = unwrap_tensor(inp)
+    torch.testing.assert_close(expect, actual)
+
+
+@requires_tma
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype_str", tma_dtypes)
+@pytest.mark.parametrize("K_BLOCK", [16, 32, 64, 128])
+def test_tensor_descriptor_store3d(dtype_str, K_BLOCK):
+
+    @triton.jit
+    def kernel(out_ptr, a_ptr, M, N, K, stride_m, stride_n, stride_k, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr,
+               K_BLOCK: tl.constexpr):
+        desc = tl._experimental_make_tensor_descriptor(
+            out_ptr,
+            shape=[M, N, K],
+            strides=[stride_m, stride_n, stride_k],
+            block_shape=[M_BLOCK, N_BLOCK, K_BLOCK],
+        )
+
+        pid_m, pid_n, pid_k = tl.program_id(0), tl.program_id(1), tl.program_id(2)
+        offs = pid_m * M_BLOCK, pid_n * N_BLOCK, pid_k * K_BLOCK
+
+        idx_m = offs[0] + tl.arange(0, M_BLOCK)[:, None, None]
+        idx_n = offs[1] + tl.arange(0, N_BLOCK)[None, :, None]
+        idx_k = offs[2] + tl.arange(0, K_BLOCK)[None, None, :]
+        idx = idx_m * N * K + idx_n * K + idx_k
+        mask = (idx_m < M) & (idx_n < N) & (idx_k < K)
+        block = tl.load(a_ptr + idx, mask)
+
+        desc.store(offs, block)
+
+    def alloc_fn(size: int, align: int, stream: Optional[int]):
+        return torch.empty(size, dtype=torch.int8, device="cuda")
+
+    triton.set_allocator(alloc_fn)
+
+    inp = to_triton(numpy_random((10, 50, 119), dtype_str), device="cuda", dst_type=dtype_str)
+
+    if K_BLOCK * inp.element_size() < 32:
+        return pytest.skip("Invalid last dim size")
+
+    M_BLOCK, N_BLOCK = 8, 8
+    out = inp.new_empty((10, 64, 128))
+
+    grid = tuple(triton.cdiv(size, block) for size, block in zip(inp.shape, (M_BLOCK, N_BLOCK, K_BLOCK)))
+    kernel[grid](out, inp, *inp.shape, *out.stride(), M_BLOCK, N_BLOCK, K_BLOCK)
+
+    expect = unwrap_tensor(inp)
+    actual = unwrap_tensor(out)[:, :50, :119]
+    torch.testing.assert_close(expect, actual)
+
+
+@requires_tma
+@pytest.mark.parametrize("dtype_str", tma_dtypes)
+@pytest.mark.parametrize("ndim", [2, 3, 4, 5])
+@pytest.mark.parametrize("INNER_BLOCK", [16, 32, 64, 128])
+def test_tensor_descriptor_load_nd(dtype_str, ndim, INNER_BLOCK):
+
+    @triton.jit
+    def kernel(out_ptr, a_ptr, shape, strides, BLOCK_SHAPE):
+        desc = tl._experimental_make_tensor_descriptor(
+            a_ptr,
+            shape=shape,
+            strides=strides,
+            block_shape=BLOCK_SHAPE,
+        )
+        ndim: tl.constexpr = len(BLOCK_SHAPE)
+
+        offs = (0, ) * ndim
+        block = desc.load(offs)
+
+        idx = tl.full(BLOCK_SHAPE, 0, tl.int32)
+        stride = 1
+        for k in tl.static_range(ndim - 1, -1, -1):
+            arange = tl.arange(0, BLOCK_SHAPE[k])
+            for _ in tl.static_range(k):
+                arange = tl.expand_dims(arange, 0)
+            for _ in tl.static_range(k + 1, ndim):
+                arange = tl.expand_dims(arange, -1)
+
+            idx += arange * stride
+            stride *= BLOCK_SHAPE[k]
+
+        tl.store(out_ptr + idx, block)
+
+    def alloc_fn(size: int, align: int, stream: Optional[int]):
+        return torch.empty(size, dtype=torch.int8, device="cuda")
+
+    triton.set_allocator(alloc_fn)
+
+    alloc_shape = (1, 1, 3, 7, INNER_BLOCK)[-ndim:]
+    inp = to_triton(numpy_random(alloc_shape, dtype_str), device="cuda", dst_type=dtype_str)
+    inp.data = inp.data[..., :INNER_BLOCK - 3]
+
+    if INNER_BLOCK * inp.element_size() < 32:
+        return pytest.skip("Invalid last dim size")
+
+    BLOCK_SHAPE = (2, 2, 4, 8, INNER_BLOCK)[-ndim:]
+    out = inp.new_empty(BLOCK_SHAPE)
+
+    constexpr_block_shape = tuple(tl.constexpr(v) for v in BLOCK_SHAPE)
+    kernel[(1, )](out, inp, inp.shape, inp.stride(), constexpr_block_shape)
+
+    # Check in-bounds
+    actual = unwrap_tensor(out)
+    expect = unwrap_tensor(inp)
+    idx = [slice(None, s) for s in inp.shape]
+    torch.testing.assert_close(expect, actual[idx])
+
+    # Check out-of-bounds
+    actual[idx].zero_()
+    expect = expect.new_zeros(BLOCK_SHAPE)
+    torch.testing.assert_close(expect, actual)
+
+
+@requires_tma
+@pytest.mark.parametrize("dtype_str", tma_dtypes)
+@pytest.mark.parametrize("ndim", [2, 3, 4, 5])
+@pytest.mark.parametrize("INNER_BLOCK", [16, 32, 64, 128])
+def test_tensor_descriptor_store_nd(dtype_str, ndim, INNER_BLOCK):
+
+    @triton.jit
+    def kernel(out_ptr, a_ptr, shape, strides, BLOCK_SHAPE):
+        desc = tl._experimental_make_tensor_descriptor(
+            out_ptr,
+            shape=shape,
+            strides=strides,
+            block_shape=BLOCK_SHAPE,
+        )
+        ndim: tl.constexpr = len(BLOCK_SHAPE)
+
+        idx = tl.full(BLOCK_SHAPE, 0, tl.int32)
+        stride = 1
+        for k in tl.static_range(ndim - 1, -1, -1):
+            arange = tl.arange(0, BLOCK_SHAPE[k])
+            for _ in tl.static_range(k):
+                arange = tl.expand_dims(arange, 0)
+            for _ in tl.static_range(k + 1, ndim):
+                arange = tl.expand_dims(arange, -1)
+
+            idx += arange * stride
+            stride *= BLOCK_SHAPE[k]
+
+        block = tl.load(a_ptr + idx)
+
+        offs = (0, ) * ndim
+        desc.store(offs, block)
+
+    def alloc_fn(size: int, align: int, stream: Optional[int]):
+        return torch.empty(size, dtype=torch.int8, device="cuda")
+
+    triton.set_allocator(alloc_fn)
+
+    BLOCK_SHAPE = (2, 2, 4, 8, INNER_BLOCK)[-ndim:]
+    inp = to_triton(numpy_random(BLOCK_SHAPE, dtype_str), device="cuda", dst_type=dtype_str)
+
+    if INNER_BLOCK * inp.element_size() < 32:
+        return pytest.skip("Invalid last dim size")
+
+    out = inp.new_empty(BLOCK_SHAPE)
+    out.data.fill_(-1)
+
+    desc_shape = (1, 1, 3, 7, INNER_BLOCK)[-ndim:]
+    constexpr_block_shape = tuple(tl.constexpr(v) for v in BLOCK_SHAPE)
+    kernel[(1, )](out, inp, desc_shape, out.stride(), constexpr_block_shape)
+
+    # Check in-bounds
+    actual = unwrap_tensor(out)
+    expect = unwrap_tensor(inp)
+    idx = [slice(None, s) for s in desc_shape]
+    torch.testing.assert_close(expect[idx], actual[idx])
+
+    # Check out-of-bounds
+    actual[idx].fill_(-1)
+    expect = expect.new_full(BLOCK_SHAPE, -1)
+    torch.testing.assert_close(expect, actual)
+
+
 @triton.jit(noinline=True)
 def tensor_descriptor_in_function_helper(out_ptr, in_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
     in_desc = tl._experimental_make_tensor_descriptor(
@@ -558,11 +783,11 @@ def test_experimental_make_tensor_descriptor_loop_carried():
 
 
 @triton.jit
-def batched_gemm_kernel(a_ptr, b_ptr, c_ptr,  #
-                        B, M, N, K,  #
-                        dtype: tl.constexpr,  #
-                        BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
-                        NUM_SMS: tl.constexpr):
+def batched_gemm_2d_tma_kernel(a_ptr, b_ptr, c_ptr,  #
+                               B, M, N, K,  #
+                               dtype: tl.constexpr,  #
+                               BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
+                               NUM_SMS: tl.constexpr):
     start_pid = tl.program_id(axis=0)
     num_tiles_m = tl.cdiv(M, BLOCK_M)
     num_tiles_n = tl.cdiv(N, BLOCK_N)
@@ -625,7 +850,7 @@ def batched_gemm_kernel(a_ptr, b_ptr, c_ptr,  #
 
 @requires_tma
 @pytest.mark.interpreter
-def test_tensor_descriptor_batched_gemm():
+def test_tensor_descriptor_batched_gemm_2d_tma():
     device = "cuda"
     BLOCK_M, BLOCK_N, BLOCK_K = 128, 256, 64
     if is_interpreter():
@@ -652,7 +877,7 @@ def test_tensor_descriptor_batched_gemm():
 
     triton.set_allocator(alloc_fn)
 
-    batched_gemm_kernel[grid](
+    batched_gemm_2d_tma_kernel[grid](
         a, b, c,  #
         B, M, N, K,  #
         tl.float16,  #
@@ -660,6 +885,111 @@ def test_tensor_descriptor_batched_gemm():
         NUM_SMS,  #
         num_stages=num_stages, num_warps=8)
     torch.cuda.synchronize()
+
+    torch.testing.assert_close(c, expect, rtol=1e-3, atol=1e-3)
+
+
+@triton.jit
+def batched_gemm_3d_tma_kernel(a_ptr, b_ptr, c_ptr,  #
+                               B, M, N, K,  #
+                               dtype: tl.constexpr,  #
+                               BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
+                               NUM_SMS: tl.constexpr):
+    start_pid = tl.program_id(axis=0)
+    num_tiles_m = tl.cdiv(M, BLOCK_M)
+    num_tiles_n = tl.cdiv(N, BLOCK_N)
+    k_tiles = tl.cdiv(K, BLOCK_K)
+    num_tiles_per_batch = num_tiles_m * num_tiles_n
+    num_tiles = B * num_tiles_per_batch
+
+    tiles_per_SM = num_tiles // NUM_SMS
+    if start_pid < num_tiles % NUM_SMS:
+        tiles_per_SM += 1
+
+    tile_id = start_pid - NUM_SMS
+    ki = -1
+
+    tile_m = 0
+    tile_n = 0
+    tile_b = 0
+
+    offs_m = 0
+    offs_n = 0
+    offs_b = 0
+
+    a_desc = tl._experimental_make_tensor_descriptor(a_ptr, [B, M, K], [K * M, K, 1], [1, BLOCK_M, BLOCK_K])
+    b_desc = tl._experimental_make_tensor_descriptor(b_ptr, [B, N, K], [N * K, K, 1], [1, BLOCK_N, BLOCK_K])
+    c_desc = tl._experimental_make_tensor_descriptor(c_ptr, [B, M, N], [M * N, N, 1], [1, BLOCK_M, BLOCK_N])
+
+    accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+
+    for _ in range(k_tiles * tiles_per_SM):
+        ki = tl.where(ki == k_tiles - 1, 0, ki + 1)
+        if ki == 0:
+            tile_id += NUM_SMS
+            tile_b = tile_id // num_tiles_per_batch
+            tile_m = (tile_id // num_tiles_n) % num_tiles_m
+            tile_n = tile_id % num_tiles_n
+
+            offs_b = tile_b
+            offs_m = tile_m * BLOCK_M
+            offs_n = tile_n * BLOCK_N
+
+        offs_k = ki * BLOCK_K
+
+        a = a_desc.load([offs_b, offs_m, offs_k]).reshape([BLOCK_M, BLOCK_K])
+        b = b_desc.load([offs_b, offs_n, offs_k]).reshape([BLOCK_N, BLOCK_K])
+        accumulator = tl.dot(a, b.T, accumulator)
+
+        if ki == k_tiles - 1:
+            c = accumulator.to(dtype)
+
+            c_desc.store([offs_b, offs_m, offs_n], c.reshape((1, BLOCK_M, BLOCK_N)))
+            accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+
+
+@requires_tma
+@pytest.mark.interpreter
+def test_tensor_descriptor_batched_gemm_3d_tma():
+    device = "cuda"
+    BLOCK_M, BLOCK_N, BLOCK_K = 128, 256, 64
+    if is_interpreter():
+        B, M, N, K = 2, BLOCK_M, BLOCK_N, BLOCK_K
+    else:
+        B, M, N, K = 2, 1024, 1024, 128
+    NUM_SMS = 96
+    num_stages = 3
+
+    grid = (min(NUM_SMS, B * triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N)), )
+
+    a = torch.randn((B, M, K), device=device, dtype=torch.float16)
+    b = torch.randn((B, N, K), device=device, dtype=torch.float16)
+    c = torch.empty((B, M, N), device=device, dtype=torch.float16)
+
+    expect = torch.bmm(a, b.mT)
+
+    def alloc_fn(size: int, align: int, stream: Optional[int]):
+        # TODO: should only need num_stages * 3 descriptors per SM
+        assert size == 128 * 3 * grid[0]
+        assert align == 128
+        assert stream == 0
+        return torch.empty(size, dtype=torch.int8, device="cuda")
+
+    triton.set_allocator(alloc_fn)
+
+    h = batched_gemm_3d_tma_kernel[grid](
+        a, b, c,  #
+        B, M, N, K,  #
+        tl.float16,  #
+        BLOCK_M, BLOCK_N, BLOCK_K,  #
+        NUM_SMS,  #
+        num_stages=num_stages, num_warps=8)
+    torch.cuda.synchronize()
+
+    if not is_interpreter():
+        capability = torch.cuda.get_device_capability(0)[0]
+        dot_op = {9: "warp_group_dot", 10: "tc_gen5_mma"}
+        assert dot_op[capability] in h.asm["ttgir"]
 
     torch.testing.assert_close(c, expect, rtol=1e-3, atol=1e-3)
 
