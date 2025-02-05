@@ -30,5 +30,5 @@ def enter_scope(name: tl.constexpr):
 
 
 @triton.jit
-def exit_scope(scope_id):
+def exit_scope(scope_id: tl.tensor):
     record(is_start=False, scope_id=scope_id)
