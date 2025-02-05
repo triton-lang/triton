@@ -369,9 +369,9 @@ struct FpToFpOpConversion
       name = "llvm.nvvm.f2bf16.rz";
       break;
     default:
-      emitError(loc) << "unsupported rounding mode for f32->bf16 conversion: "
-                     << stringifyRoundingMode(rounding) << "\n";
-      llvm_unreachable("");
+      llvm::report_fatal_error(
+          "unsupported rounding mode for f32->bf16 conversion: " +
+          stringifyRoundingMode(rounding) + "\n");
     }
     return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, name, bf16_ty, {v})
         .getResult(0);
@@ -390,9 +390,9 @@ struct FpToFpOpConversion
       ptx = "cvt.rz.f16.f32";
       break;
     default:
-      emitError(loc) << "unsupported rounding mode for f32->f16 conversion: "
-                     << stringifyRoundingMode(rounding) << "\n";
-      llvm_unreachable("");
+      llvm::report_fatal_error(
+          "unsupported rounding mode for f32->f16 conversion: " +
+          stringifyRoundingMode(rounding) + "\n");
     }
     auto &cvt = *builder.create(ptx.str());
     auto res = builder.newOperand("=h");
@@ -450,10 +450,10 @@ struct FpToFpOpConversion
     }
     if (computeCapability < 89 && (llvm::isa<Float8E4M3FNType>(srcTy) ||
                                    llvm::isa<Float8E4M3FNType>(dstTy))) {
-      llvm::errs() << "Conversion from/to f8e4m3nv is only supported on "
-                      "compute capability >= 89"
-                   << "\n";
-      llvm_unreachable("");
+      llvm::report_fatal_error(
+          "Conversion from/to f8e4m3nv is only supported on "
+          "compute capability >= 89"
+          "\n");
     }
     auto convDesc = srcMap.lookup(key);
     return {makeConverterFromPtx(
@@ -479,9 +479,9 @@ struct FpToFpOpConversion
       // For now only RTNE is supported for conversions from fp16 to fp8
       if (!srcElementType.isF32() &&
           roundingMode.value() != RoundingMode::RTNE) {
-        llvm::errs() << "Unsupported rounding mode for conversion to fp8: "
-                     << stringifyRoundingMode(roundingMode.value()) << "\n";
-        llvm_unreachable("");
+        llvm::report_fatal_error(
+            "Unsupported rounding mode for conversion to fp8: " +
+            stringifyRoundingMode(roundingMode.value()) + "\n");
       }
     }
 
