@@ -37,7 +37,7 @@ Users can pass command-line arguments to specify matrix dimensions and iteration
 
 Note that currently this tutorial will fail on devices with a small shared memory size, such as RTX-4090.
 
-.. GENERATED FROM PYTHON SOURCE LINES 21-752
+.. GENERATED FROM PYTHON SOURCE LINES 21-753
 
 
 
@@ -49,15 +49,15 @@ Note that currently this tutorial will fail on devices with a small shared memor
     TMA benchmarks will be running with experimental grid constant TMA descriptor.
     M=32, N=32, K=32 verification naive vs: torch: ✅ cublas: ✅ persistent: ✅ 
     M=8192, N=8192, K=512 verification naive vs: torch: ✅ cublas: ✅ persistent: ✅ 
-    174.743 5505.646 ROOT
-    ├─ nan 0.051 _ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastIZZZNS0_23direct_copy_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE1_clEvENKUlvE8_clEvEUlN3c104HalfEE_EEvS4_RKT_EUliE_EEviT1_
-    ├─ nan 0.046 _ZN2at6native54_GLOBAL__N__d8ceb000_21_DistributionNormal_cu_0c5b6e8543distribution_elementwise_grid_stride_kernelIfLi4EZNS0_9templates4cuda20normal_and_transformIN3c104HalfEfPNS_17CUDAGeneratorImplEZZZNS4_13normal_kernelIS9_EEvRKNS_10TensorBaseEddT_ENKUlvE_clEvENKUlvE1_clEvEUlfE_EEvRNS_18TensorIteratorBaseET1_T2_EUlP24curandStatePhilox4_32_10E0_ZNS1_27distribution_nullary_kernelIS7_f6float4S9_SO_SH_EEvSJ_SL_RKT3_T4_EUlifE_EEviNS_15PhiloxCudaStateESK_SL_
-    ├─ 176.989 4270.964 cublas [M=8192, N=8192, K=512]
-    │  └─ nan 4270.964 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
-    ├─ 154.728 444.132 matmul_kernel [M=8192, N=8192, K=512]
-    ├─ 169.719 404.901 matmul_kernel_persistent [M=8192, N=8192, K=512]
-    └─ 178.237 385.552 torch [M=8192, N=8192, K=512]
-       └─ nan 385.552 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+    174.337 5518.474 ROOT
+    ├─ nan 0.050 _ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastIZZZNS0_23direct_copy_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE1_clEvENKUlvE8_clEvEUlN3c104HalfEE_EEvS4_RKT_EUliE_EEviT1_
+    ├─ nan 0.045 _ZN2at6native54_GLOBAL__N__d8ceb000_21_DistributionNormal_cu_0c5b6e8543distribution_elementwise_grid_stride_kernelIfLi4EZNS0_9templates4cuda20normal_and_transformIN3c104HalfEfPNS_17CUDAGeneratorImplEZZZNS4_13normal_kernelIS9_EEvRKNS_10TensorBaseEddT_ENKUlvE_clEvENKUlvE1_clEvEUlfE_EEvRNS_18TensorIteratorBaseET1_T2_EUlP24curandStatePhilox4_32_10E0_ZNS1_27distribution_nullary_kernelIS7_f6float4S9_SO_SH_EEvSJ_SL_RKT3_T4_EUlifE_EEviNS_15PhiloxCudaStateESK_SL_
+    ├─ 177.059 4269.270 cublas [M=8192, N=8192, K=512]
+    │  └─ nan 4269.270 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+    ├─ 154.709 444.187 matmul_kernel [M=8192, N=8192, K=512]
+    ├─ 163.507 420.284 matmul_kernel_persistent [M=8192, N=8192, K=512]
+    └─ 178.660 384.639 torch [M=8192, N=8192, K=512]
+       └─ nan 384.639 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
 
 
 
@@ -309,15 +309,16 @@ Note that currently this tutorial will fail on devices with a small shared memor
         if start_pid < num_tiles % NUM_SMS:
             tiles_per_SM += 1
 
+        # NOTE: There is currently a bug in blackwell pipelining that means it can't handle a value being
+        # used in both the prologue and epilogue, so we duplicate the counters as a work-around.
         tile_id = start_pid - NUM_SMS
+        tile_id_c = start_pid - NUM_SMS
         ki = -1
 
         offs_k_for_mask = tl.arange(0, BLOCK_SIZE_K)
 
         num_pid_in_group = GROUP_SIZE_M * num_pid_n
 
-        pid_m = 0
-        pid_n = 0
         offs_am = tl.arange(0, BLOCK_SIZE_M)
         offs_bn = tl.arange(0, BLOCK_SIZE_N)
 
@@ -344,6 +345,8 @@ Note that currently this tutorial will fail on devices with a small shared memor
             accumulator = tl.dot(a, b, accumulator)
 
             if ki == k_tiles - 1:
+                tile_id_c, pid_m, pid_n = _compute_tile_and_pid(tile_id_c, num_pid_in_group, num_pid_m, GROUP_SIZE_M,
+                                                                NUM_SMS)
                 offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
                 offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
                 c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
@@ -417,8 +420,6 @@ Note that currently this tutorial will fail on devices with a small shared memor
             tiles_per_SM += 1
 
         tile_id = start_pid - NUM_SMS
-        # tile_id_c is used in the epilogue to break the dependency between
-        # the prologue and the epilogue
         tile_id_c = start_pid - NUM_SMS
 
         ki = -1
@@ -804,7 +805,7 @@ Note that currently this tutorial will fail on devices with a small shared memor
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (1 minutes 4.506 seconds)
+   **Total running time of the script:** (1 minutes 5.254 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_09-persistent-matmul.py:
