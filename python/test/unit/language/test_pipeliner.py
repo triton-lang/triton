@@ -222,7 +222,10 @@ def test_pipeline_matmul(scale, device):
     NUM_STAGES = 4
 
     if scale:
-        BLOCK_K = 64  # 32 NYI
+        # Large enough tile to let our heuristics to pipeline small tensor kick in
+        # for the scales
+        BLOCK_M = 256
+        BLOCK_K = 128
         K = BLOCK_K * NUM_STAGES
         a_type = "e2m1"
         DIV_FACTOR = 2 if a_type == "e2m1" else 1
@@ -296,11 +299,13 @@ def test_pipeline_matmul(scale, device):
         else:
             # 1. check async
             assert ttgir.count("ttg.async_copy_global_to_local") != 0, "async copy not found"
-            # 2. check number of stages
-            assert ttgir.count(f"num = {NUM_STAGES} : i32") != 0, "num_stages not match"
+            # 2. check sync point
+            assert ttgir.count("num = 0 : i32") == 1, "only one sync point for the loads after the loop"
             # 3. check alloc
-            assert ttgir.count("ttg.local_alloc") == 2, "alloc number not match"
-            # 4. check dot
+            assert ttgir.count("ttg.local_alloc") == (3 if scale else 2), "alloc number not match"
+            # 4. check loads in the loop
+            assert ttgir.count("ttg.local_load") == (2 if scale else 1), "local_load number not match"
+            # 5. check dot
             cc = torch.cuda.get_device_capability()
             if cc[0] >= 9:
                 ttgir.count("ttng.warp_group_dot") != 0, "warp_group_dot not found"
