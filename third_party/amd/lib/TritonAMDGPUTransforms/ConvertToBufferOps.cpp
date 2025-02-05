@@ -39,7 +39,7 @@ namespace tt = mlir::triton;
 
 namespace {
 
-constexpr int64_t kDefaultMaxTripCount = 0;
+constexpr int64_t kDefaultMaxTripCount = 1024;
 const std::string kConvertBufferOpsPrefix = "__amdgpuconvertbufferops.";
 const std::string kOutputRange = kConvertBufferOpsPrefix + "output_range";
 
@@ -237,11 +237,18 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
       for (auto [oper, argLat] :
            llvm::zip(*operands, ArrayRef(lattices).drop_front(firstIndex))) {
         std::pair loopArgLat = {loop, argLat};
+        // If we've "run the loop" #tripcount times, stop propagating.
         if (loop && loopVisits[loopArgLat] >= loopTripCounts[loop])
           continue;
-        const dataflow::IntegerValueRangeLattice *rhs =
-            getLatticeElementFor(point, oper);
-        ChangeResult changed = argLat->join(*rhs);
+        ChangeResult changed;
+        if (loop && loopTripCounts[loop] > kDefaultMaxTripCount) {
+          // If the loop's tripcount is too large, "snap" arg lattices to max
+          // range (which will "snap" body values to max range as well).
+          changed = argLat->join(IntegerValueRange::getMaxRange(oper));
+        } else {
+          // Else, propagate pred operands.
+          changed = argLat->join(*getLatticeElementFor(point, oper));
+        }
         propagateIfChanged(argLat, changed);
         if (loop && changed == ChangeResult::Change)
           ++loopVisits[loopArgLat];
