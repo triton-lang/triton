@@ -523,8 +523,9 @@ assignMemoryLayouts(scf::ForOp &forOp,
       if (isa<mlir::triton::DotOpInterface>(use)) {
         LDBG("set shared encoding with dot user: " << *use);
         auto dot = dyn_cast<tt::DotOp>(use);
-        auto warpGroupDot = dyn_cast<ttng::WarpGroupDotOp>(use);
-        mmav3Shmem = canUseMMAv3Pipelining(&op) && warpGroupDot;
+        bool isMMAv3v5Dot = isa<ttng::WarpGroupDotOp, ttng::TCGen5MMAOp,
+                                ttng::TCGen5MMAScaledOp>(use);
+        mmav3Shmem = canUseMMAv3Pipelining(&op) && isMMAv3v5Dot;
 
         loadInfo.usedByDot = true;
         loadInfo.isMMAv3Shared = mmav3Shmem;
