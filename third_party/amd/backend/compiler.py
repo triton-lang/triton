@@ -258,13 +258,13 @@ class HIPBackend(BaseBackend):
         # LDS size is determined by provided arch name.
         custom_lds_size = 0
         amd.passes.ttgpuir.add_optimize_lds_usage(pm, options.arch, custom_lds_size)
-        passes.common.add_canonicalizer(pm)
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
 
         passes.ttgpuir.add_allocate_shared_memory(pm)
         amd.passes.ttgpuir.add_membar_analysis(pm)
         amd.passes.ttgpuir.add_refine_amdgpu_ops(pm, options.arch)
+        passes.common.add_canonicalizer(pm)
         amd.passes.ttgpuir.add_reschedule_amdgpu_ops(pm, options.arch)
         ## __HIP_FTZ is used to control the denorm flushing behavior of exp2 op as follows:
         ## 1. If __HIP_FTZ = 1, exp2 flushes denorms in input and output regardless
