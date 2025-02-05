@@ -470,9 +470,9 @@ struct AsyncCopyGlobalToLocalOpConversion
     }
 
     // global.load.lds does not support per lane offsets.
-    // We need to ensure that we write coalesced into shared memory.
-    // This means that the kLane dim needs to be contigeous based on the
-    // vectorization size
+    // We need to ensure that we write coalesced into shared memory. This means
+    // that the kLane dim needs to be contigeous based on the vectorization
+    // size.
     auto shape = dstTy.getShape();
     LinearLayout srcLayout =
         triton::gpu::toLinearLayout(shape, srcTy.getEncoding());
@@ -1665,11 +1665,11 @@ struct AsyncWaitOpConversion : public ConvertOpToLLVMPattern<AsyncWaitOp> {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
     // global.load.lds uses vmcnt to synchronize
-    // The rocdl op stores all available counters in a single int32 value (v)
-    // The vmcnt (6 bits) is split into a lower 3:0 and higher part 5:4
-    // The lower parts is stored in 3:0 of v and the higher part in bits 15:14
-    // We have to set all other bits in v to 1 to signal we are not interested
-    // in those
+    // The rocdl op stores all available counters in a single int32 value (v).
+    // The vmcnt (6 bits) is split into a lower 3:0 and higher 5:4 parts.
+    // The lower part is stored in bits 3:0 of v and the higher part in bits
+    // 15:14. We have to set all other bits in v to 1 to signal we are not
+    // interested in those.
 
     int vmCnt = op.getNum();
     if (vmCnt >= 64) {
