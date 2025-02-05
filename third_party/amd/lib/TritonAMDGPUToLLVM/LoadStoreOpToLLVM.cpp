@@ -476,8 +476,8 @@ struct AsyncCopyGlobalToLocalOpConversion
     auto shape = dstTy.getShape();
     LinearLayout srcLayout =
         triton::gpu::toLinearLayout(shape, srcTy.getEncoding());
-    LinearLayout sharedLayout = triton::gpu::toLinearLayout(
-        shape, dstTy.getEncoding(), resElemTy.getIntOrFloatBitWidth());
+    LinearLayout sharedLayout =
+        triton::gpu::toLinearLayout(shape, dstTy.getEncoding());
     LinearLayout srcToSharedLayout = srcLayout.invertAndCompose(sharedLayout);
 
     StringAttr kLane = rewriter.getStringAttr("lane");
