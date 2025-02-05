@@ -4089,6 +4089,7 @@ def test_dot_mulbroadcasted(in_dtype, device):
     if not is_cuda():
         return
     assert "tt.dot" in h.asm['ttir']
+    assert re.search(r"ttg.async_wait %.* {num = 2 : i32}", h.asm["ttgir"]) is not None
 
 
 @pytest.mark.interpreter
