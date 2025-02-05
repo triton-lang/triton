@@ -76,8 +76,6 @@ struct LocalAllocOpConversion
         LLVM::getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
     auto resultTy = cast<MemDescType>(op.getType());
     auto typeConverter = getTypeConverter();
-    auto sharedLayout =
-        cast<triton::gpu::SharedEncodingAttr>(resultTy.getEncoding());
 
     auto llvmElemTy = typeConverter->convertType(resultTy.getElementType());
     auto smemObj = SharedMemoryObject(smemBase, llvmElemTy, resultTy.getRank(),

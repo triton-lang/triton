@@ -272,10 +272,10 @@ tt.func public @fn(%arg0: tensor<2x4x8x16xf32, #blocked>, %arg1: tensor<16x32x64
 // -----
 
 // Valid op with shared encoding.
-#shared = #ttg.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [3, 2, 1, 0]}>
-#shared1 = #ttg.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 2, 0, 3]}>
-#shared2 = #ttg.shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [1, 0], CTAsPerCGA = [1, 2], CTASplitNum = [2, 4], CTAOrder = [0, 1], hasLeadingOffset = true}>
-#shared3 = #ttg.shared<{vec = 8, perPhase = 1, maxPhase = 8, order = [0, 1], CTAsPerCGA = [2, 1], CTASplitNum = [4, 2], CTAOrder = [1, 0], hasLeadingOffset = true}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [3, 2, 1, 0]}>
+#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 2, 0, 3]}>
+#shared2 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 32, CTAsPerCGA = [1, 2], CTASplitNum = [2, 4], CTAOrder = [0, 1]}>
+#shared3 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 32, CTAsPerCGA = [2, 1], CTASplitNum = [4, 2], CTAOrder = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 64 : i32, "ttg.threads-per-warp" = 32 : i32} {
 tt.func public @fn(%arg0: !ttg.memdesc<2x4x8x16xf32, #shared, #smem>, %arg1: !ttg.memdesc<16x32xf32, #shared2, #smem>) {
@@ -301,8 +301,8 @@ tt.func public @fn(%arg0: tensor<16x32x64xf32, #blocked>) {
 // -----
 
 // Invalid shared encoding.
-#shared = #ttg.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1, 2]}>
-#shared1 = #ttg.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [2, 0, 1]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1, 2]}>
+#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [2, 0, 1]}>
 module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 64 : i32, "ttg.threads-per-warp" = 32 : i32} {
 tt.func public @fn(%arg0: tensor<16x32x64xf32, #shared>) {
     // expected-error @+1 {{type}}
@@ -344,8 +344,8 @@ tt.func public @fn(%arg0: tensor<16x32xf32>) {
 // -----
 
 // Invalid tensor with shared encoding.
-#shared = #ttg.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1, 2]}>
-#shared1 = #ttg.shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [2, 0, 1]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0, 1, 2]}>
+#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [2, 0, 1]}>
 module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 8 : i32, "ttg.num-warps" = 64 : i32, "ttg.threads-per-warp" = 32 : i32} {
 tt.func public @fn(%arg0: tensor<16x32x64xf32, #shared>) {
     // expected-error @+1 {{has an invalid layout: Shared layout is not allowed on tensor type.}}

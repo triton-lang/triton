@@ -32,7 +32,7 @@ Value createBarrierAlloc(IRRewriter &rewriter, scf::ForOp forOp) {
       /*context=*/ctx, /*CTAsPerCGA=*/{numCTAs},
       /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
   auto barrierEncoding =
-      ttg::SharedEncodingAttr::get(ctx, 1, 1, 1, {0}, barrierCTALayout);
+      ttg::SwizzledSharedEncodingAttr::get(ctx, 1, 1, 1, {0}, barrierCTALayout);
   ttg::MemDescType barrierMemDescType =
       ttg::MemDescType::get({1}, rewriter.getI64Type(), barrierEncoding,
                             sharedMemorySpace, /*mutableMemory=*/true);

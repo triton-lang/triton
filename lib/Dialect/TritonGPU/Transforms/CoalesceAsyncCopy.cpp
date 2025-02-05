@@ -45,18 +45,19 @@ struct ClipAsyncCopySizePerThread
     if (!blockedEnc)
       return rewriter.notifyMatchFailure(copyOp,
                                          "src must be of blocked encoding");
-    auto sharedEnc = cast<SharedEncodingAttr>(dstTy.getEncoding());
+    auto sharedEnc = dyn_cast<SwizzledSharedEncodingAttr>(dstTy.getEncoding());
+    if (!sharedEnc)
+      return failure();
     auto sharedVec = sharedEnc.getVec();
 
     // obtain max contiguous copy size
     // Note this can be further optimized, as copyContigSize can be even
     // smaller when lowering, depending on contiguity and mask alignment
     // (see AsyncCopyGlobalToLocalOpConversion)
-    auto elemBitWidth = dstTy.getElementTypeBitWidth();
     LinearLayout regLayout =
         triton::gpu::toLinearLayout(srcTy.getShape(), blockedEnc);
     LinearLayout sharedLayout =
-        triton::gpu::toLinearLayout(srcTy.getShape(), sharedEnc, elemBitWidth);
+        triton::gpu::toLinearLayout(srcTy.getShape(), sharedEnc);
     auto copyContigSize =
         regLayout.invertAndCompose(sharedLayout).getNumConsecutiveInOut();
 

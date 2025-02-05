@@ -683,9 +683,8 @@ public:
   //     Otherwise, R could map some tensor index that is not stored in S.
   //
   // One requirement we *don't* have is that S is injective; we allow two shmem
-  // offsets to hold the same 2D index.  If S is not injective, there's
-  // ambiguity in which offset we choose for a given (lane, warp).  For now we
-  // don't place any guarantees on the choices made by this function.
+  // offsets to hold the same 2D index.  If S is not injective,
+  // the algorithm chooses the smallest offset for a given (lane, warp).
   [[nodiscard]] LinearLayout invertAndCompose(const LinearLayout &outer) const;
 
   // Get the layout that is the inverse of this layout.

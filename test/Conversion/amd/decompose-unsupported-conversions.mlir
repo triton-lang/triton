@@ -2,7 +2,7 @@
 
 // CHECK: #[[$BLOCKED:.+]] = #ttg.blocked<{{.*}}>
 // CHECK: #[[$WMMA:.+]] = #ttg.amd_wmma<{{.*}}>
-// CHECK: #[[$SHARED:.+]] = #ttg.shared<{{.*}}>
+// CHECK: #[[$SHARED:.+]] = #ttg.swizzled_shared<{{.*}}>
 // CHECK-LABEL: wmma_to_wmma_dot_op
 #mma = #ttg.amd_wmma<{version = 1, warpsPerCTA = [2, 2]}>
 #smem = #ttg.shared_memory
@@ -20,7 +20,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // CHECK: #[[$BLOCKED:.+]] = #ttg.blocked<{{.*}}>
 // CHECK: #[[$WMMA:.+]] = #ttg.amd_wmma<{{.*}}>
-// CHECK: #[[$SHARED:.+]] = #ttg.shared<{{.*}}>
+// CHECK: #[[$SHARED:.+]] = #ttg.swizzled_shared<{{.*}}>
 // CHECK-LABEL: wmma_to_wmma_dot3d_op
 #mma = #ttg.amd_wmma<{version = 1, warpsPerCTA = [2, 2, 2]}>
 #smem = #ttg.shared_memory

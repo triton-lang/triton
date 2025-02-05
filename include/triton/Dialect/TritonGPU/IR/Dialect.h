@@ -14,8 +14,7 @@
 #include <unordered_map>
 
 // LinearLayoutCache Utils
-using CacheKey =
-    std::tuple<std::vector<int64_t>, mlir::Attribute, std::optional<int32_t>>;
+using CacheKey = std::tuple<std::vector<int64_t>, mlir::Attribute>;
 
 namespace llvm {
 template <typename T> size_t hash_value(const std::vector<T> &vec) {
@@ -166,10 +165,18 @@ SmallVector<unsigned> getCTAOrder(Attribute layout);
  */
 SmallVector<unsigned> getShapePerCTATile(Attribute layout);
 
+// Returns the "logical" shape per CTA
 SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
                                     ArrayRef<int64_t> shape);
 SmallVector<int64_t> getShapePerCTA(Attribute layout, ArrayRef<int64_t> shape);
 SmallVector<int64_t> getShapePerCTA(Type type);
+
+// Returns the shape per CTA, which is "physically" allocated
+// Such shapes may be bigger than the logical one due to, for example, padding
+// in shared memory.
+SmallVector<int64_t> getAllocationShapePerCTA(Attribute layout,
+                                              ArrayRef<int64_t> shape);
+SmallVector<int64_t> getAllocationShapePerCTA(Type type);
 
 unsigned getNumWarpsPerCTA(Attribute layout);
 

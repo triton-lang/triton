@@ -427,8 +427,8 @@ public:
   SmallVector<Value> getStrides(triton::gpu::MemDescType memDesc, Location loc,
                                 RewriterBase &rewriter) const {
     auto allocShape = memDesc.getAllocShape();
-    auto allocShapePerCTA =
-        triton::gpu::getShapePerCTA(memDesc.getEncoding(), allocShape);
+    auto allocShapePerCTA = triton::gpu::getAllocationShapePerCTA(
+        memDesc.getEncoding(), allocShape);
     auto layoutOrder = triton::gpu::getOrder(memDesc.getEncoding());
     auto allocStrides = SharedMemoryObject::getStridesForShape(
         allocShapePerCTA, layoutOrder, loc, rewriter);
@@ -1288,9 +1288,12 @@ inline Value packLLVector(Location loc, ValueRange vals,
 inline bool
 isSimpleSharedMemoryAccess(ArrayRef<int64_t> shape,
                            ArrayRef<int64_t> allocShape,
-                           triton::gpu::SharedEncodingAttr sharedEnc) {
+                           triton::gpu::SharedEncodingTrait sharedEnc) {
   auto rank = shape.size();
-  return /*no swizzling*/ sharedEnc.getMaxPhase() == 1 ||
+  auto swizzledLayout =
+      dyn_cast<triton::gpu::SwizzledSharedEncodingAttr>(sharedEnc);
+  bool noSwizzling = swizzledLayout && swizzledLayout.getMaxPhase() == 1;
+  return /*no swizzling*/ noSwizzling ||
          /*swizzling but same shape*/ shape == allocShape ||
          /*swizzling and rank-reduced and rank >= 2*/
          (shape == allocShape.take_back(rank) && rank >= 2);

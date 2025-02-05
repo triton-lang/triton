@@ -8,7 +8,6 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
-#include "triton/Tools/LinearLayout.h"
 #include "llvm/Support/ErrorHandling.h"
 
 namespace mlir {
@@ -32,6 +31,8 @@ void LoadOp::getEffects(
 
 // enum attribute definitions
 #include "triton/Dialect/Triton/IR/OpsEnums.cpp.inc"
+
+#include "TritonCanonicalize.inc"
 
 namespace mlir {
 namespace triton {
@@ -190,7 +191,13 @@ void StoreOp::getCanonicalizationPatterns(RewritePatternSet &results,
 OpFoldResult TransOp::fold(FoldAdaptor adaptor) {
   // transpose(x, order=[0, 1, ...]) -> x
   if (isIota(getOrder())) {
-    return getSrc();
+    // If the source and result types are the same, we can return the source
+    // If their layout is different (even if structurally equivalent), we need
+    // to insert a convert_layout in between as otherwise ::fold complains
+    // We do this in CanonicalizeConvertFromTranspose
+    if (getSrc().getType() == getType()) {
+      return getSrc();
+    }
   }
 
   // transpose(transpose(x)) -> transpose(x)
@@ -206,6 +213,23 @@ OpFoldResult TransOp::fold(FoldAdaptor adaptor) {
     return attr.reshape(getType());
 
   return {};
+}
+
+LogicalResult TransOp::verify() {
+  auto order = getOrder();
+  auto srcTy = cast<RankedTensorType>(getSrc().getType());
+  if (order.size() != srcTy.getShape().size()) {
+    return emitError("order must have the same size as the source tensor");
+  }
+  if (!isPermutationOfIota(order)) {
+    return emitError("order must be a permutation of 0..n-1");
+  }
+  SmallVector<int64_t> retShape = applyPermutation(srcTy.getShape(), order);
+  if (retShape != getType().getShape()) {
+    return emitError(
+        "result shape must match the permutation of the source shape");
+  }
+  return success();
 }
 
 LogicalResult TransOp::inferReturnTypes(
@@ -648,23 +672,27 @@ OpFoldResult ExpandDimsOp::fold(FoldAdaptor adaptor) {
 }
 
 //-- ReshapeOp --
-template <typename OpType>
-LogicalResult canonicalizeViewOrBroadcast(OpType op,
-                                          PatternRewriter &rewriter) {
+LogicalResult ReshapeOp::canonicalize(ReshapeOp op, PatternRewriter &rewriter) {
+  if (op.getEfficientLayout())
+    return failure();
+
   auto definingOp = op.getSrc().getDefiningOp();
   if (!definingOp) {
     return failure();
   }
 
-  // view(view) -> view
-  if (auto parentView = dyn_cast<OpType>(definingOp)) {
-    rewriter.replaceOpWithNewOp<OpType>(op, TypeRange({op.getType()}),
-                                        parentView->getOperands(),
-                                        parentView->getAttrs());
+  // reshape(reshape) -> reshape
+  if (auto parentReshape = dyn_cast<ReshapeOp>(definingOp)) {
+    // Allow reorder if either reshape allowed it
+    const bool allowReorder =
+        (op.getAllowReorder() || parentReshape.getAllowReorder());
+    rewriter.replaceOpWithNewOp<ReshapeOp>(op, op.getType(),
+                                           parentReshape.getSrc(), allowReorder,
+                                           op.getEfficientLayout());
     return success();
   }
 
-  // view(splat) -> splat
+  // reshape(splat) -> splat
   if (auto splat = dyn_cast<SplatOp>(definingOp)) {
     rewriter.replaceOpWithNewOp<SplatOp>(op, op.getType(), splat.getSrc());
     return success();
@@ -673,14 +701,8 @@ LogicalResult canonicalizeViewOrBroadcast(OpType op,
   return failure();
 }
 
-LogicalResult ReshapeOp::canonicalize(ReshapeOp op, PatternRewriter &rewriter) {
-  if (!op.getAllowReorder() || op.getEfficientLayout())
-    return failure();
-  return canonicalizeViewOrBroadcast(op, rewriter);
-}
-
 OpFoldResult ReshapeOp::fold(FoldAdaptor adaptor) {
-  if (getType() == getSrc().getType()) {
+  if (getType() == getSrc().getType() && !getAllowReorder()) {
     // no-op
     return getSrc();
   }
@@ -763,9 +785,9 @@ LogicalResult FpToFpOp::verify() {
 }
 
 //-- BroadcastOp --
-LogicalResult BroadcastOp::canonicalize(BroadcastOp op,
-                                        PatternRewriter &rewriter) {
-  return canonicalizeViewOrBroadcast(op, rewriter);
+void BroadcastOp::getCanonicalizationPatterns(RewritePatternSet &results,
+                                              MLIRContext *context) {
+  results.add<BroadcastSplatPattern, BroadcastBroadcastPattern>(context);
 }
 
 OpFoldResult BroadcastOp::fold(FoldAdaptor adaptor) {
@@ -1036,6 +1058,12 @@ void ElementwiseInlineAsmOp::getEffects(
                        SideEffects::DefaultResource::get());
   effects.emplace_back(MemoryEffects::Read::get(),
                        SideEffects::DefaultResource::get());
+}
+
+Speculation::Speculatability ElementwiseInlineAsmOp::getSpeculatability() {
+  if (getPure())
+    return Speculation::Speculatable;
+  return Speculation::NotSpeculatable;
 }
 
 LogicalResult ElementwiseInlineAsmOp::verify() {

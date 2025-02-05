@@ -50,10 +50,7 @@ def matmul(a, b, activation=""):
     c = torch.empty((M, N), device=a.device, dtype=a.dtype)
 
     # 1D launch kernel where each block gets its own program.
-    def grid():
-        return (1, )
-
-    matmul_kernel[grid](
+    matmul_kernel[(1, )](
         a, b, c,  #
         M, N, K,  #
         a.stride(0), a.stride(1),  #

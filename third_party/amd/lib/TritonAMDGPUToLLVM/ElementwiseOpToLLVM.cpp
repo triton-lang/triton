@@ -8,7 +8,6 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
 using namespace mlir;
-using namespace mlir::triton;
 
 using mlir::triton::gpu::appendOrGetExternFuncOp;
 using mlir::triton::gpu::ElementwiseOpConversionBase;
@@ -16,25 +15,19 @@ using mlir::triton::gpu::getElementType;
 using mlir::triton::gpu::getFunctionType;
 using mlir::triton::gpu::MultipleOperandsRange;
 
-typedef std::function<SmallVector<Value>(Location, ConversionPatternRewriter &,
-                                         const SmallVector<Value> &)>
-    ConverterT;
+using ConverterT = std::function<SmallVector<Value>(
+    Location, ConversionPatternRewriter &, const SmallVector<Value> &)>;
 
 namespace {
-//===-------------------------------------------===//
-/// ROCM utility functions for data type conversion
-//===-------------------------------------------===//
+//===----------------------------------------------------------------------===//
+// Data type conversion utility functions
+//===----------------------------------------------------------------------===//
 
-//===----------------===//
-///      FP8E5M2
-//===----------------===//
-
-// This data-type is the standard FP8E5M2 format
-// NVIDIA GPU supports it natively but we don't have hardware native
-// support on MI300.
-// The SW based downcast with RTNE is not fully functional for the
-// denorm values. We need rewrite it if we need to emulate this data type
-// on AMDGPU.
+// FP8E5M2 is the open-compute standard FP8E5M2 format. NVIDIA GPU supports it
+// natively but we don't have hardware native support on MI300.
+//
+// The SW based downcast with RTNE is not fully functional for the denorm
+// values. We need rewrite it if we need to emulate this data type on AMDGPU.
 static SmallVector<Value>
 Fp16_to_Fp8E5M2_RTNE(Location loc, ConversionPatternRewriter &rewriter,
                      const SmallVector<Value> &v) {
@@ -90,10 +83,6 @@ Fp16_to_Fp8E5M2_RTZ(Location loc, ConversionPatternRewriter &rewriter,
           b.extract_element(i8_ty, a1, b.i32_val(1)),
           b.extract_element(i8_ty, a1, b.i32_val(3))};
 }
-
-//===----------------===//
-///      FP8E4M3
-//===----------------===//
 
 // Cast FP16 to FP8E4M3FN in saturation and round-to-nearest-even mode.
 // According to
@@ -717,10 +706,6 @@ static SmallVector<Value> Bf16_to_Fp8E5M2(Location loc,
           b.extract_element(i8_ty, fp8x4Vec, b.i32_val(3))};
 }
 
-//===-----------------------------------------===//
-/// ROCM type conversion between fp8 and bf16
-//===-----------------------------------------===//
-
 // fp8e4m3fn to bf16
 static SmallVector<Value> Fp8E4M3FN_to_Bf16(Location loc,
                                             ConversionPatternRewriter &rewriter,
@@ -756,8 +741,6 @@ static SmallVector<Value> Fp8E4M3FN_to_Bf16(Location loc,
   return {b.extract_element(bf16_ty, out0, b.i32_val(0)),
           b.extract_element(bf16_ty, out0, b.i32_val(1))};
 }
-
-/****************************************************************************/
 
 // fp8e4m3fnuz to bf16
 static SmallVector<Value>
@@ -910,15 +893,18 @@ static ConverterT Fp16_to_Fp8E4M3FNUZ(AMD::ISAFamily isaFamily) {
                                             : Fp16_to_Fp8E4M3FNUZ_SW;
 }
 
+//===----------------------------------------------------------------------===//
+// Data type conversion patterns
+//===----------------------------------------------------------------------===//
+
 template <typename SourceOp, typename DestOp>
 struct ElementwiseOpConversion
     : public ElementwiseOpConversionBase<
           SourceOp, ElementwiseOpConversion<SourceOp, DestOp>> {
-  using Base =
-      ElementwiseOpConversionBase<SourceOp,
-                                  ElementwiseOpConversion<SourceOp, DestOp>>;
-  using Base::Base;
+  using Base = ElementwiseOpConversionBase<SourceOp, ElementwiseOpConversion>;
   using OpAdaptor = typename Base::OpAdaptor;
+
+  using Base::Base;
 
   // An interface to support variant DestOp builder.
   SmallVector<DestOp> createDestOps(SourceOp op, OpAdaptor adaptor,
@@ -933,9 +919,6 @@ struct ElementwiseOpConversion
 // Attempts to use vectorized conversions via inline PTX when possible.
 struct FpToFpOpConversion
     : public ElementwiseOpConversionBase<triton::FpToFpOp, FpToFpOpConversion> {
-  using ElementwiseOpConversionBase<
-      triton::FpToFpOp, FpToFpOpConversion>::ElementwiseOpConversionBase;
-
   explicit FpToFpOpConversion(LLVMTypeConverter &typeConverter,
                               ModuleAxisInfoAnalysis &axisAnalysisPass,
                               AMD::ISAFamily isaFamily,
@@ -949,18 +932,18 @@ struct FpToFpOpConversion
     return cvtFp16ToFp32(loc, rewriter, v);
   }
 
-  mlir::FailureOr<ConverterT>
+  FailureOr<ConverterT>
   getConversionFunc(Type srcTy, Type dstTy,
                     std::optional<RoundingMode> roundingMode) const {
-    auto F8E4M3B15TyID = TypeID::get<mlir::Float8E4M3B11FNUZType>();
-    auto F8E4M3FNUZTyID = TypeID::get<mlir::Float8E4M3FNUZType>();
-    auto F8E5M2FNUZTyID = TypeID::get<mlir::Float8E5M2FNUZType>();
-    auto F8E5M2TyID = TypeID::get<mlir::Float8E5M2Type>();
-    auto F8E4M3FNTyID = TypeID::get<mlir::Float8E4M3FNType>();
-    auto F16TyID = TypeID::get<mlir::Float16Type>();
-    auto BF16TyID = TypeID::get<mlir::BFloat16Type>();
-    auto F32TyID = TypeID::get<mlir::Float32Type>();
-    auto F64TyID = TypeID::get<mlir::Float64Type>();
+    auto F8E4M3B15TyID = TypeID::get<Float8E4M3B11FNUZType>();
+    auto F8E4M3FNUZTyID = TypeID::get<Float8E4M3FNUZType>();
+    auto F8E5M2FNUZTyID = TypeID::get<Float8E5M2FNUZType>();
+    auto F8E5M2TyID = TypeID::get<Float8E5M2Type>();
+    auto F8E4M3FNTyID = TypeID::get<Float8E4M3FNType>();
+    auto F16TyID = TypeID::get<Float16Type>();
+    auto BF16TyID = TypeID::get<BFloat16Type>();
+    auto F32TyID = TypeID::get<Float32Type>();
+    auto F64TyID = TypeID::get<Float64Type>();
 
     auto undefRounding = static_cast<RoundingMode>(-1);
 
@@ -1005,7 +988,7 @@ struct FpToFpOpConversion
         srcTy.getTypeID(), dstTy.getTypeID(),
         roundingMode.value_or(undefRounding)};
     if (srcMap.count(key) == 0) {
-      return mlir::failure();
+      return failure();
     }
     return srcMap.lookup(key);
   }
@@ -1083,12 +1066,12 @@ struct FpToFpOpConversion
     if (srcType != dstType) {
       auto getCvtFunc = getConversionFunc(srcType, dstType, roundingMode);
       if (failed(getCvtFunc)) {
-        mlir::emitError(loc, "Unsupported conversion from ")
-            << srcType << " to " << dstType
-            << (roundingMode.has_value()
-                    ? " with rounding mode " +
-                          stringifyRoundingMode(roundingMode.value())
-                    : "");
+        std::string rmError;
+        if (roundingMode.has_value())
+          rmError = std::string(" with rounding mode ") +
+                    stringifyRoundingMode(roundingMode.value()).str();
+        op->emitError("Unsupported conversion from ")
+            << srcType << " to " << dstType << rmError;
         return outVals;
       } else {
         auto cvtFunc = getCvtFunc.value();
@@ -1122,13 +1105,10 @@ Value EmitDualBF16ElementwiseOp(Location loc,
 }
 
 struct FDivOpConversion
-    : ElementwiseOpConversionBase<mlir::arith::DivFOp, FDivOpConversion> {
-  using Base =
-      ElementwiseOpConversionBase<mlir::arith::DivFOp, FDivOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
+    : ElementwiseOpConversionBase<arith::DivFOp, FDivOpConversion> {
+  using ElementwiseOpConversionBase::ElementwiseOpConversionBase;
 
-  SmallVector<Value> createDestOps(mlir::arith::DivFOp op, OpAdaptor adaptor,
+  SmallVector<Value> createDestOps(arith::DivFOp op, OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
@@ -1139,13 +1119,10 @@ struct FDivOpConversion
 };
 
 struct FMulOpConversion
-    : ElementwiseOpConversionBase<mlir::arith::MulFOp, FMulOpConversion> {
-  using Base =
-      ElementwiseOpConversionBase<mlir::arith::MulFOp, FMulOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
+    : ElementwiseOpConversionBase<arith::MulFOp, FMulOpConversion> {
+  using ElementwiseOpConversionBase::ElementwiseOpConversionBase;
 
-  SmallVector<Value> createDestOps(mlir::arith::MulFOp op, OpAdaptor adaptor,
+  SmallVector<Value> createDestOps(arith::MulFOp op, OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
@@ -1161,13 +1138,10 @@ struct FMulOpConversion
 };
 
 struct FAddOpConversion
-    : ElementwiseOpConversionBase<mlir::arith::AddFOp, FAddOpConversion> {
-  using Base =
-      ElementwiseOpConversionBase<mlir::arith::AddFOp, FAddOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
+    : ElementwiseOpConversionBase<arith::AddFOp, FAddOpConversion> {
+  using ElementwiseOpConversionBase::ElementwiseOpConversionBase;
 
-  SmallVector<Value> createDestOps(mlir::arith::AddFOp op, OpAdaptor adaptor,
+  SmallVector<Value> createDestOps(arith::AddFOp op, OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
@@ -1183,13 +1157,10 @@ struct FAddOpConversion
 };
 
 struct FSubOpConversion
-    : ElementwiseOpConversionBase<mlir::arith::SubFOp, FSubOpConversion> {
-  using Base =
-      ElementwiseOpConversionBase<mlir::arith::SubFOp, FSubOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
+    : ElementwiseOpConversionBase<arith::SubFOp, FSubOpConversion> {
+  using ElementwiseOpConversionBase::ElementwiseOpConversionBase;
 
-  SmallVector<Value> createDestOps(mlir::arith::SubFOp op, OpAdaptor adaptor,
+  SmallVector<Value> createDestOps(arith::SubFOp op, OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
@@ -1230,13 +1201,10 @@ static SmallVector<Value> S8_to_Bf16(Location loc,
 
 // Uses inline ptx to convert s8/u8 to bf16, since the
 struct SIToFPOpConversion
-    : ElementwiseOpConversionBase<mlir::arith::SIToFPOp, SIToFPOpConversion> {
-  using Base =
-      ElementwiseOpConversionBase<mlir::arith::SIToFPOp, SIToFPOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
+    : ElementwiseOpConversionBase<arith::SIToFPOp, SIToFPOpConversion> {
+  using ElementwiseOpConversionBase::ElementwiseOpConversionBase;
 
-  SmallVector<Value> createDestOps(mlir::arith::SIToFPOp op, OpAdaptor adaptor,
+  SmallVector<Value> createDestOps(arith::SIToFPOp op, OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
@@ -1258,13 +1226,10 @@ struct SIToFPOpConversion
 };
 
 struct FPToSIOpConversion
-    : ElementwiseOpConversionBase<mlir::arith::FPToSIOp, FPToSIOpConversion> {
-  using Base =
-      ElementwiseOpConversionBase<mlir::arith::FPToSIOp, FPToSIOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
+    : ElementwiseOpConversionBase<arith::FPToSIOp, FPToSIOpConversion> {
+  using ElementwiseOpConversionBase::ElementwiseOpConversionBase;
 
-  SmallVector<Value> createDestOps(mlir::arith::FPToSIOp op, OpAdaptor adaptor,
+  SmallVector<Value> createDestOps(arith::FPToSIOp op, OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
@@ -1279,13 +1244,10 @@ struct FPToSIOpConversion
 };
 
 struct ExtFOpConversion
-    : ElementwiseOpConversionBase<mlir::arith::ExtFOp, ExtFOpConversion> {
-  using Base =
-      ElementwiseOpConversionBase<mlir::arith::ExtFOp, ExtFOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
+    : ElementwiseOpConversionBase<arith::ExtFOp, ExtFOpConversion> {
+  using ElementwiseOpConversionBase::ElementwiseOpConversionBase;
 
-  SmallVector<Value> createDestOps(mlir::arith::ExtFOp op, OpAdaptor adaptor,
+  SmallVector<Value> createDestOps(arith::ExtFOp op, OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
@@ -1301,18 +1263,22 @@ struct ExtFOpConversion
 };
 
 struct TruncFOpConversion
-    : ElementwiseOpConversionBase<mlir::arith::TruncFOp, TruncFOpConversion> {
-  using Base =
-      ElementwiseOpConversionBase<mlir::arith::TruncFOp, TruncFOpConversion>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
+    : ElementwiseOpConversionBase<arith::TruncFOp, TruncFOpConversion> {
+  using ElementwiseOpConversionBase::ElementwiseOpConversionBase;
 
-  SmallVector<Value> createDestOps(mlir::arith::TruncFOp op, OpAdaptor adaptor,
+  explicit TruncFOpConversion(LLVMTypeConverter &typeConverter,
+                              ModuleAxisInfoAnalysis &axisAnalysisPass,
+                              llvm::AMDGPU::GPUKind gpuKind,
+                              PatternBenefit benefit = patternBenefitDefault)
+      : ElementwiseOpConversionBase(typeConverter, axisAnalysisPass, benefit),
+        gpuKind(gpuKind) {}
+
+  SmallVector<Value> createDestOps(arith::TruncFOp op, OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
     auto outElemTy = getElementType(op.getOut());
-    if (outElemTy.isBF16()) {
+    if (outElemTy.isBF16() && gpuKind != llvm::AMDGPU::GK_GFX950) {
       auto inElemTy = getElementType(op.getIn());
       assert(inElemTy.isF32() && "unsupported conversion");
       return {
@@ -1321,16 +1287,16 @@ struct TruncFOpConversion
       return {rewriter.create<LLVM::FPTruncOp>(loc, elemTy, operands[0][0])};
     }
   }
+
+private:
+  llvm::AMDGPU::GPUKind gpuKind;
 };
 
 struct ExpOpConversionApprox
-    : ElementwiseOpConversionBase<mlir::math::ExpOp, ExpOpConversionApprox> {
-  using Base =
-      ElementwiseOpConversionBase<mlir::math::ExpOp, ExpOpConversionApprox>;
-  using Base::Base;
-  using Adaptor = typename Base::OpAdaptor;
+    : ElementwiseOpConversionBase<math::ExpOp, ExpOpConversionApprox> {
+  using ElementwiseOpConversionBase::ElementwiseOpConversionBase;
 
-  SmallVector<Value> createDestOps(mlir::math::ExpOp op, OpAdaptor adaptor,
+  SmallVector<Value> createDestOps(math::ExpOp op, OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
@@ -1355,17 +1321,14 @@ struct ExpOpConversionApprox
 };
 
 struct Exp2OpConversion
-    : ElementwiseOpConversionBase<mlir::math::Exp2Op, Exp2OpConversion> {
-  using ElementwiseOpConversionBase<
-      mlir::math::Exp2Op, Exp2OpConversion>::ElementwiseOpConversionBase;
-
+    : ElementwiseOpConversionBase<math::Exp2Op, Exp2OpConversion> {
   explicit Exp2OpConversion(LLVMTypeConverter &typeConverter,
                             ModuleAxisInfoAnalysis &axisInfoAnalysis, bool ftz,
                             PatternBenefit benefit)
       : ElementwiseOpConversionBase(typeConverter, axisInfoAnalysis, benefit),
         ftz(ftz) {}
 
-  SmallVector<Value> createDestOps(mlir::math::Exp2Op op, OpAdaptor adaptor,
+  SmallVector<Value> createDestOps(math::Exp2Op op, OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
@@ -1391,17 +1354,14 @@ private:
 };
 
 struct RsqrtOpConversion
-    : ElementwiseOpConversionBase<mlir::math::RsqrtOp, RsqrtOpConversion> {
-  using ElementwiseOpConversionBase<
-      mlir::math::RsqrtOp, RsqrtOpConversion>::ElementwiseOpConversionBase;
-
+    : ElementwiseOpConversionBase<math::RsqrtOp, RsqrtOpConversion> {
   explicit RsqrtOpConversion(LLVMTypeConverter &typeConverter,
                              ModuleAxisInfoAnalysis &axisInfoAnalysis, bool ftz,
                              PatternBenefit benefit)
       : ElementwiseOpConversionBase(typeConverter, axisInfoAnalysis, benefit),
         ftz(ftz) {}
 
-  SmallVector<Value> createDestOps(mlir::math::RsqrtOp op, OpAdaptor adaptor,
+  SmallVector<Value> createDestOps(math::RsqrtOp op, OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
@@ -1450,17 +1410,14 @@ static inline Value scaleDownIfDenorm(ConversionPatternRewriter &rewriter,
 }
 
 struct SqrtOpConversion
-    : ElementwiseOpConversionBase<mlir::math::SqrtOp, SqrtOpConversion> {
-  using ElementwiseOpConversionBase<
-      mlir::math::SqrtOp, SqrtOpConversion>::ElementwiseOpConversionBase;
-
+    : ElementwiseOpConversionBase<math::SqrtOp, SqrtOpConversion> {
   explicit SqrtOpConversion(LLVMTypeConverter &typeConverter,
                             ModuleAxisInfoAnalysis &axisInfoAnalysis, bool ftz,
                             PatternBenefit benefit)
       : ElementwiseOpConversionBase(typeConverter, axisInfoAnalysis, benefit),
         ftz(ftz) {}
 
-  SmallVector<Value> createDestOps(mlir::math::SqrtOp op, OpAdaptor adaptor,
+  SmallVector<Value> createDestOps(math::SqrtOp op, OpAdaptor adaptor,
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
@@ -1523,10 +1480,6 @@ private:
 struct PreciseSqrtOpConversion
     : ElementwiseOpConversionBase<triton::PreciseSqrtOp,
                                   PreciseSqrtOpConversion> {
-  using ElementwiseOpConversionBase<
-      triton::PreciseSqrtOp,
-      PreciseSqrtOpConversion>::ElementwiseOpConversionBase;
-
   explicit PreciseSqrtOpConversion(LLVMTypeConverter &typeConverter,
                                    ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                    bool ftz, PatternBenefit benefit)
@@ -1614,7 +1567,8 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<FMulOpConversion>(typeConverter, axisInfoAnalysis, benefit);
 
   patterns.add<ExtFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
-  patterns.add<TruncFOpConversion>(typeConverter, axisInfoAnalysis, benefit);
+  patterns.add<TruncFOpConversion>(typeConverter, axisInfoAnalysis,
+                                   targetInfo.getGPUKind(), benefit);
   patterns.add<FPToSIOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<SIToFPOpConversion>(typeConverter, axisInfoAnalysis, benefit);
   patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis,
@@ -1634,12 +1588,12 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<SqrtOpConversion>(typeConverter, axisInfoAnalysis, ftz, benefit);
   patterns.add<PreciseSqrtOpConversion>(typeConverter, axisInfoAnalysis, ftz,
                                         benefit);
-  mlir::triton::populateElementwiseOpToLLVMPatterns(
+  triton::populateElementwiseOpToLLVMPatterns(
       typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
-  mlir::triton::populateMinMaxFOpToLLVMPattern(
+  triton::populateMinMaxFOpToLLVMPattern(
       typeConverter, patterns, axisInfoAnalysis,
       /*hwNanPropagationSupported=*/false, benefit);
-  mlir::triton::populateClampFOpToLLVMPattern(
-      typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
+  triton::populateClampFOpToLLVMPattern(typeConverter, patterns,
+                                        axisInfoAnalysis, targetInfo, benefit);
 }
 } // namespace mlir::triton::AMD
