@@ -88,8 +88,8 @@ tt.func @load_into_shared(%lb : index, %ub : index, %step : index,
   tt.return %loop#2: tensor<128x128xf32, #mma>
 }
 
-// CHECK-LABEL: @load_into_lt_4b
-tt.func @load_into_lt_4b(%lb : index, %ub : index, %step : index,
+// CHECK-LABEL: @load_into_shared_incompat_layout
+tt.func @load_into_shared_incompat_layout(%lb : index, %ub : index, %step : index,
                   %a_ptr_init : tensor<128x32x!tt.ptr<f16>, #AL> {tt.divisibility = 16 : i32, tt.contiguity = 32 : i32},
                   %b_ptr_init : tensor<32x128x!tt.ptr<f16>, #BL> {tt.divisibility = 16 : i32, tt.contiguity = 32 : i32}) -> tensor<128x128xf32, #mma> {
   %c_init = arith.constant dense<0.00e+00> : tensor<128x128xf32, #mma>
@@ -100,7 +100,6 @@ tt.func @load_into_lt_4b(%lb : index, %ub : index, %step : index,
     // CHECK: tt.load {{.*}} {tt.latency = 2 : i32}
     %a_ = tt.load %a_ptr : tensor<128x32x!tt.ptr<f16>, #AL>
     %a = ttg.local_alloc %a_ : (tensor<128x32xf16, #AL>) -> !ttg.memdesc<128x32xf16, #shared, #ttg.shared_memory>
-    // Do not pipeline if cp.async would read less than 4 consecutive bytes
     // CHECK: tt.load
     // CHECK-NOT: {tt.latency = 2 : i32}
     %b_ = tt.load %b_ptr : tensor<32x128x!tt.ptr<f16>, #BL>

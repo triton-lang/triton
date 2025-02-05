@@ -200,7 +200,13 @@ StringRef getAMDArch(Operation *module);
 std::optional<mlir::triton::gpu::SwizzledSharedEncodingAttr>
 getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible);
 
-bool canUseMMAv3Pipelining(Operation *loadOp);
+enum class MMALoadType {
+  SharedV3,
+  Registers,     // may be v2 or v3
+  DoNotPipeline, // could be a valid shared/registers MMA operand, but skip
+                 // pipelining
+};
+MMALoadType getMMALoadType(Operation *loadOp);
 
 // Convert \param op operands and results to layout \param encoding.
 void convertOpEncoding(Attribute encoding, Operation *op);
