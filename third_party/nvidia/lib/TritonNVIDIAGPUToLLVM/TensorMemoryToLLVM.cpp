@@ -256,46 +256,6 @@ static void lowerStoreToTensorMemory(Location loc, ModuleOp mod, Value src,
   b.barrier();
 }
 
-struct TensorMemoryObject {
-  TensorMemoryObject(Value base, int64_t rank, Location loc,
-                     RewriterBase &rewriter)
-      : base(base) {
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    offsets.append(rank, b.i32_val(0));
-  }
-
-  SmallVector<Value> getElems() const {
-    SmallVector<Value> elems;
-    elems.push_back(base);
-    elems.append(offsets.begin(), offsets.end());
-    return elems;
-  }
-
-  SmallVector<Type> getTypes() const {
-    SmallVector<Type> types;
-    types.push_back(base.getType());
-    types.append(offsets.size(), IntegerType::get(base.getContext(), 32));
-    return types;
-  }
-
-  Value getStruct(Location loc, RewriterBase &rewriter) {
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto elems = getElems();
-    auto types = getTypes();
-    auto structTy =
-        LLVM::LLVMStructType::getLiteral(rewriter.getContext(), types);
-    Value llvmStruct = rewriter.create<LLVM::UndefOp>(loc, structTy);
-    for (const auto &v : llvm::enumerate(elems)) {
-      assert(v.value() && "can not insert null values");
-      llvmStruct = b.insert_val(structTy, llvmStruct, v.value(), v.index());
-    }
-    return llvmStruct;
-  }
-
-  Value base;
-  SmallVector<Value> offsets;
-};
-
 struct TensorMemoryAllocOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::TMEMAllocOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
@@ -323,16 +283,14 @@ struct TensorMemoryAllocOpConversion
     std::iota(order.begin(), order.end(), 0);
     std::reverse(order.begin(), order.end());
     auto shape = op.getType().getShape();
-    auto tmemObj = TensorMemoryObject(ptr, shape.size(), loc, rewriter);
 
     if (op.getSrc()) {
       lowerStoreToTensorMemory(loc, mod, op.getSrc(), op.getResult(),
-                               adaptor.getSrc(), b.i1_val(true), tmemObj.base,
+                               adaptor.getSrc(), b.i1_val(true), ptr,
                                rewriter);
     }
 
-    auto retVal = tmemObj.getStruct(loc, rewriter);
-    rewriter.replaceOp(op, retVal);
+    rewriter.replaceOp(op, ptr);
     return success();
   }
 };
@@ -420,8 +378,7 @@ struct TensorMemoryLoadOpConversion
     auto mod = op->getParentOfType<ModuleOp>();
     auto llvmElemTy =
         getTypeConverter()->convertType(op.getSrc().getType().getElementType());
-    auto tmemBase = LLVM::NVIDIA::getTensorMemoryBase(
-        op.getLoc(), adaptor.getSrc(), rewriter);
+    auto tmemBase = adaptor.getSrc();
 
     SmallVector<Value> resultVals;
     calculateAddressAndEmitTmemMessage(
@@ -458,8 +415,7 @@ struct TensorMemoryStoreOpConversion
     auto mod = op->getParentOfType<ModuleOp>();
     auto llvmElemTy =
         getTypeConverter()->convertType(op.getDst().getType().getElementType());
-    auto tmemBase = LLVM::NVIDIA::getTensorMemoryBase(
-        op.getLoc(), adaptor.getDst(), rewriter);
+    auto tmemBase = adaptor.getDst();
     Value pred = adaptor.getPred();
     lowerStoreToTensorMemory(loc, mod, op.getSrc(), op.getDst(),
                              adaptor.getSrc(), pred, tmemBase, rewriter);
@@ -534,8 +490,7 @@ struct TensorMemoryCopyOpConversion
             typeConverter->convertType(srcTy.getElementType()), rewriter)
             .getBase();
 
-    Value baseDst =
-        LLVM::NVIDIA::getTensorMemoryBase(loc, adaptor.getDst(), rewriter);
+    Value baseDst = adaptor.getDst();
 
     // The following codegen assumes that we use tcgen05.cp only with
     // the warpx4.32x128b mode, to load blocked scales from MXFP.
@@ -627,8 +582,7 @@ struct MemDescSubviewOpConversion
     }
 
     // newBase = base + offset
-    auto tmemBase =
-        LLVM::NVIDIA::getTensorMemoryBase(loc, adaptor.getSrc(), rewriter);
+    auto tmemBase = adaptor.getSrc();
     SmallVector<Value> opOffsetVals = op.getOffsets();
     size_t destRank = op.getResult().getType().getRank();
     SmallVector<Value> offsetVals;
@@ -646,9 +600,7 @@ struct MemDescSubviewOpConversion
         rewriter.create<LLVM::MulOp>(loc, opOffsetVals[0],
                                      b.i32_val(numColOffset)));
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
-    auto tmemObj = TensorMemoryObject(b.inttoptr(elemPtrTy, newBase),
-                                      offsetVals.size(), loc, rewriter);
-    rewriter.replaceOp(op, tmemObj.getStruct(loc, rewriter));
+    rewriter.replaceOp(op, b.inttoptr(elemPtrTy, newBase));
     return success();
   }
 };

@@ -11,7 +11,6 @@ using namespace mlir::triton::gpu;
 using namespace mlir::triton::NVIDIA;
 
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-using ::mlir::LLVM::NVIDIA::getTensorMemoryBase;
 using ::mlir::triton::gpu::NVMMASharedEncodingAttr;
 
 mlir::triton::NVIDIA::DotOpMmaV5TmemLoader::DotOpMmaV5TmemLoader(
@@ -358,7 +357,6 @@ void convertDot(const LLVMTypeConverter *typeConverter,
           loc, loadedB, typeConverter->convertType(bTensorTy.getElementType()),
           rewriter)
           .getBase();
-  Value baseD = getTensorMemoryBase(loc, loadedD, rewriter);
 
   SmallVector<int64_t> dstPerCTA = triton::gpu::getShapePerCTA(dTensorTy);
   unsigned int M = dstPerCTA[0];
@@ -398,7 +396,7 @@ void convertDot(const LLVMTypeConverter *typeConverter,
                            {(unsigned)mmaSizeN, (unsigned)mmaSizeK},
                            bTensorTy.getElementTypeBitWidth(), rewriter, loc);
   DotOpMmaV5TmemLoader dLoader = DotOpMmaV5TmemLoader(
-      d, baseD, {(unsigned)mmaSizeM, (unsigned)mmaSizeN}, interleaved, false);
+      d, loadedD, {(unsigned)mmaSizeM, (unsigned)mmaSizeN}, interleaved, false);
   for (int m = 0; m < numRepM; m++) {
     for (int n = 0; n < numRepN; n++) {
       Value useInitAcc = useDFlag;
@@ -499,10 +497,10 @@ struct TCGen5MMAScaledOpConversion
             loc, adaptor.getB(),
             typeConverter->convertType(bTensorTy.getElementType()), rewriter)
             .getBase();
-    Value baseD = getTensorMemoryBase(loc, adaptor.getD(), rewriter);
+    Value baseD = adaptor.getD();
     baseD = tb.ptrtoint(i32_ty, baseD);
-    Value baseScaleA = getTensorMemoryBase(loc, adaptor.getAScale(), rewriter);
-    Value baseScaleB = getTensorMemoryBase(loc, adaptor.getBScale(), rewriter);
+    Value baseScaleA = adaptor.getAScale();
+    Value baseScaleB = adaptor.getBScale();
     baseScaleA = tb.ptrtoint(i32_ty, baseScaleA);
     baseScaleB = tb.ptrtoint(i32_ty, baseScaleB);
 

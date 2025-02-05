@@ -43,11 +43,6 @@ Value createElectPredicateWarp0(Location loc, RewriterBase &rewriter);
 // Create bar.warp.sync
 void createSyncWarp(Location loc, OpBuilder &builder);
 
-// Similar to getSharedMemoryObjectFromStruct, but only for getting the base
-// address of TMEM
-Value getTensorMemoryBase(Location loc, Value llvmStruct,
-                          RewriterBase &rewriter);
-
 } // namespace NVIDIA
 } // namespace LLVM
 
