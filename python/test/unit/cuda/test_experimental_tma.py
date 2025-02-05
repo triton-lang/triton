@@ -783,11 +783,11 @@ def test_experimental_make_tensor_descriptor_loop_carried():
 
 
 @triton.jit
-def batched_gemm_kernel(a_ptr, b_ptr, c_ptr,  #
-                        B, M, N, K,  #
-                        dtype: tl.constexpr,  #
-                        BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
-                        NUM_SMS: tl.constexpr):
+def batched_gemm_2d_tma_kernel(a_ptr, b_ptr, c_ptr,  #
+                               B, M, N, K,  #
+                               dtype: tl.constexpr,  #
+                               BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
+                               NUM_SMS: tl.constexpr):
     start_pid = tl.program_id(axis=0)
     num_tiles_m = tl.cdiv(M, BLOCK_M)
     num_tiles_n = tl.cdiv(N, BLOCK_N)
@@ -850,7 +850,7 @@ def batched_gemm_kernel(a_ptr, b_ptr, c_ptr,  #
 
 @requires_tma
 @pytest.mark.interpreter
-def test_tensor_descriptor_batched_gemm():
+def test_tensor_descriptor_batched_gemm_2d_tma():
     device = "cuda"
     BLOCK_M, BLOCK_N, BLOCK_K = 128, 256, 64
     if is_interpreter():
@@ -877,7 +877,7 @@ def test_tensor_descriptor_batched_gemm():
 
     triton.set_allocator(alloc_fn)
 
-    batched_gemm_kernel[grid](
+    batched_gemm_2d_tma_kernel[grid](
         a, b, c,  #
         B, M, N, K,  #
         tl.float16,  #
@@ -885,6 +885,109 @@ def test_tensor_descriptor_batched_gemm():
         NUM_SMS,  #
         num_stages=num_stages, num_warps=8)
     torch.cuda.synchronize()
+
+    torch.testing.assert_close(c, expect, rtol=1e-3, atol=1e-3)
+
+
+@triton.jit
+def batched_gemm_3d_tma_kernel(a_ptr, b_ptr, c_ptr,  #
+                               B, M, N, K,  #
+                               dtype: tl.constexpr,  #
+                               BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
+                               NUM_SMS: tl.constexpr):
+    start_pid = tl.program_id(axis=0)
+    num_tiles_m = tl.cdiv(M, BLOCK_M)
+    num_tiles_n = tl.cdiv(N, BLOCK_N)
+    k_tiles = tl.cdiv(K, BLOCK_K)
+    num_tiles_per_batch = num_tiles_m * num_tiles_n
+    num_tiles = B * num_tiles_per_batch
+
+    tiles_per_SM = num_tiles // NUM_SMS
+    if start_pid < num_tiles % NUM_SMS:
+        tiles_per_SM += 1
+
+    tile_id = start_pid - NUM_SMS
+    ki = -1
+
+    tile_m = 0
+    tile_n = 0
+    tile_b = 0
+
+    offs_m = 0
+    offs_n = 0
+    offs_b = 0
+
+    a_desc = tl._experimental_make_tensor_descriptor(a_ptr, [B, M, K], [K * M, K, 1], [1, BLOCK_M, BLOCK_K])
+    b_desc = tl._experimental_make_tensor_descriptor(b_ptr, [B, N, K], [N * K, K, 1], [1, BLOCK_N, BLOCK_K])
+    c_desc = tl._experimental_make_tensor_descriptor(c_ptr, [B, M, N], [M * N, N, 1], [1, BLOCK_M, BLOCK_N])
+
+    accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+
+    for _ in range(k_tiles * tiles_per_SM):
+        ki = tl.where(ki == k_tiles - 1, 0, ki + 1)
+        if ki == 0:
+            tile_id += NUM_SMS
+            tile_b = tile_id // num_tiles_per_batch
+            tile_m = (tile_id // num_tiles_n) % num_tiles_m
+            tile_n = tile_id % num_tiles_n
+
+            offs_b = tile_b
+            offs_m = tile_m * BLOCK_M
+            offs_n = tile_n * BLOCK_N
+
+        offs_k = ki * BLOCK_K
+
+        a = a_desc.load([offs_b, offs_m, offs_k]).reshape([BLOCK_M, BLOCK_K])
+        b = b_desc.load([offs_b, offs_n, offs_k]).reshape([BLOCK_N, BLOCK_K])
+        accumulator = tl.dot(a, b.T, accumulator)
+
+        if ki == k_tiles - 1:
+            c = accumulator.to(dtype)
+
+            c_desc.store([offs_b, offs_m, offs_n], c.reshape((1, BLOCK_M, BLOCK_N)))
+            accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+
+
+@requires_tma
+@pytest.mark.interpreter
+def test_tensor_descriptor_batched_gemm_3d_tma():
+    device = "cuda"
+    BLOCK_M, BLOCK_N, BLOCK_K = 128, 256, 64
+    if is_interpreter():
+        B, M, N, K = 2, BLOCK_M, BLOCK_N, BLOCK_K
+    else:
+        B, M, N, K = 2, 1024, 1024, 128
+    NUM_SMS = 96
+    num_stages = 3
+
+    grid = (min(NUM_SMS, B * triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N)), )
+
+    a = torch.randn((B, M, K), device=device, dtype=torch.float16)
+    b = torch.randn((B, N, K), device=device, dtype=torch.float16)
+    c = torch.empty((B, M, N), device=device, dtype=torch.float16)
+
+    expect = torch.bmm(a, b.mT)
+
+    def alloc_fn(size: int, align: int, stream: Optional[int]):
+        # TODO: should only need num_stages * 3 descriptors per SM
+        assert size == 128 * 3 * grid[0]
+        assert align == 128
+        assert stream == 0
+        return torch.empty(size, dtype=torch.int8, device="cuda")
+
+    triton.set_allocator(alloc_fn)
+
+    h = batched_gemm_3d_tma_kernel[grid](
+        a, b, c,  #
+        B, M, N, K,  #
+        tl.float16,  #
+        BLOCK_M, BLOCK_N, BLOCK_K,  #
+        NUM_SMS,  #
+        num_stages=num_stages, num_warps=8)
+    torch.cuda.synchronize()
+
+    if not is_interpreter():
+        assert "warp_group_dot" in h.asm["ttgir"]
 
     torch.testing.assert_close(c, expect, rtol=1e-3, atol=1e-3)
 
