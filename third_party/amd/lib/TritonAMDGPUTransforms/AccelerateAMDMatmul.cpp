@@ -55,9 +55,10 @@ warpsPerTile(Operation *dotOp, ArrayRef<int64_t> shape, int numWarps,
   bwdOpt.omitBlockArguments = true;
   bwdOpt.filter = filter;
   auto slices = getSlice(dotOp, bwdOpt, fwdOpt);
-  for (Operation *op : slices)
-    if (op->hasTrait<OpTrait::DotLike>() && (op != dotOp))
+  for (Operation *op : slices) {
+    if (isa<mlir::triton::DotOpInterface>(op) && (op != dotOp))
       return {(unsigned)numWarps, 1};
+  }
 
   SmallVector<int64_t, 2> tensorShape = {shape[0], shape[1]};
   SmallVector<unsigned, 3> ret = {1, 1};

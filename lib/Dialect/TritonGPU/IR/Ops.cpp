@@ -85,6 +85,14 @@ struct CanonicalizeConvertFromTranspose
   mlir::LogicalResult
   matchAndRewrite(triton::TransOp op,
                   PatternRewriter &rewriter) const override {
+    // transpose(x, order=[0, 1, ...]) -> x
+    // We turn it into a (trivial) convert_layout that may be folded away
+    if (isIota(op.getOrder())) {
+      rewriter.replaceOpWithNewOp<ConvertLayoutOp>(op, op.getType(),
+                                                   op.getSrc());
+      return success();
+    }
+
     // If the layouts are structurally the same, the convert is trivial
     auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
     if (!convert || !isConvertTrivial(convert))

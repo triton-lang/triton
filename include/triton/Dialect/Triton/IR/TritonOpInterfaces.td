@@ -29,7 +29,27 @@ def TransposeOpInterface : OpInterface<"TransposeOpInterface"> {
 			/*args=*/(ins)>
   ];
 
-	let verify = [{ return ::mlir::triton::impl::verifyTransposeOpInterface($_op); }];
+  let verify = [{ return ::mlir::triton::impl::verifyTransposeOpInterface($_op); }];
+}
+
+def DotOpInterface : OpInterface<"DotOpInterface"> {
+  let description = [{
+	This interface is implemented by operations that perform a dot product.
+  }];
+
+  let cppNamespace = "::mlir::triton";
+
+  let methods = [
+	InterfaceMethod<
+			/*desc=*/[{
+			  Verifies the dimensions of the A and B DotOp operands.
+		  }],
+			/*retType=*/"bool",
+			/*methodName=*/"verifyDims",
+			/*args=*/(ins)>
+	];
+
+  let verify = [{ return ::mlir::triton::impl::verifyDotOpInterface($_op); }];
 }
 
 
