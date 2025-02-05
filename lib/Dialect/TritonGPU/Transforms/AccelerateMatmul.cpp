@@ -184,6 +184,25 @@ getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter, int opIdx,
   return rewriter.create<LocalAllocOp>(arg.getLoc(), newType, arg);
 }
 
+static LocalAllocOp
+getSharedMemoryScale(Value arg, mlir::PatternRewriter &rewriter, Location loc) {
+  OpBuilder::InsertionGuard g(rewriter);
+  auto argType = cast<RankedTensorType>(arg.getType());
+  assert(argType.getEncoding() && "unexpected tensor type");
+  auto newOrder = getOrder(argType.getEncoding());
+
+  Attribute SharedMemorySpace =
+      SharedMemorySpaceAttr::get(argType.getContext());
+  auto CTALayout = getCTALayout(argType.getEncoding());
+  // No swizzling for scale for now
+  auto newLayout = SwizzledSharedEncodingAttr::get(argType.getContext(), 1, 1,
+                                                   1, newOrder, CTALayout);
+  auto newType = MemDescType::get(argType.getShape(), argType.getElementType(),
+                                  newLayout, SharedMemorySpace);
+  rewriter.setInsertionPointAfterValue(arg);
+  return rewriter.create<LocalAllocOp>(loc, newType, arg);
+}
+
 SmallVector<unsigned, 3>
 getWarpsPerTile(DotOp dotOp, const ArrayRef<int64_t> shape, int version,
                 int numWarps, const SmallVector<unsigned, 3> &instrShape) {
@@ -575,6 +594,60 @@ public:
   }
 };
 
+Value addSmemStageToScaleLoad(Value scale, mlir::PatternRewriter &rewriter) {
+  /*
+    Rewrite load(scale) -> local_load(local_alloc(load(scale))).
+    This function does not add anything to the final IR when num_stages > 1,
+    but it makes it easy to apply TMEM copy rewriting later.
+
+    Since scales are stored in TMEM for MMAv5 scaled dot, loading of scales do
+    not needs to be put into SMEM. But in practice, the software pipeliner puts
+    loading of scales into multi-buffered SMEM. At that point, the SMEM
+    allocation created here is eliminated.
+   */
+  OpBuilder::InsertionGuard g(rewriter);
+  auto op = scale.getDefiningOp();
+  Operation *loadConsumer = nullptr;
+
+  if (!op)
+    return scale;
+
+  while (!isa<LoadOp>(op)) {
+    if (auto reshape = dyn_cast<ReshapeOp>(op)) {
+      op = reshape.getSrc().getDefiningOp();
+      loadConsumer = reshape;
+    } else if (auto trans = dyn_cast<TransOp>(op)) {
+      op = trans.getSrc().getDefiningOp();
+      loadConsumer = trans;
+    } else if (auto cvt = dyn_cast<ConvertLayoutOp>(op)) {
+      op = cvt.getSrc().getDefiningOp();
+      loadConsumer = cvt;
+    } else {
+      // Unrecognized pattern, bail out. In practice, this implies that MMA
+      // pipelining will not apply to the scaled dot op, since tmem_copy would
+      // not be inserted before the pipeline pass.
+      return scale;
+    }
+  }
+
+  auto scaleAfterLoad = op->getResult(0);
+  auto scaleSmemAlloc =
+      getSharedMemoryScale(scaleAfterLoad, rewriter, op->getLoc());
+
+  rewriter.setInsertionPointAfterValue(scaleSmemAlloc);
+  auto localLoad = rewriter.create<LocalLoadOp>(
+      op->getLoc(), scaleAfterLoad.getType(), scaleSmemAlloc);
+
+  rewriter.replaceAllUsesExcept(scaleAfterLoad, localLoad.getResult(),
+                                scaleSmemAlloc);
+
+  if (loadConsumer) {
+    return scale;
+  } else {
+    return localLoad;
+  }
+}
+
 class ScaledBlockedToMMAv5
     : public mlir::OpRewritePattern<triton::DotScaledOp> {
   int computeCapability;
@@ -688,10 +761,14 @@ public:
         oldScaleAType.getShape(), oldScaleAType.getElementType(), scaleALayout);
     RankedTensorType newScaleBType = RankedTensorType::get(
         oldScaleBType.getShape(), oldScaleBType.getElementType(), scaleBLayout);
-    Value newScaleA = rewriter.create<ConvertLayoutOp>(loc, newScaleAType,
-                                                       dotOp.getLhsScale());
-    Value newScaleB = rewriter.create<ConvertLayoutOp>(loc, newScaleBType,
-                                                       dotOp.getRhsScale());
+
+    auto lhsScale = addSmemStageToScaleLoad(dotOp.getLhsScale(), rewriter);
+    auto rhsScale = addSmemStageToScaleLoad(dotOp.getRhsScale(), rewriter);
+
+    Value newScaleA =
+        rewriter.create<ConvertLayoutOp>(loc, newScaleAType, lhsScale);
+    Value newScaleB =
+        rewriter.create<ConvertLayoutOp>(loc, newScaleBType, rhsScale);
     Value scaleA = rewriter.create<triton::nvidia_gpu::TMEMAllocOp>(
         loc, scaleAType, newScaleA);
     Value scaleB = rewriter.create<triton::nvidia_gpu::TMEMAllocOp>(
