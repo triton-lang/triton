@@ -1,4 +1,4 @@
-// RUN: triton-opt --split-input-file %s -cse -canonicalize | FileCheck %s
+// RUN: triton-opt --split-input-file %s | FileCheck %s
 
 module {
   // CHECK-LABEL: proton_init_scope
