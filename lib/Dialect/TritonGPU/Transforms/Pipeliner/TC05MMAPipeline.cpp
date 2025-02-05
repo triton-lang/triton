@@ -650,6 +650,31 @@ bool isSafeToPipeline(ttng::TCGen5MMAScaledOp scaledDot) {
          isCopiedByTMEMCopy(scaledDot.getBScale());
 }
 
+bool isSafeToPipeline(ttng::TCGen5MMAScaledOp scaledDot) {
+  auto getNumUsers = [](Value value) {
+    return std::distance(value.user_begin(), value.user_end());
+  };
+
+  auto isCopiedByTMEMCopy = [=](Value scale) {
+    if (getNumUsers(scale) != 2) {
+      // MMA and TMEM copy must be the only users
+      return false;
+    }
+
+    for (auto user : scale.getUsers()) {
+      if (!isa<ttng::TMEMCopyOp, ttng::TCGen5MMAScaledOp>(user)) {
+        // If the scale is used by TMEM copy and the only other user is the
+        // scaled dot op, MMA pipelining is safe to apply.
+        return false;
+      }
+    }
+    return true;
+  };
+
+  return isCopiedByTMEMCopy(scaledDot.getAScale()) &&
+         isCopiedByTMEMCopy(scaledDot.getBScale());
+}
+
 // Find MMAs eligible for pipelining and lower them by:
 // 1. Hoisting the accumulator allocation outside of the loop.
 // 2. Creating a barrier alloc and lowering the MMA to MMA + wait barrier.
