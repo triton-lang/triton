@@ -383,6 +383,7 @@ tt.func @cannot_fuse(%lbi: i64, %ubi: i64, %stepi: i64) {
       "body"(%i, %j) : (i64, i64) -> ()
     }
   } {"ttg.always-fuse"}
+  // CHECK-NOT: scf.for
   tt.return
 }
 
@@ -436,5 +437,106 @@ tt.func @triple_loop_nest(
   } {"ttg.always-fuse"}
   // CHECK-NOT: scf.for
   // CHECK: tt.return
+  tt.return
+}
+
+// CHECK-LABEL: @preserve_stage_count
+tt.func @preserve_stage_count(%lb: i32, %ub: i32) {
+  %c1_i32 = arith.constant 1 : i32
+
+  // CHECK-COUNT-1: scf.for
+  scf.for %i = %lb to %ub step %c1_i32 : i32 {
+    scf.for %j = %lb to %ub step %c1_i32 : i32 {
+      "body"(%j) : (i32) -> ()
+      scf.yield
+    } {tt.num_stages = 4 : i32}
+    scf.for %j = %lb to %ub step %c1_i32 : i32 {
+      "body"(%j) : (i32) -> ()
+      scf.yield
+    } {tt.num_stages = 6 : i32}
+  } {"ttg.always-fuse"}
+  // CHECK: tt.num_stages = 6 : i32
+  // CHECK-NOT: scf.for
+  tt.return
+}
+
+// CHECK-LABEL: @fuse_attr_speculate
+// CHECK-SAME: [[LB:%.*]]: i32, [[UB:%.*]]: i32
+tt.func @fuse_attr_speculate(%lb: i32, %ub: i32) {
+  %c1_i32 = arith.constant 1 : i32
+
+  // CHECK: [[DIFF:%.*]] = arith.subi [[UB]], [[LB]]
+  // CHECK: [[LEN:%.*]] = arith.ceildivsi [[DIFF]], %c1_i32
+  // CHECK: [[IS_ZERO:%.*]] = arith.cmpi eq, [[LEN]], %c0_i32
+
+  // CHECK: scf.if [[IS_ZERO]]
+  // CHECK-NEXT: scf.for %{{.*}} = [[LB]] to [[UB]] step %c1_i32
+  // CHECK-NEXT:   "prologue"
+  // CHECK-NXET: }
+
+  // CHECK: else
+  // CHECK-COUNT-1: scf.for
+  // CHECK-NOT: scf.for
+  scf.for %i = %lb to %ub step %c1_i32 : i32 {
+    // CHECK: "prologue"
+    "prologue"(%i) : (i32) -> ()
+    // CHECK: scf.if %true
+    scf.for %j = %lb to %ub step %c1_i32 : i32 {
+      // CHECK-NEXT: "body"
+      "body"(%i, %j) : (i32, i32) -> ()
+      scf.yield
+    }
+  } {tt.fuse}
+  tt.return
+}
+
+// CHECK-LABEL: @speculate_hoist
+// CHECK-SAME: [[LB:%.*]]: i32, [[UB:%.*]]: i32
+tt.func @speculate_hoist(%lb: i32, %ub: i32) {
+  %c1_i32 = arith.constant 1 : i32
+
+  // CHECK: [[UBJ:%.*]] = arith.addi [[LB]], [[UB]]
+  // CHECK: [[DIFF:%.*]] = arith.subi [[UBJ]], [[LB]]
+  // CHECK: [[LEN:%.*]] = arith.ceildivsi [[DIFF]], %c1_i32
+  // CHECK: [[IS_ZERO:%.*]] = arith.cmpi eq, [[LEN]], %c0_i32
+
+  // CHECK: scf.if [[IS_ZERO]]
+  scf.for %i = %lb to %ub step %c1_i32 : i32 {
+    "prologue"(%i) : (i32) -> ()
+    %ubj = arith.addi %lb, %ub : i32
+    scf.for %j = %lb to %ubj step %c1_i32 : i32 {
+      "body"(%i, %j) : (i32, i32) -> ()
+      scf.yield
+    }
+  } {tt.fuse}
+  tt.return
+}
+
+// CHECK-LABEL: @sink_prologue_to_epilogue
+// CHECK-SAME: [[UB:%.*]]: i32
+tt.func @sink_prologue_to_epilogue(%ub: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+
+  // CHECK: else
+  // CHECK: scf.for
+  %0 = scf.for %i = %c0_i32 to %ub step %c1_i32 iter_args(%k = %c0_i32) -> i32 : i32 {
+    // CHECK: [[PROLOGUE_OUTS:%.*]]:2 = scf.if
+    %0 = arith.addi %i, %ub : i32
+    // CHECK: scf.if %true
+    // CHECK-NEXT: "body"
+    scf.for %j = %c0_i32 to %ub step %c1_i32 : i32 {
+      "body"(%i, %j) : (i32, i32) -> ()
+      scf.yield
+    }
+    // CHECK: scf.if
+    // CHECK-NEXT: [[V0:%.*]] = arith.addi [[PROLOGUE_OUTS]]#1, [[UB]]
+    // CHECK-NEXT: [[V1:%.*]] = arith.addi [[V0]], [[UB]]
+    %1 = arith.addi %0, %ub : i32
+    // CHECK-NEXT: "epilogue"([[V1]])
+    "epilogue"(%1) : (i32) -> ()
+    scf.yield %0 : i32
+  } {tt.fuse}
+
   tt.return
 }

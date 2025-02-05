@@ -458,6 +458,7 @@ void init_triton_ir(py::module &&m) {
   py::class_<Attribute>(m, "attribute", py::module_local());
   py::class_<IntegerAttr, Attribute>(m, "integer_attr", py::module_local());
   py::class_<BoolAttr, Attribute>(m, "bool_attr", py::module_local());
+  py::class_<UnitAttr, Attribute>(m, "unit_attr", py::module_local());
 
   // Ops
   py::class_<OpState>(m, "OpState", py::module_local())
@@ -750,6 +751,9 @@ void init_triton_ir(py::module &&m) {
              self.restoreInsertionPoint(pt);
            })
       // Attr
+      .def(
+          "get_unit_attr",
+          [](TritonOpBuilder &self) { return self.getBuilder().getUnitAttr(); })
       .def("get_bool_attr",
            [](TritonOpBuilder &self, bool value) {
              return self.getBuilder().getBoolAttr(value);

@@ -5,6 +5,7 @@
 #include "mlir/Transforms/RegionUtils.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
+#include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "llvm/Support/Debug.h"
 #include <queue>
 
@@ -19,7 +20,11 @@ namespace gpu {
 #define GEN_PASS_DEF_TRITONGPUFUSENESTEDLOOPS
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
+// This attribute is set by the front-end to control whether fusion is on.
+static constexpr llvm::StringLiteral kFuseAttr = "tt.fuse";
+// This attribute indicates the inner loop length has been speculated.
 static constexpr llvm::StringLiteral kMustExecuteAttrName = "ttg.must-execute";
+// This attribute is just used for testing the pass.
 static constexpr llvm::StringLiteral kAlwaysFuseAttrName = "ttg.always-fuse";
 
 namespace {
@@ -322,6 +327,10 @@ static Value castIntIfNecessary(ImplicitLocOpBuilder &b, Value value,
   return b.create<arith::ExtSIOp>(type, value);
 }
 
+// To model an "undef" value, i.e. a value that is known to never be read on
+// live code paths, create a zero-valued constant where possible, otherwise use
+// a poison value. PTXAS appears to generate better code with zeros compared to
+// poison values.
 static Value createPoisonOrZero(ImplicitLocOpBuilder &b, Type type) {
   Type elTy = getElementTypeOrSelf(type);
   if (!elTy.isIntOrIndexOrFloat() ||
@@ -878,11 +887,18 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
     epilogueIf.erase();
   }
 
-  // Update the parent's loop to the fused loop.
-  for (scf::ForOp loop : innerLoops)
+  // Update the parent's loop to the fused loop. Set the new stage count to the
+  // max stage count of the inner loops.
+  int numStages = 1;
+  for (scf::ForOp loop : innerLoops) {
+    if (auto stageAttr = loop->getAttrOfType<IntegerAttr>(kNumStagesAttrName))
+      numStages = std::max<int>(numStages, stageAttr.getInt());
     loop.erase();
+  }
   outer.erase();
   parent->loop = fused;
+  if (numStages > 1)
+    fused->setAttr(kNumStagesAttrName, b.getI32IntegerAttr(numStages));
 }
 
 //===----------------------------------------------------------------------===//
@@ -907,21 +923,16 @@ static bool shouldFuse(const LoopNest &nest) {
   if (nest.root->loop->hasAttr(kAlwaysFuseAttrName))
     return true;
 
-  if (nest.nodes.size() != 2 || nest.root->children.size() != 1)
-    return false;
-
-  scf::ForOp innerLoop = nest.root->children.front()->loop;
-  return llvm::any_of(innerLoop.getOps(), [](Operation &op) {
-    return op.hasTrait<OpTrait::DotLike>();
-  });
+  // Only fuse simple loop nests.
+  return nest.nodes.size() == 2 && nest.root->children.size() == 1 &&
+         nest.root->loop->hasAttr(kFuseAttr);
 }
 
 // This function identifies a subgraph of cheap ops that can be sunk between two
 // regions in the loop nest and moves them, reducing their liveranges.
-static void sinkHeavyOps(Region &limit, Block *sinkBlock,
-                         Block::iterator sinkBefore,
-                         llvm::iterator_range<Block::iterator> prologue,
-                         function_ref<bool(Operation *)> inSinkRegion) {
+static void sinkOps(Region &limit, Block *sinkBlock, Block::iterator sinkBefore,
+                    llvm::iterator_range<Block::iterator> prologue,
+                    function_ref<bool(Operation *)> inSinkRegion) {
   llvm::SetVector<Operation *> sunkOps;
   auto canBeSunk = [&](Operation &op) -> std::pair<bool, bool> {
     if (!isPure(&op) || op.hasTrait<OpTrait::DotLike>())
@@ -958,15 +969,15 @@ static void sinkHeavyOps(Region &limit, Block *sinkBlock,
 }
 
 // Sink ops from the prologue into the epilogue when possible.
-static void sinkHeavyOps(scf::ForOp outerLoop, scf::ForOp innerLoop,
-                         mlir::DominanceInfo &domInfo) {
+static void optimizeEpilogueDependencies(scf::ForOp outerLoop,
+                                         scf::ForOp innerLoop,
+                                         mlir::DominanceInfo &domInfo) {
   auto inEpilogue = [&](Operation *op) {
     return domInfo.properlyDominates(innerLoop, op, /*enclosingOpOk=*/false);
   };
   Region &limit = outerLoop.getBodyRegion();
-  sinkHeavyOps(limit, outerLoop.getBody(), std::next(innerLoop->getIterator()),
-               {outerLoop.getBody()->begin(), innerLoop->getIterator()},
-               inEpilogue);
+  sinkOps(limit, outerLoop.getBody(), std::next(innerLoop->getIterator()),
+          {outerLoop.getBody()->begin(), innerLoop->getIterator()}, inEpilogue);
 }
 
 // Speculate the length of the inner loop such that the loop is known to execute
@@ -976,10 +987,6 @@ static void sinkHeavyOps(scf::ForOp outerLoop, scf::ForOp innerLoop,
 static LogicalResult speculateInnerLoopLength(scf::ForOp outerLoop,
                                               scf::ForOp innerLoop,
                                               mlir::DominanceInfo &domInfo) {
-  innerLoop->setAttr(kMustExecuteAttrName,
-                     UnitAttr::get(outerLoop.getContext()));
-  return success();
-
   // The inner loop bounds must be outer-loop invariant to speculate from
   // outside the loop nest.
   Location loc = innerLoop.getLoc();
@@ -1034,7 +1041,7 @@ static LogicalResult preprocessLoopNest(const LoopNest &nest,
   scf::ForOp &outerLoop = nest.root->loop;
   scf::ForOp &innerLoop = nest.root->children.front()->loop;
 
-  sinkHeavyOps(outerLoop, innerLoop, domInfo);
+  optimizeEpilogueDependencies(outerLoop, innerLoop, domInfo);
   return speculateInnerLoopLength(outerLoop, innerLoop, domInfo);
 }
 
