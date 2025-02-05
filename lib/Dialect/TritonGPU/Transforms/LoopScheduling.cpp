@@ -324,21 +324,21 @@ int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
                        CoarseSchedule &schedule) {
   assert(schedule.count(op) && "LoadOp not found in the schedule");
   auto [defStage, _] = schedule[op];
-  int useStage = -1;
+  int useStage = INT_MAX;
   for (auto user : op->getUsers()) {
     Operation *topLevelUser = forOp.getBody()->findAncestorOpInBlock(*user);
     assert(schedule.count(topLevelUser) && "op user not found in the schedule");
     auto [_useStage, _] = schedule[topLevelUser];
-    if (useStage == -1) {
-      useStage = _useStage;
-    }
-    assert(useStage == _useStage && "LoadOp used in different stages");
+    useStage = std::min(_useStage, useStage);
   }
   assert(useStage >= defStage && "LoadOp used before defined");
   return useStage - defStage;
 }
 
-void lowerLoad(tt::LoadOp loadO, int stageDiff) { auto loc = loadOp.getLoc(); }
+void lowerLoad(tt::LoadOp loadOp, int stageDiff) {
+  auto loc = loadOp.getLoc();
+  auto sharedEncoding = getSharedEncoding(loadOp);
+}
 
 void lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
   forOp->walk<mlir::WalkOrder::PreOrder>([&](Operation *op) {
