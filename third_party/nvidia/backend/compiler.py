@@ -94,12 +94,12 @@ def get_ptx_version_from_options(options, arch: int):
 def get_features(options, arch: int):
     ptx_version = get_ptx_version_from_options(options, arch)
 
-    # PTX 8.3 is the max version supported by llvm 3a83162168.
+    # PTX 8.6 is the max version supported by llvm c1188642.
     #
     # To check if a newer PTX version is supported, increase this value
     # and run a test.  If it's not supported, LLVM will print a warning
     # like "+ptx8.4 is not a recognized feature for this target".
-    llvm_ptx_version = min(83, ptx_version)
+    llvm_ptx_version = min(86, ptx_version)
     features = f'+ptx{llvm_ptx_version}'
     return features
 
@@ -108,6 +108,12 @@ def get_features(options, arch: int):
 def file_hash(path):
     with open(path, "rb") as f:
         return hashlib.sha256(f.read()).hexdigest()
+
+
+def sm_arch_from_capability(capability: int):
+    # TODO: Handle non-"a" sms
+    suffix = "a" if capability >= 90 else ""
+    return f"sm_{capability}{suffix}"
 
 
 @dataclass(frozen=True)
@@ -319,10 +325,7 @@ class CUDABackend(BaseBackend):
             raise RuntimeError(
                 "Address Sanitizer Error: Address sanitizer is currently only supporteedd on the AMD backend")
         llvm_mod = llvm.to_module(mod, context)
-        proc = 'sm_90a' if capability == 90 else f'sm_{capability}'
-        # use sm_90a until sm_100 is open sourced in llvm.
-        if capability == 100:
-            proc = 'sm_90a'
+        proc = sm_arch_from_capability(capability)
         features = get_features(options, self.target.arch)
         triple = 'nvptx64-nvidia-cuda'
         llvm.attach_datalayout(llvm_mod, triple, proc, features)
@@ -354,10 +357,7 @@ class CUDABackend(BaseBackend):
         ptx_version = get_ptx_version_from_options(opt, self.target.arch)
 
         triple = 'nvptx64-nvidia-cuda'
-        proc = 'sm_90a' if capability == 90 else f'sm_{capability}'
-        # use sm_90a until sm_100 is open sourced in llvm.
-        if capability == 100:
-            proc = 'sm_90a'
+        proc = sm_arch_from_capability(capability)
         features = get_features(opt, self.target.arch)
         ret = llvm.translate_to_asm(src, triple, proc, features, ['nvptx-short-ptr'], opt.enable_fp_fusion, False)
         # Find kernel names (there should only be one)
@@ -386,11 +386,9 @@ class CUDABackend(BaseBackend):
             line_info = ["-lineinfo", "-suppress-debug-info"] if os.environ.get("TRITON_DISABLE_LINE_INFO",
                                                                                 "0") == "1" else ["-lineinfo"]
             fmad = [] if opt.enable_fp_fusion else ['--fmad=false']
-            suffix = 'a' if capability >= 90 else ''
+            arch = sm_arch_from_capability(capability)
             opt_level = ['--opt-level', '0'] if os.environ.get("DISABLE_PTXAS_OPT", "0") == "1" else []
-            ptxas_cmd = [
-                ptxas, *line_info, *fmad, '-v', *opt_level, f'--gpu-name=sm_{capability}{suffix}', fsrc.name, '-o', fbin
-            ]
+            ptxas_cmd = [ptxas, *line_info, *fmad, '-v', *opt_level, f'--gpu-name={arch}', fsrc.name, '-o', fbin]
             try:
                 subprocess.run(ptxas_cmd, check=True, close_fds=False, stderr=flog)
                 if os.path.exists(fsrc.name):

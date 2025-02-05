@@ -3,7 +3,7 @@
 #include <gtest/gtest.h>
 
 using namespace mlir;
-using mlir::triton::gpu::SharedEncodingAttr;
+using mlir::triton::gpu::SwizzledSharedEncodingAttr;
 
 struct swizzleParams {
   int vec;
@@ -40,8 +40,8 @@ TEST_P(SwizzleDotOperandTestFixture, DotOperands) {
 
   // create element type
   Type eltType = IntegerType::get(&ctx, params.typeWidth);
-  auto layout = SharedEncodingAttr::get(&ctx, encoding, params.shape, {1, 0},
-                                        CTALayout, eltType);
+  auto layout = SwizzledSharedEncodingAttr::get(&ctx, encoding, params.shape,
+                                                {1, 0}, CTALayout, eltType);
 
   ASSERT_EQ(layout.getVec(), params.refSwizzle.vec);
   ASSERT_EQ(layout.getPerPhase(), params.refSwizzle.perPhase);
