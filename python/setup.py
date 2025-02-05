@@ -555,7 +555,7 @@ download_and_copy(
     name="nvcc",
     src_func=lambda system, arch, version: f"cuda_nvcc-{system}-{arch}-{version}-archive/include",
     dst_path="include",
-    variable="TRITON_CUDACRT_PATH",
+    variable="TRITON_CUDACRT_INCLUDE_PATH",
     version=NVIDIA_TOOLCHAIN_VERSION["cudacrt"],
     url_func=lambda system, arch, version:
     f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/{system}-{arch}/cuda_nvcc-{system}-{arch}-{version}-archive.tar.xz",
@@ -564,7 +564,7 @@ download_and_copy(
     name="cudart",
     src_func=lambda system, arch, version: f"cuda_cudart-{system}-{arch}-{version}-archive/include",
     dst_path="include",
-    variable="TRITON_CUDART_PATH",
+    variable="TRITON_CUDART_INCLUDE_PATH",
     version=NVIDIA_TOOLCHAIN_VERSION["cudart"],
     url_func=lambda system, arch, version:
     f"https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/{system}-{arch}/cuda_cudart-{system}-{arch}-{version}-archive.tar.xz",
