@@ -309,13 +309,14 @@ def get_thirdparty_packages(packages: list):
 def download_and_copy(name, src_func, dst_path, variable, version, url_func):
     if is_offline_build():
         return
+    base_dir = os.path.dirname(__file__)
+    dst_path = os.path.join(base_dir, os.pardir, "third_party", "nvidia", "backend", dst_path)  # final binary path
     if (src_path := os.environ.get(variable, None)) is not None:
         if not src_path:
             return
         assert os.path.exists(src_path), f"{variable}={src_path} is not a valid path"
     else:
         triton_cache_path = get_triton_cache_path()
-        base_dir = os.path.dirname(__file__)
         system = platform.system()
         arch = platform.machine()
         # NOTE: This might be wrong for jetson if both grace chips and jetson chips return aarch64
@@ -324,7 +325,6 @@ def download_and_copy(name, src_func, dst_path, variable, version, url_func):
         url = url_func(supported[system], arch, version)
         src_path = src_func(supported[system], arch, version)
         tmp_path = os.path.join(triton_cache_path, "nvidia", name)  # path to cache the download
-        dst_path = os.path.join(base_dir, os.pardir, "third_party", "nvidia", "backend", dst_path)  # final binary path
         src_path = os.path.join(tmp_path, src_path)
         download = not os.path.exists(src_path)
         if os.path.exists(dst_path) and system == "Linux" and shutil.which(dst_path) is not None:
