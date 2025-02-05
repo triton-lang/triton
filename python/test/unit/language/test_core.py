@@ -6576,6 +6576,8 @@ def test_tl_range(device):
 
 
 def test_tl_range_fuse():
+    if is_hip():
+        pytest.skip("loop fusion is not enabled on AMD")
 
     @triton.jit
     def kernel(ub):
