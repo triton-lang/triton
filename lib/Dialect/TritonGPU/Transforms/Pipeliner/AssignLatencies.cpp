@@ -170,7 +170,7 @@ loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
           distance++;
         }
         for (Value operand : op->getOperands()) {
-          if (op->hasTrait<OpTrait::DotLike>()) {
+          if (isa<mlir::triton::DotOpInterface>(op)) {
             // Heuristic: only pipeline A and B operands of the dot op.
             if (operand == op->getOperand(2))
               continue;
@@ -195,7 +195,7 @@ loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
 
   bool seenDot = false;
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (!op.hasTrait<OpTrait::DotLike>())
+    if (!isa<mlir::triton::DotOpInterface>(op))
       continue;
     seenDot = true;
     seen.clear();

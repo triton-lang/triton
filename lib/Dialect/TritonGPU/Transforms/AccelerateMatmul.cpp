@@ -120,7 +120,7 @@ warpsPerTileV3(DotOp dotOp, const ArrayRef<int64_t> shape, int numWarps,
   // to facilitate use cases like flash attention, allowing reductions within
   // the same warp.
   if (llvm::find_if(slices, [](Operation *op) {
-        return op->hasTrait<OpTrait::DotLike>();
+        return isa<mlir::triton::DotOpInterface>(op);
       }) != slices.end())
     return {(unsigned)numWarps, 1};
 
