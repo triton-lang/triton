@@ -427,8 +427,8 @@ public:
   SmallVector<Value> getStrides(triton::gpu::MemDescType memDesc, Location loc,
                                 RewriterBase &rewriter) const {
     auto allocShape = memDesc.getAllocShape();
-    auto allocShapePerCTA =
-        triton::gpu::getShapePerCTA(memDesc.getEncoding(), allocShape);
+    auto allocShapePerCTA = triton::gpu::getAllocationShapePerCTA(
+        memDesc.getEncoding(), allocShape);
     auto layoutOrder = triton::gpu::getOrder(memDesc.getEncoding());
     auto allocStrides = SharedMemoryObject::getStridesForShape(
         allocShapePerCTA, layoutOrder, loc, rewriter);

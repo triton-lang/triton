@@ -11,9 +11,6 @@ using namespace mlir::triton::gpu;
 using namespace mlir::triton::NVIDIA;
 
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-using ::mlir::triton::gpu::getShapePerCTA;
-using ::mlir::triton::gpu::getShapePerCTATile;
-using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::NVMMASharedEncodingAttr;
 
 mlir::triton::NVIDIA::DotOpMmaV5TmemLoader::DotOpMmaV5TmemLoader(
@@ -360,11 +357,6 @@ void convertDot(const LLVMTypeConverter *typeConverter,
           loc, loadedB, typeConverter->convertType(bTensorTy.getElementType()),
           rewriter)
           .getBase();
-  Value baseD =
-      getSharedMemoryObjectFromStruct(
-          loc, loadedD, typeConverter->convertType(dTensorTy.getElementType()),
-          rewriter)
-          .getBase();
 
   SmallVector<int64_t> dstPerCTA = triton::gpu::getShapePerCTA(dTensorTy);
   unsigned int M = dstPerCTA[0];
@@ -404,7 +396,7 @@ void convertDot(const LLVMTypeConverter *typeConverter,
                            {(unsigned)mmaSizeN, (unsigned)mmaSizeK},
                            bTensorTy.getElementTypeBitWidth(), rewriter, loc);
   DotOpMmaV5TmemLoader dLoader = DotOpMmaV5TmemLoader(
-      d, baseD, {(unsigned)mmaSizeM, (unsigned)mmaSizeN}, interleaved, false);
+      d, loadedD, {(unsigned)mmaSizeM, (unsigned)mmaSizeN}, interleaved, false);
   for (int m = 0; m < numRepM; m++) {
     for (int n = 0; n < numRepN; n++) {
       Value useInitAcc = useDFlag;
@@ -505,18 +497,10 @@ struct TCGen5MMAScaledOpConversion
             loc, adaptor.getB(),
             typeConverter->convertType(bTensorTy.getElementType()), rewriter)
             .getBase();
-    Value baseD =
-        getSharedMemoryObjectFromStruct(
-            loc, adaptor.getD(),
-            typeConverter->convertType(dTensorTy.getElementType()), rewriter)
-            .getBase();
+    Value baseD = adaptor.getD();
     baseD = tb.ptrtoint(i32_ty, baseD);
-    Value baseScaleA = getSharedMemoryObjectFromStruct(loc, adaptor.getAScale(),
-                                                       i8_ty, rewriter)
-                           .getBase();
-    Value baseScaleB = getSharedMemoryObjectFromStruct(loc, adaptor.getBScale(),
-                                                       i8_ty, rewriter)
-                           .getBase();
+    Value baseScaleA = adaptor.getAScale();
+    Value baseScaleB = adaptor.getBScale();
     baseScaleA = tb.ptrtoint(i32_ty, baseScaleA);
     baseScaleB = tb.ptrtoint(i32_ty, baseScaleB);
 
@@ -540,8 +524,10 @@ struct TCGen5MMAScaledOpConversion
     bool interleaved = (mmaSizeM == 64 && (numRepM > 1 || numRepN > 1));
 
     Value zero = tb.i32_val(0);
-    SmallVector<int64_t> shapeA(aTensorTy.getShape());
-    SmallVector<int64_t> shapeB(bTensorTy.getShape());
+    SmallVector<int64_t> shapeA(
+        triton::gpu::getAllocationShapePerCTA(aTensorTy));
+    SmallVector<int64_t> shapeB(
+        triton::gpu::getAllocationShapePerCTA(bTensorTy));
     if (opKindIsMXFP4) {
       shapeA[1] *= 2;
       shapeB[0] *= 2;
