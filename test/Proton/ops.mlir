@@ -3,7 +3,7 @@
 module {
   // CHECK-LABEL: proton_init_scope
   tt.func @proton_init_scope() {
-    // CHECK: proton.init_scope "name" : i32
+    // CHECK: proton.init_scope "name0" : i32
     // CHECK-NEXT: tt.return
     %0 = proton.init_scope "name0" : i32
     tt.return
