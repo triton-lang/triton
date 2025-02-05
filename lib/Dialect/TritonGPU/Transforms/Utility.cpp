@@ -21,6 +21,7 @@
 
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
+namespace ttn = mlir::triton::nvidia_gpu;
 namespace mlir {
 
 using namespace triton;
@@ -584,6 +585,14 @@ bool canFoldIntoConversion(Operation *op, Attribute targetEncoding) {
     return reshape.getAllowReorder() && !reshape.getEfficientLayout() &&
            !triton::gpu::isExpensiveView(reshape.getSrc().getType(),
                                          newDstType);
+  }
+  if (auto tmemLoad = dyn_cast<ttn::TMEMLoadOp>(op)) {
+    auto mod = op->getParentOfType<ModuleOp>();
+    auto memDescType = tmemLoad.getSrc().getType();
+    auto oldRetType = tmemLoad.getResult().getType();
+    auto type = RankedTensorType::get(
+        oldRetType.getShape(), oldRetType.getElementType(), targetEncoding);
+    return ttn::isDistributedLayoutTMemCompatible(mod, type, memDescType);
   }
   return isa<triton::gpu::ConvertLayoutOp, arith::ConstantOp,
              triton::MakeRangeOp, triton::SplatOp, triton::HistogramOp,
