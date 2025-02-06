@@ -527,9 +527,6 @@ assignMemoryLayouts(scf::ForOp &forOp,
     loadsToPipeline.insert(&op);
     LoadInfo loadInfo;
     for (auto use : users) {
-      // By default we will try pipelining with load to registers at the end.
-      // For mmav3 we can try leaving the operands in shared memory.
-      bool mmav3Shmem = false;
       if (isa<mlir::triton::DotOpInterface>(use)) {
         LDBG("set shared encoding with dot user: " << *use);
         auto dot = dyn_cast<tt::DotOp>(use);
