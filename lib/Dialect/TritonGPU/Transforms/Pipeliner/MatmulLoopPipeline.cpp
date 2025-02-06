@@ -41,7 +41,6 @@ struct LoadInfo {
   // Blocked encoding is used for loads not used by the dot.
   ttg::BlockedEncodingAttr blockedEncoding = nullptr;
   bool isMMAv3Shared = false;
-  bool isMMAv3Registers = false;
   bool isMMAv5Scale = false;
   int distToUse = 0;
   bool usedByDot = false;
@@ -518,21 +517,23 @@ assignMemoryLayouts(scf::ForOp &forOp,
     loadsToPipeline.insert(&op);
     LoadInfo loadInfo;
     for (auto use : users) {
+      // By default we will try pipelining with load to registers at the end.
+      // For mmav3 we can try leaving the operands in shared memory.
+      bool mmav3Shmem = false;
       if (isa<mlir::triton::DotOpInterface>(use)) {
         LDBG("set shared encoding with dot user: " << *use);
-        auto mmaLoadType = getMMALoadType(&op);
         auto dot = dyn_cast<tt::DotOp>(use);
-        auto warpGroupDot = dyn_cast<ttng::WarpGroupDotOp>(use);
+        bool isMMAv3v5Dot = isa<ttng::WarpGroupDotOp, ttng::TCGen5MMAOp,
+                                ttng::TCGen5MMAScaledOp>(use);
+        mmav3Shmem = canUseMMAv3Pipelining(&op) && isMMAv3v5Dot;
 
         loadInfo.usedByDot = true;
-        loadInfo.isMMAv3Shared = mmaLoadType == MMALoadType::SharedV3;
-        loadInfo.isMMAv3Registers =
-            (mmaLoadType == MMALoadType::Registers) && warpGroupDot;
+        loadInfo.isMMAv3Shared = mmav3Shmem;
 
-        if (loadInfo.isMMAv3Shared || isTMALoad) {
+        if (mmav3Shmem || isTMALoad) {
           loadInfo.sharedEncoding =
               getSharedEncoding(&op, isTMALoad).value_or(nullptr);
-        } else if (loadInfo.isMMAv3Registers || dot) {
+        } else if (!mmav3Shmem || dot) {
           bool incompatible = false;
 
           loadInfo.sharedEncoding =
@@ -543,7 +544,9 @@ assignMemoryLayouts(scf::ForOp &forOp,
 
       // If we still don't have a shared encoding, try a "generic" shared
       // encoding.
-      if (!loadInfo.sharedEncoding && !isa<ttng::WarpGroupDotOp>(use)) {
+      if (!loadInfo.sharedEncoding) {
+        assert(!loadInfo.isMMAv3Shared &&
+               "For MMAv3 pipelining we should have shared encoding");
         LDBG("try generic shared encoding");
         loadInfo.sharedEncoding =
             getSharedEncoding(&op, isTMALoad).value_or(nullptr);
