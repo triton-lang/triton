@@ -369,6 +369,8 @@ struct FpToFpOpConversion
       name = "llvm.nvvm.f2bf16.rz";
       break;
     default:
+      emitError(loc) << "unsupported rounding mode for f32->bf16 conversion: "
+                     << stringifyRoundingMode(rounding) << "\n";
       llvm::report_fatal_error(
           "unsupported rounding mode for f32->bf16 conversion: " +
           stringifyRoundingMode(rounding) + "\n");
@@ -390,6 +392,8 @@ struct FpToFpOpConversion
       ptx = "cvt.rz.f16.f32";
       break;
     default:
+      emitError(loc) << "unsupported rounding mode for f32->f16 conversion: "
+                     << stringifyRoundingMode(rounding) << "\n";
       llvm::report_fatal_error(
           "unsupported rounding mode for f32->f16 conversion: " +
           stringifyRoundingMode(rounding) + "\n");
@@ -450,10 +454,8 @@ struct FpToFpOpConversion
     }
     if (computeCapability < 89 && (llvm::isa<Float8E4M3FNType>(srcTy) ||
                                    llvm::isa<Float8E4M3FNType>(dstTy))) {
-      llvm::report_fatal_error(
-          "Conversion from/to f8e4m3nv is only supported on "
-          "compute capability >= 89"
-          "\n");
+      llvm::report_fatal_error("Conversion from/to f8e4m3nv is only supported "
+                               "on compute capability >= 89\n");
     }
     auto convDesc = srcMap.lookup(key);
     return {makeConverterFromPtx(
