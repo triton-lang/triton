@@ -17,6 +17,13 @@ inline size_t getSourceSize(Value &source) {
   return types.size();
 }
 
+// The pattern converts `amdgpu::ConcatOp` to the LLVM dialect. The Op assumes
+// row-major order. The verifier ensures that all sub-tensor have the same
+// type and layout as well as the output dimensions are consistent with sizes
+// and number of sub-tensors. This (especially the row-major order) makes
+// lowering trivial. We create an empty llvmStruct for the output; traverse
+// input llvmStructs one by one from left to write; and add each elements to the
+// output.
 struct ConcatOpConversion : public ConvertOpToLLVMPattern<amdgpu::ConcatOp> {
   explicit ConcatOpConversion(LLVMTypeConverter &typeConverter,
                               PatternBenefit benefit = 1)
