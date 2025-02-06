@@ -197,8 +197,8 @@ public:
       }
     }
 
-    Value result =
-        packLLElements(loc, getTypeConverter(), xVals, rewriter, op.getType());
+    Value result = packLLElements(loc, getTypeConverter(), results, rewriter,
+                                  op.getType());
     rewriter.replaceOp(op, result);
     return success();
   }

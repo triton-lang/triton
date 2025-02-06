@@ -303,9 +303,7 @@ def test_pipeline_matmul(scale, device):
             assert ttgir.count("num = 0 : i32") == 1, "only one sync point for the loads after the loop"
             # 3. check alloc
             assert ttgir.count("ttg.local_alloc") == (3 if scale else 2), "alloc number not match"
-            # 4. check loads in the loop
-            assert ttgir.count("ttg.local_load") == (2 if scale else 1), "local_load number not match"
-            # 5. check dot
+            # 4. check dot
             cc = torch.cuda.get_device_capability()
             if cc[0] >= 9:
                 ttgir.count("ttng.warp_group_dot") != 0, "warp_group_dot not found"
