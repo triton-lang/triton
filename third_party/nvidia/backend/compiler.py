@@ -307,6 +307,7 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_allocate_shared_memory(pm)
         nvidia.passes.ttnvgpuir.add_allocate_tensor_memory(pm)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
+        passes.ttgpuir.add_membar_analysis(pm)
         nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, ptx_version)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)

@@ -50,6 +50,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::registerConvertTritonGPUToLLVMPass();
   mlir::triton::registerConvertNVGPUToLLVMPass();
   mlir::registerLLVMDIScope();
+  mlir::triton::gpu::registerTritonGPUMembarAnalysis();
 
   // TritonAMDGPUToLLVM passes
   mlir::triton::registerConvertTritonAMDGPUToLLVM();
@@ -58,7 +59,6 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::registerOptimizeAMDLDSUsage();
 
   // TritonAMDGPUTransforms passes
-  mlir::registerTritonAMDGPUMembarAnalysis();
   mlir::registerTritonAMDGPUAccelerateMatmul();
   mlir::registerTritonAMDGPUOptimizeEpilogue();
   mlir::registerTritonAMDGPUReorderInstructions();
