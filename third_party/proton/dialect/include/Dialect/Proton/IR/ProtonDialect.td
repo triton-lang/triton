@@ -13,6 +13,10 @@ def Proton_Dialect : Dialect {
   }];
 
   let dependentDialects = [];
+
+  let useDefaultTypePrinterParser = 1;
+  let useDefaultAttributePrinterParser = 1;
+  let usePropertiesForAttributes = 1;
 }
 
 #endif
