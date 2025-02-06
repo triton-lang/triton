@@ -193,6 +193,10 @@ def profile_batch_kernels(M, N, K, gpuid, gpus, jobs, verbose):
     if gpuIdx + 1 > jobs:
         return
     os.environ['ROCR_VISIBLE_DEVICES'] = str(gpuid)
+    # ROCR_VISIBLE_DEVICES is not parsed correctly by all pytorch versions which produces an out of bounds access
+    # To workaround this issue force it to use the first HIP_VISIBLE_DEVICE which is the one we select with ROCR_VISIBLE_DEVICES
+    # https://github.com/pytorch/pytorch/issues/140318 we need to keep this even after the fix is merged because we might use older pytorch versions
+    os.environ['HIP_VISIBLE_DEVICES'] = '0'
     jobId = gpuIdx
     while jobId < jobs:
         kernel_name = get_filename_profile_driver(M, N, K, jobId)
