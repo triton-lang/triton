@@ -25,7 +25,7 @@ using namespace triton::nvidia_gpu;
 static void
 lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
              function_ref<void(Value, Value, Value, Value)> createLoad,
-             PatternRewriter &rewriter) {
+             PatternRewriter &rewriter, float packingFactor = 1) {
   MLIRContext *ctx = op->getContext();
   Attribute sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
   auto loc = op->getLoc();
@@ -34,9 +34,10 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
   Attribute encoding = SwizzledSharedEncodingAttr::get(
       tensorType.getContext(), 1, 1, 1, order, ctaLayout);
   if (tensorType.getRank() > 1) {
+    bool isMMAv5Fp4Padded = packingFactor == 2;
     encoding = NVMMASharedEncodingAttr::get(
         tensorType.getContext(), tensorType.getShape(), order, ctaLayout,
-        tensorType.getElementType(), /*fp4Padded*/ false);
+        tensorType.getElementType(), isMMAv5Fp4Padded);
   }
   MemDescType memDescType =
       MemDescType::get(tensorType.getShape(), tensorType.getElementType(),

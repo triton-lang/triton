@@ -330,28 +330,43 @@ static PyObject *fill2DTMADescriptor(PyObject *self, PyObject *args) {
   uint32_t tensorDims[2];
   int elementSize;
   unsigned long long desc_address;
-  if (!PyArg_ParseTuple(args, "KKKiiiK", &global_address, &dims[1], &dims[0],
+  float packing_factor = 1;
+  if (!PyArg_ParseTuple(args, "KKKiiifK", &global_address, &dims[1], &dims[0],
                         &tensorDims[1], &tensorDims[0], &elementSize,
-                        &desc_address)) {
+                        &packing_factor, &desc_address)) {
     return NULL;
   }
-  uint64_t globalStrides[2] = {dims[0] * elementSize,
-                               dims[0] * dims[1] * elementSize};
+
+  uint64_t globalStrides[1] = {dims[0] / packing_factor * elementSize};
   uint32_t elementStrides[2] = {1, 1};
   CUtensorMapDataType type;
-  switch (elementSize) {
-  case 1:
-    type = CU_TENSOR_MAP_DATA_TYPE_UINT8;
-    break;
-  case 2:
-    type = CU_TENSOR_MAP_DATA_TYPE_UINT16;
-    break;
-  case 4:
-    type = CU_TENSOR_MAP_DATA_TYPE_UINT32;
-    break;
-  default:
-    PyErr_SetString(PyExc_ValueError, "elementSize must be 1, 2, or 4");
+
+  printf("dims, tensorDims, packing factor: %ld, %ld, %ld, %ld, %f\n", dims[0], dims[1], tensorDims[0], tensorDims[1], packing_factor);
+
+  if (packing_factor != 1) {
+    if (packing_factor = 2) {
+      type = CU_TENSOR_MAP_DATA_TYPE_16U4_ALIGN16B;
+    } else if (packing_factor = 4.0/3) {
+      type = CU_TENSOR_MAP_DATA_TYPE_16U6_ALIGN16B;
+    } else {
+      PyErr_SetString(PyExc_ValueError, "Unsupported packing factor");
+    }
+  } else {
+    switch (elementSize) {
+    case 1:
+      type = CU_TENSOR_MAP_DATA_TYPE_UINT8;
+      break;
+    case 2:
+      type = CU_TENSOR_MAP_DATA_TYPE_UINT16;
+      break;
+    case 4:
+      type = CU_TENSOR_MAP_DATA_TYPE_UINT32;
+      break;
+    default:
+      PyErr_SetString(PyExc_ValueError, "elementSize must be 1, 2, or 4");
+    }
   }
+
   int rank = 2;
   // Swizzling should be picked in codegen but since we need to set it on the
   // descriptor we rely on a convention between this function and codegen.
