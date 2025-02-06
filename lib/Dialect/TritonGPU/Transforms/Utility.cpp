@@ -1045,38 +1045,6 @@ getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
   return attr;
 }
 
-bool canUseMMAv3Pipelining(Operation *loadOp) {
-  Operation *user = *loadOp->getUsers().begin();
-  while (isa<triton::TransOp, triton::ReshapeOp>(user)) {
-    if (!user->hasOneUse())
-      return false;
-    user = *user->getUsers().begin();
-  }
-  if (!user)
-    return false;
-
-  if (auto alloc = dyn_cast<ttg::LocalAllocOp>(user)) {
-    auto sharedEnc =
-        dyn_cast<ttg::NVMMASharedEncodingAttr>(alloc.getType().getEncoding());
-
-    if (!sharedEnc)
-      return false;
-
-    // MMA V3 case.
-    SmallVector<unsigned> newOrder = getOrder(sharedEnc);
-    auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
-    auto oldOrder = ttg::getOrder(ty.getEncoding());
-
-    // The operand of MMAv3 is in SharedEncoding and its order should not
-    // be changed after FuseTranspositions Pass. So we only pipeline the
-    // load if the order of the loaded BlockedEncoding is the same as the
-    // order of the SharedEncoding it is converted to.
-    return oldOrder == newOrder;
-  } else {
-    return false;
-  }
-}
-
 namespace {
 
 /// Detect dead arguments in scf.for op by assuming all the values are dead and
