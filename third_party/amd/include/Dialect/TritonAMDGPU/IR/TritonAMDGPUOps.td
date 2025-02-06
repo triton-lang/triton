@@ -131,6 +131,7 @@ def InstructionSchedHint : TT_AMDGPU_Op<"instruction_sched_hint", []> {
   }];
 
   let arguments = (ins
+    TritonAMDGPU_SchedHintVariantAttr:$variant,
     TritonAMDGPU_InstCounter:$numDsReadsA,
     TritonAMDGPU_InstCounter:$numDsReadsB,
     TritonAMDGPU_InstCounter:$numDsWritesA,
@@ -143,11 +144,11 @@ def InstructionSchedHint : TT_AMDGPU_Op<"instruction_sched_hint", []> {
   );
 
   let builders = [
-    OpBuilder<(ins), [{
+    OpBuilder<(ins "amdgpu::SchedHint":$variant), [{
       auto ctx = $_state.getContext();
       auto noneType = NoneType::get(ctx);
       auto emptyAttr = amdgpu::InstCounterAttr::get(ctx, 0, noneType);
-      build($_builder, $_state, emptyAttr, emptyAttr, emptyAttr, emptyAttr,
+      build($_builder, $_state, variant, emptyAttr, emptyAttr, emptyAttr, emptyAttr,
             emptyAttr, emptyAttr, false, false, emptyAttr);
     }]>
   ];
