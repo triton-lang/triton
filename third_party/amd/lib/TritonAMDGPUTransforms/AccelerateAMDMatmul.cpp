@@ -9,6 +9,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/DecomposeScaledBlocked.h"
 #include "triton/Tools/LayoutUtils.h"
 #include <memory>
 
@@ -910,6 +911,7 @@ public:
     ModuleOp m = getOperation();
 
     RewritePatternSet patterns(context);
+    ttg::populateDecomposeScaledBlockedPatterns(patterns, /*benefit=*/3);
     switch (auto isaFamily = triton::AMD::deduceISAFamily(archGenerationName)) {
     case ISAFamily::CDNA4:
       patterns.add<::ScaledBlockedToScaledMFMAF8F6F4>(
