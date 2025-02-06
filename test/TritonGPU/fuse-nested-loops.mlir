@@ -486,7 +486,7 @@ tt.func @fuse_attr_speculate(%lb: i32, %ub: i32) {
       "body"(%i, %j) : (i32, i32) -> ()
       scf.yield
     }
-  } {tt.fuse}
+  } {tt.flatten}
   tt.return
 }
 
@@ -508,7 +508,7 @@ tt.func @speculate_hoist(%lb: i32, %ub: i32) {
       "body"(%i, %j) : (i32, i32) -> ()
       scf.yield
     }
-  } {tt.fuse}
+  } {tt.flatten}
   tt.return
 }
 
@@ -536,7 +536,7 @@ tt.func @sink_prologue_to_epilogue(%ub: i32) {
     // CHECK-NEXT: "epilogue"([[V1]])
     "epilogue"(%1) : (i32) -> ()
     scf.yield %0 : i32
-  } {tt.fuse}
+  } {tt.flatten}
 
   tt.return
 }

@@ -6581,12 +6581,12 @@ def test_tl_range_fuse():
 
     @triton.jit
     def kernel(ub):
-        for i in tl.range(0, ub, fuse=True):
+        for i in tl.range(0, ub, flatten=True):
             for j in tl.range(0, ub):
                 print("i", i)
 
     compiled_kernel = kernel.warmup(10, grid=(1, ))
-    assert "tt.fuse" in compiled_kernel.asm["ttir"]
+    assert "tt.flatten" in compiled_kernel.asm["ttir"]
     assert compiled_kernel.asm["ttgir"].count("scf.for") == 1
 
 

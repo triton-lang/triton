@@ -21,7 +21,7 @@ namespace gpu {
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
 // This attribute is set by the front-end to control whether fusion is on.
-static constexpr llvm::StringLiteral kFuseAttr = "tt.fuse";
+static constexpr llvm::StringLiteral kFlattenAttr = "tt.flatten";
 // This attribute indicates the inner loop length has been speculated.
 static constexpr llvm::StringLiteral kMustExecuteAttrName = "ttg.must-execute";
 // This attribute is just used for testing the pass.
@@ -925,7 +925,7 @@ static bool shouldFuse(const LoopNest &nest) {
 
   // Only fuse simple loop nests.
   return nest.nodes.size() == 2 && nest.root->children.size() == 1 &&
-         nest.root->loop->hasAttr(kFuseAttr);
+         nest.root->loop->hasAttr(kFlattenAttr);
 }
 
 // This function identifies a subgraph of cheap ops that can be sunk between two
