@@ -1145,23 +1145,16 @@ def test_load_fp4_mxf8f6f4_tma():
     @triton.jit
     def kernel(Z, desc):
         off0 = tl.arange(0, 32)
-        off1 = tl.arange(0, 128)
+        off1 = tl.arange(0, 64)
         x = tl._experimental_descriptor_load(desc, [0, 0], [32, 64], tl.dtype("int8"), packing_factor=2)
-        out_ptrs = Z + 128 * off0[:, None] + off1[None, :]
+        out_ptrs = Z + 64 * off0[:, None] + off1[None, :]
         tl.store(out_ptrs, x)
 
     x = MXFP4Tensor(size=(32, 128), device=device).random().to_packed_tensor(dim=1)
     desc = TmaDescKernelParam(x.data_ptr(), [32, 128], [32, 128], 1, packing_factor=2)
-    z_tri = torch.zeros(size=(32, 128), dtype=torch.uint8, device=device)
+    z_tri = torch.zeros(size=(32, 64), dtype=torch.uint8, device=device)
     out = kernel[(1, )](z_tri, desc)
-
-    for i in range(32):
-        for j in range(128 // 16):
-            ref_16f4_packed = x[i, j * 8 : (j + 1) * 8]
-            out_128b = z_tri[i, j * 16 : (j + 1) * 16]
-
-            torch.equal(ref_16f4_packed, out_128b[:8])
-            assert torch.all(out_128b[8:] == 0)
+    assert torch.equal(z_tri, x)
 
 
 def f8_to_f16(x, dtype):

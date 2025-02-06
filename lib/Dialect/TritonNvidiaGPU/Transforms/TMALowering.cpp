@@ -35,6 +35,7 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
       tensorType.getContext(), 1, 1, 1, order, ctaLayout);
   if (tensorType.getRank() > 1) {
     bool isMMAv5Fp4Padded = packingFactor == 2;
+    llvm::outs() << "isMMAv5Fp4Padded: " << isMMAv5Fp4Padded << "\n";
     encoding = NVMMASharedEncodingAttr::get(
         tensorType.getContext(), tensorType.getShape(), order, ctaLayout,
         tensorType.getElementType(), isMMAv5Fp4Padded);
@@ -78,7 +79,8 @@ public:
       rewriter.create<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp>(
           op.getLoc(), tmaPtr, op.getIndices(), barrierAlloc, alloc, pred);
     };
-    lowerTMALoad(op, op.getType(), op.getDesc(), createLoad, rewriter);
+    float packingFactor = op.getPackingFactor().convertToFloat();
+    lowerTMALoad(op, op.getType(), op.getDesc(), createLoad, rewriter, packingFactor);
     return success();
   }
 };

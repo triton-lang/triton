@@ -1860,7 +1860,7 @@ def _experimental_reinterpret_tensor_descriptor(desc_ptr, block_shape, dtype,
 
 
 @builtin
-def _experimental_descriptor_load(desc_pointer, offsets, shape, packing_factor=1, dtype, _builder=None):
+def _experimental_descriptor_load(desc_pointer, offsets, shape, dtype, packing_factor=1, _builder=None):
     """
     Experimental feature to access TMA descriptors loads. This is an escape hatch to easily exercise TTGIR operations.
     This will be removed in the future and shouldn't be used in production code.
