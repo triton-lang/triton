@@ -284,3 +284,21 @@ Supported Hardware:
 - NVIDIA GPUs (Compute Capability 8.0+)
 - AMD GPUs (ROCm 6.2+)
 - Under development: CPUs
+
+# Development Container (Dev Container)
+
+**Dev Containers** for the Triton project are available from
+the [triton-dev-containers repository](https://github.com/redhat-et/triton-dev-containers)
+
+### Key Benefits:
+- **Consistency**: All developers can work with the same development
+  environment, ensuring uniform behavior across different systems.
+- **Isolation**: The container prevents potential conflicts with software
+  installed on your local machine.
+- **Portability**: Easily share the development environment with team members,
+  minimizing onboarding time and setup issues.
+
+### How to Use the Dev Container:
+
+For detailed instructions on how to use the dev containers please see
+the [dev container user guide](https://github.com/redhat-et/triton-dev-containers/blob/main/.devcontainer/devcontainer.md)
