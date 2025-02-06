@@ -225,28 +225,6 @@ static bool bwdFilter(Operation *op) {
               mlir::TypeID::get<arith::ArithDialect>());
 }
 
-static SmallVector<int, 2> getTransposeOrder(int rank) {
-  assert(rank >= 2);
-  auto transOrder = llvm::to_vector<2>(llvm::seq<int>(rank - 2));
-  transOrder.push_back(rank - 1);
-  transOrder.push_back(rank - 2);
-  return transOrder;
-}
-
-static DotOp transposeDotOp(PatternRewriter &rewriter, DotOp dotOp) {
-  auto rank = dotOp.getResult().getType().getRank();
-  Value a = dotOp.getA();
-  Value b = dotOp.getB();
-  Value c = dotOp.getC();
-  auto transOrder = getTransposeOrder(rank);
-  a = rewriter.create<TransOp>(a.getLoc(), a, transOrder);
-  b = rewriter.create<TransOp>(b.getLoc(), b, transOrder);
-  c = rewriter.create<TransOp>(c.getLoc(), c, transOrder);
-  return rewriter.create<DotOp>(dotOp.getLoc(), c.getType(), b, a, c,
-                                dotOp.getInputPrecision(),
-                                dotOp.getMaxNumImpreciseAcc());
-}
-
 // Finds the first different bitwidth in the chain of shape-preserving
 // unary ops that x depends on.
 // There are two primary scenarios:
@@ -336,22 +314,7 @@ public:
 
     bool aFromLoad = comesFromLoadOrBlockArg(dotOp.getA());
     bool bFromLoad = comesFromLoadOrBlockArg(dotOp.getB());
-    bool transpose = false;
     auto origDotOp = dotOp;
-    if (aFromLoad && !bFromLoad) {
-      // If the lhs is not a load and the rhs is, we transpose the inputs
-      // and the result provided this allows us to use mmav3
-      // We transpose the result at the end of the rewrite
-      DotOp transDot = transposeDotOp(rewriter, dotOp);
-      if (getMMAVersionSafe(computeCapability, transDot) == 3) {
-        dotOp = transDot;
-        versionMajor = 3;
-        transpose = true;
-      }
-      std::swap(aFromLoad, bFromLoad);
-    }
-    // If !aFromLoad && !bFromLoad, we just accept a shmem roundtrip
-    // for versionMajor == 3
 
     Value a = dotOp.getA();
     Value b = dotOp.getB();
@@ -415,12 +378,6 @@ public:
       newDot = rewriter.create<DotOp>(dotOp.getLoc(), newRetType, a, b, newAcc,
                                       dotOp.getInputPrecision(),
                                       dotOp.getMaxNumImpreciseAcc());
-    }
-    if (transpose) {
-      auto rank = dotOp.getResult().getType().getRank();
-      auto transOrder = getTransposeOrder(rank);
-      newDot = rewriter.create<TransOp>(newDot->getLoc(), newDot->getResult(0),
-                                        transOrder);
     }
     // convert dot instruction
     rewriter.replaceOpWithNewOp<ConvertLayoutOp>(origDotOp, origDotOp.getType(),

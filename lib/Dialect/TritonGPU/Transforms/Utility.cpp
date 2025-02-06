@@ -1045,45 +1045,6 @@ getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
   return attr;
 }
 
-MMALoadType getMMALoadType(Operation *loadOp) {
-  if (!loadOp->hasOneUse())
-    return MMALoadType::DoNotPipeline;
-
-  if (auto alloc = dyn_cast<ttg::LocalAllocOp>(*loadOp->getUsers().begin())) {
-    auto sharedEnc =
-        dyn_cast<ttg::NVMMASharedEncodingAttr>(alloc.getType().getEncoding());
-
-    if (!sharedEnc)
-      return MMALoadType::DoNotPipeline;
-
-    // MMA V3 case.
-    SmallVector<unsigned> newOrder = getOrder(sharedEnc);
-    auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
-    auto oldOrder = ttg::getOrder(ty.getEncoding());
-
-    // The operand of MMAv3 is in SharedEncoding and its order should not
-    // be changed after FuseTranspositions Pass. So we only pipeline the
-    // load if the order of the loaded BlockedEncoding is the same as the
-    // order of the SharedEncoding it is converted to.
-    return oldOrder == newOrder ? MMALoadType::SharedV3
-                                : MMALoadType::DoNotPipeline;
-  } else if (auto cvt =
-                 dyn_cast<ttg::ConvertLayoutOp>(*loadOp->getUsers().begin())) {
-    auto resTy = dyn_cast<RankedTensorType>(cvt->getResultTypes()[0]);
-    if (!resTy) {
-      return MMALoadType::DoNotPipeline;
-    }
-
-    if (isa<ttg::DotOperandEncodingAttr>(resTy.getEncoding())) {
-      return MMALoadType::Registers;
-    }
-
-    return MMALoadType::DoNotPipeline;
-  } else {
-    return MMALoadType::DoNotPipeline;
-  }
-}
-
 namespace {
 
 /// Detect dead arguments in scf.for op by assuming all the values are dead and

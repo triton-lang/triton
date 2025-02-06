@@ -196,9 +196,10 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
   auto outDimNames = standardOutDimNames(ctx, rank);
 
   // Construct bases for a the layout's 2-dimensional tile.
-  assert(shape.size() >= 2);
-  int colDim = shared.getTransposed() ? 0 : 1;
-  int rowDim = shared.getTransposed() ? 1 : 0;
+  assert(rank >= 2);
+  int batchDims = rank - 2;
+  int colDim = batchDims + (shared.getTransposed() ? 0 : 1);
+  int rowDim = batchDims + (shared.getTransposed() ? 1 : 0);
 
   int tileRows = 8;
   int tileCols = 8 * tileWidthBytes / elemBitWidth;
@@ -254,8 +255,7 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
       LinearLayout({{S("offset"), bases2D}}, {rowDimName, colDimName});
 
   // Add the remaining dimensions.
-  for (int i = 2; i < rank; i++) {
-    int dim = shared.getTransposed() ? i : 1 - i;
+  for (int dim = batchDims - 1; dim >= 0; --dim) {
     tileLayout *=
         LinearLayout::identity1D(shape[dim], S("offset"), outDimNames[dim]);
   }
