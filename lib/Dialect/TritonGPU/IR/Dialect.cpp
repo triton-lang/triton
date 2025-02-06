@@ -39,22 +39,16 @@ namespace gpu {
 
 unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape,
                                 Type eltTy) {
-  if (auto distLayout = mlir::dyn_cast<DistributedEncodingTrait>(layout)) {
-    return distLayout.getTotalElemsPerThread(shape, eltTy);
-  } else {
-    llvm::report_fatal_error("getTotalElemsPerThread not implemented");
-    return 0;
-  }
+  auto linearLayout = toLinearLayout(shape, layout);
+  auto llAttr = LinearEncodingAttr::get(layout.getContext(), linearLayout);
+  return llAttr.getTotalElemsPerThread(shape, eltTy);
 }
 
 SmallVector<unsigned> getElemsPerThread(Attribute layout,
                                         ArrayRef<int64_t> shape, Type eltTy) {
-  if (auto distLayout = mlir::dyn_cast<DistributedEncodingTrait>(layout)) {
-    return distLayout.getElemsPerThread(shape, eltTy);
-  } else {
-    llvm::report_fatal_error("getElemsPerThread not implemented");
-    return SmallVector<unsigned>();
-  }
+  auto linearLayout = toLinearLayout(shape, layout);
+  auto llAttr = LinearEncodingAttr::get(layout.getContext(), linearLayout);
+  return llAttr.getElemsPerThread(shape, eltTy);
 }
 
 SmallVector<unsigned> getElemsPerThread(Type type) {
