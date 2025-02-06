@@ -476,6 +476,16 @@ getTransitiveUserInBlock(Operation *baseOp, scf::ForOp &forOp) {
   return users;
 }
 
+static bool isMMAv3Buffer(Operation *loadOp) {
+  if (!loadOp->hasOneUse())
+    return false;
+  Operation *user = *loadOp->getUsers().begin();
+  if (auto alloc = dyn_cast<ttg::LocalAllocOp>(user)) {
+    return isa<ttg::NVMMASharedEncodingAttr>(alloc.getType().getEncoding());
+  }
+  return false;
+}
+
 static llvm::MapVector<Operation *, LoadInfo>
 assignMemoryLayouts(scf::ForOp &forOp,
                     tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
@@ -517,16 +527,10 @@ assignMemoryLayouts(scf::ForOp &forOp,
     loadsToPipeline.insert(&op);
     LoadInfo loadInfo;
     for (auto use : users) {
-      // By default we will try pipelining with load to registers at the end.
-      // For mmav3 we can try leaving the operands in shared memory.
-      bool mmav3Shmem = false;
       if (isa<mlir::triton::DotOpInterface>(use)) {
         LDBG("set shared encoding with dot user: " << *use);
         auto dot = dyn_cast<tt::DotOp>(use);
-        bool isMMAv3v5Dot = isa<ttng::WarpGroupDotOp, ttng::TCGen5MMAOp,
-                                ttng::TCGen5MMAScaledOp>(use);
-        mmav3Shmem = canUseMMAv3Pipelining(&op) && isMMAv3v5Dot;
-
+        bool mmav3Shmem = isMMAv3Buffer(&op);
         loadInfo.usedByDot = true;
         loadInfo.isMMAv3Shared = mmav3Shmem;
 
