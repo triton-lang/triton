@@ -441,8 +441,8 @@ getCacheModifierFlagsForPredicatedCall(LLVM::CallOp callOp) {
 }
 
 // Create the auxiliary/cachepolicy value of ROCDL::RawPtrBufferLoad/StoreOp
-//   gfx942: bit 0 = sc0, bit 1 = nt, bit 3 = swz, bit 4 = sc1
-// GFX942 Vector Memory instructions (Flat, Global, Scratch, and Buffer) have 3
+//   gfx942 and gfx950: bit 0 = sc0, bit 1 = nt, bit 3 = swz, bit 4 = sc1
+// Vector Memory instructions (Flat, Global, Scratch, and Buffer) have 3
 // bits to control scope and cacheability:
 // - SC[1:0] System Cache level: 0=wave, 1=group, 2=device, 3=system
 // - NT Non-Temporal: 0=expect temporal reuse; 1=do not expect temporal reuse
@@ -463,8 +463,9 @@ getCacheModifierFlagsForPredicatedCall(LLVM::CallOp callOp) {
 // Atomic | N/A |  0  |  1  | x  | Setting sc0 returns the pre-op value
 //        | N/A |  1  |  0  | x  | Setting sc1 performs a system-scope atomic
 // -------+-----+-----+-----+----+--
-static int32_t getCtrlBitsForCacheModifierOnGFX942(triton::CacheModifier cm,
-                                                   bool isBufferLoad) {
+static int32_t
+getCtrlBitsForCacheModifierOnGFX_942_950(triton::CacheModifier cm,
+                                         bool isBufferLoad) {
   const int sc0Bit = 0b1, ntBit = 0b10, sc1Bit = 0b1000;
   int32_t aux = 0;
   switch (cm) {
@@ -493,8 +494,8 @@ static int32_t getCtrlBitsForCacheModifierOnGFX942(triton::CacheModifier cm,
   return aux;
 }
 
-int32_t getCtrlBitsForBufferAtomicsOnGFX942(bool setSC0, bool setSC1,
-                                            bool setNT) {
+int32_t getCtrlBitsForBufferAtomicsOnGFX_942_950(bool setSC0, bool setSC1,
+                                                 bool setNT) {
   const int sc0Bit = 0b1, ntBit = 0b10, sc1Bit = 0b1000;
   int32_t aux = 0;
   if (setSC0)
@@ -520,10 +521,13 @@ static int32_t getDefaultCtrlBitsForCacheModifier(triton::CacheModifier cm) {
 int32_t getCtrlBitsForCacheModifierOnTarget(
     triton::CacheModifier cm, bool isBufferLoad,
     const mlir::triton::AMD::TargetInfo &targetInfo) {
-  if (targetInfo.getGPUKind() == llvm::AMDGPU::GK_GFX942) // gfx942
-    return getCtrlBitsForCacheModifierOnGFX942(cm, isBufferLoad);
-  else
+  switch (targetInfo.getGPUKind()) {
+  case llvm::AMDGPU::GK_GFX942:
+  case llvm::AMDGPU::GK_GFX950:
+    return getCtrlBitsForCacheModifierOnGFX_942_950(cm, isBufferLoad);
+  default:
     return getDefaultCtrlBitsForCacheModifier(cm);
+  }
 }
 
 Value cvtFp32ToFp16(Location loc, RewriterBase &rewriter, const Value &v,
