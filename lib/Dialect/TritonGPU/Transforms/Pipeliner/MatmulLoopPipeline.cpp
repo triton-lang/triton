@@ -315,7 +315,6 @@ createTMAAsyncLoad(scf::ForOp forOp, tt::ExperimentalDescriptorLoadOp loadOp,
       waitOp, loadToInfo,
       [&](OpBuilderWithStage &builder, int stage, int clusterId, Value tmaPtr,
           Value barrier, Value view, Value pred, llvm::APFloat packingFactor) {
-	llvm::outs() << "SWP: packing factor = " << packingFactor.convertToFloat() << "\n";
         builder.createWithStage<ttng::AsyncTMACopyGlobalToLocalOp>(
             loadOp.getLoc(), stage, clusterId, tmaPtr, loadOp.getIndices(),
             barrier, view, pred, packingFactor);

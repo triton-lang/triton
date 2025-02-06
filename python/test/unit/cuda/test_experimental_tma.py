@@ -1153,7 +1153,7 @@ def test_load_fp4_mxf8f6f4_tma():
     x = MXFP4Tensor(size=(32, 128), device=device).random().to_packed_tensor(dim=1)
     desc = TmaDescKernelParam(x.data_ptr(), [32, 128], [32, 128], 1, packing_factor=2)
     z_tri = torch.zeros(size=(32, 64), dtype=torch.uint8, device=device)
-    out = kernel[(1, )](z_tri, desc)
+    kernel[(1, )](z_tri, desc)
     assert torch.equal(z_tri, x)
 
 
@@ -1223,11 +1223,13 @@ def mxfp8_mxfp4_matmul_tma(  #
     tl.store(output_ptrs, accumulator, mask=c_mask)
 
 
-# @pytest.mark.parametrize("M, N, K", [(1024, 512, 256), (128, 256, 256), (128, 128, 128), (2, 4, 64)])
-# @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (256, 128, 128), (128, 256, 128),
-#                                                        (128, 256, 256), (128, 128, 64), (128, 64, 128)])
-def test_mxfp8_mxfp4_matmul_tma(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, device):
-    NUM_STAGES = 1
+@pytest.mark.parametrize("M, N, K", [(1024, 512, 256), (128, 256, 256)])
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (128, 128, 256), (128, 256, 128),
+                                                       (128, 256, 256)])
+@pytest.mark.parametrize("NUM_STAGES", [1, 3])
+def test_mxfp8_mxfp4_matmul_tma(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, device):
+    if BLOCK_N == 256 and BLOCK_K == 256:
+        NUM_STAGES = 2
 
     a = torch.randint(20, 40, (M, K), dtype=torch.uint8).view(torch.float8_e5m2).to(device)
 
@@ -1248,19 +1250,12 @@ def test_mxfp8_mxfp4_matmul_tma(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, device):
 
     output = a.new_empty((M, N), dtype=torch.float32)
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
-    out = mxfp8_mxfp4_matmul_tma[grid](a, b_desc, output, a_scale, b_scale, M, N, K,
-                                   a_scale.stride(0), a.stride(0), a.stride(1), output.stride(0),
-                                   output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES=NUM_STAGES)
+    mxfp8_mxfp4_matmul_tma[grid](a, b_desc, output, a_scale, b_scale, M, N, K,
+                                 a_scale.stride(0), a.stride(0), a.stride(1), output.stride(0),
+                                 output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES=NUM_STAGES)
     # print(out.asm["ttgir"])
 
     a_ref = f8_to_f16(a.view(torch.float8_e5m2), dtype_src_str).to(torch.float32)
     ref_out = torch.matmul(a_ref * a_scale_ref, b_ref * b_scale_ref)
 
-    # return
     torch.testing.assert_close(ref_out, output, atol=1e-3, rtol=1e-3)
-    print(torch.sum(ref_out))
-    print(torch.sum(output))
-
-
-# test_load_fp4_mxf8f6f4_tma()
-test_mxfp8_mxfp4_matmul_tma(128, 128, 256, 128, 128, 256, "cuda")

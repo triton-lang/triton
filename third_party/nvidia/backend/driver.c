@@ -386,10 +386,7 @@ static PyObject *fill2DTMADescriptor(PyObject *self, PyObject *args) {
   // We clamp the block size and the codegen will emit multiple copy operations.
   if (contigDimSizeInByte > 128) {
     tensorDims[0] = 128 / elementSize;
-    printf("shrink smem box size \n");
   }
-
-  printf("dims, tensorDims, packing factor, contigDimSizeInByte: %ld, %ld, %ld, %ld, %f, %d\n", dims[0], dims[1], tensorDims[0], tensorDims[1], packing_factor, contigDimSizeInByte);
 
   static cuTensorMapEncodeTiled_t cuTensorMapEncodeTiled = NULL;
   INITIALIZE_FUNCTION_POINTER_IF_NULL(cuTensorMapEncodeTiled,
