@@ -24,9 +24,27 @@ struct Node {
     children->insert(node);
   }
 
+  size_t getNumParents() { return parents.size(); }
+  void addParent(Node *node) { parents.insert(node); }
+
+  void removeParent(Node *node) {
+    if (parents.contains(node)) {
+      parents.remove(node);
+    }
+  }
+
+  void drainChildren() {
+    realChildren.clear();
+    artificialChildren.clear();
+  }
+
+  bool empty() { return realChildren.empty() && artificialChildren.empty(); }
+
   Operation *op;
   llvm::SetVector<Node *> realChildren;
   llvm::SetVector<Node *> artificialChildren;
+
+  llvm::SetVector<Node *> parents;
 };
 
 struct Graph {
@@ -37,69 +55,92 @@ public:
   }
 
   llvm::SmallVector<std::unique_ptr<Node>> &getNodes() { return nodes; }
-  SmallVector<SetVector<Node *>> &getBlocks() { return blocks; }
 
 private:
-  SetVector<Node *> *getBlock(Node *node) {
-    for (auto &block : blocks) {
-      if (block.contains(node))
-        return &block;
-    }
-    return nullptr;
-  }
-
   void createNodes(Block *mlirBlock) {
-    SetVector<Node *> currBlock;
     for (auto it = mlirBlock->begin(); it != mlirBlock->end(); ++it) {
       Operation *op = &(*it);
       std::unique_ptr<Node> node = std::make_unique<Node>(op);
-      currBlock.insert(node.get());
       lookup.insert({op, node.get()});
       nodes.push_back(std::move(node));
+    }
+  }
 
-      if (auto barrier = llvm::dyn_cast<mlir::gpu::BarrierOp>(op)) {
-        if (!currBlock.empty()) {
-          blocks.push_back(std::move(currBlock));
-          currBlock = SetVector<Node *>{};
+  enum class Traversal { Topdown, Bottomup };
+  template <Traversal Direction> void insertGPUBarrierEdges() {
+
+    auto fwIt = nodes.begin();
+    auto bkIt = nodes.rbegin();
+    auto next = [&]() -> Node * {
+      if constexpr (Direction == Traversal::Topdown) {
+        if (fwIt == nodes.end())
+          return nullptr;
+        return (fwIt++)->get();
+      }
+      if constexpr (Direction == Traversal::Bottomup) {
+        if (bkIt == nodes.rend())
+          return nullptr;
+        return (bkIt++)->get();
+      }
+      return nullptr;
+    };
+
+    llvm::SmallVector<Node *> ldsOpsNodes;
+    while (Node *node = next()) {
+      auto localLoad = llvm::dyn_cast<triton::gpu::LocalLoadOp>(node->op);
+      auto localStore = llvm::dyn_cast<triton::gpu::LocalStoreOp>(node->op);
+      if (localLoad || localStore) {
+        ldsOpsNodes.push_back(node);
+      }
+      auto gpuBarrier = llvm::dyn_cast<mlir::gpu::BarrierOp>(node->op);
+      if (gpuBarrier) {
+        Node *barrierNode = node;
+        for (auto ldsOpNode : ldsOpsNodes) {
+          if constexpr (Direction == Traversal::Topdown) {
+            barrierNode->add<Node::ChildType::Artificials>(ldsOpNode);
+            ldsOpNode->addParent(barrierNode);
+          }
+          if constexpr (Direction == Traversal::Bottomup) {
+            barrierNode->addParent(ldsOpNode);
+            ldsOpNode->add<Node::ChildType::Artificials>(barrierNode);
+          }
         }
+        ldsOpsNodes.clear();
       }
     }
-    if (!currBlock.empty())
-      blocks.push_back(std::move(currBlock));
   }
 
   void createEdges() {
-    for (auto blockIt = blocks.rbegin(); blockIt != blocks.rend(); ++blockIt) {
-      auto &currBlock = *blockIt;
-      for (auto nodeIt = currBlock.rbegin(); nodeIt != currBlock.rend();
-           ++nodeIt) {
-        auto node = *nodeIt;
-        for (auto operand : node->op->getOperands()) {
-          Operation *childOp = operand.getDefiningOp();
-          if (!lookup.contains(childOp))
-            continue;
-          Node *childNode = lookup.find(childOp)->second;
-          if (currBlock.contains(childNode)) {
-            node->add<Node::ChildType::Real>(childNode);
-          } else {
-            auto *childBlock = getBlock(childNode);
-            assert(childBlock != nullptr);
-            auto *lastNodeInChildBlock = childBlock->back();
-            lastNodeInChildBlock->add<Node::ChildType::Artificials>(childNode);
-          }
-        }
-        if (node->op->getUsers().empty()) {
-          auto *lastNodeInBlock = currBlock.back();
-          if (lastNodeInBlock != node) {
-            lastNodeInBlock->add<Node::ChildType::Artificials>(node);
-          }
-        }
+    // insert edges imposed by def-use chains
+    for (auto it = nodes.rbegin(); it != nodes.rend(); ++it) {
+      auto &node = *it;
+      for (auto operandValue : node->op->getOperands()) {
+        auto operandDefOp = operandValue.getDefiningOp();
+        if (!lookup.contains(operandDefOp))
+          continue;
+        Node *childNode = lookup.find(operandDefOp)->second;
+        node->add<Node::ChildType::Real>(childNode);
+        childNode->addParent(node.get());
+      }
+    }
+
+    // gpu.Barrier ops are orphans. Add edges to
+    // respect data dependencies in the block
+    insertGPUBarrierEdges<Traversal::Bottomup>();
+    insertGPUBarrierEdges<Traversal::Topdown>();
+
+    // connect orphans with the last op in the block
+    auto &lastNode = *(nodes.rbegin());
+    for (auto it = std::next(nodes.rbegin()); it != nodes.rend(); ++it) {
+      auto &node = *it;
+      if (node->getNumParents() == 0) {
+        node->addParent(lastNode.get());
+        lastNode->add<Node::ChildType::Artificials>(node.get());
       }
     }
   }
 
   llvm::SmallVector<std::unique_ptr<Node>> nodes;
-  SmallVector<SetVector<Node *>> blocks;
   llvm::MapVector<Operation *, Node *> lookup;
 };
 
@@ -118,7 +159,8 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream &out, Graph &graph) {
     }
     for (auto child : node->artificialChildren) {
       std::string childName = std::to_string(reinterpret_cast<intptr_t>(child));
-      out << "\t" << childName << " -> " << name << " [style=\"dashed\"];\n";
+      out << "\t" << childName << " -> " << name
+          << " [style=\"dashed\", color=\"blue\"];\n";
     }
   }
   out << "}";
@@ -129,6 +171,18 @@ struct TritonAMDGPURescheduleOps
     : public TritonAMDGPURescheduleOpsBase<TritonAMDGPURescheduleOps> {
   explicit TritonAMDGPURescheduleOps(StringRef targetArch) {
     this->arch = targetArch.str();
+  }
+
+  LogicalResult verify(Block *mlirBlock) {
+    // make sure that a block gets terminated with `cf::BranchOp`
+    if (!dyn_cast<cf::BranchOp>(&(mlirBlock->back()))) {
+      return failure();
+    }
+
+    // do't schedule if there is not enough operations in a block
+    if (mlirBlock->getOperations().size() < 3)
+      return failure();
+    return success();
   }
 
   void reschedule(Block *mlirBlock) {
@@ -151,7 +205,8 @@ struct TritonAMDGPURescheduleOps
     });
 
     for (auto block : blocks) {
-      reschedule(block);
+      if (succeeded(verify(block)))
+        reschedule(block);
     }
   }
 };
