@@ -219,11 +219,9 @@ getWarpsPerTile(DotOp dotOp, const ArrayRef<int64_t> shape, int version,
 }
 
 static bool bwdFilter(Operation *op) {
-  return op->getNumOperands() == 1 &&
-         (isa<FpToFpOp, BitcastOp, ConvertLayoutOp>(op) ||
-          isPureUnaryInlineAsm(op) ||
-          op->getDialect()->getTypeID() ==
-              mlir::TypeID::get<arith::ArithDialect>());
+  return (op->hasTrait<OpTrait::Elementwise>() && isMemoryEffectFree(op)) ||
+         isa<BroadcastOp, ExpandDimsOp, ReshapeOp, TransOp, Fp4ToFpOp,
+             ConvertLayoutOp>(op);
 }
 
 // Finds the first different bitwidth in the chain of shape-preserving
@@ -239,19 +237,20 @@ static bool bwdFilter(Operation *op) {
 // Conversely, in the downcasting scenario, no reordering is performed,
 // making it directly use the lower precision primitive.
 static int computeOrigBitWidth(Value x) {
-  int finalBitWidth = getElementTypeOrSelf(x).getIntOrFloatBitWidth();
-  int origBitWidth = finalBitWidth;
   SetVector<Operation *> slice;
   mlir::BackwardSliceOptions opt;
   opt.omitBlockArguments = true;
   opt.filter = bwdFilter;
+  getBackwardSlice(x, &slice, opt);
+
   // TODO: This heuristic may be a bit too coarse and may need improving
   // If the chain contains a fp4 to fp16/bf16 conversion, then the original
   // bitwidth is 4.
-  getBackwardSlice(x, &slice);
   if (llvm::any_of(slice, [](Operation *op) { return isa<Fp4ToFpOp>(op); }))
     return 4;
 
+  int finalBitWidth = getElementTypeOrSelf(x).getIntOrFloatBitWidth();
+  int origBitWidth = finalBitWidth;
   for (auto op : slice) {
     if (Value arg = op->getOperand(0))
       if (auto argTy = dyn_cast<RankedTensorType>(arg.getType())) {
