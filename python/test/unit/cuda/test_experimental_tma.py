@@ -5,7 +5,7 @@ import triton
 import triton.language as tl
 from triton.tools.experimental_descriptor import (create_1d_tma_descriptor, create_2d_tma_descriptor, TmaDescKernelParam)
 from triton._internal_testing import dtypes_with_bfloat16, is_interpreter, numpy_random, to_triton, requires_tma, supports_tma, tma_skip_msg
-from triton.tools.mxfp import MXFP4Tensor
+from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from typing import Optional
 
 
@@ -1204,7 +1204,7 @@ def mxfp8_mxfp4_matmul_tma(  #
     for k in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES):
         a = tl.load(a_ptrs)
 
-        b = tl._experimental_descriptor_load(b_desc, [offs_bn_tma, offs_bk], [BLOCK_N, BLOCK_K // 2], tl.dtype("uint8"), packing_factor)
+        b = tl._experimental_descriptor_load(b_desc, [offs_bn_tma, offs_bk], [BLOCK_N, BLOCK_K // 2], tl.dtype("uint8"), packing_factor=2)
         b = b.T
 
         scale_a = tl.load(a_scale_ptr)
@@ -1255,9 +1255,12 @@ def test_mxfp8_mxfp4_matmul_tma(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, device):
     a_ref = f8_to_f16(a.view(torch.float8_e5m2), dtype_src_str).to(torch.float32)
     ref_out = torch.matmul(a_ref * a_scale_ref, b_ref * b_scale_ref)
 
-    # print(out.asm["ttgir"])
-    torch.testing.assert_close(ref_out, output, atol=1e-2, rtol=1e-2)
+    print(out.asm["ttgir"])
+    # return
+    torch.testing.assert_close(ref_out, output, atol=1e-3, rtol=1e-3)
+    print(torch.sum(ref_out))
+    print(torch.sum(output))
 
 
-test_load_fp4_mxf8f6f4_tma()
-# test_mxfp8_mxfp4_matmul_tma(128, 128, 128, 128, 128, 128, True, "cuda")
+# test_load_fp4_mxf8f6f4_tma()
+test_mxfp8_mxfp4_matmul_tma(128, 128, 128, 128, 128, 128, "cuda")
