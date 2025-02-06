@@ -249,6 +249,7 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
       TT_Ptr:$ptr,
       I32Tensor:$offsets,
       TT_Tensor:$value,
+      I32:$stride,
       TT_MemSemanticAttr:$sem,
       TT_MemSyncScopeAttr:$scope,
       Optional<TT_BoolTensor>:$mask
@@ -257,6 +258,7 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
 
     let assemblyFormat = [{
         $atomic_rmw_op `,` $sem `,` $scope `,` $value `,` $ptr `[` $offsets `]` (`,` $mask^)?
+        `stride` `=` $stride
         attr-dict `:` type($result)
     }];
 }

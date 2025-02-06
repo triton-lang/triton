@@ -67,7 +67,7 @@ Value BufferEmitter::createResourceDescriptor(Value basePtr,
 
   Value stride = b.int_val(16, 0);
   if (targetInfo.getISAFamily() == ISAFamily::CDNA3) {
-    if (blockStride) { // TODO: BufferAtomicRMWOp is unsupported
+    if (blockStride) {
       Value enableSwizzle = b.int_val(16, 16384);
       Value mask14b = b.int_val(16, 16383);
       // Cache swizzle supports only upto 8k stride. Also simply swizzling the
