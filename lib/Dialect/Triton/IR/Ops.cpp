@@ -309,6 +309,28 @@ LogicalResult DotOp::verify() {
                                                      bEncoding);
 }
 
+bool DotOp::verifyDims() {
+  auto aShape = this->getA().getType().getShape();
+  auto bShape = this->getB().getType().getShape();
+
+  return aShape[aShape.size() - 1] == bShape[aShape.size() - 2];
+}
+
+//-- DotScaledOp --
+bool DotScaledOp::verifyDims() {
+  auto aShape = this->getLhs().getType().getShape();
+  auto bShape = this->getRhs().getType().getShape();
+
+  auto aKdim = aShape[aShape.size() - 1];
+  auto bKdim = bShape[aShape.size() - 2];
+  if (this->getLhsType() == ScaleDotElemType::E2M1)
+    aKdim *= 2;
+  if (this->getRhsType() == ScaleDotElemType::E2M1)
+    bKdim *= 2;
+
+  return aKdim == bKdim;
+}
+
 //-- MakeRangeOp --
 OpFoldResult MakeRangeOp::fold(FoldAdaptor adaptor) {
   // make_range(start, start + 1) -> constant(start)
@@ -529,10 +551,9 @@ unsigned ReduceOp::getNumOperands() { return this->getOperands().size(); }
 void ScanOp::build(OpBuilder &builder, OperationState &state,
                    ValueRange operands, int axis, bool reverse) {
   SmallVector<Type> inferredReturnTypes;
-  state.addAttribute("reverse", builder.getBoolAttr(reverse));
   for (auto arg : operands)
     inferredReturnTypes.push_back(arg.getType());
-  ReduceOp::build(builder, state, inferredReturnTypes, operands, axis);
+  ScanOp::build(builder, state, inferredReturnTypes, operands, axis, reverse);
 }
 
 LogicalResult
@@ -1236,15 +1257,15 @@ LogicalResult ExperimentalDescriptorStoreOp::verify() {
 LogicalResult ExperimentalTensormapCreateOp::verify() {
   auto rank = getBoxDim().size();
   if (getGlobalDim().size() != rank) {
-    return emitError("Rank mismatch for global dim. Got")
+    return emitError("Rank mismatch for global dim. Got ")
            << getGlobalDim().size() << " but expected " << rank;
   }
   if (getGlobalStride().size() + 1 != rank) {
-    return emitError("Rank mismatch for global stride. Got")
+    return emitError("Rank mismatch for global stride. Got ")
            << getGlobalStride().size() << " but expected " << rank - 1;
   }
   if (getElementStride().size() != rank) {
-    return emitError("Rank mismatch for element stride. Got")
+    return emitError("Rank mismatch for element stride. Got ")
            << getElementStride().size() << " but expected " << rank;
   }
   return success();

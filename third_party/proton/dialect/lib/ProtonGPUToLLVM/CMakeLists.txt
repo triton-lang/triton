@@ -1,4 +1,4 @@
-add_triton_library(TritonProtonGPUToLLVM
+add_triton_library(ProtonGPUToLLVM
     InitScopeOpToLLVM.cpp
     RecordOpToLLVM.cpp
     ProtonLoweringPass.cpp
@@ -8,4 +8,5 @@ add_triton_library(TritonProtonGPUToLLVM
 
     LINK_LIBS PUBLIC
     ProtonIR
+    ProtonGPUIR
 )

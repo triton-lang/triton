@@ -154,15 +154,12 @@ struct LocalStoreOpConversion
 public:
   using ConvertOpToLLVMPattern<
       triton::gpu::LocalStoreOp>::ConvertOpToLLVMPattern;
-  using BackendCallbackType =
-      decltype(BackendCallbacks::localStoreOpConversion);
 
   LocalStoreOpConversion(const LLVMTypeConverter &converter,
                          const TargetInfoBase &targetInfo,
-                         BackendCallbackType backendCallback,
                          PatternBenefit benefit = 1)
       : ConvertOpToLLVMPattern<triton::gpu::LocalStoreOp>(converter, benefit),
-        targetInfo(targetInfo), backendCallback(backendCallback) {}
+        targetInfo(targetInfo) {}
 
   LogicalResult
   matchAndRewrite(triton::gpu::LocalStoreOp op, OpAdaptor adaptor,
@@ -178,8 +175,7 @@ public:
                              adaptor.getSrc(), smemObj, getTypeConverter(),
                              rewriter, targetInfo, &llvmOpCount);
 
-    if (backendCallback)
-      (backendCallback)(op, llvmOpCount.first, llvmOpCount.second);
+    targetInfo.storeOpAnnotation(op, llvmOpCount.first, llvmOpCount.second);
 
     rewriter.eraseOp(op);
     return success();
@@ -187,22 +183,16 @@ public:
 
 private:
   const TargetInfoBase &targetInfo;
-  BackendCallbackType backendCallback;
 };
 
 } // namespace
 
 void mlir::triton::populateMemoryOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, const TargetInfoBase &targetInfo,
-    RewritePatternSet &patterns, PatternBenefit benefit,
-    std::optional<BackendCallbacks> backendCallbacks) {
+    RewritePatternSet &patterns, PatternBenefit benefit) {
   patterns.add<GlobalScratchAllocOpConversion>(typeConverter, benefit);
   patterns.add<LocalAllocOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<LocalDeallocOpConversion>(typeConverter, benefit);
   patterns.add<LocalLoadOpConversion>(typeConverter, targetInfo, benefit);
-
-  auto backendCall =
-      backendCallbacks ? backendCallbacks->localStoreOpConversion : nullptr;
-  patterns.add<LocalStoreOpConversion>(typeConverter, targetInfo, backendCall,
-                                       benefit);
+  patterns.add<LocalStoreOpConversion>(typeConverter, targetInfo, benefit);
 }

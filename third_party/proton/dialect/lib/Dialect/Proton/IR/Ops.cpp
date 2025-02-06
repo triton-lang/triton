@@ -8,4 +8,5 @@
 
 #define GET_OP_CLASSES
 #include "Dialect/Proton/IR/Ops.cpp.inc"
+
 #include "Dialect/Proton/IR/OpsEnums.cpp.inc"

@@ -1,4 +1,4 @@
-add_triton_library(ProtonIR
+add_triton_library(ProtonGPUIR
   Dialect.cpp
   Ops.cpp
 
@@ -7,6 +7,6 @@ add_triton_library(ProtonIR
   ProtonGPUAttrDefsIncGen
 
   LINK_LIBS PUBLIC
+  ProtonIR
   TritonGPUIR
-  ProtonGPUIR
 )

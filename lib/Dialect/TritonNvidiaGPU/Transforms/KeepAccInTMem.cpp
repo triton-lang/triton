@@ -79,6 +79,138 @@ public:
   }
 };
 
+static void addTMEMLoad(IRRewriter &rewriter, ttng::TMEMAllocOp localAlloc,
+                        Operation *user, int argNo) {
+  rewriter.setInsertionPoint(user);
+  auto load = rewriter.create<ttng::TMEMLoadOp>(
+      user->getLoc(), user->getOperand(argNo).getType(),
+      localAlloc->getResult(0));
+  user->setOperand(argNo, load);
+}
+
+static bool canKeepAccInTmem(scf::ForOp forOp, Operation *mmaOp,
+                             ttng::TMEMAllocOp &localAlloc,
+                             ttng::TMEMLoadOp &localLoad,
+                             SmallVector<std::pair<Operation *, int>> &accUsers,
+                             unsigned &yieldArgNo) {
+  // The expected sequence of instructions:
+  // %acc_tm = ttg.local_alloc %acc
+  // ttng.tc_gen5_mma %A_sh, %B_sh, %acc_tm
+  // %acc_res = ttg.local_load %acc_tm
+  localAlloc = mmaOp->getOperand(2).getDefiningOp<ttng::TMEMAllocOp>();
+  if (!localAlloc) {
+    return false;
+  }
+  for (auto user : localAlloc->getUsers()) {
+    if (isa<ttng::TMEMLoadOp>(user)) {
+      localLoad = cast<ttng::TMEMLoadOp>(user);
+    } else if (user != mmaOp) {
+      // The accumulator is used by another operation, not something we
+      // expect.
+      localLoad = nullptr;
+      return false;
+    }
+  }
+
+  SmallVector<Value> queue;
+  queue.push_back(localLoad->getResult(0));
+  bool foundDotCycle = false;
+  while (!queue.empty()) {
+    Value value = queue.pop_back_val();
+    for (auto &use : value.getUses()) {
+      if (use.getOwner() == localAlloc) {
+        foundDotCycle = true;
+        continue;
+      }
+      if (auto yieldOp = dyn_cast<scf::YieldOp>(use.getOwner())) {
+        if (yieldOp->getParentOp() == forOp) {
+          yieldArgNo = use.getOperandNumber();
+          queue.push_back(forOp.getRegionIterArg(yieldArgNo));
+          continue;
+        }
+        if (auto ifOp = dyn_cast<scf::IfOp>(yieldOp->getParentOp())) {
+          // TODO: Accumulator being used in the yield of ifOp means that
+          // it is being modified in the other branch of the ifOp. This is not
+          // something we can handle yet.
+          return false;
+        }
+        // Not sure what are we doing here. Back out.
+        return false;
+      }
+      accUsers.emplace_back(use.getOwner(), use.getOperandNumber());
+    }
+  }
+  return foundDotCycle;
+}
+
+static void hoistReadModifyWrite(Operation *mmaOp, scf::ForOp forOp) {
+  // For the transformation to make sense, the accumulator must be
+  // reused by the same MMA operation in subsequent iterations.
+  SmallVector<std::pair<Operation *, int>> accUsers;
+  ttng::TMEMAllocOp localAlloc = nullptr;
+  ttng::TMEMLoadOp localLoad = nullptr;
+  unsigned yieldArgNo;
+  if (!canKeepAccInTmem(forOp, mmaOp, localAlloc, localLoad, accUsers,
+                        yieldArgNo)) {
+    return;
+  }
+
+  assert(localLoad != nullptr);
+  assert(localAlloc != nullptr);
+  Type loadType = localLoad->getResult(0).getType();
+  IRRewriter rewriter(forOp);
+  localAlloc->moveBefore(forOp);
+  localAlloc->setOperand(0, forOp.getInitArgs()[yieldArgNo]);
+  mmaOp->setOperand(2, localAlloc->getResult(0));
+  // Unlink the local_load from the yield. Short circuit the unused yield
+  // value with the corresponding iter arg.
+  forOp.getBody()->getTerminator()->setOperand(
+      yieldArgNo, forOp.getRegionIterArg(yieldArgNo));
+
+  // Add TMEM loads before all the uses
+  // TODO: We could be more efficient here, reusing loads instead of
+  // creating new ones for each use.
+  for (auto [user, argNo] : accUsers) {
+    addTMEMLoad(rewriter, localAlloc, user, argNo);
+  }
+
+  rewriter.setInsertionPointAfter(forOp);
+  auto afterLoopLoad = rewriter.create<ttng::TMEMLoadOp>(
+      forOp.getLoc(), loadType, localAlloc->getResult(0));
+  forOp->getResult(yieldArgNo).replaceAllUsesWith(afterLoopLoad->getResult(0));
+
+  localLoad->erase();
+}
+
+// Hoist invariant tmem_alloc. This could technically be done as general LICM
+// but controlling tmem liveranga more precisley is likely to be important.
+static void hoistInvariantInputs(Operation *mmaOp, scf::ForOp forOp) {
+  for (auto operand : mmaOp->getOperands()) {
+    if (forOp.isDefinedOutsideOfLoop(operand))
+      continue;
+    auto tmemAllocOp = operand.getDefiningOp<ttng::TMEMAllocOp>();
+    if (!tmemAllocOp || tmemAllocOp.getType().getMutableMemory())
+      continue;
+    assert(tmemAllocOp.getSrc());
+    Value src = tmemAllocOp.getSrc();
+    SmallVector<Operation *> opToHoist = {tmemAllocOp.getOperation()};
+    // Also hoist simple unary elementwise that may have sinked into the loop.
+    while (Operation *defOp = src.getDefiningOp()) {
+      if (forOp.isDefinedOutsideOfLoop(src))
+        break;
+      if (!(isMemoryEffectFree(defOp) && isSpeculatable(defOp) &&
+            defOp->getNumOperands() == 1))
+        break;
+      opToHoist.push_back(defOp);
+      src = defOp->getOperand(0);
+    }
+    if (!forOp.isDefinedOutsideOfLoop(src))
+      continue;
+    for (auto op : llvm::reverse(opToHoist)) {
+      forOp.moveOutOfLoop(op);
+    }
+  }
+}
 class TritonNvidiaGPUKeepAccInTMemPass
     : public TritonNvidiaGPUKeepAccInTMemPassBase<
           TritonNvidiaGPUKeepAccInTMemPass> {
@@ -99,75 +231,11 @@ public:
     }
   }
 
-  bool canKeepAccInTmem(scf::ForOp forOp, Operation *mmaOp,
-                        ttng::TMEMAllocOp &localAlloc,
-                        ttng::TMEMLoadOp &localLoad,
-                        SmallVector<std::pair<Operation *, int>> &accUsers,
-                        unsigned &yieldArgNo) {
-    // The expected sequence of instructions:
-    // %acc_tm = ttg.local_alloc %acc
-    // ttng.tc_gen5_mma %A_sh, %B_sh, %acc_tm
-    // %acc_res = ttg.local_load %acc_tm
-    localAlloc = mmaOp->getOperand(2).getDefiningOp<ttng::TMEMAllocOp>();
-    if (!localAlloc) {
-      return false;
-    }
-    for (auto user : localAlloc->getUsers()) {
-      if (isa<ttng::TMEMLoadOp>(user)) {
-        localLoad = cast<ttng::TMEMLoadOp>(user);
-      } else if (user != mmaOp) {
-        // The accumulator is used by another operation, not something we
-        // expect.
-        localLoad = nullptr;
-        return false;
-      }
-    }
-
-    SmallVector<Value> queue;
-    queue.push_back(localLoad->getResult(0));
-    bool foundDotCycle = false;
-    while (!queue.empty()) {
-      Value value = queue.pop_back_val();
-      for (auto &use : value.getUses()) {
-        if (use.getOwner() == localAlloc) {
-          foundDotCycle = true;
-          continue;
-        }
-        if (auto yieldOp = dyn_cast<scf::YieldOp>(use.getOwner())) {
-          if (yieldOp->getParentOp() == forOp) {
-            yieldArgNo = use.getOperandNumber();
-            queue.push_back(forOp.getRegionIterArg(yieldArgNo));
-            continue;
-          }
-          if (auto ifOp = dyn_cast<scf::IfOp>(yieldOp->getParentOp())) {
-            // TODO: Accumulator being used in the yield of ifOp means that
-            // it is being modified in the other branch of the ifOp. This is not
-            // something we can handle yet.
-            return false;
-          }
-          // Not sure what are we doing here. Back out.
-          return false;
-        }
-        accUsers.emplace_back(use.getOwner(), use.getOperandNumber());
-      }
-    }
-    return foundDotCycle;
-  }
-
-  void addTMEMLoad(IRRewriter &rewriter, ttng::TMEMAllocOp localAlloc,
-                   Operation *user, int argNo) {
-    rewriter.setInsertionPoint(user);
-    auto load = rewriter.create<ttng::TMEMLoadOp>(
-        user->getLoc(), user->getOperand(argNo).getType(),
-        localAlloc->getResult(0));
-    user->setOperand(argNo, load);
-  }
-
   void runOnForOp(scf::ForOp forOp) {
     SmallVector<Operation *> mmaOps;
     forOp.walk([&](Operation *mmaOp) {
       // Skip MMA nested in another forOp
-      if (isa<ttng::TCGen5MMAOp, ttng::TCGen5MMAScaledOp>(mmaOp) &&
+      if (isa<ttng::MMAv5OpInterface>(mmaOp) &&
           mmaOp->getParentOfType<scf::ForOp>() == forOp) {
         mmaOps.push_back(mmaOp);
       }
@@ -177,43 +245,8 @@ public:
     }
 
     for (auto mmaOp : mmaOps) {
-      // For the transformation to make sense, the accumulator must be
-      // reused by the same MMA operation in subsequent iterations.
-      SmallVector<std::pair<Operation *, int>> accUsers;
-      ttng::TMEMAllocOp localAlloc = nullptr;
-      ttng::TMEMLoadOp localLoad = nullptr;
-      unsigned yieldArgNo;
-      if (!canKeepAccInTmem(forOp, mmaOp, localAlloc, localLoad, accUsers,
-                            yieldArgNo)) {
-        continue;
-      }
-
-      assert(localLoad != nullptr);
-      assert(localAlloc != nullptr);
-      Type loadType = localLoad->getResult(0).getType();
-      IRRewriter rewriter(forOp);
-      localAlloc->moveBefore(forOp);
-      localAlloc->setOperand(0, forOp.getInitArgs()[yieldArgNo]);
-      mmaOp->setOperand(2, localAlloc->getResult(0));
-      // Unlink the local_load from the yield. Short circuit the unused yield
-      // value with the corresponding iter arg.
-      forOp.getBody()->getTerminator()->setOperand(
-          yieldArgNo, forOp.getRegionIterArg(yieldArgNo));
-
-      // Add TMEM loads before all the uses
-      // TODO: We could be more efficient here, reusing loads instead of
-      // creating new ones for each use.
-      for (auto [user, argNo] : accUsers) {
-        addTMEMLoad(rewriter, localAlloc, user, argNo);
-      }
-
-      rewriter.setInsertionPointAfter(forOp);
-      auto afterLoopLoad = rewriter.create<ttng::TMEMLoadOp>(
-          forOp.getLoc(), loadType, localAlloc->getResult(0));
-      forOp->getResult(yieldArgNo)
-          .replaceAllUsesWith(afterLoopLoad->getResult(0));
-
-      localLoad->erase();
+      hoistReadModifyWrite(mmaOp, forOp);
+      hoistInvariantInputs(mmaOp, forOp);
     }
   }
 };

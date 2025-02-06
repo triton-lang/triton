@@ -50,8 +50,18 @@ mlir::LogicalResult createTMADesc(mlir::Value tmaPtr,
 
   Value elemSizeVal = builder.template create<arith::ConstantOp>(
       loc, builder.getI64Type(), builder.getI64IntegerAttr(elemSize));
-  Value globalStride = builder.template create<arith::MulIOp>(
-      loc, op.getStrides()[0], elemSizeVal);
+
+  SmallVector<Value> globalDim(llvm::reverse(op.getShape()));
+  SmallVector<Value> globalStride;
+  for (int k = op.getStrides().size() - 2; k >= 0; --k) {
+    globalStride.push_back(op.getStrides()[k]);
+  }
+
+  SmallVector<Value> elementStride(globalDim.size(), mkI32Constant(1));
+
+  for (int i = 0; i < globalStride.size(); ++i)
+    globalStride[i] = builder.template create<arith::MulIOp>(
+        loc, globalStride[i], elemSizeVal);
 
   int elemTypeEnum;
   switch (elemSize) {
@@ -75,15 +85,14 @@ mlir::LogicalResult createTMADesc(mlir::Value tmaPtr,
   }
   }
 
-  auto one = mkI32Constant(1);
   builder.template create<triton::ExperimentalTensormapCreateOp>(
       loc,
       /*desc_ptr=*/tmaPtr,
       /*global_address=*/op.getBase(),
       /*box_dim=*/boxDim,
-      /*global_dim=*/ValueRange{op.getShape()[1], op.getShape()[0]},
-      /*global_stride=*/ValueRange{globalStride},
-      /*element_strides=*/ValueRange{one, one},
+      /*global_dim=*/globalDim,
+      /*global_stride=*/globalStride,
+      /*element_strides=*/elementStride,
       /*elem_type*/ builder.getI32IntegerAttr(elemTypeEnum),
       /*interleave_layout*/ builder.getI32IntegerAttr(0),
       /*swizzle_mode=*/builder.getI32IntegerAttr(swizzle_mode),

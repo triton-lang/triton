@@ -6,7 +6,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 #include "third_party/proton/dialect/include/Dialect/Proton/IR/Dialect.h"
-#include "third_party/proton/dialect/include/TritonProtonGPUToLLVM/PatternTritonProtonOpToLLVM.h"
+#include "third_party/proton/dialect/include/ProtonGPUToLLVM/PatternProtonGPUOpToLLVM.h"
 
 namespace {
 

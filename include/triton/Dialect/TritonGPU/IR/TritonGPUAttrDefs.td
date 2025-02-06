@@ -501,13 +501,17 @@ We call each individual tile "rep".
     InterfaceMethod<"Return total element size per thread.",
                     "unsigned",
                     "getTotalElemsPerThread",
-                     (ins "ArrayRef<int64_t>":$tensorShape,
-                          "Type":$eltTy)>,
+                     (ins "ArrayRef<int64_t>":$shape),
+                     /*defaultImplementation=*/[{
+                         return toLinearEncoding($_self, shape).getTotalElemsPerThread(shape);
+                     }]>,
     InterfaceMethod<"Return element size per thread in each dimension.",
                     "SmallVector<unsigned>",
                     "getElemsPerThread",
-                     (ins "ArrayRef<int64_t>":$tensorShape,
-                          "Type":$eltTy)>,
+                     (ins "ArrayRef<int64_t>":$shape),
+                     /*defaultImplementation=*/[{
+                         return toLinearEncoding($_self, shape).getElemsPerThread(shape);
+                     }]>,
     // Interface for the meta information about the multiple thread hierarchy.
     InterfaceMethod<"Get the shape of the warps per CTA.",
                     "SmallVector<unsigned>",
@@ -577,8 +581,7 @@ L(T) = [ {0,8} , {1,9} , {2,10}, {3,11}, {0,8} , {1, 9} , {2, 10}, {3, 11},
   }];
 
   code extraDistributedDeclaration  = extraBaseClassDeclaration # [{
-    unsigned getTotalElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const;
-    SmallVector<unsigned> getElemsPerThread(ArrayRef<int64_t> shape, Type eltTy) const;
+    // Implemented in subclasses
     SmallVector<unsigned> getRepOrder() const;
     SmallVector<unsigned> getCTAsPerCGA() const;
     SmallVector<unsigned> getCTAOrder() const;
@@ -613,6 +616,10 @@ def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding"
   let parameters = (ins LinearLayoutParam:$linearLayout);
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
+    // Generic distributed encoding methods
+    unsigned getTotalElemsPerThread(ArrayRef<int64_t> shape) const;
+    SmallVector<unsigned> getElemsPerThread(ArrayRef<int64_t> shape) const;
+
     SmallVector<unsigned> getContigPerThread() const;
     SmallVector<unsigned> getOrder() const;
 
@@ -965,7 +972,6 @@ V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,
       return true;
     }
     SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, int opIdx) const;
-    unsigned getTotalElemsPerThreadForOperand(ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const;
     SmallVector<int64_t> getInstrShapeForOperand(int kWidth, int opIdx) const;
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape, int kWidth, int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
@@ -1095,7 +1101,6 @@ Row |
       return true;
     }
     SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, int opIdx) const;
-    unsigned getTotalElemsPerThreadForOperand(ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const;
     SmallVector<int64_t> getElemsPerInstrForOperands() const;
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape,
                                           Type elemType, int kWidth, int opIdx) const;

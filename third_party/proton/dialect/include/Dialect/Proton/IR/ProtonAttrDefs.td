@@ -1,13 +1,7 @@
 #ifndef PROTON_ATTR_DEFS
 #define PROTON_ATTR_DEFS
 
-include "mlir/IR/AttrTypeBase.td"
-include "ProtonDialect.td"
-
-class Proton_Attr<string name, list<Trait> traits = [],
-                  string baseCppClass = "::mlir::Attribute">
-  : AttrDef<Proton_Dialect, name, traits, baseCppClass> {
-}
+include "mlir/IR/EnumAttr.td"
 
 def MetricAttr : I32EnumAttr<
   "Metric", "",
