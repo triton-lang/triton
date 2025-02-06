@@ -47,3 +47,33 @@ tt.func public @scalar_load(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: i32, %arg3: 
 }
 
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [4, 2], order = [1, 0]}>
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:90"} {
+
+// CHECK-LABEL: @make_tensor_desc_epilogue
+tt.func public @make_tensor_desc_epilogue(%arg0: i32, %arg1: !tt.ptr<f32>, %arg2: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+  %c1_i64 = arith.constant 1 : i64
+  // CHECK: scf.for
+  scf.for %arg3 = %c0_i32 to %arg0 step %c1_i32 : i32 {
+    %1 = tt.splat %arg1 {loop.cluster = 0 : i32, loop.stage = 0 : i32} : !tt.ptr<f32> -> tensor<128x256x!tt.ptr<f32>, #blocked>
+    %2 = tt.load %1 {loop.cluster = 0 : i32, loop.stage = 0 : i32} : tensor<128x256x!tt.ptr<f32>, #blocked>
+    %3 = arith.addf %2, %2 {loop.cluster = 5 : i32, loop.stage = 2 : i32} : tensor<128x256xf32, #blocked>
+    %4 = arith.cmpi eq, %arg3, %c1_i32 {loop.cluster = 5 : i32, loop.stage = 2 : i32} : i32
+    // CHECK: scf.if
+    scf.if %4 {
+      // CHECK-NOT: tt.make_tensor_descriptor
+      // CHECK: tt.experimental_tensormap_create
+      // CHECK-NEXT: tt.experimental_tensormap_fenceproxy_acquire
+      %5 = tt.make_tensor_descriptor %arg1, [%arg2, %arg2], [%c1_i64, %c1_i64] : <f32>, <tensor<128x256xf32>>
+    } {loop.cluster = 5 : i32, loop.stage = 2 : i32}
+  } {tt.num_stages = 3 : i32}
+  tt.return
+}
+
+}
