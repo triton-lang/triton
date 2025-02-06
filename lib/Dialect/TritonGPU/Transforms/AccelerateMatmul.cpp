@@ -242,6 +242,9 @@ static int computeOrigBitWidth(Value x) {
   int finalBitWidth = getElementTypeOrSelf(x).getIntOrFloatBitWidth();
   int origBitWidth = finalBitWidth;
   SetVector<Operation *> slice;
+  mlir::BackwardSliceOptions opt;
+  opt.omitBlockArguments = true;
+  opt.filter = bwdFilter;
   // TODO: This heuristic may be a bit too coarse and may need improving
   // If the chain contains a fp4 to fp16/bf16 conversion, then the original
   // bitwidth is 4.
@@ -249,11 +252,6 @@ static int computeOrigBitWidth(Value x) {
   if (llvm::any_of(slice, [](Operation *op) { return isa<Fp4ToFpOp>(op); }))
     return 4;
 
-  slice.clear();
-  mlir::BackwardSliceOptions opt;
-  opt.omitBlockArguments = true;
-  opt.filter = bwdFilter;
-  getBackwardSlice(x, &slice, opt);
   for (auto op : slice) {
     if (Value arg = op->getOperand(0))
       if (auto argTy = dyn_cast<RankedTensorType>(arg.getType())) {
