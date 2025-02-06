@@ -703,14 +703,14 @@ scf::IfOp replaceIfOpWithNewSignature(
   // Create a new loop before the existing one, with the extra operands.
   auto resultTypes = llvm::to_vector<4>(ifOp.getResults().getTypes());
   resultTypes.append(newResultTypes.begin(), newResultTypes.end());
-  scf::IfOp newIf = rewriter.create<scf::IfOp>(ifOp.getLoc(), resultTypes,
-                                               ifOp.getCondition());
+  scf::IfOp newIf = rewriter.create<scf::IfOp>(
+      ifOp.getLoc(), resultTypes, ifOp.getCondition(), /*withElse=*/true);
   newIf->setAttrs(ifOp->getAttrs());
 
-  newIf.getThenRegion().takeBody(ifOp.getThenRegion());
-  newIf.getElseRegion().takeBody(ifOp.getElseRegion());
-  scf::IfOp::ensureTerminator(newIf.getThenRegion(), rewriter, ifOp.getLoc());
-  scf::IfOp::ensureTerminator(newIf.getElseRegion(), rewriter, ifOp.getLoc());
+  rewriter.inlineBlockBefore(ifOp.thenBlock(), newIf.thenBlock(),
+                             newIf.thenBlock()->begin());
+  rewriter.inlineBlockBefore(ifOp.elseBlock(), newIf.elseBlock(),
+                             newIf.elseBlock()->begin());
 
   for (auto it : llvm::zip(ifOp.getResults(),
                            newIf.getResults().take_front(ifOp.getNumResults())))
