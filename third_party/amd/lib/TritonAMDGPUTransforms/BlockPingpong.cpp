@@ -409,7 +409,7 @@ void Pingponger::getDotPingponged() {
   // software pipelining and dot rank=2. Also only accept the for-loop with
   // supported combination of operations because this transformation is very
   // tightly scheduling the latencies.
-  if (gLoadOps.size() != 2 || lLoadOps.size() != 2 || dotOps.size() != 1)
+  if (gLoadOps.size() < 2 || lLoadOps.size() < 2 || dotOps.size() != 1)
     return;
 
   // Pingpong scheduling tries to form two different types of the instruction
@@ -447,6 +447,7 @@ void Pingponger::getDotPingponged() {
   auto elemWidth = aType.getElementTypeBitWidth();
   int64_t tileSize = dotShape[0] * dotShape[1] * aShape[1] * elemWidth;
 
+  const int64_t minTile = 262144;      // e.g. 32x128x64x16bit
   const int64_t smallTile = 16777216;  // e.g. 128x128x64x16bit
   const int64_t mediumTile = 33554432; // smallTile x 2
   const int64_t largeTile = 67108864;  // e.g. 256x256x64x16bit
@@ -465,11 +466,13 @@ void Pingponger::getDotPingponged() {
     // times for issuing the memory operations and issuing dot operations,
     // smaller tile sizes are not likely to get any advantage from current dot
     // centric pingpong scheduling.
-    if (tileSize == smallTile)
+    if (tileSize <= smallTile && tileSize >= minTile)
       transformOnePPClusters(builder, loc);
     // numWarps=4 doesn't need asymmetric sync, return.
     return;
   } else if (numWarps == 8) { // Pingpong between warps from the same block
+    if (gLoadOps.size() != 2 || lLoadOps.size() != 2)
+      return;
     // Transform a loop where the tile size requires dots to be sliced
     if (tileSize == mediumTile) {
       if (transformTwoPPClusters(builder, dotOps[0]->getLoc()).failed())
