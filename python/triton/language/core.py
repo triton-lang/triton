@@ -1265,7 +1265,7 @@ class _experimental_tensor_descriptor_base(_value):
         return f"tensor_descriptor<{self.type}>"
 
     @builtin
-    def load(self, offsets: List[constexpr | tensor], _builder=None) -> tensor:
+    def load(self, offsets: Sequence[constexpr | tensor], _builder=None) -> tensor:
         """Load a block from the descriptor starting at the given element offsets.
 
         Values outside of the tensor bounds will be filled with zeros.
@@ -1275,7 +1275,7 @@ class _experimental_tensor_descriptor_base(_value):
         return semantic.descriptor_load(self, offsets, "", "", _builder)
 
     @builtin
-    def store(self, offsets: List[constexpr | tensor], value: tensor, _builder=None) -> tensor:
+    def store(self, offsets: Sequence[constexpr | tensor], value: tensor, _builder=None) -> tensor:
         """Store a block from the descriptor starting at the given element offsets.
 
         Values outside of the tensor bounds will be ignored.
@@ -1982,7 +1982,7 @@ def _experimental_make_tensor_descriptor(
     On NVIDIA GPUs with TMA support, this will result in a TMA descriptor object
     and loads and stores from the descriptor will be backed by the TMA hardware.
 
-    Currently only 2d tensors are supported.
+    Currently only 2-5 dimensional tensors are supported.
 
     Example
     *******
