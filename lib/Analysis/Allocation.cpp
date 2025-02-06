@@ -79,15 +79,17 @@ std::pair<unsigned, unsigned>
 getScratchCvtInOutVecLengths(RankedTensorType srcTy, RankedTensorType dstTy) {
   Attribute srcLayout = srcTy.getEncoding();
   Attribute dstLayout = dstTy.getEncoding();
-  const auto &inOrd = gpu::getOrder(srcLayout);
-  const auto &outOrd = gpu::getOrder(dstLayout);
+
+  auto srcLinAttr = gpu::toLinearEncoding(srcLayout, srcTy.getShape());
+  auto dstLinAttr = gpu::toLinearEncoding(dstLayout, dstTy.getShape());
+  auto inOrd = srcLinAttr.getOrder();
+  auto outOrd = dstLinAttr.getOrder();
+
   unsigned rank = srcTy.getRank();
 
-  unsigned srcContigPerThread =
-      gpu::getUniqueContigPerThread(srcLayout, srcTy.getShape())[inOrd[0]];
-  unsigned dstContigPerThread =
-      gpu::getUniqueContigPerThread(dstLayout, dstTy.getShape())[outOrd[0]];
-  // TODO: Fix the legacy issue that ourOrd[0] == 0 always means
+  unsigned srcContigPerThread = srcLinAttr.getContigPerThread()[inOrd[0]];
+  unsigned dstContigPerThread = dstLinAttr.getContigPerThread()[outOrd[0]];
+  // TODO: Fix the legacy issue that outOrd[0] == 0 always means
   //       that we cannot do vectorization.
   unsigned innerDim = rank - 1;
   unsigned inVec = outOrd[0] != innerDim  ? 1
@@ -117,8 +119,7 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
   Attribute dstLayout = dstTy.getEncoding();
 
   assert(cvtNeedsSharedMemory(srcTy, dstTy));
-
-  const auto &outOrd = gpu::getOrder(dstLayout);
+  auto outOrd = gpu::toLinearEncoding(dstLayout, dstTy.getShape()).getOrder();
   scratchConfig.order = outOrd;
 
   std::tie(scratchConfig.inVec, scratchConfig.outVec) =

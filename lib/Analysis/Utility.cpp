@@ -22,37 +22,18 @@
 #include "triton/Tools/Sys/GetEnv.hpp"
 
 namespace mlir {
-namespace {
 
 using namespace triton;
 using namespace triton::gpu;
 
-int getParentAxis(Attribute layout, int axis) {
-  if (auto sliceEncoding = dyn_cast<SliceEncodingAttr>(layout)) {
-    axis = axis < sliceEncoding.getDim() ? axis : axis + 1;
-    return getParentAxis(sliceEncoding.getParent(), axis);
-  }
-  return axis;
-}
-
-SmallVector<unsigned> getParentOrder(Attribute layout) {
-  if (auto sliceEncoding = mlir::dyn_cast<SliceEncodingAttr>(layout)) {
-    return getParentOrder(sliceEncoding.getParent());
-  }
-  return getThreadOrder(layout);
-}
-
-} // namespace
-
 // TODO(jlebar): Move this class into namespace triton.
 bool ReduceOpHelper::isReductionOnLayoutFastAxis() {
-  return getParentAxis(getSrcLayout(), axis) ==
-         getParentOrder(getSrcLayout())[0];
+  auto linearEncoding = toLinearEncoding(getSrcLayout(), getSrcShape());
+  return linearEncoding.getOrder()[0] == axis;
 }
 
 SmallVector<unsigned> ReduceOpHelper::getOrderWithAxisAtBeginning() {
-  auto srcLayout = getSrcLayout();
-  auto order = getOrder(srcLayout);
+  auto order = toLinearEncoding(getSrcLayout(), getSrcShape()).getOrder();
   auto it = std::find(order.begin(), order.end(), axis);
   // delete the axis from order
   order.erase(it);
@@ -219,13 +200,13 @@ bool ReduceOpHelper::isSupportedLayout() {
 }
 
 unsigned ScanLoweringHelper::getAxisNumElementsPerThread() {
-  return getEncoding().getSizePerThread()[getAxis()];
+  return getEncoding().getContigPerThread()[getAxis()];
 }
 
 unsigned ScanLoweringHelper::getNonAxisNumElementsPerThread() {
-  SmallVector<unsigned> sizePerThreads = getContigPerThread(getEncoding());
-  sizePerThreads[getAxis()] = 1;
-  return product<unsigned>(sizePerThreads);
+  auto contigPerThread = getEncoding().getContigPerThread();
+  contigPerThread[getAxis()] = 1;
+  return product<unsigned>(contigPerThread);
 }
 
 Region &ScanLoweringHelper::getCombineOp() { return scanOp.getCombineOp(); }
@@ -235,7 +216,7 @@ unsigned ScanLoweringHelper::getAxisNumThreadsPerWarp() {
 }
 
 unsigned ScanLoweringHelper::getAxisNumThreadsPerWarpWithUniqueData() {
-  return getThreadsPerWarpWithUniqueData(getEncoding(), getShape())[getAxis()];
+  return getEncoding().getThreadsPerWarp()[getAxis()];
 }
 
 unsigned ScanLoweringHelper::getNonAxisNumThreadsPerWarp() {
@@ -262,26 +243,27 @@ unsigned ScanLoweringHelper::getAxisNumWarpsWithUniqueData() {
 }
 
 unsigned ScanLoweringHelper::getAxisNumBlocks() {
-  auto sizePerThreads = getSizePerThread(getEncoding());
+  auto contigPerThread = getEncoding().getContigPerThread();
   auto threadsPerWarp = getThreadsPerWarp(getEncoding());
   auto warpsPerCTA = getWarpsPerCTA(getEncoding());
   unsigned axis = getAxis();
   return ceil<unsigned>(
       getShape()[axis],
-      (sizePerThreads[axis] * threadsPerWarp[axis] * warpsPerCTA[axis]));
+      (contigPerThread[axis] * threadsPerWarp[axis] * warpsPerCTA[axis]));
 }
 
 unsigned ScanLoweringHelper::getNonAxisNumBlocks() {
-  auto sizePerThreads = getSizePerThread(getEncoding());
+  auto contigPerThread = getEncoding().getContigPerThread();
   auto threadsPerWarp = getThreadsPerWarp(getEncoding());
   auto warpsPerCTA = getWarpsPerCTA(getEncoding());
+  auto rank = contigPerThread.size();
   unsigned axis = getAxis();
   unsigned numBlocks = 1;
-  for (unsigned i = 0; i < sizePerThreads.size(); i++) {
+  for (unsigned i = 0; i < rank; i++) {
     if (i == axis)
       continue;
     numBlocks *=
-        ceil<unsigned>(getShape()[i], (sizePerThreads[i] * threadsPerWarp[i] *
+        ceil<unsigned>(getShape()[i], (contigPerThread[i] * threadsPerWarp[i] *
                                        warpsPerCTA[i]));
   }
   return numBlocks;
@@ -290,7 +272,7 @@ unsigned ScanLoweringHelper::getNonAxisNumBlocks() {
 bool ScanLoweringHelper::isSupported() {
   // TODO: Support the following cases:
   // 1. Scan on non-blocking encodings
-  if (!isa<BlockedEncodingAttr>(srcEncoding))
+  if (!isa<BlockedEncodingAttr>(legacyEncoding))
     return false;
   return true;
 }
@@ -579,23 +561,19 @@ getReshapeDecomposition(ArrayRef<int64_t> srcShape,
   return ret;
 }
 
-BlockedEncodingAttr ScanLoweringHelper::getEncoding() {
-  return cast<BlockedEncodingAttr>(srcEncoding);
-}
-
 unsigned ScanLoweringHelper::getAxisElementStride() {
-  auto order = getOrder(getEncoding());
+  auto order = getOrder();
   unsigned stride = 1;
   for (unsigned dim : order) {
     if (dim == getAxis())
       return stride;
-    stride *= getContigPerThread(getEncoding())[dim];
+    stride *= getEncoding().getContigPerThread()[dim];
   }
   llvm_unreachable("Axis not found in order");
 }
 
 unsigned ScanLoweringHelper::getAxisThreadStride() {
-  auto order = getOrder(getEncoding());
+  auto order = getOrder();
   unsigned stride = 1;
   for (unsigned dim : order) {
     if (dim == getAxis())
@@ -606,15 +584,15 @@ unsigned ScanLoweringHelper::getAxisThreadStride() {
 }
 
 unsigned ScanLoweringHelper::getAxisBlockStride() {
-  auto order = getOrder(getEncoding());
+  auto order = getOrder();
   unsigned stride = 1;
-  auto sizePerThreads = getSizePerThread(getEncoding());
+  auto contigPerThread = getEncoding().getContigPerThread();
   auto threadsPerWarp = getThreadsPerWarp(getEncoding());
   auto warpsPerCTA = getWarpsPerCTA(getEncoding());
   for (unsigned dim : order) {
     if (dim == getAxis())
       return stride;
-    stride *= ceil<unsigned int>(getShape()[dim], sizePerThreads[dim] *
+    stride *= ceil<unsigned int>(getShape()[dim], contigPerThread[dim] *
                                                       threadsPerWarp[dim] *
                                                       warpsPerCTA[dim]);
   }

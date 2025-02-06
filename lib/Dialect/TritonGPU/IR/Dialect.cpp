@@ -35,7 +35,7 @@ namespace gpu {
 
 LinearEncodingAttr toLinearEncoding(Attribute layout, ArrayRef<int64_t> shape) {
   auto linearLayout = toLinearLayout(shape, layout);
-  return LinearEncodingAttr::get(layout.getContext(), linearLayout);
+  return LinearEncodingAttr::get(layout.getContext(), std::move(linearLayout));
 }
 
 unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape) {
@@ -122,8 +122,8 @@ SmallVector<unsigned> getContigPerThread(Attribute layout) {
   }
 }
 
-SmallVector<unsigned> getUniqueContigPerThread(Attribute layout,
-                                               ArrayRef<int64_t> shape) {
+SmallVector<unsigned> oldGetUniqueContigPerThread(Attribute layout,
+                                                  ArrayRef<int64_t> shape) {
   // If slice layout, call recursively on parent layout, and drop
   // sliced dim
   if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(layout)) {
@@ -154,6 +154,14 @@ SmallVector<unsigned> getUniqueContigPerThread(Attribute layout,
   }
   return ret;
 }
+
+SmallVector<unsigned> getUniqueContigPerThread(Attribute layout,
+                                               ArrayRef<int64_t> shape) {
+  auto linearLayout = toLinearLayout(shape, layout);
+  auto llAttr = LinearEncodingAttr::get(layout.getContext(), linearLayout);
+  return llAttr.getContigPerThread();
+}
+
 SmallVector<unsigned> getShapePerCTATile(Attribute layout) {
   if (auto distributedLayout =
           mlir::dyn_cast<DistributedEncodingTrait>(layout)) {
@@ -1205,7 +1213,7 @@ SmallVector<unsigned> LinearEncodingAttr::getSizePerThread() const {
 
   llvm::SetVector<unsigned> reverseRepOrder;
   auto nonZero = [](auto val) { return val != 0; };
-  auto &registers = bases[StringAttr::get(ctx, "register")];
+  auto &registers = bases[kRegister];
   while (!registers.empty()) {
     auto &basis = registers.back();
     auto it = std::find_if(basis.begin(), basis.end(), nonZero);
@@ -1264,7 +1272,6 @@ LinearEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
   return scaledLayout.basesPerDim(kRegister, /*skipBroadcast=*/false);
 }
 
-// Start of Selection
 SmallVector<unsigned> LinearEncodingAttr::getContigPerThread() const {
   auto ll = getLinearLayout();
   const auto &regs =
