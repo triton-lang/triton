@@ -63,3 +63,26 @@ module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32,
     tt.return
   }
 }
+
+// -----
+
+// Different layouts
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @invalid_concat(
+    %arg0: tensor<32x64xf32, #blocked>,
+    %arg1: tensor<32x64xf32, #blocked>,
+    %arg2: tensor<32x64xf32, #blocked>,
+    %arg3: tensor<32x64xf32, #blocked>,
+    %arg4: tensor<32x64xf32, #blocked>,
+    %arg5: tensor<32x64xf32, #blocked>,
+    %arg6: tensor<32x64xf32, #blocked>,
+    %arg7: tensor<32x64xf32, #blocked1>) {
+
+    // expected-error @+1 {{sources are expected to have the same type}}
+    %1 = amdgpu.concat %arg0, %arg1, %arg2, %arg3, %arg4, %arg5, %arg6, %arg7 [4, 2] :
+    tensor<32x64xf32, #blocked>,tensor<32x64xf32, #blocked>, tensor<32x64xf32, #blocked>, tensor<32x64xf32, #blocked>, tensor<32x64xf32, #blocked>, tensor<32x64xf32, #blocked>, tensor<32x64xf32, #blocked>, tensor<32x64xf32, #blocked1> -> tensor<128x128xf32, #blocked>
+    tt.return
+  }
+}

@@ -175,8 +175,9 @@ LogicalResult ConcatOp::verify() {
     auto scaledSrcDim = srcShape[idx] * coordValue;
     if (dstShape[idx] != scaledSrcDim) {
       return emitError() << "mismatch along dim [" << idx
-                         << "]. Expected size `" << dstShape[idx] << "`; give `"
-                         << scaledSrcDim << "` after concatenation";
+                         << "]. Expected size `" << dstShape[idx]
+                         << "`; given `" << scaledSrcDim
+                         << "` after concatenation";
     }
   }
 
