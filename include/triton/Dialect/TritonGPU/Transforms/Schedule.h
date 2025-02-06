@@ -64,9 +64,12 @@ public:
 
   public:
     using iterator = decltype(orderClusters)::iterator;
+    using const_iterator = decltype(orderClusters)::const_iterator;
     ClusterList() = default;
     iterator begin() { return orderClusters.begin(); }
+    const_iterator begin() const { return orderClusters.begin(); }
     iterator end() { return orderClusters.end(); }
+    const_iterator end() const { return orderClusters.end(); }
     size_t size() { return orderClusters.size(); }
     iterator newAtBack() {
       orderClusters.push_back(orderClusters.size());
@@ -85,6 +88,18 @@ public:
         clusterId++;
       }
       return ret;
+    }
+
+    bool isBefore(iterator a, iterator b) const {
+      for (auto it = begin(); it != end(); ++it) {
+        if (it == a)
+          return true;
+        if (it == b)
+          return false;
+      }
+      llvm::report_fatal_error(
+          "One or both clusters not found in clusters list!");
+      return false;
     }
   };
 

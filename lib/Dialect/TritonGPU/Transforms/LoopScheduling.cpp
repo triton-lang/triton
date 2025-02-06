@@ -407,6 +407,12 @@ static Value createAlloc(scf::ForOp &forOp, Operation *loadOp,
   return alloc;
 }
 
+void createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
+                     Value insertIdx, Value extractIdx,
+                     CoarseSchedule &schedule) {
+  OpBuilder builder(forOp);
+}
+
 void lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
   struct AsyncLoad {
     int stageDiff;
@@ -440,6 +446,72 @@ void lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
         createAlloc(forOp, loadOp, sharedEncoding, asyncLoad.stageDiff);
     asyncLoad.alloc = alloc;
     loadGroups.insert({asyncLoad.stageDiff, {}});
+  }
+
+  IRRewriter builder(forOp);
+  builder.setInsertionPoint(forOp);
+  Location loc = forOp.getLoc();
+  // Create a counter to index into the allocations per loop iteration.
+  // NOTE: We create two duplicates values, insertIdx and extractIdx so that the
+  // pipeliner will re-materialize the value in later stages of the pipeline
+  // instead of carrying it as a dependency across multiple iterations.
+  Value minusOne = builder.create<arith::ConstantIntOp>(loc, -1, 32);
+  Value zero = builder.create<arith::ConstantIntOp>(loc, 0, 32);
+  Value one = builder.create<arith::ConstantIntOp>(loc, 1, 32);
+  SmallVector<Value> newOperands;
+  unsigned newOperandIndex = forOp.getBody()->getNumArguments();
+  for (auto [_, loadGroup] : loadGroups) {
+    newOperands.push_back(minusOne); // insertIdx
+    newOperands.push_back(minusOne); // extractIdx
+    // TODO: Add tma support / phase
+  }
+
+  // Patch the loop to add the new loop carried dependencies.
+  scf::ForOp newForOp =
+      replaceForOpWithNewSignature(builder, forOp, newOperands);
+  forOp.erase();
+  forOp = newForOp;
+
+  // Update yield op with temporary yield values
+  auto forYield = cast<scf::YieldOp>(newForOp.getBody()->getTerminator());
+  for (unsigned i = 0; i < newOperands.size(); ++i) {
+    forYield.getResultsMutable().append(newOperands[i]);
+  }
+
+  builder.setInsertionPoint(forOp);
+  loc = forOp.getLoc();
+  int argIdx = newOperandIndex;
+  for (auto &[numBuffers, loadGroup] : loadGroups) {
+    Value insertIdx = newForOp.getBody()->getArgument(argIdx);
+    argIdx++;
+    Value extractIdx = newForOp.getBody()->getArgument(argIdx);
+    argIdx++;
+    // TODO: Add tma support / phase
+
+    // Create two counters for the insert and extract indices to avoid creating
+    // long liverange.
+    builder.setInsertionPoint(forOp.getBody(), forOp.getBody()->begin());
+
+    Value numBuffersVal =
+        builder.create<arith::ConstantIntOp>(loc, numBuffers, 32);
+    insertIdx = builder.create<arith::AddIOp>(loc, insertIdx, one);
+    Value cndIns = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
+                                                 insertIdx, numBuffersVal);
+    insertIdx = builder.create<arith::SelectOp>(loc, cndIns, insertIdx, zero);
+    loadGroup.insertIdx = insertIdx;
+
+    extractIdx = builder.create<arith::AddIOp>(loc, extractIdx, one);
+    // Duplicate the constant to keep it from being carried across loops.
+    numBuffersVal = builder.create<arith::ConstantIntOp>(loc, numBuffers, 32);
+    Value cndExt = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
+                                                 extractIdx, numBuffersVal);
+    extractIdx = builder.create<arith::SelectOp>(loc, cndExt, extractIdx, zero);
+    loadGroup.extractIdx = extractIdx;
+  }
+
+  for (auto [loadOp, asyncLoad] : asyncLoads) {
+    auto [insertIdx, extractIdx, phase, _] = loadGroups[asyncLoad.stageDiff];
+    createAsyncCopy(forOp, loadOp, asyncLoad.alloc, insertIdx, extractIdx);
   }
 }
 
