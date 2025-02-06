@@ -390,16 +390,19 @@ getSharedEncoding(Operation *loadOp, bool isTMALoad) {
     }
   }
 
+  if (localAllocEnc) {
+    if (auto sharedMMALayout =
+            dyn_cast<ttg::NVMMASharedEncodingAttr>(localAllocEnc)) {
+      if (sharedMMALayout.getFp4Padded()) {
+        // For MMAv5 mixed precision, MMA and TMA encodings must agree.
+        return localAllocEnc;
+      }
+    }
+  }
+
   if (isTMALoad) {
     // For TMA, the encoding compatible with it takes precedence over local
     // alloc created for the MMA operand.
-    if (localAllocEnc) {
-      if (auto sharedMMALayout =
-              dyn_cast<ttg::NVMMASharedEncodingAttr>(localAllocEnc)) {
-        assert(!sharedMMALayout.getFp4Padded() &&
-               "TMA load for mixed precision MMAv5 is not supported yet.");
-      }
-    }
     return ttg::NVMMASharedEncodingAttr::get(
         ty.getContext(), ty.getShape(), order, ctaLayout, ty.getElementType(),
         /*fp4Padded*/ false);
