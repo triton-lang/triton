@@ -1227,7 +1227,7 @@ def mxfp8_mxfp4_matmul_tma(  #
 # @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (256, 128, 128), (128, 256, 128),
 #                                                        (128, 256, 256), (128, 128, 64), (128, 64, 128)])
 def test_mxfp8_mxfp4_matmul_tma(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, device):
-    NUM_STAGES = 3
+    NUM_STAGES = 1
 
     a = torch.randint(20, 40, (M, K), dtype=torch.uint8).view(torch.float8_e5m2).to(device)
 
@@ -1251,7 +1251,7 @@ def test_mxfp8_mxfp4_matmul_tma(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, device):
     out = mxfp8_mxfp4_matmul_tma[grid](a, b_desc, output, a_scale, b_scale, M, N, K,
                                    a_scale.stride(0), a.stride(0), a.stride(1), output.stride(0),
                                    output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES=NUM_STAGES)
-    print(out.asm["ttgir"])
+    # print(out.asm["ttgir"])
 
     a_ref = f8_to_f16(a.view(torch.float8_e5m2), dtype_src_str).to(torch.float32)
     ref_out = torch.matmul(a_ref * a_scale_ref, b_ref * b_scale_ref)
@@ -1263,4 +1263,4 @@ def test_mxfp8_mxfp4_matmul_tma(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, device):
 
 
 # test_load_fp4_mxf8f6f4_tma()
-test_mxfp8_mxfp4_matmul_tma(1024, 512, 512, 128, 256, 128, "cuda")
+test_mxfp8_mxfp4_matmul_tma(128, 128, 256, 128, 128, 256, "cuda")

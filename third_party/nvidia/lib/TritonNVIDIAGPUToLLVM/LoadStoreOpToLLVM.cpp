@@ -1214,7 +1214,8 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     int64_t size = totalNumElements * elementSizeInBytes;
 
     int innerBlockSize = op.getResult().getType().getShape().back();
-    int contigDimSizeInByte = innerBlockSize * elementSizeInBytes;
+llvm::outs() << "lowering: packing factor = " << op.getPackingFactor() << "\n";
+    int contigDimSizeInByte = innerBlockSize * elementSizeInBytes * op.getPackingFactor().convertToFloat();
     int numCopies = 1;
     int rank = op.getCoord().size();
     if (rank > 1)
@@ -1225,6 +1226,8 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     // https://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__TENSOR__MEMORY.html#group__CUDA__TENSOR__MEMORY_1ga7c7d2aaac9e49294304e755e6f341d7
     // We clamp the block size and the codegen will emit multiple copy
     // operations.
+    llvm::outs() << "numCopies: " << numCopies << "\n";
+    llvm::outs () << "contigDimSizeInByte: " << contigDimSizeInByte << "\n";
     for (int copyIdx = 0; copyIdx < numCopies; copyIdx += numWarps) {
       int numWarpsToCopy = std::min(numCopies - copyIdx, numWarps);
       if (numWarpsToCopy == 1)

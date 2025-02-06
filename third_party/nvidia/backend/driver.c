@@ -341,8 +341,6 @@ static PyObject *fill2DTMADescriptor(PyObject *self, PyObject *args) {
   uint32_t elementStrides[2] = {1, 1};
   CUtensorMapDataType type;
 
-  printf("dims, tensorDims, packing factor: %ld, %ld, %ld, %ld, %f\n", dims[0], dims[1], tensorDims[0], tensorDims[1], packing_factor);
-
   if (packing_factor != 1) {
     if (packing_factor = 2) {
       type = CU_TENSOR_MAP_DATA_TYPE_16U4_ALIGN16B;
@@ -372,6 +370,7 @@ static PyObject *fill2DTMADescriptor(PyObject *self, PyObject *args) {
   // descriptor we rely on a convention between this function and codegen.
   CUtensorMapSwizzle swizzle = CU_TENSOR_MAP_SWIZZLE_128B;
   uint32_t contigDimSizeInByte = elementSize * tensorDims[0];
+
   if (contigDimSizeInByte >= 128) {
     swizzle = CU_TENSOR_MAP_SWIZZLE_128B;
   } else if (contigDimSizeInByte >= 64) {
@@ -387,7 +386,11 @@ static PyObject *fill2DTMADescriptor(PyObject *self, PyObject *args) {
   // We clamp the block size and the codegen will emit multiple copy operations.
   if (contigDimSizeInByte > 128) {
     tensorDims[0] = 128 / elementSize;
+    printf("shrink smem box size \n");
   }
+
+  printf("dims, tensorDims, packing factor, contigDimSizeInByte: %ld, %ld, %ld, %ld, %f, %d\n", dims[0], dims[1], tensorDims[0], tensorDims[1], packing_factor, contigDimSizeInByte);
+
   static cuTensorMapEncodeTiled_t cuTensorMapEncodeTiled = NULL;
   INITIALIZE_FUNCTION_POINTER_IF_NULL(cuTensorMapEncodeTiled,
                                       getCuTensorMapEncodeTiledHandle);
