@@ -307,7 +307,6 @@ static unsigned getIntTypeWidth(Type type) {
 static Value computeNumIters(ImplicitLocOpBuilder &b, scf::ForOp loop) {
   // len(range(lb, ub, step)) = ceildiv(ub - lb, step)
   // This works even if step is negative.
-  Location loc = loop.getLoc();
   Value diff =
       b.create<arith::SubIOp>(loop.getUpperBound(), loop.getLowerBound());
   // Let someone else prove it can be unsigned.
