@@ -29,6 +29,32 @@
 using namespace mlir;
 using namespace mlir::triton;
 
+namespace mlir::LLVM {
+using namespace mlir::triton;
+
+Value createConstantI1(Location loc, OpBuilder &rewriter, bool v);
+Value createConstantI32(Location loc, OpBuilder &rewriter, int32_t v);
+Value createConstantI64(Location loc, OpBuilder &rewriter, int64_t v);
+Value createConstantF16(Location loc, OpBuilder &rewriter, float v);
+Value createConstantBF16(Location loc, OpBuilder &rewriter, float v);
+Value createConstantF32(Location loc, OpBuilder &rewriter, float v);
+Value createConstantF64(Location loc, OpBuilder &rewriter, double v);
+Value createNaNConstant(Location loc, OpBuilder &rewriter, Type type);
+Value createIndexConstant(OpBuilder &builder, Location loc,
+                          const TypeConverter *converter, int64_t value);
+Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
+                                int64_t value);
+
+LLVM::CallOp createLLVMCallOp(OpBuilder &builder, Location loc,
+                              LLVMFuncOp funcOp, ValueRange args);
+LLVM::CallIntrinsicOp
+createLLVMIntrinsicCallOp(OpBuilder &builder, Location loc, StringRef intrinsic,
+                          TypeRange types, ValueRange args);
+} // namespace mlir::LLVM
+
+// Is v an integer or floating-point scalar constant equal to 0?
+bool isConstantZero(Value v);
+
 namespace mlir::triton {
 
 // Returns CTA level thread idx
@@ -248,26 +274,15 @@ struct TritonLLVMOpBuilder {
   Value i1_val(int64_t val) { return int_val(1, val); }
   Value true_val() { return int_val(1, true); }
   Value false_val() { return int_val(1, false); }
-  Value f16_val(float v) {
-    auto type = type::f16Ty(builder->getContext());
-    return builder->create<LLVM::ConstantOp>(loc, type,
-                                             builder->getF16FloatAttr(v));
-  }
-  Value f32_val(float v) {
-    auto type = type::f32Ty(builder->getContext());
-    return builder->create<LLVM::ConstantOp>(loc, type,
-                                             builder->getF32FloatAttr(v));
-  }
-  Value f64_val(double v) {
-    auto type = type::f64Ty(builder->getContext());
-    return builder->create<LLVM::ConstantOp>(loc, type,
-                                             builder->getF64FloatAttr(v));
-  }
+  Value f16_val(float v) { return LLVM::createConstantF16(loc, *builder, v); }
+  Value bf16_val(float v) { return LLVM::createConstantBF16(loc, *builder, v); }
+  Value f32_val(float v) { return LLVM::createConstantF32(loc, *builder, v); }
+  Value f64_val(double v) { return LLVM::createConstantF64(loc, *builder, v); }
   Value i8_val(int64_t val) { return int_val(8, val); }
   Value i16_val(int64_t val) { return int_val(16, val); }
   Value i32_val(int64_t val) { return int_val(32, val); }
   Value i64_val(int64_t val) { return int_val(64, val); }
-  Value tid_val() { return getThreadId(*this->builder, loc); }
+  Value tid_val() { return getThreadId(*builder, loc); }
 
   Location loc;
   OpBuilder *builder;
@@ -375,24 +390,6 @@ LLVM::LLVMFuncOp appendOrGetExternFuncOp(RewriterBase &rewriter, Operation *op,
 namespace LLVM {
 using namespace mlir::triton;
 
-Value createConstantI1(Location loc, OpBuilder &rewriter, bool v);
-Value createConstantI32(Location loc, OpBuilder &rewriter, int32_t v);
-Value createConstantI64(Location loc, OpBuilder &rewriter, int64_t v);
-Value createConstantF16(Location loc, OpBuilder &rewriter, float v);
-Value createConstantF32(Location loc, OpBuilder &rewriter, float v);
-Value createConstantF64(Location loc, OpBuilder &rewriter, double v);
-Value createNaNConstant(Location loc, OpBuilder &rewriter, Type type);
-Value createIndexConstant(OpBuilder &builder, Location loc,
-                          const TypeConverter *converter, int64_t value);
-Value createLLVMIntegerConstant(OpBuilder &builder, Location loc, short width,
-                                int64_t value);
-
-LLVM::CallOp createLLVMCallOp(OpBuilder &builder, Location loc,
-                              LLVMFuncOp funcOp, ValueRange args);
-LLVM::CallIntrinsicOp
-createLLVMIntrinsicCallOp(OpBuilder &builder, Location loc, StringRef intrinsic,
-                          TypeRange types, ValueRange args);
-
 // Is v an integer or floating-point scalar constant equal to 0?
 bool isConstantZero(Value v);
 
@@ -430,8 +427,8 @@ public:
   SmallVector<Value> getStrides(triton::gpu::MemDescType memDesc, Location loc,
                                 RewriterBase &rewriter) const {
     auto allocShape = memDesc.getAllocShape();
-    auto allocShapePerCTA =
-        triton::gpu::getShapePerCTA(memDesc.getEncoding(), allocShape);
+    auto allocShapePerCTA = triton::gpu::getAllocationShapePerCTA(
+        memDesc.getEncoding(), allocShape);
     auto layoutOrder = triton::gpu::getOrder(memDesc.getEncoding());
     auto allocStrides = SharedMemoryObject::getStridesForShape(
         allocShapePerCTA, layoutOrder, loc, rewriter);
@@ -1291,9 +1288,12 @@ inline Value packLLVector(Location loc, ValueRange vals,
 inline bool
 isSimpleSharedMemoryAccess(ArrayRef<int64_t> shape,
                            ArrayRef<int64_t> allocShape,
-                           triton::gpu::SharedEncodingAttr sharedEnc) {
+                           triton::gpu::SharedEncodingTrait sharedEnc) {
   auto rank = shape.size();
-  return /*no swizzling*/ sharedEnc.getMaxPhase() == 1 ||
+  auto swizzledLayout =
+      dyn_cast<triton::gpu::SwizzledSharedEncodingAttr>(sharedEnc);
+  bool noSwizzling = swizzledLayout && swizzledLayout.getMaxPhase() == 1;
+  return /*no swizzling*/ noSwizzling ||
          /*swizzling but same shape*/ shape == allocShape ||
          /*swizzling and rank-reduced and rank >= 2*/
          (shape == allocShape.take_back(rank) && rank >= 2);

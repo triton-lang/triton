@@ -14,7 +14,7 @@ using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getShapePerCTATile;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
-using ::mlir::triton::gpu::SharedEncodingAttr;
+using ::mlir::triton::gpu::NVMMASharedEncodingAttr;
 
 mlir::triton::NVIDIA::DotOpMmaV5TmemLoader::DotOpMmaV5TmemLoader(
     Value tensor, Value base, SmallVector<unsigned int> instrShape,
@@ -61,7 +61,8 @@ enum class mxfpKind { mxf8f6f4 = 0, mxf4 = 1, mxf4nvf4 = 2 };
 inline mxfpKind getMXFPKind(ScaleDotElemType typeA, ScaleDotElemType typeB,
                             Type scaleAType, Type scaleBType) {
   if (typeA == ScaleDotElemType::E2M1 && typeB == ScaleDotElemType::E2M1) {
-    if (scaleAType.isFloat8E4M3FN() && scaleBType.isFloat8E4M3FN()) {
+    if (llvm::isa<Float8E4M3FNType>(scaleAType) &&
+        llvm::isa<Float8E4M3FNType>(scaleBType)) {
       return mxfpKind::mxf4nvf4;
     }
     return mxfpKind::mxf4;
@@ -102,9 +103,9 @@ static Value createInstDescriptor(ConversionPatternRewriter &rewriter,
       return 1;
     if (type.isF32())
       return 2;
-    if (type.isFloat8E4M3FN())
+    if (llvm::isa<Float8E4M3FNType>(type))
       return 0;
-    if (type.isFloat8E5M2())
+    if (llvm::isa<Float8E5M2Type>(type))
       return 1;
     llvm_unreachable("Unsupported type.");
   };
@@ -227,7 +228,7 @@ static void createGen5MMA(ConversionPatternRewriter &rewriter, Location loc,
     opcode += "f16";
   else if (srcElementTy.isF32())
     opcode += "tf32";
-  else if (srcElementTy.isFloat8E4M3FN() || srcElementTy.isFloat8E5M2())
+  else if (llvm::isa<Float8E4M3FNType, Float8E5M2Type>(srcElementTy))
     opcode += "f8f6f4";
   else
     assert(0 && "Unsupported type.");
@@ -343,14 +344,12 @@ void convertDot(const LLVMTypeConverter *typeConverter,
   bool aInTmem = true;
   bool transA = false;
   if (auto aSharedLayout =
-          dyn_cast<SharedEncodingAttr>(aTensorTy.getEncoding())) {
-    auto aOrd = aSharedLayout.getOrder();
-    transA = aOrd[0] == 0;
+          dyn_cast<NVMMASharedEncodingAttr>(aTensorTy.getEncoding())) {
+    transA = aSharedLayout.getTransposed();
     aInTmem = false;
   }
-  auto bSharedLayout = cast<SharedEncodingAttr>(bTensorTy.getEncoding());
-  auto bOrd = bSharedLayout.getOrder();
-  bool transB = bOrd[0] == 1;
+  auto bSharedLayout = cast<NVMMASharedEncodingAttr>(bTensorTy.getEncoding());
+  bool transB = !bSharedLayout.getTransposed();
   Value baseA =
       getSharedMemoryObjectFromStruct(
           loc, loadedA, typeConverter->convertType(aTensorTy.getElementType()),
@@ -434,10 +433,10 @@ struct TCGen5MMAOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto AEnc = op.getA().getType().getEncoding();
     auto BEnc = op.getB().getType().getEncoding();
-    assert(mlir::isa<SharedEncodingAttr>(AEnc) ||
+    assert(mlir::isa<NVMMASharedEncodingAttr>(AEnc) ||
            mlir::isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(AEnc) &&
                "Operand A should use Shared or Tensor memory layout.");
-    assert(mlir::isa<SharedEncodingAttr>(BEnc) &&
+    assert(mlir::isa<NVMMASharedEncodingAttr>(BEnc) &&
            "Operand B should use Shared layout.");
     assert(op.getBarrier() &&
            "tensorcore op should have a barrier at this point.");
@@ -490,14 +489,12 @@ struct TCGen5MMAScaledOpConversion
     bool aInTmem = true;
     bool transA = false;
     if (auto aSharedLayout =
-            dyn_cast<SharedEncodingAttr>(aTensorTy.getEncoding())) {
-      auto aOrd = aSharedLayout.getOrder();
-      transA = aOrd[0] == 0;
+            dyn_cast<NVMMASharedEncodingAttr>(aTensorTy.getEncoding())) {
+      transA = aSharedLayout.getTransposed();
       aInTmem = false;
     }
-    auto bSharedLayout = cast<SharedEncodingAttr>(bTensorTy.getEncoding());
-    auto bOrd = bSharedLayout.getOrder();
-    bool transB = bOrd[0] == 1;
+    auto bSharedLayout = cast<NVMMASharedEncodingAttr>(bTensorTy.getEncoding());
+    bool transB = !bSharedLayout.getTransposed();
     Value baseA =
         getSharedMemoryObjectFromStruct(
             loc, adaptor.getA(),
@@ -543,8 +540,10 @@ struct TCGen5MMAScaledOpConversion
     bool interleaved = (mmaSizeM == 64 && (numRepM > 1 || numRepN > 1));
 
     Value zero = tb.i32_val(0);
-    SmallVector<int64_t> shapeA(aTensorTy.getShape());
-    SmallVector<int64_t> shapeB(bTensorTy.getShape());
+    SmallVector<int64_t> shapeA(
+        triton::gpu::getAllocationShapePerCTA(aTensorTy));
+    SmallVector<int64_t> shapeB(
+        triton::gpu::getAllocationShapePerCTA(bTensorTy));
     if (opKindIsMXFP4) {
       shapeA[1] *= 2;
       shapeB[0] *= 2;

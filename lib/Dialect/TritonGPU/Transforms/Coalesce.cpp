@@ -38,7 +38,7 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
     });
 
     auto contiguity = axisInfoAnalysis.getAxisInfo(ptr)->getContiguity();
-    SmallVector<unsigned> order = getOrderFromContiguity(contiguity);
+    SmallVector<unsigned> order = argSort(contiguity);
     LDBG("order=[" << triton::join(order, ", ") << "]");
 
     auto matchesShape = [&refTensorType](const Value &val) {
@@ -55,8 +55,8 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
         Value val = getMemAccessPtr(use);
         if (!val || !matchesShape(val) || memAccessesSameOrder.contains(use))
           continue;
-        auto currOrder = getOrderFromContiguity(
-            axisInfoAnalysis.getAxisInfo(val)->getContiguity());
+        auto currOrder =
+            argSort(axisInfoAnalysis.getAxisInfo(val)->getContiguity());
         if (order == currOrder) {
           LDBG("multi-root-slice: insert to memAccessesSameOrder " << *use);
           memAccessesSameOrder.insert(use);
@@ -120,7 +120,7 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
     for (auto operand : op->getOperands()) {
       auto tensorType = dyn_cast<RankedTensorType>(operand.getType());
       if (tensorType &&
-          !isa<triton::gpu::SharedEncodingAttr>(tensorType.getEncoding())) {
+          !isa<triton::gpu::SharedEncodingTrait>(tensorType.getEncoding())) {
         Type newType = getNewType(tensorType, encoding);
         newArgs.push_back(builder.create<triton::gpu::ConvertLayoutOp>(
             op->getLoc(), newType, operand));

@@ -559,11 +559,9 @@ TEST_F(LinearEncodingTest, DistributedEncodingToLinearEncoding) {
       Type eltTy = Float32Type::get(&ctx);
 
       ASSERT_EQ(getOrder(distributedEncoding), linearEncoding.getRepOrder());
-      ASSERT_EQ(cast<triton::gpu::TritonGPU_AttrTrait>(distributedEncoding)
-                    .getTotalElemsPerThread(shape, eltTy),
+      ASSERT_EQ(distributedEncoding.getTotalElemsPerThread(shape, eltTy),
                 linearEncoding.getTotalElemsPerThread(shape, eltTy));
-      ASSERT_EQ(cast<triton::gpu::TritonGPU_AttrTrait>(distributedEncoding)
-                    .getElemsPerThread(shape, eltTy),
+      ASSERT_EQ(distributedEncoding.getElemsPerThread(shape, eltTy),
                 linearEncoding.getElemsPerThread(shape, eltTy));
       ASSERT_EQ(distributedEncoding.getRepOrder(),
                 linearEncoding.getRepOrder());
@@ -597,16 +595,15 @@ TEST_F(LinearEncodingTest, DistributedEncodingToLinearEncoding) {
       // block level
       // SliceEncoding is not well-defined for CGAs
       if (!isa<triton::gpu::SliceEncodingAttr>(distributedEncoding)) {
-        ASSERT_EQ(distributedEncoding.getCTASplitNum(),
+        auto baseEncoding = cast<LayoutEncodingTrait>(distributedEncoding);
+        ASSERT_EQ(baseEncoding.getCTASplitNum(),
                   linearEncoding.getCTASplitNum());
-        ASSERT_EQ(distributedEncoding.getCTAsPerCGA(),
-                  linearEncoding.getCTAsPerCGA());
+        ASSERT_EQ(baseEncoding.getCTAsPerCGA(), baseEncoding.getCTAsPerCGA());
         // If we are not using CGAs, the order is meaningless
-        auto useCGA = distributedEncoding.getCTAsPerCGA() !=
-                      SmallVector<unsigned>(rank, 1);
+        auto useCGA =
+            baseEncoding.getCTAsPerCGA() != SmallVector<unsigned>(rank, 1);
         if (useCGA) {
-          ASSERT_EQ(distributedEncoding.getCTAOrder(),
-                    linearEncoding.getCTAOrder());
+          ASSERT_EQ(baseEncoding.getCTAOrder(), linearEncoding.getCTAOrder());
         }
       }
     }

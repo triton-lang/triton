@@ -210,7 +210,6 @@ def test_hook(tmp_path: pathlib.Path):
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
 def test_hook_gpu_kernel(tmp_path: pathlib.Path, context: str):
-    tmp_path = pathlib.Path("./")
 
     def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
         x = args["x"]
@@ -257,7 +256,7 @@ def test_pcsampling(tmp_path: pathlib.Path):
             tl.store(y + offs, tl.load(x + offs))
 
     temp_file = tmp_path / "test_pcsampling.hatchet"
-    proton.start(str(temp_file.with_suffix("")), hook="triton", backend="cupti_pcsampling")
+    proton.start(str(temp_file.with_suffix("")), hook="triton", backend="cupti", mode="pcsampling")
     with proton.scope("init"):
         x = torch.ones((1024, ), device="cuda", dtype=torch.float32)
         y = torch.zeros_like(x)

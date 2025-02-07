@@ -30,6 +30,21 @@
           "flops8": 1e10,
           "bytes": 1e7
         }
+      },
+      {
+        "children": [],
+        "frame": {
+          "name": "foo2",
+          "type": "function"
+        },
+        "metrics": {
+          "count": 1,
+          "device_id": "2",
+          "device_type": "CUDA",
+          "time (ns)": 204800,
+          "flops8": 1e11,
+          "bytes": 1e7
+        }
       }
     ],
     "frame": {
@@ -58,6 +73,13 @@
         "clock_rate": 1980000,
         "memory_clock_rate": 2619000,
         "num_sms": 132
+      },
+      "2": {
+        "arch": "100",
+        "bus_width": 6144,
+        "clock_rate": 1700000,
+        "memory_clock_rate": 2619000,
+        "num_sms": 148
       }
     }
   }

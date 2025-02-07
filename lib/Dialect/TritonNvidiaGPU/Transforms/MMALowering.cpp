@@ -34,7 +34,7 @@ public:
         /*context=*/ctx, /*CTAsPerCGA=*/{1},
         /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
     auto barrierEncoding =
-        SharedEncodingAttr::get(ctx, 1, 1, 1, {0}, barrierCTALayout);
+        SwizzledSharedEncodingAttr::get(ctx, 1, 1, 1, {0}, barrierCTALayout);
     MemDescType barrierMemDescType =
         MemDescType::get({1}, rewriter.getI64Type(), barrierEncoding,
                          sharedMemorySpace, /*mutableMemory=*/true);
