@@ -3,7 +3,7 @@
 namespace mlir {
 
 static bool isF8F6F4(mlir::Type t) {
-  return llvm::isa<Float8E4M3FNUZType, Float8E5M2FNUZType, Float6E3M2FNType,
+  return llvm::isa<Float8E4M3FNType, Float8E5M2Type, Float6E3M2FNType,
                    Float6E2M3FNType, Float4E2M1FNType>(t);
 }
 

@@ -25,6 +25,7 @@
 #include "TritonAMDGPUTransforms/MfmaGroup.h"
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -49,23 +50,14 @@ using ValueTable = std::map<std::array<int, 3>, Value>;
 /// - 2: E2M3(FP6)
 /// - 3: E3M2(BF6)
 /// - 4: E2M1(FP4)
-static inline int32_t getMfmaF8F6F4MatrixFormat(mlir::Type t) {
-  if (llvm::isa<Float8E4M3FNUZType>(t)) {
-    return 0;
-  }
-  if (llvm::isa<Float8E5M2FNUZType>(t)) {
-    return 1;
-  }
-  if (llvm::isa<Float6E3M2FNType>(t)) {
-    return 2;
-  }
-  if (llvm::isa<Float6E2M3FNType>(t)) {
-    return 3;
-  }
-  if (llvm::isa<Float4E2M1FNType>(t)) {
-    return 4;
-  }
-  return -1;
+static inline int32_t getMfmaF8F6F4MatrixFormat(Type t) {
+  return llvm::TypeSwitch<Type, int32_t>(t)
+      .Case<Float8E4M3FNType>([](Type) { return 0; })
+      .Case<Float8E5M2Type>([](Type) { return 1; })
+      .Case<Float6E3M2FNType>([](Type) { return 2; })
+      .Case<Float6E2M3FNType>([](Type) { return 3; })
+      .Case<Float4E2M1FNType>([](Type) { return 4; })
+      .Default([](Type) { return -1; });
 }
 
 struct DotOpMFMAConversionHelper {
@@ -750,16 +742,16 @@ LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 
   assert(isa<DotOperandEncodingAttr>(rankedTType(op.getA()).getEncoding()) &&
          isa<DotOperandEncodingAttr>(rankedTType(op.getB()).getEncoding()) &&
-         "Both $a and %b should be DotOperand layout.");
+         "Both A and B should be DotOperand layout.");
 
   auto cTensorTy = rankedTType(op.getC());
   auto dTensorTy = rankedTType(op.getD());
   assert(isa<AMDMfmaEncodingAttr>(cTensorTy.getEncoding()) &&
-         "Currently, we only support $c with a mfma layout.");
+         "Currently, we only support C with a mfma layout.");
 
   assert(cTensorTy.getShape()[0] == dTensorTy.getShape()[0] &&
          cTensorTy.getShape()[1] == dTensorTy.getShape()[1] &&
-         "DotOp's $c operand should pass the same number of values as $d");
+         "DotOp's C operand should pass the same number of values as D.");
 
   auto loc = op.getLoc();
   auto mfmaLayout = cast<AMDMfmaEncodingAttr>(
@@ -774,26 +766,22 @@ LogicalResult convertScaledMFMA(triton::DotScaledOp op,
                                 triton::DotScaledOp::Adaptor adaptor,
                                 const LLVMTypeConverter *typeConverter,
                                 ConversionPatternRewriter &rewriter) {
-  auto rankedTType = [](Value tensor) {
-    return cast<RankedTensorType>(tensor.getType());
-  };
+  assert(isa<DotOperandEncodingAttr>(op.getLhs().getType().getEncoding()) &&
+         isa<DotOperandEncodingAttr>(op.getRhs().getType().getEncoding()) &&
+         "Both lhs and rhs should be DotOperand layout.");
 
-  assert(isa<DotOperandEncodingAttr>(rankedTType(op.getLhs()).getEncoding()) &&
-         isa<DotOperandEncodingAttr>(rankedTType(op.getRhs()).getEncoding()) &&
-         "Both $lhs and $rhs should be DotOperand layout.");
+  assert(isa<LinearEncodingAttr>(op.getLhsScale().getType().getEncoding()) &&
+         isa<LinearEncodingAttr>(op.getRhsScale().getType().getEncoding()) &&
+         "Both LhsScale and RhsScale should be linear layout.");
 
-  assert(isa<LinearEncodingAttr>(rankedTType(op.getLhsScale()).getEncoding()) &&
-         isa<LinearEncodingAttr>(rankedTType(op.getRhsScale()).getEncoding()) &&
-         "Both $lhs_scale and $rhs_scale should be linear layout.");
-
-  auto cTensorTy = rankedTType(op.getC());
-  auto dTensorTy = rankedTType(op.getD());
+  auto cTensorTy = op.getC().getType();
+  auto dTensorTy = op.getD().getType();
   assert(isa<AMDMfmaEncodingAttr>(cTensorTy.getEncoding()) &&
-         "Currently, we only support $c with a mfma layout.");
+         "Currently, we only support C with a mfma layout.");
 
   assert(cTensorTy.getShape()[0] == dTensorTy.getShape()[0] &&
          cTensorTy.getShape()[1] == dTensorTy.getShape()[1] &&
-         "DotOp's $c operand should pass the same number of values as $d");
+         "DotOp's C operand should pass the same number of values as D.");
 
   auto loc = op.getLoc();
   auto mfmaLayout = cast<AMDMfmaEncodingAttr>(

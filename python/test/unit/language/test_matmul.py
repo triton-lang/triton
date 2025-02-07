@@ -719,13 +719,13 @@ def block_scale_fp4_matmul(  #
 def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, scale_type, nonKDim, device):
     if is_cuda() and torch.cuda.get_device_capability()[0] < 10:
         pytest.skip("Requires compute capability >= 10")
-    if is_hip():
+    elif is_hip():
         if not is_hip_mi350():
-            pytest.skip("Only supported on MI350")
+            pytest.skip("Scaled fp4 matmul is only natively supported on MI350")
         if scale_type != 'float8_e8m0fnu':
-            pytest.skip("AMDGPU only support E8M0 scale")
+            pytest.skip("MI350 only supports E8M0 scale")
         if (nonKDim == 16 and BLOCK_K < 128) or (nonKDim == 32 and BLOCK_K < 64):
-            pytest.skip("Unsupported block size")
+            pytest.skip(f"MI350 does not support {BLOCK_K=} for scaled mfma {nonKDim=} variants")
 
     NUM_STAGES = 1
     torch.manual_seed(42)

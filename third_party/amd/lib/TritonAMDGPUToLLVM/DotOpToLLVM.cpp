@@ -27,7 +27,7 @@ LogicalResult convertWMMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 
 namespace {
 struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
-  using ConvertOpToLLVMPattern<triton::DotOp>::ConvertOpToLLVMPattern;
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
 
   LogicalResult
   matchAndRewrite(triton::DotOp op, OpAdaptor adaptor,

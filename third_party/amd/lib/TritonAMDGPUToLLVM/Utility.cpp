@@ -607,9 +607,9 @@ Type scaleDotElemTypeToMLIRType(MLIRContext *ctx, triton::ScaleDotElemType t) {
   case triton::ScaleDotElemType::BF16:
     return BFloat16Type::get(ctx);
   case triton::ScaleDotElemType::E4M3:
-    return Float8E4M3FNUZType::get(ctx);
+    return Float8E4M3FNType::get(ctx);
   case triton::ScaleDotElemType::E5M2:
-    return Float8E5M2FNUZType::get(ctx);
+    return Float8E5M2Type::get(ctx);
   case triton::ScaleDotElemType::E3M2:
     return Float6E3M2FNType::get(ctx);
   case triton::ScaleDotElemType::E2M3:

@@ -807,16 +807,57 @@ public:
     auto aEncLL = newAEncoding.toLinearLayout(a.getType().getShape());
     auto standardOutDims = llvm::to_vector(aEncLL.getOutDimNames());
 
+    // Here we create linear layout for aScale and bScale, which consists of
+    // multiple layers:
+    // - register: Elements distributed alone M/N dimension, which will be
+    // calculated sequentially with multiple mfma instructions. It's initialized
+    // first and will be adjusted after all other layouts settle down to cover
+    // all over the block.
+    // - lane: Elements distributed in a warp(64 lanes). It varies in different
+    // shapes and data types. Details will be listed below separately.
+    // - warp: Indicating how tiles are distributed among the tensor. It's
+    // related to the warp layout of its corresponding A/B operand's.
+    // - block: Block distribution. For now, we just keep it empty.
     using basisT = std::vector<std::vector<int32_t>>;
     auto createLinearLayout = [&](int idx, const basisT &warpBasis) {
       LinearLayout lanes = LinearLayout::empty();
+      // In scaled dot, the shapes of operands(without batch dimension) are,
+      // respectively:
+      // - A: [M, K]
+      // - B: [K, N]
+      // - aScale: [M, K / 32]
+      // - bScale: [N, K / 32]
+      //
+      // To correctly feed A/B and its scale into instruction, we need to
+      // distribute aScale/bScale among warps in the same way as A/B. But bScale
+      // is not transposed like B. So we need to transpose the warp layout of
+      // bScale.
+      //
+      // The tricky part is, our desired outputs are [dim0, dim1], but
+      // at this position, the layouts are transposed to [dim1, dim0]. So
+      // instead of reverse bScale's layout, we need to reverse aScale's. There
+      // will be a transpose in the end to correct everything.
       basisT warps = warpBasis;
       if (idx == 0) {
         for (auto &basis : warps) {
           std::reverse(basis.begin(), basis.end());
         }
       }
+      // In general, for both 32x32 and 16x16 scaled mfma, and no matter what
+      // data type the A/B operand is, each lane takes 32 elements from A/B
+      // alone K dim, and 1 or 2 elements from scale accordingly. The number of
+      // scale's elements in a lane varies because the 32 elements from A/B may
+      // not be consecutive.
+      //
+      // For mxfp4, these 32 elements are consecutive, so only 1 scale element
+      // is required. But for mxfp6/mxfp8, there are 2 16-consecutive elements
+      // blocks, so 2 scale elements are required.
       if (mDim == 32) {
+        // For ROCDL::mfma_scale_f32_32x32x64_f8f6f4 with fp4 input, each lane
+        // takes 32 consecutive elements from A alone K dimension. The first
+        // 32 lanes share A[0:32][0:32], and the other 32 lanes share
+        // A[0:32][32:64]. Each lane take 1 scale element accordingly. Similar
+        // to B and bScale.
         lanes = LinearLayout(
             {{kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {1, 0}}},
              {kWarp, warps},
@@ -824,6 +865,11 @@ public:
             {standardOutDims[order[0]], standardOutDims[order[1]]});
       } else {
         assert(mDim == 16);
+        // For ROCDL::mfma_scale_f32_16x16x128_f8f6f4 with fp4 input, each lane
+        // takes 32 consecutive elements from A alone K dimension. The first
+        // 16 lanes share A[0:16][0:32], and another 16 lanes share
+        // A[0:16][32:64] and so on. Each lane take 1 scale element accordingly.
+        // Similar to B and bScale.
         lanes = LinearLayout(
             {{kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {1, 0}, {2, 0}}},
              {kWarp, warps},
@@ -1214,8 +1260,7 @@ public:
     case ISAFamily::CDNA3: {
       patterns.add<::ScaledBlockedToScaledMFMAF8F6F4>(
           context, getMfmaVersion(isaFamily), matrixInstructionSize,
-          /*kPack=*/1,
-          /*benefit=*/10);
+          /*kPack=*/1, /*benefit=*/10);
       patterns.add<::BlockedToMFMA, ::ScaledBlockedToMFMA>(
           context, getMfmaVersion(isaFamily), matrixInstructionSize, kPack,
           /*benefit=*/2);
