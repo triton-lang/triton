@@ -275,6 +275,10 @@ bool TCGen5MMAOp::verifyDims() {
 
 Value TCGen5MMAOp::useAccumulator() { return getUseD(); }
 
+void TCGen5MMAOp::setUseAccumulator(Value flag) {
+  getUseDMutable().assign(flag);
+}
+
 void TCGen5MMAOp::setBarrier(Value barrier) {
   getBarrierMutable().assign(barrier);
 }
@@ -332,6 +336,10 @@ bool TCGen5MMAScaledOp::verifyDims() {
 }
 
 Value TCGen5MMAScaledOp::useAccumulator() { return getUseD(); }
+
+void TCGen5MMAScaledOp::setUseAccumulator(Value flag) {
+  getUseDMutable().assign(flag);
+}
 
 void TCGen5MMAScaledOp::setBarrier(Value barrier) {
   getBarrierMutable().assign(barrier);
