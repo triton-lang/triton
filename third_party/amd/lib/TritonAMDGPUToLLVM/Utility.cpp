@@ -482,13 +482,13 @@ getCtrlBitsForCacheModifierOnGFX_942_950(triton::CacheModifier cm,
     aux |= sc0Bit | ntBit;
     break;
   case triton::CacheModifier::CV:
-    aux |= sc0Bit | sc1Bit;
+    aux |= sc0Bit | sc1Bit | ntBit;
     break;
   case triton::CacheModifier::WB:
     aux = 0;
     break;
   case triton::CacheModifier::WT:
-    aux |= sc1Bit;
+    aux |= sc0Bit | sc1Bit | ntBit;
     break;
   default:
     aux = 0;
