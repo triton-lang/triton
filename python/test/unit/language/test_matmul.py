@@ -153,7 +153,8 @@ def simple_persistent_kernel(a_ptr, b_ptr, c_ptr, M, N, K, stride_am, stride_ak,
                              stride_bk, stride_bn,  #
                              stride_cm, stride_cn, BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr,
                              BLOCK_SIZE_K: tl.constexpr,  #
-                             GROUP_SIZE_M: tl.constexpr, NUM_SMS: tl.constexpr):
+                             GROUP_SIZE_M: tl.constexpr, NUM_SMS: tl.constexpr,
+                             DISALLOW_ACC_MULTI_BUFFER: tl.constexpr):
     start_pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
@@ -177,7 +178,7 @@ def simple_persistent_kernel(a_ptr, b_ptr, c_ptr, M, N, K, stride_am, stride_ak,
 
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
-    for _ in range(0, k_tiles * tiles_per_SM):
+    for _ in tl.range(0, k_tiles * tiles_per_SM, disallow_acc_multi_buffer=DISALLOW_ACC_MULTI_BUFFER):
         ki = tl.where(ki == k_tiles - 1, 0, ki + 1)
         if ki == 0:
             tile_id += NUM_SMS
@@ -226,7 +227,8 @@ def simple_persistent_kernel(a_ptr, b_ptr, c_ptr, M, N, K, stride_am, stride_ak,
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 16), (64, 128, 32), (32, 32, 32), (256, 128, 16),
                                                        (64, 512, 16), (512, 64, 16), (64, 16, 16)])
 @pytest.mark.parametrize("NUM_WARPS", [4, 8])
-def test_simple_persistent_matmul(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, device):
+@pytest.mark.parametrize("DISALLOW_ACC_MULTI_BUFFER", [True, False])
+def test_simple_persistent_matmul(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, DISALLOW_ACC_MULTI_BUFFER, device):
     M, N, K = 1024, 512, 256
     NUM_STAGES = 3
     a = torch.randn(M, K, dtype=torch.float16, device=device)
@@ -244,7 +246,8 @@ def test_simple_persistent_matmul(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, device):
         b.stride(0), b.stride(1),  #
         output.stride(0), output.stride(1),  #
         BLOCK_SIZE_M=BLOCK_M, BLOCK_SIZE_N=BLOCK_N, BLOCK_SIZE_K=BLOCK_K,  #
-        GROUP_SIZE_M=8, NUM_SMS=NUM_SMS, num_stages=NUM_STAGES, num_warps=NUM_WARPS)
+        GROUP_SIZE_M=8, NUM_SMS=NUM_SMS, DISALLOW_ACC_MULTI_BUFFER=DISALLOW_ACC_MULTI_BUFFER, num_stages=NUM_STAGES,
+        num_warps=NUM_WARPS)
     ref_out = torch.matmul(a.to(torch.float32), b.to(torch.float32)).to(torch.float16)
 
     torch.testing.assert_close(ref_out, output, atol=0.01, rtol=0.01)
@@ -256,8 +259,10 @@ def test_simple_persistent_matmul(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, device):
     if (device == "cuda" and torch.cuda.get_device_capability()[0] == 10 and BLOCK_M % 64 == 0 and BLOCK_N % 8 == 0
             and BLOCK_N > 16):
         ttgir = k.asm["ttgir"]
-        pattern = (r"ttng.wait_barrier %arg")
-        assert re.search(pattern, str(ttgir)), "The TTGIR does not match the expected pattern."
+        # if we disallow multi-buffering, we expect 2 barriers (one after the dot product and one before the use)
+        expected_barriers = 2 if DISALLOW_ACC_MULTI_BUFFER else 1
+        pattern = "ttng.wait_barrier %arg"
+        assert ttgir.count(pattern) == expected_barriers, "Unexpected number of barriers in the TTGIR."
 
 
 @triton.jit

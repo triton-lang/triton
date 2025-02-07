@@ -2870,7 +2870,7 @@ class range:
     """
 
     def __init__(self, arg1, arg2=None, step=None, num_stages=None, loop_unroll_factor=None,
-                 disallow_acc_multi_buffer=None):
+                 disallow_acc_multi_buffer=False):
         if step is None:
             self.step = constexpr(1)
         else:
