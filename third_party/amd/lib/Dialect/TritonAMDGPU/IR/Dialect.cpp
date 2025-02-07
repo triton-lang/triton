@@ -161,6 +161,10 @@ LogicalResult ConcatOp::verify() {
     return emitError() << "sources and the destination are expected to have "
                           "the same element type";
 
+  if (dstType.getEncoding() != srcType.getEncoding())
+    return emitError() << "sources and the destination are expected to have "
+                          "the same layout";
+
   auto dstShape = dstType.getShape();
   auto srcShape = srcType.getShape();
   if (dstShape.size() != srcShape.size())
