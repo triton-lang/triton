@@ -62,7 +62,7 @@ struct MMAInfo {
 // accumulator for the given MMA operation. The TMEMAllocOp and TMEMLoadOp must
 // be in the same region as the MMA operation.
 std::optional<std::pair<ttng::TMEMAllocOp, ttng::TMEMLoadOp>>
-getTMemAllocAndLoad(Operation* mmaOp) {
+getTMemAllocAndLoad(ttng::MMAv5OpInterface mmaOp) {
   auto acc = mmaOp->getOperand(2).getDefiningOp<ttng::TMEMAllocOp>();
   if (!acc || acc->getParentRegion() != mmaOp->getParentRegion()) {
     return std::nullopt;
@@ -230,18 +230,19 @@ getAccUseFlagFalseInLoop(scf::ForOp forOp, Value useAccFlagUse) {
 }
 
 std::optional<MMAInfo::AccOverridePoint>
-getAccOverrideOrFlagFalseInLoop(scf::ForOp forOp, Operation *mmaOp) {
+getAccOverrideOrFlagFalseInLoop(scf::ForOp forOp,
+                                ttng::MMAv5OpInterface mmaOp) {
   auto tmemAllocAndLoad = getTMemAllocAndLoad(mmaOp);
   assert(tmemAllocAndLoad.has_value() && "Expected tmem alloc and load");
   auto [accAlloc, accLoad] = tmemAllocAndLoad.value();
   auto accOverridePoint = getAccOverridePointInLoop(forOp, accAlloc, accLoad);
 
   if (!accOverridePoint.has_value()) {
-    if (auto op = dyn_cast<ttng::TCGen5MMAOp>(mmaOp)) {
-      auto useAccFlag = op.getUseD();
+    if (auto op = dyn_cast<ttng::TCGen5MMAOp>(&mmaOp)) {
+      auto useAccFlag = op->getUseD();
       accOverridePoint = getAccUseFlagFalseInLoop(forOp, useAccFlag);
-    } else if (auto op = dyn_cast<ttng::TCGen5MMAScaledOp>(mmaOp)) {
-      auto useAccFlag = op.getUseD();
+    } else if (auto op = dyn_cast<ttng::TCGen5MMAScaledOp>(&mmaOp)) {
+      auto useAccFlag = op->getUseD();
       accOverridePoint = getAccUseFlagFalseInLoop(forOp, useAccFlag);
     }
   }
@@ -490,7 +491,8 @@ void updateAccDefsInLoop(IRRewriter &builder, scf::ForOp forOp, MMAInfo &info,
 // hoisted tmem allocs. Also, update the acc loads and stores to use the new
 // tmem allocs.
 void hoistAndUseTMemAlloc(IRRewriter &builder, scf::ForOp forOp,
-                          Operation *mmaOp, MMAInfo &info, int numStages) {
+                          ttng::MMAv5OpInterface mmaOp, MMAInfo &info,
+                          int numStages) {
   builder.setInsertionPoint(forOp);
   Value zero = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 0, 32);
   Value one = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 1, 32);
@@ -515,10 +517,10 @@ void hoistAndUseTMemAlloc(IRRewriter &builder, scf::ForOp forOp,
         createSingleBufferView(builder, insertSlice, info.accInsertIdx);
   }
 
-  if (auto op = dyn_cast<ttng::TCGen5MMAOp>(mmaOp)) {
-    op.getDMutable().assign(insertSlice);
-  } else if (auto op = dyn_cast<ttng::TCGen5MMAScaledOp>(mmaOp)) {
-    op.getDMutable().assign(insertSlice);
+  if (auto op = dyn_cast<ttng::TCGen5MMAOp>(&mmaOp)) {
+    op->getDMutable().assign(insertSlice);
+  } else if (auto op = dyn_cast<ttng::TCGen5MMAScaledOp>(&mmaOp)) {
+    op->getDMutable().assign(insertSlice);
   }
 
   updateAccUsesInLoop(builder, forOp, info, newAlloc, numStages);
@@ -545,7 +547,8 @@ void hoistAndUseTMemAlloc(IRRewriter &builder, scf::ForOp forOp,
 
 // Create multi-buffered barrier allocs and lower the MMA to MMA + wait barrier
 void createBarrierAndWaitOps(IRRewriter &builder, scf::ForOp forOp,
-                             Operation *mmaOp, MMAInfo &info, int numStages) {
+                             ttng::MMAv5OpInterface mmaOp, MMAInfo &info,
+                             int numStages) {
   builder.setInsertionPoint(forOp);
   Value zero = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 0, 32);
   Value one = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 1, 32);
@@ -560,10 +563,10 @@ void createBarrierAndWaitOps(IRRewriter &builder, scf::ForOp forOp,
   Value barrierSlice =
       createSingleBufferView(builder, info.barrierAlloc, info.barrierIdx);
 
-  if (auto op = dyn_cast<ttng::TCGen5MMAOp>(mmaOp)) {
-    op.getBarrierMutable().assign(barrierSlice);
-  } else if (auto op = dyn_cast<ttng::TCGen5MMAScaledOp>(mmaOp)) {
-    op.getBarrierMutable().assign(barrierSlice);
+  if (auto op = dyn_cast<ttng::TCGen5MMAOp>(&mmaOp)) {
+    op->getBarrierMutable().assign(barrierSlice);
+  } else if (auto op = dyn_cast<ttng::TCGen5MMAScaledOp>(&mmaOp)) {
+    op->getBarrierMutable().assign(barrierSlice);
   }
 
   builder.setInsertionPointAfter(mmaOp);
@@ -653,11 +656,11 @@ FailureOr<scf::ForOp> preProcessLoopForTC05MMAPipelining(scf::ForOp forOp,
   }
 
   IRRewriter builder(forOp->getContext());
-  for (auto mmaOp : mmaOps) {
+  for (auto op : mmaOps) {
     // Avoid pipelining if in the backward slice of the mmaOp there is an
     // operation that is already assigned a stage, as it would make the pipeline
     // deeper than we are prepared for.
-    auto mmav5Op = cast<ttng::MMAv5OpInterface>(mmaOp);
+    auto mmaOp = cast<ttng::MMAv5OpInterface>(op);
     SetVector<Operation *> backwardSlice;
     BackwardSliceOptions opt;
     opt.omitBlockArguments = true;
