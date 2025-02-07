@@ -124,7 +124,7 @@ struct ExtractSliceOpConversion
   matchAndRewrite(amdgpu::ExtractSliceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto srcTy = op.getSource().getType();
-    if (isa<BlockedEncodingAttr, AMDMfmaEncodingAttr>(
+    if (isa<BlockedEncodingAttr, AMDMfmaEncodingAttr, DotOperandEncodingAttr>(
             op.getSource().getType().getEncoding())) {
       return processLayout(op, adaptor, rewriter);
     }
