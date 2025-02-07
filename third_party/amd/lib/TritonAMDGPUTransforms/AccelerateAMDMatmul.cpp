@@ -549,8 +549,6 @@ public:
     ScaleDotElemType bElemType = dotOp.getRhsType();
     auto supportsTypes = [](ScaleDotElemType elemType) {
       return elemType == ScaleDotElemType::E2M1 ||
-             elemType == ScaleDotElemType::E2M3 ||
-             elemType == ScaleDotElemType::E3M2 ||
              elemType == ScaleDotElemType::E4M3 ||
              elemType == ScaleDotElemType::E5M2 ||
              elemType == ScaleDotElemType::BF16 ||
@@ -741,6 +739,9 @@ public:
 
     ttg::CTALayoutAttr ctaLayout = ttg::getCTALayout(oldRetType.getEncoding());
     unsigned numWarps = ttg::TritonGPUDialect::getNumWarps(moduleOp);
+    if (numWarps == 1)
+      return rewriter.notifyMatchFailure(dotOp,
+                                         "num_warps==1 is not supported");
 
     // Choose a suitable Scaled MFMA instruction for this scaled dot op.
     FailureOr<MfmaInsn> mfmaInstr =
