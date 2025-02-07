@@ -10,8 +10,6 @@ include "mlir/Interfaces/SideEffectInterfaces.td"
 include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 include "ProtonDialect.td"
 include "ProtonAttrDefs.td"
-include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
-
 
 class TT_Proton_Op<string mnemonic, list<Trait> traits = []> :
     Op<Proton_Dialect, mnemonic, !listconcat(traits, [])> {

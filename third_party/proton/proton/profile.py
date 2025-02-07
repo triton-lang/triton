@@ -1,6 +1,7 @@
 import functools
 import triton
 import os
+import pathlib
 
 from triton._C.libproton import proton as libproton
 from .hook import register_triton_hook, unregister_triton_hook
@@ -20,6 +21,18 @@ def _select_backend() -> str:
         raise ValueError("No backend is available for the current target.")
 
 
+def _get_backend_default_path(backend: str) -> str:
+    lib_path = ""
+    if backend == "cupti":
+        # First try to get the path from the environment variable that overrides the default path
+        lib_path = os.getenv("TRITON_CUPTI_LIB_PATH", None)
+        if lib_path is None:
+            # Get the default path for the cupti backend,
+            # which is the most compatible with the current CUPTI header file triton is compiled with
+            lib_path = str(pathlib.Path(__file__).parent.parent.absolute() / "backends" / "nvidia" / "lib" / "cupti")
+    return lib_path
+
+
 def _check_env(backend: str) -> None:
     if backend == "roctracer":
         hip_device_envs = ["HIP_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES"]
@@ -33,9 +46,9 @@ def _check_env(backend: str) -> None:
 def _check_mode(backend: str, mode: Optional[str]) -> None:
     # TODO(Keren): Need a better mode registration mechanism
     backend_modes = {
-        "cupti": [None, "pcsampling"],
-        "roctracer": [None],
-        "instrumentation": [None],
+        "cupti": ["", "pcsampling"],
+        "roctracer": [""],
+        "instrumentation": [""],
     }
 
     if mode not in backend_modes[backend]:
@@ -89,20 +102,21 @@ def start(
         # Ignore the start() call if the script is run from the command line.
         return
 
-    if name is None:
-        name = DEFAULT_PROFILE_NAME
-
-    if backend is None:
-        backend = _select_backend()
+    name = DEFAULT_PROFILE_NAME if name is None else name
+    backend = _select_backend() if backend is None else backend
+    mode = "" if mode is None else mode
 
     _check_env(backend)
-
     _check_mode(backend, mode)
 
+    backend_path = _get_backend_default_path(backend)
+
     set_profiling_on()
-    if hook and hook == "triton":
+
+    if hook == "triton":
         register_triton_hook()
-    return libproton.start(name, context, data, backend)
+
+    return libproton.start(name, context, data, backend, mode, backend_path)
 
 
 def activate(session: Optional[int] = None) -> None:
