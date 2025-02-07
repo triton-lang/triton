@@ -285,7 +285,7 @@ void init_triton_llvm(py::module &&m) {
 
   m.def(
       "optimize_module",
-      [](llvm::Module *mod, const llvm::OptimizationLevel &opt,
+      [](llvm::Module *mod, const llvm::OptimizationLevel opt,
          std::string arch, std::string features, std::vector<std::string> flags,
          bool enable_fp_fusion) {
         if (mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT"))
