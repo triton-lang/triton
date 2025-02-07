@@ -29,7 +29,7 @@
 #include "TritonAMDGPUTransforms/Passes.h"
 
 #undef DEBUG_TYPE
-#define DEBUG_TYPE "tritonamdgpu-stream-pipeline"
+#define DEBUG_TYPE "tritonamdgpu-refine-ops"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
@@ -99,6 +99,71 @@ inline bool isRowMajor(::llvm::ArrayRef<unsigned> order) {
   return order[rank - 1] == 0;
 }
 
+LogicalResult rewriteLocalLoad(OpBuilder &rewriter,
+                               triton::gpu::LocalLoadOp op) {
+  auto *ctx = op->getContext();
+  auto loc = op->getLoc();
+
+  auto resultType = cast<RankedTensorType>(op.getType());
+  auto resultElementType = resultType.getElementType();
+  auto resultEncode = cast<DotOperandEncodingAttr>(resultType.getEncoding());
+  auto resultShape = resultType.getShape();
+  auto opIdx = resultEncode.getOpIdx();
+
+  auto mfmaLayout = cast<AMDMfmaEncodingAttr>(resultEncode.getParent());
+  int kWidth = resultEncode.getKWidth();
+  auto reps = mfmaLayout.getRepForOperand(resultShape, kWidth, opIdx);
+
+  auto memDesc = op->getOperand(0);
+  auto memDescType = cast<ttg::MemDescType>(memDesc.getType());
+  auto memDescEncoding =
+      cast<triton::gpu::SwizzledSharedEncodingAttr>(memDescType.getEncoding());
+
+  SmallVector<int64_t> refinedShape(resultShape);
+  SmallVector<int64_t> numReps = {1, 1};
+  bool rowMajor = isRowMajor(memDescEncoding.getOrder());
+  auto sliceAxis = opIdx == 0 ? 0 : 1;
+  if (opIdx == 0) {
+    numReps[sliceAxis] = rowMajor ? reps[1] : 1;
+    refinedShape[sliceAxis] /= numReps[sliceAxis];
+  } else {
+    numReps[sliceAxis] = rowMajor ? 1 : reps[2];
+    refinedShape[sliceAxis] /= numReps[sliceAxis];
+  }
+  auto elementsPerSlice = refinedShape[sliceAxis];
+  LDBG("LocalLoad: numRep: " << numReps[sliceAxis] << " : " << *op);
+
+  auto refinedTensorType =
+      RankedTensorType::get(refinedShape, resultElementType, resultEncode);
+
+  constexpr bool mutableMemory = true;
+  auto sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
+  auto subviewType = ttg::MemDescType::get(
+      refinedShape, memDescType.getElementType(), memDescType.getEncoding(),
+      sharedMemorySpace, mutableMemory);
+
+  rewriter.setInsertionPointAfter(op);
+  SmallVector<Value> subtiles;
+  for (int32_t i = 0; i < numReps[sliceAxis]; ++i) {
+    int32_t shift = i * elementsPerSlice;
+    int64_t offset0 = sliceAxis == 0 ? shift : 0;
+    int64_t offset1 = sliceAxis == 0 ? 0 : shift;
+    auto offset = createOffset({}, {offset0, offset1}, rewriter, loc);
+    auto refinedView = rewriter.create<ttg::MemDescSubviewOp>(loc, subviewType,
+                                                              memDesc, offset);
+    auto refinedLoad =
+        rewriter.create<ttg::LocalLoadOp>(loc, refinedTensorType, refinedView);
+    subtiles.push_back(refinedLoad);
+  }
+
+  auto concatDims = DenseI64ArrayAttr::get(ctx, numReps);
+  auto joinedResult = rewriter.create<triton::amdgpu::ConcatOp>(
+      loc, resultType, subtiles, concatDims);
+
+  op.replaceAllUsesWith(joinedResult.getResult());
+  return success();
+}
+
 struct DotOpMFMAConverter {
   AMDMfmaEncodingAttr mfmaLayout;
   OpBuilder &rewriter;
@@ -121,9 +186,6 @@ struct DotOpMFMAConverter {
     Value b = dotOp.getB();
     Value c = dotOp.getC();
     Value d = dotOp.getD();
-
-    auto localLoadA = cast<ttg::LocalLoadOp>(a.getDefiningOp());
-    auto localLoadB = cast<ttg::LocalLoadOp>(b.getDefiningOp());
 
     auto aTensorTy = cast<RankedTensorType>(a.getType());
     auto bTensorTy = cast<RankedTensorType>(b.getType());
@@ -155,20 +217,8 @@ struct DotOpMFMAConverter {
     Value loadedB = adaptor.getB();
     Value loadedC = adaptor.getC();
 
-    auto memDescA = localLoadA->getOperand(0);
-    auto memDescTypeA = cast<ttg::MemDescType>(memDescA.getType());
-    auto memDescEncodingA = cast<triton::gpu::SwizzledSharedEncodingAttr>(
-        memDescTypeA.getEncoding());
-
-    auto memDescB = localLoadB->getOperand(0);
-    auto memDescTypeB = cast<ttg::MemDescType>(memDescB.getType());
-    auto memDescEncodingB = cast<triton::gpu::SwizzledSharedEncodingAttr>(
-        memDescTypeB.getEncoding());
-
-    // TODO: adjusting `numRepX` using `isRowMajor` is a work around.
-    // it needs to be fixed in the future.
-    const auto numRepM = isRowMajor(memDescEncodingA.getOrder()) ? repA[1] : 1;
-    const auto numRepN = isRowMajor(memDescEncodingB.getOrder()) ? 1 : repB[2];
+    const auto numRepM = repA[1];
+    const auto numRepN = repB[2];
     const auto numRepB = repA[0];
 
     LDBG("numRepM: " << numRepM << "; numRepN: " << numRepN
@@ -197,39 +247,32 @@ struct DotOpMFMAConverter {
     constexpr bool mutableMemory = true;
     auto sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
 
-    auto subviewTypeA = ttg::MemDescType::get(
-        refinedShapeA, memDescTypeA.getElementType(),
-        memDescTypeA.getEncoding(), sharedMemorySpace, mutableMemory);
+    auto extractSliceTypeA =
+        RankedTensorType::get(refinedShapeA, elemTyA, encodeA);
 
-    auto subviewTypeB = ttg::MemDescType::get(
-        refinedShapeB, memDescTypeB.getElementType(),
-        memDescTypeB.getEncoding(), sharedMemorySpace, mutableMemory);
+    auto extractSliceTypeB =
+        RankedTensorType::get(refinedShapeB, elemTyB, encodeB);
 
-    rewriter.setInsertionPointAfter(localLoadA);
+    rewriter.setInsertionPoint(dotOp);
     SmallVector<ttg::LocalLoadOp> subtilesA;
+    SmallVector<amdgpu::ExtractSliceOp> extractedTilesA;
     for (int32_t i = 0; i < numRepM; ++i) {
-      int32_t shift = i * elementsPerSlice[M];
-
-      auto offset = createOffset({}, {shift, 0}, rewriter, loc);
-      auto viewLoadA = rewriter.create<ttg::MemDescSubviewOp>(loc, subviewTypeA,
-                                                              memDescA, offset);
-
-      auto refinedLoadA =
-          rewriter.create<ttg::LocalLoadOp>(loc, refinedTensorTypeA, viewLoadA);
-      subtilesA.push_back(refinedLoadA);
+      int64_t shift = i * elementsPerSlice[M];
+      auto extract = rewriter.create<amdgpu::ExtractSliceOp>(
+          loc, Type{extractSliceTypeA}, Value{a},
+          DenseI64ArrayAttr::get(ctx, {shift, 0}));
+      extractedTilesA.push_back(extract);
     }
 
-    rewriter.setInsertionPointAfter(localLoadB);
+    // rewriter.setInsertionPointAfter(localLoadB);
     SmallVector<ttg::LocalLoadOp> subtilesB;
+    SmallVector<amdgpu::ExtractSliceOp> extractedTilesB;
     for (int32_t i = 0; i < numRepN; ++i) {
       int32_t shift = i * elementsPerSlice[N];
-      auto offset = createOffset({}, {0, shift}, rewriter, loc);
-      auto viewLoadB = rewriter.create<ttg::MemDescSubviewOp>(loc, subviewTypeB,
-                                                              memDescB, offset);
-
-      auto refinedLoadB =
-          rewriter.create<ttg::LocalLoadOp>(loc, refinedTensorTypeB, viewLoadB);
-      subtilesB.push_back(refinedLoadB);
+      auto extract = rewriter.create<amdgpu::ExtractSliceOp>(
+          loc, Type{extractSliceTypeB}, Value{b},
+          DenseI64ArrayAttr::get(ctx, {0, shift}));
+      extractedTilesB.push_back(extract);
     }
 
     rewriter.setInsertionPointAfter(dotOp);
@@ -242,8 +285,8 @@ struct DotOpMFMAConverter {
         auto refinedTensorC = rewriter.create<triton::amdgpu::ExtractSliceOp>(
             loc, Type{refinedTensorTypeC}, Value{c}, offset);
 
-        auto refinedTensorA = subtilesA[m];
-        auto refinedTensorB = subtilesB[n];
+        auto refinedTensorA = extractedTilesA[m];
+        auto refinedTensorB = extractedTilesB[n];
 
         auto result = rewriter.create<tt::DotOp>(
             loc, refinedTensorTypeD,
@@ -462,6 +505,15 @@ struct TritonAMDGPURefineOps
       }
 
       auto *block = hint->getBlock();
+      block->walk([&](triton::gpu::LocalLoadOp localLoadOp) {
+        OpBuilder rewriter(localLoadOp->getContext());
+        if (localLoadOp->getNumOperands() == 1) {
+          if (failed(rewriteLocalLoad(rewriter, localLoadOp))) {
+            LDBG("failed to refine ttg.localLoad: " << *localLoadOp);
+          }
+        }
+      });
+
       block->walk([&](triton::DotOp dotOp) {
         OpBuilder rewriter(dotOp->getContext());
         // TODO: extend to WMMA instructions
