@@ -4,7 +4,6 @@
 #include "mlir/IR/Operation.h"
 #include "llvm/Support/Debug.h"
 #include <cstdint>
-#include <iostream>
 
 #include "triton/Dialect/TritonGPU/Transforms/PipelineErrorReporter.h"
 
@@ -56,44 +55,23 @@ PipelineErrorReporter::getBlockArgYieldValueFromForLoop(BlockArgument arg) {
   return forOp.getBody()->getTerminator()->getOperand(arg.getArgNumber() - 1);
 }
 
-DenseSet<Operation *> findUsersInScfIfHierarchy(BlockArgument arg,
+DenseSet<Operation *> findUsersInBlockHierarchy(BlockArgument arg,
                                                 Operation *consumerOp) {
 
-  DenseSet<Operation *> usersInScfIfHierarchy;
+  DenseSet<Operation *> usersInBlockHierarchy;
 
-  scf::IfOp consumerIfOp = llvm::dyn_cast<scf::IfOp>(consumerOp);
-
-  // case 1: consumer is a simple op. arg's user directly matches the consumer.
-  if (!consumerIfOp) {
-    for (Operation *user : arg.getUsers()) {
-      if (user == consumerOp) {
-        usersInScfIfHierarchy.insert(user);
-      }
-    }
-    return usersInScfIfHierarchy;
-  }
-
-  // case 2: consumer is an IfOp, and the arg's user is the condition of an
-  // ifop. the user happens to be the consumer. This is easily covered in the
-  // loop of case 3. case 3: consumer is an ifop, and the user is a simple op.
-  // we iteratively find in the if hierarchy and check if any users' parent op
-  // matches the consumer.
   for (Operation *user : arg.getUsers()) {
     Operation *currentOp = user;
-    // Traverse up the parent operations of `user` to find matches to consumer
     while (currentOp) {
-      // Check if the current operation is an scf.if
-      if (auto currentIfOp = dyn_cast<scf::IfOp>(currentOp)) {
-        if (currentIfOp == consumerIfOp) {
-          usersInScfIfHierarchy.insert(user);
-          break; // Exit the loop once the consumerIfOp is found
-        }
+      if (currentOp == consumerOp) {
+        usersInBlockHierarchy.insert(user);
+        break;
       }
-      // Move to the parent operation
       currentOp = currentOp->getParentOp();
     }
   }
-  return usersInScfIfHierarchy;
+
+  return usersInBlockHierarchy;
 }
 
 void PipelineErrorReporter::findRootSchedulingErrorLoopCarryDep(
@@ -112,7 +90,7 @@ void PipelineErrorReporter::findRootSchedulingErrorLoopCarryDep(
     }
 
     // first find the root consumer.
-    rootUserOps = std::move(findUsersInScfIfHierarchy(arg, consumer));
+    rootUserOps = std::move(findUsersInBlockHierarchy(arg, consumer));
 
     assert(producer == yieldValue->getDefiningOp() &&
            "producer should be the def of the yield value of operand");
@@ -138,12 +116,15 @@ std::optional<unsigned int> PipelineErrorReporter::findStage(Operation *op) {
 void printImplicitUse(Operation *op, InFlightDiagnostic &mainError) {
   auto parentOpLoc = op->getParentOp()->getLoc();
   if (isa<IfOp>(op->getParentOp())) {
+    // When an if branch yields a value, the original value is used implicitly
+    // when the condition is false. In this case, we don't have the source
+    // location of the implicit use. We can only attach a note to the if
+    // operation.
+    // TODO: we can report the location of the yield value in the if branch.
     mainError.attachNote(parentOpLoc)
         << "Value is implicitly used here when the condition is false in "
            "TTIR, because the variable is updated when the condition is "
            "true.";
-    // TODO: we can actually find the statement that updates the variable
-    // when the condition is true.
   } else {
     mainError.attachNote(parentOpLoc) << "Value is implicitly used here. ";
   }
@@ -228,6 +209,9 @@ void PipelineErrorReporter::printSchedulingError(int64_t distance,
     if (isa<UnknownLoc>(loc)) {
       printImplicitUse(op, mainError);
     } else {
+      // TODO: we can't find the variable name in the source code. Once we use
+      // FileLineColRange instead of FileLineColLoc, we can find the variable
+      // name and provide more detailed debug information.
       mainError.attachNote(op->getLoc())
           << "`" << op->getName() << "` is used here:";
     }
