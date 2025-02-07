@@ -247,10 +247,11 @@ void BufferEmitter::fillCommonArgsAtomics(Type type, Value rsrcDesc,
   // 3. Create the cache modifiers word
   int32_t aux = 0;
   if (hasUsers)
-    aux = getCtrlBitsForBufferAtomicsOnGFX942(/*setSC0*/ true, /*setSC1*/ false,
-                                              /*setNT*/ false);
+    aux = getCtrlBitsForBufferAtomicsOnGFX_942_950(/*setSC0*/ true,
+                                                   /*setSC1*/ false,
+                                                   /*setNT*/ false);
   else
-    aux = getCtrlBitsForBufferAtomicsOnGFX942(
+    aux = getCtrlBitsForBufferAtomicsOnGFX_942_950(
         /*setSC0*/ false, /*setSC1*/ false, /*setNT*/ false);
 
   Value cacheModifiers = b.int_val(32, aux);

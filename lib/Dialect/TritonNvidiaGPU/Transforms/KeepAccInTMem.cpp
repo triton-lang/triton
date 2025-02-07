@@ -167,7 +167,7 @@ public:
     SmallVector<Operation *> mmaOps;
     forOp.walk([&](Operation *mmaOp) {
       // Skip MMA nested in another forOp
-      if (isa<ttng::TCGen5MMAOp, ttng::TCGen5MMAScaledOp>(mmaOp) &&
+      if (isa<ttng::MMAv5OpInterface>(mmaOp) &&
           mmaOp->getParentOfType<scf::ForOp>() == forOp) {
         mmaOps.push_back(mmaOp);
       }
