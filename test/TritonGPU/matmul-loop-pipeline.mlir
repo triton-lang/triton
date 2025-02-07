@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -tritongpu-pipeline | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritongpu-pipeline | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [8], order = [0]}>
 
@@ -25,6 +25,25 @@ tt.func public @softmax_kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32},
     tt.store %9, %7, %4 {loop.cluster = 1 : i32, loop.stage = 1 : i32} : tensor<128x!tt.ptr<f32>, #blocked>
   } {tt.num_stages = 2 : i32}
   tt.return
+}
+
+}
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:90"} {
+
+// CHECK-LABEL: @scalar_load
+tt.func public @scalar_load(%arg0: !tt.ptr<f32>, %arg1: i32, %arg2: i32, %arg3: f32) -> f32 {
+  %c1_i32 = arith.constant 1 : i32
+  %2 = scf.for %i = %arg1 to %arg2 step %c1_i32 iter_args(%k = %arg3) -> f32 : i32 {
+    // CHECK: tt.load %arg0
+    %0 = tt.load %arg0 {loop.cluster = 1 : i32, loop.stage = 0 : i32} : !tt.ptr<f32>
+    %1 = arith.addf %0, %k {loop.cluster = 1 : i32, loop.stage = 0 : i32} : f32
+    %2 = arith.addf %1, %k {loop.cluster = 0 : i32, loop.stage = 1 : i32} : f32
+    scf.yield %2 : f32
+  } {num_stages = 2 : i32}
+  tt.return %2 : f32
 }
 
 }

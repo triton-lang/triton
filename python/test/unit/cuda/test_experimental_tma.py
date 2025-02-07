@@ -4,7 +4,7 @@ import torch
 import triton
 import triton.language as tl
 from triton.tools.experimental_descriptor import (create_1d_tma_descriptor, create_2d_tma_descriptor)
-from triton._internal_testing import dtypes_with_bfloat16, numpy_random, to_triton, requires_tma, supports_tma, tma_skip_msg
+from triton._internal_testing import dtypes_with_bfloat16, is_interpreter, numpy_random, to_triton, requires_tma, supports_tma, tma_skip_msg
 
 from typing import Optional
 
@@ -241,6 +241,7 @@ def test_device_tensormap1d(dtype_str):
 
 
 @requires_tma
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
 def test_tensor_descriptor_load(dtype_str):
 
@@ -284,6 +285,7 @@ def test_tensor_descriptor_load(dtype_str):
 
 
 @requires_tma
+@pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
 def test_tensor_descriptor_store(dtype_str):
 
@@ -356,6 +358,7 @@ def tensor_descriptor_in_function_helper(out_ptr, in_ptr, M, N, M_BLOCK: tl.cons
 
 
 @requires_tma
+@pytest.mark.interpreter
 def test_tensor_descriptor_in_function():
 
     @triton.jit
@@ -429,11 +432,15 @@ def matmul_kernel_make_tensor_desciptor(a_ptr, b_ptr, c_ptr,  #
 
 
 @requires_tma
+@pytest.mark.interpreter
 @pytest.mark.parametrize("num_stages", [1, 4])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(32, 32, 32), (128, 64, 64), (128, 128, 64), (128, 256, 64)])
 def test_experimental_make_tensor_descriptor_matmul(num_stages, BLOCK_M, BLOCK_N, BLOCK_K):
     device = "cuda"
-    M, N, K = 8192, 8192, 1024
+    if is_interpreter():
+        M, N, K = BLOCK_M, BLOCK_N, BLOCK_K
+    else:
+        M, N, K = 8192, 8192, 1024
     torch.manual_seed(42)
     A = torch.randn((M, K), dtype=torch.float16, device=device)
     B = torch.randn((K, N), dtype=torch.float16, device=device)
@@ -463,6 +470,9 @@ def test_experimental_make_tensor_descriptor_matmul(num_stages, BLOCK_M, BLOCK_N
     )
     ref_out = torch.matmul(A.to(torch.float32), B.to(torch.float32)).to(torch.float16)
     torch.testing.assert_close(ref_out, C, rtol=1e-3, atol=1e-3)
+    if is_interpreter():
+        return
+
     assert "tensormap.cp_fenceproxy.global.shared::cta.tensormap::generic.release.gpu.sync.aligned" in kernel.asm["ptx"]
     if BLOCK_M >= 64 and BLOCK_N >= 64 and torch.cuda.get_device_capability()[0] == 9:
         # TODO: The use of stmatrix for Blackwell is currently not supported.
@@ -516,9 +526,10 @@ def kernel_make_tensor_desciptor_loop_carried(a_ptr, M, N, MBLOCK: tl.constexpr,
 
 
 @requires_tma
+@pytest.mark.interpreter
 def test_experimental_make_tensor_descriptor_loop_carried():
     device = "cuda"
-    M, N = 8192, 8192
+    M, N = 64, 512
     torch.manual_seed(42)
     A = torch.randn((M, N), dtype=torch.float32, device=device)
     MBLOCK, NBLOCK = 8, 128
@@ -541,7 +552,9 @@ def test_experimental_make_tensor_descriptor_loop_carried():
         NBLOCK,
     )
     torch.testing.assert_close(ref_out, A)
-    assert "tensormap.cp_fenceproxy.global.shared::cta.tensormap::generic.release.gpu.sync.aligned" in kernel.asm["ptx"]
+    if not is_interpreter():
+        assert "tensormap.cp_fenceproxy.global.shared::cta.tensormap::generic.release.gpu.sync.aligned" in kernel.asm[
+            "ptx"]
 
 
 @triton.jit
@@ -611,10 +624,14 @@ def batched_gemm_kernel(a_ptr, b_ptr, c_ptr,  #
 
 
 @requires_tma
+@pytest.mark.interpreter
 def test_tensor_descriptor_batched_gemm():
     device = "cuda"
-    B, M, N, K = 2, 1024, 1024, 128
     BLOCK_M, BLOCK_N, BLOCK_K = 128, 256, 64
+    if is_interpreter():
+        B, M, N, K = 2, BLOCK_M, BLOCK_N, BLOCK_K
+    else:
+        B, M, N, K = 2, 1024, 1024, 128
     NUM_SMS = 96
     num_stages = 3
 
@@ -635,14 +652,13 @@ def test_tensor_descriptor_batched_gemm():
 
     triton.set_allocator(alloc_fn)
 
-    h = batched_gemm_kernel[grid](
+    batched_gemm_kernel[grid](
         a, b, c,  #
         B, M, N, K,  #
         tl.float16,  #
         BLOCK_M, BLOCK_N, BLOCK_K,  #
         NUM_SMS,  #
         num_stages=num_stages, num_warps=8)
-    print(h.n_regs)
     torch.cuda.synchronize()
 
     torch.testing.assert_close(c, expect, rtol=1e-3, atol=1e-3)
@@ -665,11 +681,12 @@ def torch_gather_rows(input, idx, y, block_y):
     return out
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("X, Y", [(128, 128), (64, 256)])
 @pytest.mark.parametrize("BLOCK_X, BLOCK_Y", [(32, 32), (64, 128), (16, 128)])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.int8])
 @pytest.mark.parametrize("y", [0, 32, 48])
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] != 10,
+@pytest.mark.skipif(not is_interpreter() and torch.cuda.get_device_capability()[0] != 10,
                     reason="TMA Gather only works on cloud Blackwell Chips")
 def test_tma_gather(X, Y, BLOCK_X, BLOCK_Y, dtype, y, device):
     if BLOCK_X > X or y + BLOCK_Y > Y:
@@ -719,9 +736,10 @@ def tma_gather_dot_pipeline(  #
     tl.store(output_ptrs, accumulator)
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(16, 16, 16)])
 @pytest.mark.parametrize("K", [128])
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] != 10,
+@pytest.mark.skipif(not is_interpreter() and torch.cuda.get_device_capability()[0] != 10,
                     reason="TMA Gather only works on cloud Blackwell Chips")
 def test_tma_gather_dot_pipeline(BLOCK_M, BLOCK_N, BLOCK_K, K, device):
 
@@ -736,12 +754,13 @@ def test_tma_gather_dot_pipeline(BLOCK_M, BLOCK_N, BLOCK_K, K, device):
     c = a @ b
 
     output = torch.zeros((BLOCK_M, BLOCK_N), dtype=torch.float32, device=device)
-    kernel = tma_gather_dot_pipeline.warmup(a, b, output, a.stride(0), a.stride(1), b.stride(0), b.stride(1),
-                                            output.stride(0), output.stride(1), K, BLOCK_M, BLOCK_N, BLOCK_K,
-                                            grid=(1, ))
-    assert kernel.asm["ttgir"].count("ttng.async_tma_gather") == 6
-    kernel[(1, 1, 1)](a, b, output, a.stride(0), a.stride(1), b.stride(0), b.stride(1), output.stride(0),
-                      output.stride(1), K, BLOCK_M, BLOCK_N, BLOCK_K)
+    if not is_interpreter():
+        kernel = tma_gather_dot_pipeline.warmup(a, b, output, a.stride(0), a.stride(1), b.stride(0), b.stride(1),
+                                                output.stride(0), output.stride(1), K, BLOCK_M, BLOCK_N, BLOCK_K,
+                                                grid=(1, ))
+        assert kernel.asm["ttgir"].count("ttng.async_tma_gather") == 6
+    tma_gather_dot_pipeline[(1, 1, 1)](a, b, output, a.stride(0), a.stride(1), b.stride(0), b.stride(1),
+                                       output.stride(0), output.stride(1), K, BLOCK_M, BLOCK_N, BLOCK_K)
 
     torch.testing.assert_close(c, output)
 
@@ -762,11 +781,12 @@ def tma_scatter_rows_kernel(out_ptr, in_ptr, idx_ptr, y, X: tl.constexpr, Y: tl.
     desc.scatter(data, idx, y)
 
 
+@pytest.mark.interpreter
 @pytest.mark.parametrize("X, Y", [(128, 128), (64, 256)])
 @pytest.mark.parametrize("BLOCK_X, BLOCK_Y", [(32, 32), (64, 128), (16, 128)])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.int8])
 @pytest.mark.parametrize("y", [0, 32, 48])
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] != 10,
+@pytest.mark.skipif(not is_interpreter() and torch.cuda.get_device_capability()[0] != 10,
                     reason="TMA Gather only works on cloud Blackwell Chips")
 def test_tma_scatter(X, Y, BLOCK_X, BLOCK_Y, dtype, y):
     if BLOCK_X > X or y + BLOCK_Y > Y:

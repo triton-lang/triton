@@ -977,6 +977,8 @@ LinearLayout LinearLayout::invert() const {
 
 LinearLayout LinearLayout::pseudoinvert() const {
   // A^-1(x) = A^-1(I(x)), thus A.invert() = I.invertAndCompose(A)
+  assert(isSurjective() &&
+         "A linear layout must be surjective to compute its pseudoinverse");
   LinearLayout identity = LinearLayout::empty();
   for (auto outDim : getOutDimNames()) {
     identity *= LinearLayout::identity1D(getOutDimSize(outDim), outDim, outDim);
