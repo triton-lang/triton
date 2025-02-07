@@ -195,12 +195,9 @@ struct ConvertTritonAMDGPUToLLVM
     populatePatterns7(mlir::triton::populateGatherOpToLLVMPatterns,
                       commonBenefit);
 
-    mlir::triton::BackendCallbacks callbacks;
-    callbacks.localStoreOpConversion = storeOpConversionCallback;
-
     AMD::populateMemoryOpToLLVMPatterns(typeConverter, patterns, AMDBenefit);
-    mlir::triton::populateMemoryOpToLLVMPatterns(
-        typeConverter, targetInfo, patterns, commonBenefit, callbacks);
+    mlir::triton::populateMemoryOpToLLVMPatterns(typeConverter, targetInfo,
+                                                 patterns, commonBenefit);
     mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
                                                    patterns, commonBenefit);
     mlir::triton::populateAssertOpToLLVMPattern(typeConverter, patterns,
