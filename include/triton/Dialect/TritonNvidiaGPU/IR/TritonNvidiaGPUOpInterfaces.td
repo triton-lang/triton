@@ -9,6 +9,7 @@ def MMAv5OpInterface : OpInterface<"MMAv5OpInterface"> {
 
   let cppNamespace = "::mlir::triton::nvidia_gpu";
 
+  // We can add more methods as needed.
   let methods = [
     InterfaceMethod<"",
                     "::mlir::Value",
@@ -18,15 +19,19 @@ def MMAv5OpInterface : OpInterface<"MMAv5OpInterface"> {
                     "setBarrier",
                     (ins "::mlir::Value":$barrier)>,
     InterfaceMethod<"",
+                    "::mlir::Value",
+                    "getAccumulator">,
+    InterfaceMethod<"",
                     "void",
                     "setAccumulator",
                     (ins "::mlir::Value":$accum)>,
-    // InterfaceMethod<"",
-    //                 "",
-    //                 "">,
-    // InterfaceMethod<"",
-    //                 "",
-    //                 "">,
+    InterfaceMethod<"",
+                    "::mlir::Value",
+                    "getPredicate">,
+    InterfaceMethod<"",
+                    "void",
+                    "setPredicate",
+                    (ins "::mlir::Value":$pred)>,
   ];
 }
 #endif // TRITON_NVIDIAGPU_OP_INTERFACES

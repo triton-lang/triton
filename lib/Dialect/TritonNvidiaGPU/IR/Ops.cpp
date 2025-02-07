@@ -279,7 +279,13 @@ void TCGen5MMAOp::setBarrier(Value barrier) {
   getBarrierMutable().assign(barrier);
 }
 
+Value TCGen5MMAOp::getAccumulator() { return getD(); }
+
 void TCGen5MMAOp::setAccumulator(Value accum) { getDMutable().assign(accum); }
+
+Value TCGen5MMAOp::getPredicate() { return getPred(); }
+
+void TCGen5MMAOp::setPredicate(Value pred) { getPredMutable().assign(pred); }
 
 // -- TMEMStoreOp --
 LogicalResult TMEMStoreOp::verify() {
@@ -331,8 +337,16 @@ void TCGen5MMAScaledOp::setBarrier(Value barrier) {
   getBarrierMutable().assign(barrier);
 }
 
+Value TCGen5MMAScaledOp::getAccumulator() { return getD(); }
+
 void TCGen5MMAScaledOp::setAccumulator(Value accum) {
   getDMutable().assign(accum);
+}
+
+Value TCGen5MMAScaledOp::getPredicate() { return getPred(); }
+
+void TCGen5MMAScaledOp::setPredicate(Value pred) {
+  getPredMutable().assign(pred);
 }
 
 // -- TMEMLoadOp --
