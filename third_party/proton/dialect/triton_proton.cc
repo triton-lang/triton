@@ -13,9 +13,8 @@ namespace {
 
 void init_triton_proton_passes_ttgpuir(py::module &&m) {
   using namespace mlir::triton;
-  m.def("add_proton_lowering_pass", [](mlir::PassManager &pm) {
-    pm.addPass(createProtonLoweringPass());
-  });
+  m.def("add_proton_lowering_pass",
+        [](mlir::PassManager &pm) { pm.addPass(createProtonLoweringPass()); });
 }
 } // namespace
 

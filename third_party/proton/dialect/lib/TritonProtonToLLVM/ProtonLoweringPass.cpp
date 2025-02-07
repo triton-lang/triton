@@ -21,8 +21,7 @@ namespace triton {
 
 namespace {
 struct ProtonLoweringPass
-    : public mlir::triton::impl::ProtonLoweringPassBase<
-          ProtonLoweringPass> {
+    : public mlir::triton::impl::ProtonLoweringPassBase<ProtonLoweringPass> {
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     ModuleAllocation allocation(mod);
@@ -32,7 +31,7 @@ struct ProtonLoweringPass
     auto loc = mod.getLoc();
 
     /*Add Proton Op Lowerings Here*/
-    }
+  }
 };
 
 } // namespace
