@@ -302,9 +302,9 @@ If there is a barrier the result will be safe to read after a barrier wait.
 If $two_ctas is set the op will execute a matmul across two contiguous CTAs, it will read the data distributed across the two CTAs.
 and syncronize both CTAs if the op is synchronous.
 
-Traits: `DotLike`, `VerifyTensorLayoutsTrait`
+Traits: `VerifyTensorLayoutsTrait`
 
-Interfaces: `MemoryEffectOpInterface`
+Interfaces: `DotOpInterface`, `MemoryEffectOpInterface`
 
 #### Attributes:
 
@@ -339,9 +339,9 @@ $d += matrix_multiply(scale($lhs, $lhs_scale), scale(rlhs, $rhs_scale))
 If not barrier is given the op is assumed to be synchronous otherwise the op will trigger a commit/arrive on the given barrier.
 If there is a barrier the result will be safe to read after a barrier wait.
 
-Traits: `DotLike`, `VerifyTensorLayoutsTrait`
+Traits: `VerifyTensorLayoutsTrait`
 
-Interfaces: `MemoryEffectOpInterface`
+Interfaces: `DotOpInterface`, `MemoryEffectOpInterface`
 
 #### Attributes:
 
@@ -635,9 +635,9 @@ operation ::= `ttng.warp_group_dot` $a`,` $b`,` $c (`,` $useC^)? attr-dict `:` t
 
 $d = matrix_multiply($a, $b) + $c. For docs on InputPrecisionAttr, see TT_DotOp
 
-Traits: `DotLike`, `VerifyTensorLayoutsTrait`
+Traits: `VerifyTensorLayoutsTrait`
 
-Interfaces: `InferTypeOpInterface`, `MemoryEffectOpInterface`
+Interfaces: `DotOpInterface`, `InferTypeOpInterface`, `MemoryEffectOpInterface`
 
 #### Attributes:
 

@@ -59,6 +59,7 @@
 <li class="toctree-l2"><a class="reference internal" href="07-extern-functions.html">Libdevice (<cite>tl.extra.libdevice</cite>) function</a></li>
 <li class="toctree-l2"><a class="reference internal" href="08-grouped-gemm.html">Group GEMM</a></li>
 <li class="toctree-l2"><a class="reference internal" href="09-persistent-matmul.html">Persistent Matmul</a></li>
+<li class="toctree-l2"><a class="reference internal" href="10-block-scaled-matmul.html">Block Scaled Matrix Multiplication</a></li>
 </ul>
 </li>
 </ul>
@@ -127,25 +128,25 @@ to download the full example code.</p>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>TMA benchmarks will be running with experimental grid constant TMA descriptor.
 fused-attention-batch4-head32-d64-fwd-causal=True:
      N_CTX  Triton [FP16]  Triton [FP8]
-0   1024.0     107.920799     90.290043
-1   2048.0     135.678885    111.373423
-2   4096.0     152.115209    124.734905
-3   8192.0     164.517793    132.105540
-4  16384.0     170.774049    135.530680
+0   1024.0     108.361589     90.008248
+1   2048.0     135.162129    112.327020
+2   4096.0     152.633049    124.656294
+3   8192.0     163.658535    132.018421
+4  16384.0     170.946245    135.236226
 fused-attention-batch4-head32-d64-fwd-causal=False:
      N_CTX  Triton [FP16]  Triton [FP8]
-0   1024.0     141.239341    123.742712
-1   2048.0     151.220593    133.474084
-2   4096.0     155.229093    134.436187
-3   8192.0     160.237766    136.306337
-4  16384.0     158.383600    135.385434
+0   1024.0     141.025353    123.774083
+1   2048.0     152.234796    131.438055
+2   4096.0     154.596912    133.845091
+3   8192.0     157.777253    136.302016
+4  16384.0     158.164875    136.749728
 fused-attention-batch4-head32-d64-bwd-causal=True:
      N_CTX  Triton [FP16]  Triton [FP8]
-0   1024.0      36.426703     36.471780
-1   2048.0      44.455714     44.516659
-2   4096.0      49.725529     49.809890
-3   8192.0      52.776173     52.729524
-4  16384.0      54.450485     54.436684
+0   1024.0      36.468299     36.470923
+1   2048.0      44.611357     44.566424
+2   4096.0      49.834725     50.003411
+3   8192.0      52.923927     52.797975
+4  16384.0      54.530681     54.442755
 </pre></div>
 </div>
 <div class="line-block">
@@ -1037,7 +1038,7 @@ fused-attention-batch4-head32-d64-bwd-causal=True:
     <span class="n">bench_flash_attention</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">save_path</span><span class="o">=</span><span class="s2">&quot;.&quot;</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 51.995 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 51.956 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-06-fused-attention-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/3176accb6c7288b0e45f41d94eebacb9/06-fused-attention.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">06-fused-attention.ipynb</span></code></a></p>

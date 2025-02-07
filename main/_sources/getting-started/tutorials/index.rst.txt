@@ -173,6 +173,23 @@ To install the dependencies for the tutorials:
     </div>
 
 
+.. raw:: html
+
+    <div class="sphx-glr-thumbcontainer" tooltip="Users can run the tutorial with each of the supported formats by passing the --format argument and can benchmark the performance of each by specifying matrix dimensions and iteration steps.">
+
+.. only:: html
+
+  .. image:: /getting-started/tutorials/images/thumb/sphx_glr_10-block-scaled-matmul_thumb.png
+    :alt:
+
+  :ref:`sphx_glr_getting-started_tutorials_10-block-scaled-matmul.py`
+
+.. raw:: html
+
+      <div class="sphx-glr-thumbnail-title">Block Scaled Matrix Multiplication</div>
+    </div>
+
+
 .. thumbnail-parent-div-close
 
 .. raw:: html
@@ -192,6 +209,7 @@ To install the dependencies for the tutorials:
    /getting-started/tutorials/07-extern-functions
    /getting-started/tutorials/08-grouped-gemm
    /getting-started/tutorials/09-persistent-matmul
+   /getting-started/tutorials/10-block-scaled-matmul
 
 
 .. only:: html

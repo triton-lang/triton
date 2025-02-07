@@ -22,7 +22,7 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="triton" href="../../python-api/triton.html" />
+    <link rel="next" title="Block Scaled Matrix Multiplication" href="10-block-scaled-matmul.html" />
     <link rel="prev" title="Group GEMM" href="08-grouped-gemm.html" /> 
 </head>
 
@@ -59,6 +59,7 @@
 <li class="toctree-l2"><a class="reference internal" href="07-extern-functions.html">Libdevice (<cite>tl.extra.libdevice</cite>) function</a></li>
 <li class="toctree-l2"><a class="reference internal" href="08-grouped-gemm.html">Group GEMM</a></li>
 <li class="toctree-l2 current"><a class="current reference internal" href="#">Persistent Matmul</a></li>
+<li class="toctree-l2"><a class="reference internal" href="10-block-scaled-matmul.html">Block Scaled Matrix Multiplication</a></li>
 </ul>
 </li>
 </ul>
@@ -128,15 +129,15 @@ python<span class="w"> </span><span class="m">09</span>-persistent-matmul.py<spa
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>TMA benchmarks will be running with experimental grid constant TMA descriptor.
 M=32, N=32, K=32 verification naive vs: torch: ✅ cublas: ✅ persistent: ✅
 M=8192, N=8192, K=512 verification naive vs: torch: ✅ cublas: ✅ persistent: ✅
-174.337 5518.474 ROOT
+174.418 5515.890 ROOT
 ├─ nan 0.050 _ZN2at6native18elementwise_kernelILi128ELi4EZNS0_22gpu_kernel_impl_nocastIZZZNS0_23direct_copy_kernel_cudaERNS_18TensorIteratorBaseEENKUlvE1_clEvENKUlvE8_clEvEUlN3c104HalfEE_EEvS4_RKT_EUliE_EEviT1_
-├─ nan 0.045 _ZN2at6native54_GLOBAL__N__d8ceb000_21_DistributionNormal_cu_0c5b6e8543distribution_elementwise_grid_stride_kernelIfLi4EZNS0_9templates4cuda20normal_and_transformIN3c104HalfEfPNS_17CUDAGeneratorImplEZZZNS4_13normal_kernelIS9_EEvRKNS_10TensorBaseEddT_ENKUlvE_clEvENKUlvE1_clEvEUlfE_EEvRNS_18TensorIteratorBaseET1_T2_EUlP24curandStatePhilox4_32_10E0_ZNS1_27distribution_nullary_kernelIS7_f6float4S9_SO_SH_EEvSJ_SL_RKT3_T4_EUlifE_EEviNS_15PhiloxCudaStateESK_SL_
-├─ 177.059 4269.270 cublas [M=8192, N=8192, K=512]
-│  └─ nan 4269.270 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
-├─ 154.709 444.187 matmul_kernel [M=8192, N=8192, K=512]
-├─ 163.507 420.284 matmul_kernel_persistent [M=8192, N=8192, K=512]
-└─ 178.660 384.639 torch [M=8192, N=8192, K=512]
-   └─ nan 384.639 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+├─ nan 0.046 _ZN2at6native54_GLOBAL__N__d8ceb000_21_DistributionNormal_cu_0c5b6e8543distribution_elementwise_grid_stride_kernelIfLi4EZNS0_9templates4cuda20normal_and_transformIN3c104HalfEfPNS_17CUDAGeneratorImplEZZZNS4_13normal_kernelIS9_EEvRKNS_10TensorBaseEddT_ENKUlvE_clEvENKUlvE1_clEvEUlfE_EEvRNS_18TensorIteratorBaseET1_T2_EUlP24curandStatePhilox4_32_10E0_ZNS1_27distribution_nullary_kernelIS7_f6float4S9_SO_SH_EEvSJ_SL_RKT3_T4_EUlifE_EEviNS_15PhiloxCudaStateESK_SL_
+├─ 177.053 4269.431 cublas [M=8192, N=8192, K=512]
+│  └─ nan 4269.431 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
+├─ 154.436 444.972 matmul_kernel [M=8192, N=8192, K=512]
+├─ 164.251 418.382 matmul_kernel_persistent [M=8192, N=8192, K=512]
+└─ 179.420 383.010 torch [M=8192, N=8192, K=512]
+   └─ nan 383.010 ampere_fp16_s16816gemm_fp16_128x128_ldg8_f2f_stages_32x5_tn
 </pre></div>
 </div>
 <div class="line-block">
@@ -855,27 +856,26 @@ M=8192, N=8192, K=512 verification naive vs: torch: ✅ cublas: ✅ persistent: 
 
     <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">prec</span> <span class="o">==</span> <span class="s1">&#39;fp8&#39;</span> <span class="ow">and</span> <span class="p">(</span><span class="ow">not</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">torch</span><span class="p">,</span> <span class="s2">&quot;float8_e4m3fn&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">is_cuda</span><span class="p">()):</span>
         <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;This example requires CUDA with fp8 support.&quot;</span><span class="p">)</span>
-        <span class="n">exit</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">dtype</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">float8_e4m3fn</span> <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">prec</span> <span class="o">==</span> <span class="s1">&#39;fp8&#39;</span> <span class="k">else</span> <span class="n">torch</span><span class="o">.</span><span class="n">float16</span>
 
-    <span class="n">dtype</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">float8_e4m3fn</span> <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">prec</span> <span class="o">==</span> <span class="s1">&#39;fp8&#39;</span> <span class="k">else</span> <span class="n">torch</span><span class="o">.</span><span class="n">float16</span>
+        <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">K</span> <span class="ow">and</span> <span class="n">args</span><span class="o">.</span><span class="n">K_range</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">args</span><span class="o">.</span><span class="n">K_range</span> <span class="o">=</span> <span class="p">[</span><span class="n">args</span><span class="o">.</span><span class="n">K</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">K</span><span class="p">]</span>
+            <span class="n">args</span><span class="o">.</span><span class="n">K_step</span> <span class="o">=</span> <span class="mi">1</span>  <span class="c1"># doesn&#39;t matter as long as it&#39;s not 0</span>
 
-    <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">K</span> <span class="ow">and</span> <span class="n">args</span><span class="o">.</span><span class="n">K_range</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="n">args</span><span class="o">.</span><span class="n">K_range</span> <span class="o">=</span> <span class="p">[</span><span class="n">args</span><span class="o">.</span><span class="n">K</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">K</span><span class="p">]</span>
-        <span class="n">args</span><span class="o">.</span><span class="n">K_step</span> <span class="o">=</span> <span class="mi">1</span>  <span class="c1"># doesn&#39;t matter as long as it&#39;s not 0</span>
+        <span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
 
-    <span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+        <span class="n">validate</span><span class="p">(</span><span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="n">dtype</span><span class="p">)</span>
+        <span class="n">validate</span><span class="p">(</span><span class="mi">8192</span><span class="p">,</span> <span class="mi">8192</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">K_range</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">dtype</span><span class="p">)</span>
 
-    <span class="n">validate</span><span class="p">(</span><span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="n">dtype</span><span class="p">)</span>
-    <span class="n">validate</span><span class="p">(</span><span class="mi">8192</span><span class="p">,</span> <span class="mi">8192</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">K_range</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">dtype</span><span class="p">)</span>
-
-    <span class="n">proton</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="s2">&quot;matmul&quot;</span><span class="p">,</span> <span class="n">hook</span><span class="o">=</span><span class="s2">&quot;triton&quot;</span><span class="p">)</span>
-    <span class="k">for</span> <span class="n">K</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">K_range</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">args</span><span class="o">.</span><span class="n">K_range</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">K_step</span><span class="p">):</span>
-        <span class="n">bench</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">dtype</span><span class="p">)</span>
-    <span class="n">proton</span><span class="o">.</span><span class="n">finalize</span><span class="p">()</span>
-    <span class="n">show_profile</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">prec</span><span class="p">,</span> <span class="s2">&quot;matmul&quot;</span><span class="p">)</span>
+        <span class="n">proton</span><span class="o">.</span><span class="n">start</span><span class="p">(</span><span class="s2">&quot;matmul&quot;</span><span class="p">,</span> <span class="n">hook</span><span class="o">=</span><span class="s2">&quot;triton&quot;</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">K</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">K_range</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">args</span><span class="o">.</span><span class="n">K_range</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">K_step</span><span class="p">):</span>
+            <span class="n">bench</span><span class="p">(</span><span class="n">K</span><span class="p">,</span> <span class="n">dtype</span><span class="p">)</span>
+        <span class="n">proton</span><span class="o">.</span><span class="n">finalize</span><span class="p">()</span>
+        <span class="n">show_profile</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">prec</span><span class="p">,</span> <span class="s2">&quot;matmul&quot;</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (1 minutes 5.254 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (1 minutes 4.825 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-09-persistent-matmul-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/b5537c431cd73b8ee3c32cdf90c58104/09-persistent-matmul.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">09-persistent-matmul.ipynb</span></code></a></p>
@@ -895,7 +895,7 @@ M=8192, N=8192, K=512 verification naive vs: torch: ✅ cublas: ✅ persistent: 
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
         <a href="08-grouped-gemm.html" class="btn btn-neutral float-left" title="Group GEMM" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="../../python-api/triton.html" class="btn btn-neutral float-right" title="triton" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="10-block-scaled-matmul.html" class="btn btn-neutral float-right" title="Block Scaled Matrix Multiplication" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

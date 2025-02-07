@@ -541,8 +541,8 @@ If not barrier is given the op is assumed to be synchronous otherwise the op wil
 If there is a barrier the result will be safe to read after a barrier wait.
 If $two_ctas is set the op will execute a matmul across two contiguous CTAs, it will read the data distributed across the two CTAs.
 and syncronize both CTAs if the op is synchronous.</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">DotLike</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">DotOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
 <section id="id11">
 <h3>Attributes:<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h3>
 <table>
@@ -591,8 +591,8 @@ and syncronize both CTAs if the op is synchronous.</p>
 <p>$d += matrix_multiply(scale($lhs, $lhs_scale), scale(rlhs, $rhs_scale))
 If not barrier is given the op is assumed to be synchronous otherwise the op will trigger a commit/arrive on the given barrier.
 If there is a barrier the result will be safe to read after a barrier wait.</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">DotLike</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">DotOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
 <section id="id13">
 <h3>Attributes:<a class="headerlink" href="#id13" title="Link to this heading">¶</a></h3>
 <table>
@@ -944,8 +944,8 @@ https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#data-movement-
 </pre></div>
 </div>
 <p>$d = matrix_multiply($a, $b) + $c. For docs on InputPrecisionAttr, see TT_DotOp</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">DotLike</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">DotOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
 <section id="id24">
 <h3>Attributes:<a class="headerlink" href="#id24" title="Link to this heading">¶</a></h3>
 <table>

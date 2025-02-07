@@ -534,9 +534,9 @@ tf32x3: implement the 3xTF32 trick. For more info see the pass in F32DotTC.cpp
 ieee: don't use TC, implement dot in software.
 If the GPU does not have Tensor cores or the inputs are not f32, this flag is ignored.
 
-Traits: `AlwaysSpeculatableImplTrait`, `DotLike`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+Traits: `AlwaysSpeculatableImplTrait`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `ConditionallySpeculatable`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
+Interfaces: `ConditionallySpeculatable`, `DotOpInterface`, `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
 Effects: `MemoryEffects::Effect{}`
 
@@ -580,9 +580,9 @@ operation ::= `tt.dot_scaled` $lhs (`scale` $lhs_scale^)? `,` $rhs (`scale` $rhs
 $d = matrix_multiply(scale($lhs, $lhs_scale), scale(rlhs, $rhs_scale)) + $c.
 Where scale(x, s) is a function that applies the scale per block following microscaling spec.
 
-Traits: `AlwaysSpeculatableImplTrait`, `AttrSizedOperandSegments`, `DotLike`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+Traits: `AlwaysSpeculatableImplTrait`, `AttrSizedOperandSegments`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
-Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
+Interfaces: `ConditionallySpeculatable`, `DotOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
 Effects: `MemoryEffects::Effect{}`
 
