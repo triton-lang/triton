@@ -868,25 +868,8 @@ LinearLayout SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   }
   bases[S("register")] = newRegBases;
 
-  LinearLayout ret =
-      LinearLayout(std::move(bases), llvm::to_vector(sliceLL.getOutDimNames()));
-
-  // Match a hack in the legacy code that ensures that the number of registers
-  // matches getTotalElemsPerThread.  Yup: We just removed all the zeros, now
-  // we're (maybe) adding some back.  :)
-  //
-  // TODO(jlebar): Once getTotalElemsPerThread uses LLs instead of the existing
-  // legacy code, I think we can remove this.
-  int expectedNumRegisters =
-      triton::gpu::getTotalElemsPerThread(RankedTensorType::get(
-          shape, IntegerType::get(ctx, 32) /*dummy type*/, *this));
-  if (ret.getInDimSize(S("register")) != expectedNumRegisters) {
-    int extraZeros = expectedNumRegisters / ret.getInDimSize(S("register"));
-    // Our use of "dim0" here is arbitrary; because we're adding zeros, any
-    // output dimension would work.
-    ret *= LinearLayout::zeros1D(extraZeros, S("register"), S("dim0"));
-  }
-  return ret;
+  return LinearLayout(std::move(bases),
+                      llvm::to_vector(sliceLL.getOutDimNames()));
 }
 
 LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
