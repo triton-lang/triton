@@ -1682,10 +1682,8 @@ void init_triton_ir(py::module &&m) {
            })
       // Proton Ops
       .def("create_proton_record",
-           [](TritonOpBuilder &self, bool isStart, int32_t regionId,
-              bool useDeviceBuffer = false) -> void {
-             self.create<mlir::triton::proton::RecordOp>(isStart, regionId,
-                                                         useDeviceBuffer);
+           [](TritonOpBuilder &self, bool isStart, int32_t regionId) -> void {
+             self.create<mlir::triton::proton::RecordOp>(isStart, regionId);
            });
 
   py::class_<PassManager>(m, "pass_manager", py::module_local())

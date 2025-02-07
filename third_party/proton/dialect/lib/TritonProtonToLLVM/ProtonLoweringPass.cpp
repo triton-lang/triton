@@ -31,26 +31,8 @@ struct ProtonLoweringPass
     MLIRContext *context = &getContext();
     auto loc = mod.getLoc();
 
-    /*BufferAllocOp Lowering*/
-    bool hasProtonRecordOp = false;
-    bool useDeviceBuffer = false;
-    mod.walk([&](FunctionOpInterface funcOp) {
-      funcOp.walk([&](mlir::triton::proton::RecordOp op) {
-        hasProtonRecordOp = true;
-        if (useDeviceBuffer == false && op.getUseDeviceBuffer() == true)
-          useDeviceBuffer = true;
-      });
-    });
-    if (hasProtonRecordOp && useDeviceBuffer) {
-      FuncOp func = *mod.getOps<triton::FuncOp>().begin();
-      b.setInsertionPointToStart(&func.getBody().front());
-      // For now just hard code the device buffer size we want to use.
-      int deviceBufferSizeInBytes = 1024;
-      auto ptrTy = PointerType::get(IntegerType::get(context, 8), 1);
-      auto buffer = b.create<triton::proton::BufferAllocOp>(
-          loc, ptrTy, deviceBufferSizeInBytes);
+    /*Add Proton Op Lowerings Here*/
     }
-  }
 };
 
 } // namespace

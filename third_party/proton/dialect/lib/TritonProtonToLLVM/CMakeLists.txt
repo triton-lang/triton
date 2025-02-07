@@ -1,6 +1,5 @@
 add_triton_library(TritonProtonToLLVM
     RecordOpToLLVM.cpp
-    BufferAllocOpToLLVM.cpp
     ProtonLoweringPass.cpp
 
     DEPENDS

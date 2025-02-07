@@ -29,12 +29,7 @@ void RecordOp::getEffects(
                        SideEffects::DefaultResource::get());
 }
 
-void BufferAllocOp::getEffects(
-    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
-        &effects) {
-  effects.emplace_back(MemoryEffects::Allocate::get(),
-                       mlir::triton::GlobalMemory::get());
-}
+
 } // namespace proton
 } // namespace triton
 } // namespace mlir
