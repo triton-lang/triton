@@ -467,7 +467,7 @@ getCacheModifierFlagsForPredicatedCall(LLVM::CallOp callOp) {
 // -------+-----+-----+-----+----+--
 static int32_t
 getCtrlBitsForCacheModifierOnGFX_942_950(triton::CacheModifier cm,
-                                         bool isBufferLoad) {
+                                         bool isLoad) {
   const int sc0Bit = 0b1, ntBit = 0b10, sc1Bit = 0b1000;
   int32_t aux = 0;
   switch (cm) {
@@ -475,7 +475,7 @@ getCtrlBitsForCacheModifierOnGFX_942_950(triton::CacheModifier cm,
     aux = 0;
     break;
   case triton::CacheModifier::CG:
-    if (isBufferLoad)
+    if (isLoad)
       aux |= sc0Bit | ntBit;
     break;
   case triton::CacheModifier::CS:
@@ -521,12 +521,12 @@ static int32_t getDefaultCtrlBitsForCacheModifier(triton::CacheModifier cm) {
 // .wb: write-back, writes back data at all cache levels
 // .wt: write-through, write data directly to system memory
 int32_t getCtrlBitsForCacheModifierOnTarget(
-    triton::CacheModifier cm, bool isBufferLoad,
+    triton::CacheModifier cm, bool isLoad,
     const mlir::triton::AMD::TargetInfo &targetInfo) {
   switch (targetInfo.getGPUKind()) {
   case llvm::AMDGPU::GK_GFX942:
   case llvm::AMDGPU::GK_GFX950:
-    return getCtrlBitsForCacheModifierOnGFX_942_950(cm, isBufferLoad);
+    return getCtrlBitsForCacheModifierOnGFX_942_950(cm, isLoad);
   default:
     return getDefaultCtrlBitsForCacheModifier(cm);
   }
