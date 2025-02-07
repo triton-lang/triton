@@ -129,24 +129,33 @@ public:
                       bool includeArg);
 
   void erase(Operation *op) { opToStageAndCluster.erase(op); }
-
   int count(Operation *op) { return opToStageAndCluster.count(op); }
 
   std::pair<int, Cluster> operator[](Operation *op) {
     return opToStageAndCluster[op];
   }
 
-  auto find(Operation *op) const { return opToStageAndCluster.find(op); }
-
   SmallVector<std::tuple<Operation *, int, Cluster>>
   getOpsInOrder(scf::ForOp forOp);
+  SmallVector<std::tuple<Operation *, int, Cluster>>
+  getOpsInOrder(Block *block);
+
   std::vector<std::pair<Operation *, unsigned>>
   createFinalSchedule(scf::ForOp forOp);
-  void dump();
-  bool empty() { return opToStageAndCluster.size() == 0; }
+
+  auto find(Operation *op) const { return opToStageAndCluster.find(op); }
+  bool empty() const { return opToStageAndCluster.size() == 0; }
+  auto end() const { return opToStageAndCluster.end(); }
+  auto begin() const { return opToStageAndCluster.begin(); }
+
+  // Set <stage, cluster> based on CoarseSchedule.
   void serialize(scf::ForOp &forOp);
+  void serialize(Block *block);
   // Create a CoarseSchedule based on forOp's <stage, cluster>.
   void deSerialize(scf::ForOp &forOp);
+  void deSerialize(Block *block);
+
+  LLVM_DUMP_METHOD void dump();
 };
 
 // Add dependencies of anchor ops to the coarse schedule. Schedule them to

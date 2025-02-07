@@ -234,12 +234,26 @@ void mlir::triton::replaceUsesAndPropagateType(OpBuilder &builder,
     op->erase();
 }
 
+void mlir::triton::visitNestedOperands(Operation *op,
+                                       function_ref<void(Value)> visitor) {
+  op->walk([&](Operation *nestedOp) {
+    for (Value operand : nestedOp->getOperands()) {
+      if (operand.getParentBlock()->getParentOp()->isProperAncestor(op))
+        visitor(operand);
+    }
+  });
+}
+
+SetVector<Value> mlir::triton::getNestedOperands(Operation *op) {
+  SetVector<Value> result;
+  visitNestedOperands(op, [&](Value operand) { result.insert(operand); });
+  return result;
+}
+
 std::optional<std::pair<int, int>>
 mlir::triton::maybeGetStageCluster(Operation *op) {
-  auto stage =
-      dyn_cast_if_present<IntegerAttr>(op->getAttr(tt::kLoopStageAttrName));
-  auto clusterId =
-      dyn_cast_if_present<IntegerAttr>(op->getAttr(tt::kLoopClusterAttrName));
+  auto stage = op->getAttrOfType<IntegerAttr>(tt::kLoopStageAttrName);
+  auto clusterId = op->getAttrOfType<IntegerAttr>(tt::kLoopClusterAttrName);
   if (!stage || !clusterId) {
     return std::nullopt;
   }
@@ -261,9 +275,9 @@ void mlir::triton::setStageCluster(Operation *op, int stage, int cluster) {
               IntegerAttr::get(IntegerType::get(ctx, 32), cluster));
 }
 
-std::pair<int, int> mlir::triton::getMinMaxCluster(scf::ForOp &forOp) {
+std::pair<int, int> mlir::triton::getMinMaxCluster(Block *block) {
   int minClusterId = -1, maxClusterId = -1;
-  for (auto &op : forOp.getBody()->without_terminator()) {
+  for (auto &op : block->without_terminator()) {
     if (!op.hasAttr(mlir::triton::kLoopStageAttrName) ||
         !op.hasAttr(mlir::triton::kLoopClusterAttrName))
       continue;
@@ -277,4 +291,24 @@ std::pair<int, int> mlir::triton::getMinMaxCluster(scf::ForOp &forOp) {
     minClusterId = cluster < minClusterId ? cluster : minClusterId;
   }
   return std::make_pair(minClusterId, maxClusterId);
+}
+
+std::pair<int, int> mlir::triton::getMinMaxCluster(scf::ForOp &forOp) {
+  return getMinMaxCluster(forOp.getBody());
+}
+
+SmallVector<Operation *> mlir::triton::ConditionalLoadOp::getLoads() {
+  SmallVector<Operation *> result;
+  for (Region *region : getRegions()) {
+    for (Operation &op : region->getOps()) {
+      if (isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp,
+              tt::ExperimentalDescriptorGatherOp>(op))
+        result.push_back(&op);
+    }
+  }
+  return result;
+}
+
+bool mlir::triton::ConditionalLoadOp::classof(Operation *op) {
+  return isa<scf::IfOp>(op) && op->hasAttr(kMarkerAttr);
 }

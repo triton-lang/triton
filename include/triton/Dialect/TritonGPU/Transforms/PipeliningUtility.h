@@ -37,11 +37,32 @@ void addOps(scf::ForOp forOp, int stage,
 void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
                                  Value val);
 
+/// Visit the operands of `op` and the operands of any nested ops defined
+/// outside of `op`.
+void visitNestedOperands(Operation *op, function_ref<void(Value)> visitor);
+/// Get the operands of `op` and the operands of any nested ops defined outside
+/// of `op`.
+SetVector<Value> getNestedOperands(Operation *op);
+
 // Return the minClusterId and maxClusterId for the given ForOp.
 std::pair<int, int> getMinMaxCluster(scf::ForOp &forOp);
+std::pair<int, int> getMinMaxCluster(Block *block);
 std::pair<int, int> getStageCluster(Operation *op);
 std::optional<std::pair<int, int>> maybeGetStageCluster(Operation *op);
 void setStageCluster(Operation *op, int stage, int cluster);
+
+class ConditionalLoadOp : public scf::IfOp {
+public:
+  static constexpr llvm::StringLiteral kMarkerAttr = "ttg.conditional_load";
+  using IfOp::IfOp;
+
+  // Get the loads inside the conditional.
+  SmallVector<Operation *> getLoads();
+
+  // Support for LLVM-style RTTI.
+  static bool classof(Operation *op);
+};
+
 } // namespace triton
 } // namespace mlir
 

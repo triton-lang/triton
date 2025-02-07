@@ -78,6 +78,12 @@ int getCopyVecBytes(RankedTensorType registerTy,
 
 bool isPipeliningBeneficial(Operation *op, Operation *finalUser,
                             tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
+  if (auto condOp = dyn_cast<tt::ConditionalLoadOp>(op)) {
+    return llvm::any_of(condOp.getLoads(), [&](Operation *load) {
+      return isPipeliningBeneficial(load, finalUser, axisInfoAnalysis);
+    });
+  }
+
   if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
     if (isSmallLoad(loadOp, axisInfoAnalysis)) {
       LDBG("Load " << *loadOp << " is too small for pipelining");
@@ -141,7 +147,8 @@ loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
         if (!seen.insert(op).second || excluded.count(op))
           return;
         if (isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp,
-                tt::ExperimentalDescriptorGatherOp>(op)) {
+                tt::ExperimentalDescriptorGatherOp, tt::ConditionalLoadOp>(
+                op)) {
           if (!isPipeliningBeneficial(op, finalUser, axisInfoAnalysis))
             return;
           if (loadOpToIndLevel.count(op)) {
@@ -164,7 +171,7 @@ loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
           finalUser = op;
           distance++;
         }
-        for (Value operand : op->getOperands()) {
+        for (Value operand : getNestedOperands(op)) {
           if (isa<mlir::triton::DotOpInterface>(op)) {
             // Heuristic: only pipeline A and B operands of the dot op.
             if (operand == op->getOperand(2))
@@ -199,10 +206,10 @@ loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
 
   // If the loop has numStages attribute, also consider pipelining other loads
   // that are not directly used by dot ops.
-  if (pipelineWithoutDot && !seenDot) {
+  if (pipelineWithoutDot /*&& !seenDot*/) {
     for (Operation &op : forOp.getBody()->without_terminator()) {
       if (!isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp,
-               tt::ExperimentalDescriptorGatherOp>(op))
+               tt::ExperimentalDescriptorGatherOp, tt::ConditionalLoadOp>(op))
         dfs(&op, &op, 0);
     }
   }
@@ -256,6 +263,16 @@ DenseMap<Operation *, int> assignLatencies(ModuleOp moduleOp,
 
   DenseMap<Operation *, int> opLatency;
   for (auto forOp : loops) {
+    for (auto ifOp : forOp.getBody()->getOps<scf::IfOp>()) {
+      auto isLoad = [&](Operation &op) {
+        return isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp,
+                   tt::ExperimentalDescriptorGatherOp>(op);
+      };
+      if (llvm::any_of(*ifOp.thenBlock(), isLoad) ||
+          (ifOp.elseBlock() && llvm::any_of(*ifOp.elseBlock(), isLoad)))
+        ifOp->setAttr("ttg.conditional_load", UnitAttr::get(ifOp.getContext()));
+    }
+
     if (hasLatenciesAssigned(forOp)) {
       assignUserProvidedLatencies(forOp, opLatency);
       continue;
@@ -282,10 +299,21 @@ DenseMap<Operation *, int> assignLatencies(ModuleOp moduleOp,
         ++iter;
     }
 
+    int usedStages = 0;
+    for (Operation *loadOp :
+         llvm::to_vector(llvm::make_first_range(loadOpToIndLevel))) {
+      if (isa<tt::ConditionalLoadOp>(loadOp)) {
+        opLatency[loadOp] = 1;
+        usedStages = std::max(usedStages, loadOpToIndLevel[loadOp]);
+        loadOpToIndLevel.erase(loadOp);
+      }
+    }
+
     // Calculate the stage distance between applicable loads.
     auto vals = llvm::make_second_range(loadOpToIndLevel);
     int maxIndirectionLevel = vals.empty() ? 0 : *llvm::max_element(vals);
-    unsigned loadLatency = (numStages - 1) / (maxIndirectionLevel + 1);
+    unsigned loadLatency =
+        (numStages - 1 - usedStages) / (maxIndirectionLevel + 1);
 
     for (auto [loadOp, dist] : loadOpToIndLevel) {
       opLatency[loadOp] = loadLatency;

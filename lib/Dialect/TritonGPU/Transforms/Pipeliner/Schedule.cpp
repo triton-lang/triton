@@ -18,7 +18,7 @@ bool tt::CoarseSchedule::insertDepsOfOp(Operation *op, int stage,
                                         tt::CoarseSchedule::Cluster cluster,
                                         bool includeArg) {
   bool inserted = false;
-  for (Value operand : op->getOperands()) {
+  for (Value operand : getNestedOperands(op)) {
     Value v = operand;
     llvm::SmallDenseSet<Value> seen;
     while (auto arg = dyn_cast<BlockArgument>(v)) {
@@ -45,10 +45,10 @@ bool tt::CoarseSchedule::insertDepsOfOp(Operation *op, int stage,
 }
 
 SmallVector<std::tuple<Operation *, int, tt::CoarseSchedule::Cluster>>
-tt::CoarseSchedule::getOpsInOrder(scf::ForOp forOp) {
+tt::CoarseSchedule::getOpsInOrder(Block *block) {
   SmallVector<SmallVector<std::tuple<Operation *, int, Cluster>>, 8>
       orderClusters(clusters.size());
-  for (auto &op : forOp.getBody()->without_terminator()) {
+  for (auto &op : block->without_terminator()) {
     if (opToStageAndCluster.count(&op) == 0) {
       continue;
     }
@@ -69,6 +69,11 @@ tt::CoarseSchedule::getOpsInOrder(scf::ForOp forOp) {
   }
 
   return opsInOrder;
+}
+
+SmallVector<std::tuple<Operation *, int, tt::CoarseSchedule::Cluster>>
+tt::CoarseSchedule::getOpsInOrder(scf::ForOp forOp) {
+  return getOpsInOrder(forOp.getBody());
 }
 
 std::vector<std::pair<Operation *, unsigned>>
@@ -94,26 +99,34 @@ void tt::CoarseSchedule::dump() {
 }
 
 // Set <stage, cluster> based on CoarseSchedule.
-void tt::CoarseSchedule::serialize(scf::ForOp &forOp) {
-  for (auto [op, stage, cluster] : getOpsInOrder(forOp)) {
+void tt::CoarseSchedule::serialize(Block *block) {
+  for (auto [op, stage, cluster] : getOpsInOrder(block)) {
     tt::setStageCluster(op, stage, *cluster);
   }
 }
 
+void tt::CoarseSchedule::serialize(scf::ForOp &forOp) {
+  serialize(forOp.getBody());
+}
+
 // Create a CoarseSchedule based on forOp's <stage, cluster>.
-void tt::CoarseSchedule::deSerialize(scf::ForOp &forOp) {
-  auto [minClusterId, maxClusterId] = tt::getMinMaxCluster(forOp);
+void tt::CoarseSchedule::deSerialize(Block *block) {
+  auto [minClusterId, maxClusterId] = tt::getMinMaxCluster(block);
 
   DenseMap<int, tt::CoarseSchedule::Cluster> clustersMap;
   for (int i = minClusterId; i < maxClusterId + 1; i++) {
     clustersMap.insert({i, clusters.newAtBack()});
   }
-  for (Operation &op : forOp.getBody()->without_terminator()) {
+  for (Operation &op : block->without_terminator()) {
     if (!op.hasAttr(mlir::triton::kLoopStageAttrName))
       continue;
     auto [stage, clusterId] = tt::getStageCluster(&op);
     insert(&op, stage, clustersMap[clusterId]);
   }
+}
+
+void tt::CoarseSchedule::deSerialize(scf::ForOp &forOp) {
+  deSerialize(forOp.getBody());
 }
 
 // TODO: Should this be moved somewhere else?

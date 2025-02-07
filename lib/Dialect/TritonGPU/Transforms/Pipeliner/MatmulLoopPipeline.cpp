@@ -1,6 +1,9 @@
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
+#include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "mlir/IR/Verifier.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
@@ -44,9 +47,17 @@ struct LoadInfo {
   bool isMMAv5Scale = false;
   int distToUse = 0;
   bool usedByDot = false;
-};
 
-} // namespace
+  LLVM_DUMP_METHOD void dump() const {
+    llvm::dbgs() << "LoadInfo: \n"
+                 << "  sharedEncoding: " << sharedEncoding << "\n"
+                 << "  blockedEncoding: " << blockedEncoding << "\n"
+                 << "  isMMAv3Shared: " << isMMAv3Shared << "\n"
+                 << "  isMMAv5Scale: " << isMMAv5Scale << "\n"
+                 << "  distToUse: " << distToUse << "\n"
+                 << "  usedByDot: " << usedByDot << "\n";
+  }
+};
 
 class OpBuilderWithStage : public OpBuilder {
 public:
@@ -90,6 +101,8 @@ public:
   }
 };
 
+} // namespace
+
 static bool sameStageCluster(Operation *op1, Operation *op2) {
   auto [s1, c1] = tt::getStageCluster(op1);
   auto [s2, c2] = tt::getStageCluster(op2);
@@ -99,20 +112,28 @@ static bool sameStageCluster(Operation *op1, Operation *op2) {
 // Return user of a loadOp with the lowest stage, if two users have the
 // same stage, return the user with lower cluster.
 static Operation *getFirstUseOfPipelinedLoad(Operation *loadOp) {
+  if (auto condOp = dyn_cast<tt::ConditionalLoadOp>(loadOp->getParentOp()))
+    loadOp = condOp;
+
   Operation *firstUser = nullptr;
   for (Operation *user : loadOp->getUsers()) {
-    if (user->getBlock() == loadOp->getBlock()) {
-      auto [stage, clusterId] = tt::getStageCluster(user);
-      // Update FirstUse if this use has lower stage or lower cluster.
-      if (!firstUser)
+    if (isa<scf::YieldOp>(user))
+      continue;
+
+    // Climb up to the containing op in the same block as the load.
+    while (user->getBlock() != loadOp->getBlock())
+      user = user->getParentOp();
+
+    auto [stage, clusterId] = tt::getStageCluster(user);
+    // Update FirstUse if this use has lower stage or lower cluster.
+    if (!firstUser) {
+      firstUser = user;
+    } else {
+      auto [stageForFirstUse, clusterForFirstUse] =
+          tt::getStageCluster(firstUser);
+      if (stage < stageForFirstUse ||
+          (stage == stageForFirstUse && clusterId < clusterForFirstUse))
         firstUser = user;
-      else {
-        auto [stageForFirstUse, clusterForFirstUse] =
-            tt::getStageCluster(firstUser);
-        if (stage < stageForFirstUse ||
-            (stage == stageForFirstUse && clusterId < clusterForFirstUse))
-          firstUser = user;
-      }
     }
   }
   return firstUser;
@@ -120,8 +141,7 @@ static Operation *getFirstUseOfPipelinedLoad(Operation *loadOp) {
 
 static int createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
                            Value insertIdx, Value extractIdx,
-                           llvm::MapVector<Operation *, LoadInfo> &loadToInfo,
-                           int maxClusterId) {
+                           const LoadInfo &loadInfo, int maxClusterId) {
   int retCode = -1;
   OpBuilderWithStage builder(forOp);
   auto opPair = tt::getStageCluster(loadOp);
@@ -147,10 +167,10 @@ static int createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
     return cvt.getResult();
   };
 
-  if (!isExpensiveLoadOrStore(loadOp) && loadToInfo[loadOp].blockedEncoding) {
+  if (!isExpensiveLoadOrStore(loadOp) && loadInfo.blockedEncoding) {
     // For inexpensive loads that do not directly feed into dot ops
     // we want to use optimal layout for the data.
-    ttg::BlockedEncodingAttr encoding = loadToInfo[loadOp].blockedEncoding;
+    ttg::BlockedEncodingAttr encoding = loadInfo.blockedEncoding;
     src = convertBlockLayout(src, encoding);
     if (mask)
       mask = convertBlockLayout(mask, encoding);
@@ -182,7 +202,7 @@ static int createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
   auto viewLoad = builder.createWithStage<ttg::MemDescSubviewOp>(
       loc, stageForFirstUse, clusterForFirstUse, subviewTy, alloc, loadOffsets);
 
-  if (loadToInfo[loadOp].isMMAv3Shared || loadToInfo[loadOp].isMMAv5Scale) {
+  if (loadInfo.isMMAv3Shared || loadInfo.isMMAv5Scale) {
     auto user = *loadOp->getUsers().begin();
     assert(isa<triton::gpu::LocalAllocOp>(user) &&
            "Loading of MMAv3 operands and MMAv5 scale is expected to be "
@@ -222,7 +242,7 @@ static int createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
     loadOp->replaceAllUsesWith(result);
 
     // Prefetch load if is not MMAV3 and is used by the dot.
-    if (loadToInfo[loadOp].usedByDot) {
+    if (loadInfo.usedByDot) {
       assert(stageForFirstUse >= 1);
       tt::setStageCluster(wait, stageForFirstUse - 1, maxClusterId + 1);
       tt::setStageCluster(viewLoad, stageForFirstUse - 1, maxClusterId + 1);
@@ -233,14 +253,13 @@ static int createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
   return retCode;
 }
 
-static void
-createTMAAsyncCopy(scf::ForOp forOp, Operation *loadOp, Value desc, Value alloc,
-                   Value insertIdx, Value extractIdx, Value barrier,
-                   Operation *waitOp,
-                   llvm::MapVector<Operation *, LoadInfo> &loadToInfo,
-                   function_ref<void(OpBuilderWithStage &, int, int, Value,
-                                     Value, Value, Value)>
-                       createCopy) {
+static void createTMAAsyncCopy(scf::ForOp forOp, Operation *loadOp, Value desc,
+                               Value alloc, Value insertIdx, Value extractIdx,
+                               Value barrier, Operation *waitOp,
+                               const LoadInfo &loadInfo,
+                               function_ref<void(OpBuilderWithStage &, int, int,
+                                                 Value, Value, Value, Value)>
+                                   createCopy) {
   OpBuilderWithStage builder(forOp);
   auto [stage, clusterId] = tt::getStageCluster(loadOp);
   auto *firstUse = getFirstUseOfPipelinedLoad(loadOp);
@@ -269,7 +288,7 @@ createTMAAsyncCopy(scf::ForOp forOp, Operation *loadOp, Value desc, Value alloc,
           loc, stage, clusterId, desc);
   createCopy(builder, stage, clusterId, tmaPtr, barrier, view, pred);
 
-  auto loadIsMMAv3Shared = loadToInfo[loadOp].isMMAv3Shared;
+  auto loadIsMMAv3Shared = loadInfo.isMMAv3Shared;
 
   builder.setInsertionPointAfter(waitOp);
   // Extract part.
@@ -303,14 +322,14 @@ createTMAAsyncCopy(scf::ForOp forOp, Operation *loadOp, Value desc, Value alloc,
   loadOp->erase();
 }
 
-static void
-createTMAAsyncLoad(scf::ForOp forOp, tt::ExperimentalDescriptorLoadOp loadOp,
-                   Value alloc, Value insertIdx, Value extractIdx,
-                   Value barrier, Operation *waitOp,
-                   llvm::MapVector<Operation *, LoadInfo> &loadToInfo) {
+static void createTMAAsyncLoad(scf::ForOp forOp,
+                               tt::ExperimentalDescriptorLoadOp loadOp,
+                               Value alloc, Value insertIdx, Value extractIdx,
+                               Value barrier, Operation *waitOp,
+                               const LoadInfo &loadInfo) {
   return createTMAAsyncCopy(
       forOp, loadOp, loadOp.getDesc(), alloc, insertIdx, extractIdx, barrier,
-      waitOp, loadToInfo,
+      waitOp, loadInfo,
       [&](OpBuilderWithStage &builder, int stage, int clusterId, Value tmaPtr,
           Value barrier, Value view, Value pred) {
         builder.createWithStage<ttng::AsyncTMACopyGlobalToLocalOp>(
@@ -319,13 +338,14 @@ createTMAAsyncLoad(scf::ForOp forOp, tt::ExperimentalDescriptorLoadOp loadOp,
       });
 }
 
-static void createTMAAsyncGather(
-    scf::ForOp forOp, tt::ExperimentalDescriptorGatherOp gatherOp, Value alloc,
-    Value insertIdx, Value extractIdx, Value barrier, Operation *waitOp,
-    llvm::MapVector<Operation *, LoadInfo> &loadToInfo) {
+static void createTMAAsyncGather(scf::ForOp forOp,
+                                 tt::ExperimentalDescriptorGatherOp gatherOp,
+                                 Value alloc, Value insertIdx, Value extractIdx,
+                                 Value barrier, Operation *waitOp,
+                                 const LoadInfo &loadInfo) {
   return createTMAAsyncCopy(
       forOp, gatherOp, gatherOp.getDesc(), alloc, insertIdx, extractIdx,
-      barrier, waitOp, loadToInfo,
+      barrier, waitOp, loadInfo,
       [&](OpBuilderWithStage &builder, int stage, int clusterId, Value tmaPtr,
           Value barrier, Value view, Value pred) {
         builder.createWithStage<ttng::AsyncTMAGatherOp>(
@@ -436,34 +456,35 @@ getTransitiveUserInBlock(Operation *baseOp, scf::ForOp &forOp) {
   llvm::SmallVector<Operation *> users;
   DenseSet<Operation *> seen;
   bool loopHasAttribute = forOp->hasAttr(tt::kNumStagesAttrName);
-  std::function<void(Operation *, Operation *, bool)> dfs =
-      [&](Operation *op, Operation *baseOp, bool anyOp) {
-        if (!seen.insert(op).second)
-          return;
-        if (op != baseOp) {
-          if (anyOp) {
-            // Only track the first op in the dependence chain.
-            users.push_back(op);
-            return;
-          }
-          if (isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp,
-                  tt::ExperimentalDescriptorGatherOp>(op) ||
-              isa<mlir::triton::DotOpInterface>(op)) {
-            // Stop recursion when hitting a LoadOp or a DotOp.
-            users.push_back(op);
-            return;
-          }
-        }
-        for (Operation *user : op->getUsers())
-          if (user->getBlock() == op->getBlock())
-            dfs(user, baseOp, anyOp);
-        if (auto tmemCopy = dyn_cast<triton::nvidia_gpu::TMEMCopyOp>(op)) {
-          auto tmemAlloc =
-              tmemCopy.getDst()
-                  .getDefiningOp<triton::nvidia_gpu::TMEMAllocOp>();
-          dfs(tmemAlloc, baseOp, anyOp);
-        }
-      };
+  std::function<void(Operation *, Operation *, bool)> dfs = [&](Operation *op,
+                                                                Operation
+                                                                    *baseOp,
+                                                                bool anyOp) {
+    if (!seen.insert(op).second)
+      return;
+    if (op != baseOp) {
+      if (anyOp) {
+        // Only track the first op in the dependence chain.
+        users.push_back(op);
+        return;
+      }
+      if (isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp,
+              tt::ExperimentalDescriptorGatherOp, tt::ConditionalLoadOp>(op) ||
+          isa<mlir::triton::DotOpInterface>(op)) {
+        // Stop recursion when hitting a LoadOp or a DotOp.
+        users.push_back(op);
+        return;
+      }
+    }
+    for (Operation *user : op->getUsers())
+      if (user->getBlock() == op->getBlock())
+        dfs(user, baseOp, anyOp);
+    if (auto tmemCopy = dyn_cast<triton::nvidia_gpu::TMEMCopyOp>(op)) {
+      auto tmemAlloc =
+          tmemCopy.getDst().getDefiningOp<triton::nvidia_gpu::TMEMAllocOp>();
+      dfs(tmemAlloc, baseOp, anyOp);
+    }
+  };
   // We are matching the behavior before refactoring:
   //   For loops without num_stage attributes, we check for dot users.
   //   For loops with num_stage attributes, we check for dot users, if there are
@@ -495,7 +516,7 @@ assignMemoryLayouts(scf::ForOp &forOp,
   llvm::DenseSet<Operation *> loadsToPipeline;
   for (auto &op : forOp.getBody()->without_terminator()) {
     if (!isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp,
-             tt::ExperimentalDescriptorGatherOp>(op))
+             tt::ExperimentalDescriptorGatherOp, tt::ConditionalLoadOp>(op))
       continue;
     if (loadToInfo.count(&op))
       // TODO pawel: err, we'd need to verify that the distance is the same
@@ -507,11 +528,40 @@ assignMemoryLayouts(scf::ForOp &forOp,
     // as a pipelined load.
     auto [sLoad, _cLoad] = tt::getStageCluster(&op);
     Operation *firstUse = getFirstUseOfPipelinedLoad(&op);
+    if (!firstUse)
+      continue;
     LDBG("first use for load " << op);
     LDBG("  - use: " << *firstUse);
     auto firstUseStageCluster = tt::maybeGetStageCluster(firstUse);
     if (!firstUseStageCluster || firstUseStageCluster->first == sLoad)
       continue;
+    int distToUse = firstUseStageCluster->first - sLoad;
+
+    // Loads inside conditionals cannot be fed directly into ops through
+    // shared memory (yet). So use a generic shared encoding for all of them.
+    // Also create a `LoadInfo` for each contained load.
+    if (auto condOp = dyn_cast<tt::ConditionalLoadOp>(op)) {
+      condOp->setAttr("ttg.pipelined_load", UnitAttr::get(op.getContext()));
+      for (Operation *op : condOp.getLoads()) {
+        if (!isa<RankedTensorType>(op->getResultTypes().front()))
+          continue;
+
+        loadsToPipeline.insert(op);
+        LoadInfo &loadInfo = loadToInfo[op];
+        loadInfo.distToUse = distToUse;
+
+        bool isTMALoad = isa<tt::ExperimentalDescriptorLoadOp,
+                             tt::ExperimentalDescriptorGatherOp>(op);
+        loadInfo.sharedEncoding =
+            getSharedEncoding(op, isTMALoad).value_or(nullptr);
+      }
+      continue;
+    }
+
+    loadsToPipeline.insert(&op);
+    LoadInfo loadInfo;
+    // Distance from the load to the use.
+    loadInfo.distToUse = distToUse;
 
     // Try to set shared encoding etc for the pipelined load.
     auto users = getTransitiveUserInBlock(&op, forOp);
@@ -524,8 +574,6 @@ assignMemoryLayouts(scf::ForOp &forOp,
 
     bool isTMALoad = isa<tt::ExperimentalDescriptorLoadOp,
                          tt::ExperimentalDescriptorGatherOp>(op);
-    loadsToPipeline.insert(&op);
-    LoadInfo loadInfo;
     for (auto use : users) {
       if (isa<mlir::triton::DotOpInterface>(use)) {
         LDBG("set shared encoding with dot user: " << *use);
@@ -620,6 +668,7 @@ static Value createBarrierAlloc(scf::ForOp &forOp, unsigned distance) {
   return barrierAlloc;
 }
 
+namespace {
 struct StageGroup {
   Value insertIdx;
   Value extractIdx;
@@ -635,6 +684,7 @@ struct AsyncLoad {
   bool isTMALoad = false;
   int numBuffers = 0;
 };
+} // namespace
 
 // Create barriers and wait ops for the async loads. Barriers may be shared by
 // multiple loads if the schedule allows it.
@@ -776,7 +826,7 @@ getFinalSchedule(scf::ForOp &forOp, int numStages) {
   return fSchedule;
 }
 
-LogicalResult
+static LogicalResult
 allocTMABuffers(scf::ForOp forOp,
                 llvm::MapVector<Operation *, Value> &tmaBufferMapping,
                 int numStages) {
@@ -798,8 +848,9 @@ allocTMABuffers(scf::ForOp forOp,
 }
 
 template <typename BuilderT>
-Value createIncrementModulo(BuilderT &builder, Location loc, Value counter,
-                            Value modulus, Value zero, Value one) {
+static Value createIncrementModulo(BuilderT &builder, Location loc,
+                                   Value counter, Value modulus, Value zero,
+                                   Value one) {
   Value addOne = builder.template create<arith::AddIOp>(loc, counter, one);
   Value inRangeCond = builder.template create<arith::CmpIOp>(
       loc, arith::CmpIPredicate::slt, addOne, modulus);
@@ -808,8 +859,8 @@ Value createIncrementModulo(BuilderT &builder, Location loc, Value counter,
 }
 
 template <typename BuilderT>
-Value subviewTMADescriptor(BuilderT &builder, Location loc, Value alloc,
-                           Value counter) {
+static Value subviewTMADescriptor(BuilderT &builder, Location loc, Value alloc,
+                                  Value counter) {
   Value tmaSizeVal = builder.template create<arith::ConstantIntOp>(
       loc, ttng::TMA_SIZE_BYTES, 32);
   Value offset =
@@ -818,7 +869,7 @@ Value subviewTMADescriptor(BuilderT &builder, Location loc, Value alloc,
                                                    offset);
 }
 
-LogicalResult rewriteTMABufferUpdates(
+static LogicalResult rewriteTMABufferUpdates(
     scf::ForOp forOp,
     const llvm::MapVector<Operation *, Value> &tmaBufferMapping,
     ArrayRef<BlockArgument> tmaCounters, int numStages, Value one, Value zero) {
@@ -895,6 +946,204 @@ LogicalResult rewriteTMABufferUpdates(
     forYield.setOperand(counter.getArgNumber() - 1, nextCounter);
   }
   return success();
+}
+
+namespace {
+struct SplitCluster {
+  Block *getBlock() { return block.get(); }
+  ValueRange getOutputs() { return outputs; }
+  TypeRange getOutputTypes() { return getOutputs().getTypes(); }
+
+  void replaceAllUsesWith(ValueRange values) {
+    assert(values.size() == outputs.size());
+    for (auto [output, value] : llvm::zip(outputs, values)) {
+      output.replaceUsesWithIf(value, [&](OpOperand &operand) {
+        return operand.getOwner()->getBlock() != getBlock();
+      });
+    }
+  }
+
+  std::unique_ptr<Block> block;
+  SmallVector<Value> outputs;
+  int stage;
+  int clusterId;
+};
+} // namespace
+
+static SmallVector<SplitCluster> splitIntoClusters(Block *block) {
+  llvm::MapVector<int, SplitCluster> clusters;
+  auto getCluster = [&](int stage, int clusterId) -> SplitCluster & {
+    SplitCluster &cluster = clusters[clusterId];
+    if (!cluster.block) {
+      cluster.block = std::make_unique<Block>();
+      cluster.stage = stage;
+      cluster.clusterId = clusterId;
+    }
+    return cluster;
+  };
+
+  // Partition the original block into clusters.
+  for (Operation &op :
+       llvm::make_early_inc_range(block->without_terminator())) {
+    auto [stage, clusterId] = tt::getStageCluster(&op);
+    SplitCluster &cluster = getCluster(stage, clusterId);
+    op.moveBefore(cluster.getBlock(), cluster.getBlock()->end());
+  }
+
+  // Scan the individual clusters to determine the output values.
+  for (SplitCluster &cluster : llvm::make_second_range(clusters)) {
+    for (Operation &op : *cluster.getBlock()) {
+      for (Value result : op.getResults()) {
+        if (llvm::any_of(result.getUsers(), [&](Operation *user) {
+              return user->getBlock() != cluster.getBlock();
+            })) {
+          cluster.outputs.push_back(result);
+        }
+      }
+    }
+  }
+
+  SmallVector<SplitCluster> result;
+  for (SplitCluster &cluster : llvm::make_second_range(clusters))
+    result.push_back(std::move(cluster));
+  return result;
+}
+
+// To model an "undef" value, i.e. a value that is known to never be read on
+// live code paths, create a zero-valued constant where possible, otherwise use
+// a poison value. PTXAS appears to generate better code with zeros compared to
+// poison values.
+static Value createPoisonOrZero(ImplicitLocOpBuilder &b, Type type) {
+  Type elTy = getElementTypeOrSelf(type);
+  if (!elTy.isIntOrIndexOrFloat() ||
+      (!isa<RankedTensorType>(type) && type != elTy))
+    return b.create<ub::PoisonOp>(type);
+
+  TypedAttr attr = isa<FloatType>(elTy) ? TypedAttr(b.getFloatAttr(elTy, 0))
+                                        : b.getIntegerAttr(elTy, 0);
+  if (auto tensor = dyn_cast<RankedTensorType>(type))
+    attr = SplatElementsAttr::get(tensor, attr);
+  return b.create<arith::ConstantOp>(attr);
+}
+
+static void splitIntoClusters(scf::IfOp ifOp) {
+  // First partition the regions into clusters.
+  SmallVector<SplitCluster> thenClusters = splitIntoClusters(ifOp.thenBlock());
+  SmallVector<SplitCluster> elseClusters = splitIntoClusters(ifOp.elseBlock());
+  ifOp->removeAttr(tt::ConditionalLoadOp::kMarkerAttr);
+
+  // The original `scf.if` is left with just the yields.
+  SmallVector<std::pair<bool, SplitCluster>> thenElseClusters;
+  for (SplitCluster &cluster : thenClusters)
+    thenElseClusters.push_back({true, std::move(cluster)});
+  for (SplitCluster &cluster : elseClusters)
+    thenElseClusters.push_back({false, std::move(cluster)});
+
+  ImplicitLocOpBuilder b(ifOp.getLoc(), ifOp);
+  // Functor to push the split cluster's block into one of the regions and
+  // return undefs in the other.
+  auto createSplitIf = [&b](SplitCluster &cluster, Region &clusterRegion,
+                            Region &otherRegion) {
+    OpBuilder::InsertionGuard guard(b);
+
+    clusterRegion.push_back(cluster.block.release());
+    b.setInsertionPointToEnd(&clusterRegion.back());
+    auto yield = b.create<scf::YieldOp>(cluster.getOutputs());
+    tt::setStageCluster(yield, cluster.stage, cluster.clusterId);
+
+    b.createBlock(&otherRegion);
+    SmallVector<Value> undefs;
+    for (Type type : cluster.getOutputTypes())
+      undefs.push_back(createPoisonOrZero(b, type));
+    b.create<scf::YieldOp>(undefs);
+  };
+
+  // Move the split blocks into their own ifs.
+  for (auto &[isThen, cluster] : thenElseClusters) {
+    auto clusterIf =
+        b.create<scf::IfOp>(cluster.getOutputTypes(), ifOp.getCondition());
+    tt::setStageCluster(clusterIf, cluster.stage, cluster.clusterId);
+    cluster.replaceAllUsesWith(clusterIf.getResults());
+    createSplitIf(
+        cluster, isThen ? clusterIf.getThenRegion() : clusterIf.getElseRegion(),
+        isThen ? clusterIf.getElseRegion() : clusterIf.getThenRegion());
+  }
+
+  // Break up the final if.
+  for (auto [trueVal, falseVal, result] :
+       llvm::zip(ifOp.thenYield().getOperands(), ifOp.elseYield().getOperands(),
+                 ifOp.getResults())) {
+    SmallVector<std::pair<int, int>> stageClusters;
+    if (Operation *op = trueVal.getDefiningOp())
+      stageClusters.push_back(tt::getStageCluster(op));
+    if (Operation *op = falseVal.getDefiningOp())
+      stageClusters.push_back(tt::getStageCluster(op));
+    auto [stage, cluster] = stageClusters.empty()
+                                ? tt::getStageCluster(ifOp)
+                                : *llvm::max_element(stageClusters);
+    auto select =
+        b.create<arith::SelectOp>(ifOp.getCondition(), trueVal, falseVal);
+    tt::setStageCluster(select, stage, cluster);
+    result.replaceAllUsesWith(select);
+  }
+  ifOp.erase();
+}
+
+static void processConditionalLoads(scf::ForOp forOp, int numStages) {
+  for (auto condOp : forOp.getBody()->getOps<tt::ConditionalLoadOp>()) {
+    if (!condOp->hasAttr("ttg.pipelined_load"))
+      continue;
+
+    // Prepare to split the `scf.if` by assigning clusters and stages such that:
+    // - Loads and ops in their backward slices are assigned to the stage and
+    //   cluster of the `scf.if`.
+    // - Ops in the forward slices of the loads are assign to the stage and
+    //   cluster of the conditional load's first use.
+    // - All other ops are assigned to the cluster of the `scf.if`.
+    Operation *firstUse = getFirstUseOfPipelinedLoad(condOp);
+    auto [stage, clusterId] = tt::getStageCluster(condOp);
+    auto [stageForFirstUse, clusterForFirstUse] = tt::getStageCluster(firstUse);
+    auto [minCluster, maxCluster] = tt::getMinMaxCluster(forOp);
+
+    // FIXME: Explore teaching the scheduler to handle scheduling the if bodies.
+    tt::CoarseSchedule nestedSchedule(numStages);
+    SmallVector<tt::CoarseSchedule::Cluster> clusters;
+    for (unsigned i = 0; i <= maxCluster; ++i)
+      clusters.push_back(nestedSchedule.clusters.newAtBack());
+    auto &loadCluster = clusters[clusterId];
+    auto &firstUseCluster = clusters[clusterForFirstUse];
+
+    for (Operation *loadOp : condOp.getLoads()) {
+      if (!isa<RankedTensorType>(loadOp->getResultTypes().front()))
+        continue;
+
+      nestedSchedule.insert(loadOp, stage, loadCluster);
+      nestedSchedule.insertDepsOfOp(loadOp, stage, loadCluster,
+                                    /*includeArg=*/false);
+
+      SetVector<Operation *> slice;
+      getForwardSlice(loadOp, &slice);
+      for (Operation *op : slice)
+        nestedSchedule.insert(op, stageForFirstUse, firstUseCluster);
+    }
+
+    // Schedule remaining ops.
+    for (Region &region : condOp->getRegions()) {
+      for (Operation &op : region.getOps()) {
+        if (nestedSchedule.find(&op) == nestedSchedule.end())
+          nestedSchedule.insert(&op, stage, loadCluster);
+      }
+    }
+
+    nestedSchedule.serialize(condOp.thenBlock());
+    nestedSchedule.serialize(condOp.elseBlock());
+    // HACK: Set <stage, cluster> on the yield in case it is the only direct use
+    // of the load inside the if.
+    tt::setStageCluster(&condOp.thenBlock()->back(), stageForFirstUse,
+                        clusterForFirstUse);
+    tt::setStageCluster(&condOp.elseBlock()->back(), stageForFirstUse,
+                        clusterForFirstUse);
+  }
 }
 
 // Convert load ops into their async version and apply multi-buffering based on
@@ -1042,23 +1291,26 @@ createAsyncOps(scf::ForOp &forOp,
   }
   createTMABarrierAndWait(forOp, asyncLoads, barriers, stageGroups, loadToInfo);
 
+  processConditionalLoads(forOp, numStages);
+
   auto [_, maxClusterId] = tt::getMinMaxCluster(forOp);
   for (AsyncLoad &asyncLoad : asyncLoads) {
     auto [insertIdx, extractIdx, phase, _] = stageGroups[asyncLoad.numBuffers];
+    const LoadInfo &loadInfo = loadToInfo[asyncLoad.loadOp];
     if (auto loadOp = dyn_cast<tt::LoadOp>(asyncLoad.loadOp)) {
       createAsyncCopy(forOp, loadOp, asyncLoad.alloc, insertIdx, extractIdx,
-                      loadToInfo, maxClusterId);
+                      loadInfo, maxClusterId);
     } else if (auto descLoad = dyn_cast<tt::ExperimentalDescriptorLoadOp>(
                    asyncLoad.loadOp)) {
       createTMAAsyncLoad(forOp, descLoad, asyncLoad.alloc, insertIdx,
                          extractIdx, asyncLoad.barrier, asyncLoad.waitOp,
-                         loadToInfo);
+                         loadInfo);
     } else {
       auto descGather =
           cast<tt::ExperimentalDescriptorGatherOp>(asyncLoad.loadOp);
       createTMAAsyncGather(forOp, descGather, asyncLoad.alloc, insertIdx,
                            extractIdx, asyncLoad.barrier, asyncLoad.waitOp,
-                           loadToInfo);
+                           loadInfo);
     }
   }
   // Patch the yield with the updated counters. Subtract to account for the loop
@@ -1071,6 +1323,14 @@ createAsyncOps(scf::ForOp &forOp,
       forYield.setOperand(argIdx++, stageGroup.phase);
   }
   assert(argIdx + 1 == tmaCounterArgsStartIdx);
+
+  // Now that async ops have been lowered, partition the conditional loads.
+  for (auto condOp : llvm::make_early_inc_range(
+           forOp.getBody()->getOps<tt::ConditionalLoadOp>())) {
+    if (condOp->removeAttr("ttg.pipelined_load"))
+      splitIntoClusters(condOp);
+  }
+  assert(succeeded(mlir::verify(forOp)) && "splitting produced invalid IR");
 
   tt::CoarseSchedule coarseSchedule(numStages);
   coarseSchedule.deSerialize(forOp);
@@ -1117,14 +1377,6 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
   if (loadToInfo.empty())
     return false;
 
-  // Distance from the load to the use.
-  for (auto &[loadOp, info] : loadToInfo) {
-    auto *use = getFirstUseOfPipelinedLoad(loadOp);
-    auto [stage, _] = tt::getStageCluster(loadOp);
-    auto [stageUse, t_] = tt::getStageCluster(use);
-    loadToInfo[loadOp].distToUse = stageUse - stage;
-  }
-
   SmallVector<Value> barriers;
   // Convert the loads into async loads and create the allocs.
   SmallVector<Value> allocs =
@@ -1150,10 +1402,10 @@ bool mlir::triton::preProcessLoopAndGetSchedule(
                           unsigned iteration) {};
 
   // Clean up the attributes.
-  for (Operation &op : forOp.getBody()->without_terminator()) {
-    op.removeAttr(mlir::triton::kLoopStageAttrName);
-    op.removeAttr(mlir::triton::kLoopClusterAttrName);
-  }
+  forOp.walk([&](Operation *op) {
+    op->removeAttr(mlir::triton::kLoopStageAttrName);
+    op->removeAttr(mlir::triton::kLoopClusterAttrName);
+  });
 
   // Insert a wait 0 after the loop
   OpBuilder builder(forOp);
@@ -1225,7 +1477,15 @@ static int minNumInterleavedCommitOps(Operation *waitOp) {
 
   if (waitOp->getNumOperands() != 1)
     return 0;
-  int minCommits = minOverHistories(waitOp->getOperand(0), waitOp, 0);
+  Value val = waitOp->getOperand(0);
+  // If the value resides in a region other than the region of the wait op, then
+  // the wait op must be in some nested region. Measure the number of commits
+  // between the definition value and the parent op.
+  // TODO: We could measure commits in nested regions along the path if
+  // necessary.
+  while (waitOp->getParentRegion() != val.getParentRegion())
+    waitOp = waitOp->getParentOp();
+  int minCommits = minOverHistories(val, waitOp, 0);
   return minCommits;
 }
 

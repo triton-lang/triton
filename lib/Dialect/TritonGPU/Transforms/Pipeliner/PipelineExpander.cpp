@@ -35,6 +35,7 @@
 #include "llvm/Support/MathExtras.h"
 
 #include "triton/Dialect/TritonGPU/Transforms/PipelineExpander.h"
+#include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 
 // FIXME: PipelineExpander should not depend on Triton-specific headers!
 #include "triton/Dialect/TritonGPU/IR/Types.h"
