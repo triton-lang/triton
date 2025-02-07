@@ -33,38 +33,33 @@ namespace mlir {
 namespace triton {
 namespace gpu {
 
-// TODO: Inheritance of layout attributes
-// so that all distributed layouts implement
-// these utilities
-
-unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape,
-                                Type eltTy) {
+LinearEncodingAttr toLinearEncoding(Attribute layout, ArrayRef<int64_t> shape) {
   auto linearLayout = toLinearLayout(shape, layout);
-  auto llAttr = LinearEncodingAttr::get(layout.getContext(), linearLayout);
-  return llAttr.getTotalElemsPerThread(shape, eltTy);
+  return LinearEncodingAttr::get(layout.getContext(), linearLayout);
+}
+
+unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape) {
+  return toLinearEncoding(layout, shape).getTotalElemsPerThread(shape);
 }
 
 SmallVector<unsigned> getElemsPerThread(Attribute layout,
-                                        ArrayRef<int64_t> shape, Type eltTy) {
-  auto linearLayout = toLinearLayout(shape, layout);
-  auto llAttr = LinearEncodingAttr::get(layout.getContext(), linearLayout);
-  return llAttr.getElemsPerThread(shape, eltTy);
+                                        ArrayRef<int64_t> shape) {
+  return toLinearEncoding(layout, shape).getElemsPerThread(shape);
 }
 
 SmallVector<unsigned> getElemsPerThread(Type type) {
   if (type.isIntOrIndexOrFloat() || isa<triton::PointerType>(type))
     return SmallVector<unsigned>(1, 1);
   auto tensorType = cast<RankedTensorType>(type);
-  return getElemsPerThread(tensorType.getEncoding(), tensorType.getShape(),
-                           tensorType.getElementType());
+  return getElemsPerThread(tensorType.getEncoding(), tensorType.getShape());
 }
 
 unsigned getTotalElemsPerThread(Type type) {
   if (type.isIntOrIndexOrFloat() || isa<triton::PointerType>(type))
     return 1;
   auto tensorType = cast<RankedTensorType>(type);
-  return getTotalElemsPerThread(tensorType.getEncoding(), tensorType.getShape(),
-                                tensorType.getElementType());
+  return getTotalElemsPerThread(tensorType.getEncoding(),
+                                tensorType.getShape());
 }
 
 SmallVector<unsigned> getThreadsPerWarp(Attribute layout) {
@@ -88,9 +83,7 @@ unsigned getWarpSize(Attribute layout) {
 SmallVector<unsigned>
 getThreadsPerWarpWithUniqueData(Attribute layout,
                                 ArrayRef<int64_t> tensorShape) {
-  auto linearLayout = toLinearLayout(tensorShape, layout);
-  auto llAttr = LinearEncodingAttr::get(layout.getContext(), linearLayout);
-  return llAttr.getThreadsPerWarp();
+  return toLinearEncoding(layout, tensorShape).getThreadsPerWarp();
 }
 
 SmallVector<unsigned> getWarpsPerCTA(Attribute layout) {
@@ -443,9 +436,8 @@ bool isExpensiveCat(CatOp cat, Attribute targetEncoding) {
   RankedTensorType tensorTy = cat.getType();
   auto totalElemsPerThread = gpu::getTotalElemsPerThread(tensorTy);
   auto shape = tensorTy.getShape();
-  auto elemTy = tensorTy.getElementType();
   auto newTotalElemsPerThread =
-      gpu::getTotalElemsPerThread(targetEncoding, shape, elemTy);
+      gpu::getTotalElemsPerThread(targetEncoding, shape);
   return newTotalElemsPerThread < totalElemsPerThread;
 }
 
@@ -616,28 +608,6 @@ static void maybePrintCTALayout(mlir::MLIRContext *context,
 #define GET_ATTRDEF_CLASSES
 #include "triton/Dialect/TritonGPU/IR/AttrDefs.cpp.inc"
 
-SmallVector<unsigned>
-BlockedEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
-                                       Type eltTy) const {
-  size_t rank = shape.size();
-  auto sizePerThread = getSizePerThread();
-  auto warpsPerCTA = getWarpsPerCTA();
-  auto threadsPerWarp = getThreadsPerWarp();
-  auto shapePerCTA = getShapePerCTA(*this, shape);
-  assert(rank == sizePerThread.size() &&
-         "unexpected rank in BlockedEncodingAttr::getElemsPerThread");
-  SmallVector<unsigned> elemsPerThread(rank);
-  for (size_t i = 0; i < rank; ++i) {
-    unsigned t = sizePerThread[i] * threadsPerWarp[i] * warpsPerCTA[i];
-    elemsPerThread[i] = ceil<unsigned>(shapePerCTA[i], t) * sizePerThread[i];
-  }
-  return elemsPerThread;
-}
-unsigned BlockedEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
-                                                     Type eltTy) const {
-  return product<unsigned>(getElemsPerThread(shape, eltTy));
-}
-
 // If we only had BlockedEncodingAttr, we could simply return ArrayRefs here.
 // But we need to have a consistent interface with e.g. SliceEncodingAttr, which
 // computes some of these fields.
@@ -688,20 +658,6 @@ template SmallVector<unsigned>
 SliceEncodingAttr::paddedShape<unsigned>(ArrayRef<unsigned> shape) const;
 template SmallVector<int64_t>
 SliceEncodingAttr::paddedShape<int64_t>(ArrayRef<int64_t> shape) const;
-
-SmallVector<unsigned>
-SliceEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
-                                     Type eltTy) const {
-  auto parent = getParent();
-  auto parentElemsPerThread =
-      ::getElemsPerThread(parent, paddedShape(shape), eltTy);
-  parentElemsPerThread.erase(parentElemsPerThread.begin() + getDim());
-  return parentElemsPerThread;
-}
-unsigned SliceEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
-                                                   Type eltTy) const {
-  return product<unsigned>(getElemsPerThread(shape, eltTy));
-}
 SmallVector<unsigned> SliceEncodingAttr::getRepOrder() const {
   auto parentRepOrder = ::getRepOrder(getParent());
   return eraseOrder(parentRepOrder, getDim());
@@ -772,112 +728,7 @@ SmallVector<unsigned> SliceEncodingAttr::getSizePerThread() const {
 
 //
 
-SmallVector<unsigned>
-AMDMfmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
-                                       Type eltTy) const {
-  size_t rank = shape.size();
-  assert((rank == 2 || rank == 3) && "Unexpected rank of mfma layout");
-
-  SmallVector<unsigned> elemsPerThread(rank);
-  auto nonKDim = getMDim();
-  auto elemsPerThreadPerTile = (nonKDim == 16 ? 4 : 16);
-  if (rank == 3)
-    elemsPerThread[0] = ceil<unsigned>(shape[0], getWarpsPerCTA()[0]);
-  if (getIsTransposed()) {
-    unsigned elemsCol =
-        ceil<unsigned>(shape[rank - 1], nonKDim * getWarpsPerCTA()[rank - 1]) *
-        elemsPerThreadPerTile;
-    unsigned elemsRow =
-        ceil<unsigned>(shape[rank - 2], nonKDim * getWarpsPerCTA()[rank - 2]);
-    elemsPerThread[rank - 2] = elemsRow;
-    elemsPerThread[rank - 1] = elemsCol;
-  } else {
-    unsigned elemsCol =
-        ceil<unsigned>(shape[rank - 1], nonKDim * getWarpsPerCTA()[rank - 1]);
-    unsigned elemsRow =
-        ceil<unsigned>(shape[rank - 2], nonKDim * getWarpsPerCTA()[rank - 2]) *
-        elemsPerThreadPerTile;
-    elemsPerThread[rank - 2] = elemsRow;
-    elemsPerThread[rank - 1] = elemsCol;
-  }
-  return elemsPerThread;
-}
-
-unsigned AMDMfmaEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
-                                                     Type eltTy) const {
-  return product<unsigned>(getElemsPerThread(shape, eltTy));
-}
-
 // Wmma encoding
-
-SmallVector<unsigned>
-AMDWmmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
-                                       Type eltTy) const {
-  size_t rank = shape.size();
-  assert((rank == 2 || rank == 3) && "Unexpected rank of wmma layout");
-
-  SmallVector<unsigned> elemsPerThread(rank);
-  auto mnkDim = getMNKDimPerInstr();
-  auto elemsPerThreadPerTile = getSizePerThread();
-  auto warpsPerCTA = getWarpsPerCTA();
-
-  if (rank == 3)
-    elemsPerThread[0] = ceil<unsigned>(shape[0], getWarpsPerCTA()[0]);
-  elemsPerThread[rank - 2] =
-      ceil<unsigned>(shape[rank - 2], mnkDim[0] * warpsPerCTA[rank - 2]) *
-      elemsPerThreadPerTile[rank - 2];
-  elemsPerThread[rank - 1] =
-      ceil<unsigned>(shape[rank - 1], mnkDim[1] * warpsPerCTA[rank - 1]) *
-      elemsPerThreadPerTile[rank - 1];
-  return elemsPerThread;
-}
-
-unsigned AMDWmmaEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
-                                                     Type eltTy) const {
-  return product<unsigned>(getElemsPerThread(shape, eltTy));
-}
-
-SmallVector<unsigned>
-NvidiaMmaEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
-                                         Type eltTy) const {
-  size_t rank = shape.size();
-  assert(rank == 2 ||
-         (rank == 3 && isAmpere()) && "Unexpected rank of mma layout");
-  assert((isAmpere() || isHopper()) &&
-         "For NvidiaMmaEncodingAttr only version 1~3 is supported");
-
-  auto shapePerCTA = getShapePerCTA(getCTALayout().getCTASplitNum(), shape);
-
-  SmallVector<unsigned> elemsPerThread(rank);
-  if (isAmpere()) {
-    unsigned elemsRow =
-        ceil<unsigned>(shapePerCTA[rank - 2], 16 * getWarpsPerCTA()[rank - 2]) *
-        2;
-    unsigned elemsCol =
-        ceil<unsigned>(shapePerCTA[rank - 1], 8 * getWarpsPerCTA()[rank - 1]) *
-        2;
-    if (rank == 3)
-      elemsPerThread[0] = ceil<unsigned>(shapePerCTA[0], getWarpsPerCTA()[0]);
-    elemsPerThread[rank - 2] = elemsRow;
-    elemsPerThread[rank - 1] = elemsCol;
-  } else if (isHopper()) {
-    auto wpt = getWarpsPerCTA();
-    auto instrMNK = getInstrShape();
-    int repM = ceil<unsigned>(shapePerCTA[0], instrMNK[0] * wpt[0]);
-    int repN = ceil<unsigned>(shapePerCTA[1], instrMNK[1] * wpt[1]);
-    elemsPerThread[0] = 2 * repM;
-    elemsPerThread[1] = (instrMNK[1] / 4) * repN;
-  } else {
-    llvm_unreachable("Unexpected mma version");
-  }
-
-  return elemsPerThread;
-}
-
-unsigned NvidiaMmaEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
-                                                       Type eltTy) const {
-  return product<unsigned>(getElemsPerThread(shape, eltTy));
-}
 
 int32_t SwizzledSharedEncodingAttr::getAlignment() const { return 16; }
 
@@ -903,118 +754,6 @@ SmallVector<unsigned> NVMMASharedEncodingAttr::getCTASplitNum() const {
   return SmallVector<unsigned>(getCTALayout().getCTASplitNum());
 }
 
-SmallVector<unsigned>
-DotOperandEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape,
-                                          Type eltTy) const {
-  auto rank = shape.size();
-  assert(rank == 2 || rank == 3);
-
-  auto idx = getOpIdx();
-  assert(idx == 0 || idx == 1);
-
-  SmallVector<unsigned> elemsPerThread(rank);
-  auto parent = getParent();
-  auto kWidth = getKWidth();
-
-  if (auto mfma = mlir::dyn_cast<AMDMfmaEncodingAttr>(parent)) {
-    auto rep = mfma.getRepForOperand(shape, kWidth, idx);
-    if (rank == 3)
-      elemsPerThread[0] = rep[0];
-    elemsPerThread[rank - 2] = (idx == 0) ? rep[1] : rep[1] * kWidth;
-    elemsPerThread[rank - 1] = (idx == 0) ? rep[2] * kWidth : rep[2];
-    return elemsPerThread;
-  }
-  if (auto mma = mlir::dyn_cast<NvidiaMmaEncodingAttr>(parent)) {
-    assert(getCTALayout(*this) ==
-               CTALayoutAttr::getDefault(getContext(), rank) &&
-           "NYI");
-    auto sizePerThread = getSizePerThread();
-    auto threadsPerWarp = getThreadsPerWarp();
-    auto warpsPerCTA = getWarpsPerCTA();
-    SmallVector<unsigned> regs;
-    for (auto [n, nsize, nThread, nWarp] :
-         llvm::zip(shape, sizePerThread, threadsPerWarp, warpsPerCTA)) {
-      regs.push_back(std::max<int64_t>(nsize, n / (nThread * nWarp)));
-    }
-    return regs;
-  }
-  if (auto blocked = mlir::dyn_cast<BlockedEncodingAttr>(parent)) {
-    auto shapePerCTA =
-        expandMatrixShapeWithBatch(ArrayRef(getShapePerCTA(*this, shape)));
-    auto shapePerCTATile =
-        expandMatrixShapeWithBatch(ArrayRef(getShapePerCTATile(blocked)));
-    auto sizePerThread =
-        expandMatrixShapeWithBatch(ArrayRef(blocked.getSizePerThread()));
-
-    int batchDim = 0;
-    int kDim = getOpIdx() == 0 ? 2 : 1;
-    int nonKDim = getOpIdx() == 0 ? 1 : 2;
-
-    int batchSize =
-        std::max<int>(shapePerCTA[batchDim] / shapePerCTATile[batchDim], 1) *
-        sizePerThread[batchDim];
-    int kSize = shapePerCTA[kDim];
-    int nonKSize =
-        std::max<int>(shapePerCTA[nonKDim] / shapePerCTATile[nonKDim], 1) *
-        sizePerThread[nonKDim];
-
-    SmallVector<unsigned> elemsPerThread(rank);
-    if (rank == 3) {
-      elemsPerThread[batchDim] = batchSize;
-      elemsPerThread[kDim] = kSize;
-      elemsPerThread[nonKDim] = nonKSize;
-    } else {
-      elemsPerThread[kDim - 1] = kSize;
-      elemsPerThread[nonKDim - 1] = nonKSize;
-    }
-    return elemsPerThread;
-  }
-
-  llvm_unreachable("getElemsPerThread is not supported for dot operand");
-  return SmallVector<unsigned>();
-}
-
-unsigned DotOperandEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
-                                                        Type eltTy) const {
-  if (auto mmaParent = mlir::dyn_cast<MmaEncodingTrait>(getParent())) {
-    if (auto nvidiaMmaParent =
-            mlir::dyn_cast<NvidiaMmaEncodingAttr>(mmaParent)) {
-      return product<unsigned>(getElemsPerThread(shape, eltTy));
-    }
-    if (auto amdMfmaParent = mlir::dyn_cast<AMDMfmaEncodingAttr>(getParent())) {
-      return amdMfmaParent.getTotalElemsPerThreadForOperand(
-          shape, eltTy, getKWidth(), getOpIdx());
-    }
-    if (auto amdWmmaParent = mlir::dyn_cast<AMDWmmaEncodingAttr>(getParent())) {
-      return amdWmmaParent.getTotalElemsPerThreadForOperand(
-          shape, eltTy, getKWidth(), getOpIdx());
-    }
-  }
-  if (auto blockedLayout = mlir::dyn_cast<BlockedEncodingAttr>(getParent())) {
-    auto shapePerCTA =
-        expandMatrixShapeWithBatch(ArrayRef(getShapePerCTA(*this, shape)));
-    auto shapePerCTATile =
-        expandMatrixShapeWithBatch(ArrayRef(getShapePerCTATile(blockedLayout)));
-    auto sizePerThread =
-        expandMatrixShapeWithBatch(ArrayRef(blockedLayout.getSizePerThread()));
-
-    int batchDim = 0;
-    int kDim = getOpIdx() == 0 ? 2 : 1;
-    int nonKDim = getOpIdx() == 0 ? 1 : 2;
-
-    int batchSize =
-        std::max<int>(shapePerCTA[batchDim] / shapePerCTATile[batchDim], 1) *
-        sizePerThread[batchDim];
-    int kSize = shapePerCTA[kDim];
-    int nonKSize =
-        std::max<int>(shapePerCTA[nonKDim] / shapePerCTATile[nonKDim], 1) *
-        sizePerThread[nonKDim];
-
-    return batchSize * kSize * nonKSize;
-  }
-  llvm_unreachable("unknown dot operand parent layout");
-  return 0;
-}
 SmallVector<unsigned> DotOperandEncodingAttr::getCTAsPerCGA() const {
   return ::getCTAsPerCGA(getParent());
 }
@@ -1514,7 +1253,7 @@ LinearLayout LinearEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 }
 
 SmallVector<unsigned>
-LinearEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape, Type) const {
+LinearEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
   // When broadcasting the layout the shape changes, otherwise the shape is
   // the same as the shape of the tensor
   // We can either have BroadcastOp with SameOperandsAndResultEncoding, or keep
@@ -1548,9 +1287,9 @@ SmallVector<unsigned> LinearEncodingAttr::getContigPerThread() const {
   return contig;
 }
 
-unsigned LinearEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape,
-                                                    Type eltTy) const {
-  return product(getElemsPerThread(shape, eltTy));
+unsigned
+LinearEncodingAttr::getTotalElemsPerThread(ArrayRef<int64_t> shape) const {
+  return product(getElemsPerThread(shape));
 }
 
 //===----------------------------------------------------------------------===//
@@ -2147,12 +1886,6 @@ AMDMfmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> operandShape,
   }
 }
 
-unsigned AMDMfmaEncodingAttr::getTotalElemsPerThreadForOperand(
-    ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const {
-  auto rep = getRepForOperand(shape, kWidth, opIdx);
-  return product(rep) * kWidth;
-}
-
 SmallVector<unsigned>
 AMDMfmaEncodingAttr::getSizePerThreadForOperand(int kWidth, int opIdx) const {
   auto rank = getWarpsPerCTA().size();
@@ -2271,12 +2004,6 @@ AMDWmmaEncodingAttr::getSizePerThreadForOperand(int kWidth, int opIdx) const {
     llvm::report_fatal_error("DotOperandEncodingAttr opIdx must be 0 or 1");
   }
   return sizePerThread;
-}
-
-unsigned AMDWmmaEncodingAttr::getTotalElemsPerThreadForOperand(
-    ArrayRef<int64_t> shape, Type eltTy, int kWidth, int opIdx) const {
-  auto rep = getRepForOperand(shape, eltTy, kWidth, opIdx);
-  return product(rep) * kWidth;
 }
 
 SmallVector<int64_t> AMDWmmaEncodingAttr::getElemsPerInstrForOperands() const {

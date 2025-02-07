@@ -559,10 +559,6 @@ TEST_F(LinearEncodingTest, DistributedEncodingToLinearEncoding) {
       Type eltTy = Float32Type::get(&ctx);
 
       ASSERT_EQ(getOrder(distributedEncoding), linearEncoding.getRepOrder());
-      ASSERT_EQ(distributedEncoding.getTotalElemsPerThread(shape, eltTy),
-                linearEncoding.getTotalElemsPerThread(shape, eltTy));
-      ASSERT_EQ(distributedEncoding.getElemsPerThread(shape, eltTy),
-                linearEncoding.getElemsPerThread(shape, eltTy));
       ASSERT_EQ(distributedEncoding.getRepOrder(),
                 linearEncoding.getRepOrder());
       ASSERT_EQ(distributedEncoding.getContigPerThread(),
