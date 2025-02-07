@@ -251,7 +251,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       ttng.tc_gen5_mma %A_sh, %B_sh, %acc_tm, %true, %true : (!ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>, !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, i1, i1) -> ()
       %acc_res = ttng.tmem_load %acc_tm : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked>
       tt.store %res_ptr, %acc_res : tensor<128x128x!tt.ptr<f32>, #blocked>
-    } {tt.disallow_acc_multi_buffer = true}
+    } {tt.disallow_acc_multi_buffer}
     ttg.local_dealloc %A_multibuf : !ttg.memdesc<1x128x128xf16, #shared, #ttg.shared_memory, mutable>
     ttg.local_dealloc %B_multibuf : !ttg.memdesc<1x128x128xf16, #shared, #ttg.shared_memory, mutable>
     tt.return
@@ -533,7 +533,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
         tt.store %res_ptr, %acc_res : tensor<128x128x!tt.ptr<f32>, #blocked>
       }
       scf.yield %new_acc : tensor<128x128xf32, #blocked>
-    } {tt.disallow_acc_multi_buffer = true}
+    } {tt.disallow_acc_multi_buffer}
     ttg.local_dealloc %A_multibuf : !ttg.memdesc<1x128x128xf16, #shared, #ttg.shared_memory, mutable>
     ttg.local_dealloc %B_multibuf : !ttg.memdesc<1x128x128xf16, #shared, #ttg.shared_memory, mutable>
     tt.return
@@ -675,7 +675,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
         tt.store %res_ptr, %acc_res : tensor<128x128x!tt.ptr<f32>, #blocked>
       }
       scf.yield %acc_res, %new_accUse : tensor<128x128xf32, #blocked>, i1
-    } {tt.disallow_acc_multi_buffer = true}
+    } {tt.disallow_acc_multi_buffer}
     ttg.local_dealloc %A_multibuf : !ttg.memdesc<1x128x128xf16, #shared, #ttg.shared_memory, mutable>
     ttg.local_dealloc %B_multibuf : !ttg.memdesc<1x128x128xf16, #shared, #ttg.shared_memory, mutable>
     tt.return

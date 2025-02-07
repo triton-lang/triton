@@ -237,10 +237,7 @@ void mlir::triton::replaceUsesAndPropagateType(OpBuilder &builder,
 // Return true if the given ForOp has the attribute
 // `tt.disallow_acc_multi_buffer` set to true.
 bool mlir::triton::getDisallowAccMultiBuffer(scf::ForOp forOp) {
-  return forOp->hasAttr(mlir::triton::kDisallowAccMultiBufferAttrName) &&
-         cast<BoolAttr>(
-             forOp->getAttr(mlir::triton::kDisallowAccMultiBufferAttrName))
-             .getValue();
+  return forOp->hasAttr(mlir::triton::kDisallowAccMultiBufferAttrName);
 }
 
 std::optional<std::pair<int, int>>
