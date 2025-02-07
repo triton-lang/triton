@@ -431,7 +431,7 @@ LinearLayout chooseDotLDSTransLayout(DotOperandEncodingAttr dotMfmaLayout,
   // The MFMA selection logic prioritizes double-rate MFMA instructions whenever
   // possible. Specifically:
   // - For MFMA operations that are non-K = 16, when blockK > 16, mfma16x16x32
-  // is selected; otherwise (blockK ≤ 16), mfma16x16x32 remains the choice.
+  // is selected; otherwise (blockK ≤ 16), mfma16x16x16 remains the choice.
   // - For MFMA operations that are non-K = 32, when blockK > 8, mfma32x32x16 is
   // selected; otherwise (blockK ≤ 8), mfma32x32x8 is used.
   //
@@ -516,7 +516,7 @@ LinearLayout chooseDotLDSTransLayout(DotOperandEncodingAttr dotMfmaLayout,
                            warpLayout.transposeOuts(outDimNames);
   auto finalLayout =
       combineCtaCgaWithShape(ctaLayout, mfmaLayout.getCTALayout(), shape);
-  // llvm::outs() << finalLayout;
+
   return finalLayout;
 }
 

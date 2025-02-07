@@ -108,8 +108,7 @@ public:
   TransLocalLoadOpConversion(const LLVMTypeConverter &converter,
                              const AMD::TargetInfo &targetInfo,
                              PatternBenefit benefit = 2)
-      : ConvertOpToLLVMPattern<triton::gpu::LocalLoadOp>(converter, benefit),
-        targetInfo(targetInfo) {}
+      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
 
   LogicalResult
   matchAndRewrite(triton::gpu::LocalLoadOp op, OpAdaptor adaptor,
@@ -118,12 +117,13 @@ public:
     RankedTensorType dstTy = op.getType();
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
-    if (isa<DotOperandEncodingAttr>(dstLayout) &&
-        isa<AMDMfmaEncodingAttr>(
-            cast<DotOperandEncodingAttr>(dstLayout).getParent())) {
-      if (canUseTransLoad(srcTy, dstTy)) {
-        return lowerSharedToDotOperandTransLL(op, adaptor, getTypeConverter(),
-                                              rewriter);
+
+    if (auto dotLayout = dyn_cast<DotOperandEncodingAttr>(dstLayout)) {
+      if (isa<AMDMfmaEncodingAttr>(dotLayout.getParent())) {
+        if (canUseTransLoad(srcTy, dstTy)) {
+          return lowerSharedToDotOperandTransLL(op, adaptor, getTypeConverter(),
+                                                rewriter);
+        }
       }
     }
     return failure();
@@ -142,15 +142,36 @@ private:
       return false;
     }
 
+    // The transposed load lowering logic assumes that double-rate MFMA
+    // instructions are used whenever possible. This code verifies whether
+    // double-rate MFMA instructions are being used and falls back to the
+    // default path if they are not. (Note: The lowering logic for double-rate
+    // MFMA is the same as for single-rate with kpack=2). This check should be
+    // removed once double-rate MFMA support is fully implemented in the
+    // compiler, leaving only an assertion. Currently, single-rate
+    // configurations with kpack=1 are still in use, so in such cases, we revert
+    // to the default lowering logic without LDS transposed read instructions.
+    int rank = dstTy.getRank();
+    int32_t kWidth = dotEnc.getKWidth();
+    const int32_t mDim = mfmaEnc.getMDim();
+    assert((mDim == 32 || mDim == 16) && "Invalid MFMA instruction dimension");
+
+    const int largeTileThreshold = (mDim == 32) ? 8 : 16;
+    const auto shape = dstTy.getShape();
+    const int kDim = dotEnc.getOpIdx() == 0 ? rank - 1 : rank - 2;
+
+    const bool isLargeTile = shape[kDim] > largeTileThreshold;
+    const int expectedKWidth = isLargeTile ? 8 : 4;
+
+    if (kWidth != expectedKWidth)
+      return false;
+
     auto sharedEnc =
         dyn_cast<triton::gpu::SwizzledSharedEncodingAttr>(srcTy.getEncoding());
     if (!sharedEnc)
       return false;
 
-    int rank = dstTy.getRank();
-    int kOrder = (dotEnc.getOpIdx() == 0) ? rank - 1 : rank - 2;
-    bool nonKContig = kOrder != sharedEnc.getOrder()[0];
-
+    bool nonKContig = kDim != sharedEnc.getOrder()[0];
     return nonKContig && targetInfo.canUseLDSTransLoad(bitwidth);
   }
 
