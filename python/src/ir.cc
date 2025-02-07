@@ -1397,7 +1397,7 @@ void init_triton_ir(py::module &&m) {
              auto resTy = descTy.getBlockType();
              return self.create<ExperimentalDescriptorLoadOp>(
                  resTy, desc, indices, llvm::APFloat(packingFactor),
-		 cacheModifier, evictionPolicy);
+                 cacheModifier, evictionPolicy);
            })
       .def("create_descriptor_gather",
            [](TritonOpBuilder &self, Value desc, Value x_indices, Value y_index,

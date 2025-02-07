@@ -1158,8 +1158,8 @@ def validate_descriptor_block(shape, dtype):
         1] >= min_cols, f"{dtype} tensor descriptor block shape must have at least {min_cols} columns, but got {shape[1]}"
 
 
-def descriptor_load(desc: tl._experimental_tensor_desciptor_base, offsets, packing_factor: float, cache_modifier: str, eviction_policy: str,
-                    builder: ir.builder) -> tl.tensor:
+def descriptor_load(desc: tl._experimental_tensor_desciptor_base, offsets, packing_factor: float, cache_modifier: str,
+                    eviction_policy: str, builder: ir.builder) -> tl.tensor:
     assert isinstance(desc, tl._experimental_tensor_descriptor_base)
     validate_descriptor_block(desc.block_shape, desc.type.element_ty)
     ndim = len(desc.block_shape)

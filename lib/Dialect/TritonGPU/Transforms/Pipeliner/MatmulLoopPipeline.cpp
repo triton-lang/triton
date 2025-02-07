@@ -269,7 +269,8 @@ createTMAAsyncCopy(scf::ForOp forOp, Operation *loadOp, Value desc, Value alloc,
       builder.createWithStage<triton::nvidia_gpu::TensorDescToTMAPtrOp>(
           loc, stage, clusterId, desc);
 
-  createCopy(builder, stage, clusterId, tmaPtr, barrier, view, pred, loadToInfo[loadOp].packingFactor);
+  createCopy(builder, stage, clusterId, tmaPtr, barrier, view, pred,
+             loadToInfo[loadOp].packingFactor);
 
   auto loadIsMMAv3Shared = loadToInfo[loadOp].isMMAv3Shared;
 
@@ -538,9 +539,9 @@ assignMemoryLayouts(scf::ForOp &forOp,
         if (mmav3Shmem || isTMALoad) {
           loadInfo.sharedEncoding =
               getSharedEncoding(&op, isTMALoad).value_or(nullptr);
-	  if (auto tmaLoad = dyn_cast<tt::ExperimentalDescriptorLoadOp>(op)) {
-	    loadInfo.packingFactor = tmaLoad.getPackingFactor();
-	  }
+          if (auto tmaLoad = dyn_cast<tt::ExperimentalDescriptorLoadOp>(op)) {
+            loadInfo.packingFactor = tmaLoad.getPackingFactor();
+          }
         } else if (!mmav3Shmem || dot) {
           bool incompatible = false;
 

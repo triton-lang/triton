@@ -77,9 +77,11 @@ public:
     auto createLoad = [&](Value tmaPtr, Value barrierAlloc, Value alloc,
                           Value pred) {
       rewriter.create<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp>(
-								       op.getLoc(), tmaPtr, op.getIndices(), barrierAlloc, alloc, pred, packingFactor);
+          op.getLoc(), tmaPtr, op.getIndices(), barrierAlloc, alloc, pred,
+          packingFactor);
     };
-    lowerTMALoad(op, op.getType(), op.getDesc(), createLoad, rewriter, packingFactor.convertToFloat());
+    lowerTMALoad(op, op.getType(), op.getDesc(), createLoad, rewriter,
+                 packingFactor.convertToFloat());
     return success();
   }
 };

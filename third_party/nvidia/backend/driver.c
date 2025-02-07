@@ -344,7 +344,7 @@ static PyObject *fill2DTMADescriptor(PyObject *self, PyObject *args) {
   if (packing_factor != 1) {
     if (packing_factor = 2) {
       type = CU_TENSOR_MAP_DATA_TYPE_16U4_ALIGN16B;
-    } else if (packing_factor = 4.0/3) {
+    } else if (packing_factor = 4.0 / 3) {
       type = CU_TENSOR_MAP_DATA_TYPE_16U6_ALIGN16B;
     } else {
       PyErr_SetString(PyExc_ValueError, "Unsupported packing factor");
