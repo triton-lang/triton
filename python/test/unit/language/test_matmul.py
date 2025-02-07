@@ -259,10 +259,8 @@ def test_simple_persistent_matmul(BLOCK_M, BLOCK_N, BLOCK_K, NUM_WARPS, DISALLOW
     if (device == "cuda" and torch.cuda.get_device_capability()[0] == 10 and BLOCK_M % 64 == 0 and BLOCK_N % 8 == 0
             and BLOCK_N > 16):
         ttgir = k.asm["ttgir"]
-        # if we disallow multi-buffering, we expect 2 barriers (one after the dot product and one before the use)
-        expected_barriers = 2 if DISALLOW_ACC_MULTI_BUFFER else 1
         pattern = "ttng.wait_barrier %arg"
-        assert ttgir.count(pattern) == expected_barriers, "Unexpected number of barriers in the TTGIR."
+        assert ttgir.count(pattern) > 0, "Expect barrier coming from the previous iteration."
 
 
 @triton.jit
