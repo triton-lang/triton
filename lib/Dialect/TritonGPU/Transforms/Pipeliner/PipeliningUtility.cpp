@@ -101,8 +101,7 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
   if (auto mmav5Op = dyn_cast<ttng::MMAv5OpInterface>(op)) {
     rewriter.setInsertionPoint(mmav5Op);
     auto currPred = mmav5Op.getPredicate();
-    Value mask = getPredMask(rewriter, currPred.getType(),
-                             currPred, pred);
+    Value mask = getPredMask(rewriter, currPred.getType(), currPred, pred);
     mmav5Op.setPredicate(mask);
     return op;
   }
