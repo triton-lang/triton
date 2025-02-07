@@ -532,21 +532,15 @@ int32_t getCtrlBitsForCacheModifierOnTarget(
 
 Value cvtFp32ToFp16(Location loc, RewriterBase &rewriter, const Value &v,
                     triton::RoundingMode rounding) {
-  GCNBuilder builder;
-
-  auto &cvt = *builder.create("v_cvt_f16_f32");
-  auto res = builder.newOperand("=v");
-  auto operand = builder.newOperand(v, "v");
-  if (rounding == triton::RoundingMode::RTZ) {
-    auto &setRTZ = *builder.create("s_setreg_imm32_b32 0x1801, 0xc");
-    setRTZ();
+  LLVM::RoundingMode rm = LLVM::RoundingMode::Dynamic;
+  switch (rounding) {
+  case triton::RoundingMode::RTNE:
+    rm = LLVM::RoundingMode::NearestTiesToEven;
+  case triton::RoundingMode::RTZ:
+    rm = LLVM::RoundingMode::TowardZero;
   }
-  cvt(res, operand);
-  if (rounding == triton::RoundingMode::RTZ) {
-    auto &resetRTZ = *builder.create("s_setreg_imm32_b32 0x1801, 0x0");
-    resetRTZ();
-  }
-  return builder.launch(rewriter, loc, f16_ty, false);
+  return rewriter.create<LLVM::ConstrainedFPTruncIntr>(
+      loc, f16_ty, v, rm, LLVM::FPExceptionBehavior::Ignore);
 }
 
 Type getPointerTypeWithShape(Value basePtr, Value offset) {
