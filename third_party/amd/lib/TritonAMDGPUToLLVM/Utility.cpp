@@ -455,12 +455,12 @@ getCacheModifierFlagsForPredicatedCall(LLVM::CallOp callOp) {
 // Load   | .ca |  0  |  0  | 0  |
 //        | .cg |  0  |  1  | 1  |
 //        | .cs |  0  |  1  | 1  |
-//        | .cv |  1  |  1  | x  |
+//        | .cv |  1  |  1  | 1  |
 // -------+-----+-----+-----+----+--
 // Store  | .wb |  0  |  0  | 0  |
 //        | .cg |  0  |  0  | 0  |
 //        | .cs |  0  |  1  | 1  |
-//        | .wt |  1  |  x  | x  |
+//        | .wt |  1  |  1  | 1  |
 // -------+-----+-----+-----+----+--
 // Atomic | N/A |  0  |  1  | x  | Setting sc0 returns the pre-op value
 //        | N/A |  1  |  0  | x  | Setting sc1 performs a system-scope atomic
