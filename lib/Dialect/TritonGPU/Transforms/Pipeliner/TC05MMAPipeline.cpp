@@ -238,13 +238,8 @@ getAccOverrideOrFlagFalseInLoop(scf::ForOp forOp,
   auto accOverridePoint = getAccOverridePointInLoop(forOp, accAlloc, accLoad);
 
   if (!accOverridePoint.has_value()) {
-    if (auto op = dyn_cast<ttng::TCGen5MMAOp>(&mmaOp)) {
-      auto useAccFlag = op->getUseD();
-      accOverridePoint = getAccUseFlagFalseInLoop(forOp, useAccFlag);
-    } else if (auto op = dyn_cast<ttng::TCGen5MMAScaledOp>(&mmaOp)) {
-      auto useAccFlag = op->getUseD();
-      accOverridePoint = getAccUseFlagFalseInLoop(forOp, useAccFlag);
-    }
+    auto useAccFlag = mmaOp.useAccumulator();
+    accOverridePoint = getAccUseFlagFalseInLoop(forOp, useAccFlag);
   }
 
   return accOverridePoint;

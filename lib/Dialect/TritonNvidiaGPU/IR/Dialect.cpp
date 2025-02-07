@@ -35,6 +35,7 @@
 #include "llvm/Support/Debug.h"
 
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.cpp.inc"
+#include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUOpInterfaces.cpp.inc"
 
 using namespace mlir;
 using namespace mlir::triton::gpu;

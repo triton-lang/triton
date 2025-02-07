@@ -273,6 +273,8 @@ bool TCGen5MMAOp::verifyDims() {
   return aShape[aShape.size() - 1] == bShape[aShape.size() - 2];
 }
 
+Value TCGen5MMAOp::useAccumulator() { return getUseD(); }
+
 // -- TMEMStoreOp --
 LogicalResult TMEMStoreOp::verify() {
   if (!isa<triton::nvidia_gpu::TensorMemorySpaceAttr>(
@@ -316,6 +318,8 @@ bool TCGen5MMAScaledOp::verifyDims() {
 
   return aKdim == bKdim;
 }
+
+Value TCGen5MMAScaledOp::useAccumulator() { return getUseD(); }
 
 // -- TMEMLoadOp --
 LogicalResult TMEMLoadOp::verify() {
