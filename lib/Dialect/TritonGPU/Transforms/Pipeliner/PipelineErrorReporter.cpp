@@ -192,7 +192,7 @@ void PipelineErrorReporter::printSchedulingError(int64_t distance,
 
   for (auto op : rootDefiningOps) {
     mainError.attachNote(op->getLoc())
-        << "`" << op->getName() << "` is updated here:";
+        << "The variable is updated here:";
   }
 
   auto firstRootUserOp = *rootUserOps.begin();
@@ -213,7 +213,7 @@ void PipelineErrorReporter::printSchedulingError(int64_t distance,
       // FileLineColRange instead of FileLineColLoc, we can find the variable
       // name and provide more detailed debug information.
       mainError.attachNote(op->getLoc())
-          << "`" << op->getName() << "` is used here:";
+          << "The variable is used here:";
     }
   }
   // TODO: we can also add more detailed debug information for more advanced
