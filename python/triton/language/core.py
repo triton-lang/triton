@@ -2867,10 +2867,13 @@ class range:
         this value implies no unrolling.
     :param disallow_acc_multi_buffer: If true, prevent the accumulator of the dot
         operation in the loop to be multi-buffered, if applicable.
+    :param flatten: automatically flatten the loop nest starting at this loop to
+        create a single flattened loop. The compiler will try to pipeline the
+        flattened loop which can avoid stage stalling.
     """
 
     def __init__(self, arg1, arg2=None, step=None, num_stages=None, loop_unroll_factor=None,
-                 disallow_acc_multi_buffer=False):
+                 disallow_acc_multi_buffer=False, flatten=None):
         if step is None:
             self.step = constexpr(1)
         else:
@@ -2884,6 +2887,7 @@ class range:
         self.num_stages = num_stages
         self.loop_unroll_factor = loop_unroll_factor
         self.disallow_acc_multi_buffer = disallow_acc_multi_buffer
+        self.flatten = flatten
 
     def __iter__(self):
         raise RuntimeError("tl.range can only be used in @triton.jit'd functions")

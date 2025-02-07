@@ -2135,7 +2135,7 @@ TEST_F(LinearLayoutConversionsTest, SliceOfBlocked) {
 TEST_F(LinearLayoutConversionsTest, SliceWithShape1) {
   auto parent = blocked({1, 4}, {8, 4}, {2, 2}, {1, 1}, {1, 1}, {0, 1}, {1, 0});
   EXPECT_EQ(toLinearLayout({1}, slice(parent, 0)),
-            LinearLayout({{S("register"), {{0}, {0}}},
+            LinearLayout({{S("register"), {}},
                           {S("lane"), {{0}, {0}, {0}, {0}, {0}}},
                           {S("warp"), {{0}, {0}}},
                           {S("block"), {}}},
@@ -2172,7 +2172,7 @@ TEST_F(LinearLayoutConversionsTest, SliceOfMmaV2) {
                           {S("block"), {}}},
                          {S("dim0")}));
   EXPECT_EQ(toLinearLayout({8}, slice(parent, 1)),
-            LinearLayout({{S("register"), {{0}}},
+            LinearLayout({{S("register"), {}},
                           {S("lane"), {{0}, {0}, {1}, {2}, {4}}},
                           {S("warp"), {{0}, {0}}},
                           {S("block"), {}}},

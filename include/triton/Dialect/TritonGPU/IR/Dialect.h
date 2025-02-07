@@ -70,10 +70,12 @@ struct SharedMemory : public SideEffects::Resource::Base<SharedMemory> {
   StringRef getName() final { return "<SharedMemory>"; }
 };
 
+// Convert a distributed layout to a linear encoding
+LinearEncodingAttr toLinearEncoding(Attribute layout, ArrayRef<int64_t> shape);
+
 unsigned getTotalElemsPerThread(Type type);
 
-unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape,
-                                Type eltTy);
+unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape);
 
 SmallVector<unsigned> getElemsPerThread(Type type);
 
