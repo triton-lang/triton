@@ -150,7 +150,6 @@ struct ConvertTritonAMDGPUToLLVM
     OpBuilder::InsertPoint indexInsertPoint;
 
     RewritePatternSet patterns(context);
-
     int commonBenefit = patternBenefitPrioritizeOverLLVMConversions;
     // Make benefit for AMD specific patterns higher so they apply before common
     // patterns
