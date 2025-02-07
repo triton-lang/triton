@@ -498,6 +498,20 @@ We call each individual tile "rep".
     InterfaceMethod<"Get the order of reps (tiles of this layout that tile the whole tensor). The fastest-changing axis first",
                     "SmallVector<unsigned>",
                     "getRepOrder">,
+    InterfaceMethod<"Return total element size per thread.",
+                    "unsigned",
+                    "getTotalElemsPerThread",
+                     (ins "ArrayRef<int64_t>":$shape),
+                     /*defaultImplementation=*/[{
+                         return toLinearEncoding($_self, shape).getTotalElemsPerThread(shape);
+                     }]>,
+    InterfaceMethod<"Return element size per thread in each dimension.",
+                    "SmallVector<unsigned>",
+                    "getElemsPerThread",
+                     (ins "ArrayRef<int64_t>":$shape),
+                     /*defaultImplementation=*/[{
+                         return toLinearEncoding($_self, shape).getElemsPerThread(shape);
+                     }]>,
     // Interface for the meta information about the multiple thread hierarchy.
     InterfaceMethod<"Get the shape of the warps per CTA.",
                     "SmallVector<unsigned>",
