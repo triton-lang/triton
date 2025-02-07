@@ -6569,6 +6569,21 @@ def test_tl_range(device):
                 assert 'cp.async.wait_group 6' in ptx
 
 
+def test_tl_range_fuse():
+    if is_hip():
+        pytest.skip("loop fusion is not enabled on AMD")
+
+    @triton.jit
+    def kernel(ub):
+        for i in tl.range(0, ub, flatten=True):
+            for j in tl.range(0, ub):
+                print("i", i)
+
+    compiled_kernel = kernel.warmup(10, grid=(1, ))
+    assert "tt.flatten" in compiled_kernel.asm["ttir"]
+    assert compiled_kernel.asm["ttgir"].count("scf.for") == 1
+
+
 @triton.jit(noinline=True)
 def maxnreg_noinline1(X):
     tl.store(X, 0)
