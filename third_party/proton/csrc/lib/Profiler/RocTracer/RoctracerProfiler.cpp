@@ -189,6 +189,7 @@ struct RoctracerProfiler::RoctracerProfilerPimpl
       : GPUProfiler<RoctracerProfiler>::GPUProfilerPimplInterface(profiler) {}
   virtual ~RoctracerProfilerPimpl() = default;
 
+  void setLibPath(const std::string &libPath) override {}
   void doStart() override;
   void doFlush() override;
   void doStop() override;

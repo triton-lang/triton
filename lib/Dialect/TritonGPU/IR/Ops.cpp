@@ -4,6 +4,7 @@
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 #define GET_OP_CLASSES
 #include "triton/Dialect/TritonGPU/IR/Ops.cpp.inc"
@@ -62,7 +63,7 @@ struct CanonicalizeConvertFromReshape
 
     if (isExpensiveView(convert.getSrc().getType(), op.getType()))
       return failure();
-    if (!op.getAllowReorder() || op.getEfficientLayout())
+    if (!op.getAllowReorder())
       return failure();
 
     rewriter.replaceOpWithNewOp<triton::ReshapeOp>(
@@ -84,6 +85,14 @@ struct CanonicalizeConvertFromTranspose
   mlir::LogicalResult
   matchAndRewrite(triton::TransOp op,
                   PatternRewriter &rewriter) const override {
+    // transpose(x, order=[0, 1, ...]) -> x
+    // We turn it into a (trivial) convert_layout that may be folded away
+    if (isIota(op.getOrder())) {
+      rewriter.replaceOpWithNewOp<ConvertLayoutOp>(op, op.getType(),
+                                                   op.getSrc());
+      return success();
+    }
+
     // If the layouts are structurally the same, the convert is trivial
     auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
     if (!convert || !isConvertTrivial(convert))
@@ -215,15 +224,6 @@ struct CanonicalizeConvertFromConvert
     if (mlir::isa<DotOperandEncodingAttr>(dstType.getEncoding()) &&
         mlir::isa<NvidiaMmaEncodingAttr>(srcType.getEncoding()))
       return failure();
-
-    // for hopper MMAv3
-    if (mlir::isa<SharedEncodingAttr>(dstType.getEncoding()) &&
-        mlir::isa<NvidiaMmaEncodingAttr>(srcType.getEncoding()) &&
-        llvm::any_of(op.getResult().getUsers(), [](Operation *dot) {
-          return dot->hasTrait<OpTrait::DotLike>();
-        })) {
-      return failure();
-    }
 
     Operation *arg = op.getSrc().getDefiningOp();
     if (!arg)
@@ -462,15 +462,17 @@ OpFoldResult MemDescTransOp::fold(FoldAdaptor adaptor) {
   return {};
 }
 
-LogicalResult MemDescTransOp::inferReturnTypes(
-    MLIRContext *context, std::optional<Location> location, ValueRange operands,
-    DictionaryAttr attributes, OpaqueProperties properties, RegionRange regions,
-    SmallVectorImpl<Type> &inferredReturnTypes) {
+LogicalResult
+MemDescTransOp::inferReturnTypes(MLIRContext *context,
+                                 std::optional<Location> location,
+                                 MemDescTransOp::Adaptor adaptor,
+                                 SmallVectorImpl<Type> &inferredReturnTypes) {
+
   // type is the same as the input
-  auto argTy = cast<MemDescType>(operands[0].getType());
-  auto argShape = argTy.getShape();
-  auto order = properties.as<Properties *>()->order.asArrayRef();
-  SmallVector<int64_t> retShape = applyPermutation(argTy.getShape(), order);
+  auto argTy = cast<MemDescType>(adaptor.getSrc().getType());
+  auto shape = argTy.getShape();
+  auto order = adaptor.getOrder();
+  SmallVector<int64_t> retShape = applyPermutation(shape, order);
 
   auto retEltTy = argTy.getElementType();
   Attribute argEncoding = argTy.getEncoding();
@@ -479,17 +481,17 @@ LogicalResult MemDescTransOp::inferReturnTypes(
     Dialect &dialect = argEncoding.getDialect();
     auto inferLayoutInterface = cast<DialectInferLayoutInterface>(&dialect);
     if (inferLayoutInterface
-            ->inferTransOpEncoding(argEncoding, argShape, order, retEncoding)
+            ->inferTransOpEncoding(argEncoding, shape, order, retEncoding)
             .failed()) {
       return failure();
     }
   }
-  auto memDescTy = cast<MemDescType>(argTy);
-  inferredReturnTypes.push_back(MemDescType::get(
-      retShape, retEltTy, retEncoding, memDescTy.getMemorySpace(),
-      memDescTy.getMutableMemory()));
+  inferredReturnTypes.push_back(
+      MemDescType::get(retShape, retEltTy, retEncoding, argTy.getMemorySpace(),
+                       argTy.getMutableMemory()));
   return success();
 }
+
 // LocalAllocOp
 void LocalAllocOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
@@ -605,11 +607,33 @@ LogicalResult MemDescSubviewOp::verify() {
     return emitError("src and result must both have or not have an encoding");
   }
 
-  if (!isa<SharedEncodingAttr>(srcEnc)) {
-    return emitError("src encoding must be SharedEncodingAttr");
+  if (!isa<SharedEncodingTrait>(srcEnc) &&
+      !isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(srcEnc)) {
+    return emitError("src encoding must be SharedEncodingTrait");
   }
-  if (!isa<SharedEncodingAttr>(dstEnc)) {
-    return emitError("result encoding must be SharedEncodingAttr");
+  if (!isa<SharedEncodingTrait>(dstEnc) &&
+      !isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(srcEnc)) {
+    return emitError("result encoding must be SharedEncodingTrait");
+  }
+
+  if (isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(srcEnc)) {
+    // We support only 3D -> 2D subviews with only first offset being non-zero.
+    if (srcTy.getRank() != 3 || dstTy.getRank() != 2) {
+      return emitError("only 3D -> 2D subviews are supported for "
+                       "TensorMemoryEncodingAttr");
+    }
+    for (int i = 1; i < srcTy.getRank(); i++) {
+      if (auto constOp = getOffsets()[i].getDefiningOp<arith::ConstantOp>()) {
+        if (!isa<IntegerAttr>(constOp.getValue()) ||
+            cast<IntegerAttr>(constOp.getValue()).getInt() != 0) {
+          return emitError("only first offset can be non-zero for the subview"
+                           "of TensorMemoryEncodingAttr");
+        }
+      } else {
+        return emitError(
+            "offsets other than the first one must be constant zeros");
+      }
+    }
   }
 
   // TODO(jlebar): Currently we generate illegal encodings, so we can't add a
@@ -631,7 +655,7 @@ int32_t LocalAllocOp::getAlignmentOrDefault() {
   }
 
   auto ty = getType();
-  auto enc = dyn_cast<SharedEncodingAttr>(ty.getEncoding());
+  auto enc = dyn_cast<SharedEncodingTrait>(ty.getEncoding());
   return enc ? enc.getAlignment() : 16;
 }
 

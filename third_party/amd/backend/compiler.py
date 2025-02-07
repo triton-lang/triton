@@ -13,27 +13,8 @@ from pathlib import Path
 
 
 def min_dot_size(target: GPUTarget):
-
-    def is_fma_supported(lhsType, rhsType):
-        return lhsType == rhsType and (lhsType.is_fp16() or lhsType.is_fp32())
-
-    def get_gfx94_limits(lhsType, rhsType):
-        if is_fma_supported(lhsType.scalar, rhsType.scalar):
-            return (1, 1, 1)
-        return (16, 16, 1)
-
-    def get_gfx9_limits(lhsType, rhsType):
-        if is_fma_supported(lhsType.scalar, rhsType.scalar):
-            return (1, 1, 1)
-        return (16, 16, 1)
-
-    arch_str = target.arch
-    if "gfx94" in arch_str:
-        return get_gfx94_limits
-    if "gfx9" in arch_str:
-        return get_gfx9_limits
-    # gfx11 and gfx12 architectures will only support 16,16,16 with wmma instructions
-    return lambda lhsType, rhsType: (1, 1, 1) if is_fma_supported(lhsType.scalar, rhsType.scalar) else (16, 16, 16)
+    # If some given configuration is not supported in hardware we fallback to FMA and cast arguments
+    return lambda lhsType, rhsType: (1, 1, 1)
 
 
 @dataclass(frozen=True)
@@ -224,7 +205,6 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
 
         stream_prefetch = os.getenv("TRITON_HIP_STREAM_PREFETCH", "0") == "1"
-        use_buffer_ops = os.environ.get("AMDGCN_USE_BUFFER_OPS", "0") == "1"
 
         # The `local-prefetch` scheduling variant requires turning on buffer ops.
         if options.instruction_sched_variant == "local-prefetch":
@@ -238,7 +218,8 @@ class HIPBackend(BaseBackend):
                                              "equivalent behavior in the past.")
             amd.passes.ttgpuir.add_stream_pipeline(pm, options.num_stages, stream_prefetch)
             passes.common.add_canonicalizer(pm)
-        amd.passes.ttgpuir.insert_instruction_sched_hints(pm)
+        if options.instruction_sched_variant.lower() != "none":
+            amd.passes.ttgpuir.insert_instruction_sched_hints(pm, options.instruction_sched_variant)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
@@ -294,8 +275,8 @@ class HIPBackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
-        amd.passes.ttgpuir.lower_instruction_sched_hints(pm, options.arch, options.num_stages,
-                                                         options.instruction_sched_variant)
+        if options.instruction_sched_variant.lower() != "none":
+            amd.passes.ttgpuir.lower_instruction_sched_hints(pm, options.arch, options.num_stages)
         if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":
             passes.llvmir.add_di_scope(pm)
         amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm, __HIP_FTZ)

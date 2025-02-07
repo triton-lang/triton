@@ -49,8 +49,17 @@ def _path_to_binary(binary: str):
 
 
 @functools.lru_cache()
-def get_ptxas_version():
-    version = subprocess.check_output([_path_to_binary("ptxas")[0], "--version"]).decode("utf-8")
+def get_ptxas(arch: int):
+    name = "ptxas-blackwell" if arch >= 100 else "ptxas"
+    return _path_to_binary(name)
+
+
+@functools.lru_cache()
+def get_ptxas_version(arch: int):
+    mock_ver = os.environ.get('TRITON_MOCK_PTX_VERSION')
+    if mock_ver is not None:
+        return mock_ver  # This is not really a version of ptxas, but it is good enough for testing
+    version = subprocess.check_output([get_ptxas(arch)[0], "--version"]).decode("utf-8")
     return version
 
 
@@ -64,8 +73,8 @@ def ptx_get_version(cuda_version) -> int:
     if major == 12:
         if minor < 6:
             return 80 + minor
-        elif minor == 6:
-            return 85
+        else:
+            return 80 + minor - 1
     if major == 11:
         return 70 + minor
     if major == 10:
@@ -73,24 +82,24 @@ def ptx_get_version(cuda_version) -> int:
     raise RuntimeError("Triton only support CUDA 10.0 or higher, but got CUDA version: " + cuda_version)
 
 
-def get_ptx_version_from_options(options):
+def get_ptx_version_from_options(options, arch: int):
     ptx_version = options.ptx_version
     if ptx_version is None:
-        _, cuda_version = _path_to_binary("ptxas")
+        _, cuda_version = get_ptxas(arch)
         ptx_version = ptx_get_version(cuda_version)
     return ptx_version
 
 
 @functools.lru_cache()
-def get_features(options):
-    ptx_version = get_ptx_version_from_options(options)
+def get_features(options, arch: int):
+    ptx_version = get_ptx_version_from_options(options, arch)
 
-    # PTX 8.3 is the max version supported by llvm 3a83162168.
+    # PTX 8.6 is the max version supported by llvm c1188642.
     #
     # To check if a newer PTX version is supported, increase this value
     # and run a test.  If it's not supported, LLVM will print a warning
     # like "+ptx8.4 is not a recognized feature for this target".
-    llvm_ptx_version = min(83, ptx_version)
+    llvm_ptx_version = min(86, ptx_version)
     features = f'+ptx{llvm_ptx_version}'
     return features
 
@@ -99,6 +108,12 @@ def get_features(options):
 def file_hash(path):
     with open(path, "rb") as f:
         return hashlib.sha256(f.read()).hexdigest()
+
+
+def sm_arch_from_capability(capability: int):
+    # TODO: Handle non-"a" sms
+    suffix = "a" if capability >= 90 else ""
+    return f"sm_{capability}{suffix}"
 
 
 @dataclass(frozen=True)
@@ -229,12 +244,6 @@ class CUDABackend(BaseBackend):
             cluster_info.clusterDimX = opt.cluster_dims[0]
             cluster_info.clusterDimY = opt.cluster_dims[1]
             cluster_info.clusterDimZ = opt.cluster_dims[2]
-        # Set up Diagnostic
-        if os.environ.get("MLIR_ENABLE_REMARK", "0") == "1":
-            srcMgr = llvm.source_mgr()
-            _ = ir.source_mgr_diag(srcMgr, mod.context)
-            mod.context.printOpOnDiagnostic(True)
-        # TTIR -> TTGIR
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.ttir.add_convert_to_ttgpuir(pm, f"cuda:{capability}", opt.num_warps, 32, opt.num_ctas)
@@ -250,11 +259,19 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, capability >= 80)
         passes.common.add_cse(pm)
-        if capability // 10 >= 8:
+        if capability // 10 in [8, 9]:
             passes.ttgpuir.add_optimize_accumulator_init(pm)
             passes.ttgpuir.add_combine_tensor_select_and_if(pm)
             passes.ttgpuir.add_loop_scheduling(pm, opt.num_stages)
             passes.ttgpuir.add_pipeline(pm, opt.num_stages)
+        if capability // 10 >= 10:
+            passes.ttgpuir.add_optimize_accumulator_init(pm)
+            passes.ttgpuir.add_loop_scheduling(pm, opt.num_stages)
+            passes.ttgpuir.add_pipeline(pm, opt.num_stages)
+            passes.ttgpuir.add_combine_tensor_select_and_if(pm)
+            nvidia.passes.ttnvgpuir.add_promote_lhs_to_tmem(pm)
+            nvidia.passes.ttnvgpuir.add_keep_acc_in_tmem(pm)
+            passes.common.add_canonicalizer(pm)
         passes.ttgpuir.add_prefetch(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, capability >= 80)
         passes.ttgpuir.add_coalesce_async_copy(pm)
@@ -271,9 +288,8 @@ class CUDABackend(BaseBackend):
         metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
         return mod
 
-    @staticmethod
-    def make_llir(src, metadata, options, capability):
-        ptx_version = get_ptx_version_from_options(options)
+    def make_llir(self, src, metadata, options, capability):
+        ptx_version = get_ptx_version_from_options(options, self.target.arch)
 
         # warp-specialization mutates num_warps
         num_warp_groups = src.get_int_attr("ttg.num-warp-groups-per-cta")
@@ -283,17 +299,17 @@ class CUDABackend(BaseBackend):
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        # Set up Diagnostic
-        if os.environ.get("MLIR_ENABLE_REMARK", "0") == "1":
-            srcMgr = llvm.source_mgr()
-            _ = ir.source_mgr_diag(srcMgr, mod.context)
-            mod.context.printOpOnDiagnostic(True)
+
+        nvidia.passes.ttnvgpuir.add_lower_mma(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
         passes.convert.add_scf_to_cf(pm)
         passes.convert.add_index_to_llvmir(pm)
         passes.ttgpuir.add_allocate_shared_memory(pm)
+        nvidia.passes.ttnvgpuir.add_allocate_tensor_memory(pm)
         passes.ttgpuir.add_allocate_global_scratch_memory(pm)
         nvidia.passes.ttgpuir.add_to_llvmir(pm, capability, ptx_version)
+        passes.common.add_canonicalizer(pm)
+        passes.common.add_cse(pm)
         nvidia.passes.ttnvgpuir.add_nvgpu_to_llvm(pm)
         passes.convert.add_arith_to_llvmir(pm)
         passes.common.add_canonicalizer(pm)
@@ -309,8 +325,8 @@ class CUDABackend(BaseBackend):
             raise RuntimeError(
                 "Address Sanitizer Error: Address sanitizer is currently only supporteedd on the AMD backend")
         llvm_mod = llvm.to_module(mod, context)
-        proc = 'sm_90a' if capability == 90 else f'sm_{capability}'
-        features = get_features(options)
+        proc = sm_arch_from_capability(capability)
+        features = get_features(options, self.target.arch)
         triple = 'nvptx64-nvidia-cuda'
         llvm.attach_datalayout(llvm_mod, triple, proc, features)
         nvidia.set_nvvm_reflect_ftz(llvm_mod)
@@ -329,6 +345,7 @@ class CUDABackend(BaseBackend):
 
         # Get some metadata
         metadata["shared"] = src.get_int_attr("ttg.shared")
+        metadata["tmem_size"] = src.get_int_attr("ttg.tensor_memory_size")
         metadata["global_scratch_size"] = src.get_int_attr("ttg.global_scratch_memory_size")
         metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment")
         ret = str(llvm_mod)
@@ -336,13 +353,12 @@ class CUDABackend(BaseBackend):
         del context
         return ret
 
-    @staticmethod
-    def make_ptx(src, metadata, opt, capability):
-        ptx_version = get_ptx_version_from_options(opt)
+    def make_ptx(self, src, metadata, opt, capability):
+        ptx_version = get_ptx_version_from_options(opt, self.target.arch)
 
         triple = 'nvptx64-nvidia-cuda'
-        proc = 'sm_90a' if capability == 90 else f'sm_{capability}'
-        features = get_features(opt)
+        proc = sm_arch_from_capability(capability)
+        features = get_features(opt, self.target.arch)
         ret = llvm.translate_to_asm(src, triple, proc, features, ['nvptx-short-ptr'], opt.enable_fp_fusion, False)
         # Find kernel names (there should only be one)
         names = re.findall(r".visible .entry ([a-zA-Z_][a-zA-Z0-9_]*)", ret)
@@ -351,6 +367,7 @@ class CUDABackend(BaseBackend):
         # post-process
         ptx_version = f'{ptx_version//10}.{ptx_version%10}'
         ret = re.sub(r'\.version \d+\.\d+', f'.version {ptx_version}', ret, flags=re.MULTILINE)
+        ret = re.sub(r'\.target sm_\d+', f'.target sm_{capability}', ret, flags=re.MULTILINE)
         # Remove the debug flag that prevents ptxas from optimizing the code
         ret = re.sub(r",\s*debug|debug,\s*", "", ret)
         if os.environ.get("NVPTX_ENABLE_DUMP", "0") == "1":
@@ -358,22 +375,20 @@ class CUDABackend(BaseBackend):
             print(ret)
         return ret
 
-    @staticmethod
-    def make_cubin(src, metadata, opt, capability):
-        ptxas, _ = _path_to_binary("ptxas")
+    def make_cubin(self, src, metadata, opt, capability):
+        ptxas, _ = get_ptxas(self.target.arch)
         with tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.ptx') as fsrc, \
             tempfile.NamedTemporaryFile(delete=False, mode='r', suffix='.log') as flog:
             fsrc.write(src)
             fsrc.flush()
             fbin = fsrc.name + '.o'
 
-            line_info = [] if os.environ.get('TRITON_DISABLE_LINE_INFO') else ['-lineinfo']
+            line_info = ["-lineinfo", "-suppress-debug-info"] if os.environ.get("TRITON_DISABLE_LINE_INFO",
+                                                                                "0") == "1" else ["-lineinfo"]
             fmad = [] if opt.enable_fp_fusion else ['--fmad=false']
-            suffix = 'a' if capability == 90 else ''
+            arch = sm_arch_from_capability(capability)
             opt_level = ['--opt-level', '0'] if os.environ.get("DISABLE_PTXAS_OPT", "0") == "1" else []
-            ptxas_cmd = [
-                ptxas, *line_info, *fmad, '-v', *opt_level, f'--gpu-name=sm_{capability}{suffix}', fsrc.name, '-o', fbin
-            ]
+            ptxas_cmd = [ptxas, *line_info, *fmad, '-v', *opt_level, f'--gpu-name={arch}', fsrc.name, '-o', fbin]
             try:
                 subprocess.run(ptxas_cmd, check=True, close_fds=False, stderr=flog)
                 if os.path.exists(fsrc.name):
@@ -413,5 +428,5 @@ class CUDABackend(BaseBackend):
 
     @functools.lru_cache()
     def hash(self):
-        version = get_ptxas_version()
+        version = get_ptxas_version(self.target.arch)
         return f'{version}-{self.target.arch}'

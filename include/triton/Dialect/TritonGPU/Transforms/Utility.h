@@ -17,7 +17,7 @@ class LoadOp;
 class StoreOp;
 class FuncOp;
 namespace gpu {
-class SharedEncodingAttr;
+class SwizzledSharedEncodingAttr;
 }
 } // namespace triton
 
@@ -194,17 +194,22 @@ bool isPureUnaryInlineAsm(Operation *op);
 // read the compute capability from the module attributes
 int getNVIDIAComputeCapability(Operation *module);
 
-std::optional<mlir::triton::gpu::SharedEncodingAttr>
+// Read the amd target from the module attributes
+StringRef getAMDArch(Operation *module);
+
+std::optional<mlir::triton::gpu::SwizzledSharedEncodingAttr>
 getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible);
 
-enum class MMALoadType {
-  SharedV3,
-  Registers,     // may be v2 or v3
-  DoNotPipeline, // could be a valid shared/registers MMA operand, but skip
-                 // pipelining
-};
-MMALoadType getMMALoadType(Operation *loadOp);
+// Convert \param op operands and results to layout \param encoding.
+void convertOpEncoding(Attribute encoding, Operation *op);
 
+// Returns the original memory allocation for a memdesc value
+triton::gpu::LocalAllocOp findShmemAlloc(Value operand);
+
+// Returns MMAs inside a for loop that are multi-buffered for pipeline analysis
+SmallVector<Operation *>
+getMMAsWithMultiBufferredOperands(scf::ForOp forOp,
+                                  SmallVector<Operation *> &mmaOps);
 } // namespace mlir
 
 #endif // TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_

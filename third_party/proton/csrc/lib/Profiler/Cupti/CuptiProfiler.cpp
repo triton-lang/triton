@@ -198,6 +198,9 @@ struct CuptiProfiler::CuptiProfilerPimpl
       : GPUProfiler<CuptiProfiler>::GPUProfilerPimplInterface(profiler) {}
   virtual ~CuptiProfilerPimpl() = default;
 
+  void setLibPath(const std::string &libPath) override {
+    cupti::setLibPath(libPath);
+  }
   void doStart() override;
   void doFlush() override;
   void doStop() override;
@@ -227,7 +230,7 @@ void CuptiProfiler::CuptiProfilerPimpl::allocBuffer(uint8_t **buffer,
                                                     size_t *maxNumRecords) {
   *buffer = static_cast<uint8_t *>(aligned_alloc(AlignSize, BufferSize));
   if (*buffer == nullptr) {
-    throw std::runtime_error("aligned_alloc failed");
+    throw std::runtime_error("[PROTON] aligned_alloc failed");
   }
   *bufferSize = BufferSize;
   *maxNumRecords = 0;
@@ -253,7 +256,7 @@ void CuptiProfiler::CuptiProfilerPimpl::completeBuffer(CUcontext ctx,
     } else if (status == CUPTI_ERROR_MAX_LIMIT_REACHED) {
       break;
     } else {
-      throw std::runtime_error("cupti::activityGetNextRecord failed");
+      throw std::runtime_error("[PROTON] cupti::activityGetNextRecord failed");
     }
   } while (true);
 

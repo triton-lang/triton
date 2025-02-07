@@ -140,12 +140,65 @@ private:
   bool lineInfoEnabled = !triton::tools::getBoolEnv("TRITON_DISABLE_LINE_INFO");
 };
 
+// Run the pass manager under a source manager diagnostic handler, which
+// enables emitted MLIR diagnostics to directly reference Python source
+// code. This diagnostic handler supports filtering diagnostic info by
+// severity levels.
+struct TritonSourceMgrDiagnosticHandler : public SourceMgrDiagnosticHandler {
+  TritonSourceMgrDiagnosticHandler(MLIRContext *ctx,
+                                   DiagnosticSeverity minSeverity)
+      : SourceMgrDiagnosticHandler(sourceMgr, ctx, llvm::errs()) {
+    setHandler([this, minSeverity](Diagnostic &diag) {
+      auto severity = diag.getSeverity();
+      switch (severity) {
+      case DiagnosticSeverity::Error:
+        break;
+      case DiagnosticSeverity::Warning:
+        if (minSeverity == DiagnosticSeverity::Error)
+          return success();
+        break;
+      case DiagnosticSeverity::Remark:
+        if (minSeverity == DiagnosticSeverity::Error ||
+            minSeverity == DiagnosticSeverity::Warning)
+          return success();
+        break;
+      case DiagnosticSeverity::Note:
+        // notes are handled somewhere else.
+        return failure();
+      default:
+        llvm_unreachable("Unknown diagnostic severity");
+      }
+      emitDiagnostic(diag);
+      return success();
+    });
+  }
+
+  llvm::SourceMgr sourceMgr;
+};
+
 std::string locationToString(Location loc) {
   std::string str;
   llvm::raw_string_ostream os(str);
   loc.print(os);
   os.flush(); // Make sure all the content is dumped into the 'str' string
   return str;
+}
+
+// Function to parse a comma-separated string into a vector of C-style strings
+llvm::SmallVector<const char *, 3>
+parseCommaSeparatedValues(const std::string &input,
+                          llvm::SmallVector<std::string, 3> &storage) {
+  llvm::SmallVector<StringRef, 3> split;
+  llvm::SmallVector<const char *, 3> result;
+  StringRef(input.c_str()).split(split, ',');
+  llvm::transform(split, std::back_inserter(result), [&storage](StringRef str) {
+    // StringRefs are not always null-terminated.
+    // The purpose for this storage pattern is to
+    // produce a collection of C-strings that are.
+    storage.push_back(str.str());
+    return storage.back().c_str();
+  });
+  return result;
 }
 
 void outputWarning(Location loc, const std::string &msg) {
@@ -1345,10 +1398,22 @@ void init_triton_ir(py::module &&m) {
              return self.create<ExperimentalDescriptorLoadOp>(
                  resTy, desc, indices, cacheModifier, evictionPolicy);
            })
+      .def("create_descriptor_gather",
+           [](TritonOpBuilder &self, Value desc, Value x_indices, Value y_index,
+              Type type) -> Value {
+             return self.create<ExperimentalDescriptorGatherOp>(
+                 type, desc, x_indices, y_index);
+           })
       .def("create_descriptor_store",
            [](TritonOpBuilder &self, Value desc, Value value,
               std::vector<Value> &indices) -> void {
              self.create<ExperimentalDescriptorStoreOp>(desc, value, indices);
+           })
+      .def("create_descriptor_scatter",
+           [](TritonOpBuilder &self, Value desc, Value value, Value x_indices,
+              Value y_index) -> void {
+             self.create<ExperimentalDescriptorScatterOp>(desc, x_indices,
+                                                          y_index, value);
            })
       .def("create_tensormap_create",
            [](TritonOpBuilder &self, Value desc_ptr, Value global_address,
@@ -1679,8 +1744,6 @@ void init_triton_ir(py::module &&m) {
       .def("enable_debug",
            [](PassManager &self) {
              auto *context = self.getContext();
-             bool haveDiagnostics =
-                 ::triton::tools::getBoolEnv("MLIR_ENABLE_DIAGNOSTICS");
              bool haveDump = ::triton::tools::getBoolEnv("MLIR_ENABLE_DUMP");
              std::string funcToDump;
              if (!haveDump) {
@@ -1688,18 +1751,8 @@ void init_triton_ir(py::module &&m) {
                if (!funcToDump.empty())
                  haveDump = true;
              }
-             if (haveDiagnostics || haveDump) {
-               context->disableMultithreading();
-             }
-             if (haveDiagnostics) {
-               context->printOpOnDiagnostic(true);
-               context->printStackTraceOnDiagnostic(true);
-               context->getDiagEngine().registerHandler([](Diagnostic &diag) {
-                 llvm::outs() << diag << "\n";
-                 return success();
-               });
-             }
              if (haveDump) {
+               context->disableMultithreading();
                auto printingFlags = OpPrintingFlags();
                printingFlags.elideLargeElementsAttrs(16);
                printingFlags.enableDebugInfo();
@@ -1729,6 +1782,8 @@ void init_triton_ir(py::module &&m) {
         // TODO: maybe dump module to file and print error for better
         // diagnostics
 
+        auto *context = mod.getContext();
+
         auto reproducerPath =
             triton::tools::getStrEnv("TRITON_REPRODUCER_PATH");
         if (!reproducerPath.empty()) {
@@ -1740,7 +1795,7 @@ void init_triton_ir(py::module &&m) {
           makeReproducer(anchorName, passes, op, reproducerPath);
           // But if the pass manager crashes, attempt to generate a local
           // reproducer instead.
-          mod.getContext()->disableMultithreading();
+          context->disableMultithreading();
           self.enableCrashReproducerGeneration(reproducerPath,
                                                /*genLocalReproducer=*/true);
         }
@@ -1751,20 +1806,9 @@ void init_triton_ir(py::module &&m) {
 
         if (auto debugOnly = triton::tools::getStrEnv("TRITON_LLVM_DEBUG_ONLY");
             !debugOnly.empty()) {
-          llvm::SmallVector<StringRef, 3> split;
           llvm::SmallVector<std::string, 3> storage;
-          llvm::SmallVector<const char *, 3> debugTypes;
-
-          StringRef(debugOnly.c_str()).split(split, ',');
-          llvm::transform(split, std::back_inserter(debugTypes),
-                          [&storage](StringRef str) {
-                            // StringRefs are not always null-terminated.
-                            // The purpose for this storage pattern is to
-                            // produce a collection of C-strings that are.
-                            storage.push_back(str.str());
-                            return storage.back().c_str();
-                          });
-
+          llvm::SmallVector<const char *, 3> debugTypes =
+              parseCommaSeparatedValues(debugOnly, storage);
           ::llvm::DebugFlag = true;
           using namespace llvm;
           setCurrentDebugTypes(debugTypes.data(), debugTypes.size());
@@ -1775,25 +1819,41 @@ void init_triton_ir(py::module &&m) {
           self.enableTiming();
         }
 
-        // Run the pass manager under a source manager diagnostic handler, which
-        // enables emitted MLIR diagnostics to directly reference Python source
-        // code. This diagnostic handler will only filter for errors.
-        struct SourceMgrErrorDiagnosticHandler
-            : public SourceMgrDiagnosticHandler {
-          SourceMgrErrorDiagnosticHandler(MLIRContext *ctx)
-              : SourceMgrDiagnosticHandler(sourceMgr, ctx, llvm::errs()) {
-            setHandler([this](Diagnostic &diag) {
-              if (diag.getSeverity() != DiagnosticSeverity::Error)
-                return failure();
-              emitDiagnostic(diag);
-              return success();
-            });
+        // setting up diagnostics
+        bool showOperations = false, showStacktraces = false,
+             showRemarks = false, showWarnings = false;
+
+        if (auto enableDiagnostics =
+                triton::tools::getStrEnv("MLIR_ENABLE_DIAGNOSTICS");
+            !enableDiagnostics.empty()) {
+          llvm::SmallVector<std::string, 3> storage;
+          parseCommaSeparatedValues(enableDiagnostics, storage);
+          for (auto &str : storage) {
+            if (str == "warnings") {
+              showWarnings = true;
+            } else if (str == "remarks") {
+              showRemarks = true;
+            } else if (str == "stacktraces") {
+              showStacktraces = true;
+            } else if (str == "operations") {
+              showOperations = true;
+            }
+            // we show errors by default, so no need to set it
           }
+        }
 
-          llvm::SourceMgr sourceMgr;
-        };
-        SourceMgrErrorDiagnosticHandler diagHandler(mod.getContext());
+        DiagnosticSeverity minSeverity = showWarnings
+                                             ? DiagnosticSeverity::Warning
+                                             : DiagnosticSeverity::Error;
+        minSeverity = showRemarks ? DiagnosticSeverity::Remark : minSeverity;
 
+        TritonSourceMgrDiagnosticHandler diagHandler(context, minSeverity);
+
+        context->printOpOnDiagnostic(showOperations);
+        context->printStackTraceOnDiagnostic(showStacktraces);
+        if (showStacktraces) {
+          context->disableMultithreading();
+        }
         if (failed(self.run(mod.getOperation())))
           throw std::runtime_error("PassManager::run failed");
       });

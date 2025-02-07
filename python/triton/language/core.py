@@ -1143,7 +1143,7 @@ class tensor(_value):
     def argmin(self, axis, tie_break_left=True, keep_dims=False) -> tensor:
         ...
 
-    def sum(self, axis=None, keep_dims=False) -> tensor:
+    def sum(self, axis=None, keep_dims=False, dtype=None) -> tensor:
         ...
 
     def xor_sum(self, axis=None, keep_dims=False) -> tensor:
@@ -1265,7 +1265,7 @@ class _experimental_tensor_descriptor_base(_value):
         return f"tensor_descriptor<{self.type}>"
 
     @builtin
-    def load(self, offsets: List[constexpr | tensor], _builder=None) -> tensor:
+    def load(self, offsets: Sequence[constexpr | tensor], _builder=None) -> tensor:
         """Load a block from the descriptor starting at the given element offsets.
 
         Values outside of the tensor bounds will be filled with zeros.
@@ -1275,7 +1275,7 @@ class _experimental_tensor_descriptor_base(_value):
         return semantic.descriptor_load(self, offsets, "", "", _builder)
 
     @builtin
-    def store(self, offsets: List[constexpr | tensor], value: tensor, _builder=None) -> tensor:
+    def store(self, offsets: Sequence[constexpr | tensor], value: tensor, _builder=None) -> tensor:
         """Store a block from the descriptor starting at the given element offsets.
 
         Values outside of the tensor bounds will be ignored.
@@ -1283,6 +1283,22 @@ class _experimental_tensor_descriptor_base(_value):
         :note: Offset must be a multiple of 16-bytes
         """
         return semantic.descriptor_store(self, value, offsets, _builder)
+
+    @builtin
+    def gather(self, *args, _builder=None) -> tensor:
+        """Gather multiple descriptors worth of data"""
+        assert len(args) == 2, f"descriptor gather only supports 2D indexing, but got {len(args)}"
+        x_offsets = args[0]
+        y_offset = args[1]
+        return semantic.descriptor_gather(self, x_offsets, y_offset, "", "", _builder)
+
+    @builtin
+    def scatter(self, value, *args, _builder=None) -> tensor:
+        """Scatter multiple descriptors worth of data"""
+        assert len(args) == 2, f"descriptor scatter only supports 2D indexing, but got {len(args)}"
+        x_offsets = args[0]
+        y_offset = args[1]
+        return semantic.descriptor_scatter(self, value, x_offsets, y_offset, _builder)
 
 
 class _experimental_tensor_descriptor(_experimental_tensor_descriptor_base):
@@ -1966,7 +1982,7 @@ def _experimental_make_tensor_descriptor(
     On NVIDIA GPUs with TMA support, this will result in a TMA descriptor object
     and loads and stores from the descriptor will be backed by the TMA hardware.
 
-    Currently only 2d tensors are supported.
+    Currently only 2-5 dimensional tensors are supported.
 
     Example
     *******
@@ -2260,7 +2276,8 @@ def clamp(x, min, max, propagate_nan: constexpr = PropagateNan.NONE, _builder=No
 # -----------------------
 
 
-def _add_reduction_docstr(name: str, return_indices_arg: str = None, tie_break_arg: str = None) -> Callable[[T], T]:
+def _add_reduction_docstr(name: str, return_indices_arg: str = None, tie_break_arg: str = None,
+                          dtype_arg: str = None) -> Callable[[T], T]:
 
     def _decorator(func: T) -> T:
         docstr = """
@@ -2280,6 +2297,10 @@ def _add_reduction_docstr(name: str, return_indices_arg: str = None, tie_break_a
             docstr += f"""
     :param {tie_break_arg}: if true, in case of a tie (i.e., multiple elements have the same {name} value), return the left-most index for values that aren't NaN
     :type {tie_break_arg}: bool"""
+        if dtype_arg is not None:
+            docstr += f"""
+    :param {dtype_arg}: the desired data type of the returned tensor. If specified, the input tensor is casted to :code:`{dtype_arg}` before the operation is performed. This is useful for preventing data overflows. If not specified, integer and bool dtypes are upcasted to :code:`tl.int32` and float dtypes are upcasted to at least :code:`tl.float32`.
+    :type {dtype_arg}: tl.dtype"""
 
         func.__doc__ = docstr.format(name=name)
         return func

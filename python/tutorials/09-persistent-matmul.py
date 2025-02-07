@@ -59,6 +59,91 @@ def _matmul_launch_metadata(grid, kernel, args):
     return ret
 
 
+HAS_TMA_DESC = "nv_tma_desc_type" in dir(tl)
+
+if HAS_TMA_DESC:
+    print("TMA benchmarks will be running with experimental grid constant TMA descriptor.", )
+else:
+    print("TMA benchmarks will be running without grid constant TMA descriptor.", )
+
+
+# TmaAutoTuneHelper used in htyu's PR #5622
+class TmaAutoTuneHelper:
+
+    # duck typing wrapper to implement the same interface as TmaDescKernelParam in Triton PR #4498
+    class KernelParamWrapper:
+
+        def __init__(self, desc):
+            self.desc = desc
+
+        def tma_desc_cpu_ptr(self):
+            return self.desc.data_ptr()
+
+    TMA_SIZE = 128
+
+    def __init__(self):
+        self.fill_1d_tma_descriptor_inner = (triton.runtime.driver.active.utils.fill_1d_tma_descriptor)
+        self.fill_2d_tma_descriptor_inner = (triton.runtime.driver.active.utils.fill_2d_tma_descriptor)
+        if HAS_TMA_DESC:
+            self.descriptors = {}
+        else:
+            self.cuda_descriptors = {}
+
+    # Call this method outside of the lambda function for grid size
+    def init_tma_descriptor(self, name):
+        if HAS_TMA_DESC:
+            self.descriptors[name] = torch.empty(TmaAutoTuneHelper.TMA_SIZE, device="cpu", dtype=torch.int8)
+        else:
+            self.cuda_descriptors[name] = torch.empty(TmaAutoTuneHelper.TMA_SIZE, device="cuda", dtype=torch.int8)
+
+    # Call this method inside the lambda function for grid size
+    def fill_1d_tma_descriptor(self, name, ptr, dim, block_dim, element_size):
+        if HAS_TMA_DESC:
+            desc_x = self.descriptors[name]
+            assert desc_x.data_ptr() % 64 == 0
+            self.fill_1d_tma_descriptor_inner(ptr, dim, block_dim, element_size, desc_x.data_ptr())
+        else:
+            desc_x = self.cuda_descriptors[name]
+            buf_x = torch.empty_like(desc_x, device="cpu", pin_memory=True)
+            self.fill_1d_tma_descriptor_inner(ptr, dim, block_dim, element_size, buf_x.data_ptr())
+            desc_x.copy_(buf_x, non_blocking=True)
+
+    # Call this method inside the lambda function for grid size
+    def fill_2d_tma_descriptor(self, name, ptr, dim1, dim0, block_dim1, block_dim0, element_size):
+        if HAS_TMA_DESC:
+            desc_x = self.descriptors[name]
+            assert desc_x.data_ptr() % 64 == 0
+            self.fill_2d_tma_descriptor_inner(ptr, dim1, dim0, block_dim1, block_dim0, element_size, desc_x.data_ptr())
+        else:
+            desc_x = self.cuda_descriptors[name]
+            buf_x = torch.empty_like(desc_x, device="cpu", pin_memory=True)
+            self.fill_2d_tma_descriptor_inner(ptr, dim1, dim0, block_dim1, block_dim0, element_size, buf_x.data_ptr())
+            desc_x.copy_(buf_x, non_blocking=True)
+
+    def get_tma_descriptor_kernel_param(self, name):
+        if HAS_TMA_DESC:
+            assert self.descriptors[name] is not None
+            return self.KernelParamWrapper(self.descriptors[name])
+        else:
+            assert self.cuda_descriptors[name] is not None
+            return self.cuda_descriptors[name]
+
+
+def matmul_get_configs():
+    return [
+        triton.Config({'BLOCK_SIZE_M': BM, 'BLOCK_SIZE_N': BN, "BLOCK_SIZE_K" : BK, "GROUP_SIZE_M" : 8}, num_stages=s, num_warps=w) \
+        for BM in [128] \
+        for BN in [128, 256] \
+        for BK in [64,128] \
+        for s in ([3,4]) \
+        for w in [4,8] \
+    ]
+
+
+@triton.autotune(
+    configs=matmul_get_configs(),
+    key=["M", "N", "K"],
+)
 @triton.jit(launch_metadata=_matmul_launch_metadata)
 def matmul_kernel(a_ptr, b_ptr, c_ptr,  #
                   M, N, K,  #
@@ -116,15 +201,6 @@ def matmul_kernel(a_ptr, b_ptr, c_ptr,  #
 
 
 def matmul(a, b):
-    configs = {
-        torch.float8_e4m3fn: {
-            "BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 128, "GROUP_SIZE_M": 8, "num_stages": 4,
-            "num_warps": 8
-        }, torch.float16: {
-            "BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 64, "GROUP_SIZE_M": 8, "num_stages": 3,
-            "num_warps": 8
-        }
-    }
     # Check constraints.
     assert a.shape[1] == b.shape[0], "Incompatible dimensions"
     assert a.dtype == b.dtype, "Incompatible dtypes"
@@ -141,16 +217,25 @@ def matmul(a, b):
         a.stride(0), a.stride(1),  #
         b.stride(0), b.stride(1),  #
         c.stride(0), c.stride(1),  #
-        BLOCK_SIZE_M=configs[dtype]["BLOCK_SIZE_M"],  #
-        BLOCK_SIZE_N=configs[dtype]["BLOCK_SIZE_N"],  #
-        BLOCK_SIZE_K=configs[dtype]["BLOCK_SIZE_K"],  #
-        GROUP_SIZE_M=configs[dtype]["GROUP_SIZE_M"],  #
-        num_stages=configs[dtype]["num_stages"],  #
-        num_warps=configs[dtype]["num_warps"],  #
     )
     return c
 
 
+@triton.jit
+def _compute_tile_and_pid(tile_id, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS):
+    tile_id += NUM_SMS
+    group_id = tile_id // num_pid_in_group
+    first_pid_m = group_id * GROUP_SIZE_M
+    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+    pid_m = first_pid_m + (tile_id % group_size_m)
+    pid_n = (tile_id % num_pid_in_group) // group_size_m
+    return tile_id, pid_m, pid_n
+
+
+@triton.autotune(
+    configs=matmul_get_configs(),
+    key=["M", "N", "K"],
+)
 @triton.jit(launch_metadata=_matmul_launch_metadata)
 def matmul_kernel_persistent(a_ptr, b_ptr, c_ptr,  #
                              M, N, K,  #
@@ -173,15 +258,16 @@ def matmul_kernel_persistent(a_ptr, b_ptr, c_ptr,  #
     if start_pid < num_tiles % NUM_SMS:
         tiles_per_SM += 1
 
+    # NOTE: There is currently a bug in blackwell pipelining that means it can't handle a value being
+    # used in both the prologue and epilogue, so we duplicate the counters as a work-around.
     tile_id = start_pid - NUM_SMS
+    tile_id_c = start_pid - NUM_SMS
     ki = -1
 
     offs_k_for_mask = tl.arange(0, BLOCK_SIZE_K)
 
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
 
-    pid_m = 0
-    pid_n = 0
     offs_am = tl.arange(0, BLOCK_SIZE_M)
     offs_bn = tl.arange(0, BLOCK_SIZE_N)
 
@@ -190,13 +276,7 @@ def matmul_kernel_persistent(a_ptr, b_ptr, c_ptr,  #
     for _ in range(0, k_tiles * tiles_per_SM):
         ki = tl.where(ki == k_tiles - 1, 0, ki + 1)
         if ki == 0:
-            tile_id += NUM_SMS
-            group_id = tile_id // num_pid_in_group
-            first_pid_m = group_id * GROUP_SIZE_M
-            group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-            pid_m = first_pid_m + (tile_id % group_size_m)
-            pid_n = (tile_id % num_pid_in_group) // group_size_m
-
+            tile_id, pid_m, pid_n = _compute_tile_and_pid(tile_id, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS)
             start_m = pid_m * BLOCK_SIZE_M
             start_n = pid_n * BLOCK_SIZE_N
             offs_am = start_m + tl.arange(0, BLOCK_SIZE_M)
@@ -214,6 +294,8 @@ def matmul_kernel_persistent(a_ptr, b_ptr, c_ptr,  #
         accumulator = tl.dot(a, b, accumulator)
 
         if ki == k_tiles - 1:
+            tile_id_c, pid_m, pid_n = _compute_tile_and_pid(tile_id_c, num_pid_in_group, num_pid_m, GROUP_SIZE_M,
+                                                            NUM_SMS)
             offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
             offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
             c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
@@ -227,15 +309,6 @@ def matmul_kernel_persistent(a_ptr, b_ptr, c_ptr,  #
 
 
 def matmul_persistent(a, b):
-    configs = {
-        torch.float8_e4m3fn: {
-            "BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 128, "GROUP_SIZE_M": 8, "num_stages": 4,
-            "num_warps": 8
-        }, torch.float16: {
-            "BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 64, "GROUP_SIZE_M": 8, "num_stages": 3,
-            "num_warps": 8
-        }
-    }
     # Check constraints.
     assert a.shape[1] == b.shape[0], "Incompatible dimensions"
     assert a.dtype == b.dtype, "Incompatible dtypes"
@@ -253,17 +326,27 @@ def matmul_persistent(a, b):
         a.stride(0), a.stride(1),  #
         b.stride(0), b.stride(1),  #
         c.stride(0), c.stride(1),  #
-        BLOCK_SIZE_M=configs[dtype]["BLOCK_SIZE_M"],  #
-        BLOCK_SIZE_N=configs[dtype]["BLOCK_SIZE_N"],  #
-        BLOCK_SIZE_K=configs[dtype]["BLOCK_SIZE_K"],  #
-        GROUP_SIZE_M=configs[dtype]["GROUP_SIZE_M"],  #
         NUM_SMS=NUM_SMS,  #
-        num_stages=configs[dtype]["num_stages"],  #
-        num_warps=configs[dtype]["num_warps"],  #
     )
     return c
 
 
+def matmul_tma_persistent_get_configs():
+    return [
+        triton.Config({'BLOCK_SIZE_M': BM, 'BLOCK_SIZE_N': BN, "BLOCK_SIZE_K" : BK, "GROUP_SIZE_M" : 8, "EPILOGUE_SUBTILE" : SUBTILE}, num_stages=s, num_warps=w) \
+        for BM in [128] \
+        for BN in [128, 256] \
+        for BK in [64, 128] \
+        for s in ([3, 4]) \
+        for w in [4, 8] \
+        for SUBTILE in [True, False] \
+    ]
+
+
+@triton.autotune(
+    configs=matmul_tma_persistent_get_configs(),
+    key=["M", "N", "K"],
+)
 @triton.jit(launch_metadata=_matmul_launch_metadata)
 def matmul_kernel_tma_persistent(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
                                  M, N, K,  #
@@ -272,6 +355,7 @@ def matmul_kernel_tma_persistent(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
                                  BLOCK_SIZE_K: tl.constexpr,  #
                                  GROUP_SIZE_M: tl.constexpr,  #
                                  FP8_OUTPUT: tl.constexpr,  #
+                                 EPILOGUE_SUBTILE: tl.constexpr,  #
                                  NUM_SMS: tl.constexpr):  #
     dtype = tl.float8e4nv if FP8_OUTPUT else tl.float16
     start_pid = tl.program_id(axis=0)
@@ -285,10 +369,10 @@ def matmul_kernel_tma_persistent(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
         tiles_per_SM += 1
 
     tile_id = start_pid - NUM_SMS
+    tile_id_c = start_pid - NUM_SMS
+
     ki = -1
 
-    pid_m = 0
-    pid_n = 0
     offs_am = 0
     offs_bn = 0
 
@@ -299,13 +383,7 @@ def matmul_kernel_tma_persistent(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
     for _ in range(0, k_tiles * tiles_per_SM):
         ki = tl.where(ki == k_tiles - 1, 0, ki + 1)
         if ki == 0:
-            tile_id += NUM_SMS
-            group_id = tile_id // num_pid_in_group
-            first_pid_m = group_id * GROUP_SIZE_M
-            group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-            pid_m = first_pid_m + (tile_id % group_size_m)
-            pid_n = (tile_id % num_pid_in_group) // group_size_m
-
+            tile_id, pid_m, pid_n = _compute_tile_and_pid(tile_id, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS)
             offs_am = pid_m * BLOCK_SIZE_M
             offs_bn = pid_n * BLOCK_SIZE_N
 
@@ -316,24 +394,32 @@ def matmul_kernel_tma_persistent(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
         accumulator = tl.dot(a, b.T, accumulator)
 
         if ki == k_tiles - 1:
-            c = accumulator.to(dtype)
+            tile_id_c, pid_m, pid_n = _compute_tile_and_pid(tile_id_c, num_pid_in_group, num_pid_m, GROUP_SIZE_M,
+                                                            NUM_SMS)
 
-            tl._experimental_descriptor_store(c_desc_ptr, c, [offs_am, offs_bn])
+            offs_am_c = pid_m * BLOCK_SIZE_M
+            offs_bn_c = pid_n * BLOCK_SIZE_N
+
+            # Epilogue subtiling is a technique to break our computation and stores into multiple pieces
+            # By subtiling we can reduce shared memory consumption by the epilogue and instead use that
+            # memory to increase our stage count.
+            # In this case we partition the accumulator into 2 BLOCK_SIZE_M x BLOCK_SIZE_N // 2 tensors
+            if EPILOGUE_SUBTILE:
+                acc = tl.reshape(accumulator, (BLOCK_SIZE_M, 2, BLOCK_SIZE_N // 2))
+                acc = tl.permute(acc, (0, 2, 1))
+                acc0, acc1 = tl.split(acc)
+                c0 = acc0.to(dtype)
+                tl._experimental_descriptor_store(c_desc_ptr, c0, [offs_am_c, offs_bn_c])
+                c1 = acc1.to(dtype)
+                tl._experimental_descriptor_store(c_desc_ptr, c1, [offs_am_c, offs_bn_c + BLOCK_SIZE_N // 2])
+            else:
+                accumulator = accumulator.to(dtype)
+                tl._experimental_descriptor_store(c_desc_ptr, accumulator, [offs_am_c, offs_bn_c])
+
             accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
 
 def matmul_tma_persistent(a, b):
-    # Autotuner does not work with TMA. Use manual config.
-    configs = {
-        torch.float8_e4m3fn: {
-            "BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 128, "GROUP_SIZE_M": 8, "num_stages": 4,
-            "num_warps": 8
-        }, torch.float16: {
-            "BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 64, "GROUP_SIZE_M": 8, "num_stages": 3,
-            "num_warps": 8
-        }
-    }
-
     # Check constraints.
     assert a.shape[1] == b.shape[1], "Incompatible dimensions"  # b is transposed
     assert a.dtype == b.dtype, "Incompatible dtypes"
@@ -343,36 +429,73 @@ def matmul_tma_persistent(a, b):
     dtype = a.dtype
 
     c = torch.empty((M, N), device=a.device, dtype=dtype)
-    desc_a = triton.tools.experimental_descriptor.create_2d_tma_descriptor(a.data_ptr(), M, K,
-                                                                           configs[dtype]["BLOCK_SIZE_M"],
-                                                                           configs[dtype]["BLOCK_SIZE_K"],
-                                                                           a.element_size())
-    desc_b = triton.tools.experimental_descriptor.create_2d_tma_descriptor(b.data_ptr(), N, K,
-                                                                           configs[dtype]["BLOCK_SIZE_N"],
-                                                                           configs[dtype]["BLOCK_SIZE_K"],
-                                                                           b.element_size())
-    desc_c = triton.tools.experimental_descriptor.create_2d_tma_descriptor(c.data_ptr(), M, N,
-                                                                           configs[dtype]["BLOCK_SIZE_M"],
-                                                                           configs[dtype]["BLOCK_SIZE_N"],
-                                                                           c.element_size())
+
+    desc_helper = TmaAutoTuneHelper()
+    desc_helper.init_tma_descriptor("a")
+    desc_helper.init_tma_descriptor("b")
+    desc_helper.init_tma_descriptor("c")
+
     NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count
 
-    grid = lambda META: (min(NUM_SMS, triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"])), )
+    def grid(META):
+        nonlocal desc_helper
+        desc_helper.fill_2d_tma_descriptor(
+            "a",
+            a.data_ptr(),
+            M,
+            K,
+            META["BLOCK_SIZE_M"],
+            META["BLOCK_SIZE_K"],
+            a.element_size(),
+        )
+
+        desc_helper.fill_2d_tma_descriptor(
+            "b",
+            b.data_ptr(),
+            N,
+            K,
+            META["BLOCK_SIZE_N"],
+            META["BLOCK_SIZE_K"],
+            b.element_size(),
+        )
+
+        store_block_n = META["BLOCK_SIZE_N"]
+
+        if META["EPILOGUE_SUBTILE"]:
+            store_block_n = store_block_n // 2
+
+        desc_helper.fill_2d_tma_descriptor(
+            "c",
+            c.data_ptr(),
+            M,
+            N,
+            META["BLOCK_SIZE_M"],
+            store_block_n,
+            c.element_size(),
+        )
+
+        return (min(
+            NUM_SMS,
+            triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
+        ), )
+
+    desc_a = desc_helper.get_tma_descriptor_kernel_param("a")
+    desc_b = desc_helper.get_tma_descriptor_kernel_param("b")
+    desc_c = desc_helper.get_tma_descriptor_kernel_param("c")
+
     matmul_kernel_tma_persistent[grid](
         desc_a, desc_b, desc_c,  #
         M, N, K,  #
-        BLOCK_SIZE_M=configs[dtype]["BLOCK_SIZE_M"],  #
-        BLOCK_SIZE_N=configs[dtype]["BLOCK_SIZE_N"],  #
-        BLOCK_SIZE_K=configs[dtype]["BLOCK_SIZE_K"],  #
-        GROUP_SIZE_M=configs[dtype]["GROUP_SIZE_M"],  #
         FP8_OUTPUT=dtype == torch.float8_e4m3fn,  #
         NUM_SMS=NUM_SMS,  #
-        num_stages=configs[dtype]["num_stages"],  #
-        num_warps=configs[dtype]["num_warps"],  #
     )
     return c
 
 
+@triton.autotune(
+    configs=matmul_tma_persistent_get_configs(),
+    key=["M", "N", "K"],
+)
 @triton.jit(launch_metadata=_matmul_launch_metadata)
 def matmul_kernel_descriptor_persistent(a_ptr, b_ptr, c_ptr,  #
                                         M, N, K,  #
@@ -380,6 +503,7 @@ def matmul_kernel_descriptor_persistent(a_ptr, b_ptr, c_ptr,  #
                                         BLOCK_SIZE_N: tl.constexpr,  #
                                         BLOCK_SIZE_K: tl.constexpr,  #
                                         GROUP_SIZE_M: tl.constexpr,  #
+                                        EPILOGUE_SUBTILE: tl.constexpr,  #
                                         NUM_SMS: tl.constexpr):  #
     # Matmul using TMA and device-side descriptor creation
     dtype = c_ptr.dtype.element_ty
@@ -405,7 +529,7 @@ def matmul_kernel_descriptor_persistent(a_ptr, b_ptr, c_ptr,  #
         c_ptr,
         shape=[M, N],
         strides=[N, 1],
-        block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_N],
+        block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_N if not EPILOGUE_SUBTILE else BLOCK_SIZE_N // 2],
     )
 
     tiles_per_SM = num_tiles // NUM_SMS
@@ -413,10 +537,9 @@ def matmul_kernel_descriptor_persistent(a_ptr, b_ptr, c_ptr,  #
         tiles_per_SM += 1
 
     tile_id = start_pid - NUM_SMS
+    tile_id_c = start_pid - NUM_SMS
     ki = -1
 
-    pid_m = 0
-    pid_n = 0
     offs_am = 0
     offs_bn = 0
 
@@ -427,13 +550,7 @@ def matmul_kernel_descriptor_persistent(a_ptr, b_ptr, c_ptr,  #
     for _ in range(0, k_tiles * tiles_per_SM):
         ki = tl.where(ki == k_tiles - 1, 0, ki + 1)
         if ki == 0:
-
-            tile_id += NUM_SMS
-            group_id = tile_id // num_pid_in_group
-            first_pid_m = group_id * GROUP_SIZE_M
-            group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-            pid_m = first_pid_m + (tile_id % group_size_m)
-            pid_n = (tile_id % num_pid_in_group) // group_size_m
+            tile_id, pid_m, pid_n = _compute_tile_and_pid(tile_id, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS)
 
             offs_am = pid_m * BLOCK_SIZE_M
             offs_bn = pid_n * BLOCK_SIZE_N
@@ -445,24 +562,27 @@ def matmul_kernel_descriptor_persistent(a_ptr, b_ptr, c_ptr,  #
         accumulator = tl.dot(a, b.T, accumulator)
 
         if ki == k_tiles - 1:
-            c = accumulator.to(dtype)
+            tile_id_c, pid_m, pid_n = _compute_tile_and_pid(tile_id_c, num_pid_in_group, num_pid_m, GROUP_SIZE_M,
+                                                            NUM_SMS)
+            offs_cm = pid_m * BLOCK_SIZE_M
+            offs_cn = pid_n * BLOCK_SIZE_N
 
-            c_desc.store([offs_am, offs_bn], c)
+            if EPILOGUE_SUBTILE:
+                acc = tl.reshape(accumulator, (BLOCK_SIZE_M, 2, BLOCK_SIZE_N // 2))
+                acc = tl.permute(acc, (0, 2, 1))
+                acc0, acc1 = tl.split(acc)
+                c0 = acc0.to(dtype)
+                c_desc.store([offs_cm, offs_cn], c0)
+                c1 = acc1.to(dtype)
+                c_desc.store([offs_cm, offs_cn + BLOCK_SIZE_N // 2], c1)
+            else:
+                c = accumulator.to(dtype)
+                c_desc.store([offs_cm, offs_cn], c)
 
             accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
 
 def matmul_descriptor_persistent(a, b):
-    configs = {
-        torch.float8_e4m3fn: {
-            "BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 128, "GROUP_SIZE_M": 8, "num_stages": 4,
-            "num_warps": 8
-        }, torch.float16: {
-            "BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 256, "BLOCK_SIZE_K": 64, "GROUP_SIZE_M": 8, "num_stages": 3,
-            "num_warps": 8
-        }
-    }
-
     # Check constraints.
     assert a.shape[1] == b.shape[1], "Incompatible dimensions"  # b is transposed
     assert a.dtype == b.dtype, "Incompatible dtypes"
@@ -484,13 +604,7 @@ def matmul_descriptor_persistent(a, b):
     matmul_kernel_descriptor_persistent[grid](
         a, b, c,  #
         M, N, K,  #
-        BLOCK_SIZE_M=configs[dtype]["BLOCK_SIZE_M"],  #
-        BLOCK_SIZE_N=configs[dtype]["BLOCK_SIZE_N"],  #
-        BLOCK_SIZE_K=configs[dtype]["BLOCK_SIZE_K"],  #
-        GROUP_SIZE_M=configs[dtype]["GROUP_SIZE_M"],  #
         NUM_SMS=NUM_SMS,  #
-        num_stages=configs[dtype]["num_stages"],  #
-        num_warps=configs[dtype]["num_warps"],  #
     )
     return c
 
@@ -598,13 +712,14 @@ def validate(M, N, K, dtype):
 
 def show_profile(precision, profile_name):
     import triton.profiler.viewer as proton_viewer
-    metrics = ["time/ms"]
+    metric_names = ["time/ms"]
     if precision == 'fp8':
-        metrics = ["tflop8/s"] + metrics
+        metric_names = ["tflop8/s"] + metric_names
     elif precision == 'fp16':
-        metrics = ["tflop16/s"] + metrics
+        metric_names = ["tflop16/s"] + metric_names
     file_name = f"{profile_name}.hatchet"
-    proton_viewer.parse(metrics, file_name, depth=100)
+    tree, metrics = proton_viewer.parse(metric_names, file_name)
+    proton_viewer.print_tree(tree, metrics)
 
 
 if __name__ == "__main__":
@@ -628,7 +743,7 @@ if __name__ == "__main__":
     torch.manual_seed(0)
 
     validate(32, 32, 32, dtype)
-    validate(8192, 8192, 512, dtype)
+    validate(8192, 8192, args.K_range[0], dtype)
 
     proton.start("matmul", hook="triton")
     for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):

@@ -99,6 +99,22 @@ def test_flip_inf(device):
 
 
 @pytest.mark.interpreter
+def test_ravel(device):
+
+    @triton.jit
+    def triton_ravel(out_ptr):
+        a = tl.arange(0, 256)
+        a = tl.reshape(a, (32, 8))
+        a = tl.ravel(a)
+        tl.store(out_ptr + tl.arange(0, 256), a)
+
+    out = torch.empty((256, ), device=device, dtype=torch.int32)
+    triton_ravel[(1, )](out)
+
+    assert (out == torch.arange(0, 256, device=device)).all()
+
+
+@pytest.mark.interpreter
 @pytest.mark.parametrize("size_i, size_j, size_g", [[5, 7, 3]])
 def test_swizzle2d(size_i, size_j, size_g, device):
 

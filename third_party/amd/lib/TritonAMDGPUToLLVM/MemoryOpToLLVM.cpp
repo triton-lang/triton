@@ -8,7 +8,6 @@ using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::AMDWmmaEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::MemDescType;
-using ::mlir::triton::gpu::SharedEncodingAttr;
 
 namespace SharedToDotOperandMFMA {
 Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
@@ -60,6 +59,7 @@ private:
       ConversionPatternRewriter &rewriter,
       const DotOperandEncodingAttr &dotOperandLayout) const {
     auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
     Value src = op.getSrc();
     Value dst = op.getResult();
     auto llvmElemTy = typeConverter->convertType(
@@ -75,7 +75,7 @@ private:
                                     : SharedToDotOperandWMMA::convertLayout;
       res = sharedToDotConvert(dotOperandLayout.getOpIdx(), rewriter, loc, src,
                                dotOperandLayout, smemObj, typeConverter,
-                               tid_val());
+                               b.tid_val());
     } else {
       assert(false && "unsupported layout found");
     }

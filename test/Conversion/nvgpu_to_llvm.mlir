@@ -103,3 +103,25 @@ llvm.func @wgmma(%desc: i64, %in: !struct_64xf32) {
   %out = nvgpu.wgmma_wait_group %in {pendings = 0 : i32} : !struct_64xf32
   llvm.return
 }
+
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65544 : i32, ttg.target = "cuda:100", ttg.tensor_memory_size = 128 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @tensor_memory_base_lowering
+  //      CHECK:    %[[TID:.+]] = nvvm.read.ptx.sreg.tid.x : i32
+  //      CHECK:    %[[C32:.+]] = llvm.mlir.constant(32 : i32) : i32
+  //      CHECK:    %[[PRED:.+]] = llvm.icmp "ult" %[[TID]], %[[C32]] : i32
+  //      CHECK:    %[[SHMEM:.+]] = llvm.mlir.addressof @global_smem : !llvm.ptr<3>
+  //      CHECK:    %[[A:.+]] = llvm.inline_asm has_side_effects
+  // CHECK-SAME:    "@$0 tcgen05.alloc.cta_group::1.sync.aligned.shared::cta.b32 [$1], 128;", "b,r" %[[PRED]], %[[SHMEM]] : (i1, !llvm.ptr<3>) -> !llvm.void
+  //      CHECK:    %[[AR:.+]] = llvm.load %[[SHMEM]] : !llvm.ptr<3> -> i32
+  //      CHECK:    nvvm.barrier0
+  //      CHECK:    "@$0 tcgen05.relinquish_alloc_permit.cta_group::1.sync.aligned;", "b" %[[PRED]]  : (i1) -> !llvm.void
+  //      CHECK:    llvm.inline_asm has_side_effects asm_dialect = att operand_attrs = [] "@$0 tcgen05.dealloc.cta_group::1.sync.aligned.b32 $1, 128;", "b,r" %[[PRED]], %{{.+}} : (i1, !llvm.ptr<6>) -> !llvm.void
+  llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
+  llvm.func @tensor_memory_base_lowering() -> i32 attributes {nvvm.kernel = 1 : ui1, nvvm.maxntid = array<i32: 128>} {
+    %263 = nvgpu.tensor_memory_base
+    %264 = llvm.ptrtoint %263 : !llvm.ptr<6> to i32
+    llvm.return %264 : i32
+  }
+}

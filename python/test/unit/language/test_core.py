@@ -43,6 +43,7 @@ from triton._internal_testing import (
     torch_dtype_name,
     to_numpy,
 )
+from triton.runtime.errors import InterpreterError
 
 
 @contextlib.contextmanager
@@ -201,8 +202,7 @@ class BlockedLayout:
 
 class SharedLayout:
 
-    def __init__(self, vec, per_phase, max_phase, order, ctas_per_cga, cta_split_num, cta_order,
-                 has_leading_offset=False):
+    def __init__(self, vec, per_phase, max_phase, order, ctas_per_cga, cta_split_num, cta_order):
         self.vec = vec
         self.per_phase = per_phase
         self.max_phase = max_phase
@@ -210,11 +210,24 @@ class SharedLayout:
         self.ctas_per_cga = ctas_per_cga
         self.cta_split_num = cta_split_num
         self.cta_order = cta_order
-        self.has_leading_offset = has_leading_offset
 
     def __str__(self):
-        has_leading_offset_str = "true" if self.has_leading_offset else "false"
-        return f"#{GPU_DIALECT}.shared<{{vec={self.vec}, perPhase={self.per_phase}, maxPhase={self.max_phase}, order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}, hasLeadingOffset={has_leading_offset_str}}}>"
+        return f"#{GPU_DIALECT}.swizzled_shared<{{vec={self.vec}, perPhase={self.per_phase}, maxPhase={self.max_phase}, order={self.order}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
+
+
+class NVMMASharedLayout:
+
+    def __init__(self, swizzle, transpose, element_bit_width, ctas_per_cga, cta_split_num, cta_order):
+        self.swizzle = swizzle
+        self.transpose = transpose
+        self.element_bit_width = element_bit_width
+        self.ctas_per_cga = ctas_per_cga
+        self.cta_split_num = cta_split_num
+        self.cta_order = cta_order
+
+    def __str__(self):
+        transpose_str = "true" if self.transpose else "false"
+        return f"#{GPU_DIALECT}.nvmma_shared<{{swizzlingByteWidth={self.swizzle}, transposed={transpose_str}, elementBitWidth={self.element_bit_width}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
 
 
 class LinearLayout:
@@ -2428,6 +2441,47 @@ scan_configs = [(op, type, shape, axis, reverse, num_warps)
 negative_config = [('cumsum', 'float32', (32, 32), -1, False, 4)]
 
 
+def test_sum_dtype():
+
+    @triton.jit
+    def kernel_dtype(out_ptr, init, in_dtype: tl.constexpr, out_dtype: tl.constexpr):
+        x = tl.full((32, 32), init, dtype=in_dtype)
+        x = tl.sum(x, dtype=out_dtype)
+        tl.store(out_ptr, x.to(tl.int32))
+
+    @triton.jit
+    def kernel_default_int(out_ptr):
+        x = tl.full((32, 32), 1, dtype=tl.int1)
+        x = tl.sum(x)
+        tl.store(out_ptr, x)
+
+    @triton.jit
+    def kernel_default_float(out_ptr):
+        x = tl.full((32, 32), 1.0, dtype=tl.bfloat16)
+        x = tl.sum(x)
+        tl.store(out_ptr, x)
+
+    out = torch.empty(1, dtype=torch.int32, device='cuda')
+    kernel_dtype[(1, )](out, init=1, in_dtype=tl.int1, out_dtype=None)
+    assert out[0] == 32 * 32
+
+    kernel_dtype[(1, )](out, init=1, in_dtype=tl.int1, out_dtype=tl.int1)
+    assert out[0] == 0
+
+    kernel_dtype[(1, )](out, init=7, in_dtype=tl.int8, out_dtype=tl.int8)
+    assert out[0] == (7 * 32 * 32) % 256
+
+    kernel_dtype[(1, )](out, init=1, in_dtype=tl.int32, out_dtype=None)
+    assert out[0] == 32 * 32
+
+    kernel_default_int[(1, )](out)
+    assert out[0] == 32 * 32
+
+    out = torch.empty(1, dtype=torch.bfloat16, device='cuda')
+    kernel_default_float[(1, )](out)
+    torch.testing.assert_close(out[0], torch.tensor(32 * 32, dtype=torch.bfloat16, device='cuda'))
+
+
 @triton.jit
 # trivial associative but not commutative function
 def get_first_element(a, b):
@@ -3419,7 +3473,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     if num_ctas > 1 and in_dtype == 'int8':
         # FIXME: mma v2 with num_ctas > 1 does not work
         pytest.skip()
-
     # triton kernel
     @triton.jit
     def kernel(X, stride_xm, stride_xk, Y, stride_yk, stride_yn, W, stride_wn, stride_wl, Z, stride_zm, stride_zn,
@@ -3564,15 +3617,25 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
             assert 'st.global.v2' in ptx
         else:
             assert 'st.global.v4' in ptx
+
+    is_tcgen5 = (capability[0] == 10) and (num_warps % 4) == 0 and (M % 64) == 0 and (N % 8) == 0
+
     if in_dtype == 'float32' and input_precision != "ieee":
-        assert re.search(r'[mma|wgmma.mma_async].sync.aligned.m\d+n\d+k8(?:.row.col)?.f32.tf32.tf32', ptx)
+        if is_tcgen5:
+            assert re.search(r'tcgen05.mma.cta_group::1.kind::tf32', ptx)
+        else:
+            assert re.search(r'[mma|wgmma.mma_async].sync.aligned.m\d+n\d+k8(?:.row.col)?.f32.tf32.tf32', ptx)
     elif in_dtype == 'float16' and out_dtype == tl.float32:
-        if capability[0] == 7 and capability[1] == 5:  # Turing
+        if is_tcgen5:
+            assert re.search(r'tcgen05.mma.cta_group::1.kind::f16', ptx)
+        elif capability[0] == 7 and capability[1] == 5:  # Turing
             assert re.search(r'mma.sync.aligned.m\d+n\d+k8(?:.row.col)?.f32.f16.f16', ptx)
         else:
             assert re.search(r'[mma|wgmma.mma_async].sync.aligned.m\d+n\d+k16(?:.row.col)?.f32.f16.f16', ptx)
     elif in_dtype == 'float16' and out_dtype == tl.float16:
-        if capability[0] == 7 and capability[1] == 5:  # Turing
+        if is_tcgen5:
+            assert re.search(r'tcgen05.mma.cta_group::1.kind::f16', ptx)
+        elif capability[0] == 7 and capability[1] == 5:  # Turing
             assert re.search(r'mma.sync.aligned.m\d+n\d+k8(?:.row.col)?.f16.f16.f16', ptx)
         else:
             assert re.search(r'[mma|wgmma.mma_async].sync.aligned.m\d+n\d+k16(?:.row.col)?.f16.f16.f16', ptx)
@@ -4026,13 +4089,7 @@ def test_dot_mulbroadcasted(in_dtype, device):
     if not is_cuda():
         return
     assert "tt.dot" in h.asm['ttir']
-    # When using MMAv3, we will not pipeline the load op for Y, as the loaded
-    # value is in rowmajor. But MMAv3 requires its second operand is in colmajor
-    # because transpose is not supported for MMAv3 with float32 input.
-    if capability[0] >= 9:
-        assert re.search(r"ttg.async_wait %.* {num = 1 : i32}", h.asm["ttgir"]) is not None
-    else:
-        assert re.search(r"ttg.async_wait %.* {num = 2 : i32}", h.asm["ttgir"]) is not None
+    assert re.search(r"ttg.async_wait %.* {num = 2 : i32}", h.asm["ttgir"]) is not None
 
 
 @pytest.mark.interpreter
@@ -4755,6 +4812,7 @@ def test_reshape_err(device):
     assert "reshape" in str(exc_info.value)
 
 
+@pytest.mark.interpreter
 def test_tma_load_block_shape_err():
 
     @triton.jit
@@ -4763,12 +4821,14 @@ def test_tma_load_block_shape_err():
         desc.load([0, 0])
 
     input = torch.empty((128, 128), dtype=torch.int32, device='cuda')
-    with pytest.raises(triton.CompilationError) as e:
+    errc = triton.CompilationError if not is_interpreter() else InterpreterError
+    with pytest.raises(errc) as e:
         kernel[(1, )](input)
 
     assert "tensor descriptor block shape must have at least 8 rows" in str(e.value.__cause__)
 
 
+@pytest.mark.interpreter
 def test_tma_store_block_shape_err():
 
     @triton.jit
@@ -4777,7 +4837,8 @@ def test_tma_store_block_shape_err():
         desc.store([0, 0], tl.zeros((1, 32), dtype=tl.int16))
 
     input = torch.empty((128, 128), dtype=torch.int16, device='cuda')
-    with pytest.raises(triton.CompilationError) as e:
+    errc = triton.CompilationError if not is_interpreter() else InterpreterError
+    with pytest.raises(errc) as e:
         kernel[(1, )](input)
 
     assert "int16 tensor descriptor block shape must have at least 16 columns" in str(e.value.__cause__)
@@ -5761,6 +5822,75 @@ def test_local_load_store(M, N, K, dist_layout, shared_layout, device, tmp_path:
     assert torch.equal(z, x)
 
 
+dot_layouts = [
+    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=0, k_width=4),
+    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [0, 1], [16, 8]), op_idx=1, k_width=4),
+    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [0, 1], [16, 8]), op_idx=0, k_width=2),
+    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=1, k_width=2),
+    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [0, 1], [16, 8]), op_idx=0, k_width=1),
+    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=1, k_width=1),
+]
+
+shared_layouts = [
+    SharedLayout(4, 2, 4, [0, 1], [1, 1], [1, 1], [0, 1]),
+    SharedLayout(8, 1, 8, [1, 0], [1, 1], [1, 1], [0, 1]),
+    SharedLayout(16, 1, 16, [1, 0], [1, 1], [1, 1], [0, 1]),
+]
+
+
+@pytest.mark.parametrize("M, N", [[16, 32]])
+@pytest.mark.parametrize("dtype", ['float16', 'float8e5', 'float32'])
+@pytest.mark.parametrize("shared_layout", shared_layouts)
+@pytest.mark.parametrize("dist_layout", filter_layouts(dot_layouts))
+def test_local_load_store_dot(M, N, dtype, dist_layout, shared_layout, device, tmp_path: pathlib.Path):
+    if dtype == "float32":
+        mlir_dtype = "f32"
+    elif dtype == "float16":
+        mlir_dtype = "f16"
+    elif dtype == "float8e5":
+        mlir_dtype = "f8E5M2"
+
+    layouts = f"""
+    #dist = {dist_layout}
+    #shared = {shared_layout}
+    #smem = #ttg.shared_memory
+    """
+    ir = layouts + f"""
+  module attributes {{"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32}} {{
+  tt.func public @kernel(%arg0: !tt.ptr<{mlir_dtype}> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<{mlir_dtype}> {{tt.divisibility = 16 : i32}}) attributes {{noinline = false}} {{
+    %cst = arith.constant dense<{N}> : tensor<{M}x1xi32, #dist>
+    %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #ttg.slice<{{dim = 1, parent = #dist}}>>
+    %1 = tt.make_range {{end = {N} : i32, start = 0 : i32}} : tensor<{N}xi32, #ttg.slice<{{dim = 0, parent = #dist}}>>
+    %2 = tt.splat %arg0 : !tt.ptr<{mlir_dtype}> -> tensor<{M}x{N}x!tt.ptr<{mlir_dtype}>, #dist>
+    %3 = tt.splat %arg1 : !tt.ptr<{mlir_dtype}> -> tensor<{M}x{N}x!tt.ptr<{mlir_dtype}>, #dist>
+    %4 = tt.expand_dims %0 {{axis = 1 : i32}} : tensor<{M}xi32, #ttg.slice<{{dim = 1, parent = #dist}}>> -> tensor<{M}x1xi32, #dist>
+    %5 = arith.muli %4, %cst : tensor<{M}x1xi32, #dist>
+    %6 = tt.expand_dims %1 {{axis = 0 : i32}} : tensor<{N}xi32, #ttg.slice<{{dim = 0, parent = #dist}}>> -> tensor<1x{N}xi32, #dist>
+    %7 = tt.broadcast %6 : tensor<1x{N}xi32, #dist> -> tensor<{M}x{N}xi32, #dist>
+    %8 = tt.broadcast %5 : tensor<{M}x1xi32, #dist> -> tensor<{M}x{N}xi32, #dist>
+    %9 = arith.addi %8, %7 : tensor<{M}x{N}xi32, #dist>
+    %10 = tt.addptr %2, %9 : tensor<{M}x{N}x!tt.ptr<{mlir_dtype}>, #dist>, tensor<{M}x{N}xi32, #dist>
+    %11 = tt.load %10 : tensor<{M}x{N}x!tt.ptr<{mlir_dtype}>, #dist>
+    %12 = ttg.local_alloc %11 : (tensor<{M}x{N}x{mlir_dtype}, #dist>) -> !ttg.memdesc<{M}x{N}x{mlir_dtype}, #shared, #smem>
+    %13 = ttg.local_load %12 : !ttg.memdesc<{M}x{N}x{mlir_dtype}, #shared, #smem> -> tensor<{M}x{N}x{mlir_dtype}, #dist>
+    %14 = tt.addptr %3, %9 : tensor<{M}x{N}x!tt.ptr<{mlir_dtype}>, #dist>, tensor<{M}x{N}xi32, #dist>
+    tt.store %14, %13 : tensor<{M}x{N}x!tt.ptr<{mlir_dtype}>, #dist>
+    tt.return
+  }}
+}}
+"""
+
+    x = to_triton(numpy_random((M, N), dtype_str=dtype), device=device)
+    z = torch.empty_like(x, device=device)
+
+    temp_file = tmp_path / "test_local_load_store_dot.ttgir"
+    temp_file.write_text(ir)
+    kernel = triton.compile(str(temp_file))
+
+    kernel[(1, 1, 1)](x, z)
+    assert torch.equal(z, x)
+
+
 mma_layouts = [
     MmaLayout((2, 0), [1, 4], [1, 1], [1, 1], [0, 1], [16, 8]),
     MmaLayout((3, 0), [4, 1], [1, 1], [1, 1], [0, 1], [16, 128, 16]),  # simple 4 warps case
@@ -5772,8 +5902,8 @@ mma_layouts = [
 
 shared_layouts = [
     SharedLayout(8, 1, 1, [1, 0], [1, 1], [1, 1], [0, 1]),
-    SharedLayout(8, 2, 4, [1, 0], [1, 1], [1, 1], [0, 1], has_leading_offset=True),  # small contiguous bytes
-    SharedLayout(8, 1, 8, [1, 0], [1, 1], [1, 1], [0, 1], has_leading_offset=True),  # maximum contiguous bytes
+    NVMMASharedLayout(64, False, 16, [1, 1], [1, 1], [0, 1]),
+    NVMMASharedLayout(128, False, 16, [1, 1], [1, 1], [0, 1]),
 ]
 
 
@@ -5823,7 +5953,7 @@ def test_local_load_store_mma(M, N, mma_layout, shared_layout, device, tmp_path:
     kernel[(1, 1, 1)](x, z)
     assert torch.equal(z, x)
 
-    if shared_layout.has_leading_offset == "true" and mma_layout.version[0] >= 3:
+    if isinstance(shared_layout, NVMMASharedLayout) and mma_layout.version[0] >= 3:
         assert "stmatrix" in kernel.asm["ptx"]
 
 
@@ -6210,7 +6340,7 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
         torch.testing.assert_close(ref_out, C, rtol=0.01, atol=0.01)
     else:
         torch.testing.assert_close(ref_out, C, rtol=1e-3, atol=1e-3)
-    if is_cuda() and low_precision_acc > 0 and torch.cuda.get_device_capability()[0] >= 9:
+    if is_cuda() and low_precision_acc > 0 and torch.cuda.get_device_capability()[0] == 9:
         assert h.asm["ptx"].count("add.f32") == (BLOCK_M * BLOCK_N) // (32 * num_warps) * (BLOCK_K // low_precision_acc)
 
 
@@ -6357,7 +6487,7 @@ def test_clamp(dtype, device):
 # Test for symmetric clamp(x, -limit, limit), as it may go through optimized
 # codegen in the backends
 @pytest.mark.interpreter
-@pytest.mark.parametrize("dtype", ['float16', 'float32'])
+@pytest.mark.parametrize("dtype", ['bfloat16', 'float16', 'float32'])
 def test_clamp_symmetric(dtype, device):
 
     @triton.jit
@@ -6436,7 +6566,7 @@ def test_tl_range(device):
             if capability[0] >= 8:
                 ptx = pgm.asm['ptx']
                 # check that the loop got pipelined with the right number of stages.
-                assert 'cp.async.wait_group 0x6' in ptx
+                assert 'cp.async.wait_group 6' in ptx
 
 
 @triton.jit(noinline=True)
@@ -6822,6 +6952,35 @@ def test_gather_warp_shuffle(src_shape, indices_shape, axis, src_layout, indices
     kernel[(1, 1, 1)](src, indices, output)
 
     torch.testing.assert_close(output, ref, rtol=0, atol=0)
+
+
+@triton.jit
+def mul_jit_function(x, y):
+    return x * y
+
+
+@triton.jit
+def apply_binary_op(x, combine_op):
+    return combine_op(x, x)
+
+
+def test_jit_function_arg(device):
+
+    @triton.jit
+    def square_kernel_jit_function(in_ptr, out_ptr, BLOCK_SIZE: tl.constexpr):
+        offsets = tl.arange(0, BLOCK_SIZE)
+        in_data = tl.load(in_ptr + offsets)
+        out_data = apply_binary_op(in_data, mul_jit_function)  # pass a JITFunction into another JITFunction
+        tl.store(out_ptr + offsets, out_data)
+
+    BLOCK_SIZE = 16
+    x = torch.full((BLOCK_SIZE, ), 3.0, device=device)
+    out = torch.empty((BLOCK_SIZE, ), device=device)
+    expect = torch.full((BLOCK_SIZE, ), 9.0, dtype=x.dtype, device=device)
+
+    square_kernel_jit_function[(1, )](x, out, BLOCK_SIZE)
+
+    torch.testing.assert_close(out, expect)
 
 
 @pytest.mark.interpreter

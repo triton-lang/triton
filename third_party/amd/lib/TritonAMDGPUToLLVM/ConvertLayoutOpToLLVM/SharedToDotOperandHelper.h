@@ -11,10 +11,10 @@ Value getWarpIdInBlock(ConversionPatternRewriter &rewriter, Location loc,
                        int elemPerInstrNonK, int tensorSizeNonK, int nonKIdx,
                        const ArrayRef<unsigned int> &order);
 
-bool isSwizzled(gpu::SharedEncodingAttr layout);
+bool isSwizzled(gpu::SwizzledSharedEncodingAttr layout);
 
 /// Swizzling tensor element indexes according pattern encoded in
-/// SharedEncodingAttr
+/// SwizzledSharedEncodingAttr
 ///
 /// \param rewriter
 /// \param loc
@@ -26,11 +26,12 @@ bool isSwizzled(gpu::SharedEncodingAttr layout);
 std::pair<mlir::Value, mlir::Value>
 swizzleIndexes(ConversionPatternRewriter &rewriter, Location loc, Value row,
                Value col, SharedMemoryObject smemObj,
-               gpu::SharedEncodingAttr attr);
+               gpu::SwizzledSharedEncodingAttr attr);
 
 Value computeOffset(ConversionPatternRewriter &rewriter, Location loc,
                     Value row, Value col, SharedMemoryObject smemObj,
-                    ArrayRef<Value> strides, gpu::SharedEncodingAttr srcLayout);
+                    ArrayRef<Value> strides,
+                    gpu::SwizzledSharedEncodingAttr srcLayout);
 
 Value computeBasePtr(ConversionPatternRewriter &rewriter, Location loc,
                      const SharedMemoryObject &smemObj,
@@ -49,14 +50,14 @@ llvm::SmallVector<Value> computeOffsetsAType(
     computeTensorElemMappingInBlockT fn, const ArrayRef<int64_t> &elemsPerInstr,
     Value warpId, Value laneId, int warpsPerBlock, int numOfElems,
     ArrayRef<int64_t> reps, SharedMemoryObject smemObj, ArrayRef<Value> strides,
-    gpu::SharedEncodingAttr srcLayout, unsigned nonKDim, unsigned kDim);
+    gpu::SwizzledSharedEncodingAttr srcLayout, unsigned nonKDim, unsigned kDim);
 
 llvm::SmallVector<Value> computeOffsetsBType(
     ConversionPatternRewriter &rewriter, Location loc,
     computeTensorElemMappingInBlockT fn, const ArrayRef<int64_t> &elemsPerInstr,
     Value warpId, Value laneId, int warpsPerBlock, int numOfElems,
     ArrayRef<int64_t> reps, SharedMemoryObject smemObj, ArrayRef<Value> strides,
-    gpu::SharedEncodingAttr srcLayout, unsigned nonKDim, unsigned kDim);
+    gpu::SwizzledSharedEncodingAttr srcLayout, unsigned nonKDim, unsigned kDim);
 
 } // namespace mlir::triton::AMD
 

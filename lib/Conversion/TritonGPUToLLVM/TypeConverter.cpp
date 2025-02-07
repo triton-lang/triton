@@ -10,7 +10,6 @@ using namespace mlir::triton;
 
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::MemDescType;
-using ::mlir::triton::gpu::SharedEncodingAttr;
 
 TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
     MLIRContext *ctx, LowerToLLVMOptions &options,
@@ -48,10 +47,17 @@ Type TritonGPUToLLVMTypeConverter::convertTritonTensorType(
 Type TritonGPUToLLVMTypeConverter::convertMemDescType(
     MemDescType type, const TargetInfoBase &targetInfo) {
   auto ctx = type.getContext();
-  SmallVector<Type, 4> types;
   // base ptr
   auto ptrType =
       LLVM::LLVMPointerType::get(ctx, targetInfo.getSharedAddressSpace());
+
+  if (isa<triton::nvidia_gpu::TensorMemoryEncodingAttr,
+          triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(
+          type.getEncoding())) {
+    return ptrType;
+  }
+
+  SmallVector<Type, 4> types;
   types.push_back(ptrType);
   auto rank = type.getRank();
   // offsets

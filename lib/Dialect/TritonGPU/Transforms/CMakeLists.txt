@@ -11,12 +11,13 @@ add_triton_library(TritonGPUTransforms
   OptimizeThreadLocality.cpp
   Pipeliner/AssignLatencies.cpp
   Pipeliner/MatmulLoopPipeline.cpp
-  Pipeliner/OuterLoopPipeline.cpp
   Pipeliner/PipelineExpander.cpp
   Pipeliner/TestPipelineAssignLatencies.cpp
   Pipeliner/TestPipelineScheduleLoop.cpp
   Pipeliner/SoftwarePipeliner.cpp
+  Pipeliner/TC05MMAPipeline.cpp
   Pipeliner/TMAStoresPipeline.cpp
+  Pipeliner/ModifiedAccMMAPipeline.cpp
   Pipeliner/PipeliningUtility.cpp
   Pipeliner/Schedule.cpp
   Prefetch.cpp
