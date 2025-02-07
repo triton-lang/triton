@@ -1842,7 +1842,6 @@ void init_triton_ir(py::module &&m) {
           }
         }
 
-        llvm::dbgs() << "showOperations: " << showOperations;
         DiagnosticSeverity minSeverity = showWarnings
                                              ? DiagnosticSeverity::Warning
                                              : DiagnosticSeverity::Error;
