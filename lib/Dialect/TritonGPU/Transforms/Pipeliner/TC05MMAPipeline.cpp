@@ -512,11 +512,7 @@ void hoistAndUseTMemAlloc(IRRewriter &builder, scf::ForOp forOp,
         createSingleBufferView(builder, insertSlice, info.accInsertIdx);
   }
 
-  if (auto op = dyn_cast<ttng::TCGen5MMAOp>(&mmaOp)) {
-    op->getDMutable().assign(insertSlice);
-  } else if (auto op = dyn_cast<ttng::TCGen5MMAScaledOp>(&mmaOp)) {
-    op->getDMutable().assign(insertSlice);
-  }
+  mmaOp.setAccumulator(insertSlice);
 
   updateAccUsesInLoop(builder, forOp, info, newAlloc, numStages);
   assert(isa<BlockArgument>(info.accExtractIdx));
@@ -557,12 +553,7 @@ void createBarrierAndWaitOps(IRRewriter &builder, scf::ForOp forOp,
 
   Value barrierSlice =
       createSingleBufferView(builder, info.barrierAlloc, info.barrierIdx);
-
-  if (auto op = dyn_cast<ttng::TCGen5MMAOp>(&mmaOp)) {
-    op->getBarrierMutable().assign(barrierSlice);
-  } else if (auto op = dyn_cast<ttng::TCGen5MMAScaledOp>(&mmaOp)) {
-    op->getBarrierMutable().assign(barrierSlice);
-  }
+  mmaOp.setBarrier(barrierSlice);
 
   builder.setInsertionPointAfter(mmaOp);
   auto waitOp =

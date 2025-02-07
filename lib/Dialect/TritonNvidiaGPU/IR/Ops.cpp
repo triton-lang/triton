@@ -275,6 +275,12 @@ bool TCGen5MMAOp::verifyDims() {
 
 Value TCGen5MMAOp::useAccumulator() { return getUseD(); }
 
+void TCGen5MMAOp::setBarrier(Value barrier) {
+  getBarrierMutable().assign(barrier);
+}
+
+void TCGen5MMAOp::setAccumulator(Value accum) { getDMutable().assign(accum); }
+
 // -- TMEMStoreOp --
 LogicalResult TMEMStoreOp::verify() {
   if (!isa<triton::nvidia_gpu::TensorMemorySpaceAttr>(
@@ -320,6 +326,14 @@ bool TCGen5MMAScaledOp::verifyDims() {
 }
 
 Value TCGen5MMAScaledOp::useAccumulator() { return getUseD(); }
+
+void TCGen5MMAScaledOp::setBarrier(Value barrier) {
+  getBarrierMutable().assign(barrier);
+}
+
+void TCGen5MMAScaledOp::setAccumulator(Value accum) {
+  getDMutable().assign(accum);
+}
 
 // -- TMEMLoadOp --
 LogicalResult TMEMLoadOp::verify() {
