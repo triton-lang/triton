@@ -2,7 +2,7 @@
 
 module {
   tt.func @proton_record() {
-    // CHECK-NEXT: proton.record() {isStart = true, regionId = 1 : i32}
+    // CHECK: proton.record() {isStart = true, regionId = 1 : i32}
     // CHECK-NEXT: proton.record() {isStart = false, regionId = 1 : i32}
 
     // CHECK-NEXT: tt.return
