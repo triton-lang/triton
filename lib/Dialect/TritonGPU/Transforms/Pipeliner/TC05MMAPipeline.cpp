@@ -62,7 +62,7 @@ struct MMAInfo {
 // accumulator for the given MMA operation. The TMEMAllocOp and TMEMLoadOp must
 // be in the same region as the MMA operation.
 std::optional<std::pair<ttng::TMEMAllocOp, ttng::TMEMLoadOp>>
-getTMemAllocAndLoad(Operation *mmaOp) {
+getTMemAllocAndLoad(Operation* mmaOp) {
   auto acc = mmaOp->getOperand(2).getDefiningOp<ttng::TMEMAllocOp>();
   if (!acc || acc->getParentRegion() != mmaOp->getParentRegion()) {
     return std::nullopt;
@@ -281,7 +281,7 @@ Value createSingleBufferView(IRRewriter &builder, Value alloc, int idx) {
       builder.create<arith::ConstantIntOp>(alloc.getLoc(), idx, 32));
 }
 
-Value createBarrierAlloc(scf::ForOp forOp, Operation *mmaOp, int numStages) {
+Value createBarrierAlloc(scf::ForOp forOp, int numStages) {
   IRRewriter rewriter(forOp->getContext());
   rewriter.setInsertionPoint(forOp);
   MLIRContext *ctx = forOp.getContext();
@@ -552,7 +552,7 @@ void createBarrierAndWaitOps(IRRewriter &builder, scf::ForOp forOp,
   Value numStagesVal =
       builder.create<arith::ConstantIntOp>(forOp.getLoc(), numStages, 32);
 
-  info.barrierAlloc = createBarrierAlloc(forOp, mmaOp, numStages);
+  info.barrierAlloc = createBarrierAlloc(forOp, numStages);
 
   Location loc = mmaOp->getLoc();
   builder.setInsertionPoint(mmaOp);
@@ -657,6 +657,7 @@ FailureOr<scf::ForOp> preProcessLoopForTC05MMAPipelining(scf::ForOp forOp,
     // Avoid pipelining if in the backward slice of the mmaOp there is an
     // operation that is already assigned a stage, as it would make the pipeline
     // deeper than we are prepared for.
+    auto mmav5Op = cast<ttng::MMAv5OpInterface>(mmaOp);
     SetVector<Operation *> backwardSlice;
     BackwardSliceOptions opt;
     opt.omitBlockArguments = true;
