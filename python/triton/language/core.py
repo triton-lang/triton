@@ -2865,9 +2865,12 @@ class range:
     :param loop_unroll_factor: Tells the Triton IR level loop unroller how many
         times to unroll a for loop that this range is used with. Less than 2 for
         this value implies no unrolling.
+    :param disallow_acc_multi_buffer: If true, prevent the accumulator of the dot
+        operation in the loop to be multi-buffered, if applicable.
     """
 
-    def __init__(self, arg1, arg2=None, step=None, num_stages=None, loop_unroll_factor=None):
+    def __init__(self, arg1, arg2=None, step=None, num_stages=None, loop_unroll_factor=None,
+                 disallow_acc_multi_buffer=None):
         if step is None:
             self.step = constexpr(1)
         else:
@@ -2880,6 +2883,7 @@ class range:
             self.end = arg2
         self.num_stages = num_stages
         self.loop_unroll_factor = loop_unroll_factor
+        self.disallow_acc_multi_buffer = disallow_acc_multi_buffer
 
     def __iter__(self):
         raise RuntimeError("tl.range can only be used in @triton.jit'd functions")

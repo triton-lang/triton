@@ -35,12 +35,17 @@ void annotateWithPipelineStage(IRRewriter &builder, Operation *op, int stage) {
               IntegerAttr::get(builder.getI32Type(), stage));
 }
 
+int getPipelineStage(Operation *op) {
+  return op->getAttrOfType<IntegerAttr>(kPipelineStageAttrName).getInt();
+}
+
 struct MMAInfo {
   struct AccOverridePoint {
     Operation *op;
     Value condition = nullptr;
     Value initValue = nullptr;
     int distance = 0;
+    bool isFlag = false;
   };
 
   ttng::TMEMAllocOp accAlloc; // Directly precedes the dot, allocating tmem
@@ -136,6 +141,7 @@ std::optional<MMAInfo::AccOverridePoint>
 getAccOverridePointInLoop(scf::ForOp forOp, ttng::TMEMAllocOp accUse,
                           ttng::TMEMLoadOp accDef) {
   MMAInfo::AccOverridePoint accOverridePoint;
+  accOverridePoint.isFlag = false;
   DenseSet<Value> seen;
   Value v = accUse.getSrc();
   if (v == nullptr) {
@@ -219,6 +225,7 @@ getAccUseFlagFalseInLoop(scf::ForOp forOp, Value useAccFlagUse) {
 
   IRRewriter builder(v.getDefiningOp()->getNextNode());
   MMAInfo::AccOverridePoint accOverridePoint;
+  accOverridePoint.isFlag = true;
   accOverridePoint.distance = dist;
   Location loc = v.getDefiningOp()->getLoc();
   auto vTrue =
@@ -378,9 +385,12 @@ void updateAccUsesInLoop(IRRewriter &builder, scf::ForOp forOp, MMAInfo &info,
     }
     auto load = builder.create<ttng::TMEMLoadOp>(
         domOp->getLoc(), info.accLoad.getType(), extractSlice);
+    // If accumulator is multi-buffered, it is implicit that we put the load
+    // in the last stage.
+    int pipelineStage = info.accIsMultiBuffered ? numStages - 1 : 0;
     annotateWithPipelineStage(
         builder, forOp.getBody()->findAncestorOpInBlock(*load.getOperation()),
-        numStages - 1);
+        pipelineStage);
     for (auto user : directUses) {
       user->replaceUsesOfWith(info.accLoad, load);
     }
@@ -585,12 +595,45 @@ void createBarrierAndWaitOps(IRRewriter &builder, scf::ForOp forOp,
   info.barrierIdx = newBarrierIdx;
   annotateWithPipelineStage(builder, info.barrierIdx.getDefiningOp(), 0);
 
+  Value originalPhase = info.phase;
   Value newPhase = builder.create<arith::SelectOp>(
       loc, info.phase.getType(), barWrap,
       builder.create<arith::XOrIOp>(loc, info.phase, one), info.phase);
   replaceAllUsesDominatedBy(newPhase.getDefiningOp(), newPhase, info.phase);
   info.phase = newPhase;
   annotateWithPipelineStage(builder, info.phase.getDefiningOp(), 0);
+
+  // We need to add a barrier before load from the accumulator, if it is in the
+  // same stage as the dot.
+  ttng::TMEMLoadOp tmemLoad = nullptr;
+  SmallVector<Operation *> users = {info.accAlloc->getUsers().begin(),
+                                    info.accAlloc->getUsers().end()};
+  while (!users.empty()) {
+    auto user = users.pop_back_val();
+    if (isa<ttg::MemDescSubviewOp>(user)) {
+      users.append(user->getUsers().begin(), user->getUsers().end());
+    }
+    if (isa<ttng::TMEMLoadOp>(user) && forOp->isAncestor(user)) {
+      if (tmemLoad) {
+        assert(tmemLoad == cast<ttng::TMEMLoadOp>(user) &&
+               "Should have only one tmem load from the accumulator");
+      }
+      tmemLoad = cast<ttng::TMEMLoadOp>(user);
+    }
+  }
+  if (tmemLoad) {
+    int loadStage =
+        getPipelineStage(forOp.getBody()->findAncestorOpInBlock(*tmemLoad));
+    int mmaOpStage = getPipelineStage(mmaOp);
+    if (loadStage == mmaOpStage) {
+      builder.setInsertionPoint(tmemLoad);
+      auto barrier =
+          builder.create<ttng::WaitBarrierOp>(loc, barrierSlice, originalPhase);
+      annotateWithPipelineStage(
+          builder, forOp.getBody()->findAncestorOpInBlock(*barrier),
+          mmaOpStage);
+    }
+  }
 }
 
 bool isSafeToPipeline(ttng::TCGen5MMAScaledOp scaledDot) {
@@ -694,17 +737,33 @@ FailureOr<scf::ForOp> preProcessLoopForTC05MMAPipelining(scf::ForOp forOp,
       continue;
     }
 
+    SmallVector<Operation *> accUses = getDirectAccUses(accLoad);
+    DominanceInfo domOpInfo(forOp);
+    Operation *newAccLoadInsertPoint =
+        findNearestCommonDominator(accUses, domOpInfo);
     // Check pipelining and multi-buffering constraints
-    // 1. If the acc is used by an op in the loop (other than the dot) it
-    // requires multi-buffering to pipeline, as different stages cannot operate
-    // on the same buffer.
-    bool requiresMultiBuffer = !getDirectAccUses(accLoad).empty();
+    // 1. Really needs multibuffering - if the acc is used unconditionally in
+    // the loop, or under different conditions. If we cannot multibuffer in this
+    // case, we may as well not pipeline at all, as we will have to wait after
+    // the dot in every loop iteration.
+    scf::IfOp topLevelIf =
+        newAccLoadInsertPoint
+            ? dyn_cast<scf::IfOp>(forOp.getBody()->findAncestorOpInBlock(
+                  *newAccLoadInsertPoint))
+            : nullptr;
+    bool requiresMultiBuffer = accUses.size() > 0 && !topLevelIf;
+    // If we override the acc in the loop, it is generally hard to handle it
+    // without multibuffering. We make an exception if it not a physical
+    // override of a value, but just setting a flag that acc is not used. In
+    // this case we don't need different buffer to store init value.
+    requiresMultiBuffer |=
+        accOverridePoint.has_value() && !accOverridePoint->isFlag;
 
     // 2. If the acc is not owerwritten in the loop (by op other than the dot),
     // it cannot be multi-buffered. This is because the overwrite is the only
     // way to initialize next buffer without incurring a copy.
-    bool canMultiBuffer = accOverridePoint.has_value();
-
+    bool canMultiBuffer = accOverridePoint.has_value() &&
+                          !mlir::triton::getDisallowAccMultiBuffer(forOp);
     if (requiresMultiBuffer && !canMultiBuffer) {
       continue;
     }
@@ -713,7 +772,7 @@ FailureOr<scf::ForOp> preProcessLoopForTC05MMAPipelining(scf::ForOp forOp,
                        .accLoad = accLoad,
                        .accDef = accOverridePoint,
                        .yieldArgNo = yieldArgNo,
-                       .accIsMultiBuffered = requiresMultiBuffer};
+                       .accIsMultiBuffered = canMultiBuffer};
 
     builder.setInsertionPoint(forOp);
     Value zero = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 0, 32);
