@@ -536,8 +536,10 @@ Value cvtFp32ToFp16(Location loc, RewriterBase &rewriter, const Value &v,
   switch (rounding) {
   case triton::RoundingMode::RTNE:
     rm = LLVM::RoundingMode::NearestTiesToEven;
+    break;
   case triton::RoundingMode::RTZ:
     rm = LLVM::RoundingMode::TowardZero;
+    break;
   }
   return rewriter.create<LLVM::ConstrainedFPTruncIntr>(
       loc, f16_ty, v, rm, LLVM::FPExceptionBehavior::Ignore);
