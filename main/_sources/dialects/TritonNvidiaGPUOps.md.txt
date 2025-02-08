@@ -304,7 +304,7 @@ and syncronize both CTAs if the op is synchronous.
 
 Traits: `VerifyTensorLayoutsTrait`
 
-Interfaces: `DotOpInterface`, `MemoryEffectOpInterface`
+Interfaces: `DotOpInterface`, `MMAv5OpInterface`, `MemoryEffectOpInterface`
 
 #### Attributes:
 
@@ -341,7 +341,7 @@ If there is a barrier the result will be safe to read after a barrier wait.
 
 Traits: `VerifyTensorLayoutsTrait`
 
-Interfaces: `DotOpInterface`, `MemoryEffectOpInterface`
+Interfaces: `DotOpInterface`, `MMAv5OpInterface`, `MemoryEffectOpInterface`
 
 #### Attributes:
 
