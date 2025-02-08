@@ -2213,10 +2213,11 @@ SmallVector<unsigned> DotOperandEncodingAttr::getSizePerThread() const {
   assert(parentLayout && "DotOperandEncodingAttr must have a parent");
   if (auto parentMmaLayout = mlir::dyn_cast<MmaEncodingTrait>(parentLayout)) {
     return parentMmaLayout.getSizePerThreadForOperand(getKWidth(), getOpIdx());
+  } else if (auto blocked = mlir::dyn_cast<BlockedEncodingAttr>(parentLayout)) {
+    return expandMatrixShapeWithBatch(ArrayRef(blocked.getSizePerThread()));
   } else {
     llvm::report_fatal_error(
-        "DotOperandEncodingAttr non-NvidiaMmaEncodingAttr parent not "
-        "supported yet");
+        "getSizePerThread not implemented for DotOperandEncodingAttr");
     return {};
   }
 }
