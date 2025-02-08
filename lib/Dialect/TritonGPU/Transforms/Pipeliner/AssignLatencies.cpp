@@ -265,8 +265,10 @@ DenseMap<Operation *, int> assignLatencies(ModuleOp moduleOp,
   for (auto forOp : loops) {
     for (auto ifOp : forOp.getBody()->getOps<scf::IfOp>()) {
       auto isLoad = [&](Operation &op) {
-        return isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp,
-                   tt::ExperimentalDescriptorGatherOp>(op);
+        if (!isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp,
+                 tt::ExperimentalDescriptorGatherOp>(op))
+          return false;
+        return isa<RankedTensorType>(op.getResultTypes().front());
       };
       if (llvm::any_of(*ifOp.thenBlock(), isLoad) ||
           (ifOp.elseBlock() && llvm::any_of(*ifOp.elseBlock(), isLoad)))
