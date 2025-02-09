@@ -165,8 +165,8 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
     auto dstTy = cvtLayout.getType();
     auto srcEncoding = srcTy.getEncoding();
     auto dstEncoding = dstTy.getEncoding();
-    if (isa<gpu::SharedEncodingAttr>(srcEncoding) ||
-        isa<gpu::SharedEncodingAttr>(dstEncoding)) {
+    if (mlir::isa<gpu::SharedEncodingTrait>(srcEncoding) ||
+        mlir::isa<gpu::SharedEncodingTrait>(dstEncoding)) {
       // Conversions from/to shared memory do not need scratch memory.
       return 0;
     }
@@ -234,7 +234,7 @@ private:
         // Bytes could be a different value once we support padding or other
         // allocation policies.
         auto allocType = alloc.getType();
-        auto shapePerCTA = gpu::getShapePerCTA(allocType);
+        auto shapePerCTA = gpu::getAllocationShapePerCTA(allocType);
         auto bytes = product<int64_t>(shapePerCTA) *
                      allocType.getElementTypeBitWidth() / 8;
 

@@ -15,3 +15,8 @@ mlir_tablegen(TritonNvidiaGPUAttrDefs.cpp.inc -gen-attrdef-defs)
 mlir_tablegen(OpsEnums.h.inc -gen-enum-decls)
 mlir_tablegen(OpsEnums.cpp.inc -gen-enum-defs)
 add_public_tablegen_target(TritonNvidiaGPUAttrDefsIncGen)
+
+set(LLVM_TARGET_DEFINITIONS TritonNvidiaGPUOpInterfaces.td)
+mlir_tablegen(TritonNvidiaGPUOpInterfaces.h.inc -gen-op-interface-decls)
+mlir_tablegen(TritonNvidiaGPUOpInterfaces.cpp.inc -gen-op-interface-defs)
+add_public_tablegen_target(TritonNvidiaGPUOpInterfacesIncGen)

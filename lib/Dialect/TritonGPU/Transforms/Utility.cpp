@@ -284,7 +284,7 @@ std::string GraphLayoutMarker::getColor(const Type &type) const {
       return "lightslateblue";
     else if (isa<triton::gpu::DotOperandEncodingAttr>(layout))
       return "orange";
-    else if (isa<triton::gpu::SharedEncodingAttr>(layout))
+    else if (isa<triton::gpu::SharedEncodingTrait>(layout))
       return "orangered";
     else {
       llvm::report_fatal_error("Unrecognized layout");
@@ -703,14 +703,14 @@ scf::IfOp replaceIfOpWithNewSignature(
   // Create a new loop before the existing one, with the extra operands.
   auto resultTypes = llvm::to_vector<4>(ifOp.getResults().getTypes());
   resultTypes.append(newResultTypes.begin(), newResultTypes.end());
-  scf::IfOp newIf = rewriter.create<scf::IfOp>(
-      ifOp.getLoc(), resultTypes, ifOp.getCondition(), /*withElse=*/true);
+  scf::IfOp newIf = rewriter.create<scf::IfOp>(ifOp.getLoc(), resultTypes,
+                                               ifOp.getCondition());
   newIf->setAttrs(ifOp->getAttrs());
 
-  rewriter.inlineBlockBefore(ifOp.thenBlock(), newIf.thenBlock(),
-                             newIf.thenBlock()->begin());
-  rewriter.inlineBlockBefore(ifOp.elseBlock(), newIf.elseBlock(),
-                             newIf.elseBlock()->begin());
+  newIf.getThenRegion().takeBody(ifOp.getThenRegion());
+  newIf.getElseRegion().takeBody(ifOp.getElseRegion());
+  scf::IfOp::ensureTerminator(newIf.getThenRegion(), rewriter, ifOp.getLoc());
+  scf::IfOp::ensureTerminator(newIf.getElseRegion(), rewriter, ifOp.getLoc());
 
   for (auto it : llvm::zip(ifOp.getResults(),
                            newIf.getResults().take_front(ifOp.getNumResults())))
@@ -1000,19 +1000,22 @@ StringRef getAMDArch(Operation *module) {
 // the same dot operand encoding, return the shared encoding that needs to be
 // used to be compatible with users' layouts. If there are incompatible shared
 // encodings, set incompatible to true.
-std::optional<ttg::SharedEncodingAttr>
+std::optional<ttg::SwizzledSharedEncodingAttr>
 getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
-  ttg::SharedEncodingAttr attr;
+  ttg::SwizzledSharedEncodingAttr attr;
   incompatible = false;
   for (Operation *user : val.getUsers()) {
-    ttg::SharedEncodingAttr tempAttr;
+    ttg::SwizzledSharedEncodingAttr tempAttr;
     if (user->getNumResults() != 1)
       return std::nullopt;
     if (auto memDesc =
             dyn_cast<triton::gpu::MemDescType>(user->getResult(0).getType())) {
       // First time we find a shared encoding in the chain, save it and try to
       // use it if it is compatible with the other users.
-      tempAttr = cast<ttg::SharedEncodingAttr>(memDesc.getEncoding());
+      tempAttr =
+          dyn_cast<ttg::SwizzledSharedEncodingAttr>(memDesc.getEncoding());
+      if (!tempAttr)
+        return std::nullopt;
       if (!getSharedEncIfAllUsersAreDotEnc(user->getResult(0), incompatible)
                .has_value())
         return std::nullopt;
@@ -1028,7 +1031,7 @@ getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
       auto CTALayout = ttg::getCTALayout(srcTy.getEncoding());
       auto order = ttg::getOrder(srcTy.getEncoding());
       unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
-      tempAttr = ttg::SharedEncodingAttr::get(
+      tempAttr = ttg::SwizzledSharedEncodingAttr::get(
           val.getContext(), dotOpEnc, srcTy.getShape(), order, CTALayout,
           bitWidth, /*needTrans=*/false);
     }
@@ -1040,45 +1043,6 @@ getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
     attr = tempAttr;
   }
   return attr;
-}
-
-MMALoadType getMMALoadType(Operation *loadOp) {
-  if (!loadOp->hasOneUse())
-    return MMALoadType::DoNotPipeline;
-
-  if (auto alloc = dyn_cast<ttg::LocalAllocOp>(*loadOp->getUsers().begin())) {
-    auto sharedEnc =
-        cast<ttg::SharedEncodingAttr>(alloc.getType().getEncoding());
-
-    if (!sharedEnc.getHasLeadingOffset())
-      return MMALoadType::DoNotPipeline;
-
-    // MMA V3 case.
-    auto newOrder = sharedEnc.getOrder();
-    auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
-    auto oldOrder = ttg::getOrder(ty.getEncoding());
-
-    // The operand of MMAv3 is in SharedEncoding and its order should not
-    // be changed after FuseTranspositions Pass. So we only pipeline the
-    // load if the order of the loaded BlockedEncoding is the same as the
-    // order of the SharedEncoding it is converted to.
-    return oldOrder == newOrder ? MMALoadType::SharedV3
-                                : MMALoadType::DoNotPipeline;
-  } else if (auto cvt =
-                 dyn_cast<ttg::ConvertLayoutOp>(*loadOp->getUsers().begin())) {
-    auto resTy = dyn_cast<RankedTensorType>(cvt->getResultTypes()[0]);
-    if (!resTy) {
-      return MMALoadType::DoNotPipeline;
-    }
-
-    if (isa<ttg::DotOperandEncodingAttr>(resTy.getEncoding())) {
-      return MMALoadType::Registers;
-    }
-
-    return MMALoadType::DoNotPipeline;
-  } else {
-    return MMALoadType::DoNotPipeline;
-  }
 }
 
 namespace {

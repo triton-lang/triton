@@ -37,11 +37,10 @@ namespace {
 
 struct LoadInfo {
   // Layout of the data in shared memory.
-  ttg::SharedEncodingAttr sharedEncoding = nullptr;
+  ttg::SharedEncodingTrait sharedEncoding = nullptr;
   // Blocked encoding is used for loads not used by the dot.
   ttg::BlockedEncodingAttr blockedEncoding = nullptr;
   bool isMMAv3Shared = false;
-  bool isMMAv3Registers = false;
   bool isMMAv5Scale = false;
   int distToUse = 0;
   bool usedByDot = false;
@@ -177,15 +176,18 @@ static int createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
   Operation *wait = builder.createWithStage<ttg::AsyncWaitOp>(
       loc, stageForFirstUse, clusterForFirstUse, commit->getResult(0), 0);
 
-  auto loadIsMMAv3Shared = loadToInfo[loadOp].isMMAv3Shared;
-
   // Extract part.
   SmallVector<Value> loadOffsets(allocTy.getRank(), zero);
   loadOffsets[0] = extractIdx;
   auto viewLoad = builder.createWithStage<ttg::MemDescSubviewOp>(
       loc, stageForFirstUse, clusterForFirstUse, subviewTy, alloc, loadOffsets);
-  if (loadIsMMAv3Shared) {
-    auto alloc = cast<ttg::LocalAllocOp>((*loadOp->getUsers().begin()));
+
+  if (loadToInfo[loadOp].isMMAv3Shared || loadToInfo[loadOp].isMMAv5Scale) {
+    auto user = *loadOp->getUsers().begin();
+    assert(isa<triton::gpu::LocalAllocOp>(user) &&
+           "Loading of MMAv3 operands and MMAv5 scale is expected to be "
+           "consumed by LocalAlloc.");
+    auto alloc = cast<ttg::LocalAllocOp>(user);
     tt::replaceUsesAndPropagateType(builder, alloc, viewLoad.getResult());
     alloc.erase();
   } else {
@@ -351,7 +353,7 @@ getBlockedEncoding(tt::LoadOp loadOp, tt::ModuleAxisInfoAnalysis &axisInfo) {
                                        threadsPerWarp, ctaLayout);
 }
 
-static std::optional<ttg::SharedEncodingAttr>
+static std::optional<ttg::SharedEncodingTrait>
 getSharedEncoding(Operation *loadOp, bool isTMALoad) {
   auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
   auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
@@ -368,62 +370,50 @@ getSharedEncoding(Operation *loadOp, bool isTMALoad) {
     order = blockedOrder;
   }
 
-  if (isTMALoad) {
-    // For TMA, the encoding compatible with it takes precedence over local
-    // alloc created for the MMA operand.
-    return ttg::SharedEncodingAttr::get(ty.getContext(), ty.getShape(), order,
-                                        ctaLayout, ty.getElementType());
-  }
-
-  // If the load is used by a LocalAllocOp, use the same encoding as the allocs.
-  // If the allocs don't all have the same encoding, bail.
+  ttg::SharedEncodingTrait localAllocEnc;
   if (llvm::any_of(loadOp->getUsers(), [&](Operation *user) {
         return isa<ttg::LocalAllocOp>(user);
       })) {
-    ttg::SharedEncodingAttr localAllocEnc;
     for (auto user : loadOp->getUsers()) {
       auto localAlloc = dyn_cast<ttg::LocalAllocOp>(user);
       if (!localAlloc)
         continue;
-      auto enc = mlir::cast<ttg::SharedEncodingAttr>(
+      auto enc = mlir::cast<ttg::SharedEncodingTrait>(
           localAlloc.getType().getEncoding());
       if (!localAllocEnc) {
         localAllocEnc = enc;
       }
-      if (enc != localAllocEnc)
+      if (enc != localAllocEnc) {
+        // If the allocs don't all have the same encoding, bail.
         return std::nullopt;
+      }
     }
+  }
+
+  if (isTMALoad) {
+    // For TMA, the encoding compatible with it takes precedence over local
+    // alloc created for the MMA operand.
+    if (localAllocEnc) {
+      if (auto sharedMMALayout =
+              dyn_cast<ttg::NVMMASharedEncodingAttr>(localAllocEnc)) {
+        assert(!sharedMMALayout.getFp4Padded() &&
+               "TMA load for mixed precision MMAv5 is not supported yet.");
+      }
+    }
+    return ttg::NVMMASharedEncodingAttr::get(
+        ty.getContext(), ty.getShape(), order, ctaLayout, ty.getElementType(),
+        /*fp4Padded*/ false);
+  }
+
+  // If the load is used by a LocalAllocOp, use the same encoding as the allocs.
+  if (localAllocEnc) {
     return localAllocEnc;
   }
 
   // Use non-swizzled layout for loads that do not feed into dot ops.
   // TODO: This won't be optimal for 2D tensors.
-  return ttg::SharedEncodingAttr::get(ty.getContext(), 1, 1, 1, order,
-                                      ctaLayout);
-}
-
-static bool hasSharedEncodingHelper(Operation *loadOp) {
-  // If the load is used by a LocalAllocOp, use the same encoding as the allocs.
-  // If the allocs don't all have the same encoding, bail.
-  if (llvm::any_of(loadOp->getUsers(), [&](Operation *user) {
-        return isa<ttg::LocalAllocOp>(user);
-      })) {
-    ttg::SharedEncodingAttr localAllocEnc;
-    for (auto user : loadOp->getUsers()) {
-      auto localAlloc = dyn_cast<ttg::LocalAllocOp>(user);
-      if (!localAlloc)
-        continue;
-      auto enc = mlir::cast<ttg::SharedEncodingAttr>(
-          localAlloc.getType().getEncoding());
-      if (!localAllocEnc) {
-        localAllocEnc = enc;
-      }
-      if (enc != localAllocEnc)
-        return false;
-    }
-    return true;
-  }
-  return true;
+  return ttg::SwizzledSharedEncodingAttr::get(ty.getContext(), 1, 1, 1, order,
+                                              ctaLayout);
 }
 
 static llvm::SmallVector<Operation *> getDirectUserInBlock(Operation *loadOp) {
@@ -458,7 +448,7 @@ getTransitiveUserInBlock(Operation *baseOp, scf::ForOp &forOp) {
           }
           if (isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp,
                   tt::ExperimentalDescriptorGatherOp>(op) ||
-              op->hasTrait<OpTrait::DotLike>()) {
+              isa<mlir::triton::DotOpInterface>(op)) {
             // Stop recursion when hitting a LoadOp or a DotOp.
             users.push_back(op);
             return;
@@ -467,6 +457,12 @@ getTransitiveUserInBlock(Operation *baseOp, scf::ForOp &forOp) {
         for (Operation *user : op->getUsers())
           if (user->getBlock() == op->getBlock())
             dfs(user, baseOp, anyOp);
+        if (auto tmemCopy = dyn_cast<triton::nvidia_gpu::TMEMCopyOp>(op)) {
+          auto tmemAlloc =
+              tmemCopy.getDst()
+                  .getDefiningOp<triton::nvidia_gpu::TMEMAllocOp>();
+          dfs(tmemAlloc, baseOp, anyOp);
+        }
       };
   // We are matching the behavior before refactoring:
   //   For loops without num_stage attributes, we check for dot users.
@@ -478,6 +474,16 @@ getTransitiveUserInBlock(Operation *baseOp, scf::ForOp &forOp) {
     dfs(baseOp, baseOp, true /*anyOp*/);
   }
   return users;
+}
+
+static bool isMMAv3Buffer(Operation *loadOp) {
+  if (!loadOp->hasOneUse())
+    return false;
+  Operation *user = *loadOp->getUsers().begin();
+  if (auto alloc = dyn_cast<ttg::LocalAllocOp>(user)) {
+    return isa<ttg::NVMMASharedEncodingAttr>(alloc.getType().getEncoding());
+  }
+  return false;
 }
 
 static llvm::MapVector<Operation *, LoadInfo>
@@ -521,22 +527,19 @@ assignMemoryLayouts(scf::ForOp &forOp,
     loadsToPipeline.insert(&op);
     LoadInfo loadInfo;
     for (auto use : users) {
-      if (use->hasTrait<OpTrait::DotLike>()) {
+      if (isa<mlir::triton::DotOpInterface>(use)) {
         LDBG("set shared encoding with dot user: " << *use);
-        auto mmaLoadType = getMMALoadType(&op);
         auto dot = dyn_cast<tt::DotOp>(use);
-        auto warpGroupDot = dyn_cast<ttng::WarpGroupDotOp>(use);
-
+        bool mmav3Shmem = isMMAv3Buffer(&op);
         loadInfo.usedByDot = true;
-        loadInfo.isMMAv3Shared = mmaLoadType == MMALoadType::SharedV3;
-        loadInfo.isMMAv3Registers =
-            (mmaLoadType == MMALoadType::Registers) && warpGroupDot;
+        loadInfo.isMMAv3Shared = mmav3Shmem;
 
-        if (loadInfo.isMMAv3Shared || isTMALoad) {
+        if (mmav3Shmem || isTMALoad) {
           loadInfo.sharedEncoding =
               getSharedEncoding(&op, isTMALoad).value_or(nullptr);
-        } else if (loadInfo.isMMAv3Registers || dot) {
+        } else if (!mmav3Shmem || dot) {
           bool incompatible = false;
+
           loadInfo.sharedEncoding =
               getSharedEncIfAllUsersAreDotEnc(op.getResult(0), incompatible)
                   .value_or(nullptr);
@@ -545,7 +548,9 @@ assignMemoryLayouts(scf::ForOp &forOp,
 
       // If we still don't have a shared encoding, try a "generic" shared
       // encoding.
-      if (!loadInfo.sharedEncoding && !isa<ttng::WarpGroupDotOp>(use)) {
+      if (!loadInfo.sharedEncoding) {
+        assert(!loadInfo.isMMAv3Shared &&
+               "For MMAv3 pipelining we should have shared encoding");
         LDBG("try generic shared encoding");
         loadInfo.sharedEncoding =
             getSharedEncoding(&op, isTMALoad).value_or(nullptr);
@@ -569,7 +574,8 @@ assignMemoryLayouts(scf::ForOp &forOp,
 
 // Create an allocation that can hold distance number of loadOp shapes.
 static Value createAlloc(scf::ForOp &forOp, Operation *loadOp,
-                         ttg::SharedEncodingAttr sharedEnc, unsigned distance) {
+                         ttg::SharedEncodingTrait sharedEnc,
+                         unsigned distance) {
   OpBuilder builder(forOp);
   Attribute sharedMemorySpace =
       ttg::SharedMemorySpaceAttr::get(forOp.getContext());
@@ -594,8 +600,8 @@ static Value createBarrierAlloc(scf::ForOp &forOp, unsigned distance) {
   auto barrierCTALayout =
       ttg::CTALayoutAttr::get(context, /*CTAsPerCGA=*/{1},
                               /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
-  auto barrierEncoding =
-      ttg::SharedEncodingAttr::get(context, 1, 1, 1, {0}, barrierCTALayout);
+  auto barrierEncoding = ttg::SwizzledSharedEncodingAttr::get(
+      context, 1, 1, 1, {0}, barrierCTALayout);
   auto barrierMemDescType = ttg::MemDescType::get(
       {distance}, builder.getI64Type(), barrierEncoding, sharedMemorySpace,
       /*mutableMemory=*/true);
@@ -1420,7 +1426,7 @@ static std::optional<int> dotCanBeProperlyAsync(ttng::WarpGroupDotOp dotOp,
 
   // Rule 1: All shmem operands are multi-buffered.
   auto checkOperand = [&](Value operand) {
-    if (!isa<ttg::SharedEncodingAttr>(
+    if (!isa<ttg::SharedEncodingTrait>(
             cast<ttg::TensorOrMemDesc>(operand.getType()).getEncoding())) {
       // Rule 1a: Register operands must not be modified within the loop.
       // First, check for chained WGMMA as an exception.

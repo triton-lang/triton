@@ -9,6 +9,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Interfaces/InferTypeOpInterface.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Support/LogicalResult.h"
@@ -129,6 +130,9 @@ public:
   void cleanup();
   void backwardRematerialization();
   void backwardRematerialization(ConvertLayoutOp convertOp);
+  // TODO: Merge the three hoistConvert*(); functions as they are duplicate code
+  void hoistConvertDotOperand();
+  void hoistConvertDotOperand(ConvertLayoutOp convertOp);
   void hoistConvertOnTopOfExtOrBroadcast();
   void hoistConvertOnTopOfExtOrBroadcast(ConvertLayoutOp convertOp);
   void hoistConvertIntoConditionals();
@@ -137,6 +141,12 @@ public:
                     ConvertLayoutOp convertOp, IRMapping &mapping);
   void rewriteSlice(SetVector<Value> &slice, DenseMap<Value, Attribute> &layout,
                     ConvertLayoutOp convertOp);
+
+  LogicalResult
+  getConvertBackwardSlice(OpOperand &root, Attribute rootEncoding,
+                          SetVector<Value> &slice,
+                          DenseMap<Value, Attribute> &layout,
+                          std::function<bool(Operation *)> stopPropagation);
 
   LogicalResult getRematerializableSlice(
       OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
@@ -948,7 +958,7 @@ void LayoutRematerialization::rewriteSlice(SetVector<Value> &slice,
   rewriteSlice(slice, layout, convertOp, mapping);
 }
 
-LogicalResult LayoutRematerialization::getRematerializableSlice(
+LogicalResult LayoutRematerialization::getConvertBackwardSlice(
     OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
     DenseMap<Value, Attribute> &layout,
     std::function<bool(Operation *)> stopPropagation) {
@@ -978,9 +988,17 @@ LogicalResult LayoutRematerialization::getRematerializableSlice(
     // }
     return Value();
   };
-  LogicalResult result =
-      getConvertBackwardSlice(root, slice, rootEncoding, layout,
-                              stopPropagation, getExistingConversion);
+
+  return mlir::getConvertBackwardSlice(root, slice, rootEncoding, layout,
+                                       stopPropagation, getExistingConversion);
+}
+
+LogicalResult LayoutRematerialization::getRematerializableSlice(
+    OpOperand &root, Attribute rootEncoding, SetVector<Value> &slice,
+    DenseMap<Value, Attribute> &layout,
+    std::function<bool(Operation *)> stopPropagation) {
+  LogicalResult result = getConvertBackwardSlice(root, rootEncoding, slice,
+                                                 layout, stopPropagation);
   if (result.failed() || slice.empty())
     return failure();
 
@@ -1044,8 +1062,7 @@ void LayoutRematerialization::hoistConvertIntoConditionals() {
 
 void LayoutRematerialization::backwardRematerialization(
     ConvertLayoutOp convertOp) {
-  // we don't handle conversions to DotOperandEncodingAttr
-  // this is a heuristic to accommodate fused attention
+  // DotOperand is hoisted by hoistDotOperand
   RankedTensorType targetType = convertOp.getType();
   if (isa<DotOperandEncodingAttr>(targetType.getEncoding()))
     return;
@@ -1083,12 +1100,108 @@ void LayoutRematerialization::backwardRematerialization(
   rewriteSlice(slice, layout, convertOp);
 }
 
+void LayoutRematerialization::hoistConvertDotOperand() {
+  // Go through each ConvertLayoutOp.
+  SmallVector<ConvertLayoutOp> convertOps;
+  funcOp.walk(
+      [&](ConvertLayoutOp convertOp) { convertOps.push_back(convertOp); });
+  for (ConvertLayoutOp convertOp : convertOps) {
+    hoistConvertDotOperand(convertOp);
+    if (!opToDelete.contains(convertOp)) {
+      // If the conversion didn't get removed, consider it for reuse in future
+      // backward slices.
+      addRematValue(convertOp.getSrc(), convertOp.getType().getEncoding(),
+                    convertOp.getResult());
+    }
+  }
+}
+
+void LayoutRematerialization::hoistConvertDotOperand(
+    ConvertLayoutOp convertOp) {
+  auto targetType = convertOp.getType();
+  // The pass is targeted to Nvidia mma/wgmma dot operands
+  // We move convert #dot_operand next to their loads. This is done
+  // so that it's then easy to pipeline these loads
+  // TODO: Perhaps we should do this whenever convertOp is within a loop
+
+  auto dotEnc = dyn_cast<DotOperandEncodingAttr>(targetType.getEncoding());
+  if (!(dotEnc && isa<NvidiaMmaEncodingAttr>(dotEnc.getParent())))
+    return;
+
+  // We hoist over any operation that can be done without data movement between
+  // threads We do views and elementwise pure ops for now
+  // UpcastMXFPOp is here temporarily until
+  // https://github.com/triton-lang/triton/pull/5475 lands
+  auto noDataMovement = [](Operation *op) {
+    return (op->hasTrait<OpTrait::Elementwise>() && isMemoryEffectFree(op)) ||
+           isa<BroadcastOp, ExpandDimsOp, ReshapeOp, TransOp, UpcastMXFPOp,
+               ConvertLayoutOp>(op);
+  };
+  // Stop the slice as soon as we find an operation that cannot be done without
+  // data movement between threads
+  auto stop = std::not_fn(noDataMovement);
+
+  SetVector<Value> slice;
+  DenseMap<Value, Attribute> layout;
+  // Set-up the conversion "cache"
+  LogicalResult result = getConvertBackwardSlice(
+      convertOp.getSrcMutable(), targetType.getEncoding(), slice, layout, stop);
+  if (result.failed())
+    return;
+
+  IRMapping mapping;
+  OpBuilder builder(convertOp.getContext());
+  SetVector<Value> innerSlice;
+  for (Value v : slice) {
+    if (!v.getDefiningOp()) {
+      LLVM_DEBUG(
+          { DBGS() << "  Block arguments not supported. Got " << v << "\n"; });
+      return;
+    }
+    auto loadOp = dyn_cast<LoadOp>(v.getDefiningOp());
+    // We expect the leaves of the slice to be Load or arith::Constant
+    // This could be generalised if necessary
+    if (!loadOp) {
+      auto op = v.getDefiningOp();
+      if (isa<arith::ConstantOp>(op) || noDataMovement(op)) {
+        innerSlice.insert(v);
+        continue;
+      } else {
+        LLVM_DEBUG({
+          DBGS() << "  Leaves must be Load or Constant. Got " << v << "\n";
+        });
+        return;
+      }
+    }
+    builder.setInsertionPointAfter(loadOp);
+    auto type = dyn_cast<RankedTensorType>(loadOp.getType());
+    if (!type)
+      continue;
+    auto newType = RankedTensorType::get(type.getShape(), type.getElementType(),
+                                         layout[loadOp]);
+    auto newConvertOp = builder.create<ConvertLayoutOp>(
+        convertOp.getLoc(), newType, loadOp.getResult());
+    mapping.map(loadOp.getResult(), newConvertOp.getResult());
+  }
+
+  if (innerSlice.empty()) {
+    return;
+  }
+
+  LLVM_DEBUG({
+    DBGS() << "  Hoisting " << convertOp << '\n';
+    for (Value v : innerSlice)
+      DBGS() << "    " << v << '\n';
+  });
+
+  rewriteSlice(innerSlice, layout, convertOp, mapping);
+}
+
 // For convert left we try to hoist them above type extension to reduce the cost
 // of the convert.
 void LayoutRematerialization::hoistConvertOnTopOfExtOrBroadcast(
     ConvertLayoutOp convertOp) {
-  // we don't handle conversions to DotOperandEncodingAttr
-  // this is a heuristics to accommodate fused attention
+  // DotOperand is hoisted by hoistDotOperand
   RankedTensorType targetType = convertOp.getType();
   if (isa<DotOperandEncodingAttr>(targetType.getEncoding()))
     return;
@@ -1188,27 +1301,19 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
   // These are the conditional edges above which conversions should be hoisted.
   // The value represents the `scf.if` op result and the operand represents the
   // edge into one of the branches.
-  SmallVector<std::pair<OpResult, OpOperand *>> hoistAbove;
+  SmallVector<std::pair<Value, OpOperand *>> hoistAbove;
 
   // The list of `scf.if` op results in the slice that are not rematerializable.
   // Hoisting is terminated at these values.
   SmallVector<OpResult> terminals;
 
-  // Process the whole backward slice in subslices that stop at each condtional.
-  // This is so we can apply more specific rules about when to hoist.
-  struct Subslice {
-    OpResult v;
-    OpOperand *edge;
-    SetVector<Value> slice;
-    DenseMap<Value, Attribute> layout;
-  };
-  SmallVector<Subslice> subslices;
-
-  // Check a value in the subslice.
-  auto visitValue = [&](OpResult v) {
+  // This loop recurses through the subslices of the backwards dependencies, so
+  // re-query the size of `slice`.
+  for (unsigned i = 0; i != slice.size(); ++i) {
+    Value v = slice[i];
     auto ifOp = v.getDefiningOp<scf::IfOp>();
     if (!ifOp)
-      return;
+      continue;
 
     Attribute rootLayout = layout.at(v);
     unsigned resIdx = cast<OpResult>(v).getResultNumber();
@@ -1237,65 +1342,40 @@ void LayoutRematerialization::hoistConvertIntoConditionals(
       slice.insert(elseSlice.begin(), elseSlice.end());
       layout.insert(thenLayout.begin(), thenLayout.end());
       layout.insert(elseLayout.begin(), elseLayout.end());
-      return;
+      continue;
     }
 
     // If propagation across both edges failed, then this conditional
     // terminates backwards rematerialization.
     if (failed(thenResult) && failed(elseResult)) {
-      terminals.push_back(v);
-      return;
+      terminals.push_back(cast<OpResult>(v));
+      continue;
+    }
+
+    // Only hoist into conditionals inside loops. The assumption is that an if
+    // inside a loop executes fewer than the total number of loop iterations,
+    // making this hoist profitable.
+    if (!isa<scf::ForOp>(ifOp->getParentOp())) {
+      terminals.push_back(cast<OpResult>(v));
+      continue;
     }
 
     // The layout conversion can be rematerialized along one edge but not the
     // other. We can hoist the conversion into the other branch. Push this
     // into the subslice list for analysis.
     if (succeeded(thenResult)) {
-      subslices.push_back(
-          {v, &elseRes, std::move(thenSlice), std::move(thenLayout)});
+      hoistAbove.emplace_back(v, &elseRes);
+      slice.insert(thenSlice.begin(), thenSlice.end());
+      layout.insert(thenLayout.begin(), thenLayout.end());
     } else {
-      subslices.push_back(
-          {v, &thenRes, std::move(elseSlice), std::move(elseLayout)});
+      hoistAbove.emplace_back(v, &thenRes);
+      slice.insert(elseSlice.begin(), elseSlice.end());
+      layout.insert(elseLayout.begin(), elseLayout.end());
     }
-  };
-
-  // Process the whole slice in subslices.
-  unsigned i = 0;
-  bool isLoneHoist = false;
-  do {
-    // Visit values in the current subslice.
-    for (; i != slice.size(); ++i) {
-      if (auto v = dyn_cast<OpResult>(slice[i]))
-        visitValue(v);
-    }
-    // Check the next chunk of subslices. When a condtional is marked as being
-    // valid to be hoisted across, we have to recurse on a new subslice rooted
-    // at the corresopnding yield operand.
-    //
-    // Hoist across condtionals when:
-    // 1. The conditional is directly inside a loop.
-    // 2. The whole slice contains only one conditional.
-    for (auto &[v, edge, subslice, layouts] : subslices) {
-      bool oneHoist = false;
-      if (isa<LoopLikeOpInterface>(v.getDefiningOp()->getParentOp()) ||
-          (oneHoist = subslices.size() == 1 && hoistAbove.empty())) {
-        isLoneHoist |= oneHoist;
-        hoistAbove.push_back({v, edge});
-        // Recurse on the subslice.
-        slice.insert(subslice.begin(), subslice.end());
-        layout.insert(layouts.begin(), layouts.end());
-      } else {
-        terminals.push_back(v);
-      }
-    }
-    subslices.clear();
-  } while (i != slice.size());
+  }
 
   // Exit early if there is nothing to do.
   if (hoistAbove.empty())
-    return;
-  // Check if this is a lone hoist. There should be no other terminals.
-  if (isLoneHoist && !terminals.empty())
     return;
 
   // Rematerialize failed hoists right before the condtional, and hoist those
@@ -1339,6 +1419,10 @@ void hoistConvert(ModuleOp module) {
 
     layoutRemat = LayoutRematerialization(funcOp);
     layoutRemat.hoistConvertIntoConditionals();
+    layoutRemat.cleanup();
+
+    layoutRemat = LayoutRematerialization(funcOp);
+    layoutRemat.hoistConvertDotOperand();
     layoutRemat.cleanup();
   });
 }

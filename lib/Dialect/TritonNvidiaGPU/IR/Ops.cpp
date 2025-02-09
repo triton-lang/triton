@@ -25,6 +25,8 @@
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
+#include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUOpInterfaces.cpp.inc"
+
 #define GET_OP_CLASSES
 #include "triton/Dialect/TritonNvidiaGPU/IR/Ops.cpp.inc"
 
@@ -83,6 +85,13 @@ bool WarpGroupDotOp::needsPartialAccumulator() {
       cast<triton::gpu::TensorOrMemDesc>(d.getType()).getElementType().isF32();
   uint32_t maxNumImpreciseAcc = getMaxNumImpreciseAcc();
   return isFP8 && accFP32 && maxNumImpreciseAcc <= aTensorTy.getShape()[1];
+}
+
+bool WarpGroupDotOp::verifyDims() {
+  auto aShape = this->getA().getType().getShape();
+  auto bShape = this->getB().getType().getShape();
+
+  return aShape[aShape.size() - 1] == bShape[aShape.size() - 2];
 }
 
 // -- WarpGroupDotWaitOp --
@@ -259,6 +268,31 @@ void TCGen5MMAOp::getEffects(
                        mlir::triton::gpu::SharedMemory::get());
 }
 
+bool TCGen5MMAOp::verifyDims() {
+  auto aShape = this->getA().getType().getShape();
+  auto bShape = this->getB().getType().getShape();
+
+  return aShape[aShape.size() - 1] == bShape[aShape.size() - 2];
+}
+
+Value TCGen5MMAOp::useAccumulator() { return getUseD(); }
+
+void TCGen5MMAOp::setUseAccumulator(Value flag) {
+  getUseDMutable().assign(flag);
+}
+
+void TCGen5MMAOp::setBarrier(Value barrier) {
+  getBarrierMutable().assign(barrier);
+}
+
+Value TCGen5MMAOp::getAccumulator() { return getD(); }
+
+void TCGen5MMAOp::setAccumulator(Value accum) { getDMutable().assign(accum); }
+
+Value TCGen5MMAOp::getPredicate() { return getPred(); }
+
+void TCGen5MMAOp::setPredicate(Value pred) { getPredMutable().assign(pred); }
+
 // -- TMEMStoreOp --
 LogicalResult TMEMStoreOp::verify() {
   if (!isa<triton::nvidia_gpu::TensorMemorySpaceAttr>(
@@ -287,6 +321,42 @@ void TCGen5MMAScaledOp::getEffects(
   }
   effects.emplace_back(MemoryEffects::Read::get(), &getBMutable(),
                        mlir::triton::gpu::SharedMemory::get());
+}
+
+bool TCGen5MMAScaledOp::verifyDims() {
+  auto aShape = this->getA().getType().getShape();
+  auto bShape = this->getB().getType().getShape();
+
+  auto aKdim = aShape[aShape.size() - 1];
+  auto bKdim = bShape[aShape.size() - 2];
+  if (this->getAType() == ScaleDotElemType::E2M1)
+    aKdim *= 2;
+  if (this->getBType() == ScaleDotElemType::E2M1)
+    bKdim *= 2;
+
+  return aKdim == bKdim;
+}
+
+Value TCGen5MMAScaledOp::useAccumulator() { return getUseD(); }
+
+void TCGen5MMAScaledOp::setUseAccumulator(Value flag) {
+  getUseDMutable().assign(flag);
+}
+
+void TCGen5MMAScaledOp::setBarrier(Value barrier) {
+  getBarrierMutable().assign(barrier);
+}
+
+Value TCGen5MMAScaledOp::getAccumulator() { return getD(); }
+
+void TCGen5MMAScaledOp::setAccumulator(Value accum) {
+  getDMutable().assign(accum);
+}
+
+Value TCGen5MMAScaledOp::getPredicate() { return getPred(); }
+
+void TCGen5MMAScaledOp::setPredicate(Value pred) {
+  getPredMutable().assign(pred);
 }
 
 // -- TMEMLoadOp --
@@ -336,7 +406,8 @@ LogicalResult TMEMCopyOp::verify() {
   }
 
   auto srcTy = cast<triton::gpu::MemDescType>(getSrc().getType());
-  auto sharedEnc = cast<triton::gpu::SharedEncodingAttr>(srcTy.getEncoding());
+  auto sharedEnc =
+      cast<triton::gpu::SwizzledSharedEncodingAttr>(srcTy.getEncoding());
 
   if (sharedEnc.getMaxPhase() != 1 || sharedEnc.getPerPhase() != 1 ||
       sharedEnc.getVec() != 1)

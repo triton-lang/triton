@@ -11,10 +11,7 @@ using namespace mlir::triton::gpu;
 using namespace mlir::triton::NVIDIA;
 
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
-using ::mlir::triton::gpu::getShapePerCTA;
-using ::mlir::triton::gpu::getShapePerCTATile;
-using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
-using ::mlir::triton::gpu::SharedEncodingAttr;
+using ::mlir::triton::gpu::NVMMASharedEncodingAttr;
 
 mlir::triton::NVIDIA::DotOpMmaV5TmemLoader::DotOpMmaV5TmemLoader(
     Value tensor, Value base, SmallVector<unsigned int> instrShape,
@@ -344,14 +341,12 @@ void convertDot(const LLVMTypeConverter *typeConverter,
   bool aInTmem = true;
   bool transA = false;
   if (auto aSharedLayout =
-          dyn_cast<SharedEncodingAttr>(aTensorTy.getEncoding())) {
-    auto aOrd = aSharedLayout.getOrder();
-    transA = aOrd[0] == 0;
+          dyn_cast<NVMMASharedEncodingAttr>(aTensorTy.getEncoding())) {
+    transA = aSharedLayout.getTransposed();
     aInTmem = false;
   }
-  auto bSharedLayout = cast<SharedEncodingAttr>(bTensorTy.getEncoding());
-  auto bOrd = bSharedLayout.getOrder();
-  bool transB = bOrd[0] == 1;
+  auto bSharedLayout = cast<NVMMASharedEncodingAttr>(bTensorTy.getEncoding());
+  bool transB = !bSharedLayout.getTransposed();
   Value baseA =
       getSharedMemoryObjectFromStruct(
           loc, loadedA, typeConverter->convertType(aTensorTy.getElementType()),
@@ -360,11 +355,6 @@ void convertDot(const LLVMTypeConverter *typeConverter,
   Value baseB =
       getSharedMemoryObjectFromStruct(
           loc, loadedB, typeConverter->convertType(bTensorTy.getElementType()),
-          rewriter)
-          .getBase();
-  Value baseD =
-      getSharedMemoryObjectFromStruct(
-          loc, loadedD, typeConverter->convertType(dTensorTy.getElementType()),
           rewriter)
           .getBase();
 
@@ -406,7 +396,7 @@ void convertDot(const LLVMTypeConverter *typeConverter,
                            {(unsigned)mmaSizeN, (unsigned)mmaSizeK},
                            bTensorTy.getElementTypeBitWidth(), rewriter, loc);
   DotOpMmaV5TmemLoader dLoader = DotOpMmaV5TmemLoader(
-      d, baseD, {(unsigned)mmaSizeM, (unsigned)mmaSizeN}, interleaved, false);
+      d, loadedD, {(unsigned)mmaSizeM, (unsigned)mmaSizeN}, interleaved, false);
   for (int m = 0; m < numRepM; m++) {
     for (int n = 0; n < numRepN; n++) {
       Value useInitAcc = useDFlag;
@@ -435,10 +425,10 @@ struct TCGen5MMAOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     auto AEnc = op.getA().getType().getEncoding();
     auto BEnc = op.getB().getType().getEncoding();
-    assert(mlir::isa<SharedEncodingAttr>(AEnc) ||
+    assert(mlir::isa<NVMMASharedEncodingAttr>(AEnc) ||
            mlir::isa<triton::nvidia_gpu::TensorMemoryEncodingAttr>(AEnc) &&
                "Operand A should use Shared or Tensor memory layout.");
-    assert(mlir::isa<SharedEncodingAttr>(BEnc) &&
+    assert(mlir::isa<NVMMASharedEncodingAttr>(BEnc) &&
            "Operand B should use Shared layout.");
     assert(op.getBarrier() &&
            "tensorcore op should have a barrier at this point.");
@@ -491,14 +481,12 @@ struct TCGen5MMAScaledOpConversion
     bool aInTmem = true;
     bool transA = false;
     if (auto aSharedLayout =
-            dyn_cast<SharedEncodingAttr>(aTensorTy.getEncoding())) {
-      auto aOrd = aSharedLayout.getOrder();
-      transA = aOrd[0] == 0;
+            dyn_cast<NVMMASharedEncodingAttr>(aTensorTy.getEncoding())) {
+      transA = aSharedLayout.getTransposed();
       aInTmem = false;
     }
-    auto bSharedLayout = cast<SharedEncodingAttr>(bTensorTy.getEncoding());
-    auto bOrd = bSharedLayout.getOrder();
-    bool transB = bOrd[0] == 1;
+    auto bSharedLayout = cast<NVMMASharedEncodingAttr>(bTensorTy.getEncoding());
+    bool transB = !bSharedLayout.getTransposed();
     Value baseA =
         getSharedMemoryObjectFromStruct(
             loc, adaptor.getA(),
@@ -509,18 +497,10 @@ struct TCGen5MMAScaledOpConversion
             loc, adaptor.getB(),
             typeConverter->convertType(bTensorTy.getElementType()), rewriter)
             .getBase();
-    Value baseD =
-        getSharedMemoryObjectFromStruct(
-            loc, adaptor.getD(),
-            typeConverter->convertType(dTensorTy.getElementType()), rewriter)
-            .getBase();
+    Value baseD = adaptor.getD();
     baseD = tb.ptrtoint(i32_ty, baseD);
-    Value baseScaleA = getSharedMemoryObjectFromStruct(loc, adaptor.getAScale(),
-                                                       i8_ty, rewriter)
-                           .getBase();
-    Value baseScaleB = getSharedMemoryObjectFromStruct(loc, adaptor.getBScale(),
-                                                       i8_ty, rewriter)
-                           .getBase();
+    Value baseScaleA = adaptor.getAScale();
+    Value baseScaleB = adaptor.getBScale();
     baseScaleA = tb.ptrtoint(i32_ty, baseScaleA);
     baseScaleB = tb.ptrtoint(i32_ty, baseScaleB);
 
@@ -544,8 +524,10 @@ struct TCGen5MMAScaledOpConversion
     bool interleaved = (mmaSizeM == 64 && (numRepM > 1 || numRepN > 1));
 
     Value zero = tb.i32_val(0);
-    SmallVector<int64_t> shapeA(aTensorTy.getShape());
-    SmallVector<int64_t> shapeB(bTensorTy.getShape());
+    SmallVector<int64_t> shapeA(
+        triton::gpu::getAllocationShapePerCTA(aTensorTy));
+    SmallVector<int64_t> shapeB(
+        triton::gpu::getAllocationShapePerCTA(bTensorTy));
     if (opKindIsMXFP4) {
       shapeA[1] *= 2;
       shapeB[0] *= 2;
@@ -566,8 +548,7 @@ struct TCGen5MMAScaledOpConversion
                              {(unsigned)mmaSizeN, (unsigned)mmaSizeK},
                              numBitsPerElementB, rewriter, loc);
 
-    // TODO: Support accumulator init optimization for scaled dot
-    Value useInitAcc = tb.int_val(1, 1);
+    Value useInitAcc = op.getUseD();
     // Only run mma on one thread. We currently use elect as ptxas is not able
     // to detect that tid.x == 0 is true only for 1 thread.
     Value pred =

@@ -71,6 +71,7 @@ void init_triton_passes_ttgpuir(py::module &&m) {
                      createTritonGPUCombineTensorSelectAndIf);
   ADD_PASS_WRAPPER_0("add_optimize_accumulator_init",
                      createTritonGPUOptimizeAccumulatorInit);
+  ADD_PASS_WRAPPER_0("add_fuse_nested_loops", createTritonGPUFuseNestedLoops);
   ADD_PASS_OPTION_WRAPPER_1("add_loop_scheduling",
                             createTritonGPULoopScheduling, int);
   ADD_PASS_WRAPPER_0("add_coalesce_async_copy",

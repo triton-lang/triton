@@ -581,6 +581,7 @@ def TT_TransOp : TT_Op<"trans", [Pure,
     let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
 
     let hasFolder = 1;
+    let hasVerifier = 1;
 }
 
 //
@@ -630,7 +631,7 @@ def TT_GetNumProgramsOp : TT_Op<"get_num_programs", [Pure]> {
 //
 def TT_DotOp : TT_Op<"dot", [Pure,
                              DeclareOpInterfaceMethods<InferTypeOpInterface>,
-                             DotLike,
+                             DeclareOpInterfaceMethods<DotOpInterface>,
                              TypesMatchWith<"result's type matches accumulator's type",
                                             "d", "c", "$_self">]> {
     let summary = "dot";
@@ -670,7 +671,7 @@ def TT_DotOp : TT_Op<"dot", [Pure,
 //
 def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
                              AttrSizedOperandSegments,
-                             DotLike,
+                             DeclareOpInterfaceMethods<DotOpInterface>,
                              TypesMatchWith<"result's type matches accumulator's type",
                                             "d", "c", "$_self">]> {
     let summary = "dot_scaled";
@@ -830,7 +831,8 @@ def TT_MakeRangeOp : TT_Op<"make_range", [Pure]> {
 def TT_ElementwiseInlineAsmOp : TT_Op<"elementwise_inline_asm", [
   Elementwise,
   SameOperandsAndResultEncoding,
-  DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
+  DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+  DeclareOpInterfaceMethods<ConditionallySpeculatable>
 ]> {
   let summary = "inline assembly applying an elementwise operation to a group of packed elements.";
   let description = [{

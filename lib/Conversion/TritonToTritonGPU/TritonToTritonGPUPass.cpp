@@ -2,6 +2,7 @@
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
@@ -859,6 +860,7 @@ public:
     //    mlir::scf::populateSCFStructurealTypeConversionsAndLegality(...) here?
     populateSCFPatterns(typeConverter, patterns);
     populateCFPatterns(typeConverter, patterns);
+    patterns.insert<GenericOpPattern<ub::PoisonOp>>(typeConverter, context);
 
     auto inti = llvm::APSInt(32, false);
     auto i32_ty = IntegerType::get(mod->getContext(), 32);

@@ -118,10 +118,9 @@ LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
   return ret;
 }
 
-LinearLayout sharedToLinearLayoutNoLeadingOffset(ArrayRef<int64_t> shape,
-                                                 SharedEncodingAttr shared) {
-  assert(!shared.getHasLeadingOffset());
-
+LinearLayout
+sharedToLinearLayoutNoLeadingOffset(ArrayRef<int64_t> shape,
+                                    SwizzledSharedEncodingAttr shared) {
   MLIRContext *ctx = shared.getContext();
   int rank = shape.size();
   if (rank == 1) {
@@ -169,11 +168,8 @@ LinearLayout sharedToLinearLayoutNoLeadingOffset(ArrayRef<int64_t> shape,
 } // namespace
 
 LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
-                                               SharedEncodingAttr shared,
-                                               int32_t elemBitWidth,
+                                               NVMMASharedEncodingAttr shared,
                                                bool disableSwizzle) {
-  assert(shared.getHasLeadingOffset());
-
   MLIRContext *ctx = shared.getContext();
   int rank = shape.size();
   if (rank == 1) {
@@ -182,47 +178,64 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
         LinearLayout::identity1D(shape[0], S("offset"), S("dim0")),
         shared.getCTALayout(), shape);
   }
-
-  int tileWidthBytes;
-  if (shared.getPerPhase() == 4 && shared.getMaxPhase() == 2) {
-    tileWidthBytes = 32;
-  } else if (shared.getPerPhase() == 2 && shared.getMaxPhase() == 4) {
-    tileWidthBytes = 64;
-  } else if (shared.getPerPhase() == 1 && shared.getMaxPhase() == 8) {
-    tileWidthBytes = 128;
-  } else {
-    llvm::errs()
-        << "Illegal shared encoding.  If hasLeadingOffset is true, "
-           "then (perPhase, maxPhase) must be either (4,2), (2,4), or (1,8): "
-        << shared << "\n";
-    llvm_unreachable("Illegal shared encoding");
+  int elemBitWidth = shared.getElementBitWidth();
+  int tileWidthBytes = shared.getSwizzlingByteWidth();
+  int vec = 128 / elemBitWidth;
+  int perPhase = 0;
+  int maxPhase = 0;
+  if (tileWidthBytes == 32) {
+    perPhase = 4;
+    maxPhase = 2;
+  } else if (tileWidthBytes == 64) {
+    perPhase = 2;
+    maxPhase = 4;
+  } else if (tileWidthBytes == 128) {
+    perPhase = 1;
+    maxPhase = 8;
   }
-
   auto outDimNames = standardOutDimNames(ctx, rank);
 
   // Construct bases for a the layout's 2-dimensional tile.
-  assert(shape.size() >= 2);
-  int colDim = shared.getOrder()[0];
-  int rowDim = shared.getOrder()[1];
+  assert(rank >= 2);
+  int batchDims = rank - 2;
+  int colDim = batchDims + (shared.getTransposed() ? 0 : 1);
+  int rowDim = batchDims + (shared.getTransposed() ? 1 : 0);
 
   int tileRows = 8;
   int tileCols = 8 * tileWidthBytes / elemBitWidth;
+  bool isFp4Padded = false;
+  if (auto sharedMMALayout =
+          dyn_cast<triton::gpu::NVMMASharedEncodingAttr>(shared)) {
+    if (sharedMMALayout.getFp4Padded()) {
+      isFp4Padded = true;
+    }
+  }
+  int packingFactor = isFp4Padded ? 2 : 1;
 
-  if (shape[colDim] < tileCols || shape[rowDim] < tileRows) {
+  if (shape[colDim] * packingFactor < tileCols || shape[rowDim] < tileRows) {
     llvm::errs() << "Illegal shared layout; expected shape to be at least ["
                  << tileRows << ", " << tileCols << "], shape: ["
                  << shape[rowDim] << ", " << shape[colDim] << "]\n";
     llvm::report_fatal_error("Illegal shared layout");
   }
 
-  int vec = shared.getVec();
-
   StringAttr colDimName = outDimNames[colDim];
   StringAttr rowDimName = outDimNames[rowDim];
 
   std::vector<std::vector<int>> bases2D;
   for (int logCol = 0; logCol < llvm::Log2_32(tileCols); logCol++) {
-    bases2D.push_back({0, 1 << logCol});
+    if (isFp4Padded) {
+      int colPadded = 1 << logCol;
+      // Each group of 16 offsets consists of 8 "real" and 8 "padded" offsets.
+      // We represent the padded layout by mapping 8 padded offsets to the same
+      // coordinates as the real ones. When computing the inverse of this LL,
+      // the offsets correspoding to the real ones are picked in the image by
+      // invertAndCompose.
+      int colPacked = colPadded / 16 * 8 + colPadded % 8;
+      bases2D.push_back({0, colPacked});
+    } else {
+      bases2D.push_back({0, 1 << logCol});
+    }
   }
   for (int logRow = 0; logRow < llvm::Log2_32(tileRows); logRow++) {
     int row = 1 << logRow;
@@ -230,16 +243,19 @@ LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
       bases2D.push_back({row, 0});
       continue;
     }
-    int perPhase = shared.getPerPhase();
-    int maxPhase = shared.getMaxPhase();
-    bases2D.push_back({row, vec * ((row / perPhase) % maxPhase)});
+    if (isFp4Padded) {
+      int colPadded = vec * ((row / perPhase) % maxPhase);
+      int colPacked = colPadded / 16 * 8 + colPadded % 8;
+      bases2D.push_back({row, colPacked});
+    } else {
+      bases2D.push_back({row, vec * ((row / perPhase) % maxPhase)});
+    }
   }
   LinearLayout tileLayout =
       LinearLayout({{S("offset"), bases2D}}, {rowDimName, colDimName});
 
   // Add the remaining dimensions.
-  for (int i = 2; i < rank; i++) {
-    int dim = shared.getOrder()[i];
+  for (int dim = batchDims - 1; dim >= 0; --dim) {
     tileLayout *=
         LinearLayout::identity1D(shape[dim], S("offset"), outDimNames[dim]);
   }
@@ -852,32 +868,13 @@ LinearLayout SliceEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   }
   bases[S("register")] = newRegBases;
 
-  LinearLayout ret =
-      LinearLayout(std::move(bases), llvm::to_vector(sliceLL.getOutDimNames()));
-
-  // Match a hack in the legacy code that ensures that the number of registers
-  // matches getTotalElemsPerThread.  Yup: We just removed all the zeros, now
-  // we're (maybe) adding some back.  :)
-  //
-  // TODO(jlebar): Once getTotalElemsPerThread uses LLs instead of the existing
-  // legacy code, I think we can remove this.
-  int expectedNumRegisters =
-      triton::gpu::getTotalElemsPerThread(RankedTensorType::get(
-          shape, IntegerType::get(ctx, 32) /*dummy type*/, *this));
-  if (ret.getInDimSize(S("register")) != expectedNumRegisters) {
-    int extraZeros = expectedNumRegisters / ret.getInDimSize(S("register"));
-    // Our use of "dim0" here is arbitrary; because we're adding zeros, any
-    // output dimension would work.
-    ret *= LinearLayout::zeros1D(extraZeros, S("register"), S("dim0"));
-  }
-  return ret;
+  return LinearLayout(std::move(bases),
+                      llvm::to_vector(sliceLL.getOutDimNames()));
 }
 
-LinearLayout
-TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
-                                 std::optional<int32_t> elemBitWidth) {
-  CacheKey key{std::vector<int64_t>(shape.begin(), shape.end()), layout,
-               elemBitWidth};
+LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
+                                              Attribute layout) {
+  CacheKey key{std::vector<int64_t>(shape.begin(), shape.end()), layout};
   if (auto result = llCache.get(key)) {
     return *result;
   }
@@ -888,12 +885,12 @@ TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
   if (auto distributed = dyn_cast<DistributedEncodingTrait>(layout)) {
     result = distributed.toLinearLayout(shape);
   } else {
-    auto shared = dyn_cast<SharedEncodingAttr>(layout);
-    if (shared.getHasLeadingOffset()) {
-      assert(elemBitWidth.has_value());
-      result = sharedToLinearLayoutLeadingOffset(shape, shared, *elemBitWidth);
-    } else {
+    if (auto shared = dyn_cast<SwizzledSharedEncodingAttr>(layout)) {
       result = sharedToLinearLayoutNoLeadingOffset(shape, shared);
+    } else if (auto shared = dyn_cast<NVMMASharedEncodingAttr>(layout)) {
+      result = sharedToLinearLayoutLeadingOffset(shape, shared);
+    } else {
+      assert(0 && "unknown layout");
     }
   }
 
@@ -901,12 +898,10 @@ TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
   return result;
 }
 
-LinearLayout
-toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
-               std::optional<int32_t> elemBitWidth /*= std::nullopt*/) {
+LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout) {
   auto *ctx = layout.getContext();
-  return ctx->getLoadedDialect<TritonGPUDialect>()->toLinearLayout(
-      shape, layout, elemBitWidth);
+  return ctx->getLoadedDialect<TritonGPUDialect>()->toLinearLayout(shape,
+                                                                   layout);
 }
 
 LinearLayout getLayoutWithinBlock(const LinearLayout &layout) {

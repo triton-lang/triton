@@ -208,7 +208,7 @@ Value getSmemVecAddr(const LinearLayout &regLayout,
   auto allocShape = sharedTy.getAllocShape();
   auto rank = shape.size();
   auto sharedEnc =
-      dyn_cast<triton::gpu::SharedEncodingAttr>(sharedTy.getEncoding());
+      cast<triton::gpu::SharedEncodingTrait>(sharedTy.getEncoding());
 
   auto smemBase = smemObj.getBase();
   auto smemOffsets = smemObj.getOffsets();
@@ -253,8 +253,8 @@ Value getSmemVecAddr(const LinearLayout &regLayout,
                      .second;
   } else { // Case 2 -> rank-reduced swizzling
     assert(rank >= 2 && "Swizzling only applies to tensors with rank >= 2");
-    assert(!sharedEnc.getHasLeadingOffset() &&
-           "Leading offsets are not supported for sliced tensors");
+    assert(isa<triton::gpu::SwizzledSharedEncodingAttr>(sharedEnc) &&
+           "NVMMA layout not supported for sliced tensors");
     // We define both tensor offsets and shared memory offsets:
     //
     //   - Tensor offsets: Relative offsets within a given tensor.
@@ -317,8 +317,8 @@ bool emitTransferBetweenRegistersAndShared(
   StringAttr kWarp = str_attr("warp");
 
   auto shape = sharedTy.getShape();
-  LinearLayout sharedLayout = triton::gpu::toLinearLayout(
-      shape, sharedTy.getEncoding(), elemLlvmTy.getIntOrFloatBitWidth());
+  LinearLayout sharedLayout =
+      triton::gpu::toLinearLayout(shape, sharedTy.getEncoding());
   LinearLayout regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
 
   // TODO(jlebar): We don't currently support loading from shared memory in a
@@ -363,8 +363,7 @@ bool emitTransferBetweenRegistersAndShared(
   auto allocShape = sharedTy.getAllocShape();
   LinearLayout invertAllocSharedLayout =
       triton::gpu::toLinearLayout(allocShape.take_back(sharedTy.getRank()),
-                                  sharedTy.getEncoding(),
-                                  elemLlvmTy.getIntOrFloatBitWidth())
+                                  sharedTy.getEncoding())
           .pseudoinvert();
 
   int numElems = regToSharedLayout.getInDimSize(kRegister);
@@ -386,9 +385,8 @@ bool emitTransferBetweenRegistersAndShared(
     const SharedMemoryObject &smemObj, Location loc, RewriterBase &rewriter,
     const TargetInfoBase &target,
     std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback) {
-  auto regLayout = triton::gpu::toLinearLayout(
-      registerTy.getShape(), registerTy.getEncoding(),
-      elemLlvmTy.getIntOrFloatBitWidth());
+  auto regLayout = triton::gpu::toLinearLayout(registerTy.getShape(),
+                                               registerTy.getEncoding());
   return emitTransferBetweenRegistersAndShared(
       regLayout, sharedTy, elemLlvmTy, maxVecElems, smemObj, loc, rewriter,
       target, perVectorCallback);

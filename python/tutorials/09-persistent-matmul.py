@@ -221,6 +221,16 @@ def matmul(a, b):
     return c
 
 
+@triton.jit
+def _compute_pid(tile_id, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS):
+    group_id = tile_id // num_pid_in_group
+    first_pid_m = group_id * GROUP_SIZE_M
+    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+    pid_m = first_pid_m + (tile_id % group_size_m)
+    pid_n = (tile_id % num_pid_in_group) // group_size_m
+    return pid_m, pid_n
+
+
 @triton.autotune(
     configs=matmul_get_configs(),
     key=["M", "N", "K"],
@@ -243,61 +253,45 @@ def matmul_kernel_persistent(a_ptr, b_ptr, c_ptr,  #
     k_tiles = tl.cdiv(K, BLOCK_SIZE_K)
     num_tiles = num_pid_m * num_pid_n
 
-    tiles_per_SM = num_tiles // NUM_SMS
-    if start_pid < num_tiles % NUM_SMS:
-        tiles_per_SM += 1
-
-    tile_id = start_pid - NUM_SMS
-    ki = -1
+    # NOTE: There is currently a bug in blackwell pipelining that means it can't handle a value being
+    # used in both the prologue and epilogue, so we duplicate the counters as a work-around.
+    tile_id_c = start_pid - NUM_SMS
 
     offs_k_for_mask = tl.arange(0, BLOCK_SIZE_K)
-
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
 
-    pid_m = 0
-    pid_n = 0
-    offs_am = tl.arange(0, BLOCK_SIZE_M)
-    offs_bn = tl.arange(0, BLOCK_SIZE_N)
+    for tile_id in tl.range(start_pid, num_tiles, NUM_SMS, flatten=True):
+        pid_m, pid_n = _compute_pid(tile_id, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS)
+        start_m = pid_m * BLOCK_SIZE_M
+        start_n = pid_n * BLOCK_SIZE_N
+        offs_am = start_m + tl.arange(0, BLOCK_SIZE_M)
+        offs_bn = start_n + tl.arange(0, BLOCK_SIZE_N)
+        offs_am = tl.where(offs_am < M, offs_am, 0)
+        offs_bn = tl.where(offs_bn < N, offs_bn, 0)
+        offs_am = tl.max_contiguous(tl.multiple_of(offs_am, BLOCK_SIZE_M), BLOCK_SIZE_M)
+        offs_bn = tl.max_contiguous(tl.multiple_of(offs_bn, BLOCK_SIZE_N), BLOCK_SIZE_N)
 
-    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+        accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+        for ki in range(k_tiles):
+            offs_k = ki * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
+            a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
+            b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
 
-    for _ in range(0, k_tiles * tiles_per_SM):
-        ki = tl.where(ki == k_tiles - 1, 0, ki + 1)
-        if ki == 0:
-            tile_id += NUM_SMS
-            group_id = tile_id // num_pid_in_group
-            first_pid_m = group_id * GROUP_SIZE_M
-            group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-            pid_m = first_pid_m + (tile_id % group_size_m)
-            pid_n = (tile_id % num_pid_in_group) // group_size_m
+            a = tl.load(a_ptrs, mask=offs_k_for_mask[None, :] < K - ki * BLOCK_SIZE_K, other=0.0)
+            b = tl.load(b_ptrs, mask=offs_k_for_mask[:, None] < K - ki * BLOCK_SIZE_K, other=0.0)
+            accumulator = tl.dot(a, b, accumulator)
 
-            start_m = pid_m * BLOCK_SIZE_M
-            start_n = pid_n * BLOCK_SIZE_N
-            offs_am = start_m + tl.arange(0, BLOCK_SIZE_M)
-            offs_bn = start_n + tl.arange(0, BLOCK_SIZE_N)
-            offs_am = tl.where(offs_am < M, offs_am, 0)
-            offs_bn = tl.where(offs_bn < N, offs_bn, 0)
-            offs_am = tl.max_contiguous(tl.multiple_of(offs_am, BLOCK_SIZE_M), BLOCK_SIZE_M)
-            offs_bn = tl.max_contiguous(tl.multiple_of(offs_bn, BLOCK_SIZE_N), BLOCK_SIZE_N)
-        offs_k = ki * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
-        a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
-        b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
-
-        a = tl.load(a_ptrs, mask=offs_k_for_mask[None, :] < K - ki * BLOCK_SIZE_K, other=0.0)
-        b = tl.load(b_ptrs, mask=offs_k_for_mask[:, None] < K - ki * BLOCK_SIZE_K, other=0.0)
-        accumulator = tl.dot(a, b, accumulator)
-
-        if ki == k_tiles - 1:
-            offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-            offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
-            c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
-            c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
-            if (c_ptr.dtype.element_ty == tl.float8e4nv):
-                c = accumulator.to(tl.float8e4nv)
-            else:
-                c = accumulator.to(tl.float16)
-            tl.store(c_ptrs, c, mask=c_mask)
-            accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+        tile_id_c += NUM_SMS
+        pid_m, pid_n = _compute_pid(tile_id_c, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS)
+        offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+        offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
+        c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
+        c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
+        if (c_ptr.dtype.element_ty == tl.float8e4nv):
+            c = accumulator.to(tl.float8e4nv)
+        else:
+            c = accumulator.to(tl.float16)
+        tl.store(c_ptrs, c, mask=c_mask)
 
 
 def matmul_persistent(a, b):
@@ -356,71 +350,41 @@ def matmul_kernel_tma_persistent(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
     k_tiles = tl.cdiv(K, BLOCK_SIZE_K)
     num_tiles = num_pid_m * num_pid_n
 
-    tiles_per_SM = num_tiles // NUM_SMS
-    if start_pid < num_tiles % NUM_SMS:
-        tiles_per_SM += 1
-
-    tile_id = start_pid - NUM_SMS
-    # tile_id_c is used in the epilogue to break the dependency between
-    # the prologue and the epilogue
     tile_id_c = start_pid - NUM_SMS
-
-    ki = -1
-
-    offs_am = 0
-    offs_bn = 0
-
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
 
-    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+    for tile_id in tl.range(start_pid, num_tiles, NUM_SMS, flatten=True):
+        pid_m, pid_n = _compute_pid(tile_id, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS)
+        offs_am = pid_m * BLOCK_SIZE_M
+        offs_bn = pid_n * BLOCK_SIZE_N
 
-    for _ in range(0, k_tiles * tiles_per_SM):
-        ki = tl.where(ki == k_tiles - 1, 0, ki + 1)
-        if ki == 0:
-            tile_id += NUM_SMS
-            group_id = tile_id // num_pid_in_group
-            first_pid_m = group_id * GROUP_SIZE_M
-            group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-            pid_m = first_pid_m + (tile_id % group_size_m)
-            pid_n = (tile_id % num_pid_in_group) // group_size_m
+        accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+        for ki in range(k_tiles):
+            offs_k = ki * BLOCK_SIZE_K
+            a = tl._experimental_descriptor_load(a_desc_ptr, [offs_am, offs_k], [BLOCK_SIZE_M, BLOCK_SIZE_K], dtype)
+            b = tl._experimental_descriptor_load(b_desc_ptr, [offs_bn, offs_k], [BLOCK_SIZE_N, BLOCK_SIZE_K], dtype)
+            accumulator = tl.dot(a, b.T, accumulator)
 
-            offs_am = pid_m * BLOCK_SIZE_M
-            offs_bn = pid_n * BLOCK_SIZE_N
+        tile_id_c += NUM_SMS
+        pid_m, pid_n = _compute_pid(tile_id_c, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS)
+        offs_am_c = pid_m * BLOCK_SIZE_M
+        offs_bn_c = pid_n * BLOCK_SIZE_N
 
-        offs_k = ki * BLOCK_SIZE_K
-
-        a = tl._experimental_descriptor_load(a_desc_ptr, [offs_am, offs_k], [BLOCK_SIZE_M, BLOCK_SIZE_K], dtype)
-        b = tl._experimental_descriptor_load(b_desc_ptr, [offs_bn, offs_k], [BLOCK_SIZE_N, BLOCK_SIZE_K], dtype)
-        accumulator = tl.dot(a, b.T, accumulator)
-
-        if ki == k_tiles - 1:
-            tile_id_c += NUM_SMS
-            group_id = tile_id_c // num_pid_in_group
-            first_pid_m = group_id * GROUP_SIZE_M
-            group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-            pid_m = first_pid_m + (tile_id_c % group_size_m)
-            pid_n = (tile_id_c % num_pid_in_group) // group_size_m
-
-            offs_am_c = pid_m * BLOCK_SIZE_M
-            offs_bn_c = pid_n * BLOCK_SIZE_N
-
-            # Epilogue subtiling is a technique to break our computation and stores into multiple pieces
-            # By subtiling we can reduce shared memory consumption by the epilogue and instead use that
-            # memory to increase our stage count.
-            # In this case we partition the accumulator into 2 BLOCK_SIZE_M x BLOCK_SIZE_N // 2 tensors
-            if EPILOGUE_SUBTILE:
-                acc = tl.reshape(accumulator, (BLOCK_SIZE_M, 2, BLOCK_SIZE_N // 2))
-                acc = tl.permute(acc, (0, 2, 1))
-                acc0, acc1 = tl.split(acc)
-                c0 = acc0.to(dtype)
-                tl._experimental_descriptor_store(c_desc_ptr, c0, [offs_am_c, offs_bn_c])
-                c1 = acc1.to(dtype)
-                tl._experimental_descriptor_store(c_desc_ptr, c1, [offs_am_c, offs_bn_c + BLOCK_SIZE_N // 2])
-            else:
-                accumulator = accumulator.to(dtype)
-                tl._experimental_descriptor_store(c_desc_ptr, accumulator, [offs_am_c, offs_bn_c])
-
-            accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+        # Epilogue subtiling is a technique to break our computation and stores into multiple pieces
+        # By subtiling we can reduce shared memory consumption by the epilogue and instead use that
+        # memory to increase our stage count.
+        # In this case we partition the accumulator into 2 BLOCK_SIZE_M x BLOCK_SIZE_N // 2 tensors
+        if EPILOGUE_SUBTILE:
+            acc = tl.reshape(accumulator, (BLOCK_SIZE_M, 2, BLOCK_SIZE_N // 2))
+            acc = tl.permute(acc, (0, 2, 1))
+            acc0, acc1 = tl.split(acc)
+            c0 = acc0.to(dtype)
+            tl._experimental_descriptor_store(c_desc_ptr, c0, [offs_am_c, offs_bn_c])
+            c1 = acc1.to(dtype)
+            tl._experimental_descriptor_store(c_desc_ptr, c1, [offs_am_c, offs_bn_c + BLOCK_SIZE_N // 2])
+        else:
+            accumulator = accumulator.to(dtype)
+            tl._experimental_descriptor_store(c_desc_ptr, accumulator, [offs_am_c, offs_bn_c])
 
 
 def matmul_tma_persistent(a, b):
@@ -536,57 +500,39 @@ def matmul_kernel_descriptor_persistent(a_ptr, b_ptr, c_ptr,  #
         block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_N if not EPILOGUE_SUBTILE else BLOCK_SIZE_N // 2],
     )
 
-    tiles_per_SM = num_tiles // NUM_SMS
-    if start_pid < num_tiles % NUM_SMS:
-        tiles_per_SM += 1
-
-    tile_id = start_pid - NUM_SMS
-    ki = -1
-
-    pid_m = 0
-    pid_n = 0
-    offs_am = 0
-    offs_bn = 0
-
+    # tile_id_c is used in the epilogue to break the dependency between
+    # the prologue and the epilogue
+    tile_id_c = start_pid - NUM_SMS
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
 
-    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+    for tile_id in tl.range(start_pid, num_tiles, NUM_SMS, flatten=True):
+        pid_m, pid_n = _compute_pid(tile_id, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS)
+        offs_am = pid_m * BLOCK_SIZE_M
+        offs_bn = pid_n * BLOCK_SIZE_N
 
-    for _ in range(0, k_tiles * tiles_per_SM):
-        ki = tl.where(ki == k_tiles - 1, 0, ki + 1)
-        if ki == 0:
+        accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+        for ki in range(k_tiles):
+            offs_k = ki * BLOCK_SIZE_K
+            a = a_desc.load([offs_am, offs_k])
+            b = b_desc.load([offs_bn, offs_k])
+            accumulator = tl.dot(a, b.T, accumulator)
 
-            tile_id += NUM_SMS
-            group_id = tile_id // num_pid_in_group
-            first_pid_m = group_id * GROUP_SIZE_M
-            group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-            pid_m = first_pid_m + (tile_id % group_size_m)
-            pid_n = (tile_id % num_pid_in_group) // group_size_m
+        tile_id_c += NUM_SMS
+        pid_m, pid_n = _compute_pid(tile_id_c, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS)
+        offs_cm = pid_m * BLOCK_SIZE_M
+        offs_cn = pid_n * BLOCK_SIZE_N
 
-            offs_am = pid_m * BLOCK_SIZE_M
-            offs_bn = pid_n * BLOCK_SIZE_N
-
-        offs_k = ki * BLOCK_SIZE_K
-
-        a = a_desc.load([offs_am, offs_k])
-        b = b_desc.load([offs_bn, offs_k])
-        accumulator = tl.dot(a, b.T, accumulator)
-
-        if ki == k_tiles - 1:
-
-            if EPILOGUE_SUBTILE:
-                acc = tl.reshape(accumulator, (BLOCK_SIZE_M, 2, BLOCK_SIZE_N // 2))
-                acc = tl.permute(acc, (0, 2, 1))
-                acc0, acc1 = tl.split(acc)
-                c0 = acc0.to(dtype)
-                c_desc.store([offs_am, offs_bn], c0)
-                c1 = acc1.to(dtype)
-                c_desc.store([offs_am, offs_bn + BLOCK_SIZE_N // 2], c1)
-            else:
-                c = accumulator.to(dtype)
-                c_desc.store([offs_am, offs_bn], c)
-
-            accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+        if EPILOGUE_SUBTILE:
+            acc = tl.reshape(accumulator, (BLOCK_SIZE_M, 2, BLOCK_SIZE_N // 2))
+            acc = tl.permute(acc, (0, 2, 1))
+            acc0, acc1 = tl.split(acc)
+            c0 = acc0.to(dtype)
+            c_desc.store([offs_cm, offs_cn], c0)
+            c1 = acc1.to(dtype)
+            c_desc.store([offs_cm, offs_cn + BLOCK_SIZE_N // 2], c1)
+        else:
+            c = accumulator.to(dtype)
+            c_desc.store([offs_cm, offs_cn], c)
 
 
 def matmul_descriptor_persistent(a, b):
@@ -739,21 +685,20 @@ if __name__ == "__main__":
 
     if args.prec == 'fp8' and (not hasattr(torch, "float8_e4m3fn") or not is_cuda()):
         print("This example requires CUDA with fp8 support.")
-        exit(1)
+    else:
+        dtype = torch.float8_e4m3fn if args.prec == 'fp8' else torch.float16
 
-    dtype = torch.float8_e4m3fn if args.prec == 'fp8' else torch.float16
+        if args.K and args.K_range is None:
+            args.K_range = [args.K, args.K]
+            args.K_step = 1  # doesn't matter as long as it's not 0
 
-    if args.K and args.K_range is None:
-        args.K_range = [args.K, args.K]
-        args.K_step = 1  # doesn't matter as long as it's not 0
+        torch.manual_seed(0)
 
-    torch.manual_seed(0)
+        validate(32, 32, 32, dtype)
+        validate(8192, 8192, args.K_range[0], dtype)
 
-    validate(32, 32, 32, dtype)
-    validate(8192, 8192, args.K_range[0], dtype)
-
-    proton.start("matmul", hook="triton")
-    for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
-        bench(K, dtype)
-    proton.finalize()
-    show_profile(args.prec, "matmul")
+        proton.start("matmul", hook="triton")
+        for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
+            bench(K, dtype)
+        proton.finalize()
+        show_profile(args.prec, "matmul")

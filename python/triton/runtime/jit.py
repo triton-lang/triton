@@ -842,8 +842,8 @@ class TensorWrapper:
     def data_ptr(self):
         return self.base.data_ptr()
 
-    def stride(self, i):
-        return self.base.stride(i)
+    def stride(self, *args):
+        return self.base.stride(*args)
 
     def __str__(self) -> str:
         return f"TensorWrapper[{self.dtype}]({self.base})"
