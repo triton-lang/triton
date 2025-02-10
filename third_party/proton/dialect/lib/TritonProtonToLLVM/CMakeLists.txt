@@ -1,4 +1,5 @@
 add_triton_library(TritonProtonToLLVM
+    InitScopeOpToLLVM.cpp
     RecordOpToLLVM.cpp
     ProtonLoweringPass.cpp
 
