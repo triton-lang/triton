@@ -55,7 +55,7 @@ struct DotOpConversion : public ConvertOpToLLVMPattern<triton::DotOp> {
 
 struct ScaledDotOpConversion
     : public ConvertOpToLLVMPattern<triton::DotScaledOp> {
-  using ConvertOpToLLVMPattern<triton::DotScaledOp>::ConvertOpToLLVMPattern;
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
   int mfmaVersion;
   int nonKDim;
   int kPack;

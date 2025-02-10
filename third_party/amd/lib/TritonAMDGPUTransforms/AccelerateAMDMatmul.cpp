@@ -20,14 +20,19 @@ using ::mlir::LLVM::AMD::scaleDotElemTypeToMLIRType;
 namespace {
 using triton::AMD::ISAFamily;
 
-int getMfmaVersion(ISAFamily isaFamily) {
+int getMfmaVersion(ISAFamily isaFamily, StringRef arch) {
   switch (isaFamily) {
   case ISAFamily::CDNA1:
     return 1;
   case ISAFamily::CDNA2:
     return 2;
-  case ISAFamily::CDNA3:
+  case ISAFamily::CDNA3: {
+    llvm::AMDGPU::GPUKind kind = llvm::AMDGPU::parseArchAMDGCN(arch);
+    if (kind == llvm::AMDGPU::GK_GFX950) {
+      return 4;
+    }
     return 3;
+  }
   default:
     break;
   }
@@ -693,18 +698,21 @@ class ScaledBlockedToScaledMFMAF8F6F4 final
     : public OpRewritePattern<triton::DotScaledOp> {
   int mfmaVersion;
   int nonKDim;
-  int kPack;
 
 public:
   ScaledBlockedToScaledMFMAF8F6F4(MLIRContext *context, int mfmaVersion,
-                                  int nonKDim, int kPack,
-                                  PatternBenefit benefit = 1)
+                                  int nonKDim, PatternBenefit benefit = 1)
       : OpRewritePattern(context, benefit), mfmaVersion(mfmaVersion),
-        nonKDim(nonKDim), kPack(kPack) {}
+        nonKDim(nonKDim) {}
 
   LogicalResult matchAndRewrite(triton::DotScaledOp dotOp,
                                 PatternRewriter &rewriter) const override {
     using TensorValue = TypedValue<RankedTensorType>;
+
+    if (mfmaVersion != 4) {
+      return rewriter.notifyMatchFailure(
+          dotOp, "F8F6F4 scaled dot is only supported on gfx950");
+    }
 
     RankedTensorType oldRetType = dotOp.getType();
     if (!isa_and_nonnull<BlockedEncodingAttr>(oldRetType.getEncoding()))
@@ -745,7 +753,7 @@ public:
 
     // Choose a suitable Scaled MFMA instruction for this scaled dot op.
     FailureOr<MfmaInsn> mfmaInstr =
-        chooseMfmaInstruction(dotOp, /*mfmaVersion=*/4, nonKDim);
+        chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim);
     if (failed(mfmaInstr))
       return rewriter.notifyMatchFailure(dotOp,
                                          "cannot choose scaled mfma intrinsic");
@@ -762,7 +770,7 @@ public:
     // Always use transposed mfma layout. This enables larger vectorization
     // for global store instructions.
     auto mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
-        ctx, /*versionMajor=*/4, /*versionMinor=*/0, warpsPerTile,
+        ctx, /*versionMajor=*/mfmaVersion, /*versionMinor=*/0, warpsPerTile,
         /*instrShape=*/mDim, nDim, /*isTransposed=*/true, ctaLayout);
 
     auto newRetType =
@@ -807,17 +815,6 @@ public:
     auto aEncLL = newAEncoding.toLinearLayout(a.getType().getShape());
     auto standardOutDims = llvm::to_vector(aEncLL.getOutDimNames());
 
-    // Here we create linear layout for aScale and bScale, which consists of
-    // multiple layers:
-    // - register: Elements distributed alone M/N dimension, which will be
-    // calculated sequentially with multiple mfma instructions. It's initialized
-    // first and will be adjusted after all other layouts settle down to cover
-    // all over the block.
-    // - lane: Elements distributed in a warp(64 lanes). It varies in different
-    // shapes and data types. Details will be listed below separately.
-    // - warp: Indicating how tiles are distributed among the tensor. It's
-    // related to the warp layout of its corresponding A/B operand's.
-    // - block: Block distribution. For now, we just keep it empty.
     using basisT = std::vector<std::vector<int32_t>>;
     auto createLinearLayout = [&](int idx, const basisT &warpBasis) {
       LinearLayout lanes = LinearLayout::empty();
@@ -855,9 +852,9 @@ public:
       if (mDim == 32) {
         // For ROCDL::mfma_scale_f32_32x32x64_f8f6f4 with fp4 input, each lane
         // takes 32 consecutive elements from A alone K dimension. The first
-        // 32 lanes share A[0:32][0:32], and the other 32 lanes share
-        // A[0:32][32:64]. Each lane take 1 scale element accordingly. Similar
-        // to B and bScale.
+        // 32 lanes collectively handle A[0:32][0:32], and the other 32 lanes
+        // collectively handle A[0:32][32:64]. Each lane take 1 scale element
+        // accordingly. Similar to B and bScale.
         lanes = LinearLayout(
             {{kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {1, 0}}},
              {kWarp, warps},
@@ -867,9 +864,9 @@ public:
         assert(mDim == 16);
         // For ROCDL::mfma_scale_f32_16x16x128_f8f6f4 with fp4 input, each lane
         // takes 32 consecutive elements from A alone K dimension. The first
-        // 16 lanes share A[0:16][0:32], and another 16 lanes share
-        // A[0:16][32:64] and so on. Each lane take 1 scale element accordingly.
-        // Similar to B and bScale.
+        // 16 lanes collectively handle A[0:16][0:32], and another 16 lanes
+        // collectively handle A[0:16][32:64] and so on. Each lane take 1 scale
+        // element accordingly. Similar to B and bScale.
         lanes = LinearLayout(
             {{kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {1, 0}, {2, 0}}},
              {kWarp, warps},
@@ -1259,10 +1256,12 @@ public:
     case ISAFamily::CDNA2:
     case ISAFamily::CDNA3: {
       patterns.add<::ScaledBlockedToScaledMFMAF8F6F4>(
-          context, getMfmaVersion(isaFamily), matrixInstructionSize,
-          /*kPack=*/1, /*benefit=*/10);
+          context, getMfmaVersion(isaFamily, archGenerationName),
+          matrixInstructionSize,
+          /*benefit=*/10);
       patterns.add<::BlockedToMFMA, ::ScaledBlockedToMFMA>(
-          context, getMfmaVersion(isaFamily), matrixInstructionSize, kPack,
+          context, getMfmaVersion(isaFamily, archGenerationName),
+          matrixInstructionSize, kPack,
           /*benefit=*/2);
       break;
     }
