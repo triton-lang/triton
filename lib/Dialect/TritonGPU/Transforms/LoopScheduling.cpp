@@ -320,6 +320,56 @@ void scheduleLoop(scf::ForOp forOp,
 // LOWERING
 /////////////////////////////////////////////////////////////////////////////////////
 
+class OpBuilderForStage : public OpBuilder {
+  std::optional<int> _stage;
+  std::optional<CoarseSchedule::Cluster> _cluster;
+  CoarseSchedule &_schedule;
+
+public:
+  explicit OpBuilderForStage(Operation *op, CoarseSchedule &schedule, int stage,
+                             CoarseSchedule::Cluster cluster)
+      : OpBuilder(op, nullptr), _schedule(schedule), _stage(stage),
+        _cluster(cluster) {}
+  explicit OpBuilderForStage(Operation *op, CoarseSchedule &schedule)
+      : OpBuilder(op, nullptr), _schedule(schedule) {
+    auto sc = _schedule.getStageCluster(op);
+    if (sc) {
+      _stage = sc->first;
+      _cluster = sc->second;
+    }
+  }
+
+  template <typename OpTy, typename... Args> OpTy create(Args &&...args) {
+    OpTy op = OpBuilder::create<OpTy>(std::forward<Args>(args)...);
+
+    if (stage_ && cluster_) {
+      tt::setStageCluster(op, *stage_, *cluster_);
+    }
+    return op;
+  }
+};
+
+Operation *getFirstUseOfPipelinedOp(Operation *op, scf::ForOp forOp,
+                                    CoarseSchedule &schedule) {
+  Operation *firstUser = nullptr;
+  for (Operation *user : op->getUsers()) {
+    Operation *topLevelUser = forOp.getBody()->findAncestorOpInBlock(*user);
+    assert(schedule.count(topLevelUser) && "op user not found in the schedule");
+    auto [_useStage, _useCluster] = schedule[topLevelUser];
+    if (!firstUser) {
+      firstUser = topLevelUser;
+    } else {
+      auto [_firstUserStage, _firstUserCluster] = schedule[firstUser];
+      if (_useStage < _firstUserStage ||
+          (_useStage == _firstUserStage &&
+           schedule.clusters.isBefore(_useCluster, _firstUserCluster))) {
+        firstUser = topLevelUser;
+      }
+    }
+  }
+  return firstUser;
+}
+
 int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
                        CoarseSchedule &schedule) {
   assert(schedule.count(op) && "LoadOp not found in the schedule");
@@ -407,10 +457,52 @@ static Value createAlloc(scf::ForOp &forOp, Operation *loadOp,
   return alloc;
 }
 
+template <typename BuilderT, typename... Args>
+Operation *createWithStage(BuilderT &builder, Location loc, int stage,
+                           CoarseSchedule::Cluster cluster, Args &&...args) {
+  Operation *op = builder.create<ttg::AsyncCopyGlobalToLocalOp>(
+      loc, std::forward<Args>(args)...);
+
+  return op;
+}
+
 void createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
                      Value insertIdx, Value extractIdx,
                      CoarseSchedule &schedule) {
   OpBuilder builder(forOp);
+  Operation *firstUse = getFirstUseOfPipelinedOp(loadOp, forOp, schedule);
+  auto [loadStage, loadCluster] = schedule[loadOp];
+  auto [firstUseStage, firstUseCluster] = schedule[firstUse];
+  // Replace the load with async copy, wait and loal_load.
+  OpBuilder::InsertionGuard guard(builder);
+  builder.setInsertionPoint(loadOp);
+  Location loc = loadOp.getLoc();
+  Value src = loadOp.getPtr();
+  Value mask = loadOp.getMask();
+  Value other = loadOp.getOther();
+  ttg::MemDescType allocTy = cast<ttg::MemDescType>(alloc.getType());
+
+  // TODO pawel: think about optimizing the blocked layout of indirect loads
+  // here
+
+  Value zero = builder.create<arith::ConstantIntOp>(loc, 0, 32);
+  SmallVector<Value> copyOffsets(allocTy.getRank(), zero);
+  copyOffsets[0] = insertIdx;
+  Attribute sharedMemorySpace =
+      triton::gpu::SharedMemorySpaceAttr::get(forOp.getContext());
+  ttg::MemDescType subviewTy = ttg::MemDescType::get(
+      allocTy.getShape().drop_front(), allocTy.getElementType(),
+      allocTy.getEncoding(), sharedMemorySpace, /*mutableMemory=*/true,
+      /*allocShape=*/allocTy.getAllocShape());
+  auto view = builder.createWithStage<ttg::MemDescSubviewOp>(
+      loc, stage, clusterId, subviewTy, alloc, copyOffsets);
+  Operation *copy = builder.createWithStage<ttg::AsyncCopyGlobalToLocalOp>(
+      loc, stage, clusterId, src, view, mask, other, loadOp.getCache(),
+      loadOp.getEvict(), loadOp.getIsVolatile());
+  Operation *commit = builder.createWithStage<ttg::AsyncCommitGroupOp>(
+      loc, stage, clusterId, copy->getResult(0));
+  Operation *wait = builder.createWithStage<ttg::AsyncWaitOp>(
+      loc, stageForFirstUse, clusterForFirstUse, commit->getResult(0), 0);
 }
 
 void lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
@@ -511,7 +603,8 @@ void lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
 
   for (auto [loadOp, asyncLoad] : asyncLoads) {
     auto [insertIdx, extractIdx, phase, _] = loadGroups[asyncLoad.stageDiff];
-    createAsyncCopy(forOp, loadOp, asyncLoad.alloc, insertIdx, extractIdx);
+    createAsyncCopy(forOp, loadOp, asyncLoad.alloc, insertIdx, extractIdx,
+                    schedule);
   }
 }
 
