@@ -5,7 +5,7 @@ import pathlib
 
 from triton import knobs
 from triton._C.libproton import proton as libproton
-from .hook import register_triton_hook, unregister_triton_hook
+from .hook import register_launch_hook, unregister_launch_hook, register_init_handle_hook, unregister_init_handle_hook
 from .flags import set_profiling_off, set_profiling_on, is_command_line
 from typing import Optional
 
@@ -103,19 +103,20 @@ def start(
         # Ignore the start() call if the script is run from the command line.
         return
 
+    set_profiling_on()
+
     name = DEFAULT_PROFILE_NAME if name is None else name
     backend = _select_backend() if backend is None else backend
+    backend_path = _get_backend_default_path(backend)
     mode = "" if mode is None else mode
 
     _check_env(backend)
     _check_mode(backend, mode)
 
-    backend_path = _get_backend_default_path(backend)
-
-    set_profiling_on()
-
     if hook == "triton":
-        register_triton_hook()
+        register_launch_hook()
+    if backend == "instrumentation":
+        register_init_handle_hook()
 
     return libproton.start(name, context, data, backend, mode, backend_path)
 
@@ -174,7 +175,8 @@ def finalize(session: Optional[int] = None, output_format: str = "hatchet") -> N
     if session is None:
         set_profiling_off()
         libproton.finalize_all(output_format)
-        unregister_triton_hook()
+        unregister_launch_hook()
+        unregister_init_handle_hook()
     else:
         if is_command_line() and session != 0:
             raise ValueError("Only one session can be finalized when running from the command line.")
