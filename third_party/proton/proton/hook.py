@@ -3,6 +3,8 @@ from .scope import enter_scope, exit_scope
 from triton import knobs
 from triton.compiler import LazyDict
 
+from triton._C.libtriton import ir
+
 COMPUTE_METADATA_SCOPE_NAME = "__proton_launch_metadata"
 
 
@@ -33,3 +35,32 @@ def unregister_triton_hook() -> None:
     if knobs.runtime.launch_enter_hook == TritonHook.enter:
         knobs.runtime.launch_enter_hook = None
         knobs.runtime.launch_exit_hook = None
+
+
+class TritonInitHandleHook:
+    function_scope_ids: dict = {}
+
+    @staticmethod
+    def map_scope_ids(function, module, metadata_group):
+        if function and function not in TritonInitHandleHook.function_scope_ids:
+            ir_path = None
+            if "ttgir" in metadata_group:
+                ir_path = metadata_group["ttgir"]
+            elif "ttir" in metadata_group:
+                ir_path = metadata_group["ttir"]
+            if ir_path:
+                context = ir.context()
+                module = ir.parse_mlir_module(ir_path, context)
+                module.context = context
+
+
+def register_init_handle_hook() -> None:
+    if knobs.runtime.init_handle_hook is not None:
+        raise RuntimeError("Triton init handle hook is already registered.")
+    knobs.runtime.init_handle_hook = TritonInitHandleHook.map_scope_ids
+
+
+def unregister_init_handle_hook() -> None:
+    if knobs.runtime.init_handle_hook is None:
+        raise RuntimeError("Triton init handle hook is not registered.")
+    knobs.runtime.init_handle_hook = None
