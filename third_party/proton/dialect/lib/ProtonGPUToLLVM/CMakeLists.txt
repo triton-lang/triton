@@ -1,11 +1,12 @@
-add_triton_library(TritonProtonToLLVM
+add_triton_library(ProtonGPUToLLVM
     InitScopeOpToLLVM.cpp
     RecordOpToLLVM.cpp
     ProtonLoweringPass.cpp
 
     DEPENDS
-    TritonProtonConversionPassIncGen
+    ProtonConversionPassIncGen
 
     LINK_LIBS PUBLIC
     ProtonIR
+    ProtonGPUIR
 )
