@@ -20,19 +20,16 @@ using ::mlir::LLVM::AMD::scaleDotElemTypeToMLIRType;
 namespace {
 using triton::AMD::ISAFamily;
 
-int getMfmaVersion(ISAFamily isaFamily, StringRef arch) {
+int getMfmaVersion(ISAFamily isaFamily) {
   switch (isaFamily) {
   case ISAFamily::CDNA1:
     return 1;
   case ISAFamily::CDNA2:
     return 2;
-  case ISAFamily::CDNA3: {
-    llvm::AMDGPU::GPUKind kind = llvm::AMDGPU::parseArchAMDGCN(arch);
-    if (kind == llvm::AMDGPU::GK_GFX950) {
-      return 4;
-    }
+  case ISAFamily::CDNA3:
     return 3;
-  }
+  case ISAFamily::CDNA4:
+    return 4;
   default:
     break;
   }
@@ -711,7 +708,7 @@ public:
 
     if (mfmaVersion != 4) {
       return rewriter.notifyMatchFailure(
-          dotOp, "F8F6F4 scaled dot is only supported on gfx950");
+          dotOp, "F8F6F4 scaled dot is only natively supported on gfx950");
     }
 
     RankedTensorType oldRetType = dotOp.getType();
@@ -1254,17 +1251,16 @@ public:
     switch (auto isaFamily = triton::AMD::deduceISAFamily(archGenerationName)) {
     case ISAFamily::CDNA1:
     case ISAFamily::CDNA2:
-    case ISAFamily::CDNA3: {
-      patterns.add<::ScaledBlockedToScaledMFMAF8F6F4>(
-          context, getMfmaVersion(isaFamily, archGenerationName),
-          matrixInstructionSize,
-          /*benefit=*/10);
+    case ISAFamily::CDNA3:
       patterns.add<::BlockedToMFMA, ::ScaledBlockedToMFMA>(
-          context, getMfmaVersion(isaFamily, archGenerationName),
-          matrixInstructionSize, kPack,
+          context, getMfmaVersion(isaFamily), matrixInstructionSize, kPack,
           /*benefit=*/2);
       break;
-    }
+    case ISAFamily::CDNA4:
+      patterns.add<::ScaledBlockedToScaledMFMAF8F6F4>(
+          context, getMfmaVersion(isaFamily), matrixInstructionSize,
+          /*benefit=*/2);
+      break;
     case ISAFamily::RDNA3:
       patterns.add<::BlockedToWMMA>(context, getWmmaVersion(archGenerationName),
                                     /*benefit=*/2);
