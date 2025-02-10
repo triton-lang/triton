@@ -4,10 +4,9 @@
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
-#include "triton/Dialect/Triton/IR/Dialect.h"
 
 #include "third_party/proton/dialect/include/Dialect/Proton/IR/Dialect.h"
-#include "third_party/proton/dialect/include/TritonProtonToLLVM/PatternTritonProtonOpToLLVM.h"
+#include "third_party/proton/dialect/include/ProtonGPUToLLVM/PatternProtonOpToLLVM.h"
 
 namespace {
 
@@ -23,7 +22,6 @@ struct RecordOpConversion
   LogicalResult
   matchAndRewrite(mlir::triton::proton::RecordOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-
     rewriter.eraseOp(op);
     return success();
   }

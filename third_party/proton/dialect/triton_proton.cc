@@ -5,7 +5,7 @@
 #include <pybind11/stl.h>
 #include <pybind11/stl_bind.h>
 
-#include "../third_party/proton/dialect/include/TritonProtonToLLVM/Passes.h"
+#include "../third_party/proton/dialect/include/ProtonGPUToLLVM/Passes.h"
 
 namespace py = pybind11;
 
