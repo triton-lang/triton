@@ -13,10 +13,11 @@ template <typename T> class OperationPass;
 } // namespace mlir
 
 namespace mlir::triton {
+
 std::unique_ptr<OperationPass<ModuleOp>> createProtonLoweringPass();
 
 #define GEN_PASS_REGISTRATION
-#include "../third_party/proton/dialect/include/ProtonGPUToLLVM/Passes.h.inc"
+#include "proton/dialect/include/ProtonGPUToLLVM/Passes.h.inc"
 
 } // namespace mlir::triton
 
