@@ -234,7 +234,8 @@ struct DotOpMFMAConversionHelper {
     }
   }
 
-  void packAndReplaceResult(DotOp &op, SmallVector<Value> &fc,
+  template <typename T>
+  void packAndReplaceResult(T &op, SmallVector<Value> &fc,
                             FailureOr<MfmaInsn> maybeMfmaInsn, Type dstElemTy,
                             Type elemtTy, size_t mmaCount) const {
     Type structTy = LLVM::LLVMStructType::getLiteral(
@@ -377,8 +378,8 @@ struct DotOpMFMAConversionHelper {
   /// Extract vector from rawElems based on kWidth and kBase
   /// rawElems is a vector of kWidth elements. We need to prepare vector(s) of
   /// kBase elements for each mfma instruction
-  virtual SmallVector<Value> extractOperands(Value rawElems, int kWidth,
-                                             int kBase, Type type) const {
+  SmallVector<Value> extractOperands(Value rawElems, int kWidth, int kBase,
+                                     Type type) const {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     int kpack = kWidth / kBase;
     SmallVector<Value> results;
@@ -399,11 +400,17 @@ struct DotOpMFMAConversionHelper {
         }
       }
       if (type.getIntOrFloatBitWidth() == 8) {
+        if (1 == kBase)
+          // This is only for the scale operands of scaled mfma on MI350
+          results.push_back(b.zext(i32_ty, b.bitcast(vec, i8_ty)));
         if (4 == kBase)
           // This is for int8 on pre- MI300 GPUs
           results.push_back(b.bitcast(vec, i32_ty));
         if (8 == kBase)
           results.push_back(b.bitcast(vec, i64_ty));
+        if (16 == kBase)
+          // This is only for the scale operands of scaled mfma on MI350
+          results.push_back(b.bitcast(vec, vec_ty(i32_ty, 4)));
       } else {
         results.push_back(vec);
       }
@@ -593,11 +600,6 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     auto elemsPerVec = mDim * nDim * subBlocks / warpSize;
 
     Value firstMfma;
-    auto setFirstMfma = [&](Value mfma) {
-      if (!firstMfma)
-        firstMfma = mfma;
-    };
-
     auto tb = TritonLLVMOpBuilder(loc, rewriter);
     auto vecTy = vec_ty(dstElemTy, elemsPerVec);
     for (int b = 0; b < numRepB; ++b) {
@@ -625,49 +627,13 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
                                                operandB[kPack][{b, n, k}], acc,
                                                operandAScale[kPack][{b, m, k}],
                                                operandBScale[kPack][{b, n, k}]);
-              setFirstMfma(acc);
+              if (!firstMfma)
+                firstMfma = acc;
             }
           }
           acc = reduceSubBlocks(subBlocks, acc);
-          for (unsigned v = 0; v < elemsPerVec; ++v) {
-            Value accElem = tb.extract_element(dstElemTy, acc, tb.i32_val(v));
-            // Dot operand layout minimal tile is kDimInstrSize elements across
-            // K dimension. If dot operand K dimension is smaller, layout
-            // assigns tensor elements to multiple different hardware locations.
-            // In this case mfma instruction adds elements in accumulator
-            // multiple times.
-            //
-            // Let say A=[1,2]; B=[3,4], C = A*B = 1*3+2*4 = 11
-            // Consider instruction K size is 4,
-            // in this case operands will be duplicated:
-            // A' = [1,2,1,2] B' = [3,4,3,4]
-            // C' = (1*3+2*4) + (1*3+2*4) = 22
-            //
-            // Following code adjusts accumulator values in such cases.
-            // If accumulator is integer, shift accumulator right by
-            // log2(duplicationRate). If accumulator is float, multiply accum
-            // with 1/duplicationRate constant.
-            if (kDimInstrSize > kDimOperandSize) {
-              assert(kDimInstrSize % kDimOperandSize == 0);
-              int duplicationRate = kDimInstrSize / kDimOperandSize;
-              assert(llvm::isPowerOf2_32(duplicationRate));
-              if (dstElemTy.isInteger()) {
-                auto shiftSize = llvm::Log2_32(duplicationRate);
-                assert(!accElem.getType().isUnsignedInteger() &&
-                       "MFMA uses signed accumulator");
-                accElem = tb.ashr(accElem, tb.i32_val(shiftSize));
-              } else {
-                auto multiplierAttr =
-                    rewriter.getFloatAttr(dstElemTy, 1.0 / duplicationRate);
-                auto multiplierVal = rewriter.create<LLVM::ConstantOp>(
-                    loc, dstElemTy, multiplierAttr);
-                accElem = tb.fmul(accElem, multiplierVal);
-              }
-            }
-            auto linearIdx = b * numRepM * numRepN * elemsPerVec +
-                             m * numRepN * elemsPerVec + n * elemsPerVec + v;
-            fc[linearIdx] = accElem;
-          }
+          adjustAccForSmallKDim(fc, acc, dstElemTy, b, m, n, numRepM, numRepN,
+                                kDimInstrSize, kDimOperandSize, elemsPerVec);
         }
       }
     }
@@ -681,62 +647,11 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     if (setPrioOp && firstMfma)
       setPrioOp->moveAfter(firstMfma.getDefiningOp());
 
-    // replace with new packed result
-    Type structTy = LLVM::LLVMStructType::getLiteral(
-        ctx, SmallVector<Type>(fc.size(), dstElemTy));
-    Value res = packLLElements(loc, typeConverter, fc, rewriter, structTy);
-
-    Type elemtTy = elemTyA;
     const size_t mmaCount =
         numRepB * numRepM * numRepN * numRepK * kWidth / kBase;
-    setNumGeneratedMMAs(op, mmaCount, maybeMfmaInsn->getMDim(),
-                        maybeMfmaInsn->getNDim(), maybeMfmaInsn->getKDim(),
-                        elemtTy);
-
-    rewriter.replaceOp(op, res);
+    packAndReplaceResult(op, fc, maybeMfmaInsn, dstElemTy, elemTyA, mmaCount);
 
     return success();
-  }
-
-  /// Extract vector from rawElems based on kWidth and kBase
-  /// rawElems is a vector of kWidth elements. We need to prepare vector(s) of
-  /// kBase elements for each mfma instruction
-  SmallVector<Value> extractOperands(Value rawElems, int kWidth, int kBase,
-                                     Type type) const {
-    auto tb = TritonLLVMOpBuilder(loc, rewriter);
-    int kpack = kWidth / kBase;
-    SmallVector<Value> results;
-    auto vecTy = vec_ty(type, kBase);
-    if (type.isBF16())
-      vecTy = vec_ty(i16_ty, kBase);
-    for (int k = 0; k < kpack; ++k) {
-      Value vec = tb.undef(vecTy);
-      for (int elemId = 0; elemId < kBase; ++elemId) {
-        auto val =
-            tb.extract_element(type, rawElems, tb.i32_val(elemId + k * kBase));
-        if (type.isBF16()) {
-          // rocdl.mfma.f32.32x32x8bf16.1k calls for input of i16 type
-          auto cast = tb.bitcast(val, i16_ty);
-          vec = tb.insert_element(vecTy, vec, cast, tb.i32_val(elemId));
-        } else {
-          vec = tb.insert_element(vecTy, vec, val, tb.i32_val(elemId));
-        }
-      }
-      if (type.getIntOrFloatBitWidth() == 8) {
-        if (1 == kBase)
-          results.push_back(tb.zext(i32_ty, tb.bitcast(vec, i8_ty)));
-        if (4 == kBase)
-          // This is for int8 on pre- MI300 GPUs
-          results.push_back(tb.bitcast(vec, i32_ty));
-        if (8 == kBase)
-          results.push_back(tb.bitcast(vec, i64_ty));
-        if (16 == kBase)
-          results.push_back(tb.bitcast(vec, vec_ty(i32_ty, 4)));
-      } else {
-        results.push_back(vec);
-      }
-    }
-    return results;
   }
 };
 
