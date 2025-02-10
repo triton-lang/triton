@@ -28,7 +28,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
-#include "third_party/proton/dialect/include/ProtonGPUToLLVM/PatternProtonOpToLLVM.h"
+#include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/PatternProtonOpToLLVM.h"
 
 namespace mlir::triton {
 #define GEN_PASS_DEF_CONVERTTRITONAMDGPUTOLLVM
@@ -229,10 +229,8 @@ struct ConvertTritonAMDGPUToLLVM
     mlir::triton::populatePrintOpToLLVMPattern(typeConverter, patterns,
                                                targetInfo, commonBenefit);
 
-    mlir::triton::proton::populateInitScopeOpToLLVMPattern(
-        typeConverter, patterns, commonBenefit);
-    mlir::triton::proton::populateRecordOpToLLVMPattern(
-        typeConverter, patterns, targetInfo, commonBenefit);
+    mlir::triton::proton::populateProtonOpPatterns(typeConverter, patterns,
+                                                   targetInfo, commonBenefit);
 
     mlir::ub::populateUBToLLVMConversionPatterns(typeConverter, patterns);
 
