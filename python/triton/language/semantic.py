@@ -186,6 +186,10 @@ def binary_op_type_checking_impl(lhs: tl.tensor | numbers.Number, rhs: tl.tensor
                 or rhs_is_scalar and rhs_scalar < 0 and ret_sca_ty.is_int_unsigned()):
             raise ValueError("Cannot perform a binary operation between an unsigned tensor and a negative scalar. "
                              "Perform a explicit cast on one of them.")
+        if lhs_is_scalar and not (ret_sca_ty.get_int_min_value() <= lhs_scalar <= ret_sca_ty.get_int_max_value()):
+            raise ValueError(f"Scalar {lhs_scalar} is out of range for type {ret_sca_ty}")
+        if rhs_is_scalar and not (ret_sca_ty.get_int_min_value() <= rhs_scalar <= ret_sca_ty.get_int_max_value()):
+            raise ValueError(f"Scalar {rhs_scalar} is out of range for type {ret_sca_ty}")
         lhs = full(
             (), lhs_scalar, dtype=ret_sca_ty, builder=builder) if lhs_is_scalar else cast(lhs, ret_sca_ty, builder)
         rhs = full(
