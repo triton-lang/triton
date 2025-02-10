@@ -15,7 +15,7 @@ using namespace mlir::triton;
 namespace mlir {
 namespace triton {
 #define GEN_PASS_DEF_PROTONLOWERINGPASS
-#include "../third_party/proton/dialect/include/TritonProtonToLLVM/Passes.h.inc"
+#include "../third_party/proton/dialect/include/ProtonGPUToLLVM/Passes.h.inc"
 } // namespace triton
 } // namespace mlir
 
