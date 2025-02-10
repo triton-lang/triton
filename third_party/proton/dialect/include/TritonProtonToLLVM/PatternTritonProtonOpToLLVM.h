@@ -1,5 +1,5 @@
-#ifndef TRITON_CONVERSION_TRITONPROTON_TO_LLVM_PATTERNS_TRITON_PROTON_OP_TO_LLVM_H
-#define TRITON_CONVERSION_TRITONPROTON_TO_LLVM_PATTERNS_TRITON_PROTON_OP_TO_LLVM_H
+#ifndef TRITON_PROTON_TO_LLVM_PATTERN_TRITON_PROTON_OP_TO_LLVM_H
+#define TRITON_PROTON_TO_LLVM_PATTERN_TRITON_PROTON_OP_TO_LLVM_H
 
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 
@@ -10,7 +10,12 @@ void populateRecordOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                    RewritePatternSet &patterns,
                                    const TargetInfoBase &targetInfo,
                                    PatternBenefit benefit);
+
+void populateInitScopeOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+                                      RewritePatternSet &patterns,
+                                      PatternBenefit benefit);
+
 } // namespace proton
 } // namespace mlir::triton
 
-#endif
+#endif // TRITON_PROTON_TO_LLVM_PATTERN_TRITON_PROTON_OP_TO_LLVM_H
