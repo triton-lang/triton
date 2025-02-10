@@ -118,61 +118,97 @@ public:
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
 
-    if (auto dotLayout = dyn_cast<DotOperandEncodingAttr>(dstLayout)) {
-      if (isa<AMDMfmaEncodingAttr>(dotLayout.getParent())) {
-        if (canUseTransLoad(srcTy, dstTy)) {
-          return lowerSharedToDotOperandTransLL(op, adaptor, getTypeConverter(),
-                                                rewriter);
-        }
-      }
+    if (canUseTransLoad(srcTy, dstTy)) {
+      return lowerSharedToDotOperandTransLL(op, adaptor, getTypeConverter(),
+                                            rewriter);
     }
     return failure();
   }
 
 private:
-  bool canUseTransLoad(MemDescType srcTy, RankedTensorType dstTy) const {
-    auto bitwidth = typeConverter->convertType(dstTy.getElementType())
-                        .getIntOrFloatBitWidth();
-
-    auto dotEnc = llvm::cast<DotOperandEncodingAttr>(dstTy.getEncoding());
-    auto mfmaEnc = llvm::dyn_cast<AMDMfmaEncodingAttr>(dotEnc.getParent());
-    // Currently, only transpose loading for 16-bit element types is supported.
-    // Support for 8-bit types will be added in a future patch.
-    if (!mfmaEnc || bitwidth != 16) {
+  bool checkLayoutProperties(MemDescType srcTy, RankedTensorType dstTy) const {
+    // Verify the layout properties required for using the ds_read_tr
+    // instruction. This instruction is used to load non-k contiguous tensors
+    // from shared memory into a dot layout with an MFMA layout parent.
+    auto dotEnc = llvm::dyn_cast<DotOperandEncodingAttr>(dstTy.getEncoding());
+    if (!dotEnc) {
       return false;
     }
 
-    // The transposed load lowering logic assumes that double-rate MFMA
-    // instructions are used whenever possible. This code verifies whether
-    // double-rate MFMA instructions are being used and falls back to the
-    // default path if they are not. (Note: The lowering logic for double-rate
-    // MFMA is the same as for single-rate with kpack=2). This check should be
-    // removed once double-rate MFMA support is fully implemented in the
-    // compiler, leaving only an assertion. Currently, single-rate
-    // configurations with kpack=1 are still in use, so in such cases, we revert
-    // to the default lowering logic without LDS transposed read instructions.
-    int rank = dstTy.getRank();
-    int32_t kWidth = dotEnc.getKWidth();
-    const int32_t mDim = mfmaEnc.getMDim();
-    assert((mDim == 32 || mDim == 16) && "Invalid MFMA instruction dimension");
-
-    const int largeTileThreshold = (mDim == 32) ? 8 : 16;
-    const auto shape = dstTy.getShape();
-    const int kDim = dotEnc.getOpIdx() == 0 ? rank - 1 : rank - 2;
-
-    const bool isLargeTile = shape[kDim] > largeTileThreshold;
-    const int expectedKWidth = isLargeTile ? 8 : 4;
-
-    if (kWidth != expectedKWidth)
+    auto mfmaEnc = llvm::dyn_cast<AMDMfmaEncodingAttr>(dotEnc.getParent());
+    if (!mfmaEnc) {
       return false;
+    }
 
     auto sharedEnc =
         dyn_cast<triton::gpu::SwizzledSharedEncodingAttr>(srcTy.getEncoding());
     if (!sharedEnc)
       return false;
 
-    bool nonKContig = kDim != sharedEnc.getOrder()[0];
-    return nonKContig && targetInfo.canUseLDSTransLoad(bitwidth);
+    int rank = dstTy.getRank();
+    const int kDim = dotEnc.getOpIdx() == 0 ? rank - 1 : rank - 2;
+    return kDim != sharedEnc.getOrder()[0];
+  }
+
+  bool checkPerformanceProperties(MemDescType srcTy,
+                                  RankedTensorType dstTy) const {
+    // The transposed load lowering logic assumes that double-rate MFMA (
+    // mfma32x32x16 and mfma16x16x32) instructions are used whenever possible.
+    // This code verifies whether double-rate MFMA instructions are being used
+    // and falls back to the default path if they are not. (Note: The lowering
+    // logic for double-rate MFMA is the same as for single-rate (mfma32x32x8
+    // and mfma16x16x16) with kpack=2). This check should be removed once
+    // double-rate MFMA support is fully implemented in the compiler, leaving
+    // only an assertion. Currently, single-rate configurations with kpack=1 are
+    // still in use, so in such cases, we revert to the default lowering logic
+    // without LDS transpose read instructions.
+    auto dotEnc = llvm::cast<DotOperandEncodingAttr>(dstTy.getEncoding());
+    auto mfmaEnc = llvm::cast<AMDMfmaEncodingAttr>(dotEnc.getParent());
+
+    int rank = dstTy.getRank();
+    int32_t kWidth = dotEnc.getKWidth();
+    const int32_t mDim = mfmaEnc.getMDim();
+    assert((mDim == 32 || mDim == 16) && "Invalid MFMA instruction dimension");
+
+    // Single rate MFMA insts: mfma32x32x8, mfma16x16x16
+    const int kSize16bSingleRateMfma32 = 8;
+    const int kSize16bSingleRateMfma16 = 16;
+    const int largeTileThreshold16b =
+        (mDim == 32) ? kSize16bSingleRateMfma32 : kSize16bSingleRateMfma16;
+    const auto shape = dstTy.getShape();
+    const int kDim = dotEnc.getOpIdx() == 0 ? rank - 1 : rank - 2;
+
+    const bool isLargeTile16b = shape[kDim] > largeTileThreshold16b;
+    const int expectedKWidth16b = isLargeTile16b ? 8 : 4;
+
+    return kWidth == expectedKWidth16b;
+  }
+
+  bool canUseTransLoad(MemDescType srcTy, RankedTensorType dstTy) const {
+    auto bitwidth = typeConverter->convertType(dstTy.getElementType())
+                        .getIntOrFloatBitWidth();
+
+    // 1. Check GPU arch properties.
+    if (!targetInfo.canUseLDSTransLoad(bitwidth)) {
+      return false;
+    }
+
+    // 2. Check layout properties.
+    if (!checkLayoutProperties(srcTy, dstTy)) {
+      return false;
+    }
+
+    // 3. Check performance properties.
+    if (!checkPerformanceProperties(srcTy, dstTy)) {
+      return false;
+    }
+
+    // 4. Check current limitations.
+    if (bitwidth != 16) {
+      return false;
+    }
+
+    return true;
   }
 
   LogicalResult
@@ -190,13 +226,12 @@ private:
 
     auto llvmElemTy = typeConverter->convertType(dstTy.getElementType());
     auto bitwidth = llvmElemTy.getIntOrFloatBitWidth();
-    auto ldsTransLayout = chooseLDSTransLayout(dotEnc, shape, bitwidth);
+    auto dsReadTransLayout = chooseDsReadB64Tr16Layout(dotEnc, shape, bitwidth);
     auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
                                                          llvmElemTy, rewriter);
     SmallVector<Value> outVals;
-    SmallVector<Value> elemsI32;
     bool valid = emitTransferBetweenRegistersAndShared(
-        ldsTransLayout, srcTy, llvmElemTy,
+        dsReadTransLayout, srcTy, llvmElemTy,
         /*maxVecElems=*/std::nullopt, smemObj, loc, rewriter, targetInfo,
         [&](VectorType vecTy, Value vecAddr) {
           auto dsReadOp =

@@ -390,18 +390,21 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   return combineCtaCgaWithShape(ctaLayout, getCTALayout(), shape);
 }
 
-LinearLayout chooseDotLDSTransLayout(DotOperandEncodingAttr dotMfmaLayout,
-                                     ArrayRef<int64_t> shape,
-                                     int32_t elemBitWidth) {
+LinearLayout chooseDotDsReadB64Tr16Layout(DotOperandEncodingAttr dotMfmaLayout,
+                                          ArrayRef<int64_t> shape,
+                                          int32_t elemBitWidth) {
   auto mfmaLayout = llvm::cast<AMDMfmaEncodingAttr>(dotMfmaLayout.getParent());
   assert(mfmaLayout.getMDim() == 16 || mfmaLayout.getNDim() == 32);
   assert(elemBitWidth == 16);
 
   auto rank = shape.size();
   bool hasBatchDim = rank == 3;
-  int mIndex = 0 + hasBatchDim;
   int32_t kWidthDot = dotMfmaLayout.getKWidth();
-  int32_t kWidthTransRead = 64 / elemBitWidth;
+  // Number of bits loaded by an LDS read. ds_read_tr primarily supports 64-bit
+  // loads for most element sizes (16b, 8b, 4b), except for 6b elements. Here,
+  // we assume 6b elements will not be used.
+  const int32_t ldsReadWidth = 64;
+  int32_t kWidthTransRead = ldsReadWidth / elemBitWidth;
   auto kDim = dotMfmaLayout.getOpIdx() == 0 ? rank - 1 : rank - 2;
 
   int32_t kSize = shape[kDim];
@@ -468,12 +471,9 @@ LinearLayout chooseDotLDSTransLayout(DotOperandEncodingAttr dotMfmaLayout,
 
   const bool isMfma32 = (mfmaLayout.getMDim() == 32);
   const bool isMfma16 = (mfmaLayout.getMDim() == 16);
-  assert(isMfma32 || isMfma16);
-
   const int kTileSize = isMfma32 ? 16 : 32;
-  const int kThreshold = isMfma32 ? 8 : 16;
 
-  if (kSize > kThreshold) {
+  if (kSize >= kTileSize) {
     // Handles mfma32x32x16 and mfma16x16x32 cases
     assert(kWidthDot == 8);
     registerBase.push_back({0, 4}); // second sub-tile
@@ -1330,10 +1330,10 @@ LinearLayout chooseLdMatrixLayout(Attribute enc, ArrayRef<int64_t> shape,
   return chooseDotLdMatrixLayout(dot, shape, needTrans, elemBitWidth);
 }
 
-LinearLayout chooseLDSTransLayout(Attribute enc, ArrayRef<int64_t> shape,
-                                  int32_t elemBitWidth) {
+LinearLayout chooseDsReadB64Tr16Layout(Attribute enc, ArrayRef<int64_t> shape,
+                                       int32_t elemBitWidth) {
   auto dot = cast<DotOperandEncodingAttr>(enc);
-  return chooseDotLDSTransLayout(dot, shape, elemBitWidth);
+  return chooseDotDsReadB64Tr16Layout(dot, shape, elemBitWidth);
 }
 
 } // namespace mlir::triton::gpu

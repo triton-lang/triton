@@ -259,8 +259,8 @@ LinearLayout chooseLdMatrixLayout(Attribute enc, ArrayRef<int64_t> shape,
 
 // The primary goal of this function is to efficiently load 2D tiles of a
 // tensor from shared memory using the `ds_read_tr` instruction for AMD GPUs.
-LinearLayout chooseLDSTransLayout(Attribute enc, ArrayRef<int64_t> shape,
-                                  int32_t elemBitWidth);
+LinearLayout chooseDsReadB64Tr16Layout(Attribute enc, ArrayRef<int64_t> shape,
+                                       int32_t elemBitWidth);
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H
