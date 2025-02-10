@@ -5,6 +5,7 @@
 #include "triton/Analysis/Allocation.h"
 #include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
 using namespace mlir;
@@ -173,12 +174,8 @@ Fp16_to_Fp8E4M3FN_RTNE(Location loc, ConversionPatternRewriter &rewriter,
 
 static Value cvtFp16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
                            const Value &v) {
-  GCNBuilder builder;
-  auto &cvt = *builder.create("v_cvt_f32_f16");
-  auto res = builder.newOperand("=v");
-  auto operand = builder.newOperand(v, "v");
-  cvt(res, operand);
-  return builder.launch(rewriter, loc, f32_ty, false);
+  TritonLLVMOpBuilder b(loc, rewriter);
+  return b.fpext(f32_ty, v);
 }
 
 // convert fp8 to fp32

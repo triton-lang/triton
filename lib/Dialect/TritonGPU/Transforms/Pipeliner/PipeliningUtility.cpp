@@ -234,6 +234,12 @@ void mlir::triton::replaceUsesAndPropagateType(OpBuilder &builder,
     op->erase();
 }
 
+// Return true if the given ForOp has the attribute
+// `tt.disallow_acc_multi_buffer` set to true.
+bool mlir::triton::getDisallowAccMultiBuffer(scf::ForOp forOp) {
+  return forOp->hasAttr(mlir::triton::kDisallowAccMultiBufferAttrName);
+}
+
 void mlir::triton::visitNestedOperands(Operation *op,
                                        function_ref<void(Value)> visitor) {
   op->walk([&](Operation *nestedOp) {

@@ -10,6 +10,8 @@ namespace mlir {
 namespace triton {
 
 static const char *kNumStagesAttrName = "tt.num_stages";
+static const char *kDisallowAccMultiBufferAttrName =
+    "tt.disallow_acc_multi_buffer";
 static const char *kLoopStageAttrName = "loop.stage";
 static const char *kLoopClusterAttrName = "loop.cluster";
 
@@ -36,6 +38,10 @@ void addOps(scf::ForOp forOp, int stage,
 /// mutable.
 void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
                                  Value val);
+
+// Return true if the given ForOp has the attribute
+// `tt.disallow_acc_multi_buffer` set to true.
+bool getDisallowAccMultiBuffer(scf::ForOp forOp);
 
 /// Visit the operands of `op` and the operands of any nested ops defined
 /// outside of `op`.
