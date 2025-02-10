@@ -360,6 +360,7 @@ class CompiledKernel:
     # TODO: move out of this namespace since it's a runtime thing
     launch_enter_hook = None
     launch_exit_hook = None
+    init_handle_hook = None
 
     def __init__(self, src, metadata_group, hash):
         from collections import namedtuple
@@ -408,6 +409,8 @@ class CompiledKernel:
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
         self.module, self.function, self.n_regs, self.n_spills = driver.active.utils.load_binary(
             self.name, self.kernel, self.metadata.shared, device)
+        if self.init_handle_hook is not None:
+            self.init_handle_hook(self.module, self.function, self.metadata_path)
 
     def __getattribute__(self, name):
         if name == 'run':
@@ -420,11 +423,7 @@ class CompiledKernel:
         ret = LazyDict({"name": self.name, "function": self.function, "stream": stream})
         if not isinstance(self.src, ASTSource) or self.src.fn.launch_metadata is None:
             return ret
-        arg_dict = {}
-        arg_idx = 0
-        for i, arg_name in enumerate(self.src.fn.arg_names):
-            arg_dict[arg_name] = args[arg_idx]
-            arg_idx += 1
+        arg_dict = {name: arg for name, arg in zip(self.src.fn.arg_names, args)}
         ret.add(self.src.fn.launch_metadata, (grid, self.metadata, arg_dict))
         return ret
 
