@@ -502,6 +502,7 @@ TEST_F(LinearEncodingTest, DistributedEncodingToLinearEncoding) {
       triton::gpu::CTALayoutAttr::get(&ctx, {4, 2}, {2, 2}, {1, 0}),
   };
   SmallVector<triton::gpu::DistributedEncodingTrait> distributedEncodings;
+  SmallVector<triton::gpu::DistributedEncodingTrait> distributedEncodings2;
 
   // Create BlockedEncodingAttr and SliceEncodingAttr
   {
@@ -516,6 +517,12 @@ TEST_F(LinearEncodingTest, DistributedEncodingToLinearEncoding) {
         distributedEncodings.push_back(blockedEncoding);
         distributedEncodings.push_back(
             triton::gpu::SliceEncodingAttr::get(&ctx, 0, blockedEncoding));
+        // Create an opIdx=0 and opIdx=1 encoding
+        for (unsigned opIdx = 0; opIdx < 2; ++opIdx) {
+          distributedEncodings2.push_back(
+              triton::gpu::DotOperandEncodingAttr::get(&ctx, opIdx,
+                                                       blockedEncoding, 0));
+        }
       }
     }
   }
@@ -535,6 +542,31 @@ TEST_F(LinearEncodingTest, DistributedEncodingToLinearEncoding) {
     for (unsigned opIdx = 0; opIdx < 2; ++opIdx) {
       distributedEncodings.push_back(
           triton::gpu::DotOperandEncodingAttr::get(&ctx, opIdx, mma, 2));
+    }
+  }
+
+  for (const auto &distributedEncoding : distributedEncodings2) {
+    for (auto shape : shapes) {
+      if (auto sliceEncoding =
+              dyn_cast<triton::gpu::SliceEncodingAttr>(distributedEncoding)) {
+        shape.erase(shape.begin() + sliceEncoding.getDim());
+      }
+
+      // Create LinearEncodingAttr from the LinearLayout
+      auto linearLayout = distributedEncoding.toLinearLayout(shape);
+      auto linearEncoding =
+          triton::gpu::LinearEncodingAttr::get(&ctx, linearLayout);
+
+      if (auto layout = dyn_cast<triton::gpu::DotOperandEncodingAttr>(
+              distributedEncoding)) {
+        if (isa<triton::gpu::BlockedEncodingAttr>(layout.getParent())) {
+          // FIXME: This happens to be correct for SliceLayout because of the
+          // hack in SliceEncodingAttr::toLinearLayout(). We should remove the
+          // hack and the skips in the getWarpsPerCTA() and getThreadsPerWarp()
+          ASSERT_EQ(distributedEncoding.getSizePerThread(),
+                    linearEncoding.getSizePerThread());
+        }
+      }
     }
   }
 

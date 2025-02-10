@@ -2214,7 +2214,7 @@ SmallVector<unsigned> DotOperandEncodingAttr::getSizePerThread() const {
   if (auto parentMmaLayout = mlir::dyn_cast<MmaEncodingTrait>(parentLayout)) {
     return parentMmaLayout.getSizePerThreadForOperand(getKWidth(), getOpIdx());
   } else if (auto blocked = mlir::dyn_cast<BlockedEncodingAttr>(parentLayout)) {
-    return expandMatrixShapeWithBatch(ArrayRef(blocked.getSizePerThread()));
+    return blocked.getSizePerThread();
   } else {
     llvm::report_fatal_error(
         "getSizePerThread not implemented for DotOperandEncodingAttr");
