@@ -18,7 +18,7 @@ bool tt::CoarseSchedule::insertDepsOfOp(Operation *op, int stage,
                                         tt::CoarseSchedule::Cluster cluster,
                                         bool includeArg) {
   bool inserted = false;
-  for (Value operand : op->getOperands()) {
+  for (Value operand : getNestedOperands(op)) {
     Value v = operand;
     llvm::SmallDenseSet<Value> seen;
     while (auto arg = dyn_cast<BlockArgument>(v)) {

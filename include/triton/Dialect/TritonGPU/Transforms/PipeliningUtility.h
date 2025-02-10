@@ -37,6 +37,13 @@ void addOps(scf::ForOp forOp, int stage,
 void replaceUsesAndPropagateType(OpBuilder &builder, Operation *oldUse,
                                  Value val);
 
+/// Visit the operands of `op` and the operands of any nested ops defined
+/// outside of `op`.
+void visitNestedOperands(Operation *op, function_ref<void(Value)> visitor);
+/// Get the operands of `op` and the operands of any nested ops defined outside
+/// of `op`.
+SetVector<Value> getNestedOperands(Operation *op);
+
 // Return the minClusterId and maxClusterId for the given ForOp.
 std::pair<int, int> getMinMaxCluster(scf::ForOp &forOp);
 std::pair<int, int> getStageCluster(Operation *op);
