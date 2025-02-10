@@ -6,7 +6,6 @@
 namespace mlir::triton {
 class TargetInfoBase;
 namespace proton {
-namespace gpu {
 
 void populateRecordOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                    RewritePatternSet &patterns,
@@ -17,7 +16,6 @@ void populateInitScopeOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                       RewritePatternSet &patterns,
                                       PatternBenefit benefit);
 
-} // namespace gpu
 } // namespace proton
 } // namespace mlir::triton
 
