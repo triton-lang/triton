@@ -4,6 +4,7 @@ add_triton_library(ProtonGPUIR
 
   DEPENDS
   ProtonGPUTableGen
+  ProtonGPUAttrDefsIncGen
 
   LINK_LIBS PUBLIC
   TritonGPUIR

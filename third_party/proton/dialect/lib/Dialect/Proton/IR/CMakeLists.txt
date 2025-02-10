@@ -4,4 +4,5 @@ add_triton_library(ProtonIR
 
   DEPENDS
   ProtonTableGen
+  ProtonAttrDefsIncGen
 )
