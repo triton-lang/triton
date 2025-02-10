@@ -1,2 +1,2 @@
 add_subdirectory(Dialect)
-add_subdirectory(ProtonGPUToLLVM)
+add_subdirectory(Conversion)
