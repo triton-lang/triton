@@ -16,6 +16,11 @@ void populateInitScopeOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                       RewritePatternSet &patterns,
                                       PatternBenefit benefit);
 
+void populateProtonOpPatterns(LLVMTypeConverter &typeConverter,
+                              RewritePatternSet &patterns,
+                              const TargetInfoBase &targetInfo,
+                              PatternBenefit benefit);
+
 } // namespace proton
 } // namespace mlir::triton
 
