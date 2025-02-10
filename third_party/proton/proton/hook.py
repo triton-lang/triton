@@ -1,6 +1,8 @@
 from .state import enter_state, exit_state
 from .scope import enter_scope, exit_scope
 
+from triton._C.libtriton import ir
+
 COMPUTE_METADATA_SCOPE_NAME = "__proton_launch_metadata"
 
 
@@ -24,15 +26,45 @@ class TritonHook:
         exit_scope(triton_op=True)
 
 
-def register_triton_hook() -> None:
+class TritonInitHandleHook:
+    function_scope_ids: dict = {}
+
+    @staticmethod
+    def map_scope_ids(function, module, metadata_group):
+        if function and function not in TritonInitHandleHook.function_scope_ids:
+            ir_path = None
+            if "ttgir" in metadata_group:
+                ir_path = metadata_group["ttgir"]
+            elif "ttir" in metadata_group:
+                ir_path = metadata_group["ttir"]
+            if ir_path:
+                context = ir.context()
+                module = ir.parse_mlir_module(ir_path, context)
+                module.context = context
+
+
+def register_launch_hook() -> None:
     from triton.compiler import CompiledKernel
     if CompiledKernel.launch_enter_hook is None:
         CompiledKernel.launch_enter_hook = TritonHook.enter
         CompiledKernel.launch_exit_hook = TritonHook.exit
+    else:
+        raise RuntimeError("Triton launch hook is already registered.")
 
 
-def unregister_triton_hook() -> None:
+def unregister_launch_hook() -> None:
     from triton.compiler import CompiledKernel
-    if CompiledKernel.launch_enter_hook == TritonHook.enter:
-        CompiledKernel.launch_enter_hook = None
-        CompiledKernel.launch_exit_hook = None
+    CompiledKernel.launch_enter_hook = None
+    CompiledKernel.launch_exit_hook = None
+
+
+def register_init_handle_hook() -> None:
+    from triton.compiler import CompiledKernel
+    if CompiledKernel.init_handle_hook is not None:
+        raise RuntimeError("Triton init handle hook is already registered.")
+    CompiledKernel.init_handle_hook = TritonInitHandleHook.map_scope_ids
+
+
+def unregister_init_handle_hook() -> None:
+    from triton.compiler import CompiledKernel
+    CompiledKernel.init_handle_hook = None
