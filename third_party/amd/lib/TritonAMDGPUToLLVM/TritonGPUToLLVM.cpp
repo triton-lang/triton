@@ -228,10 +228,8 @@ struct ConvertTritonAMDGPUToLLVM
     mlir::triton::populatePrintOpToLLVMPattern(typeConverter, patterns,
                                                targetInfo, commonBenefit);
 
-    mlir::triton::proton::populateInitScopeOpToLLVMPattern(
-        typeConverter, patterns, commonBenefit);
-    mlir::triton::proton::populateRecordOpToLLVMPattern(
-        typeConverter, patterns, targetInfo, commonBenefit);
+    mlir::triton::proton::populateProtonOpPatterns(typeConverter, patterns,
+                                                   targetInfo, commonBenefit);
 
     mlir::ub::populateUBToLLVMConversionPatterns(typeConverter, patterns);
 
