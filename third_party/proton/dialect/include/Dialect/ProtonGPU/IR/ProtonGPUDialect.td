@@ -1,0 +1,22 @@
+#ifndef PROTON_GPU_DIALECT
+#define PROTON_GPU_DIALECT
+
+include "mlir/IR/OpBase.td"
+
+def ProtonGPU_Dialect : Dialect {
+  let name = "proton_gpu";
+  let cppNamespace = "::mlir::triton::proton::gpu";
+
+  let description = [{
+    Proton GPU dialect.
+  }];
+
+  let dependentDialects = [
+    "triton::gpu::TritonGPUDialect",
+		"triton::proton::ProtonDialect",
+  ];
+
+  let usePropertiesForAttributes = 1;
+}
+
+#endif  // PROTON_GPU_DIALECT
