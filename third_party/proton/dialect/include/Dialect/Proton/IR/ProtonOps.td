@@ -13,7 +13,7 @@ include "ProtonDialect.td"
 include "ProtonAttrDefs.td"
 
 class PT_Op<string mnemonic, list<Trait> traits = []> :
-    Op<Proton_Dialect, mnemonic, !listconcat(traits, [])> {
+  Op<Proton_Dialect, mnemonic, !listconcat(traits, [])> {
 }
 
 def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
@@ -21,53 +21,72 @@ def SharedMemory : Resource<"::mlir::triton::gpu::SharedMemory">;
 
 // Proton profiling metric.
 def MetricAttr : I32EnumAttr<
-    "Metric", "",
-    [
-        I32EnumAttrCase<"CYCLE", 0, "cycle">,
-    ]> {
-    let cppNamespace = "::mlir::triton::proton";
+  "Metric", "",
+  [
+    I32EnumAttrCase<"CYCLE", 0, "cycle">,
+  ]> {
+  let cppNamespace = "::mlir::triton::proton";
 }
 
 // Proton profiling granularity.
 def GranularityAttr : I32EnumAttr<
-    "Granularity", "",
-    [
-        I32EnumAttrCase<"WARPGROUP", 0, "warpgroup">,
-        I32EnumAttrCase<"WARP", 1, "warp">,
-    ]> {
-    let cppNamespace = "::mlir::triton::proton";
+  "Granularity", "",
+  [
+    I32EnumAttrCase<"WARPGROUP", 0, "warpgroup">,
+    I32EnumAttrCase<"WARP", 1, "warp">,
+  ]> {
+  let cppNamespace = "::mlir::triton::proton";
 }
 
-def PT_RecordOp : PT_Op<"record", [
-  MemoryEffects<[MemRead<DefaultResource>]>,
-  MemoryEffects<[MemWrite<DefaultResource>]>
-  ]> {
-  let summary = "Record a GPU metric event";
+def PT_InitScopeOp : PT_Op<"init_scope", [Pure]> {
+  let summary = "Initialize a scope";
 
   let description = [{
-    The operator records GPU event of a particular metric.
-    Essentially a marker with a region id.
+    This operation initializes a scope with the given name and returns a unique id for the scope.
 
     Example:
 
     ```mlir
-    proton.record() {isStart = true, regionId = 4 : i32}
+    %scope0 = proton.init_scope "name0" : i32
+    ```
+  }];
+
+  let arguments = (
+    ins StrAttr: $scopeName
+  );
+  let results = (outs I32 : $scopeId);
+
+  let assemblyFormat = "$scopeName attr-dict `:` type($scopeId) ";
+  // hasVerifier = 1; verify that (1) each scope is used twice, and (2) the use ops are record like ops
+}
+
+def PT_RecordOp : PT_Op<"record", [
+  MemoryEffects<[MemRead<DefaultResource>, MemWrite<DefaultResource>]>
+]> {
+  let summary = "Record an event";
+
+  let description = [{
+    This operation records events of a particular metric.
+
+    Example:
+
+    ```mlir
+    proton.record start %scope0
     ...
-    proton.record() {isStart = false, regionId = 4 : i32}
+    proton.record end %scope0
     ```
   }];
   let arguments = (
-    ins BoolAttr: $isStart,
-    ConfinedAttr<I32Attr, [IntNonNegative]>:$regionId
+    ins UnitAttr: $isStart,
+    I32: $scopeId
   );
 
-  let assemblyFormat = " `(` operands `)` attr-dict";
+  let assemblyFormat = "(`start` $isStart^):(`end`)? $scopeId attr-dict";
 }
 
 def PT_CircularRecordOp : PT_Op<"circular_record", [
-  MemoryEffects<[MemRead<DefaultResource>]>,
-  MemoryEffects<[MemWrite<DefaultResource>]>
-  ]> {
+  MemoryEffects<[MemRead<DefaultResource>, MemWrite<DefaultResource>]>
+]> {
   let summary = "Record a GPU metric event into a circular buffer";
 
   let description = [{
@@ -76,16 +95,19 @@ def PT_CircularRecordOp : PT_Op<"circular_record", [
     get dropped if the `data` is full.
   }];
   let arguments = (
-    ins TTG_MemDescType:$data,
+    ins UnitAttr: $isStart,
+    I32: $scopeId,
+    TTG_MemDescType:$data,
     TT_PtrLike :$indexPtr,
-    BoolAttr: $isStart,
-    ConfinedAttr<I32Attr, [IntNonNegative]>:$regionId,
     DefaultValuedAttr<MetricAttr, "Metric::CYCLE">:$metric,
     DefaultValuedAttr<GranularityAttr, "Granularity::WARPGROUP">:$granularity
   );
   let hasVerifier = 1;
 
-  let assemblyFormat = [{$data `,` $indexPtr attr-dict `:` qualified(type($data)) `,` type($indexPtr)}];
+  let assemblyFormat = [{
+    (`start` $isStart^):(`end`)? $scopeId `,` $data `,` $indexPtr attr-dict `:`
+    qualified(type($data)) `,` type($indexPtr)
+  }];
 }
 
 def PT_FinalizeOp : PT_Op<"finalize", [

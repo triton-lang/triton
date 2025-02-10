@@ -458,6 +458,8 @@ class CompiledKernel:
         warp_size = driver.active.get_current_target().warp_size
         if self.metadata.num_warps * warp_size > self.n_max_threads:
             raise OutOfResources(self.metadata.num_warps * warp_size, self.n_max_threads, "threads")
+        if knobs.runtime.init_handle_hook is not None:
+            knobs.runtime.init_handle_hook(self.module, self.function, self.metadata_path)
 
     def __getattribute__(self, name):
         if name == 'run':
@@ -470,11 +472,7 @@ class CompiledKernel:
         ret = LazyDict({"name": self.name, "function": self.function, "stream": stream})
         if not isinstance(self.src, ASTSource) or self.src.fn.launch_metadata is None:
             return ret
-        arg_dict = {}
-        arg_idx = 0
-        for i, arg_name in enumerate(self.src.fn.arg_names):
-            arg_dict[arg_name] = args[arg_idx]
-            arg_idx += 1
+        arg_dict = {name: arg for name, arg in zip(self.src.fn.arg_names, args)}
         ret.add(self.src.fn.launch_metadata, (grid, self.metadata, arg_dict))
         return ret
 
