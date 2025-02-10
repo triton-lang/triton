@@ -1251,20 +1251,16 @@ public:
     switch (auto isaFamily = triton::AMD::deduceISAFamily(archGenerationName)) {
     case ISAFamily::CDNA1:
     case ISAFamily::CDNA2:
+    case ISAFamily::CDNA4:
+      patterns.add<::ScaledBlockedToScaledMFMAF8F6F4>(
+          context, getMfmaVersion(isaFamily), matrixInstructionSize,
+          /*benefit=*/10);
+      [[fallthrough]];
     case ISAFamily::CDNA3:
       patterns.add<::BlockedToMFMA, ::ScaledBlockedToMFMA>(
           context, getMfmaVersion(isaFamily), matrixInstructionSize, kPack,
           /*benefit=*/2);
       break;
-    case ISAFamily::CDNA4: {
-      patterns.add<::ScaledBlockedToScaledMFMAF8F6F4>(
-          context, getMfmaVersion(isaFamily), matrixInstructionSize,
-          /*benefit=*/10);
-      patterns.add<::BlockedToMFMA, ::ScaledBlockedToMFMA>(
-          context, getMfmaVersion(isaFamily), matrixInstructionSize, kPack,
-          /*benefit=*/2);
-      break;
-    }
     case ISAFamily::RDNA3:
       patterns.add<::BlockedToWMMA>(context, getWmmaVersion(archGenerationName),
                                     /*benefit=*/2);
