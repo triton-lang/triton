@@ -431,6 +431,16 @@ static Value convertBf16ToFp32(Location loc,
   return b.bitcast(shifted, f32_ty);
 }
 
+static Value checkNan(Location loc, RewriterBase &rewriter, Value v) {
+  std::string intrinsic = "llvm.is.fpclass";
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  // bit 0 indicates signaling nan 
+  Value sNan = b.i32_val(0);
+  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, i1_ty,
+                                        ValueRange{v, sNan})
+      ->getResult(0);
+}
+
 static Value convertFp32ToBf16(Location loc,
                                ConversionPatternRewriter &rewriter,
                                const Value &v, const RoundingMode rounding) {
@@ -441,27 +451,25 @@ static Value convertFp32ToBf16(Location loc,
     auto truncated = b.trunc(i16_ty, shifted);
     return b.bitcast(truncated, bf16_ty);
   }
-  // Otherwise it is (rounding == RoundingMode::RTNE)
-  auto as_uint32 = b.bitcast(v, i32_ty);
-  auto check_exponent =
-      b.and_(i32_ty, b.xor_(i32_ty, as_uint32, b.i32_val(0xffffffff)),
-             b.i32_val(0x7f800000));
-  auto exponent_not_all1s = b.icmp_ne(check_exponent, b.i32_val(0));
-  auto exponent_all1s = b.icmp_eq(check_exponent, b.i32_val(0));
-  auto rounded = b.add(
-      i32_ty, b.i32_val(0x7fff),
-      b.and_(i32_ty, b.lshr(i32_ty, as_uint32, b.i32_val(16)), b.i32_val(1)));
-  rounded = b.add(i32_ty, rounded, as_uint32);
-  auto res = b.select(exponent_not_all1s, rounded, as_uint32);
 
-  auto preserve_nan = b.and_(
-      i1_ty, exponent_all1s,
-      b.icmp_ne(b.and_(i32_ty, as_uint32, b.i32_val(0xffff)), b.i32_val(0)));
-  auto nan = b.or_(i32_ty, as_uint32, b.i32_val(0x10000));
-  res = b.select(preserve_nan, nan, res);
+  // This implementation is a faster version for fp32 to bf16 type conversion
+  // It is from CK:
+  // https://github.com/cgmillette/composable_kernel/commit/24e75bef6aa5
+  // It uses less VGPR and less number of instructions compared to the
+  // previous implementation
+  Value isNan = checkNan(loc, rewriter, v);
+  Value v16 = b.i32_val(16);
+  Value tmp = b.and_(i32_ty, b.lshr(i32_ty, as_int32, v16), b.i32_val(1));
 
-  auto shifted = b.lshr(i32_ty, res, b.i32_val(16));
-  auto truncated = b.trunc(i16_ty, shifted);
+  Value v7FFF = b.i32_val(0x7FFF);
+  Value s1 = b.add(as_int32, tmp);
+  Value s2 = b.add(s1, v7FFF);
+
+  Value vNan = b.i32_val(0x7FFF0000);
+  Value res = b.select(isNan, vNan, s2);
+
+  Value shifted = b.lshr(i32_ty, res, v16);
+  Value truncated = b.trunc(i16_ty, shifted);
   return b.bitcast(truncated, bf16_ty);
 }
 
