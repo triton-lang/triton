@@ -9,9 +9,9 @@ include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 include "triton/Dialect/Triton/IR/TritonInterfaces.td"
-include "proton/Dialect/Proton/IR/ProtonDialect.td"
-include "ProtonGPUDialect.td"
-include "ProtonGPUAttrDefs.td"
+include "proton/dialect/include/Dialect/Proton/IR/ProtonAttrDefs.td"
+include "proton/dialect/include/Dialect/ProtonGPU/IR/ProtonGPUDialect.td"
+include "proton/dialect/include/Dialect/ProtonGPU/IR/ProtonGPUAttrDefs.td"
 
 def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
 def SharedMemory : Resource<"::mlir::triton::gpu::SharedMemory">;

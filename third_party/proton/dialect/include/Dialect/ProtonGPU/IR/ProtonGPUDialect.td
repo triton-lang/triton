@@ -3,7 +3,7 @@
 
 include "mlir/IR/OpBase.td"
 
-def Proton_GPU_Dialect : Dialect {
+def ProtonGPU_Dialect : Dialect {
   let name = "proton_gpu";
   let cppNamespace = "::mlir::triton::proton::gpu";
 
@@ -12,12 +12,10 @@ def Proton_GPU_Dialect : Dialect {
   }];
 
   let dependentDialects = [
-    "triton::TritonGPUDialect"
+    "triton::gpu::TritonGPUDialect",
 		"triton::proton::ProtonDialect",
   ];
 
-  let useDefaultTypePrinterParser = 1;
-  let useDefaultAttributePrinterParser = 1;
   let usePropertiesForAttributes = 1;
 }
 
