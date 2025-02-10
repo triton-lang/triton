@@ -7,6 +7,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/Support/Casting.h"
 
 using namespace mlir;
@@ -97,18 +98,11 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     expectOp.getPredMutable().assign(mask);
     return op;
   }
-  if (auto mmav5Op = dyn_cast<ttng::TCGen5MMAOp>(op)) {
+  if (auto mmav5Op = dyn_cast<ttng::MMAv5OpInterface>(op)) {
     rewriter.setInsertionPoint(mmav5Op);
-    Value mask = getPredMask(rewriter, mmav5Op.getPred().getType(),
-                             mmav5Op.getPred(), pred);
-    mmav5Op.getPredMutable().assign(mask);
-    return op;
-  }
-  if (auto mmav5Op = dyn_cast<ttng::TCGen5MMAScaledOp>(op)) {
-    rewriter.setInsertionPoint(mmav5Op);
-    Value mask = getPredMask(rewriter, mmav5Op.getPred().getType(),
-                             mmav5Op.getPred(), pred);
-    mmav5Op.getPredMutable().assign(mask);
+    auto currPred = mmav5Op.getPredicate();
+    Value mask = getPredMask(rewriter, currPred.getType(), currPred, pred);
+    mmav5Op.setPredicate(mask);
     return op;
   }
   if (auto tmemStoreOp = dyn_cast<ttng::TMEMStoreOp>(op)) {
@@ -238,6 +232,12 @@ void mlir::triton::replaceUsesAndPropagateType(OpBuilder &builder,
   // Perform late op erasure.
   for (Operation *op : opsToDelete)
     op->erase();
+}
+
+// Return true if the given ForOp has the attribute
+// `tt.disallow_acc_multi_buffer` set to true.
+bool mlir::triton::getDisallowAccMultiBuffer(scf::ForOp forOp) {
+  return forOp->hasAttr(mlir::triton::kDisallowAccMultiBufferAttrName);
 }
 
 std::optional<std::pair<int, int>>

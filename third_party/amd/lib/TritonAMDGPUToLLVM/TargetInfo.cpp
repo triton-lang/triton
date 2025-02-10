@@ -1,4 +1,5 @@
 #include "TargetInfo.h"
+#include "SchedInstructions.h"
 #include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
 #include "Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -440,6 +441,11 @@ bool TargetInfo::supportVectorizedAtomics() const {
   // Note: not currently tested or used, but AMD generally supports vectorized
   // atomics.
   return true;
+}
+
+void TargetInfo::storeOpAnnotation(triton::gpu::LocalStoreOp op,
+                                   size_t localStoreOpCount, Type type) const {
+  storeOpSchedAnnotations(op, localStoreOpCount, type);
 }
 
 } // namespace mlir::triton::AMD

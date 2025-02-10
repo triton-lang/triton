@@ -10,6 +10,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include <memory>
 
 namespace mlir::triton::gpu {
@@ -90,8 +91,7 @@ public:
                                 PatternRewriter &rewriter) const override {
     if (!allocOp.getSrc() || !allocOp->hasOneUse() ||
         !isa<triton::nvidia_gpu::WarpGroupDotOp,
-             triton::nvidia_gpu::TCGen5MMAOp,
-             triton::nvidia_gpu::TCGen5MMAScaledOp>(
+             triton::nvidia_gpu::MMAv5OpInterface>(
             *allocOp->getUsers().begin()))
       return failure();
 

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <numeric>
 
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -97,16 +98,17 @@ TritonGPUConversionTarget::TritonGPUConversionTarget(
 
   addDynamicallyLegalDialect<arith::ArithDialect, math::MathDialect,
                              triton::TritonDialect, cf::ControlFlowDialect,
-                             scf::SCFDialect>([&](Operation *op) {
-    bool hasLegalRegions = true;
-    for (auto &region : op->getRegions()) {
-      hasLegalRegions = hasLegalRegions && typeConverter.isLegal(&region);
-    }
-    if (hasLegalRegions && typeConverter.isLegal(op)) {
-      return true;
-    }
-    return false;
-  });
+                             scf::SCFDialect, ub::UBDialect>(
+      [&](Operation *op) {
+        bool hasLegalRegions = true;
+        for (auto &region : op->getRegions()) {
+          hasLegalRegions = hasLegalRegions && typeConverter.isLegal(&region);
+        }
+        if (hasLegalRegions && typeConverter.isLegal(op)) {
+          return true;
+        }
+        return false;
+      });
 
   // We have requirements for the data layouts
   addDynamicallyLegalOp<triton::DotOp>([](triton::DotOp dotOp) -> bool {
