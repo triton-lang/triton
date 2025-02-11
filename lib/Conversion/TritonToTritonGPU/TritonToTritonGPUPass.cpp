@@ -605,9 +605,8 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
 void populateProtonPatterns(TritonGPUTypeConverter &typeConverter,
                             RewritePatternSet &patterns) {
   MLIRContext *context = patterns.getContext();
-  patterns.add<GenericOpPattern<triton::proton::RecordOp>,
-               GenericOpPattern<triton::proton::InitScopeOp>>(typeConverter,
-                                                              context);
+  patterns.add<GenericOpPattern<triton::proton::RecordOp>>(typeConverter,
+                                                           context);
 }
 //
 // SCF patterns

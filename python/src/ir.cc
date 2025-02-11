@@ -1752,12 +1752,11 @@ void init_triton_ir(py::module &&m) {
            })
       // Proton Ops
       .def("create_proton_record",
-           [](TritonOpBuilder &self, bool isStart, Value &scopeId) -> void {
-             self.create<mlir::triton::proton::RecordOp>(isStart, scopeId);
-           })
-      .def("create_proton_init_scope",
-           [](TritonOpBuilder &self, const std::string &name) -> Value {
-             return self.create<mlir::triton::proton::InitScopeOp>(name);
+           [](TritonOpBuilder &self, bool isStart,
+              const std::string &name) -> void {
+             auto nameAttr = StringAttr::get(self.getBuilder().getContext(),
+                                             llvm::StringRef(name));
+             self.create<mlir::triton::proton::RecordOp>(isStart, nameAttr);
            });
 
   py::class_<PassManager>(m, "pass_manager", py::module_local())
