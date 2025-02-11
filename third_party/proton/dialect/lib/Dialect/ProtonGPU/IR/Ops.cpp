@@ -19,7 +19,7 @@ namespace proton {
 namespace gpu {
 
 // -- CircularRecordOp --
-LogicalResult CircularRecordOp::verify() {
+LogicalResult CircularStoreOp::verify() {
   // TODO(fywkevin): checks the following:
   // 1. circular buffer size power of 2.
   // 2. function's noinline is false.
