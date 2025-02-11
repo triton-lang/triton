@@ -511,7 +511,7 @@ struct AsyncCopyGlobalToLocalOpConversion
 
     Value cacheModifiers =
         b.i32_val(mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
-            op.getCache(), false, targetInfo));
+            op.getCache(), /*isLoad=*/true, targetInfo));
 
     Value llMask = adaptor.getMask();
     SmallVector<Value> maskElems;
