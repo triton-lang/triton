@@ -345,8 +345,26 @@ struct TritonAMDGPURescheduleOps
       return failure();
     return success();
   }
-
+  /*
+    reschedule() is the top-level scheduling pass for a single block,
+    whose purpose is to improve performance and regalloc of backend compilers.
+    Before this pass, mfmas and local_loads (belonging to dots)
+    were already annotated with their dot-tile info.
+    The order of re-scheduling is:
+     - Place order dependencies on dots according to dot-tiling.
+     - Place order dependencies on local_loads according to dot-tiling.
+     - Determine min-register vs max-latency-hiding preference.
+     - Determine memory op order and co-scheduling.
+     - Place order dependencies between memory ops.
+     - Determine memory ops' early/late preference.
+     - Determine memory ops' preferred issue rate.
+     - Determine memory ops' supported issue rate.
+     - Place performance and anti-dependencies between memory ops and dots.
+     - Run scheduler with new dependencies in place.
+    Note that rescheduling can be run after any new dependencies are created to visualize graph.
+  */
   void reschedule(Block *mlirBlock) {
+
     Graph graph(mlirBlock);
 
     GraphManager manager(graph);
@@ -438,8 +456,9 @@ struct TritonAMDGPURescheduleOps
     });
 
     for (auto block : blocks) {
-      if (succeeded(verify(block)))
+      if (succeeded(verify(block))) {
         reschedule(block);
+      }
     }
   }
 };
