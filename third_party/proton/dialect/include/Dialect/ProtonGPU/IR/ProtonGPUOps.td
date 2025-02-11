@@ -20,19 +20,19 @@ class PTG_Op<string mnemonic, list<Trait> traits = []> :
   Op<ProtonGPU_Dialect, mnemonic, !listconcat(traits, [])> {
 }
 
-def PTG_CircularRecordOp : PTG_Op<"circular_record", [
+def PTG_CircularStoreOp : PTG_Op<"circular_store", [
   MemoryEffects<[MemRead<DefaultResource>, MemWrite<DefaultResource>]>
 ]> {
-  let summary = "Record a GPU metric event into a circular buffer";
+  let summary = "Store the value into a circular buffer";
 
   let description = [{
-    Records a metric event into a circular buffer backed by the internal memory `data`.
+    Store a metric counter into a circular buffer backed by the internal memory `data`.
     The circular buffer indexing `indexPtr` is automatically maintained. Older events
     get dropped if the `data` is full.
   }];
   let arguments = (
     ins UnitAttr: $isStart,
-    I32: $scopeId,
+    I32Attr: $scopeId,
     TTG_MemDescType:$data,
     TT_PtrLike :$indexPtr,
     DefaultValuedAttr<MetricAttr, "Metric::CYCLE">:$metric,
@@ -41,8 +41,29 @@ def PTG_CircularRecordOp : PTG_Op<"circular_record", [
   let hasVerifier = 1;
 
   let assemblyFormat = [{
-    (`start` $isStart^):(`end`)? $scopeId `,` $data `,` $indexPtr attr-dict `:`
+    (`start` $isStart^):(`end`)? $data `,` $indexPtr attr-dict `:`
     qualified(type($data)) `,` type($indexPtr)
+  }];
+}
+
+def PTG_ReadCounterOp : PTG_Op<"read_counter", [
+  MemoryEffects<[MemRead<DefaultResource>, MemWrite<DefaultResource>]>
+]> {
+  let summary = "Read a GPU metric counter into a scalar register";
+
+  let description = [{
+    Read a GPU metric counter into a scalar register.
+  }];
+  let arguments = (
+    ins UnitAttr: $isStart,
+    I32Attr: $scopeId,
+    DefaultValuedAttr<MetricAttr, "Metric::CYCLE">:$metric,
+    DefaultValuedAttr<GranularityAttr, "Granularity::WARPGROUP">:$granularity
+  );
+  let results = (outs I32 : $counter);
+
+  let assemblyFormat = [{
+    (`start` $isStart^):(`end`)? attr-dict `:` type($counter)
   }];
 }
 
