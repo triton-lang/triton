@@ -297,3 +297,14 @@ int mlir::triton::getMaxStage(scf::ForOp &forOp) {
   assert(maxStage >= 0 && "No ops with stage attribute found");
   return maxStage;
 }
+
+int mlir::triton::getCopyVecBytes(RankedTensorType registerTy,
+                                  ttg::SharedEncodingTrait sharedEnc) {
+  auto regLayout = triton::gpu::toLinearLayout(registerTy.getShape(),
+                                               registerTy.getEncoding());
+  auto sharedLayout =
+      triton::gpu::toLinearLayout(registerTy.getShape(), sharedEnc);
+  auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
+  const int vecElems = regToSharedLayout.getNumConsecutiveInOut();
+  return vecElems * registerTy.getElementTypeBitWidth() / 8;
+}

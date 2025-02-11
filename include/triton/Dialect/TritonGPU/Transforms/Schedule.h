@@ -21,6 +21,9 @@ DenseMap<Operation *, int> assignLatencies(ModuleOp moduleOp, int numStages);
 void scheduleLoops(ModuleOp moduleOp,
                    const DenseMap<Operation *, int> &opLatency);
 
+/// Lower the loops to prepare them for pipeline expansion.
+void lowerLoops(ModuleOp moduleOp);
+
 }; // namespace gpu
 
 /// This fill out the pipelining options including schedule and annotations

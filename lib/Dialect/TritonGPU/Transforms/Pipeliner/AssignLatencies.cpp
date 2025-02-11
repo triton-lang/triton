@@ -65,17 +65,6 @@ bool isSmallLoad(tt::LoadOp loadOp,
   return width < 32;
 }
 
-int getCopyVecBytes(RankedTensorType registerTy,
-                    ttg::SharedEncodingTrait sharedEnc) {
-  auto regLayout = triton::gpu::toLinearLayout(registerTy.getShape(),
-                                               registerTy.getEncoding());
-  auto sharedLayout =
-      triton::gpu::toLinearLayout(registerTy.getShape(), sharedEnc);
-  auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
-  const int vecElems = regToSharedLayout.getNumConsecutiveInOut();
-  return vecElems * registerTy.getElementTypeBitWidth() / 8;
-}
-
 bool isPipeliningBeneficial(Operation *op, Operation *finalUser,
                             tt::ModuleAxisInfoAnalysis &axisInfoAnalysis) {
   if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {

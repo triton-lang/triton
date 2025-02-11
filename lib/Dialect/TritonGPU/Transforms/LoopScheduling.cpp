@@ -332,28 +332,30 @@ public:
         _cluster(cluster) {}
   explicit OpBuilderForStage(Operation *op, CoarseSchedule &schedule)
       : OpBuilder(op, nullptr), _schedule(schedule) {
-    auto sc = _schedule.getStageCluster(op);
-    if (sc) {
-      _stage = sc->first;
-      _cluster = sc->second;
+    if (_schedule.count(op)) {
+      auto sc = _schedule[op];
+      _stage = sc.first;
+      _cluster = sc.second;
     }
+  }
+  void setStageCluster(std::pair<int, CoarseSchedule::Cluster> stageCluster) {
+    _stage = stageCluster.first;
+    _cluster = stageCluster.second;
   }
 
   template <typename OpTy, typename... Args> OpTy create(Args &&...args) {
     OpTy op = OpBuilder::create<OpTy>(std::forward<Args>(args)...);
-
-    if (stage_ && cluster_) {
-      tt::setStageCluster(op, *stage_, *cluster_);
+    if (_stage && _cluster) {
+      _schedule.insertIfAbsent(op, *_stage, *_cluster);
     }
     return op;
   }
 };
 
-Operation *getFirstUseOfPipelinedOp(Operation *op, scf::ForOp forOp,
-                                    CoarseSchedule &schedule) {
+Operation *getFirstUseOfPipelinedOp(Operation *op, CoarseSchedule &schedule) {
   Operation *firstUser = nullptr;
   for (Operation *user : op->getUsers()) {
-    Operation *topLevelUser = forOp.getBody()->findAncestorOpInBlock(*user);
+    Operation *topLevelUser = op->getBlock()->findAncestorOpInBlock(*user);
     assert(schedule.count(topLevelUser) && "op user not found in the schedule");
     auto [_useStage, _useCluster] = schedule[topLevelUser];
     if (!firstUser) {
@@ -460,7 +462,7 @@ static Value createAlloc(scf::ForOp &forOp, Operation *loadOp,
 template <typename BuilderT, typename... Args>
 Operation *createWithStage(BuilderT &builder, Location loc, int stage,
                            CoarseSchedule::Cluster cluster, Args &&...args) {
-  Operation *op = builder.create<ttg::AsyncCopyGlobalToLocalOp>(
+  Operation *op = builder.template create<ttg::AsyncCopyGlobalToLocalOp>(
       loc, std::forward<Args>(args)...);
 
   return op;
@@ -469,13 +471,14 @@ Operation *createWithStage(BuilderT &builder, Location loc, int stage,
 void createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
                      Value insertIdx, Value extractIdx,
                      CoarseSchedule &schedule) {
-  OpBuilder builder(forOp);
-  Operation *firstUse = getFirstUseOfPipelinedOp(loadOp, forOp, schedule);
-  auto [loadStage, loadCluster] = schedule[loadOp];
-  auto [firstUseStage, firstUseCluster] = schedule[firstUse];
+  OpBuilderForStage builder(forOp, schedule);
+  Value zero = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 0, 32);
+
+  Operation *firstUse = getFirstUseOfPipelinedOp(loadOp, schedule);
   // Replace the load with async copy, wait and loal_load.
   OpBuilder::InsertionGuard guard(builder);
   builder.setInsertionPoint(loadOp);
+  builder.setStageCluster(schedule[loadOp]);
   Location loc = loadOp.getLoc();
   Value src = loadOp.getPtr();
   Value mask = loadOp.getMask();
@@ -485,7 +488,7 @@ void createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
   // TODO pawel: think about optimizing the blocked layout of indirect loads
   // here
 
-  Value zero = builder.create<arith::ConstantIntOp>(loc, 0, 32);
+  // Create async copy
   SmallVector<Value> copyOffsets(allocTy.getRank(), zero);
   copyOffsets[0] = insertIdx;
   Attribute sharedMemorySpace =
@@ -494,22 +497,49 @@ void createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
       allocTy.getShape().drop_front(), allocTy.getElementType(),
       allocTy.getEncoding(), sharedMemorySpace, /*mutableMemory=*/true,
       /*allocShape=*/allocTy.getAllocShape());
-  auto view = builder.createWithStage<ttg::MemDescSubviewOp>(
-      loc, stage, clusterId, subviewTy, alloc, copyOffsets);
-  Operation *copy = builder.createWithStage<ttg::AsyncCopyGlobalToLocalOp>(
-      loc, stage, clusterId, src, view, mask, other, loadOp.getCache(),
-      loadOp.getEvict(), loadOp.getIsVolatile());
-  Operation *commit = builder.createWithStage<ttg::AsyncCommitGroupOp>(
-      loc, stage, clusterId, copy->getResult(0));
-  Operation *wait = builder.createWithStage<ttg::AsyncWaitOp>(
-      loc, stageForFirstUse, clusterForFirstUse, commit->getResult(0), 0);
+  auto view =
+      builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, copyOffsets);
+  Operation *copy = builder.create<ttg::AsyncCopyGlobalToLocalOp>(
+      loc, src, view, mask, other, loadOp.getCache(), loadOp.getEvict(),
+      loadOp.getIsVolatile());
+  Operation *commit =
+      builder.create<ttg::AsyncCommitGroupOp>(loc, copy->getResult(0));
+
+  // Create wait and local load
+  builder.setStageCluster(schedule[firstUse]);
+  Operation *wait =
+      builder.create<ttg::AsyncWaitOp>(loc, commit->getResult(0), 0);
+  SmallVector<Value> loadOffsets(allocTy.getRank(), zero);
+  loadOffsets[0] = extractIdx;
+  auto viewLoad =
+      builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, loadOffsets);
+  auto localLoad = builder.create<ttg::LocalLoadOp>(
+      loc, loadOp.getType(), viewLoad, wait->getResult(0));
+  auto result = localLoad->getResults();
+
+  // Create select for other values as they are not handled by
+  // AsyncCopyGlobalToLocalOp for now.
+  if (other && !isZeroConst(other)) {
+    auto select = builder.create<arith::SelectOp>(
+        loc, loadOp.getType(),
+        // Use the mask operand from the original load, not the one with a
+        // potentially transformed layout.
+        loadOp.getMask(), localLoad.getResult(), other);
+    result = select->getResults();
+  }
+
+  // TODO: Think about prefetching the load for MMAv2
+
+  loadOp->replaceAllUsesWith(result);
+  loadOp->erase();
 }
 
-void lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
+scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
   struct AsyncLoad {
     int stageDiff;
     Value alloc;
     Value barrier;
+    SharedEncodingTrait sharedEncoding;
   };
   struct LoadGroupInfo {
     Value insertIdx;
@@ -519,11 +549,17 @@ void lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
   };
   llvm::MapVector<tt::LoadOp, AsyncLoad> asyncLoads;
   llvm::MapVector<int, LoadGroupInfo> loadGroups;
-  forOp->walk<mlir::WalkOrder::PreOrder>([&](Operation *op) {
+  forOp.getBody()->walk<mlir::WalkOrder::PreOrder>([&](Operation *op) {
     if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
       int stageDiff = getDefUseStageDiff(loadOp, forOp, schedule);
-      if (stageDiff > 0) {
-        asyncLoads[loadOp] = {.stageDiff = stageDiff};
+      SharedEncodingTrait sharedEncoding = getSharedEncoding(loadOp);
+      // Do not create async loads for small loads (cp.async requires at least 4
+      // bytes)
+      int copyVecBytes = getCopyVecBytes(
+          cast<RankedTensorType>(loadOp.getType()), sharedEncoding);
+      if (stageDiff > 0 && copyVecBytes >= 4) {
+        asyncLoads[loadOp] = {.stageDiff = stageDiff,
+                              .sharedEncoding = sharedEncoding};
       }
     } else if (isa<scf::ForOp>(op)) {
       // Skip nested loops.
@@ -533,9 +569,12 @@ void lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
   });
 
   for (auto &[loadOp, asyncLoad] : asyncLoads) {
-    SharedEncodingTrait sharedEncoding = getSharedEncoding(loadOp);
-    Value alloc =
-        createAlloc(forOp, loadOp, sharedEncoding, asyncLoad.stageDiff);
+    if (!isa<RankedTensorType>(loadOp.getType())) {
+      continue;
+    }
+
+    Value alloc = createAlloc(forOp, loadOp, asyncLoad.sharedEncoding,
+                              asyncLoad.stageDiff);
     asyncLoad.alloc = alloc;
     loadGroups.insert({asyncLoad.stageDiff, {}});
   }
@@ -606,12 +645,30 @@ void lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
     createAsyncCopy(forOp, loadOp, asyncLoad.alloc, insertIdx, extractIdx,
                     schedule);
   }
+  // Patch the yield with the updated counters. Subtract to account for the loop
+  // counter.
+  argIdx = newOperandIndex - 1;
+  for (auto &[numBuffers, loadGroup] : loadGroups) {
+    forYield.setOperand(argIdx++, loadGroup.insertIdx);
+    forYield.setOperand(argIdx++, loadGroup.extractIdx);
+  }
+
+  // TODO: Maybe we can annotate all of the new ops manually instead of
+  // discoveringDependencies?
+  scheduleDependencies(forOp, schedule);
+
+  // Make sure all ops have attributes.
+  for (Operation &op : forOp.getBody()->without_terminator()) {
+    assert(schedule.count(&op) && "op not found in the schedule");
+  }
+  return forOp;
 }
 
 void lowerLoop(scf::ForOp forOp) {
   CoarseSchedule schedule;
   schedule.deSerialize(forOp);
-  lowerLoads(forOp, schedule);
+  scf::ForOp newForOp = lowerLoads(forOp, schedule);
+  schedule.serialize(newForOp);
 }
 
 }; // namespace
@@ -624,6 +681,16 @@ void scheduleLoops(ModuleOp moduleOp,
     return;
   for (auto forOp : loops) {
     scheduleLoop(forOp, opLatency);
+  }
+}
+
+void lowerLoops(ModuleOp moduleOp) {
+  SmallVector<scf::ForOp> loops;
+  moduleOp->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
+  if (loops.empty())
+    return;
+  for (auto forOp : loops) {
+    lowerLoop(forOp);
   }
 }
 
@@ -645,6 +712,12 @@ public:
 
     // Schedule the loops
     scheduleLoops(getOperation(), opLatency);
+
+    // Transform the loop by introducing async operations to prepare it for
+    // pipeline expansion.
+    if (enableLowering) {
+      lowerLoops(getOperation());
+    }
   }
 };
 

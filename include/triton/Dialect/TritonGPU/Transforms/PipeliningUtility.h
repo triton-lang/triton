@@ -2,6 +2,7 @@
 #define TRITON_TRITONGPU_TRANSFORMS_PIPELINER_PIPELINING_UTILITY_H_
 
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include <optional>
 #include <utility>
 #include <vector>
@@ -43,6 +44,8 @@ int getMaxStage(scf::ForOp &forOp);
 std::pair<int, int> getStageCluster(Operation *op);
 std::optional<std::pair<int, int>> maybeGetStageCluster(Operation *op);
 void setStageCluster(Operation *op, int stage, int cluster);
+int getCopyVecBytes(RankedTensorType registerTy,
+                    gpu::SharedEncodingTrait sharedEnc);
 } // namespace triton
 } // namespace mlir
 

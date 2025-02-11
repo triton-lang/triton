@@ -73,6 +73,19 @@ def TritonGPUTestPipelineScheduleLoop : Pass<"tritongpu-test-pipeline-schedule-l
                            "mlir::arith::ArithDialect"];
 }
 
+def TritonGPUTestPipelineLowerLoop : Pass<"tritongpu-test-pipeline-lower-loop", "mlir::ModuleOp"> {
+  let summary = "test lowering a loop for software pipelining";
+
+  let description = [{
+    This is a test pass that tests `lowerLoop` method of `TritonGPULoopScheduling`.
+  }];
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
+                           "mlir::scf::SCFDialect",
+                           "mlir::arith::ArithDialect"];
+}
+
 def TritonGPUFuseNestedLoops : Pass<"tritongpu-fuse-nested-loops", "mlir::ModuleOp"> {
   let summary = "fuse nested loops for pipelining";
 
@@ -264,7 +277,9 @@ def TritonGPULoopScheduling: Pass<"tritongpu-loop-scheduling", "mlir::ModuleOp">
   let options = [
     Option<"numStages", "num-stages",
            "int32_t", /*default*/"3",
-           "number of pipeline stages">
+           "number of pipeline stages">,
+    Option<"enableLowering", "enable-lowering", "bool", /*default*/"false",
+           "enable lowering of the async operations">
   ];
 }
 
