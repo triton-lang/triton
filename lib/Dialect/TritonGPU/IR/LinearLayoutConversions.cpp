@@ -401,8 +401,7 @@ LinearLayout chooseDotDsReadB64Tr16Layout(DotOperandEncodingAttr dotMfmaLayout,
   bool hasBatchDim = rank == 3;
   int32_t kWidthDot = dotMfmaLayout.getKWidth();
   // Number of bits loaded by an LDS read. ds_read_tr primarily supports 64-bit
-  // loads for most element sizes (16b, 8b, 4b), except for 6b elements. Here,
-  // we assume 6b elements will not be used.
+  // loads for most element sizes (16b, 8b, 4b).
   const int32_t ldsReadWidth = 64;
   int32_t kWidthTransRead = ldsReadWidth / elemBitWidth;
   auto kDim = dotMfmaLayout.getOpIdx() == 0 ? rank - 1 : rank - 2;
