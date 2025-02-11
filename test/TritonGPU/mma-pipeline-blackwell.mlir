@@ -999,14 +999,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %21 = ttg.async_wait %arg7 {num = 0 : i32}
       %22 = ttg.memdesc_subview %2[%19, %c0_i32, %c0_i32] : !ttg.memdesc<2x128x128xf16, #shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>
 
-      %127 = ttng.tmem_alloc  : () -> !ttg.memdesc<128x4xi8, #tmem1, #ttng.tensor_memory>
-      ttng.tmem_copy %arg8, %127,  : (!ttg.memdesc<1x512xi8, #shared1, #ttg.shared_memory, mutable>, !ttg.memdesc<128x4xi8, #tmem1, #ttng.tensor_memory>) -> ()
-      %128 = ttng.tmem_alloc  : () -> !ttg.memdesc<128x4xi8, #tmem1, #ttng.tensor_memory>
-      ttng.tmem_copy %arg9, %128,  : (!ttg.memdesc<1x512xi8, #shared1, #ttg.shared_memory, mutable>, !ttg.memdesc<128x4xi8, #tmem1, #ttng.tensor_memory>) -> ()
+      %127 = ttng.tmem_alloc  : () -> !ttg.memdesc<128x4xi8, #tmem1, #ttng.tensor_memory, mutable>
+      ttng.tmem_copy %arg8, %127,  : (!ttg.memdesc<1x512xi8, #shared1, #ttg.shared_memory, mutable>, !ttg.memdesc<128x4xi8, #tmem1, #ttng.tensor_memory, mutable>) -> ()
+      %128 = ttng.tmem_alloc  : () -> !ttg.memdesc<128x4xi8, #tmem1, #ttng.tensor_memory, mutable>
+      ttng.tmem_copy %arg9, %128,  : (!ttg.memdesc<1x512xi8, #shared1, #ttg.shared_memory, mutable>, !ttg.memdesc<128x4xi8, #tmem1, #ttng.tensor_memory, mutable>) -> ()
 
       %tmem = ttng.tmem_alloc %acc : (tensor<128x128xf32, #blocked1>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
 
-      ttng.tc_gen5_mma_scaled %20, %22, %tmem, %127, %128, %true, %true lhs = e5m2 rhs = e5m2: (!ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>, !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x4xi8, #tmem1, #ttng.tensor_memory>, !ttg.memdesc<128x4xi8, #tmem1, #ttng.tensor_memory>, i1, i1) -> ()
+      ttng.tc_gen5_mma_scaled %20, %22, %tmem, %127, %128, %true, %true lhs = e5m2 rhs = e5m2: (!ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>, !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x4xi8, #tmem1, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x4xi8, #tmem1, #ttng.tensor_memory, mutable>, i1, i1) -> ()
       %acc_res = ttng.tmem_load %tmem : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #blocked1>
       %23 = arith.addi %arg4, %c1_i32 : i32
       %24 = arith.cmpi slt, %23, %c2_i32 : i32

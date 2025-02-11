@@ -301,6 +301,9 @@ LogicalResult TMEMStoreOp::verify() {
   if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr,
            TensorMemoryScalesEncodingAttr>(getDst().getType().getEncoding()))
     return emitOpError("should use tensor memory encoding.");
+  if (!getDst().getType().getMutableMemory()) {
+    return emitOpError("Cannot store into an immutable alloc");
+  }
   return success();
 }
 
@@ -378,6 +381,10 @@ LogicalResult TMEMAllocOp::verify() {
   if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr,
            TensorMemoryScalesEncodingAttr>(getType().getEncoding()))
     return emitOpError("should use tensor memory encoding.");
+  if (!getSrc()) {
+    if (!getType().getMutableMemory())
+      return emitError("uninitialized alloc must have a mutable memdesc type");
+  }
   return success();
 }
 
@@ -403,6 +410,9 @@ LogicalResult TMEMCopyOp::verify() {
   if (getBarrier() && !isa<triton::gpu::SharedMemorySpaceAttr>(
                           getBarrier().getType().getMemorySpace())) {
     return emitOpError("The optional barrier should be a shared memory buffer");
+  }
+  if (!getDst().getType().getMutableMemory()) {
+    return emitOpError("Cannot copy into an immutable alloc");
   }
 
   auto srcTy = cast<triton::gpu::MemDescType>(getSrc().getType());
