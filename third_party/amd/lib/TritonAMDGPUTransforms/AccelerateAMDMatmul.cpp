@@ -24,6 +24,8 @@ int getMfmaVersion(ISAFamily isaFamily) {
     return 2;
   case ISAFamily::CDNA3:
     return 3;
+  case ISAFamily::CDNA4:
+    return 4;
   default:
     break;
   }
