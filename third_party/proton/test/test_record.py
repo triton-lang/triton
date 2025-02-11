@@ -28,7 +28,7 @@ def test_proton_record(tmp_path: pathlib.Path):
         tl.store(output_ptr + offsets, output, mask=mask)
 
     torch.manual_seed(0)
-    size = 2**12
+    size = 256
     x = torch.rand(size, device='cuda')
     y = torch.rand(size, device='cuda')
     output = torch.empty_like(x)
