@@ -324,7 +324,7 @@ public:
     } else {
       assert(mDim == 16);
       // One mfma16 intrinsic processes a 16x16 A tensor slice. Similarly, we
-      // need to tile the warp 2 times to cover 32 valeus. So for a thread, the
+      // need to tile the warp 2 times to cover 32 values. So for a thread, the
       // first 2 1x4 vectors shares the first scale value at row (tid % mDim).
       std::array<Value, 4> scaleThreads = {offset, b.add(offset, b.i32_val(1)),
                                            b.add(offset, b.i32_val(2)),

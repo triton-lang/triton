@@ -1458,8 +1458,8 @@ AMDMfmaEncodingAttr::verify(function_ref<mlir::InFlightDiagnostic()> emitError,
                             llvm::ArrayRef<unsigned int> warpsPerCTA,
                             unsigned mDim, unsigned nDim, bool isTransposed,
                             mlir::triton::gpu::CTALayoutAttr) {
-  if (!(versionMajor >= 0 && versionMajor <= 3)) {
-    return emitError() << "major version must be in the [0, 3] range";
+  if (!(versionMajor >= 0 && versionMajor <= 4)) {
+    return emitError() << "major version must be in the [0, 4] range";
   }
   if (versionMinor != 0) {
     return emitError() << "minor version must be 0";

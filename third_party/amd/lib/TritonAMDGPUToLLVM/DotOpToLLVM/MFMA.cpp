@@ -25,18 +25,40 @@
 #include "TritonAMDGPUTransforms/MfmaGroup.h"
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
 using namespace mlir::triton;
 
 namespace {
 
+using ::mlir::LLVM::AMD::scaleDotElemTypeToMLIRType;
 using ::mlir::LLVM::AMD::shuffleXor;
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
+using ::mlir::triton::gpu::LinearEncodingAttr;
 using ::mlir::triton::gpu::SwizzledSharedEncodingAttr;
 
 using ValueTable = std::map<std::array<int, 3>, Value>;
+
+/// Get matrix format flag passed through BLGP/CBSZ args in V_MFMA_*_F8F6F4
+/// instructions.
+///
+/// Values:
+/// - 0: E4M3(FP8)
+/// - 1: E5M2(BF8)
+/// - 2: E2M3(FP6)
+/// - 3: E3M2(BF6)
+/// - 4: E2M1(FP4)
+static inline int32_t getMfmaF8F6F4MatrixFormat(Type t) {
+  return llvm::TypeSwitch<Type, int32_t>(t)
+      .Case<Float8E4M3FNType>([](Type) { return 0; })
+      .Case<Float8E5M2Type>([](Type) { return 1; })
+      .Case<Float6E3M2FNType>([](Type) { return 2; })
+      .Case<Float6E2M3FNType>([](Type) { return 3; })
+      .Case<Float4E2M1FNType>([](Type) { return 4; })
+      .Default([](Type) { return -1; });
+}
 
 struct DotOpMFMAConversionHelper {
   AMDMfmaEncodingAttr mfmaLayout;
@@ -212,7 +234,8 @@ struct DotOpMFMAConversionHelper {
     }
   }
 
-  void packAndReplaceResult(DotOp &op, SmallVector<Value> &fc,
+  template <typename T>
+  void packAndReplaceResult(T &op, SmallVector<Value> &fc,
                             FailureOr<MfmaInsn> maybeMfmaInsn, Type dstElemTy,
                             Type elemtTy, size_t mmaCount) const {
     Type structTy = LLVM::LLVMStructType::getLiteral(
@@ -377,11 +400,17 @@ struct DotOpMFMAConversionHelper {
         }
       }
       if (type.getIntOrFloatBitWidth() == 8) {
+        if (1 == kBase)
+          // This is only for the scale operands of scaled mfma on MI350
+          results.push_back(b.zext(i32_ty, b.bitcast(vec, i8_ty)));
         if (4 == kBase)
           // This is for int8 on pre- MI300 GPUs
           results.push_back(b.bitcast(vec, i32_ty));
         if (8 == kBase)
           results.push_back(b.bitcast(vec, i64_ty));
+        if (16 == kBase)
+          // This is only for the scale operands of scaled mfma on MI350
+          results.push_back(b.bitcast(vec, vec_ty(i32_ty, 4)));
       } else {
         results.push_back(vec);
       }
@@ -391,7 +420,7 @@ struct DotOpMFMAConversionHelper {
 
   /// Converts dot operand structure to value table and converts types
   /// appropriate for mfma instructions
-  SmallVector<ValueTable>
+  virtual SmallVector<ValueTable>
   getValuesFromDotOperandLayoutStruct(Value value, int batch, int n0, int n1,
                                       int kWidth, int kBase, Type type,
                                       bool allowXF32) const {
@@ -440,6 +469,192 @@ struct DotOpMFMAConversionHelper {
   }
 };
 
+struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
+
+  ScaledDotOpMFMAConversionHelper(AMDMfmaEncodingAttr mfmaLayout,
+                                  ConversionPatternRewriter &rewriter,
+                                  const LLVMTypeConverter *typeConverter,
+                                  Location loc)
+      : DotOpMFMAConversionHelper(mfmaLayout, rewriter, typeConverter, loc) {}
+
+  Value generateScaledMFMAOp(MfmaInsn &mfmaInsn, Value valA, Value valB,
+                             Value valC, Value valScaleA,
+                             Value valScaleB) const {
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto resType = valC.getType();
+    Value zeroFlag = b.i32_val(0);
+    OperationState loweredOp(loc, mfmaInsn.getInsnName());
+    int32_t cbsz = getMfmaF8F6F4MatrixFormat(mfmaInsn.getElementTypeA());
+    int32_t blgp = getMfmaF8F6F4MatrixFormat(mfmaInsn.getElementTypeB());
+    assert((cbsz != -1) && (blgp != -1));
+    loweredOp.addTypes(resType);
+    loweredOp.addOperands({valA, valB, valC, b.i32_val(cbsz), b.i32_val(blgp),
+                           zeroFlag, valScaleA, zeroFlag, valScaleB});
+    return rewriter.create(loweredOp)->getResult(0);
+  }
+
+  LogicalResult convertScaledDot(DotScaledOp op,
+                                 DotScaledOpAdaptor adaptor) const {
+    // Check if this dot has come with priority set by setprio.
+    auto setPrioOp = dyn_cast_or_null<ROCDL::SetPrioOp>(op->getPrevNode());
+
+    auto warpsPerCTA = mfmaLayout.getWarpsPerCTA();
+    auto mDim = mfmaLayout.getMDim();
+    auto nDim = mfmaLayout.getNDim();
+    auto mfmaVersion = mfmaLayout.getVersionMajor();
+    assert((mDim == nDim && (mDim == 32 || mDim == 16 || mDim == 4)) ||
+           (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64));
+
+    Value a = op.getLhs();
+    Value b = op.getRhs();
+    Value aScale = op.getLhsScale();
+    Value bScale = op.getRhsScale();
+    Value d = op.getD();
+    auto aTensorTy = cast<RankedTensorType>(a.getType());
+    auto bTensorTy = cast<RankedTensorType>(b.getType());
+    auto dTensorTy = cast<RankedTensorType>(d.getType());
+    auto elemTyA = aTensorTy.getElementType();
+    auto elemTyB = bTensorTy.getElementType();
+    ScaleDotElemType aElemType = op.getLhsType();
+    ScaleDotElemType bElemType = op.getRhsType();
+
+    auto supportsTypes = [](ScaleDotElemType elemType) {
+      return elemType == ScaleDotElemType::E2M1;
+    };
+
+    if (!supportsTypes(aElemType) || !supportsTypes(bElemType)) {
+      llvm::report_fatal_error("NYI: mxfp6, mxfp8\n");
+    }
+
+    auto ctx = op.getContext();
+    constexpr bool allowXF32 = false;
+    auto maybeMfmaInsn = MfmaInsn::selectMfma(
+        mDim, nDim, scaleDotElemTypeToMLIRType(ctx, aElemType),
+        scaleDotElemTypeToMLIRType(ctx, bElemType), mfmaVersion, allowXF32);
+    if (failed(maybeMfmaInsn))
+      llvm::report_fatal_error("No match found in MFMA database\n");
+
+    StringRef mfmaInsnName = maybeMfmaInsn->getInsnName();
+    unsigned kBase = maybeMfmaInsn->getKBase();
+    // Two fp4 are packed into an uint8.
+    if (aElemType == ScaleDotElemType::E2M1) {
+      kBase /= 2;
+    }
+
+    auto aEncoding = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
+    auto bEncoding = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
+    int kWidth = aEncoding.getKWidth();
+    auto rank = aTensorTy.getShape().size();
+    const auto kDimOperandSize = aTensorTy.getShape()[rank - 1];
+    const auto kDimInstrSize = mfmaLayout.getInstrShapeForOperand(kWidth, 0)[1];
+
+    auto repA = mfmaLayout.getRepForOperand(aTensorTy.getShape(), kWidth, 0);
+    auto repB = mfmaLayout.getRepForOperand(bTensorTy.getShape(), kWidth, 1);
+    assert(repA[2] == repB[1]);
+
+    auto aScaleTensorTy = cast<RankedTensorType>(aScale.getType());
+    auto bScaleTensorTy = cast<RankedTensorType>(bScale.getType());
+
+    // For fp4 scaled mfma, each thread takes 1 element from scale. Will have
+    // better way to get it when adapting other data types. Similar to
+    // scaleKBase
+    constexpr int scaleKWidth = 1;
+    constexpr int scaleKBase = 1;
+
+    Value loadedA = adaptor.getLhs();
+    Value loadedB = adaptor.getRhs();
+    Value loadedAScale = adaptor.getLhsScale();
+    Value loadedBScale = adaptor.getRhsScale();
+    Value loadedC = adaptor.getC();
+
+    auto numRepM = repA[1];
+    auto numRepN = repB[2];
+    auto numRepK = repA[2];
+    auto numRepB = repA[0];
+    assert(repA[0] == repB[0]);
+
+    auto operandA = getValuesFromDotOperandLayoutStruct(
+        loadedA, numRepB, numRepM, numRepK, kWidth, kBase,
+        aTensorTy.getElementType(), allowXF32);
+    auto operandB = getValuesFromDotOperandLayoutStruct(
+        loadedB, numRepB, numRepN, numRepK, kWidth, kBase,
+        bTensorTy.getElementType(), allowXF32);
+
+    // Scales have the same replica distributions as their corresponding
+    // operands.
+    auto operandAScale = getValuesFromDotOperandLayoutStruct(
+        loadedAScale, numRepB, numRepM, numRepK, scaleKWidth, scaleKBase,
+        aScaleTensorTy.getElementType(), allowXF32);
+    auto operandBScale = getValuesFromDotOperandLayoutStruct(
+        loadedBScale, numRepB, numRepN, numRepK, scaleKWidth, scaleKBase,
+        bScaleTensorTy.getElementType(), allowXF32);
+
+    auto dstElemTy = dTensorTy.getElementType();
+    auto fc = unpackLLElements(loc, loadedC, rewriter);
+
+    unsigned warpSize = triton::gpu::getWarpSize(mfmaLayout);
+    // compute number of output elements that each thread holds for one MFMA
+    // instruction. subBlocks
+    const int subBlocks =
+        getNumSubmatrices(aTensorTy.getElementType(), mDim, nDim);
+    auto elemsPerVec = mDim * nDim * subBlocks / warpSize;
+
+    Value firstMfma;
+    auto tb = TritonLLVMOpBuilder(loc, rewriter);
+    auto vecTy = vec_ty(dstElemTy, elemsPerVec);
+    for (int b = 0; b < numRepB; ++b) {
+      for (int m = 0; m < numRepM; ++m) {
+        for (int n = 0; n < numRepN; ++n) {
+          Value acc = tb.undef(vecTy);
+          for (unsigned v = 0; v < elemsPerVec; ++v) {
+            acc = tb.insert_element(
+                vecTy, acc,
+                fc[b * numRepM * numRepN * elemsPerVec +
+                   m * numRepN * elemsPerVec + n * elemsPerVec + v],
+                tb.i32_val(v));
+          }
+          acc = zeroAuxiliarBlocks(subBlocks, acc);
+          for (int k = 0; k < numRepK; k++) {
+            for (int kPack = 0; kPack < kWidth / kBase; ++kPack) {
+              acc = mfmaLayout.getIsTransposed()
+                        ? generateScaledMFMAOp(maybeMfmaInsn.value(),
+                                               operandB[kPack][{b, n, k}],
+                                               operandA[kPack][{b, m, k}], acc,
+                                               operandBScale[kPack][{b, n, k}],
+                                               operandAScale[kPack][{b, m, k}])
+                        : generateScaledMFMAOp(maybeMfmaInsn.value(),
+                                               operandA[kPack][{b, m, k}],
+                                               operandB[kPack][{b, n, k}], acc,
+                                               operandAScale[kPack][{b, m, k}],
+                                               operandBScale[kPack][{b, n, k}]);
+              if (!firstMfma)
+                firstMfma = acc;
+            }
+          }
+          acc = reduceSubBlocks(subBlocks, acc);
+          adjustAccForSmallKDim(fc, acc, dstElemTy, b, m, n, numRepM, numRepN,
+                                kDimInstrSize, kDimOperandSize, elemsPerVec);
+        }
+      }
+    }
+
+    // Originally, setprio (high) is set to the high-level dot op. After dot is
+    // being lowered to the series of mfma operations, it should be moved next
+    // to the first mfma leaving the first mfma staying at the low priority. In
+    // this way, incoming warp can be effectively waiting on the first mfma
+    // instruction (low priority) while the other warp is executing mfma with
+    // high priority. Otherwise, incoming warp can break the cluster.
+    if (setPrioOp && firstMfma)
+      setPrioOp->moveAfter(firstMfma.getDefiningOp());
+
+    const size_t mmaCount =
+        numRepB * numRepM * numRepN * numRepK * kWidth / kBase;
+    packAndReplaceResult(op, fc, maybeMfmaInsn, dstElemTy, elemTyA, mmaCount);
+
+    return success();
+  }
+};
+
 } // namespace
 
 namespace mlir::triton::AMD {
@@ -452,16 +667,16 @@ LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
 
   assert(isa<DotOperandEncodingAttr>(rankedTType(op.getA()).getEncoding()) &&
          isa<DotOperandEncodingAttr>(rankedTType(op.getB()).getEncoding()) &&
-         "Both $a and %b should be DotOperand layout.");
+         "Both A and B should be DotOperand layout.");
 
   auto cTensorTy = rankedTType(op.getC());
   auto dTensorTy = rankedTType(op.getD());
   assert(isa<AMDMfmaEncodingAttr>(cTensorTy.getEncoding()) &&
-         "Currently, we only support $c with a mfma layout.");
+         "Currently, we only support C with a mfma layout.");
 
   assert(cTensorTy.getShape()[0] == dTensorTy.getShape()[0] &&
          cTensorTy.getShape()[1] == dTensorTy.getShape()[1] &&
-         "DotOp's $c operand should pass the same number of values as $d");
+         "DotOp's C operand should pass the same number of values as D.");
 
   auto loc = op.getLoc();
   auto mfmaLayout = cast<AMDMfmaEncodingAttr>(
@@ -470,5 +685,36 @@ LogicalResult convertMFMA(triton::DotOp op, triton::DotOp::Adaptor adaptor,
   DotOpMFMAConversionHelper helper(mfmaLayout, rewriter, typeConverter, loc);
 
   return helper.convertDot(op, adaptor);
+}
+
+LogicalResult convertScaledMFMA(triton::DotScaledOp op,
+                                triton::DotScaledOp::Adaptor adaptor,
+                                const LLVMTypeConverter *typeConverter,
+                                ConversionPatternRewriter &rewriter) {
+  assert(isa<DotOperandEncodingAttr>(op.getLhs().getType().getEncoding()) &&
+         isa<DotOperandEncodingAttr>(op.getRhs().getType().getEncoding()) &&
+         "Both lhs and rhs should be DotOperand layout.");
+
+  assert(isa<LinearEncodingAttr>(op.getLhsScale().getType().getEncoding()) &&
+         isa<LinearEncodingAttr>(op.getRhsScale().getType().getEncoding()) &&
+         "Both LhsScale and RhsScale should be linear layout.");
+
+  auto cTensorTy = op.getC().getType();
+  auto dTensorTy = op.getD().getType();
+  assert(isa<AMDMfmaEncodingAttr>(cTensorTy.getEncoding()) &&
+         "Currently, we only support C with a mfma layout.");
+
+  assert(cTensorTy.getShape()[0] == dTensorTy.getShape()[0] &&
+         cTensorTy.getShape()[1] == dTensorTy.getShape()[1] &&
+         "DotOp's C operand should pass the same number of values as D.");
+
+  auto loc = op.getLoc();
+  auto mfmaLayout = cast<AMDMfmaEncodingAttr>(
+      cast<RankedTensorType>(op.getResult().getType()).getEncoding());
+
+  ScaledDotOpMFMAConversionHelper helper(mfmaLayout, rewriter, typeConverter,
+                                         loc);
+
+  return helper.convertScaledDot(op, adaptor);
 }
 } // namespace mlir::triton::AMD
