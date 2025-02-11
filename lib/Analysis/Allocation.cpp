@@ -130,6 +130,16 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
   unsigned contiguousShapeDim = scratchConfig.repShape[scratchConfig.order[0]];
   scratchConfig.inVec = std::min(scratchConfig.inVec, contiguousShapeDim);
   scratchConfig.outVec = std::min(scratchConfig.outVec, contiguousShapeDim);
+  // Clamp the vector length to 128 / element bitwidth as this is the max
+  // vectorisation
+  auto inBitWidth = isa<PointerType>(srcTy.getElementType())
+                        ? kPtrBitWidth
+                        : srcTy.getElementTypeBitWidth();
+  auto outBitWidth = isa<PointerType>(dstTy.getElementType())
+                         ? kPtrBitWidth
+                         : dstTy.getElementTypeBitWidth();
+  scratchConfig.inVec = std::min(scratchConfig.inVec, 128 / inBitWidth);
+  scratchConfig.outVec = std::min(scratchConfig.outVec, 128 / outBitWidth);
 
   // No padding is required if the tensor is 1-D, or if all dimensions except
   // the first accessed dimension have a size of 1.
