@@ -26,13 +26,14 @@ def PTG_CircularStoreOp : PTG_Op<"circular_store", [
   let summary = "Store the value into a circular buffer";
 
   let description = [{
-    Store a metric counter into a circular buffer backed by the internal memory `data`.
+    Store a metric `counter` into a circular buffer backed by the internal memory `data`.
     The circular buffer indexing `curIndex` is automatically updated and returned as `newIndex`.
     Older metric counter get dropped if the `data` is full.
   }];
   let arguments = (
     ins TTG_MemDescType: $data,
     I32: $curIndex,
+    I32: $counter,
     UnitAttr: $isStart,
     I32Attr: $scopeId,
     DefaultValuedAttr<MetricAttr, "Metric::CYCLE">:$metric,
@@ -44,8 +45,8 @@ def PTG_CircularStoreOp : PTG_Op<"circular_store", [
   let hasVerifier = 1;
 
   let assemblyFormat = [{
-    (`start` $isStart^):(`end`)? $data `,` $curIndex attr-dict `:`
-    qualified(type($data)) `,` type($curIndex) `->` type($newIndex)
+    (`start` $isStart^):(`end`)? $data `,` $curIndex `,` $counter attr-dict `:`
+    qualified(type($data)) `,` type($curIndex) `,` type($counter) `->` type($newIndex)
   }];
 }
 
