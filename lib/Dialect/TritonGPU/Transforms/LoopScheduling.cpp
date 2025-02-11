@@ -468,6 +468,13 @@ Operation *createWithStage(BuilderT &builder, Location loc, int stage,
   return op;
 }
 
+// Check if the load can be pipelined entirely in shared memory, with user
+// consuming directly the shared memory, without going through registers.
+bool canBeShmemPipelined(tt::LoadOp loadOp) {
+  // TODO pawel: think about it.
+  return true;
+}
+
 void createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
                      Value insertIdx, Value extractIdx,
                      CoarseSchedule &schedule) {
