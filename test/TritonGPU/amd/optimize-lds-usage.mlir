@@ -21,7 +21,6 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32}
   }
 }
 
-// FIXME: This was broken in https://github.com/triton-lang/triton/pull/5840
 // -----
 
 // Check that optimization detects overflow of LDS and decomposes layout convert so kernel fits into LDS
@@ -68,6 +67,7 @@ module attributes {"ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 64 : i32}
 //   }
 // }
 
+// FIXME: This was broken in https://github.com/triton-lang/triton/pull/5840
 // -----
 
 // Check that optimization triggers with custom LDS limit and do not triggers with default one
