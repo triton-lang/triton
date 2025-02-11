@@ -26,6 +26,43 @@ static int __builtin_ctz(unsigned x) {
 
 #endif
 
+// This reverts #5645, because it introduced increased register pressure in AMD
+// backend.
+// TODO: remove when new implementation performance reaches target level
+namespace {
+
+LinearLayout getRegToSharedLayout(MLIRContext *ctx, ArrayRef<int64_t> shape,
+                                  LinearLayout regLayout, Attribute dstEnc,
+                                  int elemBitWidth) {
+  StringAttr kBlock = StringAttr::get(ctx, ("block"));
+  int rank = shape.size();
+
+  LinearLayout sharedLayout = triton::gpu::toLinearLayout(shape, dstEnc);
+  auto sharedOrder = triton::gpu::getOrder(dstEnc);
+
+  // sharedLayout's in-dims are currently (offset, block).  Reshape to
+  // (offsetX1, offsetX2, ..., block) so that we can apply the N-dimensional
+  // shmem strides.  (The offsetX's appear in minor-to-major order.)
+  auto sharedLegacy = cast<triton::gpu::SwizzledSharedEncodingAttr>(dstEnc);
+  SmallVector<std::pair<StringAttr, int32_t>> multiDimSharedSize;
+  for (int i = 0; i < rank; i++) {
+    int dim = sharedOrder[i];
+    int64_t size = std::max(
+        int64_t{1},
+        shape[dim] / sharedLegacy.getCTALayout().getCTASplitNum()[dim]);
+    multiDimSharedSize.push_back(
+        {StringAttr::get(ctx, ("offset" + std::to_string(dim))), size});
+  }
+  multiDimSharedSize.push_back({kBlock, sharedLayout.getInDimSize(kBlock)});
+  sharedLayout = sharedLayout.reshapeIns(multiDimSharedSize);
+
+  // regToSharedLayout maps from (register, lane, warp, block) to (offsetX1,
+  // ..., offsetXN, block), where the offsetX's are in minor-to-major order.
+  return regLayout.invertAndCompose(sharedLayout);
+}
+
+} // namespace
+
 namespace mlir {
 
 namespace triton::gpu {
@@ -251,6 +288,27 @@ Value getSmemVecAddr(const LinearLayout &regLayout,
                                     {kWarp, warpId},
                                     {kBlock, blockId}})[0]
                      .second;
+    // This reverts #5645, because it introduced increased register pressure in
+    // AMD backend.
+    // TODO: remove when new implementation performance reaches target level
+    if (auto swizzledSharedEnc =
+            mlir::dyn_cast<triton::gpu::SwizzledSharedEncodingAttr>(
+                sharedEnc)) {
+      auto regToSharedLayout =
+          getRegToSharedLayout(ctx, shape, regLayout, swizzledSharedEnc,
+                               elemLlvmTy.getIntOrFloatBitWidth());
+      auto smemOrder = swizzledSharedEnc.getOrder();
+      smemOffsets = llvm::to_vector(llvm::drop_end(llvm::make_second_range(
+          applyLinearLayout(loc, rewriter, regToSharedLayout,
+                            {{kRegister, regId},
+                             {kLane, laneId},
+                             {kWarp, warpId},
+                             {kBlock, b.i32_val(0)}}))));
+      // Reorder strides according to `order`.  This way they match the
+      // multi-dimensional offsets in regToSharedLayout.
+      smemOffset = dot(rewriter, loc, smemOffsets,
+                       applyPermutation(smemStrides, smemOrder));
+    }
   } else { // Case 2 -> rank-reduced swizzling
     assert(rank >= 2 && "Swizzling only applies to tensors with rank >= 2");
     assert(isa<triton::gpu::SwizzledSharedEncodingAttr>(sharedEnc) &&
