@@ -283,8 +283,7 @@ public:
         mlir::isa<NvidiaMmaEncodingAttr>(dotOp.getType().getEncoding()))
       return failure();
 
-    auto mod = dotOp->getParentOfType<mlir::ModuleOp>();
-    int numWarps = TritonGPUDialect::getNumWarps(mod);
+    int numWarps = lookupNumWarps(dotOp);
     int versionMajor = getMMAVersionSafe(computeCapability, dotOp);
     if (!(versionMajor >= 1 && versionMajor <= 3))
       return failure();
@@ -491,8 +490,7 @@ public:
 
     // get MMA encoding for the given number of warps
     auto retShapePerCTA = getShapePerCTA(oldRetType);
-    auto mod = dotOp->getParentOfType<mlir::ModuleOp>();
-    int numWarps = TritonGPUDialect::getNumWarps(mod);
+    int numWarps = lookupNumWarps(dotOp);
     auto CTALayout = getCTALayout(oldRetType.getEncoding());
 
     int versionMajor = getMMAVersionSafe(computeCapability, dotOp);
@@ -629,8 +627,7 @@ public:
 
     // get MMA encoding for the given number of warps
     auto retShapePerCTA = getShapePerCTA(oldRetType);
-    auto mod = dotOp->getParentOfType<mlir::ModuleOp>();
-    int numWarps = TritonGPUDialect::getNumWarps(mod);
+    int numWarps = lookupNumWarps(dotOp);
     auto CTALayout = getCTALayout(oldRetType.getEncoding());
     if (computeCapability < 100)
       return failure();
@@ -1065,8 +1062,7 @@ private:
 
     RankedTensorType oldRetType = dotOp.getType();
     auto retShapePerCTA = getShapePerCTA(oldRetType);
-    auto mod = dotOp->getParentOfType<mlir::ModuleOp>();
-    int numWarps = TritonGPUDialect::getNumWarps(mod);
+    int numWarps = lookupNumWarps(dotOp);
     auto CTALayout = getCTALayout(oldRetType.getEncoding());
 
     auto instrShape = mmaVersionToInstrShape(
