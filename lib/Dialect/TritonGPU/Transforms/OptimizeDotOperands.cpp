@@ -195,9 +195,11 @@ public:
     if (!localLoad || !isTmemCopyCompatible(localLoad.getSrc().getType())) {
       return failure();
     }
-
+    MemDescType newType = MemDescType::get(
+        dstType.getShape(), dstType.getElementType(), dstType.getEncoding(),
+        dstType.getMemorySpace(), /*mutableMemory=*/true);
     Value newTmemAlloc = rewriter.create<triton::nvidia_gpu::TMEMAllocOp>(
-        tmemAlloc.getLoc(), dstType, Value());
+        tmemAlloc.getLoc(), newType, Value());
 
     // Since tcgen05.cp followed by tcgen05.mma is guaranteed to execute in that
     // order, we do not need to wait for the completion of the copy before MMA.
