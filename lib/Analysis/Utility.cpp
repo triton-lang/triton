@@ -216,18 +216,15 @@ unsigned ScanLoweringHelper::getAxisNumThreadsPerWarpWithUniqueData() {
 }
 
 unsigned ScanLoweringHelper::getNonAxisNumThreadsPerWarp() {
-  auto threadsPerWarp = getThreadsPerWarp(getEncoding());
-  threadsPerWarp[getAxis()] = 1;
-  return product<unsigned>(threadsPerWarp);
+  auto nThreads = product(getEncoding().getThreadsPerWarp());
+  return nThreads / getAxisNumThreadsPerWarpWithUniqueData();
 }
 
 // Return the flat numbers of threads computing independent scan results.
 unsigned ScanLoweringHelper::getNonAxisNumThreadsPerCTA() {
-  unsigned numParallelThreadsPerWarp = getNonAxisNumThreadsPerWarp();
-  auto warpsPerCTA = getWarpsPerCTA(getEncoding());
-  warpsPerCTA[getAxis()] = 1;
-  unsigned numParallelWarpsPerCTA = product<unsigned>(warpsPerCTA);
-  return numParallelThreadsPerWarp * numParallelWarpsPerCTA;
+  auto nWarps = product(getEncoding().getWarpsPerCTA());
+  return (nWarps / getAxisNumWarpsWithUniqueData()) *
+         getNonAxisNumThreadsPerWarp();
 }
 
 unsigned ScanLoweringHelper::getAxisNumWarpsWithUniqueData() {
@@ -565,12 +562,17 @@ unsigned ScanLoweringHelper::getAxisElementStride() {
 }
 
 unsigned ScanLoweringHelper::getAxisThreadStride() {
+  auto encoding = getEncoding();
+  auto kThread = StringAttr::get(encoding.getContext(), "lane");
+  // OOOGHHH This is nasty. We should implement this lowering via LLs natively
+  // to avoid this
+  auto threadsPerWarp = encoding.basesPerDim(kThread, /*skipBroadcast=*/false);
   auto order = getOrder();
   unsigned stride = 1;
   for (unsigned dim : order) {
     if (dim == getAxis())
       return stride;
-    stride *= getEncoding().getThreadsPerWarp()[dim];
+    stride *= threadsPerWarp[dim];
   }
   llvm_unreachable("Axis not found in order");
 }
