@@ -21,9 +21,9 @@ def test_proton_record(tmp_path: pathlib.Path):
         offsets = block_start + tl.arange(0, BLOCK_SIZE)
         mask = offsets < n_elements
         x = tl.load(x_ptr + offsets, mask=mask)
-        s0 = pl.enter_scope("load0")
+        pl.enter_scope("load0")
         y = tl.load(y_ptr + offsets, mask=mask)
-        pl.exit_scope(s0)
+        pl.exit_scope("load0")
         output = x + y
         tl.store(output_ptr + offsets, output, mask=mask)
 
