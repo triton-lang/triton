@@ -195,7 +195,8 @@ struct ConvertTritonAMDGPUToLLVM
     populatePatterns7(mlir::triton::populateGatherOpToLLVMPatterns,
                       commonBenefit);
 
-    AMD::populateMemoryOpToLLVMPatterns(typeConverter, patterns, AMDBenefit);
+    AMD::populateMemoryOpToLLVMPatterns(typeConverter, patterns, targetInfo,
+                                        AMDBenefit);
     mlir::triton::populateMemoryOpToLLVMPatterns(typeConverter, targetInfo,
                                                  patterns, commonBenefit);
     mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
