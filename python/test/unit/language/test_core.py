@@ -6570,6 +6570,7 @@ def test_tl_range(device):
 
 
 def test_tl_range_fuse():
+
     @triton.jit
     def kernel(ub):
         for i in tl.range(0, ub, flatten=True):
