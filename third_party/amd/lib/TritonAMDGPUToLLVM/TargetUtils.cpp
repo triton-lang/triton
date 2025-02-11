@@ -41,6 +41,7 @@ bool supportsVDot(llvm::StringRef arch) {
   case AMD::ISAFamily::CDNA1:
   case AMD::ISAFamily::CDNA2:
   case AMD::ISAFamily::CDNA3:
+  case AMD::ISAFamily::CDNA4:
   case AMD::ISAFamily::RDNA2:
   case AMD::ISAFamily::RDNA3:
     return true;

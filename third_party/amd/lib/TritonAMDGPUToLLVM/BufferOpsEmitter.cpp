@@ -2,15 +2,11 @@
 #include "TargetInfo.h"
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
-#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/IR/PatternMatch.h"
-#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
 #include "BufferOpsEmitter.h"
 
-using mlir::triton::gpu::appendOrGetExternFuncOp;
-using mlir::triton::gpu::getFunctionType;
 using namespace triton::AMD;
 
 namespace {
@@ -66,7 +62,8 @@ Value BufferEmitter::createResourceDescriptor(Value basePtr,
   }
 
   Value stride = b.int_val(16, 0);
-  if (targetInfo.getISAFamily() == ISAFamily::CDNA3) {
+  if (llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
+                         targetInfo.getISAFamily())) {
     if (blockStride) { // TODO: BufferAtomicRMWOp is unsupported
       Value enableSwizzle = b.int_val(16, 16384);
       Value mask14b = b.int_val(16, 16383);
