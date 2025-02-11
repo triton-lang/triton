@@ -123,12 +123,8 @@ public:
   unsigned getNonAxisNumThreadsPerWarp();
   // Return the flat numbers of threads computing independent scan results.
   unsigned getNonAxisNumThreadsPerCTA();
-  // Return the number of warps per CTA along axis dim.
-  unsigned getAxisNumWarps();
   // Return the number of warps per CTA along axis dim with unique data.
   unsigned getAxisNumWarpsWithUniqueData();
-  // Return the number of threads per warp along axis dim.
-  unsigned getAxisNumThreadsPerWarp();
   // Return the number of threads per warp along axis dim with unique data.
   unsigned getAxisNumThreadsPerWarpWithUniqueData();
   // Return the number of blocks along axis dim.

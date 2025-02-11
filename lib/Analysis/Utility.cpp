@@ -211,10 +211,6 @@ unsigned ScanLoweringHelper::getNonAxisNumElementsPerThread() {
 
 Region &ScanLoweringHelper::getCombineOp() { return scanOp.getCombineOp(); }
 
-unsigned ScanLoweringHelper::getAxisNumThreadsPerWarp() {
-  return getThreadsPerWarp(getEncoding())[getAxis()];
-}
-
 unsigned ScanLoweringHelper::getAxisNumThreadsPerWarpWithUniqueData() {
   return getEncoding().getThreadsPerWarp()[getAxis()];
 }
@@ -234,12 +230,8 @@ unsigned ScanLoweringHelper::getNonAxisNumThreadsPerCTA() {
   return numParallelThreadsPerWarp * numParallelWarpsPerCTA;
 }
 
-unsigned ScanLoweringHelper::getAxisNumWarps() {
-  return getWarpsPerCTA(getEncoding())[getAxis()];
-}
-
 unsigned ScanLoweringHelper::getAxisNumWarpsWithUniqueData() {
-  return getWarpsPerCTAWithUniqueData(getEncoding(), getShape())[getAxis()];
+  return getEncoding().getWarpsPerCTA()[getAxis()];
 }
 
 unsigned ScanLoweringHelper::getAxisNumBlocks() {
