@@ -274,7 +274,7 @@ void collectRanges(std::shared_ptr<DataFlowSolver> solver, ModuleOp mod) {
   mod->walk<WalkOrder::PreOrder>([&solver, &mod](Operation *op) {
     SmallVector<ConstantIntRanges> outputRange;
     collectRanges(*solver, op->getResults(), outputRange);
-    if (outputRange.size()) {
+    if (!outputRange.empty()) {
       APInt min = outputRange[0].smin();
       APInt max = outputRange[0].smax();
       IntegerType i64ty =
@@ -745,6 +745,12 @@ public:
     mod.walk([&](LLVM::AssumeOp op) {
       if (op->getOperand(0).getDefiningOp<arith::CmpIOp>())
         assumptions.insert(op->getOperand(0));
+    });
+    LLVM_DEBUG({
+      DBGS() << "Number of assumptions found: " << assumptions.size() << "\n";
+      for (Value assume : assumptions) {
+        DBGS() << "Assumption:" << assume << "\n";
+      }
     });
 
     std::shared_ptr<DataFlowSolver> solver = createDataFlowSolver();
