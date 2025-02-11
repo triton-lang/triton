@@ -116,7 +116,7 @@ static Operation *getFirstUseOfPipelinedLoad(Operation *loadOp) {
       continue;
 
     // Climb up to the containing op in the same block as the load.
-    user = loadOp->getBlock()->findAncestorOpInBlock(user);
+    user = loadOp->getBlock()->findAncestorOpInBlock(*user);
 
     auto [stage, clusterId] = tt::getStageCluster(user);
     // Update FirstUse if this use has lower stage or lower cluster.
