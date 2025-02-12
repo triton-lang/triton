@@ -4408,9 +4408,9 @@ def test_load_cache_modifier(cache, device):
         if cache == '' or cache == '.ca':
             assert cg_cache_modifier_str not in (global_load_line[0] if global_load_line else buffer_load_line[0])
         if cache == '.cg':
-            assert cg_cache_modifier_str in global_load_line[0]
+            assert cg_cache_modifier_str in (global_load_line[0] if global_load_line else buffer_load_line[0])
         if cache == '.cv':
-            assert cv_cache_modifier_str in global_load_line[0]
+            assert cv_cache_modifier_str in (global_load_line[0] if global_load_line else buffer_load_line[0])
 
     if is_cuda():
         ptx = pgm.asm['ptx']
