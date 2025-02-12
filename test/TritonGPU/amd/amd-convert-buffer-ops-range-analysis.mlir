@@ -973,3 +973,65 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     tt.return %13, %19 : tensor<1024xf32>, tensor<1024xf32>
   }
 }
+
+// -----
+
+// CHECK-LABEL:   tt.func @forOpDynamicKBound(
+// CHECK-SAME:  %[[VAL_0:.*]]: !tt.ptr<f32>, %[[VAL_1:.*]]: tensor<1024xf32>, %[[VAL_2:.*]]: index) -> tensor<1024xf32> {
+// CHECK:           %[[VAL_3:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [1024, 1024]} 1024 : i32
+// CHECK:           %[[VAL_4:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [0, 0]} 0 : index
+// CHECK:           %[[VAL_5:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [128, 128]} 128 : index
+// CHECK:           %[[VAL_6:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 2048]} : i32
+// CHECK:           %[[VAL_7:.*]] = arith.muli %[[VAL_6]], %[[VAL_3]] {__amdgpuconvertbufferops.output_range = [0, 2097152]} : i32
+// CHECK:           %[[VAL_8:.*]] = tt.make_range {__amdgpuconvertbufferops.output_range = [0, 1024], end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
+// CHECK:           %[[VAL_9:.*]] = tt.addptr %[[VAL_0]], %[[VAL_7]] : !tt.ptr<f32>, i32
+// CHECK:           %[[VAL_10:.*]] = arith.extsi %[[VAL_8]] {__amdgpuconvertbufferops.output_range = [0, 1024]} : tensor<1024xi32> to tensor<1024xi64>
+// CHECK:           %[[VAL_11:.*]]:3 = scf.for %[[VAL_12:.*]] = %[[VAL_4]] to %[[VAL_5]] step %[[VAL_2]] iter_args(%[[VAL_13:.*]] = %[[VAL_9]], %[[VAL_14:.*]] = %[[VAL_10]], %[[VAL_15:.*]] = %[[VAL_1]]) -> (!tt.ptr<f32>, tensor<1024xi64>, tensor<1024xf32>) {
+// CHECK:             %[[VAL_16:.*]] = tt.addptr %[[VAL_13]], %[[VAL_7]] : !tt.ptr<f32>, i32
+// CHECK:             %[[VAL_17:.*]] = arith.extsi %[[VAL_8]] {__amdgpuconvertbufferops.output_range = [0, 1024]} : tensor<1024xi32> to tensor<1024xi64>
+// CHECK:             %[[VAL_18:.*]] = arith.addi %[[VAL_17]], %[[VAL_14]] {__amdgpuconvertbufferops.output_range = [-9223372036854775808, 9223372036854775807]} : tensor<1024xi64>
+// CHECK:             %[[VAL_19:.*]] = tt.splat %[[VAL_16]] : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+// CHECK:             %[[VAL_20:.*]] = tt.addptr %[[VAL_19]], %[[VAL_18]] : tensor<1024x!tt.ptr<f32>>, tensor<1024xi64>
+// CHECK:             %[[VAL_21:.*]] = tt.load %[[VAL_20]] : tensor<1024x!tt.ptr<f32>>
+// CHECK:             %[[VAL_22:.*]] = arith.addf %[[VAL_21]], %[[VAL_15]] : tensor<1024xf32>
+// CHECK:             scf.yield %[[VAL_16]], %[[VAL_18]], %[[VAL_22]] : !tt.ptr<f32>, tensor<1024xi64>, tensor<1024xf32>
+// CHECK:           }
+// CHECK:           %[[VAL_23:.*]] = tt.addptr %[[VAL_24:.*]]#0, %[[VAL_7]] : !tt.ptr<f32>, i32
+// CHECK:           %[[VAL_25:.*]] = arith.extsi %[[VAL_8]] {__amdgpuconvertbufferops.output_range = [0, 1024]} : tensor<1024xi32> to tensor<1024xi64>
+// CHECK:           %[[VAL_26:.*]] = arith.addi %[[VAL_25]], %[[VAL_24]]#1 {__amdgpuconvertbufferops.output_range = [-9223372036854775808, 9223372036854775807]} : tensor<1024xi64>
+// CHECK:           %[[VAL_27:.*]] = tt.splat %[[VAL_23]] : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+// CHECK:           %[[VAL_28:.*]] = tt.addptr %[[VAL_27]], %[[VAL_26]] : tensor<1024x!tt.ptr<f32>>, tensor<1024xi64>
+// CHECK:           %[[VAL_29:.*]] = tt.load %[[VAL_28]] : tensor<1024x!tt.ptr<f32>>
+// CHECK:           tt.return %[[VAL_29]] : tensor<1024xf32>
+// CHECK:         }
+
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @forOpDynamicKBound(%arg0: !tt.ptr<f32>, %arg1: tensor<1024xf32>, %K: index) -> tensor<1024xf32> {
+    %c1024_i32 = arith.constant 1024 : i32
+    %c0 = arith.constant 0 : index
+    %c128 = arith.constant 128 : index
+    %c1 = arith.constant 1 : index
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %c1024_i32 : i32
+    %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
+    %3 = tt.addptr %arg0, %1 : !tt.ptr<f32>, i32
+    %4 = arith.extsi %2 : tensor<1024xi32> to tensor<1024xi64>
+    %5:3 = scf.for %arg2 = %c0 to %c128 step %K iter_args(%arg3 = %3, %arg4 = %4, %arg5 = %arg1) -> (!tt.ptr<f32>, tensor<1024xi64>, tensor<1024xf32>) {
+      %12 = tt.addptr %arg3, %1 : !tt.ptr<f32>, i32
+      %13 = arith.extsi %2 : tensor<1024xi32> to tensor<1024xi64>
+      %14 = arith.addi %13, %arg4 : tensor<1024xi64>
+      %15 = tt.splat %12 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+      %16 = tt.addptr %15, %14 : tensor<1024x!tt.ptr<f32>>, tensor<1024xi64>
+      %17 = tt.load %16 : tensor<1024x!tt.ptr<f32>>
+      %18 = arith.addf %17, %arg5 : tensor<1024xf32>
+      scf.yield %12, %14, %18 : !tt.ptr<f32>, tensor<1024xi64>, tensor<1024xf32>
+    }
+    %6 = tt.addptr %5#0, %1 : !tt.ptr<f32>, i32
+    %7 = arith.extsi %2 : tensor<1024xi32> to tensor<1024xi64>
+    %8 = arith.addi %7, %5#1 : tensor<1024xi64>
+    %9 = tt.splat %6 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+    %10 = tt.addptr %9, %8 : tensor<1024x!tt.ptr<f32>>, tensor<1024xi64>
+    %11 = tt.load %10 : tensor<1024x!tt.ptr<f32>>
+    tt.return %11 : tensor<1024xf32>
+  }
+}

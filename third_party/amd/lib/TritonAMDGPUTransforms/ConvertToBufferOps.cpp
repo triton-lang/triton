@@ -226,7 +226,7 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
             std::accumulate(loops.begin(), loops.end(), 1,
                             [](int accum, LoopLikeOpInterface loop) {
                               return accum * maybeGetTripCount(loop).value_or(
-                                                 kDefaultMaxTripCount);
+                                                 kDefaultMaxTripCount + 1);
                             });
         loopTripCounts[loop] = loopTripCount;
       }
