@@ -1714,7 +1714,6 @@ namespace mlir::triton::AMD {
 void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        const TargetInfo &targetInfo,
                                        RewritePatternSet &patterns,
-                                       int numWarps,
                                        ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                        PatternBenefit benefit) {
   patterns

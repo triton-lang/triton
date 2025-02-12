@@ -353,8 +353,9 @@ getBlockedEncoding(tt::LoadOp loadOp, tt::ModuleAxisInfoAnalysis &axisInfo) {
   Value src = loadOp.getPtr();
   auto ty = cast<RankedTensorType>(src.getType());
   auto mod = loadOp->getParentOfType<ModuleOp>();
-  int numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
+  int numWarps = ttg::lookupNumWarps(loadOp);
   int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
+
   tt::AxisInfo::DimVectorT contiguity =
       axisInfo.getAxisInfo(src)->getContiguity();
   SmallVector<unsigned> order = argSort(contiguity);

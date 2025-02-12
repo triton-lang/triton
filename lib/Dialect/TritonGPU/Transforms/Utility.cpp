@@ -569,7 +569,7 @@ bool isExpensiveLoadOrStore(Operation *op) {
   // we can presume a high hit-rate that makes it cheap to load
   auto ptrType = cast<RankedTensorType>(op->getOperand(0).getType());
   auto mod = op->getParentOfType<ModuleOp>();
-  int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+  int numWarps = triton::gpu::lookupNumWarps(op);
   int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
   if (ptrType.getNumElements() < numWarps * threadsPerWarp)
     return false;
@@ -992,11 +992,9 @@ bool isPureUnaryInlineAsm(Operation *op) {
 }
 
 int getNVIDIAComputeCapability(Operation *module) {
-  assert(module->hasAttr(triton::AttrTargetName) &&
-         "Expected a target attribute on the module operation");
-
   StringAttr targetAttr =
-      module->getAttrOfType<StringAttr>(triton::AttrTargetName);
+      module->getAttrOfType<StringAttr>(triton::gpu::AttrTargetName);
+  assert(targetAttr && "Expected a target attribute on the module operation");
 
   StringRef ref = targetAttr.strref();
   assert(ref.starts_with("cuda:") &&
@@ -1012,11 +1010,9 @@ int getNVIDIAComputeCapability(Operation *module) {
 }
 
 StringRef getAMDArch(Operation *module) {
-  assert(module->hasAttr(triton::AttrTargetName) &&
-         "Expected a target attribute on the module operation");
-
   StringAttr targetAttr =
-      module->getAttrOfType<StringAttr>(triton::AttrTargetName);
+      module->getAttrOfType<StringAttr>(triton::gpu::AttrTargetName);
+  assert(targetAttr && "Expected a target attribute on the module operation");
 
   StringRef ref = targetAttr.strref();
   assert(ref.starts_with("hip:") &&
