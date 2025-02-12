@@ -3,7 +3,6 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/IR/Types.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipelineExpander.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
@@ -865,68 +864,29 @@ bool getTC05MMASchedule(scf::ForOp &forOp, int numStages,
 
   scheduleDependencies();
 
-  // Make sure that async loads are scheduled in the same stage they are used.
+  // Make sure that async loads associated with mma ops are scheduled in the
+  // same stage as the mma op.
   DenseMap<ttg::LocalAllocOp, int> allocToStage;
-  DenseMap<ttg::LocalAllocOp, ttng::WaitBarrierOp> allocToBarrierWait;
   for (auto &op : forOp.getBody()->without_terminator()) {
-    if (auto barrierWait = dyn_cast<ttng::WaitBarrierOp>(op)) {
-      auto localAlloc = findShmemAlloc(barrierWait.getAlloc());
-      assert(localAlloc);
-      assert(allocToBarrierWait.count(localAlloc) == 0);
-      allocToBarrierWait[localAlloc] = barrierWait;
-      continue;
-    }
-    if (!coarseSchedule.count(&op))
-      continue;
-
-    auto [stage, cluster] = coarseSchedule[&op];
-    for (auto arg : op.getOperands()) {
-      auto memDescTy = dyn_cast<ttg::MemDescType>(arg.getType());
-      if (!memDescTy)
-        continue;
-
-      auto localAlloc = findShmemAlloc(arg);
-      if (!localAlloc)
-        continue;
-
-      allocToStage[localAlloc] = stage;
+    if (auto mmaOp = dyn_cast<ttng::TCGen5MMAOp>(op)) {
+      if (auto localAlloc = findShmemAlloc(mmaOp.getA())) {
+        int stage = coarseSchedule[&op].first;
+        allocToStage[localAlloc] = stage;
+      }
+      if (auto localAlloc = findShmemAlloc(mmaOp.getB())) {
+        int stage = coarseSchedule[&op].first;
+        allocToStage[localAlloc] = stage;
+      }
     }
   }
 
   for (auto &op : forOp.getBody()->without_terminator()) {
-    Value memDesc;
-    Value barrier;
     if (auto copyOp = dyn_cast<ttg::AsyncCopyGlobalToLocalOp>(op)) {
-      memDesc = copyOp.getResult();
-    } else if (auto copyOp = dyn_cast<ttng::AsyncTMACopyGlobalToLocalOp>(op)) {
-      memDesc = copyOp.getResult();
-      barrier = copyOp.getBarrier();
-    } else if (auto gatherOp = dyn_cast<ttng::AsyncTMAGatherOp>(op)) {
-      memDesc = gatherOp.getResult();
-      barrier = gatherOp.getBarrier();
-    } else if (auto storeOp = dyn_cast<ttng::AsyncTMACopyLocalToGlobalOp>(op)) {
-      memDesc = storeOp.getSrc();
-    } else if (auto scatterOp = dyn_cast<ttng::AsyncTMAScatterOp>(op)) {
-      memDesc = scatterOp.getSrc();
-    } else {
-      continue;
+      if (auto localAlloc = findShmemAlloc(copyOp.getResult())) {
+        int stage = allocToStage[localAlloc];
+        coarseSchedule.insert(&op, stage, cluster);
+      }
     }
-    auto localAlloc = findShmemAlloc(memDesc);
-    assert(localAlloc);
-    int stage = allocToStage[localAlloc];
-    coarseSchedule.insert(&op, stage, cluster);
-
-    // Schedule any barrier wait in the same stage as well, otherwise we will
-    // change the loop distance to the wait.
-    if (!barrier)
-      continue;
-    auto barrierAlloc = findShmemAlloc(barrier);
-    assert(barrierAlloc);
-    auto waitOp = allocToBarrierWait[barrierAlloc];
-    // NOTE: barriers can be grouped onto multiple loads, so schedule into the
-    // eariest stage where the result is used. This means we reduce the distance
-    // between the tma issue and wait, but it is at least correct.
-    coarseSchedule.insertMinimum(waitOp, stage, cluster);
   }
 
   scheduleDependencies();

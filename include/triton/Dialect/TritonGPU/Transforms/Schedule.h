@@ -106,25 +106,6 @@ public:
     return true;
   }
 
-  void insertMinimum(Operation *op, int stage, Cluster cluster) {
-    auto res = opToStageAndCluster.insert({op, {stage, cluster}});
-    if (res.second) {
-      return;
-    }
-    auto &[existingStage, existingCluster] = res.first->second;
-    existingStage = std::min(stage, existingStage);
-
-    // If existingCluster is reachable from cluster,
-    // then cluster is earlier in the list
-    auto it = cluster;
-    for (auto it = cluster; it != clusters.end(); ++it) {
-      if (it == existingCluster) {
-        existingCluster = cluster;
-        return;
-      }
-    }
-  }
-
   bool insertDepsOfOp(Operation *op, int stage, CoarseSchedule::Cluster cluster,
                       bool includeArg);
 
@@ -135,8 +116,6 @@ public:
   std::pair<int, Cluster> operator[](Operation *op) {
     return opToStageAndCluster[op];
   }
-
-  auto find(Operation *op) const { return opToStageAndCluster.find(op); }
 
   SmallVector<std::tuple<Operation *, int, Cluster>>
   getOpsInOrder(scf::ForOp forOp);
