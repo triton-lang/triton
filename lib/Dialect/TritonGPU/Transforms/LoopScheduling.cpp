@@ -13,6 +13,7 @@
 
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
+namespace ttng = mlir::triton::nvidia_gpu;
 namespace mlir {
 namespace triton {
 namespace gpu {
@@ -409,6 +410,9 @@ ttg::SharedEncodingTrait getSharedEncoding(tt::LoadOp loadOp) {
         return localAllocEnc;
       }
     }
+    if (localAllocEnc) {
+      return localAllocEnc;
+    }
   }
 
   // TODO pawel: Add the case for TMA loads.
@@ -471,8 +475,38 @@ Operation *createWithStage(BuilderT &builder, Location loc, int stage,
 // Check if the load can be pipelined entirely in shared memory, with user
 // consuming directly the shared memory, without going through registers.
 bool canBeShmemPipelined(tt::LoadOp loadOp) {
-  // TODO pawel: think about it.
-  return true;
+  // AsyncCopyGlobalToLocalOp does not support the non-zero "other" value.
+  // With consumer consuming directly the shared memory, there would be no way
+  // to replace masked values with the "other" value.
+  if (loadOp.getOther() && !isZeroConst(loadOp.getOther()))
+    return false;
+
+  // Go through the view operations.
+  Operation *user = *loadOp->getUsers().begin();
+  while (isa<triton::TransOp, triton::ReshapeOp>(user)) {
+    if (!user->hasOneUse())
+      return false;
+    user = *user->getUsers().begin();
+  }
+  if (!user)
+    return false;
+
+  if (auto alloc = dyn_cast<ttg::LocalAllocOp>(user)) {
+    auto sharedEnc =
+        dyn_cast<ttg::NVMMASharedEncodingAttr>(alloc.getType().getEncoding());
+
+    if (!sharedEnc)
+      return false;
+
+    SmallVector<unsigned> newOrder = getOrder(sharedEnc);
+    auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
+    auto oldOrder = ttg::getOrder(ty.getEncoding());
+
+    // Transpose is not supported for fp32 MMA operands.
+    // TODO pawel: should we be checking for the element type?
+    return oldOrder == newOrder;
+  }
+  return false;
 }
 
 void createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
@@ -520,24 +554,54 @@ void createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
   loadOffsets[0] = extractIdx;
   auto viewLoad =
       builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, loadOffsets);
-  auto localLoad = builder.create<ttg::LocalLoadOp>(
-      loc, loadOp.getType(), viewLoad, wait->getResult(0));
-  auto result = localLoad->getResults();
 
-  // Create select for other values as they are not handled by
-  // AsyncCopyGlobalToLocalOp for now.
-  if (other && !isZeroConst(other)) {
-    auto select = builder.create<arith::SelectOp>(
-        loc, loadOp.getType(),
-        // Use the mask operand from the original load, not the one with a
-        // potentially transformed layout.
-        loadOp.getMask(), localLoad.getResult(), other);
-    result = select->getResults();
+  if (canBeShmemPipelined(loadOp)) {
+    auto user = *loadOp->getUsers().begin();
+    assert(isa<triton::gpu::LocalAllocOp>(user));
+    auto alloc = cast<ttg::LocalAllocOp>(user);
+    tt::replaceUsesAndPropagateType(builder, alloc, viewLoad.getResult());
+    alloc.erase();
+  } else {
+    if (!loadOp.getOther() || isZeroConst(loadOp.getOther())) {
+      // Do not load from shared only to put it back to shared, but only if
+      // we are not using the other value. AsyncCopyGlobalToLocalOp does not
+      // support the masking.
+      SmallVector<ttg::LocalAllocOp> allocsToErase;
+      for (Operation *user : loadOp->getUsers()) {
+        if (auto userAlloc = dyn_cast<ttg::LocalAllocOp>(user)) {
+          if (allocTy.getEncoding() == userAlloc.getType().getEncoding()) {
+            tt::replaceUsesAndPropagateType(builder, userAlloc,
+                                            viewLoad.getResult());
+            allocsToErase.push_back(userAlloc);
+          }
+        }
+      }
+      for (auto alloc : allocsToErase) {
+        alloc.erase();
+      }
+    }
+
+    auto sharedLoad = builder.create<ttg::LocalLoadOp>(
+        loc, loadOp.getType(), viewLoad, wait->getResult(0));
+    auto result = sharedLoad->getResults();
+
+    // Create a select for non-zero other values as they are not handled by
+    // AsyncCopyGlobalToLocalOp for now.
+    Value other = loadOp.getOther();
+    if (other && !isZeroConst(other)) {
+      auto select = builder.create<arith::SelectOp>(
+          loc, loadOp.getType(),
+          // Use the mask operand from the original load, not the one with a
+          // potentially transformed layout.
+          loadOp.getMask(), sharedLoad.getResult(), other);
+      result = select->getResults();
+    }
+
+    loadOp->replaceAllUsesWith(result);
+
+    // TODO: Think about prefetching the load for MMAv2
   }
 
-  // TODO: Think about prefetching the load for MMAv2
-
-  loadOp->replaceAllUsesWith(result);
   loadOp->erase();
 }
 
@@ -576,6 +640,8 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
   });
 
   for (auto &[loadOp, asyncLoad] : asyncLoads) {
+    // TODO: hey, even if this is scalar load, we decided we are going to
+    // pipelined it, no? shouldn't we do it then?
     if (!isa<RankedTensorType>(loadOp.getType())) {
       continue;
     }
