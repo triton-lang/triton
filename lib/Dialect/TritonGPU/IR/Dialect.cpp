@@ -1409,6 +1409,7 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
       if (parseIntArrayAttr(parser, attr, instrShape, "instrShape").failed())
         return {};
     }
+
     if (attr.getName() == "isTransposed") {
       if (parseBool(parser, attr, isTransposed, "isTransposed").failed())
         return {};
@@ -2843,6 +2844,98 @@ struct TritonGPUInferLayoutInterface
                            ArrayRef(enc.getCTAOrder()).drop_front(1)));
     return success();
   }
+
+  LogicalResult
+  inferFp4ToFpOpEncoding(ArrayRef<int64_t> shape, int axis, Attribute inEnc,
+                         Attribute &outEnc, bool fwdInference,
+                         std::optional<Location> loc) const override {
+    // We implement two legacy layout propagations
+    // Once we fully migrate to LinearLayouts, we can remove these.
+    auto *ctx = getContext();
+    auto rank = shape.size();
+    // The output encoding will only be a legacy encoding if the axis is the
+    // fastest running dimension.
+    if (getOrder(inEnc)[axis] == 0) {
+      // Dot operand: double kWidth if kDim == axis.
+      if (auto dotEnc = mlir::dyn_cast<DotOperandEncodingAttr>(inEnc)) {
+        auto kWidth = dotEnc.getKWidth();
+        if (fwdInference) {
+          kWidth *= 2;
+        } else {
+          if (kWidth > 1) {
+            // bwd inference
+            kWidth /= 2;
+          } else {
+            return emitOptionalError(loc,
+                                     "Fp4ToFpOp requires at least 2 elements "
+                                     "per thread in the axis dimension");
+          }
+        }
+        outEnc = DotOperandEncodingAttr::get(ctx, dotEnc.getOpIdx(),
+                                             dotEnc.getParent(), kWidth);
+        return success();
+      }
+
+      // Blocked layout: double elemsPerThread[axis].
+      if (auto blockedEnc = mlir::dyn_cast<BlockedEncodingAttr>(inEnc)) {
+        auto sizePerThread = llvm::to_vector(blockedEnc.getSizePerThread());
+        if (fwdInference) {
+          sizePerThread[axis] *= 2;
+        } else {
+          if (sizePerThread[axis] > 1) {
+            sizePerThread[axis] /= 2;
+          } else {
+            return emitOptionalError(
+                loc, "Fp4ToFpOp requires at least 2 elements per "
+                     "thread in the axis dimension");
+          }
+        }
+        outEnc = BlockedEncodingAttr::get(
+            ctx, sizePerThread, blockedEnc.getThreadsPerWarp(),
+            blockedEnc.getWarpsPerCTA(), blockedEnc.getOrder(),
+            blockedEnc.getCTALayout());
+        return success();
+      }
+    }
+
+    auto ll = toLinearLayout(shape, inEnc);
+
+    auto kRegister = StringAttr::get(ctx, "register");
+    auto outDims = llvm::to_vector(ll.getOutDimNames());
+    LinearLayout newLl = LinearLayout::empty();
+    if (fwdInference) {
+      auto split = LinearLayout::identity1D(2, kRegister, outDims[axis]);
+      newLl = split * ll;
+      // FIXME!!!!
+      // operator* transposes the output dimensions??!! WTF
+      newLl = newLl.transposeOuts(outDims);
+    } else {
+      // TODO This requires a division algorithm!
+      // Implement manually ll.divideLeft(split)
+      auto contiguousElems =
+          LinearEncodingAttr::get(ctx, ll).getContigPerThread();
+      if (contiguousElems[axis] > 1) {
+        LinearLayout::BasesT newBases;
+        for (const auto &basesDim : ll.getBases()) {
+          std::vector<std::vector<int32_t>> newBasesDim;
+          for (auto base : basesDim.second) {
+            if (base[axis] == 1) {
+              continue;
+            }
+            base[axis] /= 2;
+            newBasesDim.push_back(std::move(base));
+          }
+          newBases.insert({basesDim.first, std::move(newBasesDim)});
+        }
+        newLl = LinearLayout(std::move(newBases), std::move(outDims));
+      } else {
+        return emitOptionalError(loc, "Fp4ToFpOp requires at least 2 elements "
+                                      "per thread in the axis dimension");
+      }
+    }
+    outEnc = LinearEncodingAttr::get(ctx, newLl);
+    return success();
+  }
 };
 
 struct TritonGPUVerifyTensorLayoutInterface
@@ -2850,7 +2943,7 @@ struct TritonGPUVerifyTensorLayoutInterface
   using DialectVerifyTensorLayoutInterface::DialectVerifyTensorLayoutInterface;
 
   LogicalResult verifyTensorLayout(
-      Attribute layout, RankedTensorType rankedTy, ModuleOp module,
+      Attribute layout, RankedTensorType rankedTy, Operation *op,
       function_ref<InFlightDiagnostic()> makeErr) const override {
     if (isa<triton::gpu::SharedEncodingTrait>(layout))
       return makeErr() << "Shared layout is not allowed on tensor type.";
@@ -2858,7 +2951,9 @@ struct TritonGPUVerifyTensorLayoutInterface
     // layouts also have invariants!
 
     // TODO(jlebar): Handle the case when the encoding is nested within tt.ptr.
-    if (auto blocked = dyn_cast<triton::gpu::BlockedEncodingAttr>(layout)) {
+    if (auto blocked = dyn_cast<BlockedEncodingAttr>(layout)) {
+      ModuleOp module = op->getParentOfType<ModuleOp>();
+
       // A different verifier should have checked that the layout itself is
       // valid, including that threads-per-warp has the same rank as
       // warps-per-block etc.
@@ -2869,8 +2964,7 @@ struct TritonGPUVerifyTensorLayoutInterface
                          << rankedTy.getRank() << ".";
       }
 
-      int moduleThreadsPerWarp =
-          triton::gpu::TritonGPUDialect::getThreadsPerWarp(module);
+      int moduleThreadsPerWarp = TritonGPUDialect::getThreadsPerWarp(module);
       int64_t layoutThreadsPerWarp = product(blocked.getThreadsPerWarp());
       if (layoutThreadsPerWarp != moduleThreadsPerWarp) {
         return makeErr() << layout << ".\nLayout has a total of "
@@ -2879,8 +2973,7 @@ struct TritonGPUVerifyTensorLayoutInterface
                          << moduleThreadsPerWarp << " threads per warp.";
       }
 
-      int moduleWarpsPerCTA =
-          triton::gpu::TritonGPUDialect::getNumWarps(module);
+      int moduleWarpsPerCTA = lookupNumWarps(op);
       int64_t layoutWarpsPerCTA = product(blocked.getWarpsPerCTA());
       if (layoutWarpsPerCTA != moduleWarpsPerCTA) {
         return makeErr() << layout << ".\nLayout has a total of "
@@ -2890,8 +2983,7 @@ struct TritonGPUVerifyTensorLayoutInterface
       }
 
       if (blocked.getCTALayout().getCTAsPerCGA().size() > 0) {
-        int moduleCTAsPerCGA =
-            triton::gpu::TritonGPUDialect::getNumCTAs(module);
+        int moduleCTAsPerCGA = TritonGPUDialect::getNumCTAs(module);
         int64_t layoutCTAsPerCGA =
             product(blocked.getCTALayout().getCTAsPerCGA());
         if (layoutCTAsPerCGA != moduleCTAsPerCGA) {
@@ -3230,6 +3322,7 @@ void mlir::triton::gpu::dumpHWLayout(RankedTensorType tensorType) {
   llvm::errs() << getLayoutStr(tensorType, /*useHWPointOfView=*/true);
 }
 
+namespace {
 struct TensorModel
     : public triton::gpu::TensorOrMemDesc::ExternalModel<TensorModel,
                                                          RankedTensorType> {
@@ -3269,6 +3362,7 @@ struct MemDescModel
     return cast<MemDescType>(pointer).getElementType().getIntOrFloatBitWidth();
   }
 };
+} // namespace
 
 void TritonGPUDialect::initialize() {
   registerTypes();
@@ -3295,4 +3389,27 @@ LogicalResult TritonGPUDialect::verifyOperationAttribute(Operation *op,
                                                          NamedAttribute attr) {
   // TODO: fill this.
   return success();
+}
+
+int TritonGPUDialect::getNumCTAs(ModuleOp module) {
+  if (auto attr = module->getAttrOfType<IntegerAttr>(AttrNumCTAsName))
+    return attr.getInt();
+  return 1;
+}
+
+int TritonGPUDialect::getThreadsPerWarp(ModuleOp module) {
+  if (auto attr = module->getAttrOfType<IntegerAttr>(AttrNumThreadsPerWarp))
+    return attr.getInt();
+  return 32;
+}
+
+int triton::gpu::lookupNumWarps(Operation *op) {
+  // For now, just grab it from the surrounding module.
+  auto module = op->getParentOfType<ModuleOp>();
+  auto attr = module->getAttrOfType<IntegerAttr>("ttg.num-warps");
+  if (!attr) {
+    llvm::report_fatal_error(
+        "TritonGPU module should contain a ttg.num-warps attribute");
+  }
+  return attr.getInt();
 }

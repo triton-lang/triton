@@ -283,31 +283,29 @@ def TTG_LocalStoreOp : TTG_Op<"local_store", [DeclareOpInterfaceMethods<MemoryEf
   }];
 }
 
-def TTG_UpcastMXFPOp : TTG_Op<"upcast_mxfp", [Pure]> {
-  let summary = "Convert an mxfp tensor to bf16/fp16";
+def TTG_Fp4ToFpOp : TTG_Op<"fp4_to_fp", [Pure]> {
+  let summary = "Upcast fp4 (e2m1) to fp";
 
   let hasVerifier = 1;
 
   let description = [{
-    Compute the bf16 encoded in the given mxfp number as per
-    https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
+    Upcast fp4 (e2m1) represented packed as i8s to fp.
+
+    The lower 4 bits of the i8s represent the first fp4 element, and the upper 4 bits
+    the second fp4 element.
+
+    The `axis` attribute specifies the axis along which the fp4 elements are packed.
   }];
-  let arguments = (
-    ins
-    TT_Tensor:$src,
-    TT_Tensor:$scale,
-    TT_ScaleDotElemTypeAttr:$fp_type,
-    BoolAttr:$fastMath
-  );
-  let results = (outs TT_Tensor:$result);
+
+  let builders = [
+      OpBuilder<(ins "TypedValue<RankedTensorType>":$src, "Type":$elemType, "int32_t":$axis)>
+    ];
+
+  let arguments = (ins RankedTensorOf<[I8]>:$src, I32Attr:$axis);
+  let results = (outs TT_FloatTensor:$result);
 
   let assemblyFormat = [{
-    $src `,` $scale  `fp_type` `=` $fp_type attr-dict `:` type($src) `,` type($scale) `->` type($result)
-  }];
-
-  let extraClassDeclaration = [{
-    static RankedTensorType deduceOutputType(
-        TypedValue<RankedTensorType> inputTensor, ScaleDotElemType inputElemType, Type outputElemType);
+    $src attr-dict `:` type($src) `->` type($result)
   }];
 }
 
