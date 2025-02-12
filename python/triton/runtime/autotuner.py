@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import builtins
 import os
+import threading
 import time
 import inspect
 from typing import Dict, Tuple, List, Optional
@@ -128,6 +129,8 @@ class Autotuner(KernelInterface):
         else:
             self.do_bench = do_bench
 
+        self.lock = threading.Lock()
+
     def _bench(self, *args, config, **meta):
         from ..compiler.errors import CompileTimeAssertionFailure
 
@@ -171,6 +174,7 @@ class Autotuner(KernelInterface):
             return [float("inf"), float("inf"), float("inf")]
 
     def run(self, *args, **kwargs):
+        self.lock.acquire()
         self.nargs = dict(zip(self.arg_names, args))
         used_cached_result = True
         if len(self.configs) > 1:
@@ -203,12 +207,13 @@ class Autotuner(KernelInterface):
         if config.pre_hook is not None:
             full_nargs = {**self.nargs, **kwargs, **config.all_kwargs()}
             config.pre_hook(full_nargs)
+        self.nargs = None
+        self.lock.release()
         ret = self.fn.run(
             *args,
             **kwargs,
             **config.all_kwargs(),
         )
-        self.nargs = None
         return ret
 
     def prune_configs(self, kwargs: Dict) -> List[Config]:
