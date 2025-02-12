@@ -85,6 +85,18 @@ Fp16_to_Fp8E5M2_RTZ(Location loc, ConversionPatternRewriter &rewriter,
           b.extract_element(i8_ty, a1, b.i32_val(3))};
 }
 
+static Value checkIsNan(TritonLLVMOpBuilder &builder, Value v) {
+  StringRef intrinsic = "llvm.is.fpclass";
+  // bits 0 and 1 indicate signaling Nan and quiet Nan, respectively
+  Location loc = builder.loc;
+  OpBuilder &rewriter = *builder.builder;
+  Value nanBits = builder.i32_val(3);
+
+  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, i1_ty,
+                                         ValueRange{v, nanBits})
+      ->getResult(0);
+}
+
 // Cast FP16 to FP8E4M3FN in saturation and round-to-nearest-even mode.
 // According to
 // https://www.opencompute.org/documents/ocp-8-bit-floating-point-specification-ofp8-revision-1-0-2023-12-01-pdf-1,
@@ -94,11 +106,7 @@ static Value
 Fp16_to_Fp8E4M3FN_RTNE_oneValue(Location loc,
                                 ConversionPatternRewriter &rewriter, Value v) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  StringRef funcName = "llvm.is.fpclass";
-  Value isNaN = LLVM::createLLVMIntrinsicCallOp(rewriter, loc, funcName, i1_ty,
-                                                {v, b.i32_val(0x3)})
-                    ->getResult(0);
-
+  Value isNaN = checkIsNan(b, v);
   // Get sign and absolute value
   Value vi16 = b.bitcast(v, i16_ty);
   Value sign =
@@ -441,27 +449,25 @@ static Value convertFp32ToBf16(Location loc,
     auto truncated = b.trunc(i16_ty, shifted);
     return b.bitcast(truncated, bf16_ty);
   }
-  // Otherwise it is (rounding == RoundingMode::RTNE)
-  auto as_uint32 = b.bitcast(v, i32_ty);
-  auto check_exponent =
-      b.and_(i32_ty, b.xor_(i32_ty, as_uint32, b.i32_val(0xffffffff)),
-             b.i32_val(0x7f800000));
-  auto exponent_not_all1s = b.icmp_ne(check_exponent, b.i32_val(0));
-  auto exponent_all1s = b.icmp_eq(check_exponent, b.i32_val(0));
-  auto rounded = b.add(
-      i32_ty, b.i32_val(0x7fff),
-      b.and_(i32_ty, b.lshr(i32_ty, as_uint32, b.i32_val(16)), b.i32_val(1)));
-  rounded = b.add(i32_ty, rounded, as_uint32);
-  auto res = b.select(exponent_not_all1s, rounded, as_uint32);
 
-  auto preserve_nan = b.and_(
-      i1_ty, exponent_all1s,
-      b.icmp_ne(b.and_(i32_ty, as_uint32, b.i32_val(0xffff)), b.i32_val(0)));
-  auto nan = b.or_(i32_ty, as_uint32, b.i32_val(0x10000));
-  res = b.select(preserve_nan, nan, res);
+  // This implementation is a faster version for fp32 to bf16 type conversion
+  // It is from CK:
+  // https://github.com/cgmillette/composable_kernel/commit/24e75bef6aa5
+  // It uses less VGPR and less number of instructions compared to the
+  // previous implementation
+  Value isNan = checkIsNan(b, v);
+  Value v16 = b.i32_val(16);
+  Value tmp = b.and_(i32_ty, b.lshr(i32_ty, as_int32, v16), b.i32_val(1));
 
-  auto shifted = b.lshr(i32_ty, res, b.i32_val(16));
-  auto truncated = b.trunc(i16_ty, shifted);
+  Value v7FFF = b.i32_val(0x7FFF);
+  Value s1 = b.add(as_int32, tmp);
+  Value s2 = b.add(s1, v7FFF);
+
+  Value vNan = b.i32_val(0x7FFF0000);
+  Value res = b.select(isNan, vNan, s2);
+
+  Value shifted = b.lshr(i32_ty, res, v16);
+  Value truncated = b.trunc(i16_ty, shifted);
   return b.bitcast(truncated, bf16_ty);
 }
 
