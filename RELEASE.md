@@ -26,6 +26,8 @@ Following is the release cadence for year 2024/2025. All future release dates be
 
 | Minor Version | Release branch cut | Release date | Patch Release date |
 | --- | --- | --- | --- |
+| 3.5.0 | Sep 2025 | Oct 2025 | --- |
+| 3.4.0 | Jun 2025 | Jul 2025 | --- |
 | 3.3.0 | Feb/Mar 2025 | Apr 2025 | --- |
 | 3.2.0 | Dec 2024 | Jan 2025 | --- |
 | 3.1.0 | Jun 2024 | Oct 2024 | --- |
