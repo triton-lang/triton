@@ -411,7 +411,7 @@ public:
     // get MFMA encoding for the given number of warps
     auto retShape = oldRetType.getShape();
     auto mod = dotOp->getParentOfType<ModuleOp>();
-    int numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
+    int numWarps = ttg::lookupNumWarps(dotOp);
 
     // operands
     Value a = dotOp.getA();
@@ -563,7 +563,7 @@ public:
     auto moduleOp = dotOp->getParentOfType<ModuleOp>();
 
     ttg::CTALayoutAttr ctaLayout = ttg::getCTALayout(oldRetType.getEncoding());
-    int numWarps = ttg::TritonGPUDialect::getNumWarps(moduleOp);
+    int numWarps = ttg::lookupNumWarps(dotOp);
     int numThreads = ttg::TritonGPUDialect::getThreadsPerWarp(moduleOp);
 
     // Choose a suitable MFMA instruction for this scaled dot op.
@@ -743,7 +743,7 @@ public:
     auto moduleOp = dotOp->getParentOfType<ModuleOp>();
 
     ttg::CTALayoutAttr ctaLayout = ttg::getCTALayout(oldRetType.getEncoding());
-    unsigned numWarps = ttg::TritonGPUDialect::getNumWarps(moduleOp);
+    unsigned numWarps = ttg::lookupNumWarps(dotOp);
     if (numWarps == 1)
       return rewriter.notifyMatchFailure(dotOp,
                                          "num_warps==1 is not supported");
@@ -1013,8 +1013,7 @@ public:
       return failure();
 
     // get WMMA encoding for the given number of warps
-    auto mod = dotOp->getParentOfType<ModuleOp>();
-    int numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
+    int numWarps = ttg::lookupNumWarps(dotOp);
 
     ttg::AMDWmmaEncodingAttr wmmaEnc;
 

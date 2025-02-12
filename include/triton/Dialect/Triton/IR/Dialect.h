@@ -91,7 +91,7 @@ public:
   DialectVerifyTensorLayoutInterface(Dialect *dialect) : Base(dialect) {}
 
   virtual LogicalResult
-  verifyTensorLayout(Attribute layout, RankedTensorType type, ModuleOp module,
+  verifyTensorLayout(Attribute layout, RankedTensorType type, Operation *op,
                      function_ref<InFlightDiagnostic()> emitError) const = 0;
 };
 

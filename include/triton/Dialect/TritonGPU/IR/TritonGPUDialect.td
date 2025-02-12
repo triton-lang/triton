@@ -24,8 +24,8 @@ def TritonGPU_Dialect : Dialect {
 
     LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout);
 
-    static unsigned getNumCTAs(ModuleOp mod);
-    static unsigned getThreadsPerWarp(ModuleOp mod);
+    static int getNumCTAs(ModuleOp mod);
+    static int getThreadsPerWarp(ModuleOp mod);
 
     private:
       LinearLayoutCache llCache;
