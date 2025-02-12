@@ -10,11 +10,17 @@ import re
 import subprocess
 import functools
 from pathlib import Path
+import torch
 
 
 def min_dot_size(target: GPUTarget):
     # If some given configuration is not supported in hardware we fallback to FMA and cast arguments
     return lambda lhsType, rhsType: (1, 1, 1)
+
+
+@functools.lru_cache()
+def use_buffer_ops():
+    return os.environ.get("AMDGCN_USE_BUFFER_OPS", "0") == "1"
 
 
 @dataclass(frozen=True)
@@ -132,12 +138,14 @@ class HIPBackend(BaseBackend):
     def load_dialects(self, ctx):
         amd.load_dialects(ctx)
 
+    MAX_INT_32 = 2**31 - 1
+
     @staticmethod
     def is_within_2gb(arg):
         if hasattr(arg, "ptr_range"):
-            return arg.ptr_range() <= 2**31 - 1
-        if "torch.Tensor" in str(type(arg)) and hasattr(arg, "untyped_storage"):
-            return arg.untyped_storage().size() <= 2**31 - 1
+            return arg.ptr_range() <= HIPBackend.MAX_INT_32
+        if isinstance(arg, torch.Tensor) and hasattr(arg, "untyped_storage"):
+            return arg.untyped_storage().size() <= HIPBackend.MAX_INT_32
         return False
 
     @staticmethod
@@ -150,7 +158,9 @@ class HIPBackend(BaseBackend):
     @staticmethod
     def get_arg_specialization(arg, ty, **kwargs):
         ret = BaseBackend.get_arg_specialization(arg, ty, **kwargs)
-        if ty == "tensor" and HIPBackend.is_within_2gb(arg):
+        # Only attempt to do buffer ops specialization if buffer ops are enabled.
+        # Otherwise the is_within_2gb check is unnecessary overhead.
+        if use_buffer_ops() and ty == "tensor" and HIPBackend.is_within_2gb(arg):
             ret += "S"
         return ret
 
@@ -233,8 +243,7 @@ class HIPBackend(BaseBackend):
             if use_block_pingpong and options.num_stages == 2:
                 amd.passes.ttgpuir.add_block_pingpong(pm)
 
-        use_buffer_ops = os.environ.get("AMDGCN_USE_BUFFER_OPS", "0") == "1"
-        if use_buffer_ops:
+        if use_buffer_ops():
             amd.passes.ttgpuir.add_canonicalize_pointers(pm)
             passes.common.add_canonicalizer(pm)
             amd.passes.ttgpuir.add_convert_to_buffer_ops(pm, options.arch)
