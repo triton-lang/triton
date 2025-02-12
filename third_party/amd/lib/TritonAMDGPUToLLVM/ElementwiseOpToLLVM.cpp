@@ -85,6 +85,18 @@ Fp16_to_Fp8E5M2_RTZ(Location loc, ConversionPatternRewriter &rewriter,
           b.extract_element(i8_ty, a1, b.i32_val(3))};
 }
 
+static Value checkIsNan(TritonLLVMOpBuilder &builder, Value v) {
+  StringRef intrinsic = "llvm.is.fpclass";
+  // bits 0 and 1 indicate signaling Nan and quiet Nan, respectively
+  Location loc = builder.loc;
+  OpBuilder &rewriter = *builder.builder;
+  Value nanBits = builder.i32_val(3);
+
+  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, i1_ty,
+                                         ValueRange{v, nanBits})
+      ->getResult(0);
+}
+
 // Cast FP16 to FP8E4M3FN in saturation and round-to-nearest-even mode.
 // According to
 // https://www.opencompute.org/documents/ocp-8-bit-floating-point-specification-ofp8-revision-1-0-2023-12-01-pdf-1,
@@ -94,11 +106,7 @@ static Value
 Fp16_to_Fp8E4M3FN_RTNE_oneValue(Location loc,
                                 ConversionPatternRewriter &rewriter, Value v) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  StringRef funcName = "llvm.is.fpclass";
-  Value isNaN = LLVM::createLLVMIntrinsicCallOp(rewriter, loc, funcName, i1_ty,
-                                                {v, b.i32_val(0x3)})
-                    ->getResult(0);
-
+  Value isNaN = checkIsNan(b, v);
   // Get sign and absolute value
   Value vi16 = b.bitcast(v, i16_ty);
   Value sign =
@@ -429,18 +437,6 @@ static Value convertBf16ToFp32(Location loc,
   auto as_int32 = b.zext(i32_ty, as_int16);
   auto shifted = b.shl(i32_ty, as_int32, b.i32_val(16));
   return b.bitcast(shifted, f32_ty);
-}
-
-static Value checkIsNan(TritonLLVMOpBuilder &builder, Value v) {
-  StringRef intrinsic = "llvm.is.fpclass";
-  // bits 0 and 1 indicate signaling Nan and quiet Nan, respectively
-  Location loc = builder.loc;
-  OpBuilder &rewriter = *builder.builder;
-  Value nanBits = builder.i32_val(3);
-
-  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, i1_ty,
-                                        ValueRange{v, nanBits})
-      ->getResult(0);
 }
 
 static Value convertFp32ToBf16(Location loc,
