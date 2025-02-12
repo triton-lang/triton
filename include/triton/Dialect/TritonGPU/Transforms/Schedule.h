@@ -125,11 +125,17 @@ public:
   getOpsInOrder(scf::ForOp forOp);
   std::vector<std::pair<Operation *, unsigned>>
   createFinalSchedule(scf::ForOp forOp);
-  void dump();
-  bool empty() { return opToStageAndCluster.size() == 0; }
+
+  bool empty() const { return opToStageAndCluster.size() == 0; }
+  auto end() const { return opToStageAndCluster.end(); }
+  auto begin() const { return opToStageAndCluster.begin(); }
+
+  // Set <stage, cluster> based on CoarseSchedule.
   void serialize(scf::ForOp &forOp);
   // Create a CoarseSchedule based on forOp's <stage, cluster>.
   void deSerialize(scf::ForOp &forOp);
+
+  LLVM_DUMP_METHOD void dump();
 };
 
 // Add dependencies of anchor ops to the coarse schedule. Schedule them to

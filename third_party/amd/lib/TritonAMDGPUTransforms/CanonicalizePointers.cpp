@@ -296,7 +296,7 @@ struct FatPointers {
       return !(lhs == rhs);
     }
 
-    llvm::SmallDenseMap<StringRef, Attribute> attributes;
+    llvm::DenseMap<StringRef, Attribute> attributes;
     bool canNarrow = false;
   };
 
