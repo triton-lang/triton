@@ -25,6 +25,7 @@ add_triton_library(TritonGPUTransforms
   ReorderInstructions.cpp
   CoalesceAsyncCopy.cpp
   Utility.cpp
+  MembarAnalysis.cpp
 
   DEPENDS
   TritonGPUTransformsIncGen

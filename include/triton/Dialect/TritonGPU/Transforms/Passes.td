@@ -279,4 +279,14 @@ def TritonGPUCoalesceAsyncCopy: Pass<"tritongpu-coalesce-async-copy", "mlir::Mod
                            "mlir::triton::TritonDialect"];
 }
 
+def TritonGPUMembarAnalysis : Pass<"triton-membar-analysis", "mlir::ModuleOp"> {
+    let summary = "Perform the memory-barrier analysis";
+    let description = [{
+      This pass allocates shared memory and set barriers.
+     }];
+
+    let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                             "mlir::triton::TritonDialect"];
+}
+
 #endif

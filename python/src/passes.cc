@@ -76,6 +76,7 @@ void init_triton_passes_ttgpuir(py::module &&m) {
                             createTritonGPULoopScheduling, int);
   ADD_PASS_WRAPPER_0("add_coalesce_async_copy",
                      createTritonGPUCoalesceAsyncCopy);
+  ADD_PASS_WRAPPER_0("add_membar_analysis", createTritonGPUMembarAnalysis);
 }
 
 void init_triton_passes_convert(py::module &&m) {
