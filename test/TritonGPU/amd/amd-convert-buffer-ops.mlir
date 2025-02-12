@@ -675,3 +675,32 @@ module attributes {"ttg.compute-capability" = 0 : i32, "ttg.num-ctas" = 1 : i32,
 // CHECK:    %[[VAR_3:.*]] = amdgpu.buffer_load %[[ARG_0]][%[[VAR_2]]] : tensor<128x256xf32, #blocked>
 // CHECK:    tt.return %[[VAR_3]] : tensor<128x256xf32, #blocked>
 // CHECK:  }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK-LABEL: buffer_atomic_cas_i64
+  tt.func public @buffer_atomic_cas_i64(%arg0: !tt.ptr<i64> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32} , %arg1: !tt.ptr<i64> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}) {
+    // CHECK: %[[val:.*]] = arith.constant dense<2>
+    %cst = arith.constant dense<2> : tensor<1024xi64, #blocked>
+    // CHECK: %[[cmp:.*]] = arith.constant dense<0>
+    %cst_0 = arith.constant dense<0> : tensor<1024xi64, #blocked>
+    %c1024_i32 = arith.constant 1024 : i32
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %c1024_i32 : i32
+    // CHECK: %[[offset:.*]] = tt.make_range
+    %2 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
+    // CHECK: %[[scalar_ptr:.*]] = tt.addptr %arg0
+    %3 = tt.addptr %arg0, %1 : !tt.ptr<i64>, i32
+    %4 = tt.splat %3 : !tt.ptr<i64> -> tensor<1024x!tt.ptr<i64>, #blocked>
+    %5 = tt.addptr %4, %2 : tensor<1024x!tt.ptr<i64>, #blocked>, tensor<1024xi32, #blocked>
+    // CHECK: amdgpu.buffer_atomic_cas acq_rel, gpu, %[[cmp]], %[[val]], %[[scalar_ptr]][%[[offset]]]
+    %6 = tt.atomic_cas acq_rel, gpu, %5, %cst_0, %cst : (tensor<1024x!tt.ptr<i64>, #blocked>, tensor<1024xi64, #blocked>, tensor<1024xi64, #blocked>) -> tensor<1024xi64, #blocked>
+    %7 = tt.addptr %arg1, %1 : !tt.ptr<i64>, i32
+    %8 = tt.splat %7 : !tt.ptr<i64> -> tensor<1024x!tt.ptr<i64>, #blocked>
+    %9 = tt.addptr %8, %2 : tensor<1024x!tt.ptr<i64>, #blocked>, tensor<1024xi32, #blocked>
+    tt.store %9, %6 : tensor<1024x!tt.ptr<i64>, #blocked>
+    tt.return
+  }
+}
