@@ -22,7 +22,7 @@ Following is the Release Compatibility Matrix for Triton releases:
 
 ## Release Cadence
 
-Following is the release cadence for year 2024/2025. All dates below are tentative. Please note: Patch Releases are optional.
+Following is the release cadence for year 2024/2025. All future release dates below are tentative. Please note: Patch Releases are optional.
 
 | Minor Version | Release branch cut | Release date | Patch Release date |
 | --- | --- | --- | --- |
@@ -37,7 +37,7 @@ Following is the release cadence for year 2024/2025. All dates below are tentati
 
 After branch cut, we approach finalizing the release branch with clear criteria on what cherry picks are allowed in. Note: a cherry pick is a process to land a PR in the release branch after branch cut. These are typically limited to ensure that the team has sufficient time to complete a thorough round of testing on a stable code base.
 
-*  Regression Fixes - that address functional/performance regression against the most recent release (e.g. 3.2 for 3.3 release)
+* Regression Fixes - that address functional/performance regression against the most recent release (e.g. 3.2 for 3.3 release)
 * Critical fixes - critical fixes for severe issue such as silent incorrectness, backwards compatibility, crashes, deadlocks, (large) memory leaks
 * Fixes to new features introduced in the most recent release (e.g. 3.2 for 3.3 release)
 * Documentation improvements
