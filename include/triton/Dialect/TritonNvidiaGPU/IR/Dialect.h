@@ -65,6 +65,6 @@ bool isDistributedLayoutTMemCompatible(Operation *op,
                                        RankedTensorType tensorType,
                                        gpu::MemDescType memType);
 
-} // namespace nvidia_gpu
+} // namespace mlir::triton::nvidia_gpu
 
 #endif // TRITON_DIALECT_TRITONNVIDIAGPU_IR_DIALECT_H_
