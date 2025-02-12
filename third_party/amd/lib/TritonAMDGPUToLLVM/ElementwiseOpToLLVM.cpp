@@ -431,13 +431,15 @@ static Value convertBf16ToFp32(Location loc,
   return b.bitcast(shifted, f32_ty);
 }
 
-static Value checkNan(Location loc, RewriterBase &rewriter, Value v) {
-  std::string intrinsic = "llvm.is.fpclass";
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  // bit 0 indicates signaling nan 
-  Value sNan = b.i32_val(0);
+static Value checkIsNan(TritonLLVMOpBuilder &builder, Value v) {
+  StringRef intrinsic = "llvm.is.fpclass";
+  // bits 0 and 1 indicate signaling Nan and quiet Nan, respectively
+  Location loc = builder.loc;
+  OpBuilder &rewriter = *builder.builder;
+  Value nanBits = builder.i32_val(3);
+
   return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, i1_ty,
-                                        ValueRange{v, sNan})
+                                        ValueRange{v, nanBits})
       ->getResult(0);
 }
 
@@ -457,7 +459,7 @@ static Value convertFp32ToBf16(Location loc,
   // https://github.com/cgmillette/composable_kernel/commit/24e75bef6aa5
   // It uses less VGPR and less number of instructions compared to the
   // previous implementation
-  Value isNan = checkNan(loc, rewriter, v);
+  Value isNan = checkIsNan(b, v);
   Value v16 = b.i32_val(16);
   Value tmp = b.and_(i32_ty, b.lshr(i32_ty, as_int32, v16), b.i32_val(1));
 
