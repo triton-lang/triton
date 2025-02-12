@@ -56,12 +56,6 @@ createDistributedEncodings(MLIRContext &ctx) {
         distributedEncodings.push_back(blockedEncoding);
         distributedEncodings.push_back(
             triton::gpu::SliceEncodingAttr::get(&ctx, 0, blockedEncoding));
-        // Create an opIdx=0 and opIdx=1 encoding
-        for (unsigned opIdx = 0; opIdx < 2; ++opIdx) {
-          distributedEncodings.push_back(
-              triton::gpu::DotOperandEncodingAttr::get(&ctx, opIdx,
-                                                       blockedEncoding, 0));
-        }
       }
     }
   }
@@ -639,6 +633,17 @@ TEST_F(LinearEncodingTest, DistributedEncodingToLinearEncoding) {
   SmallVector<SmallVector<int64_t>> shapes = {{64, 128}, {256, 1024}};
   std::vector<DistributedEncodingTrait> distributedEncodings =
       createDistributedEncodings(ctx);
+
+  auto n = distributedEncodings.size();
+  for (auto i = 0; i < n; ++i) {
+    if (auto blocked = dyn_cast<triton::gpu::BlockedEncodingAttr>(
+            distributedEncodings[i])) {
+      for (unsigned opIdx = 0; opIdx < 2; ++opIdx) {
+        distributedEncodings.push_back(
+            triton::gpu::DotOperandEncodingAttr::get(&ctx, opIdx, blocked, 0));
+      }
+    }
+  }
 
   auto is_dot_op_with_block_parent = [](Attribute layout) {
     auto dot_layout = dyn_cast<triton::gpu::DotOperandEncodingAttr>(layout);
