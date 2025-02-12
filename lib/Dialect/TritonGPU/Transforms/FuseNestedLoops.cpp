@@ -826,7 +826,8 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   b.create<scf::YieldOp>(epilogue.getOutputs());
   b.createBlock(&epilogueIf.getElseRegion());
   b.create<scf::YieldOp>(usedIterArgs);
-  epilogue.replaceAllUsesWith(epilogueIf.getResults(), epilogueIf.getThenRegion());
+  epilogue.replaceAllUsesWith(epilogueIf.getResults(),
+                              epilogueIf.getThenRegion());
 
   // Finally, create the yield of the fused loop.
   SmallVector<Value> outerOuts{T, i};
