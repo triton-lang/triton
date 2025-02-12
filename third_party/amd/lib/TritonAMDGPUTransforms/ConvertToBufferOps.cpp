@@ -90,6 +90,24 @@ void inferResultRanges(ExpandDimsOp *op, ArrayRef<ConstantIntRanges> argRanges,
   setResultRange(op->getResult(), argRanges[0]);
 }
 
+/// This struct (analysis) adapt's upstream's IntegerRangeAnalysis (inferring
+/// lower/upperbounds on integer constants) to our needs.
+/// Specifically there are 2 points of extension:
+///
+/// 1. Support for GetProgramIdOp, MakeRangeOp, SplatOp, ExpandDimsOp. *Note*,
+/// upstream already supports range inference for shaped types such as tensors
+/// (here we just implement effectively implement the interfaces for our ops).
+///    * Upstream's semantics for "range of shape type" is union over ranges of
+///    elements.
+///    * We do not use tablegen to implement
+///    DeclareOpInterfaceMethods<InferIntRangeInterface, ["inferResultRanges"]>
+///    in order to keep the entire implementation contained/encapsulated.
+///
+/// 2. Support for inference "through loops". Upstream's analysis conservatively
+/// inferences [min_int, max_int] for loop carried values (and therefore loop
+/// body values). Here we attempt to do better by analysis the loop bounds and
+/// "abstractly interpreting" the loop when loop bounds are statically known.
+/// See visitRegionSuccessors.
 struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
   using dataflow::IntegerRangeAnalysis::IntegerRangeAnalysis;
 
@@ -104,21 +122,24 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
       ArrayRef<const dataflow::IntegerValueRangeLattice *> operands,
       ArrayRef<dataflow::IntegerValueRangeLattice *> results) override {
     LDBG("  Inferring ranges for " << *op << "\n");
-    auto joinCallback = [&op, &results, this](Value v,
-                                              const IntegerValueRange &attrs) {
-      auto result = dyn_cast<OpResult>(v);
-      if (!result)
-        return;
-      assert(llvm::is_contained(op->getResults(), result));
+    // This callback is almost exactly like the callback in
+    // IntegerRangeAnalysis::visitOperation except we do not "short-cicruit" the
+    // analysis by inferring a maximum range for loop results (instead we
+    // perform a check based on visit counts in visitRegionSuccessors).
+    auto joinCallback =
+        [&op, &results, this](Value v, const IntegerValueRange &incomingRange) {
+          auto result = dyn_cast<OpResult>(v);
+          if (!result)
+            return;
+          assert(llvm::is_contained(op->getResults(), result));
 
-      LDBG("  Inferred range " << attrs << "\n");
-      dataflow::IntegerValueRangeLattice *lattice =
-          results[result.getResultNumber()];
-      IntegerValueRange oldRange = lattice->getValue();
-
-      ChangeResult changed = lattice->join(attrs);
-      propagateIfChanged(lattice, changed);
-    };
+          LDBG("  Inferred range " << incomingRange << "\n");
+          dataflow::IntegerValueRangeLattice *lattice =
+              results[result.getResultNumber()];
+          IntegerValueRange oldRange = lattice->getValue();
+          ChangeResult changed = lattice->join(incomingRange);
+          propagateIfChanged(lattice, changed);
+        };
 
     if (llvm::isa<GetProgramIdOp, MakeRangeOp, SplatOp, ExpandDimsOp>(op)) {
       SmallVector<ConstantIntRanges> argRanges;
@@ -157,6 +178,34 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
     return success();
   }
 
+  /// This method (which overloads
+  /// AbstractSparseForwardDataFlowAnalysis::visitRegionSuccessors) implements
+  /// "abstract interpretation" of loops with statically known bounds in order
+  /// to infer tight ranges for loop carried values (and therefore loop body
+  /// values). By "abstract interpretation" we mean lattice states are
+  /// propagated to all region successors N times, where N is the total trip
+  /// count of the loop. Recall for scf.for, both the loop itself and the users
+  /// of the loop successors. Thus, after N propagations both loop body values
+  /// and users of loop results will have accurate ranges (assuming we have
+  /// implemented support for range analysis on the ops).
+  /// *Note*, this implementation is majority similar to
+  /// AbstractSparseForwardDataFlowAnalysis::visitRegionSuccessors (so check
+  /// there for more explanation/insight) and basically only does two things
+  /// differently:
+  ///
+  /// 1. If the branch op is a loop (LoopLikeOpInterface) then we attempt to
+  /// compute its total trip count (nested loop trip counts multiply) and
+  /// initialize a visit count to 0. Note, due to how Dataflow analysis works we
+  /// have to actually visit the loop N times for each iter_arg (each argument
+  /// lattice) so we actually track visit count for (loop, arg) not just (loop).
+  ///
+  /// 2. Before propagating, we check if we have propagated for (loop, arg) >= N
+  /// times. If so, we do not propagate (and thus the traversal converges/ends).
+  ///
+  /// Note, for loops where the trip count cannot be inferred *and* loops with a
+  /// total trip count larger than `kDefaultMaxTripCount`, fallback to
+  /// upstream's conservative inference (i.e., we infer [min_int, max_int]) for
+  /// the loop operands and all users and all users of the results of the loop.
   void visitRegionSuccessors(
       ProgramPoint *point, RegionBranchOpInterface branch,
       RegionBranchPoint successor,
@@ -166,6 +215,7 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
       lattices.push_back(
           static_cast<dataflow::IntegerValueRangeLattice *>(abstractLat));
     }
+    // Initialize loop trip counts
     LoopLikeOpInterface loop =
         llvm::dyn_cast<LoopLikeOpInterface>(branch.getOperation());
     if (loop) {
@@ -193,18 +243,14 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
            "unexpected unresolved region successors");
     for (Operation *op : predecessors->getKnownPredecessors()) {
       std::optional<OperandRange> operands;
-      // Check if the predecessor is the parent op.
       if (op == branch) {
         operands = branch.getEntrySuccessorOperands(successor);
-        // Otherwise, try to deduce the operands from a region return-like op.
       } else if (auto regionTerminator =
                      dyn_cast<RegionBranchTerminatorOpInterface>(op)) {
         operands = regionTerminator.getSuccessorOperands(successor);
       }
-      if (!operands) {
-        // We can't reason about the data-flow.
+      if (!operands)
         return setAllToEntryStates(lattices);
-      }
 
       ValueRange inputs = predecessors->getSuccessorInputs(op);
       assert(inputs.size() == operands->size() &&
@@ -242,14 +288,21 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
           continue;
         ChangeResult changed;
         if (loop && loopTripCounts[loop] > kDefaultMaxTripCount) {
-          // If the loop's tripcount is too large, "snap" arg lattices to max
-          // range (which will "snap" body values to max range as well).
+          // If the loop's tripcount is too large, infer the maximum range for
+          // the arg lattices. This will have the effect that all users will
+          // also be inferred to have maximum range and end the analysis will
+          // end (the maximum range is the "top" of the lattice and thus no
+          // further changes/updates are possible).
           changed = argLat->join(IntegerValueRange::getMaxRange(oper));
         } else {
           // Else, propagate pred operands.
           changed = argLat->join(*getLatticeElementFor(point, oper));
         }
         propagateIfChanged(argLat, changed);
+        // Only increase the loop visitation count if have actually update the
+        // lattice because otherwise we will over count the number of visits
+        // (since not all iter_arg lattices are updated/propagated on each
+        // visit).
         if (loop && changed == ChangeResult::Change)
           ++loopVisits[loopArgLat];
       }
