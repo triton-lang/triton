@@ -273,6 +273,7 @@ void init_triton_amd(py::module &&m) {
   m.def("has_matrix_core_feature", [](const std::string &arch) {
     using mlir::triton::AMD::ISAFamily;
     switch (mlir::triton::AMD::deduceISAFamily(arch)) {
+    case ISAFamily::CDNA4:
     case ISAFamily::CDNA3:
     case ISAFamily::CDNA2:
     case ISAFamily::CDNA1:

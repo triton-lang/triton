@@ -2441,7 +2441,7 @@ scan_configs = [(op, type, shape, axis, reverse, num_warps)
 negative_config = [('cumsum', 'float32', (32, 32), -1, False, 4)]
 
 
-def test_sum_dtype():
+def test_sum_dtype(device):
 
     @triton.jit
     def kernel_dtype(out_ptr, init, in_dtype: tl.constexpr, out_dtype: tl.constexpr):
@@ -2461,7 +2461,7 @@ def test_sum_dtype():
         x = tl.sum(x)
         tl.store(out_ptr, x)
 
-    out = torch.empty(1, dtype=torch.int32, device='cuda')
+    out = torch.empty(1, dtype=torch.int32, device=device)
     kernel_dtype[(1, )](out, init=1, in_dtype=tl.int1, out_dtype=None)
     assert out[0] == 32 * 32
 
@@ -2477,9 +2477,9 @@ def test_sum_dtype():
     kernel_default_int[(1, )](out)
     assert out[0] == 32 * 32
 
-    out = torch.empty(1, dtype=torch.bfloat16, device='cuda')
+    out = torch.empty(1, dtype=torch.bfloat16, device=device)
     kernel_default_float[(1, )](out)
-    torch.testing.assert_close(out[0], torch.tensor(32 * 32, dtype=torch.bfloat16, device='cuda'))
+    torch.testing.assert_close(out[0], torch.tensor(32 * 32, dtype=torch.bfloat16, device=device))
 
 
 @triton.jit
@@ -2675,7 +2675,7 @@ def test_histogram(M, N, device):
 
 
 @pytest.mark.parametrize("M, N", [(1, 64), (2, 32), (4, 16), (8, 8), (16, 4), (32, 2), (64, 1)])
-def test_scan_1d(M, N):
+def test_scan_1d(M, N, device):
 
     @triton.jit
     def scan_kernel(out_ptr, in_ptr, M: tl.constexpr, N: tl.constexpr):
@@ -2683,8 +2683,8 @@ def test_scan_1d(M, N):
         output = tl.cumsum(input).reshape([1, M]).broadcast_to([N, M])
         tl.store(out_ptr + tl.arange(0, M * N), output.reshape([M * N]))
 
-    x = torch.randint(-100, 100, (M, ), dtype=torch.int32, device='cuda')
-    output = torch.empty(M * N, dtype=torch.int32, device='cuda')
+    x = torch.randint(-100, 100, (M, ), dtype=torch.int32, device=device)
+    output = torch.empty(M * N, dtype=torch.int32, device=device)
 
     scan_kernel[(1, )](output, x, M, N)
 
@@ -4813,14 +4813,14 @@ def test_reshape_err(device):
 
 
 @pytest.mark.interpreter
-def test_tma_load_block_shape_err():
+def test_tma_load_block_shape_err(device):
 
     @triton.jit
     def kernel(ptr):
         desc = tl._experimental_make_tensor_descriptor(ptr, [128, 128], [128, 1], [1, 32])
         desc.load([0, 0])
 
-    input = torch.empty((128, 128), dtype=torch.int32, device='cuda')
+    input = torch.empty((128, 128), dtype=torch.int32, device=device)
     errc = triton.CompilationError if not is_interpreter() else InterpreterError
     with pytest.raises(errc) as e:
         kernel[(1, )](input)
@@ -4829,14 +4829,14 @@ def test_tma_load_block_shape_err():
 
 
 @pytest.mark.interpreter
-def test_tma_store_block_shape_err():
+def test_tma_store_block_shape_err(device):
 
     @triton.jit
     def kernel(ptr):
         desc = tl._experimental_make_tensor_descriptor(ptr, [128, 128], [128, 1], [8, 8])
         desc.store([0, 0], tl.zeros((1, 32), dtype=tl.int16))
 
-    input = torch.empty((128, 128), dtype=torch.int16, device='cuda')
+    input = torch.empty((128, 128), dtype=torch.int16, device=device)
     errc = triton.CompilationError if not is_interpreter() else InterpreterError
     with pytest.raises(errc) as e:
         kernel[(1, )](input)
@@ -7025,3 +7025,15 @@ def test_zero_strided_tensors(device):
         _simple_add[grid](x, x.stride(0), x.stride(1))
 
     assert torch.allclose(x, torch.ones_like(x) * c_dim)
+
+
+@pytest.mark.interpreter
+def test_aliasing(device):
+
+    @triton.jit
+    def aliasing_kernel(buffer, buffer2):
+        triton.language.store(buffer, 1)
+
+    buffer = torch.zeros(1, device=device)
+    aliasing_kernel[(1, )](buffer, buffer)
+    assert buffer[0] == 1

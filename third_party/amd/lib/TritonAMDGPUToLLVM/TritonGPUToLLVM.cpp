@@ -195,7 +195,8 @@ struct ConvertTritonAMDGPUToLLVM
     populatePatterns7(mlir::triton::populateGatherOpToLLVMPatterns,
                       commonBenefit);
 
-    AMD::populateMemoryOpToLLVMPatterns(typeConverter, patterns, AMDBenefit);
+    AMD::populateMemoryOpToLLVMPatterns(typeConverter, patterns, targetInfo,
+                                        AMDBenefit);
     mlir::triton::populateMemoryOpToLLVMPatterns(typeConverter, targetInfo,
                                                  patterns, commonBenefit);
     mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
@@ -210,8 +211,8 @@ struct ConvertTritonAMDGPUToLLVM
 
     mlir::triton::AMD::populateTritonAMDGPUToLLVMPatterns(typeConverter,
                                                           patterns, AMDBenefit);
-    mlir::triton::AMD::populateUpcastMXFPToLLVMPatterns(typeConverter, patterns,
-                                                        targetInfo, AMDBenefit);
+    mlir::triton::AMD::populateFp4ToFpToLLVMPatterns(typeConverter, patterns,
+                                                     AMDBenefit);
 
     // TODO(thomas): this should probably be done in a separate step to not
     // interfere with our own lowering of arith ops. Add arith/math's patterns
