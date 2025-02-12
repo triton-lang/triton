@@ -260,17 +260,35 @@ struct DotOpMFMAConverter {
     // Prefer tile to be skinny along inner loop dimension to minimize registers.
     const bool preferOuterLoopM (warpTile[0] >= warpTile[1]);
     const bool preferTileLargerM = !preferOuterLoopM;
-    // Calculate dot-tile size (in reps per tile).
-    auto tileSize = calcDotTileSize(mfmasPerRep, preferTileLargerM, cyclesPerMfma);
+    // Calculate dot-tile shape (in reps per tile).
+    DotTileShape tileShape = calcDotTileShape(mfmasPerRep, preferTileLargerM, cyclesPerMfma);
 
     llvm::outs() << "mfmasPerTile: "
-        << tileSize[0] * mfmasPerRep[0] << "x"
-        << tileSize[1] * mfmasPerRep[1] << "x"
+        << tileShape[0] * mfmasPerRep[0] << "x"
+        << tileShape[1] * mfmasPerRep[1] << "x"
         <<           1 * mfmasPerRep[2] << "\n";
-    const int tileSizeM = tileSize[0];
-    const int tileSizeN = tileSize[1];
-    const DotTileOrder dotTileOrder(numRepM, numRepN, tileSizeM, tileSizeM, preferOuterLoopM);
+    const int tileShapeM = tileShape[0];
+    const int tileShapeN = tileShape[1];
+    const DotTileOrder dotTileOrder(numRepM, numRepN, tileShapeM, tileShapeM, preferOuterLoopM);
 
+    /*
+    For correctly labeling load A,B still need to test the following:
+    different transposes.
+      - TN - works
+      - NT
+      - TT
+    different dot-tile shapes.
+     - 2x2 - works
+     - 2x4
+     - 4x2
+    different kWidth
+     - 2 - works
+    different preferOuterLoopM
+     - default worked
+    different precision?
+     - fp16 works
+     - fp8 ?
+    */
     // Extract slices for A operands.
     int64_t elementsPerSliceM = refinedShapeCD[0];
     int64_t elementsPerSliceN = refinedShapeCD[1];
@@ -289,6 +307,19 @@ struct DotOpMFMAConverter {
           loc, Type{extractSliceTypeA}, Value{a},
           DenseI64ArrayAttr::get(ctx, {shiftM, shiftK})
           );
+        // Add dot-tile info to local_load's slice;
+        // this specifies which dot-tile this load is needed for.
+        int32_t tileM = i / tileShapeM; // TODO * tile maybe
+        int32_t tileN = -1;
+        int32_t tileK = k;
+        int32_t tileSerial = dotTileOrder.getOuterTileM() ? tileM * dotTileOrder.getNumTilesN() : tileM;
+        tileSerial += k * dotTileOrder.getNumTilesM() * dotTileOrder.getNumTilesN();
+        int32_t elementM = i % tileShapeM; // dots are n-major within tile
+        int32_t elementN = -1;
+        int32_t elementK = 0;
+        int32_t elementSerial = elementM * tileShapeN; // dots are n-major within tile
+        auto dotTileAttr = triton::amdgpu::DotTileAttr::get(ctx, tileM, tileN, tileK, tileSerial, elementM, elementN, elementK, elementSerial);
+        extract->setAttr(triton::amdgpu::DotTileAttr::getMnemonic(), dotTileAttr);
         subtilesK.push_back(extract);
       }
       subtilesA.push_back(subtilesK);
@@ -307,6 +338,19 @@ struct DotOpMFMAConverter {
         auto extract = rewriter.create<amdgpu::ExtractSliceOp>(
           loc, Type{extractSliceTypeB}, Value{b},
           DenseI64ArrayAttr::get(ctx, {shiftK, shiftN}));
+        // Add dot-tile info to local_load's slice;
+        // this specifies which dot-tile this load is needed for.
+        int32_t tileM = -1;
+        int32_t tileN = j / tileShapeN; // TODO * tile maybe
+        int32_t tileK = k;
+        int32_t tileSerial = dotTileOrder.getOuterTileM() ? tileN : tileN * dotTileOrder.getNumTilesM();
+        tileSerial += k * dotTileOrder.getNumTilesM() * dotTileOrder.getNumTilesN();
+        int32_t elementM = -1;
+        int32_t elementN = j % tileShapeN; // dots are n-major within tile
+        int32_t elementK = 0;
+        int32_t elementSerial = elementN; // dots are n-major within tile
+        auto dotTileAttr = triton::amdgpu::DotTileAttr::get(ctx, tileM, tileN, tileK, tileSerial, elementM, elementN, elementK, elementSerial);
+        extract->setAttr(triton::amdgpu::DotTileAttr::getMnemonic(), dotTileAttr);
         subtilesK.push_back(extract);
       }
       subtilesB.push_back(subtilesK);
@@ -323,8 +367,8 @@ struct DotOpMFMAConverter {
       for (int tileInnerIdx = 0; tileInnerIdx < dotTileOrder.getNumTilesInner(); ++tileInnerIdx) {
         const int tileStartM = dotTileOrder.getTileStartM(tileOuterIdx, tileInnerIdx);
         const int tileStartN = dotTileOrder.getTileStartN(tileOuterIdx, tileInnerIdx);
-        for (int m = tileStartM; m < tileStartM + tileSizeM; ++m) {
-          for (int n = tileStartN; n < tileStartN + tileSizeN; ++n) {
+        for (int m = tileStartM; m < tileStartM + tileShapeM; ++m) {
+          for (int n = tileStartN; n < tileStartN + tileShapeN; ++n) {
             SmallVector<int64_t> offset = {m * elementsPerSliceM,
                                            n * elementsPerSliceN};
             auto refinedTensorC = rewriter.create<triton::amdgpu::ExtractSliceOp>(
@@ -344,21 +388,22 @@ struct DotOpMFMAConverter {
           const int tileStartN = dotTileOrder.getTileStartN(tileOuterIdx, tileInnerIdx);
           int32_t elementSerial = 0;
           // Iterate over dots within dot-tile.
-          for (int m = tileStartM; m < tileStartM + tileSizeM; ++m) {
-            for (int n = tileStartN; n < tileStartN + tileSizeN; ++n) {
-              int32_t tileM = tileStartM / tileSizeM;
-              int32_t tileN = tileStartN / tileSizeN;
-              int32_t tileK = k;
-              int32_t elementM = m - tileStartM;
-              int32_t elementN = n - tileStartN;
-              int32_t elementK = 0;
-              auto dotTileAttr = triton::amdgpu::DotTileAttr::get(ctx, tileM, tileN, tileK, tileSerial, elementM, elementN, elementK, elementSerial);
+          for (int m = tileStartM; m < tileStartM + tileShapeM; ++m) {
+            for (int n = tileStartN; n < tileStartN + tileShapeN; ++n) {
               auto refinedTensorA = subtilesA[k][m];
               auto refinedTensorB = subtilesB[k][n];
               auto dotOp = rewriter.create<tt::DotOp>(
                   loc, refinedTensorTypeD,
                   ValueRange{refinedTensorA, refinedTensorB,
                   refinedDotValues[int32_t(m*numRepN+n)]}, dotAttrs);
+              // Add dot-tile info to dot.
+              int32_t tileM = tileStartM / tileShapeM;
+              int32_t tileN = tileStartN / tileShapeN;
+              int32_t tileK = k;
+              int32_t elementM = m - tileStartM;
+              int32_t elementN = n - tileStartN;
+              int32_t elementK = 0;
+              auto dotTileAttr = triton::amdgpu::DotTileAttr::get(ctx, tileM, tileN, tileK, tileSerial, elementM, elementN, elementK, elementSerial);
               dotOp->setAttr(triton::amdgpu::DotTileAttr::getMnemonic(), dotTileAttr);
               refinedDotValues[int32_t(m*numRepN+n)] = dotOp;
               elementSerial++;
