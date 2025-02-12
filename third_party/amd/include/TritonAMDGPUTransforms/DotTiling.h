@@ -59,13 +59,13 @@ unsigned calcCyclesPerMfma(AMDMfmaEncodingAttr mfmaLayout, DotOp dotOp) {
       * maybeMfmaInsn->getNDim()
       * maybeMfmaInsn->getKDim();
   unsigned cyclesPerMfma = static_cast<unsigned>(totalOps / opsPerCycle);
-  llvm::outs() << maybeMfmaInsn->getInsnName() << " = " << cyclesPerMfma << " cycles\n";
+  DBGS() << maybeMfmaInsn->getInsnName() << " = " << cyclesPerMfma << " cycles\n";
   return cyclesPerMfma;
 }
 
 /*
 Calculate how many mfmas are in a rep, e.g. 1x1x2.
-// TODO - is there a more direct method for this?
+// TODO(dtanner) Is there a more direct method for this?
 */
 SmallVector<unsigned, 3> calcMfmasPerRep(
     SmallVector<int64_t> ctaTile,
@@ -92,46 +92,53 @@ SmallVector<unsigned, 3> calcMfmasPerRep(
   return mfmasPerRep;
 }
 
-// TODO(guacamoleo) - we also need to detect whether the a or b operands of a tile are already loaded
-// into registers, e.g. for FA, and we want to choose the tile shape (small improvement)
-// and tile order (rows vs colums which will be a large improvement).
-
 /*
- Returns the dot tile shape (in number of reps, not number of mfmas);
- typical shapes when mfmasPerRep = 1x1x2 for b128 and localLoadIssueRate=32 for b128
- 2x2 for fp16 (128 mfma cycles per tile) and
- 4x4 for fp8 (256 mfma cycles per tile).
- 
- Tile shape is chosen so that
- (1) A tile's worth of local_load_a or local_load_b can 
-     can be issued during a tile's worth of mfmas, and
- (2) A tile's worth of mfmas hides the ds_read data latency.
- Args:
-  - mfmasPerRep - shape of number of mfmas in decomposed dot, e.g. 1x1x2.
-  - preferLargerM - prefer M > N if not square.
-  - cyclesPerMfma - how many cycles does mfma take in total.
-  - localLoadIssueRate - cycles between issuing consecutive ds_reads to not overrun hardware queues.
-      This is estimated to be b128 -> 32 cycles, b64 -> 16 cycles, b32 -> 8 cycles.
-  - localLoadDataLatency - cycles between issuing ds_read and waiting for data; rounded up to pow2.
+  Returns the ideal dot-tile shape (in number of reps, not number of mfmas).
+
+  The dot-tile shape is chosen such that:
+  (1) A dot-tile's worth of local_load_a and local_load_b can 
+      can be issued during a dot-tile's worth of mfmas.
+  (2) A dot-tile's worth of dot cycles hides the local_load data latency.
+  (3) The dot-tile is as small and square as possible.
+
+    Typical shapes when mfmasPerRep = 1x1x2 for b128 and localLoadIssueRate=32 for b128
+    - 2x2 for fp16 (128 mfma cycles per tile) and
+    - 4x4 for fp8 (256 mfma cycles per tile).
+
+  Args:
+    - mfmasPerRep - shape of number of mfmas in decomposed dot, e.g. 1x1x2.
+    - preferLargerM - prefer M > N if not square.
+    - cyclesPerMfma - how many cycles does mfma take in total.
+    - localLoadIssueRate - cycles between issuing consecutive ds_reads to not overrun hardware queues.
+        This is estimated to be b128 -> 32 cycles, b64 -> 16 cycles, b32 -> 8 cycles.
+        Default is 32 cycles, which assumes all ds_read_b128.
+    - localLoadDataLatency - cycles between issuing ds_read and waiting for data; rounded up to pow2.
+  
   Notes:
-  The intended scheduling of tiles-of-reps-of-mfmas is 
+   - The intended scheduling of dot-tiles is
   --------------------------------
-  local_load_a[n]
-  MFMA_Tile[n-3] // a can be loaded during tile
-  --------------------------------
+  local_load_a[n] // a,b loads can be issued during dot-tile without any loss of performance.
   local_load_b[n]
-  MFMA_Tile[n-2] // b can be loaded during tile
+  DotTile[n-2] 
   --------------------------------
-  MFMA_Tile[n-1] // load data latency hiding
+  DotTile[n-1] // a,b load data latency hiding.
   --------------------------------
-  MFMA_Tile[n] // all a,b data is ready by the first mfma of tile.
+  DotTile[n]   // all a,b data is ready by the first mfma of tile.
   --------------------------------
-  This can be further refined if the data latency becomes much larger than
+
+    - Dot-tile shapes can be further refined if the data latency becomes much larger than
   the issue rate; in this case we can remove the condition that one tile
   hides all the data latency (which could make the tiles huge and waste registers),
   and intead local load issue rate is the only criteria and we retroactively calculate
   how many tiles are needed to hide the data latency.
-  At this time it is assumed that dot-tile-shape[k] = 1 since K's don't interact with eachother.
+    - Dot-tile shapes can be further refined so that a dot-tile only needs to load a or b,
+  and not both a and b.
+    - At this time it is assumed that dot-tile-shape[K] = 1 since K's don't interact with eachother.
+    - It is assumed that mfmasPerRep = 1x1x2 means that 1 local_load_a + 1 local_load_b
+  supplies operands for 2 mfmas, i.e. a single mfmasPerRep requires 1 local_load_a and 1 b.
+  Therefore, if for some reason the local_loads per mfmaPerRep changes,
+  this algoirthm needs to be updated so it can correctly calculate how many local_loads
+  are required to supply the dot-tile of mfmas.
 */
 typedef SmallVector<unsigned, 2> DotTileShape;
 DotTileShape calcDotTileShape(
@@ -141,13 +148,15 @@ DotTileShape calcDotTileShape(
   unsigned localLoadIssueRate = 32,
   unsigned localLoadDataLatency = 128
 ) {
-  DotTileShape tileShape = {1, 1, 1};
+  DotTileShape tileShape = {1, 1};
   int64_t numMfmas = tileShape[0]*tileShape[1]*mfmasPerRep[0]*mfmasPerRep[1]*mfmasPerRep[2];
   int64_t mfmaCycles = numMfmas * cyclesPerMfma;
-  int64_t numLoads = std::max(tileShape[0]*mfmasPerRep[0], tileShape[1]*mfmasPerRep[1]);
+  int64_t numLoads = tileShape[0]*mfmasPerRep[0] + tileShape[1]*mfmasPerRep[1];
   int64_t loadIssueCycles = numLoads * localLoadIssueRate;
+  // Keep on increasing the dimension of the tile
   while (mfmaCycles < loadIssueCycles || mfmaCycles < localLoadDataLatency) {
-    if (tileShape[0]*mfmasPerRep[0] < tileShape[1]*mfmasPerRep[1] || preferLargerM) {
+    if ((tileShape[0]*mfmasPerRep[0] < tileShape[1]*mfmasPerRep[1])
+        || ((tileShape[0]*mfmasPerRep[0] == tileShape[1]*mfmasPerRep[1]) && preferLargerM)) {
       tileShape[0] *= 2;
     } else {
       tileShape[1] *= 2;
