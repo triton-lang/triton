@@ -164,7 +164,7 @@ loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
           finalUser = op;
           distance++;
         }
-        for (Value operand : op->getOperands()) {
+        for (Value operand : getNestedOperands(op)) {
           if (isa<mlir::triton::DotOpInterface>(op)) {
             // Heuristic: only pipeline A and B operands of the dot op.
             if (operand == op->getOperand(2))
