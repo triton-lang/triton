@@ -73,13 +73,13 @@ SmallVector<unsigned, 3> calcMfmasPerRep(
     SmallVector<int64_t> numReps,
     SmallVector<unsigned> mfmaShape
 ) {
-  // Tile size per warp.
+  // Tile shape per warp.
   SmallVector<int64_t, 3> warpTile = {
     ctaTile[0] / warpsPerCta[0],
     ctaTile[1] / warpsPerCta[1],
     ctaTile[2],
   };
-  // Tile size per rep.
+  // Tile shape per rep.
   SmallVector<int64_t, 3> repTile = {
     warpTile[0] / numReps[0],
     warpTile[1] / numReps[1],
@@ -97,17 +97,17 @@ SmallVector<unsigned, 3> calcMfmasPerRep(
 // and tile order (rows vs colums which will be a large improvement).
 
 /*
- Returns the dot tile size (in number of reps, not number of mfmas);
- typical sizes when mfmasPerRep = 1x1x2 for b128 and localLoadIssueRate=32 for b128
+ Returns the dot tile shape (in number of reps, not number of mfmas);
+ typical shapes when mfmasPerRep = 1x1x2 for b128 and localLoadIssueRate=32 for b128
  2x2 for fp16 (128 mfma cycles per tile) and
  4x4 for fp8 (256 mfma cycles per tile).
  
- Tile size is chosen so that
+ Tile shape is chosen so that
  (1) A tile's worth of local_load_a or local_load_b can 
      can be issued during a tile's worth of mfmas, and
  (2) A tile's worth of mfmas hides the ds_read data latency.
  Args:
-  - mfmasPerRep - 3D shape of number of mfmas in decomposed dot, e.g. 1x1x2.
+  - mfmasPerRep - shape of number of mfmas in decomposed dot, e.g. 1x1x2.
   - preferLargerM - prefer M > N if not square.
   - cyclesPerMfma - how many cycles does mfma take in total.
   - localLoadIssueRate - cycles between issuing consecutive ds_reads to not overrun hardware queues.
@@ -131,31 +131,33 @@ SmallVector<unsigned, 3> calcMfmasPerRep(
   hides all the data latency (which could make the tiles huge and waste registers),
   and intead local load issue rate is the only criteria and we retroactively calculate
   how many tiles are needed to hide the data latency.
+  At this time it is assumed that dot-tile-shape[k] = 1 since K's don't interact with eachother.
 */
-SmallVector<unsigned, 2> calcDotTileSize(
-  SmallVector<unsigned, 3> mfmasPerRep, // = 16x16x64 / 16x16x32 = 1x1x2; served by 1 a,b load
+typedef SmallVector<unsigned, 2> DotTileShape;
+DotTileShape calcDotTileShape(
+  SmallVector<unsigned, 3> mfmasPerRep, // = 16x16x64 / 16x16x32 = 1x1x2
   bool preferLargerM,
   unsigned cyclesPerMfma = 8,
   unsigned localLoadIssueRate = 32,
   unsigned localLoadDataLatency = 128
 ) {
-  SmallVector<unsigned, 2> tileSize = {1, 1};
-  int64_t numMfmas = tileSize[0]*tileSize[1]*mfmasPerRep[0]*mfmasPerRep[1]*mfmasPerRep[2];
+  DotTileShape tileShape = {1, 1, 1};
+  int64_t numMfmas = tileShape[0]*tileShape[1]*mfmasPerRep[0]*mfmasPerRep[1]*mfmasPerRep[2];
   int64_t mfmaCycles = numMfmas * cyclesPerMfma;
-  int64_t numLoads = std::max(tileSize[0]*mfmasPerRep[0], tileSize[1]*mfmasPerRep[1]);
+  int64_t numLoads = std::max(tileShape[0]*mfmasPerRep[0], tileShape[1]*mfmasPerRep[1]);
   int64_t loadIssueCycles = numLoads * localLoadIssueRate;
   while (mfmaCycles < loadIssueCycles || mfmaCycles < localLoadDataLatency) {
-    if (tileSize[0]*mfmasPerRep[0] < tileSize[1]*mfmasPerRep[1] || preferLargerM) {
-      tileSize[0] *= 2;
+    if (tileShape[0]*mfmasPerRep[0] < tileShape[1]*mfmasPerRep[1] || preferLargerM) {
+      tileShape[0] *= 2;
     } else {
-      tileSize[1] *= 2;
+      tileShape[1] *= 2;
     }
-    numMfmas = tileSize[0]*tileSize[1]*mfmasPerRep[0]*mfmasPerRep[1]*mfmasPerRep[2];
+    numMfmas = tileShape[0]*tileShape[1]*mfmasPerRep[0]*mfmasPerRep[1]*mfmasPerRep[2];
     mfmaCycles = numMfmas * cyclesPerMfma;
-    numLoads = tileSize[0]*mfmasPerRep[0]+tileSize[1]*mfmasPerRep[1];
+    numLoads = tileShape[0]*mfmasPerRep[0]+tileShape[1]*mfmasPerRep[1];
     loadIssueCycles = numLoads * localLoadIssueRate;
   };
-  return tileSize;
+  return tileShape;
 }
 
 /*
@@ -166,70 +168,79 @@ SmallVector<unsigned, 2> calcDotTileSize(
   Args:
    - inputNumRepM - total number of [decomposed] dot ops along m.
    - inputNumRepN - total number of [decomposed] dot ops along n.
-   - inputTileSizeM - number of [decomposed] dot ops along m per tile.
-   - inputTileSizeN - number of [decomposed] dot ops along n per tile.
+   - inputTileShapeM - number of [decomposed] dot ops along m per tile.
+   - inputTileShapeN - number of [decomposed] dot ops along n per tile.
    - inputOuterLoopM - should be set to (warpTileM >= warpTileN). True means m should be
        outer loop of mfma ops so that inner loop is smaller dimension which leads to smallest
        number of registers carrying A,B operands.
-  E.g. numRep = 8x4, tileSize=2x2.
+  E.g. numRep = 8x4, tileShape=2x2.
 */
 struct DotTileOrder {
   const int numRepM;
   const int numRepN;
-  const int tileSizeM;
-  const int tileSizeN;
+  const int tileShapeM;
+  const int tileShapeN;
   const int numTilesM;
   const int numTilesN;
   bool outerTileM;
-  int tileSizeOuter;
-  int tileSizeInner;
+  int tileShapeOuter;
+  int tileShapeInner;
   int numTilesOuter;
   int numTilesInner;
   explicit DotTileOrder(int inputNumRepM, int inputNumRepN,
-                     int inputTileSizeM, int inputTileSizeN,
+                     int inputTileShapeM, int inputTileShapeN,
                      bool inputOuterLoopM)
       : numRepM(inputNumRepM),
         numRepN(inputNumRepN),
-        tileSizeM(inputTileSizeM),
-        tileSizeN(inputTileSizeN),
-        numTilesM(numRepM / tileSizeM),
-        numTilesN(numRepN / tileSizeN),
+        tileShapeM(inputTileShapeM),
+        tileShapeN(inputTileShapeN),
+        numTilesM(numRepM / tileShapeM),
+        numTilesN(numRepN / tileShapeN),
         outerTileM(inputOuterLoopM) {
     // Num mfmas must evenly divide into tiles.
-    assert(numTilesM * tileSizeM == numRepM);
-    assert(numTilesN * tileSizeN == numRepN);
+    assert(numTilesM * tileShapeM == numRepM);
+    assert(numTilesN * tileShapeN == numRepN);
     // Assign M and N to be outer vs inner tile loop.
     if (outerTileM) {
       // M is tile of outer loop.
-      tileSizeOuter = tileSizeM;
-      tileSizeInner = tileSizeN;
+      tileShapeOuter = tileShapeM;
+      tileShapeInner = tileShapeN;
       numTilesOuter = numTilesM;
       numTilesInner = numTilesN;
     } else {
       // N is tile of outer loop.
-      tileSizeOuter = tileSizeN;
-      tileSizeInner = tileSizeM;
+      tileShapeOuter = tileShapeN;
+      tileShapeInner = tileShapeM;
       numTilesOuter = numTilesN;
       numTilesInner = numTilesM;
     }
   }
-  int getTileSizeM() const { return tileSizeM; }
-  int getTileSizeN() const { return tileSizeN; }
+  int getTileShapeM() const { return tileShapeM; }
+  int getTileShapeN() const { return tileShapeN; }
   int getNumTilesOuter() const { return numTilesOuter; }
   int getNumTilesInner() const { return numTilesInner; }
   int getTileStartM(int tileOuterIdx, int tileInnerIdx) const {
     if (outerTileM) {
-      return tileOuterIdx * tileSizeOuter; // M is outer tile loop.
+      return tileOuterIdx * tileShapeOuter; // M is outer tile loop.
     } else {
-      return tileInnerIdx * tileSizeInner; // M is inner tile loop.
+      return tileInnerIdx * tileShapeInner; // M is inner tile loop.
     }
   }
   int getTileStartN(int tileOuterIdx, int tileInnerIdx) const {
     if (outerTileM) {
-      return tileInnerIdx * tileSizeInner; // N is inner tile loop.
+      return tileInnerIdx * tileShapeInner; // N is inner tile loop.
     } else {
-      return tileOuterIdx * tileSizeOuter; // N is outer tile loop.
+      return tileOuterIdx * tileShapeOuter; // N is outer tile loop.
     }
+  }
+  int getNumTilesM() const {
+    return numTilesM;
+  }
+  int getNumTilesN() const {
+    return numTilesN;
+  }
+  int getOuterTileM() const {
+    return outerTileM;
   }
 };
 
