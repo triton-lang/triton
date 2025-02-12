@@ -580,7 +580,7 @@ def test_within_2gb(device, fresh_triton_cache) -> None:
             # In warmup we assume that the pointer range is 32 bits
             kernel_add.warmup(torch.float32, grid=(1, ))
             assert pointer_range_32 == pointer_range
-            # Torch tensor > 2GB. This should never hit.
+            # Torch tensor > 2GB
             kernel_add[(1, 0)](torch.empty(2**31, dtype=torch.int8, device=device))
             assert len(pointer_range_32) == 0
             # Torch tensor <= 2GB
