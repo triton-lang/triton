@@ -23,6 +23,7 @@ using ::mlir::LLVM::getSharedMemoryBase;
 using ::mlir::LLVM::AMD::getVectorSize;
 using ::mlir::LLVM::AMD::llLoad;
 using ::mlir::LLVM::AMD::llStore;
+using ::mlir::triton::AMD::ISAFamily;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 
 namespace {
@@ -408,25 +409,18 @@ struct AsyncCopyGlobalToLocalOpConversion
 
   bool supportsLoadWidth(unsigned bits,
                          const AMD::TargetInfo &targetInfo) const {
-    llvm::SmallSetVector<unsigned, 10> supportedWidths;
-    using mlir::triton::AMD::ISAFamily;
     switch (targetInfo.getISAFamily()) {
     case ISAFamily::CDNA1:
     case ISAFamily::CDNA2:
     case ISAFamily::CDNA3:
-      supportedWidths.insert(8);
-      supportedWidths.insert(16);
-      supportedWidths.insert(32);
-      if (targetInfo.getGPUKind() == llvm::AMDGPU::GPUKind::GK_GFX950) {
-        supportedWidths.insert(96);
-        supportedWidths.insert(128);
-      }
-      break;
+      return llvm::is_contained({32, 16, 8}, bits);
+    case ISAFamily::CDNA4:
+      return llvm::is_contained({128, 96, 32, 16, 8}, bits);
     default:
-      return false;
+      break;
     }
 
-    return supportedWidths.contains(bits);
+    return false;
   }
 
   LogicalResult
@@ -517,7 +511,7 @@ struct AsyncCopyGlobalToLocalOpConversion
 
     Value cacheModifiers =
         b.i32_val(mlir::LLVM::AMD::getCtrlBitsForCacheModifierOnTarget(
-            op.getCache(), false, targetInfo));
+            op.getCache(), /*isLoad=*/true, targetInfo));
 
     Value llMask = adaptor.getMask();
     SmallVector<Value> maskElems;
@@ -1121,10 +1115,17 @@ struct AtomicCASOpConversion
   }
 };
 
-bool supportsGlobalAtomicF16PackedAndDpp(triton::AMD::ISAFamily isaFamily) {
-  return isaFamily == triton::AMD::ISAFamily::CDNA1 ||
-         isaFamily == triton::AMD::ISAFamily::CDNA2 ||
-         isaFamily == triton::AMD::ISAFamily::CDNA3;
+bool supportsGlobalAtomicF16PackedAndDpp(ISAFamily isaFamily) {
+  switch (isaFamily) {
+  case ISAFamily::CDNA1:
+  case ISAFamily::CDNA2:
+  case ISAFamily::CDNA3:
+  case ISAFamily::CDNA4:
+    return true;
+  default:
+    break;
+  }
+  return false;
 }
 
 Value generateI32DppMove(PatternRewriter &rewriter, Value val, int dppCtrl) {
@@ -1285,11 +1286,12 @@ struct AtomicRMWOpConversion
     int numElems = 1;
     Type packF16Ty = vec_ty(valueElemTy, 2);
 
-    // CDNA3 arch allows to accelerate its atomics with LDS reduction algorithm,
-    // which is only applicable for atomics with no return. Otherwise we have to
-    // deal with an additional overhead.
+    // CDNA3/CDNA4 arch allows to accelerate its atomics with LDS reduction
+    // algorithm, which is only applicable for atomics with no return. Otherwise
+    // we have to deal with an additional overhead.
     bool enableIntraWaveReduce =
-        targetInfo.getISAFamily() == triton::AMD::ISAFamily::CDNA3 &&
+        llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
+                           targetInfo.getISAFamily()) &&
         tensorTy && opResult.use_empty();
 
     // TODO: support data types less than 32 bits
@@ -1649,17 +1651,15 @@ struct AsyncWaitOpConversion : public ConvertOpToLLVMPattern<AsyncWaitOp> {
   LogicalResult
   matchAndRewrite(AsyncWaitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-
-    using mlir::triton::AMD::ISAFamily;
-
     switch (targetInfo.getISAFamily()) {
     case ISAFamily::CDNA1:
     case ISAFamily::CDNA2:
     case ISAFamily::CDNA3:
+    case ISAFamily::CDNA4:
       break;
     default:
       return rewriter.notifyMatchFailure(
-          op, "Only supported on target architecture");
+          op, "Only supported on CDNA target architecture");
     }
 
     auto loc = op->getLoc();

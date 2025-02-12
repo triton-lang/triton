@@ -26,7 +26,8 @@ using namespace mlir;
 // implementation.
 
 namespace mlir::triton {
-void setNumGeneratedMMAs(DotOp op, size_t mmaCount, unsigned m, unsigned n,
+template <typename DotOpType>
+void setNumGeneratedMMAs(DotOpType op, size_t mmaCount, unsigned m, unsigned n,
                          unsigned k, Type elementType) {
   auto *ctx = op->getContext();
   auto mmaType = RankedTensorType::get({m, n, k}, elementType);
@@ -37,6 +38,12 @@ void setNumGeneratedMMAs(DotOp op, size_t mmaCount, unsigned m, unsigned n,
     schedHint.setNumMMAsAttr(counterAttr);
   });
 }
+
+template void setNumGeneratedMMAs(triton::DotOp op, size_t mmaCount, unsigned m,
+                                  unsigned n, unsigned k, Type elementType);
+template void setNumGeneratedMMAs(triton::DotScaledOp op, size_t mmaCount,
+                                  unsigned m, unsigned n, unsigned k,
+                                  Type elementType);
 
 template <typename LoadOpType>
 void setNumGeneratedGlobalLoads(LoadOpType op, size_t globalLoadsCount,
@@ -86,8 +93,8 @@ void setNumGeneratedDsReads(gpu::LocalLoadOp op, size_t dsReadsCount,
   });
 }
 
-void storeOpConversionCallback(triton::gpu::LocalStoreOp op,
-                               size_t localStoreOpCount, Type type) {
+void storeOpSchedAnnotations(triton::gpu::LocalStoreOp op,
+                             size_t localStoreOpCount, Type type) {
   MLIRContext *ctx = op->getContext();
   auto counterAttr =
       triton::amdgpu::InstCounterAttr::get(ctx, localStoreOpCount, type);

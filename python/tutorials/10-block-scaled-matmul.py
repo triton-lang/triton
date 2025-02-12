@@ -324,17 +324,16 @@ if __name__ == "__main__":
     parser.add_argument("--format", type=str, choices=["mxfp4", "nvfp4", "mxfp8"], default="nvfp4")
     args = parser.parse_args()
 
-    torch.manual_seed(42)
-
     if not supports_block_scaling():
         print("⛔ This example requires GPU support for block scaled matmul")
-        exit(1)
+    else:
+        torch.manual_seed(42)
 
-    validate_block_scaled(8192, 8192, 8192, block_scale_type=args.format)
+        validate_block_scaled(8192, 8192, 8192, block_scale_type=args.format)
 
-    if args.bench:
-        proton.start("block_scaled_matmul", hook="triton")
-        for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
-            bench_block_scaled(K, reps=10000, block_scale_type=args.format)
-        proton.finalize()
-        show_profile("block_scaled_matmul")
+        if args.bench:
+            proton.start("block_scaled_matmul", hook="triton")
+            for K in range(args.K_range[0], args.K_range[1] + 1, args.K_step):
+                bench_block_scaled(K, reps=10000, block_scale_type=args.format)
+            proton.finalize()
+            show_profile("block_scaled_matmul")

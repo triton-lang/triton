@@ -548,8 +548,7 @@ struct TCGen5MMAScaledOpConversion
                              {(unsigned)mmaSizeN, (unsigned)mmaSizeK},
                              numBitsPerElementB, rewriter, loc);
 
-    // TODO: Support accumulator init optimization for scaled dot
-    Value useInitAcc = tb.int_val(1, 1);
+    Value useInitAcc = op.getUseD();
     // Only run mma on one thread. We currently use elect as ptxas is not able
     // to detect that tid.x == 0 is true only for 1 thread.
     Value pred =

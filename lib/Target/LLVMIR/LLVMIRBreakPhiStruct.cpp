@@ -17,7 +17,7 @@ static bool processPhiStruct(PHINode *phiNode) {
   unsigned numOperands = phiNode->getNumIncomingValues();
   unsigned numScalarEl = STy->getNumElements();
   Value *newStruct = UndefValue::get(STy);
-  builder.SetInsertPoint(phiNode->getParent()->getFirstNonPHI());
+  builder.SetInsertPoint(phiNode->getParent()->getFirstNonPHIIt());
   llvm::IRBuilderBase::InsertPoint insertInsertPt = builder.saveIP();
   for (unsigned i = 0; i < numScalarEl; i++) {
     builder.SetInsertPoint(phiNode);

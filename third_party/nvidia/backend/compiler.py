@@ -231,7 +231,6 @@ class CUDABackend(BaseBackend):
         passes.ttir.add_combine(pm)
         passes.ttir.add_reorder_broadcast(pm)
         passes.common.add_cse(pm)
-        passes.common.add_licm(pm)
         passes.common.add_symbol_dce(pm)
         passes.ttir.add_loop_unroll(pm)
         pm.run(mod)
@@ -260,11 +259,18 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_optimize_dot_operands(pm, capability >= 80)
         passes.common.add_cse(pm)
         if capability // 10 in [8, 9]:
+            passes.ttgpuir.add_fuse_nested_loops(pm)
+            passes.common.add_canonicalizer(pm)
+            passes.common.add_licm(pm)
             passes.ttgpuir.add_optimize_accumulator_init(pm)
+            passes.common.add_canonicalizer(pm)
             passes.ttgpuir.add_combine_tensor_select_and_if(pm)
             passes.ttgpuir.add_loop_scheduling(pm, opt.num_stages)
             passes.ttgpuir.add_pipeline(pm, opt.num_stages)
-        if capability // 10 >= 10:
+        elif capability // 10 >= 10:
+            passes.ttgpuir.add_fuse_nested_loops(pm)
+            passes.common.add_canonicalizer(pm)
+            passes.common.add_licm(pm)
             passes.ttgpuir.add_optimize_accumulator_init(pm)
             passes.ttgpuir.add_loop_scheduling(pm, opt.num_stages)
             passes.ttgpuir.add_pipeline(pm, opt.num_stages)
@@ -272,6 +278,8 @@ class CUDABackend(BaseBackend):
             nvidia.passes.ttnvgpuir.add_promote_lhs_to_tmem(pm)
             nvidia.passes.ttnvgpuir.add_keep_acc_in_tmem(pm)
             passes.common.add_canonicalizer(pm)
+        else:
+            passes.common.add_licm(pm)
         passes.ttgpuir.add_prefetch(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, capability >= 80)
         passes.ttgpuir.add_coalesce_async_copy(pm)

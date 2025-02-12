@@ -200,8 +200,6 @@ StringRef getAMDArch(Operation *module);
 std::optional<mlir::triton::gpu::SwizzledSharedEncodingAttr>
 getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible);
 
-bool canUseMMAv3Pipelining(Operation *loadOp);
-
 // Convert \param op operands and results to layout \param encoding.
 void convertOpEncoding(Attribute encoding, Operation *op);
 

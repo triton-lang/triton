@@ -703,14 +703,14 @@ scf::IfOp replaceIfOpWithNewSignature(
   // Create a new loop before the existing one, with the extra operands.
   auto resultTypes = llvm::to_vector<4>(ifOp.getResults().getTypes());
   resultTypes.append(newResultTypes.begin(), newResultTypes.end());
-  scf::IfOp newIf = rewriter.create<scf::IfOp>(
-      ifOp.getLoc(), resultTypes, ifOp.getCondition(), /*withElse=*/true);
+  scf::IfOp newIf = rewriter.create<scf::IfOp>(ifOp.getLoc(), resultTypes,
+                                               ifOp.getCondition());
   newIf->setAttrs(ifOp->getAttrs());
 
-  rewriter.inlineBlockBefore(ifOp.thenBlock(), newIf.thenBlock(),
-                             newIf.thenBlock()->begin());
-  rewriter.inlineBlockBefore(ifOp.elseBlock(), newIf.elseBlock(),
-                             newIf.elseBlock()->begin());
+  newIf.getThenRegion().takeBody(ifOp.getThenRegion());
+  newIf.getElseRegion().takeBody(ifOp.getElseRegion());
+  scf::IfOp::ensureTerminator(newIf.getThenRegion(), rewriter, ifOp.getLoc());
+  scf::IfOp::ensureTerminator(newIf.getElseRegion(), rewriter, ifOp.getLoc());
 
   for (auto it : llvm::zip(ifOp.getResults(),
                            newIf.getResults().take_front(ifOp.getNumResults())))
@@ -1043,38 +1043,6 @@ getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
     attr = tempAttr;
   }
   return attr;
-}
-
-bool canUseMMAv3Pipelining(Operation *loadOp) {
-  Operation *user = *loadOp->getUsers().begin();
-  while (isa<triton::TransOp, triton::ReshapeOp>(user)) {
-    if (!user->hasOneUse())
-      return false;
-    user = *user->getUsers().begin();
-  }
-  if (!user)
-    return false;
-
-  if (auto alloc = dyn_cast<ttg::LocalAllocOp>(user)) {
-    auto sharedEnc =
-        dyn_cast<ttg::NVMMASharedEncodingAttr>(alloc.getType().getEncoding());
-
-    if (!sharedEnc)
-      return false;
-
-    // MMA V3 case.
-    SmallVector<unsigned> newOrder = getOrder(sharedEnc);
-    auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
-    auto oldOrder = ttg::getOrder(ty.getEncoding());
-
-    // The operand of MMAv3 is in SharedEncoding and its order should not
-    // be changed after FuseTranspositions Pass. So we only pipeline the
-    // load if the order of the loaded BlockedEncoding is the same as the
-    // order of the SharedEncoding it is converted to.
-    return oldOrder == newOrder;
-  } else {
-    return false;
-  }
 }
 
 namespace {

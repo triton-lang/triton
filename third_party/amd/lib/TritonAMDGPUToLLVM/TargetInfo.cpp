@@ -1,5 +1,7 @@
 #include "TargetInfo.h"
+#include "SchedInstructions.h"
 #include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
+#include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -99,6 +101,10 @@ bool TargetInfo::canUseStMatrix(RankedTensorType tensorTy,
   return false;
 }
 
+bool TargetInfo::canUseLDSTransLoad(int bitwidth) const {
+  return arch == "gfx950" && llvm::is_contained({16, 8, 4, 6}, bitwidth);
+}
+
 void TargetInfo::storeMatrixShared(RewriterBase &rewriter, Location loc,
                                    Value ptr, Value val) const {
   llvm::report_fatal_error("AMDGPU does not support stmatrix");
@@ -192,8 +198,9 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
   if (numLaneToReduce != 64)
     return false;
 
-  if (auto family = getISAFamily();
-      family != ISAFamily::CDNA3 && family != ISAFamily::CDNA2) {
+  if (!llvm::is_contained(
+          {ISAFamily::CDNA2, ISAFamily::CDNA3, ISAFamily::CDNA4},
+          getISAFamily())) {
     return false;
   }
 
@@ -440,6 +447,11 @@ bool TargetInfo::supportVectorizedAtomics() const {
   // Note: not currently tested or used, but AMD generally supports vectorized
   // atomics.
   return true;
+}
+
+void TargetInfo::storeOpAnnotation(triton::gpu::LocalStoreOp op,
+                                   size_t localStoreOpCount, Type type) const {
+  storeOpSchedAnnotations(op, localStoreOpCount, type);
 }
 
 } // namespace mlir::triton::AMD

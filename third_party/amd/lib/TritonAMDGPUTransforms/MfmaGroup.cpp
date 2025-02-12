@@ -2,6 +2,11 @@
 
 namespace mlir {
 
+static bool isF8F6F4(mlir::Type t) {
+  return llvm::isa<Float8E4M3FNType, Float8E5M2Type, Float6E3M2FNType,
+                   Float6E2M3FNType, Float4E2M1FNType>(t);
+}
+
 static MfmaTypeId chooseAppropriateMfmaId(mlir::Type dataTypeA,
                                           mlir::Type dataTypeB,
                                           bool allowXF32) {
@@ -39,6 +44,9 @@ static MfmaTypeId chooseAppropriateMfmaId(mlir::Type dataTypeA,
   if (llvm::isa<Float8E5M2Type>(dataTypeA) &&
       llvm::isa<Float8E5M2Type>(dataTypeB)) {
     return MfmaTypeId::Fp16TyId;
+  }
+  if (isF8F6F4(dataTypeA) && isF8F6F4(dataTypeB)) {
+    return MfmaTypeId::F8F6F4TyId;
   }
   llvm_unreachable("Unsupported input argument type.");
 }
@@ -221,7 +229,17 @@ auto getMfmaInsnGroupAttrMap = []() -> const MfmaInsnGroupMap & {
        {32, 32, 16, 8, ROCDL::mfma_f32_32x32x16_bf8_bf8::getOperationName()}},
       // mfma_f32_16x16x32_BF8_BF8
       {{16, 16, MfmaTypeId::Bf8Bf8TyId, 3},
-       {16, 16, 32, 8, ROCDL::mfma_f32_16x16x32_bf8_bf8::getOperationName()}}};
+       {16, 16, 32, 8, ROCDL::mfma_f32_16x16x32_bf8_bf8::getOperationName()}},
+      // scaled mfma f8f6f4
+      // mfma_scale_F32_16x16x128_F8F6F4
+      {{16, 16, MfmaTypeId::F8F6F4TyId, 4},
+       {16, 16, 128, 32,
+        ROCDL::mfma_scale_f32_16x16x128_f8f6f4::getOperationName()}},
+      // mfma_scale_F32_32x32x64_F8F6F4
+      {{32, 32, MfmaTypeId::F8F6F4TyId, 4},
+       {32, 32, 64, 32,
+        ROCDL::mfma_scale_f32_32x32x64_f8f6f4::getOperationName()}},
+  };
   return MfmaInsnMap;
 };
 
@@ -261,15 +279,24 @@ FailureOr<MfmaInsn> MfmaInsn::selectMfma(unsigned mDim, unsigned nDim,
                                          Type elementTypeA, Type elementTypeB,
                                          int mfmaVersion, bool allowXF32) {
   auto mfmaInsnAttrMap = getMfmaInsnGroupAttrMap();
-  MfmaTypeId mfmaId =
-      chooseAppropriateMfmaId(elementTypeA, elementTypeB, allowXF32);
+  MfmaTypeId mfmaId;
+  if (mfmaVersion == 4) {
+    // For mfma version 4, we only use the new f8f6f4 instructions
+    mfmaId = MfmaTypeId::F8F6F4TyId;
+  } else {
+    mfmaId = chooseAppropriateMfmaId(elementTypeA, elementTypeB, allowXF32);
+  }
   MfmaInsnGroupSelectKey key = {mDim, nDim, mfmaId, mfmaVersion};
   auto it = mfmaInsnAttrMap.find(key);
   if (it == mfmaInsnAttrMap.end())
     return failure();
-  auto [instrElementTypeA, instrElementTypeB] =
-      TypesFromMfmaId(elementTypeA.getContext(), mfmaId);
-  return MfmaInsn(instrElementTypeA, instrElementTypeB, it->second);
+  if (mfmaId == MfmaTypeId::F8F6F4TyId) {
+    return MfmaInsn(elementTypeA, elementTypeB, it->second);
+  } else {
+    auto [instrElementTypeA, instrElementTypeB] =
+        TypesFromMfmaId(elementTypeA.getContext(), mfmaId);
+    return MfmaInsn(instrElementTypeA, instrElementTypeB, it->second);
+  }
 }
 
 MfmaInsn::MfmaInsn(Type elementTypeA, Type elementTypeB,

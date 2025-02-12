@@ -1,5 +1,5 @@
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=arch=gfx950 | FileCheck %s --check-prefix=GFX950
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=arch=gfx942 --verify-diagnostics | FileCheck %s --check-prefix=GFX942
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=arch=gfx942 --verify-diagnostics | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
@@ -180,7 +180,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, ttg.shared = 8192 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
-  // GFX942-LABEL: async_copy_cache_mods
+  // CHECK-LABEL: async_copy_cache_mods
   tt.func public @async_copy_cache_mods(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
                                 %arg1: i32 {tt.divisibility = 16 : i32},
                                 %arg2: !ttg.memdesc<32x32xf16, #shared, #smem, mutable>) {
@@ -188,30 +188,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, ttg.sha
     %1 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<32x32x!tt.ptr<f16>, #blocked>
     // Each thread needs to load 1 element and we load 1 (sizePerThread) per global.load.lds
 
-    // GFX942: llvm.getelementptr
-    // GFX942: %[[aux_ca:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // GFX942: rocdl.global.load.lds {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[aux_ca]]
+    // CHECK: llvm.getelementptr
+    // CHECK: %[[aux_ca:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: rocdl.global.load.lds {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[aux_ca]]
     %2 = ttg.async_copy_global_to_local %1, %arg2 cacheModifier = ca: tensor<32x32x!tt.ptr<f16>, #blocked> -> <32x32xf16, #shared, #smem, mutable>
-    // GFX942: llvm.getelementptr
-    // GFX942: %[[aux_cg:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // GFX942: rocdl.global.load.lds {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[aux_cg]]
+    // CHECK: llvm.getelementptr
+    // CHECK: %[[aux_cg:.*]] = llvm.mlir.constant(3 : i32) : i32
+    // CHECK: rocdl.global.load.lds {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[aux_cg]]
     %3 = ttg.async_copy_global_to_local %1, %arg2 cacheModifier = cg: tensor<32x32x!tt.ptr<f16>, #blocked> -> <32x32xf16, #shared, #smem, mutable>
-    // GFX942: llvm.getelementptr
-    // GFX942: %[[aux_cs:.*]] = llvm.mlir.constant(3 : i32) : i32
-    // GFX942: rocdl.global.load.lds {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[aux_cs]]
-    %5 = ttg.async_copy_global_to_local %1, %arg2 cacheModifier = cs: tensor<32x32x!tt.ptr<f16>, #blocked> -> <32x32xf16, #shared, #smem, mutable>
-    // GFX942: llvm.getelementptr
-    // GFX942: %[[aux_cv:.*]] = llvm.mlir.constant(9 : i32) : i32
-    // GFX942: rocdl.global.load.lds {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[aux_cv]]
-    %6 = ttg.async_copy_global_to_local %1, %arg2 cacheModifier = cv: tensor<32x32x!tt.ptr<f16>, #blocked> -> <32x32xf16, #shared, #smem, mutable>
-    // GFX942: llvm.getelementptr
-    // GFX942: %[[aux_wb:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // GFX942: rocdl.global.load.lds {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[aux_wb]]
-    %7 = ttg.async_copy_global_to_local %1, %arg2 cacheModifier = wb: tensor<32x32x!tt.ptr<f16>, #blocked> -> <32x32xf16, #shared, #smem, mutable>
-    // GFX942: llvm.getelementptr
-    // GFX942: %[[aux_wt:.*]] = llvm.mlir.constant(8 : i32) : i32
-    // GFX942: rocdl.global.load.lds {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[aux_wt]]
-    %8 = ttg.async_copy_global_to_local %1, %arg2 cacheModifier = wt: tensor<32x32x!tt.ptr<f16>, #blocked> -> <32x32xf16, #shared, #smem, mutable>
+    // CHECK: llvm.getelementptr
+    // CHECK: %[[aux_cv:.*]] = llvm.mlir.constant(11 : i32) : i32
+    // CHECK: rocdl.global.load.lds {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[aux_cv]]
+    %4 = ttg.async_copy_global_to_local %1, %arg2 cacheModifier = cv: tensor<32x32x!tt.ptr<f16>, #blocked> -> <32x32xf16, #shared, #smem, mutable>
     tt.return
   }
 }
