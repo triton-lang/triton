@@ -75,12 +75,7 @@ struct DotOpMFMAConversionHelper {
       : mfmaLayout(mfmaLayout), rewriter(rewriter),
         typeConverter(typeConverter), loc(loc), ctx(mfmaLayout.getContext()) {}
 
-  Value getThreadId() const {
-    auto llvmIndexTy = typeConverter->getIndexType();
-    auto tid = rewriter.create<::mlir::gpu::ThreadIdOp>(
-        loc, rewriter.getIndexType(), ::mlir::gpu::Dimension::x);
-    return rewriter.create<arith::TruncIOp>(loc, i32_ty, tid);
-  }
+  Value getThreadId() const { return triton::getThreadId(rewriter, loc); }
 
   Value generateMFMAOp(StringRef mfmaInsnName, Value valA, Value valB,
                        Value valC) const {
