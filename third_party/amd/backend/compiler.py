@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 import functools
+import sys
 from pathlib import Path
 import torch
 
@@ -18,7 +19,8 @@ def min_dot_size(target: GPUTarget):
     return lambda lhsType, rhsType: (1, 1, 1)
 
 
-@functools.lru_cache()
+# Disable caching when testing.
+@functools.lru_cache(maxsize=0 if "pytest" in sys.modules else 256)
 def use_buffer_ops():
     return os.environ.get("AMDGCN_USE_BUFFER_OPS", "0") == "1"
 
