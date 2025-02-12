@@ -1409,6 +1409,7 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
       if (parseIntArrayAttr(parser, attr, instrShape, "instrShape").failed())
         return {};
     }
+
     if (attr.getName() == "isTransposed") {
       if (parseBool(parser, attr, isTransposed, "isTransposed").failed())
         return {};
