@@ -2743,6 +2743,7 @@ def test_optimize_thread_locality(op, BLOCK_N, N, num_pid_n, device):
 
 
 scan_layouts = [
+    # thread_size=4, num_warps=4, num_ctas=1
     BlockedLayout([1, 4], [4, THREADS_PER_WARP // 4], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([4, 1], [4, THREADS_PER_WARP // 4], [1, 4], [0, 1], [1, 1], [1, 1], [0, 1]),
@@ -2753,7 +2754,55 @@ scan_layouts = [
     BlockedLayout([4, 1], [4, THREADS_PER_WARP // 4], [1, 4], [1, 0], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([2, 2], [4, THREADS_PER_WARP // 4], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([2, 2], [8, THREADS_PER_WARP // 8], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 2], [1, THREADS_PER_WARP // 1], [1, 4], [1, 0], [1, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 4], [1, THREADS_PER_WARP // 1], [1, 4], [1, 0], [1, 1], [1, 1], [0, 1]),
+    # thread_size=4, num_warps=1, num_ctas=4: CTASplitNum=[1,1]
+    BlockedLayout([1, 4], [4, THREADS_PER_WARP // 4], [1, 1], [0, 1], [4, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [1, 1], [0, 1], [4, 1], [1, 1], [0, 1]),
+    BlockedLayout([4, 1], [4, THREADS_PER_WARP // 4], [1, 1], [0, 1], [1, 4], [1, 1], [0, 1]),
+    BlockedLayout([2, 2], [4, THREADS_PER_WARP // 4], [1, 1], [0, 1], [2, 2], [1, 1], [0, 1]),
+    BlockedLayout([2, 2], [8, THREADS_PER_WARP // 8], [1, 1], [0, 1], [2, 2], [1, 1], [0, 1]),
+    BlockedLayout([1, 4], [4, THREADS_PER_WARP // 4], [1, 1], [0, 1], [4, 1], [1, 1], [1, 0]),
+    BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [1, 1], [0, 1], [4, 1], [1, 1], [1, 0]),
+    BlockedLayout([4, 1], [4, THREADS_PER_WARP // 4], [1, 1], [0, 1], [1, 4], [1, 1], [1, 0]),
+    BlockedLayout([2, 2], [4, THREADS_PER_WARP // 4], [1, 1], [0, 1], [2, 2], [1, 1], [1, 0]),
+    BlockedLayout([2, 2], [8, THREADS_PER_WARP // 8], [1, 1], [0, 1], [2, 2], [1, 1], [1, 0]),
+    BlockedLayout([1, 4], [1, THREADS_PER_WARP // 1], [1, 1], [0, 1], [1, 4], [1, 1], [1, 0]),
+    # thread_size=4, num_warps=1, num_ctas=4: CTASplitNum=CTAsPerCGA
+    BlockedLayout([1, 4], [4, THREADS_PER_WARP // 4], [1, 1], [0, 1], [4, 1], [4, 1], [0, 1]),
+    BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [1, 1], [0, 1], [4, 1], [4, 1], [0, 1]),
+    BlockedLayout([4, 1], [4, THREADS_PER_WARP // 4], [1, 1], [0, 1], [1, 4], [1, 4], [0, 1]),
+    BlockedLayout([2, 2], [4, THREADS_PER_WARP // 4], [1, 1], [0, 1], [2, 2], [2, 2], [0, 1]),
+    BlockedLayout([2, 2], [8, THREADS_PER_WARP // 8], [1, 1], [0, 1], [2, 2], [2, 2], [0, 1]),
+    BlockedLayout([1, 4], [4, THREADS_PER_WARP // 4], [1, 1], [0, 1], [4, 1], [4, 1], [1, 0]),
+    BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [1, 1], [0, 1], [4, 1], [4, 1], [1, 0]),
+    BlockedLayout([4, 1], [4, THREADS_PER_WARP // 4], [1, 1], [0, 1], [1, 4], [1, 4], [1, 0]),
+    BlockedLayout([2, 2], [4, THREADS_PER_WARP // 4], [1, 1], [0, 1], [2, 2], [2, 2], [1, 0]),
+    BlockedLayout([2, 2], [8, THREADS_PER_WARP // 8], [1, 1], [0, 1], [2, 2], [2, 2], [1, 0]),
+    BlockedLayout([1, 4], [1, THREADS_PER_WARP // 1], [1, 1], [0, 1], [1, 4], [1, 4], [1, 0]),
+    # thread_size=1, num_warps=4, num_ctas=4: CTASplitNum=[1,1]
+    BlockedLayout([1, 1], [4, THREADS_PER_WARP // 4], [1, 4], [0, 1], [4, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 1], [8, THREADS_PER_WARP // 8], [1, 4], [0, 1], [4, 1], [1, 1], [0, 1]),
+    BlockedLayout([1, 1], [4, THREADS_PER_WARP // 4], [4, 1], [0, 1], [1, 4], [1, 1], [0, 1]),
+    BlockedLayout([1, 1], [4, THREADS_PER_WARP // 4], [2, 2], [0, 1], [2, 2], [1, 1], [0, 1]),
+    BlockedLayout([1, 1], [8, THREADS_PER_WARP // 8], [2, 2], [0, 1], [2, 2], [1, 1], [0, 1]),
+    BlockedLayout([1, 1], [4, THREADS_PER_WARP // 4], [1, 4], [0, 1], [4, 1], [1, 1], [1, 0]),
+    BlockedLayout([1, 1], [8, THREADS_PER_WARP // 8], [1, 4], [0, 1], [4, 1], [1, 1], [1, 0]),
+    BlockedLayout([1, 1], [4, THREADS_PER_WARP // 4], [4, 1], [0, 1], [1, 4], [1, 1], [1, 0]),
+    BlockedLayout([1, 1], [4, THREADS_PER_WARP // 4], [2, 2], [0, 1], [2, 2], [1, 1], [1, 0]),
+    BlockedLayout([1, 1], [8, THREADS_PER_WARP // 8], [2, 2], [0, 1], [2, 2], [1, 1], [1, 0]),
+    BlockedLayout([1, 1], [1, THREADS_PER_WARP // 1], [1, 4], [0, 1], [1, 4], [1, 1], [1, 0]),
+    # thread_size=1, num_warps=4, num_ctas=4: CTASplitNum=CTAsPerCGA
+    BlockedLayout([1, 1], [4, THREADS_PER_WARP // 4], [1, 4], [0, 1], [4, 1], [4, 1], [0, 1]),
+    BlockedLayout([1, 1], [8, THREADS_PER_WARP // 8], [1, 4], [0, 1], [4, 1], [4, 1], [0, 1]),
+    BlockedLayout([1, 1], [4, THREADS_PER_WARP // 4], [4, 1], [0, 1], [1, 4], [1, 4], [0, 1]),
+    BlockedLayout([1, 1], [4, THREADS_PER_WARP // 4], [2, 2], [0, 1], [2, 2], [2, 2], [0, 1]),
+    BlockedLayout([1, 1], [8, THREADS_PER_WARP // 8], [2, 2], [0, 1], [2, 2], [2, 2], [0, 1]),
+    BlockedLayout([1, 1], [4, THREADS_PER_WARP // 4], [1, 4], [0, 1], [4, 1], [4, 1], [1, 0]),
+    BlockedLayout([1, 1], [8, THREADS_PER_WARP // 8], [1, 4], [0, 1], [4, 1], [4, 1], [1, 0]),
+    BlockedLayout([1, 1], [4, THREADS_PER_WARP // 4], [4, 1], [0, 1], [1, 4], [1, 4], [1, 0]),
+    BlockedLayout([1, 1], [4, THREADS_PER_WARP // 4], [2, 2], [0, 1], [2, 2], [2, 2], [1, 0]),
+    BlockedLayout([1, 1], [8, THREADS_PER_WARP // 8], [2, 2], [0, 1], [2, 2], [2, 2], [1, 0]),
+    BlockedLayout([1, 1], [1, THREADS_PER_WARP // 1], [1, 4], [0, 1], [1, 4], [1, 4], [1, 0]),
 ]
 
 
@@ -2762,6 +2811,16 @@ scan_layouts = [
 @pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("add_overflow_check", [False, True])
 def test_scan_layouts(M, N, src_layout, axis, add_overflow_check, device, tmp_path: pathlib.Path):
+
+    num_wraps = int(np.prod(src_layout.warps_per_cta))
+    num_ctas = int(np.prod(src_layout.ctas_per_cga))
+    cluster_dims = tuple((src_layout.ctas_per_cga[i] if i < len(src_layout.ctas_per_cga) else 1) for i in range(3))
+
+    if num_ctas > 1 and not is_hopper():
+        return pytest.skip("num_ctas > 1 is only supported after sm90.")
+
+    if cluster_dims[axis] > 1:
+        return pytest.skip(f"scan axis accross CTAs is not supported (cluster_dims[axis]={cluster_dims[axis]}).")
 
     overflow_check = """
         %17 = arith.extsi %arg2 : i32 to i64
@@ -2777,7 +2836,7 @@ def test_scan_layouts(M, N, src_layout, axis, add_overflow_check, device, tmp_pa
 
     ir = f"""
     #blocked = {src_layout}
-    module attributes {{"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = {THREADS_PER_WARP} : i32}} {{
+    module attributes {{"ttg.num-warps" = {num_wraps} : i32, "ttg.num-ctas" = {num_ctas} : i32, "ttg.threads-per-warp" = {THREADS_PER_WARP} : i32}} {{
     tt.func public @kernel_0d1d(%arg0: !tt.ptr<i32> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<i32> {{tt.divisibility = 16 : i32}}) {{
       %cst = arith.constant dense<{N}> : tensor<{M}x1xi32, #blocked>
       %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #ttg.slice<{{dim = 1, parent = #blocked}}>>
@@ -2808,7 +2867,8 @@ def test_scan_layouts(M, N, src_layout, axis, add_overflow_check, device, tmp_pa
 
     temp_file = tmp_path / "test_scan_layouts.ttgir"
     temp_file.write_text(ir)
-    kernel = triton.compile(str(temp_file))
+    kernel = triton.compile(str(temp_file), options=dict(num_warps=num_wraps, num_ctas=num_ctas,
+                                                         cluster_dims=cluster_dims))
 
     rs = RandomState(17)
     x = rs.randint(-100, 100, (M, N)).astype('int32')

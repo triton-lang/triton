@@ -244,13 +244,25 @@ unsigned ScanLoweringHelper::getNonAxisNumThreadsPerWarp() {
   return product<unsigned>(threadsPerWarp);
 }
 
-// Return the flat numbers of threads computing independent scan results.
-unsigned ScanLoweringHelper::getNonAxisNumThreadsPerCTA() {
-  unsigned numParallelThreadsPerWarp = getNonAxisNumThreadsPerWarp();
+unsigned ScanLoweringHelper::getNonAxisNumWarpsPerCTA() {
   auto warpsPerCTA = getWarpsPerCTA(getEncoding());
   warpsPerCTA[getAxis()] = 1;
-  unsigned numParallelWarpsPerCTA = product<unsigned>(warpsPerCTA);
-  return numParallelThreadsPerWarp * numParallelWarpsPerCTA;
+  return product<unsigned>(warpsPerCTA);
+}
+
+unsigned ScanLoweringHelper::getNonAxisNumCTAsPerCGA() {
+  auto CTAsPerCGA = getCTAsPerCGA(getEncoding());
+  CTAsPerCGA[getAxis()] = 1;
+  return product<unsigned>(CTAsPerCGA);
+}
+
+// Return the flat numbers of threads computing independent scan results.
+unsigned ScanLoweringHelper::getNonAxisNumThreadsPerCTA() {
+  return getNonAxisNumThreadsPerWarp() * getNonAxisNumWarpsPerCTA();
+}
+unsigned ScanLoweringHelper::getNonAxisNumThreadsPerCGA() {
+  return getNonAxisNumThreadsPerWarp() * getNonAxisNumWarpsPerCTA() *
+         getNonAxisNumCTAsPerCGA();
 }
 
 unsigned ScanLoweringHelper::getAxisNumWarps() {
@@ -265,9 +277,10 @@ unsigned ScanLoweringHelper::getAxisNumBlocks() {
   auto sizePerThreads = getSizePerThread(getEncoding());
   auto threadsPerWarp = getThreadsPerWarp(getEncoding());
   auto warpsPerCTA = getWarpsPerCTA(getEncoding());
+  auto shape = getShapePerCTA(getEncoding(), getShape());
   unsigned axis = getAxis();
   return ceil<unsigned>(
-      getShape()[axis],
+      shape[axis],
       (sizePerThreads[axis] * threadsPerWarp[axis] * warpsPerCTA[axis]));
 }
 
@@ -275,14 +288,14 @@ unsigned ScanLoweringHelper::getNonAxisNumBlocks() {
   auto sizePerThreads = getSizePerThread(getEncoding());
   auto threadsPerWarp = getThreadsPerWarp(getEncoding());
   auto warpsPerCTA = getWarpsPerCTA(getEncoding());
+  auto shape = getShapePerCTA(getEncoding(), getShape());
   unsigned axis = getAxis();
   unsigned numBlocks = 1;
   for (unsigned i = 0; i < sizePerThreads.size(); i++) {
     if (i == axis)
       continue;
-    numBlocks *=
-        ceil<unsigned>(getShape()[i], (sizePerThreads[i] * threadsPerWarp[i] *
-                                       warpsPerCTA[i]));
+    numBlocks *= ceil<unsigned>(
+        shape[i], (sizePerThreads[i] * threadsPerWarp[i] * warpsPerCTA[i]));
   }
   return numBlocks;
 }
@@ -296,13 +309,11 @@ bool ScanLoweringHelper::isSupported() {
 }
 
 unsigned ScanLoweringHelper::getScratchSizeInElems() {
-  auto mod = scanOp->getParentOfType<ModuleOp>();
-  unsigned numWarps = TritonGPUDialect::getNumWarps(mod);
-  unsigned numNonAxisElementsPerWarp =
-      getNonAxisNumThreadsPerWarp() * getNonAxisNumElementsPerThread();
-  unsigned numElements = numWarps * numNonAxisElementsPerWarp *
-                         getAxisNumBlocks() * getNonAxisNumBlocks();
-  return numElements;
+  unsigned parallelElementsPerThread = getNonAxisNumElementsPerThread();
+  unsigned numParallelLane = getNonAxisNumThreadsPerCGA();
+  unsigned axisNumWarps = getAxisNumWarpsWithUniqueData();
+  unsigned numBlocks = getNonAxisNumBlocks() * getAxisNumBlocks();
+  return parallelElementsPerThread * numParallelLane * axisNumWarps * numBlocks;
 }
 
 unsigned ScanLoweringHelper::getScratchSizeInBytes() {
@@ -611,12 +622,13 @@ unsigned ScanLoweringHelper::getAxisBlockStride() {
   auto sizePerThreads = getSizePerThread(getEncoding());
   auto threadsPerWarp = getThreadsPerWarp(getEncoding());
   auto warpsPerCTA = getWarpsPerCTA(getEncoding());
+  auto shape = getShapePerCTA(getEncoding(), getShape());
   for (unsigned dim : order) {
     if (dim == getAxis())
       return stride;
-    stride *= ceil<unsigned int>(getShape()[dim], sizePerThreads[dim] *
-                                                      threadsPerWarp[dim] *
-                                                      warpsPerCTA[dim]);
+    stride *= ceil<unsigned int>(shape[dim], sizePerThreads[dim] *
+                                                 threadsPerWarp[dim] *
+                                                 warpsPerCTA[dim]);
   }
   llvm_unreachable("Axis not found in order");
 }
