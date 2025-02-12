@@ -72,11 +72,7 @@ struct ConvertTritonGPUToLLVM
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
-
-    mlir::LowerToLLVMOptions option(context);
-    option.overrideIndexBitwidth(32);
     TargetInfo targetInfo(computeCapability, ptxVersion);
-    TritonGPUToLLVMTypeConverter typeConverter(context, option, targetInfo);
 
     // Allocate shared memory and set barrier
     ModuleAllocation allocation(mod);
@@ -86,11 +82,12 @@ struct ConvertTritonGPUToLLVM
     // Lower functions
     TritonLLVMFunctionConversionTarget funcTarget(*context);
     RewritePatternSet funcPatterns(context);
+    TritonGPUToLLVMTypeConverter funcTypeConverter(context, targetInfo);
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
-    mlir::triton::populateFuncOpConversionPattern(typeConverter, funcPatterns,
-                                                  numWarps, targetInfo,
-                                                  patternBenefitDefault);
-    mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
+    mlir::triton::populateFuncOpConversionPattern(
+        funcTypeConverter, funcPatterns, numWarps, targetInfo,
+        patternBenefitDefault);
+    mlir::cf::populateControlFlowToLLVMConversionPatterns(funcTypeConverter,
                                                           funcPatterns);
     if (failed(
             applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
@@ -99,6 +96,9 @@ struct ConvertTritonGPUToLLVM
     // initSharedMemory is run before the conversion of call and ret ops,
     // because the call op has to know the shared memory base address of each
     // function
+    mlir::LowerToLLVMOptions option(context);
+    option.overrideIndexBitwidth(32);
+    TritonGPUToLLVMTypeConverter typeConverter(context, option, targetInfo);
     initSharedMemory(typeConverter);
     ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
 
