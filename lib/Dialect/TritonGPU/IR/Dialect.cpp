@@ -122,39 +122,6 @@ SmallVector<unsigned> getContigPerThread(Attribute layout) {
   }
 }
 
-SmallVector<unsigned> oldGetUniqueContigPerThread(Attribute layout,
-                                                  ArrayRef<int64_t> shape) {
-  // If slice layout, call recursively on parent layout, and drop
-  // sliced dim
-  if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(layout)) {
-    auto parentLayout = sliceLayout.getParent();
-    auto parentShape = sliceLayout.paddedShape(shape);
-    auto parentUniqueContigPerThread =
-        getUniqueContigPerThread(parentLayout, parentShape);
-    parentUniqueContigPerThread.erase(parentUniqueContigPerThread.begin() +
-                                      sliceLayout.getDim());
-    return parentUniqueContigPerThread;
-  } else if (mlir::isa<LinearEncodingAttr>(layout)) {
-    // FIXME: This should be the impelmentation of the function, but at the
-    // moment it breaks some uses. For example, if we have a blocked layout
-    // with shape [128, 128] and size=[4, 1], that is tiled in the second
-    // dimension, then the default path will return [4, 1], but this path will
-    // return [4, 128]!
-    auto linearLayout = toLinearLayout(shape, layout);
-    auto llAttr = LinearEncodingAttr::get(layout.getContext(), linearLayout);
-    return llAttr.getContigPerThread();
-  }
-  // Base case
-  auto rank = shape.size();
-  SmallVector<unsigned> ret(rank);
-  auto contigPerThread = getContigPerThread(layout);
-  assert(contigPerThread.size() == rank && "Unexpected contigPerThread size");
-  for (int d = 0; d < rank; ++d) {
-    ret[d] = std::min<unsigned>(shape[d], contigPerThread[d]);
-  }
-  return ret;
-}
-
 SmallVector<unsigned> getUniqueContigPerThread(Attribute layout,
                                                ArrayRef<int64_t> shape) {
   auto linearLayout = toLinearLayout(shape, layout);
