@@ -171,14 +171,17 @@ void scheduleDistanceOneDependencies(scf::ForOp forOp,
               // Exception: Schedule loads with a distance of 1 together
               // with the current op.
               schedule.insertIfAbsent(defOp, stage, cluster);
-              schedule.insertDepsOfOp(defOp, stage, cluster, true);
+              schedule.insertDepsOfOp(defOp, stage, cluster,
+                                      /*includeArg=*/true,
+                                      /*insertIfEarlier=*/true);
             } else {
               if (dist1Cluster.count(&cluster) == 0) {
                 dist1Cluster[&cluster] = schedule.clusters.newBefore(cluster);
               }
               schedule.insertIfAbsent(defOp, stage + 1, dist1Cluster[&cluster]);
               schedule.insertDepsOfOp(defOp, stage + 1, dist1Cluster[&cluster],
-                                      true);
+                                      /*includeArg=*/true,
+                                      /*includeIfEarlier=*/true);
             }
           }
         }

@@ -800,25 +800,37 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   // if T == len_j0 + len_j1 + ... + len_jN - N - 1:
   //   epilogue(i)
   Logue &epilogue = logues.back();
+
+  // The only possible use of an epilogue output is the yield.
+  auto outerYield = cast<scf::YieldOp>(outer.getBody()->getTerminator());
+  SmallVector<Value> usedIterArgs;
+  for (Value output : epilogue.getOutputs()) {
+    for (OpOperand &use : output.getUses()) {
+      if (use.getOwner() == outerYield) {
+        usedIterArgs.push_back(fused.getRegionIterArgs().drop_front(
+            outerArgsStartIdx)[use.getOperandNumber()]);
+      }
+    }
+  }
+
   auto epilogueCond =
       b.create<arith::CmpIOp>(arith::CmpIPredicate::eq, T,
                               b.create<arith::SubIOp>(innerLen, intTyCst(1)));
   auto epilogueIf =
-      b.create<scf::IfOp>(outer.getYieldedValues().getTypes(), epilogueCond);
+      b.create<scf::IfOp>(epilogue.getOutputTypes(), epilogueCond);
 
   Block *thenBlock = b.createBlock(&epilogueIf.getThenRegion());
   epilogue.moveBefore(thenBlock, thenBlock->end());
 
   b.setInsertionPointToEnd(thenBlock);
-  b.create<scf::YieldOp>(outer.getYieldedValues());
-
+  b.create<scf::YieldOp>(epilogue.getOutputs());
   b.createBlock(&epilogueIf.getElseRegion());
-  b.create<scf::YieldOp>(fused.getRegionIterArgs().slice(
-      outerArgsStartIdx, outer.getNumRegionIterArgs()));
+  b.create<scf::YieldOp>(usedIterArgs);
+  epilogue.replaceAllUsesWith(epilogueIf.getResults(), epilogueIf.getThenRegion());
 
   // Finally, create the yield of the fused loop.
   SmallVector<Value> outerOuts{T, i};
-  llvm::append_range(outerOuts, epilogueIf.getResults());
+  llvm::append_range(outerOuts, outerYield.getOperands());
   for (scf::IfOp bodyIf : bodyIfs)
     outerOuts.push_back(/*jk=*/bodyIf.getResult(0));
   for (auto [bodyIf, loop] : llvm::zip(bodyIfs, innerLoops)) {
@@ -831,7 +843,7 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   }
 
   b.setInsertionPointToEnd(fused.getBody());
-  auto outerYield = b.create<scf::YieldOp>(outerOuts);
+  b.create<scf::YieldOp>(outerOuts);
   outer.replaceAllUsesWith(
       fused.getResults().slice(outerArgsStartIdx, outer.getNumResults()));
 
