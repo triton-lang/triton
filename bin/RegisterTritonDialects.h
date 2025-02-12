@@ -32,6 +32,9 @@ void registerTestAliasPass();
 void registerTestAlignmentPass();
 void registerTestAllocationPass();
 void registerTestMembarPass();
+namespace proton {
+void registerTestScopeIdAllocationPass();
+} // namespace proton
 } // namespace test
 } // namespace mlir
 
@@ -67,6 +70,9 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::registerTritonAMDGPUConvertToBufferOps();
   mlir::triton::registerTritonAMDGPUInsertInstructionSchedHints();
   mlir::triton::registerTritonAMDGPULowerInstructionSchedHints();
+
+  // Proton passes
+  mlir::test::proton::registerTestScopeIdAllocationPass();
 
   // TODO: register Triton & TritonGPU passes
   registry
