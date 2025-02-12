@@ -1682,7 +1682,7 @@ struct AsyncWaitOpConversion : public ConvertOpToLLVMPattern<AsyncWaitOp> {
     unsigned otherCnts = ~0xC00F; // C00F has bits 15:14 and 3:0 set
     unsigned waitValue = lowBits | highBits | otherCnts;
 
-    rewriter.create<ROCDL::WaitcntOp>(loc, waitValue);
+    rewriter.create<ROCDL::SWaitcntOp>(loc, waitValue);
 
     // Drop the result AsyncToken
     rewriter.replaceOp(op, b.i32_val(0));
