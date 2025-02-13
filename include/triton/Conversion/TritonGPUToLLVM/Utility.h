@@ -663,12 +663,6 @@ Value getLaneId(OpBuilder &rewriter, Location loc, unsigned threadsPerWarp);
 std::pair<Value, Value> getLaneAndWarpId(OpBuilder &rewriter, Location loc,
                                          unsigned threadsPerWarp);
 
-// Emit code to compute the (laneId, warpId, blockId) for the current thread.
-std::tuple</*laneId=*/Value, /*warpId=*/Value, /*blockId=*/Value>
-emitHardwareTuple(Location loc, RewriterBase &rewriter,
-                  const TargetInfoBase &target, bool withCTAOffset,
-                  unsigned threadsPerWarp);
-
 // -----------------------------------------------------------------------
 // Shared memory utilities
 // -----------------------------------------------------------------------
