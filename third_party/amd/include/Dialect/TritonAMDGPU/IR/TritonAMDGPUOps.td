@@ -266,6 +266,34 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
     }];
 }
 
+def TTG_UpcastMXFPOp : TT_AMDGPU_Op<"upcast_mxfp", [Pure]> {
+  let summary = "Convert an mxfp tensor to bf16/fp16";
+
+  let hasVerifier = 1;
+
+  let description = [{
+    Compute the bf16 encoded in the given mxfp number as per
+    https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
+  }];
+  let arguments = (
+    ins
+    TT_Tensor:$src,
+    TT_Tensor:$scale,
+    TT_ScaleDotElemTypeAttr:$fp_type,
+    BoolAttr:$fastMath
+  );
+  let results = (outs TT_Tensor:$result);
+
+  let assemblyFormat = [{
+    $src `,` $scale  `fp_type` `=` $fp_type attr-dict `:` type($src) `,` type($scale) `->` type($result)
+  }];
+
+  let extraClassDeclaration = [{
+    static RankedTensorType deduceOutputType(
+        TypedValue<RankedTensorType> inputTensor, ScaleDotElemType inputElemType, Type outputElemType);
+  }];
+}
+
 def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
   SameLoadStoreOperandsEncoding,
   MemoryEffects<[MemWrite<GlobalMemory>]>,
