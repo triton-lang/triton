@@ -237,22 +237,16 @@ Value getBlockStride(Location loc, Value offset, PatternRewriter &rewriter) {
   // canonicalize pointer pass sets block stride via
   // `offset:add-broadcast-muli-splat`, backtrace that pattern to reach the
   // stride.
-  if (auto maybeAdd = offset.getDefiningOp<arith::AddIOp>()) {
-    for (auto addOpr : maybeAdd.getOperands()) {
+  if (auto maybeAdd = offset.getDefiningOp<arith::AddIOp>())
+    for (auto addOpr : maybeAdd.getOperands())
       if (auto maybeBC = addOpr.getDefiningOp<tt::BroadcastOp>()) {
         auto bcSrc = maybeBC.getSrc();
-        if (auto maybeMul = bcSrc.getDefiningOp<arith::MulIOp>()) {
-          for (auto mulOpr : maybeMul.getOperands()) {
-            if (auto maybeSplat = mulOpr.getDefiningOp<tt::SplatOp>()) {
+        if (auto maybeMul = bcSrc.getDefiningOp<arith::MulIOp>())
+          for (auto mulOpr : maybeMul.getOperands())
+            if (auto maybeSplat = mulOpr.getDefiningOp<tt::SplatOp>())
               return maybeSplat.getSrc();
-            }
-          }
-        }
       }
-    }
-  }
-  return rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
-  ;
+  return nullptr;
 }
 
 } // namespace
