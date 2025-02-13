@@ -5,8 +5,8 @@
 // CHECK-LABEL:   tt.func @conversion1(
 // CHECK-SAME:  %[[VAL_0:.*]]: !tt.ptr<f32>) -> tensor<1024xf32> {
 // CHECK:           %[[VAL_1:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [1024, 1024]} 1024 : i32
-// CHECK:           %[[VAL_2:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 2048]} : i32
-// CHECK:           %[[VAL_3:.*]] = arith.muli %[[VAL_2]], %[[VAL_1]] {__amdgpuconvertbufferops.output_range = [0, 2097152]} : i32
+// CHECK:           %[[VAL_2:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 65536]} : i32
+// CHECK:           %[[VAL_3:.*]] = arith.muli %[[VAL_2]], %[[VAL_1]] {__amdgpuconvertbufferops.output_range = [0, 67108864]} : i32
 // CHECK:           %[[VAL_4:.*]] = tt.addptr %[[VAL_0]], %[[VAL_3]] : !tt.ptr<f32>, i32
 // CHECK:           %[[VAL_5:.*]] = tt.splat %[[VAL_4]] : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
 // CHECK:           %[[VAL_6:.*]] = tt.load %[[VAL_5]] : tensor<1024x!tt.ptr<f32>>
@@ -31,8 +31,8 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK-SAME:  %[[VAL_0:.*]]: !tt.ptr<f32>) -> tensor<1024xf32> {
 // CHECK:           %[[VAL_1:.*]] = arith.constant 0 : i32
 // CHECK:           %[[VAL_2:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [1024, 1024]} 1024 : i32
-// CHECK:           %[[VAL_3:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 2048]} : i32
-// CHECK:           %[[VAL_4:.*]] = arith.muli %[[VAL_3]], %[[VAL_2]] {__amdgpuconvertbufferops.output_range = [0, 2097152]} : i32
+// CHECK:           %[[VAL_3:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 65536]} : i32
+// CHECK:           %[[VAL_4:.*]] = arith.muli %[[VAL_3]], %[[VAL_2]] {__amdgpuconvertbufferops.output_range = [0, 67108864]} : i32
 // CHECK:           %[[VAL_5:.*]] = tt.make_range {__amdgpuconvertbufferops.output_range = [0, 1024], end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
 // CHECK:           %[[VAL_6:.*]] = tt.addptr %[[VAL_0]], %[[VAL_4]] : !tt.ptr<f32>, i32
 // CHECK:           %[[VAL_7:.*]] = amdgpu.buffer_load %[[VAL_6]]{{\[}}%[[VAL_5]]] stride = %[[VAL_1]] : tensor<1024xf32>
@@ -58,8 +58,8 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK-LABEL:   tt.func @conversion3(
 // CHECK-SAME:  %[[VAL_0:.*]]: !tt.ptr<f32>) -> tensor<1024xf32> {
 // CHECK:           %[[VAL_1:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [1024, 1024]} 1024 : i32
-// CHECK:           %[[VAL_2:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 2048]} : i32
-// CHECK:           %[[VAL_3:.*]] = arith.muli %[[VAL_2]], %[[VAL_1]] {__amdgpuconvertbufferops.output_range = [0, 2097152]} : i32
+// CHECK:           %[[VAL_2:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 65536]} : i32
+// CHECK:           %[[VAL_3:.*]] = arith.muli %[[VAL_2]], %[[VAL_1]] {__amdgpuconvertbufferops.output_range = [0, 67108864]} : i32
 // CHECK:           %[[VAL_4:.*]] = tt.make_range {__amdgpuconvertbufferops.output_range = [0, 1024], end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
 // CHECK:           %[[VAL_5:.*]] = tt.addptr %[[VAL_0]], %[[VAL_3]] : !tt.ptr<f32>, i32
 // CHECK:           %[[VAL_6:.*]] = arith.extsi %[[VAL_4]] {__amdgpuconvertbufferops.output_range = [0, 1024]} : tensor<1024xi32> to tensor<1024xi64>
@@ -96,8 +96,8 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK-SAME:  %[[VAL_0:.*]]: !tt.ptr<f32> {tt.pointer_range = 32 : i32}) -> tensor<1024xf32> {
 // CHECK:           %[[VAL_1:.*]] = arith.constant 0 : i32
 // CHECK:           %[[VAL_2:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [1024, 1024]} 1024 : i32
-// CHECK:           %[[VAL_3:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 2048]} : i32
-// CHECK:           %[[VAL_4:.*]] = arith.muli %[[VAL_3]], %[[VAL_2]] {__amdgpuconvertbufferops.output_range = [0, 2097152]} : i32
+// CHECK:           %[[VAL_3:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 65536]} : i32
+// CHECK:           %[[VAL_4:.*]] = arith.muli %[[VAL_3]], %[[VAL_2]] {__amdgpuconvertbufferops.output_range = [0, 67108864]} : i32
 // CHECK:           %[[VAL_5:.*]] = tt.make_range {__amdgpuconvertbufferops.output_range = [0, 1024], end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
 // CHECK:           %[[VAL_6:.*]] = tt.addptr %[[VAL_0]], %[[VAL_4]] : !tt.ptr<f32>, i32
 // CHECK:           %[[VAL_7:.*]] = tt.addptr %[[VAL_6]], %[[VAL_4]] : !tt.ptr<f32>, i32
@@ -130,8 +130,8 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           %[[VAL_3:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [0, 0]} 0 : index
 // CHECK:           %[[VAL_4:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [128, 128]} 128 : index
 // CHECK:           %[[VAL_5:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [1, 1]} 1 : index
-// CHECK:           %[[VAL_6:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 2048]} : i32
-// CHECK:           %[[VAL_7:.*]] = arith.muli %[[VAL_6]], %[[VAL_2]] {__amdgpuconvertbufferops.output_range = [0, 2097152]} : i32
+// CHECK:           %[[VAL_6:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 65536]} : i32
+// CHECK:           %[[VAL_7:.*]] = arith.muli %[[VAL_6]], %[[VAL_2]] {__amdgpuconvertbufferops.output_range = [0, 67108864]} : i32
 // CHECK:           %[[VAL_8:.*]] = tt.make_range {__amdgpuconvertbufferops.output_range = [0, 1024], end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
 // CHECK:           %[[VAL_9:.*]] = tt.addptr %[[VAL_0]], %[[VAL_7]] : !tt.ptr<f32>, i32
 // CHECK:           %[[VAL_10:.*]] = arith.extsi %[[VAL_8]] {__amdgpuconvertbufferops.output_range = [0, 1024]} : tensor<1024xi32> to tensor<1024xi64>
@@ -194,8 +194,8 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           %[[VAL_4:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [0, 0]} 0 : index
 // CHECK:           %[[VAL_5:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [128, 128]} 128 : index
 // CHECK:           %[[VAL_6:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [1, 1]} 1 : index
-// CHECK:           %[[VAL_7:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 2048]} : i32
-// CHECK:           %[[VAL_8:.*]] = arith.muli %[[VAL_7]], %[[VAL_3]] {__amdgpuconvertbufferops.output_range = [0, 2097152]} : i32
+// CHECK:           %[[VAL_7:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 65536]} : i32
+// CHECK:           %[[VAL_8:.*]] = arith.muli %[[VAL_7]], %[[VAL_3]] {__amdgpuconvertbufferops.output_range = [0, 67108864]} : i32
 // CHECK:           %[[VAL_9:.*]] = tt.make_range {__amdgpuconvertbufferops.output_range = [0, 1024], end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
 // CHECK:           %[[VAL_10:.*]]:3 = scf.for %[[VAL_11:.*]] = %[[VAL_4]] to %[[VAL_5]] step %[[VAL_6]] iter_args(%[[VAL_12:.*]] = %[[VAL_0]], %[[VAL_13:.*]] = %[[VAL_2]], %[[VAL_14:.*]] = %[[VAL_1]]) -> (!tt.ptr<f32>, tensor<1024xi64>, tensor<1024xf32>) {
 // CHECK:             %[[VAL_15:.*]] = tt.addptr %[[VAL_12]], %[[VAL_8]] : !tt.ptr<f32>, i32
@@ -255,8 +255,8 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           %[[VAL_4:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [0, 0]} 0 : index
 // CHECK:           %[[VAL_5:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [16, 16]} 16 : index
 // CHECK:           %[[VAL_6:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [1, 1]} 1 : index
-// CHECK:           %[[VAL_7:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 2048]} : i32
-// CHECK:           %[[VAL_8:.*]] = arith.muli %[[VAL_7]], %[[VAL_3]] {__amdgpuconvertbufferops.output_range = [0, 2097152]} : i32
+// CHECK:           %[[VAL_7:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 65536]} : i32
+// CHECK:           %[[VAL_8:.*]] = arith.muli %[[VAL_7]], %[[VAL_3]] {__amdgpuconvertbufferops.output_range = [0, 67108864]} : i32
 // CHECK:           %[[VAL_9:.*]] = tt.make_range {__amdgpuconvertbufferops.output_range = [0, 1024], end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
 // CHECK:           %[[VAL_10:.*]]:3 = scf.for %[[VAL_11:.*]] = %[[VAL_4]] to %[[VAL_5]] step %[[VAL_6]] iter_args(%[[VAL_12:.*]] = %[[VAL_0]], %[[VAL_13:.*]] = %[[VAL_2]], %[[VAL_14:.*]] = %[[VAL_1]]) -> (!tt.ptr<f32>, tensor<1024xi64>, tensor<1024xf32>) {
 // CHECK:             %[[VAL_15:.*]]:3 = scf.for %[[VAL_16:.*]] = %[[VAL_4]] to %[[VAL_5]] step %[[VAL_6]] iter_args(%[[VAL_17:.*]] = %[[VAL_12]], %[[VAL_18:.*]] = %[[VAL_13]], %[[VAL_19:.*]] = %[[VAL_14]]) -> (!tt.ptr<f32>, tensor<1024xi64>, tensor<1024xf32>) {
@@ -322,8 +322,8 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           %[[VAL_4:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [0, 0]} 0 : index
 // CHECK:           %[[VAL_5:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [128, 128]} 128 : index
 // CHECK:           %[[VAL_6:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [1, 1]} 1 : index
-// CHECK:           %[[VAL_7:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 2048]} : i32
-// CHECK:           %[[VAL_8:.*]] = arith.muli %[[VAL_7]], %[[VAL_3]] {__amdgpuconvertbufferops.output_range = [0, 2097152]} : i32
+// CHECK:           %[[VAL_7:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 65536]} : i32
+// CHECK:           %[[VAL_8:.*]] = arith.muli %[[VAL_7]], %[[VAL_3]] {__amdgpuconvertbufferops.output_range = [0, 67108864]} : i32
 // CHECK:           %[[VAL_9:.*]] = tt.make_range {__amdgpuconvertbufferops.output_range = [0, 1024], end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
 // CHECK:           %[[VAL_10:.*]]:3 = scf.for %[[VAL_11:.*]] = %[[VAL_4]] to %[[VAL_5]] step %[[VAL_6]] iter_args(%[[VAL_12:.*]] = %[[VAL_0]], %[[VAL_13:.*]] = %[[VAL_2]], %[[VAL_14:.*]] = %[[VAL_1]]) -> (!tt.ptr<f32>, tensor<1024xi64>, tensor<1024xf32>) {
 // CHECK:             %[[VAL_15:.*]]:3 = scf.for %[[VAL_16:.*]] = %[[VAL_4]] to %[[VAL_5]] step %[[VAL_6]] iter_args(%[[VAL_17:.*]] = %[[VAL_12]], %[[VAL_18:.*]] = %[[VAL_13]], %[[VAL_19:.*]] = %[[VAL_14]]) -> (!tt.ptr<f32>, tensor<1024xi64>, tensor<1024xf32>) {
@@ -387,8 +387,8 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           %[[VAL_3:.*]] = arith.constant 0 : i32
 // CHECK:           %[[VAL_4:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [0, 0]} dense<0> : tensor<1024xi64>
 // CHECK:           %[[VAL_5:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [1024, 1024]} 1024 : i32
-// CHECK:           %[[VAL_6:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 2048]} : i32
-// CHECK:           %[[VAL_7:.*]] = arith.muli %[[VAL_6]], %[[VAL_5]] {__amdgpuconvertbufferops.output_range = [0, 2097152]} : i32
+// CHECK:           %[[VAL_6:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 65536]} : i32
+// CHECK:           %[[VAL_7:.*]] = arith.muli %[[VAL_6]], %[[VAL_5]] {__amdgpuconvertbufferops.output_range = [0, 67108864]} : i32
 // CHECK:           %[[VAL_8:.*]] = tt.make_range {__amdgpuconvertbufferops.output_range = [0, 1024], end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
 // CHECK:           %[[VAL_9:.*]]:2 = scf.if %[[VAL_2]] -> (!tt.ptr<f32>, tensor<1024xi64>) {
 // CHECK:             %[[VAL_10:.*]] = tt.addptr %[[VAL_0]], %[[VAL_7]] : !tt.ptr<f32>, i32
@@ -433,8 +433,8 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           %[[VAL_2:.*]] = arith.constant dense<0> : tensor<1024xi32>
 // CHECK:           %[[VAL_3:.*]] = arith.constant 0 : i32
 // CHECK:           %[[VAL_4:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [1024, 1024]} 1024 : i32
-// CHECK:           %[[VAL_5:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 2048]} : i32
-// CHECK:           %[[VAL_6:.*]] = arith.muli %[[VAL_5]], %[[VAL_4]] {__amdgpuconvertbufferops.output_range = [0, 2097152]} : i32
+// CHECK:           %[[VAL_5:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 65536]} : i32
+// CHECK:           %[[VAL_6:.*]] = arith.muli %[[VAL_5]], %[[VAL_4]] {__amdgpuconvertbufferops.output_range = [0, 67108864]} : i32
 // CHECK:           %[[VAL_7:.*]] = tt.make_range {__amdgpuconvertbufferops.output_range = [0, 1024], end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
 // CHECK:           %[[VAL_8:.*]] = tt.addptr %[[VAL_0]], %[[VAL_6]] : !tt.ptr<f32>, i32
 // CHECK:           cf.cond_br %[[VAL_1]], ^bb1(%[[VAL_0]], %[[VAL_2]] : !tt.ptr<f32>, tensor<1024xi32>), ^bb1(%[[VAL_8]], %[[VAL_7]] : !tt.ptr<f32>, tensor<1024xi32>)
@@ -474,8 +474,8 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK-SAME:  %[[VAL_0:.*]]: !tt.ptr<f32>, %[[VAL_1:.*]]: i1) -> tensor<1024xf32> {
 // CHECK:           %[[VAL_2:.*]] = arith.constant 0 : i32
 // CHECK:           %[[VAL_3:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [1024, 1024]} 1024 : i32
-// CHECK:           %[[VAL_4:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 2048]} : i32
-// CHECK:           %[[VAL_5:.*]] = arith.muli %[[VAL_4]], %[[VAL_3]] {__amdgpuconvertbufferops.output_range = [0, 2097152]} : i32
+// CHECK:           %[[VAL_4:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 65536]} : i32
+// CHECK:           %[[VAL_5:.*]] = arith.muli %[[VAL_4]], %[[VAL_3]] {__amdgpuconvertbufferops.output_range = [0, 67108864]} : i32
 // CHECK:           %[[VAL_6:.*]] = tt.make_range {__amdgpuconvertbufferops.output_range = [0, 1024], end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
 // CHECK:           %[[VAL_7:.*]] = tt.addptr %[[VAL_0]], %[[VAL_5]] : !tt.ptr<f32>, i32
 // CHECK:           %[[VAL_8:.*]] = amdgpu.buffer_load %[[VAL_7]]{{\[}}%[[VAL_6]]] stride = %[[VAL_2]] : tensor<1024xf32>
@@ -502,8 +502,8 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK-LABEL:   tt.func @tile_offset(
 // CHECK-SAME:  %[[VAL_0:.*]]: !tt.ptr<f16>, %[[VAL_1:.*]]: i32, %[[VAL_2:.*]]: i32) -> tensor<16x256xf16, #[[$ATTR_0]]> {
 // CHECK:           %[[VAL_3:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [256, 256]} 256 : i32
-// CHECK:           %[[VAL_4:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 2048]} : i32
-// CHECK:           %[[VAL_5:.*]] = arith.muli %[[VAL_4]], %[[VAL_3]] {__amdgpuconvertbufferops.output_range = [0, 524288]} : i32
+// CHECK:           %[[VAL_4:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 65536]} : i32
+// CHECK:           %[[VAL_5:.*]] = arith.muli %[[VAL_4]], %[[VAL_3]] {__amdgpuconvertbufferops.output_range = [0, 16777216]} : i32
 // CHECK:           %[[VAL_6:.*]] = tt.make_range {__amdgpuconvertbufferops.output_range = [0, 256], end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 0, parent = #[[$ATTR_0]]}>>
 // CHECK:           %[[VAL_7:.*]] = tt.make_range {__amdgpuconvertbufferops.output_range = [0, 16], end = 16 : i32, start = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 1, parent = #[[$ATTR_0]]}>>
 // CHECK:           %[[VAL_8:.*]] = tt.expand_dims %[[VAL_7]] {__amdgpuconvertbufferops.output_range = [0, 16], axis = 1 : i32} : tensor<16xi32, #ttg.slice<{dim = 1, parent = #[[$ATTR_0]]}>> -> tensor<16x1xi32, #[[$ATTR_0]]>
@@ -549,8 +549,8 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK-LABEL:   tt.func public @matmul_kernel(
 // CHECK-SAME:  %[[VAL_0:.*]]: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %[[VAL_1:.*]]: i32 {tt.divisibility = 16 : i32}) -> tensor<128x16xf16, #[[$ATTR_1]]> {
 // CHECK:           %[[VAL_2:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [128, 128]} 128 : i32
-// CHECK:           %[[VAL_3:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 2048]} : i32
-// CHECK:           %[[VAL_4:.*]] = arith.muli %[[VAL_3]], %[[VAL_2]] {__amdgpuconvertbufferops.output_range = [0, 262144]} : i32
+// CHECK:           %[[VAL_3:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 65536]} : i32
+// CHECK:           %[[VAL_4:.*]] = arith.muli %[[VAL_3]], %[[VAL_2]] {__amdgpuconvertbufferops.output_range = [0, 8388608]} : i32
 // CHECK:           %[[VAL_5:.*]] = tt.make_range {__amdgpuconvertbufferops.output_range = [0, 128], end = 128 : i32, start = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #[[$ATTR_1]]}>>
 // CHECK:           %[[VAL_6:.*]] = tt.make_range {__amdgpuconvertbufferops.output_range = [0, 16], end = 16 : i32, start = 0 : i32} : tensor<16xi32, #ttg.slice<{dim = 0, parent = #[[$ATTR_1]]}>>
 // CHECK:           %[[VAL_7:.*]] = tt.expand_dims %[[VAL_5]] {__amdgpuconvertbufferops.output_range = [0, 128], axis = 1 : i32} : tensor<128xi32, #ttg.slice<{dim = 1, parent = #[[$ATTR_1]]}>> -> tensor<128x1xi32, #[[$ATTR_1]]>
@@ -599,8 +599,8 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           %[[VAL_2:.*]] = arith.constant 0 : i32
 // CHECK:           %[[VAL_3:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [0, 0]} dense<0> : tensor<1024xi64>
 // CHECK:           %[[VAL_4:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [1024, 1024]} 1024 : i32
-// CHECK:           %[[VAL_5:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 2048]} : i32
-// CHECK:           %[[VAL_6:.*]] = arith.muli %[[VAL_5]], %[[VAL_4]] {__amdgpuconvertbufferops.output_range = [0, 2097152]} : i32
+// CHECK:           %[[VAL_5:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 65536]} : i32
+// CHECK:           %[[VAL_6:.*]] = arith.muli %[[VAL_5]], %[[VAL_4]] {__amdgpuconvertbufferops.output_range = [0, 67108864]} : i32
 // CHECK:           %[[VAL_7:.*]] = tt.make_range {__amdgpuconvertbufferops.output_range = [0, 1024], end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
 // CHECK:           %[[VAL_8:.*]] = tt.addptr %[[VAL_0]], %[[VAL_6]] : !tt.ptr<f32>, i32
 // CHECK:           %[[VAL_9:.*]] = arith.extsi %[[VAL_7]] {__amdgpuconvertbufferops.output_range = [0, 1024]} : tensor<1024xi32> to tensor<1024xi64>
@@ -637,8 +637,8 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           %[[VAL_3:.*]] = arith.constant 0 : i32
 // CHECK:           %[[VAL_4:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [0, 0]} 0 : i8
 // CHECK:           %[[VAL_5:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [1024, 1024]} 1024 : i32
-// CHECK:           %[[VAL_6:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 2048]} : i32
-// CHECK:           %[[VAL_7:.*]] = arith.muli %[[VAL_6]], %[[VAL_5]] {__amdgpuconvertbufferops.output_range = [0, 2097152]} : i32
+// CHECK:           %[[VAL_6:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 65536]} : i32
+// CHECK:           %[[VAL_7:.*]] = arith.muli %[[VAL_6]], %[[VAL_5]] {__amdgpuconvertbufferops.output_range = [0, 67108864]} : i32
 // CHECK:           %[[VAL_8:.*]] = tt.make_range {__amdgpuconvertbufferops.output_range = [0, 1024], end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
 // CHECK:           %[[VAL_9:.*]] = arith.cmpi ne, %[[VAL_2]], %[[VAL_4]] {__amdgpuconvertbufferops.output_range = [-1, 0]} : i8
 // CHECK:           %[[VAL_10:.*]] = arith.select %[[VAL_9]], %[[VAL_0]], %[[VAL_1]] : !tt.ptr<i64>
@@ -672,7 +672,7 @@ module attributes {"ttg.num-ctas" = 1 : i32} {
 // CHECK:           %[[VAL_3:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [0, 0]} 0 : index
 // CHECK:           %[[VAL_4:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [1, 1]} 1 : index
 // CHECK:           %[[VAL_5:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [128, 128]} 128 : index
-// CHECK:           %[[VAL_6:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 2048]} : i32
+// CHECK:           %[[VAL_6:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 65536]} : i32
 // CHECK:           %[[VAL_7:.*]] = tt.make_range {__amdgpuconvertbufferops.output_range = [0, 1024], end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
 // CHECK:           %[[VAL_8:.*]] = tt.addptr %[[VAL_0]], %[[VAL_6]] : !tt.ptr<f32>, i32
 // CHECK:           %[[VAL_9:.*]] = arith.extsi %[[VAL_7]] {__amdgpuconvertbufferops.output_range = [0, 1024]} : tensor<1024xi32> to tensor<1024xi64>
@@ -822,8 +822,8 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           %[[VAL_3:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [0, 0]} 0 : index
 // CHECK:           %[[VAL_4:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [128, 128]} 128 : index
 // CHECK:           %[[VAL_5:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [1, 1]} 1 : index
-// CHECK:           %[[VAL_6:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 2048]} : i32
-// CHECK:           %[[VAL_7:.*]] = arith.muli %[[VAL_6]], %[[VAL_2]] {__amdgpuconvertbufferops.output_range = [0, 2097152]} : i32
+// CHECK:           %[[VAL_6:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 65536]} : i32
+// CHECK:           %[[VAL_7:.*]] = arith.muli %[[VAL_6]], %[[VAL_2]] {__amdgpuconvertbufferops.output_range = [0, 67108864]} : i32
 // CHECK:           %[[VAL_8:.*]] = tt.make_range {__amdgpuconvertbufferops.output_range = [0, 1024], end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
 // CHECK:           %[[VAL_9:.*]] = tt.addptr %[[VAL_0]], %[[VAL_7]] : !tt.ptr<f32>, i32
 // CHECK:           %[[VAL_10:.*]] = arith.extsi %[[VAL_8]] {__amdgpuconvertbufferops.output_range = [0, 1024]} : tensor<1024xi32> to tensor<1024xi64>
@@ -889,8 +889,8 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           %[[VAL_4:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [0, 0]} 0 : index
 // CHECK:           %[[VAL_5:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [128, 128]} 128 : index
 // CHECK:           %[[VAL_6:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [1, 1]} 1 : index
-// CHECK:           %[[VAL_7:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 2048]} : i32
-// CHECK:           %[[VAL_8:.*]] = arith.muli %[[VAL_7]], %[[VAL_3]] {__amdgpuconvertbufferops.output_range = [0, 2097152]} : i32
+// CHECK:           %[[VAL_7:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 65536]} : i32
+// CHECK:           %[[VAL_8:.*]] = arith.muli %[[VAL_7]], %[[VAL_3]] {__amdgpuconvertbufferops.output_range = [0, 67108864]} : i32
 // CHECK:           %[[VAL_9:.*]] = tt.make_range {__amdgpuconvertbufferops.output_range = [0, 1024], end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
 // CHECK:           %[[VAL_10:.*]] = tt.addptr %[[VAL_0]], %[[VAL_8]] : !tt.ptr<f32>, i32
 // CHECK:           %[[VAL_11:.*]] = arith.extsi %[[VAL_9]] {__amdgpuconvertbufferops.output_range = [0, 1024]} : tensor<1024xi32> to tensor<1024xi64>
@@ -981,8 +981,8 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 // CHECK:           %[[VAL_3:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [1024, 1024]} 1024 : i32
 // CHECK:           %[[VAL_4:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [0, 0]} 0 : index
 // CHECK:           %[[VAL_5:.*]] = arith.constant {__amdgpuconvertbufferops.output_range = [128, 128]} 128 : index
-// CHECK:           %[[VAL_6:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 2048]} : i32
-// CHECK:           %[[VAL_7:.*]] = arith.muli %[[VAL_6]], %[[VAL_3]] {__amdgpuconvertbufferops.output_range = [0, 2097152]} : i32
+// CHECK:           %[[VAL_6:.*]] = tt.get_program_id x {__amdgpuconvertbufferops.output_range = [0, 65536]} : i32
+// CHECK:           %[[VAL_7:.*]] = arith.muli %[[VAL_6]], %[[VAL_3]] {__amdgpuconvertbufferops.output_range = [0, 67108864]} : i32
 // CHECK:           %[[VAL_8:.*]] = tt.make_range {__amdgpuconvertbufferops.output_range = [0, 1024], end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
 // CHECK:           %[[VAL_9:.*]] = tt.addptr %[[VAL_0]], %[[VAL_7]] : !tt.ptr<f32>, i32
 // CHECK:           %[[VAL_10:.*]] = arith.extsi %[[VAL_8]] {__amdgpuconvertbufferops.output_range = [0, 1024]} : tensor<1024xi32> to tensor<1024xi64>

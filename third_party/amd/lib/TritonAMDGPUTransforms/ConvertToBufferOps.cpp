@@ -61,7 +61,7 @@ void getEnclosingLoops(Operation &op, SmallVector<LoopLikeOpInterface> &ops) {
 }
 
 void inferResultRanges(GetProgramIdOp *op, SetIntRangeFn setResultRange) {
-  constexpr int64_t kDefaultMaxProgramID = 2048;
+  constexpr int64_t kDefaultMaxProgramID = 2 << 15; // 65536
   setResultRange(
       op->getResult(),
       ConstantIntRanges::range(
