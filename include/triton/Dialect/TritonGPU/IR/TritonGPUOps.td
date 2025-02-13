@@ -331,7 +331,23 @@ def TTG_GlobalScratchAllocOp : TTG_Op<"global_scratch_alloc", [MemoryEffects<[Me
   let assemblyFormat = [{attr-dict `:` qualified(type($result))}];
 }
 
-def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [IsolatedFromAbove]> {
+def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [
+  IsolatedFromAbove, RecursiveMemoryEffects, RecursivelySpeculatable,
+]> {
+  let arguments = (ins
+    Variadic<AnyType>:$explicitCaptures,
+    DenseI32ArrayAttr:$partitionWarpSizes
+  );
+  let results = (outs Variadic<AnyType>:$defaultPassthrough);
+  let regions = (region
+    SizedRegion<1>:$defaultRegion,
+    VariadicRegion<SizedRegion<1>>:$partitionRegions
+  );
+
+  let hasVerifier = 1;
+}
+
+def TTG_WarpReturnOp : TTG_Op<"warp_return", [Pure, Terminator, ReturnLike]> {
 }
 
 #endif // TRITONGPU_OPS

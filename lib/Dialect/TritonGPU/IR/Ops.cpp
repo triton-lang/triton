@@ -602,4 +602,9 @@ int32_t LocalAllocOp::getAlignmentOrDefault() {
   return enc ? enc.getAlignment() : 16;
 }
 
+// -- WarpSpecializeOp --
+
+LogicalResult WarpSpecializeOp::verify() {
+}
+
 } // namespace mlir::triton::gpu
