@@ -169,29 +169,14 @@ Value getLaneId(OpBuilder &rewriter, Location loc, unsigned threadsPerWarp) {
 }
 
 std::pair<Value, Value> getLaneAndWarpId(OpBuilder &rewriter, Location loc,
-                                         unsigned threadsPerWarp) {
+                                         unsigned warpSize) {
   TritonLLVMOpBuilder b(loc, rewriter);
   Value tid = getThreadId(rewriter, loc);
-  Value threadsPerWarpVal = b.i32_val(threadsPerWarp);
+  Value warpSizeVal = b.i32_val(warpSize);
 
-  Value laneId = b.urem(tid, threadsPerWarpVal);
-  Value warpId = b.udiv(tid, threadsPerWarpVal);
+  Value laneId = b.urem(tid, warpSizeVal);
+  Value warpId = b.udiv(tid, warpSizeVal);
   return {laneId, warpId};
-}
-
-std::tuple<Value, Value, Value> emitHardwareTuple(Location loc,
-                                                  RewriterBase &rewriter,
-                                                  const TargetInfoBase &target,
-                                                  bool withCTAOffset,
-                                                  unsigned threadsPerWarpCst) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value threadId = getThreadId(rewriter, loc);
-  Value threadsPerWarp = b.i32_val(threadsPerWarpCst);
-  Value laneId = b.urem(threadId, threadsPerWarp);
-  Value warpId = b.udiv(threadId, threadsPerWarp);
-  Value blockId =
-      withCTAOffset ? target.getClusterCTAId(rewriter, loc) : b.i32_val(0);
-  return {laneId, warpId, blockId};
 }
 
 SmallVector<SmallVector<Value>>
@@ -210,8 +195,10 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
   StringAttr kWarp = str_attr("warp");
   StringAttr kBlock = str_attr("block");
 
-  auto [laneId, warpId, blockId] = emitHardwareTuple(
-      loc, rewriter, target, withCTAOffset, ll.getInDimSize(kLane));
+  auto [laneId, warpId] =
+      getLaneAndWarpId(rewriter, loc, ll.getInDimSize(kLane));
+  Value blockId =
+      withCTAOffset ? target.getClusterCTAId(rewriter, loc) : b.i32_val(0);
   unsigned rank = shape.size();
   SmallVector<SmallVector<Value>> ret;
   // Linear layout function is split in two parts below:
@@ -430,9 +417,10 @@ bool emitTransferBetweenRegistersAndShared(
                maxVecElems.value_or(std::numeric_limits<int>::max()));
 
   auto withCTAOffset = triton::gpu::getNumCTAs(sharedTy.getEncoding()) > 1;
-  auto [laneId, warpId, blockId] =
-      emitHardwareTuple(loc, rewriter, target, withCTAOffset,
-                        regToSharedLayout.getInDimSize(kLane));
+  auto [laneId, warpId] =
+      getLaneAndWarpId(rewriter, loc, regToSharedLayout.getInDimSize(kLane));
+  Value blockId =
+      withCTAOffset ? target.getClusterCTAId(rewriter, loc) : b.i32_val(0);
 
   // For kernels with a single CTA, `allocSharedLayout.sublayout(S("block"),
   // outDims) == 0`. We need to take out the "block" dimension in order to use
@@ -938,8 +926,7 @@ SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
     auto instrShape = mmaLayout.getInstrShape();
     SmallVector<Value> mmaColIdx(2);
     SmallVector<Value> mmaRowIdx(2);
-    auto [laneId, warpId, blockId] = emitHardwareTuple(
-        loc, rewriter, targetInfo, /*withCTAOffset=*/false, 32);
+    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc, /*warpSize=*/32);
     // TODO: fix the bug in MMAEncodingAttr document
     SmallVector<Value> multiDimWarpId(2);
     auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
