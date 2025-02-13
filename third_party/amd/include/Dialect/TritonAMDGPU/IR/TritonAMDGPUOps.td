@@ -41,8 +41,7 @@ include "TritonAMDGPUAttrDefs.td"
 
 
 class TT_AMDGPU_Op<string mnemonic, list<Trait> traits = []> :
-    Op<TritonAMDGPU_Dialect, mnemonic, !listconcat(traits, [])> {
-}
+    Op<TritonAMDGPU_Dialect, mnemonic, !listconcat(traits, [])>;
 
 //
 // Interfaces
@@ -53,8 +52,7 @@ def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
 // ExtractSliceOp
 //===----------------------------------------------------------------------===//
 
-def ExtractSliceOp
-    : TT_AMDGPU_Op<"extract_slice", [Pure]> {
+def ExtractSliceOp : TT_AMDGPU_Op<"extract_slice", [Pure]> {
   let summary = "extract slice operation";
   let description = [{
     The "extract_slice" operation enables extracting a slice of a tensor in
@@ -92,8 +90,10 @@ def ExtractSliceOp
     size of the slice is determined by the result type.
     }];
 
-  let arguments = (ins AnyRankedTensor:$source,
-      DenseI64ArrayAttr:$static_offsets);
+  let arguments = (ins
+    AnyRankedTensor:$source,
+    DenseI64ArrayAttr:$static_offsets
+  );
   let results = (outs AnyRankedTensor:$result);
 
   let builders = [
@@ -116,6 +116,10 @@ def ExtractSliceOp
 
   let hasVerifier = 1;
 }
+
+//===----------------------------------------------------------------------===//
+// InstructionSchedHint
+//===----------------------------------------------------------------------===//
 
 def InstructionSchedHint : TT_AMDGPU_Op<"instruction_sched_hint", []> {
   let summary = "A placeholder op for instruction scheduling hints within a basic block";
@@ -156,8 +160,11 @@ def InstructionSchedHint : TT_AMDGPU_Op<"instruction_sched_hint", []> {
   let assemblyFormat = [{ attr-dict }];
 }
 
-def CondBarrierOp : TT_AMDGPU_Op<"cond_barrier">,
-  Arguments<(ins I1:$pred)> {
+//===----------------------------------------------------------------------===//
+// CondBarrierOp
+//===----------------------------------------------------------------------===//
+
+def CondBarrierOp : TT_AMDGPU_Op<"cond_barrier"> {
   let summary = "Conditionally set barriers to synchronize partial threads in a block";
 
   let description = [{
@@ -170,12 +177,15 @@ def CondBarrierOp : TT_AMDGPU_Op<"cond_barrier">,
       NB. This doesn't set any memory fence.
   }];
 
+  let arguments = (ins I1:$pred);
+
   let assemblyFormat = "$pred attr-dict";
 }
 
-//
-// AMD Buffer operations.
-//
+//===----------------------------------------------------------------------===//
+// BufferLoadOp
+//===----------------------------------------------------------------------===//
+
 def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
   SameLoadStoreOperandsAndResultEncoding,
   AttrSizedOperandSegments,
@@ -201,11 +211,10 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
       when it converts to the buffer ops because it is important for optimizing
       the cache memory access.
     }];
-    let arguments = (
-      ins
+    let arguments = (ins
       TT_Ptr:$ptr,
       I32Tensor:$offsets,
-      I32:$stride,
+      Optional<I32>:$stride,
       DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
       Optional<TT_BoolTensor>:$mask,
       Optional<TT_Tensor>:$other
@@ -220,7 +229,12 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
     }];
 }
 
+//===----------------------------------------------------------------------===//
+// BufferAtomicRMWOp
+//===----------------------------------------------------------------------===//
+
 def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
+  AttrSizedOperandSegments,
   SameLoadStoreOperandsAndResultEncoding,
   MemoryEffects<[MemRead<GlobalMemory>]>,
   MemoryEffects<[MemWrite<GlobalMemory>]>,
@@ -246,13 +260,12 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
         the address difference between the first elements of each row in bytes. Compiler tries to obtain the `stride`
         when it converts to the buffer ops because it is important for optimizing the cache memory access.
     }];
-    let arguments = (
-      ins
+    let arguments = (ins
       TT_AtomicRMWAttr:$atomic_rmw_op,
       TT_Ptr:$ptr,
       I32Tensor:$offsets,
       TT_Tensor:$value,
-      I32:$stride,
+      Optional<I32>:$stride,
       TT_MemSemanticAttr:$sem,
       TT_MemSyncScopeAttr:$scope,
       Optional<TT_BoolTensor>:$mask
@@ -266,7 +279,12 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
     }];
 }
 
+//===----------------------------------------------------------------------===//
+// BufferStoreOp
+//===----------------------------------------------------------------------===//
+
 def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
+  AttrSizedOperandSegments,
   SameLoadStoreOperandsEncoding,
   MemoryEffects<[MemWrite<GlobalMemory>]>,
   TypesMatchWith<"value element type matches the pointed type of ptr", "value", "ptr", "getPointerTypeToElement($_self)">,
@@ -288,12 +306,11 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
       when it converts to the buffer ops because it is important for optimizing
       the cache memory access.
     }];
-    let arguments = (
-      ins
+    let arguments = (ins
       TT_Tensor:$value,
       TT_Ptr:$ptr,
       I32Tensor:$offsets,
-      I32:$stride,
+      Optional<I32>:$stride,
       DefaultValuedAttr<TT_CacheModifierAttr, "mlir::triton::CacheModifier::NONE">:$cache,
       Optional<TT_BoolTensor>:$mask
     );
