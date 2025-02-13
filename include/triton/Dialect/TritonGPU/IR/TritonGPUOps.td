@@ -331,4 +331,7 @@ def TTG_GlobalScratchAllocOp : TTG_Op<"global_scratch_alloc", [MemoryEffects<[Me
   let assemblyFormat = [{attr-dict `:` qualified(type($result))}];
 }
 
-#endif
+def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [IsolatedFromAbove]> {
+}
+
+#endif // TRITONGPU_OPS
