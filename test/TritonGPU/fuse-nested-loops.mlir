@@ -540,3 +540,30 @@ tt.func @sink_prologue_to_epilogue(%ub: i32) {
 
   tt.return
 }
+
+// -----
+
+// CHECK-LABEL: @prologue_output
+tt.func @prologue_output(%ub: i32) {
+  %c0_i32 = arith.constant 0 : i32
+  %c1_i32 = arith.constant 1 : i32
+
+  // CHECK: scf.for
+  %0 = scf.for %i = %c0_i32 to %ub step %c1_i32 iter_args(%k = %c0_i32) -> i32 : i32 {
+    // CHECK: scf.if
+    // CHECK: {increment}
+    %next = arith.addi %k, %c1_i32 {increment} : i32
+    // CHECK: scf.if
+    scf.for %j = %c0_i32 to %ub step %c1_i32 : i32 {
+      // CHECK-NEXT: "body"
+      "body"(%i, %j) : (i32, i32) -> ()
+    }
+    // CHECK: scf.if {{%[0-9]+}} {
+    // CHECK-NEXT: "epilogue"
+    "epilogue"(%i) : (i32) -> ()
+    // CHECK-NEXT: } else {
+    scf.yield %next : i32
+  } {"ttg.always-fuse"}
+
+  tt.return
+}
