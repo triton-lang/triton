@@ -391,6 +391,8 @@ symbol reference attribute named “callee”.</p>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>callee</code></td><td>::mlir::FlatSymbolRefAttr</td><td>flat symbol reference attribute</td></tr>
+<tr><td><code>arg_attrs</code></td><td>::mlir::ArrayAttr</td><td>Array of dictionary attributes</td></tr>
+<tr><td><code>res_attrs</code></td><td>::mlir::ArrayAttr</td><td>Array of dictionary attributes</td></tr>
 </table>
 </section>
 <section id="operands">
@@ -459,7 +461,7 @@ tt.func @example_fn_result() -&gt; (f64 {dialectName.attrName = 0 : i64})
 tt.func @example_fn_attr() attributes {dialectName.attrName = false}
 </pre></div>
 </div>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">AffineScope</span></code>, <code class="docutils literal notranslate"><span class="pre">AutomaticAllocationScope</span></code>, <code class="docutils literal notranslate"><span class="pre">IsolatedFromAbove</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AffineScope</span></code>, <code class="docutils literal notranslate"><span class="pre">AutomaticAllocationScope</span></code>, <code class="docutils literal notranslate"><span class="pre">HasParent&lt;ModuleOp&gt;</span></code>, <code class="docutils literal notranslate"><span class="pre">IsolatedFromAbove</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">CallableOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">FunctionOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">OpAsmOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">Symbol</span></code></p>
 <section id="id1">
 <h3>Attributes:<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h3>

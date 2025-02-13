@@ -30,6 +30,8 @@ Interfaces: `CallOpInterface`, `SymbolUserOpInterface`
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>callee</code></td><td>::mlir::FlatSymbolRefAttr</td><td>flat symbol reference attribute</td></tr>
+<tr><td><code>arg_attrs</code></td><td>::mlir::ArrayAttr</td><td>Array of dictionary attributes</td></tr>
+<tr><td><code>res_attrs</code></td><td>::mlir::ArrayAttr</td><td>Array of dictionary attributes</td></tr>
 </table>
 
 #### Operands:
@@ -84,7 +86,7 @@ tt.func @example_fn_result() -> (f64 {dialectName.attrName = 0 : i64})
 tt.func @example_fn_attr() attributes {dialectName.attrName = false}
 ```
 
-Traits: `AffineScope`, `AutomaticAllocationScope`, `IsolatedFromAbove`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+Traits: `AffineScope`, `AutomaticAllocationScope`, `HasParent<ModuleOp>`, `IsolatedFromAbove`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `CallableOpInterface`, `FunctionOpInterface`, `OpAsmOpInterface`, `Symbol`
 

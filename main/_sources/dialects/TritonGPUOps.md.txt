@@ -148,6 +148,49 @@ Effects: `MemoryEffects::Effect{}`
 | :----: | ----------- |
 | `result` | ranked tensor of floating-point or integer or ptr values
 
+### `ttg.fp4_to_fp` (triton::gpu::Fp4ToFpOp)
+
+_Upcast fp4 (e2m1) to fp_
+
+
+Syntax:
+
+```
+operation ::= `ttg.fp4_to_fp` $src attr-dict `:` type($src) `->` type($result)
+```
+
+Upcast fp4 (e2m1) represented packed as i8s to fp.
+
+The lower 4 bits of the i8s represent the first fp4 element, and the upper 4 bits
+the second fp4 element.
+
+The `axis` attribute specifies the axis along which the fp4 elements are packed.
+
+Traits: `AlwaysSpeculatableImplTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>axis</code></td><td>::mlir::IntegerAttr</td><td>32-bit signless integer attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `src` | ranked tensor of 8-bit signless integer values
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | ranked tensor of floating-point values
+
 ### `ttg.global_scratch_alloc` (triton::gpu::GlobalScratchAllocOp)
 
 _Allocate a global memory buffer_
@@ -387,52 +430,4 @@ Effects: `MemoryEffects::Effect{}`
 | Result | Description |
 | :----: | ----------- |
 | `result` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system
-
-### `ttg.upcast_mxfp` (triton::gpu::UpcastMXFPOp)
-
-_Convert an mxfp tensor to bf16/fp16_
-
-
-Syntax:
-
-```
-operation ::= `ttg.upcast_mxfp` $src `,` $scale  `fp_type` `=` $fp_type attr-dict `:` type($src) `,` type($scale) `->` type($result)
-```
-
-Compute the bf16 encoded in the given mxfp number as per
-https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
-
-Traits: `AlwaysSpeculatableImplTrait`, `VerifyTensorLayoutsTrait`
-
-Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
-
-Effects: `MemoryEffects::Effect{}`
-
-#### Attributes:
-
-<table>
-<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>fp_type</code></td><td>::mlir::triton::ScaleDotElemTypeAttr</td><td><details><summary>allowed 32-bit signless integer cases: 0, 1, 2, 3, 4, 5, 6</summary>{{% markdown %}}Enum cases:
-* e4m3 (`E4M3`)
-* e5m2 (`E5M2`)
-* e2m3 (`E2M3`)
-* e3m2 (`E3M2`)
-* e2m1 (`E2M1`)
-* bf16 (`BF16`)
-* fp16 (`FP16`){{% /markdown %}}</details></td></tr>
-<tr><td><code>fastMath</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
-</table>
-
-#### Operands:
-
-| Operand | Description |
-| :-----: | ----------- |
-| `src` | ranked tensor of floating-point or integer or ptr values
-| `scale` | ranked tensor of floating-point or integer or ptr values
-
-#### Results:
-
-| Result | Description |
-| :----: | ----------- |
-| `result` | ranked tensor of floating-point or integer or ptr values
 
