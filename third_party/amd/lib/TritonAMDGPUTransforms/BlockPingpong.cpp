@@ -13,6 +13,7 @@
 #include "TritonAMDGPUTransforms/Passes.h"
 
 #define DEBUG_TYPE "tritonamdgpu-block-pingpong"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 using namespace mlir;
@@ -471,7 +472,7 @@ void Pingponger::getDotPingponged() {
     // centric pingpong scheduling.
     if (tileSize <= smallTile && tileSize >= minTile) {
       transformOnePPClusters(builder, loc);
-      LDBG("Successfully performed One Ping Pong Cluster Transformation.")
+      LDBG("Successfully performed One Ping Pong Cluster Transformation.");
     }
     // numWarps=4 doesn't need asymmetric sync, return.
     return;
@@ -482,14 +483,14 @@ void Pingponger::getDotPingponged() {
     if (tileSize == mediumTile) {
       if (transformTwoPPClusters(builder, dotOps[0]->getLoc()).failed())
         return;
-      LDBG("Successfully performed Two Ping Pong Cluster Transformation.")
+      LDBG("Successfully performed Two Ping Pong Cluster Transformation.");
     } else if (tileSize >= largeTile) {
       // Avoid known register spilling. i.e., mfma16x16x16 & largetile & kpack>1
       if (intShape[0] == 16 && intShape[1] == 16 && kWidth == 8)
         return;
       if (transformFourPPClusters(builder, dotOps[0]->getLoc()).failed())
         return;
-      LDBG("Successfully performed Four Ping Pong Cluster Transformation.")
+      LDBG("Successfully performed Four Ping Pong Cluster Transformation.");
     } else
       return;
 
