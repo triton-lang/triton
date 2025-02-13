@@ -59,8 +59,8 @@ getCtrlBitsForCacheModifierOnTarget(triton::CacheModifier, bool,
                                     const mlir::triton::AMD::TargetInfo &);
 
 // Get cache modifier information for buffer atomics
-int32_t getCtrlBitsForBufferAtomicsOnGFX942(bool setSC0, bool setSC1,
-                                            bool setNT);
+int32_t getCtrlBitsForBufferAtomicsOnGFX_942_950(bool setSC0, bool setSC1,
+                                                 bool setNT);
 
 Value cvtFp32ToFp16(Location loc, RewriterBase &rewriter, const Value &v,
                     triton::RoundingMode rounding);
@@ -82,6 +82,8 @@ unsigned getVectorSize(Value ptr, ModuleAxisInfoAnalysis &axisAnalysisPass);
 // Given a scalar pointer and a tensor of offsets, determine the vector size
 unsigned getVectorSize(Value ptr, Value offset,
                        ModuleAxisInfoAnalysis &axisAnalysisPass);
+
+Type scaleDotElemTypeToMLIRType(MLIRContext *ctx, triton::ScaleDotElemType t);
 
 } // namespace mlir::LLVM::AMD
 

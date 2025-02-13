@@ -1157,16 +1157,22 @@ class GridExecutor:
         self.constexprs = [name for name in arg_names if __annotations__.get(name) == "constexpr"]
 
     def _init_args_hst(self, args_dev, kwargs):
+        storages = {}
 
         def _to_cpu(arg):
             if isinstance(arg, tuple):
                 return _tuple_create(arg, map(_to_cpu, arg))
             elif not hasattr(arg, "data_ptr"):
                 return arg
+
             unwrapped_arg = _unwrap_tensor(arg)
+            if unwrapped_arg.untyped_storage().data_ptr() not in storages:
+                storage = unwrapped_arg.untyped_storage()
+                storages[storage.data_ptr()] = storage.cpu()
+
+            storage = storages[unwrapped_arg.untyped_storage().data_ptr()]
             cpu_arg = unwrapped_arg.new_empty(0, device='cpu')
-            cpu_arg.set_(unwrapped_arg.untyped_storage().cpu(), unwrapped_arg.storage_offset(), unwrapped_arg.size(),
-                         unwrapped_arg.stride())
+            cpu_arg.set_(storage, unwrapped_arg.storage_offset(), unwrapped_arg.size(), unwrapped_arg.stride())
             cpu_arg = _rewrap_tensor(cpu_arg, original_tensor=arg)
             return cpu_arg
 
@@ -1175,21 +1181,17 @@ class GridExecutor:
         # Process keyword arguments
         kwargs_hst = {}
         for key, value in kwargs.items():
-            if hasattr(value, "data_ptr"):
-                kwargs_hst[key] = value.cpu()
-            elif isinstance(value, tuple):
-                return _tuple_create(value, map(_to_cpu, value))
-            else:
-                kwargs_hst[key] = value
+            kwargs_hst[key] = _to_cpu(value)
         return args_hst, kwargs_hst
 
     def _restore_args_dev(self, args_dev, args_hst, kwargs, kwargs_hst):
+        storages = {}
 
         def _from_cpu(arg_dev, arg_hst):
             if hasattr(arg_dev, "data_ptr"):
                 # No need to rewrap because this just modifies internal
                 arg_dev, arg_hst = _unwrap_tensor(arg_dev), _unwrap_tensor(arg_hst)
-                arg_dev.untyped_storage().copy_(arg_hst.untyped_storage())
+                storages[arg_dev.untyped_storage().data_ptr()] = (arg_dev.untyped_storage(), arg_hst.untyped_storage())
             elif isinstance(arg_dev, tuple):
                 for (arg_dev, arg_hst) in zip(arg_dev, arg_hst):
                     _from_cpu(arg_dev, arg_hst)
@@ -1201,6 +1203,9 @@ class GridExecutor:
         for key, kwarg_dev in kwargs.items():
             kwarg_hst = kwargs_hst[key]
             _from_cpu(kwarg_dev, kwarg_hst)
+
+        for (arg_dev, arg_hst) in storages.values():
+            arg_dev.copy_(arg_hst)
 
     def __call__(self, *args_dev, **kwargs):
         if kwargs.pop("warmup", False):

@@ -128,27 +128,10 @@ public:
     return true;
   }
 
-  void insertMinimum(Operation *op, int stage, Cluster cluster) {
-    auto res = opToStageAndCluster.insert({op, {stage, cluster}});
-    if (res.second) {
-      return;
-    }
-    auto &[existingStage, existingCluster] = res.first->second;
-    existingStage = std::min(stage, existingStage);
-
-    // If existingCluster is reachable from cluster,
-    // then cluster is earlier in the list
-    auto it = cluster;
-    for (auto it = cluster; it != clusters.end(); ++it) {
-      if (it == existingCluster) {
-        existingCluster = cluster;
-        return;
-      }
-    }
-  }
+  bool insertMinimum(Operation *op, int stage, Cluster cluster);
 
   bool insertDepsOfOp(Operation *op, int stage, CoarseSchedule::Cluster cluster,
-                      bool includeArg);
+                      bool includeArg, bool insertIfEarlier = false);
 
   void erase(Operation *op) { opToStageAndCluster.erase(op); }
 
@@ -164,11 +147,17 @@ public:
   getOpsInOrder(scf::ForOp forOp);
   std::vector<std::pair<Operation *, unsigned>>
   createFinalSchedule(scf::ForOp forOp);
-  void dump();
-  bool empty() { return opToStageAndCluster.size() == 0; }
+
+  bool empty() const { return opToStageAndCluster.size() == 0; }
+  auto end() const { return opToStageAndCluster.end(); }
+  auto begin() const { return opToStageAndCluster.begin(); }
+
+  // Set <stage, cluster> based on CoarseSchedule.
   void serialize(scf::ForOp &forOp);
   // Create a CoarseSchedule based on forOp's <stage, cluster>.
   void deSerialize(scf::ForOp &forOp);
+
+  LLVM_DUMP_METHOD void dump();
 
 private:
   int numStages = 0;

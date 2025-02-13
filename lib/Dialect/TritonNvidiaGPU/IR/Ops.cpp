@@ -25,6 +25,8 @@
 #include "mlir/Support/LLVM.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
+#include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUOpInterfaces.cpp.inc"
+
 #define GET_OP_CLASSES
 #include "triton/Dialect/TritonNvidiaGPU/IR/Ops.cpp.inc"
 
@@ -273,6 +275,24 @@ bool TCGen5MMAOp::verifyDims() {
   return aShape[aShape.size() - 1] == bShape[aShape.size() - 2];
 }
 
+Value TCGen5MMAOp::useAccumulator() { return getUseD(); }
+
+void TCGen5MMAOp::setUseAccumulator(Value flag) {
+  getUseDMutable().assign(flag);
+}
+
+void TCGen5MMAOp::setBarrier(Value barrier) {
+  getBarrierMutable().assign(barrier);
+}
+
+Value TCGen5MMAOp::getAccumulator() { return getD(); }
+
+void TCGen5MMAOp::setAccumulator(Value accum) { getDMutable().assign(accum); }
+
+Value TCGen5MMAOp::getPredicate() { return getPred(); }
+
+void TCGen5MMAOp::setPredicate(Value pred) { getPredMutable().assign(pred); }
+
 // -- TMEMStoreOp --
 LogicalResult TMEMStoreOp::verify() {
   if (!isa<triton::nvidia_gpu::TensorMemorySpaceAttr>(
@@ -281,6 +301,9 @@ LogicalResult TMEMStoreOp::verify() {
   if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr,
            TensorMemoryScalesEncodingAttr>(getDst().getType().getEncoding()))
     return emitOpError("should use tensor memory encoding.");
+  if (!getDst().getType().getMutableMemory()) {
+    return emitOpError("Cannot store into an immutable alloc");
+  }
   return success();
 }
 
@@ -317,6 +340,28 @@ bool TCGen5MMAScaledOp::verifyDims() {
   return aKdim == bKdim;
 }
 
+Value TCGen5MMAScaledOp::useAccumulator() { return getUseD(); }
+
+void TCGen5MMAScaledOp::setUseAccumulator(Value flag) {
+  getUseDMutable().assign(flag);
+}
+
+void TCGen5MMAScaledOp::setBarrier(Value barrier) {
+  getBarrierMutable().assign(barrier);
+}
+
+Value TCGen5MMAScaledOp::getAccumulator() { return getD(); }
+
+void TCGen5MMAScaledOp::setAccumulator(Value accum) {
+  getDMutable().assign(accum);
+}
+
+Value TCGen5MMAScaledOp::getPredicate() { return getPred(); }
+
+void TCGen5MMAScaledOp::setPredicate(Value pred) {
+  getPredMutable().assign(pred);
+}
+
 // -- TMEMLoadOp --
 LogicalResult TMEMLoadOp::verify() {
   if (!isa<triton::nvidia_gpu::TensorMemorySpaceAttr>(
@@ -336,6 +381,10 @@ LogicalResult TMEMAllocOp::verify() {
   if (!isa<triton::nvidia_gpu::TensorMemoryEncodingAttr,
            TensorMemoryScalesEncodingAttr>(getType().getEncoding()))
     return emitOpError("should use tensor memory encoding.");
+  if (!getSrc()) {
+    if (!getType().getMutableMemory())
+      return emitError("uninitialized alloc must have a mutable memdesc type");
+  }
   return success();
 }
 
@@ -361,6 +410,9 @@ LogicalResult TMEMCopyOp::verify() {
   if (getBarrier() && !isa<triton::gpu::SharedMemorySpaceAttr>(
                           getBarrier().getType().getMemorySpace())) {
     return emitOpError("The optional barrier should be a shared memory buffer");
+  }
+  if (!getDst().getType().getMutableMemory()) {
+    return emitOpError("Cannot copy into an immutable alloc");
   }
 
   auto srcTy = cast<triton::gpu::MemDescType>(getSrc().getType());

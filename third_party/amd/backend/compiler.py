@@ -65,6 +65,9 @@ class HIPOptions:
         # Ignore user-defined warp size for gfx9
         warp_size = 32 if 'gfx10' in self.arch or 'gfx11' in self.arch or 'gfx12' in self.arch else 64
         object.__setattr__(self, 'warp_size', warp_size)
+        # Only kpack=1 is supported on gfx950
+        kpack = 1 if self.arch == 'gfx950' else self.kpack
+        object.__setattr__(self, 'kpack', kpack)
         libs = ["ocml", "ockl"]
         for lib in libs:
             extern_libs[lib] = str(default_libdir / f'{lib}.bc')
@@ -99,7 +102,7 @@ class HIPBackend(BaseBackend):
 
         if "supported_fp8_dtypes" not in opts:
             supported_fp8_dtypes = set(HIPOptions.supported_fp8_dtypes)
-            if self.target.arch in ('gfx940', 'gfx941', 'gfx942'):
+            if self.target.arch in ('gfx940', 'gfx941', 'gfx942', 'gfx950'):
                 supported_fp8_dtypes.update({'fp8e4nv', 'fp8e4b8', 'fp8e5b16'})
             args["supported_fp8_dtypes"] = tuple(sorted(supported_fp8_dtypes))
 
@@ -219,7 +222,7 @@ class HIPBackend(BaseBackend):
             amd.passes.ttgpuir.add_stream_pipeline(pm, options.num_stages, stream_prefetch)
             passes.common.add_canonicalizer(pm)
         if options.instruction_sched_variant.lower() != "none":
-            amd.passes.ttgpuir.insert_instruction_sched_hints(pm)
+            amd.passes.ttgpuir.insert_instruction_sched_hints(pm, options.instruction_sched_variant)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
@@ -276,8 +279,7 @@ class HIPBackend(BaseBackend):
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
         if options.instruction_sched_variant.lower() != "none":
-            amd.passes.ttgpuir.lower_instruction_sched_hints(pm, options.arch, options.num_stages,
-                                                             options.instruction_sched_variant)
+            amd.passes.ttgpuir.lower_instruction_sched_hints(pm, options.arch, options.num_stages)
         if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":
             passes.llvmir.add_di_scope(pm)
         amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm, __HIP_FTZ)

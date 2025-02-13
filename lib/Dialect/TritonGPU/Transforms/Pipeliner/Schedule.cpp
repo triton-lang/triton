@@ -14,11 +14,53 @@ using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 
+bool tt::CoarseSchedule::insertMinimum(Operation *op, int stage,
+                                       Cluster cluster) {
+  auto res = opToStageAndCluster.insert({op, {stage, cluster}});
+  if (res.second) {
+    return true;
+  }
+
+  auto &[existingStage, existingCluster] = res.first->second;
+
+  // Always insert if the stage is earlier.
+  if (stage < existingStage) {
+    existingStage = stage;
+    existingCluster = cluster;
+    return true;
+  }
+
+  // If the stage is later, no change.
+  if (stage > existingStage) {
+    return false;
+  }
+
+  // If existingCluster is reachable from cluster,
+  // then cluster is earlier in the list
+  auto it = cluster;
+  for (auto it = cluster; it != clusters.end(); ++it) {
+    if (it == existingCluster) {
+      existingCluster = cluster;
+      return true;
+    }
+  }
+
+  // Didn't change the cluster.
+  return false;
+}
+
 bool tt::CoarseSchedule::insertDepsOfOp(Operation *op, int stage,
                                         tt::CoarseSchedule::Cluster cluster,
-                                        bool includeArg) {
+                                        bool includeArg, bool insertIfEarlier) {
+  auto tryInsert = [&](Operation *op, int stage,
+                       tt::CoarseSchedule::Cluster cluster) {
+    if (!insertIfEarlier)
+      return insertIfAbsent(op, stage, cluster);
+    return insertMinimum(op, stage, cluster);
+  };
+
   bool inserted = false;
-  for (Value operand : op->getOperands()) {
+  for (Value operand : getNestedOperands(op)) {
     Value v = operand;
     llvm::SmallDenseSet<Value> seen;
     while (auto arg = dyn_cast<BlockArgument>(v)) {
@@ -35,7 +77,7 @@ bool tt::CoarseSchedule::insertDepsOfOp(Operation *op, int stage,
     }
     Operation *defOp = v.getDefiningOp();
     if (defOp && defOp->getBlock() == op->getBlock()) {
-      if (insertIfAbsent(defOp, stage, cluster)) {
+      if (tryInsert(defOp, stage, cluster)) {
         inserted = true;
         insertDepsOfOp(defOp, stage, cluster, includeArg);
       }

@@ -143,3 +143,12 @@ tt.func @scatter4_layout(%arg0: !tt.tensordesc<tensor<1x128xf32>>, %arg1: i32, %
   tt.experimental_descriptor_scatter %arg0[%cst, %arg1], %1 : !tt.tensordesc<tensor<1x128xf32>>, tensor<32xi32>, i32, tensor<32x128xf32>
   tt.return
 }
+
+// -----
+
+// CHECK-LABEL: @ub_poison
+tt.func @ub_poison() {
+  // CHECK-NEXT: ub.poison : tensor<128x64xf16, #blocked>
+  %0 = ub.poison : tensor<128x64xf16>
+  tt.return
+}

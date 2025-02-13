@@ -587,6 +587,9 @@ class JITFunction(KernelInterface[T]):
                        *bound_args.values())
         return kernel
 
+    def repr(self, _):
+        return self._fn_name if self._repr is None else self._repr(_)
+
     def __init__(self, fn, version=None, do_not_specialize=None, do_not_specialize_on_alignment=None, debug=None,
                  noinline=None, repr=None, launch_metadata=None):
         do_not_specialize = do_not_specialize if do_not_specialize else []
@@ -599,7 +602,8 @@ class JITFunction(KernelInterface[T]):
         self.do_not_specialize = do_not_specialize
         self.do_not_specialize_on_alignment = do_not_specialize_on_alignment
         self.starting_line_number = inspect.getsourcelines(fn)[1]
-        self.repr = lambda _: fn.__name__ if repr is None else repr(_)
+        self._repr = repr
+        self._fn_name = fn.__name__
         self.launch_metadata = launch_metadata
 
         self.params = []
@@ -613,7 +617,7 @@ class JITFunction(KernelInterface[T]):
         src = src[re.search(r"^def\s+\w+\s*\(", src, re.MULTILINE).start():]
         self._unsafe_update_src(src)
         # cache of just-in-time compiled kernels
-        self.device_caches = defaultdict(lambda: self.create_binder())
+        self.device_caches = defaultdict(self.create_binder)
         self.hash = None
 
         # Map of global variables used by the function and any functions it

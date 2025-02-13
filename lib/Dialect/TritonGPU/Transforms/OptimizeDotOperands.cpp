@@ -10,6 +10,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include <memory>
 
 namespace mlir::triton::gpu {
@@ -90,8 +91,7 @@ public:
                                 PatternRewriter &rewriter) const override {
     if (!allocOp.getSrc() || !allocOp->hasOneUse() ||
         !isa<triton::nvidia_gpu::WarpGroupDotOp,
-             triton::nvidia_gpu::TCGen5MMAOp,
-             triton::nvidia_gpu::TCGen5MMAScaledOp>(
+             triton::nvidia_gpu::MMAv5OpInterface>(
             *allocOp->getUsers().begin()))
       return failure();
 
@@ -195,9 +195,11 @@ public:
     if (!localLoad || !isTmemCopyCompatible(localLoad.getSrc().getType())) {
       return failure();
     }
-
+    MemDescType newType = MemDescType::get(
+        dstType.getShape(), dstType.getElementType(), dstType.getEncoding(),
+        dstType.getMemorySpace(), /*mutableMemory=*/true);
     Value newTmemAlloc = rewriter.create<triton::nvidia_gpu::TMEMAllocOp>(
-        tmemAlloc.getLoc(), dstType, Value());
+        tmemAlloc.getLoc(), newType, Value());
 
     // Since tcgen05.cp followed by tcgen05.mma is guaranteed to execute in that
     // order, we do not need to wait for the completion of the copy before MMA.

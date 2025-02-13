@@ -4,6 +4,7 @@
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Pass/PassManager.h"
+#include "third_party/amd/include/Dialect/TritonAMDGPU/Utility/CommonUtils.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -15,20 +16,6 @@ namespace ttg = mlir::triton::gpu;
 //===----------------------------------------------------------------------===//
 // Utility functions
 //===----------------------------------------------------------------------===//
-
-static SmallVector<scf::ForOp> getLeafForOps(triton::FuncOp funcOp) {
-  SmallVector<scf::ForOp> allOps;
-  funcOp->walk([&](scf::ForOp forOp) { allOps.push_back(forOp); });
-
-  SmallVector<scf::ForOp> leafOps;
-  for (scf::ForOp forOp : allOps) {
-    auto searchResult = forOp.getBody()->walk(
-        [](scf::ForOp) { return WalkResult::interrupt(); });
-    if (!searchResult.wasInterrupted())
-      leafOps.push_back(forOp);
-  }
-  return leafOps;
-}
 
 // Return true if the given funcOp is a pure matmul problem; i.e.,
 // a single main loop with a single dot.
@@ -425,7 +412,7 @@ struct TritonAMDGPUReorderInstructionsPass
         scheduleGlobalLoadLocalStore(funcOp);
         funcOp.walk([&](scf::ForOp forOp) -> void { sinkSecondLoad(forOp); });
       } else {
-        SmallVector<scf::ForOp> leafForOps = getLeafForOps(funcOp);
+        SmallVector<scf::ForOp> leafForOps = triton::AMD::getLeafForOps(funcOp);
         for (auto forOp : leafForOps) {
           if (isPureMatmulLoop(forOp)) {
             scheduleGlobalLoadLocalStore(forOp);
