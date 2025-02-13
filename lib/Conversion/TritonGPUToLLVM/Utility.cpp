@@ -156,6 +156,29 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
   return outIndices;
 }
 
+Value getThreadId(OpBuilder &rewriter, Location loc) {
+  Value tid =
+      rewriter.create<::mlir::gpu::ThreadIdOp>(loc, ::mlir::gpu::Dimension::x);
+  return rewriter.create<arith::IndexCastOp>(loc, i32_ty, tid);
+}
+
+Value getLaneId(OpBuilder &rewriter, Location loc, unsigned threadsPerWarp) {
+  TritonLLVMOpBuilder b(loc, rewriter);
+  Value tid = getThreadId(rewriter, loc);
+  return b.urem(tid, b.i32_val(threadsPerWarp));
+}
+
+std::pair<Value, Value> getLaneAndWarpId(OpBuilder &rewriter, Location loc,
+                                         unsigned threadsPerWarp) {
+  TritonLLVMOpBuilder b(loc, rewriter);
+  Value tid = getThreadId(rewriter, loc);
+  Value threadsPerWarpVal = b.i32_val(threadsPerWarp);
+
+  Value laneId = b.urem(tid, threadsPerWarpVal);
+  Value warpId = b.udiv(tid, threadsPerWarpVal);
+  return {laneId, warpId};
+}
+
 std::tuple<Value, Value, Value> emitHardwareTuple(Location loc,
                                                   RewriterBase &rewriter,
                                                   const TargetInfoBase &target,

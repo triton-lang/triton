@@ -75,7 +75,7 @@ struct DotOpMFMAConversionHelper {
       : mfmaLayout(mfmaLayout), rewriter(rewriter),
         typeConverter(typeConverter), loc(loc), ctx(mfmaLayout.getContext()) {}
 
-  Value getThreadId() const { return triton::getThreadId(rewriter, loc); }
+  Value getThreadId() const { return mlir::getThreadId(rewriter, loc); }
 
   Value generateMFMAOp(StringRef mfmaInsnName, Value valA, Value valB,
                        Value valC) const {

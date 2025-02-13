@@ -57,17 +57,10 @@ bool isConstantZero(Value v);
 
 namespace mlir::triton {
 
-// Returns CTA level thread idx
-inline Value getThreadId(OpBuilder &rewriter, Location loc) {
-  Value tid =
-      rewriter.create<::mlir::gpu::ThreadIdOp>(loc, ::mlir::gpu::Dimension::x);
-  Type i32_ty = rewriter.getIntegerType(32);
-  return rewriter.create<arith::IndexCastOp>(loc, i32_ty, tid);
-}
-
 struct TritonLLVMOpBuilder {
-  TritonLLVMOpBuilder(const Location &loc, OpBuilder &builder)
+  TritonLLVMOpBuilder(Location loc, OpBuilder &builder)
       : loc(loc), builder(&builder) {}
+
   // Shortcuts for some commonly used LLVM ops to keep code simple and intuitive
   // Operators
   template <typename... Args> LLVM::SIToFPOp inttofloat(Args &&...args) {
@@ -282,7 +275,6 @@ struct TritonLLVMOpBuilder {
   Value i16_val(int64_t val) { return int_val(16, val); }
   Value i32_val(int64_t val) { return int_val(32, val); }
   Value i64_val(int64_t val) { return int_val(64, val); }
-  Value tid_val() { return getThreadId(*builder, loc); }
 
   Location loc;
   OpBuilder *builder;
@@ -658,6 +650,26 @@ Value mxfpScaleBf16(RewriterBase &rewriter, Location loc, Value v, Value scale,
 } // namespace LLVM
 
 // -----------------------------------------------------------------------
+// Hardware Indices
+// -----------------------------------------------------------------------
+
+// Returns CTA level thread ID.
+Value getThreadId(OpBuilder &rewriter, Location loc);
+
+// Get the lane ID, which is index of the thread within its warp.
+Value getLaneId(OpBuilder &rewriter, Location loc, unsigned threadsPerWarp);
+
+// Get the lane ID and warp ID.
+std::pair<Value, Value> getLaneAndWarpId(OpBuilder &rewriter, Location loc,
+                                         unsigned threadsPerWarp);
+
+// Emit code to compute the (laneId, warpId, blockId) for the current thread.
+std::tuple</*laneId=*/Value, /*warpId=*/Value, /*blockId=*/Value>
+emitHardwareTuple(Location loc, RewriterBase &rewriter,
+                  const TargetInfoBase &target, bool withCTAOffset,
+                  unsigned threadsPerWarp);
+
+// -----------------------------------------------------------------------
 // Shared memory utilities
 // -----------------------------------------------------------------------
 using LLVM::getMultiDimIndex;
@@ -721,11 +733,9 @@ emitBaseIndexWithinCTAForBlockedLayout(Location loc, RewriterBase &rewriter,
                                        RankedTensorType type) {
   MLIRContext *ctx = rewriter.getContext();
   auto shape = type.getShape();
-  Value threadId = getThreadId(rewriter, loc);
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value warpSize = b.i32_val(triton::gpu::getWarpSize(blockedLayout));
-  Value laneId = b.urem(threadId, warpSize);
-  Value warpId = b.udiv(threadId, warpSize);
+  auto [laneId, warpId] =
+      getLaneAndWarpId(rewriter, loc, triton::gpu::getWarpSize(blockedLayout));
   auto sizePerThread = blockedLayout.getSizePerThread();
   auto threadsPerWarp = blockedLayout.getThreadsPerWarp();
   auto warpsPerCTA = blockedLayout.getWarpsPerCTA();
@@ -784,10 +794,7 @@ emitBaseIndexWithinCTAForMmaLayoutV2V3(Location loc, RewriterBase &rewriter,
     warpsPerCTA.push_back(b.i32_val(_warpsPerCTA[i]));
   auto shapePerCTA = getShapePerCTA(mmaLayout, shape);
 
-  Value threadId = getThreadId(rewriter, loc);
-  Value warpSize = b.i32_val(32);
-  Value laneId = b.urem(threadId, warpSize);
-  Value warpId = b.udiv(threadId, warpSize);
+  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc, /*warpSize=*/32);
 
   uint32_t repM =
       (_warpsPerCTA[rank - 2] * instrShape[rank - 2]) / shapePerCTA[rank - 2];
@@ -849,15 +856,13 @@ emitBaseIndexForMfmaLayout(Location loc, RewriterBase &rewriter,
   assert((mDim == nDim && (mDim == 32 || mDim == 16 || mDim == 4)) ||
          (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64));
 
-  Value threadId = getThreadId(rewriter, loc);
-  Value warpSize = b.i32_val(triton::gpu::getWarpSize(mfmaLayout));
-  Value effectiveWarpSize = warpSize;
+  auto [laneId, warpId] =
+      getLaneAndWarpId(rewriter, loc, triton::gpu::getWarpSize(mfmaLayout));
   if (mDim == 4 && nDim == 4) {
-    const int uniqueValuesPerWarp = 4;
-    effectiveWarpSize = b.i32_val(uniqueValuesPerWarp);
+    constexpr int uniqueValuesPerWarp = 4;
+    laneId = b.urem(laneId, b.i32_val(uniqueValuesPerWarp));
   }
-  Value laneId = b.urem(threadId, effectiveWarpSize);
-  Value warpId = b.udiv(threadId, warpSize);
+
   SmallVector<Value> multiDimWarpId =
       delinearize(rewriter, loc, warpId, _warpsPerCTA,
                   triton::gpu::getWarpOrder(mfmaLayout));
@@ -975,13 +980,10 @@ emitBaseIndexForWmmaLayout(Location loc, RewriterBase &rewriter,
     warpsPerCTA.push_back(b.i32_val(_warpsPerCTA[i]));
   auto mnkDim = AMDWmmaEncodingAttr::getMNKDimPerInstr();
 
-  Value threadId = getThreadId(rewriter, loc);
-  Value warpSize = b.i32_val(triton::gpu::getWarpSize(wmmaLayout));
-  Value laneId =
-      b.urem(threadId, b.i32_val(triton::gpu::getWarpSize(wmmaLayout) / 2));
-  Value threadIdPerWarp = b.urem(threadId, warpSize);
+  unsigned warpSize = triton::gpu::getWarpSize(wmmaLayout);
+  auto [threadIdPerWarp, warpId] = getLaneAndWarpId(rewriter, loc, warpSize);
+  Value laneId = b.urem(threadIdPerWarp, b.i32_val(warpSize / 2));
 
-  Value warpId = b.udiv(threadId, warpSize);
   SmallVector<Value> multiDimWarpId =
       delinearize(rewriter, loc, warpId, _warpsPerCTA,
                   triton::gpu::getWarpOrder(wmmaLayout));
@@ -1145,12 +1147,6 @@ emitBaseIndexForLayout(Location loc, RewriterBase &rewriter,
 
   return idx;
 }
-
-// Emit code to compute the (laneId, warpId, blockId) for the current thread.
-std::tuple</*laneId=*/Value, /*warpId=*/Value, /*blockId=*/Value>
-emitHardwareTuple(Location loc, RewriterBase &rewriter,
-                  const TargetInfoBase &target, bool withCTAOffset,
-                  unsigned threadsPerWarp);
 
 // Emit indices calculation within each ConversionPattern, and returns a
 // [elemsPerThread X rank] index matrix.

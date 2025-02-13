@@ -114,7 +114,7 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
   }
 
   auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-  Value threadId = triton::getThreadId(rewriter, loc);
+  Value threadId = getThreadId(rewriter, loc);
 
   unsigned iWarpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
   Value warpSize = b.i32_val(iWarpSize);
