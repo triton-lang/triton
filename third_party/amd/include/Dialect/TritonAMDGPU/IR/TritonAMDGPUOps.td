@@ -228,11 +228,11 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
   TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "getPointerTypeToElement($_self)">,
   TypesMatchWith<"result and offsets have the same shape", "result", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"result and mask have the same shape", "result", "mask", "getI1SameShape($_self)",
-                 "($_op.getOperands().size() <= 3) || std::equal_to<>()">,
+                 "($_op.getOperands().size() <= 4) || std::equal_to<>()">,
   TypesMatchWith<"value element type matches the pointed type of ptr", "value", "ptr", "getPointerTypeToElement($_self)">,
   TypesMatchWith<"value and offsets have the same shape", "value", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"value and mask have the same shape", "value", "mask", "getI1SameShape($_self)",
-                 "($_op.getOperands().size() <= 3) || std::equal_to<>()">,
+                 "($_op.getOperands().size() <= 4) || std::equal_to<>()">,
 ]>{
     let summary = "Atomic RMW op which reads, modifies, and writes to a scalar base pointer and a tensor offset";
     let description = [{
@@ -242,6 +242,9 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
         the atomic RMW op. Elements with `mask[i] == 0` are dropped (i.e., the atomic is not executed).
         Similar to TT_AtomicRMWOp: Buffer atomic RMW ops load data at $ptr, do $rmw_op with $val, and store result to $ptr with
         the specified memory semantics and scope. Atomic RMW ops return the pre-op value if used, otherwise the value is implicitly dropped.
+        Stride is the distance between the beginning of contiguous memory chunks. When performing a RMW, the `stride` is
+        the address difference between the first elements of each row in bytes. Compiler tries to obtain the `stride`
+        when it converts to the buffer ops because it is important for optimizing the cache memory access.
     }];
     let arguments = (
       ins
@@ -249,6 +252,7 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
       TT_Ptr:$ptr,
       I32Tensor:$offsets,
       TT_Tensor:$value,
+      I32:$stride,
       TT_MemSemanticAttr:$sem,
       TT_MemSyncScopeAttr:$scope,
       Optional<TT_BoolTensor>:$mask
@@ -257,6 +261,7 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
 
     let assemblyFormat = [{
         $atomic_rmw_op `,` $sem `,` $scope `,` $value `,` $ptr `[` $offsets `]` (`,` $mask^)?
+        `stride` `=` $stride
         attr-dict `:` type($result)
     }];
 }
