@@ -1200,8 +1200,8 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     auto id = getThreadId(rewriter, loc);
 
     auto mod = op->getParentOfType<ModuleOp>();
-    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
-    int warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    int numWarps = ttg::lookupNumWarps(op);
+    int warpSize = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
     Value warpID = rewriter.create<nvgpu::WarpIdOp>(loc);
     Value pred = adaptor.getPred();
     // Select just one thread for the TMA copy. This also helps the compiler to
@@ -1296,8 +1296,8 @@ struct AsyncTMACopyLocalToGlobalOpConversion
     int64_t size = totalNumElements * elementSizeInBytes;
 
     auto mod = op->getParentOfType<ModuleOp>();
-    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
-    int warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    int numWarps = ttg::lookupNumWarps(op);
+    int warpSize = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
     Value warpID = rewriter.create<nvgpu::WarpIdOp>(loc);
     int innerBlockSize = op.getSrc().getType().getShape().back();
     int contigDimSizeInByte = innerBlockSize * elementSizeInBytes;

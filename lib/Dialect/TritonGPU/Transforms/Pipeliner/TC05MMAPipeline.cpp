@@ -816,7 +816,9 @@ bool insertUsersOfOp(tt::CoarseSchedule &coarseSchedule, Operation *op,
                      int stage, tt::CoarseSchedule::Cluster cluster) {
   bool changed = false;
   for (auto user : op->getUsers()) {
-    if (coarseSchedule.count(user) == 0) {
+    // Let wait barriers be scheduled based on the stage of async op it waits
+    // for.
+    if (!isa<ttng::WaitBarrierOp>(user) && coarseSchedule.count(user) == 0) {
       changed = true;
       coarseSchedule.insert(user, stage, cluster);
       insertUsersOfOp(coarseSchedule, user, stage, cluster);

@@ -91,7 +91,6 @@ struct ConvertTritonGPUToLLVM
     TargetInfo targetInfo(computeCapability, ptxVersion);
     TritonGPUToLLVMTypeConverter typeConverter(context, option, targetInfo);
     TritonLLVMConversionTarget convTarget(*context);
-    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
@@ -106,9 +105,8 @@ struct ConvertTritonGPUToLLVM
       TritonGPUToLLVMTypeConverter typeConverter(context, option, targetInfo);
       TritonLLVMFunctionConversionTarget funcTarget(*context);
       RewritePatternSet funcPatterns(context);
-      mlir::triton::populateFuncOpConversionPattern(typeConverter, funcPatterns,
-                                                    numWarps, targetInfo,
-                                                    patternBenefitDefault);
+      mlir::triton::populateFuncOpConversionPattern(
+          typeConverter, funcPatterns, targetInfo, patternBenefitDefault);
       mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                             funcPatterns);
       if (failed(
@@ -181,8 +179,8 @@ struct ConvertTritonGPUToLLVM
     mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
                                                    patterns, benefit);
     populateTCGen5MMAOpToLLVMPattern(typeConverter, patterns, benefit);
-    mlir::triton::NVIDIA::populateUpcastMXFPToLLVMPatterns(
-        typeConverter, patterns, targetInfo, benefit);
+    mlir::triton::NVIDIA::populateFp4ToFpToLLVMPatterns(typeConverter, patterns,
+                                                        benefit);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();
 

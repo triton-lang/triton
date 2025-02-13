@@ -75,7 +75,7 @@ struct ClipAsyncCopySizePerThread
 
     // obtain new blockedEnc based on clipped sizePerThread
     auto mod = copyOp->getParentOfType<ModuleOp>();
-    int numWarps = TritonGPUDialect::getNumWarps(mod);
+    int numWarps = lookupNumWarps(copyOp);
     int threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(mod);
     auto newBlockEnc =
         BlockedEncodingAttr::get(copyOp.getContext(), srcTy.getShape(),
