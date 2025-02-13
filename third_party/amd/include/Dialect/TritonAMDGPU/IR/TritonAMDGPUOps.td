@@ -193,9 +193,9 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
   TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "getPointerTypeToElement($_self)">,
   TypesMatchWith<"result and offsets have the same shape", "result", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"result and mask have the same shape", "result", "mask", "getI1SameShape($_self)",
-                 "($_op.getOperands().size() <= 3) || std::equal_to<>()">,
+                 "(cast<BufferLoadOp>($_op).getMask() == nullptr) || std::equal_to<>()">,
   TypesMatchWith<"result and other have the same type", "result", "other", "$_self",
-                 "($_op.getOperands().size() <= 4) || std::equal_to<>()">,
+                 "(cast<BufferLoadOp>($_op).getOther() == nullptr) || std::equal_to<>()">,
 ]>{
     let summary = "Load from a scalar base pointer and a tensor offset";
     let description = [{
@@ -224,7 +224,7 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
     let assemblyFormat = [{
       $ptr `[` $offsets `]` (`,` $mask^)? (`,` $other^)?
       oilist(`cacheModifier` `=` $cache)
-      `stride` `=` $stride
+      (`stride` `=` $stride^)?
       attr-dict `:` type($result)
     }];
 }
@@ -242,11 +242,11 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
   TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "getPointerTypeToElement($_self)">,
   TypesMatchWith<"result and offsets have the same shape", "result", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"result and mask have the same shape", "result", "mask", "getI1SameShape($_self)",
-                 "($_op.getOperands().size() <= 4) || std::equal_to<>()">,
+                 "(cast<BufferAtomicRMWOp>($_op).getMask() == nullptr) || std::equal_to<>()">,
   TypesMatchWith<"value element type matches the pointed type of ptr", "value", "ptr", "getPointerTypeToElement($_self)">,
   TypesMatchWith<"value and offsets have the same shape", "value", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"value and mask have the same shape", "value", "mask", "getI1SameShape($_self)",
-                 "($_op.getOperands().size() <= 4) || std::equal_to<>()">,
+                 "(cast<BufferAtomicRMWOp>($_op).getMask() == nullptr) || std::equal_to<>()">,
 ]>{
     let summary = "Atomic RMW op which reads, modifies, and writes to a scalar base pointer and a tensor offset";
     let description = [{
@@ -274,7 +274,7 @@ def BufferAtomicRMWOp : TT_AMDGPU_Op<"buffer_atomic_rmw", [
 
     let assemblyFormat = [{
         $atomic_rmw_op `,` $sem `,` $scope `,` $value `,` $ptr `[` $offsets `]` (`,` $mask^)?
-        `stride` `=` $stride
+        (`stride` `=` $stride^)?
         attr-dict `:` type($result)
     }];
 }
@@ -290,7 +290,7 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
   TypesMatchWith<"value element type matches the pointed type of ptr", "value", "ptr", "getPointerTypeToElement($_self)">,
   TypesMatchWith<"value and offsets have the same shape", "value", "offsets", "getI32SameShape($_self)">,
   TypesMatchWith<"value and mask have the same shape", "value", "mask", "getI1SameShape($_self)",
-                 "($_op.getOperands().size() <= 4) || std::equal_to<>()">,
+                 "(cast<BufferStoreOp>($_op).getMask() == nullptr) || std::equal_to<>()">,
 ]>{
     let summary = "Store into scalar base pointer and a tensor offset";
     let description = [{
@@ -318,7 +318,7 @@ def BufferStoreOp : TT_AMDGPU_Op<"buffer_store", [
     let assemblyFormat = [{
       $value `,` $ptr `[` $offsets `]` (`,` $mask^)?
       oilist(`cacheModifier` `=` $cache)
-      `stride` `=` $stride
+      (`stride` `=` $stride^)?
       attr-dict `:` type($value)
     }];
 }
