@@ -126,3 +126,101 @@ module attributes {"ttg.num-warps" = 1 : i32} {
     tt.return
   }
 }
+
+// -----
+
+tt.func @warp_specialize_no_holder() {
+  // expected-error @below {{'ttg.warp_specialize' op expected to find only a `ttg.warp_specialize.partitions` op inside its second region}}
+  "ttg.warp_specialize"() ({
+    "ttg.warp_yield"() : () -> ()
+  }, {
+    "ttg.warp_yield"() : () -> ()
+  }) {partitionNumWarps = array<i32>} : () -> ()
+  tt.return
+}
+
+// -----
+
+tt.func @warp_specialize_mismatch_partition_count() {
+  // expected-error @below {{'ttg.warp_specialize' op has 0 partitions but `partitionNumWarps` has 1 elements}}
+  "ttg.warp_specialize"() ({
+    "ttg.warp_yield"() : () -> ()
+  }, {
+    "ttg.warp_specialize.partitions"() : () -> ()
+  }) {partitionNumWarps = array<i32: 1>} : () -> ()
+}
+
+// -----
+
+tt.func @not_power_of_2() {
+  // expected-error @below {{'ttg.warp_specialize' op partition #0 number of warps (3) must be a power of 2}}
+  ttg.warp_specialize()
+  default {
+    ttg.warp_yield
+  }
+  partition0() num_warps(3) {
+  } : () -> ()
+  tt.return
+}
+
+// -----
+
+tt.func @bad_argument_count() {
+  // expected-error @below {{'ttg.warp_specialize' op partition region #0 has 1 arguments but expected 0}}
+  ttg.warp_specialize()
+  default {
+    ttg.warp_yield
+  }
+  partition0(%arg0: i32) num_warps(4) {
+  } : () -> ()
+  tt.return
+}
+
+// -----
+
+tt.func @bad_argument_type(%arg0: i32) {
+  // expected-error @below {{'ttg.warp_specialize' op partition region #0 argument #0 has type 'i64' but corresponding capture has type 'i32'}}
+  ttg.warp_specialize(%arg0)
+  default {
+    ttg.warp_yield
+  }
+  partition0(%arg1: i64) num_warps(4) {
+  } : (i32) -> ()
+  tt.return
+}
+
+// -----
+
+tt.func @bad_default_yields(%arg0: i32) {
+  ttg.warp_specialize()
+  default {
+    // expected-error @below {{'ttg.warp_yield' op has 0 operands but parent op expected 1}}
+    ttg.warp_yield
+  } : () -> i32
+  tt.return
+}
+
+// -----
+
+tt.func @bad_partition_terminator() {
+  // expected-error @below {{'ttg.warp_specialize' op partition region #0 does not end with a `ttg.warp_return` op}}
+  "ttg.warp_specialize"() ({
+    "ttg.warp_yield"() : () -> ()
+  }, {
+    "ttg.warp_specialize.partitions"() ({
+      "ttg.warp_yield"() : () -> ()
+    }) : () -> ()
+  }) {partitionNumWarps = array<i32: 1>} : () -> ()
+  tt.return
+}
+
+// -----
+
+tt.func @bad_default_terminator() {
+  // expected-error @below {{'ttg.warp_specialize' op expected its default region to end with a `ttg.warp_yield` op}}
+  ttg.warp_specialize()
+  default {
+    scf.yield
+  } : () -> ()
+  tt.return
+}

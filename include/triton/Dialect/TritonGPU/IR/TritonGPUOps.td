@@ -10,9 +10,10 @@ include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
 include "mlir/IR/OpBase.td"
-include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
-include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
+include "mlir/Interfaces/ControlFlowInterfaces.td" // RegionBranchOpInterface
 include "mlir/Interfaces/DestinationStyleOpInterface.td"
+include "mlir/Interfaces/InferTypeOpInterface.td"  // SameOperandsAndResultType
+include "mlir/Interfaces/SideEffectInterfaces.td"  // Pure
 include "mlir/Interfaces/ViewLikeInterface.td"
 
 //
@@ -332,22 +333,48 @@ def TTG_GlobalScratchAllocOp : TTG_Op<"global_scratch_alloc", [MemoryEffects<[Me
 }
 
 def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [
-  IsolatedFromAbove, RecursiveMemoryEffects, RecursivelySpeculatable,
+  RecursiveMemoryEffects, RecursivelySpeculatable,
+  DeclareOpInterfaceMethods<RegionBranchOpInterface>
 ]> {
   let arguments = (ins
     Variadic<AnyType>:$explicitCaptures,
-    DenseI32ArrayAttr:$partitionWarpSizes
+    DenseI32ArrayAttr:$partitionNumWarps
   );
   let results = (outs Variadic<AnyType>:$defaultPassthrough);
+
   let regions = (region
     SizedRegion<1>:$defaultRegion,
-    VariadicRegion<SizedRegion<1>>:$partitionRegions
+    SizedRegion<1>:$partitionOpHolder
   );
 
+  let extraClassDeclaration = [{
+    RegionRange getPartitionRegions();
+  }];
+
   let hasVerifier = 1;
+  let hasCustomAssemblyFormat = 1;
 }
 
-def TTG_WarpReturnOp : TTG_Op<"warp_return", [Pure, Terminator, ReturnLike]> {
+def TTG_WarpSpecializePartitionsOp : TTG_Op<"warp_specialize.partitions", [
+  IsolatedFromAbove, RecursiveMemoryEffects, RecursivelySpeculatable,
+  Terminator, SingleBlockImplicitTerminator<"WarpReturnOp">
+]> {
+  let regions = (region VariadicRegion<SizedRegion<1>>:$partitionRegions);
+}
+
+def TTG_WarpYieldOp : TTG_Op<"warp_yield", [
+  Pure, Terminator, HasParent<"WarpSpecializeOp">,
+  DeclareOpInterfaceMethods<RegionBranchTerminatorOpInterface>
+]> {
+  let arguments = (ins Variadic<AnyType>:$values);
+
+  let assemblyFormat = "($values^)? attr-dict (`:` type($values)^)?";
+}
+
+def TTG_WarpReturnOp : TTG_Op<"warp_return", [
+  Pure, Terminator, ReturnLike, HasParent<"WarpSpecializePartitionsOp">
+]> {
+  let assemblyFormat = "attr-dict";
 }
 
 #endif // TRITONGPU_OPS

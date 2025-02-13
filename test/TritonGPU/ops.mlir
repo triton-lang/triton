@@ -59,3 +59,79 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
     tt.return
   }
 }
+
+// -----
+
+// CHECK-LABEL: @warp_specialize_nothing
+tt.func @warp_specialize_nothing() {
+  // CHECK-NEXT: ttg.warp_specialize()
+  ttg.warp_specialize()
+  // CHECK-NEXT: default {
+  default {
+    // CHECK-NEXT: ttg.warp_yield
+    ttg.warp_yield
+  // CHECK-NEXT: } : () -> ()
+  } : () -> ()
+  tt.return
+}
+
+// CHECK-LABEL: @warp_specialize_no_partitions
+tt.func @warp_specialize_no_partitions(%arg0: i32, %arg1: i64) -> i64 {
+  // CHECK-NEXT: %0 = ttg.warp_specialize(%arg0)
+  %0 = ttg.warp_specialize(%arg0)
+  // CHECK-NEXT: default {
+  default {
+    // CHECK-NEXT: ttg.warp_yield %arg1 : i64
+    ttg.warp_yield %arg1 : i64
+  // CHECK-NEXT: } : (i32) -> i64
+  } : (i32) -> i64
+  tt.return %0 : i64
+}
+
+// CHECK-LABEL: @warp_specialize_partitions
+tt.func @warp_specialize_partitions(%arg0: i32, %arg1: i64) -> i64 {
+  // CHECK-NEXT: %0 = ttg.warp_specialize(%arg0)
+  %0 = ttg.warp_specialize(%arg0)
+  // CHECK-NEXT: default {
+  default {
+    // CHECK-NEXT: ttg.warp_yield %arg1 : i64
+    ttg.warp_yield %arg1 : i64
+  // CHECK-NEXT: }
+  }
+  // CHECK-NEXT: partition0(%arg2: i32) num_warps(4) {
+  partition0(%arg2: i32) num_warps(4) {
+    // CHECK-NEXT: arith.addi %arg2, %arg2 : i32
+    %1 = arith.addi %arg2, %arg2 : i32
+  // CHECK-NEXT: }
+  }
+  // CHECK-NEXT: partition1(%arg2: i32) num_warps(1) {
+  partition1(%arg2: i32) num_warps(1) {
+  // CHECK-NEXT: }
+  }
+  // CHECK-NEXT: partition2(%arg2: i32) num_warps(8) {
+  partition2(%arg2: i32) num_warps(8) {
+    // CHECK-NEXT: arith.muli
+    %1 = arith.muli %arg2, %arg2 : i32
+  // CHECK-NEXT: } : (i32) -> i64
+  } : (i32) -> i64
+  tt.return %0 : i64
+}
+
+// CHECK-LABEL: @warp_specialize_multiple_args
+tt.func @warp_specialize_multiple_args_res(%arg0: i32, %arg1: i32) -> (i32, i32) {
+  // CHECK-NEXT: %0:2 = ttg.warp_specialize(%arg0, %arg1)
+  %0:2 = ttg.warp_specialize(%arg0, %arg1)
+  // CHECK-NEXT: default {
+  default {
+    // CHECK-NEXT: ttg.warp_yield %arg0, %arg1 : i32, i32
+    ttg.warp_yield %arg0, %arg1 : i32, i32
+  // CHECK-NEXT: }
+  }
+  // CHECK-NEXT: partition0(%arg2: i32, %arg3: i32) num_warps(4) {
+  partition0(%arg2: i32, %arg3: i32) num_warps(4) {
+    // CHECK-NEXT: arith.addi %arg2, %arg3 : i32
+    %1 = arith.addi %arg2, %arg3 : i32
+  // CHECK-NEXT: } : (i32, i32) -> (i32, i32)
+  } : (i32, i32) -> (i32, i32)
+  tt.return %0#0, %0#1 : i32, i32
+}
