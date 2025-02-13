@@ -347,7 +347,7 @@ public:
   template <typename OpTy, typename... Args> OpTy create(Args &&...args) {
     OpTy op = OpBuilder::create<OpTy>(std::forward<Args>(args)...);
     if (_stage && _cluster) {
-      _schedule.insertIfAbsent(op, *_stage, *_cluster);
+      _schedule.insert(op, *_stage, *_cluster);
     }
     return op;
   }
@@ -410,9 +410,8 @@ ttg::SharedEncodingTrait getSharedEncoding(tt::LoadOp loadOp) {
         return localAllocEnc;
       }
     }
-    if (localAllocEnc) {
+    if (localAllocEnc)
       return localAllocEnc;
-    }
   }
 
   // TODO pawel: Add the case for TMA loads.
@@ -423,26 +422,26 @@ ttg::SharedEncodingTrait getSharedEncoding(tt::LoadOp loadOp) {
       getSharedEncIfAllUsersAreDotEnc(loadOp.getResult(), incompatible)
           .value_or(nullptr);
 
-  if (!localAllocEnc) {
-    // Use generic layout. This won't be optimal for 2D tensors.
-    auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
-    auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
-    auto blockedOrder = ttg::getOrder(ty.getEncoding());
-    SmallVector<unsigned> order;
-    if (blockedOrder.size() == 3) {
-      for (unsigned i = 0; i < blockedOrder.size(); ++i) {
-        if (blockedOrder[i] == 0)
-          continue;
-        order.push_back(blockedOrder[i]);
-      }
-      order.push_back(0);
-    } else {
-      order = blockedOrder;
+  if (localAllocEnc)
+    return localAllocEnc;
+
+  // Use generic layout. This won't be optimal for 2D tensors.
+  auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
+  auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
+  auto blockedOrder = ttg::getOrder(ty.getEncoding());
+  SmallVector<unsigned> order;
+  if (blockedOrder.size() == 3) {
+    for (unsigned i = 0; i < blockedOrder.size(); ++i) {
+      if (blockedOrder[i] == 0)
+        continue;
+      order.push_back(blockedOrder[i]);
     }
-    localAllocEnc = ttg::SwizzledSharedEncodingAttr::get(ty.getContext(), 1, 1,
-                                                         1, order, ctaLayout);
+    order.push_back(0);
+  } else {
+    order = blockedOrder;
   }
-  return localAllocEnc;
+  return ttg::SwizzledSharedEncodingAttr::get(ty.getContext(), 1, 1, 1, order,
+                                              ctaLayout);
 }
 
 // Create an allocation that can hold distance number of loadOp shapes.
@@ -481,30 +480,11 @@ bool canBeShmemPipelined(tt::LoadOp loadOp) {
   if (loadOp.getOther() && !isZeroConst(loadOp.getOther()))
     return false;
 
-  // Go through the view operations.
-  Operation *user = *loadOp->getUsers().begin();
-  while (isa<triton::TransOp, triton::ReshapeOp>(user)) {
-    if (!user->hasOneUse())
-      return false;
-    user = *user->getUsers().begin();
-  }
-  if (!user)
+  if (!loadOp->hasOneUse())
     return false;
-
+  Operation *user = *loadOp->getUsers().begin();
   if (auto alloc = dyn_cast<ttg::LocalAllocOp>(user)) {
-    auto sharedEnc =
-        dyn_cast<ttg::NVMMASharedEncodingAttr>(alloc.getType().getEncoding());
-
-    if (!sharedEnc)
-      return false;
-
-    SmallVector<unsigned> newOrder = getOrder(sharedEnc);
-    auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
-    auto oldOrder = ttg::getOrder(ty.getEncoding());
-
-    // Transpose is not supported for fp32 MMA operands.
-    // TODO pawel: should we be checking for the element type?
-    return oldOrder == newOrder;
+    return isa<ttg::NVMMASharedEncodingAttr>(alloc.getType().getEncoding());
   }
   return false;
 }
@@ -563,7 +543,7 @@ void createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
     alloc.erase();
   } else {
     if (!loadOp.getOther() || isZeroConst(loadOp.getOther())) {
-      // Do not load from shared only to put it back to shared, but only if
+      // Remove redundant local_load -> local_alloc, but only if
       // we are not using the other value. AsyncCopyGlobalToLocalOp does not
       // support the masking.
       SmallVector<ttg::LocalAllocOp> allocsToErase;
@@ -727,7 +707,7 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
   }
 
   // TODO: Maybe we can annotate all of the new ops manually instead of
-  // discoveringDependencies?
+  // scheduleDependencies?
   scheduleDependencies(forOp, schedule);
 
   // Make sure all ops have attributes.
