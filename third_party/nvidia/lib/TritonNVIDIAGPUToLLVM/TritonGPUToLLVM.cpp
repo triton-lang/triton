@@ -83,10 +83,8 @@ struct ConvertTritonGPUToLLVM
     TritonLLVMFunctionConversionTarget funcTarget(*context);
     RewritePatternSet funcPatterns(context);
     TritonGPUToLLVMTypeConverter funcTypeConverter(context, targetInfo);
-    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     mlir::triton::populateFuncOpConversionPattern(
-        funcTypeConverter, funcPatterns, targetInfo,
-        patternBenefitDefault);
+        funcTypeConverter, funcPatterns, targetInfo, patternBenefitDefault);
     mlir::cf::populateControlFlowToLLVMConversionPatterns(funcTypeConverter,
                                                           funcPatterns);
     if (failed(
