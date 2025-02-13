@@ -12,6 +12,8 @@
 #define GEN_PASS_CLASSES
 #include "TritonAMDGPUTransforms/Passes.h"
 
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
+
 using namespace mlir;
 namespace ttg = mlir::triton::gpu;
 namespace tt = mlir::triton;
@@ -466,8 +468,10 @@ void Pingponger::getDotPingponged() {
     // times for issuing the memory operations and issuing dot operations,
     // smaller tile sizes are not likely to get any advantage from current dot
     // centric pingpong scheduling.
-    if (tileSize <= smallTile && tileSize >= minTile)
+    if (tileSize <= smallTile && tileSize >= minTile) {
       transformOnePPClusters(builder, loc);
+      LDBG("Successfully performed One Ping Pong Cluster Transformation.")
+    }
     // numWarps=4 doesn't need asymmetric sync, return.
     return;
   } else if (numWarps == 8) { // Pingpong between warps from the same block
@@ -477,12 +481,14 @@ void Pingponger::getDotPingponged() {
     if (tileSize == mediumTile) {
       if (transformTwoPPClusters(builder, dotOps[0]->getLoc()).failed())
         return;
+      LDBG("Successfully performed Two Ping Pong Cluster Transformation.")
     } else if (tileSize >= largeTile) {
       // Avoid known register spilling. i.e., mfma16x16x16 & largetile & kpack>1
       if (intShape[0] == 16 && intShape[1] == 16 && kWidth == 8)
         return;
       if (transformFourPPClusters(builder, dotOps[0]->getLoc()).failed())
         return;
+      LDBG("Successfully performed Four Ping Pong Cluster Transformation.")
     } else
       return;
 
