@@ -361,7 +361,8 @@ struct TritonAMDGPURescheduleOps
      - Determine memory ops' supported issue rate.
      - Place performance and anti-dependencies between memory ops and dots.
      - Run scheduler with new dependencies in place.
-    Note that rescheduling can be run after any new dependencies are created to visualize graph.
+    Note that rescheduling can be run after any new dependencies are created to
+    visualize graph.
   */
   void reschedule(Block *mlirBlock) {
 
