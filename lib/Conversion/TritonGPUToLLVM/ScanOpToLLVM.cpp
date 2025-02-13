@@ -12,6 +12,7 @@ using namespace mlir::triton;
 using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::linearize;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
+using ::mlir::triton::gpu::toLinearEncoding;
 
 // apply combine region to acc and cur and accumulate it into acc
 static SmallVector<Value> accumulate(ScanLoweringHelper &helper,
@@ -92,7 +93,7 @@ static void storeWarpAccumulator(SmallVector<SmallVector<Value>> &srcValues,
                                  ScanLoweringHelper &helper, Value laneId,
                                  Value warpId, SmallVector<Value> smemBases,
                                  SmallVector<Type> smemTypes,
-                                 Value parallelLaneId,
+                                 Value parallelLaneId, Value isRepresentative,
                                  const TargetInfoBase &targetInfo) {
   Location loc = helper.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -110,6 +111,7 @@ static void storeWarpAccumulator(SmallVector<SmallVector<Value>> &srcValues,
       continue;
     auto lastElement = srcValues[srcIndex];
     Value mask = b.icmp_eq(laneId, b.i32_val(scanDim - 1));
+    mask = b.and_(mask, isRepresentative);
     Value index =
         b.add(parallelLaneId, b.mul(warpId, b.i32_val(numParallelLane)));
     index = b.add(index, b.i32_val(chunkId * numParallelLane * axisNumWarps));
@@ -342,13 +344,13 @@ public:
 
 private:
   const TargetInfoBase &targetInfo;
-  SmallVector<Value> getMultiDimLaneId(ConversionPatternRewriter &rewriter,
-                                       ScanLoweringHelper &helper,
-                                       Value laneId) const;
-  SmallVector<Value> getMultiDimWarpId(ConversionPatternRewriter &rewriter,
-                                       ScanLoweringHelper &helper,
-                                       Value warpId) const;
-  std::tuple<Value, Value, Value>
+  std::tuple<SmallVector<Value>, Value>
+  getMultiDimLaneId(ConversionPatternRewriter &rewriter,
+                    ScanLoweringHelper &helper, Value laneId) const;
+  std::tuple<SmallVector<Value>, Value>
+  getMultiDimWarpId(ConversionPatternRewriter &rewriter,
+                    ScanLoweringHelper &helper, Value warpId) const;
+  std::tuple<Value, Value, Value, Value>
   getDelinearizedIds(ConversionPatternRewriter &rewriter,
                      ScanLoweringHelper &helper, Value laneId,
                      Value warpId) const;
@@ -357,37 +359,31 @@ private:
                              const TargetInfoBase &targetInfo) const;
 };
 
-SmallVector<Value>
+std::tuple<SmallVector<Value>, Value>
 ScanOpConversion::getMultiDimLaneId(ConversionPatternRewriter &rewriter,
                                     ScanLoweringHelper &helper,
                                     Value laneId) const {
   auto loc = helper.getLoc();
-  unsigned axis = helper.getAxis();
   auto srcEncoding = helper.getEncoding();
-
-  auto threadsPerWarp = triton::gpu::getThreadsPerWarp(srcEncoding);
-  auto warpsPerCTA = triton::gpu::getWarpsPerCTA(srcEncoding);
-  auto order = triton::gpu::getOrder(srcEncoding);
-  return delinearize(rewriter, loc, laneId, threadsPerWarp, order);
+  auto kWarp = rewriter.getStringAttr("lane");
+  return delinearize(rewriter, loc, srcEncoding, helper.getShape(), kWarp,
+                     laneId);
 }
 
-SmallVector<Value>
+std::tuple<SmallVector<Value>, Value>
 ScanOpConversion::getMultiDimWarpId(ConversionPatternRewriter &rewriter,
                                     ScanLoweringHelper &helper,
                                     Value warpId) const {
   auto loc = helper.getLoc();
-  unsigned axis = helper.getAxis();
   auto srcEncoding = helper.getEncoding();
-
-  auto threadsPerWarp = triton::gpu::getThreadsPerWarp(srcEncoding);
-  auto warpsPerCTA = triton::gpu::getWarpsPerCTA(srcEncoding);
-  auto warpOrder = triton::gpu::getWarpOrder(srcEncoding);
-  return delinearize(rewriter, loc, warpId, warpsPerCTA, warpOrder);
+  auto kWarp = rewriter.getStringAttr("warp");
+  return delinearize(rewriter, loc, srcEncoding, helper.getShape(), kWarp,
+                     warpId);
 }
 
 // Break up the threadId into lane and warp id along the scan dimension and
 // compute a flat id for the parallel dimensions.
-std::tuple<Value, Value, Value>
+std::tuple<Value, Value, Value, Value>
 ScanOpConversion::getDelinearizedIds(ConversionPatternRewriter &rewriter,
                                      ScanLoweringHelper &helper, Value laneId,
                                      Value warpId) const {
@@ -398,28 +394,28 @@ ScanOpConversion::getDelinearizedIds(ConversionPatternRewriter &rewriter,
 
   auto threadsPerWarp = triton::gpu::getThreadsPerWarp(srcEncoding);
   auto warpsPerCTA = triton::gpu::getWarpsPerCTA(srcEncoding);
-  auto threadOrder = triton::gpu::getThreadOrder(srcEncoding);
-  auto warpOrder = triton::gpu::getWarpOrder(srcEncoding);
-  SmallVector<Value> multiDimLaneId =
-      delinearize(rewriter, loc, laneId, threadsPerWarp, threadOrder);
-  SmallVector<Value> multiDimWarpId =
-      delinearize(rewriter, loc, warpId, warpsPerCTA, warpOrder);
+  auto [multiDimLaneId, isRepresentativeLane] =
+      getMultiDimLaneId(rewriter, helper, laneId);
+  auto [multiDimWarpId, isRepresentativeWarp] =
+      getMultiDimWarpId(rewriter, helper, warpId);
 
   Value laneIdAxis = multiDimLaneId[axis];
   Value warpIdAxis = multiDimWarpId[axis];
 
   multiDimLaneId[axis] = b.i32_val(0);
   threadsPerWarp[axis] = 1;
-  Value laneIdParallel =
-      linearize(rewriter, loc, multiDimLaneId, threadsPerWarp, threadOrder);
+  Value laneIdParallel = linearize(rewriter, loc, multiDimLaneId,
+                                   threadsPerWarp, helper.getOrder());
   multiDimWarpId[axis] = b.i32_val(0);
   warpsPerCTA[axis] = 1;
   Value warpIdParallel =
-      linearize(rewriter, loc, multiDimWarpId, warpsPerCTA, warpOrder);
+      linearize(rewriter, loc, multiDimWarpId, warpsPerCTA, helper.getOrder());
   Value flatIdParallel = b.add(
       laneIdParallel,
       b.mul(warpIdParallel, b.i32_val(helper.getNonAxisNumThreadsPerWarp())));
-  return std::make_tuple(laneIdAxis, warpIdAxis, flatIdParallel);
+  auto isRepresentative = b.and_(isRepresentativeLane, isRepresentativeWarp);
+  return std::make_tuple(laneIdAxis, warpIdAxis, flatIdParallel,
+                         isRepresentative);
 }
 
 SmallVector<SmallVector<Value>>
@@ -480,18 +476,9 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
   Value warpId = b.udiv(threadId, warpSize);
   Value laneId = b.urem(threadId, warpSize);
 
-  // Clamp the lane ID to just threads with unique data within a warp.
-  LinearLayout layout =
-      triton::gpu::toLinearLayout(helper.getShape(), helper.getEncoding());
-  StringAttr kLane = rewriter.getStringAttr("lane");
-  int32_t laneMask = layout.getFreeVariableMasks()[kLane];
-  laneMask = (layout.getInDimSize(kLane) - 1) & ~laneMask;
-  laneId = b.and_(laneId, b.i32_val(laneMask));
-
-  auto [laneIdAxis, warpIdAxis, flatIdParallel] =
+  auto [laneIdAxis, warpIdAxis, flatIdParallel, isRepresentative] =
       getDelinearizedIds(rewriter, helper, laneId, warpId);
   auto axisNumWarps = helper.getAxisNumWarpsWithUniqueData();
-  warpIdAxis = b.urem(warpIdAxis, b.i32_val(axisNumWarps));
   auto srcValues =
       unpackInputs(loc, op, adaptor, rewriter, *getTypeConverter());
 
@@ -527,7 +514,8 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
 
     // Store the partial reducing for each warp into shared memory.
     storeWarpAccumulator(srcValues, rewriter, helper, laneIdAxis, warpIdAxis,
-                         smemBases, smemTypes, flatIdParallel, targetInfo);
+                         smemBases, smemTypes, flatIdParallel, isRepresentative,
+                         targetInfo);
     b.barrier();
     // Read back the partial reduction of each warp and accumulate them based on
     // warpId. Then update each chunk of contiguous elements by adding the
@@ -538,11 +526,13 @@ ScanOpConversion::emitFastScan(triton::ScanOp op, triton::ScanOpAdaptor adaptor,
     // Fast path for the case where there is only one warp with unique data on
     // the axis.
     unsigned scanDim = helper.getAxisNumThreadsPerWarpWithUniqueData();
-    auto multiDimLaneId = getMultiDimLaneId(rewriter, helper, laneId);
+    auto multiDimLaneId =
+        std::get<0>(getMultiDimLaneId(rewriter, helper, laneId));
     multiDimLaneId[helper.getAxis()] = b.i32_val(scanDim - 1);
-    auto threadsPerWarp = triton::gpu::getThreadsPerWarp(helper.getEncoding());
+    auto linearEncoding = helper.getEncoding();
+    auto threadsPerWarp = linearEncoding.getThreadsPerWarp();
     auto laneIdLast = linearize(rewriter, loc, multiDimLaneId, threadsPerWarp,
-                                triton::gpu::getOrder(helper.getEncoding()));
+                                helper.getOrder());
     AddPartialReduceOneWarp(srcValues, rewriter, targetInfo, helper, warpIdAxis,
                             laneIdAxis, laneIdLast);
   } // else axisNumWarps == 1 and srcValues.size() == 1, nothing to do.
