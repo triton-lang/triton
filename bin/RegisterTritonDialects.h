@@ -35,6 +35,9 @@ void registerTestAlignmentPass();
 void registerTestAllocationPass();
 void registerTestMembarPass();
 void registerTestTritonAMDGPURangeAnalysis();
+namespace proton {
+void registerTestScopeIdAllocationPass();
+} // namespace proton
 } // namespace test
 } // namespace mlir
 
@@ -77,8 +80,9 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::registerTritonAMDGPULowerInstructionSchedHints();
   mlir::registerTritonAMDFoldTrueCmpI();
 
-  // NVWS passes
-  mlir::registerNVWSTransformsPasses();
+  // Proton passes
+  mlir::triton::registerProtonLoweringPass();
+  mlir::test::proton::registerTestScopeIdAllocationPass();
 
   registry.insert<
       mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,
