@@ -12,6 +12,7 @@
 #define GEN_PASS_CLASSES
 #include "TritonAMDGPUTransforms/Passes.h"
 
+#define DEBUG_TYPE "tritonamdgpu-block-pingpong"
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 using namespace mlir;
