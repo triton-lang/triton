@@ -83,16 +83,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
                              %arg1: i32 {tt.divisibility = 16 : i32},
                              %arg2: !ttg.memdesc<32x64xf16, #shared, #smem, mutable>) {
     // The waitcnt stores all counters in one i32 bits 15:14 and 3:0 store the vmcnt we have to wait on
-    // CHECK: rocdl.waitcnt -49168
+    // CHECK: rocdl.s.waitcnt -49168
     // CHECK: rocdl.barrier
     ttg.async_wait {num = 0 : i32}
-    // CHECK: rocdl.waitcnt -49167
+    // CHECK: rocdl.s.waitcnt -49167
     // CHECK: rocdl.barrier
     ttg.async_wait {num = 1 : i32}
-    // CHECK: rocdl.waitcnt -2
+    // CHECK: rocdl.s.waitcnt -2
     // CHECK: rocdl.barrier
     ttg.async_wait {num = 62 : i32}
-    // CHECK: rocdl.waitcnt -1
+    // CHECK: rocdl.s.waitcnt -1
     // CHECK: rocdl.barrier
     ttg.async_wait {num = 63 : i32}
     tt.return

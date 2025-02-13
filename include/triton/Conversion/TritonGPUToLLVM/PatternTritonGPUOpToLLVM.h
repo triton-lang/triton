@@ -100,7 +100,7 @@ void populateSPMDOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                  PatternBenefit benefit);
 
 void populateFuncOpConversionPattern(LLVMTypeConverter &typeConverter,
-                                     RewritePatternSet &patterns, int numWarps,
+                                     RewritePatternSet &patterns,
                                      const TargetInfoBase &targetInfo,
                                      PatternBenefit benefit);
 

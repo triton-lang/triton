@@ -23,9 +23,8 @@ namespace {
 template <class MMAOpTy>
 Attribute getLHSTMemLayout(MMAOpTy tcGen5MMAOp,
                            ttg::BlockedEncodingAttr srcLayout) {
-  auto mod = tcGen5MMAOp->template getParentOfType<mlir::ModuleOp>();
   auto CTALayout = getCTALayout(srcLayout);
-  int numWarps = ttg::TritonGPUDialect::getNumWarps(mod);
+  int numWarps = ttg::lookupNumWarps(tcGen5MMAOp);
   auto accTmemEncoding = dyn_cast<ttng::TensorMemoryEncodingAttr>(
       tcGen5MMAOp.getD().getType().getEncoding());
   auto lhs = tcGen5MMAOp.getA();
@@ -46,7 +45,6 @@ public:
   LogicalResult matchAndRewrite(MMAOpTy tcGen5MMAOp,
                                 PatternRewriter &rewriter) const override {
     MLIRContext *context = tcGen5MMAOp->getContext();
-    auto mod = tcGen5MMAOp->template getParentOfType<mlir::ModuleOp>();
     Location loc = tcGen5MMAOp.getLoc();
     auto lhs = tcGen5MMAOp.getA();
     auto localAllocOp = lhs.template getDefiningOp<ttg::LocalAllocOp>();
@@ -59,7 +57,7 @@ public:
     auto srcType = cast<RankedTensorType>(src.getType());
     auto srcLayout = cast<ttg::BlockedEncodingAttr>(srcType.getEncoding());
     bool layoutTmemCompatible = ttng::isDistributedLayoutTMemCompatible(
-        mod, srcType, tcGen5MMAOp.getD().getType());
+        tcGen5MMAOp, srcType, tcGen5MMAOp.getD().getType());
     Attribute newLayout = srcLayout;
     if (!layoutTmemCompatible) {
       if (triton::tools::getBoolEnv("ALLOW_LHS_TMEM_LAYOUT_CONVERSION")) {

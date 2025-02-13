@@ -271,11 +271,13 @@ struct DotOpMFMAConversionHelper {
     auto elemTyA = aTensorTy.getElementType();
     auto elemTyB = bTensorTy.getElementType();
 
+    const auto kDimOperandSize = aTensorTy.getShape().back();
+
     bool allowXF32 =
         op.getInputPrecision() == InputPrecision::TF32 && mfmaVersion == 3;
     StringRef mfmaInsnName;
-    auto maybeMfmaInsn = MfmaInsn::selectMfma(mDim, nDim, elemTyA, elemTyB,
-                                              mfmaVersion, allowXF32);
+    auto maybeMfmaInsn = MfmaInsn::selectMfma(
+        mDim, nDim, kDimOperandSize, elemTyA, elemTyB, mfmaVersion, allowXF32);
     if (failed(maybeMfmaInsn))
       llvm::report_fatal_error("No match found in MFMA database\n");
 
@@ -290,8 +292,6 @@ struct DotOpMFMAConversionHelper {
     if (aTensorTy.getElementType().isF32() && allowXF32)
       kWidth *= 2;
 
-    auto rank = aTensorTy.getShape().size();
-    const auto kDimOperandSize = aTensorTy.getShape()[rank - 1];
     const auto kDimInstrSize = mfmaLayout.getInstrShapeForOperand(kWidth, 0)[1];
 
     auto repA = mfmaLayout.getRepForOperand(aTensorTy.getShape(), kWidth, 0);
@@ -309,12 +309,13 @@ struct DotOpMFMAConversionHelper {
     auto numRepB = repA[0];
     assert(repA[0] == repB[0]);
 
+    bool preserveBF16 = mfmaInsnName.contains(".bf16") && mfmaVersion >= 4;
     auto operandA = getValuesFromDotOperandLayoutStruct(
         loadedA, numRepB, numRepM, numRepK, kWidth, kBase,
-        aTensorTy.getElementType(), allowXF32);
+        aTensorTy.getElementType(), allowXF32, preserveBF16);
     auto operandB = getValuesFromDotOperandLayoutStruct(
         loadedB, numRepB, numRepN, numRepK, kWidth, kBase,
-        aTensorTy.getElementType(), allowXF32);
+        aTensorTy.getElementType(), allowXF32, preserveBF16);
 
     auto dstElemTy = dTensorTy.getElementType();
     auto fc = unpackLLElements(loc, loadedC, rewriter);
@@ -379,19 +380,19 @@ struct DotOpMFMAConversionHelper {
   /// rawElems is a vector of kWidth elements. We need to prepare vector(s) of
   /// kBase elements for each mfma instruction
   SmallVector<Value> extractOperands(Value rawElems, int kWidth, int kBase,
-                                     Type type) const {
+                                     Type type, bool preserveBF16) const {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     int kpack = kWidth / kBase;
     SmallVector<Value> results;
     auto vecTy = vec_ty(type, kBase);
-    if (type.isBF16())
+    if (type.isBF16() && !preserveBF16)
       vecTy = vec_ty(i16_ty, kBase);
     for (int k = 0; k < kpack; ++k) {
       Value vec = b.undef(vecTy);
       for (int elemId = 0; elemId < kBase; ++elemId) {
         auto val =
             b.extract_element(type, rawElems, b.i32_val(elemId + k * kBase));
-        if (type.isBF16()) {
+        if (type.isBF16() && !preserveBF16) {
           // rocdl.mfma.f32.32x32x8bf16.1k calls for input of i16 type
           auto cast = b.bitcast(val, i16_ty);
           vec = b.insert_element(vecTy, vec, cast, b.i32_val(elemId));
@@ -423,7 +424,7 @@ struct DotOpMFMAConversionHelper {
   virtual SmallVector<ValueTable>
   getValuesFromDotOperandLayoutStruct(Value value, int batch, int n0, int n1,
                                       int kWidth, int kBase, Type type,
-                                      bool allowXF32) const {
+                                      bool allowXF32, bool preserveBF16) const {
     auto tb = TritonLLVMOpBuilder(loc, rewriter);
     auto elems = unpackLLElements(loc, value, rewriter);
     int kpack = kWidth / kBase;
@@ -449,14 +450,18 @@ struct DotOpMFMAConversionHelper {
           } else {
             SmallVector<Value> vals;
             if (type.isF32() && allowXF32) {
-              vals = extractOperands(rawElems, kWidth, kBase, f32_ty);
+              vals = extractOperands(rawElems, kWidth, kBase, f32_ty,
+                                     preserveBF16);
             } else if (type.getIntOrFloatBitWidth() == 8) {
-              vals = extractOperands(rawElems, kWidth, kBase, i8_ty);
+              vals =
+                  extractOperands(rawElems, kWidth, kBase, i8_ty, preserveBF16);
             } else if (type.isBF16()) {
-              vals = extractOperands(rawElems, kWidth, kBase, bf16_ty);
+              vals = extractOperands(rawElems, kWidth, kBase, bf16_ty,
+                                     preserveBF16);
             } else {
               assert(type.isF16() && "Unsupported data type");
-              vals = extractOperands(rawElems, kWidth, kBase, f16_ty);
+              vals = extractOperands(rawElems, kWidth, kBase, f16_ty,
+                                     preserveBF16);
             }
             for (int k = 0; k < kpack; ++k) {
               dotOpVals[k][{b, i, j}] = vals[k];
@@ -518,6 +523,8 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     ScaleDotElemType aElemType = op.getLhsType();
     ScaleDotElemType bElemType = op.getRhsType();
 
+    const auto kDimOperandSize = aTensorTy.getShape().back();
+
     auto supportsTypes = [](ScaleDotElemType elemType) {
       return elemType == ScaleDotElemType::E2M1;
     };
@@ -529,7 +536,7 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     auto ctx = op.getContext();
     constexpr bool allowXF32 = false;
     auto maybeMfmaInsn = MfmaInsn::selectMfma(
-        mDim, nDim, scaleDotElemTypeToMLIRType(ctx, aElemType),
+        mDim, nDim, kDimOperandSize, scaleDotElemTypeToMLIRType(ctx, aElemType),
         scaleDotElemTypeToMLIRType(ctx, bElemType), mfmaVersion, allowXF32);
     if (failed(maybeMfmaInsn))
       llvm::report_fatal_error("No match found in MFMA database\n");
@@ -544,8 +551,6 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     auto aEncoding = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
     auto bEncoding = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
     int kWidth = aEncoding.getKWidth();
-    auto rank = aTensorTy.getShape().size();
-    const auto kDimOperandSize = aTensorTy.getShape()[rank - 1];
     const auto kDimInstrSize = mfmaLayout.getInstrShapeForOperand(kWidth, 0)[1];
 
     auto repA = mfmaLayout.getRepForOperand(aTensorTy.getShape(), kWidth, 0);
@@ -575,19 +580,19 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
 
     auto operandA = getValuesFromDotOperandLayoutStruct(
         loadedA, numRepB, numRepM, numRepK, kWidth, kBase,
-        aTensorTy.getElementType(), allowXF32);
+        aTensorTy.getElementType(), allowXF32, /*preserveBF16=*/false);
     auto operandB = getValuesFromDotOperandLayoutStruct(
         loadedB, numRepB, numRepN, numRepK, kWidth, kBase,
-        bTensorTy.getElementType(), allowXF32);
+        bTensorTy.getElementType(), allowXF32, /*preserveBF16=*/false);
 
     // Scales have the same replica distributions as their corresponding
     // operands.
     auto operandAScale = getValuesFromDotOperandLayoutStruct(
         loadedAScale, numRepB, numRepM, numRepK, scaleKWidth, scaleKBase,
-        aScaleTensorTy.getElementType(), allowXF32);
+        aScaleTensorTy.getElementType(), allowXF32, /*preserveBF16=*/false);
     auto operandBScale = getValuesFromDotOperandLayoutStruct(
         loadedBScale, numRepB, numRepN, numRepK, scaleKWidth, scaleKBase,
-        bScaleTensorTy.getElementType(), allowXF32);
+        bScaleTensorTy.getElementType(), allowXF32, /*preserveBF16=*/false);
 
     auto dstElemTy = dTensorTy.getElementType();
     auto fc = unpackLLElements(loc, loadedC, rewriter);

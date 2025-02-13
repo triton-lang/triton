@@ -14,7 +14,11 @@ class TritonGPUToLLVMTypeConverter : public LLVMTypeConverter {
 public:
   using TypeConverter::convertType;
 
-  TritonGPUToLLVMTypeConverter(MLIRContext *ctx, LowerToLLVMOptions &option,
+  TritonGPUToLLVMTypeConverter(MLIRContext *ctx,
+                               const LowerToLLVMOptions &option,
+                               const TargetInfoBase &targetInfo,
+                               const DataLayoutAnalysis *analysis = nullptr);
+  TritonGPUToLLVMTypeConverter(MLIRContext *ctx,
                                const TargetInfoBase &targetInfo,
                                const DataLayoutAnalysis *analysis = nullptr);
 

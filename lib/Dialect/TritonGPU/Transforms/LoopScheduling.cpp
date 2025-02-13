@@ -104,9 +104,7 @@ CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
   }
 
   // Assign stage to each op reachable from a latency op
-  for (auto &kv : distance) {
-    Operation *op = kv.first;
-    int dist = kv.second;
+  for (auto [op, dist] : distance) {
     // We only schedule ops that are downstream of a latency op
     // (had a non-negative distance due to a latency op).
     if (dist >= 0)
@@ -120,16 +118,31 @@ CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
   for (int i = 0; i <= maxStage; i++) {
     clusters[i] = schedule.clusters.newAtBack();
   }
-  CoarseSchedule::Cluster epilogue = schedule.clusters.newAtBack();
   // Assign ops to the clusters in reverse-stage order;
   // ops with higher stage numbers are assigned first. This way we will
   // end up with roughly reverse program order in the clusters.
-  for (auto [op, stage] : opToStage) {
-    if (isa<scf::IfOp>(op)) {
-      schedule.insert(op, stage, epilogue);
-      continue;
-    }
+  for (auto [op, stage] : opToStage)
     schedule.insert(op, stage, clusters[maxStage - stage]);
+
+  // Move `scf.if` ops in the current schedule (forward slice of the latency
+  // ops) into a new epilogue cluster at the end of the schedule, pushing them
+  // as close to the end of the loop body as possible.
+  CoarseSchedule::Cluster epilogue = schedule.clusters.newAtBack();
+  for (auto [op, stage] : opToStage) {
+    auto ifOp = dyn_cast<scf::IfOp>(op);
+    if (!ifOp)
+      continue;
+    // If the `scf.if` op itself is a latency op, skip it.
+    if (opLatency.contains(ifOp))
+      continue;
+    // Ensure this does not create scheduling conflicts by ensuring the forward
+    // slice of the `scf.if` does not contain ops that are already scheduled, as
+    // this will cause the `scf.if` to be scheduled after its dependents.
+    SetVector<Operation *> slice;
+    getForwardSlice(ifOp, &slice);
+    if (llvm::any_of(slice, [&](Operation *op) { return opToStage.count(op); }))
+      continue;
+    schedule.insert(ifOp, stage, epilogue);
   }
 
   return schedule;
@@ -140,16 +153,6 @@ CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
 void scheduleDistanceOneDependencies(scf::ForOp forOp,
                                      CoarseSchedule &schedule) {
   int numStages = schedule.numStages;
-  auto getNestedOperands = [](Operation *op) -> SmallVector<Value> {
-    SmallVector<Value> operands;
-    op->walk([&](Operation *nestedOp) {
-      for (Value operand : nestedOp->getOperands()) {
-        if (operand.getParentBlock()->getParentOp()->isAncestor(nestedOp))
-          operands.push_back(operand);
-      }
-    });
-    return operands;
-  };
 
   // Mapping from the cluster to the cluster before it.
   DenseMap<CoarseSchedule::Cluster *, CoarseSchedule::Cluster> dist1Cluster;
@@ -171,14 +174,17 @@ void scheduleDistanceOneDependencies(scf::ForOp forOp,
               // Exception: Schedule loads with a distance of 1 together
               // with the current op.
               schedule.insertIfAbsent(defOp, stage, cluster);
-              schedule.insertDepsOfOp(defOp, stage, cluster, true);
+              schedule.insertDepsOfOp(defOp, stage, cluster,
+                                      /*includeArg=*/true,
+                                      /*insertIfEarlier=*/true);
             } else {
               if (dist1Cluster.count(&cluster) == 0) {
                 dist1Cluster[&cluster] = schedule.clusters.newBefore(cluster);
               }
               schedule.insertIfAbsent(defOp, stage + 1, dist1Cluster[&cluster]);
               schedule.insertDepsOfOp(defOp, stage + 1, dist1Cluster[&cluster],
-                                      true);
+                                      /*includeArg=*/true,
+                                      /*includeIfEarlier=*/true);
             }
           }
         }
@@ -206,6 +212,7 @@ CoarseSchedule::Cluster schedulePrologueAndEpilogue(scf::ForOp forOp,
       SetVector<Operation *> backwardSlice;
       BackwardSliceOptions opt;
       opt.omitBlockArguments = true;
+      opt.omitUsesFromAbove = false;
       getBackwardSlice((Operation *)op, &backwardSlice, opt);
 
       for (auto op : backwardSlice) {
@@ -218,7 +225,7 @@ CoarseSchedule::Cluster schedulePrologueAndEpilogue(scf::ForOp forOp,
   if (!ifsToStage.empty()) {
     CoarseSchedule::Cluster prologueCluster = schedule.clusters.newAtFront();
     for (auto [ifOp, stage] : ifsToStage) {
-      schedule.insert(ifOp, stage, prologueCluster);
+      schedule.insertIfAbsent(ifOp, stage, prologueCluster);
     }
   }
 
@@ -341,6 +348,11 @@ public:
     // only for loops missing the latency information.
     DenseMap<Operation *, int> opLatency =
         assignLatencies(getOperation(), numStages);
+    LLVM_DEBUG({
+      LDBG("Assigned latencies:\n");
+      for (auto [op, latency] : opLatency)
+        LDBG("  " << latency << " : " << *op);
+    });
     // numStages should not be used below this point. We should know everything
     // based on the assigned stages
 
