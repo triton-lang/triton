@@ -12,12 +12,10 @@
 #include <vector>
 
 namespace mlir {
-
 namespace triton::proton {
 
 class ScopeIdAllocation {
 public:
-  /// A unique identifier for scopes
   using ScopeId = size_t;
   using ScopeIdPairs = std::vector<std::pair<ScopeId, std::string>>;
 
@@ -55,54 +53,17 @@ public:
   using FuncOffsetMapT =
       DenseMap<FunctionOpInterface, ScopeIdAllocation::ScopeId>;
 
-  ModuleScopeIdAllocation(ModuleOp moduleOp)
-      : CallGraph<ScopeIdAllocation>(moduleOp) {
-    ScopeIdAllocation::ScopeId funcScopeId = 0;
-    walk<WalkOrder::PreOrder, WalkOrder::PostOrder>(
-        // Pre-order edge walk callback
-        [](CallOpInterface callOp, FunctionOpInterface funcOp) {},
-        // Post-order node walk callback
-        [&](FunctionOpInterface funcOp) {
-          if (funcMap.contains(funcOp)) {
-            return;
-          }
-          auto iter = funcMap.try_emplace(funcOp, ScopeIdAllocation(funcOp));
-          funcScopeIdMap[funcOp] = funcScopeId;
-          funcScopeId += iter.first->second.getNumScopes();
-        });
-  }
+  explicit ModuleScopeIdAllocation(ModuleOp moduleOp);
 
-  ScopeIdAllocation::ScopeId getOpScopeId(Operation *op) const {
-    auto funcOp = op->getParentOfType<triton::FuncOp>();
-    auto funcScopeId = funcScopeIdMap.lookup(funcOp);
-    return funcMap.lookup(funcOp).getOpScopeId(op) + funcScopeId;
-  }
-
-  ScopeIdAllocation::ScopeIdPairs getScopeIdPairs(triton::FuncOp funcOp) const {
-    auto pairs = funcMap.at(funcOp).getScopeIdPairs();
-    auto funcScopeId = funcScopeIdMap.lookup(funcOp);
-    for (auto &[scopeId, name] : pairs) {
-      scopeId += funcScopeIdMap.lookup(funcOp);
-    }
-    return pairs;
-  }
-
-  ScopeIdAllocation::ScopeIdPairs getScopeIdPairs() const {
-    ScopeIdAllocation::ScopeIdPairs pairs;
-    for (auto [funcOp, funcScopeId] : funcScopeIdMap) {
-      auto funcScopeIdPairs = getScopeIdPairs(cast<triton::FuncOp>(funcOp));
-      pairs.insert(pairs.end(), funcScopeIdPairs.begin(),
-                   funcScopeIdPairs.end());
-    }
-    return pairs;
-  }
+  ScopeIdAllocation::ScopeId getOpScopeId(Operation *op) const;
+  ScopeIdAllocation::ScopeIdPairs getScopeIdPairs(triton::FuncOp funcOp) const;
+  ScopeIdAllocation::ScopeIdPairs getScopeIdPairs() const;
 
 private:
   FuncOffsetMapT funcScopeIdMap;
 };
 
 } // namespace triton::proton
-
 } // namespace mlir
 
 #endif // PROTON_ANALYSIS_SCOPE_ID_ALLOCATION_H
