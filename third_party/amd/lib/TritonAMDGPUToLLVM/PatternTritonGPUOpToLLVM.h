@@ -18,7 +18,7 @@ void populateMemoryOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                     PatternBenefit benefit);
 
 void populateDotOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
-                                 RewritePatternSet &patterns, int numWarps,
+                                 RewritePatternSet &patterns,
                                  ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                  PatternBenefit benefit);
 void populateElementwiseOpToLLVMPatterns(
@@ -28,7 +28,6 @@ void populateElementwiseOpToLLVMPatterns(
 void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        const TargetInfo &targetInfo,
                                        RewritePatternSet &patterns,
-                                       int numWarps,
                                        ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                        PatternBenefit benefit);
 
@@ -39,10 +38,9 @@ void populateTritonAMDGPUToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                         RewritePatternSet &patterns,
                                         PatternBenefit benefit);
 
-void populateUpcastMXFPToLLVMPatterns(LLVMTypeConverter &typeConverter,
-                                      RewritePatternSet &patterns,
-                                      const TargetInfo &targetInfo,
-                                      PatternBenefit benefit);
+void populateFp4ToFpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                   RewritePatternSet &patterns,
+                                   PatternBenefit benefit);
 
 } // namespace mlir::triton::AMD
 

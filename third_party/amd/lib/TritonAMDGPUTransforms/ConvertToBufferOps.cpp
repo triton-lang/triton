@@ -366,10 +366,10 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     Value maybeMask{};
     if (op.getMask() && !isZeroConst(op.getMask()))
       maybeMask = op.getMask();
-
+    Value blockStride = getBlockStride(op->getLoc(), tensorOffset, rewriter);
     rewriter.replaceOpWithNewOp<triton::amdgpu::BufferAtomicRMWOp>(
         op, op.getVal().getType(), atomicRmwOp, basePtr, tensorOffset,
-        op.getVal(), sem, scope, maybeMask);
+        op.getVal(), blockStride, sem, scope, maybeMask);
 
     return success();
   }

@@ -240,12 +240,26 @@ bool mlir::triton::getDisallowAccMultiBuffer(scf::ForOp forOp) {
   return forOp->hasAttr(mlir::triton::kDisallowAccMultiBufferAttrName);
 }
 
+void mlir::triton::visitNestedOperands(Operation *op,
+                                       function_ref<void(Value)> visitor) {
+  op->walk([&](Operation *nestedOp) {
+    for (Value operand : nestedOp->getOperands()) {
+      if (operand.getParentBlock()->getParentOp()->isProperAncestor(op))
+        visitor(operand);
+    }
+  });
+}
+
+SetVector<Value> mlir::triton::getNestedOperands(Operation *op) {
+  SetVector<Value> result;
+  visitNestedOperands(op, [&](Value operand) { result.insert(operand); });
+  return result;
+}
+
 std::optional<std::pair<int, int>>
 mlir::triton::maybeGetStageCluster(Operation *op) {
-  auto stage =
-      dyn_cast_if_present<IntegerAttr>(op->getAttr(tt::kLoopStageAttrName));
-  auto clusterId =
-      dyn_cast_if_present<IntegerAttr>(op->getAttr(tt::kLoopClusterAttrName));
+  auto stage = op->getAttrOfType<IntegerAttr>(tt::kLoopStageAttrName);
+  auto clusterId = op->getAttrOfType<IntegerAttr>(tt::kLoopClusterAttrName);
   if (!stage || !clusterId) {
     return std::nullopt;
   }

@@ -283,9 +283,9 @@ private:
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    auto mod = op.getOperation()->getParentOfType<ModuleOp>();
+    auto mod = op->getParentOfType<ModuleOp>();
     int numLanes = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+    int numWarps = triton::gpu::lookupNumWarps(op);
     int numThreads = numLanes * numWarps;
 
     Value threadId = getThreadId(rewriter, loc);
