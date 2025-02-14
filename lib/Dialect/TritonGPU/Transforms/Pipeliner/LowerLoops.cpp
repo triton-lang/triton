@@ -2,6 +2,11 @@
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "llvm/Support/Debug.h"
+
+#define DEBUG_TYPE "triton-loop-pipeline"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 using namespace mlir;
 namespace tt = mlir::triton;
@@ -321,6 +326,9 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
     return WalkResult::advance();
   });
 
+  if (asyncLoads.empty())
+    return forOp;
+
   for (auto &[loadOp, asyncLoad] : asyncLoads) {
     Value alloc = createAlloc(forOp, loadOp, asyncLoad.sharedEncoding,
                               asyncLoad.stageDiff);
@@ -418,6 +426,7 @@ void lowerLoop(scf::ForOp forOp) {
   schedule.deSerialize(forOp);
   scf::ForOp newForOp = lowerLoads(forOp, schedule);
   schedule.serialize(newForOp);
+  LLVM_DEBUG({ DBGS() << "Loop after lowering loads:\n" << newForOp << "\n"; });
 }
 
 } // namespace

@@ -23,23 +23,7 @@ struct TestPipelineScheduleLoop
   using impl::TritonGPUTestPipelineScheduleLoopBase<
       TestPipelineScheduleLoop>::TritonGPUTestPipelineScheduleLoopBase;
 
-  void runOnOperation() override {
-    ModuleOp m = getOperation();
-
-    DenseMap<Operation *, int> opLatencies;
-
-    // Deserialize latencies from the IR.
-    m.walk([&](Operation *op) {
-      if (op->hasAttr(kLatencyAttrName)) {
-        int latency =
-            mlir::cast<IntegerAttr>(op->getAttr(kLatencyAttrName)).getInt();
-        op->removeAttr(kLatencyAttrName);
-        opLatencies[op] = latency;
-      }
-    });
-
-    scheduleLoops(m, opLatencies);
-  }
+  void runOnOperation() override { scheduleLoops(getOperation()); }
 };
 
 } // namespace gpu

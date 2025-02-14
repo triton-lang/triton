@@ -15,11 +15,10 @@ namespace gpu {
 
 /// Discover operations that should become async and assign latencies to them
 /// based on the numStages value provided by the user.
-DenseMap<Operation *, int> assignLatencies(ModuleOp moduleOp, int numStages);
+void assignLatencies(ModuleOp moduleOp, int numStages);
 
 /// Schedule the loops based on the latencies assigned to the operations.
-void scheduleLoops(ModuleOp moduleOp,
-                   const DenseMap<Operation *, int> &opLatency);
+void scheduleLoops(ModuleOp moduleOp);
 
 /// Lower the loops to prepare them for pipeline expansion.
 void lowerLoops(ModuleOp moduleOp);
@@ -67,9 +66,12 @@ public:
 
   public:
     using iterator = decltype(orderClusters)::iterator;
+    using const_iterator = decltype(orderClusters)::const_iterator;
     ClusterList() = default;
     iterator begin() { return orderClusters.begin(); }
+    const_iterator begin() const { return orderClusters.begin(); }
     iterator end() { return orderClusters.end(); }
+    const_iterator end() const { return orderClusters.end(); }
     size_t size() { return orderClusters.size(); }
     iterator newAtBack() {
       orderClusters.push_back(orderClusters.size());
@@ -88,6 +90,18 @@ public:
         clusterId++;
       }
       return ret;
+    }
+
+    bool isBefore(iterator a, iterator b) const {
+      for (auto it = begin(); it != end(); ++it) {
+        if (it == a)
+          return true;
+        if (it == b)
+          return false;
+      }
+      llvm::report_fatal_error(
+          "One or both clusters not found in clusters list!");
+      return false;
     }
   };
 

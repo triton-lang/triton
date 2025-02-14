@@ -142,48 +142,6 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
   return op;
 }
 
-/// Helper to recursively add dependencies to the same stage.
-void mlir::triton::addDep(Operation *op, DenseSet<Operation *> &deps,
-                          bool includeArg, DenseSet<Operation *> *filter) {
-  if (filter && filter->count(op))
-    return;
-  if (!deps.insert(op).second)
-    return;
-  for (Value operand : op->getOperands()) {
-    Value v = operand;
-    llvm::SmallDenseSet<Value> seen;
-    while (auto arg = mlir::dyn_cast<BlockArgument>(v)) {
-      if (!includeArg)
-        break;
-      if (!seen.insert(v).second)
-        break;
-      if (arg.getArgNumber() > 0 && arg.getOwner() == op->getBlock()) {
-        auto yieldOp = op->getBlock()->getTerminator();
-        v = yieldOp->getOperand(arg.getArgNumber() - 1);
-        continue;
-      }
-      break;
-    }
-    Operation *defOp = v.getDefiningOp();
-    if (defOp && defOp->getBlock() == op->getBlock()) {
-      addDep(defOp, deps, includeArg, filter);
-    }
-  }
-}
-
-// Add operations to the schedule with the given stage based on the filter
-// function.
-void mlir::triton::addOps(
-    scf::ForOp forOp, int stage,
-    std::vector<std::pair<Operation *, unsigned>> &schedule,
-    std::function<bool(Operation *)> filter) {
-  for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (!filter(&op))
-      continue;
-    schedule.emplace_back(&op, stage);
-  }
-}
-
 void mlir::triton::replaceUsesAndPropagateType(OpBuilder &builder,
                                                Operation *oldUse, Value val) {
   SmallVector<Operation *> opsToDelete;
@@ -321,4 +279,24 @@ int mlir::triton::getCopyVecBytes(RankedTensorType registerTy,
   auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
   const int vecElems = regToSharedLayout.getNumConsecutiveInOut();
   return vecElems * registerTy.getElementTypeBitWidth() / 8;
+}
+
+void mlir::triton::serializeLatencies(ModuleOp module,
+                                      DenseMap<Operation *, int> &opLatency) {
+  for (auto &[op, latency] : opLatency) {
+    op->setAttr(
+        kLatencyAttrName,
+        IntegerAttr::get(IntegerType::get(module.getContext(), 32), latency));
+  }
+}
+
+DenseMap<Operation *, int> mlir::triton::deserializeLatencies(ModuleOp module) {
+  DenseMap<Operation *, int> opLatency;
+  module.walk([&](Operation *op) {
+    if (op->hasAttr(kLatencyAttrName)) {
+      opLatency[op] = op->getAttrOfType<IntegerAttr>(kLatencyAttrName).getInt();
+      op->removeAttr(kLatencyAttrName);
+    }
+  });
+  return opLatency;
 }

@@ -5,7 +5,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/Support/Debug.h"
 
-#define DEBUG_TYPE "triton-loop-schedule"
+#define DEBUG_TYPE "triton-loop-pipeline"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
@@ -289,30 +289,30 @@ void scheduleLoop(scf::ForOp forOp,
   if (schedule.empty())
     return;
   LLVM_DEBUG({
-    LDBG("Initial coarse schedule:");
-    schedule.dump();
+    schedule.serialize(forOp);
+    DBGS() << "Initial coarse schedule:\n" << forOp << "\n";
   });
   // Schedule the dependencies
   CoarseSchedule::Cluster afterPrologue =
       schedulePrologueAndEpilogue(forOp, schedule);
   LLVM_DEBUG({
-    LDBG("Coarse schedule with prologue and epilogue:");
-    schedule.dump();
+    schedule.serialize(forOp);
+    DBGS() << "Coarse schedule with prologue and epilogue:\n" << forOp << "\n";
   });
   scheduleDependencies(forOp, schedule);
   LLVM_DEBUG({
-    LDBG("Coarse schedule with dependencies:");
-    schedule.dump();
+    schedule.serialize(forOp);
+    DBGS() << "Coarse schedule with dependencies:\n" << forOp << "\n";
   });
   scheduleDistanceOneDependencies(forOp, schedule);
   LLVM_DEBUG({
-    LDBG("Coarse schedule with dist 1:");
-    schedule.dump();
+    schedule.serialize(forOp);
+    DBGS() << "Coarse schedule with dist 1:\n" << forOp << "\n";
   });
   scheduleRemainingToLastStage(forOp, schedule, afterPrologue);
   LLVM_DEBUG({
-    LDBG("Final coarse schedule:");
-    schedule.dump();
+    schedule.serialize(forOp);
+    DBGS() << "Final coarse schedule:\n" << forOp << "\n";
   });
 
   // Write the schedule to the IR
@@ -321,8 +321,8 @@ void scheduleLoop(scf::ForOp forOp,
 
 } // namespace
 
-void scheduleLoops(ModuleOp moduleOp,
-                   const DenseMap<Operation *, int> &opLatency) {
+void scheduleLoops(ModuleOp moduleOp) {
+  DenseMap<Operation *, int> opLatency = deserializeLatencies(moduleOp);
   SmallVector<scf::ForOp> loops;
   moduleOp->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
   if (loops.empty())

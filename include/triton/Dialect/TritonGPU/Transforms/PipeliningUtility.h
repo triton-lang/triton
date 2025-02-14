@@ -15,24 +15,13 @@ static const char *kDisallowAccMultiBufferAttrName =
     "tt.disallow_acc_multi_buffer";
 static const char *kLoopStageAttrName = "loop.stage";
 static const char *kLoopClusterAttrName = "loop.cluster";
+static const char *kLatencyAttrName = "tt.latency";
 
 bool loopHasDistGreaterThanOne(scf::ForOp forOp);
 bool isOuterLoop(scf::ForOp forOp);
 
 /// Function to mask operations during scheduling.
 Operation *predicateOp(RewriterBase &rewriter, Operation *op, Value pred);
-
-/// Collect ssa dependencies of `op` in `deps`. if `includeArg` is true,
-/// continue looking through loop block arguments.
-void addDep(Operation *op, DenseSet<Operation *> &deps, bool includeArg = true,
-            DenseSet<Operation *> *filter = nullptr);
-
-/// Add operations from `forOp` into a pipeline schedule with the the given
-/// `stage` when filter is true. This will add operation in the original loop
-/// order.
-void addOps(scf::ForOp forOp, int stage,
-            std::vector<std::pair<Operation *, unsigned>> &schedule,
-            std::function<bool(Operation *)> filter);
 
 /// Replace all uses of `oldUse` with `val` and propagate the type if needed.
 /// This is useful when we need to change a memory descriptor from immutable to
@@ -71,6 +60,14 @@ void setStageCluster(Operation *op, int stage, int cluster);
 // memory for the given tensor type and shared encoding.
 int getCopyVecBytes(RankedTensorType registerTy,
                     gpu::SharedEncodingTrait sharedEnc);
+
+// Serialize the latencies of the operations in the loops into the latency
+// attribute.
+void serializeLatencies(ModuleOp module, DenseMap<Operation *, int> &opLatency);
+
+// Deserialize the latencies of the operations in the loops from the attribute.
+DenseMap<Operation *, int> deserializeLatencies(ModuleOp module);
+
 } // namespace triton
 } // namespace mlir
 

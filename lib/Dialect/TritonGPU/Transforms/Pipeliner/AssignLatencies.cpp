@@ -7,7 +7,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
 
-#define DEBUG_TYPE "triton-pipeline-schedule"
+#define DEBUG_TYPE "triton-loop-pipeline"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
@@ -222,8 +222,7 @@ void assignUserProvidedLatencies(scf::ForOp forOp,
 // on the requested number of stages assign the latencies in a way that
 // cover all the stages with the sum of latencies in the chain from the first
 // load to the final dot op.
-DenseMap<Operation *, int> assignLatencies(ModuleOp moduleOp,
-                                           int defaultNumStages) {
+void assignLatencies(ModuleOp moduleOp, int defaultNumStages) {
   auto getNumStagesOrDefault = [defaultNumStages](scf::ForOp forOp) -> int {
     // Use the attribute attached to the loop if it exists otherwise use the
     // global control.
@@ -241,7 +240,7 @@ DenseMap<Operation *, int> assignLatencies(ModuleOp moduleOp,
       loops.push_back(forOp);
   });
   if (loops.empty())
-    return DenseMap<Operation *, int>();
+    return;
 
   DenseMap<Operation *, int> opLatency;
   for (auto forOp : loops) {
@@ -280,7 +279,11 @@ DenseMap<Operation *, int> assignLatencies(ModuleOp moduleOp,
       opLatency[loadOp] = loadLatency;
     }
   }
-  return opLatency;
+  serializeLatencies(moduleOp, opLatency);
+
+  LLVM_DEBUG({
+    DBGS() << "Module after assigning latencies:\n" << moduleOp << "\n";
+  });
 }
 
 } // namespace gpu

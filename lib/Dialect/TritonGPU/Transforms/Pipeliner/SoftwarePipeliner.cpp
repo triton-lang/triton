@@ -94,13 +94,12 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
     // numStages) to the them, trying to populate the allowed stages. This
     // step will be at some point extracted to separate pass that will be run
     // only for loops missing the latency information.
-    DenseMap<Operation *, int> opLatency =
-        assignLatencies(getOperation(), numStages);
+    assignLatencies(getOperation(), numStages);
     // numStages should not be used below this point. We should know
     // everything based on the assigned stages
 
     // Schedule the loops
-    scheduleLoops(getOperation(), opLatency);
+    scheduleLoops(getOperation());
 
     if (triton::tools::getBoolEnv("TRITON_NEW_PIPELINER")) {
       // Transform the loop by introducing async operations to prepare it for
