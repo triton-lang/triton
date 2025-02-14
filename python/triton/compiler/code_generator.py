@@ -1008,10 +1008,10 @@ class CodeGenerator(ast.NodeVisitor):
             lb = iterator.start
             ub = iterator.end
             step = iterator.step
-            num_stages = iterator.num_stages.value
-            loop_unroll_factor = iterator.loop_unroll_factor.value
-            disallow_acc_multi_buffer = iterator.disallow_acc_multi_buffer.value
-            flatten = iterator.flatten.value
+            num_stages = _unwrap_if_constexpr(iterator.num_stages)
+            loop_unroll_factor = _unwrap_if_constexpr(iterator.loop_unroll_factor)
+            disallow_acc_multi_buffer = _unwrap_if_constexpr(iterator.disallow_acc_multi_buffer)
+            flatten = _unwrap_if_constexpr(iterator.flatten)
         elif IteratorClass is range:
             # visit iterator arguments
             # note: only `range` iterator is supported now
