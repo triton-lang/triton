@@ -1,6 +1,58 @@
 #include "TritonAMDGPUTransforms/MfmaGroup.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "llvm/ADT/DenseMap.h"
+#include <array>
+#include <tuple>
+
+#define TRITON_AMD_MAX_MFMA_VERSION 4
 
 namespace mlir {
+
+namespace {
+using MfmaKey =
+    std::tuple<unsigned /*mDim*/, unsigned /*nDim*/, unsigned /*kDim*/,
+               TypeID /*aElemType*/, TypeID /*bElemType*/>;
+
+inline MfmaKey composeMfmaKeyFor(unsigned mDim, unsigned nDim, unsigned kDim,
+                                 Type aElemType, Type bElemType) {
+  return {mDim, nDim, kDim, aElemType.getTypeID(), bElemType.getTypeID()};
+}
+
+class MfmaDataBase {
+public:
+  static MfmaDataBase &get(MLIRContext *context) {
+    static MfmaDataBase db(context);
+    return db;
+  }
+
+private:
+  using PerVersionDataBase = llvm::DenseMap<MfmaKey, MfmaIntrinsic>;
+
+  explicit MfmaDataBase(MLIRContext *context);
+
+  std::array<PerVersionDataBase, TRITON_AMD_MAX_MFMA_VERSION + 1> db;
+};
+
+MfmaDataBase::MfmaDataBase(MLIRContext *context) {
+#define TRITON_AMD_ADD_MFMA_v(v, m, n, k, aET, bET, kBase, symbol)             \
+  db[v].try_emplace(composeMfmaKeyFor(m, n, k, aET, bET),                      \
+                    MfmaIntrinsic(ROCDL::symbol::getOperationName(), m, n, k,  \
+                                  kBase, aET, bET));
+
+#define TRITON_AMD_ADD_MFMA_v1to4(m, n, k, aET, bET, kBase, symbol)            \
+  TRITON_AMD_ADD_MFMA_v(1, m, n, k, aET, bET, kBase, symbol);                  \
+  TRITON_AMD_ADD_MFMA_v(2, m, n, k, aET, bET, kBase, symbol);                  \
+  TRITON_AMD_ADD_MFMA_v(3, m, n, k, aET, bET, kBase, symbol);                  \
+  TRITON_AMD_ADD_MFMA_v(4, m, n, k, aET, bET, kBase, symbol);
+
+  Builder b(context);
+  auto f16T = b.getF16Type();
+  auto f32T = b.getF32Type();
+
+  TRITON_AMD_ADD_MFMA_v1to4(32, 32, 2, f32T, f32T, 1, mfma_f32_32x32x2f32);
+}
+
+} // namespace
 
 static bool isF8F6F4(mlir::Type t) {
   return llvm::isa<Float8E4M3FNType, Float8E5M2Type, Float6E3M2FNType,
