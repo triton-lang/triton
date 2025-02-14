@@ -999,7 +999,7 @@ class CodeGenerator(ast.NodeVisitor):
         num_stages = None
         loop_unroll_factor = None
         disallow_acc_multi_buffer = False
-        flatten = None
+        flatten = False
         if IteratorClass is language.range:
             iterator = IteratorClass(*iter_args, **iter_kwargs)
             # visit iterator arguments
@@ -1008,10 +1008,10 @@ class CodeGenerator(ast.NodeVisitor):
             lb = iterator.start
             ub = iterator.end
             step = iterator.step
-            num_stages = iterator.num_stages
-            loop_unroll_factor = iterator.loop_unroll_factor
-            disallow_acc_multi_buffer = iterator.disallow_acc_multi_buffer
-            flatten = iterator.flatten
+            num_stages = iterator.num_stages.value
+            loop_unroll_factor = iterator.loop_unroll_factor.value
+            disallow_acc_multi_buffer = iterator.disallow_acc_multi_buffer.value
+            flatten = iterator.flatten.value
         elif IteratorClass is range:
             # visit iterator arguments
             # note: only `range` iterator is supported now

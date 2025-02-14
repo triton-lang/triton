@@ -2873,7 +2873,7 @@ class range:
     """
 
     def __init__(self, arg1, arg2=None, step=None, num_stages=None, loop_unroll_factor=None,
-                 disallow_acc_multi_buffer=False, flatten=None):
+                 disallow_acc_multi_buffer=False, flatten=False):
         if step is None:
             self.step = constexpr(1)
         else:
@@ -2884,10 +2884,10 @@ class range:
         else:
             self.start = arg1
             self.end = arg2
-        self.num_stages = num_stages
-        self.loop_unroll_factor = loop_unroll_factor
-        self.disallow_acc_multi_buffer = disallow_acc_multi_buffer
-        self.flatten = flatten
+        self.num_stages = constexpr(num_stages)
+        self.loop_unroll_factor = constexpr(loop_unroll_factor)
+        self.disallow_acc_multi_buffer = constexpr(disallow_acc_multi_buffer)
+        self.flatten = constexpr(flatten)
 
     def __iter__(self):
         raise RuntimeError("tl.range can only be used in @triton.jit'd functions")
