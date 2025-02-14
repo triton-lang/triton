@@ -34,7 +34,7 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
   Value mask = b.int_val(1, 1);
-  auto tid = b.tid_val();
+  auto tid = getThreadId(rewriter, loc);
   auto clusterCTAId = targetInfo.getClusterCTAId(rewriter, loc);
   if (tensorTy) {
     auto layout = tensorTy.getEncoding();
@@ -1062,7 +1062,7 @@ struct AtomicCASOpConversion
 
         // Fill entry block with global memory barrier and conditional branch.
         rewriter.setInsertionPointToEnd(curBlock);
-        auto tid = b.tid_val();
+        auto tid = getThreadId(rewriter, loc);
         Value pred = b.icmp_eq(tid, b.i32_val(i));
         rewriter.create<LLVM::CondBrOp>(loc, pred, atomicBlock, endBlock);
 
@@ -1329,7 +1329,7 @@ struct AtomicRMWOpConversion
       numElems = tensorTy.getNumElements();
     }
     Value mask = b.int_val(1, 1);
-    auto tid = b.tid_val();
+    auto tid = getThreadId(rewriter, loc);
     mask = b.and_(mask, b.icmp_slt(b.mul(tid, b.i32_val(elemsPerThread)),
                                    b.i32_val(numElems)));
     if (useDppForPackedF16)

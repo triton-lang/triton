@@ -68,7 +68,7 @@ public:
     Value c48 = b.i32_val(48);
     Value c64 = b.i32_val(64);
 
-    Value threadId = b.tid_val();
+    Value threadId = getThreadId(rewriter, loc);
     Value laneId = b.urem(threadId, c64);
 
     Value mask0 = b.icmp_slt(laneId, c32);
