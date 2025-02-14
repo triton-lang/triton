@@ -8,17 +8,14 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-namespace mlir {
-namespace triton {
+namespace mlir::triton::gpu {
 #define GEN_PASS_DEF_ALLOCATESHAREDMEMORY
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h.inc"
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton::gpu
 
 namespace {
-
 struct AllocateSharedMemory
-    : public mlir::triton::impl::AllocateSharedMemoryBase<
+    : public mlir::triton::gpu::impl::AllocateSharedMemoryBase<
           AllocateSharedMemory> {
   void runOnOperation() override {
     ModuleOp mod = getOperation();
@@ -49,21 +46,4 @@ struct AllocateSharedMemory
                                         allocation.getSharedMemorySize()));
   }
 };
-
 } // namespace
-
-namespace mlir {
-
-namespace triton {
-
-namespace gpu {
-
-std::unique_ptr<OperationPass<ModuleOp>> createAllocateSharedMemoryPass() {
-  return std::make_unique<AllocateSharedMemory>();
-}
-
-} // namespace gpu
-
-} // namespace triton
-
-} // namespace mlir
