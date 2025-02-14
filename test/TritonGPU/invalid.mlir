@@ -276,6 +276,7 @@ tt.func @function_no_scope() {
 // -----
 
 #blocked_2_warps = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [2], order = [0]}>
+
 module attributes {"ttg.num-warps" = 4 : i32} {
 
 tt.func @function_no_scope() {
@@ -292,4 +293,19 @@ tt.func @function_no_scope() {
   tt.return
 }
 
+}
+
+// -----
+
+tt.func @illegal_ws_nest() {
+  ttg.warp_specialize()
+  default {
+    // expected-error @below {{'ttg.warp_specialize' op cannot be nested inside another `ttg.warp_specialize` op}}
+    ttg.warp_specialize()
+    default {
+      ttg.warp_yield
+    } : () -> ()
+    ttg.warp_yield
+  } : () -> ()
+  tt.return
 }

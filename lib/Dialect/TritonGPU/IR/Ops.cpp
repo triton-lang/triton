@@ -687,6 +687,12 @@ LogicalResult WarpSpecializeOp::verify() {
            << getNumResults();
   }
 
+  // This op cannot be nested inside itself.
+  if ((*this)->getParentOfType<WarpSpecializeOp>()) {
+    return emitOpError(
+        "cannot be nested inside another `ttg.warp_specialize` op");
+  }
+
   return success();
 }
 
