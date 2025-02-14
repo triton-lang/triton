@@ -489,8 +489,7 @@ getDefaultBlockedEncoding(MLIRContext *context, ArrayRef<int64_t> shape,
 }
 
 LinearLayout reshapeMinorToMajor(MLIRContext *ctx, const LinearLayout &ll,
-                                 SmallVector<int64_t> dstShape,
-                                 bool doIt = true) {
+                                 SmallVector<int64_t> dstShape) {
   auto newRank = dstShape.size();
 
   SmallVector<std::pair<StringAttr, int32_t>> newOutDims;
@@ -499,16 +498,12 @@ LinearLayout reshapeMinorToMajor(MLIRContext *ctx, const LinearLayout &ll,
     newOutDims.emplace_back(dim, size);
   }
 
-  if (doIt) {
-    auto origOutDims = to_vector(ll.getOutDimNames());
-    std::reverse(origOutDims.begin(), origOutDims.end());
-    std::reverse(newOutDims.begin(), newOutDims.end());
-    return ll.transposeOuts(origOutDims)
-        .reshapeOuts(newOutDims)
-        .transposeOuts(standardOutDimNames(ctx, newRank));
-  } else {
-    return ll.reshapeOuts(newOutDims);
-  }
+  auto origOutDims = to_vector(ll.getOutDimNames());
+  std::reverse(origOutDims.begin(), origOutDims.end());
+  std::reverse(newOutDims.begin(), newOutDims.end());
+  return ll.transposeOuts(origOutDims)
+      .reshapeOuts(newOutDims)
+      .transposeOuts(standardOutDimNames(ctx, newRank));
 }
 
 LogicalResult tryJoinOnAxis(MLIRContext *ctx, const LinearLayout &inLl,
@@ -2832,7 +2827,7 @@ struct TritonGPUInferLayoutInterface
     auto ll = toLinearLayout(shape, srcEnc);
     SmallVector<int64_t> dstShape(shape.begin(), shape.end());
     dstShape.push_back(1);
-    ll = reshapeMinorToMajor(ctx, ll, dstShape, false);
+    ll = reshapeMinorToMajor(ctx, ll, dstShape);
 
     // Try join on last dim
     auto axis = dstShape.size() - 1;
