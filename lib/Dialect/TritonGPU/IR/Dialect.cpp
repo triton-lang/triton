@@ -488,6 +488,60 @@ getDefaultBlockedEncoding(MLIRContext *context, ArrayRef<int64_t> shape,
   return encoding;
 }
 
+LinearLayout reshapeHelper(MLIRContext *ctx, const LinearLayout &ll,
+                           SmallVector<int64_t> dstShape) {
+  auto newRank = dstShape.size();
+
+  SmallVector<std::pair<StringAttr, int32_t>> newOutDims;
+  for (auto [dim, size] :
+       llvm::zip(standardOutDimNames(ctx, newRank), dstShape)) {
+    newOutDims.emplace_back(dim, size);
+  }
+
+  auto origOutDims = to_vector(ll.getOutDimNames());
+  std::reverse(origOutDims.begin(), origOutDims.end());
+  std::reverse(newOutDims.begin(), newOutDims.end());
+  return ll.transposeOuts(origOutDims)
+      .reshapeOuts(newOutDims)
+      .transposeOuts(standardOutDimNames(ctx, newRank));
+}
+
+LogicalResult tryJoinOnAxis(MLIRContext *ctx, const LinearLayout &inLl,
+                            LinearLayout &outLl, bool fwdInference, int axis,
+                            std::optional<Location> loc) {
+  auto kRegister = StringAttr::get(ctx, "register");
+  auto outDims = llvm::to_vector(inLl.getOutDimNames());
+  LinearLayout newLl = LinearLayout::empty();
+  if (fwdInference) {
+    auto split = LinearLayout::identity1D(2, kRegister, outDims[axis]);
+    newLl = split * inLl;
+  } else {
+    // TODO This requires a division algorithm!
+    // Implement manually ll.divideLeft(split)
+    auto contiguousElems =
+        LinearEncodingAttr::get(ctx, inLl).getContigPerThread();
+    if (contiguousElems[axis] > 1) {
+      LinearLayout::BasesT newBases;
+      for (const auto &basesDim : inLl.getBases()) {
+        std::vector<std::vector<int32_t>> newBasesDim;
+        for (auto base : basesDim.second) {
+          if (base[axis] == 1) {
+            continue;
+          }
+          base[axis] /= 2;
+          newBasesDim.push_back(std::move(base));
+        }
+        newBases.insert({basesDim.first, std::move(newBasesDim)});
+      }
+      newLl = LinearLayout(std::move(newBases), std::move(outDims));
+    } else {
+      return emitOptionalError(loc, "Fp4ToFpOp requires at least 2 elements "
+                                    "per thread in the axis dimension");
+    }
+  }
+  return success();
+}
+
 } // namespace gpu
 } // namespace triton
 } // namespace mlir
@@ -2740,82 +2794,120 @@ struct TritonGPUInferLayoutInterface
 
   LogicalResult
   inferJoinOpEncoding(Attribute srcEnc, Attribute &dstEnc,
+                      ArrayRef<int64_t> shape,
                       std::optional<Location> loc) const override {
-    auto enc = mlir::dyn_cast<BlockedEncodingAttr>(srcEnc);
-    if (!enc) {
-      return emitOptionalError(loc,
-                               "JoinOp can only operate on BlockedEncoding");
+    if (auto enc = mlir::dyn_cast<BlockedEncodingAttr>(srcEnc)) {
+      // JoinOp takes two tensors of shape AxBxC and generates a tensor of shape
+      // AxBxCx2.  The encoding is the same as the input, but with 2 elems per
+      // thread in the new dimension.  The new dimension is most-minor.
+      auto append = [](ArrayRef<unsigned> vals, int val) {
+        SmallVector<unsigned> ret(vals);
+        ret.push_back(val);
+        return ret;
+      };
+      auto appendMinorDim = [](ArrayRef<unsigned> order) {
+        SmallVector<unsigned> ret(order);
+        ret.insert(ret.begin(), ret.size());
+        return ret;
+      };
+      dstEnc = BlockedEncodingAttr::get(
+          enc.getContext(),                    //
+          append(enc.getSizePerThread(), 2),   //
+          append(enc.getThreadsPerWarp(), 1),  //
+          append(enc.getWarpsPerCTA(), 1),     //
+          appendMinorDim(enc.getOrder()),      //
+          CTALayoutAttr::get(enc.getContext(), //
+                             append(enc.getCTAsPerCGA(), 1),
+                             append(enc.getCTASplitNum(), 1),
+                             appendMinorDim(enc.getCTAOrder())));
+      return success();
     }
 
-    // JoinOp takes two tensors of shape AxBxC and generates a tensor of shape
-    // AxBxCx2.  The encoding is the same as the input, but with 2 elems per
-    // thread in the new dimension.  The new dimension is most-minor.
-    auto append = [](ArrayRef<unsigned> vals, int val) {
-      SmallVector<unsigned> ret(vals);
-      ret.push_back(val);
-      return ret;
-    };
-    auto appendMinorDim = [](ArrayRef<unsigned> order) {
-      SmallVector<unsigned> ret(order);
-      ret.insert(ret.begin(), ret.size());
-      return ret;
-    };
-    dstEnc = BlockedEncodingAttr::get(
-        enc.getContext(),                    //
-        append(enc.getSizePerThread(), 2),   //
-        append(enc.getThreadsPerWarp(), 1),  //
-        append(enc.getWarpsPerCTA(), 1),     //
-        appendMinorDim(enc.getOrder()),      //
-        CTALayoutAttr::get(enc.getContext(), //
-                           append(enc.getCTAsPerCGA(), 1),
-                           append(enc.getCTASplitNum(), 1),
-                           appendMinorDim(enc.getCTAOrder())));
+    auto ctx = getContext();
+
+    // Append dim to shape
+    auto ll = toLinearLayout(shape, srcEnc);
+    SmallVector<int64_t> dstShape(shape.begin(), shape.end());
+    dstShape.push_back(1);
+    ll = reshapeHelper(ctx, ll, dstShape);
+
+    // Try join on last dim
+    auto axis = dstShape.size() - 1;
+    auto newLl = LinearLayout::empty();
+    auto result =
+        tryJoinOnAxis(ctx, ll, newLl, /*fwdInference=*/true, axis, loc);
+
+    if (!result.succeeded())
+      return result;
+    dstEnc = LinearEncodingAttr::get(ctx, newLl);
     return success();
   }
 
   LogicalResult
   inferSplitOpEncoding(Attribute srcEnc, Attribute &dstEnc,
+                       ArrayRef<int64_t> shape,
                        std::optional<Location> loc) const override {
     auto enc = mlir::dyn_cast<BlockedEncodingAttr>(srcEnc);
-    if (!enc) {
-      return emitOptionalError(loc,
-                               "SplitOp can only operate on BlockedEncoding");
+    if (enc) {
+      // SplitOp takes a tensor of shape AxBxCx2 and generates two tensors of
+      // shape AxBxC.  The input must have 2 elements per thread in the last
+      // dimension, which must be most-minor.  The result encoding is the same
+      // as the input, but with the last dimension removed.
+      if (enc.getSizePerThread().back() != 2) {
+        return emitOptionalError(
+            loc, "SplitOp requires 2 elements per thread in the "
+                 "last dimension of the input");
+      }
+      if (enc.getThreadsPerWarp().back() != 1 ||
+          enc.getWarpsPerCTA().back() != 1 || enc.getCTAsPerCGA().back() != 1) {
+        return emitOptionalError(
+            loc, "SplitOp requires threadsPerWarp, warpsPerCTA, "
+                 "and CTAsPerCGA = 1 for the last dimension of the input");
+      }
+      if (enc.getCTALayout().getCTAsPerCGA().back() != 1) {
+        return emitOptionalError(
+            loc,
+            "SplitOp requires the last dimension to be most-minor in CTAOrder");
+      }
+      SmallVector<unsigned> newOrder(enc.getOrder());
+      int splitDim = newOrder.size() - 1;
+      // Remove splitDim from order.
+      newOrder.erase(std::remove(newOrder.begin(), newOrder.end(), splitDim),
+                     newOrder.end());
+      dstEnc = BlockedEncodingAttr::get(
+          enc.getContext(), //
+          ArrayRef(enc.getSizePerThread()).drop_back(1),
+          ArrayRef(enc.getThreadsPerWarp()).drop_back(1),
+          ArrayRef(enc.getWarpsPerCTA()).drop_back(1), ArrayRef(newOrder),
+          CTALayoutAttr::get(enc.getContext(), //
+                             ArrayRef(enc.getCTAsPerCGA()).drop_back(1),
+                             ArrayRef(enc.getCTASplitNum()).drop_back(1),
+                             ArrayRef(enc.getCTAOrder()).drop_front(1)));
+      return success();
     }
 
-    // SplitOp takes a tensor of shape AxBxCx2 and generates two tensors of
-    // shape AxBxC.  The input must have 2 elements per thread in the last
-    // dimension, which must be most-minor.  The result encoding is the same as
-    // the input, but with the last dimension removed.
-    if (enc.getSizePerThread().back() != 2) {
-      return emitOptionalError(loc,
-                               "SplitOp requires 2 elements per thread in the "
-                               "last dimension of the input");
-    }
-    if (enc.getThreadsPerWarp().back() != 1 ||
-        enc.getWarpsPerCTA().back() != 1 || enc.getCTAsPerCGA().back() != 1) {
+    // Make sure last dim == 2
+    auto axis = shape.size() - 1;
+    if (shape[axis] != 2)
       return emitOptionalError(
-          loc, "SplitOp requires threadsPerWarp, warpsPerCTA, "
-               "and CTAsPerCGA = 1 for the last dimension of the input");
+          loc, "SplitOp input shape should have 2 in the last dim");
+
+    auto ctx = getContext();
+
+    // Split on last dim
+    auto ll = toLinearLayout(shape, srcEnc);
+    auto newLl = LinearLayout::empty();
+    auto result =
+        tryJoinOnAxis(ctx, ll, newLl, /*fwdInference=*/false, axis, loc);
+    if (!result.succeeded()) {
+      return failure();
     }
-    if (enc.getCTALayout().getCTAsPerCGA().back() != 1) {
-      return emitOptionalError(
-          loc,
-          "SplitOp requires the last dimension to be most-minor in CTAOrder");
-    }
-    SmallVector<unsigned> newOrder(enc.getOrder());
-    int splitDim = newOrder.size() - 1;
-    // Remove splitDim from order.
-    newOrder.erase(std::remove(newOrder.begin(), newOrder.end(), splitDim),
-                   newOrder.end());
-    dstEnc = BlockedEncodingAttr::get(
-        enc.getContext(), //
-        ArrayRef(enc.getSizePerThread()).drop_back(1),
-        ArrayRef(enc.getThreadsPerWarp()).drop_back(1),
-        ArrayRef(enc.getWarpsPerCTA()).drop_back(1), ArrayRef(newOrder),
-        CTALayoutAttr::get(enc.getContext(), //
-                           ArrayRef(enc.getCTAsPerCGA()).drop_back(1),
-                           ArrayRef(enc.getCTASplitNum()).drop_back(1),
-                           ArrayRef(enc.getCTAOrder()).drop_front(1)));
+
+    // Remove last dim from newLl (which should be 1)
+    SmallVector<int64_t> dstShape(shape.begin(), shape.end());
+    dstShape.pop_back();
+    newLl = reshapeHelper(ctx, newLl, dstShape);
+    dstEnc = LinearEncodingAttr::get(ctx, newLl);
     return success();
   }
 
@@ -2873,37 +2965,10 @@ struct TritonGPUInferLayoutInterface
     }
 
     auto ll = toLinearLayout(shape, inEnc);
-
-    auto kRegister = StringAttr::get(ctx, "register");
-    auto outDims = llvm::to_vector(ll.getOutDimNames());
-    LinearLayout newLl = LinearLayout::empty();
-    if (fwdInference) {
-      auto split = LinearLayout::identity1D(2, kRegister, outDims[axis]);
-      newLl = split * ll;
-    } else {
-      // TODO This requires a division algorithm!
-      // Implement manually ll.divideLeft(split)
-      auto contiguousElems =
-          LinearEncodingAttr::get(ctx, ll).getContigPerThread();
-      if (contiguousElems[axis] > 1) {
-        LinearLayout::BasesT newBases;
-        for (const auto &basesDim : ll.getBases()) {
-          std::vector<std::vector<int32_t>> newBasesDim;
-          for (auto base : basesDim.second) {
-            if (base[axis] == 1) {
-              continue;
-            }
-            base[axis] /= 2;
-            newBasesDim.push_back(std::move(base));
-          }
-          newBases.insert({basesDim.first, std::move(newBasesDim)});
-        }
-        newLl = LinearLayout(std::move(newBases), std::move(outDims));
-      } else {
-        return emitOptionalError(loc, "Fp4ToFpOp requires at least 2 elements "
-                                      "per thread in the axis dimension");
-      }
-    }
+    auto newLl = LinearLayout::empty();
+    auto result = tryJoinOnAxis(ctx, ll, newLl, fwdInference, axis, loc);
+    if (!result.succeeded())
+      return result;
     outEnc = LinearEncodingAttr::get(ctx, newLl);
     return success();
   }

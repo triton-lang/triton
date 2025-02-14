@@ -377,7 +377,8 @@ TEST_F(Fp4ToFpOpTest, Fp4ToFpOpLayoutPropagation) {
         auto transPerm = llvm::to_vector(llvm::seq<int32_t>(0, rank));
         transPerm.insert(transPerm.begin() + axis + 1, rank);
         Attribute joinedEnc;
-        result = inferLayout->inferJoinOpEncoding(enc, joinedEnc, std::nullopt);
+        result = inferLayout->inferJoinOpEncoding(enc, joinedEnc, shape,
+                                                  std::nullopt);
         auto joinShape = shape;
         joinShape.push_back(2);
         assert(succeeded(result));
