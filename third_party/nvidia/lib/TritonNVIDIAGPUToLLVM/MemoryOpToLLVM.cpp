@@ -175,7 +175,7 @@ LogicalResult lowerDistributedToSharedStmatrix(
   auto kBlock = str_attr("block");
 
   auto [laneId, warpId] =
-      getLaneAndWarpId(rewriter, loc, layout.getInDimSize(kLane));
+      getLaneAndWarpId(rewriter, loc);
 
   auto regBase = applyLinearLayout(loc, rewriter, layout,
                                    {{kRegister, b.i32_val(0)},

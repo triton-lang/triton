@@ -726,6 +726,7 @@ static Value initTensorMemory(LLVM::LLVMFuncOp func) {
   // Assume that 2CTAs is used if we have two CTAs this is pessimistic but
   // should be fine for now.
   bool useTwoCTAs = numCTAs == 2;
+  // This code is only executed by the default warp group.
   Value threadId = rewriter.create<NVVM::ThreadIdXOp>(loc, i32_ty);
   Value pred = b.icmp_ult(threadId, b.i32_val(32));
   Value alloc = createTMAlloc(rewriter, func, size, pred, useTwoCTAs);

@@ -653,15 +653,18 @@ Value mxfpScaleBf16(RewriterBase &rewriter, Location loc, Value v, Value scale,
 // Hardware Indices
 // -----------------------------------------------------------------------
 
+// If an operation is contained within a warp specialize region, this returns
+// the thread ID offset of that warpgroup.
+std::optional<int> getWarpGroupStartThreadId(Operation *op);
+
 // Returns CTA level thread ID.
 Value getThreadId(OpBuilder &rewriter, Location loc);
 
 // Get the lane ID, which is index of the thread within its warp.
-Value getLaneId(OpBuilder &rewriter, Location loc, unsigned threadsPerWarp);
+Value getLaneId(OpBuilder &rewriter, Location loc);
 
 // Get the lane ID and warp ID.
-std::pair<Value, Value> getLaneAndWarpId(OpBuilder &rewriter, Location loc,
-                                         unsigned threadsPerWarp);
+std::pair<Value, Value> getLaneAndWarpId(OpBuilder &rewriter, Location loc);
 
 // -----------------------------------------------------------------------
 // Shared memory utilities
@@ -723,13 +726,12 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
 
 inline SmallVector<Value>
 emitBaseIndexWithinCTAForBlockedLayout(Location loc, RewriterBase &rewriter,
-                                       const BlockedEncodingAttr &blockedLayout,
+                                       BlockedEncodingAttr blockedLayout,
                                        RankedTensorType type) {
   MLIRContext *ctx = rewriter.getContext();
   auto shape = type.getShape();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto [laneId, warpId] =
-      getLaneAndWarpId(rewriter, loc, triton::gpu::getWarpSize(blockedLayout));
+  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
   auto sizePerThread = blockedLayout.getSizePerThread();
   auto threadsPerWarp = blockedLayout.getThreadsPerWarp();
   auto warpsPerCTA = blockedLayout.getWarpsPerCTA();
@@ -788,7 +790,7 @@ emitBaseIndexWithinCTAForMmaLayoutV2V3(Location loc, RewriterBase &rewriter,
     warpsPerCTA.push_back(b.i32_val(_warpsPerCTA[i]));
   auto shapePerCTA = getShapePerCTA(mmaLayout, shape);
 
-  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc, /*warpSize=*/32);
+  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
 
   uint32_t repM =
       (_warpsPerCTA[rank - 2] * instrShape[rank - 2]) / shapePerCTA[rank - 2];
@@ -835,7 +837,7 @@ emitBaseIndexWithinCTAForMmaLayoutV2V3(Location loc, RewriterBase &rewriter,
 
 inline SmallVector<Value>
 emitBaseIndexForMfmaLayout(Location loc, RewriterBase &rewriter,
-                           const AMDMfmaEncodingAttr &mfmaLayout,
+                           AMDMfmaEncodingAttr mfmaLayout,
                            RankedTensorType type) {
   auto shape = type.getShape();
   auto rank = shape.size();
@@ -850,8 +852,7 @@ emitBaseIndexForMfmaLayout(Location loc, RewriterBase &rewriter,
   assert((mDim == nDim && (mDim == 32 || mDim == 16 || mDim == 4)) ||
          (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64));
 
-  auto [laneId, warpId] =
-      getLaneAndWarpId(rewriter, loc, triton::gpu::getWarpSize(mfmaLayout));
+  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
   if (mDim == 4 && nDim == 4) {
     constexpr int uniqueValuesPerWarp = 4;
     laneId = b.urem(laneId, b.i32_val(uniqueValuesPerWarp));
@@ -894,7 +895,7 @@ emitBaseIndexForMfmaLayout(Location loc, RewriterBase &rewriter,
   return multiDimBase;
 }
 
-inline void emitMfmaOffsetForCTA(const AMDMfmaEncodingAttr &mfmaLayout,
+inline void emitMfmaOffsetForCTA(AMDMfmaEncodingAttr mfmaLayout,
                                  SmallVector<SmallVector<unsigned>> &offsets,
                                  unsigned bOff, unsigned ctaOffsetX,
                                  unsigned ctaOffsetY) {
@@ -975,7 +976,7 @@ emitBaseIndexForWmmaLayout(Location loc, RewriterBase &rewriter,
   auto mnkDim = AMDWmmaEncodingAttr::getMNKDimPerInstr();
 
   unsigned warpSize = triton::gpu::getWarpSize(wmmaLayout);
-  auto [threadIdPerWarp, warpId] = getLaneAndWarpId(rewriter, loc, warpSize);
+  auto [threadIdPerWarp, warpId] = getLaneAndWarpId(rewriter, loc);
   Value laneId = b.urem(threadIdPerWarp, b.i32_val(warpSize / 2));
 
   SmallVector<Value> multiDimWarpId =

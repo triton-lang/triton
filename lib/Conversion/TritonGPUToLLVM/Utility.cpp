@@ -156,23 +156,48 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
   return outIndices;
 }
 
+std::optional<int> getWarpGroupStartThreadId(Operation *op) {
+  // Look for an enclosing `ttg.warp_specialize` op.
+  Operation *parent = op->getParentOp();
+  if (!parent)
+    return {};
+  if (auto ws = dyn_cast<triton::gpu::WarpSpecializeOp>(parent)) {
+    unsigned idx = op->getParentRegion()->getRegionNumber();
+    std::optional<ArrayRef<int32_t>> startIds = ws.getWarpGroupStartIds();
+    assert(startIds && "cannot get warp group ID before warp group allocation");
+    return (*startIds)[idx];
+  }
+  return getWarpGroupStartThreadId(parent);
+}
+
 Value getThreadId(OpBuilder &rewriter, Location loc) {
   Value tid =
       rewriter.create<::mlir::gpu::ThreadIdOp>(loc, ::mlir::gpu::Dimension::x);
-  return rewriter.create<arith::IndexCastOp>(loc, i32_ty, tid);
+  tid = rewriter.create<arith::IndexCastOp>(loc, i32_ty, tid);
+  return tid;
 }
 
-Value getLaneId(OpBuilder &rewriter, Location loc, unsigned threadsPerWarp) {
+static int lookupThreadsPerWarp(OpBuilder &rewriter) {
+  assert(rewriter.getInsertionBlock() && "expected an insertion point");
+  Operation *op = rewriter.getInsertionBlock()->getParentOp();
+  while (op && !isa<ModuleOp>(op))
+    op = op->getParentOp();
+  assert(op && "cannot create thread ID outside of module");
+  return triton::gpu::TritonGPUDialect::getThreadsPerWarp(cast<ModuleOp>(op));
+}
+
+Value getLaneId(OpBuilder &rewriter, Location loc) {
   TritonLLVMOpBuilder b(loc, rewriter);
   Value tid = getThreadId(rewriter, loc);
+  int threadsPerWarp = lookupThreadsPerWarp(rewriter);
   return b.urem(tid, b.i32_val(threadsPerWarp));
 }
 
-std::pair<Value, Value> getLaneAndWarpId(OpBuilder &rewriter, Location loc,
-                                         unsigned warpSize) {
+std::pair<Value, Value> getLaneAndWarpId(OpBuilder &rewriter, Location loc) {
   TritonLLVMOpBuilder b(loc, rewriter);
   Value tid = getThreadId(rewriter, loc);
-  Value warpSizeVal = b.i32_val(warpSize);
+  int threadsPerWarp = lookupThreadsPerWarp(rewriter);
+  Value warpSizeVal = b.i32_val(threadsPerWarp);
 
   Value laneId = b.urem(tid, warpSizeVal);
   Value warpId = b.udiv(tid, warpSizeVal);
@@ -195,8 +220,7 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
   StringAttr kWarp = str_attr("warp");
   StringAttr kBlock = str_attr("block");
 
-  auto [laneId, warpId] =
-      getLaneAndWarpId(rewriter, loc, ll.getInDimSize(kLane));
+  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
   Value blockId =
       withCTAOffset ? target.getClusterCTAId(rewriter, loc) : b.i32_val(0);
   unsigned rank = shape.size();
@@ -417,8 +441,7 @@ bool emitTransferBetweenRegistersAndShared(
                maxVecElems.value_or(std::numeric_limits<int>::max()));
 
   auto withCTAOffset = triton::gpu::getNumCTAs(sharedTy.getEncoding()) > 1;
-  auto [laneId, warpId] =
-      getLaneAndWarpId(rewriter, loc, regToSharedLayout.getInDimSize(kLane));
+  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
   Value blockId =
       withCTAOffset ? target.getClusterCTAId(rewriter, loc) : b.i32_val(0);
 
@@ -926,7 +949,7 @@ SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
     auto instrShape = mmaLayout.getInstrShape();
     SmallVector<Value> mmaColIdx(2);
     SmallVector<Value> mmaRowIdx(2);
-    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc, /*warpSize=*/32);
+    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
     // TODO: fix the bug in MMAEncodingAttr document
     SmallVector<Value> multiDimWarpId(2);
     auto warpsPerCTA = mmaLayout.getWarpsPerCTA();

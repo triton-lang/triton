@@ -28,7 +28,7 @@ tt.func @kernel() {
 
 // -----
 
-// CHECK: module attributes {"ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 11 : i32}
+// CHECK: module attributes {"ttg.num-warps" = 2 : i32, "ttg.total-num-warps" = 11 : i32}
 module attributes {"ttg.num-warps" = 2 : i32} {
 
 tt.func @two_warp_specialize() {
