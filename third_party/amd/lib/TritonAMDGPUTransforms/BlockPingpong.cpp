@@ -472,7 +472,7 @@ void Pingponger::getDotPingponged() {
     // centric pingpong scheduling.
     if (tileSize <= smallTile && tileSize >= minTile) {
       transformOnePPClusters(builder, loc);
-      LDBG("Successfully performed One Ping Pong Cluster Transformation.");
+      LDBG("Successfully performed one ping pong cluster transformation.");
     }
     // numWarps=4 doesn't need asymmetric sync, return.
     return;
@@ -483,14 +483,14 @@ void Pingponger::getDotPingponged() {
     if (tileSize == mediumTile) {
       if (transformTwoPPClusters(builder, dotOps[0]->getLoc()).failed())
         return;
-      LDBG("Successfully performed Two Ping Pong Cluster Transformation.");
+      LDBG("Successfully performed two ping pong cluster transformation.");
     } else if (tileSize >= largeTile) {
       // Avoid known register spilling. i.e., mfma16x16x16 & largetile & kpack>1
       if (intShape[0] == 16 && intShape[1] == 16 && kWidth == 8)
         return;
       if (transformFourPPClusters(builder, dotOps[0]->getLoc()).failed())
         return;
-      LDBG("Successfully performed Four Ping Pong Cluster Transformation.");
+      LDBG("Successfully performed four ping pong cluster transformation.");
     } else
       return;
 
