@@ -1,5 +1,6 @@
 #include "TritonAMDGPUTransforms/MfmaGroup.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "llvm/ADT/DenseMap.h"
 #include <array>
 #include <tuple>
@@ -9,13 +10,12 @@
 namespace mlir {
 
 namespace {
-using MfmaKey =
-    std::tuple<unsigned /*mDim*/, unsigned /*nDim*/, unsigned /*kDim*/,
-               TypeID /*aElemType*/, TypeID /*bElemType*/>;
+using MfmaKey = std::tuple<unsigned /*mDim*/, unsigned /*nDim*/,
+                           TypeID /*aElemType*/, TypeID /*bElemType*/>;
 
-inline MfmaKey composeMfmaKeyFor(unsigned mDim, unsigned nDim, unsigned kDim,
-                                 Type aElemType, Type bElemType) {
-  return {mDim, nDim, kDim, aElemType.getTypeID(), bElemType.getTypeID()};
+inline MfmaKey composeMfmaKeyFor(unsigned mDim, unsigned nDim, Type aElemType,
+                                 Type bElemType) {
+  return {mDim, nDim, aElemType.getTypeID(), bElemType.getTypeID()};
 }
 
 class MfmaDataBase {
@@ -26,7 +26,8 @@ public:
   }
 
 private:
-  using PerVersionDataBase = llvm::DenseMap<MfmaKey, MfmaIntrinsic>;
+  using PerVersionDataBase =
+      llvm::DenseMap<MfmaKey, SmallVector<MfmaIntrinsic, 2>>;
 
   explicit MfmaDataBase(MLIRContext *context);
 
@@ -35,21 +36,123 @@ private:
 
 MfmaDataBase::MfmaDataBase(MLIRContext *context) {
 #define TRITON_AMD_ADD_MFMA_v(v, m, n, k, aET, bET, kBase, symbol)             \
-  db[v].try_emplace(composeMfmaKeyFor(m, n, k, aET, bET),                      \
-                    MfmaIntrinsic(ROCDL::symbol::getOperationName(), m, n, k,  \
-                                  kBase, aET, bET));
+  db[v][composeMfmaKeyFor(m, n, aET, bET)].emplace_back(                       \
+      ROCDL::symbol::getOperationName(), m, n, k, kBase, aET, bET);
 
-#define TRITON_AMD_ADD_MFMA_v1to4(m, n, k, aET, bET, kBase, symbol)            \
+#define TRITON_AMD_ADD_MFMA_v1to2(m, n, k, aET, bET, kBase, symbol)            \
   TRITON_AMD_ADD_MFMA_v(1, m, n, k, aET, bET, kBase, symbol);                  \
-  TRITON_AMD_ADD_MFMA_v(2, m, n, k, aET, bET, kBase, symbol);                  \
+  TRITON_AMD_ADD_MFMA_v(2, m, n, k, aET, bET, kBase, symbol);
+
+#define TRITON_AMD_ADD_MFMA_v3to4(m, n, k, aET, bET, kBase, symbol)            \
   TRITON_AMD_ADD_MFMA_v(3, m, n, k, aET, bET, kBase, symbol);                  \
   TRITON_AMD_ADD_MFMA_v(4, m, n, k, aET, bET, kBase, symbol);
 
-  Builder b(context);
-  auto f16T = b.getF16Type();
-  auto f32T = b.getF32Type();
+#define TRITON_AMD_ADD_MFMA_v2to4(m, n, k, aET, bET, kBase, symbol)            \
+  TRITON_AMD_ADD_MFMA_v(2, m, n, k, aET, bET, kBase, symbol);                  \
+  TRITON_AMD_ADD_MFMA_v3to4(m, n, k, aET, bET, kBase, symbol);
 
+#define TRITON_AMD_ADD_MFMA_v1to4(m, n, k, aET, bET, kBase, symbol)            \
+  TRITON_AMD_ADD_MFMA_v(1, m, n, k, aET, bET, kBase, symbol);                  \
+  TRITON_AMD_ADD_MFMA_v2to4(m, n, k, aET, bET, kBase, symbol);
+
+  Builder b(context);
+  auto f32T = b.getF32Type();
+  auto f16T = b.getF16Type();
+  auto bf16T = b.getBF16Type();
+  auto i8T = b.getI8Type();
+  auto amdFp8T = b.getType<Float8E4M3FNUZType>();
+  auto amdBf8T = b.getType<Float8E5M2FNUZType>();
+
+  // f32 inputs
+  // mfma_f32_32x32x2f32
   TRITON_AMD_ADD_MFMA_v1to4(32, 32, 2, f32T, f32T, 1, mfma_f32_32x32x2f32);
+  // mfma_f32_16x16x4f32
+  TRITON_AMD_ADD_MFMA_v1to4(16, 16, 4, f32T, f32T, 1, mfma_f32_16x16x4f32);
+  // mfma_f32_4x4x1f32 / mfma_f32_4x4x1_16B_f32
+  TRITON_AMD_ADD_MFMA_v1to4(4, 4, 16, f32T, f32T, 1, mfma_f32_4x4x1f32);
+  TRITON_AMD_ADD_MFMA_v1to4(4, 64, 1, f32T, f32T, 1, mfma_f32_4x4x1f32);
+  TRITON_AMD_ADD_MFMA_v1to4(64, 4, 1, f32T, f32T, 1, mfma_f32_4x4x1f32);
+
+  // f16 inputs
+  // mfma_f32_32x32x16_f16
+  TRITON_AMD_ADD_MFMA_v(4, 32, 32, 16, f16T, f16T, 8, mfma_f32_32x32x16_f16);
+  // mfma_f32_32x32x8f16
+  TRITON_AMD_ADD_MFMA_v1to4(32, 32, 8, f16T, f16T, 4, mfma_f32_32x32x8f16);
+  // mfma_f32_16x16x32_f16
+  TRITON_AMD_ADD_MFMA_v(4, 16, 16, 32, f16T, f16T, 8, mfma_f32_16x16x32_f16);
+  // mfma_f32_16x16x16f16
+  TRITON_AMD_ADD_MFMA_v1to4(16, 16, 16, f16T, f16T, 4, mfma_f32_16x16x16f16);
+  // mfma_f32_4x4x4f16
+  TRITON_AMD_ADD_MFMA_v1to4(4, 4, 64, f16T, f16T, 4, mfma_f32_4x4x4f16);
+  TRITON_AMD_ADD_MFMA_v1to4(4, 64, 4, f16T, f16T, 4, mfma_f32_4x4x4f16);
+  TRITON_AMD_ADD_MFMA_v1to4(64, 4, 4, f16T, f16T, 4, mfma_f32_4x4x4f16);
+
+  // bf16 inputs
+  // mfma_f32_32x32x16_bf16
+  TRITON_AMD_ADD_MFMA_v(4, 32, 32, 16, bf16T, bf16T, 8, mfma_f32_32x32x16_bf16);
+  // mfma_f32_32x32x8_bf16_1K
+  TRITON_AMD_ADD_MFMA_v2to4(32, 32, 8, bf16T, bf16T, 4,
+                            mfma_f32_32x32x8bf16_1k);
+  // mfma_f32_16x16x32_bf16
+  TRITON_AMD_ADD_MFMA_v(4, 16, 16, 32, bf16T, bf16T, 8, mfma_f32_16x16x32_bf16);
+  // mfma_f32_16x16x16_bf16_1K
+  TRITON_AMD_ADD_MFMA_v2to4(16, 16, 16, bf16T, bf16T, 4,
+                            mfma_f32_16x16x16bf16_1k);
+  // mfma_f32_32x32x4_bf16
+  TRITON_AMD_ADD_MFMA_v(1, 32, 32, 4, bf16T, bf16T, 2, mfma_f32_32x32x4bf16);
+  // mfma_f32_16x16x8_bf16
+  TRITON_AMD_ADD_MFMA_v(1, 16, 16, 8, bf16T, bf16T, 2, mfma_f32_16x16x8bf16);
+  // mfma_f32_4x4x4_bf16_1K
+  TRITON_AMD_ADD_MFMA_v2to4(4, 4, 64, bf16T, bf16T, 4, mfma_f32_4x4x4bf16_1k);
+  TRITON_AMD_ADD_MFMA_v2to4(4, 64, 4, bf16T, bf16T, 4, mfma_f32_4x4x4bf16_1k);
+  TRITON_AMD_ADD_MFMA_v2to4(64, 4, 4, bf16T, bf16T, 4, mfma_f32_4x4x4bf16_1k);
+  // mfma_f32_4x4x2_bf16
+  TRITON_AMD_ADD_MFMA_v(1, 4, 4, 32, bf16T, bf16T, 2, mfma_f32_4x4x2bf16);
+  TRITON_AMD_ADD_MFMA_v(1, 4, 64, 2, bf16T, bf16T, 2, mfma_f32_4x4x2bf16);
+  TRITON_AMD_ADD_MFMA_v(1, 64, 4, 2, bf16T, bf16T, 2, mfma_f32_4x4x2bf16);
+
+  // fp8/bf8 inputs
+  // mfma_f32_32x32x16_FP8_FP8
+  TRITON_AMD_ADD_MFMA_v3to4(32, 32, 16, amdFp8T, amdFp8T, 8,
+                            mfma_f32_32x32x16_fp8_fp8);
+  // mfma_f32_32x32x16_FP8_BF8
+  TRITON_AMD_ADD_MFMA_v3to4(32, 32, 16, amdFp8T, amdBf8T, 8,
+                            mfma_f32_32x32x16_fp8_bf8);
+  // mfma_f32_32x32x16_BF8_FP8
+  TRITON_AMD_ADD_MFMA_v3to4(32, 32, 16, amdBf8T, amdFp8T, 8,
+                            mfma_f32_32x32x16_bf8_fp8);
+  // mfma_f32_32x32x16_BF8_BF8
+  TRITON_AMD_ADD_MFMA_v3to4(32, 32, 16, amdBf8T, amdBf8T, 8,
+                            mfma_f32_32x32x16_bf8_bf8);
+  // mfma_f32_16x16x32_FP8_FP8
+  TRITON_AMD_ADD_MFMA_v3to4(16, 16, 32, amdFp8T, amdFp8T, 8,
+                            mfma_f32_16x16x32_fp8_fp8);
+  // mfma_f32_16x16x32_FP8_BF8
+  TRITON_AMD_ADD_MFMA_v3to4(16, 16, 32, amdFp8T, amdBf8T, 8,
+                            mfma_f32_16x16x32_fp8_bf8);
+  // mfma_f32_16x16x32_BF8_FP8
+  TRITON_AMD_ADD_MFMA_v3to4(16, 16, 32, amdBf8T, amdFp8T, 8,
+                            mfma_f32_16x16x32_bf8_fp8);
+  // mfma_f32_16x16x32_BF8_BF8
+  TRITON_AMD_ADD_MFMA_v3to4(16, 16, 32, amdBf8T, amdBf8T, 8,
+                            mfma_f32_16x16x32_bf8_bf8);
+
+  // int8 inputs
+  // mfma_i32_32x32x16i8
+  TRITON_AMD_ADD_MFMA_v3to4(32, 32, 16, i8T, i8T, 8, mfma_i32_32x32x16_i8);
+  // mfma_i32_32x32x8i8
+  TRITON_AMD_ADD_MFMA_v1to2(32, 32, 8, i8T, i8T, 4, mfma_i32_32x32x8i8);
+  // mfma_i32_16x16x32i8
+  TRITON_AMD_ADD_MFMA_v3to4(16, 16, 32, i8T, i8T, 8, mfma_i32_16x16x32_i8);
+  // mfma_i32_16x16x16i8
+  TRITON_AMD_ADD_MFMA_v1to2(16, 16, 16, i8T, i8T, 4, mfma_i32_16x16x16i8);
+  // mfma_i32_4x4x4i8
+  TRITON_AMD_ADD_MFMA_v1to4(4, 4, 64, i8T, i8T, 4, mfma_i32_4x4x4i8);
+  TRITON_AMD_ADD_MFMA_v1to4(4, 64, 4, i8T, i8T, 4, mfma_i32_4x4x4i8);
+  TRITON_AMD_ADD_MFMA_v1to4(64, 4, 4, i8T, i8T, 4, mfma_i32_4x4x4i8);
+
+  // Scaled mfma f8f6f4
+  // mfma_scale_F32_16x16x128_F8F6F4
 }
 
 } // namespace
@@ -115,236 +218,7 @@ auto getMfmaInsnGroupAttrMap = []() -> const MfmaInsnGroupMap & {
       // mfma.xf32.32x32x4.xf32
       {{32, 32, 0, MfmaTypeId::Xf32TyId, 3},
        {32, 32, 4, 2, ROCDL::mfma_f32_32x32x4_xf32::getOperationName()}},
-      // f32
-      // mfma_f32_32x32x2f32
-      {{32, 32, 0, MfmaTypeId::Fp32TyId, 1},
-       {32, 32, 2, 1, ROCDL::mfma_f32_32x32x2f32::getOperationName()}},
-      {{32, 32, 0, MfmaTypeId::Fp32TyId, 2},
-       {32, 32, 2, 1, ROCDL::mfma_f32_32x32x2f32::getOperationName()}},
-      {{32, 32, 0, MfmaTypeId::Fp32TyId, 3},
-       {32, 32, 2, 1, ROCDL::mfma_f32_32x32x2f32::getOperationName()}},
-      {{32, 32, 0, MfmaTypeId::Fp32TyId, 4},
-       {32, 32, 2, 1, ROCDL::mfma_f32_32x32x2f32::getOperationName()}},
-      // mfma_f32_16x16x4f32
-      {{16, 16, 0, MfmaTypeId::Fp32TyId, 1},
-       {16, 16, 4, 1, ROCDL::mfma_f32_16x16x4f32::getOperationName()}},
-      {{16, 16, 0, MfmaTypeId::Fp32TyId, 2},
-       {16, 16, 4, 1, ROCDL::mfma_f32_16x16x4f32::getOperationName()}},
-      {{16, 16, 0, MfmaTypeId::Fp32TyId, 3},
-       {16, 16, 4, 1, ROCDL::mfma_f32_16x16x4f32::getOperationName()}},
-      {{16, 16, 0, MfmaTypeId::Fp32TyId, 4},
-       {16, 16, 4, 1, ROCDL::mfma_f32_16x16x4f32::getOperationName()}},
-      // mfma_f32_4x4x1f32
-      {{4, 4, 0, MfmaTypeId::Fp32TyId, 1},
-       {4, 4, 16, 1, ROCDL::mfma_f32_4x4x1f32::getOperationName()}},
-      {{4, 4, 0, MfmaTypeId::Fp32TyId, 2},
-       {4, 4, 16, 1, ROCDL::mfma_f32_4x4x1f32::getOperationName()}},
-      {{4, 64, 0, MfmaTypeId::Fp32TyId, 1},
-       {4, 64, 1, 1, ROCDL::mfma_f32_4x4x1f32::getOperationName()}},
-      {{4, 64, 0, MfmaTypeId::Fp32TyId, 2},
-       {4, 64, 1, 1, ROCDL::mfma_f32_4x4x1f32::getOperationName()}},
-      {{64, 4, 0, MfmaTypeId::Fp32TyId, 1},
-       {64, 4, 1, 1, ROCDL::mfma_f32_4x4x1f32::getOperationName()}},
-      {{64, 4, 0, MfmaTypeId::Fp32TyId, 2},
-       {64, 4, 1, 1, ROCDL::mfma_f32_4x4x1f32::getOperationName()}},
-      // mfma_f32_4x4x1_16B_f32
-      {{4, 4, 0, MfmaTypeId::Fp32TyId, 3},
-       {4, 4, 16, 1, ROCDL::mfma_f32_4x4x1f32::getOperationName()}},
-      {{4, 64, 0, MfmaTypeId::Fp32TyId, 3},
-       {4, 64, 1, 1, ROCDL::mfma_f32_4x4x1f32::getOperationName()}},
-      {{64, 4, 0, MfmaTypeId::Fp32TyId, 3},
-       {64, 4, 1, 1, ROCDL::mfma_f32_4x4x1f32::getOperationName()}},
-      {{4, 4, 0, MfmaTypeId::Fp32TyId, 4},
-       {4, 4, 16, 1, ROCDL::mfma_f32_4x4x1f32::getOperationName()}},
-      {{4, 64, 0, MfmaTypeId::Fp32TyId, 4},
-       {4, 64, 1, 1, ROCDL::mfma_f32_4x4x1f32::getOperationName()}},
-      {{64, 4, 0, MfmaTypeId::Fp32TyId, 4},
-       {64, 4, 1, 1, ROCDL::mfma_f32_4x4x1f32::getOperationName()}},
-      // f16
-      // mfma_f32_32x32x8f16
-      {{32, 32, 0, MfmaTypeId::Fp16TyId, 1},
-       {32, 32, 8, 4, ROCDL::mfma_f32_32x32x8f16::getOperationName()}},
-      {{32, 32, 0, MfmaTypeId::Fp16TyId, 2},
-       {32, 32, 8, 4, ROCDL::mfma_f32_32x32x8f16::getOperationName()}},
-      {{32, 32, 0, MfmaTypeId::Fp16TyId, 3},
-       {32, 32, 8, 4, ROCDL::mfma_f32_32x32x8f16::getOperationName()}},
-      {{32, 32, 0, MfmaTypeId::Fp16TyId, 4},
-       {32, 32, 8, 4, ROCDL::mfma_f32_32x32x8f16::getOperationName()}},
-      // mfma_f32_32x32x16_f16
-      {{32, 32, 16, MfmaTypeId::Fp16TyId, 4},
-       {32, 32, 16, 8, ROCDL::mfma_f32_32x32x16_f16::getOperationName()}},
-      // mfma_f32_16x16x16xf16
-      {{16, 16, 0, MfmaTypeId::Fp16TyId, 1},
-       {16, 16, 16, 4, ROCDL::mfma_f32_16x16x16f16::getOperationName()}},
-      {{16, 16, 0, MfmaTypeId::Fp16TyId, 2},
-       {16, 16, 16, 4, ROCDL::mfma_f32_16x16x16f16::getOperationName()}},
-      {{16, 16, 0, MfmaTypeId::Fp16TyId, 3},
-       {16, 16, 16, 4, ROCDL::mfma_f32_16x16x16f16::getOperationName()}},
-      {{16, 16, 0, MfmaTypeId::Fp16TyId, 4},
-       {16, 16, 16, 4, ROCDL::mfma_f32_16x16x16f16::getOperationName()}},
-      // mfma_f32_16x16x32_f16
-      {{16, 16, 32, MfmaTypeId::Fp16TyId, 4},
-       {16, 16, 32, 8, ROCDL::mfma_f32_16x16x32_f16::getOperationName()}},
-      // mfma_f32_4x4x4f16
-      {{4, 4, 0, MfmaTypeId::Fp16TyId, 1},
-       {4, 4, 64, 4, ROCDL::mfma_f32_4x4x4f16::getOperationName()}},
-      {{4, 4, 0, MfmaTypeId::Fp16TyId, 2},
-       {4, 4, 64, 4, ROCDL::mfma_f32_4x4x4f16::getOperationName()}},
-      {{4, 4, 0, MfmaTypeId::Fp16TyId, 3},
-       {4, 4, 64, 4, ROCDL::mfma_f32_4x4x4f16::getOperationName()}},
-      {{4, 4, 0, MfmaTypeId::Fp16TyId, 4},
-       {4, 4, 64, 4, ROCDL::mfma_f32_4x4x4f16::getOperationName()}},
-      {{4, 64, 0, MfmaTypeId::Fp16TyId, 1},
-       {4, 64, 4, 4, ROCDL::mfma_f32_4x4x4f16::getOperationName()}},
-      {{4, 64, 0, MfmaTypeId::Fp16TyId, 2},
-       {4, 64, 4, 4, ROCDL::mfma_f32_4x4x4f16::getOperationName()}},
-      {{4, 64, 0, MfmaTypeId::Fp16TyId, 3},
-       {4, 64, 4, 4, ROCDL::mfma_f32_4x4x4f16::getOperationName()}},
-      {{4, 64, 0, MfmaTypeId::Fp16TyId, 4},
-       {4, 64, 4, 4, ROCDL::mfma_f32_4x4x4f16::getOperationName()}},
-      {{64, 4, 0, MfmaTypeId::Fp16TyId, 1},
-       {64, 4, 4, 4, ROCDL::mfma_f32_4x4x4f16::getOperationName()}},
-      {{64, 4, 0, MfmaTypeId::Fp16TyId, 2},
-       {64, 4, 4, 4, ROCDL::mfma_f32_4x4x4f16::getOperationName()}},
-      {{64, 4, 0, MfmaTypeId::Fp16TyId, 3},
-       {64, 4, 4, 4, ROCDL::mfma_f32_4x4x4f16::getOperationName()}},
-      {{64, 4, 0, MfmaTypeId::Fp16TyId, 4},
-       {64, 4, 4, 4, ROCDL::mfma_f32_4x4x4f16::getOperationName()}},
-      // bf16
-      // mfma_f32_32x32x4_bf16
-      {{32, 32, 0, MfmaTypeId::Bf16TyId, 1},
-       {32, 32, 4, 2, ROCDL::mfma_f32_32x32x4bf16::getOperationName()}},
-      // mfma_f32_32x32x8_bf16_1K
-      {{32, 32, 0, MfmaTypeId::Bf16TyId, 2},
-       {32, 32, 8, 4, ROCDL::mfma_f32_32x32x8bf16_1k::getOperationName()}},
-      {{32, 32, 0, MfmaTypeId::Bf16TyId, 3},
-       {32, 32, 8, 4, ROCDL::mfma_f32_32x32x8bf16_1k::getOperationName()}},
-      {{32, 32, 0, MfmaTypeId::Bf16TyId, 4},
-       {32, 32, 8, 4, ROCDL::mfma_f32_32x32x8bf16_1k::getOperationName()}},
-      // mfma_f32_32x32x16_bf16
-      {{32, 32, 16, MfmaTypeId::Bf16TyId, 4},
-       {32, 32, 16, 8, ROCDL::mfma_f32_32x32x16_bf16::getOperationName()}},
-      // mfma_f32_16x16x8_bf16
-      {{16, 16, 0, MfmaTypeId::Bf16TyId, 1},
-       {16, 16, 8, 2, ROCDL::mfma_f32_16x16x8bf16::getOperationName()}},
-      // mfma_f32_16x16x16_bf16_1K
-      {{16, 16, 0, MfmaTypeId::Bf16TyId, 2},
-       {16, 16, 16, 4, ROCDL::mfma_f32_16x16x16bf16_1k::getOperationName()}},
-      {{16, 16, 0, MfmaTypeId::Bf16TyId, 3},
-       {16, 16, 16, 4, ROCDL::mfma_f32_16x16x16bf16_1k::getOperationName()}},
-      {{16, 16, 0, MfmaTypeId::Bf16TyId, 4},
-       {16, 16, 16, 4, ROCDL::mfma_f32_16x16x16bf16_1k::getOperationName()}},
-      // mfma_f32_16x16x32_bf16
-      {{16, 16, 32, MfmaTypeId::Bf16TyId, 4},
-       {16, 16, 32, 8, ROCDL::mfma_f32_16x16x32_bf16::getOperationName()}},
-      // mfma_f32_4x4x2_bf16
-      {{4, 4, 0, MfmaTypeId::Bf16TyId, 1},
-       {4, 4, 32, 2, ROCDL::mfma_f32_4x4x2bf16::getOperationName()}},
-      {{4, 64, 0, MfmaTypeId::Bf16TyId, 1},
-       {4, 64, 2, 2, ROCDL::mfma_f32_4x4x2bf16::getOperationName()}},
-      {{64, 4, 0, MfmaTypeId::Bf16TyId, 1},
-       {64, 4, 2, 2, ROCDL::mfma_f32_4x4x2bf16::getOperationName()}},
-      // mfma_f32_4x4x4_bf16_1K
-      {{4, 4, 0, MfmaTypeId::Bf16TyId, 2},
-       {4, 4, 64, 4, ROCDL::mfma_f32_4x4x4bf16_1k::getOperationName()}},
-      {{4, 4, 0, MfmaTypeId::Bf16TyId, 3},
-       {4, 4, 64, 4, ROCDL::mfma_f32_4x4x4bf16_1k::getOperationName()}},
-      {{4, 4, 0, MfmaTypeId::Bf16TyId, 4},
-       {4, 4, 64, 4, ROCDL::mfma_f32_4x4x4bf16_1k::getOperationName()}},
-      {{4, 64, 0, MfmaTypeId::Bf16TyId, 2},
-       {4, 64, 4, 4, ROCDL::mfma_f32_4x4x4bf16_1k::getOperationName()}},
-      {{4, 64, 0, MfmaTypeId::Bf16TyId, 3},
-       {4, 64, 4, 4, ROCDL::mfma_f32_4x4x4bf16_1k::getOperationName()}},
-      {{4, 64, 0, MfmaTypeId::Bf16TyId, 4},
-       {4, 64, 4, 4, ROCDL::mfma_f32_4x4x4bf16_1k::getOperationName()}},
-      {{64, 4, 0, MfmaTypeId::Bf16TyId, 2},
-       {64, 4, 4, 4, ROCDL::mfma_f32_4x4x4bf16_1k::getOperationName()}},
-      {{64, 4, 0, MfmaTypeId::Bf16TyId, 3},
-       {64, 4, 4, 4, ROCDL::mfma_f32_4x4x4bf16_1k::getOperationName()}},
-      {{64, 4, 0, MfmaTypeId::Bf16TyId, 4},
-       {64, 4, 4, 4, ROCDL::mfma_f32_4x4x4bf16_1k::getOperationName()}},
-      // int8
-      // mfma_i32_32x32x8i8
-      {{32, 32, 0, MfmaTypeId::I8TyId, 1},
-       {32, 32, 8, 4, ROCDL::mfma_i32_32x32x8i8::getOperationName()}},
-      {{32, 32, 0, MfmaTypeId::I8TyId, 2},
-       {32, 32, 8, 4, ROCDL::mfma_i32_32x32x8i8::getOperationName()}},
-      // mfma_i32_32x32x16i8
-      {{32, 32, 0, MfmaTypeId::I8TyId, 3},
-       {32, 32, 16, 8, ROCDL::mfma_i32_32x32x16_i8::getOperationName()}},
-      {{32, 32, 0, MfmaTypeId::I8TyId, 4},
-       {32, 32, 16, 8, ROCDL::mfma_i32_32x32x16_i8::getOperationName()}},
-      // mfma_i32_16x16x16i8
-      {{16, 16, 0, MfmaTypeId::I8TyId, 1},
-       {16, 16, 16, 4, ROCDL::mfma_i32_16x16x16i8::getOperationName()}},
-      {{16, 16, 0, MfmaTypeId::I8TyId, 2},
-       {16, 16, 16, 4, ROCDL::mfma_i32_16x16x16i8::getOperationName()}},
-      // mfma_i32_16x16x32i8
-      {{16, 16, 0, MfmaTypeId::I8TyId, 3},
-       {16, 16, 32, 8, ROCDL::mfma_i32_16x16x32_i8::getOperationName()}},
-      {{16, 16, 0, MfmaTypeId::I8TyId, 4},
-       {16, 16, 32, 8, ROCDL::mfma_i32_16x16x32_i8::getOperationName()}},
-      // mfma_i32_4x4x4i8
-      {{4, 4, 0, MfmaTypeId::I8TyId, 1},
-       {4, 4, 64, 4, ROCDL::mfma_i32_4x4x4i8::getOperationName()}},
-      {{4, 4, 0, MfmaTypeId::I8TyId, 2},
-       {4, 4, 64, 4, ROCDL::mfma_i32_4x4x4i8::getOperationName()}},
-      {{4, 4, 0, MfmaTypeId::I8TyId, 3},
-       {4, 4, 64, 4, ROCDL::mfma_i32_4x4x4i8::getOperationName()}},
-      {{4, 4, 0, MfmaTypeId::I8TyId, 4},
-       {4, 4, 64, 4, ROCDL::mfma_i32_4x4x4i8::getOperationName()}},
-      {{4, 64, 0, MfmaTypeId::I8TyId, 1},
-       {4, 64, 4, 4, ROCDL::mfma_i32_4x4x4i8::getOperationName()}},
-      {{4, 64, 0, MfmaTypeId::I8TyId, 2},
-       {4, 64, 4, 4, ROCDL::mfma_i32_4x4x4i8::getOperationName()}},
-      {{4, 64, 0, MfmaTypeId::I8TyId, 3},
-       {4, 64, 4, 4, ROCDL::mfma_i32_4x4x4i8::getOperationName()}},
-      {{4, 64, 0, MfmaTypeId::I8TyId, 4},
-       {4, 64, 4, 4, ROCDL::mfma_i32_4x4x4i8::getOperationName()}},
-      {{64, 4, 0, MfmaTypeId::I8TyId, 1},
-       {64, 4, 4, 4, ROCDL::mfma_i32_4x4x4i8::getOperationName()}},
-      {{64, 4, 0, MfmaTypeId::I8TyId, 2},
-       {64, 4, 4, 4, ROCDL::mfma_i32_4x4x4i8::getOperationName()}},
-      {{64, 4, 0, MfmaTypeId::I8TyId, 3},
-       {64, 4, 4, 4, ROCDL::mfma_i32_4x4x4i8::getOperationName()}},
-      {{64, 4, 0, MfmaTypeId::I8TyId, 4},
-       {64, 4, 4, 4, ROCDL::mfma_i32_4x4x4i8::getOperationName()}},
-      // fp8 * bf8
-      // mfma_f32_32x32x16_FP8_FP8
-      {{32, 32, 0, MfmaTypeId::Fp8Fp8TyId, 3},
-       {32, 32, 16, 8, ROCDL::mfma_f32_32x32x16_fp8_fp8::getOperationName()}},
-      {{32, 32, 0, MfmaTypeId::Fp8Fp8TyId, 4},
-       {32, 32, 16, 8, ROCDL::mfma_f32_32x32x16_fp8_fp8::getOperationName()}},
-      // mfma_f32_16x16x32_FP8_FP8
-      {{16, 16, 0, MfmaTypeId::Fp8Fp8TyId, 3},
-       {16, 16, 32, 8, ROCDL::mfma_f32_16x16x32_fp8_fp8::getOperationName()}},
-      {{16, 16, 0, MfmaTypeId::Fp8Fp8TyId, 4},
-       {16, 16, 32, 8, ROCDL::mfma_f32_16x16x32_fp8_fp8::getOperationName()}},
-      // mfma_f32_32x32x16_FP8_BF8
-      {{32, 32, 0, MfmaTypeId::Fp8Bf8TyId, 3},
-       {32, 32, 16, 8, ROCDL::mfma_f32_32x32x16_fp8_bf8::getOperationName()}},
-      {{32, 32, 0, MfmaTypeId::Fp8Bf8TyId, 4},
-       {32, 32, 16, 8, ROCDL::mfma_f32_32x32x16_fp8_bf8::getOperationName()}},
-      // mfma_f32_16x16x32_FP8_BF8
-      {{16, 16, 0, MfmaTypeId::Fp8Bf8TyId, 3},
-       {16, 16, 32, 8, ROCDL::mfma_f32_16x16x32_fp8_bf8::getOperationName()}},
-      {{16, 16, 0, MfmaTypeId::Fp8Bf8TyId, 4},
-       {16, 16, 32, 8, ROCDL::mfma_f32_16x16x32_fp8_bf8::getOperationName()}},
-      // mfma_f32_32x32x16_BF8_FP8
-      {{32, 32, 0, MfmaTypeId::Bf8Fp8TyId, 3},
-       {32, 32, 16, 8, ROCDL::mfma_f32_32x32x16_bf8_fp8::getOperationName()}},
-      {{32, 32, 0, MfmaTypeId::Bf8Fp8TyId, 4},
-       {32, 32, 16, 8, ROCDL::mfma_f32_32x32x16_bf8_fp8::getOperationName()}},
-      // mfma_f32_16x16x32_BF8_FP8
-      {{16, 16, 0, MfmaTypeId::Bf8Fp8TyId, 3},
-       {16, 16, 32, 8, ROCDL::mfma_f32_16x16x32_bf8_fp8::getOperationName()}},
-      {{16, 16, 0, MfmaTypeId::Bf8Fp8TyId, 4},
-       {16, 16, 32, 8, ROCDL::mfma_f32_16x16x32_bf8_fp8::getOperationName()}},
-      // mfma_f32_32x32x16_BF8_BF8
-      {{32, 32, 0, MfmaTypeId::Bf8Bf8TyId, 3},
-       {32, 32, 16, 8, ROCDL::mfma_f32_32x32x16_bf8_bf8::getOperationName()}},
-      {{32, 32, 0, MfmaTypeId::Bf8Bf8TyId, 4},
-       {32, 32, 16, 8, ROCDL::mfma_f32_32x32x16_bf8_bf8::getOperationName()}},
+
       // scaled mfma f8f6f4
       // mfma_scale_F32_16x16x128_F8F6F4
       {{16, 16, 0, MfmaTypeId::F8F6F4TyId, 4},
