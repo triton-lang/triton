@@ -489,7 +489,8 @@ getDefaultBlockedEncoding(MLIRContext *context, ArrayRef<int64_t> shape,
 }
 
 LinearLayout reshapeMinorToMajor(MLIRContext *ctx, const LinearLayout &ll,
-                                 SmallVector<int64_t> dstShape) {
+                                 SmallVector<int64_t> dstShape,
+                                 bool doIt = true) {
   auto newRank = dstShape.size();
 
   SmallVector<std::pair<StringAttr, int32_t>> newOutDims;
@@ -498,12 +499,16 @@ LinearLayout reshapeMinorToMajor(MLIRContext *ctx, const LinearLayout &ll,
     newOutDims.emplace_back(dim, size);
   }
 
-  auto origOutDims = to_vector(ll.getOutDimNames());
-  std::reverse(origOutDims.begin(), origOutDims.end());
-  std::reverse(newOutDims.begin(), newOutDims.end());
-  return ll.transposeOuts(origOutDims)
-      .reshapeOuts(newOutDims)
-      .transposeOuts(standardOutDimNames(ctx, newRank));
+  if (doIt) {
+    auto origOutDims = to_vector(ll.getOutDimNames());
+    std::reverse(origOutDims.begin(), origOutDims.end());
+    std::reverse(newOutDims.begin(), newOutDims.end());
+    return ll.transposeOuts(origOutDims)
+        .reshapeOuts(newOutDims)
+        .transposeOuts(standardOutDimNames(ctx, newRank));
+  } else {
+    return ll.reshapeOuts(newOutDims);
+  }
 }
 
 LogicalResult tryJoinOnAxis(MLIRContext *ctx, const LinearLayout &inLl,
@@ -2827,7 +2832,7 @@ struct TritonGPUInferLayoutInterface
     auto ll = toLinearLayout(shape, srcEnc);
     SmallVector<int64_t> dstShape(shape.begin(), shape.end());
     dstShape.push_back(1);
-    ll = reshapeMinorToMajor(ctx, ll, dstShape);
+    ll = reshapeMinorToMajor(ctx, ll, dstShape, false);
 
     // Try join on last dim
     auto axis = dstShape.size() - 1;
@@ -2883,11 +2888,9 @@ struct TritonGPUInferLayoutInterface
       return success();
     }
 
-    // Make sure last dim == 2
     auto axis = shape.size() - 1;
-    if (shape[axis] != 2)
-      return emitOptionalError(
-          loc, "SplitOp input shape should have 2 in the last dim");
+    assert(shape[axis] == 2 &&
+           "SplitOp input shape should have 2 in the last dim");
 
     auto ctx = getContext();
 
