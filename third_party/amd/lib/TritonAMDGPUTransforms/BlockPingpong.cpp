@@ -12,10 +12,6 @@
 #define GEN_PASS_CLASSES
 #include "TritonAMDGPUTransforms/Passes.h"
 
-#define DEBUG_TYPE "tritonamdgpu-block-pingpong"
-#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
-#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
-
 using namespace mlir;
 namespace ttg = mlir::triton::gpu;
 namespace tt = mlir::triton;
@@ -141,6 +137,7 @@ void Pingponger::transformOnePPClusters(OpBuilder &builder, Location loc) {
 
   // Dot cluster #0
   updateOpInsertion(preDotBar);
+  dotOps[0].emitRemark() << "Performed one ping pong cluster transformation\n";
   appendOpWithPrio(builder, dotOps[0], loc);
 }
 
@@ -276,6 +273,7 @@ LogicalResult Pingponger::transformFourPPClusters(OpBuilder &builder,
   appendClusterBarrier(builder, loc);
 
   // dot0 (1/4)
+  dotSliceOps[0].emitRemark() << "Performed four ping pong cluster transformation\n";
   appendOpWithPrio(builder, dotSliceOps[0], loc);
   appendClusterBarrier(builder, loc);
 
@@ -337,6 +335,7 @@ LogicalResult Pingponger::transformTwoPPClusters(OpBuilder &builder,
   appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
 
   // dot0 (1/2)
+  dotSliceOps[0].emitRemark() << "Performed two ping pong cluster transformation\n";
   appendOpWithPrio(builder, dotSliceOps[0], loc);
   appendClusterBarrier(builder, loc);
 
@@ -470,10 +469,8 @@ void Pingponger::getDotPingponged() {
     // times for issuing the memory operations and issuing dot operations,
     // smaller tile sizes are not likely to get any advantage from current dot
     // centric pingpong scheduling.
-    if (tileSize <= smallTile && tileSize >= minTile) {
+    if (tileSize <= smallTile && tileSize >= minTile)
       transformOnePPClusters(builder, loc);
-      LDBG("Successfully performed one ping pong cluster transformation.");
-    }
     // numWarps=4 doesn't need asymmetric sync, return.
     return;
   } else if (numWarps == 8) { // Pingpong between warps from the same block
@@ -483,14 +480,12 @@ void Pingponger::getDotPingponged() {
     if (tileSize == mediumTile) {
       if (transformTwoPPClusters(builder, dotOps[0]->getLoc()).failed())
         return;
-      LDBG("Successfully performed two ping pong cluster transformation.");
     } else if (tileSize >= largeTile) {
       // Avoid known register spilling. i.e., mfma16x16x16 & largetile & kpack>1
       if (intShape[0] == 16 && intShape[1] == 16 && kWidth == 8)
         return;
       if (transformFourPPClusters(builder, dotOps[0]->getLoc()).failed())
         return;
-      LDBG("Successfully performed four ping pong cluster transformation.");
     } else
       return;
 
