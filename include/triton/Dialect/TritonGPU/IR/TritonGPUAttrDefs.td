@@ -621,6 +621,7 @@ def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding"
     SmallVector<unsigned> getElemsPerThread(ArrayRef<int64_t> shape) const;
 
     SmallVector<unsigned> getContigPerThread() const;
+    SmallVector<unsigned> getContigPerWarp() const;
     SmallVector<unsigned> getOrder() const;
 
     // Generalizes get{Warp,Thread,CTA}Order to linear layouts.

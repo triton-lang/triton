@@ -542,6 +542,30 @@ LogicalResult tryJoinOnAxis(MLIRContext *ctx, const LinearLayout &inLl,
   return success();
 }
 
+SmallVector<unsigned int> getContig(const LinearEncodingAttr &enc,
+                                    const char *inDim,
+                                    SmallVector<unsigned int> lowerContig) {
+  auto ll = enc.getLinearLayout();
+  const auto &bases =
+      ll.getBases().find(StringAttr::get(enc.getContext(), inDim))->second;
+  auto order = enc.getOrder();
+  auto rank = order.size();
+
+  SmallVector<unsigned> contig(lowerContig);
+  auto basisIt = bases.begin();
+  for (unsigned dim : order) {
+    std::vector<int32_t> basis(rank, 0);
+    basis[dim] = contig[dim];
+
+    while (basisIt != bases.end() && *basisIt == basis) {
+      contig[dim] *= 2;
+      basis[dim] *= 2;
+      ++basisIt;
+    }
+  }
+  return contig;
+}
+
 } // namespace gpu
 } // namespace triton
 } // namespace mlir
@@ -1294,25 +1318,12 @@ LinearEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
 }
 
 SmallVector<unsigned> LinearEncodingAttr::getContigPerThread() const {
-  auto ll = getLinearLayout();
-  const auto &regs =
-      ll.getBases().find(StringAttr::get(getContext(), "register"))->second;
-  auto order = getOrder();
-  auto rank = order.size();
+  SmallVector<unsigned> contig(getOrder().size(), 1);
+  return getContig(*this, "register", contig);
+}
 
-  SmallVector<unsigned> contig(rank, 1);
-  auto regIt = regs.begin();
-  for (unsigned dim : order) {
-    std::vector<int32_t> basis(rank, 0);
-    basis[dim] = 1;
-
-    while (regIt != regs.end() && *regIt == basis) {
-      contig[dim] *= 2;
-      basis[dim] *= 2;
-      ++regIt;
-    }
-  }
-  return contig;
+SmallVector<unsigned> LinearEncodingAttr::getContigPerWarp() const {
+  return getContig(*this, "lane", getContigPerThread());
 }
 
 unsigned
