@@ -653,6 +653,13 @@ LogicalResult WarpSpecializeOp::verify() {
     return emitOpError("partition #")
            << i << " number of warps (" << numWarps << ") must be a power of 2";
   }
+  if (std::optional<ArrayRef<int32_t>> startIds = getWarpGroupStartIds()) {
+    if (startIds->size() != getPartitionNumWarps().size()) {
+      return emitOpError("has ")
+             << startIds->size() << " warp group start IDs but expected "
+             << getPartitionNumWarps().size();
+    }
+  }
 
   for (auto [i, region] : llvm::enumerate(getPartitionRegions())) {
     if (region->getNumArguments() != getNumOperands()) {

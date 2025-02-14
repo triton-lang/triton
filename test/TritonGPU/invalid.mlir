@@ -309,3 +309,18 @@ tt.func @illegal_ws_nest() {
   } : () -> ()
   tt.return
 }
+
+// -----
+
+tt.func @invalid_start_ids() {
+  // expected-error @below {{'ttg.warp_specialize' op has 1 warp group start IDs but expected 2}}
+  ttg.warp_specialize() attributes {warpGroupStartIds = array<i32: 4>}
+  default {
+    ttg.warp_yield
+  }
+  partition0() num_warps(2) {
+  }
+  partition1() num_warps(1) {
+  } : () -> ()
+  tt.return
+}

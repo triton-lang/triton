@@ -371,7 +371,8 @@ def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [
 
   let arguments = (ins
     Variadic<AnyType>:$explicitCaptures,
-    DenseI32ArrayAttr:$partitionNumWarps
+    DenseI32ArrayAttr:$partitionNumWarps,
+    OptionalAttr<DenseI32ArrayAttr>:$warpGroupStartIds
   );
   let results = (outs Variadic<AnyType>:$defaultPassthrough);
 
