@@ -34,7 +34,7 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
   Value mask = b.int_val(1, 1);
-  auto tid = b.tid_val();
+  auto tid = getThreadId(rewriter, loc);
   auto clusterCTAId = targetInfo.getClusterCTAId(rewriter, loc);
   if (tensorTy) {
     auto layout = tensorTy.getEncoding();
@@ -691,6 +691,7 @@ struct BufferAtomicRMWOpConversion
     Value llOffset = adaptor.getOffsets();
     Value llMask = adaptor.getMask();
     Value llData = adaptor.getValue();
+    Value llStride = adaptor.getStride();
 
     // Determine the vectorization size
     Type valueTy = data.getType();
@@ -751,7 +752,7 @@ struct BufferAtomicRMWOpConversion
       emitReleaseFence = true;
     }
 
-    Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr);
+    Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr, llStride);
     Value rDataMask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
     SmallVector<Value> loadedVals;
 
@@ -1061,7 +1062,7 @@ struct AtomicCASOpConversion
 
         // Fill entry block with global memory barrier and conditional branch.
         rewriter.setInsertionPointToEnd(curBlock);
-        auto tid = b.tid_val();
+        auto tid = getThreadId(rewriter, loc);
         Value pred = b.icmp_eq(tid, b.i32_val(i));
         rewriter.create<LLVM::CondBrOp>(loc, pred, atomicBlock, endBlock);
 
@@ -1328,7 +1329,7 @@ struct AtomicRMWOpConversion
       numElems = tensorTy.getNumElements();
     }
     Value mask = b.int_val(1, 1);
-    auto tid = b.tid_val();
+    auto tid = getThreadId(rewriter, loc);
     mask = b.and_(mask, b.icmp_slt(b.mul(tid, b.i32_val(elemsPerThread)),
                                    b.i32_val(numElems)));
     if (useDppForPackedF16)
@@ -1714,7 +1715,6 @@ namespace mlir::triton::AMD {
 void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        const TargetInfo &targetInfo,
                                        RewritePatternSet &patterns,
-                                       int numWarps,
                                        ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                        PatternBenefit benefit) {
   patterns

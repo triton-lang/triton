@@ -114,9 +114,8 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
   }
 
   auto mod = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-  Value threadId =
-      rewriter.create<::mlir::gpu::ThreadIdOp>(loc, ::mlir::gpu::Dimension::x);
-  threadId = rewriter.create<arith::IndexCastOp>(loc, i32_ty, threadId);
+  Value threadId = getThreadId(rewriter, loc);
+
   unsigned iWarpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
   Value warpSize = b.i32_val(iWarpSize);
   Value laneId = b.urem(threadId, warpSize);
@@ -131,13 +130,6 @@ static Value shuffleCommonImpl(Location loc, RewriterBase &rewriter,
   switch (mode) {
   case ShflKind::bfly:
     if (strideInt > 16) {
-      Value threadId =
-          rewriter
-              .create<UnrealizedConversionCastOp>(
-                  loc, TypeRange{i32_ty},
-                  ValueRange{rewriter.create<::mlir::gpu::ThreadIdOp>(
-                      loc, rewriter.getIndexType(), ::mlir::gpu::Dimension::x)})
-              .getResult(0);
       Value stride = b.i32_val(32);
       Value lineId = b.xor_(threadId, stride);
       return bpermute(lineId);
