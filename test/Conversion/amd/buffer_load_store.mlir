@@ -9,8 +9,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         // CHECK: %[[offset:.*]] = llvm.select %[[c_mask]]
         // CHECK: %[[aux:.*]] = llvm.mlir.constant(3 : i32) : i32
         // CHECK: rocdl.raw.ptr.buffer.load {{.*}}, %[[offset]], {{.*}}, %[[aux]]
-        %c0 = arith.constant 0 : i32
-        %ret = amdgpu.buffer_load %arg0[%offset] cacheModifier = cs stride = %c0 : tensor<128xf32, #blocked0>
+        %ret = amdgpu.buffer_load %arg0[%offset] cacheModifier = cs : tensor<128xf32, #blocked0>
         tt.return
   }
 }
