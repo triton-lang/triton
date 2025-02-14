@@ -5,7 +5,6 @@ add_triton_library(TritonGPUTransforms
   FuseNestedLoops.cpp
   CombineTensorSelectAndIf.cpp
   DecomposeScaledBlocked.cpp
-  LoopScheduling.cpp
   ReduceDataDuplication.cpp
   OptimizeAccumulatorInit.cpp
   OptimizeDotOperands.cpp

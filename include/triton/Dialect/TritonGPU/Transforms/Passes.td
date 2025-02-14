@@ -45,7 +45,7 @@ def TritonGPUTestPipelineAssignLatencies : Pass<"tritongpu-test-pipeline-assign-
   let summary = "test assigning latencies to interesting ops ahead of pipelining";
 
   let description = [{
-    This is a test pass that tests `assignLatencies` method of `TritonGPULoopScheduling`.
+    This is a test pass that tests `assignLatencies` method of `TritonGPUPipeline`.
   }];
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
@@ -64,7 +64,7 @@ def TritonGPUTestPipelineScheduleLoop : Pass<"tritongpu-test-pipeline-schedule-l
   let summary = "test scheduling a loop for software pipelining";
 
   let description = [{
-    This is a test pass that tests `scheduleLoop` method of `TritonGPULoopScheduling`.
+    This is a test pass that tests `scheduleLoop` method of `TritonGPUPipeline`.
   }];
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
@@ -77,7 +77,7 @@ def TritonGPUTestPipelineLowerLoop : Pass<"tritongpu-test-pipeline-lower-loop", 
   let summary = "test lowering a loop for software pipelining";
 
   let description = [{
-    This is a test pass that tests `lowerLoop` method of `TritonGPULoopScheduling`.
+    This is a test pass that tests `lowerLoop` method of `TritonGPUPipeline`.
   }];
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
@@ -265,20 +265,6 @@ def TritonGPUOptimizeAccumulatorInit: Pass<"tritongpu-optimize-accumulator-init"
 
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::triton::TritonDialect"];
-}
-
-def TritonGPULoopScheduling: Pass<"tritongpu-loop-scheduling", "mlir::ModuleOp"> {
-  let summary = "Generate loop scheduling for SWP";
-
-  let description = "This pass sets up stages and clustering for software pipelining.";
-
-  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
-                           "mlir::triton::TritonDialect"];
-  let options = [
-    Option<"numStages", "num-stages",
-           "int32_t", /*default*/"3",
-           "number of pipeline stages">
-  ];
 }
 
 def TritonGPUCoalesceAsyncCopy: Pass<"tritongpu-coalesce-async-copy", "mlir::ModuleOp"> {
