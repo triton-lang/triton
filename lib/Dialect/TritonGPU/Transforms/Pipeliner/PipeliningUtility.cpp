@@ -312,8 +312,6 @@ int mlir::triton::getMaxStage(scf::ForOp &forOp) {
   return maxStage;
 }
 
-// TODO: see if this should be also called in
-// emitTransferBetweenRegistersAndShared, or moved to Utility.cpp
 int mlir::triton::getCopyVecBytes(RankedTensorType registerTy,
                                   ttg::SharedEncodingTrait sharedEnc) {
   auto regLayout = triton::gpu::toLinearLayout(registerTy.getShape(),
