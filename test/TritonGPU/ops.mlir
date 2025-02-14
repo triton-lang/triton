@@ -135,3 +135,47 @@ tt.func @warp_specialize_multiple_args_res(%arg0: i32, %arg1: i32) -> (i32, i32)
   } : (i32, i32) -> (i32, i32)
   tt.return %0#0, %0#1 : i32, i32
 }
+
+// -----
+
+// CHECK-DAG: [[BLOCKED_1_WARPS:#.*]] = #ttg.blocked{{.*}} warpsPerCTA = [1]
+#blocked_1_warps = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+// CHECK-DAG: [[BLOCKED_2_WARPS:#.*]] = #ttg.blocked{{.*}} warpsPerCTA = [2]
+#blocked_2_warps = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [2], order = [0]}>
+// CHECK-DAG: [[BLOCKED_4_WARPS:#.*]] = #ttg.blocked{{.*}} warpsPerCTA = [4]
+#blocked_4_warps = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+// CHECK-DAG: [[BLOCKED_8_WARPS:#.*]] = #ttg.blocked{{.*}} warpsPerCTA = [8]
+#blocked_8_warps = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [8], order = [0]}>
+
+module attributes {"ttg.num-warps" = 4 : i32} {
+
+// CHECK: @function_scope
+tt.func @function_scope() attributes {"ttg.num-warps" = 8 : i32} {
+  // CHECK-NEXT: tt.make_range {{.*}} tensor<128xi32, [[BLOCKED_8_WARPS]]>
+  tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked_8_warps>
+  tt.return
+}
+
+// CHECK: @function_no_scope
+tt.func @function_no_scope() {
+  // CHECK-NEXT: tt.make_range {{.*}} tensor<128xi32, [[BLOCKED_4_WARPS]]>
+  tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked_4_warps>
+  // CHECK-NEXT: ttg.warp_specialize()
+  ttg.warp_specialize()
+  default {
+    ttg.warp_yield
+  }
+  // CHECK: partition0() num_warps(2)
+  partition0() num_warps(2) {
+    // CHECK-NEXT: tt.make_range {{.*}} tensor<128xi32, [[BLOCKED_2_WARPS]]>
+    tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked_2_warps>
+  }
+  // CHECK: partition1() num_warps(1)
+  partition1() num_warps(1) {
+    // CHECK-NEXT: tt.make_range {{.*}} tensor<128xi32, [[BLOCKED_1_WARPS]]>
+    tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked_1_warps>
+  } : () -> ()
+  tt.return
+}
+
+}

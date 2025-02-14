@@ -357,7 +357,8 @@ def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [
 
 def TTG_WarpSpecializePartitionsOp : TTG_Op<"warp_specialize.partitions", [
   IsolatedFromAbove, RecursiveMemoryEffects, RecursivelySpeculatable,
-  Terminator, SingleBlockImplicitTerminator<"WarpReturnOp">
+  Terminator, HasParent<"WarpSpecializeOp">,
+  SingleBlockImplicitTerminator<"WarpReturnOp">
 ]> {
   let regions = (region VariadicRegion<SizedRegion<1>>:$partitionRegions);
 }

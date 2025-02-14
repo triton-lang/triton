@@ -2957,7 +2957,7 @@ struct TritonGPUVerifyTensorLayoutInterface
       if (layoutWarpsPerCTA != *moduleWarpsPerCTA) {
         return makeErr() << layout << ".\nLayout has a total of "
                          << layoutWarpsPerCTA
-                         << " warps per CTA, but the module specifies "
+                         << " warps per CTA, but the context requires "
                          << *moduleWarpsPerCTA << " warps per CTA.";
       }
 
@@ -3395,12 +3395,17 @@ int TritonGPUDialect::getThreadsPerWarp(ModuleOp module) {
 }
 
 std::optional<int> triton::gpu::maybeLookupNumWarps(Operation *op) {
-  // For now, just grab it from the surrounding module.
-  auto module = op->getParentOfType<ModuleOp>();
-  auto attr = module->getAttrOfType<IntegerAttr>(AttrNumWarpsName);
-  if (!attr)
-    return {};
-  return attr.getInt();
+  if (isa<ModuleOp, FuncOp>(op)) {
+    if (auto attr = op->getAttrOfType<IntegerAttr>(AttrNumWarpsName))
+      return attr.getInt();
+  } else if (auto partitions =
+                 dyn_cast<WarpSpecializePartitionsOp>(op->getParentOp())) {
+    unsigned idx = op->getParentRegion()->getRegionNumber();
+    return partitions.getParentOp().getPartitionNumWarps()[idx];
+  }
+  if (Operation *parent = op->getParentOp())
+    return maybeLookupNumWarps(parent);
+  return {};
 }
 
 int triton::gpu::lookupNumWarps(Operation *op) {
