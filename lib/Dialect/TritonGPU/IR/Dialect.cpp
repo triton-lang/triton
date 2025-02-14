@@ -2947,13 +2947,18 @@ struct TritonGPUVerifyTensorLayoutInterface
                          << moduleThreadsPerWarp << " threads per warp.";
       }
 
-      int moduleWarpsPerCTA = lookupNumWarps(op);
+      std::optional<int> moduleWarpsPerCTA = maybeLookupNumWarps(op);
+      if (!moduleWarpsPerCTA) {
+        return makeErr()
+               << "Could not determine the number of warps per CTA. Operation "
+                  "is not in a context with `ttg.num-warps`.";
+      }
       int64_t layoutWarpsPerCTA = product(blocked.getWarpsPerCTA());
-      if (layoutWarpsPerCTA != moduleWarpsPerCTA) {
+      if (layoutWarpsPerCTA != *moduleWarpsPerCTA) {
         return makeErr() << layout << ".\nLayout has a total of "
                          << layoutWarpsPerCTA
-                         << " warps per CTA, but the module specifies "
-                         << moduleWarpsPerCTA << " warps per CTA.";
+                         << " warps per CTA, but the context requires "
+                         << *moduleWarpsPerCTA << " warps per CTA.";
       }
 
       if (blocked.getCTALayout().getCTAsPerCGA().size() > 0) {
@@ -3358,10 +3363,22 @@ void TritonGPUDialect::initialize() {
   MemDescType::attachInterface<MemDescModel>(*getContext());
 }
 
-// verify TritonGPU ops
 LogicalResult TritonGPUDialect::verifyOperationAttribute(Operation *op,
                                                          NamedAttribute attr) {
-  // TODO: fill this.
+  // Verify that dialect attributes are attached to the right ops.
+  if (llvm::is_contained(
+          {AttrNumCTAsName, AttrTargetName, AttrNumThreadsPerWarp},
+          attr.getName()) &&
+      !isa<ModuleOp>(op)) {
+    return op->emitOpError("has unexpected attribute ")
+           << attr.getName() << " which is expected only on `module` ops";
+  }
+  if (attr.getName() == AttrNumWarpsName && !isa<ModuleOp, FuncOp>(op)) {
+    return op->emitOpError("has unexpected attribute ")
+           << attr.getName()
+           << " which is expected only on `module` or `tt.func` ops";
+  }
+
   return success();
 }
 
@@ -3377,13 +3394,28 @@ int TritonGPUDialect::getThreadsPerWarp(ModuleOp module) {
   return 32;
 }
 
-int triton::gpu::lookupNumWarps(Operation *op) {
-  // For now, just grab it from the surrounding module.
-  auto module = op->getParentOfType<ModuleOp>();
-  auto attr = module->getAttrOfType<IntegerAttr>("ttg.num-warps");
-  if (!attr) {
-    llvm::report_fatal_error(
-        "TritonGPU module should contain a ttg.num-warps attribute");
+std::optional<int> triton::gpu::maybeLookupNumWarps(Operation *op) {
+  if (isa<ModuleOp, FuncOp>(op)) {
+    if (auto attr = op->getAttrOfType<IntegerAttr>(AttrNumWarpsName))
+      return attr.getInt();
+  } else if (auto partitions =
+                 dyn_cast<WarpSpecializePartitionsOp>(op->getParentOp())) {
+    unsigned idx = op->getParentRegion()->getRegionNumber();
+    return partitions.getParentOp().getPartitionNumWarps()[idx];
   }
-  return attr.getInt();
+  if (Operation *parent = op->getParentOp())
+    return maybeLookupNumWarps(parent);
+  return {};
+}
+
+int triton::gpu::lookupNumWarps(Operation *op) {
+  std::optional<int> numWarps = maybeLookupNumWarps(op);
+  if (!numWarps) {
+    op->emitOpError(
+        "is not contained within a context that specifies the number of warps");
+    llvm::report_fatal_error("failed to lookup the number of warps, the "
+                             "surrounding module should contain a " +
+                             Twine(AttrNumWarpsName) + " attribute");
+  }
+  return *numWarps;
 }
