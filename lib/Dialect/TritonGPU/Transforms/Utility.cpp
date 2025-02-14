@@ -907,9 +907,8 @@ LogicalResult getConvertBackwardSlice(
       }
       for (auto [i, operand] : llvm::enumerate(definingOp->getOpOperands())) {
         auto srcEncoding = inferSrcEncoding(definingOp, encoding);
-        if (!srcEncoding) {
+        if (!srcEncoding)
           return failure();
-        }
         enqueue(operand, srcEncoding);
       }
       continue;
