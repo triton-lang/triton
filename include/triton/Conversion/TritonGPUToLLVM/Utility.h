@@ -655,7 +655,7 @@ Value mxfpScaleBf16(RewriterBase &rewriter, Location loc, Value v, Value scale,
 
 // If an operation is contained within a warp specialize region, this returns
 // the thread ID offset of that warpgroup.
-std::optional<int> getWarpGroupStartThreadId(Operation *op);
+std::optional<int> getWarpGroupStartThreadId(Block *block);
 
 // Returns CTA level thread ID.
 Value getThreadId(OpBuilder &rewriter, Location loc);

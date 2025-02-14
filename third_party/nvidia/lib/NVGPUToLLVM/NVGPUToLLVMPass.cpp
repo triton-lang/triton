@@ -232,8 +232,14 @@ public:
     auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    Value threadId = rewriter.create<NVVM::ThreadIdXOp>(loc, i32_ty);
-    Value warpId = b.udiv(threadId, b.i32_val(32));
+    // If this is inside a warp specialize op, compute the relative thread ID
+    // within the warp group.
+    Value tid = rewriter.create<NVVM::ThreadIdXOp>(loc, i32_ty);
+    if (std::optional<int> startId =
+            getWarpGroupStartThreadId(rewriter.getInsertionBlock()))
+      tid = rewriter.create<LLVM::SubOp>(loc, tid, b.i32_val(*startId));
+
+    Value warpId = b.udiv(tid, b.i32_val(32));
     // This indicates to PTXAS that the result and its derived values are
     // uniform across the warp. For example, if a branch condition derives from
     // this value, it can be proven to be non-divergent.

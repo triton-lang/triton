@@ -156,24 +156,46 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
   return outIndices;
 }
 
-std::optional<int> getWarpGroupStartThreadId(Operation *op) {
+std::optional<int> getWarpGroupStartThreadId(Block *block) {
+  using namespace triton::gpu;
+
   // Look for an enclosing `ttg.warp_specialize` op.
-  Operation *parent = op->getParentOp();
+  if (!block)
+    return {};
+  Operation *parent = block->getParentOp();
   if (!parent)
     return {};
-  if (auto ws = dyn_cast<triton::gpu::WarpSpecializeOp>(parent)) {
-    unsigned idx = op->getParentRegion()->getRegionNumber();
+
+  // If we found a warp specialize region, read out the starting warp ID and
+  // query the number of threads per warp.
+  if (auto partitions = dyn_cast<WarpSpecializePartitionsOp>(parent)) {
+    unsigned idx = block->getParent()->getRegionNumber();
+    WarpSpecializeOp ws = partitions.getParentOp();
     std::optional<ArrayRef<int32_t>> startIds = ws.getWarpGroupStartIds();
     assert(startIds && "cannot get warp group ID before warp group allocation");
-    return (*startIds)[idx];
+    int32_t warpStartId = (*startIds)[idx];
+    int threadsPerWarp =
+        TritonGPUDialect::getThreadsPerWarp(ws->getParentOfType<ModuleOp>());
+    return warpStartId * threadsPerWarp;
   }
-  return getWarpGroupStartThreadId(parent);
+
+  // Recurse on the parent.
+  return getWarpGroupStartThreadId(block->getParentOp()->getBlock());
 }
 
 Value getThreadId(OpBuilder &rewriter, Location loc) {
   Value tid =
       rewriter.create<::mlir::gpu::ThreadIdOp>(loc, ::mlir::gpu::Dimension::x);
   tid = rewriter.create<arith::IndexCastOp>(loc, i32_ty, tid);
+
+  // If this is being created inside a warp specialize op, compute the relative
+  // thread ID within the warp group.
+  if (std::optional<int> startId =
+          getWarpGroupStartThreadId(rewriter.getInsertionBlock())) {
+    TritonLLVMOpBuilder b(loc, rewriter);
+    tid = rewriter.create<arith::SubIOp>(loc, tid, b.i32_val(*startId));
+  }
+
   return tid;
 }
 
