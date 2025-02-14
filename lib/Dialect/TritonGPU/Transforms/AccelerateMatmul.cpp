@@ -218,10 +218,14 @@ getWarpsPerTile(DotOp dotOp, const ArrayRef<int64_t> shape, int version,
   }
 }
 
+static bool isView(Operation *op) {
+  return isa<BroadcastOp, ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp,
+             ConvertLayoutOp>(op);
+}
+
 static bool bwdFilter(Operation *op) {
   return (op->hasTrait<OpTrait::Elementwise>() && isMemoryEffectFree(op)) ||
-         isa<BroadcastOp, ExpandDimsOp, ReshapeOp, TransOp, Fp4ToFpOp, JoinOp,
-             ConvertLayoutOp, LoadOp, ExperimentalDescriptorLoadOp>(op);
+         isView(op) || isa<Fp4ToFpOp, LoadOp, ExperimentalDescriptorLoadOp>(op);
 }
 
 // Finds the bitwidth with which the value x is loaded
@@ -255,6 +259,10 @@ static int computeOrigBitWidth(Value x) {
   // improve our load width.
   // This won't be optimal if there is a tree of multiple JoinOps, which
   // would require counting the max number of JoinOp's along any path.
+  //
+  // In the future we might want to do something like trying a large kWidth,
+  // run layout backpropagation and see what's the contiguity that you
+  // get at the loads that feed into it.
   if (llvm::any_of(slice, [](Operation *op) { return isa<JoinOp>(op); }))
     origBitWidth /= 2;
 

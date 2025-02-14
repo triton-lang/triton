@@ -488,8 +488,8 @@ getDefaultBlockedEncoding(MLIRContext *context, ArrayRef<int64_t> shape,
   return encoding;
 }
 
-LinearLayout reshapeHelper(MLIRContext *ctx, const LinearLayout &ll,
-                           SmallVector<int64_t> dstShape) {
+LinearLayout reshapeMinorToMajor(MLIRContext *ctx, const LinearLayout &ll,
+                                 SmallVector<int64_t> dstShape) {
   auto newRank = dstShape.size();
 
   SmallVector<std::pair<StringAttr, int32_t>> newOutDims;
@@ -540,30 +540,6 @@ LogicalResult tryJoinOnAxis(MLIRContext *ctx, const LinearLayout &inLl,
     }
   }
   return success();
-}
-
-SmallVector<unsigned int> getContig(const LinearEncodingAttr &enc,
-                                    const char *inDim,
-                                    SmallVector<unsigned int> lowerContig) {
-  auto ll = enc.getLinearLayout();
-  const auto &bases =
-      ll.getBases().find(StringAttr::get(enc.getContext(), inDim))->second;
-  auto order = enc.getOrder();
-  auto rank = order.size();
-
-  SmallVector<unsigned> contig(lowerContig);
-  auto basisIt = bases.begin();
-  for (unsigned dim : order) {
-    std::vector<int32_t> basis(rank, 0);
-    basis[dim] = contig[dim];
-
-    while (basisIt != bases.end() && *basisIt == basis) {
-      contig[dim] *= 2;
-      basis[dim] *= 2;
-      ++basisIt;
-    }
-  }
-  return contig;
 }
 
 } // namespace gpu
@@ -1317,13 +1293,37 @@ LinearEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
   return scaledLayout.basesPerDim(kRegister, /*skipBroadcast=*/false);
 }
 
+SmallVector<unsigned>
+LinearEncodingAttr::getContig(const char *inDim,
+                              SmallVector<unsigned int> lowerContig) const {
+  auto ll = getLinearLayout();
+  const auto &bases =
+      ll.getBases().find(StringAttr::get(getContext(), inDim))->second;
+  auto order = getOrder();
+  auto rank = order.size();
+
+  SmallVector<unsigned> contig(lowerContig);
+  auto basisIt = bases.begin();
+  for (unsigned dim : order) {
+    std::vector<int32_t> basis(rank, 0);
+    basis[dim] = contig[dim];
+
+    while (basisIt != bases.end() && *basisIt == basis) {
+      contig[dim] *= 2;
+      basis[dim] *= 2;
+      ++basisIt;
+    }
+  }
+  return contig;
+}
+
 SmallVector<unsigned> LinearEncodingAttr::getContigPerThread() const {
   SmallVector<unsigned> contig(getOrder().size(), 1);
-  return getContig(*this, "register", contig);
+  return getContig("register", contig);
 }
 
 SmallVector<unsigned> LinearEncodingAttr::getContigPerWarp() const {
-  return getContig(*this, "lane", getContigPerThread());
+  return getContig("lane", getContigPerThread());
 }
 
 unsigned
@@ -2785,20 +2785,7 @@ struct TritonGPUInferLayoutInterface
                                     "numel of src shape");
     }
 
-    auto newRank = dstShape.size();
-    SmallVector<std::pair<StringAttr, int32_t>> newOutDims;
-    for (auto [dim, size] :
-         llvm::zip(standardOutDimNames(ctx, newRank), dstShape)) {
-      newOutDims.emplace_back(dim, size);
-    }
-    auto srcOutDims = to_vector(src.getOutDimNames());
-    // reshapeOp assumes minor-to-major, so we need to transpose the out dims
-    // before the reshape
-    std::reverse(srcOutDims.begin(), srcOutDims.end());
-    std::reverse(newOutDims.begin(), newOutDims.end());
-    auto dst = src.transposeOuts(srcOutDims)
-                   .reshapeOuts(newOutDims)
-                   .transposeOuts(standardOutDimNames(ctx, newRank));
+    auto dst = reshapeMinorToMajor(ctx, src, to_vector(dstShape));
     dstEnc = LinearEncodingAttr::get(ctx, dst);
     return success();
   }
@@ -2840,7 +2827,7 @@ struct TritonGPUInferLayoutInterface
     auto ll = toLinearLayout(shape, srcEnc);
     SmallVector<int64_t> dstShape(shape.begin(), shape.end());
     dstShape.push_back(1);
-    ll = reshapeHelper(ctx, ll, dstShape);
+    ll = reshapeMinorToMajor(ctx, ll, dstShape);
 
     // Try join on last dim
     auto axis = dstShape.size() - 1;
@@ -2848,8 +2835,7 @@ struct TritonGPUInferLayoutInterface
     auto result =
         tryJoinOnAxis(ctx, ll, newLl, /*fwdInference=*/true, axis, loc);
 
-    if (!result.succeeded())
-      return result;
+    assert(result.succeeded());
     dstEnc = LinearEncodingAttr::get(ctx, newLl);
     return success();
   }
@@ -2917,7 +2903,7 @@ struct TritonGPUInferLayoutInterface
     // Remove last dim from newLl (which should be 1)
     SmallVector<int64_t> dstShape(shape.begin(), shape.end());
     dstShape.pop_back();
-    newLl = reshapeHelper(ctx, newLl, dstShape);
+    newLl = reshapeMinorToMajor(ctx, newLl, dstShape);
     dstEnc = LinearEncodingAttr::get(ctx, newLl);
     return success();
   }

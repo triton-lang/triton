@@ -620,6 +620,7 @@ def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding"
     unsigned getTotalElemsPerThread(ArrayRef<int64_t> shape) const;
     SmallVector<unsigned> getElemsPerThread(ArrayRef<int64_t> shape) const;
 
+    SmallVector<unsigned int> getContig(const char *, SmallVector<unsigned int>) const;
     SmallVector<unsigned> getContigPerThread() const;
     SmallVector<unsigned> getContigPerWarp() const;
     SmallVector<unsigned> getOrder() const;
