@@ -86,12 +86,6 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
       IRRewriter rewriter(forOp);
       FailureOr<scf::ForOp> newForOp =
           triton::pipelineForLoop(rewriter, forOp, options);
-
-      if (succeeded(newForOp)) {
-        // TODO: add extra buffers for the mma pipelining so we can pipeline
-        // mmas
-        // mlir::triton::asyncLaunchDots(newForOp.value());
-      }
     }
   }
 

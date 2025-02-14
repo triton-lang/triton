@@ -97,7 +97,9 @@ ttg::SharedEncodingTrait getSharedEncoding(tt::LoadOp loadOp) {
       if (enc != localAllocEnc) {
         // Some users have different encoding than others.
         // Use one of the encodings, and warn about the performance issue.
-        // TODO pawel: report the warning.
+        loadOp->emitRemark()
+            << "Pipelining load with different use encodings. This will lead "
+               "to layout conversions and performance degradation.";
         return localAllocEnc;
       }
     }
@@ -302,6 +304,15 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
       if (stageDiff > 0 && copyVecBytes >= 4) {
         asyncLoads[loadOp] = {.stageDiff = stageDiff,
                               .sharedEncoding = sharedEncoding};
+      } else if (stageDiff > 1) {
+        // Distance-1 loads can in most cases be pipelined in registers without
+        // any performance degradation, as the schedule will usually reorder the
+        // user and the producer so there is no liverange overlap, and no copy
+        // needed.
+        loadOp->emitRemark() << "Pipelining load that cannot use vectorized "
+                                "copy. This will likely "
+                                "lead to pipelining in registers and severe "
+                                "performance degradation.";
       }
     } else if (isa<scf::ForOp>(op)) {
       // Skip nested loops.
@@ -311,12 +322,6 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
   });
 
   for (auto &[loadOp, asyncLoad] : asyncLoads) {
-    // TODO: hey, even if this is scalar load, we decided we are going to
-    // pipelined it, no? shouldn't we do it then?
-    if (!isa<RankedTensorType>(loadOp.getType())) {
-      continue;
-    }
-
     Value alloc = createAlloc(forOp, loadOp, asyncLoad.sharedEncoding,
                               asyncLoad.stageDiff);
     asyncLoad.alloc = alloc;
@@ -397,8 +402,8 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
     forYield.setOperand(argIdx++, loadGroup.extractIdx);
   }
 
-  // TODO: Maybe we can annotate all of the new ops manually instead of
-  // scheduleDependencies?
+  // Automatically discover dependencies and schedule new insert/extract ops to
+  // correct stages.
   scheduleDependencies(forOp, schedule);
 
   // Make sure all ops have attributes.

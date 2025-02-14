@@ -53,10 +53,22 @@ SetVector<Value> getNestedOperands(Operation *op);
 
 // Return the minClusterId and maxClusterId for the given ForOp.
 std::pair<int, int> getMinMaxCluster(scf::ForOp &forOp);
+
+// Return maximum scheduled stage for any of the ops in the loop.
 int getMaxStage(scf::ForOp &forOp);
+
+// Return the stage and cluster for the given operation.
 std::pair<int, int> getStageCluster(Operation *op);
+
+// Return the stage and cluster for the given operation if it has been
+// scheduled.
 std::optional<std::pair<int, int>> maybeGetStageCluster(Operation *op);
+
+// Set the stage and cluster for the given operation.
 void setStageCluster(Operation *op, int stage, int cluster);
+
+// Return maxumum length of the vectorized copy between registers and shared
+// memory for the given tensor type and shared encoding.
 int getCopyVecBytes(RankedTensorType registerTy,
                     gpu::SharedEncodingTrait sharedEnc);
 } // namespace triton
