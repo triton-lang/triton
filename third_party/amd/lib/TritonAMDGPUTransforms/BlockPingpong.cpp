@@ -137,7 +137,7 @@ void Pingponger::transformOnePPClusters(OpBuilder &builder, Location loc) {
 
   // Dot cluster #0
   updateOpInsertion(preDotBar);
-  dotOps[0].emitRemark() << "Performed one ping pong cluster transformation\n";
+  dotOps[0]->emitRemark() << "Performed one ping pong cluster transformation\n";
   appendOpWithPrio(builder, dotOps[0], loc);
 }
 
@@ -273,7 +273,8 @@ LogicalResult Pingponger::transformFourPPClusters(OpBuilder &builder,
   appendClusterBarrier(builder, loc);
 
   // dot0 (1/4)
-  dotSliceOps[0].emitRemark() << "Performed four ping pong cluster transformation\n";
+  dotSliceOps[0]->emitRemark()
+      << "Performed four ping pong cluster transformation\n";
   appendOpWithPrio(builder, dotSliceOps[0], loc);
   appendClusterBarrier(builder, loc);
 
@@ -335,7 +336,8 @@ LogicalResult Pingponger::transformTwoPPClusters(OpBuilder &builder,
   appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
 
   // dot0 (1/2)
-  dotSliceOps[0].emitRemark() << "Performed two ping pong cluster transformation\n";
+  dotSliceOps[0]->emitRemark()
+      << "Performed two ping pong cluster transformation\n";
   appendOpWithPrio(builder, dotSliceOps[0], loc);
   appendClusterBarrier(builder, loc);
 
