@@ -237,11 +237,11 @@ LogicalResult Pingponger::sliceDot(OpBuilder &builder, Location loc,
 }
 
 // Transform a loop into four Dot - Memory (ping - pong) clusters
-// This transfrom is useful when the original dot tile is too large that there's
-// no enough register to hold data for a Dot cluster. This path slices the dot
+// This transform is useful when the original dot tile is too large that there's
+// not enough registers to hold data for a Dot cluster. This path slices the dot
 // into four pieces and pair with four clusters of reordered memory operations.
 // There are multiple guards at the boundary of each cluster.
-// (1) sched.barrier : with mask0 to prevent compiler backed from reroder
+// (1) sched.barrier : with mask0 to prevent compiler backed from reordering
 //  instructions across the boundary
 // (2) gpu.barrier : ensures asymmetric synchronization at each point
 // (3) setprio (1->0) : in order to avoid incomming warp overtaking resource
