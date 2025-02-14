@@ -215,3 +215,19 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     tt.return %b : tensor<256x256xf32, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
   }
 }
+
+// -----
+
+// CHECK-LABEL: @warp_specialize_with_no_uses_and_effects
+tt.func @warp_specialize_with_no_uses_and_effects(%arg0: i32) {
+  %0 = ttg.warp_specialize(%arg0)
+  default {
+    %1 = arith.addi %arg0, %arg0 : i32
+    ttg.warp_yield %1 : i32
+  }
+  partition0(%arg1: i32) num_warps(4) {
+    arith.addi %arg1, %arg1 : i32
+  } : (i32) -> i32
+  // CHECK-NEXT: tt.return
+  tt.return
+}

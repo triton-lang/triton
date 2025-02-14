@@ -262,9 +262,9 @@ void GatherOpConversion::emitWarpLocalGather(
   SmallVector<Value> idxValues =
       unpackLLElements(loc, adaptor.getIndices(), rewriter);
 
-  auto [laneId, warpId, blockId] =
-      emitHardwareTuple(loc, rewriter, targetInfo, /*withCTAOffset=*/true,
-                        srcLayout.getInDimSize(kLane));
+  auto [laneId, warpId] =
+      getLaneAndWarpId(rewriter, loc, srcLayout.getInDimSize(kLane));
+  Value blockId = targetInfo.getClusterCTAId(rewriter, loc);
 
   unsigned /*N=*/srcRegsPerThread = srcLayout.getInDimSize(kRegister);
   assert(srcRegsPerThread == srcValues.size());

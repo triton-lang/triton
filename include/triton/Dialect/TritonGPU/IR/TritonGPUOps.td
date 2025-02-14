@@ -10,9 +10,10 @@ include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
 include "mlir/IR/OpBase.td"
-include "mlir/Interfaces/SideEffectInterfaces.td" // Pure
-include "mlir/Interfaces/InferTypeOpInterface.td" // SameOperandsAndResultType
+include "mlir/Interfaces/ControlFlowInterfaces.td" // RegionBranchOpInterface
 include "mlir/Interfaces/DestinationStyleOpInterface.td"
+include "mlir/Interfaces/InferTypeOpInterface.td"  // SameOperandsAndResultType
+include "mlir/Interfaces/SideEffectInterfaces.td"  // Pure
 include "mlir/Interfaces/ViewLikeInterface.td"
 
 //
@@ -331,4 +332,111 @@ def TTG_GlobalScratchAllocOp : TTG_Op<"global_scratch_alloc", [MemoryEffects<[Me
   let assemblyFormat = [{attr-dict `:` qualified(type($result))}];
 }
 
-#endif
+def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [
+  RecursiveMemoryEffects, RecursivelySpeculatable,
+  DeclareOpInterfaceMethods<RegionBranchOpInterface>
+]> {
+  let summary = "asynchronously execute code on multiple warpgroups";
+  let description = [{
+    The `ttg.warp_specialize` op represents executing different code
+    simultaneously on different warp groups. A warp group is a group of
+    power-of-2 warps, which can be a different number of warps than in the
+    enclosing region.
+
+    The "default" region of the op represents the code executed by the currently
+    executing warp group. This region is allowed to implicitly capture. The op
+    contains a number of "partition" regions that are isolated from above. They
+    must be isolated because these regions represent different layout domains,
+    as the number of warps is different.
+
+    Semantically, execution of each region starts simultaneously for each warp
+    group, and all warp groups are joined at the end of the op.
+
+    Example:
+
+    ```mlir
+    %0 = ttg.warp_specialize(%a, %b)
+    default {
+      %out = some_operation(%a) // implicit capture of `%a`
+      ttg.warp_yield %out : i32
+    }
+    partition0(%arg0: i32, %arg1: i32) num_warps(8) {
+      some_async_dispatch(%arg0, %arg1)
+    }
+    partition1(%arg0: i32, %arg1: i32) num_warps(1) {
+      some_async_dispatch(%arg0, %arg1)
+    } : (i32, i32) -> i32
+    ```
+  }];
+
+  let arguments = (ins
+    Variadic<AnyType>:$explicitCaptures,
+    DenseI32ArrayAttr:$partitionNumWarps
+  );
+  let results = (outs Variadic<AnyType>:$defaultPassthrough);
+
+  let regions = (region
+    SizedRegion<1>:$defaultRegion,
+    SizedRegion<1>:$partitionOpHolder
+  );
+
+  let extraClassDeclaration = [{
+    RegionRange getPartitionRegions();
+  }];
+
+  let hasVerifier = 1;
+  let hasCustomAssemblyFormat = 1;
+}
+
+def TTG_WarpSpecializePartitionsOp : TTG_Op<"warp_specialize.partitions", [
+  IsolatedFromAbove, RecursiveMemoryEffects, RecursivelySpeculatable,
+  Terminator, HasParent<"WarpSpecializeOp">,
+  SingleBlockImplicitTerminator<"WarpReturnOp">
+]> {
+  let summary = "container op for `ttg.warp_specialize`";
+  let description = [{
+    Because MLIR requires entire operations be isolated from above, this op
+    contains the actual isolated from above regions of `ttg.warp_specialize`.
+  }];
+
+  let regions = (region VariadicRegion<SizedRegion<1>>:$partitionRegions);
+}
+
+def TTG_WarpYieldOp : TTG_Op<"warp_yield", [
+  Pure, Terminator, HasParent<"WarpSpecializeOp">,
+  DeclareOpInterfaceMethods<RegionBranchTerminatorOpInterface>
+]> {
+  let summary = "yield from the default region of `ttg.warp_specialize`";
+  let description = [{
+    The `ttg.warp_yield` operation is the terminator for the "default" region of
+    a `ttg.warp_specialize` operation. The operands are passed transparently as
+    the SSA results of the `ttg.warp_specialize` operation.
+
+    Example:
+
+    ```mlir
+    ttg.warp_yield %a, %b : i32, tensor<32xbf16, #blocked>
+    ```
+  }];
+
+  let arguments = (ins Variadic<AnyType>:$values);
+
+  let assemblyFormat = "($values^)? attr-dict (`:` type($values)^)?";
+}
+
+def TTG_WarpReturnOp : TTG_Op<"warp_return", [
+  Pure, Terminator, ReturnLike, HasParent<"WarpSpecializePartitionsOp">
+]> {
+  let summary = "implicit terminator from partition regions";
+  let description = [{
+    The `ttg.warp_return` operation is the implicit terminator that ends the
+    partition regions of a `ttg.warp_specialize` op. It has no operands as these
+    regions cannot return anything.
+
+    TODO: Support returning uniform values from partition regions.
+  }];
+
+  let assemblyFormat = "attr-dict";
+}
+
+#endif // TRITONGPU_OPS

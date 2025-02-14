@@ -85,11 +85,12 @@ Value emitRedundantThreadPredicate(
   auto kWarp = str_attr("warp");
   auto kBlock = str_attr("block");
 
-  auto warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(moduleOp);
-  auto emitBlockId = freeVarMasks.lookup(kBlock) != 0;
-  auto [laneId, warpId, blockId] =
-      emitHardwareTuple(loc, rewriter, targetInfo, emitBlockId, warpSize);
-  auto zero = b.i32_val(0);
+  int warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(moduleOp);
+  Value zero = b.i32_val(0);
+  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc, warpSize);
+  Value blockId = freeVarMasks.lookup(kBlock) == 0
+                      ? zero
+                      : targetInfo.getClusterCTAId(rewriter, loc);
 
   Value pred;
   auto dimNames = {kLane, kWarp, kBlock};
