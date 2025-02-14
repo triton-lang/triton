@@ -16,10 +16,13 @@ tt.func @kernel() {
     ttg.warp_yield
   }
   partition0() num_warps(1) {
+    ttg.warp_return
   }
   partition1() num_warps(8) {
+    ttg.warp_return
   }
   partition2() num_warps(4) {
+    ttg.warp_return
   } : () -> ()
   tt.return
 }
@@ -38,8 +41,10 @@ tt.func @two_warp_specialize() {
     ttg.warp_yield
   }
   partition0() num_warps(2) {
+    ttg.warp_return
   }
   partition1() num_warps(1) {
+    ttg.warp_return
   } : () -> ()
 
   // CHECK: ttg.warp_specialize() attributes {warpGroupStartIds = array<i32: 10, 2>}
@@ -48,8 +53,10 @@ tt.func @two_warp_specialize() {
     ttg.warp_yield
   }
   partition0() num_warps(1) {
+    ttg.warp_return
   }
   partition1() num_warps(8) {
+    ttg.warp_return
   } : () -> ()
 
   tt.return

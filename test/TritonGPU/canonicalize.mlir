@@ -227,6 +227,7 @@ tt.func @warp_specialize_with_no_uses_and_effects(%arg0: i32) {
   }
   partition0(%arg1: i32) num_warps(4) {
     arith.addi %arg1, %arg1 : i32
+    ttg.warp_return
   } : (i32) -> i32
   // CHECK-NEXT: tt.return
   tt.return

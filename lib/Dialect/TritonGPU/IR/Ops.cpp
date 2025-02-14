@@ -675,7 +675,8 @@ LogicalResult WarpSpecializeOp::verify() {
              << i << " argument #" << argIdx << " has type " << argType
              << " but corresponding capture has type " << capType;
     }
-    if (isa<WarpReturnOp>(region->front().getTerminator()))
+    if (region->empty() || !region->front().mightHaveTerminator() ||
+        isa<WarpReturnOp>(region->front().getTerminator()))
       continue;
     return emitOpError("partition region #")
            << i << " does not end with a `ttg.warp_return` op";
@@ -727,9 +728,6 @@ ParseResult WarpSpecializeOp::parse(OpAsmParser &p, OperationState &result) {
         p.parseInteger(partitionNumWarps.emplace_back()) || p.parseRParen() ||
         p.parseRegion(*partitionOpState.addRegion(), partitionArgs))
       return failure();
-    WarpSpecializePartitionsOp::ensureTerminator(
-        *partitionOpState.regions.back(), p.getBuilder(),
-        p.getEncodedSourceLoc(regionLoc));
   }
 
   FunctionType types;
@@ -768,8 +766,7 @@ void WarpSpecializeOp::print(OpAsmPrinter &p) {
       p.printRegionArgument(arg);
     });
     p << ") num_warps(" << numWarps << ") ";
-    p.printRegion(*region, /*printEntryBlockArgs=*/false,
-                  /*printBlockTerminators=*/false);
+    p.printRegion(*region, /*printEntryBlockArgs=*/false);
   }
   p << " : ";
   p.printFunctionalType(*this);

@@ -362,9 +362,11 @@ def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [
     }
     partition0(%arg0: i32, %arg1: i32) num_warps(8) {
       some_async_dispatch(%arg0, %arg1)
+      ttg.warp_return
     }
     partition1(%arg0: i32, %arg1: i32) num_warps(1) {
       some_async_dispatch(%arg0, %arg1)
+      ttg.warp_return
     } : (i32, i32) -> i32
     ```
   }];
@@ -377,7 +379,7 @@ def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [
   let results = (outs Variadic<AnyType>:$defaultPassthrough);
 
   let regions = (region
-    SizedRegion<1>:$defaultRegion,
+    MinSizedRegion<1>:$defaultRegion,
     SizedRegion<1>:$partitionOpHolder
   );
 
@@ -391,8 +393,7 @@ def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [
 
 def TTG_WarpSpecializePartitionsOp : TTG_Op<"warp_specialize.partitions", [
   IsolatedFromAbove, RecursiveMemoryEffects, RecursivelySpeculatable,
-  Terminator, HasParent<"WarpSpecializeOp">,
-  SingleBlockImplicitTerminator<"WarpReturnOp">
+  Terminator, HasParent<"WarpSpecializeOp">
 ]> {
   let summary = "container op for `ttg.warp_specialize`";
   let description = [{
@@ -400,7 +401,7 @@ def TTG_WarpSpecializePartitionsOp : TTG_Op<"warp_specialize.partitions", [
     contains the actual isolated from above regions of `ttg.warp_specialize`.
   }];
 
-  let regions = (region VariadicRegion<SizedRegion<1>>:$partitionRegions);
+  let regions = (region VariadicRegion<MinSizedRegion<1>>:$partitionRegions);
 }
 
 def TTG_WarpYieldOp : TTG_Op<"warp_yield", [

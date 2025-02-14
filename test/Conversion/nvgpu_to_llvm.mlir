@@ -165,6 +165,7 @@ llvm.func @warpid_warp_specialize() {
     %1 = nvgpu.warp_id
     // CHECK: "use"([[UNIFORM]])
     "use"(%1) : (i32) -> ()
+    ttg.warp_return
   }
   partition1() num_warps(2) {
     // 4*32 = 128
@@ -178,6 +179,7 @@ llvm.func @warpid_warp_specialize() {
     %1 = nvgpu.warp_id
     // CHECK: "use"([[UNIFORM]])
     "use"(%1) : (i32) -> ()
+    ttg.warp_return
   } : () -> ()
   llvm.return
 }

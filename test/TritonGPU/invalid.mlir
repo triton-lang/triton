@@ -159,6 +159,7 @@ tt.func @not_power_of_2() {
     ttg.warp_yield
   }
   partition0() num_warps(3) {
+    ttg.warp_return
   } : () -> ()
   tt.return
 }
@@ -172,6 +173,7 @@ tt.func @bad_argument_count() {
     ttg.warp_yield
   }
   partition0(%arg0: i32) num_warps(4) {
+    ttg.warp_return
   } : () -> ()
   tt.return
 }
@@ -185,6 +187,7 @@ tt.func @bad_argument_type(%arg0: i32) {
     ttg.warp_yield
   }
   partition0(%arg1: i64) num_warps(4) {
+    ttg.warp_return
   } : (i32) -> ()
   tt.return
 }
@@ -267,6 +270,7 @@ tt.func @function_no_scope() {
   partition0() num_warps(2) {
     // expected-error @below {{Layout has a total of 8 warps per CTA, but the context requires 2 warps per CTA}}
     tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked_8_warps>
+    ttg.warp_return
   } : () -> ()
   tt.return
 }
@@ -285,10 +289,12 @@ tt.func @function_no_scope() {
     ttg.warp_yield
   }
   partition0() num_warps(2) {
+    ttg.warp_return
   }
   partition1() num_warps(1) {
     // expected-error @below {{Layout has a total of 2 warps per CTA, but the context requires 1 warps per CTA}}
     tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked_2_warps>
+    ttg.warp_return
   } : () -> ()
   tt.return
 }
@@ -319,8 +325,37 @@ tt.func @invalid_start_ids() {
     ttg.warp_yield
   }
   partition0() num_warps(2) {
+    ttg.warp_return
   }
   partition1() num_warps(1) {
+    ttg.warp_return
+  } : () -> ()
+  tt.return
+}
+
+// -----
+
+tt.func @partition_no_terminator() {
+  ttg.warp_specialize()
+  default {
+    ttg.warp_yield
+  }
+  // expected-error @below {{region with at least 1 blocks}}
+  partition0() num_warps(2) {
+  } : () -> ()
+  tt.return
+}
+
+// -----
+
+tt.func @partition_no_terminator() {
+  ttg.warp_specialize()
+  default {
+    ttg.warp_yield
+  }
+  partition0() num_warps(2) {
+    // expected-error @below {{block with no terminator}}
+    %c1_i32 = arith.constant 1 : i32
   } : () -> ()
   tt.return
 }

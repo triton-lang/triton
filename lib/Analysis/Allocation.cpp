@@ -243,21 +243,19 @@ private:
 
   /// Initializes explicitly defined shared memory values for a given operation.
   void getExplicitValueSize(Operation *op) {
-    for (Value result : op->getResults()) {
-      auto alloc = result.getDefiningOp<gpu::LocalAllocOp>();
-      if (alloc && alloc.isSharedMemoryAlloc()) {
-        // Bytes could be a different value once we support padding or other
-        // allocation policies.
-        auto allocType = alloc.getType();
-        auto shapePerCTA = gpu::getAllocationShapePerCTA(allocType);
-        auto bytes = product<int64_t>(shapePerCTA) *
-                     allocType.getElementTypeBitWidth() / 8;
+    auto alloc = dyn_cast<gpu::LocalAllocOp>(op);
+    if (!alloc || !alloc.isSharedMemoryAlloc())
+      return;
+    // Bytes could be a different value once we support padding or other
+    // allocation policies.
+    auto allocType = alloc.getType();
+    auto shapePerCTA = gpu::getAllocationShapePerCTA(allocType);
+    auto bytes =
+        product<int64_t>(shapePerCTA) * allocType.getElementTypeBitWidth() / 8;
 
-        auto alignment = alloc.getAlignmentOrDefault();
-        allocation->addBuffer<BufferT::BufferKind::Explicit>(result, bytes,
-                                                             alignment);
-      }
-    }
+    auto alignment = alloc.getAlignmentOrDefault();
+    allocation->addBuffer<BufferT::BufferKind::Explicit>(alloc, bytes,
+                                                         alignment);
   }
 
   template <BufferT::BufferKind T>
