@@ -68,7 +68,55 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
         .getInt();
   }
 
+  void expandLoops() {
+    SmallVector<scf::ForOp> loops;
+    getOperation()->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
+    for (scf::ForOp forOp : loops) {
+      CoarseSchedule schedule;
+      schedule.deSerialize(forOp);
+
+      triton::PipeliningOption options;
+      std::vector<std::pair<Operation *, unsigned>> finalSchedule =
+          schedule.createFinalSchedule(forOp);
+      options.getScheduleFn =
+          [&](scf::ForOp forOp,
+              std::vector<std::pair<Operation *, unsigned>> &schedule) {
+            schedule = finalSchedule;
+          };
+      IRRewriter rewriter(forOp);
+      FailureOr<scf::ForOp> newForOp =
+          triton::pipelineForLoop(rewriter, forOp, options);
+
+      if (succeeded(newForOp)) {
+        // TODO: add extra buffers for the mma pipelining so we can pipeline
+        // mmas
+        // mlir::triton::asyncLaunchDots(newForOp.value());
+      }
+    }
+  }
+
   void runOnOperation() override {
+    if (triton::tools::getBoolEnv("TRITON_NEW_PIPELINER")) {
+      // Go over the interesting ops and assign latencies (based on the
+      // numStages) to the them, trying to populate the allowed stages. This
+      // step will be at some point extracted to separate pass that will be run
+      // only for loops missing the latency information.
+      DenseMap<Operation *, int> opLatency =
+          assignLatencies(getOperation(), numStages);
+      // numStages should not be used below this point. We should know
+      // everything based on the assigned stages
+
+      // Schedule the loops
+      scheduleLoops(getOperation(), opLatency);
+
+      // Transform the loop by introducing async operations to prepare it for
+      // pipeline expansion.
+      lowerLoops(getOperation());
+
+      // Apply the pipeline expansion.
+      expandLoops();
+    }
+
     SmallVector<scf::ForOp> loops;
     getOperation()->walk([&](scf::ForOp forOp) {
       // Bail out for loops with num_stage <= 1.

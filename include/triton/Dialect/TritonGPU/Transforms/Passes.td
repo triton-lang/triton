@@ -278,8 +278,6 @@ def TritonGPULoopScheduling: Pass<"tritongpu-loop-scheduling", "mlir::ModuleOp">
     Option<"numStages", "num-stages",
            "int32_t", /*default*/"3",
            "number of pipeline stages">,
-    Option<"enableLowering", "enable-lowering", "bool", /*default*/"false",
-           "enable lowering of the async operations">
   ];
 }
 
