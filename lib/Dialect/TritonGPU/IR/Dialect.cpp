@@ -2880,9 +2880,6 @@ struct TritonGPUInferLayoutInterface
     if (fwdInference) {
       auto split = LinearLayout::identity1D(2, kRegister, outDims[axis]);
       newLl = split * ll;
-      // FIXME!!!!
-      // operator* transposes the output dimensions??!! WTF
-      newLl = newLl.transposeOuts(outDims);
     } else {
       // TODO This requires a division algorithm!
       // Implement manually ll.divideLeft(split)

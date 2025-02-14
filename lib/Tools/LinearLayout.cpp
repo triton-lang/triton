@@ -8,8 +8,10 @@
 #include "third_party/f2reduce/f2reduce.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/StrUtil.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetOperations.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -155,34 +157,66 @@ void assertDimsSubsetIgnoringOrder(T &&small, U &&big) {
   }
 }
 
-// Check that elements common to both aDims and bDims
-// appear in the same relative order.
-template <typename T, typename U>
-void assertCommonDimsSameOrder(T &&aDims, U &&bDims) {
-  SmallDenseSet<StringAttr> aDimsSet(aDims.begin(), aDims.end());
-  SmallDenseSet<StringAttr> bDimsSet(bDims.begin(), bDims.end());
-
-  std::vector<StringAttr> aCommonDims;
-  for (StringAttr dim : aDims) {
-    if (bDimsSet.contains(dim)) {
-      aCommonDims.push_back(dim);
+// Compute the supremum of two lists.
+// Error out if the supremum does not exist (e.g. [a, b] and [b, a]).
+// If the supremum is not unique, we return the first list first
+// (e.g. [a, b], [a, c] -> [a, b, c]).
+SmallVector<StringAttr> orderedListSupremum(const SmallVector<StringAttr> &x,
+                                            const SmallVector<StringAttr> &y) {
+  llvm::SetVector<StringAttr> result;
+  DenseMap<StringAttr, int> posX, posY;
+  for (auto [idx, elem] : llvm::enumerate(x))
+    posX[elem] = idx;
+  for (auto [idx, elem] : llvm::enumerate(y))
+    posY[elem] = idx;
+  int i = 0, j = 0;
+  const int INF = std::numeric_limits<int>::max();
+  while (i < x.size() || j < y.size()) {
+    while (i < x.size() && result.contains(x[i]))
+      ++i;
+    while (j < y.size() && result.contains(y[j]))
+      ++j;
+    if (i >= x.size() && j >= y.size())
+      break;
+    if (i < x.size() && j < y.size() && x[i] == y[j]) {
+      if (posY[x[i]] < j)
+        llvm_unreachable("Supremum does not exist");
+      result.insert(x[i]);
+      ++i, ++j;
+      continue;
+    }
+    int candX = INF, candY = INF;
+    if (i < x.size()) {
+      if (posY.count(x[i]) && posY[x[i]] >= j)
+        candX = posY[x[i]];
+    }
+    if (j < y.size()) {
+      if (posX.count(y[j]) && posX[y[j]] >= i)
+        candY = posX[y[j]];
+    }
+    if (i < x.size() && candX == INF) {
+      result.insert(x[i]);
+      ++i;
+      continue;
+    }
+    if (j < y.size() && candY == INF) {
+      result.insert(y[j]);
+      ++j;
+      continue;
+    }
+    if (candX <= candY) {
+      if (posY[x[i]] < j)
+        llvm_unreachable("Supremum does not exist");
+      result.insert(x[i]);
+      ++i;
+    } else {
+      if (posX[y[j]] < i)
+        llvm_unreachable("Supremum does not exist");
+      result.insert(y[j]);
+      ++j;
     }
   }
-
-  std::vector<StringAttr> bCommonDims;
-  for (StringAttr dim : bDims) {
-    if (aDimsSet.contains(dim)) {
-      bCommonDims.push_back(dim);
-    }
-  }
-
-  if (aCommonDims != bCommonDims) {
-    llvm::report_fatal_error("All a/b dimensions common to both layouts "
-                             "must appear in the same relative order, but they "
-                             "don't.\na:" +
-                             Twine(triton::join(aDims, ", ")) +
-                             "\nb: " + triton::join(bDims, ", "));
-  }
+  return to_vector(result);
 }
 } // anonymous namespace
 
@@ -590,14 +624,20 @@ LinearLayout LinearLayout::concatOuts(const LinearLayout &other) const {
 
 LinearLayout operator*(LinearLayout inner, LinearLayout outer) {
   // Check that dims common to outer and inner have the same relative order.
-  assertCommonDimsSameOrder(inner.getOutDimNames(), outer.getOutDimNames());
-  assertCommonDimsSameOrder(inner.getInDimNames(), outer.getInDimNames());
+  auto inDims = orderedListSupremum(llvm::to_vector(inner.getInDimNames()),
+                                    llvm::to_vector(outer.getInDimNames()));
+  auto outDims = orderedListSupremum(llvm::to_vector(inner.getOutDimNames()),
+                                     llvm::to_vector(outer.getOutDimNames()));
 
   // Get the sizeLog2 of all input and output dimensions we're going to
   // consider, in order.  `inner` is more minor, so its dimensions come
   // first.
   llvm::MapVector<StringAttr, int32_t> inDimSizesLog2;
   llvm::MapVector<StringAttr, int32_t> outDimSizesLog2;
+  for (const auto &dim : inDims)
+    inDimSizesLog2.insert({dim, 0});
+  for (const auto &dim : outDims)
+    outDimSizesLog2.insert({dim, 0});
   for (const auto &layout : {inner, outer}) {
     for (StringAttr inDim : layout.getInDimNames()) {
       inDimSizesLog2[inDim] += layout.getInDimSizeLog2(inDim);
