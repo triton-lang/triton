@@ -1086,7 +1086,9 @@ createAsyncOps(scf::ForOp &forOp,
   assert(argIdx + 1 == tmaCounterArgsStartIdx);
 
   tt::CoarseSchedule coarseSchedule(numStages);
-  coarseSchedule.deSerialize(forOp);
+  if (failed(coarseSchedule.deSerialize(forOp))) {
+    llvm_unreachable("Failed to deserialize coarse schedule");
+  }
   scheduleDependencies(forOp, coarseSchedule);
   coarseSchedule.serialize(forOp);
 

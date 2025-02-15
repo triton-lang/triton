@@ -73,7 +73,9 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
     getOperation()->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
     for (scf::ForOp forOp : loops) {
       CoarseSchedule schedule;
-      schedule.deSerialize(forOp);
+      if (failed(schedule.deSerialize(forOp))) {
+        continue;
+      }
 
       triton::PipeliningOption options;
       std::vector<std::pair<Operation *, unsigned>> finalSchedule =

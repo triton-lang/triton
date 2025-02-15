@@ -44,7 +44,7 @@ SetVector<Value> getNestedOperands(Operation *op);
 std::pair<int, int> getMinMaxCluster(scf::ForOp &forOp);
 
 // Return maximum scheduled stage for any of the ops in the loop.
-int getMaxStage(scf::ForOp &forOp);
+std::optional<int> tryGetMaxStage(scf::ForOp &forOp);
 
 // Return the stage and cluster for the given operation.
 std::pair<int, int> getStageCluster(Operation *op);

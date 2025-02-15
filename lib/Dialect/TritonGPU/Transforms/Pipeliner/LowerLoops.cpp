@@ -73,15 +73,17 @@ int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
                        CoarseSchedule &schedule) {
   assert(schedule.count(op) && "LoadOp not found in the schedule");
   auto [defStage, _] = schedule[op];
-  int useStage = INT_MAX;
+  std::optional<int> useStage;
   for (auto user : op->getUsers()) {
     Operation *topLevelUser = forOp.getBody()->findAncestorOpInBlock(*user);
     assert(schedule.count(topLevelUser) && "op user not found in the schedule");
     auto [_useStage, _] = schedule[topLevelUser];
-    useStage = std::min(_useStage, useStage);
+    useStage = std::min(_useStage, useStage.value_or(_useStage));
   }
+  if (!useStage)
+    return 0;
   assert(useStage >= defStage && "LoadOp used before defined");
-  return useStage - defStage;
+  return useStage.value() - defStage;
 }
 
 ttg::SharedEncodingTrait getSharedEncoding(tt::LoadOp loadOp) {
@@ -194,6 +196,7 @@ void createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
   Value zero = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 0, 32);
 
   Operation *firstUse = getFirstUseOfPipelinedOp(loadOp, schedule);
+  assert(firstUse && "LoadOp has no users");
   // Replace the load with async copy, wait and loal_load.
   OpBuilder::InsertionGuard guard(builder);
   builder.setInsertionPoint(loadOp);
@@ -279,7 +282,7 @@ void createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
 
     // TODO: Think about prefetching the load for MMAv2
   }
-
+  schedule.erase(loadOp);
   loadOp->erase();
 }
 
@@ -423,7 +426,9 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
 
 void lowerLoop(scf::ForOp forOp) {
   CoarseSchedule schedule;
-  schedule.deSerialize(forOp);
+  if (failed(schedule.deSerialize(forOp))) {
+    return;
+  }
   scf::ForOp newForOp = lowerLoads(forOp, schedule);
   schedule.serialize(newForOp);
   LLVM_DEBUG({ DBGS() << "Loop after lowering loads:\n" << newForOp << "\n"; });

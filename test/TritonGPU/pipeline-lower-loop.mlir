@@ -1,16 +1,34 @@
-// RUN: triton-opt %s -split-input-file -tritongpu-test-pipeline-lower-loop -canonicalize | FileCheck %s
+// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritongpu-test-pipeline-lower-loop -canonicalize | FileCheck %s
 
 #A = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
-// CHECK-LABEL: @one_dep
-// CHECK-DAG: %[[INIT:.*]] = arith.constant dense<0.000000e+00>
+// CHECK-LABEL: @unscheduled_loop
+// CHECK: scf.for
+// CHECK:   tt.load
+// CHECK:   "use"
+tt.func @unscheduled_loop(%lb : index, %ub : index, %step : index,
+                 %a_ptr_init : tensor<128x32x!tt.ptr<f16>, #A>) -> () {
+  scf.for %iv = %lb to %ub step %step : index {
+    %a = tt.load %a_ptr_init : tensor<128x32x!tt.ptr<f16>, #A>
+    "use"(%a) : (tensor<128x32xf16, #A>) -> ()
+  }
+  tt.return
+}
+}
+
+// -----
+
+#A = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// CHECK-LABEL: @one_dep_async
 // CHECK-DAG: %[[MINUS_ONE:.*]] = arith.constant -1
 // CHECK-DAG: %[[ZERO:.*]] = arith.constant 0
 // CHECK-DAG: %[[ONE:.*]] = arith.constant 1
 // CHECK-DAG: %[[A:.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x128x32
 // CHECK-DAG: %[[NUM_BUFS:.*]] = arith.constant {{.*}} 2 : i32
-// CHECK: scf.for {{.*}} iter_args(%[[ACC:.*]] = %[[INIT]], %[[INS:.*]] = %[[MINUS_ONE]], %[[EXT:.*]] = %[[MINUS_ONE]])
+// CHECK: scf.for {{.*}} iter_args(%[[INS:.*]] = %[[MINUS_ONE]], %[[EXT:.*]] = %[[MINUS_ONE]])
 // CHECK:   %[[INS_P1:.*]] = arith.addi %[[INS]], %[[ONE]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}  : i32
 // CHECK:   %[[INS_CMP:.*]] = arith.cmpi slt, %[[INS_P1]], %[[NUM_BUFS]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}  : i32
 // CHECK:   %[[INS_NEXT:.*]] = arith.select %[[INS_CMP]], %[[INS_P1]], %[[ZERO]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}  : i32
@@ -23,18 +41,16 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK:   %[[A_TOK3:.*]] = ttg.async_wait %[[A_TOK2]] {loop.cluster = 0 : i32, loop.stage = 2 : i32, num = 0 : i32}
 // CHECK:   %[[A_EXT:.*]] = ttg.memdesc_subview %[[A]][%[[EXT_NEXT]]{{.*}} {loop.cluster = 0 : i32, loop.stage = 2 : i32}
 // CHECK:   %[[A_VAL:.*]] = ttg.local_load %[[A_EXT]] token %[[A_TOK3]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
-// CHECK:   %[[RES:.*]] = arith.addf %[[ACC]], %[[A_VAL]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
-// CHECK:   scf.yield %[[RES]], %[[INS_NEXT]], %[[EXT_NEXT]]
+// CHECK:   "use"(%[[A_VAL]]) {loop.cluster = 0 : i32, loop.stage = 2 : i32}
+// CHECK:   scf.yield %[[INS_NEXT]], %[[EXT_NEXT]]
 
 tt.func @one_dep_async(%lb : index, %ub : index, %step : index,
-                 %a_ptr_init : tensor<128x32x!tt.ptr<f16>, #A>) -> tensor<128x32xf16, #A> {
-  %init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A>
-  %loop = scf.for %iv = %lb to %ub step %step iter_args(%acc = %init) -> (tensor<128x32xf16, #A>) {
+                 %a_ptr_init : tensor<128x32x!tt.ptr<f16>, #A>) -> () {
+  scf.for %iv = %lb to %ub step %step : index {
     %a = tt.load %a_ptr_init {loop.cluster = 2 : i32, loop.stage = 0 : i32} : tensor<128x32x!tt.ptr<f16>, #A>
-    %res = arith.addf %acc, %a {loop.cluster = 0 : i32, loop.stage = 2 : i32} : tensor<128x32xf16, #A>
-    scf.yield %res : tensor<128x32xf16, #A>
+    "use"(%a) {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<128x32xf16, #A>) -> ()
   }
-  tt.return %loop#0 : tensor<128x32xf16, #A>
+  tt.return
 }
 }
 
@@ -44,18 +60,15 @@ tt.func @one_dep_async(%lb : index, %ub : index, %step : index,
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK-LABEL: @one_dep_sync
-// CHECK: %[[INIT:.*]] = arith.constant dense<0.000000e+00>
 // CHECK: scf.for
 // CHECK:   tt.load {{.*}} {loop.cluster = 2 : i32, loop.stage = 0 : i32}
 tt.func @one_dep_sync(%lb : index, %ub : index, %step : index,
-                 %a_ptr_init : tensor<1x!tt.ptr<f16>, #A>) -> tensor<1xf16, #A> {
-  %init = arith.constant dense<0.00e+00> : tensor<1xf16, #A>
-  %loop = scf.for %iv = %lb to %ub step %step iter_args(%acc = %init) -> (tensor<1xf16, #A>) {
+                 %a_ptr_init : tensor<1x!tt.ptr<f16>, #A>) -> () {
+  scf.for %iv = %lb to %ub step %step : index {
     %a = tt.load %a_ptr_init {loop.cluster = 2 : i32, loop.stage = 0 : i32} : tensor<1x!tt.ptr<f16>, #A>
-    %res = arith.addf %acc, %a {loop.cluster = 0 : i32, loop.stage = 2 : i32} : tensor<1xf16, #A>
-    scf.yield %res : tensor<1xf16, #A>
+    "use"(%a) {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<1xf16, #A>) -> ()
   }
-  tt.return %loop#0 : tensor<1xf16, #A>
+  tt.return
 }
 }
 
@@ -66,13 +79,12 @@ tt.func @one_dep_sync(%lb : index, %ub : index, %step : index,
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK: #[[SHARED:.*]] = #ttg.nvmma_shared
-// CHECK-DAG: %[[INIT:.*]] = arith.constant dense<0.000000e+00>
 // CHECK-DAG: %[[MINUS_ONE:.*]] = arith.constant -1
 // CHECK-DAG: %[[ZERO:.*]] = arith.constant 0
 // CHECK-DAG: %[[ONE:.*]] = arith.constant 1
 // CHECK-DAG: %[[A:.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x128x32
 // CHECK-DAG: %[[NUM_BUFS:.*]] = arith.constant {{.*}} 2 : i32
-// CHECK: scf.for {{.*}} iter_args(%[[ACC:.*]] = %[[INIT]], %[[INS:.*]] = %[[MINUS_ONE]], %[[EXT:.*]] = %[[MINUS_ONE]])
+// CHECK: scf.for {{.*}} iter_args(%[[INS:.*]] = %[[MINUS_ONE]], %[[EXT:.*]] = %[[MINUS_ONE]])
 // CHECK:   %[[INS_P1:.*]] = arith.addi %[[INS]], %[[ONE]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}  : i32
 // CHECK:   %[[INS_CMP:.*]] = arith.cmpi slt, %[[INS_P1]], %[[NUM_BUFS]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}  : i32
 // CHECK:   %[[INS_NEXT:.*]] = arith.select %[[INS_CMP]], %[[INS_P1]], %[[ZERO]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}  : i32
@@ -85,20 +97,206 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK:   %[[A_TOK3:.*]] = ttg.async_wait %[[A_TOK2]] {loop.cluster = 0 : i32, loop.stage = 2 : i32, num = 0 : i32}
 // CHECK:   %[[A_EXT:.*]] = ttg.memdesc_subview %[[A]][%[[EXT_NEXT]]{{.*}} {loop.cluster = 0 : i32, loop.stage = 2 : i32}
 // CHECK:   %[[A_VAL:.*]] = ttg.local_load %[[A_EXT]] {loop.cluster = 0 : i32, loop.stage = 2 : i32} : !ttg.memdesc<128x32xf16, #[[SHARED]], #
-// CHECK:   %[[RES:.*]] = arith.addf %[[ACC]], %[[A_VAL]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
-// CHECK:   scf.yield %[[RES]], %[[INS_NEXT]], %[[EXT_NEXT]]
+// CHECK:   "use"(%[[A_VAL]]) {loop.cluster = 0 : i32, loop.stage = 2 : i32}
+// CHECK:   scf.yield %[[INS_NEXT]], %[[EXT_NEXT]]
 
 tt.func @one_dep_local_alloc(%lb : index, %ub : index, %step : index,
-                 %a_ptr_init : tensor<128x32x!tt.ptr<f16>, #A>) -> tensor<128x32xf16, #A> {
-  %init = arith.constant dense<0.00e+00> : tensor<128x32xf16, #A>
-  %loop = scf.for %iv = %lb to %ub step %step iter_args(%acc = %init) -> (tensor<128x32xf16, #A>) {
+                 %a_ptr_init : tensor<128x32x!tt.ptr<f16>, #A>) -> () {
+  scf.for %iv = %lb to %ub step %step : index {
     %a = tt.load %a_ptr_init {loop.cluster = 2 : i32, loop.stage = 0 : i32} : tensor<128x32x!tt.ptr<f16>, #A>
     %a_alloc = ttg.local_alloc %a {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<128x32xf16, #A>) -> !ttg.memdesc<128x32xf16, #shared, #ttg.shared_memory, mutable>
     %a_load = ttg.local_load %a_alloc {loop.cluster = 0 : i32, loop.stage = 2 : i32} : !ttg.memdesc<128x32xf16, #shared, #ttg.shared_memory, mutable> -> tensor<128x32xf16, #A>
-    %res = arith.addf %acc, %a_load {loop.cluster = 0 : i32, loop.stage = 2 : i32} : tensor<128x32xf16, #A>
-    scf.yield %res : tensor<128x32xf16, #A>
+    "use"(%a_load) {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<128x32xf16, #A>) -> ()
   }
-  tt.return %loop#0 : tensor<128x32xf16, #A>
+  tt.return
+}
+}
+
+// -----
+
+#A = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// CHECK-LABEL: @one_load_group
+tt.func @one_load_group(%lb : index, %ub : index, %step : index,
+                       %a_ptr_init : tensor<128x32x!tt.ptr<f32>, #A>,
+                       %b_ptr_init : tensor<128x32x!tt.ptr<f32>, #A>) -> () {
+  // CHECK-DAG: %[[MINUS_ONE:.*]] = arith.constant -1
+  // CHECK-DAG: %[[ZERO:.*]] = arith.constant 0
+  // CHECK-DAG: %[[ONE:.*]] = arith.constant 1
+  // CHECK-DAG: %[[NUM_BUFS:.*]] = arith.constant {{.*}} 2 : i32
+  // Only one insert and extract index is used.
+  // CHECK: scf.for {{.*}} iter_args(%[[INS:.*]] = %[[MINUS_ONE]], %[[EXT:.*]] = %[[MINUS_ONE]]) ->
+  scf.for %iv = %lb to %ub step %step : index {
+    // CHECK: %[[INS_P1:.*]] = arith.addi %[[INS]], %[[ONE]]
+    // CHECK: %[[INS_CMP:.*]] = arith.cmpi slt, %[[INS_P1]], %[[NUM_BUFS]]
+    // CHECK: %[[INS_NEXT:.*]] = arith.select %[[INS_CMP]], %[[INS_P1]], %[[ZERO]]
+    // CHECK: %[[EXT_P1:.*]] = arith.addi %[[EXT]], %[[ONE]]
+    // CHECK: %[[EXT_CMP:.*]] = arith.cmpi slt, %[[EXT_P1]], %[[NUM_BUFS]]
+    // CHECK: %[[EXT_NEXT:.*]] = arith.select %[[EXT_CMP]], %[[EXT_P1]], %[[ZERO]]
+    %a = tt.load %a_ptr_init {loop.cluster = 2 : i32, loop.stage = 0 : i32} : tensor<128x32x!tt.ptr<f32>, #A>
+    %b = tt.load %a_ptr_init {loop.cluster = 2 : i32, loop.stage = 0 : i32} : tensor<128x32x!tt.ptr<f32>, #A>
+    "use1"(%a){loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<128x32xf32, #A>) -> ()
+    "use2"(%b){loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<128x32xf32, #A>) -> ()
+  }
+  tt.return
+}
+}
+
+// -----
+
+#A = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// CHECK-LABEL: @two_load_groups
+tt.func @two_load_groups(%lb : index, %ub : index, %step : index,
+                       %a_ptr_init : tensor<128x32x!tt.ptr<f32>, #A>,
+                       %b_ptr_init : tensor<128x32x!tt.ptr<f32>, #A>,
+                       %c_ptr_init : tensor<128x32x!tt.ptr<f32>, #A>) -> () {
+  // CHECK-DAG: %[[MINUS_ONE:.*]] = arith.constant -1
+  // CHECK-DAG: %[[ZERO:.*]] = arith.constant 0
+  // CHECK-DAG: %[[ONE:.*]] = arith.constant 1
+  // CHECK-DAG: %[[NUM_BUFS2:.*]] = arith.constant {{.*}} 2 : i32
+  // CHECK-DAG: %[[NUM_BUFS3:.*]] = arith.constant {{.*}} 3 : i32
+  // Two insert and extract indices are used.
+  // CHECK: scf.for {{.*}} iter_args(%[[INS2:.*]] = %[[MINUS_ONE]], %[[EXT2:.*]] = %[[MINUS_ONE]], %[[INS3:.*]] = %[[MINUS_ONE]], %[[EXT3:.*]] = %[[MINUS_ONE]]) ->
+  scf.for %iv = %lb to %ub step %step : index {
+    // CHECK-DAG: %[[INS3_P1:.*]] = arith.addi %[[INS3]], %[[ONE]]
+    // CHECK-DAG: %[[INS3_CMP:.*]] = arith.cmpi slt, %[[INS3_P1]], %[[NUM_BUFS3]]
+    // CHECK-DAG: %[[INS3_NEXT:.*]] = arith.select %[[INS3_CMP]], %[[INS3_P1]], %[[ZERO]]
+    // CHECK-DAG: %[[EXT3_P1:.*]] = arith.addi %[[EXT3]], %[[ONE]]
+    // CHECK-DAG: %[[EXT3_CMP:.*]] = arith.cmpi slt, %[[EXT3_P1]], %[[NUM_BUFS3]]
+    // CHECK-DAG: %[[EXT3_NEXT:.*]] = arith.select %[[EXT3_CMP]], %[[EXT3_P1]], %[[ZERO]]
+    // CHECK-DAG: %[[INS2_P1:.*]] = arith.addi %[[INS2]], %[[ONE]]
+    // CHECK-DAG: %[[INS2_CMP:.*]] = arith.cmpi slt, %[[INS2_P1]], %[[NUM_BUFS2]]
+    // CHECK-DAG: %[[INS2_NEXT:.*]] = arith.select %[[INS2_CMP]], %[[INS2_P1]], %[[ZERO]]
+    // CHECK-DAG: %[[EXT2_P1:.*]] = arith.addi %[[EXT2]], %[[ONE]]
+    // CHECK-DAG: %[[EXT2_CMP:.*]] = arith.cmpi slt, %[[EXT2_P1]], %[[NUM_BUFS2]]
+    // CHECK-DAG: %[[EXT2_NEXT:.*]] = arith.select %[[EXT2_CMP]], %[[EXT2_P1]], %[[ZERO]]
+    %a = tt.load %a_ptr_init {loop.cluster = 3 : i32, loop.stage = 0 : i32} : tensor<128x32x!tt.ptr<f32>, #A>
+    %b = tt.load %a_ptr_init {loop.cluster = 3 : i32, loop.stage = 0 : i32} : tensor<128x32x!tt.ptr<f32>, #A>
+    %c = tt.load %a_ptr_init {loop.cluster = 3 : i32, loop.stage = 0 : i32} : tensor<128x32x!tt.ptr<f32>, #A>
+    "use1"(%a){loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<128x32xf32, #A>) -> ()
+    "use2"(%b){loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<128x32xf32, #A>) -> ()
+    "use3"(%c){loop.cluster = 0 : i32, loop.stage = 3 : i32} : (tensor<128x32xf32, #A>) -> ()
+  }
+  tt.return
+}
+}
+
+// -----
+
+#A = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// CHECK-LABEL: @dependent_loads
+tt.func @dependent_loads(%lb : index, %ub : index, %step : index,
+                       %a_ptr_init : tensor<128x32x!tt.ptr<f32>, #A>) -> () {
+  // CHECK-DAG: %[[MINUS_ONE:.*]] = arith.constant -1
+  // CHECK-DAG: %[[ZERO:.*]] = arith.constant 0
+  // CHECK-DAG: %[[ONE:.*]] = arith.constant 1
+  // CHECK-DAG: %[[NUM_BUFS:.*]] = arith.constant {{.*}} 2 : i32
+  // CHECK: %[[A:.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x128x32xf32
+  // CHECK: %[[C:.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x128x32xf32
+  // CHECK: scf.for {{.*}} iter_args(%[[INS:.*]] = %[[MINUS_ONE]], %[[EXT:.*]] = %[[MINUS_ONE]]) ->
+  scf.for %iv = %lb to %ub step %step : index {
+    // CHECK: %[[INS_P1:.*]] = arith.addi %[[INS]], %[[ONE]] {loop.cluster = 4 : i32, loop.stage = 0 : i32}
+    // CHECK: %[[INS_CMP:.*]] = arith.cmpi slt, %[[INS_P1]], %[[NUM_BUFS]] {loop.cluster = 4 : i32, loop.stage = 0 : i32}
+    // CHECK: %[[INS_NEXT:.*]] = arith.select %[[INS_CMP]], %[[INS_P1]], %[[ZERO]] {loop.cluster = 4 : i32, loop.stage = 0 : i32}
+    // CHECK: %[[EXT_P1:.*]] = arith.addi %[[EXT]], %[[ONE]] {loop.cluster = 2 : i32, loop.stage = 2 : i32}
+    // CHECK: %[[EXT_CMP:.*]] = arith.cmpi slt, %[[EXT_P1]], %[[NUM_BUFS]] {loop.cluster = 2 : i32, loop.stage = 2 : i32}
+    // CHECK: %[[EXT_NEXT:.*]] = arith.select %[[EXT_CMP]], %[[EXT_P1]], %[[ZERO]] {loop.cluster = 2 : i32, loop.stage = 2 : i32}
+    // CHECK: %[[A_INS:.*]] = ttg.memdesc_subview %[[A]][%[[INS_NEXT]]{{.*}} {loop.cluster = 4 : i32, loop.stage = 0 : i32}
+    // CHECK: %[[A_TOK:.*]] = ttg.async_copy_global_to_local %{{.*}}, %[[A_INS]] {loop.cluster = 4 : i32, loop.stage = 0 : i32}
+    // CHECK: %[[A_TOK2:.*]] = ttg.async_commit_group %[[A_TOK]] {loop.cluster = 4 : i32, loop.stage = 0 : i32}
+    // CHECK: %[[A_TOK3:.*]] = ttg.async_wait %[[A_TOK2]] {loop.cluster = 2 : i32, loop.stage = 2 : i32, num = 0 : i32}
+    // CHECK: %[[A_EXT:.*]] = ttg.memdesc_subview %[[A]][%[[EXT_NEXT]]{{.*}} {loop.cluster = 2 : i32, loop.stage = 2 : i32}
+    // CHECK: %[[A_VAL:.*]] = ttg.local_load %[[A_EXT]] token %[[A_TOK3]] {loop.cluster = 2 : i32, loop.stage = 2 : i32}
+    // CHECK: %[[B:.*]] = "pointerize"(%[[A_VAL]]) {loop.cluster = 2 : i32, loop.stage = 2 : i32}
+    // CHECK: %[[C_INS:.*]] = ttg.memdesc_subview %[[C]][%[[INS_NEXT]]{{.*}} {loop.cluster = 2 : i32, loop.stage = 2 : i32}
+    // CHECK: %[[C_TOK:.*]] = ttg.async_copy_global_to_local %[[B]], %[[C_INS]] {loop.cluster = 2 : i32, loop.stage = 2 : i32}
+    // CHECK: %[[C_TOK2:.*]] = ttg.async_commit_group %[[C_TOK]] {loop.cluster = 2 : i32, loop.stage = 2 : i32}
+    // CHECK: %[[C_TOK3:.*]] = ttg.async_wait %[[C_TOK2]] {loop.cluster = 0 : i32, loop.stage = 4 : i32, num = 0 : i32}
+    // CHECK: %[[C_EXT:.*]] = ttg.memdesc_subview %[[C]][%[[EXT_NEXT]]{{.*}} {loop.cluster = 0 : i32, loop.stage = 4 : i32}
+    // CHECK: %[[C_VAL:.*]] = ttg.local_load %[[C_EXT]] token %[[C_TOK3]] {loop.cluster = 0 : i32, loop.stage = 4 : i32}
+    // CHECK: "use1"(%[[C_VAL]]) {loop.cluster = 0 : i32, loop.stage = 4 : i32}
+    %a = tt.load %a_ptr_init {loop.cluster = 4 : i32, loop.stage = 0 : i32} : tensor<128x32x!tt.ptr<f32>, #A>
+    %b = "pointerize"(%a) {loop.cluster = 2 : i32, loop.stage = 2 : i32} : (tensor<128x32xf32, #A>) -> tensor<128x32x!tt.ptr<f32>, #A>
+    %c = tt.load %b {loop.cluster = 2 : i32, loop.stage = 2 : i32} : tensor<128x32x!tt.ptr<f32>, #A>
+    "use1"(%c){loop.cluster = 0 : i32, loop.stage = 4 : i32} : (tensor<128x32xf32, #A>) -> ()
+  }
+  tt.return
+}
+}
+
+// -----
+
+#A = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// CHECK-LABEL: @dependent_loads_asymmetric
+// Loads have different latencies, should create two load groups.
+tt.func @dependent_loads_asymmetric(%lb : index, %ub : index, %step : index,
+                       %a_ptr_init : tensor<128x32x!tt.ptr<f32>, #A>) -> () {
+  // CHECK-DAG: %[[MINUS_ONE:.*]] = arith.constant -1
+  // CHECK-DAG: %[[ZERO:.*]] = arith.constant 0
+  // CHECK-DAG: %[[ONE:.*]] = arith.constant 1
+  // CHECK-DAG: %[[NUM_BUFS2:.*]] = arith.constant {{.*}} 2 : i32
+  // CHECK-DAG: %[[NUM_BUFS3:.*]] = arith.constant {{.*}} 3 : i32
+  // CHECK: %[[A:.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x128x32xf32
+  // CHECK: %[[C:.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x128x32xf32
+  // CHECK: scf.for {{.*}} iter_args(%[[INS2:.*]] = %[[MINUS_ONE]], %[[EXT2:.*]] = %[[MINUS_ONE]], %[[INS3:.*]] = %[[MINUS_ONE]], %[[EXT3:.*]] = %[[MINUS_ONE]]) ->
+  scf.for %iv = %lb to %ub step %step : index {
+    // CHECK-DAG: %[[INS3_P1:.*]] = arith.addi %[[INS3]], %[[ONE]] {loop.cluster = 2 : i32, loop.stage = 2 : i32}
+    // CHECK-DAG: %[[INS3_CMP:.*]] = arith.cmpi slt, %[[INS3_P1]], %[[NUM_BUFS3]] {loop.cluster = 2 : i32, loop.stage = 2 : i32}
+    // CHECK-DAG: %[[INS3_NEXT:.*]] = arith.select %[[INS3_CMP]], %[[INS3_P1]], %[[ZERO]] {loop.cluster = 2 : i32, loop.stage = 2 : i32}
+    // CHECK-DAG: %[[EXT3_P1:.*]] = arith.addi %[[EXT3]], %[[ONE]] {loop.cluster = 0 : i32, loop.stage = 5 : i32}
+    // CHECK-DAG: %[[EXT3_CMP:.*]] = arith.cmpi slt, %[[EXT3_P1]], %[[NUM_BUFS3]] {loop.cluster = 0 : i32, loop.stage = 5 : i32}
+    // CHECK-DAG: %[[EXT3_NEXT:.*]] = arith.select %[[EXT3_CMP]], %[[EXT3_P1]], %[[ZERO]] {loop.cluster = 0 : i32, loop.stage = 5 : i32}
+    // CHECK-DAG: %[[INS2_P1:.*]] = arith.addi %[[INS2]], %[[ONE]] {loop.cluster = 4 : i32, loop.stage = 0 : i32}
+    // CHECK-DAG: %[[INS2_CMP:.*]] = arith.cmpi slt, %[[INS2_P1]], %[[NUM_BUFS2]] {loop.cluster = 4 : i32, loop.stage = 0 : i32}
+    // CHECK-DAG: %[[INS2_NEXT:.*]] = arith.select %[[INS2_CMP]], %[[INS2_P1]], %[[ZERO]] {loop.cluster = 4 : i32, loop.stage = 0 : i32}
+    // CHECK-DAG: %[[EXT2_P1:.*]] = arith.addi %[[EXT2]], %[[ONE]] {loop.cluster = 2 : i32, loop.stage = 2 : i32}
+    // CHECK-DAG: %[[EXT2_CMP:.*]] = arith.cmpi slt, %[[EXT2_P1]], %[[NUM_BUFS2]] {loop.cluster = 2 : i32, loop.stage = 2 : i32}
+    // CHECK-DAG: %[[EXT2_NEXT:.*]] = arith.select %[[EXT2_CMP]], %[[EXT2_P1]], %[[ZERO]] {loop.cluster = 2 : i32, loop.stage = 2 : i32}
+    // CHECK: %[[A_INS:.*]] = ttg.memdesc_subview %[[A]][%[[INS2_NEXT]]{{.*}} {loop.cluster = 4 : i32, loop.stage = 0 : i32}
+    // CHECK: %[[A_TOK:.*]] = ttg.async_copy_global_to_local %{{.*}}, %[[A_INS]] {loop.cluster = 4 : i32, loop.stage = 0 : i32}
+    // CHECK: %[[A_TOK2:.*]] = ttg.async_commit_group %[[A_TOK]] {loop.cluster = 4 : i32, loop.stage = 0 : i32}
+    // CHECK: %[[A_TOK3:.*]] = ttg.async_wait %[[A_TOK2]] {loop.cluster = 2 : i32, loop.stage = 2 : i32, num = 0 : i32}
+    // CHECK: %[[A_EXT:.*]] = ttg.memdesc_subview %[[A]][%[[EXT2_NEXT]]{{.*}} {loop.cluster = 2 : i32, loop.stage = 2 : i32}
+    // CHECK: %[[A_VAL:.*]] = ttg.local_load %[[A_EXT]] token %[[A_TOK3]] {loop.cluster = 2 : i32, loop.stage = 2 : i32}
+    // CHECK: %[[B:.*]] = "pointerize"(%[[A_VAL]]) {loop.cluster = 2 : i32, loop.stage = 2 : i32}
+    // CHECK: %[[C_INS:.*]] = ttg.memdesc_subview %[[C]][%[[INS3_NEXT]]{{.*}} {loop.cluster = 2 : i32, loop.stage = 2 : i32}
+    // CHECK: %[[C_TOK:.*]] = ttg.async_copy_global_to_local %[[B]], %[[C_INS]] {loop.cluster = 2 : i32, loop.stage = 2 : i32}
+    // CHECK: %[[C_TOK2:.*]] = ttg.async_commit_group %[[C_TOK]] {loop.cluster = 2 : i32, loop.stage = 2 : i32}
+    // CHECK: %[[C_TOK3:.*]] = ttg.async_wait %[[C_TOK2]] {loop.cluster = 0 : i32, loop.stage = 5 : i32, num = 0 : i32}
+    // CHECK: %[[C_EXT:.*]] = ttg.memdesc_subview %[[C]][%[[EXT3_NEXT]]{{.*}} {loop.cluster = 0 : i32, loop.stage = 5 : i32}
+    // CHECK: %[[C_VAL:.*]] = ttg.local_load %[[C_EXT]] token %[[C_TOK3]] {loop.cluster = 0 : i32, loop.stage = 5 : i32}
+    // CHECK: "use1"(%[[C_VAL]]) {loop.cluster = 0 : i32, loop.stage = 5 : i32}
+    %a = tt.load %a_ptr_init {loop.cluster = 4 : i32, loop.stage = 0 : i32} : tensor<128x32x!tt.ptr<f32>, #A>
+    %b = "pointerize"(%a) {loop.cluster = 2 : i32, loop.stage = 2 : i32} : (tensor<128x32xf32, #A>) -> tensor<128x32x!tt.ptr<f32>, #A>
+    %c = tt.load %b {loop.cluster = 2 : i32, loop.stage = 2 : i32} : tensor<128x32x!tt.ptr<f32>, #A>
+    "use1"(%c){loop.cluster = 0 : i32, loop.stage = 5 : i32} : (tensor<128x32xf32, #A>) -> ()
+  }
+  tt.return
+}
+}
+
+// -----
+
+#A = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// CHECK-LABEL: @unused_load
+tt.func @unused_load(%lb : index, %ub : index, %step : index,
+                       %a_ptr_init : tensor<128x32x!tt.ptr<f32>, #A>) -> () {
+  // CHECK: scf.for
+  scf.for %iv = %lb to %ub step %step : index {
+    // CHECK: dummy
+    %a = tt.load %a_ptr_init {loop.cluster = 0 : i32, loop.stage = 1 : i32} : tensor<128x32x!tt.ptr<f32>, #A>
+    "dummy"() : () -> ()
+  }
+  tt.return
 }
 }
 

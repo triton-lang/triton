@@ -154,7 +154,7 @@ public:
   // Set <stage, cluster> based on CoarseSchedule.
   void serialize(scf::ForOp &forOp);
   // Create a CoarseSchedule based on forOp's <stage, cluster>.
-  void deSerialize(scf::ForOp &forOp);
+  LogicalResult deSerialize(scf::ForOp &forOp);
 
   LLVM_DUMP_METHOD void dump();
 

@@ -144,9 +144,13 @@ void tt::CoarseSchedule::serialize(scf::ForOp &forOp) {
 }
 
 // Create a CoarseSchedule based on forOp's <stage, cluster>.
-void tt::CoarseSchedule::deSerialize(scf::ForOp &forOp) {
+LogicalResult tt::CoarseSchedule::deSerialize(scf::ForOp &forOp) {
   auto [minClusterId, maxClusterId] = tt::getMinMaxCluster(forOp);
-  numStages = tt::getMaxStage(forOp) + 1;
+  std::optional<int> maxStage = tt::tryGetMaxStage(forOp);
+  if (!maxStage) {
+    return failure();
+  }
+  numStages = *maxStage + 1;
 
   DenseMap<int, tt::CoarseSchedule::Cluster> clustersMap;
   for (int i = minClusterId; i < maxClusterId + 1; i++) {
@@ -158,6 +162,7 @@ void tt::CoarseSchedule::deSerialize(scf::ForOp &forOp) {
     auto [stage, clusterId] = tt::getStageCluster(&op);
     insert(&op, stage, clustersMap[clusterId]);
   }
+  return success();
 }
 
 // TODO: Should this be moved somewhere else?

@@ -257,16 +257,15 @@ std::pair<int, int> mlir::triton::getMinMaxCluster(scf::ForOp &forOp) {
   return std::make_pair(minClusterId, maxClusterId);
 }
 
-int mlir::triton::getMaxStage(scf::ForOp &forOp) {
-  int maxStage = -1;
+std::optional<int> mlir::triton::tryGetMaxStage(scf::ForOp &forOp) {
+  std::optional<int> maxStage = std::nullopt;
   for (auto &op : forOp.getBody()->without_terminator()) {
     if (!op.hasAttr(mlir::triton::kLoopStageAttrName) ||
         !op.hasAttr(mlir::triton::kLoopClusterAttrName))
       continue;
     auto [stage, _] = getStageCluster(&op);
-    maxStage = stage > maxStage ? stage : maxStage;
+    maxStage = maxStage ? (stage > *maxStage ? stage : *maxStage) : stage;
   }
-  assert(maxStage >= 0 && "No ops with stage attribute found");
   return maxStage;
 }
 
