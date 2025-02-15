@@ -120,7 +120,7 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
     for (auto operand : op->getOperands()) {
       auto tensorType = dyn_cast<RankedTensorType>(operand.getType());
       if (tensorType &&
-          !isa<triton::gpu::SharedEncodingAttr>(tensorType.getEncoding())) {
+          !isa<triton::gpu::SharedEncodingTrait>(tensorType.getEncoding())) {
         Type newType = getNewType(tensorType, encoding);
         newArgs.push_back(builder.create<triton::gpu::ConvertLayoutOp>(
             op->getLoc(), newType, operand));
@@ -161,6 +161,7 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
     // For each i/o operation, we determine what layout
     // the pointers should have for best memory coalescing
     llvm::MapVector<Operation *, Attribute> layoutMap;
+    int threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(moduleOp);
     moduleOp.walk([&](Operation *curr) {
       Value ptr = getMemAccessPtr(curr);
       if (!ptr)
@@ -171,10 +172,7 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
         isPtrTensor = isa<PointerType>(tensorType.getElementType());
       if (!isPtrTensor)
         return;
-      auto mod = curr->getParentOfType<ModuleOp>();
-      int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
-      int threadsPerWarp =
-          triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+      int numWarps = lookupNumWarps(curr);
       setCoalescedEncoding(axisInfoAnalysis, curr, numWarps, threadsPerWarp,
                            layoutMap);
     });

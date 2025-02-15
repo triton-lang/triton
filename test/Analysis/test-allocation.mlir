@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --mlir-disable-threading -test-print-allocation 2>&1 | FileCheck %s
+// RUN: triton-opt %s -split-input-file --mlir-disable-threading -test-print-allocation 2>&1 | FileCheck %s --dump-input-context=10
 // RUN: triton-opt %s -split-input-file --mlir-disable-threading -test-print-allocation="get-scratch-size-function=ValidConstant" 2>&1 | FileCheck %s --check-prefix=CHECK-128
 
 // Check there are no lines with a size different to 128 and we have at least a line with size 128.
@@ -10,9 +10,9 @@
 #AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #sliceAd0 = #ttg.slice<{dim = 0, parent = #AL}>
 #BL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
-#A_SHARED = #ttg.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
-#A_SHARED_T = #ttg.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [0, 1]}>
-#B_SHARED = #ttg.shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+#A_SHARED = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+#A_SHARED_T = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [0, 1]}>
+#B_SHARED = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
 #C = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
 #A_DOT = #ttg.dot_op<{opIdx = 0, parent = #C, kWidth = 2}>
 #B_DOT = #ttg.dot_op<{opIdx = 1, parent = #C, kWidth = 2}>
@@ -94,45 +94,45 @@ tt.func @reusable(%A : !tt.ptr<f16>) {
 // %cst3->%g->%h->%i
 // CHECK-LABEL: preallocate
 tt.func @preallocate(%A : !tt.ptr<f16>) {
-  // CHECK: offset = 0, size = 512
+  // CHECK: offset = 2048, size = 512
   %cst0 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // CHECK-NEXT: offset = 1024, size = 512
+  // CHECK-NEXT: offset = 3072, size = 512
   %cst1 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // CHECK-NEXT: offset = 2048, size = 512
+  // CHECK-NEXT: offset = 3584, size = 512
   %cst2 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // CHECK-NEXT: offset = 3072, size = 1024
+  // CHECK-NEXT: offset = 0, size = 1024
   %a = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // CHECK-NEXT: offset = 4096, size = 1024
+  // CHECK-NEXT: offset = 1024, size = 1024
   %b = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
 
   ttg.local_dealloc %cst0 : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // CHECK-NEXT: offset = 0, size = 1024
+  // CHECK-NEXT: offset = 2048, size = 1024
   %c = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
 
   ttg.local_dealloc %cst1 : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   ttg.local_dealloc %cst2 : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
 
-  // CHECK-NEXT: offset = 1024, size = 1024
+  // CHECK-NEXT: offset = 3072, size = 1024
   %cst4 = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // CHECK-NEXT: offset = 6144, size = 2048
+  // CHECK-NEXT: offset = 4096, size = 2048
   %e = ttg.local_alloc : () -> !ttg.memdesc<64x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   ttg.local_dealloc %a : !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // CHECK-NEXT: offset = 8192, size = 2048
+  // CHECK-NEXT: offset = 6144, size = 2048
   %d = ttg.local_alloc : () -> !ttg.memdesc<64x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   ttg.local_dealloc %b : !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // CHECK-NEXT: offset = 10240, size = 2048
+  // CHECK-NEXT: offset = 8192, size = 2048
   %f = ttg.local_alloc : () -> !ttg.memdesc<64x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   ttg.local_dealloc %cst4 : !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   ttg.local_dealloc %c : !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // CHECK-NEXT: offset = 0, size = 2048
+  // CHECK-NEXT: offset = 10240, size = 2048
   %cst5 = ttg.local_alloc : () -> !ttg.memdesc<64x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // CHECK-NEXT: offset = 2048, size = 4096
+  // CHECK-NEXT: offset = 0, size = 4096
   %g = ttg.local_alloc : () -> !ttg.memdesc<128x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   ttg.local_dealloc %e : !ttg.memdesc<64x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // CHECK-NEXT: offset = 2048, size = 4096
+  // CHECK-NEXT: offset = 0, size = 4096
   %h = ttg.local_alloc : () -> !ttg.memdesc<128x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   ttg.local_dealloc %d : !ttg.memdesc<64x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // CHECK-NEXT: offset = 2048, size = 4096
+  // CHECK-NEXT: offset = 0, size = 4096
   %i = ttg.local_alloc : () -> !ttg.memdesc<128x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   ttg.local_dealloc %f : !ttg.memdesc<64x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   ttg.local_dealloc %cst5 : !ttg.memdesc<64x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
@@ -157,49 +157,49 @@ tt.func @unused(%A : !tt.ptr<f16>) {
 // cst0 is alive through the entire function, it cannot be released before the end of the function
 // CHECK-LABEL: longlive
 tt.func @longlive(%A : !tt.ptr<f16>) {
-  // CHECK: offset = 0, size = 512
+  // CHECK: offset = 2048, size = 512
   %cst0 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   // CHECK-NEXT: offset = 1024, size = 512
   %cst1 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // CHECK-NEXT: offset = 2048, size = 512
+  // CHECK-NEXT: offset = 1536, size = 512
   %cst2 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // CHECK-NEXT: offset = 3072, size = 1024
+  // CHECK-NEXT: offset = 0, size = 1024
   %a = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   ttg.local_dealloc %cst1 : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   ttg.local_dealloc %cst2 : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
 
   // CHECK-NEXT: offset = 1024, size = 512
   %cst3 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // CHECK-NEXT: offset = 2048, size = 512
+  // CHECK-NEXT: offset = 1536, size = 512
   %cst4 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // CHECK-NEXT: offset = 3072, size = 1024
+  // CHECK-NEXT: offset = 0, size = 1024
   %b = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // CHECK-NEXT: offset = 3072, size = 512
+  // CHECK-NEXT: offset = 0, size = 512
   %cst5 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // CHECK-NEXT: offset = 3072, size = 512
+  // CHECK-NEXT: offset = 0, size = 512
   %cst6 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // CHECK-NEXT: offset = 3072, size = 1024
+  // CHECK-NEXT: offset = 0, size = 1024
   %c = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   ttg.local_dealloc %cst3 : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   ttg.local_dealloc %cst4 : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // CHECK-NEXT: offset = 1024, size = 1024
+  // CHECK-NEXT: offset = 0, size = 1024
   %d = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   ttg.local_dealloc %cst0 : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   tt.return
-  // CHECK-NEXT: size = 4096
+  // CHECK-NEXT: size = 2560
 }
 
 // This example triggers graph coloring with > 1 colors.
 // CHECK-LABEL: multi_color
 tt.func @multi_color(%A : !tt.ptr<f16>) {
-  // CHECK: offset = 0, size = 64
+  // CHECK: offset = 1152, size = 64
   %cst = ttg.local_alloc : () -> !ttg.memdesc<4x8xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // CHECK-NEXT: offset = 1536, size = 32
+  // CHECK-NEXT: offset = 1472, size = 32
   %cst_0 = ttg.local_alloc : () -> !ttg.memdesc<4x4xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // CHECK-NEXT: offset = 1664, size = 128
+  // CHECK-NEXT: offset = 1216, size = 128
   %cst_1 = ttg.local_alloc : () -> !ttg.memdesc<16x4xf16, #A_SHARED, #ttg.shared_memory, mutable>
   %cst_2 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
-  // CHECK-NEXT: scratch offset = 128, size = 1152
+  // CHECK-NEXT: scratch offset = 0, size = 1152
   %0 = ttg.convert_layout %cst_2 : tensor<16x32xf16, #AL> -> tensor<16x32xf16, #BL>
   %1 = ttg.local_load %cst : !ttg.memdesc<4x8xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<4x8xf16, #AL>
   // CHECK-NEXT: offset = 0, size = 128
@@ -207,22 +207,22 @@ tt.func @multi_color(%A : !tt.ptr<f16>) {
   %2 = ttg.local_load %cst_0 : !ttg.memdesc<4x4xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<4x4xf16, #AL>
   // CHECK-NEXT: scratch offset = 0, size = 1152
   %3 = ttg.convert_layout %cst_2 : tensor<16x32xf16, #AL> -> tensor<16x32xf16, #BL>
-  // CHECK-NEXT: offset = 0, size = 256
+  // CHECK-NEXT: offset = 512, size = 256
   %cst_4 = ttg.local_alloc : () -> !ttg.memdesc<4x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // CHECK-NEXT: offset = 256, size = 64
+  // CHECK-NEXT: offset = 0, size = 64
   %cst_5 = ttg.local_alloc : () -> !ttg.memdesc<4x8xf16, #A_SHARED, #ttg.shared_memory, mutable>
   %4 = ttg.local_load %cst_5 : !ttg.memdesc<4x8xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<4x8xf16, #AL>
   %5 = ttg.local_load %cst_5 : !ttg.memdesc<4x8xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<4x8xf16, #AL>
-  // CHECK-NEXT: offset = 1024, size = 512
+  // CHECK-NEXT: offset = 0, size = 512
   %cst_6 = ttg.local_alloc : () -> !ttg.memdesc<8x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // CHECK-NEXT: offset = 1792, size = 128
+  // CHECK-NEXT: offset = 1344, size = 128
   %cst_7 = ttg.local_alloc : () -> !ttg.memdesc<2x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
   %6 = ttg.local_load %cst_0 : !ttg.memdesc<4x4xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<4x4xf16, #AL>
-  // CHECK-NEXT: offset = 1024, size = 512
+  // CHECK-NEXT: offset = 0, size = 512
   %cst_8 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // CHECK-NEXT: offset = 256, size = 32
+  // CHECK-NEXT: offset = 0, size = 32
   %cst_9 = ttg.local_alloc : () -> !ttg.memdesc<4x4xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // CHECK-NEXT: offset = 1024, size = 512
+  // CHECK-NEXT: offset = 0, size = 512
   %cst_10 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   %7 = ttg.local_load %cst_1 : !ttg.memdesc<16x4xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<16x4xf16, #AL>
   %8 = ttg.local_load %cst_4 : !ttg.memdesc<4x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<4x32xf16, #AL>
@@ -232,34 +232,34 @@ tt.func @multi_color(%A : !tt.ptr<f16>) {
   %10 = ttg.local_load %cst_7 : !ttg.memdesc<2x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<2x32xf16, #AL>
   %cst_12 = arith.constant dense<0.000000e+00> : tensor<4x16xf16, #AL>
   %cst_13 = arith.constant dense<0.000000e+00> : tensor<8x32xf16, #AL>
-  // CHECK-NEXT: size = 1920
+  // CHECK-NEXT: size = 1504
   tt.return
 }
 
 // This example triggers graph coloring with multiple rounds
 // CHECK-LABEL: multi_color_multi_rounds
 tt.func @multi_color_multi_rounds(%arg0: !tt.ptr<f16>) {
-  // CHECK: offset = 0, size = 32
+  // CHECK: offset = 9472, size = 32
   %cst = ttg.local_alloc : () -> !ttg.memdesc<4x4xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // CHECK-NEXT: offset = 1280, size = 128
+  // CHECK-NEXT: offset = 9344, size = 128
   %cst_0 = ttg.local_alloc : () -> !ttg.memdesc<16x4xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // CHECK-NEXT: offset = 2048, size = 8192
+  // CHECK-NEXT: offset = 0, size = 8192
   %cst_1 = ttg.local_alloc : () -> !ttg.memdesc<1024x4xf16, #A_SHARED, #ttg.shared_memory, mutable>
   %cst_2 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
-  // CHECK-NEXT: scratch offset = 128, size = 1152
+  // CHECK-NEXT: scratch offset = 8192, size = 1152
   %0 = ttg.convert_layout %cst_2 : tensor<16x32xf16, #AL> -> tensor<16x32xf16, #BL>
   %1 = ttg.local_load %cst : !ttg.memdesc<4x4xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<4x4xf16, #AL>
-  // CHECK-NEXT: offset = 1152, size = 128
+  // CHECK-NEXT: offset = 8704, size = 128
   %cst_3 = ttg.local_alloc : () -> !ttg.memdesc<2x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
   %2 = ttg.local_load %cst : !ttg.memdesc<4x4xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<4x4xf16, #AL>
-  // CHECK-NEXT: offset = 0, size = 512
+  // CHECK-NEXT: offset = 8192, size = 512
   %cst_4 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   %3 = ttg.local_load %cst_0 : !ttg.memdesc<16x4xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<16x4xf16, #AL>
   %4 = ttg.local_load %cst_1 : !ttg.memdesc<1024x4xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<1024x4xf16, #AL>
   // CHECK-NEXT: scratch offset = 0, size = 1152
   %5 = ttg.convert_layout %cst_2 : tensor<16x32xf16, #AL> -> tensor<16x32xf16, #BL>
   %6 = ttg.local_load %cst_3 : !ttg.memdesc<2x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<2x32xf16, #AL>
-  // CHECK-NEXT: size = 10240
+  // CHECK-NEXT: size = 9504
   tt.return
 }
 
@@ -348,59 +348,59 @@ tt.func @atomic_scalar_no_use(%arg3: !tt.ptr<i32>) {
 // Memory used by B1 can be reused by B0.
 // CHECK-LABEL: if
 tt.func @if(%i1 : i1) {
-  // CHECK: offset = 0, size = 512
+  // CHECK: offset = 1024, size = 512
   %cst0 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // CHECK-NEXT: offset = 1024, size = 512
+  // CHECK-NEXT: offset = 1536, size = 512
   %cst1 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   scf.if %i1 {
-    // CHECK-NEXT: offset = 2048, size = 1024
+    // CHECK-NEXT: offset = 0, size = 1024
     %a = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
-    // CHECK-NEXT: offset = 2048, size = 1024
+    // CHECK-NEXT: offset = 0, size = 1024
     %b = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
     ttg.local_dealloc %cst0 : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
     ttg.local_dealloc %cst1 : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   }
-  // CHECK-NEXT: offset = 0, size = 512
-  %cst2 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   // CHECK-NEXT: offset = 1024, size = 512
+  %cst2 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
+  // CHECK-NEXT: offset = 1536, size = 512
   %cst3 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // CHECK-NEXT: offset = 2048, size = 1024
+  // CHECK-NEXT: offset = 0, size = 1024
   %a = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   ttg.local_dealloc %cst2 : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   ttg.local_dealloc %cst3 : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   tt.return
-  // CHECK-NEXT: size = 3072
+  // CHECK-NEXT: size = 2048
 }
 
 // B0 -> (B1) -> (B2) -> B0
 // Memory used by B0 cannot be reused by B1 or B2.
 // CHECK-LABEL: if_else
 tt.func @if_else(%i1 : i1) {
-  // CHECK: offset = 0, size = 512
+  // CHECK: offset = 1536, size = 512
   %cst0 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // CHECK-NEXT: offset = 1024, size = 512
+  // CHECK-NEXT: offset = 2048, size = 512
   %cst1 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   scf.if %i1 {
-    // CHECK-NEXT: offset = 2048, size = 1024
+    // CHECK-NEXT: offset = 0, size = 1024
     %a = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
-    // CHECK-NEXT: offset = 2048, size = 1024
+    // CHECK-NEXT: offset = 0, size = 1024
     %b = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   } else {
-    // CHECK-NEXT: offset = 2048, size = 512
+    // CHECK-NEXT: offset = 1024, size = 512
     %cst2 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
-    // CHECK-NEXT: offset = 3072, size = 512
+    // CHECK-NEXT: offset = 2560, size = 512
     %cst3 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
-    // CHECK-NEXT: offset = 4096, size = 1024
+    // CHECK-NEXT: offset = 0, size = 1024
     %a = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
     ttg.local_dealloc %cst2 : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
     ttg.local_dealloc %cst3 : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   }
-  // CHECK-NEXT: offset = 2048, size = 1024
+  // CHECK-NEXT: offset = 0, size = 1024
   %a = ttg.local_alloc : () -> !ttg.memdesc<32x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   ttg.local_dealloc %cst0 : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   ttg.local_dealloc %cst1 : !ttg.memdesc<1x16x16xf16, #A_SHARED, #ttg.shared_memory, mutable>
   tt.return
-  // CHECK-NEXT: size = 5120
+  // CHECK-NEXT: size = 3072
 }
 
 // Block arguments and yields are memory aliases that do not trigger a new
@@ -615,4 +615,14 @@ tt.func @call_graph_2(%A : !tt.ptr<f16>, %cond : i1) {
   // CHECK-NEXT: size = 1024
 }
 
+// CHECK-LABEL: scan_alloc
+tt.func @scan_alloc(%x : tensor<8x16xf32, #AL>) {
+  // CHECK: offset = 0, size = 128
+  %a = "tt.scan"(%x) <{axis = 0 : i32, reverse = false}>({
+  ^bb0(%arg0: f32, %arg1: f32):
+    %add = arith.addf %arg0, %arg1 : f32
+    tt.scan.return %add : f32
+  }) : (tensor<8x16xf32, #AL>) -> tensor<8x16xf32, #AL>
+  tt.return
+}
 }

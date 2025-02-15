@@ -104,7 +104,7 @@ void processActivityKernel(
     for (auto *data : dataSet) {
       auto scopeId = parentId;
       if (isAPI)
-        scopeId = data->addScope(parentId, activity->kernel_name);
+        scopeId = data->addOp(parentId, activity->kernel_name);
       data->addMetric(scopeId, convertActivityToMetric(activity));
     }
   } else {
@@ -117,7 +117,7 @@ void processActivityKernel(
     // --- Roctracer thread ---
     // 3. corrId -> numKernels
     for (auto *data : dataSet) {
-      auto externId = data->addScope(parentId, activity->kernel_name);
+      auto externId = data->addOp(parentId, activity->kernel_name);
       data->addMetric(externId, convertActivityToMetric(activity));
     }
   }
@@ -189,6 +189,7 @@ struct RoctracerProfiler::RoctracerProfilerPimpl
       : GPUProfiler<RoctracerProfiler>::GPUProfilerPimplInterface(profiler) {}
   virtual ~RoctracerProfilerPimpl() = default;
 
+  void setLibPath(const std::string &libPath) override {}
   void doStart() override;
   void doFlush() override;
   void doStop() override;
@@ -233,8 +234,7 @@ void RoctracerProfiler::RoctracerProfilerPimpl::apiCallback(
     const hip_api_data_t *data = (const hip_api_data_t *)(callbackData);
     if (data->phase == ACTIVITY_API_PHASE_ENTER) {
       // Valid context and outermost level of the kernel launch
-      auto scopeId = threadState.record();
-      threadState.enterOp(scopeId);
+      threadState.enterOp();
       size_t numInstances = 1;
       if (cid == HIP_API_ID_hipGraphLaunch) {
         pImpl->CorrIdToIsHipGraph[data->correlation_id] = true;
@@ -329,7 +329,7 @@ void RoctracerProfiler::RoctracerProfilerPimpl::activityCallback(
       dynamic_cast<RoctracerProfiler &>(RoctracerProfiler::instance());
   auto *pImpl = dynamic_cast<RoctracerProfiler::RoctracerProfilerPimpl *>(
       profiler.pImpl.get());
-  auto &dataSet = profiler.dataSet;
+  auto dataSet = profiler.getDataSet();
   auto &correlation = profiler.correlation;
 
   const roctracer_record_t *record =

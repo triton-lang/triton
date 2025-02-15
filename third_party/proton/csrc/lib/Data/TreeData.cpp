@@ -95,35 +95,36 @@ public:
 
 private:
   size_t nextContextId = TreeNode::RootId + 1;
-  // tree node id->tree node
+  // tree node id -> tree node
   std::map<size_t, TreeNode> treeNodeMap;
 };
 
 void TreeData::init() { tree = std::make_unique<Tree>(); }
 
-void TreeData::startOp(const Scope &scope) {
+void TreeData::enterScope(const Scope &scope) {
   // enterOp and addMetric maybe called from different threads
   std::unique_lock<std::shared_mutex> lock(mutex);
   std::vector<Context> contexts;
   if (contextSource != nullptr)
     contexts = contextSource->getContexts();
-  contexts.push_back(Context(scope.name));
   auto contextId = tree->addNode(contexts);
   scopeIdToContextId[scope.scopeId] = contextId;
 }
 
-void TreeData::stopOp(const Scope &scope) {}
+void TreeData::exitScope(const Scope &scope) {}
 
-size_t TreeData::addScope(size_t parentScopeId, const std::string &name) {
+size_t TreeData::addOp(size_t scopeId, const std::string &name) {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  auto scopeIdIt = scopeIdToContextId.find(parentScopeId);
-  auto scopeId = parentScopeId;
+  auto scopeIdIt = scopeIdToContextId.find(scopeId);
   if (scopeIdIt == scopeIdToContextId.end()) {
+    // Obtain the current context
     std::vector<Context> contexts;
     if (contextSource != nullptr)
       contexts = contextSource->getContexts();
-    // Record the parent context
-    scopeIdToContextId[parentScopeId] = tree->addNode(contexts);
+    // Add an op under the current context
+    if (!name.empty())
+      contexts.emplace_back(name);
+    scopeIdToContextId[scopeId] = tree->addNode(contexts);
   } else {
     // Add a new context under it and update the context
     scopeId = Scope::getNewScopeId();
@@ -136,7 +137,7 @@ size_t TreeData::addScope(size_t parentScopeId, const std::string &name) {
 void TreeData::addMetric(size_t scopeId, std::shared_ptr<Metric> metric) {
   std::unique_lock<std::shared_mutex> lock(mutex);
   auto scopeIdIt = scopeIdToContextId.find(scopeId);
-  // The profile data is deactived, ignore the metric
+  // The profile data is deactivated, ignore the metric
   if (scopeIdIt == scopeIdToContextId.end())
     return;
   auto contextId = scopeIdIt->second;
@@ -147,30 +148,28 @@ void TreeData::addMetric(size_t scopeId, std::shared_ptr<Metric> metric) {
     node.metrics[metric->getKind()]->updateMetric(*metric);
 }
 
-void TreeData::addMetrics(size_t scopeId,
-                          const std::map<std::string, MetricValueType> &metrics,
-                          bool aggregable) {
+void TreeData::addMetrics(
+    size_t scopeId, const std::map<std::string, MetricValueType> &metrics) {
   std::unique_lock<std::shared_mutex> lock(mutex);
   auto scopeIdIt = scopeIdToContextId.find(scopeId);
-  auto contextId = Tree::TreeNode::DummyId;
-  if (scopeIdIt == scopeIdToContextId.end()) {
-    if (contextSource == nullptr)
-      throw std::runtime_error("ContextSource is not set");
-    // Attribute the metric to the last context
-    std::vector<Context> contexts = contextSource->getContexts();
-    contextId = tree->addNode(contexts);
-  } else {
-    contextId = scopeIdIt->second;
-  }
+  // The profile data is deactivated, ignore the metric
+  if (scopeIdIt == scopeIdToContextId.end())
+    return;
+  auto contextId = scopeIdIt->second;
   auto &node = tree->getNode(contextId);
   for (auto [metricName, metricValue] : metrics) {
-    if (node.flexibleMetrics.find(metricName) == node.flexibleMetrics.end())
-      node.flexibleMetrics.emplace(
-          metricName, FlexibleMetric(metricName, metricValue, aggregable));
-    else {
+    if (node.flexibleMetrics.find(metricName) == node.flexibleMetrics.end()) {
+      node.flexibleMetrics.emplace(metricName,
+                                   FlexibleMetric(metricName, metricValue));
+    } else {
       node.flexibleMetrics.at(metricName).updateValue(metricValue);
     }
   }
+}
+
+void TreeData::clear() {
+  std::unique_lock<std::shared_mutex> lock(mutex);
+  scopeIdToContextId.clear();
 }
 
 void TreeData::dumpHatchet(std::ostream &os) const {
@@ -178,80 +177,84 @@ void TreeData::dumpHatchet(std::ostream &os) const {
   json output = json::array();
   output.push_back(json::object());
   jsonNodes[Tree::TreeNode::RootId] = &(output.back());
-  std::set<std::string> valueNames;
+  std::set<std::string> inclusiveValueNames;
   std::map<uint64_t, std::set<uint64_t>> deviceIds;
-  this->tree->template walk<Tree::WalkPolicy::PreOrder>([&](Tree::TreeNode
-                                                                &treeNode) {
-    const auto contextName = treeNode.name;
-    auto contextId = treeNode.id;
-    json *jsonNode = jsonNodes[contextId];
-    (*jsonNode)["frame"] = {{"name", contextName}, {"type", "function"}};
-    (*jsonNode)["metrics"] = json::object();
-    for (auto [metricKind, metric] : treeNode.metrics) {
-      if (metricKind == MetricKind::Kernel) {
-        std::shared_ptr<KernelMetric> kernelMetric =
-            std::dynamic_pointer_cast<KernelMetric>(metric);
-        uint64_t duration =
-            std::get<uint64_t>(kernelMetric->getValue(KernelMetric::Duration));
-        uint64_t invocations = std::get<uint64_t>(
-            kernelMetric->getValue(KernelMetric::Invocations));
-        uint64_t deviceId =
-            std::get<uint64_t>(kernelMetric->getValue(KernelMetric::DeviceId));
-        uint64_t deviceType = std::get<uint64_t>(
-            kernelMetric->getValue(KernelMetric::DeviceType));
-        std::string deviceTypeName =
-            getDeviceTypeString(static_cast<DeviceType>(deviceType));
-        (*jsonNode)["metrics"]
-                   [kernelMetric->getValueName(KernelMetric::Duration)] =
-                       duration;
-        (*jsonNode)["metrics"]
-                   [kernelMetric->getValueName(KernelMetric::Invocations)] =
-                       invocations;
-        (*jsonNode)["metrics"]
-                   [kernelMetric->getValueName(KernelMetric::DeviceId)] =
-                       std::to_string(deviceId);
-        (*jsonNode)["metrics"]
-                   [kernelMetric->getValueName(KernelMetric::DeviceType)] =
-                       deviceTypeName;
-        valueNames.insert(kernelMetric->getValueName(KernelMetric::Duration));
-        valueNames.insert(
-            kernelMetric->getValueName(KernelMetric::Invocations));
-        deviceIds.insert({deviceType, {deviceId}});
-      } else if (metricKind == MetricKind::PCSampling) {
-        auto pcSamplingMetric =
-            std::dynamic_pointer_cast<PCSamplingMetric>(metric);
-        for (size_t i = 0; i < PCSamplingMetric::Count; i++) {
-          auto valueName = pcSamplingMetric->getValueName(i);
-          valueNames.insert(valueName);
+  this->tree->template walk<Tree::WalkPolicy::PreOrder>(
+      [&](Tree::TreeNode &treeNode) {
+        const auto contextName = treeNode.name;
+        auto contextId = treeNode.id;
+        json *jsonNode = jsonNodes[contextId];
+        (*jsonNode)["frame"] = {{"name", contextName}, {"type", "function"}};
+        (*jsonNode)["metrics"] = json::object();
+        for (auto [metricKind, metric] : treeNode.metrics) {
+          if (metricKind == MetricKind::Kernel) {
+            std::shared_ptr<KernelMetric> kernelMetric =
+                std::dynamic_pointer_cast<KernelMetric>(metric);
+            uint64_t duration = std::get<uint64_t>(
+                kernelMetric->getValue(KernelMetric::Duration));
+            uint64_t invocations = std::get<uint64_t>(
+                kernelMetric->getValue(KernelMetric::Invocations));
+            uint64_t deviceId = std::get<uint64_t>(
+                kernelMetric->getValue(KernelMetric::DeviceId));
+            uint64_t deviceType = std::get<uint64_t>(
+                kernelMetric->getValue(KernelMetric::DeviceType));
+            std::string deviceTypeName =
+                getDeviceTypeString(static_cast<DeviceType>(deviceType));
+            (*jsonNode)["metrics"]
+                       [kernelMetric->getValueName(KernelMetric::Duration)] =
+                           duration;
+            (*jsonNode)["metrics"]
+                       [kernelMetric->getValueName(KernelMetric::Invocations)] =
+                           invocations;
+            (*jsonNode)["metrics"]
+                       [kernelMetric->getValueName(KernelMetric::DeviceId)] =
+                           std::to_string(deviceId);
+            (*jsonNode)["metrics"]
+                       [kernelMetric->getValueName(KernelMetric::DeviceType)] =
+                           deviceTypeName;
+            inclusiveValueNames.insert(
+                kernelMetric->getValueName(KernelMetric::Duration));
+            inclusiveValueNames.insert(
+                kernelMetric->getValueName(KernelMetric::Invocations));
+            deviceIds.insert({deviceType, {deviceId}});
+          } else if (metricKind == MetricKind::PCSampling) {
+            auto pcSamplingMetric =
+                std::dynamic_pointer_cast<PCSamplingMetric>(metric);
+            for (size_t i = 0; i < PCSamplingMetric::Count; i++) {
+              auto valueName = pcSamplingMetric->getValueName(i);
+              inclusiveValueNames.insert(valueName);
+              std::visit(
+                  [&](auto &&value) {
+                    (*jsonNode)["metrics"][valueName] = value;
+                  },
+                  pcSamplingMetric->getValues()[i]);
+            }
+          } else {
+            throw std::runtime_error("MetricKind not supported");
+          }
+        }
+        for (auto [_, flexibleMetric] : treeNode.flexibleMetrics) {
+          auto valueName = flexibleMetric.getValueName(0);
+          if (!flexibleMetric.isExclusive(0))
+            inclusiveValueNames.insert(valueName);
           std::visit(
               [&](auto &&value) { (*jsonNode)["metrics"][valueName] = value; },
-              pcSamplingMetric->getValues()[i]);
+              flexibleMetric.getValues()[0]);
         }
-      } else {
-        throw std::runtime_error("MetricKind not supported");
-      }
-    }
-    for (auto [_, flexibleMetric] : treeNode.flexibleMetrics) {
-      auto valueName = flexibleMetric.getValueName(0);
-      valueNames.insert(valueName);
-      std::visit(
-          [&](auto &&value) { (*jsonNode)["metrics"][valueName] = value; },
-          flexibleMetric.getValues()[0]);
-    }
-    (*jsonNode)["children"] = json::array();
-    auto children = treeNode.children;
-    for (auto _ : children) {
-      (*jsonNode)["children"].push_back(json::object());
-    }
-    auto idx = 0;
-    for (auto child : children) {
-      auto [index, childId] = child;
-      jsonNodes[childId] = &(*jsonNode)["children"][idx];
-      idx++;
-    }
-  });
-  // Hints for all available metrics
-  for (auto valueName : valueNames) {
+        (*jsonNode)["children"] = json::array();
+        auto children = treeNode.children;
+        for (auto _ : children) {
+          (*jsonNode)["children"].push_back(json::object());
+        }
+        auto idx = 0;
+        for (auto child : children) {
+          auto [index, childId] = child;
+          jsonNodes[childId] = &(*jsonNode)["children"][idx];
+          idx++;
+        }
+      });
+  // Hints for all inclusive metrics
+  for (auto valueName : inclusiveValueNames) {
     output[Tree::TreeNode::RootId]["metrics"][valueName] = 0;
   }
   // Prepare the device information
@@ -279,7 +282,6 @@ void TreeData::dumpHatchet(std::ostream &os) const {
 }
 
 void TreeData::doDump(std::ostream &os, OutputFormat outputFormat) const {
-  std::shared_lock<std::shared_mutex> lock(mutex);
   if (outputFormat == OutputFormat::Hatchet) {
     dumpHatchet(os);
   } else {

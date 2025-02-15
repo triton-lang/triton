@@ -3,6 +3,7 @@
 
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
+#include "llvm/TargetParser/TargetParser.h"
 #include <string>
 
 namespace mlir::triton::AMD {
@@ -11,6 +12,8 @@ public:
   explicit TargetInfo(std::string arch) : arch(std::move(arch)) {}
 
   ISAFamily getISAFamily() const { return deduceISAFamily(arch); }
+
+  llvm::AMDGPU::GPUKind getGPUKind() const;
 
   int getSharedMemorySize() const;
 
@@ -27,6 +30,7 @@ public:
   Value loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
                     std::optional<Value> ctaId, Type elemTy,
                     Value pred) const override;
+  bool canUseLDSTransLoad(int bitwidth) const;
 
   bool canUseStMatrix(RankedTensorType tensorTy, ArrayRef<unsigned> repShape,
                       ArrayRef<unsigned> paddedRepShape,
@@ -64,6 +68,9 @@ public:
   int getSharedAddressSpace() const override;
 
   bool supportVectorizedAtomics() const override;
+
+  void storeOpAnnotation(triton::gpu::LocalStoreOp op, size_t localStoreOpCount,
+                         Type type) const override;
 
 private:
   void printfImpl(Value formatStrStart, int formatStrByteCount, ValueRange args,

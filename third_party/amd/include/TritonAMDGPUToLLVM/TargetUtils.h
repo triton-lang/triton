@@ -11,6 +11,7 @@ enum class ISAFamily {
   CDNA1,
   CDNA2,
   CDNA3,
+  CDNA4,
   RDNA1,
   RDNA2,
   RDNA3,
@@ -18,6 +19,9 @@ enum class ISAFamily {
 
 // Deduces the corresponding ISA family for the given target gfx |arch|.
 ISAFamily deduceISAFamily(llvm::StringRef arch);
+
+// Retursn true if given architecture support V_DOT instruction.
+bool supportsVDot(llvm::StringRef arch);
 
 // Here is a partial definition of DppCtrl enums. For the complete definition,
 // please check:

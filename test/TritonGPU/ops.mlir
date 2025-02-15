@@ -47,3 +47,135 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
     tt.return
   }
 }
+
+// -----
+
+#shared0 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: memdesc
+  // CHECK-SAME: !ttg.memdesc<1x64x16xf16, #{{.+}}>
+  tt.func @memdesc(%d : !ttg.memdesc<1x64x16xf16, #shared0, #smem>) {
+    tt.return
+  }
+}
+
+// -----
+
+// CHECK-LABEL: @warp_specialize_nothing
+tt.func @warp_specialize_nothing() {
+  // CHECK-NEXT: ttg.warp_specialize()
+  ttg.warp_specialize()
+  // CHECK-NEXT: default {
+  default {
+    // CHECK-NEXT: ttg.warp_yield
+    ttg.warp_yield
+  // CHECK-NEXT: } : () -> ()
+  } : () -> ()
+  tt.return
+}
+
+// CHECK-LABEL: @warp_specialize_no_partitions
+tt.func @warp_specialize_no_partitions(%arg0: i32, %arg1: i64) -> i64 {
+  // CHECK-NEXT: %0 = ttg.warp_specialize(%arg0)
+  %0 = ttg.warp_specialize(%arg0)
+  // CHECK-NEXT: default {
+  default {
+    // CHECK-NEXT: ttg.warp_yield %arg1 : i64
+    ttg.warp_yield %arg1 : i64
+  // CHECK-NEXT: } : (i32) -> i64
+  } : (i32) -> i64
+  tt.return %0 : i64
+}
+
+// CHECK-LABEL: @warp_specialize_partitions
+tt.func @warp_specialize_partitions(%arg0: i32, %arg1: i64) -> i64 {
+  // CHECK-NEXT: %0 = ttg.warp_specialize(%arg0)
+  %0 = ttg.warp_specialize(%arg0)
+  // CHECK-NEXT: default {
+  default {
+    // CHECK-NEXT: ttg.warp_yield %arg1 : i64
+    ttg.warp_yield %arg1 : i64
+  // CHECK-NEXT: }
+  }
+  // CHECK-NEXT: partition0(%arg2: i32) num_warps(4) {
+  partition0(%arg2: i32) num_warps(4) {
+    // CHECK-NEXT: arith.addi %arg2, %arg2 : i32
+    %1 = arith.addi %arg2, %arg2 : i32
+  // CHECK-NEXT: }
+  }
+  // CHECK-NEXT: partition1(%arg2: i32) num_warps(1) {
+  partition1(%arg2: i32) num_warps(1) {
+  // CHECK-NEXT: }
+  }
+  // CHECK-NEXT: partition2(%arg2: i32) num_warps(8) {
+  partition2(%arg2: i32) num_warps(8) {
+    // CHECK-NEXT: arith.muli
+    %1 = arith.muli %arg2, %arg2 : i32
+  // CHECK-NEXT: } : (i32) -> i64
+  } : (i32) -> i64
+  tt.return %0 : i64
+}
+
+// CHECK-LABEL: @warp_specialize_multiple_args
+tt.func @warp_specialize_multiple_args_res(%arg0: i32, %arg1: i32) -> (i32, i32) {
+  // CHECK-NEXT: %0:2 = ttg.warp_specialize(%arg0, %arg1)
+  %0:2 = ttg.warp_specialize(%arg0, %arg1)
+  // CHECK-NEXT: default {
+  default {
+    // CHECK-NEXT: ttg.warp_yield %arg0, %arg1 : i32, i32
+    ttg.warp_yield %arg0, %arg1 : i32, i32
+  // CHECK-NEXT: }
+  }
+  // CHECK-NEXT: partition0(%arg2: i32, %arg3: i32) num_warps(4) {
+  partition0(%arg2: i32, %arg3: i32) num_warps(4) {
+    // CHECK-NEXT: arith.addi %arg2, %arg3 : i32
+    %1 = arith.addi %arg2, %arg3 : i32
+  // CHECK-NEXT: } : (i32, i32) -> (i32, i32)
+  } : (i32, i32) -> (i32, i32)
+  tt.return %0#0, %0#1 : i32, i32
+}
+
+// -----
+
+// CHECK-DAG: [[BLOCKED_1_WARPS:#.*]] = #ttg.blocked{{.*}} warpsPerCTA = [1]
+#blocked_1_warps = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+// CHECK-DAG: [[BLOCKED_2_WARPS:#.*]] = #ttg.blocked{{.*}} warpsPerCTA = [2]
+#blocked_2_warps = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [2], order = [0]}>
+// CHECK-DAG: [[BLOCKED_4_WARPS:#.*]] = #ttg.blocked{{.*}} warpsPerCTA = [4]
+#blocked_4_warps = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+// CHECK-DAG: [[BLOCKED_8_WARPS:#.*]] = #ttg.blocked{{.*}} warpsPerCTA = [8]
+#blocked_8_warps = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [8], order = [0]}>
+
+module attributes {"ttg.num-warps" = 4 : i32} {
+
+// CHECK: @function_scope
+tt.func @function_scope() attributes {"ttg.num-warps" = 8 : i32} {
+  // CHECK-NEXT: tt.make_range {{.*}} tensor<128xi32, [[BLOCKED_8_WARPS]]>
+  tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked_8_warps>
+  tt.return
+}
+
+// CHECK: @function_no_scope
+tt.func @function_no_scope() {
+  // CHECK-NEXT: tt.make_range {{.*}} tensor<128xi32, [[BLOCKED_4_WARPS]]>
+  tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked_4_warps>
+  // CHECK-NEXT: ttg.warp_specialize()
+  ttg.warp_specialize()
+  default {
+    ttg.warp_yield
+  }
+  // CHECK: partition0() num_warps(2)
+  partition0() num_warps(2) {
+    // CHECK-NEXT: tt.make_range {{.*}} tensor<128xi32, [[BLOCKED_2_WARPS]]>
+    tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked_2_warps>
+  }
+  // CHECK: partition1() num_warps(1)
+  partition1() num_warps(1) {
+    // CHECK-NEXT: tt.make_range {{.*}} tensor<128xi32, [[BLOCKED_1_WARPS]]>
+    tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked_1_warps>
+  } : () -> ()
+  tt.return
+}
+
+}

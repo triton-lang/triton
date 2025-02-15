@@ -33,12 +33,38 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h.inc"
-#include "triton/Dialect/TritonNvidiaGPU/IR/Types.h"
 
 #define GET_ATTRDEF_CLASSES
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUAttrDefs.h.inc"
 
+#include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUOpInterfaces.h.inc"
+
 #define GET_OP_CLASSES
 #include "triton/Dialect/TritonNvidiaGPU/IR/Ops.h.inc"
+
+namespace mlir::triton::nvidia_gpu {
+
+struct TensorMemory : public SideEffects::Resource::Base<TensorMemory> {
+  StringRef getName() final { return "<TensorMemory>"; }
+};
+
+struct TMemAllocation {
+  TMemAllocation(int numCols, int numRows)
+      : numCols(numCols), numRows(numRows) {}
+  int numRows;
+  int numCols;
+};
+
+TMemAllocation getTmemAllocSizes(gpu::MemDescType memDescType);
+
+Attribute getTmemCompatibleLayout(unsigned M, unsigned N,
+                                  ArrayRef<int64_t> shape, unsigned numWarps,
+                                  triton::gpu::CTALayoutAttr ctaLayout);
+
+bool isDistributedLayoutTMemCompatible(Operation *op,
+                                       RankedTensorType tensorType,
+                                       gpu::MemDescType memType);
+
+} // namespace mlir::triton::nvidia_gpu
 
 #endif // TRITON_DIALECT_TRITONNVIDIAGPU_IR_DIALECT_H_

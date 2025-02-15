@@ -1,5 +1,7 @@
 #include "TargetInfo.h"
+#include "SchedInstructions.h"
 #include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
+#include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -27,11 +29,12 @@ LLVM::LLVMFuncOp getOrInsertFunction(T &moduleOp, const Location loc,
 Value printfPromoteValue(RewriterBase &rewriter, Value value) {
   auto *context = rewriter.getContext();
   auto loc = UnknownLoc::get(context);
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto type = value.getType();
 
   if (isa<LLVM::LLVMPointerType>(type)) {
     // The llvm.ptrtoint op requires signless integer types.
-    return ptrtoint(i64_ty, value);
+    return b.ptrtoint(i64_ty, value);
   }
 
   assert(type.getIntOrFloatBitWidth() <= 64);
@@ -39,23 +42,27 @@ Value printfPromoteValue(RewriterBase &rewriter, Value value) {
   if (auto floatType = dyn_cast<FloatType>(type)) {
     Value newValue = value;
     if (!floatType.isF64())
-      newValue = fpext(f64_ty, newValue);
-    return bitcast(newValue, i64_ty);
+      newValue = b.fpext(f64_ty, newValue);
+    return b.bitcast(newValue, i64_ty);
   }
 
   assert(type.isIntOrIndex());
   if (type.getIntOrFloatBitWidth() < 64) {
     if (type.isUnsignedInteger())
-      return zext(ui64_ty, value);
+      return b.zext(ui64_ty, value);
     if (type.isSignedInteger())
-      return sext(i64_ty, value);
+      return b.sext(i64_ty, value);
     // Signless integers are printed using unsigned integer formats.
-    return zext(i64_ty, value);
+    return b.zext(i64_ty, value);
   }
 
   return value;
 }
 } // namespace
+
+llvm::AMDGPU::GPUKind TargetInfo::getGPUKind() const {
+  return llvm::AMDGPU::parseArchAMDGCN(arch);
+}
 
 int TargetInfo::getSharedMemorySize() const { return 64 * 1024; }
 
@@ -92,6 +99,10 @@ bool TargetInfo::canUseStMatrix(RankedTensorType tensorTy,
                                 int swizzleByteSize) const {
   // AMD does not support stmatrix
   return false;
+}
+
+bool TargetInfo::canUseLDSTransLoad(int bitwidth) const {
+  return arch == "gfx950" && llvm::is_contained({16, 8, 4, 6}, bitwidth);
 }
 
 void TargetInfo::storeMatrixShared(RewriterBase &rewriter, Location loc,
@@ -141,16 +152,17 @@ Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
 static inline Type castToAndSExtInt(RewriterBase &rewriter, Location loc,
                                     Value &val, Type fromType,
                                     unsigned toBits) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   unsigned originalBits = fromType.getIntOrFloatBitWidth();
   Type toType = fromType;
 
   if (!fromType.isIntOrIndex()) {
-    val = bitcast(val, int_ty(originalBits));
+    val = b.bitcast(val, int_ty(originalBits));
     toType = int_ty(originalBits);
   }
 
   if (originalBits < toBits) {
-    val = sext(int_ty(toBits), val);
+    val = b.sext(int_ty(toBits), val);
     toType = int_ty(toBits);
   }
 
@@ -163,15 +175,16 @@ static inline Type castToAndSExtInt(RewriterBase &rewriter, Location loc,
 static inline Value truncAndCastFromInt(RewriterBase &rewriter, Location loc,
                                         Value val, Type valType,
                                         unsigned fromBits) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   unsigned originalBits = valType.getIntOrFloatBitWidth();
   Value toVal = val;
 
   if (originalBits < fromBits) {
-    toVal = trunc(int_ty(originalBits), toVal);
+    toVal = b.trunc(int_ty(originalBits), toVal);
   }
 
   if (!valType.isIntOrIndex()) {
-    toVal = bitcast(toVal, valType);
+    toVal = b.bitcast(toVal, valType);
   }
 
   return toVal;
@@ -181,11 +194,13 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
                             unsigned numLaneToReduce,
                             unsigned interleave) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   if (numLaneToReduce != 64)
     return false;
 
-  if (auto family = getISAFamily();
-      family != ISAFamily::CDNA3 && family != ISAFamily::CDNA2) {
+  if (!llvm::is_contained(
+          {ISAFamily::CDNA2, ISAFamily::CDNA3, ISAFamily::CDNA4},
+          getISAFamily())) {
     return false;
   }
 
@@ -303,7 +318,7 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
     std::string intrinsic = "llvm.amdgcn.readlane";
     Value result =
         LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, actualType,
-                                        ValueRange{buf, i32_val(63)})
+                                        ValueRange{buf, b.i32_val(63)})
             ->getResult(0);
 
     result = truncAndCastFromInt(rewriter, loc, result, valType, 16);
@@ -320,6 +335,7 @@ void TargetInfo::printfImpl(Value formatStrStart, int formatStrByteCount,
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   auto *ctx = rewriter.getContext();
   mlir::Location loc = UnknownLoc::get(ctx);
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
 
   // See
   // https://github.com/ROCm/ROCm-Device-Libs/blob/rocm-6.0.x/ockl/src/services.cl#L263-L361
@@ -345,16 +361,16 @@ void TargetInfo::printfImpl(Value formatStrStart, int formatStrByteCount,
   // Emit the intrinsic function call to begin the printf.
   Value zeroI64 = rewriter.create<LLVM::ConstantOp>(loc, i64_ty, 0);
   Value message =
-      call(printBeginFn, useStdErr ? ValueRange() : zeroI64).getResult();
+      b.call(printBeginFn, useStdErr ? ValueRange() : zeroI64).getResult();
 
   // Emit the intrinsic function call to handle the printf format string.
-  Value oneI32 = i32_val(1);
-  Value zeroI32 = i32_val(0);
+  Value oneI32 = b.i32_val(1);
+  Value zeroI32 = b.i32_val(0);
   Value formatStrLen =
       rewriter.create<LLVM::ConstantOp>(loc, i64_ty, formatStrByteCount);
   SmallVector<Value, 4> arguments = {message, formatStrStart, formatStrLen,
                                      args.empty() ? oneI32 : zeroI32};
-  message = call(printStrFn, arguments).getResult();
+  message = b.call(printStrFn, arguments).getResult();
 
   // Emit the intrinsic function call to handle arguments iteratively.
   // We can only handle at most 7 values each time.
@@ -365,7 +381,7 @@ void TargetInfo::printfImpl(Value formatStrStart, int formatStrByteCount,
 
     SmallVector<Value, 2 + kArgsPerGroup + 1> arguments;
     arguments.push_back(message);
-    arguments.push_back(i32_val(numArgs));
+    arguments.push_back(b.i32_val(numArgs));
     for (size_t i = group; i < bound; ++i) {
       arguments.push_back(printfPromoteValue(rewriter, args[i]));
     }
@@ -376,7 +392,7 @@ void TargetInfo::printfImpl(Value formatStrStart, int formatStrByteCount,
 
     Value isLast = (bound == args.size()) ? oneI32 : zeroI32;
     arguments.push_back(isLast);
-    message = call(printArgsFn, arguments).getResult();
+    message = b.call(printArgsFn, arguments).getResult();
   }
 }
 
@@ -407,6 +423,7 @@ void TargetInfo::printf(RewriterBase &rewriter, StringRef msg,
 void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
                             StringRef message, StringRef file, StringRef func,
                             int line) const {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   // Compose and print an assert message.
   llvm::SmallString<256> msgBuffer;
   llvm::Twine("device assertion failed: '" + message + "', in " + func +
@@ -419,7 +436,7 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
 
   // Set block barrrier before aborting kernel, give a chance for all
   // the threads in a block to check/print the assert failure.
-  barrier();
+  b.barrier();
   // Perform the trap to abort the kernel.
   rewriter.create<LLVM::Trap>(loc);
 }
@@ -430,6 +447,11 @@ bool TargetInfo::supportVectorizedAtomics() const {
   // Note: not currently tested or used, but AMD generally supports vectorized
   // atomics.
   return true;
+}
+
+void TargetInfo::storeOpAnnotation(triton::gpu::LocalStoreOp op,
+                                   size_t localStoreOpCount, Type type) const {
+  storeOpSchedAnnotations(op, localStoreOpCount, type);
 }
 
 } // namespace mlir::triton::AMD

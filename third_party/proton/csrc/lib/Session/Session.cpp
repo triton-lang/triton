@@ -9,17 +9,17 @@
 namespace proton {
 
 namespace {
-Profiler *getProfiler(const std::string &profilerName) {
-  if (proton::toLower(profilerName) == "cupti") {
-    return &CuptiProfiler::instance();
+Profiler *getProfiler(const std::string &name, const std::string &path) {
+  if (proton::toLower(name) == "cupti") {
+    return &CuptiProfiler::instance().setLibPath(path);
   }
-  if (proton::toLower(profilerName) == "cupti_pcsampling") {
-    return &CuptiProfiler::instance().enablePCSampling();
+  if (proton::toLower(name) == "cupti_pcsampling") {
+    return &CuptiProfiler::instance().setLibPath(path).enablePCSampling();
   }
-  if (proton::toLower(profilerName) == "roctracer") {
+  if (proton::toLower(name) == "roctracer") {
     return &RoctracerProfiler::instance();
   }
-  throw std::runtime_error("Unknown profiler: " + profilerName);
+  throw std::runtime_error("Unknown profiler: " + name);
 }
 
 std::unique_ptr<Data> makeData(const std::string &dataName,
@@ -61,6 +61,7 @@ void Session::activate() {
 void Session::deactivate() {
   profiler->flush();
   profiler->unregisterData(data.get());
+  data->clear();
 }
 
 void Session::finalize(OutputFormat outputFormat) {
@@ -70,8 +71,9 @@ void Session::finalize(OutputFormat outputFormat) {
 
 std::unique_ptr<Session> SessionManager::makeSession(
     size_t id, const std::string &path, const std::string &profilerName,
-    const std::string &contextSourceName, const std::string &dataName) {
-  auto profiler = getProfiler(profilerName);
+    const std::string &profilerPath, const std::string &contextSourceName,
+    const std::string &dataName) {
+  auto profiler = getProfiler(profilerName, profilerPath);
   auto contextSource = makeContextSource(contextSourceName);
   auto data = makeData(dataName, path, contextSource.get());
   auto *session = new Session(id, path, profiler, std::move(contextSource),
@@ -80,24 +82,24 @@ std::unique_ptr<Session> SessionManager::makeSession(
 }
 
 void SessionManager::activateSession(size_t sessionId) {
-  std::unique_lock<std::shared_mutex> lock(mutex);
+  std::lock_guard<std::mutex> lock(mutex);
   activateSessionImpl(sessionId);
 }
 
 void SessionManager::activateAllSessions() {
-  std::unique_lock<std::shared_mutex> lock(mutex);
+  std::lock_guard<std::mutex> lock(mutex);
   for (auto iter : sessionActive) {
     activateSessionImpl(iter.first);
   }
 }
 
 void SessionManager::deactivateSession(size_t sessionId) {
-  std::unique_lock<std::shared_mutex> lock(mutex);
+  std::lock_guard<std::mutex> lock(mutex);
   deActivateSessionImpl(sessionId);
 }
 
 void SessionManager::deactivateAllSessions() {
-  std::unique_lock<std::shared_mutex> lock(mutex);
+  std::lock_guard<std::mutex> lock(mutex);
   for (auto iter : sessionActive) {
     deActivateSessionImpl(iter.first);
   }
@@ -138,9 +140,10 @@ void SessionManager::removeSession(size_t sessionId) {
 
 size_t SessionManager::addSession(const std::string &path,
                                   const std::string &profilerName,
+                                  const std::string &profilerPath,
                                   const std::string &contextSourceName,
                                   const std::string &dataName) {
-  std::unique_lock<std::shared_mutex> lock(mutex);
+  std::lock_guard<std::mutex> lock(mutex);
   if (hasSession(path)) {
     auto sessionId = getSessionId(path);
     activateSessionImpl(sessionId);
@@ -148,14 +151,14 @@ size_t SessionManager::addSession(const std::string &path,
   }
   auto sessionId = nextSessionId++;
   sessionPaths[path] = sessionId;
-  sessions[sessionId] =
-      makeSession(sessionId, path, profilerName, contextSourceName, dataName);
+  sessions[sessionId] = makeSession(sessionId, path, profilerName, profilerPath,
+                                    contextSourceName, dataName);
   return sessionId;
 }
 
 void SessionManager::finalizeSession(size_t sessionId,
                                      OutputFormat outputFormat) {
-  std::unique_lock<std::shared_mutex> lock(mutex);
+  std::lock_guard<std::mutex> lock(mutex);
   if (!hasSession(sessionId)) {
     return;
   }
@@ -165,7 +168,7 @@ void SessionManager::finalizeSession(size_t sessionId,
 }
 
 void SessionManager::finalizeAllSessions(OutputFormat outputFormat) {
-  std::unique_lock<std::shared_mutex> lock(mutex);
+  std::lock_guard<std::mutex> lock(mutex);
   auto sessionIds = std::vector<size_t>{};
   for (auto &[sessionId, session] : sessions) {
     deActivateSessionImpl(sessionId);
@@ -178,7 +181,7 @@ void SessionManager::finalizeAllSessions(OutputFormat outputFormat) {
 }
 
 void SessionManager::enterScope(const Scope &scope) {
-  std::shared_lock<std::shared_mutex> lock(mutex);
+  std::lock_guard<std::mutex> lock(mutex);
   for (auto iter : scopeInterfaceCounts) {
     auto [scopeInterface, count] = iter;
     if (count > 0) {
@@ -188,7 +191,7 @@ void SessionManager::enterScope(const Scope &scope) {
 }
 
 void SessionManager::exitScope(const Scope &scope) {
-  std::shared_lock<std::shared_mutex> lock(mutex);
+  std::lock_guard<std::mutex> lock(mutex);
   for (auto iter : scopeInterfaceCounts) {
     auto [scopeInterface, count] = iter;
     if (count > 0) {
@@ -198,7 +201,7 @@ void SessionManager::exitScope(const Scope &scope) {
 }
 
 void SessionManager::enterOp(const Scope &scope) {
-  std::shared_lock<std::shared_mutex> lock(mutex);
+  std::lock_guard<std::mutex> lock(mutex);
   for (auto iter : opInterfaceCounts) {
     auto [opInterface, count] = iter;
     if (count > 0) {
@@ -208,7 +211,7 @@ void SessionManager::enterOp(const Scope &scope) {
 }
 
 void SessionManager::exitOp(const Scope &scope) {
-  std::shared_lock<std::shared_mutex> lock(mutex);
+  std::lock_guard<std::mutex> lock(mutex);
   for (auto iter : opInterfaceCounts) {
     auto [opInterface, count] = iter;
     if (count > 0) {
@@ -218,18 +221,17 @@ void SessionManager::exitOp(const Scope &scope) {
 }
 
 void SessionManager::addMetrics(
-    size_t scopeId, const std::map<std::string, MetricValueType> &metrics,
-    bool aggregable) {
-  std::shared_lock<std::shared_mutex> lock(mutex);
+    size_t scopeId, const std::map<std::string, MetricValueType> &metrics) {
+  std::lock_guard<std::mutex> lock(mutex);
   for (auto [sessionId, active] : sessionActive) {
     if (active) {
-      sessions[sessionId]->data->addMetrics(scopeId, metrics, aggregable);
+      sessions[sessionId]->data->addMetrics(scopeId, metrics);
     }
   }
 }
 
 void SessionManager::setState(std::optional<Context> context) {
-  std::shared_lock<std::shared_mutex> lock(mutex);
+  std::lock_guard<std::mutex> lock(mutex);
   for (auto iter : contextSourceCounts) {
     auto [contextSource, count] = iter;
     if (count > 0) {

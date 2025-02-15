@@ -7,11 +7,27 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "llvm/Support/Casting.h"
 
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
+
+bool mlir::triton::loopHasDistGreaterThanOne(scf::ForOp forOp) {
+  return llvm::any_of(forOp.getBody()->getTerminator()->getOperands(),
+                      [](Value operand) {
+                        Operation *def = operand.getDefiningOp();
+                        return !def;
+                      });
+}
+
+bool mlir::triton::isOuterLoop(scf::ForOp forOp) {
+  return llvm::any_of(forOp.getBody()->getOperations(), [](Operation &op) {
+    return isa<scf::ForOp, scf::WhileOp>(op);
+  });
+}
 
 // Combine the current mask with the given predicate.
 static Value getPredMask(RewriterBase &rewriter, Type typeLike,
@@ -37,6 +53,8 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
   if (isa<ttg::AsyncCommitGroupOp, ttg::AsyncWaitOp>(op))
     return op;
   if (isa<ttg::LocalLoadOp, ttg::LocalStoreOp>(op))
+    return op;
+  if (isa<ttng::TMEMAllocOp, ttng::TMEMCopyOp>(op))
     return op;
   if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
     rewriter.setInsertionPoint(op);
@@ -66,11 +84,42 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     copyOp.getPredMutable().assign(mask);
     return op;
   }
+  if (auto gatherOp = dyn_cast<ttng::AsyncTMAGatherOp>(op)) {
+    rewriter.setInsertionPoint(gatherOp);
+    Value mask = getPredMask(rewriter, gatherOp.getPred().getType(),
+                             gatherOp.getPred(), pred);
+    gatherOp.getPredMutable().assign(mask);
+    return op;
+  }
   if (auto expectOp = dyn_cast<ttng::BarrierExpectOp>(op)) {
     rewriter.setInsertionPoint(expectOp);
     Value mask = getPredMask(rewriter, expectOp.getPred().getType(),
                              expectOp.getPred(), pred);
     expectOp.getPredMutable().assign(mask);
+    return op;
+  }
+  if (auto mmav5Op = dyn_cast<ttng::MMAv5OpInterface>(op)) {
+    rewriter.setInsertionPoint(mmav5Op);
+    auto currPred = mmav5Op.getPredicate();
+    Value mask = getPredMask(rewriter, currPred.getType(), currPred, pred);
+    mmav5Op.setPredicate(mask);
+    return op;
+  }
+  if (auto tmemStoreOp = dyn_cast<ttng::TMEMStoreOp>(op)) {
+    rewriter.setInsertionPoint(tmemStoreOp);
+    Value mask = getPredMask(rewriter, tmemStoreOp.getPred().getType(),
+                             tmemStoreOp.getPred(), pred);
+    tmemStoreOp.getPredMutable().assign(mask);
+    return op;
+  }
+  if (auto waitBarrier = dyn_cast<ttng::WaitBarrierOp>(op)) {
+    rewriter.setInsertionPoint(waitBarrier);
+    Value mask = pred;
+    Value currentPred = waitBarrier.getPred();
+    if (currentPred) {
+      mask = getPredMask(rewriter, currentPred.getType(), currentPred, pred);
+    }
+    waitBarrier.getPredMutable().assign(mask);
     return op;
   }
   if (auto storeOp = dyn_cast<tt::StoreOp>(op)) {
@@ -80,8 +129,16 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     storeOp.getMaskMutable().assign(mask);
     return op;
   }
+  if (auto atomicRMWOp = dyn_cast<tt::AtomicRMWOp>(op)) {
+    rewriter.setInsertionPoint(atomicRMWOp);
+    Value mask = getPredMask(rewriter, atomicRMWOp.getPtr().getType(),
+                             atomicRMWOp.getMask(), pred);
+    atomicRMWOp.getMaskMutable().assign(mask);
+    return op;
+  }
 
-  assert("don't know how to predicate this op" && false);
+  op->emitError("pipeliner doesn't know how to predicate this op.");
+  llvm::report_fatal_error("Fatal pipeliner error");
   return op;
 }
 
@@ -177,15 +234,43 @@ void mlir::triton::replaceUsesAndPropagateType(OpBuilder &builder,
     op->erase();
 }
 
+// Return true if the given ForOp has the attribute
+// `tt.disallow_acc_multi_buffer` set to true.
+bool mlir::triton::getDisallowAccMultiBuffer(scf::ForOp forOp) {
+  return forOp->hasAttr(mlir::triton::kDisallowAccMultiBufferAttrName);
+}
+
+void mlir::triton::visitNestedOperands(Operation *op,
+                                       function_ref<void(Value)> visitor) {
+  op->walk([&](Operation *nestedOp) {
+    for (Value operand : nestedOp->getOperands()) {
+      if (operand.getParentBlock()->getParentOp()->isProperAncestor(op))
+        visitor(operand);
+    }
+  });
+}
+
+SetVector<Value> mlir::triton::getNestedOperands(Operation *op) {
+  SetVector<Value> result;
+  visitNestedOperands(op, [&](Value operand) { result.insert(operand); });
+  return result;
+}
+
+std::optional<std::pair<int, int>>
+mlir::triton::maybeGetStageCluster(Operation *op) {
+  auto stage = op->getAttrOfType<IntegerAttr>(tt::kLoopStageAttrName);
+  auto clusterId = op->getAttrOfType<IntegerAttr>(tt::kLoopClusterAttrName);
+  if (!stage || !clusterId) {
+    return std::nullopt;
+  }
+
+  return {
+      {stage.getValue().getSExtValue(), clusterId.getValue().getSExtValue()}};
+}
 std::pair<int, int> mlir::triton::getStageCluster(Operation *op) {
-  auto stage = cast<IntegerAttr>(op->getAttr(mlir::triton::kLoopStageAttrName))
-                   .getValue()
-                   .getSExtValue();
-  auto clusterId =
-      cast<IntegerAttr>(op->getAttr(mlir::triton::kLoopClusterAttrName))
-          .getValue()
-          .getSExtValue();
-  return std::make_pair(stage, clusterId);
+  auto res = maybeGetStageCluster(op);
+  assert(res.has_value() || "Operation is missing stage & cluster attribute");
+  return *res;
 }
 
 void mlir::triton::setStageCluster(Operation *op, int stage, int cluster) {

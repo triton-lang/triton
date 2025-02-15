@@ -17,7 +17,7 @@ using namespace mlir::triton;
 // NOTE: [Additional Function Arguments]
 // To support use of shared memory and global scratch memory inside of a
 // function, the caller allocates a single large block of the relevant memory
-// and calls the funciton with these extra arguments at the end.
+// and calls the function with these extra arguments at the end.
 // Specifically, the last argument is the global scratch memory allocation and
 // the second to last is the shared memory allocation.
 //
@@ -31,10 +31,9 @@ using namespace mlir::triton;
 /// MemRef descriptors (LLVM struct data types) containing all the MemRef type
 /// information.
 struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
-  FuncOpConversion(LLVMTypeConverter &converter, int numWarps,
+  FuncOpConversion(LLVMTypeConverter &converter,
                    const TargetInfoBase &targetInfo, PatternBenefit benefit)
-      : ConvertOpToLLVMPattern(converter, benefit), numWarps(numWarps),
-        targetInfo(targetInfo) {}
+      : ConvertOpToLLVMPattern(converter, benefit), targetInfo(targetInfo) {}
 
   /// Only retain those attributes that are not constructed by
   /// `LLVMFuncOp::build`. If `filterArgAttrs` is set, also filter out argument
@@ -168,6 +167,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     }
     // Set an attribute for reqntidx, it could be used in latter LLVM codegen
     // for `nvvm.annotation` metadata.
+    int numWarps = triton::gpu::lookupNumWarps(funcOp);
     newFuncOp->setAttr("nvvm.reqntid",
                        rewriter.getDenseI32ArrayAttr(32 * numWarps));
 
@@ -181,14 +181,13 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
   }
 
 private:
-  int numWarps{0};
   const TargetInfoBase &targetInfo;
 };
 
 } // namespace
 
 void mlir::triton::populateFuncOpConversionPattern(
-    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, int numWarps,
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     const TargetInfoBase &targetInfo, PatternBenefit benefit) {
-  patterns.add<FuncOpConversion>(typeConverter, numWarps, targetInfo, benefit);
+  patterns.add<FuncOpConversion>(typeConverter, targetInfo, benefit);
 }

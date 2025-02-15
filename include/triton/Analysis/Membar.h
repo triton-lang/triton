@@ -12,7 +12,7 @@ class OpBuilder;
 
 /// Callback to allow backend to provide more information on whether a barrier
 /// is needed between two operations. Even though two operations access the same
-/// shared memory thay may not require a barrier in between them.
+/// shared memory they may not require a barrier in between them.
 using MembarFilterFn = std::function<bool(Operation *, Operation *)>;
 
 struct BlockInfo {
@@ -32,6 +32,25 @@ struct BlockInfo {
       syncWriteIntervals[interval.first].insert(interval.second.begin(),
                                                 interval.second.end());
     return *this;
+  }
+
+  void dump() {
+    auto &err = llvm::errs();
+    err << "Block Interval:\n";
+    err << "  Read Intervals:\n";
+    for (auto &[interval, ops] : syncReadIntervals) {
+      err << "    [" << interval.start() << ", " << interval.end() << "] ";
+      for (auto &op : ops)
+        err << op->getName() << " ";
+      err << "\n";
+    }
+    err << "  Write Intervals:\n";
+    for (auto &[interval, ops] : syncWriteIntervals) {
+      err << "    [" << interval.start() << ", " << interval.end() << "] ";
+      for (auto &op : ops)
+        err << op->getName() << " ";
+      err << "\n";
+    }
   }
 
   /// Returns true if intervals in two BlockInfo objects are intersected.

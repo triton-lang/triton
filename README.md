@@ -22,34 +22,68 @@ You can install the latest stable release of Triton from pip:
 pip install triton
 ```
 
-Binary wheels are available for CPython 3.8-3.12 and PyPy 3.8-3.9.
+Binary wheels are available for CPython 3.9-3.13.
 
-And the latest nightly release:
+# Enabling Blackwell Support
 
-```shell
-pip install -U --index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/Triton-Nightly/pypi/simple/ triton-nightly
+The main branch now features support for NVIDIA Blackwell GPUs using 5th
+generation tensor cores. To enable this, you will need two additional steps:
+
+1. Build a pre-release PyTorch from source with CUDA 12.8
+2. Build triton from the latest source
+
+
+First, to build pytorch you need to have CUDA 12.8 installed locally. If not,
+follow the [instructions for your platform](https://developer.nvidia.com/cuda-downloads)
+```bash
+# Clone and checkout pytorch 2.6 release candidate
+git clone https://github.com/pytorch/pytorch
+cd pytorch
+git checkout v2.6.0-rc9
+git submodule sync
+git submodule update --init --recursive -j 8
+
+# Install build dependencies (assumes you already have a system compiler)
+pip install -r requirements.txt
+pip install mkl-static mkl-include wheel
+
+# Build PyTorch (will take a long time)
+export CUDA_HOME=/usr/local/cuda-12.8
+export CUDA_PATH=$CUDA_HOME
+export TORCH_CUDA_ARCH_LIST=Blackwell
+python setup.py develop
+
+# Optional, package build into a wheel to install on other machines.
+python setup.py bdist_wheel
+ls dist  # Wheel should be output in this directory
 ```
+
+Note that if you use the domain libraries (`torchvision`, `torchtext`,
+`torchaudio`, etc.) these will need to be built from source as well, otherwise
+their custom PyTorch extensions will not work.
+
+Finally, follow the instructions below to install triton from source.
 
 # Install from source
 
 ```shell
-git clone https://github.com/triton-lang/triton.git;
-cd triton;
+git clone https://github.com/triton-lang/triton.git
+cd triton
 
-pip install ninja cmake wheel pybind11; # build-time dependencies
+pip install ninja cmake wheel pybind11 # build-time dependencies
 pip install -e python
 ```
 
 Or with a virtualenv:
 
 ```shell
-git clone https://github.com/triton-lang/triton.git;
-cd triton;
+git clone https://github.com/triton-lang/triton.git
+cd triton
 
-python -m venv .venv --prompt triton;
-source .venv/bin/activate;
+python -m venv .venv --prompt triton
+source .venv/bin/activate
 
-pip install ninja cmake wheel pybind11; # build-time dependencies
+pip install ninja cmake wheel pybind11 # build-time dependencies
 pip install -e python
 ```
 
@@ -130,36 +164,15 @@ There currently isn't a turnkey way to run all the Triton tests, but you can
 follow the following recipe.
 
 ```shell
-# One-time setup.  Note we have to reinstall local Triton because torch
+# One-time setup.  Note this will reinstall local Triton because torch
 # overwrites it with the public version.
-$ pip install scipy numpy torch pytest lit pandas matplotlib && pip install -e python
+$ make dev-install
 
-# Run Python tests using your local GPU.
-$ python3 -m pytest python/test/unit
+# To run all tests (requires a GPU)
+$ make test
 
-# Move to builddir.  Fill in <...> with the full path, e.g.
-# `cmake.linux-x86_64-cpython-3.11`.
-$ cd python/build/cmake<...>
-
-# Run C++ unit tests.
-$ ctest -j32
-
-# Run lit tests.
-$ lit test
-```
-
-You may find it helpful to make a symlink to the builddir and tell your local
-git to ignore it.
-
-```shell
-$ ln -s python/build/cmake<...> build
-$ echo build >> .git/info/exclude
-```
-
-Then you can e.g. rebuild and run lit with the following command.
-
-```shell
-$ ninja -C build && ( cd build ; lit test )
+# Or, to run tests without a gpu
+$ make test-nogpu
 ```
 
 # Tips for hacking
@@ -171,6 +184,7 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
 - `MLIR_ENABLE_DUMP=1` dumps the IR before every MLIR pass Triton runs, for all
    kernels. Use `MLIR_ENABLE_DUMP=kernelName` to dump for a specific kernel only.
   - Triton cache can interfere with the dump. In cases where `MLIR_ENABLE_DUMP=1` does not work, try cleaning your triton cache: `rm -r ~/.triton/cache/*`
+- `MLIR_DUMP_PATH` specifies where `MLIR_ENABLE_DUMP` will dump to. If unset will dump to stderr.
 - `LLVM_IR_ENABLE_DUMP=1` dumps the IR before every pass run over the LLVM IR.
 - `TRITON_REPRODUCER_PATH=<reproducer_path>` will generate an MLIR reproducer file
   at `<reproducer_path>` before each MLIR compiler stage. If any of the stages fail,
@@ -191,8 +205,16 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
   DEBUG_TYPE` throughout LLVM and Triton) in order to allow the debug output to
   be less noisy. `TRITON_LLVM_DEBUG_ONLY` allows for one or more comma
   separated values to be specified (eg
-  `TRITON_LLVM_DEBUG_ONLY="tritongpu-remove-layout-conversions` or
+  `TRITON_LLVM_DEBUG_ONLY="tritongpu-remove-layout-conversions"` or
   `TRITON_LLVM_DEBUG_ONLY="tritongpu-remove-layout-conversions,regalloc"`).
+- `TRITON_ENABLE_ASAN=1` invokes the LLVM address sanitizer for
+  memory leak and out of bounds access detection. Currently only supported on the AMD
+  backend. This must be run using the ASAN libraries documented [here](https://rocm.docs.amd.com/projects/llvm-project/en/latest/conceptual/using-gpu-sanitizer.html).
+
+  When enabling the address sanitizer it is recommended to disable various memory caching strategies
+  both within the ROCm stack and PyTorch. This will give the address sanitizer the best chance at finding the
+  memory fault where it originates. See this [test](https://github.com/triton-lang/triton/blob/main/third_party/amd/python/test/test_address_sanitizer.py) for more details.
+
 - `USE_IR_LOC={ttir,ttgir}` reparses the IR such that the location information
   will be the line number of the IR file with that particular extension,
   instead of line number of the python file. This can provide a direct mapping
@@ -210,11 +232,18 @@ For detailed instructions on how to debug Triton's frontend, please refer to thi
 - `MLIR_ENABLE_TIMING` dumps the timing information for each MLIR pass.
 - `LLVM_ENABLE_TIMING` dumps the timing information for each LLVM pass.
 - `TRITON_DEFAULT_FP_FUSION` overrides the default behavior of allowing fp fusion (mul+add->fma).
-- `MLIR_ENABLE_REMARK` enables the performance warnings that are emitted as remarks.
-- `TRITON_KERNEL_DUMP` enables the dumping of the IR from each compilation stage and the final ptx.
-- `TRITON_DUMP_DIR` specifies the directory to save the dumped IR and ptx when `TRITON_KERNEL_DUMP` is set to 1.
-- `TRITON_KERNEL_OVERRIDE` enables the override of the compiled kernel with a user-specified IR/ptx at the beginning of each compilation stage.
-- `TRITON_OVERRIDE_DIR` specifies the directory from which to load the IR/ptx files when `TRITON_KERNEL_OVERRIDE` is set to 1.
+- `MLIR_ENABLE_DIAGNOSTICS=<comma-separated>` controls diagnostic emission in MLIR.
+  Options are: `warnings`, `remarks`, `stacktraces`, `operations`.
+  Use comma-separated values to customize output. For example,
+  `MLIR_ENABLE_DIAGNOSTICS=remarks,operations` enables remarks and IR operations,
+  while `MLIR_ENABLE_DIAGNOSTICS=warnings,stacktraces` enables warnings with
+  stacktraces. By default, only errors are shown. Setting `warnings` includes
+  errors and warnings; `remarks` includes errors, warnings, and remarks.
+- `MLIR_ENABLE_REMARK` is deprecated. Please use `MLIR_ENABLE_DIAGNOSTICS=remarks`.
+- `TRITON_KERNEL_DUMP` enables the dumping of the IR from each compilation stage and the final ptx/amdgcn.
+- `TRITON_DUMP_DIR` specifies the directory to save the dumped IR and ptx/amdgcn when `TRITON_KERNEL_DUMP` is set to 1.
+- `TRITON_KERNEL_OVERRIDE` enables the override of the compiled kernel with a user-specified IR/ptx/amdgcn at the beginning of each compilation stage.
+- `TRITON_OVERRIDE_DIR` specifies the directory from which to load the IR/ptx/amdgcn files when `TRITON_KERNEL_OVERRIDE` is set to 1.
 
 **Kernel Override Steps**
 
@@ -224,7 +253,7 @@ export TRITON_KERNEL_DUMP=1
 export TRITON_DUMP_DIR=<dump_dir>
 export TRITON_KERNEL_OVERRIDE=1
 export TRITON_OVERRIDE_DIR=<override_dir>
-# Step 1: Run the kernel once to dump kernel's IRs and ptx in $TRITON_DUMP_DIR
+# Step 1: Run the kernel once to dump kernel's IRs and ptx/amdgcn in $TRITON_DUMP_DIR
 # Step 2: Copy $TRITON_DUMP_DIR/<kernel_hash> to $TRITON_OVERRIDE_DIR
 # Step 3: Delete the stages that you do not want to override and modify the stage you do want to override
 # Step 4: Run the kernel again to see the overridden result
@@ -253,5 +282,23 @@ Supported Platforms:
 Supported Hardware:
 
 - NVIDIA GPUs (Compute Capability 8.0+)
-- AMD GPUs (ROCm 5.2+)
+- AMD GPUs (ROCm 6.2+)
 - Under development: CPUs
+
+# Development Container (Dev Container)
+
+**Dev Containers** for the Triton project are available from
+the [triton-dev-containers repository](https://github.com/redhat-et/triton-dev-containers)
+
+### Key Benefits:
+- **Consistency**: All developers can work with the same development
+  environment, ensuring uniform behavior across different systems.
+- **Isolation**: The container prevents potential conflicts with software
+  installed on your local machine.
+- **Portability**: Easily share the development environment with team members,
+  minimizing onboarding time and setup issues.
+
+### How to Use the Dev Container:
+
+For detailed instructions on how to use the dev containers please see
+the [dev container user guide](https://github.com/redhat-et/triton-dev-containers/blob/main/.devcontainer/devcontainer.md)

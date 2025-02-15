@@ -10,20 +10,6 @@ class TTG_TypeDef<string name, string _mnemonic, list<Trait> traits = []>
     let mnemonic = _mnemonic;
 }
 
-def TTG_TokenType : TTG_TypeDef<"Token", "token"> {
-  let parameters = (ins "int32_t":$type);
-
-  let builders = [
-    TypeBuilder<(ins "unsigned":$type), [{
-      return $_get($_ctxt, type);
-    }]>
-  ];
-
-  let hasCustomAssemblyFormat = 1;
-
-  let skipDefaultBuilders = 1;
-}
-
 def TTG_AsyncToken : TTG_TypeDef<"AsyncToken", "async.token", []> {
   let summary = "async token type";
   let description = [{
@@ -49,16 +35,19 @@ def TTG_MemDescType : TTG_TypeDef<"MemDesc", "memdesc", [ShapedTypeInterface]> {
     "Type":$elementType,
     "Attribute":$encoding,
     "Attribute":$memorySpace,
-    "bool":$mutable_memory
+    "bool":$mutableMemory,
+    ArrayRefParameter<"int64_t">:$allocShape
   );
+
   let extraClassDeclaration = [{
     MemDescType cloneWith(std::optional<ArrayRef<int64_t>> shape,
                           Type elementType) const {
-        return MemDescType::get(shape.value_or(getShape()), elementType, getEncoding(), getMemorySpace(), getMutableMemory());
+      return MemDescType::get(shape.value_or(getShape()), elementType, getEncoding(), getMemorySpace(), getMutableMemory(), getAllocShape());
     }
 
     bool hasRank() const { return true; }
   }];
+
   let builders = [
         TypeBuilderWithInferredContext<(ins
             "llvm::ArrayRef<int64_t>":$shape,
@@ -66,7 +55,7 @@ def TTG_MemDescType : TTG_TypeDef<"MemDesc", "memdesc", [ShapedTypeInterface]> {
             "Attribute":$encoding,
             "Attribute":$memorySpace
         ), [{
-            return $_get(elementType.getContext(), shape, elementType, encoding, memorySpace, /*mutableMemory=*/false);
+            return $_get(elementType.getContext(), shape, elementType, encoding, memorySpace, /*mutableMemory=*/false, /*allocShape=*/shape);
         }]>,
         TypeBuilderWithInferredContext<(ins
             "llvm::ArrayRef<int64_t>":$shape,
@@ -75,10 +64,23 @@ def TTG_MemDescType : TTG_TypeDef<"MemDesc", "memdesc", [ShapedTypeInterface]> {
             "Attribute":$memorySpace,
             "bool":$mutableMemory
         ), [{
-            return $_get(elementType.getContext(), shape, elementType, encoding, memorySpace, mutableMemory);
+            return $_get(elementType.getContext(), shape, elementType, encoding, memorySpace, mutableMemory, /*allocShape=*/shape);
+        }]>,
+        TypeBuilderWithInferredContext<(ins
+            "llvm::ArrayRef<int64_t>":$shape,
+            "Type":$elementType,
+            "Attribute":$encoding,
+            "Attribute":$memorySpace,
+            "bool":$mutableMemory,
+            "llvm::ArrayRef<int64_t>":$allocShape
+        ), [{
+            return $_get(elementType.getContext(), shape, elementType, encoding, memorySpace, mutableMemory, allocShape);
         }]>
+
     ];
+
   let hasCustomAssemblyFormat = 1;
+  let genVerifyDecl = 1;
 }
 
 

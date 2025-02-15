@@ -4,10 +4,11 @@
 #include "Context/Context.h"
 #include "Data/Metric.h"
 #include "Utility/Singleton.h"
+#include <algorithm>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <set>
-#include <shared_mutex>
 #include <string>
 #include <vector>
 
@@ -39,13 +40,16 @@ private:
 
   template <typename T> std::vector<T *> getInterfaces() {
     std::vector<T *> interfaces;
+    // There's an implicit order between contextSource and profiler/data. The
+    // latter two rely on the contextSource to obtain the context, so we need to
+    // add the contextSource first.
+    if (auto interface = dynamic_cast<T *>(contextSource.get())) {
+      interfaces.push_back(interface);
+    }
     if (auto interface = dynamic_cast<T *>(profiler)) {
       interfaces.push_back(interface);
     }
     if (auto interface = dynamic_cast<T *>(data.get())) {
-      interfaces.push_back(interface);
-    }
-    if (auto interface = dynamic_cast<T *>(contextSource.get())) {
       interfaces.push_back(interface);
     }
     return interfaces;
@@ -68,6 +72,7 @@ public:
   ~SessionManager() = default;
 
   size_t addSession(const std::string &path, const std::string &profilerName,
+                    const std::string &profilerPath,
                     const std::string &contextSourceName,
                     const std::string &dataName);
 
@@ -92,14 +97,14 @@ public:
   void exitOp(const Scope &scope);
 
   void addMetrics(size_t scopeId,
-                  const std::map<std::string, MetricValueType> &metrics,
-                  bool aggregable);
+                  const std::map<std::string, MetricValueType> &metrics);
 
   void setState(std::optional<Context> context);
 
 private:
   std::unique_ptr<Session> makeSession(size_t id, const std::string &path,
                                        const std::string &profilerName,
+                                       const std::string &profilerPath,
                                        const std::string &contextSourceName,
                                        const std::string &dataName);
 
@@ -119,23 +124,40 @@ private:
 
   void removeSession(size_t sessionId);
 
-  template <typename Interface, typename Counter>
-  void registerInterface(size_t sessionId, Counter &interfaceCounts) {
+  template <typename Interface, typename Counter, bool isRegistering>
+  void updateInterfaceCount(size_t sessionId, Counter &interfaceCounts) {
     auto interfaces = sessions[sessionId]->getInterfaces<Interface>();
     for (auto *interface : interfaces) {
-      interfaceCounts[interface] += 1;
+      auto it = std::find_if(
+          interfaceCounts.begin(), interfaceCounts.end(),
+          [interface](const auto &pair) { return pair.first == interface; });
+
+      if (it != interfaceCounts.end()) {
+        if constexpr (isRegistering) {
+          ++it->second;
+        } else {
+          --it->second;
+          if (it->second == 0) {
+            interfaceCounts.erase(it);
+          }
+        }
+      } else if constexpr (isRegistering) {
+        interfaceCounts.emplace_back(interface, 1);
+      }
     }
+  }
+
+  template <typename Interface, typename Counter>
+  void registerInterface(size_t sessionId, Counter &interfaceCounts) {
+    updateInterfaceCount<Interface, Counter, true>(sessionId, interfaceCounts);
   }
 
   template <typename Interface, typename Counter>
   void unregisterInterface(size_t sessionId, Counter &interfaceCounts) {
-    auto interfaces = sessions[sessionId]->getInterfaces<Interface>();
-    for (auto *interface : interfaces) {
-      interfaceCounts[interface] -= 1;
-    }
+    updateInterfaceCount<Interface, Counter, false>(sessionId, interfaceCounts);
   }
 
-  mutable std::shared_mutex mutex;
+  mutable std::mutex mutex;
 
   size_t nextSessionId{};
   // path -> session id
@@ -144,12 +166,12 @@ private:
   std::map<size_t, bool> sessionActive;
   // session id -> session
   std::map<size_t, std::unique_ptr<Session>> sessions;
-  // scope -> active count
-  std::map<ScopeInterface *, size_t> scopeInterfaceCounts;
-  // op -> active count
-  std::map<OpInterface *, size_t> opInterfaceCounts;
-  // context source -> active count
-  std::map<ContextSource *, size_t> contextSourceCounts;
+  // {scope, active count}
+  std::vector<std::pair<ScopeInterface *, size_t>> scopeInterfaceCounts;
+  // {op, active count}
+  std::vector<std::pair<OpInterface *, size_t>> opInterfaceCounts;
+  // {context source, active count}
+  std::vector<std::pair<ContextSource *, size_t>> contextSourceCounts;
 };
 
 } // namespace proton

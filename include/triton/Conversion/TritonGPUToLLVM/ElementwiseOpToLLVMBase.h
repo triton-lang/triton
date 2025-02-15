@@ -86,7 +86,7 @@ public:
       return resultVals;
     while (auto sliced = dyn_cast<SliceEncodingAttr>(baseEncoding))
       baseEncoding = sliced.getParent();
-    if (isa<NvidiaMmaEncodingAttr, DotOperandEncodingAttr>(baseEncoding)) {
+    if (isa<LinearEncodingAttr, DotOperandEncodingAttr>(baseEncoding)) {
       // TODO: this logic seems incorrect for mma layout. Skip for now.
       // The following test crashes and some other miscompile:
       // test_core::test_fp8_dot_acc
@@ -206,6 +206,27 @@ public:
 
 protected:
   ModuleAxisInfoAnalysis &axisAnalysisPass;
+};
+
+// Trivial case where we map elementwise to an existing LLVM operator
+template <typename SourceOp, typename DestOp>
+struct ElementwiseOpConversion
+    : public ElementwiseOpConversionBase<
+          SourceOp, ElementwiseOpConversion<SourceOp, DestOp>> {
+  using Base =
+      ElementwiseOpConversionBase<SourceOp,
+                                  ElementwiseOpConversion<SourceOp, DestOp>>;
+  using Base::Base;
+  using OpAdaptor = typename Base::OpAdaptor;
+
+  // An interface to support variant DestOp builder.
+  SmallVector<DestOp> createDestOps(SourceOp op, OpAdaptor adaptor,
+                                    ConversionPatternRewriter &rewriter,
+                                    Type elemTy, MultipleOperandsRange operands,
+                                    Location loc) const {
+    return {rewriter.create<DestOp>(loc, elemTy, operands[0],
+                                    adaptor.getAttributes().getValue())};
+  }
 };
 
 } // namespace gpu

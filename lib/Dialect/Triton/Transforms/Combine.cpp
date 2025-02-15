@@ -187,6 +187,60 @@ public:
   }
 };
 
+// When reducing a 1D tensor the order of elements of the tensor doesn't matter.
+// Therefore we can relax the reshape to allow it to re-order elements.
+class CombineReshapeReducePatterns : public mlir::OpRewritePattern<ReshapeOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(triton::ReshapeOp reshapeOp,
+                  mlir::PatternRewriter &rewriter) const override {
+    if (reshapeOp.getAllowReorder())
+      return failure();
+    if (reshapeOp.getType().getRank() != 1)
+      return failure();
+    for (Operation *user : reshapeOp->getUsers()) {
+      if (!isa<triton::ReduceOp, triton::HistogramOp>(user))
+        return failure();
+    }
+    rewriter.modifyOpInPlace(reshapeOp,
+                             [&]() { reshapeOp.setAllowReorder(true); });
+    return success();
+  }
+};
+
+class RankedReduceDescriptorLoads : public mlir::OpRewritePattern<ReshapeOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(triton::ReshapeOp reshapeOp,
+                  mlir::PatternRewriter &rewriter) const override {
+    auto loadDef = reshapeOp.getSrc()
+                       .getDefiningOp<triton::ExperimentalDescriptorLoadOp>();
+    if (!loadDef || !loadDef->hasOneUse())
+      return failure();
+    int loadRank = loadDef.getType().getRank();
+    int reshapeRank = reshapeOp.getType().getRank();
+    if (!(reshapeRank < loadRank))
+      return failure();
+    ArrayRef<int64_t> loadShape = loadDef.getType().getShape();
+    ArrayRef<int64_t> reshapeShape = reshapeOp.getType().getShape();
+    for (int i = 0; i < loadRank - reshapeRank; ++i) {
+      // Only rank reduce unit dims.
+      if (loadShape[i] != 1)
+        return failure();
+    }
+    if (loadShape.take_back(reshapeRank) != reshapeShape)
+      return failure();
+    rewriter.modifyOpInPlace(
+        loadDef, [&]() { loadDef.getResult().setType(reshapeOp.getType()); });
+    rewriter.replaceOp(reshapeOp, loadDef.getResult());
+    return success();
+  }
+};
+
 class CombineOpsPass : public TritonCombineOpsBase<CombineOpsPass> {
 public:
   void runOnOperation() override {
@@ -203,8 +257,10 @@ public:
     patterns.add<CombineSelectMaskedLoadPattern>(context);
     patterns.add<CombineAddPtrPattern>(context);
     patterns.add<CombineBroadcastMulReducePattern>(context);
+    patterns.add<CombineReshapeReducePatterns>(context);
+    patterns.add<RankedReduceDescriptorLoads>(context);
 
-    if (applyPatternsAndFoldGreedily(m, std::move(patterns)).failed())
+    if (applyPatternsGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
   }
 };

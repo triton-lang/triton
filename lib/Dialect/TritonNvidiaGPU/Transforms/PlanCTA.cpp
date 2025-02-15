@@ -230,13 +230,23 @@ void CTAPlanner::setTiling(llvm::ArrayRef<unsigned> CTAsPerCGA) {
   assert(!tiled && "CTA tiling is already determinted");
   assert(clusterInfo && "ClusterInfo pointer is null");
   assert(CTAsPerCGA.size() <= 3 && "setTiling not implemented");
+  tiled = true;
+  unsigned numCTAs = 1;
+  for (unsigned cta : CTAsPerCGA)
+    numCTAs *= cta;
+  if (numCTAs == 2) {
+    // For 2 CTAs always use 2x1x1.
+    // TODO: can we always serialize the CTAs on X dimension?
+    clusterInfo->clusterDimX = 2;
+    return;
+  }
+
   if (CTAsPerCGA.size() > 0)
     clusterInfo->clusterDimX = CTAsPerCGA[0];
   if (CTAsPerCGA.size() > 1)
     clusterInfo->clusterDimY = CTAsPerCGA[1];
   if (CTAsPerCGA.size() > 2)
     clusterInfo->clusterDimZ = CTAsPerCGA[2];
-  tiled = true;
 }
 
 bool CTAPlanner::processDot(triton::FuncOp &funcOp) {
@@ -656,7 +666,7 @@ bool CTAPlanner::isElementwiseOp(Operation *op) const {
                 math::CtPopOp, math::ErfOp, math::ExpOp, math::Exp2Op,
                 math::FloorOp, math::ExpM1Op, math::FmaOp, math::LogOp,
                 math::Log10Op, math::Log1pOp, math::Log2Op, math::PowFOp,
-                math::RsqrtOp, math::SqrtOp, math::RsqrtOp, math::TanhOp>(op))
+                math::SqrtOp, math::RsqrtOp, math::TanhOp>(op))
     return true;
   if (llvm::isa<triton::IntToPtrOp, triton::PtrToIntOp, triton::BitcastOp,
                 triton::FpToFpOp, triton::AddPtrOp, triton::PreciseSqrtOp,

@@ -24,6 +24,8 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
+#include "third_party/proton/dialect/include/TritonProtonToLLVM/PatternTritonProtonOpToLLVM.h"
+
 namespace mlir::triton {
 #define GEN_PASS_DEF_CONVERTTRITONAMDGPUTOLLVM
 #include "TritonAMDGPUToLLVM/Passes.h.inc"
@@ -90,16 +92,8 @@ struct ConvertTritonAMDGPUToLLVM
     TritonGPUToLLVMTypeConverter typeConverter(context, option, targetInfo);
     TritonLLVMConversionTarget convTarget(*context);
 
-    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-
-    // Hack: WSMaterialization may have changed the effective number of warps,
-    // in a way that isn't reflected in ttg.num-warps.  If so, we have to
-    // respect that here.
-    if (Attribute attr = mod->getAttr("ttg.num-warp-groups-per-cta")) {
-      numWarps *= cast<IntegerAttr>(attr).getInt();
-    }
 
     // Allocate shared memory and set barrier
     ModuleAllocation allocation(mod);
@@ -112,9 +106,8 @@ struct ConvertTritonAMDGPUToLLVM
       TritonGPUToLLVMTypeConverter typeConverter(context, option, targetInfo);
       TritonLLVMFunctionConversionTarget funcTarget(*context);
       RewritePatternSet funcPatterns(context);
-      mlir::triton::populateFuncOpConversionPattern(typeConverter, funcPatterns,
-                                                    numWarps, targetInfo,
-                                                    patternBenefitDefault);
+      mlir::triton::populateFuncOpConversionPattern(
+          typeConverter, funcPatterns, targetInfo, patternBenefitDefault);
       mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                             funcPatterns);
       if (failed(
@@ -153,8 +146,8 @@ struct ConvertTritonAMDGPUToLLVM
     // patterns
     int AMDBenefit = commonBenefit + 1;
     auto populatePatterns1 = [&](auto populateFunc, int benefit) {
-      populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
-                   allocation, benefit);
+      populateFunc(typeConverter, patterns, axisInfoAnalysis, allocation,
+                   benefit);
     };
 
     auto populatePatterns5 = [&](auto populateFunc, int benefit) {
@@ -162,8 +155,8 @@ struct ConvertTritonAMDGPUToLLVM
     };
 
     auto populatePatterns6 = [&](auto populateFunc, int benefit) {
-      populateFunc(typeConverter, patterns, numWarps, axisInfoAnalysis,
-                   allocation, targetInfo, benefit);
+      populateFunc(typeConverter, patterns, axisInfoAnalysis, allocation,
+                   targetInfo, benefit);
     };
 
     auto populatePatterns7 = [&](auto populateFunc, int benefit) {
@@ -171,18 +164,16 @@ struct ConvertTritonAMDGPUToLLVM
     };
 
     AMD::populateConvertLayoutOpToLLVMPatterns(typeConverter, targetInfo,
-                                               patterns, numWarps,
-                                               axisInfoAnalysis, AMDBenefit);
+                                               patterns, AMDBenefit);
     mlir::triton::populateConvertLayoutOpToLLVMPatterns(
         typeConverter, targetInfo, patterns, commonBenefit);
-    AMD::populateDotOpToLLVMPatterns(typeConverter, patterns, numWarps,
-                                     axisInfoAnalysis, AMDBenefit);
+    AMD::populateDotOpToLLVMPatterns(typeConverter, patterns, axisInfoAnalysis,
+                                     AMDBenefit);
     AMD::populateElementwiseOpToLLVMPatterns(typeConverter, patterns, ftz,
                                              axisInfoAnalysis, allocation,
                                              targetInfo, AMDBenefit);
     AMD::populateLoadStoreOpToLLVMPatterns(typeConverter, targetInfo, patterns,
-                                           numWarps, axisInfoAnalysis,
-                                           AMDBenefit);
+                                           axisInfoAnalysis, AMDBenefit);
     populatePatterns7(mlir::triton::populateReduceOpToLLVMPatterns,
                       commonBenefit);
     populatePatterns7(mlir::triton::populateScanOpToLLVMPatterns,
@@ -194,11 +185,10 @@ struct ConvertTritonAMDGPUToLLVM
     populatePatterns7(mlir::triton::populateGatherOpToLLVMPatterns,
                       commonBenefit);
 
-    mlir::triton::BackendCallbacks callbacks;
-    callbacks.localStoreOpConversion = storeOpConversionCallback;
-
-    mlir::triton::populateMemoryOpToLLVMPattern(
-        typeConverter, targetInfo, patterns, commonBenefit, callbacks);
+    AMD::populateMemoryOpToLLVMPatterns(typeConverter, patterns, targetInfo,
+                                        AMDBenefit);
+    mlir::triton::populateMemoryOpToLLVMPatterns(typeConverter, targetInfo,
+                                                 patterns, commonBenefit);
     mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
                                                    patterns, commonBenefit);
     mlir::triton::populateAssertOpToLLVMPattern(typeConverter, patterns,
@@ -228,6 +218,10 @@ struct ConvertTritonAMDGPUToLLVM
                                                           patterns);
     mlir::triton::populatePrintOpToLLVMPattern(typeConverter, patterns,
                                                targetInfo, commonBenefit);
+
+    mlir::triton::proton::populateRecordOpToLLVMPattern(
+        typeConverter, patterns, targetInfo, commonBenefit);
+
     mlir::ub::populateUBToLLVMConversionPatterns(typeConverter, patterns);
 
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns)))) {

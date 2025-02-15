@@ -3,7 +3,7 @@ import hashlib
 import json
 from .._C.libtriton import get_cache_invalidating_env_vars, ir
 from ..backends import backends
-from ..backends.compiler import GPUTarget, AttrsDescriptor
+from ..backends.compiler import GPUTarget
 from .. import __version__
 from ..runtime.autotuner import OutOfResources
 from ..runtime.cache import get_cache_manager, get_dump_manager, get_override_manager
@@ -51,34 +51,30 @@ def convert_type_repr(x):
 
 class ASTSource:
 
-    def __init__(self, fn, signature, constants=None, attrs=None) -> None:
+    def __init__(self, fn, signature, constexprs=None, attrs=None) -> None:
         self.fn = fn
         self.ext = "ttir"
         self.name = fn.__name__
         self.signature = signature
-        self.constants = constants
-        self.attrs = attrs
+        self.constants = dict()
+        if constexprs is not None:
+            for k, v in constexprs.items():
+                k = (fn.arg_names.index(k), ) if isinstance(k, str) else k
+                assert isinstance(k, tuple)
+                self.constants[k] = v
+        self.attrs = attrs or dict()
         if isinstance(self.signature, str):
             self.signature = {k: v.strip() for k, v in enumerate(self.signature.split(","))}
         else:
             for k in self.signature.keys():
                 if not isinstance(k, str):
                     raise TypeError("Signature keys must be string")
-        if self.constants is None:
-            self.constants = {}
-        else:
-            for k in self.constants.keys():
-                if not isinstance(k, str):
-                    raise TypeError("Constants keys must be string")
-        if self.attrs is None:
-            self.attrs = AttrsDescriptor()
 
     def hash(self):
         sorted_sig = [v for k, v in sorted(self.signature.items())]
-        # Note - we stringify the keys here to allow sorting to work for cases
-        # where constants have mixed int/str keys.
-        sorted_constants = sorted((str(k), v) for k, v in self.constants.items())
-        key = f"{self.fn.cache_key}-{self.attrs.hash()}-{sorted_sig}-{sorted_constants}"
+        get_key = lambda x: x.cache_key if hasattr(x, 'cache_key') else str(x)
+        constants_key = '-'.join([get_key(v) for k, v in sorted(self.constants.items())])
+        key = f"{self.fn.cache_key}-{str(self.attrs)}-{sorted_sig}-{constants_key}"
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
     def make_ir(self, options, codegen_fns, module_map, context):
@@ -171,9 +167,9 @@ def parse(full_name, ext, context):
         module = ir.parse_mlir_module(full_name, context)
         module.context = context
         return module
-    if ext == "llir" or ext == "ptx":
+    if ext == "llir" or ext == "ptx" or ext == "amdgcn":
         return Path(full_name).read_text()
-    if ext == "cubin":
+    if ext == "cubin" or ext == "hsaco":
         return Path(full_name).read_bytes()
 
 
@@ -196,6 +192,7 @@ def filter_traceback(e: BaseException):
         "/triton/compiler/code_generator.py",
         "/ast.py",
     ]
+    BAD_FILES = [bad_file.replace("/", os.sep) for bad_file in BAD_FILES]
 
     tb = e.__traceback__
     frames = []
@@ -237,6 +234,7 @@ def compile(src, target=None, options=None):
     # core changes to make it easier to track kernels by hash.
     enable_override = os.environ.get("TRITON_KERNEL_OVERRIDE", "0") == "1"
     enable_ir_dump = os.environ.get("TRITON_KERNEL_DUMP", "0") == "1"
+    store_only_binary = os.environ.get("TRITON_STORE_BINARY_ONLY", "0") == "1"
     fn_override_manager = get_override_manager(src.hash()) if enable_override else None
     fn_dump_manager = get_dump_manager(src.hash()) if enable_ir_dump else None
     # Pre-truncate the file name here to avoid hitting the 255 character limit on common platforms.
@@ -250,7 +248,6 @@ def compile(src, target=None, options=None):
     always_compile = os.environ.get("TRITON_ALWAYS_COMPILE", "0") == "1"
     if not always_compile and metadata_path is not None:
         # cache hit!
-        metadata = json.loads(Path(metadata_path).read_text())
         return CompiledKernel(src, metadata_group, hash)
     # initialize metadata
     metadata = {
@@ -274,7 +271,7 @@ def compile(src, target=None, options=None):
         ir.load_dialects(context)
         backend.load_dialects(context)
 
-    codegen_fns = backend.get_codegen_implementation()
+    codegen_fns = backend.get_codegen_implementation(options)
     module_map = backend.get_module_map()
     try:
         module = src.make_ir(options, codegen_fns, module_map, context)
@@ -288,7 +285,9 @@ def compile(src, target=None, options=None):
         if (fn_override_manager is not None and (full_name := fn_override_manager.get_file(ir_filename)) is not None):
             print(f"\nOverriding kernel with file {full_name}")
             next_module = parse(full_name, ext, context)
-        metadata_group[ir_filename] = fn_cache_manager.put(next_module, ir_filename)
+        # If TRITON_STORE_BINARY_ONLY is 1, only store cubin/hsaco/json
+        if (not store_only_binary) or (ext in ("cubin", "hsaco", "json")):
+            metadata_group[ir_filename] = fn_cache_manager.put(next_module, ir_filename)
         if fn_dump_manager is not None:
             fn_dump_manager.put(next_module, ir_filename)
         # use an env variable to parse ir from file
@@ -305,7 +304,13 @@ def compile(src, target=None, options=None):
     # This is needed to safely finalize threads pool inside context: if current process forks before
     # python GC deletes context object, thread pool in child process will be invalid, which could
     # lead to child crash or hang.
-    context.disable_multithreading()
+    #
+    # However disabling multithreading causes the code to hang if the ASAN pass is enabled
+    # this is likely due to the llvm-symbolizer forking a process
+    # TODO: Reconcile the difference here between the ASAN and non-ASAN path with enabling
+    # multithreading in the MLIR context
+    if not os.environ.get("TRITON_ENABLE_ASAN", "0") == "1":
+        context.disable_multithreading()
     # return handle to compiled kernel
     return CompiledKernel(src, metadata_group, hash)
 
@@ -393,6 +398,11 @@ class CompiledKernel:
         max_shared = driver.active.utils.get_device_properties(device)["max_shared_mem"]
         if self.metadata.shared > max_shared:
             raise OutOfResources(self.metadata.shared, max_shared, "shared memory")
+        if hasattr(self.metadata, "tmem_size") and self.metadata.tmem_size is not None:
+            # Use blackwell max tmem size for now, this should be moved in device properties
+            max_tmem_size = 512  # tmem size in number of columns
+            if self.metadata.tmem_size > max_tmem_size:
+                raise OutOfResources(self.metadata.tmem_size, max_tmem_size, "tensor memory")
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
         self.module, self.function, self.n_regs, self.n_spills = driver.active.utils.load_binary(
             self.name, self.kernel, self.metadata.shared, device)
@@ -411,11 +421,8 @@ class CompiledKernel:
         arg_dict = {}
         arg_idx = 0
         for i, arg_name in enumerate(self.src.fn.arg_names):
-            if i in self.src.fn.constexprs:
-                arg_dict[arg_name] = self.src.constants[arg_name]
-            else:
-                arg_dict[arg_name] = args[arg_idx]
-                arg_idx += 1
+            arg_dict[arg_name] = args[arg_idx]
+            arg_idx += 1
         ret.add(self.src.fn.launch_metadata, (grid, self.metadata, arg_dict))
         return ret
 

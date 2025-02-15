@@ -28,6 +28,7 @@ env:
   TRITON_USE_ASSERT_ENABLED_LLVM: "TRUE"
   TRITON_DISABLE_LINE_INFO: 1
   PROTON_SKIP_PC_SAMPLING_TEST: 1
+  PYTHON: "python3"
   CCACHE_COMPRESS: "true"
 
 jobs:
@@ -265,19 +266,13 @@ jobs:
         run: |
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: Install pip dependencies
-        run: |
-          python3 -m pip install --upgrade pip
-          python3 -m pip install cython setuptools wheel cmake==3.24 ninja lit
-
       - name: Install Triton
         env:
           CUDA_HOME: "/usr/local/cuda"
         run: |
           echo "PATH is '$PATH'"
-          cd python
           ccache --zero-stats
-          python3 -m pip install -v '.[tests]'
+          make dev-install
 
       - &print-ccache-stats
         name: CCache Stats
@@ -285,60 +280,25 @@ jobs:
 
       - &run-lit-tests-step
         name: Run lit tests
-        run: |
-          cd python
-          LIT_TEST_DIR="build/$(ls build | grep -i cmake)/test"
-          if [ ! -d "${LIT_TEST_DIR}" ]; then
-            echo "Could not find '${LIT_TEST_DIR}'" ; exit -1
-          fi
-          lit -v "${LIT_TEST_DIR}"
+        run: make test-lit
 
       - name: Run python tests on CUDA
-        run: |
-          INSTRUMENTATION_LIB_DIR="${GITHUB_WORKSPACE}/python/build/$(ls python/build | grep -i lib)/triton/instrumentation"
-          if [ ! -d "${INSTRUMENTATION_LIB_DIR}" ]; then
-            echo "Could not find '${INSTRUMENTATION_LIB_DIR}'" ; exit -1
-          fi
-          cd python/test/unit
-          python3 -m pytest -s -n 8 --ignore=hopper/test_flashattention.py --ignore=language/test_line_info.py --ignore=language/test_subprocess.py --ignore=test_debug.py
-          python3 -m pytest -s -n 8 language/test_subprocess.py
-          python3 -m pytest -s -n 8 test_debug.py --forked
-          # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
-          TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s language/test_line_info.py
-          # Run hopper/test_flashattention.py separately to avoid out of gpu memory
-          python3 -m pytest -s hopper/test_flashattention.py
-          TRITON_ALWAYS_COMPILE=1 TRITON_DISABLE_LINE_INFO=0 LLVM_PASS_PLUGIN_PATH=${INSTRUMENTATION_LIB_DIR}/libGPUInstrumentationTestLib.so \
-          python3 -m pytest --capture=tee-sys -rfs -vvv instrumentation/test_gpuhello.py
+        run: make test-unit
 
       - name: Run interpreter tests
         if: ${{ matrix.runner[0] == 'h100-runner-set' }}
-        env:
-          TRITON_INTERPRET: "1"
-        run: |
-          cd python/test/unit
-          python3 -m pytest -s -n 16 -m interpreter language/test_core.py language/test_standard.py \
-           language/test_random.py language/test_block_pointer.py language/test_subprocess.py language/test_line_info.py \
-           runtime/test_autotuner.py::test_kwargs[False]\
-           ../../tutorials/06-fused-attention.py::test_op --device cpu
+        run: make test-interpret
 
       - name: Run regression tests
-        run: |
-          cd python/test/regression
-          python3 -m pytest -s -n 8 .
+        run: make test-regression
 
       - &run-cpp-unittests-step
         name: Run C++ unittests
-        run: |
-          cd python
-          cd "build/$(ls build | grep -i cmake)"
-          ctest -j32
+        run: make test-cpp
 
       - &run-proton-tests-step
         name: Run Proton tests
-        run: |
-          cd third_party/proton/test
-          python3 -m pytest -s .
-          cd ..
+        run: make test-proton
 
       - *inspect-cache-directories-step
 
@@ -374,7 +334,7 @@ jobs:
     name: Integration-Tests (${{matrix.runner[1] == 'gfx90a' && 'mi210' || 'mi300x'}})
 
     container:
-      image: rocmshared/pytorch:rocm6.2.2_ubuntu22.04_py3.10_pytorch_2.5.1_asan
+      image: rocm/pytorch:rocm6.2.2_ubuntu22.04_py3.10_pytorch_2.5.1_asan
       options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
 
     steps:
@@ -398,14 +358,8 @@ jobs:
         run: |
           echo "PATH is '$PATH'"
           pip uninstall -y triton pytorch-triton-rocm
-          cd python
           ccache --zero-stats
-          pip install -v -e '.[tests]'
-
-      - name: Clean up after an unsuccessful build
-        if: ${{ !success() && steps.amd-install-triton.outcome != 'success' }}
-        run: |
-          rm -rf ~/.triton
+          make dev-install
 
       - *print-ccache-stats
       - *run-lit-tests-step
@@ -419,7 +373,7 @@ jobs:
           pytest --capture=tee-sys -rfs python/tutorials/06-fused-attention.py
           pytest --capture=tee-sys -rfs third_party/amd/python/test/test_extract_slice.py
           cd python/test/unit
-          pytest --capture=tee-sys -rfs -n 16 language runtime \
+          pytest --capture=tee-sys -rfs -n 12 language runtime \
                  --ignore=language/test_line_info.py \
                  --ignore=test_debug.py
           # TODO: uncomment
@@ -429,7 +383,18 @@ jobs:
 
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
           TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py
-
+      - name: Run asan tests on HIP
+        run: |
+          cd third_party/amd/python/test/
+          ulimit -s 1024
+          export PATH=$(find ~/.triton/llvm -name llvm-symbolizer  -printf '%h\n'):$PATH
+          export LD_LIBRARY_PATH=$(find /opt -name libclang_rt.asan-x86_64.so -printf '%h\n'):$LD_LIBRARY_PATH
+          export LD_LIBRARY_PATH=$(find /opt -type d -wholename *lib/llvm/lib/asan):$LD_LIBRARY_PATH
+          export LD_LIBRARY_PATH=$(find /usr -name libcaffe2_nvrtc.so -printf '%h\n'):$LD_LIBRARY_PATH
+          export CLANG_ASAN_LIB=$(find /opt -name libclang_rt.asan-x86_64.so)
+          export HIP_ASAN_LIB=$(find /opt -wholename *lib/asan/libamdhip64.so)
+          ASAN_OPTIONS=detect_leaks=0,alloc_dealloc_mismatch=0 \
+          LD_PRELOAD=$CLANG_ASAN_LIB:$HIP_ASAN_LIB python3 -m pytest -s test_address_sanitizer.py
       - name: Run regression tests
         run: |
           # Reenable test_functional_regression.py once it's fixed
@@ -442,8 +407,11 @@ jobs:
       - *save-build-artifacts-step
 
       - name: Clean up caches
+        # Always cleanup the worker, even if builds or tests failed
+        if: always()
         run: |
-          rm -rf ~/.triton/cache
+          rm -rf ~/.triton
+          rm -rf ~/.ccache
 
   Build-Tests:
     needs: Runner-Preparation
@@ -476,12 +444,11 @@ jobs:
         run: |
           echo "$HOME/.local/bin" >> $GITHUB_PATH
           echo "/opt/homebrew/opt/llvm/bin" >> $GITHUB_PATH
-      - name: Install pip dependencies
+      - name: Create venv
         run: |
           python3 -m venv ~/.venv
           source ~/.venv/bin/activate
           python3 -m pip install --upgrade pip
-          python3 -m pip install cython setuptools wheel cmake==3.24 ninja lit pybind11
       - name: Install Triton
         env:
           TRITON_BUILD_WITH_O1: "true"
@@ -491,9 +458,8 @@ jobs:
         run: |
           source ~/.venv/bin/activate
           echo "PATH is '$PATH'"
-          cd python
           ccache --zero-stats
-          python3 -m pip install -v --no-build-isolation .
+          make dev-install
 
       - *print-ccache-stats
       - *inspect-cache-directories-step

@@ -140,6 +140,7 @@ class constexpr:
             self.value = value.value
         else:
             self.value = value
+        self.type = constexpr
 
     def __repr__(self) -> str:
         return f"constexpr[{self.value}]"
@@ -473,6 +474,10 @@ class dtype:
     def is_const():
         return False
 
+    @staticmethod
+    def is_tuple():
+        return False
+
     def __eq__(self, other: dtype):
         if not isinstance(other, dtype):
             return False
@@ -608,11 +613,10 @@ class block_type(dtype):
 
         # Note that block_type's shape is a list of int
         # while tensor's shape is a list of constexpr.
-
-        assert (isinstance(shape, list))
+        assert (isinstance(shape, (list, tuple)))
 
         # shape can be empty ([]) when an input is a 0D tensor.
-        self.shape = _unwrap_shape(shape)
+        self.shape = tuple(_unwrap_shape(shape))
         if not self.shape:
             raise TypeError('0d block_type is forbidden')
 
@@ -647,19 +651,33 @@ class block_type(dtype):
         return self.element_ty
 
 
-class function_type(dtype):
+class tuple_type(dtype):
 
-    def __init__(self, ret_types: List[dtype], param_types: List[dtype]) -> None:
-        self.ret_types = ret_types
-        self.param_types = param_types
+    def __init__(self, types, fields=None):
+        self.types = types
+        self.fields = fields or [''] * len(types)
+        self.name = '[' + ','.join([f"{k}:{v}" for k, v in zip(self.fields, self.types)]) + ']'
 
     def __str__(self):
-        return f'fn ({self.param_types}) -> {self.ret_types}'
+        return self.name
+
+    def __iter__(self):
+        return iter(self.types)
 
     def to_ir(self, builder: ir.builder):
-        ir_param_types = [ty.to_ir(builder) for ty in self.param_types]
-        ret_types = [ret_type.to_ir(builder) for ret_type in self.ret_types]
-        return builder.get_function_ty(ir_param_types, ret_types)
+        return [ty.to_ir(builder) for ty in self.types]
+
+    def __getitem__(self, index: int) -> dtype:
+        return self.types[index]
+
+    def is_tuple(self):
+        return True
+
+
+class slice_type(dtype):
+
+    def __init__(self):
+        self.name = 'slice_type'
 
 
 # scalar types
@@ -761,7 +779,7 @@ class tensor(_value):
         self.type = type  # Tensor type (can be block_type)
         # Following the practice in pytorch, dtype is scalar type
         self.dtype = type.scalar
-        self.shape = [constexpr(s) for s in self.shape]
+        self.shape = tuple([constexpr(s) for s in self.shape])
 
     def _flatten_ir(self):
         return [self.handle]
@@ -982,13 +1000,16 @@ class tensor(_value):
 
     @builtin
     def __getitem__(self, slices, _builder=None):
-        if isinstance(slices, (slice, constexpr)) or slices is None:
+        import builtins
+        if isinstance(slices, (builtins.slice, slice, constexpr)) or slices is None:
             slices = [slices]
+        if isinstance(slices, tuple):
+            slices = slices.values
         ret = self
         for dim, sl in enumerate(slices):
             if sl is None or isinstance(sl, constexpr) and sl.value is None:
                 ret = semantic.expand_dims(ret, dim, _builder)
-            elif isinstance(sl, slice) and sl.start is None and sl.stop is None and sl.step is None:
+            elif isinstance(sl, (builtins.slice, slice)) and sl.start is None and sl.stop is None and sl.step is None:
                 pass
             else:
                 raise ValueError(f"unsupported tensor index: {sl}")
@@ -1004,13 +1025,7 @@ class tensor(_value):
         """
         Alias for :py:func:`tensor.cast`.
         """
-        # Triton doesn't like core functions calling other core functions, so we
-        # just copy-paste the implementation of cast here.  It's not too bad.
-        dtype = _unwrap_if_constexpr(dtype)
-        bitcast = _unwrap_if_constexpr(bitcast)
-        if bitcast:
-            return semantic.bitcast(self, dtype, _builder)
-        return semantic.cast(self, dtype, _builder, fp_downcast_rounding)
+        return cast(self, dtype, fp_downcast_rounding, bitcast, _builder=_builder)
 
     # Type stubs for functions added by the _tensor_member_fn decorator.
     # (Unfortunately these can't be created automatically.)
@@ -1128,7 +1143,7 @@ class tensor(_value):
     def argmin(self, axis, tie_break_left=True, keep_dims=False) -> tensor:
         ...
 
-    def sum(self, axis=None, keep_dims=False) -> tensor:
+    def sum(self, axis=None, keep_dims=False, dtype=None) -> tensor:
         ...
 
     def xor_sum(self, axis=None, keep_dims=False) -> tensor:
@@ -1145,6 +1160,79 @@ class tensor(_value):
 
     def flip(self, dim=None) -> tensor:
         ...
+
+
+class tuple:
+
+    def __init__(self, args: list, type: tuple_type = None):
+        self.values = [i for i in args]
+
+        def get_type(x):
+            if isinstance(x, dtype):
+                return dtype
+            if isinstance(x, int):
+                return constexpr
+            return x.type
+
+        self.type = type or tuple_type([get_type(x) for x in self.values])
+
+    def __getitem__(self, idx: constexpr):
+        if isinstance(idx, int):
+            idx = constexpr(idx)
+        if isinstance(idx, constexpr):
+            return self.values[idx]
+        else:
+            import builtins
+            assert isinstance(idx, (slice, builtins.slice))
+            return tuple(self.values[idx.start:idx.stop:idx.step])
+
+    def __getattr__(self, name):
+        return self.values[self.type.fields.index(name)]
+
+    # TODO: remove
+    def __setitem__(self, idx: constexpr, value):
+        if isinstance(idx, int):
+            idx = constexpr(idx)
+        assert isinstance(idx, constexpr)
+        self.values[idx] = value
+
+    def __add__(self, other):
+        if isinstance(other, list):
+            other = tuple(other)
+        return tuple(self.values + other.values)
+        # return tuple(a + b for a, b in zip(self.values, other.values))
+
+    def __mul__(self, other):
+        assert isinstance(other, constexpr)
+        return tuple(self.values * other.value)
+
+    def __eq__(self, other):
+        import builtins
+        if isinstance(other, (list, builtins.tuple)):
+            other = tuple(other)
+        return constexpr(self.values == other.values)
+
+    def __hash__(self):
+        import builtins
+        return hash(builtins.tuple(self.values))
+
+    def __str__(self):
+        return str([str(x) for x in self.values])
+
+    def __iter__(self):
+        return iter(self.values)
+
+    def __len__(self):
+        return len(self.values)
+
+
+class slice:
+
+    def __init__(self, start, stop, step):
+        self.start = start
+        self.stop = stop
+        self.step = step
+        self.type = slice_type()
 
 
 class _experimental_tensor_descriptor_base(_value):
@@ -1177,7 +1265,7 @@ class _experimental_tensor_descriptor_base(_value):
         return f"tensor_descriptor<{self.type}>"
 
     @builtin
-    def load(self, offsets: List[tensor], _builder=None) -> tensor:
+    def load(self, offsets: Sequence[constexpr | tensor], _builder=None) -> tensor:
         """Load a block from the descriptor starting at the given element offsets.
 
         Values outside of the tensor bounds will be filled with zeros.
@@ -1187,7 +1275,7 @@ class _experimental_tensor_descriptor_base(_value):
         return semantic.descriptor_load(self, offsets, "", "", _builder)
 
     @builtin
-    def store(self, offsets: List[tensor], value: tensor, _builder=None) -> tensor:
+    def store(self, offsets: Sequence[constexpr | tensor], value: tensor, _builder=None) -> tensor:
         """Store a block from the descriptor starting at the given element offsets.
 
         Values outside of the tensor bounds will be ignored.
@@ -1195,6 +1283,22 @@ class _experimental_tensor_descriptor_base(_value):
         :note: Offset must be a multiple of 16-bytes
         """
         return semantic.descriptor_store(self, value, offsets, _builder)
+
+    @builtin
+    def gather(self, *args, _builder=None) -> tensor:
+        """Gather multiple descriptors worth of data"""
+        assert len(args) == 2, f"descriptor gather only supports 2D indexing, but got {len(args)}"
+        x_offsets = args[0]
+        y_offset = args[1]
+        return semantic.descriptor_gather(self, x_offsets, y_offset, "", "", _builder)
+
+    @builtin
+    def scatter(self, value, *args, _builder=None) -> tensor:
+        """Scatter multiple descriptors worth of data"""
+        assert len(args) == 2, f"descriptor scatter only supports 2D indexing, but got {len(args)}"
+        x_offsets = args[0]
+        y_offset = args[1]
+        return semantic.descriptor_scatter(self, value, x_offsets, y_offset, _builder)
 
 
 class _experimental_tensor_descriptor(_experimental_tensor_descriptor_base):
@@ -1562,7 +1666,7 @@ def expand_dims(input, axis, _builder=None):
     """
     input = semantic.to_tensor(input, _builder)
     axis = _constexpr_to_value(axis)
-    axes = list(axis) if isinstance(axis, Sequence) else [axis]
+    axes = list(axis) if isinstance(axis, (Sequence, tuple)) else [axis]
     new_ndim = len(input.shape) + len(axes)
     axes = [_wrap_axis(_constexpr_to_value(d), new_ndim) for d in axes]
 
@@ -1594,8 +1698,9 @@ def cast(input, dtype: dtype, fp_downcast_rounding: Optional[str] = None, bitcas
     :type bitcast: bool, optional
     """
     input = semantic.to_tensor(input, _builder)
-    if isinstance(bitcast, constexpr):
-        bitcast = bitcast.value
+    dtype = _constexpr_to_value(dtype)
+    fp_downcast_rounding = _constexpr_to_value(fp_downcast_rounding)
+    bitcast = _constexpr_to_value(bitcast)
     if bitcast:
         return semantic.bitcast(input, dtype, _builder)
     return semantic.cast(input, dtype, _builder, fp_downcast_rounding)
@@ -1626,7 +1731,7 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
       the device does not have Tensor Cores or the inputs are not of dtype f32,
       this option is ignored. For devices that do have tensor cores, the
       default precision is tf32.
-    :type input_precision: string. Available options for nvidia: :code:`"tf32"`, :code:`"tf32x3"`, :code:`"ieee"`. Default: :code:`"tf32"`. Avaliable options for amd: :code:`"ieee"`.
+    :type input_precision: string. Available options for nvidia: :code:`"tf32"`, :code:`"tf32x3"`, :code:`"ieee"`. Default: :code:`"tf32"`. Available options for amd: :code:`"ieee"`, (CDNA3 only) :code:`"tf32"`.
     :param allow_tf32: *Deprecated.* If true, input_precision is set to "tf32".
       Only one of :code:`input_precision` and :code:`allow_tf32` can be
       specified (i.e. at least one must be :code:`None`).
@@ -1644,28 +1749,39 @@ def dot(input, other, acc=None, input_precision=None, allow_tf32=None, max_num_i
 
 
 @builtin
-def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None, out_dtype=float32, _builder=None):
+def dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc=None, fast_math=False, out_dtype=float32,
+               _builder=None):
     """
     Returns the matrix product of two blocks in microscaling format.
+
     lhs and rhs use microscaling formats described here:
     https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
+
+    Software emulation enables targeting hardware architectures without native microscaling
+    operation support. Right now for such case, microscaled lhs/rhs are upcasted to
+    :code:`bf16` element type beforehand for dot computation, with one exception:
+    for AMD CDNA3 specifically, if one of the inputs is of :code:`fp16` element type,
+    the other input is also upcasted to :code:`fp16` element type instead.
+    This behavior is experimental and may be subject to change in the future.
+
     :param lhs: The first tensor to be multiplied.
     :type lhs: 2D tensor representing fp4, fp8 or bf16 elements. Fp4 elements are packed into uint8 inputs with the first element in lower bits. Fp8 are stored as uint8 or the corresponding fp8 type.
     :param lhs_scale: Scale factor for lhs tensor.
     :type lhs_scale: e8m0 type represented as an uint8 tensor.
-    :param lhs_format: format of the lhs tensor. Available formats: {:code:`e2m1`, :code:`e4m3`, :code:`e5m2`, :code:`bf16`}.
+    :param lhs_format: format of the lhs tensor. Available formats: {:code:`e2m1`, :code:`e4m3`, :code:`e5m2`, :code:`bf16`, :code:`fp16`}.
     :type lhs_format: str
     :param rhs: The second tensor to be multiplied.
     :type rhs: 2D tensor representing fp4, fp8 or bf16 elements. Fp4 elements are packed into uint8 inputs with the first element in lower bits. Fp8 are stored as uint8 or the corresponding fp8 type.
     :param rhs_scale: Scale factor for rhs tensor.
     :type rhs_scale: e8m0 type represented as an uint8 tensor.
-    :param rhs_format: format of the rhs tensor. Available formats: {:code:`e2m1`, :code:`e4m3`, :code:`e5m2`, :code:`bf16`}.
+    :param rhs_format: format of the rhs tensor. Available formats: {:code:`e2m1`, :code:`e4m3`, :code:`e5m2`, :code:`bf16`, :code:`fp16`}.
     :type rhs_format: str
     :param acc: The accumulator tensor. If not None, the result is added to this tensor.
     """
     out_dtype = _constexpr_to_value(out_dtype)
     assert out_dtype == float32, "Only float32 is supported for out_dtype at the moment"
-    return semantic.dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc, out_dtype, _builder)
+    return semantic.dot_scaled(lhs, lhs_scale, lhs_format, rhs, rhs_scale, rhs_format, acc, fast_math, out_dtype,
+                               _builder)
 
 
 # -----------------------
@@ -1856,7 +1972,7 @@ def _experimental_make_tensor_descriptor(
     """Make an experimental tensor descriptor object
 
     :param base: the base pointer of the tensor, must be 16-byte aligned
-    :param shape: A list of non-negative integers represeting the tensor shape
+    :param shape: A list of non-negative integers representing the tensor shape
     :param strides: A list of tensor strides. Leading dimensions must be multiples
         of 16-byte strides and the last dimension must be contiguous.
     :param block_shape: The shape of block to be loaded/stored from global memory
@@ -1866,7 +1982,7 @@ def _experimental_make_tensor_descriptor(
     On NVIDIA GPUs with TMA support, this will result in a TMA descriptor object
     and loads and stores from the descriptor will be backed by the TMA hardware.
 
-    Currently only 2d tensors are supported.
+    Currently only 2-5 dimensional tensors are supported.
 
     Example
     *******
@@ -2160,7 +2276,8 @@ def clamp(x, min, max, propagate_nan: constexpr = PropagateNan.NONE, _builder=No
 # -----------------------
 
 
-def _add_reduction_docstr(name: str, return_indices_arg: str = None, tie_break_arg: str = None) -> Callable[[T], T]:
+def _add_reduction_docstr(name: str, return_indices_arg: str = None, tie_break_arg: str = None,
+                          dtype_arg: str = None) -> Callable[[T], T]:
 
     def _decorator(func: T) -> T:
         docstr = """
@@ -2180,6 +2297,10 @@ def _add_reduction_docstr(name: str, return_indices_arg: str = None, tie_break_a
             docstr += f"""
     :param {tie_break_arg}: if true, in case of a tie (i.e., multiple elements have the same {name} value), return the left-most index for values that aren't NaN
     :type {tie_break_arg}: bool"""
+        if dtype_arg is not None:
+            docstr += f"""
+    :param {dtype_arg}: the desired data type of the returned tensor. If specified, the input tensor is casted to :code:`{dtype_arg}` before the operation is performed. This is useful for preventing data overflows. If not specified, integer and bool dtypes are upcasted to :code:`tl.int32` and float dtypes are upcasted to at least :code:`tl.float32`.
+    :type {dtype_arg}: tl.dtype"""
 
         func.__doc__ = docstr.format(name=name)
         return func
@@ -2213,14 +2334,12 @@ def reduce(input, axis, combine_fn, keep_dims=False, _builder=None, _generator=N
         return reduce((input, ), axis, combine_fn, keep_dims=keep_dims, _builder=_builder, _generator=_generator)[0]
 
     def make_combine_region(reduce_op):
-        in_scalar_tys = [t.type.scalar for t in input]
-        prototype = function_type(in_scalar_tys, in_scalar_tys * 2)
-
+        param_types = [t.type.scalar for t in input] * 2
         region = reduce_op.get_region(0)
         with _insertion_guard(_builder):
-            param_types = [ty.to_ir(_builder) for ty in prototype.param_types]
-            block = _builder.create_block_with_parent(region, param_types)
-            args = [tensor(block.arg(i), ty) for i, ty in enumerate(prototype.param_types)]
+            to_ir = lambda T: T.to_ir(_builder)
+            block = _builder.create_block_with_parent(region, list(map(to_ir, param_types)))
+            args = [tensor(block.arg(i), ty) for i, ty in enumerate(param_types)]
             results = _generator.call_JitFunction(combine_fn, args, kwargs={})
             if isinstance(results, tensor):
                 handles = [results.handle]
@@ -2314,14 +2433,12 @@ def associative_scan(input, axis, combine_fn, reverse=False, _builder=None, _gen
         return associative_scan((input, ), axis, combine_fn, reverse, _builder=_builder, _generator=_generator)[0]
 
     def make_combine_region(scan_op):
-        in_scalar_tys = [t.type.scalar for t in input]
-        prototype = function_type(in_scalar_tys, in_scalar_tys * 2)
-
+        param_types = [t.type.scalar for t in input] * 2
         region = scan_op.get_region(0)
         with _insertion_guard(_builder):
-            param_types = [ty.to_ir(_builder) for ty in prototype.param_types]
-            block = _builder.create_block_with_parent(region, param_types)
-            args = [tensor(block.arg(i), ty) for i, ty in enumerate(prototype.param_types)]
+            to_ir = lambda T: T.to_ir(_builder)
+            block = _builder.create_block_with_parent(region, list(map(to_ir, param_types)))
+            args = [tensor(block.arg(i), ty) for i, ty in enumerate(param_types)]
             results = _generator.call_JitFunction(combine_fn, args, kwargs={})
             if isinstance(results, tensor):
                 handles = [results.handle]
@@ -2748,9 +2865,15 @@ class range:
     :param loop_unroll_factor: Tells the Triton IR level loop unroller how many
         times to unroll a for loop that this range is used with. Less than 2 for
         this value implies no unrolling.
+    :param disallow_acc_multi_buffer: If true, prevent the accumulator of the dot
+        operation in the loop to be multi-buffered, if applicable.
+    :param flatten: automatically flatten the loop nest starting at this loop to
+        create a single flattened loop. The compiler will try to pipeline the
+        flattened loop which can avoid stage stalling.
     """
 
-    def __init__(self, arg1, arg2=None, step=None, num_stages=None, loop_unroll_factor=None):
+    def __init__(self, arg1, arg2=None, step=None, num_stages=None, loop_unroll_factor=None,
+                 disallow_acc_multi_buffer=False, flatten=False):
         if step is None:
             self.step = constexpr(1)
         else:
@@ -2763,6 +2886,8 @@ class range:
             self.end = arg2
         self.num_stages = num_stages
         self.loop_unroll_factor = loop_unroll_factor
+        self.disallow_acc_multi_buffer = disallow_acc_multi_buffer
+        self.flatten = flatten
 
     def __iter__(self):
         raise RuntimeError("tl.range can only be used in @triton.jit'd functions")

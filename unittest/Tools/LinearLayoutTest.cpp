@@ -1,4 +1,5 @@
 #include "triton/Tools/LinearLayout.h"
+#include "triton/Tools/LayoutUtils.h"
 
 #include "mlir/Support/LLVM.h"
 #include "llvm/Support/Signals.h"
@@ -410,26 +411,6 @@ TEST_F(LinearLayoutTest, InvertAndCompose_NonInjective) {
   EXPECT_EQ(composition.compose(l2), l1);
 }
 
-TEST_F(LinearLayoutTest, InvertAndCompose_SmallerResult) {
-  // The domain of l2 is [0,16), but the codomain of the result is only [0,8),
-  // because there's no value v in the codomain of l1 such that l2^-1(v) >= 8.
-  LinearLayout l1({{S("in1"), {{1}, {2}, {4}}}}, {S("out")});
-  LinearLayout l2({{S("in2"), {{4}, {1}, {2}, {8}}}}, {S("out")});
-  // Pseudo-inverse of l2 is
-  //
-  //  out(1) = 2
-  //  out(2) = 4
-  //  out(4) = 1
-  //  out(8) = 8
-  //
-  // Composing with l1 gives back l2^-1 without the out(8) entry.
-  LinearLayout composition = l1.invertAndCompose(l2);
-  EXPECT_EQ(composition,
-            LinearLayout({{S("in1"), {{2}, {4}, {1}}}}, {{S("in2"), 16}},
-                         /*requireSurjective=*/false));
-  EXPECT_TRUE(composition.compose(l2).equalIgnoringOutDimSizes(l1));
-}
-
 TEST_F(LinearLayoutTest, InvertAndCompose_BroadcastedInDim) {
   LinearLayout l1({{S("in1"), {{2}, {1}, {4}}}, {S("in2"), {{0}}}}, {S("out")});
   LinearLayout l2({{S("in"), {{4}, {1}, {2}}}}, {S("out")});
@@ -514,8 +495,10 @@ TEST_F(LinearLayoutTest, InvertAndCompose_BroadcastedDims) {
   LinearLayout l1({{S("in1"), {{1}, {2}, {4}}}, {S("in2"), {{0}}}}, {S("out")});
   LinearLayout l2({{S("in3"), {{1}, {2}, {4}}}, {S("in4"), {{0}}}}, {S("out")});
   LinearLayout c = l1.invertAndCompose(l2);
-  EXPECT_EQ(c, LinearLayout::identity1D(8, S("in1"), S("in3")) *
-                   LinearLayout::identity1D(2, S("in2"), S("in4")));
+  EXPECT_EQ(c, LinearLayout(
+                   {{S("in1"), {{1, 0}, {2, 0}, {4, 0}}}, {S("in2"), {{0, 0}}}},
+                   {{S("in3"), 8}, {S("in4"), 2}},
+                   /*requireSurjective=*/false));
   EXPECT_EQ(c.compose(l2),
             l1.transposeOuts(llvm::to_vector(l2.getOutDimNames())));
 }
@@ -525,9 +508,63 @@ TEST_F(LinearLayoutTest, InvertAndCompose_BroadcastedDims2) {
   LinearLayout b({{S("in3"), {{2}, {1}}}, {S("in4"), {{0}}}}, {S("out")});
   LinearLayout c = a.invertAndCompose(b);
   EXPECT_EQ(c,
-            LinearLayout({{S("in1"), {{2, 0}, {1, 0}}}, {S("in2"), {{0, 1}}}},
-                         {S("in3"), S("in4")}));
+            LinearLayout({{S("in1"), {{2, 0}, {1, 0}}}, {S("in2"), {{0, 0}}}},
+                         {{S("in3"), 4}, {S("in4"), 2}},
+                         /*requireSurjective=*/false));
   EXPECT_EQ(c.compose(b), a.transposeOuts(llvm::to_vector(b.getOutDimNames())));
+}
+
+TEST_F(LinearLayoutTest, InvertAndCompose_IdentityInDim) {
+  SmallVector<StringAttr> outDims = {S("dim0"), S("dim1"), S("dim2"),
+                                     S("dim3"), S("dim4"), S("dim5"),
+                                     S("dim6"), S("dim7"), S("dim8")};
+
+  LinearLayout src({{S("register"),
+                     {
+                         {0, 0, 0, 0, 0, 0, 0, 0, 1},
+                         {0, 0, 0, 0, 0, 0, 0, 1, 0},
+                     }},
+                    {S("lane"),
+                     {
+                         {0, 0, 0, 0, 0, 0, 1, 0, 0},
+                         {0, 0, 0, 0, 0, 1, 0, 0, 0},
+                         {0, 0, 0, 0, 1, 0, 0, 0, 0},
+                         {0, 0, 0, 1, 0, 0, 0, 0, 0},
+                         {0, 0, 1, 0, 0, 0, 0, 0, 0},
+                     }},
+                    {S("warp"),
+                     {
+                         {0, 1, 0, 0, 0, 0, 0, 0, 0},
+                         {1, 0, 0, 0, 0, 0, 0, 0, 0},
+                     }},
+                    {S("block"), {}}},
+                   outDims);
+  LinearLayout dst({{S("register"),
+                     {
+                         {0, 0, 0, 0, 0, 0, 0, 0, 1},
+                         {0, 0, 0, 0, 0, 0, 0, 1, 0},
+                     }},
+                    {S("lane"),
+                     {
+                         {1, 0, 0, 0, 0, 0, 0, 0, 0},
+                         {0, 1, 0, 0, 0, 0, 0, 0, 0},
+                         {0, 0, 1, 0, 0, 0, 0, 0, 0},
+                         {0, 0, 0, 1, 0, 0, 0, 0, 0},
+                         {0, 0, 0, 0, 1, 0, 0, 0, 0},
+                     }},
+                    {S("warp"),
+                     {
+                         {0, 0, 0, 0, 0, 1, 0, 0, 0},
+                         {0, 0, 0, 0, 0, 0, 1, 0, 0},
+                     }},
+                    {S("block"), {}}},
+                   outDims);
+
+  LinearLayout cvt = dst.invertAndCompose(src);
+  SmallVector<std::pair<StringAttr, int32_t>> k = {
+      {S("register"), 3}, {S("lane"), 0}, {S("warp"), 2}, {S("block"), 0}};
+
+  EXPECT_EQ(dst.apply(k), src.apply(cvt.apply(k)));
 }
 
 TEST_F(LinearLayoutTest, NumConsecutiveInOut) {
@@ -610,35 +647,6 @@ TEST_F(LinearLayoutTest, SublayoutIsZero) {
   EXPECT_FALSE(l1.sublayoutIsZero({S("in1")}, {S("out2")}));
   EXPECT_FALSE(l1.sublayoutIsZero({S("in2")}, {S("out1")}));
   EXPECT_FALSE(l1.sublayoutIsZero({S("in2")}, {S("out2")}));
-}
-
-TEST_F(LinearLayoutTest, SquareSublayoutIsIdentity) {
-  EXPECT_TRUE(LinearLayout::identity1D(4, S("in"), S("in"))
-                  .squareSublayoutIsIdentity({S("in")}));
-  EXPECT_TRUE(LinearLayout::identity1D(4, S("in"), S("in"))
-                  .squareSublayoutIsIdentity({}));
-
-  LinearLayout l1(
-      {{S("in1"), {{1, 1}, {2, 2}, {4, 4}}}, {S("in2"), {{2, 1}, {1, 2}}}},
-      {{S("in1"), 8}, {S("in2"), 8}}, /*requireSurjective=*/false);
-  EXPECT_TRUE(l1.squareSublayoutIsIdentity({S("in1")}));
-  EXPECT_FALSE(l1.squareSublayoutIsIdentity({S("in2")}));
-
-  LinearLayout l2 = LinearLayout::identity1D(4, S("in1"), S("in1")) *
-                    LinearLayout::identity1D(8, S("in2"), S("in2")) *
-                    LinearLayout({{S("in3"), {{1, 1, 1}}}},
-                                 {{S("in1"), 2}, {S("in2"), 2}, {S("in3"), 2}},
-                                 /*requireSurjective=*/false);
-  EXPECT_FALSE(l2.squareSublayoutIsIdentity({S("in1")}));
-  EXPECT_FALSE(l2.squareSublayoutIsIdentity({S("in2")}));
-  EXPECT_TRUE(l2.squareSublayoutIsIdentity({S("in3")}));
-  EXPECT_FALSE(l2.squareSublayoutIsIdentity({S("in1"), S("in2")}));
-
-  LinearLayout l3 = LinearLayout::identity1D(4, S("in1"), S("in1")) *
-                    LinearLayout::identity1D(8, S("in2"), S("in2"));
-  EXPECT_TRUE(l3.squareSublayoutIsIdentity({S("in1")}));
-  EXPECT_TRUE(l3.squareSublayoutIsIdentity({S("in2")}));
-  EXPECT_TRUE(l3.squareSublayoutIsIdentity({S("in1"), S("in2")}));
 }
 
 TEST_F(LinearLayoutTest, FreeVariableMasks) {
@@ -747,37 +755,106 @@ TEST_F(LinearLayoutTest, QuotientIdentityMultipleDimensions) {
   ASSERT_TRUE(quotientLayout->quotient({S("dim2")}).has_value());
 }
 
-TEST_F(LinearLayoutTest, Resize) {
-  auto init = LinearLayout(
-      {
-          {S("in0"), {{0, 1}, {0, 2}}},
-          {S("in1"), {{1, 0}, {2, 0}}},
-          {S("in2"), {}},
-      },
-      {S("dim0"), S("dim1")});
-  EXPECT_EQ(init.resize(S("in0"), 8),
-            LinearLayout(
-                {
-                    {S("in0"), {{0, 1}, {0, 2}, {0, 0}}},
-                    {S("in1"), {{1, 0}, {2, 0}}},
-                    {S("in2"), {}},
-                },
-                {S("dim0"), S("dim1")}));
-  EXPECT_EQ(init.resize(S("in0"), 4), LinearLayout(
-                                          {
-                                              {S("in0"), {{0, 1}, {0, 2}}},
-                                              {S("in1"), {{1, 0}, {2, 0}}},
-                                              {S("in2"), {}},
-                                          },
-                                          {S("dim0"), S("dim1")}));
-  EXPECT_EQ(init.resize(S("in1"), 8),
-            LinearLayout(
-                {
-                    {S("in0"), {{0, 1}, {0, 2}}},
-                    {S("in1"), {{1, 0}, {2, 0}, {0, 0}}},
-                    {S("in2"), {}},
-                },
-                {S("dim0"), S("dim1")}));
+LinearLayout getPackedCoordtoPaddedOffset(int M, int KPacked8b, StringAttr row,
+                                          StringAttr col, StringAttr offset) {
+  std::vector<std::vector<int>> basesRows, basesCols;
+  for (int i = 0; i < llvm::Log2_32(M); ++i) {
+    int row = 1 << i;
+    int col = 0;
+    int linearCoord = row * KPacked8b + col;
+    int offset = (linearCoord / 8) * 16 + (linearCoord % 8);
+    basesRows.push_back({offset});
+  }
+
+  for (int j = 0; j < llvm::Log2_32(KPacked8b); ++j) {
+    int row = 0;
+    int col = 1 << j;
+    int linearCoord = row * KPacked8b + col;
+    int offset = (linearCoord / 8) * 16 + (linearCoord % 8);
+    basesCols.push_back({offset});
+  }
+
+  return LinearLayout({{row, basesRows}, {col, basesCols}},
+                      {{offset, M * KPacked8b * 2}}, /*surjective*/ false);
+}
+
+TEST_F(LinearLayoutTest, BlackwellMixedPrecisionDotScaledSMEM) {
+  std::vector<std::vector<int>> basesRows, basesCols, basesOffset;
+  int numFp4Elems = 128;
+  int M = 16;
+  int KPacked8b = numFp4Elems / M / 2;
+  int KPadded8b = numFp4Elems / M;
+
+  for (int i = 0; i < llvm::Log2_32(M * KPadded8b); ++i) {
+    int offset = 1 << i;
+    int linearCoordPacked = offset / 16 * 8 + offset % 8;
+    int row = linearCoordPacked / KPacked8b;
+    int col = linearCoordPacked % KPacked8b;
+    basesOffset.push_back({row, col});
+  }
+
+  LinearLayout layout({{S("offset"), basesOffset}}, {S("row"), S("col")});
+  LinearLayout layoutInverseComputed = layout.pseudoinvert();
+  LinearLayout layoutInverseManual = getPackedCoordtoPaddedOffset(
+      M, KPacked8b, S("row"), S("col"), S("offset"));
+
+  for (int i = 0; i < M; ++i) {
+    for (int j = 0; j < KPacked8b; ++j) {
+      auto off1 = layoutInverseManual.apply({{S("row"), i}, {S("col"), j}});
+      auto off2 = layoutInverseComputed.apply({{S("row"), i}, {S("col"), j}});
+      EXPECT_EQ(off1[0].second, off2[0].second);
+    }
+  }
+}
+
+TEST_F(LinearLayoutTest, BlackwellMixedPrecisionDotScaledSMEMSwizzled) {
+  int M = 16;
+  int KPadded8b = 128;
+  int numFp4Elems = M * KPadded8b;
+  int KPacked8b = KPadded8b / 2;
+  int elemBitWidth = 8;
+  int tileWidthBytes = 128;
+  int tileRows = 8;
+  int tileCols = 8 * tileWidthBytes / elemBitWidth;
+  int vec = 16;
+
+  std::vector<std::vector<int>> bases2D;
+  for (int logCol = 0; logCol < llvm::Log2_32(tileCols); logCol++) {
+    int colPadded = 1 << logCol;
+    int colPacked = colPadded / 16 * 8 + colPadded % 8;
+    bases2D.push_back({0, colPacked});
+  }
+  for (int logRow = 0; logRow < llvm::Log2_32(tileRows); logRow++) {
+    int row = 1 << logRow;
+    int perPhase = 1;
+    int maxPhase = 8;
+    int colPadded = vec * ((row / perPhase) % maxPhase);
+    int colPacked = colPadded / 16 * 8 + colPadded % 8;
+    bases2D.push_back({row, colPacked});
+  }
+
+  LinearLayout layoutSwizzled({{S("offset"), bases2D}}, {S("row"), S("col")});
+  layoutSwizzled = ensureLayoutNotSmallerThan(
+      layoutSwizzled, {{S("row"), M}, {S("col"), KPacked8b}});
+
+  auto layoutInverseSwizzled = layoutSwizzled.pseudoinvert();
+
+  LinearLayout layoutInverseNoSwizzle = getPackedCoordtoPaddedOffset(
+      M, KPacked8b, S("row"), S("col"), S("offset"));
+
+  for (int i = 0; i < M; ++i) {
+    for (int j = 0; j < KPacked8b; ++j) {
+      auto nonSwizzleOffset =
+          layoutInverseNoSwizzle.apply({{S("row"), i}, {S("col"), j}})[0]
+              .second;
+      auto swizzledOffset =
+          layoutInverseSwizzled.apply({{S("row"), i}, {S("col"), j}})[0].second;
+      int row = nonSwizzleOffset / KPadded8b;
+      int col = nonSwizzleOffset % KPadded8b;
+      int colSwizzled = ((col / 16) ^ (row % 8)) * 16 + col % 16;
+      EXPECT_EQ(row * KPadded8b + colSwizzled, swizzledOffset);
+    }
+  }
 }
 
 } // anonymous namespace

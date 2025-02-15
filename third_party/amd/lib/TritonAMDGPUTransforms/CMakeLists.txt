@@ -1,5 +1,6 @@
 add_triton_library(TritonAMDGPUTransforms
   AccelerateAMDMatmul.cpp
+  BlockPingpong.cpp
   CanonicalizePointers.cpp
   ConvertToBufferOps.cpp
   OptimizeEpilogue.cpp
@@ -11,6 +12,7 @@ add_triton_library(TritonAMDGPUTransforms
   TritonAMDGPUIR
   TritonAMDGPUTransformsIncGen
   TritonGPUIR
+  TritonAMDUtils
 )
 
 target_include_directories(TritonAMDGPUTransforms PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../../include)

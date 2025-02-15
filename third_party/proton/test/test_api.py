@@ -130,35 +130,41 @@ def test_scope_metrics(tmp_path: pathlib.Path):
     proton.enter_scope("test3", metrics={"a": 1.0})
     proton.exit_scope()
 
+    # exit_scope can also take metrics
+    proton.enter_scope("test4")
+    proton.exit_scope(metrics={"b": 1.0})
+
     proton.finalize()
     assert temp_file.exists()
     with temp_file.open() as f:
         data = json.load(f)
-    assert len(data[0]["children"]) == 3
+    assert len(data[0]["children"]) == 4
     for child in data[0]["children"]:
         if child["frame"]["name"] == "test3":
             assert child["metrics"]["a"] == 2.0
+        elif child["frame"]["name"] == "test4":
+            assert child["metrics"]["b"] == 1.0
 
 
 def test_scope_properties(tmp_path: pathlib.Path):
-    temp_file = tmp_path / "test.hatchet"
+    temp_file = tmp_path / "test_scope_properties.hatchet"
     proton.start(str(temp_file.with_suffix("")))
     # Test different scope creation methods
     # Different from metrics, properties could be str
-    with proton.scope("test0", properties={"a": "1"}):
+    with proton.scope("test0", {"a (pty)": "1"}):
         pass
 
-    @proton.scope("test1", properties={"a": "1"})
+    @proton.scope("test1", {"a (pty)": "1"})
     def foo():
         pass
 
     foo()
 
     # Properties do not aggregate
-    proton.enter_scope("test2", properties={"a": 1.0})
+    proton.enter_scope("test2", metrics={"a (pty)": 1.0})
     proton.exit_scope()
 
-    proton.enter_scope("test2", properties={"a": 1.0})
+    proton.enter_scope("test2", metrics={"a (pty)": 1.0})
     proton.exit_scope()
 
     proton.finalize()
@@ -170,6 +176,32 @@ def test_scope_properties(tmp_path: pathlib.Path):
             assert child["metrics"]["a"] == 1.0
         elif child["frame"]["name"] == "test0":
             assert child["metrics"]["a"] == "1"
+
+
+def test_scope_exclusive(tmp_path: pathlib.Path):
+    temp_file = tmp_path / "test_scope_exclusive.hatchet"
+    proton.start(str(temp_file.with_suffix("")))
+    # metric a only appears in the outermost scope
+    # metric b only appears in the innermost scope
+    # both metrics do not appear in the root scope
+    with proton.scope("test0", metrics={"a (exc)": "1"}):
+        with proton.scope("test1", metrics={"b (exc)": "1"}):
+            pass
+
+    proton.finalize()
+    assert temp_file.exists()
+    with temp_file.open() as f:
+        data = json.load(f)
+    root_metrics = data[0]["metrics"]
+    assert len(root_metrics) == 0
+    test0_frame = data[0]["children"][0]
+    test0_metrics = test0_frame["metrics"]
+    assert len(test0_metrics) == 1
+    assert test0_metrics["a"] == "1"
+    test1_frame = test0_frame["children"][0]
+    test1_metrics = test1_frame["metrics"]
+    assert len(test1_metrics) == 1
+    assert test1_metrics["b"] == "1"
 
 
 def test_state(tmp_path: pathlib.Path):

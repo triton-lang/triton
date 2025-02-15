@@ -30,13 +30,15 @@ def test_torch(context, tmp_path: pathlib.Path):
         assert data[0]["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
     elif context == "python":
         assert len(data[0]["children"]) == 1
-        # The last frame is the torch kernel
-        prev_frame = data
-        curr_frame = data[0]["children"]
-        while len(curr_frame) > 0:
-            prev_frame = curr_frame
-            curr_frame = curr_frame[0]["children"]
-        assert "elementwise_kernel" in prev_frame[0]["frame"]["name"]
+        # bfs search until find the "elementwise_kernel" and then check its children
+        queue = [data[0]]
+        while len(queue) > 0:
+            parent_frame = queue.pop(0)
+            for child in parent_frame["children"]:
+                if "elementwise_kernel" in child["frame"]["name"]:
+                    assert len(child["children"]) == 0
+                    return
+                queue.append(child)
 
 
 def test_triton(tmp_path: pathlib.Path):
@@ -157,6 +159,24 @@ def test_scope_backward(tmp_path: pathlib.Path):
     assert len(data[0]["children"]) == 4
 
 
+def test_cpu_timed_scope(tmp_path: pathlib.Path):
+    temp_file = tmp_path / "test_cpu_timed_scope.hatchet"
+    proton.start(str(temp_file.with_suffix("")))
+    with proton.cpu_timed_scope("test0"):
+        with proton.cpu_timed_scope("test1"):
+            torch.ones((100, 100), device="cuda")
+    proton.finalize()
+    with temp_file.open() as f:
+        data = json.load(f)
+    assert len(data[0]["children"]) == 1
+    test0_frame = data[0]["children"][0]
+    assert test0_frame["metrics"]["cpu_time (ns)"] > 0
+    test1_frame = test0_frame["children"][0]
+    assert test1_frame["metrics"]["cpu_time (ns)"] > 0
+    kernel_frame = test1_frame["children"][0]
+    assert kernel_frame["metrics"]["time (ns)"] > 0
+
+
 def test_hook(tmp_path: pathlib.Path):
 
     def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
@@ -190,7 +210,6 @@ def test_hook(tmp_path: pathlib.Path):
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
 def test_hook_gpu_kernel(tmp_path: pathlib.Path, context: str):
-    tmp_path = pathlib.Path("./")
 
     def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
         x = args["x"]

@@ -29,10 +29,12 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/PatternMatch.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Traits.h"
 
 // clang-format off
 #include "amd/include/Dialect/TritonAMDGPU/IR/Dialect.h.inc"
+#include "amd/include/Dialect/TritonAMDGPU/IR/TritonAMDGPUEnums.h.inc"
 // clang-format on
 
 #define GET_ATTRDEF_CLASSES

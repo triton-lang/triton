@@ -7,8 +7,7 @@ import pathlib
 
 def test_help():
     # Only check if the viewer can be invoked
-    ret = subprocess.check_call(["proton", "-h"], stdout=subprocess.DEVNULL)
-    assert ret == 0
+    subprocess.check_call(["proton", "-h"], stdout=subprocess.DEVNULL)
 
 
 def is_hip():
@@ -22,14 +21,13 @@ def test_exec(mode, tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_exec.hatchet"
     name = str(temp_file.with_suffix(""))
     if mode == "script":
-        ret = subprocess.check_call(["proton", "-n", name, helper_file, "test"], stdout=subprocess.DEVNULL)
+        subprocess.check_call(["proton", "-n", name, helper_file, "test"], stdout=subprocess.DEVNULL)
     elif mode == "python":
-        ret = subprocess.check_call(["python3", "-m", "triton.profiler.proton", "-n", name, helper_file, "test"],
-                                    stdout=subprocess.DEVNULL)
+        subprocess.check_call(["python3", "-m", "triton.profiler.proton", "-n", name, helper_file, "test"],
+                              stdout=subprocess.DEVNULL)
     elif mode == "pytest":
-        ret = subprocess.check_call(["proton", "-n", name, "pytest", "-k", "test_main", helper_file],
-                                    stdout=subprocess.DEVNULL)
-    assert ret == 0
+        subprocess.check_call(["proton", "-n", name, "pytest", "-k", "test_main", helper_file],
+                              stdout=subprocess.DEVNULL)
     with temp_file.open() as f:
         data = json.load(f, )
     kernels = data[0]["children"]
@@ -40,8 +38,8 @@ def test_exec(mode, tmp_path: pathlib.Path):
 def test_instrument_exec():
 
     try:
-        out = subprocess.Popen(["proton", "--instrument=print-mem-spaces", "instrument.py"], stderr=subprocess.PIPE,
-                               stdout=subprocess.PIPE)
+        out = subprocess.Popen(["proton", "--instrument=print-mem-spaces", "instrument.py"],
+                               cwd=pathlib.Path(__file__).parent, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
     except Exception as e:
         print(f"An error occurred while executing proton: {e}")
 

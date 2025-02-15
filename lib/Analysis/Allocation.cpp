@@ -12,6 +12,12 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/raw_ostream.h"
+
+#define DEBUG_TYPE "allocation-shared-memory"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace mlir {
 
@@ -22,6 +28,8 @@ namespace triton {
 
 // Bitwidth of pointers
 constexpr int kPtrBitWidth = 64;
+// Max shmem LDS/STS instruction in bits
+constexpr int kMaxShmemVecBitLength = 128;
 
 static SmallVector<unsigned> getRepShapeForCvt(RankedTensorType srcTy,
                                                RankedTensorType dstTy) {
@@ -69,6 +77,38 @@ static SmallVector<unsigned> getRepShapeForAtomic(Value result) {
   return smemShape;
 }
 
+std::pair<unsigned, unsigned>
+getScratchCvtInOutVecLengths(RankedTensorType srcTy, RankedTensorType dstTy) {
+  Attribute srcLayout = srcTy.getEncoding();
+  Attribute dstLayout = dstTy.getEncoding();
+
+  auto srcLinAttr = gpu::toLinearEncoding(srcLayout, srcTy.getShape());
+  auto dstLinAttr = gpu::toLinearEncoding(dstLayout, dstTy.getShape());
+  auto inOrd = srcLinAttr.getOrder();
+  auto outOrd = dstLinAttr.getOrder();
+
+  unsigned rank = srcTy.getRank();
+
+  unsigned srcContigPerThread = srcLinAttr.getContigPerThread()[inOrd[0]];
+  unsigned dstContigPerThread = dstLinAttr.getContigPerThread()[outOrd[0]];
+  // TODO: Fix the legacy issue that outOrd[0] == 0 always means
+  //       that we cannot do vectorization.
+  unsigned innerDim = rank - 1;
+  unsigned inVec = outOrd[0] != innerDim  ? 1
+                   : inOrd[0] != innerDim ? 1
+                                          : srcContigPerThread;
+  unsigned outVec = outOrd[0] != innerDim ? 1 : dstContigPerThread;
+
+  if (isa<gpu::NvidiaMmaEncodingAttr>(srcLayout) &&
+      isa<gpu::BlockedEncodingAttr>(dstLayout)) {
+    // when storing from mma layout and loading in blocked layout vectorizing
+    // the load back gives better performance even if there is a
+    // transposition.
+    outVec = dstContigPerThread;
+  }
+  return {inVec, outVec};
+}
+
 ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
                                      RankedTensorType dstTy) {
   // Initialize vector sizes and stride
@@ -81,30 +121,29 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
   Attribute dstLayout = dstTy.getEncoding();
 
   assert(cvtNeedsSharedMemory(srcTy, dstTy));
-
-  const auto &inOrd = gpu::getOrder(srcLayout);
-  const auto &outOrd = gpu::getOrder(dstLayout);
+  auto outOrd = gpu::toLinearEncoding(dstLayout, dstTy.getShape()).getOrder();
   scratchConfig.order = outOrd;
 
-  unsigned srcContigPerThread =
-      gpu::getUniqueContigPerThread(srcLayout, srcTy.getShape())[inOrd[0]];
-  unsigned dstContigPerThread =
-      gpu::getUniqueContigPerThread(dstLayout, dstTy.getShape())[outOrd[0]];
-  // TODO: Fix the legacy issue that ourOrd[0] == 0 always means
-  //       that we cannot do vectorization.
-  unsigned innerDim = rank - 1;
-  scratchConfig.inVec = outOrd[0] != innerDim  ? 1
-                        : inOrd[0] != innerDim ? 1
-                                               : srcContigPerThread;
-  scratchConfig.outVec = outOrd[0] != innerDim ? 1 : dstContigPerThread;
-
-  if (mlir::isa<gpu::NvidiaMmaEncodingAttr>(srcLayout) &&
-      mlir::isa<gpu::BlockedEncodingAttr>(dstLayout)) {
-    // when storing from mma layout and loading in blocked layout vectorizing
-    // the load back gives better performance even if there is a
-    // transposition.
-    scratchConfig.outVec = dstContigPerThread;
-  }
+  std::tie(scratchConfig.inVec, scratchConfig.outVec) =
+      getScratchCvtInOutVecLengths(srcTy, dstTy);
+  // We can't write a longer vector than the shape of shared memory.
+  // This shape might be smaller than the tensor shape in case we decided to
+  // do the conversion in multiple iterations.
+  unsigned contiguousShapeDim = scratchConfig.repShape[scratchConfig.order[0]];
+  scratchConfig.inVec = std::min(scratchConfig.inVec, contiguousShapeDim);
+  scratchConfig.outVec = std::min(scratchConfig.outVec, contiguousShapeDim);
+  // Clamp the vector length to kMaxShmemVecBitLength / element bitwidth as this
+  // is the max vectorisation
+  auto inBitWidth = isa<PointerType>(srcTy.getElementType())
+                        ? kPtrBitWidth
+                        : srcTy.getElementTypeBitWidth();
+  auto outBitWidth = isa<PointerType>(dstTy.getElementType())
+                         ? kPtrBitWidth
+                         : dstTy.getElementTypeBitWidth();
+  scratchConfig.inVec =
+      std::min(scratchConfig.inVec, kMaxShmemVecBitLength / inBitWidth);
+  scratchConfig.outVec =
+      std::min(scratchConfig.outVec, kMaxShmemVecBitLength / outBitWidth);
 
   // No padding is required if the tensor is 1-D, or if all dimensions except
   // the first accessed dimension have a size of 1.
@@ -141,8 +180,8 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
     auto dstTy = cvtLayout.getType();
     auto srcEncoding = srcTy.getEncoding();
     auto dstEncoding = dstTy.getEncoding();
-    if (mlir::isa<gpu::SharedEncodingAttr>(srcEncoding) ||
-        mlir::isa<gpu::SharedEncodingAttr>(dstEncoding)) {
+    if (mlir::isa<gpu::SharedEncodingTrait>(srcEncoding) ||
+        mlir::isa<gpu::SharedEncodingTrait>(dstEncoding)) {
       // Conversions from/to shared memory do not need scratch memory.
       return 0;
     }
@@ -169,7 +208,7 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
     assert(!isa<PointerType>(elemTy) && "unexpected pointer type");
     return elems * std::max<int>(8, elemTy.getIntOrFloatBitWidth()) / 8;
   }
-  if (auto createTensormap = dyn_cast<ExperimentalTensormapCreateOp>(op)) {
+  if (isa<ExperimentalTensormapCreateOp>(op)) {
     constexpr int32_t kTMASize = 128;
     return kTMASize;
   }
@@ -210,7 +249,7 @@ private:
         // Bytes could be a different value once we support padding or other
         // allocation policies.
         auto allocType = alloc.getType();
-        auto shapePerCTA = gpu::getShapePerCTA(allocType);
+        auto shapePerCTA = gpu::getAllocationShapePerCTA(allocType);
         auto bytes = product<int64_t>(shapePerCTA) *
                      allocType.getElementTypeBitWidth() / 8;
 
@@ -297,6 +336,10 @@ private:
       auto value = valueBufferIter.first;
       auto *buffer = valueBufferIter.second;
       bufferRange[buffer] = getLiveness(value);
+      LLVM_DEBUG({
+        llvm::dbgs() << "-- buffer " << buffer->id << "; value: ";
+        value.dump();
+      });
     }
   }
 
@@ -336,6 +379,10 @@ private:
         auto *buffer = opScratchIter.second;
         bufferRange.insert({buffer, Interval(operationId.lookup(op),
                                              operationId.lookup(op) + 1)});
+        LLVM_DEBUG({
+          llvm::dbgs() << "-- buffer " << buffer->id << "; value: ";
+          op->dump();
+        });
       }
     };
     processScratchMemory(allocation->opScratch);
@@ -387,6 +434,44 @@ private:
     resolveScratchBufferLiveness(operationId);
   }
 
+  void dumpBuffers() {
+    LDBG("Dump bufferRange: id size offset ---------");
+    for (auto bufferIter : bufferRange) {
+      llvm::dbgs() << "-- " << bufferIter.first->id << " "
+                   << bufferIter.first->size << " " << bufferIter.first->offset;
+      llvm::dbgs() << " interval " << bufferIter.second.start() << " "
+                   << bufferIter.second.end() << "\n";
+    }
+  }
+
+  void dumpAllocationSize() {
+    LDBG("Dump shared memory allocation size -----------");
+    auto liveBuffers = allocation->getLiveBuffers();
+    auto analyzedSize = 0;
+    for (auto [op, bufferIds] : liveBuffers) {
+      auto size = 0;
+      for (auto bufferId : bufferIds) {
+        auto bufferSize = allocation->getAllocatedSize(bufferId);
+        size += bufferSize;
+      }
+      analyzedSize = std::max(analyzedSize, size);
+    }
+    llvm::dbgs() << "Allocated: " << allocation->sharedMemorySize
+                 << ", analyzed: " << analyzedSize << "\n";
+  }
+
+  void dumpInterferenceGraph(const GraphT &interference) {
+    LDBG("\n");
+    LDBG("Dump interference graph: \n");
+    for (auto edges : interference) {
+      llvm::dbgs() << "-- from " << edges.first->id << " to ";
+      for (auto node : edges.second) {
+        llvm::dbgs() << node->id << "; ";
+      }
+      llvm::dbgs() << "\n";
+    }
+  }
+
   /// Computes the shared memory offsets for all related values.
   /// Paper: Algorithms for Compile-Time Memory Optimization
   /// (https://dl.acm.org/doi/pdf/10.5555/314500.315082)
@@ -395,6 +480,14 @@ private:
     for (auto bufferIter : bufferRange) {
       buffers.emplace_back(bufferIter.first);
     }
+
+    // Sort buffers by size in descending order to reduce the fragmentation
+    // on big buffers caused by smaller buffers. Big buffers have a higher
+    // chance to overlap with multiple other buffers, and allocating them first
+    // (by calculateStarts) ensures a higher chance that they will occupy a
+    // standalone smem slot.
+    llvm::stable_sort(
+        buffers, [&](BufferT *A, BufferT *B) { return A->size > B->size; });
 
     calculateStarts(buffers);
 
@@ -411,6 +504,8 @@ private:
       allocate(buffers, interference);
       buildInterferenceGraph(buffers, interference);
     } while (!interference.empty());
+
+    LLVM_DEBUG(dumpAllocationSize());
   }
 
   /// Computes the initial shared memory offsets.
@@ -471,6 +566,7 @@ private:
         xBuffers.erase(bufferIt);
       }
     }
+    LLVM_DEBUG(dumpBuffers());
   }
 
   /// Builds a graph of all shared memory values. Edges are created between
@@ -497,6 +593,8 @@ private:
         }
       }
     }
+
+    LLVM_DEBUG(dumpInterferenceGraph(interference));
   }
 
   /// Finalizes shared memory offsets considering interference.
@@ -524,6 +622,9 @@ private:
       }
       auto it = std::find(available.begin(), available.end(), true);
       colors[x] = std::distance(available.begin(), it);
+      LLVM_DEBUG({
+        llvm::dbgs() << "-- color " << x->id << " " << colors[x] << "\n";
+      });
     }
     // Finalize allocation
     // color0: [0, 7), [0, 8), [0, 15) -> [0, 7), [0, 8), [0, 15)
@@ -541,6 +642,7 @@ private:
       allocation->sharedMemorySize =
           std::max(allocation->sharedMemorySize, x->offset + x->size);
     }
+    LLVM_DEBUG(dumpBuffers());
   }
 
 private:
@@ -565,7 +667,7 @@ Allocation::getLiveBuffers() {
   std::map<Operation *, SmallVector<BufferId>> liveBuffers;
 
   Operation *rootOperation = getOperation();
-  mlir::Liveness liveness(rootOperation);
+  Liveness liveness(rootOperation);
   auto analyzeOperation = [&](Operation *op) -> void {
     auto scratchBuffer = getBufferId(op);
     if (scratchBuffer != InvalidBufferId)

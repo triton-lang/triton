@@ -48,8 +48,6 @@ static Operation *streamPredication(RewriterBase &rewriter, Operation *op,
     dotOp->moveBefore(yield);
     ifOp.getElseBodyBuilder().create<scf::YieldOp>(loc, dotOp.getC());
     return ifOp;
-  } else if (isa<gpu::BarrierOp>(op)) {
-    return op;
   }
   return tt::predicateOp(rewriter, op, pred);
 }
@@ -121,7 +119,8 @@ private:
 
   LogicalResult preprocessLoopAndBuildSchedule();
 
-  Value createAlloc(Operation *loadOp, ttg::SharedEncodingAttr sharedEnc,
+  Value createAlloc(Operation *loadOp,
+                    ttg::SwizzledSharedEncodingAttr sharedEnc,
                     unsigned numBuffers);
   void createStreamCopy(tt::LoadOp loadOp, Value alloc, Value extractIdx);
   void createStreamOps();
@@ -170,7 +169,7 @@ private:
 
   struct LoadInfo {
     // Shared layout is used for loads feeding into dot ops.
-    ttg::SharedEncodingAttr sharedEncoding = nullptr;
+    ttg::SwizzledSharedEncodingAttr sharedEncoding = nullptr;
     // The distance of this load's stage to its use' stage.
     int distToUse = 0;
     bool usedByDot = false;
@@ -322,18 +321,18 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
 // If all the transitive uses of the given value have are used by a convert to
 // the same dot operand encoding, return true and get the shared encoding that
 // needs to be used to be compatible with users' layouts.
-static std::optional<ttg::SharedEncodingAttr>
+static std::optional<ttg::SwizzledSharedEncodingAttr>
 getSharedEncIfAllUsersAreDotEnc(Value val) {
-  ttg::SharedEncodingAttr attr;
+  ttg::SwizzledSharedEncodingAttr attr;
   for (Operation *user : val.getUsers()) {
-    ttg::SharedEncodingAttr tempAttr;
+    ttg::SwizzledSharedEncodingAttr tempAttr;
     if (user->getNumResults() != 1)
       return std::nullopt;
     if (auto memDesc =
             dyn_cast<triton::gpu::MemDescType>(user->getResult(0).getType())) {
       // First time we find a shared encoding in the chain, save it and try to
       // use it if it is compatible with the other users.
-      tempAttr = cast<ttg::SharedEncodingAttr>(memDesc.getEncoding());
+      tempAttr = cast<ttg::SwizzledSharedEncodingAttr>(memDesc.getEncoding());
       if (!getSharedEncIfAllUsersAreDotEnc(user->getResult(0)).has_value())
         return std::nullopt;
     } else {
@@ -350,8 +349,8 @@ getSharedEncIfAllUsersAreDotEnc(Value val) {
       unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
       SmallVector<unsigned> sharedOrder;
       int rank = order.size();
-      // TODO rework this when shared -> dotOp conversions support arbitrary
-      // shared memory ordering
+      // TODO rework this when shared -> dotOperand conversions support
+      // arbitrary shared memory ordering
       if (rank == 3) {
         // Move the batch dimension (dim #0) to be the last so that it will be
         // the slowest varying dimension.
@@ -362,7 +361,7 @@ getSharedEncIfAllUsersAreDotEnc(Value val) {
       } else {
         sharedOrder = order;
       }
-      tempAttr = ttg::SharedEncodingAttr::get(
+      tempAttr = ttg::SwizzledSharedEncodingAttr::get(
           val.getContext(), dotOpEnc, srcTy.getShape(), sharedOrder, CTALayout,
           bitWidth, /*needTrans=*/false);
     }
@@ -405,7 +404,7 @@ void StreamPipeliner::computeLoadOpsToIndirectionLevelAndUse() {
       };
 
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (!op.hasTrait<OpTrait::DotLike>())
+    if (!isa<mlir::triton::DotOpInterface>(op))
       continue;
     seen.clear();
     dfs(&op, 0, &op);
@@ -455,7 +454,7 @@ void StreamPipeliner::assignMemoryLayouts() {
       continue;
     }
 
-    if (use->hasTrait<OpTrait::DotLike>()) {
+    if (isa<mlir::triton::DotOpInterface>(use)) {
       // Only use shared memory when feeding into a dot op.
       loadInfo.usedByDot = true;
       loadInfo.sharedEncoding =
@@ -627,12 +626,11 @@ void StreamPipeliner::scheduleRemainingToLastStage() {
   // Assign the rest of the ops to the last stage.
   // Take care of the ordering of the ops - uses cannot be scheduled to the
   // cluster before the definition.
+  auto cluster = config[SCHED_TAIL].cluster;
   DenseMap<Operation *, tt::CoarseSchedule::Cluster> opToCluster;
   for (auto &op : forOp.getBody()->without_terminator()) {
-    if (schedule.count(&op) == 0) {
-      auto schedType = isa<gpu::BarrierOp>(op) ? SCHED_COMPUTE : SCHED_TAIL;
-      opToCluster[&op] = config[schedType].cluster;
-    }
+    if (schedule.count(&op) == 0)
+      opToCluster[&op] = cluster;
   }
   SmallVector<Operation *> queue;
   for (auto [op, stage, cluster] : schedule.getOpsInOrder(forOp)) {
@@ -662,7 +660,7 @@ void StreamPipeliner::scheduleRemainingToLastStage() {
 
 // Create an allocation that can hold distance number of loadOp shapes.
 Value StreamPipeliner::createAlloc(Operation *loadOp,
-                                   ttg::SharedEncodingAttr sharedEnc,
+                                   ttg::SwizzledSharedEncodingAttr sharedEnc,
                                    unsigned numBuffers) {
   OpBuilder builder(forOp);
   Attribute sharedMemorySpace =
@@ -673,8 +671,7 @@ Value StreamPipeliner::createAlloc(Operation *loadOp,
   Type memdescType = ttg::MemDescType::get(bufferShape, ty.getElementType(),
                                            sharedEnc, sharedMemorySpace,
                                            /*mutableMemory=*/true);
-  auto alloc =
-      builder.create<ttg::LocalAllocOp>(loadOp->getLoc(), memdescType, Value());
+  auto alloc = builder.create<ttg::LocalAllocOp>(loadOp->getLoc(), memdescType);
   sharedMemAllocs.push_back(alloc);
   return alloc;
 }
@@ -812,13 +809,16 @@ static bool checkPrecondition(scf::ForOp forOp) {
                    [](Value operand) { return !operand.getDefiningOp(); }))
     return false;
 
-  // Don't pipeline outer loops.
-  auto hasNestedLoopInside = [forOp](Operation *op) {
+  auto hasInvalidOp = [forOp](Operation *op) {
+    // Don't pipeline outer loops.
     if (op != forOp && isa<scf::ForOp, scf::WhileOp>(op))
+      return WalkResult::interrupt();
+    // Don't pipeline loops with barriers.
+    if (isa<gpu::BarrierOp>(op))
       return WalkResult::interrupt();
     return WalkResult::advance();
   };
-  return !forOp->walk(hasNestedLoopInside).wasInterrupted();
+  return !forOp->walk(hasInvalidOp).wasInterrupted();
 }
 
 namespace {

@@ -31,6 +31,11 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
+#include "llvm/Support/Debug.h"
+
+#define DEBUG_TYPE "tritongpu-prefetch"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace mlir {
 namespace triton {
@@ -136,8 +141,9 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
         builder.create<arith::ConstantIntOp>(v.getLoc(), off, 32));
   Value newSmem = builder.create<triton::gpu::MemDescSubviewOp>(
       v.getLoc(),
-      triton::gpu::MemDescType::get(shape, elementType, type.getEncoding(),
-                                    type.getMemorySpace()),
+      triton::gpu::MemDescType::get(
+          shape, elementType, type.getEncoding(), type.getMemorySpace(),
+          type.getMutableMemory(), type.getAllocShape()),
       v, offsetsVal);
 
   auto dotOperandEnc = triton::gpu::DotOperandEncodingAttr::get(
@@ -185,6 +191,7 @@ LogicalResult Prefetcher::initialize() {
     bool foundConvertFromShared = false;
     SmallVector<Value> rets;
     rets.push_back(op->getResult(0));
+    LDBG("Prefetch src: " << *op);
     while (op) {
       if (op->getNumOperands() != 1)
         break;
@@ -192,10 +199,15 @@ LogicalResult Prefetcher::initialize() {
         break;
       rets.push_back(op->getOperand(0));
       if (auto cvt = dyn_cast<triton::gpu::LocalLoadOp>(op)) {
-        foundConvertFromShared = true;
+        // NYI for other encodings, for example if we have transpose
+        // in the chain
+        if (isa<DotOperandEncodingAttr>(cvt.getType().getEncoding()))
+          foundConvertFromShared = true;
         break;
       }
       op = op->getOperand(0).getDefiningOp();
+      if (op)
+        LDBG("op: " << *op);
     }
     std::reverse(rets.begin(), rets.end());
 
@@ -421,8 +433,7 @@ struct PrefetchPass : public impl::TritonGPUPrefetchBase<PrefetchPass> {
     RewritePatternSet cleanUpPatterns(&getContext());
     triton::gpu::ConvertLayoutOp::getCanonicalizationPatterns(cleanUpPatterns,
                                                               &getContext());
-    if (mlir::applyPatternsAndFoldGreedily(getOperation(),
-                                           std::move(cleanUpPatterns))
+    if (mlir::applyPatternsGreedily(getOperation(), std::move(cleanUpPatterns))
             .failed()) {
       signalPassFailure();
     }

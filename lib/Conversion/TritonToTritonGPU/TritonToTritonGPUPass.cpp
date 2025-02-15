@@ -2,6 +2,7 @@
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
@@ -15,6 +16,8 @@
 #define GEN_PASS_CLASSES
 #include "triton/Conversion/TritonToTritonGPU/Passes.h.inc"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+
+#include "third_party/proton/dialect/include/Dialect/Proton/IR/Dialect.h"
 
 namespace {
 
@@ -227,6 +230,11 @@ struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {
       retSizePerThread[rank - 1] = 4;
       retSizePerThread[rank - 2] = 4;
     }
+    retSizePerThread[rank - 1] = std::min(
+        retSizePerThread[rank - 1], static_cast<unsigned>(origShape[rank - 1]));
+    retSizePerThread[rank - 2] = std::min(
+        retSizePerThread[rank - 2], static_cast<unsigned>(origShape[rank - 2]));
+
     SmallVector<unsigned> retOrder(rank);
     for (unsigned i = 0; i < rank; ++i)
       retOrder[i] = rank - 1 - i;
@@ -394,6 +402,77 @@ struct TritonSplitOpPattern : public OpConversionPattern<triton::SplitOp> {
   }
 };
 
+// This function returns the layout to use for gather/scatter indices. The
+// `gather4` and `scatter4` TMA instructions require 4 consecutive indices.
+// Thus, threads issuing these instructions must have all 4 index elements
+// available.
+static RankedTensorType getNewIndicesType(RankedTensorType type) {
+  assert(type.getRank() == 1);
+  auto enc = cast<DistributedEncodingTrait>(type.getEncoding());
+
+  // Technically any layout where we have a pack of 4 neighbouring elements plus
+  // broadcasted over the warp dimension is okay but for now we just pick a
+  // layout.
+  unsigned numThreadsPerWarp = product(enc.getThreadsPerWarp());
+  unsigned numWarps = product(enc.getWarpsPerCTA());
+  std::array<unsigned, 2> sizePerThread{1, 4};
+  std::array<unsigned, 2> threadsPerWarp = {numThreadsPerWarp, 1};
+  std::array<unsigned, 2> order = {1, 0};
+  std::array<unsigned, 2> warpsPerCta = {1, static_cast<unsigned>(numWarps)};
+
+  MLIRContext *ctx = type.getContext();
+  auto ctaLayout = CTALayoutAttr::getDefault(ctx, /*rank=*/2);
+  auto parentEncoding = BlockedEncodingAttr::get(
+      ctx, sizePerThread, threadsPerWarp, warpsPerCta, order, ctaLayout);
+  auto newEncoding = SliceEncodingAttr::get(ctx, /*dim=*/0, parentEncoding);
+  if (enc == newEncoding)
+    return {};
+
+  return RankedTensorType::get(type.getShape(), type.getElementType(),
+                               newEncoding);
+}
+
+struct TritonDescriptorGatherPattern
+    : public OpConversionPattern<triton::ExperimentalDescriptorGatherOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::ExperimentalDescriptorGatherOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    RankedTensorType newType = getNewIndicesType(
+        cast<RankedTensorType>(adaptor.getXOffsets().getType()));
+    if (!newType)
+      return failure();
+
+    Value newInd = rewriter.create<ConvertLayoutOp>(op.getLoc(), newType,
+                                                    adaptor.getXOffsets());
+    rewriter.replaceOpWithNewOp<triton::ExperimentalDescriptorGatherOp>(
+        op, getTypeConverter()->convertType(op.getType()), adaptor.getDesc(),
+        newInd, adaptor.getYOffset());
+    return success();
+  }
+};
+
+struct TritonDescriptorScatterPattern
+    : public OpConversionPattern<triton::ExperimentalDescriptorScatterOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::ExperimentalDescriptorScatterOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    RankedTensorType newType = getNewIndicesType(
+        cast<RankedTensorType>(adaptor.getXOffsets().getType()));
+    if (!newType)
+      return failure();
+
+    Value newInd = rewriter.create<ConvertLayoutOp>(op.getLoc(), newType,
+                                                    adaptor.getXOffsets());
+    rewriter.replaceOpWithNewOp<triton::ExperimentalDescriptorScatterOp>(
+        op, adaptor.getDesc(), newInd, adaptor.getYOffset(), adaptor.getSrc());
+    return success();
+  }
+};
+
 struct TritonTransPattern : public OpConversionPattern<TransOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -535,7 +614,8 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       GenericOpPattern<triton::ReduceReturnOp>, TritonScanPattern,
       GenericOpPattern<triton::ScanReturnOp>,
       GenericOpPattern<triton::MakeRangeOp>, TritonExpandDimsPattern,
-      TritonTransPattern, TritonDotPattern, GenericOpPattern<triton::LoadOp>,
+      TritonTransPattern, TritonDotPattern, TritonDescriptorGatherPattern,
+      TritonDescriptorScatterPattern, GenericOpPattern<triton::LoadOp>,
       GenericOpPattern<triton::StoreOp>, GenericOpPattern<triton::HistogramOp>,
       GenericOpPattern<triton::GatherOp>,
       GenericOpPattern<triton::ExternElementwiseOp>,
@@ -550,7 +630,17 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       GenericOpPattern<triton::DotScaledOp>, GenericOpPattern<triton::CallOp>,
       TritonFuncOpPattern>(typeConverter, context);
 }
-
+// Proton patterns
+// NOTE: Because Proton's inputs are scalars and not tensors this conversion
+// isn't strictly nessessary however you could envision a case where we pass in
+// tensors in for Triton object specific tracing operations in which case we
+// would need to fill in the OpConversionPattern
+void populateProtonPatterns(TritonGPUTypeConverter &typeConverter,
+                            RewritePatternSet &patterns) {
+  MLIRContext *context = patterns.getContext();
+  patterns.add<GenericOpPattern<triton::proton::RecordOp>>(typeConverter,
+                                                           context);
+}
 //
 // SCF patterns
 //
@@ -753,6 +843,13 @@ public:
   }
 
   void runOnOperation() override {
+    if (target.getValue().empty()) {
+      mlir::emitError(
+          getOperation().getLoc(),
+          "'convert-triton-to-tritongpu' requires 'target' option to be set");
+      return signalPassFailure();
+    }
+
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
     // type converter
@@ -765,30 +862,20 @@ public:
     populateArithPatternsAndLegality(typeConverter, patterns, target);
     populateMathPatternsAndLegality(typeConverter, patterns, target);
     populateTritonPatterns(typeConverter, patterns, numCTAs);
+    populateProtonPatterns(typeConverter, patterns);
     // TODO: can we use
     //    mlir::scf::populateSCFStructurealTypeConversionsAndLegality(...) here?
     populateSCFPatterns(typeConverter, patterns);
     populateCFPatterns(typeConverter, patterns);
+    patterns.insert<GenericOpPattern<ub::PoisonOp>>(typeConverter, context);
 
     auto inti = llvm::APSInt(32, false);
-    auto i32_ty = IntegerType::get(mod->getContext(), 32);
 
-    mod->setAttr(
-        AttrNumWarpsName,
-        IntegerAttr::get(i32_ty, llvm::APInt(32, numWarps.getValue())));
-    mod->setAttr(
-        AttrNumThreadsPerWarp,
-        IntegerAttr::get(i32_ty, llvm::APInt(32, threadsPerWarp.getValue())));
-
-    mod->setAttr(AttrNumCTAsName,
-                 IntegerAttr::get(i32_ty, llvm::APInt(32, numCTAs.getValue())));
-
-    if (this->target.getValue().empty()) {
-      mod.emitError("expected target specification to attach to the module op");
-      return signalPassFailure();
-    }
-    mod->setAttr(AttrTargetName,
-                 StringAttr::get(context, this->target.getValue()));
+    Builder b(&getContext());
+    mod->setAttr(AttrNumWarpsName, b.getI32IntegerAttr(numWarps));
+    mod->setAttr(AttrNumThreadsPerWarp, b.getI32IntegerAttr(threadsPerWarp));
+    mod->setAttr(AttrNumCTAsName, b.getI32IntegerAttr(numCTAs));
+    mod->setAttr(AttrTargetName, b.getStringAttr(this->target.getValue()));
 
     if (failed(applyPartialConversion(mod, target, std::move(patterns))))
       return signalPassFailure();

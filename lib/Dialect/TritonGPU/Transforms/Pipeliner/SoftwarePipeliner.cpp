@@ -33,54 +33,15 @@ namespace gpu {
 #define GEN_PASS_DEF_TRITONGPUPIPELINE
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
-// Return true if the preconditions for pipelining the loop are met.
-static bool preCondition(scf::ForOp forOp) {
-  // Skip loop with distance > 1 for now.
-  // TODO: relax the constraint in the expander.
-  if (llvm::any_of(forOp.getBody()->getTerminator()->getOperands(),
-                   [](Value operand) {
-                     Operation *def = operand.getDefiningOp();
-                     return !def;
-                   }))
-    return false;
-  // Don't pipeline outer loops.
-  if (forOp
-          ->walk([&](Operation *op) {
-            if (forOp.getOperation() == op)
-              return WalkResult::advance();
-            if (isa<scf::ForOp, scf::WhileOp>(op))
-              return WalkResult::interrupt();
-            return WalkResult::advance();
-          })
-          .wasInterrupted())
-    return false;
-  return true;
-}
-
-static void tryAndPipelineOuterLoop(scf::ForOp forOp) {
+static scf::ForOp pipelineLoop(scf::ForOp forOp, int numStages) {
   mlir::triton::PipeliningOption options;
-  bool foundSchedule = false;
-  // Limit 2 stages to not require extra shared memory.
-  foundSchedule = getOuterLoopSchedule(forOp, /*numStage=*/2, options);
-  if (!foundSchedule)
-    return;
-  IRRewriter rewriter(forOp->getContext());
-  rewriter.setInsertionPoint(forOp);
-  FailureOr<scf::ForOp> newForOp =
-      mlir::triton::pipelineForLoop(rewriter, forOp, options);
-}
-
-static bool pipelineLoop(scf::ForOp forOp, int numStages) {
-  mlir::triton::PipeliningOption options;
-  if (!preCondition(forOp))
-    return false;
 
   bool foundSchedule = false;
   foundSchedule = preProcessLoopAndGetSchedule(forOp, numStages, options);
 
   // TODO: add more pipelines strategy.
   if (!foundSchedule)
-    return false;
+    return nullptr;
 
   IRRewriter rewriter(forOp->getContext());
   rewriter.setInsertionPoint(forOp);
@@ -88,9 +49,9 @@ static bool pipelineLoop(scf::ForOp forOp, int numStages) {
       mlir::triton::pipelineForLoop(rewriter, forOp, options);
 
   if (failed(newForOp))
-    return false;
+    return nullptr;
   mlir::triton::asyncLaunchDots(newForOp.value());
-  return true;
+  return newForOp.value();
 }
 
 struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
@@ -118,14 +79,18 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
     if (loops.empty())
       return;
 
-    llvm::SmallSetVector<scf::ForOp, 8> outerLoops;
+    llvm::SmallVector<scf::ForOp> pipelinedLoops;
     for (scf::ForOp forOp : loops) {
-      auto outerLoop = dyn_cast<scf::ForOp>(forOp->getParentOp());
       int loopNumStages = getNumStagesOrDefault(forOp);
-      bool pipelined = pipelineLoop(forOp, loopNumStages);
-      if (pipelined && outerLoop && getNumStagesOrDefault(outerLoop) > 1)
-        outerLoops.insert(outerLoop);
+      scf::ForOp pipelinedFor = pipelineLoop(forOp, loopNumStages);
+      if (pipelinedFor != nullptr)
+        pipelinedLoops.push_back(pipelinedFor);
     }
+
+    // There is a hard dependency between load pipelining and the TC05MMA
+    // pipelining. We can pipeline the TC05MMA only after the loads are
+    // pipelined and buffers are allocated.
+    mlir::triton::pipelineTC05MMALoops(getOperation(), pipelinedLoops, 2);
 
     // schedule the waits
     mlir::triton::updateWaits(getOperation());
@@ -136,14 +101,8 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
         getOperation().getContext()->getLoadedDialect<arith::ArithDialect>();
     RewritePatternSet patterns(getOperation().getContext());
     arithDialect->getCanonicalizationPatterns(patterns);
-    if (applyPatternsAndFoldGreedily(getOperation(), std::move(patterns))
-            .failed())
+    if (applyPatternsGreedily(getOperation(), std::move(patterns)).failed())
       return signalPassFailure();
-
-    // Try to pipeline the outer loop to overlap the prologue and epilogue of
-    // the inner loop.
-    for (scf::ForOp outerLoop : outerLoops)
-      tryAndPipelineOuterLoop(outerLoop);
 
     // Re-collect loop ops
     loops.clear();
@@ -155,6 +114,10 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
 
     for (scf::ForOp forOp : loops) {
       mlir::triton::pipelineTMAStores(forOp);
+    }
+
+    for (scf::ForOp forOp : loops) {
+      mlir::triton::pipelineMMAWithScaledAcc(forOp);
     }
   }
 };
