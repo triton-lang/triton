@@ -107,7 +107,7 @@ warpsPerTileWMMA(Operation *dotOp, ArrayRef<int64_t> shape, int numWarps) {
 FailureOr<MfmaIntrinsic>
 chooseMfmaInstruction(int mfmaVersion, RankedTensorType cType, Type aElemType,
                       Type bElemType, int inputKSize, int enforcedNonKDim,
-                      bool allowScale, bool allowXF32) {
+                      bool withScale, bool allowXF32) {
   // number of matrix elements along k dim per one MFMA intruction
   unsigned kDim = 0;
 
@@ -134,8 +134,9 @@ chooseMfmaInstruction(int mfmaVersion, RankedTensorType cType, Type aElemType,
   if (mDim == 0 || nDim == 0)
     return failure();
 
-  auto maybeMfmaIntrinsic = MfmaIntrinsic::selectFor(
-      mfmaVersion, mDim, nDim, inputKSize, aElemType, bElemType, allowXF32);
+  auto maybeMfmaIntrinsic =
+      MfmaIntrinsic::selectFor(mfmaVersion, mDim, nDim, inputKSize, aElemType,
+                               bElemType, withScale, allowXF32);
   if (failed(maybeMfmaIntrinsic))
     llvm::report_fatal_error("No match found in MFMA database\n");
 
@@ -157,7 +158,7 @@ FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotOp dot, int mfmaVersion,
   return chooseMfmaInstruction(
       mfmaVersion, dot.getC().getType(), aType.getElementType(),
       dot.getB().getType().getElementType(), aType.getShape().back(), nonKDim,
-      /*allowScale=*/false, allowXF32);
+      /*withScale=*/false, allowXF32);
 }
 
 FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotScaledOp dot,
@@ -185,7 +186,7 @@ FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotScaledOp dot,
   return chooseMfmaInstruction(
       mfmaVersion, dot.getC().getType(), elemType, elemType,
       dot.getLhs().getType().getShape().back(), nonKDim,
-      /*allowScale=*/false, /*allowXF32=*/false);
+      /*withScale=*/false, /*allowXF32=*/false);
 }
 
 using OperandTypesVector = SmallVector<Type, 4>;

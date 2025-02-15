@@ -17,16 +17,17 @@ using MfmaKey =
                TypeID /*aElemType*/, TypeID /*bElemType*/>;
 
 inline MfmaKey composeMfmaKeyFor(unsigned version, unsigned mDim, unsigned nDim,
-                                 Type aElemType, Type bElemType, bool useTF32) {
-  if (useTF32) {
+                                 Type aElemType, Type bElemType, bool withScale,
+                                 bool useTF32) {
+  if (withScale) {
+    assert(version == 4 && isF8F6F4(aElemType) && isF8F6F4(bElemType));
+    // For MXFP types, we have the same instruction, which uses FP4 as the key.
+    aElemType = bElemType = Float4E2M1FNType::get(aElemType.getContext());
+  } else if (useTF32) {
     // In Triton we use fp32 with TF32 input precision to mean TF32 types.
     // In the MFMA map we use the proper TF32 type. So fix it here.
     assert(version == 3 && aElemType.isF32() && bElemType.isF32());
     aElemType = bElemType = FloatTF32Type::get(aElemType.getContext());
-  } else if (isF8F6F4(aElemType) && isF8F6F4(bElemType)) {
-    assert(version == 4);
-    // For MXFP types, we have the same instruction, which uses FP4 as the key.
-    aElemType = bElemType = Float4E2M1FNType::get(aElemType.getContext());
   }
   return {version, mDim, nDim, aElemType.getTypeID(), bElemType.getTypeID()};
 }
@@ -209,19 +210,19 @@ MfmaDatabase::MfmaDatabase(MLIRContext *context) {
 
 } // namespace
 
-FailureOr<MfmaIntrinsic> MfmaIntrinsic::selectFor(int version, unsigned mDim,
-                                                  unsigned nDim, unsigned kDim,
-                                                  Type aElemType,
-                                                  Type bElemType,
-                                                  bool useTF32) {
+FailureOr<MfmaIntrinsic>
+MfmaIntrinsic::selectFor(int version, unsigned mDim, unsigned nDim,
+                         unsigned inputKDim, Type aElemType, Type bElemType,
+                         bool withScale, bool useTF32) {
   const auto &mfmaDatabase = MfmaDatabase::get(aElemType.getContext());
   const auto &mfmaMap = mfmaDatabase.getMap();
-  MfmaKey key =
-      composeMfmaKeyFor(version, mDim, nDim, aElemType, bElemType, useTF32);
+  MfmaKey key = composeMfmaKeyFor(version, mDim, nDim, aElemType, bElemType,
+                                  withScale, useTF32);
 
   auto it = mfmaMap.find(key);
   if (it == mfmaMap.end())
     return failure();
+  llvm::outs() << "found key\n";
 
   const SmallVector<MfmaMapValue, 2> &values = it->second;
   if (values.size() == 1) {
@@ -232,7 +233,7 @@ FailureOr<MfmaIntrinsic> MfmaIntrinsic::selectFor(int version, unsigned mDim,
   // We have more than one instrinsics. Prefer larger K ones.
   for (const auto &value : values) {
     auto [symbol, k, kBase] = values.front();
-    if (kDim >= k)
+    if (inputKDim >= k)
       return MfmaIntrinsic(symbol, mDim, nDim, k, kBase, aElemType, bElemType);
   }
   return failure();

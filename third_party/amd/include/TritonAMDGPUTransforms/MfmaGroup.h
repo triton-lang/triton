@@ -9,9 +9,9 @@ namespace mlir {
 struct MfmaIntrinsic {
   // Chooses a suitable mfma instrinsic for the given input case.
   static FailureOr<MfmaIntrinsic> selectFor(int version, unsigned mDim,
-                                            unsigned nDim, unsigned kDim,
+                                            unsigned nDim, unsigned inputKDim,
                                             Type aElemType, Type bElemType,
-                                            bool useTF32);
+                                            bool withScale, bool useTF32);
 
   MfmaIntrinsic(StringRef symbol, unsigned m, unsigned n, unsigned k,
                 unsigned kB, Type aET, Type bET)

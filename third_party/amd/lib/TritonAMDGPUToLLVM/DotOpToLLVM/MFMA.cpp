@@ -269,7 +269,8 @@ struct DotOpMFMAConversionHelper {
         op.getInputPrecision() == InputPrecision::TF32 && mfmaVersion == 3;
     StringRef intrinsicName;
     auto maybeMfmaIntrinsic = MfmaIntrinsic::selectFor(
-        mfmaVersion, mDim, nDim, kDimOperandSize, elemTyA, elemTyB, allowXF32);
+        mfmaVersion, mDim, nDim, kDimOperandSize, elemTyA, elemTyB,
+        /*withScale=*/false, allowXF32);
     if (failed(maybeMfmaIntrinsic))
       llvm::report_fatal_error("No match found in MFMA database\n");
 
@@ -529,10 +530,11 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
 
     auto ctx = op.getContext();
     constexpr bool allowXF32 = false;
-    auto maybeMfmaIntrinsic = MfmaIntrinsic::selectFor(
-        mfmaVersion, mDim, nDim, kDimOperandSize,
-        scaleDotElemTypeToMLIRType(ctx, aElemType),
-        scaleDotElemTypeToMLIRType(ctx, bElemType), allowXF32);
+    auto maybeMfmaIntrinsic =
+        MfmaIntrinsic::selectFor(mfmaVersion, mDim, nDim, kDimOperandSize,
+                                 scaleDotElemTypeToMLIRType(ctx, aElemType),
+                                 scaleDotElemTypeToMLIRType(ctx, bElemType),
+                                 /*withScale=*/false, allowXF32);
     if (failed(maybeMfmaIntrinsic))
       llvm::report_fatal_error("No match found in MFMA database\n");
 
