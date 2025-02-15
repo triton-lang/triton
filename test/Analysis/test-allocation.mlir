@@ -492,10 +492,6 @@ tt.func @for_for_if(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, 
   tt.return
 }
 
-}
-
-module attributes {"ttg.num-warps" = 4 : i32} {
-
 // expected-remark @below {{alloc1}}
 // expected-remark @below {{size = 512}}
 tt.func @alloc1(%A : !tt.ptr<f16>) {
@@ -629,4 +625,5 @@ tt.func @scan_alloc(%x : tensor<8x16xf32, #AL>) {
   }) : (tensor<8x16xf32, #AL>) -> tensor<8x16xf32, #AL>
   tt.return
 }
+
 }
