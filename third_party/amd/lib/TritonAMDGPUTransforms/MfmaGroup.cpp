@@ -99,6 +99,8 @@ MfmaDatabase::MfmaDatabase(MLIRContext *context) {
   auto i8T = b.getI8Type();
   auto amdFp8T = b.getType<Float8E4M3FNUZType>();
   auto amdBf8T = b.getType<Float8E5M2FNUZType>();
+  auto ocpFp8T = b.getType<Float8E4M3FNType>();
+  auto ocpBf8T = b.getType<Float8E5M2Type>();
   auto fp4T = b.getType<Float4E2M1FNType>();
 
   mfmaMap = {
@@ -160,29 +162,45 @@ MfmaDatabase::MfmaDatabase(MLIRContext *context) {
 
       // fp8/bf8 inputs
       // mfma_f32_32x32x16_FP8_FP8
-      TRITON_MFMA_v3to4(32, 32, amdFp8T, amdFp8T, mfma_f32_32x32x16_fp8_fp8, 16,
-                        8),
+      TRITON_MFMA_v(4, 32, 32, ocpFp8T, ocpFp8T, mfma_f32_32x32x16_fp8_fp8, 16,
+                    8),
+      TRITON_MFMA_v(3, 32, 32, amdFp8T, amdFp8T, mfma_f32_32x32x16_fp8_fp8, 16,
+                    8),
       // mfma_f32_32x32x16_FP8_BF8
-      TRITON_MFMA_v3to4(32, 32, amdFp8T, amdBf8T, mfma_f32_32x32x16_fp8_bf8, 16,
-                        8),
+      TRITON_MFMA_v(4, 32, 32, ocpFp8T, ocpBf8T, mfma_f32_32x32x16_fp8_bf8, 16,
+                    8),
+      TRITON_MFMA_v(3, 32, 32, amdFp8T, amdBf8T, mfma_f32_32x32x16_fp8_bf8, 16,
+                    8),
       // mfma_f32_32x32x16_BF8_FP8
-      TRITON_MFMA_v3to4(32, 32, amdBf8T, amdFp8T, mfma_f32_32x32x16_bf8_fp8, 16,
-                        8),
+      TRITON_MFMA_v(4, 32, 32, ocpBf8T, ocpFp8T, mfma_f32_32x32x16_bf8_fp8, 16,
+                    8),
+      TRITON_MFMA_v(3, 32, 32, amdBf8T, amdFp8T, mfma_f32_32x32x16_bf8_fp8, 16,
+                    8),
       // mfma_f32_32x32x16_BF8_BF8
-      TRITON_MFMA_v3to4(32, 32, amdBf8T, amdBf8T, mfma_f32_32x32x16_bf8_bf8, 16,
-                        8),
+      TRITON_MFMA_v(4, 32, 32, ocpBf8T, ocpBf8T, mfma_f32_32x32x16_bf8_bf8, 16,
+                    8),
+      TRITON_MFMA_v(3, 32, 32, amdBf8T, amdBf8T, mfma_f32_32x32x16_bf8_bf8, 16,
+                    8),
       // mfma_f32_16x16x32_FP8_FP8
-      TRITON_MFMA_v3to4(16, 16, amdFp8T, amdFp8T, mfma_f32_16x16x32_fp8_fp8, 32,
-                        8),
+      TRITON_MFMA_v(4, 16, 16, ocpFp8T, ocpFp8T, mfma_f32_16x16x32_fp8_fp8, 32,
+                    8),
+      TRITON_MFMA_v(3, 16, 16, amdFp8T, amdFp8T, mfma_f32_16x16x32_fp8_fp8, 32,
+                    8),
       // mfma_f32_16x16x32_FP8_BF8
-      TRITON_MFMA_v3to4(16, 16, amdFp8T, amdBf8T, mfma_f32_16x16x32_fp8_bf8, 32,
-                        8),
+      TRITON_MFMA_v(4, 16, 16, ocpFp8T, ocpBf8T, mfma_f32_16x16x32_fp8_bf8, 32,
+                    8),
+      TRITON_MFMA_v(3, 16, 16, amdFp8T, amdBf8T, mfma_f32_16x16x32_fp8_bf8, 32,
+                    8),
       // mfma_f32_16x16x32_BF8_FP8
-      TRITON_MFMA_v3to4(16, 16, amdBf8T, amdFp8T, mfma_f32_16x16x32_bf8_fp8, 32,
-                        8),
+      TRITON_MFMA_v(3, 16, 16, amdBf8T, amdFp8T, mfma_f32_16x16x32_bf8_fp8, 32,
+                    8),
+      TRITON_MFMA_v(4, 16, 16, ocpBf8T, ocpFp8T, mfma_f32_16x16x32_bf8_fp8, 32,
+                    8),
       // mfma_f32_16x16x32_BF8_BF8
-      TRITON_MFMA_v3to4(16, 16, amdBf8T, amdBf8T, mfma_f32_16x16x32_bf8_bf8, 32,
-                        8),
+      TRITON_MFMA_v(4, 16, 16, ocpBf8T, ocpBf8T, mfma_f32_16x16x32_bf8_bf8, 32,
+                    8),
+      TRITON_MFMA_v(3, 16, 16, amdBf8T, amdBf8T, mfma_f32_16x16x32_bf8_bf8, 32,
+                    8),
 
       // int8 inputs
       // mfma_i32_32x32x16i8
