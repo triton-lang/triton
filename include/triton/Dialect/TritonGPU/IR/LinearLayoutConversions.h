@@ -11,6 +11,7 @@
 namespace mlir::triton::gpu {
 class SwizzledSharedEncodingAttr;
 class NVMMASharedEncodingAttr;
+class CTALayoutAttr;
 
 // - BlockedEncodingAttrs have the following input dimensions.
 //
@@ -261,6 +262,16 @@ LinearLayout chooseLdMatrixLayout(Attribute enc, ArrayRef<int64_t> shape,
 // tensor from shared memory using the `ds_read_tr` instruction for AMD GPUs.
 LinearLayout chooseDsReadB64Tr16Layout(Attribute enc, ArrayRef<int64_t> shape,
                                        int32_t elemBitWidth);
+
+// Combines the layout of a CTA (input dims [register, lane, warp]) with the
+// layout of a CGA (i.e. a block), and ensures that the resulting layout has the
+// given shape.
+//
+// See the nomenclature note at the top of the file for why the variable with
+// type CTALayoutAttr is called cgaLayoutAttr.
+LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
+                                    CTALayoutAttr cgaLayoutAttr,
+                                    ArrayRef<int64_t> shape);
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H

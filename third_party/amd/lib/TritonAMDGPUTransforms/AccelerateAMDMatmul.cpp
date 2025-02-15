@@ -15,6 +15,7 @@ using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 using ::mlir::LLVM::AMD::scaleDotElemTypeToMLIRType;
+using mlir::triton::gpu::combineCtaCgaWithShape;
 
 namespace {
 using triton::AMD::ISAFamily;
@@ -174,7 +175,7 @@ FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotScaledOp dot,
   Type bElemType = scaleDotElemTypeToMLIRType(ctx, dot.getRhsType());
   return chooseMfmaInstruction(mfmaVersion, dot.getC().getType(), aElemType,
                                bElemType, inputKDim, nonKDim,
-                               /*hasScale=*/true, /*allowXF32=*/false);
+                               /*withScale=*/true, /*allowXF32=*/false);
 }
 
 FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotScaledOp dot,
@@ -728,11 +729,14 @@ public:
     ScaleDotElemType aElemType = dotOp.getLhsType();
     ScaleDotElemType bElemType = dotOp.getRhsType();
     auto supportsTypes = [](ScaleDotElemType elemType) {
-      return elemType == ScaleDotElemType::E2M1;
+      return elemType == ScaleDotElemType::E2M1 ||
+             elemType == ScaleDotElemType::E4M3 ||
+             elemType == ScaleDotElemType::E5M2;
     };
 
-    if (!supportsTypes(aElemType) || !supportsTypes(bElemType))
-      return rewriter.notifyMatchFailure(dotOp, "NYI: mxfp6, mxfp8");
+    if (!supportsTypes(aElemType) || !supportsTypes(bElemType)) {
+      return rewriter.notifyMatchFailure(dotOp, "NYI: mxfp6");
+    }
 
     MLIRContext *ctx = dotOp.getContext();
 
@@ -763,6 +767,7 @@ public:
     auto mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
         ctx, /*versionMajor=*/mfmaVersion, /*versionMinor=*/0, warpsPerTile,
         /*instrShape=*/mDim, nDim, /*isTransposed=*/true, ctaLayout);
+    auto warpOrder = mfmaEnc.getWarpOrder();
 
     auto newRetType =
         RankedTensorType::get(oldShape, oldRetType.getElementType(), mfmaEnc);
@@ -770,43 +775,92 @@ public:
     auto newAcc = rewriter.create<ttg::ConvertLayoutOp>(
         dotOp.getC().getLoc(), newRetType, dotOp.getC());
 
-    // For the mfma_scale_f32_*_f8f6f4 instructions, each thread consumes 32
-    // elements. But since two fp4 elements are packed into one int8, the
-    // kWidth is 16 for fp4.
-    unsigned kWidth = kBase;
-    auto newAEncoding = DotOperandEncodingAttr::get(
-        ctx, /*idx=*/0, newRetType.getEncoding(),
-        aElemType == ScaleDotElemType::E2M1 ? kWidth / 2 : kWidth);
-
-    auto newBEncoding = DotOperandEncodingAttr::get(
-        ctx, /*idx=*/1, newRetType.getEncoding(),
-        bElemType == ScaleDotElemType::E2M1 ? kWidth / 2 : kWidth);
-
-    auto convertInputLayout = [&](TensorValue v,
-                                  DotOperandEncodingAttr enc) -> TensorValue {
-      auto vType = v.getType();
-
-      auto newVType =
-          RankedTensorType::get(vType.getShape(), vType.getElementType(), enc);
-      return rewriter.create<ttg::ConvertLayoutOp>(v.getLoc(), newVType, v);
-    };
-    a = convertInputLayout(a, newAEncoding);
-    b = convertInputLayout(b, newBEncoding);
-
     StringAttr kRegister = StringAttr::get(ctx, "register");
     StringAttr kLane = StringAttr::get(ctx, "lane");
     StringAttr kWarp = StringAttr::get(ctx, "warp");
     StringAttr kBlock = StringAttr::get(ctx, "block");
 
     auto order = ttg::getMatrixOrder(rank, /*rowMajor=*/true);
+    auto standardOutDims = standardOutDimNames(ctx, rank);
+
+    // For the mfma_scale_f32_*_f8f6f4 instructions, each thread consumes 32
+    // elements. But since two fp4 elements are packed into one int8, the
+    // kWidth is 16 for fp4.
+    const unsigned kWidth = kBase;
+    using basisT = std::vector<std::vector<int32_t>>;
+
+    // For mxfp4, we use dot layout directly. Mxfp8 is not covered by dot
+    // layout, so we need to manually create linear layout for it.
+    auto createOperandLinearLayout = [&](int idx, ScaleDotElemType elemType,
+                                         llvm::ArrayRef<int64_t> shape) {
+      if (elemType == ScaleDotElemType::E2M1) {
+        auto newEncoding = DotOperandEncodingAttr::get(
+            ctx, idx, newRetType.getEncoding(), kWidth / 2);
+        return newEncoding.toLinearLayout(shape);
+      } else {
+        // For mxfp8, each lane contains 32 elements, consisting of two blocks
+        // of 16 consecutive elements. There's a gap between these two blocks,
+        // which is not supported by normal dot layout.
+        assert(elemType == ScaleDotElemType::E4M3 ||
+               elemType == ScaleDotElemType::E5M2);
+        basisT regBase = {{0, 1}, {0, 2}, {0, 4}, {0, 8}};
+        basisT laneBase = {{1, 0}, {2, 0}, {4, 0}, {8, 0}};
+        int32_t kTileSize;
+        if (mDim == 16) {
+          regBase.emplace_back(std::vector<int32_t>{0, 64});
+          laneBase.emplace_back(std::vector<int32_t>{0, 16});
+          laneBase.emplace_back(std::vector<int32_t>{0, 32});
+          kTileSize = kWidth * 4;
+        } else {
+          assert(mDim == 32);
+          regBase.emplace_back(std::vector<int32_t>{0, 32});
+          laneBase.emplace_back(std::vector<int32_t>{16, 0});
+          laneBase.emplace_back(std::vector<int32_t>{0, 16});
+          kTileSize = kWidth * 2;
+        }
+        // Add repeats of registers along K dimension to register base vectors
+        int64_t kSize = idx == 0 ? shape[1] : shape[0];
+        for (int32_t elem = kTileSize; elem < kSize; elem *= 2) {
+          regBase.emplace_back(std::vector<int32_t>{0, elem});
+        }
+
+        std::vector<int> repOrder = {0, 1};
+        if (idx == 1) {
+          std::reverse(repOrder.begin(), repOrder.end());
+        }
+
+        auto regLanes = LinearLayout(
+            {{kRegister, regBase}, {kLane, laneBase}},
+            {standardOutDims[repOrder[0]], standardOutDims[repOrder[1]]});
+
+        auto warps =
+            identityStandardND(kWarp, mfmaEnc.getWarpsPerCTA(), warpOrder);
+
+        return combineCtaCgaWithShape(regLanes.transposeOuts(standardOutDims) *
+                                          warps.transposeOuts(standardOutDims),
+                                      mfmaEnc.getCTALayout(), shape);
+      }
+    };
+    auto aShape = a.getType().getShape();
+    auto bShape = b.getType().getShape();
+    auto aEncLL = createOperandLinearLayout(0, aElemType, aShape);
+    auto bEncLL = createOperandLinearLayout(1, bElemType, bShape);
+
+    auto convertInputLayout = [&](TensorValue v,
+                                  LinearLayout layout) -> TensorValue {
+      auto vType = v.getType();
+
+      auto newEnc = ttg::LinearEncodingAttr::get(ctx, layout);
+      auto newVType = RankedTensorType::get(vType.getShape(),
+                                            vType.getElementType(), newEnc);
+      return rewriter.create<ttg::ConvertLayoutOp>(v.getLoc(), newVType, v);
+    };
+    a = convertInputLayout(a, aEncLL);
+    b = convertInputLayout(b, bEncLL);
 
     // Init register layout. Will be adjusted later
     auto regs = tt::identityStandardND(kRegister, {1, 1}, order);
 
-    auto aEncLL = newAEncoding.toLinearLayout(a.getType().getShape());
-    auto standardOutDims = llvm::to_vector(aEncLL.getOutDimNames());
-
-    using basisT = std::vector<std::vector<int32_t>>;
     auto createLinearLayout = [&](int idx, const basisT &warpBasis) {
       LinearLayout lanes = LinearLayout::empty();
       // In scaled dot, the shapes of operands(without batch dimension) are,
@@ -867,12 +921,9 @@ public:
       return regs * lanes;
     };
 
-    auto convertScaleLayout = [&](TensorValue val, TensorValue scale,
-                                  DotOperandEncodingAttr enc,
-                                  int idx) -> Value {
-      auto valShape = val.getType().getShape();
-
-      auto dotLL = enc.toLinearLayout(valShape);
+    auto convertScaleLayout = [&](TensorValue scale,
+                                  llvm::ArrayRef<int64_t> valShape,
+                                  LinearLayout dotLL, int idx) -> Value {
       LinearLayout::BasesT scaleBases = dotLL.getBases();
       auto &warpBases = scaleBases[kWarp];
 
@@ -891,7 +942,8 @@ public:
 
       // Adjust register-level layout to fill the shape, at this level, both
       // aScale and bScale should align with A operand.
-      for (auto d : newAEncoding.getRepOrder()) {
+      SmallVector<int, 2> repOrder = {1, 0};
+      for (auto d : repOrder) {
         auto outDim = standardOutDims[d];
         auto dimSize = newLL.getOutDimSize(outDim);
         newLL *=
@@ -912,8 +964,8 @@ public:
                                                      newScaleType, scale);
       }
     };
-    auto newAScale = convertScaleLayout(a, aScale, newAEncoding, 0);
-    auto newBScale = convertScaleLayout(b, bScale, newBEncoding, 1);
+    auto newAScale = convertScaleLayout(aScale, aShape, aEncLL, 0);
+    auto newBScale = convertScaleLayout(bScale, bShape, bEncLL, 1);
 
     auto newDot = rewriter.create<triton::DotScaledOp>(
         dotOp.getLoc(), newRetType, a, b, newAcc, newAScale, newBScale,
@@ -921,6 +973,7 @@ public:
 
     rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(dotOp, oldRetType,
                                                       newDot);
+
     return success();
   }
 };
