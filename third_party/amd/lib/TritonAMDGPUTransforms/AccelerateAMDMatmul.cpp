@@ -103,12 +103,11 @@ warpsPerTileWMMA(Operation *dotOp, ArrayRef<int64_t> shape, int numWarps) {
 
 // Chooses a proper MFMA instruction that can used to compute the given dot op.
 // If enforcedNonKDim is not zero, it will be used to overwrite the default
-// logic to chose a MFMA with matching M/N dim.
-FailureOr<MfmaIntrinsic> chooseMfmaInstruction(RankedTensorType cType,
-                                               Type aElemType, Type bElemType,
-                                               int inputKSize, int mfmaVersion,
-                                               bool allowXF32,
-                                               int enforcedNonKDim) {
+// logic to choose a MFMA with matching M/N dim.
+FailureOr<MfmaIntrinsic>
+chooseMfmaInstruction(int mfmaVersion, RankedTensorType cType, Type aElemType,
+                      Type bElemType, int inputKSize, int enforcedNonKDim,
+                      bool allowScale, bool allowXF32) {
   // number of matrix elements along k dim per one MFMA intruction
   unsigned kDim = 0;
 
@@ -155,10 +154,10 @@ FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotOp dot, int mfmaVersion,
   RankedTensorType aType = dot.getA().getType();
   bool allowXF32 =
       dot.getInputPrecision() == InputPrecision::TF32 && mfmaVersion == 3;
-  return chooseMfmaInstruction(dot.getC().getType(), aType.getElementType(),
-                               dot.getB().getType().getElementType(),
-                               aType.getShape().back(), mfmaVersion, allowXF32,
-                               nonKDim);
+  return chooseMfmaInstruction(
+      mfmaVersion, dot.getC().getType(), aType.getElementType(),
+      dot.getB().getType().getElementType(), aType.getShape().back(), nonKDim,
+      /*allowScale=*/false, allowXF32);
 }
 
 FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotScaledOp dot,
@@ -170,10 +169,11 @@ FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotScaledOp dot,
     // need to multiply it by 2.
     inputKDim *= 2;
   }
-  return chooseMfmaInstruction(
-      dot.getC().getType(), scaleDotElemTypeToMLIRType(ctx, dot.getLhsType()),
-      scaleDotElemTypeToMLIRType(ctx, dot.getRhsType()), inputKDim, mfmaVersion,
-      /*allowXF32=*/false, nonKDim);
+  Type aElemType = scaleDotElemTypeToMLIRType(ctx, dot.getLhsType());
+  Type bElemType = scaleDotElemTypeToMLIRType(ctx, dot.getRhsType());
+  return chooseMfmaInstruction(mfmaVersion, dot.getC().getType(), aElemType,
+                               bElemType, inputKDim, nonKDim,
+                               /*hasScale=*/true, /*allowXF32=*/false);
 }
 
 FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotScaledOp dot,
@@ -182,10 +182,10 @@ FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotScaledOp dot,
   // For scaled dot, we handle it with fp16 or bf16 emulation for now.
   Builder b(dot.getContext());
   Type elemType = useFp16 ? b.getF16Type() : b.getBF16Type();
-  return chooseMfmaInstruction(dot.getC().getType(), /*aElemType=*/elemType,
-                               /*bElemType=*/elemType,
-                               dot.getLhs().getType().getShape().back(),
-                               mfmaVersion, /*allowXF32=*/false, nonKDim);
+  return chooseMfmaInstruction(
+      mfmaVersion, dot.getC().getType(), elemType, elemType,
+      dot.getLhs().getType().getShape().back(), nonKDim,
+      /*allowScale=*/false, /*allowXF32=*/false);
 }
 
 using OperandTypesVector = SmallVector<Type, 4>;
