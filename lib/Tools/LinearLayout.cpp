@@ -156,68 +156,6 @@ void assertDimsSubsetIgnoringOrder(T &&small, U &&big) {
                              triton::join(big, ", ") + "]");
   }
 }
-
-// Compute the supremum of two lists.
-// Error out if the supremum does not exist (e.g. [a, b] and [b, a]).
-// If the supremum is not unique, we return the first list first
-// (e.g. [a, b], [a, c] -> [a, b, c]).
-SmallVector<StringAttr> orderedListSupremum(const SmallVector<StringAttr> &x,
-                                            const SmallVector<StringAttr> &y) {
-  llvm::SetVector<StringAttr> result;
-  DenseMap<StringAttr, int> posX, posY;
-  for (auto [idx, elem] : llvm::enumerate(x))
-    posX[elem] = idx;
-  for (auto [idx, elem] : llvm::enumerate(y))
-    posY[elem] = idx;
-  int i = 0, j = 0;
-  const int INF = std::numeric_limits<int>::max();
-  while (i < x.size() || j < y.size()) {
-    while (i < x.size() && result.contains(x[i]))
-      ++i;
-    while (j < y.size() && result.contains(y[j]))
-      ++j;
-    if (i >= x.size() && j >= y.size())
-      break;
-    if (i < x.size() && j < y.size() && x[i] == y[j]) {
-      if (posY[x[i]] < j)
-        llvm_unreachable("Supremum does not exist");
-      result.insert(x[i]);
-      ++i, ++j;
-      continue;
-    }
-    int candX = INF, candY = INF;
-    if (i < x.size()) {
-      if (posY.count(x[i]) && posY[x[i]] >= j)
-        candX = posY[x[i]];
-    }
-    if (j < y.size()) {
-      if (posX.count(y[j]) && posX[y[j]] >= i)
-        candY = posX[y[j]];
-    }
-    if (i < x.size() && candX == INF) {
-      result.insert(x[i]);
-      ++i;
-      continue;
-    }
-    if (j < y.size() && candY == INF) {
-      result.insert(y[j]);
-      ++j;
-      continue;
-    }
-    if (candX <= candY) {
-      if (posY[x[i]] < j)
-        llvm_unreachable("Supremum does not exist");
-      result.insert(x[i]);
-      ++i;
-    } else {
-      if (posX[y[j]] < i)
-        llvm_unreachable("Supremum does not exist");
-      result.insert(y[j]);
-      ++j;
-    }
-  }
-  return to_vector(result);
-}
 } // anonymous namespace
 
 /*static*/ std::optional<LinearLayout>
@@ -624,10 +562,10 @@ LinearLayout LinearLayout::concatOuts(const LinearLayout &other) const {
 
 LinearLayout operator*(LinearLayout inner, LinearLayout outer) {
   // Check that dims common to outer and inner have the same relative order.
-  auto inDims = orderedListSupremum(llvm::to_vector(inner.getInDimNames()),
-                                    llvm::to_vector(outer.getInDimNames()));
-  auto outDims = orderedListSupremum(llvm::to_vector(inner.getOutDimNames()),
-                                     llvm::to_vector(outer.getOutDimNames()));
+  auto inDims = supremum(llvm::to_vector(inner.getInDimNames()),
+                         llvm::to_vector(outer.getInDimNames()));
+  auto outDims = supremum(llvm::to_vector(inner.getOutDimNames()),
+                          llvm::to_vector(outer.getOutDimNames()));
 
   // Get the sizeLog2 of all input and output dimensions we're going to
   // consider, in order.  `inner` is more minor, so its dimensions come
