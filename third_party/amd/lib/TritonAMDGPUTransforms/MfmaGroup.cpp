@@ -23,10 +23,10 @@ inline MfmaKey composeMfmaKeyFor(unsigned version, unsigned mDim, unsigned nDim,
     assert(version == 4 && isF8F6F4(aElemType) && isF8F6F4(bElemType));
     // For MXFP types, we have the same instruction, which uses FP4 as the key.
     aElemType = bElemType = Float4E2M1FNType::get(aElemType.getContext());
-  } else if (useTF32) {
+  } else if (useTF32 && aElemType.isF32() && bElemType.isF32()) {
     // In Triton we use fp32 with TF32 input precision to mean TF32 types.
     // In the MFMA map we use the proper TF32 type. So fix it here.
-    assert(version == 3 && aElemType.isF32() && bElemType.isF32());
+    assert(version == 3);
     aElemType = bElemType = FloatTF32Type::get(aElemType.getContext());
   }
   return {version, mDim, nDim, aElemType.getTypeID(), bElemType.getTypeID()};

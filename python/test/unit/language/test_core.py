@@ -6319,7 +6319,7 @@ def matmul_kernel(  #
 @pytest.mark.interpreter
 @pytest.mark.parametrize("M, N, K", [(128, 256, 256)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 256, 128), (64, 64, 64)])
-@pytest.mark.parametrize("in_type_str", ['float8e5', 'float8e4nv', 'float8e4b15'])
+@pytest.mark.parametrize("in_type_str", ['float8e5b16', 'float8e4b8'] if is_hip() else ['float8e5', 'float8e4nv', 'float8e4b15'])
 @pytest.mark.parametrize("low_precision_acc", [0, 32, 64, 128])
 def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_str, low_precision_acc, device):
     num_stages = 3
@@ -6329,8 +6329,6 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
             pytest.skip("Dot op does not support fp8e4b15 on CUDA arch >= 90")
     elif is_hip():
         num_stages = 2
-        if in_type_str != 'float8e5':
-            pytest.skip('test_fp8_dot_acc for HIP currently broken in upstream.')
 
     check_type_supported(in_type_str, device)
     A = numpy_random((M, K), dtype_str=in_type_str)
