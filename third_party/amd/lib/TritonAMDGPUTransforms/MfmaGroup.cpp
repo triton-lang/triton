@@ -260,7 +260,7 @@ FailureOr<MfmaIntrinsic>
 MfmaIntrinsic::selectFor(int version, unsigned mDim, unsigned nDim,
                          unsigned inputKDim, Type aElemType, Type bElemType,
                          bool withScale, bool useTF32) {
-  const auto &mfmaMap = MfmaDatabase::get(aElemType.getContext());
+  const MfmaMap &mfmaMap = MfmaDatabase::get(aElemType.getContext());
   MfmaKey key = composeMfmaKeyFor(version, mDim, nDim, aElemType, bElemType,
                                   withScale, useTF32);
 
