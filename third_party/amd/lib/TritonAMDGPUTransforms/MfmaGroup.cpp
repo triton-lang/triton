@@ -218,9 +218,9 @@ MfmaDatabase::MfmaDatabase(MLIRContext *context) {
       TRITON_MFMA_v(3, 16, 16, amdFp8T, amdBf8T, mfma_f32_16x16x32_fp8_bf8, 32,
                     8),
       // mfma_f32_16x16x32_BF8_FP8
-      TRITON_MFMA_v(3, 16, 16, amdBf8T, amdFp8T, mfma_f32_16x16x32_bf8_fp8, 32,
-                    8),
       TRITON_MFMA_v(4, 16, 16, ocpBf8T, ocpFp8T, mfma_f32_16x16x32_bf8_fp8, 32,
+                    8),
+      TRITON_MFMA_v(3, 16, 16, amdBf8T, amdFp8T, mfma_f32_16x16x32_bf8_fp8, 32,
                     8),
       // mfma_f32_16x16x32_BF8_BF8
       TRITON_MFMA_v(4, 16, 16, ocpBf8T, ocpBf8T, mfma_f32_16x16x32_bf8_bf8, 32,
