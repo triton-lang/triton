@@ -283,7 +283,7 @@ static void createTMAAsyncCopy(scf::ForOp forOp, Operation *loadOp, Value desc,
           loc, stage, clusterId, desc);
 
   createCopy(builder, stage, clusterId, tmaPtr, barrier, view, pred,
-             loadToInfo[loadOp].packingFactor);
+             loadInfo.packingFactor);
 
   auto loadIsMMAv3Shared = loadInfo.isMMAv3Shared;
 
