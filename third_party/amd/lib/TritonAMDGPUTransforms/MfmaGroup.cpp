@@ -7,30 +7,54 @@
 namespace mlir {
 namespace {
 
-inline bool isF8F6F4(mlir::Type t) {
+//===----------------------------------------------------------------------===//
+// MFMA intrinsic query key
+//===----------------------------------------------------------------------===//
+
+// Returns true if the given type is an OCP FP8/FP6/FP6 type.
+inline bool isF8F6F4(mlir::Type type) {
   return llvm::isa<Float8E4M3FNType, Float8E5M2Type, Float6E3M2FNType,
-                   Float6E2M3FNType, Float4E2M1FNType>(t);
+                   Float6E2M3FNType, Float4E2M1FNType>(type);
 }
 
+// The tuple used as key to query MFMA intrinsic map.
 using MfmaKey =
     std::tuple<unsigned /*version*/, unsigned /*mDim*/, unsigned /*nDim*/,
                TypeID /*aElemType*/, TypeID /*bElemType*/>;
 
-inline MfmaKey composeMfmaKeyFor(unsigned version, unsigned mDim, unsigned nDim,
-                                 Type aElemType, Type bElemType, bool withScale,
-                                 bool useTF32) {
+// Returns a key for querying an MFMA intrinsic for the given parameters.
+// Updates the passed-in A/B element type to the chosen MFMA intrinsic's A/B
+// element type if the chosen intrinsic is not a direct hit and will require
+// emulation.
+//
+// This function adapts certain parameters so we can be flexible when trying
+// to query with "mismatches".
+MfmaKey composeMfmaKeyFor(unsigned version, unsigned mDim, unsigned nDim,
+                          Type &aElemType, Type &bElemType, bool withScale,
+                          bool useTF32) {
+  Type aET = aElemType, bET = bElemType;
+  Builder b(aElemType.getContext());
   if (withScale) {
-    assert(version == 4 && isF8F6F4(aElemType) && isF8F6F4(bElemType));
-    // For MXFP types, we have the same instruction, which uses FP4 as the key.
-    aElemType = bElemType = Float4E2M1FNType::get(aElemType.getContext());
-  } else if (useTF32 && aElemType.isF32() && bElemType.isF32()) {
+    assert(version == 4 && isF8F6F4(aET) && isF8F6F4(bET));
+    // For MXFP types, we have the same intrinsic, which uses FP4 as the key
+    // in the MFMA map. So adjust to that.
+    aET = bET = b.getType<Float4E2M1FNType>();
+  } else if (useTF32 && aET.isF32() && bET.isF32()) {
     // In Triton we use fp32 with TF32 input precision to mean TF32 types.
-    // In the MFMA map we use the proper TF32 type. So fix it here.
+    // In the MFMA map we use the proper TF32 type. So "fix" it here.
     assert(version == 3);
-    aElemType = bElemType = FloatTF32Type::get(aElemType.getContext());
+    aET = bET = b.getType<FloatTF32Type>();
+  } else if (version <= 3 && isa<Float8E5M2Type>(aET) &&
+             isa<Float8E5M2Type>(bET)) {
+    // For the OCP FP8 E5M2 type, we can emulate the support for it with FP16.
+    aElemType = bElemType = aET = bET = b.getF16Type();
   }
-  return {version, mDim, nDim, aElemType.getTypeID(), bElemType.getTypeID()};
+  return {version, mDim, nDim, aET.getTypeID(), bET.getTypeID()};
 }
+
+//===----------------------------------------------------------------------===//
+// MFMA intrinsic map
+//===----------------------------------------------------------------------===//
 
 using MfmaMapValue =
     std::tuple<StringRef /*symbol*/, unsigned /*kDim*/, unsigned /*kBase*/>;
@@ -38,17 +62,15 @@ using MfmaMap = llvm::DenseMap<MfmaKey, SmallVector<MfmaMapValue, 2>>;
 
 class MfmaDatabase {
 public:
-  static const MfmaDatabase &get(MLIRContext *context) {
+  static const MfmaMap &get(MLIRContext *context) {
     static MfmaDatabase db(context);
-    return db;
+    return db.mfmaMap;
   }
 
-  const MfmaMap &getMap() const { return mfmaMap; }
-
 private:
-  MfmaMap mfmaMap;
-
   explicit MfmaDatabase(MLIRContext *context);
+
+  MfmaMap mfmaMap;
 };
 
 MfmaDatabase::MfmaDatabase(MLIRContext *context) {
@@ -58,6 +80,8 @@ MfmaDatabase::MfmaDatabase(MLIRContext *context) {
       {ROCDL::symbol::getOperationName(), k, kBase},                           \
     }                                                                          \
   }
+// For gfx950, we can have two intrinsics with the same M/N but different K.
+// Order matters here: case1 will be preferred to case2.
 #define TRITON_MFMA_v4_2k(m, n, aET, bET, symbol1, k1, kBase1, symbol2, k2,    \
                           kBase2)                                              \
   {                                                                            \
@@ -228,19 +252,21 @@ MfmaDatabase::MfmaDatabase(MLIRContext *context) {
 
 } // namespace
 
+//===----------------------------------------------------------------------===//
+// MFMA intrinsic selection
+//===----------------------------------------------------------------------===//
+
 FailureOr<MfmaIntrinsic>
 MfmaIntrinsic::selectFor(int version, unsigned mDim, unsigned nDim,
                          unsigned inputKDim, Type aElemType, Type bElemType,
                          bool withScale, bool useTF32) {
-  const auto &mfmaDatabase = MfmaDatabase::get(aElemType.getContext());
-  const auto &mfmaMap = mfmaDatabase.getMap();
+  const auto &mfmaMap = MfmaDatabase::get(aElemType.getContext());
   MfmaKey key = composeMfmaKeyFor(version, mDim, nDim, aElemType, bElemType,
                                   withScale, useTF32);
 
   auto it = mfmaMap.find(key);
   if (it == mfmaMap.end())
     return failure();
-  llvm::outs() << "found key\n";
 
   const SmallVector<MfmaMapValue, 2> &values = it->second;
   if (values.size() == 1) {
