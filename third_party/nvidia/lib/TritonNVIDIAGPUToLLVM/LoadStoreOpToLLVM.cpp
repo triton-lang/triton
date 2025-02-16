@@ -85,11 +85,12 @@ Value emitRedundantThreadPredicate(
   auto kWarp = str_attr("warp");
   auto kBlock = str_attr("block");
 
-  auto warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(moduleOp);
-  auto emitBlockId = freeVarMasks.lookup(kBlock) != 0;
-  auto [laneId, warpId, blockId] =
-      emitHardwareTuple(loc, rewriter, targetInfo, emitBlockId, warpSize);
-  auto zero = b.i32_val(0);
+  int warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(moduleOp);
+  Value zero = b.i32_val(0);
+  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc, warpSize);
+  Value blockId = freeVarMasks.lookup(kBlock) == 0
+                      ? zero
+                      : targetInfo.getClusterCTAId(rewriter, loc);
 
   Value pred;
   auto dimNames = {kLane, kWarp, kBlock};
@@ -1200,8 +1201,8 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     auto id = getThreadId(rewriter, loc);
 
     auto mod = op->getParentOfType<ModuleOp>();
-    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
-    int warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    int numWarps = ttg::lookupNumWarps(op);
+    int warpSize = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
     Value warpID = rewriter.create<nvgpu::WarpIdOp>(loc);
     Value pred = adaptor.getPred();
     // Select just one thread for the TMA copy. This also helps the compiler to
@@ -1298,8 +1299,8 @@ struct AsyncTMACopyLocalToGlobalOpConversion
     int64_t size = totalNumElements * elementSizeInBytes;
 
     auto mod = op->getParentOfType<ModuleOp>();
-    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
-    int warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    int numWarps = ttg::lookupNumWarps(op);
+    int warpSize = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
     Value warpID = rewriter.create<nvgpu::WarpIdOp>(loc);
     int innerBlockSize = op.getSrc().getType().getShape().back();
     int contigDimSizeInByte = innerBlockSize * elementSizeInBytes;

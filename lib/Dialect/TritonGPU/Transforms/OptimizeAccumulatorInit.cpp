@@ -28,12 +28,13 @@ public:
                                    op.getResult().getUsers().end());
     if (users.size() > 2)
       return failure();
-    triton::nvidia_gpu::TCGen5MMAOp mmaOp = nullptr;
+    triton::nvidia_gpu::MMAv5OpInterface mmaOp = nullptr;
     triton::nvidia_gpu::TMEMLoadOp tmemLoad = nullptr;
     for (auto user : users) {
       if (auto load = dyn_cast<triton::nvidia_gpu::TMEMLoadOp>(user)) {
         tmemLoad = load;
-      } else if (auto mma = dyn_cast<triton::nvidia_gpu::TCGen5MMAOp>(user)) {
+      } else if (auto mma =
+                     dyn_cast<triton::nvidia_gpu::MMAv5OpInterface>(user)) {
         mmaOp = mma;
       }
     }
@@ -41,7 +42,7 @@ public:
       return failure();
     if (tmemLoad && !mmaOp->isBeforeInBlock(tmemLoad))
       return failure();
-    Value useAccFlag = mmaOp.getUseD();
+    Value useAccFlag = mmaOp.useAccumulator();
     if (!useAccFlag)
       return failure();
     auto flagConstOp = useAccFlag.getDefiningOp<arith::ConstantOp>();
@@ -63,7 +64,7 @@ bool dotSupportsAccInitFlag(Operation *op) {
     // initialization that would degrade the performance.
     return !wgDotOp.needsPartialAccumulator();
   }
-  if (isa<triton::nvidia_gpu::TCGen5MMAOp>(op)) {
+  if (isa<triton::nvidia_gpu::MMAv5OpInterface>(op)) {
     return true;
   }
   return false;
@@ -76,8 +77,8 @@ std::pair<Value, Operation *> getAccumulatorUseAndDef(Operation *op) {
   if (auto wgDotOp = dyn_cast<triton::nvidia_gpu::WarpGroupDotOp>(op)) {
     return std::make_pair(wgDotOp.getC(), wgDotOp);
   }
-  if (auto tc05MmaOp = dyn_cast<triton::nvidia_gpu::TCGen5MMAOp>(op)) {
-    auto accVal = tc05MmaOp.getD();
+  if (auto tc05MmaOp = dyn_cast<triton::nvidia_gpu::MMAv5OpInterface>(op)) {
+    auto accVal = tc05MmaOp.getAccumulator();
     auto tmemAlloc = accVal.getDefiningOp<triton::nvidia_gpu::TMEMAllocOp>();
     if (!tmemAlloc ||
         tmemAlloc->getParentRegion() != tc05MmaOp->getParentRegion())
@@ -104,8 +105,9 @@ void setUseAccFlag(Operation *op, Value useAcc) {
 
   if (auto wgDotOp = dyn_cast<triton::nvidia_gpu::WarpGroupDotOp>(op)) {
     wgDotOp.getUseCMutable().assign(useAcc);
-  } else if (auto tc05MmaOp = dyn_cast<triton::nvidia_gpu::TCGen5MMAOp>(op)) {
-    tc05MmaOp.getUseDMutable().assign(useAcc);
+  } else if (auto tc05MmaOp =
+                 dyn_cast<triton::nvidia_gpu::MMAv5OpInterface>(op)) {
+    tc05MmaOp.setUseAccumulator(useAcc);
   } else {
     assert(false && "Unexpected op which implements a DotOpInterface");
   }

@@ -138,6 +138,8 @@ void Pingponger::transformOnePPClusters(OpBuilder &builder, Location loc) {
   // Dot cluster #0
   updateOpInsertion(preDotBar);
   appendOpWithPrio(builder, dotOps[0], loc);
+  // Add a remark for user feedback
+  dotOps[0]->emitRemark() << "Performed one ping pong cluster transformation\n";
 }
 
 void Pingponger::genOffsetConstants(Location loc, OpBuilder &builder,
@@ -236,11 +238,11 @@ LogicalResult Pingponger::sliceDot(OpBuilder &builder, Location loc,
 }
 
 // Transform a loop into four Dot - Memory (ping - pong) clusters
-// This transfrom is useful when the original dot tile is too large that there's
-// no enough register to hold data for a Dot cluster. This path slices the dot
+// This transform is useful when the original dot tile is too large that there's
+// not enough registers to hold data for a Dot cluster. This path slices the dot
 // into four pieces and pair with four clusters of reordered memory operations.
 // There are multiple guards at the boundary of each cluster.
-// (1) sched.barrier : with mask0 to prevent compiler backed from reroder
+// (1) sched.barrier : with mask0 to prevent compiler backed from reordering
 //  instructions across the boundary
 // (2) gpu.barrier : ensures asymmetric synchronization at each point
 // (3) setprio (1->0) : in order to avoid incomming warp overtaking resource
@@ -301,6 +303,9 @@ LogicalResult Pingponger::transformFourPPClusters(OpBuilder &builder,
   appendOpWithPrio(builder, dotSliceOps[3], loc);
   appendClusterBarrier(builder, loc);
 
+  // Add a remark for user feedback
+  dotSliceOps[0]->emitRemark()
+      << "Performed four ping pong cluster transformation\n";
   return success();
 }
 
@@ -346,6 +351,9 @@ LogicalResult Pingponger::transformTwoPPClusters(OpBuilder &builder,
   appendOpWithPrio(builder, dotSliceOps[1], loc);
   appendClusterBarrier(builder, loc);
 
+  // Add a remark for user feedback
+  dotSliceOps[0]->emitRemark()
+      << "Performed two ping pong cluster transformation\n";
   return success();
 }
 
@@ -409,7 +417,7 @@ void Pingponger::getDotPingponged() {
   // software pipelining and dot rank=2. Also only accept the for-loop with
   // supported combination of operations because this transformation is very
   // tightly scheduling the latencies.
-  if (gLoadOps.size() != 2 || lLoadOps.size() != 2 || dotOps.size() != 1)
+  if (gLoadOps.size() < 2 || lLoadOps.size() < 2 || dotOps.size() != 1)
     return;
 
   // Pingpong scheduling tries to form two different types of the instruction
@@ -447,6 +455,7 @@ void Pingponger::getDotPingponged() {
   auto elemWidth = aType.getElementTypeBitWidth();
   int64_t tileSize = dotShape[0] * dotShape[1] * aShape[1] * elemWidth;
 
+  const int64_t minTile = 262144;      // e.g. 32x128x64x16bit
   const int64_t smallTile = 16777216;  // e.g. 128x128x64x16bit
   const int64_t mediumTile = 33554432; // smallTile x 2
   const int64_t largeTile = 67108864;  // e.g. 256x256x64x16bit
@@ -465,11 +474,13 @@ void Pingponger::getDotPingponged() {
     // times for issuing the memory operations and issuing dot operations,
     // smaller tile sizes are not likely to get any advantage from current dot
     // centric pingpong scheduling.
-    if (tileSize == smallTile)
+    if (tileSize <= smallTile && tileSize >= minTile)
       transformOnePPClusters(builder, loc);
     // numWarps=4 doesn't need asymmetric sync, return.
     return;
   } else if (numWarps == 8) { // Pingpong between warps from the same block
+    if (gLoadOps.size() != 2 || lLoadOps.size() != 2)
+      return;
     // Transform a loop where the tile size requires dots to be sliced
     if (tileSize == mediumTile) {
       if (transformTwoPPClusters(builder, dotOps[0]->getLoc()).failed())
@@ -499,10 +510,9 @@ public:
   TritonAMDGPUBlockPingpongPass() = default;
   void runOnOperation() override {
     ModuleOp m = getOperation();
-    int32_t numWarps = ttg::TritonGPUDialect::getNumWarps(m);
     for (auto funcOp : m.getOps<tt::FuncOp>()) {
       funcOp.walk([&](scf::ForOp forOp) {
-        Pingponger pingponger(forOp, numWarps);
+        Pingponger pingponger(forOp, ttg::lookupNumWarps(forOp));
         pingponger.getDotPingponged();
       });
     }

@@ -93,6 +93,12 @@ SmallVector<StringAttr> standardOutDimNames(MLIRContext *ctx, int rank);
 LinearLayout identityStandardND(StringAttr inDimName, ArrayRef<unsigned> shape,
                                 ArrayRef<unsigned> order);
 
+// Compute the supremum of two lists.
+// Error out if the supremum does not exist (e.g. [a, b] and [b, a]).
+// If the supremum is not unique, we return the first list first
+// (e.g. [a, b], [a, c] -> [a, b, c]).
+SmallVector<StringAttr> supremum(const SmallVector<StringAttr> &x,
+                                 const SmallVector<StringAttr> &y);
 } // namespace mlir::triton
 
 #endif // TRITON_TOOLS_LAYOUTUTILS_H

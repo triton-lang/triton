@@ -39,6 +39,18 @@ template <> struct hash<CacheKey> {
 
 namespace mlir::triton::gpu {
 
+constexpr static char AttrNumWarpsName[] = "ttg.num-warps";
+constexpr static char AttrNumCTAsName[] = "ttg.num-ctas";
+constexpr static char AttrTargetName[] = "ttg.target";
+constexpr static char AttrNumThreadsPerWarp[] = "ttg.threads-per-warp";
+
+// Find the contextual number of warps on which this operation is executed.
+int lookupNumWarps(Operation *op);
+// Try to find the contextual number of warps on which this operation is
+// executed. Returns nullopt if a warp size cannot be find. This is used for
+// verifiers.
+std::optional<int> maybeLookupNumWarps(Operation *op);
+
 class LinearLayoutCache {
 public:
   std::optional<LinearLayout> get(const CacheKey &key) {
@@ -70,10 +82,12 @@ struct SharedMemory : public SideEffects::Resource::Base<SharedMemory> {
   StringRef getName() final { return "<SharedMemory>"; }
 };
 
+// Convert a distributed layout to a linear encoding
+LinearEncodingAttr toLinearEncoding(Attribute layout, ArrayRef<int64_t> shape);
+
 unsigned getTotalElemsPerThread(Type type);
 
-unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape,
-                                Type eltTy);
+unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape);
 
 SmallVector<unsigned> getElemsPerThread(Type type);
 

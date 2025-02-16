@@ -37,12 +37,12 @@
 #define GET_ATTRDEF_CLASSES
 #include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUAttrDefs.h.inc"
 
+#include "triton/Dialect/TritonNvidiaGPU/IR/TritonNvidiaGPUOpInterfaces.h.inc"
+
 #define GET_OP_CLASSES
 #include "triton/Dialect/TritonNvidiaGPU/IR/Ops.h.inc"
 
-namespace mlir {
-namespace triton {
-namespace nvidia_gpu {
+namespace mlir::triton::nvidia_gpu {
 
 struct TensorMemory : public SideEffects::Resource::Base<TensorMemory> {
   StringRef getName() final { return "<TensorMemory>"; }
@@ -61,12 +61,10 @@ Attribute getTmemCompatibleLayout(unsigned M, unsigned N,
                                   ArrayRef<int64_t> shape, unsigned numWarps,
                                   triton::gpu::CTALayoutAttr ctaLayout);
 
-bool isDistributedLayoutTMemCompatible(ModuleOp mod,
+bool isDistributedLayoutTMemCompatible(Operation *op,
                                        RankedTensorType tensorType,
                                        gpu::MemDescType memType);
 
-} // namespace nvidia_gpu
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton::nvidia_gpu
 
 #endif // TRITON_DIALECT_TRITONNVIDIAGPU_IR_DIALECT_H_

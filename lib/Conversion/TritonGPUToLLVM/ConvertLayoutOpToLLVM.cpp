@@ -455,10 +455,8 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     StringAttr kOffset = str_attr("offset");
     StringAttr kIteration = str_attr("iteration");
 
-    Value threadId = getThreadId(rewriter, loc);
-    Value threadsPerWarp = b.i32_val(srcLayout.getInDimSize(kLane));
-    Value laneId = b.urem(threadId, threadsPerWarp);
-    Value warpId = b.udiv(threadId, threadsPerWarp);
+    auto [laneId, warpId] =
+        getLaneAndWarpId(rewriter, loc, srcLayout.getInDimSize(kLane));
 
     auto scratchConfig =
         getScratchConfigForCvt(op.getSrc().getType(), op.getType());
@@ -662,9 +660,7 @@ void ConvertLayoutOpUsingLinearLayoutsConversion::transferWithinWarp(
       unpackLLElements(loc, adaptor.getSrc(), rewriter);
   SmallVector<Value> shflOuts(Cp.getInDimSize(kRegister));
 
-  Value threadId = getThreadId(rewriter, loc);
-  Value threadsPerWarp = b.i32_val(Cp.getInDimSize(kLane));
-  Value laneId = b.urem(threadId, threadsPerWarp);
+  Value laneId = getLaneId(rewriter, loc, Cp.getInDimSize(kLane));
 
   // Emit one shuffle per destination register.
   for (int i : llvm::seq(shflOuts.size())) {
