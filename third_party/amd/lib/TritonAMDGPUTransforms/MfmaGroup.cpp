@@ -74,6 +74,7 @@ private:
 };
 
 MfmaDatabase::MfmaDatabase(MLIRContext *context) {
+// Macro for defining MFMA intrinsics at a specific gfx version.
 #define TRITON_MFMA_v(v, m, n, aET, bET, symbol, k, kBase)                     \
   {                                                                            \
     /*key=*/{v, m, n, aET.getTypeID(), bET.getTypeID()}, /*value=*/{           \
@@ -91,6 +92,7 @@ MfmaDatabase::MfmaDatabase(MLIRContext *context) {
     }                                                                          \
   }
 
+// Macro for defining MFMA intrinsics existing in multiple gfx versions.
 #define TRITON_MFMA_v1to2(m, n, k, aET, bET, kBase, symbol)                    \
   TRITON_MFMA_v(1, m, n, k, aET, bET, kBase, symbol),                          \
       TRITON_MFMA_v(2, m, n, k, aET, bET, kBase, symbol)

@@ -134,7 +134,7 @@ chooseMfmaInstruction(int mfmaVersion, RankedTensorType cType, Type aElemType,
   if (mDim == 0 || nDim == 0)
     return failure();
 
-  auto maybeMfmaIntrinsic =
+  FailureOr<MfmaIntrinsic> maybeMfmaIntrinsic =
       MfmaIntrinsic::selectFor(mfmaVersion, mDim, nDim, inputKSize, aElemType,
                                bElemType, withScale, allowXF32);
   if (failed(maybeMfmaIntrinsic))
@@ -423,14 +423,13 @@ public:
 
     ttg::AMDMfmaEncodingAttr mfmaEnc;
 
-    auto instrSelection = chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim);
-    if (failed(instrSelection))
+    auto mfmaInstr = chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim);
+    if (failed(mfmaInstr))
       return failure();
-    auto mfmaInstr = instrSelection.value();
-    auto mDim = mfmaInstr.mDim;
-    auto nDim = mfmaInstr.nDim;
-    auto kDim = mfmaInstr.kDim;
-    auto kBase = mfmaInstr.kBase;
+    auto mDim = mfmaInstr->mDim;
+    auto nDim = mfmaInstr->nDim;
+    auto kDim = mfmaInstr->kDim;
+    auto kBase = mfmaInstr->kBase;
 
     auto warpsPerTile =
         warpsPerTileMFMA(dotOp, retShape, numWarps, {mDim, nDim});
@@ -438,7 +437,7 @@ public:
     // Use transposed mfma layout to enable larger vectorization for global
     // store instructions, except for fp8 matmul kernels due to regression
     // TODO (lixun): investigate the regression and enable this feature again
-    auto aElemTy = mfmaInstr.aElementType;
+    auto aElemTy = mfmaInstr->aElementType;
     bool isFP8 = llvm::isa<Float8E5M2FNUZType, Float8E4M3FNUZType>(aElemTy);
     bool isTransposed = isChainDot(dotOp) || !isFP8;
     mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
@@ -500,8 +499,10 @@ public:
         ttg::DotOperandEncodingAttr::get(ctx, 0, mfmaEnc, kWidth);
     auto newBEncoding =
         ttg::DotOperandEncodingAttr::get(ctx, 1, mfmaEnc, kWidth);
-    a = convertAndCastTensor(rewriter, a, newAEncoding, mfmaInstr.aElementType);
-    b = convertAndCastTensor(rewriter, b, newBEncoding, mfmaInstr.bElementType);
+    a = convertAndCastTensor(rewriter, a, newAEncoding,
+                             mfmaInstr->aElementType);
+    b = convertAndCastTensor(rewriter, b, newBEncoding,
+                             mfmaInstr->bElementType);
     auto newDot = rewriter.create<tt::DotOp>(
         dotOp.getLoc(), newAcc.getType(), a, b, newAcc,
         dotOp.getInputPrecision(), dotOp.getMaxNumImpreciseAcc());

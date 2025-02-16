@@ -227,7 +227,7 @@ struct DotOpMFMAConversionHelper {
 
   template <typename T>
   void packAndReplaceResult(T &op, SmallVector<Value> &fc,
-                            FailureOr<MfmaIntrinsic> maybeMfmaIntrinsic,
+                            const FailureOr<MfmaIntrinsic> &maybeMfmaIntrinsic,
                             Type dstElemTy, Type elemtTy,
                             size_t mmaCount) const {
     Type structTy = LLVM::LLVMStructType::getLiteral(
@@ -268,7 +268,7 @@ struct DotOpMFMAConversionHelper {
     bool allowXF32 =
         op.getInputPrecision() == InputPrecision::TF32 && mfmaVersion == 3;
     StringRef intrinsicName;
-    auto maybeMfmaIntrinsic = MfmaIntrinsic::selectFor(
+    FailureOr<MfmaIntrinsic> maybeMfmaIntrinsic = MfmaIntrinsic::selectFor(
         mfmaVersion, mDim, nDim, kDimOperandSize, elemTyA, elemTyB,
         /*withScale=*/false, allowXF32);
     if (failed(maybeMfmaIntrinsic))
@@ -477,7 +477,7 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
                                   Location loc)
       : DotOpMFMAConversionHelper(mfmaLayout, rewriter, typeConverter, loc) {}
 
-  Value generateScaledMFMAOp(MfmaIntrinsic &mfmaIntrinsic, Value valA,
+  Value generateScaledMFMAOp(const MfmaIntrinsic &mfmaIntrinsic, Value valA,
                              Value valB, Value valC, Value valScaleA,
                              Value valScaleB) const {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -530,7 +530,7 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
 
     auto ctx = op.getContext();
     constexpr bool allowXF32 = false;
-    auto maybeMfmaIntrinsic =
+    FailureOr<MfmaIntrinsic> maybeMfmaIntrinsic =
         MfmaIntrinsic::selectFor(mfmaVersion, mDim, nDim, kDimOperandSize,
                                  scaleDotElemTypeToMLIRType(ctx, aElemType),
                                  scaleDotElemTypeToMLIRType(ctx, bElemType),
