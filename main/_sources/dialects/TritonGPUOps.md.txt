@@ -431,3 +431,127 @@ Effects: `MemoryEffects::Effect{}`
 | :----: | ----------- |
 | `result` | memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system
 
+### `ttg.warp_return` (triton::gpu::WarpReturnOp)
+
+_Implicit terminator from partition regions_
+
+
+Syntax:
+
+```
+operation ::= `ttg.warp_return` attr-dict
+```
+
+The `ttg.warp_return` operation is the implicit terminator that ends the
+partition regions of a `ttg.warp_specialize` op. It has no operands as these
+regions cannot return anything.
+
+TODO: Support returning uniform values from partition regions.
+
+Traits: `AlwaysSpeculatableImplTrait`, `HasParent<WarpSpecializePartitionsOp>`, `ReturnLike`, `Terminator`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`, `RegionBranchTerminatorOpInterface`
+
+Effects: `MemoryEffects::Effect{}`
+
+### `ttg.warp_specialize` (triton::gpu::WarpSpecializeOp)
+
+_Asynchronously execute code on multiple warpgroups_
+
+The `ttg.warp_specialize` op represents executing different code
+simultaneously on different warp groups. A warp group is a group of
+power-of-2 warps, which can be a different number of warps than in the
+enclosing region.
+
+The "default" region of the op represents the code executed by the currently
+executing warp group. This region is allowed to implicitly capture. The op
+contains a number of "partition" regions that are isolated from above. They
+must be isolated because these regions represent different layout domains,
+as the number of warps is different.
+
+Semantically, execution of each region starts simultaneously for each warp
+group, and all warp groups are joined at the end of the op.
+
+Example:
+
+```mlir
+%0 = ttg.warp_specialize(%a, %b)
+default {
+  %out = some_operation(%a) // implicit capture of `%a`
+  ttg.warp_yield %out : i32
+}
+partition0(%arg0: i32, %arg1: i32) num_warps(8) {
+  some_async_dispatch(%arg0, %arg1)
+}
+partition1(%arg0: i32, %arg1: i32) num_warps(1) {
+  some_async_dispatch(%arg0, %arg1)
+} : (i32, i32) -> i32
+```
+
+Traits: `RecursiveMemoryEffects`, `RecursivelySpeculatableImplTrait`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `ConditionallySpeculatable`, `RegionBranchOpInterface`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>partitionNumWarps</code></td><td>::mlir::DenseI32ArrayAttr</td><td>i32 dense array attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `explicitCaptures` | variadic of any type
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `defaultPassthrough` | variadic of any type
+
+### `ttg.warp_specialize.partitions` (triton::gpu::WarpSpecializePartitionsOp)
+
+_Container op for `ttg.warp_specialize`_
+
+Because MLIR requires entire operations be isolated from above, this op
+contains the actual isolated from above regions of `ttg.warp_specialize`.
+
+Traits: `HasParent<WarpSpecializeOp>`, `IsolatedFromAbove`, `RecursiveMemoryEffects`, `RecursivelySpeculatableImplTrait`, `SingleBlockImplicitTerminator<WarpReturnOp>`, `SingleBlock`, `Terminator`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `ConditionallySpeculatable`
+
+### `ttg.warp_yield` (triton::gpu::WarpYieldOp)
+
+_Yield from the default region of `ttg.warp_specialize`_
+
+
+Syntax:
+
+```
+operation ::= `ttg.warp_yield` ($values^)? attr-dict (`:` type($values)^)?
+```
+
+The `ttg.warp_yield` operation is the terminator for the "default" region of
+a `ttg.warp_specialize` operation. The operands are passed transparently as
+the SSA results of the `ttg.warp_specialize` operation.
+
+Example:
+
+```mlir
+ttg.warp_yield %a, %b : i32, tensor<32xbf16, #blocked>
+```
+
+Traits: `AlwaysSpeculatableImplTrait`, `HasParent<WarpSpecializeOp>`, `Terminator`, `VerifyTensorLayoutsTrait`
+
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`, `RegionBranchTerminatorOpInterface`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `values` | variadic of any type
+

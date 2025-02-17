@@ -8,6 +8,7 @@ Syntax:
 
 ```
 operation ::= `amdgpu.buffer_atomic_rmw` $atomic_rmw_op `,` $sem `,` $scope `,` $value `,` $ptr `[` $offsets `]` (`,` $mask^)?
+              (`stride` `=` $stride^)?
               attr-dict `:` type($result)
 ```
 
@@ -17,8 +18,11 @@ Similar to other buffer ops, the `mask` is a boolean vector that determines if a
 the atomic RMW op. Elements with `mask[i] == 0` are dropped (i.e., the atomic is not executed).
 Similar to TT_AtomicRMWOp: Buffer atomic RMW ops load data at $ptr, do $rmw_op with $val, and store result to $ptr with
 the specified memory semantics and scope. Atomic RMW ops return the pre-op value if used, otherwise the value is implicitly dropped.
+Stride is the distance between the beginning of contiguous memory chunks. When performing a RMW, the `stride` is
+the address difference between the first elements of each row in bytes. Compiler tries to obtain the `stride`
+when it converts to the buffer ops because it is important for optimizing the cache memory access.
 
-Traits: `SameLoadStoreOperandsAndResultEncoding`
+Traits: `AttrSizedOperandSegments`, `SameLoadStoreOperandsAndResultEncoding`
 
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
@@ -57,6 +61,7 @@ Effects: `MemoryEffects::Effect{MemoryEffects::Read on ::mlir::triton::GlobalMem
 | `ptr` | ptr
 | `offsets` | tensor of 32-bit signless integer values
 | `value` | ranked tensor of floating-point or integer or ptr values
+| `stride` | 32-bit signless integer
 | `mask` | ranked tensor of 1-bit signless integer values
 
 #### Results:
@@ -75,7 +80,7 @@ Syntax:
 ```
 operation ::= `amdgpu.buffer_load` $ptr `[` $offsets `]` (`,` $mask^)? (`,` $other^)?
               oilist(`cacheModifier` `=` $cache)
-              `stride` `=` $stride
+              (`stride` `=` $stride^)?
               attr-dict `:` type($result)
 ```
 
@@ -137,7 +142,7 @@ Syntax:
 ```
 operation ::= `amdgpu.buffer_store` $value `,` $ptr `[` $offsets `]` (`,` $mask^)?
               oilist(`cacheModifier` `=` $cache)
-              `stride` `=` $stride
+              (`stride` `=` $stride^)?
               attr-dict `:` type($value)
 ```
 
@@ -153,7 +158,7 @@ the first elements of each row in bytes. Compiler tries to obtain the `stride`
 when it converts to the buffer ops because it is important for optimizing
 the cache memory access.
 
-Traits: `SameLoadStoreOperandsEncoding`
+Traits: `AttrSizedOperandSegments`, `SameLoadStoreOperandsEncoding`
 
 Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
 
@@ -338,4 +343,52 @@ interleave for better instruction level parallelism.
     the data type.
   {{% /markdown %}}</details></td></tr>
 </table>
+
+### `amdgpu.upcast_mxfp` (triton::amdgpu::UpcastMXFPOp)
+
+_Convert an mxfp tensor to bf16/fp16_
+
+
+Syntax:
+
+```
+operation ::= `amdgpu.upcast_mxfp` $src `,` $scale  `fp_type` `=` $fp_type attr-dict `:` type($src) `,` type($scale) `->` type($result)
+```
+
+Compute the bf16 encoded in the given mxfp number as per
+https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
+
+Traits: `AlwaysSpeculatableImplTrait`
+
+Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`
+
+Effects: `MemoryEffects::Effect{}`
+
+#### Attributes:
+
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>fp_type</code></td><td>::mlir::triton::ScaleDotElemTypeAttr</td><td><details><summary>allowed 32-bit signless integer cases: 0, 1, 2, 3, 4, 5, 6</summary>{{% markdown %}}Enum cases:
+* e4m3 (`E4M3`)
+* e5m2 (`E5M2`)
+* e2m3 (`E2M3`)
+* e3m2 (`E3M2`)
+* e2m1 (`E2M1`)
+* bf16 (`BF16`)
+* fp16 (`FP16`){{% /markdown %}}</details></td></tr>
+<tr><td><code>fastMath</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
+</table>
+
+#### Operands:
+
+| Operand | Description |
+| :-----: | ----------- |
+| `src` | ranked tensor of floating-point or integer or ptr values
+| `scale` | ranked tensor of floating-point or integer or ptr values
+
+#### Results:
+
+| Result | Description |
+| :----: | ----------- |
+| `result` | ranked tensor of floating-point or integer or ptr values
 
