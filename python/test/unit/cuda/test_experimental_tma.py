@@ -1140,24 +1140,6 @@ def test_tma_scatter(X, Y, BLOCK_X, BLOCK_Y, dtype, y):
     torch.testing.assert_close(ref, output, atol=0, rtol=0)
 
 
-def test_load_fp4_mxf8f6f4_tma():
-    device = "cuda"
-
-    @triton.jit
-    def kernel(Z, desc):
-        off0 = tl.arange(0, 32)
-        off1 = tl.arange(0, 64)
-        x = tl._experimental_descriptor_load(desc, [0, 0], [32, 64], tl.dtype("int8"), packing_factor=2)
-        out_ptrs = Z + 64 * off0[:, None] + off1[None, :]
-        tl.store(out_ptrs, x)
-
-    x = MXFP4Tensor(size=(32, 128), device=device).random().to_packed_tensor(dim=1)
-    desc = TmaDescKernelParam(x.data_ptr(), [32, 128], [32, 128], 1, packing_factor=2)
-    z_tri = torch.zeros(size=(32, 64), dtype=torch.uint8, device=device)
-    kernel[(1, )](z_tri, desc)
-    assert torch.equal(z_tri, x)
-
-
 def f8_to_f16(x, dtype):
 
     @triton.jit
@@ -1205,8 +1187,7 @@ def mxfp8_mxfp4_matmul_tma(  #
     for k in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES):
         a = tl.load(a_ptrs)
 
-        b = tl._experimental_descriptor_load(b_desc, [offs_bn_tma, offs_bk], [BLOCK_N, BLOCK_K // 2], tl.dtype("uint8"),
-                                             packing_factor=2)
+        b = tl._experimental_descriptor_load(b_desc, [offs_bn_tma, offs_bk], [BLOCK_N, BLOCK_K // 2], tl.dtype("uint8"))
         b = b.T
 
         scale_a = tl.load(a_scale_ptr)
@@ -1261,3 +1242,7 @@ def test_mxfp8_mxfp4_matmul_tma(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, 
     ref_out = torch.matmul(a_ref * a_scale_ref, b_ref * b_scale_ref)
 
     torch.testing.assert_close(ref_out, output, atol=1e-3, rtol=1e-3)
+    print("ok")
+
+
+test_mxfp8_mxfp4_matmul_tma(128, 128, 128, 128, 128, 128, 1, "cuda")

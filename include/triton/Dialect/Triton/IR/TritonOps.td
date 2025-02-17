@@ -1265,7 +1265,6 @@ def TT_ExperimentalDescriptorLoadOp : TT_Op<"experimental_descriptor_load", [Mem
   let arguments = (ins
     TT_TensorDescType:$desc,
     Variadic<I32>:$indices,
-    F32Attr:$packingFactor,
     TT_DescriptorLoadAttr:$descAttr,
     DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
     DefaultValuedAttr<TT_EvictionPolicyAttr, "::mlir::triton::EvictionPolicy::NORMAL">:$evict
@@ -1274,7 +1273,7 @@ def TT_ExperimentalDescriptorLoadOp : TT_Op<"experimental_descriptor_load", [Mem
   let results = (outs TT_Tensor:$result);
 
   let assemblyFormat = [{
-    $desc `[` $indices `]` $packingFactor
+    $desc `[` $indices `]`
     oilist(
       `cacheModifier` `=` $cache |
       `evictionPolicy` `=` $evict

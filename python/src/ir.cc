@@ -1411,15 +1411,16 @@ void init_triton_ir(py::module &&m) {
            })
       .def("create_descriptor_load",
            [](TritonOpBuilder &self, Value desc, std::vector<Value> &indices,
-              float packingFactor, CacheModifier cacheModifier,
+              CacheModifier cacheModifier,
               EvictionPolicy evictionPolicy) -> Value {
              auto descTy = cast<triton::TensorDescType>(desc.getType());
              auto resTy = descTy.getBlockType();
              auto ctx = self.getContext();
-	     auto descLoadAttr = mlir::triton::DescriptorLoadAttr::get(ctx, true, false);
+             auto descLoadAttr =
+                 mlir::triton::DescriptorLoadAttr::get(ctx, true, false);
              return self.create<ExperimentalDescriptorLoadOp>(
-                 resTy, desc, indices, llvm::APFloat(packingFactor),
-                 descLoadAttr, cacheModifier, evictionPolicy);
+                 resTy, desc, indices, descLoadAttr, cacheModifier,
+                 evictionPolicy);
            })
       .def("create_descriptor_gather",
            [](TritonOpBuilder &self, Value desc, Value x_indices, Value y_index,

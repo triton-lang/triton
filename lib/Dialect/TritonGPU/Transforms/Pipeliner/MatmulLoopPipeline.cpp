@@ -44,7 +44,6 @@ struct LoadInfo {
   bool isMMAv5Scale = false;
   int distToUse = 0;
   bool usedByDot = false;
-  llvm::APFloat packingFactor{1.0};
 
   LLVM_DUMP_METHOD void dump() const {
     llvm::dbgs() << "LoadInfo: \n"
@@ -253,7 +252,7 @@ static void createTMAAsyncCopy(scf::ForOp forOp, Operation *loadOp, Value desc,
                                Value barrier, Operation *waitOp,
                                const LoadInfo &loadInfo,
                                function_ref<void(OpBuilderWithStage &, int, int,
-                                                 Value, Value, Value, Value, llvm::APFloat)>
+                                                 Value, Value, Value, Value)>
                                    createCopy) {
   OpBuilderWithStage builder(forOp);
   auto [stage, clusterId] = tt::getStageCluster(loadOp);
@@ -281,9 +280,7 @@ static void createTMAAsyncCopy(scf::ForOp forOp, Operation *loadOp, Value desc,
   Value tmaPtr =
       builder.createWithStage<triton::nvidia_gpu::TensorDescToTMAPtrOp>(
           loc, stage, clusterId, desc);
-
-  createCopy(builder, stage, clusterId, tmaPtr, barrier, view, pred,
-             loadInfo.packingFactor);
+  createCopy(builder, stage, clusterId, tmaPtr, barrier, view, pred);
 
   auto loadIsMMAv3Shared = loadInfo.isMMAv3Shared;
 
@@ -328,10 +325,10 @@ static void createTMAAsyncLoad(scf::ForOp forOp,
       forOp, loadOp, loadOp.getDesc(), alloc, insertIdx, extractIdx, barrier,
       waitOp, loadInfo,
       [&](OpBuilderWithStage &builder, int stage, int clusterId, Value tmaPtr,
-          Value barrier, Value view, Value pred, llvm::APFloat packingFactor) {
+          Value barrier, Value view, Value pred) {
         builder.createWithStage<ttng::AsyncTMACopyGlobalToLocalOp>(
             loadOp.getLoc(), stage, clusterId, tmaPtr, loadOp.getIndices(),
-            barrier, view, pred, packingFactor, loadOp.getDescAttr());
+            barrier, view, pred, loadOp.getDescAttr());
       });
 }
 
@@ -344,7 +341,7 @@ static void createTMAAsyncGather(scf::ForOp forOp,
       forOp, gatherOp, gatherOp.getDesc(), alloc, insertIdx, extractIdx,
       barrier, waitOp, loadInfo,
       [&](OpBuilderWithStage &builder, int stage, int clusterId, Value tmaPtr,
-          Value barrier, Value view, Value pred, llvm::APFloat _) {
+          Value barrier, Value view, Value pred) {
         builder.createWithStage<ttng::AsyncTMAGatherOp>(
             gatherOp.getLoc(), stage, clusterId, tmaPtr, gatherOp.getXOffsets(),
             gatherOp.getYOffset(), barrier, view, pred);
@@ -552,9 +549,6 @@ assignMemoryLayouts(scf::ForOp &forOp,
         if (mmav3Shmem || isTMALoad) {
           loadInfo.sharedEncoding =
               getSharedEncoding(&op, isTMALoad).value_or(nullptr);
-          if (auto tmaLoad = dyn_cast<tt::ExperimentalDescriptorLoadOp>(op)) {
-            loadInfo.packingFactor = tmaLoad.getPackingFactor();
-          }
         } else if (!mmav3Shmem || dot) {
           bool incompatible = false;
 

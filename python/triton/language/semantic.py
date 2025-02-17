@@ -1158,16 +1158,15 @@ def validate_descriptor_block(shape, dtype):
         1] >= min_cols, f"{dtype} tensor descriptor block shape must have at least {min_cols} columns, but got {shape[1]}"
 
 
-def descriptor_load(desc: tl._experimental_tensor_desciptor_base, offsets, packing_factor: float, cache_modifier: str,
-                    eviction_policy: str, builder: ir.builder) -> tl.tensor:
+def descriptor_load(desc: tl._experimental_tensor_desciptor_base, offsets, cache_modifier: str, eviction_policy: str,
+                    builder: ir.builder) -> tl.tensor:
     assert isinstance(desc, tl._experimental_tensor_descriptor_base)
     validate_descriptor_block(desc.block_shape, desc.type.element_ty)
     ndim = len(desc.block_shape)
     assert len(offsets) == ndim, f"expected {ndim} offsets, but got {len(offsets)}"
 
     offsets = _convert_to_ir_values(builder, offsets, require_i64=False)
-    x = builder.create_descriptor_load(desc.handle, offsets, packing_factor,
-                                       _str_to_load_cache_modifier(cache_modifier),
+    x = builder.create_descriptor_load(desc.handle, offsets, _str_to_load_cache_modifier(cache_modifier),
                                        _str_to_eviction_policy(eviction_policy))
     return tl.tensor(x, desc.type)
 
