@@ -64,7 +64,7 @@
 
 // -----
 
-// expected-error@+1 {{major version must be in the [0, 3] range}}
+// expected-error@+1 {{major version must be in the [0, 4] range}}
 #mfma = #ttg.amd_mfma<{versionMajor = 10, versionMinor = 0, warpsPerCTA = [1, 1, 1], instrShape = [32, 32], isTransposed = false}>
 
 // -----

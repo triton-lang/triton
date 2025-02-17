@@ -8,8 +8,10 @@
 #include "third_party/f2reduce/f2reduce.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/StrUtil.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetOperations.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -152,36 +154,6 @@ void assertDimsSubsetIgnoringOrder(T &&small, U &&big) {
                              "they aren't.  Got dims: [" +
                              Twine(triton::join(small, ", ")) + "] and [" +
                              triton::join(big, ", ") + "]");
-  }
-}
-
-// Check that elements common to both aDims and bDims
-// appear in the same relative order.
-template <typename T, typename U>
-void assertCommonDimsSameOrder(T &&aDims, U &&bDims) {
-  SmallDenseSet<StringAttr> aDimsSet(aDims.begin(), aDims.end());
-  SmallDenseSet<StringAttr> bDimsSet(bDims.begin(), bDims.end());
-
-  std::vector<StringAttr> aCommonDims;
-  for (StringAttr dim : aDims) {
-    if (bDimsSet.contains(dim)) {
-      aCommonDims.push_back(dim);
-    }
-  }
-
-  std::vector<StringAttr> bCommonDims;
-  for (StringAttr dim : bDims) {
-    if (aDimsSet.contains(dim)) {
-      bCommonDims.push_back(dim);
-    }
-  }
-
-  if (aCommonDims != bCommonDims) {
-    llvm::report_fatal_error("All a/b dimensions common to both layouts "
-                             "must appear in the same relative order, but they "
-                             "don't.\na:" +
-                             Twine(triton::join(aDims, ", ")) +
-                             "\nb: " + triton::join(bDims, ", "));
   }
 }
 } // anonymous namespace
@@ -590,14 +562,20 @@ LinearLayout LinearLayout::concatOuts(const LinearLayout &other) const {
 
 LinearLayout operator*(LinearLayout inner, LinearLayout outer) {
   // Check that dims common to outer and inner have the same relative order.
-  assertCommonDimsSameOrder(inner.getOutDimNames(), outer.getOutDimNames());
-  assertCommonDimsSameOrder(inner.getInDimNames(), outer.getInDimNames());
+  auto inDims = supremum(llvm::to_vector(inner.getInDimNames()),
+                         llvm::to_vector(outer.getInDimNames()));
+  auto outDims = supremum(llvm::to_vector(inner.getOutDimNames()),
+                          llvm::to_vector(outer.getOutDimNames()));
 
   // Get the sizeLog2 of all input and output dimensions we're going to
   // consider, in order.  `inner` is more minor, so its dimensions come
   // first.
   llvm::MapVector<StringAttr, int32_t> inDimSizesLog2;
   llvm::MapVector<StringAttr, int32_t> outDimSizesLog2;
+  for (const auto &dim : inDims)
+    inDimSizesLog2.insert({dim, 0});
+  for (const auto &dim : outDims)
+    outDimSizesLog2.insert({dim, 0});
   for (const auto &layout : {inner, outer}) {
     for (StringAttr inDim : layout.getInDimNames()) {
       inDimSizesLog2[inDim] += layout.getInDimSizeLog2(inDim);
@@ -977,6 +955,8 @@ LinearLayout LinearLayout::invert() const {
 
 LinearLayout LinearLayout::pseudoinvert() const {
   // A^-1(x) = A^-1(I(x)), thus A.invert() = I.invertAndCompose(A)
+  assert(isSurjective() &&
+         "A linear layout must be surjective to compute its pseudoinverse");
   LinearLayout identity = LinearLayout::empty();
   for (auto outDim : getOutDimNames()) {
     identity *= LinearLayout::identity1D(getOutDimSize(outDim), outDim, outDim);

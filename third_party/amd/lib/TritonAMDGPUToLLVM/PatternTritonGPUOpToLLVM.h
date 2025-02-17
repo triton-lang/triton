@@ -14,10 +14,11 @@ void populateConvertLayoutOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
 
 void populateMemoryOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                     RewritePatternSet &patterns,
+                                    const TargetInfo &targetInfo,
                                     PatternBenefit benefit);
 
 void populateDotOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
-                                 RewritePatternSet &patterns, int numWarps,
+                                 RewritePatternSet &patterns,
                                  ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                  PatternBenefit benefit);
 void populateElementwiseOpToLLVMPatterns(
@@ -27,7 +28,6 @@ void populateElementwiseOpToLLVMPatterns(
 void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        const TargetInfo &targetInfo,
                                        RewritePatternSet &patterns,
-                                       int numWarps,
                                        ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                        PatternBenefit benefit);
 

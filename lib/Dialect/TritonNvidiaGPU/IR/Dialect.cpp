@@ -146,10 +146,10 @@ Attribute getTmemCompatibleLayout(unsigned M, unsigned N,
 }
 
 // Verify if the distributed layout can be mapped onto tensor memory.
-bool isDistributedLayoutTMemCompatible(ModuleOp mod,
+bool isDistributedLayoutTMemCompatible(Operation *op,
                                        RankedTensorType tensorType,
                                        MemDescType memType) {
-  int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+  int numWarps = lookupNumWarps(op);
   assert(numWarps % 4 == 0);
   int numWarpGroups = numWarps / 4;
 

@@ -31,6 +31,11 @@
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
+#include "llvm/Support/Debug.h"
+
+#define DEBUG_TYPE "tritongpu-prefetch"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 namespace mlir {
 namespace triton {
@@ -116,11 +121,12 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
   // opIdx: 0 => a, 1 => b
   auto type = cast<triton::gpu::MemDescType>(v.getType());
   SmallVector<int64_t> shape{type.getShape().begin(), type.getShape().end()};
-  SmallVector<int64_t> offset{0, 0};
+  auto rank = shape.size();
+  SmallVector<int64_t> offset(rank, 0);
   Type elementType = type.getElementType();
 
   // k => (prefetchWidth, k - prefetchWidth)
-  int64_t kIdx = opIdx == 0 ? 1 : 0;
+  int64_t kIdx = opIdx == 0 ? rank - 1 : rank - 2;
 
   offset[kIdx] = isPrologue ? 0 : prefetchWidth;
   shape[kIdx] = isPrologue ? prefetchWidth : (shape[kIdx] - prefetchWidth);
@@ -186,6 +192,7 @@ LogicalResult Prefetcher::initialize() {
     bool foundConvertFromShared = false;
     SmallVector<Value> rets;
     rets.push_back(op->getResult(0));
+    LDBG("Prefetch src: " << *op);
     while (op) {
       if (op->getNumOperands() != 1)
         break;
@@ -193,10 +200,15 @@ LogicalResult Prefetcher::initialize() {
         break;
       rets.push_back(op->getOperand(0));
       if (auto cvt = dyn_cast<triton::gpu::LocalLoadOp>(op)) {
-        foundConvertFromShared = true;
+        // NYI for other encodings, for example if we have transpose
+        // in the chain
+        if (isa<DotOperandEncodingAttr>(cvt.getType().getEncoding()))
+          foundConvertFromShared = true;
         break;
       }
       op = op->getOperand(0).getDefiningOp();
+      if (op)
+        LDBG("op: " << *op);
     }
     std::reverse(rets.begin(), rets.end());
 
@@ -229,7 +241,7 @@ LogicalResult Prefetcher::initialize() {
     int bKWidth = bEnc.getKWidth();
     assert(aKWidth == bKWidth);
 
-    auto kSize = aType.getShape()[1];
+    auto kSize = aType.getShape().back();
 
     // works better with nvidia tensor cores
     unsigned elementWidth = aType.getElementTypeBitWidth();
@@ -345,7 +357,7 @@ scf::ForOp Prefetcher::createNewForOp() {
 
       // remaining part
       int64_t kOff = prefetchWidth;
-      int64_t kRem = dot.getA().getType().getShape()[1] - prefetchWidth;
+      int64_t kRem = dot.getA().getType().getShape().back() - prefetchWidth;
       Operation *prevDot = firstDot;
       if (kRem == 0) {
         // There is only one dot while prefetchWidth == kSize so delay issuing

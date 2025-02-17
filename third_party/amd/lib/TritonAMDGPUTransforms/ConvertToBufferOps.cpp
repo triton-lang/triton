@@ -1,3 +1,6 @@
+#include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
+#include "mlir/Analysis/DataFlow/DenseAnalysis.h"
+#include "mlir/Analysis/DataFlow/IntegerRangeAnalysis.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -6,10 +9,8 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/MLIRContext.h"
-#include "mlir/IR/Verifier.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
-#include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "third_party/amd/lib/TritonAMDGPUToLLVM/Utility.h"
@@ -19,7 +20,6 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/TypeSwitch.h"
-#include <deque>
 #include <optional>
 
 #define GEN_PASS_CLASSES
@@ -38,10 +38,312 @@ namespace ttg = mlir::triton::gpu;
 namespace tt = mlir::triton;
 
 namespace {
-template <typename F>
-bool verifyNonSmallerByAssumption(Value expr,
-                                  const DenseSet<Value> &assumptions,
-                                  F matchesOther) {
+
+constexpr int64_t kDefaultMaxTripCount = 1024;
+const std::string kConvertBufferOpsPrefix = "__amdgpuconvertbufferops.";
+const std::string kOutputRange = kConvertBufferOpsPrefix + "output_range";
+
+std::optional<int64_t> maybeGetTripCount(LoopLikeOpInterface loop) {
+  std::optional<OpFoldResult> lowerBound = loop.getSingleLowerBound();
+  std::optional<OpFoldResult> upperBound = loop.getSingleUpperBound();
+  std::optional<OpFoldResult> step = loop.getSingleStep();
+  assert(lowerBound && upperBound && step);
+  return constantTripCount(*lowerBound, *upperBound, *step);
+}
+
+void getEnclosingLoops(Operation &op, SmallVector<LoopLikeOpInterface> &ops) {
+  Operation *currOp = op.getParentOp();
+  while (currOp) {
+    if (isa<LoopLikeOpInterface>(currOp))
+      ops.push_back(llvm::cast<LoopLikeOpInterface>(currOp));
+    currOp = currOp->getParentOp();
+  }
+}
+
+void inferResultRanges(GetProgramIdOp *op, SetIntRangeFn setResultRange) {
+  constexpr int64_t kDefaultMaxProgramID = 2 << 15; // 65536
+  setResultRange(
+      op->getResult(),
+      ConstantIntRanges::range(
+          /*min*/ {/*numBits*/ 32, /*val*/ 0, /*isSigned*/ true},
+          /*max*/
+          {/*numBits*/ 32, /*val*/ kDefaultMaxProgramID, /*isSigned*/ true},
+          /*isSigned*/ true));
+}
+
+void inferResultRanges(MakeRangeOp *op, SetIntRangeFn setResultRange) {
+  setResultRange(
+      op->getResult(),
+      ConstantIntRanges::range(
+          /*min*/ {/*numBits*/ 32, /*val*/ op->getStart(), /*isSigned*/ true},
+          /*max*/ {/*numBits*/ 32, /*val*/ op->getEnd(), /*isSigned*/ true},
+          /*isSigned*/ true));
+}
+
+void inferResultRanges(SplatOp *op, ArrayRef<ConstantIntRanges> argRanges,
+                       SetIntRangeFn setResultRange) {
+  setResultRange(op->getResult(), argRanges[0]);
+}
+
+void inferResultRanges(ExpandDimsOp *op, ArrayRef<ConstantIntRanges> argRanges,
+                       SetIntRangeFn setResultRange) {
+  setResultRange(op->getResult(), argRanges[0]);
+}
+
+/// This struct (analysis) adapt's upstream's IntegerRangeAnalysis (inferring
+/// lower/upperbounds on integer constants) to our needs.
+/// Specifically there are 2 points of extension:
+///
+/// 1. Support for GetProgramIdOp, MakeRangeOp, SplatOp, ExpandDimsOp. *Note*,
+/// upstream already supports range inference for shaped types such as tensors
+/// (here we just implement effectively implement the interfaces for our ops).
+///    * Upstream's semantics for "range of shape type" is union over ranges of
+///    elements.
+///    * We do not use tablegen to implement
+///    DeclareOpInterfaceMethods<InferIntRangeInterface, ["inferResultRanges"]>
+///    in order to keep the entire implementation contained/encapsulated.
+///
+/// 2. Support for inference "through loops". Upstream's analysis conservatively
+/// inferences [min_int, max_int] for loop carried values (and therefore loop
+/// body values). Here we attempt to do better by analysis the loop bounds and
+/// "abstractly interpreting" the loop when loop bounds are statically known.
+/// See visitRegionSuccessors.
+struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
+  using dataflow::IntegerRangeAnalysis::IntegerRangeAnalysis;
+
+  llvm::SmallDenseMap<LoopLikeOpInterface, int64_t> loopTripCounts;
+  llvm::SmallDenseMap<
+      std::pair<LoopLikeOpInterface, dataflow::IntegerValueRangeLattice *>,
+      int64_t>
+      loopVisits;
+
+  LogicalResult visitOperation(
+      Operation *op,
+      ArrayRef<const dataflow::IntegerValueRangeLattice *> operands,
+      ArrayRef<dataflow::IntegerValueRangeLattice *> results) override {
+    LDBG("  Inferring ranges for " << *op << "\n");
+    // This callback is almost exactly like the callback in
+    // IntegerRangeAnalysis::visitOperation except we do not "short-cicruit" the
+    // analysis by inferring a maximum range for loop results (instead we
+    // perform a check based on visit counts in visitRegionSuccessors).
+    auto joinCallback =
+        [&op, &results, this](Value v, const IntegerValueRange &incomingRange) {
+          auto result = dyn_cast<OpResult>(v);
+          if (!result)
+            return;
+          assert(llvm::is_contained(op->getResults(), result));
+
+          LDBG("  Inferred range " << incomingRange << "\n");
+          dataflow::IntegerValueRangeLattice *lattice =
+              results[result.getResultNumber()];
+          IntegerValueRange oldRange = lattice->getValue();
+          ChangeResult changed = lattice->join(incomingRange);
+          propagateIfChanged(lattice, changed);
+        };
+
+    if (llvm::isa<GetProgramIdOp, MakeRangeOp, SplatOp, ExpandDimsOp>(op)) {
+      SmallVector<ConstantIntRanges> argRanges;
+      for (auto lattice : operands) {
+        if (lattice->getValue().isUninitialized()) {
+          setAllToEntryStates(results);
+          return success();
+        }
+        argRanges.push_back(lattice->getValue().getValue());
+      }
+      if (auto op_ = llvm::dyn_cast<GetProgramIdOp>(op))
+        inferResultRanges(&op_, joinCallback);
+      else if (auto op_ = llvm::dyn_cast<SplatOp>(op))
+        inferResultRanges(&op_, argRanges, joinCallback);
+      else if (auto op_ = llvm::dyn_cast<ExpandDimsOp>(op))
+        inferResultRanges(&op_, argRanges, joinCallback);
+      else if (auto op_ = llvm::dyn_cast<MakeRangeOp>(op))
+        inferResultRanges(&op_, joinCallback);
+      else {
+        llvm_unreachable("Unsupported operation");
+      }
+      return success();
+    }
+
+    auto inferrable = dyn_cast<InferIntRangeInterface>(op);
+    if (!inferrable) {
+      setAllToEntryStates(results);
+      return success();
+    }
+    SmallVector<IntegerValueRange> argRanges = llvm::map_to_vector(
+        operands, [](const dataflow::IntegerValueRangeLattice *lattice) {
+          return lattice->getValue();
+        });
+
+    inferrable.inferResultRangesFromOptional(argRanges, joinCallback);
+    return success();
+  }
+
+  /// This method (which overloads
+  /// AbstractSparseForwardDataFlowAnalysis::visitRegionSuccessors) implements
+  /// "abstract interpretation" of loops with statically known bounds in order
+  /// to infer tight ranges for loop carried values (and therefore loop body
+  /// values). By "abstract interpretation" we mean lattice states are
+  /// propagated to all region successors N times, where N is the total trip
+  /// count of the loop. Recall for scf.for, both the loop itself and the users
+  /// of the loop successors. Thus, after N propagations both loop body values
+  /// and users of loop results will have accurate ranges (assuming we have
+  /// implemented support for range analysis on the ops).
+  /// *Note*, this implementation is majority similar to
+  /// AbstractSparseForwardDataFlowAnalysis::visitRegionSuccessors (so check
+  /// there for more explanation/insight) and basically only does two things
+  /// differently:
+  ///
+  /// 1. If the branch op is a loop (LoopLikeOpInterface) then we attempt to
+  /// compute its total trip count (nested loop trip counts multiply) and
+  /// initialize a visit count to 0. Note, due to how Dataflow analysis works we
+  /// have to actually visit the loop N times for each iter_arg (each argument
+  /// lattice) so we actually track visit count for (loop, arg) not just (loop).
+  ///
+  /// 2. Before propagating, we check if we have propagated for (loop, arg) >= N
+  /// times. If so, we do not propagate (and thus the traversal converges/ends).
+  ///
+  /// Note, for loops where the trip count cannot be inferred *and* loops with a
+  /// total trip count larger than `kDefaultMaxTripCount`, fallback to
+  /// upstream's conservative inference (i.e., we infer [min_int, max_int]) for
+  /// the loop operands and all users and all users of the results of the loop.
+  void visitRegionSuccessors(
+      ProgramPoint *point, RegionBranchOpInterface branch,
+      RegionBranchPoint successor,
+      ArrayRef<dataflow::AbstractSparseLattice *> abstractLattices) override {
+    SmallVector<dataflow::IntegerValueRangeLattice *> lattices;
+    for (auto abstractLat : abstractLattices) {
+      lattices.push_back(
+          static_cast<dataflow::IntegerValueRangeLattice *>(abstractLat));
+    }
+    // Initialize loop trip counts
+    LoopLikeOpInterface loop =
+        llvm::dyn_cast<LoopLikeOpInterface>(branch.getOperation());
+    if (loop) {
+      if (!loopTripCounts.contains(loop)) {
+        SmallVector loops{loop};
+        getEnclosingLoops(*loop, loops);
+        int loopTripCount =
+            std::accumulate(loops.begin(), loops.end(), 1,
+                            [](int accum, LoopLikeOpInterface loop) {
+                              return accum * maybeGetTripCount(loop).value_or(
+                                                 kDefaultMaxTripCount + 1);
+                            });
+        loopTripCounts[loop] = loopTripCount;
+      }
+      for (auto argLat : lattices) {
+        if (!loopVisits.contains({loop, argLat})) {
+          loopVisits[{loop, argLat}] = 0;
+        }
+      }
+    }
+
+    const auto *predecessors =
+        getOrCreateFor<dataflow::PredecessorState>(point, point);
+    assert(predecessors->allPredecessorsKnown() &&
+           "unexpected unresolved region successors");
+    for (Operation *op : predecessors->getKnownPredecessors()) {
+      std::optional<OperandRange> operands;
+      if (op == branch) {
+        operands = branch.getEntrySuccessorOperands(successor);
+      } else if (auto regionTerminator =
+                     dyn_cast<RegionBranchTerminatorOpInterface>(op)) {
+        operands = regionTerminator.getSuccessorOperands(successor);
+      }
+      if (!operands)
+        return setAllToEntryStates(lattices);
+
+      ValueRange inputs = predecessors->getSuccessorInputs(op);
+      assert(inputs.size() == operands->size() &&
+             "expected the same number of successor inputs as operands");
+
+      unsigned firstIndex = 0;
+      if (inputs.size() != lattices.size()) {
+        if (!point->isBlockStart()) {
+          if (!inputs.empty()) {
+            firstIndex = cast<OpResult>(inputs.front()).getResultNumber();
+          }
+          visitNonControlFlowArguments(
+              branch,
+              RegionSuccessor(
+                  branch->getResults().slice(firstIndex, inputs.size())),
+              lattices, firstIndex);
+        } else {
+          if (!inputs.empty()) {
+            firstIndex = cast<BlockArgument>(inputs.front()).getArgNumber();
+          }
+          Region *region = point->getBlock()->getParent();
+          visitNonControlFlowArguments(
+              branch,
+              RegionSuccessor(region, region->getArguments().slice(
+                                          firstIndex, inputs.size())),
+              lattices, firstIndex);
+        }
+      }
+
+      for (auto [oper, argLat] :
+           llvm::zip(*operands, ArrayRef(lattices).drop_front(firstIndex))) {
+        std::pair loopArgLat = {loop, argLat};
+        // If we've "run the loop" #tripcount times, stop propagating.
+        if (loop && loopVisits[loopArgLat] >= loopTripCounts[loop])
+          continue;
+        ChangeResult changed;
+        if (loop && loopTripCounts[loop] > kDefaultMaxTripCount) {
+          // If the loop's tripcount is too large, infer the maximum range for
+          // the arg lattices. This will have the effect that all users will
+          // also be inferred to have maximum range and end the analysis will
+          // end (the maximum range is the "top" of the lattice and thus no
+          // further changes/updates are possible).
+          changed = argLat->join(IntegerValueRange::getMaxRange(oper));
+        } else {
+          // Else, propagate pred operands.
+          changed = argLat->join(*getLatticeElementFor(point, oper));
+        }
+        propagateIfChanged(argLat, changed);
+        // Only increase the loop visitation count if have actually update the
+        // lattice because otherwise we will over count the number of visits
+        // (since not all iter_arg lattices are updated/propagated on each
+        // visit).
+        if (loop && changed == ChangeResult::Change)
+          ++loopVisits[loopArgLat];
+      }
+    }
+  }
+};
+
+void collectRanges(DataFlowSolver &solver, ValueRange values,
+                   SmallVectorImpl<ConstantIntRanges> &ranges) {
+  for (Value val : values) {
+    auto *maybeInferredRange =
+        solver.lookupState<dataflow::IntegerValueRangeLattice>(val);
+    if (!maybeInferredRange || maybeInferredRange->getValue().isUninitialized())
+      return;
+    const ConstantIntRanges &inferredRange =
+        maybeInferredRange->getValue().getValue();
+    ranges.push_back(inferredRange);
+  }
+}
+
+void collectRanges(std::shared_ptr<DataFlowSolver> solver, ModuleOp mod) {
+  mod->walk<WalkOrder::PreOrder>([&solver, &mod](Operation *op) {
+    SmallVector<ConstantIntRanges> outputRange;
+    collectRanges(*solver, op->getResults(), outputRange);
+    if (!outputRange.empty()) {
+      APInt min = outputRange[0].smin();
+      APInt max = outputRange[0].smax();
+      IntegerType i64ty =
+          IntegerType::get(mod.getContext(), 64, IntegerType::Signless);
+      SmallVector<Attribute> range = {
+          IntegerAttr::get(i64ty, min.getSExtValue()),
+          IntegerAttr::get(i64ty, max.getSExtValue()),
+      };
+      op->setAttr(kOutputRange, ArrayAttr::get(mod.getContext(), range));
+    }
+  });
+}
+
+bool verifyNonSmallerByAssumption(
+    Value expr, const DenseSet<Value> &assumptions,
+    const std::function<bool(Value)> &matchesOther) {
   for (Value assume : assumptions) {
     if (auto cmpOp = assume.getDefiningOp<arith::CmpIOp>()) {
       switch (cmpOp.getPredicate()) {
@@ -87,6 +389,17 @@ bool verifyNonSmallerByAssumption(Value expr,
 
 bool verifyNonNegativeExpr(Value expr, const DenseSet<Value> &assumptions) {
   LDBG("Determing if non-negative: " << expr);
+
+  if (!llvm::isa<mlir::BlockArgument>(expr)) {
+    if (auto outputR = llvm::dyn_cast_if_present<mlir::ArrayAttr>(
+            expr.getDefiningOp()->getAttr(kOutputRange))) {
+      assert(outputR.size() == 2 && llvm::isa<mlir::IntegerAttr>(outputR[0]) &&
+             "expected output_range to have 2 integerAttr entries");
+      auto lb = llvm::cast<mlir::IntegerAttr>(outputR[0]);
+      if (lb.getValue().sge(0))
+        return true;
+    }
+  }
 
   // Check if the expression is contained in any assumption
   if (verifyNonNegativeByAssumption(expr, assumptions)) {
@@ -224,12 +537,7 @@ bool canUseBufferOps(Value ptr, const DenseSet<Value> &assumptions) {
     return false;
   LDBG("32 bit offset");
 
-  // 3. Check if the offset is non-negative
-  if (!verifyNonNegativeExpr(offset, assumptions))
-    return false;
-
-  LDBG("Non-negative");
-  return true;
+  return verifyNonNegativeExpr(offset, assumptions);
 }
 
 // Extract stride of the blocked offset of LD/ST ops.
@@ -237,22 +545,16 @@ Value getBlockStride(Location loc, Value offset, PatternRewriter &rewriter) {
   // canonicalize pointer pass sets block stride via
   // `offset:add-broadcast-muli-splat`, backtrace that pattern to reach the
   // stride.
-  if (auto maybeAdd = offset.getDefiningOp<arith::AddIOp>()) {
-    for (auto addOpr : maybeAdd.getOperands()) {
+  if (auto maybeAdd = offset.getDefiningOp<arith::AddIOp>())
+    for (auto addOpr : maybeAdd.getOperands())
       if (auto maybeBC = addOpr.getDefiningOp<tt::BroadcastOp>()) {
         auto bcSrc = maybeBC.getSrc();
-        if (auto maybeMul = bcSrc.getDefiningOp<arith::MulIOp>()) {
-          for (auto mulOpr : maybeMul.getOperands()) {
-            if (auto maybeSplat = mulOpr.getDefiningOp<tt::SplatOp>()) {
+        if (auto maybeMul = bcSrc.getDefiningOp<arith::MulIOp>())
+          for (auto mulOpr : maybeMul.getOperands())
+            if (auto maybeSplat = mulOpr.getDefiningOp<tt::SplatOp>())
               return maybeSplat.getSrc();
-            }
-          }
-        }
       }
-    }
-  }
-  return rewriter.create<arith::ConstantIntOp>(loc, 0, 32);
-  ;
+  return nullptr;
 }
 
 } // namespace
@@ -366,10 +668,10 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     Value maybeMask{};
     if (op.getMask() && !isZeroConst(op.getMask()))
       maybeMask = op.getMask();
-
+    Value blockStride = getBlockStride(op->getLoc(), tensorOffset, rewriter);
     rewriter.replaceOpWithNewOp<triton::amdgpu::BufferAtomicRMWOp>(
         op, op.getVal().getType(), atomicRmwOp, basePtr, tensorOffset,
-        op.getVal(), sem, scope, maybeMask);
+        op.getVal(), blockStride, sem, scope, maybeMask);
 
     return success();
   }
@@ -491,10 +793,18 @@ public:
       if (op->getOperand(0).getDefiningOp<arith::CmpIOp>())
         assumptions.insert(op->getOperand(0));
     });
-    LDBG("Number of assumptions found: " << assumptions.size());
-    for (Value assume : assumptions) {
-      LDBG("Assumption:" << assume);
-    }
+    LLVM_DEBUG({
+      DBGS() << "Number of assumptions found: " << assumptions.size() << "\n";
+      for (Value assume : assumptions) {
+        DBGS() << "Assumption:" << assume << "\n";
+      }
+    });
+
+    std::shared_ptr<DataFlowSolver> solver = createDataFlowSolver();
+    solver->load<TritonIntegerRangeAnalysis>();
+    if (failed(solver->initializeAndRun(getOperation())))
+      return signalPassFailure();
+    collectRanges(solver, mod);
 
     ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
     patterns.add<ConvertTritonLoadToBufferLoad>(context, assumptions);

@@ -53,7 +53,7 @@ int getNum32BRegs(int rowsPerMessage, bool unpackedb16, int numElementsPer32B,
 // Map the distributed layout onto the tmem. Calculate the address and emit one
 // or more tmem messages.
 void calculateAddressAndEmitTmemMessage(
-    Location loc, ModuleOp mod, Value baseAddress, RankedTensorType tensorType,
+    Location loc, Operation *op, Value baseAddress, RankedTensorType tensorType,
     MemDescType memType, ConversionPatternRewriter &rewriter,
     const std::function<void(Value /*startAddress*/,
                              int /*secondHalfColOffset*/, bool /*unpackedb16*/,
@@ -62,12 +62,11 @@ void calculateAddressAndEmitTmemMessage(
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   const int numRowsPerWarp = 32;
 
-  if (!nvidia_gpu::isDistributedLayoutTMemCompatible(mod, tensorType,
-                                                     memType)) {
-    assert(0 && "unsupported distributed layout for tensor memory");
-  }
+  assert(
+      nvidia_gpu::isDistributedLayoutTMemCompatible(op, tensorType, memType) &&
+      "unsupported distributed layout for tensor memory");
 
-  int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+  int numWarps = triton::gpu::lookupNumWarps(op);
   assert(numWarps % 4 == 0);
   int numWarpGroups = numWarps / 4;
   int numElementsPer32B = 32 / tensorType.getElementTypeBitWidth();
@@ -220,9 +219,9 @@ static void reorderScales(SmallVector<Value> &srcValues, int64_t k) {
   srcValues = std::move(reorderedValues);
 }
 
-static void lowerStoreToTensorMemory(Location loc, ModuleOp mod, Value src,
+static void lowerStoreToTensorMemory(Location loc, Operation *op, Value src,
                                      Value dest, Value llSrc, Value pred,
-                                     SharedMemoryObject smemObj,
+                                     Value tmemBase,
                                      ConversionPatternRewriter &rewriter) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value> srcValues = unpackLLElements(loc, llSrc, rewriter);
@@ -236,7 +235,7 @@ static void lowerStoreToTensorMemory(Location loc, ModuleOp mod, Value src,
   }
   int regIdx = 0;
   calculateAddressAndEmitTmemMessage(
-      loc, mod, smemObj.getBase(), cast<RankedTensorType>(src.getType()),
+      loc, op, tmemBase, cast<RankedTensorType>(src.getType()),
       cast<MemDescType>(dest.getType()), rewriter,
       [&](Value startAddress, int secondHalfColOffset, bool unpackedb16,
           int regsPerMessage, bool useStridedMessage) {
@@ -265,7 +264,6 @@ struct TensorMemoryAllocOpConversion
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto mod = op->getParentOfType<ModuleOp>();
     Value base = rewriter.create<nvgpu::TensorMemoryBaseAddress>(loc);
     Value baseInt = b.ptrtoint(i32_ty, base);
     int colOffset = cast<IntegerAttr>(op->getAttr("tensor_memory_col_offset"))
@@ -283,17 +281,13 @@ struct TensorMemoryAllocOpConversion
     std::iota(order.begin(), order.end(), 0);
     std::reverse(order.begin(), order.end());
     auto shape = op.getType().getShape();
-    auto smemObj = SharedMemoryObject(ptr, op.getType().getElementType(),
-                                      shape.size(), loc, rewriter);
 
     if (op.getSrc()) {
-      lowerStoreToTensorMemory(loc, mod, op.getSrc(), op.getResult(),
-                               adaptor.getSrc(), b.i1_val(true), smemObj,
-                               rewriter);
+      lowerStoreToTensorMemory(loc, op, op.getSrc(), op.getResult(),
+                               adaptor.getSrc(), b.i1_val(true), ptr, rewriter);
     }
 
-    auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
-    rewriter.replaceOp(op, retVal);
+    rewriter.replaceOp(op, ptr);
     return success();
   }
 };
@@ -378,16 +372,13 @@ struct TensorMemoryLoadOpConversion
   matchAndRewrite(triton::nvidia_gpu::TMEMLoadOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    auto mod = op->getParentOfType<ModuleOp>();
     auto llvmElemTy =
         getTypeConverter()->convertType(op.getSrc().getType().getElementType());
-    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
-        op.getLoc(), adaptor.getSrc(), llvmElemTy, rewriter);
+    auto tmemBase = adaptor.getSrc();
 
     SmallVector<Value> resultVals;
     calculateAddressAndEmitTmemMessage(
-        loc, mod, smemObj.getBase(), op.getType(), op.getSrc().getType(),
-        rewriter,
+        loc, op, tmemBase, op.getType(), op.getSrc().getType(), rewriter,
         [&](Value startAddress, int secondHalfColOffset, bool unpackedb16,
             int regsPerMessage, bool useStridedMessage) {
           Value packedValues = createTensorMemoryLoad(
@@ -417,14 +408,12 @@ struct TensorMemoryStoreOpConversion
   matchAndRewrite(triton::nvidia_gpu::TMEMStoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op->getLoc();
-    auto mod = op->getParentOfType<ModuleOp>();
     auto llvmElemTy =
         getTypeConverter()->convertType(op.getDst().getType().getElementType());
-    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(
-        op.getLoc(), adaptor.getDst(), llvmElemTy, rewriter);
+    auto tmemBase = adaptor.getDst();
     Value pred = adaptor.getPred();
-    lowerStoreToTensorMemory(loc, mod, op.getSrc(), op.getDst(),
-                             adaptor.getSrc(), pred, smemObj, rewriter);
+    lowerStoreToTensorMemory(loc, op, op.getSrc(), op.getDst(),
+                             adaptor.getSrc(), pred, tmemBase, rewriter);
 
     rewriter.eraseOp(op);
     return success();
@@ -496,11 +485,7 @@ struct TensorMemoryCopyOpConversion
             typeConverter->convertType(srcTy.getElementType()), rewriter)
             .getBase();
 
-    Value baseDst =
-        LLVM::getSharedMemoryObjectFromStruct(
-            loc, adaptor.getDst(),
-            typeConverter->convertType(srcTy.getElementType()), rewriter)
-            .getBase();
+    Value baseDst = adaptor.getDst();
 
     // The following codegen assumes that we use tcgen05.cp only with
     // the warpx4.32x128b mode, to load blocked scales from MXFP.
@@ -592,8 +577,7 @@ struct MemDescSubviewOpConversion
     }
 
     // newBase = base + offset
-    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
-                                                         llvmElemTy, rewriter);
+    auto tmemBase = adaptor.getSrc();
     SmallVector<Value> opOffsetVals = op.getOffsets();
     size_t destRank = op.getResult().getType().getRank();
     SmallVector<Value> offsetVals;
@@ -605,16 +589,13 @@ struct MemDescSubviewOpConversion
     triton::nvidia_gpu::TMemAllocation tmemAlloc =
         triton::nvidia_gpu::getTmemAllocSizes(cast<MemDescType>(dstTy));
     int numColOffset = tmemAlloc.numCols;
-    Value newBase = b.ptrtoint(rewriter.getI32Type(), smemObj.getBase());
+    Value newBase = b.ptrtoint(rewriter.getI32Type(), tmemBase);
     newBase = rewriter.create<LLVM::AddOp>(
         loc, newBase,
         rewriter.create<LLVM::MulOp>(loc, opOffsetVals[0],
                                      b.i32_val(numColOffset)));
     auto elemPtrTy = ptr_ty(rewriter.getContext(), 3);
-    smemObj = SharedMemoryObject(b.inttoptr(elemPtrTy, newBase), llvmElemTy,
-                                 offsetVals);
-    rewriter.replaceOp(op,
-                       getStructFromSharedMemoryObject(loc, smemObj, rewriter));
+    rewriter.replaceOp(op, b.inttoptr(elemPtrTy, newBase));
     return success();
   }
 };

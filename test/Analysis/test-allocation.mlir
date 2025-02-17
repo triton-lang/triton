@@ -615,4 +615,14 @@ tt.func @call_graph_2(%A : !tt.ptr<f16>, %cond : i1) {
   // CHECK-NEXT: size = 1024
 }
 
+// CHECK-LABEL: scan_alloc
+tt.func @scan_alloc(%x : tensor<8x16xf32, #AL>) {
+  // CHECK: offset = 0, size = 128
+  %a = "tt.scan"(%x) <{axis = 0 : i32, reverse = false}>({
+  ^bb0(%arg0: f32, %arg1: f32):
+    %add = arith.addf %arg0, %arg1 : f32
+    tt.scan.return %add : f32
+  }) : (tensor<8x16xf32, #AL>) -> tensor<8x16xf32, #AL>
+  tt.return
+}
 }

@@ -12,12 +12,6 @@ template <typename T> class OperationPass;
 
 namespace triton {
 
-constexpr static char AttrNumWarpsName[] = "ttg.num-warps";
-constexpr static char AttrNumCTAsName[] = "ttg.num-ctas";
-constexpr static char AttrTargetName[] = "ttg.target";
-
-constexpr static char AttrNumThreadsPerWarp[] = "ttg.threads-per-warp";
-
 // Create the pass with numWarps passed from cl::opt.
 std::unique_ptr<OperationPass<ModuleOp>> createConvertTritonToTritonGPUPass();
 

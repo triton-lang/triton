@@ -60,8 +60,15 @@ def is_hip_mi300():
     return target.arch in ('gfx940', 'gfx941', 'gfx942')
 
 
+def is_hip_mi350():
+    target = get_current_target()
+    if target is None or target.backend != 'hip':
+        return False
+    return target.arch in ('gfx950')
+
+
 def is_hip_cdna():
-    return is_hip_mi200() or is_hip_mi300()
+    return is_hip_mi200() or is_hip_mi300() or is_hip_mi350()
 
 
 def is_xpu():
@@ -150,6 +157,8 @@ def to_numpy(x):
 
 
 def supports_tma(byval_only=False):
+    if is_interpreter():
+        return True
     if not is_cuda():
         return False
     _, cuda_version = _path_to_binary("ptxas")

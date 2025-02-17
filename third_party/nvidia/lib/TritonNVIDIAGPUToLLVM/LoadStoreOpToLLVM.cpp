@@ -28,7 +28,6 @@ using ::mlir::LLVM::delinearize;
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::LLVM::linearize;
 using ::mlir::triton::gpu::getCTALayout;
-using ::mlir::triton::gpu::getShapePerCTA;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 using ::mlir::triton::gpu::NVMMASharedEncodingAttr;
 
@@ -86,11 +85,12 @@ Value emitRedundantThreadPredicate(
   auto kWarp = str_attr("warp");
   auto kBlock = str_attr("block");
 
-  auto warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(moduleOp);
-  auto emitBlockId = freeVarMasks.lookup(kBlock) != 0;
-  auto [laneId, warpId, blockId] =
-      emitHardwareTuple(loc, rewriter, targetInfo, emitBlockId, warpSize);
-  auto zero = b.i32_val(0);
+  int warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(moduleOp);
+  Value zero = b.i32_val(0);
+  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc, warpSize);
+  Value blockId = freeVarMasks.lookup(kBlock) == 0
+                      ? zero
+                      : targetInfo.getClusterCTAId(rewriter, loc);
 
   Value pred;
   auto dimNames = {kLane, kWarp, kBlock};
@@ -1201,8 +1201,8 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     auto id = getThreadId(rewriter, loc);
 
     auto mod = op->getParentOfType<ModuleOp>();
-    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
-    int warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    int numWarps = ttg::lookupNumWarps(op);
+    int warpSize = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
     Value warpID = rewriter.create<nvgpu::WarpIdOp>(loc);
     Value pred = adaptor.getPred();
     // Select just one thread for the TMA copy. This also helps the compiler to
@@ -1297,8 +1297,8 @@ struct AsyncTMACopyLocalToGlobalOpConversion
     int64_t size = totalNumElements * elementSizeInBytes;
 
     auto mod = op->getParentOfType<ModuleOp>();
-    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
-    int warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    int numWarps = ttg::lookupNumWarps(op);
+    int warpSize = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
     Value warpID = rewriter.create<nvgpu::WarpIdOp>(loc);
     int innerBlockSize = op.getSrc().getType().getShape().back();
     int contigDimSizeInByte = innerBlockSize * elementSizeInBytes;
@@ -1361,7 +1361,7 @@ struct AsyncTMACopyLocalToGlobalOpConversion
 static LinearLayout getUnswizzledLayout(triton::gpu::MemDescType type) {
   return triton::gpu::sharedToLinearLayoutLeadingOffset(
       type.getShape(), cast<NVMMASharedEncodingAttr>(type.getEncoding()),
-      type.getElementTypeBitWidth(), /*disableSwizzle=*/true);
+      /*disableSwizzle=*/true);
 }
 
 // This function is shared between the TMA gather and scatter lowerings. It

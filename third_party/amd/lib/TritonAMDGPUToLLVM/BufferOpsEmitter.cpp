@@ -2,15 +2,11 @@
 #include "TargetInfo.h"
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
-#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/IR/PatternMatch.h"
-#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
 #include "BufferOpsEmitter.h"
 
-using mlir::triton::gpu::appendOrGetExternFuncOp;
-using mlir::triton::gpu::getFunctionType;
 using namespace triton::AMD;
 
 namespace {
@@ -66,8 +62,9 @@ Value BufferEmitter::createResourceDescriptor(Value basePtr,
   }
 
   Value stride = b.int_val(16, 0);
-  if (targetInfo.getISAFamily() == ISAFamily::CDNA3) {
-    if (blockStride) { // TODO: BufferAtomicRMWOp is unsupported
+  if (llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
+                         targetInfo.getISAFamily())) {
+    if (blockStride) {
       Value enableSwizzle = b.int_val(16, 16384);
       Value mask14b = b.int_val(16, 16383);
       // Cache swizzle supports only upto 8k stride. Also simply swizzling the
@@ -247,10 +244,11 @@ void BufferEmitter::fillCommonArgsAtomics(Type type, Value rsrcDesc,
   // 3. Create the cache modifiers word
   int32_t aux = 0;
   if (hasUsers)
-    aux = getCtrlBitsForBufferAtomicsOnGFX942(/*setSC0*/ true, /*setSC1*/ false,
-                                              /*setNT*/ false);
+    aux = getCtrlBitsForBufferAtomicsOnGFX_942_950(/*setSC0*/ true,
+                                                   /*setSC1*/ false,
+                                                   /*setNT*/ false);
   else
-    aux = getCtrlBitsForBufferAtomicsOnGFX942(
+    aux = getCtrlBitsForBufferAtomicsOnGFX_942_950(
         /*setSC0*/ false, /*setSC1*/ false, /*setNT*/ false);
 
   Value cacheModifiers = b.int_val(32, aux);

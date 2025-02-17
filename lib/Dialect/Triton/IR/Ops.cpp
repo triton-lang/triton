@@ -191,7 +191,13 @@ void StoreOp::getCanonicalizationPatterns(RewritePatternSet &results,
 OpFoldResult TransOp::fold(FoldAdaptor adaptor) {
   // transpose(x, order=[0, 1, ...]) -> x
   if (isIota(getOrder())) {
-    return getSrc();
+    // If the source and result types are the same, we can return the source
+    // If their layout is different (even if structurally equivalent), we need
+    // to insert a convert_layout in between as otherwise ::fold complains
+    // We do this in CanonicalizeConvertFromTranspose
+    if (getSrc().getType() == getType()) {
+      return getSrc();
+    }
   }
 
   // transpose(transpose(x)) -> transpose(x)
@@ -207,6 +213,23 @@ OpFoldResult TransOp::fold(FoldAdaptor adaptor) {
     return attr.reshape(getType());
 
   return {};
+}
+
+LogicalResult TransOp::verify() {
+  auto order = getOrder();
+  auto srcTy = cast<RankedTensorType>(getSrc().getType());
+  if (order.size() != srcTy.getShape().size()) {
+    return emitError("order must have the same size as the source tensor");
+  }
+  if (!isPermutationOfIota(order)) {
+    return emitError("order must be a permutation of 0..n-1");
+  }
+  SmallVector<int64_t> retShape = applyPermutation(srcTy.getShape(), order);
+  if (retShape != getType().getShape()) {
+    return emitError(
+        "result shape must match the permutation of the source shape");
+  }
+  return success();
 }
 
 LogicalResult TransOp::inferReturnTypes(
@@ -284,6 +307,28 @@ LogicalResult DotOp::verify() {
   auto interface = cast<DialectInferLayoutInterface>(&dialect);
   return interface->verifyDotOpEncodingCompatibility(getOperation(), aEncoding,
                                                      bEncoding);
+}
+
+bool DotOp::verifyDims() {
+  auto aShape = this->getA().getType().getShape();
+  auto bShape = this->getB().getType().getShape();
+
+  return aShape[aShape.size() - 1] == bShape[aShape.size() - 2];
+}
+
+//-- DotScaledOp --
+bool DotScaledOp::verifyDims() {
+  auto aShape = this->getLhs().getType().getShape();
+  auto bShape = this->getRhs().getType().getShape();
+
+  auto aKdim = aShape[aShape.size() - 1];
+  auto bKdim = bShape[aShape.size() - 2];
+  if (this->getLhsType() == ScaleDotElemType::E2M1)
+    aKdim *= 2;
+  if (this->getRhsType() == ScaleDotElemType::E2M1)
+    bKdim *= 2;
+
+  return aKdim == bKdim;
 }
 
 //-- MakeRangeOp --
@@ -506,10 +551,9 @@ unsigned ReduceOp::getNumOperands() { return this->getOperands().size(); }
 void ScanOp::build(OpBuilder &builder, OperationState &state,
                    ValueRange operands, int axis, bool reverse) {
   SmallVector<Type> inferredReturnTypes;
-  state.addAttribute("reverse", builder.getBoolAttr(reverse));
   for (auto arg : operands)
     inferredReturnTypes.push_back(arg.getType());
-  ReduceOp::build(builder, state, inferredReturnTypes, operands, axis);
+  ScanOp::build(builder, state, inferredReturnTypes, operands, axis, reverse);
 }
 
 LogicalResult
@@ -649,6 +693,23 @@ OpFoldResult ExpandDimsOp::fold(FoldAdaptor adaptor) {
 }
 
 //-- ReshapeOp --
+
+void ReshapeOp::build(OpBuilder &builder, OperationState &state,
+                      ArrayRef<int64_t> shape,
+                      TypedValue<RankedTensorType> src) {
+  auto srcTy = src.getType();
+  auto srcEnc = srcTy.getEncoding();
+  Attribute dstEnc;
+  if (srcEnc) {
+    auto result = cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
+                      ->inferReshapeOpEncoding(srcTy.getShape(), srcEnc, shape,
+                                               dstEnc, state.location);
+    assert(succeeded(result));
+  }
+  auto dstTy = RankedTensorType::get(shape, srcTy.getElementType(), dstEnc);
+  build(builder, state, dstTy, src);
+}
+
 LogicalResult ReshapeOp::canonicalize(ReshapeOp op, PatternRewriter &rewriter) {
   if (op.getEfficientLayout())
     return failure();
@@ -725,6 +786,10 @@ LogicalResult ReshapeOp::verify() {
 OpFoldResult FpToFpOp::fold(FoldAdaptor adaptor) {
   auto srcVal = getSrc();
   auto dstTy = getType();
+  // Fold trivial cast
+  if (srcVal.getType() == dstTy) {
+    return srcVal;
+  }
 
   auto resElemType = cast<FloatType>(getElementTypeOrSelf(getType()));
   const llvm::fltSemantics &semantic = resElemType.getFloatSemantics();
@@ -878,7 +943,7 @@ void FuncOp::build(OpBuilder &builder, OperationState &state, StringRef name,
   if (argAttrs.empty())
     return;
   assert(type.getNumInputs() == argAttrs.size());
-  function_interface_impl::addArgAndResultAttrs(
+  call_interface_impl::addArgAndResultAttrs(
       builder, state, argAttrs, /*resultAttrs=*/std::nullopt,
       getArgAttrsAttrName(state.name), getResAttrsAttrName(state.name));
 }
@@ -1037,6 +1102,12 @@ void ElementwiseInlineAsmOp::getEffects(
                        SideEffects::DefaultResource::get());
 }
 
+Speculation::Speculatability ElementwiseInlineAsmOp::getSpeculatability() {
+  if (getPure())
+    return Speculation::Speculatable;
+  return Speculation::NotSpeculatable;
+}
+
 LogicalResult ElementwiseInlineAsmOp::verify() {
   if (getNumOperands() >= 1) {
     auto tensorType = dyn_cast<RankedTensorType>(getOperand(0).getType());
@@ -1187,7 +1258,19 @@ static LogicalResult verifyDesciptorLoadStoreType(Operation *op,
                                                   TensorDescType desc,
                                                   RankedTensorType tensor) {
   RankedTensorType block = desc.getBlockType();
-  if (block.getShape() == tensor.getShape() &&
+  ArrayRef<int64_t> blockShape = block.getShape();
+  ArrayRef<int64_t> tensorShape = tensor.getShape();
+  if (blockShape.size() > tensorShape.size()) {
+    // Allow ranked reduced load if the leading dimensions are all 1s.
+    for (int i = 0; i < blockShape.size() - tensorShape.size(); ++i) {
+      if (blockShape[i] != 1)
+        return op->emitOpError(
+            "ranked reduce load only allowed for unit dimension leading dim.");
+    }
+    blockShape = blockShape.take_back(tensorShape.size());
+  }
+
+  if (blockShape == tensorShape &&
       block.getElementType() == tensor.getElementType())
     return success();
   return op->emitOpError("tensor desciptor block and tensor types must match");
@@ -1207,15 +1290,15 @@ LogicalResult ExperimentalDescriptorStoreOp::verify() {
 LogicalResult ExperimentalTensormapCreateOp::verify() {
   auto rank = getBoxDim().size();
   if (getGlobalDim().size() != rank) {
-    return emitError("Rank mismatch for global dim. Got")
+    return emitError("Rank mismatch for global dim. Got ")
            << getGlobalDim().size() << " but expected " << rank;
   }
   if (getGlobalStride().size() + 1 != rank) {
-    return emitError("Rank mismatch for global stride. Got")
+    return emitError("Rank mismatch for global stride. Got ")
            << getGlobalStride().size() << " but expected " << rank - 1;
   }
   if (getElementStride().size() != rank) {
-    return emitError("Rank mismatch for element stride. Got")
+    return emitError("Rank mismatch for element stride. Got ")
            << getElementStride().size() << " but expected " << rank;
   }
   return success();

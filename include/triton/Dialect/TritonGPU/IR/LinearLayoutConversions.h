@@ -41,8 +41,7 @@ class NVMMASharedEncodingAttr;
 // shared layouts with nvmma_shared layout) but is otherwise unused.
 //
 // Returns std::nullopt if the given layout can't be converted to an LL.
-LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
-                            std::optional<int32_t> elemBitWidth = std::nullopt);
+LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout);
 
 // Convert the shared encoding of a tensor with `nvmma_shared` layout to a
 // LinearLayout that maps from a linear shared memory offset to tensor index.
@@ -51,7 +50,6 @@ LinearLayout toLinearLayout(ArrayRef<int64_t> shape, Attribute layout,
 // swizzling.
 LinearLayout sharedToLinearLayoutLeadingOffset(ArrayRef<int64_t> shape,
                                                NVMMASharedEncodingAttr shared,
-                                               int32_t elemBitWidth,
                                                bool disableSwizzle = false);
 
 // Given a linear layout where the input dimensions contain a "block" dimension,
@@ -258,6 +256,11 @@ LinearLayout chooseStMatrixLayout(MLIRContext *ctx, RankedTensorType tensorTy,
 // tensor into shared memory using the `ldmatrix` instruction.
 LinearLayout chooseLdMatrixLayout(Attribute enc, ArrayRef<int64_t> shape,
                                   bool needTrans, int32_t elemBitWidth);
+
+// The primary goal of this function is to efficiently load 2D tiles of a
+// tensor from shared memory using the `ds_read_tr` instruction for AMD GPUs.
+LinearLayout chooseDsReadB64Tr16Layout(Attribute enc, ArrayRef<int64_t> shape,
+                                       int32_t elemBitWidth);
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H

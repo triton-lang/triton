@@ -5,6 +5,7 @@
 #include "triton/Analysis/Allocation.h"
 #include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 
 using namespace mlir;
@@ -84,6 +85,18 @@ Fp16_to_Fp8E5M2_RTZ(Location loc, ConversionPatternRewriter &rewriter,
           b.extract_element(i8_ty, a1, b.i32_val(3))};
 }
 
+static Value checkIsNan(TritonLLVMOpBuilder &builder, Value v) {
+  StringRef intrinsic = "llvm.is.fpclass";
+  // bits 0 and 1 indicate signaling Nan and quiet Nan, respectively
+  Location loc = builder.loc;
+  OpBuilder &rewriter = *builder.builder;
+  Value nanBits = builder.i32_val(3);
+
+  return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, i1_ty,
+                                         ValueRange{v, nanBits})
+      ->getResult(0);
+}
+
 // Cast FP16 to FP8E4M3FN in saturation and round-to-nearest-even mode.
 // According to
 // https://www.opencompute.org/documents/ocp-8-bit-floating-point-specification-ofp8-revision-1-0-2023-12-01-pdf-1,
@@ -93,11 +106,7 @@ static Value
 Fp16_to_Fp8E4M3FN_RTNE_oneValue(Location loc,
                                 ConversionPatternRewriter &rewriter, Value v) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  StringRef funcName = "llvm.is.fpclass";
-  Value isNaN = LLVM::createLLVMIntrinsicCallOp(rewriter, loc, funcName, i1_ty,
-                                                {v, b.i32_val(0x3)})
-                    ->getResult(0);
-
+  Value isNaN = checkIsNan(b, v);
   // Get sign and absolute value
   Value vi16 = b.bitcast(v, i16_ty);
   Value sign =
@@ -173,12 +182,8 @@ Fp16_to_Fp8E4M3FN_RTNE(Location loc, ConversionPatternRewriter &rewriter,
 
 static Value cvtFp16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
                            const Value &v) {
-  GCNBuilder builder;
-  auto &cvt = *builder.create("v_cvt_f32_f16");
-  auto res = builder.newOperand("=v");
-  auto operand = builder.newOperand(v, "v");
-  cvt(res, operand);
-  return builder.launch(rewriter, loc, f32_ty, false);
+  TritonLLVMOpBuilder b(loc, rewriter);
+  return b.fpext(f32_ty, v);
 }
 
 // convert fp8 to fp32
@@ -434,29 +439,6 @@ static Value convertBf16ToFp32(Location loc,
   return b.bitcast(shifted, f32_ty);
 }
 
-static Value buildGCNInstruction(Location loc, RewriterBase &rewritter,
-                                 StringRef instrName,
-                                 ArrayRef<StringRef> constraints,
-                                 ArrayRef<Value> vals, Type retType) {
-  assert(constraints.size() == vals.size() + 1);
-  assert(vals.size() == 2 || vals.size() == 3);
-  GCNBuilder builder;
-  GCNInstr &instr = *builder.create(instrName.str());
-  GCNBuilder::Operand *out = builder.newOperand(constraints[0]);
-  SmallVector<GCNBuilder::Operand *> operands;
-  for (int i = 0; i < vals.size(); ++i) {
-    operands.push_back(builder.newOperand(vals[i], constraints[i + 1]));
-  }
-
-  if (vals.size() == 2) {
-    instr(out, operands[0], operands[1]);
-  } else {
-    instr(out, operands[0], operands[1], operands[2]);
-  }
-
-  return builder.launch(rewritter, loc, retType, false);
-}
-
 static Value convertFp32ToBf16(Location loc,
                                ConversionPatternRewriter &rewriter,
                                const Value &v, const RoundingMode rounding) {
@@ -473,31 +455,18 @@ static Value convertFp32ToBf16(Location loc,
   // https://github.com/cgmillette/composable_kernel/commit/24e75bef6aa5
   // It uses less VGPR and less number of instructions compared to the
   // previous implementation
-  SmallVector<StringRef> constraints0 = {"=s", "v", "v"};
-  SmallVector<Value> vals0 = {v, v};
-  Value isNan = buildGCNInstruction(loc, rewriter, "v_cmp_u_f32", constraints0,
-                                    vals0, i64_ty);
-
+  Value isNan = checkIsNan(b, v);
   Value v16 = b.i32_val(16);
-  Value v1 = b.i32_val(1);
-  SmallVector<StringRef> constraints1 = {"=v", "v", "v", "v"};
-  SmallVector<Value> vals1 = {v, v16, v1};
-  Value tmp = buildGCNInstruction(loc, rewriter, "v_bfe_u32", constraints1,
-                                  vals1, i32_ty);
+  Value tmp = b.and_(i32_ty, b.lshr(i32_ty, as_int32, v16), b.i32_val(1));
 
-  SmallVector<StringRef> constraints2 = {"=v", "v", "v", "v"};
   Value v7FFF = b.i32_val(0x7FFF);
-  SmallVector<Value> vals2 = {v, tmp, v7FFF};
-  Value tmp1 = buildGCNInstruction(loc, rewriter, "v_add3_u32", constraints2,
-                                   vals2, i32_ty);
+  Value s1 = b.add(as_int32, tmp);
+  Value s2 = b.add(s1, v7FFF);
 
-  SmallVector<StringRef> constraints3 = {"=v", "v", "v", "s"};
   Value vNan = b.i32_val(0x7FFF0000);
-  SmallVector<Value> vals3 = {tmp1, vNan, isNan};
-  Value cndMask = buildGCNInstruction(loc, rewriter, "v_cndmask_b32",
-                                      constraints3, vals3, i32_ty);
+  Value res = b.select(isNan, vNan, s2);
 
-  Value shifted = b.lshr(i32_ty, cndMask, v16);
+  Value shifted = b.lshr(i32_ty, res, v16);
   Value truncated = b.trunc(i16_ty, shifted);
   return b.bitcast(truncated, bf16_ty);
 }

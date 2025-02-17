@@ -54,11 +54,10 @@ struct ClipAsyncCopySizePerThread
     // Note this can be further optimized, as copyContigSize can be even
     // smaller when lowering, depending on contiguity and mask alignment
     // (see AsyncCopyGlobalToLocalOpConversion)
-    auto elemBitWidth = dstTy.getElementTypeBitWidth();
     LinearLayout regLayout =
         triton::gpu::toLinearLayout(srcTy.getShape(), blockedEnc);
     LinearLayout sharedLayout =
-        triton::gpu::toLinearLayout(srcTy.getShape(), sharedEnc, elemBitWidth);
+        triton::gpu::toLinearLayout(srcTy.getShape(), sharedEnc);
     auto copyContigSize =
         regLayout.invertAndCompose(sharedLayout).getNumConsecutiveInOut();
 
@@ -76,7 +75,7 @@ struct ClipAsyncCopySizePerThread
 
     // obtain new blockedEnc based on clipped sizePerThread
     auto mod = copyOp->getParentOfType<ModuleOp>();
-    int numWarps = TritonGPUDialect::getNumWarps(mod);
+    int numWarps = lookupNumWarps(copyOp);
     int threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(mod);
     auto newBlockEnc =
         BlockedEncodingAttr::get(copyOp.getContext(), srcTy.getShape(),

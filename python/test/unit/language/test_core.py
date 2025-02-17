@@ -43,6 +43,7 @@ from triton._internal_testing import (
     torch_dtype_name,
     to_numpy,
 )
+from triton.runtime.errors import InterpreterError
 
 
 @contextlib.contextmanager
@@ -216,16 +217,17 @@ class SharedLayout:
 
 class NVMMASharedLayout:
 
-    def __init__(self, swizzle, transpose, ctas_per_cga, cta_split_num, cta_order):
+    def __init__(self, swizzle, transpose, element_bit_width, ctas_per_cga, cta_split_num, cta_order):
         self.swizzle = swizzle
         self.transpose = transpose
+        self.element_bit_width = element_bit_width
         self.ctas_per_cga = ctas_per_cga
         self.cta_split_num = cta_split_num
         self.cta_order = cta_order
 
     def __str__(self):
         transpose_str = "true" if self.transpose else "false"
-        return f"#{GPU_DIALECT}.nvmma_shared<{{swizzlingByteWidth={self.swizzle}, transposed={transpose_str}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
+        return f"#{GPU_DIALECT}.nvmma_shared<{{swizzlingByteWidth={self.swizzle}, transposed={transpose_str}, elementBitWidth={self.element_bit_width}, CTAsPerCGA={self.ctas_per_cga}, CTASplitNum={self.cta_split_num}, CTAOrder={self.cta_order}}}>"
 
 
 class LinearLayout:
@@ -2439,7 +2441,7 @@ scan_configs = [(op, type, shape, axis, reverse, num_warps)
 negative_config = [('cumsum', 'float32', (32, 32), -1, False, 4)]
 
 
-def test_sum_dtype():
+def test_sum_dtype(device):
 
     @triton.jit
     def kernel_dtype(out_ptr, init, in_dtype: tl.constexpr, out_dtype: tl.constexpr):
@@ -2459,7 +2461,7 @@ def test_sum_dtype():
         x = tl.sum(x)
         tl.store(out_ptr, x)
 
-    out = torch.empty(1, dtype=torch.int32, device='cuda')
+    out = torch.empty(1, dtype=torch.int32, device=device)
     kernel_dtype[(1, )](out, init=1, in_dtype=tl.int1, out_dtype=None)
     assert out[0] == 32 * 32
 
@@ -2475,9 +2477,9 @@ def test_sum_dtype():
     kernel_default_int[(1, )](out)
     assert out[0] == 32 * 32
 
-    out = torch.empty(1, dtype=torch.bfloat16, device='cuda')
+    out = torch.empty(1, dtype=torch.bfloat16, device=device)
     kernel_default_float[(1, )](out)
-    torch.testing.assert_close(out[0], torch.tensor(32 * 32, dtype=torch.bfloat16, device='cuda'))
+    torch.testing.assert_close(out[0], torch.tensor(32 * 32, dtype=torch.bfloat16, device=device))
 
 
 @triton.jit
@@ -2673,7 +2675,7 @@ def test_histogram(M, N, device):
 
 
 @pytest.mark.parametrize("M, N", [(1, 64), (2, 32), (4, 16), (8, 8), (16, 4), (32, 2), (64, 1)])
-def test_scan_1d(M, N):
+def test_scan_1d(M, N, device):
 
     @triton.jit
     def scan_kernel(out_ptr, in_ptr, M: tl.constexpr, N: tl.constexpr):
@@ -2681,8 +2683,8 @@ def test_scan_1d(M, N):
         output = tl.cumsum(input).reshape([1, M]).broadcast_to([N, M])
         tl.store(out_ptr + tl.arange(0, M * N), output.reshape([M * N]))
 
-    x = torch.randint(-100, 100, (M, ), dtype=torch.int32, device='cuda')
-    output = torch.empty(M * N, dtype=torch.int32, device='cuda')
+    x = torch.randint(-100, 100, (M, ), dtype=torch.int32, device=device)
+    output = torch.empty(M * N, dtype=torch.int32, device=device)
 
     scan_kernel[(1, )](output, x, M, N)
 
@@ -3418,9 +3420,19 @@ def get_test_dot_small_mn_fma_cases():
             for in_dtype, out_dtype in [('float16', 'float16'), ('float32', 'float32')]]
 
 
+def get_test_dot_double_rate_cases():
+    if not is_hip_cdna():
+        return []
+    return [(32, 32, 16, 4, False, False, 'None', 'ieee', 'float16', 'float32', 1, None),
+            (32, 32, 16, 4, False, False, 'None', 'ieee', 'bfloat16', 'float32', 1, None),
+            (16, 16, 32, 4, False, False, 'None', 'ieee', 'float16', 'float32', 1, None),
+            (16, 16, 32, 4, False, False, 'None', 'ieee', 'bfloat16', 'float32', 1, None)]
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize(
     "M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size",
+    get_test_dot_double_rate_cases() + \
     get_test_dot_base_cases() + \
     get_test_dot_mixed_sizes_cases() + \
     get_test_dot_transposed_op_base_cases() + \
@@ -3902,7 +3914,8 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
             assert 'ld.global.v4' in ptx
         if M * N // (num_warps * 32) >= 4:
             assert 'st.global.v4' in ptx
-        assert re.search(r'(mma|wgmma.mma_async).sync.aligned.m\d+n\d+k16(?:.row.col)?.f32.(f|bf)16.(f|bf)16', ptx)
+        assert (re.search(r'(mma|wgmma.mma_async).sync.aligned.m\d+n\d+k16(?:.row.col)?.f32.(f|bf)16.(f|bf)16', ptx)
+                or "tcgen05.mma.cta_group::1.kind::f16" in ptx)
 
 
 @pytest.mark.interpreter
@@ -4087,13 +4100,7 @@ def test_dot_mulbroadcasted(in_dtype, device):
     if not is_cuda():
         return
     assert "tt.dot" in h.asm['ttir']
-    # When using MMAv3, we will not pipeline the load op for Y, as the loaded
-    # value is in rowmajor. But MMAv3 requires its second operand is in colmajor
-    # because transpose is not supported for MMAv3 with float32 input.
-    if capability[0] == 9:
-        assert re.search(r"ttg.async_wait %.* {num = 1 : i32}", h.asm["ttgir"]) is not None
-    else:
-        assert re.search(r"ttg.async_wait %.* {num = 2 : i32}", h.asm["ttgir"]) is not None
+    assert re.search(r"ttg.async_wait %.* {num = 2 : i32}", h.asm["ttgir"]) is not None
 
 
 @pytest.mark.interpreter
@@ -4409,12 +4416,13 @@ def test_load_cache_modifier(cache, device):
         cv_cache_modifier_str = 'sc0 sc1'
         buffer_load_line = [line for line in amdgcn.splitlines() if "buffer_load" in line]
         global_load_line = [line for line in amdgcn.splitlines() if "global_load" in line]
+        load_line = global_load_line[0] if global_load_line else buffer_load_line[0]
         if cache == '' or cache == '.ca':
-            assert cg_cache_modifier_str not in (global_load_line[0] if global_load_line else buffer_load_line[0])
+            assert cg_cache_modifier_str not in load_line
         if cache == '.cg':
-            assert cg_cache_modifier_str in global_load_line[0]
+            assert cg_cache_modifier_str in load_line
         if cache == '.cv':
-            assert cv_cache_modifier_str in global_load_line[0]
+            assert cv_cache_modifier_str in load_line
 
     if is_cuda():
         ptx = pgm.asm['ptx']
@@ -4531,18 +4539,18 @@ def test_store_cache_modifier(cache, device):
         amdgcn = pgm.asm['amdgcn']
         cs_cache_modifier_str = 'nt'
         wt_cache_modifier_str = 'sc0 sc1'
+        buffer_store_line = [line for line in amdgcn.splitlines() if "buffer_store" in line]
         global_store_line = [line for line in amdgcn.splitlines() if "global_store" in line]
-        if not global_store_line:
-            return
+        store_line = global_store_line[0] if global_store_line else buffer_store_line[0]
         if cache == '' or cache == '.cg':
-            assert cs_cache_modifier_str not in global_store_line[0]
-            assert wt_cache_modifier_str not in global_store_line[0]
+            assert cs_cache_modifier_str not in store_line
+            assert wt_cache_modifier_str not in store_line
         if cache == '.cs':
-            assert cs_cache_modifier_str in global_store_line[0]
-            assert wt_cache_modifier_str not in global_store_line[0]
+            assert cs_cache_modifier_str in store_line
+            assert wt_cache_modifier_str not in store_line
         if cache == '.wt':
-            assert cs_cache_modifier_str not in global_store_line[0]
-            assert wt_cache_modifier_str in global_store_line[0]
+            assert cs_cache_modifier_str not in store_line
+            assert wt_cache_modifier_str in store_line
 
     if is_cuda():
         ptx = pgm.asm['ptx']
@@ -4816,29 +4824,33 @@ def test_reshape_err(device):
     assert "reshape" in str(exc_info.value)
 
 
-def test_tma_load_block_shape_err():
+@pytest.mark.interpreter
+def test_tma_load_block_shape_err(device):
 
     @triton.jit
     def kernel(ptr):
         desc = tl._experimental_make_tensor_descriptor(ptr, [128, 128], [128, 1], [1, 32])
         desc.load([0, 0])
 
-    input = torch.empty((128, 128), dtype=torch.int32, device='cuda')
-    with pytest.raises(triton.CompilationError) as e:
+    input = torch.empty((128, 128), dtype=torch.int32, device=device)
+    errc = triton.CompilationError if not is_interpreter() else InterpreterError
+    with pytest.raises(errc) as e:
         kernel[(1, )](input)
 
     assert "tensor descriptor block shape must have at least 8 rows" in str(e.value.__cause__)
 
 
-def test_tma_store_block_shape_err():
+@pytest.mark.interpreter
+def test_tma_store_block_shape_err(device):
 
     @triton.jit
     def kernel(ptr):
         desc = tl._experimental_make_tensor_descriptor(ptr, [128, 128], [128, 1], [8, 8])
         desc.store([0, 0], tl.zeros((1, 32), dtype=tl.int16))
 
-    input = torch.empty((128, 128), dtype=torch.int16, device='cuda')
-    with pytest.raises(triton.CompilationError) as e:
+    input = torch.empty((128, 128), dtype=torch.int16, device=device)
+    errc = triton.CompilationError if not is_interpreter() else InterpreterError
+    with pytest.raises(errc) as e:
         kernel[(1, )](input)
 
     assert "int16 tensor descriptor block shape must have at least 16 columns" in str(e.value.__cause__)
@@ -5822,6 +5834,75 @@ def test_local_load_store(M, N, K, dist_layout, shared_layout, device, tmp_path:
     assert torch.equal(z, x)
 
 
+dot_layouts = [
+    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=0, k_width=4),
+    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [0, 1], [16, 8]), op_idx=1, k_width=4),
+    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [0, 1], [16, 8]), op_idx=0, k_width=2),
+    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=1, k_width=2),
+    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [0, 1], [16, 8]), op_idx=0, k_width=1),
+    DotOperandLayout(parent=MmaLayout([2, 0], [4, 1], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=1, k_width=1),
+]
+
+shared_layouts = [
+    SharedLayout(4, 2, 4, [0, 1], [1, 1], [1, 1], [0, 1]),
+    SharedLayout(8, 1, 8, [1, 0], [1, 1], [1, 1], [0, 1]),
+    SharedLayout(16, 1, 16, [1, 0], [1, 1], [1, 1], [0, 1]),
+]
+
+
+@pytest.mark.parametrize("M, N", [[16, 32]])
+@pytest.mark.parametrize("dtype", ['float16', 'float8e5', 'float32'])
+@pytest.mark.parametrize("shared_layout", shared_layouts)
+@pytest.mark.parametrize("dist_layout", filter_layouts(dot_layouts))
+def test_local_load_store_dot(M, N, dtype, dist_layout, shared_layout, device, tmp_path: pathlib.Path):
+    if dtype == "float32":
+        mlir_dtype = "f32"
+    elif dtype == "float16":
+        mlir_dtype = "f16"
+    elif dtype == "float8e5":
+        mlir_dtype = "f8E5M2"
+
+    layouts = f"""
+    #dist = {dist_layout}
+    #shared = {shared_layout}
+    #smem = #ttg.shared_memory
+    """
+    ir = layouts + f"""
+  module attributes {{"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32}} {{
+  tt.func public @kernel(%arg0: !tt.ptr<{mlir_dtype}> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<{mlir_dtype}> {{tt.divisibility = 16 : i32}}) attributes {{noinline = false}} {{
+    %cst = arith.constant dense<{N}> : tensor<{M}x1xi32, #dist>
+    %0 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #ttg.slice<{{dim = 1, parent = #dist}}>>
+    %1 = tt.make_range {{end = {N} : i32, start = 0 : i32}} : tensor<{N}xi32, #ttg.slice<{{dim = 0, parent = #dist}}>>
+    %2 = tt.splat %arg0 : !tt.ptr<{mlir_dtype}> -> tensor<{M}x{N}x!tt.ptr<{mlir_dtype}>, #dist>
+    %3 = tt.splat %arg1 : !tt.ptr<{mlir_dtype}> -> tensor<{M}x{N}x!tt.ptr<{mlir_dtype}>, #dist>
+    %4 = tt.expand_dims %0 {{axis = 1 : i32}} : tensor<{M}xi32, #ttg.slice<{{dim = 1, parent = #dist}}>> -> tensor<{M}x1xi32, #dist>
+    %5 = arith.muli %4, %cst : tensor<{M}x1xi32, #dist>
+    %6 = tt.expand_dims %1 {{axis = 0 : i32}} : tensor<{N}xi32, #ttg.slice<{{dim = 0, parent = #dist}}>> -> tensor<1x{N}xi32, #dist>
+    %7 = tt.broadcast %6 : tensor<1x{N}xi32, #dist> -> tensor<{M}x{N}xi32, #dist>
+    %8 = tt.broadcast %5 : tensor<{M}x1xi32, #dist> -> tensor<{M}x{N}xi32, #dist>
+    %9 = arith.addi %8, %7 : tensor<{M}x{N}xi32, #dist>
+    %10 = tt.addptr %2, %9 : tensor<{M}x{N}x!tt.ptr<{mlir_dtype}>, #dist>, tensor<{M}x{N}xi32, #dist>
+    %11 = tt.load %10 : tensor<{M}x{N}x!tt.ptr<{mlir_dtype}>, #dist>
+    %12 = ttg.local_alloc %11 : (tensor<{M}x{N}x{mlir_dtype}, #dist>) -> !ttg.memdesc<{M}x{N}x{mlir_dtype}, #shared, #smem>
+    %13 = ttg.local_load %12 : !ttg.memdesc<{M}x{N}x{mlir_dtype}, #shared, #smem> -> tensor<{M}x{N}x{mlir_dtype}, #dist>
+    %14 = tt.addptr %3, %9 : tensor<{M}x{N}x!tt.ptr<{mlir_dtype}>, #dist>, tensor<{M}x{N}xi32, #dist>
+    tt.store %14, %13 : tensor<{M}x{N}x!tt.ptr<{mlir_dtype}>, #dist>
+    tt.return
+  }}
+}}
+"""
+
+    x = to_triton(numpy_random((M, N), dtype_str=dtype), device=device)
+    z = torch.empty_like(x, device=device)
+
+    temp_file = tmp_path / "test_local_load_store_dot.ttgir"
+    temp_file.write_text(ir)
+    kernel = triton.compile(str(temp_file))
+
+    kernel[(1, 1, 1)](x, z)
+    assert torch.equal(z, x)
+
+
 mma_layouts = [
     MmaLayout((2, 0), [1, 4], [1, 1], [1, 1], [0, 1], [16, 8]),
     MmaLayout((3, 0), [4, 1], [1, 1], [1, 1], [0, 1], [16, 128, 16]),  # simple 4 warps case
@@ -5833,8 +5914,8 @@ mma_layouts = [
 
 shared_layouts = [
     SharedLayout(8, 1, 1, [1, 0], [1, 1], [1, 1], [0, 1]),
-    NVMMASharedLayout(64, False, [1, 1], [1, 1], [0, 1]),
-    NVMMASharedLayout(128, False, [1, 1], [1, 1], [0, 1]),
+    NVMMASharedLayout(64, False, 16, [1, 1], [1, 1], [0, 1]),
+    NVMMASharedLayout(128, False, 16, [1, 1], [1, 1], [0, 1]),
 ]
 
 
@@ -6473,7 +6554,7 @@ def test_static_range(device):
 
 
 @pytest.mark.interpreter
-def test_tl_range(device):
+def test_tl_range_num_stages(device):
     if is_hip():
         pytest.skip("test_tl_range is not supported in HIP")
     M, N, K = 64, 64, 512
@@ -6498,6 +6579,33 @@ def test_tl_range(device):
                 ptx = pgm.asm['ptx']
                 # check that the loop got pipelined with the right number of stages.
                 assert 'cp.async.wait_group 6' in ptx
+
+
+def test_tl_range_fuse():
+    if is_hip():
+        pytest.skip("loop fusion is not enabled on AMD")
+
+    @triton.jit
+    def kernel(ub):
+        for i in tl.range(0, ub, flatten=True):
+            for j in tl.range(0, ub):
+                print("i", i)
+
+    compiled_kernel = kernel.warmup(10, grid=(1, ))
+    assert "tt.flatten" in compiled_kernel.asm["ttir"]
+    assert compiled_kernel.asm["ttgir"].count("scf.for") == 1
+
+
+def test_tl_range_option_none():
+
+    @triton.jit
+    def kernel(ub):
+        for i in tl.range(0, ub, num_stages=None, loop_unroll_factor=None):
+            print("i", i)
+
+    compiled_kernel = kernel.warmup(10, grid=(1, ))
+    assert "num_stages" not in compiled_kernel.asm["ttir"]
+    assert "loop_unroll_factor" not in compiled_kernel.asm["ttir"]
 
 
 @triton.jit(noinline=True)
@@ -6941,3 +7049,15 @@ def test_zero_strided_tensors(device):
         _simple_add[grid](x, x.stride(0), x.stride(1))
 
     assert torch.allclose(x, torch.ones_like(x) * c_dim)
+
+
+@pytest.mark.interpreter
+def test_aliasing(device):
+
+    @triton.jit
+    def aliasing_kernel(buffer, buffer2):
+        triton.language.store(buffer, 1)
+
+    buffer = torch.zeros(1, device=device)
+    aliasing_kernel[(1, )](buffer, buffer)
+    assert buffer[0] == 1

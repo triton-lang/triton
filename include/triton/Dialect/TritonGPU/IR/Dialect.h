@@ -14,8 +14,7 @@
 #include <unordered_map>
 
 // LinearLayoutCache Utils
-using CacheKey =
-    std::tuple<std::vector<int64_t>, mlir::Attribute, std::optional<int32_t>>;
+using CacheKey = std::tuple<std::vector<int64_t>, mlir::Attribute>;
 
 namespace llvm {
 template <typename T> size_t hash_value(const std::vector<T> &vec) {
@@ -39,6 +38,18 @@ template <> struct hash<CacheKey> {
 } // namespace std
 
 namespace mlir::triton::gpu {
+
+constexpr static char AttrNumWarpsName[] = "ttg.num-warps";
+constexpr static char AttrNumCTAsName[] = "ttg.num-ctas";
+constexpr static char AttrTargetName[] = "ttg.target";
+constexpr static char AttrNumThreadsPerWarp[] = "ttg.threads-per-warp";
+
+// Find the contextual number of warps on which this operation is executed.
+int lookupNumWarps(Operation *op);
+// Try to find the contextual number of warps on which this operation is
+// executed. Returns nullopt if a warp size cannot be find. This is used for
+// verifiers.
+std::optional<int> maybeLookupNumWarps(Operation *op);
 
 class LinearLayoutCache {
 public:
@@ -71,10 +82,12 @@ struct SharedMemory : public SideEffects::Resource::Base<SharedMemory> {
   StringRef getName() final { return "<SharedMemory>"; }
 };
 
+// Convert a distributed layout to a linear encoding
+LinearEncodingAttr toLinearEncoding(Attribute layout, ArrayRef<int64_t> shape);
+
 unsigned getTotalElemsPerThread(Type type);
 
-unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape,
-                                Type eltTy);
+unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape);
 
 SmallVector<unsigned> getElemsPerThread(Type type);
 
@@ -166,10 +179,18 @@ SmallVector<unsigned> getCTAOrder(Attribute layout);
  */
 SmallVector<unsigned> getShapePerCTATile(Attribute layout);
 
+// Returns the "logical" shape per CTA
 SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
                                     ArrayRef<int64_t> shape);
 SmallVector<int64_t> getShapePerCTA(Attribute layout, ArrayRef<int64_t> shape);
 SmallVector<int64_t> getShapePerCTA(Type type);
+
+// Returns the shape per CTA, which is "physically" allocated
+// Such shapes may be bigger than the logical one due to, for example, padding
+// in shared memory.
+SmallVector<int64_t> getAllocationShapePerCTA(Attribute layout,
+                                              ArrayRef<int64_t> shape);
+SmallVector<int64_t> getAllocationShapePerCTA(Type type);
 
 unsigned getNumWarpsPerCTA(Attribute layout);
 

@@ -456,6 +456,10 @@ def TT_ReshapeOp : TT_Op<"reshape", [Pure,
         If efficient_layout is set, this is a hint that the destination layout should be kept for performance reason.
         The compiler is still free to change it for better performance.
     }];
+    let builders = [
+      OpBuilder<(ins "ArrayRef<int64_t>":$shape, "TypedValue<RankedTensorType>":$src)>
+    ];
+
     let arguments = (ins TT_Tensor:$src, UnitAttr:$allow_reorder, UnitAttr:$efficient_layout);
     let results = (outs TT_Tensor:$result);
     let assemblyFormat = "$src (`allow_reorder` $allow_reorder^)? (`efficient_layout` $efficient_layout^)? attr-dict `:` type($src) `->` type($result)";
@@ -581,6 +585,7 @@ def TT_TransOp : TT_Op<"trans", [Pure,
     let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
 
     let hasFolder = 1;
+    let hasVerifier = 1;
 }
 
 //
@@ -630,7 +635,7 @@ def TT_GetNumProgramsOp : TT_Op<"get_num_programs", [Pure]> {
 //
 def TT_DotOp : TT_Op<"dot", [Pure,
                              DeclareOpInterfaceMethods<InferTypeOpInterface>,
-                             DotLike,
+                             DeclareOpInterfaceMethods<DotOpInterface>,
                              TypesMatchWith<"result's type matches accumulator's type",
                                             "d", "c", "$_self">]> {
     let summary = "dot";
@@ -670,7 +675,7 @@ def TT_DotOp : TT_Op<"dot", [Pure,
 //
 def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
                              AttrSizedOperandSegments,
-                             DotLike,
+                             DeclareOpInterfaceMethods<DotOpInterface>,
                              TypesMatchWith<"result's type matches accumulator's type",
                                             "d", "c", "$_self">]> {
     let summary = "dot_scaled";
@@ -830,7 +835,8 @@ def TT_MakeRangeOp : TT_Op<"make_range", [Pure]> {
 def TT_ElementwiseInlineAsmOp : TT_Op<"elementwise_inline_asm", [
   Elementwise,
   SameOperandsAndResultEncoding,
-  DeclareOpInterfaceMethods<MemoryEffectsOpInterface>
+  DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+  DeclareOpInterfaceMethods<ConditionallySpeculatable>
 ]> {
   let summary = "inline assembly applying an elementwise operation to a group of packed elements.";
   let description = [{
@@ -1053,7 +1059,10 @@ def CallOp : TT_Op<"call", [CallOpInterface, /*MemRefsNormalizable, */DeclareOpI
     ```
   }];
 
-  let arguments = (ins FlatSymbolRefAttr:$callee, Variadic<AnyType>:$operands);
+  let arguments = (ins FlatSymbolRefAttr:$callee,
+                   Variadic<AnyType>:$operands,
+                   OptionalAttr<DictArrayAttr>:$arg_attrs,
+                   OptionalAttr<DictArrayAttr>:$res_attrs);
   let results = (outs Variadic<AnyType>);
 
   let builders = [
@@ -1113,7 +1122,11 @@ def CallOp : TT_Op<"call", [CallOpInterface, /*MemRefsNormalizable, */DeclareOpI
   }];
 }
 
-def FuncOp : TT_Op<"func", [AffineScope, AutomaticAllocationScope, CallableOpInterface, FunctionOpInterface, IsolatedFromAbove, OpAsmOpInterface]> {
+def FuncOp : TT_Op<"func", [
+    AffineScope, AutomaticAllocationScope, CallableOpInterface,
+    FunctionOpInterface, IsolatedFromAbove, OpAsmOpInterface,
+    HasParent<"ModuleOp">
+]> {
   let summary = "An operation with a name containing a single `SSACFG` region";
   let description = [{
     Operations within the function cannot implicitly capture values defined

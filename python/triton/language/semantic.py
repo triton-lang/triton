@@ -1162,6 +1162,8 @@ def descriptor_load(desc: tl._experimental_tensor_desciptor_base, offsets, cache
                     builder: ir.builder) -> tl.tensor:
     assert isinstance(desc, tl._experimental_tensor_descriptor_base)
     validate_descriptor_block(desc.block_shape, desc.type.element_ty)
+    ndim = len(desc.block_shape)
+    assert len(offsets) == ndim, f"expected {ndim} offsets, but got {len(offsets)}"
 
     offsets = _convert_to_ir_values(builder, offsets, require_i64=False)
     x = builder.create_descriptor_load(desc.handle, offsets, _str_to_load_cache_modifier(cache_modifier),
@@ -1173,6 +1175,9 @@ def descriptor_store(desc: tl._experimental_tensor_descriptor_base, value: tl.te
                      builder: ir.builder) -> tl.tensor:
     assert isinstance(desc, tl._experimental_tensor_descriptor_base)
     validate_descriptor_block(desc.block_shape, desc.type.element_ty)
+    ndim = len(desc.block_shape)
+    assert len(offsets) == ndim, f"expected {ndim} offsets, but got {len(offsets)}"
+    assert value.shape == desc.block_shape
 
     offsets = _convert_to_ir_values(builder, offsets, require_i64=False)
     return tl.tensor(builder.create_descriptor_store(desc.handle, value.handle, offsets), tl.void)
@@ -1916,15 +1921,16 @@ def make_tensor_descriptor(
     builder: ir.builder,
 ) -> tl._experimental_tensor_descriptor:
     ndim = len(shape)
-    if ndim != 2:
-        raise ValueError("Only two dimensional tensor descriptors are supported at the moment")
+    if not (2 <= ndim <= 5):
+        raise ValueError(f"Expected 2 <= ndim <= 5 but got {ndim} dimensions")
     if len(strides) != ndim:
         raise ValueError(f"Expected {ndim} strides but got {len(strides)}")
     if len(block_shape) != ndim:
         raise ValueError(f"Expected block_shape to have {ndim} dimensions but got {len(strides)}")
 
-    if not (isinstance(strides[-1], tl.constexpr) and strides[-1].value == 1):
-        raise ValueError(f"Tensor descriptor last dim must tl.constexpr(1) but got {strides[-1]}")
+    strides[-1] = tl._constexpr_to_value(strides[-1])
+    if strides[-1] != 1:
+        raise ValueError(f"Tensor descriptor last dim must be 1 but got {strides[-1]}")
 
     shape = [to_tensor(x, builder) for x in shape]
     strides = [to_tensor(x, builder).to(tl.int64, _builder=builder) for x in strides]

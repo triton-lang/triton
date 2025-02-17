@@ -28,12 +28,13 @@ public:
                                    op.getResult().getUsers().end());
     if (users.size() > 2)
       return failure();
-    triton::nvidia_gpu::TCGen5MMAOp mmaOp = nullptr;
+    triton::nvidia_gpu::MMAv5OpInterface mmaOp = nullptr;
     triton::nvidia_gpu::TMEMLoadOp tmemLoad = nullptr;
     for (auto user : users) {
       if (auto load = dyn_cast<triton::nvidia_gpu::TMEMLoadOp>(user)) {
         tmemLoad = load;
-      } else if (auto mma = dyn_cast<triton::nvidia_gpu::TCGen5MMAOp>(user)) {
+      } else if (auto mma =
+                     dyn_cast<triton::nvidia_gpu::MMAv5OpInterface>(user)) {
         mmaOp = mma;
       }
     }
@@ -41,7 +42,7 @@ public:
       return failure();
     if (tmemLoad && !mmaOp->isBeforeInBlock(tmemLoad))
       return failure();
-    Value useAccFlag = mmaOp.getUseD();
+    Value useAccFlag = mmaOp.useAccumulator();
     if (!useAccFlag)
       return failure();
     auto flagConstOp = useAccFlag.getDefiningOp<arith::ConstantOp>();
@@ -55,25 +56,29 @@ public:
 };
 
 bool dotSupportsAccInitFlag(Operation *op) {
-  assert(op->hasTrait<OpTrait::DotLike>() && "Expected a dot-like operation");
+  assert(isa<DotOpInterface>(op) &&
+         "Expected an op which implements a DotOpInterface");
+
   if (auto wgDotOp = dyn_cast<triton::nvidia_gpu::WarpGroupDotOp>(op)) {
     // Partial accumulation would require a select op to handle the
     // initialization that would degrade the performance.
     return !wgDotOp.needsPartialAccumulator();
   }
-  if (isa<triton::nvidia_gpu::TCGen5MMAOp>(op)) {
+  if (isa<triton::nvidia_gpu::MMAv5OpInterface>(op)) {
     return true;
   }
   return false;
 }
 
 std::pair<Value, Operation *> getAccumulatorUseAndDef(Operation *op) {
-  assert(op->hasTrait<OpTrait::DotLike>() && "Expected a dot-like operation");
+  assert(isa<DotOpInterface>(op) &&
+         "Expected an op which implements a DotOpInterface");
+
   if (auto wgDotOp = dyn_cast<triton::nvidia_gpu::WarpGroupDotOp>(op)) {
     return std::make_pair(wgDotOp.getC(), wgDotOp);
   }
-  if (auto tc05MmaOp = dyn_cast<triton::nvidia_gpu::TCGen5MMAOp>(op)) {
-    auto accVal = tc05MmaOp.getD();
+  if (auto tc05MmaOp = dyn_cast<triton::nvidia_gpu::MMAv5OpInterface>(op)) {
+    auto accVal = tc05MmaOp.getAccumulator();
     auto tmemAlloc = accVal.getDefiningOp<triton::nvidia_gpu::TMEMAllocOp>();
     if (!tmemAlloc ||
         tmemAlloc->getParentRegion() != tc05MmaOp->getParentRegion())
@@ -90,18 +95,21 @@ std::pair<Value, Operation *> getAccumulatorUseAndDef(Operation *op) {
       return std::make_pair(nullptr, nullptr);
     return std::make_pair(tmemAlloc.getSrc(), tmemLoad);
   }
-  assert(false && "Unexpected dot-like operation");
+  assert(false && "Unexpected op which implements a DotOpInterface");
   return std::make_pair(nullptr, nullptr);
 }
 
 void setUseAccFlag(Operation *op, Value useAcc) {
-  assert(op->hasTrait<OpTrait::DotLike>() && "Expected a dot-like operation");
+  assert(isa<DotOpInterface>(op) &&
+         "Expected an op which implements a DotOpInterface");
+
   if (auto wgDotOp = dyn_cast<triton::nvidia_gpu::WarpGroupDotOp>(op)) {
     wgDotOp.getUseCMutable().assign(useAcc);
-  } else if (auto tc05MmaOp = dyn_cast<triton::nvidia_gpu::TCGen5MMAOp>(op)) {
-    tc05MmaOp.getUseDMutable().assign(useAcc);
+  } else if (auto tc05MmaOp =
+                 dyn_cast<triton::nvidia_gpu::MMAv5OpInterface>(op)) {
+    tc05MmaOp.setUseAccumulator(useAcc);
   } else {
-    assert(false && "Unexpected dot-like operation");
+    assert(false && "Unexpected op which implements a DotOpInterface");
   }
 }
 
@@ -159,9 +167,8 @@ public:
     ModuleOp m = getOperation();
     SmallVector<Operation *> mmaOps;
     m.walk([&](Operation *op) {
-      if (op->hasTrait<OpTrait::DotLike>() && dotSupportsAccInitFlag(op)) {
+      if (isa<DotOpInterface>(op) && dotSupportsAccInitFlag(op))
         mmaOps.push_back(op);
-      }
     });
 
     // for each mma op, find where the accumulator is initialized with zero

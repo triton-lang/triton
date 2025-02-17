@@ -178,6 +178,7 @@ tt.func @matmul_loop(%lb : index, %ub : index, %step : index,
 // CHECK-DAG: %[[CONSTANT_0:.*]] = arith.constant 0 : i32
 // CHECK-DAG: %[[CONSTANT_1:.*]] = arith.constant 1 : i32
 // CHECK-DAG: %[[CONSTANT_2:.*]] = arith.constant 2 : i32
+// CHECK: scf.for
 // CHECK:   %[[ABUFFER:.*]] = ttg.local_alloc
 // CHECK:   %[[BBUFFER:.*]] = ttg.local_alloc
 // CHECK:   ttg.memdesc_subview %[[ABUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
@@ -188,7 +189,6 @@ tt.func @matmul_loop(%lb : index, %ub : index, %step : index,
 // CHECK:   ttg.async_copy_global_to_local
 // CHECK:   ttg.memdesc_subview %[[BBUFFER]][%[[CONSTANT_1]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
 // CHECK:   ttg.async_copy_global_to_local
-// CHECK: scf.for
 // CHECK-DAG:   %[[A0:.*]] = ttg.memdesc_subview %[[ABUFFER]][%[[CONSTANT_0]],
 // CHECK-DAG:   %[[B0:.*]] = ttg.memdesc_subview %[[BBUFFER]][%[[CONSTANT_0]],
 // CHECK-DAG:   ttg.async_wait {{.*}} {num = 2 : i32}
@@ -211,14 +211,6 @@ tt.func @matmul_loop(%lb : index, %ub : index, %step : index,
 // CHECK-DAG: ttg.async_wait {{.*}} {num = 2 : i32}
 // CHECK:   scf.yield {{.*}}, %[[INS_IDX_3]], %[[EXT_IDX_3]], %[[NEXT_A]], %[[NEXT_B]]
 // CHECK:   ttg.async_wait {num = 0 : i32}
-// CHECK:   ttg.memdesc_subview %[[ABUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
-// CHECK:   ttg.async_copy_global_to_local
-// CHECK:   ttg.memdesc_subview %[[BBUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
-// CHECK:   ttg.async_copy_global_to_local
-// CHECK:   ttg.memdesc_subview %[[ABUFFER]][%[[CONSTANT_1]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
-// CHECK:   ttg.async_copy_global_to_local
-// CHECK:   ttg.memdesc_subview %[[BBUFFER]][%[[CONSTANT_1]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
-// CHECK:   ttg.async_copy_global_to_local
 // CHECK    scf.yield
 
 //   AMD-LABEL:  tt.func @matmul_loop_nested
@@ -945,17 +937,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // -----
 
 // CHECK-LABEL: nested_loops
-// CHECK: ttg.local_alloc
 // CHECK: scf.for
-// CHECK-NOT: ttg.local_alloc
+// CHECK:   ttg.local_alloc
+// CHECK:   ttg.async_copy_global_to_local
+// CHECK:   ttg.async_commit_group
+// CHECK:   ttg.async_copy_global_to_local
+// CHECK:   ttg.async_commit_group
 // CHECK:   scf.for
 // CHECK:     scf.yield
 // CHECK:   ttg.async_wait {num = 0 : i32}
-// CHECK:   ttg.async_copy_global_to_local
-// CHECK:   ttg.async_commit_group
-// CHECK:   ttg.async_copy_global_to_local
-// CHECK:   ttg.async_commit_group
-// CHECK:   scf.yield
 
 // AMD-LABEL: tt.func public @nested_loops
 //       AMD: scf.for
@@ -1283,18 +1273,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // CHECK-LABEL: @nested_loops
 // CHECK: tt.addptr %{{.*}}, {{.*}}
 // CHECK: %[[NEXT_BUFFER_1:.*]] = tt.addptr %{{.*}}, {{.*}}
-// CHECK: %[[BUFFER_1:.*]] = ttg.local_alloc
-// CHECK: %[[SUBVIEW_1:.*]] = ttg.memdesc_subview %[[BUFFER_1]]
-// CHECK: %[[ASYNC_COPY_1:.*]] = ttg.async_copy_global_to_local %[[NEXT_BUFFER_1]], %[[SUBVIEW_1]]
-// CHECK: ttg.async_commit_group %[[ASYNC_COPY_1]]
-// CHECK: %[[SUBVIEW_2:.*]] = ttg.memdesc_subview %[[BUFFER_1]]
-// CHECK: %[[ASYNC_COPY_2:.*]] = ttg.async_copy_global_to_local %[[NEXT_BUFFER_1]], %[[SUBVIEW_2]]
-// CHECK: ttg.async_commit_group %[[ASYNC_COPY_2]]
 // CHECK: scf.for
 // CHECK:   %[[LOAD_1:.*]] = tt.load %[[NEXT_BUFFER_1]]
 // CHECK:   %[[BUFFER_2:.*]] = ttg.local_alloc %[[LOAD_1]]
 // CHECK:   %[[TRANS:.*]] = ttg.memdesc_trans %[[BUFFER_2]]
 // CHECK:   %[[LOCAL_LOAD_1:.*]] = ttg.local_load %[[TRANS]]
+// CHECK:   %[[BUFFER_1:.*]] = ttg.local_alloc : ()
+// CHECK:   %[[SUBVIEW_1:.*]] = ttg.memdesc_subview %[[BUFFER_1]]
+// CHECK:   %[[ASYNC_COPY_1:.*]] = ttg.async_copy_global_to_local %[[NEXT_BUFFER_1]], %[[SUBVIEW_1]]
+// CHECK:   ttg.async_commit_group %[[ASYNC_COPY_1]]
+// CHECK:   %[[SUBVIEW_2:.*]] = ttg.memdesc_subview %[[BUFFER_1]]
+// CHECK:   %[[ASYNC_COPY_2:.*]] = ttg.async_copy_global_to_local %[[NEXT_BUFFER_1]], %[[SUBVIEW_2]]
+// CHECK:   ttg.async_commit_group %[[ASYNC_COPY_2]]
 // CHECK:   ttg.async_wait
 // CHECK:   ttg.memdesc_subview %[[BUFFER_1]]
 // CHECK:   scf.for
@@ -1305,13 +1295,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // CHECK:     %[[ASYNC_COPY_3:.*]] = ttg.async_copy_global_to_local %[[NEXT_BUFFER_1]], %[[SUBVIEW_4]]
 // CHECK:     ttg.async_commit_group %[[ASYNC_COPY_3]]
 // CHECK:     ttg.memdesc_subview %[[BUFFER_1]]
-// CHECK:   %[[SUBVIEW_6:.*]] = ttg.memdesc_subview %[[BUFFER_1]]
-// CHECK:   %[[ASYNC_COPY_4:.*]] = ttg.async_copy_global_to_local %[[NEXT_BUFFER_1]], %[[SUBVIEW_6]] mask
-// CHECK:   %[[COMMIT_1:.*]] = ttg.async_commit_group %[[ASYNC_COPY_4]]
-// CHECK:   %[[SUBVIEW_7:.*]] = ttg.memdesc_subview %[[BUFFER_1]]
-// CHECK:   %[[ASYNC_COPY_5:.*]] = ttg.async_copy_global_to_local %[[NEXT_BUFFER_1]], %[[SUBVIEW_7]] mask
-// CHECK:   %[[COMMIT_2:.*]] = ttg.async_commit_group %[[ASYNC_COPY_5]]
-// CHECK:   scf.yield %[[COMMIT_1]], %[[COMMIT_2]]
 // CHECK: ttg.local_dealloc %[[BUFFER_1]]
 
 // AMD-LABEL:  tt.func public @nested_loops
