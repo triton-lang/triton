@@ -9,6 +9,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+
 #undef DEBUG_TYPE
 #define DEBUG_TYPE "tritonamdgpu-refine-ops"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -22,8 +23,10 @@ namespace {
 /*
  TODO - this needs to be MUCH more official.
 */
-unsigned calcCyclesPerMfma(AMDMfmaEncodingAttr mfmaLayout, DotOp dotOp) {
+unsigned getCyclesPerMfma(DotOp dotOp) {
   // Get mfma op type.
+  auto mfmaLayout = cast<AMDMfmaEncodingAttr>(
+      cast<RankedTensorType>(dotOp.getResult().getType()).getEncoding());
   Value a = dotOp.getA();
   Value b = dotOp.getB();
   auto aTensorTy = cast<RankedTensorType>(a.getType());
@@ -58,8 +61,8 @@ unsigned calcCyclesPerMfma(AMDMfmaEncodingAttr mfmaLayout, DotOp dotOp) {
   int64_t totalOps = maybeMfmaInsn->getMDim() * maybeMfmaInsn->getNDim() *
                      maybeMfmaInsn->getKDim();
   unsigned cyclesPerMfma = static_cast<unsigned>(totalOps / opsPerCycle);
-  DBGS() << maybeMfmaInsn->getInsnName() << " = " << cyclesPerMfma
-         << " cycles\n";
+  LDBG(maybeMfmaInsn->getInsnName() << " = " << cyclesPerMfma
+         << " cycles\n");
   return cyclesPerMfma;
 }
 
@@ -67,10 +70,10 @@ unsigned calcCyclesPerMfma(AMDMfmaEncodingAttr mfmaLayout, DotOp dotOp) {
 Calculate how many mfmas are in a rep, e.g. 1x1x2.
 // TODO(dtanner) Is there a more direct method for this?
 */
-SmallVector<unsigned, 3> calcMfmasPerRep(SmallVector<int64_t> ctaTile,
-                                         SmallVector<unsigned> warpsPerCta,
-                                         SmallVector<int64_t> numReps,
-                                         SmallVector<unsigned> mfmaShape) {
+SmallVector<unsigned, 3> getMfmasPerRep(const SmallVector<int64_t>& ctaTile,
+                                        const SmallVector<unsigned>& warpsPerCta,
+                                        const SmallVector<int64_t>& numReps,
+                                        const SmallVector<unsigned>& mfmaShape) {
   // Tile shape per warp.
   SmallVector<int64_t, 3> warpTile = {
       ctaTile[0] / warpsPerCta[0],
@@ -94,35 +97,68 @@ SmallVector<unsigned, 3> calcMfmasPerRep(SmallVector<int64_t> ctaTile,
   Returns the ideal dot-tile shape (in number of reps, not number of mfmas).
 
   The dot-tile shape is chosen such that:
-  (1) A dot-tile's worth of local_load_a and local_load_b can
-      can be issued during a dot-tile's worth of mfmas.
-  (2) A dot-tile's worth of dot cycles hides the local_load data latency.
-  (3) The dot-tile is as small and square as possible.
+  (1) A dot-tile's worth of mfma cycles hides the local_load data latency.
+      If this criterial leads the dot tile shape to be larger than the
+      dot itself, this means local loads need to be issued more
+      than one dot tile in advance.
+  (2) A dot-tile's worth of local_load A,B can
+      can be issued during a dot-tile's worth of mfmas
+      without overruning the hardware queues;
+      this is called issue *rate* below.
+      Note, this ensures the dot-tile will not be LDS bandwidth bound.
+      If this criteria leads the dot-tile shape to be larger than the
+      dot itself, this means the dot will be LDS bandwidth bound.
+  (3) A dot-tile's worth of local_load_a and local_load_b can
+      can be issued and have their issue cycles hidden by the mfmas.
+      If this criterial leads the dot-tile shape to be larger than the
+      dot itself, this means the dot will be bottlenecked
+      by issuing local loads; this this case need to increase
+      ds_read_u16 to ds_read_b32 for example.
+  (4) The dot-tile is as small and square as possible.
 
-    Typical shapes when mfmasPerRep = 1x1x2 for b128 and localLoadIssueRate=32
+  Typical shapes when mfmasPerRep = 1x1x2 for b128 and localLoadRate=32
   for b128
     - 2x2 for fp16 (128 mfma cycles per tile) and
     - 4x4 for fp8 (256 mfma cycles per tile).
 
   Args:
     - mfmasPerRep - shape of number of mfmas in decomposed dot, e.g. 1x1x2.
-    - preferLargerM - prefer M > N if not square.
+    - preferLargerM - prefer M > N if dot-tile cannot be square.
     - cyclesPerMfma - how many cycles does mfma take in total.
-    - localLoadIssueRate - cycles between issuing consecutive ds_reads to not
-  overrun hardware queues. This is estimated to be b128 -> 32 cycles, b64 -> 16
-  cycles, b32 -> 8 cycles. Default is 32 cycles, which assumes all ds_read_b128.
+    - localLoadRateA,B - cycles between issuing consecutive ds_reads to not
+  overrun hardware queues. This is estimated to be
+        b128 -> 32 cycles,
+        b64 -> 16 cycles,
+        b32 -> 8 cycles,
+        b16 -> 4 cycles.
+  Default is 32 cycles, which assumes all ds_read_b128.
+    - numLoadsLoadsPerMfmaA -  Note, this does not yet
+  handle the case for not enough cycles to issue all the loads, e.g.
+  mfma_16x16x16 // 16 cycles to compute - 4 cycles to issue = 12 cycles of hiding
+  ds_read_u16 // hidden
+  ds_read_u16 // hidden
+  ds_read_u16 // hidden
+  ds_read_u16
+  ds_read_u16
+  ds_read_u16
+  ds_read_u16
+  ds_read_u16
+    - numLocalLoadsPerMfmaA,B - number of local loads required to load the
+  A,B operands of a single mfma.
     - localLoadDataLatency - cycles between issuing ds_read and waiting for
   data; rounded up to pow2.
 
   Notes:
-   - The intended scheduling of dot-tiles is
+   - The intended scheduling of dot-tiles is:
+
   --------------------------------
-  local_load_a[n] // a,b loads can be issued during dot-tile without any loss of
-  performance. local_load_b[n] DotTile[n-2]
+  local_load_a[n] // Hide A,B load issue cycles and rate.
+  local_load_b[n]
+  DotTile[n-2]
   --------------------------------
-  DotTile[n-1] // a,b load data latency hiding.
+  DotTile[n-1] // Hide load A,B data latency.
   --------------------------------
-  DotTile[n]   // all a,b data is ready by the first mfma of tile.
+  DotTile[n]   // A,B data is ready by the first mfma of tile.
   --------------------------------
 
     - Dot-tile shapes can be further refined if the data latency becomes much
@@ -134,26 +170,30 @@ SmallVector<unsigned, 3> calcMfmasPerRep(SmallVector<int64_t> ctaTile,
   load a or b, and not both a and b.
     - At this time it is assumed that dot-tile-shape[K] = 1 since K's don't
   interact with eachother.
-    - It is assumed that mfmasPerRep = 1x1x2 means that 1 local_load_a + 1
-  local_load_b supplies operands for 2 mfmas, i.e. a single mfmasPerRep requires
-  1 local_load_a and 1 b. Therefore, if for some reason the local_loads per
-  mfmaPerRep changes, this algoirthm needs to be updated so it can correctly
-  calculate how many local_loads are required to supply the dot-tile of mfmas.
+  // TODO(dtanner) - This should be simplifiable to not require so many
+  low-level details of the device.
+  For example, just a ratio of flops/byte for the given mfma precision.
+  And maybe info regarding transpose and how many loads of what precision
+  to know if we'll have 
 */
-typedef SmallVector<unsigned, 2> DotTileShape;
-DotTileShape calcDotTileShape(
-    SmallVector<unsigned, 3> mfmasPerRep, // = 16x16x64 / 16x16x32 = 1x1x2
+using DotTileShapeType = SmallVector<unsigned, 3>;
+DotTileShapeType calcDotTileShape(
+    const SmallVector<unsigned, 3> & mfmasPerRep, // = 16x16x64 / 16x16x32 = 1x1x2
     bool preferLargerM, unsigned cyclesPerMfma = 8,
-    unsigned localLoadIssueRate = 32, unsigned localLoadDataLatency = 128) {
-  DotTileShape tileShape = {1, 1};
-  int64_t numMfmas = tileShape[0] * tileShape[1] * mfmasPerRep[0] *
-                     mfmasPerRep[1] * mfmasPerRep[2];
-  int64_t mfmaCycles = numMfmas * cyclesPerMfma;
-  int64_t numLoads =
-      tileShape[0] * mfmasPerRep[0] + tileShape[1] * mfmasPerRep[1];
-  int64_t loadIssueCycles = numLoads * localLoadIssueRate;
+    unsigned localLoadRateA = 32,
+    unsigned localLoadRateB = 32,
+    unsigned numLocalLoadsPerRepA = 1,
+    unsigned numLocalLoadsPerRepB = 1,
+    unsigned localLoadDataLatency = 128) {
+  DotTileShapeType tileShape = {1, 1, 1};
+
+  bool localLoadDataLatencyExposed = true;
+  bool localLoadRateExposed = true;
+  bool localLoadIssueExposed = true;
+
   // Keep on increasing the dimension of the tile
-  while (mfmaCycles < loadIssueCycles || mfmaCycles < localLoadDataLatency) {
+  while (localLoadDataLatencyExposed || localLoadRateExposed || localLoadIssueExposed) {
+    // Enforce criteria #4 - small square.
     if ((tileShape[0] * mfmasPerRep[0] < tileShape[1] * mfmasPerRep[1]) ||
         ((tileShape[0] * mfmasPerRep[0] == tileShape[1] * mfmasPerRep[1]) &&
          preferLargerM)) {
@@ -161,12 +201,23 @@ DotTileShape calcDotTileShape(
     } else {
       tileShape[1] *= 2;
     }
-    numMfmas = tileShape[0] * tileShape[1] * mfmasPerRep[0] * mfmasPerRep[1] *
+    // Check criteria #1 - local load data latency.
+    int64_t numMfmas = tileShape[0] * tileShape[1] * mfmasPerRep[0] * mfmasPerRep[1] *
                mfmasPerRep[2];
-    mfmaCycles = numMfmas * cyclesPerMfma;
-    numLoads = tileShape[0] * mfmasPerRep[0] + tileShape[1] * mfmasPerRep[1];
-    loadIssueCycles = numLoads * localLoadIssueRate;
-  };
+    int64_t mfmaCycles = numMfmas * cyclesPerMfma;
+    localLoadDataLatencyExposed = mfmaCycles < localLoadDataLatency;
+    // Check criteria #2 - local load rate.
+    int64_t loadRateCycles = tileShape[0] * mfmasPerRep[0] * numLocalLoadsPerRepA * localLoadRateA
+        + tileShape[1] * mfmasPerRep[1] * numLocalLoadsPerRepB * localLoadRateB;
+    localLoadRateExposed = mfmaCycles < loadRateCycles;
+    // Check criteria #3 - issue cycles.
+    constexpr unsigned mfmaIssueCycles = 4; // num cycles to issue mfma
+    constexpr unsigned loadIssueCycles = 4; // num cycles to issue local load
+    int64_t totalLoadIssueCycles = tileShape[0] * mfmasPerRep[0] * numLocalLoadsPerRepA * loadIssueCycles
+        + tileShape[1] * mfmasPerRep[1] * numLocalLoadsPerRepB * loadIssueCycles;
+    int64_t totalMfmaIssueCycles = numMfmas * mfmaIssueCycles;
+    localLoadIssueExposed = (mfmaCycles - totalMfmaIssueCycles) < totalLoadIssueCycles;
+  }
   return tileShape;
 }
 
@@ -185,7 +236,7 @@ DotTileShape calcDotTileShape(
   leads to smallest number of registers carrying A,B operands. E.g. numRep =
   8x4, tileShape=2x2.
 */
-struct DotTileOrder {
+class DotTileOrder {
   const int numRepM;
   const int numRepN;
   const int tileShapeM;
@@ -197,6 +248,7 @@ struct DotTileOrder {
   int tileShapeInner;
   int numTilesOuter;
   int numTilesInner;
+  public:
   explicit DotTileOrder(int inputNumRepM, int inputNumRepN, int inputTileShapeM,
                         int inputTileShapeN, bool inputOuterLoopM)
       : numRepM(inputNumRepM), numRepN(inputNumRepN),
