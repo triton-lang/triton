@@ -5545,7 +5545,6 @@ def test_poison_return(device):
     assert "ub.poison" in h.asm["ttir"], h.asm["ttir"]
     # xpu uses llvm.store, which in this case is removed by the optimizer
     if not is_xpu():
-        print(h.asm["llir"])
         assert "poison" in h.asm["llir"], h.asm["llir"]
 
 
