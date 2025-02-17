@@ -121,11 +121,12 @@ Value Prefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
   // opIdx: 0 => a, 1 => b
   auto type = cast<triton::gpu::MemDescType>(v.getType());
   SmallVector<int64_t> shape{type.getShape().begin(), type.getShape().end()};
-  SmallVector<int64_t> offset{0, 0};
+  auto rank = shape.size();
+  SmallVector<int64_t> offset(rank, 0);
   Type elementType = type.getElementType();
 
   // k => (prefetchWidth, k - prefetchWidth)
-  int64_t kIdx = opIdx == 0 ? 1 : 0;
+  int64_t kIdx = opIdx == 0 ? rank - 1 : rank - 2;
 
   offset[kIdx] = isPrologue ? 0 : prefetchWidth;
   shape[kIdx] = isPrologue ? prefetchWidth : (shape[kIdx] - prefetchWidth);
@@ -240,7 +241,7 @@ LogicalResult Prefetcher::initialize() {
     int bKWidth = bEnc.getKWidth();
     assert(aKWidth == bKWidth);
 
-    auto kSize = aType.getShape()[1];
+    auto kSize = aType.getShape().back();
 
     // works better with nvidia tensor cores
     unsigned elementWidth = aType.getElementTypeBitWidth();
@@ -356,7 +357,7 @@ scf::ForOp Prefetcher::createNewForOp() {
 
       // remaining part
       int64_t kOff = prefetchWidth;
-      int64_t kRem = dot.getA().getType().getShape()[1] - prefetchWidth;
+      int64_t kRem = dot.getA().getType().getShape().back() - prefetchWidth;
       Operation *prevDot = firstDot;
       if (kRem == 0) {
         // There is only one dot while prefetchWidth == kSize so delay issuing
