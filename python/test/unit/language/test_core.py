@@ -3434,7 +3434,6 @@ def get_test_dot_double_rate_cases():
     "M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size",
     get_test_dot_double_rate_cases() + \
     get_test_dot_base_cases() + \
-    get_test_dot_base_cases() + \
     get_test_dot_mixed_sizes_cases() + \
     get_test_dot_transposed_op_base_cases() + \
     get_test_dot_h100_shortcut_cases() + \
