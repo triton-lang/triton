@@ -4,7 +4,6 @@
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "third_party/amd/lib/TritonAMDGPUToLLVM/SchedInstructions.h"
 #include "triton/Analysis/AxisInfo.h"
-#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipelineExpander.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
@@ -210,12 +209,13 @@ LogicalResult StreamPipeliner::initSchedule(int maxIndirectionLevel) {
   bool pairedGlobalLoadLocalStore = stages[SCHED_LOCAL_STORE] == 0;
   stages[SCHED_LOCAL_STORE] += maxIndirectionLevel;
 
-  LDBG("Stage schedule:"
-       << "  GLOBAL_LOAD stage = " << stages[SCHED_GLOBAL_LOAD]
-       << ", LOCAL_STORE stage = " << stages[SCHED_LOCAL_STORE]
-       << ", LOCAL_LOAD stage = " << stages[SCHED_LOCAL_LOAD]
-       << ", COMPUTE stage = " << stages[SCHED_COMPUTE]
-       << "; total = " << numStages);
+  LDBG(
+      "Stage schedule:" << "  GLOBAL_LOAD stage = " << stages[SCHED_GLOBAL_LOAD]
+                        << ", LOCAL_STORE stage = " << stages[SCHED_LOCAL_STORE]
+                        << ", LOCAL_LOAD stage = " << stages[SCHED_LOCAL_LOAD]
+                        << ", COMPUTE stage = " << stages[SCHED_COMPUTE]
+                        << "; total = " << numStages);
+
   if (stages[SCHED_LOCAL_STORE] >= numStages ||
       stages[SCHED_LOCAL_STORE] > stages[SCHED_LOCAL_LOAD]) {
     LDBG("Invalid stage schedule");
@@ -270,12 +270,11 @@ LogicalResult StreamPipeliner::initSchedule(int maxIndirectionLevel) {
   clusters[SCHED_LOCAL_LOAD] = clusterVec[localLoadCluster];
   clusters[SCHED_COMPUTE] = clusterVec[computeCluster];
 
-  LDBG("Cluster schedule:"
-       << "  GLOBAL_LOAD cluster = " << globalLoadCluster
-       << ", LOCAL_STORE cluster = " << localStoreCluster
-       << ", LOCAL_LOAD cluster = " << localLoadCluster
-       << ", COMPUTE cluster = " << computeCluster
-       << "; total = " << SCHED_SIZE);
+  LDBG("Cluster schedule:" << "  GLOBAL_LOAD cluster = " << globalLoadCluster
+                           << ", LOCAL_STORE cluster = " << localStoreCluster
+                           << ", LOCAL_LOAD cluster = " << localLoadCluster
+                           << ", COMPUTE cluster = " << computeCluster
+                           << "; total = " << SCHED_SIZE);
 
   return success();
 }
