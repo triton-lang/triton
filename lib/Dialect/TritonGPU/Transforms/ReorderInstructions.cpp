@@ -65,7 +65,8 @@ public:
     // before the first use ancestor in its block
     m.walk([&](triton::gpu::ConvertLayoutOp op) {
       auto curr = mlir::Block::iterator(op);
-      for (; &*curr != getFirstUse(op); curr++)
+      auto end = op->getBlock()->end();
+      for (; curr != end && &*curr != getFirstUse(op); curr++)
         if (isa<triton::gpu::LocalDeallocOp>(&*curr))
           op->moveAfter(&*curr);
     });
