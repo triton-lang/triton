@@ -551,7 +551,7 @@ struct AsyncCopyGlobalToLocalOpConversion
         Value storeVal = packElementRangeIntoVector(
             rewriter, this->getTypeConverter(), loc, vecTy, otherElems, srcIdx);
         llStore(rewriter, loc, shmemAddrs[i], storeVal,
-                b.icmp_ne(maskElems[srcIdx], b.true_val()), 0, op.getCache());
+                b.icmp_ne(maskElems[srcIdx], b.true_val()), op.getCache());
       }
     }
 
