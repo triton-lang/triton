@@ -2,6 +2,7 @@
 #define TRITON_ATTR_DEFS
 
 include "mlir/IR/EnumAttr.td"
+include "triton/Dialect/Triton/IR/TritonDialect.td"
 
 // Attributes for LoadOp and StoreOp
 def TT_CacheModifierAttr : I32EnumAttr<
@@ -132,6 +133,15 @@ def TT_ScaleDotElemTypeAttr : I32EnumAttr<
       I32EnumAttrCase<"FP16", 6, "fp16">
     ]>{
   let cppNamespace = "::mlir::triton";
+}
+
+def TT_DescriptorLoadAttr : AttrDef<Triton_Dialect, "DescriptorLoad"> {
+  let attrName = "triton.gpu.descriptor_load_attr";
+  let mnemonic = "descriptor_load_attr";
+  let cppNamespace = "::mlir::triton";
+
+  let description = [{
+  }];
 }
 
 #endif

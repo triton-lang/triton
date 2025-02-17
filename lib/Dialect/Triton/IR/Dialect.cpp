@@ -14,6 +14,8 @@
 #include "triton/Dialect/Triton/IR/AttrInterfaces.cpp.inc"
 #include "triton/Dialect/Triton/IR/Dialect.cpp.inc"
 #include "triton/Dialect/Triton/IR/OpInterfaces.cpp.inc"
+#define GET_ATTRDEF_CLASSES
+#include "triton/Dialect/Triton/IR/TritonAttrDefs.cpp.inc"
 
 using namespace mlir;
 using namespace mlir::triton;

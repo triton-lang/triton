@@ -1266,6 +1266,7 @@ def TT_ExperimentalDescriptorLoadOp : TT_Op<"experimental_descriptor_load", [Mem
     TT_TensorDescType:$desc,
     Variadic<I32>:$indices,
     F32Attr:$packingFactor,
+    TT_DescriptorLoadAttr:$descAttr,
     DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
     DefaultValuedAttr<TT_EvictionPolicyAttr, "::mlir::triton::EvictionPolicy::NORMAL">:$evict
   );
