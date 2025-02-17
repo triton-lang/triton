@@ -207,8 +207,8 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
 
-        local_prefetch = int(os.getenv("TRITON_HIP_LOCAL_PREFETCH", "0"))
         global_prefetch = int(os.getenv("TRITON_HIP_GLOBAL_PREFETCH", "0"))
+        local_prefetch = int(os.getenv("TRITON_HIP_LOCAL_PREFETCH", "0"))
 
         # The `local-prefetch` scheduling variant requires turning on buffer ops.
         if options.instruction_sched_variant == "local-prefetch":
