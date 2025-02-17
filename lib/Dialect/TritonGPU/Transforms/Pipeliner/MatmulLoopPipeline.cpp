@@ -331,7 +331,7 @@ static void createTMAAsyncLoad(scf::ForOp forOp,
           Value barrier, Value view, Value pred, llvm::APFloat packingFactor) {
         builder.createWithStage<ttng::AsyncTMACopyGlobalToLocalOp>(
             loadOp.getLoc(), stage, clusterId, tmaPtr, loadOp.getIndices(),
-            barrier, view, pred, packingFactor);
+            barrier, view, pred, packingFactor, loadOp.getDescAttr());
       });
 }
 

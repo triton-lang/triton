@@ -91,6 +91,11 @@ void TritonDialect::initialize() {
 
   // We can also add interface here.
   addInterfaces<TritonInlinerInterface>();
+
+  addAttributes<
+#define GET_ATTRDEF_LIST
+#include "triton/Dialect/Triton/IR/TritonAttrDefs.cpp.inc"
+      >();
 }
 
 Operation *TritonDialect::materializeConstant(OpBuilder &builder,

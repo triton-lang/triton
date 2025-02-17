@@ -78,7 +78,7 @@ public:
                           Value pred) {
       rewriter.create<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp>(
           op.getLoc(), tmaPtr, op.getIndices(), barrierAlloc, alloc, pred,
-          packingFactor);
+          packingFactor, op.getDescAttr());
     };
     lowerTMALoad(op, op.getType(), op.getDesc(), createLoad, rewriter,
                  packingFactor.convertToFloat());
