@@ -602,4 +602,178 @@ int32_t LocalAllocOp::getAlignmentOrDefault() {
   return enc ? enc.getAlignment() : 16;
 }
 
+// -- WarpSpecializeOp --
+
+static Type removeEncodingIfTensor(Type type) {
+  if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
+    return RankedTensorType::get(tensorType.getShape(),
+                                 tensorType.getElementType());
+  }
+  return type;
+}
+
+RegionRange WarpSpecializeOp::getPartitionRegions() {
+  return cast<WarpSpecializePartitionsOp>(
+             getPartitionOpHolder().front().front())
+      .getPartitionRegions();
+}
+
+void WarpSpecializeOp::getSuccessorRegions(
+    RegionBranchPoint src, SmallVectorImpl<RegionSuccessor> &successors) {
+  // The parent branches transparently into the default region.
+  if (src.isParent()) {
+    successors.emplace_back(&getDefaultRegion());
+    return;
+  }
+  // And the default region branches transparently back to the parent.
+  assert(src.getRegionOrNull() == &getDefaultRegion());
+  successors.push_back(RegionSuccessor(getResults()));
+}
+
+LogicalResult WarpSpecializeOp::verify() {
+  // The default region is not isolated from above but the partition regions
+  // have to be. MLIR does not support this, so we hide an op inside another
+  // region that contains the isolated regions. Check that it is there.
+  if (!isa<WarpSpecializePartitionsOp>(
+          getPartitionOpHolder().front().front())) {
+    return emitOpError(
+        "expected to find only a `ttg.warp_specialize.partitions` op inside "
+        "its second region");
+  }
+
+  // Verify the partitions.
+  if (getPartitionRegions().size() != getPartitionNumWarps().size()) {
+    return emitOpError("has ") << getPartitionRegions().size()
+                               << " partitions but `partitionNumWarps` has "
+                               << getPartitionNumWarps().size() << " elements";
+  }
+  for (auto [i, numWarps] : llvm::enumerate(getPartitionNumWarps())) {
+    if (llvm::isPowerOf2_32(numWarps))
+      continue;
+    return emitOpError("partition #")
+           << i << " number of warps (" << numWarps << ") must be a power of 2";
+  }
+
+  for (auto [i, region] : llvm::enumerate(getPartitionRegions())) {
+    if (region->getNumArguments() != getNumOperands()) {
+      return emitOpError("partition region #")
+             << i << " has " << region->getNumArguments()
+             << " arguments but expected " << getNumOperands();
+    }
+    for (auto [argIdx, argType, capType] : llvm::enumerate(
+             region->getArgumentTypes(), getExplicitCaptures().getTypes())) {
+      if (argType == capType)
+        continue;
+      return emitOpError("partition region #")
+             << i << " argument #" << argIdx << " has type " << argType
+             << " but corresponding capture has type " << capType;
+    }
+    if (isa<WarpReturnOp>(region->front().getTerminator()))
+      continue;
+    return emitOpError("partition region #")
+           << i << " does not end with a `ttg.warp_return` op";
+  }
+
+  // Verify the default region.
+  auto yield =
+      dyn_cast<WarpYieldOp>(getDefaultRegion().front().getTerminator());
+  if (!yield) {
+    return emitOpError(
+        "expected its default region to end with a `ttg.warp_yield` op");
+  }
+  if (yield.getNumOperands() != getNumResults()) {
+    return yield.emitOpError("has ")
+           << yield.getNumOperands() << " operands but parent op expected "
+           << getNumResults();
+  }
+
+  // This op cannot be nested inside itself.
+  if ((*this)->getParentOfType<WarpSpecializeOp>()) {
+    return emitOpError(
+        "cannot be nested inside another `ttg.warp_specialize` op");
+  }
+
+  return success();
+}
+
+ParseResult WarpSpecializeOp::parse(OpAsmParser &p, OperationState &result) {
+  SmallVector<OpAsmParser::UnresolvedOperand> operands;
+  SMLoc operandLoc = p.getCurrentLocation();
+  if (p.parseOperandList(operands, AsmParser::Delimiter::Paren) ||
+      p.parseOptionalAttrDictWithKeyword(result.attributes) ||
+      p.parseKeyword("default") || p.parseRegion(*result.addRegion()))
+    return failure();
+
+  OperationState partitionOpState(
+      p.getEncodedSourceLoc(p.getCurrentLocation()),
+      WarpSpecializePartitionsOp::getOperationName());
+
+  SmallVector<int32_t> partitionNumWarps;
+  SmallVector<OpAsmParser::Argument> partitionArgs;
+  while (succeeded(p.parseOptionalKeyword(
+      ("partition" + Twine(partitionNumWarps.size()).str())))) {
+    partitionArgs.clear();
+    SMLoc regionLoc = p.getCurrentLocation();
+    if (p.parseArgumentList(partitionArgs, AsmParser::Delimiter::Paren,
+                            /*allowType=*/true) ||
+        p.parseKeyword("num_warps") || p.parseLParen() ||
+        p.parseInteger(partitionNumWarps.emplace_back()) || p.parseRParen() ||
+        p.parseRegion(*partitionOpState.addRegion(), partitionArgs))
+      return failure();
+    WarpSpecializePartitionsOp::ensureTerminator(
+        *partitionOpState.regions.back(), p.getBuilder(),
+        p.getEncodedSourceLoc(regionLoc));
+  }
+
+  FunctionType types;
+  if (p.parseColon() || p.parseType(types) ||
+      p.resolveOperands(operands, types.getInputs(), operandLoc,
+                        result.operands))
+    return failure();
+
+  result.addTypes(types.getResults());
+  result.addAttribute(getPartitionNumWarpsAttrName(result.name),
+                      p.getBuilder().getDenseI32ArrayAttr(partitionNumWarps));
+
+  Block &holder = result.addRegion()->emplaceBlock();
+  OpBuilder b(p.getContext());
+  b.setInsertionPointToStart(&holder);
+  b.create(partitionOpState);
+  return success();
+}
+
+void WarpSpecializeOp::print(OpAsmPrinter &p) {
+  p << '(';
+  p.printOperands(getOperands());
+  p << ')';
+  p.printOptionalAttrDictWithKeyword(getOperation()->getAttrs(),
+                                     {getPartitionNumWarpsAttrName()});
+
+  p.printNewline();
+  p << "default ";
+  p.printRegion(getDefaultRegion(), /*printEntryBlockArgs=*/false);
+
+  for (auto [i, region, numWarps] :
+       llvm::enumerate(getPartitionRegions(), getPartitionNumWarps())) {
+    p.printNewline();
+    p << "partition" << i << '(';
+    llvm::interleaveComma(region->getArguments(), p, [&](BlockArgument arg) {
+      p.printRegionArgument(arg);
+    });
+    p << ") num_warps(" << numWarps << ") ";
+    p.printRegion(*region, /*printEntryBlockArgs=*/false,
+                  /*printBlockTerminators=*/false);
+  }
+  p << " : ";
+  p.printFunctionalType(*this);
+}
+
+// -- WarpYieldOp --
+
+MutableOperandRange
+WarpYieldOp::getMutableSuccessorOperands(RegionBranchPoint target) {
+  assert(target.isParent());
+  return getValuesMutable();
+}
+
 } // namespace mlir::triton::gpu

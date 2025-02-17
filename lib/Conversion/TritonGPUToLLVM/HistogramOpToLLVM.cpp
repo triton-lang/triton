@@ -6,8 +6,6 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-static int log2Int(int64_t num) { return (num > 1) ? 1 + log2Int(num / 2) : 0; }
-
 // Compute a histogram within a warp. This uses an algorithm by @apgoucher
 // that does the following:
 // Create a ballot for each bit of the bin index (there
@@ -22,8 +20,8 @@ static SmallVector<Value> computeWarpLevelHistogram(
   assert(numBins % numThreadPerWarp == 0 &&
          "numBins must be divisible by numThreadPerWarp");
   Value zero = b.i32_val(0);
-  int numBits = log2Int(numBins);
-  int numBitsLaneId = log2Int(numThreadPerWarp);
+  int numBits = llvm::Log2_64(numBins);
+  int numBitsLaneId = llvm::Log2_64(numThreadPerWarp);
   unsigned numElementsPerThreads = triton::gpu::getTotalElemsPerThread(srcType);
   unsigned numThreadWithUniqueData =
       triton::gpu::getThreadsPerWarpWithUniqueData(srcType.getEncoding(),
