@@ -100,7 +100,7 @@ namespace {
 //
 class StreamPipeliner {
   // Define categories of scheduling details per Operation types.
-  // The StreamPipeliner schedules 5 types of operations:
+  // The StreamPipeliner schedules 4 types of operations:
   // 1. GLOBAL_LOAD: tt.load
   // 2. LOCAL_STORE: ttg.local_store (created by the StreamPipeliner)
   // 3. LOCAL_LOAD:  ttg.local_load (created by the StreamPipeliner)
@@ -210,13 +210,15 @@ LogicalResult StreamPipeliner::initSchedule(int maxIndirectionLevel) {
   bool pairedGlobalLoadLocalStore = stages[SCHED_LOCAL_STORE] == 0;
   stages[SCHED_LOCAL_STORE] += maxIndirectionLevel;
 
+  LDBG("Stage schedule:"
+       << "  GLOBAL_LOAD stage = " << stages[SCHED_GLOBAL_LOAD]
+       << ", LOCAL_STORE stage = " << stages[SCHED_LOCAL_STORE]
+       << ", LOCAL_LOAD stage = " << stages[SCHED_LOCAL_LOAD]
+       << ", COMPUTE stage = " << stages[SCHED_COMPUTE]
+       << "; total = " << numStages);
   if (stages[SCHED_LOCAL_STORE] >= numStages ||
       stages[SCHED_LOCAL_STORE] > stages[SCHED_LOCAL_LOAD]) {
-    LDBG("Invalid schedule: GLOBAL_LOAD stage = "
-         << stages[SCHED_GLOBAL_LOAD]
-         << ", LOCAL_STORE stage = " << stages[SCHED_LOCAL_STORE]
-         << ", LOCAL_LOAD stage = " << stages[SCHED_LOCAL_LOAD]
-         << ", COMPUTE stage = " << stages[SCHED_COMPUTE]);
+    LDBG("Invalid stage schedule");
     return failure();
   }
 
@@ -267,6 +269,13 @@ LogicalResult StreamPipeliner::initSchedule(int maxIndirectionLevel) {
   clusters[SCHED_LOCAL_STORE] = clusterVec[localStoreCluster];
   clusters[SCHED_LOCAL_LOAD] = clusterVec[localLoadCluster];
   clusters[SCHED_COMPUTE] = clusterVec[computeCluster];
+
+  LDBG("Cluster schedule:"
+       << "  GLOBAL_LOAD cluster = " << globalLoadCluster
+       << ", LOCAL_STORE cluster = " << localStoreCluster
+       << ", LOCAL_LOAD cluster = " << localLoadCluster
+       << ", COMPUTE cluster = " << computeCluster
+       << "; total = " << SCHED_SIZE);
 
   return success();
 }
@@ -884,12 +893,19 @@ struct PipelinePass : public TritonAMDGPUStreamPipelineBase<PipelinePass> {
   }
 
   void runOnOperation() override {
+    ModuleOp moduleOp = getOperation();
     // check numStages
-    if (globalPrefetch < 0 || globalPrefetch >= numStages)
-      return;
+    if (globalPrefetch < 0 || globalPrefetch >= numStages) {
+      moduleOp.emitError("global prefetch control must be in [0, ")
+          << numStages << "); " << globalPrefetch << " is out of range";
+      return signalPassFailure();
+    }
 
-    if (localPrefetch < 0 || localPrefetch >= numStages)
-      return;
+    if (localPrefetch < 0 || localPrefetch >= numStages) {
+      moduleOp.emitError("local prefetch control must be in [0, ")
+          << numStages << "); " << localPrefetch << " is out of range";
+      return signalPassFailure();
+    }
 
     SmallVector<scf::ForOp> loops;
     getOperation()->walk([&](scf::ForOp forOp) {
