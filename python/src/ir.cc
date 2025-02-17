@@ -1417,7 +1417,7 @@ void init_triton_ir(py::module &&m) {
              auto resTy = descTy.getBlockType();
              auto ctx = self.getContext();
              auto descLoadAttr =
-                 mlir::triton::DescriptorLoadAttr::get(ctx, true, false);
+                 mlir::triton::DescriptorLoadAttr::get(ctx, false, false);
              return self.create<ExperimentalDescriptorLoadOp>(
                  resTy, desc, indices, descLoadAttr, cacheModifier,
                  evictionPolicy);

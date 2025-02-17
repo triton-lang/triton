@@ -463,6 +463,27 @@ static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter) {
   return newB;
 }
 
+struct DescriptorLoadAttr {
+  bool fp4Padded;
+  bool twoCTA;
+};
+
+void propageteDescriptorLoadAttributes(Value operand,
+                                       const DescriptorLoadAttr &attrs) {
+  SetVector<Operation *> backwardSlice;
+  BackwardSliceOptions opt;
+  getBackwardSlice(operand, &backwardSlice, opt);
+
+  for (auto op : backwardSlice) {
+    if (auto descLoad = dyn_cast<ExperimentalDescriptorLoadOp>(op)) {
+      auto newDescLoadAttr = mlir::triton::DescriptorLoadAttr::get(
+          op->getContext(), attrs.fp4Padded, attrs.twoCTA);
+      descLoad.setDescAttrAttr(newDescLoadAttr);
+      break;
+    }
+  }
+}
+
 class BlockedToMMAv5 : public mlir::OpRewritePattern<DotOp> {
   int computeCapability;
 
@@ -536,6 +557,10 @@ public:
     auto ld =
         rewriter.create<triton::nvidia_gpu::TMEMLoadOp>(loc, newAccType, acc);
     rewriter.replaceOpWithNewOp<ConvertLayoutOp>(dotOp, oldRetType, ld);
+
+    propageteDescriptorLoadAttributes(a, {/*fp4Padded*/ false, useTwoCTAs});
+    propageteDescriptorLoadAttributes(b, {/*fp4Padded*/ false, useTwoCTAs});
+
     return success();
   }
 };
@@ -726,6 +751,11 @@ public:
     auto ld =
         rewriter.create<triton::nvidia_gpu::TMEMLoadOp>(loc, newAccType, acc);
     rewriter.replaceOpWithNewOp<ConvertLayoutOp>(dotOp, oldRetType, ld);
+
+    // TODO: Support 2CTA scaled dot
+    propageteDescriptorLoadAttributes(a, {IsAMixedPrecFp4, /*twoCTA*/ false});
+    propageteDescriptorLoadAttributes(b, {IsBMixedPrecFp4, /*twoCTA*/ false});
+
     return success();
   }
 };
