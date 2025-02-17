@@ -277,8 +277,7 @@ MfmaIntrinsic::selectFor(int version, unsigned mDim, unsigned nDim,
   }
 
   // We have more than one instrinsics. Prefer larger K ones.
-  for (const auto &value : values) {
-    auto [symbol, k, kBase] = values.front();
+  for (const auto [symbol, k, kBase] : values) {
     if (inputKDim >= k)
       return MfmaIntrinsic(symbol, mDim, nDim, k, kBase, aElemType, bElemType);
   }
