@@ -999,7 +999,7 @@ class CodeGenerator(ast.NodeVisitor):
         num_stages = None
         loop_unroll_factor = None
         disallow_acc_multi_buffer = False
-        flatten = None
+        flatten = False
         if IteratorClass is language.range:
             iterator = IteratorClass(*iter_args, **iter_kwargs)
             # visit iterator arguments
@@ -1082,9 +1082,9 @@ class CodeGenerator(ast.NodeVisitor):
             init_handles = [a._flatten_ir() for a in init_args]
             init_handles_spec, init_handles_flat = list_list_flatten(init_handles)
             for_op = self.builder.create_for_op(lb, ub, step, init_handles_flat)
-            if num_stages is not None:
+            if _unwrap_if_constexpr(num_stages) is not None:
                 for_op.set_attr("tt.num_stages", self.builder.get_int32_attr(num_stages))
-            if loop_unroll_factor is not None:
+            if _unwrap_if_constexpr(loop_unroll_factor) is not None:
                 for_op.set_attr("tt.loop_unroll_factor", self.builder.get_int32_attr(loop_unroll_factor))
             if disallow_acc_multi_buffer:
                 for_op.set_attr("tt.disallow_acc_multi_buffer", self.builder.get_unit_attr())

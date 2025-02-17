@@ -75,13 +75,6 @@ struct DotOpMFMAConversionHelper {
       : mfmaLayout(mfmaLayout), rewriter(rewriter),
         typeConverter(typeConverter), loc(loc), ctx(mfmaLayout.getContext()) {}
 
-  Value getThreadId() const {
-    auto llvmIndexTy = typeConverter->getIndexType();
-    auto tid = rewriter.create<::mlir::gpu::ThreadIdOp>(
-        loc, rewriter.getIndexType(), ::mlir::gpu::Dimension::x);
-    return rewriter.create<arith::TruncIOp>(loc, i32_ty, tid);
-  }
-
   Value generateMFMAOp(StringRef mfmaInsnName, Value valA, Value valB,
                        Value valC) const {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -124,8 +117,7 @@ struct DotOpMFMAConversionHelper {
       return acc;
     constexpr int warpSize = 64;
     int subBlockSize = warpSize / numSubBlocks;
-    Value laneId = getThreadId();
-    laneId = b.and_(laneId, b.i32_val(warpSize - 1));
+    Value laneId = getLaneId(rewriter, loc, warpSize);
     auto vecTy = dyn_cast<VectorType>(acc.getType());
     auto elemType = vecTy.getElementType();
     assert(elemType.getIntOrFloatBitWidth() == 32);
