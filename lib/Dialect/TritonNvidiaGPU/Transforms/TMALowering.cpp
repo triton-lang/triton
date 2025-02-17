@@ -25,7 +25,7 @@ using namespace triton::nvidia_gpu;
 static void
 lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
              function_ref<void(Value, Value, Value, Value)> createLoad,
-             PatternRewriter &rewriter, float packingFactor = 1) {
+             PatternRewriter &rewriter, bool fp4Padded) {
   MLIRContext *ctx = op->getContext();
   Attribute sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
   auto loc = op->getLoc();
@@ -34,10 +34,9 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
   Attribute encoding = SwizzledSharedEncodingAttr::get(
       tensorType.getContext(), 1, 1, 1, order, ctaLayout);
   if (tensorType.getRank() > 1) {
-    bool isMMAv5Fp4Padded = packingFactor == 2;
     encoding = NVMMASharedEncodingAttr::get(
         tensorType.getContext(), tensorType.getShape(), order, ctaLayout,
-        tensorType.getElementType(), isMMAv5Fp4Padded);
+        tensorType.getElementType(), fp4Padded);
   }
   MemDescType memDescType =
       MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
@@ -73,15 +72,14 @@ public:
 
   LogicalResult matchAndRewrite(ExperimentalDescriptorLoadOp op,
                                 PatternRewriter &rewriter) const override {
-    auto packingFactor = op.getPackingFactor();
     auto createLoad = [&](Value tmaPtr, Value barrierAlloc, Value alloc,
                           Value pred) {
       rewriter.create<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp>(
           op.getLoc(), tmaPtr, op.getIndices(), barrierAlloc, alloc, pred,
-          packingFactor, op.getDescAttr());
+          op.getPackingFactor(), op.getDescAttr());
     };
     lowerTMALoad(op, op.getType(), op.getDesc(), createLoad, rewriter,
-                 packingFactor.convertToFloat());
+                 op.getDescAttr().getFp4Padded());
     return success();
   }
 };
@@ -98,7 +96,7 @@ struct TMAGatherLowering
           op.getLoc(), tmaPtr, op.getXOffsets(), op.getYOffset(), barrierAlloc,
           alloc, pred);
     };
-    lowerTMALoad(op, op.getType(), op.getDesc(), createLoad, rewriter);
+    lowerTMALoad(op, op.getType(), op.getDesc(), createLoad, rewriter, false);
     return success();
   }
 };

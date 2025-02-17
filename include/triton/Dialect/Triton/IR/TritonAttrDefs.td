@@ -142,6 +142,14 @@ def TT_DescriptorLoadAttr : AttrDef<Triton_Dialect, "DescriptorLoad"> {
 
   let description = [{
   }];
+
+  let parameters = (
+    ins
+    "bool":$fp4Padded,
+    "bool":$twoCTAs
+  );
+
+  let assemblyFormat = "`<` struct(params) `>`";
 }
 
 #endif
