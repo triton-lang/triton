@@ -207,6 +207,11 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
 
+        passes.ttgpuir.add_fuse_nested_loops(pm)
+        passes.common.add_canonicalizer(pm)
+        passes.common.add_licm(pm)
+        passes.common.add_canonicalizer(pm)
+
         stream_prefetch = os.getenv("TRITON_HIP_STREAM_PREFETCH", "0") == "1"
 
         # The `local-prefetch` scheduling variant requires turning on buffer ops.
