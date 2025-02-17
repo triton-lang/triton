@@ -40,6 +40,7 @@ inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
     "STORE_TMEM_TO_GLOBAL_BYPASS_SMEM",
     "ALLOW_LHS_TMEM_LAYOUT_CONVERSION",
     "ENABLE_LHS_TO_TMEM",
+    "TRITON_F32_DEFAULT",
     // clang-format on
 };
 
