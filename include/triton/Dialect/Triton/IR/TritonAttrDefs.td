@@ -135,6 +135,23 @@ def TT_ScaleDotElemTypeAttr : I32EnumAttr<
   let cppNamespace = "::mlir::triton";
 }
 
+def TT_MakeDescriptorAttr : AttrDef<Triton_Dialect, "MakeDescriptor"> {
+  let attrName = "triton.gpu.make_descriptor_attr";
+  let mnemonic = "make_descriptor_attr";
+  let cppNamespace = "::mlir::triton";
+
+  let description = [{
+  }];
+
+  let parameters = (
+    ins
+    "bool":$fp4Padded,
+    "unsigned":$swizzlingByteWidth
+  );
+
+  let assemblyFormat = "`<` struct(params) `>`";
+}
+
 def TT_DescriptorLoadAttr : AttrDef<Triton_Dialect, "DescriptorLoad"> {
   let attrName = "triton.gpu.descriptor_load_attr";
   let mnemonic = "descriptor_load_attr";

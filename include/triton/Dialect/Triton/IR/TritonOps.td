@@ -1004,7 +1004,8 @@ def TT_MakeTensorDescOp : TT_Op<"make_tensor_descriptor", [
   let arguments = (ins
     TT_Ptr:$base,
     Variadic<I32>:$shape,
-    Variadic<I64>:$strides
+    Variadic<I64>:$strides,
+    TT_MakeDescriptorAttr:$descAttr
   );
 
   let results = (outs TT_TensorDescType:$result);
