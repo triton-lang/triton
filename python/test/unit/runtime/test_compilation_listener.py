@@ -8,11 +8,11 @@ from triton.runtime.config import TritonConfig, CompileTimes
 from typing import Any, Union
 
 import torch
-import uuid
 
 
-def get_add_kernel(suffix: str) -> triton.JITFunction:
+def get_add_kernel() -> triton.JITFunction:
 
+    @triton.jit
     def add_kernel(
         in_ptr0,
         in_ptr1,
@@ -29,17 +29,11 @@ def get_add_kernel(suffix: str) -> triton.JITFunction:
         output = x + y
         tl.store(out_ptr + offsets, output, mask=mask)
 
-    add_kernel.__name__ += suffix
-
-    return triton.jit(add_kernel)
+    return add_kernel
 
 
-def test_compile_stats(device: str) -> None:
+def test_compile_stats(device: str, fresh_triton_cache: str) -> None:
     captured: tuple[Union[ASTSource, IRSource], dict[str, Any], CompileTimes, bool] | None = None
-
-    # We generate a unique kernel name so that we don't pick up cache hit on
-    # first run.
-    suffix = str(uuid.uuid4()).replace("-", "")
 
     def compile_listener(src: Union[ASTSource, IRSource], metadata: dict[str, Any], times: CompileTimes,
                          cache_hit: bool) -> None:
@@ -49,7 +43,7 @@ def test_compile_stats(device: str) -> None:
 
     TritonConfig.compilation_listener = compile_listener
 
-    kernel = get_add_kernel(suffix)
+    kernel = get_add_kernel()
     x = torch.randn(4, device=device)
     y = torch.randn(4, device=device)
     out = torch.zeros_like(x)
@@ -72,7 +66,7 @@ def test_compile_stats(device: str) -> None:
 
     # Now lets create a new instance of the same kernel to pick up cache_hit=True
     captured = None
-    kernel = get_add_kernel(suffix)
+    kernel = get_add_kernel()
     kernel[(4, )](x, y, out, 4, 4)
 
     assert captured is not None
