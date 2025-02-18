@@ -185,6 +185,10 @@ getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter, int opIdx,
   return rewriter.create<LocalAllocOp>(arg.getLoc(), newType, arg);
 }
 
+static unsigned getSwizzleBytes(LocalAllocOp alloc) {
+  return cast<NVMMASharedEncodingAttr>(alloc.getType().getEncoding()).getSwizzlingByteWidth();
+}
+
 static LocalAllocOp
 getSharedMemoryScale(Value arg, mlir::PatternRewriter &rewriter, Location loc) {
   OpBuilder::InsertionGuard g(rewriter);
@@ -466,6 +470,7 @@ static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter) {
 struct DescriptorLoadAttr {
   bool fp4Padded;
   bool twoCTA;
+  unsigned swizzleBytes;
 };
 
 void propageteDescriptorLoadAttributes(Value operand,
@@ -479,7 +484,11 @@ void propageteDescriptorLoadAttributes(Value operand,
       auto newDescLoadAttr = mlir::triton::DescriptorLoadAttr::get(
           op->getContext(), attrs.fp4Padded, attrs.twoCTA);
       descLoad.setDescAttrAttr(newDescLoadAttr);
-      break;
+    } else if (auto makeDesc = dyn_cast<MakeTensorDescOp>(op)) {
+      llvm::outs() << "attrs.swizzleBytes: " << attrs.swizzleBytes << "\n";
+      auto newMakeDescAttr = mlir::triton::MakeDescriptorAttr::get(
+          op->getContext(), attrs.fp4Padded, attrs.swizzleBytes);
+      makeDesc.setDescAttrAttr(newMakeDescAttr);
     }
   }
 }
@@ -558,8 +567,12 @@ public:
         rewriter.create<triton::nvidia_gpu::TMEMLoadOp>(loc, newAccType, acc);
     rewriter.replaceOpWithNewOp<ConvertLayoutOp>(dotOp, oldRetType, ld);
 
-    propageteDescriptorLoadAttributes(a, {/*fp4Padded*/ false, useTwoCTAs});
-    propageteDescriptorLoadAttributes(b, {/*fp4Padded*/ false, useTwoCTAs});
+    propageteDescriptorLoadAttributes(
+        a, {/*fp4Padded*/ false, useTwoCTAs,
+            getSwizzleBytes(a.getDefiningOp<LocalAllocOp>())});
+    propageteDescriptorLoadAttributes(
+        b, {/*fp4Padded*/ false, useTwoCTAs,
+            getSwizzleBytes(b.getDefiningOp<LocalAllocOp>())});
 
     return success();
   }
@@ -753,8 +766,12 @@ public:
     rewriter.replaceOpWithNewOp<ConvertLayoutOp>(dotOp, oldRetType, ld);
 
     // TODO: Support 2CTA scaled dot
-    propageteDescriptorLoadAttributes(a, {IsAMixedPrecFp4, /*twoCTA*/ false});
-    propageteDescriptorLoadAttributes(b, {IsBMixedPrecFp4, /*twoCTA*/ false});
+    propageteDescriptorLoadAttributes(
+        a, {IsAMixedPrecFp4, /*twoCTA*/ false,
+            getSwizzleBytes(a.getDefiningOp<LocalAllocOp>())});
+    propageteDescriptorLoadAttributes(
+        b, {IsBMixedPrecFp4, /*twoCTA*/ false,
+            getSwizzleBytes(b.getDefiningOp<LocalAllocOp>())});
 
     return success();
   }

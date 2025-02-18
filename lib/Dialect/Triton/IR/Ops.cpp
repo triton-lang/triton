@@ -923,10 +923,7 @@ void MakeTensorDescOp::build(OpBuilder &builder, OperationState &state,
   SmallVector<int64_t> blockShape64(blockShape);
   auto blockTy = RankedTensorType::get(blockShape64, elemTy);
   auto descTy = TensorDescType::get(builder.getContext(), blockTy);
-  // Create empty attributes, to be filled during AccelerateMatmul
-  auto makeDescAttr =
-    mlir::triton::MakeDescriptorAttr::get(builder.getContext(), false, 0);
-  return build(builder, state, descTy, base, shape, strides, makeDescAttr);
+  return build(builder, state, descTy, base, shape, strides, MakeDescriptorAttr{});
 }
 
 // The following ops, including `call`, `func`, and `return` are copied and
