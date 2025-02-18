@@ -55,7 +55,7 @@ Type TritonGPUToLLVMTypeConverter::convertMemDescType(
   auto ctx = type.getContext();
   // base ptr
   auto ptrType =
-      LLVM::LLVMPointerType::get(ctx, targetInfo.getSharedAddressSpace());
+      LLVM::LLVMPointerType::get(ctx, targetInfo.getAddressSpace(type.getMemorySpace()));
 
   if (isa<triton::nvidia_gpu::TensorMemoryEncodingAttr,
           triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(
