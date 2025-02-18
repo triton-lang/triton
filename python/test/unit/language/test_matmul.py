@@ -719,17 +719,17 @@ def block_scale_fp4_matmul(  #
 @pytest.mark.parametrize("M, N, K", [(1024, 512, 256), (2, 4, 64)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (256, 128, 128), (128, 256, 128),
                                                        (128, 256, 256), (128, 128, 64), (128, 64, 128)])
-@pytest.mark.parametrize("none_a_scale", [True, False])
-@pytest.mark.parametrize("none_b_scale", [True, False])
+@pytest.mark.parametrize("with_a_scale", [True, False])
+@pytest.mark.parametrize("with_b_scale", [True, False])
 @pytest.mark.parametrize(("scale_type", "VEC_SIZE"), [("float8_e8m0fnu", 32), ("float8_e4m3fn", 16)],
                          ids=["mxfp4", "nvfp4"])
 @pytest.mark.parametrize("nonKDim", ([0, 16, 32] if is_hip_cdna() else []))
-def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, none_a_scale, none_b_scale, scale_type, nonKDim,
+def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_scale, with_b_scale, scale_type, nonKDim,
                          device):
     if is_cuda():
         if torch.cuda.get_device_capability()[0] < 10:
             pytest.skip("Requires compute capability >= 10")
-        if none_a_scale or none_b_scale:
+        if not (with_a_scale and with_b_scale):
             pytest.skip("None aScale/bScale is only tested on AMD backend for now")
     elif is_hip():
         if not is_hip_mi350():
@@ -767,10 +767,10 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, none_a_sc
     a_scale_ref = a_scale_ref.to(torch.float32).repeat_interleave(VEC_SIZE, dim=1)[:M, :K]
     b_scale_ref = b_scale_ref.to(torch.float32).repeat_interleave(VEC_SIZE, dim=1).T.contiguous()[:K, :N]
     stride_scale = a_scale.stride(0)
-    if none_a_scale is True:
+    if not with_a_scale:
         a_scale = None
         a_scale_ref = 1.0
-    if none_b_scale is True:
+    if not with_b_scale:
         b_scale = None
         b_scale_ref = 1.0
     ref_out = torch.matmul(a_mxfp4.to(torch.float32) * a_scale_ref, b_ref * b_scale_ref)
