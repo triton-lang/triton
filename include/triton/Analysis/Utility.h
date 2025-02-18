@@ -46,6 +46,7 @@ public:
   Attribute getSrcLayout() { return srcEncoding; }
 
   triton::ReduceOp getOperation() { return op; }
+
   unsigned getThreadOffsetOnReductionAxis();
 
   bool isWarpSynchronous();
