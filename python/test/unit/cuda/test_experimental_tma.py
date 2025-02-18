@@ -1244,11 +1244,8 @@ def test_mxfp8_mxfp4_matmul_tma(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, 
 
     triton.set_allocator(alloc_fn)
 
-    out = mxfp8_mxfp4_matmul_tma[grid](a, b, output, a_scale, b_scale, M, N, K, a_scale.stride(0), a.stride(0),
-                                 a.stride(1), output.stride(0), output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K,
-                                 NUM_STAGES=NUM_STAGES)
-    # print(out.asm["ttgir"])
-    # return
+    mxfp8_mxfp4_matmul_tma[grid](a, b, output, a_scale, b_scale, M, N, K, a_scale.stride(0), a.stride(0), a.stride(1),
+                                 output.stride(0), output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES=NUM_STAGES)
 
     a_ref = f8_to_f16(a.view(torch.float8_e5m2), dtype_src_str).to(torch.float32)
     ref_out = torch.matmul(a_ref * a_scale_ref, b_ref * b_scale_ref)

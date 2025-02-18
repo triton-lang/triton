@@ -16,8 +16,8 @@
 #include "triton/Dialect/Triton/IR/OpInterfaces.h"
 #include "triton/Dialect/Triton/IR/OpsEnums.h.inc"
 #define GET_ATTRDEF_CLASSES
-#include "triton/Dialect/Triton/IR/TritonAttrDefs.h.inc"
 #include "triton/Dialect/Triton/IR/Traits.h"
+#include "triton/Dialect/Triton/IR/TritonAttrDefs.h.inc"
 #include "triton/Dialect/Triton/IR/Types.h"
 
 #define GET_OP_CLASSES

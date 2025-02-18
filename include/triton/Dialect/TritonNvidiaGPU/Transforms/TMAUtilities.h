@@ -53,7 +53,6 @@ mlir::LogicalResult createTMADesc(mlir::Value tmaPtr,
       swizzleBytes = 64;
     } else if (contig_dim_size_in_bytes == 32) {
       swizzleBytes = 32;
-
     } else {
       op->emitError()
           << "contiguous box dimension must be at least 32 bytes but got "

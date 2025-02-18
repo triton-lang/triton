@@ -186,7 +186,8 @@ getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter, int opIdx,
 }
 
 static unsigned getSwizzleBytes(LocalAllocOp alloc) {
-  return cast<NVMMASharedEncodingAttr>(alloc.getType().getEncoding()).getSwizzlingByteWidth();
+  auto enc = cast<NVMMASharedEncodingAttr>(alloc.getType().getEncoding());
+  return enc.getSwizzlingByteWidth();
 }
 
 static LocalAllocOp

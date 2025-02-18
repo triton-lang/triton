@@ -330,47 +330,33 @@ static PyObject *fill2DTMADescriptor(PyObject *self, PyObject *args) {
   uint32_t tensorDims[2];
   int elementSize;
   unsigned long long desc_address;
-  float packing_factor = 1;
-  if (!PyArg_ParseTuple(args, "KKKiiifK", &global_address, &dims[1], &dims[0],
+  if (!PyArg_ParseTuple(args, "KKKiiiK", &global_address, &dims[1], &dims[0],
                         &tensorDims[1], &tensorDims[0], &elementSize,
-                        &packing_factor, &desc_address)) {
+                        &desc_address)) {
     return NULL;
   }
-
-  uint64_t globalStrides[1] = {dims[0] / packing_factor * elementSize};
+  uint64_t globalStrides[2] = {dims[0] * elementSize,
+                               dims[0] * dims[1] * elementSize};
   uint32_t elementStrides[2] = {1, 1};
   CUtensorMapDataType type;
-
-  if (packing_factor != 1) {
-    if (packing_factor = 2) {
-      type = CU_TENSOR_MAP_DATA_TYPE_16U4_ALIGN16B;
-    } else if (packing_factor = 4.0 / 3) {
-      type = CU_TENSOR_MAP_DATA_TYPE_16U6_ALIGN16B;
-    } else {
-      PyErr_SetString(PyExc_ValueError, "Unsupported packing factor");
-    }
-  } else {
-    switch (elementSize) {
-    case 1:
-      type = CU_TENSOR_MAP_DATA_TYPE_UINT8;
-      break;
-    case 2:
-      type = CU_TENSOR_MAP_DATA_TYPE_UINT16;
-      break;
-    case 4:
-      type = CU_TENSOR_MAP_DATA_TYPE_UINT32;
-      break;
-    default:
-      PyErr_SetString(PyExc_ValueError, "elementSize must be 1, 2, or 4");
-    }
+  switch (elementSize) {
+  case 1:
+    type = CU_TENSOR_MAP_DATA_TYPE_UINT8;
+    break;
+  case 2:
+    type = CU_TENSOR_MAP_DATA_TYPE_UINT16;
+    break;
+  case 4:
+    type = CU_TENSOR_MAP_DATA_TYPE_UINT32;
+    break;
+  default:
+    PyErr_SetString(PyExc_ValueError, "elementSize must be 1, 2, or 4");
   }
-
   int rank = 2;
   // Swizzling should be picked in codegen but since we need to set it on the
   // descriptor we rely on a convention between this function and codegen.
   CUtensorMapSwizzle swizzle = CU_TENSOR_MAP_SWIZZLE_128B;
   uint32_t contigDimSizeInByte = elementSize * tensorDims[0];
-
   if (contigDimSizeInByte >= 128) {
     swizzle = CU_TENSOR_MAP_SWIZZLE_128B;
   } else if (contigDimSizeInByte >= 64) {
@@ -387,7 +373,6 @@ static PyObject *fill2DTMADescriptor(PyObject *self, PyObject *args) {
   if (contigDimSizeInByte > 128) {
     tensorDims[0] = 128 / elementSize;
   }
-
   static cuTensorMapEncodeTiled_t cuTensorMapEncodeTiled = NULL;
   INITIALIZE_FUNCTION_POINTER_IF_NULL(cuTensorMapEncodeTiled,
                                       getCuTensorMapEncodeTiledHandle);
