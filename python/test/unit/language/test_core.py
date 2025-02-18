@@ -2863,7 +2863,7 @@ layouts = [
     WmmaLayout(version=1, warps_per_cta=[4, 1]),
     WmmaLayout(version=1, warps_per_cta=[1, 4]),
     DotOperandLayout(parent=MmaLayout([2, 0], [4, 2], [1, 1], [1, 1], [0, 1], [16, 8]), op_idx=1, k_width=4),
-    DotOperandLayout(parent=MmaLayout([2, 0], [4, 4], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=0, k_width=8),
+    DotOperandLayout(parent=MmaLayout([2, 0], [2, 4], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=0, k_width=8),
     DotOperandLayout(parent=MmaLayout([3, 0], [8, 1], [1, 1], [1, 1], [1, 0], [16, 32, 16]), op_idx=0, k_width=2),
     SliceLayout(dim=1, parent=MmaLayout([2, 0], [4, 1, 1], [1, 1, 1], [1, 1, 1], [2, 1, 0], [1, 16, 8])),
     SliceLayout(
