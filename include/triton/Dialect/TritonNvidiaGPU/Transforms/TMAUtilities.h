@@ -22,6 +22,7 @@ mlir::LogicalResult createTMADesc(mlir::Value tmaPtr,
 
   auto elemType = op.getBase().getType().getPointeeType();
   auto elemSize = elemType.getIntOrFloatBitWidth() / 8;
+  bool fp4Padded = op.getDescAttr() && op.getDescAttr()->getFp4Padded();
 
   int32_t contig_dim_size = op.getTensorShape().back();
   int32_t contig_dim_size_in_bytes = contig_dim_size * elemSize;
@@ -29,7 +30,11 @@ mlir::LogicalResult createTMADesc(mlir::Value tmaPtr,
     contig_dim_size = 128 / elemSize;
   }
   llvm::SmallVector<Value> boxDim;
-  boxDim.push_back(mkI32Constant(contig_dim_size));
+  if (fp4Padded) {
+    boxDim.push_back(mkI32Constant(128));
+  } else {
+    boxDim.push_back(mkI32Constant(contig_dim_size));
+  }
   for (int k = op.getTensorShape().size() - 2; k >= 0; --k) {
     boxDim.push_back(mkI32Constant(op.getTensorShape()[k]));
   }
@@ -37,6 +42,10 @@ mlir::LogicalResult createTMADesc(mlir::Value tmaPtr,
   unsigned swizzleBytes = 0;
   if (op.getDescAttr()) {
     swizzleBytes = op.getDescAttr()->getSwizzlingByteWidth();
+    if (fp4Padded) {
+      assert(swizzleBytes == 128 &&
+             "elem type .b4x16_p64 supports only 128B swizzling");
+    }
   } else {
     if (contig_dim_size_in_bytes >= 128) {
       swizzleBytes = 128;
@@ -79,7 +88,7 @@ mlir::LogicalResult createTMADesc(mlir::Value tmaPtr,
 
   int elemTypeEnum;
 
-  if (op.getDescAttr() && op.getDescAttr()->getFp4Padded()) {
+  if (fp4Padded) {
     elemTypeEnum = 14; // .b4x16_p64
   } else {
     switch (elemSize) {
