@@ -1221,7 +1221,7 @@ def descriptor_scatter(desc, value: tl.tensor, x_offsets, y_offset, builder: ir.
 
     # Validate minimum block size.
     assert x_offsets.shape[0] >= 8, f"descriptor scatter must have at least 8 rows, but got {x_offsets.shape}"
-    dtype = desc.type.element_ty
+    dtype = desc.dtype
     min_cols = 32 // dtype.primitive_bitwidth * 8
     assert desc.block_shape[
         1] >= min_cols, f"descriptor scatter of {dtype} must have at least {min_cols} columns, but got {desc.block_shape[1]}"
