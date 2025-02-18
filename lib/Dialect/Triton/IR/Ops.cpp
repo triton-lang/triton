@@ -882,7 +882,7 @@ void MakeTensorPtrOp::build(OpBuilder &builder, OperationState &state,
   auto tensorType = RankedTensorType::get(
       SmallVector<int64_t>(tensorShape.begin(), tensorShape.end()),
       pointerType.getPointeeType());
-  auto result = PointerType::get(tensorType, 1);
+  auto result = PointerType::get(tensorType, pointerType.getAddressSpace());
 
   return build(builder, state, result, base, shape, strides, offsets,
                builder.getDenseI32ArrayAttr(order));
