@@ -47,8 +47,9 @@ std::optional<int64_t> maybeGetTripCount(LoopLikeOpInterface loop) {
   std::optional<OpFoldResult> lowerBound = loop.getSingleLowerBound();
   std::optional<OpFoldResult> upperBound = loop.getSingleUpperBound();
   std::optional<OpFoldResult> step = loop.getSingleStep();
-  assert(lowerBound && upperBound && step);
-  return constantTripCount(*lowerBound, *upperBound, *step);
+  if (lowerBound && upperBound && step)
+    return constantTripCount(*lowerBound, *upperBound, *step);
+  return {};
 }
 
 void getEnclosingLoops(Operation &op, SmallVector<LoopLikeOpInterface> &ops) {
