@@ -318,6 +318,18 @@ def test_empty_kernel(dtype_x, device):
     kernel[(1, )](x, SIZE=SIZE, num_warps=4)
 
 
+def test_scalar_overflow(device):
+
+    @triton.jit
+    def kernel():
+        huge_int: tl.constexpr = 0xFFFFFFFFFFFFFF
+        x = tl.full((), 32, dtype=tl.int32)
+        y = x + huge_int
+
+    with pytest.raises(triton.TritonError, match="out of range"):
+        kernel[(1, )]()
+
+
 # generic test functions
 def _test_unary(dtype_x, expr, numpy_expr=None, device='cuda', num_ctas=1):
     check_type_supported(dtype_x, device)  # early return if dtype_x is not supported
@@ -5543,8 +5555,8 @@ def test_poison_return(device):
     a = torch.empty((), device=device, dtype=torch.int32)
     h = kernel[(1, )](a)
     assert "ub.poison" in h.asm["ttir"], h.asm["ttir"]
-    # xpu uses llvm.store, which in this case is removed by the optimizer
-    if not is_xpu():
+    # hip/xpu uses llvm.store, which in this case is removed by the optimizer
+    if not (is_hip() or is_xpu()):
         assert "poison" in h.asm["llir"], h.asm["llir"]
 
 
