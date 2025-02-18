@@ -64,8 +64,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @chained_scale_after_dot
-  // CHECK-NOT: ttng.tmem_alloc
+  // CHECK: ttng.tmem_alloc
   // CHECK: scf.for
+  // CHECK:   ttng.tc_gen5_mma
+  // CHECK:   ttng.wait_barrier
+  // CHECK:   ttng.tmem_load
+  // CHECK:   arith.mulf
+  // CHECK:   ttng.tmem_store
   tt.func public @chained_scale_after_dot(%A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>, %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>, %arg3: i32) -> tensor<128x128xf16, #blocked> attributes {noinline = false} {
     %true = arith.constant true
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>

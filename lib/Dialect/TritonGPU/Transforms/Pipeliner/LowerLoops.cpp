@@ -310,6 +310,10 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
       int copyVecBytes = getCopyVecBytes(
           cast<RankedTensorType>(loadOp.getType()), sharedEncoding);
       if (stageDiff > 0 && copyVecBytes >= 4) {
+        if (canBeShmemPipelined(loadOp)) {
+          // Allocate additional buffer required by the wgmma pipelining.
+          stageDiff += 1;
+        }
         asyncLoads[loadOp] = {.stageDiff = stageDiff,
                               .sharedEncoding = sharedEncoding};
       } else if (stageDiff > 1) {

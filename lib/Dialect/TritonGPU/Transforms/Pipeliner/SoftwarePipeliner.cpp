@@ -77,9 +77,12 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
         continue;
       }
 
-      triton::PipeliningOption options;
       std::vector<std::pair<Operation *, unsigned>> finalSchedule =
           schedule.createFinalSchedule(forOp);
+      triton::PipeliningOption options;
+      options.supportDynamicLoops = true;
+      options.peelEpilogue = false;
+      options.predicateFn = triton::predicateOp;
       options.getScheduleFn =
           [&](scf::ForOp forOp,
               std::vector<std::pair<Operation *, unsigned>> &schedule) {
@@ -110,30 +113,39 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
 
       // Apply the pipeline expansion.
       expandLoops();
+    } else {
+
+      SmallVector<scf::ForOp> loops;
+      getOperation()->walk([&](scf::ForOp forOp) {
+        // Bail out for loops with num_stage <= 1.
+        if (getNumStagesOrDefault(forOp) > 1)
+          loops.push_back(forOp);
+      });
+
+      if (loops.empty())
+        return;
+
+      llvm::SmallVector<scf::ForOp> pipelinedLoops;
+      for (scf::ForOp forOp : loops) {
+        int loopNumStages = getNumStagesOrDefault(forOp);
+        scf::ForOp pipelinedFor = pipelineLoop(forOp, loopNumStages);
+        if (pipelinedFor != nullptr)
+          pipelinedLoops.push_back(pipelinedFor);
+      }
     }
 
-    SmallVector<scf::ForOp> loops;
-    getOperation()->walk([&](scf::ForOp forOp) {
-      // Bail out for loops with num_stage <= 1.
-      if (getNumStagesOrDefault(forOp) > 1)
-        loops.push_back(forOp);
-    });
-
-    if (loops.empty())
-      return;
-
-    llvm::SmallVector<scf::ForOp> pipelinedLoops;
-    for (scf::ForOp forOp : loops) {
-      int loopNumStages = getNumStagesOrDefault(forOp);
-      scf::ForOp pipelinedFor = pipelineLoop(forOp, loopNumStages);
-      if (pipelinedFor != nullptr)
-        pipelinedLoops.push_back(pipelinedFor);
+    {
+      SmallVector<scf::ForOp> loops;
+      getOperation()->walk([&](scf::ForOp forOp) {
+        // Bail out for loops with num_stage <= 1.
+        if (getNumStagesOrDefault(forOp) > 1)
+          loops.push_back(forOp);
+      });
+      // There is a hard dependency between load pipelining and the TC05MMA
+      // pipelining. We can pipeline the TC05MMA only after the loads are
+      // pipelined and buffers are allocated.
+      mlir::triton::pipelineTC05MMALoops(getOperation(), loops, 2);
     }
-
-    // There is a hard dependency between load pipelining and the TC05MMA
-    // pipelining. We can pipeline the TC05MMA only after the loads are
-    // pipelined and buffers are allocated.
-    mlir::triton::pipelineTC05MMALoops(getOperation(), pipelinedLoops, 2);
 
     // schedule the waits
     mlir::triton::updateWaits(getOperation());
@@ -147,20 +159,21 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
     if (applyPatternsGreedily(getOperation(), std::move(patterns)).failed())
       return signalPassFailure();
 
-    // Re-collect loop ops
-    loops.clear();
-    getOperation()->walk([&](scf::ForOp forOp) {
-      // Bail out for loops with num_stage <= 1.
-      if (getNumStagesOrDefault(forOp) > 1)
-        loops.push_back(forOp);
-    });
+    {
+      SmallVector<scf::ForOp> loops;
+      getOperation()->walk([&](scf::ForOp forOp) {
+        // Bail out for loops with num_stage <= 1.
+        if (getNumStagesOrDefault(forOp) > 1)
+          loops.push_back(forOp);
+      });
 
-    for (scf::ForOp forOp : loops) {
-      mlir::triton::pipelineTMAStores(forOp);
-    }
+      for (scf::ForOp forOp : loops) {
+        mlir::triton::pipelineTMAStores(forOp);
+      }
 
-    for (scf::ForOp forOp : loops) {
-      mlir::triton::pipelineMMAWithScaledAcc(forOp);
+      for (scf::ForOp forOp : loops) {
+        mlir::triton::pipelineMMAWithScaledAcc(forOp);
+      }
     }
   }
 };
