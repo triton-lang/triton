@@ -21,9 +21,9 @@ struct AllocateSharedMemory
     MLIRContext *ctx = &getContext();
     ModuleAllocation allocation(mod);
 
-    mod.walk([&](FunctionOpInterface funcOp) {
+    mod.walk<mlir::WalkOrder::PreOrder>([&](FunctionOpInterface funcOp) {
+      auto *funcAllocation = allocation.getFuncData(funcOp);
       funcOp.walk([&](Operation *op) {
-        auto *funcAllocation = allocation.getFuncData(funcOp);
         auto oBufferId = funcAllocation->getBufferId(op);
         int offset = -1;
         if (oBufferId != Allocation::InvalidBufferId)
@@ -39,6 +39,7 @@ struct AllocateSharedMemory
         op->setAttr("allocation.offset",
                     IntegerAttr::get(IntegerType::get(ctx, 32), offset));
       });
+      return WalkResult::skip();
     });
     mod->setAttr("ttg.shared",
                  mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 32),
