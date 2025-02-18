@@ -693,9 +693,25 @@ def get_git_commit_hash(length=8):
         return ""
 
 
+def get_git_branch():
+    try:
+        cmd = ['git', 'rev-parse', '--abbrev-ref', 'HEAD']
+        return subprocess.check_output(cmd).strip().decode('utf-8')
+    except Exception:
+        return ""
+
+
+def get_git_version_suffix():
+    branch = get_git_branch()
+    if branch.startswith("release"):
+        return ""
+    else:
+        return get_git_commit_hash()
+
+
 setup(
     name=os.environ.get("TRITON_WHEEL_NAME", "triton"),
-    version="3.2.0" + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", ""),
+    version="3.2.0" + get_git_version_suffix() + os.environ.get("TRITON_WHEEL_VERSION_SUFFIX", ""),
     author="Philippe Tillet",
     author_email="phil@openai.com",
     description="A language and compiler for custom Deep Learning operations",
