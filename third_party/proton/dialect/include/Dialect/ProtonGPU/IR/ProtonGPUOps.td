@@ -27,7 +27,7 @@ def PTG_CircularStoreOp : PTG_Op<"circular_store", [
 
   let description = [{
     Store a metric `counter` into a circular buffer backed by the internal memory `data`.
-    The circular buffer indexing is stored in the address of `indexPtr`. Index value is 
+    The circular buffer indexing is stored in the address of `indexPtr`. Index value is
     automatically updated. Older metric counter get dropped if the `data` is full.
   }];
   let arguments = (
