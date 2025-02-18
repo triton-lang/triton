@@ -270,7 +270,7 @@ def bases_per_dim(layout, dim, rank, skip_broadcast=True):
 def warps_per_cta(layout, shape):
     if isinstance(layout, LinearLayout):
         return bases_per_dim(layout, 'warp', len(shape))
-    elif isinstance(layout, SliceLayout):
+    elif isinstance(layout, (SliceLayout, DotOperandLayout)):
         return warps_per_cta(layout.parent, shape)
     else:
         return layout.warps_per_cta
