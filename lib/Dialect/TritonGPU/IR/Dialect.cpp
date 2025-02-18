@@ -488,22 +488,15 @@ getDefaultBlockedEncoding(MLIRContext *context, ArrayRef<int64_t> shape,
   return encoding;
 }
 
-LinearLayout reshapeMinorToMajor(MLIRContext *ctx, const LinearLayout &ll,
-                                 SmallVector<int64_t> dstShape) {
+SmallVector<std::pair<StringAttr, int32_t>>
+getStandardOutDimNames(MLIRContext *ctx, ArrayRef<int64_t> dstShape) {
   auto newRank = dstShape.size();
-
   SmallVector<std::pair<StringAttr, int32_t>> newOutDims;
   for (auto [dim, size] :
        llvm::zip(standardOutDimNames(ctx, newRank), dstShape)) {
     newOutDims.emplace_back(dim, size);
   }
-
-  auto origOutDims = to_vector(ll.getOutDimNames());
-  std::reverse(origOutDims.begin(), origOutDims.end());
-  std::reverse(newOutDims.begin(), newOutDims.end());
-  return ll.transposeOuts(origOutDims)
-      .reshapeOuts(newOutDims)
-      .transposeOuts(standardOutDimNames(ctx, newRank));
+  return newOutDims;
 }
 
 LogicalResult tryJoinOnAxis(MLIRContext *ctx, const LinearLayout &inLl,
@@ -2785,7 +2778,18 @@ struct TritonGPUInferLayoutInterface
                                     "numel of src shape");
     }
 
-    auto dst = reshapeMinorToMajor(ctx, src, to_vector(dstShape));
+    auto newRank = dstShape.size();
+
+    auto newOutDims = getStandardOutDimNames(ctx, dstShape);
+
+    // reshapeOp assumes minor-to-major, so we need to transpose the out dims
+    // before the reshape
+    auto srcOutDims = to_vector(src.getOutDimNames());
+    std::reverse(srcOutDims.begin(), srcOutDims.end());
+    std::reverse(newOutDims.begin(), newOutDims.end());
+    auto dst = src.transposeOuts(srcOutDims)
+                   .reshapeOuts(newOutDims)
+                   .transposeOuts(standardOutDimNames(ctx, newRank));
     dstEnc = LinearEncodingAttr::get(ctx, dst);
     return success();
   }
@@ -2827,7 +2831,7 @@ struct TritonGPUInferLayoutInterface
     auto ll = toLinearLayout(shape, srcEnc);
     SmallVector<int64_t> dstShape(shape.begin(), shape.end());
     dstShape.push_back(1);
-    ll = reshapeMinorToMajor(ctx, ll, dstShape);
+    ll = ll.reshapeOuts(getStandardOutDimNames(ctx, dstShape));
 
     // Try join on last dim
     auto axis = dstShape.size() - 1;
@@ -2901,7 +2905,7 @@ struct TritonGPUInferLayoutInterface
     // Remove last dim from newLl (which should be 1)
     SmallVector<int64_t> dstShape(shape.begin(), shape.end());
     dstShape.pop_back();
-    newLl = reshapeMinorToMajor(ctx, newLl, dstShape);
+    newLl = newLl.reshapeOuts(getStandardOutDimNames(ctx, dstShape));
     dstEnc = LinearEncodingAttr::get(ctx, newLl);
     return success();
   }
