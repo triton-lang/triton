@@ -241,9 +241,11 @@ static int computeOrigBitWidth(Value x) {
   int origBitWidth = getElementTypeOrSelf(x).getIntOrFloatBitWidth();
   for (auto op : slice) {
     if (isa<LoadOp, ExperimentalDescriptorLoadOp>(op)) {
-      origBitWidth = std::min<int>(
-          origBitWidth, cast<RankedTensorType>(op->getResult(0).getType())
-                            .getElementTypeBitWidth());
+      if (auto tensorTy =
+              dyn_cast<RankedTensorType>(op->getResultTypes().front())) {
+        origBitWidth =
+            std::min<int>(origBitWidth, tensorTy.getElementTypeBitWidth());
+      }
     }
   }
   return origBitWidth;
