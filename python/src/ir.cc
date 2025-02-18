@@ -1,4 +1,4 @@
-﻿#include <optional>
+#include <optional>
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -1401,6 +1401,12 @@ void init_triton_ir(py::module &&m) {
               EvictionPolicy evictionPolicy) -> void {
              self.create<StoreOp>(ptrs, val, mask, cacheModifier,
                                   evictionPolicy);
+           })
+      .def("create_tensor_descriptor_type",
+           [](TritonOpBuilder &self, Type blockTy) -> Type {
+             auto ctx = self.getContext();
+             return triton::TensorDescType::get(
+                 ctx, cast<RankedTensorType>(blockTy));
            })
       .def("create_reinterpret_tensor_descriptor",
            [](TritonOpBuilder &self, Value desc_ptr, Type blockTy) -> Value {

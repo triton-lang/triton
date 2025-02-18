@@ -1161,20 +1161,20 @@ def validate_descriptor_block(shape, dtype):
 def descriptor_load(desc: tl._experimental_tensor_desciptor_base, offsets, cache_modifier: str, eviction_policy: str,
                     builder: ir.builder) -> tl.tensor:
     assert isinstance(desc, tl._experimental_tensor_descriptor_base)
-    validate_descriptor_block(desc.block_shape, desc.type.element_ty)
+    validate_descriptor_block(desc.block_shape, desc.dtype)
     ndim = len(desc.block_shape)
     assert len(offsets) == ndim, f"expected {ndim} offsets, but got {len(offsets)}"
 
     offsets = _convert_to_ir_values(builder, offsets, require_i64=False)
     x = builder.create_descriptor_load(desc.handle, offsets, _str_to_load_cache_modifier(cache_modifier),
                                        _str_to_eviction_policy(eviction_policy))
-    return tl.tensor(x, desc.type)
+    return tl.tensor(x, desc.block_type)
 
 
 def descriptor_store(desc: tl._experimental_tensor_descriptor_base, value: tl.tensor, offsets,
                      builder: ir.builder) -> tl.tensor:
     assert isinstance(desc, tl._experimental_tensor_descriptor_base)
-    validate_descriptor_block(desc.block_shape, desc.type.element_ty)
+    validate_descriptor_block(desc.block_shape, desc.dtype)
     ndim = len(desc.block_shape)
     assert len(offsets) == ndim, f"expected {ndim} offsets, but got {len(offsets)}"
     assert value.shape == desc.block_shape
@@ -1190,18 +1190,18 @@ def descriptor_gather(desc, x_offsets, y_offset, cache_modifier: str, eviction_p
     assert eviction_policy == "", "eviction policy is not supported yet"
 
     # Validate descriptor.
-    assert len(desc.type.shape) == 2, f"descriptor must be 2D, but got {desc.type.shape}"
-    assert desc.type.shape[0] == 1, f"descriptor block must have 1 row, but got {desc.type.shape}"
+    assert len(desc.block_shape) == 2, f"descriptor must be 2D, but got {desc.block_shape}"
+    assert desc.block_shape[0] == 1, f"descriptor block must have 1 row, but got {desc.block_shape}"
 
     # Validate offsets.
-    assert len(x_offsets.shape) == 1, f"x offsets must be 1D, but got {x_offsets.shapae}"
+    assert len(x_offsets.shape) == 1, f"x offsets must be 1D, but got {x_offsets.shape}"
 
     # Validate minimum block size.
     assert x_offsets.shape[0] >= 8, f"descriptor gather must have at least 8 rows, but got {x_offsets.shape}"
-    dtype = desc.type.element_ty
+    dtype = desc.dtype
     min_cols = 32 // dtype.primitive_bitwidth * 8
-    assert desc.type.shape[
-        1] >= min_cols, f"descriptor gather of {dtype} must have at least {min_cols} columns, but got {desc.type.shape[1]}"
+    assert desc.block_shape[
+        1] >= min_cols, f"descriptor gather of {dtype} must have at least {min_cols} columns, but got {desc.block_shape[1]}"
 
     type = tl.block_type(desc.dtype, [x_offsets.shape[0], desc.block_shape[1]])
     y_offset = _convert_to_ir_values(builder, (y_offset, ), require_i64=False)[0]
@@ -1213,8 +1213,8 @@ def descriptor_scatter(desc, value: tl.tensor, x_offsets, y_offset, builder: ir.
     assert isinstance(desc, tl._experimental_tensor_descriptor_base)
 
     # Validate descriptor.
-    assert len(desc.type.shape) == 2, f"descriptor must be 2D, but got {desc.type.shape}"
-    assert desc.type.shape[0] == 1, f"descriptor block must have 1 row, but got {desc.type.shape}"
+    assert len(desc.block_shape) == 2, f"descriptor must be 2D, but got {desc.block_shape}"
+    assert desc.block_shape[0] == 1, f"descriptor block must have 1 row, but got {desc.block_shape}"
 
     # Validate offsets.
     assert len(x_offsets.shape) == 1, f"x offsets must be 1D, but got {x_offsets.shapae}"
@@ -1223,8 +1223,8 @@ def descriptor_scatter(desc, value: tl.tensor, x_offsets, y_offset, builder: ir.
     assert x_offsets.shape[0] >= 8, f"descriptor scatter must have at least 8 rows, but got {x_offsets.shape}"
     dtype = desc.type.element_ty
     min_cols = 32 // dtype.primitive_bitwidth * 8
-    assert desc.type.shape[
-        1] >= min_cols, f"descriptor scatter of {dtype} must have at least {min_cols} columns, but got {desc.type.shape[1]}"
+    assert desc.block_shape[
+        1] >= min_cols, f"descriptor scatter of {dtype} must have at least {min_cols} columns, but got {desc.block_shape[1]}"
 
     y_offset = _convert_to_ir_values(builder, (y_offset, ), require_i64=False)[0]
     builder.create_descriptor_scatter(desc.handle, value.handle, x_offsets.handle, y_offset)

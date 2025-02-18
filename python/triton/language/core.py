@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from enum import Enum
 from functools import partial, wraps
 import typing
-from typing import Union, Callable, List, Sequence, TypeVar, Optional
+from typing import Union, Callable, List, Sequence, TypeVar, Optional, Tuple
 import builtins
 from ..runtime.jit import jit
 import inspect
@@ -280,12 +280,39 @@ def check_bit_width(value, shift_value):
             )
 
 
+class base_value:
+    """Base class of values that exist in the triton IR (i.e. not constexprs).
+    """
+
+    def _flatten_ir(self, handles: List[ir.value]) -> None:
+        """Flatten frontend value into a sequence of mlir handles, which are appended
+        to the output list
+        """
+        raise NotImplementedError
+
+
+class base_type:
+
+    def __eq__(self, other):
+        raise NotImplementedError("Types must implement __eq__")
+
+    def __ne__(self, other):
+        return not (self == other)
+
+    def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[base_value, int]:
+        """Build a frontend value with the current dtype, wrapping a list of existing handles.
+        cursor is the index of the first handle relevant to this value, and the function
+        should return the updated cursor position after any handles consumed by the created value.
+        """
+        raise NotImplementedError
+
+
 # -----------------------
 # dtype
 # -----------------------
 
 
-class dtype:
+class dtype(base_type):
     SINT_TYPES = ['int8', 'int16', 'int32', 'int64']
     UINT_TYPES = ['int1', 'uint8', 'uint16', 'uint32', 'uint64']
     FP_TYPES = ['fp8e4b15', 'fp8e4nv', 'fp8e4b8', 'fp8e5', 'fp8e5b16', 'fp16', 'bf16', 'fp32', 'fp64']
@@ -483,9 +510,6 @@ class dtype:
             return False
         return self.name == other.name
 
-    def __ne__(self, other: dtype):
-        return not self.__eq__(other)
-
     def __hash__(self):
         return hash((self.name, ))
 
@@ -553,6 +577,9 @@ class dtype:
         """Output of repr needs to be an evaluatable expression"""
         return f'triton.language.{self.codegen_name()}'
 
+    def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[base_value, int]:
+        return tensor(handles[cursor], self), cursor + 1
+
 
 # Some functions have a param named `dtype`, which shadows the `dtype` class.
 # We can't change the param name because it is part of function's public API.
@@ -590,9 +617,6 @@ class pointer_type(dtype):
         if not isinstance(other, pointer_type):
             return False
         return self.element_ty == other.element_ty and self.address_space == other.address_space and self.const == other.const
-
-    def __ne__(self, other: pointer_type) -> bool:
-        return not self.__eq__(other)
 
     @property
     def scalar(self):
@@ -643,15 +667,12 @@ class block_type(dtype):
             return False
         return self.element_ty == other.element_ty and self.shape == other.shape
 
-    def __ne__(self, other: block_type) -> bool:
-        return not self.__eq__(other)
-
     @property
     def scalar(self):
         return self.element_ty
 
 
-class tuple_type(dtype):
+class tuple_type(base_type):
 
     def __init__(self, types, fields=None):
         self.types = types
@@ -672,6 +693,16 @@ class tuple_type(dtype):
 
     def is_tuple(self):
         return True
+
+    def __eq__(self, other):
+        return self.types == other.types
+
+    def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[tuple, int]:
+        values = []
+        for ty in self.types:
+            value, cursor = ty._unflatten_ir(handles, cursor)
+            values.append(value)
+        return tuple(values, self), cursor
 
 
 class slice_type(dtype):
@@ -727,26 +758,12 @@ def get_int_dtype(bitwidth: int, signed: bool) -> dtype:
         raise ValueError(f'Unsupported bitwidth {bitwidth} and signedness {signed}')
 
 
-class _value:
-    """Base class of values that exist in the triton IR (i.e. not constexprs).
-    """
-
-    def __init__(self, handle):
-        self.handle = handle
-
-    def _flatten_ir(self):
-        raise NotImplementedError
-
-    def _unflatten_ir(self, handles):
-        raise NotImplementedError
-
-
 # -----------------------
 # tensor
 # -----------------------
 
 
-class tensor(_value):
+class tensor(base_value):
     """Represents an N-dimensional array of values or pointers.
 
     :code:`tensor` is the fundamental data structure in Triton programs.  Most
@@ -768,8 +785,9 @@ class tensor(_value):
 
     def __init__(self, handle, type: dtype):
         """Not called by user code."""
+        super().__init__()
         # IR handle
-        super().__init__(handle)
+        self.handle = handle
         # Block shape
         self.shape = type.shape if type.is_block() else ()
         self.numel = 1
@@ -781,12 +799,8 @@ class tensor(_value):
         self.dtype = type.scalar
         self.shape = tuple([constexpr(s) for s in self.shape])
 
-    def _flatten_ir(self):
-        return [self.handle]
-
-    def _unflatten_ir(self, handles):
-        assert len(handles) == 1
-        return tensor(handles[0], self.type)
+    def _flatten_ir(self, handles: List[ir.value]) -> None:
+        handles.append(self.handle)
 
     def __str__(self) -> str:
         # ex. "float32[16, 32]"
@@ -1162,7 +1176,7 @@ class tensor(_value):
         ...
 
 
-class tuple:
+class tuple(base_value):
 
     def __init__(self, args: list, type: tuple_type = None):
         self.values = [i for i in args]
@@ -1225,6 +1239,10 @@ class tuple:
     def __len__(self):
         return len(self.values)
 
+    def _flatten_ir(self, handles: List[ir.value]):
+        for v in self.values:
+            v._flatten_ir(handles)
+
 
 class slice:
 
@@ -1235,34 +1253,60 @@ class slice:
         self.type = slice_type()
 
 
-class _experimental_tensor_descriptor_base(_value):
+class tensor_descriptor_base_type(base_type):
+
+    def __init__(self, block_type: block_type):
+        self.block_type = block_type
+
+    def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[_experimental_tensor_descriptor_base, int]:
+        value = _experimental_tensor_descriptor_base(handles[cursor], self.block_type)
+        return value, cursor + 1
+
+    def to_ir(self, builder: ir.builder):
+        return builder.create_tensor_descriptor_type(self.block_type.to_ir(builder))
+
+    def __str__(self) -> str:
+        # ex. "tensor_descriptor<float32[16, 32]>"
+        return f"tensor_descriptor<{self.block_type}>"
+
+    def __eq__(self, other) -> bool:
+        if type(other) is not type(self):
+            return False
+        return self.block_type == other.block_type
+
+    def __neq__(self, other) -> bool:
+        return not (self == other)
+
+
+class _experimental_tensor_descriptor_base(base_value):
     """"
     A tensor descriptor with unknown shape and strides
     """
 
-    def __init__(self, handle, type: block_type):
+    def __init__(self, handle, block_type: block_type):
         """Not called by user code."""
-        # IR handle
-        super().__init__(handle)
+        super().__init__()
 
-        self.type = type  # Tensor type (block_type)
-        # Following the practice in pytorch, dtype is scalar type
-        self.dtype = type.scalar
+        self.handle = handle  # IR handle
+        self.type = tensor_descriptor_base_type(block_type)  # Tensor type (block_type)
 
-    def _flatten_ir(self):
-        return [self.handle]
+    def _flatten_ir(self, handles: List[ir.value]) -> None:
+        handles.append(self.handle)
 
-    def _unflatten_ir(self, handles):
-        assert len(handles) == 1
-        return _experimental_tensor_descriptor_base(handles[0], self.type)
+    @property
+    def block_type(self):
+        return self.type.block_type
 
     @property
     def block_shape(self):
-        return self.type.shape
+        return self.type.block_type.shape
+
+    @property
+    def dtype(self):
+        return self.type.block_type.element_ty
 
     def __str__(self) -> str:
-        # ex. "tensor_descriptor<float32[16, 32]>"
-        return f"tensor_descriptor<{self.type}>"
+        return str(self.type)
 
     @builtin
     def load(self, offsets: Sequence[constexpr | tensor], _builder=None) -> tensor:
@@ -1301,31 +1345,52 @@ class _experimental_tensor_descriptor_base(_value):
         return semantic.descriptor_scatter(self, value, x_offsets, y_offset, _builder)
 
 
+class tensor_descriptor_type(tensor_descriptor_base_type):
+
+    def __init__(self, block_type: block_type, shape_type: tuple_type, strides_type: tuple_type):
+        self.block_type = block_type
+        self.shape_type = shape_type
+        self.strides_type = strides_type
+
+    def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[_experimental_tensor_descriptor_base, int]:
+        handle = handles[cursor]
+        cursor += 1
+        shape, cursor = self.shape_type._unflatten_ir(handles, cursor)
+        strides, cursor = self.strides_type._unflatten_ir(handles, cursor)
+        shape = shape.values
+        strides = strides.values
+        value = _experimental_tensor_descriptor(handle, shape, strides, self.block_type)
+        return value, cursor
+
+    def to_ir(self, builder: ir.builder):
+        return [super().to_ir(builder), *self.shape_type.to_ir(builder), *self.strides_type.to_ir(builder)]
+
+    def __eq__(self, other):
+        return super().__eq__(other) and (self.shape_type == other.shape_type) and (self.strides_type
+                                                                                    == other.strides_type)
+
+
 class _experimental_tensor_descriptor(_experimental_tensor_descriptor_base):
     """A descriptor representing a tensor in global memory.
     """
 
-    def __init__(self, handle, shape: List[tensor], strides: List[tensor], type: block_type):
+    def __init__(self, handle, shape: List[tensor], strides: List[tensor], block_type: block_type):
         """Not called by user code."""
         # IR handle
-        super().__init__(handle, type)
+        super().__init__(handle, block_type)
+        self.type = tensor_descriptor_type(
+            block_type,
+            shape_type=tuple_type([s.type for s in shape]),
+            strides_type=tuple_type([s.type for s in strides]),
+        )
         # Global shape
         self.shape = shape
         self.strides = strides
 
-    def _flatten_ir(self):
-        handles = [self.handle]
+    def _flatten_ir(self, handles: List[ir.value]) -> None:
+        handles.append(self.handle)
         handles.extend(s.handle for s in self.shape)
         handles.extend(s.handle for s in self.strides)
-        return handles
-
-    def _unflatten_ir(self, handles):
-        ndim = len(self.shape)
-        assert len(handles) == 2 * ndim + 1
-        handle = handles[0]
-        shape = [tensor(handle, s.type) for handle, s in zip(handles[1:1 + ndim], self.shape)]
-        strides = [tensor(handle, s.type) for handle, s in zip(handles[1 + ndim:], self.strides)]
-        return _experimental_tensor_descriptor(handle, shape, strides, self.type)
 
 
 def get_bool_env_var(var_name):
