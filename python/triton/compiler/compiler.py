@@ -16,6 +16,7 @@ import re
 import functools
 import os
 import sysconfig
+import time
 
 # - ^\s*tt\.func\s+ : match the start of the string, any leading whitespace, the keyword func,
 #    and any following whitespace
@@ -216,7 +217,48 @@ def filter_traceback(e: BaseException):
         e.__traceback__ = frames[0]
 
 
+class CompileTimer:
+
+    def __init__(self) -> None:
+        self.start: float = time.time()
+        self.prologue_end: float = -1.0
+        self.lowering_stage_ends: list[tuple[str, float]] = []
+        self.epilogue_end: float = -1.0
+
+    def prologue_finished(self) -> None:
+        self.prologue_end = time.time()
+
+    def stage_finished(self, stage_name: str) -> None:
+        self.lowering_stage_ends.append((stage_name, time.time()))
+
+    def end(self) -> config.CompileTimes:
+        timestamp = time.time()
+        if self.prologue_end < 0.0:
+            self.prologue_end = timestamp
+        else:
+            self.epilogue_end = timestamp
+
+        def delta(start: float, end: float) -> int:
+            if end < 0.0:
+                return 0
+            return int((end - start) * 1000000)
+
+        lowering_stage_durations = []
+        stage_start = self.prologue_end
+        for stage_name, stage_end in self.lowering_stage_ends:
+            lowering_stage_durations.append((stage_name, delta(stage_start, stage_end)))
+            stage_start = stage_end
+
+        return config.CompileTimes(
+            prologue=delta(self.start, self.prologue_end),
+            lowering_stages=lowering_stage_durations,
+            epilogue=delta(stage_start, self.epilogue_end),
+        )
+
+
 def compile(src, target=None, options=None):
+    timer = CompileTimer()
+
     if target is None:
         target = driver.active.get_current_target()
     assert isinstance(target, GPUTarget), "target must be of GPUTarget type"
@@ -253,7 +295,16 @@ def compile(src, target=None, options=None):
     always_compile = config.compilation.always_compile
     if not always_compile and metadata_path is not None:
         # cache hit!
-        return CompiledKernel(src, metadata_group, hash)
+        res = CompiledKernel(src, metadata_group, hash)
+        if compilation_listener := config.compilation.listener:
+            compilation_listener(
+                src=src,
+                metadata=res.metadata._asdict(),
+                times=timer.end(),
+                cache_hit=True,
+            )
+        return res
+
     # initialize metadata
     metadata = {
         "hash": hash,
@@ -289,6 +340,7 @@ def compile(src, target=None, options=None):
         module.create_location_snapshot(src.path)
         print(f"Creating new locations for {src.path}")
 
+    timer.prologue_finished()
     for ext, compile_ir in list(stages.items())[first_stage:]:
         next_module = compile_ir(module, metadata)
         ir_filename = f"{file_name}.{ext}"
@@ -306,6 +358,7 @@ def compile(src, target=None, options=None):
             next_module.create_location_snapshot(ir_full_name)
             print(f"Creating new locations for {ir_full_name}")
         module = next_module
+        timer.stage_finished(ext)
     # write-back metadata
     metadata_group[metadata_filename] = fn_cache_manager.put(json.dumps(metadata, default=vars), metadata_filename,
                                                              binary=False)
@@ -321,6 +374,10 @@ def compile(src, target=None, options=None):
     # multithreading in the MLIR context
     if not config.compilation.enable_asan:
         context.disable_multithreading()
+
+    # notify any listener
+    if compilation_listener := config.compilation.listener:
+        compilation_listener(src=src, metadata=metadata, times=timer.end(), cache_hit=False)
     # return handle to compiled kernel
     return CompiledKernel(src, metadata_group, hash)
 
