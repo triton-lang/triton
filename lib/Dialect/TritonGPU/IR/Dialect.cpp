@@ -511,10 +511,9 @@ LogicalResult tryJoinOnAxis(MLIRContext *ctx, const LinearLayout &inLl,
                             std::optional<Location> loc) {
   auto kRegister = StringAttr::get(ctx, "register");
   auto outDims = llvm::to_vector(inLl.getOutDimNames());
-  LinearLayout newLl = LinearLayout::empty();
   if (fwdInference) {
     auto split = LinearLayout::identity1D(2, kRegister, outDims[axis]);
-    newLl = split * inLl;
+    outLl = split * inLl;
   } else {
     // TODO This requires a division algorithm!
     // Implement manually ll.divideLeft(split)
@@ -533,10 +532,11 @@ LogicalResult tryJoinOnAxis(MLIRContext *ctx, const LinearLayout &inLl,
         }
         newBases.insert({basesDim.first, std::move(newBasesDim)});
       }
-      newLl = LinearLayout(std::move(newBases), std::move(outDims));
+      outLl = LinearLayout(std::move(newBases), std::move(outDims));
     } else {
-      return emitOptionalError(loc, "Fp4ToFpOp requires at least 2 elements "
-                                    "per thread in the axis dimension");
+      return emitOptionalError(loc,
+                               "Fp4ToFpOp/SplitOp requires at least 2 elements "
+                               "per thread in the axis/last dimension");
     }
   }
   return success();
