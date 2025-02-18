@@ -27,7 +27,7 @@ using namespace triton;
 using namespace triton::gpu;
 
 SmallVector<unsigned> ReduceOpHelper::getOrderWithAxisAtBeginning() {
-  auto order = toLinearEncoding(getSrcLayout(), getSrcShape()).getOrder();
+  auto order = toLinearEncoding(srcEncoding, srcShape).getOrder();
   auto it = std::find(order.begin(), order.end(), axis);
   // delete the axis from order
   order.erase(it);
@@ -39,9 +39,8 @@ SmallVector<unsigned> ReduceOpHelper::getOrderWithAxisAtBeginning() {
 // Thread offset is the thread index offset of two adjacent threads on the
 // reduction axis within the warp.
 unsigned ReduceOpHelper::getThreadOffsetOnReductionAxis() {
-  auto srcLayout = getSrcLayout();
-  auto *ctx = srcLayout.getContext();
-  auto linearLayout = toLinearLayout(getSrcShape(), srcLayout);
+  auto *ctx = srcEncoding.getContext();
+  auto linearLayout = toLinearLayout(srcShape, srcEncoding);
   auto kLane = mlir::StringAttr::get(ctx, "lane");
   const auto &bases = linearLayout.getBases();
   const auto &lanes = bases.find(kLane)->second;
@@ -100,15 +99,15 @@ bool shouldUseDistSmem(Attribute srcLayout, Attribute dstLayout) {
 }
 
 unsigned ReduceOpHelper::getInterWarpSizeWithUniqueData() {
-  return getWarpsPerCTAWithUniqueData(getSrcLayout(), getSrcShape())[axis];
+  return getWarpsPerCTAWithUniqueData(srcEncoding, srcShape)[axis];
 }
 
 unsigned ReduceOpHelper::getIntraWarpSizeWithUniqueData() {
-  return getThreadsPerWarpWithUniqueData(getSrcLayout(), getSrcShape())[axis];
+  return getThreadsPerWarpWithUniqueData(srcEncoding, srcShape)[axis];
 }
 
 bool ReduceOpHelper::isWarpSynchronous() {
-  return getWarpsPerCTAWithUniqueData(getSrcLayout(), getSrcShape())[axis] == 1;
+  return getWarpsPerCTAWithUniqueData(srcEncoding, srcShape)[axis] == 1;
 }
 
 SmallVector<unsigned> ReduceOpHelper::getScratchRepShape() {
@@ -117,7 +116,7 @@ SmallVector<unsigned> ReduceOpHelper::getScratchRepShape() {
   if (isWarpSynchronous())
     return {0, 0};
 
-  smemShape = convertType<unsigned>(getSrcShape());
+  smemShape = convertType<unsigned>(srcShape);
   smemShape[axis] = getInterWarpSizeWithUniqueData();
 
   return smemShape;
@@ -135,7 +134,7 @@ unsigned ReduceOpHelper::getScratchSizeInBytes() {
 }
 
 bool ReduceOpHelper::isReduceWithinCTA() {
-  return getCTASplitNum(getSrcLayout())[axis] == 1;
+  return getCTASplitNum(srcEncoding)[axis] == 1;
 }
 
 bool ReduceOpHelper::isSupportedLayout() {
@@ -146,13 +145,12 @@ bool ReduceOpHelper::isSupportedLayout() {
   }
 
   // TODO: Remove the following constraint to support all valid layouts
-  auto srcLayout = getSrcLayout();
   if (isa<BlockedEncodingAttr, LinearEncodingAttr, SliceEncodingAttr>(
-          srcLayout)) {
+          srcEncoding)) {
     return true;
   }
 
-  if (auto mmaLayout = dyn_cast<MmaEncodingTrait>(srcLayout)) {
+  if (auto mmaLayout = dyn_cast<MmaEncodingTrait>(srcEncoding)) {
     return mmaLayout.supportReduction();
   }
   return false;

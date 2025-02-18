@@ -41,10 +41,6 @@ public:
     }
   }
 
-  ArrayRef<int64_t> getSrcShape() { return srcShape; }
-
-  Attribute getSrcLayout() { return srcEncoding; }
-
   triton::ReduceOp getOperation() { return op; }
   unsigned getThreadOffsetOnReductionAxis();
 
