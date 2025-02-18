@@ -502,7 +502,7 @@ private:
   }
 
   /// Computes the initial shared memory offsets.
-  void calculateStarts(const SmallVector<BufferT *> &buffers) const {
+  void calculateStarts(const SmallVector<BufferT *> &buffers) {
     //  v = values in shared memory
     //  t = triplet of (size, start, end)
     //  shared memory space
