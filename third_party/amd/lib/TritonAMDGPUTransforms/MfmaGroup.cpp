@@ -278,7 +278,7 @@ MfmaIntrinsic::selectFor(int version, unsigned mDim, unsigned nDim,
       return MfmaIntrinsic(symbol, mDim, nDim, k, kBase, aElemType, bElemType);
   }
 
-  // We always have one choice--the (only) smallest-K intrinsic.
+  // We always have one choice--the only / smallest-K intrinsic.
   auto [symbol, k, kBase] = values.back();
   return MfmaIntrinsic(symbol, mDim, nDim, k, kBase, aElemType, bElemType);
 }

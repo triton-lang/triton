@@ -302,13 +302,24 @@ def test_pipeline_matmul(scale, device):
             # 2. check sync point
             assert ttgir.count("num = 0 : i32") == 1, "only one sync point for the loads after the loop"
             # 3. check alloc
-            assert ttgir.count("ttg.local_alloc") == (3 if scale else 2), "alloc number not match"
+            if torch.cuda.get_device_capability()[0] == 10:
+                if scale:
+                    # A, B, scale, decomposed A shmem
+                    # MMA pipelining fails to identify the MMA pattern in this case, so the barrier is not inserted.
+                    count = 4
+                else:
+                    # A, B, MMA barrier
+                    count = 3
+                assert ttgir.count("ttg.local_alloc") == count, "alloc number not match"
+            else:
+                assert ttgir.count("ttg.local_alloc") == (3 if scale else 2), "alloc number not match"
+
             # 4. check dot
             cc = torch.cuda.get_device_capability()
-            if cc[0] >= 9:
-                ttgir.count("ttng.warp_group_dot") != 0, "warp_group_dot not found"
-            else:
-                ttgir.count("ttg.dot") != 0, "dot not found"
+            if cc[0] == 9:
+                assert ttgir.count("ttng.warp_group_dot") != 0, "warp_group_dot not found"
+            elif cc[0] < 9:
+                assert ttgir.count("ttg.dot") != 0, "dot not found"
 
 
 def test_pipeline_vecadd(device):
