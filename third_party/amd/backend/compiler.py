@@ -140,14 +140,13 @@ class HIPBackend(BaseBackend):
     def load_dialects(self, ctx):
         amd.load_dialects(ctx)
 
-    MAX_INT_32 = 2**31 - 1
-
     @staticmethod
     def is_within_2gb(arg):
+        MAX_INT_32 = 2**31 - 1
         if hasattr(arg, "ptr_range"):
-            return arg.ptr_range() <= HIPBackend.MAX_INT_32
+            return arg.ptr_range() <= MAX_INT_32
         if isinstance(arg, torch.Tensor) and hasattr(arg, "untyped_storage"):
-            return arg.untyped_storage().size() <= HIPBackend.MAX_INT_32
+            return arg.untyped_storage().size() <= MAX_INT_32
         return False
 
     @staticmethod
