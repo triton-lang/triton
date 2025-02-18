@@ -270,6 +270,8 @@ def bases_per_dim(layout, dim, rank, skip_broadcast=True):
 def warps_per_cta(layout, shape):
     if isinstance(layout, LinearLayout):
         return bases_per_dim(layout, 'warp', len(shape))
+    elif isinstance(layout, SliceLayout):
+        return warps_per_cta(layout.parent, shape)
     else:
         return layout.warps_per_cta
 
@@ -2863,8 +2865,7 @@ layouts = [
     DotOperandLayout(parent=MmaLayout([2, 0], [4, 2], [1, 1], [1, 1], [0, 1], [16, 8]), op_idx=1, k_width=4),
     DotOperandLayout(parent=MmaLayout([2, 0], [4, 4], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=0, k_width=8),
     DotOperandLayout(parent=MmaLayout([3, 0], [8, 1], [1, 1], [1, 1], [1, 0], [16, 32, 16]), op_idx=0, k_width=2),
-    SliceLayout(dim=1, parent=MmaLayout([2, 0], [4, 1, 1], [1, 1, 1], [1, 1, 1], [2, 1, 0], [1, 16, 8]), op_idx=1,
-                k_width=2),
+    SliceLayout(dim=1, parent=MmaLayout([2, 0], [4, 1, 1], [1, 1, 1], [1, 1, 1], [2, 1, 0], [1, 16, 8])),
     SliceLayout(
         dim=1, parent=DotOperandLayout(parent=MmaLayout([2, 0], [4, 1, 1], [1, 1, 1], [1, 1, 1], [2, 1, 0], [1, 16, 8]),
                                        op_idx=1, k_width=2)),
