@@ -26,12 +26,6 @@ namespace mlir {
 using namespace triton;
 using namespace triton::gpu;
 
-// TODO(jlebar): Move this class into namespace triton.
-bool ReduceOpHelper::isReductionOnLayoutFastAxis() {
-  auto linearEncoding = toLinearEncoding(getSrcLayout(), getSrcShape());
-  return linearEncoding.getOrder()[0] == axis;
-}
-
 SmallVector<unsigned> ReduceOpHelper::getOrderWithAxisAtBeginning() {
   auto order = toLinearEncoding(getSrcLayout(), getSrcShape()).getOrder();
   auto it = std::find(order.begin(), order.end(), axis);
@@ -106,52 +100,21 @@ bool shouldUseDistSmem(Attribute srcLayout, Attribute dstLayout) {
   return true;
 }
 
-unsigned ReduceOpHelper::getInterWarpSize() {
-  auto srcReduceDimSize = static_cast<unsigned>(srcShape[axis]);
-  unsigned sizeIntraWarps = getIntraWarpSize();
-  return std::min(srcReduceDimSize / sizeIntraWarps,
-                  getWarpsPerCTA(getSrcLayout())[axis]);
-}
-
-unsigned ReduceOpHelper::getIntraWarpSize() {
-  auto srcReduceDimSize = static_cast<unsigned>(srcShape[axis]);
-  return std::min(srcReduceDimSize, getThreadsPerWarp(getSrcLayout())[axis]);
-}
-
 unsigned ReduceOpHelper::getInterWarpSizeWithUniqueData() {
-  auto srcReduceDimSize = static_cast<unsigned>(srcShape[axis]);
-  unsigned sizeIntraWarps = getIntraWarpSizeWithUniqueData();
-  return std::min(
-      srcReduceDimSize / sizeIntraWarps,
-      getWarpsPerCTAWithUniqueData(getSrcLayout(), getSrcShape())[axis]);
+  return getWarpsPerCTAWithUniqueData(getSrcLayout(), getSrcShape())[axis];
 }
 
 unsigned ReduceOpHelper::getIntraWarpSizeWithUniqueData() {
-  auto srcReduceDimSize = static_cast<unsigned>(srcShape[axis]);
-  unsigned elementPerThreads =
-      getUniqueContigPerThread(getSrcLayout(), getSrcShape())[axis];
-  return std::min(
-      srcReduceDimSize / elementPerThreads,
-      getThreadsPerWarpWithUniqueData(getSrcLayout(), getSrcShape())[axis]);
-}
-
-unsigned ReduceOpHelper::getThreadsReductionAxis() {
-  auto axis = getAxis();
-  auto *ctx = getSrcLayout().getContext();
-  auto ll = LinearEncodingAttr::get(
-      ctx, toLinearLayout(getSrcShape(), getSrcLayout()));
-  return ll.getThreadsPerWarp()[axis] * ll.getWarpsPerCTA()[axis];
+  return getThreadsPerWarpWithUniqueData(getSrcLayout(), getSrcShape())[axis];
 }
 
 bool ReduceOpHelper::isWarpSynchronous() {
-  auto srcLayout = getSrcLayout();
-  auto srcShape = getSrcShape();
-  return getWarpsPerCTAWithUniqueData(srcLayout, srcShape)[axis] == 1;
+  return getWarpsPerCTAWithUniqueData(getSrcLayout(), getSrcShape())[axis] == 1;
 }
 
 SmallVector<unsigned> ReduceOpHelper::getScratchRepShape() {
   SmallVector<unsigned> smemShape;
-  // that case doesn't need inter-warp communication
+  // This case doesn't need inter-warp communication
   if (isWarpSynchronous())
     return {0, 0};
 
@@ -173,11 +136,7 @@ unsigned ReduceOpHelper::getScratchSizeInBytes() {
 }
 
 bool ReduceOpHelper::isReduceWithinCTA() {
-  auto axis = getAxis();
-  auto srcLayout = getSrcLayout();
-  auto CTASplitNum = getCTASplitNum(srcLayout);
-  assert(axis < CTASplitNum.size());
-  return CTASplitNum[axis] == 1;
+  return getCTASplitNum(getSrcLayout())[axis] == 1;
 }
 
 bool ReduceOpHelper::isSupportedLayout() {
@@ -187,6 +146,7 @@ bool ReduceOpHelper::isSupportedLayout() {
     return false;
   }
 
+  // TODO: Remove the following constraint to support all valid layouts
   auto srcLayout = getSrcLayout();
   if (isa<BlockedEncodingAttr, LinearEncodingAttr, SliceEncodingAttr>(
           srcLayout)) {
