@@ -42,7 +42,6 @@ unsigned ReduceOpHelper::getThreadOffsetOnReductionAxis() {
   auto srcLayout = getSrcLayout();
   auto *ctx = srcLayout.getContext();
   auto linearLayout = toLinearLayout(getSrcShape(), srcLayout);
-  auto axis = getAxis();
   auto kLane = mlir::StringAttr::get(ctx, "lane");
   const auto &bases = linearLayout.getBases();
   const auto &lanes = bases.find(kLane)->second;
