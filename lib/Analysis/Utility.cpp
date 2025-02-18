@@ -140,20 +140,9 @@ bool ReduceOpHelper::isReduceWithinCTA() {
 bool ReduceOpHelper::isSupportedLayout() {
   // Layout optimization passes such as PlanCTAPass and
   // RemoveLayoutConversionPass should avoid cross-CTA reduction
-  if (!isReduceWithinCTA()) {
+  if (!isReduceWithinCTA())
     return false;
-  }
-
-  // TODO: Remove the following constraint to support all valid layouts
-  if (isa<BlockedEncodingAttr, LinearEncodingAttr, SliceEncodingAttr>(
-          srcEncoding)) {
-    return true;
-  }
-
-  if (auto mmaLayout = dyn_cast<MmaEncodingTrait>(srcEncoding)) {
-    return mmaLayout.supportReduction();
-  }
-  return false;
+  return true;
 }
 
 unsigned ScanLoweringHelper::getAxisNumElementsPerThread() {
