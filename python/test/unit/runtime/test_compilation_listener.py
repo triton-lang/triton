@@ -11,6 +11,8 @@ import torch
 
 
 def get_add_kernel() -> triton.JITFunction:
+    # We need to define the kernel in a method so that we can test getting a
+    # 'cache_hit=True' callback below.
 
     @triton.jit
     def add_kernel(
