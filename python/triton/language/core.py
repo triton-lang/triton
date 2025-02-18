@@ -283,6 +283,7 @@ def check_bit_width(value, shift_value):
 class base_value:
     """Base class of values that exist in the triton IR (i.e. not constexprs).
     """
+    type: base_type
 
     def _flatten_ir(self, handles: List[ir.value]) -> None:
         """Flatten frontend value into a sequence of mlir handles, which are appended
@@ -662,7 +663,7 @@ class block_type(dtype):
     def get_block_shapes(self) -> List[int]:
         return self.shape
 
-    def __eq__(self, other: block_type) -> bool:
+    def __eq__(self, other) -> bool:
         if not isinstance(other, block_type):
             return False
         return self.element_ty == other.element_ty and self.shape == other.shape
@@ -695,7 +696,7 @@ class tuple_type(base_type):
         return True
 
     def __eq__(self, other):
-        return self.types == other.types
+        return type(self) is type(other) and self.types == other.types and self.fields == other.fields
 
     def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[tuple, int]:
         values = []
