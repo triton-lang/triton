@@ -3,8 +3,7 @@ import torch
 
 import triton
 import triton.language as tl
-from triton.tools.experimental_descriptor import (create_1d_tma_descriptor, create_2d_tma_descriptor,
-                                                  TmaDescKernelParam)
+from triton.tools.experimental_descriptor import (create_1d_tma_descriptor, create_2d_tma_descriptor)
 from triton._internal_testing import dtypes_with_bfloat16, is_interpreter, numpy_random, to_triton, requires_tma, supports_tma, tma_skip_msg
 from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from typing import Optional
@@ -1159,7 +1158,7 @@ def f8_to_f16(x, dtype):
 
 @triton.jit
 def mxfp8_mxfp4_matmul_tma(  #
-        a_ptr, b_desc, output_ptr,  #
+        a_ptr, b_ptr, output_ptr,  #
         a_scale, b_scale,  #
         M, N, K,  #
         stride_scale,  #
@@ -1184,10 +1183,17 @@ def mxfp8_mxfp4_matmul_tma(  #
     accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=output_ptr.dtype.element_ty)
     offs_bk = 0
 
+    b_desc = tl._experimental_make_tensor_descriptor(
+        b_ptr,
+        shape=[N, K],
+        strides=[K // 2, 1],
+        block_shape=[BLOCK_N, BLOCK_K // 2],
+    )
+
     for k in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES):
         a = tl.load(a_ptrs)
 
-        b = tl._experimental_descriptor_load(b_desc, [offs_bn_tma, offs_bk], [BLOCK_N, BLOCK_K // 2], tl.dtype("uint8"))
+        b = b_desc.load([offs_bn_tma, offs_bk])
         b = b.T
 
         scale_a = tl.load(a_scale_ptr)
@@ -1220,7 +1226,6 @@ def test_mxfp8_mxfp4_matmul_tma(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, 
 
     b_mxfp4 = MXFP4Tensor(size=(N, K), device=device).random()
     b = b_mxfp4.to_packed_tensor(dim=1)
-    b_desc = TmaDescKernelParam(b.data_ptr(), [N, K], [BLOCK_N, BLOCK_K], 1, packing_factor=2)
     b_ref = b_mxfp4.to(torch.float32).T
 
     a_scale_mxfp4 = MXScaleTensor(size=(M, (K + 32 - 1) // 32), device=device).random(high=64.0)
@@ -1233,10 +1238,17 @@ def test_mxfp8_mxfp4_matmul_tma(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, 
 
     output = a.new_empty((M, N), dtype=torch.float32)
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
-    mxfp8_mxfp4_matmul_tma[grid](a, b_desc, output, a_scale, b_scale, M, N, K, a_scale.stride(0), a.stride(0),
+
+    def alloc_fn(size: int, align: int, stream: Optional[int]):
+        return torch.empty(size, dtype=torch.int8, device="cuda")
+
+    triton.set_allocator(alloc_fn)
+
+    out = mxfp8_mxfp4_matmul_tma[grid](a, b, output, a_scale, b_scale, M, N, K, a_scale.stride(0), a.stride(0),
                                  a.stride(1), output.stride(0), output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K,
                                  NUM_STAGES=NUM_STAGES)
-    # print(out.asm["ttgir"])
+    print(out.asm["ttgir"])
+    # return
 
     a_ref = f8_to_f16(a.view(torch.float8_e5m2), dtype_src_str).to(torch.float32)
     ref_out = torch.matmul(a_ref * a_scale_ref, b_ref * b_scale_ref)

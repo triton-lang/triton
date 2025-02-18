@@ -1378,7 +1378,7 @@ def TT_ExperimentalTensormapCreateOp: TT_Op<
       Variadic<I32>:$global_dim,
       Variadic<I64>:$global_stride,
       Variadic<I32>:$element_stride,
-      ConfinedAttr<I32Attr, [IntNonNegative, IntMaxValue<12>]>:$elem_type,
+      ConfinedAttr<I32Attr, [IntNonNegative, IntMaxValue<15>]>:$elem_type,
       ConfinedAttr<I32Attr, [IntNonNegative, IntMaxValue<2>]>:$interleave_layout,
       ConfinedAttr<I32Attr, [IntNonNegative, IntMaxValue<3>]>:$swizzle_mode,
       ConfinedAttr<I32Attr, [IntNonNegative, IntMaxValue<1>]>:$fill_mode

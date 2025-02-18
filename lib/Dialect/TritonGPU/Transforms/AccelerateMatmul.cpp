@@ -485,7 +485,6 @@ void propageteDescriptorLoadAttributes(Value operand,
           op->getContext(), attrs.fp4Padded, attrs.twoCTA);
       descLoad.setDescAttrAttr(newDescLoadAttr);
     } else if (auto makeDesc = dyn_cast<MakeTensorDescOp>(op)) {
-      llvm::outs() << "attrs.swizzleBytes: " << attrs.swizzleBytes << "\n";
       auto newMakeDescAttr = mlir::triton::MakeDescriptorAttr::get(
           op->getContext(), attrs.fp4Padded, attrs.swizzleBytes);
       makeDesc.setDescAttrAttr(newMakeDescAttr);

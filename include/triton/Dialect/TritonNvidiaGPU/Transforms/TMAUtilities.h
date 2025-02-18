@@ -78,25 +78,30 @@ mlir::LogicalResult createTMADesc(mlir::Value tmaPtr,
         loc, globalStride[i], elemSizeVal);
 
   int elemTypeEnum;
-  switch (elemSize) {
-  case 1: {
-    elemTypeEnum = 0;
-    break;
-  }
-  case 2: {
-    elemTypeEnum = 1;
-    break;
-  }
-  case 4: {
-    elemTypeEnum = 2;
-    break;
-  }
-  default: {
-    op->emitError()
-        << "Tensor descriptor element type must have size 1, 2, or 4 but got "
-        << elemSize;
-    return failure();
-  }
+
+  if (op.getDescAttr() && op.getDescAttr()->getFp4Padded()) {
+    elemTypeEnum = 14; // .b4x16_p64
+  } else {
+    switch (elemSize) {
+    case 1: {
+      elemTypeEnum = 0;
+      break;
+    }
+    case 2: {
+      elemTypeEnum = 1;
+      break;
+    }
+    case 4: {
+      elemTypeEnum = 2;
+      break;
+    }
+    default: {
+      op->emitError()
+          << "Tensor descriptor element type must have size 1, 2, or 4 but got "
+          << elemSize;
+      return failure();
+    }
+    }
   }
 
   builder.template create<triton::ExperimentalTensormapCreateOp>(
