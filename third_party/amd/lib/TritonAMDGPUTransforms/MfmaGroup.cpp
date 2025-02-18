@@ -271,16 +271,15 @@ MfmaIntrinsic::selectFor(int version, unsigned mDim, unsigned nDim,
     return failure();
 
   const SmallVector<MfmaMapValue, 2> &values = it->second;
-  if (values.size() == 1) {
-    auto [symbol, k, kBase] = values.front();
-    return MfmaIntrinsic(symbol, mDim, nDim, k, kBase, aElemType, bElemType);
-  }
 
-  // We have more than one instrinsics. Prefer larger K ones.
-  for (const auto [symbol, k, kBase] : values) {
+  // If We have more than one instrinsics, prefer those with a larger K.
+  for (const auto [symbol, k, kBase] : llvm::drop_end(values)) {
     if (inputKDim >= k)
       return MfmaIntrinsic(symbol, mDim, nDim, k, kBase, aElemType, bElemType);
   }
-  return failure();
+
+  // We always have one choice--the (only) smallest-K intrinsic.
+  auto [symbol, k, kBase] = values.back();
+  return MfmaIntrinsic(symbol, mDim, nDim, k, kBase, aElemType, bElemType);
 }
 } // namespace mlir
