@@ -218,10 +218,6 @@ getWarpsPerTile(DotOp dotOp, const ArrayRef<int64_t> shape, int version,
   }
 }
 
-static bool isView(Operation *op) {
-  return isa<ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp>(op);
-}
-
 static bool bwdFilter(Operation *op) {
   return (op->hasTrait<OpTrait::Elementwise>() && isMemoryEffectFree(op)) ||
          isView(op) ||

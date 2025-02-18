@@ -141,6 +141,10 @@ unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
   return currPerThread;
 }
 
+bool isView(Operation *op) {
+  return isa<ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp>(op);
+}
+
 //===----------------------------------------------------------------------===//
 // GraphDumper
 //===----------------------------------------------------------------------===//
