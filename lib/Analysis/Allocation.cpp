@@ -346,9 +346,7 @@ private:
   /// arguments are involved.
   void resolveAliasBufferLiveness(
       function_ref<Interval<size_t>(Value value)> getLiveness) {
-    for (const auto &aliasBufferIter : allocation->aliasBuffer) {
-      auto value = aliasBufferIter.first;
-      auto buffers = aliasBufferIter.second;
+    for (const auto &[value, buffers] : allocation->aliasBuffer) {
       auto range = getLiveness(value);
       for (auto *buffer : buffers) {
         auto minId = range.start();
@@ -370,11 +368,9 @@ private:
       const DenseMap<Operation *, size_t> &operationId) {
     // Analyze liveness of scratch buffers and virtual buffers.
     auto processScratchMemory = [&](const auto &container) {
-      for (auto opScratchIter : container) {
+      for (auto [op, buffer] : container) {
         // Any scratch memory's live range is the current operation's live
         // range.
-        auto *op = opScratchIter.first;
-        auto *buffer = opScratchIter.second;
         bufferRange.insert({buffer, Interval(operationId.lookup(op),
                                              operationId.lookup(op) + 1)});
         LLVM_DEBUG({
@@ -415,15 +411,14 @@ private:
       auto liveOperations = liveness.resolveLiveness(value);
       auto minId = std::numeric_limits<size_t>::max();
       auto maxId = std::numeric_limits<size_t>::min();
-      std::for_each(liveOperations.begin(), liveOperations.end(),
-                    [&](Operation *liveOp) {
-                      if (operationId[liveOp] < minId) {
-                        minId = operationId[liveOp];
-                      }
-                      if ((operationId[liveOp] + 1) > maxId) {
-                        maxId = operationId[liveOp] + 1;
-                      }
-                    });
+      llvm::for_each(liveOperations, [&](Operation *liveOp) {
+        if (operationId[liveOp] < minId) {
+          minId = operationId[liveOp];
+        }
+        if ((operationId[liveOp] + 1) > maxId) {
+          maxId = operationId[liveOp] + 1;
+        }
+      });
       return Interval(minId, maxId);
     };
 
@@ -432,7 +427,7 @@ private:
     resolveScratchBufferLiveness(operationId);
   }
 
-  void dumpBuffers() {
+  void dumpBuffers() const {
     LDBG("Dump bufferRange: id size offset ---------");
     for (auto bufferIter : bufferRange) {
       llvm::dbgs() << "-- " << bufferIter.first->id << " "
@@ -442,7 +437,7 @@ private:
     }
   }
 
-  void dumpAllocationSize() {
+  void dumpAllocationSize() const {
     LDBG("Dump shared memory allocation size -----------");
     auto liveBuffers = allocation->getLiveBuffers();
     auto analyzedSize = 0;
@@ -458,7 +453,7 @@ private:
                  << ", analyzed: " << analyzedSize << "\n";
   }
 
-  void dumpInterferenceGraph(const GraphT &interference) {
+  void dumpInterferenceGraph(const GraphT &interference) const {
     LDBG("\n");
     LDBG("Dump interference graph: \n");
     for (auto edges : interference) {
@@ -507,7 +502,7 @@ private:
   }
 
   /// Computes the initial shared memory offsets.
-  void calculateStarts(const SmallVector<BufferT *> &buffers) {
+  void calculateStarts(const SmallVector<BufferT *> &buffers) const {
     //  v = values in shared memory
     //  t = triplet of (size, start, end)
     //  shared memory space
