@@ -2,6 +2,7 @@
 #include "TritonAMDGPUToLLVM/Passes.h"
 #include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "TritonAMDGPUTransforms/Passes.h"
+#include "lld/Common/Driver.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
 #include "passes.h"
@@ -110,7 +111,25 @@ void addControlConstant(llvm::Module *module, const char *name,
   constant->setUnnamedAddr(GlobalVariable::UnnamedAddr::Local);
   constant->setVisibility(GlobalVariable::VisibilityTypes::ProtectedVisibility);
 }
+
 } // namespace
+
+LLD_HAS_DRIVER(elf)
+
+static std::optional<std::string> lldInvoke(const char *inPath,
+                                            const char *outPath) {
+  llvm::SmallVector<const char *> args{"ld.lld", "-shared", inPath, "-o",
+                                       outPath};
+  std::string errString;
+  llvm::raw_string_ostream errStream(errString);
+  lld::Result s = lld::lldMain(args, llvm::outs(), errStream,
+                               {{lld::Gnu, &lld::elf::link}});
+  if (s.retCode || !s.canRunAgain) {
+    errStream.flush();
+    return errString;
+  }
+  return {};
+}
 
 void init_triton_amd(py::module &&m) {
   m.doc() = "Python bindings to the AMD Triton backend";
@@ -304,6 +323,14 @@ void init_triton_amd(py::module &&m) {
       arg.addAttr(llvm::Attribute::InReg);
     }
   });
+
+  m.def("link_hsaco",
+        [](const std::string &inPath, const std::string &outPath) {
+          if (auto errString = lldInvoke(inPath.c_str(), outPath.c_str()))
+            throw std::runtime_error("LLD failed to link hsaco source " +
+                                     inPath + " into object file " + outPath +
+                                     " because " + errString.value());
+        });
 
   m.def("add_scalarize_packed_fops_llvm_pass", [](llvm::Function *fn) {
     mlir::triton::AMD::runScalarizePackedFOpsPass(*fn);
