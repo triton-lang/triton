@@ -142,7 +142,7 @@ bool ReduceOpHelper::isSupportedLayout() {
   // RemoveLayoutConversionPass should avoid cross-CTA reduction
   if (!isReduceWithinCTA())
     return false;
-  return true;
+  return false;
 }
 
 unsigned ScanLoweringHelper::getAxisNumElementsPerThread() {
