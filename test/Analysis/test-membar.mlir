@@ -828,3 +828,62 @@ tt.func @tma_special_cases_cf(%arg1: !tt.ptr<i8, 0>, %i1 : i1, %arg2: tensor<256
   tt.return %t : tensor<256x64xf16, #blocked>
 }
 }
+
+// -----
+
+#layout = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+#smem = #ttg.shared_memory
+
+// CHECK-LABEL: @warp_specialize_isolated_regions
+tt.func @warp_specialize_isolated_regions(%arg0: tensor<1xi64>) {
+  // CHECK-NEXT: local_alloc
+  %0 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
+  // CHECK-NEXT: local_store
+  ttg.local_store %arg0, %0 : tensor<1xi64> -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
+  // CHECK-NEXT: barrier
+  // CHECK-NEXT: local_load
+  ttg.local_load %0 : !ttg.memdesc<1xi64, #layout, #smem, mutable> -> tensor<1xi64>
+
+  // CHECK-NEXT: warp_specialize
+  ttg.warp_specialize(%arg0)
+  default {
+    ttg.warp_yield
+  }
+  partition0(%arg1: tensor<1xi64>) num_warps(4) {
+    // CHECK-NEXT: local_alloc
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
+    // CHECK-NEXT: local_store
+    ttg.local_store %arg1, %1 : tensor<1xi64> -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
+    // CHECK-NEXT: barrier
+    // CHECK-NEXT: local_load
+    ttg.local_load %1 : !ttg.memdesc<1xi64, #layout, #smem, mutable> -> tensor<1xi64>
+    // CHECK-NEXT: warp_return
+    ttg.warp_return
+  } : (tensor<1xi64>) -> ()
+
+  tt.return
+}
+
+// CHECK-LABEL: @warp_specialize_into_default
+tt.func @warp_specialize_into_default(%arg0: tensor<1xi64>) {
+  // CHECK-NEXT: local_alloc
+  %0 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
+  // CHECK-NEXT: local_store
+  ttg.local_store %arg0, %0 : tensor<1xi64> -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
+  // CHECK-NEXT: warp_specialize
+  ttg.warp_specialize()
+  // CHECK-NEXT: default
+  default {
+    // CHECK-NEXT: barrier
+    // CHECK-NEXT: local_load
+    ttg.local_load %0 : !ttg.memdesc<1xi64, #layout, #smem, mutable> -> tensor<1xi64>
+    // CHECK-NEXT: barrier
+    gpu.barrier
+    // CHECK-NEXT: warp_yield
+    ttg.warp_yield
+  // CHECK-NEXT: () -> ()
+  } : () -> ()
+  // CHECK-NEXT: local_store
+  ttg.local_store %arg0, %0 : tensor<1xi64> -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
+  tt.return
+}

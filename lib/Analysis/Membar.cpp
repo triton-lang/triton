@@ -35,9 +35,24 @@ void MembarAnalysis::resolve(FunctionOpInterface funcOp,
         return;
       }
     }
-    if (block->isEntryBlock())
+    // Start the analysis from the entry blocks of any nested isolated from
+    // above regions.
+    if (block->getParentOp()->hasTrait<OpTrait::IsIsolatedFromAbove>() &&
+        block->isEntryBlock())
       blockList.emplace_back(block);
   });
+
+  // `ttg.warp_specialize` is the only operation with regions present in the IR.
+  // Its default region is not isolated but is trivially branched to and from
+  // the parent op. Transparently iterate into the region within the context of
+  // the surrounding basic block.
+  auto advance = [](Operation *op) {
+    if (auto ws = dyn_cast<triton::gpu::WarpSpecializeOp>(op))
+      return &ws.getDefaultRegion().front().front();
+    if (isa<triton::gpu::WarpYieldOp>(op))
+      return op->getParentOp()->getNextNode();
+    return op->getNextNode();
+  };
 
   // A fixed point algorithm
   while (!blockList.empty()) {
@@ -46,11 +61,11 @@ void MembarAnalysis::resolve(FunctionOpInterface funcOp,
     // Make a copy of the inputblockInfo but not update
     auto inputBlockInfo = inputBlockInfoMap[block];
     SmallVector<Block *> successors;
-    for (auto &op : block->getOperations()) {
-      if (op.hasTrait<OpTrait::IsTerminator>()) {
-        visitTerminator(&op, successors);
+    for (Operation *op = &block->front(); op; op = advance(op)) {
+      if (op->hasTrait<OpTrait::IsTerminator>()) {
+        visitTerminator(op, successors);
       } else {
-        update(&op, &inputBlockInfo, funcBlockInfoMap, builder);
+        update(op, &inputBlockInfo, funcBlockInfoMap, builder);
       }
     }
     // Get the reference because we want to update if it changed
@@ -88,6 +103,9 @@ void MembarAnalysis::visitTerminator(Operation *op,
   }
   // Otherwise, it could be a return op
   if (op->hasTrait<OpTrait::ReturnLike>())
+    return;
+  // Nothing to be done here.
+  if (isa<triton::gpu::WarpYieldOp>(op))
     return;
   llvm_unreachable("Unknown terminator encountered in membar analysis");
 }
