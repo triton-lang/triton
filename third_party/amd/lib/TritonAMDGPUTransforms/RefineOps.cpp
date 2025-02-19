@@ -207,6 +207,8 @@ struct DotOpMFMAConverter {
     auto shapeC = cTensorTy.getShape();
     auto shapeD = dTensorTy.getShape();
 
+    const auto kDimOperandSize = aTensorTy.getShape().back();
+
     int kWidth = encodeA.getKWidth();
     auto repA = mfmaLayout.getRepForOperand(aTensorTy.getShape(), kWidth, 0);
     auto repB = mfmaLayout.getRepForOperand(bTensorTy.getShape(), kWidth, 1);
@@ -218,15 +220,17 @@ struct DotOpMFMAConverter {
 
     const auto numRepM = repA[1];
     const auto numRepN = repB[2];
-    // TODO(dtanner) This is a temporary workaround so that local_load and dot are decomposed
-    // the same and the intervening extract_slice and concat can be canonicalized away.
-    // Re-enable slicing dots along K when we know we can slice local_load along K too.
-    //const auto numRepK = repA[2];
+
+    // TODO(dtanner) This is a temporary workaround so that local_load and dot
+    // are decomposed the same and the intervening extract_slice and concat can
+    // be canonicalized away. Re-enable slicing dots along K when we know we can
+    // slice local_load along K too.
+    // const auto numRepK = repA[2];
     const int numRepK = 1;
     const auto numRepB = repA[0];
     SmallVector<int64_t> numRepShape = {numRepM, numRepN, numRepK};
     LDBG("totalReps: " << numRepShape[0] << "x" << numRepShape[1] << "x"
-           << numRepShape[2] << "\n");
+                       << numRepShape[2] << "\n");
     SmallVector<int64_t> refinedShapeA = {shapeA[0] / numRepM,
                                           shapeA[1] / numRepK};
     SmallVector<int64_t> refinedShapeB = {shapeB[0] / numRepK,
@@ -244,8 +248,8 @@ struct DotOpMFMAConverter {
     auto mfmaVersion = mfmaLayout.getVersionMajor();
     bool allowXF32 =
         dotOp.getInputPrecision() == InputPrecision::TF32 && mfmaVersion == 3;
-    auto maybeMfmaInsn = MfmaInsn::selectMfma(mDim, nDim, elemTyA, elemTyB,
-                                              mfmaVersion, allowXF32);
+    auto maybeMfmaInsn = MfmaInsn::selectMfma(
+        mDim, nDim, kDimOperandSize, elemTyA, elemTyB, mfmaVersion, allowXF32);
     SmallVector<unsigned> mfmaShape = {16, 16, 16};
     if (failed(maybeMfmaInsn)) {
       llvm::errs() << "No match found in MFMA database\n";
@@ -258,7 +262,7 @@ struct DotOpMFMAConverter {
     auto mfmasPerRep =
         getMfmasPerRep(ctaTile, warpsPerCTA, numRepShape, mfmaShape);
     LDBG("mfmasPerRep: " << mfmasPerRep[0] << "x" << mfmasPerRep[1] << "x"
-           << mfmasPerRep[2] << "\n");
+                         << mfmasPerRep[2] << "\n");
 
     // Calculate Dot-Tiling.
     unsigned cyclesPerMfma = getCyclesPerMfma(dotOp);
@@ -272,7 +276,7 @@ struct DotOpMFMAConverter {
     DotTileShapeType tileShape =
         calcDotTileShape(mfmasPerRep, preferTileLargerM, cyclesPerMfma);
     LDBG("repsPerDotTile: " << tileShape[0] << "x" << tileShape[1] << "x"
-           << tileShape[2] << "\n");
+                            << tileShape[2] << "\n");
     const int tileShapeM = tileShape[0];
     const int tileShapeN = tileShape[1];
     const int tileShapeK = tileShape[2];
@@ -388,7 +392,8 @@ struct DotOpMFMAConverter {
               dotTileOrder.getTileStartM(tileOuterIdx, tileInnerIdx);
           const int tileStartN =
               dotTileOrder.getTileStartN(tileOuterIdx, tileInnerIdx);
-          for (int k = tileIdxK * tileShapeK; k < (tileIdxK+1) * tileShapeK; ++k) {
+          for (int k = tileIdxK * tileShapeK; k < (tileIdxK + 1) * tileShapeK;
+               ++k) {
             int32_t elementSerial = 0;
             LDBG("dot-tile[" << tileSerial << "]\n");
             // Iterate over dots within dot-tile.
@@ -400,7 +405,7 @@ struct DotOpMFMAConverter {
                 auto dotOp = rewriter.create<tt::DotOp>(
                     loc, refinedTensorTypeD,
                     ValueRange{refinedTensorA, refinedTensorB,
-                              refinedDotValues[int32_t(m * numRepN + n)]},
+                               refinedDotValues[int32_t(m * numRepN + n)]},
                     dotAttrs);
                 // Add dot-tile info to dot.
                 int32_t tileM = tileStartM / tileShapeM;
@@ -413,7 +418,7 @@ struct DotOpMFMAConverter {
                     ctx, tileM, tileN, tileK, tileSerial, elementM, elementN,
                     elementK, elementSerial);
                 dotOp->setAttr(triton::amdgpu::DotTileAttr::getMnemonic(),
-                              dotTileAttr);
+                               dotTileAttr);
                 refinedDotValues[int32_t(m * numRepN + n)] = dotOp;
                 elementSerial++;
               }

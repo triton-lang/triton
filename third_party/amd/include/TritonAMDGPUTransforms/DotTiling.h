@@ -35,11 +35,13 @@ unsigned getCyclesPerMfma(DotOp dotOp) {
   auto elemTyB = bTensorTy.getElementType();
   auto mDim = mfmaLayout.getMDim();
   auto nDim = mfmaLayout.getNDim();
+  const auto kDimOperandSize = aTensorTy.getShape().back();
+  // auto kDim = mfmaLayout.getKDim();
   auto mfmaVersion = mfmaLayout.getVersionMajor();
   bool allowXF32 =
       dotOp.getInputPrecision() == InputPrecision::TF32 && mfmaVersion == 3;
-  auto maybeMfmaInsn = MfmaInsn::selectMfma(mDim, nDim, elemTyA, elemTyB,
-                                            mfmaVersion, allowXF32);
+  auto maybeMfmaInsn = MfmaInsn::selectMfma(
+      mDim, nDim, kDimOperandSize, elemTyA, elemTyB, mfmaVersion, allowXF32);
   if (failed(maybeMfmaInsn))
     llvm::report_fatal_error("No match found in MFMA database\n");
   // Estimate rate of mfma op type.
@@ -61,8 +63,7 @@ unsigned getCyclesPerMfma(DotOp dotOp) {
   int64_t totalOps = maybeMfmaInsn->getMDim() * maybeMfmaInsn->getNDim() *
                      maybeMfmaInsn->getKDim();
   unsigned cyclesPerMfma = static_cast<unsigned>(totalOps / opsPerCycle);
-  LDBG(maybeMfmaInsn->getInsnName() << " = " << cyclesPerMfma
-         << " cycles\n");
+  LDBG(maybeMfmaInsn->getInsnName() << " = " << cyclesPerMfma << " cycles\n");
   return cyclesPerMfma;
 }
 
@@ -70,10 +71,11 @@ unsigned getCyclesPerMfma(DotOp dotOp) {
 Calculate how many mfmas are in a rep, e.g. 1x1x2.
 // TODO(dtanner) Is there a more direct method for this?
 */
-SmallVector<unsigned, 3> getMfmasPerRep(const SmallVector<int64_t>& ctaTile,
-                                        const SmallVector<unsigned>& warpsPerCta,
-                                        const SmallVector<int64_t>& numReps,
-                                        const SmallVector<unsigned>& mfmaShape) {
+SmallVector<unsigned, 3>
+getMfmasPerRep(const SmallVector<int64_t> &ctaTile,
+               const SmallVector<unsigned> &warpsPerCta,
+               const SmallVector<int64_t> &numReps,
+               const SmallVector<unsigned> &mfmaShape) {
   // Tile shape per warp.
   SmallVector<int64_t, 3> warpTile = {
       ctaTile[0] / warpsPerCta[0],
@@ -134,10 +136,8 @@ SmallVector<unsigned, 3> getMfmasPerRep(const SmallVector<int64_t>& ctaTile,
   Default is 32 cycles, which assumes all ds_read_b128.
     - numLoadsLoadsPerMfmaA -  Note, this does not yet
   handle the case for not enough cycles to issue all the loads, e.g.
-  mfma_16x16x16 // 16 cycles to compute - 4 cycles to issue = 12 cycles of hiding
-  ds_read_u16 // hidden
-  ds_read_u16 // hidden
-  ds_read_u16 // hidden
+  mfma_16x16x16 // 16 cycles to compute - 4 cycles to issue = 12 cycles of
+  hiding ds_read_u16 // hidden ds_read_u16 // hidden ds_read_u16 // hidden
   ds_read_u16
   ds_read_u16
   ds_read_u16
@@ -174,17 +174,17 @@ SmallVector<unsigned, 3> getMfmasPerRep(const SmallVector<int64_t>& ctaTile,
   low-level details of the device.
   For example, just a ratio of flops/byte for the given mfma precision.
   And maybe info regarding transpose and how many loads of what precision
-  to know if we'll have 
+  to know if we'll have
 */
 using DotTileShapeType = SmallVector<unsigned, 3>;
-DotTileShapeType calcDotTileShape(
-    const SmallVector<unsigned, 3> & mfmasPerRep, // = 16x16x64 / 16x16x32 = 1x1x2
-    bool preferLargerM, unsigned cyclesPerMfma = 8,
-    unsigned localLoadRateA = 32,
-    unsigned localLoadRateB = 32,
-    unsigned numLocalLoadsPerRepA = 1,
-    unsigned numLocalLoadsPerRepB = 1,
-    unsigned localLoadDataLatency = 128) {
+DotTileShapeType
+calcDotTileShape(const SmallVector<unsigned, 3>
+                     &mfmasPerRep, // = 16x16x64 / 16x16x32 = 1x1x2
+                 bool preferLargerM, unsigned cyclesPerMfma = 8,
+                 unsigned localLoadRateA = 32, unsigned localLoadRateB = 32,
+                 unsigned numLocalLoadsPerRepA = 1,
+                 unsigned numLocalLoadsPerRepB = 1,
+                 unsigned localLoadDataLatency = 128) {
   DotTileShapeType tileShape = {1, 1, 1};
 
   bool localLoadDataLatencyExposed = true;
@@ -192,7 +192,8 @@ DotTileShapeType calcDotTileShape(
   bool localLoadIssueExposed = true;
 
   // Keep on increasing the dimension of the tile
-  while (localLoadDataLatencyExposed || localLoadRateExposed || localLoadIssueExposed) {
+  while (localLoadDataLatencyExposed || localLoadRateExposed ||
+         localLoadIssueExposed) {
     // Enforce criteria #4 - small square.
     if ((tileShape[0] * mfmasPerRep[0] < tileShape[1] * mfmasPerRep[1]) ||
         ((tileShape[0] * mfmasPerRep[0] == tileShape[1] * mfmasPerRep[1]) &&
@@ -202,21 +203,24 @@ DotTileShapeType calcDotTileShape(
       tileShape[1] *= 2;
     }
     // Check criteria #1 - local load data latency.
-    int64_t numMfmas = tileShape[0] * tileShape[1] * mfmasPerRep[0] * mfmasPerRep[1] *
-               mfmasPerRep[2];
+    int64_t numMfmas = tileShape[0] * tileShape[1] * mfmasPerRep[0] *
+                       mfmasPerRep[1] * mfmasPerRep[2];
     int64_t mfmaCycles = numMfmas * cyclesPerMfma;
     localLoadDataLatencyExposed = mfmaCycles < localLoadDataLatency;
     // Check criteria #2 - local load rate.
-    int64_t loadRateCycles = tileShape[0] * mfmasPerRep[0] * numLocalLoadsPerRepA * localLoadRateA
-        + tileShape[1] * mfmasPerRep[1] * numLocalLoadsPerRepB * localLoadRateB;
+    int64_t loadRateCycles =
+        tileShape[0] * mfmasPerRep[0] * numLocalLoadsPerRepA * localLoadRateA +
+        tileShape[1] * mfmasPerRep[1] * numLocalLoadsPerRepB * localLoadRateB;
     localLoadRateExposed = mfmaCycles < loadRateCycles;
     // Check criteria #3 - issue cycles.
     constexpr unsigned mfmaIssueCycles = 4; // num cycles to issue mfma
     constexpr unsigned loadIssueCycles = 4; // num cycles to issue local load
-    int64_t totalLoadIssueCycles = tileShape[0] * mfmasPerRep[0] * numLocalLoadsPerRepA * loadIssueCycles
-        + tileShape[1] * mfmasPerRep[1] * numLocalLoadsPerRepB * loadIssueCycles;
+    int64_t totalLoadIssueCycles =
+        tileShape[0] * mfmasPerRep[0] * numLocalLoadsPerRepA * loadIssueCycles +
+        tileShape[1] * mfmasPerRep[1] * numLocalLoadsPerRepB * loadIssueCycles;
     int64_t totalMfmaIssueCycles = numMfmas * mfmaIssueCycles;
-    localLoadIssueExposed = (mfmaCycles - totalMfmaIssueCycles) < totalLoadIssueCycles;
+    localLoadIssueExposed =
+        (mfmaCycles - totalMfmaIssueCycles) < totalLoadIssueCycles;
   }
   return tileShape;
 }
@@ -248,7 +252,8 @@ class DotTileOrder {
   int tileShapeInner;
   int numTilesOuter;
   int numTilesInner;
-  public:
+
+public:
   explicit DotTileOrder(int inputNumRepM, int inputNumRepN, int inputTileShapeM,
                         int inputTileShapeN, bool inputOuterLoopM)
       : numRepM(inputNumRepM), numRepN(inputNumRepN),
