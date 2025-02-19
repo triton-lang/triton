@@ -64,7 +64,12 @@ llvm::AMDGPU::GPUKind TargetInfo::getGPUKind() const {
   return llvm::AMDGPU::parseArchAMDGCN(arch);
 }
 
-int TargetInfo::getSharedMemorySize() const { return 64 * 1024; }
+int TargetInfo::getSharedMemorySize() const {
+  int kbytes = 64;
+  if (getISAFamily() == ISAFamily::CDNA4)
+    kbytes = 160;
+  return kbytes * 1024;
+}
 
 bool TargetInfo::supportMaximumMinimum() const { return false; }
 
@@ -102,7 +107,7 @@ bool TargetInfo::canUseStMatrix(RankedTensorType tensorTy,
 }
 
 bool TargetInfo::canUseLDSTransLoad(int bitwidth) const {
-  return arch == "gfx950" && llvm::is_contained({16, 8, 4, 6}, bitwidth);
+  return getISAFamily() == ISAFamily::CDNA4 && llvm::is_contained({16, 8, 4, 6}, bitwidth);
 }
 
 void TargetInfo::storeMatrixShared(RewriterBase &rewriter, Location loc,
