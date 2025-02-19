@@ -101,12 +101,11 @@ template <class T> Interval(T, T) -> Interval<T>;
 class Allocation {
 public:
   /// A unique identifier for shared memory buffers
-  using BufferId = size_t;
+  using BufferId = Operation *;
   using BufferIdSetT = DenseSet<BufferId>;
   using FuncAllocMapT = CallGraph<Allocation>::FuncDataMapT;
 
-  static constexpr BufferId InvalidBufferId =
-      std::numeric_limits<BufferId>::max();
+  static constexpr BufferId InvalidBufferId = nullptr;
 
   Allocation() = default;
   /// Creates a new Allocation analysis that computes the shared memory
@@ -191,9 +190,6 @@ private:
     /// Virtual: triton.call
     enum class BufferKind { Explicit, Scratch, Virtual };
 
-    /// MT: thread-safe
-    inline static std::atomic<BufferId> nextId = 0;
-
     BufferKind kind;
     BufferId id;
     size_t size;
@@ -203,11 +199,10 @@ private:
     bool operator==(const BufferT &other) const { return id == other.id; }
     bool operator<(const BufferT &other) const { return id < other.id; }
 
-    BufferT() : BufferT(BufferKind::Explicit, 0) {}
-    BufferT(BufferKind kind, size_t size, size_t alignment = 4,
+    BufferT(Operation *id, BufferKind kind, size_t size, size_t alignment = 4,
             size_t offset = 0)
-        : kind(kind), id(nextId++), size(size), alignment(alignment),
-          offset(offset) {}
+        : kind(kind), id(id), size(size), alignment(alignment), offset(offset) {
+    }
 
     size_t setOffsetAligned(size_t newOffset) {
       return offset = llvm::alignTo(newOffset, alignment);
@@ -226,14 +221,15 @@ private:
 private:
   template <BufferT::BufferKind Kind, typename KeyType, typename... Args>
   void addBuffer(KeyType &key, Args &&...args) {
-    auto buffer = BufferT(Kind, std::forward<Args>(args)...);
-    bufferSet[buffer.id] = std::move(buffer);
+    auto [it, inserted] = bufferSet.insert_or_assign(
+        key, BufferT(key, Kind, std::forward<Args>(args)...));
+    BufferT *buffer = &it->second;
     if constexpr (Kind == BufferT::BufferKind::Explicit) {
-      valueBuffer[key] = &bufferSet[buffer.id];
+      valueBuffer[key] = buffer;
     } else if constexpr (Kind == BufferT::BufferKind::Virtual) {
-      opVirtual[key] = &bufferSet[buffer.id];
+      opVirtual[key] = buffer;
     } else {
-      opScratch[key] = &bufferSet[buffer.id];
+      opScratch[key] = buffer;
     }
   }
 

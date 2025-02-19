@@ -312,10 +312,15 @@ private:
     std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
     SharedMemoryAliasAnalysis *aliasAnalysis =
         solver->load<SharedMemoryAliasAnalysis>();
-    if (failed(solver->initializeAndRun(operation))) {
-      // TODO: return error instead of bailing out..
-      llvm_unreachable("failed to run SharedMemoryAliasAnalysis");
-    }
+    // Run the analysis rooted at every isolated from above operation, including
+    // the top-level function but also any nested regions.
+    operation->walk([&](Operation *op) {
+      if (op->hasTrait<OpTrait::IsIsolatedFromAbove>() &&
+          failed(solver->initializeAndRun(op))) {
+        // TODO: return error instead of bailing out..
+        llvm_unreachable("failed to run SharedMemoryAliasAnalysis");
+      }
+    });
     operation->walk<WalkOrder::PreOrder>([&](Operation *op) {
       for (auto operand : op->getOperands()) {
         getValueAlias(operand, *aliasAnalysis);
@@ -580,7 +585,20 @@ private:
         Interval ySizeRange = {yStart, yStart + ySize};
         auto xOpRange = bufferRange.lookup(x);
         auto yOpRange = bufferRange.lookup(y);
+
+        // Buffers interfere if their allocation offsets overlap and they are
+        // live at the same time.
         if (xOpRange.intersects(yOpRange) &&
+            xSizeRange.intersects(ySizeRange)) {
+          interference[x].insert(y);
+        }
+
+        // Buffers also interfer if their allocation offsets overlap and they
+        // exist within regions that may execute simultaneously.
+        auto wsx = x->id->getParentOfType<gpu::WarpSpecializeOp>();
+        auto wsy = y->id->getParentOfType<gpu::WarpSpecializeOp>();
+        if (wsx && wsy &&
+            x->id->getParentRegion() != y->id->getParentRegion() &&
             xSizeRange.intersects(ySizeRange)) {
           interference[x].insert(y);
         }
