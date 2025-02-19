@@ -174,8 +174,7 @@ LogicalResult lowerDistributedToSharedStmatrix(
   auto kWarp = str_attr("warp");
   auto kBlock = str_attr("block");
 
-  auto [laneId, warpId] =
-      getLaneAndWarpId(rewriter, loc);
+  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
 
   auto regBase = applyLinearLayout(loc, rewriter, layout,
                                    {{kRegister, b.i32_val(0)},
