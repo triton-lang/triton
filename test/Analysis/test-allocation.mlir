@@ -1,5 +1,5 @@
-// RUN: triton-opt %s -test-print-allocation -verify-diagnostics -o /dev/null
-// RUN: triton-opt %s -test-print-allocation="get-scratch-size-function=ValidConstant" 2>&1 | FileCheck %s --check-prefix=CHECK-128
+// RUN: triton-opt %s -allow-unregistered-dialect -test-print-allocation -verify-diagnostics -o /dev/null
+// RUN: triton-opt %s -allow-unregistered-dialect -test-print-allocation="get-scratch-size-function=ValidConstant" 2>&1 | FileCheck %s --check-prefix=CHECK-128
 
 // Check there are no lines with a size different to 128 and we have at least a line with size 128.
 
@@ -16,6 +16,7 @@
 #C = #ttg.nvidia_mma<{versionMajor = 2, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
 #A_DOT = #ttg.dot_op<{opIdx = 0, parent = #C, kWidth = 2}>
 #B_DOT = #ttg.dot_op<{opIdx = 1, parent = #C, kWidth = 2}>
+#smem = #ttg.shared_memory
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 
@@ -623,6 +624,230 @@ tt.func @scan_alloc(%x : tensor<8x16xf32, #AL>) {
     %add = arith.addf %arg0, %arg1 : f32
     tt.scan.return %add : f32
   }) : (tensor<8x16xf32, #AL>) -> tensor<8x16xf32, #AL>
+  tt.return
+}
+
+// expected-remark @below {{warp_specialize_default_region}}
+// expected-remark @below {{size = 32}}
+tt.func @warp_specialize_default_region() {
+  // expected-remark @below {{offset = 0, size = 16}}
+  %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+  ttg.warp_specialize()
+  default {
+    // expected-remark @below {{offset = 16, size = 16}}
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    ttg.warp_yield
+  }
+  partition0() num_warps(1) {
+    ttg.warp_return
+  } : () -> ()
+  "use"(%0) : (!ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>) -> ()
+
+  tt.return
+}
+
+// expected-remark @below {{nonoverlapping_liveness_in_default_region}}
+// expected-remark @below {{size = 32}}
+tt.func @nonoverlapping_liveness_in_default_region() {
+  // expected-remark @below {{offset = 0, size = 16}}
+  %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+  ttg.warp_specialize()
+  default {
+    // expected-remark @below {{offset = 16, size = 16}}
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    "use"(%1) : (!ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>) -> ()
+    // expected-remark @below {{offset = 16, size = 16}}
+    %2 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    "use"(%2) : (!ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>) -> ()
+    ttg.warp_yield
+  }
+  partition0() num_warps(1) {
+    ttg.warp_return
+  } : () -> ()
+  "use"(%0) : (!ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>) -> ()
+
+  tt.return
+}
+
+// expected-remark @below {{overlapping_liveness_in_default_region}}
+// expected-remark @below {{size = 48}}
+tt.func @overlapping_liveness_in_default_region() {
+  // expected-remark @below {{offset = 0, size = 16}}
+  %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+  ttg.warp_specialize()
+  default {
+    // expected-remark @below {{offset = 16, size = 16}}
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    // expected-remark @below {{offset = 32, size = 16}}
+    %2 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    "use"(%1) : (!ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>) -> ()
+    "use"(%2) : (!ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>) -> ()
+    ttg.warp_yield
+  }
+  partition0() num_warps(1) {
+    ttg.warp_return
+  } : () -> ()
+  "use"(%0) : (!ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>) -> ()
+
+  tt.return
+}
+
+// expected-remark @below {{alias_through_default_outputs}}
+// expected-remark @below {{size = 32}}
+tt.func @alias_through_default_outputs() {
+  // expected-remark @below {{offset = 0, size = 16}}
+  %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+  %1 = ttg.warp_specialize()
+  default {
+    ttg.warp_yield %0 : !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+  }
+  partition0() num_warps(1) {
+    ttg.warp_return
+  } : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+  // expected-remark @below {{offset = 16, size = 16}}
+  %2 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+  "use"(%1) : (!ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>) -> ()
+  tt.return
+}
+
+// expected-remark @below {{implicit_capture_liveness}}
+// expected-remark @below {{size = 32}}
+tt.func @implicit_capture_liveness() {
+  // expected-remark @below {{offset = 0, size = 16}}
+  %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+  ttg.warp_specialize()
+  default {
+    // expected-remark @below {{offset = 16, size = 16}}
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    "use"(%0) : (!ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>) -> ()
+    ttg.warp_yield
+  }
+  partition0() num_warps(1) {
+    ttg.warp_return
+  } : () -> ()
+  tt.return
+}
+
+// expected-remark @below {{implicit_and_explicit_capture_liveness}}
+// expected-remark @below {{size = 32}}
+tt.func @implicit_and_explicit_capture_liveness() {
+  // expected-remark @below {{offset = 0, size = 16}}
+  %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+  // expected-remark @below {{offset = 16, size = 16}}
+  %1 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+  ttg.warp_specialize(%1)
+  default {
+    "use"(%0) : (!ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>) -> ()
+    ttg.warp_yield
+  }
+  partition0(%arg0: !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>) num_warps(1) {
+    ttg.warp_return
+  } : (!ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>) -> ()
+  tt.return
+}
+
+// expected-remark @below {{explicit_capture_liveness}}
+// expected-remark @below {{size = 32}}
+tt.func @explicit_capture_liveness() {
+  // expected-remark @below {{offset = 0, size = 16}}
+  %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+  ttg.warp_specialize(%0)
+  default {
+    // expected-remark @below {{offset = 16, size = 16}}
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    ttg.warp_yield
+  }
+  partition0(%arg0: !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>) num_warps(1) {
+    ttg.warp_return
+  } : (!ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>) -> ()
+  tt.return
+}
+
+// expected-remark @below {{implicit_capture_liveness_default}}
+// expected-remark @below {{size = 32}}
+tt.func @implicit_capture_liveness_default() {
+  // expected-remark @below {{offset = 0, size = 16}}
+  %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+  ttg.warp_specialize()
+  default {
+    // FIXME: This is correct, but not optimal. The memory for `%0` should be
+    // reused for the next allocation. The same problem happens with `scf.if`.
+    "use"(%0) : (!ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>) -> ()
+    // expected-remark @below {{offset = 16, size = 16}}
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    ttg.warp_yield
+  }
+  partition0() num_warps(1) {
+    ttg.warp_return
+  } : () -> ()
+  tt.return
+}
+
+// expected-remark @below {{liveness_in_partition}}
+// expected-remark @below {{size = 32}}
+tt.func @liveness_in_partition() {
+  ttg.warp_specialize()
+  default {
+    ttg.warp_yield
+  }
+  partition0() num_warps(4) {
+    // expected-remark @below {{offset = 0, size = 16}}
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    // expected-remark @below {{offset = 16, size = 16}}
+    %2 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    "use"(%0) : (!ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>) -> ()
+    ttg.warp_return
+  } : () -> ()
+  tt.return
+}
+
+// expected-remark @below {{aliasing_in_partition}}
+// expected-remark @below {{size = 32}}
+tt.func @aliasing_in_partition() {
+  ttg.warp_specialize()
+  default {
+    ttg.warp_yield
+  }
+  partition0() num_warps(4) {
+    // expected-remark @below {{offset = 0, size = 16}}
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    %c0_i32 = arith.constant 0 : i32
+    %1 = ttg.memdesc_subview %0[%c0_i32] : !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable> -> !ttg.memdesc<1xi64, #A_SHARED, #smem, mutable>
+    // expected-remark @below {{offset = 16, size = 16}}
+    %2 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    "use"(%1) : (!ttg.memdesc<1xi64, #A_SHARED, #smem, mutable>) -> ()
+    ttg.warp_return
+  } : () -> ()
+  tt.return
+}
+
+// expected-remark @below {{partition_region_interference}}
+// expected-remark @below {{size = 80}}
+tt.func @partition_region_interference() {
+  // expected-remark @below {{offset = 0, size = 16}}
+  %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+  ttg.warp_specialize()
+  default {
+    // expected-remark @below {{offset = 16, size = 16}}
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    ttg.warp_yield
+  }
+  partition0() num_warps(4) {
+    // expected-remark @below {{offset = 32, size = 16}}
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    // expected-remark @below {{offset = 48, size = 16}}
+    %2 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    "use"(%1) : (!ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>) -> ()
+    ttg.warp_return
+  }
+  partition1() num_warps(4) {
+    // expected-remark @below {{offset = 64, size = 16}}
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    // expected-remark @below {{offset = 64, size = 16}}
+    %2 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    ttg.warp_return
+  } : () -> ()
+  "use"(%0) : (!ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>) -> ()
   tt.return
 }
 
