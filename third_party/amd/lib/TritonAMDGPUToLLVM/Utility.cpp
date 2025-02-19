@@ -374,12 +374,12 @@ static bool isPredicatedStoreWT(LLVM::CallOp callOp) {
 // Load | .ca |   F      | F
 //      | .cg |   F      | T
 //      | .cs |   F      | T
-//      | .cv |   T      | T
+//      | .cv |   T      | X
 // -----+-----+----------+---------
 // Store| .wb |   F      | F
 //      | .cg |   F      | F
 //      | .cs |   F      | T
-//      | .wt |   T      | T
+//      | .wt |   T      | X
 // -----+-----+----------+---------
 std::pair<bool, bool>
 getCacheModifierFlagsForPredicatedCall(LLVM::CallOp callOp) {
@@ -413,12 +413,12 @@ getCacheModifierFlagsForPredicatedCall(LLVM::CallOp callOp) {
 // Load   | .ca |  0  |  0  | 0  |
 //        | .cg |  0  |  1  | 1  |
 //        | .cs |  0  |  1  | 1  |
-//        | .cv |  1  |  1  | 1  |
+//        | .cv |  1  |  1  | x  |
 // -------+-----+-----+-----+----+--
 // Store  | .wb |  0  |  0  | 0  |
 //        | .cg |  0  |  0  | 0  |
 //        | .cs |  0  |  1  | 1  |
-//        | .wt |  1  |  1  | 1  |
+//        | .wt |  1  |  1  | x  |
 // -------+-----+-----+-----+----+--
 // Atomic | N/A |  0  |  1  | x  | Setting sc0 returns the pre-op value
 //        | N/A |  1  |  0  | x  | Setting sc1 performs a system-scope atomic
@@ -426,7 +426,7 @@ getCacheModifierFlagsForPredicatedCall(LLVM::CallOp callOp) {
 static int32_t
 getCtrlBitsForCacheModifierOnGFX_942_950(triton::CacheModifier cm,
                                          bool isLoad) {
-  const int sc0Bit = 0b1, ntBit = 0b10, sc1Bit = 0b1000;
+  const int sc0Bit = 0b1, ntBit = 0b10, sc1Bit = 0b10000;
   int32_t aux = 0;
   switch (cm) {
   case triton::CacheModifier::CA:
@@ -441,7 +441,7 @@ getCtrlBitsForCacheModifierOnGFX_942_950(triton::CacheModifier cm,
     break;
   case triton::CacheModifier::CV:
     assert(isLoad);
-    aux |= sc0Bit | sc1Bit | ntBit;
+    aux |= sc0Bit | sc1Bit;
     break;
   case triton::CacheModifier::WB:
     assert(!isLoad);
@@ -449,7 +449,7 @@ getCtrlBitsForCacheModifierOnGFX_942_950(triton::CacheModifier cm,
     break;
   case triton::CacheModifier::WT:
     assert(!isLoad);
-    aux |= sc0Bit | sc1Bit | ntBit;
+    aux |= sc0Bit | sc1Bit;
     break;
   default:
     aux = 0;
@@ -459,7 +459,7 @@ getCtrlBitsForCacheModifierOnGFX_942_950(triton::CacheModifier cm,
 
 int32_t getCtrlBitsForBufferAtomicsOnGFX_942_950(bool setSC0, bool setSC1,
                                                  bool setNT) {
-  const int sc0Bit = 0b1, ntBit = 0b10, sc1Bit = 0b1000;
+  const int sc0Bit = 0b1, ntBit = 0b10, sc1Bit = 0b10000;
   int32_t aux = 0;
   if (setSC0)
     aux |= sc0Bit;

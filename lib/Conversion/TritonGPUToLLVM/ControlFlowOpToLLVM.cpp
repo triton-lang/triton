@@ -92,7 +92,7 @@ private:
       promotedOperands.push_back(base);
     }
 
-    auto opOffsetAttr = caller->getAttrOfType<mlir::IntegerAttr>(
+    auto opOffsetAttr = callOp->getAttrOfType<mlir::IntegerAttr>(
         "ttg.global_scratch_memory_offset");
     Value opOffsetVal;
     if (opOffsetAttr) {
