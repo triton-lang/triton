@@ -10,28 +10,22 @@ from typing import Any, Union
 import torch
 
 
-def get_add_kernel() -> triton.JITFunction:
-    # We need to define the kernel in a method so that we can test getting a
-    # 'cache_hit=True' callback below.
-
-    @triton.jit
-    def add_kernel(
-        in_ptr0,
-        in_ptr1,
-        out_ptr,
-        n_elements,
-        BLOCK_SIZE: "tl.constexpr",
-    ):
-        pid = tl.program_id(axis=0)
-        block_start = pid * BLOCK_SIZE
-        offsets = block_start + tl.arange(0, BLOCK_SIZE)
-        mask = offsets < n_elements
-        x = tl.load(in_ptr0 + offsets, mask=mask)
-        y = tl.load(in_ptr1 + offsets, mask=mask)
-        output = x + y
-        tl.store(out_ptr + offsets, output, mask=mask)
-
-    return add_kernel
+@triton.jit
+def add_kernel(
+    in_ptr0,
+    in_ptr1,
+    out_ptr,
+    n_elements,
+    BLOCK_SIZE: "tl.constexpr",
+):
+    pid = tl.program_id(axis=0)
+    block_start = pid * BLOCK_SIZE
+    offsets = block_start + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    x = tl.load(in_ptr0 + offsets, mask=mask)
+    y = tl.load(in_ptr1 + offsets, mask=mask)
+    output = x + y
+    tl.store(out_ptr + offsets, output, mask=mask)
 
 
 def test_compile_stats(device: str, fresh_triton_cache: str) -> None:
@@ -45,11 +39,10 @@ def test_compile_stats(device: str, fresh_triton_cache: str) -> None:
 
     TritonConfig.compilation_listener = compile_listener
 
-    kernel = get_add_kernel()
     x = torch.randn(4, device=device)
     y = torch.randn(4, device=device)
     out = torch.zeros_like(x)
-    kernel[(4, )](x, y, out, 4, 4)
+    add_kernel[(4, )](x, y, out, 4, 4)
 
     assert captured is not None
 
@@ -67,9 +60,9 @@ def test_compile_stats(device: str, fresh_triton_cache: str) -> None:
     assert captured[2].total > 0
 
     # Now lets create a new instance of the same kernel to pick up cache_hit=True
+    add_kernel.device_caches.clear()
     captured = None
-    kernel = get_add_kernel()
-    kernel[(4, )](x, y, out, 4, 4)
+    add_kernel[(4, )](x, y, out, 4, 4)
 
     assert captured is not None
     # Cache hit!
