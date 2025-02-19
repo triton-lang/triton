@@ -849,6 +849,7 @@ tt.func @warp_specialize_isolated_regions(%arg0: tensor<1xi64>) {
   default {
     ttg.warp_yield
   }
+  // CHECK: partition0
   partition0(%arg1: tensor<1xi64>) num_warps(4) {
     // CHECK-NEXT: local_alloc
     %1 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
