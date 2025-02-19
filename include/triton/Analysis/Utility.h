@@ -62,7 +62,7 @@ public:
 
   unsigned getScratchSizeInBytes();
 
-  bool isSupportedLayout();
+  bool isReduceWithinCTA();
 
 private:
   triton::ReduceOp op;

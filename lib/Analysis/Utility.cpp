@@ -133,7 +133,7 @@ unsigned ReduceOpHelper::getScratchSizeInBytes() {
   return bytesPerElem * elems;
 }
 
-bool ReduceOpHelper::isSupportedLayout() {
+bool ReduceOpHelper::isReduceWithinCTA() {
   // TODO: Support reduce across CTAS
   // Layout optimization passes such as PlanCTAPass and
   // RemoveLayoutConversionPass should avoid cross-CTA reduction
