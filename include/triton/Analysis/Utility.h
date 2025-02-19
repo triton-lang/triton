@@ -64,8 +64,6 @@ public:
 
   bool isSupportedLayout();
 
-  bool isReduceWithinCTA();
-
 private:
   triton::ReduceOp op;
   ArrayRef<int64_t> srcShape;

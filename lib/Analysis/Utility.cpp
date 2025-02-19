@@ -133,16 +133,11 @@ unsigned ReduceOpHelper::getScratchSizeInBytes() {
   return bytesPerElem * elems;
 }
 
-bool ReduceOpHelper::isReduceWithinCTA() {
-  return getCTASplitNum(srcEncoding)[axis] == 1;
-}
-
 bool ReduceOpHelper::isSupportedLayout() {
+  // TODO: Support reduce across CTAS
   // Layout optimization passes such as PlanCTAPass and
   // RemoveLayoutConversionPass should avoid cross-CTA reduction
-  if (!isReduceWithinCTA())
-    return false;
-  return true;
+  return getCTASplitNum(srcEncoding)[axis] == 1;
 }
 
 unsigned ScanLoweringHelper::getAxisNumElementsPerThread() {
