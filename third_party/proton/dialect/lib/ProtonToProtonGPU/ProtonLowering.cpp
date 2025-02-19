@@ -101,7 +101,14 @@ public:
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     int allocBufferSize = bufferSize > 0 ? bufferSize : allocSharedMemSize;
 
-    // TODO (fywkevin): add description about layout
+    // Circular strategy memory layout (total: allocScratchMemSize bytes)
+    //  +-----------------------------------------------+
+    //  | header (circularHeaderSize bytes)             |
+    //  +-----------------------------------------------+
+    //  | number of events per warp (4 bytes x numWarps)|
+    //  +-----------------------------------------------+
+    //  | profiled data (allocBufferSize bytes)         |
+    //  +-----------------------------------------------+
     int allocScratchMemSize = llvm::alignTo(
         allocBufferSize + circularHeaderSize + numWarps * 4, alignment);
 
@@ -135,8 +142,10 @@ public:
         loc, triton::getPointerType(builder.getI32Type()), allocScratchMemSize,
         alignment);
 
+    // Profiler index is private to each thread, address space is 5. In
+    // practice, it doesn't prevent us from register promotion.
     auto ptrTy =
-        triton::PointerType::get(mlir::IntegerType::get(context, 32), 1);
+        triton::PointerType::get(mlir::IntegerType::get(context, 32), 5);
     Value index = builder.create<proton::gpu::InitBufferIndexOp>(loc, ptrTy);
 
     mlir::RewritePatternSet patterns(context);

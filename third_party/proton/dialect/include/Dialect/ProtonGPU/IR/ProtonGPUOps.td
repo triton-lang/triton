@@ -32,7 +32,7 @@ def PTG_CircularStoreOp : PTG_Op<"circular_store", [
   }];
   let arguments = (
     ins TTG_MemDescType: $data,
-    TT_PtrLike :$indexPtr,
+    TT_PtrType :$indexPtr,
     I32: $counter,
     UnitAttr: $isStart,
     I32Attr: $scopeId,
@@ -77,8 +77,8 @@ def PTG_FinalizeOp : PTG_Op<"finalize", [
   }];
   let arguments = (
     ins TTG_MemDescType:$data,
-    TT_PtrLike :$indexPtr,
-    TT_PtrLike :$ptr,
+    TT_PtrType :$indexPtr,
+    TT_Ptr :$ptr,
     I32Attr :$size
   );
 
@@ -93,7 +93,7 @@ def PTG_InitBufferIndexOp : PTG_Op<"init_buffer_index", []> {
       The index is stored in the address of `indexPtr`.
   }];
   let arguments = (ins);
-  let results = (outs TT_PtrLike :$indexPtr);
+  let results = (outs TT_PtrType :$indexPtr);
   let assemblyFormat = "attr-dict `:` type($indexPtr)";
 }
 
