@@ -6,16 +6,16 @@ import os
 import textwrap
 import itertools
 from types import ModuleType
-from typing import Any, Callable, Dict, Optional, Tuple, Type, Union
+from typing import Any, Callable, Dict, Optional, Tuple, Type, Union, Iterable, List
 
 from .. import language
 from .._C.libtriton import ir
 from ..language import constexpr, semantic, str_to_ty, tensor
-from ..language.core import _unwrap_if_constexpr, nv_tma_desc_type, _value
+from ..language.core import _unwrap_if_constexpr, nv_tma_desc_type, base_value, base_type
 from ..runtime.jit import _normalize_ty, get_jit_fn_file_line
 # ideally we wouldn't need any runtime component
 from ..runtime import JITFunction
-from .._utils import list_list_flatten, list_list_unflatten, find_paths_if, get_iterable_path, set_iterable_path
+from .._utils import find_paths_if, get_iterable_path, set_iterable_path
 
 from .errors import (CompilationError, CompileTimeAssertionFailure, UnsupportedLanguageConstruct)
 
@@ -60,7 +60,7 @@ def mangle_fn(name, arg_tys, constants):
 
 
 def _is_triton_value(o: Any) -> bool:
-    return isinstance(o, _value)
+    return isinstance(o, base_value)
 
 
 def _is_triton_tensor(o: Any) -> bool:
@@ -87,6 +87,21 @@ def _check_fn_args(node, fn, args):
                     fn.src, node,
                     f'Function {fn.__name__} is marked noinline, but was called with non-scalar argument {fn.arg_names[idx]}:{arg}'
                 )
+
+
+def flatten_values_to_ir(values: Iterable[base_value]):
+    handles = []
+    for v in values:
+        v._flatten_ir(handles)
+    return handles
+
+
+def unflatten_ir_values(handles: List[ir.value], types: List[base_type]):
+    cursor = 0
+    for ty in types:
+        value, cursor = ty._unflatten_ir(handles, cursor)
+        yield value
+    assert cursor == len(handles)
 
 
 _condition_types = {bool, int, type(None)}  # Python types accepted for conditionals inside kernels
@@ -209,13 +224,25 @@ class ASTFunction:
         self.constants = constants
         self.attrs = attrs
 
+    def return_types_ir(self, builder: ir.builder):
+        ret_types = []
+        for ret_ty in self.ret_types:
+            if ret_ty is None:
+                continue
+            ir_ty = ret_ty.to_ir(builder)
+            if isinstance(ir_ty, list):
+                ret_types.extend(ir_ty)
+            else:
+                ret_types.append(ir_ty)
+        return ret_types
+
     def serialize(self, builder: ir.builder):
         # fill up IR values in template
         # > build function
         is_val = lambda path, _: path not in self.constants and _ is not None
         val_paths = list(find_paths_if(self.arg_types, is_val))
         arg_types = [get_iterable_path(self.arg_types, path).to_ir(builder) for path in val_paths]
-        ret_types = [ret_type.to_ir(builder) for ret_type in self.ret_types]
+        ret_types = self.return_types_ir(builder)
         return builder.get_function_ty(arg_types, ret_types)
 
     def deserialize(self, fn):
@@ -376,7 +403,7 @@ class CodeGenerator(ast.NodeVisitor):
 
         return name_lookup
 
-    def set_value(self, name: str, value: Union[tensor, constexpr]) -> None:
+    def set_value(self, name: str, value: Union[base_value, constexpr]) -> None:
         ''' This function:
             called by visit_Assign() & visit_FunctionDef() to store left value (lvalue)
         1. record local defined name (FIXME: should consider control flow)
@@ -423,18 +450,24 @@ class CodeGenerator(ast.NodeVisitor):
     # By design, only non-kernel functions can return
     def visit_Return(self, node):
         ret_value = self.visit(node.value)
+        handles = []
+
+        def decay(value):
+            if isinstance(value, language.tuple):
+                return language.tuple([decay(v) for v in value.values])
+            elif isinstance(value, (language.constexpr, int, float)):
+                return semantic.to_tensor(value, self.builder)
+            return value
+
+        ret_value = decay(ret_value)
+
         if ret_value is None:
-            self.builder.ret([])
             ret_ty = language.void
-        elif isinstance(ret_value, language.tuple):
-            ret_values = [semantic.to_tensor(v, self.builder) for v in ret_value.values]
-            ret_types = [v.type for v in ret_values]
-            self.builder.ret([v.handle for v in ret_values])
-            ret_ty = language.tuple_type(ret_types)
         else:
-            ret = semantic.to_tensor(ret_value, self.builder)
-            self.builder.ret([ret.handle])
-            ret_ty = ret.type
+            assert isinstance(ret_value, language.core.base_value)
+            ret_value._flatten_ir(handles)
+            ret_ty = ret_value.type
+        self.builder.ret(handles)
         if self.ret_type is None:
             self.ret_type = ret_ty
         elif self.ret_type != ret_ty:
@@ -497,11 +530,7 @@ class CodeGenerator(ast.NodeVisitor):
             else:
                 self.prototype.ret_types = [self.ret_type]
             self.fn.reset_type(self.prototype.serialize(self.builder))
-            self.builder.ret([
-                self.builder.create_poison(ty.to_ir(self.builder))
-                for ty in self.prototype.ret_types
-                if self.ret_type is not None
-            ])
+            self.builder.ret([self.builder.create_poison(ty) for ty in self.prototype.return_types_ir(self.builder)])
         self.fn.finalize()
 
         if insert_pt:
@@ -693,16 +722,15 @@ class CodeGenerator(ast.NodeVisitor):
             # then terminator
             self.builder.set_insertion_point_to_end(then_block)
             assert not then_block.has_terminator(), f"{then_block}"
-            then_handles = [then_defs[n]._flatten_ir() for n in names]
-            then_handles_spec, then_handles_flat = list_list_flatten(then_handles)
-            self.builder.create_branch(endif_block, then_handles_flat)
+            then_handles = flatten_values_to_ir(then_defs[name] for name in names)
+            self.builder.create_branch(endif_block, then_handles)
             # else terminator
             self.builder.set_insertion_point_to_end(else_block)
             assert not else_block.has_terminator(), f"{else_block}"
-            else_handles = [else_defs[n]._flatten_ir() for n in names]
-            _, else_handles_flat = list_list_flatten(else_handles)
-            self.builder.create_branch(endif_block, else_handles_flat)
-            for then_h, else_h in zip(then_handles_flat, else_handles_flat):
+            else_handles = flatten_values_to_ir(else_defs[name] for name in names)
+            self.builder.create_branch(endif_block, else_handles)
+            assert len(then_handles) == len(else_handles)
+            for then_h, else_h in zip(then_handles, else_handles):
                 ty = then_h.get_type()
                 assert ty == else_h.get_type()
                 endif_block.add_argument(ty)
@@ -710,10 +738,10 @@ class CodeGenerator(ast.NodeVisitor):
         # change block
         self.builder.set_insertion_point_to_start(endif_block)
         # update value
-        res_handles_flat = [endif_block.arg(i) for i in range(len(then_handles_flat))]
-        res_handles = list_list_unflatten(then_handles_spec, res_handles_flat)
-        for name, handles in zip(names, res_handles):
-            new_value = then_defs[name]._unflatten_ir(handles)
+        res_handles = [endif_block.arg(i) for i in range(len(then_handles))]
+        types = [then_defs[name].type for name in names]
+        new_values = unflatten_ir_values(res_handles, types)
+        for name, new_value in zip(names, new_values):
             self.set_value(name, new_value)
 
     # TODO: refactor
@@ -726,28 +754,26 @@ class CodeGenerator(ast.NodeVisitor):
             then_defs, else_defs, then_block, else_block, names = \
                 self.visit_then_else_blocks(node, liveins, then_block, else_block)
             # create if op
-            then_handles = [then_defs[n]._flatten_ir() for n in names]
-            then_handles_spec, then_handles_flat = list_list_flatten(then_handles)
+            then_handles = flatten_values_to_ir(then_defs[name] for name in names)
             self._set_insertion_point_and_loc(ip, last_loc)
-            if_op = self.builder.create_if_op([h.get_type() for h in then_handles_flat], cond.handle, True)
+            if_op = self.builder.create_if_op([h.get_type() for h in then_handles], cond.handle, True)
             then_block.merge_block_before(if_op.get_then_block())
             self.builder.set_insertion_point_to_end(if_op.get_then_block())
             if len(names) > 0:
-                self.builder.create_yield_op(then_handles_flat)
+                self.builder.create_yield_op(then_handles)
             if not node.orelse:
                 else_block = if_op.get_else_block()
             else:
                 else_block.merge_block_before(if_op.get_else_block())
             self.builder.set_insertion_point_to_end(if_op.get_else_block())
             if len(names) > 0:
-                else_handles = [else_defs[n]._flatten_ir() for n in names]
-                _, else_handles_flat = list_list_flatten(else_handles)
-                self.builder.create_yield_op(else_handles_flat)
+                else_handles = flatten_values_to_ir(else_defs[name] for name in names)
+                self.builder.create_yield_op(else_handles)
         # update values
-        res_handles_flat = [if_op.get_result(i) for i in range(len(then_handles_flat))]
-        res_handles = list_list_unflatten(then_handles_spec, res_handles_flat)
-        for name, handles in zip(names, res_handles):
-            new_value = then_defs[name]._unflatten_ir(handles)
+        res_handles = [if_op.get_result(i) for i in range(len(then_handles))]
+        types = [then_defs[name].type for name in names]
+        new_values = unflatten_ir_values(res_handles, types)
+        for name, new_value in zip(names, new_values):
             self.set_value(name, new_value)
 
     def visit_If(self, node):
@@ -909,33 +935,31 @@ class CodeGenerator(ast.NodeVisitor):
                     names.append(name)
                     init_args.append(live_val)
 
-            init_handles = [a._flatten_ir() for a in init_args]
-            init_handles_spec, init_handles_flat = list_list_flatten(init_handles)
-            init_tys_flat = [h.get_type() for h in init_handles_flat]
+            init_handles = flatten_values_to_ir(init_args)
+            init_tys = [h.get_type() for h in init_handles]
+            init_fe_tys = [a.type for a in init_args]
             self._set_insertion_point_and_loc(ip, last_loc)
-            while_op = self.builder.create_while_op(init_tys_flat, init_handles_flat)
+            while_op = self.builder.create_while_op(init_tys, init_handles)
             # merge the condition region
-            before_block = self.builder.create_block_with_parent(while_op.get_before(), init_tys_flat)
+            before_block = self.builder.create_block_with_parent(while_op.get_before(), init_tys)
             self.builder.set_insertion_point_to_start(before_block)
-            block_args_flat = [before_block.arg(i) for i in range(len(init_handles_flat))]
-            block_args = list_list_unflatten(init_handles_spec, block_args_flat)
-            for name, init_val, arg_handles in zip(names, init_args, block_args):
-                val = init_val._unflatten_ir(arg_handles)
+            block_args = [before_block.arg(i) for i in range(len(init_handles))]
+            condition_args = unflatten_ir_values(block_args, init_fe_tys)
+            for name, val in zip(names, condition_args):
                 self.lscope[name] = val
                 self.local_defs[name] = val
             cond = self.visit(node.test)
             self.builder.set_insertion_point_to_end(before_block)
             # create ConditionOp: e.g., scf.condition(%cond) %arg0, %arg1, ...
-            self.builder.create_condition_op(cond.handle, block_args_flat)
+            self.builder.create_condition_op(cond.handle, block_args)
             # merge the loop body
-            after_block = self.builder.create_block_with_parent(while_op.get_after(), init_tys_flat)
+            after_block = self.builder.create_block_with_parent(while_op.get_after(), init_tys)
 
             # generate loop body
             self.builder.set_insertion_point_to_start(after_block)
-            block_args_flat = [after_block.arg(i) for i in range(len(init_handles_flat))]
-            block_args = list_list_unflatten(init_handles_spec, block_args_flat)
-            for name, init_val, arg_handles in zip(names, init_args, block_args):
-                val = init_val._unflatten_ir(arg_handles)
+            body_handles = [after_block.arg(i) for i in range(len(init_handles))]
+            body_args = unflatten_ir_values(body_handles, init_fe_tys)
+            for name, val in zip(names, body_args):
                 self.lscope[name] = val
                 self.local_defs[name] = val
             self.scf_stack.append(node)
@@ -945,16 +969,14 @@ class CodeGenerator(ast.NodeVisitor):
             yields = []
             for name in loop_defs:
                 if name in liveins:
-                    yields.append(loop_defs[name]._flatten_ir())
+                    loop_defs[name]._flatten_ir(yields)
 
-            _, yields_flat = list_list_flatten(yields)
-            self.builder.create_yield_op(yields_flat)
+            self.builder.create_yield_op(yields)
 
         # WhileOp defines new values, update the symbol table (lscope, local_defs)
-        results_flat = [while_op.get_result(i) for i in range(len(init_handles_flat))]
-        results = list_list_unflatten(init_handles_spec, results_flat)
-        for name, init_val, result in zip(names, init_args, results):
-            new_def = init_val._unflatten_ir(result)
+        result_handles = [while_op.get_result(i) for i in range(len(init_handles))]
+        result_vals = unflatten_ir_values(result_handles, init_fe_tys)
+        for name, new_def in zip(names, result_vals):
             self.lscope[name] = new_def
             self.local_defs[name] = new_def
 
@@ -999,7 +1021,7 @@ class CodeGenerator(ast.NodeVisitor):
         num_stages = None
         loop_unroll_factor = None
         disallow_acc_multi_buffer = False
-        flatten = None
+        flatten = False
         if IteratorClass is language.range:
             iterator = IteratorClass(*iter_args, **iter_kwargs)
             # visit iterator arguments
@@ -1079,12 +1101,12 @@ class CodeGenerator(ast.NodeVisitor):
 
             # create ForOp
             self._set_insertion_point_and_loc(ip, last_loc)
-            init_handles = [a._flatten_ir() for a in init_args]
-            init_handles_spec, init_handles_flat = list_list_flatten(init_handles)
-            for_op = self.builder.create_for_op(lb, ub, step, init_handles_flat)
-            if num_stages is not None:
+            init_handles = flatten_values_to_ir(init_args)
+            init_tys = [v.type for v in init_args]
+            for_op = self.builder.create_for_op(lb, ub, step, init_handles)
+            if _unwrap_if_constexpr(num_stages) is not None:
                 for_op.set_attr("tt.num_stages", self.builder.get_int32_attr(num_stages))
-            if loop_unroll_factor is not None:
+            if _unwrap_if_constexpr(loop_unroll_factor) is not None:
                 for_op.set_attr("tt.loop_unroll_factor", self.builder.get_int32_attr(loop_unroll_factor))
             if disallow_acc_multi_buffer:
                 for_op.set_attr("tt.disallow_acc_multi_buffer", self.builder.get_unit_attr())
@@ -1097,10 +1119,9 @@ class CodeGenerator(ast.NodeVisitor):
             # reset local scope to not pick up local defs from the previous dry run.
             self.lscope = liveins.copy()
             self.local_defs = {}
-            block_args_flat = [for_op_body.arg(i + 1) for i in range(len(init_handles_flat))]
-            block_args = list_list_unflatten(init_handles_spec, block_args_flat)
-            for name, init_val, arg_handles in zip(names, init_args, block_args):
-                val = init_val._unflatten_ir(arg_handles)
+            block_handles = [for_op_body.arg(i + 1) for i in range(len(init_handles))]
+            block_args = unflatten_ir_values(block_handles, init_tys)
+            for name, val in zip(names, block_args):
                 self.set_value(name, val)
             self.visit_compound_statement(node.body)
             self.scf_stack.pop()
@@ -1114,9 +1135,8 @@ class CodeGenerator(ast.NodeVisitor):
 
             # create YieldOp
             if len(yields) > 0:
-                yield_handles = [y._flatten_ir() for y in yields]
-                _, yield_handles_flat = list_list_flatten(yield_handles)
-                self.builder.create_yield_op(yield_handles_flat)
+                yield_handles = flatten_values_to_ir(yields)
+                self.builder.create_yield_op(yield_handles)
             for_op_region = for_op_body.get_parent()
             assert for_op_region.size() == 1, "We use SCF, so the loop body should only have one block"
 
@@ -1130,10 +1150,9 @@ class CodeGenerator(ast.NodeVisitor):
             self.set_value(node.target.id, language.core.tensor(iv, iv_type))
 
         # update lscope & local_defs (ForOp defines new values)
-        result_handles_flat = [for_op.get_result(i) for i in range(len(init_handles_flat))]
-        result_handles = list_list_unflatten(init_handles_spec, result_handles_flat)
-        for name, init_val, arg_handles in zip(names, init_args, result_handles):
-            val = init_val._unflatten_ir(arg_handles)
+        result_handles = [for_op.get_result(i) for i in range(len(init_handles))]
+        result_values = unflatten_ir_values(result_handles, init_tys)
+        for name, val in zip(names, result_values):
             self.set_value(name, val)
 
         for stmt in node.orelse:
@@ -1198,16 +1217,10 @@ class CodeGenerator(ast.NodeVisitor):
         symbol = self.module.get_function(fn_name)
         args_val = [arg.handle for arg in args_val]
         call_op = self.builder.call(symbol, args_val)
-        if callee_ret_type is None:
+        if callee_ret_type == language.void:
             return None
-        elif call_op.get_num_results() == 1:
-            return tensor(call_op.get_result(0), callee_ret_type)
-        else:
-            # should return a tuple of tl.tensor
-            results = []
-            for i in range(call_op.get_num_results()):
-                results.append(tensor(call_op.get_result(i), callee_ret_type.types[i]))
-            return language.tuple(results)
+        handles = [call_op.get_result(i) for i in range(call_op.get_num_results())]
+        return next(unflatten_ir_values(handles, [callee_ret_type]))
 
     def visit_Call(self, node):
         fn = _unwrap_if_constexpr(self.visit(node.func))

@@ -857,6 +857,70 @@ TEST_F(LinearLayoutTest, BlackwellMixedPrecisionDotScaledSMEMSwizzled) {
   }
 }
 
+static SmallVector<StringAttr> makeList(MLIRContext *ctx,
+                                        llvm::ArrayRef<llvm::StringRef> list) {
+  SmallVector<StringAttr> ret;
+  for (auto s : list)
+    ret.push_back(StringAttr::get(ctx, s));
+  return ret;
+}
+
+TEST(SupremumTest, IdenticalLists) {
+  MLIRContext ctx;
+  SmallVector<StringAttr> x = makeList(&ctx, {"a", "b", "c"});
+  SmallVector<StringAttr> y = makeList(&ctx, {"a", "b", "c"});
+  EXPECT_EQ(supremum(x, y), x);
+}
+
+TEST(SupremumTest, NonUniqueSupremumFirstListPriority) {
+  MLIRContext ctx;
+  // sup([a, b], [a, c]) should yield [a, b, c]
+  SmallVector<StringAttr> x = makeList(&ctx, {"a", "b"});
+  SmallVector<StringAttr> y = makeList(&ctx, {"a", "c"});
+  EXPECT_EQ(supremum(x, y), makeList(&ctx, {"a", "b", "c"}));
+}
+
+TEST(SupremumTest, NonUniqueSupremumAlternate) {
+  MLIRContext ctx;
+  // sup([a, b], [b, c]) should yield [a, b, c]
+  SmallVector<StringAttr> x = makeList(&ctx, {"a", "b"});
+  SmallVector<StringAttr> y = makeList(&ctx, {"b", "c"});
+  EXPECT_EQ(supremum(x, y), makeList(&ctx, {"a", "b", "c"}));
+}
+
+TEST(SupremumTest, DifferentLengths) {
+  MLIRContext ctx;
+  // sup([a, b, c], [a, d]) should yield [a, b, c, d]
+  SmallVector<StringAttr> x = makeList(&ctx, {"a", "b", "c"});
+  SmallVector<StringAttr> y = makeList(&ctx, {"a", "d"});
+  EXPECT_EQ(supremum(x, y), makeList(&ctx, {"a", "b", "c", "d"}));
+}
+
+TEST(SupremumTest, SupremumEmptyLists) {
+  MLIRContext ctx;
+  SmallVector<StringAttr> x;
+  SmallVector<StringAttr> y;
+  EXPECT_TRUE(supremum(x, y).empty());
+}
+
+TEST(SupremumTest, OneEmptyList) {
+  MLIRContext ctx;
+  // sup([a, b], []) should yield [a, b]
+  SmallVector<StringAttr> x = makeList(&ctx, {"a", "b"});
+  SmallVector<StringAttr> y;
+  EXPECT_EQ(supremum(x, y), makeList(&ctx, {"a", "b"}));
+}
+
+#ifdef LLVM_ENABLE_ASSERTIONS
+TEST(SupremumTest, ErrorOnInconsistentOrder) {
+  MLIRContext ctx;
+  // sup([a, b], [b, a]) has no consistent ordering so it should trigger
+  // llvm_unreachable.
+  SmallVector<StringAttr> x = makeList(&ctx, {"a", "b"});
+  SmallVector<StringAttr> y = makeList(&ctx, {"b", "a"});
+  ASSERT_DEATH({ supremum(x, y); }, "Supremum does not exist");
+}
+#endif
 } // anonymous namespace
 } // namespace mlir::triton
 

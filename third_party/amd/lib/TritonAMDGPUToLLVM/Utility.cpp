@@ -284,27 +284,8 @@ Value llGetPid(Location loc, RewriterBase &rewriter, ModuleOp moduleOp,
 }
 
 Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
-             Value pred, Value falseVal, int64_t alignmentBytes,
-             triton::CacheModifier cm) {
+             Value pred, Value falseVal, triton::CacheModifier cm) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  // Try to emit llvm.intr.masked.load if we can. In theory the backend should
-  // be happier because we emit less branchy code to optimize. The backend will
-  // lower it down however it wants at some point.
-  if (alignmentBytes &&
-      (cm == triton::CacheModifier::CG || cm == triton::CacheModifier::NONE)) {
-    // `llvm.intr.masked.load` only accepts vectors. If we see a scalar we need
-    // to bitcast to `vector<1xelemTy>` (and back)
-    int64_t vecSize = getNumElements(elemTy);
-    Type vecType = castToVectorType(elemTy);
-    falseVal = b.bitcast(falseVal, vecType);
-    Value maskVal = createVectorMaskFromPredicate(rewriter, loc, pred, vecSize);
-    bool nt = (cm == triton::CacheModifier::CG);
-    Value vecData = rewriter.create<LLVM::MaskedLoadOp>(
-        loc, vecType, ptr, maskVal, falseVal, alignmentBytes, nt);
-    // If it is not a vector, remember to bitcast back to a scalar
-    vecData = b.bitcast(vecData, elemTy);
-    return vecData;
-  }
 
   Type funcType = getFunctionType(elemTy, ValueRange({ptr, pred, falseVal}));
   auto parent = ptr.getParentRegion()->getParentOfType<LLVM::LLVMFuncOp>();
@@ -332,23 +313,8 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
 }
 
 void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
-             Value pred, int64_t alignmentBytes, triton::CacheModifier cm) {
+             Value pred, triton::CacheModifier cm) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  // Try to emit llvm.intr.masked.store if we can. In theory the backend should
-  // be happier because we emit less branchy code to optimize. The backend will
-  // lower it down however it wants at some point.
-  if (alignmentBytes && cm == triton::CacheModifier::NONE) {
-    // `llvm.intr.masked.store` only accepts vectors. If we see a scalar we need
-    // to bitcast to `vector<1xelemTy>`
-    Type elemTy = val.getType();
-    int64_t vecSize = getNumElements(elemTy);
-    Type vecType = castToVectorType(elemTy);
-    val = b.bitcast(val, vecType);
-    Value maskVal = createVectorMaskFromPredicate(rewriter, loc, pred, vecSize);
-    auto op = rewriter.create<LLVM::MaskedStoreOp>(loc, val, ptr, maskVal,
-                                                   alignmentBytes);
-    return;
-  }
 
   auto ctx = ptr.getContext();
   Type funcType = getFunctionType(void_ty(ctx), ValueRange({ptr, val, pred}));
@@ -408,12 +374,12 @@ static bool isPredicatedStoreWT(LLVM::CallOp callOp) {
 // Load | .ca |   F      | F
 //      | .cg |   F      | T
 //      | .cs |   F      | T
-//      | .cv |   T      | T
+//      | .cv |   T      | X
 // -----+-----+----------+---------
 // Store| .wb |   F      | F
 //      | .cg |   F      | F
 //      | .cs |   F      | T
-//      | .wt |   T      | T
+//      | .wt |   T      | X
 // -----+-----+----------+---------
 std::pair<bool, bool>
 getCacheModifierFlagsForPredicatedCall(LLVM::CallOp callOp) {
@@ -447,12 +413,12 @@ getCacheModifierFlagsForPredicatedCall(LLVM::CallOp callOp) {
 // Load   | .ca |  0  |  0  | 0  |
 //        | .cg |  0  |  1  | 1  |
 //        | .cs |  0  |  1  | 1  |
-//        | .cv |  1  |  1  | 1  |
+//        | .cv |  1  |  1  | x  |
 // -------+-----+-----+-----+----+--
 // Store  | .wb |  0  |  0  | 0  |
 //        | .cg |  0  |  0  | 0  |
 //        | .cs |  0  |  1  | 1  |
-//        | .wt |  1  |  1  | 1  |
+//        | .wt |  1  |  1  | x  |
 // -------+-----+-----+-----+----+--
 // Atomic | N/A |  0  |  1  | x  | Setting sc0 returns the pre-op value
 //        | N/A |  1  |  0  | x  | Setting sc1 performs a system-scope atomic
@@ -460,7 +426,7 @@ getCacheModifierFlagsForPredicatedCall(LLVM::CallOp callOp) {
 static int32_t
 getCtrlBitsForCacheModifierOnGFX_942_950(triton::CacheModifier cm,
                                          bool isLoad) {
-  const int sc0Bit = 0b1, ntBit = 0b10, sc1Bit = 0b1000;
+  const int sc0Bit = 0b1, ntBit = 0b10, sc1Bit = 0b10000;
   int32_t aux = 0;
   switch (cm) {
   case triton::CacheModifier::CA:
@@ -475,7 +441,7 @@ getCtrlBitsForCacheModifierOnGFX_942_950(triton::CacheModifier cm,
     break;
   case triton::CacheModifier::CV:
     assert(isLoad);
-    aux |= sc0Bit | sc1Bit | ntBit;
+    aux |= sc0Bit | sc1Bit;
     break;
   case triton::CacheModifier::WB:
     assert(!isLoad);
@@ -483,7 +449,7 @@ getCtrlBitsForCacheModifierOnGFX_942_950(triton::CacheModifier cm,
     break;
   case triton::CacheModifier::WT:
     assert(!isLoad);
-    aux |= sc0Bit | sc1Bit | ntBit;
+    aux |= sc0Bit | sc1Bit;
     break;
   default:
     aux = 0;
@@ -493,7 +459,7 @@ getCtrlBitsForCacheModifierOnGFX_942_950(triton::CacheModifier cm,
 
 int32_t getCtrlBitsForBufferAtomicsOnGFX_942_950(bool setSC0, bool setSC1,
                                                  bool setNT) {
-  const int sc0Bit = 0b1, ntBit = 0b10, sc1Bit = 0b1000;
+  const int sc0Bit = 0b1, ntBit = 0b10, sc1Bit = 0b10000;
   int32_t aux = 0;
   if (setSC0)
     aux |= sc0Bit;
