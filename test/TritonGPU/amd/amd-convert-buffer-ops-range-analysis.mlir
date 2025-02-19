@@ -1027,3 +1027,25 @@ module attributes {"ttg.num-warps" = 4 : i32} {
     tt.return %11 : tensor<1024xf32>
   }
 }
+
+// -----
+
+// CHECK-LABEL:   tt.func @whileOp
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @whileOp(%arg0: !tt.ptr<f32>, %arg1: tensor<1024xf32>) -> tensor<1024xf32> {
+    // CHECK: tt.make_range {__amdgpuconvertbufferops.output_range = [0, 1024]
+    %0 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
+    %1 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>>
+    %2 = scf.while (%arg2 = %1) : (tensor<1024x!tt.ptr<f32>>) -> tensor<1024x!tt.ptr<f32>> {
+      // CHECK: "dummy.evaluate_condition"() {__amdgpuconvertbufferops.output_range = [-1, 0]}
+      %4 = "dummy.evaluate_condition"() : () -> i1
+      scf.condition(%4) %arg2 : tensor<1024x!tt.ptr<f32>>
+    } do {
+    ^bb0(%arg2: tensor<1024x!tt.ptr<f32>>):
+      %4 = tt.addptr %arg2, %0 : tensor<1024x!tt.ptr<f32>>, tensor<1024xi32>
+      scf.yield %4 : tensor<1024x!tt.ptr<f32>>
+    }
+    %3 = tt.load %2 : tensor<1024x!tt.ptr<f32>>
+    tt.return %3 : tensor<1024xf32>
+  }
+}
