@@ -241,7 +241,6 @@ UpcastMXFPOp::deduceOutputType(TypedValue<RankedTensorType> inputTensor,
   return RankedTensorType::get(newShape, outputElemType, newVEncoding);
 }
 
-
 LogicalResult ConcatOp::verify() {
   auto sources = getSources();
   auto coords = getCoords();
