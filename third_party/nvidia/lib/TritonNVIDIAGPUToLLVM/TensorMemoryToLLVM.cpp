@@ -12,42 +12,55 @@ using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 
-// The maximum number of registers that can be accessed by a single message
-// regardless of shape or repetitions
+// The maximum number of tensor memory registers that can be accessed
+// by a single message regardless of shape or repetitions
 static constexpr int largestTmemLoadStore = 128;
-// Factor used to intentionally narrow contiguous tmem access down from
-// the maximum message width to avoid register pressure
-static constexpr int narrowingFactor = 4;
+// The maximum number of thread registers that can be populated by
+// multiple messages
+static constexpr int maxRegisters = 256;
 
 namespace {
 
-// Tensor memory access traits, currently only 32b is used
-template <bool IsStrided> struct TMemAccess32b {
-  static constexpr int opBitWidth = 32;
-  static constexpr int colsPerThread = 1;
-  static constexpr int rowsPerThread = 1;
-  static constexpr const char *opShape = IsStrided ? "16x32bx2" : "32x32b";
-  static constexpr bool usesSecondHalfOffset = IsStrided;
+struct TMemAccessAtom {
+  int opBitWidth;
+  int colsPerThread;
+  int rowsPerThread;
+  const char *opShape;
+  bool usesSecondHalfOffset;
 };
 
-struct TMemAccess256b {
-  static constexpr int opBitWidth = 256;
-  static constexpr int colsPerThread = 2;
-  static constexpr int rowsPerThread = 2;
-  static constexpr char opShape[] = "16x256b";
-};
+constexpr TMemAccessAtom TMemAccess32x32b{.opBitWidth = 32,
+                                          .colsPerThread = 1,
+                                          .rowsPerThread = 1,
+                                          .opShape = "32x32b",
+                                          .usesSecondHalfOffset = false};
 
-template <typename TMemAccess> struct TMemMessage {
-  using traits = TMemAccess;
-  static constexpr int opBitWidth = TMemAccess::opBitWidth;
-  static constexpr int colsPerThread = TMemAccess::colsPerThread;
-  static constexpr int rowsPerThread = TMemAccess::rowsPerThread;
-  static constexpr int numThreadsPerWarp = 32;
-  static constexpr int maxNumRepeats =
-      largestTmemLoadStore / (colsPerThread * rowsPerThread);
-  static constexpr int maxColsPerMessage = (opBitWidth / 32) * maxNumRepeats;
-  static constexpr int rowsPerMessage = numThreadsPerWarp / rowsPerThread;
-  static constexpr int colsPerMessage = maxColsPerMessage / narrowingFactor;
+constexpr TMemAccessAtom TMemAccess16x32bx2{.opBitWidth = 32,
+                                            .colsPerThread = 1,
+                                            .rowsPerThread = 1,
+                                            .opShape = "16x32bx2",
+                                            .usesSecondHalfOffset = true};
+
+constexpr TMemAccessAtom TMemAccess16x256b{.opBitWidth = 256,
+                                           .colsPerThread = 2,
+                                           .rowsPerThread = 2,
+                                           .opShape = "16x256b",
+                                           .usesSecondHalfOffset = false};
+
+struct TMemMessageTraits {
+  TMemAccessAtom atom;
+  bool usesSecondHalfOffset;
+  int numThreadsPerWarp;
+  int maxNumRepeats;
+  int maxCols;
+  int numRows;
+  int numCols;
+  int numRepeats;
+  int numRegs;
+
+  bool operator<(const TMemMessageTraits &other) const {
+    return numRegs < other.numRegs;
+  }
 };
 
 struct TMemRuntimeInfo {
@@ -67,6 +80,64 @@ struct TMemRuntimeInfo {
   int numColsPerBlock;
   int colsPerWarpGroup;
 };
+
+TMemMessageTraits getTMemMessageFromAtom(const TMemAccessAtom &atom,
+                                         int narrowingFactor) {
+  TMemMessageTraits m;
+  m.atom = atom;
+  m.usesSecondHalfOffset = atom.usesSecondHalfOffset;
+  m.numThreadsPerWarp = 32;
+  m.maxNumRepeats =
+      largestTmemLoadStore / (atom.colsPerThread * atom.rowsPerThread);
+  m.maxCols = (atom.opBitWidth / 32) * m.maxNumRepeats;
+  m.numRows = m.numThreadsPerWarp / atom.rowsPerThread;
+  m.numCols = m.maxCols / narrowingFactor;
+  m.numRepeats = m.numCols / (atom.opBitWidth / 32);
+  m.numRegs = atom.colsPerThread * atom.rowsPerThread * m.numRepeats;
+  return m;
+}
+
+// Only allows half of the thread registers to be used for tensor memory access
+// to avoid register pressure. This ensures the largest tmem message width is
+// used for the workload without inducing spills.
+int getTMemMessageNarrowingFactor(int workloadThreadRegs) {
+  const int allowedRegUsage = maxRegisters / 2;
+  int narrowingFactor = 1;
+  while (workloadThreadRegs > allowedRegUsage) {
+    workloadThreadRegs /= 2;
+    narrowingFactor *= 2;
+  }
+  return narrowingFactor;
+}
+
+int getEffectiveRegs(bool unpackedb16, bool useStridedMessage, int numRegs) {
+  // The effective register count is less when using unpacked or strided
+  // messages
+  if (unpackedb16) {
+    numRegs /= 2;
+  }
+  if (useStridedMessage) {
+    numRegs /= 2;
+  }
+  return numRegs;
+}
+
+// If the workload runtime requires fewer registers than the default message
+// width, use the widest possible message that matches the workload
+TMemMessageTraits constrainMessageFromWorkload(TMemMessageTraits m,
+                                               const TMemRuntimeInfo &info,
+                                               int numRegs) {
+  m.numRegs =
+      getEffectiveRegs(info.unpackedb16, info.useStridedMessage, numRegs);
+  m.numRegs = std::min(largestTmemLoadStore, m.numRegs);
+  // Invert the above formulas to calculate the effective runtime message width
+  m.numCols = (m.numRegs * (m.atom.opBitWidth / 32)) /
+              (m.atom.colsPerThread * m.atom.rowsPerThread);
+  // Half as many registers are needed for 16-bit packed elements,
+  // so twice as many columns are accessed per message.
+  m.numCols *= info.numElementsPer32B;
+  return m;
+}
 
 SmallVector<Value> packToI32(const SmallVector<Value> &values, Location loc,
                              ConversionPatternRewriter &rewriter) {
@@ -89,13 +160,6 @@ SmallVector<Value> packToI32(const SmallVector<Value> &values, Location loc,
     }
   }
   return packedValues;
-}
-
-int getNum32BRegs(bool unpackedb16, int numElementsPer32B, int numCols) {
-  int numRegPerMessage = numCols;
-  if (unpackedb16)
-    numRegPerMessage = numRegPerMessage / numElementsPer32B;
-  return numRegPerMessage;
 }
 
 TMemRuntimeInfo getTMemRuntimeInfo(Operation *op, RankedTensorType tensorType,
@@ -142,49 +206,26 @@ TMemRuntimeInfo getTMemRuntimeInfo(Operation *op, RankedTensorType tensorType,
   info.numWarpGroupsPerBlock = ceil<int>(info.numWarpGroups, info.numBlocks);
   info.blocksInterleaved = (info.numBlocks > 1 && info.useStridedMessage);
   info.numColsPerBlock = info.numCols / info.numBlocks;
-  info.colsPerWarpGroup = info.numCols / info.numWarpGroups;
-  // If more than one warp group processes the same block,
-  // then fewer columns must be processed per message per warp group
-  info.numColsPerBlock /= info.numWarpGroupsPerBlock;
-
   if (info.blocksInterleaved) {
     info.numColsPerBlock *= 2;
   }
-
+  info.colsPerWarpGroup = info.numColsPerBlock / info.numWarpGroupsPerBlock;
+  // If more than one warp group processes the same block,
+  // then fewer columns must be processed per message per warp group
+  info.numColsPerBlock /= info.numWarpGroupsPerBlock;
   return info;
 }
 
-template <typename TMemMsgT>
 void calculateAddressAndEmitTmemMessage(
-    Location loc, Value baseAddress, TMemRuntimeInfo info,
-    ConversionPatternRewriter &rewriter,
-    const std::function<void(Value, int, bool, int, bool, int)>
-        &createMemoryOp) {
+    Location loc, Value baseAddress, const TMemRuntimeInfo &info,
+    const TMemMessageTraits &message, ConversionPatternRewriter &rewriter,
+    const std::function<void(Value, int, bool, int, bool)> &createMemoryOp) {
 
   TritonLLVMOpBuilder b(loc, rewriter);
   Value warpId = rewriter.create<nvgpu::WarpIdOp>(loc);
   Value warpIdInGroup = b.urem(warpId, b.i32_val(4));
   Value warpGroupId = b.udiv(warpId, b.i32_val(4));
 
-  int numRegs = getNum32BRegs(info.unpackedb16, info.numElementsPer32B,
-                              info.colsPerWarpGroup);
-  if (info.useStridedMessage)
-    numRegs /= 2;
-
-  // If the workload runtime requires fewer registers than the default message
-  // width, use a message width that matches the workload
-  int colsPerMessage = TMemMsgT::colsPerMessage;
-  int numRepeats = colsPerMessage / (TMemMsgT::opBitWidth / 32);
-  int numRegsPerMsg =
-      TMemMsgT::colsPerThread * TMemMsgT::rowsPerThread * numRepeats;
-  numRegsPerMsg = std::min(numRegsPerMsg, numRegs);
-  // Invert the above formulas to calculate the effective runtime message width
-  colsPerMessage = (numRegsPerMsg * (TMemMsgT::opBitWidth / 32)) /
-                   (TMemMsgT::colsPerThread * TMemMsgT::rowsPerThread);
-
-  // Half as many registers are needed for 16-bit packed elements,
-  // so twice as many columns are accessed per message.
-  colsPerMessage *= info.numElementsPer32B;
   for (int block = 0; block < info.numBlocks; block += info.numWarpGroups) {
     Value address = b.ptrtoint(i32_ty, baseAddress);
     Value blockId =
@@ -213,11 +254,11 @@ void calculateAddressAndEmitTmemMessage(
     // thus half as many messages are required
     int numColumns = info.useStridedMessage ? info.numColsPerBlock / 2
                                             : info.numColsPerBlock;
-    for (int colStart = 0; colStart < numColumns; colStart += colsPerMessage) {
+    for (int colStart = 0; colStart < numColumns; colStart += message.numCols) {
       // For messages that span only 16 rows (e.g. 16x256b), multiple messages
       // are required to cover the entire set of rows per warp.
       for (int rowStart = 0; rowStart < TMemRuntimeInfo::numRowsPerWarp;
-           rowStart += TMemMsgT::rowsPerMessage) {
+           rowStart += message.numRows) {
         Value rowOffset = b.add(blockRowId, b.i32_val(rowStart));
         Value warpGroupAddress =
             b.add(address, b.shl(rowOffset, b.i32_val(16)));
@@ -230,26 +271,23 @@ void calculateAddressAndEmitTmemMessage(
           secondHalfColOffset = numColumns;
         }
         createMemoryOp(msgAddress, secondHalfColOffset, info.unpackedb16,
-                       numRegsPerMsg, info.useStridedMessage,
-                       TMemMsgT::opBitWidth);
+                       message.numRegs, info.useStridedMessage);
       }
     }
   }
 }
 
-template <typename TMemMsgT>
-static void
-createTensorMemoryStore(Location loc, Value address, SmallVector<Value> &srcs,
-                        int secondHalfOffset, Value pred, bool unpacked,
-                        ConversionPatternRewriter &rewriter) {
+void createTensorMemoryStore(Location loc, Value address,
+                             SmallVector<Value> &srcs, int secondHalfOffset,
+                             Value pred, bool unpacked,
+                             const TMemAccessAtom &atom,
+                             ConversionPatternRewriter &rewriter) {
   PTXBuilder ptxBuilder;
-  std::string opcode;
   std::string packedStr = unpacked ? ".unpack::16b" : "";
-  unsigned numRepeats = srcs.size() / (TMemMsgT::traits::rowsPerThread *
-                                       TMemMsgT::traits::colsPerThread);
-  opcode = "@$0 tcgen05.st.sync.aligned." +
-           std::string(TMemMsgT::traits::opShape) + ".x" +
-           std::to_string(numRepeats) + packedStr;
+  unsigned numRepeats = srcs.size() / (atom.rowsPerThread * atom.colsPerThread);
+  std::string opcode = "@$0 tcgen05.st.sync.aligned." +
+                       std::string(atom.opShape) + ".x" +
+                       std::to_string(numRepeats) + packedStr;
   if (secondHalfOffset)
     opcode += ".b32 [$1], " + std::to_string(secondHalfOffset) + ", {";
   else
@@ -299,11 +337,20 @@ static void reorderScales(SmallVector<Value> &srcValues, int64_t k) {
   srcValues = std::move(reorderedValues);
 }
 
-template <typename Fn> void emitMemoryOp(bool isStrided, Fn &&emitMemoryOpFn) {
-  if (isStrided)
-    emitMemoryOpFn(std::integral_constant<bool, true>{});
-  else
-    emitMemoryOpFn(std::integral_constant<bool, false>{});
+TMemMessageTraits selectTMemMessage(const TMemRuntimeInfo &info) {
+  auto atom = info.useStridedMessage ? TMemAccess16x32bx2 : TMemAccess32x32b;
+
+  int totalRegsNeeded =
+      getEffectiveRegs(info.unpackedb16, info.useStridedMessage, info.numCols);
+  int narrowingFactor = getTMemMessageNarrowingFactor(totalRegsNeeded);
+  auto narrowedMessage = getTMemMessageFromAtom(atom, narrowingFactor);
+  narrowedMessage = constrainMessageFromWorkload(narrowedMessage, info,
+                                                 narrowedMessage.numRegs);
+
+  auto maxWidthMessage = getTMemMessageFromAtom(atom, /*narrowingFactor=*/1);
+  maxWidthMessage = constrainMessageFromWorkload(maxWidthMessage, info,
+                                                 info.colsPerWarpGroup);
+  return std::min(narrowedMessage, maxWidthMessage);
 }
 
 static void lowerStoreToTensorMemory(Location loc, Operation *op, Value src,
@@ -321,24 +368,22 @@ static void lowerStoreToTensorMemory(Location loc, Operation *op, Value src,
     reorderScales(srcValues, dstType.getShape().back());
   }
 
-  auto tmemInfo = getTMemRuntimeInfo(op, cast<RankedTensorType>(src.getType()),
-                                     cast<MemDescType>(dest.getType()));
+  auto info = getTMemRuntimeInfo(op, cast<RankedTensorType>(src.getType()),
+                                 cast<MemDescType>(dest.getType()));
+  const TMemMessageTraits message = selectTMemMessage(info);
   int regIdx = 0;
-  emitMemoryOp(tmemInfo.useStridedMessage, [&](auto isStrided) {
-    using MsgT = TMemMessage<TMemAccess32b<decltype(isStrided)::value>>;
-    calculateAddressAndEmitTmemMessage<MsgT>(
-        loc, tmemBase, tmemInfo, rewriter,
-        [&](Value startAddress, int secondHalfColOffset, bool unpackedb16,
-            int regsPerMsg, bool useStridedMessage, int opBitWidth) {
-          SmallVector<Value> srcValuesSlice(srcValues.begin() + regIdx,
-                                            srcValues.begin() + regIdx +
-                                                regsPerMsg);
-          regIdx += regsPerMsg;
-          createTensorMemoryStore<MsgT>(loc, startAddress, srcValuesSlice,
-                                        secondHalfColOffset, pred, unpackedb16,
-                                        rewriter);
-        });
-  });
+  calculateAddressAndEmitTmemMessage(
+      loc, tmemBase, info, message, rewriter,
+      [&](Value startAddress, int secondHalfColOffset, bool unpackedb16,
+          int regsPerMsg, bool useStridedMessage) {
+        SmallVector<Value> srcValuesSlice(srcValues.begin() + regIdx,
+                                          srcValues.begin() + regIdx +
+                                              regsPerMsg);
+        regIdx += regsPerMsg;
+        createTensorMemoryStore(loc, startAddress, srcValuesSlice,
+                                secondHalfColOffset, pred, unpackedb16,
+                                message.atom, rewriter);
+      });
   createWaitOpSt(loc, rewriter);
 
   // Emit a barrier to ensure all threads have finished writing to tensor memory
@@ -383,20 +428,17 @@ struct TensorMemoryAllocOpConversion
   }
 };
 
-template <typename TMemMsgT>
-static Value createTensorMemoryLoad(Location loc,
-                                    triton::nvidia_gpu::TMEMLoadOp op,
-                                    Value address, int secondHalfOffset,
-                                    bool unpacked, int numRegPerMessage,
-                                    ConversionPatternRewriter &rewriter) {
+Value createTensorMemoryLoad(Location loc, triton::nvidia_gpu::TMEMLoadOp op,
+                             Value address, int secondHalfOffset, bool unpacked,
+                             int numRegPerMessage, const TMemAccessAtom &atom,
+                             ConversionPatternRewriter &rewriter) {
   PTXBuilder ptxBuilder;
-  std::string opcode;
   // If the memory is unpacked we need to pack on the fly when loading.
   std::string packedStr = unpacked ? ".pack::16b" : "";
-  unsigned numRepeats = numRegPerMessage / (TMemMsgT::traits::rowsPerThread *
-                                            TMemMsgT::traits::colsPerThread);
-  opcode = "tcgen05.ld.sync.aligned." + std::string(TMemMsgT::traits::opShape) +
-           ".x" + std::to_string(numRepeats) + packedStr + ".b32 {";
+  unsigned numRepeats =
+      numRegPerMessage / (atom.rowsPerThread * atom.colsPerThread);
+  std::string opcode = "tcgen05.ld.sync.aligned." + std::string(atom.opShape) +
+                       ".x" + std::to_string(numRepeats) + packedStr + ".b32 {";
 
   SmallVector<PTXInstr::Operand *> operands;
   for (int i = 0; i < numRegPerMessage; i++) {
@@ -464,25 +506,22 @@ struct TensorMemoryLoadOpConversion
         getTypeConverter()->convertType(op.getSrc().getType().getElementType());
     auto tmemBase = adaptor.getSrc();
 
-    auto tmemInfo =
-        getTMemRuntimeInfo(op, cast<RankedTensorType>(op.getType()),
-                           cast<MemDescType>(op.getSrc().getType()));
+    auto info = getTMemRuntimeInfo(op, cast<RankedTensorType>(op.getType()),
+                                   cast<MemDescType>(op.getSrc().getType()));
+    const TMemMessageTraits message = selectTMemMessage(info);
     SmallVector<Value> resultVals;
-    emitMemoryOp(tmemInfo.useStridedMessage, [&](auto isStrided) {
-      using MsgT = TMemMessage<TMemAccess32b<decltype(isStrided)::value>>;
-      calculateAddressAndEmitTmemMessage<MsgT>(
-          loc, tmemBase, tmemInfo, rewriter,
-          [&](Value startAddress, int secondHalfColOffset, bool unpackedb16,
-              int regsPerMessage, bool useStridedMessage, int opBitWidth) {
-            Value packedValues = createTensorMemoryLoad<MsgT>(
-                loc, op, startAddress, secondHalfColOffset, unpackedb16,
-                regsPerMessage, rewriter);
-            auto results =
-                unpackResults(packedValues, op.getType().getElementType(),
-                              regsPerMessage, loc, rewriter);
-            resultVals.append(results.begin(), results.end());
-          });
-    });
+    calculateAddressAndEmitTmemMessage(
+        loc, tmemBase, info, message, rewriter,
+        [&](Value startAddress, int secondHalfColOffset, bool unpackedb16,
+            int regsPerMessage, bool useStridedMessage) {
+          Value packedValues = createTensorMemoryLoad(
+              loc, op, startAddress, secondHalfColOffset, unpackedb16,
+              regsPerMessage, message.atom, rewriter);
+          auto results =
+              unpackResults(packedValues, op.getType().getElementType(),
+                            regsPerMessage, loc, rewriter);
+          resultVals.append(results.begin(), results.end());
+        });
     Type structTy = getTypeConverter()->convertType(op.getType());
     Value resultStruct =
         packLLElements(loc, getTypeConverter(), resultVals, rewriter, structTy);
