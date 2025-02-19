@@ -488,17 +488,6 @@ getDefaultBlockedEncoding(MLIRContext *context, ArrayRef<int64_t> shape,
   return encoding;
 }
 
-SmallVector<std::pair<StringAttr, int32_t>>
-getStandardOutDimNames(MLIRContext *ctx, ArrayRef<int64_t> dstShape) {
-  auto newRank = dstShape.size();
-  SmallVector<std::pair<StringAttr, int32_t>> newOutDims;
-  for (auto [dim, size] :
-       llvm::zip(standardOutDimNames(ctx, newRank), dstShape)) {
-    newOutDims.emplace_back(dim, size);
-  }
-  return newOutDims;
-}
-
 LogicalResult tryJoinOnAxis(MLIRContext *ctx, const LinearLayout &inLl,
                             LinearLayout &outLl, bool fwdInference, int axis,
                             std::optional<Location> loc) {
@@ -2780,7 +2769,7 @@ struct TritonGPUInferLayoutInterface
 
     auto newRank = dstShape.size();
 
-    auto newOutDims = getStandardOutDimNames(ctx, dstShape);
+    auto newOutDims = standardOutDimPairs(ctx, dstShape);
 
     // reshapeOp assumes minor-to-major, so we need to transpose the out dims
     // before the reshape
@@ -2831,7 +2820,7 @@ struct TritonGPUInferLayoutInterface
     auto ll = toLinearLayout(shape, srcEnc);
     SmallVector<int64_t> dstShape(shape.begin(), shape.end());
     dstShape.push_back(1);
-    ll = ll.reshapeOuts(getStandardOutDimNames(ctx, dstShape));
+    ll = ll.reshapeOuts(standardOutDimPairs(ctx, dstShape));
 
     // Try join on last dim
     auto axis = dstShape.size() - 1;
@@ -2905,7 +2894,7 @@ struct TritonGPUInferLayoutInterface
     // Remove last dim from newLl (which should be 1)
     SmallVector<int64_t> dstShape(shape.begin(), shape.end());
     dstShape.pop_back();
-    newLl = newLl.reshapeOuts(getStandardOutDimNames(ctx, dstShape));
+    newLl = newLl.reshapeOuts(standardOutDimPairs(ctx, dstShape));
     dstEnc = LinearEncodingAttr::get(ctx, newLl);
     return success();
   }
