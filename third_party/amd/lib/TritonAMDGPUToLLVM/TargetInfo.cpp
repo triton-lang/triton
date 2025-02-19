@@ -65,9 +65,7 @@ llvm::AMDGPU::GPUKind TargetInfo::getGPUKind() const {
 }
 
 int TargetInfo::getSharedMemorySize() const {
-  int kbytes = 64;
-  if (getISAFamily() == ISAFamily::CDNA4)
-    kbytes = 160;
+  int kbytes = getISAFamily() == ISAFamily::CDNA4 ? 160 : 64;
   return kbytes * 1024;
 }
 
