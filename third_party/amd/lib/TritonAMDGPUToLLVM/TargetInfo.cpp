@@ -105,7 +105,8 @@ bool TargetInfo::canUseStMatrix(RankedTensorType tensorTy,
 }
 
 bool TargetInfo::canUseLDSTransLoad(int bitwidth) const {
-  return getISAFamily() == ISAFamily::CDNA4 && llvm::is_contained({16, 8, 4, 6}, bitwidth);
+  return getISAFamily() == ISAFamily::CDNA4 &&
+         llvm::is_contained({16, 8, 4, 6}, bitwidth);
 }
 
 void TargetInfo::storeMatrixShared(RewriterBase &rewriter, Location loc,
