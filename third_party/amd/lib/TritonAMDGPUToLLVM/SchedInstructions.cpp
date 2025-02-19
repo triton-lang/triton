@@ -531,8 +531,8 @@ struct TritonAMDGPUInsertInstructionSchedHints
                                                                 schedHint);
         }
       });
+      return;
     }
-    return;
 
     if (schedHint != mlir::triton::amdgpu::SchedHint::none) {
       mod.walk([&](scf::ForOp forOp) {
