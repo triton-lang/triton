@@ -232,3 +232,21 @@ tt.func @warp_specialize_with_no_uses_and_effects(%arg0: i32) {
   // CHECK-NEXT: tt.return
   tt.return
 }
+
+// CHECK-LABEL: @canonicalize_within_warp_specialize
+tt.func @canonicalize_within_warp_specialize(%arg0: i32) -> i32 {
+  %c0_i32 = arith.constant 0 : i32
+  %0 = ttg.warp_specialize()
+  default {
+    %1 = arith.addi %arg0, %c0_i32 : i32
+    // CHECK: warp_yield %arg0
+    ttg.warp_yield %1 : i32
+  }
+  // CHECK: partition0
+  partition0() num_warps(4) {
+    %c0_i32_0 = arith.constant 0 : i32
+    // CHECK-NEXT: warp_return
+    ttg.warp_return
+  } : () -> i32
+  tt.return %0 : i32
+}
