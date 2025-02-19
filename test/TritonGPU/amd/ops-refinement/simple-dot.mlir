@@ -4,6 +4,7 @@
 #blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  // CHECK: @matmul_kernel
   tt.func public @matmul_kernel(
       %arg0: tensor<256x64x!tt.ptr<f16>, #blocked> {tt.contiguity=16 : i32, tt.divisibility=16: i32, tt.constancy=16: i32},
       %arg1: tensor<64x128x!tt.ptr<f16>, #blocked> {tt.contiguity=16 : i32, tt.divisibility=16: i32, tt.constancy=16: i32})  -> tensor<256x128xf32, #mma> attributes {noinline = false} {
