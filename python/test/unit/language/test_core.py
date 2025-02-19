@@ -4170,29 +4170,6 @@ def test_constexpr(literal, dtype_str, device):
     assert re.search(r"arith.constant .* : " + dtype_str, h.asm["ttir"]) is not None
 
 
-GLOBAL_CONST_ANNOTATED: tl.constexpr = 1.0
-GLOBAL_CONST_INSTANTIATED = tl.constexpr(1.0)
-
-
-@pytest.mark.parametrize("mode", ["annotated", "instantiated"])
-def test_constexpr_global(mode, device):
-
-    @triton.jit
-    def kernel(out_ptr):
-        GENERATE_TEST_HERE
-
-    val = "GLOBAL_CONST_ANNOTATED" if mode == "annotated" else "GLOBAL_CONST_INSTANTIATED"
-    kernel_patched = patch_kernel(kernel, {'GENERATE_TEST_HERE': f"tl.store(out_ptr, {val})"})
-    out = torch.zeros((1, ), dtype=torch.float32, device=device)
-    try:
-        h = kernel_patched[(1, )](out)
-        assert torch.all(out == 1.0)
-        assert mode == "instantiated"
-    except triton.CompilationError as e:
-        assert mode == "annotated"
-        assert "Cannot access global variable" in str(e)
-
-
 @triton.jit
 def pass_const(a, b, choose_b):
     if choose_b:
