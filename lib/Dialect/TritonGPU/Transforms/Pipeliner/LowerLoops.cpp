@@ -49,10 +49,34 @@ public:
   }
 };
 
-Operation *getFirstUseOfPipelinedOp(Operation *op, CoarseSchedule &schedule) {
+DenseSet<Operation *> getTopLevelUsersInLoop(Operation *op, scf::ForOp forOp) {
+  struct Use {
+    Use(OpOperand &use)
+        : op(use.getOwner()), operandNumber(use.getOperandNumber()) {}
+    Operation *op;
+    unsigned int operandNumber;
+  };
+  DenseSet<Operation *> topLevelUsers;
+  SmallVector<Use> q(op->use_begin(), op->use_end());
+  while (!q.empty()) {
+    auto use = q.pop_back_val();
+    auto yieldOp = dyn_cast<scf::YieldOp>(use.op);
+    if (yieldOp && yieldOp->getParentOp() == forOp) {
+      q.append(forOp.getRegionIterArgs()[use.operandNumber].use_begin(),
+               forOp.getRegionIterArgs()[use.operandNumber].use_end());
+      continue;
+    }
+    Operation *topLevelUser = forOp.getBody()->findAncestorOpInBlock(*use.op);
+    topLevelUsers.insert(topLevelUser);
+  }
+  return topLevelUsers;
+}
+
+Operation *getFirstUseOfPipelinedOp(Operation *op, scf::ForOp forOp,
+                                    CoarseSchedule &schedule) {
   Operation *firstUser = nullptr;
-  for (Operation *user : op->getUsers()) {
-    Operation *topLevelUser = op->getBlock()->findAncestorOpInBlock(*user);
+  DenseSet<Operation *> topLevelUsers = getTopLevelUsersInLoop(op, forOp);
+  for (Operation *topLevelUser : topLevelUsers) {
     assert(schedule.count(topLevelUser) && "op user not found in the schedule");
     auto [_useStage, _useCluster] = schedule[topLevelUser];
     if (!firstUser) {
@@ -74,9 +98,8 @@ int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
   assert(schedule.count(op) && "LoadOp not found in the schedule");
   auto [defStage, _] = schedule[op];
   std::optional<int> useStage;
-  for (auto user : op->getUsers()) {
-    Operation *topLevelUser = forOp.getBody()->findAncestorOpInBlock(*user);
-    assert(schedule.count(topLevelUser) && "op user not found in the schedule");
+  DenseSet<Operation *> topLevelUsers = getTopLevelUsersInLoop(op, forOp);
+  for (Operation *topLevelUser : topLevelUsers) {
     auto [_useStage, _] = schedule[topLevelUser];
     useStage = std::min(_useStage, useStage.value_or(_useStage));
   }
@@ -195,7 +218,7 @@ void createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
   OpBuilderForStage builder(forOp, schedule);
   Value zero = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 0, 32);
 
-  Operation *firstUse = getFirstUseOfPipelinedOp(loadOp, schedule);
+  Operation *firstUse = getFirstUseOfPipelinedOp(loadOp, forOp, schedule);
   assert(firstUse && "LoadOp has no users");
   // Replace the load with async copy, wait and loal_load.
   OpBuilder::InsertionGuard guard(builder);
