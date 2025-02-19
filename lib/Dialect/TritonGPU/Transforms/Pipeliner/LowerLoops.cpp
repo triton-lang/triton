@@ -230,9 +230,6 @@ void createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
   Value other = loadOp.getOther();
   ttg::MemDescType allocTy = cast<ttg::MemDescType>(alloc.getType());
 
-  // TODO pawel: think about optimizing the blocked layout of indirect loads
-  // here
-
   // Create async copy
   SmallVector<Value> copyOffsets(allocTy.getRank(), zero);
   copyOffsets[0] = insertIdx;
@@ -302,8 +299,6 @@ void createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
     }
 
     loadOp->replaceAllUsesWith(result);
-
-    // TODO: Think about prefetching the load for MMAv2
   }
   schedule.erase(loadOp);
   loadOp->erase();
@@ -327,12 +322,15 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
   forOp.getBody()->walk<mlir::WalkOrder::PreOrder>([&](Operation *op) {
     if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
       int stageDiff = getDefUseStageDiff(loadOp, forOp, schedule);
+      if (stageDiff == 0) {
+        return WalkResult::advance();
+      }
       SharedEncodingTrait sharedEncoding = getSharedEncoding(loadOp);
       // Do not create async loads for small loads (cp.async requires at least 4
       // bytes)
       int copyVecBytes = getCopyVecBytes(
           cast<RankedTensorType>(loadOp.getType()), sharedEncoding);
-      if (stageDiff > 0 && copyVecBytes >= 4) {
+      if (copyVecBytes >= 4) {
         if (canBeShmemPipelined(loadOp)) {
           // Allocate additional buffer required by the wgmma pipelining.
           stageDiff += 1;
