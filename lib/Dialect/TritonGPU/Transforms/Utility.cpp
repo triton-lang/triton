@@ -1034,7 +1034,8 @@ StringRef getAMDArch(Operation *module) {
 // as we've replaced DotOpEnc with Linear in some cases
 // (specifically, fp4ToFp and similar unpack-upcast thru join)
 std::optional<ttg::SwizzledSharedEncodingAttr>
-getSharedForLinear(ttg::LinearEncodingAttr enc, ArrayRef<int64_t> shape,
+getSharedForLinear(ttg::LinearEncodingAttr enc,
+                   ArrayRef<unsigned int> globalOrder, ArrayRef<int64_t> shape,
                    unsigned elemBitWidth, ttg::CTALayoutAttr ctaLayout) {
   auto ctx = enc.getContext();
   auto ll = enc.getLinearLayout();
@@ -1044,6 +1045,11 @@ getSharedForLinear(ttg::LinearEncodingAttr enc, ArrayRef<int64_t> shape,
     return std::nullopt;
 
   auto order = enc.getOrder();
+  assert(globalOrder.size() == rank);
+  // TODO add memdesc_trans support for dot(trans(cvt(src) #linear) #dot_op)
+  if (order != globalOrder)
+    return std::nullopt;
+
   auto innerDim = order[0];
   auto outerDim = order[1];
   auto contigPerWarp = enc.getContigPerWarp();
@@ -1104,8 +1110,8 @@ getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
             bitWidth, /*needTrans=*/false);
       } else if (auto linearEnc = dyn_cast<ttg::LinearEncodingAttr>(enc)) {
 
-        auto attrOpt = getSharedForLinear(linearEnc, srcTy.getShape(), bitWidth,
-                                          ctaLayout);
+        auto attrOpt = getSharedForLinear(linearEnc, order, srcTy.getShape(),
+                                          bitWidth, ctaLayout);
         if (!attrOpt)
           return std::nullopt;
         tempAttr = *attrOpt;
