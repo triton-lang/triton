@@ -9,7 +9,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK: llvm.br
     // CHECK: rocdl.barrier
     // CHECK: llvm.load
-    // CHECK: llvm.intr.masked.store
+    // CHECK: llvm.store
     %0 = tt.atomic_rmw fadd, relaxed, gpu, %arg0, %arg2, %arg1 : (!tt.ptr<f32>, f32, i1) -> f32
     tt.store %arg0, %0 : !tt.ptr<f32>
     tt.return
@@ -25,8 +25,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK: llvm.cond_br
     // CHECK: llvm.atomicrmw
     // CHECK: llvm.atomicrmw
-    // CHECK: llvm.intr.masked.store
-    // CHECK: llvm.intr.masked.store
+    // CHECK: llvm.store
+    // CHECK: llvm.store
     %0 = tt.atomic_rmw fadd, relaxed, gpu, %arg0, %arg2, %arg1 : (tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xf32, #blocked0>, tensor<256xi1, #blocked0>) -> tensor<256xf32, #blocked0>
     tt.store %arg0, %0 : tensor<256x!tt.ptr<f32>, #blocked0>
     tt.return
