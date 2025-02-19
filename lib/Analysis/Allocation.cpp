@@ -597,7 +597,7 @@ private:
         // exist within regions that may execute simultaneously.
         auto wsx = x->id->getParentOfType<gpu::WarpSpecializeOp>();
         auto wsy = y->id->getParentOfType<gpu::WarpSpecializeOp>();
-        if (wsx && wsy &&
+        if (wsx && wsy && wsx == wsy &&
             x->id->getParentRegion() != y->id->getParentRegion() &&
             xSizeRange.intersects(ySizeRange)) {
           interference[x].insert(y);

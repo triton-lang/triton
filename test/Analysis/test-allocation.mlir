@@ -851,4 +851,28 @@ tt.func @partition_region_interference() {
   tt.return
 }
 
+// expected-remark @below {{two_different_ws}}
+// expected-remark @below {{size = 16}}
+tt.func @two_different_ws() {
+  ttg.warp_specialize()
+  default {
+    // expected-remark @below {{offset = 0, size = 16}}
+    ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    ttg.warp_yield
+  }
+  partition0() num_warps(1) {
+    ttg.warp_return
+  } : () -> ()
+  ttg.warp_specialize()
+  default {
+    ttg.warp_yield
+  }
+  partition0() num_warps(1) {
+    // expected-remark @below {{offset = 0, size = 16}}
+    ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+    ttg.warp_return
+  } : () -> ()
+  tt.return
+}
+
 }

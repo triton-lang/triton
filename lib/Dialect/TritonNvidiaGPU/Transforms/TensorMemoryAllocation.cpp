@@ -192,7 +192,6 @@ allocateTMem(Operation *parentOp,
              DenseMap<triton::nvidia_gpu::TMEMAllocOp, int> &offsets) {
   SmallVector<triton::nvidia_gpu::TMEMAllocOp> allocs;
   DenseMap<Operation *, int> operationId;
-  llvm::EquivalenceClasses<Operation *> dependentAllocs;
   RowIdConstraints rowIdConstraints;
   parentOp->walk<WalkOrder::PostOrder>([&](Operation *op) {
     operationId[op] = operationId.size();
