@@ -114,6 +114,11 @@ public:
   }
 };
 
+// This trait indicates that regions in the op may execute concurrently with
+// each other.
+template <typename ConcreteType>
+struct AsyncRegions : public TraitBase<ConcreteType, AsyncRegions> {};
+
 } // namespace OpTrait
 } // namespace mlir
 

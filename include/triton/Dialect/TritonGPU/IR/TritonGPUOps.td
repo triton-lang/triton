@@ -333,7 +333,7 @@ def TTG_GlobalScratchAllocOp : TTG_Op<"global_scratch_alloc", [MemoryEffects<[Me
 }
 
 def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [
-  RecursiveMemoryEffects, RecursivelySpeculatable,
+  RecursiveMemoryEffects, RecursivelySpeculatable, AsyncRegions,
   DeclareOpInterfaceMethods<RegionBranchOpInterface>
 ]> {
   let summary = "asynchronously execute code on multiple warpgroups";
