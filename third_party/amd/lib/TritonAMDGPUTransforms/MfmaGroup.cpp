@@ -81,16 +81,25 @@ MfmaDatabase::MfmaDatabase(MLIRContext *context) {
       {ROCDL::symbol::getOperationName(), k, kBase},                           \
     }                                                                          \
   }
-// For gfx950, we can have two intrinsics with the same M/N but different K.
-// Order matters here: case1 will be preferred to case2.
-#define TRITON_MFMA_v4_2case(m, n, aET, bET, symbol1, k1, kBase1, symbol2, k2, \
-                             kBase2)                                           \
+
+// For certain architectures, we can have two intrinsics with the same M/N but
+// different K. Order matters here: case1 will be preferred to case2.
+#define TRITON_MFMA_v_2case(v, m, n, aET, bET, symbol1, k1, kBase1, symbol2,   \
+                            k2, kBase2)                                        \
   {                                                                            \
-    /*key=*/{4, m, n, aET.getTypeID(), bET.getTypeID()}, /*value=*/{           \
+    /*key=*/{v, m, n, aET.getTypeID(), bET.getTypeID()}, /*value=*/{           \
       {ROCDL::symbol1::getOperationName(), k1, kBase1},                        \
           {ROCDL::symbol2::getOperationName(), k2, kBase2},                    \
     }                                                                          \
   }
+#define TRITON_MFMA_v4_2case(m, n, aET, bET, symbol1, k1, kBase1, symbol2, k2, \
+                             kBase2)                                           \
+  TRITON_MFMA_v_2case(4, m, n, aET, bET, symbol1, k1, kBase1, symbol2, k2,     \
+                      kBase2)
+#define TRITON_MFMA_v2_2case(m, n, aET, bET, symbol1, k1, kBase1, symbol2, k2, \
+                             kBase2)                                           \
+  TRITON_MFMA_v_2case(2, m, n, aET, bET, symbol1, k1, kBase1, symbol2, k2,     \
+                      kBase2)
 
 // Macro for defining MFMA intrinsics existing in multiple gfx versions.
 #define TRITON_MFMA_v1to2(m, n, aET, bET, symbol, k, kBase)                    \
@@ -166,13 +175,17 @@ MfmaDatabase::MfmaDatabase(MLIRContext *context) {
       // mfma_f32_32x32x16_bf16 & mfma_f32_32x32x8_bf16_1K
       TRITON_MFMA_v4_2case(32, 32, bf16T, bf16T, mfma_f32_32x32x16_bf16, 16, 8,
                            mfma_f32_32x32x8bf16_1k, 8, 4),
-      // mfma_f32_32x32x8_bf16_1K
-      TRITON_MFMA_v2to3(32, 32, bf16T, bf16T, mfma_f32_32x32x8bf16_1k, 8, 4),
+      TRITON_MFMA_v(3, 32, 32, bf16T, bf16T, mfma_f32_32x32x8bf16_1k, 8, 4),
+      // mfma_f32_32x32x8_bf16_1K & mfma_f32_32x32x4bf16_1k
+      TRITON_MFMA_v2_2case(32, 32, bf16T, bf16T, mfma_f32_32x32x8bf16_1k, 8, 4,
+                           mfma_f32_32x32x4bf16_1k, 4, 2),
       // mfma_f32_16x16x32_bf16 & mfma_f32_16x16x16_bf16_1K
       TRITON_MFMA_v4_2case(16, 16, bf16T, bf16T, mfma_f32_16x16x32_bf16, 32, 8,
                            mfma_f32_16x16x16bf16_1k, 16, 4),
-      // mfma_f32_16x16x16_bf16_1K
-      TRITON_MFMA_v2to3(16, 16, bf16T, bf16T, mfma_f32_16x16x16bf16_1k, 16, 4),
+      TRITON_MFMA_v(3, 16, 16, bf16T, bf16T, mfma_f32_16x16x16bf16_1k, 16, 4),
+      // mfma_f32_16x16x16_bf16_1K & mfma_f32_16x16x8_bf16
+      TRITON_MFMA_v2_2case(16, 16, bf16T, bf16T, mfma_f32_16x16x16bf16_1k, 16,
+                           4, mfma_f32_16x16x8bf16, 8, 2),
       // mfma_f32_32x32x4_bf16
       TRITON_MFMA_v(1, 32, 32, bf16T, bf16T, mfma_f32_32x32x4bf16, 4, 2),
       // mfma_f32_16x16x8_bf16
