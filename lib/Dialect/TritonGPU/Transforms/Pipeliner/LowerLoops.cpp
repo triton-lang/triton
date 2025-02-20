@@ -4,6 +4,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "triton-loop-pipeline"
@@ -20,6 +21,11 @@ namespace triton {
 namespace gpu {
 
 namespace {
+
+/////////////////////////////
+// UTILS
+/////////////////////////////
+
 class OpBuilderForStage : public OpBuilder {
   std::optional<int> _stage;
   std::optional<CoarseSchedule::Cluster> _cluster;
@@ -134,6 +140,10 @@ Value createIncrementModulo(BuilderT &builder, Location loc, Value counter,
   return builder.template create<arith::SelectOp>(loc, inRangeCond, addOne,
                                                   zero);
 }
+
+/////////////////////////////
+// LOWER LOADS
+/////////////////////////////
 
 ttg::SharedEncodingTrait getSharedEncoding(Operation *op) {
   // Try to use local alloc encoding if possible.
@@ -700,12 +710,176 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
   return forOp;
 }
 
+/////////////////////////////
+// LOWER TMA DESCRIPTORS
+/////////////////////////////
+
+LogicalResult
+allocTMABuffers(scf::ForOp forOp,
+                llvm::MapVector<Operation *, Value> &tmaBufferMapping,
+                int numStages) {
+  IRRewriter rewriter(forOp);
+
+  // Create a multi-buffered allocation for each MakeTensorDescOp call in the
+  // loop
+  forOp.walk([&](tt::MakeTensorDescOp op) {
+    // TODO peter: walk to loop yield to find the init value if this is a
+    // loop-carried value. That would save us from allocating another buffer
+    // just for the init value
+    auto loc = op.getLoc();
+    Value alloc = rewriter.create<triton::gpu::GlobalScratchAllocOp>(
+        loc, triton::getPointerType(rewriter.getI8Type()),
+        numStages * ttng::TMA_SIZE_BYTES, ttng::TMA_ALIGN);
+    tmaBufferMapping[op.getOperation()] = alloc;
+  });
+  return success();
+}
+
+template <typename BuilderT>
+Value subviewTMADescriptor(BuilderT &builder, Location loc, Value alloc,
+                           Value counter) {
+  Value tmaSizeVal = builder.template create<arith::ConstantIntOp>(
+      loc, ttng::TMA_SIZE_BYTES, 32);
+  Value offset =
+      builder.template create<arith::MulIOp>(loc, tmaSizeVal, counter);
+  return builder.template create<triton::AddPtrOp>(loc, alloc.getType(), alloc,
+                                                   offset);
+}
+
+LogicalResult rewriteTMABufferUpdates(
+    scf::ForOp forOp,
+    const llvm::MapVector<Operation *, Value> &tmaBufferMapping,
+    ArrayRef<BlockArgument> tmaCounters, int numStages, Value one, Value zero,
+    CoarseSchedule &schedule) {
+  assert(tmaBufferMapping.size() == tmaCounters.size());
+
+  Value numStagesVal = mlir::OpBuilder(forOp).create<arith::ConstantIntOp>(
+      forOp.getLoc(), numStages, 32);
+
+  for (auto [iOp, pair] : llvm::enumerate(tmaBufferMapping)) {
+    auto &[op, alloc] = pair;
+
+    // Rewriter MakeTensorDescOp as writing a TMA descriptor
+    auto makeDescOp = cast<tt::MakeTensorDescOp>(op);
+
+    OpBuilderForStage stageBuilder(makeDescOp, schedule);
+    auto loc = makeDescOp.getLoc();
+
+    BlockArgument counter = tmaCounters[iOp];
+    Value nextBuf = subviewTMADescriptor(stageBuilder, loc, alloc, counter);
+    if (failed(ttng::createTMADesc(nextBuf, makeDescOp, stageBuilder))) {
+      return failure();
+    }
+    stageBuilder.create<triton::ExperimentalTensormapFenceproxyAcquireOp>(
+        loc, nextBuf);
+    Value nextDesc = stageBuilder.create<triton::ReinterpretTensorDescOp>(
+        loc, makeDescOp.getType(), nextBuf);
+
+    makeDescOp.getResult().replaceAllUsesWith(nextDesc);
+
+    // Increment the buffer index counter
+    Value nextCounter = createIncrementModulo(stageBuilder, loc, counter,
+                                              numStagesVal, zero, one);
+
+    // If we are in a (potentially nested) if region, propagate the counter
+    // up to the main for op body scope
+    Operation *curOp = op;
+    Operation *parent = op->getParentOp();
+    while (parent != forOp.getOperation()) {
+      auto ifOp = dyn_cast<scf::IfOp>(parent);
+      if (!ifOp) {
+        std::string msg;
+        llvm::raw_string_ostream ss(msg);
+        ss << "Cannot pipeline MakeTensorDescOp inside:\n";
+        parent->print(ss);
+        ss << "\nOnly scf.if regions are supported";
+        return makeDescOp->emitOpError(std::move(msg));
+      }
+
+      IRRewriter rewriter(parent);
+      auto newIfOp =
+          replaceIfOpWithNewSignature(rewriter, ifOp, {nextCounter.getType()});
+
+      auto yieldNewBlock = newIfOp.thenBlock();
+      auto yieldOldBlock = newIfOp.elseBlock();
+
+      if (yieldNewBlock != curOp->getBlock()) {
+        std::swap(yieldNewBlock, yieldOldBlock);
+      }
+      cast<scf::YieldOp>(yieldNewBlock->getTerminator())
+          .getResultsMutable()
+          .append(nextCounter);
+      cast<scf::YieldOp>(yieldOldBlock->getTerminator())
+          .getResultsMutable()
+          .append(counter);
+
+      ifOp.erase();
+      nextCounter = newIfOp.getResults().back();
+      curOp = newIfOp;
+      parent = newIfOp->getParentOp();
+    }
+
+    // Finally, rewrite the loop level yield
+    auto forYield = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+    forYield.setOperand(counter.getArgNumber() - 1, nextCounter);
+  }
+  return success();
+}
+
+scf::ForOp lowerTMADescriptors(scf::ForOp forOp, CoarseSchedule &schedule) {
+  llvm::MapVector<Operation *, Value> tmaBufferMapping;
+  if (failed(
+          allocTMABuffers(forOp, tmaBufferMapping, schedule.getNumStages()))) {
+    llvm_unreachable("TMA pipelining failed");
+  }
+
+  IRRewriter builder(forOp);
+  Location loc = forOp.getLoc();
+  Value zero = builder.create<arith::ConstantIntOp>(loc, 0, 32);
+  Value one = builder.create<arith::ConstantIntOp>(loc, 1, 32);
+  SmallVector<Value> newOperands;
+  unsigned newOperandIndex = forOp.getBody()->getNumArguments();
+  // Create one counter per TMA buffer. This allows the descriptors to be
+  // updated independently without needing to write duplicate of existing tma
+  // descriptors.
+  unsigned tmaCounterArgsStartIdx = newOperandIndex + newOperands.size();
+  for (int i = 0; i < tmaBufferMapping.size(); ++i) {
+    newOperands.push_back(zero);
+  }
+
+  scf::ForOp newForOp =
+      replaceForOpWithNewSignature(builder, forOp, newOperands);
+  forOp.erase();
+  forOp = newForOp;
+
+  auto tmaCounters = ArrayRef<BlockArgument>(newForOp.getBody()->getArguments())
+                         .slice(tmaCounterArgsStartIdx);
+
+  // Update yield op with temporary yield values
+  auto forYield = cast<scf::YieldOp>(newForOp.getBody()->getTerminator());
+  for (unsigned i = 0; i < newOperands.size(); ++i) {
+    forYield.getResultsMutable().append(newOperands[i]);
+  }
+
+  if (failed(rewriteTMABufferUpdates(newForOp, tmaBufferMapping, tmaCounters,
+                                     schedule.getNumStages(), one, zero,
+                                     schedule))) {
+    llvm_unreachable("Failed to rewrite TMA ops");
+  }
+  return newForOp;
+}
+
+/////////////////////////////
+// LOWER LOOP
+/////////////////////////////
+
 void lowerLoop(scf::ForOp forOp) {
   CoarseSchedule schedule;
   if (failed(schedule.deSerialize(forOp))) {
     return;
   }
   scf::ForOp newForOp = lowerLoads(forOp, schedule);
+  newForOp = lowerTMADescriptors(newForOp, schedule);
   schedule.serialize(newForOp);
   LLVM_DEBUG({ DBGS() << "Loop after lowering loads:\n" << newForOp << "\n"; });
 }

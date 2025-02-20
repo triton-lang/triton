@@ -60,6 +60,30 @@ tt.func @one_dep_async(%lb : index, %ub : index, %step : index,
 #A = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// CHECK-LABEL: @different_use_stages
+// CHECK: scf.for
+// CHECK:   ttg.async_copy_global_to_local %{{.*}} {loop.cluster = 2 : i32, loop.stage = 0 : i32}
+// CHECK:   ttg.async_wait {{.*}} {loop.cluster = 0 : i32, loop.stage = 2 : i32, num = 0 : i32}
+// CHECK:   ttg.memdesc_subview {{.*}} {loop.cluster = 0 : i32, loop.stage = 2 : i32}
+// CHECK:   %[[A_VAL:.*]] = ttg.local_load {{.*}} {loop.cluster = 0 : i32, loop.stage = 2 : i32}
+// CHECK:   "use1"(%[[A_VAL]]) {loop.cluster = 0 : i32, loop.stage = 2 : i32}
+// CHECK:   "use2"(%[[A_VAL]]) {loop.cluster = 0 : i32, loop.stage = 3 : i32}
+tt.func @different_use_stages(%lb : index, %ub : index, %step : index,
+                 %a_ptr_init : tensor<128x32x!tt.ptr<f16>, #A>) -> () {
+  scf.for %iv = %lb to %ub step %step : index {
+    %a = tt.load %a_ptr_init {loop.cluster = 2 : i32, loop.stage = 0 : i32} : tensor<128x32x!tt.ptr<f16>, #A>
+    "use1"(%a) {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<128x32xf16, #A>) -> ()
+    "use2"(%a) {loop.cluster = 0 : i32, loop.stage = 3 : i32} : (tensor<128x32xf16, #A>) -> ()
+  }
+  tt.return
+}
+}
+
+// -----
+
+#A = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK-LABEL: @used_by_if_yield
 // CHECK-DAG: %[[A:.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x128x32
 // CHECK: scf.for
@@ -368,7 +392,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-DAG: %[[MINUS_ONE:.*]] = arith.constant -1
   // CHECK-DAG: %[[ZERO:.*]] = arith.constant 0
   // CHECK-DAG: %[[ONE:.*]] = arith.constant 1
-  // CHECK-DAG: %[[NUM_BUFS:.*]] = arith.constant {{.*}} 3 : i32
+  // CHECK-DAG: %[[NUM_BUFS:.*]] = arith.constant 3 : i32
   // CHECK: %[[A:.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x128x128
   // CHECK: %[[B:.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x128x128
   // CHECK: scf.for {{.*}} iter_args(%[[ACC:.*]] = %[[INIT]], %[[INS:.*]] = %[[MINUS_ONE]], %[[EXT:.*]] = %[[MINUS_ONE]])
@@ -426,7 +450,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-DAG: %[[MINUS_ONE:.*]] = arith.constant -1
   // CHECK-DAG: %[[ZERO:.*]] = arith.constant 0
   // CHECK-DAG: %[[ONE:.*]] = arith.constant 1
-  // CHECK-DAG: %[[NUM_BUFS:.*]] = arith.constant {{.*}} 2 : i32
+  // CHECK-DAG: %[[NUM_BUFS:.*]] = arith.constant 3 : i32
   // CHECK: %[[A:.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x128x128
   // CHECK: scf.for {{.*}} iter_args(%[[ACC:.*]] = %[[INIT]], %[[INS:.*]] = %[[MINUS_ONE]], %[[EXT:.*]] = %[[MINUS_ONE]])
   // CHECK:   %[[INS_P1:.*]] = arith.addi %[[INS]], %[[ONE]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}  : i32
@@ -543,7 +567,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-DAG: %[[MINUS_ONE:.*]] = arith.constant -1
   // CHECK-DAG: %[[ZERO:.*]] = arith.constant 0
   // CHECK-DAG: %[[ONE:.*]] = arith.constant 1
-  // CHECK-DAG: %[[NUM_BUFS:.*]] = arith.constant {{.*}} 3 : i32
+  // CHECK-DAG: %[[NUM_BUFS:.*]] = arith.constant 3 : i32
   // CHECK: %[[A:.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x128x128
   // CHECK: %[[B:.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x128x128
   // CHECK: scf.for {{.*}} iter_args(%[[ACC:.*]] = %[[INIT]], %[[INS:.*]] = %[[MINUS_ONE]], %[[EXT:.*]] = %[[MINUS_ONE]])
@@ -772,9 +796,36 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   }
 }
 
-// Tests to write:
-// - mmav5 scaled with pipelined scale loads
-// - load with multiple uses
-// - memdesc_trans
-// - mmav2
-// - buffer deallocation
+// -----
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @tensor_descriptor_lowering
+  // CHECK-DAG: %[[ZERO:.*]] = arith.constant 0 : i32
+  // CHECK-DAG: %[[ONE:.*]] = arith.constant 1 : i32
+  // CHECK-DAG: %[[NUM_STAGES:.*]] = arith.constant 2 : i32
+  // CHECK-DAG: %[[_128:.*]] = arith.constant{{.*}} 128 : i32
+  // CHECK: %[[GLOBAL_ALLOC:.*]] = ttg.global_scratch_alloc {alignment = 128 : i32, nbytes = 256 : i32} : !tt.ptr<i8>
+  // CHECK: scf.for {{.*}} iter_args(%[[IDX:.*]] = %[[ZERO]])
+  // CHECK:   %[[OFFS:.*]] = arith.muli %[[IDX]], %[[_128]] {loop.cluster = 0 : i32, loop.stage = 1 : i32}
+  // CHECK:   %[[DESC_PTR:.*]] = tt.addptr %[[GLOBAL_ALLOC]], %[[OFFS]] {loop.cluster = 0 : i32, loop.stage = 1 : i32}
+  // CHECK:   tt.experimental_tensormap_create %[[DESC_PTR]]{{.*}} loop.cluster = 0 : i32, loop.stage = 1 : i32
+  // CHECK:   tt.experimental_tensormap_fenceproxy_acquire %[[DESC_PTR]] {loop.cluster = 0 : i32, loop.stage = 1 : i32}
+  // CHECK:   %[[DESC:.*]] = tt.reinterpret_tensor_descriptor %[[DESC_PTR]] {loop.cluster = 0 : i32, loop.stage = 1 : i32}
+  // CHECK:   %[[IDX_P1:.*]] = arith.addi %[[IDX]], %[[ONE]] {loop.cluster = 0 : i32, loop.stage = 1 : i32}
+  // CHECK:   %[[IDX_CMP:.*]] = arith.cmpi slt, %[[IDX_P1]], %[[NUM_STAGES]] {loop.cluster = 0 : i32, loop.stage = 1 : i32}
+  // CHECK:   %[[IDX_NEXT:.*]] = arith.select %[[IDX_CMP]], %[[IDX_P1]], %[[ZERO]] {loop.cluster = 0 : i32, loop.stage = 1 : i32}
+  // CHECK:   "use"(%[[DESC]]) {loop.cluster = 0 : i32, loop.stage = 1 : i32}
+  tt.func @tensor_descriptor_lowering(
+    %lb : index, %ub : index, %step : index,
+    %A: !tt.ptr<f16>,
+    %shape_x: i32,
+    %shape_y: i32,
+    %strides_x: i64,
+    %strides_y: i64) -> (){
+    scf.for %iv = %lb to %ub step %step : index {
+      %desc = tt.make_tensor_descriptor %A, [%shape_x, %shape_y], [%strides_x, %strides_y] {loop.cluster = 0 : i32, loop.stage = 1 : i32} : <f16>, <tensor<128x128xf16>>
+      "use"(%desc) {loop.cluster = 0 : i32, loop.stage = 1 : i32} : (!tt.tensordesc<tensor<128x128xf16>>) -> ()
+    }
+    tt.return
+  }
+}
