@@ -2264,8 +2264,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [8, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 8], order = [1, 0]}>
 module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: rematerialize_loop_arg
-  tt.func public @rematerialize_loop_arg(%arg0: !tt.ptr<f16>) {
+  // CHECK-LABEL: rematerialize_loop_arg_1
+  tt.func public @rematerialize_loop_arg_1(%arg0: !tt.ptr<f16>) {
     // CHECK-NOT: ttg.convert_layout
     %c1_i32 = arith.constant 1 : i32
     %c0_i32 = arith.constant 0 : i32
@@ -2372,19 +2372,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.thr
 #blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LABEL: @rematerialize_loop_arg
-  tt.func public @rematerialize_loop_arg() -> (tensor<32xf32, #blocked>, tensor<32xf32, #blocked>, tensor<32xf32, #blocked1>) {
+  // CHECK-LABEL: @rematerialize_loop_arg_2
+  tt.func public @rematerialize_loop_arg_2() -> (tensor<32xf32, #blocked>, tensor<32xf32, #blocked>, tensor<32xf32, #blocked1>) {
     %cst = arith.constant dense<1.000000e+00> : tensor<32xf32, #blocked1>
     %cst_0 = arith.constant dense<2.000000e+00> : tensor<32xf32, #blocked>
     %c0_i32 = arith.constant 0 : i32
     %c32_i32 = arith.constant 32 : i32
     %c4096_i32 = arith.constant 4096 : i32
-    // CHECK: %[[F:.+]]:4 = scf.for
+    // CHECK: %[[F:.+]]:3 = scf.for
     // CHECK:   %[[R:.+]] = arith.addf
     // CHECK:   arith.addf
-    // CHECK:   scf.yield %{{.+}}, %{{.+}}, %{{.+}}, %[[R]]
+    // CHECK:   arith.mulf
+    // CHECK:   scf.yield %{{.+}}, %{{.+}}, %[[R]]
     // CHECK: }
-    // CHECK: tt.return %[[F]]#3, %[[F]]#1, %[[F]]#2
+    // CHECK: tt.return %[[F]]#2, %[[F]]#1, %[[F]]#0
     %1:3 = scf.for %arg0 = %c0_i32 to %c4096_i32 step %c32_i32 iter_args(%arg1 = %cst, %arg3 = %cst_0, %arg4 = %cst) -> (tensor<32xf32, #blocked1>, tensor<32xf32, #blocked>, tensor<32xf32, #blocked1>) : i32 {
       %4 = arith.addf %arg1, %cst : tensor<32xf32, #blocked1>
       %5 = ttg.convert_layout %4 : tensor<32xf32, #blocked1> -> tensor<32xf32, #blocked>
