@@ -3,13 +3,13 @@
 
 include "mlir/Pass/PassBase.td"
 
-def ProtonLowering: Pass<"proton-lowering", "mlir::ModuleOp"> {
+def ConvertProtonToProtonGPU: Pass<"convert-proton-to-protongpu", "mlir::ModuleOp"> {
   let summary = "Lowering pass of ProtonIR to ProtonGPU IR";
 
   let description = "Convert the Proton Op into ProtonGPU Op. This includes scaffolding operations"
                     "such as allocation for internal profiling buffers, resources binding, and final cleanup.";
 
-  let constructor = "mlir::triton::proton::createProtonLoweringPass(\"cycle\", \"warpgroup\", 0, 32768, 128, \"circular\", \"shared_mem\", 0)";
+  let constructor = "mlir::triton::proton::createConvertProtonToProtonGPUPass(\"cycle\", \"warpgroup\", 0, 32768, 128, \"circular\", \"shared_mem\", 0)";
 
   let dependentDialects = ["mlir::triton::proton::ProtonDialect",
                            "mlir::triton::proton::gpu::ProtonGPUDialect",

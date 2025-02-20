@@ -78,8 +78,7 @@ def PTG_FinalizeOp : PTG_Op<"finalize", [
   let arguments = (
     ins TTG_MemDescType:$data,
     TT_PtrType :$indexPtr,
-    TT_Ptr :$ptr,
-    I32Attr :$size
+    TT_Ptr :$ptr
   );
 
   let assemblyFormat = [{$data `,` $indexPtr `,` $ptr attr-dict `:` qualified(type($data)) `,` type($indexPtr) `,` type($ptr)}];

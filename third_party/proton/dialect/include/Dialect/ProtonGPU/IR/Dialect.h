@@ -19,8 +19,6 @@ namespace triton {
 namespace proton {
 namespace gpu {
 
-const int getWarpNumPerGroup();
-
 const int getBytesPerClockEntry();
 
 } // namespace gpu

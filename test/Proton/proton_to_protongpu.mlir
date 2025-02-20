@@ -1,10 +1,4 @@
-// RUN: triton-opt --split-input-file -proton-lowering="max-shared-mem=1024" -canonicalize -cse %s | FileCheck %s
-
-module {
-// CHECK: module
-}
-
-// -----
+// RUN: triton-opt --split-input-file -convert-proton-to-protongpu="max-shared-mem=1024" -canonicalize -cse %s | FileCheck %s
 
 module {
   // CHECK-LABEL: no_record
@@ -26,7 +20,7 @@ module attributes {"ttg.num-warps" = 8 : i32} {
   // CHECK: %[[END:.*]] = proton_gpu.read_counter : i32
   // CHECK: proton_gpu.circular_store end %[[BUF]], %[[INDEX]], %[[END]] {scopeId = 0 : i32} : !ttg.memdesc<256xi32, #shared, #smem, mutable>, <i32, 5>, i32
   // CHECK: gpu.barrier
-  // CHECK: proton_gpu.finalize %[[BUF]], %[[INDEX]], %[[SCRATCH]] {size = 1152 : i32} : !ttg.memdesc<256xi32, #shared, #smem, mutable>, <i32, 5>, <i32>
+  // CHECK: proton_gpu.finalize %[[BUF]], %[[INDEX]], %[[SCRATCH]] : !ttg.memdesc<256xi32, #shared, #smem, mutable>, <i32, 5>, <i32>
   // CHECK: tt.return
   tt.func @simple_record() {
     proton.record start "name0"

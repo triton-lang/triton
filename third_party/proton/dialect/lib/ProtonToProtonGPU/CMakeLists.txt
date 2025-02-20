@@ -1,5 +1,5 @@
 add_triton_library(ProtonToProtonGPU
-  ProtonLowering.cpp
+  ProtonToProtonGPUPass.cpp
 
   DEPENDS
   ProtonToProtonGPUIncGen

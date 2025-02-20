@@ -27,13 +27,13 @@ module attributes {"ttg.num-warps" = 8 : i32} {
     // CHECK-NEXT: gpu.barrier
     // CHECK-NEXT: proton_gpu.finalize
     // CHECK-NEXT: tt.return
-    %0 = ttg.local_alloc  : () -> !ttg.memdesc<0xi32, #shared, #smem, mutable>
-    %1 = proton_gpu.global_scratch_alloc {alignment = 128 : i32, nbytes = 128 : i32} : !tt.ptr<i32>
-    %2 = proton_gpu.init_buffer_index : !tt.ptr<i32>
+    %0 = ttg.local_alloc  : () -> !ttg.memdesc<64xi32, #shared, #smem, mutable>
+    %1 = proton_gpu.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32} : !tt.ptr<i32>
+    %2 = proton_gpu.init_buffer_index : <i32, 5>
     %3 = proton_gpu.read_counter : i32
-    proton_gpu.circular_store start %0, %2, %3 {scopeId = 0 : i32} : !ttg.memdesc<0xi32, #shared, #smem, mutable>, !tt.ptr<i32>, i32
+    proton_gpu.circular_store start %0, %2, %3 {scopeId = 0 : i32} : !ttg.memdesc<64xi32, #shared, #smem, mutable>, <i32, 5>, i32
     gpu.barrier
-    proton_gpu.finalize %0, %2, %1 {size = 128 : i32} : !ttg.memdesc<0xi32, #shared, #smem, mutable>, !tt.ptr<i32>, !tt.ptr<i32>
+    proton_gpu.finalize %0, %2, %1 : !ttg.memdesc<64xi32, #shared, #smem, mutable>, <i32, 5>, <i32>
     tt.return
   }
 } // end module

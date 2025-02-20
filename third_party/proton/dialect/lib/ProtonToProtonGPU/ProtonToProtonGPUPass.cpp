@@ -19,10 +19,14 @@ namespace mlir {
 namespace triton {
 namespace proton {
 
-#define GEN_PASS_DEF_PROTONLOWERING
+#define GEN_PASS_DEF_CONVERTPROTONTOPROTONGPU
 #include "Conversion/ProtonToProtonGPU/Passes.h.inc"
 
 namespace {
+// FIXME(fywkevin): This is a placeholder for now. After Jeff's WS support in
+// place, we should revisit and adjust this accordingly.
+const int getWarpNumPerGroup() { return 4; }
+
 class RecordOpCircularRewrite : public OpRewritePattern<proton::RecordOp> {
 public:
   RecordOpCircularRewrite(MLIRContext *ctx, Value buffer, Value index,
@@ -63,13 +67,14 @@ private:
 };
 } // namespace
 
-class ProtonLoweringPass : public impl::ProtonLoweringBase<ProtonLoweringPass> {
+class ConvertProtonToProtonGPUPass
+    : public impl::ConvertProtonToProtonGPUBase<ConvertProtonToProtonGPUPass> {
 public:
-  ProtonLoweringPass(std::string metric, std::string granularity,
-                     int32_t maxSharedMem, int32_t scratchMem,
-                     int32_t alignment, std::string strategy,
-                     std::string bufferType, int32_t bufferSize)
-      : ProtonLoweringBase<ProtonLoweringPass>() {
+  ConvertProtonToProtonGPUPass(std::string metric, std::string granularity,
+                               int32_t maxSharedMem, int32_t scratchMem,
+                               int32_t alignment, std::string strategy,
+                               std::string bufferType, int32_t bufferSize)
+      : ConvertProtonToProtonGPUBase<ConvertProtonToProtonGPUPass>() {
     this->metric = metric;
     this->granularity = granularity;
     this->maxSharedMem = maxSharedMem;
@@ -95,11 +100,17 @@ public:
     const int bytesPerEntry = proton::gpu::getBytesPerClockEntry();
     const int wordsPerEntry = bytesPerEntry / 4; // 1 word = 4 bytes
     const int circularHeaderSize = 16;           // byte size
+    // TODO(fywkevin): we should consider the WS support for shared memory
+    // allocation.
     int sharedSlots =
         llvm::PowerOf2Ceil((maxSharedMem - sharedMemUsed) / bytesPerEntry);
     int allocSharedMemSize = sharedSlots * bytesPerEntry;
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     int allocBufferSize = bufferSize > 0 ? bufferSize : allocSharedMemSize;
+    if (!allocBufferSize) {
+      mlir::emitError(loc, "profiling buffer size can't be 0.");
+      return failure();
+    }
 
     // Circular strategy memory layout (total: allocScratchMemSize bytes)
     //  +-----------------------------------------------+
@@ -127,6 +138,9 @@ public:
       auto ctaLayout = triton::gpu::CTALayoutAttr::get(
           context, /*CTAsPerCGA=*/{1},
           /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
+
+      // TODO(fywkevin): add another shared encoding attribute derived from the
+      // SharedEncodingTrait, and use it here.
       auto encoding = triton::gpu::SwizzledSharedEncodingAttr::get(
           context, 1, 1, 1, {0}, ctaLayout);
       auto sharedBufferType = triton::gpu::MemDescType::get(
@@ -158,10 +172,7 @@ public:
     func.walk([&](triton::ReturnOp ret) {
       builder.setInsertionPoint(ret);
       builder.create<mlir::gpu::BarrierOp>(loc);
-      builder.create<proton::gpu::FinalizeOp>(
-          loc, buffer, index, profileMem,
-          mlir::IntegerAttr::get(mlir::IntegerType::get(context, 32),
-                                 allocScratchMemSize));
+      builder.create<proton::gpu::FinalizeOp>(loc, buffer, index, profileMem);
     });
 
     return success();
@@ -232,13 +243,13 @@ public:
 };
 
 std::unique_ptr<OperationPass<ModuleOp>>
-createProtonLoweringPass(std::string metric, std::string granularity,
-                         int32_t maxSharedMem, int32_t scratchMem,
-                         int32_t alignment, std::string strategy,
-                         std::string bufferType, int32_t bufferSize) {
-  return std::make_unique<ProtonLoweringPass>(metric, granularity, maxSharedMem,
-                                              scratchMem, alignment, strategy,
-                                              bufferType, bufferSize);
+createConvertProtonToProtonGPUPass(std::string metric, std::string granularity,
+                                   int32_t maxSharedMem, int32_t scratchMem,
+                                   int32_t alignment, std::string strategy,
+                                   std::string bufferType, int32_t bufferSize) {
+  return std::make_unique<ConvertProtonToProtonGPUPass>(
+      metric, granularity, maxSharedMem, scratchMem, alignment, strategy,
+      bufferType, bufferSize);
 }
 
 } // namespace proton

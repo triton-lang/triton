@@ -75,7 +75,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
 
   // Proton passes
   mlir::test::proton::registerTestScopeIdAllocationPass();
-  mlir::triton::proton::registerProtonLowering();
+  mlir::triton::proton::registerConvertProtonToProtonGPU();
 
   // TODO: register Triton & TritonGPU passes
   registry.insert<mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,
