@@ -828,3 +828,44 @@ tt.func @tma_special_cases_cf(%arg1: !tt.ptr<i8, 0>, %i1 : i1, %arg2: tensor<256
   tt.return %t : tensor<256x64xf16, #blocked>
 }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 2, perPhase = 2, maxPhase = 4, order = [1, 0]}>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-warps" = 4 : i32} {
+
+// CHECK-LABEL: @direct_backedge_within_loop
+tt.func @direct_backedge_within_loop(%arg0: index, %arg1: index, %arg2: index, %arg3: !tt.ptr<f16>, %arg4: !tt.ptr<f16>, %arg5: i1) {
+  // CHECK-NEXT: constant
+  %cst = arith.constant dense<0.000000e+00> : tensor<128x32xf16, #blocked>
+  // CHECK-NEXT: local_alloc
+  %0 = ttg.local_alloc %cst : (tensor<128x32xf16, #blocked>) -> !ttg.memdesc<128x32xf16, #shared, #smem>
+  // CHECK-NEXT: barrier
+  // CHECK-NEXT: local_load
+  %1 = ttg.local_load %0 : !ttg.memdesc<128x32xf16, #shared, #smem> -> tensor<128x32xf16, #blocked>
+  // CHECK-NEXT: br
+  cf.br ^bb1(%arg0, %0 : index, !ttg.memdesc<128x32xf16, #shared, #smem>)
+^bb1(%2: index, %3: !ttg.memdesc<128x32xf16, #shared, #smem>):
+  cf.cond_br %arg5, ^bb2, ^bb3
+// CHECK: ^bb2:
+^bb2:
+  // CHECK-NEXT: barrier
+  // CHECK-NEXT: local_alloc
+  %4 = ttg.local_alloc %cst : (tensor<128x32xf16, #blocked>) -> !ttg.memdesc<128x32xf16, #shared, #smem>
+  // CHECK-NEXT: br
+  cf.br ^bb1(%arg1, %4 : index, !ttg.memdesc<128x32xf16, #shared, #smem>)
+// CHECK: ^bb3
+^bb3:
+  // CHECK-NEXT: barrier
+  // CHECK-NEXT: local_load
+  %5 = ttg.local_load %3 : !ttg.memdesc<128x32xf16, #shared, #smem> -> tensor<128x32xf16, #blocked>
+  // CHECK-NEXT: cond_br
+  cf.cond_br %arg5, ^bb3, ^bb4
+^bb4:
+  tt.return
+}
+
+}
