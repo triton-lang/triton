@@ -60,9 +60,8 @@ void MembarAnalysis::resolve(FunctionOpInterface funcOp,
       // the outputBlockInfo, we skip the successors
       continue;
     }
-    // Update the current block. The block transfer function is not monotonic,
-    // so overwrite the output state entirely.
-    outputBlockInfoMap[block] = inputBlockInfo;
+    // Update the current block
+    outputBlockInfoMap[block].join(inputBlockInfo);
     // Update the successors
     for (auto *successor : successors) {
       inputBlockInfoMap[successor].join(outputBlockInfoMap[block]);
