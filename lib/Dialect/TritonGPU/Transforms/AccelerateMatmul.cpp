@@ -220,8 +220,9 @@ getWarpsPerTile(DotOp dotOp, const ArrayRef<int64_t> shape, int version,
 
 static bool bwdFilter(Operation *op) {
   return (op->hasTrait<OpTrait::Elementwise>() && isMemoryEffectFree(op)) ||
-         isa<BroadcastOp, ExpandDimsOp, ReshapeOp, TransOp, Fp4ToFpOp,
-             ConvertLayoutOp, LoadOp, ExperimentalDescriptorLoadOp>(op);
+         isView(op) ||
+         isa<Fp4ToFpOp, LoadOp, ExperimentalDescriptorLoadOp, BroadcastOp,
+             ConvertLayoutOp>(op);
 }
 
 // Finds the bitwidth with which the value x is loaded
@@ -241,11 +242,27 @@ static int computeOrigBitWidth(Value x) {
   int origBitWidth = getElementTypeOrSelf(x).getIntOrFloatBitWidth();
   for (auto op : slice) {
     if (isa<LoadOp, ExperimentalDescriptorLoadOp>(op)) {
-      origBitWidth = std::min<int>(
-          origBitWidth, cast<RankedTensorType>(op->getResult(0).getType())
-                            .getElementTypeBitWidth());
+      if (auto tensorTy =
+              dyn_cast<RankedTensorType>(op->getResultTypes().front())) {
+        origBitWidth =
+            std::min<int>(origBitWidth, tensorTy.getElementTypeBitWidth());
+      }
     }
   }
+
+  // If JoinOp occurred at least once, in backward layout propagation,
+  // the kWidth will be split in half as we pass through the JoinOp.
+  // Hence we divide origBitWidth by 2 here to compensate for that and
+  // improve our load width.
+  // This won't be optimal if there is a tree of multiple JoinOps, which
+  // would require counting the max number of JoinOp's along any path.
+  //
+  // In the future we might want to do something like trying a large kWidth,
+  // run layout backpropagation and see what's the contiguity that you
+  // get at the loads that feed into it.
+  if (llvm::any_of(slice, [](Operation *op) { return isa<JoinOp>(op); }))
+    origBitWidth /= 2;
+
   return origBitWidth;
 }
 

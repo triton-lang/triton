@@ -296,3 +296,81 @@ module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32}
     tt.return
   }
 }
+
+
+// -----
+
+// Category 4: load a scalar. Make sure the optimization is not applied
+// should NOT apply: load scalar
+// CHECK-LABEL: sink_2nd_load_scalar
+//       CHECK: tt.load
+//  CHECK-NEXT: tt.load
+//  CHECK-NEXT: tt.splat
+//  CHECK-NEXT: tt.broadcast
+//  CHECK-NEXT: ttg.convert_layout
+//  CHECK-NEXT: ttg.convert_layout
+//  CHECK-NEXT: tt.dot
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [0, 1]}>
+#mma = #ttg.amd_mfma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [1, 1], instrShape = [16, 16], isTransposed = true}>
+#dotOp0 = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>
+#dotOp1 = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+tt.func public @sink_2nd_load_scalar(%A_ptr: !tt.ptr<f16>, %B_ptr: tensor<64x256x!tt.ptr<f16>, #blocked1>, %C_ptr: tensor<256x256x!tt.ptr<f32>, #mma>) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<256x256xf32, #mma>
+    %0:1 = scf.for %arg0 = %c0 to %c1 step %c1 iter_args(%arg1 = %cst) -> (tensor<256x256xf32, #mma>)  : i32 {
+      %1 = tt.load %A_ptr : !tt.ptr<f16>
+      %2 = tt.splat %1 : f16 -> tensor<1x64xf16, #blocked>
+      %3 = tt.broadcast %2 : tensor<1x64xf16, #blocked> -> tensor<256x64xf16, #blocked>
+      %4 = tt.load %B_ptr : tensor<64x256x!tt.ptr<f16>, #blocked1>
+      %5 = ttg.convert_layout %3 : tensor<256x64xf16, #blocked> -> tensor<256x64xf16, #dotOp0>
+      %6 = ttg.convert_layout %4 : tensor<64x256xf16, #blocked1> -> tensor<64x256xf16, #dotOp1>
+      %7 = tt.dot %5, %6, %arg1 : tensor<256x64xf16, #dotOp0> * tensor<64x256xf16, #dotOp1> -> tensor<256x256xf32, #mma>
+      scf.yield %7 : tensor<256x256xf32, #mma>
+    }
+    tt.store %C_ptr, %0#0: tensor<256x256x!tt.ptr<f32>, #mma>
+    tt.return
+  }
+}
+
+
+// -----
+
+// Category 5: load a 1D tensor. Make sure the optimization is not applied
+// should NOT apply: load scalar
+// CHECK-LABEL: sink_2nd_load_1D_tensor
+//       CHECK: tt.load
+//  CHECK-NEXT: tt.load
+//  CHECK-NEXT: tt.expand_dims
+//  CHECK-NEXT: tt.broadcast
+//  CHECK-NEXT: ttg.convert_layout
+//  CHECK-NEXT: ttg.convert_layout
+//  CHECK-NEXT: tt.dot
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 1], order = [0, 1]}>
+#mma = #ttg.amd_mfma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [1, 1], instrShape = [16, 16], isTransposed = true}>
+#dotOp0 = #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>
+#dotOp1 = #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
+tt.func public @sink_2nd_load_1D_tensor(%A_ptr: tensor<256x!tt.ptr<f16>, #ttg.slice<{dim = 1, parent = #blocked}>>, %B_ptr: tensor<64x256x!tt.ptr<f16>, #blocked1>, %C_ptr: tensor<256x256x!tt.ptr<f32>, #mma>) {
+    %c0 = arith.constant 0 : i32
+    %c1 = arith.constant 1 : i32
+    %cst = arith.constant dense<0.000000e+00> : tensor<256x256xf32, #mma>
+    %0:1 = scf.for %arg0 = %c0 to %c1 step %c1 iter_args(%arg1 = %cst) -> (tensor<256x256xf32, #mma>)  : i32 {
+      %1 = tt.load %A_ptr : tensor<256x!tt.ptr<f16>, #ttg.slice<{dim = 1, parent = #blocked}>>
+      %2 = tt.expand_dims %1 {axis = 1 : i32} : tensor<256xf16, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<256x1xf16, #blocked>
+      %3 = tt.broadcast %2 : tensor<256x1xf16, #blocked> -> tensor<256x64xf16, #blocked>
+      %4 = tt.load %B_ptr : tensor<64x256x!tt.ptr<f16>, #blocked1>
+      %5 = ttg.convert_layout %3 : tensor<256x64xf16, #blocked> -> tensor<256x64xf16, #dotOp0>
+      %6 = ttg.convert_layout %4 : tensor<64x256xf16, #blocked1> -> tensor<64x256xf16, #dotOp1>
+      %7 = tt.dot %5, %6, %arg1 : tensor<256x64xf16, #dotOp0> * tensor<64x256xf16, #dotOp1> -> tensor<256x256xf32, #mma>
+      scf.yield %7 : tensor<256x256xf32, #mma>
+    }
+    tt.store %C_ptr, %0#0: tensor<256x256x!tt.ptr<f32>, #mma>
+    tt.return
+  }
+}

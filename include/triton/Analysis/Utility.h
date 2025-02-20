@@ -47,21 +47,13 @@ public:
 
   triton::ReduceOp getOperation() { return op; }
 
-  bool isReductionOnLayoutFastAxis();
-
   unsigned getThreadOffsetOnReductionAxis();
 
   bool isWarpSynchronous();
 
-  unsigned getInterWarpSize();
-
-  unsigned getIntraWarpSize();
-
   unsigned getInterWarpSizeWithUniqueData();
 
   unsigned getIntraWarpSizeWithUniqueData();
-
-  unsigned getThreadsReductionAxis();
 
   // The shape of the shared memory space needed for the reduction.
   SmallVector<unsigned> getScratchRepShape();
@@ -70,11 +62,7 @@ public:
 
   unsigned getScratchSizeInBytes();
 
-  bool isSupportedLayout();
-
   bool isReduceWithinCTA();
-
-  unsigned getAxis() { return axis; }
 
 private:
   triton::ReduceOp op;

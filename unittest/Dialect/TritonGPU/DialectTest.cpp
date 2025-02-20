@@ -363,41 +363,83 @@ TEST_F(Fp4ToFpOpTest, Fp4ToFpOpLayoutPropagation) {
       if (!isa<LinearEncodingAttr>(dstEnc)) {
         EXPECT_EQ(newSrcEnc, enc);
       }
+    }
+  }
+}
 
-      // Once join and trans support arbitrary layouts we could implement it
-      // like this, but for now we test against this decomposition:
+class JoinOpTest : public ::testing::Test {
+public:
+  JoinOpTest() { ctx.getOrLoadDialect<TritonGPUDialect>(); }
+
+protected:
+  MLIRContext ctx;
+};
+
+TEST_F(JoinOpTest, JoinOpLayoutPropagation) {
+  SmallVector<SmallVector<int64_t>> shapes = {{64, 128}, {256, 1024}};
+  auto distributedEncodings = createDistributedEncodings(ctx);
+  auto *inferLayout =
+      ctx.getOrLoadDialect<TritonGPUDialect>()
+          ->getRegisteredInterface<DialectInferLayoutInterface>();
+
+  for (auto enc : distributedEncodings) {
+    for (auto shape : shapes) {
+      if (auto sliceEncoding = dyn_cast<triton::gpu::SliceEncodingAttr>(enc)) {
+        shape.erase(shape.begin() + sliceEncoding.getDim());
+      }
+      auto rank = shape.size();
+      // Join only supports Linear or Blocked
+      auto linear = LinearEncodingAttr::get(&ctx, toLinearLayout(shape, enc));
+      // Test that we can do a round trip from src to dst encoding and back.
+      Attribute dstEnc;
+      LogicalResult result =
+          inferLayout->inferJoinOpEncoding(linear, dstEnc, shape, std::nullopt);
+      EXPECT_TRUE(succeeded(result));
+      Attribute newSrcEnc;
+      auto newShape = shape;
+      newShape.push_back(2);
+      result = inferLayout->inferSplitOpEncoding(dstEnc, newSrcEnc, newShape,
+                                                 std::nullopt);
+      EXPECT_TRUE(succeeded(result));
+      // Structural equality.
+      EXPECT_EQ(toLinearLayout(shape, newSrcEnc), toLinearLayout(shape, enc));
+      // We'll have equality iff dstEnc is a legacy encoding.
+      if (!isa<LinearEncodingAttr>(dstEnc)) {
+        EXPECT_EQ(newSrcEnc, enc);
+      }
+
+      // We test against this decomposition:
       // newShape = shape
       // newShape[axis] *= 2
       // rank = len(shape)
       // transShape = list(range(rank))
       // transShape.insert(axis + 1, rank)
       // join(enc, enc).trans(transShape).reshape(newShape)
-      // join just supports Blocked encodings tho
-      if (auto blockedEnc = dyn_cast<BlockedEncodingAttr>(enc)) {
-        auto transPerm = llvm::to_vector(llvm::seq<int32_t>(0, rank));
-        transPerm.insert(transPerm.begin() + axis + 1, rank);
-        Attribute joinedEnc;
-        result = inferLayout->inferJoinOpEncoding(enc, joinedEnc, std::nullopt);
-        auto joinShape = shape;
-        joinShape.push_back(2);
-        assert(succeeded(result));
-        Attribute transEnc;
-        result = inferLayout->inferTransOpEncoding(joinedEnc, joinShape,
-                                                   transPerm, transEnc);
-        assert(succeeded(result));
-        SmallVector<int64_t> transShape;
-        for (auto i : transPerm) {
-          transShape.push_back(joinShape[i]);
-        }
-        Attribute reshapedEnc;
-        result = inferLayout->inferReshapeOpEncoding(
-            transShape, transEnc, newShape, reshapedEnc, std::nullopt);
-        assert(succeeded(result));
-        // The layouts should be structurally the same
-        // but reshapeEnc will likely be a LinearEncodingAttr
-        EXPECT_EQ(toLinearLayout(newShape, reshapedEnc),
-                  toLinearLayout(newShape, dstEnc));
+      auto axis = rank - 1;
+      auto transPerm = llvm::to_vector(llvm::seq<int32_t>(0, rank));
+      transPerm.insert(transPerm.begin() + axis + 1, rank);
+      Attribute joinedEnc;
+      result =
+          inferLayout->inferJoinOpEncoding(enc, joinedEnc, shape, std::nullopt);
+      auto joinShape = shape;
+      joinShape.push_back(2);
+      assert(succeeded(result));
+      Attribute transEnc;
+      result = inferLayout->inferTransOpEncoding(joinedEnc, joinShape,
+                                                 transPerm, transEnc);
+      assert(succeeded(result));
+      SmallVector<int64_t> transShape;
+      for (auto i : transPerm) {
+        transShape.push_back(joinShape[i]);
       }
+      Attribute reshapedEnc;
+      result = inferLayout->inferReshapeOpEncoding(
+          transShape, transEnc, newShape, reshapedEnc, std::nullopt);
+      assert(succeeded(result));
+      // The layouts should be structurally the same
+      // but reshapeEnc will likely be a LinearEncodingAttr
+      EXPECT_EQ(toLinearLayout(newShape, reshapedEnc),
+                toLinearLayout(newShape, dstEnc));
     }
   }
 }

@@ -12,6 +12,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
@@ -138,6 +139,10 @@ unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
                         << ", contig: " << valInfo.getContiguity(order[0])
                         << ", alignment: " << alignment);
   return currPerThread;
+}
+
+bool isView(Operation *op) {
+  return isa<ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp>(op);
 }
 
 //===----------------------------------------------------------------------===//
@@ -312,9 +317,10 @@ static Attribute inferDstEncoding(triton::ExpandDimsOp op, Attribute encoding) {
 
 static Attribute inferDstEncoding(JoinOp op, Attribute srcEnc) {
   Attribute dstEnc;
+  auto shape = op.getResult().getType().getShape();
   if (srcEnc.getDialect()
           .getRegisteredInterface<DialectInferLayoutInterface>()
-          ->inferJoinOpEncoding(srcEnc, dstEnc,
+          ->inferJoinOpEncoding(srcEnc, dstEnc, shape,
                                 /*loc=*/std::nullopt)
           .succeeded()) {
     return dstEnc;
@@ -324,9 +330,10 @@ static Attribute inferDstEncoding(JoinOp op, Attribute srcEnc) {
 
 static Attribute inferDstEncoding(SplitOp op, Attribute srcEnc) {
   Attribute dstEnc;
+  auto shape = op.getSrc().getType().getShape();
   if (srcEnc.getDialect()
           .getRegisteredInterface<DialectInferLayoutInterface>()
-          ->inferSplitOpEncoding(srcEnc, dstEnc,
+          ->inferSplitOpEncoding(srcEnc, dstEnc, shape,
                                  /*loc=*/std::nullopt)
           .succeeded()) {
     return dstEnc;
@@ -350,10 +357,11 @@ static Attribute inferSrcEncoding(triton::ExpandDimsOp op, Attribute encoding) {
 
 static Attribute inferSrcEncoding(JoinOp op, Attribute dstEnc) {
   // Split is the inverse of join.
+  auto shape = op.getResult().getType().getShape();
   Attribute srcEnc;
   if (dstEnc.getDialect()
           .getRegisteredInterface<DialectInferLayoutInterface>()
-          ->inferSplitOpEncoding(dstEnc, srcEnc, /*loc=*/std::nullopt)
+          ->inferSplitOpEncoding(dstEnc, srcEnc, shape, /*loc=*/std::nullopt)
           .succeeded()) {
     return srcEnc;
   }
@@ -363,9 +371,10 @@ static Attribute inferSrcEncoding(JoinOp op, Attribute dstEnc) {
 static Attribute inferSrcEncoding(SplitOp op, Attribute dstEnc) {
   // Join is the inverse of split.
   Attribute srcEnc;
+  auto shape = op.getSrc().getType().getShape();
   if (dstEnc.getDialect()
           .getRegisteredInterface<DialectInferLayoutInterface>()
-          ->inferJoinOpEncoding(dstEnc, srcEnc, /*loc=*/std::nullopt)
+          ->inferJoinOpEncoding(dstEnc, srcEnc, shape, /*loc=*/std::nullopt)
           .succeeded()) {
     return srcEnc;
   }
@@ -1021,6 +1030,46 @@ StringRef getAMDArch(Operation *module) {
   return ref.drop_front(4); // drop the "hip:"
 }
 
+// Rough utility for obtaining a SharedEnc for a LinearEncoding,
+// as we've replaced DotOpEnc with Linear in some cases
+// (specifically, fp4ToFp and similar unpack-upcast thru join)
+std::optional<ttg::SwizzledSharedEncodingAttr>
+getSharedForLinear(ttg::LinearEncodingAttr enc,
+                   ArrayRef<unsigned int> globalOrder, ArrayRef<int64_t> shape,
+                   unsigned elemBitWidth, ttg::CTALayoutAttr ctaLayout) {
+  auto ctx = enc.getContext();
+  auto ll = enc.getLinearLayout();
+  auto rank = shape.size();
+
+  if (rank != 2)
+    return std::nullopt;
+
+  auto order = enc.getOrder();
+  assert(globalOrder.size() == rank);
+  // TODO add memdesc_trans support for dot(trans(cvt(src) #linear) #dot_op)
+  if (order != globalOrder)
+    return std::nullopt;
+
+  auto innerDim = order[0];
+  auto outerDim = order[1];
+  auto contigPerWarp = enc.getContigPerWarp();
+
+  constexpr unsigned BANK_SIZE{128};
+  auto elemBytes = elemBitWidth / 8;
+
+  auto vec = contigPerWarp[innerDim];
+  auto rowSize = elemBytes * (unsigned)shape[innerDim];
+  auto perPhase = std::max(BANK_SIZE / rowSize, 1u);
+  auto maxPhase = std::max(contigPerWarp[outerDim] / perPhase, 1u);
+
+  // cp.async does not support transfer size < 4B
+  if (vec * elemBytes < 4 && perPhase < maxPhase)
+    return std::nullopt;
+
+  return ttg::SwizzledSharedEncodingAttr::get(ctx, vec, perPhase, maxPhase,
+                                              order, ctaLayout);
+}
+
 // If all the transitive uses of the given value have are used by a convert to
 // the same dot operand encoding, return the shared encoding that needs to be
 // used to be compatible with users' layouts. If there are incompatible shared
@@ -1047,18 +1096,28 @@ getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
     } else {
       if (!isa<ttg::LocalLoadOp, ttg::ConvertLayoutOp>(user))
         return std::nullopt;
-      auto dotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(
+      auto enc =
           cast<triton::gpu::TensorOrMemDesc>(user->getResult(0).getType())
-              .getEncoding());
-      if (!dotOpEnc)
-        return std::nullopt;
+              .getEncoding();
       auto srcTy = cast<triton::gpu::TensorOrMemDesc>(val.getType());
-      auto CTALayout = ttg::getCTALayout(srcTy.getEncoding());
+      auto ctaLayout = ttg::getCTALayout(srcTy.getEncoding());
       auto order = ttg::getOrder(srcTy.getEncoding());
       unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
-      tempAttr = ttg::SwizzledSharedEncodingAttr::get(
-          val.getContext(), dotOpEnc, srcTy.getShape(), order, CTALayout,
-          bitWidth, /*needTrans=*/false);
+
+      if (auto dotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(enc)) {
+        tempAttr = ttg::SwizzledSharedEncodingAttr::get(
+            val.getContext(), dotOpEnc, srcTy.getShape(), order, ctaLayout,
+            bitWidth, /*needTrans=*/false);
+      } else if (auto linearEnc = dyn_cast<ttg::LinearEncodingAttr>(enc)) {
+
+        auto attrOpt = getSharedForLinear(linearEnc, order, srcTy.getShape(),
+                                          bitWidth, ctaLayout);
+        if (!attrOpt)
+          return std::nullopt;
+        tempAttr = *attrOpt;
+      } else {
+        return std::nullopt;
+      }
     }
     // Check that the shared encodings needed by the users are compatible.
     if (attr != nullptr && attr != tempAttr) {

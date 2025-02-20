@@ -375,7 +375,8 @@ struct DotOpMFMAConversionHelper {
   /// rawElems is a vector of kWidth elements. We need to prepare vector(s) of
   /// kBase elements for each mfma instruction
   SmallVector<Value> extractOperands(Value rawElems, int kWidth, int kBase,
-                                     Type type, bool preserveBF16) const {
+                                     Type type, bool preserveBF16,
+                                     bool isConstantScale = false) const {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     int kpack = kWidth / kBase;
     SmallVector<Value> results;
@@ -396,9 +397,20 @@ struct DotOpMFMAConversionHelper {
         }
       }
       if (type.getIntOrFloatBitWidth() == 8) {
-        if (1 == kBase)
+        if (1 == kBase) {
           // This is only for the scale operands of scaled mfma on MI350
-          results.push_back(b.zext(i32_ty, b.bitcast(vec, i8_ty)));
+          if (isConstantScale) {
+            // If the scale is constant(created by arith::ConstantOp), it will
+            // be put in a sgpr instead of vgpr. In that case, instead of
+            // vgpr[7:0], the instruction reads sgpr[30:23] as the scale value.
+            // So we need to manually left shift the scale by 23 bits to meet
+            // the requirement.
+            results.push_back(b.shl(
+                i32_ty, b.zext(i32_ty, b.bitcast(vec, i8_ty)), b.i32_val(23)));
+          } else {
+            results.push_back(b.zext(i32_ty, b.bitcast(vec, i8_ty)));
+          }
+        }
         if (4 == kBase)
           // This is for int8 on pre- MI300 GPUs
           results.push_back(b.bitcast(vec, i32_ty));
@@ -416,10 +428,9 @@ struct DotOpMFMAConversionHelper {
 
   /// Converts dot operand structure to value table and converts types
   /// appropriate for mfma instructions
-  virtual SmallVector<ValueTable>
-  getValuesFromDotOperandLayoutStruct(Value value, int batch, int n0, int n1,
-                                      int kWidth, int kBase, Type type,
-                                      bool allowXF32, bool preserveBF16) const {
+  virtual SmallVector<ValueTable> getValuesFromDotOperandLayoutStruct(
+      Value value, int batch, int n0, int n1, int kWidth, int kBase, Type type,
+      bool allowXF32, bool preserveBF16, bool isConstantScale = false) const {
     auto tb = TritonLLVMOpBuilder(loc, rewriter);
     auto elems = unpackLLElements(loc, value, rewriter);
     int kpack = kWidth / kBase;
@@ -448,8 +459,8 @@ struct DotOpMFMAConversionHelper {
               vals = extractOperands(rawElems, kWidth, kBase, f32_ty,
                                      preserveBF16);
             } else if (type.getIntOrFloatBitWidth() == 8) {
-              vals =
-                  extractOperands(rawElems, kWidth, kBase, i8_ty, preserveBF16);
+              vals = extractOperands(rawElems, kWidth, kBase, i8_ty,
+                                     preserveBF16, isConstantScale);
             } else if (type.isBF16()) {
               vals = extractOperands(rawElems, kWidth, kBase, bf16_ty,
                                      preserveBF16);
@@ -509,6 +520,8 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     Value b = op.getRhs();
     Value aScale = op.getLhsScale();
     Value bScale = op.getRhsScale();
+    bool isAScaleConstant = aScale.getDefiningOp<arith::ConstantOp>();
+    bool isBScaleConstant = bScale.getDefiningOp<arith::ConstantOp>();
     Value d = op.getD();
     auto aTensorTy = cast<RankedTensorType>(a.getType());
     auto bTensorTy = cast<RankedTensorType>(b.getType());
@@ -586,10 +599,12 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     // operands.
     auto operandAScale = getValuesFromDotOperandLayoutStruct(
         loadedAScale, numRepB, numRepM, numRepK, scaleKWidth, scaleKBase,
-        aScaleTensorTy.getElementType(), allowXF32, /*preserveBF16=*/false);
+        aScaleTensorTy.getElementType(), allowXF32, /*preserveBF16=*/false,
+        isAScaleConstant);
     auto operandBScale = getValuesFromDotOperandLayoutStruct(
         loadedBScale, numRepB, numRepN, numRepK, scaleKWidth, scaleKBase,
-        bScaleTensorTy.getElementType(), allowXF32, /*preserveBF16=*/false);
+        bScaleTensorTy.getElementType(), allowXF32, /*preserveBF16=*/false,
+        isBScaleConstant);
 
     auto dstElemTy = dTensorTy.getElementType();
     auto fc = unpackLLElements(loc, loadedC, rewriter);

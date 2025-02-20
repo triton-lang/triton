@@ -725,10 +725,6 @@ public:
     TensorValue bScale = dotOp.getRhsScale();
     auto oldShape = oldRetType.getShape();
 
-    if (!aScale || !bScale)
-      return rewriter.notifyMatchFailure(dotOp,
-                                         "expect scales for both A and B");
-
     ScaleDotElemType aElemType = dotOp.getLhsType();
     ScaleDotElemType bElemType = dotOp.getRhsType();
     auto supportsTypes = [](ScaleDotElemType elemType) {
@@ -873,14 +869,25 @@ public:
 
     auto convertScaleLayout = [&](TensorValue val, TensorValue scale,
                                   DotOperandEncodingAttr enc,
-                                  int idx) -> TensorValue {
-      auto dotLL = enc.toLinearLayout(val.getType().getShape());
+                                  int idx) -> Value {
+      auto valShape = val.getType().getShape();
+
+      auto dotLL = enc.toLinearLayout(valShape);
       LinearLayout::BasesT scaleBases = dotLL.getBases();
       auto &warpBases = scaleBases[kWarp];
 
       LinearLayout newLL = createLinearLayout(idx, warpBases);
 
-      auto shape = scale.getType().getShape();
+      SmallVector<int64_t> shape;
+      if (!scale) {
+        int64_t nonKDim = idx == 0 ? valShape[0] : valShape[1];
+        int64_t k = idx == 0 ? valShape[1] : valShape[0];
+        ScaleDotElemType &elemType = idx == 0 ? aElemType : bElemType;
+        int packSize = elemType == ScaleDotElemType::E2M1 ? 2 : 1;
+        shape = {nonKDim, k * packSize / 32};
+      } else {
+        shape = llvm::to_vector(scale.getType().getShape());
+      }
 
       // Adjust register-level layout to fill the shape, at this level, both
       // aScale and bScale should align with A operand.
@@ -892,18 +899,25 @@ public:
       }
       newLL = newLL.transposeOuts(standardOutDims);
       Attribute newScaleEncoding = ttg::LinearEncodingAttr::get(ctx, newLL);
+      // Scale's data type is always i8
+      auto newScaleType = RankedTensorType::get(shape, i8_ty, newScaleEncoding);
 
-      auto newScaleType = RankedTensorType::get(
-          shape, scale.getType().getElementType(), newScaleEncoding);
-      return rewriter.create<ttg::ConvertLayoutOp>(scale.getLoc(), newScaleType,
-                                                   scale);
+      if (!scale) {
+        // 0x7F is 1.0 in E8M0
+        return rewriter.create<arith::ConstantOp>(
+            dotOp->getLoc(), newScaleType,
+            DenseElementsAttr::get(newScaleType, llvm::APInt(8, 0x7F)));
+      } else {
+        return rewriter.create<ttg::ConvertLayoutOp>(scale.getLoc(),
+                                                     newScaleType, scale);
+      }
     };
-    aScale = convertScaleLayout(a, aScale, newAEncoding, 0);
-    bScale = convertScaleLayout(b, bScale, newBEncoding, 1);
+    auto newAScale = convertScaleLayout(a, aScale, newAEncoding, 0);
+    auto newBScale = convertScaleLayout(b, bScale, newBEncoding, 1);
 
     auto newDot = rewriter.create<triton::DotScaledOp>(
-        dotOp.getLoc(), newRetType, a, b, newAcc, aScale, bScale, aElemType,
-        bElemType, dotOp.getFastMath());
+        dotOp.getLoc(), newRetType, a, b, newAcc, newAScale, newBScale,
+        aElemType, bElemType, dotOp.getFastMath());
 
     rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(dotOp, oldRetType,
                                                       newDot);
