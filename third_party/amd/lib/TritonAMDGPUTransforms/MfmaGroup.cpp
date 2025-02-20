@@ -229,12 +229,16 @@ MfmaDatabase::MfmaDatabase(MLIRContext *context) {
                     8),
 
       // int8 inputs
-      // mfma_i32_32x32x16i8
-      TRITON_MFMA_v3to4(32, 32, i8T, i8T, mfma_i32_32x32x16_i8, 16, 8),
+      // mfma_i32_32x32x32_i8 & mfma_i32_32x32x16i8
+      TRITON_MFMA_v4_2k(32, 32, i8T, i8T, mfma_i32_32x32x32_i8, 32, 16,
+                        mfma_i32_32x32x16_i8, 16, 8),
+      TRITON_MFMA_v(3, 32, 32, i8T, i8T, mfma_i32_32x32x16_i8, 16, 8),
       // mfma_i32_32x32x8i8
       TRITON_MFMA_v1to2(32, 32, i8T, i8T, mfma_i32_32x32x8i8, 8, 4),
-      // mfma_i32_16x16x32i8
-      TRITON_MFMA_v3to4(16, 16, i8T, i8T, mfma_i32_16x16x32_i8, 32, 8),
+      // mfma_i32_16x16x64_i8 & mfma_i32_16x16x32i8
+      TRITON_MFMA_v4_2k(16, 16, i8T, i8T, mfma_i32_16x16x64_i8, 64, 16,
+                        mfma_i32_16x16x32_i8, 32, 8),
+      TRITON_MFMA_v(3, 16, 16, i8T, i8T, mfma_i32_16x16x32_i8, 32, 8),
       // mfma_i32_16x16x16i8
       TRITON_MFMA_v1to2(16, 16, i8T, i8T, mfma_i32_16x16x16i8, 16, 4),
       // mfma_i32_4x4x4i8
