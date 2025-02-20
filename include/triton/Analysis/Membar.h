@@ -97,6 +97,8 @@ private:
 // Shared Memory Barrier Analysis
 //===----------------------------------------------------------------------===//
 class MembarAnalysis {
+  using VirtualBlock = std::pair<Block *, Block::iterator>;
+
 public:
   using FuncBlockInfoMapT = CallGraph<BlockInfo>::FuncDataMapT;
   /// Creates a new Membar analysis that generates the shared memory barrier
@@ -143,7 +145,8 @@ private:
               FuncBlockInfoMapT *funcBlockInfoMap, OpBuilder *builder);
 
   /// Collects the successors of the terminator
-  void visitTerminator(Operation *operation, SmallVector<Block *> &successors);
+  void visitTerminator(Operation *operation,
+                       SmallVector<VirtualBlock> &successors);
 
   void insertBarrier(Operation *operation, OpBuilder *builder);
 
