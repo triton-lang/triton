@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -test-print-alias -verify-diagnostics -o /dev/null
+// RUN: triton-opt %s -mlir-disable-threading -test-print-alias -verify-diagnostics -o /dev/null
 
 #AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #BL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
