@@ -3352,6 +3352,8 @@ def convert_fp8_to_fp32(x, device, dtype_str):
         return torch.tensor(x, device=device).view(torch.float8_e4m3fn).to(torch.float32)
     elif dtype_str == 'float8e5':
         return torch.tensor(x, device=device).view(torch.float8_e5m2).to(torch.float32)
+    elif dtype_str == 'float8e4b8':
+        return torch.tensor(x, device=device).view(torch.float8_e4m3fnuz).to(torch.float32)
     assert "Unsupported float8 dtype"
 
 
@@ -3614,6 +3616,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                 z_fp8 = torch.tensor(z_ref, dtype=torch.float8_e4m3fn)
             elif in_dtype == 'float8e5':
                 z_fp8 = torch.tensor(z_ref, dtype=torch.float8_e5m2)
+            elif in_dtype == 'float8e4b8':
+                z_fp8 = torch.tensor(z_ref, dtype=torch.float8_e4m3fnuz)
             else:
                 assert "Unsupported float8 dtype"
             z_ref = to_numpy(z_fp8.to(torch.float32))
