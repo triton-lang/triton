@@ -212,6 +212,10 @@ unsigned defaultAllocationAnalysisScratchSizeFn(Operation *op) {
     constexpr int32_t kTMASize = 128;
     return kTMASize;
   }
+  if (auto ws = dyn_cast<gpu::WarpSpecializeOp>(op)) {
+    // `ttg.warp_specialize` needs memory to pass its explicit captures.
+    return 4;
+  }
   return 0;
 }
 
@@ -376,8 +380,11 @@ private:
       for (auto [op, buffer] : container) {
         // Any scratch memory's live range is the current operation's live
         // range.
-        bufferRange.insert({buffer, Interval(operationId.lookup(op),
-                                             operationId.lookup(op) + 1)});
+        size_t startId = operationId.at(op);
+        for (Region &region : op->getRegions()) {
+          startId = std::min(startId, operationId.at(&region.front().front()));
+        }
+        bufferRange.insert({buffer, Interval(startId, operationId.at(op) + 1)});
         LLVM_DEBUG({
           llvm::dbgs() << "-- buffer " << buffer->id << "; value: ";
           op->dump();

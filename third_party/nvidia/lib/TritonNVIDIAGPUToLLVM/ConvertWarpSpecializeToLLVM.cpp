@@ -16,13 +16,31 @@ using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
 
-static void createWarpGroupBarrier(ImplicitLocOpBuilder &b, unsigned barIdx,
-                                   unsigned numThreads) {
+// Reserve one barrier for the default warp group, one for the start barrier,
+// and one for the end barrier.
+enum BarrierIndex {
+  kDefaultWarpGroupBarrierIdx,
+  kSwitchLoopBarrierIdx,
+
+  kNumReservedBarriers,
+  kNumBarriers = 16
+};
+
+static void createBarrier(ImplicitLocOpBuilder &b, unsigned barIdx = 0,
+                          std::optional<unsigned> numThreads = std::nullopt,
+                          bool aligned = true) {
   assert(barIdx < 16 && "not enough barriers");
 
   PTXBuilder ptxBuilder;
-  std::string ptxString =
-      ("bar.sync " + Twine(barIdx) + ", " + Twine(numThreads)).str();
+  std::string ptxString;
+  llvm::raw_string_ostream os(ptxString);
+  os << "barrier.sync";
+  if (aligned)
+    os << ".aligned";
+  os << ' ' << barIdx;
+  if (numThreads)
+    os << ", " << *numThreads;
+
   (*ptxBuilder.create<>(ptxString))();
   ptxBuilder.launch(b, b.getLoc(), void_ty(b.getContext()));
 }
@@ -46,8 +64,8 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func) {
       return failure();
   }
 
-  unsigned threadsPerWarp =
-      TritonGPUDialect::getThreadsPerWarp(cast<ModuleOp>(func->getParentOp()));
+  auto module = cast<ModuleOp>(func->getParentOp());
+  unsigned threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(module);
   unsigned defaultWarpGroupSize = threadsPerWarp * lookupNumWarps(func);
 
   // HACK: Turn all `nvvm.barrier0` ops into warp group barriers.
@@ -58,7 +76,7 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func) {
 
     if (auto bar = dyn_cast<NVVM::Barrier0Op>(op)) {
       ImplicitLocOpBuilder b(bar.getLoc(), bar);
-      createWarpGroupBarrier(b, 0, defaultWarpGroupSize);
+      createBarrier(b, 0, defaultWarpGroupSize);
       bar.erase();
       return WalkResult::advance();
     }
@@ -69,15 +87,16 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func) {
   // barrier ID, but note this means there is a maximum of 16 barriers.
   for (WarpSpecializeOp op : wsOps) {
     for (auto [idx, partition] : llvm::enumerate(op.getPartitionRegions())) {
-      unsigned barIdx = idx + 1;
-      if (barIdx >= 16) {
-        return func.emitError(
-            "cannot support more than 15 warp group partitions");
+      unsigned barIdx = idx + kNumReservedBarriers;
+      if (barIdx >= kNumBarriers) {
+        return func.emitError("cannot support more than ")
+               << (kNumBarriers - kNumReservedBarriers)
+               << " warp group partitions";
       }
       unsigned warpGroupSize = threadsPerWarp * op.getPartitionNumWarps()[idx];
       partition->walk([&](NVVM::Barrier0Op bar) {
         ImplicitLocOpBuilder b(bar.getLoc(), bar);
-        createWarpGroupBarrier(b, barIdx, warpGroupSize);
+        createBarrier(b, barIdx, warpGroupSize);
         bar.erase();
       });
     }
@@ -85,9 +104,11 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func) {
 
   // Generate the function header.
   MLIRContext *ctx = func.getContext();
-  TritonLLVMOpBuilder b(func.getLoc(), ctx);
+  TritonLLVMOpBuilder2 b(func.getLoc(), ctx);
   Block *entry = &func.getBody().front();
-  Block *header = b.createBlock(entry, func.getArgumentTypes());
+  SmallVector<Location> argLocs = llvm::to_vector(llvm::map_range(
+      func.getArguments(), [](BlockArgument arg) { return arg.getLoc(); }));
+  Block *header = b.createBlock(entry, func.getArgumentTypes(), argLocs);
   Block *switchLoop = b.createBlock(entry);
   b.setInsertionPointToStart(header);
 
@@ -102,6 +123,20 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func) {
        llvm::zip(header->getArguments(), entry->getArguments()))
     oldArg.replaceAllUsesWith(arg);
   entry->eraseArguments([](auto) { return true; });
+
+  // Generate the switch loop.
+  auto totalNumWarpsAttr =
+      module->getAttrOfType<IntegerAttr>("ttg.total-num-warps");
+  if (!totalNumWarpsAttr) {
+    return mlir::emitError(module.getLoc(),
+                           "module missing 'ttg.total-num-warps' attribute");
+  }
+  unsigned totalNumThreads = totalNumWarpsAttr.getInt() * threadsPerWarp;
+
+  b.setInsertionPointToStart(switchLoop);
+  createBarrier(b, kSwitchLoopBarrierIdx, totalNumThreads, /*aligned=*/false);
+  createBarrier(b, kSwitchLoopBarrierIdx, totalNumThreads, /*aligned=*/false);
+  b.create<LLVM::ReturnOp>(ValueRange());
 
   return success();
 }

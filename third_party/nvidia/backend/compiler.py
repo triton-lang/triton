@@ -347,9 +347,9 @@ class CUDABackend(BaseBackend):
 
         # Get some metadata
         # warp-specialization mutates num_warps
-        num_warp_groups = src.get_int_attr("ttg.num-warp-groups-per-cta")
-        if num_warp_groups is not None:
-            metadata["num_warps"] *= num_warp_groups
+        total_num_warps = src.get_int_attr("ttg.total-num-warps")
+        if total_num_warps is not None:
+            metadata["num_warps"] = total_num_warps
         metadata["shared"] = src.get_int_attr("ttg.shared")
         metadata["tmem_size"] = src.get_int_attr("ttg.tensor_memory_size")
         metadata["global_scratch_size"] = src.get_int_attr("ttg.global_scratch_memory_size")

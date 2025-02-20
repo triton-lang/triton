@@ -6,6 +6,7 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/MLIRTypes.h"
@@ -278,6 +279,16 @@ struct TritonLLVMOpBuilder {
 
   Location loc;
   OpBuilder *builder;
+};
+
+// FIXME: Improve name.
+class TritonLLVMOpBuilder2 : public ImplicitLocOpBuilder,
+                             public TritonLLVMOpBuilder {
+public:
+  template <typename... Args>
+  TritonLLVMOpBuilder2(Location loc, Args &&...args)
+      : ImplicitLocOpBuilder(loc, std::forward<Args>(args)...),
+        TritonLLVMOpBuilder(loc, *this) {}
 };
 } // namespace mlir::triton
 
