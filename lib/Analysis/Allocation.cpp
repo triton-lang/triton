@@ -595,10 +595,10 @@ private:
 
         // Buffers also interfer if their allocation offsets overlap and they
         // exist within regions that may execute simultaneously.
-        auto wsx = x->id->getParentOfType<gpu::WarpSpecializeOp>();
-        auto wsy = y->id->getParentOfType<gpu::WarpSpecializeOp>();
+        auto wsx = x->owner->getParentOfType<gpu::WarpSpecializeOp>();
+        auto wsy = y->owner->getParentOfType<gpu::WarpSpecializeOp>();
         if (wsx && wsy && wsx == wsy &&
-            x->id->getParentRegion() != y->id->getParentRegion() &&
+            x->owner->getParentRegion() != y->owner->getParentRegion() &&
             xSizeRange.intersects(ySizeRange)) {
           interference[x].insert(y);
         }
