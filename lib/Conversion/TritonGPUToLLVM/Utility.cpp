@@ -160,27 +160,21 @@ std::optional<int> getWarpGroupStartThreadId(Block *block) {
   using namespace triton::gpu;
 
   // Look for an enclosing `ttg.warp_specialize` op.
-  if (!block)
-    return {};
-  Operation *parent = block->getParentOp();
-  if (!parent)
+  while (block && block->getParentOp() &&
+         !isa<WarpSpecializePartitionsOp>(block->getParentOp()))
+    block = block->getParentOp()->getBlock();
+  if (!block || !block->getParentOp())
     return {};
 
-  // If we found a warp specialize region, read out the starting warp ID and
-  // query the number of threads per warp.
-  if (auto partitions = dyn_cast<WarpSpecializePartitionsOp>(parent)) {
-    unsigned idx = block->getParent()->getRegionNumber();
-    WarpSpecializeOp ws = partitions.getParentOp();
-    std::optional<ArrayRef<int32_t>> startIds = ws.getWarpGroupStartIds();
-    assert(startIds && "cannot get warp group ID before warp group allocation");
-    int32_t warpStartId = (*startIds)[idx];
-    int threadsPerWarp =
-        TritonGPUDialect::getThreadsPerWarp(ws->getParentOfType<ModuleOp>());
-    return warpStartId * threadsPerWarp;
-  }
-
-  // Recurse on the parent.
-  return getWarpGroupStartThreadId(block->getParentOp()->getBlock());
+  auto partitions = cast<WarpSpecializePartitionsOp>(block->getParentOp());
+  unsigned idx = block->getParent()->getRegionNumber();
+  WarpSpecializeOp ws = partitions.getParentOp();
+  std::optional<ArrayRef<int32_t>> startIds = ws.getWarpGroupStartIds();
+  assert(startIds && "cannot get warp group ID before warp group allocation");
+  int32_t warpStartId = (*startIds)[idx];
+  int threadsPerWarp =
+      TritonGPUDialect::getThreadsPerWarp(ws->getParentOfType<ModuleOp>());
+  return warpStartId * threadsPerWarp;
 }
 
 Value getThreadId(OpBuilder &rewriter, Location loc) {

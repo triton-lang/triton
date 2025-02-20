@@ -101,11 +101,12 @@ template <class T> Interval(T, T) -> Interval<T>;
 class Allocation {
 public:
   /// A unique identifier for shared memory buffers
-  using BufferId = Operation *;
+  using BufferId = size_t;
   using BufferIdSetT = DenseSet<BufferId>;
   using FuncAllocMapT = CallGraph<Allocation>::FuncDataMapT;
 
-  static constexpr BufferId InvalidBufferId = nullptr;
+  static constexpr BufferId InvalidBufferId =
+      std::numeric_limits<BufferId>::max();
 
   Allocation() = default;
   /// Creates a new Allocation analysis that computes the shared memory
@@ -192,6 +193,7 @@ private:
 
     BufferKind kind;
     BufferId id;
+    Operation *owner;
     size_t size;
     size_t alignment;
     size_t offset;
@@ -199,10 +201,10 @@ private:
     bool operator==(const BufferT &other) const { return id == other.id; }
     bool operator<(const BufferT &other) const { return id < other.id; }
 
-    BufferT(Operation *id, BufferKind kind, size_t size, size_t alignment = 4,
-            size_t offset = 0)
-        : kind(kind), id(id), size(size), alignment(alignment), offset(offset) {
-    }
+    BufferT(BufferKind kind, BufferId id, Operation *owner, size_t size,
+            size_t alignment = 4, size_t offset = 0)
+        : kind(kind), id(id), owner(owner), size(size), alignment(alignment),
+          offset(offset) {}
 
     size_t setOffsetAligned(size_t newOffset) {
       return offset = llvm::alignTo(newOffset, alignment);
@@ -221,8 +223,9 @@ private:
 private:
   template <BufferT::BufferKind Kind, typename KeyType, typename... Args>
   void addBuffer(KeyType &key, Args &&...args) {
+    BufferId nextId = bufferIdCounter++;
     auto [it, inserted] = bufferSet.insert_or_assign(
-        key, BufferT(key, Kind, std::forward<Args>(args)...));
+        nextId, BufferT(Kind, nextId, key, std::forward<Args>(args)...));
     BufferT *buffer = &it->second;
     if constexpr (Kind == BufferT::BufferKind::Explicit) {
       valueBuffer[key] = buffer;
@@ -245,6 +248,8 @@ private:
   AliasBufferMapT aliasBuffer;
   BufferSetT bufferSet;
   size_t sharedMemorySize = 0;
+
+  size_t bufferIdCounter = 0;
 
   friend class triton::AllocationAnalysis;
 };

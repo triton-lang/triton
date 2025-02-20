@@ -333,7 +333,7 @@ def TTG_GlobalScratchAllocOp : TTG_Op<"global_scratch_alloc", [MemoryEffects<[Me
 }
 
 def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [
-  RecursiveMemoryEffects, RecursivelySpeculatable,
+  RecursiveMemoryEffects, RecursivelySpeculatable, AsyncRegions,
   DeclareOpInterfaceMethods<RegionBranchOpInterface>
 ]> {
   let summary = "asynchronously execute code on multiple warpgroups";
@@ -405,7 +405,7 @@ def TTG_WarpSpecializePartitionsOp : TTG_Op<"warp_specialize.partitions", [
 }
 
 def TTG_WarpYieldOp : TTG_Op<"warp_yield", [
-  Pure, Terminator, HasParent<"WarpSpecializeOp">,
+  Pure, Terminator, ReturnLike, HasParent<"WarpSpecializeOp">,
   DeclareOpInterfaceMethods<RegionBranchTerminatorOpInterface>
 ]> {
   let summary = "yield from the default region of `ttg.warp_specialize`";

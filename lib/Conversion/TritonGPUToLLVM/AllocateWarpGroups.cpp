@@ -28,6 +28,7 @@ struct AllocateWarpGroups
 
       // Allocate the start IDs such that the largest warpgroups have lower
       // starting warp IDs.
+      // FIXME: Handle aligning warp group IDs to 4 for TMEM.
       SmallVector<std::pair<unsigned, int32_t>> idxAndSize;
       for (auto [i, size] : llvm::enumerate(arr))
         idxAndSize.emplace_back(i, size);

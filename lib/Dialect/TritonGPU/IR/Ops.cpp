@@ -772,12 +772,4 @@ void WarpSpecializeOp::print(OpAsmPrinter &p) {
   p.printFunctionalType(*this);
 }
 
-// -- WarpYieldOp --
-
-MutableOperandRange
-WarpYieldOp::getMutableSuccessorOperands(RegionBranchPoint target) {
-  assert(target.isParent());
-  return getValuesMutable();
-}
-
 } // namespace mlir::triton::gpu
