@@ -257,7 +257,7 @@ void mlir::triton::AMD::populateMemoryOpToLLVMPatterns(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     const TargetInfo &targetInfo, PatternBenefit benefit) {
   PatternBenefit transBenefit = PatternBenefit(benefit.getBenefit() + 1);
-  patterns.add<LocalLoadOpConversion>(typeConverter, benefit);
+  //patterns.add<LocalLoadOpConversion>(typeConverter, benefit);
   patterns.add<TransLocalLoadOpConversion>(typeConverter, targetInfo,
                                            transBenefit);
 }
