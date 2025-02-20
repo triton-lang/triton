@@ -76,5 +76,6 @@
    .. autosummary::
    
       ~tensor.T
+      ~tensor.type
    
    
