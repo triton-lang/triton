@@ -891,3 +891,36 @@ tt.func @warp_specialize_into_default(%arg0: tensor<1xi64>) {
   ttg.local_store %arg0, %0 : tensor<1xi64> -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
   tt.return
 }
+
+// CHECK-LABEL: @default_region_cfg
+tt.func @default_region_cfg(%arg0: tensor<1xi64>, %arg1: i1) {
+  // CHECK-NEXT: local_alloc
+  %0 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
+  // CHECK-NEXT: local_store
+  ttg.local_store %arg0, %0 : tensor<1xi64> -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
+  // CHECK-NEXT: warp_specialize
+  ttg.warp_specialize()
+  // CHECK-NEXT: default
+  default {
+    // CHECK-NEXT: barrier
+    // CHECK-NEXT: local_load
+    ttg.local_load %0 : !ttg.memdesc<1xi64, #layout, #smem, mutable> -> tensor<1xi64>
+    cf.cond_br %arg1, ^bb1, ^bb2
+  // CHECK: ^bb1:
+  ^bb1:
+    // CHECK-NEXT: barrier
+    gpu.barrier
+    cf.br ^bb3
+  ^bb2:
+    cf.br ^bb3
+  // CHECK: ^bb3:
+  ^bb3:
+    // CHECK-NEXT: warp_yield
+    ttg.warp_yield
+  // CHECK-NEXT: () -> ()
+  } : () -> ()
+  // CHECK-NEXT: gpu.barrier
+  // CHECK-NEXT: local_store
+  ttg.local_store %arg0, %0 : tensor<1xi64> -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
+  tt.return
+}

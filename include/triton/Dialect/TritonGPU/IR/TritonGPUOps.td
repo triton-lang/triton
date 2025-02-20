@@ -424,6 +424,7 @@ def TTG_WarpYieldOp : TTG_Op<"warp_yield", [
   let arguments = (ins Variadic<AnyType>:$values);
 
   let assemblyFormat = "($values^)? attr-dict (`:` type($values)^)?";
+  let hasVerifier = 1;
 }
 
 def TTG_WarpReturnOp : TTG_Op<"warp_return", [
