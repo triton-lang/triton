@@ -445,5 +445,30 @@ tt.func @scalar_load_in_bwd_slice(%arg0: tensor<128x128xf8E5M2, #ttg.dot_op<{opI
   %3 = tt.dot %2, %arg0, %cst, inputPrecision = tf32 : tensor<128x128xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<128x128xf8E5M2, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x128xf32, #blocked>
   tt.return %3 : tensor<128x128xf32, #blocked>
 }
+}
 
+// -----
+
+// check for heuristic to increase kWidth when join is present
+#blocked = #ttg.blocked<{sizePerThread = [2, 2], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked3 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [1, 32], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked4 = #ttg.blocked<{sizePerThread = [1, 16, 2], threadsPerWarp = [4, 8, 1], warpsPerCTA = [4, 1, 1], order = [2, 1, 0]}>
+#blocked5 = #ttg.blocked<{sizePerThread = [1, 32], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked6 = #ttg.blocked<{sizePerThread = [32, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 4], order = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @join_reshape_upcast_mma_kwidth(%84: tensor<16x256x!tt.ptr<bf16>, #blocked3>, %112: tensor<64x128x!tt.ptr<i8>, #blocked2>) -> tensor<16x64xf32, #blocked> {
+      %90 = tt.load %84 : tensor<16x256x!tt.ptr<bf16>, #blocked3>
+      %118 = tt.load %112, : tensor<64x128x!tt.ptr<i8>, #blocked2>
+      %121:2 = tt.elementwise_inline_asm "" {constraints = "=r,=r,=r,=r,r", packed_element = 4 : i32, pure = true} %118 : tensor<64x128xi8, #blocked2> -> tensor<64x128xbf16, #blocked2>, tensor<64x128xbf16, #blocked2>
+      %122 = tt.join %121#0, %121#1 : tensor<64x128xbf16, #blocked2> -> tensor<64x128x2xbf16, #blocked4>
+      %123 = tt.reshape %122 : tensor<64x128x2xbf16, #blocked4> -> tensor<64x256xbf16, #blocked5>
+      %124 = tt.trans %123 {order = array<i32: 1, 0>} : tensor<64x256xbf16, #blocked5> -> tensor<256x64xbf16, #blocked6>
+      %125 = ttg.convert_layout %90 : tensor<16x256xbf16, #blocked3> -> tensor<16x256xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>
+      %126 = ttg.convert_layout %124 : tensor<256x64xbf16, #blocked6> -> tensor<256x64xbf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>
+      // CHECK: {{.*}} = tt.dot {{.*}} tensor<16x256xbf16, #ttg.dot_op<{opIdx = 0, parent = {{.*}}, kWidth = 8}>> * tensor<256x64xbf16, #ttg.dot_op<{opIdx = 1, parent = {{.*}}, kWidth = 8}>>
+      %cst = arith.constant dense<0.000000e+00> : tensor<16x64xf32, #blocked>
+      %127 = tt.dot %125, %126, %cst, inputPrecision = tf32 : tensor<16x256xbf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<256x64xbf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<16x64xf32, #blocked>
+      tt.return %127 : tensor<16x64xf32, #blocked>
+  }
 }

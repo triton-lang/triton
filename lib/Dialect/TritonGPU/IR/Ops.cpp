@@ -675,24 +675,6 @@ LogicalResult WarpSpecializeOp::verify() {
              << i << " argument #" << argIdx << " has type " << argType
              << " but corresponding capture has type " << capType;
     }
-    if (region->empty() || !region->front().mightHaveTerminator() ||
-        isa<WarpReturnOp>(region->front().getTerminator()))
-      continue;
-    return emitOpError("partition region #")
-           << i << " does not end with a `ttg.warp_return` op";
-  }
-
-  // Verify the default region.
-  auto yield =
-      dyn_cast<WarpYieldOp>(getDefaultRegion().front().getTerminator());
-  if (!yield) {
-    return emitOpError(
-        "expected its default region to end with a `ttg.warp_yield` op");
-  }
-  if (yield.getNumOperands() != getNumResults()) {
-    return yield.emitOpError("has ")
-           << yield.getNumOperands() << " operands but parent op expected "
-           << getNumResults();
   }
 
   // This op cannot be nested inside itself.
@@ -770,6 +752,22 @@ void WarpSpecializeOp::print(OpAsmPrinter &p) {
   }
   p << " : ";
   p.printFunctionalType(*this);
+}
+
+LogicalResult WarpYieldOp::verify() {
+  if (getNumOperands() != getParentOp().getNumResults()) {
+    return emitOpError("has ")
+           << getNumOperands() << " operands but parent op expected "
+           << getParentOp().getNumResults();
+  }
+  for (auto [i, result, type] :
+       llvm::enumerate(getParentOp().getResultTypes(), getOperandTypes())) {
+    if (result != type) {
+      return emitOpError("operand #") << i << " has type " << type
+                                      << " but parent op expected " << result;
+    }
+  }
+  return success();
 }
 
 } // namespace mlir::triton::gpu

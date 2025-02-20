@@ -49,6 +49,9 @@ unsigned
 getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
                         triton::ModuleAxisInfoAnalysis &axisInfoAnalysis);
 
+// Returns whether the op is a "view op", i.e. doesn't move any data
+bool isView(Operation *op);
+
 /* Dump Triton IR in graphviz dot format.
  *
  * You can override `onValue` and `onOperation` in a subclass to mark

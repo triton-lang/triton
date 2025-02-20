@@ -205,26 +205,12 @@ tt.func @bad_default_yields(%arg0: i32) {
 
 // -----
 
-tt.func @bad_partition_terminator() {
-  // expected-error @below {{'ttg.warp_specialize' op partition region #0 does not end with a `ttg.warp_return` op}}
-  "ttg.warp_specialize"() ({
-    "ttg.warp_yield"() : () -> ()
-  }, {
-    "ttg.warp_specialize.partitions"() ({
-      "ttg.warp_yield"() : () -> ()
-    }) : () -> ()
-  }) {partitionNumWarps = array<i32: 1>} : () -> ()
-  tt.return
-}
-
-// -----
-
-tt.func @bad_default_terminator() {
-  // expected-error @below {{'ttg.warp_specialize' op expected its default region to end with a `ttg.warp_yield` op}}
+tt.func @bad_default_yields(%arg0: i32, %arg1: i64) {
   ttg.warp_specialize()
   default {
-    scf.yield
-  } : () -> ()
+    // expected-error @below {{'ttg.warp_yield' op operand #0 has type 'i64' but parent op expected 'i32'}}
+    ttg.warp_yield %arg1 : i64
+  } : () -> i32
   tt.return
 }
 
