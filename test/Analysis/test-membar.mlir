@@ -1,7 +1,5 @@
-// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory -test-print-membar | FileCheck %s
-
-// FIXME: This should work.
-// UN: triton-opt %s -split-input-file --allocate-shared-memory -test-print-membar | FileCheck %s
+// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory -test-print-membar | FileCheck %s --check-prefix=CHECK --check-prefix=CF
+// RUN: triton-opt %s -split-input-file                     --allocate-shared-memory -test-print-membar | FileCheck %s --check-prefix=CHECK --check-prefix=SCF
 
 #AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #sliceAd0 = #ttg.slice<{dim = 0, parent = #AL}>
@@ -807,23 +805,24 @@ tt.func @tma_special_cases_cf(%arg1: !tt.ptr<i8, 0>, %i1 : i1, %arg2: tensor<256
   %c0 = arith.constant 0 : i32
   %barrier = ttg.local_alloc  : () -> !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
   %alloc = ttg.local_alloc  : () -> !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable>
-  // CHECK: cf.cond_br
+  // CF: cf.cond_br
+  // SCF: scf.if
   scf.if %i1 {
     //  CHECK-NOT: gpu.barrier
     //      CHECK: ttng.async_tma_copy_global_to_local
     // CHECK-NEXT: ttng.barrier_expect
     // CHECK-NEXT: ttng.wait_barrier
-    // CHECK-NEXT: cf.br
+    // CF-NEXT: cf.br
+    // SCF-NEXT: } else {
     ttng.async_tma_copy_global_to_local %arg1[%c0, %c0] %alloc, %barrier, %true : !tt.ptr<i8, 0>, !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable> -> !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable>
     ttng.barrier_expect %barrier, 49152, %true : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
     ttng.wait_barrier %barrier, %c0 : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
-    scf.yield
   } else {
     //  CHECK-NOT: gpu.barrier
     //      CHECK: ttg.local_store
-    // CHECK-NEXT: cf.br
+    // CF-NEXT: cf.br
+    // SCF-NEXT: }
     ttg.local_store %arg2, %alloc : tensor<256x64xf16, #blocked> -> !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable>
-    scf.yield
   }
   //      CHECK: gpu.barrier
   // CHECK-NEXT: ttg.local_load
