@@ -414,7 +414,8 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
     }
     for (auto alloc : allocsToErase)
       alloc.erase();
-  }
+  } else
+    alloc.getDefiningOp()->erase();
 
   // Prefetch load ahead of the dot stage if is used by the dot.
   auto copyVal = copy->getResult(0);
