@@ -2379,12 +2379,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     %c0_i32 = arith.constant 0 : i32
     %c32_i32 = arith.constant 32 : i32
     %c4096_i32 = arith.constant 4096 : i32
-    // CHECK: %[[F:.+]]:4 = scf.for
+    // CHECK: %[[F:.+]]:3 = scf.for
     // CHECK:   %[[R:.+]] = arith.addf
     // CHECK:   arith.addf
-    // CHECK:   scf.yield %{{.+}}, %{{.+}}, %{{.+}}, %[[R]]
+    // CHECK:   scf.yield %{{.+}}, %{{.+}}, %[[R]]
     // CHECK: }
-    // CHECK: tt.return %[[F]]#3, %[[F]]#1, %[[F]]#2
+    // CHECK: tt.return %[[F]]#2, %[[F]]#1, %[[F]]#0
     %1:3 = scf.for %arg0 = %c0_i32 to %c4096_i32 step %c32_i32 iter_args(%arg1 = %cst, %arg3 = %cst_0, %arg4 = %cst) -> (tensor<32xf32, #blocked1>, tensor<32xf32, #blocked>, tensor<32xf32, #blocked1>) : i32 {
       %4 = arith.addf %arg1, %cst : tensor<32xf32, #blocked1>
       %5 = ttg.convert_layout %4 : tensor<32xf32, #blocked1> -> tensor<32xf32, #blocked>
