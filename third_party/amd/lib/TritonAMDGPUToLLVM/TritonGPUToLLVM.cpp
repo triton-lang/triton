@@ -97,8 +97,8 @@ struct ConvertTritonAMDGPUToLLVM
 
     // Allocate shared memory and set barrier
     ModuleAllocation allocation(mod);
-    ModuleMembarAnalysis membarPass(&allocation);
-    membarPass.run();
+    //ModuleMembarAnalysis membarPass(&allocation);
+    //membarPass.run();
 
     // Lower functions
     {
