@@ -83,8 +83,8 @@ MfmaDatabase::MfmaDatabase(MLIRContext *context) {
   }
 // For gfx950, we can have two intrinsics with the same M/N but different K.
 // Order matters here: case1 will be preferred to case2.
-#define TRITON_MFMA_v4_2k(m, n, aET, bET, symbol1, k1, kBase1, symbol2, k2,    \
-                          kBase2)                                              \
+#define TRITON_MFMA_v4_2case(m, n, aET, bET, symbol1, k1, kBase1, symbol2, k2, \
+                             kBase2)                                           \
   {                                                                            \
     /*key=*/{4, m, n, aET.getTypeID(), bET.getTypeID()}, /*value=*/{           \
       {ROCDL::symbol1::getOperationName(), k1, kBase1},                        \
@@ -148,13 +148,13 @@ MfmaDatabase::MfmaDatabase(MLIRContext *context) {
 
       // f16 inputs
       // mfma_f32_32x32x16_f16 & mfma_f32_32x32x8f16
-      TRITON_MFMA_v4_2k(32, 32, f16T, f16T, mfma_f32_32x32x16_f16, 16, 8,
-                        mfma_f32_32x32x8f16, 8, 4),
+      TRITON_MFMA_v4_2case(32, 32, f16T, f16T, mfma_f32_32x32x16_f16, 16, 8,
+                           mfma_f32_32x32x8f16, 8, 4),
       // mfma_f32_32x32x8f16
       TRITON_MFMA_v1to3(32, 32, f16T, f16T, mfma_f32_32x32x8f16, 8, 4),
       // mfma_f32_16x16x32_f16 & mfma_f32_16x16x16f16
-      TRITON_MFMA_v4_2k(16, 16, f16T, f16T, mfma_f32_16x16x32_f16, 32, 8,
-                        mfma_f32_16x16x16f16, 16, 4),
+      TRITON_MFMA_v4_2case(16, 16, f16T, f16T, mfma_f32_16x16x32_f16, 32, 8,
+                           mfma_f32_16x16x16f16, 16, 4),
       // mfma_f32_16x16x16f16
       TRITON_MFMA_v1to3(16, 16, f16T, f16T, mfma_f32_16x16x16f16, 16, 4),
       // mfma_f32_4x4x4f16
@@ -164,13 +164,13 @@ MfmaDatabase::MfmaDatabase(MLIRContext *context) {
 
       // bf16 inputs
       // mfma_f32_32x32x16_bf16 & mfma_f32_32x32x8_bf16_1K
-      TRITON_MFMA_v4_2k(32, 32, bf16T, bf16T, mfma_f32_32x32x16_bf16, 16, 8,
-                        mfma_f32_32x32x8bf16_1k, 8, 4),
+      TRITON_MFMA_v4_2case(32, 32, bf16T, bf16T, mfma_f32_32x32x16_bf16, 16, 8,
+                           mfma_f32_32x32x8bf16_1k, 8, 4),
       // mfma_f32_32x32x8_bf16_1K
       TRITON_MFMA_v2to3(32, 32, bf16T, bf16T, mfma_f32_32x32x8bf16_1k, 8, 4),
       // mfma_f32_16x16x32_bf16 & mfma_f32_16x16x16_bf16_1K
-      TRITON_MFMA_v4_2k(16, 16, bf16T, bf16T, mfma_f32_16x16x32_bf16, 32, 8,
-                        mfma_f32_16x16x16bf16_1k, 16, 4),
+      TRITON_MFMA_v4_2case(16, 16, bf16T, bf16T, mfma_f32_16x16x32_bf16, 32, 8,
+                           mfma_f32_16x16x16bf16_1k, 16, 4),
       // mfma_f32_16x16x16_bf16_1K
       TRITON_MFMA_v2to3(16, 16, bf16T, bf16T, mfma_f32_16x16x16bf16_1k, 16, 4),
       // mfma_f32_32x32x4_bf16
@@ -230,14 +230,14 @@ MfmaDatabase::MfmaDatabase(MLIRContext *context) {
 
       // int8 inputs
       // mfma_i32_32x32x32_i8 & mfma_i32_32x32x16i8
-      TRITON_MFMA_v4_2k(32, 32, i8T, i8T, mfma_i32_32x32x32_i8, 32, 16,
-                        mfma_i32_32x32x16_i8, 16, 8),
+      TRITON_MFMA_v4_2case(32, 32, i8T, i8T, mfma_i32_32x32x32_i8, 32, 16,
+                           mfma_i32_32x32x16_i8, 16, 8),
       TRITON_MFMA_v(3, 32, 32, i8T, i8T, mfma_i32_32x32x16_i8, 16, 8),
       // mfma_i32_32x32x8i8
       TRITON_MFMA_v1to2(32, 32, i8T, i8T, mfma_i32_32x32x8i8, 8, 4),
       // mfma_i32_16x16x64_i8 & mfma_i32_16x16x32i8
-      TRITON_MFMA_v4_2k(16, 16, i8T, i8T, mfma_i32_16x16x64_i8, 64, 16,
-                        mfma_i32_16x16x32_i8, 32, 8),
+      TRITON_MFMA_v4_2case(16, 16, i8T, i8T, mfma_i32_16x16x64_i8, 64, 16,
+                           mfma_i32_16x16x32_i8, 32, 8),
       TRITON_MFMA_v(3, 16, 16, i8T, i8T, mfma_i32_16x16x32_i8, 32, 8),
       // mfma_i32_16x16x16i8
       TRITON_MFMA_v1to2(16, 16, i8T, i8T, mfma_i32_16x16x16i8, 16, 4),
