@@ -10,7 +10,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   //  CHECK-LABEL: wmma1_dot_operand
   tt.func @wmma1_dot_operand(%arg0: !ttg.memdesc<64x64xf16, #shared, #smem>) {
     // 2 CTA * 4 rep * load_per_thread_per_instr
-    // CHECK-COUNT-8: llvm.load %{{.*}} : !llvm.ptr<3> -> vector<16xf16>
+    // CHECK-COUNT-2: llvm.load %{{.*}} : !llvm.ptr<3> -> vector<64xf16>
     %0 = ttg.local_load %arg0 : !ttg.memdesc<64x64xf16, #shared, #smem> -> tensor<64x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma1, kWidth = 16}>>
     // CHECK-COUNT-128: llvm.load %{{.*}} : !llvm.ptr<3> -> vector<1xf16>
     %1 = ttg.local_load %arg0 : !ttg.memdesc<64x64xf16, #shared, #smem> -> tensor<64x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma1, kWidth = 16}>>
@@ -181,7 +181,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: wmma_dot_operand3d
   tt.func @wmma_dot_operand3d(%arg0: !ttg.memdesc<4x16x32xf16, #shared, #smem>) {
-    // CHECK-COUNT-4: llvm.load %{{.*}} : !llvm.ptr<3> -> vector<16xf16>
+    // CHECK-COUNT-2: llvm.load %{{.*}} : !llvm.ptr<3> -> vector<32xf16>
     %0 = ttg.local_load %arg0 : !ttg.memdesc<4x16x32xf16, #shared, #smem> -> tensor<4x16x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma1, kWidth = 16}>>
     // CHECK-COUNT-32: llvm.load %{{.*}} : !llvm.ptr<3> -> vector<1xf16>
     %1 = ttg.local_load %arg0 : !ttg.memdesc<4x16x32xf16, #shared, #smem> -> tensor<4x16x32xf16, #ttg.dot_op<{opIdx = 1, parent = #mma1, kWidth = 16}>>

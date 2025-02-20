@@ -493,12 +493,10 @@ bool emitTransferBetweenRegistersAndShared(
       target, perVectorCallback);
 }
 
-SmallVector<Value> loadSharedToDistributed(RankedTensorType dstTy,
-                                           triton::gpu::MemDescType srcTy,
-                                           Type elemLlvmTy,
-                                           const SharedMemoryObject &smemObj,
-                                           Location loc, RewriterBase &rewriter,
-                                           const TargetInfoBase &target) {
+SmallVector<Value> loadSharedToDistributed(
+    RankedTensorType dstTy, triton::gpu::MemDescType srcTy, Type elemLlvmTy,
+    const SharedMemoryObject &smemObj, Location loc, RewriterBase &rewriter,
+    const TargetInfoBase &target, std::pair<size_t, Type> *const llvmOpCount) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value> ret;
   bool success = emitTransferBetweenRegistersAndShared(
@@ -510,6 +508,10 @@ SmallVector<Value> loadSharedToDistributed(RankedTensorType dstTy,
 
         for (int v = 0; v < vecTy.getNumElements(); v++) {
           ret.push_back(b.extract_element(elemLlvmTy, vecVal, b.i32_val(v)));
+        }
+        if (llvmOpCount) {
+          ++(llvmOpCount->first);
+          llvmOpCount->second = vecTy;
         }
       });
   if (!success)

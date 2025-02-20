@@ -73,6 +73,8 @@ public:
 
   bool supportVectorizedAtomics() const override;
 
+  void loadOpAnnotation(triton::gpu::LocalLoadOp op, size_t localLoadOpCount,
+                        Type type) const override;
   void storeOpAnnotation(triton::gpu::LocalStoreOp op, size_t localStoreOpCount,
                          Type type) const override;
 
