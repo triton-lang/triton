@@ -104,9 +104,6 @@ void MembarAnalysis::visitTerminator(Operation *op,
   // Otherwise, it could be a return op
   if (op->hasTrait<OpTrait::ReturnLike>())
     return;
-  // Nothing to be done here.
-  if (isa<triton::gpu::WarpYieldOp>(op))
-    return;
   llvm_unreachable("Unknown terminator encountered in membar analysis");
 }
 
