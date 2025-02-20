@@ -5,7 +5,6 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "third_party/amd/lib/TritonAMDGPUToLLVM/Utility.h"
-#include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -104,11 +103,11 @@ warpsPerTileWMMA(Operation *dotOp, ArrayRef<int64_t> shape, int numWarps) {
 
 // Chooses a proper MFMA instruction that can used to compute the given dot op.
 // If enforcedNonKDim is not zero, it will be used to overwrite the default
-// logic to chose a MFMA with matching M/N dim.
-FailureOr<MfmaInsn> chooseMfmaInstruction(RankedTensorType cType,
-                                          Type aElemType, Type bElemType,
-                                          int inputKSize, int mfmaVersion,
-                                          bool allowXF32, int enforcedNonKDim) {
+// logic to choose a MFMA with matching M/N dim.
+FailureOr<MfmaIntrinsic>
+chooseMfmaInstruction(int mfmaVersion, RankedTensorType cType, Type aElemType,
+                      Type bElemType, int inputKSize, int enforcedNonKDim,
+                      bool withScale, bool allowXF32) {
   // number of matrix elements along k dim per one MFMA intruction
   unsigned kDim = 0;
 
@@ -135,34 +134,35 @@ FailureOr<MfmaInsn> chooseMfmaInstruction(RankedTensorType cType,
   if (mDim == 0 || nDim == 0)
     return failure();
 
-  auto maybeMfmaInsn = MfmaInsn::selectMfma(mDim, nDim, inputKSize, aElemType,
-                                            bElemType, mfmaVersion, allowXF32);
-  if (failed(maybeMfmaInsn))
+  FailureOr<MfmaIntrinsic> maybeMfmaIntrinsic =
+      MfmaIntrinsic::selectFor(mfmaVersion, mDim, nDim, inputKSize, aElemType,
+                               bElemType, withScale, allowXF32);
+  if (failed(maybeMfmaIntrinsic))
     llvm::report_fatal_error("No match found in MFMA database\n");
 
-  kDim = maybeMfmaInsn->getKDim();
+  kDim = maybeMfmaIntrinsic->kDim;
   assert(kDim != 0);
   assert(enforcedNonKDim != 0 || (M % mDim == 0 && N % nDim == 0));
   // if inputKSize % kDim != 0 this layout will introduce data duplication,
   // consider FMA dot is prefered, except cases MFMA layout is enforced.
   if (enforcedNonKDim == 0 && inputKSize % kDim != 0)
     return failure();
-  return maybeMfmaInsn;
+  return maybeMfmaIntrinsic;
 }
 
-FailureOr<MfmaInsn> chooseMfmaInstruction(tt::DotOp dot, int mfmaVersion,
-                                          int nonKDim) {
+FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotOp dot, int mfmaVersion,
+                                               int nonKDim) {
   RankedTensorType aType = dot.getA().getType();
   bool allowXF32 =
       dot.getInputPrecision() == InputPrecision::TF32 && mfmaVersion == 3;
-  return chooseMfmaInstruction(dot.getC().getType(), aType.getElementType(),
-                               dot.getB().getType().getElementType(),
-                               aType.getShape().back(), mfmaVersion, allowXF32,
-                               nonKDim);
+  return chooseMfmaInstruction(
+      mfmaVersion, dot.getC().getType(), aType.getElementType(),
+      dot.getB().getType().getElementType(), aType.getShape().back(), nonKDim,
+      /*withScale=*/false, allowXF32);
 }
 
-FailureOr<MfmaInsn> chooseMfmaInstruction(tt::DotScaledOp dot, int mfmaVersion,
-                                          int nonKDim) {
+FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotScaledOp dot,
+                                               int mfmaVersion, int nonKDim) {
   auto ctx = dot.getContext();
   int64_t inputKDim = dot.getLhs().getType().getShape().back();
   if (dot.getLhsType() == ScaleDotElemType::E2M1) {
@@ -170,21 +170,23 @@ FailureOr<MfmaInsn> chooseMfmaInstruction(tt::DotScaledOp dot, int mfmaVersion,
     // need to multiply it by 2.
     inputKDim *= 2;
   }
-  return chooseMfmaInstruction(
-      dot.getC().getType(), scaleDotElemTypeToMLIRType(ctx, dot.getLhsType()),
-      scaleDotElemTypeToMLIRType(ctx, dot.getRhsType()), inputKDim, mfmaVersion,
-      /*allowXF32=*/false, nonKDim);
+  Type aElemType = scaleDotElemTypeToMLIRType(ctx, dot.getLhsType());
+  Type bElemType = scaleDotElemTypeToMLIRType(ctx, dot.getRhsType());
+  return chooseMfmaInstruction(mfmaVersion, dot.getC().getType(), aElemType,
+                               bElemType, inputKDim, nonKDim,
+                               /*hasScale=*/true, /*allowXF32=*/false);
 }
 
-FailureOr<MfmaInsn> chooseMfmaInstruction(tt::DotScaledOp dot, int mfmaVersion,
-                                          int nonKDim, bool useFp16) {
+FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotScaledOp dot,
+                                               int mfmaVersion, int nonKDim,
+                                               bool useFp16) {
   // For scaled dot, we handle it with fp16 or bf16 emulation for now.
   Builder b(dot.getContext());
   Type elemType = useFp16 ? b.getF16Type() : b.getBF16Type();
-  return chooseMfmaInstruction(dot.getC().getType(), /*aElemType=*/elemType,
-                               /*bElemType=*/elemType,
-                               dot.getLhs().getType().getShape().back(),
-                               mfmaVersion, /*allowXF32=*/false, nonKDim);
+  return chooseMfmaInstruction(
+      mfmaVersion, dot.getC().getType(), elemType, elemType,
+      dot.getLhs().getType().getShape().back(), nonKDim,
+      /*withScale=*/false, /*allowXF32=*/false);
 }
 
 using OperandTypesVector = SmallVector<Type, 4>;
@@ -421,14 +423,13 @@ public:
 
     ttg::AMDMfmaEncodingAttr mfmaEnc;
 
-    auto instrSelection = chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim);
-    if (failed(instrSelection))
+    auto mfmaInstr = chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim);
+    if (failed(mfmaInstr))
       return failure();
-    auto mfmaInstr = instrSelection.value();
-    auto mDim = mfmaInstr.getMDim();
-    auto nDim = mfmaInstr.getNDim();
-    auto kDim = mfmaInstr.getKDim();
-    auto kBase = mfmaInstr.getKBase();
+    auto mDim = mfmaInstr->mDim;
+    auto nDim = mfmaInstr->nDim;
+    auto kDim = mfmaInstr->kDim;
+    auto kBase = mfmaInstr->kBase;
 
     auto warpsPerTile =
         warpsPerTileMFMA(dotOp, retShape, numWarps, {mDim, nDim});
@@ -436,7 +437,7 @@ public:
     // Use transposed mfma layout to enable larger vectorization for global
     // store instructions, except for fp8 matmul kernels due to regression
     // TODO (lixun): investigate the regression and enable this feature again
-    auto aElemTy = mfmaInstr.getElementTypeA();
+    auto aElemTy = mfmaInstr->aElementType;
     bool isFP8 = llvm::isa<Float8E5M2FNUZType, Float8E4M3FNUZType>(aElemTy);
     bool isTransposed = isChainDot(dotOp) || !isFP8;
     mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
@@ -499,9 +500,9 @@ public:
     auto newBEncoding =
         ttg::DotOperandEncodingAttr::get(ctx, 1, mfmaEnc, kWidth);
     a = convertAndCastTensor(rewriter, a, newAEncoding,
-                             mfmaInstr.getElementTypeA());
+                             mfmaInstr->aElementType);
     b = convertAndCastTensor(rewriter, b, newBEncoding,
-                             mfmaInstr.getElementTypeB());
+                             mfmaInstr->bElementType);
     auto newDot = rewriter.create<tt::DotOp>(
         dotOp.getLoc(), newAcc.getType(), a, b, newAcc,
         dotOp.getInputPrecision(), dotOp.getMaxNumImpreciseAcc());
@@ -567,7 +568,7 @@ public:
     // Choose a suitable MFMA instruction for this scaled dot op.
     bool useFp16 = dotOp.getLhsType() == ScaleDotElemType::FP16 ||
                    dotOp.getRhsType() == ScaleDotElemType::FP16;
-    FailureOr<MfmaInsn> mfmaInstr =
+    FailureOr<MfmaIntrinsic> mfmaInstr =
         chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim, useFp16);
     if (failed(mfmaInstr))
       return rewriter.notifyMatchFailure(dotOp, "cannot choose mfma intrinsic");
@@ -579,10 +580,10 @@ public:
           "experimental behavior and may change in future");
     }
 
-    unsigned mDim = mfmaInstr.value().getMDim();
-    unsigned nDim = mfmaInstr.value().getNDim();
-    unsigned kDim = mfmaInstr.value().getKDim();
-    unsigned kBase = mfmaInstr.value().getKBase();
+    unsigned mDim = mfmaInstr->mDim;
+    unsigned nDim = mfmaInstr->nDim;
+    unsigned kDim = mfmaInstr->kDim;
+    unsigned kBase = mfmaInstr->kBase;
 
     // For mxfp4 A/B tensor, we pack every two values into one int8 value there.
     // For such cases, we have different initial kWidth for LHS and RHS, which
@@ -742,16 +743,16 @@ public:
                                          "num_warps==1 is not supported");
 
     // Choose a suitable Scaled MFMA instruction for this scaled dot op.
-    FailureOr<MfmaInsn> mfmaInstr =
+    FailureOr<MfmaIntrinsic> mfmaInstr =
         chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim);
     if (failed(mfmaInstr))
       return rewriter.notifyMatchFailure(dotOp,
                                          "cannot choose scaled mfma intrinsic");
 
-    unsigned mDim = mfmaInstr.value().getMDim();
-    unsigned nDim = mfmaInstr.value().getNDim();
-    unsigned kDim = mfmaInstr.value().getKDim();
-    unsigned kBase = mfmaInstr.value().getKBase();
+    auto mDim = mfmaInstr->mDim;
+    auto nDim = mfmaInstr->nDim;
+    auto kDim = mfmaInstr->kDim;
+    auto kBase = mfmaInstr->kBase;
     assert(mDim == nDim);
 
     auto warpsPerTile =
