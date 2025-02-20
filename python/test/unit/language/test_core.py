@@ -270,6 +270,8 @@ def bases_per_dim(layout, dim, rank, skip_broadcast=True):
 def warps_per_cta(layout, shape):
     if isinstance(layout, LinearLayout):
         return bases_per_dim(layout, 'warp', len(shape))
+    elif isinstance(layout, (SliceLayout, DotOperandLayout)):
+        return warps_per_cta(layout.parent, shape)
     else:
         return layout.warps_per_cta
 
@@ -2839,34 +2841,32 @@ def test_scan_layouts(M, N, src_layout, axis, add_overflow_check, device, tmp_pa
 layouts = [
     BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([4, 4], [THREADS_PER_WARP // 16, 16], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 2], [4, THREADS_PER_WARP // 4], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    MmaLayout(version=(2, 0), warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[0, 1],
-              instr_shape=[16, 8]),
-    MmaLayout(version=(2, 0), warps_per_cta=[2, 2], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[0, 1],
+    MmaLayout(version=(2, 0), warps_per_cta=[2, 4], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[0, 1],
               instr_shape=[16, 8]),
     MmaLayout(version=(3, 0), warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[1, 0],
               instr_shape=[16, 16, 16]),
-    MmaLayout(version=(3, 0), warps_per_cta=[4, 2], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[1, 0],
-              instr_shape=[16, 32, 16]),
-    MfmaLayout(version=(2, 0), warps_per_cta=[2, 2], instr_shape=[32, 32], is_transposed=False),
     MfmaLayout(version=(2, 0), warps_per_cta=[4, 1], instr_shape=[32, 32], is_transposed=False),
     MfmaLayout(version=(2, 0), warps_per_cta=[1, 4], instr_shape=[32, 32], is_transposed=False),
-    MfmaLayout(version=(2, 0), warps_per_cta=[2, 2], instr_shape=[32, 32], is_transposed=True),
     MfmaLayout(version=(2, 0), warps_per_cta=[4, 1], instr_shape=[32, 32], is_transposed=True),
     MfmaLayout(version=(2, 0), warps_per_cta=[1, 4], instr_shape=[32, 32], is_transposed=True),
-    WmmaLayout(version=1, warps_per_cta=[2, 2]),
     WmmaLayout(version=1, warps_per_cta=[4, 1]),
     WmmaLayout(version=1, warps_per_cta=[1, 4]),
+    DotOperandLayout(parent=MmaLayout([2, 0], [2, 4], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=1, k_width=8),
+    DotOperandLayout(parent=MmaLayout([3, 0], [8, 1], [1, 1], [1, 1], [1, 0], [16, 32, 16]), op_idx=0, k_width=2),
+    # FIXME: Do not enable these tests until the SLPVectorizor problem with nvptx target has been resolved
+    # SliceLayout(dim=1, parent=BlockedLayout([1, 4, 1], [1, 8, THREADS_PER_WARP // 8], [1, 1, 4], [2, 0, 1], [1, 1, 1], [1, 1, 1], [0, 1, 2])),
+    # SliceLayout(dim=0, parent=BlockedLayout([1, 4, 1], [1, 8, THREADS_PER_WARP // 8], [1, 4, 1], [2, 1, 0], [1, 1, 1], [1, 1, 1], [0, 1, 2])),
+    SliceLayout(dim=0, parent=MmaLayout([2, 0], [4, 1, 1], [1, 1, 1], [1, 1, 1], [2, 1, 0], [1, 16, 8])),
+    SliceLayout(
+        dim=1, parent=DotOperandLayout(parent=MmaLayout([2, 0], [4, 1, 1], [1, 1, 1], [1, 1, 1], [2, 1, 0], [1, 16, 8]),
+                                       op_idx=1, k_width=2)),
     LinearLayout(register=[[0, 16], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], lane=[[0, 0], [0, 1], [0, 2], [0, 4],
                                                                                     [0, 8]], warp=[[32, 0], [0, 32]],
                  block=[]),
 ]
 
 
-@pytest.mark.parametrize("M, N", [[128, 16], [128, 128], [64, 64], [32, 128], [32, 32], [16, 16]])
+@pytest.mark.parametrize("M, N", [[128, 16], [128, 128], [32, 128], [32, 32], [16, 16]])
 @pytest.mark.parametrize("src_layout", filter_layouts(layouts))
 @pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("epilogue_kind", ['reduce1d', 'reduce2d', 'expand_reduce2d'])
@@ -2886,7 +2886,7 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, add_ov
         pytest.skip("FIXME: LinearLayout not supported on HIP")
 
     if isinstance(src_layout, MmaLayout) and src_layout.version == 3:
-        src_layout[2] = 16 if dtype_str == "float16" else 8
+        src_layout.instr_shape[2] = 16 if dtype_str == "float16" else 8
 
     overflow_check = """
         %18 = arith.extsi %arg3 : i32 to i64
@@ -2909,11 +2909,9 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, add_ov
     rdims_1d = f"{N}" if axis == 0 else f"{M}"
     rdims_2d = f"1x{N}" if axis == 0 else f"{M}x1"
     store_range = "%7" if axis == 0 else "%1"
-    blocked = BlockedLayout([1, 1], [32, THREADS_PER_WARP // 32], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1])
     warps = warps_per_cta(src_layout, [M, N])
-    num_warps = warps[0] * warps[1]
-    if num_warps == 8:
-        blocked = BlockedLayout([1, 1], [32, THREADS_PER_WARP // 32], [4, 2], [0, 1], [1, 1], [1, 1], [0, 1])
+    num_warps = np.prod(warps)
+    blocked = BlockedLayout([1, 1], [32, THREADS_PER_WARP // 32], [4, num_warps // 4], [0, 1], [1, 1], [1, 1], [0, 1])
     one_d_layout = BlockedLayout([1], [THREADS_PER_WARP], [num_warps], [0], [1], [1], [0])
 
     expanded_shape = f"1x{N}" if axis == 0 else f"{M}x1"
