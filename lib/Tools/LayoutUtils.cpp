@@ -151,6 +151,19 @@ SmallVector<StringAttr> standardOutDimNames(MLIRContext *ctx, int rank) {
   return ret;
 }
 
+// Returns [("dim0", dstShape[0]), ("dim1", dstShape[1]), ...,
+// ("dim<rank-1>", dstShape[rank-1])].
+SmallVector<std::pair<StringAttr, int32_t>>
+standardOutDimPairs(MLIRContext *ctx, ArrayRef<int64_t> dstShape) {
+  auto newRank = dstShape.size();
+  SmallVector<std::pair<StringAttr, int32_t>> newOutDims;
+  for (auto [dim, size] :
+       llvm::zip(standardOutDimNames(ctx, newRank), dstShape)) {
+    newOutDims.emplace_back(dim, size);
+  }
+  return newOutDims;
+}
+
 // Returns a 1D -> ND layout into [dim0, dim1, ...] that's equivalent to
 // creating a 1D -> 1D mapping of size product(shape) and then reshaping to
 // permute(shape, order).
