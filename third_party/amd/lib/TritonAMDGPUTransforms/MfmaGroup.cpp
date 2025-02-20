@@ -93,29 +93,29 @@ MfmaDatabase::MfmaDatabase(MLIRContext *context) {
   }
 
 // Macro for defining MFMA intrinsics existing in multiple gfx versions.
-#define TRITON_MFMA_v1to2(m, n, k, aET, bET, kBase, symbol)                    \
-  TRITON_MFMA_v(1, m, n, k, aET, bET, kBase, symbol),                          \
-      TRITON_MFMA_v(2, m, n, k, aET, bET, kBase, symbol)
+#define TRITON_MFMA_v1to2(m, n, aET, bET, symbol, k, kBase)                    \
+  TRITON_MFMA_v(1, m, n, aET, bET, symbol, k, kBase),                          \
+      TRITON_MFMA_v(2, m, n, aET, bET, symbol, k, kBase)
 
-#define TRITON_MFMA_v2to3(m, n, k, aET, bET, kBase, symbol)                    \
-  TRITON_MFMA_v(2, m, n, k, aET, bET, kBase, symbol),                          \
-      TRITON_MFMA_v(3, m, n, k, aET, bET, kBase, symbol)
+#define TRITON_MFMA_v2to3(m, n, aET, bET, symbol, k, kBase)                    \
+  TRITON_MFMA_v(2, m, n, aET, bET, symbol, k, kBase),                          \
+      TRITON_MFMA_v(3, m, n, aET, bET, symbol, k, kBase)
 
-#define TRITON_MFMA_v3to4(m, n, k, aET, bET, kBase, symbol)                    \
-  TRITON_MFMA_v(3, m, n, k, aET, bET, kBase, symbol),                          \
-      TRITON_MFMA_v(4, m, n, k, aET, bET, kBase, symbol)
+#define TRITON_MFMA_v3to4(m, n, aET, bET, symbol, k, kBase)                    \
+  TRITON_MFMA_v(3, m, n, aET, bET, symbol, k, kBase),                          \
+      TRITON_MFMA_v(4, m, n, aET, bET, symbol, k, kBase)
 
-#define TRITON_MFMA_v2to4(m, n, k, aET, bET, kBase, symbol)                    \
-  TRITON_MFMA_v(2, m, n, k, aET, bET, kBase, symbol),                          \
-      TRITON_MFMA_v3to4(m, n, k, aET, bET, kBase, symbol)
+#define TRITON_MFMA_v2to4(m, n, aET, bET, symbol, k, kBase)                    \
+  TRITON_MFMA_v(2, m, n, aET, bET, symbol, k, kBase),                          \
+      TRITON_MFMA_v3to4(m, n, aET, bET, symbol, k, kBase)
 
-#define TRITON_MFMA_v1to3(m, n, k, aET, bET, kBase, symbol)                    \
-  TRITON_MFMA_v(1, m, n, k, aET, bET, kBase, symbol),                          \
-      TRITON_MFMA_v2to3(m, n, k, aET, bET, kBase, symbol)
+#define TRITON_MFMA_v1to3(m, n, aET, bET, symbol, k, kBase)                    \
+  TRITON_MFMA_v(1, m, n, aET, bET, symbol, k, kBase),                          \
+      TRITON_MFMA_v2to3(m, n, aET, bET, symbol, k, kBase)
 
-#define TRITON_MFMA_v1to4(m, n, k, aET, bET, kBase, symbol)                    \
-  TRITON_MFMA_v(1, m, n, k, aET, bET, kBase, symbol),                          \
-      TRITON_MFMA_v2to4(m, n, k, aET, bET, kBase, symbol)
+#define TRITON_MFMA_v1to4(m, n, aET, bET, symbol, k, kBase)                    \
+  TRITON_MFMA_v(1, m, n, aET, bET, symbol, k, kBase),                          \
+      TRITON_MFMA_v2to4(m, n, aET, bET, symbol, k, kBase)
 
   Builder b(context);
   auto f32T = b.getF32Type();
