@@ -22,6 +22,8 @@ enum class MfmaTypeId : uint32_t {
   Bf8Fp8TyId,
   Bf8Bf8TyId,
   F8F6F4TyId,
+  OBf8OBf8TyId,
+  OFp8OFp8TyId,
 };
 
 struct MfmaInsnGroupSelectKey {

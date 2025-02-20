@@ -41,13 +41,22 @@ static MfmaTypeId chooseAppropriateMfmaId(mlir::Type dataTypeA,
       llvm::isa<Float8E5M2FNUZType>(dataTypeB)) {
     return MfmaTypeId::Bf8Bf8TyId;
   }
+  //if (llvm::isa<Float8E5M2Type>(dataTypeA) &&
+  //    llvm::isa<Float8E5M2Type>(dataTypeB)) {
+  //  return MfmaTypeId::Fp16TyId;
+  //}
+  if (llvm::isa<Float8E4M3FNType>(dataTypeA) &&
+      llvm::isa<Float8E4M3FNType>(dataTypeB)) {
+    return MfmaTypeId::OFp8OFp8TyId;
+  }
   if (llvm::isa<Float8E5M2Type>(dataTypeA) &&
       llvm::isa<Float8E5M2Type>(dataTypeB)) {
-    return MfmaTypeId::Fp16TyId;
+    return MfmaTypeId::OBf8OBf8TyId;
   }
   if (isF8F6F4(dataTypeA) && isF8F6F4(dataTypeB)) {
     return MfmaTypeId::F8F6F4TyId;
   }
+
   llvm_unreachable("Unsupported input argument type.");
 }
 
@@ -261,7 +270,7 @@ auto getMfmaInsnGroupAttrMap = []() -> const MfmaInsnGroupMap & {
       // mfma_f32_32x32x16_FP8_FP8
       {{32, 32, 0, MfmaTypeId::Fp8Fp8TyId, 3},
        {32, 32, 16, 8, ROCDL::mfma_f32_32x32x16_fp8_fp8::getOperationName()}},
-      {{32, 32, 0, MfmaTypeId::Fp8Fp8TyId, 4},
+      {{32, 32, 0, MfmaTypeId::OFp8OFp8TyId, 4},
        {32, 32, 16, 8, ROCDL::mfma_f32_32x32x16_fp8_fp8::getOperationName()}},
       // mfma_f32_16x16x32_FP8_FP8
       {{16, 16, 0, MfmaTypeId::Fp8Fp8TyId, 3},
@@ -291,7 +300,7 @@ auto getMfmaInsnGroupAttrMap = []() -> const MfmaInsnGroupMap & {
       // mfma_f32_32x32x16_BF8_BF8
       {{32, 32, 0, MfmaTypeId::Bf8Bf8TyId, 3},
        {32, 32, 16, 8, ROCDL::mfma_f32_32x32x16_bf8_bf8::getOperationName()}},
-      {{32, 32, 0, MfmaTypeId::Bf8Bf8TyId, 4},
+      {{32, 32, 0, MfmaTypeId::OBf8OBf8TyId, 4},
        {32, 32, 16, 8, ROCDL::mfma_f32_32x32x16_bf8_bf8::getOperationName()}},
       // scaled mfma f8f6f4
       // mfma_scale_F32_16x16x128_F8F6F4
@@ -313,6 +322,7 @@ auto getMfmaInsnGroupAttrMap = []() -> const MfmaInsnGroupMap & {
 
 std::pair<mlir::Type, mlir::Type> TypesFromMfmaId(mlir::MLIRContext *ctx,
                                                   MfmaTypeId id) {
+  auto f8e4m3fn = Float8E4M3FNType::get(ctx);
   auto f8e5m2 = Float8E5M2Type::get(ctx);
   auto f8e4m3fnuz = Float8E4M3FNUZType::get(ctx);
   auto f8e5m2fnuz = Float8E5M2FNUZType::get(ctx);
@@ -338,6 +348,11 @@ std::pair<mlir::Type, mlir::Type> TypesFromMfmaId(mlir::MLIRContext *ctx,
     return {f8e5m2fnuz, f8e4m3fnuz};
   case MfmaTypeId::Bf8Bf8TyId:
     return {f8e5m2fnuz, f8e5m2fnuz};
+  case MfmaTypeId::OFp8OFp8TyId:
+    return {f8e4m3fn, f8e4m3fn};
+  case MfmaTypeId::OBf8OBf8TyId:
+    return {f8e5m2, f8e5m2};
+
   default:
     llvm_unreachable("unsupported MfmaTypeId!");
   }
