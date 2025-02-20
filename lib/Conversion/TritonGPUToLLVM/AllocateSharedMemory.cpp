@@ -1,5 +1,6 @@
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Analysis/Membar.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -20,6 +21,8 @@ struct AllocateSharedMemory
     ModuleOp mod = getOperation();
     MLIRContext *ctx = &getContext();
     ModuleAllocation allocation(mod);
+    ModuleMembarAnalysis membarPass(&allocation);
+    membarPass.run();
 
     mod.walk<mlir::WalkOrder::PreOrder>([&](FunctionOpInterface funcOp) {
       auto *funcAllocation = allocation.getFuncData(funcOp);
@@ -37,13 +40,14 @@ struct AllocateSharedMemory
         if (offset == -1)
           return;
         op->setAttr("allocation.offset",
-                    IntegerAttr::get(IntegerType::get(ctx, 32), offset));
+                    IntegerAttr::get(IntegerType::get(ctx, 32), 0));
       });
       return WalkResult::skip();
     });
+    auto msize = allocation.getSharedMemorySize() / 2;
     mod->setAttr("ttg.shared",
                  mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 32),
-                                        allocation.getSharedMemorySize()));
+                                        msize));
   }
 };
 } // namespace
