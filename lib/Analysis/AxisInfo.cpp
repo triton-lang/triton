@@ -1218,6 +1218,23 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
   return AxisInfo(contiguity, divisibility, constancy, constantValue);
 }
 
+namespace {
+
+unsigned getMaxContig(ArrayRef<int64_t> alignment, ArrayRef<int64_t> shape,
+                      ArrayRef<unsigned> order) {
+  unsigned maxContig = 1;
+  for (auto i = 0; i < alignment.size(); ++i) {
+    auto d = order[i];
+    maxContig *= alignment[d];
+    if (alignment[d] != shape[d]) {
+      break;
+    }
+  }
+  return maxContig;
+}
+
+} // namespace
+
 unsigned ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr) {
   auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
   if (!tensorTy)
@@ -1234,7 +1251,10 @@ unsigned ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr) {
   auto uniqueContigPerThread = linAttr.getContigPerThread();
   assert(order[0] < uniqueContigPerThread.size() &&
          "Unexpected uniqueContigPerThread size");
-  unsigned contiguity = uniqueContigPerThread[order[0]];
+
+  auto shape = tensorTy.getShape();
+  unsigned contiguity =
+      getMaxContig(convertType<int64_t>(uniqueContigPerThread), shape, order);
   LDBG("getPtrContiguity uniqueContigPerThread = " << contiguity);
   contiguity = std::min(align, contiguity);
 
@@ -1251,12 +1271,17 @@ unsigned ModuleAxisInfoAnalysis::getPtrAlignment(Value ptr) {
   auto linAttr =
       gpu::toLinearEncoding(tensorTy.getEncoding(), tensorTy.getShape());
   auto order = linAttr.getOrder();
-  auto maxMultipleBytes = axisInfo->getDivisibility(order[0]);
-  auto maxContig = axisInfo->getContiguity(order[0]);
+  auto shape = tensorTy.getShape();
   auto elemNumBits = triton::getPointeeBitWidth(tensorTy);
   auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
+  auto divBytes = axisInfo->getDivisibility();
+  for (auto i = 0; i < divBytes.size(); ++i) {
+    divBytes[i] = divBytes[i] / elemNumBytes;
+  }
+  auto maxMultipleBytes = getMaxContig(divBytes, shape, order);
+  auto maxContig = getMaxContig(axisInfo->getContiguity(), shape, order);
   auto maxMultiple = std::max<int64_t>(maxMultipleBytes / elemNumBytes, 1);
-  unsigned alignment = std::min(maxMultiple, maxContig);
+  unsigned alignment = std::min<unsigned>(maxMultiple, maxContig);
   LDBG("getPtrAlignment order[0] "
        << order[0] << " maxMultipleBytes = " << maxMultipleBytes
        << " maxContig = " << maxContig << " elemNumBits = " << elemNumBits
@@ -1280,9 +1305,9 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
   auto linAttr =
       gpu::toLinearEncoding(tensorTy.getEncoding(), tensorTy.getShape());
   auto maskOrder = linAttr.getOrder();
-  auto alignment = std::max<unsigned>(axisInfo->getConstancy(maskOrder[0]), 1);
-  LDBG("getMaskAlignment maskOrder[0] " << maskOrder[0] << " alignment "
-                                        << alignment);
+  auto shape = tensorTy.getShape();
+  auto alignment = getMaxContig(axisInfo->getConstancy(), shape, maskOrder);
+  LDBG("getMaskAlignment alignment " << alignment);
   LLVM_DEBUG({
     std::string axisStr;
     llvm::raw_string_ostream os(axisStr);
