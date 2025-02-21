@@ -550,6 +550,13 @@ void createTMABarrierAndWait(
   }
 }
 
+// Check if load requires additional buffer for a mma pipelining
+bool loadRequiresAdditionalBuffer(Operation *loadOp) {
+  if (canBeShmemPipelined(loadOp)) {
+    return true;
+  }
+}
+
 scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
   llvm::MapVector<Operation *, AsyncLoad> asyncLoads;
   llvm::MapVector<int, LoadGroupInfo> loadGroups;

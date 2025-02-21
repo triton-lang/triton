@@ -54,6 +54,39 @@ static scf::ForOp pipelineLoop(scf::ForOp forOp, int numStages) {
   return newForOp.value();
 }
 
+static void expandLoops(ModuleOp moduleOp) {
+  SmallVector<scf::ForOp> loops;
+  moduleOp->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
+  for (scf::ForOp forOp : loops) {
+    CoarseSchedule schedule;
+    if (failed(schedule.deSerialize(forOp))) {
+      continue;
+    }
+
+    std::vector<std::pair<Operation *, unsigned>> finalSchedule =
+        schedule.createFinalSchedule(forOp);
+    triton::PipeliningOption options;
+    options.supportDynamicLoops = true;
+    options.peelEpilogue = false;
+    options.predicateFn = triton::predicateOp;
+    options.getScheduleFn =
+        [&](scf::ForOp forOp,
+            std::vector<std::pair<Operation *, unsigned>> &schedule) {
+          schedule = finalSchedule;
+        };
+    IRRewriter rewriter(forOp);
+    FailureOr<scf::ForOp> newForOp =
+        triton::pipelineForLoop(rewriter, forOp, options);
+  }
+}
+
+static void removeAttributes(ModuleOp moduleOp) {
+  moduleOp->walk([&](Operation *op) {
+    op->removeAttr(mlir::triton::kLoopStageAttrName);
+    op->removeAttr(mlir::triton::kLoopClusterAttrName);
+  });
+}
+
 struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
 
   using impl::TritonGPUPipelineBase<PipelinePass>::TritonGPUPipelineBase;
@@ -66,32 +99,6 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
     return mlir::cast<IntegerAttr>(
                forOp->getAttr(mlir::triton::kNumStagesAttrName))
         .getInt();
-  }
-
-  void expandLoops() {
-    SmallVector<scf::ForOp> loops;
-    getOperation()->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
-    for (scf::ForOp forOp : loops) {
-      CoarseSchedule schedule;
-      if (failed(schedule.deSerialize(forOp))) {
-        continue;
-      }
-
-      std::vector<std::pair<Operation *, unsigned>> finalSchedule =
-          schedule.createFinalSchedule(forOp);
-      triton::PipeliningOption options;
-      options.supportDynamicLoops = true;
-      options.peelEpilogue = false;
-      options.predicateFn = triton::predicateOp;
-      options.getScheduleFn =
-          [&](scf::ForOp forOp,
-              std::vector<std::pair<Operation *, unsigned>> &schedule) {
-            schedule = finalSchedule;
-          };
-      IRRewriter rewriter(forOp);
-      FailureOr<scf::ForOp> newForOp =
-          triton::pipelineForLoop(rewriter, forOp, options);
-    }
   }
 
   void runOnOperation() override {
@@ -117,43 +124,45 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
           << moduleOp << "\n\n\n";
     }
 
-    if (triton::tools::getBoolEnv("TRITON_NEW_PIPELINER")) {
-      // Transform the loop by introducing async operations to prepare it for
-      // pipeline expansion.
-      lowerLoops(moduleOp);
-      if (dumpIntermediateSteps) {
-        llvm::dbgs()
-            << "// -----// IR Dump After: SoftwarePipeliner: LowerLoops\n"
-            << moduleOp << "\n\n\n";
-      }
-
-      // Apply the pipeline expansion.
-      expandLoops();
-      if (dumpIntermediateSteps) {
-        llvm::dbgs()
-            << "// -----// IR Dump After: SoftwarePipeliner: ExpandLoops\n"
-            << moduleOp << "\n\n\n";
-      }
-    } else {
-
-      SmallVector<scf::ForOp> loops;
-      getOperation()->walk([&](scf::ForOp forOp) {
-        // Bail out for loops with num_stage <= 1.
-        if (getNumStagesOrDefault(forOp) > 1)
-          loops.push_back(forOp);
-      });
-
-      if (loops.empty())
-        return;
-
-      llvm::SmallVector<scf::ForOp> pipelinedLoops;
-      for (scf::ForOp forOp : loops) {
-        int loopNumStages = getNumStagesOrDefault(forOp);
-        scf::ForOp pipelinedFor = pipelineLoop(forOp, loopNumStages);
-        if (pipelinedFor != nullptr)
-          pipelinedLoops.push_back(pipelinedFor);
-      }
+    // if (triton::tools::getBoolEnv("TRITON_NEW_PIPELINER")) {
+    // Transform the loop by introducing async operations to prepare it for
+    // pipeline expansion.
+    lowerLoops(moduleOp);
+    if (dumpIntermediateSteps) {
+      llvm::dbgs()
+          << "// -----// IR Dump After: SoftwarePipeliner: LowerLoops\n"
+          << moduleOp << "\n\n\n";
     }
+
+    // Apply the pipeline expansion.
+    expandLoops(moduleOp);
+    if (dumpIntermediateSteps) {
+      llvm::dbgs()
+          << "// -----// IR Dump After: SoftwarePipeliner: ExpandLoops\n"
+          << moduleOp << "\n\n\n";
+    }
+
+    removeAttributes(moduleOp);
+    // } else {
+
+    //   SmallVector<scf::ForOp> loops;
+    //   getOperation()->walk([&](scf::ForOp forOp) {
+    //     // Bail out for loops with num_stage <= 1.
+    //     if (getNumStagesOrDefault(forOp) > 1)
+    //       loops.push_back(forOp);
+    //   });
+
+    //   if (loops.empty())
+    //     return;
+
+    //   llvm::SmallVector<scf::ForOp> pipelinedLoops;
+    //   for (scf::ForOp forOp : loops) {
+    //     int loopNumStages = getNumStagesOrDefault(forOp);
+    //     scf::ForOp pipelinedFor = pipelineLoop(forOp, loopNumStages);
+    //     if (pipelinedFor != nullptr)
+    //       pipelinedLoops.push_back(pipelinedFor);
+    //   }
+    // }
 
     {
       SmallVector<scf::ForOp> loops;
