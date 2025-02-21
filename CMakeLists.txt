@@ -229,6 +229,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     MLIRLLVMDialect
     MLIRSupport
     MLIRTargetLLVMIRExport
+    MLIRTargetLLVMIRImport
     MLIRMathToLLVM
     MLIRROCDLToLLVMIRTranslation
     MLIRGPUDialect

@@ -200,7 +200,6 @@ void MembarAnalysis::update(Operation *op, BlockInfo *blockInfo,
   // read/write operations, and ending with a shared memory read, i.e., shared
   // memory write -> ... -> shared memory read.
   if (scratchBufferId != Allocation::InvalidBufferId) {
-    mlir::emitRemark(op->getLoc(), "scratch buffer");
     if (!curBlockInfo.syncReadIntervals.empty() ||
         !curBlockInfo.syncWriteIntervals.empty()) {
       llvm::report_fatal_error(
