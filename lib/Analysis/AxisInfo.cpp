@@ -1221,11 +1221,12 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
 namespace {
 
 unsigned getMaxContig(ArrayRef<int64_t> alignment, ArrayRef<int64_t> shape,
-                      ArrayRef<unsigned> order) {
+                      ArrayRef<unsigned> order,
+                      ArrayRef<unsigned> sizePerThread) {
   unsigned maxContig = 1;
   for (auto i = 0; i < alignment.size(); ++i) {
     auto d = order[i];
-    maxContig *= alignment[d];
+    maxContig *= sizePerThread[d];
     if (alignment[d] != shape[d]) {
       break;
     }
@@ -1253,8 +1254,9 @@ unsigned ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr) {
          "Unexpected uniqueContigPerThread size");
 
   auto shape = tensorTy.getShape();
-  unsigned contiguity =
-      getMaxContig(convertType<int64_t>(uniqueContigPerThread), shape, order);
+  auto sizePerThread = linAttr.getSizePerThread();
+  unsigned contiguity = getMaxContig(
+      convertType<int64_t>(uniqueContigPerThread), shape, order, sizePerThread);
   LDBG("uniqueContigPerThread=" << uniqueContigPerThread[0] << " "
                                 << uniqueContigPerThread[1]);
   LDBG("shape=" << shape[0] << " " << shape[1]);
@@ -1279,8 +1281,10 @@ unsigned ModuleAxisInfoAnalysis::getPtrAlignment(Value ptr) {
   auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
   auto divBytes = axisInfo->getDivisibility();
   divBytes[order[0]] = divBytes[order[0]] / elemNumBytes;
-  auto maxMultipleBytes = getMaxContig(divBytes, shape, order);
-  auto maxContig = getMaxContig(axisInfo->getContiguity(), shape, order);
+  auto sizePerThread = linAttr.getSizePerThread();
+  auto maxMultipleBytes = getMaxContig(divBytes, shape, order, sizePerThread);
+  auto maxContig =
+      getMaxContig(axisInfo->getContiguity(), shape, order, sizePerThread);
   auto maxMultiple = std::max<int64_t>(maxMultipleBytes / elemNumBytes, 1);
   unsigned alignment = std::min<unsigned>(maxMultiple, maxContig);
   LDBG("getPtrAlignment order[0] "
