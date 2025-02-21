@@ -1226,7 +1226,11 @@ unsigned getMaxContig(ArrayRef<int64_t> alignment, ArrayRef<int64_t> shape,
   unsigned maxContig = 1;
   for (auto i = 0; i < alignment.size(); ++i) {
     auto d = order[i];
-    maxContig *= sizePerThread[d];
+    if (i == 0) {
+      maxContig = alignment[d];
+    } else {
+      maxContig *= sizePerThread[d];
+    }
     if (alignment[d] != shape[d]) {
       break;
     }
