@@ -534,12 +534,14 @@ public:
   TritonAMDGPUBlockPingpongPass() = default;
   void runOnOperation() override {
     ModuleOp m = getOperation();
+    m->dump();
     for (auto funcOp : m.getOps<tt::FuncOp>()) {
       funcOp.walk([&](scf::ForOp forOp) {
         Pingponger pingponger(forOp, ttg::lookupNumWarps(forOp));
         pingponger.getDotPingponged();
       });
     }
+    m->dump();
   }
 };
 } // namespace
