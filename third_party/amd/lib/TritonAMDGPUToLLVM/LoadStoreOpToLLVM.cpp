@@ -176,8 +176,7 @@ struct LoadStoreConversionBase {
     return axisAnalysisPass.getMaskAlignment(mask);
   }
 
-  std::optional<const std::string>
-  getAMDGPUMemScopeStr(MemSyncScope scope) const {
+  std::optional<const char *> getAMDGPUMemScopeStr(MemSyncScope scope) const {
     // See: https://llvm.org/docs/AMDGPUUsage.html#memory-scopes
     auto scopeStr = "";
     switch (scope) {
@@ -1324,7 +1323,7 @@ struct AtomicRMWOpConversion
       // mask
       numElems = tensorTy.getNumElements();
     }
-    Value mask = b.int_val(1, 1);
+    Value mask = b.true_val();
     auto tid = getThreadId(rewriter, loc);
     mask = b.and_(mask, b.icmp_slt(b.mul(tid, b.i32_val(elemsPerThread)),
                                    b.i32_val(numElems)));
@@ -1333,7 +1332,7 @@ struct AtomicRMWOpConversion
     auto scope = op.getScope();
     auto atomicMemOrdering = getMemoryOrdering(memOrdering);
 
-    auto scopeStr = getAMDGPUMemScopeStr(scope);
+    std::optional<const char *> scopeStr = getAMDGPUMemScopeStr(scope);
     if (!scopeStr)
       return rewriter.notifyMatchFailure(op, "Unknown AMDGPU memory scope");
 
@@ -1352,7 +1351,7 @@ struct AtomicRMWOpConversion
       Value enablePackedOpt;
       if (useDppForPackedF16) {
         Value isOddI32 = b.urem(tid, b.i32_val(2));
-        // First check if odd threads hold adjacent ptrs to even.
+        // First check if odd threads hold adjacent ptrs to even ones.
         Value castedAddr = b.ptrtoint(i64_ty, rmwPtr);
         // Fill casted addr by ones if the thread is disabled
         castedAddr = b.or_(
@@ -1428,39 +1427,32 @@ struct AtomicRMWOpConversion
       Value isVecOp;
       if (enableIntraWaveReduce) {
         atom = atomicIntraWaveReduce(rewriter, rmwPtr, operand, *maybeKind,
-                                     atomicMemOrdering, scopeStr.value());
+                                     atomicMemOrdering, *scopeStr);
       } else {
         if (useDppForPackedF16) {
-          // Determine on the runtime what intrinsic to execute: packed or
-          // regular.
-          auto *atomicVectorBlock =
+          // Determine on the runtime what atomic intrinsic to execute:
+          // packed or regular.
+          auto *packedBlock =
               atomicBlock->splitBlock(rewriter.getInsertionPoint());
-          auto *atomicNonVectorBlock =
+          auto *regularBlock =
               rewriter.createBlock(atomicBlock->getParent(),
                                    std::next(Region::iterator(atomicBlock)));
-
           rewriter.setInsertionPointToEnd(atomicBlock);
+          rewriter.create<LLVM::CondBrOp>(loc, enablePackedOpt, packedBlock,
+                                          regularBlock);
 
-          rewriter.create<LLVM::CondBrOp>(
-              loc, enablePackedOpt, atomicVectorBlock, atomicNonVectorBlock);
-
-          rewriter.setInsertionPointToEnd(atomicNonVectorBlock);
+          // Fill out the regular block, where we issue two atomic ops.
+          rewriter.setInsertionPointToEnd(regularBlock);
           Value pairedOperand0 =
               b.extract_element(valueElemTy, operand, b.i32_val(0));
           Value pairedOperand1 =
               b.extract_element(valueElemTy, operand, b.i32_val(1));
-          Value atomNonVec0 =
-              rewriter
-                  .create<LLVM::AtomicRMWOp>(loc, *maybeKind, rmwPtr,
-                                             pairedOperand0, atomicMemOrdering,
-                                             StringRef(scopeStr.value()))
-                  .getResult();
-          Value atomNonVec1 =
-              rewriter
-                  .create<LLVM::AtomicRMWOp>(loc, *maybeKind, rightNeighbourPtr,
-                                             pairedOperand1, atomicMemOrdering,
-                                             StringRef(scopeStr.value()))
-                  .getResult();
+          Value atomNonVec0 = rewriter.create<LLVM::AtomicRMWOp>(
+              loc, *maybeKind, rmwPtr, pairedOperand0, atomicMemOrdering,
+              *scopeStr);
+          Value atomNonVec1 = rewriter.create<LLVM::AtomicRMWOp>(
+              loc, *maybeKind, rightNeighbourPtr, pairedOperand1,
+              atomicMemOrdering, *scopeStr);
           Value packedRes = b.null(packF16Ty);
           packedRes =
               b.insert_element(packF16Ty, packedRes, atomNonVec0, b.i32_val(0));
@@ -1468,14 +1460,11 @@ struct AtomicRMWOpConversion
               b.insert_element(packF16Ty, packedRes, atomNonVec1, b.i32_val(1));
           rewriter.create<LLVM::BrOp>(loc, packedRes, endBlock);
 
-          // Just start to fill up `atomicVectorBlock`.
-          rewriter.setInsertionPointToEnd(atomicVectorBlock);
+          // Start to fill out the packed block.
+          rewriter.setInsertionPointToEnd(packedBlock);
         }
-        atom = rewriter
-                   .create<LLVM::AtomicRMWOp>(loc, *maybeKind, rmwPtr, operand,
-                                              atomicMemOrdering,
-                                              StringRef(scopeStr.value()))
-                   .getResult();
+        atom = rewriter.create<LLVM::AtomicRMWOp>(
+            loc, *maybeKind, rmwPtr, operand, atomicMemOrdering, *scopeStr);
       }
 
       if (!tensorTy) {
@@ -1702,11 +1691,8 @@ private:
     rewriter.setInsertionPointToEnd(leaderBlock);
     // Utilize global atomic only by leader threads
     rmwPtr = b.inttoptr(origPtrType, rmwPtr);
-    Value atom = rewriter
-                     .create<LLVM::AtomicRMWOp>(loc, opKind, rmwPtr,
-                                                afterRedBlock->getArgument(0),
-                                                memOrdering, scope)
-                     .getResult();
+    Value atom = rewriter.create<LLVM::AtomicRMWOp>(
+        loc, opKind, rmwPtr, afterRedBlock->getArgument(0), memOrdering, scope);
     rewriter.create<LLVM::BrOp>(loc, atom, endBlock);
     rewriter.setInsertionPointToStart(endBlock);
 
