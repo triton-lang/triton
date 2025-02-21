@@ -443,6 +443,27 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
              ENABLE_DROPOUT: tl.constexpr, RETURN_ENCODED_SOFTMAX: tl.constexpr, USE_ALIBI: tl.constexpr,
              INT8: tl.constexpr, USE_P_SCALE: tl.constexpr, INT8_KV: tl.constexpr):
 
+    tl.assume(stride_qz >= 0)
+    tl.assume(stride_qh >= 0)
+    tl.assume(stride_qm >= 0)
+    tl.assume(stride_qk >= 0)
+    tl.assume(stride_kz >= 0)
+    tl.assume(stride_kh >= 0)
+    tl.assume(stride_kn >= 0)
+    tl.assume(stride_kk >= 0)
+    tl.assume(stride_bz >= 0)
+    tl.assume(stride_bh >= 0)
+    tl.assume(stride_bm >= 0)
+    tl.assume(stride_bn >= 0)
+    tl.assume(stride_vz >= 0)
+    tl.assume(stride_vh >= 0)
+    tl.assume(stride_vk >= 0)
+    tl.assume(stride_vn >= 0)
+    tl.assume(stride_oz >= 0)
+    tl.assume(stride_oh >= 0)
+    tl.assume(stride_om >= 0)
+    tl.assume(stride_on >= 0)
+
     if PERSISTENT:  # if persistent, kernel loops over multiple tiles
         NUM_WG = NUM_CU * GRID_CU_MULTIP  # number of workgroups launched
         num_tiles_per_head = tl.cdiv(MAX_SEQLENS_Q, BLOCK_M)  # the number of work units (tiles) of a single head
