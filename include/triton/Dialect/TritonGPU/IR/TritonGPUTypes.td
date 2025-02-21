@@ -3,6 +3,7 @@
 
 include "mlir/IR/AttrTypeBase.td"
 include "mlir/IR/BuiltinTypeInterfaces.td"
+include "mlir/Interfaces/DataLayoutInterfaces.td"
 include "triton/Dialect/TritonGPU/IR/TritonGPUDialect.td"
 
 class TTG_TypeDef<string name, string _mnemonic, list<Trait> traits = []>
@@ -20,7 +21,9 @@ def TTG_AsyncToken : TTG_TypeDef<"AsyncToken", "async.token", []> {
 }
 
 // Memory descriptor type.
-def TTG_MemDescType : TTG_TypeDef<"MemDesc", "memdesc", [ShapedTypeInterface]> {
+def TTG_MemDescType : TTG_TypeDef<"MemDesc", "memdesc", [
+  ShapedTypeInterface, DeclareTypeInterfaceMethods<DataLayoutTypeInterface>
+]> {
   let summary = "memory descriptor type (`::mlir::triton::gpu::MemDescType`) in Triton IR type system";
 
   let description = [{

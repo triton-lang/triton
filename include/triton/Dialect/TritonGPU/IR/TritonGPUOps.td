@@ -385,6 +385,10 @@ def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [
 
   let extraClassDeclaration = [{
     RegionRange getPartitionRegions();
+
+    // Get the size and alignment of the capture list.
+    std::pair<llvm::TypeSize, uint64_t>
+    getCaptureSizeAlign(const DataLayout &datalayout);
   }];
 
   let hasVerifier = 1;

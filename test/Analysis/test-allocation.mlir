@@ -729,12 +729,13 @@ tt.func @implicit_capture_liveness() {
 }
 
 // expected-remark @below {{implicit_and_explicit_capture_liveness}}
-// expected-remark @below {{size = 32}}
+// expected-remark @below {{size = 44}}
 tt.func @implicit_and_explicit_capture_liveness() {
   // expected-remark @below {{offset = 0, size = 16}}
   %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
   // expected-remark @below {{offset = 16, size = 16}}
   %1 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+  // expected-remark @below {{offset = 32, size = 12}}
   ttg.warp_specialize(%1)
   default {
     "use"(%0) : (!ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>) -> ()
@@ -751,6 +752,7 @@ tt.func @implicit_and_explicit_capture_liveness() {
 tt.func @explicit_capture_liveness() {
   // expected-remark @below {{offset = 0, size = 16}}
   %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
+  // expected-remark @below {{offset = 16, size = 12}}
   ttg.warp_specialize(%0)
   default {
     // expected-remark @below {{offset = 16, size = 16}}

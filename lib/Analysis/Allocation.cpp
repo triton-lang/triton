@@ -286,17 +286,17 @@ private:
     if (auto ws = dyn_cast<gpu::WarpSpecializeOp>(op)) {
       // `ttg.warp_specialize` needs memory to pass its explicit captures. Pack
       // the captures like a struct.
-      auto captureSize = llvm::TypeSize::getFixed(0);
-      uint64_t captureAlign = 1;
       mlir::DataLayout datalayout(op->getParentOfType<ModuleOp>());
-      for (Type type : ws.getOperandTypes()) {
-        uint64_t align = datalayout.getTypeABIAlignment(type);
-        captureSize = llvm::alignTo(captureSize, align);
-        captureSize += datalayout.getTypeSize(type);
-        captureAlign = std::max(align, captureAlign);
-      }
+      auto [captureSize, captureAlign] = ws.getCaptureSizeAlign(datalayout);
       maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, captureSize,
                                                           captureAlign);
+      return;
+    }
+    if (auto func = dyn_cast<FunctionOpInterface>(op)) {
+      WalkResult isSpecialized = func.walk(
+          [&](gpu::WarpSpecializeOp) { return WalkResult::interrupt(); });
+      if (isSpecialized.wasInterrupted())
+        maybeAddScratchBuffer<BufferT::BufferKind::Virtual>(op, /*bytes=*/4);
       return;
     }
     unsigned bytes = scratchSizeGetter(op);
@@ -390,6 +390,12 @@ private:
     // Analyze liveness of scratch buffers and virtual buffers.
     auto processScratchMemory = [&](const auto &container) {
       for (auto [op, buffer] : container) {
+        if (op == operation) {
+          bufferRange.insert(
+              {buffer, Interval(size_t(), std::numeric_limits<size_t>::max())});
+          continue;
+        }
+
         // Any scratch memory's live range is the current operation's live
         // range.
         bufferRange.insert(

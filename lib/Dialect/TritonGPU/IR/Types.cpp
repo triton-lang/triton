@@ -88,6 +88,28 @@ LogicalResult MemDescType::verify(function_ref<InFlightDiagnostic()> emitError,
   return success();
 }
 
+llvm::TypeSize
+MemDescType::getTypeSizeInBits(const DataLayout &datalayout,
+                               DataLayoutEntryListRef entries) const {
+  // FIXME: There is no good way to separate datalayout from lowering.
+  if (!::isa<SharedMemorySpaceAttr>(getMemorySpace()))
+    return llvm::TypeSize::getFixed(64);
+  return llvm::TypeSize::getFixed(64 + getRank() * 32);
+}
+
+uint64_t MemDescType::getABIAlignment(const DataLayout &datalayout,
+                                      DataLayoutEntryListRef entries) const {
+  // FIXME: There is no good way to separate datalayout from lowering.
+  return 4; // default LLVM pointer alignment
+}
+
+uint64_t
+MemDescType::getPreferredAlignment(const DataLayout &datalayout,
+                                   DataLayoutEntryListRef entries) const {
+  // FIXME: This should default to `getABIAlignment` upstream.
+  return getABIAlignment(datalayout, entries);
+}
+
 //===----------------------------------------------------------------------===//
 // Triton Dialect
 //===----------------------------------------------------------------------===//

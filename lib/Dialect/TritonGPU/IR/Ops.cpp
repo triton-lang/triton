@@ -770,4 +770,17 @@ LogicalResult WarpYieldOp::verify() {
   return success();
 }
 
+std::pair<llvm::TypeSize, uint64_t>
+WarpSpecializeOp::getCaptureSizeAlign(const DataLayout &datalayout) {
+  auto captureSize = llvm::TypeSize::getFixed(0);
+  uint64_t captureAlign = 1;
+  for (Type type : getOperandTypes()) {
+    uint64_t align = datalayout.getTypeABIAlignment(type);
+    captureSize = llvm::alignTo(captureSize, align);
+    captureSize += datalayout.getTypeSize(type);
+    captureAlign = std::max(align, captureAlign);
+  }
+  return {captureSize, captureAlign};
+}
+
 } // namespace mlir::triton::gpu

@@ -58,6 +58,12 @@ public:
     addIllegalDialect<triton::nvidia_gpu::TritonNvidiaGPUDialect>();
     addIllegalDialect<mlir::gpu::GPUDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
+
+    // Warp specialization is lowered later.
+    addLegalOp<triton::gpu::WarpSpecializeOp>();
+    addLegalOp<triton::gpu::WarpYieldOp>();
+    addLegalOp<triton::gpu::WarpSpecializePartitionsOp>();
+    addLegalOp<triton::gpu::WarpReturnOp>();
   }
 };
 

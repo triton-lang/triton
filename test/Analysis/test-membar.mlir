@@ -847,22 +847,23 @@ tt.func @warp_specialize_isolated_regions(%arg0: tensor<1xi64>) {
   ttg.local_load %0 : !ttg.memdesc<1xi64, #layout, #smem, mutable> -> tensor<1xi64>
 
   // CHECK-NEXT: warp_specialize
-  ttg.warp_specialize(%arg0)
+  ttg.warp_specialize()
   default {
     ttg.warp_yield
   }
   // CHECK: partition0
-  partition0(%arg1: tensor<1xi64>) num_warps(4) {
-    // CHECK-NEXT: local_alloc
+  partition0() num_warps(4) {
+    %cst = arith.constant dense<0> : tensor<1xi64>
+    // CHECK: local_alloc
     %1 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
     // CHECK-NEXT: local_store
-    ttg.local_store %arg1, %1 : tensor<1xi64> -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
+    ttg.local_store %cst, %1 : tensor<1xi64> -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
     // CHECK-NEXT: barrier
     // CHECK-NEXT: local_load
     ttg.local_load %1 : !ttg.memdesc<1xi64, #layout, #smem, mutable> -> tensor<1xi64>
     // CHECK-NEXT: warp_return
     ttg.warp_return
-  } : (tensor<1xi64>) -> ()
+  } : () -> ()
 
   tt.return
 }

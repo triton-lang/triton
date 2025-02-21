@@ -1,3 +1,4 @@
+#include "TargetInfo.h"
 #include "TritonNVIDIAGPUToLLVM/PTXAsmFormat.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
@@ -26,7 +27,7 @@ enum BarrierIndex {
   kNumBarriers = 16
 };
 
-static void createBarrier(ImplicitLocOpBuilder &b, unsigned barIdx = 0,
+static void createBarrier(TritonLLVMOpBuilder2 &b, unsigned barIdx = 0,
                           std::optional<unsigned> numThreads = std::nullopt,
                           bool aligned = true) {
   assert(barIdx < 16 && "not enough barriers");
@@ -45,7 +46,8 @@ static void createBarrier(ImplicitLocOpBuilder &b, unsigned barIdx = 0,
   ptxBuilder.launch(b, b.getLoc(), void_ty(b.getContext()));
 }
 
-static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func) {
+static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
+                                         const NVIDIA::TargetInfo &targetInfo) {
   SmallVector<WarpSpecializeOp> wsOps;
   func.walk([&](WarpSpecializeOp op) { wsOps.push_back(op); });
 
@@ -75,7 +77,7 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func) {
       return WalkResult::skip();
 
     if (auto bar = dyn_cast<NVVM::Barrier0Op>(op)) {
-      ImplicitLocOpBuilder b(bar.getLoc(), bar);
+      TritonLLVMOpBuilder2 b(bar.getLoc(), bar);
       createBarrier(b, 0, defaultWarpGroupSize);
       bar.erase();
       return WalkResult::advance();
@@ -95,16 +97,17 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func) {
       }
       unsigned warpGroupSize = threadsPerWarp * op.getPartitionNumWarps()[idx];
       partition->walk([&](NVVM::Barrier0Op bar) {
-        ImplicitLocOpBuilder b(bar.getLoc(), bar);
+        TritonLLVMOpBuilder2 b(bar.getLoc(), bar);
         createBarrier(b, barIdx, warpGroupSize);
         bar.erase();
       });
     }
   }
 
-  // Generate the function header.
   MLIRContext *ctx = func.getContext();
   TritonLLVMOpBuilder2 b(func.getLoc(), ctx);
+
+  // Generate the function header.
   Block *entry = &func.getBody().front();
   SmallVector<Location> argLocs = llvm::to_vector(llvm::map_range(
       func.getArguments(), [](BlockArgument arg) { return arg.getLoc(); }));
@@ -133,9 +136,17 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func) {
   }
   unsigned totalNumThreads = totalNumWarpsAttr.getInt() * threadsPerWarp;
 
+  // ^switchLoop:
+  //   barrier.sync 1
+  //   %state_ptr = getelementptr (ptr @shared), <offset>
+  //   %state
   b.setInsertionPointToStart(switchLoop);
-  createBarrier(b, kSwitchLoopBarrierIdx, totalNumThreads, /*aligned=*/false);
-  createBarrier(b, kSwitchLoopBarrierIdx, totalNumThreads, /*aligned=*/false);
+  createBarrier(b, kSwitchLoopBarrierIdx, /*numThreads=*/std::nullopt,
+                /*aligned=*/false);
+  Value statePtr = LLVM::getSharedMemoryBase(b.getLoc(), b, targetInfo, func);
+
+  createBarrier(b, kSwitchLoopBarrierIdx, /*numThreads=*/std::nullopt,
+                /*aligned=*/false);
   b.create<LLVM::ReturnOp>(ValueRange());
 
   return success();
@@ -147,13 +158,17 @@ struct ConvertWarpSpecializeToLLVM
           ConvertWarpSpecializeToLLVM> {
   void runOnOperation() override {
     ModuleOp mod = getOperation();
+    // FIXME: Assume warp specialization only happens on Blackwell.
+    NVIDIA::TargetInfo targetInfo(/*computeCapability=*/100,
+                                  /*ptxVersion=*/100);
+
     SmallVector<LLVM::LLVMFuncOp> kernels;
     for (auto func : mod.getOps<LLVM::LLVMFuncOp>()) {
       if (func.isPublic())
         kernels.push_back(func);
     }
     for (LLVM::LLVMFuncOp kernel : kernels)
-      if (failed(lowerWarpSpecialize(kernel)))
+      if (failed(lowerWarpSpecialize(kernel, targetInfo)))
         return signalPassFailure();
   }
 };

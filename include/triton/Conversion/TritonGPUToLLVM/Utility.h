@@ -282,13 +282,19 @@ struct TritonLLVMOpBuilder {
 };
 
 // FIXME: Improve name.
-class TritonLLVMOpBuilder2 : public ImplicitLocOpBuilder,
-                             public TritonLLVMOpBuilder {
+class TritonLLVMOpBuilder2 : public IRRewriter, public TritonLLVMOpBuilder {
 public:
   template <typename... Args>
   TritonLLVMOpBuilder2(Location loc, Args &&...args)
-      : ImplicitLocOpBuilder(loc, std::forward<Args>(args)...),
+      : IRRewriter(std::forward<Args>(args)...),
         TritonLLVMOpBuilder(loc, *this) {}
+
+  Location getLoc() const { return loc; }
+  void setLoc(Location loc) { this->loc = loc; }
+
+  template <typename OpTy, typename... Args> OpTy create(Args &&...args) {
+    return OpBuilder::create<OpTy>(loc, std::forward<Args>(args)...);
+  }
 };
 } // namespace mlir::triton
 
@@ -637,8 +643,10 @@ inline Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
                                  const TargetInfoBase &target, Operation *op) {
   auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(),
                                           target.getSharedAddressSpace());
-  FunctionOpInterface func =
-      op->template getParentOfType<FunctionOpInterface>();
+  auto func = op->template getParentOfType<FunctionOpInterface>();
+  if (!func)
+    func = cast<FunctionOpInterface>(op);
+
   assert(op->hasAttr("allocation.offset"));
   size_t offset = cast<IntegerAttr>(op->getAttr("allocation.offset"))
                       .getValue()
