@@ -54,6 +54,15 @@ static scf::ForOp pipelineLoop(scf::ForOp forOp, int numStages) {
   return newForOp.value();
 }
 
+static void pipelineWgmma(ModuleOp moduleOp) {
+  SmallVector<scf::ForOp> loops;
+  moduleOp->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
+
+  for (scf::ForOp forOp : loops) {
+    mlir::triton::asyncLaunchDots(forOp);
+  }
+}
+
 static void expandLoops(ModuleOp moduleOp) {
   SmallVector<scf::ForOp> loops;
   moduleOp->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
@@ -164,18 +173,12 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
     //   }
     // }
 
-    {
-      SmallVector<scf::ForOp> loops;
-      getOperation()->walk([&](scf::ForOp forOp) {
-        // Bail out for loops with num_stage <= 1.
-        if (getNumStagesOrDefault(forOp) > 1)
-          loops.push_back(forOp);
-      });
-      // There is a hard dependency between load pipelining and the TC05MMA
-      // pipelining. We can pipeline the TC05MMA only after the loads are
-      // pipelined and buffers are allocated.
-      mlir::triton::pipelineTC05MMALoops(getOperation(), loops, 2);
-    }
+    pipelineWgmma(moduleOp);
+
+    // There is a hard dependency between load pipelining and the TC05MMA
+    // pipelining. We can pipeline the TC05MMA only after the loads are
+    // pipelined and buffers are allocated.
+    mlir::triton::pipelineTC05MMALoops(moduleOp, 2);
 
     // schedule the waits
     mlir::triton::updateWaits(getOperation());

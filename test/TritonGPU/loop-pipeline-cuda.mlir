@@ -34,12 +34,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %14 = tt.broadcast %11 : tensor<1x16x!tt.ptr<f16>, #blocked> -> tensor<64x16x!tt.ptr<f16>, #blocked>
     %15 = tt.broadcast %13 : tensor<64x1xi32, #blocked> -> tensor<64x16xi32, #blocked>
     %16 = tt.addptr %14, %15 : tensor<64x16x!tt.ptr<f16>, #blocked>, tensor<64x16xi32, #blocked>
-    // CHECK: ttg.async_wait {{.*}} {num = 1 : i32}
     // CHECK: scf.for
+    // CHECK:   ttg.async_wait {{.*}} {num = 1 : i32}
     // CHECK:   tt.dot
     // CHECK:   tt.dot
     // CHECK:   ttg.async_copy_global_to_local
-    // CHECK:   ttg.async_wait {{.*}} {num = 1 : i32}
     // CHECK:   scf.yield
     // CHECK: ttg.async_wait {num = 0 : i32}
 

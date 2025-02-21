@@ -903,9 +903,11 @@ bool getTC05MMASchedule(scf::ForOp &forOp, int numStages,
 
 } // namespace
 
-void mlir::triton::pipelineTC05MMALoops(ModuleOp module,
-                                        const SmallVector<scf::ForOp> &forOps,
-                                        int numStages, bool disableExpander) {
+void mlir::triton::pipelineTC05MMALoops(ModuleOp module, int numStages,
+                                        bool disableExpander) {
+  SmallVector<scf::ForOp> forOps;
+  module->walk([&](scf::ForOp forOp) { forOps.push_back(forOp); });
+
   for (auto forOp : forOps) {
     FailureOr<scf::ForOp> newForOp =
         preProcessLoopForTC05MMAPipelining(forOp, numStages);

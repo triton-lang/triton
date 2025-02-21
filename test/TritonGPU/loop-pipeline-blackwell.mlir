@@ -253,8 +253,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   tt.func public @block_scale_mxfp_matmul(%lb : index, %ub : index, %step : index, %arg0: !tt.ptr<f8E5M2> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f8E5M2> {tt.divisibility = 16 : i32}, %arg3: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg4: !tt.ptr<i8> {tt.divisibility = 16 : i32}) -> tensor<128x128xf32, #blocked4> {
     // CHECK: ttg.local_alloc  : () -> !ttg.memdesc<3x128x256xf8E5M2
     // CHECK: ttg.local_alloc  : () -> !ttg.memdesc<3x256x128xf8E5M2
-    // CHECK: ttg.local_alloc  : () -> !ttg.memdesc<3x1x2x32x4x4xi8
-    // CHECK: ttg.local_alloc  : () -> !ttg.memdesc<3x1x2x32x4x4xi8
+    // Do not multibuffer the scale loads, as we cannot pipeline the mma due to tmem.cp not being used
+    // CHECK: ttg.local_alloc  : () -> !ttg.memdesc<2x1x2x32x4x4xi8
+    // CHECK: ttg.local_alloc  : () -> !ttg.memdesc<2x1x2x32x4x4xi8
 
     %true = arith.constant true
     %cst_1 = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked4>

@@ -552,9 +552,22 @@ void createTMABarrierAndWait(
 
 // Check if load requires additional buffer for a mma pipelining
 bool loadRequiresAdditionalBuffer(Operation *loadOp) {
+  // TODO: Limit the cases to only the wgmma pipelining once mmav5
+  // pipelining is integrated with the new pipeliner
   if (canBeShmemPipelined(loadOp)) {
     return true;
   }
+  // Pattern match the op sequence used for mmav5 scales
+  if (loadOp->hasOneUse()) {
+    ttg::LocalAllocOp alloc =
+        dyn_cast<ttg::LocalAllocOp>(*loadOp->getUsers().begin());
+    if (alloc && alloc->hasOneUse()) {
+      if (isa<ttng::TMEMCopyOp>(*alloc->getUsers().begin())) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
@@ -575,7 +588,7 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
       int copyVecBytes = getCopyVecBytes(
           cast<RankedTensorType>(op->getResultTypes()[0]), sharedEncoding);
       if (copyVecBytes >= 4 || isTMALoad(op)) {
-        if (canBeShmemPipelined(op)) {
+        if (loadRequiresAdditionalBuffer(op)) {
           // Allocate additional buffer required by the wgmma pipelining.
           stageDiff += 1;
         }
