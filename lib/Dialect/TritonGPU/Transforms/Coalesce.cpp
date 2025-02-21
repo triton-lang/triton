@@ -100,7 +100,9 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
     sizePerThread[order[0]] = perThread;
     // Hack
     if (order.size() > 1) {
-      sizePerThread[order[1]] = 4;
+      auto bitwidth = refTensorType.getElementTypeBitWidth();
+      sizePerThread[order[1]] =
+          std::max<unsigned>(128 / (perThread * bitwidth), 1);
     }
 
     auto CTALayout = triton::gpu::getCTALayout(refTensorType.getEncoding());
