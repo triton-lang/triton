@@ -70,6 +70,7 @@ private:
   void addAsymmetricSyncToLoop(OpBuilder &builder, Location loc);
   void updateOpInsertion(Operation *Op);
   void appendOp(Operation *Op);
+  void moveOpAndDependencies(Operation *Op);
   void appendSlicedLoadAB(int slice);
   void appendClusterBarrier(OpBuilder &builder, Location loc);
   void appendOpWithPrio(OpBuilder &builder, Operation *Op, Location loc);
@@ -80,6 +81,30 @@ void Pingponger::appendOp(Operation *op) {
   assert(lastInsertedOp != nullptr);
   op->moveAfter(lastInsertedOp);
   lastInsertedOp = op;
+}
+void Pingponger::moveOpAndDependencies(Operation *op) {
+  assert(lastInsertedOp != nullptr);
+  assert(lastInsertedOp->isBeforeInBlock(op));
+  DenseSet<Operation *> moveOpsSet;
+  SmallVector<Operation *> candidateOps;
+  candidateOps.push_back(op);
+  while (!candidateOps.empty()) {
+    Operation *curOp = candidateOps.pop_back_val();
+    if (moveOpsSet.insert(curOp).second)
+      for (auto operand : curOp->getOperands()) {
+        auto operandOp = operand.getDefiningOp();
+        if (operandOp && lastInsertedOp->getBlock() == operandOp->getBlock() &&
+            lastInsertedOp->isBeforeInBlock(operandOp))
+          candidateOps.push_back(operandOp);
+      }
+  }
+  // Sort to ensure we maintain the same ordering of operations
+  // and therefore any dependencies between them.
+  SmallVector<Operation *> moveOps(moveOpsSet.begin(), moveOpsSet.end());
+  sort(moveOps.begin(), moveOps.end(),
+       [&](Operation *a, Operation *b) { return a->isBeforeInBlock(b); });
+  for (auto op : moveOps)
+    appendOp(op);
 }
 void Pingponger::appendSlicedLoadAB(int slice) {
   appendOp(subViewOps[0][slice]);
@@ -296,7 +321,11 @@ LogicalResult Pingponger::transformFourPPClusters(OpBuilder &builder,
   appendClusterBarrier(builder, loc);
 
   // mem3: local store A and B
-  updateOpInsertion(lStoreOps[1]);
+  // Persistent matmul kernels may include an epilogue as part of the main
+  // loop. To accomdiate such cases, we need to move the local store up in the
+  // loop so that the dot product result is still available for the epilogue.
+  moveOpAndDependencies(lStoreOps[0]);
+  moveOpAndDependencies(lStoreOps[1]);
   appendClusterBarrier(builder, loc);
 
   // dot3 (4/4)
@@ -342,9 +371,11 @@ LogicalResult Pingponger::transformTwoPPClusters(OpBuilder &builder,
   appendClusterBarrier(builder, loc);
 
   // mem1: local store A and B
-  // Don't need to reorder local_stores, just add cluster barrier after the the
-  // last store
-  updateOpInsertion(lStoreOps[1]);
+  // Persistent matmul kernels may include an epilogue as part of the main
+  // loop. To accomdiate such cases, we need to move the local store up in the
+  // loop so that the dot product result is still available for the epilogue.
+  moveOpAndDependencies(lStoreOps[0]);
+  moveOpAndDependencies(lStoreOps[1]);
   appendClusterBarrier(builder, loc);
 
   // dot1 (2/2)
@@ -423,7 +454,7 @@ void Pingponger::getDotPingponged() {
   // Pingpong scheduling tries to form two different types of the instruction
   // clusters, i.e., Dot clusters and Memory clusters. While each SIMD has
   // two concurrent warps, both warps can execute a different type of
-  // instruction cluster in parallel.Here are currently available patterns,
+  // instruction cluster in parallel. Here are currently available patterns,
   // more patterns could be added later.
   //
   // (1) One Dot-Memory (ping-pong) cluster
@@ -439,7 +470,7 @@ void Pingponger::getDotPingponged() {
   //   exceeds the amount of register GPU has so, we need to split the dot
   //   into several pieces.
   //
-  // (3) Twp Dot-Memory (ping-pongx2) clusters
+  // (3) Two Dot-Memory (ping-pongx2) clusters
   //  :Covers medium sized tile e.g., 256x128x64_FP16. Different tile size may
   //  require different scheduling pattern because the loop consists of
   //  different amount of memory transfer and dot operation. This scheduling
