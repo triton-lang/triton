@@ -1,1 +1,2 @@
+add_subdirectory(ProtonToProtonGPU)
 add_subdirectory(ProtonGPUToLLVM)
