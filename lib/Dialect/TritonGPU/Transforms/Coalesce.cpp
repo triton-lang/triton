@@ -105,7 +105,7 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
         bitwidth = cast<RankedTensorType>(op->getResultTypes()[0])
                        .getElementTypeBitWidth();
       } else if (isa<triton::StoreOp>(op)) {
-        bitwidth = cast<RankedTensorType>(op->getOperand(0).getType())
+        bitwidth = cast<RankedTensorType>(op->getOperand(1).getType())
                        .getElementTypeBitWidth();
       }
       sizePerThread[order[1]] =
