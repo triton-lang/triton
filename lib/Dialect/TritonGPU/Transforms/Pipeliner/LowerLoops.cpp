@@ -567,7 +567,7 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
       // bytes)
       int copyVecBytes = getCopyVecBytes(
           cast<RankedTensorType>(op->getResultTypes()[0]), sharedEncoding);
-      if (copyVecBytes >= 4) {
+      if (copyVecBytes >= 4 || isTMALoad(op)) {
         if (canBeShmemPipelined(op)) {
           // Allocate additional buffer required by the wgmma pipelining.
           stageDiff += 1;
@@ -701,7 +701,10 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
   // correct stages.
   scheduleDependencies(forOp, schedule);
 
-  // TODO: deallocate buffers
+  // Insert sync point for any possibly outstanding loads after the loop. This
+  // can happen as we speculatively execute loads in the loop.
+  builder.setInsertionPointAfter(forOp);
+  builder.create<ttg::AsyncWaitOp>(loc, ValueRange({}), 0);
 
   // Make sure all ops have attributes.
   for (Operation &op : forOp.getBody()->without_terminator()) {

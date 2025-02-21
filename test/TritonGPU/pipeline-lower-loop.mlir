@@ -43,7 +43,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK:   %[[A_VAL:.*]] = ttg.local_load %[[A_EXT]] token %[[A_TOK3]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
 // CHECK:   "use"(%[[A_VAL]]) {loop.cluster = 0 : i32, loop.stage = 2 : i32}
 // CHECK:   scf.yield %[[INS_NEXT]], %[[EXT_NEXT]]
-// CHECK:   ttg.local_dealloc %[[A]]
+// CHECK-DAG:   ttg.local_dealloc %[[A]]
+// CHECK-DAG:   ttg.async_wait  {num = 0 : i32}
 
 tt.func @one_dep_async(%lb : index, %ub : index, %step : index,
                  %a_ptr_init : tensor<128x32x!tt.ptr<f16>, #A>) -> () {
@@ -173,7 +174,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK:   %[[A_VAL:.*]] = ttg.local_load %[[A_EXT]] {loop.cluster = 0 : i32, loop.stage = 2 : i32} : !ttg.memdesc<128x32xf16, #[[SHARED]], #
 // CHECK:   "use"(%[[A_VAL]]) {loop.cluster = 0 : i32, loop.stage = 2 : i32}
 // CHECK:   scf.yield %[[INS_NEXT]], %[[EXT_NEXT]]
-// CHECK:   ttg.local_dealloc %[[A]]
+// CHECK-DAG:   ttg.local_dealloc %[[A]]
+// CHECK-DAG:   ttg.async_wait  {num = 0 : i32}
 tt.func @one_dep_local_alloc(%lb : index, %ub : index, %step : index,
                  %a_ptr_init : tensor<128x32x!tt.ptr<f16>, #A>) -> () {
   scf.for %iv = %lb to %ub step %step : index {
@@ -296,6 +298,7 @@ tt.func @dependent_loads(%lb : index, %ub : index, %step : index,
   // CHECK: scf.yield
   // CHECK-DAG: ttg.local_dealloc %[[A]]
   // CHECK-DAG: ttg.local_dealloc %[[C]]
+  // CHECK-DAG:   ttg.async_wait  {num = 0 : i32}
   scf.for %iv = %lb to %ub step %step : index {
     %a = tt.load %a_ptr_init {loop.cluster = 4 : i32, loop.stage = 0 : i32} : tensor<128x32x!tt.ptr<f32>, #A>
     %b = "pointerize"(%a) {loop.cluster = 2 : i32, loop.stage = 2 : i32} : (tensor<128x32xf32, #A>) -> tensor<128x32x!tt.ptr<f32>, #A>
@@ -352,6 +355,7 @@ tt.func @dependent_loads_asymmetric(%lb : index, %ub : index, %step : index,
   // CHECK: scf.yield
   // CHECK-DAG: ttg.local_dealloc %[[A]]
   // CHECK-DAG: ttg.local_dealloc %[[C]]
+  // CHECK-DAG: ttg.async_wait  {num = 0 : i32}
   scf.for %iv = %lb to %ub step %step : index {
     %a = tt.load %a_ptr_init {loop.cluster = 4 : i32, loop.stage = 0 : i32} : tensor<128x32x!tt.ptr<f32>, #A>
     %b = "pointerize"(%a) {loop.cluster = 2 : i32, loop.stage = 2 : i32} : (tensor<128x32xf32, #A>) -> tensor<128x32x!tt.ptr<f32>, #A>
@@ -416,6 +420,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK:   scf.yield {{.*}}, %[[INS_NEXT]], %[[EXT_NEXT]]
   // CHECK-DAG: ttg.local_dealloc %[[A]]
   // CHECK-DAG: ttg.local_dealloc %[[B]]
+  // CHECK-DAG: ttg.async_wait  {num = 0 : i32}
   tt.func public @shmem_pipelining_mmav3(%lb : index, %ub : index, %step : index,
                                               %A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>,
                                               %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>) -> tensor<128x128xf16, #mma> attributes {noinline = false} {
@@ -468,7 +473,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK:   %[[B_SH:.*]] = ttg.local_alloc %[[B]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK:   ttng.warp_group_dot %[[A_EXT]], %[[B_SH]], %{{.*}} {loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK:   scf.yield {{.*}}, %[[INS_NEXT]], %[[EXT_NEXT]]
-  // CHECK: ttg.local_dealloc %[[A]]
+  // CHECK-DAG:   ttg.local_dealloc %[[A]]
+  // CHECK-DAG:   ttg.async_wait  {num = 0 : i32}
   tt.func public @no_shmem_pipelining_incompat_layout(
                     %lb : index, %ub : index, %step : index,
                     %A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>,
@@ -532,6 +538,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK:   scf.yield {{.*}}, %[[INS_NEXT]], %[[EXT_NEXT]]
   // CHECK-DAG: ttg.local_dealloc %[[A]]
   // CHECK-DAG: ttg.local_dealloc %[[B]]
+  // CHECK-DAG: ttg.async_wait  {num = 0 : i32}
   tt.func public @no_shmem_pipelining_other_used(
                       %lb : index, %ub : index, %step : index,
                       %A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>,
@@ -591,6 +598,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK:   scf.yield {{.*}}, %[[INS_NEXT]], %[[EXT_NEXT]]
   // CHECK-DAG: ttg.local_dealloc %[[A]]
   // CHECK-DAG: ttg.local_dealloc %[[B]]
+  // CHECK-DAG: ttg.async_wait  {num = 0 : i32}
   tt.func public @shmem_pipelining_mmav5(%lb : index, %ub : index, %step : index,
                                               %A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>,
                                               %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>) -> tensor<128x128xf16, #blocked> attributes {noinline = false} {
@@ -708,8 +716,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK:  ttng.inval_barrier %[[BAR1_VIEW]]
 // CHECK:  %[[BAR2_VIEW:.*]] = ttg.memdesc_subview %[[BARRIER]][%[[ONE]]]
 // CHECK:  ttng.inval_barrier %[[BAR2_VIEW]]
-// CHECK:  ttg.local_dealloc %[[BARRIER]]
-// CHECK:  ttg.local_dealloc %[[A]]
+// CHECK-DAG: ttg.local_dealloc %[[BARRIER]]
+// CHECK-DAG: ttg.local_dealloc %[[A]]
 tt.func @tma_gather_lowering(%lb : index, %ub : index, %step : index,
                  %desc : !tt.tensordesc<tensor<1x128xf32>>,
                  %x : tensor<32xi32, #offsets>,
