@@ -318,6 +318,8 @@ def test_mxfp(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, nonKDim, device):
     if is_cuda() and torch.cuda.get_device_capability()[0] < 10:
         pytest.skip("Requires compute capability >= 10")
     elif is_hip():
+        if not is_hip_mi350():
+            pytest.skip("Scaled mxfp8 matmul is only natively supported on MI350")
         if (M == 2 and N == 4 and K == 32) or (M == 256 and N == 16 and K == 32):
             pytest.skip(f"Input shape {M=}, {N=}, {K=} is not supported yet")
         if (nonKDim == 16 and BLOCK_K < 128) or (nonKDim == 32 and BLOCK_K < 64):
