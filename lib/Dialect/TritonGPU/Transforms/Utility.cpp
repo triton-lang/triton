@@ -317,7 +317,7 @@ static Attribute inferDstEncoding(triton::ExpandDimsOp op, Attribute encoding) {
 
 static Attribute inferDstEncoding(JoinOp op, Attribute srcEnc) {
   Attribute dstEnc;
-  auto shape = op.getResult().getType().getShape();
+  auto shape = op.getLhs().getType().getShape();
   if (srcEnc.getDialect()
           .getRegisteredInterface<DialectInferLayoutInterface>()
           ->inferJoinOpEncoding(srcEnc, dstEnc, shape,
@@ -371,7 +371,7 @@ static Attribute inferSrcEncoding(JoinOp op, Attribute dstEnc) {
 static Attribute inferSrcEncoding(SplitOp op, Attribute dstEnc) {
   // Join is the inverse of split.
   Attribute srcEnc;
-  auto shape = op.getSrc().getType().getShape();
+  auto shape = op.getOutLHS().getType().getShape();
   if (dstEnc.getDialect()
           .getRegisteredInterface<DialectInferLayoutInterface>()
           ->inferJoinOpEncoding(dstEnc, srcEnc, shape, /*loc=*/std::nullopt)
