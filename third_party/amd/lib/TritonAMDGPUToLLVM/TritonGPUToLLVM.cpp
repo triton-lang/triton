@@ -102,8 +102,6 @@ struct ConvertTritonAMDGPUToLLVM
 
     // Lower functions
     {
-      mlir::LowerToLLVMOptions option(context);
-      TritonGPUToLLVMTypeConverter typeConverter(context, option, targetInfo);
       TritonLLVMFunctionConversionTarget funcTarget(*context);
       RewritePatternSet funcPatterns(context);
       mlir::triton::populateFuncOpConversionPattern(
@@ -122,8 +120,6 @@ struct ConvertTritonAMDGPUToLLVM
 
     // Convert call and ret ops
     {
-      mlir::LowerToLLVMOptions option(context);
-      TritonGPUToLLVMTypeConverter typeConverter(context, option, targetInfo);
       TritonLLVMFunctionConversionTarget funcTarget(*context);
       RewritePatternSet funcPatterns(context);
       if (failed(

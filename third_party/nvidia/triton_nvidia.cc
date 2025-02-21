@@ -38,6 +38,8 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
                      mlir::createTritonNvidiaGPUPromoteLHSToTMemPass);
   ADD_PASS_WRAPPER_0("add_nvgpu_to_llvm",
                      mlir::triton::createConvertNVGPUToLLVMPass);
+  ADD_PASS_WRAPPER_0("add_warp_specialize_to_llvm",
+                     mlir::triton::createConvertWarpSpecializeToLLVM);
   ADD_PASS_WRAPPER_0("add_allocate_tensor_memory",
                      mlir::createTensorMemoryAllocationPass);
   ADD_PASS_WRAPPER_0("add_lower_mma",

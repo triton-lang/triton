@@ -283,6 +283,22 @@ private:
                                                           scratchAlignment);
       return;
     }
+    if (auto ws = dyn_cast<gpu::WarpSpecializeOp>(op)) {
+      // `ttg.warp_specialize` needs memory to pass its explicit captures. Pack
+      // the captures like a struct.
+      auto captureSize = llvm::TypeSize::getFixed(0);
+      uint64_t captureAlign = 1;
+      mlir::DataLayout datalayout(op->getParentOfType<ModuleOp>());
+      for (Type type : ws.getOperandTypes()) {
+        uint64_t align = datalayout.getTypeABIAlignment(type);
+        captureSize = llvm::alignTo(captureSize, align);
+        captureSize += datalayout.getTypeSize(type);
+        captureAlign = std::max(align, captureAlign);
+      }
+      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, captureSize,
+                                                          captureAlign);
+      return;
+    }
     unsigned bytes = scratchSizeGetter(op);
     maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
                                                         scratchAlignment);
@@ -376,8 +392,8 @@ private:
       for (auto [op, buffer] : container) {
         // Any scratch memory's live range is the current operation's live
         // range.
-        bufferRange.insert({buffer, Interval(operationId.lookup(op),
-                                             operationId.lookup(op) + 1)});
+        bufferRange.insert(
+            {buffer, Interval(operationId.at(op), operationId.at(op) + 1)});
         LLVM_DEBUG({
           llvm::dbgs() << "-- buffer " << buffer->id << "; value: ";
           op->dump();

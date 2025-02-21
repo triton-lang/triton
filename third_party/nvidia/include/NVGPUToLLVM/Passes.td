@@ -3,7 +3,6 @@
 
 include "mlir/Pass/PassBase.td"
 
-
 def ConvertNVGPUToLLVM : Pass<"convert-nv-gpu-to-llvm", "mlir::ModuleOp"> {
     let summary = "Convert NVGPU to LLVM";
     let description = [{
@@ -17,4 +16,4 @@ def ConvertNVGPUToLLVM : Pass<"convert-nv-gpu-to-llvm", "mlir::ModuleOp"> {
                              "mlir::triton::nvgpu::NVGPUDialect"];
 }
 
-#endif
+#endif // NVGPU_CONVERSION_PASSES
