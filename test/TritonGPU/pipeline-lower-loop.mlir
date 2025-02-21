@@ -837,3 +837,53 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked2 = #ttg.blocked<{sizePerThread = [1, 1, 1, 1, 4], threadsPerWarp = [1, 1, 8, 4, 1], warpsPerCTA = [1, 1, 4, 1, 1], order = [4, 3, 2, 1, 0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [4, 3, 2, 1, 0]}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
+#tmem_scales = #ttng.tensor_memory_scales_encoding<>
+#smem = #ttg.shared_memory
+
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: @pipelining_mmav5_scaled
+  // CHECK: ttg.local_alloc  : () -> !ttg.memdesc<3x128x128xf8E5M2
+  // CHECK: ttg.local_alloc  : () -> !ttg.memdesc<3x128x128xf8E5M2
+  // CHECK: ttg.local_alloc  : () -> !ttg.memdesc<3x1x2x32x4x4xi8
+  // CHECK: ttg.local_alloc  : () -> !ttg.memdesc<3x1x2x32x4x4xi8
+  tt.func public @pipelining_mmav5_scaled(%lb : index, %ub : index, %step : index,
+                                              %A_ptr: tensor<128x128x!tt.ptr<f8E5M2>, #blocked1>,
+                                              %B_ptr: tensor<128x128x!tt.ptr<f8E5M2>, #blocked1>,
+                                              %A_sc_ptr: tensor<1x2x32x4x4x!tt.ptr<i8>, #blocked2>,
+                                              %B_sc_ptr: tensor<1x2x32x4x4x!tt.ptr<i8>, #blocked2>) -> tensor<128x128xf32, #blocked> attributes {noinline = false} {
+    %true = arith.constant true
+    %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
+    %c0_i32 = arith.constant 0 : i32
+    %res = scf.for %i = %lb to %ub step %step iter_args(%acc = %cst) -> (tensor<128x128xf32, #blocked>) : index {
+      %A = tt.load %A_ptr  {loop.cluster = 2 : i32, loop.stage = 0 : i32} : tensor<128x128x!tt.ptr<f8E5M2>, #blocked1>
+      %B = tt.load %B_ptr  {loop.cluster = 2 : i32, loop.stage = 0 : i32} : tensor<128x128x!tt.ptr<f8E5M2>, #blocked1>
+      %A_sh = ttg.local_alloc %A {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<128x128xf8E5M2, #blocked1>) -> !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>
+      %B_sh = ttg.local_alloc %B {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<128x128xf8E5M2, #blocked1>) -> !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>
+
+      %A_sc = tt.load %A_sc_ptr {loop.cluster = 2 : i32, loop.stage = 0 : i32} : tensor<1x2x32x4x4x!tt.ptr<i8>, #blocked2>
+      %A_sc_sh = ttg.local_alloc %A_sc {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<1x2x32x4x4xi8, #blocked2>) -> !ttg.memdesc<1x2x32x4x4xi8, #shared1, #smem>
+      %A_sc_tm = ttng.tmem_alloc {loop.cluster = 0 : i32, loop.stage = 2 : i32} : () -> !ttg.memdesc<128x8xi8, #tmem_scales, #ttng.tensor_memory, mutable>
+      ttng.tmem_copy %A_sc_sh, %A_sc_tm, {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (!ttg.memdesc<1x2x32x4x4xi8, #shared1, #smem>, !ttg.memdesc<128x8xi8, #tmem_scales, #ttng.tensor_memory, mutable>) -> ()
+
+      %B_sc = tt.load %B_sc_ptr {loop.cluster = 2 : i32, loop.stage = 0 : i32} : tensor<1x2x32x4x4x!tt.ptr<i8>, #blocked2>
+      %B_sc_sh = ttg.local_alloc %B_sc {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<1x2x32x4x4xi8, #blocked2>) -> !ttg.memdesc<1x2x32x4x4xi8, #shared1, #smem>
+      %B_sc_tm = ttng.tmem_alloc {loop.cluster = 0 : i32, loop.stage = 2 : i32} : () -> !ttg.memdesc<128x8xi8, #tmem_scales, #ttng.tensor_memory, mutable>
+      ttng.tmem_copy %B_sc_sh, %B_sc_tm, {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (!ttg.memdesc<1x2x32x4x4xi8, #shared1, #smem>, !ttg.memdesc<128x8xi8, #tmem_scales, #ttng.tensor_memory, mutable>) -> ()
+
+      %acc_tm = ttng.tmem_alloc %acc {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory>
+      ttng.tc_gen5_mma_scaled %A_sh, %B_sh, %acc_tm, %A_sc_tm, %B_sc_tm, %true, %true lhs = e5m2 rhs = e5m2 {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (!ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory>, !ttg.memdesc<128x8xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory, mutable>, !ttg.memdesc<128x8xi8, #ttng.tensor_memory_scales_encoding<>, #ttng.tensor_memory, mutable>, i1, i1) -> ()
+      %acc_res = ttng.tmem_load %acc_tm {loop.cluster = 0 : i32, loop.stage = 2 : i32} : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory> -> tensor<128x128xf32, #blocked>
+      scf.yield %acc_res : tensor<128x128xf32, #blocked>
+    }
+    tt.return %res : tensor<128x128xf32, #blocked>
+  }
+}
