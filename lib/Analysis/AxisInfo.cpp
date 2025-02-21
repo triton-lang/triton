@@ -1284,8 +1284,10 @@ unsigned ModuleAxisInfoAnalysis::getPtrAlignment(Value ptr) {
   auto elemNumBits = triton::getPointeeBitWidth(tensorTy);
   auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
   auto divBytes = axisInfo->getDivisibility();
+  divBytes[order[0]] = divBytes[order[0]] / elemNumBytes;
   auto sizePerThread = linAttr.getSizePerThread();
-  auto maxMultipleBytes = getMaxContig(divBytes, shape, order, sizePerThread);
+  auto maxMultipleBytes =
+      getMaxContig(divBytes, shape, order, sizePerThread) * elemNumBytes;
   auto maxContig =
       getMaxContig(axisInfo->getContiguity(), shape, order, sizePerThread);
   auto maxMultiple = std::max<int64_t>(maxMultipleBytes / elemNumBytes, 1);
