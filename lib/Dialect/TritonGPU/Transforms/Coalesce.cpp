@@ -38,7 +38,8 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
     });
 
     auto contiguity = axisInfoAnalysis.getAxisInfo(ptr)->getContiguity();
-    SmallVector<unsigned> order = argSort(contiguity);
+    SmallVector<unsigned> order;
+    std::iota(order.rbegin(), order.rend(), 0);
     LDBG("order=[" << triton::join(order, ", ") << "]");
 
     auto matchesShape = [&refTensorType](const Value &val) {
