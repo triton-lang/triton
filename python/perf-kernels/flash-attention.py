@@ -459,6 +459,10 @@ def attn_fwd(Q, K, V, bias, SM_SCALE: tl.constexpr, L, Out, stride_qz, stride_qh
     tl.assume(stride_vh >= 0)
     tl.assume(stride_vk >= 0)
     tl.assume(stride_vn >= 0)
+    tl.assume(stride_oz >= 0)
+    tl.assume(stride_oh >= 0)
+    tl.assume(stride_om >= 0)
+    tl.assume(stride_on >= 0)
 
     if PERSISTENT:  # if persistent, kernel loops over multiple tiles
         NUM_WG = NUM_CU * GRID_CU_MULTIP  # number of workgroups launched
