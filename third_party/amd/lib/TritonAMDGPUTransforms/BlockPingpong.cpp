@@ -1,3 +1,4 @@
+#include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -85,26 +86,18 @@ void Pingponger::appendOp(Operation *op) {
 void Pingponger::moveOpAndDependencies(Operation *op) {
   assert(lastInsertedOp != nullptr);
   assert(lastInsertedOp->isBeforeInBlock(op));
-  DenseSet<Operation *> moveOpsSet;
-  SmallVector<Operation *> candidateOps;
-  candidateOps.push_back(op);
-  while (!candidateOps.empty()) {
-    Operation *curOp = candidateOps.pop_back_val();
-    if (moveOpsSet.insert(curOp).second)
-      for (auto operand : curOp->getOperands()) {
-        auto operandOp = operand.getDefiningOp();
-        if (operandOp && lastInsertedOp->getBlock() == operandOp->getBlock() &&
-            lastInsertedOp->isBeforeInBlock(operandOp))
-          candidateOps.push_back(operandOp);
-      }
-  }
-  // Sort to ensure we maintain the same ordering of operations
-  // and therefore any dependencies between them.
-  SmallVector<Operation *> moveOps(moveOpsSet.begin(), moveOpsSet.end());
-  sort(moveOps.begin(), moveOps.end(),
-       [&](Operation *a, Operation *b) { return a->isBeforeInBlock(b); });
-  for (auto op : moveOps)
-    appendOp(op);
+  SetVector<Operation *> backwardSlice;
+  BackwardSliceOptions opt;
+  opt.omitBlockArguments = true;
+  Operation *checkedOp = lastInsertedOp;
+  opt.filter = [&checkedOp](Operation *op) {
+    return op->getBlock() == checkedOp->getBlock() &&
+           checkedOp->isBeforeInBlock(op);
+  };
+  getBackwardSlice(op, &backwardSlice, opt);
+  for (auto predOp : backwardSlice)
+    appendOp(predOp);
+  appendOp(op);
 }
 void Pingponger::appendSlicedLoadAB(int slice) {
   appendOp(subViewOps[0][slice]);
