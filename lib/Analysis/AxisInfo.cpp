@@ -1253,8 +1253,8 @@ unsigned ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr) {
          "Unexpected uniqueContigPerThread size");
 
   auto shape = tensorTy.getShape();
-  auto ll = gpu::toLinearLayout(shape, tensorTy.getEncoding());
-  unsigned contiguity = ll.flattenOuts().getNumConsecutiveInOut();
+  unsigned contiguity =
+      getMaxContig(convertType<int64_t>(uniqueContigPerThread), shape, order);
   LDBG("uniqueContigPerThread=" << uniqueContigPerThread[0] << " "
                                 << uniqueContigPerThread[1]);
   LDBG("shape=" << shape[0] << " " << shape[1]);
