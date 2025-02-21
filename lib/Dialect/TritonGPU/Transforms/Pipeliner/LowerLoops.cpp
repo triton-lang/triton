@@ -573,43 +573,41 @@ bool loadRequiresAdditionalBuffer(Operation *loadOp) {
 scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
   llvm::MapVector<Operation *, AsyncLoad> asyncLoads;
   llvm::MapVector<int, LoadGroupInfo> loadGroups;
-  forOp.getBody()->walk<mlir::WalkOrder::PreOrder>([&](Operation *op) {
+  // Only visit the top level ops, we do not support pipelining conditional
+  // loads for now
+  for (auto &op : forOp.getBody()->without_terminator()) {
     if (isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp,
             tt::ExperimentalDescriptorGatherOp>(op)) {
-      int stageDiff = getDefUseStageDiff(op, forOp, schedule);
-      if (stageDiff == 0 || !isa<RankedTensorType>(op->getResultTypes()[0])) {
+      int stageDiff = getDefUseStageDiff(&op, forOp, schedule);
+      if (stageDiff == 0 || !isa<RankedTensorType>(op.getResultTypes()[0])) {
         // Don't care about non-pipelined loads. Don't use async loads for
         // scalar values.
-        return WalkResult::advance();
+        continue;
       }
-      SharedEncodingTrait sharedEncoding = getSharedEncoding(op);
+      SharedEncodingTrait sharedEncoding = getSharedEncoding(&op);
       // Do not create async loads for small loads (cp.async requires at least 4
       // bytes)
       int copyVecBytes = getCopyVecBytes(
-          cast<RankedTensorType>(op->getResultTypes()[0]), sharedEncoding);
-      if (copyVecBytes >= 4 || isTMALoad(op)) {
-        if (loadRequiresAdditionalBuffer(op)) {
+          cast<RankedTensorType>(op.getResultTypes()[0]), sharedEncoding);
+      if (copyVecBytes >= 4 || isTMALoad(&op)) {
+        if (loadRequiresAdditionalBuffer(&op)) {
           // Allocate additional buffer required by the wgmma pipelining.
           stageDiff += 1;
         }
-        asyncLoads[op] = {.stageDiff = stageDiff,
-                          .sharedEncoding = sharedEncoding};
+        asyncLoads[&op] = {.stageDiff = stageDiff,
+                           .sharedEncoding = sharedEncoding};
       } else if (stageDiff > 1) {
         // Distance-1 loads can in most cases be pipelined in registers without
         // any performance degradation, as the schedule will usually reorder the
         // user and the producer so there is no liverange overlap, and no copy
         // needed.
-        op->emitRemark() << "Pipelining load that cannot use vectorized "
-                            "copy. This will likely "
-                            "lead to pipelining in registers and severe "
-                            "performance degradation.";
+        op.emitRemark() << "Pipelining load that cannot use vectorized "
+                           "copy. This will likely "
+                           "lead to pipelining in registers and severe "
+                           "performance degradation.";
       }
-    } else if (isa<scf::ForOp>(op)) {
-      // Skip nested loops.
-      return WalkResult::skip();
     }
-    return WalkResult::advance();
-  });
+  }
 
   if (asyncLoads.empty())
     return forOp;

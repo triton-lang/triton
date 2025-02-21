@@ -84,7 +84,8 @@ Value createSingleBufferView(BuilderT &builder, Value alloc, Value idx) {
   }
   auto viewDescType = triton::gpu::MemDescType::get(
       shape, allocDescType.getElementType(), allocDescType.getEncoding(),
-      allocDescType.getMemorySpace(), allocDescType.getMutableMemory());
+      allocDescType.getMemorySpace(), allocDescType.getMutableMemory(),
+      /*allocShape=*/allocDescType.getAllocShape());
   SmallVector<Value> idxs = {idx};
   if (allocDescType.getShape().size() > 1) {
     Value zero =

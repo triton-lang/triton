@@ -15,8 +15,8 @@
 // RUN: triton-opt %s -split-input-file -tritongpu-pipeline -canonicalize | FileCheck --dump-input-context=51 %s
 // CHECK-LABEL:   tt.func public @matmul_kernel_with_descriptors(
 // CHECK-SAME:  %[[VAL_0:.*]]: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %[[VAL_1:.*]]: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %[[VAL_2:.*]]: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %[[VAL_3:.*]]: i32 {tt.divisibility = 16 : i32}, %[[VAL_4:.*]]: i32 {tt.divisibility = 16 : i32}, %[[VAL_5:.*]]: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
-// CHECK:           %[[VAL_6:.*]] = arith.constant 2 : i32
 // CHECK:           %[[VAL_7:.*]] = arith.constant 3 : i32
+// CHECK:           %[[VAL_6:.*]] = arith.constant 2 : i32
 // CHECK:           %[[VAL_8:.*]] = arith.constant -1 : i32
 // CHECK:           %[[VAL_9:.*]] = arith.constant 8 : i32
 // CHECK:           %[[VAL_10:.*]] = arith.constant 128 : i32
@@ -116,8 +116,9 @@
 // CHECK:           ttng.inval_barrier %[[VAL_94]] : !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable, 3>
 // CHECK:           %[[VAL_95:.*]] = ttg.memdesc_subview %[[VAL_45]]{{\[}}%[[VAL_6]]] : !ttg.memdesc<3xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable, 3>
 // CHECK:           ttng.inval_barrier %[[VAL_95]] : !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable, 3>
-// CHECK:           ttg.local_dealloc %[[VAL_43]] : !ttg.memdesc<3x128x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
+// CHECK:           ttg.local_dealloc %[[VAL_45]] : !ttg.memdesc<3xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable>
 // CHECK:           ttg.local_dealloc %[[VAL_44]] : !ttg.memdesc<3x256x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
+// CHECK:           ttg.local_dealloc %[[VAL_43]] : !ttg.memdesc<3x128x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
 // CHECK:           %[[VAL_96:.*]] = arith.truncf %[[VAL_90]] : tensor<128x256xf32, #[[$ATTR_1]]> to tensor<128x256xf16, #[[$ATTR_1]]>
 // CHECK:           %[[VAL_97:.*]] = ttg.convert_layout %[[VAL_96]] : tensor<128x256xf16, #[[$ATTR_1]]> -> tensor<128x256xf16, #[[$ATTR_0]]>
 // CHECK:           tt.experimental_descriptor_store %[[VAL_38]]{{\[}}%[[VAL_39]], %[[VAL_40]]], %[[VAL_97]] : !tt.tensordesc<tensor<128x256xf16>>, tensor<128x256xf16, #[[$ATTR_0]]>
