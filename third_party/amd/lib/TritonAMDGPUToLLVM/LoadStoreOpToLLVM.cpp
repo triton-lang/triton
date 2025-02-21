@@ -1278,8 +1278,6 @@ struct AtomicRMWOpConversion
     int numElems = 1;
     Type packF16Ty = vec_ty(valueElemTy, 2);
 
-    Value i64Ones = b.i64_val(~uint64_t(0));
-
     // CDNA3/CDNA4 arch allows to accelerate its atomics with LDS reduction
     // algorithm, which is only applicable for atomics with no return. Otherwise
     // we have to deal with an additional overhead.
@@ -1346,6 +1344,8 @@ struct AtomicRMWOpConversion
       // elemsPerThread.
       Value rmwMask = llMask ? b.and_(mask, maskElements[i]) : mask;
 
+      Value i64Ones = b.i64_val(~uint64_t(0));
+      Value i64Zeros = b.i64_val(0);
       Value operand;
       Value rightNeighbourPtr;
       Value enablePackedOpt;
@@ -1353,49 +1353,40 @@ struct AtomicRMWOpConversion
         Value isOddI32 = b.urem(tid, b.i32_val(2));
         // First check if odd threads hold adjacent ptrs to even ones.
         Value castedAddr = b.ptrtoint(i64_ty, rmwPtr);
-        // Fill casted addr by ones if the thread is disabled
-        castedAddr = b.or_(
-            b.mul(b.zext(i64_ty, b.icmp_eq(rmwMask, b.false_val())), i64Ones),
-            castedAddr);
+        // Set casted addr to all ones if the thread is disabled.
+        castedAddr = b.select(rmwMask, castedAddr, i64Ones);
 
         // Move %val to left neighbour to proceed packed atomic further.
         Value packedVal = b.null(packF16Ty);
         packedVal =
             b.insert_element(packF16Ty, packedVal, valElements[i], isOddI32);
-        // Pack to i32 type to simplify transaction
+        // Pack to i32 type to simplify transaction.
         packedVal = b.bitcast(packedVal, i32_ty);
-        // Zero-ize operands for disabled threads to make corresponding
-        // operations dummy
-        packedVal = b.mul(b.zext(i32_ty, rmwMask), packedVal);
+        // Zero operands for disabled threads to make addition no op.
+        packedVal = b.select(rmwMask, packedVal, b.i32_val(0));
         Value dppMoveRes = shiftLeftI32ByDpp(rewriter, packedVal);
 
         Value rightNeighbourAddr =
             genI32TiledOp(rewriter, shiftLeftI32ByDpp, castedAddr);
 
+        // Packing optimization only supported if both threads active.
         Value neighbourEnabled = b.icmp_ne(i64Ones, rightNeighbourAddr);
-        // Packing optimization only supported if both of threads enabled for
-        // now
-        enablePackedOpt = b.and_(
-            b.and_(neighbourEnabled, rmwMask),
-            b.icmp_eq(
-                rightNeighbourAddr,
-                b.add(castedAddr,
-                      b.i64_val(valueElemTy.getIntOrFloatBitWidth() / 8))));
-        // Enable only even threads
+        Value neighbourAddrAdjacent = b.icmp_eq(
+            rightNeighbourAddr,
+            b.add(castedAddr,
+                  b.i64_val(valueElemTy.getIntOrFloatBitWidth() / 8)));
+        enablePackedOpt =
+            b.and_(b.and_(neighbourEnabled, rmwMask), neighbourAddrAdjacent);
+
+        // Enable only the even threads.
         Value oneDisabled = b.or_(neighbourEnabled, rmwMask);
         rmwMask = b.and_(oneDisabled, b.icmp_eq(isOddI32, b.i32_val(0)));
 
-        // If one of the threads disabled, make corresponding operation dummy to
-        // the neighbour's addr
-        rightNeighbourAddr = b.or_(
-            b.mul(castedAddr,
-                  b.zext(i64_ty, b.icmp_eq(neighbourEnabled, b.false_val()))),
-            b.mul(rightNeighbourAddr,
-                  b.zext(i64_ty, b.icmp_eq(neighbourEnabled, b.true_val()))));
-        castedAddr = b.or_(
-            b.mul(castedAddr, b.zext(i64_ty, b.icmp_eq(rmwMask, b.true_val()))),
-            b.mul(rightNeighbourAddr,
-                  b.zext(i64_ty, b.icmp_eq(rmwMask, b.false_val()))));
+        // If one of the threads is disabled, use the neighbour's addr.
+        rightNeighbourAddr =
+            b.select(neighbourEnabled, rightNeighbourAddr, castedAddr);
+        castedAddr = b.select(rmwMask, castedAddr, rightNeighbourAddr);
+
         // Unpack results back
         rightNeighbourPtr = b.inttoptr(rmwPtr.getType(), rightNeighbourAddr);
         rmwPtr = b.inttoptr(rmwPtr.getType(), castedAddr);
