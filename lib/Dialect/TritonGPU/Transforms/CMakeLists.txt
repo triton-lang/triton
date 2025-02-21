@@ -12,7 +12,7 @@ add_triton_library(TritonGPUTransforms
   Pipeliner/AssignLatencies.cpp
   Pipeliner/LowerLoops.cpp
   Pipeliner/ScheduleLoops.cpp
-  Pipeliner/MatmulLoopPipeline.cpp
+  Pipeliner/WGMMAPipeline.cpp
   Pipeliner/PipelineExpander.cpp
   Pipeliner/TestPipelineAssignLatencies.cpp
   Pipeliner/TestPipelineScheduleLoop.cpp

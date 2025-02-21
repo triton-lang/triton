@@ -33,27 +33,6 @@ namespace gpu {
 #define GEN_PASS_DEF_TRITONGPUPIPELINE
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
-static scf::ForOp pipelineLoop(scf::ForOp forOp, int numStages) {
-  mlir::triton::PipeliningOption options;
-
-  bool foundSchedule = false;
-  foundSchedule = preProcessLoopAndGetSchedule(forOp, numStages, options);
-
-  // TODO: add more pipelines strategy.
-  if (!foundSchedule)
-    return nullptr;
-
-  IRRewriter rewriter(forOp->getContext());
-  rewriter.setInsertionPoint(forOp);
-  FailureOr<scf::ForOp> newForOp =
-      mlir::triton::pipelineForLoop(rewriter, forOp, options);
-
-  if (failed(newForOp))
-    return nullptr;
-  mlir::triton::asyncLaunchDots(newForOp.value());
-  return newForOp.value();
-}
-
 static void pipelineWgmma(ModuleOp moduleOp) {
   SmallVector<scf::ForOp> loops;
   moduleOp->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
@@ -133,7 +112,6 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
                    << moduleOp << "\n\n\n";
     }
 
-    // if (triton::tools::getBoolEnv("TRITON_NEW_PIPELINER")) {
     // Transform the loop by introducing async operations to prepare it for
     // pipeline expansion.
     lowerLoops(moduleOp);
@@ -151,27 +129,8 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
                    << moduleOp << "\n\n\n";
     }
 
+    // Cleanup the IR from the pipeline attributes.
     removeAttributes(moduleOp);
-    // } else {
-
-    //   SmallVector<scf::ForOp> loops;
-    //   getOperation()->walk([&](scf::ForOp forOp) {
-    //     // Bail out for loops with num_stage <= 1.
-    //     if (getNumStagesOrDefault(forOp) > 1)
-    //       loops.push_back(forOp);
-    //   });
-
-    //   if (loops.empty())
-    //     return;
-
-    //   llvm::SmallVector<scf::ForOp> pipelinedLoops;
-    //   for (scf::ForOp forOp : loops) {
-    //     int loopNumStages = getNumStagesOrDefault(forOp);
-    //     scf::ForOp pipelinedFor = pipelineLoop(forOp, loopNumStages);
-    //     if (pipelinedFor != nullptr)
-    //       pipelinedLoops.push_back(pipelinedFor);
-    //   }
-    // }
 
     pipelineWgmma(moduleOp);
 

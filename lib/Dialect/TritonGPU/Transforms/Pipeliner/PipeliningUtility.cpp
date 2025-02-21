@@ -214,61 +214,6 @@ SetVector<Value> mlir::triton::getNestedOperands(Operation *op) {
   return result;
 }
 
-std::optional<std::pair<int, int>>
-mlir::triton::maybeGetStageCluster(Operation *op) {
-  auto stage = op->getAttrOfType<IntegerAttr>(tt::kLoopStageAttrName);
-  auto clusterId = op->getAttrOfType<IntegerAttr>(tt::kLoopClusterAttrName);
-  if (!stage || !clusterId) {
-    return std::nullopt;
-  }
-
-  return {
-      {stage.getValue().getSExtValue(), clusterId.getValue().getSExtValue()}};
-}
-std::pair<int, int> mlir::triton::getStageCluster(Operation *op) {
-  auto res = maybeGetStageCluster(op);
-  assert(res.has_value() || "Operation is missing stage & cluster attribute");
-  return *res;
-}
-
-void mlir::triton::setStageCluster(Operation *op, int stage, int cluster) {
-  auto ctx = op->getContext();
-  op->setAttr(mlir::triton::kLoopStageAttrName,
-              IntegerAttr::get(IntegerType::get(ctx, 32), stage));
-  op->setAttr(mlir::triton::kLoopClusterAttrName,
-              IntegerAttr::get(IntegerType::get(ctx, 32), cluster));
-}
-
-std::pair<int, int> mlir::triton::getMinMaxCluster(scf::ForOp &forOp) {
-  int minClusterId = -1, maxClusterId = -1;
-  for (auto &op : forOp.getBody()->without_terminator()) {
-    if (!op.hasAttr(mlir::triton::kLoopStageAttrName) ||
-        !op.hasAttr(mlir::triton::kLoopClusterAttrName))
-      continue;
-    auto [_, cluster] = getStageCluster(&op);
-    if (maxClusterId < 0) {
-      minClusterId = cluster;
-      maxClusterId = cluster;
-      continue;
-    }
-    maxClusterId = cluster > maxClusterId ? cluster : maxClusterId;
-    minClusterId = cluster < minClusterId ? cluster : minClusterId;
-  }
-  return std::make_pair(minClusterId, maxClusterId);
-}
-
-std::optional<int> mlir::triton::tryGetMaxStage(scf::ForOp &forOp) {
-  std::optional<int> maxStage = std::nullopt;
-  for (auto &op : forOp.getBody()->without_terminator()) {
-    if (!op.hasAttr(mlir::triton::kLoopStageAttrName) ||
-        !op.hasAttr(mlir::triton::kLoopClusterAttrName))
-      continue;
-    auto [stage, _] = getStageCluster(&op);
-    maxStage = maxStage ? (stage > *maxStage ? stage : *maxStage) : stage;
-  }
-  return maxStage;
-}
-
 int mlir::triton::getCopyVecBytes(RankedTensorType registerTy,
                                   ttg::SharedEncodingTrait sharedEnc) {
   auto regLayout = triton::gpu::toLinearLayout(registerTy.getShape(),
