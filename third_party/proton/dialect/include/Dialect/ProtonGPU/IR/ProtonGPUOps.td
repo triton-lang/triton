@@ -27,26 +27,23 @@ def PTG_CircularStoreOp : PTG_Op<"circular_store", [
 
   let description = [{
     Store a metric `counter` into a circular buffer backed by the internal memory `data`.
-    The circular buffer indexing `curIndex` is automatically updated and returned as `newIndex`.
-    Older metric counter get dropped if the `data` is full.
+    The circular buffer indexing is stored in the address of `indexPtr`. Index value is
+    automatically updated. Older metric counter get dropped if the `data` is full.
   }];
   let arguments = (
     ins TTG_MemDescType: $data,
-    I32: $curIndex,
+    TT_PtrType :$indexPtr,
     I32: $counter,
     UnitAttr: $isStart,
     I32Attr: $scopeId,
-    DefaultValuedAttr<MetricAttr, "Metric::CYCLE">:$metric,
     DefaultValuedAttr<GranularityAttr, "Granularity::WARPGROUP">:$granularity
   );
-
-  let results = (outs I32 : $newIndex);
 
   let hasVerifier = 1;
 
   let assemblyFormat = [{
-    (`start` $isStart^):(`end`)? $data `,` $curIndex `,` $counter attr-dict `:`
-    qualified(type($data)) `,` type($curIndex) `,` type($counter) `->` type($newIndex)
+    (`start` $isStart^):(`end`)? $data `,` $indexPtr `,` $counter attr-dict `:`
+    qualified(type($data)) `,` type($indexPtr) `,` type($counter)
   }];
 }
 
@@ -80,12 +77,11 @@ def PTG_FinalizeOp : PTG_Op<"finalize", [
   }];
   let arguments = (
     ins TTG_MemDescType:$data,
-    I32 :$index,
-    TT_PtrLike :$ptr,
-    I32Attr :$size
+    TT_PtrType :$indexPtr,
+    TT_Ptr :$ptr
   );
 
-  let assemblyFormat = [{$data `,` $index `,` $ptr attr-dict `:` qualified(type($data)) `,` type($index) `,` type($ptr)}];
+  let assemblyFormat = [{$data `,` $indexPtr `,` $ptr attr-dict `:` qualified(type($data)) `,` type($indexPtr) `,` type($ptr)}];
 }
 
 def PTG_InitBufferIndexOp : PTG_Op<"init_buffer_index", []> {
@@ -93,10 +89,32 @@ def PTG_InitBufferIndexOp : PTG_Op<"init_buffer_index", []> {
 
   let description = [{
       Zero-initialization for the internal buffer index for the intra kernel profiler.
+      The index is stored in the address of `indexPtr`.
   }];
   let arguments = (ins);
-  let results = (outs I32 :$index);
-  let assemblyFormat = "attr-dict `:` type($index)";
+  let results = (outs TT_PtrType :$indexPtr);
+  let assemblyFormat = "attr-dict `:` type($indexPtr)";
+}
+
+def PTG_GlobalScratchAllocOp : PTG_Op<"global_scratch_alloc", [MemoryEffects<[MemAlloc<GlobalMemory>]>]> {
+  let summary = "Allocate a proton global memory profiling buffer";
+  let description = [{
+    This operation allocates a proton buffer in global memory, which holds the device-side profiling data of the current program.
+  }];
+  let arguments = (
+    ins
+    I32Attr:$nbytes,
+    I32Attr:$alignment
+  );
+  let results = (outs TT_Ptr:$result);
+
+  let builders = [
+    OpBuilder<(ins "Type":$result, "int32_t":$nbytes, "int32_t":$alignment),
+              [{ build($_builder, $_state, result,
+                       $_builder.getI32IntegerAttr(nbytes), $_builder.getI32IntegerAttr(alignment)); }]>
+  ];
+
+  let assemblyFormat = [{attr-dict `:` qualified(type($result))}];
 }
 
 #endif  // PROTON_GPU_OPS
