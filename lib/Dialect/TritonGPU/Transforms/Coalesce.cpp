@@ -100,8 +100,14 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
     sizePerThread[order[0]] = perThread;
     // Hack
     if (order.size() > 1) {
-      auto bitwidth = cast<RankedTensorType>(op->getResultTypes()[0])
-                          .getElementTypeBitWidth();
+      auto bitwidth = 1;
+      if (isa<triton::LoadOp>(op)) {
+        bitwidth = cast<RankedTensorType>(op->getResultTypes()[0])
+                       .getElementTypeBitWidth();
+      } else if (isa<triton::StoreOp>(op)) {
+        bitwidth = cast<RankedTensorType>(op->getOperand(0).getType())
+                       .getElementTypeBitWidth();
+      }
       sizePerThread[order[1]] =
           std::max<unsigned>(128 / (perThread * bitwidth), 1);
     }
