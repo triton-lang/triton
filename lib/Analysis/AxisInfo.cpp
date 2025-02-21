@@ -1311,7 +1311,9 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
       gpu::toLinearEncoding(tensorTy.getEncoding(), tensorTy.getShape());
   auto maskOrder = linAttr.getOrder();
   auto shape = tensorTy.getShape();
-  auto alignment = getMaxContig(axisInfo->getConstancy(), shape, maskOrder);
+  auto sizePerThread = linAttr.getSizePerThread();
+  auto alignment =
+      getMaxContig(axisInfo->getConstancy(), shape, maskOrder, sizePerThread);
   LDBG("getMaskAlignment alignment " << alignment);
   LLVM_DEBUG({
     std::string axisStr;
