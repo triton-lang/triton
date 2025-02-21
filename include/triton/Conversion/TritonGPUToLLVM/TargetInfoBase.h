@@ -93,6 +93,8 @@ public:
 
   // Helper used by targets to annotate store operations during lowering to
   // llvm.
+  virtual void loadOpAnnotation(triton::gpu::LocalLoadOp op,
+                                size_t localLoadOpCount, Type type) const {}
   virtual void storeOpAnnotation(triton::gpu::LocalStoreOp op,
                                  size_t localStoreOpCount, Type type) const {}
 
