@@ -19,7 +19,10 @@ def TritonGPUPipeline : Pass<"tritongpu-pipeline", "mlir::ModuleOp"> {
   let options = [
     Option<"numStages", "num-stages",
            "int32_t", /*default*/"3",
-           "number of pipeline stages">
+           "number of pipeline stages">,
+    Option<"dumpIntermediateSteps", "dump-intermediate-steps",
+           "bool", /*default*/"false",
+           "Dump intermediate steps">
   ];
 }
 

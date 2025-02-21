@@ -280,12 +280,7 @@ void assignLatencies(ModuleOp moduleOp, int defaultNumStages) {
     }
   }
   serializeLatencies(moduleOp, opLatency);
-
-  LLVM_DEBUG({
-    DBGS() << "Module after assigning latencies:\n" << moduleOp << "\n";
-  });
 }
-
 } // namespace gpu
 } // namespace triton
 } // namespace mlir

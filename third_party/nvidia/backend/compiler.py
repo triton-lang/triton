@@ -244,7 +244,7 @@ class CUDABackend(BaseBackend):
             cluster_info.clusterDimY = opt.cluster_dims[1]
             cluster_info.clusterDimZ = opt.cluster_dims[2]
         pm = ir.pass_manager(mod.context)
-        pm.enable_debug()
+        dump_enabled = pm.enable_debug()
         passes.ttir.add_convert_to_ttgpuir(pm, f"cuda:{capability}", opt.num_warps, 32, opt.num_ctas)
         # optimize TTGIR
         passes.ttgpuir.add_coalesce(pm)
@@ -265,13 +265,13 @@ class CUDABackend(BaseBackend):
             passes.ttgpuir.add_optimize_accumulator_init(pm)
             passes.common.add_canonicalizer(pm)
             passes.ttgpuir.add_combine_tensor_select_and_if(pm)
-            passes.ttgpuir.add_pipeline(pm, opt.num_stages)
+            passes.ttgpuir.add_pipeline(pm, opt.num_stages, dump_enabled)
         elif capability // 10 >= 10:
             passes.ttgpuir.add_fuse_nested_loops(pm)
             passes.common.add_canonicalizer(pm)
             passes.common.add_licm(pm)
             passes.ttgpuir.add_optimize_accumulator_init(pm)
-            passes.ttgpuir.add_pipeline(pm, opt.num_stages)
+            passes.ttgpuir.add_pipeline(pm, opt.num_stages, dump_enabled)
             passes.ttgpuir.add_combine_tensor_select_and_if(pm)
             nvidia.passes.ttnvgpuir.add_promote_lhs_to_tmem(pm)
             nvidia.passes.ttnvgpuir.add_keep_acc_in_tmem(pm)

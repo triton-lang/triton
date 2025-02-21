@@ -51,7 +51,7 @@ void init_triton_passes_ttgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_coalesce", createTritonGPUCoalesce);
   ADD_PASS_WRAPPER_0("add_optimize_thread_locality",
                      createTritonGPUOptimizeThreadLocality);
-  ADD_PASS_OPTION_WRAPPER_1("add_pipeline", createTritonGPUPipeline, int);
+  ADD_PASS_OPTION_WRAPPER_2("add_pipeline", createTritonGPUPipeline, int, bool);
   ADD_PASS_WRAPPER_0("add_prefetch", createTritonGPUPrefetch);
   ADD_PASS_WRAPPER_0("add_accelerate_matmul", createTritonGPUAccelerateMatmul);
   ADD_PASS_WRAPPER_0("add_reorder_instructions",

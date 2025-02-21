@@ -881,7 +881,6 @@ void lowerLoop(scf::ForOp forOp) {
   scf::ForOp newForOp = lowerLoads(forOp, schedule);
   newForOp = lowerTMADescriptors(newForOp, schedule);
   schedule.serialize(newForOp);
-  LLVM_DEBUG({ DBGS() << "Loop after lowering loads:\n" << newForOp << "\n"; });
 }
 
 } // namespace

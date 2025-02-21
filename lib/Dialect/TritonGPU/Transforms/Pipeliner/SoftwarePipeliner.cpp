@@ -95,24 +95,45 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
   }
 
   void runOnOperation() override {
+    ModuleOp moduleOp = getOperation();
     // Go over the interesting ops and assign latencies (based on the
     // numStages) to the them, trying to populate the allowed stages. This
     // step will be at some point extracted to separate pass that will be run
     // only for loops missing the latency information.
-    assignLatencies(getOperation(), numStages);
+    assignLatencies(moduleOp, numStages);
+    if (dumpIntermediateSteps) {
+      llvm::dbgs()
+          << "// -----// IR Dump After: SoftwarePipeliner: AssignLatencies\n"
+          << moduleOp << "\n\n\n";
+    }
     // numStages should not be used below this point. We should know
     // everything based on the assigned stages
 
     // Schedule the loops
-    scheduleLoops(getOperation());
+    scheduleLoops(moduleOp);
+    if (dumpIntermediateSteps) {
+      llvm::dbgs()
+          << "// -----// IR Dump After: SoftwarePipeliner: ScheduleLoops\n"
+          << moduleOp << "\n\n\n";
+    }
 
     if (triton::tools::getBoolEnv("TRITON_NEW_PIPELINER")) {
       // Transform the loop by introducing async operations to prepare it for
       // pipeline expansion.
-      lowerLoops(getOperation());
+      lowerLoops(moduleOp);
+      if (dumpIntermediateSteps) {
+        llvm::dbgs()
+            << "// -----// IR Dump After: SoftwarePipeliner: LowerLoops\n"
+            << moduleOp << "\n\n\n";
+      }
 
       // Apply the pipeline expansion.
       expandLoops();
+      if (dumpIntermediateSteps) {
+        llvm::dbgs()
+            << "// -----// IR Dump After: SoftwarePipeliner: ExpandLoops\n"
+            << moduleOp << "\n\n\n";
+      }
     } else {
 
       SmallVector<scf::ForOp> loops;
