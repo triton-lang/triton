@@ -98,6 +98,7 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
     }
     SmallVector<unsigned> sizePerThread(refTensorType.getRank(), 1);
     sizePerThread[order[0]] = perThread;
+    // Hack
     if (order.size() > 1) {
       sizePerThread[order[1]] = 4;
     }
