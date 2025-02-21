@@ -3,7 +3,9 @@
 #include "amd/include/TritonAMDGPUTransforms/Passes.h"
 #include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"
 #include "third_party/nvidia/include/Dialect/NVWS/IR/Dialect.h"
+#include "third_party/proton/dialect/include/Conversion/ProtonToProtonGPU/Passes.h"
 #include "third_party/proton/dialect/include/Dialect/Proton/IR/Dialect.h"
+#include "third_party/proton/dialect/include/Dialect/ProtonGPU/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -87,6 +89,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   // Proton passes
   mlir::triton::registerProtonLoweringPass();
   mlir::test::proton::registerTestScopeIdAllocationPass();
+  mlir::triton::proton::registerConvertProtonToProtonGPU();
 
   // NVGPU transform passes
   mlir::registerNVHopperTransformsPasses();
@@ -99,5 +102,6 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
       mlir::LLVM::LLVMDialect, mlir::NVVM::NVVMDialect,
       mlir::triton::nvgpu::NVGPUDialect, mlir::triton::nvws::NVWSDialect,
       mlir::triton::amdgpu::TritonAMDGPUDialect,
-      mlir::triton::proton::ProtonDialect, mlir::ROCDL::ROCDLDialect>();
+      mlir::triton::proton::ProtonDialect,
+      mlir::triton::proton::ProtonGPUDialect, mlir::ROCDL::ROCDLDialect>();
 }
