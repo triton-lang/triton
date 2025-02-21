@@ -317,6 +317,8 @@ bool DotOp::verifyDims() {
 }
 
 //-- DotScaledOp --
+Value DotScaledOp::getA() { return getLhs(); }
+Value DotScaledOp::getB() { return getRhs(); }
 bool DotScaledOp::verifyDims() {
   auto aShape = this->getLhs().getType().getShape();
   auto bShape = this->getRhs().getType().getShape();
