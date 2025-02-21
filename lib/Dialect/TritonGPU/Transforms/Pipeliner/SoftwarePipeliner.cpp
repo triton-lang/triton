@@ -118,9 +118,9 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
     // only for loops missing the latency information.
     assignLatencies(moduleOp, numStages);
     if (dumpIntermediateSteps) {
-      llvm::dbgs()
-          << "// -----// IR Dump After: SoftwarePipeliner: AssignLatencies\n"
-          << moduleOp << "\n\n\n";
+      llvm::dbgs() << "// -----// SoftwarePipeliner internal IR Dump After: "
+                      "AssignLatencies\n"
+                   << moduleOp << "\n\n\n";
     }
     // numStages should not be used below this point. We should know
     // everything based on the assigned stages
@@ -128,9 +128,9 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
     // Schedule the loops
     scheduleLoops(moduleOp);
     if (dumpIntermediateSteps) {
-      llvm::dbgs()
-          << "// -----// IR Dump After: SoftwarePipeliner: ScheduleLoops\n"
-          << moduleOp << "\n\n\n";
+      llvm::dbgs() << "// -----// SoftwarePipeliner internal IR Dump After: "
+                      "ScheduleLoops\n"
+                   << moduleOp << "\n\n\n";
     }
 
     // if (triton::tools::getBoolEnv("TRITON_NEW_PIPELINER")) {
@@ -139,16 +139,16 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
     lowerLoops(moduleOp);
     if (dumpIntermediateSteps) {
       llvm::dbgs()
-          << "// -----// IR Dump After: SoftwarePipeliner: LowerLoops\n"
+          << "// -----// SoftwarePipeliner internal IR Dump After: LowerLoops\n"
           << moduleOp << "\n\n\n";
     }
 
     // Apply the pipeline expansion.
     expandLoops(moduleOp);
     if (dumpIntermediateSteps) {
-      llvm::dbgs()
-          << "// -----// IR Dump After: SoftwarePipeliner: ExpandLoops\n"
-          << moduleOp << "\n\n\n";
+      llvm::dbgs() << "// -----// SoftwarePipeliner internal IR Dump After: "
+                      "ExpandLoops\n"
+                   << moduleOp << "\n\n\n";
     }
 
     removeAttributes(moduleOp);
