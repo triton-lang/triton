@@ -2,7 +2,9 @@
 #include "amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "amd/include/TritonAMDGPUTransforms/Passes.h"
 #include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"
+#include "third_party/proton/dialect/include/Conversion/ProtonToProtonGPU/Passes.h"
 #include "third_party/proton/dialect/include/Dialect/Proton/IR/Dialect.h"
+#include "third_party/proton/dialect/include/Dialect/ProtonGPU/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -79,14 +81,16 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   // Proton passes
   mlir::triton::registerProtonLoweringPass();
   mlir::test::proton::registerTestScopeIdAllocationPass();
+  mlir::triton::proton::registerConvertProtonToProtonGPU();
 
-  registry
-      .insert<mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,
-              mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
-              mlir::triton::gpu::TritonGPUDialect, mlir::math::MathDialect,
-              mlir::arith::ArithDialect, mlir::scf::SCFDialect,
-              mlir::gpu::GPUDialect, mlir::LLVM::LLVMDialect,
-              mlir::NVVM::NVVMDialect, mlir::triton::nvgpu::NVGPUDialect,
-              mlir::triton::amdgpu::TritonAMDGPUDialect,
-              mlir::triton::proton::ProtonDialect, mlir::ROCDL::ROCDLDialect>();
+  registry.insert<mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,
+                  mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,
+                  mlir::triton::gpu::TritonGPUDialect, mlir::math::MathDialect,
+                  mlir::arith::ArithDialect, mlir::scf::SCFDialect,
+                  mlir::gpu::GPUDialect, mlir::LLVM::LLVMDialect,
+                  mlir::NVVM::NVVMDialect, mlir::triton::nvgpu::NVGPUDialect,
+                  mlir::triton::amdgpu::TritonAMDGPUDialect,
+                  mlir::triton::proton::ProtonDialect,
+                  mlir::triton::proton::gpu::ProtonGPUDialect,
+                  mlir::ROCDL::ROCDLDialect>();
 }

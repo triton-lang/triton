@@ -14,4 +14,16 @@
 #define GET_OP_CLASSES
 #include "proton/dialect/include/Dialect/ProtonGPU/IR/Ops.h.inc"
 
+namespace mlir {
+namespace triton {
+namespace proton {
+namespace gpu {
+
+const int getBytesPerClockEntry();
+
+} // namespace gpu
+} // namespace proton
+} // namespace triton
+} // namespace mlir
+
 #endif // DIALECT_PROTON_GPU_IR_DIALECT_H_
