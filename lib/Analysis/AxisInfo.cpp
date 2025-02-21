@@ -1253,8 +1253,11 @@ unsigned ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr) {
          "Unexpected uniqueContigPerThread size");
 
   auto shape = tensorTy.getShape();
-  unsigned contiguity =
-      getMaxContig(convertType<int64_t>(uniqueContigPerThread), shape, order);
+  auto ll = gpu::toLinearLayout(shape, tensorTy.getEncoding());
+  unsigned contiguity = ll.flattenOuts().getNumConsecutiveInOut();
+  LDBG("uniqueContigPerThread=" << uniqueContigPerThread[0] << " "
+                                << uniqueContigPerThread[1]);
+  LDBG("shape=" << shape[0] << " " << shape[1]);
   LDBG("getPtrContiguity uniqueContigPerThread = " << contiguity);
   contiguity = std::min(align, contiguity);
 
@@ -1275,9 +1278,7 @@ unsigned ModuleAxisInfoAnalysis::getPtrAlignment(Value ptr) {
   auto elemNumBits = triton::getPointeeBitWidth(tensorTy);
   auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
   auto divBytes = axisInfo->getDivisibility();
-  for (auto i = 0; i < divBytes.size(); ++i) {
-    divBytes[i] = divBytes[i] / elemNumBytes;
-  }
+  divBytes[order[0]] = divBytes[order[0]] / elemNumBytes;
   auto maxMultipleBytes = getMaxContig(divBytes, shape, order);
   auto maxContig = getMaxContig(axisInfo->getContiguity(), shape, order);
   auto maxMultiple = std::max<int64_t>(maxMultipleBytes / elemNumBytes, 1);
