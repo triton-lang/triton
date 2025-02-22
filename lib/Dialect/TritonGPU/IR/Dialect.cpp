@@ -39,14 +39,14 @@ LinearEncodingAttr toLinearEncoding(Attribute layout, ArrayRef<int64_t> shape) {
 }
 
 unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape) {
-  auto layout = mlir::cast<DistributedEncodingTrait>(layout);
-  return layout.getTotalElemsPerThread(shape);
+  auto distributedEncoding = mlir::cast<DistributedEncodingTrait>(layout);
+  return distributedEncoding.getTotalElemsPerThread(shape);
 }
 
 SmallVector<unsigned> getElemsPerThread(Attribute layout,
                                         ArrayRef<int64_t> shape) {
-  auto layout = mlir::cast<DistributedEncodingTrait>(layout);
-  return layout.getElemsPerThread(shape);
+  auto distributedEncoding = mlir::cast<DistributedEncodingTrait>(layout);
+  return distributedEncoding.getElemsPerThread(shape);
 }
 
 SmallVector<unsigned> getElemsPerThread(Type type) {
