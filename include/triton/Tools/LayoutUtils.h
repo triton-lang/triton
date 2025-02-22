@@ -87,6 +87,11 @@ LinearLayout ensureLayoutNotSmallerThan(
 // are "dim0", "dim1", etc.
 SmallVector<StringAttr> standardOutDimNames(MLIRContext *ctx, int rank);
 
+// Return a vector of the standard out dimension name/value pairs, i.e.
+// ("dim0", dstShape[0]), ("dim1", dstShape[1]), etc.
+SmallVector<std::pair<StringAttr, int32_t>>
+standardOutDimPairs(MLIRContext *ctx, ArrayRef<int64_t> dstShape);
+
 // Return an identity mapping from `inDimName` to the standard out dimensions,
 // with the dimensions sized according to the shape. The bases are sorted
 // according to `order`, with the most minor dimension first.
