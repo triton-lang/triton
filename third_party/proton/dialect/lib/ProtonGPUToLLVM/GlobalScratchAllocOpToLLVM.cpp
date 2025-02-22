@@ -32,40 +32,6 @@ static void filterFuncAttributes(LLVM::LLVMFuncOp op, bool filterArgAttrs,
   }
 }
 
-triton::FuncOp amendFuncOp(LLVM::LLVMFuncOp func,
-                           ConversionPatternRewriter &rewriter,
-                           const TargetInfoBase &targetInfo) {
-    auto loc = func.getLoc();
-    auto ctx = func->getContext();
-    auto globalPtrTy = LLVM::LLVMPointerType::get(ctx, 1);
-    auto funcTy = func.getFunctionType();
-    auto amendedInputTy = llvm::to_vector<4>(func.getArgumentTypes());
-    amendedInputTy.push_back(globalPtrTy);
-    auto amendedFuncTy =
-        FunctionType::get(ctx, amendedInputTy, func.getResultTypes());
-
-    SmallVector<NamedAttribute> amendedAttrs;
-    
-//    filterFuncAttributes(func, /*filterArgAttrs=*/true, amendedAttrs);
-//    if (auto argAttrs = func.getAllArgAttrs()) {
-//      llvm::SmallVector<mlir::Attribute> amendedArgAttrs(argAttrs.begin(),
-//                                                         argAttrs.end());
-//      while (amendedArgAttrs.size() < amendedInputTy.size()) {
-//        amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
-//      }
-//      amendedAttrs.push_back(
-//          rewriter.getNamedAttr(func.getArgAttrsAttrName(),
-//                                rewriter.getArrayAttr(amendedArgAttrs)));
-//    }
-    auto amendedFuncOp = rewriter.create<triton::FuncOp >(
-        func.getLoc(), func.getName(), amendedFuncTy);
-    auto &region = func.getBody();
-    region.addArgument(globalPtrTy, loc);
-    rewriter.inlineRegionBefore(region, amendedFuncOp.getBody(),
-                                amendedFuncOp.end());
-    return amendedFuncOp;
-  }
-
 struct GlobalScratchAllocOpConversion
    : public ConvertOpToLLVMPattern<proton::gpu::GlobalScratchAllocOp> {
 	   explicit GlobalScratchAllocOpConversion(LLVMTypeConverter &typeConverter,
@@ -78,27 +44,20 @@ struct GlobalScratchAllocOpConversion
   LogicalResult
   matchAndRewrite(proton::gpu::GlobalScratchAllocOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto m =
-        rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
-    auto func = *m.getOps<LLVM::LLVMFuncOp>().begin();    
-    auto funcTy = func.getFunctionType();
-    auto amendedFuncOp = amendFuncOp(func, rewriter, targetInfo);
-    FailureOr<LLVM::LLVMFuncOp> maybeNewFuncOp =
-        mlir::convertFuncOpToLLVMFuncOp(amendedFuncOp, rewriter,
-                                        *getTypeConverter());    
-    if (failed(maybeNewFuncOp)) {
-      return failure();
-    }
-
-    LLVM::LLVMFuncOp newFuncOp = *maybeNewFuncOp;    
-    auto amendedFuncTy = newFuncOp.getFunctionType();
-    llvm::errs() << funcTy << "\n";
-    llvm::errs() << amendedFuncTy << "\n";
-//    llvm::errs() << m << "\n";
-
-    rewriter.eraseOp(func);
-//    rewriter.eraseOp(amendedFuncOp);
-    rewriter.eraseOp(op);
+    ModuleOp mod = op.getOperation()->getParentOfType<ModuleOp>();
+    auto func = op->getParentOfType<LLVM::LLVMFuncOp>();
+    auto loc = func.getLoc();
+    auto ctx = func->getContext();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto globalPtrTy = LLVM::LLVMPointerType::get(ctx, 1);
+    auto &region = func.getBody();
+    auto gmemBase = region.addArgument(globalPtrTy, loc);    
+//    auto gmemBase = func.getArgument(func.getNumArguments() - 1);
+    //TODO: make this offset more meaningful
+    Value offset = b.i32_val(0);
+    Value bufferStart =
+      b.gep(mlir::LLVM::LLVMPointerType::get(ctx, 1), i8_ty, gmemBase, offset);    
+    rewriter.replaceOp(op, bufferStart);
     return success();
   }
 protected:
