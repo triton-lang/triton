@@ -703,7 +703,7 @@ def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
 
     let assemblyFormat = [{
       $a (`scale` $a_scale^)? `,` $b (`scale` $b_scale^)? `,` $c
-      `a` `=` $a_elem_type `b` `=` $b_elem_type attr-dict
+      `lhs` `=` $a_elem_type `rhs` `=` $b_elem_type attr-dict
       `:` type($a) (`,` type($a_scale)^)? `*` type($b) (`,` type($b_scale)^)? `->` type($d)
     }];
 }
