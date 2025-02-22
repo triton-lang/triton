@@ -33,6 +33,7 @@
 #include "llvm/Support/SourceMgr.h"
 
 #include "third_party/proton/dialect/include/Dialect/Proton/IR/Dialect.h"
+#include "third_party/proton/dialect/include/Dialect/ProtonGPU/IR/Dialect.h"
 
 namespace {
 
@@ -308,7 +309,9 @@ void init_triton_ir(py::module &&m) {
     registry.insert<TritonDialect, ::mlir::triton::gpu::TritonGPUDialect,
                     math::MathDialect, arith::ArithDialect, scf::SCFDialect,
                     ::mlir::gpu::GPUDialect, cf::ControlFlowDialect,
-                    ::mlir::triton::proton::ProtonDialect, LLVM::LLVMDialect,
+                    ::mlir::triton::proton::ProtonDialect, 
+		    ::mlir::triton::proton::gpu::ProtonGPUDialect,
+		    LLVM::LLVMDialect,
                     mlir::ub::UBDialect>();
     mlir::LLVM::registerInlinerInterface(registry);
     registerBuiltinDialectTranslation(registry);
