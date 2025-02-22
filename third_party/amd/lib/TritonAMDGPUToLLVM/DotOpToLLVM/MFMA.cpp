@@ -516,10 +516,10 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     assert((mDim == nDim && (mDim == 32 || mDim == 16 || mDim == 4)) ||
            (mDim == 64 && nDim == 4) || (mDim == 4 && nDim == 64));
 
-    Value a = op.getLhs();
-    Value b = op.getRhs();
-    Value aScale = op.getLhsScale();
-    Value bScale = op.getRhsScale();
+    Value a = op.getA();
+    Value b = op.getB();
+    Value aScale = op.getAScale();
+    Value bScale = op.getBScale();
     bool isAScaleConstant = aScale.getDefiningOp<arith::ConstantOp>();
     bool isBScaleConstant = bScale.getDefiningOp<arith::ConstantOp>();
     Value d = op.getD();
@@ -528,8 +528,8 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     auto dTensorTy = cast<RankedTensorType>(d.getType());
     auto elemTyA = aTensorTy.getElementType();
     auto elemTyB = bTensorTy.getElementType();
-    ScaleDotElemType aElemType = op.getLhsType();
-    ScaleDotElemType bElemType = op.getRhsType();
+    ScaleDotElemType aElemType = op.getAElemType();
+    ScaleDotElemType bElemType = op.getBElemType();
 
     const auto kDimOperandSize = aTensorTy.getShape().back();
 
@@ -576,10 +576,10 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     constexpr int scaleKWidth = 1;
     constexpr int scaleKBase = 1;
 
-    Value loadedA = adaptor.getLhs();
-    Value loadedB = adaptor.getRhs();
-    Value loadedAScale = adaptor.getLhsScale();
-    Value loadedBScale = adaptor.getRhsScale();
+    Value loadedA = adaptor.getA();
+    Value loadedB = adaptor.getB();
+    Value loadedAScale = adaptor.getAScale();
+    Value loadedBScale = adaptor.getBScale();
     Value loadedC = adaptor.getC();
 
     auto numRepM = repA[1];
@@ -709,12 +709,12 @@ LogicalResult convertScaledMFMA(triton::DotScaledOp op,
                                 triton::DotScaledOp::Adaptor adaptor,
                                 const LLVMTypeConverter *typeConverter,
                                 ConversionPatternRewriter &rewriter) {
-  assert(isa<DotOperandEncodingAttr>(op.getLhs().getType().getEncoding()) &&
-         isa<DotOperandEncodingAttr>(op.getRhs().getType().getEncoding()) &&
+  assert(isa<DotOperandEncodingAttr>(op.getA().getType().getEncoding()) &&
+         isa<DotOperandEncodingAttr>(op.getB().getType().getEncoding()) &&
          "Both lhs and rhs should be DotOperand layout.");
 
-  assert(isa<LinearEncodingAttr>(op.getLhsScale().getType().getEncoding()) &&
-         isa<LinearEncodingAttr>(op.getRhsScale().getType().getEncoding()) &&
+  assert(isa<LinearEncodingAttr>(op.getAScale().getType().getEncoding()) &&
+         isa<LinearEncodingAttr>(op.getBScale().getType().getEncoding()) &&
          "Both LhsScale and RhsScale should be linear layout.");
 
   auto cTensorTy = op.getC().getType();
