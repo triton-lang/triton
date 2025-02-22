@@ -321,6 +321,30 @@ void scheduleLoop(scf::ForOp forOp,
     schedule.dump();
   });
 
+  auto newMaxStages = schedule.numStages;
+
+  int64_t oldNumStages = -1;
+  if (forOp->hasAttr(mlir::triton::kNumStagesAttrName)) {
+    oldNumStages = mlir::cast<IntegerAttr>(
+                       forOp->getAttr(mlir::triton::kNumStagesAttrName))
+                       .getInt();
+  }
+
+  LDBG("Old num_stages attribute: " << oldNumStages);
+  LDBG("New num_stages: " << newMaxStages);
+  // if new number of stages is larger than the old one, we need to update the
+  // attribute and emit a remark on the loop op
+  if (oldNumStages < newMaxStages) {
+    forOp->setAttr(mlir::triton::kNumStagesAttrName,
+                   IntegerAttr::get(IntegerType::get(forOp->getContext(), 32),
+                                    newMaxStages));
+    LDBG("Updated num_stages attribute from" << oldNumStages << " to "
+                                             << newMaxStages);
+    if (oldNumStages > 0)
+      forOp->emitRemark()
+          << "[triton-loop-schedule] Overwrite num_stages attribute to "
+          << newMaxStages;
+  }
   // Write the schedule to the IR
   schedule.serialize(forOp);
 }
