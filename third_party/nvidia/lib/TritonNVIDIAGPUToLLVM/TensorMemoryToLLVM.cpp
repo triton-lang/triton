@@ -341,7 +341,8 @@ TMemMessageTraits selectTMemMessage(const TMemRuntimeInfo &info) {
   auto atom = info.useStridedMessage ? TMemAccess16x32bx2 : TMemAccess32x32b;
 
   int totalRegsNeeded =
-      getEffectiveRegs(info.unpackedb16, info.useStridedMessage, info.numCols);
+      getEffectiveRegs(info.unpackedb16, info.useStridedMessage,
+                       info.numCols / info.numWarpGroups);
   int narrowingFactor = getTMemMessageNarrowingFactor(totalRegsNeeded);
   auto narrowedMessage = getTMemMessageFromAtom(atom, narrowingFactor);
   narrowedMessage = constrainMessageFromWorkload(narrowedMessage, info,
