@@ -512,15 +512,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %c304_i32 = arith.constant 304 : i32
     %31 = arith.divsi %30, %c304_i32 : i32
     %c1_i32 = arith.constant 1 : i32
-    %32 = arith.remsi %30, %c304_i32 : i32
-    %33 = arith.cmpi slt, %2, %32 : i32
-    %34 = scf.if %33 -> (i32) {
-      %86 = arith.addi %31, %c1_i32 : i32
-      scf.yield %86 : i32
-    } else {
-      scf.yield %31 : i32
-    }
-    %35 = arith.muli %29, %34 : i32
+    %35 = arith.muli %29, %31 : i32
     %c0_i32 = arith.constant 0 : i32
     %36 = arith.cmpi sgt, %35, %c0_i32 : i32
     %37 = tt.splat %36 : i1 -> tensor<128x64xi1, #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>>
@@ -748,15 +740,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %c304_i32 = arith.constant 304 : i32
     %31 = arith.divsi %30, %c304_i32 : i32
     %c1_i32 = arith.constant 1 : i32
-    %32 = arith.remsi %30, %c304_i32 : i32
-    %33 = arith.cmpi slt, %2, %32 : i32
-    %34 = scf.if %33 -> (i32) {
-      %86 = arith.addi %31, %c1_i32 : i32
-      scf.yield %86 : i32
-    } else {
-      scf.yield %31 : i32
-    }
-    %35 = arith.muli %29, %34 : i32
+    %35 = arith.muli %29, %31 : i32
     %c0_i32 = arith.constant 0 : i32
     %36 = arith.cmpi sgt, %35, %c0_i32 : i32
     %37 = tt.splat %36 : i1 -> tensor<256x64xi1, #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [1, 0]}>>
