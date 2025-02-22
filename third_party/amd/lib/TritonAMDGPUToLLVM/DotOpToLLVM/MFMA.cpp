@@ -37,7 +37,6 @@ using ::mlir::LLVM::AMD::shuffleXor;
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
 using ::mlir::triton::gpu::LinearEncodingAttr;
-using ::mlir::triton::gpu::SwizzledSharedEncodingAttr;
 
 using ValueTable = std::map<std::array<int, 3>, Value>;
 
@@ -75,12 +74,12 @@ struct DotOpMFMAConversionHelper {
       : mfmaLayout(mfmaLayout), rewriter(rewriter),
         typeConverter(typeConverter), loc(loc), ctx(mfmaLayout.getContext()) {}
 
-  Value generateMFMAOp(StringRef mfmaInsnName, Value valA, Value valB,
+  Value generateMFMAOp(StringRef intrinsicName, Value valA, Value valB,
                        Value valC) const {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto resType = valC.getType();
     Value zeroFlag = b.i32_val(0);
-    OperationState loweredOp(loc, mfmaInsnName);
+    OperationState loweredOp(loc, intrinsicName);
     loweredOp.addTypes(resType);
     loweredOp.addOperands({valA, valB, valC, zeroFlag, zeroFlag, zeroFlag});
     return rewriter.create(loweredOp)->getResult(0);
@@ -228,14 +227,15 @@ struct DotOpMFMAConversionHelper {
 
   template <typename T>
   void packAndReplaceResult(T &op, SmallVector<Value> &fc,
-                            FailureOr<MfmaInsn> maybeMfmaInsn, Type dstElemTy,
-                            Type elemtTy, size_t mmaCount) const {
+                            const FailureOr<MfmaIntrinsic> &maybeMfmaIntrinsic,
+                            Type dstElemTy, Type elemtTy,
+                            size_t mmaCount) const {
     Type structTy = LLVM::LLVMStructType::getLiteral(
         ctx, SmallVector<Type>(fc.size(), dstElemTy));
     Value res = packLLElements(loc, typeConverter, fc, rewriter, structTy);
 
-    setNumGeneratedMMAs(op, mmaCount, maybeMfmaInsn->getMDim(),
-                        maybeMfmaInsn->getNDim(), maybeMfmaInsn->getKDim(),
+    setNumGeneratedMMAs(op, mmaCount, maybeMfmaIntrinsic->mDim,
+                        maybeMfmaIntrinsic->nDim, maybeMfmaIntrinsic->kDim,
                         elemtTy);
 
     rewriter.replaceOp(op, res);
@@ -267,14 +267,15 @@ struct DotOpMFMAConversionHelper {
 
     bool allowXF32 =
         op.getInputPrecision() == InputPrecision::TF32 && mfmaVersion == 3;
-    StringRef mfmaInsnName;
-    auto maybeMfmaInsn = MfmaInsn::selectMfma(
-        mDim, nDim, kDimOperandSize, elemTyA, elemTyB, mfmaVersion, allowXF32);
-    if (failed(maybeMfmaInsn))
+    StringRef intrinsicName;
+    FailureOr<MfmaIntrinsic> maybeMfmaIntrinsic = MfmaIntrinsic::selectFor(
+        mfmaVersion, mDim, nDim, kDimOperandSize, elemTyA, elemTyB,
+        /*withScale=*/false, allowXF32);
+    if (failed(maybeMfmaIntrinsic))
       llvm::report_fatal_error("No match found in MFMA database\n");
 
-    mfmaInsnName = maybeMfmaInsn->getInsnName();
-    unsigned kBase = maybeMfmaInsn->getKBase();
+    intrinsicName = maybeMfmaIntrinsic->name;
+    unsigned kBase = maybeMfmaIntrinsic->kBase;
 
     auto aEncoding = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
     auto bEncoding = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
@@ -301,7 +302,7 @@ struct DotOpMFMAConversionHelper {
     auto numRepB = repA[0];
     assert(repA[0] == repB[0]);
 
-    bool preserveBF16 = mfmaInsnName.contains(".bf16") && mfmaVersion >= 4;
+    bool preserveBF16 = intrinsicName.contains(".bf16") && mfmaVersion >= 4;
     auto operandA = getValuesFromDotOperandLayoutStruct(
         loadedA, numRepB, numRepM, numRepK, kWidth, kBase,
         aTensorTy.getElementType(), allowXF32, preserveBF16);
@@ -335,12 +336,13 @@ struct DotOpMFMAConversionHelper {
           acc = zeroAuxiliarBlocks(subBlocks, acc);
           for (int k = 0; k < numRepK; k++) {
             for (int kPack = 0; kPack < kWidth / kBase; ++kPack) {
-              acc =
-                  mfmaLayout.getIsTransposed()
-                      ? generateMFMAOp(mfmaInsnName, operandB[kPack][{b, n, k}],
-                                       operandA[kPack][{b, m, k}], acc)
-                      : generateMFMAOp(mfmaInsnName, operandA[kPack][{b, m, k}],
-                                       operandB[kPack][{b, n, k}], acc);
+              acc = mfmaLayout.getIsTransposed()
+                        ? generateMFMAOp(intrinsicName,
+                                         operandB[kPack][{b, n, k}],
+                                         operandA[kPack][{b, m, k}], acc)
+                        : generateMFMAOp(intrinsicName,
+                                         operandA[kPack][{b, m, k}],
+                                         operandB[kPack][{b, n, k}], acc);
               if (!firstMfma)
                 firstMfma = acc;
             }
@@ -363,7 +365,8 @@ struct DotOpMFMAConversionHelper {
 
     const size_t mmaCount =
         numRepB * numRepM * numRepN * numRepK * kWidth / kBase;
-    packAndReplaceResult(op, fc, maybeMfmaInsn, dstElemTy, elemTyA, mmaCount);
+    packAndReplaceResult(op, fc, maybeMfmaIntrinsic, dstElemTy, elemTyA,
+                         mmaCount);
 
     return success();
   }
@@ -372,7 +375,8 @@ struct DotOpMFMAConversionHelper {
   /// rawElems is a vector of kWidth elements. We need to prepare vector(s) of
   /// kBase elements for each mfma instruction
   SmallVector<Value> extractOperands(Value rawElems, int kWidth, int kBase,
-                                     Type type, bool preserveBF16) const {
+                                     Type type, bool preserveBF16,
+                                     bool isConstantScale = false) const {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     int kpack = kWidth / kBase;
     SmallVector<Value> results;
@@ -393,9 +397,20 @@ struct DotOpMFMAConversionHelper {
         }
       }
       if (type.getIntOrFloatBitWidth() == 8) {
-        if (1 == kBase)
+        if (1 == kBase) {
           // This is only for the scale operands of scaled mfma on MI350
-          results.push_back(b.zext(i32_ty, b.bitcast(vec, i8_ty)));
+          if (isConstantScale) {
+            // If the scale is constant(created by arith::ConstantOp), it will
+            // be put in a sgpr instead of vgpr. In that case, instead of
+            // vgpr[7:0], the instruction reads sgpr[30:23] as the scale value.
+            // So we need to manually left shift the scale by 23 bits to meet
+            // the requirement.
+            results.push_back(b.shl(
+                i32_ty, b.zext(i32_ty, b.bitcast(vec, i8_ty)), b.i32_val(23)));
+          } else {
+            results.push_back(b.zext(i32_ty, b.bitcast(vec, i8_ty)));
+          }
+        }
         if (4 == kBase)
           // This is for int8 on pre- MI300 GPUs
           results.push_back(b.bitcast(vec, i32_ty));
@@ -413,10 +428,9 @@ struct DotOpMFMAConversionHelper {
 
   /// Converts dot operand structure to value table and converts types
   /// appropriate for mfma instructions
-  virtual SmallVector<ValueTable>
-  getValuesFromDotOperandLayoutStruct(Value value, int batch, int n0, int n1,
-                                      int kWidth, int kBase, Type type,
-                                      bool allowXF32, bool preserveBF16) const {
+  virtual SmallVector<ValueTable> getValuesFromDotOperandLayoutStruct(
+      Value value, int batch, int n0, int n1, int kWidth, int kBase, Type type,
+      bool allowXF32, bool preserveBF16, bool isConstantScale = false) const {
     auto tb = TritonLLVMOpBuilder(loc, rewriter);
     auto elems = unpackLLElements(loc, value, rewriter);
     int kpack = kWidth / kBase;
@@ -445,8 +459,8 @@ struct DotOpMFMAConversionHelper {
               vals = extractOperands(rawElems, kWidth, kBase, f32_ty,
                                      preserveBF16);
             } else if (type.getIntOrFloatBitWidth() == 8) {
-              vals =
-                  extractOperands(rawElems, kWidth, kBase, i8_ty, preserveBF16);
+              vals = extractOperands(rawElems, kWidth, kBase, i8_ty,
+                                     preserveBF16, isConstantScale);
             } else if (type.isBF16()) {
               vals = extractOperands(rawElems, kWidth, kBase, bf16_ty,
                                      preserveBF16);
@@ -474,15 +488,15 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
                                   Location loc)
       : DotOpMFMAConversionHelper(mfmaLayout, rewriter, typeConverter, loc) {}
 
-  Value generateScaledMFMAOp(MfmaInsn &mfmaInsn, Value valA, Value valB,
-                             Value valC, Value valScaleA,
+  Value generateScaledMFMAOp(const MfmaIntrinsic &mfmaIntrinsic, Value valA,
+                             Value valB, Value valC, Value valScaleA,
                              Value valScaleB) const {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto resType = valC.getType();
     Value zeroFlag = b.i32_val(0);
-    OperationState loweredOp(loc, mfmaInsn.getInsnName());
-    int32_t cbsz = getMfmaF8F6F4MatrixFormat(mfmaInsn.getElementTypeA());
-    int32_t blgp = getMfmaF8F6F4MatrixFormat(mfmaInsn.getElementTypeB());
+    OperationState loweredOp(loc, mfmaIntrinsic.name);
+    int32_t cbsz = getMfmaF8F6F4MatrixFormat(mfmaIntrinsic.aElementType);
+    int32_t blgp = getMfmaF8F6F4MatrixFormat(mfmaIntrinsic.bElementType);
     assert((cbsz != -1) && (blgp != -1));
     loweredOp.addTypes(resType);
     loweredOp.addOperands({valA, valB, valC, b.i32_val(cbsz), b.i32_val(blgp),
@@ -506,6 +520,8 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     Value b = op.getRhs();
     Value aScale = op.getLhsScale();
     Value bScale = op.getRhsScale();
+    bool isAScaleConstant = aScale.getDefiningOp<arith::ConstantOp>();
+    bool isBScaleConstant = bScale.getDefiningOp<arith::ConstantOp>();
     Value d = op.getD();
     auto aTensorTy = cast<RankedTensorType>(a.getType());
     auto bTensorTy = cast<RankedTensorType>(b.getType());
@@ -527,14 +543,16 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
 
     auto ctx = op.getContext();
     constexpr bool allowXF32 = false;
-    auto maybeMfmaInsn = MfmaInsn::selectMfma(
-        mDim, nDim, kDimOperandSize, scaleDotElemTypeToMLIRType(ctx, aElemType),
-        scaleDotElemTypeToMLIRType(ctx, bElemType), mfmaVersion, allowXF32);
-    if (failed(maybeMfmaInsn))
+    FailureOr<MfmaIntrinsic> maybeMfmaIntrinsic =
+        MfmaIntrinsic::selectFor(mfmaVersion, mDim, nDim, kDimOperandSize,
+                                 scaleDotElemTypeToMLIRType(ctx, aElemType),
+                                 scaleDotElemTypeToMLIRType(ctx, bElemType),
+                                 /*withScale=*/false, allowXF32);
+    if (failed(maybeMfmaIntrinsic))
       llvm::report_fatal_error("No match found in MFMA database\n");
 
-    StringRef mfmaInsnName = maybeMfmaInsn->getInsnName();
-    unsigned kBase = maybeMfmaInsn->getKBase();
+    StringRef intrinsicName = maybeMfmaIntrinsic->name;
+    unsigned kBase = maybeMfmaIntrinsic->kBase;
     // Two fp4 are packed into an uint8.
     if (aElemType == ScaleDotElemType::E2M1) {
       kBase /= 2;
@@ -581,10 +599,12 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     // operands.
     auto operandAScale = getValuesFromDotOperandLayoutStruct(
         loadedAScale, numRepB, numRepM, numRepK, scaleKWidth, scaleKBase,
-        aScaleTensorTy.getElementType(), allowXF32, /*preserveBF16=*/false);
+        aScaleTensorTy.getElementType(), allowXF32, /*preserveBF16=*/false,
+        isAScaleConstant);
     auto operandBScale = getValuesFromDotOperandLayoutStruct(
         loadedBScale, numRepB, numRepN, numRepK, scaleKWidth, scaleKBase,
-        bScaleTensorTy.getElementType(), allowXF32, /*preserveBF16=*/false);
+        bScaleTensorTy.getElementType(), allowXF32, /*preserveBF16=*/false,
+        isBScaleConstant);
 
     auto dstElemTy = dTensorTy.getElementType();
     auto fc = unpackLLElements(loc, loadedC, rewriter);
@@ -614,12 +634,12 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
           for (int k = 0; k < numRepK; k++) {
             for (int kPack = 0; kPack < kWidth / kBase; ++kPack) {
               acc = mfmaLayout.getIsTransposed()
-                        ? generateScaledMFMAOp(maybeMfmaInsn.value(),
+                        ? generateScaledMFMAOp(maybeMfmaIntrinsic.value(),
                                                operandB[kPack][{b, n, k}],
                                                operandA[kPack][{b, m, k}], acc,
                                                operandBScale[kPack][{b, n, k}],
                                                operandAScale[kPack][{b, m, k}])
-                        : generateScaledMFMAOp(maybeMfmaInsn.value(),
+                        : generateScaledMFMAOp(maybeMfmaIntrinsic.value(),
                                                operandA[kPack][{b, m, k}],
                                                operandB[kPack][{b, n, k}], acc,
                                                operandAScale[kPack][{b, m, k}],
@@ -646,7 +666,8 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
 
     const size_t mmaCount =
         numRepB * numRepM * numRepN * numRepK * kWidth / kBase;
-    packAndReplaceResult(op, fc, maybeMfmaInsn, dstElemTy, elemTyA, mmaCount);
+    packAndReplaceResult(op, fc, maybeMfmaIntrinsic, dstElemTy, elemTyA,
+                         mmaCount);
 
     return success();
   }
