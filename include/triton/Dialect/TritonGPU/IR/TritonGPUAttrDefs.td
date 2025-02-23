@@ -837,10 +837,6 @@ def MmaEncodingTrait : AttrInterface<"MmaEncodingTrait"> {
   let cppNamespace = "::mlir::triton::gpu";
   let methods = [
 
-    InterfaceMethod<"Return whether the layout support reduction op.",
-                    "bool",
-                    "supportReduction">,
-
     InterfaceMethod<"Return size per thread for dot operands.",
                     "SmallVector<unsigned>",
                     "getSizePerThreadForOperand",
@@ -971,9 +967,6 @@ V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,
   );
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
-    bool supportReduction() const {
-      return true;
-    }
     SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, int opIdx) const;
     SmallVector<int64_t> getInstrShapeForOperand(int kWidth, int opIdx) const;
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape, int kWidth, int opIdx) const;
@@ -1100,9 +1093,6 @@ Row |
   let hasCustomAssemblyFormat = 1;
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
-    bool supportReduction() const {
-      return true;
-    }
     SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, int opIdx) const;
     SmallVector<int64_t> getElemsPerInstrForOperands() const;
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape,
@@ -1228,13 +1218,6 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
                                           int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
     SmallVector<unsigned> getThreadsPerWarpForOperand(int opIdx) const;
-
-    bool supportReduction() const {
-      if (isAmpere() || isHopper()) {
-        return true;
-      }
-      return false;
-    };
     SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, int opIdx) const;
 
     SmallVector<unsigned> getContigPerThread() {
