@@ -9,28 +9,11 @@
 #include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/PatternProtonOpToLLVM.h"
 #include "third_party/proton/dialect/include/Dialect/Proton/IR/Dialect.h"
 #include "third_party/proton/dialect/include/Dialect/ProtonGPU/IR/Dialect.h"
-
-namespace mlir {
-FailureOr<LLVM::LLVMFuncOp>
-convertFuncOpToLLVMFuncOp(FunctionOpInterface funcOp,
-                          ConversionPatternRewriter &rewriter,
-                          const LLVMTypeConverter &converter);
-}
+#include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/Utility.h"
 
 namespace {
-
-static void filterFuncAttributes(LLVM::LLVMFuncOp op, bool filterArgAttrs,
-                                 SmallVectorImpl<NamedAttribute> &result) {
-
-  for (const auto &attr : op->getAttrs()) {
-    if (attr.getName() == SymbolTable::getSymbolAttrName() ||
-        attr.getName() == op.getFunctionTypeAttrName() ||
-        attr.getName() == "std.varargs" ||
-        (filterArgAttrs && attr.getName() == op.getArgAttrsAttrName()))
-      continue;
-    result.push_back(attr);
-  }
-}
+using namespace mlir;
+using namespace mlir::triton;
 
 struct GlobalScratchAllocOpConversion
    : public ConvertOpToLLVMPattern<proton::gpu::GlobalScratchAllocOp> {
@@ -44,20 +27,18 @@ struct GlobalScratchAllocOpConversion
   LogicalResult
   matchAndRewrite(proton::gpu::GlobalScratchAllocOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    ModuleOp mod = op.getOperation()->getParentOfType<ModuleOp>();
     auto func = op->getParentOfType<LLVM::LLVMFuncOp>();
     auto loc = func.getLoc();
     auto ctx = func->getContext();
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto globalPtrTy = LLVM::LLVMPointerType::get(ctx, 1);
     auto &region = func.getBody();
-    auto gmemBase = region.addArgument(globalPtrTy, loc);    
-//    auto gmemBase = func.getArgument(func.getNumArguments() - 1);
-    //TODO: make this offset more meaningful
-    Value offset = b.i32_val(0);
-    Value bufferStart =
-      b.gep(mlir::LLVM::LLVMPointerType::get(ctx, 1), i8_ty, gmemBase, offset);    
-    rewriter.replaceOp(op, bufferStart);
+    region.addArgument(globalPtrTy, loc);
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    Value bufferOffset = b.i32_val(0);
+    Value ptr =
+        triton::proton::gpu::getGlobalScratchPtr(loc, rewriter, func, bufferOffset);
+
+    rewriter.replaceOp(op, ptr);    
     return success();
   }
 protected:
