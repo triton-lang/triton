@@ -447,6 +447,16 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
 
 int TargetInfo::getSharedAddressSpace() const { return 3; }
 
+int TargetInfo::getAddressSpace(Attribute addressSpace) const {
+  int spaceId = 0;
+  if (isa<triton::gpu::SharedMemorySpaceAttr>(addressSpace)) {
+    spaceId = 3;
+  } else {
+    llvm::report_fatal_error("Only support SharedMemorySpace for now");
+  }
+  return spaceId;
+}
+
 bool TargetInfo::supportVectorizedAtomics() const {
   // Note: not currently tested or used, but AMD generally supports vectorized
   // atomics.
