@@ -71,6 +71,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       amendedInputTy.push_back(sharedPtrTy);
     }
     amendedInputTy.push_back(globalPtrTy);
+    amendedInputTy.push_back(globalPtrTy); //Proton Buffer
     auto amendedFuncTy =
         FunctionType::get(ctx, amendedInputTy, funcTy.getResults());
     // 2. Modify the argument attributes to add the new argument.
@@ -95,6 +96,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       region.addArgument(sharedPtrTy, loc);
     }
     region.addArgument(globalPtrTy, loc);
+    region.addArgument(globalPtrTy, loc);//Proton Buffer
     rewriter.inlineRegionBefore(region, amendedFuncOp.getBody(),
                                 amendedFuncOp.end());
     return amendedFuncOp;

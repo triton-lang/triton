@@ -28,17 +28,20 @@ struct GlobalScratchAllocOpConversion
   matchAndRewrite(proton::gpu::GlobalScratchAllocOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto func = op->getParentOfType<LLVM::LLVMFuncOp>();
-    auto loc = func.getLoc();
-    auto ctx = func->getContext();
-    auto globalPtrTy = LLVM::LLVMPointerType::get(ctx, 1);
-    auto &region = func.getBody();
-    region.addArgument(globalPtrTy, loc);
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    Value bufferOffset = b.i32_val(0);
-    Value ptr =
-        triton::proton::gpu::getGlobalScratchPtr(loc, rewriter, func, bufferOffset);
-
-    rewriter.replaceOp(op, ptr);    
+    auto funcTy = func.getFunctionType();
+//    auto loc = func.getLoc();
+//    auto ctx = func->getContext();
+//    auto globalPtrTy = LLVM::LLVMPointerType::get(ctx, 1);
+//    auto &region = func.getBody();
+//    region.addArgument(globalPtrTy, loc);
+//    auto b = TritonLLVMOpBuilder(loc, rewriter);
+//    Value bufferOffset = b.i32_val(0);
+//    Value ptr =
+//        triton::proton::gpu::getGlobalScratchPtr(loc, rewriter, func, bufferOffset);
+//
+//    rewriter.replaceOp(op, ptr);   
+    llvm::errs() << funcTy << "\n";
+    rewriter.eraseOp(op);
     return success();
   }
 protected:

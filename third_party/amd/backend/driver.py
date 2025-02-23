@@ -8,6 +8,7 @@ from triton.runtime.build import _build
 from triton.runtime.cache import get_cache_manager
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import GPUDriver
+from triton.runtime import _allocation
 
 dirname = os.path.dirname(os.path.realpath(__file__))
 include_dir = [os.path.join(dirname, "include")]
@@ -225,7 +226,7 @@ def make_launcher(constants, signature, warp_size):
         }[ty_to_cpp(ty)]
 
     args_format = ''.join([format_of(ty) for ty in signature.values()])
-    format = "piiiKKOOOO" + args_format
+    format = "piiiKKOOOOO" + args_format
     signature = ','.join(map(_serialize_signature, signature.values()))
     signature = list(filter(bool, signature.split(',')))
     signature = {i: s for i, s in enumerate(signature)}
@@ -245,6 +246,7 @@ def make_launcher(constants, signature, warp_size):
     params = list(range(len(signature)))
     params = [f"&arg{i}" for i, ty in signature.items() if ty != "constexpr"]
     params.append("&global_scratch")
+    params.append("&proton_scratch")
     src = f"""
 #define __HIP_PLATFORM_AMD__
 #include <hip/hip_runtime.h>
@@ -344,7 +346,7 @@ static inline void gpuAssert(hipError_t code, const char *file, int line)
 
 #define HIP_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
 
-static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int launch_cooperative_grid, int clusterDimX, int clusterDimY, int clusterDimZ, int shared_memory, hipStream_t stream, hipFunction_t function{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
+static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int launch_cooperative_grid, int clusterDimX, int clusterDimY, int clusterDimZ, int shared_memory, hipStream_t stream, hipFunction_t function, hipDeviceptr_t proton_scratch{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
   // printf("_launch hip kernel\\n");
   hipDeviceptr_t global_scratch = 0;
   void *params[] = {{ {', '.join(params)} }};
@@ -413,9 +415,10 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   PyObject *launch_exit_hook = NULL;
   PyObject *kernel_metadata = NULL;
   PyObject *launch_metadata = NULL;
+  PyObject *proton_scratch_obj = NULL;
   {' '.join([f"{_extracted_type(ty)} _arg{i}; " for i, ty in signature.items()])}
   if(!PyArg_ParseTuple(args, \"{format}\", &launch_cooperative_grid,
-                                           &gridX, &gridY, &gridZ, &_stream, &_function,
+                                           &gridX, &gridY, &gridZ, &_stream, &_function, &proton_scratch_obj,
                                            &kernel_metadata, &launch_metadata,
                                            &launch_enter_hook, &launch_exit_hook {args_list})) {{
     return NULL;
@@ -435,10 +438,18 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
       return NULL;
   }}
 
+  hipDeviceptr_t proton_scratch = 0;
+  if (proton_scratch_obj != Py_None) {{
+    DevicePtrInfo proton_scratch_info = getPointer(proton_scratch_obj, -1);
+    if (!proton_scratch_info.valid) {{
+      return NULL;
+    }}
+    proton_scratch = proton_scratch_info.dev_ptr;
+  }}
 
   // raise exception asap
   {"; ".join([f"DevicePtrInfo ptr_info{i} = getPointer(_arg{i}, {i}); if (!ptr_info{i}.valid) return NULL;" if ty[0] == "*" else "" for i, ty in signature.items()])};
-  _launch(gridX, gridY, gridZ, num_warps, num_ctas, launch_cooperative_grid, clusterDimX, clusterDimY, clusterDimZ, shared_memory, (hipStream_t)_stream, (hipFunction_t)_function{', ' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
+  _launch(gridX, gridY, gridZ, num_warps, num_ctas, launch_cooperative_grid, clusterDimX, clusterDimY, clusterDimZ, shared_memory, (hipStream_t)_stream, (hipFunction_t)_function, proton_scratch{', ' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
 
   if(launch_exit_hook != Py_None){{
     PyObject* args = Py_BuildValue("(O)", launch_metadata);
@@ -495,9 +506,17 @@ class HIPLauncher(object):
         mod = compile_module_from_src(src, "__triton_launcher")
         self.launch = mod.launch
         self.launch_cooperative_grid = metadata.launch_cooperative_grid
-
-    def __call__(self, *args):
-        self.launch(self.launch_cooperative_grid, *args)
+        self.proton_scratch_size = 1024
+        self.proton_scratch_align = 0
+        
+    def __call__(self, gridX, gridY, gridZ, stream, function, *args):
+        if self.proton_scratch_size > 0:
+            grid_size = gridX * gridY * gridZ
+            alloc_size = grid_size * self.proton_scratch_size
+            proton_scratch = _allocation._allocator(alloc_size, self.proton_scratch_align, stream)
+        else:
+            proton_scratch = None
+        self.launch(gridX, gridY, gridZ, stream, function, 0, proton_scratch, *args)        
 
 
 class HIPDriver(GPUDriver):
