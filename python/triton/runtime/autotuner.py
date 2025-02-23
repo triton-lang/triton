@@ -189,6 +189,15 @@ class Autotuner(KernelInterface):
                 timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
                 bench_end = time.time()
                 self.bench_time = bench_end - bench_start
+
+                if os.getenv("TRITON_PRINT_AUTOTUNING_ALL", None) == "1":
+                    print(
+                        f'\nPrinting ALL Multiple Triton autotuning Configs with timings in sorted order for kernel {self.fn}:'
+                    )
+                    sorted_configs = builtins.sorted(timings, key=timings.get)
+                    for config in sorted_configs:
+                        print(f'Triton autotune config: [{config}]; Triton autotune timing: {timings[config]}')
+
                 self.cache[key] = builtins.min(timings, key=timings.get)
                 full_nargs = {**self.nargs, **kwargs, **self.cache[key].all_kwargs()}
                 self.pre_hook(full_nargs, reset_only=True)
