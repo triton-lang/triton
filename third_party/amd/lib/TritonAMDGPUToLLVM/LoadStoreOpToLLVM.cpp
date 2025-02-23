@@ -1369,14 +1369,20 @@ struct AtomicRMWOpConversion
         Value rightNeighbourAddr =
             genI32TiledOp(rewriter, shiftLeftI32ByDpp, castedAddr);
 
-        // Packing optimization only supported if both threads active.
+        // Packing optimization only supported if following conditions are true:
+        // 1. address is aligned by 4 bytes
+        // 2. right neighbour has adjacent address
+        // 3. both threads are active
         Value neighbourEnabled = b.icmp_ne(i64Ones, rightNeighbourAddr);
+        Value bothEnabled = b.and_(neighbourEnabled, rmwMask);
+        Value isAligned =
+            b.icmp_eq(b.urem(castedAddr, b.i64_val(4)), b.i64_val(0));
         Value neighbourAddrAdjacent = b.icmp_eq(
             rightNeighbourAddr,
             b.add(castedAddr,
                   b.i64_val(valueElemTy.getIntOrFloatBitWidth() / 8)));
         enablePackedOpt =
-            b.and_(b.and_(neighbourEnabled, rmwMask), neighbourAddrAdjacent);
+            b.and_(b.and_(isAligned, bothEnabled), neighbourAddrAdjacent);
 
         // Enable only the even threads.
         Value oneDisabled = b.or_(neighbourEnabled, rmwMask);
