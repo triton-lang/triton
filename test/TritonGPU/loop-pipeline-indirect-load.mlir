@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritongpu-loop-scheduling=num-stages=2 -tritongpu-pipeline=num-stages=2 | FileCheck %s
+// RUN: triton-opt %s -split-input-file -tritongpu-pipeline=num-stages=2 | FileCheck %s
 // CHECK-LABEL: @indirect_load_two_stages
 // CHECK: scf.for
 // CHECK: tt.dot

@@ -1,27 +1,29 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
-#include "triton/Dialect/TritonGPU/Transforms/PipelineExpander.h"
+#include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+
+using namespace mlir;
+namespace tt = mlir::triton;
+namespace ttg = mlir::triton::gpu;
 
 namespace mlir {
 namespace triton {
 namespace gpu {
 
-#define GEN_PASS_DEF_TRITONGPUTC05MMAPIPELINE
+#define GEN_PASS_DEF_TRITONGPUTESTPIPELINELOWERLOOP
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
-struct TC05MMAPipelinePass
-    : public impl::TritonGPUTC05MMAPipelineBase<TC05MMAPipelinePass> {
-
-  using impl::TritonGPUTC05MMAPipelineBase<
-      TC05MMAPipelinePass>::TritonGPUTC05MMAPipelineBase;
+struct TestPipelineLowerLoop
+    : public impl::TritonGPUTestPipelineLowerLoopBase<TestPipelineLowerLoop> {
+  using impl::TritonGPUTestPipelineLowerLoopBase<
+      TestPipelineLowerLoop>::TritonGPUTestPipelineLowerLoopBase;
 
   void runOnOperation() override {
     ModuleOp m = getOperation();
 
-    pipelineTC05MMALoops(m, /*numStages=*/2, disableExpander);
+    lowerLoops(m);
   }
 };
 
