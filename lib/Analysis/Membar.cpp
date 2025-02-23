@@ -21,37 +21,33 @@ void MembarAnalysis::resolve(FunctionOpInterface funcOp,
                              FuncBlockInfoMapT *funcBlockInfoMap,
                              OpBuilder *builder) {
   // Initialize the blockList
-  DenseMap<Block *, BlockInfo> inputBlockInfoMap;
-  DenseMap<Block *, BlockInfo> outputBlockInfoMap;
-  std::deque<Block *> blockList;
+  DenseMap<VirtualBlock, BlockInfo> inputBlockInfoMap;
+  DenseMap<VirtualBlock, BlockInfo> outputBlockInfoMap;
+  std::deque<VirtualBlock> blockList;
   funcOp.walk<WalkOrder::PreOrder>([&](Block *block) {
-    for (auto &op : block->getOperations()) {
-      // Check if the operation belongs to scf dialect, if so, we need to
-      // throw an error
-      if (op.getDialect()->getNamespace() == "scf") {
-        llvm::report_fatal_error(
-            "scf dialect is not supported in membar. Please lower it "
-            "to cf dialect first.");
-        return;
-      }
-    }
-    if (block->isEntryBlock())
-      blockList.emplace_back(block);
+    // Start the analysis from the entry blocks of any nested isolated from
+    // above regions.
+    if (block->isEntryBlock() &&
+        !isa<RegionBranchOpInterface>(block->getParentOp()))
+      blockList.emplace_back(block, Block::iterator());
   });
 
   // A fixed point algorithm
   while (!blockList.empty()) {
-    auto *block = blockList.front();
+    VirtualBlock block = blockList.front();
     blockList.pop_front();
     // Make a copy of the inputblockInfo but not update
     auto inputBlockInfo = inputBlockInfoMap[block];
-    SmallVector<Block *> successors;
-    for (auto &op : block->getOperations()) {
-      if (op.hasTrait<OpTrait::IsTerminator>()) {
+    SmallVector<VirtualBlock> successors;
+    Block::iterator startIt =
+        block.second.isValid() ? std::next(block.second) : block.first->begin();
+    for (Operation &op : llvm::make_range(startIt, block.first->end())) {
+      if (op.hasTrait<OpTrait::IsTerminator>() ||
+          isa<RegionBranchOpInterface>(op)) {
         visitTerminator(&op, successors);
-      } else {
-        update(&op, &inputBlockInfo, funcBlockInfoMap, builder);
+        break;
       }
+      update(&op, &inputBlockInfo, funcBlockInfoMap, builder);
     }
     // Get the reference because we want to update if it changed
     if (outputBlockInfoMap.count(block) &&
@@ -64,29 +60,74 @@ void MembarAnalysis::resolve(FunctionOpInterface funcOp,
     // so overwrite the output state entirely.
     outputBlockInfoMap[block] = inputBlockInfo;
     // Update the successors
-    for (auto *successor : successors) {
+    for (VirtualBlock successor : successors) {
       inputBlockInfoMap[successor].join(outputBlockInfoMap[block]);
       blockList.emplace_back(successor);
     }
   }
 
   // Update the final dangling buffers that haven't been synced
-  auto &funcBlockInfo = (*funcBlockInfoMap)[funcOp];
-  funcOp.walk<WalkOrder::PreOrder>([&](Block *block) {
-    block->walk([&](triton::ReturnOp returnOp) {
-      funcBlockInfo.join(outputBlockInfoMap[block]);
+  BlockInfo &funcBlockInfo = (*funcBlockInfoMap)[funcOp];
+  funcOp.walk<WalkOrder::PreOrder>([&](triton::ReturnOp returnOp) {
+    // Find the virtual block that contains this op.
+    SmallVector<std::pair<VirtualBlock, BlockInfo>> virtualBlocks;
+    for (auto &[block, blockInfo] : outputBlockInfoMap) {
+      if (block.first == returnOp->getBlock())
+        virtualBlocks.emplace_back(block, blockInfo);
+    }
+    // The last virtual block in this group contains the terminator.
+    auto maxIt = llvm::max_element(virtualBlocks, [&](auto &lhs, auto &rhs) {
+      assert(lhs.first.first == rhs.first.first);
+      Block::iterator lhsIt = lhs.first.second, rhsIt = rhs.first.second;
+      return !lhsIt.isValid() ||
+             (rhsIt.isValid() && lhsIt->isBeforeInBlock(&*rhsIt));
     });
+
+    funcBlockInfo.join(maxIt->second);
   });
 }
 
 void MembarAnalysis::visitTerminator(Operation *op,
-                                     SmallVector<Block *> &successors) {
-  if (auto branchInterface = dyn_cast<BranchOpInterface>(op)) {
-    Block *parentBlock = branchInterface->getBlock();
-    successors.append(std::begin(parentBlock->getSuccessors()),
-                      std::end(parentBlock->getSuccessors()));
+                                     SmallVector<VirtualBlock> &successors) {
+  if (isa<BranchOpInterface>(op)) {
+    for (Block *successor : op->getSuccessors())
+      successors.emplace_back(successor, Block::iterator());
     return;
   }
+
+  if (auto br = dyn_cast<RegionBranchOpInterface>(op)) {
+    SmallVector<RegionSuccessor> regions;
+    br.getSuccessorRegions(RegionBranchPoint::parent(), regions);
+    for (RegionSuccessor &region : regions) {
+      if (region.isParent()) {
+        successors.emplace_back(br->getBlock(), br->getIterator());
+      } else {
+        Block &block = region.getSuccessor()->front();
+        successors.emplace_back(&block, Block::iterator());
+      }
+    }
+    return;
+  }
+
+  // FIXME: `ReturnLike` adds `RegionBranchTerminatorOpInterface` for some
+  // reason. Check that the parent is actually a `RegionBranchOpInterface`.
+  auto br = dyn_cast<RegionBranchTerminatorOpInterface>(op);
+  if (br && isa<RegionBranchOpInterface>(br->getParentOp())) {
+    SmallVector<Attribute> operands(br->getNumOperands());
+    SmallVector<RegionSuccessor> regions;
+    br.getSuccessorRegions(operands, regions);
+    for (RegionSuccessor &region : regions) {
+      if (region.isParent()) {
+        Operation *parent = br->getParentOp();
+        successors.emplace_back(parent->getBlock(), parent->getIterator());
+      } else {
+        Block &block = region.getSuccessor()->front();
+        successors.emplace_back(&block, Block::iterator());
+      }
+    }
+    return;
+  }
+
   // Otherwise, it could be a return op
   if (op->hasTrait<OpTrait::ReturnLike>())
     return;

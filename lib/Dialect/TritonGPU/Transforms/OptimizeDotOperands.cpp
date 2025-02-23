@@ -277,9 +277,10 @@ public:
     MLIRContext *context = &getContext();
     ModuleOp m = getOperation();
 
-    mlir::PassManager pm(m.getContext());
+    OpPassManager pm;
     pm.addPass(mlir::createCanonicalizerPass());
-    auto ret = pm.run(m);
+    if (failed(runPipeline(pm, m)))
+      return signalPassFailure();
 
     mlir::RewritePatternSet patterns(context);
     patterns.add<SwizzleShmemConvert>(context);

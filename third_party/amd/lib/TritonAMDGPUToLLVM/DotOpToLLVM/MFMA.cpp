@@ -116,7 +116,7 @@ struct DotOpMFMAConversionHelper {
       return acc;
     constexpr int warpSize = 64;
     int subBlockSize = warpSize / numSubBlocks;
-    Value laneId = getLaneId(rewriter, loc, warpSize);
+    Value laneId = getLaneId(rewriter, loc);
     auto vecTy = dyn_cast<VectorType>(acc.getType());
     auto elemType = vecTy.getElementType();
     assert(elemType.getIntOrFloatBitWidth() == 32);

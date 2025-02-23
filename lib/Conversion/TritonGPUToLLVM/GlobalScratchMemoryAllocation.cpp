@@ -2,14 +2,14 @@
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
-#define GEN_PASS_CLASSES
-#include "triton/Conversion/TritonGPUToLLVM/Passes.h.inc"
-
 using namespace mlir;
 using namespace triton;
 using namespace triton::gpu;
 
-namespace {
+namespace mlir::triton::gpu {
+#define GEN_PASS_DEF_TRITONGPUGLOBALSCRATCHALLOCATIONPASS
+#include "triton/Conversion/TritonGPUToLLVM/Passes.h.inc"
+} // namespace mlir::triton::gpu
 
 static int32_t roundUp(int32_t val, int32_t step) {
   auto t = val + step - 1;
@@ -70,8 +70,9 @@ static void allocateGMem(Operation *parentOp,
                     builder.getI32IntegerAttr(largestAlignment));
 }
 
+namespace {
 class TritonGPUGlobalScratchAllocationPass
-    : public TritonGPUGlobalScratchAllocationPassBase<
+    : public mlir::triton::gpu::impl::TritonGPUGlobalScratchAllocationPassBase<
           TritonGPUGlobalScratchAllocationPass> {
 public:
   void runOnOperation() override {
@@ -99,10 +100,4 @@ public:
     assert(seenKernel);
   }
 };
-
 } // namespace
-
-std::unique_ptr<Pass>
-mlir::triton::gpu::createTritonGPUGlobalScratchAllocationPass() {
-  return std::make_unique<TritonGPUGlobalScratchAllocationPass>();
-}

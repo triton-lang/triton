@@ -281,7 +281,7 @@ public:
 
     int numThreads = triton::gpu::TritonGPUDialect::getThreadsPerWarp(
         op->getParentOfType<ModuleOp>());
-    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc, numThreads);
+    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
 
     bool useFp16 = op.getType().getElementType().isF16();
     if (isPacked) {

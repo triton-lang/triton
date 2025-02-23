@@ -85,9 +85,8 @@ Value emitRedundantThreadPredicate(
   auto kWarp = str_attr("warp");
   auto kBlock = str_attr("block");
 
-  int warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(moduleOp);
   Value zero = b.i32_val(0);
-  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc, warpSize);
+  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
   Value blockId = freeVarMasks.lookup(kBlock) == 0
                       ? zero
                       : targetInfo.getClusterCTAId(rewriter, loc);

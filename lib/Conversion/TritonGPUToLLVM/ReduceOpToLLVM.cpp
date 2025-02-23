@@ -228,9 +228,7 @@ private:
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto srcLayout =
         mlir::cast<DistributedEncodingTrait>(helper.getSrcLayout());
-    auto mod = op.getOperation()->getParentOfType<ModuleOp>();
-    auto [laneId, warpId] = getLaneAndWarpId(
-        rewriter, loc, triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
+    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
     unsigned axis = op.getAxis();
     auto smemShape = helper.getScratchRepShape();
 
