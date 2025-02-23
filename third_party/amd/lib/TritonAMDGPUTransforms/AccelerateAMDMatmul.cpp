@@ -164,14 +164,14 @@ FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotOp dot, int mfmaVersion,
 FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotScaledOp dot,
                                                int mfmaVersion, int nonKDim) {
   auto ctx = dot.getContext();
-  int64_t inputKDim = dot.getLhs().getType().getShape().back();
-  if (dot.getLhsType() == ScaleDotElemType::E2M1) {
+  int64_t inputKDim = dot.getA().getType().getShape().back();
+  if (dot.getAElemType() == ScaleDotElemType::E2M1) {
     // Since two fp4 are packed into int8, to get the correct K dim size, we
     // need to multiply it by 2.
     inputKDim *= 2;
   }
-  Type aElemType = scaleDotElemTypeToMLIRType(ctx, dot.getLhsType());
-  Type bElemType = scaleDotElemTypeToMLIRType(ctx, dot.getRhsType());
+  Type aElemType = scaleDotElemTypeToMLIRType(ctx, dot.getAElemType());
+  Type bElemType = scaleDotElemTypeToMLIRType(ctx, dot.getBElemType());
   return chooseMfmaInstruction(mfmaVersion, dot.getC().getType(), aElemType,
                                bElemType, inputKDim, nonKDim,
                                /*hasScale=*/true, /*allowXF32=*/false);
@@ -183,10 +183,10 @@ FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotScaledOp dot,
   // For scaled dot, we handle it with fp16 or bf16 emulation for now.
   Builder b(dot.getContext());
   Type elemType = useFp16 ? b.getF16Type() : b.getBF16Type();
-  return chooseMfmaInstruction(
-      mfmaVersion, dot.getC().getType(), elemType, elemType,
-      dot.getLhs().getType().getShape().back(), nonKDim,
-      /*withScale=*/false, /*allowXF32=*/false);
+  return chooseMfmaInstruction(mfmaVersion, dot.getC().getType(), elemType,
+                               elemType, dot.getA().getType().getShape().back(),
+                               nonKDim,
+                               /*withScale=*/false, /*allowXF32=*/false);
 }
 
 using OperandTypesVector = SmallVector<Type, 4>;
@@ -539,15 +539,15 @@ public:
     if (rank == 3)
       return rewriter.notifyMatchFailure(dotOp, "NYI: 3d case");
 
-    TensorValue a = dotOp.getLhs();
-    TensorValue b = dotOp.getRhs();
-    TensorValue aScale = dotOp.getLhsScale();
-    TensorValue bScale = dotOp.getRhsScale();
+    TensorValue a = dotOp.getA();
+    TensorValue b = dotOp.getB();
+    TensorValue aScale = dotOp.getAScale();
+    TensorValue bScale = dotOp.getBScale();
     if (aScale && bScale)
       return rewriter.notifyMatchFailure(dotOp, "NYI: both LHS and RHS scale");
 
-    ScaleDotElemType aElemType = dotOp.getLhsType();
-    ScaleDotElemType bElemType = dotOp.getRhsType();
+    ScaleDotElemType aElemType = dotOp.getAElemType();
+    ScaleDotElemType bElemType = dotOp.getBElemType();
     auto supportsTypes = [](ScaleDotElemType elemType) {
       return elemType == ScaleDotElemType::E2M1 ||
              elemType == ScaleDotElemType::E4M3 ||
@@ -566,8 +566,8 @@ public:
     int numThreads = ttg::TritonGPUDialect::getThreadsPerWarp(moduleOp);
 
     // Choose a suitable MFMA instruction for this scaled dot op.
-    bool useFp16 = dotOp.getLhsType() == ScaleDotElemType::FP16 ||
-                   dotOp.getRhsType() == ScaleDotElemType::FP16;
+    bool useFp16 = aElemType == ScaleDotElemType::FP16 ||
+                   bElemType == ScaleDotElemType::FP16;
     FailureOr<MfmaIntrinsic> mfmaInstr =
         chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim, useFp16);
     if (failed(mfmaInstr))
@@ -679,9 +679,9 @@ public:
     };
 
     Value scaledA =
-        upcastMXFP(a, aScale, dotOp.getLhsType(), dotOp.getFastMath());
+        upcastMXFP(a, aScale, dotOp.getAElemType(), dotOp.getFastMath());
     Value scaledB =
-        upcastMXFP(b, bScale, dotOp.getRhsType(), dotOp.getFastMath());
+        upcastMXFP(b, bScale, dotOp.getBElemType(), dotOp.getFastMath());
     auto newDot = rewriter.create<DotOp>(dotOp.getLoc(), newRetType, scaledA,
                                          scaledB, newAcc);
     rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(dotOp, oldRetType,
@@ -719,14 +719,14 @@ public:
     if (rank == 3)
       return rewriter.notifyMatchFailure(dotOp, "NYI: 3d case");
 
-    TensorValue a = dotOp.getLhs();
-    TensorValue b = dotOp.getRhs();
-    TensorValue aScale = dotOp.getLhsScale();
-    TensorValue bScale = dotOp.getRhsScale();
+    TensorValue a = dotOp.getA();
+    TensorValue b = dotOp.getB();
+    TensorValue aScale = dotOp.getAScale();
+    TensorValue bScale = dotOp.getBScale();
     auto oldShape = oldRetType.getShape();
 
-    ScaleDotElemType aElemType = dotOp.getLhsType();
-    ScaleDotElemType bElemType = dotOp.getRhsType();
+    ScaleDotElemType aElemType = dotOp.getAElemType();
+    ScaleDotElemType bElemType = dotOp.getBElemType();
     auto supportsTypes = [](ScaleDotElemType elemType) {
       return elemType == ScaleDotElemType::E2M1;
     };
