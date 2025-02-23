@@ -681,7 +681,7 @@ def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
     let summary = "dot_scaled";
 
     let description = [{
-        $d = matrix_multiply(scale($lhs, $lhs_scale), scale(rlhs, $rhs_scale)) + $c.
+        $d = matrix_multiply(scale($a, $a_scale), scale($b, $b_scale)) + $c.
         Where scale(x, s) is a function that applies the scale per block following microscaling spec.
     }];
 
@@ -689,21 +689,22 @@ def TT_DotScaledOp : TT_Op<"dot_scaled", [Pure,
       ins
       // inputs are floats if we have a type for them, otherwise (fp4),
       // they are packed in pairs in an I8Tensor
-      RankedTensorOf<[TT_Float,I8]>:$lhs,
-      RankedTensorOf<[TT_Float,I8]>:$rhs,
+      RankedTensorOf<[TT_Float,I8]>:$a,
+      RankedTensorOf<[TT_Float,I8]>:$b,
       TT_FloatTensor:$c,
-      Optional<RankedTensorOf<[TT_Float, I8]>>:$lhs_scale,
-      Optional<RankedTensorOf<[TT_Float, I8]>>:$rhs_scale,
-      TT_ScaleDotElemTypeAttr:$lhs_type,
-      TT_ScaleDotElemTypeAttr:$rhs_type,
+      Optional<RankedTensorOf<[TT_Float, I8]>>:$a_scale,
+      Optional<RankedTensorOf<[TT_Float, I8]>>:$b_scale,
+      TT_ScaleDotElemTypeAttr:$a_elem_type,
+      TT_ScaleDotElemTypeAttr:$b_elem_type,
       BoolAttr:$fastMath
     );
 
     let results = (outs TT_FloatTensor:$d);
 
     let assemblyFormat = [{
-      $lhs (`scale` $lhs_scale^)? `,` $rhs (`scale` $rhs_scale^)? `,` $c `lhs` `=` $lhs_type `rhs` `=` $rhs_type attr-dict
-      `:` type($lhs) (`,` type($lhs_scale)^)? `*` type($rhs) (`,` type($rhs_scale)^)? `->` type($d)
+      $a (`scale` $a_scale^)? `,` $b (`scale` $b_scale^)? `,` $c
+      `lhs` `=` $a_elem_type `rhs` `=` $b_elem_type attr-dict
+      `:` type($a) (`,` type($a_scale)^)? `*` type($b) (`,` type($b_scale)^)? `->` type($d)
     }];
 }
 
