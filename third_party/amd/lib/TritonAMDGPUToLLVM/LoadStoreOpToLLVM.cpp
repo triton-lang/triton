@@ -1548,35 +1548,28 @@ private:
     rmwPtr = b.ptrtoint(i64_ty, rmwPtr);
 
     auto *curBlock = rewriter.getInsertionBlock();
-    // auto *leaderBlock = rewriter.createBlock(
-    //   curBlock->getParent(), std::next(Region::iterator(curBlock)));
     auto *leaderBlock = curBlock->splitBlock(rewriter.getInsertionPoint());
     leaderBlock->addArgument(i64_ty, loc);
+    leaderBlock->addArgument(operandElemType, loc);
     auto *block1 = rewriter.createBlock(
         curBlock->getParent(), std::next(Region::iterator(curBlock)));
 
-    // auto *block1 = curBlock->splitBlock(rewriter.getInsertionPoint());
-    // auto *leaderBlock = rewriter.createBlock(
-    //     curBlock->getParent(), std::next(Region::iterator(curBlock)));
-    
     rewriter.setInsertionPointToEnd(curBlock);
 
     // check how many adjacent address are in the wave
     Value rightNeighbourAddr = genI32TiledOp(rewriter, shiftLeftI32ByDpp, rmwPtr);
-    Type elemTy = operand.getType();
-    Value elemSize = b.i64_val(elemTy.getIntOrFloatBitWidth() / 8);
+    Value elemSize = b.i64_val(operandElemType.getIntOrFloatBitWidth() / 8);
     Value isNeighbour = b.icmp_eq(rightNeighbourAddr, b.add(rmwPtr, elemSize));
     Value neighbourFlag = targetInfo.ballot(rewriter, loc, i64_ty, isNeighbour);
     Value numNeighbours = b.trunc(i32_ty, generatePopcount64(rewriter, neighbourFlag));
-    // heuristic, if # of neighbours is larger than 32, skip the optimization
+    // heuristic, do optimization only if # of neighbours is less than 32,
+    // [TODO], will calculate actual # of difference addresses
     Value skipOpt = b.icmp_ult(numNeighbours, b.i32_val(32));
 
-    rewriter.create<LLVM::CondBrOp>(loc, skipOpt, block1, leaderBlock, rmwPtr);
+    rewriter.create<LLVM::CondBrOp>(loc, skipOpt, block1, leaderBlock, ValueRange({rmwPtr, operand}));
     rewriter.setInsertionPointToEnd(block1);
 
     auto *afterLoopBlock = block1->splitBlock(rewriter.getInsertionPoint());
-    // auto *afterLoopBlock = rewriter.createBlock(
-    //   loopBody->getParent(), std::next(Region::iterator(loopBody)));
     afterLoopBlock->addArgument(i32_ty, loc);    // idx
     afterLoopBlock->addArgument(i32_ty, loc);    // cnt
     afterLoopBlock->addArgument(int_ty(1), loc); // isLeader
@@ -1708,20 +1701,18 @@ private:
 
     auto *endBlock = afterRedBlock->splitBlock(rewriter.getInsertionPoint());
     endBlock->addArgument(operandElemType, loc);
-    // auto *leaderBlock = rewriter.createBlock(
-    //     afterRedBlock->getParent(), std::next(Region::iterator(afterRedBlock)));
     rewriter.setInsertionPointToEnd(afterRedBlock);
     Value leaderCond = leaderRes;
     Value defaultRes = b.undef(operandElemType);
-    rewriter.create<LLVM::CondBrOp>(loc, leaderCond, leaderBlock, rmwPtr, endBlock,
-                                    defaultRes);
+    rewriter.create<LLVM::CondBrOp>(loc, leaderCond, leaderBlock, ValueRange({rmwPtr, afterRedBlock->getArgument(0)}), endBlock,
+                                    ValueRange({defaultRes}));
     rewriter.setInsertionPointToEnd(leaderBlock);
     // Utilize global atomic only by leader threads
     Value addr = leaderBlock->getArgument(0);
     Value atomAddr = b.inttoptr(origPtrType, addr);
     Value atom = rewriter
                      .create<LLVM::AtomicRMWOp>(loc, opKind, atomAddr,
-                                                afterRedBlock->getArgument(0),
+                                            leaderBlock->getArgument(1),
                                                 memOrdering, scope)
                      .getResult();
     rewriter.create<LLVM::BrOp>(loc, atom, endBlock);
