@@ -524,8 +524,8 @@ void Pingponger::getDotPingponged() {
               << gLoadOps.size() << " global loads, " << lLoadOps.size()
               << " local loads";
       LDBG(message.str());
+      return;
     }
-    return;
     // Transform a loop where the tile size requires dots to be sliced
     if (tileSize == mediumTile) {
       if (transformTwoPPClusters(builder, dotOps[0]->getLoc()).failed()) {
