@@ -628,7 +628,8 @@ tt.func @scan_alloc(%x : tensor<8x16xf32, #AL>) {
 }
 
 // expected-remark @below {{warp_specialize_default_region}}
-// expected-remark @below {{size = 32}}
+// expected-remark @below {{size = 33}}
+// expected-remark @below {{offset = 32, size = 1}}
 tt.func @warp_specialize_default_region() {
   // expected-remark @below {{offset = 0, size = 16}}
   %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
@@ -647,7 +648,8 @@ tt.func @warp_specialize_default_region() {
 }
 
 // expected-remark @below {{nonoverlapping_liveness_in_default_region}}
-// expected-remark @below {{size = 32}}
+// expected-remark @below {{size = 33}}
+// expected-remark @below {{offset = 32, size = 1}}
 tt.func @nonoverlapping_liveness_in_default_region() {
   // expected-remark @below {{offset = 0, size = 16}}
   %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
@@ -670,7 +672,8 @@ tt.func @nonoverlapping_liveness_in_default_region() {
 }
 
 // expected-remark @below {{overlapping_liveness_in_default_region}}
-// expected-remark @below {{size = 48}}
+// expected-remark @below {{size = 49}}
+// expected-remark @below {{offset = 48, size = 1}}
 tt.func @overlapping_liveness_in_default_region() {
   // expected-remark @below {{offset = 0, size = 16}}
   %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
@@ -693,7 +696,8 @@ tt.func @overlapping_liveness_in_default_region() {
 }
 
 // expected-remark @below {{alias_through_default_outputs}}
-// expected-remark @below {{size = 32}}
+// expected-remark @below {{size = 33}}
+// expected-remark @below {{offset = 32, size = 1}}
 tt.func @alias_through_default_outputs() {
   // expected-remark @below {{offset = 0, size = 16}}
   %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
@@ -711,7 +715,8 @@ tt.func @alias_through_default_outputs() {
 }
 
 // expected-remark @below {{implicit_capture_liveness}}
-// expected-remark @below {{size = 32}}
+// expected-remark @below {{size = 33}}
+// expected-remark @below {{offset = 32, size = 1}}
 tt.func @implicit_capture_liveness() {
   // expected-remark @below {{offset = 0, size = 16}}
   %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
@@ -729,7 +734,8 @@ tt.func @implicit_capture_liveness() {
 }
 
 // expected-remark @below {{implicit_and_explicit_capture_liveness}}
-// expected-remark @below {{size = 44}}
+// expected-remark @below {{size = 45}}
+// expected-remark @below {{offset = 44, size = 1}}
 tt.func @implicit_and_explicit_capture_liveness() {
   // expected-remark @below {{offset = 0, size = 16}}
   %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
@@ -748,7 +754,8 @@ tt.func @implicit_and_explicit_capture_liveness() {
 }
 
 // expected-remark @below {{explicit_capture_liveness}}
-// expected-remark @below {{size = 32}}
+// expected-remark @below {{size = 33}}
+// expected-remark @below {{offset = 32, size = 1}}
 tt.func @explicit_capture_liveness() {
   // expected-remark @below {{offset = 0, size = 16}}
   %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
@@ -766,7 +773,8 @@ tt.func @explicit_capture_liveness() {
 }
 
 // expected-remark @below {{implicit_capture_liveness_default}}
-// expected-remark @below {{size = 32}}
+// expected-remark @below {{size = 33}}
+// expected-remark @below {{offset = 32, size = 1}}
 tt.func @implicit_capture_liveness_default() {
   // expected-remark @below {{offset = 0, size = 16}}
   %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
@@ -786,7 +794,8 @@ tt.func @implicit_capture_liveness_default() {
 }
 
 // expected-remark @below {{liveness_in_partition}}
-// expected-remark @below {{size = 32}}
+// expected-remark @below {{size = 36}}
+// expected-remark @below {{offset = 32, size = 4}}
 tt.func @liveness_in_partition() {
   ttg.warp_specialize()
   default {
@@ -804,7 +813,8 @@ tt.func @liveness_in_partition() {
 }
 
 // expected-remark @below {{aliasing_in_partition}}
-// expected-remark @below {{size = 32}}
+// expected-remark @below {{size = 36}}
+// expected-remark @below {{offset = 32, size = 4}}
 tt.func @aliasing_in_partition() {
   ttg.warp_specialize()
   default {
@@ -824,7 +834,8 @@ tt.func @aliasing_in_partition() {
 }
 
 // expected-remark @below {{partition_region_interference}}
-// expected-remark @below {{size = 80}}
+// expected-remark @below {{size = 88}}
+// expected-remark @below {{offset = 80, size = 8}}
 tt.func @partition_region_interference() {
   // expected-remark @below {{offset = 0, size = 16}}
   %0 = ttg.local_alloc : () -> !ttg.memdesc<2xi64, #A_SHARED, #smem, mutable>
@@ -854,7 +865,8 @@ tt.func @partition_region_interference() {
 }
 
 // expected-remark @below {{two_different_ws}}
-// expected-remark @below {{size = 16}}
+// expected-remark @below {{size = 17}}
+// expected-remark @below {{offset = 16, size = 1}}
 tt.func @two_different_ws() {
   ttg.warp_specialize()
   default {

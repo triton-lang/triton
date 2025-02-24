@@ -299,7 +299,7 @@ private:
       func.walk([&](gpu::WarpSpecializeOp op) {
         numWarpIndices = std::max(numWarpIndices, op.getTotalPartitionWarps());
       });
-      maybeAddScratchBuffer<BufferT::BufferKind::Virtual>(op, numWarpIndices);
+      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, numWarpIndices);
       return;
     }
     unsigned bytes = scratchSizeGetter(op);

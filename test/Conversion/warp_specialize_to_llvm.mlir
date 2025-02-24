@@ -506,3 +506,64 @@ llvm.func @multiple_specialize() attributes {allocation.offset = 32 : i32} {
 }
 
 }
+
+// -----
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 8 : i32} {
+
+llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
+
+// CHECK-LABEL: @cfg
+llvm.func @cfg() attributes {allocation.offset = 32 : i32} {
+  // CHECK: [[SWITCH_LOOP:\^bb1]]:
+  // CHECK: llvm.switch
+  // CHECK-NEXT: 0: [[PARTITION:\^.*]]
+
+  // CHECK: [[PARTITION]]:
+  // CHECK: barrier.sync 1 ;
+  // CHECK-NEXT: "something"()[[[A:\^.*]], [[B:\^.*]]]
+  // CHECK: [[A]]:
+  // CHECK-NEXT: "A"
+  // CHECK-NEXT: barrier.sync 1 ;
+  // CHECK-NEXT: llvm.br [[SWITCH_LOOP]]
+  // CHECK: [[B]]:
+  // CHECK-NEXT: "B"
+  // CHECK-NEXT: barrier.sync 1 ;
+  // CHECK-NEXT: llvm.br [[SWITCH_LOOP]]
+
+  // CHECK: barrier.sync 1 ;
+  // CHECK-NEXT: barrier.sync 1 ;
+  // CHECK: llvm.br [[DEFAULT:\^.*]]
+  // CHECK: [[DEFAULT]]:
+  // CHECK-NEXT: "something"()[[[A:\^.*]], [[B:\^.*]]]
+  // CHECK: [[A]]:
+  // CHECK-NEXT: "A"
+  // CHECK-NEXT: barrier.sync 1 ;
+  // CHECK-NEXT: llvm.br [[AFTER:\^.*]]
+  // CHECK: [[B]]:
+  // CHECK-NEXT: "B"
+  // CHECK-NEXT: barrier.sync 1 ;
+  // CHECK-NEXT: llvm.br [[AFTER]]
+  ttg.warp_specialize() attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32: 4>}
+  default {
+    "something"()[^A, ^B] : () -> ()
+  ^A:
+   "A"() : () -> ()
+    ttg.warp_yield
+  ^B:
+   "B"() : () -> ()
+    ttg.warp_yield
+  }
+  partition0() num_warps(4) {
+    "something"()[^A, ^B] : () -> ()
+  ^A:
+   "A"() : () -> ()
+    ttg.warp_return
+  ^B:
+   "B"() : () -> ()
+    ttg.warp_return
+  } : () -> ()
+  llvm.return
+}
+
+}

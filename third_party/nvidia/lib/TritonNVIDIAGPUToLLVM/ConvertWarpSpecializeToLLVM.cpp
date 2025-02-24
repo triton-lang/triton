@@ -31,7 +31,7 @@ enum BarrierIndex {
   kNumBarriers = 16
 };
 
-static void createBarrier(TritonLLVMOpBuilder2 &b, unsigned barIdx = 0,
+static void createBarrier(TritonLLVMOpBuilder2 &b, unsigned barIdx,
                           std::optional<unsigned> numThreads, bool aligned) {
   assert(barIdx < 16 && "not enough barriers");
 
@@ -88,7 +88,7 @@ static LogicalResult rewriteWarpGroupBarriers(LLVM::LLVMFuncOp func,
 
     if (auto bar = dyn_cast<NVVM::Barrier0Op>(op)) {
       TritonLLVMOpBuilder2 b(bar.getLoc(), bar);
-      createBarrier(b, 0, defaultWarpGroupSize, /*aligned=*/true);
+      createBarrier(b, /*barIdx=*/0, defaultWarpGroupSize, /*aligned=*/true);
       bar.erase();
       return WalkResult::advance();
     }
@@ -129,7 +129,9 @@ static void rewritePartitionRegions(WarpSpecializeOp ws, Block *switchLoop,
     b.setInsertionPointToStart(&partition->front());
     Value capturePtr = LLVM::getSharedMemoryBase(b.getLoc(), b, targetInfo, ws);
     LLVM::LLVMPointerType ptrTy = ptr_ty(b.getContext(), 3);
-    for (auto [i, arg] : llvm::enumerate(partition->getArguments())) {
+    for (auto [i, arg] :
+         llvm::zip(llvm::seq<int32_t>(partition->getNumArguments()),
+                   partition->getArguments())) {
       Value ptr =
           b.gep(ptrTy, captureType, capturePtr, ArrayRef<LLVM::GEPArg>{0, i});
       Value value = b.load(arg.getType(), ptr);
@@ -293,7 +295,8 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
     auto captureType = LLVM::LLVMStructType::getLiteral(
         b.getContext(), llvm::to_vector(ws.getOperandTypes()));
     Value capturePtr = LLVM::getSharedMemoryBase(b.getLoc(), b, targetInfo, ws);
-    for (auto [i, arg] : llvm::enumerate(ws.getOperands())) {
+    for (auto [i, arg] :
+         llvm::zip(llvm::seq<int32_t>(ws.getNumOperands()), ws.getOperands())) {
       Value ptr =
           b.gep(ptrTy, captureType, capturePtr, ArrayRef<LLVM::GEPArg>{0, i});
       b.store(arg, ptr);
