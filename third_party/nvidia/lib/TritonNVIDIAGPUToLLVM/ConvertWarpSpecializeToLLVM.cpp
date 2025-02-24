@@ -32,8 +32,7 @@ enum BarrierIndex {
 };
 
 static void createBarrier(TritonLLVMOpBuilder2 &b, unsigned barIdx = 0,
-                          std::optional<unsigned> numThreads = std::nullopt,
-                          bool aligned = true) {
+                          std::optional<unsigned> numThreads, bool aligned) {
   assert(barIdx < 16 && "not enough barriers");
 
   PTXBuilder ptxBuilder;
@@ -64,11 +63,11 @@ collectWarpSpecializeOps(LLVM::LLVMFuncOp func,
   // Function calls inside `ttg.warp_specialize` ops are not supported.
   for (WarpSpecializeOp op : wsOps) {
     auto check = [&](LLVM::CallOp op) -> WalkResult {
-      return mlir::emitError(op.getLoc(),
-                             "TODO: function calls inside warp specialize "
-                             "partitions are not supported");
+      return mlir::emitError(
+          op.getLoc(),
+          "TODO: function calls inside warp specialize are not supported");
     };
-    if (op.getPartitionOpHolder().walk(check).wasInterrupted())
+    if (op.walk(check).wasInterrupted())
       return failure();
   }
 
@@ -89,7 +88,7 @@ static LogicalResult rewriteWarpGroupBarriers(LLVM::LLVMFuncOp func,
 
     if (auto bar = dyn_cast<NVVM::Barrier0Op>(op)) {
       TritonLLVMOpBuilder2 b(bar.getLoc(), bar);
-      createBarrier(b, 0, defaultWarpGroupSize);
+      createBarrier(b, 0, defaultWarpGroupSize, /*aligned=*/true);
       bar.erase();
       return WalkResult::advance();
     }
@@ -109,7 +108,7 @@ static LogicalResult rewriteWarpGroupBarriers(LLVM::LLVMFuncOp func,
       unsigned warpGroupSize = threadsPerWarp * op.getPartitionNumWarps()[idx];
       partition->walk([&](NVVM::Barrier0Op bar) {
         TritonLLVMOpBuilder2 b(bar.getLoc(), bar);
-        createBarrier(b, barIdx, warpGroupSize);
+        createBarrier(b, barIdx, warpGroupSize, /*aligned=*/true);
         bar.erase();
       });
     }
@@ -225,13 +224,6 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
   Value warpStatePtr = b.gep(ptrTy, i8_ty, statePtr, relWid);
   Value warpState = b.load(i8_ty, warpStatePtr);
 
-  SmallVector<int32_t> numWarpsPerWs;
-  int32_t maxNumWarps = 0;
-  for (WarpSpecializeOp ws : wsOps) {
-    numWarpsPerWs.push_back(ws.getTotalPartitionWarps());
-    maxNumWarps = std::max(maxNumWarps, numWarpsPerWs.back());
-  }
-
   // Pull the partition regions out. Switch based on the state ID to the right
   // partition.
   SmallVector<Block *> partitionBlocks;
@@ -240,10 +232,10 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
   // This represents the data that the default warp group will fill into the
   // state pointer before entering each `warp_specialize` region, which maps
   // a warp ID to a state ID in the switch.
+  int32_t maxNumWarps = totalNumWarpsAttr.getInt() - defaultNumWarps;
   SmallVector<SmallVector<int32_t>> warpToState(
       wsOps.size(), SmallVector<int32_t>(maxNumWarps, -1));
-  for (auto [op, numWarps, stateMap] :
-       llvm::zip(wsOps, numWarpsPerWs, warpToState)) {
+  for (auto [op, stateMap] : llvm::zip(wsOps, warpToState)) {
     rewritePartitionRegions(op, switchLoop, targetInfo);
     for (auto [partition, partitionNumWarps, startId] :
          llvm::zip(op.getPartitionRegions(), op.getPartitionNumWarps(),
@@ -317,6 +309,8 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
 
     ws.getDefaultRegion().walk([&](WarpYieldOp op) {
       b.setInsertionPoint(op);
+      createBarrier(b, kSwitchLoopBarrierIdx, /*numThreads=*/std::nullopt,
+                    /*aligned=*/false);
       b.replaceOpWithNewOp<LLVM::BrOp>(op, after);
     });
     after->getParent()->getBlocks().splice(after->getIterator(),
