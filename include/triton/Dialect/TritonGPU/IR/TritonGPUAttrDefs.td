@@ -1267,8 +1267,7 @@ def SliceEncodingAttr : DistributedEncoding<"SliceEncoding", "slice_encoding"> {
   let parameters = (
     ins
     "unsigned":$dim,
-    // TODO: constraint here to only take distributed encodings
-    "Attribute":$parent
+    "DistributedEncodingTrait":$parent
   );
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
