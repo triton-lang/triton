@@ -19,7 +19,6 @@ def min_dot_size(target: GPUTarget):
     return lambda lhsType, rhsType: (1, 1, 1)
 
 
-# Disable caching when testing.
 @functools.lru_cache()
 def use_buffer_ops():
     return os.environ.get("AMDGCN_USE_BUFFER_OPS", "0") == "1"
