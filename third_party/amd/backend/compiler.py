@@ -27,6 +27,7 @@ class HIPOptions:
     cluster_dims: tuple = (1, 1, 1)
     debug: bool = False
     sanitize_overflow: bool = True
+    sanitize_nan: bool = True
     arch: str = None
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", )
     deprecated_fp8_dtypes: Tuple[str] = ()
