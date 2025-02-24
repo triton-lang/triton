@@ -14,8 +14,6 @@
 #include "triton/Dialect/Triton/IR/AttrInterfaces.cpp.inc"
 #include "triton/Dialect/Triton/IR/Dialect.cpp.inc"
 #include "triton/Dialect/Triton/IR/OpInterfaces.cpp.inc"
-#define GET_ATTRDEF_CLASSES
-#include "triton/Dialect/Triton/IR/TritonAttrDefs.cpp.inc"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -91,11 +89,6 @@ void TritonDialect::initialize() {
 
   // We can also add interface here.
   addInterfaces<TritonInlinerInterface>();
-
-  addAttributes<
-#define GET_ATTRDEF_LIST
-#include "triton/Dialect/Triton/IR/TritonAttrDefs.cpp.inc"
-      >();
 }
 
 Operation *TritonDialect::materializeConstant(OpBuilder &builder,

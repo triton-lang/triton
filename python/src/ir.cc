@@ -1421,12 +1421,8 @@ void init_triton_ir(py::module &&m) {
               EvictionPolicy evictionPolicy) -> Value {
              auto descTy = cast<triton::TensorDescType>(desc.getType());
              auto resTy = descTy.getBlockType();
-             auto ctx = self.getContext();
-             auto descLoadAttr =
-                 mlir::triton::DescriptorLoadAttr::get(ctx, false, false);
              return self.create<ExperimentalDescriptorLoadOp>(
-                 resTy, desc, indices, descLoadAttr, cacheModifier,
-                 evictionPolicy);
+                 resTy, desc, indices, cacheModifier, evictionPolicy);
            })
       .def("create_descriptor_gather",
            [](TritonOpBuilder &self, Value desc, Value x_indices, Value y_index,

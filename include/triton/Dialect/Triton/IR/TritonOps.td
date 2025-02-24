@@ -1007,8 +1007,7 @@ def TT_MakeTensorDescOp : TT_Op<"make_tensor_descriptor", [
   let arguments = (ins
     TT_Ptr:$base,
     Variadic<I32>:$shape,
-    Variadic<I64>:$strides,
-    OptionalAttr<TT_MakeDescriptorAttr>:$descAttr
+    Variadic<I64>:$strides
   );
 
   let results = (outs TT_TensorDescType:$result);
@@ -1269,7 +1268,6 @@ def TT_ExperimentalDescriptorLoadOp : TT_Op<"experimental_descriptor_load", [Mem
   let arguments = (ins
     TT_TensorDescType:$desc,
     Variadic<I32>:$indices,
-    TT_DescriptorLoadAttr:$descAttr,
     DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
     DefaultValuedAttr<TT_EvictionPolicyAttr, "::mlir::triton::EvictionPolicy::NORMAL">:$evict
   );

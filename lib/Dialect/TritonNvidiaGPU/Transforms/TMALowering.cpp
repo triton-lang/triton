@@ -25,7 +25,7 @@ using namespace triton::nvidia_gpu;
 static void
 lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
              function_ref<void(Value, Value, Value, Value)> createLoad,
-             PatternRewriter &rewriter, bool fp4Padded) {
+             PatternRewriter &rewriter) {
   MLIRContext *ctx = op->getContext();
   Attribute sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
   auto loc = op->getLoc();
@@ -36,7 +36,7 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
   if (tensorType.getRank() > 1) {
     encoding = NVMMASharedEncodingAttr::get(
         tensorType.getContext(), tensorType.getShape(), order, ctaLayout,
-        tensorType.getElementType(), fp4Padded);
+        tensorType.getElementType(), /*fp4Padded*/ false);
   }
   MemDescType memDescType =
       MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
@@ -75,11 +75,9 @@ public:
     auto createLoad = [&](Value tmaPtr, Value barrierAlloc, Value alloc,
                           Value pred) {
       rewriter.create<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp>(
-          op.getLoc(), tmaPtr, op.getIndices(), barrierAlloc, alloc, pred,
-          op.getDescAttr());
+          op.getLoc(), tmaPtr, op.getIndices(), barrierAlloc, alloc, pred);
     };
-    lowerTMALoad(op, op.getType(), op.getDesc(), createLoad, rewriter,
-                 op.getDescAttr().getFp4Padded());
+    lowerTMALoad(op, op.getType(), op.getDesc(), createLoad, rewriter);
     return success();
   }
 };
@@ -96,7 +94,7 @@ struct TMAGatherLowering
           op.getLoc(), tmaPtr, op.getXOffsets(), op.getYOffset(), barrierAlloc,
           alloc, pred);
     };
-    lowerTMALoad(op, op.getType(), op.getDesc(), createLoad, rewriter, false);
+    lowerTMALoad(op, op.getType(), op.getDesc(), createLoad, rewriter);
     return success();
   }
 };

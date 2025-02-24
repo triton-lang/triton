@@ -2,7 +2,6 @@
 #define TRITON_ATTR_DEFS
 
 include "mlir/IR/EnumAttr.td"
-include "triton/Dialect/Triton/IR/TritonDialect.td"
 
 // Attributes for LoadOp and StoreOp
 def TT_CacheModifierAttr : I32EnumAttr<
@@ -133,47 +132,6 @@ def TT_ScaleDotElemTypeAttr : I32EnumAttr<
       I32EnumAttrCase<"FP16", 6, "fp16">
     ]>{
   let cppNamespace = "::mlir::triton";
-}
-
-def TT_MakeDescriptorAttr : AttrDef<Triton_Dialect, "MakeDescriptor"> {
-  let attrName = "triton.gpu.make_descriptor_attr";
-  let mnemonic = "make_descriptor_attr";
-  let cppNamespace = "::mlir::triton";
-
-  let description = [{
-    Additional attributes for MakeTensorDescOp.
-  }];
-
-  // fp4Padded: Indicates that this encoding represents a mixed-precision fp4 operand in MMAv5 scaled dot, which needs
-  // to be in the special padded layout as described in https://docs.nvidia.com/cuda/parallel-thread-execution/#packing-format-used-for-matrix-a-and-b-by-kind-mxf8f6f4-in-shared-memory
-  let parameters = (
-    ins
-    "bool":$fp4Padded,
-    "unsigned":$swizzlingByteWidth
-  );
-
-  let assemblyFormat = "`<` struct(params) `>`";
-}
-
-def TT_DescriptorLoadAttr : AttrDef<Triton_Dialect, "DescriptorLoad"> {
-  let attrName = "triton.gpu.descriptor_load_attr";
-  let mnemonic = "descriptor_load_attr";
-  let cppNamespace = "::mlir::triton";
-
-  let description = [{
-    Additional attributes for ExperimentalDescriptorLoadOp.
-  }];
-
-  // fp4Padded: Indicates that this encoding represents a mixed-precision fp4 operand in MMAv5 scaled dot, which needs
-  // to be in the special padded layout as described in https://docs.nvidia.com/cuda/parallel-thread-execution/#packing-format-used-for-matrix-a-and-b-by-kind-mxf8f6f4-in-shared-memory
-  // twoCTAs: Indicates that the result of the load is consumed by an MMAv5 op with the 2CTA mode.
-  let parameters = (
-    ins
-    "bool":$fp4Padded,
-    "bool":$twoCTAs
-  );
-
-  let assemblyFormat = "`<` struct(params) `>`";
 }
 
 #endif

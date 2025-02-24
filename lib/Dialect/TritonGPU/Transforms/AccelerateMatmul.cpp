@@ -187,11 +187,6 @@ getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter, int opIdx,
   return rewriter.create<LocalAllocOp>(arg.getLoc(), newType, arg);
 }
 
-static unsigned getSwizzleBytes(LocalAllocOp alloc) {
-  auto enc = cast<NVMMASharedEncodingAttr>(alloc.getType().getEncoding());
-  return enc.getSwizzlingByteWidth();
-}
-
 static LocalAllocOp
 getSharedMemoryScale(Value arg, mlir::PatternRewriter &rewriter, Location loc) {
   OpBuilder::InsertionGuard g(rewriter);
@@ -480,31 +475,6 @@ static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter) {
   return newB;
 }
 
-struct DescriptorLoadAttr {
-  bool fp4Padded;
-  bool twoCTA;
-  unsigned swizzleBytes;
-};
-
-void propageteDescriptorLoadAttributes(Value operand,
-                                       const DescriptorLoadAttr &attrs) {
-  SetVector<Operation *> backwardSlice;
-  BackwardSliceOptions opt;
-  getBackwardSlice(operand, &backwardSlice, opt);
-
-  for (auto op : backwardSlice) {
-    if (auto descLoad = dyn_cast<ExperimentalDescriptorLoadOp>(op)) {
-      auto newDescLoadAttr = mlir::triton::DescriptorLoadAttr::get(
-          op->getContext(), attrs.fp4Padded, attrs.twoCTA);
-      descLoad.setDescAttrAttr(newDescLoadAttr);
-    } else if (auto makeDesc = dyn_cast<MakeTensorDescOp>(op)) {
-      auto newMakeDescAttr = mlir::triton::MakeDescriptorAttr::get(
-          op->getContext(), attrs.fp4Padded, attrs.swizzleBytes);
-      makeDesc.setDescAttrAttr(newMakeDescAttr);
-    }
-  }
-}
-
 class BlockedToMMAv5 : public mlir::OpRewritePattern<DotOp> {
   int computeCapability;
 
@@ -578,14 +548,6 @@ public:
     auto ld =
         rewriter.create<triton::nvidia_gpu::TMEMLoadOp>(loc, newAccType, acc);
     rewriter.replaceOpWithNewOp<ConvertLayoutOp>(dotOp, oldRetType, ld);
-
-    propageteDescriptorLoadAttributes(
-        a, {/*fp4Padded*/ false, useTwoCTAs,
-            getSwizzleBytes(a.getDefiningOp<LocalAllocOp>())});
-    propageteDescriptorLoadAttributes(
-        b, {/*fp4Padded*/ false, useTwoCTAs,
-            getSwizzleBytes(b.getDefiningOp<LocalAllocOp>())});
-
     return success();
   }
 };
@@ -774,15 +736,6 @@ public:
     auto ld =
         rewriter.create<triton::nvidia_gpu::TMEMLoadOp>(loc, newAccType, acc);
     rewriter.replaceOpWithNewOp<ConvertLayoutOp>(dotOp, oldRetType, ld);
-
-    // TODO: Support 2CTA scaled dot
-    propageteDescriptorLoadAttributes(
-        a, {IsAMixedPrecFp4, /*twoCTA*/ false,
-            getSwizzleBytes(a.getDefiningOp<LocalAllocOp>())});
-    propageteDescriptorLoadAttributes(
-        b, {IsBMixedPrecFp4, /*twoCTA*/ false,
-            getSwizzleBytes(b.getDefiningOp<LocalAllocOp>())});
-
     return success();
   }
 };
