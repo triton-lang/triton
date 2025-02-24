@@ -5,6 +5,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 
 using mlir::triton::ModuleAxisInfoAnalysis;
 using mlir::triton::AMD::DppCtrl;
@@ -536,12 +537,14 @@ unsigned getContiguity(Value ptr, Value offset,
   Type type = getPointerTypeWithShape(ptr, offset);
   RankedTensorType tensorTy = cast<RankedTensorType>(type);
   auto layout = tensorTy.getEncoding();
-  auto order = triton::gpu::getOrder(layout);
-  auto uniqueContigPerThread =
-      triton::gpu::getUniqueContigPerThread(layout, tensorTy.getShape());
-  assert(order[0] < uniqueContigPerThread.size() &&
-         "Unexpected uniqueContigPerThread size");
-  unsigned contiguity = uniqueContigPerThread[order[0]];
+  auto linearLayout = triton::gpu::toLinearLayout(tensorTy.getShape(), layout);
+  auto llAttr =
+      triton::gpu::LinearEncodingAttr::get(tensorTy.getContext(), linearLayout);
+  auto order = llAttr.getOrder();
+  auto contigPerThread = llAttr.getContigPerThread();
+  assert(order[0] < contigPerThread.size() &&
+         "Unexpected contigPerThread size");
+  unsigned contiguity = contigPerThread[order[0]];
 
   // Get alignment from the pointer. Since this is a scalar pointer
   // we should not take the pointer contiguity to consider alignment

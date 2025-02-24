@@ -729,7 +729,6 @@ bool matchMFMAAndDotOperandShuffleCase(RankedTensorType srcTy,
   return dotOperandLayout.getParent() == mfmaLayout &&
          dotOperandLayout.getOpIdx() == 0 && mfmaLayout.getIsTransposed() &&
          dotOperandLayout.getKWidth() == 8 &&
-         getContigPerThread(mfmaLayout)[1] == 4 &&
          ((mfmaLayout.getMDim() == 16 && mfmaLayout.getNDim() == 16) ||
           (mfmaLayout.getMDim() == 32 && mfmaLayout.getNDim() == 32)) &&
          triton::type::isFloat8(srcTy.getElementType()) &&
