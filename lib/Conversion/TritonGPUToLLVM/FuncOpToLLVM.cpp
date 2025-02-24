@@ -71,6 +71,8 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       amendedInputTy.push_back(sharedPtrTy);
     }
     amendedInputTy.push_back(globalPtrTy);
+    //TODO: figure out if there is a way to move this into the Proton
+    //GlobalScratchAllocOpToLLVM conversion pass
     amendedInputTy.push_back(globalPtrTy); //Proton Buffer
     auto amendedFuncTy =
         FunctionType::get(ctx, amendedInputTy, funcTy.getResults());
@@ -96,6 +98,8 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       region.addArgument(sharedPtrTy, loc);
     }
     region.addArgument(globalPtrTy, loc);
+    //TODO: figure out if there is a way to move this into the Proton
+    //GlobalScratchAllocOpToLLVM conversion pass    
     region.addArgument(globalPtrTy, loc);//Proton Buffer
     rewriter.inlineRegionBefore(region, amendedFuncOp.getBody(),
                                 amendedFuncOp.end());

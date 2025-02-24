@@ -102,8 +102,10 @@ private:
 
     promotedOperands.push_back(
         LLVM::getGlobalScratchPtr(loc, rewriter, caller, opOffsetVal));
+    //TODO: figure out if there is a way to move this into the Proton
+    //GlobalScratchAllocOpToLLVM conversion pass    
     promotedOperands.push_back(
-        LLVM::getGlobalScratchPtr(loc, rewriter, caller, opOffsetVal)); //Proton buffer
+        LLVM::getGlobalScratchPtr(loc, rewriter, caller, b.i32_val(0))); //Proton buffer
     return promotedOperands;
   }
 
