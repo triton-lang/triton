@@ -96,7 +96,7 @@ warpsPerTile(Operation *dotOp, ArrayRef<int64_t> shape, int numWarps,
 
   // Case 2: For FA-like pattern, i.e. result of 1st tl.dot is used as the opA
   // of the 2nd dot, we will set warpsPerCTA differently for 1st and 2nd dot
-  auto ttDotOp = dyn_cast<tt::DotOpInterface>(dotOp);
+  auto ttDotOp = cast<tt::DotOpInterface>(dotOp);
   bool isHeadDot = isChainDotHead(ttDotOp);
   bool isTailDot = isChainDotTail(ttDotOp);
   // For the 1st dot in chain-dot, we always set warpsPerCTA={numWarps, 1}
@@ -117,9 +117,9 @@ warpsPerTile(Operation *dotOp, ArrayRef<int64_t> shape, int numWarps,
   //    kernels.
   if (isTailDot) {
     SmallVector<unsigned, 3> ret = {1, 1};
-    ret[0] = static_cast<unsigned>(
-        std::min(static_cast<int64_t>(numWarps),
-                 (shape[0] + shapePerWarp.first - 1) / shapePerWarp.first));
+    ret[0] = static_cast<unsigned>(std::min(
+        static_cast<int64_t>(numWarps),
+        static_cast<int64_t>(llvm::divideCeil(shape[0], shapePerWarp.first))));
     ret[1] = numWarps / ret[0];
     return ret;
   }
