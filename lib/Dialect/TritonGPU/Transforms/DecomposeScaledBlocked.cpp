@@ -3,7 +3,6 @@
 #include "mlir/IR/Types.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Support/LogicalResult.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -32,8 +31,8 @@ public:
   LogicalResult matchAndRewrite(DotScaledOp scaledDotOp,
                                 PatternRewriter &rewriter) const override {
     // Types
-    auto computeType = getComputeType(scaledDotOp.getLhsType(),
-                                      scaledDotOp.getRhsType(), rewriter);
+    auto computeType = getComputeType(scaledDotOp.getAElemType(),
+                                      scaledDotOp.getBElemType(), rewriter);
     auto loc = scaledDotOp.getLoc();
 
     auto cvtDotOperand = [&](TypedValue<RankedTensorType> v,
@@ -185,12 +184,11 @@ private:
   TypedValue<RankedTensorType> scaleArg(PatternRewriter &rewriter,
                                         DotScaledOp scaledDotOp, int opIdx,
                                         FloatType computeType) const {
-    auto v = opIdx == 0 ? scaledDotOp.getLhs() : scaledDotOp.getRhs();
-    auto scale =
-        opIdx == 0 ? scaledDotOp.getLhsScale() : scaledDotOp.getRhsScale();
+    auto v = opIdx == 0 ? scaledDotOp.getA() : scaledDotOp.getB();
+    auto scale = opIdx == 0 ? scaledDotOp.getAScale() : scaledDotOp.getBScale();
     auto isFp4 =
-        (opIdx == 0 ? scaledDotOp.getLhsType() : scaledDotOp.getRhsType()) ==
-        ScaleDotElemType::E2M1;
+        ScaleDotElemType::E2M1 ==
+        (opIdx == 0 ? scaledDotOp.getAElemType() : scaledDotOp.getBElemType());
     auto fastMath = scaledDotOp.getFastMath();
 
     auto *ctx = rewriter.getContext();
