@@ -1,14 +1,13 @@
 from __future__ import annotations  # remove after python 3.11
-
-import numbers
 import warnings
 
 from typing import List, Optional, Sequence, Tuple, TypeVar
+import numbers
 
 from .._C.libtriton import ir
 from . import core as tl
 
-T = TypeVar("T")
+T = TypeVar('T')
 
 
 class IncompatibleTypeErrorImpl(Exception):
@@ -16,7 +15,7 @@ class IncompatibleTypeErrorImpl(Exception):
     def __init__(self, type_a, type_b):
         self.type_a = type_a
         self.type_b = type_b
-        self.message = ("invalid operands of type " + self.type_a.__repr__() + " and " + self.type_b.__repr__())
+        self.message = "invalid operands of type " + self.type_a.__repr__() + " and " + self.type_b.__repr__()
         super(IncompatibleTypeErrorImpl, self).__init__(self.message)
 
 
@@ -58,13 +57,8 @@ def integer_promote_impl(a_ty: tl.dtype, b_ty: tl.dtype) -> tl.dtype:
     raise TypeError(f"unexpected signedness {a_sn} and {b_sn}")
 
 
-def computation_type_impl(
-    a_ty: tl.dtype,
-    a_is_scalar: bool,
-    b_ty: tl.dtype,
-    b_is_scalar: bool,
-    div_or_mod: bool,
-) -> tl.dtype:
+def computation_type_impl(a_ty: tl.dtype, a_is_scalar: bool, b_ty: tl.dtype, b_is_scalar: bool,
+                          div_or_mod: bool) -> tl.dtype:
     # 0) For scalars we follow semantics similar to PyTorch, namely:
     # - If the scalar is of a lower or equal kind (bool < uint < int < fp),
     #   it doesn't participate in the promotion
@@ -119,22 +113,25 @@ def to_tensor(x, builder, check_type: bool = True):
         return tl.tensor(builder.get_int1(x), tl.int1)
     # Note: compile-time const integers are represented by unsigned values
     elif isinstance(x, int):
-        if -(2**31) <= x < 2**31:
+        if -2**31 <= x < 2**31:
             dtype = tl.int32
         elif 2**31 <= x < 2**32:
             dtype = tl.uint32
-        elif -(2**63) <= x < 2**63:
+        elif -2**63 <= x < 2**63:
             dtype = tl.int64
         elif 2**63 <= x < 2**64:
             dtype = tl.uint64
         else:
-            raise ValueError(f"Nonrepresentable integer {x}.")
+            raise ValueError(f'Nonrepresentable integer {x}.')
         return full((), x, dtype=dtype, builder=builder)
     elif isinstance(x, float):
         min_float32 = 2**-126
         max_float32 = (2 - 2**-23) * 2**127
-        abs_x = __builtins__["abs"](x)
-        if (abs_x == float("inf") or abs_x == 0.0 or x != x or min_float32 <= abs_x <= max_float32):
+        abs_x = __builtins__['abs'](x)
+        if abs_x == float("inf") or\
+           abs_x == 0.0 or \
+           x != x or \
+           min_float32 <= abs_x <= max_float32:
             dtype = tl.float32
         else:
             dtype = tl.float64
@@ -166,15 +163,9 @@ def check_ptr_type_impl(type_a: tl.dtype, type_b: tl.dtype, allow_ptr_a: bool) -
             raise IncompatibleTypeErrorImpl(type_a, type_b)
 
 
-def binary_op_type_checking_impl(
-    lhs: tl.tensor | numbers.Number,
-    rhs: tl.tensor | numbers.Number,
-    builder: ir.builder,
-    allow_lhs_ptr=False,
-    allow_rhs_ptr=False,
-    arithmetic_check=True,
-    div_or_mod=False,
-) -> Tuple[tl.tensor, tl.tensor]:
+def binary_op_type_checking_impl(lhs: tl.tensor | numbers.Number, rhs: tl.tensor | numbers.Number, builder: ir.builder,
+                                 allow_lhs_ptr=False, allow_rhs_ptr=False, arithmetic_check=True,
+                                 div_or_mod=False) -> Tuple[tl.tensor, tl.tensor]:
     lhs_is_scalar = isinstance(lhs, numbers.Number)
     rhs_is_scalar = isinstance(rhs, numbers.Number)
     if lhs_is_scalar:
@@ -200,10 +191,10 @@ def binary_op_type_checking_impl(
                 raise ValueError(f"Scalar {lhs_scalar} is out of range for type {ret_sca_ty}")
             if rhs_is_scalar and not (ret_sca_ty.get_int_min_value() <= rhs_scalar <= ret_sca_ty.get_int_max_value()):
                 raise ValueError(f"Scalar {rhs_scalar} is out of range for type {ret_sca_ty}")
-        lhs = (full(
-            (), lhs_scalar, dtype=ret_sca_ty, builder=builder) if lhs_is_scalar else cast(lhs, ret_sca_ty, builder))
-        rhs = (full(
-            (), rhs_scalar, dtype=ret_sca_ty, builder=builder) if rhs_is_scalar else cast(rhs, ret_sca_ty, builder))
+        lhs = full(
+            (), lhs_scalar, dtype=ret_sca_ty, builder=builder) if lhs_is_scalar else cast(lhs, ret_sca_ty, builder)
+        rhs = full(
+            (), rhs_scalar, dtype=ret_sca_ty, builder=builder) if rhs_is_scalar else cast(rhs, ret_sca_ty, builder)
 
     # implicit broadcasting
     lhs, rhs = broadcast_impl_value(lhs, rhs, builder)
@@ -224,11 +215,7 @@ def binary_op_sanitize_overflow_impl(lhs: tl.tensor, rhs: tl.tensor, builder: ir
     max_value = tl.tensor(builder.get_int64(max_value), tl.int64)
     min_value = lhs_sca_ty.get_int_min_value()
     min_value = tl.tensor(builder.get_int64(min_value), tl.int64)
-    cond = and_(
-        less_equal(ret, max_value, builder),
-        greater_equal(ret, min_value, builder),
-        builder,
-    )
+    cond = and_(less_equal(ret, max_value, builder), greater_equal(ret, min_value, builder), builder)
     msg = f"int{lhs_sca_ty.int_bitwidth} overflow detected for operation {binary_op.__name__}"
     device_assert(cond, msg, builder)
 
@@ -241,18 +228,13 @@ def binary_op_sanitize_nan_impl(lhs: tl.tensor, rhs: tl.tensor, builder: ir.buil
     """
     if not builder.options.sanitize_nan:
         return
-    input_cond = and_(equal(lhs, lhs, builder), equal(rhs, rhs, builder), builder)
+    input_cond = and_(equal(lhs,lhs,builder), equal(rhs,rhs,builder), builder)
     msg = f"nan value detected in input for operation {binary_op.__name__}"
     device_assert(input_cond, msg, builder)
 
 
-def add(
-    input: tl.tensor | numbers.Number,
-    other: tl.tensor | numbers.Number,
-    sanitize_overflow: bool,
-    sanitize_nan: bool,
-    builder: ir.builder,
-) -> tl.tensor:
+def add(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, sanitize_overflow: bool,
+        sanitize_nan: bool, builder: ir.builder) -> tl.tensor:
     input, other = binary_op_type_checking_impl(input, other, builder, True, True)
     input_scalar_ty = input.type.scalar
     other_scalar_ty = other.type.scalar
@@ -290,50 +272,34 @@ def add(
     raise TypeError(f"unexpected type {input_scalar_ty}")
 
 
-def sub(
-    input: tl.tensor | numbers.Number,
-    other: tl.tensor | numbers.Number,
-    sanitize_overflow: bool,
-    sanitize_nan: bool,
-    builder: ir.builder,
-) -> tl.tensor:
+def sub(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, sanitize_overflow: bool,
+        sanitize_nan: bool, builder: ir.builder) -> tl.tensor:
     input, other = binary_op_type_checking_impl(input, other, builder, True, False)
     scalar_ty = input.type.scalar
     # ptr - offset
     if scalar_ty.is_ptr():
-        return tl.tensor(
-            builder.create_addptr(input.handle,
-                                  minus(other, builder).handle),
-            input.type,
-        )
-
-    if sanitize_nan:
-        binary_op_sanitize_nan_impl(input, other, builder, add)
-
+        return tl.tensor(builder.create_addptr(input.handle, minus(other, builder).handle), input.type)
     # float - float
     if scalar_ty.is_floating():
+        if sanitize_nan:
+            binary_op_sanitize_nan_impl(input, other, builder, add)
         return tl.tensor(builder.create_fsub(input.handle, other.handle), input.type)
     # int - int
     elif scalar_ty.is_int():
+        if sanitize_nan:
+            binary_op_sanitize_nan_impl(input, other, builder, add)
         if sanitize_overflow:
             binary_op_sanitize_overflow_impl(input, other, builder, sub)
         return tl.tensor(builder.create_sub(input.handle, other.handle), input.type)
     raise TypeError(f"unexpected type {scalar_ty}")
 
 
-def mul(
-    input: tl.tensor | numbers.Number,
-    other: tl.tensor | numbers.Number,
-    sanitize_overflow: bool,
-    sanitize_nan: bool,
-    builder: ir.builder,
-) -> tl.tensor:
+def mul(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, sanitize_overflow: bool,
+        sanitize_nan: bool, builder: ir.builder) -> tl.tensor:
     input, other = binary_op_type_checking_impl(input, other, builder)
     scalar_ty = input.type.scalar
-
     if sanitize_nan:
-        binary_op_sanitize_nan_impl(input, other, builder, add)
-
+            binary_op_sanitize_nan_impl(input, other, builder, add)
     # float * float
     if scalar_ty.is_floating():
         return tl.tensor(builder.create_fmul(input.handle, other.handle), input.type)
@@ -345,11 +311,7 @@ def mul(
     raise TypeError(f"unexpected type {scalar_ty}")
 
 
-def truediv(
-    input: tl.tensor | numbers.Number,
-    other: tl.tensor | numbers.Number,
-    builder: ir.builder,
-) -> tl.tensor:
+def truediv(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, builder: ir.builder) -> tl.tensor:
     input, other = binary_op_type_checking_impl(input, other, builder, False, False, True, True)
     input_scalar_ty = input.type.scalar
     other_scalar_ty = other.type.scalar
@@ -375,11 +337,7 @@ def truediv(
     return tl.tensor(builder.create_fdiv(input.handle, other.handle), input.type)
 
 
-def floordiv(
-    input: tl.tensor | numbers.Number,
-    other: tl.tensor | numbers.Number,
-    builder: ir.builder,
-) -> tl.tensor:
+def floordiv(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, builder: ir.builder) -> tl.tensor:
     input, other = binary_op_type_checking_impl(input, other, builder, False, False, True, True)
     input_scalar_ty = input.type.scalar
     other_scalar_ty = other.type.scalar
@@ -394,12 +352,8 @@ def floordiv(
     raise TypeError(f"unexpected type {input_scalar_ty}")
 
 
-def fdiv(
-    input: tl.tensor | numbers.Number,
-    other: tl.tensor | numbers.Number,
-    ieee_rounding: bool,
-    builder: ir.builder,
-) -> tl.tensor:
+def fdiv(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, ieee_rounding: bool,
+         builder: ir.builder) -> tl.tensor:
     input_scalar_ty = input.type.scalar
     other_scalar_ty = other.type.scalar
     if not input_scalar_ty.is_floating() or not other_scalar_ty.is_floating():
@@ -409,11 +363,7 @@ def fdiv(
     return tl.tensor(ret, input.type)
 
 
-def mod(
-    input: tl.tensor | numbers.Number,
-    other: tl.tensor | numbers.Number,
-    builder: ir.builder,
-) -> tl.tensor:
+def mod(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, builder: ir.builder) -> tl.tensor:
     input, other = binary_op_type_checking_impl(input, other, builder, False, False, True, True)
     scalar_ty = input.type.scalar
     other_scalar_ty = other.type.scalar
@@ -474,23 +424,14 @@ def maximum(x: tl.tensor, y: tl.tensor, propagate_nan: tl.PropagateNan, builder:
         raise TypeError(f"Unexpected dtype {dtype}")
 
 
-def clamp(
-    x: tl.tensor,
-    min: tl.tensor,
-    max: tl.tensor,
-    propagate_nan: tl.PropagateNan,
-    builder: ir.builder,
-):
+def clamp(x: tl.tensor, min: tl.tensor, max: tl.tensor, propagate_nan: tl.PropagateNan, builder: ir.builder):
     min, max = binary_op_type_checking_impl(min, max, builder)
     x, min = binary_op_type_checking_impl(x, min, builder)
     x, max = binary_op_type_checking_impl(x, max, builder)
 
     dtype = x.dtype
     if dtype.is_floating():
-        return tl.tensor(
-            builder.create_clampf(x.handle, min.handle, max.handle, propagate_nan),
-            x.type,
-        )
+        return tl.tensor(builder.create_clampf(x.handle, min.handle, max.handle, propagate_nan), x.type)
     else:
         raise TypeError(f"Unexpected dtype {dtype}. Only floating point clamp is supported")
 
@@ -793,8 +734,8 @@ def join(a: tl.tensor, b: tl.tensor, builder: ir.builder) -> tl.tensor:
 
 
 def split(a: tl.tensor, builder: ir.builder) -> Tuple[tl.tensor, tl.tensor]:
-    assert len(a.shape) > 0
-    assert tl._constexpr_to_value(a.shape[-1]) == 2
+    assert (len(a.shape) > 0)
+    assert (tl._constexpr_to_value(a.shape[-1]) == 2)
 
     new_shape = a.shape[:-1]
     ret_type = tl.block_type(a.type.scalar, new_shape)
@@ -853,19 +794,15 @@ def broadcast_impl_value(lhs: tl.tensor, rhs: tl.tensor, builder: ir.builder) ->
         if len(lhs_shape) < len(rhs_shape):
             # Add new axes to lhs
             for _ in range(len(lhs_shape), len(rhs_shape)):
-                lhs = tl.tensor(
-                    builder.create_expand_dims(lhs.handle, 0),
-                    tl.block_type(lhs_ty.scalar, [1] + lhs_shape.values),
-                )
+                lhs = tl.tensor(builder.create_expand_dims(lhs.handle, 0),
+                                tl.block_type(lhs_ty.scalar, [1] + lhs_shape.values))
                 lhs_ty = lhs.type
                 lhs_shape = lhs_ty.get_block_shapes()
         elif len(rhs_shape) < len(lhs_shape):
             # Add new axes to rhs
             for _ in range(len(rhs_shape), len(lhs_shape)):
-                rhs = tl.tensor(
-                    builder.create_expand_dims(rhs.handle, 0),
-                    tl.block_type(rhs_ty.scalar, [1] + rhs_shape.values),
-                )
+                rhs = tl.tensor(builder.create_expand_dims(rhs.handle, 0),
+                                tl.block_type(rhs_ty.scalar, [1] + rhs_shape.values))
                 rhs_ty = rhs.type
                 rhs_shape = rhs_ty.get_block_shapes()
         assert len(rhs_shape) == len(lhs_shape)
@@ -898,9 +835,9 @@ def broadcast_impl_value(lhs: tl.tensor, rhs: tl.tensor, builder: ir.builder) ->
 def _str_to_rounding_mode(rounding_mode: Optional[str]):
     if rounding_mode is None:
         return None
-    if rounding_mode == "rtne":
+    if rounding_mode == 'rtne':
         return ir.ROUNDING_MODE.RTNE
-    if rounding_mode == "rtz":
+    if rounding_mode == 'rtz':
         return ir.ROUNDING_MODE.RTZ
     raise ValueError(f"Invalid rounding mode: {rounding_mode}. Supported rounding modes are 'rtne' and 'rtz'.")
 
@@ -924,12 +861,8 @@ def bitcast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder) -> tl.tenso
     return tl.tensor(builder.create_bitcast(input.handle, dst_ty.to_ir(builder)), dst_ty)
 
 
-def cast(
-    input: tl.tensor,
-    dst_ty: tl.dtype,
-    builder: ir.builder,
-    fp_downcast_rounding: Optional[str] = None,
-) -> tl.tensor:
+def cast(input: tl.tensor, dst_ty: tl.dtype, builder: ir.builder,
+         fp_downcast_rounding: Optional[str] = None) -> tl.tensor:
     src_ty = input.type
     if src_ty.is_block():
         dst_ty = tl.block_type(dst_ty.scalar, input.type.get_block_shapes())
@@ -943,39 +876,37 @@ def cast(
     # not be set
     fp_downcast_rounding = _str_to_rounding_mode(fp_downcast_rounding)
     use_custom_rounding = False
-    if (dst_sca_ty.is_floating() and src_sca_ty.is_floating()
-            and dst_sca_ty.primitive_bitwidth < src_sca_ty.primitive_bitwidth):
-        if fp_downcast_rounding is None:
-            fp_downcast_rounding = ir.ROUNDING_MODE.RTNE
-        elif fp_downcast_rounding != ir.ROUNDING_MODE.RTNE:
-            use_custom_rounding = True
+    if dst_sca_ty.is_floating() and src_sca_ty.is_floating(
+    ) and dst_sca_ty.primitive_bitwidth < src_sca_ty.primitive_bitwidth:
+        if fp_downcast_rounding is None: fp_downcast_rounding = ir.ROUNDING_MODE.RTNE
+        elif fp_downcast_rounding != ir.ROUNDING_MODE.RTNE: use_custom_rounding = True
     else:
         if fp_downcast_rounding is not None:
             raise ValueError("fp_downcast_rounding should be set only for truncating fp conversions. "
                              "Source scalar type is " + str(src_sca_ty) + " and destination type is " + str(dst_sca_ty))
 
-    if src_sca_ty.is_fp8e4b15() or dst_sca_ty.is_fp8e4b15():
-        assert (builder.codegen_fns.get("convert_custom_types")
-                is not None), "target doesn't provide conversion for this type."
+    if (src_sca_ty.is_fp8e4b15() or dst_sca_ty.is_fp8e4b15()):
+        assert builder.codegen_fns.get(
+            "convert_custom_types") is not None, "target doesn't provide conversion for this type."
         return builder.codegen_fns["convert_custom_types"](input, dst_ty, fp_downcast_rounding, _builder=builder)
     # Casting with customized floating types involved: fp8 <=> bf16, fp16, fp32, fp64
     # and non-default rounding modes for downcasting
-    if ((src_sca_ty.is_fp8() and dst_sca_ty.is_floating()) or (src_sca_ty.is_floating() and dst_sca_ty.is_fp8())
-            or use_custom_rounding):
-        return tl.tensor(
-            builder.create_fp_to_fp(input.handle, dst_ty.to_ir(builder), fp_downcast_rounding),
-            dst_ty,
-        )
+    if (src_sca_ty.is_fp8() and dst_sca_ty.is_floating()) or \
+       (src_sca_ty.is_floating() and dst_sca_ty.is_fp8()) or \
+       use_custom_rounding:
+        return tl.tensor(builder.create_fp_to_fp(input.handle, dst_ty.to_ir(builder), fp_downcast_rounding), dst_ty)
 
     # bf16 <=> (not fp32)
-    if (src_sca_ty.is_fp16() and not dst_sca_ty.is_fp32()) or (src_sca_ty.is_bf16() and not dst_sca_ty.is_fp32()):
+    if (src_sca_ty.is_fp16() and not dst_sca_ty.is_fp32()) or \
+       (src_sca_ty.is_bf16() and not dst_sca_ty.is_fp32()):
         return cast(cast(input, tl.float32, builder), dst_sca_ty, builder)
 
     # Standard floating types' casting: truncation
     #   fp64 => fp32, fp16, bf16
     #   fp32 => fp16, bf16
-    truncate_fp = (src_sca_ty.is_floating() and dst_sca_ty.is_floating()
-                   and src_sca_ty.primitive_bitwidth > dst_sca_ty.primitive_bitwidth)
+    truncate_fp = src_sca_ty.is_floating() and \
+        dst_sca_ty.is_floating() and \
+        src_sca_ty.primitive_bitwidth > dst_sca_ty.primitive_bitwidth
     if truncate_fp:
         return tl.tensor(builder.create_fp_trunc(input.handle, dst_ty.to_ir(builder)), dst_ty)
 
@@ -983,24 +914,22 @@ def cast(
     #   fp32 => fp64
     #   fp16 => fp32, fp64
     #   bf16 => fp32, fp64
-    ext_fp = (src_sca_ty.is_floating() and dst_sca_ty.is_floating()
-              and src_sca_ty.primitive_bitwidth < dst_sca_ty.primitive_bitwidth)
+    ext_fp = src_sca_ty.is_floating() and \
+        dst_sca_ty.is_floating() and \
+        src_sca_ty.primitive_bitwidth < dst_sca_ty.primitive_bitwidth
     if ext_fp:
         return tl.tensor(builder.create_fp_ext(input.handle, dst_ty.to_ir(builder)), dst_ty)
 
     # Casting between integer types
-    if (src_sca_ty.is_int() and dst_sca_ty.is_int() and
-        (src_sca_ty.int_bitwidth != dst_sca_ty.int_bitwidth or src_sca_ty.int_signedness != dst_sca_ty.int_signedness)):
+    if src_sca_ty.is_int() and dst_sca_ty.is_int() and \
+       (src_sca_ty.int_bitwidth != dst_sca_ty.int_bitwidth or src_sca_ty.int_signedness != dst_sca_ty.int_signedness):
         sign_extend = src_sca_ty.is_int_signed() and not src_sca_ty.is_bool()
         if dst_sca_ty.is_bool():
             ty = input.dtype.to_ir(builder)
             _0 = tl.tensor(builder.get_null_value(ty), input.dtype)
             return not_equal(input, _0, builder)
         else:
-            return tl.tensor(
-                builder.create_int_cast(input.handle, dst_ty.to_ir(builder), sign_extend),
-                dst_ty,
-            )
+            return tl.tensor(builder.create_int_cast(input.handle, dst_ty.to_ir(builder), sign_extend), dst_ty)
 
     # Casting standard floating types to integer types
     if src_sca_ty.is_standard_floating() and dst_sca_ty.is_int():
@@ -1026,11 +955,7 @@ def cast(
         if bitwidth == 64:
             return tl.tensor(builder.create_ptr_to_int(input.handle, dst_ty.to_ir(builder)), dst_ty)
         if bitwidth == 1:
-            return not_equal(
-                cast(input, tl.int64, builder),
-                tl.tensor(builder.get_int64(0), tl.int64),
-                builder,
-            )
+            return not_equal(cast(input, tl.int64, builder), tl.tensor(builder.get_int64(0), tl.int64), builder)
 
     # Casting integer types to pointer types
     if src_sca_ty.is_int() and dst_sca_ty.is_ptr():
@@ -1040,7 +965,7 @@ def cast(
     if src_sca_ty.is_ptr() and dst_sca_ty.is_ptr():
         return tl.tensor(builder.create_bitcast(input.handle, dst_ty.to_ir(builder)), dst_ty)
 
-    assert False, f"cannot cast {input} to {dst_ty}"
+    assert False, f'cannot cast {input} to {dst_ty}'
 
 
 # ===----------------------------------------------------------------------===//
@@ -1164,9 +1089,7 @@ def _load_block_pointer(ptr, mask, other, boundary_check, padding, cache, evicti
 
     # Build IR
     return tl.tensor(
-        builder.create_tensor_pointer_load(ptr.handle, boundary_check, padding, cache, eviction, is_volatile),
-        dst_ty,
-    )
+        builder.create_tensor_pointer_load(ptr.handle, boundary_check, padding, cache, eviction, is_volatile), dst_ty)
 
 
 def _load_legacy(ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile, builder):
@@ -1224,32 +1147,16 @@ def _load_legacy(ptr, mask, other, boundary_check, padding, cache, eviction, is_
         ret = tl.tensor(builder.create_load(ptr.handle, cache, eviction, is_volatile), dst_ty)
     else:
         ret = tl.tensor(
-            builder.create_masked_load(
-                ptr.handle,
-                mask.handle,
-                other.handle if other else None,
-                cache,
-                eviction,
-                is_volatile,
-            ),
-            dst_ty,
-        )
+            builder.create_masked_load(ptr.handle, mask.handle, other.handle if other else None, cache, eviction,
+                                       is_volatile), dst_ty)
     if is_bool:
         ret = cast(ret, tl.int1, builder)
     return ret
 
 
-def load(
-    ptr: tl.tensor,
-    mask: Optional[tl.tensor],
-    other: Optional[tl.tensor],
-    boundary_check: Tuple,
-    padding_option: str,
-    cache_modifier: str,
-    eviction_policy: str,
-    is_volatile: bool,
-    builder: ir.builder,
-) -> tl.tensor:
+def load(ptr: tl.tensor, mask: Optional[tl.tensor], other: Optional[tl.tensor], boundary_check: Tuple,
+         padding_option: str, cache_modifier: str, eviction_policy: str, is_volatile: bool,
+         builder: ir.builder) -> tl.tensor:
     # Cache, eviction and padding options
     cache = _str_to_load_cache_modifier(cache_modifier)
     eviction = _str_to_eviction_policy(eviction_policy)
@@ -1257,30 +1164,10 @@ def load(
 
     if ptr.type.is_ptr() and ptr.type.element_ty.is_block():
         # Load by a block pointer: `pointer_type<block_type<>>`
-        return _load_block_pointer(
-            ptr,
-            mask,
-            other,
-            boundary_check,
-            padding,
-            cache,
-            eviction,
-            is_volatile,
-            builder,
-        )
+        return _load_block_pointer(ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile, builder)
     else:
         # Load by a tensor of pointers or a pointer of scalar: `block_type<pointer_type<>>` or `pointer_type<>`
-        return _load_legacy(
-            ptr,
-            mask,
-            other,
-            boundary_check,
-            padding,
-            cache,
-            eviction,
-            is_volatile,
-            builder,
-        )
+        return _load_legacy(ptr, mask, other, boundary_check, padding, cache, eviction, is_volatile, builder)
 
 
 def reinterpret_tensor_descriptor(desc_ptr: tl.tensor, block_ty: tl.block_type, builder: ir.builder):
@@ -1293,41 +1180,27 @@ def validate_descriptor_block(shape, dtype):
         return
     # Due to limitations of the shared memory encoding, the TMA bounding box has
     # to be at least as big as the swizzle tile.
-    assert (shape[0] >= 8), f"tensor descriptor block shape must have at least 8 rows, but got {shape[0]}"
+    assert shape[0] >= 8, f"tensor descriptor block shape must have at least 8 rows, but got {shape[0]}"
     min_cols = 32 // dtype.primitive_bitwidth * 8
-    assert (
-        shape[1]
-        >= min_cols), f"{dtype} tensor descriptor block shape must have at least {min_cols} columns, but got {shape[1]}"
+    assert shape[
+        1] >= min_cols, f"{dtype} tensor descriptor block shape must have at least {min_cols} columns, but got {shape[1]}"
 
 
-def descriptor_load(
-    desc: tl._experimental_tensor_desciptor_base,
-    offsets,
-    cache_modifier: str,
-    eviction_policy: str,
-    builder: ir.builder,
-) -> tl.tensor:
+def descriptor_load(desc: tl._experimental_tensor_desciptor_base, offsets, cache_modifier: str, eviction_policy: str,
+                    builder: ir.builder) -> tl.tensor:
     assert isinstance(desc, tl._experimental_tensor_descriptor_base)
     validate_descriptor_block(desc.block_shape, desc.dtype)
     ndim = len(desc.block_shape)
     assert len(offsets) == ndim, f"expected {ndim} offsets, but got {len(offsets)}"
 
     offsets = _convert_to_ir_values(builder, offsets, require_i64=False)
-    x = builder.create_descriptor_load(
-        desc.handle,
-        offsets,
-        _str_to_load_cache_modifier(cache_modifier),
-        _str_to_eviction_policy(eviction_policy),
-    )
+    x = builder.create_descriptor_load(desc.handle, offsets, _str_to_load_cache_modifier(cache_modifier),
+                                       _str_to_eviction_policy(eviction_policy))
     return tl.tensor(x, desc.block_type)
 
 
-def descriptor_store(
-    desc: tl._experimental_tensor_descriptor_base,
-    value: tl.tensor,
-    offsets,
-    builder: ir.builder,
-) -> tl.tensor:
+def descriptor_store(desc: tl._experimental_tensor_descriptor_base, value: tl.tensor, offsets,
+                     builder: ir.builder) -> tl.tensor:
     assert isinstance(desc, tl._experimental_tensor_descriptor_base)
     validate_descriptor_block(desc.block_shape, desc.dtype)
     ndim = len(desc.block_shape)
@@ -1338,31 +1211,25 @@ def descriptor_store(
     return tl.tensor(builder.create_descriptor_store(desc.handle, value.handle, offsets), tl.void)
 
 
-def descriptor_gather(
-    desc,
-    x_offsets,
-    y_offset,
-    cache_modifier: str,
-    eviction_policy: str,
-    builder: ir.builder,
-) -> tl.tensor:
+def descriptor_gather(desc, x_offsets, y_offset, cache_modifier: str, eviction_policy: str,
+                      builder: ir.builder) -> tl.tensor:
     assert isinstance(desc, tl._experimental_tensor_descriptor_base)
     assert cache_modifier == "", "cache modifier is not supported yet"
     assert eviction_policy == "", "eviction policy is not supported yet"
 
     # Validate descriptor.
-    assert (len(desc.block_shape) == 2), f"descriptor must be 2D, but got {desc.block_shape}"
-    assert (desc.block_shape[0] == 1), f"descriptor block must have 1 row, but got {desc.block_shape}"
+    assert len(desc.block_shape) == 2, f"descriptor must be 2D, but got {desc.block_shape}"
+    assert desc.block_shape[0] == 1, f"descriptor block must have 1 row, but got {desc.block_shape}"
 
     # Validate offsets.
     assert len(x_offsets.shape) == 1, f"x offsets must be 1D, but got {x_offsets.shape}"
 
     # Validate minimum block size.
-    assert (x_offsets.shape[0] >= 8), f"descriptor gather must have at least 8 rows, but got {x_offsets.shape}"
+    assert x_offsets.shape[0] >= 8, f"descriptor gather must have at least 8 rows, but got {x_offsets.shape}"
     dtype = desc.dtype
     min_cols = 32 // dtype.primitive_bitwidth * 8
-    assert (desc.block_shape[1] >= min_cols
-            ), f"descriptor gather of {dtype} must have at least {min_cols} columns, but got {desc.block_shape[1]}"
+    assert desc.block_shape[
+        1] >= min_cols, f"descriptor gather of {dtype} must have at least {min_cols} columns, but got {desc.block_shape[1]}"
 
     type = tl.block_type(desc.dtype, [x_offsets.shape[0], desc.block_shape[1]])
     y_offset = _convert_to_ir_values(builder, (y_offset, ), require_i64=False)[0]
@@ -1374,18 +1241,18 @@ def descriptor_scatter(desc, value: tl.tensor, x_offsets, y_offset, builder: ir.
     assert isinstance(desc, tl._experimental_tensor_descriptor_base)
 
     # Validate descriptor.
-    assert (len(desc.block_shape) == 2), f"descriptor must be 2D, but got {desc.block_shape}"
-    assert (desc.block_shape[0] == 1), f"descriptor block must have 1 row, but got {desc.block_shape}"
+    assert len(desc.block_shape) == 2, f"descriptor must be 2D, but got {desc.block_shape}"
+    assert desc.block_shape[0] == 1, f"descriptor block must have 1 row, but got {desc.block_shape}"
 
     # Validate offsets.
-    assert (len(x_offsets.shape) == 1), f"x offsets must be 1D, but got {x_offsets.shapae}"
+    assert len(x_offsets.shape) == 1, f"x offsets must be 1D, but got {x_offsets.shapae}"
 
     # Validate minimum block size.
-    assert (x_offsets.shape[0] >= 8), f"descriptor scatter must have at least 8 rows, but got {x_offsets.shape}"
+    assert x_offsets.shape[0] >= 8, f"descriptor scatter must have at least 8 rows, but got {x_offsets.shape}"
     dtype = desc.dtype
     min_cols = 32 // dtype.primitive_bitwidth * 8
-    assert (desc.block_shape[1] >= min_cols
-            ), f"descriptor scatter of {dtype} must have at least {min_cols} columns, but got {desc.block_shape[1]}"
+    assert desc.block_shape[
+        1] >= min_cols, f"descriptor scatter of {dtype} must have at least {min_cols} columns, but got {desc.block_shape[1]}"
 
     y_offset = _convert_to_ir_values(builder, (y_offset, ), require_i64=False)[0]
     builder.create_descriptor_scatter(desc.handle, value.handle, x_offsets.handle, y_offset)
@@ -1438,11 +1305,9 @@ def _store_block_pointer(ptr, val, mask, boundary_check, cache, eviction, builde
     if not val.type.is_block():
         val = broadcast_impl_shape(val, block_shape, builder)
     assert val.type.is_block(), "Value argument must be block type or a scalar"
-    assert (block_shape == val.type.get_block_shapes()
-            ), f"Block shape({block_shape}) and value shape({val.type.get_block_shapes()}) mismatch"
-    assert (
-        ptr.type.element_ty.element_ty == val.type.element_ty
-    ), f"Block element type({ptr.type.element_ty.element_ty}) and value element type({val.type.element_ty}) mismatch"
+    assert block_shape == val.type.get_block_shapes(
+    ), f"Block shape({block_shape}) and value shape({val.type.get_block_shapes()}) mismatch"
+    assert ptr.type.element_ty.element_ty == val.type.element_ty, f"Block element type({ptr.type.element_ty.element_ty}) and value element type({val.type.element_ty}) mismatch"
 
     elt_ty = ptr.type.element_ty.element_ty
     assert elt_ty != tl.int1, "`tl.int1` should be rewritten in `tl.make_block_ptr`"
@@ -1454,10 +1319,8 @@ def _store_block_pointer(ptr, val, mask, boundary_check, cache, eviction, builde
     val = cast(val, elt_ty, builder)
 
     # Build IR
-    return tl.tensor(
-        builder.create_tensor_pointer_store(ptr.handle, val.handle, boundary_check, cache, eviction),
-        tl.void,
-    )
+    return tl.tensor(builder.create_tensor_pointer_store(ptr.handle, val.handle, boundary_check, cache, eviction),
+                     tl.void)
 
 
 def _store_legacy(ptr, val, mask, boundary_check, cache, eviction, builder):
@@ -1501,21 +1364,11 @@ def _store_legacy(ptr, val, mask, boundary_check, cache, eviction, builder):
         return tl.tensor(builder.create_store(ptr.handle, val.handle, cache, eviction), tl.void)
     if not mask.type.scalar.is_bool():
         raise ValueError("Mask must have boolean scalar type")
-    return tl.tensor(
-        builder.create_masked_store(ptr.handle, val.handle, mask.handle, cache, eviction),
-        tl.void,
-    )
+    return tl.tensor(builder.create_masked_store(ptr.handle, val.handle, mask.handle, cache, eviction), tl.void)
 
 
-def store(
-    ptr: tl.tensor,
-    val: tl.tensor,
-    mask: Optional[tl.tensor],
-    boundary_check,
-    cache_modifier: str,
-    eviction_policy: str,
-    builder: ir.builder,
-) -> tl.tensor:
+def store(ptr: tl.tensor, val: tl.tensor, mask: Optional[tl.tensor], boundary_check, cache_modifier: str,
+          eviction_policy: str, builder: ir.builder) -> tl.tensor:
     # Cache and eviction options
     cache = _str_to_store_cache_modifier(cache_modifier)
     eviction = _str_to_eviction_policy(eviction_policy)
@@ -1536,23 +1389,13 @@ def store(
 #########
 
 
-def atomic_cas(
-    ptr: tl.tensor,
-    cmp: tl.tensor,
-    val: tl.tensor,
-    sem: str,
-    scope: str,
-    builder: ir.builder,
-) -> tl.tensor:
+def atomic_cas(ptr: tl.tensor, cmp: tl.tensor, val: tl.tensor, sem: str, scope: str, builder: ir.builder) -> tl.tensor:
     sem = _str_to_sem(sem)
     scope = _str_to_scope(scope)
     element_ty = ptr.type.scalar.element_ty
     if element_ty.primitive_bitwidth not in [16, 32, 64]:
         raise ValueError("atomic_cas only supports elements with width {16, 32, 64}")
-    return tl.tensor(
-        builder.create_atomic_cas(ptr.handle, cmp.handle, val.handle, sem, scope),
-        val.type,
-    )
+    return tl.tensor(builder.create_atomic_cas(ptr.handle, cmp.handle, val.handle, sem, scope), val.type)
 
 
 def atom_red_typechecking_impl(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, op: str,
@@ -1562,7 +1405,7 @@ def atom_red_typechecking_impl(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, 
     if ptr.type.is_const() or ptr.type.element_ty.is_const():
         raise ValueError("Cannot store to a constant pointer")
     element_ty = ptr.type.scalar.element_ty
-    if element_ty is tl.float16 and op != "add":
+    if element_ty is tl.float16 and op != 'add':
         raise ValueError("atomic_" + op + " does not support fp16")
     if element_ty in [tl.int1, tl.int8, tl.int16, tl.bfloat16]:
         raise ValueError("atomic_" + op + " does not support " + str(element_ty))
@@ -1582,15 +1425,8 @@ def atom_red_typechecking_impl(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, 
     return ptr, val, mask
 
 
-def atomic_max(
-    ptr: tl.tensor,
-    val: tl.tensor,
-    mask: tl.tensor,
-    sem: str,
-    scope: str,
-    builder: ir.builder,
-) -> tl.tensor:
-    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, "max", builder)
+def atomic_max(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, sem: str, scope: str, builder: ir.builder) -> tl.tensor:
+    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, 'max', builder)
     sem = _str_to_sem(sem)
     scope = _str_to_scope(scope)
     sca_ty = val.type.scalar
@@ -1598,14 +1434,10 @@ def atomic_max(
     if sca_ty.is_int():
         if sca_ty.is_int_signed():
             return tl.tensor(
-                builder.create_atomic_rmw(ir.ATOMIC_OP.MAX, ptr.handle, val.handle, mask.handle, sem, scope),
-                val.type,
-            )
+                builder.create_atomic_rmw(ir.ATOMIC_OP.MAX, ptr.handle, val.handle, mask.handle, sem, scope), val.type)
         else:
             return tl.tensor(
-                builder.create_atomic_rmw(ir.ATOMIC_OP.UMAX, ptr.handle, val.handle, mask.handle, sem, scope),
-                val.type,
-            )
+                builder.create_atomic_rmw(ir.ATOMIC_OP.UMAX, ptr.handle, val.handle, mask.handle, sem, scope), val.type)
     # for float
     # return atomic_smax(i_ptr, i_val) if val >= 0
     # return atomic_umin(i_ptr, i_val) if val < 0
@@ -1623,40 +1455,17 @@ def atomic_max(
     pos = greater_equal(val, zero, builder)
     neg = less_than(val, zero, builder)
     pos_ret = tl.tensor(
-        builder.create_atomic_rmw(
-            ir.ATOMIC_OP.MAX,
-            i_ptr.handle,
-            i_val.handle,
-            and_(mask, pos, builder).handle,
-            sem,
-            scope,
-        ),
-        i_val.type,
-    )
+        builder.create_atomic_rmw(ir.ATOMIC_OP.MAX, i_ptr.handle, i_val.handle,
+                                  and_(mask, pos, builder).handle, sem, scope), i_val.type)
     neg_ret = tl.tensor(
-        builder.create_atomic_rmw(
-            ir.ATOMIC_OP.UMIN,
-            ui_ptr.handle,
-            ui_val.handle,
-            and_(mask, neg, builder).handle,
-            sem,
-            scope,
-        ),
-        ui_val.type,
-    )
+        builder.create_atomic_rmw(ir.ATOMIC_OP.UMIN, ui_ptr.handle, ui_val.handle,
+                                  and_(mask, neg, builder).handle, sem, scope), ui_val.type)
     ret = where(pos, pos_ret, neg_ret, builder)
     return bitcast(ret, sca_ty, builder)
 
 
-def atomic_min(
-    ptr: tl.tensor,
-    val: tl.tensor,
-    mask: tl.tensor,
-    sem: str,
-    scope: str,
-    builder: ir.builder,
-) -> tl.tensor:
-    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, "min", builder)
+def atomic_min(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, sem: str, scope: str, builder: ir.builder) -> tl.tensor:
+    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, 'min', builder)
     sem = _str_to_sem(sem)
     scope = _str_to_scope(scope)
     sca_ty = val.type.scalar
@@ -1664,14 +1473,10 @@ def atomic_min(
     if sca_ty.is_int():
         if sca_ty.is_int_signed():
             return tl.tensor(
-                builder.create_atomic_rmw(ir.ATOMIC_OP.MIN, ptr.handle, val.handle, mask.handle, sem, scope),
-                val.type,
-            )
+                builder.create_atomic_rmw(ir.ATOMIC_OP.MIN, ptr.handle, val.handle, mask.handle, sem, scope), val.type)
         else:
             return tl.tensor(
-                builder.create_atomic_rmw(ir.ATOMIC_OP.UMIN, ptr.handle, val.handle, mask.handle, sem, scope),
-                val.type,
-            )
+                builder.create_atomic_rmw(ir.ATOMIC_OP.UMIN, ptr.handle, val.handle, mask.handle, sem, scope), val.type)
     # for float
     # return atomic_smin(i_ptr, i_val) if val >= 0
     # return atomic_umax(i_ptr, i_val) if val < 0
@@ -1689,116 +1494,55 @@ def atomic_min(
     pos = greater_equal(val, zero, builder)
     neg = less_than(val, zero, builder)
     pos_ret = tl.tensor(
-        builder.create_atomic_rmw(
-            ir.ATOMIC_OP.MIN,
-            i_ptr.handle,
-            i_val.handle,
-            and_(mask, pos, builder).handle,
-            sem,
-            scope,
-        ),
-        i_val.type,
-    )
+        builder.create_atomic_rmw(ir.ATOMIC_OP.MIN, i_ptr.handle, i_val.handle,
+                                  and_(mask, pos, builder).handle, sem, scope), i_val.type)
     neg_ret = tl.tensor(
-        builder.create_atomic_rmw(
-            ir.ATOMIC_OP.UMAX,
-            ui_ptr.handle,
-            ui_val.handle,
-            and_(mask, neg, builder).handle,
-            sem,
-            scope,
-        ),
-        ui_ptr.type,
-    )
+        builder.create_atomic_rmw(ir.ATOMIC_OP.UMAX, ui_ptr.handle, ui_val.handle,
+                                  and_(mask, neg, builder).handle, sem, scope), ui_ptr.type)
     ret = where(pos, pos_ret, neg_ret, builder)
     return bitcast(ret, sca_ty, builder)
 
 
-def atomic_add(
-    ptr: tl.tensor,
-    val: tl.tensor,
-    mask: tl.tensor,
-    sem: str,
-    scope: str,
-    builder: ir.builder,
-) -> tl.tensor:
-    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, "add", builder)
+def atomic_add(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, sem: str, scope: str, builder: ir.builder) -> tl.tensor:
+    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, 'add', builder)
     sem = _str_to_sem(sem)
     scope = _str_to_scope(scope)
     sca_ty = val.type.scalar
     op = ir.ATOMIC_OP.FADD if sca_ty.is_floating() else ir.ATOMIC_OP.ADD
-    return tl.tensor(
-        builder.create_atomic_rmw(op, ptr.handle, val.handle, mask.handle, sem, scope),
-        val.type,
-    )
+    return tl.tensor(builder.create_atomic_rmw(op, ptr.handle, val.handle, mask.handle, sem, scope), val.type)
 
 
-def atomic_and(
-    ptr: tl.tensor,
-    val: tl.tensor,
-    mask: tl.tensor,
-    sem: str,
-    scope: str,
-    builder: ir.builder,
-) -> tl.tensor:
-    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, "and", builder)
+def atomic_and(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, sem: str, scope: str, builder: ir.builder) -> tl.tensor:
+    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, 'and', builder)
     sem = _str_to_sem(sem)
     scope = _str_to_scope(scope)
-    return tl.tensor(
-        builder.create_atomic_rmw(ir.ATOMIC_OP.AND, ptr.handle, val.handle, mask.handle, sem, scope),
-        val.type,
-    )
+    return tl.tensor(builder.create_atomic_rmw(ir.ATOMIC_OP.AND, ptr.handle, val.handle, mask.handle, sem, scope),
+                     val.type)
 
 
-def atomic_or(
-    ptr: tl.tensor,
-    val: tl.tensor,
-    mask: tl.tensor,
-    sem: str,
-    scope: str,
-    builder: ir.builder,
-) -> tl.tensor:
-    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, "or", builder)
+def atomic_or(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, sem: str, scope: str, builder: ir.builder) -> tl.tensor:
+    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, 'or', builder)
     sem = _str_to_sem(sem)
     scope = _str_to_scope(scope)
-    return tl.tensor(
-        builder.create_atomic_rmw(ir.ATOMIC_OP.OR, ptr.handle, val.handle, mask.handle, sem, scope),
-        val.type,
-    )
+    return tl.tensor(builder.create_atomic_rmw(ir.ATOMIC_OP.OR, ptr.handle, val.handle, mask.handle, sem, scope),
+                     val.type)
 
 
-def atomic_xor(
-    ptr: tl.tensor,
-    val: tl.tensor,
-    mask: tl.tensor,
-    sem: str,
-    scope: str,
-    builder: ir.builder,
-) -> tl.tensor:
-    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, "xor", builder)
+def atomic_xor(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, sem: str, scope: str, builder: ir.builder) -> tl.tensor:
+    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, 'xor', builder)
     sem = _str_to_sem(sem)
     scope = _str_to_scope(scope)
-    return tl.tensor(
-        builder.create_atomic_rmw(ir.ATOMIC_OP.XOR, ptr.handle, val.handle, mask.handle, sem, scope),
-        val.type,
-    )
+    return tl.tensor(builder.create_atomic_rmw(ir.ATOMIC_OP.XOR, ptr.handle, val.handle, mask.handle, sem, scope),
+                     val.type)
 
 
-def atomic_xchg(
-    ptr: tl.tensor,
-    val: tl.tensor,
-    mask: tl.tensor,
-    sem: str,
-    scope: str,
-    builder: ir.builder,
-) -> tl.tensor:
-    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, "xchg", builder)
+def atomic_xchg(ptr: tl.tensor, val: tl.tensor, mask: tl.tensor, sem: str, scope: str,
+                builder: ir.builder) -> tl.tensor:
+    ptr, val, mask = atom_red_typechecking_impl(ptr, val, mask, 'xchg', builder)
     sem = _str_to_sem(sem)
     scope = _str_to_scope(scope)
-    return tl.tensor(
-        builder.create_atomic_rmw(ir.ATOMIC_OP.XCHG, ptr.handle, val.handle, mask.handle, sem, scope),
-        val.type,
-    )
+    return tl.tensor(builder.create_atomic_rmw(ir.ATOMIC_OP.XCHG, ptr.handle, val.handle, mask.handle, sem, scope),
+                     val.type)
 
 
 # ===----------------------------------------------------------------------===//
@@ -1807,44 +1551,27 @@ def atomic_xchg(
 
 
 def _str_to_dot_input_precision(input_precision, builder):
-    assert (input_precision.lower() in builder.options.allowed_dot_input_precisions
-            ), f"input_precision must be one of {builder.options.allowed_dot_input_precisions}. Got {input_precision}"
+    assert input_precision.lower() in builder.options.allowed_dot_input_precisions, \
+        f"input_precision must be one of {builder.options.allowed_dot_input_precisions}. Got {input_precision}"
     input_precision = input_precision.upper()
     if input_precision == "TF32X3":
         input_precision = "TF32x3"
     return getattr(ir.INPUT_PRECISION, input_precision)
 
 
-def dot(
-    lhs: tl.tensor,
-    rhs: tl.tensor,
-    acc: tl.tensor,
-    input_precision: Optional[str],
-    max_num_imprecise_acc: int,
-    out_dtype: tl.dtype,
-    builder: ir.builder,
-) -> tl.tensor:
+def dot(lhs: tl.tensor, rhs: tl.tensor, acc: tl.tensor, input_precision: Optional[str], max_num_imprecise_acc: int,
+        out_dtype: tl.dtype, builder: ir.builder) -> tl.tensor:
     assert lhs.type.is_block() and rhs.type.is_block()
 
     if lhs.dtype.is_fp8() and rhs.dtype.is_fp8():
         # All combinations of supported fp8 x fp8 are permitted
         pass
     else:
-        assert lhs.dtype in (
-            tl.int8,
-            tl.uint8,
-            tl.float16,
-            tl.bfloat16,
-            tl.float32,
-        ), f"Unsupported lhs dtype {lhs.dtype}"
-        assert rhs.dtype in (
-            tl.int8,
-            tl.uint8,
-            tl.float16,
-            tl.bfloat16,
-            tl.float32,
-        ), f"Unsupported rhs dtype {rhs.dtype}"
-        assert (lhs.dtype == rhs.dtype), f"Both operands must be same dtype. Got {lhs.dtype} and {rhs.dtype}"
+        assert lhs.dtype in (tl.int8, tl.uint8, tl.float16, tl.bfloat16,
+                             tl.float32), f"Unsupported lhs dtype {lhs.dtype}"
+        assert rhs.dtype in (tl.int8, tl.uint8, tl.float16, tl.bfloat16,
+                             tl.float32), f"Unsupported rhs dtype {rhs.dtype}"
+        assert lhs.dtype == rhs.dtype, f"Both operands must be same dtype. Got {lhs.dtype} and {rhs.dtype}"
 
     if lhs.dtype.is_fp8e4b15() or rhs.dtype.is_fp8e4b15():
         # We upcast because there's no fp8e4b15 type in MLIR
@@ -1858,16 +1585,14 @@ def dot(
 
     lhs_rank = len(lhs.shape)
     rhs_rank = len(rhs.shape)
-    assert (lhs_rank == rhs_rank == 2 or
-            lhs_rank == rhs_rank == 3), f"Both inputs must be either 2D or 3D; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
-    assert (
-        lhs.shape[-1].value == rhs.shape[-2].value
-    ), f"First input shape ({lhs.shape}) and second input shape {rhs.shape} are not compatible for matmul (second index of first shape ({lhs.shape[-1].value}) must be equal to first index of second shape ({rhs.shape[-2].value})"
-    assert (builder.codegen_fns.get("min_dot_size") is not None), "target doesn't provide lower shape bounds for dot."
+    assert lhs_rank == rhs_rank == 2 or lhs_rank == rhs_rank == 3, f"Both inputs must be either 2D or 3D; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
+    assert lhs.shape[-1].value == rhs.shape[
+        -2].value, f"First input shape ({lhs.shape}) and second input shape {rhs.shape} are not compatible for matmul (second index of first shape ({lhs.shape[-1].value}) must be equal to first index of second shape ({rhs.shape[-2].value})"
+    assert builder.codegen_fns.get("min_dot_size") is not None, "target doesn't provide lower shape bounds for dot."
     min_dot_size = builder.codegen_fns["min_dot_size"](lhs.type, rhs.type)
-    assert (lhs.shape[-2].value >= min_dot_size[0] and lhs.shape[-1].value >= min_dot_size[2]
-            and rhs.shape[-1].value >= min_dot_size[1]
-            ), f"Input shapes should have M >= {min_dot_size[0]}, N >= {min_dot_size[1]} and K >= {min_dot_size[2]}"
+    assert lhs.shape[-2].value >= min_dot_size[0] and lhs.shape[-1].value >= min_dot_size[2] \
+        and rhs.shape[-1].value >= min_dot_size[1], \
+            f"Input shapes should have M >= {min_dot_size[0]}, N >= {min_dot_size[1]} and K >= {min_dot_size[2]}"
     if lhs.type.scalar.is_int():
         assert lhs.type.scalar == tl.int8, "only int8 supported!"
         _0 = builder.get_int32(0)
@@ -1903,10 +1628,8 @@ def dot(
         if lhs.dtype.is_fp8() and rhs.dtype.is_fp8() and max_num_imprecise_acc > K:
             raise ValueError(f"max_num_imprecise_acc ({max_num_imprecise_acc}) must be <= K ({K})")
 
-    return tl.tensor(
-        builder.create_dot(lhs.handle, rhs.handle, acc_handle, input_precision, max_num_imprecise_acc),
-        ret_ty,
-    )
+    return tl.tensor(builder.create_dot(lhs.handle, rhs.handle, acc_handle, input_precision, max_num_imprecise_acc),
+                     ret_ty)
 
 
 def _str_to_fp_type(float_format: str):
@@ -1921,47 +1644,27 @@ def _bitcast_to_fp_type(val: tl.tensor, float_format: str, builder: ir.builder):
     If float_format is subbyte, make sure it's packed as uint8 and return it.
     Otherwise, return a tensor (perhaps bitcasting) of the specified float format.
     """
-    triton_ty = {
-        "e5m2": tl.float8e5,
-        "e4m3": tl.float8e4nv,
-        "bf16": tl.bfloat16,
-        "fp16": tl.float16,
-    }.get(float_format)
+    triton_ty = {"e5m2": tl.float8e5, "e4m3": tl.float8e4nv, "bf16": tl.bfloat16, "fp16": tl.float16}.get(float_format)
     if triton_ty is None:
-        assert (float_format == "e2m1"), f"Internal Error: Unexpected float format: {float_format}"
-        assert (val.dtype == tl.uint8), f"e2m1 format must be packed as uint8. Got {val.dtype}"
+        assert float_format == "e2m1", f"Internal Error: Unexpected float format: {float_format}"
+        assert val.dtype == tl.uint8, f"e2m1 format must be packed as uint8. Got {val.dtype}"
         return val
     if val.dtype == triton_ty:
         return val
     else:
-        unsigned_ty = {
-            "e5m2": tl.uint8,
-            "e4m3": tl.uint8,
-            "bf16": tl.uint16,
-            "fp16": tl.uint16,
-        }[float_format]
-        assert (val.dtype == unsigned_ty), f"Unexpected dtype for {float_format}. Got {val.dtype}"
+        unsigned_ty = {"e5m2": tl.uint8, "e4m3": tl.uint8, "bf16": tl.uint16, "fp16": tl.uint16}[float_format]
+        assert val.dtype == unsigned_ty, f"Unexpected dtype for {float_format}. Got {val.dtype}"
         return bitcast(val, triton_ty, builder)
 
 
-def dot_scaled(
-    lhs: tl.tensor,
-    lhs_scale: tl.tensor,
-    lhs_format: str,
-    rhs: tl.tensor,
-    rhs_scale: Optional[tl.tensor],
-    rhs_format: str,
-    acc: tl.tensor | None,
-    fast_math: bool,
-    out_dtype: tl.dtype,
-    builder: ir.builder,
-) -> tl.tensor:
+def dot_scaled(lhs: tl.tensor, lhs_scale: tl.tensor, lhs_format: str, rhs: tl.tensor, rhs_scale: Optional[tl.tensor],
+               rhs_format: str, acc: tl.tensor | None, fast_math: bool, out_dtype: tl.dtype,
+               builder: ir.builder) -> tl.tensor:
     assert lhs.type.is_block() and rhs.type.is_block()
-    # TODO: validate types.
+    #TODO: validate types.
     lhs_rank = len(lhs.shape)
     rhs_rank = len(rhs.shape)
-    assert (lhs_rank == rhs_rank == 2 or
-            lhs_rank == rhs_rank == 3), f"Both inputs must be either 2D or 3D; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
+    assert lhs_rank == rhs_rank == 2 or lhs_rank == rhs_rank == 3, f"Both inputs must be either 2D or 3D; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
     lhs_format: str = lhs_format.value
     rhs_format: str = rhs_format.value
     lhs_format_enum = _str_to_fp_type(lhs_format)
@@ -1978,9 +1681,9 @@ def dot_scaled(
     K, N = rhs.type.shape[-2:]
     PACKED_A = 2 if lhs_format == "e2m1" else 1
     PACKED_B = 2 if rhs_format == "e2m1" else 1
-    assert (K * PACKED_B == PACKED_A * lhs.type.shape[-1]
-            ), f"Reduction dimension should pack the same number of elements; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
-    # assert K * PACKED_B >= 64, f"scaled_dot NYI for K < 64. Got {K=}"
+    assert K * PACKED_B == PACKED_A * lhs.type.shape[
+        -1], f"Reduction dimension should pack the same number of elements; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
+    #assert K * PACKED_B >= 64, f"scaled_dot NYI for K < 64. Got {K=}"
     B = lhs.type.shape[0] if lhs_rank == 3 else None
 
     ret_ty = tl.block_type(out_dtype, [B, M, N] if B else [M, N])
@@ -1993,18 +1696,8 @@ def dot_scaled(
     rhs_scale_handle = None if rhs_scale_is_none else rhs_scale.handle
     lhs_scale_handle = None if lhs_scale_is_none else lhs_scale.handle
     return tl.tensor(
-        builder.create_dot_scaled(
-            lhs.handle,
-            lhs_scale_handle,
-            lhs_format_enum,
-            rhs.handle,
-            rhs_scale_handle,
-            rhs_format_enum,
-            fast_math,
-            acc_handle,
-        ),
-        ret_ty,
-    )
+        builder.create_dot_scaled(lhs.handle, lhs_scale_handle, lhs_format_enum, rhs.handle, rhs_scale_handle,
+                                  rhs_format_enum, fast_math, acc_handle), ret_ty)
 
 
 # ===----------------------------------------------------------------------===//
@@ -2066,13 +1759,8 @@ def reduction(inputs: Sequence[tl.tensor], axis: int, region_builder_fn, builder
 # ===----------------------------------------------------------------------===
 
 
-def associative_scan(
-    inputs: Sequence[tl.tensor],
-    axis: int,
-    region_builder_fn,
-    reverse: bool,
-    builder: ir.builder,
-) -> Tuple[tl.tensor, ...]:
+def associative_scan(inputs: Sequence[tl.tensor], axis: int, region_builder_fn, reverse: bool,
+                     builder: ir.builder) -> Tuple[tl.tensor, ...]:
     shape = inputs[0].type.shape
     rank = len(shape)
 
@@ -2100,7 +1788,7 @@ def gather(src: tl.tensor, index: tl.tensor, axis: int, builder: ir.builder) -> 
     assert index.dtype.is_int(), "index must be an integer tensor"
 
     rank = len(src.type.shape)
-    assert (len(index.type.shape) == rank), "source and index tensors must have the same rank"
+    assert len(index.type.shape) == rank, "source and index tensors must have the same rank"
 
     assert -rank <= axis < rank, f"gather axis {axis} must be < source rank ({rank})"
     if axis < 0:
@@ -2109,7 +1797,7 @@ def gather(src: tl.tensor, index: tl.tensor, axis: int, builder: ir.builder) -> 
     for d in range(rank):
         if d == axis:
             continue
-        assert (index.type.shape[d] == src.type.shape[d]), f"index dim {axis} must match the corresponding source dim"
+        assert index.type.shape[d] == src.type.shape[d], f"index dim {axis} must match the corresponding source dim"
 
     gather = builder.create_gather(src.handle, index.handle, axis)
     return wrap_tensor(gather, src.type.scalar, index.type.shape)
@@ -2123,10 +1811,7 @@ def gather(src: tl.tensor, index: tl.tensor, axis: int, builder: ir.builder) -> 
 def histogram(input: tl.tensor, num_bins: int, builder: ir.builder) -> tl.tensor:
     assert len(input.shape) == 1, "histogram only supports 1D input"
     assert input.dtype.is_int(), "histogram only supports integer input"
-    return tl.tensor(
-        builder.create_histogram(input.handle, num_bins),
-        tl.block_type(tl.int32, [num_bins]),
-    )
+    return tl.tensor(builder.create_histogram(input.handle, num_bins), tl.block_type(tl.int32, [num_bins]))
 
 
 def multiple_of(x: tl.tensor, values: List[int]) -> tl.tensor:
@@ -2184,21 +1869,21 @@ def _convert_elem_to_ir_value(builder, elem, require_i64):
         elem = tl.constexpr(elem)
     if isinstance(elem, tl.constexpr):
         if require_i64:
-            assert -(2**63) <= elem.value < 2**63, (f"Block pointers only support 64 bit `shape/strides`, "
-                                                    f"got a value {elem.value} which is out of the range")
+            assert -2**63 <= elem.value < 2**63, f"Block pointers only support 64 bit `shape/strides`, " \
+                f"got a value {elem.value} which is out of the range"
             return builder.get_int64(elem.value)
         else:
-            assert -(2**31) <= elem.value < 2**31, (f"Block pointers only support 32 bit `offsets/block_shape`, "
-                                                    f"got a value {elem.value} which is out of the range")
+            assert -2**31 <= elem.value < 2**31, f"Block pointers only support 32 bit `offsets/block_shape`, " \
+                f"got a value {elem.value} which is out of the range"
             return builder.get_int32(elem.value)
     elif isinstance(elem, tl.tensor):
         assert elem.numel.value == 1, "Expected a scalar in shape/strides/offsets"
-        assert (elem.dtype.is_int()), "Expected an integer scalar type in shape/strides/offsets"
+        assert elem.dtype.is_int(), "Expected an integer scalar type in shape/strides/offsets"
         if elem.dtype != tl.int64 and require_i64:
             return builder.create_int_cast(elem.handle, builder.get_int64_ty(), elem.dtype.is_int_signed())
         elif elem.dtype != tl.int32 and not require_i64:
-            assert False, ("Block pointers only support 32 bit `offsets/block_shape`, "
-                           "add a `.to(tl.int32)` or use regular indexing for 64 bit support")
+            assert False, "Block pointers only support 32 bit `offsets/block_shape`, " \
+                "add a `.to(tl.int32)` or use regular indexing for 64 bit support"
         return elem.handle
     assert False, f"Unsupported element type in shape/strides/offsets: {type(elem)}"
 
@@ -2228,8 +1913,8 @@ def make_block_ptr(base: tl.tensor, shape, strides, offsets, block_shape, order,
     if not hasattr(block_shape, "__iter__"):
         block_shape = [block_shape]
     block_shape = [elem.value if isinstance(elem, tl.constexpr) else elem for elem in block_shape]
-    assert all(isinstance(elem, int) and -(2**31) <= elem < 2**31
-               for elem in block_shape), "Expected a list of constant integers (`int32_t` range) in `block_shape`"
+    assert all(isinstance(elem, int) and -2**31 <= elem < 2**31 for elem in block_shape), \
+        "Expected a list of constant integers (`int32_t` range) in `block_shape`"
 
     # Check `order`
     if not hasattr(order, "__iter__"):
@@ -2238,8 +1923,8 @@ def make_block_ptr(base: tl.tensor, shape, strides, offsets, block_shape, order,
     assert sorted(order) == list(range(len(order))), "Expected a permutation of (0, 1, ..., len(order)-1) in order"
 
     # Must have same length
-    assert all(len(block_shape) == len(list_like) for list_like in
-               [shape, strides, offsets, order]), "Expected shape/strides/offsets/block_shape to have the same length"
+    assert all(len(block_shape) == len(list_like) for list_like in [shape, strides, offsets, order]), \
+        "Expected shape/strides/offsets/block_shape to have the same length"
 
     # Build value, the type is:
     #   `pointer_type<blocked<shape, element_type>>` in Python

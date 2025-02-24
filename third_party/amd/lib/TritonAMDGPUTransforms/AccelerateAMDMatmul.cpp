@@ -43,28 +43,88 @@ int getWmmaVersion(StringRef archGen) {
   return 0;
 }
 
+// Check if the result of this tl.dot is used as opA of another tl.dot
+// in the same region
+bool isChainDotHead(tt::DotOpInterface dotOp) {
+  auto isInSameRegion = [&dotOp](Operation *op) {
+    return op->getParentRegion() == dotOp->getParentRegion();
+  };
+  ForwardSliceOptions fwdOpt;
+  fwdOpt.filter = isInSameRegion;
+  SetVector<mlir::Operation *> fwdSlices;
+  getForwardSlice(dotOp, &fwdSlices, fwdOpt);
+  for (Operation *op : fwdSlices) {
+    if (auto dOp = dyn_cast<tt::DotOpInterface>(op)) {
+      assert(dOp != dotOp);
+      auto opA = dOp.getA().getDefiningOp();
+      if (opA && fwdSlices.contains(opA)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Check if the opA of this tl.dot is the result of another tl.dot
+// in the same region
+bool isChainDotTail(tt::DotOpInterface dotOp) {
+  auto isInSameRegion = [&dotOp](Operation *op) {
+    return op->getParentRegion() == dotOp->getParentRegion();
+  };
+  BackwardSliceOptions bwdOpt;
+  bwdOpt.omitBlockArguments = true;
+  bwdOpt.filter = isInSameRegion;
+  SetVector<Operation *> bwdSlices;
+  Operation *opA = dotOp.getA().getDefiningOp();
+  if (!opA)
+    return false;
+  getBackwardSlice(opA, &bwdSlices, bwdOpt);
+  if (llvm::find_if(bwdSlices, [](Operation *op) {
+        return isa<tt::DotOpInterface>(op);
+      }) != bwdSlices.end())
+    return true;
+  return false;
+}
+
 SmallVector<unsigned, 3>
 warpsPerTile(Operation *dotOp, ArrayRef<int64_t> shape, int numWarps,
              std::pair<int64_t, int64_t> shapePerWarp) {
   auto rank = shape.size();
-  // Early exit for batched matmul
+  // Case 1: Early exit for batched matmul
   if (rank == 3)
-    return {(unsigned)numWarps, 1, 1};
+    return {static_cast<unsigned>(numWarps), 1, 1};
 
-  auto filter = [dotOp](Operation *op) {
-    return op->getParentRegion() == dotOp->getParentRegion();
-  };
-  ForwardSliceOptions fwdOpt;
-  fwdOpt.filter = filter;
-  BackwardSliceOptions bwdOpt;
-  bwdOpt.omitBlockArguments = true;
-  bwdOpt.filter = filter;
-  auto slices = getSlice(dotOp, bwdOpt, fwdOpt);
-  for (Operation *op : slices) {
-    if (isa<mlir::triton::DotOpInterface>(op) && (op != dotOp))
-      return {(unsigned)numWarps, 1};
+  // Case 2: For FA-like pattern, i.e. result of 1st tl.dot is used as the opA
+  // of the 2nd dot, we will set warpsPerCTA differently for 1st and 2nd dot
+  auto ttDotOp = cast<tt::DotOpInterface>(dotOp);
+  bool isHeadDot = isChainDotHead(ttDotOp);
+  bool isTailDot = isChainDotTail(ttDotOp);
+  // For the 1st dot in chain-dot, we always set warpsPerCTA={numWarps, 1}
+  // because this eliminates
+  // 1) inter-warp reduction in the softmax step.
+  // 2) layout conversion from #mma to #dot_op of the second dot.
+  if (isHeadDot)
+    return {static_cast<unsigned>(numWarps), 1};
+  // For the 2nd dot in chain-dot, we always distribute warp along dim0 first,
+  // then dim1. Because
+  // 1) This is how we distribute the warps for the 1st dot. Now the
+  //    warpsPerCTA for the 1st dot become the warp layout of the dotOperand
+  //    layout of the 2nd dot, which must match the warpsPerCTA of the 2nd dot.
+  // 2) When shape[0] is small, as in decode kernels, we don't want to
+  //    distribute more warps than shape[0] // mDim. If we do so, each warp
+  //    needs to hold more elements in the final output, which increases
+  //    register pressure, especially for large head dim (e.g. 512) attention
+  //    kernels.
+  if (isTailDot) {
+    SmallVector<unsigned, 3> ret = {1, 1};
+    ret[0] = static_cast<unsigned>(std::min(
+        static_cast<int64_t>(numWarps),
+        static_cast<int64_t>(llvm::divideCeil(shape[0], shapePerWarp.first))));
+    ret[1] = numWarps / ret[0];
+    return ret;
   }
 
+  // Case 3: Regular cases
   SmallVector<int64_t, 2> tensorShape = {shape[0], shape[1]};
   SmallVector<unsigned, 3> ret = {1, 1};
   do {
@@ -365,39 +425,6 @@ public:
       : OpRewritePattern(context, benefit), mfmaVersion(mfmaVersion),
         nonKDim(nonKDim), kPack(kPack) {}
 
-  bool isChainDot(tt::DotOp &dotOp) const {
-    auto filter = [&dotOp](Operation *op) {
-      return op->getParentRegion() == dotOp->getParentRegion();
-    };
-    ForwardSliceOptions fwdOpt;
-    fwdOpt.filter = filter;
-    BackwardSliceOptions bwdOpt;
-    bwdOpt.omitBlockArguments = true;
-    bwdOpt.filter = filter;
-    auto slices = getSlice(dotOp, bwdOpt, fwdOpt);
-    for (Operation *op : slices) {
-      if (isa<tt::DotOp>(op) && (op != dotOp))
-        return true;
-    }
-    return false;
-  }
-
-  bool isSecondDot(tt::DotOp &dotOp) const {
-    auto filter = [&dotOp](Operation *op) {
-      return op->getParentRegion() == dotOp->getParentRegion();
-    };
-    BackwardSliceOptions bwdOpt;
-    bwdOpt.omitBlockArguments = true;
-    bwdOpt.filter = filter;
-    SetVector<Operation *> slices;
-    getBackwardSlice(dotOp.getResult(), &slices, bwdOpt);
-    if (llvm::find_if(slices, [](Operation *op) {
-          return isa<tt::DotOp>(op);
-        }) != slices.end())
-      return true;
-    return false;
-  }
-
   LogicalResult matchAndRewrite(tt::DotOp dotOp,
                                 PatternRewriter &rewriter) const override {
     RankedTensorType oldRetType = dotOp.getType();
@@ -439,7 +466,8 @@ public:
     // TODO (lixun): investigate the regression and enable this feature again
     auto aElemTy = mfmaInstr->aElementType;
     bool isFP8 = llvm::isa<Float8E5M2FNUZType, Float8E4M3FNUZType>(aElemTy);
-    bool isTransposed = isChainDot(dotOp) || !isFP8;
+    bool isTransposed =
+        isChainDotHead(dotOp) || isChainDotTail(dotOp) || !isFP8;
     mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
         oldRetType.getContext(),
         /*versionMajor*/ mfmaVersion, /*versionMinor*/ 0, warpsPerTile,
@@ -492,7 +520,7 @@ public:
     // to increase ds_read vector size
     // However, in FA, the second dot can only use kWidth = kBase since it's
     // limited by the result of the first dot, which is of mfmaLayout.
-    if (!isSecondDot(dotOp))
+    if (!isChainDotTail(dotOp))
       kWidth *= kPack;
 
     auto newAEncoding =
