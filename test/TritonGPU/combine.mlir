@@ -3663,3 +3663,19 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.target" = "cuda:80"} {
       tt.return %130 : tensor<16x128xf32, #mma>
   }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 1, 2], threadsPerWarp = [2, 16, 1], warpsPerCTA = [1, 1, 1], order = [2, 1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [2, 16], warpsPerCTA = [1, 1], order = [1, 0]}>
+#linear = #ttg.linear<{register = [], lane = [[0, 1], [0, 2], [0, 4], [0, 8], [1, 0]], warp = [], block = []}>
+module attributes {"ttg.num-warps" = 1 : i32, ttg.target = "cuda:80"} {
+  // CHECK-LABEL: join_forward
+  tt.func @join_forward(%arg0: tensor<2x16xf32, #linear>) -> tensor<2x16x2xf32, #blocked> {
+    // CHECK-LABEL: tt.join
+    // CHECK-LABEL: ttg.convert_layout
+    %0 = ttg.convert_layout %arg0 : tensor<2x16xf32, #linear> -> tensor<2x16xf32, #blocked1>
+    %1 = tt.join %0, %0 : tensor<2x16xf32, #blocked1> -> tensor<2x16x2xf32, #blocked>
+    tt.return %1 : tensor<2x16x2xf32, #blocked>
+  }
+}
