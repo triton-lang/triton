@@ -783,4 +783,9 @@ WarpSpecializeOp::getCaptureSizeAlign(const DataLayout &datalayout) {
   return {captureSize, captureAlign};
 }
 
+unsigned WarpSpecializeOp::getTotalPartitionWarps() {
+  ArrayRef<int32_t> numWarps = getPartitionNumWarps();
+  return std::accumulate(numWarps.begin(), numWarps.end(), 0);
+}
+
 } // namespace mlir::triton::gpu

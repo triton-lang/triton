@@ -389,6 +389,8 @@ def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [
     // Get the size and alignment of the capture list.
     std::pair<llvm::TypeSize, uint64_t>
     getCaptureSizeAlign(const DataLayout &datalayout);
+    // Get the total number of extra warps required.
+    unsigned getTotalPartitionWarps();
   }];
 
   let hasVerifier = 1;

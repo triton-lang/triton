@@ -23,7 +23,7 @@ struct AllocateWarpGroups
     int maxExtraWarps = 0;
     mod.walk([&](WarpSpecializeOp op) {
       ArrayRef<int32_t> arr = op.getPartitionNumWarps();
-      int req = std::accumulate(arr.begin(), arr.end(), 0, std::plus{});
+      int req = op.getTotalPartitionWarps();
       maxExtraWarps = std::max(maxExtraWarps, req);
 
       // Allocate the start IDs such that the largest warpgroups have lower

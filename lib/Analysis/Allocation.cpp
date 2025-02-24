@@ -293,10 +293,13 @@ private:
       return;
     }
     if (auto func = dyn_cast<FunctionOpInterface>(op)) {
-      WalkResult isSpecialized = func.walk(
-          [&](gpu::WarpSpecializeOp) { return WalkResult::interrupt(); });
-      if (isSpecialized.wasInterrupted())
-        maybeAddScratchBuffer<BufferT::BufferKind::Virtual>(op, /*bytes=*/4);
+      unsigned numWarpIndices = 0;
+      // Warp specialization communicates states over shared memory to each
+      // warp. Add space for an i8 for each warpgroup warp.
+      func.walk([&](gpu::WarpSpecializeOp op) {
+        numWarpIndices = std::max(numWarpIndices, op.getTotalPartitionWarps());
+      });
+      maybeAddScratchBuffer<BufferT::BufferKind::Virtual>(op, numWarpIndices);
       return;
     }
     unsigned bytes = scratchSizeGetter(op);
