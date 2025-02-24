@@ -53,27 +53,6 @@ static void createBarrier(TritonLLVMOpBuilder2 &b, unsigned barIdx,
 // lowerWarpSpecialize
 //===----------------------------------------------------------------------===//
 
-// Collect all `ttg.warp_specialize` ops in the function and validate that
-// lowering is supported.
-static LogicalResult
-collectWarpSpecializeOps(LLVM::LLVMFuncOp func,
-                         SmallVectorImpl<WarpSpecializeOp> &wsOps) {
-  func.walk([&](WarpSpecializeOp op) { wsOps.push_back(op); });
-
-  // Function calls inside `ttg.warp_specialize` ops are not supported.
-  for (WarpSpecializeOp op : wsOps) {
-    auto check = [&](LLVM::CallOp op) -> WalkResult {
-      return mlir::emitError(
-          op.getLoc(),
-          "TODO: function calls inside warp specialize are not supported");
-    };
-    if (op.walk(check).wasInterrupted())
-      return failure();
-  }
-
-  return success();
-}
-
 // Assign hardware barriers to each warp group and rewrite warp group barriers
 // into `barrier.sync` instructions. There is a maximum number of barriers.
 static LogicalResult rewriteWarpGroupBarriers(LLVM::LLVMFuncOp func,
@@ -122,22 +101,25 @@ static void rewritePartitionRegions(WarpSpecializeOp ws, Block *switchLoop,
   TritonLLVMOpBuilder2 b(ws.getLoc(), ws.getContext());
 
   for (Region *partition : ws.getPartitionRegions()) {
-    // Load the explicit captures from shared memory and replace the block args.
-    auto captureType = LLVM::LLVMStructType::getLiteral(
-        b.getContext(), llvm::to_vector(partition->getArgumentTypes()));
-
+    // Load the explicit captures from shared memory and replace the block args
+    // if there are any.
     b.setInsertionPointToStart(&partition->front());
-    Value capturePtr = LLVM::getSharedMemoryBase(b.getLoc(), b, targetInfo, ws);
-    LLVM::LLVMPointerType ptrTy = ptr_ty(b.getContext(), 3);
-    for (auto [i, arg] :
-         llvm::zip(llvm::seq<int32_t>(partition->getNumArguments()),
-                   partition->getArguments())) {
-      Value ptr =
-          b.gep(ptrTy, captureType, capturePtr, ArrayRef<LLVM::GEPArg>{0, i});
-      Value value = b.load(arg.getType(), ptr);
-      arg.replaceAllUsesWith(value);
+    if (partition->getNumArguments()) {
+      auto captureType = LLVM::LLVMStructType::getLiteral(
+          b.getContext(), llvm::to_vector(partition->getArgumentTypes()));
+      Value capturePtr =
+          LLVM::getSharedMemoryBase(b.getLoc(), b, targetInfo, ws);
+      LLVM::LLVMPointerType ptrTy = ptr_ty(b.getContext(), 3);
+      for (auto [i, arg] :
+           llvm::zip(llvm::seq<int32_t>(partition->getNumArguments()),
+                     partition->getArguments())) {
+        Value ptr =
+            b.gep(ptrTy, captureType, capturePtr, ArrayRef<LLVM::GEPArg>{0, i});
+        Value value = b.load(arg.getType(), ptr);
+        arg.replaceAllUsesWith(value);
+      }
+      partition->front().eraseArguments([](auto) { return true; });
     }
-    partition->front().eraseArguments([](auto) { return true; });
 
     // The shared memory is only live for the entry into the region, so put
     // another barrier here.
@@ -157,8 +139,7 @@ static void rewritePartitionRegions(WarpSpecializeOp ws, Block *switchLoop,
 static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
                                          const NVIDIA::TargetInfo &targetInfo) {
   SmallVector<WarpSpecializeOp> wsOps;
-  if (failed(collectWarpSpecializeOps(func, wsOps)))
-    return failure();
+  func.walk([&](WarpSpecializeOp op) { wsOps.push_back(op); });
   // Nothing to do. This kernel is not warp specialized.
   if (wsOps.empty())
     return success();
@@ -291,7 +272,8 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
       b.store(b.i8_val(state), b.gep(ptrTy, i8_ty, statePtr, LLVM::GEPArg(i)));
     }
 
-    // Store the captures.
+    // Store the captures if there are any.
+    if (ws.getNumOperands()) {
     auto captureType = LLVM::LLVMStructType::getLiteral(
         b.getContext(), llvm::to_vector(ws.getOperandTypes()));
     Value capturePtr = LLVM::getSharedMemoryBase(b.getLoc(), b, targetInfo, ws);
@@ -301,6 +283,7 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
           b.gep(ptrTy, captureType, capturePtr, ArrayRef<LLVM::GEPArg>{0, i});
       b.store(arg, ptr);
     }
+  }
 
     // First barrier releases the waiting warpgroups. The second barrier ensures
     // they have read the captures before the memory is released upon entry.

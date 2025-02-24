@@ -1,24 +1,4 @@
-// RUN: triton-opt %s -split-input-file -verify-diagnostics -allow-unregistered-dialect -convert-warp-specialize-to-llvm | FileCheck %s
-
-module attributes {"ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 4 : i32} {
-
-llvm.func private @a_function() {
-  llvm.return
-}
-
-llvm.func @disallow_function_calls() {
-  ttg.warp_specialize()
-  default {
-    // expected-error @below {{function calls inside warp specialize are not supported}}
-    llvm.call @a_function() : () -> ()
-    ttg.warp_yield
-  } : () -> ()
-  llvm.return
-}
-
-}
-
-// -----
+// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -convert-warp-specialize-to-llvm | FileCheck %s
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 11 : i32} {
 
@@ -561,6 +541,26 @@ llvm.func @cfg() attributes {allocation.offset = 32 : i32} {
     ttg.warp_return
   ^B:
    "B"() : () -> ()
+    ttg.warp_return
+  } : () -> ()
+  llvm.return
+}
+
+}
+
+// -----
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.total-num-warps" = 8 : i32} {
+
+llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
+
+// CHECK-LABEL: @no_captures
+llvm.func @no_captures() attributes {allocation.offset = 0 : i32} {
+  ttg.warp_specialize() attributes {warpGroupStartIds = array<i32: 4>}
+  default {
+    ttg.warp_yield
+  }
+  partition0() num_warps(4) {
     ttg.warp_return
   } : () -> ()
   llvm.return
