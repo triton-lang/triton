@@ -223,7 +223,7 @@ def test_kernel_default_arg(device):
     assert len(kernel.device_caches[device][0]) == 1
 
 
-GLOBAL_VAR: tl.constexpr = 1
+GLOBAL_VAR = tl.constexpr(1)
 
 
 def test_kernel_global_var_change(device):
@@ -263,7 +263,7 @@ def test_local_shadows_global():
     kernel[(1, )]()
 
 
-CONSTEXPR_GLOBAL: tl.constexpr = 42
+CONSTEXPR_GLOBAL = tl.constexpr(42)
 
 
 def test_local_does_not_shadow_global():
@@ -274,9 +274,9 @@ def test_local_does_not_shadow_global():
         a = CONSTEXPR_GLOBAL  # noqa
         _, CONSTEXPR_GLOBAL = 0, 0  # noqa
 
-    CONSTEXPR_GLOBAL = 42
+    CONSTEXPR_GLOBAL = tl.constexpr(42)
     kernel[(1, )]()
-    CONSTEXPR_GLOBAL = 43
+    CONSTEXPR_GLOBAL = tl.constexpr(43)
 
     # Error because the `CONSTEXPR_GLOBAL` we're modifying is the same
     # `CONSTEXPR_GLOBAL` that's read inside `kernel`.  (Alternatively, we could
@@ -288,7 +288,7 @@ def test_local_does_not_shadow_global():
         kernel[(1, )]()
 
 
-CONFLICTING_GLOBAL: tl.constexpr = 0
+CONFLICTING_GLOBAL = tl.constexpr(0)
 
 
 @triton.jit

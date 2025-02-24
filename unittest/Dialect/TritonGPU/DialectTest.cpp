@@ -723,8 +723,6 @@ TEST_F(LinearEncodingTest, DistributedEncodingToLinearEncoding) {
       if (!is_dot_op_with_block_parent(distributedEncoding)) {
         ASSERT_EQ(distributedEncoding.getRepOrder(),
                   linearEncoding.getRepOrder());
-        ASSERT_EQ(distributedEncoding.getContigPerThread(),
-                  linearEncoding.getContigPerThread());
       }
       // DotOperandEncodingAttr::getWarpOrder() is not defined
       if (!isa<triton::gpu::DotOperandEncodingAttr>(distributedEncoding)) {

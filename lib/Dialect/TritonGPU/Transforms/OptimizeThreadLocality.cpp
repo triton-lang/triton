@@ -544,7 +544,8 @@ private:
     return viewOpTensorShape;
   }
 
-  Attribute getThreadLocalityOptimizedEncoding(triton::ReduceOp reduce) const {
+  BlockedEncodingAttr
+  getThreadLocalityOptimizedEncoding(triton::ReduceOp reduce) const {
     auto srcType = cast<RankedTensorType>(reduce.getOperands()[0].getType());
     auto rank = srcType.getShape().size();
     auto srcEncoding = srcType.getEncoding();
