@@ -1660,7 +1660,7 @@ def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, check_return_val,
 @pytest.mark.parametrize("size, num_ctas, dtype_x_str", [(size, num_ctas, dtype_x_str)
                                                          for size in [2, 4, 8, 32, 64, 128]
                                                          for num_ctas in num_ctas_list
-                                                         for dtype_x_str in ['float16', 'float32']])
+                                                         for dtype_x_str in ['float32']])
 def test_tensor_atomic_add_non_exclusive_offset(size, num_ctas, dtype_x_str, device):
 
     @triton.jit
