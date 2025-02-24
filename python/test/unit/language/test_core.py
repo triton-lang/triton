@@ -1656,6 +1656,79 @@ def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, check_return_val,
 
 
 @pytest.mark.interpreter
+@pytest.mark.parametrize("size, num_ctas, dtype_x_str", [(size, num_ctas, dtype_x_str)
+                                                         for size in [2, 4, 8, 32, 64, 128]
+                                                         for num_ctas in num_ctas_list
+                                                         for dtype_x_str in ['float16']])
+def test_tensor_atomic_add_non_exclusive_offset(size, num_ctas, dtype_x_str, device):
+
+    @triton.jit
+    def kernel(X, val, NUM: tl.constexpr):
+        off = tl.arange(0, NUM)
+        offset = off[:, None] * NUM + off[None, :]
+        val = tl.load(val + offset)
+        tl.atomic_add(X + offset // 2, val)
+
+    shape = (size // 2, size)
+    x = torch.zeros(shape, dtype=getattr(torch, dtype_x_str), device=device)
+    val = torch.randn((size**2), dtype=getattr(torch, dtype_x_str), device=device)
+    kernel[(1, )](x, val, size, num_warps=1, num_ctas=num_ctas)
+    ref = val[0::2] + val[1::2]
+    torch.testing.assert_close(ref, x.reshape(math.prod(shape)))
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("shape, idx_order, mask_step, num_ctas, dtype_x_str",
+                         [(shape, idx_order, mask_step, num_ctas, dtype_x_str)
+                          for shape in [(2, 2), (5, 5), (6, 6), (8, 8)]
+                          for idx_order in ['increase', 'decrease', 'random_no_duplication', 'random']
+                          for mask_step in range(1, 5)
+                          for num_ctas in num_ctas_list
+                          for dtype_x_str in ['float16']])
+def test_tensor_atomic_add_access_patterns(shape, idx_order, mask_step, num_ctas, dtype_x_str, device):
+    check_type_supported(dtype_x_str, device)
+    if is_interpreter():
+        pytest.skip("not supported in the interpreter")
+
+    @triton.jit
+    def kernel(in_ptr, idx_ptr, out_ptr, shape0, shape1, mask_step, XBLOCK: tl.constexpr):
+        xoffset = tl.program_id(0) * XBLOCK
+        x_idx = xoffset + tl.arange(0, XBLOCK)[:]
+        mask = x_idx < shape0 * shape1
+        mask = mask and (x_idx % mask_step != 0)
+        idx_base = shape1 * (x_idx // shape1)
+        idx_offset = tl.load(idx_ptr + x_idx, mask)
+        in_elem = tl.load(in_ptr + x_idx, mask)
+        tl.atomic_add(out_ptr + (idx_offset + idx_base), in_elem, mask, sem='relaxed')
+
+    shape0, shape1 = shape
+    idx_row = torch.arange(0, shape1, device=device)
+    if idx_order == 'increase':
+        idx = torch.stack([idx_row.repeat_interleave(i + 1)[:shape1] for i in range(shape0)])
+    if idx_order == 'decrease':
+        idx = torch.stack([idx_row.flip(0).repeat_interleave(i + 1)[:shape1] for i in range(shape0)])
+    if idx_order == 'random_no_duplication':
+        idx = torch.stack([torch.randperm(shape1, device=device) for _ in idx_row])
+    if idx_order == 'random':
+        idx = torch.randint(0, shape1, size=(shape0, shape1), device=device)
+
+    val = torch.randn((shape0, shape1), dtype=getattr(torch, dtype_x_str), device=device)
+    dst = torch.randn((shape0, shape1), dtype=getattr(torch, dtype_x_str), device=device)
+
+    dst_ref = dst.clone()
+
+    cnt = 0
+    for i, row in enumerate(idx):
+        for j, elem in enumerate(row):
+            if cnt % mask_step != 0:
+                dst_ref[i][elem] += val[i][j]
+            cnt += 1
+
+    kernel[(1, )](val, idx, dst, shape0, shape1, mask_step, 64, num_ctas=num_ctas)
+    np.testing.assert_allclose(to_numpy(dst_ref), to_numpy(dst), atol=1e-2)
+
+
+@pytest.mark.interpreter
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_tensor_atomic_rmw_block(num_ctas, device):
     shape = (8, 8)
