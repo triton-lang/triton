@@ -39,6 +39,18 @@ template <> struct hash<CacheKey> {
 
 namespace mlir::triton::gpu {
 
+constexpr static char AttrNumWarpsName[] = "ttg.num-warps";
+constexpr static char AttrNumCTAsName[] = "ttg.num-ctas";
+constexpr static char AttrTargetName[] = "ttg.target";
+constexpr static char AttrNumThreadsPerWarp[] = "ttg.threads-per-warp";
+
+// Find the contextual number of warps on which this operation is executed.
+int lookupNumWarps(Operation *op);
+// Try to find the contextual number of warps on which this operation is
+// executed. Returns nullopt if a warp size cannot be find. This is used for
+// verifiers.
+std::optional<int> maybeLookupNumWarps(Operation *op);
+
 class LinearLayoutCache {
 public:
   std::optional<LinearLayout> get(const CacheKey &key) {
@@ -92,20 +104,13 @@ SmallVector<unsigned> getWarpsPerCTA(Attribute layout);
 
 SmallVector<unsigned> getSizePerThread(Attribute layout);
 
-// Returns the number of contiguous elements that each thread
-// has access to, on each dimension of the tensor. E.g.
-// for a blocked layout with sizePerThread = [1, 4], returns [1, 4],
-// regardless of the shape of the tensor.
-SmallVector<unsigned> getContigPerThread(Attribute layout);
-
-// Returns the number of non-replicated contiguous elements that each thread
-// has access to, on each dimension of the tensor. For a blocked layout
+// Returns the number of contiguous elements of the logical tensor that each
+// thread has access to, on each dimension of the tensor. For a blocked layout
 // with sizePerThread = [1, 4] and tensor shape = [128, 1], the elements
 // for thread 0 would be [A_{0, 0}, A_{0, 0}, A_{0, 0}, A_{0, 0}], returns [1,
 // 1]. Whereas for a tensor shape [128, 128], the elements for thread 0 would be
 // [A_{0, 0}, A_{0, 1}, A_{0, 2}, A_{0, 3}], returns [1, 4].
-SmallVector<unsigned> getUniqueContigPerThread(Attribute layout,
-                                               ArrayRef<int64_t> tensorShape);
+SmallVector<unsigned> getContigPerThread(RankedTensorType tensorType);
 
 // Returns the number of threads per warp that have access to non-replicated
 // elements of the tensor. E.g. for a blocked layout with sizePerThread = [1,

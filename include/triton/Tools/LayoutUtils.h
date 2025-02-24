@@ -87,12 +87,23 @@ LinearLayout ensureLayoutNotSmallerThan(
 // are "dim0", "dim1", etc.
 SmallVector<StringAttr> standardOutDimNames(MLIRContext *ctx, int rank);
 
+// Return a vector of the standard out dimension name/value pairs, i.e.
+// ("dim0", dstShape[0]), ("dim1", dstShape[1]), etc.
+SmallVector<std::pair<StringAttr, int32_t>>
+standardOutDimPairs(MLIRContext *ctx, ArrayRef<int64_t> dstShape);
+
 // Return an identity mapping from `inDimName` to the standard out dimensions,
 // with the dimensions sized according to the shape. The bases are sorted
 // according to `order`, with the most minor dimension first.
 LinearLayout identityStandardND(StringAttr inDimName, ArrayRef<unsigned> shape,
                                 ArrayRef<unsigned> order);
 
+// Compute the supremum of two lists.
+// Error out if the supremum does not exist (e.g. [a, b] and [b, a]).
+// If the supremum is not unique, we return the first list first
+// (e.g. [a, b], [a, c] -> [a, b, c]).
+SmallVector<StringAttr> supremum(const SmallVector<StringAttr> &x,
+                                 const SmallVector<StringAttr> &y);
 } // namespace mlir::triton
 
 #endif // TRITON_TOOLS_LAYOUTUTILS_H

@@ -5,8 +5,8 @@
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
-#include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
+#include "mlir/Dialect/Arith/Transforms/Passes.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Pass/Pass.h"
@@ -35,12 +35,6 @@ using namespace mlir;
 using namespace mlir::triton::NVIDIA;
 
 namespace {
-
-// pass ws related named attrs.
-static void addAttrs(Operation *op, ArrayRef<mlir::NamedAttribute> attrs) {
-  for (const NamedAttribute attr : attrs)
-    op->setAttr(attr.getName(), attr.getValue());
-}
 
 class TritonLLVMFunctionConversionTarget : public ConversionTarget {
 public:
@@ -71,29 +65,15 @@ struct ConvertTritonGPUToLLVM
     : public triton::impl::ConvertTritonGPUToLLVMBase<ConvertTritonGPUToLLVM> {
   using ConvertTritonGPUToLLVMBase::ConvertTritonGPUToLLVMBase;
 
-  void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<triton::nvgpu::NVGPUDialect, LLVM::LLVMDialect,
-                    NVVM::NVVMDialect>();
-  }
-
   ConvertTritonGPUToLLVM(int32_t computeCapability)
       : ConvertTritonGPUToLLVMBase({computeCapability}) {}
-
   ConvertTritonGPUToLLVM(int32_t computeCapability, int32_t ptxVersion)
       : ConvertTritonGPUToLLVMBase({computeCapability, ptxVersion}) {}
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
-
-    mlir::LowerToLLVMOptions option(context);
-    option.overrideIndexBitwidth(32);
     TargetInfo targetInfo(computeCapability, ptxVersion);
-    TritonGPUToLLVMTypeConverter typeConverter(context, option, targetInfo);
-    TritonLLVMConversionTarget convTarget(*context);
-    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
-    int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
-    int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
 
     // Allocate shared memory and set barrier
     ModuleAllocation allocation(mod);
@@ -101,27 +81,25 @@ struct ConvertTritonGPUToLLVM
     membarPass.run();
 
     // Lower functions
-    {
-      mlir::LowerToLLVMOptions option(context);
-      TritonGPUToLLVMTypeConverter typeConverter(context, option, targetInfo);
-      TritonLLVMFunctionConversionTarget funcTarget(*context);
-      RewritePatternSet funcPatterns(context);
-      mlir::triton::populateFuncOpConversionPattern(typeConverter, funcPatterns,
-                                                    numWarps, targetInfo,
-                                                    patternBenefitDefault);
-      mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
-                                                            funcPatterns);
-      if (failed(
-              applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
-        return signalPassFailure();
-    }
+    TritonLLVMFunctionConversionTarget funcTarget(*context);
+    RewritePatternSet funcPatterns(context);
+    TritonGPUToLLVMTypeConverter funcTypeConverter(context, targetInfo);
+    mlir::triton::populateFuncOpConversionPattern(
+        funcTypeConverter, funcPatterns, targetInfo, patternBenefitDefault);
+    mlir::cf::populateControlFlowToLLVMConversionPatterns(funcTypeConverter,
+                                                          funcPatterns);
+    if (failed(
+            applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
+      return signalPassFailure();
 
     // initSharedMemory is run before the conversion of call and ret ops,
     // because the call op has to know the shared memory base address of each
     // function
+    mlir::LowerToLLVMOptions option(context);
+    option.overrideIndexBitwidth(32);
+    TritonGPUToLLVMTypeConverter typeConverter(context, option, targetInfo);
     initSharedMemory(typeConverter);
     ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
-    OpBuilder::InsertPoint indexInsertPoint;
 
     RewritePatternSet patterns(context);
     int benefit = patternBenefitPrioritizeOverLLVMConversions;
@@ -164,6 +142,7 @@ struct ConvertTritonGPUToLLVM
     // TODO(thomas): this should probably be done in a separate step to not
     // interfere with our own lowering of arith ops. Add arith/math's patterns
     // to help convert scalar expression to LLVM.
+    mlir::arith::populateCeilFloorDivExpandOpsPatterns(patterns);
     mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
     mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
     mlir::populateGpuToNVVMConversionPatterns(typeConverter, patterns);
@@ -180,13 +159,16 @@ struct ConvertTritonGPUToLLVM
         typeConverter, patterns, benefit);
     mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
                                                    patterns, benefit);
-    populateTCGen5MMAOpToLLVMPattern(typeConverter, patterns, benefit);
+    mlir::triton::NVIDIA::populateTCGen5MMAOpToLLVMPattern(typeConverter,
+                                                           patterns, benefit);
     mlir::triton::NVIDIA::populateFp4ToFpToLLVMPatterns(typeConverter, patterns,
                                                         benefit);
+    TritonLLVMConversionTarget convTarget(*context);
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();
 
     // Fold CTAId when there is only 1 CTA.
+    int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
     if (numCTAs == 1) {
       mod.walk([](triton::nvgpu::ClusterCTAIdOp id) {
         OpBuilder b(id);
@@ -200,7 +182,6 @@ private:
   void initSharedMemory(LLVMTypeConverter &typeConverter) {
     ModuleOp mod = getOperation();
     OpBuilder b(mod.getBodyRegion());
-    auto ctx = mod.getContext();
     auto loc = mod.getLoc();
     auto elemTy = typeConverter.convertType(b.getIntegerType(8));
     // Set array size 0 and external linkage indicates that we use dynamic
@@ -209,18 +190,11 @@ private:
     // Ask for 16B alignment on global_smem because that's the largest we should
     // ever need (4xi32).
     auto arrayTy = LLVM::LLVMArrayType::get(elemTy, 0);
-    auto global = b.create<LLVM::GlobalOp>(
+    b.create<LLVM::GlobalOp>(
         loc, arrayTy, /*isConstant=*/false, LLVM::Linkage::External,
         "global_smem", /*value=*/Attribute(), /*alignment=*/16,
         // Add ROCm support.
         static_cast<unsigned>(NVVM::NVVMMemorySpace::kSharedMemorySpace));
-  }
-
-  static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
-                              Type promotedType) {
-    Type tensorPromotedType = cast<RankedTensorType>(operand.getType())
-                                  .cloneWith(std::nullopt, promotedType);
-    return builder.create<triton::FpToFpOp>(loc, tensorPromotedType, operand);
   }
 };
 

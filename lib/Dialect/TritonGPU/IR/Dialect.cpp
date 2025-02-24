@@ -35,7 +35,7 @@ namespace gpu {
 
 LinearEncodingAttr toLinearEncoding(Attribute layout, ArrayRef<int64_t> shape) {
   auto linearLayout = toLinearLayout(shape, layout);
-  return LinearEncodingAttr::get(layout.getContext(), linearLayout);
+  return LinearEncodingAttr::get(layout.getContext(), std::move(linearLayout));
 }
 
 unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape) {
@@ -113,47 +113,14 @@ SmallVector<unsigned> getSizePerThread(Attribute layout) {
   }
 }
 
-SmallVector<unsigned> getContigPerThread(Attribute layout) {
-  if (auto distributedLayout = dyn_cast<DistributedEncodingTrait>(layout)) {
-    return distributedLayout.getContigPerThread();
-  } else {
-    llvm::report_fatal_error("getContigPerThread not implemented");
-    return {};
-  }
+SmallVector<unsigned> getContigPerThread(RankedTensorType tensorType) {
+  auto layout = tensorType.getEncoding();
+  auto shape = tensorType.getShape();
+  auto linearLayout = toLinearLayout(shape, layout);
+  auto llAttr = LinearEncodingAttr::get(tensorType.getContext(), linearLayout);
+  return llAttr.getContigPerThread();
 }
 
-SmallVector<unsigned> getUniqueContigPerThread(Attribute layout,
-                                               ArrayRef<int64_t> shape) {
-  // If slice layout, call recursively on parent layout, and drop
-  // sliced dim
-  if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(layout)) {
-    auto parentLayout = sliceLayout.getParent();
-    auto parentShape = sliceLayout.paddedShape(shape);
-    auto parentUniqueContigPerThread =
-        getUniqueContigPerThread(parentLayout, parentShape);
-    parentUniqueContigPerThread.erase(parentUniqueContigPerThread.begin() +
-                                      sliceLayout.getDim());
-    return parentUniqueContigPerThread;
-  } else if (mlir::isa<LinearEncodingAttr>(layout)) {
-    // FIXME: This should be the impelmentation of the function, but at the
-    // moment it breaks some uses. For example, if we have a blocked layout
-    // with shape [128, 128] and size=[4, 1], that is tiled in the second
-    // dimension, then the default path will return [4, 1], but this path will
-    // return [4, 128]!
-    auto linearLayout = toLinearLayout(shape, layout);
-    auto llAttr = LinearEncodingAttr::get(layout.getContext(), linearLayout);
-    return llAttr.getContigPerThread();
-  }
-  // Base case
-  auto rank = shape.size();
-  SmallVector<unsigned> ret(rank);
-  auto contigPerThread = getContigPerThread(layout);
-  assert(contigPerThread.size() == rank && "Unexpected contigPerThread size");
-  for (int d = 0; d < rank; ++d) {
-    ret[d] = std::min<unsigned>(shape[d], contigPerThread[d]);
-  }
-  return ret;
-}
 SmallVector<unsigned> getShapePerCTATile(Attribute layout) {
   if (auto distributedLayout =
           mlir::dyn_cast<DistributedEncodingTrait>(layout)) {
@@ -346,7 +313,6 @@ SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
   unsigned rank = shape.size();
   SmallVector<int64_t> shapePerCTA(rank);
   for (unsigned i = 0; i < rank; ++i) {
-    // This wrapping rule must be consistent with emitCTAOffsetForLayout
     unsigned splitNum = std::min<unsigned>(shape[i], CTASplitNum[i]);
     shapePerCTA[i] = shape[i] / splitNum;
   }
@@ -511,6 +477,42 @@ getDefaultBlockedEncoding(MLIRContext *context, ArrayRef<int64_t> shape,
                                             order, numWarps, threadsPerWarp,
                                             numCTAs);
   return encoding;
+}
+
+LogicalResult tryJoinOnAxis(MLIRContext *ctx, const LinearLayout &inLl,
+                            LinearLayout &outLl, bool fwdInference, int axis,
+                            std::optional<Location> loc) {
+  auto kRegister = StringAttr::get(ctx, "register");
+  auto outDims = llvm::to_vector(inLl.getOutDimNames());
+  if (fwdInference) {
+    auto split = LinearLayout::identity1D(2, kRegister, outDims[axis]);
+    outLl = split * inLl;
+  } else {
+    // TODO This requires a division algorithm!
+    // Implement manually ll.divideLeft(split)
+    auto contiguousElems =
+        LinearEncodingAttr::get(ctx, inLl).getContigPerThread();
+    if (contiguousElems[axis] > 1) {
+      LinearLayout::BasesT newBases;
+      for (const auto &basesDim : inLl.getBases()) {
+        std::vector<std::vector<int32_t>> newBasesDim;
+        for (auto base : basesDim.second) {
+          if (base[axis] == 1) {
+            continue;
+          }
+          base[axis] /= 2;
+          newBasesDim.push_back(std::move(base));
+        }
+        newBases.insert({basesDim.first, std::move(newBasesDim)});
+      }
+      outLl = LinearLayout(std::move(newBases), std::move(outDims));
+    } else {
+      return emitOptionalError(loc,
+                               "Fp4ToFpOp/SplitOp requires at least 2 elements "
+                               "per thread in the axis/last dimension");
+    }
+  }
+  return success();
 }
 
 } // namespace gpu
@@ -1205,7 +1207,7 @@ SmallVector<unsigned> LinearEncodingAttr::getSizePerThread() const {
 
   llvm::SetVector<unsigned> reverseRepOrder;
   auto nonZero = [](auto val) { return val != 0; };
-  auto &registers = bases[StringAttr::get(ctx, "register")];
+  auto &registers = bases[kRegister];
   while (!registers.empty()) {
     auto &basis = registers.back();
     auto it = std::find_if(basis.begin(), basis.end(), nonZero);
@@ -1264,27 +1266,37 @@ LinearEncodingAttr::getElemsPerThread(ArrayRef<int64_t> shape) const {
   return scaledLayout.basesPerDim(kRegister, /*skipBroadcast=*/false);
 }
 
-// Start of Selection
-SmallVector<unsigned> LinearEncodingAttr::getContigPerThread() const {
+SmallVector<unsigned>
+LinearEncodingAttr::getContig(const char *inDim,
+                              SmallVector<unsigned int> lowerContig) const {
   auto ll = getLinearLayout();
-  const auto &regs =
-      ll.getBases().find(StringAttr::get(getContext(), "register"))->second;
+  const auto &bases =
+      ll.getBases().find(StringAttr::get(getContext(), inDim))->second;
   auto order = getOrder();
   auto rank = order.size();
 
-  SmallVector<unsigned> contig(rank, 1);
-  auto regIt = regs.begin();
+  SmallVector<unsigned> contig(lowerContig);
+  auto basisIt = bases.begin();
   for (unsigned dim : order) {
     std::vector<int32_t> basis(rank, 0);
-    basis[dim] = 1;
+    basis[dim] = contig[dim];
 
-    while (regIt != regs.end() && *regIt == basis) {
+    while (basisIt != bases.end() && *basisIt == basis) {
       contig[dim] *= 2;
       basis[dim] *= 2;
-      ++regIt;
+      ++basisIt;
     }
   }
   return contig;
+}
+
+SmallVector<unsigned> LinearEncodingAttr::getContigPerThread() const {
+  SmallVector<unsigned> contig(getOrder().size(), 1);
+  return getContig("register", contig);
+}
+
+SmallVector<unsigned> LinearEncodingAttr::getContigPerWarp() const {
+  return getContig("lane", getContigPerThread());
 }
 
 unsigned
@@ -1409,6 +1421,7 @@ Attribute AMDMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
       if (parseIntArrayAttr(parser, attr, instrShape, "instrShape").failed())
         return {};
     }
+
     if (attr.getName() == "isTransposed") {
       if (parseBool(parser, attr, isTransposed, "isTransposed").failed())
         return {};
@@ -1571,7 +1584,12 @@ Attribute SliceEncodingAttr::parse(AsmParser &parser, Type type) {
   if (parser.parseGreater().failed())
     return {};
   unsigned dim = mlir::cast<IntegerAttr>(attrs.get("dim")).getInt();
-  Attribute parent = attrs.get("parent");
+  auto parent = mlir::dyn_cast<DistributedEncodingTrait>(attrs.get("parent"));
+  if (!parent) {
+    parser.emitError(parser.getNameLoc(),
+                     "expected a distributed encoding trait");
+    return {};
+  }
   return parser.getChecked<SliceEncodingAttr>(parser.getContext(), dim, parent);
 }
 
@@ -2264,8 +2282,9 @@ struct TritonGPUInferLayoutInterface
   LogicalResult
   inferReduceOpEncoding(Attribute operandEncoding, unsigned axis,
                         Attribute &resultEncoding) const override {
-    resultEncoding = SliceEncodingAttr::get(getDialect()->getContext(), axis,
-                                            operandEncoding);
+    resultEncoding =
+        SliceEncodingAttr::get(getDialect()->getContext(), axis,
+                               cast<DistributedEncodingTrait>(operandEncoding));
     return success();
   }
 
@@ -2746,14 +2765,12 @@ struct TritonGPUInferLayoutInterface
     }
 
     auto newRank = dstShape.size();
-    SmallVector<std::pair<StringAttr, int32_t>> newOutDims;
-    for (auto [dim, size] :
-         llvm::zip(standardOutDimNames(ctx, newRank), dstShape)) {
-      newOutDims.emplace_back(dim, size);
-    }
-    auto srcOutDims = to_vector(src.getOutDimNames());
+
+    auto newOutDims = standardOutDimPairs(ctx, dstShape);
+
     // reshapeOp assumes minor-to-major, so we need to transpose the out dims
     // before the reshape
+    auto srcOutDims = to_vector(src.getOutDimNames());
     std::reverse(srcOutDims.begin(), srcOutDims.end());
     std::reverse(newOutDims.begin(), newOutDims.end());
     auto dst = src.transposeOuts(srcOutDims)
@@ -2765,82 +2782,117 @@ struct TritonGPUInferLayoutInterface
 
   LogicalResult
   inferJoinOpEncoding(Attribute srcEnc, Attribute &dstEnc,
+                      ArrayRef<int64_t> shape,
                       std::optional<Location> loc) const override {
-    auto enc = mlir::dyn_cast<BlockedEncodingAttr>(srcEnc);
-    if (!enc) {
-      return emitOptionalError(loc,
-                               "JoinOp can only operate on BlockedEncoding");
+    if (auto enc = mlir::dyn_cast<BlockedEncodingAttr>(srcEnc)) {
+      // JoinOp takes two tensors of shape AxBxC and generates a tensor of shape
+      // AxBxCx2.  The encoding is the same as the input, but with 2 elems per
+      // thread in the new dimension.  The new dimension is most-minor.
+      auto append = [](ArrayRef<unsigned> vals, int val) {
+        SmallVector<unsigned> ret(vals);
+        ret.push_back(val);
+        return ret;
+      };
+      auto appendMinorDim = [](ArrayRef<unsigned> order) {
+        SmallVector<unsigned> ret(order);
+        ret.insert(ret.begin(), ret.size());
+        return ret;
+      };
+      dstEnc = BlockedEncodingAttr::get(
+          enc.getContext(),                    //
+          append(enc.getSizePerThread(), 2),   //
+          append(enc.getThreadsPerWarp(), 1),  //
+          append(enc.getWarpsPerCTA(), 1),     //
+          appendMinorDim(enc.getOrder()),      //
+          CTALayoutAttr::get(enc.getContext(), //
+                             append(enc.getCTAsPerCGA(), 1),
+                             append(enc.getCTASplitNum(), 1),
+                             appendMinorDim(enc.getCTAOrder())));
+      return success();
     }
 
-    // JoinOp takes two tensors of shape AxBxC and generates a tensor of shape
-    // AxBxCx2.  The encoding is the same as the input, but with 2 elems per
-    // thread in the new dimension.  The new dimension is most-minor.
-    auto append = [](ArrayRef<unsigned> vals, int val) {
-      SmallVector<unsigned> ret(vals);
-      ret.push_back(val);
-      return ret;
-    };
-    auto appendMinorDim = [](ArrayRef<unsigned> order) {
-      SmallVector<unsigned> ret(order);
-      ret.insert(ret.begin(), ret.size());
-      return ret;
-    };
-    dstEnc = BlockedEncodingAttr::get(
-        enc.getContext(),                    //
-        append(enc.getSizePerThread(), 2),   //
-        append(enc.getThreadsPerWarp(), 1),  //
-        append(enc.getWarpsPerCTA(), 1),     //
-        appendMinorDim(enc.getOrder()),      //
-        CTALayoutAttr::get(enc.getContext(), //
-                           append(enc.getCTAsPerCGA(), 1),
-                           append(enc.getCTASplitNum(), 1),
-                           appendMinorDim(enc.getCTAOrder())));
+    auto ctx = getContext();
+
+    // Append dim to shape
+    auto ll = toLinearLayout(shape, srcEnc);
+    SmallVector<int64_t> dstShape(shape.begin(), shape.end());
+    dstShape.push_back(1);
+    ll = ll.reshapeOuts(standardOutDimPairs(ctx, dstShape));
+
+    // Try join on last dim
+    auto axis = dstShape.size() - 1;
+    auto newLl = LinearLayout::empty();
+    auto result =
+        tryJoinOnAxis(ctx, ll, newLl, /*fwdInference=*/true, axis, loc);
+
+    assert(result.succeeded());
+    dstEnc = LinearEncodingAttr::get(ctx, newLl);
     return success();
   }
 
   LogicalResult
   inferSplitOpEncoding(Attribute srcEnc, Attribute &dstEnc,
+                       ArrayRef<int64_t> shape,
                        std::optional<Location> loc) const override {
     auto enc = mlir::dyn_cast<BlockedEncodingAttr>(srcEnc);
-    if (!enc) {
-      return emitOptionalError(loc,
-                               "SplitOp can only operate on BlockedEncoding");
+    if (enc) {
+      // SplitOp takes a tensor of shape AxBxCx2 and generates two tensors of
+      // shape AxBxC.  The input must have 2 elements per thread in the last
+      // dimension, which must be most-minor.  The result encoding is the same
+      // as the input, but with the last dimension removed.
+      if (enc.getSizePerThread().back() != 2) {
+        return emitOptionalError(
+            loc, "SplitOp requires 2 elements per thread in the "
+                 "last dimension of the input");
+      }
+      if (enc.getThreadsPerWarp().back() != 1 ||
+          enc.getWarpsPerCTA().back() != 1 || enc.getCTAsPerCGA().back() != 1) {
+        return emitOptionalError(
+            loc, "SplitOp requires threadsPerWarp, warpsPerCTA, "
+                 "and CTAsPerCGA = 1 for the last dimension of the input");
+      }
+      if (enc.getCTALayout().getCTAsPerCGA().back() != 1) {
+        return emitOptionalError(
+            loc,
+            "SplitOp requires the last dimension to be most-minor in CTAOrder");
+      }
+      SmallVector<unsigned> newOrder(enc.getOrder());
+      int splitDim = newOrder.size() - 1;
+      // Remove splitDim from order.
+      newOrder.erase(std::remove(newOrder.begin(), newOrder.end(), splitDim),
+                     newOrder.end());
+      dstEnc = BlockedEncodingAttr::get(
+          enc.getContext(), //
+          ArrayRef(enc.getSizePerThread()).drop_back(1),
+          ArrayRef(enc.getThreadsPerWarp()).drop_back(1),
+          ArrayRef(enc.getWarpsPerCTA()).drop_back(1), ArrayRef(newOrder),
+          CTALayoutAttr::get(enc.getContext(), //
+                             ArrayRef(enc.getCTAsPerCGA()).drop_back(1),
+                             ArrayRef(enc.getCTASplitNum()).drop_back(1),
+                             ArrayRef(enc.getCTAOrder()).drop_front(1)));
+      return success();
     }
 
-    // SplitOp takes a tensor of shape AxBxCx2 and generates two tensors of
-    // shape AxBxC.  The input must have 2 elements per thread in the last
-    // dimension, which must be most-minor.  The result encoding is the same as
-    // the input, but with the last dimension removed.
-    if (enc.getSizePerThread().back() != 2) {
-      return emitOptionalError(loc,
-                               "SplitOp requires 2 elements per thread in the "
-                               "last dimension of the input");
+    auto axis = shape.size() - 1;
+    assert(shape[axis] == 2 &&
+           "SplitOp input shape should have 2 in the last dim");
+
+    auto ctx = getContext();
+
+    // Split on last dim
+    auto ll = toLinearLayout(shape, srcEnc);
+    auto newLl = LinearLayout::empty();
+    auto result =
+        tryJoinOnAxis(ctx, ll, newLl, /*fwdInference=*/false, axis, loc);
+    if (!result.succeeded()) {
+      return failure();
     }
-    if (enc.getThreadsPerWarp().back() != 1 ||
-        enc.getWarpsPerCTA().back() != 1 || enc.getCTAsPerCGA().back() != 1) {
-      return emitOptionalError(
-          loc, "SplitOp requires threadsPerWarp, warpsPerCTA, "
-               "and CTAsPerCGA = 1 for the last dimension of the input");
-    }
-    if (enc.getCTALayout().getCTAsPerCGA().back() != 1) {
-      return emitOptionalError(
-          loc,
-          "SplitOp requires the last dimension to be most-minor in CTAOrder");
-    }
-    SmallVector<unsigned> newOrder(enc.getOrder());
-    int splitDim = newOrder.size() - 1;
-    // Remove splitDim from order.
-    newOrder.erase(std::remove(newOrder.begin(), newOrder.end(), splitDim),
-                   newOrder.end());
-    dstEnc = BlockedEncodingAttr::get(
-        enc.getContext(), //
-        ArrayRef(enc.getSizePerThread()).drop_back(1),
-        ArrayRef(enc.getThreadsPerWarp()).drop_back(1),
-        ArrayRef(enc.getWarpsPerCTA()).drop_back(1), ArrayRef(newOrder),
-        CTALayoutAttr::get(enc.getContext(), //
-                           ArrayRef(enc.getCTAsPerCGA()).drop_back(1),
-                           ArrayRef(enc.getCTASplitNum()).drop_back(1),
-                           ArrayRef(enc.getCTAOrder()).drop_front(1)));
+
+    // Remove last dim from newLl (which should be 1)
+    SmallVector<int64_t> dstShape(shape.begin(), shape.end());
+    dstShape.pop_back();
+    newLl = newLl.reshapeOuts(standardOutDimPairs(ctx, dstShape));
+    dstEnc = LinearEncodingAttr::get(ctx, newLl);
     return success();
   }
 
@@ -2898,40 +2950,10 @@ struct TritonGPUInferLayoutInterface
     }
 
     auto ll = toLinearLayout(shape, inEnc);
-
-    auto kRegister = StringAttr::get(ctx, "register");
-    auto outDims = llvm::to_vector(ll.getOutDimNames());
-    LinearLayout newLl = LinearLayout::empty();
-    if (fwdInference) {
-      auto split = LinearLayout::identity1D(2, kRegister, outDims[axis]);
-      newLl = split * ll;
-      // FIXME!!!!
-      // operator* transposes the output dimensions??!! WTF
-      newLl = newLl.transposeOuts(outDims);
-    } else {
-      // TODO This requires a division algorithm!
-      // Implement manually ll.divideLeft(split)
-      auto contiguousElems =
-          LinearEncodingAttr::get(ctx, ll).getContigPerThread();
-      if (contiguousElems[axis] > 1) {
-        LinearLayout::BasesT newBases;
-        for (const auto &basesDim : ll.getBases()) {
-          std::vector<std::vector<int32_t>> newBasesDim;
-          for (auto base : basesDim.second) {
-            if (base[axis] == 1) {
-              continue;
-            }
-            base[axis] /= 2;
-            newBasesDim.push_back(std::move(base));
-          }
-          newBases.insert({basesDim.first, std::move(newBasesDim)});
-        }
-        newLl = LinearLayout(std::move(newBases), std::move(outDims));
-      } else {
-        return emitOptionalError(loc, "Fp4ToFpOp requires at least 2 elements "
-                                      "per thread in the axis dimension");
-      }
-    }
+    auto newLl = LinearLayout::empty();
+    auto result = tryJoinOnAxis(ctx, ll, newLl, fwdInference, axis, loc);
+    if (!result.succeeded())
+      return result;
     outEnc = LinearEncodingAttr::get(ctx, newLl);
     return success();
   }
@@ -2942,7 +2964,7 @@ struct TritonGPUVerifyTensorLayoutInterface
   using DialectVerifyTensorLayoutInterface::DialectVerifyTensorLayoutInterface;
 
   LogicalResult verifyTensorLayout(
-      Attribute layout, RankedTensorType rankedTy, ModuleOp module,
+      Attribute layout, RankedTensorType rankedTy, Operation *op,
       function_ref<InFlightDiagnostic()> makeErr) const override {
     if (isa<triton::gpu::SharedEncodingTrait>(layout))
       return makeErr() << "Shared layout is not allowed on tensor type.";
@@ -2950,7 +2972,9 @@ struct TritonGPUVerifyTensorLayoutInterface
     // layouts also have invariants!
 
     // TODO(jlebar): Handle the case when the encoding is nested within tt.ptr.
-    if (auto blocked = dyn_cast<triton::gpu::BlockedEncodingAttr>(layout)) {
+    if (auto blocked = dyn_cast<BlockedEncodingAttr>(layout)) {
+      ModuleOp module = op->getParentOfType<ModuleOp>();
+
       // A different verifier should have checked that the layout itself is
       // valid, including that threads-per-warp has the same rank as
       // warps-per-block etc.
@@ -2961,8 +2985,7 @@ struct TritonGPUVerifyTensorLayoutInterface
                          << rankedTy.getRank() << ".";
       }
 
-      int moduleThreadsPerWarp =
-          triton::gpu::TritonGPUDialect::getThreadsPerWarp(module);
+      int moduleThreadsPerWarp = TritonGPUDialect::getThreadsPerWarp(module);
       int64_t layoutThreadsPerWarp = product(blocked.getThreadsPerWarp());
       if (layoutThreadsPerWarp != moduleThreadsPerWarp) {
         return makeErr() << layout << ".\nLayout has a total of "
@@ -2971,19 +2994,22 @@ struct TritonGPUVerifyTensorLayoutInterface
                          << moduleThreadsPerWarp << " threads per warp.";
       }
 
-      int moduleWarpsPerCTA =
-          triton::gpu::TritonGPUDialect::getNumWarps(module);
+      std::optional<int> moduleWarpsPerCTA = maybeLookupNumWarps(op);
+      if (!moduleWarpsPerCTA) {
+        return makeErr()
+               << "Could not determine the number of warps per CTA. Operation "
+                  "is not in a context with `ttg.num-warps`.";
+      }
       int64_t layoutWarpsPerCTA = product(blocked.getWarpsPerCTA());
-      if (layoutWarpsPerCTA != moduleWarpsPerCTA) {
+      if (layoutWarpsPerCTA != *moduleWarpsPerCTA) {
         return makeErr() << layout << ".\nLayout has a total of "
                          << layoutWarpsPerCTA
-                         << " warps per CTA, but the module specifies "
-                         << moduleWarpsPerCTA << " warps per CTA.";
+                         << " warps per CTA, but the context requires "
+                         << *moduleWarpsPerCTA << " warps per CTA.";
       }
 
       if (blocked.getCTALayout().getCTAsPerCGA().size() > 0) {
-        int moduleCTAsPerCGA =
-            triton::gpu::TritonGPUDialect::getNumCTAs(module);
+        int moduleCTAsPerCGA = TritonGPUDialect::getNumCTAs(module);
         int64_t layoutCTAsPerCGA =
             product(blocked.getCTALayout().getCTAsPerCGA());
         if (layoutCTAsPerCGA != moduleCTAsPerCGA) {
@@ -3322,6 +3348,7 @@ void mlir::triton::gpu::dumpHWLayout(RankedTensorType tensorType) {
   llvm::errs() << getLayoutStr(tensorType, /*useHWPointOfView=*/true);
 }
 
+namespace {
 struct TensorModel
     : public triton::gpu::TensorOrMemDesc::ExternalModel<TensorModel,
                                                          RankedTensorType> {
@@ -3361,6 +3388,7 @@ struct MemDescModel
     return cast<MemDescType>(pointer).getElementType().getIntOrFloatBitWidth();
   }
 };
+} // namespace
 
 void TritonGPUDialect::initialize() {
   registerTypes();
@@ -3382,9 +3410,59 @@ void TritonGPUDialect::initialize() {
   MemDescType::attachInterface<MemDescModel>(*getContext());
 }
 
-// verify TritonGPU ops
 LogicalResult TritonGPUDialect::verifyOperationAttribute(Operation *op,
                                                          NamedAttribute attr) {
-  // TODO: fill this.
+  // Verify that dialect attributes are attached to the right ops.
+  if (llvm::is_contained(
+          {AttrNumCTAsName, AttrTargetName, AttrNumThreadsPerWarp},
+          attr.getName()) &&
+      !isa<ModuleOp>(op)) {
+    return op->emitOpError("has unexpected attribute ")
+           << attr.getName() << " which is expected only on `module` ops";
+  }
+  if (attr.getName() == AttrNumWarpsName && !isa<ModuleOp, FuncOp>(op)) {
+    return op->emitOpError("has unexpected attribute ")
+           << attr.getName()
+           << " which is expected only on `module` or `tt.func` ops";
+  }
+
   return success();
+}
+
+int TritonGPUDialect::getNumCTAs(ModuleOp module) {
+  if (auto attr = module->getAttrOfType<IntegerAttr>(AttrNumCTAsName))
+    return attr.getInt();
+  return 1;
+}
+
+int TritonGPUDialect::getThreadsPerWarp(ModuleOp module) {
+  if (auto attr = module->getAttrOfType<IntegerAttr>(AttrNumThreadsPerWarp))
+    return attr.getInt();
+  return 32;
+}
+
+std::optional<int> triton::gpu::maybeLookupNumWarps(Operation *op) {
+  if (isa<ModuleOp, FuncOp>(op)) {
+    if (auto attr = op->getAttrOfType<IntegerAttr>(AttrNumWarpsName))
+      return attr.getInt();
+  } else if (auto partitions =
+                 dyn_cast<WarpSpecializePartitionsOp>(op->getParentOp())) {
+    unsigned idx = op->getParentRegion()->getRegionNumber();
+    return partitions.getParentOp().getPartitionNumWarps()[idx];
+  }
+  if (Operation *parent = op->getParentOp())
+    return maybeLookupNumWarps(parent);
+  return {};
+}
+
+int triton::gpu::lookupNumWarps(Operation *op) {
+  std::optional<int> numWarps = maybeLookupNumWarps(op);
+  if (!numWarps) {
+    op->emitOpError(
+        "is not contained within a context that specifies the number of warps");
+    llvm::report_fatal_error("failed to lookup the number of warps, the "
+                             "surrounding module should contain a " +
+                             Twine(AttrNumWarpsName) + " attribute");
+  }
+  return *numWarps;
 }

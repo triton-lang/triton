@@ -9,7 +9,6 @@
 
 using namespace mlir;
 
-using mlir::LLVM::getWrappedMultiDimOffset;
 using ::mlir::LLVM::linearize;
 namespace {
 // declare vprintf(i8*, i8*) as external function
@@ -447,8 +446,7 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
         // For partitioned reduction we need to calculate the mask so that
         // each group of numLaneToReduce threads has the correct mask.
         unsigned bitmask = (1 << numLaneToReduce) - 1;
-        Value threadId = getThreadId(rewriter, loc);
-        Value laneId = b.urem(threadId, b.i32_val(32));
+        Value laneId = getLaneId(rewriter, loc, /*warpSize=*/32);
         mask = b.shl(b.i32_val(bitmask),
                      b.and_(laneId, b.i32_val(~(numLaneToReduce - 1))));
       }

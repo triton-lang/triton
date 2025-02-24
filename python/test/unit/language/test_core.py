@@ -270,6 +270,8 @@ def bases_per_dim(layout, dim, rank, skip_broadcast=True):
 def warps_per_cta(layout, shape):
     if isinstance(layout, LinearLayout):
         return bases_per_dim(layout, 'warp', len(shape))
+    elif isinstance(layout, (SliceLayout, DotOperandLayout)):
+        return warps_per_cta(layout.parent, shape)
     else:
         return layout.warps_per_cta
 
@@ -316,6 +318,18 @@ def test_empty_kernel(dtype_x, device):
     check_type_supported(dtype_x, device)
     x = to_triton(numpy_random(SIZE, dtype_str=dtype_x), device=device, dst_type=dtype_x)
     kernel[(1, )](x, SIZE=SIZE, num_warps=4)
+
+
+def test_scalar_overflow(device):
+
+    @triton.jit
+    def kernel():
+        huge_int: tl.constexpr = 0xFFFFFFFFFFFFFF
+        x = tl.full((), 32, dtype=tl.int32)
+        y = x + huge_int
+
+    with pytest.raises(triton.TritonError, match="out of range"):
+        kernel[(1, )]()
 
 
 # generic test functions
@@ -1642,6 +1656,79 @@ def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, check_return_val,
 
 
 @pytest.mark.interpreter
+@pytest.mark.parametrize("size, num_ctas, dtype_x_str", [(size, num_ctas, dtype_x_str)
+                                                         for size in [2, 4, 8, 32, 64, 128]
+                                                         for num_ctas in num_ctas_list
+                                                         for dtype_x_str in ['float16']])
+def test_tensor_atomic_add_non_exclusive_offset(size, num_ctas, dtype_x_str, device):
+
+    @triton.jit
+    def kernel(X, val, NUM: tl.constexpr):
+        off = tl.arange(0, NUM)
+        offset = off[:, None] * NUM + off[None, :]
+        val = tl.load(val + offset)
+        tl.atomic_add(X + offset // 2, val)
+
+    shape = (size // 2, size)
+    x = torch.zeros(shape, dtype=getattr(torch, dtype_x_str), device=device)
+    val = torch.randn((size**2), dtype=getattr(torch, dtype_x_str), device=device)
+    kernel[(1, )](x, val, size, num_warps=1, num_ctas=num_ctas)
+    ref = val[0::2] + val[1::2]
+    torch.testing.assert_close(ref, x.reshape(math.prod(shape)))
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("shape, idx_order, mask_step, num_ctas, dtype_x_str",
+                         [(shape, idx_order, mask_step, num_ctas, dtype_x_str)
+                          for shape in [(2, 2), (5, 5), (6, 6), (8, 8)]
+                          for idx_order in ['increase', 'decrease', 'random_no_duplication', 'random']
+                          for mask_step in range(1, 5)
+                          for num_ctas in num_ctas_list
+                          for dtype_x_str in ['float16']])
+def test_tensor_atomic_add_access_patterns(shape, idx_order, mask_step, num_ctas, dtype_x_str, device):
+    check_type_supported(dtype_x_str, device)
+    if is_interpreter():
+        pytest.skip("not supported in the interpreter")
+
+    @triton.jit
+    def kernel(in_ptr, idx_ptr, out_ptr, shape0, shape1, mask_step, XBLOCK: tl.constexpr):
+        xoffset = tl.program_id(0) * XBLOCK
+        x_idx = xoffset + tl.arange(0, XBLOCK)[:]
+        mask = x_idx < shape0 * shape1
+        mask = mask and (x_idx % mask_step != 0)
+        idx_base = shape1 * (x_idx // shape1)
+        idx_offset = tl.load(idx_ptr + x_idx, mask)
+        in_elem = tl.load(in_ptr + x_idx, mask)
+        tl.atomic_add(out_ptr + (idx_offset + idx_base), in_elem, mask, sem='relaxed')
+
+    shape0, shape1 = shape
+    idx_row = torch.arange(0, shape1, device=device)
+    if idx_order == 'increase':
+        idx = torch.stack([idx_row.repeat_interleave(i + 1)[:shape1] for i in range(shape0)])
+    if idx_order == 'decrease':
+        idx = torch.stack([idx_row.flip(0).repeat_interleave(i + 1)[:shape1] for i in range(shape0)])
+    if idx_order == 'random_no_duplication':
+        idx = torch.stack([torch.randperm(shape1, device=device) for _ in idx_row])
+    if idx_order == 'random':
+        idx = torch.randint(0, shape1, size=(shape0, shape1), device=device)
+
+    val = torch.randn((shape0, shape1), dtype=getattr(torch, dtype_x_str), device=device)
+    dst = torch.randn((shape0, shape1), dtype=getattr(torch, dtype_x_str), device=device)
+
+    dst_ref = dst.clone()
+
+    cnt = 0
+    for i, row in enumerate(idx):
+        for j, elem in enumerate(row):
+            if cnt % mask_step != 0:
+                dst_ref[i][elem] += val[i][j]
+            cnt += 1
+
+    kernel[(1, )](val, idx, dst, shape0, shape1, mask_step, 64, num_ctas=num_ctas)
+    np.testing.assert_allclose(to_numpy(dst_ref), to_numpy(dst), atol=1e-2)
+
+
+@pytest.mark.interpreter
 @pytest.mark.parametrize("num_ctas", num_ctas_list)
 def test_tensor_atomic_rmw_block(num_ctas, device):
     shape = (8, 8)
@@ -2827,34 +2914,32 @@ def test_scan_layouts(M, N, src_layout, axis, add_overflow_check, device, tmp_pa
 layouts = [
     BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
     BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [2, 2], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 4], [8, THREADS_PER_WARP // 8], [2, 2], [0, 1], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([4, 4], [THREADS_PER_WARP // 16, 16], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    BlockedLayout([1, 2], [4, THREADS_PER_WARP // 4], [4, 1], [1, 0], [1, 1], [1, 1], [0, 1]),
-    MmaLayout(version=(2, 0), warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[0, 1],
-              instr_shape=[16, 8]),
-    MmaLayout(version=(2, 0), warps_per_cta=[2, 2], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[0, 1],
+    MmaLayout(version=(2, 0), warps_per_cta=[2, 4], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[0, 1],
               instr_shape=[16, 8]),
     MmaLayout(version=(3, 0), warps_per_cta=[4, 1], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[1, 0],
               instr_shape=[16, 16, 16]),
-    MmaLayout(version=(3, 0), warps_per_cta=[4, 2], ctas_per_cga=[1, 1], cta_split_num=[1, 1], cta_order=[1, 0],
-              instr_shape=[16, 32, 16]),
-    MfmaLayout(version=(2, 0), warps_per_cta=[2, 2], instr_shape=[32, 32], is_transposed=False),
     MfmaLayout(version=(2, 0), warps_per_cta=[4, 1], instr_shape=[32, 32], is_transposed=False),
     MfmaLayout(version=(2, 0), warps_per_cta=[1, 4], instr_shape=[32, 32], is_transposed=False),
-    MfmaLayout(version=(2, 0), warps_per_cta=[2, 2], instr_shape=[32, 32], is_transposed=True),
     MfmaLayout(version=(2, 0), warps_per_cta=[4, 1], instr_shape=[32, 32], is_transposed=True),
     MfmaLayout(version=(2, 0), warps_per_cta=[1, 4], instr_shape=[32, 32], is_transposed=True),
-    WmmaLayout(version=1, warps_per_cta=[2, 2]),
     WmmaLayout(version=1, warps_per_cta=[4, 1]),
     WmmaLayout(version=1, warps_per_cta=[1, 4]),
+    DotOperandLayout(parent=MmaLayout([2, 0], [2, 4], [1, 1], [1, 1], [1, 0], [16, 8]), op_idx=1, k_width=8),
+    DotOperandLayout(parent=MmaLayout([3, 0], [8, 1], [1, 1], [1, 1], [1, 0], [16, 32, 16]), op_idx=0, k_width=2),
+    # FIXME: Do not enable these tests until the SLPVectorizor problem with nvptx target has been resolved
+    # SliceLayout(dim=1, parent=BlockedLayout([1, 4, 1], [1, 8, THREADS_PER_WARP // 8], [1, 1, 4], [2, 0, 1], [1, 1, 1], [1, 1, 1], [0, 1, 2])),
+    # SliceLayout(dim=0, parent=BlockedLayout([1, 4, 1], [1, 8, THREADS_PER_WARP // 8], [1, 4, 1], [2, 1, 0], [1, 1, 1], [1, 1, 1], [0, 1, 2])),
+    SliceLayout(dim=0, parent=MmaLayout([2, 0], [4, 1, 1], [1, 1, 1], [1, 1, 1], [2, 1, 0], [1, 16, 8])),
+    SliceLayout(
+        dim=1, parent=DotOperandLayout(parent=MmaLayout([2, 0], [4, 1, 1], [1, 1, 1], [1, 1, 1], [2, 1, 0], [1, 16, 8]),
+                                       op_idx=1, k_width=2)),
     LinearLayout(register=[[0, 16], [1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], lane=[[0, 0], [0, 1], [0, 2], [0, 4],
                                                                                     [0, 8]], warp=[[32, 0], [0, 32]],
                  block=[]),
 ]
 
 
-@pytest.mark.parametrize("M, N", [[128, 16], [128, 128], [64, 64], [32, 128], [32, 32], [16, 16]])
+@pytest.mark.parametrize("M, N", [[128, 16], [128, 128], [32, 128], [32, 32], [16, 16]])
 @pytest.mark.parametrize("src_layout", filter_layouts(layouts))
 @pytest.mark.parametrize("axis", [0, 1])
 @pytest.mark.parametrize("epilogue_kind", ['reduce1d', 'reduce2d', 'expand_reduce2d'])
@@ -2874,7 +2959,7 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, add_ov
         pytest.skip("FIXME: LinearLayout not supported on HIP")
 
     if isinstance(src_layout, MmaLayout) and src_layout.version == 3:
-        src_layout[2] = 16 if dtype_str == "float16" else 8
+        src_layout.instr_shape[2] = 16 if dtype_str == "float16" else 8
 
     overflow_check = """
         %18 = arith.extsi %arg3 : i32 to i64
@@ -2897,11 +2982,9 @@ def test_reduce_layouts(M, N, src_layout, axis, epilogue_kind, dtype_str, add_ov
     rdims_1d = f"{N}" if axis == 0 else f"{M}"
     rdims_2d = f"1x{N}" if axis == 0 else f"{M}x1"
     store_range = "%7" if axis == 0 else "%1"
-    blocked = BlockedLayout([1, 1], [32, THREADS_PER_WARP // 32], [4, 1], [0, 1], [1, 1], [1, 1], [0, 1])
     warps = warps_per_cta(src_layout, [M, N])
-    num_warps = warps[0] * warps[1]
-    if num_warps == 8:
-        blocked = BlockedLayout([1, 1], [32, THREADS_PER_WARP // 32], [4, 2], [0, 1], [1, 1], [1, 1], [0, 1])
+    num_warps = np.prod(warps)
+    blocked = BlockedLayout([1, 1], [32, THREADS_PER_WARP // 32], [4, num_warps // 4], [0, 1], [1, 1], [1, 1], [0, 1])
     one_d_layout = BlockedLayout([1], [THREADS_PER_WARP], [num_warps], [0], [1], [1], [0])
 
     expanded_shape = f"1x{N}" if axis == 0 else f"{M}x1"
@@ -3420,9 +3503,19 @@ def get_test_dot_small_mn_fma_cases():
             for in_dtype, out_dtype in [('float16', 'float16'), ('float32', 'float32')]]
 
 
+def get_test_dot_double_rate_cases():
+    if not is_hip_cdna():
+        return []
+    return [(32, 32, 16, 4, False, False, 'None', 'ieee', 'float16', 'float32', 1, None),
+            (32, 32, 16, 4, False, False, 'None', 'ieee', 'bfloat16', 'float32', 1, None),
+            (16, 16, 32, 4, False, False, 'None', 'ieee', 'float16', 'float32', 1, None),
+            (16, 16, 32, 4, False, False, 'None', 'ieee', 'bfloat16', 'float32', 1, None)]
+
+
 @pytest.mark.interpreter
 @pytest.mark.parametrize(
     "M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dtype, out_dtype, kpack, mma_nonk_size",
+    get_test_dot_double_rate_cases() + \
     get_test_dot_base_cases() + \
     get_test_dot_mixed_sizes_cases() + \
     get_test_dot_transposed_op_base_cases() + \
@@ -3904,7 +3997,8 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
             assert 'ld.global.v4' in ptx
         if M * N // (num_warps * 32) >= 4:
             assert 'st.global.v4' in ptx
-        assert re.search(r'(mma|wgmma.mma_async).sync.aligned.m\d+n\d+k16(?:.row.col)?.f32.(f|bf)16.(f|bf)16', ptx)
+        assert (re.search(r'(mma|wgmma.mma_async).sync.aligned.m\d+n\d+k16(?:.row.col)?.f32.(f|bf)16.(f|bf)16', ptx)
+                or "tcgen05.mma.cta_group::1.kind::f16" in ptx)
 
 
 @pytest.mark.interpreter
@@ -4405,12 +4499,13 @@ def test_load_cache_modifier(cache, device):
         cv_cache_modifier_str = 'sc0 sc1'
         buffer_load_line = [line for line in amdgcn.splitlines() if "buffer_load" in line]
         global_load_line = [line for line in amdgcn.splitlines() if "global_load" in line]
+        load_line = global_load_line[0] if global_load_line else buffer_load_line[0]
         if cache == '' or cache == '.ca':
-            assert cg_cache_modifier_str not in (global_load_line[0] if global_load_line else buffer_load_line[0])
+            assert cg_cache_modifier_str not in load_line
         if cache == '.cg':
-            assert cg_cache_modifier_str in global_load_line[0]
+            assert cg_cache_modifier_str in load_line
         if cache == '.cv':
-            assert cv_cache_modifier_str in global_load_line[0]
+            assert cv_cache_modifier_str in load_line
 
     if is_cuda():
         ptx = pgm.asm['ptx']
@@ -4527,18 +4622,18 @@ def test_store_cache_modifier(cache, device):
         amdgcn = pgm.asm['amdgcn']
         cs_cache_modifier_str = 'nt'
         wt_cache_modifier_str = 'sc0 sc1'
+        buffer_store_line = [line for line in amdgcn.splitlines() if "buffer_store" in line]
         global_store_line = [line for line in amdgcn.splitlines() if "global_store" in line]
-        if not global_store_line:
-            return
+        store_line = global_store_line[0] if global_store_line else buffer_store_line[0]
         if cache == '' or cache == '.cg':
-            assert cs_cache_modifier_str not in global_store_line[0]
-            assert wt_cache_modifier_str not in global_store_line[0]
+            assert cs_cache_modifier_str not in store_line
+            assert wt_cache_modifier_str not in store_line
         if cache == '.cs':
-            assert cs_cache_modifier_str in global_store_line[0]
-            assert wt_cache_modifier_str not in global_store_line[0]
+            assert cs_cache_modifier_str in store_line
+            assert wt_cache_modifier_str not in store_line
         if cache == '.wt':
-            assert cs_cache_modifier_str not in global_store_line[0]
-            assert wt_cache_modifier_str in global_store_line[0]
+            assert cs_cache_modifier_str not in store_line
+            assert wt_cache_modifier_str in store_line
 
     if is_cuda():
         ptx = pgm.asm['ptx']
@@ -5531,8 +5626,8 @@ def test_poison_return(device):
     a = torch.empty((), device=device, dtype=torch.int32)
     h = kernel[(1, )](a)
     assert "ub.poison" in h.asm["ttir"], h.asm["ttir"]
-    # xpu uses llvm.store, which in this case is removed by the optimizer
-    if not is_xpu():
+    # hip/xpu uses llvm.store, which in this case is removed by the optimizer
+    if not (is_hip() or is_xpu()):
         assert "poison" in h.asm["llir"], h.asm["llir"]
 
 
@@ -6306,7 +6401,8 @@ def matmul_kernel(  #
 @pytest.mark.interpreter
 @pytest.mark.parametrize("M, N, K", [(128, 256, 256)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 256, 128), (64, 64, 64)])
-@pytest.mark.parametrize("in_type_str", ['float8e5', 'float8e4nv', 'float8e4b15'])
+@pytest.mark.parametrize(
+    "in_type_str", ['float8e5', 'float8e5b16', 'float8e4b8'] if is_hip() else ['float8e5', 'float8e4nv', 'float8e4b15'])
 @pytest.mark.parametrize("low_precision_acc", [0, 32, 64, 128])
 def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_str, low_precision_acc, device):
     num_stages = 3
@@ -6316,8 +6412,8 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
             pytest.skip("Dot op does not support fp8e4b15 on CUDA arch >= 90")
     elif is_hip():
         num_stages = 2
-        if in_type_str != 'float8e5':
-            pytest.skip('test_fp8_dot_acc for HIP currently broken in upstream.')
+        if in_type_str in ("float8e5b16", "float8e4b8") and not is_hip_mi300():
+            pytest.skip(f"{in_type_str} only supported on mi300")
 
     check_type_supported(in_type_str, device)
     A = numpy_random((M, K), dtype_str=in_type_str)
@@ -6542,7 +6638,7 @@ def test_static_range(device):
 
 
 @pytest.mark.interpreter
-def test_tl_range(device):
+def test_tl_range_num_stages(device):
     if is_hip():
         pytest.skip("test_tl_range is not supported in HIP")
     M, N, K = 64, 64, 512
@@ -6582,6 +6678,18 @@ def test_tl_range_fuse():
     compiled_kernel = kernel.warmup(10, grid=(1, ))
     assert "tt.flatten" in compiled_kernel.asm["ttir"]
     assert compiled_kernel.asm["ttgir"].count("scf.for") == 1
+
+
+def test_tl_range_option_none():
+
+    @triton.jit
+    def kernel(ub):
+        for i in tl.range(0, ub, num_stages=None, loop_unroll_factor=None):
+            print("i", i)
+
+    compiled_kernel = kernel.warmup(10, grid=(1, ))
+    assert "num_stages" not in compiled_kernel.asm["ttir"]
+    assert "loop_unroll_factor" not in compiled_kernel.asm["ttir"]
 
 
 @triton.jit(noinline=True)

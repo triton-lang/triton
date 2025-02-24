@@ -27,7 +27,7 @@ public:
   matchAndRewrite(triton::ReduceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     ReduceOpHelper helper(op);
-    assert(helper.isSupportedLayout() &&
+    assert(helper.isReduceWithinCTA() &&
            "Unexpected srcLayout in ReduceOpConversion");
     Location loc = op->getLoc();
 
@@ -226,14 +226,11 @@ private:
     triton::ReduceOp op = helper.getOperation();
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    Value threadId = getThreadId(rewriter, loc);
     auto srcLayout =
         mlir::cast<DistributedEncodingTrait>(helper.getSrcLayout());
     auto mod = op.getOperation()->getParentOfType<ModuleOp>();
-    Value warpSize =
-        b.i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
-    Value warpId = b.udiv(threadId, warpSize);
-    Value laneId = b.urem(threadId, warpSize);
+    auto [laneId, warpId] = getLaneAndWarpId(
+        rewriter, loc, triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
     unsigned axis = op.getAxis();
     auto smemShape = helper.getScratchRepShape();
 
@@ -283,9 +280,9 @@ private:
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    auto mod = op.getOperation()->getParentOfType<ModuleOp>();
+    auto mod = op->getParentOfType<ModuleOp>();
     int numLanes = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+    int numWarps = triton::gpu::lookupNumWarps(op);
     int numThreads = numLanes * numWarps;
 
     Value threadId = getThreadId(rewriter, loc);

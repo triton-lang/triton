@@ -75,7 +75,7 @@ private:
                                     : SharedToDotOperandWMMA::convertLayout;
       res = sharedToDotConvert(dotOperandLayout.getOpIdx(), rewriter, loc, src,
                                dotOperandLayout, smemObj, typeConverter,
-                               b.tid_val());
+                               getThreadId(rewriter, loc));
     } else {
       assert(false && "unsupported layout found");
     }

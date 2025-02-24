@@ -6,7 +6,7 @@ import triton.language as tl
 import triton.tools.experimental_descriptor
 from test_mxfp import MXFP4Tensor, MXScaleTensor
 import re
-from triton._internal_testing import is_cuda, is_hip, is_hip_mi200, is_hip_mi350, is_hip_cdna
+from triton._internal_testing import is_cuda, is_hip, is_hip_mi300, is_hip_mi350, is_hip_cdna
 
 
 def f8_to_f16(x, dtype):
@@ -84,8 +84,8 @@ def test_simple_matmul(dtype_src_str, dtype_dst_str, BLOCK_M, BLOCK_N, BLOCK_K, 
     if is_hip() and ((BLOCK_K * BLOCK_M + BLOCK_K * BLOCK_N) * NUM_STAGES * get_src_element_ty_size(dtype_src_str)
                      > 65536):
         pytest.skip("HIP path requires less than 64KB of shared memory")
-    if is_hip_mi200() and dtype_src_str == "tensorfloat32":
-        pytest.skip("HIP MI200 does not support tensorfloat32")
+    if is_hip() and (not is_hip_mi300()) and dtype_src_str == "tensorfloat32":
+        pytest.skip("tensorfloat32 is only supported on HIP MI300")
     if dtype_src_str == "float8e5" and BLOCK_K == 16:
         pytest.skip("Skipping cases small K for float8")
     if dtype_src_str == "float8e5" and device == "cuda" and torch.cuda.get_device_capability()[0] < 9:
@@ -682,8 +682,10 @@ def block_scale_fp4_matmul(  #
     # Two e2m1 values per K
     offs_k = tl.arange(0, BLOCK_K // 2)
     offs_scale_k = tl.arange(0, BLOCK_K // VEC_SIZE)
-    a_scale_ptr = a_scale + offs_am[:, None] * stride_scale + offs_scale_k[None, :]
-    b_scale_ptr = b_scale + offs_bn[:, None] * stride_scale + offs_scale_k[None, :]
+    if a_scale is not None:
+        a_scale_ptr = a_scale + offs_am[:, None] * stride_scale + offs_scale_k[None, :]
+    if b_scale is not None:
+        b_scale_ptr = b_scale + offs_bn[:, None] * stride_scale + offs_scale_k[None, :]
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
     accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=output_ptr.dtype.element_ty)
@@ -692,13 +694,21 @@ def block_scale_fp4_matmul(  #
         valid_k = offs_k < k_remaining
         a = tl.load(a_ptrs, mask=valid_k[None, :], other=0)
         b = tl.load(b_ptrs, mask=valid_k[:, None], other=0)
-        scale_a = tl.load(a_scale_ptr)
-        scale_b = tl.load(b_scale_ptr)
+        if a_scale is not None:
+            scale_a = tl.load(a_scale_ptr)
+        else:
+            scale_a = None
+        if b_scale is not None:
+            scale_b = tl.load(b_scale_ptr)
+        else:
+            scale_b = None
         accumulator = tl.dot_scaled(a, scale_a, "e2m1", b, scale_b, "e2m1", accumulator)
         a_ptrs += (BLOCK_K // 2) * stride_ak
         b_ptrs += (BLOCK_K // 2) * stride_bk
-        a_scale_ptr += BLOCK_K // VEC_SIZE
-        b_scale_ptr += BLOCK_K // VEC_SIZE
+        if a_scale is not None:
+            a_scale_ptr += BLOCK_K // VEC_SIZE
+        if b_scale is not None:
+            b_scale_ptr += BLOCK_K // VEC_SIZE
     offs_cm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     offs_cn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
     output_ptrs = output_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
@@ -709,12 +719,18 @@ def block_scale_fp4_matmul(  #
 @pytest.mark.parametrize("M, N, K", [(1024, 512, 256), (2, 4, 64)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (256, 128, 128), (128, 256, 128),
                                                        (128, 256, 256), (128, 128, 64), (128, 64, 128)])
+@pytest.mark.parametrize("with_a_scale", [True, False])
+@pytest.mark.parametrize("with_b_scale", [True, False])
 @pytest.mark.parametrize(("scale_type", "VEC_SIZE"), [("float8_e8m0fnu", 32), ("float8_e4m3fn", 16)],
                          ids=["mxfp4", "nvfp4"])
 @pytest.mark.parametrize("nonKDim", ([0, 16, 32] if is_hip_cdna() else []))
-def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, scale_type, nonKDim, device):
-    if is_cuda() and torch.cuda.get_device_capability()[0] < 10:
-        pytest.skip("Requires compute capability >= 10")
+def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, with_a_scale, with_b_scale, scale_type, nonKDim,
+                         device):
+    if is_cuda():
+        if torch.cuda.get_device_capability()[0] < 10:
+            pytest.skip("Requires compute capability >= 10")
+        if not (with_a_scale and with_b_scale):
+            pytest.skip("None aScale/bScale is only tested on AMD backend for now")
     elif is_hip():
         if not is_hip_mi350():
             pytest.skip("Scaled fp4 matmul is only natively supported on MI350")
@@ -750,6 +766,13 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, scale_typ
 
     a_scale_ref = a_scale_ref.to(torch.float32).repeat_interleave(VEC_SIZE, dim=1)[:M, :K]
     b_scale_ref = b_scale_ref.to(torch.float32).repeat_interleave(VEC_SIZE, dim=1).T.contiguous()[:K, :N]
+    stride_scale = a_scale.stride(0)
+    if not with_a_scale:
+        a_scale = None
+        a_scale_ref = 1.0
+    if not with_b_scale:
+        b_scale = None
+        b_scale_ref = 1.0
     ref_out = torch.matmul(a_mxfp4.to(torch.float32) * a_scale_ref, b_ref * b_scale_ref)
 
     output = a.new_empty((M, N), dtype=torch.float32)
@@ -757,7 +780,7 @@ def test_block_scale_fp4(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, VEC_SIZE, scale_typ
     kernel_kwargs = {}
     if is_hip():
         kernel_kwargs["matrix_instr_nonkdim"] = nonKDim
-    block_scale_fp4_matmul[grid](a, b, output, a_scale, b_scale, M, N, K, a_scale.stride(0), a.stride(0), a.stride(1),
+    block_scale_fp4_matmul[grid](a, b, output, a_scale, b_scale, M, N, K, stride_scale, a.stride(0), a.stride(1),
                                  b.stride(0), b.stride(1), output.stride(0), output.stride(1), VEC_SIZE, BLOCK_M,
                                  BLOCK_N, BLOCK_K, NUM_STAGES=NUM_STAGES, **kernel_kwargs)
 

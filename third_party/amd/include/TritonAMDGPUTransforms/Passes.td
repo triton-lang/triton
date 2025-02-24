@@ -19,9 +19,12 @@ def TritonAMDGPUStreamPipeline : Pass<"tritonamdgpu-stream-pipeline", "mlir::Mod
     Option<"numStages", "num_stages",
            "int32_t", /*default*/"2",
            "Number of Pipeline stages">,
-    Option<"prefetch", "prefetch",
+    Option<"globalPrefetch", "global_prefetch",
            "int32_t", /*default*/"0",
-           "Enable prefetch from shared memory">
+           "Set global prefetch stage count">,
+    Option<"localPrefetch", "local_prefetch",
+           "int32_t", /*default*/"0",
+           "Set local prefetch stage count">,
   ];
 }
 
@@ -35,7 +38,7 @@ def TritonAMDGPUAccelerateMatmul : Pass<"tritonamdgpu-accelerate-matmul", "mlir:
 
   let constructor = "mlir::createTritonAMDGPUAccelerateMatmulPass()";
 
-  let dependentDialects = [];
+  let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
 
   let options = [
     Option<"archGenerationName", "arch-generation-name",

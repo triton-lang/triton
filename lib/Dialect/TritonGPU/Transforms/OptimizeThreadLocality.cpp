@@ -24,14 +24,12 @@ namespace {
 // Change the destination layout of reshape ops allowing reorder when used by a
 // reduction in order to minimize the amount of cross thread communication for
 // the reduction.
-struct OptimizeReshapeLayoutPattern
-    : public mlir::OpRewritePattern<triton::ReshapeOp> {
-  OptimizeReshapeLayoutPattern(mlir::MLIRContext *context)
-      : OpRewritePattern<triton::ReshapeOp>(context, 1) {}
+struct OptimizeReshapeLayoutPattern : public OpRewritePattern<ReshapeOp> {
+  OptimizeReshapeLayoutPattern(MLIRContext *context)
+      : OpRewritePattern<ReshapeOp>(context, 1) {}
 
-  mlir::LogicalResult
-  matchAndRewrite(triton::ReshapeOp viewOp,
-                  mlir::PatternRewriter &rewriter) const override {
+  LogicalResult matchAndRewrite(ReshapeOp viewOp,
+                                PatternRewriter &rewriter) const override {
     if (!viewOp.getAllowReorder())
       return failure();
     std::optional<int> reductionAxis;
@@ -48,8 +46,8 @@ struct OptimizeReshapeLayoutPattern
     if (!reductionAxis)
       return failure();
     RankedTensorType tensorType = viewOp.getType();
-    if (auto blocked = mlir::dyn_cast<triton::gpu::BlockedEncodingAttr>(
-            tensorType.getEncoding())) {
+    if (auto blocked =
+            mlir::dyn_cast<BlockedEncodingAttr>(tensorType.getEncoding())) {
       // If the layout already has all the elements along the reduction
       // dimension in the same thread we can skip.
       if (blocked.getThreadsPerWarp()[*reductionAxis] == 1 &&
@@ -58,7 +56,7 @@ struct OptimizeReshapeLayoutPattern
         return failure();
     }
     ArrayRef<int64_t> shape = tensorType.getShape();
-    llvm::SmallVector<unsigned> order;
+    SmallVector<unsigned> order;
     for (int i : triton::gpu::getOrder(tensorType.getEncoding())) {
       if (i != *reductionAxis)
         order.push_back(i);
@@ -66,15 +64,14 @@ struct OptimizeReshapeLayoutPattern
     // Make the reduction axis last so that elements won't be distributed
     // amongst threads along this dimension.
     order.push_back(*reductionAxis);
-    llvm::SmallVector<unsigned> sizePerThread(shape.size(), 1);
+    SmallVector<unsigned> sizePerThread(shape.size(), 1);
     auto mod = viewOp->getParentOfType<ModuleOp>();
-    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
-    int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-    int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);
-    triton::gpu::BlockedEncodingAttr encoding =
-        triton::gpu::BlockedEncodingAttr::get(viewOp.getContext(), shape,
-                                              sizePerThread, order, numWarps,
-                                              threadsPerWarp, numCTAs);
+    int numWarps = lookupNumWarps(viewOp);
+    int threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(mod);
+    int numCTAs = TritonGPUDialect::getNumCTAs(mod);
+    auto encoding =
+        BlockedEncodingAttr::get(viewOp.getContext(), shape, sizePerThread,
+                                 order, numWarps, threadsPerWarp, numCTAs);
     if (encoding == tensorType.getEncoding())
       return failure();
     RankedTensorType newType =
@@ -86,13 +83,12 @@ struct OptimizeReshapeLayoutPattern
       viewOp.getResult().setType(newType);
       viewOp.setEfficientLayout(true);
     });
-    auto cvt = rewriter.create<mlir::triton::gpu::ConvertLayoutOp>(
-        viewOp.getLoc(), tensorType, viewOp.getResult());
+    auto cvt = rewriter.create<ConvertLayoutOp>(viewOp.getLoc(), tensorType,
+                                                viewOp.getResult());
     rewriter.replaceAllUsesExcept(viewOp.getResult(), cvt.getResult(), cvt);
-    return mlir::success();
+    return success();
   }
 };
-
 } // namespace
 
 static RankedTensorType replaceEncoding(RankedTensorType oldType,
@@ -103,7 +99,7 @@ static RankedTensorType replaceEncoding(RankedTensorType oldType,
 
 // This function considers a gather op in isolation and attempts to determine
 // whether an optimized layout can be applied to the source and index tensors.
-static void setOptimizedGatherLayout(GatherOp op, mlir::RewriterBase &b) {
+static void setOptimizedGatherLayout(GatherOp op, RewriterBase &b) {
   RankedTensorType srcType = op.getSrc().getType();
   RankedTensorType idxType = op.getIndices().getType();
 
@@ -548,7 +544,8 @@ private:
     return viewOpTensorShape;
   }
 
-  Attribute getThreadLocalityOptimizedEncoding(triton::ReduceOp reduce) const {
+  BlockedEncodingAttr
+  getThreadLocalityOptimizedEncoding(triton::ReduceOp reduce) const {
     auto srcType = cast<RankedTensorType>(reduce.getOperands()[0].getType());
     auto rank = srcType.getShape().size();
     auto srcEncoding = srcType.getEncoding();

@@ -3,7 +3,6 @@
 #include "mlir/IR/Types.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Support/LogicalResult.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -23,19 +22,17 @@ SmallVector<int, 2> getTransposeOrder(int rank) {
   return transOrder;
 }
 
-class DecomposeScaledBlocked
-    : public mlir::OpRewritePattern<triton::DotScaledOp> {
+class DecomposeScaledBlocked : public OpRewritePattern<DotScaledOp> {
 
 public:
-  DecomposeScaledBlocked(mlir::MLIRContext *context, int benefit)
-      : mlir::OpRewritePattern<triton::DotScaledOp>(context, benefit) {}
+  DecomposeScaledBlocked(MLIRContext *context, int benefit)
+      : OpRewritePattern<DotScaledOp>(context, benefit) {}
 
-  mlir::LogicalResult
-  matchAndRewrite(triton::DotScaledOp scaledDotOp,
-                  mlir::PatternRewriter &rewriter) const override {
+  LogicalResult matchAndRewrite(DotScaledOp scaledDotOp,
+                                PatternRewriter &rewriter) const override {
     // Types
-    auto computeType = getComputeType(scaledDotOp.getLhsType(),
-                                      scaledDotOp.getRhsType(), rewriter);
+    auto computeType = getComputeType(scaledDotOp.getAElemType(),
+                                      scaledDotOp.getBElemType(), rewriter);
     auto loc = scaledDotOp.getLoc();
 
     auto cvtDotOperand = [&](TypedValue<RankedTensorType> v,
@@ -64,13 +61,13 @@ public:
 
 private:
   FloatType getComputeType(ScaleDotElemType aType, ScaleDotElemType bType,
-                           mlir::PatternRewriter &rewriter) const {
+                           PatternRewriter &rewriter) const {
     if (aType == ScaleDotElemType::FP16 || bType == ScaleDotElemType::FP16)
       return rewriter.getF16Type();
     return rewriter.getBF16Type();
   }
 
-  TypedValue<RankedTensorType> scaleTo16(mlir::PatternRewriter &rewriter,
+  TypedValue<RankedTensorType> scaleTo16(PatternRewriter &rewriter,
                                          TypedValue<RankedTensorType> scale,
                                          FloatType computeType) const {
     auto loc = scale.getLoc();
@@ -105,8 +102,9 @@ private:
   }
 
   TypedValue<RankedTensorType>
-  broadcastScale(mlir::PatternRewriter &rewriter, ModuleOp mod,
-                 TypedValue<RankedTensorType> scale, int dim) const {
+  broadcastScale(PatternRewriter &rewriter, DotScaledOp scaledDotOp,
+                 ModuleOp mod, TypedValue<RankedTensorType> scale,
+                 int dim) const {
     auto *ctx = rewriter.getContext();
     auto loc = scale.getLoc();
     auto scaleTy = scale.getType();
@@ -116,7 +114,7 @@ private:
       // 2.1.1) Find default encoding for ExpandDims
       auto shape = to_vector(scaleTy.getShape());
       shape.insert(shape.end(), 1);
-      auto nWarps = TritonGPUDialect::getNumWarps(mod);
+      auto nWarps = lookupNumWarps(scaledDotOp);
       auto threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(mod);
       auto numCTAs = TritonGPUDialect::getNumCTAs(mod);
       auto blockedEnc = getDefaultBlockedEncoding(ctx, shape, nWarps,
@@ -146,8 +144,8 @@ private:
     return reshapeScale;
   }
 
-  TypedValue<RankedTensorType> maskNan(mlir::PatternRewriter &rewriter,
-                                       ModuleOp mod,
+  TypedValue<RankedTensorType> maskNan(PatternRewriter &rewriter,
+                                       DotScaledOp scaledDotOp, ModuleOp mod,
                                        TypedValue<RankedTensorType> mxfp,
                                        TypedValue<RankedTensorType> scale,
                                        int dim) const {
@@ -165,7 +163,7 @@ private:
             .create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq, scale,
                                    constFF)
             .getResult());
-    auto cond = broadcastScale(rewriter, mod, scaleIsNan, dim);
+    auto cond = broadcastScale(rewriter, scaledDotOp, mod, scaleIsNan, dim);
     // Make scale is NaN compatible with mxfp
     auto condTy = cond.getType();
     condTy = RankedTensorType::get(condTy.getShape(), condTy.getElementType(),
@@ -183,15 +181,14 @@ private:
     return cast<TypedValue<RankedTensorType>>(result.getResult());
   }
 
-  TypedValue<RankedTensorType> scaleArg(mlir::PatternRewriter &rewriter,
+  TypedValue<RankedTensorType> scaleArg(PatternRewriter &rewriter,
                                         DotScaledOp scaledDotOp, int opIdx,
                                         FloatType computeType) const {
-    auto v = opIdx == 0 ? scaledDotOp.getLhs() : scaledDotOp.getRhs();
-    auto scale =
-        opIdx == 0 ? scaledDotOp.getLhsScale() : scaledDotOp.getRhsScale();
+    auto v = opIdx == 0 ? scaledDotOp.getA() : scaledDotOp.getB();
+    auto scale = opIdx == 0 ? scaledDotOp.getAScale() : scaledDotOp.getBScale();
     auto isFp4 =
-        (opIdx == 0 ? scaledDotOp.getLhsType() : scaledDotOp.getRhsType()) ==
-        ScaleDotElemType::E2M1;
+        ScaleDotElemType::E2M1 ==
+        (opIdx == 0 ? scaledDotOp.getAElemType() : scaledDotOp.getBElemType());
     auto fastMath = scaledDotOp.getFastMath();
 
     auto *ctx = rewriter.getContext();
@@ -224,7 +221,8 @@ private:
     auto scale16 = scaleTo16(rewriter, scale, computeType);
 
     // 2) Broadcast scale to the same shape and layout as v
-    auto reshapeScale = broadcastScale(rewriter, mod, scale16, kDim);
+    auto reshapeScale =
+        broadcastScale(rewriter, scaledDotOp, mod, scale16, kDim);
     reshapeScale =
         rewriter.create<ConvertLayoutOp>(loc, v.getType(), reshapeScale);
 
@@ -237,7 +235,7 @@ private:
       return mxfp;
 
     // 4) If the scale is NaN, return NaN, else return the scaled value.
-    return maskNan(rewriter, mod, mxfp, scale, kDim);
+    return maskNan(rewriter, scaledDotOp, mod, mxfp, scale, kDim);
   }
 };
 
@@ -245,7 +243,7 @@ private:
 
 namespace mlir::triton::gpu {
 
-void populateDecomposeScaledBlockedPatterns(mlir::RewritePatternSet &patterns,
+void populateDecomposeScaledBlockedPatterns(RewritePatternSet &patterns,
                                             int benefit) {
   patterns.add<DecomposeScaledBlocked>(patterns.getContext(), benefit);
 }

@@ -156,19 +156,27 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
   return outIndices;
 }
 
-std::tuple<Value, Value, Value> emitHardwareTuple(Location loc,
-                                                  RewriterBase &rewriter,
-                                                  const TargetInfoBase &target,
-                                                  bool withCTAOffset,
-                                                  unsigned threadsPerWarpCst) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value threadId = getThreadId(rewriter, loc);
-  Value threadsPerWarp = b.i32_val(threadsPerWarpCst);
-  Value laneId = b.urem(threadId, threadsPerWarp);
-  Value warpId = b.udiv(threadId, threadsPerWarp);
-  Value blockId =
-      withCTAOffset ? target.getClusterCTAId(rewriter, loc) : b.i32_val(0);
-  return {laneId, warpId, blockId};
+Value getThreadId(OpBuilder &rewriter, Location loc) {
+  Value tid =
+      rewriter.create<::mlir::gpu::ThreadIdOp>(loc, ::mlir::gpu::Dimension::x);
+  return rewriter.create<arith::IndexCastOp>(loc, i32_ty, tid);
+}
+
+Value getLaneId(OpBuilder &rewriter, Location loc, unsigned threadsPerWarp) {
+  TritonLLVMOpBuilder b(loc, rewriter);
+  Value tid = getThreadId(rewriter, loc);
+  return b.urem(tid, b.i32_val(threadsPerWarp));
+}
+
+std::pair<Value, Value> getLaneAndWarpId(OpBuilder &rewriter, Location loc,
+                                         unsigned warpSize) {
+  TritonLLVMOpBuilder b(loc, rewriter);
+  Value tid = getThreadId(rewriter, loc);
+  Value warpSizeVal = b.i32_val(warpSize);
+
+  Value laneId = b.urem(tid, warpSizeVal);
+  Value warpId = b.udiv(tid, warpSizeVal);
+  return {laneId, warpId};
 }
 
 SmallVector<SmallVector<Value>>
@@ -187,8 +195,10 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
   StringAttr kWarp = str_attr("warp");
   StringAttr kBlock = str_attr("block");
 
-  auto [laneId, warpId, blockId] = emitHardwareTuple(
-      loc, rewriter, target, withCTAOffset, ll.getInDimSize(kLane));
+  auto [laneId, warpId] =
+      getLaneAndWarpId(rewriter, loc, ll.getInDimSize(kLane));
+  Value blockId =
+      withCTAOffset ? target.getClusterCTAId(rewriter, loc) : b.i32_val(0);
   unsigned rank = shape.size();
   SmallVector<SmallVector<Value>> ret;
   // Linear layout function is split in two parts below:
@@ -407,9 +417,10 @@ bool emitTransferBetweenRegistersAndShared(
                maxVecElems.value_or(std::numeric_limits<int>::max()));
 
   auto withCTAOffset = triton::gpu::getNumCTAs(sharedTy.getEncoding()) > 1;
-  auto [laneId, warpId, blockId] =
-      emitHardwareTuple(loc, rewriter, target, withCTAOffset,
-                        regToSharedLayout.getInDimSize(kLane));
+  auto [laneId, warpId] =
+      getLaneAndWarpId(rewriter, loc, regToSharedLayout.getInDimSize(kLane));
+  Value blockId =
+      withCTAOffset ? target.getClusterCTAId(rewriter, loc) : b.i32_val(0);
 
   // For kernels with a single CTA, `allocSharedLayout.sublayout(S("block"),
   // outDims) == 0`. We need to take out the "block" dimension in order to use
@@ -855,170 +866,6 @@ Value addStringToModule(Location loc, RewriterBase &rewriter, StringRef key,
   Value stringStart =
       b.gep(ptr_ty(ctx), i8_ty, globalPtr, SmallVector<Value>({zero}));
   return stringStart;
-}
-
-SmallVector<Value> getMultiDimOffset(Attribute layout, Location loc,
-                                     RewriterBase &rewriter,
-                                     const TargetInfoBase &targetInfo,
-                                     unsigned elemId, RankedTensorType type,
-                                     ArrayRef<unsigned> multiDimCTAInRepId,
-                                     ArrayRef<unsigned> shapePerCTATile) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto shape = type.getShape();
-  unsigned rank = shape.size();
-  if (auto blockedLayout = dyn_cast<BlockedEncodingAttr>(layout)) {
-    auto multiDimOffsetFirstElem = emitBaseIndexForLayout(
-        loc, rewriter, targetInfo, blockedLayout, type, false);
-    SmallVector<Value> multiDimOffset(rank);
-    SmallVector<unsigned> multiDimElemId = getMultiDimIndex<unsigned>(
-        elemId, getSizePerThread(layout), getOrder(layout));
-    for (unsigned d = 0; d < rank; ++d) {
-      multiDimOffset[d] =
-          b.add(multiDimOffsetFirstElem[d],
-                b.i32_val(multiDimCTAInRepId[d] * shapePerCTATile[d] +
-                          multiDimElemId[d]));
-    }
-    return multiDimOffset;
-  }
-  if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(layout)) {
-    unsigned dim = sliceLayout.getDim();
-    auto parentEncoding = sliceLayout.getParent();
-    auto parentSizePerThread = getSizePerThread(parentEncoding);
-    auto parentShape = sliceLayout.paddedShape(shape);
-    auto parentTy = RankedTensorType::get(parentShape, type.getElementType(),
-                                          parentEncoding);
-    auto offsets = emitOffsetForLayout(layout, type);
-    auto parentOffset = emitOffsetForLayout(parentEncoding, parentTy);
-    SmallVector<int> idxs;
-    for (SmallVector<unsigned> off : offsets) {
-      off.insert(off.begin() + dim, 0);
-      auto it = std::find(parentOffset.begin(), parentOffset.end(), off);
-      idxs.push_back(std::distance(parentOffset.begin(), it));
-    }
-    auto multiDimOffsetParent = getMultiDimOffset(
-        parentEncoding, loc, rewriter, targetInfo, idxs[elemId], parentTy,
-        sliceLayout.paddedShape(multiDimCTAInRepId),
-        sliceLayout.paddedShape(shapePerCTATile));
-    SmallVector<Value> multiDimOffset(rank);
-    for (unsigned d = 0; d < rank + 1; ++d) {
-      if (d == dim)
-        continue;
-      unsigned slicedD = d < dim ? d : (d - 1);
-      multiDimOffset[slicedD] = multiDimOffsetParent[d];
-    }
-    return multiDimOffset;
-  }
-  if (auto mmaLayout = mlir::dyn_cast<NvidiaMmaEncodingAttr>(layout)) {
-    assert(rank == 2 ||
-           (rank == 3 && mmaLayout.isAmpere()) && "Unexpected rank");
-    auto shapePerCTA = getShapePerCTA(mmaLayout, shape);
-    auto instrShape = mmaLayout.getInstrShape();
-    SmallVector<Value> mmaColIdx(2);
-    SmallVector<Value> mmaRowIdx(2);
-    auto [laneId, warpId, blockId] = emitHardwareTuple(
-        loc, rewriter, targetInfo, /*withCTAOffset=*/false, 32);
-    // TODO: fix the bug in MMAEncodingAttr document
-    SmallVector<Value> multiDimWarpId(2);
-    auto warpsPerCTA = mmaLayout.getWarpsPerCTA();
-    auto warpOrder = triton::gpu::getWarpOrder(mmaLayout);
-    multiDimWarpId = delinearize(rewriter, loc, warpId, warpsPerCTA, warpOrder);
-    Value _1 = b.i32_val(1);
-    Value _2 = b.i32_val(2);
-    Value _4 = b.i32_val(4);
-    Value _8 = b.i32_val(8);
-    Value _16 = b.i32_val(16);
-    if (mmaLayout.isAmpere() || mmaLayout.isHopper()) {
-      multiDimWarpId[rank - 1] =
-          b.urem(multiDimWarpId[rank - 1],
-                 b.i32_val(ceil<unsigned>(shapePerCTA[rank - 1],
-                                          instrShape[rank - 1])));
-      multiDimWarpId[rank - 2] =
-          b.urem(multiDimWarpId[rank - 2],
-                 b.i32_val(ceil<unsigned>(shapePerCTA[rank - 2],
-                                          instrShape[rank - 2])));
-
-      Value mmaGrpId = b.udiv(laneId, _4);
-      Value mmaGrpIdP8 = b.add(mmaGrpId, _8);
-      Value mmaThreadIdInGrp = b.urem(laneId, _4);
-      Value mmaThreadIdInGrpM2 = b.mul(mmaThreadIdInGrp, _2);
-      Value mmaThreadIdInGrpM2P1 = b.add(mmaThreadIdInGrpM2, _1);
-      Value rowWarpOffset =
-          b.mul(multiDimWarpId[rank - 2], b.i32_val(instrShape[rank - 2]));
-      mmaRowIdx[0] = b.add(mmaGrpId, rowWarpOffset);
-      mmaRowIdx[1] = b.add(mmaGrpIdP8, rowWarpOffset);
-      Value colWarpOffset =
-          b.mul(multiDimWarpId[rank - 1], b.i32_val(instrShape[rank - 1]));
-      mmaColIdx[0] = b.add(mmaThreadIdInGrpM2, colWarpOffset);
-      mmaColIdx[1] = b.add(mmaThreadIdInGrpM2P1, colWarpOffset);
-    } else {
-      llvm_unreachable("Unexpected MMALayout version");
-    }
-
-    SmallVector<Value> multiDimOffset(rank);
-    if (mmaLayout.isHopper()) {
-      unsigned elemIdRem4 = elemId % 4;
-      unsigned nGrpId = elemId / 4;
-      multiDimOffset[0] = elemIdRem4 < 2 ? mmaRowIdx[0] : mmaRowIdx[1];
-      multiDimOffset[1] = elemIdRem4 % 2 == 0 ? mmaColIdx[0] : mmaColIdx[1];
-      multiDimOffset[1] = b.add(multiDimOffset[1], b.i32_val(8 * nGrpId));
-      multiDimOffset[0] =
-          b.add(multiDimOffset[0],
-                b.i32_val(multiDimCTAInRepId[0] * shapePerCTATile[0]));
-      multiDimOffset[1] =
-          b.add(multiDimOffset[1],
-                b.i32_val(multiDimCTAInRepId[1] * shapePerCTATile[1]));
-    } else if (mmaLayout.isAmpere()) {
-      if (rank == 3)
-        multiDimOffset[0] =
-            b.add(multiDimWarpId[0],
-                  b.i32_val(multiDimCTAInRepId[0] * shapePerCTATile[0]));
-      multiDimOffset[rank - 2] = elemId < 2 ? mmaRowIdx[0] : mmaRowIdx[1];
-      multiDimOffset[rank - 1] = elemId % 2 == 0 ? mmaColIdx[0] : mmaColIdx[1];
-      multiDimOffset[rank - 2] = b.add(
-          multiDimOffset[rank - 2],
-          b.i32_val(multiDimCTAInRepId[rank - 2] * shapePerCTATile[rank - 2]));
-      multiDimOffset[rank - 1] = b.add(
-          multiDimOffset[rank - 1],
-          b.i32_val(multiDimCTAInRepId[rank - 1] * shapePerCTATile[rank - 1]));
-    } else {
-      llvm_unreachable("Unexpected MMALayout version");
-    }
-    return multiDimOffset;
-  }
-  if (isa<AMDMfmaEncodingAttr, AMDWmmaEncodingAttr>(layout)) {
-    auto multiDimBase =
-        emitBaseIndexForLayout(loc, rewriter, targetInfo, layout, type, false);
-    SmallVector<SmallVector<unsigned>> offsets;
-    assert(rank == 2);
-    SmallVector<Value> multiDimOffset(rank);
-    if (auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(layout)) {
-      emitMfmaOffsetForCTA(mfmaLayout, offsets, 0, multiDimCTAInRepId[0],
-                           multiDimCTAInRepId[1]);
-    } else if (auto wmmaLayout = dyn_cast<AMDWmmaEncodingAttr>(layout)) {
-      emitWmmaOffsetForCTA(wmmaLayout, offsets, 0, multiDimCTAInRepId[0],
-                           multiDimCTAInRepId[1]);
-    }
-    multiDimOffset[0] = b.add(multiDimBase[0], b.i32_val(offsets[elemId][0]));
-    multiDimOffset[1] = b.add(multiDimBase[1], b.i32_val(offsets[elemId][1]));
-    return multiDimOffset;
-  }
-  llvm_unreachable("unexpected layout in getMultiDimOffset");
-}
-
-SmallVector<Value> getWrappedMultiDimOffset(
-    RewriterBase &rewriter, Location loc, ArrayRef<Value> multiDimOffset,
-    ArrayRef<unsigned> shape, SmallVector<unsigned> shapePerCTATile,
-    SmallVector<int64_t> shapePerCTA) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  unsigned rank = shape.size();
-  SmallVector<Value> multiDimOffsetWrapped(rank);
-  for (unsigned d = 0; d < rank; ++d) {
-    if (shapePerCTATile[d] > shapePerCTA[d])
-      multiDimOffsetWrapped[d] = b.urem(multiDimOffset[d], b.i32_val(shape[d]));
-    else
-      multiDimOffsetWrapped[d] = multiDimOffset[d];
-  }
-  return multiDimOffsetWrapped;
 }
 
 } // namespace LLVM
