@@ -21,14 +21,14 @@ def test_proton_record(tmp_path: pathlib.Path):
         offsets = block_start + tl.arange(0, BLOCK_SIZE)
         mask = offsets < n_elements
         x = tl.load(x_ptr + offsets, mask=mask)
-        pl.record(True, 0)
+        pl.enter_scope("load0")
         y = tl.load(y_ptr + offsets, mask=mask)
-        pl.record(False, 0)
+        pl.exit_scope("load0")
         output = x + y
         tl.store(output_ptr + offsets, output, mask=mask)
 
     torch.manual_seed(0)
-    size = 2**12
+    size = 256
     x = torch.rand(size, device='cuda')
     y = torch.rand(size, device='cuda')
     output = torch.empty_like(x)
@@ -36,5 +36,5 @@ def test_proton_record(tmp_path: pathlib.Path):
     grid = (1, 1, 1)
     pgm = add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
     ttir = pgm.asm['ttir']
-    assert "proton.record() {isStart = true, regionId = 0 : i32}" in ttir
-    assert "proton.record() {isStart = false, regionId = 0 : i32}" in ttir
+    assert "proton.record start" in ttir
+    assert "proton.record end" in ttir
