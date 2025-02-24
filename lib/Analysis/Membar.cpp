@@ -69,13 +69,16 @@ void MembarAnalysis::resolve(FunctionOpInterface funcOp,
   // Update the final dangling buffers that haven't been synced
   BlockInfo &funcBlockInfo = (*funcBlockInfoMap)[funcOp];
   funcOp.walk<WalkOrder::PreOrder>([&](triton::ReturnOp returnOp) {
-    // Find the virtual block that contains this op.
+    // A basic block can be broken into several virtual blocks. Find all virtual
+    // blocks that belong to the basic block containing the return.
     SmallVector<std::pair<VirtualBlock, BlockInfo>> virtualBlocks;
     for (auto &[block, blockInfo] : outputBlockInfoMap) {
       if (block.first == returnOp->getBlock())
         virtualBlocks.emplace_back(block, blockInfo);
     }
-    // The last virtual block in this group contains the terminator.
+    // The return is a terminator, so the virtual block that contains this
+    // return starts after all other ones. Find it by comparing the start
+    // iterators of the virtual blocks.
     auto maxIt = llvm::max_element(virtualBlocks, [&](auto &lhs, auto &rhs) {
       assert(lhs.first.first == rhs.first.first);
       Block::iterator lhsIt = lhs.first.second, rhsIt = rhs.first.second;
@@ -90,12 +93,16 @@ void MembarAnalysis::resolve(FunctionOpInterface funcOp,
 void MembarAnalysis::visitTerminator(Operation *op,
                                      SmallVector<VirtualBlock> &successors) {
   if (isa<BranchOpInterface>(op)) {
+    // Collect the block successors of the branch.
     for (Block *successor : op->getSuccessors())
       successors.emplace_back(successor, Block::iterator());
     return;
   }
 
   if (auto br = dyn_cast<RegionBranchOpInterface>(op)) {
+    // The successors of an operation with regions can be queried via an
+    // interface. The operation branches to the entry blocks of its region
+    // successors. It can also branch to after itself.
     SmallVector<RegionSuccessor> regions;
     br.getSuccessorRegions(RegionBranchPoint::parent(), regions);
     for (RegionSuccessor &region : regions) {
@@ -113,6 +120,8 @@ void MembarAnalysis::visitTerminator(Operation *op,
   // reason. Check that the parent is actually a `RegionBranchOpInterface`.
   auto br = dyn_cast<RegionBranchTerminatorOpInterface>(op);
   if (br && isa<RegionBranchOpInterface>(br->getParentOp())) {
+    // Check the successors of a region branch terminator. It can branch to
+    // another region of its parent operation or to after the parent op.
     SmallVector<Attribute> operands(br->getNumOperands());
     SmallVector<RegionSuccessor> regions;
     br.getSuccessorRegions(operands, regions);

@@ -618,7 +618,7 @@ private:
           interference[x].insert(y);
         }
 
-        // Buffers also interfer if their allocation offsets overlap and they
+        // Buffers also interfere if their allocation offsets overlap and they
         // exist within regions that may execute simultaneously with respect to
         // each other.
         auto wsx = x->owner->getParentWithTrait<OpTrait::AsyncRegions>();
