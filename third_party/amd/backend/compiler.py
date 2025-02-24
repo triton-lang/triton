@@ -1,16 +1,15 @@
-import functools
+from triton.backends.compiler import BaseBackend, GPUTarget
+from triton._C.libtriton import ir, passes, llvm, amd
+from dataclasses import dataclass
+from typing import Any, Dict, Tuple
+from types import ModuleType
 import hashlib
+import tempfile
 import os
 import re
 import subprocess
-import tempfile
-from dataclasses import dataclass
+import functools
 from pathlib import Path
-from types import ModuleType
-from typing import Any, Dict, Tuple
-
-from triton._C.libtriton import amd, ir, llvm, passes
-from triton.backends.compiler import BaseBackend, GPUTarget
 
 
 def min_dot_size(target: GPUTarget):
@@ -28,19 +27,18 @@ class HIPOptions:
     cluster_dims: tuple = (1, 1, 1)
     debug: bool = False
     sanitize_overflow: bool = True
-    sanitize_nan: bool = True
     arch: str = None
-    supported_fp8_dtypes: Tuple[str] = ("fp8e5",)
+    supported_fp8_dtypes: Tuple[str] = ("fp8e5", )
     deprecated_fp8_dtypes: Tuple[str] = ()
     default_dot_input_precision: str = "ieee"
-    allowed_dot_input_precisions: Tuple[str] = ("ieee",)
+    allowed_dot_input_precisions: Tuple[str] = ("ieee", )
     enable_fp_fusion: bool = True
     launch_cooperative_grid: bool = False
     matrix_instr_nonkdim: int = 0
     kpack: int = 1
     allow_flush_denorm: bool = False
     max_num_imprecise_acc_default: int = 0
-    backend_name: str = "hip"
+    backend_name: str = 'hip'
 
     # The following option provides hints to the AMDGPU backend regarding instruction scheduling
     # for all `tt.dot` operations in a kernel. The "none" variant preserves the default
@@ -59,31 +57,26 @@ class HIPOptions:
     #                 Kernel library. Note, this variant requires the use of buffer load/store ops
     #                 and a special software pipelining style - i.e., 1x LDS and 1x register
     #                 prefetch buffers for each GEMM tile.
-    instruction_sched_variant: str = "none"
+    instruction_sched_variant: str = 'none'
 
     def __post_init__(self):
-        default_libdir = Path(__file__).parent / "lib"
+        default_libdir = Path(__file__).parent / 'lib'
         extern_libs = {} if self.extern_libs is None else dict(self.extern_libs)
         # Ignore user-defined warp size for gfx9
-        warp_size = (
-            32
-            if "gfx10" in self.arch or "gfx11" in self.arch or "gfx12" in self.arch
-            else 64
-        )
-        object.__setattr__(self, "warp_size", warp_size)
+        warp_size = 32 if 'gfx10' in self.arch or 'gfx11' in self.arch or 'gfx12' in self.arch else 64
+        object.__setattr__(self, 'warp_size', warp_size)
         # Only kpack=1 is supported on gfx950
-        kpack = 1 if self.arch == "gfx950" else self.kpack
-        object.__setattr__(self, "kpack", kpack)
+        kpack = 1 if self.arch == 'gfx950' else self.kpack
+        object.__setattr__(self, 'kpack', kpack)
         libs = ["ocml", "ockl"]
         for lib in libs:
-            extern_libs[lib] = str(default_libdir / f"{lib}.bc")
-        object.__setattr__(self, "extern_libs", tuple(extern_libs.items()))
-        assert (
-            self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0
-        ), "num_warps must be a power of 2"
+            extern_libs[lib] = str(default_libdir / f'{lib}.bc')
+        object.__setattr__(self, 'extern_libs', tuple(extern_libs.items()))
+        assert self.num_warps > 0 and (self.num_warps & (self.num_warps - 1)) == 0, \
+               "num_warps must be a power of 2"
 
     def hash(self):
-        key = "_".join([f"{name}-{val}" for name, val in self.__dict__.items()])
+        key = '_'.join([f'{name}-{val}' for name, val in self.__dict__.items()])
         return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
@@ -91,7 +84,7 @@ class HIPBackend(BaseBackend):
 
     @staticmethod
     def supports_target(target: GPUTarget):
-        return target.backend == "hip"
+        return target.backend == 'hip'
 
     def __init__(self, target: GPUTarget) -> None:
         super().__init__(target)
@@ -99,31 +92,23 @@ class HIPBackend(BaseBackend):
         self.binary_ext = "hsaco"
 
     def parse_options(self, opts) -> Any:
-        args = {"arch": os.getenv("TRITON_OVERRIDE_ARCH", self.target.arch)}
+        args = {'arch': os.getenv("TRITON_OVERRIDE_ARCH", self.target.arch)}
 
         # Enable XF32 (TF32) for CDNA3 GPUs
-        if self.target.arch in ("gfx940", "gfx941", "gfx942"):
+        if self.target.arch in ('gfx940', 'gfx941', 'gfx942'):
             allowed_dot_input_precisions = set(HIPOptions.allowed_dot_input_precisions)
-            allowed_dot_input_precisions.update({"tf32"})
-            args["allowed_dot_input_precisions"] = tuple(
-                sorted(allowed_dot_input_precisions)
-            )
+            allowed_dot_input_precisions.update({'tf32'})
+            args["allowed_dot_input_precisions"] = tuple(sorted(allowed_dot_input_precisions))
 
         if "supported_fp8_dtypes" not in opts:
             supported_fp8_dtypes = set(HIPOptions.supported_fp8_dtypes)
-            if self.target.arch in ("gfx940", "gfx941", "gfx942", "gfx950"):
-                supported_fp8_dtypes.update({"fp8e4nv", "fp8e4b8", "fp8e5b16"})
+            if self.target.arch in ('gfx940', 'gfx941', 'gfx942', 'gfx950'):
+                supported_fp8_dtypes.update({'fp8e4nv', 'fp8e4b8', 'fp8e5b16'})
             args["supported_fp8_dtypes"] = tuple(sorted(supported_fp8_dtypes))
 
         if "enable_fp_fusion" not in opts:
             args["enable_fp_fusion"] = os.getenv("TRITON_DEFAULT_FP_FUSION", "1") == "1"
-        args.update(
-            {
-                k: opts[k]
-                for k in HIPOptions.__dataclass_fields__.keys()
-                if k in opts and opts[k] is not None
-            }
-        )
+        args.update({k: opts[k] for k in HIPOptions.__dataclass_fields__.keys() if k in opts and opts[k] is not None})
         return HIPOptions(**args)
 
     def pack_metadata(self, metadata):
@@ -142,7 +127,6 @@ class HIPBackend(BaseBackend):
 
     def get_module_map(self) -> Dict[str, ModuleType]:
         from triton.language.extra.hip import libdevice
-
         return {"triton.language.extra.libdevice": libdevice}
 
     def load_dialects(self, ctx):
@@ -188,9 +172,7 @@ class HIPBackend(BaseBackend):
         lld = Path("/usr/bin/ld.lld")
         if lld.is_file():
             return lld
-        raise Exception(
-            "ROCm linker /opt/rocm/llvm/bin/ld.lld not found. Set 'TRITON_HIP_LLD_PATH' to its path."
-        )
+        raise Exception("ROCm linker /opt/rocm/llvm/bin/ld.lld not found. Set 'TRITON_HIP_LLD_PATH' to its path.")
 
     @staticmethod
     def make_ttir(mod, metadata, options):
@@ -212,22 +194,15 @@ class HIPBackend(BaseBackend):
     def make_ttgir(mod, metadata, options):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        passes.ttir.add_convert_to_ttgpuir(
-            pm,
-            f"hip:{options.arch}",
-            options.num_warps,
-            options.warp_size,
-            options.num_ctas,
-        )
+        passes.ttir.add_convert_to_ttgpuir(pm, f"hip:{options.arch}", options.num_warps, options.warp_size,
+                                           options.num_ctas)
         pm.run(mod)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.ttgpuir.add_coalesce(pm)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_thread_locality(pm)
-        amd.passes.ttgpuir.add_accelerate_matmul(
-            pm, options.arch, options.matrix_instr_nonkdim, options.kpack
-        )
+        amd.passes.ttgpuir.add_accelerate_matmul(pm, options.arch, options.matrix_instr_nonkdim, options.kpack)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
@@ -240,21 +215,15 @@ class HIPBackend(BaseBackend):
             global_prefetch = local_prefetch = 1
 
         if amd.has_matrix_core_feature(options.arch):
-            assert options.num_stages != 0, (
-                "Triton AMD backend pipeliner has been updated. "
-                "We used to trigger software pipelining with "
-                "num_stages == 0. Now it will not happen anymore; "
-                "please update to use num_stages == 2 for "
-                "equivalent behavior in the past."
-            )
-            amd.passes.ttgpuir.add_stream_pipeline(
-                pm, options.num_stages, global_prefetch, local_prefetch
-            )
+            assert options.num_stages != 0, ("Triton AMD backend pipeliner has been updated. "
+                                             "We used to trigger software pipelining with "
+                                             "num_stages == 0. Now it will not happen anymore; "
+                                             "please update to use num_stages == 2 for "
+                                             "equivalent behavior in the past.")
+            amd.passes.ttgpuir.add_stream_pipeline(pm, options.num_stages, global_prefetch, local_prefetch)
             passes.common.add_canonicalizer(pm)
         if options.instruction_sched_variant.lower() != "none":
-            amd.passes.ttgpuir.insert_instruction_sched_hints(
-                pm, options.instruction_sched_variant
-            )
+            amd.passes.ttgpuir.insert_instruction_sched_hints(pm, options.instruction_sched_variant)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
@@ -311,9 +280,7 @@ class HIPBackend(BaseBackend):
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
         if options.instruction_sched_variant.lower() != "none":
-            amd.passes.ttgpuir.lower_instruction_sched_hints(
-                pm, options.arch, options.num_stages
-            )
+            amd.passes.ttgpuir.lower_instruction_sched_hints(pm, options.arch, options.num_stages)
         if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":
             passes.llvmir.add_di_scope(pm)
         amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm, __HIP_FTZ)
@@ -324,12 +291,10 @@ class HIPBackend(BaseBackend):
         context = llvm.context()
         llvm_mod = llvm.to_module(mod, context)
         amd.attach_target_triple(llvm_mod)
-        target_features = ""
+        target_features = ''
         if os.environ.get("TRITON_ENABLE_ASAN", "0") == "1":
-            target_features = "+xnack"
-        llvm.attach_datalayout(
-            llvm_mod, amd.TARGET_TRIPLE, options.arch, target_features
-        )
+            target_features = '+xnack'
+        llvm.attach_datalayout(llvm_mod, amd.TARGET_TRIPLE, options.arch, target_features)
 
         # Set various control constants on the LLVM module so that device
         # libraries can resolve references to them.
@@ -338,17 +303,13 @@ class HIPBackend(BaseBackend):
         amd.set_bool_control_constant(llvm_mod, "__oclc_finite_only_opt", False)
         amd.set_bool_control_constant(llvm_mod, "__oclc_correctly_rounded_sqrt32", True)
         amd.set_bool_control_constant(llvm_mod, "__oclc_unsafe_math_opt", False)
-        amd.set_bool_control_constant(
-            llvm_mod, "__oclc_wavefrontsize64", options.warp_size == 64
-        )
+        amd.set_bool_control_constant(llvm_mod, "__oclc_wavefrontsize64", options.warp_size == 64)
 
         # Set kernel attributes first given this may affect later optimizations.
         fns = [fn for fn in llvm_mod.get_functions() if not fn.is_declaration()]
         # The public kernel should be kernel 0.
         fns[0].set_calling_conv(amd.CALLING_CONV_AMDGPU_KERNEL)
-        fns[0].add_fn_attr(
-            "amdgpu-flat-work-group-size", f"1,{options.num_warps*options.warp_size}"
-        )
+        fns[0].add_fn_attr("amdgpu-flat-work-group-size", f"1,{options.num_warps*options.warp_size}")
         # LLVM AMDGPU backend supports the attribute "amdgpu-waves-per-eu"="<min>[, <max>]".
         # This attribute may be attached to a kernel function definition and is an optimization hint.
         # <min> parameter specifies the requested minimum number of waves per EU, and optional <max> parameter
@@ -369,24 +330,18 @@ class HIPBackend(BaseBackend):
         amd.set_all_fn_arg_inreg(fns[0])
 
         if os.environ.get("TRITON_ENABLE_ASAN", "0") == "1":
-            default_libdir = Path(__file__).parent / "lib"
+            default_libdir = Path(__file__).parent / 'lib'
             paths = [
-                str(default_libdir / "asanrtl.bc"),
+                str(default_libdir / 'asanrtl.bc'),
                 str(default_libdir / "ocml.bc"),
-                str(default_libdir / "ockl.bc"),
+                str(default_libdir / "ockl.bc")
             ]
             llvm.link_extern_libs(llvm_mod, paths)
         elif options.extern_libs:
-            paths = [
-                path
-                for (name, path) in options.extern_libs
-                if amd.need_extern_lib(llvm_mod, name)
-            ]
+            paths = [path for (name, path) in options.extern_libs if amd.need_extern_lib(llvm_mod, name)]
             llvm.link_extern_libs(llvm_mod, paths)
 
-        llvm.optimize_module(
-            llvm_mod, llvm.OPTIMIZE_O3, options.arch, "", [], options.enable_fp_fusion
-        )
+        llvm.optimize_module(llvm_mod, llvm.OPTIMIZE_O3, options.arch, '', [], options.enable_fp_fusion)
 
         # Get some metadata
         metadata["shared"] = src.get_int_attr("ttg.shared")
@@ -406,15 +361,7 @@ class HIPBackend(BaseBackend):
         assert len(names) == 1
         metadata["name"] = names[0]
         # llvm -> hsaco
-        amdgcn = llvm.translate_to_asm(
-            src,
-            amd.TARGET_TRIPLE,
-            options.arch,
-            "",
-            [],
-            options.enable_fp_fusion,
-            False,
-        )
+        amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, '', [], options.enable_fp_fusion, False)
         if os.environ.get("AMDGCN_ENABLE_DUMP", "0") == "1":
             print("// -----// AMDGCN Dump //----- //")
             print(amdgcn)
@@ -422,28 +369,18 @@ class HIPBackend(BaseBackend):
 
     @staticmethod
     def make_hsaco(src, metadata, options):
-        target_features = ""
+        target_features = ''
         if os.environ.get("TRITON_ENABLE_ASAN", "0") == "1":
-            target_features = "+xnack"
+            target_features = '+xnack'
         hsaco = amd.assemble_amdgcn(src, options.arch, target_features)
 
         rocm_path = HIPBackend.path_to_rocm_lld()
         with tempfile.NamedTemporaryFile() as tmp_out:
             with tempfile.NamedTemporaryFile() as tmp_in:
-                with open(tmp_in.name, "wb") as fd_in:
+                with open(tmp_in.name, 'wb') as fd_in:
                     fd_in.write(hsaco)
-                subprocess.check_call(
-                    [
-                        rocm_path,
-                        "-flavor",
-                        "gnu",
-                        "-shared",
-                        tmp_in.name,
-                        "-o",
-                        tmp_out.name,
-                    ]
-                )
-            with open(tmp_out.name, "rb") as fd_out:
+                subprocess.check_call([rocm_path, '-flavor', 'gnu', '-shared', tmp_in.name, '-o', tmp_out.name])
+            with open(tmp_out.name, 'rb') as fd_out:
                 ret = fd_out.read()
         return ret
 
@@ -451,14 +388,10 @@ class HIPBackend(BaseBackend):
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
         stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options)
         stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
-        stages["amdgcn"] = lambda src, metadata: self.make_amdgcn(
-            src, metadata, options
-        )
+        stages["amdgcn"] = lambda src, metadata: self.make_amdgcn(src, metadata, options)
         stages["hsaco"] = lambda src, metadata: self.make_hsaco(src, metadata, options)
 
     @functools.lru_cache()
     def hash(self):
-        version = subprocess.check_output(
-            [HIPBackend.path_to_rocm_lld(), "--version"], encoding="utf-8"
-        )
-        return f"{version}-{self.target}"
+        version = subprocess.check_output([HIPBackend.path_to_rocm_lld(), "--version"], encoding='utf-8')
+        return f'{version}-{self.target}'
