@@ -8,10 +8,14 @@
 
 #include "triton/Tools/LinearLayout.h"
 
+namespace mlir::triton {
+enum class ScaleDotElemType : uint32_t;
+} // namespace mlir::triton
+
 namespace mlir::triton::gpu {
 class SwizzledSharedEncodingAttr;
 class NVMMASharedEncodingAttr;
-class CTALayoutAttr;
+class AMDMfmaEncodingAttr;
 
 // - BlockedEncodingAttrs have the following input dimensions.
 //
@@ -263,15 +267,20 @@ LinearLayout chooseLdMatrixLayout(Attribute enc, ArrayRef<int64_t> shape,
 LinearLayout chooseDsReadB64Tr16Layout(Attribute enc, ArrayRef<int64_t> shape,
                                        int32_t elemBitWidth);
 
-// Combines the layout of a CTA (input dims [register, lane, warp]) with the
-// layout of a CGA (i.e. a block), and ensures that the resulting layout has the
-// given shape.
-//
-// See the nomenclature note at the top of the file for why the variable with
-// type CTALayoutAttr is called cgaLayoutAttr.
-LinearLayout combineCtaCgaWithShape(LinearLayout ctaLayout,
-                                    CTALayoutAttr cgaLayoutAttr,
-                                    ArrayRef<int64_t> shape);
+// Create LinearLayout for mxfp4 and mxfp8 operand in scaled mfma.
+// For mxfp4, we use dot layout directly. Mxfp8 is not covered by dot
+// layout, so we need to manually create linear layout for it.
+LinearLayout chooseScaledMfmaOperandLayout(MLIRContext *ctx,
+                                           AMDMfmaEncodingAttr mfmaEnc,
+                                           int kWidth, unsigned mDim, int idx,
+                                           ScaleDotElemType elemType,
+                                           llvm::ArrayRef<int64_t> shape);
+
+// Create LinearLayout for scale in scaled mfma.
+LinearLayout
+chooseScaledMfmaScaleLayout(MLIRContext *ctx, int idx,
+                            const std::vector<std::vector<int32_t>> &warpBasis,
+                            ArrayRef<int64_t> shape, unsigned mDim);
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H

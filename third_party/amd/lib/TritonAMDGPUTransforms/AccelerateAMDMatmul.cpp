@@ -15,7 +15,8 @@ using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 using ::mlir::LLVM::AMD::scaleDotElemTypeToMLIRType;
-using mlir::triton::gpu::combineCtaCgaWithShape;
+using mlir::triton::gpu::chooseScaledMfmaOperandLayout;
+using mlir::triton::gpu::chooseScaledMfmaScaleLayout;
 
 namespace {
 using triton::AMD::ISAFamily;
@@ -789,62 +790,12 @@ public:
     const unsigned kWidth = kBase;
     using basisT = std::vector<std::vector<int32_t>>;
 
-    // For mxfp4, we use dot layout directly. Mxfp8 is not covered by dot
-    // layout, so we need to manually create linear layout for it.
-    auto createOperandLinearLayout = [&](int idx, ScaleDotElemType elemType,
-                                         llvm::ArrayRef<int64_t> shape) {
-      if (elemType == ScaleDotElemType::E2M1) {
-        auto newEncoding = DotOperandEncodingAttr::get(
-            ctx, idx, newRetType.getEncoding(), kWidth / 2);
-        return newEncoding.toLinearLayout(shape);
-      } else {
-        // For mxfp8, each lane contains 32 elements, consisting of two blocks
-        // of 16 consecutive elements. There's a gap between these two blocks,
-        // which is not supported by normal dot layout.
-        assert(elemType == ScaleDotElemType::E4M3 ||
-               elemType == ScaleDotElemType::E5M2);
-        basisT regBase = {{0, 1}, {0, 2}, {0, 4}, {0, 8}};
-        basisT laneBase = {{1, 0}, {2, 0}, {4, 0}, {8, 0}};
-        int32_t kTileSize;
-        if (mDim == 16) {
-          regBase.emplace_back(std::vector<int32_t>{0, 64});
-          laneBase.emplace_back(std::vector<int32_t>{0, 16});
-          laneBase.emplace_back(std::vector<int32_t>{0, 32});
-          kTileSize = kWidth * 4;
-        } else {
-          assert(mDim == 32);
-          regBase.emplace_back(std::vector<int32_t>{0, 32});
-          laneBase.emplace_back(std::vector<int32_t>{16, 0});
-          laneBase.emplace_back(std::vector<int32_t>{0, 16});
-          kTileSize = kWidth * 2;
-        }
-        // Add repeats of registers along K dimension to register base vectors
-        int64_t kSize = idx == 0 ? shape[1] : shape[0];
-        for (int32_t elem = kTileSize; elem < kSize; elem *= 2) {
-          regBase.emplace_back(std::vector<int32_t>{0, elem});
-        }
-
-        std::vector<int> repOrder = {0, 1};
-        if (idx == 1) {
-          std::reverse(repOrder.begin(), repOrder.end());
-        }
-
-        auto regLanes = LinearLayout(
-            {{kRegister, regBase}, {kLane, laneBase}},
-            {standardOutDims[repOrder[0]], standardOutDims[repOrder[1]]});
-
-        auto warps =
-            identityStandardND(kWarp, mfmaEnc.getWarpsPerCTA(), warpOrder);
-
-        return combineCtaCgaWithShape(regLanes.transposeOuts(standardOutDims) *
-                                          warps.transposeOuts(standardOutDims),
-                                      mfmaEnc.getCTALayout(), shape);
-      }
-    };
     auto aShape = a.getType().getShape();
     auto bShape = b.getType().getShape();
-    auto aEncLL = createOperandLinearLayout(0, aElemType, aShape);
-    auto bEncLL = createOperandLinearLayout(1, bElemType, bShape);
+    auto aEncLL = chooseScaledMfmaOperandLayout(ctx, mfmaEnc, kWidth, mDim, 0,
+                                                aElemType, aShape);
+    auto bEncLL = chooseScaledMfmaOperandLayout(ctx, mfmaEnc, kWidth, mDim, 1,
+                                                bElemType, bShape);
 
     auto convertInputLayout = [&](TensorValue v,
                                   LinearLayout layout) -> TensorValue {
@@ -858,76 +809,11 @@ public:
     a = convertInputLayout(a, aEncLL);
     b = convertInputLayout(b, bEncLL);
 
-    // Init register layout. Will be adjusted later
-    auto regs = tt::identityStandardND(kRegister, {1, 1}, order);
-
-    auto createLinearLayout = [&](int idx, const basisT &warpBasis) {
-      LinearLayout lanes = LinearLayout::empty();
-      // In scaled dot, the shapes of operands(without batch dimension) are,
-      // respectively:
-      // - A: [M, K]
-      // - B: [K, N]
-      // - aScale: [M, K / 32]
-      // - bScale: [N, K / 32]
-      //
-      // To correctly feed A/B and its scale into instruction, we need to
-      // distribute aScale/bScale among warps in the same way as A/B. But bScale
-      // is not transposed like B. So we need to transpose the warp layout of
-      // bScale.
-      //
-      // The tricky part is, our desired outputs are [dim0, dim1], but
-      // at this position, the layouts are transposed to [dim1, dim0]. So
-      // instead of reverse bScale's layout, we need to reverse aScale's. There
-      // will be a transpose in the end to correct everything.
-      basisT warps = warpBasis;
-      if (idx == 0) {
-        for (auto &basis : warps) {
-          std::reverse(basis.begin(), basis.end());
-        }
-      }
-      // In general, for both 32x32 and 16x16 scaled mfma, and no matter what
-      // data type the A/B operand is, each lane takes 32 elements from A/B
-      // alone K dim, and 1 or 2 elements from scale accordingly. The number of
-      // scale's elements in a lane varies because the 32 elements from A/B may
-      // not be consecutive.
-      //
-      // For mxfp4, these 32 elements are consecutive, so only 1 scale element
-      // is required. But for mxfp6/mxfp8, there are 2 16-consecutive elements
-      // blocks, so 2 scale elements are required.
-      if (mDim == 32) {
-        // For ROCDL::mfma_scale_f32_32x32x64_f8f6f4 with fp4 input, each lane
-        // takes 32 consecutive elements from A alone K dimension. The first
-        // 32 lanes collectively handle A[0:32][0:32], and the other 32 lanes
-        // collectively handle A[0:32][32:64]. Each lane take 1 scale element
-        // accordingly. Similar to B and bScale.
-        lanes = LinearLayout(
-            {{kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {1, 0}}},
-             {kWarp, warps},
-             {kBlock, {}}},
-            {standardOutDims[order[0]], standardOutDims[order[1]]});
-      } else {
-        assert(mDim == 16);
-        // For ROCDL::mfma_scale_f32_16x16x128_f8f6f4 with fp4 input, each lane
-        // takes 32 consecutive elements from A alone K dimension. The first
-        // 16 lanes collectively handle A[0:16][0:32], and another 16 lanes
-        // collectively handle A[0:16][32:64] and so on. Each lane take 1 scale
-        // element accordingly. Similar to B and bScale.
-        lanes = LinearLayout(
-            {{kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {1, 0}, {2, 0}}},
-             {kWarp, warps},
-             {kBlock, {}}},
-            {standardOutDims[order[0]], standardOutDims[order[1]]});
-      }
-      return regs * lanes;
-    };
-
     auto convertScaleLayout = [&](TensorValue scale,
                                   llvm::ArrayRef<int64_t> valShape,
                                   LinearLayout dotLL, int idx) -> Value {
       LinearLayout::BasesT scaleBases = dotLL.getBases();
       auto &warpBases = scaleBases[kWarp];
-
-      LinearLayout newLL = createLinearLayout(idx, warpBases);
 
       SmallVector<int64_t> shape;
       if (!scale) {
@@ -940,16 +826,9 @@ public:
         shape = llvm::to_vector(scale.getType().getShape());
       }
 
-      // Adjust register-level layout to fill the shape, at this level, both
-      // aScale and bScale should align with A operand.
-      SmallVector<int, 2> repOrder = {1, 0};
-      for (auto d : repOrder) {
-        auto outDim = standardOutDims[d];
-        auto dimSize = newLL.getOutDimSize(outDim);
-        newLL *=
-            LinearLayout::identity1D(shape[d] / dimSize, kRegister, outDim);
-      }
-      newLL = newLL.transposeOuts(standardOutDims);
+      LinearLayout newLL =
+          chooseScaledMfmaScaleLayout(ctx, idx, warpBases, shape, mDim);
+
       Attribute newScaleEncoding = ttg::LinearEncodingAttr::get(ctx, newLL);
       // Scale's data type is always i8
       auto newScaleType = RankedTensorType::get(shape, i8_ty, newScaleEncoding);

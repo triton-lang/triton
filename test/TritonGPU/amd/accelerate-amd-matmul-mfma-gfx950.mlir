@@ -1,10 +1,10 @@
 // RUN: triton-opt %s -split-input-file --tritonamdgpu-accelerate-matmul='arch-generation-name=gfx950 matrix-instruction-size=0' | FileCheck %s --check-prefixes CHECK
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
-// CHECK{LITERAL}: #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 32], [64, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 16]], warp = [[0, 0], [32, 0]], block = []}>
-// CHECK{LITERAL}: #ttg.linear<{register = [[1, 0], [2, 0], [4, 0], [8, 0], [32, 0], [0, 64]], lane = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [16, 0]], warp = [[0, 32], [0, 0]], block = []}>
-// CHECK{LITERAL}: #ttg.linear<{register = [[0, 2], [64, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 1]], warp = [[0, 0], [32, 0]], block = []}>
-// CHECK{LITERAL}: #ttg.linear<{register = [[0, 2], [64, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 1]], warp = [[32, 0], [0, 0]], block = []}>
+// CHECK{LITERAL}: #linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 32], [64, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 16]], warp = [[0, 0], [32, 0]], block = []}>
+// CHECK{LITERAL}: #linear1 = #ttg.linear<{register = [[1, 0], [2, 0], [4, 0], [8, 0], [32, 0], [0, 64]], lane = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [16, 0]], warp = [[0, 32], [0, 0]], block = []}>
+// CHECK{LITERAL}: #linear2 = #ttg.linear<{register = [[0, 2], [64, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 1]], warp = [[0, 0], [32, 0]], block = []}>
+// CHECK{LITERAL}: #linear3 = #ttg.linear<{register = [[0, 2], [64, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 1]], warp = [[32, 0], [0, 0]], block = []}>
 // CHECK-LABEL: mfma_dot_scaled_mxfp4_mxfp4
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @mfma_dot_scaled_mxfp4_mxfp4(
@@ -98,10 +98,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // -----
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [16, 4], warpsPerCTA = [4, 1], order = [1, 0]}>
-// CHECK{LITERAL}: #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 32], [0, 64], [64, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 16]], warp = [[0, 0], [32, 0]], block = []}>
-// CHECK{LITERAL}: #ttg.linear<{register = [[1, 0], [2, 0], [4, 0], [8, 0], [32, 0], [64, 0], [0, 64]], lane = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [16, 0]], warp = [[0, 32], [0, 0]], block = []}>
-// CHECK{LITERAL}: #ttg.linear<{register = [[0, 2], [64, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 1]], warp = [[0, 0], [32, 0]], block = []}>
-// CHECK{LITERAL}: #ttg.linear<{register = [[0, 2], [64, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 1]], warp = [[32, 0], [0, 0]], block = []}>
+// CHECK{LITERAL}: #linear = #ttg.linear<{register = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 32], [0, 64], [64, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 16]], warp = [[0, 0], [32, 0]], block = []}>
+// CHECK{LITERAL}: #linear1 = #ttg.linear<{register = [[1, 0], [2, 0], [4, 0], [8, 0], [32, 0], [64, 0], [0, 64]], lane = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [16, 0]], warp = [[0, 32], [0, 0]], block = []}>
+// CHECK{LITERAL}: #linear2 = #ttg.linear<{register = [[0, 2], [64, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 1]], warp = [[0, 0], [32, 0]], block = []}>
+// CHECK{LITERAL}: #linear3 = #ttg.linear<{register = [[0, 2], [64, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0], [0, 1]], warp = [[32, 0], [0, 0]], block = []}>
 // CHECK-LABEL: mfma_dot_scaled_mxfp8e4_mxfp8e4
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx950", "ttg.threads-per-warp" = 64 : i32} {
   tt.func public @mfma_dot_scaled_mxfp8e4_mxfp8e4(

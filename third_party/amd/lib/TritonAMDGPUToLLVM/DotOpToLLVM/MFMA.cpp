@@ -638,21 +638,23 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
           acc = zeroAuxiliarBlocks(subBlocks, acc);
           for (int k = 0; k < numRepK; k++) {
             for (int kPack = 0; kPack < aKWidth / aKBase; ++kPack) {
-              acc = mfmaLayout.getIsTransposed()
-                        ? generateScaledMFMAOp(intrinsicName,
-                                               operandB[kPack][{b, n, k}],
-                                               operandA[kPack][{b, m, k}], acc,
-                                               operandBScale[kPack][{b, n, k}],
-                                               operandAScale[kPack][{b, m, k}],
-                                               maybeMfmaIntrinsic->bElementType,
-                                               maybeMfmaIntrinsic->aElementType)
-                        : generateScaledMFMAOp(
-                              intrinsicName, operandA[kPack][{b, m, k}],
-                              operandB[kPack][{b, n, k}], acc,
-                              operandAScale[kPack][{b, m, k}],
-                              operandBScale[kPack][{b, n, k}],
-                              maybeMfmaIntrinsic->aElementType,
-                              maybeMfmaIntrinsic->bElementType);
+              if (mfmaLayout.getIsTransposed()) {
+                acc = generateScaledMFMAOp(intrinsicName,
+                                           operandB[kPack][{b, n, k}],
+                                           operandA[kPack][{b, m, k}], acc,
+                                           operandBScale[kPack][{b, n, k}],
+                                           operandAScale[kPack][{b, m, k}],
+                                           maybeMfmaIntrinsic->bElementType,
+                                           maybeMfmaIntrinsic->aElementType);
+              } else {
+                acc = generateScaledMFMAOp(intrinsicName,
+                                           operandA[kPack][{b, m, k}],
+                                           operandB[kPack][{b, n, k}], acc,
+                                           operandAScale[kPack][{b, m, k}],
+                                           operandBScale[kPack][{b, n, k}],
+                                           maybeMfmaIntrinsic->aElementType,
+                                           maybeMfmaIntrinsic->bElementType);
+              }
               if (!firstMfma)
                 firstMfma = acc;
             }
