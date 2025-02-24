@@ -236,7 +236,7 @@ private:
     void applyToBufferAndAliases(const std::function<void(BufferT *)> &f) {
       if (kind == BufferKind::Alias) {
         for (auto *buf : aliases)
-          f(buf);
+          buf->applyToBufferAndAliases(f);
       } else
         f(this);
     }
