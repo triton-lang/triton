@@ -1,5 +1,6 @@
 #include <iterator>
 #include <numeric>
+#include <unordered_set>
 
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Support/LLVM.h"
@@ -23,6 +24,11 @@ namespace gpu {
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
 struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
+
+  void lookupTopDivisibilityOperand(Operation *op, const llvm::SmallSet<Operation *, 8> &operationsReachedTopOnDivisibility) {
+    // should use the official backward slice analysis
+  }
+
   void
   setCoalescedEncoding(ModuleAxisInfoAnalysis &axisInfoAnalysis, Operation *op,
                        int numWarps, int threadsPerWarp,
@@ -85,6 +91,24 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
     perThread = std::min<int>(perThread, std::max(numElems / numThreads, 1));
     LDBG("perThread: " << perThread);
 
+    if (perThread == 1) {
+      auto divisibility = axisInfoAnalysis.getAxisInfo(ptr)->getDivisibility();
+      // check if divisibility in all dimensions is 1
+      auto divisibilityIsOne = std::all_of(divisibility.begin(),
+                                           divisibility.end(),
+                                           [](int i) { return i == 1; });
+
+      auto contiguityIsOne = std::all_of(contiguity.begin(), contiguity.end(),
+                                         [](int i) { return i == 1; });
+
+      auto mainError = op->emitRemark() << "Coalescing only assigns one element per thread for this operation. Performance may be suboptimal.";
+      if (divisibilityIsOne) {
+        mainError.attachNote() << "The divisibility of the pointer is 1 in all dimensions. Consider specifying divisibility via `tt.multiple_of`.";
+      }
+      if (contiguityIsOne) {
+        mainError.attachNote() << "The contiguity of the pointer is 1 in all dimensions.";
+      }
+    }
     if (!dyn_cast<triton::LoadOp>(op)) {
       // For ops that can result in a global memory write, we should enforce
       // that each thread handles at most 128 bits, which is the widest

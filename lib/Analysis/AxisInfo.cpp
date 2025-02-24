@@ -1,9 +1,14 @@
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
+#include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/SmallSet.h"
+
+
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include "triton/Analysis/AxisInfo.h"
+#include "mlir/IR/Operation.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
@@ -170,6 +175,11 @@ class AxisInfoAnalysis : public dataflow::SparseForwardDataFlowAnalysis<
 private:
   AxisInfoVisitorList visitors;
 
+  // record the operations that reached the top of the lattice, i.e., the
+  // value of divisibility is 1. These are candidates that developers
+  // want to inspect to see if they missed any divisibility marks.
+  llvm::SmallSet<Operation *, 8> operationsReachedTopOnDivisibility;
+
   void setToEntryState(dataflow::Lattice<AxisInfo> *lattice) override {
     propagateIfChanged(
         lattice, lattice->join(
@@ -202,6 +212,11 @@ public:
   void
   visitForOpInductionVar(scf::ForOp op,
                          ArrayRef<dataflow::Lattice<AxisInfo> *> argLattices);
+
+  // const reference getter for operationsReachedTopOnDivisibility
+  const llvm::SmallSet<Operation*, 8> &getOperationsReachedTopOnDivisibility() const {
+    return operationsReachedTopOnDivisibility;
+  }
 };
 
 template <typename OpTy>
@@ -1094,8 +1109,22 @@ LogicalResult AxisInfoAnalysis::visitOperation(
   curr = AxisInfo(newContiguity, newDivisibility, newConstancy,
                   curr.getConstantValue());
   // join all lattice elements
-  for (auto *result : results)
+  for (auto *result : results) {
+    auto divisibility = result->getValue().getDivisibility();
+    auto divisibilityBeforeIsOne = std::all_of(divisibility.begin(), divisibility.end(),
+                                        [](int i) { return i == 1; });
+    auto joinResult = result->join(curr);
+    if (joinResult == ChangeResult::Change) {
+      auto divisibility = result->getValue().getDivisibility();
+      auto divisibilityAfterIsOne = std::all_of(divisibility.begin(), divisibility.end(),
+                                         [](int i) { return i == 1; });
+      if (divisibilityBeforeIsOne && !divisibilityAfterIsOne) {
+        // op->emitRemark() << "[AxisInfo] divisibility is set to 1 for all dims."; 
+        operationsReachedTopOnDivisibility.insert(op);
+      }
+    }
     propagateIfChanged(result, result->join(curr));
+  }
   return success();
 }
 
@@ -1292,7 +1321,7 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
   return alignment;
 }
 
-void ModuleAxisInfoAnalysis::initialize(FunctionOpInterface funcOp) {
+void ModuleAxisInfoAnalysis::initialize(FunctionOpInterface funcOp, llvm::SmallSet<Operation*, 8> &operationsReachedTopOnDivisibility) {
   std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
   AxisInfoAnalysis *analysis = solver->load<AxisInfoAnalysis>();
   if (failed(solver->initializeAndRun(funcOp)))
@@ -1318,6 +1347,7 @@ void ModuleAxisInfoAnalysis::initialize(FunctionOpInterface funcOp) {
       updateAxisInfoMap(value);
     }
   });
+  operationsReachedTopOnDivisibility.insert(analysis->getOperationsReachedTopOnDivisibility().begin(), analysis->getOperationsReachedTopOnDivisibility().end());
 }
 
 void ModuleAxisInfoAnalysis::update(CallOpInterface callOp,
