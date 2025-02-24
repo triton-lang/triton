@@ -387,3 +387,23 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.shar
     tt.return
   }
 }
+
+// -----
+
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 16}>
+#shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
+#smem = #ttg.shared_memory
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 32, unpacked = false>
+#tmem1 = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32} {
+  tt.func @tc_gen5_mma_lhs_tmem(%arg0: !ttg.memdesc<128x32xf16, #tmem, #ttng.tensor_memory>, %arg1: !ttg.memdesc<32x128xf16, #shared, #smem>, %arg2: !ttg.memdesc<128x128xf32, #tmem1, #ttng.tensor_memory, mutable>, %arg3: i1, %arg4: i1, %arg5: !ttg.memdesc<1xi64, #shared1, #smem>) {
+    // CHECK-LABEL: tc_gen5_mma_lhs_tmem
+    //       CHECK: tcgen05.mma.cta_group::1.kind::f16
+    ttng.tc_gen5_mma %arg0, %arg1, %arg2, %arg3, %arg4, %arg5 : (
+      !ttg.memdesc<128x32xf16, #tmem, #ttng.tensor_memory>,
+      !ttg.memdesc<32x128xf16, #shared, #smem>,
+      !ttg.memdesc<128x128xf32, #tmem1, #ttng.tensor_memory, mutable>,
+      i1, i1, !ttg.memdesc<1xi64, #shared1, #smem>) -> ()
+    tt.return
+  }
+}
