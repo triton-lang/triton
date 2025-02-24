@@ -324,7 +324,7 @@ bool CTAPlanner::processReduce(triton::FuncOp &funcOp) {
     auto srcLayout = srcTy.getEncoding();
 
     auto rank = srcShape.size();
-    auto order = ttg::getOrder(srcLayout);
+    auto order = ttg::getOrder(srcTy);
     auto sizePerThread = ttg::getSizePerThread(srcLayout);
     auto CTAOrder = ttg::getCTAOrder(srcLayout);
 
