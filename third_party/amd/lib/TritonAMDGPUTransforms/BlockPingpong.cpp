@@ -13,6 +13,10 @@
 #define GEN_PASS_CLASSES
 #include "TritonAMDGPUTransforms/Passes.h"
 
+#define DEBUG_TYPE "tritonamdgpu-block-pingpong"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
+
 using namespace mlir;
 namespace ttg = mlir::triton::gpu;
 namespace tt = mlir::triton;
@@ -447,9 +451,14 @@ void Pingponger::getDotPingponged() {
   // software pipelining and dot rank=2. Also only accept the for-loop with
   // supported combination of operations because this transformation is very
   // tightly scheduling the latencies.
-  if (gLoadOps.size() < 2 || lLoadOps.size() < 2 || dotOps.size() != 1)
+  if (gLoadOps.size() < 2 || lLoadOps.size() < 2 || dotOps.size() != 1) {
+    std::stringstream message;
+    message << "Unable to match ping pong scheduling pattern. Details: "
+            << gLoadOps.size() << " global loads, " << lLoadOps.size()
+            << " local loads, " << dotOps.size() << " dot products";
+    LDBG(message.str());
     return;
-
+  }
   // Pingpong scheduling tries to form two different types of the instruction
   // clusters, i.e., Dot clusters and Memory clusters. While each SIMD has
   // two concurrent warps, both warps can execute a different type of
@@ -509,18 +518,32 @@ void Pingponger::getDotPingponged() {
     // numWarps=4 doesn't need asymmetric sync, return.
     return;
   } else if (numWarps == 8) { // Pingpong between warps from the same block
-    if (gLoadOps.size() != 2 || lLoadOps.size() != 2)
+    if (gLoadOps.size() != 2 || lLoadOps.size() != 2) {
+      std::stringstream message;
+      message << "Unable to match ping pong slicing pattern. Details: "
+              << gLoadOps.size() << " global loads, " << lLoadOps.size()
+              << " local loads";
+      LDBG(message.str());
       return;
+    }
     // Transform a loop where the tile size requires dots to be sliced
     if (tileSize == mediumTile) {
-      if (transformTwoPPClusters(builder, dotOps[0]->getLoc()).failed())
+      if (transformTwoPPClusters(builder, dotOps[0]->getLoc()).failed()) {
+        LDBG("Encountered failure when trying to execute the two ping pong "
+             "cluster transformation");
         return;
+      }
     } else if (tileSize >= largeTile) {
       // Avoid known register spilling. i.e., mfma16x16x16 & largetile & kpack>1
-      if (intShape[0] == 16 && intShape[1] == 16 && kWidth == 8)
+      if (intShape[0] == 16 && intShape[1] == 16 && kWidth == 8) {
+        LDBG("Reached known register spilling case, skip pingpong scheduling");
         return;
-      if (transformFourPPClusters(builder, dotOps[0]->getLoc()).failed())
+      }
+      if (transformFourPPClusters(builder, dotOps[0]->getLoc()).failed()) {
+        LDBG("Encountered failure when trying to execute the four ping pong "
+             "cluster transformation");
         return;
+      }
     } else
       return;
 
