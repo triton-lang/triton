@@ -1385,13 +1385,13 @@ struct AtomicRMWOpConversion
             b.and_(b.and_(isAligned, bothEnabled), neighbourAddrAdjacent);
 
         // Enable only the even threads.
-        Value oneDisabled = b.or_(neighbourEnabled, rmwMask);
-        rmwMask = b.and_(oneDisabled, b.icmp_eq(isOddI32, b.i32_val(0)));
-
+        Value anyEnabled = b.or_(neighbourEnabled, rmwMask);
         // If one of the threads is disabled, use the neighbour's addr.
         rightNeighbourAddr =
             b.select(neighbourEnabled, rightNeighbourAddr, castedAddr);
         castedAddr = b.select(rmwMask, castedAddr, rightNeighbourAddr);
+
+        rmwMask = b.and_(anyEnabled, b.icmp_eq(isOddI32, b.i32_val(0)));
 
         // Unpack results back
         rightNeighbourPtr = b.inttoptr(rmwPtr.getType(), rightNeighbourAddr);
@@ -1450,7 +1450,7 @@ struct AtomicRMWOpConversion
           Value atomNonVec1 = rewriter.create<LLVM::AtomicRMWOp>(
               loc, *maybeKind, rightNeighbourPtr, pairedOperand1,
               atomicMemOrdering, *scopeStr);
-          Value packedRes = b.null(packF16Ty);
+          Value packedRes = b.undef(packF16Ty);
           packedRes =
               b.insert_element(packF16Ty, packedRes, atomNonVec0, b.i32_val(0));
           packedRes =
