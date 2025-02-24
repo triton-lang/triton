@@ -532,10 +532,6 @@ We call each individual tile "rep".
     InterfaceMethod<"Get the shape of the values per thread.",
                     "SmallVector<unsigned>",
                     "getSizePerThread">,
-
-    InterfaceMethod<"Gets the number of contiguous elements per thread.",
-                    "SmallVector<unsigned>",
-                    "getContigPerThread">,
     InterfaceMethod<"Convert to LinearLayout.",
                     "LinearLayout",
                     "toLinearLayout",
@@ -819,12 +815,7 @@ for
     }]>
   ];
 
-  let extraClassDeclaration = extraDistributedDeclaration # [{
-    SmallVector<unsigned> getContigPerThread() {
-      // Block encoding is dense stride layout. The elements per thread are contiguous.
-      return getSizePerThread();
-    };
-  }];
+  let extraClassDeclaration = extraDistributedDeclaration;
 
   let hasCustomAssemblyFormat = 1;
 }
@@ -972,17 +963,6 @@ V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape, int kWidth, int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
     SmallVector<unsigned> getThreadsPerWarpForOperand(int opIdx) const;
-
-    SmallVector<unsigned> getContigPerThread() {
-      auto rank = getWarpsPerCTA().size();
-      SmallVector<unsigned> contigPerThread(rank, 1);
-      if (getIsTransposed())
-        contigPerThread[rank - 1] = 4;
-      else
-        contigPerThread[rank - 2] = 4;
-      return contigPerThread;
-    };
-
   }];
 
   let genVerifyDecl = 1;
@@ -1100,16 +1080,6 @@ Row |
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
     SmallVector<unsigned> getThreadsPerWarpForOperand(int opIdx) const;
     static SmallVector<unsigned> getMNKDimPerInstr();
-
-    SmallVector<unsigned> getContigPerThread() {
-      auto rank = getWarpsPerCTA().size();
-      assert(rank == 2 || rank == 3);
-      SmallVector<unsigned> contigPerThread(rank, 1);
-      if (getVersion() == 2) {
-        contigPerThread[rank - 2] = 8;
-      }
-      return contigPerThread;
-    };
   }];
 }
 
@@ -1219,15 +1189,6 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
     SmallVector<unsigned> getThreadsPerWarpForOperand(int opIdx) const;
     SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, int opIdx) const;
-
-    SmallVector<unsigned> getContigPerThread() {
-      assert(isAmpere() || isHopper());
-      auto rank = getWarpsPerCTA().size();
-      SmallVector<unsigned> contigPerThread(rank, 1);
-      contigPerThread[rank - 1] = 2;
-      return contigPerThread;
-    };
-
   }];
 
   let hasCustomAssemblyFormat = 1;
@@ -1274,13 +1235,6 @@ def SliceEncodingAttr : DistributedEncoding<"SliceEncoding", "slice_encoding"> {
   let extraClassDeclaration = extraDistributedDeclaration # [{
     template<class T>
     SmallVector<T> paddedShape(ArrayRef<T> shape) const;
-
-    SmallVector<unsigned> getContigPerThread() {
-      auto parentLayout = mlir::cast<DistributedEncodingTrait>(getParent());
-      auto parentContigPerThread = parentLayout.getContigPerThread();
-      parentContigPerThread.erase(parentContigPerThread.begin() + getDim());
-      return parentContigPerThread;
-    };
   }];
 
   let hasCustomAssemblyFormat = 1;
@@ -1348,20 +1302,7 @@ vecIdx (index of the element in the quad; this is always along the k-dim)
 
   let assemblyFormat = "`<` `{` struct(params) `}` `>`";
   let genVerifyDecl = 1;
-  let extraClassDeclaration = extraDistributedDeclaration # [{
-    SmallVector<unsigned> getContigPerThread() {
-      auto rank = getWarpsPerCTA().size();
-      assert(rank == 2 || rank == 3);
-      SmallVector<unsigned> contigPerThread(rank, 1);
-      auto kWidth = getKWidth();
-      assert(kWidth != 0 && "Do not support kWidth=0");
-      if (getOpIdx() == 0)
-        contigPerThread[rank - 1] = kWidth;
-      else
-        contigPerThread[rank - 2] = kWidth;
-      return contigPerThread;
-    };
-  }];
+  let extraClassDeclaration = extraDistributedDeclaration;
 }
 
 def TTG_SharedMemorySpace : AttrDef<TritonGPU_Dialect, "SharedMemorySpace"> {
