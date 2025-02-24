@@ -321,7 +321,6 @@ SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
   unsigned rank = shape.size();
   SmallVector<int64_t> shapePerCTA(rank);
   for (unsigned i = 0; i < rank; ++i) {
-    // This wrapping rule must be consistent with emitCTAOffsetForLayout
     unsigned splitNum = std::min<unsigned>(shape[i], CTASplitNum[i]);
     shapePerCTA[i] = shape[i] / splitNum;
   }
