@@ -270,17 +270,16 @@ LinearLayout chooseDsReadB64Tr16Layout(Attribute enc, ArrayRef<int64_t> shape,
 // Create LinearLayout for mxfp4 and mxfp8 operand in scaled mfma.
 // For mxfp4, we use dot layout directly. Mxfp8 is not covered by dot
 // layout, so we need to manually create linear layout for it.
-LinearLayout chooseScaledMfmaOperandLayout(MLIRContext *ctx,
-                                           AMDMfmaEncodingAttr mfmaEnc,
-                                           int kWidth, unsigned mDim, int idx,
-                                           ScaleDotElemType elemType,
-                                           llvm::ArrayRef<int64_t> shape);
+LinearLayout
+chooseScaledMfmaOperandLayout(AMDMfmaEncodingAttr mfmaEnc, int kWidth,
+                              int dotOperandIdx, ScaleDotElemType elemType,
+                              llvm::ArrayRef<int64_t> dotOperandShape);
 
 // Create LinearLayout for scale in scaled mfma.
-LinearLayout
-chooseScaledMfmaScaleLayout(MLIRContext *ctx, int idx,
-                            const std::vector<std::vector<int32_t>> &warpBasis,
-                            ArrayRef<int64_t> shape, unsigned mDim);
+LinearLayout chooseScaledMfmaScaleLayout(
+    MLIRContext *ctx, int dotOperandIdx,
+    const std::vector<std::vector<int32_t>> &dotOperandWarpBasis,
+    ArrayRef<int64_t> dotOperandShape, unsigned mfmaMDim);
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_LINEARLAYOUTCONVERSIONS_H

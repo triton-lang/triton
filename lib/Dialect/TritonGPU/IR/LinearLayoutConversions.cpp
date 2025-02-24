@@ -1338,15 +1338,16 @@ LinearLayout chooseDsReadB64Tr16Layout(Attribute enc, ArrayRef<int64_t> shape,
   return chooseDotDsReadB64Tr16Layout(dot, shape, elemBitWidth);
 }
 
-LinearLayout chooseScaledMfmaOperandLayout(MLIRContext *ctx,
-                                           AMDMfmaEncodingAttr mfmaEnc,
-                                           int kWidth, unsigned mDim, int idx,
-                                           ScaleDotElemType elemType,
-                                           llvm::ArrayRef<int64_t> shape) {
+LinearLayout
+chooseScaledMfmaOperandLayout(AMDMfmaEncodingAttr mfmaEnc, int kWidth,
+                              int dotOperandIdx, ScaleDotElemType elemType,
+                              llvm::ArrayRef<int64_t> dotOperandShape) {
+  MLIRContext *ctx = mfmaEnc.getContext();
+  unsigned mDim = mfmaEnc.getMDim();
   if (elemType == ScaleDotElemType::E2M1) {
     auto newEncoding =
-        DotOperandEncodingAttr::get(ctx, idx, mfmaEnc, kWidth / 2);
-    return newEncoding.toLinearLayout(shape);
+        DotOperandEncodingAttr::get(ctx, dotOperandIdx, mfmaEnc, kWidth / 2);
+    return newEncoding.toLinearLayout(dotOperandShape);
   }
 
   // For mxfp8, each lane contains 32 elements, consisting of two blocks
@@ -1355,7 +1356,7 @@ LinearLayout chooseScaledMfmaOperandLayout(MLIRContext *ctx,
   assert(elemType == ScaleDotElemType::E4M3 ||
          elemType == ScaleDotElemType::E5M2);
   using basisT = std::vector<std::vector<int32_t>>;
-  unsigned rank = shape.size();
+  unsigned rank = dotOperandShape.size();
   auto standardOutDims = standardOutDimNames(ctx, rank);
   auto warpOrder = mfmaEnc.getWarpOrder();
 
@@ -1379,13 +1380,15 @@ LinearLayout chooseScaledMfmaOperandLayout(MLIRContext *ctx,
     kTileSize = kWidth * 2;
   }
   // Add repeats of registers along K dimension to register base vectors
-  int64_t kSize = idx == 0 ? shape[1] : shape[0];
+  int64_t kSize = dotOperandIdx == 0 ? dotOperandShape[1] : dotOperandShape[0];
   for (int32_t elem = kTileSize; elem < kSize; elem *= 2) {
     regBase.emplace_back(std::vector<int32_t>{0, elem});
   }
 
+  // Order of dimensionality changes on A/B operand, so here we need to reverse
+  // if it's operand B.
   std::vector<int> repOrder = {0, 1};
-  if (idx == 1) {
+  if (dotOperandIdx == 1) {
     std::reverse(repOrder.begin(), repOrder.end());
   }
 
@@ -1397,15 +1400,15 @@ LinearLayout chooseScaledMfmaOperandLayout(MLIRContext *ctx,
 
   return combineCtaCgaWithShape(regLanes.transposeOuts(standardOutDims) *
                                     warps.transposeOuts(standardOutDims),
-                                mfmaEnc.getCTALayout(), shape);
+                                mfmaEnc.getCTALayout(), dotOperandShape);
 }
 
-using basisT = std::vector<std::vector<int32_t>>;
-LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int idx,
-                                         const basisT &warpBasis,
-                                         ArrayRef<int64_t> shape,
-                                         unsigned mDim) {
-  unsigned rank = shape.size();
+LinearLayout chooseScaledMfmaScaleLayout(
+    MLIRContext *ctx, int dotOperandIdx,
+    const std::vector<std::vector<int32_t>> &dotOperandWarpBasis,
+    ArrayRef<int64_t> dotOperandShape, unsigned mfmaMDim) {
+  using basisT = std::vector<std::vector<int32_t>>;
+  unsigned rank = dotOperandShape.size();
   auto order = mlir::triton::gpu::getMatrixOrder(rank, /*rowMajor=*/true);
   auto standardOutDims = standardOutDimNames(ctx, rank);
   StringAttr kRegister = StringAttr::get(ctx, "register");
@@ -1431,8 +1434,8 @@ LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int idx,
   // at this position, the layouts are transposed to [dim1, dim0]. So
   // instead of reverse bScale's layout, we need to reverse aScale's. There
   // will be a transpose in the end to correct everything.
-  basisT warps = warpBasis;
-  if (idx == 0) {
+  basisT warps = dotOperandWarpBasis;
+  if (dotOperandIdx == 0) {
     for (auto &basis : warps) {
       std::reverse(basis.begin(), basis.end());
     }
@@ -1446,7 +1449,7 @@ LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int idx,
   // For mxfp4, these 32 elements are consecutive, so only 1 scale element
   // is required. But for mxfp6/mxfp8, there are 2 16-consecutive elements
   // blocks, so 2 scale elements are required.
-  if (mDim == 32) {
+  if (mfmaMDim == 32) {
     // For ROCDL::mfma_scale_f32_32x32x64_f8f6f4 with fp4 input, each lane
     // takes 32 consecutive elements from A alone K dimension. The first
     // 32 lanes collectively handle A[0:32][0:32], and the other 32 lanes
@@ -1458,7 +1461,7 @@ LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int idx,
          {kBlock, {}}},
         {standardOutDims[order[0]], standardOutDims[order[1]]});
   } else {
-    assert(mDim == 16);
+    assert(mfmaMDim == 16);
     // For ROCDL::mfma_scale_f32_16x16x128_f8f6f4 with fp4 input, each lane
     // takes 32 consecutive elements from A alone K dimension. The first
     // 16 lanes collectively handle A[0:16][0:32], and another 16 lanes
@@ -1478,7 +1481,8 @@ LinearLayout chooseScaledMfmaScaleLayout(MLIRContext *ctx, int idx,
   for (auto d : repOrder) {
     auto outDim = standardOutDims[d];
     auto dimSize = newLL.getOutDimSize(outDim);
-    newLL *= LinearLayout::identity1D(shape[d] / dimSize, kRegister, outDim);
+    newLL *= LinearLayout::identity1D(dotOperandShape[d] / dimSize, kRegister,
+                                      outDim);
   }
   newLL = newLL.transposeOuts(standardOutDims);
   return newLL;

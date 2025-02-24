@@ -3856,7 +3856,7 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
     # overflow when scaling.
     comp_dtype_max_exp = 6 if normal_type == "fp16" else 15
 
-    torch.manual_seed(42)
+    torch.manual_seed(0)
 
     def make_arg(shape, ty, col_major=False):
         if col_major:

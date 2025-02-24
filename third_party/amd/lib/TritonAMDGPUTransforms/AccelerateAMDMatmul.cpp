@@ -820,10 +820,10 @@ public:
 
     auto aShape = a.getType().getShape();
     auto bShape = b.getType().getShape();
-    auto aEncLL = chooseScaledMfmaOperandLayout(ctx, mfmaEnc, kWidth, mDim, 0,
-                                                aElemType, aShape);
-    auto bEncLL = chooseScaledMfmaOperandLayout(ctx, mfmaEnc, kWidth, mDim, 1,
-                                                bElemType, bShape);
+    auto aEncLL = chooseScaledMfmaOperandLayout(
+        mfmaEnc, kWidth, /*dotOperandIdx=*/0, aElemType, aShape);
+    auto bEncLL = chooseScaledMfmaOperandLayout(
+        mfmaEnc, kWidth, /*dotOperandIdx=*/1, bElemType, bShape);
 
     auto convertInputLayout = [&](TensorValue v,
                                   LinearLayout layout) -> TensorValue {
@@ -871,8 +871,10 @@ public:
                                                      newScaleType, scale);
       }
     };
-    auto newAScale = convertScaleLayout(aScale, aShape, aEncLL, 0);
-    auto newBScale = convertScaleLayout(bScale, bShape, bEncLL, 1);
+    auto newAScale =
+        convertScaleLayout(aScale, aShape, aEncLL, /*dotOperandIdx=*/0);
+    auto newBScale =
+        convertScaleLayout(bScale, bShape, bEncLL, /*dotOperandIdx=*/1);
 
     auto newDot = rewriter.create<triton::DotScaledOp>(
         dotOp.getLoc(), newRetType, a, b, newAcc, newAScale, newBScale,
