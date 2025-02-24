@@ -428,8 +428,8 @@ static bool canUseTwoCTAs(triton::DotOp dotOp) {
   return true;
 }
 
-static Attribute
-replaceCTALayout(Attribute layout,
+static DistributedEncodingTrait
+replaceCTALayout(DistributedEncodingTrait layout,
                  const triton::gpu::CTALayoutAttr &newCTALayout) {
   if (auto blockedLayout = mlir::dyn_cast<BlockedEncodingAttr>(layout)) {
     return BlockedEncodingAttr::get(
@@ -454,7 +454,7 @@ static Value splitBOperand(Value b, mlir::PatternRewriter &rewriter) {
   auto loadOp = b.getDefiningOp<triton::LoadOp>();
   assert(loadOp && "expected LoadOp");
   RankedTensorType bType = cast<RankedTensorType>(b.getType());
-  Attribute currentLayout = bType.getEncoding();
+  auto currentLayout = cast<DistributedEncodingTrait>(bType.getEncoding());
   auto newCTALayout =
       CTALayoutAttr::get(ctx, {1, 2}, {1, 2}, getCTAOrder(currentLayout));
   Attribute newLayout = replaceCTALayout(currentLayout, newCTALayout);
