@@ -1007,7 +1007,8 @@ def TT_MakeTensorDescOp : TT_Op<"make_tensor_descriptor", [
   let arguments = (ins
     TT_Ptr:$base,
     Variadic<I32>:$shape,
-    Variadic<I64>:$strides
+    Variadic<I64>:$strides,
+    OptionalAttr<TT_MakeDescriptorAttr>:$descAttr
   );
 
   let results = (outs TT_TensorDescType:$result);
@@ -1268,6 +1269,7 @@ def TT_ExperimentalDescriptorLoadOp : TT_Op<"experimental_descriptor_load", [Mem
   let arguments = (ins
     TT_TensorDescType:$desc,
     Variadic<I32>:$indices,
+    TT_DescriptorLoadAttr:$descAttr,
     DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
     DefaultValuedAttr<TT_EvictionPolicyAttr, "::mlir::triton::EvictionPolicy::NORMAL">:$evict
   );
@@ -1379,7 +1381,7 @@ def TT_ExperimentalTensormapCreateOp: TT_Op<
       Variadic<I32>:$global_dim,
       Variadic<I64>:$global_stride,
       Variadic<I32>:$element_stride,
-      ConfinedAttr<I32Attr, [IntNonNegative, IntMaxValue<12>]>:$elem_type,
+      ConfinedAttr<I32Attr, [IntNonNegative, IntMaxValue<15>]>:$elem_type,
       ConfinedAttr<I32Attr, [IntNonNegative, IntMaxValue<2>]>:$interleave_layout,
       ConfinedAttr<I32Attr, [IntNonNegative, IntMaxValue<3>]>:$swizzle_mode,
       ConfinedAttr<I32Attr, [IntNonNegative, IntMaxValue<1>]>:$fill_mode

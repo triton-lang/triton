@@ -1178,11 +1178,14 @@ struct AsyncTMACopyGlobalToLocalOpConversion
 
     int elementSizeInBytes =
         op.getResult().getType().getElementType().getIntOrFloatBitWidth() / 8;
-    int totalNumElements = product(op.getResult().getType().getShape());
+    int packingFactor = op.getDescAttr().getFp4Padded() ? 2 : 1;
+    int totalNumElements =
+        product(op.getResult().getType().getShape()) * packingFactor;
     int64_t size = totalNumElements * elementSizeInBytes;
 
     int innerBlockSize = op.getResult().getType().getShape().back();
-    int contigDimSizeInByte = innerBlockSize * elementSizeInBytes;
+    int contigDimSizeInByte =
+        innerBlockSize * elementSizeInBytes * packingFactor;
     int numCopies = 1;
     int rank = op.getCoord().size();
     if (rank > 1)

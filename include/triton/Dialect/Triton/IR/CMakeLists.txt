@@ -24,4 +24,8 @@ set(LLVM_TARGET_DEFINITIONS TritonOpInterfaces.td)
 mlir_tablegen(OpInterfaces.h.inc -gen-op-interface-decls)
 mlir_tablegen(OpInterfaces.cpp.inc -gen-op-interface-defs)
 
+set(LLVM_TARGET_DEFINITIONS TritonAttrDefs.td)
+mlir_tablegen(TritonAttrDefs.h.inc -gen-attrdef-decls)
+mlir_tablegen(TritonAttrDefs.cpp.inc -gen-attrdef-defs)
+
 add_public_tablegen_target(TritonTableGen)
