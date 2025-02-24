@@ -291,15 +291,17 @@ Value llLoad(RewriterBase &rewriter, Location loc, Value ptr, Type elemTy,
   // be happier because we emit less branchy code to optimize. The backend will
   // lower it down however it wants at some point.
   // if (alignmentBytes &&
-  //     (cm == triton::CacheModifier::CG || cm == triton::CacheModifier::NONE)) {
-  //   // `llvm.intr.masked.load` only accepts vectors. If we see a scalar we need
+  //     (cm == triton::CacheModifier::CG || cm == triton::CacheModifier::NONE))
+  //     {
+  //   // `llvm.intr.masked.load` only accepts vectors. If we see a scalar we
+  //   need
   //   // to bitcast to `vector<1xelemTy>` (and back)
   //   int64_t vecSize = getNumElements(elemTy);
   //   Type vecType = castToVectorType(elemTy);
   //   falseVal = b.bitcast(falseVal, vecType);
-  //   Value maskVal = createVectorMaskFromPredicate(rewriter, loc, pred, vecSize);
-  //   bool nt = (cm == triton::CacheModifier::CG);
-  //   Value vecData = rewriter.create<LLVM::MaskedLoadOp>(
+  //   Value maskVal = createVectorMaskFromPredicate(rewriter, loc, pred,
+  //   vecSize); bool nt = (cm == triton::CacheModifier::CG); Value vecData =
+  //   rewriter.create<LLVM::MaskedLoadOp>(
   //       loc, vecType, ptr, maskVal, falseVal, alignmentBytes, nt);
   //   // If it is not a vector, remember to bitcast back to a scalar
   //   vecData = b.bitcast(vecData, elemTy);
@@ -338,14 +340,16 @@ void llStore(RewriterBase &rewriter, Location loc, Value ptr, Value val,
   // be happier because we emit less branchy code to optimize. The backend will
   // lower it down however it wants at some point.
   // if (alignmentBytes && cm == triton::CacheModifier::NONE) {
-  //   // `llvm.intr.masked.store` only accepts vectors. If we see a scalar we need
+  //   // `llvm.intr.masked.store` only accepts vectors. If we see a scalar we
+  //   need
   //   // to bitcast to `vector<1xelemTy>`
   //   Type elemTy = val.getType();
   //   int64_t vecSize = getNumElements(elemTy);
   //   Type vecType = castToVectorType(elemTy);
   //   val = b.bitcast(val, vecType);
-  //   Value maskVal = createVectorMaskFromPredicate(rewriter, loc, pred, vecSize);
-  //   auto op = rewriter.create<LLVM::MaskedStoreOp>(loc, val, ptr, maskVal,
+  //   Value maskVal = createVectorMaskFromPredicate(rewriter, loc, pred,
+  //   vecSize); auto op = rewriter.create<LLVM::MaskedStoreOp>(loc, val, ptr,
+  //   maskVal,
   //                                                  alignmentBytes);
   //   return;
   // }

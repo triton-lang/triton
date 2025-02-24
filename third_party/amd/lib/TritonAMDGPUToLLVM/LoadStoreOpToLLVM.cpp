@@ -1551,34 +1551,37 @@ private:
     auto *leaderBlock = curBlock->splitBlock(rewriter.getInsertionPoint());
     leaderBlock->addArgument(i64_ty, loc);
     leaderBlock->addArgument(operandElemType, loc);
-    auto *block1 = rewriter.createBlock(
+    auto *beforeLoop = rewriter.createBlock(
         curBlock->getParent(), std::next(Region::iterator(curBlock)));
 
     rewriter.setInsertionPointToEnd(curBlock);
 
     // check how many adjacent address are in the wave
-    Value rightNeighbourAddr = genI32TiledOp(rewriter, shiftLeftI32ByDpp, rmwPtr);
+    Value rightNeighbourAddr =
+        genI32TiledOp(rewriter, shiftLeftI32ByDpp, rmwPtr);
     Value elemSize = b.i64_val(operandElemType.getIntOrFloatBitWidth() / 8);
     Value isNeighbour = b.icmp_eq(rightNeighbourAddr, b.add(rmwPtr, elemSize));
     Value neighbourFlag = targetInfo.ballot(rewriter, loc, i64_ty, isNeighbour);
-    Value numNeighbours = b.trunc(i32_ty, generatePopcount64(rewriter, neighbourFlag));
+    Value numNeighbours =
+        b.trunc(i32_ty, generatePopcount64(rewriter, neighbourFlag));
     // heuristic, do optimization only if # of neighbours is less than 32,
     // [TODO], will calculate actual # of difference addresses
     Value skipOpt = b.icmp_ult(numNeighbours, b.i32_val(32));
 
-    rewriter.create<LLVM::CondBrOp>(loc, skipOpt, block1, leaderBlock, ValueRange({rmwPtr, operand}));
-    rewriter.setInsertionPointToEnd(block1);
+    rewriter.create<LLVM::CondBrOp>(loc, skipOpt, beforeLoop, leaderBlock,
+                                    ValueRange({rmwPtr, operand}));
+    rewriter.setInsertionPointToEnd(beforeLoop);
 
-    auto *afterLoopBlock = block1->splitBlock(rewriter.getInsertionPoint());
+    auto *afterLoopBlock = beforeLoop->splitBlock(rewriter.getInsertionPoint());
     afterLoopBlock->addArgument(i32_ty, loc);    // idx
     afterLoopBlock->addArgument(i32_ty, loc);    // cnt
     afterLoopBlock->addArgument(int_ty(1), loc); // isLeader
 
     auto *loopBody = rewriter.createBlock(
-      block1->getParent(), std::next(Region::iterator(block1)));
+        beforeLoop->getParent(), std::next(Region::iterator(beforeLoop)));
     loopBody->addArgument(i32_ty, loc);
 
-    rewriter.setInsertionPointToEnd(block1);
+    rewriter.setInsertionPointToEnd(beforeLoop);
     rewriter.create<LLVM::BrOp>(loc, b.i32_val(0), loopBody);
 
     // Greed search of same addr within wavefront. Also collect auxiliary
@@ -1704,15 +1707,17 @@ private:
     rewriter.setInsertionPointToEnd(afterRedBlock);
     Value leaderCond = leaderRes;
     Value defaultRes = b.undef(operandElemType);
-    rewriter.create<LLVM::CondBrOp>(loc, leaderCond, leaderBlock, ValueRange({rmwPtr, afterRedBlock->getArgument(0)}), endBlock,
-                                    ValueRange({defaultRes}));
+    rewriter.create<LLVM::CondBrOp>(
+        loc, leaderCond, leaderBlock,
+        ValueRange({rmwPtr, afterRedBlock->getArgument(0)}), endBlock,
+        ValueRange({defaultRes}));
     rewriter.setInsertionPointToEnd(leaderBlock);
     // Utilize global atomic only by leader threads
     Value addr = leaderBlock->getArgument(0);
     Value atomAddr = b.inttoptr(origPtrType, addr);
     Value atom = rewriter
                      .create<LLVM::AtomicRMWOp>(loc, opKind, atomAddr,
-                                            leaderBlock->getArgument(1),
+                                                leaderBlock->getArgument(1),
                                                 memOrdering, scope)
                      .getResult();
     rewriter.create<LLVM::BrOp>(loc, atom, endBlock);
