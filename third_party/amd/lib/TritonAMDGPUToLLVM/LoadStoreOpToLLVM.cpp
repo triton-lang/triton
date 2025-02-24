@@ -1373,14 +1373,14 @@ struct AtomicRMWOpConversion
         // 1. address is aligned by 4 bytes
         // 2. right neighbour has adjacent address
         // 3. both threads are active
-        Value neighbourEnabled = b.icmp_ne(i64Ones, rightNeighbourAddr);
-        Value bothEnabled = b.and_(neighbourEnabled, rmwMask);
         Value isAligned =
             b.icmp_eq(b.urem(castedAddr, b.i64_val(4)), b.i64_val(0));
         Value neighbourAddrAdjacent = b.icmp_eq(
             rightNeighbourAddr,
             b.add(castedAddr,
                   b.i64_val(valueElemTy.getIntOrFloatBitWidth() / 8)));
+        Value neighbourEnabled = b.icmp_ne(i64Ones, rightNeighbourAddr);
+        Value bothEnabled = b.and_(neighbourEnabled, rmwMask);
         enablePackedOpt =
             b.and_(b.and_(isAligned, bothEnabled), neighbourAddrAdjacent);
 
