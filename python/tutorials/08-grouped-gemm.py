@@ -223,20 +223,6 @@ tma_configs = [
 ]
 
 
-def keep(conf):
-    BLOCK_M = conf.kwargs["BLOCK_SIZE_M"]
-    BLOCK_N = conf.kwargs["BLOCK_SIZE_N"]
-    BLOCK_K = conf.kwargs["BLOCK_SIZE_K"]
-    FP8 = conf.kwargs["FP8"]
-    if BLOCK_M * BLOCK_N < 128 * 128 and conf.num_warps == 8:
-        return False
-    if BLOCK_K == 64 and FP8:
-        return False
-    if BLOCK_K == 128 and not FP8:
-        return False
-    return True
-
-
 @triton.autotune(
     tma_configs,
     key=['group_a_ptrs', 'group_b_ptrs', 'gropup_c_ptrs', 'group_size'],
@@ -431,11 +417,6 @@ def triton_tma_perf_fn(a_ptrs, b_ptrs, c_ptrs, sizes, lds, group_size, dtype):
     grid = lambda META: (META['NUM_SM'], )
     grouped_matmul_tma_kernel[grid](a_ptrs, b_ptrs, c_ptrs, sizes, lds, group_size, FP8=torch.float8_e4m3fn == dtype,
                                     NUM_SM=num_sms())
-    #num_warps = 8,
-    #num_stages = 4 if torch.float8_e4m3fn == dtype else 3,
-    #BLOCK_SIZE_M = 128,
-    #BLOCK_SIZE_N = 256,
-    #BLOCK_SIZE_K = 128 if torch.float8_e4m3fn == dtype else 64,
 
 
 def torch_perf_fn(group_A, group_B):
