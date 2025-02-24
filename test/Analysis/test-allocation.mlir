@@ -889,4 +889,15 @@ tt.func @two_different_ws() {
   tt.return
 }
 
+// expected-remark @below {{ptr_allocation_datalayout}}
+// expected-remark @below {{size = 8}}
+tt.func @ptr_allocation_datalayout(%arg0: !tt.ptr<i32>) {
+  // expected-remark @below {{offset = 0, size = 8}}
+  ttg.warp_specialize(%arg0)
+  default {
+    ttg.warp_yield
+  } : (!tt.ptr<i32>) -> ()
+  tt.return
+}
+
 }

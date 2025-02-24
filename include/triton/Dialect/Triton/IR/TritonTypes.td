@@ -3,6 +3,7 @@
 
 include "mlir/IR/AttrTypeBase.td"
 include "mlir/IR/BuiltinTypeInterfaces.td"
+include "mlir/Interfaces/DataLayoutInterfaces.td"
 include "triton/Dialect/Triton/IR/TritonDialect.td"
 
 //
@@ -50,27 +51,29 @@ class TT_PtrOf<list<Type> pointeeTypes> :
                 "ptr", "::mlir::triton::PointerType">;
 
 // Pointer Type in C++ (corresponding to `TT_PtrOf`)
-def TT_PtrType : TritonTypeDef<"Pointer", "ptr"> {
-    let summary = "Pointer type (`::mlir::triton::PointerType`) in Triton IR type system";
+def TT_PtrType : TritonTypeDef<"Pointer", "ptr", [
+  DeclareTypeInterfaceMethods<DataLayoutTypeInterface>
+]> {
+  let summary = "Pointer type (`::mlir::triton::PointerType`) in Triton IR type system";
 
-    let description = [{
-        Pointer type in Triton IR type system, which could be pointing to scalars or tensors.
-    }];
+  let description = [{
+      Pointer type in Triton IR type system, which could be pointing to scalars or tensors.
+  }];
 
-    let parameters = (ins "Type":$pointeeType, "int":$addressSpace);
+  let parameters = (ins "Type":$pointeeType, "int":$addressSpace);
 
-    let builders = [
-        TypeBuilderWithInferredContext<(ins
-            "Type":$pointeeType,
-            "int":$addressSpace
-        ), [{
-            return $_get(pointeeType.getContext(), pointeeType, addressSpace);
-        }]>
-    ];
+  let builders = [
+      TypeBuilderWithInferredContext<(ins
+          "Type":$pointeeType,
+          "int":$addressSpace
+      ), [{
+          return $_get(pointeeType.getContext(), pointeeType, addressSpace);
+      }]>
+  ];
 
-    let hasCustomAssemblyFormat = 1;
+  let hasCustomAssemblyFormat = 1;
 
-    let skipDefaultBuilders = 1;
+  let skipDefaultBuilders = 1;
 }
 
 // Scalar Pointer Type: `ptr<>`

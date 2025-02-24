@@ -1,16 +1,18 @@
 import triton
 import pathlib
+import torch
 
 ir = """
-tt.func @kernel() {
-  ttg.warp_specialize()
+tt.func @kernel(%arg0: !tt.ptr<i32>) {
+  %c0 = arith.constant 42 : i32
+  ttg.warp_specialize(%arg0)
   default {
-    tt.print "hello world" {hex = false, isSigned = array<i32>}
+    tt.store %arg0, %c0 : !tt.ptr<i32>
     ttg.warp_yield
   }
-  partition0() num_warps(1) {
+  partition0(%arg1: !tt.ptr<i32>) num_warps(1) {
     ttg.warp_return
-  } : () -> ()
+  } : (!tt.ptr<i32>) -> ()
   tt.return
 }
 """
@@ -21,4 +23,6 @@ tmp.write_text(ir)
 kernel = triton.compile(str(tmp))
 print(kernel.asm["ttgir"])
 
-kernel[(1,1,1)]()
+k = torch.empty(2, dtype=torch.int32, device='cuda')
+kernel[(1,1,1)](k)
+print(k)

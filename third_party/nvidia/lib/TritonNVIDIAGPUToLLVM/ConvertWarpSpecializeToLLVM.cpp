@@ -274,16 +274,17 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
 
     // Store the captures if there are any.
     if (ws.getNumOperands()) {
-    auto captureType = LLVM::LLVMStructType::getLiteral(
-        b.getContext(), llvm::to_vector(ws.getOperandTypes()));
-    Value capturePtr = LLVM::getSharedMemoryBase(b.getLoc(), b, targetInfo, ws);
-    for (auto [i, arg] :
-         llvm::zip(llvm::seq<int32_t>(ws.getNumOperands()), ws.getOperands())) {
-      Value ptr =
-          b.gep(ptrTy, captureType, capturePtr, ArrayRef<LLVM::GEPArg>{0, i});
-      b.store(arg, ptr);
+      auto captureType = LLVM::LLVMStructType::getLiteral(
+          b.getContext(), llvm::to_vector(ws.getOperandTypes()));
+      Value capturePtr =
+          LLVM::getSharedMemoryBase(b.getLoc(), b, targetInfo, ws);
+      for (auto [i, arg] : llvm::zip(llvm::seq<int32_t>(ws.getNumOperands()),
+                                     ws.getOperands())) {
+        Value ptr =
+            b.gep(ptrTy, captureType, capturePtr, ArrayRef<LLVM::GEPArg>{0, i});
+        b.store(arg, ptr);
+      }
     }
-  }
 
     // First barrier releases the waiting warpgroups. The second barrier ensures
     // they have read the captures before the memory is released upon entry.

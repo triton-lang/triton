@@ -50,6 +50,23 @@ void PointerType::print(AsmPrinter &printer) const {
   }
 }
 
+llvm::TypeSize
+PointerType::getTypeSizeInBits(const DataLayout &datalayout,
+                               DataLayoutEntryListRef entries) const {
+  return llvm::TypeSize::getFixed(64);
+}
+
+uint64_t PointerType::getABIAlignment(const DataLayout &datalayout,
+                                      DataLayoutEntryListRef entries) const {
+  return 4;
+}
+
+uint64_t
+PointerType::getPreferredAlignment(const DataLayout &datalayout,
+                                   DataLayoutEntryListRef entries) const {
+  return getABIAlignment(datalayout, entries);
+}
+
 namespace mlir {
 
 namespace triton {
