@@ -85,6 +85,13 @@ unsigned getVectorSize(Value ptr, Value offset,
 
 Type scaleDotElemTypeToMLIRType(MLIRContext *ctx, triton::ScaleDotElemType t);
 
+// Return true if the src encoding and the destination encoding (in LDS) result
+// in coalesced writes
+bool writesCoalscedIntoLocalMemory(RewriterBase &rewriter,
+                                   RankedTensorType srcTy,
+                                   triton::gpu::MemDescType dstTy,
+                                   unsigned vectorization);
+
 } // namespace mlir::LLVM::AMD
 
 #endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_UTILITY_H_

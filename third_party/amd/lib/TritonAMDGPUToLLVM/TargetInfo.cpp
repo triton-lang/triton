@@ -468,4 +468,20 @@ void TargetInfo::storeOpAnnotation(triton::gpu::LocalStoreOp op,
   storeOpSchedAnnotations(op, localStoreOpCount, type);
 }
 
+SmallVector<unsigned> TargetInfo::supportedDirectToLdsWidths() const {
+  switch (getISAFamily()) {
+  case ISAFamily::CDNA1:
+  case ISAFamily::CDNA2:
+  case ISAFamily::CDNA3:
+    return {32, 16, 8};
+  case ISAFamily::CDNA4:
+    // Disable 96 bits as it uses 128bit strides between threads in a warp
+    return {128, /*96, */ 32, 16, 8};
+  default:
+    break;
+  }
+
+  return {};
+}
+
 } // namespace mlir::triton::AMD
