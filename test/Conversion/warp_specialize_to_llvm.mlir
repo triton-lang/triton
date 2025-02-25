@@ -33,7 +33,6 @@ llvm.func @rewrite_barriers() attributes {allocation.offset = 32 : i32} {
   } : () -> ()
   // CHECK: barrier.sync.aligned 0, 128
   nvvm.barrier0
-  // CHECK-NEXT: return
   llvm.return
 }
 
@@ -71,12 +70,16 @@ llvm.func @generate_switch_loop() attributes {allocation.offset = 32 : i32} {
   // CHECK-NEXT: llvm.switch [[STATE]] : i8, [[DEFAULT:\^.*]] [
   // CHECK-NEXT: 0: [[PARTITION0:\^.*]],
   // CHECK-NEXT: 1: [[PARTITION1:\^.*]],
-  // CHECK-NEXT: 2: [[PARTITION2:\^.*]]
+  // CHECK-NEXT: 2: [[PARTITION2:\^.*]],
+  // CHECK-NEXT: 3: [[EXIT:\^.*]]
 
   // CHECK: [[DEFAULT]]:
   // CHECK-NEXT: barrier.sync 1 ;
   // CHECK-NEXT: barrier.sync 1 ;
   // CHECK-NEXT: llvm.br [[SWITCH_LOOP]]
+
+  // CHECK: [[EXIT]]:
+  // CHECK-NEXT: llvm.return
 
   // CHECK: [[PARTITION0]]:
   // CHECK: barrier.sync 1 ;
@@ -153,6 +156,27 @@ llvm.func @generate_switch_loop() attributes {allocation.offset = 32 : i32} {
   } : () -> ()
   // CHECK: [[AFTER]]:
   // CHECK-NEXT: "after"
+
+  // CHECK-NEXT: [[C32:%.*]] = llvm.mlir.constant(32 : i32)
+  // CHECK-NEXT: [[SMEM_ADDR:%.*]] = llvm.mlir.addressof @global_smem
+  // CHECK-NEXT: [[SMEM_BASE:%.*]] = llvm.getelementptr [[SMEM_ADDR]][[[C32]]]
+
+  // CHECK-NEXT: [[CX:%.*]] = llvm.mlir.constant(3 : i8)
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][0]
+  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][1]
+  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][2]
+  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][3]
+  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][4]
+  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][5]
+  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
+  // CHECK-NEXT: [[PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][6]
+  // CHECK-NEXT: llvm.store [[CX]], [[PTR]]
+  // CHECK-NEXT: barrier.sync 1 ;
   // CHECK-NEXT: llvm.return
   "after"() : () -> ()
   llvm.return
@@ -168,7 +192,7 @@ llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 :
 
 // CHECK-LABEL: @pass_captures
 llvm.func @pass_captures(%arg0: i32, %arg1: i64) attributes {allocation.offset = 32 : i32} {
-  // CHECK: ^bb3:
+  // CHECK: ^bb4:
   // CHECK-NEXT: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
   // CHECK-NEXT: [[SMEM_ADDR:%.*]] = llvm.mlir.addressof @global_smem
   // CHECK-NEXT: [[SMEM_BASE:%.*]] = llvm.getelementptr [[SMEM_ADDR]][[[C0]]]
@@ -181,7 +205,7 @@ llvm.func @pass_captures(%arg0: i32, %arg1: i64) attributes {allocation.offset =
   // CHECK-NEXT: "use"([[ARG0]], [[ARG1]])
   // CHECK-NEXT: barrier.sync 1 ;
 
-  // CHECK: ^bb4:
+  // CHECK: ^bb5:
   // CHECK: llvm.mlir.addressof @global_smem
   // CHECK: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
   // CHECK-NEXT: [[SMEM_ADDR:%.*]] = llvm.mlir.addressof @global_smem
@@ -216,7 +240,8 @@ llvm.func @partition_warpid_order() attributes {allocation.offset = 32 : i32} {
   // CHECK: llvm.switch
   // CHECK-NEXT: 0: [[PARTITION0:\^.*]],
   // CHECK-NEXT: 1: [[PARTITION1:\^.*]],
-  // CHECK-NEXT: 2: [[PARTITION2:\^.*]]
+  // CHECK-NEXT: 2: [[PARTITION2:\^.*]],
+  // CHECK-NEXT: 3: [[EXIT:\^.*]]
 
   // CHECK: [[PARTITION0]]:
   // CHECK: "ws0_partition0"
@@ -308,7 +333,8 @@ llvm.func @multiple_specialize() attributes {allocation.offset = 32 : i32} {
   // CHECK-NEXT: 2: [[WS0_PARTITION2:\^.*]],
   // CHECK-NEXT: 3: [[WS1_PARTITION0:\^.*]],
   // CHECK-NEXT: 4: [[WS1_PARTITION1:\^.*]],
-  // CHECK-NEXT: 5: [[WS3_PARTITION0:\^.*]]
+  // CHECK-NEXT: 5: [[WS3_PARTITION0:\^.*]],
+  // CHECK-NEXT: 6: [[EXIT:\^.*]]
 
   // CHECK: [[WS0_PARTITION0]]:
   // CHECK: "ws0_partition0"
@@ -497,7 +523,8 @@ llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 :
 llvm.func @cfg() attributes {allocation.offset = 32 : i32} {
   // CHECK: [[SWITCH_LOOP:\^bb1]]:
   // CHECK: llvm.switch
-  // CHECK-NEXT: 0: [[PARTITION:\^.*]]
+  // CHECK-NEXT: 0: [[PARTITION:\^.*]],
+  // CHECK-NEXT: 1: [[EXIT:\^.*]]
 
   // CHECK: [[PARTITION]]:
   // CHECK: barrier.sync 1 ;
@@ -577,7 +604,7 @@ llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 :
 // CHECK-LABEL: @type_conversion_results
 // CHECK-NOT: !tt.ptr<i32>
 // CHECK-NOT: unrealized_conversion_cast
-llvm.func @type_conversion_results(%arg0: !llvm.ptr<1>) -> !llvm.ptr<1> attributes {allocation.offset = 0 : i32} {
+llvm.func @type_conversion_results(%arg0: !llvm.ptr<1>) attributes {allocation.offset = 0 : i32} {
   %0 = builtin.unrealized_conversion_cast %arg0 : !llvm.ptr<1> to !tt.ptr<i32>
   %1 = ttg.warp_specialize(%0) attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32: 4>}
   default {
@@ -591,8 +618,9 @@ llvm.func @type_conversion_results(%arg0: !llvm.ptr<1>) -> !llvm.ptr<1> attribut
   } : (!tt.ptr<i32>) -> !tt.ptr<i32>
   // CHECK: [[AFTER]]([[OUT:%.*]]: !llvm.ptr<1>):
   %2 = builtin.unrealized_conversion_cast %1 : !tt.ptr<i32> to !llvm.ptr<1>
-  // CHECK-NEXT: return [[OUT]]
-  llvm.return %2 : !llvm.ptr<1>
+  // CHECK-NEXT: "use"([[OUT]])
+  "use"(%2) : (!llvm.ptr<1>) -> ()
+  llvm.return
 }
 
 }

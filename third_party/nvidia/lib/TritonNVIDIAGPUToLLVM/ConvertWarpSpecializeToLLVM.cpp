@@ -302,6 +302,12 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
                 /*aligned=*/false);
   b.create<LLVM::BrOp>(switchLoop);
 
+  // Exit state.
+  Block *switchExit = new Block;
+  funcBlocks.insert(std::next(defaultBlock->getIterator()), switchExit);
+  partitionBlocks.push_back(switchExit);
+  partitionStates.push_back(partitionStateCounter);
+
   // Create the switch.
   b.setInsertionPointToEnd(switchLoop);
   SmallVector<APInt> caseValues;
@@ -359,6 +365,19 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
     ws.replaceAllUsesWith(outputs);
     ws.erase();
   }
+
+  // Signal all warp groups to exit.
+  func.walk([&](LLVM::ReturnOp op) {
+    TritonLLVMOpBuilder2 b(op.getLoc(), op);
+    Value statePtr = LLVM::getSharedMemoryBase(b.getLoc(), b, targetInfo, func);
+    Value cst = b.i8_val(partitionStateCounter);
+    for (int32_t i : llvm::seq(maxNumWarps))
+      b.store(cst, b.gep(ptrTy, i8_ty, statePtr, LLVM::GEPArg(i)));
+    createBarrier(b, kSwitchLoopBarrierIdx, /*numThreads=*/std::nullopt,
+                  /*aligned=*/false);
+  });
+  b.setInsertionPointToStart(switchExit);
+  b.create<LLVM::ReturnOp>(ValueRange());
 
   return success();
 }
