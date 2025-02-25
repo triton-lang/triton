@@ -29,7 +29,7 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
   MLIRContext *ctx = op->getContext();
   Attribute sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
   auto loc = op->getLoc();
-  auto order = getOrder(tensorType.getEncoding());
+  auto order = getOrder(tensorType);
   auto ctaLayout = getCTALayout(tensorType.getEncoding());
   Attribute encoding = SwizzledSharedEncodingAttr::get(
       tensorType.getContext(), 1, 1, 1, order, ctaLayout);
@@ -107,7 +107,7 @@ static void lowerTMAStore(Operation *op, mlir::TypedValue<RankedTensorType> src,
   Attribute sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
   auto loc = op->getLoc();
   auto tensorType = src.getType();
-  auto order = getOrder(tensorType.getEncoding());
+  auto order = getOrder(tensorType);
   auto ctaLayout = getCTALayout(tensorType.getEncoding());
   Attribute encoding = SwizzledSharedEncodingAttr::get(
       tensorType.getContext(), 1, 1, 1, order, ctaLayout);

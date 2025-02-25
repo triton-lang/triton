@@ -387,7 +387,7 @@ public:
     auto allocShape = memDesc.getAllocShape();
     auto allocShapePerCTA = triton::gpu::getAllocationShapePerCTA(
         memDesc.getEncoding(), allocShape);
-    auto layoutOrder = triton::gpu::getOrder(memDesc.getEncoding());
+    auto layoutOrder = triton::gpu::getOrder(memDesc);
     auto allocStrides = SharedMemoryObject::getStridesForShape(
         allocShapePerCTA, layoutOrder, loc, rewriter);
     return SmallVector<Value>(allocStrides.end() - offsets.size(),

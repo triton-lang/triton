@@ -389,7 +389,7 @@ LogicalResult TMEMAllocOp::verify() {
 }
 
 bool isDescendingOrder(triton::gpu::MemDescType type) {
-  auto order = triton::gpu::getOrder(type.getEncoding());
+  auto order = triton::gpu::getOrder(type);
   auto rank = type.getRank();
   for (int i = 0; i < rank; ++i) {
     if (order[i] != rank - 1 - i)
