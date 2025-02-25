@@ -11,6 +11,7 @@ add_triton_library(TritonGPUTransforms
   OptimizeDotOperands.cpp
   OptimizeThreadLocality.cpp
   Pipeliner/AssignLatencies.cpp
+  Pipeliner/AutomaticWarpSpecialization.cpp
   Pipeliner/MatmulLoopPipeline.cpp
   Pipeliner/PipelineExpander.cpp
   Pipeliner/TestPipelineAssignLatencies.cpp
