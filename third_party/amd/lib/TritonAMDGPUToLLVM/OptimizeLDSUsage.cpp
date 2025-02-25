@@ -123,7 +123,7 @@ class OptimizeAMDLDSUsage
     }
 
     auto layoutCTA = triton::gpu::getCTALayout(srcEnc);
-    auto order = triton::gpu::getOrder(srcEnc);
+    auto order = triton::gpu::getOrder(srcType);
     SmallVector<unsigned> dummyWarpsPerCTA(rank, 1);
 
     auto baseFallbackLayout = triton::gpu::BlockedEncodingAttr::get(

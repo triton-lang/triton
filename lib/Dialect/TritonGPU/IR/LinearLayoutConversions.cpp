@@ -330,7 +330,7 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 
   // We use the order from fastest varying to slowest varying. So each base
   // vector is a tuple of values mapping to matrix C's (N, M[, B]) indices.
-  SmallVector<unsigned> order = triton::gpu::getOrder(*this);
+  SmallVector<unsigned> order = getDefaultOrder();
   auto tileLayout = LinearLayout::empty();
 
   if (getMDim() == 32) {
@@ -424,7 +424,7 @@ LinearLayout chooseDotDsReadB64Tr16Layout(DotOperandEncodingAttr dotMfmaLayout,
   // operand B: [0, 1] / [1, 2, 0]
   // Regular dot mfma order for both cases is [k, nonk]/[k, nonk, batch]
   // For LDS transpose layout swap order to [nonk, k]/[nonk, k, batch]
-  SmallVector<unsigned> order = triton::gpu::getOrder(dotMfmaLayout);
+  SmallVector<unsigned> order = dotMfmaLayout.getDefaultOrder();
   std::swap(order[0], order[1]);
 
   // In the LDS transpose logic, each thread accesses 64 bits (8 bytes) of data.
@@ -511,7 +511,7 @@ LinearLayout chooseDotDsReadB64Tr16Layout(DotOperandEncodingAttr dotMfmaLayout,
   // warp order
   // common for both operand A and B: [0, 1] / [0, 1, 2]
   // in both cases it is [M dim, N dim]/[batch, M dim, N dim]
-  SmallVector<unsigned> warpOrder = triton::gpu::getWarpOrder(dotMfmaLayout);
+  SmallVector<unsigned> warpOrder = dotMfmaLayout.getDefaultWarpOrder();
   LinearLayout warpLayout = identityStandardND(kWarp, warpsPerCTA, warpOrder);
 
   LinearLayout ctaLayout = tileLayout.transposeOuts(outDimNames) *
@@ -571,11 +571,11 @@ LinearLayout mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
   // operand A: [1, 0] / [2, 1, 0]
   // operand B: [0, 1] / [1, 2, 0]
   // for both cases it is [k, nonk]/[k, nonk, batch]
-  SmallVector<unsigned> order = triton::gpu::getOrder(dotMfmaLayout);
+  SmallVector<unsigned> order = dotMfmaLayout.getDefaultOrder();
   // warp order
   // common for both operand A and B: [0, 1] / [0, 1, 2]
   // in both cases it is [M dim, N dim]/[batch, M dim, N dim]
-  SmallVector<unsigned> warpOrder = triton::gpu::getWarpOrder(dotMfmaLayout);
+  SmallVector<unsigned> warpOrder = dotMfmaLayout.getDefaultWarpOrder();
 
   // Lane holds kWidth consecutive elements along k dimension, so
   // base register vectors for one tile are initialized in following way:
@@ -662,7 +662,7 @@ AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 
   // We use the order from fastest varying to slowest varying. So each base
   // vector is a tuple of values mapping to matrix C's (N, M[, B]) indices.
-  SmallVector<unsigned> threadOrder = getThreadOrder();
+  SmallVector<unsigned> threadOrder = getDefaultThreadOrder();
   assert(threadOrder[0] == mIndex || threadOrder[0] == nIndex);
   assert(threadOrder[1] == mIndex || threadOrder[1] == nIndex);
 
@@ -709,7 +709,7 @@ AMDWmmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
 
   // And each warp takes the same register and lane sub-layout. So multiply with
   // an identity layout for the warp.
-  auto warpOrder = getWarpOrder();
+  auto warpOrder = getDefaultWarpOrder();
   LinearLayout warpLayout =
       identityStandardND(S("warp"), getWarpsPerCTA(), warpOrder);
   // reorder dim names in rep order, so combineCtaCgaWithShape generate proper
@@ -740,7 +740,7 @@ LinearLayout wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
   // operand A: [1, 0] / [2, 1, 0]
   // operand B: [0, 1] / [1, 2, 0]
   // for both cases it is [k, nonk]/[k, nonk, batch]
-  SmallVector<unsigned> laneOrder = triton::gpu::getOrder(dotWmmaLayout);
+  SmallVector<unsigned> laneOrder = dotWmmaLayout.getDefaultOrder();
   // generate continuous part of register bases(i.e. kWidth)
   std::vector<std::vector<int32_t>> registerBase;
   const int32_t kWidth = dotWmmaLayout.getKWidth();
@@ -774,7 +774,7 @@ LinearLayout wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
 
   // Generate warp layout
   auto warpsPerCTA = wmmaLayout.getWarpsPerCTA();
-  auto warpOrder = triton::gpu::getWarpOrder(dotWmmaLayout);
+  auto warpOrder = dotWmmaLayout.getDefaultWarpOrder();
   LinearLayout warpLayout =
       broadcastedDotOperandLayout(ctx, warpsPerCTA, warpOrder, kDim, S("warp"));
 
@@ -794,10 +794,10 @@ LinearLayout wmmaDotOperandToLinearLayout(DotOperandEncodingAttr dotWmmaLayout,
 
 LinearLayout
 BlockedEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
-  assert(shape.size() == getOrder().size());
+  assert(shape.size() == getDefaultOrder().size());
   MLIRContext *ctx = getContext();
 
-  const auto &order = getOrder();
+  const auto &order = getDefaultOrder();
   LinearLayout ctaLayout =
       identityStandardND(S("register"), getSizePerThread(), order) *
       identityStandardND(S("lane"), getThreadsPerWarp(), order) *
@@ -812,13 +812,13 @@ LinearLayout fmaDotToLinearLayout(DotOperandEncodingAttr operandLayout,
   auto blocked = cast<BlockedEncodingAttr>(operandLayout.getParent());
   MLIRContext *ctx = operandLayout.getContext();
 
-  // TODO: introduce registerOrder or use getOrder(operandLayout)
+  // TODO: introduce registerOrder or use getDefaultOrder(operandLayout)
   // Currently this order is used in legacy converter, because we do not
   // have access to full dot operand layout, only parent part.
-  auto regOrder = blocked.getOrder();
-  // TODO: use operandLayout.getThreadOrder()
-  auto threadOrder = blocked.getThreadOrder();
-  auto warpOrder = blocked.getWarpOrder();
+  auto regOrder = blocked.getDefaultOrder();
+  // TODO: use operandLayout.getDefaultThreadOrder()
+  auto threadOrder = blocked.getDefaultThreadOrder();
+  auto warpOrder = blocked.getDefaultWarpOrder();
   auto repOrder = blocked.getRepOrder();
 
   StringAttr kReg = S("register");
@@ -905,13 +905,14 @@ NvidiaMmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   // nvidiamma layout always assumes kWidth = 2
   constexpr auto kWidth = 2;
   auto ctaLayout =
-      nvidiaMmaTile(ctx, tileShape, kWidth, getOrder(*this), getRepOrder());
+      nvidiaMmaTile(ctx, tileShape, kWidth, getDefaultOrder(), getRepOrder());
 
   // The triton orders are defined on [dim0, dim1, ...], so we need to pass
   // those dims Then, for some reason, operator* requires the orders to match
   // so we need to reorder the outs to match
-  ctaLayout *= identityStandardND(S("warp"), getWarpsPerCTA(), getWarpOrder())
-                   .transposeOuts(llvm::to_vector(ctaLayout.getOutDimNames()));
+  ctaLayout *=
+      identityStandardND(S("warp"), getWarpsPerCTA(), getDefaultWarpOrder())
+          .transposeOuts(llvm::to_vector(ctaLayout.getOutDimNames()));
 
   return combineCtaCgaWithShape(ctaLayout, getCTALayout(), shape);
 }
@@ -934,12 +935,13 @@ LinearLayout nvidiaDotToLinearLayout(ArrayRef<int64_t> shape,
     tileShape[rank - 2] = kWidth * 8;
     tileShape[rank - 1] = 8;
   }
-  auto ctaLayout =
-      nvidiaMmaTile(ctx, tileShape, kWidth, getOrder(dot), dot.getRepOrder());
+  auto ctaLayout = nvidiaMmaTile(ctx, tileShape, kWidth, dot.getDefaultOrder(),
+                                 dot.getRepOrder());
   auto kDim = isA ? rank - 1 : rank - 2;
-  ctaLayout *= broadcastedDotOperandLayout(ctx, mma.getWarpsPerCTA(),
-                                           mma.getWarpOrder(), kDim, S("warp"))
-                   .transposeOuts(llvm::to_vector(ctaLayout.getOutDimNames()));
+  ctaLayout *=
+      broadcastedDotOperandLayout(ctx, mma.getWarpsPerCTA(),
+                                  mma.getDefaultWarpOrder(), kDim, S("warp"))
+          .transposeOuts(llvm::to_vector(ctaLayout.getOutDimNames()));
 
   return combineCtaCgaWithShape(ctaLayout, getCTALayout(dot), shape);
 }
@@ -1309,8 +1311,8 @@ LinearLayout chooseDotLdMatrixLayout(DotOperandEncodingAttr dot,
                                S("dim" + std::to_string(kDim)));
   // Expand the `warp` dimension according to warpsPerCTA.
   auto warpsPerCTA = mma.getWarpsPerCTA();
-  layout *= broadcastedDotOperandLayout(ctx, warpsPerCTA, mma.getWarpOrder(),
-                                        kDim, kWarp)
+  layout *= broadcastedDotOperandLayout(ctx, warpsPerCTA,
+                                        mma.getDefaultWarpOrder(), kDim, kWarp)
                 .transposeOuts(llvm::to_vector(layout.getOutDimNames()));
   return combineCtaCgaWithShape(layout, getCTALayout(dot), shape);
 }
@@ -1358,7 +1360,7 @@ chooseScaledMfmaOperandLayout(AMDMfmaEncodingAttr mfmaEnc, int kWidth,
   using basisT = std::vector<std::vector<int32_t>>;
   unsigned rank = dotOperandShape.size();
   auto standardOutDims = standardOutDimNames(ctx, rank);
-  auto warpOrder = mfmaEnc.getWarpOrder();
+  auto warpOrder = mfmaEnc.getDefaultWarpOrder();
 
   StringAttr kRegister = StringAttr::get(ctx, "register");
   StringAttr kLane = StringAttr::get(ctx, "lane");
