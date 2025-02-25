@@ -34,6 +34,7 @@ from triton._internal_testing import (
     is_hip_cdna,
     is_hip_mi200,
     is_hip_mi300,
+    is_hip_mi350,
     is_xpu,
     get_arch,
     torch_float8_dtypes,
@@ -3352,6 +3353,8 @@ def convert_fp8_to_fp32(x, device, dtype_str):
         return torch.tensor(x, device=device).view(torch.float8_e5m2).to(torch.float32)
     elif dtype_str == 'float8e4b8':
         return torch.tensor(x, device=device).view(torch.float8_e4m3fnuz).to(torch.float32)
+    elif dtype_str == 'float8e5b16':
+        return torch.tensor(x, device=device).view(torch.float8_e5m2fnuz).to(torch.float32)
     assert "Unsupported float8 dtype"
 
 
@@ -3481,12 +3484,13 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
             if capability[0] < 9 and in_dtype == 'float8e4nv':
                 pytest.skip("float8e4nv not supported on sm <= 80")
 
-        #if is_hip() and (in_dtype == 'float8e4nv' or in_dtype == 'float8e5'):
-        #    pytest.skip("float8e4nv and float8e5 not supported on HIP")
-        if is_hip() and not ((input_precision == "ieee") or (input_precision == "tf32" and is_hip_mi300())):
-            pytest.skip(f"{input_precision} not supported on HIP")
-        if is_hip() and (kpack == 2 and in_dtype == 'int8' and K < 64):
-            pytest.skip("kpack too large for K")
+        if is_hip():
+            if in_type_str in ("float8e5", "float8e4nv") and not is_hip_mi350():
+                pytest.skip(f"{in_type_str} only supported on mi350")
+            if not ((input_precision == "ieee") or (input_precision == "tf32" and is_hip_mi300())):
+                pytest.skip(f"{input_precision} not supported on HIP")
+            if kpack == 2 and in_dtype == 'int8' and K < 64:
+                pytest.skip("kpack too large for K")
         if not is_hip() and kpack == 2:
             pytest.skip("Skip duplicated tests on nv path")
 
@@ -3616,6 +3620,8 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                 z_fp8 = torch.tensor(z_ref, dtype=torch.float8_e5m2)
             elif in_dtype == 'float8e4b8':
                 z_fp8 = torch.tensor(z_ref, dtype=torch.float8_e4m3fnuz)
+            elif in_dtype == 'float8e5b16':
+                z_fp8 = torch.tensor(z_ref, dtype=torch.float8_e5m2fnuz)
             else:
                 assert "Unsupported float8 dtype"
             z_ref = to_numpy(z_fp8.to(torch.float32))
@@ -3676,8 +3682,10 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
         if capability[0] == 9:
             assert 'wgmma.mma_async.sync.aligned.m64n128k32.f32.e4m3.e4m3' in ptx
 
+
 #test_dot(32, 32, 16, 4, False, False, None, 'ieee', 'float8e4nv', 'float32', 1, None, 1, 'cuda')
 #test_dot(32, 32, 16, 4, False, False, None, 'ieee', 'float8e5', 'float32', 1, None, 1, 'cuda')
+
 
 @pytest.mark.parametrize("M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, num_warps, mma, kpack",
                          [(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, 4, mma, kpack)
@@ -6335,7 +6343,8 @@ def matmul_kernel(  #
 @pytest.mark.parametrize("M, N, K", [(128, 256, 256)])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 256, 128), (64, 64, 64)])
 @pytest.mark.parametrize(
-    "in_type_str", ['float8e5', 'float8e5b16', 'float8e4b8'] if is_hip() else ['float8e5', 'float8e4nv', 'float8e4b15'])
+    "in_type_str",
+    ['float8e5', 'float8e5b16', 'float8e4b8', 'float8e4nv'] if is_hip() else ['float8e5', 'float8e4nv', 'float8e4b15'])
 @pytest.mark.parametrize("low_precision_acc", [0, 32, 64, 128])
 def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_str, low_precision_acc, device):
     num_stages = 3
@@ -6347,6 +6356,8 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
         num_stages = 2
         if in_type_str in ("float8e5b16", "float8e4b8") and not is_hip_mi300():
             pytest.skip(f"{in_type_str} only supported on mi300")
+        if in_type_str in ("float8e5", "float8e4nv") and not is_hip_mi350():
+            pytest.skip(f"{in_type_str} only supported on mi350")
 
     check_type_supported(in_type_str, device)
     A = numpy_random((M, K), dtype_str=in_type_str)
