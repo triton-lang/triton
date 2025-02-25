@@ -80,7 +80,7 @@ enum BarrierIndex {
   kNumBarriers = 16
 };
 
-static void createBarrier(TritonLLVMOpBuilder2 &b, unsigned barIdx,
+static void createBarrier(TritonLLVMIRRewriter &b, unsigned barIdx,
                           std::optional<unsigned> numThreads, bool aligned) {
   assert(barIdx < 16 && "not enough barriers");
 
@@ -115,7 +115,7 @@ static LogicalResult rewriteWarpGroupBarriers(LLVM::LLVMFuncOp func,
       return WalkResult::skip();
 
     if (auto bar = dyn_cast<NVVM::Barrier0Op>(op)) {
-      TritonLLVMOpBuilder2 b(bar.getLoc(), bar);
+      TritonLLVMIRRewriter b(bar.getLoc(), bar);
       createBarrier(b, /*barIdx=*/0, defaultWarpGroupSize, /*aligned=*/true);
       bar.erase();
       return WalkResult::advance();
@@ -135,7 +135,7 @@ static LogicalResult rewriteWarpGroupBarriers(LLVM::LLVMFuncOp func,
       }
       unsigned warpGroupSize = threadsPerWarp * op.getPartitionNumWarps()[idx];
       partition->walk([&](NVVM::Barrier0Op bar) {
-        TritonLLVMOpBuilder2 b(bar.getLoc(), bar);
+        TritonLLVMIRRewriter b(bar.getLoc(), bar);
         createBarrier(b, barIdx, warpGroupSize, /*aligned=*/true);
         bar.erase();
       });
@@ -147,7 +147,7 @@ static LogicalResult rewriteWarpGroupBarriers(LLVM::LLVMFuncOp func,
 
 static void rewritePartitionRegions(WarpSpecializeOp ws, Block *switchLoop,
                                     const NVIDIA::TargetInfo &targetInfo) {
-  TritonLLVMOpBuilder2 b(ws.getLoc(), ws.getContext());
+  TritonLLVMIRRewriter b(ws.getLoc(), ws.getContext());
 
   for (Region *partition : ws.getPartitionRegions()) {
     // Load the explicit captures from shared memory and replace the block args
@@ -203,7 +203,7 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
     return failure();
 
   MLIRContext *ctx = func.getContext();
-  TritonLLVMOpBuilder2 b(func.getLoc(), ctx);
+  TritonLLVMIRRewriter b(func.getLoc(), ctx);
   Builder rewriter(ctx);
 
   // Generate the function header.
@@ -368,7 +368,7 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
 
   // Signal all warp groups to exit.
   func.walk([&](LLVM::ReturnOp op) {
-    TritonLLVMOpBuilder2 b(op.getLoc(), op);
+    TritonLLVMIRRewriter b(op.getLoc(), op);
     Value statePtr = LLVM::getSharedMemoryBase(b.getLoc(), b, targetInfo, func);
     Value cst = b.i8_val(partitionStateCounter);
     for (int32_t i : llvm::seq(maxNumWarps))

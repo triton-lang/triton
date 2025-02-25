@@ -281,17 +281,22 @@ struct TritonLLVMOpBuilder {
   OpBuilder *builder;
 };
 
-// FIXME: Improve name.
-class TritonLLVMOpBuilder2 : public IRRewriter, public TritonLLVMOpBuilder {
+// This builder combines an IRRewriter and a TritonLLVMOpBuilder into one, making
+// it easy to create operations with an implicit location and create LLVM operations with shorthands.
+class TritonLLVMIRRewriter : public IRRewriter, public TritonLLVMOpBuilder {
 public:
+// Create a builder with an implicit location. Arguments are forwarded to IRRewriter's constructor.
   template <typename... Args>
-  TritonLLVMOpBuilder2(Location loc, Args &&...args)
+  TritonLLVMIRRewriter(Location loc, Args &&...args)
       : IRRewriter(std::forward<Args>(args)...),
         TritonLLVMOpBuilder(loc, *this) {}
 
+      // Get the implicit location.
   Location getLoc() const { return loc; }
+  // Set the implicit location used to build ops.
   void setLoc(Location loc) { this->loc = loc; }
 
+  // Wrapper for op creation that passes an implicit location.
   template <typename OpTy, typename... Args> OpTy create(Args &&...args) {
     return OpBuilder::create<OpTy>(loc, std::forward<Args>(args)...);
   }

@@ -393,6 +393,9 @@ private:
     // Analyze liveness of scratch buffers and virtual buffers.
     auto processScratchMemory = [&](const auto &container) {
       for (auto [op, buffer] : container) {
+        // Buffers owned by the function are assumed live for the whole
+        // function. This memory is used for warp specialization codegen.
+        // FIXME: Spooky-action-at-a-distance. Find a better way to model this.
         if (op == operation) {
           bufferRange.insert(
               {buffer, Interval(size_t(), std::numeric_limits<size_t>::max())});
