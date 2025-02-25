@@ -393,12 +393,12 @@ AMDMfmaEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
   return combineCtaCgaWithShape(ctaLayout, getCTALayout(), shape);
 }
 
-LinearLayout chooseDotDsReadB64Tr16Layout(DotOperandEncodingAttr dotMfmaLayout,
-                                          ArrayRef<int64_t> shape,
-                                          int32_t elemBitWidth) {
+LinearLayout chooseDotDsReadB64TrLayout(DotOperandEncodingAttr dotMfmaLayout,
+                                        ArrayRef<int64_t> shape,
+                                        int32_t elemBitWidth) {
   auto mfmaLayout = llvm::cast<AMDMfmaEncodingAttr>(dotMfmaLayout.getParent());
   assert(mfmaLayout.getMDim() == 16 || mfmaLayout.getNDim() == 32);
-  assert(elemBitWidth == 16);
+  assert(elemBitWidth == 16 || elemBitWidth == 8);
 
   auto rank = shape.size();
   bool hasBatchDim = rank == 3;
@@ -407,6 +407,7 @@ LinearLayout chooseDotDsReadB64Tr16Layout(DotOperandEncodingAttr dotMfmaLayout,
   // loads for most element sizes (16b, 8b, 4b).
   const int32_t ldsReadWidth = 64;
   int32_t kWidthTransRead = ldsReadWidth / elemBitWidth;
+  const int elemByteWidth = elemBitWidth / 8;
   auto kDim = dotMfmaLayout.getOpIdx() == 0 ? rank - 1 : rank - 2;
 
   int32_t kSize = shape[kDim];
@@ -454,44 +455,58 @@ LinearLayout chooseDotDsReadB64Tr16Layout(DotOperandEncodingAttr dotMfmaLayout,
   // For single-rate mfma instructions, each thread holds 4 elements along K
   // dimension. This means larger tile (that corresponds to one mfma
   // instruction) consists of 4 16x4 sub-tiles.
-  std::vector<std::vector<int32_t>> registerBase = {{1, 0},
-                                                    {2, 0}}; // first sub-tile
-  std::vector<std::vector<int32_t>> laneBase = {{kWidthTransRead, 0},
-                                                {2 * kWidthTransRead, 0},
-                                                {0, 1},
-                                                {0, 2}}; // first sub-tile
+  std::vector<std::vector<int32_t>> registerBase;
+  std::vector<std::vector<int32_t>> laneBase;
 
-  // Extend register base for multiple tiles in K dimension (corresponding to
-  // multiple mfma instructions accross k dim).
-  auto populateRegisterBase = [&](int kTileSize) {
-    const int regsPerTile = 8;
-    int numRegs = (kSize / kTileSize) * regsPerTile;
-    for (int reg = regsPerTile; reg < numRegs; reg *= 2) {
+  // Populate register base for first subtile
+  for (int i = 1; i < kWidthTransRead; i *= 2) {
+    registerBase.push_back({i, 0});
+  }
+
+  const int threadsPerSubtileNonK = 16 / kWidthTransRead;
+  const int threadsPerSubtileK = kWidthTransRead;
+
+  // Populate lane base for first subtile
+  for (int i = 1; i < threadsPerSubtileNonK; i *= 2) {
+    laneBase.push_back({i * kWidthTransRead, 0});
+  }
+  for (int i = 1; i < threadsPerSubtileK; i *= 2) {
+    laneBase.push_back({0, i});
+  }
+
+  // Function to extend register base for multiple tiles K dim.
+  auto extendRegisterBaseForKDim = [&](int kTileSize) {
+    const int regsPerTile = kWidthTransRead * 2; // Two subtiles per tile
+    int totalRegs = (kSize / kTileSize) * regsPerTile;
+
+    for (int reg = regsPerTile; reg < totalRegs; reg *= 2) {
       registerBase.push_back({0, (reg / regsPerTile) * kTileSize});
     }
   };
 
   const bool isMfma32 = (mfmaLayout.getMDim() == 32);
   const bool isMfma16 = (mfmaLayout.getMDim() == 16);
-  const int kTileSize = isMfma32 ? 16 : 32;
+  const int kTileSize = isMfma32 ? 32 / elemByteWidth : 64 / elemByteWidth;
+  const bool largeKSize = kSize >= kTileSize;
 
-  if (kSize >= kTileSize) {
-    // Handles mfma32x32x16 and mfma16x16x32 cases
-    assert(kWidthDot == 8);
-    registerBase.push_back({0, 4}); // second sub-tile
-    populateRegisterBase(kTileSize);
-    auto laneBaseExt = isMfma32
-                           ? std::vector<std::vector<int32_t>>{{16, 0}, {0, 8}}
-                           : std::vector<std::vector<int32_t>>{{0, 8}, {0, 16}};
-    laneBase.insert(laneBase.end(), laneBaseExt.begin(), laneBaseExt.end());
-  } else {
-    // Handles mfma32x32x8 and mfma16x16x16 cases
-    assert(kWidthDot == 4);
-    auto laneBaseExt = isMfma32
-                           ? std::vector<std::vector<int32_t>>{{16, 0}, {0, 4}}
-                           : std::vector<std::vector<int32_t>>{{0, 4}, {0, 8}};
-    laneBase.insert(laneBase.end(), laneBaseExt.begin(), laneBaseExt.end());
+  // Extend register base for large K sizes.
+  if (largeKSize) {
+    registerBase.push_back({0, threadsPerSubtileK}); // Second subtile
+    extendRegisterBaseForKDim(kTileSize);
   }
+
+  // Extend lane base based on MFMA size.
+  const int numSubtilesPerTile = largeKSize ? 2 : 1;
+  std::vector<std::vector<int32_t>> laneBaseExt;
+
+  if (isMfma32) {
+    laneBaseExt = {{16, 0}, {0, numSubtilesPerTile * threadsPerSubtileK}};
+  } else {
+    laneBaseExt = {{0, numSubtilesPerTile * threadsPerSubtileK},
+                   {0, 2 * numSubtilesPerTile * threadsPerSubtileK}};
+  }
+
+  laneBase.insert(laneBase.end(), laneBaseExt.begin(), laneBaseExt.end());
 
   // Base vectors above are defined in a fixed order [non-k-dim, k-dim].
   // To assign them to actual matrix dimensions `order` array is used.
@@ -516,10 +531,7 @@ LinearLayout chooseDotDsReadB64Tr16Layout(DotOperandEncodingAttr dotMfmaLayout,
 
   LinearLayout ctaLayout = tileLayout.transposeOuts(outDimNames) *
                            warpLayout.transposeOuts(outDimNames);
-  auto finalLayout =
-      combineCtaCgaWithShape(ctaLayout, mfmaLayout.getCTALayout(), shape);
-
-  return finalLayout;
+  return combineCtaCgaWithShape(ctaLayout, mfmaLayout.getCTALayout(), shape);
 }
 
 LinearLayout mfmaDotToLinearLayout(DotOperandEncodingAttr dotMfmaLayout,
@@ -1334,10 +1346,10 @@ LinearLayout chooseLdMatrixLayout(Attribute enc, ArrayRef<int64_t> shape,
   return chooseDotLdMatrixLayout(dot, shape, needTrans, elemBitWidth);
 }
 
-LinearLayout chooseDsReadB64Tr16Layout(Attribute enc, ArrayRef<int64_t> shape,
-                                       int32_t elemBitWidth) {
+LinearLayout chooseDsReadB64TrLayout(Attribute enc, ArrayRef<int64_t> shape,
+                                     int32_t elemBitWidth) {
   auto dot = cast<DotOperandEncodingAttr>(enc);
-  return chooseDotDsReadB64Tr16Layout(dot, shape, elemBitWidth);
+  return chooseDotDsReadB64TrLayout(dot, shape, elemBitWidth);
 }
 
 LinearLayout
