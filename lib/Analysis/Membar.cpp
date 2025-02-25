@@ -20,7 +20,22 @@ void MembarAnalysis::run(FuncBlockInfoMapT &funcBlockInfoMap) {
 void MembarAnalysis::resolve(FunctionOpInterface funcOp,
                              FuncBlockInfoMapT *funcBlockInfoMap,
                              OpBuilder *builder) {
-  // Initialize the blockList
+  // Initialize the blockList. Operations are organized into "virtual blocks",
+  // which represent segments of straight-line code analyzed by each iteration
+  // of the dataflow analysis. Virtual blocks abstract over both control flow
+  // represented by basic blocks and block successors (i.e. `BranchOpInterface`)
+  // and control flow represented by regions (i.e. `RegionBranchOpInterface`).
+  //
+  // A virtual block consists of a parent block and a starting iterator, where
+  // the virtual block starts on the operation *after* the starting iterator. A
+  // null iterator is used to represent the beginning of the block. The virtual
+  // block ends at any region branch operation or the basic block terminator.
+  // Thus, basic blocks are broken up into multiple virtual blocks at each
+  // region operation.
+  //
+  // Entry virtual blocks are represented by a null iterator. Populate the
+  // blockList with the entry virtual blocks in the function. Then, each
+  // iteration scans until a terminator or region branch operation is found.
   DenseMap<VirtualBlock, BlockInfo> inputBlockInfoMap;
   DenseMap<VirtualBlock, BlockInfo> outputBlockInfoMap;
   std::deque<VirtualBlock> blockList;
