@@ -1076,11 +1076,12 @@ If the GPU does not have Tensor cores or the inputs are not f32, this flag is ig
 <h2><code class="docutils literal notranslate"><span class="pre">tt.dot_scaled</span></code> (triton::DotScaledOp)<a class="headerlink" href="#tt-dot-scaled-triton-dotscaledop" title="Link to this heading">¶</a></h2>
 <p><em>Dot_scaled</em></p>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tt.dot_scaled` $lhs (`scale` $lhs_scale^)? `,` $rhs (`scale` $rhs_scale^)? `,` $c `lhs` `=` $lhs_type `rhs` `=` $rhs_type attr-dict
-              `:` type($lhs) (`,` type($lhs_scale)^)? `*` type($rhs) (`,` type($rhs_scale)^)? `-&gt;` type($d)
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `tt.dot_scaled` $a (`scale` $a_scale^)? `,` $b (`scale` $b_scale^)? `,` $c
+              `lhs` `=` $a_elem_type `rhs` `=` $b_elem_type attr-dict
+              `:` type($a) (`,` type($a_scale)^)? `*` type($b) (`,` type($b_scale)^)? `-&gt;` type($d)
 </pre></div>
 </div>
-<p>$d = matrix_multiply(scale($lhs, $lhs_scale), scale(rlhs, $rhs_scale)) + $c.
+<p>$d = matrix_multiply(scale($a, $a_scale), scale($b, $b_scale)) + $c.
 Where scale(x, s) is a function that applies the scale per block following microscaling spec.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorSizeTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">DotOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
@@ -1089,7 +1090,7 @@ Where scale(x, s) is a function that applies the scale per block following micro
 <h3>Attributes:<a class="headerlink" href="#id29" title="Link to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
-<tr><td><code>lhs_type</code></td><td>::mlir::triton::ScaleDotElemTypeAttr</td><td><details><summary>allowed 32-bit signless integer cases: 0, 1, 2, 3, 4, 5, 6</summary>{{% markdown %}}Enum cases:
+<tr><td><code>a_elem_type</code></td><td>::mlir::triton::ScaleDotElemTypeAttr</td><td><details><summary>allowed 32-bit signless integer cases: 0, 1, 2, 3, 4, 5, 6</summary>{{% markdown %}}Enum cases:
 * e4m3 (`E4M3`)
 * e5m2 (`E5M2`)
 * e2m3 (`E2M3`)
@@ -1097,7 +1098,7 @@ Where scale(x, s) is a function that applies the scale per block following micro
 * e2m1 (`E2M1`)
 * bf16 (`BF16`)
 * fp16 (`FP16`){{% /markdown %}}</details></td></tr>
-<tr><td><code>rhs_type</code></td><td>::mlir::triton::ScaleDotElemTypeAttr</td><td><details><summary>allowed 32-bit signless integer cases: 0, 1, 2, 3, 4, 5, 6</summary>{{% markdown %}}Enum cases:
+<tr><td><code>b_elem_type</code></td><td>::mlir::triton::ScaleDotElemTypeAttr</td><td><details><summary>allowed 32-bit signless integer cases: 0, 1, 2, 3, 4, 5, 6</summary>{{% markdown %}}Enum cases:
 * e4m3 (`E4M3`)
 * e5m2 (`E5M2`)
 * e2m3 (`E2M3`)
@@ -1117,19 +1118,19 @@ Where scale(x, s) is a function that applies the scale per block following micro
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">lhs</span></code></p></td>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">a</span></code></p></td>
 <td><p>ranked tensor of floating-point or 8-bit signless integer values</p></td>
 </tr>
-<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">rhs</span></code></p></td>
+<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">b</span></code></p></td>
 <td><p>ranked tensor of floating-point or 8-bit signless integer values</p></td>
 </tr>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">c</span></code></p></td>
 <td><p>ranked tensor of floating-point values</p></td>
 </tr>
-<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">lhs_scale</span></code></p></td>
+<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">a_scale</span></code></p></td>
 <td><p>ranked tensor of floating-point or 8-bit signless integer values</p></td>
 </tr>
-<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">rhs_scale</span></code></p></td>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">b_scale</span></code></p></td>
 <td><p>ranked tensor of floating-point or 8-bit signless integer values</p></td>
 </tr>
 </tbody>
