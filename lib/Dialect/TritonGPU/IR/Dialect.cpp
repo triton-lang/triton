@@ -147,6 +147,20 @@ SmallVector<unsigned> getShapePerCTATile(Attribute layout) {
 }
 
 bool isExpensiveView(Type srcType, Type dstType) {
+  auto tensorSrcType = cast<RankedTensorType>(srcType);
+  auto tensorDstType = cast<RankedTensorType>(dstType);
+  auto llSrc =
+      toLinearLayout(tensorSrcType.getShape(), tensorSrcType.getEncoding());
+  auto llDst =
+      toLinearLayout(tensorDstType.getShape(), tensorDstType.getEncoding());
+  // In case there are replicated value we need to make sure the new and old
+  // layout have matching masks.
+  for (auto [srcMask, dstMask] :
+       llvm::zip(llSrc.getFreeVariableMasks(), llDst.getFreeVariableMasks())) {
+    assert(srcMask.first == dstMask.first);
+    if (srcMask.second != dstMask.second)
+      return true;
+  }
   return getTotalElemsPerThread(srcType) != getTotalElemsPerThread(dstType);
 }
 
