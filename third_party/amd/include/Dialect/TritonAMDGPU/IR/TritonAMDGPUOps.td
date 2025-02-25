@@ -115,6 +115,7 @@ def ExtractSliceOp : TT_AMDGPU_Op<"extract_slice", [Pure]> {
   }];
 
   let hasVerifier = 1;
+  let hasCanonicalizer = 1;
 }
 
 def ConcatOp : TT_AMDGPU_Op<"concat", [Pure]> {
