@@ -109,30 +109,40 @@ LogicalResult rewriteLocalLoad(OpBuilder &rewriter,
   auto resultElementType = resultType.getElementType();
   auto resultEncode = cast<DotOperandEncodingAttr>(resultType.getEncoding());
   auto resultShape = resultType.getShape();
+
+  const auto rank = resultShape.size();
+  assert(rank == 2);
+
   auto opIdx = resultEncode.getOpIdx();
+  const int kDimIdx = opIdx == 0 ? rank - 1 : rank - 2;
+  const int nonKDimIdx = opIdx == 0 ? rank - 2 : rank - 1;
 
   auto mfmaLayout = cast<AMDMfmaEncodingAttr>(resultEncode.getParent());
   int kWidth = resultEncode.getKWidth();
-  auto reps = mfmaLayout.getRepForOperand(resultShape, kWidth, opIdx);
+  auto numReps = mfmaLayout.getRepForOperand(resultShape, kWidth, opIdx);
+
+  // indices into 3D numReps
+  int kRepsIdx = opIdx == 0 ? 2 : 1;
+  int nonKRepsIdx = opIdx == 0 ? 1 : 2;
+  int bRepsIdx = 0;
+
+  // 2D shape which drops batch dimension.
+  SmallVector<int64_t> numReps2D = {numReps[1], numReps[2]};
+
+  auto numRepsNonK = numReps[nonKRepsIdx];
+  auto numRepsK = numReps[kRepsIdx];
+  auto numRepsB = numReps[bRepsIdx];
 
   auto memDesc = op->getOperand(0);
   auto memDescType = cast<ttg::MemDescType>(memDesc.getType());
   auto memDescEncoding =
       cast<triton::gpu::SwizzledSharedEncodingAttr>(memDescType.getEncoding());
 
-  SmallVector<int64_t> refinedShape(resultShape);
-  SmallVector<int64_t> numReps = {1, 1};
-  bool rowMajor = isRowMajor(memDescEncoding.getOrder());
-  auto sliceAxis = opIdx == 0 ? 0 : 1;
-  if (opIdx == 0) {
-    numReps[sliceAxis] = rowMajor ? reps[1] : 1;
-    refinedShape[sliceAxis] /= numReps[sliceAxis];
-  } else {
-    numReps[sliceAxis] = rowMajor ? 1 : reps[2];
-    refinedShape[sliceAxis] /= numReps[sliceAxis];
-  }
-  auto elementsPerSlice = refinedShape[sliceAxis];
-  LDBG("LocalLoad: numRep: " << numReps[sliceAxis] << " : " << *op);
+  SmallVector<int64_t> refinedShape = {resultShape[0] / numReps2D[0],
+                                       resultShape[1] / numReps2D[1]};
+  LDBG("refinedShape: " << refinedShape[0] << "x" << refinedShape[1]);
+  int64_t refinedShapeNonK = refinedShape[nonKDimIdx];
+  int64_t refinedShapeK = refinedShape[kDimIdx];
 
   auto refinedTensorType =
       RankedTensorType::get(refinedShape, resultElementType, resultEncode);
@@ -141,25 +151,32 @@ LogicalResult rewriteLocalLoad(OpBuilder &rewriter,
   auto sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
   auto subviewType = ttg::MemDescType::get(
       refinedShape, memDescType.getElementType(), memDescType.getEncoding(),
-      sharedMemorySpace, mutableMemory);
+      sharedMemorySpace, mutableMemory, memDescType.getAllocShape());
 
   rewriter.setInsertionPointAfter(op);
   SmallVector<Value> subtiles;
-  for (int32_t i = 0; i < numReps[sliceAxis]; ++i) {
-    int32_t shift = i * elementsPerSlice;
-    int64_t offset0 = sliceAxis == 0 ? shift : 0;
-    int64_t offset1 = sliceAxis == 0 ? 0 : shift;
-    auto offset = createOffset({}, {offset0, offset1}, rewriter, loc);
-    auto refinedView = rewriter.create<ttg::MemDescSubviewOp>(loc, subviewType,
-                                                              memDesc, offset);
-    auto refinedLoad =
-        rewriter.create<ttg::LocalLoadOp>(loc, refinedTensorType, refinedView);
-    subtiles.push_back(refinedLoad);
+  auto order = memDescEncoding.getOrder();
+  for (int32_t j = 0; j < numReps2D[1]; ++j) {   // dim[1]
+    for (int32_t i = 0; i < numReps2D[0]; ++i) { // dim[0]
+      int32_t offset0 = i * refinedShape[0];
+      int32_t offset1 = j * refinedShape[1];
+      auto offset = createOffset({}, {offset0, offset1}, rewriter, loc);
+      auto refinedView = rewriter.create<ttg::MemDescSubviewOp>(
+          loc, subviewType, memDesc, offset);
+      LDBG("RefinedLocalLoadSubvew: " << *refinedView);
+
+      auto refinedLoad = rewriter.create<ttg::LocalLoadOp>(
+          loc, refinedTensorType, refinedView);
+      // LDBG("RefinedLocalLoad: " << *refinedLoad);
+      subtiles.push_back(refinedLoad);
+    }
   }
 
-  auto concatDims = DenseI64ArrayAttr::get(ctx, numReps);
+  // concat dims is correct shape 8x1 vs 1x8, else gives wrong output shape.
+  auto concatDims = DenseI64ArrayAttr::get(ctx, numReps2D);
   auto joinedResult = rewriter.create<triton::amdgpu::ConcatOp>(
       loc, resultType, subtiles, concatDims);
+  LDBG("ConcatOp: " << *joinedResult);
 
   op.replaceAllUsesWith(joinedResult.getResult());
   return success();
@@ -225,12 +242,12 @@ struct DotOpMFMAConverter {
     // are decomposed the same and the intervening extract_slice and concat can
     // be canonicalized away. Re-enable slicing dots along K when we know we can
     // slice local_load along K too.
-    // const auto numRepK = repA[2];
-    const int numRepK = 1;
+    const auto numRepK = repA[2];
+    // const int numRepK = 1;
     const auto numRepB = repA[0];
     SmallVector<int64_t> numRepShape = {numRepM, numRepN, numRepK};
     LDBG("totalReps: " << numRepShape[0] << "x" << numRepShape[1] << "x"
-                       << numRepShape[2] << "\n");
+                       << numRepShape[2]);
     SmallVector<int64_t> refinedShapeA = {shapeA[0] / numRepM,
                                           shapeA[1] / numRepK};
     SmallVector<int64_t> refinedShapeB = {shapeB[0] / numRepK,
@@ -262,7 +279,7 @@ struct DotOpMFMAConverter {
     auto mfmasPerRep =
         getMfmasPerRep(ctaTile, warpsPerCTA, numRepShape, mfmaShape);
     LDBG("mfmasPerRep: " << mfmasPerRep[0] << "x" << mfmasPerRep[1] << "x"
-                         << mfmasPerRep[2] << "\n");
+                         << mfmasPerRep[2]);
 
     // Calculate Dot-Tiling.
     unsigned cyclesPerMfma = getCyclesPerMfma(dotOp);
@@ -281,7 +298,7 @@ struct DotOpMFMAConverter {
     tileShape[2] = std::min(tileShape[2], static_cast<unsigned>(numRepK));
 
     LDBG("repsPerDotTile: " << tileShape[0] << "x" << tileShape[1] << "x"
-                            << tileShape[2] << "\n");
+                            << tileShape[2]);
     const int tileShapeM = tileShape[0];
     const int tileShapeN = tileShape[1];
     const int tileShapeK = tileShape[2];
@@ -300,7 +317,7 @@ struct DotOpMFMAConverter {
     for (int32_t k = 0; k < numRepK; ++k) {
       SmallVector<amdgpu::ExtractSliceOp> subtilesK;
       for (int32_t i = 0; i < numRepM; ++i) {
-        LDBG("local_load_a[" << i << "][" << k << "] extract_slice\n");
+        LDBG("local_load_a[" << i << "][" << k << "] extract_slice");
         int32_t shiftM = i * elementsPerSliceM;
         int32_t shiftK = k * elementsPerSliceK;
         auto extract = rewriter.create<amdgpu::ExtractSliceOp>(
@@ -339,7 +356,7 @@ struct DotOpMFMAConverter {
     for (int32_t k = 0; k < numRepK; ++k) {
       SmallVector<amdgpu::ExtractSliceOp> subtilesK;
       for (int32_t j = 0; j < numRepN; ++j) {
-        LDBG("local_load_b[" << k << "][" << j << "] extact_slice\n");
+        LDBG("local_load_b[" << k << "][" << j << "] extact_slice");
         int32_t shiftN = j * elementsPerSliceN;
         int32_t shiftK = k * elementsPerSliceK;
         auto extract = rewriter.create<amdgpu::ExtractSliceOp>(
@@ -400,11 +417,11 @@ struct DotOpMFMAConverter {
           for (int k = tileIdxK * tileShapeK; k < (tileIdxK + 1) * tileShapeK;
                ++k) {
             int32_t elementSerial = 0;
-            LDBG("dot-tile[" << tileSerial << "]\n");
+            LDBG("dot-tile[" << tileSerial << "]");
             // Iterate over dots within dot-tile.
             for (int m = tileStartM; m < tileStartM + tileShapeM; ++m) {
               for (int n = tileStartN; n < tileStartN + tileShapeN; ++n) {
-                LDBG("  dot[" << m << "][" << n << "][" << k << "]\n");
+                LDBG("  dot[" << m << "][" << n << "][" << k << "]");
                 auto refinedTensorA = subtilesA[k][m];
                 auto refinedTensorB = subtilesB[k][n];
                 auto dotOp = rewriter.create<tt::DotOp>(
@@ -595,9 +612,9 @@ LogicalResult rewriteLocalStoreOp(OpBuilder &rewriter,
   constexpr bool mutableMemory = true;
   auto sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
 
-  auto subviewType =
-      ttg::MemDescType::get(refinedBlock.refinedShape, refinedBlock.elemType,
-                            sharedEncoding, sharedMemorySpace, mutableMemory);
+  auto subviewType = ttg::MemDescType::get(
+      refinedBlock.refinedShape, refinedBlock.elemType, sharedEncoding,
+      sharedMemorySpace, mutableMemory, origMemViewType.getAllocShape());
 
   rewriter.setInsertionPointAfter(loadStoreOp);
   CoordinateAux aux(refinedBlock.numPerDims);
