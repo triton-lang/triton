@@ -325,7 +325,7 @@ class CUDABackend(BaseBackend):
         context = llvm.context()
         if os.environ.get("TRITON_ENABLE_ASAN", "0") == "1":
             raise RuntimeError(
-                "Address Sanitizer Error: Address sanitizer is currently only supporteedd on the AMD backend")
+                "Address Sanitizer Error: Address sanitizer is currently only supported on the AMD backend")
         llvm_mod = llvm.to_module(mod, context)
         proc = sm_arch_from_capability(capability)
         features = get_features(options, self.target.arch)

@@ -159,6 +159,7 @@ tt.func @not_power_of_2() {
     ttg.warp_yield
   }
   partition0() num_warps(3) {
+    ttg.warp_return
   } : () -> ()
   tt.return
 }
@@ -172,6 +173,7 @@ tt.func @bad_argument_count() {
     ttg.warp_yield
   }
   partition0(%arg0: i32) num_warps(4) {
+    ttg.warp_return
   } : () -> ()
   tt.return
 }
@@ -185,6 +187,7 @@ tt.func @bad_argument_type(%arg0: i32) {
     ttg.warp_yield
   }
   partition0(%arg1: i64) num_warps(4) {
+    ttg.warp_return
   } : (i32) -> ()
   tt.return
 }
@@ -202,26 +205,12 @@ tt.func @bad_default_yields(%arg0: i32) {
 
 // -----
 
-tt.func @bad_partition_terminator() {
-  // expected-error @below {{'ttg.warp_specialize' op partition region #0 does not end with a `ttg.warp_return` op}}
-  "ttg.warp_specialize"() ({
-    "ttg.warp_yield"() : () -> ()
-  }, {
-    "ttg.warp_specialize.partitions"() ({
-      "ttg.warp_yield"() : () -> ()
-    }) : () -> ()
-  }) {partitionNumWarps = array<i32: 1>} : () -> ()
-  tt.return
-}
-
-// -----
-
-tt.func @bad_default_terminator() {
-  // expected-error @below {{'ttg.warp_specialize' op expected its default region to end with a `ttg.warp_yield` op}}
+tt.func @bad_default_yields(%arg0: i32, %arg1: i64) {
   ttg.warp_specialize()
   default {
-    scf.yield
-  } : () -> ()
+    // expected-error @below {{'ttg.warp_yield' op operand #0 has type 'i64' but parent op expected 'i32'}}
+    ttg.warp_yield %arg1 : i64
+  } : () -> i32
   tt.return
 }
 
@@ -267,6 +256,7 @@ tt.func @function_no_scope() {
   partition0() num_warps(2) {
     // expected-error @below {{Layout has a total of 8 warps per CTA, but the context requires 2 warps per CTA}}
     tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked_8_warps>
+    ttg.warp_return
   } : () -> ()
   tt.return
 }
@@ -285,10 +275,12 @@ tt.func @function_no_scope() {
     ttg.warp_yield
   }
   partition0() num_warps(2) {
+    ttg.warp_return
   }
   partition1() num_warps(1) {
     // expected-error @below {{Layout has a total of 2 warps per CTA, but the context requires 1 warps per CTA}}
     tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked_2_warps>
+    ttg.warp_return
   } : () -> ()
   tt.return
 }
@@ -306,6 +298,50 @@ tt.func @illegal_ws_nest() {
       ttg.warp_yield
     } : () -> ()
     ttg.warp_yield
+  } : () -> ()
+  tt.return
+}
+
+// -----
+
+tt.func @invalid_start_ids() {
+  // expected-error @below {{'ttg.warp_specialize' op has 1 warp group start IDs but expected 2}}
+  ttg.warp_specialize() attributes {warpGroupStartIds = array<i32: 4>}
+  default {
+    ttg.warp_yield
+  }
+  partition0() num_warps(2) {
+    ttg.warp_return
+  }
+  partition1() num_warps(1) {
+    ttg.warp_return
+  } : () -> ()
+  tt.return
+}
+
+// -----
+
+tt.func @partition_no_terminator() {
+  ttg.warp_specialize()
+  default {
+    ttg.warp_yield
+  }
+  // expected-error @below {{region with at least 1 blocks}}
+  partition0() num_warps(2) {
+  } : () -> ()
+  tt.return
+}
+
+// -----
+
+tt.func @partition_no_terminator() {
+  ttg.warp_specialize()
+  default {
+    ttg.warp_yield
+  }
+  partition0() num_warps(2) {
+    // expected-error @below {{block with no terminator}}
+    %c1_i32 = arith.constant 1 : i32
   } : () -> ()
   tt.return
 }

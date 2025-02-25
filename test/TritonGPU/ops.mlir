@@ -102,16 +102,22 @@ tt.func @warp_specialize_partitions(%arg0: i32, %arg1: i64) -> i64 {
   partition0(%arg2: i32) num_warps(4) {
     // CHECK-NEXT: arith.addi %arg2, %arg2 : i32
     %1 = arith.addi %arg2, %arg2 : i32
+    // CHECK-NEXT: ttg.warp_return
+    ttg.warp_return
   // CHECK-NEXT: }
   }
   // CHECK-NEXT: partition1(%arg2: i32) num_warps(1) {
   partition1(%arg2: i32) num_warps(1) {
+    // CHECK-NEXT: ttg.warp_return
+    ttg.warp_return
   // CHECK-NEXT: }
   }
   // CHECK-NEXT: partition2(%arg2: i32) num_warps(8) {
   partition2(%arg2: i32) num_warps(8) {
     // CHECK-NEXT: arith.muli
     %1 = arith.muli %arg2, %arg2 : i32
+    // CHECK-NEXT: ttg.warp_return
+    ttg.warp_return
   // CHECK-NEXT: } : (i32) -> i64
   } : (i32) -> i64
   tt.return %0 : i64
@@ -131,6 +137,8 @@ tt.func @warp_specialize_multiple_args_res(%arg0: i32, %arg1: i32) -> (i32, i32)
   partition0(%arg2: i32, %arg3: i32) num_warps(4) {
     // CHECK-NEXT: arith.addi %arg2, %arg3 : i32
     %1 = arith.addi %arg2, %arg3 : i32
+    // CHECK-NEXT: ttg.warp_return
+    ttg.warp_return
   // CHECK-NEXT: } : (i32, i32) -> (i32, i32)
   } : (i32, i32) -> (i32, i32)
   tt.return %0#0, %0#1 : i32, i32
@@ -169,11 +177,13 @@ tt.func @function_no_scope() {
   partition0() num_warps(2) {
     // CHECK-NEXT: tt.make_range {{.*}} tensor<128xi32, [[BLOCKED_2_WARPS]]>
     tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked_2_warps>
+    ttg.warp_return
   }
   // CHECK: partition1() num_warps(1)
   partition1() num_warps(1) {
     // CHECK-NEXT: tt.make_range {{.*}} tensor<128xi32, [[BLOCKED_1_WARPS]]>
     tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32, #blocked_1_warps>
+    ttg.warp_return
   } : () -> ()
   tt.return
 }

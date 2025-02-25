@@ -37,23 +37,22 @@ struct TestAllocationPass
   }
 
   void runOnOperation() override {
-    auto &os = llvm::errs();
     ModuleOp moduleOp = getOperation();
     // Convert to std::string can remove quotes from opName
     ModuleAllocation moduleAllocation = getModuleAllocation();
     moduleOp.walk([&](triton::FuncOp funcOp) {
       auto opName = SymbolTable::getSymbolName(funcOp).getValue().str();
-      os << opName << "\n";
+      mlir::emitRemark(funcOp.getLoc(), opName);
       auto *allocation = moduleAllocation.getFuncData(funcOp);
       funcOp.walk([&](Operation *op) {
         auto scratchBufferId = allocation->getBufferId(op);
         if (scratchBufferId != Allocation::InvalidBufferId) {
           size_t offset = allocation->getOffset(scratchBufferId);
           size_t size = allocation->getAllocatedSize(scratchBufferId);
-          if (allocation->isVirtualBuffer(scratchBufferId))
-            os << "virtual offset = " << offset << ", size = " << size << "\n";
-          else
-            os << "scratch offset = " << offset << ", size = " << size << "\n";
+          mlir::emitRemark(op->getLoc())
+              << (allocation->isVirtualBuffer(scratchBufferId) ? "virtual"
+                                                               : "scratch")
+              << " offset = " << offset << ", size = " << size;
         }
         if (op->getNumResults() < 1)
           return;
@@ -62,11 +61,13 @@ struct TestAllocationPass
           if (bufferId != Allocation::InvalidBufferId) {
             size_t offset = allocation->getOffset(bufferId);
             size_t size = allocation->getAllocatedSize(bufferId);
-            os << "offset = " << offset << ", size = " << size << "\n";
+            mlir::emitRemark(op->getLoc())
+                << "offset = " << offset << ", size = " << size;
           }
         }
       });
-      os << "size = " << allocation->getSharedMemorySize() << "\n";
+      mlir::emitRemark(funcOp.getLoc())
+          << "size = " << allocation->getSharedMemorySize();
     });
   }
 

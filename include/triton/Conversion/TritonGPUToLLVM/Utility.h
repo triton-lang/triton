@@ -575,15 +575,18 @@ Value mxfpScaleBf16(RewriterBase &rewriter, Location loc, Value v, Value scale,
 // Hardware Indices
 // -----------------------------------------------------------------------
 
+// If an operation is contained within a warp specialize region, this returns
+// the thread ID offset of that warpgroup.
+std::optional<int> getWarpGroupStartThreadId(Block *block);
+
 // Returns CTA level thread ID.
 Value getThreadId(OpBuilder &rewriter, Location loc);
 
 // Get the lane ID, which is index of the thread within its warp.
-Value getLaneId(OpBuilder &rewriter, Location loc, unsigned threadsPerWarp);
+Value getLaneId(OpBuilder &rewriter, Location loc);
 
 // Get the lane ID and warp ID.
-std::pair<Value, Value> getLaneAndWarpId(OpBuilder &rewriter, Location loc,
-                                         unsigned threadsPerWarp);
+std::pair<Value, Value> getLaneAndWarpId(OpBuilder &rewriter, Location loc);
 
 // -----------------------------------------------------------------------
 // Shared memory utilities
