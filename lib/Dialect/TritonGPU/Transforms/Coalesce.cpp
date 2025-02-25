@@ -119,7 +119,7 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
         llvm::SetVector<Operation *> rootCauseOps;
         findTopDivisibilityOperand(op, rootCauseOps, axisInfoAnalysis.operationsReachedTopOnDivisibility);
         for (auto rootCauseOp : rootCauseOps) {
-          mainError.attachNote(rootCauseOp->getLoc()) << "Divisibility of 1 first introduced here: ";
+          mainError.attachNote(rootCauseOp->getLoc()) << "Divisibility of 1 first introduced here: " << *rootCauseOp;
         }
       }
       if (contiguityIsOne) {
