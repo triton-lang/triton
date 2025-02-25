@@ -216,13 +216,13 @@ private:
 
     llvm::SmallVector<Node *> ldsOpsNodes;
     while (Node *node = next()) {
-      auto localLoad = llvm::dyn_cast<triton::gpu::LocalLoadOp>(node->getOp());
-      auto localStore =
-          llvm::dyn_cast<triton::gpu::LocalStoreOp>(node->getOp());
-      if (localLoad || localStore) {
+      auto localLoad = dyn_cast<triton::gpu::LocalLoadOp>(node->getOp());
+      auto localStore = dyn_cast<triton::gpu::LocalStoreOp>(node->getOp());
+      auto localAlloc = dyn_cast<triton::gpu::LocalAllocOp>(node->getOp());
+      if (localLoad || localStore || localAlloc) {
         ldsOpsNodes.push_back(node);
       }
-      auto gpuBarrier = llvm::dyn_cast<mlir::gpu::BarrierOp>(node->getOp());
+      auto gpuBarrier = dyn_cast<mlir::gpu::BarrierOp>(node->getOp());
       if (gpuBarrier) {
         Node *barrierNode = node;
         for (auto ldsOpNode : ldsOpsNodes) {
