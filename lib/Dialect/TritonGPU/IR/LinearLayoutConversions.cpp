@@ -1360,7 +1360,7 @@ chooseScaledMfmaOperandLayout(AMDMfmaEncodingAttr mfmaEnc, int kWidth,
   using basisT = std::vector<std::vector<int32_t>>;
   unsigned rank = dotOperandShape.size();
   auto standardOutDims = standardOutDimNames(ctx, rank);
-  auto warpOrder = mfmaEnc.getWarpOrder();
+  auto warpOrder = mfmaEnc.getDefaultWarpOrder();
 
   StringAttr kRegister = StringAttr::get(ctx, "register");
   StringAttr kLane = StringAttr::get(ctx, "lane");
