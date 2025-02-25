@@ -142,74 +142,122 @@ public:
 // Inject TMEM copy instructions into IR to efficiently load blocked scales for
 // scaled dot
 class InjectTMemCopy
-    : public OpRewritePattern<triton::nvidia_gpu::TMEMAllocOp> {
+    : public OpRewritePattern<triton::nvidia_gpu::TCGen5MMAScaledOp> {
 public:
-  using OpRewritePattern<triton::nvidia_gpu::TMEMAllocOp>::OpRewritePattern;
+  using OpRewritePattern<
+      triton::nvidia_gpu::TCGen5MMAScaledOp>::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(triton::nvidia_gpu::TMEMAllocOp tmemAlloc,
+  LogicalResult matchAndRewrite(triton::nvidia_gpu::TCGen5MMAScaledOp mmaOp,
                                 PatternRewriter &rewriter) const override {
-    auto dstType = tmemAlloc.getResult().getType();
+    auto aScale = mmaOp.getAScale();
+    auto bScale = mmaOp.getBScale();
+    LogicalResult ret = failure();
+    if (aScale && isa<triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(
+                      aScale.getType().getEncoding())) {
+      auto tmemAlloc = aScale.getDefiningOp<triton::nvidia_gpu::TMEMAllocOp>();
+      if (!tmemAlloc) {
+        return failure(); // TODO: go to the second operand instead
+      }
+      auto dstType = tmemAlloc.getResult().getType();
 
-    // Only applies to TMEMAlloc with scales encoding
-    if (!isa<triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(
-            dstType.getEncoding())) {
-      return failure();
+      if (!tmemAlloc.getSrc()) {
+        return failure();
+      }
+
+      // Look for a sequence
+      //    local_load
+      // -> reshape(..., (BLOCK_MN / 128, BLOCK_K / scale_vec_size / 4, 32, 4,
+      // 4)
+      // -> transpose(..., (0, 3, 2, 1, 4))
+      // -> reshape(..., (BLOCK_MN, BLOCK_K / scale_vec_size)
+      // -> tmem_alloc
+      // and replace it with tmem_alloc -> tmem_copy
+      auto scale2DShape = dstType.getShape();
+      auto blockMN = scale2DShape[0];
+      auto numScales = scale2DShape[1];
+      const SmallVector<int> transposeOrder{0, 3, 2, 1, 4};
+      const SmallVector<int64_t> reshape5DShape{blockMN / 128, numScales / 4,
+                                                32, 4, 4};
+
+      auto reshapeOp2D = getNextOp<triton::ReshapeOp>(tmemAlloc.getSrc());
+      if (!reshapeOp2D ||
+          reshapeOp2D.getResult().getType().getShape() != scale2DShape) {
+        return failure();
+      }
+
+      auto transOp = getNextOp<triton::TransOp>(reshapeOp2D.getSrc());
+      if (!transOp || transOp.getOrder() != ArrayRef<int>(transposeOrder)) {
+        return failure();
+      }
+
+      auto reshapeOp5D = getNextOp<triton::ReshapeOp>(transOp.getSrc());
+      if (!reshapeOp5D || reshapeOp5D.getResult().getType().getShape() !=
+                              ArrayRef<int64_t>(reshape5DShape)) {
+        return failure();
+      }
+
+      auto localLoad =
+          getNextOp<triton::gpu::LocalLoadOp>(reshapeOp5D.getSrc());
+      if (!localLoad || !isTmemCopyCompatible(localLoad.getSrc().getType())) {
+        return failure();
+      }
+      mmaOp.getAScaleMutable().assign(localLoad.getSrc());
+      ret = success();
+    }
+    if (bScale && isa<triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(
+                      bScale.getType().getEncoding())) {
+      auto tmemAlloc = bScale.getDefiningOp<triton::nvidia_gpu::TMEMAllocOp>();
+      if (!tmemAlloc) {
+        return failure(); // TODO: go to the second operand instead
+      }
+      auto dstType = tmemAlloc.getResult().getType();
+
+      if (!tmemAlloc.getSrc()) {
+        return failure();
+      }
+
+      // Look for a sequence
+      //    local_load
+      // -> reshape(..., (BLOCK_MN / 128, BLOCK_K / scale_vec_size / 4, 32, 4,
+      // 4)
+      // -> transpose(..., (0, 3, 2, 1, 4))
+      // -> reshape(..., (BLOCK_MN, BLOCK_K / scale_vec_size)
+      // -> tmem_alloc
+      // and replace it with tmem_alloc -> tmem_copy
+      auto scale2DShape = dstType.getShape();
+      auto blockMN = scale2DShape[0];
+      auto numScales = scale2DShape[1];
+      const SmallVector<int> transposeOrder{0, 3, 2, 1, 4};
+      const SmallVector<int64_t> reshape5DShape{blockMN / 128, numScales / 4,
+                                                32, 4, 4};
+
+      auto reshapeOp2D = getNextOp<triton::ReshapeOp>(tmemAlloc.getSrc());
+      if (!reshapeOp2D ||
+          reshapeOp2D.getResult().getType().getShape() != scale2DShape) {
+        return failure();
+      }
+
+      auto transOp = getNextOp<triton::TransOp>(reshapeOp2D.getSrc());
+      if (!transOp || transOp.getOrder() != ArrayRef<int>(transposeOrder)) {
+        return failure();
+      }
+
+      auto reshapeOp5D = getNextOp<triton::ReshapeOp>(transOp.getSrc());
+      if (!reshapeOp5D || reshapeOp5D.getResult().getType().getShape() !=
+                              ArrayRef<int64_t>(reshape5DShape)) {
+        return failure();
+      }
+
+      auto localLoad =
+          getNextOp<triton::gpu::LocalLoadOp>(reshapeOp5D.getSrc());
+      if (!localLoad || !isTmemCopyCompatible(localLoad.getSrc().getType())) {
+        return failure();
+      }
+      mmaOp.getBScaleMutable().assign(localLoad.getSrc());
+      ret = success();
     }
 
-    if (!tmemAlloc.getSrc()) {
-      return failure();
-    }
-
-    // Look for a sequence
-    //    local_load
-    // -> reshape(..., (BLOCK_MN / 128, BLOCK_K / scale_vec_size / 4, 32, 4, 4)
-    // -> transpose(..., (0, 3, 2, 1, 4))
-    // -> reshape(..., (BLOCK_MN, BLOCK_K / scale_vec_size)
-    // -> tmem_alloc
-    // and replace it with tmem_alloc -> tmem_copy
-    auto scale2DShape = dstType.getShape();
-    auto blockMN = scale2DShape[0];
-    auto numScales = scale2DShape[1];
-    const SmallVector<int> transposeOrder{0, 3, 2, 1, 4};
-    const SmallVector<int64_t> reshape5DShape{blockMN / 128, numScales / 4, 32,
-                                              4, 4};
-
-    auto reshapeOp2D = getNextOp<triton::ReshapeOp>(tmemAlloc.getSrc());
-    if (!reshapeOp2D ||
-        reshapeOp2D.getResult().getType().getShape() != scale2DShape) {
-      return failure();
-    }
-
-    auto transOp = getNextOp<triton::TransOp>(reshapeOp2D.getSrc());
-    if (!transOp || transOp.getOrder() != ArrayRef<int>(transposeOrder)) {
-      return failure();
-    }
-
-    auto reshapeOp5D = getNextOp<triton::ReshapeOp>(transOp.getSrc());
-    if (!reshapeOp5D || reshapeOp5D.getResult().getType().getShape() !=
-                            ArrayRef<int64_t>(reshape5DShape)) {
-      return failure();
-    }
-
-    auto localLoad = getNextOp<triton::gpu::LocalLoadOp>(reshapeOp5D.getSrc());
-    if (!localLoad || !isTmemCopyCompatible(localLoad.getSrc().getType())) {
-      return failure();
-    }
-    MemDescType newType = MemDescType::get(
-        dstType.getShape(), dstType.getElementType(), dstType.getEncoding(),
-        dstType.getMemorySpace(), /*mutableMemory=*/true);
-    Value newTmemAlloc = rewriter.create<triton::nvidia_gpu::TMEMAllocOp>(
-        tmemAlloc.getLoc(), newType, Value());
-
-    // Since tcgen05.cp followed by tcgen05.mma is guaranteed to execute in that
-    // order, we do not need to wait for the completion of the copy before MMA.
-    rewriter.create<triton::nvidia_gpu::TMEMCopyOp>(
-        newTmemAlloc.getLoc(), localLoad.getSrc(), newTmemAlloc,
-        Value() /* barrier */);
-
-    rewriter.replaceOp(tmemAlloc, newTmemAlloc);
-
-    return success();
+    return ret;
   }
 
 private:

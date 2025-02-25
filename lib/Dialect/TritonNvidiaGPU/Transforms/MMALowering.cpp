@@ -29,7 +29,7 @@ public:
       return failure();
     MLIRContext *ctx = op.getContext();
     Location loc = op.getLoc();
-    Attribute sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
+    Attribute sharedMemorySpace = SharedMemorySpaceAttr::get(ctx);
     auto barrierCTALayout = CTALayoutAttr::get(
         /*context=*/ctx, /*CTAsPerCGA=*/{1},
         /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
@@ -51,6 +51,50 @@ public:
   }
 };
 
+struct TCGen5MMAScaleSharedToTmemConversion
+    : public OpRewritePattern<TCGen5MMAScaledOp> {
+  using OpRewritePattern<TCGen5MMAScaledOp>::OpRewritePattern;
+
+  bool lowerScaleToTmem(OpOperand &operand, PatternRewriter &rewriter) const {
+    Location loc = operand.getOwner()->getLoc();
+    MLIRContext *context = operand.getOwner()->getContext();
+    Attribute tensorMemorySpace = TensorMemorySpaceAttr::get(context);
+    auto oldType = cast<MemDescType>(operand.get().getType());
+    Type elType = oldType.getElementType();
+    SwizzledSharedEncodingAttr oldEncoding =
+        cast<SwizzledSharedEncodingAttr>(oldType.getEncoding());
+    CTALayoutAttr CTALayout = getCTALayout(oldEncoding);
+    ArrayRef<unsigned> CTASplitNum = CTALayout.getCTASplitNum();
+    ArrayRef<int64_t> shape = oldType.getAllocShape();
+    Attribute scaleEncoding = TensorMemoryScalesEncodingAttr::get(
+        context, CTASplitNum[0], CTASplitNum[1]);
+    Type scaleAType =
+        MemDescType::get(shape, elType, scaleEncoding, tensorMemorySpace,
+                         /*mutableMemory=*/true);
+    auto tmemAlloc = rewriter.create<TMEMAllocOp>(loc, scaleAType, Value());
+    rewriter.create<TMEMCopyOp>(loc, operand.get(), tmemAlloc,
+                                /*barrier*/ Value());
+    operand.set(tmemAlloc);
+    return true;
+  }
+
+  LogicalResult matchAndRewrite(TCGen5MMAScaledOp op,
+                                PatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    MLIRContext *context = op->getContext();
+    auto aScaleType = op.getAScale().getType();
+    auto bScaleType = op.getBScale().getType();
+    bool anyChanged = false;
+    if (isa<SwizzledSharedEncodingAttr>(aScaleType.getEncoding())) {
+      anyChanged = lowerScaleToTmem(op.getAScaleMutable(), rewriter);
+    }
+    if (isa<SwizzledSharedEncodingAttr>(bScaleType.getEncoding())) {
+      anyChanged = lowerScaleToTmem(op.getBScaleMutable(), rewriter);
+    }
+    return LogicalResult::success(anyChanged);
+  }
+};
+
 class TritonNvidiaGPUMMALoweringPass
     : public TritonNvidiaGPUMMALoweringPassBase<
           TritonNvidiaGPUMMALoweringPass> {
@@ -61,8 +105,8 @@ public:
 
     mlir::RewritePatternSet patterns(context);
     patterns
-        .add<SyncMMALowering<TCGen5MMAOp>, SyncMMALowering<TCGen5MMAScaledOp>>(
-            context);
+        .add<SyncMMALowering<TCGen5MMAOp>, SyncMMALowering<TCGen5MMAScaledOp>,
+             TCGen5MMAScaleSharedToTmemConversion>(context);
     if (applyPatternsGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
   }

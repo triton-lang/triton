@@ -465,56 +465,6 @@ static int64_t getFormatBitSize(ScaleDotElemType type) {
   }
 }
 
-struct TCGen5MMAScaleSharedToTmemConversion
-    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::TCGen5MMAScaledOp> {
-  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
-
-  bool lowerScaleToTmem(OpOperand &operand,
-                        ConversionPatternRewriter &rewriter) const {
-    Location loc = operand.getOwner()->getLoc();
-    MLIRContext *context = operand.getOwner()->getContext();
-    Attribute tensorMemorySpace =
-        triton::nvidia_gpu::TensorMemorySpaceAttr::get(context);
-    auto oldType = cast<MemDescType>(operand.get().getType());
-    Type elType = oldType.getElementType();
-    triton::gpu::SwizzledSharedEncodingAttr oldEncoding =
-        cast<triton::gpu::SwizzledSharedEncodingAttr>(oldType.getEncoding());
-    triton::gpu::CTALayoutAttr CTALayout = getCTALayout(oldEncoding);
-    llvm::ArrayRef<unsigned> CTASplitNum = CTALayout.getCTASplitNum();
-    ArrayRef<int64_t> shape = oldType.getAllocShape();
-    Attribute scaleEncoding =
-        triton::nvidia_gpu::TensorMemoryScalesEncodingAttr::get(
-            context, CTASplitNum[0], CTASplitNum[1]);
-    Type scaleAType = triton::gpu::MemDescType::get(
-        shape, elType, scaleEncoding, tensorMemorySpace,
-        /*mutableMemory=*/false);
-    auto tmemAlloc = rewriter.create<triton::nvidia_gpu::TMEMAllocOp>(
-        loc, scaleAType, Value());
-    rewriter.create<triton::nvidia_gpu::TMEMCopyOp>(
-        loc, operand.get(), tmemAlloc, /*barrier*/ Value());
-    operand.set(tmemAlloc);
-    return true;
-  }
-
-  LogicalResult
-  matchAndRewrite(triton::nvidia_gpu::TCGen5MMAScaledOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    Location loc = op.getLoc();
-    MLIRContext *context = op->getContext();
-    auto aScaleType = op.getAScale().getType();
-    auto bScaleType = op.getBScale().getType();
-    bool anyChanged = false;
-    if (isa<triton::gpu::SwizzledSharedEncodingAttr>(
-            aScaleType.getEncoding())) {
-      anyChanged = lowerScaleToTmem(op.getAScaleMutable(), rewriter);
-    }
-    if (isa<triton::gpu::SwizzledSharedEncodingAttr>(
-            bScaleType.getEncoding())) {
-      anyChanged = lowerScaleToTmem(op.getBScaleMutable(), rewriter);
-    }
-    return LogicalResult::success(anyChanged);
-  }
-};
 struct TCGen5MMAScaledOpConversion
     : public ConvertOpToLLVMPattern<triton::nvidia_gpu::TCGen5MMAScaledOp> {
   using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
@@ -678,8 +628,8 @@ namespace NVIDIA {
 void populateTCGen5MMAOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                       RewritePatternSet &patterns,
                                       PatternBenefit benefit) {
-  patterns.add<TCGen5MMAOpConversion, TCGen5MMAScaledOpConversion,
-               TCGen5MMAScaleSharedToTmemConversion>(typeConverter, benefit);
+  patterns.add<TCGen5MMAOpConversion, TCGen5MMAScaledOpConversion>(
+      typeConverter, benefit);
 }
 
 } // namespace NVIDIA
