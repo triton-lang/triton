@@ -22,6 +22,7 @@ mlir::LogicalResult createTMADesc(mlir::Value tmaPtr,
 
   auto elemType = op.getBase().getType().getPointeeType();
   auto elemSize = elemType.getIntOrFloatBitWidth() / 8;
+  bool fp4Padded = op.getDescAttr() && op.getDescAttr()->getFp4Padded();
 
   int32_t contig_dim_size = op.getTensorShape().back();
   int32_t contig_dim_size_in_bytes = contig_dim_size * elemSize;
@@ -29,23 +30,44 @@ mlir::LogicalResult createTMADesc(mlir::Value tmaPtr,
     contig_dim_size = 128 / elemSize;
   }
   llvm::SmallVector<Value> boxDim;
-  boxDim.push_back(mkI32Constant(contig_dim_size));
+  if (fp4Padded) {
+    boxDim.push_back(mkI32Constant(128));
+  } else {
+    boxDim.push_back(mkI32Constant(contig_dim_size));
+  }
   for (int k = op.getTensorShape().size() - 2; k >= 0; --k) {
     boxDim.push_back(mkI32Constant(op.getTensorShape()[k]));
   }
 
-  int32_t swizzle_mode;
-  if (contig_dim_size_in_bytes >= 128) {
-    swizzle_mode = 3;
-  } else if (contig_dim_size_in_bytes == 64) {
-    swizzle_mode = 2;
-  } else if (contig_dim_size_in_bytes == 32) {
-    swizzle_mode = 1;
+  unsigned swizzleBytes = 0;
+  if (op.getDescAttr()) {
+    swizzleBytes = op.getDescAttr()->getSwizzlingByteWidth();
+    if (fp4Padded) {
+      assert(swizzleBytes == 128 &&
+             "elem type .b4x16_p64 supports only 128B swizzling");
+    }
   } else {
-    op->emitError()
-        << "contiguous box dimension must be at least 32 bytes but got "
-        << contig_dim_size_in_bytes;
-    return failure();
+    if (contig_dim_size_in_bytes >= 128) {
+      swizzleBytes = 128;
+    } else if (contig_dim_size_in_bytes == 64) {
+      swizzleBytes = 64;
+    } else if (contig_dim_size_in_bytes == 32) {
+      swizzleBytes = 32;
+    } else {
+      op->emitError()
+          << "contiguous box dimension must be at least 32 bytes but got "
+          << contig_dim_size_in_bytes;
+      return failure();
+    }
+  }
+
+  int32_t swizzle_mode;
+  if (swizzleBytes == 128) {
+    swizzle_mode = 3;
+  } else if (swizzleBytes == 64) {
+    swizzle_mode = 2;
+  } else if (swizzleBytes == 32) {
+    swizzle_mode = 1;
   }
 
   Value elemSizeVal = builder.template create<arith::ConstantOp>(
@@ -64,25 +86,30 @@ mlir::LogicalResult createTMADesc(mlir::Value tmaPtr,
         loc, globalStride[i], elemSizeVal);
 
   int elemTypeEnum;
-  switch (elemSize) {
-  case 1: {
-    elemTypeEnum = 0;
-    break;
-  }
-  case 2: {
-    elemTypeEnum = 1;
-    break;
-  }
-  case 4: {
-    elemTypeEnum = 2;
-    break;
-  }
-  default: {
-    op->emitError()
-        << "Tensor descriptor element type must have size 1, 2, or 4 but got "
-        << elemSize;
-    return failure();
-  }
+
+  if (fp4Padded) {
+    elemTypeEnum = 14; // .b4x16_p64
+  } else {
+    switch (elemSize) {
+    case 1: {
+      elemTypeEnum = 0;
+      break;
+    }
+    case 2: {
+      elemTypeEnum = 1;
+      break;
+    }
+    case 4: {
+      elemTypeEnum = 2;
+      break;
+    }
+    default: {
+      op->emitError()
+          << "Tensor descriptor element type must have size 1, 2, or 4 but got "
+          << elemSize;
+      return failure();
+    }
+    }
   }
 
   builder.template create<triton::ExperimentalTensormapCreateOp>(
