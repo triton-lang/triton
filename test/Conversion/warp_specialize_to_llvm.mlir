@@ -47,8 +47,14 @@ llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 :
 // CHECK-LABEL: @generate_switch_loop
 llvm.func @generate_switch_loop() attributes {allocation.offset = 32 : i32} {
   // CHECK-NEXT: [[TIDX:%.*]] = nvvm.read.ptx.sreg.tid.x
-  // CHECK-NEXT: [[C128:%.*]] = llvm.mlir.constant(128 : i32)
-  // CHECK-NEXT: [[IS_DEFAULT:%.*]] = llvm.icmp "ult" [[TIDX]], [[C128]]
+  // CHECK-NEXT: [[C32:%.*]] = llvm.mlir.constant(32 : i32)
+  // CHECK-NEXT: [[WID:%.*]] = llvm.udiv [[TIDX]], [[C32]]
+  // CHECK-NEXT: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
+  // CHECK-NEXT: [[C31:%.*]] = llvm.mlir.constant(31 : i32)
+  // CHECK-NEXT: [[CNEG1:%.*]] = llvm.mlir.constant(-1 : i32)
+  // CHECK-NEXT: [[WARP_ID:%.*]] = nvvm.shfl.sync idx [[CNEG1]], [[WID]], [[C0]], [[C31]]
+  // CHECK-NEXT: [[C4:%.*]] = llvm.mlir.constant(4 : i32)
+  // CHECK-NEXT: [[IS_DEFAULT:%.*]] = llvm.icmp "ult" [[WARP_ID]], [[C4]]
   // CHECK-NEXT: llvm.cond_br [[IS_DEFAULT]], [[BODY:\^.*]], [[SWITCH_LOOP:\^.*]]
 
   // CHECK: [[SWITCH_LOOP]]:
@@ -56,16 +62,10 @@ llvm.func @generate_switch_loop() attributes {allocation.offset = 32 : i32} {
   // CHECK-NEXT: [[C32:%.*]] = llvm.mlir.constant(32 : i32)
   // CHECK-NEXT: [[SMEM_ADDR:%.*]] = llvm.mlir.addressof @global_smem
   // CHECK-NEXT: [[SMEM_BASE:%.*]] = llvm.getelementptr [[SMEM_ADDR]][[[C32]]] : (!llvm.ptr<3>, i32) -> !llvm.ptr<3>, i8
-  // CHECK-NEXT: [[C128:%.*]] = llvm.mlir.constant(128 : i32)
-  // CHECK-NEXT: [[REL_TID:%.*]] = llvm.sub [[TIDX]], [[C128]]
-  // CHECK-NEXT: [[C32:%.*]] = llvm.mlir.constant(32 : i32)
-  // CHECK-NEXT: [[REL_WID:%.*]] = llvm.udiv [[REL_TID]], [[C32]]
+  // CHECK-NEXT: [[C4:%.*]] = llvm.mlir.constant(4 : i32)
+  // CHECK-NEXT: [[REL_WID:%.*]] = llvm.sub [[WARP_ID]], [[C4]]
 
-  // CHECK-NEXT: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
-  // CHECK-NEXT: [[C31:%.*]] = llvm.mlir.constant(31 : i32)
-  // CHECK-NEXT: [[CNEG1:%.*]] = llvm.mlir.constant(-1 : i32)
-  // CHECK-NEXT: [[WARP_ID:%.*]] = nvvm.shfl.sync idx [[CNEG1]], [[REL_WID]], [[C0]], [[C31]]
-  // CHECK-NEXT: [[STATE_PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][[[WARP_ID]]]
+  // CHECK-NEXT: [[STATE_PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][[[REL_WID]]]
   // CHECK-NEXT: [[STATE:%.*]] = llvm.load [[STATE_PTR]]
   // CHECK-NEXT: llvm.switch [[STATE]] : i8, [[DEFAULT:\^.*]] [
   // CHECK-NEXT: 0: [[PARTITION0:\^.*]],

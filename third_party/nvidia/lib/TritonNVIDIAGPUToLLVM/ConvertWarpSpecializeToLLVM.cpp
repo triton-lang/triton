@@ -164,6 +164,7 @@ static void rewritePartitionRegions(WarpSpecializeOp ws, Block *switchLoop,
                      partition->getArguments())) {
         Value ptr =
             b.gep(ptrTy, captureType, capturePtr, ArrayRef<LLVM::GEPArg>{0, i});
+        // Each thread in the warp group needs a copy of the value.
         Value value = b.load(arg.getType(), ptr);
         arg.replaceAllUsesWith(value);
       }
@@ -216,7 +217,10 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
 
   // This is the absolute thread ID.
   Value tid = b.create<NVVM::ThreadIdXOp>(i32_ty);
-  Value isDefault = b.icmp_ult(tid, b.i32_val(defaultWarpGroupSize));
+  Value wid = b.udiv(tid, b.i32_val(threadsPerWarp));
+  // Tell PTXAS this value is warp-uniform.
+  wid = targetInfo.shuffleIdx(b, b.getLoc(), wid, 0);
+  Value isDefault = b.icmp_ult(wid, b.i32_val(defaultNumWarps));
   b.create<LLVM::CondBrOp>(isDefault, entry, switchLoop);
 
   // Forward arguments from the header into the old entry block.
@@ -243,10 +247,7 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
   createBarrier(b, kSwitchLoopBarrierIdx, /*numThreads=*/std::nullopt,
                 /*aligned=*/false);
   Value statePtr = LLVM::getSharedMemoryBase(b.getLoc(), b, targetInfo, func);
-  Value relTid = b.sub(tid, b.i32_val(defaultWarpGroupSize));
-  Value relWid = b.udiv(relTid, b.i32_val(threadsPerWarp));
-  // Tell PTXAS this value is warp-uniform.
-  relWid = targetInfo.shuffleIdx(b, b.getLoc(), relWid, 0);
+  Value relWid = b.sub(wid, b.i32_val(defaultNumWarps));
 
   // The default warp group will populate the state pointer with the state ID
   // for all warps.
@@ -254,6 +255,8 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
   // %warp_state = load i8 %warp_state_ptr
   LLVM::LLVMPointerType ptrTy = ptr_ty(ctx, 3);
   Value warpStatePtr = b.gep(ptrTy, i8_ty, statePtr, relWid);
+  // All threads in a warp reading from the same smem address will not create
+  // bank conflicts and is better than predicated load.
   Value warpState = b.load(i8_ty, warpStatePtr);
 
   // Pull the partition regions out. Switch based on the state ID to the right
