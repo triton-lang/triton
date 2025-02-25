@@ -31,6 +31,7 @@ include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
 
 include "mlir/IR/EnumAttr.td"
 include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
@@ -47,6 +48,7 @@ class TT_AMDGPU_Op<string mnemonic, list<Trait> traits = []> :
 // Interfaces
 //
 def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
+def LocalMemory : Resource<"::mlir::triton::gpu::SharedMemory">;
 
 //===----------------------------------------------------------------------===//
 // ExtractSliceOp
@@ -227,6 +229,43 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
       (`stride` `=` $stride^)?
       attr-dict `:` type($result)
     }];
+}
+
+//===----------------------------------------------------------------------===//
+// BufferLoadToLocalOp
+//===----------------------------------------------------------------------===//
+
+def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
+  AttrSizedOperandSegments,
+  MemoryEffects<[MemRead<GlobalMemory>]>,
+  MemoryEffects<[MemWrite<LocalMemory>]>,
+  TypesMatchWith<"result element type matches the pointed type of ptr", "result", "ptr", "getPointerTypeToElement($_self)">,
+  TypesMatchWith<"infer mask shape from offsets",
+                 "offsets", "mask", "getI1SameShape($_self)",
+                 "(cast<BufferLoadToLocalOp>($_op).getMask() == nullptr) || std::equal_to<>()">,
+]>{
+    let summary = "Load from a scalar base pointer and a tensor offset to local memory";
+    let description = [{
+      AMD Buffer load operation. Same as BufferLoad (see above) but writes to LDS instead of VGPR. }];
+    let arguments = (ins
+      TT_Ptr:$ptr,
+      I32Tensor:$offsets,
+      TTG_MemDescType:$result,
+      Optional<I32>:$stride,
+      DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache,
+      Optional<TT_BoolTensor>:$mask,
+      Optional<TT_Tensor>:$other
+    );
+    let results = (outs TTG_AsyncToken:$token);
+
+    let assemblyFormat = [{
+      $ptr `[` $offsets `]` `,` $result (`mask` $mask^)? (`other` $other^)?
+      (`stride` `=` $stride^)?
+      oilist(`cacheModifier` `=` $cache)
+      attr-dict `:` type($ptr) `[` type($offsets) `]` type($other) `->` type($result)
+    }];
+
+    let hasVerifier = 1;
 }
 
 //===----------------------------------------------------------------------===//

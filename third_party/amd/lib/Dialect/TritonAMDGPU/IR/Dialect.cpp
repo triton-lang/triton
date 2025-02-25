@@ -241,4 +241,23 @@ UpcastMXFPOp::deduceOutputType(TypedValue<RankedTensorType> inputTensor,
   return RankedTensorType::get(newShape, outputElemType, newVEncoding);
 }
 
+LogicalResult BufferLoadToLocalOp::verify() {
+  auto other = getOther();
+  if (!other)
+    return success();
+
+  // Other should have the same data type as the ptr and the same shape/layout
+  // as offsets
+  Type elemTy = getPtr().getType().getPointeeType();
+  auto offsetType = cast<RankedTensorType>(getOffsets().getType());
+  auto expectedType = offsetType.cloneWith(std::nullopt, elemTy);
+
+  if (other.getType() != expectedType) {
+    return emitError("other type must share the datatype with ptr and the "
+                     "shape and encoding of offsets.");
+  }
+
+  return success();
+}
+
 } // namespace mlir::triton::amdgpu
