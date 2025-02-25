@@ -179,7 +179,6 @@ def test_specialize(mode, device, fresh_triton_cache):
     x = torch.empty(1, dtype=torch.int32, device=device)
     function = {'enable': kernel, 'disable': kernel_nospec, 'disable_on_alignment': kernel_nospec_on_alignment}[mode]
     target = {'enable': 3, 'disable': 1, 'disable_on_alignment': 2}[mode]
-    target = {"enable": 3, "disable": 1, "disable_on_alignment": 2}[mode]
     for i in [1, 2, 4, 8, 16, 32]:
         function[(1, )](x, i, BLOCK=512)
     assert counter == target
