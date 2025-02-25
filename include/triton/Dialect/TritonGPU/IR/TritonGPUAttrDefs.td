@@ -464,6 +464,9 @@ def NVMMASharedEncodingAttr :
     SmallVector<unsigned> getCTAsPerCGA() const;
     SmallVector<unsigned> getCTAOrder() const;
     SmallVector<unsigned> getCTASplitNum() const;
+    SmallVector<unsigned> getOrder() const {
+      return getTransposed() ? SmallVector<unsigned>({0, 1}) : SmallVector<unsigned>({1, 0});
+    }
   }];
   let hasCustomAssemblyFormat = 1;
 }

@@ -137,8 +137,8 @@ sharedToLinearLayoutNoLeadingOffset(ArrayRef<int64_t> shape,
   // Construct bases for the 2 most minor dimensions of the layout.  These are
   // the dims that get swizzled.
   assert(shape.size() >= 2);
-  int colDim = getDefaultOrder(shared)[0];
-  int rowDim = getDefaultOrder(shared)[1];
+  int colDim = shared.getOrder()[0];
+  int rowDim = shared.getOrder()[1];
   int numCols = shape[colDim];
   int numRows = shape[rowDim];
   StringAttr colDimName = outDimNames[colDim];
@@ -160,7 +160,7 @@ sharedToLinearLayoutNoLeadingOffset(ArrayRef<int64_t> shape,
 
   // Add the remaining dimensions.
   for (int i = 2; i < rank; i++) {
-    int dim = getDefaultOrder(shared)[i];
+    int dim = shared.getOrder()[i];
     ctaLayout *=
         LinearLayout::identity1D(shape[dim], S("offset"), outDimNames[dim]);
   }

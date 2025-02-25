@@ -221,7 +221,15 @@ SmallVector<unsigned> getRepOrder(RankedTensorType type) {
 // This one's not terribly bad as we don't broadcast ShareEncodings
 SmallVector<unsigned> getOrder(SharedEncodingTrait layout,
                                ArrayRef<int64_t> shape) {
-  return getDefaultOrder(layout);
+  if (auto swizzledLayout =
+          mlir::dyn_cast<SwizzledSharedEncodingAttr>(layout)) {
+    return llvm::to_vector(swizzledLayout.getOrder());
+  }
+  if (auto sharedLayout = mlir::dyn_cast<NVMMASharedEncodingAttr>(layout)) {
+    return sharedLayout.getOrder();
+  }
+  llvm::report_fatal_error("Unimplemented usage of getOrder for MemDescType");
+  return {};
 }
 
 // Convenience functions
@@ -237,18 +245,6 @@ SmallVector<unsigned> getOrder(TensorOrMemDesc type) {
 SmallVector<unsigned> getOrder(MemDescType type) {
   return getOrder(cast<SharedEncodingTrait>(type.getEncoding()),
                   type.getShape());
-}
-
-SmallVector<unsigned> getDefaultOrder(SharedEncodingTrait layout) {
-  if (auto sharedLayout = mlir::dyn_cast<SwizzledSharedEncodingAttr>(layout)) {
-    return llvm::to_vector(sharedLayout.getOrder());
-  }
-  if (auto sharedLayout = mlir::dyn_cast<NVMMASharedEncodingAttr>(layout)) {
-    return sharedLayout.getTransposed() ? SmallVector<unsigned>({0, 1})
-                                        : SmallVector<unsigned>({1, 0});
-  }
-  llvm::report_fatal_error("Unimplemented usage of getOrder for MemDescType");
-  return {};
 }
 
 // Legacy impl for now
