@@ -347,11 +347,16 @@ void convertDot(const LLVMTypeConverter *typeConverter,
   }
   auto bSharedLayout = cast<NVMMASharedEncodingAttr>(bTensorTy.getEncoding());
   bool transB = !bSharedLayout.getTransposed();
-  Value baseA =
-      getSharedMemoryObjectFromStruct(
-          loc, loadedA, typeConverter->convertType(aTensorTy.getElementType()),
-          rewriter)
-          .getBase();
+  Value baseA;
+  if (aInTmem) {
+    baseA = loadedA;
+  } else {
+    baseA =
+        getSharedMemoryObjectFromStruct(
+            loc, loadedA,
+            typeConverter->convertType(aTensorTy.getElementType()), rewriter)
+            .getBase();
+  }
   Value baseB =
       getSharedMemoryObjectFromStruct(
           loc, loadedB, typeConverter->convertType(bTensorTy.getElementType()),
