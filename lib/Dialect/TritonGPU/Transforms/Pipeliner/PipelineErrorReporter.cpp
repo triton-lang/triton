@@ -25,7 +25,7 @@ void PipelineErrorReporter::findRootDefiningOp(Operation *op,
       auto operandFromThenBranch = ifOp.thenYield()->getOperand(resultNumber);
       LDBG("operandFromThenBranch: " << operandFromThenBranch);
       if (auto opResult = dyn_cast<OpResult>(operandFromThenBranch)) {
-        findRootDefiningOp(operandFromThenBranch.getDefiningOp(),
+        findRootDefiningOp(opResult.getDefiningOp(),
                            opResult.getResultNumber());
       } else if (!dyn_cast<BlockArgument>(operandFromThenBranch)) {
         rootDefiningOps.insert(operandFromThenBranch.getDefiningOp());
