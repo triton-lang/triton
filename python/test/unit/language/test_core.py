@@ -34,6 +34,7 @@ from triton._internal_testing import (
     is_hip_cdna,
     is_hip_mi200,
     is_hip_mi300,
+    is_hip_mi350,
     is_xpu,
     get_arch,
     torch_float8_dtypes,
@@ -3764,8 +3765,8 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
         if not is_hip_cdna():
             pytest.skip("scaled_dot only implemented for HIP CDNA")
         if "e4m3" in (mxfp_type, normal_type):
-            if not is_hip_mi300():
-                pytest.skip(f"scaled_dot({mxfp_type}, {normal_type}) only implemented for MI300")
+            if not (is_hip_mi300() or is_hip_mi350()):
+                pytest.skip(f"scaled_dot({mxfp_type}, {normal_type}) only implemented for MI300 and MI350")
         if mma == 16 and K == 64:
             pytest.skip(f"K == {K} too small for mfma {mma} in scaled_dot")
 
@@ -3938,7 +3939,15 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
             # Clamp to avoid relative error issues
             ret.clamp_(-2**comp_dtype_max_exp, 2**comp_dtype_max_exp - 1)
         else:
-            ret = torch.randint(256, shape, dtype=torch.uint8, device=device)
+            if is_hip_mi350():
+                # On other chips, the A/B operands are upcasted to fp16/bf16
+                # before matmul, which has larger range to avoid overflow.
+                # On MI350, we use the V_MFMA_*_F8F6F4 instructions to
+                # directly calculate matmul on F8F6F4 data. So we need
+                # to narrow down the range of input to avoid overflow.
+                ret = torch.randint(20, 40, shape, dtype=torch.uint8, device=device)
+            else:
+                ret = torch.randint(256, shape, dtype=torch.uint8, device=device)
         if col_major:
             ret = ret.mT
         return ret
