@@ -64,23 +64,21 @@ bool isTMALoad(Operation *op) {
 }
 
 DenseSet<Operation *> getTopLevelUsersInLoop(Operation *op, scf::ForOp forOp) {
-  struct Use {
-    Use(OpOperand &use)
-        : op(use.getOwner()), operandNumber(use.getOperandNumber()) {}
-    Operation *op;
-    unsigned int operandNumber;
-  };
   DenseSet<Operation *> topLevelUsers;
-  SmallVector<Use> q(op->use_begin(), op->use_end());
+  SmallVector<OpOperand *> q;
+  for (auto &use : op->getUses())
+    q.push_back(&use);
   while (!q.empty()) {
     auto use = q.pop_back_val();
-    auto yieldOp = dyn_cast<scf::YieldOp>(use.op);
+    auto yieldOp = dyn_cast<scf::YieldOp>(use->getOwner());
     if (yieldOp && yieldOp->getParentOp() == forOp) {
-      q.append(forOp.getRegionIterArgs()[use.operandNumber].use_begin(),
-               forOp.getRegionIterArgs()[use.operandNumber].use_end());
+      for (auto &use :
+           forOp.getRegionIterArgs()[use->getOperandNumber()].getUses())
+        q.push_back(&use);
       continue;
     }
-    Operation *topLevelUser = forOp.getBody()->findAncestorOpInBlock(*use.op);
+    Operation *topLevelUser =
+        forOp.getBody()->findAncestorOpInBlock(*use->getOwner());
     topLevelUsers.insert(topLevelUser);
   }
   return topLevelUsers;
@@ -173,7 +171,7 @@ ttg::SharedEncodingTrait getSharedEncoding(Operation *op) {
 
   auto ty = cast<RankedTensorType>(op->getResultTypes()[0]);
   auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
-  auto order = ttg::getOrder(ty.getEncoding());
+  auto order = ttg::getOrder(ty);
   if (isTMALoad(op)) {
     // For TMA, the encoding compatible with it takes precedence over local
     // alloc created for the MMA operand.
