@@ -1487,8 +1487,6 @@ struct AtomicRMWOpConversion
       Value atom;
       Value isVecOp;
       if (enableIntraWaveReduce) {
-        // permute to make active lanes at the begining in a wave
-
         atom = atomicIntraWaveReduce(rewriter, rmwPtr, operand, *maybeKind,
                                      atomicMemOrdering, *scopeStr);
       } else {
