@@ -92,8 +92,10 @@ class OptimizeAMDLDSUsage
     auto srcType = cvtOp.getSrc().getType();
     auto dstType = cvtOp.getType();
 
-    auto srcEnc = srcType.getEncoding();
-    auto dstEnc = dstType.getEncoding();
+    auto srcEnc =
+        cast<triton::gpu::DistributedEncodingTrait>(srcType.getEncoding());
+    auto dstEnc =
+        cast<triton::gpu::DistributedEncodingTrait>(dstType.getEncoding());
 
     auto ctx = srcEnc.getContext();
     auto rank = srcType.getRank();

@@ -318,14 +318,14 @@ bool DotOp::verifyDims() {
 
 //-- DotScaledOp --
 bool DotScaledOp::verifyDims() {
-  auto aShape = this->getLhs().getType().getShape();
-  auto bShape = this->getRhs().getType().getShape();
+  auto aShape = this->getA().getType().getShape();
+  auto bShape = this->getB().getType().getShape();
 
   auto aKdim = aShape[aShape.size() - 1];
   auto bKdim = bShape[aShape.size() - 2];
-  if (this->getLhsType() == ScaleDotElemType::E2M1)
+  if (this->getAElemType() == ScaleDotElemType::E2M1)
     aKdim *= 2;
-  if (this->getRhsType() == ScaleDotElemType::E2M1)
+  if (this->getBElemType() == ScaleDotElemType::E2M1)
     bKdim *= 2;
 
   return aKdim == bKdim;
@@ -882,7 +882,7 @@ void MakeTensorPtrOp::build(OpBuilder &builder, OperationState &state,
   auto tensorType = RankedTensorType::get(
       SmallVector<int64_t>(tensorShape.begin(), tensorShape.end()),
       pointerType.getPointeeType());
-  auto result = PointerType::get(tensorType, 1);
+  auto result = PointerType::get(tensorType, pointerType.getAddressSpace());
 
   return build(builder, state, result, base, shape, strides, offsets,
                builder.getDenseI32ArrayAttr(order));
