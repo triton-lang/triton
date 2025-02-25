@@ -1660,7 +1660,7 @@ def test_tensor_atomic_rmw(shape, axis, num_ctas, dtype_x_str, check_return_val,
 @pytest.mark.parametrize("size, num_ctas, dtype_x_str", [(size, num_ctas, dtype_x_str)
                                                          for size in [2, 4, 8, 32, 64, 128]
                                                          for num_ctas in num_ctas_list
-                                                         for dtype_x_str in ['float32']])
+                                                         for dtype_x_str in ['float16', 'float32']])
 def test_tensor_atomic_add_non_exclusive_offset(size, num_ctas, dtype_x_str, device):
 
     @triton.jit
@@ -1685,7 +1685,7 @@ def test_tensor_atomic_add_non_exclusive_offset(size, num_ctas, dtype_x_str, dev
                           for idx_order in ['increase', 'decrease', 'random_no_duplication', 'random']
                           for mask_step in range(1, 5)
                           for num_ctas in num_ctas_list
-                          for dtype_x_str in ['float16']])
+                          for dtype_x_str in ['float16', 'float32']])
 def test_tensor_atomic_add_access_patterns(shape, idx_order, mask_step, num_ctas, dtype_x_str, device):
     check_type_supported(dtype_x_str, device)
     if is_interpreter():
