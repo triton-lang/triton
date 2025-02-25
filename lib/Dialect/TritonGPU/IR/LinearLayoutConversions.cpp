@@ -1490,4 +1490,37 @@ LinearLayout chooseScaledMfmaScaleLayout(
   return newLL;
 }
 
+LinearLayout getScaleTMEMStoreLinearLayout(RankedTensorType scaleType,
+                                           int numWarps) {
+  MLIRContext *ctx = scaleType.getContext();
+
+  using basisT = std::vector<std::vector<int32_t>>;
+  StringAttr kRegister = StringAttr::get(ctx, "register");
+  StringAttr kLane = StringAttr::get(ctx, "lane");
+  StringAttr kWarp = StringAttr::get(ctx, "warp");
+
+  int64_t M = scaleType.getDimSize(0);
+  int64_t N = scaleType.getDimSize(1);
+  auto CTALayout = getCTALayout(scaleType.getEncoding());
+  basisT regBase;
+  for (int i = 1; i < N; i = i << 1) {
+    regBase.push_back({0, i});
+  }
+  // For N < 4, duplicate the scales up to 4 elements.
+  for (int i = N; i < 4; i = i << 1) {
+    regBase.push_back({0, 0});
+  }
+  basisT laneBase = {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}};
+  basisT warpBase = {{0, 0}, {0, 0}};
+  for (int i = 32; i < M; i = i << 1) {
+    regBase.push_back({i, 0});
+  }
+  SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, 2);
+  auto regLanes =
+      LinearLayout({{kRegister, regBase}, {kLane, laneBase}, {kWarp, warpBase}},
+                   {outDimNames[0], outDimNames[1]});
+
+  return combineCtaCgaWithShape(regLanes, CTALayout, scaleType.getShape());
+}
+
 } // namespace mlir::triton::gpu
