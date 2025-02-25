@@ -567,3 +567,32 @@ llvm.func @no_captures() attributes {allocation.offset = 0 : i32} {
 }
 
 }
+
+// -----
+
+module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.total-num-warps" = 6 : i32} {
+
+llvm.mlir.global external @global_smem() {addr_space = 3 : i32, alignment = 16 : i64} : !llvm.array<0 x i8>
+
+// CHECK-LABEL: @type_conversion_results
+// CHECK-NOT: !tt.ptr<i32>
+// CHECK-NOT: unrealized_conversion_cast
+llvm.func @type_conversion_results(%arg0: !llvm.ptr<1>) -> !llvm.ptr<1> attributes {allocation.offset = 0 : i32} {
+  %0 = builtin.unrealized_conversion_cast %arg0 : !llvm.ptr<1> to !tt.ptr<i32>
+  %1 = ttg.warp_specialize(%0) attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32: 4>}
+  default {
+    // CHECK: llvm.br [[AFTER:\^.*]](%arg0 : !llvm.ptr<1>)
+    ttg.warp_yield %0 : !tt.ptr<i32>
+  }
+  partition0(%arg1: !tt.ptr<i32>) num_warps(2) {
+    %3 = builtin.unrealized_conversion_cast %arg1 : !tt.ptr<i32> to !llvm.ptr<1>
+    %4 = llvm.load %3 : !llvm.ptr<1> -> i32
+    ttg.warp_return
+  } : (!tt.ptr<i32>) -> !tt.ptr<i32>
+  // CHECK: [[AFTER]]([[OUT:%.*]]: !llvm.ptr<1>):
+  %2 = builtin.unrealized_conversion_cast %1 : !tt.ptr<i32> to !llvm.ptr<1>
+  // CHECK-NEXT: return [[OUT]]
+  llvm.return %2 : !llvm.ptr<1>
+}
+
+}

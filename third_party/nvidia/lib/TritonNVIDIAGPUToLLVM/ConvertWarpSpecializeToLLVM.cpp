@@ -4,7 +4,9 @@
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
+#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
@@ -16,6 +18,53 @@ namespace mlir::triton {
 using namespace mlir;
 using namespace mlir::triton;
 using namespace mlir::triton::gpu;
+
+//===----------------------------------------------------------------------===//
+// convertOpTypes
+//===----------------------------------------------------------------------===//
+
+static void convertOpTypes(Operation *op, const TypeConverter &typeConverter) {
+  ImplicitLocOpBuilder b(op->getLoc(), op);
+  SmallVector<Value> operands = llvm::to_vector(op->getOperands());
+  for (Value &operand : operands) {
+    Type type = typeConverter.convertType(operand.getType());
+    if (type != operand.getType()) {
+      operand =
+          b.create<UnrealizedConversionCastOp>(type, operand).getResult(0);
+    }
+  }
+  op->setOperands(operands);
+
+  for (Region &region : op->getRegions()) {
+    b.setInsertionPointToStart(&region.front());
+    for (BlockArgument arg : llvm::to_vector(region.getArguments())) {
+      Type type = typeConverter.convertType(arg.getType());
+      BlockArgument newArg = region.addArgument(type, arg.getLoc());
+      auto cast = b.create<UnrealizedConversionCastOp>(arg.getType(), newArg);
+      arg.replaceAllUsesWith(cast.getResult(0));
+      region.eraseArgument(0);
+    }
+  }
+
+  SmallVector<Type> resultTypes;
+  (void)typeConverter.convertTypes(op->getResultTypes(), resultTypes);
+  if (TypeRange(resultTypes) == op->getResultTypes())
+    return;
+  OperationState state(op->getLoc(), op->getName(), op->getOperands(),
+                       resultTypes, op->getAttrs());
+  for (Region &region : op->getRegions())
+    state.addRegion()->takeBody(region);
+  b.setInsertionPoint(op);
+  Operation *newOp = b.create(state);
+
+  SmallVector<Value> results;
+  for (auto [i, result, type] :
+       llvm::enumerate(newOp->getResults(), op->getResultTypes())) {
+    auto cast = b.create<UnrealizedConversionCastOp>(type, result);
+    op->getResult(i).replaceAllUsesWith(cast.getResult(0));
+  }
+  op->erase();
+}
 
 //===----------------------------------------------------------------------===//
 // Utilities
@@ -298,10 +347,16 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
       b.setInsertionPoint(op);
       createBarrier(b, kSwitchLoopBarrierIdx, /*numThreads=*/std::nullopt,
                     /*aligned=*/false);
-      b.replaceOpWithNewOp<LLVM::BrOp>(op, after);
+      b.replaceOpWithNewOp<LLVM::BrOp>(op, op.getOperands(), after);
     });
     after->getParent()->getBlocks().splice(after->getIterator(),
                                            ws.getDefaultRegion().getBlocks());
+
+    // Replace the results.
+    auto outputs = after->addArguments(
+        ws.getResultTypes(),
+        SmallVector<Location>(ws.getNumResults(), ws.getLoc()));
+    ws.replaceAllUsesWith(outputs);
     ws.erase();
   }
 
@@ -321,6 +376,21 @@ struct ConvertWarpSpecializeToLLVM
     // FIXME: Assume warp specialization only happens on Blackwell.
     NVIDIA::TargetInfo targetInfo(/*computeCapability=*/100,
                                   /*ptxVersion=*/100);
+
+    // Convert types and cleanup unrealized conversions.
+    mlir::LowerToLLVMOptions option(&getContext());
+    option.overrideIndexBitwidth(32);
+    TritonGPUToLLVMTypeConverter typeConverter(&getContext(), option,
+                                               targetInfo);
+    mod.walk([&](Operation *op) {
+      if (isa<WarpSpecializeOp, WarpSpecializePartitionsOp, WarpYieldOp>(op))
+        convertOpTypes(op, typeConverter);
+    });
+    RewritePatternSet patterns(&getContext());
+    UnrealizedConversionCastOp::getCanonicalizationPatterns(patterns,
+                                                            &getContext());
+    if (failed(applyPatternsGreedily(mod, std::move(patterns))))
+      return signalPassFailure();
 
     SmallVector<LLVM::LLVMFuncOp> kernels;
     for (auto func : mod.getOps<LLVM::LLVMFuncOp>()) {
