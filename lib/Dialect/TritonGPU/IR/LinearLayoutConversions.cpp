@@ -1,5 +1,6 @@
 #include <vector>
 
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -13,6 +14,8 @@
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
+
+using mlir::triton::ScaleDotElemType;
 
 namespace mlir::triton::gpu {
 namespace {
@@ -1333,6 +1336,156 @@ LinearLayout chooseDsReadB64Tr16Layout(Attribute enc, ArrayRef<int64_t> shape,
                                        int32_t elemBitWidth) {
   auto dot = cast<DotOperandEncodingAttr>(enc);
   return chooseDotDsReadB64Tr16Layout(dot, shape, elemBitWidth);
+}
+
+LinearLayout
+chooseScaledMfmaOperandLayout(AMDMfmaEncodingAttr mfmaEnc, int kWidth,
+                              int dotOperandIdx, ScaleDotElemType elemType,
+                              llvm::ArrayRef<int64_t> dotOperandShape) {
+  MLIRContext *ctx = mfmaEnc.getContext();
+  unsigned mDim = mfmaEnc.getMDim();
+  if (elemType == ScaleDotElemType::E2M1) {
+    auto newEncoding =
+        DotOperandEncodingAttr::get(ctx, dotOperandIdx, mfmaEnc, kWidth / 2);
+    return newEncoding.toLinearLayout(dotOperandShape);
+  }
+
+  // For mxfp8, each lane contains 32 elements, consisting of two blocks
+  // of 16 consecutive elements. There's a gap between these two blocks,
+  // which is not supported by normal dot layout.
+  assert(elemType == ScaleDotElemType::E4M3 ||
+         elemType == ScaleDotElemType::E5M2);
+  using basisT = std::vector<std::vector<int32_t>>;
+  unsigned rank = dotOperandShape.size();
+  auto standardOutDims = standardOutDimNames(ctx, rank);
+  auto warpOrder = mfmaEnc.getWarpOrder();
+
+  StringAttr kRegister = StringAttr::get(ctx, "register");
+  StringAttr kLane = StringAttr::get(ctx, "lane");
+  StringAttr kWarp = StringAttr::get(ctx, "warp");
+
+  basisT regBase = {{0, 1}, {0, 2}, {0, 4}, {0, 8}};
+  basisT laneBase = {{1, 0}, {2, 0}, {4, 0}, {8, 0}};
+  int32_t kTileSize;
+  if (mDim == 16) {
+    regBase.emplace_back(std::vector<int32_t>{0, 64});
+    laneBase.emplace_back(std::vector<int32_t>{0, 16});
+    laneBase.emplace_back(std::vector<int32_t>{0, 32});
+    kTileSize = kWidth * 4;
+  } else {
+    assert(mDim == 32);
+    regBase.emplace_back(std::vector<int32_t>{0, 32});
+    laneBase.emplace_back(std::vector<int32_t>{16, 0});
+    laneBase.emplace_back(std::vector<int32_t>{0, 16});
+    kTileSize = kWidth * 2;
+  }
+  // Add repeats of registers along K dimension to register base vectors
+  int64_t kSize = dotOperandIdx == 0 ? dotOperandShape[1] : dotOperandShape[0];
+  for (int32_t elem = kTileSize; elem < kSize; elem *= 2) {
+    regBase.emplace_back(std::vector<int32_t>{0, elem});
+  }
+
+  // Order of dimensionality changes on A/B operand, so here we need to reverse
+  // if it's operand B.
+  std::vector<int> repOrder = {0, 1};
+  if (dotOperandIdx == 1) {
+    std::reverse(repOrder.begin(), repOrder.end());
+  }
+
+  auto regLanes = LinearLayout(
+      {{kRegister, regBase}, {kLane, laneBase}},
+      {standardOutDims[repOrder[0]], standardOutDims[repOrder[1]]});
+
+  auto warps = identityStandardND(kWarp, mfmaEnc.getWarpsPerCTA(), warpOrder);
+
+  return combineCtaCgaWithShape(regLanes.transposeOuts(standardOutDims) *
+                                    warps.transposeOuts(standardOutDims),
+                                mfmaEnc.getCTALayout(), dotOperandShape);
+}
+
+LinearLayout chooseScaledMfmaScaleLayout(
+    MLIRContext *ctx, int dotOperandIdx,
+    const std::vector<std::vector<int32_t>> &dotOperandWarpBasis,
+    ArrayRef<int64_t> dotOperandShape, unsigned mfmaMDim) {
+  using basisT = std::vector<std::vector<int32_t>>;
+  unsigned rank = dotOperandShape.size();
+  auto order = mlir::triton::gpu::getMatrixOrder(rank, /*rowMajor=*/true);
+  auto standardOutDims = standardOutDimNames(ctx, rank);
+  StringAttr kRegister = StringAttr::get(ctx, "register");
+  StringAttr kLane = StringAttr::get(ctx, "lane");
+  StringAttr kWarp = StringAttr::get(ctx, "warp");
+  StringAttr kBlock = StringAttr::get(ctx, "block");
+  // Init register layout. Will be adjusted later
+  auto regs = mlir::triton::identityStandardND(kRegister, {1, 1}, order);
+  LinearLayout lanes = LinearLayout::empty();
+  // In scaled dot, the shapes of operands(without batch dimension) are,
+  // respectively:
+  // - A: [M, K]
+  // - B: [K, N]
+  // - aScale: [M, K / 32]
+  // - bScale: [N, K / 32]
+  //
+  // To correctly feed A/B and its scale into instruction, we need to
+  // distribute aScale/bScale among warps in the same way as A/B. But bScale
+  // is not transposed like B. So we need to transpose the warp layout of
+  // bScale.
+  //
+  // The tricky part is, our desired outputs are [dim0, dim1], but
+  // at this position, the layouts are transposed to [dim1, dim0]. So
+  // instead of reverse bScale's layout, we need to reverse aScale's. There
+  // will be a transpose in the end to correct everything.
+  basisT warps = dotOperandWarpBasis;
+  if (dotOperandIdx == 0) {
+    for (auto &basis : warps) {
+      std::reverse(basis.begin(), basis.end());
+    }
+  }
+  // In general, for both 32x32 and 16x16 scaled mfma, and no matter what
+  // data type the A/B operand is, each lane takes 32 elements from A/B
+  // alone K dim, and 1 or 2 elements from scale accordingly. The number of
+  // scale's elements in a lane varies because the 32 elements from A/B may
+  // not be consecutive.
+  //
+  // For mxfp4, these 32 elements are consecutive, so only 1 scale element
+  // is required. But for mxfp6/mxfp8, there are 2 16-consecutive elements
+  // blocks, so 2 scale elements are required.
+  if (mfmaMDim == 32) {
+    // For ROCDL::mfma_scale_f32_32x32x64_f8f6f4 with fp4 input, each lane
+    // takes 32 consecutive elements from A alone K dimension. The first
+    // 32 lanes collectively handle A[0:32][0:32], and the other 32 lanes
+    // collectively handle A[0:32][32:64]. Each lane take 1 scale element
+    // accordingly. Similar to B and bScale.
+    lanes = LinearLayout(
+        {{kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {1, 0}}},
+         {kWarp, warps},
+         {kBlock, {}}},
+        {standardOutDims[order[0]], standardOutDims[order[1]]});
+  } else {
+    assert(mfmaMDim == 16);
+    // For ROCDL::mfma_scale_f32_16x16x128_f8f6f4 with fp4 input, each lane
+    // takes 32 consecutive elements from A alone K dimension. The first
+    // 16 lanes collectively handle A[0:16][0:32], and another 16 lanes
+    // collectively handle A[0:16][32:64] and so on. Each lane take 1 scale
+    // element accordingly. Similar to B and bScale.
+    lanes =
+        LinearLayout({{kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {1, 0}, {2, 0}}},
+                      {kWarp, warps},
+                      {kBlock, {}}},
+                     {standardOutDims[order[0]], standardOutDims[order[1]]});
+  }
+  LinearLayout newLL = regs * lanes;
+
+  // Adjust register-level layout to fill the shape, at this level, both
+  // aScale and bScale should align with A operand.
+  SmallVector<int, 2> repOrder = {1, 0};
+  for (auto d : repOrder) {
+    auto outDim = standardOutDims[d];
+    auto dimSize = newLL.getOutDimSize(outDim);
+    newLL *= LinearLayout::identity1D(dotOperandShape[d] / dimSize, kRegister,
+                                      outDim);
+  }
+  newLL = newLL.transposeOuts(standardOutDims);
+  return newLL;
 }
 
 } // namespace mlir::triton::gpu
