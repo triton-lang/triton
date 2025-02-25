@@ -113,19 +113,11 @@ SmallVector<unsigned> getSizePerThread(Attribute layout) {
   }
 }
 
-SmallVector<unsigned> getContigPerThread(Attribute layout) {
-  if (auto distributedLayout = dyn_cast<DistributedEncodingTrait>(layout)) {
-    return distributedLayout.getContigPerThread();
-  } else {
-    llvm::report_fatal_error("getContigPerThread not implemented");
-    return {};
-  }
-}
-
-SmallVector<unsigned> getUniqueContigPerThread(Attribute layout,
-                                               ArrayRef<int64_t> shape) {
+SmallVector<unsigned> getContigPerThread(RankedTensorType tensorType) {
+  auto layout = tensorType.getEncoding();
+  auto shape = tensorType.getShape();
   auto linearLayout = toLinearLayout(shape, layout);
-  auto llAttr = LinearEncodingAttr::get(layout.getContext(), linearLayout);
+  auto llAttr = LinearEncodingAttr::get(tensorType.getContext(), linearLayout);
   return llAttr.getContigPerThread();
 }
 
@@ -155,6 +147,20 @@ SmallVector<unsigned> getShapePerCTATile(Attribute layout) {
 }
 
 bool isExpensiveView(Type srcType, Type dstType) {
+  auto tensorSrcType = cast<RankedTensorType>(srcType);
+  auto tensorDstType = cast<RankedTensorType>(dstType);
+  auto llSrc =
+      toLinearLayout(tensorSrcType.getShape(), tensorSrcType.getEncoding());
+  auto llDst =
+      toLinearLayout(tensorDstType.getShape(), tensorDstType.getEncoding());
+  // In case there are replicated value we need to make sure the new and old
+  // layout have matching masks.
+  for (auto [srcMask, dstMask] :
+       llvm::zip(llSrc.getFreeVariableMasks(), llDst.getFreeVariableMasks())) {
+    assert(srcMask.first == dstMask.first);
+    if (srcMask.second != dstMask.second)
+      return true;
+  }
   return getTotalElemsPerThread(srcType) != getTotalElemsPerThread(dstType);
 }
 
@@ -321,7 +327,6 @@ SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
   unsigned rank = shape.size();
   SmallVector<int64_t> shapePerCTA(rank);
   for (unsigned i = 0; i < rank; ++i) {
-    // This wrapping rule must be consistent with emitCTAOffsetForLayout
     unsigned splitNum = std::min<unsigned>(shape[i], CTASplitNum[i]);
     shapePerCTA[i] = shape[i] / splitNum;
   }
@@ -1593,7 +1598,12 @@ Attribute SliceEncodingAttr::parse(AsmParser &parser, Type type) {
   if (parser.parseGreater().failed())
     return {};
   unsigned dim = mlir::cast<IntegerAttr>(attrs.get("dim")).getInt();
-  Attribute parent = attrs.get("parent");
+  auto parent = mlir::dyn_cast<DistributedEncodingTrait>(attrs.get("parent"));
+  if (!parent) {
+    parser.emitError(parser.getNameLoc(),
+                     "expected a distributed encoding trait");
+    return {};
+  }
   return parser.getChecked<SliceEncodingAttr>(parser.getContext(), dim, parent);
 }
 
@@ -2286,8 +2296,9 @@ struct TritonGPUInferLayoutInterface
   LogicalResult
   inferReduceOpEncoding(Attribute operandEncoding, unsigned axis,
                         Attribute &resultEncoding) const override {
-    resultEncoding = SliceEncodingAttr::get(getDialect()->getContext(), axis,
-                                            operandEncoding);
+    resultEncoding =
+        SliceEncodingAttr::get(getDialect()->getContext(), axis,
+                               cast<DistributedEncodingTrait>(operandEncoding));
     return success();
   }
 
