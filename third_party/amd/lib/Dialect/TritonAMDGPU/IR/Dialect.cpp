@@ -134,6 +134,32 @@ LogicalResult ExtractSliceOp::verify() {
   return success();
 }
 
+struct CanonicalizeExtractSliceOp
+    : public mlir::OpRewritePattern<amdgpu::ExtractSliceOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(amdgpu::ExtractSliceOp op,
+                  PatternRewriter &rewriter) const override {
+    auto result = op.getResult();
+    auto resultType = cast<RankedTensorType>(result.getType());
+    auto source = op.getSource();
+    auto sourceType = cast<RankedTensorType>(source.getType());
+    auto offsets = op.getStaticOffsets();
+
+    if (resultType == sourceType) {
+      result.replaceAllUsesWith(source);
+      return success();
+    }
+    return failure();
+  }
+};
+
+void ExtractSliceOp::getCanonicalizationPatterns(
+    mlir::RewritePatternSet &patterns, mlir::MLIRContext *context) {
+  patterns.add<CanonicalizeExtractSliceOp>(context);
+}
+
 LogicalResult UpcastMXFPOp::verify() {
   auto fpType = getFpType();
 
@@ -338,8 +364,30 @@ struct CanonicalizeConcatOpFromExtractSlice
   }
 };
 
+struct CanonicalizeConcatOp : public mlir::OpRewritePattern<amdgpu::ConcatOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(amdgpu::ConcatOp op,
+                  PatternRewriter &rewriter) const override {
+
+    auto result = op.getResult();
+    auto sources = op.getSources();
+    auto offsets = op.getCoords();
+    if (sources.size() == 1) {
+      assert(product(offsets) == 1);
+      auto source = sources.front();
+      result.replaceAllUsesWith(source);
+      return success();
+    }
+
+    return failure();
+  }
+};
+
 void ConcatOp::getCanonicalizationPatterns(mlir::RewritePatternSet &patterns,
                                            mlir::MLIRContext *context) {
   patterns.add<CanonicalizeConcatOpFromExtractSlice>(context);
+  patterns.add<CanonicalizeConcatOp>(context);
 }
 } // namespace mlir::triton::amdgpu
