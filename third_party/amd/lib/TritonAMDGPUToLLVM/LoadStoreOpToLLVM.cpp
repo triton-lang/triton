@@ -1161,6 +1161,7 @@ Value generatePopcount64(PatternRewriter &rewriter, Value val) {
 
 Value genReadFirstLane(PatternRewriter &rewriter, Value v) {
   auto loc = v.getLoc();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   std::string intrinsic = "llvm.amdgcn.readfirstlane";
   return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, i32_ty, v)
       ->getResult(0);
@@ -1202,6 +1203,48 @@ Value genI32TiledOp(PatternRewriter &rewriter, Generator genCall,
     vec = b.insert_element(i32VecValTy, vec, result, b.i32_val(i));
   }
   return b.bitcast(vec, ty);
+}
+
+Value genPermuate(PatternRewriter &rewriter, Value v0) {
+  auto loc = v0.getLoc();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value old = b.i32_val(0);
+
+  Value v1 = v0;
+  // v_add_f32 v1, v0, v0 row_shr:1 bound_ctrl:0
+  Value tmp = rewriter.create<ROCDL::DPPUpdateOp>(
+    loc, i32_ty, old, v0, 0x111, 0xF, 0xF, false).getResult();
+  v1 = b.add(v1, tmp);
+  // v_add_f32 v1, v0, v1 row_shr:2 bound_ctrl:0
+  tmp = rewriter.create<ROCDL::DPPUpdateOp>(
+    loc, i32_ty, old, v0, 0x112, 0xF, 0xF, false).getResult();
+  v1 = b.add(v1, tmp);
+  // v_add_f32 v1, v0, v1 row_shr:3 bound_ctrl:0
+  tmp = rewriter.create<ROCDL::DPPUpdateOp>(
+    loc, i32_ty, old, v0, 0x113, 0xF, 0xF, false).getResult();
+  v1 = b.add(v1, tmp);
+
+  // v_add_f32 v1, v1, v1 row_shr:4 bank_mask:0xe
+  tmp = rewriter.create<ROCDL::DPPUpdateOp>(
+    loc, i32_ty, old, v1, 0x114, 0xF, 0xE, true).getResult();
+  v1 = b.add(v1, tmp);
+
+  // v_add_f32 v1, v1, v1 row_shr:8 bank_mask:0xc
+  tmp = rewriter.create<ROCDL::DPPUpdateOp>(
+    loc, i32_ty, old, v1, 0x118, 0xF, 0xC, true).getResult();
+  v1 = b.add(v1, tmp);
+
+  // v_add_f32 v1, v1, v1 row_bcast:15 row_mask:0xa
+  tmp = rewriter.create<ROCDL::DPPUpdateOp>(
+    loc, i32_ty, old, v1, 0x142, 0xA, 0xF, true).getResult();
+  v1 = b.add(v1, tmp);
+
+  // v_add_f32 v1, v1, v1 row_bcast:31 row_mask:0xc
+  tmp = rewriter.create<ROCDL::DPPUpdateOp>(
+    loc, i32_ty, old, v1, 0x143, 0xC, 0xF, true).getResult();
+  v1 = b.add(v1, tmp);
+
+  return v1;
 }
 
 struct AtomicRMWOpConversion
@@ -1288,6 +1331,7 @@ struct AtomicRMWOpConversion
 
     // TODO: support data types less than 32 bits
     enableIntraWaveReduce &= valueElemNbits >= 32;
+    // enableIntraWaveReduce = false;
 
     // In the case of unpaired f16 elements utilize dpp instructions to
     // accelerate atomics. Here is an algorithm of lowering

@@ -1681,11 +1681,11 @@ def test_tensor_atomic_add_non_exclusive_offset(size, num_ctas, dtype_x_str, dev
 @pytest.mark.interpreter
 @pytest.mark.parametrize("shape, idx_order, mask_step, num_ctas, dtype_x_str",
                          [(shape, idx_order, mask_step, num_ctas, dtype_x_str)
-                          for shape in [(2, 2), (5, 5), (6, 6), (8, 8)]
+                          for shape in [(2, 4), (2, 2), (5, 5), (6, 6), (8, 8)]
                           for idx_order in ['increase', 'decrease', 'random_no_duplication', 'random']
                           for mask_step in range(1, 5)
                           for num_ctas in num_ctas_list
-                          for dtype_x_str in ['float16']])
+                          for dtype_x_str in ['float32']])
 def test_tensor_atomic_add_access_patterns(shape, idx_order, mask_step, num_ctas, dtype_x_str, device):
     check_type_supported(dtype_x_str, device)
     if is_interpreter():
@@ -1714,7 +1714,8 @@ def test_tensor_atomic_add_access_patterns(shape, idx_order, mask_step, num_ctas
         idx = torch.randint(0, shape1, size=(shape0, shape1), device=device)
 
     val = torch.randn((shape0, shape1), dtype=getattr(torch, dtype_x_str), device=device)
-    dst = torch.randn((shape0, shape1), dtype=getattr(torch, dtype_x_str), device=device)
+    dst = torch.zeros((shape0, shape1), dtype=getattr(torch, dtype_x_str), device=device)
+    print(f"val_shape = {val.shape}")
 
     dst_ref = dst.clone()
 
@@ -1725,7 +1726,14 @@ def test_tensor_atomic_add_access_patterns(shape, idx_order, mask_step, num_ctas
                 dst_ref[i][elem] += val[i][j]
             cnt += 1
 
+    print(f"val = {val}")
+    print(f"idx = {idx}")
+
     kernel[(1, )](val, idx, dst, shape0, shape1, mask_step, 64, num_ctas=num_ctas)
+
+    print(f"dst_ref = {dst_ref}")
+    print(f"dst     = {dst}")
+
     np.testing.assert_allclose(to_numpy(dst_ref), to_numpy(dst), atol=1e-2)
 
 
