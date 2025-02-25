@@ -300,7 +300,11 @@ def test_constexpr_annotated_global_var_access():
         a = CONSTEXPR_ANNOTATED_GLOBAL  # noqa
 
     # No error.
-    triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constexprs={}))
+    try:
+        triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constexprs={}))
+        assert False, "Using a constexpr annotated global variable should not be allowed"
+    except CompilationError as e:
+        assert "Cannot access global variable" in str(e)
 
 
 CONSTEXPR_GLOBAL = tl.constexpr(42)

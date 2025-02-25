@@ -369,7 +369,7 @@ struct MemDescSubviewOpConversion
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto srcTy = op.getSrc().getType();
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
-    auto layoutOrder = getOrder(srcTy.getEncoding());
+    auto layoutOrder = getOrder(srcTy);
 
     // newBase = base + offset
     auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),

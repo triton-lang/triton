@@ -9,7 +9,6 @@
 
 using namespace mlir;
 
-using mlir::LLVM::getWrappedMultiDimOffset;
 using ::mlir::LLVM::linearize;
 namespace {
 // declare vprintf(i8*, i8*) as external function
@@ -617,6 +616,18 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
 }
 
 int TargetInfo::getSharedAddressSpace() const { return 3; }
+
+int TargetInfo::getAddressSpace(Attribute addressSpace) const {
+  int spaceId = 0;
+  if (isa<triton::gpu::SharedMemorySpaceAttr,
+          triton::nvidia_gpu::TensorMemorySpaceAttr>(addressSpace)) {
+    spaceId = 3;
+  } else {
+    llvm::report_fatal_error(
+        "Only support SharedMemorySpace, TensorMemorySpace for now");
+  }
+  return spaceId;
+}
 
 bool TargetInfo::supportVectorizedAtomics() const {
   return computeCapability >= 90 && ptxVersion >= 81;

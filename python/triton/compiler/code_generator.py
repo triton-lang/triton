@@ -12,7 +12,7 @@ from .. import language
 from .._C.libtriton import ir
 from ..language import constexpr, semantic, str_to_ty, tensor
 from ..language.core import _unwrap_if_constexpr, nv_tma_desc_type, base_value, base_type
-from ..runtime.jit import _normalize_ty, get_jit_fn_file_line
+from ..runtime.jit import get_jit_fn_file_line
 # ideally we wouldn't need any runtime component
 from ..runtime import JITFunction
 from .._utils import find_paths_if, get_iterable_path, set_iterable_path
@@ -347,9 +347,6 @@ class CodeGenerator(ast.NodeVisitor):
         if _is_constexpr(val):
             return True
 
-        if a := self.gscope.get("__annotations__", {}).get(name):
-            return _normalize_ty(a) == "constexpr"
-
         return False
 
     def _is_namedtuple(self, val):
@@ -386,8 +383,8 @@ class CodeGenerator(ast.NodeVisitor):
                 textwrap.dedent(f"""\
                 Cannot access global variable {name} from within @jit'ed
                 function. Triton kernels can only access global variables that
-                are annotated as constexpr (`x: triton.language.constexpr = 42`
-                or `x = triton.language.constexpr(42)`).  Alternatively, set the
+                are instanstiated as constexpr (`x = triton.language.constexpr(42)`). Note that this is different from
+                annotating a variable as constexpr (`x: triton.language.constexpr = 42`), which is not supported.  Alternatively, set the
                 envvar TRITON_ALLOW_NON_CONSTEXPR_GLOBALS=1, but we do not
                 promise to support this forever.""").replace("\n", " "))
 

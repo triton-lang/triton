@@ -85,7 +85,7 @@ public:
     return DotOperandEncodingAttr::get(&ctx, opIdx, wmma, kWidth);
   }
 
-  SliceEncodingAttr slice(Attribute parent, int dim) {
+  SliceEncodingAttr slice(DistributedEncodingTrait parent, int dim) {
     return SliceEncodingAttr::get(&ctx, dim, parent);
   }
 

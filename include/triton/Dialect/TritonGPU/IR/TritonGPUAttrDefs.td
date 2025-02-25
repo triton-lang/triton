@@ -464,6 +464,9 @@ def NVMMASharedEncodingAttr :
     SmallVector<unsigned> getCTAsPerCGA() const;
     SmallVector<unsigned> getCTAOrder() const;
     SmallVector<unsigned> getCTASplitNum() const;
+    SmallVector<unsigned> getOrder() const {
+      return getTransposed() ? SmallVector<unsigned>({0, 1}) : SmallVector<unsigned>({1, 0});
+    }
   }];
   let hasCustomAssemblyFormat = 1;
 }
@@ -517,29 +520,33 @@ We call each individual tile "rep".
                     "SmallVector<unsigned>",
                     "getWarpsPerCTA">,
 
-    InterfaceMethod<"Get the order of the warps per CTA. The fastest-changing axis first",
-                    "SmallVector<unsigned>",
-                    "getWarpOrder">,
 
     InterfaceMethod<"Get the shape of the threads per warp",
                     "SmallVector<unsigned>",
                     "getThreadsPerWarp">,
 
-    InterfaceMethod<"Get the order of the threads per warp. The fastest-changing axis first",
-                    "SmallVector<unsigned>",
-                    "getThreadOrder">,
-
     InterfaceMethod<"Get the shape of the values per thread.",
                     "SmallVector<unsigned>",
                     "getSizePerThread">,
-
-    InterfaceMethod<"Gets the number of contiguous elements per thread.",
-                    "SmallVector<unsigned>",
-                    "getContigPerThread">,
     InterfaceMethod<"Convert to LinearLayout.",
                     "LinearLayout",
                     "toLinearLayout",
-                    (ins "ArrayRef<int64_t>":$shape)>
+                    (ins "ArrayRef<int64_t>":$shape)>,
+
+    // Legacy methods: They do not take into account the shape of the tensor
+    // that is, the fact that we use them to tile the tensor.
+    InterfaceMethod<"Get the default order of the registers per warp. The fastest-changing axis first",
+                    "SmallVector<unsigned>",
+                    "getDefaultOrder">,
+
+    InterfaceMethod<"Get the default order of the threads per warp. The fastest-changing axis first",
+                    "SmallVector<unsigned>",
+                    "getDefaultThreadOrder">,
+
+    InterfaceMethod<"Get the default order of the warps per CTA. The fastest-changing axis first",
+                    "SmallVector<unsigned>",
+                    "getDefaultWarpOrder">
+
   ];
 }
 
@@ -587,13 +594,16 @@ L(T) = [ {0,8} , {1,9} , {2,10}, {3,11}, {0,8} , {1, 9} , {2, 10}, {3, 11},
     SmallVector<unsigned> getCTAOrder() const;
     SmallVector<unsigned> getCTASplitNum() const;
     SmallVector<unsigned> getWarpsPerCTA() const;
-    SmallVector<unsigned> getWarpOrder() const;
     SmallVector<unsigned> getThreadsPerWarp() const;
-    SmallVector<unsigned> getThreadOrder() const;
 
     SmallVector<unsigned> getSizePerThread() const;
 
     LinearLayout toLinearLayout(ArrayRef<int64_t> shape) const;
+
+    // Legacy methods: They do not take into account the shape of the tensor
+    SmallVector<unsigned> getDefaultWarpOrder() const;
+    SmallVector<unsigned> getDefaultThreadOrder() const;
+    SmallVector<unsigned> getDefaultOrder() const;
   }];
 }
 
@@ -624,6 +634,8 @@ def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding"
     SmallVector<unsigned> getContigPerThread() const;
     SmallVector<unsigned> getContigPerWarp() const;
     SmallVector<unsigned> getOrder() const;
+    SmallVector<unsigned> getWarpOrder() const;
+    SmallVector<unsigned> getThreadOrder() const;
 
     // Generalizes get{Warp,Thread,CTA}Order to linear layouts.
     // Returns the order of the dimensions `dimName` of the layout.
@@ -819,12 +831,7 @@ for
     }]>
   ];
 
-  let extraClassDeclaration = extraDistributedDeclaration # [{
-    SmallVector<unsigned> getContigPerThread() {
-      // Block encoding is dense stride layout. The elements per thread are contiguous.
-      return getSizePerThread();
-    };
-  }];
+  let extraClassDeclaration = extraDistributedDeclaration;
 
   let hasCustomAssemblyFormat = 1;
 }
@@ -836,10 +843,6 @@ for
 def MmaEncodingTrait : AttrInterface<"MmaEncodingTrait"> {
   let cppNamespace = "::mlir::triton::gpu";
   let methods = [
-
-    InterfaceMethod<"Return whether the layout support reduction op.",
-                    "bool",
-                    "supportReduction">,
 
     InterfaceMethod<"Return size per thread for dot operands.",
                     "SmallVector<unsigned>",
@@ -971,25 +974,11 @@ V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,
   );
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
-    bool supportReduction() const {
-      return true;
-    }
     SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, int opIdx) const;
     SmallVector<int64_t> getInstrShapeForOperand(int kWidth, int opIdx) const;
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape, int kWidth, int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
     SmallVector<unsigned> getThreadsPerWarpForOperand(int opIdx) const;
-
-    SmallVector<unsigned> getContigPerThread() {
-      auto rank = getWarpsPerCTA().size();
-      SmallVector<unsigned> contigPerThread(rank, 1);
-      if (getIsTransposed())
-        contigPerThread[rank - 1] = 4;
-      else
-        contigPerThread[rank - 2] = 4;
-      return contigPerThread;
-    };
-
   }];
 
   let genVerifyDecl = 1;
@@ -1100,9 +1089,6 @@ Row |
   let hasCustomAssemblyFormat = 1;
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
-    bool supportReduction() const {
-      return true;
-    }
     SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, int opIdx) const;
     SmallVector<int64_t> getElemsPerInstrForOperands() const;
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape,
@@ -1110,16 +1096,6 @@ Row |
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
     SmallVector<unsigned> getThreadsPerWarpForOperand(int opIdx) const;
     static SmallVector<unsigned> getMNKDimPerInstr();
-
-    SmallVector<unsigned> getContigPerThread() {
-      auto rank = getWarpsPerCTA().size();
-      assert(rank == 2 || rank == 3);
-      SmallVector<unsigned> contigPerThread(rank, 1);
-      if (getVersion() == 2) {
-        contigPerThread[rank - 2] = 8;
-      }
-      return contigPerThread;
-    };
   }];
 }
 
@@ -1228,23 +1204,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
                                           int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
     SmallVector<unsigned> getThreadsPerWarpForOperand(int opIdx) const;
-
-    bool supportReduction() const {
-      if (isAmpere() || isHopper()) {
-        return true;
-      }
-      return false;
-    };
     SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, int opIdx) const;
-
-    SmallVector<unsigned> getContigPerThread() {
-      assert(isAmpere() || isHopper());
-      auto rank = getWarpsPerCTA().size();
-      SmallVector<unsigned> contigPerThread(rank, 1);
-      contigPerThread[rank - 1] = 2;
-      return contigPerThread;
-    };
-
   }];
 
   let hasCustomAssemblyFormat = 1;
@@ -1284,20 +1244,12 @@ def SliceEncodingAttr : DistributedEncoding<"SliceEncoding", "slice_encoding"> {
   let parameters = (
     ins
     "unsigned":$dim,
-    // TODO: constraint here to only take distributed encodings
-    "Attribute":$parent
+    "DistributedEncodingTrait":$parent
   );
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
     template<class T>
     SmallVector<T> paddedShape(ArrayRef<T> shape) const;
-
-    SmallVector<unsigned> getContigPerThread() {
-      auto parentLayout = mlir::cast<DistributedEncodingTrait>(getParent());
-      auto parentContigPerThread = parentLayout.getContigPerThread();
-      parentContigPerThread.erase(parentContigPerThread.begin() + getDim());
-      return parentContigPerThread;
-    };
   }];
 
   let hasCustomAssemblyFormat = 1;
@@ -1365,20 +1317,7 @@ vecIdx (index of the element in the quad; this is always along the k-dim)
 
   let assemblyFormat = "`<` `{` struct(params) `}` `>`";
   let genVerifyDecl = 1;
-  let extraClassDeclaration = extraDistributedDeclaration # [{
-    SmallVector<unsigned> getContigPerThread() {
-      auto rank = getWarpsPerCTA().size();
-      assert(rank == 2 || rank == 3);
-      SmallVector<unsigned> contigPerThread(rank, 1);
-      auto kWidth = getKWidth();
-      assert(kWidth != 0 && "Do not support kWidth=0");
-      if (getOpIdx() == 0)
-        contigPerThread[rank - 1] = kWidth;
-      else
-        contigPerThread[rank - 2] = kWidth;
-      return contigPerThread;
-    };
-  }];
+  let extraClassDeclaration = extraDistributedDeclaration;
 }
 
 def TTG_SharedMemorySpace : AttrDef<TritonGPU_Dialect, "SharedMemorySpace"> {

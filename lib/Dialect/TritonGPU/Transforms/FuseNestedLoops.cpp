@@ -2,6 +2,7 @@
 #include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
+#include "mlir/Transforms/LoopInvariantCodeMotionUtils.h"
 #include "mlir/Transforms/RegionUtils.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
@@ -1053,6 +1054,7 @@ static LogicalResult preprocessLoopNest(const LoopNest &nest,
   scf::ForOp &outerLoop = nest.root->loop;
   scf::ForOp &innerLoop = nest.root->children.front()->loop;
 
+  moveLoopInvariantCode(outerLoop);
   optimizeEpilogueDependencies(outerLoop, innerLoop, domInfo);
   return speculateInnerLoopLength(outerLoop, innerLoop, domInfo);
 }

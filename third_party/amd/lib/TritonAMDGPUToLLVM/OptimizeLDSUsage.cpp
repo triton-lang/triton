@@ -92,8 +92,10 @@ class OptimizeAMDLDSUsage
     auto srcType = cvtOp.getSrc().getType();
     auto dstType = cvtOp.getType();
 
-    auto srcEnc = srcType.getEncoding();
-    auto dstEnc = dstType.getEncoding();
+    auto srcEnc =
+        cast<triton::gpu::DistributedEncodingTrait>(srcType.getEncoding());
+    auto dstEnc =
+        cast<triton::gpu::DistributedEncodingTrait>(dstType.getEncoding());
 
     auto ctx = srcEnc.getContext();
     auto rank = srcType.getRank();
@@ -121,7 +123,7 @@ class OptimizeAMDLDSUsage
     }
 
     auto layoutCTA = triton::gpu::getCTALayout(srcEnc);
-    auto order = triton::gpu::getOrder(srcEnc);
+    auto order = triton::gpu::getOrder(srcType);
     SmallVector<unsigned> dummyWarpsPerCTA(rank, 1);
 
     auto baseFallbackLayout = triton::gpu::BlockedEncodingAttr::get(
