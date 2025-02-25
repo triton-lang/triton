@@ -297,7 +297,8 @@ class RMSNorm(torch.autograd.Function):
     def forward(ctx, x, g, y, rsigma, dx, dg, dg_tmp, n_rows, n_cols, ZERO_CENTERED_GAMMA, blk_size, USE_BLOCKED,
                 NUM_PRGMS, epsilon=1e-6):
         # heuristics for number of warps
-        num_warps = min(max(blk_size // 256, 1), 8)
+        #    num_warps = min(max(blk_size // 256, 1), 8)
+        num_warps = 8
         grid = lambda meta: (NUM_PRGMS, )
         rms_kernel[grid](y, x, g, rsigma, x.stride(0), y.stride(0), n_rows, n_cols, epsilon, ZERO_CENTERED_GAMMA,
                          blk_size, USE_BLOCKED, NUM_PRGMS)
@@ -336,8 +337,8 @@ class RMSNorm(torch.autograd.Function):
 
         #        grid_reduce = lambda meta: (triton.cdiv(n_cols, blk_size), )
         grid_reduce = lambda meta: [triton.cdiv(n_cols, meta['BLOCK_SIZE_N'])]
-        _rmsnorm_bwd_dg_reduce[grid_reduce](dg_tmp, dg, dg_tmp.stride(0), n_rows, n_cols, BLOCK_SIZE_M=32,
-                                            BLOCK_SIZE_N=128)
+        _rmsnorm_bwd_dg_reduce[grid_reduce](dg_tmp, dg, dg_tmp.stride(0), n_rows, n_cols, BLOCK_SIZE_M=128,
+                                            BLOCK_SIZE_N=64)
 
         return dx, dg, None, None, None, None, None, None, None, None, None, None, None
 
@@ -527,8 +528,9 @@ def run_benchmark(args):
         dg = torch.empty((1, N), device='cuda', dtype=dtype, requires_grad=False)
         dg_tmp = torch.zeros(M, N, device='cuda', dtype=torch.float32, requires_grad=False)
         n_rows, n_cols = x.shape
-        MAX_FUSED_SIZE = 65536 // x.element_size()
-        blk_size = min(MAX_FUSED_SIZE, triton.next_power_of_2(n_cols))
+        #        MAX_FUSED_SIZE = 65536 // x.element_size()
+        #        blk_size = min(MAX_FUSED_SIZE, triton.next_power_of_2(n_cols))
+        blk_size = 1024
         USE_BLOCKED = n_cols > blk_size
         NUM_PRGMS = min(n_rows, get_num_sms())
         stream = torch.cuda.Stream()
