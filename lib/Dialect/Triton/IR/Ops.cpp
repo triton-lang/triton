@@ -318,14 +318,14 @@ bool DotOp::verifyDims() {
 
 //-- DotScaledOp --
 bool DotScaledOp::verifyDims() {
-  auto aShape = this->getLhs().getType().getShape();
-  auto bShape = this->getRhs().getType().getShape();
+  auto aShape = this->getA().getType().getShape();
+  auto bShape = this->getB().getType().getShape();
 
   auto aKdim = aShape[aShape.size() - 1];
   auto bKdim = bShape[aShape.size() - 2];
-  if (this->getLhsType() == ScaleDotElemType::E2M1)
+  if (this->getAElemType() == ScaleDotElemType::E2M1)
     aKdim *= 2;
-  if (this->getRhsType() == ScaleDotElemType::E2M1)
+  if (this->getBElemType() == ScaleDotElemType::E2M1)
     bKdim *= 2;
 
   return aKdim == bKdim;
@@ -1046,7 +1046,7 @@ JoinOp::inferReturnTypes(MLIRContext *context, std::optional<Location> location,
   Attribute retEnc;
   if (srcEnc) {
     if (cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
-            ->inferJoinOpEncoding(srcEnc, retEnc, location)
+            ->inferJoinOpEncoding(srcEnc, retEnc, srcTy.getShape(), location)
             .failed()) {
       return failure();
     }
@@ -1079,7 +1079,7 @@ LogicalResult SplitOp::inferReturnTypes(
   Attribute retEnc;
   if (srcEnc) {
     if (cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
-            ->inferSplitOpEncoding(srcEnc, retEnc, location)
+            ->inferSplitOpEncoding(srcEnc, retEnc, srcTy.getShape(), location)
             .failed()) {
       return failure();
     }

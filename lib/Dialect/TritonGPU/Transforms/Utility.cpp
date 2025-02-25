@@ -12,6 +12,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
@@ -138,6 +139,10 @@ unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
                         << ", contig: " << valInfo.getContiguity(order[0])
                         << ", alignment: " << alignment);
   return currPerThread;
+}
+
+bool isView(Operation *op) {
+  return isa<ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp>(op);
 }
 
 //===----------------------------------------------------------------------===//
@@ -297,8 +302,9 @@ std::string GraphLayoutMarker::getColor(const Type &type) const {
 // -------------------------------------------------------------------------- //
 
 static Attribute inferDstEncoding(triton::ReduceOp op, Attribute encoding) {
-  return triton::gpu::SliceEncodingAttr::get(op->getContext(), op.getAxis(),
-                                             encoding);
+  return triton::gpu::SliceEncodingAttr::get(
+      op->getContext(), op.getAxis(),
+      cast<ttg::DistributedEncodingTrait>(encoding));
 }
 
 static Attribute inferDstEncoding(triton::ExpandDimsOp op, Attribute encoding) {
@@ -312,9 +318,10 @@ static Attribute inferDstEncoding(triton::ExpandDimsOp op, Attribute encoding) {
 
 static Attribute inferDstEncoding(JoinOp op, Attribute srcEnc) {
   Attribute dstEnc;
+  auto shape = op.getLhs().getType().getShape();
   if (srcEnc.getDialect()
           .getRegisteredInterface<DialectInferLayoutInterface>()
-          ->inferJoinOpEncoding(srcEnc, dstEnc,
+          ->inferJoinOpEncoding(srcEnc, dstEnc, shape,
                                 /*loc=*/std::nullopt)
           .succeeded()) {
     return dstEnc;
@@ -324,9 +331,10 @@ static Attribute inferDstEncoding(JoinOp op, Attribute srcEnc) {
 
 static Attribute inferDstEncoding(SplitOp op, Attribute srcEnc) {
   Attribute dstEnc;
+  auto shape = op.getSrc().getType().getShape();
   if (srcEnc.getDialect()
           .getRegisteredInterface<DialectInferLayoutInterface>()
-          ->inferSplitOpEncoding(srcEnc, dstEnc,
+          ->inferSplitOpEncoding(srcEnc, dstEnc, shape,
                                  /*loc=*/std::nullopt)
           .succeeded()) {
     return dstEnc;
@@ -344,16 +352,18 @@ static Attribute inferSrcEncoding(triton::ReduceOp op, Attribute encoding) {
 }
 
 static Attribute inferSrcEncoding(triton::ExpandDimsOp op, Attribute encoding) {
-  return triton::gpu::SliceEncodingAttr::get(op->getContext(), op.getAxis(),
-                                             encoding);
+  return triton::gpu::SliceEncodingAttr::get(
+      op->getContext(), op.getAxis(),
+      cast<ttg::DistributedEncodingTrait>(encoding));
 }
 
 static Attribute inferSrcEncoding(JoinOp op, Attribute dstEnc) {
   // Split is the inverse of join.
+  auto shape = op.getResult().getType().getShape();
   Attribute srcEnc;
   if (dstEnc.getDialect()
           .getRegisteredInterface<DialectInferLayoutInterface>()
-          ->inferSplitOpEncoding(dstEnc, srcEnc, /*loc=*/std::nullopt)
+          ->inferSplitOpEncoding(dstEnc, srcEnc, shape, /*loc=*/std::nullopt)
           .succeeded()) {
     return srcEnc;
   }
@@ -363,9 +373,10 @@ static Attribute inferSrcEncoding(JoinOp op, Attribute dstEnc) {
 static Attribute inferSrcEncoding(SplitOp op, Attribute dstEnc) {
   // Join is the inverse of split.
   Attribute srcEnc;
+  auto shape = op.getOutLHS().getType().getShape();
   if (dstEnc.getDialect()
           .getRegisteredInterface<DialectInferLayoutInterface>()
-          ->inferJoinOpEncoding(dstEnc, srcEnc, /*loc=*/std::nullopt)
+          ->inferJoinOpEncoding(dstEnc, srcEnc, shape, /*loc=*/std::nullopt)
           .succeeded()) {
     return srcEnc;
   }

@@ -9,7 +9,6 @@
 
 using namespace mlir;
 
-using mlir::LLVM::getWrappedMultiDimOffset;
 using ::mlir::LLVM::linearize;
 namespace {
 // declare vprintf(i8*, i8*) as external function

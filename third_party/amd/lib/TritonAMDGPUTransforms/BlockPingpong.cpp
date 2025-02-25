@@ -1,3 +1,4 @@
+#include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -42,7 +43,7 @@ class Pingponger {
   // rocdl.s.setprio will be mapped to `s_setprio` instruction which set the
   // priority of the warp within a SIMD, determines which warp to occupy the
   // instruction unit when they compete on the same instruction.
-  // We use this instruction in the pingpong sheduling to prevent warps from
+  // We use this instruction in the pingpong scheduling to prevent warps from
   // entering into the dot cluster while the other warp is still busy in the dot
   // cluster. Otherwise pingpong pattern can be broken and performance drops.
   // Currently pingpong only handles two warps, we only need 0/1 priorities.
@@ -70,6 +71,7 @@ private:
   void addAsymmetricSyncToLoop(OpBuilder &builder, Location loc);
   void updateOpInsertion(Operation *Op);
   void appendOp(Operation *Op);
+  void moveOpAndPredecessorsUpSameBlock(Operation *Op);
   void appendSlicedLoadAB(int slice);
   void appendClusterBarrier(OpBuilder &builder, Location loc);
   void appendOpWithPrio(OpBuilder &builder, Operation *Op, Location loc);
@@ -80,6 +82,28 @@ void Pingponger::appendOp(Operation *op) {
   assert(lastInsertedOp != nullptr);
   op->moveAfter(lastInsertedOp);
   lastInsertedOp = op;
+}
+
+// Move the given operations and any predecessors upon which it depends
+// up in the block to the last inserted operation. This does not move
+// operations that reaches the last inserted operation or
+// are not in the same block.
+void Pingponger::moveOpAndPredecessorsUpSameBlock(Operation *op) {
+  assert(lastInsertedOp != nullptr);
+  // TODO: Enable moving ops across blocks
+  assert(lastInsertedOp->isBeforeInBlock(op));
+  SetVector<Operation *> backwardSlice;
+  BackwardSliceOptions opt;
+  opt.omitBlockArguments = true;
+  Operation *checkedOp = lastInsertedOp;
+  opt.filter = [&checkedOp](Operation *op) {
+    return op->getBlock() == checkedOp->getBlock() &&
+           checkedOp->isBeforeInBlock(op);
+  };
+  getBackwardSlice(op, &backwardSlice, opt);
+  for (auto predOp : backwardSlice)
+    appendOp(predOp);
+  appendOp(op);
 }
 void Pingponger::appendSlicedLoadAB(int slice) {
   appendOp(subViewOps[0][slice]);
@@ -245,7 +269,7 @@ LogicalResult Pingponger::sliceDot(OpBuilder &builder, Location loc,
 // (1) sched.barrier : with mask0 to prevent compiler backed from reordering
 //  instructions across the boundary
 // (2) gpu.barrier : ensures asymmetric synchronization at each point
-// (3) setprio (1->0) : in order to avoid incomming warp overtaking resource
+// (3) setprio (1->0) : in order to avoid incoming warp overtaking resource
 //  while the other warp is actively using it.
 //
 // Here's overview of the instruction clusters
@@ -296,7 +320,11 @@ LogicalResult Pingponger::transformFourPPClusters(OpBuilder &builder,
   appendClusterBarrier(builder, loc);
 
   // mem3: local store A and B
-  updateOpInsertion(lStoreOps[1]);
+  // Matmul kernels may use the output of the dot product in another operation
+  // before the local store (e.g. persistent matmul epilogue). To accommodate
+  // such cases, we need to move the local store up in the loop.
+  moveOpAndPredecessorsUpSameBlock(lStoreOps[0]);
+  moveOpAndPredecessorsUpSameBlock(lStoreOps[1]);
   appendClusterBarrier(builder, loc);
 
   // dot3 (4/4)
@@ -342,9 +370,11 @@ LogicalResult Pingponger::transformTwoPPClusters(OpBuilder &builder,
   appendClusterBarrier(builder, loc);
 
   // mem1: local store A and B
-  // Don't need to reorder local_stores, just add cluster barrier after the the
-  // last store
-  updateOpInsertion(lStoreOps[1]);
+  // Matmul kernels may use the output of the dot product in another operation
+  // before the local store (e.g. persistent matmul epilogue). To accommodate
+  // such cases, we need to move the local store up in the loop.
+  moveOpAndPredecessorsUpSameBlock(lStoreOps[0]);
+  moveOpAndPredecessorsUpSameBlock(lStoreOps[1]);
   appendClusterBarrier(builder, loc);
 
   // dot1 (2/2)
@@ -423,7 +453,7 @@ void Pingponger::getDotPingponged() {
   // Pingpong scheduling tries to form two different types of the instruction
   // clusters, i.e., Dot clusters and Memory clusters. While each SIMD has
   // two concurrent warps, both warps can execute a different type of
-  // instruction cluster in parallel.Here are currently available patterns,
+  // instruction cluster in parallel. Here are currently available patterns,
   // more patterns could be added later.
   //
   // (1) One Dot-Memory (ping-pong) cluster
@@ -439,7 +469,7 @@ void Pingponger::getDotPingponged() {
   //   exceeds the amount of register GPU has so, we need to split the dot
   //   into several pieces.
   //
-  // (3) Twp Dot-Memory (ping-pongx2) clusters
+  // (3) Two Dot-Memory (ping-pongx2) clusters
   //  :Covers medium sized tile e.g., 256x128x64_FP16. Different tile size may
   //  require different scheduling pattern because the loop consists of
   //  different amount of memory transfer and dot operation. This scheduling
@@ -495,7 +525,7 @@ void Pingponger::getDotPingponged() {
       return;
 
     // Let half of the warps start the loop first and the others follow later
-    // but in the synchronized way. This can be accompished by calling
+    // but in the synchronized way. This can be accomplished by calling
     // cond_barrier for the second half before the beginning of the loop so they
     // can wait until the first half hit the first barrier in the loop. Also
     // need to call cond_barrier for the first_half after exiting the loop, so

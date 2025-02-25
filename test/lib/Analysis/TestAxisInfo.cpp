@@ -1,3 +1,4 @@
+#include "mlir/IR/Diagnostics.h"
 #include "mlir/Pass/Pass.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
@@ -22,19 +23,20 @@ struct TestAxisInfoPass
     ModuleOp moduleOp = cast<ModuleOp>(operation);
     ModuleAxisInfoAnalysis moduleAxisInfoAnalysis(moduleOp);
     moduleOp.walk([&](FuncOp funcOp) {
-      auto &os = llvm::errs();
-      auto opName = SymbolTable::getSymbolName(funcOp).getValue().str();
-      os << "@" << opName << "\n";
       funcOp.walk([&](Operation *op) {
         if (op->getNumResults() < 1)
           return;
         for (Value result : op->getResults()) {
-          result.print(os);
-          os << " => ";
+          InFlightDiagnostic diag = mlir::emitRemark(op->getLoc());
+          diag << result;
+          diag << " => ";
           auto *axisInfo = moduleAxisInfoAnalysis.getAxisInfo(result);
-          if (axisInfo)
+          if (axisInfo) {
+            std::string str;
+            llvm::raw_string_ostream os(str);
             axisInfo->print(os);
-          os << "\n";
+            diag << str;
+          }
         }
       });
     });

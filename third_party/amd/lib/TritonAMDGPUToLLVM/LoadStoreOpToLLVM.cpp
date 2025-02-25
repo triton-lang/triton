@@ -91,7 +91,6 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
         // Skip when multicast is not enabled in this dimension
         if (CTAsPerCGA[dim] == CTASplitNum[dim])
           continue;
-        // This wrapping rule must be consistent with emitCTAOffsetForLayout
         unsigned splitNum = std::min<unsigned>(shape[dim], CTASplitNum[dim]);
         Value repId = b.udiv(multiDimClusterCTAId[dim], b.i32_val(splitNum));
         // Consider the example where CTAsPerCGA = [4] and CTASplitNum = [2]:

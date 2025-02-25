@@ -47,21 +47,13 @@ public:
 
   triton::ReduceOp getOperation() { return op; }
 
-  bool isReductionOnLayoutFastAxis();
-
   unsigned getThreadOffsetOnReductionAxis();
 
   bool isWarpSynchronous();
 
-  unsigned getInterWarpSize();
-
-  unsigned getIntraWarpSize();
-
   unsigned getInterWarpSizeWithUniqueData();
 
   unsigned getIntraWarpSizeWithUniqueData();
-
-  unsigned getThreadsReductionAxis();
 
   // The shape of the shared memory space needed for the reduction.
   SmallVector<unsigned> getScratchRepShape();
@@ -70,11 +62,7 @@ public:
 
   unsigned getScratchSizeInBytes();
 
-  bool isSupportedLayout();
-
   bool isReduceWithinCTA();
-
-  unsigned getAxis() { return axis; }
 
 private:
   triton::ReduceOp op;
@@ -253,8 +241,6 @@ bool cvtNeedsWarpShuffle(RankedTensorType srcTy, RankedTensorType dstTy);
 bool cvtNeedsSharedMemory(RankedTensorType srcTy, RankedTensorType dstTy);
 
 bool atomicNeedsSharedMemory(Value result);
-
-bool isBlockedToDotShortcut(RankedTensorType srcTy, RankedTensorType dstTy);
 
 // Return true if the src and dst layout match.
 bool matchMmaV3AndDotOperandLayout(RankedTensorType srcTy,
