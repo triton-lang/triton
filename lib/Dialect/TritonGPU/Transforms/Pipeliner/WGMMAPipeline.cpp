@@ -111,7 +111,7 @@ combineRedundantWaitOps(llvm::SmallSetVector<ttg::AsyncWaitOp, 8> &waitOps) {
     SmallVector<Value> depTokens;
     unsigned minWaitNumber = waitOp.getNum();
     Operation *next = waitOp->getNextNode();
-    while (next && isa<ttg::MemDescSubviewOp, ttg::AsyncWaitOp>(next)) {
+    while (next && !isa<ttg::AsyncCommitGroupOp>(next)) {
       if (auto nextWait = dyn_cast<ttg::AsyncWaitOp>(next)) {
         waitGroup.push_back(nextWait);
         minWaitNumber = std::min(minWaitNumber, nextWait.getNum());
@@ -122,7 +122,7 @@ combineRedundantWaitOps(llvm::SmallSetVector<ttg::AsyncWaitOp, 8> &waitOps) {
     }
     if (waitGroup.size() == 1)
       continue;
-    OpBuilder builder(waitGroup.back());
+    OpBuilder builder(waitGroup.front());
     auto newWaitOp = builder.create<ttg::AsyncWaitOp>(waitOp.getLoc(),
                                                       depTokens, minWaitNumber);
     for (auto waitOp : waitGroup) {

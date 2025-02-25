@@ -38,10 +38,9 @@
 // CHECK:   %[[EXT_IDX_2:.*]] = arith.addi %[[EXT_IDX]], %[[CONSTANT_1]] : i32
 // CHECK:   %[[CMP_EXT:.*]] = arith.cmpi slt, %[[EXT_IDX_2]], %[[CONSTANT_2]]
 // CHECK:   %[[EXT_IDX_3:.*]] = arith.select %[[CMP_EXT]], %[[EXT_IDX_2]], %[[CONSTANT_0]]
-// CHECK:   ttg.async_wait {{.*}} {num = 3 : i32}
+// CHECK:   ttg.async_wait {{.*}} {num = 2 : i32}
 // CHECK:   %[[A:.*]] = ttg.memdesc_subview %[[ABUFFER]][%[[EXT_IDX_3]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
 // CHECK:   %[[arg_a0_dot_op:.*]] = ttg.local_load %[[A]]
-// CHECK:   ttg.async_wait {{.*}} {num = 2 : i32}
 // CHECK:   %[[B:.*]] = ttg.memdesc_subview %[[BBUFFER]][%[[EXT_IDX_3]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
 // CHECK:   %[[arg_b0_dot_op_0:.*]] = ttg.local_load %[[B]]
 // CHECK:   tt.dot %[[arg_a0_dot_op]], %[[arg_b0_dot_op_0]], {{.*}}
@@ -754,8 +753,8 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
     %15 = tt.broadcast %13 : tensor<64x1xi32, #blocked> -> tensor<64x16xi32, #blocked>
     %16 = tt.addptr %14, %15 : tensor<64x16x!tt.ptr<f16>, #blocked>, tensor<64x16xi32, #blocked>
     // CHECK: scf.for
-    // CHECK:   ttg.local_load
     // CHECK:   ttg.async_wait {{.*}} {num = 2 : i32}
+    // CHECK:   ttg.local_load
     // CHECK:   ttng.warp_group_dot
     // CHECK-NEXT: ttng.warp_group_dot_wait {{.*}} {pendings = 0 : i32}
     // CHECK:   ttg.async_copy_global_to_local

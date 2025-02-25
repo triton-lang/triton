@@ -40,10 +40,9 @@
 // CHECK-DAG: %[[EXT_IDX_2:.*]] = arith.addi %[[EXT_IDX]], %[[CONSTANT_1]] : i32
 // CHECK-DAG: %[[CMP_EXT:.*]] = arith.cmpi slt, %[[EXT_IDX_2]], %[[CONSTANT_2]]
 // CHECK-DAG: %[[EXT_IDX_3:.*]] = arith.select %[[CMP_EXT]], %[[EXT_IDX_2]], %[[CONSTANT_0]]
-// CHECK-DAG: ttg.async_wait {{.*}} {num = 3 : i32}
+// CHECK-DAG: ttg.async_wait {{.*}} {num = 2 : i32}
 // CHECK-DAG: %[[A0:.*]] = ttg.memdesc_subview %[[ABUFFER]][%[[EXT_IDX_3]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
 // CHECK:   %[[arg_a0_dot_op:.*]] = ttg.local_load %[[A0]]
-// CHECK-DAG: ttg.async_wait {{.*}} {num = 2 : i32}
 // CHECK-DAG: %[[B0:.*]] = ttg.memdesc_subview %[[BBUFFER]][%[[EXT_IDX_3]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
 // CHECK:   %[[arg_b0_dot_op_0:.*]] = ttg.local_load %[[B0]]
 // CHECK:   %[[arg_b0_dot_op_1:.*]] = arith.mulf %[[arg_b0_dot_op_0]]
@@ -193,10 +192,9 @@ tt.func @matmul_loop(%lb : index, %ub : index, %step : index,
 // CHECK:     %[[EXT_IDX_2:.*]] = arith.addi %[[EXT_IDX]], %[[CONSTANT_1]] : i32
 // CHECK:     %[[CMP_EXT:.*]] = arith.cmpi slt, %[[EXT_IDX_2]], %[[CONSTANT_2]]
 // CHECK:     %[[EXT_IDX_3:.*]] = arith.select %[[CMP_EXT]], %[[EXT_IDX_2]], %[[CONSTANT_0]]
-// CHECK:     ttg.async_wait {{.*}} {num = 3 : i32}
+// CHECK:     ttg.async_wait {{.*}} {num = 2 : i32}
 // CHECK:     %[[A:.*]] = ttg.memdesc_subview %[[ABUFFER]][%[[EXT_IDX_3]],
 // CHECK:     %[[arg_a0_dot_op:.*]] = ttg.local_load %[[A]]
-// CHECK:     ttg.async_wait {{.*}} {num = 2 : i32}
 // CHECK:     %[[B:.*]] = ttg.memdesc_subview %[[BBUFFER]][%[[EXT_IDX_3]],
 // CHECK:     %[[arg_b0_dot_op_0:.*]] = ttg.local_load %[[B]]
 // CHECK:     tt.dot %[[arg_a0_dot_op]], %[[arg_b0_dot_op_0]], {{.*}}
@@ -601,7 +599,7 @@ tt.func @indirect_bmm_scalar_dist_one(%77: i64 {tt.divisibility=16: i32},
 // CHECK: ttg.async_copy_global_to_local
 // CHECK: ttg.async_commit_group
 // CHECK: scf.for
-// CHECK: ttg.async_wait {{.*}} {num = 2 : i32}
+// CHECK: ttg.async_wait {{.*}} {num = 1 : i32}
 // CHECK: tt.dot
 // CHECK: %[[NEXT_BUFFER_1:.*]] = tt.addptr %{{.*}}, {{.*}}
 // CHECK: ttg.async_copy_global_to_local %[[NEXT_BUFFER_1]]
