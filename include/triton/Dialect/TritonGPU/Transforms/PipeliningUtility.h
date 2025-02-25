@@ -54,40 +54,8 @@ DenseMap<Operation *, int> deserializeLatencies(ModuleOp module);
 
 // Given a result of MemDescSubview, or Alloca, create a MemDescSubview with a
 // single buffer slice (leading dimension equal to 1), at the given index.
-template <typename BuilderT>
-Value createSingleBufferView(BuilderT &builder, Value alloc, Value idx) {
-  assert(isa<triton::gpu::MemDescType>(alloc.getType()) &&
-         "Expected MemDescType");
-  auto allocDescType = cast<triton::gpu::MemDescType>(alloc.getType());
-  SmallVector<int64_t> shape;
-  if (allocDescType.getShape().size() > 1) {
-    shape.insert(shape.end(), allocDescType.getShape().begin() + 1,
-                 allocDescType.getShape().end());
-  } else {
-    shape.push_back(1);
-  }
-  auto viewDescType = triton::gpu::MemDescType::get(
-      shape, allocDescType.getElementType(), allocDescType.getEncoding(),
-      allocDescType.getMemorySpace(), allocDescType.getMutableMemory(),
-      /*allocShape=*/allocDescType.getAllocShape());
-  SmallVector<Value> idxs = {idx};
-  if (allocDescType.getShape().size() > 1) {
-    Value zero =
-        builder.template create<arith::ConstantIntOp>(alloc.getLoc(), 0, 32);
-    for (unsigned i = 1; i < allocDescType.getShape().size(); i++) {
-      idxs.push_back(zero);
-    }
-  }
-  return builder.template create<triton::gpu::MemDescSubviewOp>(
-      alloc.getLoc(), viewDescType, alloc, idxs);
-}
-
-template <typename BuilderT>
-Value createSingleBufferView(BuilderT &builder, Value alloc, int idx) {
-  return createSingleBufferView(
-      builder, alloc,
-      builder.template create<arith::ConstantIntOp>(alloc.getLoc(), idx, 32));
-}
+Value createSingleBufferView(OpBuilder &builder, Value alloc, Value idx);
+Value createSingleBufferView(OpBuilder &builder, Value alloc, int idx);
 
 // Create an allocation and init the mbarriers.
 Value createBarrierAlloc(scf::ForOp forOp, int numBarriers);
