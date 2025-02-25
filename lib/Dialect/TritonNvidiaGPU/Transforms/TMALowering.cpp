@@ -9,6 +9,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
+#include "llvm/Support/ErrorHandling.h"
 
 #include <memory>
 
@@ -29,14 +30,13 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
   MLIRContext *ctx = op->getContext();
   Attribute sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
   auto loc = op->getLoc();
-  auto order = getOrder(tensorType);
-  auto ctaLayout = getCTALayout(tensorType.getEncoding());
-  Attribute encoding = SwizzledSharedEncodingAttr::get(
-      tensorType.getContext(), 1, 1, 1, order, ctaLayout);
-  if (tensorType.getRank() > 1) {
-    encoding = NVMMASharedEncodingAttr::get(
-        tensorType.getContext(), tensorType.getShape(), order, ctaLayout,
-        tensorType.getElementType(), /*fp4Padded*/ false);
+  Attribute encoding =
+      cast<TensorDescType>(desc.getType()).getBlockType().getEncoding();
+  if (!encoding) {
+    constexpr auto msg =
+        "Internal Error: Tensor descriptor should have encoding set\n";
+    op->emitError() << msg;
+    llvm::report_fatal_error(msg);
   }
   MemDescType memDescType =
       MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
@@ -107,18 +107,17 @@ static void lowerTMAStore(Operation *op, mlir::TypedValue<RankedTensorType> src,
   Attribute sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
   auto loc = op->getLoc();
   auto tensorType = src.getType();
-  auto order = getOrder(tensorType);
-  auto ctaLayout = getCTALayout(tensorType.getEncoding());
-  Attribute encoding = SwizzledSharedEncodingAttr::get(
-      tensorType.getContext(), 1, 1, 1, order, ctaLayout);
-  if (tensorType.getRank() > 1) {
-    encoding = NVMMASharedEncodingAttr::get(
-        tensorType.getContext(), tensorType.getShape(), order, ctaLayout,
-        tensorType.getElementType(), /*fp4Padded*/ false);
+  auto encoding =
+      cast<TensorDescType>(desc.getType()).getBlockType().getEncoding();
+  if (!encoding) {
+    constexpr auto msg =
+        "Internal Error: Tensor descriptor should have encoding set\n";
+    op->emitError() << msg;
+    llvm::report_fatal_error(msg);
   }
-  MemDescType memDescType =
-      MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
-                       encoding, sharedMemorySpace, /*mutableMemory=*/true);
+  MemDescType memDescType = MemDescType::get(
+      tensorType.getShape(), tensorType.getElementType(),
+      tensorType.getEncoding(), sharedMemorySpace, /*mutableMemory=*/true);
   Value alloc = rewriter.create<LocalAllocOp>(loc, memDescType, src);
   rewriter.create<triton::nvidia_gpu::FenceAsyncSharedOp>(loc, false);
   Value tmaPtr =

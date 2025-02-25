@@ -1176,9 +1176,11 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     // figure out that the op is uniform.
     pred = b.and_(pred, LLVM::NVIDIA::createElectPredicate(loc, rewriter));
 
+    Attribute encoding = op.getResult().getType().getEncoding();
+    auto mmaEncoding = dyn_cast_or_null<NVMMASharedEncodingAttr>(encoding);
     int elementSizeInBytes =
         op.getResult().getType().getElementType().getIntOrFloatBitWidth() / 8;
-    int packingFactor = op.getDescAttr().getFp4Padded() ? 2 : 1;
+    int packingFactor = (mmaEncoding && mmaEncoding.getFp4Padded()) ? 2 : 1;
     int totalNumElements =
         product(op.getResult().getType().getShape()) * packingFactor;
     int64_t size = totalNumElements * elementSizeInBytes;

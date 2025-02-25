@@ -2,6 +2,8 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/PatternMatch.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/Attributes.h"
+#include "llvm/Support/Casting.h"
 
 namespace mlir::triton::nvidia_gpu {
 
@@ -22,7 +24,9 @@ mlir::LogicalResult createTMADesc(mlir::Value tmaPtr,
 
   auto elemType = op.getBase().getType().getPointeeType();
   auto elemSize = elemType.getIntOrFloatBitWidth() / 8;
-  bool fp4Padded = op.getDescAttr() && op.getDescAttr()->getFp4Padded();
+  auto mmaEncoding = llvm::dyn_cast_or_null<gpu::NVMMASharedEncodingAttr>(
+      op.getType().getBlockType().getEncoding());
+  bool fp4Padded = mmaEncoding && mmaEncoding.getFp4Padded();
 
   int32_t contig_dim_size = op.getTensorShape().back();
   int32_t contig_dim_size_in_bytes = contig_dim_size * elemSize;
@@ -40,25 +44,15 @@ mlir::LogicalResult createTMADesc(mlir::Value tmaPtr,
   }
 
   unsigned swizzleBytes = 0;
-  if (op.getDescAttr()) {
-    swizzleBytes = op.getDescAttr()->getSwizzlingByteWidth();
+  if (mmaEncoding) {
+    swizzleBytes = mmaEncoding.getSwizzlingByteWidth();
     if (fp4Padded) {
       assert(swizzleBytes == 128 &&
              "elem type .b4x16_p64 supports only 128B swizzling");
     }
   } else {
-    if (contig_dim_size_in_bytes >= 128) {
-      swizzleBytes = 128;
-    } else if (contig_dim_size_in_bytes == 64) {
-      swizzleBytes = 64;
-    } else if (contig_dim_size_in_bytes == 32) {
-      swizzleBytes = 32;
-    } else {
-      op->emitError()
-          << "contiguous box dimension must be at least 32 bytes but got "
-          << contig_dim_size_in_bytes;
-      return failure();
-    }
+    op->emitError() << "Unhandled encoding type";
+    return failure();
   }
 
   int32_t swizzle_mode;
