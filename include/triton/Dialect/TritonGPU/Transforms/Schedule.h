@@ -100,7 +100,6 @@ public:
       }
       llvm::report_fatal_error(
           "One or both clusters not found in clusters list!");
-      return false;
     }
   };
 
