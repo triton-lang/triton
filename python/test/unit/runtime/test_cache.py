@@ -1,16 +1,16 @@
 import importlib.util
 import itertools
 import os
-import pathlib
 import shutil
+import pathlib
 
 import pytest
 import torch
 
 import triton
 import triton.language as tl
-from triton._internal_testing import is_hip
 from triton.runtime.jit import JITFunction
+from triton._internal_testing import is_hip
 
 
 @triton.jit
@@ -81,25 +81,25 @@ def apply_src_change(target, old, new, to_modify):
 
 def test_nochange():
     baseline = kernel.cache_key
-    updated = apply_src_change(kernel, "i + 1", "i + 1", function_1)
+    updated = apply_src_change(kernel, 'i + 1', 'i + 1', function_1)
     assert baseline == updated
 
 
 def test_toplevel_change():
     baseline = kernel.cache_key
-    updated = apply_src_change(kernel, "i + 1", "i + 2", function_1)
+    updated = apply_src_change(kernel, 'i + 1', 'i + 2', function_1)
     assert baseline != updated
 
 
 def test_nested1_change():
     baseline = kernel.cache_key
-    updated = apply_src_change(kernel, "i + 1", "i + 2", function_2)
+    updated = apply_src_change(kernel, 'i + 1', 'i + 2', function_2)
     assert baseline != updated
 
 
 def test_nested2_change():
     baseline = kernel.cache_key
-    updated = apply_src_change(kernel, "i + 1", "i + 2", function_0)
+    updated = apply_src_change(kernel, 'i + 1', 'i + 2', function_0)
     assert baseline != updated
 
 
@@ -128,7 +128,7 @@ def test_combine_fn_change():
 
 
 def write_and_load_module(temp_file: pathlib.Path, code, num_extra_lines):
-    temp_file.write_text(("# extra line\n" * num_extra_lines) + code)
+    temp_file.write_text(('# extra line\n' * num_extra_lines) + code)
     spec = importlib.util.spec_from_file_location("module.name", str(temp_file))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -137,7 +137,6 @@ def write_and_load_module(temp_file: pathlib.Path, code, num_extra_lines):
 
 def test_changed_line_numbers_invalidate_cache(tmp_path: pathlib.Path):
     from textwrap import dedent
-
     code = dedent("""
         import triton
         @triton.jit
@@ -168,7 +167,7 @@ def test_reuse(device, fresh_triton_cache):
     assert counter == 1
 
 
-@pytest.mark.parametrize("mode", ["enable", "disable", "disable_on_alignment"])
+@pytest.mark.parametrize('mode', ['enable', 'disable', 'disable_on_alignment'])
 def test_specialize(mode, device, fresh_triton_cache):
     counter = 0
 
@@ -178,11 +177,8 @@ def test_specialize(mode, device, fresh_triton_cache):
 
     JITFunction.cache_hook = inc_counter
     x = torch.empty(1, dtype=torch.int32, device=device)
-    function = {
-        "enable": kernel,
-        "disable": kernel_nospec,
-        "disable_on_alignment": kernel_nospec_on_alignment,
-    }[mode]
+    function = {'enable': kernel, 'disable': kernel_nospec, 'disable_on_alignment': kernel_nospec_on_alignment}[mode]
+    target = {'enable': 3, 'disable': 1, 'disable_on_alignment': 2}[mode]
     target = {"enable": 3, "disable": 1, "disable_on_alignment": 2}[mode]
     for i in [1, 2, 4, 8, 16, 32]:
         function[(1, )](x, i, BLOCK=512)
@@ -312,7 +308,7 @@ def test_conflicting_global_in_inner_function():
 
     @triton.jit
     def kernel2():
-        a = CONFLICTING_GLOBAL  # noqa
+        a = CONFLICTING_GLOBAL  #noqa
         conflicting_global_inner()
 
     kernel1[(1, )]()
@@ -421,7 +417,7 @@ def test_jit_debug(device) -> None:
     kernel[(1, )](tmp, debug=True)
     assert len(kernel.device_caches[device][0]) == 2
     bins = list(kernel.device_caches[device][0].values())
-    assert bins[0].asm["ttir"] != bins[1].asm["ttir"]
+    assert bins[0].asm['ttir'] != bins[1].asm['ttir']
 
 
 @triton.jit
@@ -441,7 +437,7 @@ def test_jit_noinline(device) -> None:
     kernel_add_device.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1, ))
     assert len(kernel_add_device.device_caches[device][0]) == 1
     bins = list(kernel_add_device.device_caches[device][0].values())
-    inline_ttir = bins[0].asm["ttir"]
+    inline_ttir = bins[0].asm['ttir']
     add_fn.noinline = True
     add_fn.hash = None
     kernel_add_device.hash = None
@@ -449,7 +445,7 @@ def test_jit_noinline(device) -> None:
     kernel_add_device.warmup(torch.float32, torch.float32, torch.float32, 32, grid=(1, ))
     assert len(kernel_add_device.device_caches[device][0]) == 1
     bins = list(kernel_add_device.device_caches[device][0].values())
-    noinline_ttir = bins[0].asm["ttir"]
+    noinline_ttir = bins[0].asm['ttir']
     assert inline_ttir != noinline_ttir
 
 
@@ -552,7 +548,7 @@ def test_hooks(device, fresh_triton_cache) -> None:
     JITFunction.cache_hook = cache_hook
     JITFunction.compiled_hook = compiled_hook
     kernel_add.warmup(torch.float32, torch.float32, torch.float32, 32, tl.float32, grid=(1, ))
-    assert (specialization_data is not None and specialization_data_compiled == specialization_data)
+    assert specialization_data is not None and specialization_data_compiled == specialization_data
     assert is_warmup is True
     assert key in kernel_add.device_caches[getattr(torch, device).current_device()][0]
 
