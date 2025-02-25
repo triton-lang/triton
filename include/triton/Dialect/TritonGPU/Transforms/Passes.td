@@ -93,6 +93,11 @@ def TritonGPUAutomaticWarpSpecialization : Pass<"tritongpu-automatic-warp-specia
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
                            "mlir::scf::SCFDialect",
                            "mlir::arith::ArithDialect"];
+
+  let options = [
+    Option<"numStages", "num-stages", "int32_t", /*default*/"3",
+           "number of pipeline stages">
+  ];
 }
 
 def TritonGPUF32DotTC : Pass<"tritongpu-F32DotTC", "mlir::ModuleOp"> {
