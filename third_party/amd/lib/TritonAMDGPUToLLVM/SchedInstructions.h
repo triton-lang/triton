@@ -19,7 +19,7 @@ void setNumGeneratedGlobalLoads(LoadOpType op, size_t globalLoadsCount,
                                 Type type);
 void setNumGeneratedDsReads(gpu::LocalLoadOp op, size_t numDsReadsCount,
                             Type type);
-void storeOpSchedAnnotations(triton::gpu::LocalStoreOp op, size_t llvmOpCount,
+void storeOpSchedAnnotations(Operation *op, size_t llvmOpCount,
                              Type type);
 triton::DotOp getSingleDotOpIfExists(scf::ForOp forOp);
 } // namespace mlir::triton

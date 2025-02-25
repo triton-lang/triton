@@ -83,11 +83,13 @@ public:
                               size_t localStoreOpCount,
                               Type type) const override;
 
-  bool supportsDirectToLdsLoadBitWidth(int bitWidth) const;
+  void allocOpAnnotation(triton::gpu::LocalAllocOp op, size_t localStoreOpCount,
+                         Type type) const override;
 
   void localLoadOpAnnotation(triton::gpu::LocalLoadOp localLoadOp,
                              Operation *llLoadOp) const override;
 
+  bool supportsDirectToLdsLoadBitWidth(int bitWidth) const;
 private:
   void printfImpl(Value formatStrStart, int formatStrByteCount, ValueRange args,
                   ArrayRef<bool> isSigned, RewriterBase &rewriter,
