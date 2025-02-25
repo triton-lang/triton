@@ -65,6 +65,18 @@ def TritonAMDGPUOptimizeEpilogue : Pass<"tritonamdgpu-optimize-epilogue", "mlir:
 
 }
 
+def TritonAMDGPUHoistLayoutConversions : Pass<"tritonamdgpu-hoist-layout-conversions", "mlir::ModuleOp"> {
+  let summary = "Hoist layout conversions out of the loop";
+
+  let description = [{
+  }];
+
+  let constructor = "mlir::createTritonAMDGPUHoistLayoutConversionsPass()";
+
+  let dependentDialects = [];
+
+}
+
 def TritonAMDGPUCanonicalizePointers : Pass<"tritonamdgpu-canonicalize-pointers", "mlir::triton::FuncOp"> {
   let summary = "Canonicalize pointers: rewrite pointers passed to load/store operation as a `<basePtr, offset>` pair.";
 
