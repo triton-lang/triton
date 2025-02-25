@@ -168,7 +168,7 @@ void PipelineErrorReporter::printSchedulingError(int64_t distance,
     // We failed to find the root defining ops. Whether the disntance is 0 or
     // not, an empty set means we have some bugs in the pipeline expander. We
     // should let the user help report the bug.
-    consumer->emitError() << errorMessage << " " << likelyBuggyMessage;
+    consumer->emitWarning() << errorMessage << " " << likelyBuggyMessage;
     return;
   }
   // find the stage of the consumer and the producer.
@@ -177,10 +177,10 @@ void PipelineErrorReporter::printSchedulingError(int64_t distance,
   if (!consumerStage || !producerStage) {
     // We failed to find the stage of the consumer or the producer. This is
     // likely to be a bug. We should let the user help report the bug.
-    consumer->emitError() << errorMessage << " " << likelyBuggyMessage;
+    consumer->emitWarning() << errorMessage << " " << likelyBuggyMessage;
     return;
   }
-  InFlightDiagnostic mainError = forOp->emitError() << errorMessage;
+  InFlightDiagnostic mainError = forOp->emitWarning() << errorMessage;
   mainError.attachNote()
       << "The loop body is divided into " << numStages
       << " stages to optimize GPU I/O and computation resources. Different "
