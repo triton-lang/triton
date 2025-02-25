@@ -25,8 +25,20 @@ namespace gpu {
 
 struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
 
-  void lookupTopDivisibilityOperand(Operation *op, const llvm::SmallSet<Operation *, 8> &operationsReachedTopOnDivisibility) {
+  void findTopDivisibilityOperand(Operation *op, llvm::SetVector<Operation *> &rootCauseOps, const llvm::SmallSet<Operation *, 8> &operationsReachedTopOnDivisibility) {
     // should use the official backward slice analysis
+    llvm::SetVector<Operation *> backwardSlice;
+    BackwardSliceOptions opt;
+    opt.omitBlockArguments = false;
+    getBackwardSlice(op, &backwardSlice, opt);
+    // llvm::SetVector<Operation *> rootCauseOps;
+    for (auto sliceOp : backwardSlice) {
+      for (auto operand : sliceOp->getOperands()) {
+        if (operationsReachedTopOnDivisibility.contains(operand.getDefiningOp()) && !operationsReachedTopOnDivisibility.contains(sliceOp)) {
+          rootCauseOps.insert(operand.getDefiningOp());
+        }
+      }
+    }
   }
 
   void
@@ -104,6 +116,11 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
       auto mainError = op->emitRemark() << "Coalescing only assigns one element per thread for this operation. Performance may be suboptimal.";
       if (divisibilityIsOne) {
         mainError.attachNote() << "The divisibility of the pointer is 1 in all dimensions. Consider specifying divisibility via `tt.multiple_of`.";
+        llvm::SetVector<Operation *> rootCauseOps;
+        findTopDivisibilityOperand(op, rootCauseOps, axisInfoAnalysis.operationsReachedTopOnDivisibility);
+        for (auto rootCauseOp : rootCauseOps) {
+          mainError.attachNote(rootCauseOp->getLoc()) << "Divisibility of 1 first introduced here: ";
+        }
       }
       if (contiguityIsOne) {
         mainError.attachNote() << "The contiguity of the pointer is 1 in all dimensions.";

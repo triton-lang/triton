@@ -181,7 +181,6 @@ public:
     }
     SetVector<FunctionOpInterface> sortedFuncs(funcs.begin(), funcs.end());
     SymbolTableCollection symbolTable;
-    llvm::SmallSet<Operation*, 8> operationsReachedTopOnDivisibility;
     for (auto funcOp : llvm::reverse(sortedFuncs)) {
       llvm::dbgs() << "Processing " << funcOp->getName() << "\n";
       initialize(funcOp, operationsReachedTopOnDivisibility);
@@ -210,6 +209,7 @@ public:
   unsigned getPtrContiguity(Value ptr);
   unsigned getPtrAlignment(Value ptr);
   unsigned getMaskAlignment(Value mask);
+  llvm::SmallSet<Operation*, 8> operationsReachedTopOnDivisibility;
 
 private:
   void initialize(FunctionOpInterface funcOp, llvm::SmallSet<Operation*, 8> &operationsReachedTopOnDivisibility);
