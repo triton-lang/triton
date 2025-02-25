@@ -372,7 +372,7 @@ static std::optional<ttg::SharedEncodingTrait>
 getSharedEncoding(Operation *loadOp, bool isTMALoad) {
   auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
   auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
-  auto order = ttg::getOrder(ty.getEncoding());
+  auto order = ttg::getOrder(ty);
 
   ttg::SharedEncodingTrait localAllocEnc;
   if (llvm::any_of(loadOp->getUsers(), [&](Operation *user) {
