@@ -43,13 +43,13 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
     auto sizePerThread = triton::gpu::getSizePerThread(layout);
     auto threadsPerWarp = triton::gpu::getThreadsPerWarp(layout);
     auto warpsPerCTA = triton::gpu::getWarpsPerCTA(layout);
-    auto threadOrder = triton::gpu::getThreadOrder(layout);
+    auto threadOrder = triton::gpu::getThreadOrder(tensorTy);
     SmallVector<unsigned> warpOrder(rank);
     if (auto enc = dyn_cast<DotOperandEncodingAttr>(layout)) {
       warpOrder =
           triton::gpu::getMatrixOrder(rank, /*rowMajor=*/enc.getOpIdx() == 1);
     } else {
-      warpOrder = triton::gpu::getWarpOrder(layout);
+      warpOrder = triton::gpu::getWarpOrder(tensorTy);
     }
     auto shapePerCTATile = triton::gpu::getShapePerCTATile(layout);
     Value warpSize = b.i32_val(triton::gpu::getWarpSize(layout));

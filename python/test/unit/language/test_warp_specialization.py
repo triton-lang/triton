@@ -3,9 +3,10 @@ import pytest
 import pathlib
 import triton
 
+from triton._internal_testing import is_cuda
 
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9,
-                    reason="warp specialization is only supported on Hopper and Blackwell")
+
+@pytest.mark.skipif(not is_cuda(), reason="warp specialization is only supported on NVIDIA")
 def test_warp_specialize_basic_ir(tmp_path: pathlib.Path):
     ir = """
     tt.func @kernel(%arg0: !tt.ptr<i32>) {
@@ -39,8 +40,7 @@ def test_warp_specialize_basic_ir(tmp_path: pathlib.Path):
     assert input[1] == 5555
 
 
-@pytest.mark.skipif(torch.cuda.get_device_capability()[0] < 9,
-                    reason="warp specialization is only supported on Hopper and Blackwell")
+@pytest.mark.skipif(not is_cuda(), reason="warp specialization is only supported on NVIDIA")
 def test_warpgroup_reduction(tmp_path: pathlib.Path):
 
     def template(i, num_warps, in_ptr, out_ptr):

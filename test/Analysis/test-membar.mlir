@@ -1,5 +1,7 @@
 // RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory -test-print-membar | FileCheck %s --check-prefix=CHECK --check-prefix=CF
 // RUN: triton-opt %s -split-input-file                     --allocate-shared-memory -test-print-membar | FileCheck %s --check-prefix=CHECK --check-prefix=SCF
+// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory -test-print-membar | FileCheck %s --check-prefix=CHECK --check-prefix=CF
+// RUN: triton-opt %s -split-input-file                     --allocate-shared-memory -test-print-membar | FileCheck %s --check-prefix=CHECK --check-prefix=SCF
 
 #AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #sliceAd0 = #ttg.slice<{dim = 0, parent = #AL}>
