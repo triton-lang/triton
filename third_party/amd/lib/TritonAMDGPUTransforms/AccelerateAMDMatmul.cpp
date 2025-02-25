@@ -15,6 +15,8 @@ using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 using ::mlir::LLVM::AMD::scaleDotElemTypeToMLIRType;
+using mlir::triton::gpu::chooseScaledMfmaOperandLayout;
+using mlir::triton::gpu::chooseScaledMfmaScaleLayout;
 
 namespace {
 using triton::AMD::ISAFamily;
@@ -234,7 +236,7 @@ FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotScaledOp dot,
   Type bElemType = scaleDotElemTypeToMLIRType(ctx, dot.getBElemType());
   return chooseMfmaInstruction(mfmaVersion, dot.getC().getType(), aElemType,
                                bElemType, inputKDim, nonKDim,
-                               /*hasScale=*/true, /*allowXF32=*/false);
+                               /*withScale=*/true, /*allowXF32=*/false);
 }
 
 FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotScaledOp dot,
@@ -756,11 +758,14 @@ public:
     ScaleDotElemType aElemType = dotOp.getAElemType();
     ScaleDotElemType bElemType = dotOp.getBElemType();
     auto supportsTypes = [](ScaleDotElemType elemType) {
-      return elemType == ScaleDotElemType::E2M1;
+      return elemType == ScaleDotElemType::E2M1 ||
+             elemType == ScaleDotElemType::E4M3 ||
+             elemType == ScaleDotElemType::E5M2;
     };
 
-    if (!supportsTypes(aElemType) || !supportsTypes(bElemType))
-      return rewriter.notifyMatchFailure(dotOp, "NYI: mxfp6, mxfp8");
+    if (!supportsTypes(aElemType) || !supportsTypes(bElemType)) {
+      return rewriter.notifyMatchFailure(dotOp, "NYI: mxfp6");
+    }
 
     MLIRContext *ctx = dotOp.getContext();
 
@@ -791,6 +796,7 @@ public:
     auto mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
         ctx, /*versionMajor=*/mfmaVersion, /*versionMinor=*/0, warpsPerTile,
         /*instrShape=*/mDim, nDim, /*isTransposed=*/true, ctaLayout);
+    auto warpOrder = mfmaEnc.getWarpOrder();
 
     auto newRetType =
         RankedTensorType::get(oldShape, oldRetType.getElementType(), mfmaEnc);
@@ -798,113 +804,44 @@ public:
     auto newAcc = rewriter.create<ttg::ConvertLayoutOp>(
         dotOp.getC().getLoc(), newRetType, dotOp.getC());
 
-    // For the mfma_scale_f32_*_f8f6f4 instructions, each thread consumes 32
-    // elements. But since two fp4 elements are packed into one int8, the
-    // kWidth is 16 for fp4.
-    unsigned kWidth = kBase;
-    auto newAEncoding = DotOperandEncodingAttr::get(
-        ctx, /*idx=*/0, newRetType.getEncoding(),
-        aElemType == ScaleDotElemType::E2M1 ? kWidth / 2 : kWidth);
-
-    auto newBEncoding = DotOperandEncodingAttr::get(
-        ctx, /*idx=*/1, newRetType.getEncoding(),
-        bElemType == ScaleDotElemType::E2M1 ? kWidth / 2 : kWidth);
-
-    auto convertInputLayout = [&](TensorValue v,
-                                  DotOperandEncodingAttr enc) -> TensorValue {
-      auto vType = v.getType();
-
-      auto newVType =
-          RankedTensorType::get(vType.getShape(), vType.getElementType(), enc);
-      return rewriter.create<ttg::ConvertLayoutOp>(v.getLoc(), newVType, v);
-    };
-    a = convertInputLayout(a, newAEncoding);
-    b = convertInputLayout(b, newBEncoding);
-
     StringAttr kRegister = StringAttr::get(ctx, "register");
     StringAttr kLane = StringAttr::get(ctx, "lane");
     StringAttr kWarp = StringAttr::get(ctx, "warp");
     StringAttr kBlock = StringAttr::get(ctx, "block");
 
     auto order = ttg::getMatrixOrder(rank, /*rowMajor=*/true);
+    auto standardOutDims = standardOutDimNames(ctx, rank);
 
-    // Init register layout. Will be adjusted later
-    auto regs = tt::identityStandardND(kRegister, {1, 1}, order);
-
-    auto aEncLL = newAEncoding.toLinearLayout(a.getType().getShape());
-    auto standardOutDims = llvm::to_vector(aEncLL.getOutDimNames());
-
+    // For the mfma_scale_f32_*_f8f6f4 instructions, each thread consumes 32
+    // elements. But since two fp4 elements are packed into one int8, the
+    // kWidth is 16 for fp4.
+    const unsigned kWidth = kBase;
     using basisT = std::vector<std::vector<int32_t>>;
-    auto createLinearLayout = [&](int idx, const basisT &warpBasis) {
-      LinearLayout lanes = LinearLayout::empty();
-      // In scaled dot, the shapes of operands(without batch dimension) are,
-      // respectively:
-      // - A: [M, K]
-      // - B: [K, N]
-      // - aScale: [M, K / 32]
-      // - bScale: [N, K / 32]
-      //
-      // To correctly feed A/B and its scale into instruction, we need to
-      // distribute aScale/bScale among warps in the same way as A/B. But bScale
-      // is not transposed like B. So we need to transpose the warp layout of
-      // bScale.
-      //
-      // The tricky part is, our desired outputs are [dim0, dim1], but
-      // at this position, the layouts are transposed to [dim1, dim0]. So
-      // instead of reverse bScale's layout, we need to reverse aScale's. There
-      // will be a transpose in the end to correct everything.
-      basisT warps = warpBasis;
-      if (idx == 0) {
-        for (auto &basis : warps) {
-          std::reverse(basis.begin(), basis.end());
-        }
-      }
-      // In general, for both 32x32 and 16x16 scaled mfma, and no matter what
-      // data type the A/B operand is, each lane takes 32 elements from A/B
-      // alone K dim, and 1 or 2 elements from scale accordingly. The number of
-      // scale's elements in a lane varies because the 32 elements from A/B may
-      // not be consecutive.
-      //
-      // For mxfp4, these 32 elements are consecutive, so only 1 scale element
-      // is required. But for mxfp6/mxfp8, there are 2 16-consecutive elements
-      // blocks, so 2 scale elements are required.
-      if (mDim == 32) {
-        // For ROCDL::mfma_scale_f32_32x32x64_f8f6f4 with fp4 input, each lane
-        // takes 32 consecutive elements from A alone K dimension. The first
-        // 32 lanes collectively handle A[0:32][0:32], and the other 32 lanes
-        // collectively handle A[0:32][32:64]. Each lane take 1 scale element
-        // accordingly. Similar to B and bScale.
-        lanes = LinearLayout(
-            {{kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}, {1, 0}}},
-             {kWarp, warps},
-             {kBlock, {}}},
-            {standardOutDims[order[0]], standardOutDims[order[1]]});
-      } else {
-        assert(mDim == 16);
-        // For ROCDL::mfma_scale_f32_16x16x128_f8f6f4 with fp4 input, each lane
-        // takes 32 consecutive elements from A alone K dimension. The first
-        // 16 lanes collectively handle A[0:16][0:32], and another 16 lanes
-        // collectively handle A[0:16][32:64] and so on. Each lane take 1 scale
-        // element accordingly. Similar to B and bScale.
-        lanes = LinearLayout(
-            {{kLane, {{0, 1}, {0, 2}, {0, 4}, {0, 8}, {1, 0}, {2, 0}}},
-             {kWarp, warps},
-             {kBlock, {}}},
-            {standardOutDims[order[0]], standardOutDims[order[1]]});
-      }
-      return regs * lanes;
+
+    auto aShape = a.getType().getShape();
+    auto bShape = b.getType().getShape();
+    auto aEncLL = chooseScaledMfmaOperandLayout(
+        mfmaEnc, kWidth, /*dotOperandIdx=*/0, aElemType, aShape);
+    auto bEncLL = chooseScaledMfmaOperandLayout(
+        mfmaEnc, kWidth, /*dotOperandIdx=*/1, bElemType, bShape);
+
+    auto convertInputLayout = [&](TensorValue v,
+                                  LinearLayout layout) -> TensorValue {
+      auto vType = v.getType();
+
+      auto newEnc = ttg::LinearEncodingAttr::get(ctx, layout);
+      auto newVType = RankedTensorType::get(vType.getShape(),
+                                            vType.getElementType(), newEnc);
+      return rewriter.create<ttg::ConvertLayoutOp>(v.getLoc(), newVType, v);
     };
+    a = convertInputLayout(a, aEncLL);
+    b = convertInputLayout(b, bEncLL);
 
-    auto convertScaleLayout = [&](TensorValue val, TensorValue scale,
-                                  DotOperandEncodingAttr enc,
-                                  int idx) -> Value {
-      auto valShape = val.getType().getShape();
-
-      auto dotLL = enc.toLinearLayout(valShape);
+    auto convertScaleLayout = [&](TensorValue scale,
+                                  llvm::ArrayRef<int64_t> valShape,
+                                  LinearLayout dotLL, int idx) -> Value {
       LinearLayout::BasesT scaleBases = dotLL.getBases();
       auto &warpBases = scaleBases[kWarp];
-
-      LinearLayout newLL = createLinearLayout(idx, warpBases);
 
       SmallVector<int64_t> shape;
       if (!scale) {
@@ -917,15 +854,9 @@ public:
         shape = llvm::to_vector(scale.getType().getShape());
       }
 
-      // Adjust register-level layout to fill the shape, at this level, both
-      // aScale and bScale should align with A operand.
-      for (auto d : newAEncoding.getRepOrder()) {
-        auto outDim = standardOutDims[d];
-        auto dimSize = newLL.getOutDimSize(outDim);
-        newLL *=
-            LinearLayout::identity1D(shape[d] / dimSize, kRegister, outDim);
-      }
-      newLL = newLL.transposeOuts(standardOutDims);
+      LinearLayout newLL =
+          chooseScaledMfmaScaleLayout(ctx, idx, warpBases, shape, mDim);
+
       Attribute newScaleEncoding = ttg::LinearEncodingAttr::get(ctx, newLL);
       // Scale's data type is always i8
       auto newScaleType = RankedTensorType::get(shape, i8_ty, newScaleEncoding);
@@ -940,8 +871,10 @@ public:
                                                      newScaleType, scale);
       }
     };
-    auto newAScale = convertScaleLayout(a, aScale, newAEncoding, 0);
-    auto newBScale = convertScaleLayout(b, bScale, newBEncoding, 1);
+    auto newAScale =
+        convertScaleLayout(aScale, aShape, aEncLL, /*dotOperandIdx=*/0);
+    auto newBScale =
+        convertScaleLayout(bScale, bShape, bEncLL, /*dotOperandIdx=*/1);
 
     auto newDot = rewriter.create<triton::DotScaledOp>(
         dotOp.getLoc(), newRetType, a, b, newAcc, newAScale, newBScale,
@@ -949,6 +882,7 @@ public:
 
     rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(dotOp, oldRetType,
                                                       newDot);
+
     return success();
   }
 };

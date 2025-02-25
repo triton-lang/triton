@@ -417,8 +417,10 @@ struct DotOpMFMAConversionHelper {
         if (8 == kBase)
           results.push_back(b.bitcast(vec, i64_ty));
         if (16 == kBase)
-          // This is only for the scale operands of scaled mfma on MI350
+          // This is only for the operands of scaled mfma on MI350
           results.push_back(b.bitcast(vec, vec_ty(i32_ty, 4)));
+        if (32 == kBase)
+          results.push_back(b.bitcast(vec, vec_ty(i32_ty, 8)));
       } else {
         results.push_back(vec);
       }
@@ -488,15 +490,15 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
                                   Location loc)
       : DotOpMFMAConversionHelper(mfmaLayout, rewriter, typeConverter, loc) {}
 
-  Value generateScaledMFMAOp(const MfmaIntrinsic &mfmaIntrinsic, Value valA,
-                             Value valB, Value valC, Value valScaleA,
-                             Value valScaleB) const {
+  Value generateScaledMFMAOp(StringRef intrinsicName, Value valA, Value valB,
+                             Value valC, Value valScaleA, Value valScaleB,
+                             Type elemTypeA, Type elemTypeB) const {
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto resType = valC.getType();
     Value zeroFlag = b.i32_val(0);
-    OperationState loweredOp(loc, mfmaIntrinsic.name);
-    int32_t cbsz = getMfmaF8F6F4MatrixFormat(mfmaIntrinsic.aElementType);
-    int32_t blgp = getMfmaF8F6F4MatrixFormat(mfmaIntrinsic.bElementType);
+    OperationState loweredOp(loc, intrinsicName);
+    int32_t cbsz = getMfmaF8F6F4MatrixFormat(elemTypeA);
+    int32_t blgp = getMfmaF8F6F4MatrixFormat(elemTypeB);
     assert((cbsz != -1) && (blgp != -1));
     loweredOp.addTypes(resType);
     loweredOp.addOperands({valA, valB, valC, b.i32_val(cbsz), b.i32_val(blgp),
@@ -531,40 +533,43 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     ScaleDotElemType aElemType = op.getAElemType();
     ScaleDotElemType bElemType = op.getBElemType();
 
-    const auto kDimOperandSize = aTensorTy.getShape().back();
-
     auto supportsTypes = [](ScaleDotElemType elemType) {
-      return elemType == ScaleDotElemType::E2M1;
+      return elemType == ScaleDotElemType::E2M1 ||
+             elemType == ScaleDotElemType::E4M3 ||
+             elemType == ScaleDotElemType::E5M2;
     };
 
     if (!supportsTypes(aElemType) || !supportsTypes(bElemType)) {
-      llvm::report_fatal_error("NYI: mxfp6, mxfp8\n");
+      llvm::report_fatal_error("NYI: mxfp6\n");
     }
+
+    int64_t kDimOperandSize = aTensorTy.getShape().back();
 
     auto ctx = op.getContext();
     constexpr bool allowXF32 = false;
-    FailureOr<MfmaIntrinsic> maybeMfmaIntrinsic =
-        MfmaIntrinsic::selectFor(mfmaVersion, mDim, nDim, kDimOperandSize,
-                                 scaleDotElemTypeToMLIRType(ctx, aElemType),
-                                 scaleDotElemTypeToMLIRType(ctx, bElemType),
-                                 /*withScale=*/false, allowXF32);
+    FailureOr<MfmaIntrinsic> maybeMfmaIntrinsic = MfmaIntrinsic::selectFor(
+        mfmaVersion, mDim, nDim,
+        aElemType == ScaleDotElemType::E2M1 ? kDimOperandSize * 2
+                                            : kDimOperandSize,
+        scaleDotElemTypeToMLIRType(ctx, aElemType),
+        scaleDotElemTypeToMLIRType(ctx, bElemType),
+        /*withScale=*/true, allowXF32);
     if (failed(maybeMfmaIntrinsic))
       llvm::report_fatal_error("No match found in MFMA database\n");
 
     StringRef intrinsicName = maybeMfmaIntrinsic->name;
     unsigned kBase = maybeMfmaIntrinsic->kBase;
     // Two fp4 are packed into an uint8.
-    if (aElemType == ScaleDotElemType::E2M1) {
-      kBase /= 2;
-    }
+    unsigned aKBase = aElemType == ScaleDotElemType::E2M1 ? kBase / 2 : kBase;
+    unsigned bKBase = bElemType == ScaleDotElemType::E2M1 ? kBase / 2 : kBase;
 
-    auto aEncoding = cast<DotOperandEncodingAttr>(aTensorTy.getEncoding());
-    auto bEncoding = cast<DotOperandEncodingAttr>(bTensorTy.getEncoding());
-    int kWidth = aEncoding.getKWidth();
-    const auto kDimInstrSize = mfmaLayout.getInstrShapeForOperand(kWidth, 0)[1];
+    int aKWidth = aKBase;
+    int bKWidth = bKBase;
 
-    auto repA = mfmaLayout.getRepForOperand(aTensorTy.getShape(), kWidth, 0);
-    auto repB = mfmaLayout.getRepForOperand(bTensorTy.getShape(), kWidth, 1);
+    const auto kDimInstrSize = mfmaLayout.getInstrShapeForOperand(aKBase, 0)[1];
+
+    auto repA = mfmaLayout.getRepForOperand(aTensorTy.getShape(), aKWidth, 0);
+    auto repB = mfmaLayout.getRepForOperand(bTensorTy.getShape(), bKWidth, 1);
     assert(repA[2] == repB[1]);
 
     auto aScaleTensorTy = cast<RankedTensorType>(aScale.getType());
@@ -589,10 +594,10 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     assert(repA[0] == repB[0]);
 
     auto operandA = getValuesFromDotOperandLayoutStruct(
-        loadedA, numRepB, numRepM, numRepK, kWidth, kBase,
+        loadedA, numRepB, numRepM, numRepK, aKWidth, aKBase,
         aTensorTy.getElementType(), allowXF32, /*preserveBF16=*/false);
     auto operandB = getValuesFromDotOperandLayoutStruct(
-        loadedB, numRepB, numRepN, numRepK, kWidth, kBase,
+        loadedB, numRepB, numRepN, numRepK, bKWidth, bKBase,
         bTensorTy.getElementType(), allowXF32, /*preserveBF16=*/false);
 
     // Scales have the same replica distributions as their corresponding
@@ -632,18 +637,24 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
           }
           acc = zeroAuxiliarBlocks(subBlocks, acc);
           for (int k = 0; k < numRepK; k++) {
-            for (int kPack = 0; kPack < kWidth / kBase; ++kPack) {
-              acc = mfmaLayout.getIsTransposed()
-                        ? generateScaledMFMAOp(maybeMfmaIntrinsic.value(),
-                                               operandB[kPack][{b, n, k}],
-                                               operandA[kPack][{b, m, k}], acc,
-                                               operandBScale[kPack][{b, n, k}],
-                                               operandAScale[kPack][{b, m, k}])
-                        : generateScaledMFMAOp(maybeMfmaIntrinsic.value(),
-                                               operandA[kPack][{b, m, k}],
-                                               operandB[kPack][{b, n, k}], acc,
-                                               operandAScale[kPack][{b, m, k}],
-                                               operandBScale[kPack][{b, n, k}]);
+            for (int kPack = 0; kPack < aKWidth / aKBase; ++kPack) {
+              if (mfmaLayout.getIsTransposed()) {
+                acc = generateScaledMFMAOp(intrinsicName,
+                                           operandB[kPack][{b, n, k}],
+                                           operandA[kPack][{b, m, k}], acc,
+                                           operandBScale[kPack][{b, n, k}],
+                                           operandAScale[kPack][{b, m, k}],
+                                           maybeMfmaIntrinsic->bElementType,
+                                           maybeMfmaIntrinsic->aElementType);
+              } else {
+                acc = generateScaledMFMAOp(intrinsicName,
+                                           operandA[kPack][{b, m, k}],
+                                           operandB[kPack][{b, n, k}], acc,
+                                           operandAScale[kPack][{b, m, k}],
+                                           operandBScale[kPack][{b, n, k}],
+                                           maybeMfmaIntrinsic->aElementType,
+                                           maybeMfmaIntrinsic->bElementType);
+              }
               if (!firstMfma)
                 firstMfma = acc;
             }
@@ -665,7 +676,7 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
       setPrioOp->moveAfter(firstMfma.getDefiningOp());
 
     const size_t mmaCount =
-        numRepB * numRepM * numRepN * numRepK * kWidth / kBase;
+        numRepB * numRepM * numRepN * numRepK * aKWidth / aKBase;
     packAndReplaceResult(op, fc, maybeMfmaIntrinsic, dstElemTy, elemTyA,
                          mmaCount);
 
@@ -709,9 +720,9 @@ LogicalResult convertScaledMFMA(triton::DotScaledOp op,
                                 triton::DotScaledOp::Adaptor adaptor,
                                 const LLVMTypeConverter *typeConverter,
                                 ConversionPatternRewriter &rewriter) {
-  assert(isa<DotOperandEncodingAttr>(op.getA().getType().getEncoding()) &&
-         isa<DotOperandEncodingAttr>(op.getB().getType().getEncoding()) &&
-         "Both lhs and rhs should be DotOperand layout.");
+  assert(isa<LinearEncodingAttr>(op.getA().getType().getEncoding()) &&
+         isa<LinearEncodingAttr>(op.getB().getType().getEncoding()) &&
+         "Both lhs and rhs should be linear layout.");
 
   assert(isa<LinearEncodingAttr>(op.getAScale().getType().getEncoding()) &&
          isa<LinearEncodingAttr>(op.getBScale().getType().getEncoding()) &&
