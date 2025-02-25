@@ -267,13 +267,15 @@ def test_remark_swp_op_before_operands_persistent_matmul(capfd, fresh_triton_cac
                 tl.store(c_ptrs, c, mask=c_mask)
                 accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
                 tile_id += NUM_SMS  # this line is newly added
+            else: # deliberately increasing test coverage
+                tile_id = min(tile_id, tile_id - NUM_SMS)
+                tile_id += NUM_SMS
 
     with enable_diagnostics_context('warnings'):
+        M = 8192; N = 8192; K = 512
+
         dtype = torch.float16
 
-        M = 8192
-        N = 8192
-        K = 512
         a = torch.randn((M, K), device="cuda", dtype=torch.float16).to(dtype)
         b = torch.randn((K, N), device="cuda", dtype=torch.float16).to(dtype)
 
@@ -309,6 +311,7 @@ def test_remark_swp_op_before_operands_persistent_matmul(capfd, fresh_triton_cac
             num_warps=8,  #
         )
 
+
     _, err = capfd.readouterr()
     # Split the output into lines for easier processing
     lines = err.splitlines()
@@ -316,7 +319,7 @@ def test_remark_swp_op_before_operands_persistent_matmul(capfd, fresh_triton_cac
     expected_strings = [
         "warning: The software pipeliner failed due to a dependency conflict", "for _ in range",
         "note: The loop body is divided into 3 stages to optimize GPU I/O and computation resources.",
-        "tile_id += NUM_SMS", "group_id = tile_id", "pid_m = first_pid_m + (tile_id % group_size_m)",
+        "tile_id += NUM_SMS","tile_id += NUM_SMS", "group_id = tile_id", "pid_m = first_pid_m + (tile_id % group_size_m)",
         "pid_n = (tile_id % num_pid_in_group)"
     ]
     # Initialize an index to track the position in expected_strings
