@@ -3485,8 +3485,10 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                 pytest.skip("float8e4nv not supported on sm <= 80")
 
         if is_hip():
-            if in_type_str in ("float8e5", "float8e4nv") and not is_hip_mi350():
-                pytest.skip(f"{in_type_str} only supported on mi350")
+            if in_dtype in ("float8e5", "float8e4nv") and not is_hip_mi350():
+                pytest.skip(f"{in_dtype} only supported on mi350")
+            if in_dtype in ("float8e5b16", "float8e4b8") and not is_hip_mi300():
+                pytest.skip(f"{in_dtype} only supported on mi300")
             if not ((input_precision == "ieee") or (input_precision == "tf32" and is_hip_mi300())):
                 pytest.skip(f"{input_precision} not supported on HIP")
             if kpack == 2 and in_dtype == 'int8' and K < 64:
@@ -3681,10 +3683,6 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
     elif in_dtype == "float8e4nv" and out_dtype == tl.float32:
         if capability[0] == 9:
             assert 'wgmma.mma_async.sync.aligned.m64n128k32.f32.e4m3.e4m3' in ptx
-
-
-#test_dot(32, 32, 16, 4, False, False, None, 'ieee', 'float8e4nv', 'float32', 1, None, 1, 'cuda')
-#test_dot(32, 32, 16, 4, False, False, None, 'ieee', 'float8e5', 'float32', 1, None, 1, 'cuda')
 
 
 @pytest.mark.parametrize("M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, num_warps, mma, kpack",
