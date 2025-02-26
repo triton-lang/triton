@@ -319,24 +319,6 @@ static void createWaitOpSt(Location loc, ConversionPatternRewriter &rewriter) {
   ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
 }
 
-// Helper to reorder the packed scales before storing them. Each block of 4
-// scales along K are separated in their own block.
-static void reorderScales(SmallVector<Value> &srcValues, int64_t k) {
-  if (k <= 4)
-    return;
-  assert(k % 4 == 0);
-  int64_t numKBlocks = k / 4;
-  int64_t blockSize = srcValues.size() / numKBlocks;
-  SmallVector<Value> reorderedValues(srcValues.size());
-  for (int i = 0; i < srcValues.size(); i++) {
-    int64_t row = i / numKBlocks;
-    int64_t col = i % numKBlocks;
-    int64_t newIdx = col * blockSize + row;
-    reorderedValues[newIdx] = srcValues[i];
-  }
-  srcValues = std::move(reorderedValues);
-}
-
 TMemMessageTraits selectTMemMessage(const TMemRuntimeInfo &info) {
   auto atom = info.useStridedMessage ? TMemAccess16x32bx2 : TMemAccess32x32b;
 
@@ -362,13 +344,6 @@ static void lowerStoreToTensorMemory(Location loc, Operation *op, Value src,
   SmallVector<Value> srcValues = unpackLLElements(loc, llSrc, rewriter);
   srcValues = packToI32(srcValues, loc, rewriter);
   auto dstType = cast<MemDescType>(dest.getType());
-  if (isa<triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(
-          dstType.getEncoding())) {
-    // Scales are stored in a different layout where each block of 4 scales
-    // along K are stored separately.
-    reorderScales(srcValues, dstType.getShape().back());
-  }
-
   auto info = getTMemRuntimeInfo(op, cast<RankedTensorType>(src.getType()),
                                  cast<MemDescType>(dest.getType()));
   const TMemMessageTraits message = selectTMemMessage(info);

@@ -1503,18 +1503,23 @@ LinearLayout getScaleTMEMStoreLinearLayout(RankedTensorType scaleType,
   int64_t N = scaleType.getDimSize(1);
   auto CTALayout = getCTALayout(scaleType.getEncoding());
   basisT regBase;
-  for (int i = 1; i < N; i = i << 1) {
-    regBase.push_back({0, i});
+
+  for (int i = 1; i < 4; i = i << 1) {
+    if (i >= N)
+      regBase.push_back({0, 0});
+    else
+      regBase.push_back({0, i});
   }
-  // For N < 4, duplicate the scales up to 4 elements.
-  for (int i = N; i < 4; i = i << 1) {
-    regBase.push_back({0, 0});
-  }
+
   basisT laneBase = {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}};
   basisT warpBase = {{0, 0}, {0, 0}};
   for (int i = 32; i < M; i = i << 1) {
     regBase.push_back({i, 0});
   }
+  for (int i = 4; i < N; i = i << 1) {
+    regBase.push_back({0, i});
+  }
+
   SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, 2);
   auto regLanes =
       LinearLayout({{kRegister, regBase}, {kLane, laneBase}, {kWarp, warpBase}},
