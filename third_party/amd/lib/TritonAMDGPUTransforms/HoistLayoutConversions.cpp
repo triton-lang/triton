@@ -50,10 +50,7 @@ struct TritonAMDGPUHoistLayoutConversionsPass
     tt::FuncOp funcOp = getOperation();
 
     SmallVector<ttg::ConvertLayoutOp> cvtOps;
-    funcOp.walk([&](Operation *op) {
-      if (auto cvtOp = dyn_cast<ttg::ConvertLayoutOp>(op))
-        cvtOps.push_back(cvtOp);
-    });
+    funcOp.walk([&](ttg::ConvertLayoutOp cvtOp) { cvtOps.push_back(cvtOp); });
 
     for (auto cvtOp : cvtOps)
       hoistCvtDotOpOutOfLoop(cvtOp);
