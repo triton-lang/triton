@@ -275,6 +275,9 @@ chooseScaledMfmaOperandLayout(AMDMfmaEncodingAttr mfmaEnc, int kWidth,
                               int dotOperandIdx, ScaleDotElemType elemType,
                               llvm::ArrayRef<int64_t> dotOperandShape);
 
+LinearLayout getScaleTMEMStoreLinearLayout(RankedTensorType scaleType,
+                                           int numWarps);
+
 // Create LinearLayout for scale in scaled mfma.
 LinearLayout chooseScaledMfmaScaleLayout(
     MLIRContext *ctx, int dotOperandIdx,

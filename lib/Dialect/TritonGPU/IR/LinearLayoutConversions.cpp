@@ -1490,4 +1490,52 @@ LinearLayout chooseScaledMfmaScaleLayout(
   return newLL;
 }
 
+LinearLayout getScaleTMEMStoreLinearLayout(RankedTensorType scaleType,
+                                           int numWarps) {
+  assert(numWarps == 4 || numWarps == 8);
+  MLIRContext *ctx = scaleType.getContext();
+
+  using basisT = std::vector<std::vector<int32_t>>;
+  StringAttr kRegister = StringAttr::get(ctx, "register");
+  StringAttr kLane = StringAttr::get(ctx, "lane");
+  StringAttr kWarp = StringAttr::get(ctx, "warp");
+
+  int64_t M = scaleType.getDimSize(0);
+  int64_t N = scaleType.getDimSize(1);
+  auto CTALayout = getCTALayout(scaleType.getEncoding());
+  basisT regBase;
+
+  // Pick a layout that will be trivial to store into the following TMEM layout:
+  // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-mma-scale-factor-a-layout-1x
+  // Pack 4 scales together, if there are less than 4 we replicate the data.
+  for (int i = 1; i < 4; i = i << 1) {
+    if (i >= N)
+      regBase.push_back({0, 0});
+    else
+      regBase.push_back({0, i});
+  }
+  // Distribute 32 elements of M along a warp.
+  basisT laneBase = {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}};
+  // The data are replicated across all the warps of each warpgroups.
+  basisT warpBase = {{0, 0}, {0, 0}};
+  for (int i = 32; i < M; i = i << 1) {
+    regBase.push_back({i, 0});
+  }
+  for (int i = 4; i < N; i = i << 1) {
+    regBase.push_back({0, i});
+  }
+  // If we have 8 warps distribute the last dimension on the second warp group.
+  if (numWarps == 8) {
+    warpBase.push_back(regBase.back());
+    regBase.pop_back();
+  }
+
+  SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, 2);
+  auto regLanes =
+      LinearLayout({{kRegister, regBase}, {kLane, laneBase}, {kWarp, warpBase}},
+                   {outDimNames[0], outDimNames[1]});
+
+  return combineCtaCgaWithShape(regLanes, CTALayout, scaleType.getShape());
+}
+
 } // namespace mlir::triton::gpu
