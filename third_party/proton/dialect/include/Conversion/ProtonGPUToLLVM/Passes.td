@@ -6,7 +6,7 @@ include "mlir/Pass/PassBase.td"
 def AllocateProtonSharedMemory : Pass<"allocate-proton-shared-memory", "mlir::ModuleOp"> {
     let summary = "Update metadata for proton shared memory allocation";
     let description = [{
-      This pass updates the amount of shared/local memory used due to 
+      This pass updates the amount of shared/local memory used due to
       proton intra kernel profiling.
      }];
 

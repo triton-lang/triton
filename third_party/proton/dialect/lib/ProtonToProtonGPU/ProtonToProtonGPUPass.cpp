@@ -102,12 +102,14 @@ public:
     const int circularHeaderSize = 16;           // byte size
     // TODO(fywkevin): we should consider the WS support for shared memory
     // allocation.
-    // TODO: considers to align of offset 8 bytes.
-    int sharedSlots = llvm::NextPowerOf2((maxSharedMem - sharedMemUsed)) /
-                      (2 * bytesPerEntry);
+
+    // We take any available shared memory left to allocate the circular buffer.
+    // The buffer size must be power of 2.
+    int sharedSlots =
+        llvm::NextPowerOf2(
+            (maxSharedMem - llvm::alignTo(sharedMemUsed, bytesPerEntry))) /
+        (2 * bytesPerEntry);
     int allocSharedMemSize = sharedSlots * bytesPerEntry;
-    llvm::outs() << "sharedMemUsed: " << sharedMemUsed << "\n";
-    llvm::outs() << "sharedSlots: " << sharedSlots << "\n";
     int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
     int allocBufferSize = bufferSize > 0 ? bufferSize : allocSharedMemSize;
     if (!allocBufferSize) {

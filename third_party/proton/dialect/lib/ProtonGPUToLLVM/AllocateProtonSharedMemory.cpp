@@ -42,8 +42,7 @@ struct AllocateProtonSharedMemory
             llvm::alignTo(sharedMemUsed, proton::gpu::getBytesPerClockEntry());
         alloc->setAttr("allocation.offset",
                        IntegerAttr::get(IntegerType::get(ctx, 32), offset));
-        // Compute the proton buffer size in bytes: the shape, for example is
-        // something like <1024xi32>
+        // Compute the proton buffer size in bytes.
         auto memDescTy =
             mlir::cast<triton::gpu::MemDescType>(alloc.getResult().getType());
         int bufferSizeInBytes = memDescTy.getShape()[0] * 4;
@@ -59,6 +58,8 @@ struct AllocateProtonSharedMemory
           "we expect proton allocates a single shared memory buffer");
       signalPassFailure();
       return;
+    } else if (count == 0) {
+      totalSharedMemSize = sharedMemUsed;
     }
 
     mod->setAttr("ttg.shared",
