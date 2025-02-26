@@ -30,12 +30,17 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
     llvm::SetVector<Operation *> backwardSlice;
     BackwardSliceOptions opt;
     opt.omitBlockArguments = false;
+    // opt.filter = [](Operation *op) {
+    //   return isa<LoadOp>(op);
+    // };
     getBackwardSlice(op, &backwardSlice, opt);
     // llvm::SetVector<Operation *> rootCauseOps;
     for (auto sliceOp : backwardSlice) {
       for (auto operand : sliceOp->getOperands()) {
         if (operationsReachedTopOnDivisibility.contains(operand.getDefiningOp()) && !operationsReachedTopOnDivisibility.contains(sliceOp)) {
-          rootCauseOps.insert(operand.getDefiningOp());
+          // exclude operands that are scalar
+          if (!operand.getType().isIntOrIndexOrFloat() && operand.getDefiningOp() != op)
+            rootCauseOps.insert(operand.getDefiningOp());
         }
       }
     }
