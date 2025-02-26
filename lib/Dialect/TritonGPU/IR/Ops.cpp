@@ -791,7 +791,7 @@ static size_t getSharedMemorySize(Type type) {
 std::pair<uint64_t, uint64_t> WarpSpecializeOp::getCaptureSizeAlign() {
   uint64_t captureSize = 0;
   // Tightly pack the captures in memory.
-  for (Type type : getOperandTypes()){
+  for (Type type : getOperandTypes()) {
     captureSize += getSharedMemorySize(type);
   }
   // Align the captures to 8 bytes.
