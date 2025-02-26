@@ -21,7 +21,8 @@ LogicalResult OpTrait::impl::verifyEquivalentType(Type typeA, Type typeB) {
   auto shapeB = tensorTypeB.getShape();
   if (shapeA != shapeB)
     return failure();
-
+  if (tensorTypeA.getElementType() != tensorTypeB.getElementType())
+    return failure();
   // If there's no encoding or the encodings are the same
   if (encodingA == encodingB)
     return success();
