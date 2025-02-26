@@ -438,11 +438,11 @@ LinearLayout chooseDotDsReadB64TrLayout(DotOperandEncodingAttr dotMfmaLayout,
   // The MFMA selection logic prioritizes double-rate MFMA instructions whenever
   // possible:
   //
-  // - For MFMA operations where non-K = 16, when blockK > k, mfma16x16x2*k
+  // - For MFMA operations where M = N = 16, when blockK > k, mfma16x16x2*k
   //   is selected; otherwise (blockK ≤ k), mfma16x16xk remains the choice.
   //
-  // - For MFMA operations where non-K = 32, when blockK > k, mfma32x32xk is
-  //   selected; otherwise (blockK ≤ k), mfma32x32x2*k is used.
+  // - For MFMA operations where M = N = 32, when blockK > k, mfma32x32x2*k is
+  //   selected; otherwise (blockK ≤ k), mfma32x32xk is used.
   //
   // NOTE: For fp8 and fp4, "double-rate" results in 4*k since scaled MFMA
   // instructions are used.
