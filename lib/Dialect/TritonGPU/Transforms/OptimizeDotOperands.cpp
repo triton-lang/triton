@@ -186,7 +186,8 @@ private:
     // -> transpose(..., (0, 3, 2, 1, 4))
     // -> reshape(..., (BLOCK_MN, BLOCK_K / scale_vec_size)
     // -> tmem_alloc
-    // and replace it with tmem_alloc -> tmem_copy
+    // -> tc_gen_mma_scaled
+    // and replace it with local_alloc -> tc_gen_mma_scaled
     auto scale2DShape = dstType.getShape();
     auto blockMN = scale2DShape[0];
     auto numScales = scale2DShape[1];

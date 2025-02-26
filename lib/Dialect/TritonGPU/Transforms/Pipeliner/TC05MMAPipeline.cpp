@@ -571,18 +571,14 @@ void createBarrierAndWaitOps(IRRewriter &builder, scf::ForOp forOp,
 }
 
 bool isSafeToPipeline(ttng::TCGen5MMAScaledOp scaledDot) {
-  auto getNumUsers = [](Value value) {
-    return std::distance(value.user_begin(), value.user_end());
-  };
-
   auto isCopiedByTMEMCopy = [=](Value scale) {
-    if (getNumUsers(scale) != 2) {
-      // MMA and TMEM copy must be the only users
+    if (!scale.hasOneUse()) {
+      // Should be used only by the scaled dot op
       return false;
     }
 
     for (auto user : scale.getUsers()) {
-      if (!isa<ttng::TMEMCopyOp, ttng::TCGen5MMAScaledOp>(user)) {
+      if (!isa<ttng::TCGen5MMAScaledOp>(user)) {
         // If the scale is used by TMEM copy and the only other user is the
         // scaled dot op, MMA pipelining is safe to apply.
         return false;
