@@ -586,7 +586,6 @@ SmallVector<SmallVector<unsigned>> emitOffsetForLayout(Attribute layout,
 namespace LLVM {
 using namespace mlir::triton;
 using mlir::triton::gpu::getOrder;
-using mlir::triton::gpu::getSizePerThread;
 
 Value createConstantI1(Location loc, OpBuilder &rewriter, bool v) {
   auto i1ty = rewriter.getIntegerType(1);

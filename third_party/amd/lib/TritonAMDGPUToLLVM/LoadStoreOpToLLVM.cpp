@@ -33,50 +33,23 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
                         Location loc, const AMD::TargetInfo &targetInfo) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
-  Value mask = b.int_val(1, 1);
+  Value mask = b.true_val();
   auto tid = getThreadId(rewriter, loc);
   auto clusterCTAId = targetInfo.getClusterCTAId(rewriter, loc);
   if (tensorTy) {
-    auto layout = tensorTy.getEncoding();
+    // To remove this use, port https://github.com/triton-lang/triton/pull/5432
+    // to the AMDGPU dialect
+    auto layout = cast<DistributedEncodingTrait>(tensorTy.getEncoding());
     auto shape = tensorTy.getShape();
-    unsigned rank = shape.size();
-    auto sizePerThread = triton::gpu::getSizePerThread(layout);
-    auto threadsPerWarp = triton::gpu::getThreadsPerWarp(layout);
-    auto warpsPerCTA = triton::gpu::getWarpsPerCTA(layout);
-    auto threadOrder = triton::gpu::getThreadOrder(tensorTy);
-    SmallVector<unsigned> warpOrder(rank);
-    if (auto enc = dyn_cast<DotOperandEncodingAttr>(layout)) {
-      warpOrder =
-          triton::gpu::getMatrixOrder(rank, /*rowMajor=*/enc.getOpIdx() == 1);
-    } else {
-      warpOrder = triton::gpu::getWarpOrder(tensorTy);
-    }
-    auto shapePerCTATile = triton::gpu::getShapePerCTATile(layout);
-    Value warpSize = b.i32_val(triton::gpu::getWarpSize(layout));
-    Value laneId = b.urem(tid, warpSize);
-    Value warpId = b.udiv(tid, warpSize);
-    // TODO: [DOT LL]
-    // The delinearize function is not entirely correct for certain layouts,
-    // such as wgmma. The correct approach is to convert a legacy layout to its
-    // corresponding linear layout and use the linear layout's
-    // getFreeVariableMasks to identify redundant elements.
-    SmallVector<Value> multiDimWarpId =
-        delinearize(rewriter, loc, warpId, warpsPerCTA, warpOrder);
-    SmallVector<Value> multiDimThreadId =
-        delinearize(rewriter, loc, laneId, threadsPerWarp, threadOrder);
-    for (unsigned dim = 0; dim < rank; ++dim) {
-      // if there is no data replication across threads on this dimension
-      if (shape[dim] >= shapePerCTATile[dim])
-        continue;
-      // Otherwise, we need to mask threads that will replicate data on this
-      // dimension. Calculate the thread index on this dimension for the CTA
-      Value threadDim =
-          b.add(b.mul(multiDimWarpId[dim], b.i32_val(threadsPerWarp[dim])),
-                multiDimThreadId[dim]);
-      mask = b.and_(mask,
-                    b.icmp_slt(b.mul(threadDim, b.i32_val(sizePerThread[dim])),
-                               b.i32_val(shape[dim])));
-    }
+    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+    auto kLane = StringAttr::get(rewriter.getContext(), "lane");
+    auto kWarp = StringAttr::get(rewriter.getContext(), "warp");
+    auto maskLane =
+        std::get<1>(delinearize(rewriter, loc, layout, shape, kLane, laneId));
+    auto maskWarp =
+        std::get<1>(delinearize(rewriter, loc, layout, shape, kWarp, warpId));
+    mask = b.and_(maskLane, maskWarp);
+
     // Do not write duplicated data when multicast is enabled
     if (triton::gpu::getNumCTAs(layout) > 1) {
       auto _0 = b.i32_val(0);
@@ -87,6 +60,7 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
       auto multiDimClusterCTAId =
           delinearize(rewriter, loc, clusterCTAId, CTAsPerCGA, CTAOrder);
 
+      auto rank = tensorTy.getRank();
       for (unsigned dim = 0; dim < rank; ++dim) {
         // Skip when multicast is not enabled in this dimension
         if (CTAsPerCGA[dim] == CTASplitNum[dim])
