@@ -1,20 +1,20 @@
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=arch=gfx950 | FileCheck %s --check-prefix=GFX950
-// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=arch=gfx942 --verify-diagnostics | FileCheck %s
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=arch=gfx950 | FileCheck %s --check-prefixes=COMMON,GFX950
+// RUN: triton-opt %s -split-input-file --allocate-shared-memory --convert-triton-amdgpu-to-llvm=arch=gfx942 --verify-diagnostics | FileCheck %s --check-prefixes=COMMON,GFX942
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 64], warpsPerCTA = [4, 1], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8192 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
-  // CHECK-LABEL: buffer_load_to_local_simple
+  // COMMON-LABEL: buffer_load_to_local_simple
   tt.func public @buffer_load_to_local_simple(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
                                 %arg1: !tt.ptr<f16>,
                                 %arg2: tensor<32x64xi32, #blocked>,
                                 %arg3: !ttg.memdesc<32x64xf16, #shared, #smem, mutable>) {
     // Each thread needs to load 8 elements and we load 1 (sizePerThread) per buffer load instruction
-    // CHECK: rocdl.make.buffer.rsrc %arg1
-    // CHECK-NOT: rocdl.make.buffer.rsrc
-    // CHECK-COUNT-8: rocdl.raw.ptr.buffer.load.lds
-    // CHECK-NOT: rocdl.raw.ptr.buffer.load.lds
+    // COMMON: rocdl.make.buffer.rsrc
+    // COMMON-NOT: rocdl.make.buffer.rsrc
+    // COMMON-COUNT-8: rocdl.raw.ptr.buffer.load.lds
+    // COMMON-NOT: rocdl.raw.ptr.buffer.load.lds
     %65 = amdgpu.buffer_load_to_local %arg1[%arg2] into %arg3 {OpIdx = #amdgpu.OpIdx<1>} : <f16>[tensor<32x64xi32, #blocked>] -> <32x64xf16, #shared, #smem, mutable>
     tt.return
   }
@@ -26,7 +26,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8192 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
-  // CHECK-LABEL: buffer_load_to_local_vectorized_2xf16
+  // COMMON-LABEL: buffer_load_to_local_vectorized_2xf16
   tt.func public @buffer_load_to_local_vectorized_2xf16(
                                 %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
                                 %arg2: !ttg.memdesc<32x64xf16, #shared, #smem, mutable>,
@@ -35,10 +35,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     %2 = tt.expand_dims %1 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #blocked>
     %3 = tt.broadcast %2 : tensor<1x64xi32, #blocked> -> tensor<32x64xi32, #blocked>
     // Each thread needs to load 8 elements and we load 2 (sizePerThread) per buffer load instruction
-    // CHECK: rocdl.make.buffer.rsrc
-    // CHECK-NOT: rocdl.make.buffer.rsrc
-    // CHECK-COUNT-4: rocdl.raw.ptr.buffer.load.lds
-    // CHECK-NOT: rocdl.raw.ptr.buffer.load.lds
+    // COMMON: rocdl.make.buffer.rsrc
+    // COMMON-NOT: rocdl.make.buffer.rsrc
+    // COMMON-COUNT-4: rocdl.raw.ptr.buffer.load.lds
+    // COMMON-NOT: rocdl.raw.ptr.buffer.load.lds
     %65 = amdgpu.buffer_load_to_local %arg1[%3] into %arg2  : <f16>[tensor<32x64xi32, #blocked>] -> <32x64xf16, #shared, #smem, mutable>
     tt.return
   }
@@ -50,8 +50,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8192 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
-  // GFX950-LABEL: buffer_load_to_local_vectorized_8xf16
-  // GFX942-LABEL: buffer_load_to_local_vectorized_8xf16
+  // COMMON-LABEL: buffer_load_to_local_vectorized_8xf16
   tt.func public @buffer_load_to_local_vectorized_8xf16(
                                 %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
                                 %arg2: !ttg.memdesc<32x64xf16, #shared, #smem, mutable>,
@@ -67,8 +66,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // GFX950-NOT: rocdl.raw.ptr.buffer.load.lds
 
     // GFX942 does not support vectorization > 4bytes so we cannot lower it
-    // GFX942-NOT rocdl.raw.ptr.buffer.load.lds
-    // GFX942: amdgpu.amdgpu.buffer_load_to_local
+    // GFX942-NOT: rocdl.raw.ptr.buffer.load.lds
+    // GFX942: amdgpu.buffer_load_to_local
     %65 = amdgpu.buffer_load_to_local %arg1[%3] into %arg2  : <f16>[tensor<32x64xi32, #blocked>] -> <32x64xf16, #shared, #smem, mutable>
     tt.return
   }
@@ -80,8 +79,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8192 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
-  // CHECK-LABEL: buffer_load_to_local_mask_other
-  // GFX950-LABEL: buffer_load_to_local_mask_other
+  // COMMON-LABEL: buffer_load_to_local_mask_other
   tt.func public @buffer_load_to_local_mask_other(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
                                 %arg1: !tt.ptr<f16>,
                                 %arg2: tensor<32x32xi32, #blocked>,
@@ -109,20 +107,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     // Each thread needs to load 4 elements and we load 1 (sizePerThread) per buffer load instruction
     // Note that mask/other alignment is 1 so we need 4 conditionals
 
-    // CHECK: rocdl.raw.ptr.buffer.load.lds
-    // CHECK: _predicated_store
+    // COMMON: rocdl.raw.ptr.buffer.load.lds
+    // COMMON: _predicated_store
 
-    // CHECK: rocdl.raw.ptr.buffer.load.lds
-    // CHECK: _predicated_store
+    // COMMON: rocdl.raw.ptr.buffer.load.lds
+    // COMMON: _predicated_store
 
-    // CHECK: rocdl.raw.ptr.buffer.load.lds
-    // CHECK: _predicated_store
+    // COMMON: rocdl.raw.ptr.buffer.load.lds
+    // COMMON: _predicated_store
 
-    // CHECK: rocdl.raw.ptr.buffer.load.lds
-    // CHECK: _predicated_store
+    // COMMON: rocdl.raw.ptr.buffer.load.lds
+    // COMMON: _predicated_store
 
-    // CHECK-NOT: rocdl.raw.ptr.buffer.load.lds
-    // CHECK-NOT: _predicated_store
+    // COMMON-NOT: rocdl.raw.ptr.buffer.load.lds
+    // COMMON-NOT: _predicated_store
 
     amdgpu.buffer_load_to_local %arg1[%arg2] mask=%67 other=%cst_0 into %arg3 {OpIdx = #amdgpu.OpIdx<1>} : <f16>[tensor<32x32xi32, #blocked>] tensor<32x32xf16, #blocked>  -> <32x32xf16, #shared, #smem, mutable>
     tt.return
@@ -136,24 +134,24 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, ttg.shared = 8192 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
-  // CHECK-LABEL: buffer_load_to_local_cache_mods
+  // COMMON-LABEL: buffer_load_to_local_cache_mods
   tt.func public @buffer_load_to_local_cache_mods(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
                                 %arg1: !tt.ptr<f16>,
                                 %arg2: tensor<32x32xi32, #blocked>,
                                 %arg3: !ttg.memdesc<32x32xf16, #shared, #smem, mutable>) {
     // The first constant 0 skips the LDS offset which is also 0
-    // CHECK: llvm.getelementptr
-    // CHECK: llvm.mlir.constant(0 : i32) : i32
-    // CHECK: %[[aux_ca:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK: rocdl.raw.ptr.buffer.load.lds {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[aux_ca]]
+    // COMMON: llvm.getelementptr
+    // COMMON: llvm.mlir.constant(0 : i32) : i32
+    // COMMON: %[[aux_ca:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // COMMON: rocdl.raw.ptr.buffer.load.lds {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[aux_ca]]
     %1 = amdgpu.buffer_load_to_local %arg1[%arg2] cacheModifier = ca into %arg3: <f16>[tensor<32x32xi32, #blocked>] -> <32x32xf16, #shared, #smem, mutable>
-    // CHECK: llvm.getelementptr
-    // CHECK: %[[aux_cg:.*]] = llvm.mlir.constant(3 : i32) : i32
-    // CHECK: rocdl.raw.ptr.buffer.load.lds {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[aux_cg]]
+    // COMMON: llvm.getelementptr
+    // COMMON: %[[aux_cg:.*]] = llvm.mlir.constant(3 : i32) : i32
+    // COMMON: rocdl.raw.ptr.buffer.load.lds {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[aux_cg]]
     %2 = amdgpu.buffer_load_to_local %arg1[%arg2] cacheModifier = cg into %arg3: <f16>[tensor<32x32xi32, #blocked>] -> <32x32xf16, #shared, #smem, mutable>
-    // CHECK: llvm.getelementptr
-    // CHECK: %[[aux_cv:.*]] = llvm.mlir.constant(17 : i32) : i32
-    // CHECK: rocdl.raw.ptr.buffer.load.lds {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[aux_cv]]
+    // COMMON: llvm.getelementptr
+    // COMMON: %[[aux_cv:.*]] = llvm.mlir.constant(17 : i32) : i32
+    // COMMON: rocdl.raw.ptr.buffer.load.lds {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[aux_cv]]
     %3 = amdgpu.buffer_load_to_local %arg1[%arg2] cacheModifier = cv into %arg3: <f16>[tensor<32x32xi32, #blocked>] -> <32x32xf16, #shared, #smem, mutable>
 
     tt.return

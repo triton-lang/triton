@@ -407,7 +407,7 @@ struct BufferLoadToLocalOpConversion
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo);
 
-    // original values
+    // Original values
     Value ptr = op.getPtr();
     Value offset = op.getOffsets();
     Value mask = op.getMask();
@@ -421,8 +421,7 @@ struct BufferLoadToLocalOpConversion
     Value llStride = adaptor.getStride();
 
     RankedTensorType ptrType =
-        dyn_cast<RankedTensorType>(getPointerTypeWithShape(ptr, offset));
-    assert(ptrType);
+        cast<RankedTensorType>(getPointerTypeWithShape(ptr, offset));
     unsigned numElems = getTotalElemsPerThread(ptrType);
 
     // We can load N elements at a time if:
@@ -445,8 +444,8 @@ struct BufferLoadToLocalOpConversion
     // buffer_load into LDS does not support per lane offsets.
     // We need to ensure that we write coalesced into shared memory.
     auto dstTy = op.getDest().getType();
-    if (!LLVM::AMD::writesCoalscedIntoLocalMemory(rewriter, ptrType, dstTy,
-                                                  vec)) {
+    if (!LLVM::AMD::canCoalesceWriteIntoSharedMemory(rewriter, ptrType, dstTy,
+                                                     vec)) {
       return rewriter.notifyMatchFailure(op,
                                          "does not write coalesced into LDS");
     }
@@ -455,7 +454,9 @@ struct BufferLoadToLocalOpConversion
     auto smemObj = mlir::LLVM::getSharedMemoryObjectFromStruct(
         loc, llDst, resElemTy, rewriter);
 
-    // Addresses to store into, one per `vecTy`.
+    // First we determine the vector size per load and collect the
+    // shared addresses. This will only emit the address calculation and not the
+    // actual loads
     VectorType vecTy;
     SmallVector<Value> shmemAddrs;
     bool ok = emitTransferBetweenRegistersAndShared(
@@ -467,10 +468,11 @@ struct BufferLoadToLocalOpConversion
     assert(ok);
 
     int vecBits = vecTy.getNumElements() * vecTy.getElementTypeBitWidth();
-    if (!llvm::is_contained(targetInfo.supportedDirectToLdsWidths(), vecBits)) {
+    if (!targetInfo.supportsDirectToLdsLoadBitWidth(vecBits)) {
       return rewriter.notifyMatchFailure(
-          op, "Buffer load to local does not support the required load "
-              "vectorization");
+          op, "Buffer load to local does not support the required load vector "
+              "bitwidth" +
+                  std::to_string(vecBits));
     }
 
     int vecBytes = vecBits / 8;
@@ -478,13 +480,14 @@ struct BufferLoadToLocalOpConversion
     Value vecBytesVal = b.i32_val(vecBytes);
 
     // Create the resource descriptor and then emit the buffer_loads to lds
+    // based on the collected shared addresses and vector size
     Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr, llStride);
 
     for (int i = 0; i < shmemAddrs.size(); i++) {
       auto srcIdx = i * vec;
       auto offsetIn = offsetElems[srcIdx];
 
-      Value pred = mask ? maskElems[srcIdx] : b.int_val(1, 1);
+      Value pred = mask ? maskElems[srcIdx] : b.true_val();
       bufferEmitter.emitLoadToLds(vecTy, vecBytesVal, rsrcDesc, offsetIn,
                                   shmemAddrs[i], pred, op.getCache());
       if (!otherElems.empty()) {
@@ -554,15 +557,16 @@ struct AsyncCopyGlobalToLocalOpConversion
 
     // global.load.lds does not support per lane offsets.
     // We need to ensure that we write coalesced into shared memory. This means
-    // that the kLane dim needs to be contigeous based on the vectorization
-    // size.
-    if (!LLVM::AMD::writesCoalscedIntoLocalMemory(rewriter, srcTy, dstTy,
-                                                  maxVec)) {
+    // that the kLane dim needs to be contigeous based on the vector size.
+    if (!LLVM::AMD::canCoalesceWriteIntoSharedMemory(rewriter, srcTy, dstTy,
+                                                     maxVec)) {
       return rewriter.notifyMatchFailure(op,
                                          "does not write coalesced into LDS");
     }
 
-    // Addresses to store into, one per `vecTy`.
+    // First we determine the vector size per load and collect the
+    // shared addresses. This will only emit the address calculation and not the
+    // actual loads
     VectorType vecTy;
     SmallVector<Value> shmemAddrs;
     bool ok = emitTransferBetweenRegistersAndShared(
@@ -574,9 +578,10 @@ struct AsyncCopyGlobalToLocalOpConversion
     assert(ok);
 
     int vecBits = vecTy.getNumElements() * vecTy.getElementTypeBitWidth();
-    if (!llvm::is_contained(targetInfo.supportedDirectToLdsWidths(), vecBits)) {
+    if (!targetInfo.supportsDirectToLdsLoadBitWidth(vecBits)) {
       return rewriter.notifyMatchFailure(
-          op, "Async copy does not support the required load vectorization");
+          op, "Async copy does not support the required load vector bitwidth" +
+                  std::to_string(vecBits));
     }
 
     int vecBytes = vecBits / 8;
@@ -600,6 +605,8 @@ struct AsyncCopyGlobalToLocalOpConversion
       assert(srcElems.size() == otherElems.size());
     }
 
+    // Emit the load to lds based on the collected shared addresses and vector
+    // size
     for (int i = 0; i < shmemAddrs.size(); i++) {
       auto srcIdx = i * maxVec;
       auto srcPtr = srcElems[srcIdx];

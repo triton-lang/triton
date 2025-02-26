@@ -596,10 +596,10 @@ Type scaleDotElemTypeToMLIRType(MLIRContext *ctx, triton::ScaleDotElemType t) {
   }
 }
 
-bool writesCoalscedIntoLocalMemory(RewriterBase &rewriter,
-                                   RankedTensorType srcTy,
-                                   triton::gpu::MemDescType dstTy,
-                                   unsigned vectorization) {
+bool canCoalesceWriteIntoSharedMemory(RewriterBase &rewriter,
+                                      RankedTensorType srcTy,
+                                      triton::gpu::MemDescType dstTy,
+                                      unsigned vectorSize) {
   auto shape = srcTy.getShape();
   LinearLayout srcLayout =
       triton::gpu::toLinearLayout(shape, srcTy.getEncoding());
@@ -610,7 +610,7 @@ bool writesCoalscedIntoLocalMemory(RewriterBase &rewriter,
   StringAttr kLane = rewriter.getStringAttr("lane");
   for (int inLane : llvm::seq(srcToSharedLayout.getInDimSizeLog2(kLane))) {
     auto basis = srcToSharedLayout.getBasis(kLane, inLane)[0];
-    unsigned expected = vectorization * (1 << inLane);
+    unsigned expected = vectorSize * (1 << inLane);
     if (basis != expected) {
       LDBG("detected uncoalesced layout from blocked to shared in async copy "
            "for lane "
