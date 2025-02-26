@@ -1,4 +1,5 @@
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/Support/DebugStringHelper.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -770,17 +771,27 @@ LogicalResult WarpYieldOp::verify() {
   return success();
 }
 
-std::pair<llvm::TypeSize, uint64_t>
-WarpSpecializeOp::getCaptureSizeAlign(const DataLayout &datalayout) {
-  auto captureSize = llvm::TypeSize::getFixed(0);
-  uint64_t captureAlign = 1;
-  for (Type type : getOperandTypes()) {
-    uint64_t align = datalayout.getTypeABIAlignment(type);
-    captureSize = llvm::alignTo(captureSize, align);
-    captureSize += datalayout.getTypeSize(type);
-    captureAlign = std::max(align, captureAlign);
+static size_t getSharedMemorySize(Type type) {
+  if (isa<IntegerType, FloatType>(type))
+    return llvm::divideCeil(type.getIntOrFloatBitWidth(), 8);
+  if (isa<PointerType>(type))
+    return 8;
+  if (auto desc = dyn_cast<MemDescType>(type)) {
+    if (!isa<SharedMemorySpaceAttr>(desc.getMemorySpace()))
+      return 8;
+    return 8 + desc.getRank() * 4;
   }
-  return {captureSize, captureAlign};
+  llvm::report_fatal_error(
+      Twine("shared memory size for scalar type is unspecified: ") +
+      mlir::debugString(type));
+}
+
+std::pair<uint64_t, uint64_t> WarpSpecializeOp::getCaptureSizeAlign() {
+  uint64_t captureSize = 0;
+  // Tightly pack the captures in memory.
+  for (Type type : getOperandTypes())
+    captureSize += getSharedMemorySize(type);
+  return {captureSize, 8};
 }
 
 unsigned WarpSpecializeOp::getTotalPartitionWarps() {

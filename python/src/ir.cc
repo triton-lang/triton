@@ -6,7 +6,6 @@
 #include "mlir/Bytecode/BytecodeWriter.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
-#include "mlir/Dialect/DLTI/DLTI.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/Transforms/InlinerInterfaceImpl.h"
 #include "mlir/Dialect/UB/IR/UBOps.h"
@@ -22,7 +21,6 @@
 #include "mlir/Support/LLVM.h"
 #include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
-#include "mlir/Target/LLVMIR/Import.h"
 #include "mlir/Transforms/LocationSnapshot.h"
 
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -323,12 +321,11 @@ void init_triton_ir(py::module &&m) {
 
   m.def("load_dialects", [](MLIRContext &context) {
     DialectRegistry registry;
-    registry
-        .insert<TritonDialect, ::mlir::triton::gpu::TritonGPUDialect,
-                math::MathDialect, DLTIDialect, arith::ArithDialect,
-                scf::SCFDialect, ::mlir::gpu::GPUDialect,
-                cf::ControlFlowDialect, ::mlir::triton::proton::ProtonDialect,
-                LLVM::LLVMDialect, mlir::ub::UBDialect>();
+    registry.insert<TritonDialect, ::mlir::triton::gpu::TritonGPUDialect,
+                    math::MathDialect, arith::ArithDialect, scf::SCFDialect,
+                    ::mlir::gpu::GPUDialect, cf::ControlFlowDialect,
+                    ::mlir::triton::proton::ProtonDialect, LLVM::LLVMDialect,
+                    mlir::ub::UBDialect>();
     mlir::LLVM::registerInlinerInterface(registry);
     registerBuiltinDialectTranslation(registry);
     registerLLVMDialectTranslation(registry);
@@ -614,14 +611,6 @@ void init_triton_ir(py::module &&m) {
       .def("get_function",
            [](ModuleOp &self, std::string &funcName) -> FuncOp {
              return self.lookupSymbol<FuncOp>(funcName);
-           })
-      .def("set_datalayout",
-           [](ModuleOp &self, const std::string &datalayoutStr) {
-             llvm::DataLayout datalayout(datalayoutStr);
-             DataLayoutSpecInterface datalayoutAttr =
-                 mlir::translateDataLayout(datalayout, self.getContext());
-             self->setAttr(mlir::DLTIDialect::kDataLayoutAttrName,
-                           datalayoutAttr);
            })
 
       /*

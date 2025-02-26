@@ -155,7 +155,8 @@ static void rewritePartitionRegions(WarpSpecializeOp ws, Block *switchLoop,
     b.setInsertionPointToStart(&partition->front());
     if (partition->getNumArguments()) {
       auto captureType = LLVM::LLVMStructType::getLiteral(
-          b.getContext(), llvm::to_vector(partition->getArgumentTypes()));
+          b.getContext(), llvm::to_vector(partition->getArgumentTypes()),
+          /*isPacked=*/true);
       Value capturePtr =
           LLVM::getSharedMemoryBase(b.getLoc(), b, targetInfo, ws);
       LLVM::LLVMPointerType ptrTy = ptr_ty(b.getContext(), 3);
@@ -165,7 +166,7 @@ static void rewritePartitionRegions(WarpSpecializeOp ws, Block *switchLoop,
         Value ptr =
             b.gep(ptrTy, captureType, capturePtr, ArrayRef<LLVM::GEPArg>{0, i});
         // Each thread in the warp group needs a copy of the value.
-        Value value = b.load(arg.getType(), ptr);
+        Value value = b.load(arg.getType(), ptr, /*align=*/1);
         arg.replaceAllUsesWith(value);
       }
       partition->front().eraseArguments([](auto) { return true; });
@@ -333,14 +334,15 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
     // Store the captures if there are any.
     if (ws.getNumOperands()) {
       auto captureType = LLVM::LLVMStructType::getLiteral(
-          b.getContext(), llvm::to_vector(ws.getOperandTypes()));
+          b.getContext(), llvm::to_vector(ws.getOperandTypes()),
+          /*isPacked=*/true);
       Value capturePtr =
           LLVM::getSharedMemoryBase(b.getLoc(), b, targetInfo, ws);
       for (auto [i, arg] : llvm::zip(llvm::seq<int32_t>(ws.getNumOperands()),
                                      ws.getOperands())) {
         Value ptr =
             b.gep(ptrTy, captureType, capturePtr, ArrayRef<LLVM::GEPArg>{0, i});
-        b.store(arg, ptr);
+        b.store(arg, ptr, /*align=*/1);
       }
     }
 

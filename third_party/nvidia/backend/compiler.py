@@ -299,15 +299,7 @@ class CUDABackend(BaseBackend):
     def make_llir(self, src, metadata, options, capability):
         ptx_version = get_ptx_version_from_options(options, self.target.arch)
 
-        # Attach the datalayout to the MLIR module.
         mod = src
-        proc = sm_arch_from_capability(capability)
-        features = get_features(options, self.target.arch)
-        triple = 'nvptx64-nvidia-cuda'
-        llvm.init_targets()
-        datalayout = llvm.get_datalayout(triple, proc, features)
-        mod.set_datalayout(datalayout)
-
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
@@ -331,11 +323,15 @@ class CUDABackend(BaseBackend):
             passes.llvmir.add_di_scope(pm)
         pm.run(mod)
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
+        llvm.init_targets()
         context = llvm.context()
         if os.environ.get("TRITON_ENABLE_ASAN", "0") == "1":
             raise RuntimeError(
                 "Address Sanitizer Error: Address sanitizer is currently only supported on the AMD backend")
         llvm_mod = llvm.to_module(mod, context)
+        proc = sm_arch_from_capability(capability)
+        features = get_features(options, self.target.arch)
+        triple = 'nvptx64-nvidia-cuda'
         llvm.attach_datalayout(llvm_mod, triple, proc, features)
         nvidia.set_nvvm_reflect_ftz(llvm_mod)
 

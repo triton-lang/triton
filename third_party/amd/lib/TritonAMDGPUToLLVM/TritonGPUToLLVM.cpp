@@ -3,7 +3,6 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "SchedInstructions.h"
 #include "TargetInfo.h"
-#include "mlir/Analysis/DataLayoutAnalysis.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
@@ -90,9 +89,7 @@ struct ConvertTritonAMDGPUToLLVM
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
 
-    auto &datalayout = getAnalysis<DataLayoutAnalysis>();
-    TritonGPUToLLVMTypeConverter typeConverter(context, option, targetInfo,
-                                               &datalayout);
+    TritonGPUToLLVMTypeConverter typeConverter(context, option, targetInfo);
     TritonLLVMConversionTarget convTarget(*context);
 
     int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(mod);

@@ -197,10 +197,10 @@ llvm.func @pass_captures(%arg0: i32, %arg1: i64) attributes {allocation.offset =
   // CHECK-NEXT: [[SMEM_ADDR:%.*]] = llvm.mlir.addressof @global_smem
   // CHECK-NEXT: [[SMEM_BASE:%.*]] = llvm.getelementptr [[SMEM_ADDR]][[[C0]]]
 
-  // CHECK-NEXT: [[ARG0_PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][0, 0]
-  // CHECK-NEXT: [[ARG0:%.*]] = llvm.load [[ARG0_PTR]]
-  // CHECK-NEXT: [[ARG1_PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][0, 1]
-  // CHECK-NEXT: [[ARG1:%.*]] = llvm.load [[ARG1_PTR]]
+  // CHECK-NEXT: [[ARG0_PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][0, 0] : (!llvm.ptr<3>) -> !llvm.ptr<3>, !llvm.struct<packed (i32, i64)>
+  // CHECK-NEXT: [[ARG0:%.*]] = llvm.load [[ARG0_PTR]] {alignment = 1 : i64}
+  // CHECK-NEXT: [[ARG1_PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][0, 1] : (!llvm.ptr<3>) -> !llvm.ptr<3>, !llvm.struct<packed (i32, i64)>
+  // CHECK-NEXT: [[ARG1:%.*]] = llvm.load [[ARG1_PTR]] {alignment = 1 : i64}
   // CHECK-NEXT: barrier.sync 1 ;
   // CHECK-NEXT: "use"([[ARG0]], [[ARG1]])
   // CHECK-NEXT: barrier.sync 1 ;
@@ -210,10 +210,10 @@ llvm.func @pass_captures(%arg0: i32, %arg1: i64) attributes {allocation.offset =
   // CHECK: [[C0:%.*]] = llvm.mlir.constant(0 : i32)
   // CHECK-NEXT: [[SMEM_ADDR:%.*]] = llvm.mlir.addressof @global_smem
   // CHECK-NEXT: [[SMEM_BASE:%.*]] = llvm.getelementptr [[SMEM_ADDR]][[[C0]]]
-  // CHECK-NEXT: [[ARG0_PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][0, 0]
-  // CHECK-NEXT: llvm.store %arg0, [[ARG0_PTR]]
-  // CHECK-NEXT: [[ARG1_PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][0, 1]
-  // CHECK-NEXT: llvm.store %arg1, [[ARG1_PTR]]
+  // CHECK-NEXT: [[ARG0_PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][0, 0] : (!llvm.ptr<3>) -> !llvm.ptr<3>, !llvm.struct<packed (i32, i64)>
+  // CHECK-NEXT: llvm.store %arg0, [[ARG0_PTR]] {alignment = 1 : i64}
+  // CHECK-NEXT: [[ARG1_PTR:%.*]] = llvm.getelementptr [[SMEM_BASE]][0, 1] : (!llvm.ptr<3>) -> !llvm.ptr<3>, !llvm.struct<packed (i32, i64)>
+  // CHECK-NEXT: llvm.store %arg1, [[ARG1_PTR]] {alignment = 1 : i64}
   // CHECK-NEXT: barrier.sync 1 ;
   // CHECK-NEXT: barrier.sync 1 ;
   ttg.warp_specialize(%arg0, %arg1) attributes {allocation.offset = 0 : i32, warpGroupStartIds = array<i32: 4>}
