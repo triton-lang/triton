@@ -11,12 +11,12 @@
 // CHECK: #[[$ATTR_3:.+]] = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = true, elementBitWidth = 16}>
 // CHECK: #[[$ATTR_4:.+]] = #ttg.shared_memory
 // To regenerate this test case, run `make golden-samples` in the triton root directory
-// RUN: triton-opt %s -split-input-file -tritongpu-loop-scheduling -tritongpu-pipeline -canonicalize | FileCheck --dump-input-context=50 %s
+// RUN: triton-opt %s -split-input-file -tritongpu-pipeline -canonicalize | FileCheck --dump-input-context=50 %s
 // CHECK-LABEL:   tt.func public @matmul_kernel_descriptor_persistent(
 // CHECK-SAME:  %[[VAL_0:.*]]: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %[[VAL_1:.*]]: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %[[VAL_2:.*]]: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %[[VAL_3:.*]]: i32 {tt.divisibility = 16 : i32}, %[[VAL_4:.*]]: i32 {tt.divisibility = 16 : i32}, %[[VAL_5:.*]]: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
 // CHECK:           %[[VAL_6:.*]] = arith.constant 2 : i64
-// CHECK:           %[[VAL_7:.*]] = arith.constant 2 : i32
 // CHECK:           %[[VAL_8:.*]] = arith.constant 3 : i32
+// CHECK:           %[[VAL_7:.*]] = arith.constant 2 : i32
 // CHECK:           %[[VAL_9:.*]] = arith.constant false
 // CHECK:           %[[VAL_10:.*]] = arith.constant 1 : i32
 // CHECK:           %[[VAL_11:.*]] = arith.constant 132 : i32
@@ -58,9 +58,6 @@
 // CHECK:           %[[VAL_43:.*]] = tt.elementwise_inline_asm "mov.b32 $0, 0;" {constraints = "=r", packed_element = 1 : i32, pure = true} -> i32
 // CHECK:           %[[VAL_44:.*]] = arith.muli %[[VAL_29]], %[[VAL_39]] : i32
 // CHECK:           %[[VAL_45:.*]] = arith.subi %[[VAL_29]], %[[VAL_10]] : i32
-// CHECK:           %[[VAL_46:.*]] = ttg.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32} : !tt.ptr<i8>
-// CHECK:           %[[VAL_47:.*]] = ttg.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32} : !tt.ptr<i8>
-// CHECK:           %[[VAL_48:.*]] = ttg.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32} : !tt.ptr<i8>
 // CHECK:           %[[VAL_49:.*]] = ttg.local_alloc  : () -> !ttg.memdesc<3x128x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable>
 // CHECK:           %[[VAL_50:.*]] = ttg.local_alloc  : () -> !ttg.memdesc<3x256x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable>
 // CHECK:           %[[VAL_51:.*]] = ttg.local_alloc  : () -> !ttg.memdesc<3xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable>
@@ -70,6 +67,9 @@
 // CHECK:           ttng.init_barrier %[[VAL_53]], 1 : !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
 // CHECK:           %[[VAL_54:.*]] = ttg.memdesc_subview %[[VAL_51]]{{\[}}%[[VAL_7]]] : !ttg.memdesc<3xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable> -> !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
 // CHECK:           ttng.init_barrier %[[VAL_54]], 1 : !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
+// CHECK:           %[[VAL_46:.*]] = ttg.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32} : !tt.ptr<i8>
+// CHECK:           %[[VAL_47:.*]] = ttg.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32} : !tt.ptr<i8>
+// CHECK:           %[[VAL_48:.*]] = ttg.global_scratch_alloc {alignment = 128 : i32, nbytes = 384 : i32} : !tt.ptr<i8>
 // CHECK:           %[[VAL_55:.*]] = arith.cmpi sgt, %[[VAL_44]], %[[VAL_13]] : i32
 // CHECK:           %[[VAL_56:.*]] = arith.select %[[VAL_55]], %[[VAL_23]], %[[VAL_41]] : i32
 // CHECK:           %[[VAL_57:.*]] = arith.select %[[VAL_55]], %[[VAL_13]], %[[VAL_12]] : i32
@@ -262,8 +262,9 @@
 // CHECK:           ttng.inval_barrier %[[VAL_221]] : !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
 // CHECK:           %[[VAL_222:.*]] = ttg.memdesc_subview %[[VAL_51]]{{\[}}%[[VAL_7]]] : !ttg.memdesc<3xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable> -> !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
 // CHECK:           ttng.inval_barrier %[[VAL_222]] : !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
-// CHECK:           ttg.local_dealloc %[[VAL_49]] : !ttg.memdesc<3x128x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable>
+// CHECK:           ttg.local_dealloc %[[VAL_51]] : !ttg.memdesc<3xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable>
 // CHECK:           ttg.local_dealloc %[[VAL_50]] : !ttg.memdesc<3x256x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable>
+// CHECK:           ttg.local_dealloc %[[VAL_49]] : !ttg.memdesc<3x128x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable>
 // CHECK:           tt.return
 // CHECK:         }
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
