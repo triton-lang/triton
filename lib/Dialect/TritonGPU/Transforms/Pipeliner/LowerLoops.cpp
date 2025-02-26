@@ -560,7 +560,7 @@ bool loadRequiresAdditionalBuffer(Operation *loadOp) {
     ttg::LocalAllocOp alloc =
         dyn_cast<ttg::LocalAllocOp>(*loadOp->getUsers().begin());
     if (alloc && alloc->hasOneUse()) {
-      if (isa<ttng::TMEMCopyOp>(*alloc->getUsers().begin())) {
+      if (isa<ttng::TCGen5MMAScaledOp>(*alloc->getUsers().begin())) {
         return true;
       }
     }

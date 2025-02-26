@@ -580,8 +580,8 @@ Value addSmemStageToScaleLoad(Value scale, mlir::PatternRewriter &rewriter) {
       loadConsumer = cvt;
     } else {
       // Unrecognized pattern, bail out. In practice, this implies that MMA
-      // pipelining will not apply to the scaled dot op, since tmem_copy would
-      // not be inserted before the pipeline pass.
+      // pipelining will not apply to the scaled dot op, since scales will not
+      // be in passed through SMEM to tc_gen5_mma_scaled.
       return scale;
     }
   }

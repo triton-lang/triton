@@ -141,20 +141,39 @@ public:
 
 // Inject TMEM copy instructions into IR to efficiently load blocked scales for
 // scaled dot
-class InjectTMemCopy
-    : public OpRewritePattern<triton::nvidia_gpu::TMEMAllocOp> {
+class UseShmemForScales
+    : public OpRewritePattern<triton::nvidia_gpu::TCGen5MMAScaledOp> {
 public:
-  using OpRewritePattern<triton::nvidia_gpu::TMEMAllocOp>::OpRewritePattern;
+  using OpRewritePattern<
+      triton::nvidia_gpu::TCGen5MMAScaledOp>::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(triton::nvidia_gpu::TMEMAllocOp tmemAlloc,
+  LogicalResult matchAndRewrite(triton::nvidia_gpu::TCGen5MMAScaledOp mmaOp,
                                 PatternRewriter &rewriter) const override {
-    auto dstType = tmemAlloc.getResult().getType();
+    auto aScale = mmaOp.getAScale();
+    auto bScale = mmaOp.getBScale();
+    LogicalResult ret = failure();
+    if (aScale && isa<triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(
+                      aScale.getType().getEncoding())) {
+      if (rewriteOperand(mmaOp.getAScaleMutable(), rewriter).succeeded())
+        ret = success();
+    }
+    if (bScale && isa<triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(
+                      bScale.getType().getEncoding())) {
+      if (rewriteOperand(mmaOp.getBScaleMutable(), rewriter).succeeded())
+        ret = success();
+    }
+    return ret;
+  }
 
-    // Only applies to TMEMAlloc with scales encoding
-    if (!isa<triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(
-            dstType.getEncoding())) {
+private:
+  LogicalResult rewriteOperand(OpOperand &opOperand,
+                               PatternRewriter &rewriter) const {
+    auto src = cast<TypedValue<MemDescType>>(opOperand.get());
+    auto tmemAlloc = src.getDefiningOp<triton::nvidia_gpu::TMEMAllocOp>();
+    if (!tmemAlloc) {
       return failure();
     }
+    auto dstType = tmemAlloc.getResult().getType();
 
     if (!tmemAlloc.getSrc()) {
       return failure();
@@ -162,11 +181,13 @@ public:
 
     // Look for a sequence
     //    local_load
-    // -> reshape(..., (BLOCK_MN / 128, BLOCK_K / scale_vec_size / 4, 32, 4, 4)
+    // -> reshape(..., (BLOCK_MN / 128, BLOCK_K / scale_vec_size / 4, 32, 4,
+    // 4)
     // -> transpose(..., (0, 3, 2, 1, 4))
     // -> reshape(..., (BLOCK_MN, BLOCK_K / scale_vec_size)
     // -> tmem_alloc
-    // and replace it with tmem_alloc -> tmem_copy
+    // -> tc_gen_mma_scaled
+    // and replace it with local_alloc -> tc_gen_mma_scaled
     auto scale2DShape = dstType.getShape();
     auto blockMN = scale2DShape[0];
     auto numScales = scale2DShape[1];
@@ -195,24 +216,10 @@ public:
     if (!localLoad || !isTmemCopyCompatible(localLoad.getSrc().getType())) {
       return failure();
     }
-    MemDescType newType = MemDescType::get(
-        dstType.getShape(), dstType.getElementType(), dstType.getEncoding(),
-        dstType.getMemorySpace(), /*mutableMemory=*/true);
-    Value newTmemAlloc = rewriter.create<triton::nvidia_gpu::TMEMAllocOp>(
-        tmemAlloc.getLoc(), newType, Value());
-
-    // Since tcgen05.cp followed by tcgen05.mma is guaranteed to execute in that
-    // order, we do not need to wait for the completion of the copy before MMA.
-    rewriter.create<triton::nvidia_gpu::TMEMCopyOp>(
-        newTmemAlloc.getLoc(), localLoad.getSrc(), newTmemAlloc,
-        Value() /* barrier */);
-
-    rewriter.replaceOp(tmemAlloc, newTmemAlloc);
-
+    opOperand.assign(localLoad.getSrc());
     return success();
   }
 
-private:
   template <typename Op> Op getNextOp(Value op) const {
     while (auto cvtOp = op.getDefiningOp<ConvertLayoutOp>()) {
       op = cvtOp.getSrc();
@@ -285,7 +292,7 @@ public:
     mlir::RewritePatternSet patterns(context);
     patterns.add<SwizzleShmemConvert>(context);
     patterns.add<FuseTransMMAV3Plus>(context);
-    patterns.add<InjectTMemCopy>(context);
+    patterns.add<UseShmemForScales>(context);
     ConvertLayoutOp::getCanonicalizationPatterns(patterns, context);
     if (failed(applyPatternsGreedily(m, std::move(patterns))))
       signalPassFailure();
