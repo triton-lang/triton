@@ -774,19 +774,22 @@ default {
 }
 partition0(%arg0: i32, %arg1: i32) num_warps(8) {
   some_async_dispatch(%arg0, %arg1)
+  ttg.warp_return
 }
 partition1(%arg0: i32, %arg1: i32) num_warps(1) {
   some_async_dispatch(%arg0, %arg1)
+  ttg.warp_return
 } : (i32, i32) -&gt; i32
 </pre></div>
 </div>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">RecursiveMemoryEffects</span></code>, <code class="docutils literal notranslate"><span class="pre">RecursivelySpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AsyncRegions</span></code>, <code class="docutils literal notranslate"><span class="pre">RecursiveMemoryEffects</span></code>, <code class="docutils literal notranslate"><span class="pre">RecursivelySpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">RegionBranchOpInterface</span></code></p>
 <section id="id25">
 <h3>Attributes:<a class="headerlink" href="#id25" title="Link to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>partitionNumWarps</code></td><td>::mlir::DenseI32ArrayAttr</td><td>i32 dense array attribute</td></tr>
+<tr><td><code>warpGroupStartIds</code></td><td>::mlir::DenseI32ArrayAttr</td><td>i32 dense array attribute</td></tr>
 </table>
 </section>
 <section id="id26">
@@ -825,7 +828,7 @@ partition1(%arg0: i32, %arg1: i32) num_warps(1) {
 <p><em>Container op for <code class="docutils literal notranslate"><span class="pre">ttg.warp_specialize</span></code></em></p>
 <p>Because MLIR requires entire operations be isolated from above, this op
 contains the actual isolated from above regions of <code class="docutils literal notranslate"><span class="pre">ttg.warp_specialize</span></code>.</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">HasParent&lt;WarpSpecializeOp&gt;</span></code>, <code class="docutils literal notranslate"><span class="pre">IsolatedFromAbove</span></code>, <code class="docutils literal notranslate"><span class="pre">RecursiveMemoryEffects</span></code>, <code class="docutils literal notranslate"><span class="pre">RecursivelySpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">SingleBlockImplicitTerminator&lt;WarpReturnOp&gt;</span></code>, <code class="docutils literal notranslate"><span class="pre">SingleBlock</span></code>, <code class="docutils literal notranslate"><span class="pre">Terminator</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">HasParent&lt;WarpSpecializeOp&gt;</span></code>, <code class="docutils literal notranslate"><span class="pre">IsolatedFromAbove</span></code>, <code class="docutils literal notranslate"><span class="pre">RecursiveMemoryEffects</span></code>, <code class="docutils literal notranslate"><span class="pre">RecursivelySpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">Terminator</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code></p>
 </section>
 <section id="ttg-warp-yield-triton-gpu-warpyieldop">
@@ -842,7 +845,7 @@ the SSA results of the <code class="docutils literal notranslate"><span class="p
 <div class="highlight-mlir notranslate"><div class="highlight"><pre><span></span>ttg.warp_yield %a, %b : i32, tensor&lt;32xbf16, #blocked&gt;
 </pre></div>
 </div>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">HasParent&lt;WarpSpecializeOp&gt;</span></code>, <code class="docutils literal notranslate"><span class="pre">Terminator</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code>, <code class="docutils literal notranslate"><span class="pre">HasParent&lt;WarpSpecializeOp&gt;</span></code>, <code class="docutils literal notranslate"><span class="pre">ReturnLike</span></code>, <code class="docutils literal notranslate"><span class="pre">Terminator</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code>, <code class="docutils literal notranslate"><span class="pre">RegionBranchTerminatorOpInterface</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
 <section id="id28">

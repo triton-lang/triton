@@ -482,13 +482,15 @@ default {
 }
 partition0(%arg0: i32, %arg1: i32) num_warps(8) {
   some_async_dispatch(%arg0, %arg1)
+  ttg.warp_return
 }
 partition1(%arg0: i32, %arg1: i32) num_warps(1) {
   some_async_dispatch(%arg0, %arg1)
+  ttg.warp_return
 } : (i32, i32) -> i32
 ```
 
-Traits: `RecursiveMemoryEffects`, `RecursivelySpeculatableImplTrait`, `VerifyTensorLayoutsTrait`
+Traits: `AsyncRegions`, `RecursiveMemoryEffects`, `RecursivelySpeculatableImplTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `ConditionallySpeculatable`, `RegionBranchOpInterface`
 
@@ -497,6 +499,7 @@ Interfaces: `ConditionallySpeculatable`, `RegionBranchOpInterface`
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>partitionNumWarps</code></td><td>::mlir::DenseI32ArrayAttr</td><td>i32 dense array attribute</td></tr>
+<tr><td><code>warpGroupStartIds</code></td><td>::mlir::DenseI32ArrayAttr</td><td>i32 dense array attribute</td></tr>
 </table>
 
 #### Operands:
@@ -518,7 +521,7 @@ _Container op for `ttg.warp_specialize`_
 Because MLIR requires entire operations be isolated from above, this op
 contains the actual isolated from above regions of `ttg.warp_specialize`.
 
-Traits: `HasParent<WarpSpecializeOp>`, `IsolatedFromAbove`, `RecursiveMemoryEffects`, `RecursivelySpeculatableImplTrait`, `SingleBlockImplicitTerminator<WarpReturnOp>`, `SingleBlock`, `Terminator`, `VerifyTensorLayoutsTrait`
+Traits: `HasParent<WarpSpecializeOp>`, `IsolatedFromAbove`, `RecursiveMemoryEffects`, `RecursivelySpeculatableImplTrait`, `Terminator`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `ConditionallySpeculatable`
 
@@ -543,7 +546,7 @@ Example:
 ttg.warp_yield %a, %b : i32, tensor<32xbf16, #blocked>
 ```
 
-Traits: `AlwaysSpeculatableImplTrait`, `HasParent<WarpSpecializeOp>`, `Terminator`, `VerifyTensorLayoutsTrait`
+Traits: `AlwaysSpeculatableImplTrait`, `HasParent<WarpSpecializeOp>`, `ReturnLike`, `Terminator`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `ConditionallySpeculatable`, `NoMemoryEffect (MemoryEffectOpInterface)`, `RegionBranchTerminatorOpInterface`
 
