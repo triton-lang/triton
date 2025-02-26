@@ -65,15 +65,21 @@ def TritonAMDGPUOptimizeEpilogue : Pass<"tritonamdgpu-optimize-epilogue", "mlir:
 
 }
 
-def TritonAMDGPUHoistLayoutConversions : Pass<"tritonamdgpu-hoist-layout-conversions", "mlir::ModuleOp"> {
+def TritonAMDGPUHoistLayoutConversions : Pass<"tritonamdgpu-hoist-layout-conversions", "mlir::triton::FuncOp"> {
   let summary = "Hoist layout conversions out of the loop";
 
   let description = [{
+  This pass tries to hoist a convert_layout op out of the loop if 1) its dst is a tensor
+  of dotOperand layout, and 2) its src is defined out of the loop.
+  The rational is as follows:
+  1. When the defining op of the src is out of the loop, it means the src is loop-invariant.
+     Then we can potentially hoist this convert_layout op, since it's also loop-invariant.
+  2. The drawback of this LICM is higher register pressure. However, on AMD GPUs, we have
+     a larger register file but smaller shared memory. It's beneficial to keep loop-invariant
+     variables in registers rather than loading them from shared memory in the loop.
   }];
 
   let constructor = "mlir::createTritonAMDGPUHoistLayoutConversionsPass()";
-
-  let dependentDialects = [];
 
 }
 

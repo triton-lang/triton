@@ -11,6 +11,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 using namespace mlir;
+namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 
 // Hoist convert_layout out of the loop if the src is defined out of the loop.
@@ -46,14 +47,16 @@ struct TritonAMDGPUHoistLayoutConversionsPass
           TritonAMDGPUHoistLayoutConversionsPass> {
 
   void runOnOperation() override {
-    MLIRContext *context = &getContext();
-    ModuleOp m = getOperation();
+    tt::FuncOp funcOp = getOperation();
 
-    for (auto funcOp : m.getOps<triton::FuncOp>()) {
-      funcOp.walk([&](ttg::ConvertLayoutOp cvtOp) -> void {
-        hoistCvtDotOpOutOfLoop(cvtOp);
-      });
-    }
+    SmallVector<ttg::ConvertLayoutOp> cvtOps;
+    funcOp.walk([&](Operation *op) {
+      if (auto cvtOp = dyn_cast<ttg::ConvertLayoutOp>(op))
+        cvtOps.push_back(cvtOp);
+    });
+
+    for (auto cvtOp : cvtOps)
+      hoistCvtDotOpOutOfLoop(cvtOp);
   }
 };
 } // namespace
