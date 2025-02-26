@@ -1505,14 +1505,18 @@ LinearLayout getScaleTMEMStoreLinearLayout(RankedTensorType scaleType,
   auto CTALayout = getCTALayout(scaleType.getEncoding());
   basisT regBase;
 
+  // Pick a layout that will be trivial to store into the following TMEM layout:
+  // https://docs.nvidia.com/cuda/parallel-thread-execution/#tcgen05-mma-scale-factor-a-layout-1x
+  // Pack 4 scales together, if there are less than 4 we replicate the data.
   for (int i = 1; i < 4; i = i << 1) {
     if (i >= N)
       regBase.push_back({0, 0});
     else
       regBase.push_back({0, i});
   }
-
+  // Distribute 32 elements of M along a warp.
   basisT laneBase = {{1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}};
+  // The data are replicated across all the warps of each warpgroups.
   basisT warpBase = {{0, 0}, {0, 0}};
   for (int i = 32; i < M; i = i << 1) {
     regBase.push_back({i, 0});
@@ -1520,6 +1524,7 @@ LinearLayout getScaleTMEMStoreLinearLayout(RankedTensorType scaleType,
   for (int i = 4; i < N; i = i << 1) {
     regBase.push_back({0, i});
   }
+  // If we have 8 warps distribute the last dimension on the second warp group.
   if (numWarps == 8) {
     warpBase.push_back(regBase.back());
     regBase.pop_back();

@@ -396,7 +396,6 @@ public:
 // Pick the layout to match MXFP scales layout in register so that it can be
 // copied directly using tmem st.
 static Attribute getTmemScales(RankedTensorType type, unsigned numWarps) {
-  assert(numWarps == 4 || numWarps == 8);
   return triton::gpu::LinearEncodingAttr::get(
       type.getContext(), getScaleTMEMStoreLinearLayout(type, numWarps));
 }
