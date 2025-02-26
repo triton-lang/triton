@@ -50,6 +50,12 @@ void visitNestedOperands(Operation *op, function_ref<void(Value)> visitor);
 /// of `op`.
 SetVector<Value> getNestedOperands(Operation *op);
 
+// Return the defining op of the given value, if the Value is an argument of the
+// loop return the associated defining op in the loop and its distance to the
+// Value.
+std::pair<Operation *, int64_t> getDefiningOpAndDistance(scf::ForOp forOp,
+                                                         Value value);
+
 // Return the minClusterId and maxClusterId for the given ForOp.
 std::pair<int, int> getMinMaxCluster(scf::ForOp &forOp);
 std::pair<int, int> getStageCluster(Operation *op);

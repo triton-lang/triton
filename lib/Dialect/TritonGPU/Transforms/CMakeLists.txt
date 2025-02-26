@@ -20,6 +20,7 @@ add_triton_library(TritonGPUTransforms
   Pipeliner/TC05MMAPipeline.cpp
   Pipeliner/TMAStoresPipeline.cpp
   Pipeliner/ModifiedAccMMAPipeline.cpp
+  Pipeliner/Partition.cpp
   Pipeliner/PipeliningUtility.cpp
   Pipeliner/Schedule.cpp
   Prefetch.cpp

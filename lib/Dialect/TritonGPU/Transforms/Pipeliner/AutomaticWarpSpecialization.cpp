@@ -2,9 +2,9 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Partition.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
-#include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 
 using namespace mlir;
 using namespace triton;
@@ -31,20 +31,24 @@ void AutomaticWarpSpecialization::runOnOperation() {
   // be scheduled.
   SmallVector<scf::ForOp> loops;
   getOperation().walk([&](scf::ForOp loop) {
-    if (llvm::any_of(loop.getOps(), [](Operation &op) {
-          return op.hasAttr(kLoopStageAttrName);
-        }))
+    if (loop->hasAttrOfType<ArrayAttr>(kLatenciesAttrName))
       loops.push_back(loop);
   });
 
   for (scf::ForOp loop : loops) {
-    int loopNumStages = numStages;
-    if (auto attr = loop->getAttrOfType<IntegerAttr>(kNumStagesAttrName))
-      loopNumStages = attr.getInt();
-
-    PipeliningOption result;
-    // Preprocess the loop by lowering async ops.
-    if (!preProcessLoopAndGetSchedule(loop, loopNumStages, result))
-      continue;
   }
+
+  // Analyze partitions and organized them into a DAG. Each partition is a node
+  // with multiple inputs and multiple outputs. Entry partitions have no inputs
+  // and exit partitions have no outputs. The DAG is determined based on SSA
+  // dependencies. Each output has a latency T that determines how its buffered.
+  // I.e. an output with latency T will be buffered for T cycles. A partition
+  // can have outputs with different latencies. Ops without latency/partition
+  // assginments are assumed to be "free" and can be cloned as necessary.
+
+  // - Ops are assigned to partitions.
+  // - Partitions have latencies.
+  // - Latency determines how many buffers the partition outputs need
+  //   (SSA outputs).
+  // - Latencies are assigned based on num_stages
 }

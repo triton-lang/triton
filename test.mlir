@@ -67,21 +67,21 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %50 = arith.muli %arg7, %c32_i32 : i32
     %51 = tt.splat %50 : i32 -> tensor<32x64xi32, #blocked1>
     %52:3 = scf.for %arg9 = %c0_i32 to %49 step %c1_i32 iter_args(%arg10 = %cst_2, %arg11 = %38, %arg12 = %47) -> (tensor<32x64xf32, #mma>, tensor<32x32x!tt.ptr<f16>, #blocked>, tensor<32x64x!tt.ptr<f16>, #blocked1>)  : i32 {
-      %71 = arith.muli %arg9, %c32_i32 {loop.cluster = 4 : i32, loop.stage = 0 : i32} : i32
-      %72 = arith.subi %arg5, %71 {loop.cluster = 4 : i32, loop.stage = 0 : i32} : i32
-      %73 = tt.splat %72 {loop.cluster = 4 : i32, loop.stage = 0 : i32} : i32 -> tensor<1x32xi32, #blocked>
-      %74 = arith.cmpi slt, %33, %73 {loop.cluster = 4 : i32, loop.stage = 0 : i32} : tensor<1x32xi32, #blocked>
-      %75 = tt.broadcast %74 {loop.cluster = 4 : i32, loop.stage = 0 : i32} : tensor<1x32xi1, #blocked> -> tensor<32x32xi1, #blocked>
-      %76 = tt.load %arg11, %75, %cst_0 {loop.cluster = 4 : i32, loop.stage = 0 : i32} : tensor<32x32x!tt.ptr<f16>, #blocked>
-      %77 = tt.splat %72 {loop.cluster = 4 : i32, loop.stage = 0 : i32} : i32 -> tensor<32x1xi32, #blocked1>
-      %78 = arith.cmpi slt, %39, %77 {loop.cluster = 4 : i32, loop.stage = 0 : i32} : tensor<32x1xi32, #blocked1>
-      %79 = tt.broadcast %78 {loop.cluster = 4 : i32, loop.stage = 0 : i32} : tensor<32x1xi1, #blocked1> -> tensor<32x64xi1, #blocked1>
-      %80 = tt.load %arg12, %79, %cst_1 {loop.cluster = 4 : i32, loop.stage = 0 : i32} : tensor<32x64x!tt.ptr<f16>, #blocked1>
-      %81 = ttg.convert_layout %76 {loop.cluster = 0 : i32, loop.stage = 3 : i32} : tensor<32x32xf16, #blocked> -> tensor<32x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
-      %82 = ttg.convert_layout %80 {loop.cluster = 0 : i32, loop.stage = 3 : i32} : tensor<32x64xf16, #blocked1> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
-      %83 = tt.dot %81, %82, %arg10, inputPrecision = tf32 {loop.cluster = 0 : i32, loop.stage = 3 : i32} : tensor<32x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<32x64xf32, #mma>
-      %84 = tt.addptr %arg11, %cst {loop.cluster = 3 : i32, loop.stage = 1 : i32} : tensor<32x32x!tt.ptr<f16>, #blocked>, tensor<32x32xi32, #blocked>
-      %85 = tt.addptr %arg12, %51 {loop.cluster = 3 : i32, loop.stage = 1 : i32} : tensor<32x64x!tt.ptr<f16>, #blocked1>, tensor<32x64xi32, #blocked1>
+      %71 = arith.muli %arg9, %c32_i32 {loop.cluster = 3 : i32, loop.stage = 0 : i32} : i32
+      %72 = arith.subi %arg5, %71 {loop.cluster = 3 : i32, loop.stage = 0 : i32} : i32
+      %73 = tt.splat %72 {loop.cluster = 3 : i32, loop.stage = 0 : i32} : i32 -> tensor<1x32xi32, #blocked>
+      %74 = arith.cmpi slt, %33, %73 {loop.cluster = 3 : i32, loop.stage = 0 : i32} : tensor<1x32xi32, #blocked>
+      %75 = tt.broadcast %74 {loop.cluster = 3 : i32, loop.stage = 0 : i32} : tensor<1x32xi1, #blocked> -> tensor<32x32xi1, #blocked>
+      %76 = tt.load %arg11, %75, %cst_0 {loop.cluster = 3 : i32, loop.stage = 0 : i32} : tensor<32x32x!tt.ptr<f16>, #blocked>
+      %77 = tt.splat %72 {loop.cluster = 3 : i32, loop.stage = 0 : i32} : i32 -> tensor<32x1xi32, #blocked1>
+      %78 = arith.cmpi slt, %39, %77 {loop.cluster = 3 : i32, loop.stage = 0 : i32} : tensor<32x1xi32, #blocked1>
+      %79 = tt.broadcast %78 {loop.cluster = 3 : i32, loop.stage = 0 : i32} : tensor<32x1xi1, #blocked1> -> tensor<32x64xi1, #blocked1>
+      %80 = tt.load %arg12, %79, %cst_1 {loop.cluster = 3 : i32, loop.stage = 0 : i32} : tensor<32x64x!tt.ptr<f16>, #blocked1>
+      %81 = ttg.convert_layout %76 {loop.cluster = 0 : i32, loop.stage = 2 : i32} : tensor<32x32xf16, #blocked> -> tensor<32x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+      %82 = ttg.convert_layout %80 {loop.cluster = 0 : i32, loop.stage = 2 : i32} : tensor<32x64xf16, #blocked1> -> tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
+      %83 = tt.dot %81, %82, %arg10, inputPrecision = tf32 {loop.cluster = 0 : i32, loop.stage = 2 : i32} : tensor<32x32xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> * tensor<32x64xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>> -> tensor<32x64xf32, #mma>
+      %84 = tt.addptr %arg11, %cst {loop.cluster = 2 : i32, loop.stage = 1 : i32} : tensor<32x32x!tt.ptr<f16>, #blocked>, tensor<32x32xi32, #blocked>
+      %85 = tt.addptr %arg12, %51 {loop.cluster = 2 : i32, loop.stage = 1 : i32} : tensor<32x64x!tt.ptr<f16>, #blocked1>, tensor<32x64xi32, #blocked1>
       scf.yield %83, %84, %85 : tensor<32x64xf32, #mma>, tensor<32x32x!tt.ptr<f16>, #blocked>, tensor<32x64x!tt.ptr<f16>, #blocked1>
     }
     %53 = arith.truncf %52#0 : tensor<32x64xf32, #mma> to tensor<32x64xf16, #mma>

@@ -256,6 +256,24 @@ SetVector<Value> mlir::triton::getNestedOperands(Operation *op) {
   return result;
 }
 
+std::pair<Operation *, int64_t>
+mlir::triton::getDefiningOpAndDistance(scf::ForOp forOp, Value value) {
+  int64_t distance = 0;
+  while (auto arg = dyn_cast<BlockArgument>(value)) {
+    if (arg.getOwner() != forOp.getBody())
+      return {nullptr, 0};
+    // Ignore induction variable.
+    if (arg.getArgNumber() == 0)
+      return {nullptr, 0};
+    distance++;
+    value =
+        forOp.getBody()->getTerminator()->getOperand(arg.getArgNumber() - 1);
+  }
+  Operation *def = value.getDefiningOp();
+  assert(def);
+  return {def, distance};
+}
+
 std::optional<std::pair<int, int>>
 mlir::triton::maybeGetStageCluster(Operation *op) {
   auto stage = op->getAttrOfType<IntegerAttr>(tt::kLoopStageAttrName);
