@@ -1,5 +1,4 @@
 add_triton_library(TritonGPUToLLVM
-    ConvertLayoutOpToLLVM/SharedToDotOperandFMA.cpp
     DotOpToLLVM/FMA.cpp
     DotOpToLLVM/FMADotUtility.cpp
     AllocateSharedMemory.cpp
