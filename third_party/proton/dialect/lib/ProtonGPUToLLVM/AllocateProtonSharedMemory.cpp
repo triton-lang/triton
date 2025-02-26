@@ -52,13 +52,7 @@ struct AllocateProtonSharedMemory
       }
     });
 
-    if (count > 1) {
-      mlir::emitError(
-          func.getLoc(),
-          "we expect proton allocates a single shared memory buffer");
-      signalPassFailure();
-      return;
-    } else if (count == 0) {
+    if (count == 0) {
       totalSharedMemSize = sharedMemUsed;
     }
 
