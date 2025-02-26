@@ -612,7 +612,6 @@ void init_triton_ir(py::module &&m) {
            [](ModuleOp &self, std::string &funcName) -> FuncOp {
              return self.lookupSymbol<FuncOp>(funcName);
            })
-
       /*
        * def ty_to_cpp(ty) is the consumer of this function.
        * If the type is a ptr it expects ty[0] == '*', else the type itself.
