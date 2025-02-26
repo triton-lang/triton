@@ -7,7 +7,7 @@ import triton
 import triton.language as tl
 from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
 import traceback
-from triton._internal_testing import is_cuda, is_hip, is_hip_mi300, is_hip_mi300
+from triton._internal_testing import is_cuda, is_hip, is_hip_mi300, is_hip_mi350
 
 
 def format_exception(type, value, tb):
