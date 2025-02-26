@@ -428,33 +428,39 @@ LinearLayout chooseDotDsReadB64TrLayout(DotOperandEncodingAttr dotMfmaLayout,
   SmallVector<unsigned> order = dotMfmaLayout.getDefaultOrder();
   std::swap(order[0], order[1]);
 
-  // In the LDS transpose logic, each thread accesses 64 bits (8 bytes) of data.
-  // The smallest unit for transposing is a 4x4 sub-tile of threads, where each
-  // thread reads 4 16-bit elements along the non-K dimension, resulting in a
-  // [non-K, K] = {16, 4}  sub-tile of elements. Because of transposing
-  // mechanism, thread ends up with 4 16-bit elements along K dim.
+  // For ds_read_b64_tr_* instructions, each thread accesses 64 bits (8 bytes)
+  // of data. The smallest unit for transposition is a
+  // [non-K, K] = {16, kWidthTransRead} sub-tile of elements,
+  // where each thread reads kWidthTransRead elements along the non-K dimension.
+  // Due to the transposition mechanism, each thread ends up with
+  // kWidthTransRead elements along the K dimension.
   //
   // The MFMA selection logic prioritizes double-rate MFMA instructions whenever
-  // possible. Specifically:
-  // - For MFMA operations that are non-K = 16, when blockK > 16, mfma16x16x32
-  // is selected; otherwise (blockK ≤ 16), mfma16x16x16 remains the choice.
-  // - For MFMA operations that are non-K = 32, when blockK > 8, mfma32x32x16 is
-  // selected; otherwise (blockK ≤ 8), mfma32x32x8 is used.
+  // possible:
   //
-  // In double-rate MFMA instructions, each thread holds 8 elements along the K
-  // dimension.
-  // - The first 4 elements belong to the first sub-tile.
-  // - The next 4 elements belong to the second sub-tile.
+  // - For MFMA operations where non-K = 16, when blockK > k, mfma16x16x2*k
+  //   is selected; otherwise (blockK ≤ k), mfma16x16xk remains the choice.
   //
-  // We then group these into larger tiles, each consisting of 8 of these 16x4
-  // sub-tiles. These tiles correspond to data for one mfma instruction. The
-  // shapes of these tiles depend on the MFMA instruction used:
-  // 1. For mfma32x32x16, the tile shape is [non-K, K] = {32, 16}.
-  // 2. For mfma16x16x32, the tile shape is [non-K, K] = {16, 32}.
+  // - For MFMA operations where non-K = 32, when blockK > k, mfma32x32xk is
+  //   selected; otherwise (blockK ≤ k), mfma32x32x2*k is used.
   //
-  // For single-rate mfma instructions, each thread holds 4 elements along K
-  // dimension. This means larger tile (that corresponds to one mfma
-  // instruction) consists of 4 16x4 sub-tiles.
+  // NOTE: For fp8 and fp4, "double-rate" results in 4*k since scaled MFMA
+  // instructions are used.
+  //
+  // In "double-rate" MFMA instructions, each thread holds 2*kWidthTransRead
+  // elements along the K dimension:
+  // - The first kWidthTransRead elements belong to the first sub-tile.
+  // - The next kWidthTransRead elements belong to the second sub-tile.
+  //
+  // These elements are then grouped into larger tiles, each consisting of
+  // 8 {16, kWidthTransRead} sub-tiles. These tiles correspond to the data
+  // for one MFMA instruction. The shape of these tiles depends on the MFMA
+  // instruction used.
+  //
+  // For single-rate MFMA instructions, each thread holds kWidthTransRead
+  // elements along the K dimension. This means that the larger tile
+  // (corresponding to one MFMA instruction) consists of 4 {16, kWidthTransRead}
+  // sub-tiles.
   std::vector<std::vector<int32_t>> registerBase;
   std::vector<std::vector<int32_t>> laneBase;
 
