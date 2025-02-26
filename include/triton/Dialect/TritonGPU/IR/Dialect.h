@@ -103,8 +103,6 @@ unsigned getWarpSize(Attribute layout);
 // elements. If you want non-replicated warps, use getWarpsPerCTAWithUniqueData.
 SmallVector<unsigned> getWarpsPerCTA(Attribute layout);
 
-SmallVector<unsigned> getSizePerThread(Attribute layout);
-
 // Returns the number of contiguous elements of the logical tensor that each
 // thread has access to, on each dimension of the tensor. For a blocked layout
 // with sizePerThread = [1, 4] and tensor shape = [128, 1], the elements

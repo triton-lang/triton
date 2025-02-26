@@ -843,7 +843,7 @@ LinearLayout fmaDotToLinearLayout(DotOperandEncodingAttr operandLayout,
   StringAttr kLane = S("lane");
   StringAttr kWarp = S("warp");
 
-  SmallVector<unsigned> threadSize = blocked.getSizePerThread();
+  auto threadSize = llvm::to_vector(blocked.getSizePerThread());
   auto kDimIdx = operandLayout.getOpIdx() == 0 ? rank - 1 : rank - 2;
   threadSize[kDimIdx] = shape[kDimIdx];
   auto threadShape = blocked.getThreadsPerWarp();
