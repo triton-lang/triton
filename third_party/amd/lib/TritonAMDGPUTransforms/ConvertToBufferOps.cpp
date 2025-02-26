@@ -417,8 +417,8 @@ struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
                                  SourceOp,
                                  triton::gpu::AsyncCopyGlobalToLocalOp>) {
           return rewriter.create<triton::amdgpu::BufferLoadToLocalOp>(
-              op->getLoc(), op.getType(), basePtr, tensorOffset, op.getResult(),
-              blockStride, op.getCache(), maybeMask, maybeOther);
+              op->getLoc(), op.getType(), op.getResult(), basePtr, tensorOffset,
+              maybeMask, maybeOther, blockStride, op.getCache());
         } else {
           static_assert(false,
                         "Unsupported type in ConvertTritonLoadToBufferLoad");
