@@ -102,8 +102,10 @@ class HIPBackend(BaseBackend):
 
         if "supported_fp8_dtypes" not in opts:
             supported_fp8_dtypes = set(HIPOptions.supported_fp8_dtypes)
-            if self.target.arch in ('gfx940', 'gfx941', 'gfx942', 'gfx950'):
+            if self.target.arch in ('gfx940', 'gfx941', 'gfx942'):
                 supported_fp8_dtypes.update({'fp8e4nv', 'fp8e4b8', 'fp8e5b16'})
+            elif self.target.arch in ('gfx950'):
+                supported_fp8_dtypes.update({'fp8e4nv', 'fp8e5'})
             args["supported_fp8_dtypes"] = tuple(sorted(supported_fp8_dtypes))
 
         if "enable_fp_fusion" not in opts:
