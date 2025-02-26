@@ -351,42 +351,77 @@ struct MachineModel {
 
   Result select(const SetVector<Node *> &readyNodes) {
     Result result;
+    SmallVector<Node *> ldsNodes;
+    SmallVector<Node *> vmemNodes;
+    SmallVector<Node *> mfmaNodes;
+    SmallVector<Node *> barrierNodes;
+
     for (auto *node : readyNodes) {
       Operation *op = node->getOp();
       if (dyn_cast<triton::gpu::LocalLoadOp>(op) ||
-          dyn_cast<triton::gpu::LocalStoreOp>(op)) {
-        if (MachineModel::maxLocalLoadStoreIssues >
-            issuedLocalStoreLoadCounter) {
-          ++issuedLocalStoreLoadCounter;
-          result.set(node);
-        } else {
-          result.lowPriorityNodes.push_back(node);
-        }
+          dyn_cast<triton::gpu::LocalStoreOp>(op) ||
+          dyn_cast<triton::gpu::MemDescSubviewOp>(op)) {
+        ldsNodes.push_back(node);
         continue;
       }
       if (dyn_cast<triton::LoadOp>(op) || dyn_cast<triton::StoreOp>(op) ||
           dyn_cast<triton::amdgpu::BufferLoadOp>(op) ||
           dyn_cast<triton::amdgpu::BufferStoreOp>(op)) {
-        if (MachineModel::maxLoadStoreIssues > issuedLoadStoreCounter) {
-          ++issuedLoadStoreCounter;
-          result.set(node);
-        } else {
-          result.lowPriorityNodes.push_back(node);
-        }
+        vmemNodes.push_back(node);
         continue;
       }
       if (dyn_cast<triton::DotOp>(op)) {
-        issuedLocalStoreLoadCounter =
-            std::max(0, issuedLocalStoreLoadCounter - 1);
-        issuedLoadStoreCounter = std::max(0, issuedLoadStoreCounter - 1);
-        result.set(node);
+        mfmaNodes.push_back(node);
         continue;
       }
       if (dyn_cast<mlir::gpu::BarrierOp>(op)) {
-        result.set(node);
+        barrierNodes.push_back(node);
         continue;
       }
       result.normPriorityNodes.push_back(node);
+    }
+
+    if (!vmemNodes.empty()) {
+      if (MachineModel::maxLoadStoreIssues > issuedLoadStoreCounter) {
+        for (auto *node : vmemNodes) {
+          result.set(node);
+        }
+        ++issuedLoadStoreCounter;
+        return result;
+      } else {
+        result.lowPriorityNodes.append(vmemNodes);
+      }
+    }
+
+    if (!ldsNodes.empty()) {
+      if (MachineModel::maxLocalLoadStoreIssues > issuedLocalStoreLoadCounter) {
+        for (auto *node : ldsNodes) {
+          result.set(node);
+        }
+        if (!(dyn_cast<triton::gpu::MemDescSubviewOp>(
+                result.selectedNode->getOp())))
+          ++issuedLocalStoreLoadCounter;
+        return result;
+      } else {
+        result.lowPriorityNodes.append(ldsNodes);
+      }
+    }
+
+    if (!barrierNodes.empty()) {
+      for (auto *node : barrierNodes) {
+        result.set(node);
+      }
+      return result;
+    }
+
+    if (!mfmaNodes.empty()) {
+      issuedLocalStoreLoadCounter =
+          std::max(0, issuedLocalStoreLoadCounter - 1);
+      issuedLoadStoreCounter = std::max(0, issuedLoadStoreCounter - 1);
+      for (auto *node : mfmaNodes) {
+        result.set(node);
+      }
+      return result;
     }
 
     return result;
