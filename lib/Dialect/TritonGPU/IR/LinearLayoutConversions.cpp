@@ -1492,6 +1492,7 @@ LinearLayout chooseScaledMfmaScaleLayout(
 
 LinearLayout getScaleTMEMStoreLinearLayout(RankedTensorType scaleType,
                                            int numWarps) {
+  assert(numWarps == 4 || numWarps == 8);
   MLIRContext *ctx = scaleType.getContext();
 
   using basisT = std::vector<std::vector<int32_t>>;
@@ -1518,6 +1519,10 @@ LinearLayout getScaleTMEMStoreLinearLayout(RankedTensorType scaleType,
   }
   for (int i = 4; i < N; i = i << 1) {
     regBase.push_back({0, i});
+  }
+  if (numWarps == 8) {
+    warpBase.push_back(regBase.back());
+    regBase.pop_back();
   }
 
   SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, 2);
