@@ -28,14 +28,8 @@ from utils.benchmark_utils import get_available_models, get_model_configs
             {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 4, 'waves_per_eu': 0},
             num_warps=8, num_stages=2),
         triton.Config(
-            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 16, 'GROUP_SIZE_M': 4, 'waves_per_eu': 2},
-            num_warps=4, num_stages=2),
-        triton.Config(
             {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 1, 'waves_per_eu': 2},
             num_warps=8, num_stages=2),
-        triton.Config(
-            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 32, 'waves_per_eu': 2},
-            num_warps=4, num_stages=2),
     ],
     key=['M', 'N', 'K'],
     use_cuda_graph=True,
@@ -122,7 +116,7 @@ def matmul_kernel(
         else:
             a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
             b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
-        accumulator += tl.dot(a, b)
+        accumulator += tl.dot(a, b, input_precision="ieee")
 
         # Advance the ptrs to the next K block.
         a_ptrs += BLOCK_SIZE_K * stride_ak
@@ -179,29 +173,36 @@ def matmul(a, b, c, a_scale, b_scale, scale_a8_b8=False, activation=""):
     )
 
 
+def is_cdna4():
+    return triton.runtime.driver.active.get_current_target().arch == 'gfx950'
+
+
+e5m2_type = torch.float8_e5m2 if is_cdna4() else torch.float8_e5m2fnuz
+e4m3_type = torch.float8_e4m3fn if is_cdna4() else torch.float8_e4m3fnuz
+
 name_to_torch_types = {
     'int8': torch.int8,
     'int32': torch.int32,
     'fp16': torch.float16,
     'fp32': torch.float32,
     'bf16': torch.bfloat16,
-    'fp8e5': torch.float8_e5m2fnuz,
-    'fp8e4': torch.float8_e4m3fnuz,
+    'fp8e5': e5m2_type,
+    'fp8e4': e4m3_type,
 }
 
 dtype_max = {
     dtype: (torch.finfo(dtype) if dtype.is_floating_point else torch.iinfo(dtype)).max
     for dtype in [
-        torch.float8_e5m2fnuz,
-        torch.float8_e4m3fnuz,
+        e5m2_type,
+        e4m3_type,
         torch.int8,
     ]
 }
 
 
 def dtype_is_8_bit(dtype):
-    return (dtype is torch.float8_e5m2fnuz) or \
-           (dtype is torch.float8_e4m3fnuz) or \
+    return (dtype is e5m2_type) or \
+           (dtype is e4m3_type) or \
            (dtype is torch.int8)
 
 
@@ -278,7 +279,7 @@ def get_type(provider):
         x_vals=get_x_vals(),
         line_arg='provider',
         line_vals=[
-            'rocblas(fp16)', 'rocblas(bf16)', 'triton(fp16)', 'triton(bf16)', 'triton(int8)', 'triton(fp8e4)',
+            'hipblaslt(fp16)', 'hipblaslt(bf16)', 'triton(fp16)', 'triton(bf16)', 'triton(int8)', 'triton(fp8e4)',
             'triton(fp8e5)'
         ],
         line_names=[
@@ -293,9 +294,10 @@ def benchmark(M, N, K, provider, model=None):
     out_dtype = in_dtype
 
     quantiles = [0.5, 0.2, 0.8]
-    if 'rocblas' in provider:
+    if 'hipblaslt' in provider:
         a = torch.randn((M, K), dtype=in_dtype, device='cuda')
-        b = torch.randn((K, N), dtype=in_dtype, device='cuda')
+        b = torch.randn((N, K), dtype=in_dtype, device='cuda')
+        b = b.T
 
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), quantiles=quantiles)
     else:  # triton, different data types
