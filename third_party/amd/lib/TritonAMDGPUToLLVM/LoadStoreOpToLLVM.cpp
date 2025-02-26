@@ -415,7 +415,7 @@ struct BufferLoadToLocalOpConversion
     // Converted values
     Value llPtr = adaptor.getPtr();
     Value llOffset = adaptor.getOffsets();
-    Value llDst = adaptor.getResult();
+    Value llDst = adaptor.getDest();
     Value llMask = adaptor.getMask();
     Value llOther = adaptor.getOther();
     Value llStride = adaptor.getStride();
@@ -444,7 +444,7 @@ struct BufferLoadToLocalOpConversion
 
     // buffer_load into LDS does not support per lane offsets.
     // We need to ensure that we write coalesced into shared memory.
-    auto dstTy = op.getResult().getType();
+    auto dstTy = op.getDest().getType();
     if (!LLVM::AMD::writesCoalscedIntoLocalMemory(rewriter, ptrType, dstTy,
                                                   vec)) {
       return rewriter.notifyMatchFailure(op,
