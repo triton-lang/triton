@@ -286,8 +286,7 @@ private:
     if (auto ws = dyn_cast<gpu::WarpSpecializeOp>(op)) {
       // `ttg.warp_specialize` needs memory to pass its explicit captures. Pack
       // the captures like a struct.
-      mlir::DataLayout datalayout(op->getParentOfType<ModuleOp>());
-      auto [captureSize, captureAlign] = ws.getCaptureSizeAlign(datalayout);
+      auto [captureSize, captureAlign] = ws.getCaptureSizeAlign();
       maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, captureSize,
                                                           captureAlign);
       return;

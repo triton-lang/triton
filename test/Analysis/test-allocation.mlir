@@ -900,4 +900,15 @@ tt.func @ptr_allocation_datalayout(%arg0: !tt.ptr<i32>) {
   tt.return
 }
 
+// expected-remark @below {{tightly_packed_captures}}
+// expected-remark @below {{size = 9}}
+tt.func @tightly_packed_captures(%arg0: i8, %arg1: i64) {
+  // expected-remark @below {{offset = 0, size = 9}}
+  ttg.warp_specialize(%arg0, %arg1)
+  default {
+    ttg.warp_yield
+  } : (i8, i64) -> ()
+  tt.return
+}
+
 }

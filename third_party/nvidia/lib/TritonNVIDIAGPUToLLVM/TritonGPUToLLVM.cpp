@@ -1,7 +1,6 @@
 #include "Dialect/NVGPU/IR/Dialect.h"
 #include "TritonNVIDIAGPUToLLVM/Passes.h"
 #include "TritonNVIDIAGPUToLLVM/Utility.h"
-#include "mlir/Analysis/DataLayoutAnalysis.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
@@ -89,9 +88,7 @@ struct ConvertTritonGPUToLLVM
 
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
-    auto &datalayout = getAnalysis<DataLayoutAnalysis>();
-    TritonGPUToLLVMTypeConverter typeConverter(context, option, targetInfo,
-                                               &datalayout);
+    TritonGPUToLLVMTypeConverter typeConverter(context, option, targetInfo);
 
     // Lower functions
     TritonLLVMFunctionConversionTarget funcTarget(*context);

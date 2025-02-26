@@ -157,21 +157,6 @@ std::string translateLLVMIRToASM(llvm::Module &module,
   return result;
 }
 
-static llvm::DataLayout createTargetDataLayout(StringRef triple, StringRef proc,
-                                               StringRef features) {
-  std::string error;
-  auto target = llvm::TargetRegistry::lookupTarget(triple, error);
-  if (!target) {
-    throw std::runtime_error("target lookup error: " + error);
-  }
-  llvm::TargetOptions opt;
-  // Target machine is only used to create the data layout.
-  std::unique_ptr<llvm::TargetMachine> machine{target->createTargetMachine(
-      triple, proc, features, opt, llvm::Reloc::PIC_, std::nullopt,
-      llvm::CodeGenOptLevel::None)};
-  return machine->createDataLayout();
-}
-
 using ret = py::return_value_policy;
 
 void init_triton_llvm(py::module &&m) {
@@ -281,17 +266,21 @@ void init_triton_llvm(py::module &&m) {
       },
       py::keep_alive<0, 2>());
 
-  m.def("attach_datalayout",
-        [](llvm::Module *mod, const std::string triple, const std::string proc,
-           const std::string features) {
-          llvm::DataLayout dataLayout =
-              createTargetDataLayout(triple, proc, features);
-          mod->setDataLayout(dataLayout);
-        });
-  m.def("get_datalayout", [](const std::string triple, const std::string proc,
-                             const std::string features) {
-    return createTargetDataLayout(triple, proc, features)
-        .getStringRepresentation();
+  m.def("attach_datalayout", [](llvm::Module *mod, const std::string triple,
+                                const std::string proc,
+                                const std::string features) {
+    std::string error;
+    auto target = llvm::TargetRegistry::lookupTarget(triple, error);
+    if (!target) {
+      throw std::runtime_error("target lookup error: " + error);
+    }
+    llvm::TargetOptions opt;
+    // Target machine is only used to create the data layout.
+    std::unique_ptr<llvm::TargetMachine> machine{target->createTargetMachine(
+        triple, proc, features, opt, llvm::Reloc::PIC_, std::nullopt,
+        llvm::CodeGenOptLevel::None)};
+    // set data layout
+    mod->setDataLayout(machine->createDataLayout());
   });
 
   m.def(
