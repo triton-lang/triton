@@ -2,8 +2,12 @@
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/Analysis/DataFlow/IntegerRangeAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Interfaces/Utils/InferIntRangeCommon.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 
 #include <numeric>
@@ -18,29 +22,10 @@ using namespace mlir;
 
 namespace tt = mlir::triton;
 
-// TODO(max): remove after we catch up to
-// https://github.com/llvm/llvm-project/pull/127888
-namespace mlir::triton::AMD {
-LogicalResult staticallyNonNegative(DataFlowSolver &solver, Value v) {
-  auto *result = solver.lookupState<dataflow::IntegerValueRangeLattice>(v);
-  if (!result || result->getValue().isUninitialized())
-    return failure();
-  const ConstantIntRanges &range = result->getValue().getValue();
-  return success(range.smin().isNonNegative());
-}
-
-LogicalResult staticallyNonNegative(DataFlowSolver &solver, Operation *op) {
-  auto nonNegativePred = [&solver](Value v) -> bool {
-    return succeeded(staticallyNonNegative(solver, v));
-  };
-  return success(llvm::all_of(op->getOperands(), nonNegativePred) &&
-                 llvm::all_of(op->getResults(), nonNegativePred));
-}
-} // namespace mlir::triton::AMD
-
 namespace {
 
 constexpr int64_t kDefaultMaxTripCount = 1024;
+constexpr int64_t kDefaultMaxPrograms = 2 << 15; // 65536
 
 std::optional<int64_t> maybeGetTripCount(LoopLikeOpInterface loop) {
   std::optional<OpFoldResult> lowerBound = loop.getSingleLowerBound();
@@ -60,57 +45,208 @@ void getEnclosingLoops(Operation &op, SmallVector<LoopLikeOpInterface> &ops) {
   }
 }
 
-void inferResultRanges(tt::GetProgramIdOp *op, SetIntRangeFn setResultRange) {
-  constexpr int64_t kDefaultMaxProgramID = 2 << 15; // 65536
-  setResultRange(
-      op->getResult(),
-      ConstantIntRanges::range(
-          /*min*/ {/*numBits*/ 32, /*val*/ 0, /*isSigned*/ true},
-          /*max*/
-          {/*numBits*/ 32, /*val*/ kDefaultMaxProgramID, /*isSigned*/ true},
-          /*isSigned*/ true));
+void inferResultRangesPID(Operation *op, uint64_t max,
+                          SetIntRangeFn setResultRange) {
+  assert(op->getNumResults() == 1 && "expected op to have one result");
+  auto result = op->getResult(0);
+  assert(llvm::isa<IntegerType>(result.getType()) &&
+         "expected result type to be int");
+  IntegerType resTy = llvm::cast<IntegerType>(result.getType());
+  auto bitWidth = mlir::ConstantIntRanges::getStorageBitwidth(resTy);
+  setResultRange(result, ConstantIntRanges::range(
+                             /*min*/ {/*numBits*/ bitWidth, /*val*/ 0,
+                                      /*isSigned*/ resTy.isSigned()},
+                             /*max*/
+                             {/*numBits*/ bitWidth, /*val*/ max,
+                              /*isSigned*/ resTy.isSigned()},
+                             /*isSigned*/ resTy.isSigned()));
 }
 
 void inferResultRanges(tt::MakeRangeOp *op, SetIntRangeFn setResultRange) {
-  setResultRange(
-      op->getResult(),
-      ConstantIntRanges::range(
-          /*min*/ {/*numBits*/ 32, /*val*/ op->getStart(), /*isSigned*/ true},
-          /*max*/ {/*numBits*/ 32, /*val*/ op->getEnd(), /*isSigned*/ true},
-          /*isSigned*/ true));
+  auto result = op->getResult();
+  RankedTensorType resTy = result.getType();
+  assert(llvm::isa<IntegerType>(resTy.getElementType()) && "expected int type");
+  IntegerType elTy = llvm::cast<IntegerType>(resTy.getElementType());
+  auto bitWidth = mlir::ConstantIntRanges::getStorageBitwidth(elTy);
+  setResultRange(result,
+                 ConstantIntRanges::range(
+                     /*min*/ {/*numBits*/ bitWidth, /*val*/ op->getStart(),
+                              /*isSigned*/ elTy.isSigned()},
+                     /*max*/
+                     {/*numBits*/ bitWidth, /*val*/ op->getEnd(),
+                      /*isSigned*/ elTy.isSigned()},
+                     /*isSigned*/ elTy.isSigned()));
 }
 
-void inferResultRanges(tt::SplatOp *op, ArrayRef<ConstantIntRanges> argRanges,
+void inferResultRanges(tt::GatherOp *op, ArrayRef<ConstantIntRanges> argRanges,
                        SetIntRangeFn setResultRange) {
+  assert(argRanges.size() == 2 && "expected two arg ranges");
   setResultRange(op->getResult(), argRanges[0]);
 }
 
-void inferResultRanges(tt::ExpandDimsOp *op,
-                       ArrayRef<ConstantIntRanges> argRanges,
-                       SetIntRangeFn setResultRange) {
-  setResultRange(op->getResult(), argRanges[0]);
+void inferResultRangesUnaryOpForwardArgRange(
+    Operation *op, ArrayRef<ConstantIntRanges> argRanges,
+    SetIntRangeFn setResultRange) {
+  assert(op->getNumResults() == 1 && "expected op to have one result");
+  setResultRange(op->getResult(0), argRanges[0]);
+}
+
+void inferResultRangesBinaryOpUnionArgRanges(
+    Operation *op, ArrayRef<ConstantIntRanges> argRanges,
+    SetIntRangeFn setResultRange) {
+  assert(op->getNumResults() == 1 && "expected op to have one result");
+  assert(op->getNumOperands() == 2 && "expected op to have two operands");
+  assert(argRanges.size() == 2 && "expected two arg ranges");
+  setResultRange(op->getResult(0), argRanges[0].rangeUnion(argRanges[1]));
+}
+
+void inferResultRangesMaxNonNegSigned(Operation *op,
+                                      SetIntRangeFn setResultRange) {
+  for (auto result : op->getResults()) {
+    auto bitWidth =
+        mlir::ConstantIntRanges::getStorageBitwidth(result.getType());
+    setResultRange(result, ConstantIntRanges::fromSigned(
+                               APInt::getZero(bitWidth).sext(bitWidth),
+                               APInt::getMaxValue(bitWidth).sext(bitWidth)));
+  }
+}
+
+std::optional<ConstantIntRanges> maybeGetAssumedRange(Operation *assumption,
+                                                      Value anchor) {
+  arith::CmpIOp cmpOp = llvm::dyn_cast<arith::CmpIOp>(assumption);
+  if (!cmpOp) {
+    emitRemark(assumption->getLoc(), "unsupported assumption operation");
+    return {};
+  }
+
+  switch (cmpOp.getPredicate()) {
+  case arith::CmpIPredicate::uge:
+  case arith::CmpIPredicate::ugt:
+  case arith::CmpIPredicate::ule:
+  case arith::CmpIPredicate::ult:
+    emitRemark(assumption->getLoc(),
+               "unsigned arithmetic not currently supported");
+    return {};
+  default:;
+    break;
+  }
+  bool isSigned = true;
+
+  bool anchorIsLhs = cmpOp.getLhs() == anchor;
+  auto maybeConstantIntValue = getConstantIntValue(
+      getAsOpFoldResult(anchorIsLhs ? cmpOp.getRhs() : cmpOp.getLhs()));
+  if (auto constValue = maybeConstantIntValue) {
+    unsigned bitWidth = ConstantIntRanges::getStorageBitwidth(anchor.getType());
+    assert(bitWidth > 0 && "expected non-zero bitwdith");
+    // This is always true in
+    APInt apVal = {bitWidth, static_cast<uint64_t>(*constValue), isSigned},
+          min = APInt::getSignedMinValue(bitWidth),
+          max = APInt::getSignedMaxValue(bitWidth);
+
+    switch (cmpOp.getPredicate()) {
+    case arith::CmpIPredicate::eq:
+      return mlir::ConstantIntRanges::constant(apVal);
+    case arith::CmpIPredicate::sge: {
+      // K >= apVal implies K ∈ [apVal, max]
+      if (anchorIsLhs)
+        return mlir::ConstantIntRanges::range(apVal, max, isSigned);
+      // apVal >= K implies K ∈ [min, apVal]
+      return mlir::ConstantIntRanges::range(min, apVal, isSigned);
+    }
+    case arith::CmpIPredicate::sgt: {
+      // K > apVal implies K >= apVal + 1 implies K ∈ [apVal + 1, max]
+      if (anchorIsLhs)
+        return mlir::ConstantIntRanges::range(apVal + 1, max, isSigned);
+      // apVal > K implies apVal - 1 >= K implies K ∈ [min, apVal - 1]
+      return mlir::ConstantIntRanges::range(min, apVal - 1, isSigned);
+    }
+    case arith::CmpIPredicate::sle: {
+      // K <= apVal implies K ∈ [min, apVal]
+      if (anchorIsLhs)
+        return mlir::ConstantIntRanges::range(min, apVal, isSigned);
+      // apVal <= K implies K ∈ [apVal, max]
+      return mlir::ConstantIntRanges::range(apVal, max, isSigned);
+    }
+    case arith::CmpIPredicate::slt: {
+      // K < apVal implies K <= apVal -1 implies K ∈ [min, apVal - 1]
+      if (anchorIsLhs)
+        return mlir::ConstantIntRanges::range(min, apVal - 1, isSigned);
+      // apVal < K implies apVal + 1 <= K implies K ∈ [apVal + 1, max]
+      return mlir::ConstantIntRanges::range(apVal + 1, max, isSigned);
+    }
+    default:
+      emitRemark(cmpOp.getLoc(), "unsupported cmp predicate for assumption");
+      return {};
+    }
+  }
+  return {};
 }
 
 } // namespace
 
 namespace mlir::triton::AMD {
 
+std::optional<SmallVector<ConstantIntRanges>>
+collectRanges(const DataFlowSolver &solver, ValueRange values) {
+  SmallVector<ConstantIntRanges> ranges;
+  for (Value val : values) {
+    auto *maybeInferredRange =
+        solver.lookupState<dataflow::IntegerValueRangeLattice>(val);
+    if (!maybeInferredRange || maybeInferredRange->getValue().isUninitialized())
+      return {};
+    const ConstantIntRanges &inferredRange =
+        maybeInferredRange->getValue().getValue();
+    ranges.push_back(inferredRange);
+  }
+  return ranges;
+}
+
+bool cmpIIsStaticallyTrue(const DataFlowSolver &solver, arith::CmpIOp cmpOp) {
+  if (auto inputRanges =
+          collectRanges(solver, ValueRange{cmpOp.getOperands()})) {
+    intrange::CmpPredicate pred =
+        static_cast<intrange::CmpPredicate>(cmpOp.getPredicate());
+    return intrange::evaluatePred(pred, (*inputRanges)[0], (*inputRanges)[1])
+        .value_or(false);
+  }
+  return false;
+}
+
+std::optional<ConstantIntRanges>
+TritonIntegerRangeAnalysis::maybeGetAssumedRange(Value anchor) const {
+  auto matchingAssumptions = this->assumptions.lookup(anchor);
+  if (matchingAssumptions.empty())
+    return {};
+
+  unsigned bitWidth = ConstantIntRanges::getStorageBitwidth(anchor.getType());
+  assert(bitWidth > 0 && "expected non-zero bitwidth");
+  ConstantIntRanges constIntRange = ConstantIntRanges::maxRange(bitWidth);
+  for (auto assumption : matchingAssumptions) {
+    if (auto constIntRange_ = ::maybeGetAssumedRange(assumption, anchor))
+      constIntRange = constIntRange.intersection(*constIntRange_);
+  }
+  return constIntRange;
+}
+
 void TritonIntegerRangeAnalysis::setToEntryState(
     dataflow::IntegerValueRangeLattice *lattice) {
-  propagateIfChanged(lattice, lattice->join(IntegerValueRange::getMaxRange(
-                                  lattice->getAnchor())));
+  auto anchor = lattice->getAnchor();
+  IntegerValueRange range = IntegerValueRange::getMaxRange(anchor);
+  if (auto maybeRange = maybeGetAssumedRange(anchor))
+    range = *maybeRange;
+  propagateIfChanged(lattice, lattice->join(range));
 }
 
 LogicalResult TritonIntegerRangeAnalysis::visitOperation(
     Operation *op,
     ArrayRef<const dataflow::IntegerValueRangeLattice *> operands,
-    ArrayRef<dataflow::IntegerValueRangeLattice *> results) {
+    ArrayRef<dataflow::IntegerValueRangeLattice *> resultsLattices) {
   LDBG("  Inferring ranges for " << *op << "\n");
   // This callback is almost exactly like the callback in
   // IntegerRangeAnalysis::visitOperation except we do not "short-cicruit" the
   // analysis by inferring a maximum range for loop results (instead we
   // perform a check based on visit counts in visitRegionSuccessors).
-  auto joinCallback = [&op, &results,
+  auto joinCallback = [&op, &resultsLattices,
                        this](Value v, const IntegerValueRange &incomingRange) {
     auto result = dyn_cast<OpResult>(v);
     if (!result)
@@ -119,46 +255,88 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperation(
 
     LDBG("  Inferred range " << incomingRange << "\n");
     dataflow::IntegerValueRangeLattice *lattice =
-        results[result.getResultNumber()];
+        resultsLattices[result.getResultNumber()];
     IntegerValueRange oldRange = lattice->getValue();
     ChangeResult changed = lattice->join(incomingRange);
     propagateIfChanged(lattice, changed);
   };
 
-  if (llvm::isa<GetProgramIdOp, MakeRangeOp, SplatOp, ExpandDimsOp>(op)) {
-    SmallVector<ConstantIntRanges> argRanges;
-    for (auto lattice : operands) {
-      if (lattice->getValue().isUninitialized()) {
-        setAllToEntryStates(results);
-        return success();
-      }
-      argRanges.push_back(lattice->getValue().getValue());
+  // Ops with fixed/constant ranges.
+  if (llvm::isa<GetProgramIdOp, MakeRangeOp, HistogramOp, GetNumProgramsOp>(
+          op)) {
+    assert(resultsLattices.size() == 1 && "expected exactly one result");
+    auto resultLattice = resultsLattices[0];
+
+    // No updates necessary.
+    if (!resultLattice->getValue().isUninitialized())
+      return success();
+
+    // Check if user hinted/assumed (this really only applies to get_pid but
+    // simpler to keep it out of the typeswitch).
+    auto anchor = resultLattice->getAnchor();
+    if (auto assumptions = this->assumptions.lookup(anchor);
+        !assumptions.empty()) {
+      setToEntryState(resultLattice);
+      return success();
     }
-    if (auto op_ = llvm::dyn_cast<GetProgramIdOp>(op))
-      inferResultRanges(&op_, joinCallback);
-    else if (auto op_ = llvm::dyn_cast<SplatOp>(op))
-      inferResultRanges(&op_, argRanges, joinCallback);
-    else if (auto op_ = llvm::dyn_cast<ExpandDimsOp>(op))
-      inferResultRanges(&op_, argRanges, joinCallback);
-    else if (auto op_ = llvm::dyn_cast<MakeRangeOp>(op))
-      inferResultRanges(&op_, joinCallback);
-    else {
-      llvm_unreachable("Unsupported operation");
-    }
+
+    // else use defaults
+    llvm::TypeSwitch<Operation *>(op)
+        .Case<GetProgramIdOp>([&](auto getPIDOp) {
+          inferResultRangesPID(getPIDOp, kDefaultMaxPrograms - 1, joinCallback);
+        })
+        .Case<GetNumProgramsOp>([&](auto getPIDOp) {
+          inferResultRangesPID(getPIDOp, kDefaultMaxPrograms, joinCallback);
+        })
+        .Case<MakeRangeOp>([&](MakeRangeOp makeROp) {
+          inferResultRanges(&makeROp, joinCallback);
+        })
+        .Case<HistogramOp>([&](HistogramOp histOp) {
+          return inferResultRangesMaxNonNegSigned(histOp, joinCallback);
+        })
+        .Default([&](auto) { llvm::report_fatal_error("unsupported op"); });
     return success();
   }
 
-  auto inferrable = dyn_cast<InferIntRangeInterface>(op);
-  if (!inferrable) {
-    setAllToEntryStates(results);
-    return success();
-  }
-  SmallVector<IntegerValueRange> argRanges = llvm::map_to_vector(
+  SmallVector<IntegerValueRange> argIntValueRanges = llvm::map_to_vector(
       operands, [](const dataflow::IntegerValueRangeLattice *lattice) {
         return lattice->getValue();
       });
 
-  inferrable.inferResultRangesFromOptional(argRanges, joinCallback);
+  // Ops with actually changing/variable input/output ranges.
+  if (llvm::isa<TransOp, BroadcastOp, ReshapeOp, gpu::ConvertLayoutOp, SplatOp,
+                ExpandDimsOp, JoinOp, CatOp, GatherOp>(op)) {
+    SmallVector<ConstantIntRanges> argConstIntRanges;
+    for (const auto &r : argIntValueRanges) {
+      if (r.isUninitialized()) {
+        setAllToEntryStates(resultsLattices);
+        return success();
+      }
+      argConstIntRanges.push_back(r.getValue());
+    }
+    llvm::TypeSwitch<Operation *>(op)
+        .Case<TransOp, BroadcastOp, ExpandDimsOp, SplatOp, ReshapeOp,
+              gpu::ConvertLayoutOp>([&](auto) {
+          return inferResultRangesUnaryOpForwardArgRange(op, argConstIntRanges,
+                                                         joinCallback);
+        })
+        .Case<JoinOp, CatOp>([&](auto joinOp) {
+          return inferResultRangesBinaryOpUnionArgRanges(
+              joinOp, argConstIntRanges, joinCallback);
+        })
+        .Case<GatherOp>([&](GatherOp gatherOp) {
+          return inferResultRanges(&gatherOp, argConstIntRanges, joinCallback);
+        })
+        .Default([&](auto) { llvm::report_fatal_error("unsupported op"); });
+    return success();
+  }
+
+  if (auto inferrable = dyn_cast<InferIntRangeInterface>(op)) {
+    inferrable.inferResultRangesFromOptional(argIntValueRanges, joinCallback);
+    return success();
+  }
+
+  setAllToEntryStates(resultsLattices);
   return success();
 }
 
@@ -263,4 +441,20 @@ void TritonIntegerRangeAnalysis::visitRegionSuccessors(
     }
   }
 }
+
+DenseMap<Value, SetVector<Operation *>>
+TritonIntegerRangeAnalysis::collectAssumptions(Operation *rootOp,
+                                               bool filterConstants) {
+  DenseMap<Value, SetVector<Operation *>> assumptions;
+  rootOp->walk([&](LLVM::AssumeOp op) {
+    auto assump = op.getCond().getDefiningOp();
+    for (auto operand : assump->getOperands()) {
+      if (filterConstants && getConstantIntValue(operand))
+        continue;
+      assumptions[operand].insert(assump);
+    }
+  });
+  return assumptions;
+}
+
 } // namespace mlir::triton::AMD
