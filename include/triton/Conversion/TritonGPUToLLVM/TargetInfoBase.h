@@ -89,6 +89,8 @@ public:
 
   virtual int getSharedAddressSpace() const = 0;
 
+  virtual int getAddressSpace(Attribute addressSpace) const = 0;
+
   virtual bool supportVectorizedAtomics() const = 0;
 
   // Helper used by targets to annotate store operations during lowering to

@@ -378,7 +378,7 @@ getSharedEncIfAllUsersAreDotEnc(Value val) {
         return std::nullopt;
       auto srcTy = cast<triton::gpu::TensorOrMemDesc>(val.getType());
       auto CTALayout = ttg::getCTALayout(srcTy.getEncoding());
-      auto order = ttg::getOrder(srcTy.getEncoding());
+      auto order = ttg::getOrder(srcTy);
       unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
       SmallVector<unsigned> sharedOrder;
       int rank = order.size();
