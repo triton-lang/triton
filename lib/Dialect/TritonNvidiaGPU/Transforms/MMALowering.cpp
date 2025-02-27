@@ -90,7 +90,7 @@ struct TCGen5MMAScaleSharedToTmemConversion
                      .getShape()[op.getA().getType().getShape().size() - 2];
     int blockN = op.getB()
                      .getType()
-                     .getShape()[op.getB().getType().getShape().size() - 2];
+                     .getShape()[op.getB().getType().getShape().size() - 1];
     int blockK = op.getA()
                      .getType()
                      .getShape()[op.getA().getType().getShape().size() - 1];
