@@ -194,11 +194,11 @@ tt.func @longlive(%A : !tt.ptr<f16>) {
 // expected-remark @below {{multi_color}}
 // expected-remark @below {{size = 1504}}
 tt.func @multi_color(%A : !tt.ptr<f16>) {
-  // expected-remark @below {{offset = 1280, size = 64}}
+  // expected-remark @below {{offset = 1152, size = 64}}
   %cst = ttg.local_alloc : () -> !ttg.memdesc<4x8xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // expected-remark @below {{offset = 1408, size = 32}}
+  // expected-remark @below {{offset = 1472, size = 32}}
   %cst_0 = ttg.local_alloc : () -> !ttg.memdesc<4x4xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // expected-remark @below {{offset = 1152, size = 128}}
+  // expected-remark @below {{offset = 1216, size = 128}}
   %cst_1 = ttg.local_alloc : () -> !ttg.memdesc<16x4xf16, #A_SHARED, #ttg.shared_memory, mutable>
   %cst_2 = arith.constant dense<0.000000e+00> : tensor<16x32xf16, #AL>
   // expected-remark @below {{scratch offset = 0, size = 1152}}
@@ -217,7 +217,7 @@ tt.func @multi_color(%A : !tt.ptr<f16>) {
   %5 = ttg.local_load %cst_5 : !ttg.memdesc<4x8xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<4x8xf16, #AL>
   // expected-remark @below {{offset = 0, size = 512}}
   %cst_6 = ttg.local_alloc : () -> !ttg.memdesc<8x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // expected-remark @below {{offset = 1280, size = 128}}
+  // expected-remark @below {{offset = 1344, size = 128}}
   %cst_7 = ttg.local_alloc : () -> !ttg.memdesc<2x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
   %6 = ttg.local_load %cst_0 : !ttg.memdesc<4x4xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<4x4xf16, #AL>
   // expected-remark @below {{offset = 0, size = 512}}
@@ -234,7 +234,6 @@ tt.func @multi_color(%A : !tt.ptr<f16>) {
   %10 = ttg.local_load %cst_7 : !ttg.memdesc<2x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<2x32xf16, #AL>
   %cst_12 = arith.constant dense<0.000000e+00> : tensor<4x16xf16, #AL>
   %cst_13 = arith.constant dense<0.000000e+00> : tensor<8x32xf16, #AL>
-  // expected-remark @below {{size = 1440}}
   tt.return
 }
 
@@ -464,29 +463,30 @@ tt.func @for_use_ancestor(%lb : index, %ub : index, %step : index, %A : !tt.ptr<
 }
 
 // a_shared lifetime does not overlap with a_next
-// CHECK-LABEL: for_loop_carried
+// expected-remark @below {{for_loop_carried}}
+// expected-remark @below {{size = 24576}}
 tt.func @for_loop_carried(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>, %i1 : i1) {
-  // CHECK: offset = 0, size = 8192
+  // expected-remark @below {{offset = 0, size = 8192}}
   %a_shared_init = ttg.local_alloc : () -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // CHECK-NEXT: offset = 8192, size = 8192
+  // expected-remark @below {{offset = 8192, size = 8192}}
   %b_shared_init = ttg.local_alloc : () -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
   %a_shared, %b_shared = scf.for %iv = %lb to %ub step %step iter_args(%a_shared = %a_shared_init, %b_shared = %b_shared_init) -> (!ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>) {
     %al = ttg.local_load %a_shared : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<2x32xf16, #AL>
     // this should overlap with %a_shared, but Buffer needs to support disjoint ranges
-    // CHECK-NEXT: offset = 16384, size = 8192
+    // expected-remark @below {{offset = 16384, size = 8192}}
     %a_next = ttg.local_alloc : () -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
     scf.yield %a_next, %b_shared: !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
   }
   tt.return
-  // CHECK-NEXT: size = 24576
 }
 
 // loop carried variable is disjoint with alias
-// CHECK-LABEL: cf_loop_carried
+// expected-remark @below {{cf_loop_carried}}
+// expected-remark @below {{size = 16384}}
 tt.func @cf_loop_carried(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>, %i1 : i1) {
-  // CHECK: offset = 0, size = 8192
+  // expected-remark @below {{offset = 0, size = 8192}}
   %a_shared_init = ttg.local_alloc : () -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // CHECK-NEXT: offset = 8192, size = 8192
+  // expected-remark @below {{offset = 8192, size = 8192}}
   %b_shared_init = ttg.local_alloc : () -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
   cf.br ^bb1(%lb, %ub, %a_shared_init, %b_shared_init : index, index, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>)
 ^bb1(%bb1_0: index, %bb1_1: index, %bb1_a: !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>, %bb1_b: !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>):  // 2 preds: ^bb0, ^bb2
@@ -495,21 +495,21 @@ tt.func @cf_loop_carried(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f
 ^bb2:  // pred: ^bb1
   %al = ttg.local_load %bb1_a : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<2x32xf16, #AL>
   // this should overlap with %a_shared, but Buffer needs to support disjoint ranges
-  // CHECK-NEXT: offset = 0, size = 8192
+  // expected-remark @below {{offset = 0, size = 8192}}
   %a_next = ttg.local_alloc : () -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
   %lb_next = arith.addi %bb1_0, %step : index
   cf.br ^bb1(%lb_next, %bb1_1, %a_next, %bb1_b : index, index, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>)
 ^bb3:  // pred: ^bb1
-  // CHECK-NEXT: size = 16384
   tt.return
 }
 
 // loop carried variable is overlapped with alias
-// CHECK-LABEL: cf_loop_carried_overlap
+// expected-remark @below {{cf_loop_carried_overlap}}
+// expected-remark @below {{size = 24576}}
 tt.func @cf_loop_carried_overlap(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>, %i1 : i1) {
-  // CHECK: offset = 0, size = 8192
+  // expected-remark @below {{offset = 0, size = 8192}}
   %a_shared_init = ttg.local_alloc : () -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
-  // CHECK-NEXT: offset = 16384, size = 8192
+  // expected-remark @below {{offset = 16384, size = 8192}}
   %b_shared_init = ttg.local_alloc : () -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
   cf.br ^bb1(%lb, %ub, %a_shared_init, %b_shared_init : index, index, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>)
 ^bb1(%bb1_0: index, %bb1_1: index, %bb1_a: !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>, %bb1_b: !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>):  // 2 preds: ^bb0, ^bb2
@@ -517,20 +517,19 @@ tt.func @cf_loop_carried_overlap(%lb : index, %ub : index, %step : index, %A : !
   cf.cond_br %75, ^bb2, ^bb3
 ^bb2:  // pred: ^bb1
   // this should overlap with %a_shared, but Buffer needs to support disjoint ranges
-  // CHECK-NEXT: offset = 8192, size = 8192
+  // expected-remark @below {{offset = 8192, size = 8192}}
   %a_next = ttg.local_alloc : () -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
   %al = ttg.local_load %bb1_a : !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable> -> tensor<2x32xf16, #AL>
   %lb_next = arith.addi %bb1_0, %step : index
   cf.br ^bb1(%lb_next, %bb1_1, %a_next, %bb1_b : index, index, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>, !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>)
 ^bb3:  // pred: ^bb1
-  // CHECK-NEXT: size = 24576
   tt.return
 }
 
 // a_shared_init, b_shared_init, and c_shared_init's liveness ranges are span over the entire function before cst2.
 // So they cannot be reused by cst0 and cst1, but can be reused by cst2.
 // expected-remark @below {{for_for_if}}
-// expected-remark @below {{size = 40960}}
+// expected-remark @below {{size = 32768}}
 tt.func @for_for_if(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, %B : !tt.ptr<f16>, %i1 : i1) {
   // expected-remark @below {{offset = 0, size = 8192}}
   %a_shared_init = ttg.local_alloc : () -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
@@ -556,7 +555,6 @@ tt.func @for_for_if(%lb : index, %ub : index, %step : index, %A : !tt.ptr<f16>, 
   // expected-remark @below {{offset = 0, size = 8192}}
   %cst2 = ttg.local_alloc : () -> !ttg.memdesc<128x32xf16, #A_SHARED, #ttg.shared_memory, mutable>
   tt.return
-  // expected-remark @below {{size = 32768}}
 }
 
 // expected-remark @below {{alloc1}}
