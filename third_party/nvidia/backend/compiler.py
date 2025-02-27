@@ -262,6 +262,7 @@ class CUDABackend(BaseBackend):
             passes.ttgpuir.add_fuse_nested_loops(pm)
             passes.common.add_canonicalizer(pm)
             passes.common.add_licm(pm)
+            passes.ttir.add_hoist_load(pm)
             passes.ttgpuir.add_optimize_accumulator_init(pm)
             passes.common.add_canonicalizer(pm)
             passes.ttgpuir.add_combine_tensor_select_and_if(pm)
@@ -270,6 +271,7 @@ class CUDABackend(BaseBackend):
             passes.ttgpuir.add_fuse_nested_loops(pm)
             passes.common.add_canonicalizer(pm)
             passes.common.add_licm(pm)
+            passes.ttir.add_hoist_load(pm)
             passes.ttgpuir.add_optimize_accumulator_init(pm)
             passes.ttgpuir.add_pipeline(pm, opt.num_stages, dump_enabled)
             passes.ttgpuir.add_combine_tensor_select_and_if(pm)
@@ -278,6 +280,7 @@ class CUDABackend(BaseBackend):
             passes.common.add_canonicalizer(pm)
         else:
             passes.common.add_licm(pm)
+            passes.ttir.add_hoist_load(pm)
         passes.ttgpuir.add_prefetch(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, capability >= 80)
         passes.ttgpuir.add_coalesce_async_copy(pm)
