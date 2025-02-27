@@ -384,7 +384,7 @@ class CodeGenerator(ast.NodeVisitor):
                     getattr(val, "__triton_builtin__", False),  #
                     getattr(val, "__module__", "").startswith("triton.language"),  #
                     isinstance(val, language.dtype),  #
-                    self._is_namedtuple(val),
+                    _is_namedtuple(val),
                     self._is_constexpr_global(name),  #
                     # Allow accesses to globals while visiting an ast.arg
                     # because you should be able to do
@@ -589,7 +589,7 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_Assign(self, node):
         # construct values to assign
         def _sanitize_value(value):
-            if self._is_namedtuple(type(value)) or isinstance(value, language.tuple):
+            if _is_namedtuple(type(value)) or isinstance(value, language.tuple):
                 return _apply_to_tuple_values(value, _sanitize_value)
             native_nontensor_types = (language.dtype, language.tuple)
             value = _unwrap_if_constexpr(value)
