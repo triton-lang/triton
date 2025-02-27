@@ -464,7 +464,7 @@ class CodeGenerator(ast.NodeVisitor):
         handles = []
 
         def decay(value):
-            if isinstance(value, language.tuple):
+            if _is_namedtuple(type(value)) or isinstance(value, language.tuple):
                 return _apply_to_tuple_values(value, decay)
             elif isinstance(value, (language.constexpr, int, float)):
                 return semantic.to_tensor(value, self.builder)
