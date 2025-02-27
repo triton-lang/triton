@@ -1263,7 +1263,7 @@ class CodeGenerator(ast.NodeVisitor):
         if fn in self.builtin_namespace.values():
             args = map(_unwrap_if_constexpr, args)
         ret = fn(*args, **kws)
-        if _is_namedtuple(ret):
+        if _is_namedtuple(type(ret)):
             return _apply_to_tuple_values(ret, lambda x: x)
         return ret
 
