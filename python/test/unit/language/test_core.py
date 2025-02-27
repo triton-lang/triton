@@ -1715,8 +1715,6 @@ def test_tensor_atomic_add_access_patterns(shape, idx_order, mask_step, num_ctas
 
     val = torch.randn((shape0, shape1), dtype=getattr(torch, dtype_x_str), device=device)
     dst = torch.zeros((shape0, shape1), dtype=getattr(torch, dtype_x_str), device=device)
-    print(f"val_shape = {val.shape}")
-
     dst_ref = dst.clone()
 
     cnt = 0
@@ -1726,13 +1724,7 @@ def test_tensor_atomic_add_access_patterns(shape, idx_order, mask_step, num_ctas
                 dst_ref[i][elem] += val[i][j]
             cnt += 1
 
-    print(f"val = {val}")
-    print(f"idx = {idx}")
-
     kernel[(1, )](val, idx, dst, shape0, shape1, mask_step, 64, num_ctas=num_ctas)
-
-    print(f"dst_ref = {dst_ref}")
-    print(f"dst     = {dst}")
 
     np.testing.assert_allclose(to_numpy(dst_ref), to_numpy(dst), atol=1e-2)
 
