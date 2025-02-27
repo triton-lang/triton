@@ -267,12 +267,14 @@ def test_remark_swp_op_before_operands_persistent_matmul(capfd, fresh_triton_cac
                 tl.store(c_ptrs, c, mask=c_mask)
                 accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
                 tile_id += NUM_SMS  # this line is newly added
-            else: # deliberately increasing test coverage
+            else:  # deliberately increasing test coverage
                 tile_id = min(tile_id, tile_id - NUM_SMS)
                 tile_id += NUM_SMS
 
     with enable_diagnostics_context('warnings'):
-        M = 8192; N = 8192; K = 512
+        M = 8192
+        N = 8192
+        K = 512
 
         dtype = torch.float16
 
@@ -311,7 +313,6 @@ def test_remark_swp_op_before_operands_persistent_matmul(capfd, fresh_triton_cac
             num_warps=8,  #
         )
 
-
     _, err = capfd.readouterr()
     # Split the output into lines for easier processing
     lines = err.splitlines()
@@ -319,8 +320,8 @@ def test_remark_swp_op_before_operands_persistent_matmul(capfd, fresh_triton_cac
     expected_strings = [
         "warning: The software pipeliner failed due to a dependency conflict", "for _ in range",
         "note: The loop body is divided into 3 stages to optimize GPU I/O and computation resources.",
-        "tile_id += NUM_SMS","tile_id += NUM_SMS", "group_id = tile_id", "pid_m = first_pid_m + (tile_id % group_size_m)",
-        "pid_n = (tile_id % num_pid_in_group)"
+        "tile_id += NUM_SMS", "tile_id += NUM_SMS", "group_id = tile_id",
+        "pid_m = first_pid_m + (tile_id % group_size_m)", "pid_n = (tile_id % num_pid_in_group)"
     ]
     # Initialize an index to track the position in expected_strings
     index = 0
@@ -340,6 +341,7 @@ def test_remark_swp_op_before_operands_persistent_matmul(capfd, fresh_triton_cac
     if index != len(expected_strings):
         missing_string = expected_strings[index]
         raise AssertionError(f"Missing expected string: '{missing_string}' from {err}")
+
 
 def test_remark_swp_op_before_operands_fused_matmul(capfd, fresh_triton_cache):
 
@@ -407,33 +409,23 @@ def test_remark_swp_op_before_operands_fused_matmul(capfd, fresh_triton_cache):
                 offs_bn = start_n + tl.arange(0, BLOCK_SIZE_N)
                 offs_am = tl.where(offs_am < M, offs_am, 0)
                 offs_bn = tl.where(offs_bn < N, offs_bn, 0)
-                offs_am = tl.max_contiguous(
-                    tl.multiple_of(offs_am, BLOCK_SIZE_M), BLOCK_SIZE_M
-                )
-                offs_bn = tl.max_contiguous(
-                    tl.multiple_of(offs_bn, BLOCK_SIZE_N), BLOCK_SIZE_N
-                )
+                offs_am = tl.max_contiguous(tl.multiple_of(offs_am, BLOCK_SIZE_M), BLOCK_SIZE_M)
+                offs_bn = tl.max_contiguous(tl.multiple_of(offs_bn, BLOCK_SIZE_N), BLOCK_SIZE_N)
                 bias_left_ptrs = bias_left_ptr + offs_bn[None, :]
                 bias_right_ptrs = bias_right_ptr + offs_bn[None, :]
                 bias_left = tl.load(bias_left_ptrs).to(tl.float32)
                 bias_right = tl.load(bias_right_ptrs).to(tl.float32)
-                acc_left = bias_left.broadcast_to(BLOCK_SIZE_M, BLOCK_SIZE_N) # num_stage = 0
+                acc_left = bias_left.broadcast_to(BLOCK_SIZE_M, BLOCK_SIZE_N)  # num_stage = 0
                 acc_right = bias_right.broadcast_to(BLOCK_SIZE_M, BLOCK_SIZE_N)
             # else:
-                # we implicit yield acc_left and acc_right from the previous iteration. This causes conflicts in scheduling.
+            # we implicit yield acc_left and acc_right from the previous iteration. This causes conflicts in scheduling.
 
             offs_k = ki * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)
             a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
-            b_left_ptrs = b_left_ptr + (
-                offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn
-            )
-            b_right_ptrs = b_right_ptr + (
-                offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn
-            )
+            b_left_ptrs = b_left_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
+            b_right_ptrs = b_right_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
 
-            a = tl.load(
-                a_ptrs, mask=offs_k_for_mask[None, :] < K - ki * BLOCK_SIZE_K, other=0.0
-            )
+            a = tl.load(a_ptrs, mask=offs_k_for_mask[None, :] < K - ki * BLOCK_SIZE_K, other=0.0)
             b_left = tl.load(
                 b_left_ptrs,
                 mask=offs_k_for_mask[:, None] < K - ki * BLOCK_SIZE_K,
@@ -445,7 +437,7 @@ def test_remark_swp_op_before_operands_fused_matmul(capfd, fresh_triton_cache):
                 other=0.0,
             )
 
-            acc_left = tl.dot(a, b_left, acc_left) # num_stage = 2
+            acc_left = tl.dot(a, b_left, acc_left)  # num_stage = 2
             acc_right = tl.dot(a, b_right, acc_right)
 
             if ki == k_tiles - 1:
@@ -471,7 +463,7 @@ def test_remark_swp_op_before_operands_fused_matmul(capfd, fresh_triton_cache):
         # Generate input tensors
         a = torch.randn((M, K), device=device, dtype=dtype, requires_grad=True)
         w = torch.randn((K, N), dtype=dtype, device=device)
-        b = torch.randn((N,), dtype=dtype, device=device)
+        b = torch.randn((N, ), dtype=dtype, device=device)
         # Split the b matrix in half column-wise
         N_half = N // 2
         b_left, b_right = w.split(N_half, dim=-1)
@@ -490,12 +482,10 @@ def test_remark_swp_op_before_operands_fused_matmul(capfd, fresh_triton_cache):
             "num_warps": 8,
         }
         # Define grid size
-        grid = lambda META: (
-            min(
-                NUM_SMS,
-                triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N_half, META["BLOCK_SIZE_N"]),
-            ),
-        )
+        grid = lambda META: (min(
+            NUM_SMS,
+            triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N_half, META["BLOCK_SIZE_N"]),
+        ), )
         # Launch the kernel
         fused_matmul_kernel[grid](
             a,
@@ -528,9 +518,8 @@ def test_remark_swp_op_before_operands_fused_matmul(capfd, fresh_triton_cache):
     # Define the expected strings in order
     expected_strings = [
         "warning: The software pipeliner failed due to a dependency conflict", "for _ in range",
-        "note: The loop body is divided into",
-        "acc_left = tl.dot(a, b_left, acc_left)",
-        "if ki == 0:" #implicit use from the else branch
+        "note: The loop body is divided into", "acc_left = tl.dot(a, b_left, acc_left)",
+        "if ki == 0:"  #implicit use from the else branch
     ]
     # Initialize an index to track the position in expected_strings
     index = 0
