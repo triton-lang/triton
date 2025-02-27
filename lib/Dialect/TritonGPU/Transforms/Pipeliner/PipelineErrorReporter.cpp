@@ -165,7 +165,7 @@ void PipelineErrorReporter::printSchedulingError(int64_t distance,
     findRootSchedulingErrorLoopCarryDep(consumer, producer, operand);
   }
   if (rootDefiningOps.empty()) {
-    // We failed to find the root defining ops. Whether the disntance is 0 or
+    // We failed to find the root defining ops. Whether the distance is 0 or
     // not, an empty set means we have some bugs in the pipeline expander. We
     // should let the user help report the bug.
     consumer->emitWarning() << errorMessage << " " << likelyBuggyMessage;

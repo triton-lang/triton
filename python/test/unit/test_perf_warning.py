@@ -529,7 +529,8 @@ def test_remark_swp_op_before_operands_fused_matmul(capfd, fresh_triton_cache):
     expected_strings = [
         "warning: The software pipeliner failed due to a dependency conflict", "for _ in range",
         "note: The loop body is divided into",
-        "acc_left = tl.dot(a, b_left, acc_left)", "if ki == 0:"
+        "acc_left = tl.dot(a, b_left, acc_left)",
+        "if ki == 0:" #implicit use from the else branch
     ]
     # Initialize an index to track the position in expected_strings
     index = 0
