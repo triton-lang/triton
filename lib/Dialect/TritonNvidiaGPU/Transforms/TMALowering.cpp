@@ -38,6 +38,7 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
     op->emitError() << msg;
     llvm::report_fatal_error(msg);
   }
+  assert(isa<SharedEncodingTrait>(encoding));
   MemDescType memDescType =
       MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
                        encoding, sharedMemorySpace, /*mutableMemory=*/true);
@@ -115,9 +116,10 @@ static void lowerTMAStore(Operation *op, mlir::TypedValue<RankedTensorType> src,
     op->emitError() << msg;
     llvm::report_fatal_error(msg);
   }
-  MemDescType memDescType = MemDescType::get(
-      tensorType.getShape(), tensorType.getElementType(),
-      tensorType.getEncoding(), sharedMemorySpace, /*mutableMemory=*/true);
+  assert(isa<SharedEncodingTrait>(encoding));
+  MemDescType memDescType =
+      MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
+                       encoding, sharedMemorySpace, /*mutableMemory=*/true);
   Value alloc = rewriter.create<LocalAllocOp>(loc, memDescType, src);
   rewriter.create<triton::nvidia_gpu::FenceAsyncSharedOp>(loc, false);
   Value tmaPtr =
