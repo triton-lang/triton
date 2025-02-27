@@ -43,7 +43,7 @@ struct MemoryBitMap {
   }
   void alloc(const TMemChunk &chunk) {
     // Ensure the underlying data fits the allocation.
-    while ((chunk.startCol + chunk.numCols) * chunk.numRows >= elements.size())
+    while ((chunk.startCol + chunk.numCols) * kNumRows >= elements.size())
       elements.resize(2 * elements.size(), false);
 
     for (int i = 0; i < chunk.numCols; i++) {
@@ -92,8 +92,13 @@ struct MemoryBitMap {
   }
 
 private:
-  bool isUsed(int row, int col) const { return elements[row + col * kNumRows]; }
+  bool isUsed(int row, int col) const {
+    if (row + col * kNumRows >= elements.size())
+      return false;
+    return elements[row + col * kNumRows];
+  }
   void setUsed(int row, int col, bool used) {
+    assert(row + col * kNumRows < elements.size());
     elements[row + col * kNumRows] = used;
   }
 
