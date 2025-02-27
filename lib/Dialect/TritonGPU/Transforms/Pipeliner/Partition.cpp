@@ -98,7 +98,7 @@ FailureOr<PartitionGraph> WarpSchedule::verify(scf::ForOp loop) const {
   //     op_c(%1)        {ttg.partition = 0}
   //
   PartitionGraph graph(loop, *this);
-  for (auto it = llvm::scc_begin(&graph); !it.isAtEnd(); ++it) {
+  for (auto it = llvm::scc_begin(graph); !it.isAtEnd(); ++it) {
     if (!it.hasCycle())
       continue;
     InFlightDiagnostic diag =
@@ -113,23 +113,30 @@ FailureOr<PartitionGraph> WarpSchedule::verify(scf::ForOp loop) const {
     return failure();
   }
 
-  // Each partition's stage must be strictly less than all of its consumers.
-  for (auto &[partition, node] : graph.nodes) {
-    for (auto &[consumer, use] : node.consumers) {
-      const Partition *user = consumer->partition;
-      if (user->getStage() > partition->getStage())
-        continue;
+  // Each partition's stage must be strictly less than all of its consumers plus
+  // the distance.
+  for (Partition &partition : getPartitions()) {
+    bool failed = false;
+    auto callback = [&](OpResult output, OpOperand &use, unsigned distance) {
+      const Partition *consumer = opToPartition.at(use.getOwner());
+      if (partition.getStage() < consumer->getStage() + distance)
+        return;
       InFlightDiagnostic diag =
           mlir::emitWarning(loop.getLoc(), "partition #")
-          << partition->getIndex() << " has stage " << partition->getStage()
-          << " but is consumed by partition #" << user->getIndex()
-          << " with stage " << user->getStage();
-      diag.attachNote(use->getOwner()->getLoc())
-          << "use of value defined in partition #" << partition->getIndex();
-      diag.attachNote(use->get().getDefiningOp()->getLoc())
-          << "value defined here in partition #" << partition->getIndex();
+          << partition.getIndex() << " has stage " << partition.getStage()
+          << " but is consumed by partition #" << consumer->getIndex()
+          << " with stage " << consumer->getStage() << " at distance "
+          << distance;
+      diag.attachNote(use.getOwner()->getLoc())
+          << "use of value defined in partition #" << partition.getIndex()
+          << " at " << distance << " iterations in the future";
+      diag.attachNote(output.getLoc())
+          << "value defined here in partition #" << partition.getIndex();
+      failed = true;
+    };
+    iterateUses(loop, &partition, callback);
+    if (failed)
       return failure();
-    }
   }
 
   return std::move(graph);

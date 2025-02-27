@@ -1,10 +1,12 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/Pass/Pass.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Partition.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
+#include "llvm/ADT/SCCIterator.h"
 
 using namespace mlir;
 using namespace triton;
@@ -25,7 +27,7 @@ public:
       : schedule(schedule), graph(graph), loop(loop) {}
 
   // Partition the loop.
-  void run();
+  LogicalResult run();
 
 private:
   // The schedule to apply.
@@ -38,40 +40,62 @@ private:
 
 struct UseInfo {
   llvm::MapVector<const Partition *, SmallVector<OpOperand *>> consumers;
-  unsigned maxDistance = 0;
 };
 } // namespace
 
-void LoopPartitioner::run() {
+LogicalResult LoopPartitioner::run() {
+  SmallVector<llvm::MapVector<OpResult, UseInfo>> partitionUseInfo;
   for (const Partition &partition : schedule.getPartitions()) {
     // Find all the consumers of an output. That output will need to be
     // multibuffered based on the maximum total distance to its uses. At the
     // same time, because each consumer can complete at any time, track all of
     // them since they all need to be synchronized.
-    DenseMap<OpResult, UseInfo> useInfo;
+    auto &useInfo = partitionUseInfo.emplace_back();
 
-    unsigned defStage = partition.getStage();
     auto callback = [&](OpResult output, OpOperand &use, unsigned distance) {
-      // Determine the overall distance of the use. This is the stage delta plus
-      // the distance in the future.
       const Partition *usePartition = schedule.getPartition(use.getOwner());
-      unsigned useStage = usePartition->getStage();
-      assert(useStage > defStage && "expected verifier to check this");
-
       UseInfo &info = useInfo[output];
-      info.maxDistance = std::max(info.maxDistance, useStage - defStage);
-
-      OpOperand *curUse = &use;
-      while (distance--) {
-        unsigned idx = cast<BlockArgument>(curUse->get()).getArgNumber();
-        curUse = &(*loop.getYieldedValuesMutable())[idx - 1];
-      }
-      assert(curUse->getOwner() == loop.getBody()->getTerminator() &&
-             curUse->get().getDefiningOp());
+      info.consumers[usePartition].push_back(&use);
     };
 
     schedule.iterateUses(loop, &partition, callback);
   }
+
+  // Resolve multiplicity.
+
+  // Cut all SSA dependencies by passing outputs through shared memory.
+  ImplicitLocOpBuilder b(loop.getLoc(), loop);
+  for (auto [partition, useInfo] :
+       llvm::zip(schedule.getPartitions(), partitionUseInfo)) {
+    for (auto [output, info] : useInfo) {
+      int maxDistance = 0;
+      for (const Partition *usePartition :
+           llvm::make_first_range(info.consumers)) {
+        assert(usePartition->getStage() > partition.getStage() &&
+               "expected the verifier to check this");
+        maxDistance = std::max(maxDistance,
+                               usePartition->getStage() - partition.getStage());
+      }
+      return mlir::emitError(output.getLoc(), "TODO: handle partition outputs");
+    }
+  }
+
+  llvm::SmallSetVector<const Partition *, 4> splitOrder;
+  for (auto it = llvm::scc_begin(graph); !it.isAtEnd(); ++it) {
+    assert(!it.hasCycle() && "expected verifier to check this");
+    splitOrder.insert(it->front().first->partition);
+  }
+  SmallVector<std::unique_ptr<Region>> partitionRegions;
+  for (const Partition *partition : llvm::reverse(splitOrder)) {
+    auto region = std::make_unique<Region>();
+    Block &block = region->emplaceBlock();
+    partitionRegions.push_back(std::move(region));
+
+    for (Operation *op : partition->getOps())
+      op->moveBefore(&block, block.end());
+  }
+
+  return success();
 }
 
 //===----------------------------------------------------------------------===//
@@ -112,7 +136,8 @@ void AutomaticWarpSpecialization::runOnOperation() {
     if (failed(graphOr))
       continue;
     LoopPartitioner partitioner(schedule, *graphOr, loop);
-    partitioner.run();
+    if (failed(partitioner.run()))
+      return signalPassFailure();
   }
 
   // FIXME: Scratch notes below:

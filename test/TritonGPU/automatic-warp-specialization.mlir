@@ -70,3 +70,16 @@ tt.func @invalid_partition_stage(%lb: i32, %ub: i32, %step: i32) {
   } {ttg.partition.stages = [2, 0]}
   tt.return
 }
+
+tt.func @invalid_future_partition(%lb: i32, %ub: i32, %step: i32) {
+  %c0 = arith.constant 0 : index
+  // expected-warning @below {{partition #1 has stage 2 but is consumed by partition #0 with stage 0 at distance 1}}
+  scf.for %i = %lb to %ub step %step iter_args(%k = %c0) -> index : i32 {
+    // expected-note @below {{use of value defined in partition #1 at 1 iterations in the future}}
+    "op_a"(%k) {ttg.partition = 0} : (index) -> ()
+    // expected-note @below {{value defined here in partition #1}}
+    %0 = "op_b"() {ttg.partition = 1} : () -> index
+    scf.yield %0 : index
+  } {ttg.partition.stages = [0, 2]}
+  tt.return
+}

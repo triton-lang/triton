@@ -129,7 +129,7 @@ struct PartitionNode {
   // The partition this node represents.
   const WarpSchedule::Partition *partition;
   // Partitions that consume the outputs of this partition.
-  SmallVector<std::pair<PartitionNode *, OpOperand *>> consumers;
+  SmallVector<std::pair<const PartitionNode *, OpOperand *>> consumers;
 };
 
 // A graph of partitions that can be used to check for cycles and other schedule
@@ -144,14 +144,14 @@ struct PartitionGraph {
 } // namespace mlir::triton::gpu
 
 namespace llvm {
-template <> struct GraphTraits<mlir::triton::gpu::PartitionGraph *> {
+template <> struct GraphTraits<mlir::triton::gpu::PartitionGraph> {
   using NodeRef =
-      std::pair<mlir::triton::gpu::PartitionNode *, mlir::OpOperand *>;
-  static NodeRef getEntryNode(mlir::triton::gpu::PartitionGraph *graph) {
-    return {&graph->root, nullptr};
+      std::pair<const mlir::triton::gpu::PartitionNode *, mlir::OpOperand *>;
+  static NodeRef getEntryNode(const mlir::triton::gpu::PartitionGraph &graph) {
+    return {&graph.root, nullptr};
   }
 
-  using ChildIteratorType = SmallVector<NodeRef>::iterator;
+  using ChildIteratorType = SmallVector<NodeRef>::const_iterator;
   static ChildIteratorType child_begin(NodeRef node) {
     return node.first->consumers.begin();
   }
