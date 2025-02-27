@@ -65,7 +65,7 @@ struct TCGen5MMAScaleSharedToTmemConversion
         cast<SwizzledSharedEncodingAttr>(oldType.getEncoding());
     CTALayoutAttr CTALayout = getCTALayout(oldEncoding);
     ArrayRef<unsigned> CTASplitNum = CTALayout.getCTASplitNum();
-    ArrayRef<int64_t> shape = oldType.getAllocShape();
+    ArrayRef<int64_t> shape = oldType.getShape();
     Attribute scaleEncoding = TensorMemoryScalesEncodingAttr::get(
         context, CTASplitNum[0], CTASplitNum[1]);
     Type scaleAType =
