@@ -74,12 +74,16 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
 /// values: [Start, End).
 template <typename T> class Interval {
 public:
-  Interval() {}
-  Interval(T S, T E) : Start(S), End(E) { assert(Start <= End); }
+  Interval() = default;
+  Interval(T S) : Start(S), End(S + 1) {}
+  Interval(T S, T E) : Start(S), End(E) { assert(Start < End); }
   T start() const { return Start; }
   T end() const { return End; }
   T size() const { return End - Start; }
   bool contains(T Addr) const { return Start <= Addr && Addr < End; }
+  bool contains(const Interval &R) const {
+    return Start <= R.Start && R.End <= End;
+  }
   bool intersects(const Interval &R) const {
     return Start < R.End && R.Start < End;
   }
@@ -90,6 +94,12 @@ public:
   bool operator<(const Interval &R) const {
     return std::make_pair(Start, End) < std::make_pair(R.Start, R.End);
   }
+  bool adjacent(const Interval &R) const {
+    return R.End == Start || R.Start == End;
+  }
+  Interval span(const Interval &R) const {
+    return Interval(std::min(Start, R.Start), std::max(End, R.End));
+  }
 
 private:
   T Start = std::numeric_limits<T>::min();
@@ -97,6 +107,13 @@ private:
 };
 
 template <class T> Interval(T, T) -> Interval<T>;
+
+template <typename T>
+llvm::raw_ostream &operator<<(llvm::raw_ostream &ostr,
+                              const Interval<T> &ival) {
+  ostr << "[" << ival.start() << "," << ival.end() << ")";
+  return ostr;
+}
 
 class Allocation {
 public:
@@ -177,6 +194,11 @@ public:
     return bufferSet.at(bufferId).kind == BufferT::BufferKind::Virtual;
   }
 
+  /// Returns if the given buffer is a alias buffer.
+  bool isAliasBuffer(BufferId bufferId) const {
+    return bufferSet.at(bufferId).kind == BufferT::BufferKind::Alias;
+  }
+
   /// Returns the size of total shared memory allocated
   size_t getSharedMemorySize() const { return sharedMemorySize; }
 
@@ -189,7 +211,7 @@ private:
     /// Explicit: ttg.local_alloc
     /// Scratch: ttg.convert_layout
     /// Virtual: triton.call
-    enum class BufferKind { Explicit, Scratch, Virtual };
+    enum class BufferKind { Explicit, Scratch, Virtual, Alias };
 
     BufferKind kind;
     BufferId id;
@@ -197,6 +219,7 @@ private:
     size_t size;
     size_t alignment;
     size_t offset;
+    SmallVector<BufferT *> aliases;
 
     bool operator==(const BufferT &other) const { return id == other.id; }
     bool operator<(const BufferT &other) const { return id < other.id; }
@@ -209,6 +232,16 @@ private:
     size_t setOffsetAligned(size_t newOffset) {
       return offset = llvm::alignTo(newOffset, alignment);
     }
+
+    void applyToBufferAndAliases(const std::function<void(BufferT *)> &f) {
+      if (kind == BufferKind::Alias) {
+        for (auto *buf : aliases)
+          buf->applyToBufferAndAliases(f);
+      } else
+        f(this);
+    }
+
+    void dump() const;
   };
 
   /// Op -> Scratch Buffer
@@ -220,20 +253,34 @@ private:
   /// BufferId -> Buffer
   using BufferSetT = std::map<BufferId, BufferT>;
 
+public:
+  void dump() const;
+
 private:
-  template <BufferT::BufferKind Kind, typename KeyType, typename... Args>
-  void addBuffer(KeyType &key, Args &&...args) {
+  template <BufferT::BufferKind Kind>
+  BufferT *addBuffer(Operation *key, size_t size, size_t alignment) {
     BufferId nextId = bufferIdCounter++;
     auto [it, inserted] = bufferSet.insert_or_assign(
-        nextId, BufferT(Kind, nextId, key, std::forward<Args>(args)...));
+        nextId, BufferT(Kind, nextId, key, size, alignment));
     BufferT *buffer = &it->second;
     if constexpr (Kind == BufferT::BufferKind::Explicit) {
-      valueBuffer[key] = buffer;
+      valueBuffer[key->getResult(0)] = buffer;
     } else if constexpr (Kind == BufferT::BufferKind::Virtual) {
       opVirtual[key] = buffer;
     } else {
+      static_assert(Kind == BufferT::BufferKind::Scratch);
       opScratch[key] = buffer;
     }
+    return buffer;
+  }
+
+  BufferT *addAlias(Value key, size_t size, size_t alignment) {
+    BufferId nextId = bufferIdCounter++;
+    auto [it, inserted] = bufferSet.insert_or_assign(
+        nextId, BufferT(BufferT::BufferKind::Alias, nextId, nullptr, size, alignment));
+    BufferT *buffer = &it->second;
+    valueBuffer[key] = buffer;
+    return buffer;
   }
 
   void addAlias(Value value, Value alloc) {
