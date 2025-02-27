@@ -236,12 +236,12 @@ static int createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
     loadOp->replaceAllUsesWith(result);
 
     // Prefetch load if is not MMAV3 and is used by the dot.
-    //if (loadInfo.usedByDot) {
-    //  assert(stageForFirstUse >= 1);
-    //  tt::setStageCluster(wait, stageForFirstUse - 1, maxClusterId + 1);
-    //  tt::setStageCluster(viewLoad, stageForFirstUse - 1, maxClusterId + 1);
-    //  retCode = stageForFirstUse - 1;
-    //}
+    if (loadInfo.usedByDot) {
+      assert(stageForFirstUse >= 1);
+      tt::setStageCluster(wait, stageForFirstUse - 1, maxClusterId + 1);
+      tt::setStageCluster(viewLoad, stageForFirstUse - 1, maxClusterId + 1);
+      retCode = stageForFirstUse - 1;
+    }
   }
   loadOp.erase();
   return retCode;

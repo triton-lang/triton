@@ -240,14 +240,19 @@ bool mlir::triton::getDisallowAccMultiBuffer(scf::ForOp forOp) {
   return forOp->hasAttr(mlir::triton::kDisallowAccMultiBufferAttrName);
 }
 
-void mlir::triton::visitNestedOperands(Operation *op,
-                                       function_ref<void(Value)> visitor) {
+void mlir::triton::visitNestedOperands(
+    Operation *op, function_ref<void(OpOperand &)> visitor) {
   op->walk([&](Operation *nestedOp) {
-    for (Value operand : nestedOp->getOperands()) {
-      if (operand.getParentBlock()->getParentOp()->isProperAncestor(op))
+    for (OpOperand &operand : nestedOp->getOpOperands()) {
+      if (operand.get().getParentBlock()->getParentOp()->isProperAncestor(op))
         visitor(operand);
     }
   });
+}
+
+void mlir::triton::visitNestedOperands(Operation *op,
+                                       function_ref<void(Value)> visitor) {
+  visitNestedOperands(op, [&](OpOperand &operand) { visitor(operand.get()); });
 }
 
 SetVector<Value> mlir::triton::getNestedOperands(Operation *op) {

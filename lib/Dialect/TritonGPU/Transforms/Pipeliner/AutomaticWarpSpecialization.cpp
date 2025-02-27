@@ -31,12 +31,20 @@ void AutomaticWarpSpecialization::runOnOperation() {
   // be scheduled.
   SmallVector<scf::ForOp> loops;
   getOperation().walk([&](scf::ForOp loop) {
-    if (loop->hasAttrOfType<ArrayAttr>(kLatenciesAttrName))
+    if (loop->hasAttrOfType<ArrayAttr>(kPartitionStagesAttrName))
       loops.push_back(loop);
   });
 
   for (scf::ForOp loop : loops) {
+    FailureOr<WarpSchedule> scheduleOr = WarpSchedule::deserialize(loop);
+    if (failed(scheduleOr))
+      continue;
+    WarpSchedule schedule = std::move(*scheduleOr);
+    if (failed(schedule.verify(loop)))
+      continue;
   }
+
+  // FIXME: Scratch notes below:
 
   // Analyze partitions and organized them into a DAG. Each partition is a node
   // with multiple inputs and multiple outputs. Entry partitions have no inputs

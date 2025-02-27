@@ -45,6 +45,10 @@ bool getDisallowAccMultiBuffer(scf::ForOp forOp);
 
 /// Visit the operands of `op` and the operands of any nested ops defined
 /// outside of `op`.
+void visitNestedOperands(Operation *op,
+                         function_ref<void(OpOperand &)> visitor);
+/// Visit the operands of `op` and the operands of any nested ops defined
+/// outside of `op`.
 void visitNestedOperands(Operation *op, function_ref<void(Value)> visitor);
 /// Get the operands of `op` and the operands of any nested ops defined outside
 /// of `op`.

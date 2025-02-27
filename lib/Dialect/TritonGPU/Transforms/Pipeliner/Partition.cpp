@@ -1,34 +1,115 @@
 #include "triton/Dialect/TritonGPU/Transforms/Partition.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
+#include "llvm/ADT/GraphTraits.h"
+#include "llvm/ADT/SCCIterator.h"
 
 using namespace mlir;
 using namespace triton;
 using namespace gpu;
 
 //===----------------------------------------------------------------------===//
+// PartitionGraph
+//===----------------------------------------------------------------------===//
+
+namespace {
+// A temporary node structure that can be used to build a graph of partitions.
+// The consumers have to be precomputed in order for the SCC iterator to have an
+// acceptable runtime complexity. This assumes the underlying loop is immutable.
+struct PartitionNode {
+  PartitionNode(const WarpSchedule::Partition *partition)
+      : partition(partition) {}
+
+  // The partition this node represents.
+  const WarpSchedule::Partition *partition;
+  // Partitions that consume the outputs of this partition.
+  SmallVector<std::pair<PartitionNode *, OpOperand *>> consumers;
+};
+
+// A graph of partitions that can be used to check for cycles and other schedule
+// invariants.
+struct PartitionGraph {
+  PartitionGraph(scf::ForOp loop, const WarpSchedule &schedule);
+
+  PartitionNode root;
+  llvm::MapVector<const WarpSchedule::Partition *, PartitionNode> nodes;
+};
+} // namespace
+
+PartitionGraph::PartitionGraph(scf::ForOp loop, const WarpSchedule &schedule)
+    : root(schedule.getRootPartition()) {
+  // Create the nodes at once. Afterwards, the map won't re-allocate and the
+  // pointers will be stable.
+  for (WarpSchedule::Partition &partition : schedule.getPartitions())
+    nodes.try_emplace(&partition, &partition);
+
+  // Wire up the graph. Consider the root node to be consumed by all other
+  // partitions so that it can be used as a virtual root.
+  for (PartitionNode &node : llvm::make_second_range(nodes))
+    root.consumers.emplace_back(&node, nullptr);
+
+  // Check the users of the partition outputs to wire the rest of the graph.
+  for (auto &[partition, node] : nodes) {
+    auto callback = [&, node = &node](Operation *owner, OpOperand &use) {
+      // Ignore uses in subsequent iterations.
+      if (isa<scf::YieldOp>(owner))
+        return;
+      PartitionNode &consumer =
+          nodes.find(schedule.getPartition(owner))->second;
+      node->consumers.emplace_back(&consumer, &use);
+    };
+    schedule.iterateOutputs(loop, partition, callback);
+  }
+}
+
+namespace llvm {
+template <> struct GraphTraits<PartitionGraph *> {
+  using NodeRef = std::pair<PartitionNode *, OpOperand *>;
+  static NodeRef getEntryNode(PartitionGraph *graph) {
+    return {&graph->root, nullptr};
+  }
+
+  using ChildIteratorType = SmallVector<NodeRef>::iterator;
+  static ChildIteratorType child_begin(NodeRef node) {
+    return node.first->consumers.begin();
+  }
+  static ChildIteratorType child_end(NodeRef node) {
+    return node.first->consumers.end();
+  }
+};
+} // namespace llvm
+
+//===----------------------------------------------------------------------===//
 // WarpSchedule
 //===----------------------------------------------------------------------===//
 
+WarpSchedule::Partition *WarpSchedule::getPartition(Operation *op) {
+  return opToPartition.at(op);
+}
+const WarpSchedule::Partition *WarpSchedule::getPartition(Operation *op) const {
+  return opToPartition.at(op);
+}
+
 FailureOr<WarpSchedule> WarpSchedule::deserialize(scf::ForOp loop) {
-  auto latencies = loop->getAttrOfType<ArrayAttr>(kLatenciesAttrName);
-  if (!latencies) {
-    return mlir::emitError(loop.getLoc(), "missing '")
-           << kLatenciesAttrName << "' attribute";
+  auto stages = loop->getAttrOfType<ArrayAttr>(kPartitionStagesAttrName);
+  if (!stages) {
+    return mlir::emitWarning(loop.getLoc(), "missing '")
+           << kPartitionStagesAttrName << "' attribute";
   }
 
   WarpSchedule result;
-  for (Attribute attr : latencies) {
-    auto latency = dyn_cast<IntegerAttr>(attr);
-    if (!latency || latency.getInt() <= 0) {
-      return mlir::emitError(loop.getLoc(), "latencies '")
-             << kLatenciesAttrName << "' has invalid element " << attr;
+  for (auto [idx, attr] : llvm::enumerate(stages)) {
+    auto stage = dyn_cast<IntegerAttr>(attr);
+    if (!stage || stage.getInt() < 0) {
+      return mlir::emitError(loop.getLoc(), "partition stages attribute '")
+             << kPartitionStagesAttrName << "' has invalid element " << attr;
     }
 
-    result.partitions.push_back(std::make_unique<Partition>(latency.getInt()));
+    result.partitions.push_back(
+        std::make_unique<Partition>(idx, stage.getInt()));
   }
 
   for (Operation &op : loop.getBody()->without_terminator()) {
-    Partition *partition = &result.nullPartition;
+    Partition *partition = &result.rootPartition;
     if (auto attr = op.getAttrOfType<IntegerAttr>(kPartitionAttrName)) {
       int64_t idx = attr.getInt();
       if (idx < 0 || idx >= result.partitions.size()) {
@@ -37,7 +118,7 @@ FailureOr<WarpSchedule> WarpSchedule::deserialize(scf::ForOp loop) {
       partition = result.partitions[idx].get();
     }
 
-    partition->ops.push_back(&op);
+    partition->insert(&op);
     result.opToPartition[&op] = partition;
   }
 
@@ -45,50 +126,129 @@ FailureOr<WarpSchedule> WarpSchedule::deserialize(scf::ForOp loop) {
 }
 
 void WarpSchedule::serialize(scf::ForOp loop) const {
-  SmallVector<Attribute> latencies;
+  SmallVector<Attribute> stages;
   Builder b(loop.getContext());
   for (auto [i, partition] :
        llvm::enumerate(llvm::make_pointee_range(partitions))) {
-    latencies.push_back(b.getI32IntegerAttr(partition.latency));
-    for (Operation *op : partition.ops) {
+    stages.push_back(b.getI32IntegerAttr(partition.getStage()));
+    for (Operation *op : partition.getOps()) {
       op->setAttr(kPartitionAttrName, b.getI32IntegerAttr(i));
     }
   }
-  loop->setAttr(kLatenciesAttrName, b.getArrayAttr(latencies));
+  loop->setAttr(kPartitionStagesAttrName, b.getArrayAttr(stages));
 }
 
 LogicalResult WarpSchedule::verify(scf::ForOp loop) const {
-  // The null partition is only allowed to depend on itself.
+  // The root partition is only allowed to transitively depend on itself.
+  bool failed = false;
+  iterateInputs(loop, &rootPartition, [&](OpOperand &input) {
+    auto [def, distance] = getDefiningOpAndDistance(loop, input.get());
+    // Ignore values defined outside the loop.
+    if (!def || def->getParentOp() != loop)
+      return;
+    const Partition *defPartition = opToPartition.at(def);
+    if (defPartition == &rootPartition)
+      return;
+    InFlightDiagnostic diag = mlir::emitWarning(input.getOwner()->getLoc());
+    diag << "operation in the root partition depends on a value that "
+            "originates from a non-root partition through operand #"
+         << input.getOperandNumber();
+    diag.attachNote(def->getLoc())
+        << "operand defined here in partition #" << defPartition->getIndex()
+        << " at distance " << distance;
+    failed = true;
+  });
+  if (failed)
+    return failure();
 
-  for (auto [i, partition] :
-       llvm::enumerate(llvm::make_pointee_range(partitions))) {
-    for (Operation *op : partition.ops) {
+  // Within a loop iteration, the partitions must form a DAG. For example, the
+  // following is invalid:
+  //
+  //   scf.for %i = %lb to %ub step %step
+  //     %0 = op_a()     {ttg.partition = 0}
+  //     %1 = op_b(%0)   {ttg.partition = 1}
+  //     op_c(%1)        {ttg.partition = 0}
+  //
+  PartitionGraph graph(loop, *this);
+  for (auto it = llvm::scc_begin(&graph); !it.isAtEnd(); ++it) {
+    if (!it.hasCycle())
+      continue;
+    InFlightDiagnostic diag =
+        mlir::emitWarning(loop.getLoc(), "warp schedule contains a cycle");
+    for (auto [node, use] : *it) {
+      assert(use && "already checked that the root partition has no ancestors");
+      diag.attachNote(use->getOwner()->getLoc())
+          << "operation in partition #" << node->partition->getIndex()
+          << " uses value defined in partition #"
+          << opToPartition.at(use->get().getDefiningOp())->getIndex();
+    }
+    return failure();
+  }
+
+  // Each partition's stage must be strictly less than all of its consumers.
+  for (auto &[partition, node] : graph.nodes) {
+    for (auto &[consumer, use] : node.consumers) {
+      const Partition *user = consumer->partition;
+      if (user->getStage() > partition->getStage())
+        continue;
+      InFlightDiagnostic diag =
+          mlir::emitWarning(loop.getLoc(), "partition #")
+          << partition->getIndex() << " has stage " << partition->getStage()
+          << " but is consumed by partition #" << user->getIndex()
+          << " with stage " << user->getStage();
+      diag.attachNote(use->getOwner()->getLoc())
+          << "use of value defined in partition #" << partition->getIndex();
+      diag.attachNote(use->get().getDefiningOp()->getLoc())
+          << "value defined here in partition #" << partition->getIndex();
+      return failure();
     }
   }
   return success();
 }
 
-void WarpSchedule::iterateInputs(scf::ForOp loop, Partition *partition,
-                                 function_ref<void(Value)> callback) const {
-  for (Operation *op : partition->ops) {
-    visitNestedOperands(op, [&](Value operand) {
+void WarpSchedule::iterateInputs(
+    scf::ForOp loop, const Partition *partition,
+    function_ref<void(OpOperand &)> callback) const {
+  for (Operation *op : partition->getOps()) {
+    visitNestedOperands(op, [&](OpOperand &operand) {
       // Ignore implicit captures.
-      if (operand.getParentBlock() != loop.getBody())
+      Value value = operand.get();
+      if (value.getParentBlock() != loop.getBody())
         return;
-      if (auto arg = dyn_cast<BlockArgument>(operand)) {
+      if (auto arg = dyn_cast<BlockArgument>(value)) {
         assert(arg.getOwner() == loop.getBody());
         // Ignore the induction variable.
         if (arg == loop.getInductionVar())
           return;
         // This value originates from a previous iteration.
         assert(llvm::is_contained(loop.getRegionIterArgs(), arg));
-        callback(arg);
-      } else if (opToPartition.at(operand.getDefiningOp()) != partition) {
+        callback(operand);
+      } else if (opToPartition.at(value.getDefiningOp()) != partition) {
         // This value originates from a different partition in the same
         // iteration.
-        assert(operand.getDefiningOp()->getParentOp() == loop);
+        assert(value.getDefiningOp()->getParentOp() == loop);
         callback(operand);
       }
     });
+  }
+}
+
+void WarpSchedule::iterateOutputs(
+    scf::ForOp loop, const Partition *partition,
+    function_ref<void(Operation *, OpOperand &)> callback) const {
+  for (Operation *op : partition->getOps()) {
+    for (OpResult result : op->getOpResults()) {
+      for (OpOperand &use : result.getUses()) {
+        Operation *owner =
+            loop.getBody()->findAncestorOpInBlock(*use.getOwner());
+        if (isa<scf::YieldOp>(owner)) {
+          // This value is used in a subsequent iteration.
+          callback(owner, use);
+        } else if (opToPartition.at(owner) != partition) {
+          // This value is used in a different partition in the same iteration.
+          callback(owner, use);
+        }
+      }
+    }
   }
 }
