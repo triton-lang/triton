@@ -172,12 +172,11 @@ static std::pair<int, int> getMinMaxCluster(scf::ForOp &forOp) {
 
 static std::optional<int> tryGetMaxStage(scf::ForOp &forOp) {
   std::optional<int> maxStage = std::nullopt;
-  for (auto &op : forOp.getBody()->without_terminator()) {
-    if (!op.hasAttr(mlir::triton::kLoopStageAttrName) ||
-        !op.hasAttr(mlir::triton::kLoopClusterAttrName))
-      continue;
-    auto [stage, _] = getStageCluster(&op);
-    maxStage = maxStage ? (stage > *maxStage ? stage : *maxStage) : stage;
+  if (forOp->hasAttr(mlir::triton::kScheduledMaxStageAttrName)) {
+    return forOp
+        ->getAttrOfType<IntegerAttr>(mlir::triton::kScheduledMaxStageAttrName)
+        .getValue()
+        .getSExtValue();
   }
   return maxStage;
 }
@@ -187,6 +186,9 @@ void tt::CoarseSchedule::serialize(scf::ForOp &forOp) {
   for (auto [op, stage, cluster] : getOpsInOrder(forOp)) {
     setStageCluster(op, stage, *cluster);
   }
+  forOp->setAttr(mlir::triton::kScheduledMaxStageAttrName,
+                 IntegerAttr::get(IntegerType::get(forOp.getContext(), 32),
+                                  numStages - 1));
 }
 
 // Create a CoarseSchedule based on forOp's <stage, cluster>.
