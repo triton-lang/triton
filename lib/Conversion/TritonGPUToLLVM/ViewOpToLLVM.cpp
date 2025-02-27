@@ -173,22 +173,29 @@ struct SplitOpConversion : public ConvertOpToLLVMPattern<SplitOp> {
     // We rely on the following invariants of this op (which are checked by its
     // verifier):
     //
-    // - The op has a blocked encoding.
+    // - The layout distribute the last dimension along registers
     // - The last dimension (the one we're splitting) has sizePerThread=2,
     // threadPerWarp=1 and warpPerBlock=1.
     //
     // With these invariants, split is trivial: We can count how many contiguous
     // registers belong to the same chunk then we separate the registers between
     // two different chunks.
+    auto srcTy = cast<RankedTensorType>(op.getSrc().getType());
+    auto ll = toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
+    int splitDim = srcTy.getRank() - 1;
+    auto kReg = mlir::StringAttr::get(srcTy.getContext(), "register");
+    const auto &bases = ll.getBases();
+    const auto &regs = bases.find(kReg)->second;
     int numContiguousValues = 1;
-    auto encoding = cast<BlockedEncodingAttr>(
-        cast<RankedTensorType>(op.getSrc().getType()).getEncoding());
-    int splitDim = encoding.getOrder().size() - 1;
-    for (int i = 0; i < encoding.getOrder().size(); i++) {
-      if (encoding.getOrder()[i] == splitDim)
+    bool found = false;
+    for (const auto &reg : regs) {
+      if (reg[splitDim] != 0) {
+        found = true;
         break;
-      numContiguousValues *= encoding.getSizePerThread()[i];
+      }
+      numContiguousValues *= 2;
     }
+    assert(found && "Split dimension is not distributed along registers.");
     Location loc = op->getLoc();
     auto typeConverter = getTypeConverter();
     SmallVector<Value> srcVals =
@@ -369,7 +376,7 @@ struct MemDescSubviewOpConversion
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto srcTy = op.getSrc().getType();
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
-    auto layoutOrder = getOrder(srcTy.getEncoding());
+    auto layoutOrder = getOrder(srcTy);
 
     // newBase = base + offset
     auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),

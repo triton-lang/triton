@@ -332,7 +332,7 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [DeclareOpInterfaceMethods<MemoryE
 
     let description = [{
         $d += matrix_multiply($a, $b).
-        If not barrier is given the op is assumed to be synchronous otherwise the op will trigger a commit/arrive on the given barrier.
+        If no barrier is given the op is assumed to be synchronous otherwise the op will trigger a commit/arrive on the given barrier.
         If there is a barrier the result will be safe to read after a barrier wait.
         If $two_ctas is set the op will execute a matmul across two contiguous CTAs, it will read the data distributed across the two CTAs.
         and syncronize both CTAs if the op is synchronous.
@@ -355,7 +355,7 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [DeclareOpInterfaceMe
 
     let description = [{
         $d += matrix_multiply(scale($lhs, $lhs_scale), scale(rlhs, $rhs_scale))
-        If not barrier is given the op is assumed to be synchronous otherwise the op will trigger a commit/arrive on the given barrier.
+        If no barrier is given the op is assumed to be synchronous otherwise the op will trigger a commit/arrive on the given barrier.
         If there is a barrier the result will be safe to read after a barrier wait.
     }];
 

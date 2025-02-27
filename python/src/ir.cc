@@ -1,4 +1,4 @@
-#include <optional>
+﻿#include <optional>
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -1768,7 +1768,7 @@ void init_triton_ir(py::module &&m) {
   py::class_<PassManager>(m, "pass_manager", py::module_local())
       .def(py::init<MLIRContext *>())
       .def("enable_debug",
-           [](PassManager &self) {
+           [](PassManager &self) -> bool {
              auto *context = self.getContext();
              bool haveDump = ::triton::tools::getBoolEnv("MLIR_ENABLE_DUMP");
              std::string funcToDump;
@@ -1803,6 +1803,7 @@ void init_triton_ir(py::module &&m) {
                    /*printAfterOnlyOnFailure*/ true, mlir_dumps_or_dbgs(),
                    printingFlags);
              }
+             return haveDump;
            })
       .def("get_pipeline_str",
            [](PassManager &self) {
