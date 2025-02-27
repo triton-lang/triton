@@ -464,7 +464,7 @@ class CodeGenerator(ast.NodeVisitor):
         handles = []
 
         def decay(value):
-            if _is_namedtuple(type(value)) or isinstance(value, language.tuple):
+            if isinstance(value, language.tuple):
                 return _apply_to_tuple_values(value, decay)
             elif isinstance(value, (language.constexpr, int, float)):
                 return semantic.to_tensor(value, self.builder)
@@ -589,7 +589,7 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_Assign(self, node):
         # construct values to assign
         def _sanitize_value(value):
-            if _is_namedtuple(type(value)) or isinstance(value, language.tuple):
+            if isinstance(value, language.tuple):
                 return _apply_to_tuple_values(value, _sanitize_value)
             native_nontensor_types = (language.dtype, language.tuple)
             value = _unwrap_if_constexpr(value)
@@ -1262,7 +1262,10 @@ class CodeGenerator(ast.NodeVisitor):
 
         if fn in self.builtin_namespace.values():
             args = map(_unwrap_if_constexpr, args)
-        return fn(*args, **kws)
+        ret = fn(*args, **kws)
+        if _is_namedtuple(ret):
+            return _apply_to_tuple_values(ret, lambda x: x)
+        return ret
 
     def visit_Constant(self, node):
         return constexpr(node.value)
