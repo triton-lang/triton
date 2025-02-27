@@ -33,7 +33,7 @@ LLVM::LLVMFuncOp getVprintfDeclaration(RewriterBase &rewriter) {
 
 // extend integer to int32, extend float to float64
 // this comes from vprintf alignment requirements.
-std::pair<Type, Value> printfPromoteValue(RewriterBase &rewriter, Value value) {
+std::pair<Type, Value> printfPromoteValue(RewriterBase &rewriter, Value value, bool isSigned) {
   auto *context = rewriter.getContext();
   auto type = value.getType();
   Value newOp = value;
@@ -43,12 +43,12 @@ std::pair<Type, Value> printfPromoteValue(RewriterBase &rewriter, Value value) {
 
   bool isUnsigned = type.isUnsignedInteger();
   if (type.isIntOrIndex() && type.getIntOrFloatBitWidth() < 32) {
-    if (isUnsigned) {
-      newType = ui32_ty;
-      newOp = b.zext(newType, value);
-    } else {
+    if (isSigned) {
       newType = i32_ty;
       newOp = b.sext(newType, value);
+    } else {
+      newType = ui32_ty;
+      newOp = b.zext(newType, value);
     }
   } else if (type.isBF16() || type.isF16() || type.isF32()) {
     newType = f64_ty;
@@ -537,7 +537,8 @@ std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {
 }
 
 void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,
-                        int /*formatStrByteCount*/, ValueRange args) const {
+                        int /*formatStrByteCount*/, ValueRange args,
+                        ArrayRef<bool> isSigned) const {
   auto *ctx = rewriter.getContext();
   Type ptr = ptr_ty(ctx);
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
@@ -553,10 +554,11 @@ void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,
   SmallVector<Value, 16> newArgs;
   if (args.size() >= 1) {
     SmallVector<Type> argTypes;
-    for (auto arg : args) {
+    for (auto [i, arg] : llvm::enumerate(args)) {
       Type newType;
       Value newArg;
-      std::tie(newType, newArg) = printfPromoteValue(rewriter, arg);
+      std::tie(newType, newArg) = printfPromoteValue(
+          rewriter, arg, isSigned.empty() ? true : isSigned[i]);
       argTypes.push_back(newType);
       newArgs.push_back(newArg);
     }
@@ -580,7 +582,7 @@ void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,
 }
 
 void TargetInfo::printf(RewriterBase &rewriter, StringRef msg,
-                        ValueRange args) const {
+                        ValueRange args, ArrayRef<bool> isSigned) const {
   assert(!msg.empty() && "printf with empty string not supported");
   llvm::SmallString<64> msgNewline(msg);
   msgNewline.push_back('\n');
@@ -588,7 +590,7 @@ void TargetInfo::printf(RewriterBase &rewriter, StringRef msg,
   Value msgValue =
       LLVM::addStringToModule(UnknownLoc::get(rewriter.getContext()), rewriter,
                               "printfFormat_", msgNewline);
-  printf(rewriter, msgValue, msgNewline.size_in_bytes(), args);
+  printf(rewriter, msgValue, msgNewline.size_in_bytes(), args, isSigned);
 }
 
 void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
