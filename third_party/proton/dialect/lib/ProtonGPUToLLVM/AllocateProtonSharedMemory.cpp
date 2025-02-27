@@ -45,7 +45,9 @@ struct AllocateProtonSharedMemory
         // Compute the proton buffer size in bytes.
         auto memDescTy =
             mlir::cast<triton::gpu::MemDescType>(alloc.getResult().getType());
-        int bufferSizeInBytes = memDescTy.getShape()[0] * 4;
+        int bufferSizeInBytes =
+            mlir::ShapedType::getNumElements(memDescTy.getShape()) *
+            memDescTy.getElementType().getIntOrFloatBitWidth() / 8;
 
         totalSharedMemSize = offset + bufferSizeInBytes;
         count++;
