@@ -19,8 +19,9 @@ namespace triton {
 namespace proton {
 namespace gpu {
 
-Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
-                          FunctionOpInterface funcOp, Value allocOffset = {}) {
+static Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
+                                 FunctionOpInterface funcOp,
+                                 Value allocOffset = {}) {
   auto gmemBase = funcOp.getArgument(funcOp.getNumArguments() - 1);
   ModuleOp mod = funcOp.getOperation()->getParentOfType<ModuleOp>();
   auto b = TritonLLVMOpBuilder(loc, rewriter);

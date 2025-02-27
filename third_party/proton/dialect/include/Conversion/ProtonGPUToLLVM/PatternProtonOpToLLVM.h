@@ -12,6 +12,11 @@ void populateRecordOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                    const TargetInfoBase &targetInfo,
                                    PatternBenefit benefit);
 
+void populateModuleOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+                                   RewritePatternSet &patterns,
+                                   const TargetInfoBase &targetInfo,
+                                   PatternBenefit benefit);
+
 void populateGlobalScratchAllocOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                                RewritePatternSet &patterns,
                                                const TargetInfoBase &targetInfo,
