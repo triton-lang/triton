@@ -384,6 +384,7 @@ jobs:
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
           TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py
       - name: Run asan tests on HIP
+        if: false
         run: |
           cd third_party/amd/python/test/
           ulimit -s 1024

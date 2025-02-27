@@ -1527,8 +1527,8 @@ TEST_F(LinearLayoutConversionsTest, mfma16_dot_op_lhs_trans) {
   auto parentMfma16 = mfma(/*warps=*/{2, 4}, /*mDim=*/16, /*nDim=*/16,
                            /*isTransposed=*/false);
   auto mfmaDotOp0_kwidth_8 = mfmaDotOp(parentMfma16, /*opIdx=*/0, /*kWidth=*/8);
-  EXPECT_EQ(chooseDsReadB64Tr16Layout(mfmaDotOp0_kwidth_8, {128, 128},
-                                      /*elemBitWidth=*/16),
+  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_8, {128, 128},
+                                    /*elemBitWidth=*/16),
             LinearLayout(
                 {{S("register"),
                   {{1, 0}, {2, 0}, {0, 4}, {0, 32}, {0, 64}, {32, 0}, {64, 0}}},
@@ -1536,8 +1536,8 @@ TEST_F(LinearLayoutConversionsTest, mfma16_dot_op_lhs_trans) {
                  {S("warp"), {{0, 0}, {0, 0}, {16, 0}}},
                  {S("block"), {}}},
                 {S("dim0"), S("dim1")}));
-  EXPECT_EQ(chooseDsReadB64Tr16Layout(mfmaDotOp0_kwidth_8, {32, 64},
-                                      /*elemBitWidth=*/16),
+  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_8, {32, 64},
+                                    /*elemBitWidth=*/16),
             LinearLayout(
                 {{S("register"), {{1, 0}, {2, 0}, {0, 4}, {0, 32}}},
                  {S("lane"), {{4, 0}, {8, 0}, {0, 1}, {0, 2}, {0, 8}, {0, 16}}},
@@ -1546,11 +1546,33 @@ TEST_F(LinearLayoutConversionsTest, mfma16_dot_op_lhs_trans) {
                 {S("dim0"), S("dim1")}));
 
   auto mfmaDotOp0_kwidth_4 = mfmaDotOp(parentMfma16, /*opIdx=*/0, /*kWidth=*/4);
-  EXPECT_EQ(chooseDsReadB64Tr16Layout(mfmaDotOp0_kwidth_4, {16, 16},
-                                      /*elemBitWidth=*/16),
+  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_4, {16, 16},
+                                    /*elemBitWidth=*/16),
             LinearLayout(
                 {{S("register"), {{1, 0}, {2, 0}}},
                  {S("lane"), {{4, 0}, {8, 0}, {0, 1}, {0, 2}, {0, 4}, {0, 8}}},
+                 {S("warp"), {{0, 0}, {0, 0}, {0, 0}}},
+                 {S("block"), {}}},
+                {S("dim0"), S("dim1")}));
+
+  auto mfmaDotOp0_kwidth_16 =
+      mfmaDotOp(parentMfma16, /*opIdx=*/0, /*kWidth=*/16);
+  EXPECT_EQ(
+      chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_16, {128, 128},
+                              /*elemBitWidth=*/8),
+      LinearLayout(
+          {{S("register"),
+            {{1, 0}, {2, 0}, {4, 0}, {0, 8}, {0, 64}, {32, 0}, {64, 0}}},
+           {S("lane"), {{8, 0}, {0, 1}, {0, 2}, {0, 4}, {0, 16}, {0, 32}}},
+           {S("warp"), {{0, 0}, {0, 0}, {16, 0}}},
+           {S("block"), {}}},
+          {S("dim0"), S("dim1")}));
+
+  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_8, {16, 32},
+                                    /*elemBitWidth=*/8),
+            LinearLayout(
+                {{S("register"), {{1, 0}, {2, 0}, {4, 0}}},
+                 {S("lane"), {{8, 0}, {0, 1}, {0, 2}, {0, 4}, {0, 8}, {0, 16}}},
                  {S("warp"), {{0, 0}, {0, 0}, {0, 0}}},
                  {S("block"), {}}},
                 {S("dim0"), S("dim1")}));
@@ -1559,40 +1581,62 @@ TEST_F(LinearLayoutConversionsTest, mfma16_dot_op_lhs_trans) {
   // layout as ordinary
   auto parentTMfma16 = mfma(/*warps=*/{2, 4}, /*mDim=*/16, /*nDim=*/16,
                             /*isTransposed=*/true);
+  auto tmfmaDotOp0_kwidth_16 =
+      mfmaDotOp(parentTMfma16, /*opIdx=*/0, /*kWidth=*/16);
   auto tmfmaDotOp0_kwidth_8 =
       mfmaDotOp(parentTMfma16, /*opIdx=*/0, /*kWidth=*/8);
   auto tmfmaDotOp0_kwidth_4 =
       mfmaDotOp(parentTMfma16, /*opIdx=*/0, /*kWidth=*/4);
 
-  EXPECT_EQ(chooseDsReadB64Tr16Layout(tmfmaDotOp0_kwidth_8, {128, 128},
-                                      /*elemBitWidth=*/16),
-            chooseDsReadB64Tr16Layout(mfmaDotOp0_kwidth_8, {128, 128},
-                                      /*elemBitWidth=*/16));
-  EXPECT_EQ(chooseDsReadB64Tr16Layout(tmfmaDotOp0_kwidth_8, {64, 32},
-                                      /*elemBitWidth=*/16),
-            chooseDsReadB64Tr16Layout(mfmaDotOp0_kwidth_8, {64, 32},
-                                      /*elemBitWidth=*/16));
-  EXPECT_EQ(chooseDsReadB64Tr16Layout(tmfmaDotOp0_kwidth_4, {16, 16},
-                                      /*elemBitWidth=*/16),
-            chooseDsReadB64Tr16Layout(mfmaDotOp0_kwidth_4, {16, 16},
-                                      /*elemBitWidth=*/16));
+  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp0_kwidth_8, {128, 128},
+                                    /*elemBitWidth=*/16),
+            chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_8, {128, 128},
+                                    /*elemBitWidth=*/16));
+  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp0_kwidth_16, {128, 128},
+                                    /*elemBitWidth=*/8),
+            chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_16, {128, 128},
+                                    /*elemBitWidth=*/8));
+  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp0_kwidth_8, {64, 32},
+                                    /*elemBitWidth=*/16),
+            chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_8, {64, 32},
+                                    /*elemBitWidth=*/16));
+  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp0_kwidth_4, {16, 16},
+                                    /*elemBitWidth=*/16),
+            chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_4, {16, 16},
+                                    /*elemBitWidth=*/16));
+  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp0_kwidth_8, {16, 32},
+                                    /*elemBitWidth=*/8),
+            chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_8, {16, 32},
+                                    /*elemBitWidth=*/8));
 }
 
 TEST_F(LinearLayoutConversionsTest, mfma16_dot_op_rhs_trans) {
   auto parentMfma16 = mfma(/*warps=*/{2, 4}, /*mDim=*/16, /*nDim=*/16,
                            /*isTransposed=*/false);
   auto mfmaDotOp1_kwidth_8 = mfmaDotOp(parentMfma16, /*opIdx=*/1, /*kWidth=*/8);
+  auto mfmaDotOp1_kwidth_16 =
+      mfmaDotOp(parentMfma16, /*opIdx=*/1, /*kWidth=*/16);
   EXPECT_EQ(
-      chooseDsReadB64Tr16Layout(mfmaDotOp1_kwidth_8, {128, 128},
-                                /*elemBitWidth=*/16),
+      chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_16, {128, 128},
+                              /*elemBitWidth=*/8),
+      LinearLayout(
+          {{S("register"), {{0, 1}, {0, 2}, {0, 4}, {8, 0}, {64, 0}, {0, 64}}},
+           {S("lane"), {{0, 8}, {1, 0}, {2, 0}, {4, 0}, {16, 0}, {32, 0}}},
+           {S("warp"), {{0, 16}, {0, 32}, {0, 0}}},
+           {S("block"), {}}},
+          {S("dim0"), S("dim1")}));
+  EXPECT_EQ(
+      chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_8, {128, 128},
+                              /*elemBitWidth=*/16),
       LinearLayout(
           {{S("register"), {{0, 1}, {0, 2}, {4, 0}, {32, 0}, {64, 0}, {0, 64}}},
            {S("lane"), {{0, 4}, {0, 8}, {1, 0}, {2, 0}, {8, 0}, {16, 0}}},
            {S("warp"), {{0, 16}, {0, 32}, {0, 0}}},
            {S("block"), {}}},
           {S("dim0"), S("dim1")}));
-  EXPECT_EQ(chooseDsReadB64Tr16Layout(mfmaDotOp1_kwidth_8, {32, 64},
-                                      /*elemBitWidth=*/16),
+
+  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_8, {32, 64},
+                                    /*elemBitWidth=*/16),
             LinearLayout(
                 {{S("register"), {{0, 1}, {0, 2}, {4, 0}}},
                  {S("lane"), {{0, 4}, {0, 8}, {1, 0}, {2, 0}, {8, 0}, {16, 0}}},
@@ -1601,11 +1645,20 @@ TEST_F(LinearLayoutConversionsTest, mfma16_dot_op_rhs_trans) {
                 {S("dim0"), S("dim1")}));
 
   auto mfmaDotOp1_kwidth_4 = mfmaDotOp(parentMfma16, /*opIdx=*/1, /*kWidth=*/4);
-  EXPECT_EQ(chooseDsReadB64Tr16Layout(mfmaDotOp1_kwidth_4, {16, 16},
-                                      /*elemBitWidth=*/16),
+  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_4, {16, 16},
+                                    /*elemBitWidth=*/16),
             LinearLayout(
                 {{S("register"), {{0, 1}, {0, 2}}},
                  {S("lane"), {{0, 4}, {0, 8}, {1, 0}, {2, 0}, {4, 0}, {8, 0}}},
+                 {S("warp"), {{0, 0}, {0, 0}, {0, 0}}},
+                 {S("block"), {}}},
+                {S("dim0"), S("dim1")}));
+
+  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_8, {32, 16},
+                                    /*elemBitWidth=*/8),
+            LinearLayout(
+                {{S("register"), {{0, 1}, {0, 2}, {0, 4}}},
+                 {S("lane"), {{0, 8}, {1, 0}, {2, 0}, {4, 0}, {8, 0}, {16, 0}}},
                  {S("warp"), {{0, 0}, {0, 0}, {0, 0}}},
                  {S("block"), {}}},
                 {S("dim0"), S("dim1")}));
@@ -1614,31 +1667,44 @@ TEST_F(LinearLayoutConversionsTest, mfma16_dot_op_rhs_trans) {
   // same  layout as ordinary.
   auto parentTMfma16 = mfma(/*warps=*/{2, 4}, /*mDim=*/16, /*nDim=*/16,
                             /*isTransposed=*/true);
+
+  auto tmfmaDotOp1_kwidth_16 =
+      mfmaDotOp(parentTMfma16, /*opIdx=*/1, /*kWidth=*/8);
   auto tmfmaDotOp1_kwidth_8 =
       mfmaDotOp(parentTMfma16, /*opIdx=*/1, /*kWidth=*/8);
   auto tmfmaDotOp1_kwidth_4 =
       mfmaDotOp(parentTMfma16, /*opIdx=*/1, /*kWidth=*/4);
 
-  EXPECT_EQ(chooseDsReadB64Tr16Layout(tmfmaDotOp1_kwidth_8, {128, 128},
-                                      /*elemBitWidth=*/16),
-            chooseDsReadB64Tr16Layout(mfmaDotOp1_kwidth_8, {128, 128},
-                                      /*elemBitWidth=*/16));
-  EXPECT_EQ(chooseDsReadB64Tr16Layout(tmfmaDotOp1_kwidth_8, {64, 32},
-                                      /*elemBitWidth=*/16),
-            chooseDsReadB64Tr16Layout(mfmaDotOp1_kwidth_8, {64, 32},
-                                      /*elemBitWidth=*/16));
-  EXPECT_EQ(chooseDsReadB64Tr16Layout(tmfmaDotOp1_kwidth_4, {16, 16},
-                                      /*elemBitWidth=*/16),
-            chooseDsReadB64Tr16Layout(mfmaDotOp1_kwidth_4, {16, 16},
-                                      /*elemBitWidth=*/16));
+  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp1_kwidth_8, {128, 128},
+                                    /*elemBitWidth=*/16),
+            chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_8, {128, 128},
+                                    /*elemBitWidth=*/16));
+  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp1_kwidth_16, {128, 128},
+                                    /*elemBitWidth=*/8),
+            chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_8, {128, 128},
+                                    /*elemBitWidth=*/8));
+  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp1_kwidth_8, {64, 32},
+                                    /*elemBitWidth=*/16),
+            chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_8, {64, 32},
+                                    /*elemBitWidth=*/16));
+  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp1_kwidth_4, {16, 16},
+                                    /*elemBitWidth=*/16),
+            chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_4, {16, 16},
+                                    /*elemBitWidth=*/16));
+  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp1_kwidth_8, {32, 16},
+                                    /*elemBitWidth=*/8),
+            chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_8, {32, 16},
+                                    /*elemBitWidth=*/8));
 }
 
 TEST_F(LinearLayoutConversionsTest, mfma32_dot_op_lhs_trans) {
   auto parentMfma32 = mfma(/*warps=*/{2, 4}, /*mDim=*/32, /*nDim=*/32,
                            /*isTransposed=*/false);
   auto mfmaDotOp0_kwidth_8 = mfmaDotOp(parentMfma32, /*opIdx=*/0, /*kWidth=*/8);
-  EXPECT_EQ(chooseDsReadB64Tr16Layout(mfmaDotOp0_kwidth_8, {128, 128},
-                                      /*elemBitWidth=*/16),
+  auto mfmaDotOp0_kwidth_16 =
+      mfmaDotOp(parentMfma32, /*opIdx=*/0, /*kWidth=*/16);
+  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_8, {128, 128},
+                                    /*elemBitWidth=*/16),
             LinearLayout(
                 {{S("register"),
                   {{1, 0}, {2, 0}, {0, 4}, {0, 16}, {0, 32}, {0, 64}, {64, 0}}},
@@ -1646,8 +1712,18 @@ TEST_F(LinearLayoutConversionsTest, mfma32_dot_op_lhs_trans) {
                  {S("warp"), {{0, 0}, {0, 0}, {32, 0}}},
                  {S("block"), {}}},
                 {S("dim0"), S("dim1")}));
-  EXPECT_EQ(chooseDsReadB64Tr16Layout(mfmaDotOp0_kwidth_8, {32, 64},
-                                      /*elemBitWidth=*/16),
+  EXPECT_EQ(
+      chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_16, {128, 128},
+                              /*elemBitWidth=*/8),
+      LinearLayout(
+          {{S("register"),
+            {{1, 0}, {2, 0}, {4, 0}, {0, 8}, {0, 32}, {0, 64}, {64, 0}}},
+           {S("lane"), {{8, 0}, {0, 1}, {0, 2}, {0, 4}, {16, 0}, {0, 16}}},
+           {S("warp"), {{0, 0}, {0, 0}, {32, 0}}},
+           {S("block"), {}}},
+          {S("dim0"), S("dim1")}));
+  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_8, {32, 64},
+                                    /*elemBitWidth=*/16),
             LinearLayout(
                 {{S("register"), {{1, 0}, {2, 0}, {0, 4}, {0, 16}, {0, 32}}},
                  {S("lane"), {{4, 0}, {8, 0}, {0, 1}, {0, 2}, {16, 0}, {0, 8}}},
@@ -1657,11 +1733,19 @@ TEST_F(LinearLayoutConversionsTest, mfma32_dot_op_lhs_trans) {
 
   auto mfmaDotOp0_kwidth_4 = mfmaDotOp(parentMfma32, /*opIdx=*/0,
                                        /*kWidth=*/4);
-  EXPECT_EQ(chooseDsReadB64Tr16Layout(mfmaDotOp0_kwidth_4, {32, 8},
-                                      /*elemBitWidth=*/16),
+  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_4, {32, 8},
+                                    /*elemBitWidth=*/16),
             LinearLayout(
                 {{S("register"), {{1, 0}, {2, 0}}},
                  {S("lane"), {{4, 0}, {8, 0}, {0, 1}, {0, 2}, {16, 0}, {0, 4}}},
+                 {S("warp"), {{0, 0}, {0, 0}, {0, 0}}},
+                 {S("block"), {}}},
+                {S("dim0"), S("dim1")}));
+  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_8, {32, 16},
+                                    /*elemBitWidth=*/8),
+            LinearLayout(
+                {{S("register"), {{1, 0}, {2, 0}, {4, 0}}},
+                 {S("lane"), {{8, 0}, {0, 1}, {0, 2}, {0, 4}, {16, 0}, {0, 8}}},
                  {S("warp"), {{0, 0}, {0, 0}, {0, 0}}},
                  {S("block"), {}}},
                 {S("dim0"), S("dim1")}));
@@ -1670,40 +1754,63 @@ TEST_F(LinearLayoutConversionsTest, mfma32_dot_op_lhs_trans) {
   // same  layout as ordinary.
   auto parentTMfma32 = mfma(/*warps=*/{2, 4}, /*mDim=*/32, /*nDim=*/32,
                             /*isTransposed=*/true);
+  auto tmfmaDotOp0_kwidth_16 =
+      mfmaDotOp(parentTMfma32, /*opIdx=*/0, /*kWidth=*/16);
   auto tmfmaDotOp0_kwidth_8 =
       mfmaDotOp(parentTMfma32, /*opIdx=*/0, /*kWidth=*/8);
   auto tmfmaDotOp0_kwidth_4 =
       mfmaDotOp(parentTMfma32, /*opIdx=*/0, /*kWidth=*/4);
 
-  EXPECT_EQ(chooseDsReadB64Tr16Layout(tmfmaDotOp0_kwidth_8, {128, 128},
-                                      /*elemBitWidth=*/16),
-            chooseDsReadB64Tr16Layout(mfmaDotOp0_kwidth_8, {128, 128},
-                                      /*elemBitWidth=*/16));
-  EXPECT_EQ(chooseDsReadB64Tr16Layout(tmfmaDotOp0_kwidth_8, {64, 32},
-                                      /*elemBitWidth=*/16),
-            chooseDsReadB64Tr16Layout(mfmaDotOp0_kwidth_8, {64, 32},
-                                      /*elemBitWidth=*/16));
-  EXPECT_EQ(chooseDsReadB64Tr16Layout(tmfmaDotOp0_kwidth_4, {32, 8},
-                                      /*elemBitWidth=*/16),
-            chooseDsReadB64Tr16Layout(mfmaDotOp0_kwidth_4, {32, 8},
-                                      /*elemBitWidth=*/16));
+  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp0_kwidth_8, {128, 128},
+                                    /*elemBitWidth=*/16),
+            chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_8, {128, 128},
+                                    /*elemBitWidth=*/16));
+  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp0_kwidth_16, {128, 128},
+                                    /*elemBitWidth=*/8),
+            chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_16, {128, 128},
+                                    /*elemBitWidth=*/8));
+  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp0_kwidth_8, {64, 32},
+                                    /*elemBitWidth=*/16),
+            chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_8, {64, 32},
+                                    /*elemBitWidth=*/16));
+  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp0_kwidth_4, {32, 8},
+                                    /*elemBitWidth=*/16),
+            chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_4, {32, 8},
+                                    /*elemBitWidth=*/16));
+  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp0_kwidth_8, {32, 16},
+                                    /*elemBitWidth=*/8),
+            chooseDsReadB64TrLayout(mfmaDotOp0_kwidth_8, {32, 16},
+                                    /*elemBitWidth=*/8));
 }
 
 TEST_F(LinearLayoutConversionsTest, mfma32_dot_op_rhs_trans) {
   auto parentMfma16 = mfma(/*warps=*/{2, 4}, /*mDim=*/32, /*nDim=*/32,
                            /*isTransposed=*/false);
   auto mfmaDotOp1_kwidth_8 = mfmaDotOp(parentMfma16, /*opIdx=*/1, /*kWidth=*/8);
+  auto mfmaDotOp1_kwidth_16 =
+      mfmaDotOp(parentMfma16, /*opIdx=*/1, /*kWidth=*/16);
+
   EXPECT_EQ(
-      chooseDsReadB64Tr16Layout(mfmaDotOp1_kwidth_8, {128, 128},
-                                /*elemBitWidth=*/16),
+      chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_8, {128, 128},
+                              /*elemBitWidth=*/16),
       LinearLayout(
           {{S("register"), {{0, 1}, {0, 2}, {4, 0}, {16, 0}, {32, 0}, {64, 0}}},
            {S("lane"), {{0, 4}, {0, 8}, {1, 0}, {2, 0}, {0, 16}, {8, 0}}},
            {S("warp"), {{0, 32}, {0, 64}, {0, 0}}},
            {S("block"), {}}},
           {S("dim0"), S("dim1")}));
-  EXPECT_EQ(chooseDsReadB64Tr16Layout(mfmaDotOp1_kwidth_8, {32, 64},
-                                      /*elemBitWidth=*/16),
+  EXPECT_EQ(
+      chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_16, {128, 128},
+                              /*elemBitWidth=*/8),
+      LinearLayout(
+          {{S("register"), {{0, 1}, {0, 2}, {0, 4}, {8, 0}, {32, 0}, {64, 0}}},
+           {S("lane"), {{0, 8}, {1, 0}, {2, 0}, {4, 0}, {0, 16}, {16, 0}}},
+           {S("warp"), {{0, 32}, {0, 64}, {0, 0}}},
+           {S("block"), {}}},
+          {S("dim0"), S("dim1")}));
+
+  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_8, {32, 64},
+                                    /*elemBitWidth=*/16),
             LinearLayout(
                 {{S("register"), {{0, 1}, {0, 2}, {4, 0}, {16, 0}}},
                  {S("lane"), {{0, 4}, {0, 8}, {1, 0}, {2, 0}, {0, 16}, {8, 0}}},
@@ -1712,11 +1819,19 @@ TEST_F(LinearLayoutConversionsTest, mfma32_dot_op_rhs_trans) {
                 {S("dim0"), S("dim1")}));
 
   auto mfmaDotOp1_kwidth_4 = mfmaDotOp(parentMfma16, /*opIdx=*/1, /*kWidth=*/4);
-  EXPECT_EQ(chooseDsReadB64Tr16Layout(mfmaDotOp1_kwidth_4, {8, 32},
-                                      /*elemBitWidth=*/16),
+  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_4, {8, 32},
+                                    /*elemBitWidth=*/16),
             LinearLayout(
                 {{S("register"), {{0, 1}, {0, 2}}},
                  {S("lane"), {{0, 4}, {0, 8}, {1, 0}, {2, 0}, {0, 16}, {4, 0}}},
+                 {S("warp"), {{0, 0}, {0, 0}, {0, 0}}},
+                 {S("block"), {}}},
+                {S("dim0"), S("dim1")}));
+  EXPECT_EQ(chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_8, {16, 32},
+                                    /*elemBitWidth=*/8),
+            LinearLayout(
+                {{S("register"), {{0, 1}, {0, 2}, {0, 4}}},
+                 {S("lane"), {{0, 8}, {1, 0}, {2, 0}, {4, 0}, {0, 16}, {8, 0}}},
                  {S("warp"), {{0, 0}, {0, 0}, {0, 0}}},
                  {S("block"), {}}},
                 {S("dim0"), S("dim1")}));
@@ -1725,23 +1840,33 @@ TEST_F(LinearLayoutConversionsTest, mfma32_dot_op_rhs_trans) {
   // same  layout as ordinary.
   auto parentTMfma16 = mfma(/*warps=*/{2, 4}, /*mDim=*/32, /*nDim=*/32,
                             /*isTransposed=*/true);
+  auto tmfmaDotOp1_kwidth_16 =
+      mfmaDotOp(parentTMfma16, /*opIdx=*/1, /*kWidth=*/8);
   auto tmfmaDotOp1_kwidth_8 =
       mfmaDotOp(parentTMfma16, /*opIdx=*/1, /*kWidth=*/8);
   auto tmfmaDotOp1_kwidth_4 =
       mfmaDotOp(parentTMfma16, /*opIdx=*/1, /*kWidth=*/4);
 
-  EXPECT_EQ(chooseDsReadB64Tr16Layout(tmfmaDotOp1_kwidth_8, {128, 128},
-                                      /*elemBitWidth=*/16),
-            chooseDsReadB64Tr16Layout(mfmaDotOp1_kwidth_8, {128, 128},
-                                      /*elemBitWidth=*/16));
-  EXPECT_EQ(chooseDsReadB64Tr16Layout(tmfmaDotOp1_kwidth_8, {64, 32},
-                                      /*elemBitWidth=*/16),
-            chooseDsReadB64Tr16Layout(mfmaDotOp1_kwidth_8, {64, 32},
-                                      /*elemBitWidth=*/16));
-  EXPECT_EQ(chooseDsReadB64Tr16Layout(tmfmaDotOp1_kwidth_4, {8, 32},
-                                      /*elemBitWidth=*/16),
-            chooseDsReadB64Tr16Layout(mfmaDotOp1_kwidth_4, {8, 32},
-                                      /*elemBitWidth=*/16));
+  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp1_kwidth_8, {128, 128},
+                                    /*elemBitWidth=*/16),
+            chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_8, {128, 128},
+                                    /*elemBitWidth=*/16));
+  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp1_kwidth_16, {128, 128},
+                                    /*elemBitWidth=*/8),
+            chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_16, {128, 128},
+                                    /*elemBitWidth=*/8));
+  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp1_kwidth_8, {64, 32},
+                                    /*elemBitWidth=*/16),
+            chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_8, {64, 32},
+                                    /*elemBitWidth=*/16));
+  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp1_kwidth_4, {8, 32},
+                                    /*elemBitWidth=*/16),
+            chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_4, {8, 32},
+                                    /*elemBitWidth=*/16));
+  EXPECT_EQ(chooseDsReadB64TrLayout(tmfmaDotOp1_kwidth_8, {16, 32},
+                                    /*elemBitWidth=*/8),
+            chooseDsReadB64TrLayout(mfmaDotOp1_kwidth_8, {16, 32},
+                                    /*elemBitWidth=*/8));
 }
 
 TEST_F(LinearLayoutConversionsTest, WMMA_v1_2x4Warps) {

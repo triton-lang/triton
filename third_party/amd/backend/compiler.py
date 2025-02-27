@@ -17,6 +17,11 @@ def min_dot_size(target: GPUTarget):
     return lambda lhsType, rhsType: (1, 1, 1)
 
 
+def is_pingpong_enabled(arch):
+    default = "1" if arch == "gfx942" else "0"
+    return os.getenv("TRITON_HIP_USE_BLOCK_PINGPONG", default) == "1"
+
+
 @dataclass(frozen=True)
 class HIPOptions:
     num_warps: int = 4
@@ -102,8 +107,10 @@ class HIPBackend(BaseBackend):
 
         if "supported_fp8_dtypes" not in opts:
             supported_fp8_dtypes = set(HIPOptions.supported_fp8_dtypes)
-            if self.target.arch in ('gfx940', 'gfx941', 'gfx942', 'gfx950'):
+            if self.target.arch in ('gfx940', 'gfx941', 'gfx942'):
                 supported_fp8_dtypes.update({'fp8e4nv', 'fp8e4b8', 'fp8e5b16'})
+            elif self.target.arch in ('gfx950'):
+                supported_fp8_dtypes.update({'fp8e4nv', 'fp8e5'})
             args["supported_fp8_dtypes"] = tuple(sorted(supported_fp8_dtypes))
 
         if "enable_fp_fusion" not in opts:
@@ -206,6 +213,7 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_remove_layout_conversions(pm)
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
+        amd.passes.ttgpuir.add_hoist_layout_conversions(pm)
 
         global_prefetch = int(os.getenv("TRITON_HIP_GLOBAL_PREFETCH", "0"))
         local_prefetch = int(os.getenv("TRITON_HIP_LOCAL_PREFETCH", "0"))
@@ -229,7 +237,7 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_reduce_data_duplication(pm)
         if amd.has_matrix_core_feature(options.arch):
             amd.passes.ttgpuir.add_reorder_instructions(pm)
-            use_block_pingpong = os.getenv("TRITON_HIP_USE_BLOCK_PINGPONG", "0") == "1"
+            use_block_pingpong = is_pingpong_enabled(options.arch)
             if use_block_pingpong and options.num_stages == 2:
                 amd.passes.ttgpuir.add_block_pingpong(pm)
 

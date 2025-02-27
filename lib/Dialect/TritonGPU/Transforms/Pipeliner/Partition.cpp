@@ -4,7 +4,7 @@
 
 using namespace mlir;
 using namespace triton;
-using namespace gpu;
+using namespace triton::gpu;
 
 //===----------------------------------------------------------------------===//
 // WarpSchedule

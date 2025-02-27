@@ -337,11 +337,9 @@ def test_pipeline_vecadd(device):
     torch.testing.assert_close(ref_out, output)
     if is_cuda():
         ttgir = handler.asm["ttgir"]
-        # 1. check async
-        assert ttgir.count("ttg.async_copy_global_to_local") != 0, "async copy not found"
-        # 2. check number of stages
-        assert ttgir.count(f"num = {NUM_STAGES} : i32") != 0, "num_stages not match"
-        # 3. check alloc
+        # 1. check number of stages
+        assert ttgir.count("ttg.async_copy_global_to_local") / 2 == NUM_STAGES, "num_stages not match"
+        # 2. check alloc
         assert ttgir.count("ttg.local_alloc") == 2, "alloc number not match"
 
 

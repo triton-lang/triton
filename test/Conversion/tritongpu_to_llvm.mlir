@@ -2238,3 +2238,24 @@ tt.func private @reshape_linear_layout_broadcasting(%arg0: tensor<32x4xbf16, #li
 }
 
 }
+
+
+// -----
+
+#linear1 = #ttg.linear<{register = [[0, 0, 0, 1], [0, 0, 1, 0], [0, 1, 0, 0], [16, 0, 0, 0], [32, 0, 0, 0], [64, 0, 0, 0]], lane = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [1, 0, 0, 0], [2, 0, 0, 0]], warp = [[4, 0, 0, 0], [8, 0, 0, 0]], block = []}>
+#linear2 = #ttg.linear<{register = [[0, 0, 1], [0, 1, 0], [16, 0, 0], [32, 0, 0], [64, 0, 0]], lane = [[0, 0, 0], [0, 0, 0], [0, 0, 0], [1, 0, 0], [2, 0, 0]], warp = [[4, 0, 0], [8, 0, 0]], block = []}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
+// CHECK-LABEL: split_linear
+tt.func @split_linear(%arg : tensor<128x2x2x2xf32, #linear1>) {
+  // CHECK: %[[E0:.+]] = llvm.extractvalue %{{.*}}[0]
+  // CHECK: %[[E1:.+]] = llvm.extractvalue %{{.*}}[1]
+  // CHECK: %[[E2:.+]] = llvm.extractvalue %{{.*}}[2]
+  // CHECK: %[[E3:.+]] = llvm.extractvalue %{{.*}}[3]
+  // CHECK: llvm.insertvalue %[[E0]], %{{.*}}[0]
+  // CHECK: llvm.insertvalue %[[E2]], %{{.*}}[1]
+  // CHECK: llvm.insertvalue %[[E1]], %{{.*}}[0]
+  // CHECK: llvm.insertvalue %[[E3]], %{{.*}}[1]
+  %outLHS, %outRHS = tt.split %arg : tensor<128x2x2x2xf32, #linear1> -> tensor<128x2x2xf32, #linear2>
+  tt.return
+}
+}

@@ -21,6 +21,7 @@ tt.func @one_dep(%lb : index, %ub : index, %step : index,
     %res = arith.addf %acc, %a : tensor<128x32xf16, #A>
     scf.yield %res : tensor<128x32xf16, #A>
   }
+  // CHECK: tt.scheduled_max_stage
   tt.return %loop#0 : tensor<128x32xf16, #A>
 }
 

@@ -124,6 +124,7 @@ tt::CoarseSchedule::createFinalSchedule(scf::ForOp forOp) {
 }
 
 void tt::CoarseSchedule::dump() {
+  assert(numStages > 0 && "Invalid number of stages");
   for (int i = 0; i < numStages; i++) {
     llvm::dbgs() << "\n---- Ops in stage " << i << "\n";
     for (auto &[op, stageAndCluster] : opToStageAndCluster) {
@@ -135,16 +136,69 @@ void tt::CoarseSchedule::dump() {
   }
 }
 
+static void setStageCluster(Operation *op, int stage, int cluster) {
+  auto ctx = op->getContext();
+  op->setAttr(mlir::triton::kLoopStageAttrName,
+              IntegerAttr::get(IntegerType::get(ctx, 32), stage));
+  op->setAttr(mlir::triton::kLoopClusterAttrName,
+              IntegerAttr::get(IntegerType::get(ctx, 32), cluster));
+}
+
+static std::pair<int, int> getStageCluster(Operation *op) {
+  auto stage = op->getAttrOfType<IntegerAttr>(tt::kLoopStageAttrName);
+  auto clusterId = op->getAttrOfType<IntegerAttr>(tt::kLoopClusterAttrName);
+  assert(stage && clusterId &&
+         "Operation is missing stage & cluster attribute");
+  return {stage.getValue().getSExtValue(), clusterId.getValue().getSExtValue()};
+}
+
+static std::pair<int, int> getMinMaxCluster(scf::ForOp &forOp) {
+  int minClusterId = -1, maxClusterId = -1;
+  for (auto &op : forOp.getBody()->without_terminator()) {
+    if (!op.hasAttr(mlir::triton::kLoopStageAttrName) ||
+        !op.hasAttr(mlir::triton::kLoopClusterAttrName))
+      continue;
+    auto [_, cluster] = getStageCluster(&op);
+    if (maxClusterId < 0) {
+      minClusterId = cluster;
+      maxClusterId = cluster;
+      continue;
+    }
+    maxClusterId = cluster > maxClusterId ? cluster : maxClusterId;
+    minClusterId = cluster < minClusterId ? cluster : minClusterId;
+  }
+  return std::make_pair(minClusterId, maxClusterId);
+}
+
+static std::optional<int> tryGetMaxStage(scf::ForOp &forOp) {
+  std::optional<int> maxStage = std::nullopt;
+  if (forOp->hasAttr(mlir::triton::kScheduledMaxStageAttrName)) {
+    return forOp
+        ->getAttrOfType<IntegerAttr>(mlir::triton::kScheduledMaxStageAttrName)
+        .getValue()
+        .getSExtValue();
+  }
+  return maxStage;
+}
+
 // Set <stage, cluster> based on CoarseSchedule.
 void tt::CoarseSchedule::serialize(scf::ForOp &forOp) {
   for (auto [op, stage, cluster] : getOpsInOrder(forOp)) {
-    tt::setStageCluster(op, stage, *cluster);
+    setStageCluster(op, stage, *cluster);
   }
+  forOp->setAttr(mlir::triton::kScheduledMaxStageAttrName,
+                 IntegerAttr::get(IntegerType::get(forOp.getContext(), 32),
+                                  numStages - 1));
 }
 
 // Create a CoarseSchedule based on forOp's <stage, cluster>.
-void tt::CoarseSchedule::deSerialize(scf::ForOp &forOp) {
-  auto [minClusterId, maxClusterId] = tt::getMinMaxCluster(forOp);
+LogicalResult tt::CoarseSchedule::deSerialize(scf::ForOp &forOp) {
+  auto [minClusterId, maxClusterId] = getMinMaxCluster(forOp);
+  std::optional<int> maxStage = tryGetMaxStage(forOp);
+  if (!maxStage) {
+    return failure();
+  }
+  numStages = *maxStage + 1;
 
   DenseMap<int, tt::CoarseSchedule::Cluster> clustersMap;
   for (int i = minClusterId; i < maxClusterId + 1; i++) {
@@ -153,16 +207,17 @@ void tt::CoarseSchedule::deSerialize(scf::ForOp &forOp) {
   for (Operation &op : forOp.getBody()->without_terminator()) {
     if (!op.hasAttr(mlir::triton::kLoopStageAttrName))
       continue;
-    auto [stage, clusterId] = tt::getStageCluster(&op);
+    auto [stage, clusterId] = getStageCluster(&op);
     insert(&op, stage, clustersMap[clusterId]);
   }
+  return success();
 }
 
 // TODO: Should this be moved somewhere else?
 // Add dependencies of anchor ops to the coarse schedule. Schedule them to
 // the same stage and ordering cluster as the anchor op.
 void tt::scheduleDependencies(scf::ForOp forOp, tt::CoarseSchedule &schedule) {
-  int numStages = schedule.numStages;
+  int numStages = schedule.getNumStages();
   SmallVector<std::tuple<Operation *, int, tt::CoarseSchedule::Cluster>>
       opsInOrder = schedule.getOpsInOrder(forOp);
   // Schedule dependencies stage by stage.

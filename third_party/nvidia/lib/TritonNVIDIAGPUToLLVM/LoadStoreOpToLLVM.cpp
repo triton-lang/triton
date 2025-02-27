@@ -1044,8 +1044,6 @@ struct AsyncCopyGlobalToLocalOpConversion
     auto dstTy = op.getResult().getType();
     auto resElemTy = getTypeConverter()->convertType(dstTy.getElementType());
     auto srcLayout = srcTy.getEncoding();
-    assert((isa<BlockedEncodingAttr, SliceEncodingAttr>(srcLayout) &&
-            "Unexpected srcLayout in AsyncCopyGlobalToLocalOpConversion"));
 
     Value llDst = adaptor.getResult();
     Value llSrc = adaptor.getSrc();

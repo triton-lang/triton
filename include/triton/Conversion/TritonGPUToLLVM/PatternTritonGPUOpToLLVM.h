@@ -9,13 +9,6 @@ using namespace mlir;
 using namespace mlir::triton;
 
 using ::mlir::triton::gpu::BlockedEncodingAttr;
-
-namespace SharedToDotOperandFMA {
-Value convertLayout(int opIdx, Value val, Value llVal,
-                    BlockedEncodingAttr dLayout, Value thread, Location loc,
-                    const LLVMTypeConverter *typeConverter,
-                    ConversionPatternRewriter &rewriter);
-}
 LogicalResult convertFMADot(triton::DotOp op, triton::DotOp::Adaptor adaptor,
                             const LLVMTypeConverter *typeConverter,
                             ConversionPatternRewriter &rewriter);
