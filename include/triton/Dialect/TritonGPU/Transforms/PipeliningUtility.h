@@ -15,6 +15,7 @@ static const char *kDisallowAccMultiBufferAttrName =
     "tt.disallow_acc_multi_buffer";
 static const char *kLoopStageAttrName = "loop.stage";
 static const char *kLoopClusterAttrName = "loop.cluster";
+static const char *kScheduledMaxStageAttrName = "tt.scheduled_max_stage";
 static const char *kLatencyAttrName = "tt.latency";
 
 bool loopHasDistGreaterThanOne(scf::ForOp forOp);

@@ -51,7 +51,7 @@ tt.func @one_dep_async(%lb : index, %ub : index, %step : index,
   scf.for %iv = %lb to %ub step %step : index {
     %a = tt.load %a_ptr_init {loop.cluster = 2 : i32, loop.stage = 0 : i32} : tensor<128x32x!tt.ptr<f16>, #A>
     "use"(%a) {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<128x32xf16, #A>) -> ()
-  }
+  } {tt.scheduled_max_stage = 2 : i32}
   tt.return
 }
 }
@@ -75,7 +75,7 @@ tt.func @different_use_stages(%lb : index, %ub : index, %step : index,
     %a = tt.load %a_ptr_init {loop.cluster = 2 : i32, loop.stage = 0 : i32} : tensor<128x32x!tt.ptr<f16>, #A>
     "use1"(%a) {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<128x32xf16, #A>) -> ()
     "use2"(%a) {loop.cluster = 0 : i32, loop.stage = 3 : i32} : (tensor<128x32xf16, #A>) -> ()
-  }
+  } {tt.scheduled_max_stage = 3 : i32}
   tt.return
 }
 }
@@ -106,7 +106,7 @@ tt.func @used_by_if_yield(%lb : index, %ub : index, %step : index,
       scf.yield %init_a : tensor<128x32xf16, #A>
     } {loop.cluster = 0 : i32, loop.stage = 2 : i32}
     "use"(%a_if) {loop.cluster = 0 : i32, loop.stage = 3 : i32} : (tensor<128x32xf16, #A>) -> ()
-  }
+  } {tt.scheduled_max_stage = 3 : i32}
   tt.return
 }
 }
@@ -124,7 +124,7 @@ tt.func @dist1_load(%lb : index, %ub : index, %step : index,
     %a = tt.load %a_ptr_init {loop.cluster = 2 : i32, loop.stage = 0 : i32} : tensor<128x32x!tt.ptr<f16>, #A>
     "use"(%a) {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<128x32xf16, #A>) -> ()
     scf.yield %a : tensor<128x32xf16, #A>
-  }
+  } {tt.scheduled_max_stage = 2 : i32}
   tt.return
 }
 }
@@ -142,7 +142,7 @@ tt.func @one_dep_sync(%lb : index, %ub : index, %step : index,
   scf.for %iv = %lb to %ub step %step : index {
     %a = tt.load %a_ptr_init {loop.cluster = 2 : i32, loop.stage = 0 : i32} : tensor<1x!tt.ptr<f16>, #A>
     "use"(%a) {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<1xf16, #A>) -> ()
-  }
+  } {tt.scheduled_max_stage = 2 : i32}
   tt.return
 }
 }
@@ -183,7 +183,7 @@ tt.func @one_dep_local_alloc(%lb : index, %ub : index, %step : index,
     %a_alloc = ttg.local_alloc %a {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<128x32xf16, #A>) -> !ttg.memdesc<128x32xf16, #shared, #ttg.shared_memory, mutable>
     %a_load = ttg.local_load %a_alloc {loop.cluster = 0 : i32, loop.stage = 2 : i32} : !ttg.memdesc<128x32xf16, #shared, #ttg.shared_memory, mutable> -> tensor<128x32xf16, #A>
     "use"(%a_load) {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<128x32xf16, #A>) -> ()
-  }
+  } {tt.scheduled_max_stage = 2 : i32}
   tt.return
 }
 }
@@ -214,7 +214,7 @@ tt.func @one_load_group(%lb : index, %ub : index, %step : index,
     %b = tt.load %a_ptr_init {loop.cluster = 2 : i32, loop.stage = 0 : i32} : tensor<128x32x!tt.ptr<f32>, #A>
     "use1"(%a){loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<128x32xf32, #A>) -> ()
     "use2"(%b){loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<128x32xf32, #A>) -> ()
-  }
+  } {tt.scheduled_max_stage = 2 : i32}
   tt.return
 }
 }
@@ -255,7 +255,7 @@ tt.func @two_load_groups(%lb : index, %ub : index, %step : index,
     "use1"(%a){loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<128x32xf32, #A>) -> ()
     "use2"(%b){loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<128x32xf32, #A>) -> ()
     "use3"(%c){loop.cluster = 0 : i32, loop.stage = 3 : i32} : (tensor<128x32xf32, #A>) -> ()
-  }
+  } {tt.scheduled_max_stage = 3 : i32}
   tt.return
 }
 }
@@ -304,7 +304,7 @@ tt.func @dependent_loads(%lb : index, %ub : index, %step : index,
     %b = "pointerize"(%a) {loop.cluster = 2 : i32, loop.stage = 2 : i32} : (tensor<128x32xf32, #A>) -> tensor<128x32x!tt.ptr<f32>, #A>
     %c = tt.load %b {loop.cluster = 2 : i32, loop.stage = 2 : i32} : tensor<128x32x!tt.ptr<f32>, #A>
     "use1"(%c){loop.cluster = 0 : i32, loop.stage = 4 : i32} : (tensor<128x32xf32, #A>) -> ()
-  }
+  } {tt.scheduled_max_stage = 4 : i32}
   tt.return
 }
 }
@@ -361,7 +361,7 @@ tt.func @dependent_loads_asymmetric(%lb : index, %ub : index, %step : index,
     %b = "pointerize"(%a) {loop.cluster = 2 : i32, loop.stage = 2 : i32} : (tensor<128x32xf32, #A>) -> tensor<128x32x!tt.ptr<f32>, #A>
     %c = tt.load %b {loop.cluster = 2 : i32, loop.stage = 2 : i32} : tensor<128x32x!tt.ptr<f32>, #A>
     "use1"(%c){loop.cluster = 0 : i32, loop.stage = 5 : i32} : (tensor<128x32xf32, #A>) -> ()
-  }
+  } {tt.scheduled_max_stage = 5 : i32}
   tt.return
 }
 }
@@ -379,7 +379,7 @@ tt.func @unused_load(%lb : index, %ub : index, %step : index,
     // CHECK: dummy
     %a = tt.load %a_ptr_init {loop.cluster = 0 : i32, loop.stage = 1 : i32} : tensor<128x32x!tt.ptr<f32>, #A>
     "dummy"() : () -> ()
-  }
+  } {tt.scheduled_max_stage = 1 : i32}
   tt.return
 }
 }
@@ -434,7 +434,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %B_sh = ttg.local_alloc %B {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<128x128xf16, #blocked1>) -> !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>
       %acc_res = ttng.warp_group_dot %A_sh, %B_sh, %acc {loop.cluster = 0 : i32, loop.stage = 2 : i32} : !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory> * !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory> -> tensor<128x128xf32, #mma>
       scf.yield %acc_res : tensor<128x128xf32, #mma>
-    }
+    } {tt.scheduled_max_stage = 2 : i32}
     %res_f16 = arith.truncf %res : tensor<128x128xf32, #mma> to tensor<128x128xf16, #mma>
     tt.return %res_f16 : tensor<128x128xf16, #mma>
   }
@@ -489,7 +489,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %B_sh = ttg.local_alloc %B {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<128x128xf16, #blocked1>) -> !ttg.memdesc<128x128xf16, #shared1, #ttg.shared_memory>
       %acc_res = ttng.warp_group_dot %A_sh, %B_sh, %acc {loop.cluster = 0 : i32, loop.stage = 2 : i32} : !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory> * !ttg.memdesc<128x128xf16, #shared1, #ttg.shared_memory> -> tensor<128x128xf32, #mma>
       scf.yield %acc_res : tensor<128x128xf32, #mma>
-    }
+    } {tt.scheduled_max_stage = 2 : i32}
     tt.return %res : tensor<128x128xf32, #mma>
   }
 }
@@ -555,7 +555,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %B_sh = ttg.local_alloc %B {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<128x128xf16, #blocked1>) -> !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>
       %acc_res = ttng.warp_group_dot %A_sh, %B_sh, %acc {loop.cluster = 0 : i32, loop.stage = 2 : i32} : !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory> * !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory> -> tensor<128x128xf32, #mma>
       scf.yield %acc_res : tensor<128x128xf32, #mma>
-    }
+    } {tt.scheduled_max_stage = 2 : i32}
     %res_f16 = arith.truncf %res : tensor<128x128xf32, #mma> to tensor<128x128xf16, #mma>
     tt.return %res_f16 : tensor<128x128xf16, #mma>
   }
@@ -614,7 +614,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       ttng.tc_gen5_mma %A_sh, %B_sh, %acc_tm, %true, %true {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (!ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory>, i1, i1) -> ()
       %acc_res = ttng.tmem_load %acc_tm {loop.cluster = 0 : i32, loop.stage = 2 : i32} : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory> -> tensor<128x128xf32, #blocked>
       scf.yield %acc_res : tensor<128x128xf32, #blocked>
-    }
+    } {tt.scheduled_max_stage = 2 : i32}
     %res_f16 = arith.truncf %res : tensor<128x128xf32, #blocked> to tensor<128x128xf16, #blocked>
     tt.return %res_f16 : tensor<128x128xf16, #blocked>
   }
@@ -669,7 +669,7 @@ tt.func @tma_load_lowering(%lb : index, %ub : index, %step : index,
   scf.for %iv = %lb to %ub step %step : index {
     %a = tt.experimental_descriptor_load %desc[%offs, %offs] {loop.cluster = 2 : i32, loop.stage = 0 : i32} : !tt.tensordesc<tensor<128x32xf16>> -> tensor<128x32xf16, #A>
     "use"(%a) {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<128x32xf16, #A>) -> ()
-  }
+  } {tt.scheduled_max_stage = 2 : i32}
   tt.return
 }
 }
@@ -725,7 +725,7 @@ tt.func @tma_gather_lowering(%lb : index, %ub : index, %step : index,
   scf.for %iv = %lb to %ub step %step : index {
     %a = tt.experimental_descriptor_gather %desc[%x, %y] {loop.cluster = 2 : i32, loop.stage = 0 : i32} : (!tt.tensordesc<tensor<1x128xf32>>, tensor<32xi32, #offsets>, i32) -> tensor<32x128xf32, #A>
     "use"(%a) {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<32x128xf32, #A>) -> ()
-  }
+  } {tt.scheduled_max_stage = 2 : i32}
   tt.return
 }
 }
@@ -760,7 +760,7 @@ tt.func @tma_reuse_barrier(%lb : index, %ub : index, %step : index,
     "use2"(%b) {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<128x32xf16, #A>) -> ()
     %c = tt.experimental_descriptor_load %descC[%offs, %offs] {loop.cluster = 2 : i32, loop.stage = 0 : i32} : !tt.tensordesc<tensor<128x32xf16>> -> tensor<128x32xf16, #A>
     "use3"(%c) {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<128x32xf16, #A>) -> ()
-  }
+  } {tt.scheduled_max_stage = 2 : i32}
   tt.return
 }
 }
@@ -798,7 +798,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %B_sh = ttg.local_alloc %B {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (tensor<128x128xf16, #blocked1>) -> !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>
       %acc_res = ttng.warp_group_dot %A_sh, %B_sh, %acc {loop.cluster = 0 : i32, loop.stage = 2 : i32} : !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory> * !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory> -> tensor<128x128xf32, #mma>
       scf.yield %acc_res : tensor<128x128xf32, #mma>
-    }
+    } {tt.scheduled_max_stage = 2 : i32}
     %res_f16 = arith.truncf %res : tensor<128x128xf32, #mma> to tensor<128x128xf16, #mma>
     tt.return %res_f16 : tensor<128x128xf16, #mma>
   }
@@ -833,7 +833,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     scf.for %iv = %lb to %ub step %step : index {
       %desc = tt.make_tensor_descriptor %A, [%shape_x, %shape_y], [%strides_x, %strides_y] {loop.cluster = 0 : i32, loop.stage = 1 : i32} : <f16>, <tensor<128x128xf16>>
       "use"(%desc) {loop.cluster = 0 : i32, loop.stage = 1 : i32} : (!tt.tensordesc<tensor<128x128xf16>>) -> ()
-    }
+    } {tt.scheduled_max_stage = 1 : i32}
     tt.return
   }
 }
@@ -879,7 +879,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       ttng.tc_gen5_mma_scaled %A_sh, %B_sh, %acc_tm, %A_sc_sh, %B_sc_sh, %true, %true lhs = e5m2 rhs = e5m2 {loop.cluster = 0 : i32, loop.stage = 2 : i32} : (!ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf8E5M2, #shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory>, !ttg.memdesc<1x2x32x4x4xi8, #shared1, #smem>, !ttg.memdesc<1x2x32x4x4xi8, #shared1, #smem>, i1, i1) -> ()
       %acc_res = ttng.tmem_load %acc_tm {loop.cluster = 0 : i32, loop.stage = 2 : i32} : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory> -> tensor<128x128xf32, #blocked>
       scf.yield %acc_res : tensor<128x128xf32, #blocked>
-    }
+    } {tt.scheduled_max_stage = 2 : i32}
     tt.return %res : tensor<128x128xf32, #blocked>
   }
 }
