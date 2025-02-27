@@ -17,6 +17,11 @@ def min_dot_size(target: GPUTarget):
     return lambda lhsType, rhsType: (1, 1, 1)
 
 
+def is_pingpong_enabled(arch):
+    default = "1" if arch == "gfx942" else "0"
+    return os.getenv("TRITON_HIP_USE_BLOCK_PINGPONG", default) == "1"
+
+
 @dataclass(frozen=True)
 class HIPOptions:
     num_warps: int = 4
@@ -232,7 +237,7 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_reduce_data_duplication(pm)
         if amd.has_matrix_core_feature(options.arch):
             amd.passes.ttgpuir.add_reorder_instructions(pm)
-            use_block_pingpong = os.getenv("TRITON_HIP_USE_BLOCK_PINGPONG", "0") == "1"
+            use_block_pingpong = is_pingpong_enabled(options.arch)
             if use_block_pingpong and options.num_stages == 2:
                 amd.passes.ttgpuir.add_block_pingpong(pm)
 
