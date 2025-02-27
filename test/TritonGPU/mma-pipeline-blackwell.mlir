@@ -259,20 +259,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 }
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
-  // CHECK-LOWER-LABEL: @do_not_pipeline_second_dot
-  // CHECK-LOWER: scf.for {{.*}}
-  // CHECK-LOWER:   ttng.tmem_store {{.*}} {triton.pipeline_stage = 0 : i32}
-  // CHECK-LOWER:   ttng.tc_gen5_mma {{.*}} {triton.pipeline_stage = 0 : i32}
-  // CHECK-LOWER:   ttng.tmem_load {{.*}} {triton.pipeline_stage = 1 : i32}
-  // CHECK-LOWER:   ttng.tmem_alloc
-  // CHECK-LOWER-NOT: triton.pipeline_stage
-  // CHECK-LOWER:   ttng.tc_gen5_mma
-  // CHECK-LOWER-NOT: triton.pipeline_stage
-  // CHECK-LOWER:   ttng.tmem_load
+  // CHECK-LOWER-LABEL: @do_not_pipeline_two_dots
   // CHECK-LOWER-NOT: triton.pipeline_stage
 
-  // CHECK-LABEL: @do_not_pipeline_second_dot
-  tt.func public @do_not_pipeline_second_dot(%A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>, %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>, %acc_ptr: tensor<128x128x!tt.ptr<f32>, #blocked>, %res_ptr: tensor<128x128x!tt.ptr<f32>, #blocked>, %arg3: i32) attributes {noinline = false} {
+  // CHECK-LABEL: @do_not_pipeline_two_dots
+  tt.func public @do_not_pipeline_two_dots(%A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>, %B_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>, %acc_ptr: tensor<128x128x!tt.ptr<f32>, #blocked>, %res_ptr: tensor<128x128x!tt.ptr<f32>, #blocked>, %arg3: i32) attributes {noinline = false} {
     %true = arith.constant true
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked>
     %c0_i32 = arith.constant 0 : i32
