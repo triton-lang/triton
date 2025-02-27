@@ -438,6 +438,36 @@ convertFuncOpToLLVMFuncOp(FunctionOpInterface funcOp,
   return newFuncOp;
 }
 
+triton::FuncOp amendFuncOp(LLVM::LLVMFuncOp funcOp,
+                           ConversionPatternRewriter &rewriter){
+  auto moduleOp = funcOp->getParentOfType<ModuleOp>();
+  Location loc = moduleOp->getLoc();
+  auto ctx = funcOp->getContext();
+  auto globalPtrTy = LLVM::LLVMPointerType::get(ctx, 1);
+  auto funcTy = funcOp.getFunctionType();
+  auto amendedInputTy = llvm::to_vector(funcOp.getArgumentTypes());
+  unsigned oldNumArgs = amendedInputTy.size();
+  amendedInputTy.push_back(globalPtrTy);
+  auto amendedFuncTy =
+      FunctionType::get(ctx, amendedInputTy, funcOp.getResultTypes());
+  auto amendedFuncOp = rewriter.create<triton::FuncOp>(
+      funcOp.getLoc(), funcOp.getName(), amendedFuncTy);
+  auto &region = funcOp.getBody();
+  region.addArgument(globalPtrTy, amendedFuncOp.getLoc());
+  rewriter.inlineRegionBefore(region, amendedFuncOp.getBody(),
+                              amendedFuncOp.end());
+  IRMapping mapper;
+  if (auto argAttrs = funcOp.getAllArgAttrs()) {
+    SmallVector<Attribute> newArgAttrs;
+    newArgAttrs.reserve(amendedInputTy.size());
+    for (unsigned i = 0; i != oldNumArgs; ++i)
+      if (!mapper.contains(funcOp.getArgument(i)))
+        newArgAttrs.push_back(argAttrs[i]);
+    amendedFuncOp.setAllArgAttrs(newArgAttrs);
+  }
+  return amendedFuncOp;
+}
+
 struct AddProtonKernelArg
     : public mlir::triton::proton::impl::AddProtonKernelArgBase<
           AddProtonKernelArg> {
@@ -456,10 +486,13 @@ struct AddProtonKernelArg
 
     if (!hasProtonGlobalScratchAllocOp)
       return;
-    IRRewriter rewriter(ctx);
 
     assert(llvm::range_size(moduleOp.getOps<LLVM::LLVMFuncOp>()) == 1);
     LLVM::LLVMFuncOp funcOp = *moduleOp.getOps<LLVM::LLVMFuncOp>().begin();
+
+    IRRewriter rewriter(ctx);
+    rewriter.setInsertionPointToStart(moduleOp.getBody());
+//    auto amendedFuncOp = amendFuncOp(funcOp, rewriter);
 
   }
 };
