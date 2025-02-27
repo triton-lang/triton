@@ -261,22 +261,26 @@ SetVector<Value> mlir::triton::getNestedOperands(Operation *op) {
   return result;
 }
 
-std::pair<Operation *, int64_t>
-mlir::triton::getDefiningOpAndDistance(scf::ForOp forOp, Value value) {
+std::pair<OpResult, int64_t>
+mlir::triton::getDefinitionAndDistance(scf::ForOp forOp, Value value) {
   int64_t distance = 0;
   while (auto arg = dyn_cast<BlockArgument>(value)) {
+    // Ignore implicit captures.
     if (arg.getOwner() != forOp.getBody())
       return {nullptr, 0};
     // Ignore induction variable.
     if (arg.getArgNumber() == 0)
       return {nullptr, 0};
-    distance++;
-    value =
-        forOp.getBody()->getTerminator()->getOperand(arg.getArgNumber() - 1);
+    ++distance;
+    value = forOp.getYieldedValues()[arg.getArgNumber() - 1];
   }
-  Operation *def = value.getDefiningOp();
-  assert(def);
-  return {def, distance};
+  return {cast<OpResult>(value), distance};
+}
+
+std::pair<Operation *, int64_t>
+mlir::triton::getDefiningOpAndDistance(scf::ForOp forOp, Value value) {
+  auto [definition, distance] = getDefinitionAndDistance(forOp, value);
+  return {definition ? definition.getDefiningOp() : nullptr, distance};
 }
 
 std::optional<std::pair<int, int>>

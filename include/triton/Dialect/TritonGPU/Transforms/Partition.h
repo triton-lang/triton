@@ -4,11 +4,14 @@
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/GraphTraits.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SmallVector.h"
 
 namespace mlir {
 class Operation;
 class OpOperand;
+class OpResult;
 class Region;
 class Value;
 namespace scf {
@@ -24,6 +27,8 @@ static constexpr char kPartitionStagesAttrName[] = "ttg.partition.stages";
 //===----------------------------------------------------------------------===//
 
 namespace mlir::triton::gpu {
+struct PartitionGraph;
+
 // A warp schedule divides a loop into multiple partitions. Ops in a loop are
 // assigned at most one partition. A warp schedule represents asynchronous
 // execution of the loop body, where partitions may execute simultaneously.
@@ -74,7 +79,7 @@ public:
   void serialize(scf::ForOp loop) const;
   // Verify that the warp schedule is valid by checking the SSA dependencies
   // between the schedules.
-  LogicalResult verify(scf::ForOp loop) const;
+  FailureOr<PartitionGraph> verify(scf::ForOp loop) const;
 
   // Iterate the inputs of the partition. Input values are those that originate
   // from a different partition or a previous iteration of the current
@@ -89,6 +94,15 @@ public:
   void
   iterateOutputs(scf::ForOp loop, const Partition *partition,
                  function_ref<void(Operation *, OpOperand &)> callback) const;
+  // Iterate the defining ops of the inputs to the partition in the current and
+  // previous iterations, including the distance in the past.
+  void iterateDefs(scf::ForOp loop, const Partition *partition,
+                   function_ref<void(OpResult, unsigned)> callback) const;
+  // Iterate the uses of all outputs of the partition in the current iteration
+  // and in future iterations, including the distance in the future.
+  void iterateUses(
+      scf::ForOp loop, const Partition *partition,
+      function_ref<void(OpResult, OpOperand &, unsigned)> callback) const;
 
 private:
   // Partitions are numbered [0, N).
@@ -101,6 +115,50 @@ private:
   Partition rootPartition = Partition(kSentinel, kSentinel);
 };
 
+//===----------------------------------------------------------------------===//
+// PartitionGraph
+//===----------------------------------------------------------------------===//
+
+// A temporary node structure that can be used to build a graph of partitions.
+// The consumers have to be precomputed in order for the SCC iterator to have an
+// acceptable runtime complexity. This assumes the underlying loop is immutable.
+struct PartitionNode {
+  PartitionNode(const WarpSchedule::Partition *partition)
+      : partition(partition) {}
+
+  // The partition this node represents.
+  const WarpSchedule::Partition *partition;
+  // Partitions that consume the outputs of this partition.
+  SmallVector<std::pair<PartitionNode *, OpOperand *>> consumers;
+};
+
+// A graph of partitions that can be used to check for cycles and other schedule
+// invariants.
+struct PartitionGraph {
+  PartitionGraph(scf::ForOp loop, const WarpSchedule &schedule);
+
+  PartitionNode root;
+  llvm::MapVector<const WarpSchedule::Partition *, PartitionNode> nodes;
+};
+
 } // namespace mlir::triton::gpu
+
+namespace llvm {
+template <> struct GraphTraits<mlir::triton::gpu::PartitionGraph *> {
+  using NodeRef =
+      std::pair<mlir::triton::gpu::PartitionNode *, mlir::OpOperand *>;
+  static NodeRef getEntryNode(mlir::triton::gpu::PartitionGraph *graph) {
+    return {&graph->root, nullptr};
+  }
+
+  using ChildIteratorType = SmallVector<NodeRef>::iterator;
+  static ChildIteratorType child_begin(NodeRef node) {
+    return node.first->consumers.begin();
+  }
+  static ChildIteratorType child_end(NodeRef node) {
+    return node.first->consumers.end();
+  }
+};
+} // namespace llvm
 
 #endif // TRITON_TRITONGPU_TRANSFORM_PIPELINE_PARTITION_H_

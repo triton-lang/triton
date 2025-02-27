@@ -1,82 +1,10 @@
 #include "triton/Dialect/TritonGPU/Transforms/Partition.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
-#include "llvm/ADT/GraphTraits.h"
 #include "llvm/ADT/SCCIterator.h"
 
 using namespace mlir;
 using namespace triton;
 using namespace gpu;
-
-//===----------------------------------------------------------------------===//
-// PartitionGraph
-//===----------------------------------------------------------------------===//
-
-namespace {
-// A temporary node structure that can be used to build a graph of partitions.
-// The consumers have to be precomputed in order for the SCC iterator to have an
-// acceptable runtime complexity. This assumes the underlying loop is immutable.
-struct PartitionNode {
-  PartitionNode(const WarpSchedule::Partition *partition)
-      : partition(partition) {}
-
-  // The partition this node represents.
-  const WarpSchedule::Partition *partition;
-  // Partitions that consume the outputs of this partition.
-  SmallVector<std::pair<PartitionNode *, OpOperand *>> consumers;
-};
-
-// A graph of partitions that can be used to check for cycles and other schedule
-// invariants.
-struct PartitionGraph {
-  PartitionGraph(scf::ForOp loop, const WarpSchedule &schedule);
-
-  PartitionNode root;
-  llvm::MapVector<const WarpSchedule::Partition *, PartitionNode> nodes;
-};
-} // namespace
-
-PartitionGraph::PartitionGraph(scf::ForOp loop, const WarpSchedule &schedule)
-    : root(schedule.getRootPartition()) {
-  // Create the nodes at once. Afterwards, the map won't re-allocate and the
-  // pointers will be stable.
-  for (WarpSchedule::Partition &partition : schedule.getPartitions())
-    nodes.try_emplace(&partition, &partition);
-
-  // Wire up the graph. Consider the root node to be consumed by all other
-  // partitions so that it can be used as a virtual root.
-  for (PartitionNode &node : llvm::make_second_range(nodes))
-    root.consumers.emplace_back(&node, nullptr);
-
-  // Check the users of the partition outputs to wire the rest of the graph.
-  for (auto &[partition, node] : nodes) {
-    auto callback = [&, node = &node](Operation *owner, OpOperand &use) {
-      // Ignore uses in subsequent iterations.
-      if (isa<scf::YieldOp>(owner))
-        return;
-      PartitionNode &consumer =
-          nodes.find(schedule.getPartition(owner))->second;
-      node->consumers.emplace_back(&consumer, &use);
-    };
-    schedule.iterateOutputs(loop, partition, callback);
-  }
-}
-
-namespace llvm {
-template <> struct GraphTraits<PartitionGraph *> {
-  using NodeRef = std::pair<PartitionNode *, OpOperand *>;
-  static NodeRef getEntryNode(PartitionGraph *graph) {
-    return {&graph->root, nullptr};
-  }
-
-  using ChildIteratorType = SmallVector<NodeRef>::iterator;
-  static ChildIteratorType child_begin(NodeRef node) {
-    return node.first->consumers.begin();
-  }
-  static ChildIteratorType child_end(NodeRef node) {
-    return node.first->consumers.end();
-  }
-};
-} // namespace llvm
 
 //===----------------------------------------------------------------------===//
 // WarpSchedule
@@ -138,7 +66,7 @@ void WarpSchedule::serialize(scf::ForOp loop) const {
   loop->setAttr(kPartitionStagesAttrName, b.getArrayAttr(stages));
 }
 
-LogicalResult WarpSchedule::verify(scf::ForOp loop) const {
+FailureOr<PartitionGraph> WarpSchedule::verify(scf::ForOp loop) const {
   // The root partition is only allowed to transitively depend on itself.
   bool failed = false;
   iterateInputs(loop, &rootPartition, [&](OpOperand &input) {
@@ -203,7 +131,8 @@ LogicalResult WarpSchedule::verify(scf::ForOp loop) const {
       return failure();
     }
   }
-  return success();
+
+  return std::move(graph);
 }
 
 void WarpSchedule::iterateInputs(
@@ -250,5 +179,64 @@ void WarpSchedule::iterateOutputs(
         }
       }
     }
+  }
+}
+
+void WarpSchedule::iterateDefs(
+    scf::ForOp loop, const Partition *partition,
+    function_ref<void(OpResult, unsigned)> callback) const {
+  iterateInputs(loop, partition, [&](OpOperand &input) {
+    auto [def, distance] = getDefinitionAndDistance(loop, input.get());
+    if (def && def.getParentBlock() == loop.getBody())
+      callback(def, distance);
+  });
+}
+
+void WarpSchedule::iterateUses(
+    scf::ForOp loop, const Partition *partition,
+    function_ref<void(OpResult, OpOperand &, unsigned)> callback) const {
+  SmallVector<std::tuple<OpResult, OpOperand *, unsigned>> uses;
+  iterateOutputs(loop, partition, [&](Operation *owner, OpOperand &use) {
+    uses.emplace_back(cast<OpResult>(use.get()), &use, 0);
+  });
+  while (!uses.empty()) {
+    auto [output, use, distance] = uses.pop_back_val();
+    if (!isa<scf::YieldOp>(use->getOwner())) {
+      callback(output, *use, distance);
+      continue;
+    }
+    BlockArgument arg = loop.getRegionIterArg(use->getOperandNumber());
+    for (OpOperand &use : arg.getUses())
+      uses.emplace_back(output, &use, distance + 1);
+  }
+}
+
+//===----------------------------------------------------------------------===//
+// PartitionGraph
+//===----------------------------------------------------------------------===//
+
+PartitionGraph::PartitionGraph(scf::ForOp loop, const WarpSchedule &schedule)
+    : root(schedule.getRootPartition()) {
+  // Create the nodes at once. Afterwards, the map won't re-allocate and the
+  // pointers will be stable.
+  for (WarpSchedule::Partition &partition : schedule.getPartitions())
+    nodes.try_emplace(&partition, &partition);
+
+  // Wire up the graph. Consider the root node to be consumed by all other
+  // partitions so that it can be used as a virtual root.
+  for (PartitionNode &node : llvm::make_second_range(nodes))
+    root.consumers.emplace_back(&node, nullptr);
+
+  // Check the users of the partition outputs to wire the rest of the graph.
+  for (auto &[partition, node] : nodes) {
+    auto callback = [&, node = &node](Operation *owner, OpOperand &use) {
+      // Ignore uses in subsequent iterations.
+      if (isa<scf::YieldOp>(owner))
+        return;
+      PartitionNode &consumer =
+          nodes.find(schedule.getPartition(owner))->second;
+      node->consumers.emplace_back(&consumer, &use);
+    };
+    schedule.iterateOutputs(loop, partition, callback);
   }
 }

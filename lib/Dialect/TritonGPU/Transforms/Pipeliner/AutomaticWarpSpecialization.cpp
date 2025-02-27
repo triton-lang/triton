@@ -10,6 +10,74 @@ using namespace mlir;
 using namespace triton;
 using namespace triton::gpu;
 
+//===----------------------------------------------------------------------===//
+// Loop Partitioning
+//===----------------------------------------------------------------------===//
+
+namespace {
+using Partition = WarpSchedule::Partition;
+
+// Helper class for loop partitioning.
+class LoopPartitioner {
+public:
+  LoopPartitioner(const WarpSchedule &schedule, const PartitionGraph &graph,
+                  scf::ForOp loop)
+      : schedule(schedule), graph(graph), loop(loop) {}
+
+  // Partition the loop.
+  void run();
+
+private:
+  // The schedule to apply.
+  const WarpSchedule &schedule;
+  // A precomputed partition graph.
+  const PartitionGraph &graph;
+  // The loop to partition.
+  scf::ForOp loop;
+};
+
+struct UseInfo {
+  llvm::MapVector<const Partition *, SmallVector<OpOperand *>> consumers;
+  unsigned maxDistance = 0;
+};
+} // namespace
+
+void LoopPartitioner::run() {
+  for (const Partition &partition : schedule.getPartitions()) {
+    // Find all the consumers of an output. That output will need to be
+    // multibuffered based on the maximum total distance to its uses. At the
+    // same time, because each consumer can complete at any time, track all of
+    // them since they all need to be synchronized.
+    DenseMap<OpResult, UseInfo> useInfo;
+
+    unsigned defStage = partition.getStage();
+    auto callback = [&](OpResult output, OpOperand &use, unsigned distance) {
+      // Determine the overall distance of the use. This is the stage delta plus
+      // the distance in the future.
+      const Partition *usePartition = schedule.getPartition(use.getOwner());
+      unsigned useStage = usePartition->getStage();
+      assert(useStage > defStage && "expected verifier to check this");
+
+      UseInfo &info = useInfo[output];
+      info.maxDistance = std::max(info.maxDistance, useStage - defStage);
+
+      OpOperand *curUse = &use;
+      while (distance--) {
+        unsigned idx = cast<BlockArgument>(curUse->get()).getArgNumber();
+        curUse = &(*loop.getYieldedValuesMutable())[idx - 1];
+      }
+      assert(curUse->getOwner() == loop.getBody()->getTerminator() &&
+             curUse->get().getDefiningOp());
+    };
+
+    schedule.iterateUses(loop, &partition, callback);
+  }
+}
+
+//===----------------------------------------------------------------------===//
+// Pass Definition
+//===----------------------------------------------------------------------===//
+
 namespace mlir::triton::gpu {
 #define GEN_PASS_DEF_TRITONGPUAUTOMATICWARPSPECIALIZATION
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
@@ -40,8 +108,11 @@ void AutomaticWarpSpecialization::runOnOperation() {
     if (failed(scheduleOr))
       continue;
     WarpSchedule schedule = std::move(*scheduleOr);
-    if (failed(schedule.verify(loop)))
+    FailureOr<PartitionGraph> graphOr = schedule.verify(loop);
+    if (failed(graphOr))
       continue;
+    LoopPartitioner partitioner(schedule, *graphOr, loop);
+    partitioner.run();
   }
 
   // FIXME: Scratch notes below:

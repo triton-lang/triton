@@ -54,6 +54,10 @@ void visitNestedOperands(Operation *op, function_ref<void(Value)> visitor);
 /// of `op`.
 SetVector<Value> getNestedOperands(Operation *op);
 
+// Return the definition of the given value. If the value is a loop-carried
+// dependency, return the definition and the distance to it.
+std::pair<OpResult, int64_t> getDefinitionAndDistance(scf::ForOp forOp,
+                                                      Value value);
 // Return the defining op of the given value, if the Value is an argument of the
 // loop return the associated defining op in the loop and its distance to the
 // Value.
