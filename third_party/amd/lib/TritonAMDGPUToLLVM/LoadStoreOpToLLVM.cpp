@@ -1467,10 +1467,11 @@ struct AtomicRMWOpConversion
         int waveSize = 64;
         permuteOffset = b.select(b.icmp_eq(permuteOffset, b.i32_val(0)), permuteOffset, b.i32_val(waveSize));
         permuteOffset = b.sub(permuteOffset, b.i32_val(1));
+        permuteOffset = b.mul(permuteOffset, b.i32_val(4));
 
+        operand = genI32TiledOp(rewriter, genPermute, operand, permuteOffset);
         rmwPtr = genI32TiledOp(rewriter, genPermute, rmwPtr, permuteOffset);
-        valElements[i] = genI32TiledOp(rewriter, genPermute, valElements[i], permuteOffset);
-        
+
         // update mask
         Value maskFlag = targetInfo.ballot(rewriter, loc, i64_ty, rmwMask);
         Value numActiveLanes =
