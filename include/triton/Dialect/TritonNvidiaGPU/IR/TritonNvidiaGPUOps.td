@@ -167,7 +167,9 @@ def TTNG_BarrierExpectOp : TTNG_Op<"barrier_expect", [DeclareOpInterfaceMethods<
   }];
 }
 
-def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [
+      DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+      AttrSizedOperandSegments]> {
     let summary = "wait until the mbarrier phase completes.";
 
     let description = [{
@@ -184,13 +186,19 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [DeclareOpInterfaceMethods<Memo
     let hasVerifier = 1;
     let arguments = (ins TTG_MemDescType:$alloc,
                          I32:$phase,
-                         Optional<I1>:$pred);
+                         Optional<I1>:$pred,
+                         Variadic<AnyType>:$deps);
     let builders = [
       OpBuilder<(ins "Value":$alloc, "Value":$phase),
       [{
-      build($_builder, $_state, alloc, phase, /*pred=*/static_cast<mlir::Value>(nullptr));
-      }]>];
-    let assemblyFormat = "$alloc `,` $phase attr-dict (`,` $pred^)? `:` qualified(type($alloc))";
+      build($_builder, $_state, alloc, phase, /*pred=*/static_cast<mlir::Value>(nullptr), /*deps=*/{});
+      }]>,
+      OpBuilder<(ins "Value":$alloc, "Value":$phase, "ValueRange":$deps),
+      [{
+      build($_builder, $_state, alloc, phase, /*pred=*/static_cast<mlir::Value>(nullptr), deps);
+      }]>,
+    ];
+    let assemblyFormat = "$alloc `,` $phase attr-dict (`,` $pred^)? `deps` ($deps^ `:` type($deps))? `:` qualified(type($alloc))";
 }
 
 def TTNG_TensorDescToTMAPtrOp : TTNG_Op<"tensor_desc_to_tma_ptr", [Pure]> {
