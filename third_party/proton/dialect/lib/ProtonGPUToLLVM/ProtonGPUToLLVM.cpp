@@ -15,9 +15,9 @@ void populateProtonOpPatterns(LLVMTypeConverter &typeConverter,
                               RewritePatternSet &patterns,
                               const TargetInfoBase &targetInfo,
                               PatternBenefit benefit) {
-  populateModuleOpToLLVMPattern(typeConverter, patterns, targetInfo, benefit);
-  populateGlobalScratchAllocOpToLLVMPattern(typeConverter, patterns, targetInfo,
-                                            benefit);
+  //populateModuleOpToLLVMPattern(typeConverter, patterns, targetInfo, benefit);
+  //populateGlobalScratchAllocOpToLLVMPattern(typeConverter, patterns, targetInfo,
+  //                                          benefit);
   populateRecordOpToLLVMPattern(typeConverter, patterns, targetInfo, benefit);
 }
 

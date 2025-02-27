@@ -1,3 +1,7 @@
+#include "Dialect/ProtonGPU/IR/Dialect.h"
+#include "mlir/Pass/Pass.h"
+#include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/Passes.h"
+
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -5,6 +9,8 @@
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 #include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/PatternProtonOpToLLVM.h"
 #include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/Utility.h"
@@ -13,15 +19,21 @@
 
 #include "llvm/Support/FormatVariadic.h"
 
-//namespace mlir {
-//FailureOr<LLVM::LLVMFuncOp>
-//convertFuncOpToLLVMFuncOp(FunctionOpInterface funcOp,
-//                          ConversionPatternRewriter &rewriter,
-//                          const LLVMTypeConverter &converter);
-//}
+
+
+using namespace mlir;
+using namespace mlir::triton;
+
+namespace mlir {
+namespace triton::proton {
+#define GEN_PASS_DEF_ADDPROTONKERNELARG
+#include "proton/dialect/include/Conversion/ProtonGPUToLLVM/Passes.h.inc"
+} // namespace triton::proton
+} // namespace mlir
+
+namespace {
 // The following convertFuncOpToLLVMFuncOp is copied and modified from
 // https://github.com/llvm/llvm-project/blob/main/mlir/lib/Conversion/FuncToLLVM/FuncToLLVM.cpp
-namespace {
 static constexpr StringRef varargsAttrName = "func.varargs";
 static constexpr StringRef linkageAttrName = "llvm.linkage";
 static constexpr StringRef barePtrAttrName = "llvm.bareptr";
@@ -424,93 +436,49 @@ convertFuncOpToLLVMFuncOp(FunctionOpInterface funcOp,
   }
 
   return newFuncOp;
-}	
-using namespace mlir;
-using namespace mlir::triton;
-
-triton::FuncOp amendFuncOp(LLVM::LLVMFuncOp funcOp,
-                           ConversionPatternRewriter &rewriter,
-                           const TargetInfoBase &targetInfo) {
-  auto moduleOp = funcOp->getParentOfType<ModuleOp>();
-  Location loc = moduleOp->getLoc();
-  auto ctx = funcOp->getContext();
-  auto globalPtrTy = LLVM::LLVMPointerType::get(ctx, 1);
-  auto funcTy = funcOp.getFunctionType();
-  auto amendedInputTy = llvm::to_vector(funcOp.getArgumentTypes());
-  unsigned oldNumArgs = amendedInputTy.size();
-  amendedInputTy.push_back(globalPtrTy);
-  auto amendedFuncTy =
-      FunctionType::get(ctx, amendedInputTy, funcOp.getResultTypes());
-  auto amendedFuncOp = rewriter.create<triton::FuncOp>(
-      funcOp.getLoc(), funcOp.getName(), amendedFuncTy);
-  auto &region = funcOp.getBody();
-  region.addArgument(globalPtrTy, amendedFuncOp.getLoc());
-  rewriter.inlineRegionBefore(region, amendedFuncOp.getBody(),
-                              amendedFuncOp.end());
-  IRMapping mapper;
-  if (auto argAttrs = funcOp.getAllArgAttrs()) {
-    SmallVector<Attribute> newArgAttrs;
-    newArgAttrs.reserve(amendedInputTy.size());
-    for (unsigned i = 0; i != oldNumArgs; ++i)
-      if (!mapper.contains(funcOp.getArgument(i)))
-        newArgAttrs.push_back(argAttrs[i]);
-    amendedFuncOp.setAllArgAttrs(newArgAttrs);
-  }
-  return amendedFuncOp;
 }
 
-struct ModuleOpConversion : public ConvertOpToLLVMPattern<ModuleOp> {
-  explicit ModuleOpConversion(LLVMTypeConverter &typeConverter,
-                              const TargetInfoBase &targetInfo,
-                              PatternBenefit benefit)
-      : mlir::ConvertOpToLLVMPattern<ModuleOp>(typeConverter, benefit),
-        targetInfo(targetInfo) {}
-
-  LogicalResult
-  matchAndRewrite(ModuleOp moduleOp, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
+struct AddProtonKernelArg
+    : public mlir::triton::proton::impl::AddProtonKernelArgBase<
+          AddProtonKernelArg> {
+  void runOnOperation() override {
+    ModuleOp moduleOp = getOperation();
+    MLIRContext *ctx = &getContext();
 
     bool hasProtonGlobalScratchAllocOp = false;
     moduleOp.walk([&](LLVM::LLVMFuncOp funcOp) {
       funcOp.walk([&](proton::gpu::GlobalScratchAllocOp op) {
         hasProtonGlobalScratchAllocOp = true;
+        auto funcTy = funcOp.getFunctionType();		    
+	llvm::errs() << funcTy << "\n";
       });
-    });
+    });    
 
     if (!hasProtonGlobalScratchAllocOp)
-      return success();
+      return;
+    IRRewriter rewriter(ctx);
 
     assert(llvm::range_size(moduleOp.getOps<LLVM::LLVMFuncOp>()) == 1);
     LLVM::LLVMFuncOp funcOp = *moduleOp.getOps<LLVM::LLVMFuncOp>().begin();
 
-    rewriter.setInsertionPointToStart(moduleOp.getBody());
-    auto amendedFuncOp = amendFuncOp(funcOp, rewriter, targetInfo);
-    FailureOr<LLVM::LLVMFuncOp> maybeNewFuncOp =
-        convertFuncOpToLLVMFuncOp(amendedFuncOp, rewriter,
-                                        *getTypeConverter());
-    if (failed(maybeNewFuncOp)) {
-      return failure();
-    }
-
-    LLVM::LLVMFuncOp newFuncOp = *maybeNewFuncOp;
-    auto ctx = funcOp->getContext();
-    newFuncOp->setAttr("nvvm.kernel",
-                       rewriter.getIntegerAttr(type::u1Ty(ctx), 1));
-    newFuncOp.setLinkage(LLVM::Linkage::External);
-    rewriter.eraseOp(funcOp);
-    rewriter.eraseOp(amendedFuncOp);
-    auto newFuncOpTy = newFuncOp.getFunctionType();
-    return success();
   }
-
-protected:
-  const TargetInfoBase &targetInfo;
 };
 
 } // namespace
 
-void mlir::triton::proton::populateModuleOpToLLVMPattern(
-    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    const TargetInfoBase &targetInfo, PatternBenefit benefit) {
-  patterns.add<ModuleOpConversion>(typeConverter, targetInfo, benefit);
+namespace mlir {
+
+namespace triton::proton {
+
+namespace gpu {
+
+std::unique_ptr<OperationPass<ModuleOp>>
+createAddProtonKernelArgPass() {
+  return std::make_unique<AddProtonKernelArg>();
 }
+
+} // namespace gpu
+
+} // namespace triton::proton
+
+} // namespace mlir    
