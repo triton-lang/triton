@@ -3,6 +3,10 @@ add_triton_library(ProtonGPUToLLVM
     ProtonGPUToLLVM.cpp
     ModuleOpToLLVM.cpp
     GlobalScratchAllocOpToLLVM.cpp
+    AllocateProtonSharedMemory.cpp
+
+    DEPENDS
+    ProtonGPUConversionPassIncGen
 
     LINK_LIBS PUBLIC
     ProtonIR
