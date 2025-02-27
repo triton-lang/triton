@@ -388,6 +388,25 @@ LogicalResult TMEMAllocOp::verify() {
   return success();
 }
 
+// TMEMAllocOp
+void TMEMAllocOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  Operation *op = getOperation();
+  // If allocation is immutable, mark it as no side effect allow things like
+  // CSE, DCE to work in early compiler passes.
+  // After the memory offset is computed, we attach the true side effect to the
+  // op.
+  if (!getType().getMutableMemory() && !op->hasAttr("tensor_memory_col_offset"))
+    return;
+  effects.emplace_back(MemoryEffects::Allocate::get(),
+                       mlir::triton::nvidia_gpu::TensorMemory::get());
+  if (getSrc())
+    effects.emplace_back(MemoryEffects::Write::get(),
+                         getOperation()->getOpResult(0),
+                         mlir::triton::nvidia_gpu::TensorMemory::get());
+}
+
 bool isDescendingOrder(triton::gpu::MemDescType type) {
   auto order = triton::gpu::getOrder(type);
   auto rank = type.getRank();
