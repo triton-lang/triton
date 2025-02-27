@@ -441,6 +441,9 @@ public:
   auto getInDimNames() const { return llvm::make_first_range(bases); }
   auto getOutDimNames() const { return llvm::make_first_range(outDims); }
   auto getOutDimSizes() const { return llvm::make_second_range(outDims); }
+  auto getOutDims() const {
+    return llvm::make_range(outDims.begin(), outDims.end());
+  }
 
   // Gets the position that this outDim occupies in getOutDimNames().  Asserts
   // if the dim is not present.

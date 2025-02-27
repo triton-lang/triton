@@ -886,11 +886,6 @@ LinearLayout LinearLayout::invertAndCompose(const LinearLayout &outer) const {
            "Convert layout does not change the shape of a tensor");
   }
 
-  // We'll write A^{-1} to mean the inverse or the pseudo-inverse of A
-  // We are computing A^{-1}B so A must be surjective so that
-  // it has a left inverse.
-  assert(A.isSurjective());
-
   // Broadcasting heuristic
   // Imagine we have two layouts with `warps = [[0, 0],  [0, 0]]`
   // (broadcasting) on both layouts. We could map any warp to any warp in the

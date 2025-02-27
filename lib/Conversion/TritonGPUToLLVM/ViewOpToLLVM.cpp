@@ -170,46 +170,40 @@ struct SplitOpConversion : public ConvertOpToLLVMPattern<SplitOp> {
   LogicalResult
   matchAndRewrite(SplitOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // We rely on the following invariants of this op (which are checked by its
-    // verifier):
-    //
-    // - The layout distribute the last dimension along registers
-    // - The last dimension (the one we're splitting) has sizePerThread=2,
-    // threadPerWarp=1 and warpPerBlock=1.
-    //
-    // With these invariants, split is trivial: We can count how many contiguous
-    // registers belong to the same chunk then we separate the registers between
-    // two different chunks.
+    Location loc = op->getLoc();
     auto srcTy = cast<RankedTensorType>(op.getSrc().getType());
     auto ll = toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
-    int splitDim = srcTy.getRank() - 1;
     auto kReg = mlir::StringAttr::get(srcTy.getContext(), "register");
     const auto &bases = ll.getBases();
-    const auto &regs = bases.find(kReg)->second;
-    int numContiguousValues = 1;
-    bool found = false;
-    for (const auto &reg : regs) {
-      if (reg[splitDim] != 0) {
-        found = true;
-        break;
-      }
-      numContiguousValues *= 2;
-    }
-    assert(found && "Split dimension is not distributed along registers.");
-    Location loc = op->getLoc();
-    auto typeConverter = getTypeConverter();
+    auto regs = bases.find(kReg)->second;
+    auto dims = llvm::to_vector(ll.getOutDims());
+
+    // Layout to map back logical tensor to registers
+    auto R = LinearLayout({{kReg, regs}}, dims, false);
+
+    // Layout for second split (remove (0,..., 0, 1) from regs)
+    int splitDim = srcTy.getRank() - 1;
+    auto v = std::vector<int32_t>(srcTy.getRank());
+    v[splitDim] = 1;
+    auto it = llvm::find(regs, v);
+    auto pos = std::distance(regs.begin(), it);
+    regs.erase(it);
+    auto L1 = LinearLayout({{kReg, regs}}, dims, false);
+    auto convert = L1.invertAndCompose(R);
+
     SmallVector<Value> srcVals =
         unpackLLElements(loc, adaptor.getSrc(), rewriter);
-    assert(srcVals.size() % 2 == 0);
-    SmallVector<Value> outLhsVals;
-    SmallVector<Value> outRhsVals;
-    for (int i = 0; i < srcVals.size(); i += 2 * numContiguousValues) {
-      for (int j = 0; j < numContiguousValues; j++) {
-        outLhsVals.push_back(srcVals[i + j]);
-        outRhsVals.push_back(srcVals[i + numContiguousValues + j]);
-      }
+    assert(convert.getInDimSize(kReg) == srcVals.size() / 2);
+    SmallVector<Value> outLhsVals(srcVals.size() / 2);
+    SmallVector<Value> outRhsVals(srcVals.size() / 2);
+    for (int i = 0; i < outLhsVals.size(); i++) {
+      auto srcIdx = convert.apply({{kReg, i}}).begin()->second;
+      outLhsVals[i] = srcVals[srcIdx];
+      outRhsVals[i] = srcVals[srcIdx ^ (1 << pos)];
     }
+
     auto resultTy = cast<RankedTensorType>(op.getResult(0).getType());
+    auto typeConverter = getTypeConverter();
     Value retLhs =
         packLLElements(loc, typeConverter, outLhsVals, rewriter, resultTy);
     Value retRhs =
