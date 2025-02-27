@@ -98,6 +98,8 @@ public:
   // llvm.
   virtual void storeOpAnnotation(triton::gpu::LocalStoreOp op,
                                  size_t localStoreOpCount, Type type) const {}
+  virtual void allocOpAnnotation(triton::gpu::LocalAllocOp op,
+                                 size_t localStoreOpCount, Type type) const {}
 
   virtual ~TargetInfoBase() {}
 };
