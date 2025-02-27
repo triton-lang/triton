@@ -468,31 +468,26 @@ public:
         mfmaVersion == 4 && isF8F6F4(aElemType) && isF8F6F4(bElemType);
 
     // If mfmaVersion == 4 and both inputs are of F8F6F4 types, we will try to
-    // use the V_MFMA_*_F8F6F4 instructions since it has higher bandwidth. If we
-    // can't find a proper instruction, we will fall back to select from normal
-    // mfma instructions.
-    MfmaIntrinsic mfmaInstr;
-    FailureOr<MfmaIntrinsic> maybeMfmaInstr =
+    // use the V_MFMA_*_F8F6F4 instructions since it has higher FLOPs per cycle.
+    // If we can't find a proper instruction, we will fall back to select from
+    // normal mfma instructions.
+    FailureOr<MfmaIntrinsic> mfmaInstr =
         chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim, withScale);
-    if (failed(maybeMfmaInstr)) {
+    if (failed(mfmaInstr)) {
       if (!withScale) {
         return failure();
       }
-      auto maybeMfmaInstr =
-          chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim, false);
-      if (failed(maybeMfmaInstr))
+      mfmaInstr = chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim, false);
+      if (failed(mfmaInstr))
         return failure();
 
-      mfmaInstr = std::move(maybeMfmaInstr.value());
       withScale = false;
-    } else {
-      mfmaInstr = std::move(maybeMfmaInstr.value());
     }
 
-    auto mDim = mfmaInstr.mDim;
-    auto nDim = mfmaInstr.nDim;
-    auto kDim = mfmaInstr.kDim;
-    auto kBase = mfmaInstr.kBase;
+    auto mDim = mfmaInstr->mDim;
+    auto nDim = mfmaInstr->nDim;
+    auto kDim = mfmaInstr->kDim;
+    auto kBase = mfmaInstr->kBase;
 
     auto warpsPerTile =
         warpsPerTileMFMA(dotOp, retShape, numWarps, {mDim, nDim});
@@ -500,7 +495,7 @@ public:
     // Use transposed mfma layout to enable larger vectorization for global
     // store instructions, except for fp8 matmul kernels due to regression
     // TODO (lixun): investigate the regression and enable this feature again
-    auto aElemTy = mfmaInstr.aElementType;
+    auto aElemTy = mfmaInstr->aElementType;
     bool isFP8 = llvm::isa<Float8E5M2FNUZType, Float8E4M3FNUZType,
                            Float8E4M3FNType, Float8E5M2Type>(aElemTy);
     bool isTransposed =
@@ -565,10 +560,8 @@ public:
       // If a scaled mfma instruction is chosen, we will rewrite the DotOp to a
       // DotScaledOp.
       auto aScaledElemTy = mlirTypeToScaledElemType(aElemType);
-      if (failed(aScaledElemTy))
-        return failure();
       auto bScaledElemTy = mlirTypeToScaledElemType(bElemType);
-      if (failed(bScaledElemTy))
+      if (failed(aScaledElemTy) || failed(bScaledElemTy))
         return failure();
 
       auto aEncLL = chooseScaledMfmaOperandLayout(
@@ -581,9 +574,9 @@ public:
       auto newBEncoding = ttg::LinearEncodingAttr::get(ctx, bEncLL);
 
       a = convertAndCastTensor(rewriter, a, newAEncoding,
-                               mfmaInstr.aElementType);
+                               mfmaInstr->aElementType);
       b = convertAndCastTensor(rewriter, b, newBEncoding,
-                               mfmaInstr.bElementType);
+                               mfmaInstr->bElementType);
       newDot = rewriter.create<triton::DotScaledOp>(
           dotOp.getLoc(), newAcc.getType(), a, b, newAcc, Value(), Value(),
           aScaledElemTy.value(), bScaledElemTy.value(), /*fastMath=*/false);
@@ -593,9 +586,9 @@ public:
       auto newBEncoding =
           ttg::DotOperandEncodingAttr::get(ctx, 1, mfmaEnc, kWidth);
       a = convertAndCastTensor(rewriter, a, newAEncoding,
-                               mfmaInstr.aElementType);
+                               mfmaInstr->aElementType);
       b = convertAndCastTensor(rewriter, b, newBEncoding,
-                               mfmaInstr.bElementType);
+                               mfmaInstr->bElementType);
       newDot = rewriter.create<tt::DotOp>(dotOp.getLoc(), newAcc.getType(), a,
                                           b, newAcc, dotOp.getInputPrecision(),
                                           dotOp.getMaxNumImpreciseAcc());

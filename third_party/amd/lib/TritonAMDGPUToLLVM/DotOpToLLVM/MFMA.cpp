@@ -769,6 +769,20 @@ LogicalResult convertScaledMFMA(triton::DotScaledOp op,
   auto aScale = op.getAScale();
   auto bScale = op.getBScale();
 
+  // If the tt.dot_scaled is transformed from a tt.dot, both scales are None. In
+  // this case, both scales remain None in this method and we will generate a
+  // mfma instruction with the scale operand to be 0. Then there's an
+  // optimization pass in the LLVM backend to convert such V_MFMA_SCALE_*_F8F6F4
+  // instruction to V_MFMA_*_F8F6F4 to avoid LD_SCALE.
+  //
+  // If the tt.dot_scaled is not from a tt.dot but native, we support 0, 1, 2
+  // scales and treat them in different ways:
+  //
+  // 1. #scales = 0, 1: The upstream transform guarantees to create constant
+  // scales for the absent.
+  // 2. #scales = 2: Both scales should exist.
+
+  // Thus in this pass, there shouldn't be a single scale present.
   assert(((aScale && bScale) || (!aScale && !bScale)) &&
          "Single scale is not supported");
 
