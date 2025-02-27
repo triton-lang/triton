@@ -53,7 +53,7 @@ def _tuple_assign(XPtrs, YPtrs, values):
 
 @pytest.mark.interpreter
 def test_assign(device):
-    vals = (2., 3.)
+    vals = (2.0, 3.0)
     x = tuple([torch.zeros((1, ), dtype=torch.float32, device=device) for _ in range(2)])
     y = tuple([torch.zeros((1, ), dtype=torch.float32, device=device) for _ in range(3)])
     _tuple_assign[(1, )](x, y, vals)
@@ -116,6 +116,11 @@ class Tensor(NamedTuple):
 
 
 @triton.jit
+def _namedtuple_create_func(shape, ptr, stride):
+    return Tensor(shape=shape, ptr=ptr, stride=stride)
+
+
+@triton.jit
 def _namedtuple_mask_func(Tensor, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
     offs_m = tl.arange(0, BLOCK_M)
     offs_n = tl.arange(0, BLOCK_N)
@@ -127,7 +132,7 @@ def _namedtuple_mask_func(Tensor, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
 def _namedtuple_kernel(closure, _X, Y, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
     offs_m = tl.arange(0, BLOCK_M)
     offs_n = tl.arange(0, BLOCK_N)
-    X = Tensor(shape=_X.shape, ptr=_X.ptr, stride=_X.stride)
+    X = _namedtuple_create_func(_X.shape, _X.ptr, _X.stride)
     Xs = X.ptr + offs_m[:, None] * X.stride[0] + offs_n[None, :] * X.stride[1]
     Ys = Y.ptr + offs_m[:, None] * Y.stride[0] + offs_n[None, :] * Y.stride[1]
     x = tl.load(Xs, mask=_namedtuple_mask_func(X, BLOCK_M, BLOCK_N), other=0)
