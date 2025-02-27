@@ -1206,7 +1206,7 @@ shape 4x8x2xf32.
 Because Triton tensors always have a power-of-two number of elements,
 the two input tensors must have the same shape.
 
-Traits: `SameTypeOperands`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+Traits: `InferTypeOpAdaptor`, `SameTypeOperands`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
 
@@ -1755,7 +1755,7 @@ tensors, src[..., 0] and src[..., 1].
 For example, if the input shape is 4x8x2xf32, returns two tensors of
 shape 4x8xf32.
 
-Traits: `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
+Traits: `InferTypeOpAdaptor`, `TensorSizeTrait`, `VerifyTensorLayoutsTrait`
 
 Interfaces: `InferTypeOpInterface`, `NoMemoryEffect (MemoryEffectOpInterface)`
 

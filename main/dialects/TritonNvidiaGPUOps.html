@@ -537,7 +537,7 @@ spec this has to be done before any reuse of the memory used by mbarrier.</p>
 </pre></div>
 </div>
 <p>$d += matrix_multiply($a, $b).
-If not barrier is given the op is assumed to be synchronous otherwise the op will trigger a commit/arrive on the given barrier.
+If no barrier is given the op is assumed to be synchronous otherwise the op will trigger a commit/arrive on the given barrier.
 If there is a barrier the result will be safe to read after a barrier wait.
 If $two_ctas is set the op will execute a matmul across two contiguous CTAs, it will read the data distributed across the two CTAs.
 and syncronize both CTAs if the op is synchronous.</p>
@@ -589,7 +589,7 @@ and syncronize both CTAs if the op is synchronous.</p>
 </pre></div>
 </div>
 <p>$d += matrix_multiply(scale($lhs, $lhs_scale), scale(rlhs, $rhs_scale))
-If not barrier is given the op is assumed to be synchronous otherwise the op will trigger a commit/arrive on the given barrier.
+If no barrier is given the op is assumed to be synchronous otherwise the op will trigger a commit/arrive on the given barrier.
 If there is a barrier the result will be safe to read after a barrier wait.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">DotOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MMAv5OpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
