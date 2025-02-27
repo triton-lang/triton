@@ -251,11 +251,10 @@ void assignMemoryLayouts(tt::FuncOp &func) {
 
   // 1. Set seed values from either TMA ops, or function boundary ops which we
   // fallback to default encoding
-  for (auto blockArg : func.getBlocks().front().getArguments()) {
-    if (auto desc = dyn_cast<TypedValue<tt::TensorDescType>>(blockArg)) {
+  for (auto blockArg : func.getBlocks().front().getArguments())
+    if (auto desc = dyn_cast<TypedValue<tt::TensorDescType>>(blockArg))
       updateEncoding({desc}, EncodingInfo{{}, {}, /*forcedToDefault=*/true});
-    }
-  }
+
   func.walk([&](Operation *op) {
     if (auto info = getUseInfo(op)) {
       updateEncoding(info->descriptor, EncodingInfo{info->desiredSharedEncoding,
@@ -269,19 +268,16 @@ void assignMemoryLayouts(tt::FuncOp &func) {
       auto setEncoding = [&](Value v) {
         auto typedVal = cast<TypedValue<tt::TensorDescType>>(v);
         valueToEncodingInfo.try_emplace(typedVal, einfo);
-        if (forcedToDefault) {
+        if (forcedToDefault)
           worklist.insert(typedVal);
-        }
       };
-      for (auto result : op->getResults()) {
+      for (auto result : op->getResults())
         if (auto desc = dyn_cast<TypedValue<tt::TensorDescType>>(result))
           setEncoding(desc);
-      }
 
-      for (auto arg : op->getOperands()) {
+      for (auto arg : op->getOperands())
         if (auto desc = dyn_cast<TypedValue<tt::TensorDescType>>(arg))
           setEncoding(desc);
-      }
     }
   });
 
@@ -353,21 +349,12 @@ void assignMemoryLayouts(tt::FuncOp &func) {
   func.setFunctionType(FunctionType::get(ctx, argTys, resultTys));
 }
 
-auto assignMemoryLayouts(ModuleOp &mod) {
+void assignMemoryLayouts(ModuleOp &mod) {
   for (auto &op : *mod.getBody()) {
     if (auto func = dyn_cast<tt::FuncOp>(&op)) {
       assignMemoryLayouts(func);
     }
   }
-  llvm::MapVector<Operation *, UseInfo> descUses;
-
-  mod.walk([&](Operation *op) {
-    auto useInfo = getUseInfo(op);
-    if (useInfo)
-      descUses.insert({op, *useInfo});
-  });
-
-  return descUses;
 }
 
 class TritonNvidiaGPUOptimizeDescriptorEncodingPass
