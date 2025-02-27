@@ -264,8 +264,8 @@ LinearLayout chooseLdMatrixLayout(Attribute enc, ArrayRef<int64_t> shape,
 
 // The primary goal of this function is to efficiently load 2D tiles of a
 // tensor from shared memory using the `ds_read_tr` instruction for AMD GPUs.
-LinearLayout chooseDsReadB64Tr16Layout(Attribute enc, ArrayRef<int64_t> shape,
-                                       int32_t elemBitWidth);
+LinearLayout chooseDsReadB64TrLayout(Attribute enc, ArrayRef<int64_t> shape,
+                                     int32_t elemBitWidth);
 
 // Create LinearLayout for mxfp4 and mxfp8 operand in scaled mfma.
 // For mxfp4, we use dot layout directly. Mxfp8 is not covered by dot
