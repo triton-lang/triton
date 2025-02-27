@@ -385,6 +385,11 @@ def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [
 
   let extraClassDeclaration = [{
     RegionRange getPartitionRegions();
+
+    // Get the size and alignment of the capture list.
+    std::pair<uint64_t, uint64_t> getCaptureSizeAlign();
+    // Get the total number of extra warps required.
+    unsigned getTotalPartitionWarps();
   }];
 
   let hasVerifier = 1;

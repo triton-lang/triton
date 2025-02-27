@@ -1,5 +1,4 @@
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
-#include "mlir/Interfaces/DataLayoutInterfaces.h"
 #include "mlir/Support/LogicalResult.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"

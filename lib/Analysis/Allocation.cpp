@@ -283,6 +283,24 @@ private:
                                                           scratchAlignment);
       return;
     }
+    if (auto ws = dyn_cast<gpu::WarpSpecializeOp>(op)) {
+      // `ttg.warp_specialize` needs memory to pass its explicit captures. Pack
+      // the captures like a struct.
+      auto [captureSize, captureAlign] = ws.getCaptureSizeAlign();
+      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, captureSize,
+                                                          captureAlign);
+      return;
+    }
+    if (auto func = dyn_cast<FunctionOpInterface>(op)) {
+      unsigned numWarpIndices = 0;
+      // Warp specialization communicates states over shared memory to each
+      // warp. Add space for an i8 for each warpgroup warp.
+      func.walk([&](gpu::WarpSpecializeOp op) {
+        numWarpIndices = std::max(numWarpIndices, op.getTotalPartitionWarps());
+      });
+      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, numWarpIndices);
+      return;
+    }
     unsigned bytes = scratchSizeGetter(op);
     maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, bytes,
                                                         scratchAlignment);
@@ -374,10 +392,19 @@ private:
     // Analyze liveness of scratch buffers and virtual buffers.
     auto processScratchMemory = [&](const auto &container) {
       for (auto [op, buffer] : container) {
+        // Buffers owned by the function are assumed live for the whole
+        // function. This memory is used for warp specialization codegen.
+        // FIXME: Spooky-action-at-a-distance. Find a better way to model this.
+        if (op == operation) {
+          bufferRange.insert(
+              {buffer, Interval(size_t(), std::numeric_limits<size_t>::max())});
+          continue;
+        }
+
         // Any scratch memory's live range is the current operation's live
         // range.
-        bufferRange.insert({buffer, Interval(operationId.lookup(op),
-                                             operationId.lookup(op) + 1)});
+        bufferRange.insert(
+            {buffer, Interval(operationId.at(op), operationId.at(op) + 1)});
         LLVM_DEBUG({
           llvm::dbgs() << "-- buffer " << buffer->id << "; value: ";
           op->dump();

@@ -304,6 +304,7 @@ class CUDABackend(BaseBackend):
 
         nvidia.passes.ttnvgpuir.add_lower_mma(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
+        passes.ttgpuir.add_allocate_warp_groups(pm)
         passes.convert.add_scf_to_cf(pm)
         passes.ttgpuir.add_allocate_shared_memory(pm)
         nvidia.passes.ttnvgpuir.add_allocate_tensor_memory(pm)
@@ -312,6 +313,7 @@ class CUDABackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         nvidia.passes.ttnvgpuir.add_nvgpu_to_llvm(pm)
+        nvidia.passes.ttnvgpuir.add_warp_specialize_to_llvm(pm)
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
@@ -345,9 +347,9 @@ class CUDABackend(BaseBackend):
 
         # Get some metadata
         # warp-specialization mutates num_warps
-        num_warp_groups = src.get_int_attr("ttg.num-warp-groups-per-cta")
-        if num_warp_groups is not None:
-            metadata["num_warps"] *= num_warp_groups
+        total_num_warps = src.get_int_attr("ttg.total-num-warps")
+        if total_num_warps is not None:
+            metadata["num_warps"] = total_num_warps
         metadata["shared"] = src.get_int_attr("ttg.shared")
         metadata["tmem_size"] = src.get_int_attr("ttg.tensor_memory_size")
         metadata["global_scratch_size"] = src.get_int_attr("ttg.global_scratch_memory_size")

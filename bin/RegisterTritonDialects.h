@@ -50,6 +50,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::gpu::registerAllocateSharedMemoryPass();
   mlir::triton::gpu::registerTritonGPUAllocateWarpGroups();
   mlir::triton::gpu::registerTritonGPUGlobalScratchAllocationPass();
+  mlir::triton::registerConvertWarpSpecializeToLLVM();
   mlir::triton::registerConvertTritonGPUToLLVMPass();
   mlir::triton::registerConvertNVGPUToLLVMPass();
   mlir::registerLLVMDIScope();
@@ -72,7 +73,6 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::registerTritonAMDGPUInsertInstructionSchedHints();
   mlir::triton::registerTritonAMDGPULowerInstructionSchedHints();
 
-  // TODO: register Triton & TritonGPU passes
   registry
       .insert<mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,
               mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect,

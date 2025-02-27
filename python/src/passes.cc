@@ -63,6 +63,8 @@ void init_triton_passes_ttgpuir(py::module &&m) {
                      createTritonGPURemoveLayoutConversions);
   ADD_PASS_WRAPPER_0("add_reduce_data_duplication",
                      createTritonGPUReduceDataDuplication);
+  ADD_PASS_WRAPPER_0("add_allocate_warp_groups",
+                     createTritonGPUAllocateWarpGroups);
   ADD_PASS_WRAPPER_0("add_allocate_shared_memory", createAllocateSharedMemory);
   ADD_PASS_WRAPPER_0("add_allocate_global_scratch_memory",
                      createTritonGPUGlobalScratchAllocationPass);
