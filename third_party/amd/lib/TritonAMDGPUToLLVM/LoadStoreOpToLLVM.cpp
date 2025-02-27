@@ -1459,27 +1459,28 @@ struct AtomicRMWOpConversion
       endBlock->addArgument({retType}, {loc});
 
       rewriter.setInsertionPointToEnd(curBlock);
-      if (enableIntraWaveReduce) {
-        // permute to make active lanes at the begining in a wave
-        Value maskI32 = b.zext(i32_ty, rmwMask);
-        Value permuteOffset = genPrefixSum(rewriter, maskI32);
-        permuteOffset = b.and_(permuteOffset, maskI32);
-        int waveSize = 64;
-        permuteOffset = b.select(b.icmp_eq(permuteOffset, b.i32_val(0)), permuteOffset, b.i32_val(waveSize));
-        permuteOffset = b.sub(permuteOffset, b.i32_val(1));
-        permuteOffset = b.mul(permuteOffset, b.i32_val(4));
+      // if (enableIntraWaveReduce) {
+      //   // permute to make active lanes at the begining in a wave
+      //   Value maskI32 = b.zext(i32_ty, rmwMask);
+      //   Value permuteOffset = genPrefixSum(rewriter, maskI32);
+      //   permuteOffset = b.and_(permuteOffset, maskI32);
+      //   int waveSize = 64;
+      //   permuteOffset = b.select(b.icmp_eq(permuteOffset, b.i32_val(0)), b.i32_val(waveSize), permuteOffset);
+      //   permuteOffset = b.sub(permuteOffset, b.i32_val(1));
+      //   permuteOffset = b.mul(permuteOffset, b.i32_val(4));
+      //   operand = genI32TiledOp(rewriter, genPermute, operand, permuteOffset);
+      //   Value castedAddr = b.ptrtoint(i64_ty, rmwPtr);
+      //   castedAddr = genI32TiledOp(rewriter, genPermute, castedAddr, permuteOffset);
+      //   rmwPtr = b.inttoptr(rmwPtr.getType(), castedAddr);
 
-        operand = genI32TiledOp(rewriter, genPermute, operand, permuteOffset);
-        rmwPtr = genI32TiledOp(rewriter, genPermute, rmwPtr, permuteOffset);
-
-        // update mask
-        Value maskFlag = targetInfo.ballot(rewriter, loc, i64_ty, rmwMask);
-        Value numActiveLanes =
-            b.trunc(i32_ty, generatePopcount64(rewriter, maskFlag));
+      //   // update mask
+      //   Value maskFlag = targetInfo.ballot(rewriter, loc, i64_ty, rmwMask);
+      //   Value numActiveLanes =
+      //       b.trunc(i32_ty, generatePopcount64(rewriter, maskFlag));
     
-        Value laneID = b.urem(tid, b.i32_val(waveSize));
-        rmwMask = b.icmp_ult(laneID, numActiveLanes);
-      }
+      //   Value laneID = b.urem(tid, b.i32_val(waveSize));
+      //   rmwMask = b.icmp_ult(laneID, numActiveLanes);
+      // }
       rewriter.create<LLVM::CondBrOp>(loc, rmwMask, atomicBlock, endBlock,
                                       undefVal);
 
