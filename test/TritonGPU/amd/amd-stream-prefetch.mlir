@@ -16,12 +16,12 @@
 // An extra register buffer for global loads.
 // GLOBAL_1-LABEL: tt.func @matmul_loop
 // GLOBAL_1-COUNT-2: tt.load
-// GLOBAL_1-COUNT-2: ttg.local_store
+// GLOBAL_1-COUNT-2: ttg.local_alloc
 // GLOBAL_1-COUNT-2: tt.load
 // GLOBAL_1: scf.for
 // GLOBAL_1-COUNT-2: ttg.local_load
 // GLOBAL_1: tt.dot
-// GLOBAL_1-COUNT-2: ttg.local_store
+// GLOBAL_1-COUNT-2: ttg.local_alloc
 // GLOBAL_1-COUNT-2: tt.load
 // GLOBAL_1: scf.yield
 // GLOBAL_1-COUNT-2: tt.dot
@@ -30,12 +30,12 @@
 // Two extra register buffers for global loads.
 // GLOBAL_2-LABEL: tt.func @matmul_loop
 // GLOBAL_2-COUNT-4: tt.load
-// GLOBAL_2-COUNT-2: ttg.local_store
+// GLOBAL_2-COUNT-2: ttg.local_alloc
 // GLOBAL_2-COUNT-2: tt.load
 // GLOBAL_2: scf.for
 // GLOBAL_2-COUNT-2: ttg.local_load
 // GLOBAL_2: tt.dot
-// GLOBAL_2-COUNT-2: ttg.local_store
+// GLOBAL_2-COUNT-2: ttg.local_alloc
 // GLOBAL_2-COUNT-2: tt.load
 // GLOBAL_2: scf.yield
 // GLOBAL_2-COUNT-3: tt.dot
@@ -44,13 +44,13 @@
 // An extra register buffer for global loads and an extra register buffer for local_loads.
 // GLOBAL_LOCAL_1-LABEL: tt.func @matmul_loop
 // GLOBAL_LOCAL_1-COUNT-2: tt.load
-// GLOBAL_LOCAL_1-COUNT-2: ttg.local_store
+// GLOBAL_LOCAL_1-COUNT-2: ttg.local_alloc
 // GLOBAL_LOCAL_1: tt.load
 // GLOBAL_LOCAL_1: ttg.local_load
 // GLOBAL_LOCAL_1: tt.load
 // GLOBAL_LOCAL_1: ttg.local_load
 // GLOBAL_LOCAL_1: scf.for
-// GLOBAL_LOCAL_1-COUNT-2: ttg.local_store
+// GLOBAL_LOCAL_1-COUNT-2: ttg.local_alloc
 // GLOBAL_LOCAL_1: tt.dot
 // GLOBAL_LOCAL_1: tt.load
 // GLOBAL_LOCAL_1: ttg.local_load
@@ -63,12 +63,12 @@
 // One Local buffer.
 // LOCAL_1-LABEL: tt.func @matmul_loop
 // LOCAL_1-COUNT-2: tt.load
-// LOCAL_1-COUNT-2: ttg.local_store
+// LOCAL_1-COUNT-2: ttg.local_alloc
 // LOCAL_1-COUNT-2: ttg.local_load
 // LOCAL_1: scf.for
 // LOCAL_1-COUNT-2: tt.load
 // LOCAL_1: tt.dot
-// LOCAL_1-COUNT-2: ttg.local_store
+// LOCAL_1-COUNT-2: ttg.local_alloc
 // LOCAL_1-COUNT-2: ttg.local_load
 // LOCAL_1: scf.yield
 // LOCAL_1: tt.dot

@@ -81,8 +81,9 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
                      mlir::createTritonAMDGPUReorderInstructionsPass);
   ADD_PASS_WRAPPER_0("add_block_pingpong",
                      mlir::createTritonAMDGPUBlockPingpongPass);
-  ADD_PASS_WRAPPER_3("add_stream_pipeline",
-                     mlir::createTritonAMDGPUStreamPipelinePass, int, int, int);
+  ADD_PASS_WRAPPER_4("add_stream_pipeline",
+                     mlir::createTritonAMDGPUStreamPipelinePass, int, int, int,
+                     int);
 }
 
 void addControlConstant(llvm::Module *module, const char *name,
