@@ -615,7 +615,10 @@ FailureOr<scf::ForOp> preProcessLoopForTC05MMAPipelining(scf::ForOp forOp,
     }
   });
 
-  if (mmaOps.empty()) {
+  // Temporarily disable mma pipelining if there are more than one mmaOp in the
+  // loop. This is a workaround for difficult to solve scheduling issues with
+  // loads feeding into non-0 stage ops.
+  if (mmaOps.empty() || mmaOps.size() > 1) {
     return failure();
   }
 
