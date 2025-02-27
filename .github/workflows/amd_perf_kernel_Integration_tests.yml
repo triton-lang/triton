@@ -122,6 +122,7 @@ jobs:
           pytest -vvv ./python/perf-kernels/fused_moe/moe-gemm.py
           sh ./python/perf-kernels/streamk/utils/unittest.sh
           pytest -vvv ./python/perf-kernels/multreduce_matmul_kernel.py
+          pytest -vvv ./python/perf-kernels/MLA_decode_rope.py
       - name: Run Perf Kernels Benchmark
         run: |
           python ./python/perf-kernels/flash-attention.py
@@ -130,3 +131,4 @@ jobs:
           python ./python/perf-kernels/rmsnorm.py --mode bwd
           python ./python/perf-kernels/layernorm.py
           python ./python/perf-kernels/multreduce_matmul_kernel.py bench
+          python ./python/perf-kernels/MLA_decode_rope.py
