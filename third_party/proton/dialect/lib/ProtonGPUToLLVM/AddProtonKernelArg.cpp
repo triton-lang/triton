@@ -40,7 +40,8 @@ static void filterFuncAttributes(triton::FuncOp op, bool filterArgAttrs,
   }
 }
 
-triton::FuncOp amendFuncOp(triton::FuncOp funcOp, IRRewriter &rewriter) {
+triton::FuncOp insertAmendedFuncOp(triton::FuncOp funcOp,
+                                   IRRewriter &rewriter) {
   auto moduleOp = funcOp->getParentOfType<ModuleOp>();
   Location loc = moduleOp->getLoc();
   auto ctx = funcOp->getContext();
@@ -93,7 +94,7 @@ struct AddProtonKernelArg
 
     IRRewriter rewriter(ctx);
     rewriter.setInsertionPointToStart(moduleOp.getBody());
-    auto amendedFuncOp = amendFuncOp(funcOp, rewriter);
+    auto amendedFuncOp = insertAmendedFuncOp(funcOp, rewriter);
     rewriter.eraseOp(funcOp);
     return;
   }
