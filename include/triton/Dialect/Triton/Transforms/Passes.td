@@ -64,8 +64,6 @@ def TritonHoistLoad : Pass</*cli-arg*/"triton-hoist-load", /*Op*/"mlir::ModuleOp
   let summary = "Hoists load ops out of loops.";
   let description = [{
     This pass hoists load ops out of loops that consists of pure/read-only ops.
-    Loops that also have write side effects specifically print and assert ops
-    are also eligible.
   }];
   let constructor = "mlir::triton::createHoistLoadPass()";
   let dependentDialects = ["mlir::triton::TritonDialect"];

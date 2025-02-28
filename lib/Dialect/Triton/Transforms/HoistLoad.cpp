@@ -17,45 +17,16 @@ namespace {
 class HoistLoadPass : public TritonHoistLoadBase<HoistLoadPass> {
 
   DenseMap<scf::ForOp, bool> visitedForOps;
-  // This function checks if the root operation consists of ops with only read
-  // side-effects or with write side-effects but are only PrintOp or
-  // AssertOp.
-  bool isOnlyReadPrintAssert(Operation *rootOp) {
-    SmallVector<Operation *> effectingOps(1, rootOp);
-    while (!effectingOps.empty()) {
-      Operation *op = effectingOps.pop_back_val();
 
-      // If the operation has recursive effects, push all of the nested
-      // operations on to the stack to consider.
-      bool hasRecursiveEffects =
-          op->hasTrait<OpTrait::HasRecursiveMemoryEffects>();
-      if (hasRecursiveEffects) {
-        for (Region &region : op->getRegions()) {
-          for (Block &block : region) {
-            for (Operation &nestedOp : block) {
-              effectingOps.push_back(&nestedOp);
-            }
-          }
-        }
-      }
-      SmallVector<MemoryEffects::EffectInstance> effects;
-      if (auto effectInterface = dyn_cast<MemoryEffectOpInterface>(op)) {
-        effectInterface.getEffects(effects);
-      } else if (!hasRecursiveEffects) {
-        // the operation does not have recursive memory effects or implement
-        // the memory effect op interface. Its effects are unknown.
-        return false;
-      }
-      bool allReadPrintOrAssert = llvm::all_of(
-          effects, [&](const MemoryEffects::EffectInstance &effect) {
-            return isa<MemoryEffects::Read>(effect.getEffect()) ||
-                   (isa<MemoryEffects::Write>(effect.getEffect()) &&
-                    isa<PrintOp, AssertOp>(op));
-          });
-      if (!allReadPrintOrAssert)
-        return false;
-    }
-    return true;
+  bool isMemoryEffectFreeOrOnlyRead(Operation *op) {
+    std::optional<SmallVector<MemoryEffects::EffectInstance>> effects =
+        getEffectsRecursively(op);
+    if (!effects)
+      return false;
+    return llvm::all_of(*effects,
+                        [&](const MemoryEffects::EffectInstance &effect) {
+                          return isa<MemoryEffects::Read>(effect.getEffect());
+                        });
   }
 
   void runOnOperation() override {
@@ -74,7 +45,7 @@ class HoistLoadPass : public TritonHoistLoadBase<HoistLoadPass> {
             if (!isa<LoadOp>(op))
               return false;
             if (!visitedForOps.contains(forOp))
-              visitedForOps[forOp] = isOnlyReadPrintAssert(forOp);
+              visitedForOps[forOp] = isMemoryEffectFreeOrOnlyRead(forOp);
             return visitedForOps[forOp];
           },
           // moveOutOfRegion

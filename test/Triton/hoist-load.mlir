@@ -75,15 +75,9 @@ tt.func @hoist_load(%arg0: tensor<1024x!tt.ptr<f32>>, %arg1: tensor<1024xi32>, %
 tt.func @hoist_load_with_print_in_loop(%arg0: tensor<1024x!tt.ptr<f32>>, %arg1: tensor<1024xi32>, %arg2: tensor<1024xi32>, %arg3: i32, %arg4 : i32, %arg5: tensor<1024x!tt.ptr<f32>>) {
   %cst = arith.constant dense<0.000000e+00> : tensor<1024xf32>
   %c1_i32 = arith.constant 1 : i32
-  // Check if the load is hoisted when there is a tt.print which has a write side effect
   // CHECK-LABEL: hoist_load_with_print_in_loop
-  // CHECK: %[[ZERO:.*]] = arith.constant dense<false>
-  // CHECK: %[[MASK:.*]] = arith.cmpi
-  // CHECK: %[[TRIP_COUNT_CMP:.*]] = arith.cmpi slt, %[[LB:.*]], %[[UB:.*]]
-  // CHECK: %[[SELECT:.*]] = arith.select %[[TRIP_COUNT_CMP]], %[[MASK]], %[[ZERO]]
-  // CHECK: tt.load %[[_:.*]], %[[SELECT]]
   // CHECK: scf.for
-  // CHECK-NOT: tt.load
+  // CHECK: tt.load
   %0 = arith.cmpi slt, %arg1, %arg2 : tensor<1024xi32>
   %1 = scf.for %arg7 = %arg3 to %arg4 step %c1_i32 iter_args(%arg6 = %cst) -> (tensor<1024xf32>)  : i32 {
     %2 = tt.load %arg0, %0 : tensor<1024x!tt.ptr<f32>>
@@ -100,15 +94,9 @@ tt.func @hoist_load_with_print_in_loop(%arg0: tensor<1024x!tt.ptr<f32>>, %arg1: 
 tt.func @hoist_load_with_assert_in_loop(%arg0: tensor<1024x!tt.ptr<f32>>, %arg1: tensor<1024xi32>, %arg2: tensor<1024xi32>, %arg3: i32, %arg4 : i32, %arg5: tensor<1024x!tt.ptr<f32>>) {
   %cst = arith.constant dense<0.000000e+00> : tensor<1024xf32>
   %c1_i32 = arith.constant 1 : i32
-  // Check if the load is hoisted when there is a tt.assert which has a write side effect
   // CHECK-LABEL: hoist_load_with_assert_in_loop
-  // CHECK: %[[ZERO:.*]] = arith.constant dense<false>
-  // CHECK: %[[MASK:.*]] = arith.cmpi
-  // CHECK: %[[TRIP_COUNT_CMP:.*]] = arith.cmpi slt, %[[LB:.*]], %[[UB:.*]]
-  // CHECK: %[[SELECT:.*]] = arith.select %[[TRIP_COUNT_CMP]], %[[MASK]], %[[ZERO]]
-  // CHECK: tt.load %[[_:.*]], %[[SELECT]]
   // CHECK: scf.for
-  // CHECK-NOT: tt.load
+  // CHECK: tt.load
   %0 = arith.cmpi slt, %arg1, %arg2 : tensor<1024xi32>
   %cmp = arith.cmpi sge, %arg4, %arg3 : i32
   %1 = scf.for %arg7 = %arg3 to %arg4 step %c1_i32 iter_args(%arg6 = %cst) -> (tensor<1024xf32>)  : i32 {
