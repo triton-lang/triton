@@ -41,13 +41,11 @@ std::pair<Type, Value> printfPromoteValue(RewriterBase &rewriter, Value value, b
   auto loc = UnknownLoc::get(context);
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-  bool isUnsigned = type.isUnsignedInteger();
   if (type.isIntOrIndex() && type.getIntOrFloatBitWidth() < 32) {
+    newType = i32_ty;
     if (isSigned) {
-      newType = i32_ty;
       newOp = b.sext(newType, value);
     } else {
-      newType = ui32_ty;
       newOp = b.zext(newType, value);
     }
   } else if (type.isBF16() || type.isF16() || type.isF32()) {
