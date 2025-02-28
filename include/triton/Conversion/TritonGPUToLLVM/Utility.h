@@ -6,6 +6,7 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/MLIRTypes.h"
@@ -279,6 +280,29 @@ struct TritonLLVMOpBuilder {
   Location loc;
   OpBuilder *builder;
 };
+
+// This builder combines an IRRewriter and a TritonLLVMOpBuilder into one,
+// making it easy to create operations with an implicit location and create LLVM
+// operations with shorthands.
+class TritonLLVMIRRewriter : public IRRewriter, public TritonLLVMOpBuilder {
+public:
+  // Create a builder with an implicit location. Arguments are forwarded to
+  // IRRewriter's constructor.
+  template <typename... Args>
+  TritonLLVMIRRewriter(Location loc, Args &&...args)
+      : IRRewriter(std::forward<Args>(args)...),
+        TritonLLVMOpBuilder(loc, *this) {}
+
+  // Get the implicit location.
+  Location getLoc() const { return loc; }
+  // Set the implicit location used to build ops.
+  void setLoc(Location loc) { this->loc = loc; }
+
+  // Wrapper for op creation that passes an implicit location.
+  template <typename OpTy, typename... Args> OpTy create(Args &&...args) {
+    return OpBuilder::create<OpTy>(loc, std::forward<Args>(args)...);
+  }
+};
 } // namespace mlir::triton
 
 // Types
@@ -548,8 +572,10 @@ inline Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
                                  const TargetInfoBase &target, Operation *op) {
   auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(),
                                           target.getSharedAddressSpace());
-  FunctionOpInterface func =
-      op->template getParentOfType<FunctionOpInterface>();
+  auto func = op->template getParentOfType<FunctionOpInterface>();
+  if (!func)
+    func = cast<FunctionOpInterface>(op);
+
   assert(op->hasAttr("allocation.offset"));
   size_t offset = cast<IntegerAttr>(op->getAttr("allocation.offset"))
                       .getValue()
@@ -575,15 +601,18 @@ Value mxfpScaleBf16(RewriterBase &rewriter, Location loc, Value v, Value scale,
 // Hardware Indices
 // -----------------------------------------------------------------------
 
+// If an operation is contained within a warp specialize region, this returns
+// the thread ID offset of that warpgroup.
+std::optional<int> getWarpGroupStartThreadId(Block *block);
+
 // Returns CTA level thread ID.
 Value getThreadId(OpBuilder &rewriter, Location loc);
 
 // Get the lane ID, which is index of the thread within its warp.
-Value getLaneId(OpBuilder &rewriter, Location loc, unsigned threadsPerWarp);
+Value getLaneId(OpBuilder &rewriter, Location loc);
 
 // Get the lane ID and warp ID.
-std::pair<Value, Value> getLaneAndWarpId(OpBuilder &rewriter, Location loc,
-                                         unsigned threadsPerWarp);
+std::pair<Value, Value> getLaneAndWarpId(OpBuilder &rewriter, Location loc);
 
 // -----------------------------------------------------------------------
 // Shared memory utilities

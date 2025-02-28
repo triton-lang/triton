@@ -332,7 +332,7 @@ def TTNG_TCGen5MMAOp : TTNG_Op<"tc_gen5_mma", [DeclareOpInterfaceMethods<MemoryE
 
     let description = [{
         $d += matrix_multiply($a, $b).
-        If not barrier is given the op is assumed to be synchronous otherwise the op will trigger a commit/arrive on the given barrier.
+        If no barrier is given the op is assumed to be synchronous otherwise the op will trigger a commit/arrive on the given barrier.
         If there is a barrier the result will be safe to read after a barrier wait.
         If $two_ctas is set the op will execute a matmul across two contiguous CTAs, it will read the data distributed across the two CTAs.
         and syncronize both CTAs if the op is synchronous.
@@ -355,7 +355,7 @@ def TTNG_TCGen5MMAScaledOp : TTNG_Op<"tc_gen5_mma_scaled", [DeclareOpInterfaceMe
 
     let description = [{
         $d += matrix_multiply(scale($lhs, $lhs_scale), scale(rlhs, $rhs_scale))
-        If not barrier is given the op is assumed to be synchronous otherwise the op will trigger a commit/arrive on the given barrier.
+        If no barrier is given the op is assumed to be synchronous otherwise the op will trigger a commit/arrive on the given barrier.
         If there is a barrier the result will be safe to read after a barrier wait.
     }];
 
@@ -400,7 +400,7 @@ def TTNG_TMEMStoreOp : TTNG_Op<"tmem_store", [MemoryEffects<[MemWrite]>]> {
   let hasVerifier = 1;
 }
 
-def TTNG_TMEMAllocOp : TTNG_Op<"tmem_alloc", [MemoryEffects<[MemWrite]>]> {
+def TTNG_TMEMAllocOp : TTNG_Op<"tmem_alloc", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
   let summary = "allocate tensor memory";
   let description = [{
     This operation allocates buffer in tensor memory and return a descriptor
@@ -417,7 +417,7 @@ def TTNG_TMEMAllocOp : TTNG_Op<"tmem_alloc", [MemoryEffects<[MemWrite]>]> {
   let hasVerifier = 1;
 }
 
-def TTNG_TMEMCopyOp : TTNG_Op<"tmem_copy", [MemoryEffects<[MemWrite]>]> {
+def TTNG_TMEMCopyOp : TTNG_Op<"tmem_copy", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
   let summary = "Initiate an asynchronous copy operation from shared memory to the Tensor Memory.";
 
   let description = [{

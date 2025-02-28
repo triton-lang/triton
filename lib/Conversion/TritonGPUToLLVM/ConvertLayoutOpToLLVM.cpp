@@ -1,5 +1,4 @@
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
-#include "mlir/Interfaces/DataLayoutInterfaces.h"
 #include "mlir/Support/LogicalResult.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
@@ -198,8 +197,7 @@ struct ConvertLayoutOpUsingLinearLayoutsConversion
     StringAttr kOffset = str_attr("offset");
     StringAttr kIteration = str_attr("iteration");
 
-    auto [laneId, warpId] =
-        getLaneAndWarpId(rewriter, loc, srcLayout.getInDimSize(kLane));
+    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
 
     auto scratchConfig =
         getScratchConfigForCvt(op.getSrc().getType(), op.getType());
@@ -403,7 +401,7 @@ void ConvertLayoutOpUsingLinearLayoutsConversion::transferWithinWarp(
       unpackLLElements(loc, adaptor.getSrc(), rewriter);
   SmallVector<Value> shflOuts(Cp.getInDimSize(kRegister));
 
-  Value laneId = getLaneId(rewriter, loc, Cp.getInDimSize(kLane));
+  Value laneId = getLaneId(rewriter, loc);
 
   // Emit one shuffle per destination register.
   for (int i : llvm::seq(shflOuts.size())) {

@@ -1,4 +1,3 @@
-#include "mlir/Pass/Pass.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h"
@@ -8,26 +7,23 @@
 using namespace mlir;
 using namespace mlir::triton;
 
-namespace mlir {
-namespace triton {
+namespace mlir::triton::gpu {
 #define GEN_PASS_DEF_ALLOCATESHAREDMEMORY
 #include "triton/Conversion/TritonGPUToLLVM/Passes.h.inc"
-} // namespace triton
-} // namespace mlir
+} // namespace mlir::triton::gpu
 
 namespace {
-
 struct AllocateSharedMemory
-    : public mlir::triton::impl::AllocateSharedMemoryBase<
+    : public mlir::triton::gpu::impl::AllocateSharedMemoryBase<
           AllocateSharedMemory> {
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     MLIRContext *ctx = &getContext();
     ModuleAllocation allocation(mod);
 
-    mod.walk([&](FunctionOpInterface funcOp) {
+    mod.walk<mlir::WalkOrder::PreOrder>([&](FunctionOpInterface funcOp) {
+      auto *funcAllocation = allocation.getFuncData(funcOp);
       funcOp.walk([&](Operation *op) {
-        auto *funcAllocation = allocation.getFuncData(funcOp);
         auto oBufferId = funcAllocation->getBufferId(op);
         int offset = -1;
         if (oBufferId != Allocation::InvalidBufferId)
@@ -43,27 +39,11 @@ struct AllocateSharedMemory
         op->setAttr("allocation.offset",
                     IntegerAttr::get(IntegerType::get(ctx, 32), offset));
       });
+      return WalkResult::skip();
     });
     mod->setAttr("ttg.shared",
                  mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 32),
                                         allocation.getSharedMemorySize()));
   }
 };
-
 } // namespace
-
-namespace mlir {
-
-namespace triton {
-
-namespace gpu {
-
-std::unique_ptr<OperationPass<ModuleOp>> createAllocateSharedMemoryPass() {
-  return std::make_unique<AllocateSharedMemory>();
-}
-
-} // namespace gpu
-
-} // namespace triton
-
-} // namespace mlir
