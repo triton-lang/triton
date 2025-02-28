@@ -364,6 +364,123 @@ struct BufferLoadOpConversion
   }
 };
 
+struct BufferLoadToLocalOpConversion
+    : public ConvertOpToLLVMPattern<triton::amdgpu::BufferLoadToLocalOp>,
+      public LoadStoreConversionBase {
+  BufferLoadToLocalOpConversion(LLVMTypeConverter &converter,
+                                const AMD::TargetInfo &targetInfo,
+                                ModuleAxisInfoAnalysis &axisAnalysisPass,
+                                PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit),
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+
+  LogicalResult
+  matchAndRewrite(triton::amdgpu::BufferLoadToLocalOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op->getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    LLVM::AMD::BufferEmitter bufferEmitter(rewriter, loc, targetInfo);
+
+    // Original values
+    Value ptr = op.getPtr();
+    Value offset = op.getOffsets();
+    Value mask = op.getMask();
+
+    // Converted values
+    Value llPtr = adaptor.getPtr();
+    Value llOffset = adaptor.getOffsets();
+    Value llDst = adaptor.getDest();
+    Value llMask = adaptor.getMask();
+    Value llOther = adaptor.getOther();
+    Value llStride = adaptor.getStride();
+
+    RankedTensorType ptrType =
+        cast<RankedTensorType>(getPointerTypeWithShape(ptr, offset));
+    unsigned numElems = getTotalElemsPerThread(ptrType);
+
+    // We can load N elements at a time if:
+    //  1. Every group of N source pointers are contiguous.  For example, if
+    //     N=2, then the pointers should be [x, x+1, y, y+1, ...].
+    //  2. The mask (if present) has "alignment" N, meaning that each group of N
+    //     mask bits are the same.  For example if N=2, the mask must be
+    //     [x, x, y, y, ...].
+    unsigned vec = getVectorSize(ptr, offset, axisAnalysisPass);
+    SmallVector<Value> maskElems =
+        getMaskElemsAndUpdateVeclen(rewriter, loc, llMask, mask, vec);
+
+    SmallVector<Value> offsetElems = unpackLLElements(loc, llOffset, rewriter);
+    assert(offsetElems.size() == numElems);
+
+    SmallVector<Value> otherElems;
+    if (llOther)
+      otherElems = unpackLLElements(loc, llOther, rewriter);
+
+    // buffer_load into LDS does not support per lane offsets.
+    // We need to ensure that we write coalesced into shared memory.
+    auto dstTy = op.getDest().getType();
+    if (!LLVM::AMD::canCoalesceWriteIntoSharedMemory(rewriter, ptrType, dstTy,
+                                                     vec)) {
+      return rewriter.notifyMatchFailure(op,
+                                         "does not write coalesced into LDS");
+    }
+
+    auto resElemTy = getTypeConverter()->convertType(dstTy.getElementType());
+    auto smemObj = mlir::LLVM::getSharedMemoryObjectFromStruct(
+        loc, llDst, resElemTy, rewriter);
+
+    // First we determine the vector size per load and collect the
+    // shared addresses. This will only emit the address calculation and not the
+    // actual loads
+    VectorType vecTy;
+    SmallVector<Value> shmemAddrs;
+    bool ok = emitTransferBetweenRegistersAndShared(
+        ptrType, dstTy, resElemTy, {}, smemObj, loc, rewriter, targetInfo,
+        [&](VectorType vecTy_, Value shmemAddr) {
+          vecTy = vecTy_;
+          shmemAddrs.push_back(shmemAddr);
+        });
+    assert(ok);
+
+    int vecBits = vecTy.getNumElements() * vecTy.getElementTypeBitWidth();
+    if (!targetInfo.supportsDirectToLdsLoadBitWidth(vecBits)) {
+      return rewriter.notifyMatchFailure(
+          op, "Buffer load to local does not support the required load vector "
+              "bitwidth" +
+                  std::to_string(vecBits));
+    }
+
+    int vecBytes = vecBits / 8;
+    assert(llvm::isPowerOf2_32(vecBytes));
+    Value vecBytesVal = b.i32_val(vecBytes);
+
+    // Create the resource descriptor and then emit the buffer_loads to lds
+    // based on the collected shared addresses and vector size
+    Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr, llStride);
+
+    for (int i = 0; i < shmemAddrs.size(); i++) {
+      auto srcIdx = i * vec;
+      auto offsetIn = offsetElems[srcIdx];
+
+      Value pred = mask ? maskElems[srcIdx] : b.true_val();
+      bufferEmitter.emitLoadToLds(vecTy, vecBytesVal, rsrcDesc, offsetIn,
+                                  shmemAddrs[i], pred, op.getCache());
+      if (!otherElems.empty()) {
+        Value storeVal = packElementRangeIntoVector(
+            rewriter, this->getTypeConverter(), loc, vecTy, otherElems, srcIdx);
+        llStore(rewriter, loc, shmemAddrs[i], storeVal,
+                b.icmp_ne(maskElems[srcIdx], b.true_val()), op.getCache());
+      }
+    }
+
+    // Drop the result token.
+    Value zero = rewriter.create<LLVM::ConstantOp>(
+        op.getLoc(), IntegerType::get(op.getContext(), 32),
+        rewriter.getI32IntegerAttr(0));
+    rewriter.replaceOp(op, zero);
+    return success();
+  }
+};
+
 struct AsyncCopyGlobalToLocalOpConversion
     : public ConvertOpToLLVMPattern<triton::gpu::AsyncCopyGlobalToLocalOp>,
       public LoadStoreConversionBase {
@@ -373,22 +490,6 @@ struct AsyncCopyGlobalToLocalOpConversion
                                      PatternBenefit benefit)
       : ConvertOpToLLVMPattern(converter, benefit),
         LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
-
-  bool supportsLoadWidth(unsigned bits,
-                         const AMD::TargetInfo &targetInfo) const {
-    switch (targetInfo.getISAFamily()) {
-    case ISAFamily::CDNA1:
-    case ISAFamily::CDNA2:
-    case ISAFamily::CDNA3:
-      return llvm::is_contained({32, 16, 8}, bits);
-    case ISAFamily::CDNA4:
-      return llvm::is_contained({128, 96, 32, 16, 8}, bits);
-    default:
-      break;
-    }
-
-    return false;
-  }
 
   LogicalResult
   matchAndRewrite(triton::gpu::AsyncCopyGlobalToLocalOp op, OpAdaptor adaptor,
@@ -425,37 +526,21 @@ struct AsyncCopyGlobalToLocalOpConversion
     //     [x, x, y, y, ...].
     unsigned maxVec =
         mlir::LLVM::AMD::getContiguity(op.getSrc(), axisAnalysisPass);
-    Value mask = op.getMask();
-    if (mask) {
-      maxVec = std::min(maxVec, getMaskAlignment(mask));
-    }
+    auto maskElements = getMaskElemsAndUpdateVeclen(
+        rewriter, loc, adaptor.getMask(), op.getMask(), maxVec);
 
     // global.load.lds does not support per lane offsets.
     // We need to ensure that we write coalesced into shared memory. This means
-    // that the kLane dim needs to be contigeous based on the vectorization
-    // size.
-    auto shape = dstTy.getShape();
-    LinearLayout srcLayout =
-        triton::gpu::toLinearLayout(shape, srcTy.getEncoding());
-    LinearLayout sharedLayout =
-        triton::gpu::toLinearLayout(shape, dstTy.getEncoding());
-    LinearLayout srcToSharedLayout = srcLayout.invertAndCompose(sharedLayout);
-
-    StringAttr kLane = rewriter.getStringAttr("lane");
-    for (int inLane : llvm::seq(srcToSharedLayout.getInDimSizeLog2(kLane))) {
-      auto basis = srcToSharedLayout.getBasis(kLane, inLane)[0];
-      unsigned expected = maxVec * (1 << inLane);
-      if (basis != expected) {
-        LDBG("detected uncoalesced layout from blocked to shared in async copy "
-             "for lane "
-             << 1 + inLane << "; given " << basis << " but expected "
-             << expected);
-        return rewriter.notifyMatchFailure(op,
-                                           "does not write coalesced into LDS");
-      }
+    // that the kLane dim needs to be contigeous based on the vector size.
+    if (!LLVM::AMD::canCoalesceWriteIntoSharedMemory(rewriter, srcTy, dstTy,
+                                                     maxVec)) {
+      return rewriter.notifyMatchFailure(op,
+                                         "does not write coalesced into LDS");
     }
 
-    // Addresses to store into, one per `vecTy`.
+    // First we determine the vector size per load and collect the
+    // shared addresses. This will only emit the address calculation and not the
+    // actual loads
     VectorType vecTy;
     SmallVector<Value> shmemAddrs;
     bool ok = emitTransferBetweenRegistersAndShared(
@@ -467,9 +552,10 @@ struct AsyncCopyGlobalToLocalOpConversion
     assert(ok);
 
     int vecBits = vecTy.getNumElements() * vecTy.getElementTypeBitWidth();
-    if (!supportsLoadWidth(vecBits, targetInfo)) {
+    if (!targetInfo.supportsDirectToLdsLoadBitWidth(vecBits)) {
       return rewriter.notifyMatchFailure(
-          op, "Async copy does not support the required load vectorization");
+          op, "Async copy does not support the required load vector bitwidth" +
+                  std::to_string(vecBits));
     }
 
     int vecBytes = vecBits / 8;
@@ -487,18 +573,19 @@ struct AsyncCopyGlobalToLocalOpConversion
       assert(srcElems.size() == maskElems.size());
     }
 
-    Value other = op.getOther();
     SmallVector<Value> otherElems;
-    if (other) {
+    if (op.getOther()) {
       otherElems = unpackLLElements(loc, adaptor.getOther(), rewriter);
       assert(srcElems.size() == otherElems.size());
     }
 
+    // Emit the load to lds based on the collected shared addresses and vector
+    // size
     for (int i = 0; i < shmemAddrs.size(); i++) {
       auto srcIdx = i * maxVec;
       auto srcPtr = srcElems[srcIdx];
 
-      if (!mask) {
+      if (maskElems.empty()) {
         rewriter.create<ROCDL::GlobalLoadLDSOp>(
             loc, srcPtr, shmemAddrs[i], vecBytesVal, /*offset=*/b.i32_val(0),
             cacheModifiers);
@@ -519,7 +606,7 @@ struct AsyncCopyGlobalToLocalOpConversion
 
       rewriter.create<LLVM::BrOp>(loc, afterLoad);
       rewriter.setInsertionPointToStart(afterLoad);
-      if (other) {
+      if (!otherElems.empty()) {
         Value storeVal = packElementRangeIntoVector(
             rewriter, this->getTypeConverter(), loc, vecTy, otherElems, srcIdx);
         llStore(rewriter, loc, shmemAddrs[i], storeVal,
@@ -1848,11 +1935,11 @@ void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        RewritePatternSet &patterns,
                                        ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                        PatternBenefit benefit) {
-  patterns
-      .add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
-           StoreOpConversion, BufferLoadOpConversion, BufferStoreOpConversion,
-           BufferAtomicRMWOpConversion, AsyncCopyGlobalToLocalOpConversion>(
-          typeConverter, targetInfo, axisInfoAnalysis, benefit);
+  patterns.add<AtomicCASOpConversion, AtomicRMWOpConversion, LoadOpConversion,
+               StoreOpConversion, BufferLoadOpConversion,
+               BufferLoadToLocalOpConversion, BufferStoreOpConversion,
+               BufferAtomicRMWOpConversion, AsyncCopyGlobalToLocalOpConversion>(
+      typeConverter, targetInfo, axisInfoAnalysis, benefit);
   patterns.add<AsyncWaitOpConversion>(typeConverter, targetInfo, benefit);
   patterns.add<AsyncCommitGroupOpConversion>(typeConverter, benefit);
 }
