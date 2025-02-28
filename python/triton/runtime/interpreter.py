@@ -306,6 +306,9 @@ class InterpreterBuilder:
     def get_double_ty(self):
         return tl.float64
 
+    def get_int1_ty(self):
+        return tl.int1
+
     def get_int8_ty(self):
         return tl.int8
 

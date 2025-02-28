@@ -7168,3 +7168,14 @@ def test_aliasing(device):
     buffer = torch.zeros(1, device=device)
     aliasing_kernel[(1, )](buffer, buffer)
     assert buffer[0] == 1
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype", map(tl.dtype, tl.dtype.SINT_TYPES + tl.dtype.UINT_TYPES + tl.dtype.STANDARD_FP_TYPES))
+def test_dtype_tensor(device, dtype):
+
+    @triton.jit
+    def dtype_tensor_kernel(dtype: tl.constexpr):
+        tensor = tl.zeros((1, ), dtype)
+
+    dtype_tensor_kernel[(1, )](dtype)
