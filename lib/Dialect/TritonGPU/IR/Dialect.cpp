@@ -2852,9 +2852,9 @@ struct TritonGPUInferLayoutInterface
   }
 
   LogicalResult
-  inferJoinOpEncoding(Attribute srcEnc, Attribute &dstEnc,
-                      ArrayRef<int64_t> shape,
-                      std::optional<Location> loc) const override {
+  inferDefaultJoinOpEncoding(Attribute srcEnc, Attribute &dstEnc,
+                             ArrayRef<int64_t> shape,
+                             std::optional<Location> loc) const override {
     if (auto enc = mlir::dyn_cast<BlockedEncodingAttr>(srcEnc)) {
       // JoinOp takes two tensors of shape AxBxC and generates a tensor of shape
       // AxBxCx2.  The encoding is the same as the input, but with 2 elems per

@@ -321,8 +321,8 @@ static Attribute inferDstEncoding(JoinOp op, Attribute srcEnc) {
   auto shape = op.getLhs().getType().getShape();
   if (srcEnc.getDialect()
           .getRegisteredInterface<DialectInferLayoutInterface>()
-          ->inferJoinOpEncoding(srcEnc, dstEnc, shape,
-                                /*loc=*/std::nullopt)
+          ->inferDefaultJoinOpEncoding(srcEnc, dstEnc, shape,
+                                       /*loc=*/std::nullopt)
           .succeeded()) {
     return dstEnc;
   }
@@ -376,7 +376,8 @@ static Attribute inferSrcEncoding(SplitOp op, Attribute dstEnc) {
   auto shape = op.getOutLHS().getType().getShape();
   if (dstEnc.getDialect()
           .getRegisteredInterface<DialectInferLayoutInterface>()
-          ->inferJoinOpEncoding(dstEnc, srcEnc, shape, /*loc=*/std::nullopt)
+          ->inferDefaultJoinOpEncoding(dstEnc, srcEnc, shape,
+                                       /*loc=*/std::nullopt)
           .succeeded()) {
     return srcEnc;
   }

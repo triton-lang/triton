@@ -392,8 +392,8 @@ TEST_F(JoinOpTest, JoinOpLayoutPropagation) {
       auto linear = LinearEncodingAttr::get(&ctx, toLinearLayout(shape, enc));
       // Test that we can do a round trip from src to dst encoding and back.
       Attribute dstEnc;
-      LogicalResult result =
-          inferLayout->inferJoinOpEncoding(linear, dstEnc, shape, std::nullopt);
+      LogicalResult result = inferLayout->inferDefaultJoinOpEncoding(
+          linear, dstEnc, shape, std::nullopt);
       EXPECT_TRUE(succeeded(result));
       Attribute newSrcEnc;
       auto newShape = shape;
@@ -419,8 +419,8 @@ TEST_F(JoinOpTest, JoinOpLayoutPropagation) {
       auto transPerm = llvm::to_vector(llvm::seq<int32_t>(0, rank));
       transPerm.insert(transPerm.begin() + axis + 1, rank);
       Attribute joinedEnc;
-      result =
-          inferLayout->inferJoinOpEncoding(enc, joinedEnc, shape, std::nullopt);
+      result = inferLayout->inferDefaultJoinOpEncoding(enc, joinedEnc, shape,
+                                                       std::nullopt);
       auto joinShape = shape;
       joinShape.push_back(2);
       assert(succeeded(result));
