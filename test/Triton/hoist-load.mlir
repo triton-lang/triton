@@ -22,6 +22,31 @@ tt.func @hoist_load_without_mask(%arg0: tensor<1024x!tt.ptr<f32>>, %arg1: tensor
 
 // -----
 
+tt.func @hoist_two_loads_without_mask(%arg0: tensor<1024x!tt.ptr<f32>>, %arg1: tensor<1024xi32>, %arg2: tensor<1024xi32>, %arg3: i32, %arg4 : i32, %arg5: tensor<1024x!tt.ptr<f32>>, %arg6: tensor<1024x!tt.ptr<f32>>) {
+  %cst = arith.constant dense<0.000000e+00> : tensor<1024xf32>
+  %c1_i32 = arith.constant 1 : i32
+  // CHECK-LABEL: hoist_two_loads_without_mask
+  // CHECK: %[[TRIP_COUNT_CMP_1:.*]] = arith.cmpi slt, %[[LB:.*]], %[[UB:.*]]
+  // CHECK: %[[SPLAT_1:.*]] = tt.splat %[[TRIP_COUNT_CMP_1]]
+  // CHECK: tt.load %[[_:.*]], %[[SPLAT_1]]
+  // CHECK: %[[TRIP_COUNT_CMP_2:.*]] = arith.cmpi slt, %[[LB]], %[[UB]]
+  // CHECK: %[[SPLAT_2:.*]] = tt.splat %[[TRIP_COUNT_CMP_2]]
+  // CHECK: tt.load %[[_:.*]], %[[SPLAT_2]]
+  // CHECK: scf.for
+  // CHECK-NOT: tt.load
+  %1 = scf.for %arg8 = %arg3 to %arg4 step %c1_i32 iter_args(%arg7 = %cst) -> (tensor<1024xf32>)  : i32 {
+    %2 = tt.load %arg0 : tensor<1024x!tt.ptr<f32>>
+    %3 = tt.load %arg6 : tensor<1024x!tt.ptr<f32>>
+    %4 = arith.addf %2, %3 : tensor<1024xf32>
+    %5 = arith.addf %arg7, %4 : tensor<1024xf32>
+    scf.yield %5 : tensor<1024xf32>
+  }
+  tt.store %arg5, %1 : tensor<1024x!tt.ptr<f32>>
+  tt.return
+}
+
+// -----
+
 tt.func @hoist_load(%arg0: tensor<1024x!tt.ptr<f32>>, %arg1: tensor<1024xi32>, %arg2: tensor<1024xi32>, %arg3: i32, %arg4 : i32, %arg5: tensor<1024x!tt.ptr<f32>>) {
   %cst = arith.constant dense<0.000000e+00> : tensor<1024xf32>
   %c1_i32 = arith.constant 1 : i32

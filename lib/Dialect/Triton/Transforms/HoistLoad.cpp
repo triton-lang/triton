@@ -16,6 +16,7 @@ namespace {
 
 class HoistLoadPass : public TritonHoistLoadBase<HoistLoadPass> {
 
+  DenseMap<scf::ForOp, bool> visitedForOps;
   // This function checks if the root operation consists of ops with only read
   // side-effects or with write side-effects but are only PrintOp or
   // AssertOp.
@@ -61,56 +62,49 @@ class HoistLoadPass : public TritonHoistLoadBase<HoistLoadPass> {
     // Walk through all loops in a function in innermost-loop-first order.
     // This way, we first LICM from the inner loop, and place the ops in the
     // outer loop, which in turn can be further LICM'ed.
-    getOperation()->walk([&](LoopLikeOpInterface loopLike) {
+    getOperation()->walk([&](scf::ForOp forOp) {
       moveLoopInvariantCode(
-          loopLike.getLoopRegions(),
+          forOp.getLoopRegions(),
           // isDefinedOutsideOfRegion
           [&](Value value, Region *region) {
-            return loopLike.isDefinedOutsideOfLoop(value);
+            return forOp.isDefinedOutsideOfLoop(value);
           },
           // shouldMoveOutOfRegion
           [&](Operation *op, Region *region) {
-            return isa<LoadOp>(op) &&
-                   isOnlyReadPrintAssert(region->getParentOp());
+            if (!isa<LoadOp>(op))
+              return false;
+            if (!visitedForOps.contains(forOp))
+              visitedForOps[forOp] = isOnlyReadPrintAssert(forOp);
+            return visitedForOps[forOp];
           },
           // moveOutOfRegion
           [&](Operation *op, Region *) {
             LoadOp loadOp = cast<LoadOp>(op);
-            scf::ForOp scfForOp =
-                dyn_cast<scf::ForOp>(loadOp->getParentRegion()->getParentOp());
-            if (!scfForOp)
-              return;
             Value mask = loadOp.getMask();
-            MLIRContext *ctx = loadOp->getContext();
-            IRRewriter rewriter(ctx);
-            OpBuilder::InsertionGuard insertGuard(rewriter);
-            rewriter.setInsertionPoint(scfForOp.getOperation());
-            Location loc = scfForOp->getLoc();
+            IRRewriter rewriter(forOp);
+            Location loc = forOp->getLoc();
             arith::CmpIOp cmpIOp = rewriter.create<arith::CmpIOp>(
-                loc, arith::CmpIPredicate::slt, scfForOp.getLowerBound(),
-                scfForOp.getUpperBound());
-            LoadOp newLoadOp;
+                loc, arith::CmpIPredicate::slt, forOp.getLowerBound(),
+                forOp.getUpperBound());
+            Value newMask;
             if (mask) {
               Value zeroMask = rewriter.create<arith::ConstantOp>(
                   loc, rewriter.getZeroAttr(mask.getType()));
-              arith::SelectOp selectOp =
+              newMask =
                   rewriter.create<arith::SelectOp>(loc, cmpIOp, mask, zeroMask);
-              newLoadOp = rewriter.create<LoadOp>(
-                  loc, loadOp.getPtr(), selectOp, loadOp.getOther(),
-                  loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
             } else {
               auto loadType = dyn_cast<RankedTensorType>(loadOp.getType());
               if (!loadType)
                 return;
-              SplatOp splatOp = rewriter.create<SplatOp>(
+              newMask = rewriter.create<SplatOp>(
                   loc,
                   RankedTensorType::get(loadType.getShape(),
                                         rewriter.getI1Type()),
                   cmpIOp);
-              newLoadOp = rewriter.create<LoadOp>(
-                  loc, loadOp.getPtr(), splatOp, loadOp.getOther(),
-                  loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
             }
+            LoadOp newLoadOp = rewriter.create<LoadOp>(
+                loc, loadOp.getPtr(), newMask, loadOp.getOther(),
+                loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
             rewriter.replaceAllUsesWith(loadOp, newLoadOp);
           });
     });
