@@ -325,7 +325,7 @@ bool CTAPlanner::processReduce(triton::FuncOp &funcOp) {
 
     auto rank = srcShape.size();
     auto order = ttg::getOrder(srcTy);
-    auto sizePerThread = ttg::getSizePerThread(srcLayout);
+    auto sizePerThread = ttg::getContigPerThread(srcTy);
     auto CTAOrder = ttg::getCTAOrder(srcLayout);
 
     llvm::SmallVector<unsigned> CTAsPerCGA(rank, 0);

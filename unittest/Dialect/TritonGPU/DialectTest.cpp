@@ -589,13 +589,11 @@ TEST_F(AMDWmmaLayoutTest, wmmaV1) {
   auto wmma2d = createWMMAv1({2, 4});
   ASSERT_THAT(wmma2d.getDefaultThreadOrder(), testing::ElementsAre(1u, 0u));
   ASSERT_THAT(wmma2d.getDefaultWarpOrder(), testing::ElementsAre(1u, 0u));
-  ASSERT_THAT(wmma2d.getSizePerThread(), testing::ElementsAre(8u, 1u));
   ASSERT_THAT(wmma2d.getThreadsPerWarp(), testing::ElementsAre(2u, 16u));
 
   auto wmma3d = createWMMAv1({2, 4, 1});
   ASSERT_THAT(wmma3d.getDefaultThreadOrder(), testing::ElementsAre(2u, 1u, 0u));
   ASSERT_THAT(wmma3d.getDefaultWarpOrder(), testing::ElementsAre(2u, 1u, 0u));
-  ASSERT_THAT(wmma3d.getSizePerThread(), testing::ElementsAre(1u, 8u, 1u));
   ASSERT_THAT(wmma3d.getThreadsPerWarp(), testing::ElementsAre(1, 2u, 16u));
 }
 
@@ -603,26 +601,22 @@ TEST_F(AMDWmmaLayoutTest, wmmaV2) {
   auto wmma2d = createWMMAv2(false, {2, 4});
   ASSERT_THAT(wmma2d.getDefaultThreadOrder(), testing::ElementsAre(1u, 0u));
   ASSERT_THAT(wmma2d.getDefaultWarpOrder(), testing::ElementsAre(1u, 0u));
-  ASSERT_THAT(wmma2d.getSizePerThread(), testing::ElementsAre(8u, 1u));
   ASSERT_THAT(wmma2d.getThreadsPerWarp(), testing::ElementsAre(2u, 16u));
 
   auto wmma3d = createWMMAv2(false, {2, 4, 1});
   ASSERT_THAT(wmma3d.getDefaultThreadOrder(), testing::ElementsAre(2u, 1u, 0u));
   ASSERT_THAT(wmma3d.getDefaultWarpOrder(), testing::ElementsAre(2u, 1u, 0u));
-  ASSERT_THAT(wmma3d.getSizePerThread(), testing::ElementsAre(1u, 8u, 1u));
   ASSERT_THAT(wmma3d.getThreadsPerWarp(), testing::ElementsAre(1u, 2u, 16u));
 
   auto twmma2d = createWMMAv2(true, {2, 4});
   ASSERT_THAT(twmma2d.getDefaultThreadOrder(), testing::ElementsAre(0u, 1u));
   ASSERT_THAT(twmma2d.getDefaultWarpOrder(), testing::ElementsAre(1u, 0u));
-  ASSERT_THAT(twmma2d.getSizePerThread(), testing::ElementsAre(1u, 8u));
   ASSERT_THAT(twmma2d.getThreadsPerWarp(), testing::ElementsAre(16u, 2u));
 
   auto twmma3d = createWMMAv2(true, {2, 4, 1});
   ASSERT_THAT(twmma3d.getDefaultThreadOrder(),
               testing::ElementsAre(1u, 2u, 0u));
   ASSERT_THAT(twmma3d.getDefaultWarpOrder(), testing::ElementsAre(2u, 1u, 0u));
-  ASSERT_THAT(twmma3d.getSizePerThread(), testing::ElementsAre(1u, 1u, 8u));
   ASSERT_THAT(twmma3d.getThreadsPerWarp(), testing::ElementsAre(1u, 16u, 2u));
 }
 
@@ -750,15 +744,6 @@ TEST_F(LinearEncodingTest, DistributedEncodingToLinearEncoding) {
           ASSERT_EQ(distributedEncoding.getThreadsPerWarp(),
                     linearEncoding.getThreadsPerWarp());
         }
-      }
-      // Canonicalisation for opIdx=0 takes just a [2 x 2] subtile as it takes
-      // the second repetition along K as the second tile.
-      if (!isa<triton::gpu::DotOperandEncodingAttr>(distributedEncoding)) {
-        // FIXME: This happens to be correct for SliceLayout because of the hack
-        // in SliceEncodingAttr::toLinearLayout(). We should remove the hack
-        // and the skips in the getWarpsPerCTA() and getThreadsPerWarp()
-        ASSERT_EQ(distributedEncoding.getSizePerThread(),
-                  linearEncoding.getSizePerThread());
       }
 
       // block level

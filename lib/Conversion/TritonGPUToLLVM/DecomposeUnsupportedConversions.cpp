@@ -36,7 +36,7 @@ void decomposeTensorCoreToDotLayoutConversion(ModuleOp module,
 
     int numWarps = lookupNumWarps(cvtOp);
     auto enc = BlockedEncodingAttr::get(
-        ctx, srcType.getShape(), getSizePerThread(srcMma), getOrder(srcType),
+        ctx, srcType.getShape(), getContigPerThread(srcType), getOrder(srcType),
         numWarps, threadsPerWarp, numCTAs);
     auto tmpType = RankedTensorType::get(dstType.getShape(),
                                          dstType.getElementType(), enc);
