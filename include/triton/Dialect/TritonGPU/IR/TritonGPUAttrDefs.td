@@ -271,7 +271,7 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
                      "unsigned":$typeWidthInBit,
                      "bool":$needTrans), [{
 
-        // ---- begin GFX908/GFX90A/GFX950 ----
+        // ---- begin MFMA ----
         if (auto mfmaEnc = mlir::dyn_cast<AMDMfmaEncodingAttr>(dotOpEnc.getParent())) {
           int kDimNum = dotOpEnc.getOpIdx() == 0 ? 1 : 0;
           if (needTrans)
@@ -309,7 +309,7 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
           }
         }
 
-        // ---- begin GFX11 ----
+        // ---- begin WMMA ----
         if (mlir::isa<AMDWmmaEncodingAttr>(dotOpEnc.getParent())) {
           if (dotOpEnc.getOpIdx() == 0) {
             const int numBanks = 32;
