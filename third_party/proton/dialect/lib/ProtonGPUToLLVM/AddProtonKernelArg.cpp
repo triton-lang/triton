@@ -96,7 +96,6 @@ struct AddProtonKernelArg
     IRRewriter rewriter(ctx);
     rewriter.setInsertionPointToStart(moduleOp.getBody());
     auto amendedFuncOp = amendFuncOp(funcOp, rewriter);
-    amendedFuncOp.setVisibility(SymbolTable::Visibility::Private);
     rewriter.eraseOp(funcOp);
     return;
   }
