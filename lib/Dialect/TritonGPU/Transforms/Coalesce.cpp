@@ -97,9 +97,21 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
       llvm::SetVector<Operation *> backwardSlice;
       BackwardSliceOptions opt;
       opt.omitBlockArguments = false;
-
+      opt.filter = [&axisInfoAnalysis](Operation *op) {
+        bool allDivisibilityOne = true;
+        // check if results are all with divisibility 1
+        for (auto result : op->getResults()) {
+          auto axisInfo = axisInfoAnalysis.getAxisInfo(result);
+          auto divisibility = axisInfo->getDivisibility();
+          auto divisibilityIsOne =
+              std::all_of(divisibility.begin(), divisibility.end(),
+                          [](int i) { return i == 1; });
+          allDivisibilityOne = allDivisibilityOne && divisibilityIsOne;                          
+        }
+        return allDivisibilityOne;
+      };
       getBackwardSlice(op, &backwardSlice, opt);
-
+      
       auto divisibility = axisInfoAnalysis.getAxisInfo(ptr)->getDivisibility();
       // check if divisibility in all dimensions is 1
       auto divisibilityIsOne =
