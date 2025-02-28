@@ -207,7 +207,8 @@ calcDotTileShape(const SmallVector<unsigned, 3>
   bool localLoadIssueExposed = true;
 
   // Try a finite number of times to increase the TileShape meet performance criteria.
-  int maxTries = 12; // sufficient to create 64x64 tile.
+  // TODO - possibly need to refactor loop bounds before production ready.
+  constexpr int maxTries = 12; // sufficient to create 64x64 tile.
   for (int i = 0; i < maxTries; ++i) {
     // If TileShape meets performance criteria, return.
     if (!(localLoadDataLatencyExposed || localLoadRateExposed || localLoadIssueExposed)) {
