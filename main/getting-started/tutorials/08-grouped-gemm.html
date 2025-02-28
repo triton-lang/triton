@@ -115,18 +115,28 @@ to download the full example code.</p>
 <span id="sphx-glr-getting-started-tutorials-08-grouped-gemm-py"></span><h1>Group GEMM<a class="headerlink" href="#group-gemm" title="Link to this heading">¶</a></h1>
 <p>This group gemm kernel launches a fixed number of CTA to compute a group
 of gemms. The scheduling is static and we do it on device.</p>
-<img src="../../_images/sphx_glr_08-grouped-gemm_001.png" srcset="../../_images/sphx_glr_08-grouped-gemm_001.png" alt="08 grouped gemm" class = "sphx-glr-single-img"/><div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>group-gemm-performance:
+<ul class="sphx-glr-horizontal">
+<li><img src="../../_images/sphx_glr_08-grouped-gemm_001.png" srcset="../../_images/sphx_glr_08-grouped-gemm_001.png" alt="08 grouped gemm" class = "sphx-glr-multi-img"/></li>
+<li><img src="../../_images/sphx_glr_08-grouped-gemm_002.png" srcset="../../_images/sphx_glr_08-grouped-gemm_002.png" alt="08 grouped gemm" class = "sphx-glr-multi-img"/></li>
+</ul>
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>group-gemm-performance:
         N    cuBLAS    Triton
-0   128.0  0.021504  0.012288
-1   256.0  0.023552  0.015360
+0   128.0  0.021504  0.013312
+1   256.0  0.023552  0.016384
 2   512.0  0.032768  0.020480
-3  1024.0  0.071680  0.077824
+3  1024.0  0.071680  0.079872
+group-gemm-performance-m-8192-k-8192:
+        M    cuBLAS    Triton
+0   128.0  0.460800  0.539648
+1   256.0  0.735232  0.929792
+2   512.0  1.707008  1.844224
+3  1024.0  2.788352  3.586048
 </pre></div>
 </div>
 <div class="line-block">
 <div class="line"><br /></div>
 </div>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="c1"># Copyright (c) 2023 NVIDIA Corporation &amp; Affiliates. All rights reserved.</span>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="c1"># Copyright (c) 2023 - 2025 NVIDIA Corporation &amp; Affiliates. All rights reserved.</span>
 <span class="c1">#</span>
 <span class="c1"># Permission is hereby granted, free of charge, to any person obtaining</span>
 <span class="c1"># a copy of this software and associated documentation files</span>
@@ -147,12 +157,27 @@ of gemms. The scheduling is static and we do it on device.</p>
 <span class="c1"># TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE</span>
 <span class="c1"># SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.</span>
 
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Optional</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">triton</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">triton.language</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">tl</span>
 
 <span class="n">DEVICE</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">get_active_torch_device</span><span class="p">()</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">is_cuda</span><span class="p">():</span>
+    <span class="k">return</span> <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">get_current_target</span><span class="p">()</span><span class="o">.</span><span class="n">backend</span> <span class="o">==</span> <span class="s2">&quot;cuda&quot;</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">supports_tma</span><span class="p">():</span>
+    <span class="k">return</span> <span class="n">is_cuda</span><span class="p">()</span> <span class="ow">and</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">get_device_capability</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="mi">9</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">num_sms</span><span class="p">():</span>
+    <span class="k">if</span> <span class="n">is_cuda</span><span class="p">():</span>
+        <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">get_device_properties</span><span class="p">(</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">multi_processor_count</span>
+    <span class="k">return</span> <span class="mi">148</span>
 
 
 <span class="nd">@triton</span><span class="o">.</span><span class="n">autotune</span><span class="p">(</span>
@@ -180,6 +205,18 @@ of gemms. The scheduling is static and we do it on device.</p>
             <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span>
             <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">32</span><span class="p">,</span>
             <span class="s1">&#39;NUM_SM&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span>
+        <span class="p">}),</span>
+        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">({</span>
+            <span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span>
+            <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span>
+            <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span>
+            <span class="s1">&#39;NUM_SM&#39;</span><span class="p">:</span> <span class="n">num_sms</span><span class="p">(),</span>
+        <span class="p">}),</span>
+        <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">({</span>
+            <span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span>
+            <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span>
+            <span class="s1">&#39;BLOCK_SIZE_K&#39;</span><span class="p">:</span> <span class="mi">64</span><span class="p">,</span>
+            <span class="s1">&#39;NUM_SM&#39;</span><span class="p">:</span> <span class="n">num_sms</span><span class="p">(),</span>
         <span class="p">}),</span>
     <span class="p">],</span>
     <span class="n">key</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;group_size&#39;</span><span class="p">],</span>
@@ -307,11 +344,168 @@ of gemms. The scheduling is static and we do it on device.</p>
     <span class="k">return</span> <span class="n">group_C</span>
 
 
+<span class="n">tma_configs</span> <span class="o">=</span> <span class="p">[</span>
+    <span class="n">triton</span><span class="o">.</span><span class="n">Config</span><span class="p">({</span><span class="s1">&#39;BLOCK_SIZE_M&#39;</span><span class="p">:</span> <span class="n">BM</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_N&#39;</span><span class="p">:</span> <span class="n">BN</span><span class="p">,</span> <span class="s1">&#39;BLOCK_SIZE_K&#39;</span> <span class="p">:</span> <span class="n">BK</span><span class="p">},</span> <span class="n">num_stages</span><span class="o">=</span><span class="n">s</span><span class="p">,</span> <span class="n">num_warps</span><span class="o">=</span><span class="n">w</span><span class="p">)</span> \
+    <span class="k">for</span> <span class="n">BM</span> <span class="ow">in</span> <span class="p">[</span><span class="mi">128</span><span class="p">]</span>\
+    <span class="k">for</span> <span class="n">BN</span> <span class="ow">in</span> <span class="p">[</span><span class="mi">128</span><span class="p">,</span> <span class="mi">256</span><span class="p">]</span>\
+    <span class="k">for</span> <span class="n">BK</span> <span class="ow">in</span> <span class="p">[</span><span class="mi">64</span><span class="p">,</span> <span class="mi">128</span><span class="p">]</span>\
+    <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="p">([</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">])</span>\
+    <span class="k">for</span> <span class="n">w</span> <span class="ow">in</span> <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">8</span><span class="p">]</span>\
+<span class="p">]</span>
+
+
+<span class="nd">@triton</span><span class="o">.</span><span class="n">autotune</span><span class="p">(</span>
+    <span class="n">tma_configs</span><span class="p">,</span>
+    <span class="n">key</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;group_a_ptrs&#39;</span><span class="p">,</span> <span class="s1">&#39;group_b_ptrs&#39;</span><span class="p">,</span> <span class="s1">&#39;gropup_c_ptrs&#39;</span><span class="p">,</span> <span class="s1">&#39;group_size&#39;</span><span class="p">],</span>
+<span class="p">)</span>
+<span class="nd">@triton</span><span class="o">.</span><span class="n">jit</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">grouped_matmul_tma_kernel</span><span class="p">(</span>
+    <span class="c1"># device tensor of matrices pointers</span>
+    <span class="n">group_a_ptrs</span><span class="p">,</span>
+    <span class="n">group_b_ptrs</span><span class="p">,</span>
+    <span class="n">group_c_ptrs</span><span class="p">,</span>
+    <span class="c1"># device tensor of gemm sizes. its shape is [group_size, 3]</span>
+    <span class="c1"># dim 0 is group_size, dim 1 is the values of &lt;M, N, K&gt; of each gemm</span>
+    <span class="n">group_gemm_sizes</span><span class="p">,</span>
+    <span class="c1"># device tensor of leading dimension sizes. its shape is [group_size, 3]</span>
+    <span class="c1"># dim 0 is group_size, dim 1 is the values of &lt;lda, ldb, ldc&gt; of each gemm</span>
+    <span class="n">g_lds</span><span class="p">,</span>
+    <span class="c1"># number of gemms</span>
+    <span class="n">group_size</span><span class="p">,</span>
+    <span class="c1"># number of virtual SM</span>
+    <span class="n">NUM_SM</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
+    <span class="c1"># tile sizes</span>
+    <span class="n">BLOCK_SIZE_M</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
+    <span class="n">BLOCK_SIZE_N</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
+    <span class="n">BLOCK_SIZE_K</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
+    <span class="c1"># is the output FP8 or FP16</span>
+    <span class="n">FP8</span><span class="p">:</span> <span class="n">tl</span><span class="o">.</span><span class="n">constexpr</span><span class="p">,</span>
+<span class="p">):</span>
+    <span class="n">dtype</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">float8e4nv</span> <span class="k">if</span> <span class="n">FP8</span> <span class="k">else</span> <span class="n">tl</span><span class="o">.</span><span class="n">float16</span>
+    <span class="n">tile_idx</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">program_id</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">last_problem_end</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="k">for</span> <span class="n">g</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">group_size</span><span class="p">):</span>
+        <span class="c1"># get the gemm size of the current problem</span>
+        <span class="n">gm</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">group_gemm_sizes</span> <span class="o">+</span> <span class="n">g</span> <span class="o">*</span> <span class="mi">3</span><span class="p">)</span>
+        <span class="n">gn</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">group_gemm_sizes</span> <span class="o">+</span> <span class="n">g</span> <span class="o">*</span> <span class="mi">3</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="n">gk</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">group_gemm_sizes</span> <span class="o">+</span> <span class="n">g</span> <span class="o">*</span> <span class="mi">3</span> <span class="o">+</span> <span class="mi">2</span><span class="p">)</span>
+        <span class="n">num_m_tiles</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">gm</span><span class="p">,</span> <span class="n">BLOCK_SIZE_M</span><span class="p">)</span>
+        <span class="n">num_n_tiles</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">gn</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">)</span>
+        <span class="n">num_tiles</span> <span class="o">=</span> <span class="n">num_m_tiles</span> <span class="o">*</span> <span class="n">num_n_tiles</span>
+        <span class="k">if</span> <span class="n">tile_idx</span> <span class="o">&gt;=</span> <span class="n">last_problem_end</span> <span class="ow">and</span> <span class="n">tile_idx</span> <span class="o">&lt;</span> <span class="n">last_problem_end</span> <span class="o">+</span> <span class="n">num_tiles</span><span class="p">:</span>
+            <span class="c1"># pick up a tile from the current gemm problem</span>
+            <span class="n">lda</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">g_lds</span> <span class="o">+</span> <span class="n">g</span> <span class="o">*</span> <span class="mi">3</span><span class="p">)</span>
+            <span class="n">ldb</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">g_lds</span> <span class="o">+</span> <span class="n">g</span> <span class="o">*</span> <span class="mi">3</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
+            <span class="n">ldc</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">g_lds</span> <span class="o">+</span> <span class="n">g</span> <span class="o">*</span> <span class="mi">3</span> <span class="o">+</span> <span class="mi">2</span><span class="p">)</span>
+
+            <span class="n">a_ptr</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">group_a_ptrs</span> <span class="o">+</span> <span class="n">g</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">tl</span><span class="o">.</span><span class="n">pointer_type</span><span class="p">(</span><span class="n">dtype</span><span class="p">))</span>
+            <span class="n">b_ptr</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">group_b_ptrs</span> <span class="o">+</span> <span class="n">g</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">tl</span><span class="o">.</span><span class="n">pointer_type</span><span class="p">(</span><span class="n">dtype</span><span class="p">))</span>
+            <span class="n">c_ptr</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">group_c_ptrs</span> <span class="o">+</span> <span class="n">g</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">tl</span><span class="o">.</span><span class="n">pointer_type</span><span class="p">(</span><span class="n">dtype</span><span class="p">))</span>
+
+            <span class="n">a_desc</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">_experimental_make_tensor_descriptor</span><span class="p">(</span>
+                <span class="n">a_ptr</span><span class="p">,</span>
+                <span class="n">shape</span><span class="o">=</span><span class="p">[</span><span class="n">gm</span><span class="p">,</span> <span class="n">gk</span><span class="p">],</span>
+                <span class="n">strides</span><span class="o">=</span><span class="p">[</span><span class="n">lda</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span>
+                <span class="n">block_shape</span><span class="o">=</span><span class="p">[</span><span class="n">BLOCK_SIZE_M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_K</span><span class="p">],</span>
+            <span class="p">)</span>
+
+            <span class="n">b_desc</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">_experimental_make_tensor_descriptor</span><span class="p">(</span>
+                <span class="n">b_ptr</span><span class="p">,</span>
+                <span class="n">shape</span><span class="o">=</span><span class="p">[</span><span class="n">gn</span><span class="p">,</span> <span class="n">gk</span><span class="p">],</span>
+                <span class="n">strides</span><span class="o">=</span><span class="p">[</span><span class="n">ldb</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span>
+                <span class="n">block_shape</span><span class="o">=</span><span class="p">[</span><span class="n">BLOCK_SIZE_N</span><span class="p">,</span> <span class="n">BLOCK_SIZE_K</span><span class="p">],</span>
+            <span class="p">)</span>
+            <span class="n">c_desc</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">_experimental_make_tensor_descriptor</span><span class="p">(</span>
+                <span class="n">c_ptr</span><span class="p">,</span>
+                <span class="n">shape</span><span class="o">=</span><span class="p">[</span><span class="n">gm</span><span class="p">,</span> <span class="n">gn</span><span class="p">],</span>
+                <span class="n">strides</span><span class="o">=</span><span class="p">[</span><span class="n">ldc</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span>
+                <span class="n">block_shape</span><span class="o">=</span><span class="p">[</span><span class="n">BLOCK_SIZE_M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">],</span>
+            <span class="p">)</span>
+
+            <span class="c1"># iterate through the tiles in the current gemm problem</span>
+            <span class="k">while</span> <span class="p">(</span><span class="n">tile_idx</span> <span class="o">&gt;=</span> <span class="n">last_problem_end</span> <span class="ow">and</span> <span class="n">tile_idx</span> <span class="o">&lt;</span> <span class="n">last_problem_end</span> <span class="o">+</span> <span class="n">num_tiles</span><span class="p">):</span>
+                <span class="n">k</span> <span class="o">=</span> <span class="n">gk</span>
+                <span class="c1"># figure out tile coordinates</span>
+                <span class="n">tile_idx_in_gemm</span> <span class="o">=</span> <span class="n">tile_idx</span> <span class="o">-</span> <span class="n">last_problem_end</span>
+                <span class="n">tile_m_idx</span> <span class="o">=</span> <span class="n">tile_idx_in_gemm</span> <span class="o">//</span> <span class="n">num_n_tiles</span>
+                <span class="n">tile_n_idx</span> <span class="o">=</span> <span class="n">tile_idx_in_gemm</span> <span class="o">%</span> <span class="n">num_n_tiles</span>
+
+                <span class="c1"># do regular gemm here</span>
+                <span class="n">offs_am</span> <span class="o">=</span> <span class="n">tile_m_idx</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_M</span>
+                <span class="n">offs_bn</span> <span class="o">=</span> <span class="n">tile_n_idx</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_N</span>
+
+                <span class="n">accumulator</span> <span class="o">=</span> <span class="n">tl</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">BLOCK_SIZE_M</span><span class="p">,</span> <span class="n">BLOCK_SIZE_N</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">tl</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+                <span class="k">for</span> <span class="n">kk</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">tl</span><span class="o">.</span><span class="n">cdiv</span><span class="p">(</span><span class="n">k</span><span class="p">,</span> <span class="n">BLOCK_SIZE_K</span><span class="p">)):</span>
+                    <span class="n">a</span> <span class="o">=</span> <span class="n">a_desc</span><span class="o">.</span><span class="n">load</span><span class="p">([</span><span class="n">offs_am</span><span class="p">,</span> <span class="n">kk</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_K</span><span class="p">])</span>
+                    <span class="n">b</span> <span class="o">=</span> <span class="n">b_desc</span><span class="o">.</span><span class="n">load</span><span class="p">([</span><span class="n">offs_bn</span><span class="p">,</span> <span class="n">kk</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_K</span><span class="p">])</span>
+                    <span class="n">accumulator</span> <span class="o">+=</span> <span class="n">tl</span><span class="o">.</span><span class="n">dot</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="o">.</span><span class="n">T</span><span class="p">)</span>
+
+                <span class="n">offs_cm</span> <span class="o">=</span> <span class="n">tile_m_idx</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_M</span>
+                <span class="n">offs_cn</span> <span class="o">=</span> <span class="n">tile_n_idx</span> <span class="o">*</span> <span class="n">BLOCK_SIZE_N</span>
+
+                <span class="n">c</span> <span class="o">=</span> <span class="n">accumulator</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="p">)</span>
+                <span class="n">c_desc</span><span class="o">.</span><span class="n">store</span><span class="p">([</span><span class="n">offs_cm</span><span class="p">,</span> <span class="n">offs_cn</span><span class="p">],</span> <span class="n">c</span><span class="p">)</span>
+
+                <span class="c1"># go to the next tile by advancing NUM_SM</span>
+                <span class="n">tile_idx</span> <span class="o">+=</span> <span class="n">NUM_SM</span>
+
+        <span class="c1"># get ready to go to the next gemm problem</span>
+        <span class="n">last_problem_end</span> <span class="o">=</span> <span class="n">last_problem_end</span> <span class="o">+</span> <span class="n">num_tiles</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">group_gemm_tma_fn</span><span class="p">(</span><span class="n">group_A</span><span class="p">,</span> <span class="n">group_B</span><span class="p">):</span>
+
+    <span class="k">assert</span> <span class="n">supports_tma</span><span class="p">()</span>
+
+    <span class="k">assert</span> <span class="nb">len</span><span class="p">(</span><span class="n">group_A</span><span class="p">)</span> <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="n">group_B</span><span class="p">)</span>
+    <span class="n">group_size</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">group_A</span><span class="p">)</span>
+
+    <span class="n">A_addrs</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">B_addrs</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">C_addrs</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">g_sizes</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">g_lds</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">group_C</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">group_size</span><span class="p">):</span>
+        <span class="n">A</span> <span class="o">=</span> <span class="n">group_A</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+        <span class="n">B</span> <span class="o">=</span> <span class="n">group_B</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+        <span class="k">assert</span> <span class="n">A</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="n">B</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+        <span class="n">M</span><span class="p">,</span> <span class="n">K</span> <span class="o">=</span> <span class="n">A</span><span class="o">.</span><span class="n">shape</span>
+        <span class="n">N</span><span class="p">,</span> <span class="n">K</span> <span class="o">=</span> <span class="n">B</span><span class="o">.</span><span class="n">shape</span>
+        <span class="n">C</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">A</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
+        <span class="n">group_C</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">C</span><span class="p">)</span>
+        <span class="n">A_addrs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">A</span><span class="o">.</span><span class="n">data_ptr</span><span class="p">())</span>
+        <span class="n">B_addrs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">B</span><span class="o">.</span><span class="n">data_ptr</span><span class="p">())</span>
+        <span class="n">C_addrs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">C</span><span class="o">.</span><span class="n">data_ptr</span><span class="p">())</span>
+        <span class="n">g_sizes</span> <span class="o">+=</span> <span class="p">[</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">]</span>
+        <span class="n">g_lds</span> <span class="o">+=</span> <span class="p">[</span><span class="n">A</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">B</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">C</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">)]</span>
+    <span class="c1"># note these are device tensors</span>
+    <span class="n">d_a_ptrs</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">A_addrs</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">)</span>
+    <span class="n">d_b_ptrs</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">B_addrs</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">)</span>
+    <span class="n">d_c_ptrs</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">C_addrs</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">)</span>
+    <span class="n">d_g_sizes</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">g_sizes</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">)</span>
+    <span class="n">d_g_lds</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">g_lds</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">)</span>
+
+    <span class="c1"># we use a fixed number of CTA, and it&#39;s auto-tunable</span>
+
+    <span class="c1"># TMA descriptors require a global memory allocation</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">alloc_fn</span><span class="p">(</span><span class="n">size</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">alignment</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">stream</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]):</span>
+        <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="n">size</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int8</span><span class="p">)</span>
+
+    <span class="n">triton</span><span class="o">.</span><span class="n">set_allocator</span><span class="p">(</span><span class="n">alloc_fn</span><span class="p">)</span>
+
+    <span class="n">grid</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">META</span><span class="p">:</span> <span class="p">(</span><span class="n">META</span><span class="p">[</span><span class="s1">&#39;NUM_SM&#39;</span><span class="p">],</span> <span class="p">)</span>
+    <span class="n">grouped_matmul_tma_kernel</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span><span class="n">d_a_ptrs</span><span class="p">,</span> <span class="n">d_b_ptrs</span><span class="p">,</span> <span class="n">d_c_ptrs</span><span class="p">,</span> <span class="n">d_g_sizes</span><span class="p">,</span> <span class="n">d_g_lds</span><span class="p">,</span> <span class="n">group_size</span><span class="p">,</span>
+                                    <span class="n">FP8</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float8_e4m3fn</span> <span class="o">==</span> <span class="n">group_A</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span> <span class="n">NUM_SM</span><span class="o">=</span><span class="n">num_sms</span><span class="p">())</span>
+    <span class="k">return</span> <span class="n">group_C</span>
+
+
 <span class="n">group_m</span> <span class="o">=</span> <span class="p">[</span><span class="mi">1024</span><span class="p">,</span> <span class="mi">512</span><span class="p">,</span> <span class="mi">256</span><span class="p">,</span> <span class="mi">128</span><span class="p">]</span>
 <span class="n">group_n</span> <span class="o">=</span> <span class="p">[</span><span class="mi">1024</span><span class="p">,</span> <span class="mi">512</span><span class="p">,</span> <span class="mi">256</span><span class="p">,</span> <span class="mi">128</span><span class="p">]</span>
 <span class="n">group_k</span> <span class="o">=</span> <span class="p">[</span><span class="mi">1024</span><span class="p">,</span> <span class="mi">512</span><span class="p">,</span> <span class="mi">256</span><span class="p">,</span> <span class="mi">128</span><span class="p">]</span>
 <span class="n">group_A</span> <span class="o">=</span> <span class="p">[]</span>
 <span class="n">group_B</span> <span class="o">=</span> <span class="p">[]</span>
+<span class="n">group_B_T</span> <span class="o">=</span> <span class="p">[]</span>
 <span class="k">assert</span> <span class="nb">len</span><span class="p">(</span><span class="n">group_m</span><span class="p">)</span> <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="n">group_n</span><span class="p">)</span>
 <span class="k">assert</span> <span class="nb">len</span><span class="p">(</span><span class="n">group_n</span><span class="p">)</span> <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="n">group_k</span><span class="p">)</span>
 <span class="n">group_size</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">group_m</span><span class="p">)</span>
@@ -321,13 +515,20 @@ of gemms. The scheduling is static and we do it on device.</p>
     <span class="n">K</span> <span class="o">=</span> <span class="n">group_k</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
     <span class="n">A</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="n">M</span><span class="p">,</span> <span class="n">K</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
     <span class="n">B</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="n">K</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+    <span class="n">B_T</span> <span class="o">=</span> <span class="n">B</span><span class="o">.</span><span class="n">T</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
     <span class="n">group_A</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">A</span><span class="p">)</span>
     <span class="n">group_B</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">B</span><span class="p">)</span>
+    <span class="n">group_B_T</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">B_T</span><span class="p">)</span>
 
 <span class="n">tri_out</span> <span class="o">=</span> <span class="n">group_gemm_fn</span><span class="p">(</span><span class="n">group_A</span><span class="p">,</span> <span class="n">group_B</span><span class="p">)</span>
 <span class="n">ref_out</span> <span class="o">=</span> <span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">matmul</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span> <span class="k">for</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">group_A</span><span class="p">,</span> <span class="n">group_B</span><span class="p">)]</span>
 <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">group_size</span><span class="p">):</span>
     <span class="k">assert</span> <span class="n">torch</span><span class="o">.</span><span class="n">allclose</span><span class="p">(</span><span class="n">ref_out</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">tri_out</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">atol</span><span class="o">=</span><span class="mf">1e-2</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+
+<span class="k">if</span> <span class="n">supports_tma</span><span class="p">():</span>
+    <span class="n">tri_tma_out</span> <span class="o">=</span> <span class="n">group_gemm_tma_fn</span><span class="p">(</span><span class="n">group_A</span><span class="p">,</span> <span class="n">group_B_T</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">group_size</span><span class="p">):</span>
+        <span class="k">assert</span> <span class="n">torch</span><span class="o">.</span><span class="n">allclose</span><span class="p">(</span><span class="n">ref_out</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">tri_tma_out</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">atol</span><span class="o">=</span><span class="mf">1e-2</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
 
 
 <span class="c1"># only launch the kernel, no tensor preparation here to remove all overhead</span>
@@ -343,6 +544,12 @@ of gemms. The scheduling is static and we do it on device.</p>
     <span class="p">)</span>
 
 
+<span class="k">def</span><span class="w"> </span><span class="nf">triton_tma_perf_fn</span><span class="p">(</span><span class="n">a_ptrs</span><span class="p">,</span> <span class="n">b_ptrs</span><span class="p">,</span> <span class="n">c_ptrs</span><span class="p">,</span> <span class="n">sizes</span><span class="p">,</span> <span class="n">lds</span><span class="p">,</span> <span class="n">group_size</span><span class="p">,</span> <span class="n">dtype</span><span class="p">):</span>
+    <span class="n">grid</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">META</span><span class="p">:</span> <span class="p">(</span><span class="n">META</span><span class="p">[</span><span class="s1">&#39;NUM_SM&#39;</span><span class="p">],</span> <span class="p">)</span>
+    <span class="n">grouped_matmul_tma_kernel</span><span class="p">[</span><span class="n">grid</span><span class="p">](</span><span class="n">a_ptrs</span><span class="p">,</span> <span class="n">b_ptrs</span><span class="p">,</span> <span class="n">c_ptrs</span><span class="p">,</span> <span class="n">sizes</span><span class="p">,</span> <span class="n">lds</span><span class="p">,</span> <span class="n">group_size</span><span class="p">,</span> <span class="n">FP8</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float8_e4m3fn</span> <span class="o">==</span> <span class="n">dtype</span><span class="p">,</span>
+                                    <span class="n">NUM_SM</span><span class="o">=</span><span class="n">num_sms</span><span class="p">())</span>
+
+
 <span class="k">def</span><span class="w"> </span><span class="nf">torch_perf_fn</span><span class="p">(</span><span class="n">group_A</span><span class="p">,</span> <span class="n">group_B</span><span class="p">):</span>
     <span class="k">for</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">group_A</span><span class="p">,</span> <span class="n">group_B</span><span class="p">):</span>
         <span class="n">torch</span><span class="o">.</span><span class="n">matmul</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span>
@@ -356,22 +563,24 @@ of gemms. The scheduling is static and we do it on device.</p>
         <span class="n">line_arg</span><span class="o">=</span><span class="s1">&#39;provider&#39;</span><span class="p">,</span>
         <span class="c1"># argument name whose value corresponds to a different line in the plot</span>
         <span class="c1"># possible values for `line_arg``</span>
-        <span class="n">line_vals</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;cublas&#39;</span><span class="p">,</span> <span class="s1">&#39;triton&#39;</span><span class="p">],</span>
+        <span class="n">line_vals</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;cublas&#39;</span><span class="p">,</span> <span class="s1">&#39;triton&#39;</span><span class="p">]</span> <span class="o">+</span> <span class="p">([</span><span class="s1">&#39;triton-tma&#39;</span><span class="p">]</span> <span class="k">if</span> <span class="n">supports_tma</span><span class="p">()</span> <span class="k">else</span> <span class="p">[]),</span>
         <span class="c1"># label name for the lines</span>
-        <span class="n">line_names</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;cuBLAS&quot;</span><span class="p">,</span> <span class="s2">&quot;Triton&quot;</span><span class="p">],</span>
+        <span class="n">line_names</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;cuBLAS&quot;</span><span class="p">,</span> <span class="s2">&quot;Triton&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="p">([</span><span class="s1">&#39;Triton + TMA&#39;</span><span class="p">]</span> <span class="k">if</span> <span class="n">supports_tma</span><span class="p">()</span> <span class="k">else</span> <span class="p">[]),</span>
         <span class="c1"># line styles</span>
-        <span class="n">styles</span><span class="o">=</span><span class="p">[(</span><span class="s1">&#39;green&#39;</span><span class="p">,</span> <span class="s1">&#39;-&#39;</span><span class="p">),</span> <span class="p">(</span><span class="s1">&#39;blue&#39;</span><span class="p">,</span> <span class="s1">&#39;-&#39;</span><span class="p">)],</span>
+        <span class="n">styles</span><span class="o">=</span><span class="p">[(</span><span class="s1">&#39;green&#39;</span><span class="p">,</span> <span class="s1">&#39;-&#39;</span><span class="p">),</span> <span class="p">(</span><span class="s1">&#39;blue&#39;</span><span class="p">,</span> <span class="s1">&#39;-&#39;</span><span class="p">)]</span> <span class="o">+</span> <span class="p">([(</span><span class="s1">&#39;red&#39;</span><span class="p">,</span> <span class="s1">&#39;-&#39;</span><span class="p">)]</span> <span class="k">if</span> <span class="n">supports_tma</span><span class="p">()</span> <span class="k">else</span> <span class="p">[]),</span>
         <span class="n">ylabel</span><span class="o">=</span><span class="s2">&quot;runtime(ms)&quot;</span><span class="p">,</span>  <span class="c1"># label name for the y-axis</span>
         <span class="n">plot_name</span><span class="o">=</span><span class="s2">&quot;group-gemm-performance&quot;</span><span class="p">,</span>
         <span class="c1"># name for the plot. Used also as a file name for saving the plot.</span>
         <span class="n">args</span><span class="o">=</span><span class="p">{},</span>
     <span class="p">))</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">benchmark</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">provider</span><span class="p">):</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">benchmark_square_matrices</span><span class="p">(</span><span class="n">N</span><span class="p">,</span> <span class="n">provider</span><span class="p">):</span>
     <span class="n">group_size</span> <span class="o">=</span> <span class="mi">4</span>
     <span class="n">group_A</span> <span class="o">=</span> <span class="p">[]</span>
     <span class="n">group_B</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">group_B_T</span> <span class="o">=</span> <span class="p">[]</span>
     <span class="n">A_addrs</span> <span class="o">=</span> <span class="p">[]</span>
     <span class="n">B_addrs</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">B_T_addrs</span> <span class="o">=</span> <span class="p">[]</span>
     <span class="n">C_addrs</span> <span class="o">=</span> <span class="p">[]</span>
     <span class="n">g_sizes</span> <span class="o">=</span> <span class="p">[]</span>
     <span class="n">g_lds</span> <span class="o">=</span> <span class="p">[]</span>
@@ -380,17 +589,21 @@ of gemms. The scheduling is static and we do it on device.</p>
         <span class="n">A</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="n">N</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
         <span class="n">B</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="n">N</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
         <span class="n">C</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">N</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+        <span class="n">B_T</span> <span class="o">=</span> <span class="n">B</span><span class="o">.</span><span class="n">T</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
         <span class="n">group_A</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">A</span><span class="p">)</span>
         <span class="n">group_B</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">B</span><span class="p">)</span>
+        <span class="n">group_B_T</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">B_T</span><span class="p">)</span>
         <span class="n">group_C</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">C</span><span class="p">)</span>
         <span class="n">A_addrs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">A</span><span class="o">.</span><span class="n">data_ptr</span><span class="p">())</span>
         <span class="n">B_addrs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">B</span><span class="o">.</span><span class="n">data_ptr</span><span class="p">())</span>
+        <span class="n">B_T_addrs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">B_T</span><span class="o">.</span><span class="n">data_ptr</span><span class="p">())</span>
         <span class="n">C_addrs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">C</span><span class="o">.</span><span class="n">data_ptr</span><span class="p">())</span>
         <span class="n">g_sizes</span> <span class="o">+=</span> <span class="p">[</span><span class="n">N</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">N</span><span class="p">]</span>
         <span class="n">g_lds</span> <span class="o">+=</span> <span class="p">[</span><span class="n">N</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">N</span><span class="p">]</span>
 
     <span class="n">d_a_ptrs</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">A_addrs</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">)</span>
     <span class="n">d_b_ptrs</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">B_addrs</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">)</span>
+    <span class="n">d_b_t_ptrs</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">B_T_addrs</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">)</span>
     <span class="n">d_c_ptrs</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">C_addrs</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">)</span>
     <span class="n">d_g_sizes</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">g_sizes</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">)</span>
     <span class="n">d_g_lds</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">g_lds</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">)</span>
@@ -401,13 +614,89 @@ of gemms. The scheduling is static and we do it on device.</p>
     <span class="k">if</span> <span class="n">provider</span> <span class="o">==</span> <span class="s1">&#39;triton&#39;</span><span class="p">:</span>
         <span class="n">ms</span><span class="p">,</span> <span class="n">min_ms</span><span class="p">,</span> <span class="n">max_ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span>
             <span class="k">lambda</span><span class="p">:</span> <span class="n">triton_perf_fn</span><span class="p">(</span><span class="n">d_a_ptrs</span><span class="p">,</span> <span class="n">d_b_ptrs</span><span class="p">,</span> <span class="n">d_c_ptrs</span><span class="p">,</span> <span class="n">d_g_sizes</span><span class="p">,</span> <span class="n">d_g_lds</span><span class="p">,</span> <span class="n">group_size</span><span class="p">),</span> <span class="n">quantiles</span><span class="o">=</span><span class="n">quantiles</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">provider</span> <span class="o">==</span> <span class="s1">&#39;triton-tma&#39;</span><span class="p">:</span>
+        <span class="n">ms</span><span class="p">,</span> <span class="n">min_ms</span><span class="p">,</span> <span class="n">max_ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span>
+            <span class="k">lambda</span><span class="p">:</span> <span class="n">triton_tma_perf_fn</span><span class="p">(</span><span class="n">d_a_ptrs</span><span class="p">,</span> <span class="n">d_b_t_ptrs</span><span class="p">,</span> <span class="n">d_c_ptrs</span><span class="p">,</span> <span class="n">d_g_sizes</span><span class="p">,</span> <span class="n">d_g_lds</span><span class="p">,</span> <span class="n">group_size</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span>
+                                       <span class="n">float16</span><span class="p">),</span> <span class="n">quantiles</span><span class="o">=</span><span class="n">quantiles</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">ms</span><span class="p">,</span> <span class="n">max_ms</span><span class="p">,</span> <span class="n">min_ms</span>
 
 
-<span class="n">benchmark</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">show_plots</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="nd">@triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">perf_report</span><span class="p">(</span>
+    <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">Benchmark</span><span class="p">(</span>
+        <span class="c1"># argument names to use as an x-axis for the plot</span>
+        <span class="n">x_names</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;M&#39;</span><span class="p">],</span>
+        <span class="n">x_vals</span><span class="o">=</span><span class="p">[</span><span class="mi">2</span><span class="o">**</span><span class="n">i</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">7</span><span class="p">,</span> <span class="mi">11</span><span class="p">)],</span>  <span class="c1"># different possible values for `x_name`</span>
+        <span class="n">line_arg</span><span class="o">=</span><span class="s1">&#39;provider&#39;</span><span class="p">,</span>
+        <span class="c1"># argument name whose value corresponds to a different line in the plot</span>
+        <span class="c1"># possible values for `line_arg``</span>
+        <span class="n">line_vals</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;cublas&#39;</span><span class="p">,</span> <span class="s1">&#39;triton&#39;</span><span class="p">]</span> <span class="o">+</span> <span class="p">([</span><span class="s1">&#39;triton-tma&#39;</span><span class="p">]</span> <span class="k">if</span> <span class="n">supports_tma</span><span class="p">()</span> <span class="k">else</span> <span class="p">[]),</span>
+        <span class="c1"># label name for the lines</span>
+        <span class="n">line_names</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;cuBLAS&quot;</span><span class="p">,</span> <span class="s2">&quot;Triton&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="p">([</span><span class="s1">&#39;Triton + TMA&#39;</span><span class="p">]</span> <span class="k">if</span> <span class="n">supports_tma</span><span class="p">()</span> <span class="k">else</span> <span class="p">[]),</span>
+        <span class="c1"># line styles</span>
+        <span class="n">styles</span><span class="o">=</span><span class="p">[(</span><span class="s1">&#39;green&#39;</span><span class="p">,</span> <span class="s1">&#39;-&#39;</span><span class="p">),</span> <span class="p">(</span><span class="s1">&#39;blue&#39;</span><span class="p">,</span> <span class="s1">&#39;-&#39;</span><span class="p">)]</span> <span class="o">+</span> <span class="p">([(</span><span class="s1">&#39;red&#39;</span><span class="p">,</span> <span class="s1">&#39;-&#39;</span><span class="p">)]</span> <span class="k">if</span> <span class="n">supports_tma</span><span class="p">()</span> <span class="k">else</span> <span class="p">[]),</span>
+        <span class="n">ylabel</span><span class="o">=</span><span class="s2">&quot;runtime(ms)&quot;</span><span class="p">,</span>  <span class="c1"># label name for the y-axis</span>
+        <span class="n">plot_name</span><span class="o">=</span><span class="s2">&quot;group-gemm-performance-m-8192-k-8192&quot;</span><span class="p">,</span>
+        <span class="c1"># name for the plot. Used also as a file name for saving the plot.</span>
+        <span class="n">args</span><span class="o">=</span><span class="p">{},</span>
+    <span class="p">))</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">benchmark_batches</span><span class="p">(</span><span class="n">M</span><span class="p">,</span> <span class="n">provider</span><span class="p">):</span>
+    <span class="n">N</span> <span class="o">=</span> <span class="mi">8192</span>
+    <span class="n">K</span> <span class="o">=</span> <span class="mi">8192</span>
+    <span class="n">group_size</span> <span class="o">=</span> <span class="mi">4</span>
+    <span class="n">group_A</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">group_B</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">group_B_T</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">A_addrs</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">B_addrs</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">B_T_addrs</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">C_addrs</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">g_sizes</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">g_lds</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">g_T_lds</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">group_C</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">group_size</span><span class="p">):</span>
+        <span class="n">A</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="n">M</span><span class="p">,</span> <span class="n">K</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+        <span class="n">B</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="n">K</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+        <span class="n">C</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">empty</span><span class="p">((</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+        <span class="n">B_T</span> <span class="o">=</span> <span class="n">B</span><span class="o">.</span><span class="n">T</span><span class="o">.</span><span class="n">contiguous</span><span class="p">()</span>
+        <span class="n">group_A</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">A</span><span class="p">)</span>
+        <span class="n">group_B</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">B</span><span class="p">)</span>
+        <span class="n">group_B_T</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">B_T</span><span class="p">)</span>
+        <span class="n">group_C</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">C</span><span class="p">)</span>
+        <span class="n">A_addrs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">A</span><span class="o">.</span><span class="n">data_ptr</span><span class="p">())</span>
+        <span class="n">B_addrs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">B</span><span class="o">.</span><span class="n">data_ptr</span><span class="p">())</span>
+        <span class="n">B_T_addrs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">B_T</span><span class="o">.</span><span class="n">data_ptr</span><span class="p">())</span>
+        <span class="n">C_addrs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">C</span><span class="o">.</span><span class="n">data_ptr</span><span class="p">())</span>
+        <span class="n">g_sizes</span> <span class="o">+=</span> <span class="p">[</span><span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">]</span>
+        <span class="n">g_lds</span> <span class="o">+=</span> <span class="p">[</span><span class="n">A</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">B</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">C</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">)]</span>
+        <span class="n">g_T_lds</span> <span class="o">+=</span> <span class="p">[</span><span class="n">A</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">B_T</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">C</span><span class="o">.</span><span class="n">stride</span><span class="p">(</span><span class="mi">0</span><span class="p">)]</span>
+
+    <span class="n">d_a_ptrs</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">A_addrs</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">)</span>
+    <span class="n">d_b_ptrs</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">B_addrs</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">)</span>
+    <span class="n">d_b_t_ptrs</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">B_T_addrs</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">)</span>
+    <span class="n">d_c_ptrs</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">C_addrs</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">)</span>
+    <span class="n">d_g_sizes</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">g_sizes</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">)</span>
+    <span class="n">d_g_lds</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">g_lds</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">)</span>
+    <span class="n">d_g_t_lds</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">g_T_lds</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">)</span>
+
+    <span class="n">quantiles</span> <span class="o">=</span> <span class="p">[</span><span class="mf">0.5</span><span class="p">,</span> <span class="mf">0.2</span><span class="p">,</span> <span class="mf">0.8</span><span class="p">]</span>
+    <span class="k">if</span> <span class="n">provider</span> <span class="o">==</span> <span class="s1">&#39;cublas&#39;</span><span class="p">:</span>
+        <span class="n">ms</span><span class="p">,</span> <span class="n">min_ms</span><span class="p">,</span> <span class="n">max_ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">torch_perf_fn</span><span class="p">(</span><span class="n">group_A</span><span class="p">,</span> <span class="n">group_B</span><span class="p">),</span> <span class="n">quantiles</span><span class="o">=</span><span class="n">quantiles</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">provider</span> <span class="o">==</span> <span class="s1">&#39;triton&#39;</span><span class="p">:</span>
+        <span class="n">ms</span><span class="p">,</span> <span class="n">min_ms</span><span class="p">,</span> <span class="n">max_ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span>
+            <span class="k">lambda</span><span class="p">:</span> <span class="n">triton_perf_fn</span><span class="p">(</span><span class="n">d_a_ptrs</span><span class="p">,</span> <span class="n">d_b_ptrs</span><span class="p">,</span> <span class="n">d_c_ptrs</span><span class="p">,</span> <span class="n">d_g_sizes</span><span class="p">,</span> <span class="n">d_g_lds</span><span class="p">,</span> <span class="n">group_size</span><span class="p">),</span> <span class="n">quantiles</span><span class="o">=</span><span class="n">quantiles</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">provider</span> <span class="o">==</span> <span class="s1">&#39;triton-tma&#39;</span><span class="p">:</span>
+        <span class="n">ms</span><span class="p">,</span> <span class="n">min_ms</span><span class="p">,</span> <span class="n">max_ms</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">do_bench</span><span class="p">(</span>
+            <span class="k">lambda</span><span class="p">:</span> <span class="n">triton_tma_perf_fn</span><span class="p">(</span><span class="n">d_a_ptrs</span><span class="p">,</span> <span class="n">d_b_t_ptrs</span><span class="p">,</span> <span class="n">d_c_ptrs</span><span class="p">,</span> <span class="n">d_g_sizes</span><span class="p">,</span> <span class="n">d_g_t_lds</span><span class="p">,</span> <span class="n">group_size</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span>
+                                       <span class="n">float16</span><span class="p">),</span> <span class="n">quantiles</span><span class="o">=</span><span class="n">quantiles</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">ms</span><span class="p">,</span> <span class="n">max_ms</span><span class="p">,</span> <span class="n">min_ms</span>
+
+
+<span class="n">benchmark_square_matrices</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">show_plots</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">benchmark_batches</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">show_plots</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">print_data</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 3.064 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 5.469 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-08-grouped-gemm-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/6360f3425f2c39f9f330971830c25ba7/08-grouped-gemm.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">08-grouped-gemm.ipynb</span></code></a></p>

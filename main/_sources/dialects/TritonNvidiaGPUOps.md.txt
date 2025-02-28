@@ -420,9 +420,7 @@ Explicitly deallocating a buffer is optional; see local_dealloc.
 
 Traits: `VerifyTensorLayoutsTrait`
 
-Interfaces: `MemoryEffectOpInterface (MemoryEffectOpInterface)`
-
-Effects: `MemoryEffects::Effect{MemoryEffects::Write on ::mlir::SideEffects::DefaultResource}`
+Interfaces: `MemoryEffectOpInterface`
 
 #### Operands:
 
