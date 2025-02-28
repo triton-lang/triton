@@ -865,7 +865,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @pipeline_tc05mma_scaled
   // CHECK:   ttng.tc_gen5_mma_scaled
-  // CHECK-NOT:   ttng.wait_barrier // MMA pipeline should not apply since scales are not passed in shmem
+  // MMA pipeline should not apply since scales are not passed in shmem
+  // CHECK-NOT:   ttng.wait_barrier
 
   tt.func public @pipeline_tc05mma_scaled(%arg0: i32, %arg1: tensor<128x128x!tt.ptr<f16>, #blocked> {tt.contiguity = 16 : i32, tt.divisibility = 16 : i32}, %arg2: tensor<128x128x!tt.ptr<f16>, #blocked> {tt.contiguity = 16 : i32, tt.divisibility = 16 : i32}, %scale_A: tensor<128x4x!tt.ptr<i8>, #blocked> {tt.contiguity = 16 : i32, tt.divisibility = 16 : i32}, %scale_B: tensor<128x4x!tt.ptr<i8>, #blocked> {tt.contiguity = 16 : i32, tt.divisibility = 16 : i32}) -> tensor<128x128xf32, #blocked1> attributes {noinline = false} {
     %c2_i32 = arith.constant 2 : i32
