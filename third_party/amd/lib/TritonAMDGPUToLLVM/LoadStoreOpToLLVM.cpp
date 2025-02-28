@@ -1212,50 +1212,36 @@ Value genPrefixSum(PatternRewriter &rewriter, Value v0) {
 
   Value v1 = v0;
   // v_add_f32 v1, v0, v0 row_shr:1 bound_ctrl:0
-  Value tmp = rewriter
-                  .create<ROCDL::DPPUpdateOp>(loc, i32_ty, old, v0, 0x111, 0xF,
-                                              0xF, false)
-                  .getResult();
+  Value tmp = rewriter.create<ROCDL::DPPUpdateOp>(loc, i32_ty, old, v0, 0x111,
+                                                  0xF, 0xF, false);
   v1 = b.add(v1, tmp);
   // v_add_f32 v1, v0, v1 row_shr:2 bound_ctrl:0
-  tmp = rewriter
-            .create<ROCDL::DPPUpdateOp>(loc, i32_ty, old, v0, 0x112, 0xF, 0xF,
-                                        false)
-            .getResult();
+  tmp = rewriter.create<ROCDL::DPPUpdateOp>(loc, i32_ty, old, v0, 0x112, 0xF,
+                                            0xF, false);
   v1 = b.add(v1, tmp);
   // v_add_f32 v1, v0, v1 row_shr:3 bound_ctrl:0
-  tmp = rewriter
-            .create<ROCDL::DPPUpdateOp>(loc, i32_ty, old, v0, 0x113, 0xF, 0xF,
-                                        false)
-            .getResult();
+  tmp = rewriter.create<ROCDL::DPPUpdateOp>(loc, i32_ty, old, v0, 0x113, 0xF,
+                                            0xF, false);
   v1 = b.add(v1, tmp);
 
   // v_add_f32 v1, v1, v1 row_shr:4 bank_mask:0xe
-  tmp = rewriter
-            .create<ROCDL::DPPUpdateOp>(loc, i32_ty, old, v1, 0x114, 0xF, 0xE,
-                                        true)
-            .getResult();
+  tmp = rewriter.create<ROCDL::DPPUpdateOp>(loc, i32_ty, old, v1, 0x114, 0xF,
+                                            0xE, true);
   v1 = b.add(v1, tmp);
 
   // v_add_f32 v1, v1, v1 row_shr:8 bank_mask:0xc
-  tmp = rewriter
-            .create<ROCDL::DPPUpdateOp>(loc, i32_ty, old, v1, 0x118, 0xF, 0xC,
-                                        true)
-            .getResult();
+  tmp = rewriter.create<ROCDL::DPPUpdateOp>(loc, i32_ty, old, v1, 0x118, 0xF,
+                                            0xC, true);
   v1 = b.add(v1, tmp);
 
   // v_add_f32 v1, v1, v1 row_bcast:15 row_mask:0xa
-  tmp = rewriter
-            .create<ROCDL::DPPUpdateOp>(loc, i32_ty, old, v1, 0x142, 0xA, 0xF,
-                                        true)
-            .getResult();
+  tmp = rewriter.create<ROCDL::DPPUpdateOp>(loc, i32_ty, old, v1, 0x142, 0xA,
+                                            0xF, true);
   v1 = b.add(v1, tmp);
 
   // v_add_f32 v1, v1, v1 row_bcast:31 row_mask:0xc
-  tmp = rewriter
-            .create<ROCDL::DPPUpdateOp>(loc, i32_ty, old, v1, 0x143, 0xC, 0xF,
-                                        true)
-            .getResult();
+  tmp = rewriter.create<ROCDL::DPPUpdateOp>(loc, i32_ty, old, v1, 0x143, 0xC,
+                                            0xF, true);
   v1 = b.add(v1, tmp);
 
   return v1;
@@ -1345,7 +1331,6 @@ struct AtomicRMWOpConversion
 
     // TODO: support data types less than 32 bits
     enableIntraWaveReduce &= valueElemNbits >= 32;
-    // enableIntraWaveReduce = false;
 
     // In the case of unpaired f16 elements utilize dpp instructions to
     // accelerate atomics. Here is an algorithm of lowering
@@ -1473,20 +1458,27 @@ struct AtomicRMWOpConversion
       endBlock->addArgument({retType}, {loc});
 
       rewriter.setInsertionPointToEnd(curBlock);
+      // intraWave reduce optimization for atomic ops needs all active threads
+      // at the beginning of a wave. This is achieved as:
+      // 1. Compute the prefix sum of the mask, then each active lane gets a
+      //    different value (offset) from its previous lane.
+      // 2. Multiply the mask and the offset, so only active lanes have a
+      //    non-zero offset, and the offset is different in each active lanes
+      // 3. Sub 1 from offset to get the idx each active lane is moved to
+      // 4. call permute to move active lanes to the beginning of wave
+      // 5. Update mask of each lane accordingly.
       if (enableIntraWaveReduce) {
-        // permute to make active lanes at the begining in a wave
         Value maskI32 = b.zext(i32_ty, rmwMask);
-        Value permuteOffset = genPrefixSum(rewriter, maskI32);
-        permuteOffset = b.mul(permuteOffset, maskI32);
-        int waveSize = 64;
-        permuteOffset = b.select(b.icmp_eq(permuteOffset, b.i32_val(0)),
-                                 b.i32_val(waveSize), permuteOffset);
-        permuteOffset = b.sub(permuteOffset, b.i32_val(1));
-        permuteOffset = b.mul(permuteOffset, b.i32_val(4));
-        operand = genI32TiledOp(rewriter, genPermute, operand, permuteOffset);
+        Value offset = genPrefixSum(rewriter, maskI32);
+        offset = b.mul(offset, maskI32);
+        auto layout = tensorTy.getEncoding();
+        Value waveSize = b.i32_val(triton::gpu::getWarpSize(layout));
+        offset = b.select(b.icmp_eq(offset, b.i32_val(0)), waveSize, offset);
+        Value idx = b.sub(offset, b.i32_val(1));
+        idx = b.mul(idx, b.i32_val(4));
+        operand = genI32TiledOp(rewriter, genPermute, operand, idx);
         Value castedAddr = b.ptrtoint(i64_ty, rmwPtr);
-        castedAddr =
-            genI32TiledOp(rewriter, genPermute, castedAddr, permuteOffset);
+        castedAddr = genI32TiledOp(rewriter, genPermute, castedAddr, idx);
         rmwPtr = b.inttoptr(rmwPtr.getType(), castedAddr);
 
         // update mask
@@ -1494,7 +1486,7 @@ struct AtomicRMWOpConversion
         Value numActiveLanes =
             b.trunc(i32_ty, generatePopcount64(rewriter, maskFlag));
 
-        Value laneID = b.urem(tid, b.i32_val(waveSize));
+        Value laneID = b.urem(tid, waveSize);
         rmwMask = b.icmp_ult(laneID, numActiveLanes);
       }
       rewriter.create<LLVM::CondBrOp>(loc, rmwMask, atomicBlock, endBlock,
@@ -1648,8 +1640,7 @@ private:
         b.trunc(i32_ty, generatePopcount64(rewriter, neighbourFlag));
     // Heuristic that atomic_add is optimizated only if the number of
     // neighbouring addresses in a wave is less than 32.
-    // TODO: Calculate actual number of difference addresses
-    // in a wave.
+    // TODO: Calculate actual number of difference addresses in a wave.
     Value optAtomic = b.icmp_ult(numNeighbours, b.i32_val(32));
 
     rewriter.create<LLVM::CondBrOp>(loc, optAtomic, initLoop, atomicBlock,
