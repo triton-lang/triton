@@ -76,22 +76,33 @@ getMfmasPerRep(const SmallVector<int64_t> &ctaTile,
                const SmallVector<unsigned> &warpsPerCta,
                const SmallVector<int64_t> &numReps,
                const SmallVector<unsigned> &mfmaShape) {
+  LDBG("ctaTile: " << ctaTile[0] << "x" << ctaTile[1] << "x" << ctaTile[2]);
+  LDBG("warpsPerCtaTile: " << warpsPerCta[0] << "x" << warpsPerCta[1]);
+  LDBG("numReps: " << numReps[0] << "x" << numReps[1] << "x" << numReps[2]);
+  LDBG("mfmaShape: " << mfmaShape[0] << "x" << mfmaShape[1] << "x" << mfmaShape[2]);
   // Tile shape per warp.
   SmallVector<int64_t, 3> warpTile = {
       ctaTile[0] / warpsPerCta[0],
       ctaTile[1] / warpsPerCta[1],
       ctaTile[2],
   };
+  LDBG("warpTile: " << warpTile[0] << "x" << warpTile[1] << "x" << warpTile[2]);
   // Tile shape per rep.
   SmallVector<int64_t, 3> repTile = {
       warpTile[0] / numReps[0],
       warpTile[1] / numReps[1],
       warpTile[2] / numReps[2],
   };
+  LDBG("repTile: " << repTile[0] << "x" << repTile[1] << "x" << repTile[2]);
   SmallVector<unsigned, 3> mfmasPerRep = {
       static_cast<unsigned>(repTile[0] / mfmaShape[0]),
       static_cast<unsigned>(repTile[1] / mfmaShape[1]),
       static_cast<unsigned>(repTile[2] / mfmaShape[2])};
+  LDBG("mfmasPerRep: " << mfmasPerRep[0] << "x" << mfmasPerRep[1] << "x" << mfmasPerRep[2]);
+  if (mfmasPerRep[0] < 1 || mfmasPerRep[1] < 1 || mfmasPerRep[2] < 1) {
+    llvm::errs() << "DotTiling::getMfmasPerRep() - Invalid combination of ctaTile, warpsPerCta and mfmaShape.\n";
+    return SmallVector<unsigned, 3>({1, 1, 1});
+  }
   return mfmasPerRep;
 }
 
@@ -186,14 +197,23 @@ calcDotTileShape(const SmallVector<unsigned, 3>
                  unsigned numLocalLoadsPerRepB = 1,
                  unsigned localLoadDataLatency = 128) {
   DotTileShapeType tileShape = {1, 1, 1};
+  assert(mfmasPerRep[0] >= 1);
+  assert(mfmasPerRep[1] >= 1);
+  assert(mfmasPerRep[2] >= 1);
+  assert(cyclesPerMfma >= 1);
 
   bool localLoadDataLatencyExposed = true;
   bool localLoadRateExposed = true;
   bool localLoadIssueExposed = true;
 
-  // Keep on increasing the dimension of the tile
-  while (localLoadDataLatencyExposed || localLoadRateExposed ||
-         localLoadIssueExposed) {
+  // Try a finite number of times to increase the TileShape meet performance criteria.
+  int maxTries = 12; // sufficient to create 64x64 tile.
+  for (int i = 0; i < maxTries; ++i) {
+    // If TileShape meets performance criteria, return.
+    if (!(localLoadDataLatencyExposed || localLoadRateExposed || localLoadIssueExposed)) {
+        return tileShape;
+    }
+    // TileShape doesn't meet performance criteria, increase it's size.
     // Enforce criteria #4 - small square.
     if ((tileShape[0] * mfmasPerRep[0] < tileShape[1] * mfmasPerRep[1]) ||
         ((tileShape[0] * mfmasPerRep[0] == tileShape[1] * mfmasPerRep[1]) &&
@@ -222,7 +242,8 @@ calcDotTileShape(const SmallVector<unsigned, 3>
     localLoadIssueExposed =
         (mfmaCycles - totalMfmaIssueCycles) < totalLoadIssueCycles;
   }
-  return tileShape;
+  // Fallback to 2x2x1 tile shape.
+  return DotTileShapeType({2, 2, 1});
 }
 
 /*
