@@ -1,4 +1,5 @@
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/Support/DebugStringHelper.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -653,6 +654,13 @@ LogicalResult WarpSpecializeOp::verify() {
     return emitOpError("partition #")
            << i << " number of warps (" << numWarps << ") must be a power of 2";
   }
+  if (std::optional<ArrayRef<int32_t>> startIds = getWarpGroupStartIds()) {
+    if (startIds->size() != getPartitionNumWarps().size()) {
+      return emitOpError("has ")
+             << startIds->size() << " warp group start IDs but expected "
+             << getPartitionNumWarps().size();
+    }
+  }
 
   for (auto [i, region] : llvm::enumerate(getPartitionRegions())) {
     if (region->getNumArguments() != getNumOperands()) {
@@ -668,23 +676,6 @@ LogicalResult WarpSpecializeOp::verify() {
              << i << " argument #" << argIdx << " has type " << argType
              << " but corresponding capture has type " << capType;
     }
-    if (isa<WarpReturnOp>(region->front().getTerminator()))
-      continue;
-    return emitOpError("partition region #")
-           << i << " does not end with a `ttg.warp_return` op";
-  }
-
-  // Verify the default region.
-  auto yield =
-      dyn_cast<WarpYieldOp>(getDefaultRegion().front().getTerminator());
-  if (!yield) {
-    return emitOpError(
-        "expected its default region to end with a `ttg.warp_yield` op");
-  }
-  if (yield.getNumOperands() != getNumResults()) {
-    return yield.emitOpError("has ")
-           << yield.getNumOperands() << " operands but parent op expected "
-           << getNumResults();
   }
 
   // This op cannot be nested inside itself.
@@ -720,9 +711,6 @@ ParseResult WarpSpecializeOp::parse(OpAsmParser &p, OperationState &result) {
         p.parseInteger(partitionNumWarps.emplace_back()) || p.parseRParen() ||
         p.parseRegion(*partitionOpState.addRegion(), partitionArgs))
       return failure();
-    WarpSpecializePartitionsOp::ensureTerminator(
-        *partitionOpState.regions.back(), p.getBuilder(),
-        p.getEncodedSourceLoc(regionLoc));
   }
 
   FunctionType types;
@@ -761,19 +749,58 @@ void WarpSpecializeOp::print(OpAsmPrinter &p) {
       p.printRegionArgument(arg);
     });
     p << ") num_warps(" << numWarps << ") ";
-    p.printRegion(*region, /*printEntryBlockArgs=*/false,
-                  /*printBlockTerminators=*/false);
+    p.printRegion(*region, /*printEntryBlockArgs=*/false);
   }
   p << " : ";
   p.printFunctionalType(*this);
 }
 
-// -- WarpYieldOp --
+LogicalResult WarpYieldOp::verify() {
+  if (getNumOperands() != getParentOp().getNumResults()) {
+    return emitOpError("has ")
+           << getNumOperands() << " operands but parent op expected "
+           << getParentOp().getNumResults();
+  }
+  for (auto [i, result, type] :
+       llvm::enumerate(getParentOp().getResultTypes(), getOperandTypes())) {
+    if (result != type) {
+      return emitOpError("operand #") << i << " has type " << type
+                                      << " but parent op expected " << result;
+    }
+  }
+  return success();
+}
 
-MutableOperandRange
-WarpYieldOp::getMutableSuccessorOperands(RegionBranchPoint target) {
-  assert(target.isParent());
-  return getValuesMutable();
+// Get the size of a scalar type when stored in shared memory.
+// TODO: Generalize this as needed.
+static size_t getSharedMemorySize(Type type) {
+  if (isa<IntegerType, FloatType>(type))
+    return llvm::divideCeil(type.getIntOrFloatBitWidth(), 8);
+  if (isa<PointerType>(type))
+    return 8;
+  if (auto desc = dyn_cast<MemDescType>(type)) {
+    if (!isa<SharedMemorySpaceAttr>(desc.getMemorySpace()))
+      return 8;
+    return 8 + desc.getRank() * 4;
+  }
+  llvm::report_fatal_error(
+      Twine("shared memory size for scalar type is unspecified: ") +
+      mlir::debugString(type));
+}
+
+std::pair<uint64_t, uint64_t> WarpSpecializeOp::getCaptureSizeAlign() {
+  uint64_t captureSize = 0;
+  // Tightly pack the captures in memory.
+  for (Type type : getOperandTypes()) {
+    captureSize += getSharedMemorySize(type);
+  }
+  // Align the captures to 8 bytes.
+  return {captureSize, 8};
+}
+
+unsigned WarpSpecializeOp::getTotalPartitionWarps() {
+  ArrayRef<int32_t> numWarps = getPartitionNumWarps();
+  return std::accumulate(numWarps.begin(), numWarps.end(), 0);
 }
 
 } // namespace mlir::triton::gpu

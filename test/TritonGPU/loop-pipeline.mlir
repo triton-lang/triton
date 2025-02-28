@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritongpu-loop-scheduling=num-stages=3 -tritongpu-pipeline=num-stages=3 -canonicalize | FileCheck %s --check-prefixes=COMMON,CHECK
+// RUN: triton-opt %s -split-input-file -tritongpu-pipeline=num-stages=3 -canonicalize | FileCheck %s --check-prefixes=COMMON,CHECK
 // RUN: triton-opt %s -split-input-file -tritonamdgpu-stream-pipeline=num_stages=2 -canonicalize | FileCheck %s --check-prefixes=COMMON,AMD
 // RUN: triton-opt %s -split-input-file -tritonamdgpu-stream-pipeline="num_stages=3 global_prefetch=1 local_prefetch=1" -canonicalize | FileCheck %s --check-prefixes=COMMON,AMD_PREFETCH
 
@@ -15,6 +15,7 @@
 #smem = #ttg.shared_memory
 
 // CHECK-LABEL: tt.func @matmul_loop
+// CHECK-DAG: %[[CONSTANT_NEG1:.*]] = arith.constant -1 : i32
 // CHECK-DAG: %[[CONSTANT_0:.*]] = arith.constant 0 : i32
 // CHECK-DAG: %[[CONSTANT_1:.*]] = arith.constant 1 : i32
 // CHECK-DAG: %[[CONSTANT_2:.*]] = arith.constant 2 : i32
@@ -35,12 +36,15 @@
 // CHECK-DAG: %[[LOOP_COND_1_SPLAT_B:.*]] = tt.splat %[[LOOP_COND_1]]
 // CHECK-DAG: %[[BSUB1:.*]] = ttg.memdesc_subview %[[BBUFFER]][%[[CONSTANT_1]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
 // CHECK: %[[T_B1:.*]] = ttg.async_copy_global_to_local %{{.*}}, %[[BSUB1]] mask %[[LOOP_COND_1_SPLAT_B]]
-// CHECK-DAG: %[[A0:.*]] = ttg.memdesc_subview %[[ABUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
-// CHECK-DAG: %[[B0:.*]] = ttg.memdesc_subview %[[BBUFFER]][%[[CONSTANT_0]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
-// CHECK-DAG:   ttg.async_wait {{.*}} {num = 2 : i32}
-// CHECK: scf.for {{.*}} iter_args({{.*}}, %[[INS_IDX:.*]] = %[[CONSTANT_1]], %[[EXT_IDX:.*]] = %[[CONSTANT_0]]{{.*}}, %[[arg_a0:.*]] = %[[A0]], %[[arg_b0:.*]] = %[[B0]]
-// CHECK:   %[[arg_a0_dot_op:.*]] = ttg.local_load %[[arg_a0]]
-// CHECK:   %[[arg_b0_dot_op_0:.*]] = ttg.local_load %[[arg_b0]]
+// CHECK: scf.for {{.*}} iter_args({{.*}}, %[[INS_IDX:.*]] = %[[CONSTANT_1]], %[[EXT_IDX:.*]] = %[[CONSTANT_NEG1]]
+// CHECK-DAG: %[[EXT_IDX_2:.*]] = arith.addi %[[EXT_IDX]], %[[CONSTANT_1]] : i32
+// CHECK-DAG: %[[CMP_EXT:.*]] = arith.cmpi slt, %[[EXT_IDX_2]], %[[CONSTANT_2]]
+// CHECK-DAG: %[[EXT_IDX_3:.*]] = arith.select %[[CMP_EXT]], %[[EXT_IDX_2]], %[[CONSTANT_0]]
+// CHECK-DAG: ttg.async_wait {{.*}} {num = 2 : i32}
+// CHECK-DAG: %[[A0:.*]] = ttg.memdesc_subview %[[ABUFFER]][%[[EXT_IDX_3]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK:   %[[arg_a0_dot_op:.*]] = ttg.local_load %[[A0]]
+// CHECK-DAG: %[[B0:.*]] = ttg.memdesc_subview %[[BBUFFER]][%[[EXT_IDX_3]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK:   %[[arg_b0_dot_op_0:.*]] = ttg.local_load %[[B0]]
 // CHECK:   %[[arg_b0_dot_op_1:.*]] = arith.mulf %[[arg_b0_dot_op_0]]
 // CHECK:   tt.dot %[[arg_a0_dot_op]], %[[arg_b0_dot_op_1]], {{.*}}
 // CHECK-DAG: %[[INS_IDX_2:.*]] = arith.addi %[[INS_IDX]], %[[CONSTANT_1]] : i32
@@ -50,13 +54,7 @@
 // CHECK:   %[[NEXT_A_BUFFER:.*]] = ttg.async_copy_global_to_local {{.*}}, %[[ASUB3]]
 // CHECK:   %[[BSUB3:.*]] = ttg.memdesc_subview %[[BBUFFER]][%[[INS_IDX_3]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
 // CHECK:   %[[NEXT_B_BUFFER:.*]] = ttg.async_copy_global_to_local {{.*}}, %[[BSUB3]]
-// CHECK-DAG: %[[EXT_IDX_2:.*]] = arith.addi %[[EXT_IDX]], %[[CONSTANT_1]] : i32
-// CHECK-DAG: %[[CMP_EXT:.*]] = arith.cmpi slt, %[[EXT_IDX_2]], %[[CONSTANT_2]]
-// CHECK-DAG: %[[EXT_IDX_3:.*]] = arith.select %[[CMP_EXT]], %[[EXT_IDX_2]], %[[CONSTANT_0]]
-// CHECK-DAG: %[[NEXT_A:.*]] = ttg.memdesc_subview %{{.+}}[%[[EXT_IDX_3]],
-// CHECK-DAG: %[[NEXT_B:.*]] = ttg.memdesc_subview %{{.+}}[%[[EXT_IDX_3]],
-// CHECK-DAG: ttg.async_wait {{.*}} {num = 2 : i32}
-// CHECK:   scf.yield {{.*}}, %[[INS_IDX_3]], %[[EXT_IDX_3]], %[[NEXT_A]], %[[NEXT_B]]
+// CHECK:   scf.yield {{.*}}, %[[INS_IDX_3]], %[[EXT_IDX_3]]
 
 // AMD-LABEL:  tt.func @matmul_loop
 //   AMD-DAG:   %[[CM1:.*]] = arith.constant -1 : index
@@ -175,6 +173,7 @@ tt.func @matmul_loop(%lb : index, %ub : index, %step : index,
 }
 
 // CHECK-LABEL: tt.func @matmul_loop_nested
+// CHECK-DAG: %[[CONSTANT_NEG1:.*]] = arith.constant -1 : i32
 // CHECK-DAG: %[[CONSTANT_0:.*]] = arith.constant 0 : i32
 // CHECK-DAG: %[[CONSTANT_1:.*]] = arith.constant 1 : i32
 // CHECK-DAG: %[[CONSTANT_2:.*]] = arith.constant 2 : i32
@@ -189,27 +188,24 @@ tt.func @matmul_loop(%lb : index, %ub : index, %step : index,
 // CHECK:   ttg.async_copy_global_to_local
 // CHECK:   ttg.memdesc_subview %[[BBUFFER]][%[[CONSTANT_1]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
 // CHECK:   ttg.async_copy_global_to_local
-// CHECK-DAG:   %[[A0:.*]] = ttg.memdesc_subview %[[ABUFFER]][%[[CONSTANT_0]],
-// CHECK-DAG:   %[[B0:.*]] = ttg.memdesc_subview %[[BBUFFER]][%[[CONSTANT_0]],
-// CHECK-DAG:   ttg.async_wait {{.*}} {num = 2 : i32}
-// CHECK:   scf.for {{.*}} iter_args({{.*}}, %[[INS_IDX:.*]] = %[[CONSTANT_1]], %[[EXT_IDX:.*]] = %[[CONSTANT_0]]{{.*}}, %[[arg_a0:.*]] = %[[A0]], %[[arg_b0:.*]] = %[[B0]]
-// CHECK:   %[[arg_a0_dot_op:.*]] = ttg.local_load %[[arg_a0]]
-// CHECK:   %[[arg_b0_dot_op_0:.*]] = ttg.local_load %[[arg_b0]]
-// CHECK:   tt.dot %[[arg_a0_dot_op]], %[[arg_b0_dot_op_0]], {{.*}}
+// CHECK:   scf.for {{.*}} iter_args({{.*}}, %[[INS_IDX:.*]] = %[[CONSTANT_1]], %[[EXT_IDX:.*]] = %[[CONSTANT_NEG1]]{{.*}}
+// CHECK:     %[[EXT_IDX_2:.*]] = arith.addi %[[EXT_IDX]], %[[CONSTANT_1]] : i32
+// CHECK:     %[[CMP_EXT:.*]] = arith.cmpi slt, %[[EXT_IDX_2]], %[[CONSTANT_2]]
+// CHECK:     %[[EXT_IDX_3:.*]] = arith.select %[[CMP_EXT]], %[[EXT_IDX_2]], %[[CONSTANT_0]]
+// CHECK:     ttg.async_wait {{.*}} {num = 2 : i32}
+// CHECK:     %[[A:.*]] = ttg.memdesc_subview %[[ABUFFER]][%[[EXT_IDX_3]],
+// CHECK:     %[[arg_a0_dot_op:.*]] = ttg.local_load %[[A]]
+// CHECK:     %[[B:.*]] = ttg.memdesc_subview %[[BBUFFER]][%[[EXT_IDX_3]],
+// CHECK:     %[[arg_b0_dot_op_0:.*]] = ttg.local_load %[[B]]
+// CHECK:     tt.dot %[[arg_a0_dot_op]], %[[arg_b0_dot_op_0]], {{.*}}
 // CHECK-DAG: %[[INS_IDX_2:.*]] = arith.addi %[[INS_IDX]], %[[CONSTANT_1]] : i32
 // CHECK-DAG: %[[CMP_INS:.*]] = arith.cmpi slt, %[[INS_IDX_2]], %[[CONSTANT_2]]
 // CHECK-DAG: %[[INS_IDX_3:.*]] = arith.select %[[CMP_INS]], %[[INS_IDX_2]], %[[CONSTANT_0]]
-// CHECK:   ttg.memdesc_subview %[[ABUFFER]][%[[INS_IDX_3]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
-// CHECK:   ttg.async_copy_global_to_local
-// CHECK:   ttg.memdesc_subview %[[BBUFFER]][%[[INS_IDX_3]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
-// CHECK:   ttg.async_copy_global_to_local
-// CHECK-DAG: %[[EXT_IDX_2:.*]] = arith.addi %[[EXT_IDX]], %[[CONSTANT_1]] : i32
-// CHECK-DAG: %[[CMP_EXT:.*]] = arith.cmpi slt, %[[EXT_IDX_2]], %[[CONSTANT_2]]
-// CHECK-DAG: %[[EXT_IDX_3:.*]] = arith.select %[[CMP_EXT]], %[[EXT_IDX_2]], %[[CONSTANT_0]]
-// CHECK-DAG: %[[NEXT_A:.*]] = ttg.memdesc_subview %[[ABUFFER]][%[[EXT_IDX_3]]
-// CHECK-DAG: %[[NEXT_B:.*]] = ttg.memdesc_subview %[[BBUFFER]][%[[EXT_IDX_3]]
-// CHECK-DAG: ttg.async_wait {{.*}} {num = 2 : i32}
-// CHECK:   scf.yield {{.*}}, %[[INS_IDX_3]], %[[EXT_IDX_3]], %[[NEXT_A]], %[[NEXT_B]]
+// CHECK:     ttg.memdesc_subview %[[ABUFFER]][%[[INS_IDX_3]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK:     ttg.async_copy_global_to_local
+// CHECK:     ttg.memdesc_subview %[[BBUFFER]][%[[INS_IDX_3]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
+// CHECK:     ttg.async_copy_global_to_local
+// CHECK:   scf.yield {{.*}}, %[[INS_IDX_3]], %[[EXT_IDX_3]]
 // CHECK:   ttg.async_wait {num = 0 : i32}
 // CHECK    scf.yield
 
@@ -289,6 +285,7 @@ tt.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
 }
 
 // CHECK-LABEL: tt.func @matmul_loop_single_pipeline
+// CHECK-DAG: %[[CONSTANT_NEG1:.*]] = arith.constant -1 : i32
 // CHECK-DAG: %[[CONSTANT_0:.*]] = arith.constant 0 : i32
 // CHECK-DAG: %[[CONSTANT_1:.*]] = arith.constant 1 : i32
 // CHECK-DAG: %[[CONSTANT_2:.*]] = arith.constant 2 : i32
@@ -297,22 +294,20 @@ tt.func @matmul_loop_nested(%lb : index, %ub : index, %step : index,
 // CHECK: ttg.async_copy_global_to_local
 // CHECK: ttg.memdesc_subview %[[BBUFFER]][%[[CONSTANT_1]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
 // CHECK: ttg.async_copy_global_to_local
-// CHECK-DAG: %[[B0:.*]] = ttg.memdesc_subview %[[BBUFFER]][%[[CONSTANT_0]]
-// CHECK-DAG: ttg.async_wait {{.*}} {num = 1 : i32}
-// CHECK:   scf.for {{.*}} iter_args({{.*}}, %[[INS_IDX:.*]] = %[[CONSTANT_1]], %[[EXT_IDX:.*]] = %[[CONSTANT_0]]{{.*}}, %[[arg_b0:.*]] = %[[B0]]
-// CHECK:   %[[arg_b0_dot_op:.*]] = ttg.local_load %[[arg_b0]]
-// CHECK:   tt.dot {{.*}}, %[[arg_b0_dot_op]], {{.*}}
+// CHECK:   scf.for {{.*}} iter_args({{.*}}, %[[INS_IDX:.*]] = %[[CONSTANT_1]], %[[EXT_IDX:.*]] = %[[CONSTANT_NEG1]]
+// CHECK:     %[[EXT_IDX_2:.*]] = arith.addi %[[EXT_IDX]], %[[CONSTANT_1]] : i32
+// CHECK:     %[[CMP_EXT:.*]] = arith.cmpi slt, %[[EXT_IDX_2]], %[[CONSTANT_2]]
+// CHECK:     %[[EXT_IDX_3:.*]] = arith.select %[[CMP_EXT]], %[[EXT_IDX_2]], %[[CONSTANT_0]]
+// CHECK:     ttg.async_wait {{.*}} {num = 1 : i32}
+// CHECK:     %[[B0:.*]] = ttg.memdesc_subview %[[BBUFFER]][%[[EXT_IDX_3]]
+// CHECK:     %[[arg_b0_dot_op:.*]] = ttg.local_load %[[B0]]
+// CHECK:     tt.dot {{.*}}, %[[arg_b0_dot_op]], {{.*}}
 // CHECK-DAG: %[[INS_IDX_2:.*]] = arith.addi %[[INS_IDX]], %[[CONSTANT_1]] : i32
 // CHECK-DAG: %[[CMP_INS:.*]] = arith.cmpi slt, %[[INS_IDX_2]], %[[CONSTANT_2]]
 // CHECK-DAG: %[[INS_IDX_3:.*]] = arith.select %[[CMP_INS]], %[[INS_IDX_2]], %[[CONSTANT_0]]
 // CHECK:     ttg.memdesc_subview %[[BBUFFER]][%[[INS_IDX_3]], %[[CONSTANT_0]], %[[CONSTANT_0]]]
 // CHECK:     ttg.async_copy_global_to_local
-// CHECK-DAG: %[[EXT_IDX_2:.*]] = arith.addi %[[EXT_IDX]], %[[CONSTANT_1]] : i32
-// CHECK-DAG: %[[CMP_EXT:.*]] = arith.cmpi slt, %[[EXT_IDX_2]], %[[CONSTANT_2]]
-// CHECK-DAG: %[[EXT_IDX_3:.*]] = arith.select %[[CMP_EXT]], %[[EXT_IDX_2]], %[[CONSTANT_0]]
-// CHECK-DAG: %[[NEXT_B:.*]] = ttg.memdesc_subview %{{.+}}[%[[EXT_IDX_3]]
-// CHECK-DAG: ttg.async_wait {{.*}} {num = 1 : i32}
-// CHECK:   scf.yield {{.*}}, %[[INS_IDX_3]], %[[EXT_IDX_3]], %[[NEXT_B]]
+// CHECK:   scf.yield {{.*}}, %[[INS_IDX_3]], %[[EXT_IDX_3]]
 
 // AMD-LABEL:  tt.func @matmul_loop_single_pipeline
 //       AMD:   %[[LOAD_10:.*]] = tt.load %{{.*}}
@@ -397,6 +392,8 @@ tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
 // CHECK: ttg.async_copy_global_to_local
 // CHECK: ttg.async_copy_global_to_local
 // CHECK: ttg.async_commit_group
+// CHECK: scf.for
+// CHECK: ttg.async_wait {{.*}} {num = 2 : i32}
 // CHECK: %[[NEXT_BUFFER_1:.*]] = tt.addptr %{{.*}}, {{.*}}
 // CHECK: ttg.async_copy_global_to_local %[[NEXT_BUFFER_1]]
 // CHECK: %[[IND_BUFFER_0:.*]] = tt.load %{{.*}}, {{.*}}
@@ -404,7 +401,6 @@ tt.func @matmul_loop_single_pipeline(%lb : index, %ub : index, %step : index,
 // CHECK: %[[IND_BUFFER_2:.*]] = tt.splat %[[IND_BUFFER_1]]
 // CHECK: %[[NEXT_BUFFER_0:.*]] = tt.addptr {{.*}}, %[[IND_BUFFER_2]]
 // CHECK: ttg.async_copy_global_to_local %[[NEXT_BUFFER_0]]
-// CHECK: ttg.async_wait {{.*}} {num = 2 : i32}
 
 // AMD-LABEL:   tt.func @indirect_bmm_scalar
 //       AMD:     %[[LOCAL_ALLOC_0:.*]] = ttg.local_alloc
@@ -545,6 +541,7 @@ tt.func @indirect_bmm_scalar(%77: i64 {tt.divisibility=16: i32},
 // CHECK: ttg.async_copy_global_to_local
 // CHECK: ttg.async_commit_group
 // CHECK: scf.for %{{.*}} iter_args(%{{[^,]*}}, %{{[^,]*}}, %{{[^,]*}}, %[[IND_BUFFER_PREV:[^,]*]] = {{[^,]*}}
+// CHECK: ttg.async_wait {{.*}} {num = 2 : i32}
 // CHECK: %[[NEXT_BUFFER_1:.*]] = tt.addptr %{{.*}}, {{.*}}
 // CHECK: ttg.async_copy_global_to_local %[[NEXT_BUFFER_1]]
 // CHECK: %[[IND_BUFFER_0:.*]] = tt.load %{{.*}}, {{.*}}
@@ -552,7 +549,6 @@ tt.func @indirect_bmm_scalar(%77: i64 {tt.divisibility=16: i32},
 // CHECK: %[[IND_BUFFER_2:.*]] = tt.splat %[[IND_BUFFER_1]]
 // CHECK: %[[NEXT_BUFFER_0:.*]] = tt.addptr {{.*}}, %[[IND_BUFFER_2]]
 // CHECK: ttg.async_copy_global_to_local %[[NEXT_BUFFER_0]]
-// CHECK: ttg.async_wait {{.*}} {num = 2 : i32}
 // CHECK: scf.yield {{.*}}, {{.*}}, {{.*}}, %[[IND_BUFFER_0]]
 
 // AMD-LABEL:  tt.func @indirect_bmm_scalar_dist_one
@@ -602,8 +598,8 @@ tt.func @indirect_bmm_scalar_dist_one(%77: i64 {tt.divisibility=16: i32},
 // CHECK: ttg.async_copy_global_to_local
 // CHECK: ttg.async_copy_global_to_local
 // CHECK: ttg.async_commit_group
-// CHECK: ttg.async_wait {{.*}} {num = 1 : i32}
 // CHECK: scf.for
+// CHECK: ttg.async_wait {{.*}} {num = 1 : i32}
 // CHECK: tt.dot
 // CHECK: %[[NEXT_BUFFER_1:.*]] = tt.addptr %{{.*}}, {{.*}}
 // CHECK: ttg.async_copy_global_to_local %[[NEXT_BUFFER_1]]
@@ -615,7 +611,6 @@ tt.func @indirect_bmm_scalar_dist_one(%77: i64 {tt.divisibility=16: i32},
 // CHECK: %[[IND_BUFFER_4:.*]] = arith.muli {{.*}}, %[[IND_BUFFER_3]]
 // CHECK: %[[NEXT_BUFFER_0:.*]] = tt.addptr {{.*}}, %[[IND_BUFFER_4]]
 // CHECK: ttg.async_copy_global_to_local %[[NEXT_BUFFER_0]]
-// CHECK: ttg.async_wait {{.*}} {num = 1 : i32}
 // CHECK: scf.yield
 
 // AMD-LABEL:  tt.func @indirect_bmm_vector
@@ -1029,6 +1024,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // CHECK: #[[$SHARED_LAYOUT:shared.*]] = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 // CHECK-LABEL: tt.func @indirect_load_shared_layout
 // CHECK: scf.for
+// CHECK: ttg.async_wait {{.*}} {num = 1 : i32}
 // CHECK: %[[NEXT_BUFFER_1:.*]] = tt.addptr %{{.*}}, {{.*}}
 // CHECK: ttg.async_copy_global_to_local %[[NEXT_BUFFER_1]]
 // CHECK: %[[IND_BUFFER_0:.*]] = ttg.memdesc_subview {{.*}} : !ttg.memdesc<1x16xi64, #[[$SHARED_LAYOUT]], #smem, mutable> -> !ttg.memdesc<16xi64, #[[$SHARED_LAYOUT]], #smem, mutable, 1x16>
@@ -1038,7 +1034,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // CHECK: %[[IND_BUFFER_4:.*]] = arith.muli {{.*}}, %[[IND_BUFFER_3]]
 // CHECK: %[[NEXT_BUFFER_0:.*]] = tt.addptr {{.*}}, %[[IND_BUFFER_4]]
 // CHECK: ttg.async_copy_global_to_local %[[NEXT_BUFFER_0]]
-// CHECK: ttg.async_wait {{.*}} {num = 1 : i32}
 
 //   AMD-DIS: #[[$SHARED_LAYOUT:shared.*]] = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 // AMD-LABEL: tt.func @indirect_load_shared_layout
@@ -1149,10 +1144,9 @@ tt.func @indirect_load_shared_layout(%77: tensor<16x16xi64, #BL> {tt.divisibilit
 
 // CHECK-LABEL: @kernel_yield_constant
 // CHECK: ttg.async_copy_global_to_local
-// CHECK: ttg.memdesc_subview
 // CHECK: scf.for
-// CHECK: ttg.async_copy_global_to_local
 // CHECK: ttg.memdesc_subview
+// CHECK: ttg.async_copy_global_to_local
 // CHECK: tt.return
 
 // AMD-LABEL: @kernel_yield_constant
@@ -1282,16 +1276,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // CHECK:   %[[SUBVIEW_2:.*]] = ttg.memdesc_subview %[[BUFFER_1]]
 // CHECK:   %[[ASYNC_COPY_2:.*]] = ttg.async_copy_global_to_local %[[NEXT_BUFFER_1]], %[[SUBVIEW_2]]
 // CHECK:   ttg.async_commit_group %[[ASYNC_COPY_2]]
-// CHECK:   ttg.async_wait
-// CHECK:   ttg.memdesc_subview %[[BUFFER_1]]
 // CHECK:   scf.for
+// CHECK:     ttg.async_wait
+// CHECK:     ttg.memdesc_subview %[[BUFFER_1]]
 // CHECK:     %[[LOCAL_LOAD_2:.*]] = ttg.local_load
 // CHECK:     %[[DOT:.*]] = tt.dot %[[LOCAL_LOAD_2]], %[[LOCAL_LOAD_1]]
 // CHECK:     %[[CONVERT_LAYOUT_3:.*]] = ttg.convert_layout %[[DOT]]
 // CHECK:     %[[SUBVIEW_4:.*]] = ttg.memdesc_subview %[[BUFFER_1]]
 // CHECK:     %[[ASYNC_COPY_3:.*]] = ttg.async_copy_global_to_local %[[NEXT_BUFFER_1]], %[[SUBVIEW_4]]
 // CHECK:     ttg.async_commit_group %[[ASYNC_COPY_3]]
-// CHECK:     ttg.memdesc_subview %[[BUFFER_1]]
 // CHECK: ttg.local_dealloc %[[BUFFER_1]]
 
 // AMD-LABEL:  tt.func public @nested_loops

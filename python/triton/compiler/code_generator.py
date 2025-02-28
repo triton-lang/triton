@@ -89,6 +89,23 @@ def _check_fn_args(node, fn, args):
                 )
 
 
+def _is_namedtuple(val):
+    return isinstance(val, type) and issubclass(val, tuple) and hasattr(val, "_fields")
+
+
+def _apply_to_tuple_values(value, fn):
+    if _is_namedtuple(type(value)):
+        fields = value._fields
+    elif isinstance(value, language.tuple):
+        fields = value.type.fields
+    else:
+        assert False, f"Unsupported type {type(value)}"
+
+    vals = [fn(v) for v in value]
+    types = [v.type for v in vals]
+    return language.tuple(vals, language.tuple_type(types, fields))
+
+
 def flatten_values_to_ir(values: Iterable[base_value]):
     handles = []
     for v in values:
@@ -349,9 +366,6 @@ class CodeGenerator(ast.NodeVisitor):
 
         return False
 
-    def _is_namedtuple(self, val):
-        return isinstance(val, type) and issubclass(val, tuple) and hasattr(val, "_fields")
-
     def _define_name_lookup(self):
 
         def local_lookup(name: str, absent):
@@ -370,7 +384,7 @@ class CodeGenerator(ast.NodeVisitor):
                     getattr(val, "__triton_builtin__", False),  #
                     getattr(val, "__module__", "").startswith("triton.language"),  #
                     isinstance(val, language.dtype),  #
-                    self._is_namedtuple(val),
+                    _is_namedtuple(val),
                     self._is_constexpr_global(name),  #
                     # Allow accesses to globals while visiting an ast.arg
                     # because you should be able to do
@@ -451,7 +465,7 @@ class CodeGenerator(ast.NodeVisitor):
 
         def decay(value):
             if isinstance(value, language.tuple):
-                return language.tuple([decay(v) for v in value.values])
+                return _apply_to_tuple_values(value, decay)
             elif isinstance(value, (language.constexpr, int, float)):
                 return semantic.to_tensor(value, self.builder)
             return value
@@ -575,13 +589,8 @@ class CodeGenerator(ast.NodeVisitor):
     def visit_Assign(self, node):
         # construct values to assign
         def _sanitize_value(value):
-            if self._is_namedtuple(type(value)):
-                vals = [_sanitize_value(v) for v in value]
-                types = [v.type for v in vals]
-                fields = type(value)._fields
-                return language.tuple(vals, language.tuple_type(types, fields))
             if isinstance(value, language.tuple):
-                return language.tuple([_sanitize_value(v) for v in value.values])
+                return _apply_to_tuple_values(value, _sanitize_value)
             native_nontensor_types = (language.dtype, language.tuple)
             value = _unwrap_if_constexpr(value)
             if value is not None and \
@@ -1253,7 +1262,8 @@ class CodeGenerator(ast.NodeVisitor):
 
         if fn in self.builtin_namespace.values():
             args = map(_unwrap_if_constexpr, args)
-        return fn(*args, **kws)
+        ret = fn(*args, **kws)
+        return _apply_to_tuple_values(ret, lambda x: x) if _is_namedtuple(type(ret)) else ret
 
     def visit_Constant(self, node):
         return constexpr(node.value)

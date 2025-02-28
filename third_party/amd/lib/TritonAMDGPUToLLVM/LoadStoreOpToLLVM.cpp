@@ -33,50 +33,23 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
                         Location loc, const AMD::TargetInfo &targetInfo) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
-  Value mask = b.int_val(1, 1);
+  Value mask = b.true_val();
   auto tid = getThreadId(rewriter, loc);
   auto clusterCTAId = targetInfo.getClusterCTAId(rewriter, loc);
   if (tensorTy) {
-    auto layout = tensorTy.getEncoding();
+    // To remove this use, port https://github.com/triton-lang/triton/pull/5432
+    // to the AMDGPU dialect
+    auto layout = cast<DistributedEncodingTrait>(tensorTy.getEncoding());
     auto shape = tensorTy.getShape();
-    unsigned rank = shape.size();
-    auto sizePerThread = triton::gpu::getSizePerThread(layout);
-    auto threadsPerWarp = triton::gpu::getThreadsPerWarp(layout);
-    auto warpsPerCTA = triton::gpu::getWarpsPerCTA(layout);
-    auto threadOrder = triton::gpu::getThreadOrder(tensorTy);
-    SmallVector<unsigned> warpOrder(rank);
-    if (auto enc = dyn_cast<DotOperandEncodingAttr>(layout)) {
-      warpOrder =
-          triton::gpu::getMatrixOrder(rank, /*rowMajor=*/enc.getOpIdx() == 1);
-    } else {
-      warpOrder = triton::gpu::getWarpOrder(tensorTy);
-    }
-    auto shapePerCTATile = triton::gpu::getShapePerCTATile(layout);
-    Value warpSize = b.i32_val(triton::gpu::getWarpSize(layout));
-    Value laneId = b.urem(tid, warpSize);
-    Value warpId = b.udiv(tid, warpSize);
-    // TODO: [DOT LL]
-    // The delinearize function is not entirely correct for certain layouts,
-    // such as wgmma. The correct approach is to convert a legacy layout to its
-    // corresponding linear layout and use the linear layout's
-    // getFreeVariableMasks to identify redundant elements.
-    SmallVector<Value> multiDimWarpId =
-        delinearize(rewriter, loc, warpId, warpsPerCTA, warpOrder);
-    SmallVector<Value> multiDimThreadId =
-        delinearize(rewriter, loc, laneId, threadsPerWarp, threadOrder);
-    for (unsigned dim = 0; dim < rank; ++dim) {
-      // if there is no data replication across threads on this dimension
-      if (shape[dim] >= shapePerCTATile[dim])
-        continue;
-      // Otherwise, we need to mask threads that will replicate data on this
-      // dimension. Calculate the thread index on this dimension for the CTA
-      Value threadDim =
-          b.add(b.mul(multiDimWarpId[dim], b.i32_val(threadsPerWarp[dim])),
-                multiDimThreadId[dim]);
-      mask = b.and_(mask,
-                    b.icmp_slt(b.mul(threadDim, b.i32_val(sizePerThread[dim])),
-                               b.i32_val(shape[dim])));
-    }
+    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+    auto kLane = StringAttr::get(rewriter.getContext(), "lane");
+    auto kWarp = StringAttr::get(rewriter.getContext(), "warp");
+    auto maskLane =
+        std::get<1>(delinearize(rewriter, loc, layout, shape, kLane, laneId));
+    auto maskWarp =
+        std::get<1>(delinearize(rewriter, loc, layout, shape, kWarp, warpId));
+    mask = b.and_(maskLane, maskWarp);
+
     // Do not write duplicated data when multicast is enabled
     if (triton::gpu::getNumCTAs(layout) > 1) {
       auto _0 = b.i32_val(0);
@@ -87,6 +60,7 @@ Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
       auto multiDimClusterCTAId =
           delinearize(rewriter, loc, clusterCTAId, CTAsPerCGA, CTAOrder);
 
+      auto rank = tensorTy.getRank();
       for (unsigned dim = 0; dim < rank; ++dim) {
         // Skip when multicast is not enabled in this dimension
         if (CTAsPerCGA[dim] == CTASplitNum[dim])
@@ -1248,6 +1222,7 @@ Value generatePopcount64(PatternRewriter &rewriter, Value val) {
 
 Value genReadFirstLane(PatternRewriter &rewriter, Value v) {
   auto loc = v.getLoc();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
   std::string intrinsic = "llvm.amdgcn.readfirstlane";
   return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, i32_ty, v)
       ->getResult(0);
@@ -1289,6 +1264,48 @@ Value genI32TiledOp(PatternRewriter &rewriter, Generator genCall,
     vec = b.insert_element(i32VecValTy, vec, result, b.i32_val(i));
   }
   return b.bitcast(vec, ty);
+}
+
+Value genPrefixSum(PatternRewriter &rewriter, Value v0) {
+  auto loc = v0.getLoc();
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Value old = b.i32_val(0);
+
+  Value v1 = v0;
+  // v_add_f32 v1, v0, v0 row_shr:1 bound_ctrl:0
+  Value tmp = rewriter.create<ROCDL::DPPUpdateOp>(loc, i32_ty, old, v0, 0x111,
+                                                  0xF, 0xF, false);
+  v1 = b.add(v1, tmp);
+  // v_add_f32 v1, v0, v1 row_shr:2 bound_ctrl:0
+  tmp = rewriter.create<ROCDL::DPPUpdateOp>(loc, i32_ty, old, v0, 0x112, 0xF,
+                                            0xF, false);
+  v1 = b.add(v1, tmp);
+  // v_add_f32 v1, v0, v1 row_shr:3 bound_ctrl:0
+  tmp = rewriter.create<ROCDL::DPPUpdateOp>(loc, i32_ty, old, v0, 0x113, 0xF,
+                                            0xF, false);
+  v1 = b.add(v1, tmp);
+
+  // v_add_f32 v1, v1, v1 row_shr:4 bank_mask:0xe
+  tmp = rewriter.create<ROCDL::DPPUpdateOp>(loc, i32_ty, old, v1, 0x114, 0xF,
+                                            0xE, true);
+  v1 = b.add(v1, tmp);
+
+  // v_add_f32 v1, v1, v1 row_shr:8 bank_mask:0xc
+  tmp = rewriter.create<ROCDL::DPPUpdateOp>(loc, i32_ty, old, v1, 0x118, 0xF,
+                                            0xC, true);
+  v1 = b.add(v1, tmp);
+
+  // v_add_f32 v1, v1, v1 row_bcast:15 row_mask:0xa
+  tmp = rewriter.create<ROCDL::DPPUpdateOp>(loc, i32_ty, old, v1, 0x142, 0xA,
+                                            0xF, true);
+  v1 = b.add(v1, tmp);
+
+  // v_add_f32 v1, v1, v1 row_bcast:31 row_mask:0xc
+  tmp = rewriter.create<ROCDL::DPPUpdateOp>(loc, i32_ty, old, v1, 0x143, 0xC,
+                                            0xF, true);
+  v1 = b.add(v1, tmp);
+
+  return v1;
 }
 
 struct AtomicRMWOpConversion
@@ -1502,6 +1519,37 @@ struct AtomicRMWOpConversion
       endBlock->addArgument({retType}, {loc});
 
       rewriter.setInsertionPointToEnd(curBlock);
+      // intraWave reduce optimization for atomic ops needs all active threads
+      // at the beginning of a wave. This is achieved as:
+      // 1. Compute the prefix sum of the mask, then each active lane gets a
+      //    different value (offset) from its previous lane.
+      // 2. Multiply the mask and the offset, so only active lanes have a
+      //    non-zero offset, and the offset is different in each active lane
+      // 3. Sub 1 from offset to get the idx each active lane is moved to
+      // 4. Call ds_permute to move active lanes to the beginning of a wave
+      // 5. Update mask of each lane
+      if (enableIntraWaveReduce) {
+        Value maskI32 = b.zext(i32_ty, rmwMask);
+        Value offset = genPrefixSum(rewriter, maskI32);
+        offset = b.mul(offset, maskI32);
+        auto layout = tensorTy.getEncoding();
+        Value waveSize = b.i32_val(triton::gpu::getWarpSize(layout));
+        offset = b.select(b.icmp_eq(offset, b.i32_val(0)), waveSize, offset);
+        Value idx = b.sub(offset, b.i32_val(1));
+        idx = b.mul(idx, b.i32_val(4));
+        operand = genI32TiledOp(rewriter, genPermute, operand, idx);
+        Value castedAddr = b.ptrtoint(i64_ty, rmwPtr);
+        castedAddr = genI32TiledOp(rewriter, genPermute, castedAddr, idx);
+        rmwPtr = b.inttoptr(rmwPtr.getType(), castedAddr);
+
+        // update mask
+        Value maskFlag = targetInfo.ballot(rewriter, loc, i64_ty, rmwMask);
+        Value numActiveLanes =
+            b.trunc(i32_ty, generatePopcount64(rewriter, maskFlag));
+
+        Value laneID = b.urem(tid, waveSize);
+        rmwMask = b.icmp_ult(laneID, numActiveLanes);
+      }
       rewriter.create<LLVM::CondBrOp>(loc, rmwMask, atomicBlock, endBlock,
                                       undefVal);
 
@@ -1635,14 +1683,41 @@ private:
     rmwPtr = b.ptrtoint(i64_ty, rmwPtr);
 
     auto *curBlock = rewriter.getInsertionBlock();
-    auto *afterLoopBlock = curBlock->splitBlock(rewriter.getInsertionPoint());
+    auto *atomicBlock = curBlock->splitBlock(rewriter.getInsertionPoint());
+    atomicBlock->addArgument(i64_ty, loc);
+    atomicBlock->addArgument(operandElemType, loc);
+    auto *initLoop = rewriter.createBlock(
+        curBlock->getParent(), std::next(Region::iterator(curBlock)));
+
+    rewriter.setInsertionPointToEnd(curBlock);
+
+    // check how many adjacent address are in the wave
+    Value rightNeighbourAddr =
+        genI32TiledOp(rewriter, shiftLeftI32ByDpp, rmwPtr);
+    Value elemSize = b.i64_val(operandElemType.getIntOrFloatBitWidth() / 8);
+    Value isNeighbour = b.icmp_eq(rightNeighbourAddr, b.add(rmwPtr, elemSize));
+    Value neighbourFlag = targetInfo.ballot(rewriter, loc, i64_ty, isNeighbour);
+    Value numNeighbours =
+        b.trunc(i32_ty, generatePopcount64(rewriter, neighbourFlag));
+    // Heuristic that atomic_add is optimizated only if the number of
+    // neighbouring addresses in a wave is less than 32.
+    // TODO: Calculate actual number of difference addresses in a wave.
+    Value optAtomic = b.icmp_ult(numNeighbours, b.i32_val(32));
+
+    rewriter.create<LLVM::CondBrOp>(loc, optAtomic, initLoop, atomicBlock,
+                                    ValueRange({rmwPtr, operand}));
+    rewriter.setInsertionPointToEnd(initLoop);
+
+    auto *afterLoopBlock = initLoop->splitBlock(rewriter.getInsertionPoint());
     afterLoopBlock->addArgument(i32_ty, loc);    // idx
     afterLoopBlock->addArgument(i32_ty, loc);    // cnt
     afterLoopBlock->addArgument(int_ty(1), loc); // isLeader
+
     auto *loopBody = rewriter.createBlock(
-        curBlock->getParent(), std::next(Region::iterator(curBlock)));
-    loopBody->addArgument(i32_ty, loc); // base
-    rewriter.setInsertionPointToEnd(curBlock);
+        initLoop->getParent(), std::next(Region::iterator(initLoop)));
+    loopBody->addArgument(i32_ty, loc);
+
+    rewriter.setInsertionPointToEnd(initLoop);
     rewriter.create<LLVM::BrOp>(loc, b.i32_val(0), loopBody);
 
     // Greed search of same addr within wavefront. Also collect auxiliary
@@ -1765,18 +1840,19 @@ private:
 
     auto *endBlock = afterRedBlock->splitBlock(rewriter.getInsertionPoint());
     endBlock->addArgument(operandElemType, loc);
-    auto *leaderBlock = rewriter.createBlock(
-        afterRedBlock->getParent(), std::next(Region::iterator(afterRedBlock)));
     rewriter.setInsertionPointToEnd(afterRedBlock);
     Value leaderCond = leaderRes;
     Value defaultRes = b.undef(operandElemType);
-    rewriter.create<LLVM::CondBrOp>(loc, leaderCond, leaderBlock, endBlock,
-                                    defaultRes);
-    rewriter.setInsertionPointToEnd(leaderBlock);
+    rewriter.create<LLVM::CondBrOp>(
+        loc, leaderCond, atomicBlock,
+        ValueRange({rmwPtr, afterRedBlock->getArgument(0)}), endBlock,
+        ValueRange({defaultRes}));
+    rewriter.setInsertionPointToEnd(atomicBlock);
     // Utilize global atomic only by leader threads
-    rmwPtr = b.inttoptr(origPtrType, rmwPtr);
+    Value addr = atomicBlock->getArgument(0);
+    Value atomAddr = b.inttoptr(origPtrType, addr);
     Value atom = rewriter.create<LLVM::AtomicRMWOp>(
-        loc, opKind, rmwPtr, afterRedBlock->getArgument(0), memOrdering, scope);
+        loc, opKind, atomAddr, atomicBlock->getArgument(1), memOrdering, scope);
     rewriter.create<LLVM::BrOp>(loc, atom, endBlock);
     rewriter.setInsertionPointToStart(endBlock);
 

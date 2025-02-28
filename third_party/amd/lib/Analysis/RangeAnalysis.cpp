@@ -1,21 +1,12 @@
 #include "third_party/amd/include/Analysis/RangeAnalysis.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
-#include "mlir/Analysis/DataFlow/DenseAnalysis.h"
 #include "mlir/Analysis/DataFlow/IntegerRangeAnalysis.h"
-#include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/IR/BuiltinAttributes.h"
-#include "mlir/IR/Dominance.h"
-#include "mlir/Pass/Pass.h"
-#include "mlir/Pass/PassManager.h"
-#include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
-#include "third_party/amd/lib/TritonAMDGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/Debug.h"
 
+#include <numeric>
 #include <optional>
 
 #undef DEBUG_TYPE
@@ -24,10 +15,7 @@
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 using namespace mlir;
-using ::mlir::LLVM::AMD::getVectorSize;
-using mlir::triton::AMD::ISAFamily;
 
-namespace ttg = mlir::triton::gpu;
 namespace tt = mlir::triton;
 
 // TODO(max): remove after we catch up to
@@ -72,7 +60,7 @@ void getEnclosingLoops(Operation &op, SmallVector<LoopLikeOpInterface> &ops) {
   }
 }
 
-void inferResultRanges(GetProgramIdOp *op, SetIntRangeFn setResultRange) {
+void inferResultRanges(tt::GetProgramIdOp *op, SetIntRangeFn setResultRange) {
   constexpr int64_t kDefaultMaxProgramID = 2 << 15; // 65536
   setResultRange(
       op->getResult(),
@@ -83,7 +71,7 @@ void inferResultRanges(GetProgramIdOp *op, SetIntRangeFn setResultRange) {
           /*isSigned*/ true));
 }
 
-void inferResultRanges(MakeRangeOp *op, SetIntRangeFn setResultRange) {
+void inferResultRanges(tt::MakeRangeOp *op, SetIntRangeFn setResultRange) {
   setResultRange(
       op->getResult(),
       ConstantIntRanges::range(
@@ -92,12 +80,13 @@ void inferResultRanges(MakeRangeOp *op, SetIntRangeFn setResultRange) {
           /*isSigned*/ true));
 }
 
-void inferResultRanges(SplatOp *op, ArrayRef<ConstantIntRanges> argRanges,
+void inferResultRanges(tt::SplatOp *op, ArrayRef<ConstantIntRanges> argRanges,
                        SetIntRangeFn setResultRange) {
   setResultRange(op->getResult(), argRanges[0]);
 }
 
-void inferResultRanges(ExpandDimsOp *op, ArrayRef<ConstantIntRanges> argRanges,
+void inferResultRanges(tt::ExpandDimsOp *op,
+                       ArrayRef<ConstantIntRanges> argRanges,
                        SetIntRangeFn setResultRange) {
   setResultRange(op->getResult(), argRanges[0]);
 }

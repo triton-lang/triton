@@ -66,8 +66,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     // CHECK-LABEL: buffer_store
     tt.func @buffer_store(%value : tensor<128xf32, #blocked0>, %arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %offset : tensor<128xi32, #blocked0>{tt.divisibility=16:i32}) {
+        // CHECK: llvm.mlir.constant(true) : i1
         // CHECK: %[[c_mask:.*]] = llvm.mlir.constant(true) : i1
-        // CHECK: %[[offset:.*]] = llvm.select %[[c_mask]]
+        // CHECK: %[[w_mask:.*]] = llvm.mlir.constant(true) : i1
+        // CHECK: %[[mask:.*]] = llvm.and %[[c_mask]], %[[w_mask]]
+        // CHECK: %[[offset:.*]] = llvm.select %[[mask]]
         // CHECK: %[[aux:.*]] = llvm.mlir.constant(3 : i32) : i32
         // CHECK: rocdl.raw.ptr.buffer.store {{.*}}, {{.*}}, %[[offset]], {{.*}}, %[[aux]]
         %c256_i32 = arith.constant 256 : i32

@@ -271,14 +271,20 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
                      "unsigned":$typeWidthInBit,
                      "bool":$needTrans), [{
 
-        // ---- begin GFX908/GFX90A ----
+        // ---- begin MFMA ----
         if (auto mfmaEnc = mlir::dyn_cast<AMDMfmaEncodingAttr>(dotOpEnc.getParent())) {
           int kDimNum = dotOpEnc.getOpIdx() == 0 ? 1 : 0;
           if (needTrans)
             kDimNum = 1 - kDimNum;
           bool isKDimInner = (order[0] == kDimNum);
-          if (isKDimInner) {
-            const int numBanks = 32;
+
+          // GFX950 supports LDS transpose load instructions, so we need
+          // swizzling even when K dimension is not innermost.
+          const int versionMajor = mfmaEnc.getVersionMajor();
+          bool isGFX950 = versionMajor == 4;
+          bool swizzleNonKDimInner = isGFX950 && (typeWidthInBit == 8 || typeWidthInBit == 16);
+          if (isKDimInner || swizzleNonKDimInner) {
+            const int numBanks = isGFX950 ? 64 : 32;
             const int bankBitWidth = 32;
             const int SIMDWidth = 16;
 
@@ -303,7 +309,7 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
           }
         }
 
-        // ---- begin GFX11 ----
+        // ---- begin WMMA ----
         if (mlir::isa<AMDWmmaEncodingAttr>(dotOpEnc.getParent())) {
           if (dotOpEnc.getOpIdx() == 0) {
             const int numBanks = 32;
@@ -524,10 +530,6 @@ We call each individual tile "rep".
     InterfaceMethod<"Get the shape of the threads per warp",
                     "SmallVector<unsigned>",
                     "getThreadsPerWarp">,
-
-    InterfaceMethod<"Get the shape of the values per thread.",
-                    "SmallVector<unsigned>",
-                    "getSizePerThread">,
     InterfaceMethod<"Convert to LinearLayout.",
                     "LinearLayout",
                     "toLinearLayout",
@@ -596,8 +598,6 @@ L(T) = [ {0,8} , {1,9} , {2,10}, {3,11}, {0,8} , {1, 9} , {2, 10}, {3, 11},
     SmallVector<unsigned> getWarpsPerCTA() const;
     SmallVector<unsigned> getThreadsPerWarp() const;
 
-    SmallVector<unsigned> getSizePerThread() const;
-
     LinearLayout toLinearLayout(ArrayRef<int64_t> shape) const;
 
     // Legacy methods: They do not take into account the shape of the tensor
@@ -649,6 +649,10 @@ def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding"
     // If skipBroadcast is false, we count a base zero
     SmallVector<unsigned> basesPerDim(StringAttr dimName,
                                       bool skipBroadcast = true) const;
+
+    // [FIXME LL] Supports legacy behaviour. We should remove these functions
+    SmallVector<unsigned> getShapePerCTATile() const;
+    SmallVector<unsigned> getSizePerThread() const;
   }];
 
   let genVerifyDecl = 1;
@@ -753,7 +757,7 @@ for
 
   let parameters = (
     ins
-    ArrayRefParameter<"unsigned">:$sizePerThread__,
+    ArrayRefParameter<"unsigned">:$sizePerThread,
     ArrayRefParameter<"unsigned">:$threadsPerWarp__,
     ArrayRefParameter<"unsigned">:$warpsPerCTA__,
     ArrayRefParameter<"unsigned">:$order, // the fastest-changing axis first
@@ -843,13 +847,6 @@ for
 def MmaEncodingTrait : AttrInterface<"MmaEncodingTrait"> {
   let cppNamespace = "::mlir::triton::gpu";
   let methods = [
-
-    InterfaceMethod<"Return size per thread for dot operands.",
-                    "SmallVector<unsigned>",
-                    "getSizePerThreadForOperand",
-                    (ins "int":$opIdx,
-                         "int":$kWidth)>,
-
     InterfaceMethod<"Return the number of threads per warp for dot operands.",
                     "SmallVector<unsigned>",
                     "getThreadsPerWarpForOperand",
@@ -974,7 +971,6 @@ V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,
   );
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
-    SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, int opIdx) const;
     SmallVector<int64_t> getInstrShapeForOperand(int kWidth, int opIdx) const;
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape, int kWidth, int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
@@ -1089,12 +1085,12 @@ Row |
   let hasCustomAssemblyFormat = 1;
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
-    SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, int opIdx) const;
     SmallVector<int64_t> getElemsPerInstrForOperands() const;
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape,
                                           Type elemType, int kWidth, int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
     SmallVector<unsigned> getThreadsPerWarpForOperand(int opIdx) const;
+    unsigned getKWidthForOperands() const;
     static SmallVector<unsigned> getMNKDimPerInstr();
   }];
 }
@@ -1204,7 +1200,6 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
                                           int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
     SmallVector<unsigned> getThreadsPerWarpForOperand(int opIdx) const;
-    SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, int opIdx) const;
   }];
 
   let hasCustomAssemblyFormat = 1;

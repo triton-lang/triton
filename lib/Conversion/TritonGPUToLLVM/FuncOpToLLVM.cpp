@@ -168,6 +168,9 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     // Set an attribute for reqntidx, it could be used in latter LLVM codegen
     // for `nvvm.annotation` metadata.
     int numWarps = triton::gpu::lookupNumWarps(funcOp);
+    if (auto totalNumWarps = funcOp.getParentOp()->getAttrOfType<IntegerAttr>(
+            "ttg.total-num-warps"))
+      numWarps = totalNumWarps.getInt();
     newFuncOp->setAttr("nvvm.reqntid",
                        rewriter.getDenseI32ArrayAttr(32 * numWarps));
 

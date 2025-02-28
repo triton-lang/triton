@@ -58,6 +58,12 @@ public:
     addIllegalDialect<triton::nvidia_gpu::TritonNvidiaGPUDialect>();
     addIllegalDialect<mlir::gpu::GPUDialect>();
     addLegalOp<mlir::UnrealizedConversionCastOp>();
+
+    // Warp specialization is lowered later.
+    addLegalOp<triton::gpu::WarpSpecializeOp>();
+    addLegalOp<triton::gpu::WarpYieldOp>();
+    addLegalOp<triton::gpu::WarpSpecializePartitionsOp>();
+    addLegalOp<triton::gpu::WarpReturnOp>();
   }
 };
 
@@ -80,13 +86,16 @@ struct ConvertTritonGPUToLLVM
     ModuleMembarAnalysis membarPass(&allocation);
     membarPass.run();
 
+    mlir::LowerToLLVMOptions option(context);
+    option.overrideIndexBitwidth(32);
+    TritonGPUToLLVMTypeConverter typeConverter(context, option, targetInfo);
+
     // Lower functions
     TritonLLVMFunctionConversionTarget funcTarget(*context);
     RewritePatternSet funcPatterns(context);
-    TritonGPUToLLVMTypeConverter funcTypeConverter(context, targetInfo);
     mlir::triton::populateFuncOpConversionPattern(
-        funcTypeConverter, funcPatterns, targetInfo, patternBenefitDefault);
-    mlir::cf::populateControlFlowToLLVMConversionPatterns(funcTypeConverter,
+        typeConverter, funcPatterns, targetInfo, patternBenefitDefault);
+    mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
                                                           funcPatterns);
     if (failed(
             applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
@@ -95,9 +104,6 @@ struct ConvertTritonGPUToLLVM
     // initSharedMemory is run before the conversion of call and ret ops,
     // because the call op has to know the shared memory base address of each
     // function
-    mlir::LowerToLLVMOptions option(context);
-    option.overrideIndexBitwidth(32);
-    TritonGPUToLLVMTypeConverter typeConverter(context, option, targetInfo);
     initSharedMemory(typeConverter);
     ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
 
