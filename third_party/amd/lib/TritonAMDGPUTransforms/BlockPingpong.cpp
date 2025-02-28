@@ -157,11 +157,11 @@ void Pingponger::transformOnePPClusters(OpBuilder &builder, Location loc) {
   // Memory cluster #0
   updateOpInsertion(lLoadOps[0]);
   appendOp(builder.create<ROCDL::SetPrioOp>(loc, highPriority));
-  appendOp(gLoadOps[0]);
+  moveOpAndPredecessorsUpSameBlock(gLoadOps[0]);
   appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
-  appendOp(lLoadOps[1]);
+  moveOpAndPredecessorsUpSameBlock(lLoadOps[1]);
   appendOp(builder.create<ROCDL::SetPrioOp>(loc, lowPriority));
-  appendOp(gLoadOps[1]);
+  moveOpAndPredecessorsUpSameBlock(gLoadOps[1]);
 
   // Dot cluster #0
   updateOpInsertion(preDotBar);
