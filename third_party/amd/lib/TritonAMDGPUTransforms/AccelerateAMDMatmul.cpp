@@ -825,6 +825,8 @@ public:
       return rewriter.notifyMatchFailure(dotOp, "NYI: mxfp6");
     }
 
+    bool bothScalesAbsent = !aScale && !bScale;
+
     MLIRContext *ctx = dotOp.getContext();
 
     ttg::CTALayoutAttr ctaLayout = ttg::getCTALayout(oldRetType.getEncoding());
@@ -894,6 +896,9 @@ public:
     auto convertScaleLayout = [&](TensorValue scale,
                                   llvm::ArrayRef<int64_t> valShape,
                                   LinearLayout dotLL, int idx) -> Value {
+      if (bothScalesAbsent)
+        return Value();
+
       LinearLayout::BasesT scaleBases = dotLL.getBases();
       auto &warpBases = scaleBases[kWarp];
 

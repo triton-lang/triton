@@ -778,7 +778,9 @@ LogicalResult convertScaledMFMA(triton::DotScaledOp op,
   // If the tt.dot_scaled is not from a tt.dot but native, we support 0, 1, 2
   // scales and treat them in different ways:
   //
-  // 1. #scales = 0, 1: The upstream transform guarantees to create constant
+  // 1. #scales = 0: Just like those transformed from tt.dot, both scales remain
+  // None.
+  // 2. #scales = 1: The upstream transform guarantees to create constant
   // scales for the absent.
   // 2. #scales = 2: Both scales should exist.
 
