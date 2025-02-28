@@ -7,7 +7,7 @@ import os
 import re
 import textwrap
 from collections import defaultdict
-from functools import cached_property
+from functools import cached_property, cache
 from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, overload, Dict, Any, Tuple
 from ..runtime.driver import driver
 from types import ModuleType
@@ -279,8 +279,13 @@ class KernelParam:
 dtype2str = {}
 
 
-def specialize_impl(arg, specialize_extra, is_const=False, specialize_value=True, align=True):
+def cached_constexpr():
     from ..language import constexpr
+    return constexpr
+
+
+def specialize_impl(arg, specialize_extra, is_const=False, specialize_value=True, align=True):
+    constexpr = cached_constexpr()
     if arg is None:
         return ("constexpr", None)
     elif isinstance(arg, JITFunction):
