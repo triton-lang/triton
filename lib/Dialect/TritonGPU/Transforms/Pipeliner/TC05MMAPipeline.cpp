@@ -571,13 +571,16 @@ void createBarrierAndWaitOps(IRRewriter &builder, scf::ForOp forOp,
 }
 
 bool isSafeToPipeline(ttng::TCGen5MMAScaledOp scaledDot, scf::ForOp forOp) {
-  auto isCopiedByTMEMCopy =
-      [&](Value scale) { // The scales must be multi-buffered.
-        auto scaleAlloc = findShmemAlloc(scale);
-        if (!scaleAlloc || !forOp.isDefinedOutsideOfLoop(scaleAlloc))
-          return false;
-        return true;
-      };
+  // MMAv5 scaled dot (tcgen05.mma mxf8f6f4) is safe to be pipelined only
+  // when its scales in TMEM are stored by the TMEMCopy op (tcgen05.cp).
+  // That condition is equivalent to scale arguments of
+  // ttng::TCGen5MMAScaledOp being in SMEM during SWP in our convention.
+  auto isCopiedByTMEMCopy = [&](Value scale) {
+    auto scaleAlloc = findShmemAlloc(scale);
+    if (!scaleAlloc || !forOp.isDefinedOutsideOfLoop(scaleAlloc))
+      return false;
+    return true;
+  };
 
   return isCopiedByTMEMCopy(scaledDot.getAScale()) &&
          isCopiedByTMEMCopy(scaledDot.getBScale());
