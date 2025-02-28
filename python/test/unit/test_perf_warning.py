@@ -167,6 +167,42 @@ def test_remark_vectorization(capfd, fresh_triton_cache):
     assert "note: diagnostic emitted with trace:" in err
 
 
+def test_remark_reduction(capfd, fresh_triton_cache):
+    @triton.jit
+    def reduction_warp_bounds(in_out_ptr0, in_ptr0, XBLOCK: tl.constexpr):
+        RBLOCK: tl.constexpr = 64
+        xoffset = tl.program_id(0) * XBLOCK
+        x0 = xoffset + tl.arange(0, XBLOCK)[:, None]
+        r1 = tl.arange(0, RBLOCK)[None, :]
+        # The row length of 33 causes one thread per which results in a
+        # expanded reduce that goes out of the warp bounds and requires SMEM
+        # synchronization
+        tmp0 = tl.load(in_ptr0 + (r1 + (33 * x0)))
+        tmp1 = tl.broadcast_to(tmp0, [XBLOCK, RBLOCK])
+        tmp2 = tl.sum(tmp1, 1)[:, None]
+        tl.store(in_out_ptr0 + (x0), tmp2)
+
+    XBLOCK = 32
+
+    astsource_args = {
+        "fn": reduction_warp_bounds,
+        "signature": {
+            "in_out_ptr0": "*bf16",
+            "in_ptr0": "*bf16",
+            "XBLOCK": "constexpr",
+        },
+        "constexprs": {"XBLOCK": XBLOCK},
+    }
+
+    with enable_diagnostics_context('remarks'):
+        triton.compile(
+            triton.compiler.ASTSource(**astsource_args),
+        )
+
+    _, err = capfd.readouterr()
+    assert ("remark: Reduction does not fit within a warp boundary and will result in inefficient synchronization through shared memory" in err), "expect reduction inefficiency remark"
+
+
 def test_remark_swp_op_before_operands(capfd, fresh_triton_cache):
 
     @triton.jit

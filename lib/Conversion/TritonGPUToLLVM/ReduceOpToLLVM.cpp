@@ -47,6 +47,10 @@ public:
       return success();
     }
 
+    op->emitRemark()
+      << "Reduction does not fit within a warp boundary and will "
+      << "result in inefficient synchronization through shared memory";
+
     // Compute a shared memory base per operand.
     auto smemShape = helper.getScratchRepShape();
 
