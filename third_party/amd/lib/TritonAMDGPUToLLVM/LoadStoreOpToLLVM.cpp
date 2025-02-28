@@ -1463,10 +1463,10 @@ struct AtomicRMWOpConversion
       // 1. Compute the prefix sum of the mask, then each active lane gets a
       //    different value (offset) from its previous lane.
       // 2. Multiply the mask and the offset, so only active lanes have a
-      //    non-zero offset, and the offset is different in each active lanes
+      //    non-zero offset, and the offset is different in each active lane
       // 3. Sub 1 from offset to get the idx each active lane is moved to
-      // 4. call permute to move active lanes to the beginning of wave
-      // 5. Update mask of each lane accordingly.
+      // 4. Call ds_permute to move active lanes to the beginning of a wave
+      // 5. Update mask of each lane
       if (enableIntraWaveReduce) {
         Value maskI32 = b.zext(i32_ty, rmwMask);
         Value offset = genPrefixSum(rewriter, maskI32);
