@@ -1,6 +1,5 @@
 #include <iterator>
 #include <numeric>
-#include <unordered_set>
 
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"

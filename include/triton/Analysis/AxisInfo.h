@@ -2,7 +2,6 @@
 #define TRITON_ANALYSIS_AXISINFO_H
 
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
-#include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include "mlir/Support/LLVM.h"
@@ -10,7 +9,6 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "llvm/ADT/SmallSet.h"
 
 
 #include <optional>
