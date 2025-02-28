@@ -271,14 +271,20 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
                      "unsigned":$typeWidthInBit,
                      "bool":$needTrans), [{
 
-        // ---- begin GFX908/GFX90A ----
+        // ---- begin GFX908/GFX90A/GFX950 ----
         if (auto mfmaEnc = mlir::dyn_cast<AMDMfmaEncodingAttr>(dotOpEnc.getParent())) {
           int kDimNum = dotOpEnc.getOpIdx() == 0 ? 1 : 0;
           if (needTrans)
             kDimNum = 1 - kDimNum;
           bool isKDimInner = (order[0] == kDimNum);
-          if (isKDimInner) {
-            const int numBanks = 32;
+
+          // GFX950 supports LDS transpose load instructions, so we need
+          // swizzling even when K dimension is not innermost.
+          const int versionMajor = mfmaEnc.getVersionMajor();
+          bool isGFX950 = versionMajor == 4;
+          bool swizzleNonKDimInner = isGFX950 && (typeWidthInBit == 8 || typeWidthInBit == 16);
+          if (isKDimInner || swizzleNonKDimInner) {
+            const int numBanks = isGFX950 ? 64 : 32;
             const int bankBitWidth = 32;
             const int SIMDWidth = 16;
 
