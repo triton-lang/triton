@@ -3,8 +3,11 @@
 #include <unordered_set>
 
 #include "mlir/Analysis/SliceAnalysis.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/IR/Diagnostics.h"
 #include "mlir/Support/LLVM.h"
 #include "triton/Analysis/AxisInfo.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
@@ -24,27 +27,6 @@ namespace gpu {
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
 struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
-
-  void findTopDivisibilityOperand(Operation *op, llvm::SetVector<Operation *> &rootCauseOps, const llvm::SmallSet<Operation *, 8> &operationsReachedTopOnDivisibility) {
-    // should use the official backward slice analysis
-    llvm::SetVector<Operation *> backwardSlice;
-    BackwardSliceOptions opt;
-    opt.omitBlockArguments = false;
-    // opt.filter = [](Operation *op) {
-    //   return isa<LoadOp>(op);
-    // };
-    getBackwardSlice(op, &backwardSlice, opt);
-    // llvm::SetVector<Operation *> rootCauseOps;
-    for (auto sliceOp : backwardSlice) {
-      for (auto operand : sliceOp->getOperands()) {
-        if (operationsReachedTopOnDivisibility.contains(operand.getDefiningOp()) && !operationsReachedTopOnDivisibility.contains(sliceOp)) {
-          // exclude operands that are scalar
-          if (!operand.getType().isIntOrIndexOrFloat() && operand.getDefiningOp() != op)
-            rootCauseOps.insert(operand.getDefiningOp());
-        }
-      }
-    }
-  }
 
   void
   setCoalescedEncoding(ModuleAxisInfoAnalysis &axisInfoAnalysis, Operation *op,
@@ -109,26 +91,68 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
     LDBG("perThread: " << perThread);
 
     if (perThread == 1) {
+      auto mainError = op->emitRemark()
+                       << "Coalescing only assigns one element per thread for "
+                          "this operation. Performance may be suboptimal.";
+
+      llvm::SetVector<Operation *> backwardSlice;
+      BackwardSliceOptions opt;
+      opt.omitBlockArguments = false;
+
+      getBackwardSlice(op, &backwardSlice, opt);
+
       auto divisibility = axisInfoAnalysis.getAxisInfo(ptr)->getDivisibility();
       // check if divisibility in all dimensions is 1
-      auto divisibilityIsOne = std::all_of(divisibility.begin(),
-                                           divisibility.end(),
-                                           [](int i) { return i == 1; });
+      auto divisibilityIsOne =
+          std::all_of(divisibility.begin(), divisibility.end(),
+                      [](int i) { return i == 1; });
 
       auto contiguityIsOne = std::all_of(contiguity.begin(), contiguity.end(),
                                          [](int i) { return i == 1; });
 
-      auto mainError = op->emitRemark() << "Coalescing only assigns one element per thread for this operation. Performance may be suboptimal.";
       if (divisibilityIsOne) {
-        mainError.attachNote() << "The divisibility of the pointer is 1 in all dimensions. Consider specifying divisibility via `tt.multiple_of`.";
-        llvm::SetVector<Operation *> rootCauseOps;
-        findTopDivisibilityOperand(op, rootCauseOps, axisInfoAnalysis.operationsReachedTopOnDivisibility);
-        for (auto rootCauseOp : rootCauseOps) {
-          mainError.attachNote(rootCauseOp->getLoc()) << "Divisibility of 1 first introduced here: " << *rootCauseOp;
+        mainError.attachNote()
+            << "The divisibility of the pointer is 1 in all dimensions. ";
+        for (auto sliceOp : backwardSlice) {
+          bool operandWithDivisibilityOne = false;
+          for (auto operand : sliceOp->getOperands()) {
+            auto axisInfo = axisInfoAnalysis.getAxisInfo(operand);
+            auto divisibility = axisInfo->getDivisibility();
+            auto divisibilityIsOne = std::all_of(divisibility.begin(), divisibility.end(),
+                                      [](int i) { return i == 1; });
+            if (divisibilityIsOne) {
+              operandWithDivisibilityOne = true;
+              break;
+            }
+          }
+          bool resultWithDivisibilityOne = false;
+          if (sliceOp->getNumResults() > 0) {
+            auto lhsValue = sliceOp->getResult(0);
+            auto axisInfo = axisInfoAnalysis.getAxisInfo(lhsValue);
+            auto divisibility = axisInfo->getDivisibility();
+            resultWithDivisibilityOne = std::all_of(divisibility.begin(), divisibility.end(),
+                                      [](int i) { return i == 1; });
+          }
+          if (!operandWithDivisibilityOne && resultWithDivisibilityOne) {
+            // ignore certain ops
+            if (isa<triton::GetProgramIdOp>(sliceOp) || isa<arith::ConstantOp>(sliceOp)) {
+              continue;
+            }
+            mainError.attachNote(sliceOp->getLoc())
+                << "Divisibility of 1 first introduced here: " << *sliceOp;
+            if (isa<triton::LoadOp>(sliceOp)) {
+              mainError.attachNote(sliceOp->getLoc())
+                  << "tt.load resets divisibility. Consider add `tt.multiple_of` if you believe it is correct for the data.";
+            } else if (isa<arith::DivUIOp>(sliceOp) || isa<arith::DivSIOp>(sliceOp)) {
+              mainError.attachNote(sliceOp->getLoc())
+                  << "Division resets divisibility. Consider add `tt.multiple_of` if you believe it is correct for the data.";
+            }
+          }
         }
       }
       if (contiguityIsOne) {
-        mainError.attachNote() << "The contiguity of the pointer is 1 in all dimensions.";
+        mainError.attachNote()
+            << "The contiguity of the pointer is 1 in all dimensions.";
       }
     }
     if (!dyn_cast<triton::LoadOp>(op)) {

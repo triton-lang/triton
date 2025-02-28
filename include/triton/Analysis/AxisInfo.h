@@ -182,8 +182,7 @@ public:
     SetVector<FunctionOpInterface> sortedFuncs(funcs.begin(), funcs.end());
     SymbolTableCollection symbolTable;
     for (auto funcOp : llvm::reverse(sortedFuncs)) {
-      llvm::dbgs() << "Processing " << funcOp->getName() << "\n";
-      initialize(funcOp, operationsReachedTopOnDivisibility);
+      initialize(funcOp);
       funcOp.walk([&](CallOpInterface callOp) {
         auto callee = dyn_cast<FunctionOpInterface>(
             callOp.resolveCallableInTable(&symbolTable));
@@ -209,10 +208,9 @@ public:
   unsigned getPtrContiguity(Value ptr);
   unsigned getPtrAlignment(Value ptr);
   unsigned getMaskAlignment(Value mask);
-  llvm::SmallSet<Operation*, 8> operationsReachedTopOnDivisibility;
 
 private:
-  void initialize(FunctionOpInterface funcOp, llvm::SmallSet<Operation*, 8> &operationsReachedTopOnDivisibility);
+  void initialize(FunctionOpInterface funcOp);
   void update(CallOpInterface callOp, FunctionOpInterface funcOp);
 };
 
