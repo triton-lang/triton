@@ -54,7 +54,7 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     return op;
   if (isa<ttg::LocalLoadOp, ttg::LocalStoreOp>(op))
     return op;
-  if (isa<ttng::TMEMAllocOp, ttng::TMEMCopyOp>(op))
+  if (isa<ttng::TMEMAllocOp>(op))
     return op;
   if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
     rewriter.setInsertionPoint(op);
