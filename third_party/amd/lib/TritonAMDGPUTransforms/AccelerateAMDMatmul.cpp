@@ -9,6 +9,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
+#include "llvm/ADT/TypeSwitch.h"
 #include <memory>
 
 using namespace mlir;
@@ -43,6 +44,16 @@ int getWmmaVersion(StringRef archGen) {
   if (archGen.contains("gfx12"))
     return 2;
   return 0;
+}
+
+FailureOr<ScaleDotElemType> mlirTypeToScaledElemType(Type type) {
+  return llvm::TypeSwitch<Type, FailureOr<ScaleDotElemType>>(type)
+      .Case<Float8E4M3FNType>([](Type) { return ScaleDotElemType::E4M3; })
+      .Case<Float8E5M2Type>([](Type) { return ScaleDotElemType::E5M2; })
+      .Case<Float6E3M2FNType>([](Type) { return ScaleDotElemType::E3M2; })
+      .Case<Float6E2M3FNType>([](Type) { return ScaleDotElemType::E2M3; })
+      .Case<Float4E2M1FNType>([](Type) { return ScaleDotElemType::E2M1; })
+      .Default([](Type) { return failure(); });
 }
 
 // Check if the result of this tl.dot is used as opA of another tl.dot
@@ -213,14 +224,15 @@ chooseMfmaInstruction(int mfmaVersion, RankedTensorType cType, Type aElemType,
 }
 
 FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotOp dot, int mfmaVersion,
-                                               int nonKDim) {
+                                               int nonKDim,
+                                               bool withScale = false) {
   RankedTensorType aType = dot.getA().getType();
   bool allowXF32 =
       dot.getInputPrecision() == InputPrecision::TF32 && mfmaVersion == 3;
   return chooseMfmaInstruction(
       mfmaVersion, dot.getC().getType(), aType.getElementType(),
       dot.getB().getType().getElementType(), aType.getShape().back(), nonKDim,
-      /*withScale=*/false, allowXF32);
+      withScale, allowXF32);
 }
 
 FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotScaledOp dot,
@@ -450,11 +462,28 @@ public:
     auto oldBType = cast<RankedTensorType>(b.getType());
     auto ctx = oldAType.getContext();
 
-    ttg::AMDMfmaEncodingAttr mfmaEnc;
+    Type aElemType = oldAType.getElementType();
+    Type bElemType = oldBType.getElementType();
+    bool withScale =
+        mfmaVersion == 4 && isF8F6F4(aElemType) && isF8F6F4(bElemType);
 
-    auto mfmaInstr = chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim);
-    if (failed(mfmaInstr))
-      return failure();
+    // If mfmaVersion == 4 and both inputs are of F8F6F4 types, we will try to
+    // use the V_MFMA_*_F8F6F4 instructions since it has higher FLOPs per cycle.
+    // If we can't find a proper instruction, we will fall back to select from
+    // normal mfma instructions.
+    FailureOr<MfmaIntrinsic> mfmaInstr =
+        chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim, withScale);
+    if (failed(mfmaInstr)) {
+      if (!withScale) {
+        return failure();
+      }
+      mfmaInstr = chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim, false);
+      if (failed(mfmaInstr))
+        return failure();
+
+      withScale = false;
+    }
+
     auto mDim = mfmaInstr->mDim;
     auto nDim = mfmaInstr->nDim;
     auto kDim = mfmaInstr->kDim;
@@ -471,7 +500,7 @@ public:
                            Float8E4M3FNType, Float8E5M2Type>(aElemTy);
     bool isTransposed =
         isChainDotHead(dotOp) || isChainDotTail(dotOp) || !isFP8;
-    mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
+    ttg::AMDMfmaEncodingAttr mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
         oldRetType.getContext(),
         /*versionMajor*/ mfmaVersion, /*versionMinor*/ 0, warpsPerTile,
         /*instrShape*/ mDim, nDim, isTransposed, CTALayout);
@@ -526,17 +555,45 @@ public:
     if (!isChainDotTail(dotOp))
       kWidth *= kPack;
 
-    auto newAEncoding =
-        ttg::DotOperandEncodingAttr::get(ctx, 0, mfmaEnc, kWidth);
-    auto newBEncoding =
-        ttg::DotOperandEncodingAttr::get(ctx, 1, mfmaEnc, kWidth);
-    a = convertAndCastTensor(rewriter, a, newAEncoding,
-                             mfmaInstr->aElementType);
-    b = convertAndCastTensor(rewriter, b, newBEncoding,
-                             mfmaInstr->bElementType);
-    auto newDot = rewriter.create<tt::DotOp>(
-        dotOp.getLoc(), newAcc.getType(), a, b, newAcc,
-        dotOp.getInputPrecision(), dotOp.getMaxNumImpreciseAcc());
+    Value newDot;
+    if (withScale) {
+      // If a scaled mfma instruction is chosen, we will rewrite the DotOp to a
+      // DotScaledOp.
+      auto aScaledElemTy = mlirTypeToScaledElemType(aElemType);
+      auto bScaledElemTy = mlirTypeToScaledElemType(bElemType);
+      if (failed(aScaledElemTy) || failed(bScaledElemTy))
+        return failure();
+
+      auto aEncLL = chooseScaledMfmaOperandLayout(
+          mfmaEnc, kWidth, /*dotOperandIdx=*/0, aScaledElemTy.value(),
+          oldAType.getShape());
+      auto bEncLL = chooseScaledMfmaOperandLayout(
+          mfmaEnc, kWidth, /*dotOperandIdx=*/1, bScaledElemTy.value(),
+          oldBType.getShape());
+      auto newAEncoding = ttg::LinearEncodingAttr::get(ctx, aEncLL);
+      auto newBEncoding = ttg::LinearEncodingAttr::get(ctx, bEncLL);
+
+      a = convertAndCastTensor(rewriter, a, newAEncoding,
+                               mfmaInstr->aElementType);
+      b = convertAndCastTensor(rewriter, b, newBEncoding,
+                               mfmaInstr->bElementType);
+      newDot = rewriter.create<triton::DotScaledOp>(
+          dotOp.getLoc(), newAcc.getType(), a, b, newAcc, Value(), Value(),
+          aScaledElemTy.value(), bScaledElemTy.value(), /*fastMath=*/false);
+    } else {
+      auto newAEncoding =
+          ttg::DotOperandEncodingAttr::get(ctx, 0, mfmaEnc, kWidth);
+      auto newBEncoding =
+          ttg::DotOperandEncodingAttr::get(ctx, 1, mfmaEnc, kWidth);
+      a = convertAndCastTensor(rewriter, a, newAEncoding,
+                               mfmaInstr->aElementType);
+      b = convertAndCastTensor(rewriter, b, newBEncoding,
+                               mfmaInstr->bElementType);
+      newDot = rewriter.create<tt::DotOp>(dotOp.getLoc(), newAcc.getType(), a,
+                                          b, newAcc, dotOp.getInputPrecision(),
+                                          dotOp.getMaxNumImpreciseAcc());
+    }
+
     Value dotOutput =
         convertAndCastTensor(rewriter, newDot, oldRetType.getEncoding(),
                              oldRetType.getElementType());
@@ -805,11 +862,6 @@ public:
     auto newAcc = rewriter.create<ttg::ConvertLayoutOp>(
         dotOp.getC().getLoc(), newRetType, dotOp.getC());
 
-    StringAttr kRegister = StringAttr::get(ctx, "register");
-    StringAttr kLane = StringAttr::get(ctx, "lane");
-    StringAttr kWarp = StringAttr::get(ctx, "warp");
-    StringAttr kBlock = StringAttr::get(ctx, "block");
-
     auto order = ttg::getMatrixOrder(rank, /*rowMajor=*/true);
     auto standardOutDims = standardOutDimNames(ctx, rank);
 
@@ -838,6 +890,7 @@ public:
     a = convertInputLayout(a, aEncLL);
     b = convertInputLayout(b, bEncLL);
 
+    StringAttr kWarp = StringAttr::get(ctx, "warp");
     auto convertScaleLayout = [&](TensorValue scale,
                                   llvm::ArrayRef<int64_t> valShape,
                                   LinearLayout dotLL, int idx) -> Value {
