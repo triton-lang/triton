@@ -93,7 +93,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %arg2: tensor<128x128x!tt.ptr<f32>, #blocked1>
       ) {
     // CHECK-NOT: tt.fp_to_fp
-    // CHECK: tt.dot_scaled {{.*}}, {{.*}}, {{.*}} lhs = e2m1 rhs = e2m1
+    // CHECK: tt.dot_scaled {{[^ ]+}}, {{[^ ]+}}, {{[^ ]+}} lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<128x64xi8, #linear> * tensor<64x128xi8, #linear1> -> tensor<128x128xf32, #mma>
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked1>
     %1 = tt.dot_scaled %arg0, %arg1, %cst lhs = e2m1 rhs = e2m1 {fastMath = false} : tensor<128x64xi8, #blocked> * tensor<64x128xi8, #blocked1> -> tensor<128x128xf32, #blocked1>
     tt.store %arg2, %1 : tensor<128x128x!tt.ptr<f32>, #blocked1>
