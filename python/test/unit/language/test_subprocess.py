@@ -66,7 +66,7 @@ def test_print(func_type: str, data_type: str, device: str):
     if func_type in ("print", "device_print", "device_print_uint", "device_print_uint_cast"):
         for i in range(N):
             offset = 0
-            if data_type == "device_print_uint_cast":
+            if func_type == "device_print_uint_cast":
                 offset = 1 << 7
             elif func_type == "device_print_uint":
                 offset = (1 << 31)
