@@ -90,8 +90,6 @@ struct AddProtonKernelArg
 
     assert(llvm::range_size(moduleOp.getOps<triton::FuncOp>()) == 1);
     triton::FuncOp funcOp = *moduleOp.getOps<triton::FuncOp>().begin();
-    auto funcTy = funcOp.getFunctionType();
-    llvm::errs() << funcTy << "\n";
 
     IRRewriter rewriter(ctx);
     rewriter.setInsertionPointToStart(moduleOp.getBody());
