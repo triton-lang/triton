@@ -117,8 +117,9 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
           for (auto operand : sliceOp->getOperands()) {
             auto axisInfo = axisInfoAnalysis.getAxisInfo(operand);
             auto divisibility = axisInfo->getDivisibility();
-            auto divisibilityIsOne = std::all_of(divisibility.begin(), divisibility.end(),
-                                      [](int i) { return i == 1; });
+            auto divisibilityIsOne =
+                std::all_of(divisibility.begin(), divisibility.end(),
+                            [](int i) { return i == 1; });
             if (divisibilityIsOne) {
               operandWithDivisibilityOne = true;
               break;
@@ -129,22 +130,29 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
             auto lhsValue = sliceOp->getResult(0);
             auto axisInfo = axisInfoAnalysis.getAxisInfo(lhsValue);
             auto divisibility = axisInfo->getDivisibility();
-            resultWithDivisibilityOne = std::all_of(divisibility.begin(), divisibility.end(),
-                                      [](int i) { return i == 1; });
+            resultWithDivisibilityOne =
+                std::all_of(divisibility.begin(), divisibility.end(),
+                            [](int i) { return i == 1; });
           }
           if (!operandWithDivisibilityOne && resultWithDivisibilityOne) {
             // ignore certain ops
-            if (isa<triton::GetProgramIdOp>(sliceOp) || isa<arith::ConstantOp>(sliceOp)) {
+            if (isa<triton::GetProgramIdOp>(sliceOp) ||
+                isa<arith::ConstantOp>(sliceOp)) {
               continue;
             }
             mainError.attachNote(sliceOp->getLoc())
                 << "Divisibility of 1 first introduced here: " << *sliceOp;
             if (isa<triton::LoadOp>(sliceOp)) {
               mainError.attachNote(sliceOp->getLoc())
-                  << "tt.load resets divisibility. Consider add `tt.multiple_of` if you believe it is correct for the data.";
-            } else if (isa<arith::DivUIOp>(sliceOp) || isa<arith::DivSIOp>(sliceOp)) {
+                  << "tt.load resets divisibility. Consider add "
+                     "`tt.multiple_of` if you believe it is correct for the "
+                     "data.";
+            } else if (isa<arith::DivUIOp>(sliceOp) ||
+                       isa<arith::DivSIOp>(sliceOp)) {
               mainError.attachNote(sliceOp->getLoc())
-                  << "Division resets divisibility. Consider add `tt.multiple_of` if you believe it is correct for the data.";
+                  << "Division resets divisibility. Consider add "
+                     "`tt.multiple_of` if you believe it is correct for the "
+                     "data.";
             }
           }
         }

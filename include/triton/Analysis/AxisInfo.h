@@ -10,7 +10,6 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
-
 #include <optional>
 #include <type_traits>
 
