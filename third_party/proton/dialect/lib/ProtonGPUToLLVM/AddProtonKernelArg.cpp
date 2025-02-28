@@ -12,14 +12,8 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
-#include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/PatternProtonOpToLLVM.h"
-#include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/Utility.h"
 #include "third_party/proton/dialect/include/Dialect/Proton/IR/Dialect.h"
 #include "third_party/proton/dialect/include/Dialect/ProtonGPU/IR/Dialect.h"
-
-#include "llvm/Support/FormatVariadic.h"
-
-
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -44,10 +38,9 @@ static void filterFuncAttributes(triton::FuncOp op, bool filterArgAttrs,
       continue;
     result.push_back(attr);
   }
-}	
+}
 
-triton::FuncOp amendFuncOp(triton::FuncOp funcOp,		
-                           IRRewriter &rewriter){
+triton::FuncOp amendFuncOp(triton::FuncOp funcOp, IRRewriter &rewriter) {
   auto moduleOp = funcOp->getParentOfType<ModuleOp>();
   Location loc = moduleOp->getLoc();
   auto ctx = funcOp->getContext();
@@ -57,41 +50,26 @@ triton::FuncOp amendFuncOp(triton::FuncOp funcOp,
 
   amendedInputTy.push_back(globalPtrTy);
   auto amendedFuncTy =
-      FunctionType::get(ctx, amendedInputTy, funcTy.getResults()); 
+      FunctionType::get(ctx, amendedInputTy, funcTy.getResults());
   SmallVector<NamedAttribute> amendedAttrs;
-      filterFuncAttributes(funcOp, /*filterArgAttrs=*/true, amendedAttrs);
-      if (auto argAttrs = funcOp.getAllArgAttrs()) {
-        llvm::SmallVector<mlir::Attribute> amendedArgAttrs(argAttrs.begin(),
-                                                           argAttrs.end());
-        while (amendedArgAttrs.size() < amendedInputTy.size()) {
-          amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
-        }
-        amendedAttrs.push_back(
-            rewriter.getNamedAttr(funcOp.getArgAttrsAttrName(),
-                                  rewriter.getArrayAttr(amendedArgAttrs)));
-      }
-    auto amendedFuncOp = rewriter.create<triton::FuncOp>(
-        funcOp.getLoc(), funcOp.getName(), amendedFuncTy, amendedAttrs);
-    auto &region = funcOp.getBody();
-    region.addArgument(globalPtrTy, loc);
-    rewriter.inlineRegionBefore(region, amendedFuncOp.getBody(),
-                                amendedFuncOp.end());
-    return amendedFuncOp;
+  filterFuncAttributes(funcOp, /*filterArgAttrs=*/true, amendedAttrs);
+  if (auto argAttrs = funcOp.getAllArgAttrs()) {
+    llvm::SmallVector<mlir::Attribute> amendedArgAttrs(argAttrs.begin(),
+                                                       argAttrs.end());
+    while (amendedArgAttrs.size() < amendedInputTy.size()) {
+      amendedArgAttrs.emplace_back(DictionaryAttr::get(ctx));
+    }
+    amendedAttrs.push_back(rewriter.getNamedAttr(
+        funcOp.getArgAttrsAttrName(), rewriter.getArrayAttr(amendedArgAttrs)));
   }
-//  auto &region = funcOp.getBody();
-////  llvm::errs() << amendedInputTy << "\n";
-//  region.addArgument(globalPtrTy, amendedFuncOp.getLoc());
-//  rewriter.inlineRegionBefore(region, amendedFuncOp.getBody(),
-//                              amendedFuncOp.end());
-//  IRMapping mapper;
-//  if (auto argAttrs = funcOp.getAllArgAttrs()) {
-//    SmallVector<Attribute> newArgAttrs;
-//    newArgAttrs.reserve(amendedInputTy.size());
-//    for (unsigned i = 0; i != oldNumArgs; ++i)
-//      if (!mapper.contains(funcOp.getArgument(i)))
-//        newArgAttrs.push_back(argAttrs[i]);
-//    amendedFuncOp.setAllArgAttrs(newArgAttrs);
-//  }
+  auto amendedFuncOp = rewriter.create<triton::FuncOp>(
+      funcOp.getLoc(), funcOp.getName(), amendedFuncTy, amendedAttrs);
+  auto &region = funcOp.getBody();
+  region.addArgument(globalPtrTy, loc);
+  rewriter.inlineRegionBefore(region, amendedFuncOp.getBody(),
+                              amendedFuncOp.end());
+  return amendedFuncOp;
+}
 
 struct AddProtonKernelArg
     : public mlir::triton::proton::impl::AddProtonKernelArgBase<
@@ -105,26 +83,22 @@ struct AddProtonKernelArg
       funcOp.walk([&](proton::gpu::GlobalScratchAllocOp op) {
         hasProtonGlobalScratchAllocOp = true;
       });
-    });    
+    });
 
     if (!hasProtonGlobalScratchAllocOp)
       return;
 
     assert(llvm::range_size(moduleOp.getOps<triton::FuncOp>()) == 1);
     triton::FuncOp funcOp = *moduleOp.getOps<triton::FuncOp>().begin();
-    auto funcTy = funcOp.getFunctionType();		    
+    auto funcTy = funcOp.getFunctionType();
     llvm::errs() << funcTy << "\n";
 
     IRRewriter rewriter(ctx);
     rewriter.setInsertionPointToStart(moduleOp.getBody());
-////    auto ptrTy = dyn_cast<triton::PointerType>(rewriter.getI8Type());
-////    auto globalPtrTy = LLVM::LLVMPointerType::get(ctx, 1);
     auto amendedFuncOp = amendFuncOp(funcOp, rewriter);
     amendedFuncOp.setVisibility(SymbolTable::Visibility::Private);
-//    auto amendedFuncOpTy = amendedFuncOp.getFunctionType();
-//    llvm::errs() << amendedFuncOpTy << "\n";    
-    rewriter.eraseOp(funcOp);    
-
+    rewriter.eraseOp(funcOp);
+    return;
   }
 };
 
@@ -136,8 +110,7 @@ namespace triton::proton {
 
 namespace gpu {
 
-std::unique_ptr<OperationPass<ModuleOp>>
-createAddProtonKernelArgPass() {
+std::unique_ptr<OperationPass<ModuleOp>> createAddProtonKernelArgPass() {
   return std::make_unique<AddProtonKernelArg>();
 }
 
@@ -145,4 +118,4 @@ createAddProtonKernelArgPass() {
 
 } // namespace triton::proton
 
-} // namespace mlir    
+} // namespace mlir
