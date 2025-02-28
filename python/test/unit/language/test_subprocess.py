@@ -68,7 +68,7 @@ def test_print(func_type: str, data_type: str, device: str):
             offset = 0
             if data_type == "device_print_uint_cast":
                 offset = 1 << 7
-            elif func_type == "device_print_uint_cast":
+            elif func_type == "device_print_uint":
                 offset = (1 << 31)
             line = f"pid (0, 0, 0) idx ({i:3}) x: {i + offset}"
             if data_type.startswith("float"):
