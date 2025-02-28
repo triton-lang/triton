@@ -411,12 +411,13 @@ std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {
 void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,
                         int formatStrByteCount, ValueRange args,
                         ArrayRef<bool> isSigned) const {
-  return printfImpl(formatStrStart, formatStrByteCount, args, isSigned, rewriter,
+  return printfImpl(formatStrStart, formatStrByteCount, args, isSigned,
+                    rewriter,
                     /*useStdError=*/false);
 }
 
-void TargetInfo::printf(RewriterBase &rewriter, StringRef msg,
-                        ValueRange args, ArrayRef<bool> isSigned) const {
+void TargetInfo::printf(RewriterBase &rewriter, StringRef msg, ValueRange args,
+                        ArrayRef<bool> isSigned) const {
   assert(!msg.empty() && "printf with empty string not supported");
   llvm::SmallString<64> msgNewline(msg);
   msgNewline.push_back('\n');

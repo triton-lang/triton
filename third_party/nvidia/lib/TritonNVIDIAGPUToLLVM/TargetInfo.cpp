@@ -33,7 +33,8 @@ LLVM::LLVMFuncOp getVprintfDeclaration(RewriterBase &rewriter) {
 
 // extend integer to int32, extend float to float64
 // this comes from vprintf alignment requirements.
-std::pair<Type, Value> printfPromoteValue(RewriterBase &rewriter, Value value, bool isSigned) {
+std::pair<Type, Value> printfPromoteValue(RewriterBase &rewriter, Value value,
+                                          bool isSigned) {
   auto *context = rewriter.getContext();
   auto type = value.getType();
   Value newOp = value;
@@ -579,8 +580,8 @@ void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,
   b.call(funcOp, operands);
 }
 
-void TargetInfo::printf(RewriterBase &rewriter, StringRef msg,
-                        ValueRange args, ArrayRef<bool> isSigned) const {
+void TargetInfo::printf(RewriterBase &rewriter, StringRef msg, ValueRange args,
+                        ArrayRef<bool> isSigned) const {
   assert(!msg.empty() && "printf with empty string not supported");
   llvm::SmallString<64> msgNewline(msg);
   msgNewline.push_back('\n');

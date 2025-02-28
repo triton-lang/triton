@@ -154,9 +154,8 @@ def test_print(func: str, data_type: str, device: str):
         assert f"Unknown kernel: {func}"
 
     excluded_funcs = {
-        "print_no_arg", "no_arg_print", "device_print_large", "print_multiple_args",
-        "device_print_multiple_args", "device_print_pointer", "device_print_scalar",
-        "device_print_2d_tensor", "device_print_uint_cast"
+        "print_no_arg", "no_arg_print", "device_print_large", "print_multiple_args", "device_print_multiple_args",
+        "device_print_pointer", "device_print_scalar", "device_print_2d_tensor", "device_print_uint_cast"
     }
     if func not in excluded_funcs:
         assert_close(y, x)
