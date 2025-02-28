@@ -2280,3 +2280,43 @@ tt.func @split_linear(%arg : tensor<128x2x2x2xf32, #linear1>) {
   tt.return
 }
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 64, 2], threadsPerWarp = [32, 1, 1], warpsPerCTA = [4, 1, 1], order = [0, 1, 2]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: split_stride
+  tt.func public @split_stride(%arg0: tensor<128x64x2xf32, #blocked>) {
+  // CHECK: %[[E0:.+]] = llvm.extractvalue %{{.*}}[0]
+  // CHECK: %[[E1:.+]] = llvm.extractvalue %{{.*}}[1]
+  // CHECK: %[[E64:.+]] = llvm.extractvalue %{{.*}}[64]
+  // CHECK: %[[E65:.+]] = llvm.extractvalue %{{.*}}[65]
+  // CHECK: llvm.insertvalue %[[E0]], %{{.*}}[0]
+  // CHECK: llvm.insertvalue %[[E1]], %{{.*}}[1]
+  // CHECK: llvm.insertvalue %[[E64]], %{{.*}}[0]
+  // CHECK: llvm.insertvalue %[[E65]], %{{.*}}[1]
+    %outLHS, %outRHS = tt.split %arg0 : tensor<128x64x2xf32, #blocked> -> tensor<128x64xf32, #blocked1>
+    tt.return
+  }
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 64, 2], threadsPerWarp = [32, 1, 1], warpsPerCTA = [4, 1, 1], order = [0, 1, 2]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 64], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+  // CHECK-LABEL: join_stride
+  tt.func public @join_stride(%arg0: tensor<128x64xf32, #blocked1>, %arg1: tensor<128x64xf32, #blocked1>) {
+  // CHECK: %[[A0:.+]] = llvm.extractvalue %{{.*}}[0]
+  // CHECK: %[[A1:.+]] = llvm.extractvalue %{{.*}}[1]
+  // CHECK: %[[B0:.+]] = llvm.extractvalue %{{.*}}[0]
+  // CHECK: %[[B1:.+]] = llvm.extractvalue %{{.*}}[1]
+  // CHECK: llvm.insertvalue %[[A0]], %{{.*}}[0]
+  // CHECK: llvm.insertvalue %[[A1]], %{{.*}}[1]
+  // CHECK: llvm.insertvalue %[[B0]], %{{.*}}[64]
+  // CHECK: llvm.insertvalue %[[B1]], %{{.*}}[65]
+    %r = tt.join %arg0, %arg1 : tensor<128x64xf32, #blocked1> -> tensor<128x64x2xf32, #blocked>
+    tt.return
+  }
+}
