@@ -83,3 +83,17 @@ tt.func @invalid_future_partition(%lb: i32, %ub: i32, %step: i32) {
   } {ttg.partition.stages = [0, 2]}
   tt.return
 }
+
+tt.func @simple_multiplicity(%lb: i32, %ub: i32, %step: i32) {
+  %c0 = arith.constant 0 : index
+  scf.for %i = %lb to %ub step %step iter_args(%k = %c0, %l = %c0) -> (index, index) : i32 {
+    %0 = "op_a"() {ttg.partition = 0} : () -> index
+    "op_b"(%k) {ttg.partition = 1} : (index) -> ()
+    "op_c"(%k) {ttg.partition = 2} : (index) -> ()
+    "op_c"(%k) {ttg.partition = 2} : (index) -> ()
+    "op_d"(%l) {ttg.partition = 1} : (index) -> ()
+    "op_d"(%l) {ttg.partition = 2} : (index) -> ()
+    scf.yield %0, %k : index, index
+  } {ttg.partition.stages = [0, 2, 2]}
+  tt.return
+}

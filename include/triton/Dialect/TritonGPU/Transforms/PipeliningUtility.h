@@ -8,6 +8,7 @@
 #include <vector>
 
 namespace mlir {
+class ImplicitLocOpBuilder;
 namespace triton {
 
 static const char *kNumStagesAttrName = "tt.num_stages";
@@ -72,6 +73,9 @@ DenseMap<Operation *, int> deserializeLatencies(ModuleOp module);
 Value createSingleBufferView(OpBuilder &builder, Value alloc, Value idx);
 Value createSingleBufferView(OpBuilder &builder, Value alloc, int idx);
 
+// Create an allocation for multibuffered scalars.
+Value createScalarAlloc(ImplicitLocOpBuilder &rewriter, Type type,
+                        unsigned numBuffers);
 // Create an allocation and init the mbarriers.
 Value createBarrierAlloc(scf::ForOp forOp, int numBarriers);
 

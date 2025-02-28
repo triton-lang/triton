@@ -13,7 +13,6 @@ class Operation;
 class OpOperand;
 class OpResult;
 class Region;
-class Value;
 namespace scf {
 class ForOp;
 } // namespace scf
