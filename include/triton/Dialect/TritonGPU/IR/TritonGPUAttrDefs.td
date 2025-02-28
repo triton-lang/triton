@@ -649,6 +649,9 @@ def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding"
     // If skipBroadcast is false, we count a base zero
     SmallVector<unsigned> basesPerDim(StringAttr dimName,
                                       bool skipBroadcast = true) const;
+
+    // [FIXME LL] Supports legacy behaviour. We should remove this function.
+    SmallVector<unsigned> getShapePerCTATile() const;
   }];
 
   let genVerifyDecl = 1;
