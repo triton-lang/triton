@@ -20,6 +20,12 @@ def kernel_device_print(X, Y, BLOCK: tl.constexpr):
 
 
 @triton.jit
+def kernel_device_print_cast(BLOCK: tl.constexpr):
+    x = tl.arange(0, BLOCK) + 128
+    tl.device_print("x: ", x.to(tl.uint8))
+
+
+@triton.jit
 def kernel_device_print_hex(X, Y, BLOCK: tl.constexpr):
     x = tl.load(X + tl.arange(0, BLOCK))
     tl.device_print("x: ", x, hex=True)
@@ -118,6 +124,8 @@ def test_print(func: str, data_type: str, device: str):
     elif func == "device_print_uint":
         x = torch.arange((1 << 31), (1 << 31) + N, device=device).to(getattr(torch, data_type))
         kernel_device_print[(1, )](x, y, num_warps=num_warps, BLOCK=N)
+    elif func == "device_print_uint_cast":
+        kernel_device_print_cast[(1, )](num_warps=num_warps)
     elif func == "print":
         kernel_print[(1, )](x, y, num_warps=num_warps, BLOCK=N)
     elif func == "device_print_large":
