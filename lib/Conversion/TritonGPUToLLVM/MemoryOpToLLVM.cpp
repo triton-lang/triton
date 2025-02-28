@@ -136,8 +136,11 @@ private:
         typeConverter->convertType(srcTy.getElementType()), rewriter);
     auto elemLlvmTy = typeConverter->convertType(dstTy.getElementType());
 
-    SmallVector<Value> outVals = loadSharedToDistributed(
-        dstTy, srcTy, elemLlvmTy, smemObj, loc, rewriter, targetInfo);
+    std::pair<size_t, Type> llvmOpCount;
+    SmallVector<Value> outVals =
+        loadSharedToDistributed(dstTy, srcTy, elemLlvmTy, smemObj, loc,
+                                rewriter, targetInfo, &llvmOpCount);
+    targetInfo.loadOpAnnotation(op, llvmOpCount.first, llvmOpCount.second);
 
     Value result = packLLElements(loc, typeConverter, outVals, rewriter, dstTy);
     rewriter.replaceOp(op, result);
