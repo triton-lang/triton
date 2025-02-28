@@ -179,6 +179,9 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [
       This lowers a waitloop using PTX instruction
       mbarrier.try_wait.parity.shared.b64.
 
+      Accepts optional list of memory. If present, it is assumed that any of the
+      dependencies may be accessed until the barrier completes.
+
       The barrier behavior is described here:
       https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#data-movement-and-conversion-instructions-asynchronous-copy-completion-mechanisms
     }];
@@ -187,7 +190,7 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [
     let arguments = (ins TTG_MemDescType:$alloc,
                          I32:$phase,
                          Optional<I1>:$pred,
-                         Variadic<AnyType>:$deps);
+                         Variadic<TTG_MemDescType>:$deps);
     let builders = [
       OpBuilder<(ins "Value":$alloc, "Value":$phase),
       [{
@@ -198,7 +201,7 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [
       build($_builder, $_state, alloc, phase, /*pred=*/static_cast<mlir::Value>(nullptr), deps);
       }]>,
     ];
-    let assemblyFormat = "$alloc `,` $phase attr-dict (`,` $pred^)? `deps` ($deps^ `:` type($deps))? `:` qualified(type($alloc))";
+    let assemblyFormat = "$alloc `,` $phase attr-dict (`,` $pred^)? (`deps` $deps^)? `:` qualified(type($alloc)) (`,` type($deps)^)?";
 }
 
 def TTNG_TensorDescToTMAPtrOp : TTNG_Op<"tensor_desc_to_tma_ptr", [Pure]> {
