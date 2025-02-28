@@ -379,6 +379,11 @@ private:
   std::shared_ptr<DataFlowSolver> solver;
 };
 
+// Workaround to allow static_assert(false) on older compilers as it was
+// ill-formed before defect report CWG2518
+// (https://cplusplus.github.io/CWG/issues/2518.html)
+template <typename T> struct always_false : std::false_type {};
+
 template <typename SourceOp>
 struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
   using OpRewritePattern<SourceOp>::OpRewritePattern;
@@ -420,7 +425,7 @@ struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
               op->getLoc(), op.getType(), op.getResult(), basePtr, tensorOffset,
               maybeMask, maybeOther, blockStride, op.getCache());
         } else {
-          static_assert(false,
+          static_assert(always_false<SourceOp>::value,
                         "Unsupported type in ConvertTritonLoadToBufferLoad");
         }
       }();
