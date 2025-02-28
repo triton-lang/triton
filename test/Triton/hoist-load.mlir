@@ -72,10 +72,10 @@ tt.func @hoist_load(%arg0: tensor<1024x!tt.ptr<f32>>, %arg1: tensor<1024xi32>, %
 
 // -----
 
-tt.func @hoist_load_with_print_in_loop(%arg0: tensor<1024x!tt.ptr<f32>>, %arg1: tensor<1024xi32>, %arg2: tensor<1024xi32>, %arg3: i32, %arg4 : i32, %arg5: tensor<1024x!tt.ptr<f32>>) {
+tt.func @cannot_hoist_load_with_print_in_loop(%arg0: tensor<1024x!tt.ptr<f32>>, %arg1: tensor<1024xi32>, %arg2: tensor<1024xi32>, %arg3: i32, %arg4 : i32, %arg5: tensor<1024x!tt.ptr<f32>>) {
   %cst = arith.constant dense<0.000000e+00> : tensor<1024xf32>
   %c1_i32 = arith.constant 1 : i32
-  // CHECK-LABEL: hoist_load_with_print_in_loop
+  // CHECK-NOT: tt.load
   // CHECK: scf.for
   // CHECK: tt.load
   %0 = arith.cmpi slt, %arg1, %arg2 : tensor<1024xi32>
@@ -91,10 +91,10 @@ tt.func @hoist_load_with_print_in_loop(%arg0: tensor<1024x!tt.ptr<f32>>, %arg1: 
 }
 // -----
 
-tt.func @hoist_load_with_assert_in_loop(%arg0: tensor<1024x!tt.ptr<f32>>, %arg1: tensor<1024xi32>, %arg2: tensor<1024xi32>, %arg3: i32, %arg4 : i32, %arg5: tensor<1024x!tt.ptr<f32>>) {
+tt.func @cannot_hoist_load_with_assert_in_loop(%arg0: tensor<1024x!tt.ptr<f32>>, %arg1: tensor<1024xi32>, %arg2: tensor<1024xi32>, %arg3: i32, %arg4 : i32, %arg5: tensor<1024x!tt.ptr<f32>>) {
   %cst = arith.constant dense<0.000000e+00> : tensor<1024xf32>
   %c1_i32 = arith.constant 1 : i32
-  // CHECK-LABEL: hoist_load_with_assert_in_loop
+  // CHECK-NOT: tt.load
   // CHECK: scf.for
   // CHECK: tt.load
   %0 = arith.cmpi slt, %arg1, %arg2 : tensor<1024xi32>
@@ -115,8 +115,6 @@ tt.func @hoist_load_with_assert_in_loop(%arg0: tensor<1024x!tt.ptr<f32>>, %arg1:
 tt.func @cannot_hoist_load_with_store_in_loop(%arg0: tensor<1024x!tt.ptr<f32>>, %arg1: tensor<1024xi32>, %arg2: tensor<1024xi32>, %arg3: i32, %arg4 : i32, %arg5: tensor<1024x!tt.ptr<f32>>, %tmp: tensor<1024x!tt.ptr<f32>>) {
   %cst = arith.constant dense<0.000000e+00> : tensor<1024xf32>
   %c1_i32 = arith.constant 1 : i32
-  // Check if the load is not hoisted when there is an op with write side effect that is neither tt.print nor tt.assert
-  // CHECK-LABEL: cannot_hoist_load_with_store_in_loop
   // CHECK-NOT: tt.load
   // CHECK: scf.for
   // CHECK: tt.load
