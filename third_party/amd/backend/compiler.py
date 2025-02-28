@@ -10,7 +10,6 @@ import re
 import subprocess
 import functools
 from pathlib import Path
-import torch
 
 
 def min_dot_size(target: GPUTarget):
@@ -141,6 +140,8 @@ class HIPBackend(BaseBackend):
 
     @staticmethod
     def is_within_2gb(arg):
+        import torch
+
         MAX_INT_32 = 2**31 - 1
         if hasattr(arg, "ptr_range"):
             return arg.ptr_range() <= MAX_INT_32
@@ -160,7 +161,7 @@ class HIPBackend(BaseBackend):
         ret = BaseBackend.get_arg_specialization(arg, ty, **kwargs)
         # Only attempt to do buffer ops specialization if buffer ops are enabled.
         # Otherwise the is_within_2gb check is unnecessary overhead.
-        if (HIPBackend.use_buffer_ops() and ty == "tensor" and HIPBackend.is_within_2gb(arg)):
+        if HIPBackend.use_buffer_ops() and ty == "tensor" and HIPBackend.is_within_2gb(arg):
             ret += "S"
         return ret
 
