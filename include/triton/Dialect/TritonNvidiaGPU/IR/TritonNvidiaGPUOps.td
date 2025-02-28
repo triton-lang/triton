@@ -196,6 +196,10 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [
       [{
       build($_builder, $_state, alloc, phase, /*pred=*/static_cast<mlir::Value>(nullptr), /*deps=*/{});
       }]>,
+      OpBuilder<(ins "Value":$alloc, "Value":$phase, "Value":$pred),
+      [{
+      build($_builder, $_state, alloc, phase, pred, /*deps=*/{});
+      }]>,
       OpBuilder<(ins "Value":$alloc, "Value":$phase, "ValueRange":$deps),
       [{
       build($_builder, $_state, alloc, phase, /*pred=*/static_cast<mlir::Value>(nullptr), deps);
