@@ -278,8 +278,6 @@ struct DotOpMFMAConverter {
 
     auto mfmasPerRep =
         getMfmasPerRep(ctaTile, warpsPerCTA, numRepShape, mfmaShape);
-    LDBG("mfmasPerRep: " << mfmasPerRep[0] << "x" << mfmasPerRep[1] << "x"
-                         << mfmasPerRep[2]);
 
     // Calculate Dot-Tiling.
     unsigned cyclesPerMfma = getCyclesPerMfma(dotOp);
