@@ -570,22 +570,14 @@ void createBarrierAndWaitOps(IRRewriter &builder, scf::ForOp forOp,
   }
 }
 
-bool isSafeToPipeline(ttng::TCGen5MMAScaledOp scaledDot) {
-  auto isCopiedByTMEMCopy = [=](Value scale) {
-    if (!scale.hasOneUse()) {
-      // Should be used only by the scaled dot op
-      return false;
-    }
-
-    for (auto user : scale.getUsers()) {
-      if (!isa<ttng::TCGen5MMAScaledOp>(user)) {
-        // If the scale is used by TMEM copy and the only other user is the
-        // scaled dot op, MMA pipelining is safe to apply.
-        return false;
-      }
-    }
-    return true;
-  };
+bool isSafeToPipeline(ttng::TCGen5MMAScaledOp scaledDot, scf::ForOp forOp) {
+  auto isCopiedByTMEMCopy =
+      [&](Value scale) { // The scales must be multi-buffered.
+        auto scaleAlloc = findShmemAlloc(scale);
+        if (!scaleAlloc || !forOp.isDefinedOutsideOfLoop(scaleAlloc))
+          return false;
+        return true;
+      };
 
   return isCopiedByTMEMCopy(scaledDot.getAScale()) &&
          isCopiedByTMEMCopy(scaledDot.getBScale());
@@ -605,7 +597,7 @@ FailureOr<scf::ForOp> preProcessLoopForTC05MMAPipelining(scf::ForOp forOp,
       if (isa<ttng::TCGen5MMAOp>(op)) {
         mmaOps.push_back(op);
       } else if (auto scaledDot = dyn_cast<ttng::TCGen5MMAScaledOp>(op)) {
-        if (isSafeToPipeline(scaledDot)) {
+        if (isSafeToPipeline(scaledDot, forOp)) {
           mmaOps.push_back(op);
         } else {
           op->emitWarning("Skipping pipelining of an MMAv5 scaled op because "
