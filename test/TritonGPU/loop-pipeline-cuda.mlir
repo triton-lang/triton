@@ -181,16 +181,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 //     CHECK-NOT:     ttng.wait_barrier
 // CHECK-COUNT-2:     ttng.async_tma_copy_global_to_local
 //         CHECK:     scf.yield
-  tt.func public @matmul_tma(%arg0: !tt.tensordesc<tensor<128x64xf16>>, %arg1: !tt.tensordesc<tensor<64x256xf16>>) -> tensor<128x256xf32, #mma> {
+  tt.func public @matmul_tma(%arg0: !tt.tensordesc<tensor<128x64xf16, #shared>>, %arg1: !tt.tensordesc<tensor<64x256xf16, #shared>>) -> tensor<128x256xf32, #mma> {
     %c256_i32 = arith.constant 256 : i32
     %c0_i32 = arith.constant 0 : i32
     %c64_i32 = arith.constant 64 : i32
     %c1_i32 = arith.constant 1 : i32
     %cst = arith.constant dense<0.000000e+00> : tensor<128x256xf32, #mma>
     %0:2 = scf.for %arg3 = %c0_i32 to %c256_i32 step %c1_i32 iter_args(%arg4 = %cst, %arg5 = %c0_i32) -> (tensor<128x256xf32, #mma>, i32)  : i32 {
-      %1 = tt.experimental_descriptor_load %arg0[%c0_i32, %arg5] : !tt.tensordesc<tensor<128x64xf16>> -> tensor<128x64xf16, #blocked>
+      %1 = tt.experimental_descriptor_load %arg0[%c0_i32, %arg5] : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #blocked>
       %2 = ttg.local_alloc %1 : (tensor<128x64xf16, #blocked>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
-      %3 = tt.experimental_descriptor_load %arg1[%arg5, %c0_i32] : !tt.tensordesc<tensor<64x256xf16>> -> tensor<64x256xf16, #blocked1>
+      %3 = tt.experimental_descriptor_load %arg1[%arg5, %c0_i32] : !tt.tensordesc<tensor<64x256xf16, #shared>> -> tensor<64x256xf16, #blocked1>
       %4 = ttg.local_alloc %3 : (tensor<64x256xf16, #blocked1>) -> !ttg.memdesc<64x256xf16, #shared, #smem>
       %5 = ttng.warp_group_dot %2, %4, %arg4 { inputPrecision = 0 : i32 } : !ttg.memdesc<128x64xf16, #shared, #smem> * !ttg.memdesc<64x256xf16, #shared, #smem> -> tensor<128x256xf32, #mma>
       %6 = arith.addi %arg5, %c64_i32 : i32
