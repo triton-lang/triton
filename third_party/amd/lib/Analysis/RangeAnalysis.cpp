@@ -127,7 +127,7 @@ std::optional<ConstantIntRanges> maybeGetAssumedRange(Operation *assumption,
     emitRemark(assumption->getLoc(),
                "unsigned arithmetic not currently supported");
     return {};
-  default:;
+  default:
     break;
   }
   bool isSigned = true;
