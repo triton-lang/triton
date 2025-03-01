@@ -80,29 +80,35 @@
 <li class="toctree-l4"><a class="reference internal" href="#id3">Results:</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#amdgpu-buffer-store-triton-amdgpu-bufferstoreop"><code class="docutils literal notranslate"><span class="pre">amdgpu.buffer_store</span></code> (triton::amdgpu::BufferStoreOp)</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#amdgpu-buffer-load-to-local-triton-amdgpu-bufferloadtolocalop"><code class="docutils literal notranslate"><span class="pre">amdgpu.buffer_load_to_local</span></code> (triton::amdgpu::BufferLoadToLocalOp)</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="#id4">Attributes:</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#id5">Operands:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id6">Results:</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#amdgpu-buffer-store-triton-amdgpu-bufferstoreop"><code class="docutils literal notranslate"><span class="pre">amdgpu.buffer_store</span></code> (triton::amdgpu::BufferStoreOp)</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id7">Attributes:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id8">Operands:</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#amdgpu-cond-barrier-triton-amdgpu-condbarrierop"><code class="docutils literal notranslate"><span class="pre">amdgpu.cond_barrier</span></code> (triton::amdgpu::CondBarrierOp)</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#id6">Operands:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id9">Operands:</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#amdgpu-extract-slice-triton-amdgpu-extractsliceop"><code class="docutils literal notranslate"><span class="pre">amdgpu.extract_slice</span></code> (triton::amdgpu::ExtractSliceOp)</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#id7">Attributes:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#id8">Operands:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#id9">Results:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id10">Attributes:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id11">Operands:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id12">Results:</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#amdgpu-instruction-sched-hint-triton-amdgpu-instructionschedhint"><code class="docutils literal notranslate"><span class="pre">amdgpu.instruction_sched_hint</span></code> (triton::amdgpu::InstructionSchedHint)</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#id10">Attributes:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id13">Attributes:</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#amdgpu-upcast-mxfp-triton-amdgpu-upcastmxfpop"><code class="docutils literal notranslate"><span class="pre">amdgpu.upcast_mxfp</span></code> (triton::amdgpu::UpcastMXFPOp)</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#id11">Attributes:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#id12">Operands:</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#id13">Results:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id14">Attributes:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id15">Operands:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id16">Results:</a></li>
 </ul>
 </li>
 </ul>
@@ -320,6 +326,79 @@ the cache memory access.</p>
 </table>
 </section>
 </section>
+<section id="amdgpu-buffer-load-to-local-triton-amdgpu-bufferloadtolocalop">
+<h2><code class="docutils literal notranslate"><span class="pre">amdgpu.buffer_load_to_local</span></code> (triton::amdgpu::BufferLoadToLocalOp)<a class="headerlink" href="#amdgpu-buffer-load-to-local-triton-amdgpu-bufferloadtolocalop" title="Link to this heading">¶</a></h2>
+<p><em>Load from a scalar base pointer and a tensor offset to shared memory</em></p>
+<p>Syntax:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `amdgpu.buffer_load_to_local` $ptr `[` $offsets `]` (`mask` `=` $mask^)? (`other` `=` $other^)? (`stride` `=` $stride^)?
+              oilist(`cacheModifier` `=` $cache) `into` $dest
+              attr-dict `:` type($ptr) `[` type($offsets) `]` type($other) `-&gt;` type($dest)
+</pre></div>
+</div>
+<p>AMD Buffer load operation. Similar to amdgpu.buffer_load op but directly wirtes to shared memory instead of into registers.</p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">InferTypeOpInterface</span></code>, <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
+<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Read</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory}</span></code>, <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::triton::gpu::SharedMemory}</span></code></p>
+<section id="id4">
+<h3>Attributes:<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h3>
+<table>
+<tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
+<tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</summary>{{% markdown %}}Enum cases:
+* none (`NONE`)
+* ca (`CA`)
+* cg (`CG`)
+* wb (`WB`)
+* cs (`CS`)
+* wt (`WT`)
+* cv (`CV`){{% /markdown %}}</details></td></tr>
+</table>
+</section>
+<section id="id5">
+<h3>Operands:<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h3>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">dest</span></code></p></td>
+<td><p>memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>
+</tr>
+<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">ptr</span></code></p></td>
+<td><p>ptr</p></td>
+</tr>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">offsets</span></code></p></td>
+<td><p>tensor of 32-bit signless integer values</p></td>
+</tr>
+<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">mask</span></code></p></td>
+<td><p>ranked tensor of 1-bit signless integer values</p></td>
+</tr>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">other</span></code></p></td>
+<td><p>ranked tensor of floating-point or integer or ptr values</p></td>
+</tr>
+<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">stride</span></code></p></td>
+<td><p>32-bit signless integer</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="id6">
+<h3>Results:<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h3>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head text-center"><p>Result</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">token</span></code></p></td>
+<td><p>async token type</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+</section>
 <section id="amdgpu-buffer-store-triton-amdgpu-bufferstoreop">
 <h2><code class="docutils literal notranslate"><span class="pre">amdgpu.buffer_store</span></code> (triton::amdgpu::BufferStoreOp)<a class="headerlink" href="#amdgpu-buffer-store-triton-amdgpu-bufferstoreop" title="Link to this heading">¶</a></h2>
 <p><em>Store into scalar base pointer and a tensor offset</em></p>
@@ -344,8 +423,8 @@ the cache memory access.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">SameLoadStoreOperandsEncoding</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::triton::GlobalMemory}</span></code></p>
-<section id="id4">
-<h3>Attributes:<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h3>
+<section id="id7">
+<h3>Attributes:<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>cache</code></td><td>::mlir::triton::CacheModifierAttr</td><td><details><summary>allowed 32-bit signless integer cases: 1, 2, 3, 4, 5, 6, 7</summary>{{% markdown %}}Enum cases:
@@ -358,8 +437,8 @@ the cache memory access.</p>
 * cv (`CV`){{% /markdown %}}</details></td></tr>
 </table>
 </section>
-<section id="id5">
-<h3>Operands:<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h3>
+<section id="id8">
+<h3>Operands:<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -400,8 +479,8 @@ converge at the end by calling condBarrierOp(true) with the remaining threads.
 Conceptually, this is similar to having an execution barrier inside an if statement.
 This op allows us to avoid blocking the whole block when suitable to help scheduling.
 NB. This doesn’t set any memory fence.</p>
-<section id="id6">
-<h3>Operands:<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h3>
+<section id="id9">
+<h3>Operands:<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -456,15 +535,15 @@ size of the slice is determined by the result type.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
-<section id="id7">
-<h3>Attributes:<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h3>
+<section id="id10">
+<h3>Attributes:<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>static_offsets</code></td><td>::mlir::DenseI64ArrayAttr</td><td>i64 dense array attribute</td></tr>
 </table>
 </section>
-<section id="id8">
-<h3>Operands:<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h3>
+<section id="id11">
+<h3>Operands:<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -478,8 +557,8 @@ size of the slice is determined by the result type.</p>
 </tbody>
 </table>
 </section>
-<section id="id9">
-<h3>Results:<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h3>
+<section id="id12">
+<h3>Results:<a class="headerlink" href="#id12" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Result</p></th>
@@ -509,8 +588,8 @@ to mark intended scheduling regions. The hint ops are eventually lowered
 into LLVM AMDGPU instruction scheduling primitives, which are meant to control
 how different kinds of instructions (valu/mfma, global/shared memory, etc.) should
 interleave for better instruction level parallelism.</p>
-<section id="id10">
-<h3>Attributes:<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h3>
+<section id="id13">
+<h3>Attributes:<a class="headerlink" href="#id13" title="Link to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>variant</code></td><td>::mlir::triton::amdgpu::SchedHintAttr</td><td><details><summary>Instruction Scheduling Hints for AMD GPUs</summary>{{% markdown %}}Enum cases:
@@ -563,8 +642,8 @@ https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-fina
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">AlwaysSpeculatableImplTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">ConditionallySpeculatable</span></code>, <code class="docutils literal notranslate"><span class="pre">NoMemoryEffect</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
 <p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{}</span></code></p>
-<section id="id11">
-<h3>Attributes:<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h3>
+<section id="id14">
+<h3>Attributes:<a class="headerlink" href="#id14" title="Link to this heading">¶</a></h3>
 <table>
 <tr><th>Attribute</th><th>MLIR Type</th><th>Description</th></tr>
 <tr><td><code>fp_type</code></td><td>::mlir::triton::ScaleDotElemTypeAttr</td><td><details><summary>allowed 32-bit signless integer cases: 0, 1, 2, 3, 4, 5, 6</summary>{{% markdown %}}Enum cases:
@@ -578,8 +657,8 @@ https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-fina
 <tr><td><code>fastMath</code></td><td>::mlir::BoolAttr</td><td>bool attribute</td></tr>
 </table>
 </section>
-<section id="id12">
-<h3>Operands:<a class="headerlink" href="#id12" title="Link to this heading">¶</a></h3>
+<section id="id15">
+<h3>Operands:<a class="headerlink" href="#id15" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Operand</p></th>
@@ -596,8 +675,8 @@ https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-fina
 </tbody>
 </table>
 </section>
-<section id="id13">
-<h3>Results:<a class="headerlink" href="#id13" title="Link to this heading">¶</a></h3>
+<section id="id16">
+<h3>Results:<a class="headerlink" href="#id16" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head text-center"><p>Result</p></th>

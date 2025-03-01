@@ -757,8 +757,7 @@ registers is now understood to be incorporated into tmem_copy itself. Ideally, w
 the SMEM memdesc, making tmem_copy a straightforward 2D copy operation: (BLOCK_MN, BLOCK_K / scale_vec_size) -&gt; (BLOCK_MN, BLOCK_K / scale_vec_size).
 In the absence of such operations on memdesc, we resort to implicitly encoding the reshape/transpose semantics in tmem_copy.</p>
 <p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
-<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span> <span class="pre">(MemoryEffectOpInterface)</span></code></p>
-<p>Effects: <code class="docutils literal notranslate"><span class="pre">MemoryEffects::Effect{MemoryEffects::Write</span> <span class="pre">on</span> <span class="pre">::mlir::SideEffects::DefaultResource}</span></code></p>
+<p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
 <section id="id17">
 <h3>Operands:<a class="headerlink" href="#id17" title="Link to this heading">¶</a></h3>
 <table class="docutils align-default">
@@ -902,16 +901,18 @@ Therefore we cannot combine this op with any convert layout like local_load.</p>
 <h2><code class="docutils literal notranslate"><span class="pre">ttng.wait_barrier</span></code> (triton::nvidia_gpu::WaitBarrierOp)<a class="headerlink" href="#ttng-wait-barrier-triton-nvidia-gpu-waitbarrierop" title="Link to this heading">¶</a></h2>
 <p><em>Wait until the mbarrier phase completes.</em></p>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttng.wait_barrier` $alloc `,` $phase attr-dict (`,` $pred^)? `:` qualified(type($alloc))
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttng.wait_barrier` $alloc `,` $phase attr-dict (`,` $pred^)? (`deps` $deps^)? `:` qualified(type($alloc)) (`,` type($deps)^)?
 </pre></div>
 </div>
 <p>Blocks the program progress until the mbarrier object in <code class="docutils literal notranslate"><span class="pre">alloc</span></code> completes
 its current phase.</p>
 <p>This lowers a waitloop using PTX instruction
 mbarrier.try_wait.parity.shared.b64.</p>
+<p>Accepts optional list of memory. If present, it is assumed that any of the
+dependencies may be accessed until the barrier completes.</p>
 <p>The barrier behavior is described here:
 https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#data-movement-and-conversion-instructions-asynchronous-copy-completion-mechanisms</p>
-<p>Traits: <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
+<p>Traits: <code class="docutils literal notranslate"><span class="pre">AttrSizedOperandSegments</span></code>, <code class="docutils literal notranslate"><span class="pre">VerifyTensorLayoutsTrait</span></code></p>
 <p>Interfaces: <code class="docutils literal notranslate"><span class="pre">MemoryEffectOpInterface</span></code></p>
 <section id="id23">
 <h3>Operands:<a class="headerlink" href="#id23" title="Link to this heading">¶</a></h3>
@@ -930,6 +931,9 @@ https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#data-movement-
 </tr>
 <tr class="row-even"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">pred</span></code></p></td>
 <td><p>1-bit signless integer</p></td>
+</tr>
+<tr class="row-odd"><td class="text-center"><p><code class="docutils literal notranslate"><span class="pre">deps</span></code></p></td>
+<td><p>variadic of memory descriptor type (<code class="docutils literal notranslate"><span class="pre">::mlir::triton::gpu::MemDescType</span></code>) in Triton IR type system</p></td>
 </tr>
 </tbody>
 </table>
