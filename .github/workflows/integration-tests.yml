@@ -250,7 +250,6 @@ jobs:
         run: make test-lit
       - name: Run python tests on CUDA
         run: |
-          nvidia-smi
           if [ "${{ matrix.runner[0] }}" == "gb200-runner-set" ]; then
             source /venv/bin/activate
           fi
@@ -267,11 +266,8 @@ jobs:
       - name: Run C++ unittests
         run: make test-cpp
       - name: Run Proton tests
-        run: |
-          if [ "${{ matrix.runner[0] }}" == "gb200-runner-set" ]; then
-            source /venv/bin/activate
-          fi
-          make test-proton
+        if: ${{ matrix.runner[0] != 'gb200-runner-set' }}
+        run: make test-proton
       - name: Inspect cache directories
         run: |
           mkdir -p ~/.triton
@@ -426,11 +422,8 @@ jobs:
           cd python/test/regression
           python3 -m pytest -s -n 8 ./test_cast_matmul.py
       - name: Run Proton tests
-        run: |
-          if [ "${{ matrix.runner[0] }}" == "gb200-runner-set" ]; then
-            source /venv/bin/activate
-          fi
-          make test-proton
+        if: ${{ matrix.runner[0] != 'gb200-runner-set' }}
+        run: make test-proton
       - name: Run C++ unittests
         run: make test-cpp
       - name: Inspect cache directories

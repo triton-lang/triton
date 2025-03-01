@@ -287,7 +287,6 @@ jobs:
 
       - name: Run python tests on CUDA
         run:  |
-          nvidia-smi
           if [ "${{ matrix.runner[0] }}" == "gb200-runner-set" ]; then
             source /venv/bin/activate
           fi
@@ -310,11 +309,8 @@ jobs:
 
       - &run-proton-tests-step
         name: Run Proton tests
-        run:  |
-          if [ "${{ matrix.runner[0] }}" == "gb200-runner-set" ]; then
-            source /venv/bin/activate
-          fi
-          make test-proton
+        if: ${{ matrix.runner[0] != 'gb200-runner-set' }}
+        run: make test-proton
 
       - *inspect-cache-directories-step
 
