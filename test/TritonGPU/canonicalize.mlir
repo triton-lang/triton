@@ -269,3 +269,79 @@ tt.func @canonicalize_within_warp_specialize(%arg0: i32) -> i32 {
   } : () -> i32
   tt.return %0 : i32
 }
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase=2, maxPhase=8, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: cvt_local_alloc_fold
+  tt.func @cvt_local_alloc_fold(%arg0: tensor<16x16xf16, #blocked>) -> !ttg.memdesc<16x16xf16, #shared, #smem> {
+    %c = ttg.convert_layout %arg0 : tensor<16x16xf16, #blocked> -> tensor<16x16xf16, #blocked1>
+    %a = ttg.local_alloc %c : (tensor<16x16xf16, #blocked1>) -> !ttg.memdesc<16x16xf16, #shared, #smem>
+    // CHECK-NOT: ttg.convert_layout
+    // CHECK: %[[ARG:.+]] = ttg.local_alloc
+    // CHECK-NEXT: tt.return %[[ARG]]
+    tt.return %a : !ttg.memdesc<16x16xf16, #shared, #smem>
+  }
+} // end module
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#linear = #ttg.linear<{register = [[1, 0], [2, 0], [4, 0]], lane = [[8, 0], [0, 1], [0, 2], [0, 4], [0, 8]], warp = [], block = []}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase=2, maxPhase=8, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: cvt_local_alloc_nofold
+  tt.func @cvt_local_alloc_nofold(%arg0: tensor<16x16xf16, #blocked>) -> !ttg.memdesc<16x16xf16, #shared, #smem> {
+    %c = ttg.convert_layout %arg0 : tensor<16x16xf16, #blocked> -> tensor<16x16xf16, #linear>
+    %a = ttg.local_alloc %c : (tensor<16x16xf16, #linear>) -> !ttg.memdesc<16x16xf16, #shared, #smem>
+    // CHECK: %[[ARG1:.+]] = ttg.convert_layout
+    // CHECK: %[[ARG2:.+]] = ttg.local_alloc %[[ARG1]]
+    // CHECK-NEXT: tt.return %[[ARG2]]
+    tt.return %a : !ttg.memdesc<16x16xf16, #shared, #smem>
+  }
+} // end module
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [4, 1], threadsPerWarp = [4, 8], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase=2, maxPhase=8, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: cvt_local_store_fold
+  tt.func @cvt_local_store_fold(%arg0: tensor<16x16xf16, #blocked>) -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable> {
+    %c = ttg.convert_layout %arg0 : tensor<16x16xf16, #blocked> -> tensor<16x16xf16, #blocked1>
+    %a = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable>
+    ttg.local_store %c, %a : tensor<16x16xf16, #blocked1> -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable>
+    // CHECK-NOT: ttg.convert_layout
+    // CHECK: %[[ARG:.+]] = ttg.local_alloc
+    // CHECK: ttg.local_store {{.*}}, %[[ARG]]
+    // CHECK-NEXT: tt.return %[[ARG]]
+    tt.return %a : !ttg.memdesc<16x16xf16, #shared, #smem, mutable>
+  }
+} // end module
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [8, 4], warpsPerCTA = [1, 1], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#linear = #ttg.linear<{register = [[1, 0], [2, 0], [4, 0]], lane = [[8, 0], [0, 1], [0, 2], [0, 4], [0, 8]], warp = [], block = []}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase=2, maxPhase=8, order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // CHECK-LABEL: cvt_local_store_nofold
+  tt.func @cvt_local_store_nofold(%arg0: tensor<16x16xf16, #blocked>) -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable> {
+    %c = ttg.convert_layout %arg0 : tensor<16x16xf16, #blocked> -> tensor<16x16xf16, #linear>
+    %a = ttg.local_alloc : () -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable>
+    ttg.local_store %c, %a : tensor<16x16xf16, #linear> -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable>
+    // CHECK-DAG: %[[ARG1:.+]] = ttg.convert_layout
+    // CHECK-DAG: %[[ARG2:.+]] = ttg.local_alloc
+    // CHECK: ttg.local_store %[[ARG1]], %[[ARG2]]
+    // CHECK-NEXT: tt.return %[[ARG2]]
+    tt.return %a : !ttg.memdesc<16x16xf16, #shared, #smem, mutable>
+  }
+} // end module

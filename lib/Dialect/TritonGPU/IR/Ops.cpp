@@ -160,6 +160,10 @@ struct CanonicalizeConvertFromAlloc
     auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
     if (!convert)
       return failure();
+    // Consider Linear encoding as an ankor layout
+    auto cvtType = convert.getResult().getType();
+    if (isa<triton::gpu::LinearEncodingAttr>(cvtType.getEncoding()))
+      return failure();
     rewriter.replaceOpWithNewOp<triton::gpu::LocalAllocOp>(
         op, op->getResult(0).getType(), convert.getSrc());
     return mlir::success();
@@ -177,6 +181,11 @@ struct CanonicalizeConvertFromLocalStore
     auto convert = op.getSrc().getDefiningOp<ConvertLayoutOp>();
     if (!convert)
       return failure();
+    // Consider Linear encoding as an ankor layout
+    auto cvtType = convert.getResult().getType();
+    if (isa<triton::gpu::LinearEncodingAttr>(cvtType.getEncoding()))
+      return failure();
+
     rewriter.replaceOpWithNewOp<triton::gpu::LocalStoreOp>(op, convert.getSrc(),
                                                            op.getDst());
     return mlir::success();
