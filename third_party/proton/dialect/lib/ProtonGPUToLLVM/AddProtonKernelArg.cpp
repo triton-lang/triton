@@ -86,8 +86,9 @@ struct AddProtonKernelArg
       });
     });
 
-    assert(hasProtonGlobalScratchAllocOp && "Proton scratch alloc op not found");
-    //TODO(crobeck): add support for multiple kernels
+    assert(hasProtonGlobalScratchAllocOp &&
+           "Proton scratch alloc op not found");
+    // TODO(crobeck): add support for multiple kernels
     assert(llvm::range_size(moduleOp.getOps<triton::FuncOp>()) == 1);
     triton::FuncOp funcOp = *moduleOp.getOps<triton::FuncOp>().begin();
 
