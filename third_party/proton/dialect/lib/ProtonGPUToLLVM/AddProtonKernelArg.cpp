@@ -47,7 +47,7 @@ triton::FuncOp insertAmendedFuncOp(triton::FuncOp funcOp,
   auto ctx = funcOp->getContext();
   auto funcTy = funcOp.getFunctionType();
   SmallVector<Type> amendedInputTy(funcTy.getInputs());
-  Type globalPtrTy = triton::PointerType::get(rewriter.getI8Type(), 0);
+  Type globalPtrTy = triton::PointerType::get(rewriter.getI8Type(), 1);
 
   amendedInputTy.push_back(globalPtrTy);
   auto amendedFuncTy =
@@ -86,9 +86,8 @@ struct AddProtonKernelArg
       });
     });
 
-    if (!hasProtonGlobalScratchAllocOp)
-      return;
-
+    assert(hasProtonGlobalScratchAllocOp && "Proton scratch alloc op not found");
+    //TODO(crobeck): add support for multiple kernels
     assert(llvm::range_size(moduleOp.getOps<triton::FuncOp>()) == 1);
     triton::FuncOp funcOp = *moduleOp.getOps<triton::FuncOp>().begin();
 
