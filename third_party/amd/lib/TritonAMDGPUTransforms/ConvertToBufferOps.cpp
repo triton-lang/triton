@@ -85,7 +85,7 @@ bool verifyNonNegativeExpr(Value expr, const DenseSet<Value> &assumptions,
   LDBG("Determing if non-negative: " << expr);
 
   if (!llvm::isa<mlir::BlockArgument>(expr) &&
-      succeeded(AMD::staticallyNonNegative(*solver, expr))) {
+      succeeded(dataflow::staticallyNonNegative(*solver, expr))) {
     return true;
   }
 
@@ -513,8 +513,9 @@ public:
     // Collect assumptions in the function
     DenseSet<Value> assumptions;
     mod.walk([&](LLVM::AssumeOp op) {
-      if (op->getOperand(0).getDefiningOp<arith::CmpIOp>())
-        assumptions.insert(op->getOperand(0));
+      auto oper = op->getOperand(0);
+      if (oper.getDefiningOp<arith::CmpIOp>())
+        assumptions.insert(oper);
     });
     LLVM_DEBUG({
       DBGS() << "Number of assumptions found: " << assumptions.size() << "\n";
