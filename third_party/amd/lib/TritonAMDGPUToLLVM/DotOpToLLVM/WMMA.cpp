@@ -291,7 +291,7 @@ LogicalResult convertDot(DotOp op, DotOpAdaptor adaptor,
   auto dstElemTy = dTensorTy.getElementType();
   auto fc = unpackLLElements(loc, loadedC, rewriter);
 
-  unsigned warpSize = triton::gpu::getWarpSize(wmmaLayout);
+  unsigned warpSize = gpu::lookupThreadsPerWarp(rewriter);
   constexpr unsigned vgprElemBitWidth = 32;
   unsigned paddedOutputElemSize =
       wmmaVer == 1 ? vgprElemBitWidth / dstElemTy.getIntOrFloatBitWidth() : 1;

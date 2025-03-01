@@ -75,15 +75,6 @@ SmallVector<unsigned> getThreadsPerWarp(Attribute layout) {
   }
 }
 
-unsigned getWarpSize(Attribute layout) {
-  unsigned size = 1;
-  auto threadsPerWarp = getThreadsPerWarp(layout);
-  for (auto e : threadsPerWarp) {
-    size *= e;
-  }
-  return size;
-}
-
 SmallVector<unsigned>
 getThreadsPerWarpWithUniqueData(Attribute layout,
                                 ArrayRef<int64_t> tensorShape) {
@@ -371,28 +362,6 @@ SmallVector<int64_t> getAllocationShapePerCTA(Type type) {
   auto tensorType = cast<TensorOrMemDesc>(type);
   return getAllocationShapePerCTA(tensorType.getEncoding(),
                                   tensorType.getShape());
-}
-
-unsigned getNumWarpsPerCTA(Attribute layout) {
-  SmallVector<unsigned> warpsPerCTA;
-  if (auto blockedLayout = dyn_cast<BlockedEncodingAttr>(layout))
-    warpsPerCTA = blockedLayout.getWarpsPerCTA();
-  else if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout))
-    return getNumWarpsPerCTA(sliceLayout.getParent());
-  else if (auto mmaLayout = dyn_cast<MmaEncodingTrait>(layout)) {
-    // Use the distributed layout interface to get the number of warps per
-    // CTA.
-    auto distributedLayout = cast<DistributedEncodingTrait>(layout);
-    warpsPerCTA = distributedLayout.getWarpsPerCTA();
-  } else if (auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(layout))
-    warpsPerCTA = mfmaLayout.getWarpsPerCTA();
-  else if (auto wmmaLayout = dyn_cast<AMDWmmaEncodingAttr>(layout))
-    warpsPerCTA = wmmaLayout.getWarpsPerCTA();
-  else if (auto dotLayout = dyn_cast<DotOperandEncodingAttr>(layout))
-    warpsPerCTA = dotLayout.getWarpsPerCTA();
-  else
-    llvm::report_fatal_error("Unimplemented usage of getNumWarpsPerCTA");
-  return product<unsigned>(warpsPerCTA);
 }
 
 unsigned getNumCTAs(Attribute layout) {
@@ -3409,4 +3378,13 @@ int triton::gpu::lookupNumWarps(Operation *op) {
                              Twine(AttrNumWarpsName) + " attribute");
   }
   return *numWarps;
+}
+
+int triton::gpu::lookupThreadsPerWarp(OpBuilder &rewriter) {
+  assert(rewriter.getInsertionBlock() && "expected an insertion point");
+  Operation *op = rewriter.getInsertionBlock()->getParentOp();
+  while (op && !isa<ModuleOp>(op))
+    op = op->getParentOp();
+  assert(op && "cannot create thread ID outside of module");
+  return triton::gpu::TritonGPUDialect::getThreadsPerWarp(cast<ModuleOp>(op));
 }

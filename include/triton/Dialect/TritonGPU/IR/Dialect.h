@@ -51,6 +51,10 @@ int lookupNumWarps(Operation *op);
 // verifiers.
 std::optional<int> maybeLookupNumWarps(Operation *op);
 
+// FIXME: Make this API and that of maybeLookupNumWarps consistent!
+// Utility to find the number of threads per warp
+int lookupThreadsPerWarp(OpBuilder &rewriter);
+
 class LinearLayoutCache {
 public:
   std::optional<LinearLayout> get(const CacheKey &key) {
@@ -96,8 +100,6 @@ SmallVector<unsigned> getElemsPerThread(Type type);
 // elements. If you want non-replicated threads, use
 // getThreadsPerWarpWithUniqueData.
 SmallVector<unsigned> getThreadsPerWarp(Attribute layout);
-
-unsigned getWarpSize(Attribute layout);
 
 // Returns the number of warps per CTA that may have access to replicated
 // elements. If you want non-replicated warps, use getWarpsPerCTAWithUniqueData.
@@ -195,8 +197,6 @@ SmallVector<int64_t> getShapePerCTA(Type type);
 SmallVector<int64_t> getAllocationShapePerCTA(Attribute layout,
                                               ArrayRef<int64_t> shape);
 SmallVector<int64_t> getAllocationShapePerCTA(Type type);
-
-unsigned getNumWarpsPerCTA(Attribute layout);
 
 unsigned getNumCTAs(Attribute layout);
 

@@ -252,7 +252,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
     numRepK = numReps[kDimIdx + 1];
   }
 
-  unsigned iWarpSize = triton::gpu::getWarpSize(mfmaLayout);
+  unsigned iWarpSize = triton::gpu::lookupThreadsPerWarp(rewriter);
   assert(iWarpSize == 64);
   Value warpSize = tb.i32_val(iWarpSize);
   Value linearWarpId = tb.udiv(thread, warpSize);

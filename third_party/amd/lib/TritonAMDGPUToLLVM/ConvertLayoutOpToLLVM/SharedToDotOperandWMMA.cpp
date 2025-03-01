@@ -171,7 +171,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   auto numRepK = numReps[opIdx == 0 ? 2 : 1];
   auto repB = numReps[0];
 
-  unsigned iWaveSize = triton::gpu::getWarpSize(wmmaLayout);
+  unsigned iWaveSize = triton::gpu::lookupThreadsPerWarp(rewriter);
   assert(iWaveSize == 32);
   Value waveSize = tb.i32_val(iWaveSize);
   Value linearWaveId = tb.udiv(thread, waveSize);
