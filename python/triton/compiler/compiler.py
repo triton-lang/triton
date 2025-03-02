@@ -359,8 +359,8 @@ class CompiledKernel:
 
     def __init__(self, src, metadata_group, hash):
         from collections import namedtuple
-        self.metadata_path = next((Path(p) for c, p in metadata_group.items() if c.endswith(".json")))
-        metadata = json.loads(self.metadata_path.read_text())
+        metadata_path = next((Path(p) for c, p in metadata_group.items() if c.endswith(".json")))
+        metadata = json.loads(metadata_path.read_text())
         metadata['cluster_dims'] = tuple(metadata['cluster_dims'])
         # JSON serialization dumps the target as a dict. Restore it to a GPUTarget.
         target = metadata['target']
@@ -379,6 +379,7 @@ class CompiledKernel:
             file.suffix[1:]: file.read_bytes() if file.suffix[1:] == binary_ext else file.read_text()
             for file in asm_files
         })
+        self.metadata_group = metadata_group 
         self.kernel = self.asm[binary_ext]
         # binaries are lazily initialized
         # because it involves doing runtime things
@@ -405,7 +406,7 @@ class CompiledKernel:
         self.module, self.function, self.n_regs, self.n_spills = driver.active.utils.load_binary(
             self.name, self.kernel, self.metadata.shared, device)
         if CompiledKernel.init_handle_hook is not None:
-            CompiledKernel.init_handle_hook(self.module, self.function, self.metadata_path)
+            CompiledKernel.init_handle_hook(self.module, self.function, self.metadata_group)
 
     def __getattribute__(self, name):
         if name == 'run':
