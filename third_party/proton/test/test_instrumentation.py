@@ -4,9 +4,10 @@ import pathlib
 import triton
 import triton.language as tl
 import triton.profiler.language as pl
+import triton.profiler as proton
 
 
-def test_proton_record(tmp_path: pathlib.Path):
+def test_record(tmp_path: pathlib.Path):
 
     @triton.jit
     def add_kernel(
@@ -38,3 +39,21 @@ def test_proton_record(tmp_path: pathlib.Path):
     ttir = pgm.asm['ttir']
     assert "proton.record start" in ttir
     assert "proton.record end" in ttir
+
+
+def test_hook_instrumentation(tmp_path):
+
+    @triton.jit
+    def foo(x, size: tl.constexpr, y):
+        offs = tl.arange(0, size)
+        pl.enter_scope("store0")
+        tl.store(y + offs, tl.load(x + offs))
+        pl.exit_scope("store0")
+
+    x = torch.tensor([2], device="cuda", dtype=torch.float32)
+    y = torch.zeros_like(x)
+    temp_file = tmp_path / "test_hook_instrumentation.hatchet"
+    proton.start(str(temp_file.with_suffix("")), backend="instrumentation")
+    foo[(1, )](x, 1, y, num_warps=4)
+    proton.finalize()
+    # TODO: add asserts
