@@ -384,6 +384,7 @@ class CompiledKernel:
             file.suffix[1:]: file.read_bytes() if file.suffix[1:] == binary_ext else file.read_text()
             for file in asm_files
         })
+        self.metadata_group = metadata_group
         self.kernel = self.asm[binary_ext]
         # binaries are lazily initialized
         # because it involves doing runtime things
@@ -409,8 +410,8 @@ class CompiledKernel:
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
         self.module, self.function, self.n_regs, self.n_spills = driver.active.utils.load_binary(
             self.name, self.kernel, self.metadata.shared, device)
-        if self.init_handle_hook is not None:
-            self.init_handle_hook(self.module, self.function, self.metadata_path)
+        if CompiledKernel.init_handle_hook is not None:
+            CompiledKernel.init_handle_hook(self.module, self.function, self.metadata_group)
 
     def __getattribute__(self, name):
         if name == 'run':
