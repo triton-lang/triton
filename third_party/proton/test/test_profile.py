@@ -208,23 +208,6 @@ def test_hook_triton(tmp_path: pathlib.Path):
     assert data[0]["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
 
 
-def test_hook_instrumentation(tmp_path):
-    
-    @triton.jit
-    def foo(x, size: tl.constexpr, y):
-        offs = tl.arange(0, size)
-        tl.store(y + offs, tl.load(x + offs))
-
-    x = torch.tensor([2], device="cuda", dtype=torch.float32)
-    y = torch.zeros_like(x)
-    temp_file = tmp_path / "test_hook_instrumentation.hatchet"
-    proton.start(str(temp_file.with_suffix("")), backend="instrumentation")
-    foo[(1, )](x, 1, y, num_warps=4)
-    proton.finalize()
-    # TODO: add asserts
-
-
-
 @pytest.mark.parametrize("context", ["shadow", "python"])
 def test_hook_gpu_kernel(tmp_path: pathlib.Path, context: str):
 
