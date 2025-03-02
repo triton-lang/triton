@@ -359,8 +359,8 @@ class CompiledKernel:
 
     def __init__(self, src, metadata_group, hash):
         from collections import namedtuple
-        metadata_path = next((Path(p) for c, p in metadata_group.items() if c.endswith(".json")))
-        metadata = json.loads(metadata_path.read_text())
+        self.metadata_path = next((Path(p) for c, p in metadata_group.items() if c.endswith(".json")))
+        metadata = json.loads(self.metadata_path.read_text())
         metadata['cluster_dims'] = tuple(metadata['cluster_dims'])
         # JSON serialization dumps the target as a dict. Restore it to a GPUTarget.
         target = metadata['target']
