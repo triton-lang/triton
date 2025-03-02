@@ -1,6 +1,6 @@
-import triton
 from triton.language import core as tl
 from triton.language.core import builtin
+from triton._C.libtriton import ir
 import warnings
 
 
@@ -14,11 +14,9 @@ def record(is_start: tl.constexpr, scope_name: tl.constexpr, _builder=None):
     return tl.tensor(_builder.create_proton_record(is_start, scope_name), tl.void)
 
 
-@triton.jit
-def enter_scope(name: tl.constexpr):
+def enter_scope(name: tl.constexpr, builder: ir.builder):
     record(is_start=True, scope_name=name)
 
 
-@triton.jit
-def exit_scope(name: tl.constexpr):
+def exit_scope(name: tl.constexpr, builder: ir.builder):
     record(is_start=False, scope_name=name)
