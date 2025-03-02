@@ -2,6 +2,8 @@ from .state import enter_state, exit_state
 from .scope import enter_scope, exit_scope
 
 from triton._C.libtriton import ir
+from triton._C.libtriton import proton as triton_proton
+from triton._C.libproton import proton as libproton
 
 COMPUTE_METADATA_SCOPE_NAME = "__proton_launch_metadata"
 
@@ -30,17 +32,16 @@ class TritonInitHandleHook:
     function_scope_ids: dict = {}
 
     @staticmethod
-    def map_scope_ids(function, module, metadata_group):
+    def map_scope_ids(function, module, metadata_group) -> None:
         if function and function not in TritonInitHandleHook.function_scope_ids:
-            ir_path = None
-            if "ttgir" in metadata_group:
-                ir_path = metadata_group["ttgir"]
-            elif "ttir" in metadata_group:
-                ir_path = metadata_group["ttir"]
+            ir_path = next((path for key, path in metadata_group.items() if key.endswith(("ttgir", "ttir"))), None)
             if ir_path:
                 context = ir.context()
+                ir.load_dialects(context)
                 module = ir.parse_mlir_module(ir_path, context)
                 module.context = context
+                scope_id_pairs = triton_proton.get_scope_id_pairs(module)
+                libproton.map_scope_ids(function, scope_id_pairs)
 
 
 def register_launch_hook() -> None:
