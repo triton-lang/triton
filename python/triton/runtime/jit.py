@@ -6,6 +6,7 @@ import itertools
 import os
 import re
 import textwrap
+import triton
 from collections import defaultdict
 from functools import cached_property
 from typing import Callable, Generic, Iterable, Optional, TypeVar, Union, overload, Dict, Any, Tuple
@@ -280,12 +281,11 @@ dtype2str = {}
 
 
 def specialize_impl(arg, specialize_extra, is_const=False, specialize_value=True, align=True):
-    from ..language import constexpr
     if arg is None:
         return ("constexpr", None)
     elif isinstance(arg, JITFunction):
         return ("constexpr", arg.cache_key)
-    elif isinstance(arg, constexpr):
+    elif isinstance(arg, triton.language.constexpr):
         return ("constexpr", arg)
     elif isinstance(arg, bool):
         return ("i1", None)
