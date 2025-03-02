@@ -7,7 +7,7 @@ namespace proton {
 
 class InstrumentationProfiler : public Profiler {
 public:
-  InstrumentationProfiler(const std::string &mode) : mode(mode) {}
+  InstrumentationProfiler(const std::string &mode);
   virtual ~InstrumentationProfiler();
 
 protected:

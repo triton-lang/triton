@@ -14,6 +14,9 @@ void InstrumentationProfiler::doStop() {
   // Stop the instrumentation profiler.
 }
 
+InstrumentationProfiler::InstrumentationProfiler(const std::string &mode)
+		: mode(mode) {}
+
 InstrumentationProfiler::~InstrumentationProfiler() = default;
 
 } // namespace proton
