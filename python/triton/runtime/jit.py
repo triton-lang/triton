@@ -524,8 +524,12 @@ class JITFunction(KernelInterface[T]):
         stream = driver.active.get_current_stream(device)
 
         # Execute pre run hooks with args and kwargs
-        for hook in self.pre_run_hooks:
-            hook(*args, **kwargs)
+        if len(self.pre_run_hooks) > 0:
+            param_kwargs = {}
+            param_kwargs["grid"] = grid
+            param_kwargs["warmup"] = warmup
+            for hook in self.pre_run_hooks:
+                hook(*args, **{**kwargs, **param_kwargs})
 
         kernel_cache, target, backend, binder = self.device_caches[device]
         bound_args, specialization, options = binder(*args, **kwargs)
