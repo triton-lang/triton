@@ -404,8 +404,8 @@ class CompiledKernel:
         # TODO: n_regs, n_spills should be metadata generated when calling `ptxas`
         self.module, self.function, self.n_regs, self.n_spills = driver.active.utils.load_binary(
             self.name, self.kernel, self.metadata.shared, device)
-        if self.init_handle_hook is not None:
-            self.init_handle_hook(self.module, self.function, self.metadata_path)
+        if CompiledKernel.init_handle_hook is not None:
+            CompiledKernel.init_handle_hook(self.module, self.function, self.metadata_path)
 
     def __getattribute__(self, name):
         if name == 'run':
