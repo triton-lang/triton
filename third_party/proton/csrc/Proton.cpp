@@ -83,9 +83,10 @@ void initProton(pybind11::module &&m) {
           SessionManager::instance().addMetrics(scopeId, metrics);
         });
 
-  m.def("set_scope_id_pairs",
+  m.def("map_scope_ids",
         [](uint64_t functionHandle,
-           const std::vector<std::pair<size_t, std::string>> &scopeIdPairs) -> void {});
+           const std::vector<std::pair<size_t, std::string>> &scopeIdPairs)
+            -> void {});
 
   pybind11::bind_map<std::map<std::string, MetricValueType>>(m, "MetricMap");
 }
