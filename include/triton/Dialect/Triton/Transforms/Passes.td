@@ -60,4 +60,13 @@ def TritonLoopUnroll : Pass</*cli-arg*/"triton-loop-unroll", /*Op*/"mlir::Module
   let dependentDialects = ["mlir::triton::TritonDialect"];
 }
 
+def TritonHoistLoad : Pass</*cli-arg*/"triton-hoist-load", /*Op*/"mlir::ModuleOp"> {
+  let summary = "Hoists load ops out of loops.";
+  let description = [{
+    This pass hoists load ops out of loops that consists of pure/read-only ops.
+  }];
+  let constructor = "mlir::triton::createHoistLoadPass()";
+  let dependentDialects = ["mlir::triton::TritonDialect"];
+}
+
 #endif
