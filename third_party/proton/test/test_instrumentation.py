@@ -46,7 +46,9 @@ def test_hook_instrumentation(tmp_path):
     @triton.jit
     def foo(x, size: tl.constexpr, y):
         offs = tl.arange(0, size)
+        pl.enter_scope("store0")
         tl.store(y + offs, tl.load(x + offs))
+        pl.exit_scope("store0")
 
     x = torch.tensor([2], device="cuda", dtype=torch.float32)
     y = torch.zeros_like(x)
