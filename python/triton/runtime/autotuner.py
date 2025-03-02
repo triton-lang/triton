@@ -4,7 +4,9 @@ import builtins
 import os
 import time
 import inspect
+
 from typing import Dict, Tuple, List, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .jit import KernelInterface
 from .errors import OutOfResources, PTXASError
@@ -13,27 +15,16 @@ from .driver import driver
 
 class Autotuner(KernelInterface):
 
-    def __init__(
-        self,
-        fn,
-        arg_names,
-        configs,
-        key,
-        reset_to_zero,
-        restore_value,
-        pre_hook=None,
-        post_hook=None,
-        prune_configs_by: Optional[Dict] = None,
-        warmup=None,
-        rep=None,
-        use_cuda_graph=False,
-        do_bench=None,
-    ):
+    def __init__(self, fn, arg_names, configs, key, reset_to_zero, restore_value, pre_hook=None, post_hook=None,
+                 prune_configs_by: Optional[Dict] = None, warmup=None, rep=None, use_cuda_graph=False, do_bench=None,
+                 max_workers: int = os.cpu_count() or 1,  # Fallback to 1 if os.cpu_count() is None
+                 ):
         """
         :param prune_configs_by: a dict of functions that are used to prune configs, fields:
             'perf_model': performance model used to predicate running time with different configs, returns running time
             'top_k': number of configs to bench
             'prune_num_stages_by'(optional): a function used to prune num_stages. It takes configs:List[Config] as its input, and returns pruned configs.
+         :param max_workers: (Optional) The maximum number of threads to use for parallel compilation. Defaults to the number of CPU cores.
         """
         if not configs:
             self.configs = [Config({}, num_warps=4, num_stages=3, num_ctas=1)]
@@ -42,6 +33,7 @@ class Autotuner(KernelInterface):
         self.keys = key
         self.cache: Dict[Tuple, Config] = {}
         self.arg_names = arg_names
+        self.max_workers = max_workers
 
         # Reset to zero or restore values
         self.reset_to_zero = []
@@ -128,6 +120,27 @@ class Autotuner(KernelInterface):
         else:
             self.do_bench = do_bench
 
+    def _compile(self, *args, config, **meta):
+        """Compile a configuration without running it."""
+        from ..compiler.errors import CompileTimeAssertionFailure
+        conflicts = meta.keys() & config.kwargs.keys()
+        if conflicts:
+            raise ValueError(f"Conflicting meta-parameters: {', '.join(conflicts)}."
+                             " Make sure that you don't re-define auto-tuned symbols.")
+        current = dict(meta, **config.all_kwargs())
+
+        try:
+            # Attempt to execute the kernel with all arguments
+            # Execution errors will indicate compilation issues
+            # Add or overwrite 'warmup' in the current dictionary to compile without running
+            current['warmup'] = True
+            self.fn.run(*args, **current)
+            return config, True  # Compilation successful
+        except Exception as e:
+            if isinstance(e, (OutOfResources, CompileTimeAssertionFailure)):
+                return config, False  # Compilation failed due to expected issues
+            raise  # Re-raise other unexpected exceptions
+
     def _bench(self, *args, config, **meta):
         from ..compiler.errors import CompileTimeAssertionFailure
 
@@ -184,12 +197,46 @@ class Autotuner(KernelInterface):
             if key not in self.cache:
                 # prune configs
                 used_cached_result = False
+                # Step 1: Parallel compilation
                 pruned_configs = self.prune_configs(kwargs)
+
+                # Workaround for older python versions to safely initialize sysconfig variables
+                # See https://github.com/python/cpython/issues/92452
+                import sysconfig
+                sysconfig.get_config_vars()
+
+                compile_start = time.time()
+                compiled_configs = []
+
+                if self.max_workers == 1:
+                    # Single-threaded execution
+                    for config in pruned_configs:
+                        compiled_configs.append(self._compile(*args, config=config, **kwargs)[0])
+                else:
+                    # Multi-threaded execution
+                    with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                        futures = {
+                            executor.submit(self._compile, *args, config=config, **kwargs): config
+                            for config in pruned_configs
+                        }
+                        for future in as_completed(futures):
+                            config, success = future.result()
+                            if success:
+                                compiled_configs.append(config)
+
+                compile_end = time.time()
+
+                # Step 2: Linear benchmarking
                 bench_start = time.time()
-                timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                timings = {config: self._bench(*args, config=config, **kwargs) for config in compiled_configs}
                 bench_end = time.time()
+
+                self.compile_time = compile_end - compile_start
                 self.bench_time = bench_end - bench_start
+
+                # Cache the best configuration
                 self.cache[key] = builtins.min(timings, key=timings.get)
+
                 full_nargs = {**self.nargs, **kwargs, **self.cache[key].all_kwargs()}
                 self.pre_hook(full_nargs, reset_only=True)
                 self.configs_timings = timings
@@ -199,7 +246,8 @@ class Autotuner(KernelInterface):
         self.best_config = config
         if os.getenv("TRITON_PRINT_AUTOTUNING", None) == "1" and not used_cached_result:
             print(f"Triton autotuning for function {self.base_fn.__name__} finished after "
-                  f"{self.bench_time:.2f}s; best config selected: {self.best_config};")
+                  f"{self.compile_time:.2f}s (compilation) + {self.bench_time:.2f}s (benchmarking); "
+                  f"best config selected: {self.best_config};")
         if config.pre_hook is not None:
             full_nargs = {**self.nargs, **kwargs, **config.all_kwargs()}
             config.pre_hook(full_nargs)
