@@ -15,7 +15,7 @@ namespace gpu {
 
 /// Discover operations that should become async and assign latencies to them
 /// based on the numStages value provided by the user.
-void assignLatencies(ModuleOp moduleOp, int numStages);
+void assignLatencies(ModuleOp moduleOp, int numStages, bool assignMMA = false);
 
 /// Schedule the loops based on the latencies assigned to the operations.
 void scheduleLoops(ModuleOp moduleOp);
