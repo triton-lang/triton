@@ -147,6 +147,8 @@ Scan/Sort Ops
     histogram
     sort
     gather
+    topk
+
 
 Atomic Ops
 ----------
