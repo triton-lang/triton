@@ -34,11 +34,7 @@ class TritonInitHandleHook:
     @staticmethod
     def map_scope_ids(function, module, metadata_group) -> None:
         if function and function not in TritonInitHandleHook.function_scope_ids:
-            ir_path = None
-            if "ttgir" in metadata_group:
-                ir_path = metadata_group["ttgir"]
-            elif "ttir" in metadata_group:
-                ir_path = metadata_group["ttir"]
+            ir_path = next((path for key, path in metadata_group.items() if key.endswith(("ttgir", "ttir"))), None)
             if ir_path:
                 context = ir.context()
                 module = ir.parse_mlir_module(ir_path, context)
