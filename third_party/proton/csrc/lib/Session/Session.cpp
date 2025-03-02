@@ -3,6 +3,7 @@
 #include "Context/Shadow.h"
 #include "Data/TreeData.h"
 #include "Profiler/Cupti/CuptiProfiler.h"
+#include "Profiler/Instrumentation/InstrumentationProfiler.h"
 #include "Profiler/Roctracer/RoctracerProfiler.h"
 #include "Utility/String.h"
 
@@ -20,6 +21,9 @@ Profiler *getProfiler(const std::string &name, const std::string &path,
   }
   if (proton::toLower(name) == "roctracer") {
     return &RoctracerProfiler::instance();
+  }
+  if (proton::toLower(name) == "instrumentation") {
+    return new InstrumentationProfiler(mode);
   }
   throw std::runtime_error("Unknown profiler: " + name);
 }

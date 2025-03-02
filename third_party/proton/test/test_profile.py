@@ -177,7 +177,7 @@ def test_cpu_timed_scope(tmp_path: pathlib.Path):
     assert kernel_frame["metrics"]["time (ns)"] > 0
 
 
-def test_hook(tmp_path: pathlib.Path):
+def test_hook_triton(tmp_path: pathlib.Path):
 
     def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
         # get arg's element size
@@ -194,7 +194,7 @@ def test_hook(tmp_path: pathlib.Path):
 
     x = torch.tensor([2], device="cuda", dtype=torch.float32)
     y = torch.zeros_like(x)
-    temp_file = tmp_path / "test_hook.hatchet"
+    temp_file = tmp_path / "test_hook_triton.hatchet"
     proton.start(str(temp_file.with_suffix("")), hook="triton")
     with proton.scope("test0"):
         foo[(1, )](x, 1, y, num_warps=4)
