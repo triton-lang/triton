@@ -1,6 +1,6 @@
+#include "Analysis/ScopeIdAllocation.h"
 #include "Dialect/Proton/IR/Dialect.h"
 #include "Dialect/ProtonGPU/IR/Dialect.h"
-#include "Analysis/ScopeIdAllocation.h"
 #include "mlir/Pass/PassManager.h"
 #include "passes.h"
 #include <pybind11/pybind11.h>

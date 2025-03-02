@@ -15,7 +15,7 @@ void InstrumentationProfiler::doStop() {
 }
 
 InstrumentationProfiler::InstrumentationProfiler(const std::string &mode)
-		: mode(mode) {}
+    : mode(mode) {}
 
 InstrumentationProfiler::~InstrumentationProfiler() = default;
 

@@ -42,7 +42,7 @@ def test_record(tmp_path: pathlib.Path):
 
 
 def test_hook_instrumentation(tmp_path):
-    
+
     @triton.jit
     def foo(x, size: tl.constexpr, y):
         offs = tl.arange(0, size)
