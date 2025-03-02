@@ -37,6 +37,7 @@ class TritonInitHandleHook:
             ir_path = next((path for key, path in metadata_group.items() if key.endswith(("ttgir", "ttir"))), None)
             if ir_path:
                 context = ir.context()
+                ir.load_dialects(context)
                 module = ir.parse_mlir_module(ir_path, context)
                 module.context = context
                 scope_id_pairs = triton_proton.get_scope_id_pairs(module)
