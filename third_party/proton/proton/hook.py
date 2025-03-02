@@ -1,7 +1,7 @@
 from .state import enter_state, exit_state
 from .scope import enter_scope, exit_scope
 
-from triton._C.libtriton import ir
+from triton._C.libtriton import ir, proton
 
 COMPUTE_METADATA_SCOPE_NAME = "__proton_launch_metadata"
 
@@ -41,6 +41,7 @@ class TritonInitHandleHook:
                 context = ir.context()
                 module = ir.parse_mlir_module(ir_path, context)
                 module.context = context
+                scope_id_pairs = proton.get_scope_id_pairs(module)
 
 
 def register_launch_hook() -> None:

@@ -1,4 +1,5 @@
 #include "Dialect/Proton/IR/Dialect.h"
+#include "Analysis/ScopeIdAllocation.h"
 #include "mlir/Pass/PassManager.h"
 #include "passes.h"
 #include <pybind11/pybind11.h>
@@ -16,5 +17,12 @@ void init_triton_proton(py::module &&m) {
     registry.insert<mlir::triton::proton::ProtonDialect>();
     context.appendDialectRegistry(registry);
     context.loadAllAvailableDialects();
+  });
+
+  m.def("get_scope_id_pairs", [](mlir::ModuleOp &module) {
+    auto moduleScopeIdAllocation =
+        mlir::triton::proton::ModuleScopeIdAllocation(module);
+    auto pairs = moduleScopeIdAllocation.getScopeIdPairs();
+    return pairs;
   });
 }
