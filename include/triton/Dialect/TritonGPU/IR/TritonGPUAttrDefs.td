@@ -476,20 +476,55 @@ def SwizzledBlocksSharedEncodingAttr :
   let mnemonic = "swizzled_blocks_shared";
 
   let description = [{
-Shared encoding similar to SwizzledSharedEncodingAttr,
-but with additional swizzling pattern change in blocks of maxPhase * perPhase rows:
+This shared encoding is similar to SwizzledSharedEncodingAttr,
+but instead of repeating swizzling pattern every `blockSize = maxPhase*perPhase` rows of memory object,
+this layout changes swizzling pattern.
 
-  #shared<{vec=1, perPhase=1, maxPhase=4, order=[1, 0]}>
-  [ 0,  1,  2,  3],  // xor with 0  (phase = 0 ^ block no = 0)
-  [ 5,  4,  7,  6],  // xor with 1  (phase = 1 ^ block no = 0)
-  [10, 11,  8,  9],  // xor with 2  (phase = 2 ^ block no = 0)
-  [15, 14, 13, 12]   // xor with 3  (phase = 3 ^ block no = 0)
-  [17, 16, 19, 18],  // xor with 1  (phase = 0 ^ block no = 1)
-  [20, 21, 22, 23],  // xor with 0  (phase = 1 ^ block no = 1)
-  [27, 26, 25, 24],  // xor with 3  (phase = 2 ^ block no = 1)
-  [30, 31, 28, 29]   // xor with 2  (phase = 3 ^ block no = 1)
+Let's consider an element with position = (row, col).
+For simplicity, we do not vectorize memory,
+i.e. vec == 1 and layout swizzles inidividual elements.
 
-Used to minimize bank conflicts while loading MFMA operand B in TN GEMM case
+Swizzled coordinates within memory object are (row, swizzledCol):
+
+  phase   = (row / perPhase) % maxPhase
+  blockNo = (row / perPhase) / maxPhase % maxPhase
+  combinedPhase = phase ^ blockNo
+  swizzledCol   = col ^ combinedPhase
+
+Swizzling examples (matrix is filled with numbers 0, 1, 2, .. col*row-1):
+
+  #shared<{vec=1, perPhase=1, maxPhase=2}>
+  [ 0,  1,  2,  3],  // phase = 0 blockNo = 0 (xor with 0)
+  [ 5,  4,  7,  6],  // phase = 1 blockNo = 0 (xor with 1)
+  [ 9,  8, 11, 10],  // phase = 0 blockNo = 1 (xor with 1)
+  [12, 13, 14, 15]   // phase = 1 blockNo = 1 (xor with 0)
+  [16, 17, 18, 19],  // phase = 0 blockNo = 0 (xor with 0)
+  [21, 20, 23, 22],  // phase = 1 blockNo = 0 (xor with 1)
+  [25, 24, 27, 26],  // phase = 0 blockNo = 1 (xor with 1)
+  [28, 29, 30, 31]   // phase = 1 blockNo = 1 (xor with 0)
+
+  #shared<{vec=1, perPhase=2, maxPhase=2}>
+  [ 0,  1,  2,  3],  // phase = 0 blockNo = 0 (xor with 0)
+  [ 4,  5,  6,  7],  // phase = 0 blockNo = 0 (xor with 0)
+  [ 9,  8, 11, 10],  // phase = 1 blockNo = 0 (xor with 1)
+  [13, 12, 15, 14]   // phase = 1 blockNo = 0 (xor with 1)
+  [17, 16, 19, 18],  // phase = 0 blockNo = 1 (xor with 1)
+  [21, 20, 23, 22],  // phase = 0 blockNo = 1 (xor with 1)
+  [24, 25, 26, 27],  // phase = 1 blockNo = 1 (xor with 0)
+  [28, 29, 30, 31]   // phase = 1 blockNo = 1 (xor with 0)
+
+  #shared<{vec=1, perPhase=1, maxPhase=4}>
+  [ 0,  1,  2,  3],  // phase = 0 blockNo = 0 (xor with 0)
+  [ 5,  4,  7,  6],  // phase = 1 blockNo = 0 (xor with 1)
+  [10, 11,  8,  9],  // phase = 2 blockNo = 0 (xor with 2)
+  [15, 14, 13, 12]   // phase = 3 blockNo = 0 (xor with 3)
+  [17, 16, 19, 18],  // phase = 0 blockNo = 1 (xor with 1)
+  [20, 21, 22, 23],  // phase = 1 blockNo = 1 (xor with 0)
+  [27, 26, 25, 24],  // phase = 2 blockNo = 1 (xor with 3)
+  [30, 31, 28, 29]   // phase = 3 blockNo = 1 (xor with 2)
+
+This layout is used to reduce bank conflicts in cases
+shared memory writes and reads are performed on layouts with different order.
   }];
 
   let parameters = (
