@@ -9,10 +9,7 @@ jobs:
 
   Build-Wheels:
     timeout-minutes: 60
-
     runs-on: 'ubuntu-20.04'
-    target-os: 'ubuntu'
-    arch: 'arm64'
     permissions:
       id-token: write
       contents: read
