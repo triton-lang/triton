@@ -5132,7 +5132,8 @@ def test_unary_math(func_str, device):
     y = torch.zeros(shape, dtype=torch.float32, device=device)
 
     kernel[(1, )](x, y, BLOCK=shape[0])
-    assert torch.allclose(getattr(torch, func_str)(x), y, rtol=1e-3)
+    # compare
+    np.testing.assert_allclose(to_numpy(getattr(torch, func_str)(x)), to_numpy(y), rtol=1e-3)
 
 
 # -----------------------
