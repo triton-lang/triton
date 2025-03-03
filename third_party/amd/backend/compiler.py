@@ -307,6 +307,26 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.add_membar_analysis(pm)
         amd.passes.ttgpuir.add_refine_amdgpu_ops(pm, options.arch)
         passes.common.add_canonicalizer(pm)
+
+        # Emit and read custom ttgir.
+        pm.run(mod)
+        if "TRITON_MLIR_DUMP_REFINE_OPS" in os.environ.keys():
+            print("TRITON_MLIR_DUMP_REFINE_OPS\n")
+            mod.dump()
+        if "TRITON_MLIR_INSERT_REFINE_OPS" in os.environ.keys():
+            insert_module_path = str(os.environ["TRITON_MLIR_INSERT_REFINE_OPS"])
+            print("TRITON_MLIR_INSERT_REFINE_OPS=%s\n" % insert_module_path)
+            if not os.path.exists(insert_module_path):
+                raise RuntimeError(f'cannot find mlir file to insert. Given: `{insert_module_path}`')
+            new_mod = ir.parse_mlir_module(insert_module_path, mod.context)
+            new_mod.context = mod.context
+            mod = new_mod
+
+        pm = ir.pass_manager(mod.context)
+        pm.enable_debug()
+
+        # Resume normal compilation
+        passes.common.add_canonicalizer(pm)
         amd.passes.ttgpuir.add_reschedule_amdgpu_ops(pm, options.arch)
         ## __HIP_FTZ is used to control the denorm flushing behavior of exp2 op as follows:
         ## 1. If __HIP_FTZ = 1, exp2 flushes denorms in input and output regardless

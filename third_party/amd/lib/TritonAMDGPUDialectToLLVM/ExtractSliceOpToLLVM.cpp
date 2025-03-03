@@ -9,6 +9,11 @@
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
+#undef DEBUG_TYPE
+#define DEBUG_TYPE "tritonamdgpu-extract-slice-to-llvm"
+#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
+
 using namespace mlir;
 using namespace mlir::triton;
 
