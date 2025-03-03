@@ -10,11 +10,12 @@ jobs:
   Build-Wheels:
     timeout-minutes: 60
 
-    runs-on: [self-hosted, CPU]
+    runs-on: 'ubuntu-20.04'
+    target-os: 'ubuntu'
+    arch: 'arm64'
     permissions:
       id-token: write
       contents: read
-
     steps:
 
       - name: Prune stale docker containers
