@@ -18,6 +18,7 @@ namespace triton::proton {
 #include "proton/dialect/include/Conversion/ProtonGPUToLLVM/Passes.h.inc"
 
 namespace gpu {
+std::unique_ptr<OperationPass<ModuleOp>> createAddProtonKernelArgPass();
 std::unique_ptr<OperationPass<ModuleOp>> createAllocateProtonSharedMemoryPass();
 
 } // namespace gpu
