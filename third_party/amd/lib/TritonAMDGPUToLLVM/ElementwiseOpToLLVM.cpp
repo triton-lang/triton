@@ -1087,6 +1087,8 @@ struct FDivOpConversion
       return {rewriter.create<LLVM::FDivOp>(loc, elemTy, operands[0][0],
                                             operands[0][1])};
 
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
     // The algorithm comes from
     // https://github.com/llvm/llvm-project/blob/bda7aadf/llvm/lib/Target/AMDGPU/AMDGPULegalizerInfo.cpp#L4980-L5065
     // with the Newton-Raphson refinement removed, to perform a faster,
@@ -1109,26 +1111,26 @@ struct FDivOpConversion
     // ret1: The VCC register indicating whether post-scaling is required.
     auto denominatorScaleOp = LLVM::createLLVMIntrinsicCallOp(
         rewriter, loc, "llvm.amdgcn.div.scale.f32", divScaleResType,
-        {lhs, rhs, false_val()});
-    Value denominatorScaled = extract_val(denominatorScaleOp.getResult(0), 0);
+        {lhs, rhs, b.false_val()});
+    Value denominatorScaled = b.extract_val(denominatorScaleOp.getResult(0), 0);
     auto numeratorScaleOp = LLVM::createLLVMIntrinsicCallOp(
         rewriter, loc, "llvm.amdgcn.div.scale.f32", divScaleResType,
-        {lhs, rhs, true_val()});
-    Value numeratorScaled = extract_val(numeratorScaleOp.getResult(0), 0);
-    Value vcc = extract_val(numeratorScaleOp.getResult(0), 1);
+        {lhs, rhs, b.true_val()});
+    Value numeratorScaled = b.extract_val(numeratorScaleOp.getResult(0), 0);
+    Value vcc = b.extract_val(numeratorScaleOp.getResult(0), 1);
 
     Value rcp =
         LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.rcp.f32",
                                         elemTy, {denominatorScaled})
             .getResult(0);
 
-    Value approxDiv = fmul(numeratorScaled, rcp);
+    Value approxDiv = b.fmul(numeratorScaled, rcp);
 
     // Since the Newton-Raphson is skipped, we use 0 instead of approximations
     // as the inputs.
     auto fmas = LLVM::createLLVMIntrinsicCallOp(
                     rewriter, loc, "llvm.amdgcn.div.fmas.f32", elemTy,
-                    {f32_val(0), f32_val(0), approxDiv, vcc})
+                    {b.f32_val(0), b.f32_val(0), approxDiv, vcc})
                     .getResult(0);
 
     return {LLVM::createLLVMIntrinsicCallOp(rewriter, loc,
