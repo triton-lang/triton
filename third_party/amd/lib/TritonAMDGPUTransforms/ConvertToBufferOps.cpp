@@ -313,8 +313,12 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     // 4. Buffer atomic RMW does not support FP8 ops
     //    easier to just check what we support
     auto checkType = getElementTypeOrSelf(op.getVal());
-    bool isSupportedType = checkType.isF16() || checkType.isBF16() ||
-                           checkType.isF32() || checkType.isF64() ||
+    // TODO: F16 and BF16 data types are supported by intrinsics with packed
+    // arithmetic on adjacent addresses, requiring the leading address to be
+    // 4-byte aligned. A runtime check should be implemented to enforce this
+    // requirement and ensure fallback to regular atomic operations when
+    // alignment is not met.
+    bool isSupportedType = checkType.isF32() || checkType.isF64() ||
                            checkType.isInteger(32) || checkType.isInteger(64);
     if (!isSupportedType) {
       return rewriter.notifyMatchFailure(op, "RMW with unsupported type");
