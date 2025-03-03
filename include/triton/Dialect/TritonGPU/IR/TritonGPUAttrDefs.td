@@ -480,20 +480,27 @@ This shared encoding is similar to SwizzledSharedEncodingAttr,
 but instead of repeating swizzling pattern every `blockSize = maxPhase*perPhase` rows of memory object,
 this layout changes swizzling pattern.
 
-Let's consider an element with position = (row, col).
-For simplicity, we do not vectorize memory,
+Swizzling pattern affects only 2 fastest dimensions of a tensor:
+- fastest dimension is called row
+- second fastest dimension is called column
+
+Example below follow this notation, i.e. elemens in a row stored in memory consequentially.
+
+Let's consider an element with position = (rowId, colId).
+For simplicity, we do not vectorize memory in examples,
 i.e. vec == 1 and layout swizzles inidividual elements.
+For vec != 1 example, take a look at SwizzledSharedEncodingAttr documentation.
 
-Swizzled coordinates within memory object are (row, swizzledCol):
+Swizzled coordinates within memory object are (rowId, swizzledColId):
 
-  phase   = (row / perPhase) % maxPhase
-  blockNo = (row / perPhase) / maxPhase % maxPhase
+  phase   = (rowId / perPhase) % maxPhase
+  blockNo = (rowId / (perPhase * maxPhase)) % maxPhase
   combinedPhase = phase ^ blockNo
-  swizzledCol   = col ^ combinedPhase
+  swizzledColId   = colId ^ combinedPhase
 
-Swizzling examples (matrix is filled with numbers 0, 1, 2, .. col*row-1):
+Swizzling examples (matrix is filled with numbers 0, 1, 2, .. columns*rows-1):
 
-  #shared<{vec=1, perPhase=1, maxPhase=2}>
+  #shared<{vec=1, perPhase=1, maxPhase=2, order=[1,0]}>
   [ 0,  1,  2,  3],  // phase = 0 blockNo = 0 (xor with 0)
   [ 5,  4,  7,  6],  // phase = 1 blockNo = 0 (xor with 1)
   [ 9,  8, 11, 10],  // phase = 0 blockNo = 1 (xor with 1)
@@ -503,7 +510,7 @@ Swizzling examples (matrix is filled with numbers 0, 1, 2, .. col*row-1):
   [25, 24, 27, 26],  // phase = 0 blockNo = 1 (xor with 1)
   [28, 29, 30, 31]   // phase = 1 blockNo = 1 (xor with 0)
 
-  #shared<{vec=1, perPhase=2, maxPhase=2}>
+  #shared<{vec=1, perPhase=2, maxPhase=2, order=[1,0]}>
   [ 0,  1,  2,  3],  // phase = 0 blockNo = 0 (xor with 0)
   [ 4,  5,  6,  7],  // phase = 0 blockNo = 0 (xor with 0)
   [ 9,  8, 11, 10],  // phase = 1 blockNo = 0 (xor with 1)
@@ -513,7 +520,7 @@ Swizzling examples (matrix is filled with numbers 0, 1, 2, .. col*row-1):
   [24, 25, 26, 27],  // phase = 1 blockNo = 1 (xor with 0)
   [28, 29, 30, 31]   // phase = 1 blockNo = 1 (xor with 0)
 
-  #shared<{vec=1, perPhase=1, maxPhase=4}>
+  #shared<{vec=1, perPhase=1, maxPhase=4, order=[1,0]}>
   [ 0,  1,  2,  3],  // phase = 0 blockNo = 0 (xor with 0)
   [ 5,  4,  7,  6],  // phase = 1 blockNo = 0 (xor with 1)
   [10, 11,  8,  9],  // phase = 2 blockNo = 0 (xor with 2)
