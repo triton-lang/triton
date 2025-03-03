@@ -29,7 +29,7 @@ jobs:
       fail-fast: true
       matrix:
         config:
-        - {runner: 'AlmaLinux 8 ARM64', runs_on: 'ubuntu-20.04-arm', target-os: 'almalinux', arch: 'arm64'}
+        - {runner: 'AlmaLinux 8 ARM64', runs_on: 'ubuntu-22.04-arm', target-os: 'almalinux', arch: 'arm64'}
 
     steps:
 
