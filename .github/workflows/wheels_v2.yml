@@ -1,6 +1,9 @@
-name: Wheels Build manylinux2014_x86_64
+name: Wheels Build Linux aarch64
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/wheels_v2.yml
 
 jobs:
 
@@ -46,31 +49,23 @@ jobs:
       - name: Build wheels
         if: ${{ steps.check-version.outputs.new_commit == 'true' }}
         run: |
-          python3 -m  pip install cibuildwheel --upgrade --user
+          # Make sure cibuildwheel is updated to latest, this will enable latest python builds
+          python3 -m pip install cibuildwheel --upgrade --user
           export LATEST_DATE=$(TZ=UTC0 git show --quiet --date='format-local:%Y%m%d%H%M%S' --format="%cd")
           # Pass MAX_JOBS=4 because, at time of writing, the VM "only" has 32GB
           # of RAM and OOMs while building if we give it the default number of
           # workers (2 * NUM_CPUs).
-          #
-          # Sadly, I couldn't make TRITON_BUILD_WITH_CLANG_LLD=1 work.  The
-          # manylinux image has a relatively recent gcc (v10, released 2020),
-          # but its clang is ancient, v3.4, released in 2014 (!).  I tried
-          # installing the prebuilt clang 10 binary distributed by LLVM, and I
-          # quickly ran into Linux DLL hell.  I give up, for now.  Perhaps
-          # manylinux_x_y will save us; I didn't try.
-          export CIBW_ENVIRONMENT="MAX_JOBS=4 TRITON_WHEEL_NAME=triton"
-          export CIBW_MANYLINUX_X86_64_IMAGE="quay.io/pypa/manylinux2014_x86_64:latest"
-          #export CIBW_MANYLINUX_PYPY_X86_64_IMAGE="quay.io/pypa/manylinux2014_x86_64:latest"
-          export CIBW_BEFORE_BUILD="pip install cmake;"
+          export CIBW_ENVIRONMENT="MAX_JOBS=4 \
+                  TRITON_WHEEL_NAME=triton-nightly \
+                  TRITON_WHEEL_VERSION_SUFFIX=-$LATEST_DATE \
+                  TRITON_BUILD_WITH_CLANG_LLD=1"
+          export CIBW_MANYLINUX_AARCH64_IMAGE="quay.io/pypa/manylinux_2_28_aarch64:latest"
+          # many_linux_2_28 image comes with GCC 12.2.1, but not clang.
+          # With this install, it gets clang 16.0.6.
+          export CIBW_BEFORE_ALL="dnf install clang lld -y";
           export CIBW_SKIP="cp{35,36,37,38}-*"
-          export CIBW_BUILD="cp3{9,10,11,12,13}-manylinux_x86_64"
+          export CIBW_BUILD="cp3{9,10,11,12,13,13t}-manylinux_aarch64"
+          export CIBW_FREE_THREADED_SUPPORT=1
+          export CIBW_ARCHS_LINUX="aarch64"
+
           python3 -m cibuildwheel python --output-dir wheelhouse
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: cibw-wheels-manylinux2014-wheels-upload
-          path: ./wheelhouse/*.whl
-
-      - name: Upload wheels to PyPI
-        run: |
-          python3 -m twine upload wheelhouse/* -u __token__ -p ${{ secrets.PYPY_API_TOKEN }}
