@@ -13,4 +13,12 @@ def AllocateProtonSharedMemory : Pass<"allocate-proton-shared-memory", "mlir::Mo
     let constructor = "mlir::triton::proton::gpu::createAllocateProtonSharedMemoryPass()";
 }
 
+
+def AddProtonKernelArg : Pass<"add-proton-kernel-arg", "mlir::ModuleOp"> {
+
+    let constructor = "mlir::triton::proton::gpu::createAddProtonKernelArgPass()";
+  let dependentDialects = [
+    "mlir::triton::gpu::TritonGPUDialect"
+  ];
+}
 #endif
