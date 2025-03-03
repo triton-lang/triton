@@ -6,6 +6,9 @@ on:
       - llvm-head
     paths:
       - cmake/llvm-hash.txt
+  pull_request:
+    paths:
+      - .github/workflows/llvm-build.yml
   workflow_dispatch:
 
 env:
