@@ -7,7 +7,7 @@ import pytest
 import triton
 import triton.language as tl
 
-from triton._internal_testing import is_cuda, is_hip, is_hip_mi300
+from triton._internal_testing import is_cuda, is_hip, is_hip_mi300, is_hip_mi350
 
 
 def matching_int(dtype):
@@ -281,10 +281,12 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
                 launch_exhaustive_populate(getattr(tl, src_dtype), 0, 65536, False, 8, 0x7f, device=device)
             return
     elif is_hip():
-        if  src_dtype == 'float8e4nv' and (
-            dst_dtype == 'float32' or ((dst_dtype in ('bfloat16')) and not is_hip_mi300())):
+        if  src_dtype in ('float8e4nv', 'float8e5') and not is_hip_mi350():
             pytest.skip(f"upcasting {src_dtype} to {dst_dtype} not supported in this architecture")
-        if (src_dtype in ('float8e4b15') or
+        if  (src_dtype == 'float8e4nv' and dst_dtype in ('bfloat16') and
+            (not is_hip_mi300() or not is_hip_mi350())):
+            pytest.skip(f"upcasting {src_dtype} to {dst_dtype} not supported in this architecture")
+        if  (src_dtype in ('float8e4b15') or
             (src_dtype in ('float8e4b8', 'float8e5b16') and not is_hip_mi300())):
             # If the dtype should error out in the given device, we assert that and return
             with pytest.raises(triton.CompilationError, match="not supported in this architecture"):
@@ -340,7 +342,8 @@ def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
         if dst_dtype in ('float8e5b16', 'float8e4b8') and rounding == 'rtne':
             pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on AMDGPU MI300")
 
-    if is_hip():
+    #if is_hip():
+    if False:
         if dst_dtype == 'float8e5' and rounding == 'rtne':
             pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on NVGPU with compute capability 9.0+")
 
@@ -363,3 +366,5 @@ def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
 
     for i in range(256):
         downcast_test(getattr(tl, src_dtype), getattr(tl, dst_dtype), rounding, *stuff, max_repr, i, device=device)
+
+test_typeconvert_downcast('float32', 'float8e5', 'rtne', 0x43e00000, 'cuda')
