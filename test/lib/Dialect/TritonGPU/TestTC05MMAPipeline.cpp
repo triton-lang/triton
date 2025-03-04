@@ -21,13 +21,7 @@ struct TC05MMAPipelinePass
   void runOnOperation() override {
     ModuleOp m = getOperation();
 
-    SmallVector<scf::ForOp> loops;
-    getOperation()->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
-
-    if (loops.empty())
-      return;
-
-    pipelineTC05MMALoops(m, loops, /*numStages=*/2, disableExpander);
+    pipelineTC05MMALoops(m, /*numStages=*/2, disableExpander);
   }
 };
 

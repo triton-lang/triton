@@ -80,11 +80,6 @@ LogicalResult ExtractSliceOp::verify() {
   }
 
   auto srcShape = srcTy.getShape();
-  auto shapePerCTATile = mlir::triton::gpu::getShapePerCTATile(srcLayout);
-  shapePerCTATile[0] =
-      std::min(static_cast<unsigned>(srcShape[0]), shapePerCTATile[0]);
-  shapePerCTATile[1] =
-      std::min(static_cast<unsigned>(srcShape[1]), shapePerCTATile[1]);
 
   // ExtractSlice only supports slicing where offsets and sizes are multiples of
   // shapePerCTATile. This condition ensures that slice has the same layout as
@@ -117,6 +112,11 @@ LogicalResult ExtractSliceOp::verify() {
     sizes.push_back(resultDimSize);
   }
 
+  auto shapePerCTATile = mlir::triton::gpu::getShapePerCTATile(srcTy);
+  shapePerCTATile[0] =
+      std::min(static_cast<unsigned>(srcShape[0]), shapePerCTATile[0]);
+  shapePerCTATile[1] =
+      std::min(static_cast<unsigned>(srcShape[1]), shapePerCTATile[1]);
   if (sizes[0] % shapePerCTATile[0] != 0 ||
       sizes[1] % shapePerCTATile[1] != 0) {
     return emitError() << "sizes [" << sizes

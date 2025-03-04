@@ -39,7 +39,7 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
       os << "pid (" << getFormatSubstr(pid[0]) << ", "
          << getFormatSubstr(pid[1]) << ", " << getFormatSubstr(pid[2]) << ")"
          << op.getPrefix();
-      llPrintf(formatStr, {pid[0], pid[1], pid[2]}, rewriter);
+      llPrintf(formatStr, {pid[0], pid[1], pid[2]}, {}, rewriter);
       rewriter.eraseOp(op);
       return success();
     }
@@ -162,12 +162,14 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
       // construct the format string at the same time as we populate
       // printfOperands.  But we don't want to create BLOCK_SIZE duplicate
       // strings, so we cache the Value.
+      auto isSignedOperands =
+          llvm::SmallVector<bool>(printfOperands.size(), isSigned);
       if (i == 0) {
-        formatStrValue =
-            llPrintf(formatStr, printfOperands, rewriter, &formatStrByteCount);
+        formatStrValue = llPrintf(formatStr, printfOperands, isSignedOperands,
+                                  rewriter, &formatStrByteCount);
       } else {
         targetInfo.printf(rewriter, formatStrValue, formatStrByteCount,
-                          printfOperands);
+                          printfOperands, isSignedOperands);
       }
     }
   }
@@ -212,7 +214,7 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
 
   // Returns a Value for the format string, which you can reuse. Writes the byte
   // count for the string to |formatStrByteCount| if not null.
-  Value llPrintf(StringRef msg, ValueRange args,
+  Value llPrintf(StringRef msg, ValueRange args, ArrayRef<bool> isSigned,
                  ConversionPatternRewriter &rewriter,
                  int *formatStrByteCount = nullptr) const {
     assert(!msg.empty() && "printf with empty string not supported");
@@ -222,7 +224,8 @@ struct PrintOpConversion : public ConvertOpToLLVMPattern<triton::PrintOp> {
     Value msgValue =
         LLVM::addStringToModule(UnknownLoc::get(rewriter.getContext()),
                                 rewriter, "printfFormat_", msgNewline);
-    targetInfo.printf(rewriter, msgValue, msgNewline.size_in_bytes(), args);
+    targetInfo.printf(rewriter, msgValue, msgNewline.size_in_bytes(), args,
+                      isSigned);
     if (formatStrByteCount)
       *formatStrByteCount = msgNewline.size_in_bytes();
     return msgValue;

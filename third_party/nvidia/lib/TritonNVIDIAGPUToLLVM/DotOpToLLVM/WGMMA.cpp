@@ -31,7 +31,6 @@ using namespace mlir::triton::NVIDIA;
 
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::triton::gpu::getShapePerCTA;
-using ::mlir::triton::gpu::getShapePerCTATile;
 using ::mlir::triton::gpu::MemDescType;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::NVMMASharedEncodingAttr;
@@ -379,7 +378,10 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   int N = instrShape[1];
   int K = instrShape[2];
   bool zeroAcc = isZeroConst(c);
-  auto shapePerCTATile = getShapePerCTATile(mmaEncoding);
+  auto instrMNK = mmaEncoding.getInstrShape();
+  auto warpSize = mmaEncoding.getWarpsPerCTA();
+  auto shapePerCTATile = SmallVector<unsigned>{instrMNK[0] * warpSize[0],
+                                               instrMNK[1] * warpSize[1]};
   int numRepM = ceil<unsigned>(dShapePerCTA[0], shapePerCTATile[0]);
   int numRepN = ceil<unsigned>(dShapePerCTA[1], shapePerCTATile[1]);
   int numRepK = ceil<unsigned>(aTensorTy.getShape()[1], instrShape[2]);

@@ -347,11 +347,16 @@ void convertDot(const LLVMTypeConverter *typeConverter,
   }
   auto bSharedLayout = cast<NVMMASharedEncodingAttr>(bTensorTy.getEncoding());
   bool transB = !bSharedLayout.getTransposed();
-  Value baseA =
-      getSharedMemoryObjectFromStruct(
-          loc, loadedA, typeConverter->convertType(aTensorTy.getElementType()),
-          rewriter)
-          .getBase();
+  Value baseA;
+  if (aInTmem) {
+    baseA = loadedA;
+  } else {
+    baseA =
+        getSharedMemoryObjectFromStruct(
+            loc, loadedA,
+            typeConverter->convertType(aTensorTy.getElementType()), rewriter)
+            .getBase();
+  }
   Value baseB =
       getSharedMemoryObjectFromStruct(
           loc, loadedB, typeConverter->convertType(bTensorTy.getElementType()),
@@ -548,7 +553,6 @@ struct TCGen5MMAScaledOpConversion
                              {(unsigned)mmaSizeN, (unsigned)mmaSizeK},
                              numBitsPerElementB, rewriter, loc);
 
-    Value useInitAcc = op.getUseD();
     // Only run mma on one thread. We currently use elect as ptxas is not able
     // to detect that tid.x == 0 is true only for 1 thread.
     Value pred =
@@ -588,6 +592,7 @@ struct TCGen5MMAScaledOpConversion
         // `TensorMemorySpace` definition.
         int blockId = m + n * numRepM;
         Value accAddress = tb.add(baseD, tb.i32_val(numColPerBlock * blockId));
+        Value useInitAcc = op.getUseD();
         for (int k = 0; k < numRepK; k++) {
           Value a = aLoader->memLoad(m, k, rewriter, loc);
           Value b = bLoader.smemLoad(n, k, rewriter, loc);
@@ -603,6 +608,7 @@ struct TCGen5MMAScaledOpConversion
           createScaledGen5MMA(rewriter, loc, op, a, b, accAddress, scaleA,
                               scaleB, pred, instDescriptor, useInitAcc, aInTmem,
                               mxfpInstKind);
+          useInitAcc = tb.i1_val(1);
         }
       }
     }

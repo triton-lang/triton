@@ -152,7 +152,7 @@ getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter, int opIdx,
     arg = cvtOp.getSrc();
   auto argType = cast<RankedTensorType>(arg.getType());
   assert(argType.getEncoding() && "unexpected tensor type");
-  auto newOrder = getOrder(argType.getEncoding());
+  auto newOrder = getOrder(argType);
 
   // If the MMA op doesn't support transpose pick the layout expected by the MMA
   // op.
@@ -164,7 +164,7 @@ getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter, int opIdx,
     }
   }
 
-  if (newOrder != getOrder(argType.getEncoding()) && op) {
+  if (newOrder != getOrder(argType) && op) {
     op->emitWarning("Warning: Forcing a different order [")
         << newOrder[0] << ", " << newOrder[1]
         << "] on SMEM than the register order for the opreand " << opIdx
@@ -190,7 +190,7 @@ getSharedMemoryScale(Value arg, mlir::PatternRewriter &rewriter, Location loc) {
   OpBuilder::InsertionGuard g(rewriter);
   auto argType = cast<RankedTensorType>(arg.getType());
   assert(argType.getEncoding() && "unexpected tensor type");
-  auto newOrder = getOrder(argType.getEncoding());
+  auto newOrder = getOrder(argType);
 
   Attribute SharedMemorySpace =
       SharedMemorySpaceAttr::get(argType.getContext());
@@ -395,16 +395,9 @@ public:
 
 // Pick the layout to match MXFP scales layout in register so that it can be
 // copied directly using tmem st.
-static Attribute getTmemScales(unsigned N, unsigned numWarps,
-                               triton::gpu::CTALayoutAttr ctaLayout) {
-  assert(numWarps == 4 && "todo enable numWarps == 8");
-  SmallVector<unsigned> sizePerThread = {1, std::max<unsigned>(N, 4)};
-  SmallVector<unsigned> threadsPerWarp = {32, 1};
-  SmallVector<unsigned> warpsPerCTA = {1, numWarps};
-  SmallVector<unsigned> order = {1, 0};
-  return triton::gpu::BlockedEncodingAttr::get(ctaLayout.getContext(),
-                                               sizePerThread, threadsPerWarp,
-                                               warpsPerCTA, order, ctaLayout);
+static Attribute getTmemScales(RankedTensorType type, unsigned numWarps) {
+  return triton::gpu::LinearEncodingAttr::get(
+      type.getContext(), getScaleTMEMStoreLinearLayout(type, numWarps));
 }
 
 static bool canUseTwoCTAs(triton::DotOp dotOp) {
@@ -435,7 +428,7 @@ replaceCTALayout(DistributedEncodingTrait layout,
     return BlockedEncodingAttr::get(
         layout.getContext(), blockedLayout.getSizePerThread(),
         blockedLayout.getThreadsPerWarp(), blockedLayout.getWarpsPerCTA(),
-        blockedLayout.getOrder(), newCTALayout);
+        blockedLayout.getDefaultOrder(), newCTALayout);
   } else if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(layout)) {
     return SliceEncodingAttr::get(
         layout.getContext(), sliceLayout.getDim(),
@@ -587,8 +580,8 @@ Value addSmemStageToScaleLoad(Value scale, mlir::PatternRewriter &rewriter) {
       loadConsumer = cvt;
     } else {
       // Unrecognized pattern, bail out. In practice, this implies that MMA
-      // pipelining will not apply to the scaled dot op, since tmem_copy would
-      // not be inserted before the pipeline pass.
+      // pipelining will not apply to the scaled dot op, since scales will not
+      // be in passed through SMEM to tc_gen5_mma_scaled.
       return scale;
     }
   }
@@ -715,10 +708,8 @@ public:
         oldScaleBType.getShape(), oldScaleBType.getElementType(), scaleEncoding,
         tensorMemorySpace,
         /*mutableMemory=*/false);
-    Attribute scaleALayout =
-        getTmemScales(oldScaleAType.getDimSize(1), numWarps, CTALayout);
-    Attribute scaleBLayout =
-        getTmemScales(oldScaleBType.getDimSize(1), numWarps, CTALayout);
+    Attribute scaleALayout = getTmemScales(oldScaleAType, numWarps);
+    Attribute scaleBLayout = getTmemScales(oldScaleBType, numWarps);
     RankedTensorType newScaleAType = RankedTensorType::get(
         oldScaleAType.getShape(), oldScaleAType.getElementType(), scaleALayout);
     RankedTensorType newScaleBType = RankedTensorType::get(

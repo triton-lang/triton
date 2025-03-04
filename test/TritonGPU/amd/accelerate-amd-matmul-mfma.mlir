@@ -1,5 +1,5 @@
-// RUN: triton-opt %s -split-input-file --tritonamdgpu-accelerate-matmul='arch-generation-name=gfx940 matrix-instruction-size=0' | FileCheck %s --check-prefixes MFMA0,CHECK
-// RUN: triton-opt %s -split-input-file --tritonamdgpu-accelerate-matmul='arch-generation-name=gfx940 matrix-instruction-size=16' | FileCheck %s --check-prefixes MFMA16,CHECK
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-accelerate-matmul='arch-generation-name=gfx942 matrix-instruction-size=0' | FileCheck %s --check-prefixes MFMA0,CHECK
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-accelerate-matmul='arch-generation-name=gfx942 matrix-instruction-size=16' | FileCheck %s --check-prefixes MFMA16,CHECK
 
 #blocked = #ttg.blocked<{sizePerThread = [4, 4], threadsPerWarp = [8, 8], warpsPerCTA = [2, 4], order = [1, 0]}>
 // CHECK-LABEL: mfma_dot_fp8e5m2

@@ -7,7 +7,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
 
-#define DEBUG_TYPE "triton-pipeline-schedule"
+#define DEBUG_TYPE "triton-loop-pipeline"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
@@ -63,17 +63,6 @@ bool isSmallLoad(tt::LoadOp loadOp,
   //    pressure.
   LDBG("Load " << *loadOp << " has width " << width);
   return width < 32;
-}
-
-int getCopyVecBytes(RankedTensorType registerTy,
-                    ttg::SharedEncodingTrait sharedEnc) {
-  auto regLayout = triton::gpu::toLinearLayout(registerTy.getShape(),
-                                               registerTy.getEncoding());
-  auto sharedLayout =
-      triton::gpu::toLinearLayout(registerTy.getShape(), sharedEnc);
-  auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
-  const int vecElems = regToSharedLayout.getNumConsecutiveInOut();
-  return vecElems * registerTy.getElementTypeBitWidth() / 8;
 }
 
 bool isPipeliningBeneficial(Operation *op, Operation *finalUser,
@@ -176,16 +165,6 @@ loadOpsToIndirectionLevel(scf::ForOp forOp, bool pipelineWithoutDot,
             dfs(defOp, finalUser, distance);
           }
         }
-        if (auto tmemAlloc = dyn_cast<nvidia_gpu::TMEMAllocOp>(op)) {
-          if (!tmemAlloc.getSrc()) {
-            for (auto user : tmemAlloc.getResult().getUsers()) {
-              if (auto tmemCopy = dyn_cast<nvidia_gpu::TMEMCopyOp>(user)) {
-                dfs(tmemCopy.getSrc().getDefiningOp(), finalUser, distance);
-                break;
-              }
-            }
-          }
-        }
       };
 
   bool seenDot = false;
@@ -233,8 +212,7 @@ void assignUserProvidedLatencies(scf::ForOp forOp,
 // on the requested number of stages assign the latencies in a way that
 // cover all the stages with the sum of latencies in the chain from the first
 // load to the final dot op.
-DenseMap<Operation *, int> assignLatencies(ModuleOp moduleOp,
-                                           int defaultNumStages) {
+void assignLatencies(ModuleOp moduleOp, int defaultNumStages) {
   auto getNumStagesOrDefault = [defaultNumStages](scf::ForOp forOp) -> int {
     // Use the attribute attached to the loop if it exists otherwise use the
     // global control.
@@ -252,7 +230,7 @@ DenseMap<Operation *, int> assignLatencies(ModuleOp moduleOp,
       loops.push_back(forOp);
   });
   if (loops.empty())
-    return DenseMap<Operation *, int>();
+    return;
 
   DenseMap<Operation *, int> opLatency;
   for (auto forOp : loops) {
@@ -291,9 +269,8 @@ DenseMap<Operation *, int> assignLatencies(ModuleOp moduleOp,
       opLatency[loadOp] = loadLatency;
     }
   }
-  return opLatency;
+  serializeLatencies(moduleOp, opLatency);
 }
-
 } // namespace gpu
 } // namespace triton
 } // namespace mlir

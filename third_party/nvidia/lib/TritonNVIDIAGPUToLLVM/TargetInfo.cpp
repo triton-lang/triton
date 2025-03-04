@@ -33,7 +33,8 @@ LLVM::LLVMFuncOp getVprintfDeclaration(RewriterBase &rewriter) {
 
 // extend integer to int32, extend float to float64
 // this comes from vprintf alignment requirements.
-std::pair<Type, Value> printfPromoteValue(RewriterBase &rewriter, Value value) {
+std::pair<Type, Value> printfPromoteValue(RewriterBase &rewriter, Value value,
+                                          bool isSigned) {
   auto *context = rewriter.getContext();
   auto type = value.getType();
   Value newOp = value;
@@ -41,14 +42,12 @@ std::pair<Type, Value> printfPromoteValue(RewriterBase &rewriter, Value value) {
   auto loc = UnknownLoc::get(context);
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-  bool isUnsigned = type.isUnsignedInteger();
   if (type.isIntOrIndex() && type.getIntOrFloatBitWidth() < 32) {
-    if (isUnsigned) {
-      newType = ui32_ty;
-      newOp = b.zext(newType, value);
-    } else {
-      newType = i32_ty;
+    newType = i32_ty;
+    if (isSigned) {
       newOp = b.sext(newType, value);
+    } else {
+      newOp = b.zext(newType, value);
     }
   } else if (type.isBF16() || type.isF16() || type.isF32()) {
     newType = f64_ty;
@@ -446,7 +445,7 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
         // For partitioned reduction we need to calculate the mask so that
         // each group of numLaneToReduce threads has the correct mask.
         unsigned bitmask = (1 << numLaneToReduce) - 1;
-        Value laneId = getLaneId(rewriter, loc, /*warpSize=*/32);
+        Value laneId = getLaneId(rewriter, loc);
         mask = b.shl(b.i32_val(bitmask),
                      b.and_(laneId, b.i32_val(~(numLaneToReduce - 1))));
       }
@@ -537,7 +536,8 @@ std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {
 }
 
 void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,
-                        int /*formatStrByteCount*/, ValueRange args) const {
+                        int /*formatStrByteCount*/, ValueRange args,
+                        ArrayRef<bool> isSigned) const {
   auto *ctx = rewriter.getContext();
   Type ptr = ptr_ty(ctx);
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
@@ -553,10 +553,11 @@ void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,
   SmallVector<Value, 16> newArgs;
   if (args.size() >= 1) {
     SmallVector<Type> argTypes;
-    for (auto arg : args) {
+    for (auto [i, arg] : llvm::enumerate(args)) {
       Type newType;
       Value newArg;
-      std::tie(newType, newArg) = printfPromoteValue(rewriter, arg);
+      std::tie(newType, newArg) = printfPromoteValue(
+          rewriter, arg, isSigned.empty() ? true : isSigned[i]);
       argTypes.push_back(newType);
       newArgs.push_back(newArg);
     }
@@ -579,8 +580,8 @@ void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,
   b.call(funcOp, operands);
 }
 
-void TargetInfo::printf(RewriterBase &rewriter, StringRef msg,
-                        ValueRange args) const {
+void TargetInfo::printf(RewriterBase &rewriter, StringRef msg, ValueRange args,
+                        ArrayRef<bool> isSigned) const {
   assert(!msg.empty() && "printf with empty string not supported");
   llvm::SmallString<64> msgNewline(msg);
   msgNewline.push_back('\n');
@@ -588,7 +589,7 @@ void TargetInfo::printf(RewriterBase &rewriter, StringRef msg,
   Value msgValue =
       LLVM::addStringToModule(UnknownLoc::get(rewriter.getContext()), rewriter,
                               "printfFormat_", msgNewline);
-  printf(rewriter, msgValue, msgNewline.size_in_bytes(), args);
+  printf(rewriter, msgValue, msgNewline.size_in_bytes(), args, isSigned);
 }
 
 void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
@@ -616,6 +617,18 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
 }
 
 int TargetInfo::getSharedAddressSpace() const { return 3; }
+
+int TargetInfo::getAddressSpace(Attribute addressSpace) const {
+  int spaceId = 0;
+  if (isa<triton::gpu::SharedMemorySpaceAttr,
+          triton::nvidia_gpu::TensorMemorySpaceAttr>(addressSpace)) {
+    spaceId = 3;
+  } else {
+    llvm::report_fatal_error(
+        "Only support SharedMemorySpace, TensorMemorySpace for now");
+  }
+  return spaceId;
+}
 
 bool TargetInfo::supportVectorizedAtomics() const {
   return computeCapability >= 90 && ptxVersion >= 81;

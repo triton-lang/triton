@@ -388,8 +388,26 @@ LogicalResult TMEMAllocOp::verify() {
   return success();
 }
 
+void TMEMAllocOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  Operation *op = getOperation();
+  // If allocation is immutable, mark it as no side effect allow things like
+  // CSE, DCE to work in early compiler passes.
+  // After the memory offset is computed, we attach the true side effect to the
+  // op.
+  if (!getType().getMutableMemory() && !op->hasAttr("tensor_memory_col_offset"))
+    return;
+  effects.emplace_back(MemoryEffects::Allocate::get(),
+                       mlir::triton::nvidia_gpu::TensorMemory::get());
+  if (getSrc())
+    effects.emplace_back(MemoryEffects::Write::get(),
+                         getOperation()->getOpResult(0),
+                         mlir::triton::nvidia_gpu::TensorMemory::get());
+}
+
 bool isDescendingOrder(triton::gpu::MemDescType type) {
-  auto order = triton::gpu::getOrder(type.getEncoding());
+  auto order = triton::gpu::getOrder(type);
   auto rank = type.getRank();
   for (int i = 0; i < rank; ++i) {
     if (order[i] != rank - 1 - i)
@@ -431,6 +449,15 @@ LogicalResult TMEMCopyOp::verify() {
   // checking we can do here are limited. For simplicity, shape checking is
   // omitted.
   return success();
+}
+
+void TMEMCopyOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Write::get(),
+                       mlir::triton::nvidia_gpu::TensorMemory::get());
+  effects.emplace_back(MemoryEffects::Read::get(), &getSrcMutable(),
+                       mlir::triton::gpu::SharedMemory::get());
 }
 
 } // namespace nvidia_gpu

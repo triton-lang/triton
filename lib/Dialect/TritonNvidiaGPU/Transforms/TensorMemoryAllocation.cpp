@@ -42,6 +42,10 @@ struct MemoryBitMap {
     }
   }
   void alloc(const TMemChunk &chunk) {
+    // Ensure the underlying data fits the allocation.
+    while ((chunk.startCol + chunk.numCols) * kNumRows >= elements.size())
+      elements.resize(2 * elements.size(), false);
+
     for (int i = 0; i < chunk.numCols; i++) {
       for (int j = 0; j < chunk.numRows; j++) {
         setUsed(chunk.startRow + j, chunk.startCol + i, true);
@@ -50,15 +54,12 @@ struct MemoryBitMap {
   }
 
   TMemChunk findFirstFit(TMemAllocation allocSize,
-                         std::optional<int> rowIdConstraint) {
+                         std::optional<int> rowIdConstraint) const {
     int numRows = allocSize.numRows / allocGranularity;
     assert(kNumRows - numRows >= 0);
     assert(allocSize.numRows % allocGranularity == 0);
     int startCol = 0;
     while (1) {
-      if ((startCol + allocSize.numCols) * numRows >= elements.size())
-        elements.resize(2 * elements.size(), false);
-
       // Iterate over possible starting rows
       for (int startRow = 0; startRow <= kNumRows - numRows; ++startRow) {
         if (rowIdConstraint && *rowIdConstraint != startRow)
@@ -91,8 +92,13 @@ struct MemoryBitMap {
   }
 
 private:
-  bool isUsed(int row, int col) const { return elements[row + col * kNumRows]; }
+  bool isUsed(int row, int col) const {
+    if (row + col * kNumRows >= elements.size())
+      return false;
+    return elements[row + col * kNumRows];
+  }
   void setUsed(int row, int col, bool used) {
+    assert(row + col * kNumRows < elements.size());
     elements[row + col * kNumRows] = used;
   }
 
@@ -145,8 +151,18 @@ static void updateMap(MemoryBitMap &memoryMap, Interval<int> liveInterval,
 
 static TMemChunk allocFirstFit(MemoryBitMap &memoryMap,
                                TMemAllocation allocSize,
-                               std::optional<int> rowIdConstraint) {
-  TMemChunk chunk = memoryMap.findFirstFit(allocSize, rowIdConstraint);
+                               std::optional<int> rowIdConstraint,
+                               ArrayRef<TMemChunk> coexistingChunks) {
+  // `coexistingChunks` are all the allocations that might need to be live at
+  // the same time as the current allocation plus what is known to be currently
+  // live. Union those allocations with a copy of the current memory map and use
+  // that to find the actual offsets.
+  MemoryBitMap mapForAlloc = memoryMap;
+  for (const TMemChunk &chunk : coexistingChunks)
+    mapForAlloc.alloc(chunk);
+  TMemChunk chunk = mapForAlloc.findFirstFit(allocSize, rowIdConstraint);
+
+  // Mark this chunk as allocated in the actual memory map.
   memoryMap.alloc(chunk);
   return chunk;
 }
@@ -192,7 +208,6 @@ allocateTMem(Operation *parentOp,
              DenseMap<triton::nvidia_gpu::TMEMAllocOp, int> &offsets) {
   SmallVector<triton::nvidia_gpu::TMEMAllocOp> allocs;
   DenseMap<Operation *, int> operationId;
-  llvm::EquivalenceClasses<Operation *> dependentAllocs;
   RowIdConstraints rowIdConstraints;
   parentOp->walk<WalkOrder::PostOrder>([&](Operation *op) {
     operationId[op] = operationId.size();
@@ -226,9 +241,25 @@ allocateTMem(Operation *parentOp,
   MemoryBitMap memoryMap;
   Liveness liveness(parentOp);
   std::map<int, TMemChunk> intervalLiverangeEnd;
+  DenseMap<TMEMAllocOp, TMemChunk> allocChunks;
   // Implement a linear scan first fit algorithm. We expect that fragmentation
   // won't be a problem, if it is this should be revisited.
-  for (triton::nvidia_gpu::TMEMAllocOp alloc : allocs) {
+  for (auto it = allocs.begin(), e = allocs.end(); it != e; ++it) {
+    TMEMAllocOp alloc = *it;
+
+    // Find all allocations in code that may execute at the same time. Only look
+    // at processed allocations.
+    SmallVector<TMemChunk> coexistingChunks;
+    if (auto ws = alloc->getParentOfType<WarpSpecializeOp>()) {
+      for (auto prevIt = allocs.begin(); prevIt != it; ++prevIt) {
+        TMEMAllocOp prevAlloc = *prevIt;
+        auto prevWs = prevAlloc->getParentOfType<WarpSpecializeOp>();
+        if (prevWs && prevWs == ws &&
+            alloc->getParentRegion() != prevAlloc->getParentRegion())
+          coexistingChunks.push_back(allocChunks.at(prevAlloc));
+      }
+    }
+
     Interval<int> liveInterval = getLiveIntervals(alloc, liveness, operationId);
     auto memDescType = alloc.getType();
     TMemAllocation allocSize = getTmemAllocSizes(memDescType);
@@ -237,7 +268,8 @@ allocateTMem(Operation *parentOp,
     std::optional<int> rowIdConstraint =
         rowIdConstraints.getRowIdConstraint(alloc);
     TMemChunk chunkAllocated =
-        allocFirstFit(memoryMap, allocSize, rowIdConstraint);
+        allocFirstFit(memoryMap, allocSize, rowIdConstraint, coexistingChunks);
+    allocChunks.insert({alloc, chunkAllocated});
     // currently naively constraint allocs based on the first one we find.
     rowIdConstraints.addConstraints(alloc, chunkAllocated.startRow);
     intervalLiverangeEnd[liveInterval.end()] = chunkAllocated;

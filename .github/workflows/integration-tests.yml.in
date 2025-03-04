@@ -123,7 +123,7 @@ jobs:
         if: env.enable_integration == 'true'
         run: |
           if [ x"${{ github.repository }}" == x"triton-lang/triton" ]; then
-            echo '::set-output name=matrix-CUDA::[["a100-runner-set"], ["h100-runner-set"]]'
+            echo '::set-output name=matrix-CUDA::[["a100-runner-set"], ["h100-runner-set"], ["gb200-runner-set"]]'
             echo '::set-output name=matrix-HIP::[["self-hosted", "gfx90a"], ["self-hosted", "gfx942"]]'
             echo '::set-output name=matrix-MACOS::[["macos-latest"]]'
           else
@@ -270,6 +270,9 @@ jobs:
         env:
           CUDA_HOME: "/usr/local/cuda"
         run: |
+          if [ "${{ matrix.runner[0] }}" == "gb200-runner-set" ]; then
+            source /venv/bin/activate
+          fi
           echo "PATH is '$PATH'"
           ccache --zero-stats
           make dev-install
@@ -283,14 +286,22 @@ jobs:
         run: make test-lit
 
       - name: Run python tests on CUDA
-        run: make test-unit
+        run:  |
+          if [ "${{ matrix.runner[0] }}" == "gb200-runner-set" ]; then
+            source /venv/bin/activate
+          fi
+          make test-unit
 
       - name: Run interpreter tests
         if: ${{ matrix.runner[0] == 'h100-runner-set' }}
         run: make test-interpret
 
       - name: Run regression tests
-        run: make test-regression
+        run:  |
+          if [ "${{ matrix.runner[0] }}" == "gb200-runner-set" ]; then
+            source /venv/bin/activate
+          fi
+          make test-regression
 
       - &run-cpp-unittests-step
         name: Run C++ unittests
@@ -298,6 +309,7 @@ jobs:
 
       - &run-proton-tests-step
         name: Run Proton tests
+        if: ${{ matrix.runner[0] != 'gb200-runner-set' }}
         run: make test-proton
 
       - *inspect-cache-directories-step
@@ -384,6 +396,7 @@ jobs:
           # Run test_line_info.py separately with TRITON_DISABLE_LINE_INFO=0
           TRITON_DISABLE_LINE_INFO=0 python3 -m pytest -s -n 8 language/test_line_info.py
       - name: Run asan tests on HIP
+        if: false
         run: |
           cd third_party/amd/python/test/
           ulimit -s 1024

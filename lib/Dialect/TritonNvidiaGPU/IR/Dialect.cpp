@@ -164,9 +164,10 @@ bool isDistributedLayoutTMemCompatible(Operation *op,
     assert(isa<triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(
                memType.getEncoding()) &&
            "Expecting a tensor memory encoding attribute");
-    blockM = 128;
-    blockN = 32;
-    scalesEncoding = true;
+    return tensorType.getEncoding() ==
+           triton::gpu::LinearEncodingAttr::get(
+               tensorType.getContext(),
+               getScaleTMEMStoreLinearLayout(tensorType, numWarps));
   }
   auto shapePerCTA = mlir::triton::gpu::getShapePerCTA(tensorType);
   int numElements = product(shapePerCTA);
@@ -185,7 +186,7 @@ bool isDistributedLayoutTMemCompatible(Operation *op,
   if (order.size() != 2)
     return false;
 
-  if (!scalesEncoding && (order[0] != 0 || order[1] != 1))
+  if (order[0] != 0 || order[1] != 1)
     return false;
 
   if (useStridedMessage) {

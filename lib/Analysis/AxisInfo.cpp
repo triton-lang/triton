@@ -1295,8 +1295,15 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
 void ModuleAxisInfoAnalysis::initialize(FunctionOpInterface funcOp) {
   std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
   AxisInfoAnalysis *analysis = solver->load<AxisInfoAnalysis>();
-  if (failed(solver->initializeAndRun(funcOp)))
+  WalkResult result = funcOp.walk([&](Operation *op) {
+    if (op->hasTrait<OpTrait::IsIsolatedFromAbove>() &&
+        failed(solver->initializeAndRun(op)))
+      return WalkResult::interrupt();
+    return WalkResult::advance();
+  });
+  if (result.wasInterrupted())
     return;
+
   auto *axisInfoMap = getFuncData(funcOp);
   auto updateAxisInfoMap = [&](Value value) {
     auto axisInfo = analysis->getLatticeElement(value)->getValue();

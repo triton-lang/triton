@@ -1768,13 +1768,15 @@ void init_triton_ir(py::module &&m) {
   py::class_<PassManager>(m, "pass_manager", py::module_local())
       .def(py::init<MLIRContext *>())
       .def("enable_debug",
-           [](PassManager &self) {
+           [](PassManager &self) -> bool {
              auto *context = self.getContext();
              bool haveDump = ::triton::tools::getBoolEnv("MLIR_ENABLE_DUMP");
              std::string funcToDump;
              if (!haveDump) {
                funcToDump = triton::tools::getStrEnv("MLIR_ENABLE_DUMP");
-               if (!funcToDump.empty())
+               bool isEnvValueBool =
+                   triton::tools::isEnvValueBool(funcToDump).has_value();
+               if (!funcToDump.empty() && !isEnvValueBool)
                  haveDump = true;
              }
              if (haveDump) {
@@ -1803,6 +1805,7 @@ void init_triton_ir(py::module &&m) {
                    /*printAfterOnlyOnFailure*/ true, mlir_dumps_or_dbgs(),
                    printingFlags);
              }
+             return haveDump;
            })
       .def("get_pipeline_str",
            [](PassManager &self) {

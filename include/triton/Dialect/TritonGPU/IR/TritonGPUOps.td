@@ -333,7 +333,7 @@ def TTG_GlobalScratchAllocOp : TTG_Op<"global_scratch_alloc", [MemoryEffects<[Me
 }
 
 def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [
-  RecursiveMemoryEffects, RecursivelySpeculatable,
+  RecursiveMemoryEffects, RecursivelySpeculatable, AsyncRegions,
   DeclareOpInterfaceMethods<RegionBranchOpInterface>
 ]> {
   let summary = "asynchronously execute code on multiple warpgroups";
@@ -362,26 +362,34 @@ def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [
     }
     partition0(%arg0: i32, %arg1: i32) num_warps(8) {
       some_async_dispatch(%arg0, %arg1)
+      ttg.warp_return
     }
     partition1(%arg0: i32, %arg1: i32) num_warps(1) {
       some_async_dispatch(%arg0, %arg1)
+      ttg.warp_return
     } : (i32, i32) -> i32
     ```
   }];
 
   let arguments = (ins
     Variadic<AnyType>:$explicitCaptures,
-    DenseI32ArrayAttr:$partitionNumWarps
+    DenseI32ArrayAttr:$partitionNumWarps,
+    OptionalAttr<DenseI32ArrayAttr>:$warpGroupStartIds
   );
   let results = (outs Variadic<AnyType>:$defaultPassthrough);
 
   let regions = (region
-    SizedRegion<1>:$defaultRegion,
+    MinSizedRegion<1>:$defaultRegion,
     SizedRegion<1>:$partitionOpHolder
   );
 
   let extraClassDeclaration = [{
     RegionRange getPartitionRegions();
+
+    // Get the size and alignment of the capture list.
+    std::pair<uint64_t, uint64_t> getCaptureSizeAlign();
+    // Get the total number of extra warps required.
+    unsigned getTotalPartitionWarps();
   }];
 
   let hasVerifier = 1;
@@ -390,8 +398,7 @@ def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [
 
 def TTG_WarpSpecializePartitionsOp : TTG_Op<"warp_specialize.partitions", [
   IsolatedFromAbove, RecursiveMemoryEffects, RecursivelySpeculatable,
-  Terminator, HasParent<"WarpSpecializeOp">,
-  SingleBlockImplicitTerminator<"WarpReturnOp">
+  Terminator, HasParent<"WarpSpecializeOp">
 ]> {
   let summary = "container op for `ttg.warp_specialize`";
   let description = [{
@@ -399,11 +406,11 @@ def TTG_WarpSpecializePartitionsOp : TTG_Op<"warp_specialize.partitions", [
     contains the actual isolated from above regions of `ttg.warp_specialize`.
   }];
 
-  let regions = (region VariadicRegion<SizedRegion<1>>:$partitionRegions);
+  let regions = (region VariadicRegion<MinSizedRegion<1>>:$partitionRegions);
 }
 
 def TTG_WarpYieldOp : TTG_Op<"warp_yield", [
-  Pure, Terminator, HasParent<"WarpSpecializeOp">,
+  Pure, Terminator, ReturnLike, HasParent<"WarpSpecializeOp">,
   DeclareOpInterfaceMethods<RegionBranchTerminatorOpInterface>
 ]> {
   let summary = "yield from the default region of `ttg.warp_specialize`";
@@ -422,6 +429,7 @@ def TTG_WarpYieldOp : TTG_Op<"warp_yield", [
   let arguments = (ins Variadic<AnyType>:$values);
 
   let assemblyFormat = "($values^)? attr-dict (`:` type($values)^)?";
+  let hasVerifier = 1;
 }
 
 def TTG_WarpReturnOp : TTG_Op<"warp_return", [
