@@ -97,13 +97,13 @@ void Pingponger::moveOpAndPredecessorsUpSameBlock(Operation *op) {
   assert(lastInsertedOp != nullptr);
   // TODO: Enable moving ops across blocks
   assert(op->getBlock() == lastInsertedOp->getBlock());
+  Operation *checkedOp = lastInsertedOp;
   // Check if we are moving the op up, if so we may need to
   // move additional ops up to maintain correctness.
   if (lastInsertedOp->isBeforeInBlock(op)) {
     SetVector<Operation *> backwardSlice;
     BackwardSliceOptions opt;
     opt.omitBlockArguments = true;
-    Operation *checkedOp = lastInsertedOp;
     opt.filter = [&checkedOp](Operation *op) {
       return op->getBlock() == checkedOp->getBlock() &&
              checkedOp->isBeforeInBlock(op);
@@ -111,8 +111,18 @@ void Pingponger::moveOpAndPredecessorsUpSameBlock(Operation *op) {
     getBackwardSlice(op, &backwardSlice, opt);
     for (auto predOp : backwardSlice)
       appendOp(predOp);
+    appendOp(op);
+  } else {
+    auto hasUnsafeUser = [&checkedOp](auto &&user) {
+      return user != checkedOp && user->getBlock() == checkedOp->getBlock() &&
+             user->isBeforeInBlock(checkedOp);
+    };
+    if (std::any_of(op->user_begin(), op->user_end(), hasUnsafeUser))
+      LDBG("Unable to move operation "
+           << op << " due to use before intended move location");
+    else
+      appendOp(op);
   }
-  appendOp(op);
 }
 void Pingponger::appendSlicedLoadAB(int slice) {
   appendOp(subViewOps[0][slice]);
@@ -157,10 +167,9 @@ void Pingponger::transformOnePPClusters(OpBuilder &builder, Location loc) {
   // scheduled across the barrier.
   auto preDotBar = builder.create<ROCDL::SchedBarrier>(loc, 1);
   updateOpInsertion(dotLoc);
-  appendOp(preDotBar);
 
   // Memory cluster #0
-  updateOpInsertion(lLoadOps[0]);
+  moveOpAndPredecessorsUpSameBlock(lLoadOps[0]);
   appendOp(builder.create<ROCDL::SetPrioOp>(loc, highPriority));
   moveOpAndPredecessorsUpSameBlock(gLoadOps[0]);
   appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
@@ -169,7 +178,7 @@ void Pingponger::transformOnePPClusters(OpBuilder &builder, Location loc) {
   moveOpAndPredecessorsUpSameBlock(gLoadOps[1]);
 
   // Dot cluster #0
-  updateOpInsertion(preDotBar);
+  appendOp(preDotBar);
   appendOpWithPrio(builder, dotOps[0], loc);
   // Add a remark for user feedback
   dotOps[0]->emitRemark() << "Performed one ping pong cluster transformation\n";
