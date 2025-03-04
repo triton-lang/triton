@@ -31,13 +31,13 @@ struct AllocateProtonGlobalScratchBuffer
     uint32_t largestAlignment = 1;
 
     func.walk([&](proton::gpu::GlobalScratchAllocOp op) {
-	  totalMemorySize+=op.getNbytes();
-	  largestAlignment = std::max(largestAlignment, op.getAlignment());
+      totalMemorySize += op.getNbytes();
+      largestAlignment = std::max(largestAlignment, op.getAlignment());
     });
-  mod->setAttr("proton.global_scratch_memory_size",
-                    builder.getI32IntegerAttr(totalMemorySize));
-  mod->setAttr("proton.global_scratch_memory_alignment",
-                    builder.getI32IntegerAttr(largestAlignment));  
+    mod->setAttr("proton.global_scratch_memory_size",
+                 builder.getI32IntegerAttr(totalMemorySize));
+    mod->setAttr("proton.global_scratch_memory_alignment",
+                 builder.getI32IntegerAttr(largestAlignment));
   }
 };
 
