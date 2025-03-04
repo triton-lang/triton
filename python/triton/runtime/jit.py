@@ -281,7 +281,7 @@ specialize_impl_cache = []
 
 
 def create_specialize_impl():
-    if len(specialize_impl_cache) > 0:
+    if specialize_impl_cache:
         return specialize_impl_cache[-1]
 
     from ..language import constexpr
