@@ -27,65 +27,67 @@ using ::mlir::triton::AMD::ISAFamily;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
 
 namespace {
-// Return the mask for the unique data accessed by given tensor type.
-// Used to mask out the redundant data accessed by threads.
-Value redundantDataMask(Type valueTy, ConversionPatternRewriter &rewriter,
-                        Location loc, const AMD::TargetInfo &targetInfo) {
-  auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
-  Value mask = b.true_val();
-  auto tid = getThreadId(rewriter, loc);
-  auto clusterCTAId = targetInfo.getClusterCTAId(rewriter, loc);
-  if (tensorTy) {
-    // To remove this use, port https://github.com/triton-lang/triton/pull/5432
-    // to the AMDGPU dialect
-    auto layout = cast<DistributedEncodingTrait>(tensorTy.getEncoding());
-    auto shape = tensorTy.getShape();
-    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
-    auto kLane = StringAttr::get(rewriter.getContext(), "lane");
-    auto kWarp = StringAttr::get(rewriter.getContext(), "warp");
-    auto maskLane =
-        std::get<1>(delinearize(rewriter, loc, layout, shape, kLane, laneId));
-    auto maskWarp =
-        std::get<1>(delinearize(rewriter, loc, layout, shape, kWarp, warpId));
-    mask = b.and_(maskLane, maskWarp);
 
-    // Do not write duplicated data when multicast is enabled
-    if (triton::gpu::getNumCTAs(layout) > 1) {
-      auto _0 = b.i32_val(0);
-      auto CTAsPerCGA = triton::gpu::getCTAsPerCGA(layout);
-      auto CTASplitNum = triton::gpu::getCTASplitNum(layout);
-      auto CTAOrder = triton::gpu::getCTAOrder(layout);
+llvm::MapVector<StringAttr, int32_t> getAllFreeVarMasks(MLIRContext *ctx) {
+  // Mask where all elements are redundant
+  auto kReg = str_attr("reg");
+  auto kLane = str_attr("lane");
+  auto kWarp = str_attr("warp");
+  auto kBlock = str_attr("block");
 
-      auto multiDimClusterCTAId =
-          delinearize(rewriter, loc, clusterCTAId, CTAsPerCGA, CTAOrder);
-
-      auto rank = tensorTy.getRank();
-      for (unsigned dim = 0; dim < rank; ++dim) {
-        // Skip when multicast is not enabled in this dimension
-        if (CTAsPerCGA[dim] == CTASplitNum[dim])
-          continue;
-        unsigned splitNum = std::min<unsigned>(shape[dim], CTASplitNum[dim]);
-        Value repId = b.udiv(multiDimClusterCTAId[dim], b.i32_val(splitNum));
-        // Consider the example where CTAsPerCGA = [4] and CTASplitNum = [2]:
-        //     CTA0 and CTA2 holds data of block0,
-        //     CTA1 and CTA3 holds data of block1.
-        // Only CTA0 and CTA1 are expected to write while CTA2 and CTA3 should
-        // be masked. We add the following mask:
-        //     multiDimClusterCTAId[dim] / splitNum == 0
-        // Actually in all existing cases of multicast, splitNum is always 1.
-        // The mask is equivalent to:
-        //     multiDimClusterCTAId[dim] == 0
-        mask = b.and_(mask, b.icmp_eq(repId, _0));
-      }
-    }
-  } else {
-    // If the tensor is not ranked, then it is a scalar and only thread 0 of
-    // CTA0 can write
-    mask = b.and_(mask, b.icmp_eq(clusterCTAId, b.i32_val(0)));
-    mask = b.and_(mask, b.icmp_eq(tid, b.i32_val(0)));
+  int32_t fullMask = -1;
+  llvm::MapVector<StringAttr, int32_t> ret;
+  for (auto dimName : {kReg, kLane, kWarp, kBlock}) {
+    ret[dimName] = fullMask;
   }
-  return mask;
+  return ret;
+}
+
+llvm::MapVector<StringAttr, int32_t> getFreeVariableMasks(Type type) {
+  auto ctx = type.getContext();
+  auto tensorTy = dyn_cast<RankedTensorType>(type);
+  if (!tensorTy) {
+    return getAllFreeVarMasks(ctx);
+  }
+
+  auto ll =
+      triton::gpu::toLinearLayout(tensorTy.getShape(), tensorTy.getEncoding());
+  return ll.getFreeVariableMasks();
+}
+
+// Return a predicate that is true only if the current thread holds unique data,
+// according to freeVarsMask.
+Value emitRedundantThreadPredicate(
+    ModuleOp moduleOp, const llvm::MapVector<StringAttr, int32_t> &freeVarMasks,
+    ConversionPatternRewriter &rewriter, Location loc,
+    const AMD::TargetInfo &targetInfo) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto ctx = rewriter.getContext();
+  auto kLane = str_attr("lane");
+  auto kWarp = str_attr("warp");
+  auto kBlock = str_attr("block");
+
+  Value zero = b.i32_val(0);
+  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+  Value blockId = freeVarMasks.lookup(kBlock) == 0
+                      ? zero
+                      : targetInfo.getClusterCTAId(rewriter, loc);
+
+  Value pred = b.true_val();
+  auto dimNames = {kLane, kWarp, kBlock};
+  auto dimIds = {laneId, warpId, blockId};
+  for (auto [dimName, dimId] : llvm::zip(dimNames, dimIds)) {
+    int32_t mask = freeVarMasks.lookup(dimName);
+    if (mask != 0) {
+      auto dimPred = b.icmp_eq(b.and_(dimId, b.i32_val(mask)), zero);
+      pred = b.and_(pred, dimPred);
+    }
+  }
+  return pred;
+}
+
+bool isCanonicalIndex(unsigned index, unsigned freeVarMask) {
+  return (index & freeVarMask) == 0;
 }
 
 // Contains some helper functions for both Load and Store conversions.
@@ -648,6 +650,7 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
     auto loc = op->getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     MLIRContext *ctx = rewriter.getContext();
+    auto moduleOp = op->getParentOfType<ModuleOp>();
 
     auto valueTy = value.getType();
     Type valueElemTy =
@@ -670,9 +673,19 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
 
     auto cacheMod = op.getCache();
     const int numVecs = elemsPerThread / vec;
-    Value rDataMask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
+    auto freeVarMasks = getFreeVariableMasks(valueTy);
+    Value threadPred = emitRedundantThreadPredicate(moduleOp, freeVarMasks,
+                                                    rewriter, loc, targetInfo);
+    uint32_t regMask = freeVarMasks[str_attr("reg")];
     for (size_t vecStart = 0; vecStart < elemsPerThread; vecStart += vec) {
-      Value pred = mask ? b.and_(maskElems[vecStart], rDataMask) : rDataMask;
+      if (!isCanonicalIndex(vecStart, regMask)) {
+        // Don't emit store ops for redundant elements within a thread
+        continue;
+      }
+
+      Value pred =
+          llMask ? b.and_(threadPred, maskElems[vecStart]) : threadPred;
+
       auto vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
 
       const size_t maxWordWidth = std::max<size_t>(32, valueElemNBits);
@@ -806,7 +819,6 @@ struct BufferAtomicRMWOpConversion
     }
 
     Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr, llStride);
-    Value rDataMask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
     SmallVector<Value> loadedVals;
 
     // set the scope
@@ -903,10 +915,22 @@ struct BufferAtomicRMWOpConversion
     // Check if the op has users, if it does we set GLC=1, otherwise GLC=0
     auto opUsers = op.getResult().getUsers();
     auto hasUsers = std::distance(opUsers.begin(), opUsers.end()) > 0;
+    auto moduleOp = op->getParentOfType<ModuleOp>();
 
+    auto freeVarMasks = getFreeVariableMasks(valueTy);
+    Value threadPred = emitRedundantThreadPredicate(moduleOp, freeVarMasks,
+                                                    rewriter, loc, targetInfo);
+    uint32_t regMask = freeVarMasks[str_attr("reg")];
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
+      if (!isCanonicalIndex(vecStart, regMask)) {
+        // Don't emit store ops for redundant elements within a thread
+        continue;
+      }
+
+      Value pred =
+          llMask ? b.and_(threadPred, maskElems[vecStart]) : threadPred;
+
       Type vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
-      Value pred = mask ? b.and_(maskElems[vecStart], rDataMask) : rDataMask;
       Value falseVal = createZeroVector(rewriter, loc, cast<VectorType>(vecTy));
       // Create the store val
       Value storeVal = packElementRangeIntoVector(
@@ -1001,10 +1025,22 @@ struct BufferStoreOpConversion
         getMaskElemsAndUpdateVeclen(rewriter, loc, llMask, mask, vec);
 
     Value rsrcDesc = bufferEmitter.createResourceDescriptor(llPtr, llStride);
-    Value rDataMask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
+    MLIRContext *ctx = rewriter.getContext();
+    auto moduleOp = op->getParentOfType<ModuleOp>();
+    auto freeVarMasks = getFreeVariableMasks(valueTy);
+    Value threadPred = emitRedundantThreadPredicate(moduleOp, freeVarMasks,
+                                                    rewriter, loc, targetInfo);
+    uint32_t regMask = freeVarMasks[str_attr("reg")];
     for (size_t vecStart = 0; vecStart < numElems; vecStart += vec) {
+      if (!isCanonicalIndex(vecStart, regMask)) {
+        // Don't emit store ops for redundant elements within a thread
+        continue;
+      }
+
+      Value pred =
+          llMask ? b.and_(threadPred, maskElems[vecStart]) : threadPred;
+
       Type vecTy = LLVM::getFixedVectorType(valueElemTy, vec);
-      Value pred = mask ? b.and_(maskElems[vecStart], rDataMask) : rDataMask;
       // Create the store val
       Value storeVal = packElementRangeIntoVector(
           rewriter, this->getTypeConverter(), loc, cast<VectorType>(vecTy),
@@ -1071,7 +1107,6 @@ struct AtomicCASOpConversion
       vec = std::min<unsigned>(vec, valTy.getElementType().isF16() ? 2 : 1);
     }
 
-    Value mask = redundantDataMask(valueTy, rewriter, loc, targetInfo);
     auto vecTy = vec_ty(valueElemTy, vec);
     SmallVector<Value> resultVals(elemsPerThread);
 

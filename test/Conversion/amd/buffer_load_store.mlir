@@ -66,10 +66,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     // CHECK-LABEL: buffer_store
     tt.func @buffer_store(%value : tensor<128xf32, #blocked0>, %arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %offset : tensor<128xi32, #blocked0>{tt.divisibility=16:i32}) {
-        // CHECK: llvm.mlir.constant(true) : i1
-        // CHECK: %[[c_mask:.*]] = llvm.mlir.constant(true) : i1
-        // CHECK: %[[w_mask:.*]] = llvm.mlir.constant(true) : i1
-        // CHECK: %[[mask:.*]] = llvm.and %[[c_mask]], %[[w_mask]]
+        // CHECK: %[[mask:.*]] = llvm.mlir.constant(true) : i1
         // CHECK: %[[offset:.*]] = llvm.select %[[mask]]
         // CHECK: %[[aux:.*]] = llvm.mlir.constant(3 : i32) : i32
         // CHECK: rocdl.raw.ptr.buffer.store {{.*}}, {{.*}}, %[[offset]], {{.*}}, %[[aux]]
@@ -94,8 +91,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         %5 = tt.splat %N: i32 -> tensor<128xi32, #blocked0>
         %7 = arith.cmpi slt, %4, %5: tensor<128xi32, #blocked0>
         // CHECK: %[[mask0:.*]] = llvm.extractvalue %{{.*}} : !llvm.struct<(i1, i1, i1, i1)>
-        // CHECK: %[[mask1:.*]] = llvm.and %[[mask0]], {{.*}}
-        // CHECK: %[[offset:.*]] = llvm.select %[[mask1]]
+        // CHECK: %[[mask1:.*]] = llvm.mlir.constant(true) : i1
+        // CHECK: %[[mask2:.*]] = llvm.and %[[mask1]], %[[mask0]]
+        // CHECK: %[[offset:.*]] = llvm.select %[[mask2]]
         // CHECK: rocdl.raw.ptr.buffer.store {{.*}}, {{.*}}, %[[offset]]
         amdgpu.buffer_store %value, %arg0[%offset], %7 stride = %N : tensor<128xf32, #blocked0>
         tt.return
@@ -201,8 +199,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
         // CHECK: %[[mask0:.*]] = llvm.extractvalue %{{.*}} : !llvm.struct<(i1, i1, i1, i1)>
         // There should be a single release fence before any atomics
         // CHECK: llvm.fence syncscope("agent") release
-        // CHECK: %[[mask1:.*]] = llvm.and %[[mask0]], {{.*}}
-        // CHECK: %[[offset:.*]] = llvm.select %[[mask1]]
+        // CHECK: %[[mask1:.*]] = llvm.mlir.constant(true) : i1
+        // CHECK: %[[mask2:.*]] = llvm.and %[[mask1]], %[[mask0]]
+        // CHECK: %[[offset:.*]] = llvm.select %[[mask2]]
 
         // We will have 4 calls to fadd, since the sizePerThread is 4. We should have a vmcnt between each call.
         %ret = amdgpu.buffer_atomic_rmw fadd, acq_rel, gpu, %values, %arg0[%offset], %mask stride = %stride : tensor<128xf32, #blocked0>
