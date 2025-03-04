@@ -27,10 +27,13 @@ struct AllocateProtonGlobalScratchBuffer
     assert(llvm::range_size(mod.getOps<triton::FuncOp>()) == 1);
     FuncOp func = *mod.getOps<triton::FuncOp>().begin();
 
-    int32_t totalMemorySize = 0;
+    int32_t totalMemorySize = 0; // bytes
     uint32_t largestAlignment = 1;
 
     func.walk([&](proton::gpu::GlobalScratchAllocOp op) {
+      // TODO(crobeck): decide how we want to deal with the alignment here
+      op->setAttr("offset",
+                  IntegerAttr::get(IntegerType::get(ctx, 32), totalMemorySize));
       totalMemorySize += op.getNbytes();
       largestAlignment = std::max(largestAlignment, op.getAlignment());
     });
