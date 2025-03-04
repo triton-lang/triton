@@ -279,6 +279,7 @@ class KernelParam:
 dtype2str = {}
 specialize_impl_cache = []
 
+
 def create_specialize_impl():
     if len(specialize_impl_cache) > 0:
         return specialize_impl_cache[-1]
