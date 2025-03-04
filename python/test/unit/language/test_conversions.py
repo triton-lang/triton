@@ -281,7 +281,7 @@ def test_typeconvert_upcast(src_dtype, dst_dtype, device):
                 launch_exhaustive_populate(getattr(tl, src_dtype), 0, 65536, False, 8, 0x7f, device=device)
             return
     elif is_hip():
-        if  src_dtype in ('float8e4nv', 'float8e5') and not is_hip_mi350():
+        if  src_dtype in ('float8e4nv', 'float8e5') and dst_dtype == 'float32' and not is_hip_mi350():
             pytest.skip(f"upcasting {src_dtype} to {dst_dtype} not supported in this architecture")
         if  (src_dtype == 'float8e4nv' and dst_dtype in ('bfloat16') and
             (not is_hip_mi300() or not is_hip_mi350())):
@@ -342,13 +342,17 @@ def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
         if dst_dtype in ('float8e5b16', 'float8e4b8') and rounding == 'rtne':
             pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on AMDGPU MI300")
 
-    #if is_hip():
-    if False:
-        if dst_dtype == 'float8e5' and rounding == 'rtne':
-            pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on NVGPU with compute capability 9.0+")
+    if is_hip():
+        if dst_dtype == 'float8e5' and rounding == 'rtne' and not (src_dtype == 'float32' and is_hip_mi350()):
+            pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported from float32, and on MI350")
 
-        if dst_dtype == 'float8e4nv' and not (src_dtype == 'float16' and rounding == 'rtne' and is_hip_mi300()):
-            pytest.skip("float8e4nv downcast tests only supported from float16, with RTNE rounding, and on AMDGPU MI300")
+        if dst_dtype == 'float8e4nv':
+            if not rounding == 'rtne':
+                pytest.skip("float8e4nv downcast tests only supported with RTNE rounding on AMDGPU")
+            if is_hip_mi300() and src_dtype != 'float16':
+                pytest.skip("float8e4nv downcast tests only supported from float16, with RTNE rounding on AMDGPU MI300")
+            if is_hip_mi350() and src_dtype not in ('float32'):
+                pytest.skip("float8e4nv downcast tests only supported from float32, with RTNE rounding on AMDGPU MI350")
 
         if dst_dtype in ('float8e5b16', 'float8e4b8') and rounding == 'rtne' and not is_hip_mi300():
             pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on AMDGPU MI300")
@@ -366,5 +370,3 @@ def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
 
     for i in range(256):
         downcast_test(getattr(tl, src_dtype), getattr(tl, dst_dtype), rounding, *stuff, max_repr, i, device=device)
-
-test_typeconvert_downcast('float32', 'float8e5', 'rtne', 0x43e00000, 'cuda')

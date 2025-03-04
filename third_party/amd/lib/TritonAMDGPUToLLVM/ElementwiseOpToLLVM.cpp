@@ -1087,16 +1087,36 @@ struct FpToFpOpConversion
       }
       return outVals;
     }
+
+    if (llvm::isa<Float8E4M3FNType, Float8E5M2Type>(srcElementType) &&
+            llvm::isa<Float32Type>(dstElementType) ||
+        llvm::isa<Float8E4M3FNType, Float8E5M2Type>(dstElementType) &&
+            llvm::isa<Float32Type>(srcElementType) &&
+            roundingMode == RoundingMode::RTNE) {
+      assert(isaFamily == AMD::ISAFamily::CDNA4 &&
+             "conversions OCP fp8/bf8->fp32 only supported on CDNA4");
+    }
+
     size_t numElements = 4;
-    if (llvm::isa<Float8E4M3FNType, Float8E4M3FNUZType, Float8E5M2FNUZType,
-                  Float8E5M2Type>(srcElementType) ||
-        llvm::isa<Float8E4M3FNType, Float8E4M3FNUZType, Float8E5M2FNUZType,
-                  Float8E5M2Type>(dstElementType)) {
+    if (llvm::isa<Float8E4M3FNType, Float8E4M3FNUZType, Float8E5M2FNUZType>(
+            srcElementType) ||
+        llvm::isa<Float8E5M2Type>(srcElementType) &&
+            llvm::isa<Float32Type>(dstElementType) &&
+            isaFamily == AMD::ISAFamily::CDNA4 ||
+        llvm::isa<Float8E4M3FNType, Float8E4M3FNUZType, Float8E5M2FNUZType>(
+            dstElementType) ||
+        llvm::isa<Float8E5M2Type>(dstElementType) &&
+            llvm::isa<Float32Type>(srcElementType) &&
+            roundingMode == RoundingMode::RTNE &&
+            isaFamily == AMD::ISAFamily::CDNA4) {
       numElements = 2;
     }
 
     bool useFP16IntermediateSrc =
-        srcElementType.isF32() && (isaFamily != AMD::ISAFamily::CDNA4) &&
+        srcElementType.isF32() &&
+        !(isaFamily == AMD::ISAFamily::CDNA4 &&
+          (llvm::isa<Float8E4M3FNType, Float8E5M2Type>(dstElementType)) &&
+          roundingMode == RoundingMode::RTNE) &&
         !(isaFamily == AMD::ISAFamily::CDNA3 &&
           (llvm::isa<Float8E4M3FNUZType, Float8E5M2FNUZType>(dstElementType)));
     bool isDstFP32 = dstElementType.isF32();
