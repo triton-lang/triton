@@ -12,15 +12,15 @@ permissions: read-all
 jobs:
 
   Build-Wheels:
-    timeout-minutes: 60
+    timeout-minutes: 90
     runs-on: ${{ matrix.config.runs_on }}
 
     strategy:
       fail-fast: true
       matrix:
         config:
-        - {runs_on: ['self-hosted', 'CPU'], arch: 'x64'}
-        - {runs_on: 'ubuntu-22.04-arm', arch: 'arm64'}
+        - {runs_on: ['self-hosted', 'CPU'], arch: 'x86_64'}
+        - {runs_on: 'ubuntu-22.04-arm', arch: 'aarch64'}
 
 
     permissions:
@@ -58,7 +58,7 @@ jobs:
           echo "[build_ext]" >> python/setup.cfg
           echo "base-dir=/project" >> python/setup.cfg
 
-      - name: Build wheels x64
+      - name: Build wheels
         if: ${{ steps.check-version.outputs.new_commit == 'true' }}
         run: |
           # Make sure cibuildwheel is updated to latest, this will enable latest python builds
@@ -71,17 +71,17 @@ jobs:
                   TRITON_WHEEL_VERSION_SUFFIX=-$LATEST_DATE \
                   TRITON_BUILD_WITH_CLANG_LLD=1"
 
-          if [[ matrix.config.arch == 'x64' ]]; then
-            export CIBW_MANYLINUX_X86_64_IMAGE="quay.io/pypa/manylinux_2_28_x86_64:latest"
-            export CIBW_BUILD="cp3{9,10,11,12,13,13t}-manylinux_x86_64"
-          else
-            export CIBW_MANYLINUX_AARCH_IMAGE="quay.io/pypa/manylinux_2_28_aarch64:latest"
-            export CIBW_BUILD="cp3{9,10,11,12,13,13t}-manylinux_aarch64"
-            export CIBW_ARCHS_LINUX="aarch64"
-          fi
           # many_linux_2_28 image comes with GCC 12.2.1, but not clang.
           # With this install, it gets clang 16.0.6.
           export CIBW_BEFORE_ALL="dnf install clang lld -y"
+
+          if [[ ${{ matrix.config.arch }} == 'x86_64' ]]; then
+            export CIBW_MANYLINUX_X86_64_IMAGE="quay.io/pypa/manylinux_2_28_${{ matrix.config.arch }}:latest"
+          else
+            export CIBW_MANYLINUX_AARCH64_IMAGE="quay.io/pypa/manylinux_2_28_${{ matrix.config.arch }}:latest"
+          fi
+
+          export CIBW_BUILD="cp3{9,10,11,12,13,13t}-manylinux_${{ matrix.config.arch }}"
           export CIBW_SKIP="cp{35,36,37,38}-*"
           export CIBW_FREE_THREADED_SUPPORT=1
           python3 -m cibuildwheel python --output-dir wheelhouse
