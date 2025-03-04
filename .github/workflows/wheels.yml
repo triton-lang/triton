@@ -61,6 +61,7 @@ jobs:
       - name: Build wheels
         if: ${{ steps.check-version.outputs.new_commit == 'true' }}
         run: |
+          python3 -m  pip install cibuildwheel --upgrade --user
           export LATEST_DATE=$(TZ=UTC0 git show --quiet --date='format-local:%Y%m%d%H%M%S' --format="%cd")
           # Pass MAX_JOBS=4 because, at time of writing, the VM "only" has 32GB
           # of RAM and OOMs while building if we give it the default number of
