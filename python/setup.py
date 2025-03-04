@@ -176,12 +176,14 @@ def get_json_package_info():
     url = "https://github.com/nlohmann/json/releases/download/v3.11.3/include.zip"
     return Package("json", "", url, "JSON_INCLUDE_DIR", "", "JSON_SYSPATH")
 
+
 def is_linux_os(id):
     if os.path.exists("/etc/os-release"):
         with open("/etc/os-release", "r") as f:
             os_release_content = f.read()
             return f'ID="{id}"' in os_release_content
     return False
+
 
 # llvm
 def get_llvm_package_info():
@@ -196,7 +198,7 @@ def get_llvm_package_info():
         if arch == 'arm64' and is_linux_os('almalinux'):
             system_suffix = 'almalinux-arm64'
         elif arch == 'arm64':
-            system_suffix = 'ubuntu-arm64'     
+            system_suffix = 'ubuntu-arm64'
         elif arch == 'x64':
             vglibc = tuple(map(int, platform.libc_ver()[1].split('.')))
             vglibc = vglibc[0] * 100 + vglibc[1]
