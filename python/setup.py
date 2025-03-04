@@ -189,6 +189,8 @@ def get_llvm_package_info():
     elif system == "Linux":
         if arch == 'arm64':
             system_suffix = 'ubuntu-arm64'
+        elif arch == 'aarch64':
+            system_suffix = 'almalinux-arm64'
         elif arch == 'x64':
             vglibc = tuple(map(int, platform.libc_ver()[1].split('.')))
             vglibc = vglibc[0] * 100 + vglibc[1]
