@@ -1,6 +1,9 @@
 name: Wheels
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/wheels.yml
   schedule:
     - cron: "0 8 * * *"
 
@@ -10,8 +13,16 @@ jobs:
 
   Build-Wheels:
     timeout-minutes: 60
+    runs-on: ${{ matrix.config.runs_on }}
 
-    runs-on: [self-hosted, CPU]
+    strategy:
+      fail-fast: true
+      matrix:
+        config:
+        - {runs_on: ['self-hosted', 'CPU'], arch: 'x64'}
+        - {runs_on: 'ubuntu-22.04-arm', arch: 'arm64'}
+
+
     permissions:
       id-token: write
       contents: read
@@ -47,7 +58,7 @@ jobs:
           echo "[build_ext]" >> python/setup.cfg
           echo "base-dir=/project" >> python/setup.cfg
 
-      - name: Build wheels
+      - name: Build wheels x64
         if: ${{ steps.check-version.outputs.new_commit == 'true' }}
         run: |
           # Make sure cibuildwheel is updated to latest, this will enable latest python builds
@@ -57,18 +68,22 @@ jobs:
           # of RAM and OOMs while building if we give it the default number of
           # workers (2 * NUM_CPUs).
           export CIBW_ENVIRONMENT="MAX_JOBS=4 \
-                  TRITON_WHEEL_NAME=triton-nightly \
                   TRITON_WHEEL_VERSION_SUFFIX=-$LATEST_DATE \
                   TRITON_BUILD_WITH_CLANG_LLD=1"
-          export CIBW_MANYLINUX_X86_64_IMAGE="quay.io/pypa/manylinux_2_28_x86_64:latest"
-          #export CIBW_MANYLINUX_PYPY_X86_64_IMAGE="quay.io/pypa/manylinux_2_28_x86_64:latest"
+
+          if [[ matrix.config.arch == 'x64' ]]; then
+            export CIBW_MANYLINUX_X86_64_IMAGE="quay.io/pypa/manylinux_2_28_x86_64:latest"
+            export CIBW_BUILD="cp3{9,10,11,12,13,13t}-manylinux_x86_64"
+          else
+            export CIBW_MANYLINUX_AARCH_IMAGE="quay.io/pypa/manylinux_2_28_aarch64:latest"
+            export CIBW_BUILD="cp3{9,10,11,12,13,13t}-manylinux_aarch64"
+            export CIBW_ARCHS_LINUX="aarch64"
+          fi
           # many_linux_2_28 image comes with GCC 12.2.1, but not clang.
           # With this install, it gets clang 16.0.6.
-          export CIBW_BEFORE_ALL="dnf install clang lld -y";
+          export CIBW_BEFORE_ALL="dnf install clang lld -y"
           export CIBW_SKIP="cp{35,36,37,38}-*"
-          export CIBW_BUILD="cp3{9,10,11,12,13,13t}-manylinux_x86_64"
           export CIBW_FREE_THREADED_SUPPORT=1
-
           python3 -m cibuildwheel python --output-dir wheelhouse
 
       - name: Install Azure CLI
