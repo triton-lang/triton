@@ -273,40 +273,9 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
 
         // ---- begin MFMA ----
         if (auto mfmaEnc = mlir::dyn_cast<AMDMfmaEncodingAttr>(dotOpEnc.getParent())) {
-          int kDimNum = dotOpEnc.getOpIdx() == 0 ? 1 : 0;
-          if (needTrans)
-            kDimNum = 1 - kDimNum;
-          bool isKDimInner = (order[0] == kDimNum);
-
-          // GFX950 supports LDS transpose load instructions, so we need
-          // swizzling even when K dimension is not innermost.
-          const int versionMajor = mfmaEnc.getVersionMajor();
-          bool isGFX950 = versionMajor == 4;
-          bool swizzleNonKDimInner = isGFX950 && (typeWidthInBit == 8 || typeWidthInBit == 16);
-          if (isKDimInner || swizzleNonKDimInner) {
-            const int numBanks = isGFX950 ? 64 : 32;
-            const int bankBitWidth = 32;
-            const int SIMDWidth = 16;
-
-            // number of inner dimension rows per one pattern repeat
-            int innerDimLength = shape[order[0]];
-            int elemsPerOneBanksRow = (numBanks * bankBitWidth) / typeWidthInBit;
-
-            int perPhase = std::max(1, elemsPerOneBanksRow / innerDimLength);
-            // vecSize is set to kWidth of the dotop layout
-            int vecSize = dotOpEnc.getKWidth();
-            int maxPhase = std::max(std::min(SIMDWidth / perPhase, innerDimLength / vecSize), 1);
-
-            // TODO (zhanglx): figure out better parameters for mfma4
-            if (mfmaEnc.getMDim() == 4)
-              maxPhase = 4;
-
-            return get(context, vecSize, perPhase, maxPhase, order, CTALayout);
-          } else {
-            // Do not swizzle in case k dimension is not innermost.
-            // In this case accesses will go in different banks even without swizzling.
-            return get(context, 1, 1, 1, order, CTALayout);
-          }
+          return mfmaEnc.composeSharedLayoutForOperand(
+              CTALayout, dotOpEnc.getOpIdx(), shape, order, dotOpEnc.getKWidth(),
+              typeWidthInBit, needTrans);
         }
 
         // ---- begin WMMA ----
@@ -975,6 +944,13 @@ V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape, int kWidth, int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
     SmallVector<unsigned> getThreadsPerWarpForOperand(int opIdx) const;
+
+    // Returns a swizzled shared layout matching this MFMA layout for the
+    // dot operand at the given |operandIdx| with |operandShape|.
+    SwizzledSharedEncodingAttr composeSharedLayoutForOperand(
+        CTALayoutAttr ctaLayout, int operandIdx, ArrayRef<int64_t> operandShape,
+        ArrayRef<unsigned> sharedOrder, unsigned vectorSize,
+        unsigned elemBitWidth, bool needTrans) const;
   }];
 
   let genVerifyDecl = 1;
