@@ -620,6 +620,9 @@ class JITFunction(KernelInterface[T]):
                 return None
             # compile the kernel
             src = self.ASTSource(self, signature, constants, configs[0])
+            # some AMD devices have warp size 64 so num_warps must <=16 for <=1024 threads/block
+            if driver.active.warp_size == 64:
+                options.__dict__.update({'num_warps': 16})
             kernel = self.compile(
                 src,
                 target=target,

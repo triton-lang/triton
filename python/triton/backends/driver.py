@@ -42,6 +42,7 @@ class GPUDriver(DriverBase):
             self.get_current_stream = lambda idx: torch.cuda.current_stream(idx).cuda_stream
         self.get_current_device = torch.cuda.current_device
         self.set_current_device = torch.cuda.set_device
+	self.warp_size = getattr(torch.cuda.get_device_properties(torch.cuda.current_device()), "warp_size", 32)
 
     # TODO: remove once TMA is cleaned up
     def assemble_tensormap_to_arg(self, tensormaps_info, args):
