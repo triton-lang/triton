@@ -230,7 +230,6 @@ def TT_LoadOp : TT_Op<"load", [
   AttrSizedOperandSegments,
   DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
   DeclareOpInterfaceMethods<InferTypeOpInterface>,
-  ConditionallySpeculatable,
   TypesMatchWith<"result matches ptr type", "ptr", "result", "getPointeeType($_self)">,
   TypesMatchWith<"mask type matches ptr type", "ptr", "mask", "getI1SameShape(getPointeeType($_self))",
                  "($_op.getOperands().size() <= 1) || std::equal_to<>()">,
@@ -295,15 +294,6 @@ def TT_LoadOp : TT_Op<"load", [
         `evictionPolicy` `=` $evict
       )
       attr-dict `:` type($ptr)
-    }];
-
-    let extraClassDeclaration = [{
-      // Interface method for ConditionallySpeculatable.
-      Speculation::Speculatability getSpeculatability() {
-        if (!getIsVolatile())
-          return Speculation::Speculatable;
-        return Speculation::NotSpeculatable;
-      }
     }];
 
     let hasCanonicalizer = 1;

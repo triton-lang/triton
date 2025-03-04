@@ -141,105 +141,28 @@ tt.func @cannot_hoist_with_store_in_loop(%arg0: tensor<1024x!tt.ptr<f32>>, %arg1
 
 // -----
 
-tt.func @hoist_load_without_mask_from_scf_while(%ptr: tensor<1024x!tt.ptr<f32>>, %cond: i1, %arg1: tensor<1024xi32>, %arg2: tensor<1024xi32>) {
+tt.func @hoist_cond_no_hoist_load_from_scf_while(%ptr: tensor<1024x!tt.ptr<f32>>, %arg1: i32, %arg2 : i32) {
   %cst = arith.constant dense<0.000000e+00> : tensor<1024xf32>
-  // CHECK-LABEL: hoist_load_without_mask_from_scf_while
-  // CHECK: %[[SPLAT:.*]] = tt.splat %[[COND:.*]]
-  // CHECK: %[[LOAD:.*]] = tt.load %[[_:.*]], %[[SPLAT]]
-  // CHECK: arith.addf %[[LOAD]], %[[LOAD]]
-  // CHECK: scf.while
-  // CHECK-NOT: tt.load
-  // CHECK-NOT: arith.addf
-  // CHECK: scf.yield
-  %0 = scf.while (%arg0 = %cst, %arg3 = %cond) : (tensor<1024xf32>, i1) -> (tensor<1024xf32>) {
-    scf.condition(%arg3) %arg0 : tensor<1024xf32>
-  } do {
-  ^bb0(%arg0: tensor<1024xf32>):
-    %1 = tt.load %ptr : tensor<1024x!tt.ptr<f32>>
-    %2 = arith.addf %1, %1 : tensor<1024xf32>
-    scf.yield %2, %cond : tensor<1024xf32>, i1
-  }
-  tt.store %ptr, %0 : tensor<1024x!tt.ptr<f32>>
-  tt.return
-}
-
-// -----
-
-tt.func @hoist_from_scf_while(%ptr: tensor<1024x!tt.ptr<f32>>, %cond: i1, %arg1: tensor<1024xi32>, %arg2: tensor<1024xi32>) {
-  %cst = arith.constant dense<0.000000e+00> : tensor<1024xf32>
-  // CHECK-LABEL: hoist_from_scf_while
-  // CHECK: %[[MASK:.*]] = arith.cmpi
-  // CHECK: %[[SPLAT:.*]] = tt.splat %[[COND:.*]]
-  // CHECK: %[[AND:.*]] = arith.andi %[[SPLAT]], %[[MASK]]
-  // CHECK: %[[LOAD:.*]] = tt.load %[[_:.*]], %[[AND]]
-  // CHECK: arith.addf %[[LOAD]], %[[LOAD]]
-  // CHECK: scf.while
-  // CHECK-NOT: tt.load
-  // CHECK-NOT: arith.addf
-  // CHECK: scf.yield
-  %0 = arith.cmpi slt, %arg1, %arg2 : tensor<1024xi32>
-  %1 = scf.while (%arg0 = %cst, %arg3 = %cond) : (tensor<1024xf32>, i1) -> (tensor<1024xf32>) {
-    scf.condition(%arg3) %arg0 : tensor<1024xf32>
-  } do {
-  ^bb0(%arg0: tensor<1024xf32>):
-    %2 = tt.load %ptr, %0 : tensor<1024x!tt.ptr<f32>>
-    %3 = arith.addf %2, %2 : tensor<1024xf32>
-    scf.yield %3, %cond : tensor<1024xf32>, i1
-  }
-  tt.store %ptr, %1 : tensor<1024x!tt.ptr<f32>>
-  tt.return
-}
-
-// -----
-
-tt.func @hoist_from_scf_while_with_lower_upper_bound(%ptr: tensor<1024x!tt.ptr<f32>>, %arg1: tensor<1024xi32>, %arg2: tensor<1024xi32>, %arg3: i32, %arg4 : i32) {
-  %cst = arith.constant dense<0.000000e+00> : tensor<1024xf32>
-  // CHECK-LABEL: hoist_from_scf_while_with_lower_upper_bound
+  // CHECK-LABEL: hoist_cond_no_hoist_load_from_scf_while
   // CHECK: %[[CST42:.*]] = arith.constant 42
   // CHECK: %[[ADD:.*]] = arith.addi %[[_:.*]], %[[CST42]]
   // CHECK: %[[COND:.*]] = arith.cmpi slt, %[[ADD]], %[[_:.*]]
-  // CHECK: %[[SPLAT:.*]] = tt.splat %[[COND]]
-  // CHECK: %[[AND:.*]] = arith.andi %[[SPLAT]]
-  // CHECK: %[[LOAD:.*]] = tt.load %[[_:.*]], %[[AND]]
-  // CHECK: arith.addf %[[LOAD]], %[[LOAD]]
   // CHECK: scf.while
-  // CHECK-NOT: tt.load
-  // CHECK-NOT: arith.addf
+  // CHECK: do
+  // CHECK: tt.load
+  // CHECK: arith.addf
   // CHECK: scf.yield
-  %0 = arith.cmpi slt, %arg1, %arg2 : tensor<1024xi32>
   %1 = scf.while (%arg0 = %cst) : (tensor<1024xf32>) -> (tensor<1024xf32>) {
     %cst_42 = arith.constant 42 : i32
-    %add_42 = arith.addi %arg3, %cst_42 : i32
-    %2 = arith.cmpi slt, %add_42, %arg4 : i32
+    %add_42 = arith.addi %arg1, %cst_42 : i32
+    %2 = arith.cmpi slt, %add_42, %arg2 : i32
     scf.condition(%2) %arg0 : tensor<1024xf32>
   } do {
   ^bb0(%arg0: tensor<1024xf32>):
-    %3 = tt.load %ptr, %0 : tensor<1024x!tt.ptr<f32>>
+    %3 = tt.load %ptr : tensor<1024x!tt.ptr<f32>>
     %4 = arith.addf %3, %3 : tensor<1024xf32>
     scf.yield %4 : tensor<1024xf32>
   }
   tt.store %ptr, %1 : tensor<1024x!tt.ptr<f32>>
-  tt.return
-}
-
-// -----
-
-tt.func @cannot_hoist_from_scf_while_with_store(%ptr: tensor<1024x!tt.ptr<f32>>, %cond: i1, %arg1: tensor<1024xi32>, %arg2: tensor<1024xi32>) {
-  %cst = arith.constant dense<0.000000e+00> : tensor<1024xf32>
-  // CHECK-NOT: tt.load
-  // CHECK: scf.while
-  // CHECK: tt.load
-  // CHECK: arith.addf
-  // CHECK: scf.yield
-  %0 = arith.cmpi slt, %arg1, %arg2 : tensor<1024xi32>
-  %1 = scf.while (%arg0 = %cst, %arg3 = %cond) : (tensor<1024xf32>, i1) -> (tensor<1024xf32>) {
-    scf.condition(%arg3) %arg0 : tensor<1024xf32>
-  } do {
-  ^bb0(%arg0: tensor<1024xf32>):
-    %2 = tt.load %ptr, %0 : tensor<1024x!tt.ptr<f32>>
-    %3 = arith.addf %2, %2 : tensor<1024xf32>
-    tt.store %ptr, %3 : tensor<1024x!tt.ptr<f32>>
-    scf.yield %3, %cond : tensor<1024xf32>, i1
-  }
   tt.return
 }

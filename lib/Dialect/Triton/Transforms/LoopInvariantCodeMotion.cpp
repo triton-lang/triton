@@ -47,10 +47,13 @@ class LoopInvariantCodeMotionPass
             if (!isLoopMemoryEffectFreeOrOnlyRead.contains(loopLike))
               isLoopMemoryEffectFreeOrOnlyRead[loopLike] =
                   isMemoryEffectFreeOrOnlyRead(loopLike);
-            return isSpeculatable(op) &&
-                   isLoopMemoryEffectFreeOrOnlyRead[loopLike] &&
-                   ((!isa<LoadOp>(op) && isMemoryEffectFree(op)) ||
-                    (isa<LoadOp>(op) && isMemoryEffectFreeOrOnlyRead(op)));
+            bool nonLoadShouldMoveOutOfRegion = !isa<LoadOp>(op) &&
+                                                isSpeculatable(op) &&
+                                                isMemoryEffectFree(op);
+            bool loadShouldMoveOutOfRegion =
+                isa<LoadOp>(op) && isMemoryEffectFreeOrOnlyRead(op) &&
+                isLoopMemoryEffectFreeOrOnlyRead[loopLike];
+            return nonLoadShouldMoveOutOfRegion || loadShouldMoveOutOfRegion;
           },
           // moveOutOfRegion
           [&](Operation *op, Region *) {
@@ -66,23 +69,8 @@ class LoopInvariantCodeMotionPass
                     forOp.getUpperBound());
               } else if (auto whileOp =
                              dyn_cast<scf::WhileOp>(loopLike.getOperation())) {
-                IRMapping mapper;
-                Block *beforeBlock = whileOp.getBeforeBody();
-                // Clone before block before the loop for zero-trip-check.
-                for (auto [arg, init] : llvm::zip_equal(
-                         beforeBlock->getArguments(), whileOp.getInits()))
-                  mapper.map(arg, init);
-                for (auto &op : *beforeBlock) {
-                  if (isa<scf::ConditionOp>(op))
-                    break;
-                  // Safe to clone everything as in a single block all defs have
-                  // been cloned and added to mapper in order.
-                  rewriter.insert(op.clone(mapper));
-                }
-                scf::ConditionOp condOp = whileOp.getConditionOp();
-                Value clonedCondition =
-                    mapper.lookupOrDefault(condOp.getCondition());
-                cond = clonedCondition;
+                // TODO: Support Load Op hoisting for while loop.
+                return;
               } else {
                 loopLike->emitError("Unrecognized loop-like op");
                 llvm::report_fatal_error("Fatal LICM error");
