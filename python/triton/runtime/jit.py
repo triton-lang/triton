@@ -520,11 +520,6 @@ class JITFunction(KernelInterface[T]):
         self.compile = compile
         self.ASTSource = ASTSource
         binder = create_function_from_signature(self.signature, self.params, backend)
-        self.constexpr_indices = [i for (i, p) in enumerate(self.params) if p.is_constexpr]
-        self.non_constexpr_indices = [i for (i, p) in enumerate(self.params) if not p.is_constexpr]
-        self.specialised_indices = [
-            i for (i, p) in enumerate(self.params) if (not p.do_not_specialize) and (not p.is_constexpr)
-        ]
         return {}, target, backend, binder
 
     def run(self, *args, grid, warmup, **kwargs):
