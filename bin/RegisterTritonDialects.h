@@ -83,6 +83,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::proton::registerConvertProtonNvidiaGPUToLLVM();
   mlir::triton::proton::registerConvertProtonAMDGPUToLLVM();
   mlir::triton::proton::registerAddProtonKernelArgPass();
+  mlir::triton::proton::registerAllocateProtonGlobalScratchBufferPass();
 
   // TODO: register Triton & TritonGPU passes
   registry.insert<mlir::triton::TritonDialect, mlir::cf::ControlFlowDialect,
