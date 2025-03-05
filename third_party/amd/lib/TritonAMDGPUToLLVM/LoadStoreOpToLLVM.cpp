@@ -316,7 +316,7 @@ struct BufferLoadOpConversion
         typeConverter->convertType(getElementTypeOrSelf(valueTy));
     Type ptrType = getPointerTypeWithShape(ptr, offset);
     unsigned numElems = getTotalElemsPerThread(ptrType);
-    unsigned vec = getVectorSize(ptr, offset, axisAnalysisPass);
+    unsigned vec = getVectorSize(ptr, axisAnalysisPass);
 
     // Get the offset
     SmallVector<Value> offsetElems = unpackLLElements(loc, llOffset, rewriter);
@@ -404,7 +404,7 @@ struct BufferLoadToLocalOpConversion
     //  2. The mask (if present) has "alignment" N, meaning that each group of N
     //     mask bits are the same.  For example if N=2, the mask must be
     //     [x, x, y, y, ...].
-    unsigned vec = getVectorSize(ptr, offset, axisAnalysisPass);
+    unsigned vec = getVectorSize(ptr, axisAnalysisPass);
     SmallVector<Value> maskElems =
         getMaskElemsAndUpdateVeclen(rewriter, loc, llMask, mask, vec);
 
@@ -753,7 +753,7 @@ struct BufferAtomicRMWOpConversion
     Type ptrType = getPointerTypeWithShape(ptr, offset);
 
     unsigned numElems = getTotalElemsPerThread(ptrType);
-    unsigned vec = getVectorSize(ptr, offset, axisAnalysisPass);
+    unsigned vec = getVectorSize(ptr, axisAnalysisPass);
 
     // v4f16 and v4bf16 variants of buffer atomics do not exist.
     // only v2f16 and v2bf16.
@@ -990,7 +990,7 @@ struct BufferStoreOpConversion
     Type ptrType = getPointerTypeWithShape(ptr, offset);
 
     unsigned numElems = getTotalElemsPerThread(ptrType);
-    unsigned vec = getVectorSize(ptr, offset, axisAnalysisPass);
+    unsigned vec = getVectorSize(ptr, axisAnalysisPass);
 
     // Get the offsets and value
     SmallVector<Value> offsetElems = unpackLLElements(loc, llOffset, rewriter);

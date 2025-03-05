@@ -531,47 +531,12 @@ unsigned getContiguity(Value ptr, ModuleAxisInfoAnalysis &axisAnalysisPass) {
   return axisAnalysisPass.getPtrContiguity(ptr);
 }
 
-unsigned getContiguity(Value ptr, Value offset,
-                       ModuleAxisInfoAnalysis &axisAnalysisPass) {
-  // Get contiguity from the offset
-  Type type = getPointerTypeWithShape(ptr, offset);
-  RankedTensorType tensorTy = cast<RankedTensorType>(type);
-  auto layout = tensorTy.getEncoding();
-  auto linearLayout = triton::gpu::toLinearLayout(tensorTy.getShape(), layout);
-  auto llAttr =
-      triton::gpu::LinearEncodingAttr::get(tensorTy.getContext(), linearLayout);
-  auto order = llAttr.getOrder();
-  auto contigPerThread = llAttr.getContigPerThread();
-  assert(order[0] < contigPerThread.size() &&
-         "Unexpected contigPerThread size");
-  unsigned contiguity = contigPerThread[order[0]];
-
-  // Get alignment from the pointer. Since this is a scalar pointer
-  // we should not take the pointer contiguity to consider alignment
-  auto *axisInfo = axisAnalysisPass.getAxisInfo(ptr);
-  auto maxMultipleBytes = axisInfo->getDivisibility(0);
-  auto elemNumBits = triton::getPointeeBitWidth(tensorTy);
-  auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
-  auto align = std::max<int64_t>(maxMultipleBytes / elemNumBytes, 1);
-
-  // Final contiguity is a min of the offset contiguity and pointer alignment
-  contiguity = std::min<int64_t>(align, contiguity);
-  return contiguity;
-}
-
 unsigned getVectorSize(Value ptr, ModuleAxisInfoAnalysis &axisAnalysisPass) {
   auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
   if (!tensorTy)
     return 1;
   auto contiguity = getContiguity(ptr, axisAnalysisPass);
   auto pointeeBitWidth = triton::getPointeeBitWidth(tensorTy);
-  return std::min<unsigned>(128 / pointeeBitWidth, contiguity);
-}
-
-unsigned getVectorSize(Value ptr, Value offset,
-                       ModuleAxisInfoAnalysis &axisAnalysisPass) {
-  auto contiguity = getContiguity(ptr, offset, axisAnalysisPass);
-  auto pointeeBitWidth = triton::getPointeeBitWidth(ptr.getType());
   return std::min<unsigned>(128 / pointeeBitWidth, contiguity);
 }
 
