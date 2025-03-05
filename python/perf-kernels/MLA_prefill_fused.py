@@ -19,15 +19,17 @@ It supports page size = 1 and prefill with KV cache (i.e. extend).
 import torch
 import triton
 import triton.language as tl
-
-from sglang.srt.layers.attention.triton_ops.prefill_attention import (
-    context_attention_fwd,
-)
-from sglang.srt.utils import is_hip
+from utils.rotary_embedding import DeepseekScalingRotaryEmbedding
+from utils.sglang_ref import extend_attention_fwd as extend_attention_fwd_ref
+import argparse
+import sys
 
 is_cuda_available = torch.cuda.is_available()
 if is_cuda_available:
     CUDA_CAPABILITY = torch.cuda.get_device_capability()
+
+def is_hip():
+    return triton.runtime.driver.active.get_current_target().backend == "hip"
 
 is_hip_ = is_hip()
 
@@ -396,3 +398,358 @@ def extend_attention_fwd(
         num_stages=num_stages,
         **extra_kargs,
     )
+
+
+"""
+forward_normal
+q_extend.shape torch.Size([2048, 16, 192])
+k_extend.shape torch.Size([2048, 16, 192])
+v_extend.shape torch.Size([2048, 16, 128])
+
+k_buffer.shape torch.Size([1044998, 1, 576])
+v_buffer.shape torch.Size([1044998, 1, 512])
+
+qo_indptr: tensor([   0, 2048], device='cuda:5', dtype=torch.int32)
+kv_indptr: tensor([0, 0], device='cuda:1', dtype=torch.int32)
+"""
+"""
+our forward_normal 
+q_extend.shape: torch.Size([2048, 16, 192])
+k_extend.shape: torch.Size([2048, 16, 192])
+v_extend.shape: torch.Size([2048, 16, 128])
+k_buffer.shape: torch.Size([0, 1, 576])
+v_buffer.shape: torch.Size([0, 1, 576])
+qo_indptr: tensor([   0, 2048], device='cuda:0')
+kv_indptr: tensor([0, 0], device='cuda:0')
+MLA-decode:
+"""
+"""
+forward_absorb
+q_extend.shape torch.Size([2048, 1, 576])
+k_extend.shape torch.Size([2048, 1, 576])
+v_extend.shape torch.Size([2048, 1, 512])
+
+k_buffer.shape torch.Size([1044998, 1, 576])
+v_buffer.shape torch.Size([1044998, 1, 512])
+
+qo_indptr: tensor([   0, 2048], device='cuda:5', dtype=torch.int32)
+kv_indptr: tensor([0, 2048], device='cuda:1', dtype=torch.int32)
+"""
+def input_helper(B, H, S_prefix, S_extend, kv_lora_rank, qk_nope_head_dim, v_head_dim, qk_rope_head_dim, dtype, device):
+    q = torch.randn(B * S_extend, H, qk_nope_head_dim + qk_rope_head_dim, dtype=dtype, device=device)
+    kv_cache = torch.randn(B * S_extend, 1, kv_lora_rank + qk_rope_head_dim, dtype=dtype, device=device)
+
+    k_buffer = torch.randn(B * S_prefix, 1, kv_lora_rank + qk_rope_head_dim)
+    v_buffer = torch.randn(B * S_prefix, 1, kv_lora_rank)
+
+    # interlancing [batch_start_off, batch_seq_len, batch_start_off, batch_seq_len, ...,]
+    qo_indptr = torch.arange(B + 1, device=device) * S_extend
+    kv_indptr = torch.arange(B + 1, device=device) * S_prefix # 0, prefix_length, prefix_length*2
+    kv_indices = torch.arange(B * (S_prefix), device=device)
+
+    # o_extend = torch.empty(B * S_extend, H, kv_lora_rank, dtype=dtype, device=device)
+    w_kc = torch.randn(H, kv_lora_rank, qk_nope_head_dim, dtype=dtype, device=device)
+    w_vc = torch.randn(H, kv_lora_rank, v_head_dim, dtype=dtype, device=device)
+
+    rotary_emb = DeepseekScalingRotaryEmbedding(
+        qk_rope_head_dim,
+        rotary_dim=qk_rope_head_dim,
+        max_position_embeddings=16324,
+        base=10,
+        is_neox_style=True,
+        scaling_factor=1.0,
+        dtype=q.dtype,
+        device=device,
+    )
+
+    positions = torch.tensor([S_extend], device=device).unsqueeze(0).repeat(B, 1)  # k positions and q position as last
+
+    return q, kv_cache, k_buffer, v_buffer, qo_indptr, kv_indptr, kv_indices, w_kc, w_vc, rotary_emb, positions
+
+
+def kv_b_proj(kv_a, w_kc, w_vc):
+    kv_lora_rank = kv_a.shape[-1]
+    qk_nope_head_dim = w_kc.shape[-1]
+    v_head_dim = w_vc.shape[-1]
+    num_heads = w_kc.shape[0]
+    w = torch.cat((w_kc, w_vc), dim=-1).transpose(0, 1).reshape(kv_lora_rank, num_heads * (qk_nope_head_dim + v_head_dim))
+    return torch.matmul(kv_a, w).type_as(kv_a)
+
+
+"""
+kv_a.shape: torch.Size([2048, 512])
+kv.shape: torch.Size([2048, 4096])
+"""
+def forward_normal(
+        q,
+        latent_cache,
+        k_buffer,
+        v_buffer,
+        o,
+        qo_indptr,
+        kv_indptr,
+        kv_indices,
+        w_kc,
+        w_vc,
+        H,
+        kv_lora_rank,
+        qk_nope_head_dim,
+        v_head_dim,
+        qk_rope_head_dim,
+        rotary_emb,
+        positions
+    ):
+    _, q_pe = q.split([qk_nope_head_dim, qk_rope_head_dim], dim=-1)
+
+    kv_a, _ = latent_cache.split([kv_lora_rank, qk_rope_head_dim], dim=-1)
+
+    kv = kv_b_proj(kv_a, w_kc, w_vc)
+    kv = kv.view(-1, H, qk_nope_head_dim + v_head_dim)
+    k_nope = kv[..., : qk_nope_head_dim]
+    v = kv[..., qk_nope_head_dim :]
+    k_pe = latent_cache[:, :, kv_lora_rank :]
+    q_pe, k_pe = rotary_emb(positions, q_pe, k_pe)
+    q[..., qk_nope_head_dim :] = q_pe
+    k = torch.empty_like(q)
+    k[..., : qk_nope_head_dim] = k_nope
+    k[..., qk_nope_head_dim :] = k_pe
+
+    latent_cache[:, :, : kv_lora_rank] = kv_a
+    latent_cache[:, :, kv_lora_rank :] = k_pe
+
+    extend_attention_fwd_ref(
+        q,
+        k,
+        v,
+        o,
+        k_buffer,
+        v_buffer,
+        qo_indptr,
+        kv_indptr,
+        kv_indices,
+        custom_mask=None,
+        mask_indptr=None,
+        max_len_extend=qo_indptr[1]
+    )
+    attn_output = o
+    attn_output = attn_output.reshape(-1, H * v_head_dim)
+    return attn_output
+
+def forward_absorb(
+    q,
+    latent_cache,
+    k_buffer,
+    v_buffer,
+    o,
+    qo_indptr,
+    kv_indptr,
+    kv_indices,
+    w_kc,
+    w_vc,
+    H,
+    kv_lora_rank,
+    qk_nope_head_dim,
+    v_head_dim,
+    qk_rope_head_dim,
+    rotary_emb,
+    positions
+):
+    q_input = q.new_empty(
+        q.shape[0], H, kv_lora_rank + qk_rope_head_dim
+    )
+    q_nope, q_pe = q.split([qk_nope_head_dim, qk_rope_head_dim], dim=-1)
+
+    if w_kc.dtype == torch.float8_e4m3fnuz:
+        # TODO(kernel): add bmm_fp8 for torch.float8_e4m3fnuz
+        pass
+        # q_nope_out = torch.bmm(
+        #     q_nope.to(torch.bfloat16).transpose(0, 1),
+        #     w_kc.to(torch.bfloat16) * w_scale,
+        # )
+    elif w_kc.dtype == torch.float8_e4m3fn:
+        pass
+        # q_nope_val, q_nope_scale = input_to_float8(
+        #     q_nope.transpose(0, 1), torch.float8_e4m3fn
+        # )
+        # q_nope_out = bmm_fp8(
+        #     q_nope_val, w_kc, q_nope_scale, w_scale, torch.bfloat16
+        # )
+    else:
+        q_nope_out = torch.bmm(q_nope.transpose(0, 1), w_kc.transpose(1, 2))
+    q_input[..., : kv_lora_rank] = q_nope_out.transpose(0, 1)
+
+    v_input = latent_cache[..., : kv_lora_rank]
+    # v_input = kv_a_layernorm(v_input.contiguous()).unsqueeze(1)
+    k_input = latent_cache
+    k_input[..., : kv_lora_rank] = v_input
+    k_pe = k_input[..., kv_lora_rank :]
+
+    q_pe, k_pe = rotary_emb(positions, q_pe, k_pe)
+    q_input[..., kv_lora_rank :] = q_pe
+    k_input[..., kv_lora_rank :] = k_pe
+
+    extend_attention_fwd_ref(
+        q_input,
+        k_input,
+        v_input,
+        o,
+        k_buffer,
+        v_buffer,
+        qo_indptr,
+        kv_indptr,
+        kv_indices,
+        custom_mask=None,
+        mask_indptr=None,
+        max_len_extend=qo_indptr[1]
+    )
+    attn_output = o
+    attn_output = attn_output.view(-1, H, kv_lora_rank)
+
+    if w_vc.dtype == torch.float8_e4m3fnuz:
+        pass
+        # TODO(kernel): add bmm_fp8 for torch.float8_e4m3fnuz
+        # attn_bmm_output = torch.bmm(
+        #     attn_output.to(torch.bfloat16).transpose(0, 1),
+        #     w_vc.to(torch.bfloat16) * self.w_scale,
+        # )
+    elif w_vc.dtype == torch.float8_e4m3fn:
+        pass
+        # attn_output_val, attn_output_scale = input_to_float8(
+        #     attn_output.transpose(0, 1), torch.float8_e4m3fn
+        # )
+        # attn_bmm_output = bmm_fp8(
+        #     attn_output_val,
+        #     w_vc,
+        #     attn_output_scale,
+        #     w_scale,
+        #     torch.bfloat16,
+        # )
+    else:
+        attn_bmm_output = torch.bmm(attn_output.transpose(0, 1), w_vc)
+    attn_output = attn_bmm_output.transpose(0, 1).flatten(1, 2)
+
+    return attn_output
+
+
+def forward(q, latent_cache, k_buffer, v_buffer, qo_indptr, kv_indptr, kv_indices, w_kc, w_vc, H, kv_lora_rank, qk_nope_head_dim, v_head_dim, qk_rope_head_dim, rotary_emb, positions, absorb=False):
+    o = torch.empty(qo_indptr[-1], H, v_head_dim, dtype=q.dtype, device=q.device)
+    if absorb:
+        return forward_absorb(
+            q,
+            latent_cache,
+            k_buffer,
+            v_buffer,
+            o,
+            qo_indptr,
+            kv_indptr,
+            kv_indices,
+            w_kc,
+            w_vc,
+            H,
+            kv_lora_rank,
+            qk_nope_head_dim,
+            v_head_dim,
+            qk_rope_head_dim,
+            rotary_emb,
+            positions
+        )
+    else:
+        return forward_normal(
+            q,
+            latent_cache,
+            k_buffer,
+            v_buffer,
+            o,
+            qo_indptr,
+            kv_indptr,
+            kv_indices,
+            w_kc,
+            w_vc,
+            H,
+            kv_lora_rank,
+            qk_nope_head_dim,
+            v_head_dim,
+            qk_rope_head_dim,
+            rotary_emb,
+            positions
+        )
+
+# forward_batch.extend_prefix_lens.sum() == 0 => forward_normal
+def benchmark(args):
+    dtype = arg_to_torch_dtype[args.dtype]
+    absorb = args.absorb
+    configs = []
+
+    if not absorb:
+        # prefill
+        x_vals_list = [(args.B, 16, 0, 2048, 512, 128, 128, 64)]
+    else:
+        # decode
+        x_vals_list = [(args.B, 16, 0, 5, 512, 128, 128, 64)]
+    x_names = ["B", "H", "S_prefix", "S_extend", "kv_lora_rank", "qk_nope_head_dim", "v_head_dim", "qk_rope_head_dim"]
+    line_vals = ["ref"]
+    plot_name = "MLA-decode"
+
+    configs.append(
+        triton.testing.Benchmark(x_names=x_names, x_vals=x_vals_list, line_arg='provider', line_vals=line_vals,
+                                 line_names=line_vals, styles=[('red', '-'), ('green', '-')], ylabel='ms',
+                                 plot_name=plot_name, args={'sm_scale': 1.0, 'logit_cap': 0.0, 'device': args.device}))
+
+    @triton.testing.perf_report(configs)
+    def bench_MLA(B, H, S_prefix, S_extend, kv_lora_rank, qk_nope_head_dim, v_head_dim, qk_rope_head_dim, sm_scale, logit_cap, device,
+                  provider):
+        warmup = 25
+        rep = 100
+
+        q, kv_cache, k_buffer, v_buffer, qo_indptr, kv_indptr, kv_indices, w_kc, w_vc, rotary_emb, positions = input_helper(
+            B,
+            H,
+            S_prefix,
+            S_extend,
+            kv_lora_rank,
+            qk_nope_head_dim,
+            v_head_dim,
+            qk_rope_head_dim,
+            dtype,
+            device)
+
+
+        if "ref" in provider:
+            fn = lambda: {
+                forward(q, kv_cache, k_buffer, v_buffer, qo_indptr, kv_indptr, kv_indices, w_kc, w_vc, H, kv_lora_rank, qk_nope_head_dim, v_head_dim, qk_rope_head_dim, rotary_emb, positions, absorb)
+            }
+
+        ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
+        return ms
+
+    bench_MLA.run(save_path=".", print_data=True, show_plots=False)
+
+
+arg_to_torch_dtype = {'fp16': torch.float16, 'bf16': torch.bfloat16, 'fp32': torch.float32}
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        prog="Benchmark MLA",
+        allow_abbrev=False,
+    )
+
+    parser.add_argument("-dtype", default='bf16', help="data type")
+    parser.add_argument("-device", default='cuda')
+    parser.add_argument("-B", type=int, default=1)
+    parser.add_argument("-absorb", type=bool, default=False)
+    return parser.parse_args()
+
+
+arg_to_torch_dtype = {'fp16': torch.float16, 'bf16': torch.bfloat16, 'fp32': torch.float32}
+
+
+def main():
+    torch.manual_seed(0)
+    args = parse_args()
+    torch.set_default_device(args.device)
+    benchmark(args)
+
+
+if __name__ == '__main__':
+    sys.exit(main())
