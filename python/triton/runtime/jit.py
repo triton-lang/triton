@@ -283,7 +283,6 @@ specialize_impl_cache = []
 def create_specialize_impl(specialize_extra):
 
     from ..language import constexpr
-    from torch import Tensor
 
     def specialize_impl(arg, is_const=False, specialize_value=True, align=True):
 
@@ -303,7 +302,7 @@ def create_specialize_impl(specialize_extra):
             return ("fp32", None)
         elif isinstance(arg, bool):
             return ("i1", None)
-        elif isinstance(arg, Tensor):
+        elif hasattr(arg, "data_ptr"):
             # dtypes are hashable so we can memoize this mapping:
             dsk = (arg.dtype, is_const)
             res = dtype2str.get(dsk, None)
