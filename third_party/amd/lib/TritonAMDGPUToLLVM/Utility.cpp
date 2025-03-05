@@ -540,7 +540,7 @@ unsigned getContiguity(Value ptr, Value offset,
   auto linearLayout = triton::gpu::toLinearLayout(tensorTy.getShape(), layout);
   auto llAttr =
       triton::gpu::LinearEncodingAttr::get(tensorTy.getContext(), linearLayout);
-  auto order = llAttr.getOrder();
+  auto order = triton::gpu::getOrder(tensorTy);
   auto contigPerThread = llAttr.getContigPerThread();
   assert(order[0] < contigPerThread.size() &&
          "Unexpected contigPerThread size");
