@@ -27,21 +27,27 @@ struct AllocateProtonGlobalScratchBuffer
     assert(llvm::range_size(mod.getOps<triton::FuncOp>()) == 1);
     FuncOp func = *mod.getOps<triton::FuncOp>().begin();
 
-    int32_t totalMemorySize = 0; // bytes
-    uint32_t largestAlignment = 1;
+    int32_t cumulativeMemorySize = 0; // bytes
+    std::vector<uint32_t> Alignments;
 
     func.walk([&](proton::gpu::GlobalScratchAllocOp op) {
-      int offset =
-          llvm::alignTo(totalMemorySize, proton::gpu::getBytesPerClockEntry());
+      int offset = llvm::alignTo(cumulativeMemorySize,
+                                 proton::gpu::getBytesPerClockEntry());
       op->setAttr("offset",
                   IntegerAttr::get(IntegerType::get(ctx, 32), offset));
-      totalMemorySize += op.getNbytes();
-      largestAlignment = std::max(largestAlignment, op.getAlignment());
+      cumulativeMemorySize += op.getNbytes();
+      Alignments.push_back(op.getAlignment());
     });
+    assert(!Alignments.empty() &&
+           "no global scratch buffer alignment values found");
+    bool allAlignmentsEqual = std::equal(Alignments.begin() + 1,
+                                         Alignments.end(), Alignments.begin());
+    assert(allAlignmentsEqual &&
+           "all global scratch buffer alignment values must be the same");
     mod->setAttr("proton.global_scratch_memory_size",
-                 builder.getI32IntegerAttr(totalMemorySize));
+                 builder.getI32IntegerAttr(cumulativeMemorySize));
     mod->setAttr("proton.global_scratch_memory_alignment",
-                 builder.getI32IntegerAttr(largestAlignment));
+                 builder.getI32IntegerAttr(Alignments.front()));
   }
 };
 
