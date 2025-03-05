@@ -31,9 +31,10 @@ struct AllocateProtonGlobalScratchBuffer
     uint32_t largestAlignment = 1;
 
     func.walk([&](proton::gpu::GlobalScratchAllocOp op) {
-      // TODO(crobeck): decide how we want to deal with the alignment here
+      int offset =
+          llvm::alignTo(totalMemorySize, proton::gpu::getBytesPerClockEntry());
       op->setAttr("offset",
-                  IntegerAttr::get(IntegerType::get(ctx, 32), totalMemorySize));
+                  IntegerAttr::get(IntegerType::get(ctx, 32), offset));
       totalMemorySize += op.getNbytes();
       largestAlignment = std::max(largestAlignment, op.getAlignment());
     });
