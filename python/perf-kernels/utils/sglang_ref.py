@@ -899,9 +899,16 @@ def extend_attention_fwd(
 
     k_buffer, v_buffer: (prefix + extend) tensors in mem_manager
     """
-    print(f"q_extend.shape: {q_extend.shape}, k_extend.shape: {k_extend.shape}, v_extend.shape: {v_extend.shape}, k_buffer.shape: {k_buffer.shape}, v_buffer.shape: {v_buffer.shape}")
-    print(f"qo_indptr: {qo_indptr}")
-    print(f"kv_indptr: {kv_indptr}")
+    print(
+        f"q_extend.shape: {q_extend.shape}\n"
+        f"k_extend.shape: {k_extend.shape}\n"
+        f"v_extend.shape: {v_extend.shape}\n"
+        f"k_buffer.shape: {k_buffer.shape}\n"
+        f"v_buffer.shape: {v_buffer.shape}\n"
+        f"qo_indptr: {qo_indptr}\n"
+        f"kv_indptr: {kv_indptr}\n"
+        f"kv_indices: {kv_indices}\n"
+    )
     Lq, Lk, Lv = (
         q_extend.shape[-1],
         k_extend.shape[-1],
@@ -922,7 +929,6 @@ def extend_attention_fwd(
         BLOCK_DPE = 0
     BLOCK_DV = triton.next_power_of_2(Lv)
 
-    print(f"is_hip_: {is_hip_}")
     if is_hip_:
         BLOCK_M, BLOCK_N = (64, 64)
         num_warps = 4

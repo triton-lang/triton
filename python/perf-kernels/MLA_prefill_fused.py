@@ -685,7 +685,7 @@ def benchmark(args):
         x_vals_list = [(args.B, 16, 0, 2048, 512, 128, 128, 64)]
     else:
         # decode
-        x_vals_list = [(args.B, 16, 0, 5, 512, 128, 128, 64)]
+        x_vals_list = [(args.B, 16, 1024, 1024, 512, 128, 128, 64)]
     x_names = ["B", "H", "S_prefix", "S_extend", "kv_lora_rank", "qk_nope_head_dim", "v_head_dim", "qk_rope_head_dim"]
     line_vals = ["ref"]
     plot_name = "MLA-decode"
