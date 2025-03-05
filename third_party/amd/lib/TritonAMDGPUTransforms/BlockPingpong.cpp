@@ -9,7 +9,6 @@
 #include "third_party/amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include <iostream>
 
 #define GEN_PASS_CLASSES
 #include "TritonAMDGPUTransforms/Passes.h"
@@ -215,10 +214,6 @@ void Pingponger::determineDotMemoryOps(
   // within the loop.
   for (auto &&localStore : dotLocalStores)
     findClosestPredOps<tt::LoadOp>(localStore.getSrc(), dotGlobalLoads);
-
-  std::cout << "Dot Global Loads: " << dotGlobalLoads.size() << "\n";
-  std::cout << "Dot Local Loads: " << dotLocalLoads.size() << "\n";
-  std::cout << "Dot Local Stores: " << dotLocalStores.size() << "\n";
 }
 
 // Transform a loop into one Dot - Memory (ping - pong) clusters
