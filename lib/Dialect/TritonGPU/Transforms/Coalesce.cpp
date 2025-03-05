@@ -103,9 +103,7 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
         for (auto result : op->getResults()) {
           auto axisInfo = axisInfoAnalysis.getAxisInfo(result);
           auto divisibility = axisInfo->getDivisibility();
-          auto divisibilityIsOne =
-              std::all_of(divisibility.begin(), divisibility.end(),
-                          [](int i) { return i == 1; });
+          auto divisibilityIsOne = product<int64_t>(divisibility) == 1;
           allDivisibilityOne = allDivisibilityOne && divisibilityIsOne;                          
         }
         return allDivisibilityOne;
@@ -114,12 +112,9 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
       
       auto divisibility = axisInfoAnalysis.getAxisInfo(ptr)->getDivisibility();
       // check if divisibility in all dimensions is 1
-      auto divisibilityIsOne =
-          std::all_of(divisibility.begin(), divisibility.end(),
-                      [](int i) { return i == 1; });
+      auto divisibilityIsOne = product<int64_t>(divisibility) == 1;
 
-      auto contiguityIsOne = std::all_of(contiguity.begin(), contiguity.end(),
-                                         [](int i) { return i == 1; });
+      auto contiguityIsOne = product<int64_t>(contiguity) == 1;
 
       if (divisibilityIsOne) {
         mainError.attachNote()
@@ -128,11 +123,7 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
           bool operandWithDivisibilityOne = false;
           for (auto operand : sliceOp->getOperands()) {
             auto axisInfo = axisInfoAnalysis.getAxisInfo(operand);
-            auto divisibility = axisInfo->getDivisibility();
-            auto divisibilityIsOne =
-                std::all_of(divisibility.begin(), divisibility.end(),
-                            [](int i) { return i == 1; });
-            if (divisibilityIsOne) {
+            if (product<int64_t>(axisInfo->getDivisibility()) == 1) {
               operandWithDivisibilityOne = true;
               break;
             }
@@ -141,10 +132,7 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
           if (sliceOp->getNumResults() > 0) {
             auto lhsValue = sliceOp->getResult(0);
             auto axisInfo = axisInfoAnalysis.getAxisInfo(lhsValue);
-            auto divisibility = axisInfo->getDivisibility();
-            resultWithDivisibilityOne =
-                std::all_of(divisibility.begin(), divisibility.end(),
-                            [](int i) { return i == 1; });
+            resultWithDivisibilityOne = product<int64_t>(axisInfo->getDivisibility()) == 1;
           }
           if (!operandWithDivisibilityOne && resultWithDivisibilityOne) {
             // ignore certain ops
