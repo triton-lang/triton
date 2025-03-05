@@ -13,6 +13,10 @@ def AllocateProtonSharedMemory : Pass<"allocate-proton-shared-memory", "mlir::Mo
     let constructor = "mlir::triton::proton::gpu::createAllocateProtonSharedMemoryPass()";
 }
 
+def AllocateProtonGlobalScratchBuffer : Pass<"allocate-proton-global-scratch-buffer", "mlir::ModuleOp"> {
+    let constructor = "mlir::triton::proton::gpu::createAllocateProtonGlobalScratchBufferPass()";
+}
+
 
 def AddProtonKernelArg : Pass<"add-proton-kernel-arg", "mlir::ModuleOp"> {
 
