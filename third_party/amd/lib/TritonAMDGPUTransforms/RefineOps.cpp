@@ -636,6 +636,92 @@ LogicalResult rewriteLocalStoreOp(OpBuilder &rewriter,
   return success();
 }
 
+
+LogicalResult rewriteReduceOp(OpBuilder &rewriter,
+                              triton::ReduceOp op) {
+  llvm::outs() << "\n\nRefineOps::rewriteReduceOp()\n";
+  auto ctx = op->getContext();
+  auto loc = op.getLoc();
+
+  llvm::outs() << op << "\n";
+
+  Value origSrc = op->getOperand(0);
+
+  // TODO(dtanner) how to calculate this
+  int numReps = 2;
+
+  // Slice input tensor along non-dimension.
+  // for numReps
+  // create extract_slice
+
+  // for numReps
+  // create reduce
+
+  // concatOp
+
+  // replace old op with concat op
+
+/*
+  auto dotOp = rewriter.create<tt::DotOp>(
+    loc, refinedTensorTypeD,
+    ValueRange{refinedTensorA, refinedTensorB,
+               refinedDotValues[int32_t(m * numRepN + n)]},
+    dotAttrs);
+*/
+  //auto newReduce = rewriter.create<triton::ReduceOp>(
+  //    op.getLoc(), adaptor.getOperands(), adaptor.getAxis());
+  //addNamedAttrs(newReduce, adaptor.getAttributes());
+
+#if 0
+  auto origMemViewOp =
+      cast<ttg::MemDescSubviewOp>(op->getOperand(1).getDefiningOp());
+  Value origMemView = origMemViewOp->getOperand(0);
+  Value selectValue = origMemViewOp.getOffsets().front();
+
+  auto origSrcType = rankedTType(origSrc);
+  auto blockEncoding = dyn_cast<BlockedEncodingAttr>(origSrcType.getEncoding());
+  if (blockEncoding == nullptr)
+    return failure();
+
+  auto origMemViewType = cast<ttg::MemDescType>(origMemView.getType());
+  auto sharedEncoding = cast<triton::gpu::SwizzledSharedEncodingAttr>(
+      origMemViewType.getEncoding());
+  if (sharedEncoding == nullptr)
+    return failure();
+
+  RefinedBlock refinedBlock(origSrcType.getShape(),
+                            origSrcType.getElementType(), blockEncoding);
+
+  constexpr bool mutableMemory = true;
+  auto sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
+
+  auto subviewType = ttg::MemDescType::get(
+      refinedBlock.refinedShape, refinedBlock.elemType, sharedEncoding,
+      sharedMemorySpace, mutableMemory, origMemViewType.getAllocShape());
+
+  rewriter.setInsertionPointAfter(op);
+  CoordinateAux aux(refinedBlock.numPerDims);
+  for (size_t counter = 0; counter < refinedBlock.numSubTiles; ++counter) {
+    auto coords = aux.map(counter);
+    SmallVector<int64_t> offset(refinedBlock.numDims, 0);
+    for (auto [dim, coord] : llvm::enumerate(coords)) {
+      offset[dim] = coord * refinedBlock.elementsPerWorkGroup[dim];
+    }
+    auto offsetValues = createOffset({selectValue}, offset, rewriter, loc);
+    auto slicedSharedMemView = rewriter.create<ttg::MemDescSubviewOp>(
+        loc, subviewType, origMemView, offsetValues);
+
+    auto slice = rewriter.create<triton::amdgpu::ExtractSliceOp>(
+        loc, Type{refinedBlock.tensorType}, Value{origSrc}, offset);
+
+    rewriter.create<ttg::LocalStoreOp>(loc, slice, slicedSharedMemView);
+  }
+
+  op.erase();
+#endif
+  return success();
+}
+
 struct TritonAMDGPURefineOps
     : public TritonAMDGPURefineOpsBase<TritonAMDGPURefineOps> {
   explicit TritonAMDGPURefineOps(StringRef targetArch) {
@@ -691,6 +777,14 @@ struct TritonAMDGPURefineOps
           }
         }
       });
+
+      block->walk([&](triton::ReduceOp reduceOp) {
+        OpBuilder rewriter(reduceOp->getContext());
+        if (failed(rewriteReduceOp(rewriter, reduceOp))) {
+          LDBG("failed to refine tt.reduce: " << *reduceOp);
+        }
+      });
+
       return WalkResult::advance();
     });
   }
