@@ -156,9 +156,17 @@ void Pingponger::findClosestPredOps(Value v, DenseSet<T> &matchingOps) {
     // current block
     if (auto blockArg = dyn_cast<BlockArgument>(v)) {
       auto operandNumber = blockArg.getArgNumber();
-      if (auto yield =
-              dyn_cast<scf::YieldOp>(blockArg.getOwner()->getTerminator()))
-        impl(yield->getOperand(operandNumber - 1));
+      auto block = blockArg.getOwner();
+      if (auto yield = dyn_cast<scf::YieldOp>(block->getTerminator())) {
+        auto parentOp = block->getParentOp();
+        // Skip the induction variables to find the yield position
+        if (auto forOp = dyn_cast<scf::ForOp>(parentOp)) {
+          if (operandNumber < forOp.getNumInductionVars())
+            return;
+          operandNumber -= forOp.getNumInductionVars();
+        }
+        impl(yield->getOperand(operandNumber));
+      }
     } else {
       auto definingOp = v.getDefiningOp();
       if (!definingOp)
@@ -544,7 +552,7 @@ void Pingponger::getDotPingponged() {
   // The existing code depends on the loads being targeted being safe to move,
   // which will not hold if we do not properly have a GEMM. As a result, we
   // filter the associated load operations to only those that are associated
-  // with the GEMM.
+  // // with the GEMM.
   DenseSet<tt::LoadOp> dotGlobalLoads;
   DenseSet<ttg::LocalLoadOp> dotLocalLoads;
   DenseSet<ttg::LocalStoreOp> dotLocalStores;
