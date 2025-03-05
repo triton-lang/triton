@@ -1491,7 +1491,6 @@ class TritonSemantic(Generic[TensorTy]):
             input_precision = self.builder.options.default_dot_input_precision
 
         input_precision = self._str_to_dot_input_precision(input_precision)
-
         lhs_rank = len(lhs.shape)
         rhs_rank = len(rhs.shape)
         assert lhs_rank == rhs_rank == 2 or lhs_rank == rhs_rank == 3, f"Both inputs must be either 2D or 3D; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
@@ -1541,6 +1540,51 @@ class TritonSemantic(Generic[TensorTy]):
 
         return self.tensor(
             self.builder.create_dot(lhs.handle, rhs.handle, acc_handle, input_precision, max_num_imprecise_acc), ret_ty)
+
+def dot_sparse(lhs: tl.tensor, rhs: tl.tensor, lhs_meta: tl.tensor, acc: tl.tensor, builder: ir.builder) -> tl.tensor:
+    assert lhs.type.is_block() and rhs.type.is_block()
+
+    supported_sparse_dot_dtypes = builder.codegen_fns.get("supported_sparse_dot_dtypes")
+    assert supported_sparse_dot_dtypes is not None, "Sparse dot is unsupported on this platform"
+    assert supported_sparse_dot_dtypes(lhs.dtype), f"Unsupported lhs dtype {lhs.dtype}"
+    assert supported_sparse_dot_dtypes(rhs.dtype), f"Unsupported rhs dtype {rhs.dtype}"
+    assert lhs.dtype == rhs.dtype, f"Both operands must be same dtype. Got {lhs.dtype} and {rhs.dtype}"
+
+    lhs_rank = len(lhs.shape)
+    rhs_rank = len(rhs.shape)
+    assert (lhs_rank == rhs_rank == 2) or (lhs_rank == rhs_rank ==
+                                           3), f"Both inputs must be 2D or 3D; (lhs: {lhs.shape} vs rhs: {rhs.shape})"
+    assert lhs.shape[-1].value * 2 == rhs.shape[
+        -2].value, f"First input shape {lhs.shape} and second input shape {rhs.shape} are not compatible for matmul (lhs: {lhs.shape} vs rhs: {rhs.shape})"
+    assert builder.codegen_fns.get(
+        "min_sparse_dot_size") is not None, "target doesn't provide lower shape bounds for sparse dot."
+    min_dot_size = builder.codegen_fns["min_sparse_dot_size"](lhs.type, rhs.type)
+    assert lhs.shape[-2].value >= min_dot_size[0] and lhs.shape[-1].value >= min_dot_size[2] \
+        and rhs.shape[-1].value >= min_dot_size[1], \
+            f"Input shapes should have M >= {min_dot_size[0]}, N >= {min_dot_size[1]} and K >= {min_dot_size[2]}"
+
+    _0 = builder.get_fp32(0)
+    ret_scalar_ty = tl.float32
+
+    M = lhs.type.shape[-2]
+    N = rhs.type.shape[-1]
+    B = lhs.type.shape[0] if lhs_rank == 3 else None
+    ret_ty = tl.block_type(ret_scalar_ty, [B, M, N] if B else [M, N])
+
+    if acc is None:
+        acc_handle = builder.create_splat(_0, [B, M, N] if B else [M, N])
+    else:
+        acc_handle = acc.handle
+        assert acc.type == ret_ty
+        if builder.codegen_fns.get("sparse_dot_acc_emulation") is not None:
+            # We only do this for AMD, where 2:4 sparse ops operate implicitly on the accumulator (i.e., they are all "accumulate" ops).
+            # See: Section 7.4 in the MI300 ISA docs
+            temp_acc_handle = builder.create_splat(_0, [M, N])
+            sparse_dot_result = tl.tensor(
+                builder.create_dot_sparse(lhs.handle, rhs.handle, temp_acc_handle, lhs_meta.handle), ret_ty)
+            return tl.tensor(builder.create_fadd(sparse_dot_result.handle, acc_handle), ret_ty)
+
+    return tl.tensor(builder.create_dot_sparse(lhs.handle, rhs.handle, acc_handle, lhs_meta.handle), ret_ty)
 
     def _str_to_fp_type(self, float_format: str):
         ty_enum = getattr(ir.ScaleDotElemTypeTY, float_format.upper(), None)

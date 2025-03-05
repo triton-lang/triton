@@ -138,7 +138,7 @@ warpsPerTileWMMA(Operation *dotOp, ArrayRef<int64_t> shape, int numWarps) {
 FailureOr<MfmaIntrinsic>
 chooseMfmaInstruction(int mfmaVersion, RankedTensorType cType, Type aElemType,
                       Type bElemType, int inputKSize, int enforcedNonKDim,
-                      bool withScale, bool allowXF32) {
+                      bool withScale, bool isSparse, bool allowXF32) {
   // number of matrix elements along k dim per one MFMA instruction
   unsigned kDim = 0;
 
@@ -167,7 +167,7 @@ chooseMfmaInstruction(int mfmaVersion, RankedTensorType cType, Type aElemType,
 
   FailureOr<MfmaIntrinsic> maybeMfmaIntrinsic =
       MfmaIntrinsic::selectFor(mfmaVersion, mDim, nDim, inputKSize, aElemType,
-                               bElemType, withScale, allowXF32);
+                               bElemType, withScale, isSparse, allowXF32);
   if (failed(maybeMfmaIntrinsic))
     llvm::report_fatal_error("No match found in MFMA database\n");
 
@@ -190,7 +190,7 @@ FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotOp dot, int mfmaVersion,
   return chooseMfmaInstruction(
       mfmaVersion, dot.getC().getType(), aType.getElementType(),
       dot.getB().getType().getElementType(), aType.getShape().back(), nonKDim,
-      withScale, allowXF32);
+      /*withScale=*/false, /*isSparse=*/false, allowXF32);
 }
 
 FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotScaledOp dot,
@@ -206,7 +206,20 @@ FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotScaledOp dot,
   Type bElemType = scaleDotElemTypeToMLIRType(ctx, dot.getBElemType());
   return chooseMfmaInstruction(mfmaVersion, dot.getC().getType(), aElemType,
                                bElemType, inputKDim, nonKDim,
-                               /*withScale=*/true, /*allowXF32=*/false);
+                               /*withScale=*/true, /*isSparse=*/false,
+                               /*allowXF32=*/false);
+}
+
+FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotSparseOp dot,
+                                               int mfmaVersion, int nonKDim) {
+  RankedTensorType aType = dot.getA().getType();
+  // A is 2:4 sparse, so we multiply the kDim by 2 for MFMA instruction
+  // selection
+  return chooseMfmaInstruction(
+      mfmaVersion, dot.getC().getType(), aType.getElementType(),
+      dot.getB().getType().getElementType(), aType.getShape().back() * 2,
+      nonKDim,
+      /*withScale=*/false, /*isSparse=*/true, /*allowXF32=*/false);
 }
 
 FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotScaledOp dot,
@@ -215,10 +228,10 @@ FailureOr<MfmaIntrinsic> chooseMfmaInstruction(tt::DotScaledOp dot,
   // For scaled dot, we handle it with fp16 or bf16 emulation for now.
   Builder b(dot.getContext());
   Type elemType = useFp16 ? b.getF16Type() : b.getBF16Type();
-  return chooseMfmaInstruction(mfmaVersion, dot.getC().getType(), elemType,
-                               elemType, dot.getA().getType().getShape().back(),
-                               nonKDim,
-                               /*withScale=*/false, /*allowXF32=*/false);
+  return chooseMfmaInstruction(
+      mfmaVersion, dot.getC().getType(), elemType, elemType,
+      dot.getA().getType().getShape().back(), nonKDim,
+      /*withScale=*/false, /*isSparse=*/false, /*allowXF32=*/false);
 }
 
 using OperandTypesVector = SmallVector<Type, 4>;
@@ -911,6 +924,141 @@ public:
   }
 };
 
+class SparseBlockedToMFMA : public OpRewritePattern<tt::DotSparseOp> {
+  int mfmaVersion;
+  int nonKDim;
+  int kPack;
+
+public:
+  SparseBlockedToMFMA(MLIRContext *context, int mfmaVersion, int nonKDim,
+                      int kPack, PatternBenefit benefit = 1)
+      : OpRewritePattern(context, benefit), mfmaVersion(mfmaVersion),
+        nonKDim(nonKDim), kPack(kPack) {}
+
+  LogicalResult matchAndRewrite(tt::DotSparseOp dotOp,
+                                PatternRewriter &rewriter) const override {
+    RankedTensorType oldRetType = dotOp.getType();
+    if (!oldRetType.getEncoding() ||
+        !isa<ttg::BlockedEncodingAttr>(oldRetType.getEncoding()))
+      return failure();
+    if (!isa_and_nonnull<BlockedEncodingAttr>(dotOp.getType().getEncoding()))
+      return rewriter.notifyMatchFailure(
+          dotOp, "expected blocked encoding result tensor");
+
+    auto CTALayout = ttg::getCTALayout(oldRetType.getEncoding());
+
+    // get MFMA encoding for the given number of warps
+    auto retShape = oldRetType.getShape();
+    int numWarps = ttg::lookupNumWarps(dotOp);
+
+    // operands
+    Value a = dotOp.getA();
+    Value b = dotOp.getB();
+    Value aMeta = dotOp.getAMeta();
+
+    auto oldAType = cast<RankedTensorType>(a.getType());
+    auto oldBType = cast<RankedTensorType>(b.getType());
+    auto aMetaType = cast<RankedTensorType>(aMeta.getType());
+    auto ctx = oldAType.getContext();
+
+    ttg::AMDCompressionMfmaEncodingAttr compressionMfmaEnc;
+    ttg::AMDSparseMfmaEncodingAttr sparseMfmaEnc;
+    ttg::AMDMfmaEncodingAttr mfmaEnc;
+
+    auto mfmaInstr = chooseMfmaInstruction(dotOp, mfmaVersion, nonKDim);
+    if (failed(mfmaInstr))
+      return failure();
+    auto mDim = mfmaInstr->mDim;
+    auto nDim = mfmaInstr->nDim;
+    auto kDim = mfmaInstr->kDim;
+    auto kBase = mfmaInstr->kBase;
+
+    auto warpsPerTile =
+        warpsPerTileMFMA(dotOp, retShape, numWarps, {mDim, nDim});
+
+    auto aElemTy = mfmaInstr->aElementType;
+    auto bElemTy = mfmaInstr->bElementType;
+
+    // Adjust kPack based on the datatype
+    // fp16/bf16 --> kPack needs to be 2
+    // fp8/bf8 --> kPack needs to be 1
+    assert(aElemTy == bElemTy && "For now, we only support sparse dot with the "
+                                 "same A and B element type inputs");
+    int localKPack = 1;
+    if (aElemTy.getIntOrFloatBitWidth() == 16)
+      localKPack = 2;
+
+    // We cannot support transposed MFMA layouts for 2:4 sparsity on AMD
+    // This is because we cannot swap the A, B inputs, as only the A input can
+    // be sparse.
+    bool isTransposed = false;
+    mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
+        oldRetType.getContext(),
+        /*versionMajor*/ mfmaVersion, /*versionMinor*/ 0, warpsPerTile,
+        /*instrShape*/ mDim, nDim, isTransposed, CTALayout);
+
+    // The A input needs a different, sparse layout
+    // This is because it has half as many elements on the k-dim (i.e., 2:4)
+    sparseMfmaEnc = ttg::AMDSparseMfmaEncodingAttr::get(
+        oldRetType.getContext(),
+        /*versionMajor*/ mfmaVersion, /*versionMinor*/ 0, warpsPerTile,
+        /*instrShape*/ mDim, nDim, isTransposed, CTALayout);
+
+    // The layout for aMeta
+    compressionMfmaEnc = ttg::AMDCompressionMfmaEncodingAttr::get(
+        oldRetType.getContext(),
+        /*versionMajor*/ mfmaVersion, /*versionMinor*/ 0, warpsPerTile,
+        /*instrShape*/ mDim, nDim, isTransposed, CTALayout);
+
+    Type mfmaAccType;
+    if (oldRetType.getElementType().isIntOrIndex())
+      mfmaAccType = rewriter.getIntegerType(32);
+    else
+      mfmaAccType = rewriter.getF32Type();
+
+    // convert accumulator
+    auto oldAcc = dotOp.getC();
+    auto newAcc = convertAndCastTensor(rewriter, oldAcc, mfmaEnc, mfmaAccType);
+    auto kWidth = kBase;
+
+    // We want to extend kWidth by kPack (kPack=1 means no extension)
+    // to increase ds_read vector size
+    // However, in FA, the second dot can only use kWidth = kBase since it's
+    // limited by the result of the first dot, which is of mfmaLayout.
+    if (!isChainDotTail(dotOp))
+      kWidth *= localKPack;
+
+    // The A input has half the K-dim of the B-input for 2:4 smfmac instructions
+    // So we want to load half as many elements
+    auto newAEncoding =
+        ttg::DotOperandEncodingAttr::get(ctx, 0, sparseMfmaEnc, kWidth / 2);
+    auto newBEncoding =
+        ttg::DotOperandEncodingAttr::get(ctx, 1, mfmaEnc, kWidth);
+    a = convertAndCastTensor(rewriter, a, newAEncoding,
+                             mfmaInstr->aElementType);
+    b = convertAndCastTensor(rewriter, b, newBEncoding,
+                             mfmaInstr->bElementType);
+    aMeta = convertAndCastTensor(rewriter, aMeta, compressionMfmaEnc,
+                                 aMetaType.getElementType());
+
+    auto newDot = rewriter.create<tt::DotSparseOp>(
+        dotOp.getLoc(), newAcc.getType(), a, b, newAcc, aMeta);
+    Value dotOutput =
+        convertAndCastTensor(rewriter, newDot, oldRetType.getEncoding(),
+                             oldRetType.getElementType());
+
+    // TODO: if new acc is provided, rewrite the output so that it converts
+    // acc1 = tl.sparse_dot(a, b, aMeta, acc2)
+    // into...
+    // acc1 = tl.sparse_dot(a, b, aMeta).to(float32) + acc2
+    // The cast to float32 is implicit
+
+    rewriter.replaceOp(dotOp, dotOutput);
+
+    return success();
+  }
+};
+
 static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
                             Type promotedType) {
   Type tensorPromotedType = cast<RankedTensorType>(operand.getType())
@@ -1250,6 +1398,14 @@ public:
       patterns.add<::BlockedToMFMA, ::ScaledBlockedToMFMA>(
           context, getMfmaVersion(isaFamily), matrixInstructionSize, kPack,
           /*benefit=*/2);
+
+      // For 16-bit inputs, smfmac requires 8-bits per-lane for one SMFMA
+      // So kPack must be 2, since the metadata (compression) matrix is of type
+      // i16. It has to be be i16 to be compatible with the NVIDIA backend.
+      patterns.add<::SparseBlockedToMFMA>(context, getMfmaVersion(isaFamily),
+                                          matrixInstructionSize, /*kPack=*/1,
+                                          /*benefit=*/2);
+
       break;
     case ISAFamily::RDNA3:
       patterns.add<::BlockedToWMMA>(context, getWmmaVersion(archGenerationName),
