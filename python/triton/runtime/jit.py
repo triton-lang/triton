@@ -288,6 +288,8 @@ def create_specialize_impl(specialize_extra):
 
         if arg is None:
             return ("constexpr", None)
+        elif isinstance(arg, bool):
+            return ("i1", None)
         elif isinstance(arg, int):
             key = specialize_extra(arg, "int", align=align) if specialize_value else None
             if arg == 1 and specialize_value:
@@ -300,8 +302,6 @@ def create_specialize_impl(specialize_extra):
                 return ("i64", key)
         elif isinstance(arg, float):
             return ("fp32", None)
-        elif isinstance(arg, bool):
-            return ("i1", None)
         elif hasattr(arg, "data_ptr"):
             # dtypes are hashable so we can memoize this mapping:
             dsk = (arg.dtype, is_const)
