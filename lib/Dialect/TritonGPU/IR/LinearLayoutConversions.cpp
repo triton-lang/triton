@@ -169,8 +169,8 @@ sharedToLinearLayoutNoLeadingOffset(ArrayRef<int64_t> shape,
 }
 
 LinearLayout
-sharedToLinearLayoutSwizzleBlocks(ArrayRef<int64_t> shape,
-                                  SwizzledBlocksSharedEncodingAttr shared) {
+sharedToLinearLayoutAMDRotating(ArrayRef<int64_t> shape,
+                                AMDRotatingSharedEncodingAttr shared) {
   MLIRContext *ctx = shared.getContext();
   int rank = shape.size();
   if (rank == 1) {
@@ -1092,8 +1092,8 @@ LinearLayout TritonGPUDialect::toLinearLayout(ArrayRef<int64_t> shape,
       result = sharedToLinearLayoutNoLeadingOffset(shape, shared);
     } else if (auto shared = dyn_cast<NVMMASharedEncodingAttr>(layout)) {
       result = sharedToLinearLayoutLeadingOffset(shape, shared);
-    } else if (auto sbl = dyn_cast<SwizzledBlocksSharedEncodingAttr>(layout)) {
-      result = sharedToLinearLayoutSwizzleBlocks(shape, sbl);
+    } else if (auto sbl = dyn_cast<AMDRotatingSharedEncodingAttr>(layout)) {
+      result = sharedToLinearLayoutAMDRotating(shape, sbl);
     } else {
       assert(0 && "unknown layout");
     }

@@ -332,12 +332,12 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
 
 // -----
 
-// CHECK-LABEL: amd_shared_layout
+// CHECK-LABEL: amd_rotating_shared_layout
 #blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [2, 2], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
-#shared = #ttg.swizzled_blocks_shared<{vec = 1, perPhase = 1, maxPhase = 4, order = [1, 0]}>
+#shared = #ttg.amd_rotating_shared<{vec = 1, perPhase = 1, maxPhase = 4, order = [1, 0]}>
 #smem = #ttg.shared_memory
 module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
-  tt.func @amd_shared_layout(%arg0: tensor<64x64xf16, #blocked>) {
+  tt.func @amd_rotating_shared_layout(%arg0: tensor<64x64xf16, #blocked>) {
     // CHECK-COUNT-16: llvm.store {{.*}} : vector<1xf16>, !llvm.ptr<3>
     %0 = ttg.local_alloc %arg0 : (tensor<64x64xf16, #blocked>) -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
     // CHECK-COUNT-16: llvm.load {{.*}} : !llvm.ptr<3> -> vector<1xf16>

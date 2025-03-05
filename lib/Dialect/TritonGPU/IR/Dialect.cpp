@@ -229,7 +229,7 @@ SmallVector<unsigned> getOrder(SharedEncodingTrait layout,
     return sharedLayout.getOrder();
   }
   if (auto sharedLayout =
-          mlir::dyn_cast<SwizzledBlocksSharedEncodingAttr>(layout)) {
+          mlir::dyn_cast<AMDRotatingSharedEncodingAttr>(layout)) {
     return llvm::to_vector(sharedLayout.getOrder());
   }
   llvm::report_fatal_error("Unimplemented usage of getOrder for MemDescType");
@@ -804,15 +804,15 @@ SmallVector<unsigned> NVMMASharedEncodingAttr::getCTASplitNum() const {
   return SmallVector<unsigned>(getCTALayout().getCTASplitNum());
 }
 
-int32_t SwizzledBlocksSharedEncodingAttr::getAlignment() const { return 16; }
+int32_t AMDRotatingSharedEncodingAttr::getAlignment() const { return 16; }
 
-SmallVector<unsigned> SwizzledBlocksSharedEncodingAttr::getCTAsPerCGA() const {
+SmallVector<unsigned> AMDRotatingSharedEncodingAttr::getCTAsPerCGA() const {
   return SmallVector<unsigned>(getCTALayout().getCTAsPerCGA());
 }
-SmallVector<unsigned> SwizzledBlocksSharedEncodingAttr::getCTAOrder() const {
+SmallVector<unsigned> AMDRotatingSharedEncodingAttr::getCTAOrder() const {
   return SmallVector<unsigned>(getCTALayout().getCTAOrder());
 }
-SmallVector<unsigned> SwizzledBlocksSharedEncodingAttr::getCTASplitNum() const {
+SmallVector<unsigned> AMDRotatingSharedEncodingAttr::getCTASplitNum() const {
   return SmallVector<unsigned>(getCTALayout().getCTASplitNum());
 }
 
@@ -1839,12 +1839,11 @@ void NVMMASharedEncodingAttr::print(AsmPrinter &printer) const {
 // SwizzledBlocksShared encoding
 //===----------------------------------------------------------------------===//
 
-Attribute SwizzledBlocksSharedEncodingAttr::parse(AsmParser &parser,
-                                                  Type type) {
-  return parseSwizzledEncoding<SwizzledBlocksSharedEncodingAttr>(parser, type);
+Attribute AMDRotatingSharedEncodingAttr::parse(AsmParser &parser, Type type) {
+  return parseSwizzledEncoding<AMDRotatingSharedEncodingAttr>(parser, type);
 }
 
-void SwizzledBlocksSharedEncodingAttr::print(AsmPrinter &printer) const {
+void AMDRotatingSharedEncodingAttr::print(AsmPrinter &printer) const {
   printer << "<{"
           << "vec = " << getVec() //
           << ", perPhase = " << getPerPhase()

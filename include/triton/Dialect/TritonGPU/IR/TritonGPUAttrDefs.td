@@ -471,64 +471,82 @@ def NVMMASharedEncodingAttr :
   let hasCustomAssemblyFormat = 1;
 }
 
-def SwizzledBlocksSharedEncodingAttr :
-  TritonGPU_Attr<"SwizzledBlocksSharedEncoding", "swizzled_blocks_shared_encoding", [SharedEncodingTrait, LayoutEncodingTrait]> {
-  let mnemonic = "swizzled_blocks_shared";
+def AMDRotatingSharedEncodingAttr :
+  TritonGPU_Attr<"AMDRotatingSharedEncoding", "amd_rotating_shared_encoding", [SharedEncodingTrait, LayoutEncodingTrait]> {
+  let mnemonic = "amd_rotating_shared";
 
   let description = [{
 This shared encoding is similar to SwizzledSharedEncodingAttr,
 but instead of repeating swizzling pattern every `blockSize = maxPhase*perPhase` rows of memory object,
-this layout changes swizzling pattern.
+this layout changes swizzling pattern maxPhase times, then repeats pattern.
+Rotating name comes from the fact that first tensor element of each block is swizzled with different phase,
+which is equal to current block number: 0, 1, 2.. maxPhase, 0, 1, 2 ...
 
-Swizzling pattern affects only 2 fastest dimensions of a tensor:
-- fastest dimension is called row
-- second fastest dimension is called column
+Swizzling pattern affects only 2 fastest dimensions of a tensor.
+In following text these two dimensions are called row and column:
+- row is a fastest dimension
+- column is a second fastest dimension
 
-Example below follow this notation, i.e. elemens in a row stored in memory consequentially.
+Elements in a row dimension are stored in memory consequentially.
 
-Let's consider an element with position = (rowId, colId).
+If a matrix of size [128x64] is stored in this shared layout with order [1, 0],
+dim 1 (64) will be stored consequentially and called row, dim 0 (128) is will be called column.
+If order of shared layout is [0, 1], dim 0 (128) is stored consequentially becomes a row, dim 1 (64) becomes a column.
+
+Swizzling pattern is following:
+
+Let's consider an element with logical coordinates = (inRowId, inColId).
 For simplicity, we do not vectorize memory in examples,
 i.e. vec == 1 and layout swizzles inidividual elements.
 For vec != 1 example, take a look at SwizzledSharedEncodingAttr documentation.
 
-Swizzled coordinates within memory object are (rowId, swizzledColId):
+Swizzled coordinates within memory object are (outRowId, outColId):
 
-  phase   = (rowId / perPhase) % maxPhase
-  blockNo = (rowId / (perPhase * maxPhase)) % maxPhase
+  outRowId = inRowId
+  phase   = (inRowId / perPhase) % maxPhase
+  blockNo = (inRowId / (perPhase * maxPhase)) % maxPhase
   combinedPhase = phase ^ blockNo
-  swizzledColId   = colId ^ combinedPhase
+  outColId   = inColId ^ combinedPhase
+
+Actual offset in memory could be computed with following function:
+
+memmory_offset = (outColId + outRowId * num_of_element_in_row) * sizeof(element)
+
 
 Swizzling examples (matrix is filled with numbers 0, 1, 2, .. columns*rows-1):
 
   #shared<{vec=1, perPhase=1, maxPhase=2, order=[1,0]}>
-  [ 0,  1,  2,  3],  // phase = 0 blockNo = 0 (xor with 0)
-  [ 5,  4,  7,  6],  // phase = 1 blockNo = 0 (xor with 1)
-  [ 9,  8, 11, 10],  // phase = 0 blockNo = 1 (xor with 1)
-  [12, 13, 14, 15]   // phase = 1 blockNo = 1 (xor with 0)
-  [16, 17, 18, 19],  // phase = 0 blockNo = 0 (xor with 0)
-  [21, 20, 23, 22],  // phase = 1 blockNo = 0 (xor with 1)
-  [25, 24, 27, 26],  // phase = 0 blockNo = 1 (xor with 1)
-  [28, 29, 30, 31]   // phase = 1 blockNo = 1 (xor with 0)
+  row      elements
+    0  [ 0,  1,  2,  3],  // phase = 0 blockNo = 0 (xor with 0)
+    1  [ 5,  4,  7,  6],  // phase = 1 blockNo = 0 (xor with 1)
+    2  [ 9,  8, 11, 10],  // phase = 0 blockNo = 1 (xor with 1)
+    3  [12, 13, 14, 15]   // phase = 1 blockNo = 1 (xor with 0)
+    4  [16, 17, 18, 19],  // phase = 0 blockNo = 0 (xor with 0)
+    5  [21, 20, 23, 22],  // phase = 1 blockNo = 0 (xor with 1)
+    6  [25, 24, 27, 26],  // phase = 0 blockNo = 1 (xor with 1)
+    7  [28, 29, 30, 31]   // phase = 1 blockNo = 1 (xor with 0)
 
   #shared<{vec=1, perPhase=2, maxPhase=2, order=[1,0]}>
-  [ 0,  1,  2,  3],  // phase = 0 blockNo = 0 (xor with 0)
-  [ 4,  5,  6,  7],  // phase = 0 blockNo = 0 (xor with 0)
-  [ 9,  8, 11, 10],  // phase = 1 blockNo = 0 (xor with 1)
-  [13, 12, 15, 14]   // phase = 1 blockNo = 0 (xor with 1)
-  [17, 16, 19, 18],  // phase = 0 blockNo = 1 (xor with 1)
-  [21, 20, 23, 22],  // phase = 0 blockNo = 1 (xor with 1)
-  [24, 25, 26, 27],  // phase = 1 blockNo = 1 (xor with 0)
-  [28, 29, 30, 31]   // phase = 1 blockNo = 1 (xor with 0)
+  row      elements
+    0  [ 0,  1,  2,  3],  // phase = 0 blockNo = 0 (xor with 0)
+    1  [ 4,  5,  6,  7],  // phase = 0 blockNo = 0 (xor with 0)
+    2  [ 9,  8, 11, 10],  // phase = 1 blockNo = 0 (xor with 1)
+    3  [13, 12, 15, 14]   // phase = 1 blockNo = 0 (xor with 1)
+    4  [17, 16, 19, 18],  // phase = 0 blockNo = 1 (xor with 1)
+    5  [21, 20, 23, 22],  // phase = 0 blockNo = 1 (xor with 1)
+    6  [24, 25, 26, 27],  // phase = 1 blockNo = 1 (xor with 0)
+    7  [28, 29, 30, 31]   // phase = 1 blockNo = 1 (xor with 0)
 
   #shared<{vec=1, perPhase=1, maxPhase=4, order=[1,0]}>
-  [ 0,  1,  2,  3],  // phase = 0 blockNo = 0 (xor with 0)
-  [ 5,  4,  7,  6],  // phase = 1 blockNo = 0 (xor with 1)
-  [10, 11,  8,  9],  // phase = 2 blockNo = 0 (xor with 2)
-  [15, 14, 13, 12]   // phase = 3 blockNo = 0 (xor with 3)
-  [17, 16, 19, 18],  // phase = 0 blockNo = 1 (xor with 1)
-  [20, 21, 22, 23],  // phase = 1 blockNo = 1 (xor with 0)
-  [27, 26, 25, 24],  // phase = 2 blockNo = 1 (xor with 3)
-  [30, 31, 28, 29]   // phase = 3 blockNo = 1 (xor with 2)
+  row      elements
+    0  [ 0,  1,  2,  3],  // phase = 0 blockNo = 0 (xor with 0)
+    1  [ 5,  4,  7,  6],  // phase = 1 blockNo = 0 (xor with 1)
+    2  [10, 11,  8,  9],  // phase = 2 blockNo = 0 (xor with 2)
+    3  [15, 14, 13, 12]   // phase = 3 blockNo = 0 (xor with 3)
+    4  [17, 16, 19, 18],  // phase = 0 blockNo = 1 (xor with 1)
+    5  [20, 21, 22, 23],  // phase = 1 blockNo = 1 (xor with 0)
+    6  [27, 26, 25, 24],  // phase = 2 blockNo = 1 (xor with 3)
+    7  [30, 31, 28, 29]   // phase = 3 blockNo = 1 (xor with 2)
 
 This layout is used to reduce bank conflicts in cases
 shared memory writes and reads are performed on layouts with different order.
