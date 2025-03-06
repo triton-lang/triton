@@ -1,5 +1,7 @@
 // RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory -test-print-membar | FileCheck %s --check-prefix=CHECK --check-prefix=CF
 // RUN: triton-opt %s -split-input-file                     --allocate-shared-memory -test-print-membar | FileCheck %s --check-prefix=CHECK --check-prefix=SCF
+// RUN: triton-opt %s -split-input-file --convert-scf-to-cf --allocate-shared-memory -test-print-membar | FileCheck %s --check-prefix=CHECK --check-prefix=CF
+// RUN: triton-opt %s -split-input-file                     --allocate-shared-memory -test-print-membar | FileCheck %s --check-prefix=CHECK --check-prefix=SCF
 
 #AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
 #sliceAd0 = #ttg.slice<{dim = 0, parent = #AL}>
@@ -847,22 +849,23 @@ tt.func @warp_specialize_isolated_regions(%arg0: tensor<1xi64>) {
   ttg.local_load %0 : !ttg.memdesc<1xi64, #layout, #smem, mutable> -> tensor<1xi64>
 
   // CHECK-NEXT: warp_specialize
-  ttg.warp_specialize(%arg0)
+  ttg.warp_specialize()
   default {
     ttg.warp_yield
   }
   // CHECK: partition0
-  partition0(%arg1: tensor<1xi64>) num_warps(4) {
-    // CHECK-NEXT: local_alloc
+  partition0() num_warps(4) {
+    %cst = arith.constant dense<0> : tensor<1xi64>
+    // CHECK: local_alloc
     %1 = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
     // CHECK-NEXT: local_store
-    ttg.local_store %arg1, %1 : tensor<1xi64> -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
+    ttg.local_store %cst, %1 : tensor<1xi64> -> !ttg.memdesc<1xi64, #layout, #smem, mutable>
     // CHECK-NEXT: barrier
     // CHECK-NEXT: local_load
     ttg.local_load %1 : !ttg.memdesc<1xi64, #layout, #smem, mutable> -> tensor<1xi64>
     // CHECK-NEXT: warp_return
     ttg.warp_return
-  } : (tensor<1xi64>) -> ()
+  } : () -> ()
 
   tt.return
 }
@@ -963,4 +966,24 @@ tt.func @direct_backedge_within_loop(%arg0: index, %arg1: index, %arg2: index, %
   tt.return
 }
 
+}
+
+// -----
+
+// CHECK-LABEL: tmem_copy_after_alloc
+#blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
+#shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+#smem = #ttg.shared_memory
+#tmem_scales = #ttng.tensor_memory_scales_encoding<>
+module attributes {"ttg.num-warps" = 4 : i32} {
+  tt.func @tmem_copy_after_alloc(%arg0: tensor<1x2048xf8E4M3FN, #blocked>) {
+    // CHECK: local_alloc
+    %0 = ttg.local_alloc %arg0 {allocation.offset = 53248 : i32} : (tensor<1x2048xf8E4M3FN, #blocked>) -> !ttg.memdesc<1x2048xf8E4M3FN, #shared, #smem>
+    // CHECK: tmem_alloc
+    %1 = ttng.tmem_alloc  {tensor_memory_col_offset = 256 : i32, tensor_memory_row_offset = 0 : i32} : () -> !ttg.memdesc<128x16xf8E4M3FN, #tmem_scales, #ttng.tensor_memory, mutable>
+    // gpu.barrier
+    // CHECK: tmem_copy
+    ttng.tmem_copy %0, %1,  : (!ttg.memdesc<1x2048xf8E4M3FN, #shared, #smem>, !ttg.memdesc<128x16xf8E4M3FN, #tmem_scales, #ttng.tensor_memory, mutable>) -> ()
+    tt.return
+  }
 }

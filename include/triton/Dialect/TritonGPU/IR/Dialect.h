@@ -83,6 +83,7 @@ struct SharedMemory : public SideEffects::Resource::Base<SharedMemory> {
 };
 
 // Convert a distributed layout to a linear encoding
+LinearEncodingAttr toLinearEncoding(RankedTensorType type);
 LinearEncodingAttr toLinearEncoding(Attribute layout, ArrayRef<int64_t> shape);
 
 unsigned getTotalElemsPerThread(Type type);
@@ -101,8 +102,6 @@ unsigned getWarpSize(Attribute layout);
 // Returns the number of warps per CTA that may have access to replicated
 // elements. If you want non-replicated warps, use getWarpsPerCTAWithUniqueData.
 SmallVector<unsigned> getWarpsPerCTA(Attribute layout);
-
-SmallVector<unsigned> getSizePerThread(Attribute layout);
 
 // Returns the number of contiguous elements of the logical tensor that each
 // thread has access to, on each dimension of the tensor. For a blocked layout
@@ -181,7 +180,8 @@ SmallVector<unsigned> getCTAOrder(Attribute layout);
  * (3) In the implementation of emitIndices, ShapePerCTATile will
  *     be replicated or wrapped to fit ShapePerCTA.
  */
-SmallVector<unsigned> getShapePerCTATile(Attribute layout);
+// [FIXME LL] Kill this function
+SmallVector<unsigned> getShapePerCTATile(RankedTensorType layout);
 
 // Returns the "logical" shape per CTA
 SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
@@ -238,7 +238,6 @@ llvm::SmallVector<T> expandMatrixShapeWithBatch(llvm::ArrayRef<T> s);
 
 llvm::SmallVector<unsigned>
 expandMatrixOrderWithBatch(llvm::ArrayRef<unsigned> o);
-
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_DIALECT_H_

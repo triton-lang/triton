@@ -1,4 +1,4 @@
-﻿#include <optional>
+#include <optional>
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -1774,7 +1774,9 @@ void init_triton_ir(py::module &&m) {
              std::string funcToDump;
              if (!haveDump) {
                funcToDump = triton::tools::getStrEnv("MLIR_ENABLE_DUMP");
-               if (!funcToDump.empty())
+               bool isEnvValueBool =
+                   triton::tools::isEnvValueBool(funcToDump).has_value();
+               if (!funcToDump.empty() && !isEnvValueBool)
                  haveDump = true;
              }
              if (haveDump) {

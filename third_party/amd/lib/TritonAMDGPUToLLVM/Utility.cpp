@@ -540,7 +540,7 @@ unsigned getContiguity(Value ptr, Value offset,
   auto linearLayout = triton::gpu::toLinearLayout(tensorTy.getShape(), layout);
   auto llAttr =
       triton::gpu::LinearEncodingAttr::get(tensorTy.getContext(), linearLayout);
-  auto order = llAttr.getOrder();
+  auto order = triton::gpu::getOrder(tensorTy);
   auto contigPerThread = llAttr.getContigPerThread();
   assert(order[0] < contigPerThread.size() &&
          "Unexpected contigPerThread size");
@@ -594,6 +594,32 @@ Type scaleDotElemTypeToMLIRType(MLIRContext *ctx, triton::ScaleDotElemType t) {
   default:
     llvm_unreachable("unsupported ScaleDotElemType!");
   }
+}
+
+bool canCoalesceWriteIntoSharedMemory(RewriterBase &rewriter,
+                                      RankedTensorType srcTy,
+                                      triton::gpu::MemDescType dstTy,
+                                      unsigned vectorSize) {
+  auto shape = srcTy.getShape();
+  LinearLayout srcLayout =
+      triton::gpu::toLinearLayout(shape, srcTy.getEncoding());
+  LinearLayout sharedLayout =
+      triton::gpu::toLinearLayout(shape, dstTy.getEncoding());
+  LinearLayout srcToSharedLayout = srcLayout.invertAndCompose(sharedLayout);
+
+  StringAttr kLane = rewriter.getStringAttr("lane");
+  for (int inLane : llvm::seq(srcToSharedLayout.getInDimSizeLog2(kLane))) {
+    auto basis = srcToSharedLayout.getBasis(kLane, inLane)[0];
+    unsigned expected = vectorSize * (1 << inLane);
+    if (basis != expected) {
+      LDBG("detected uncoalesced layout from blocked to shared in async copy "
+           "for lane "
+           << 1 + inLane << "; given " << basis << " but expected "
+           << expected);
+      return false;
+    }
+  }
+  return true;
 }
 
 } // namespace mlir::LLVM::AMD

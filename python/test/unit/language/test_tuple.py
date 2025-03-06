@@ -116,6 +116,17 @@ class Tensor(NamedTuple):
 
 
 @triton.jit
+def _namedtuple_create_func0(shape, ptr, stride):
+    return Tensor(shape=shape, ptr=ptr, stride=stride)
+
+
+@triton.jit
+def _namedtuple_create_func1(shape, ptr, stride):
+    tensor = Tensor(shape=shape, ptr=ptr, stride=stride)
+    return tensor
+
+
+@triton.jit
 def _namedtuple_mask_func(Tensor, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
     offs_m = tl.arange(0, BLOCK_M)
     offs_n = tl.arange(0, BLOCK_N)
@@ -127,7 +138,8 @@ def _namedtuple_mask_func(Tensor, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
 def _namedtuple_kernel(closure, _X, Y, BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
     offs_m = tl.arange(0, BLOCK_M)
     offs_n = tl.arange(0, BLOCK_N)
-    X = Tensor(shape=_X.shape, ptr=_X.ptr, stride=_X.stride)
+    X = _namedtuple_create_func0(_X.shape, _X.ptr, _X.stride)
+    Y = _namedtuple_create_func1(Y.shape, Y.ptr, Y.stride)
     Xs = X.ptr + offs_m[:, None] * X.stride[0] + offs_n[None, :] * X.stride[1]
     Ys = Y.ptr + offs_m[:, None] * Y.stride[0] + offs_n[None, :] * Y.stride[1]
     x = tl.load(Xs, mask=_namedtuple_mask_func(X, BLOCK_M, BLOCK_N), other=0)

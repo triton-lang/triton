@@ -1,4 +1,5 @@
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/Support/DebugStringHelper.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
@@ -768,6 +769,38 @@ LogicalResult WarpYieldOp::verify() {
     }
   }
   return success();
+}
+
+// Get the size of a scalar type when stored in shared memory.
+// TODO: Generalize this as needed.
+static size_t getSharedMemorySize(Type type) {
+  if (isa<IntegerType, FloatType>(type))
+    return llvm::divideCeil(type.getIntOrFloatBitWidth(), 8);
+  if (isa<PointerType>(type))
+    return 8;
+  if (auto desc = dyn_cast<MemDescType>(type)) {
+    if (!isa<SharedMemorySpaceAttr>(desc.getMemorySpace()))
+      return 8;
+    return 8 + desc.getRank() * 4;
+  }
+  llvm::report_fatal_error(
+      Twine("shared memory size for scalar type is unspecified: ") +
+      mlir::debugString(type));
+}
+
+std::pair<uint64_t, uint64_t> WarpSpecializeOp::getCaptureSizeAlign() {
+  uint64_t captureSize = 0;
+  // Tightly pack the captures in memory.
+  for (Type type : getOperandTypes()) {
+    captureSize += getSharedMemorySize(type);
+  }
+  // Align the captures to 8 bytes.
+  return {captureSize, 8};
+}
+
+unsigned WarpSpecializeOp::getTotalPartitionWarps() {
+  ArrayRef<int32_t> numWarps = getPartitionNumWarps();
+  return std::accumulate(numWarps.begin(), numWarps.end(), 0);
 }
 
 } // namespace mlir::triton::gpu
