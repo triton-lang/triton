@@ -335,36 +335,34 @@ def get_type(provider):
         plot_name="matmul-performance",
         args={},
     ))
-def benchmark(M, N, K, provider, model=None):
+def benchmark(M, N, K, provider, model=None, args=None):
     in_dtype_a, in_dtype_b = [name_to_torch_types[x] for x in get_type(provider)]
     out_dtype = in_dtype_a
 
     quantiles = [0.5, 0.2, 0.8]
+    layout_tn = args.layout == 'tn'
+    a, _, a_scale = gen_input(M, K, in_dtype_a, False, 1, device='cuda')
+    b, _, b_scale = gen_input(K, N, in_dtype_b, layout_tn, 2, device='cuda')
     if 'hipblaslt' in provider:
-        a = torch.randn((M, K), dtype=in_dtype_a, device='cuda')
-        b = torch.randn((N, K), dtype=in_dtype_b, device='cuda')
-        b = b.T
-
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), quantiles=quantiles)
     else:  # triton, different data types
         assert "triton" in provider
-        a, _, a_scale = gen_input(M, K, in_dtype_a, False, 1, device='cuda')
-        b, _, b_scale = gen_input(K, N, in_dtype_b, True, 2, device='cuda')
         # Allocates output.
         c = torch.empty((M, N), device=a.device, dtype=out_dtype)
+
         scale_a8_b8 = dtype_is_8_bit(in_dtype_a) or dtype_is_8_bit(in_dtype_b)
         ms, min_ms, max_ms = triton.testing.do_bench(
             lambda: matmul(a, b, c, a_scale, b_scale, scale_a8_b8=scale_a8_b8, activation=""), quantiles=quantiles)
-        global verbose
-        if verbose:
-            print(f'SIZE: {M},{N},{K}   Best tuning config: ({matmul_kernel.best_config()})')
+        if args.v:
+            print(f'Best tuning config for M={M}, N={N}, K={K}, '
+                  f'dtype={in_dtype_a} / {in_dtype_b} / {out_dtype}: \n({matmul_kernel.best_config})\n')
     perf = lambda ms: 2 * M * N * K * 1e-12 / (ms * 1e-3)
     return perf(ms), perf(max_ms), perf(min_ms)
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        prog="GEMM tutorial example",
+        prog="AMD Triton GEMM kernel",
         allow_abbrev=False,
     )
 
@@ -375,48 +373,71 @@ def parse_args():
         "Model name to benchmark. Select from: [" + ", ".join(available_models) +
         "]. Use 'all' to benchmark all models. Not providing runs the default benchmark script with custom configs.")
     parser.add_argument('-model', type=str, default=None, help=model_help)
-    parser.add_argument('-b', type=int, default=0, help="Batch size used together with model.")
-    parser.add_argument('-sq', type=int, default=0, help="Sequence length used together with model.")
-
     parser.add_argument("-v", action='store_true', default=False, help="Print out the best tuning config")
     parser.add_argument("-M", type=int, default=0)
     parser.add_argument("-N", type=int, default=0)
     parser.add_argument("-K", type=int, default=0)
+    parser.add_argument("-layout", type=str, default='tn')
+    parser.add_argument("-dtype", type=str, default=None, help="Data type of inputs and outputs")
+    parser.add_argument("-b_dtype", type=str, default=None,
+                        help="Data type of B operand, if specified (else same as dtype)")
 
     args = parser.parse_args()
 
     return args
 
 
+def get_line_vals_names(a_dtype=None, b_dtype=None):
+    line_vals = [
+        'hipblaslt(fp16/fp16)', 'hipblaslt(bf16/bf16)', 'triton(fp16/fp16)', 'triton(bf16/bf16)', 'triton(int8/int8)',
+        'triton(fp8e4/fp8e4)', 'triton(fp8e5/fp8e5)', 'triton(fp16/fp8e4)', 'triton(fp16/fp8e5)'
+    ]
+    line_names = [
+        "rocBLAS.Fp16", "rocBLAS.Bf16", "Triton.Fp16", "Triton.Bf16", "Triton.Int8", "Triton.Fp8E4", "Triton.Fp8E5",
+        "Triton.Fp16.Fp8E4", "Triton.Fp16.Fp8E5"
+    ]
+    assert not ((a_dtype is None) ^ (b_dtype is None))
+    if a_dtype is not None:
+        line_vals_suffix_str = '(' + a_dtype + '/' + b_dtype + ')'
+        line_names_suffix_str = '.' + a_dtype + '.' + b_dtype
+        line_vals = ['triton' + line_vals_suffix_str]
+        line_names = ['Triton' + line_names_suffix_str]
+    if not dtype_is_8_bit(name_to_torch_types[a_dtype]) and \
+       not dtype_is_8_bit(name_to_torch_types[b_dtype]):
+        line_vals += ['hipblaslt' + line_vals_suffix_str]
+        line_names += ['hipblaslt' + line_names_suffix_str]
+
+    return line_vals, line_names
+
+
 def main():
-    # assign to a global verbose var to indicate whether print
-    # best tuning config
-    global verbose
     args = parse_args()
-    verbose = args.v
 
     if args.model:
         config_file = args.model_configs
         configs = get_model_configs(config_path=config_file, model_families=["llama3"], model=args.model)
         mnk_list = []
-        batch_size = args.b if args.b else 1
 
         for model_name, config in configs.items():
-            seq_len = args.sq if args.sq else 4096
-            M, N, K = batch_size * seq_len, config["hidden_size"], config["intermediate_size"]
+            M, N, K = args.M or 8192, config["hidden_size"], config["intermediate_size"]
             mnk_list.append((model_name, M, N, K))
 
         benchmark.benchmarks.x_names = ['model', 'M', 'N', 'K']
         benchmark.benchmarks.x_vals = mnk_list
 
-    if args.M or args.N or args.K:
-        assert args.model is None, "Providing both -model and -M/N/K is not compatible! -model already fixes -M/N/K."
+    a_dtype = args.dtype
+    b_dtype = args.b_dtype or args.dtype
+    assert a_dtype is None or a_dtype in name_to_torch_types, f"Unsupported dtype {a_dtype}"
+    assert b_dtype is None or b_dtype in name_to_torch_types, f"Unsupported dtype {b_dtype}"
+    benchmark.benchmarks.line_vals, benchmark.benchmarks.line_names = get_line_vals_names(a_dtype, b_dtype)
+    if args.N or args.K:
+        assert args.model is None, "Providing both -model and N/K is not compatible! -model already fixes N/K."
 
     if args.M and args.N and args.K:
         x_vals = [(args.M, args.N, args.K)]
         benchmark.benchmarks.x_vals = x_vals
 
-    benchmark.run(show_plots=True, print_data=True)
+    benchmark.run(show_plots=True, print_data=True, args=args)
 
 
 if __name__ == '__main__':
