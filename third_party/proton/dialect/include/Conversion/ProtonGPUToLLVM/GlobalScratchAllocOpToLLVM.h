@@ -3,7 +3,7 @@
 
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 
-// TODO(fywkevin): This pattern is a temporary solution to convert the record op
+// TODO(crobeck): This pattern is a temporary solution to convert the op
 // to LLVM IR such that we could still have a path to test the frontend. Need to
 // be removed soon.
 
