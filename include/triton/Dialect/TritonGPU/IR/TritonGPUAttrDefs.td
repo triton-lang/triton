@@ -479,7 +479,7 @@ def AMDRotatingSharedEncodingAttr :
 This shared encoding is similar to SwizzledSharedEncodingAttr,
 but instead of repeating swizzling pattern every `blockSize = maxPhase*perPhase` rows of memory object,
 this layout changes swizzling pattern maxPhase times, then repeats pattern.
-Rotating name comes from the fact that first tensor element of each block is swizzled with different phase,
+The name "Rotating" comes from the fact that first tensor element of each block is swizzled with different phase,
 which is equal to current block number: 0, 1, 2.. maxPhase, 0, 1, 2 ...
 
 Swizzling pattern affects only 2 fastest dimensions of a tensor.
