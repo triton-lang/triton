@@ -1,19 +1,19 @@
+#include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/GlobalScratchAllocOpToLLVM.h"
+#include "Dialect/ProtonGPU/IR/Dialect.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
-#include "mlir/Conversion/LLVMCommon/TypeConverter.h"
-#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/PatternMatch.h"
-#include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
+#include "mlir/Pass/Pass.h"
+#include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/Passes.h"
+#include "third_party/proton/dialect/include/Dialect/Proton/IR/Dialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
-#include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/PatternProtonOpToLLVM.h"
-#include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/Utility.h"
-#include "third_party/proton/dialect/include/Dialect/Proton/IR/Dialect.h"
-#include "third_party/proton/dialect/include/Dialect/ProtonGPU/IR/Dialect.h"
-
-namespace {
 using namespace mlir;
 using namespace mlir::triton;
+
+namespace {
 
 struct GlobalScratchAllocOpConversion
     : public ConvertOpToLLVMPattern<proton::gpu::GlobalScratchAllocOp> {
@@ -27,18 +27,19 @@ struct GlobalScratchAllocOpConversion
   LogicalResult
   matchAndRewrite(proton::gpu::GlobalScratchAllocOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-
     rewriter.eraseOp(op);
     auto funcOp = op->getParentOfType<LLVM::LLVMFuncOp>();
     auto ctx = funcOp->getContext();
     auto loc = funcOp.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto gmemBase = funcOp.getArgument(funcOp.getNumArguments() - 1);
-    // TODO: implement this offset value
-    auto opOffset = 0;
+    assert(op->hasAttr("offset"));
+    size_t offset =
+        cast<IntegerAttr>(op->getAttr("offset")).getValue().getZExtValue();
     auto llvmPointerType = LLVM::LLVMPointerType::get(ctx);
     rewriter.create<LLVM::GEPOp>(loc, llvmPointerType, llvmPointerType,
-                                 gmemBase, b.i32_val(opOffset));
+                                 gmemBase, b.i32_val(offset));
+
     return success();
   }
 
