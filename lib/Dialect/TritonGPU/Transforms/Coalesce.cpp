@@ -27,6 +27,84 @@ namespace gpu {
 
 struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
 
+  void emitLowPerThreadRemarks(ModuleAxisInfoAnalysis &axisInfoAnalysis, Operation *op, Value memoryAccessPtr, int64_t perThread) {
+    if (perThread > 1)
+      return;
+    auto mainError = op->emitRemark()
+                      << "Coalescing only assigns one element per thread for "
+                        "this operation. Performance may be suboptimal.";
+
+    llvm::SetVector<Operation *> backwardSlice;
+    BackwardSliceOptions opt;
+    opt.omitBlockArguments = false;
+    opt.filter = [&axisInfoAnalysis](Operation *op) {
+      bool allDivisibilityOne = true;
+      // check if results are all with divisibility 1
+      for (auto result : op->getResults()) {
+        auto axisInfo = axisInfoAnalysis.getAxisInfo(result);
+        auto divisibility = axisInfo->getDivisibility();
+        auto divisibilityIsOne = product<int64_t>(divisibility) == 1;
+        allDivisibilityOne = allDivisibilityOne && divisibilityIsOne;
+      }
+      return allDivisibilityOne;
+    };
+    getBackwardSlice(op, &backwardSlice, opt);
+
+    auto divisibility = axisInfoAnalysis.getAxisInfo(memoryAccessPtr)->getDivisibility();
+    auto contiguity = axisInfoAnalysis.getAxisInfo(memoryAccessPtr)->getContiguity();
+    // check if divisibility in all dimensions is 1
+    auto divisibilityIsOne = product<int64_t>(divisibility) == 1;
+
+    auto contiguityIsOne = product<int64_t>(contiguity) == 1;
+
+    if (divisibilityIsOne) {
+      mainError.attachNote()
+          << "The divisibility of the pointer is 1 in all dimensions. ";
+      for (auto sliceOp : backwardSlice) {
+        bool operandWithDivisibilityOne = false;
+        for (auto operand : sliceOp->getOperands()) {
+          auto axisInfo = axisInfoAnalysis.getAxisInfo(operand);
+          if (product<int64_t>(axisInfo->getDivisibility()) == 1) {
+            operandWithDivisibilityOne = true;
+            break;
+          }
+        }
+        bool resultWithDivisibilityOne = false;
+        if (sliceOp->getNumResults() > 0) {
+          auto lhsValue = sliceOp->getResult(0);
+          auto axisInfo = axisInfoAnalysis.getAxisInfo(lhsValue);
+          resultWithDivisibilityOne =
+              product<int64_t>(axisInfo->getDivisibility()) == 1;
+        }
+        if (!operandWithDivisibilityOne && resultWithDivisibilityOne) {
+          // ignore certain ops
+          if (isa<triton::GetProgramIdOp>(sliceOp) ||
+              isa<arith::ConstantOp>(sliceOp)) {
+            continue;
+          }
+          mainError.attachNote(sliceOp->getLoc())
+              << "Divisibility of 1 first introduced here: " << *sliceOp;
+          if (isa<triton::LoadOp>(sliceOp)) {
+            mainError.attachNote(sliceOp->getLoc())
+                << "tt.load resets divisibility. Consider add "
+                    "`tt.multiple_of` if you believe it is correct for the "
+                    "data.";
+          } else if (isa<arith::DivUIOp>(sliceOp) ||
+                      isa<arith::DivSIOp>(sliceOp)) {
+            mainError.attachNote(sliceOp->getLoc())
+                << "Division resets divisibility. Consider add "
+                    "`tt.multiple_of` if you believe it is correct for the "
+                    "data.";
+          }
+        }
+      }
+    }
+    if (contiguityIsOne) {
+      mainError.attachNote()
+          << "The contiguity of the pointer is 1 in all dimensions.";
+    }
+  }
+
   void
   setCoalescedEncoding(ModuleAxisInfoAnalysis &axisInfoAnalysis, Operation *op,
                        int numWarps, int threadsPerWarp,
@@ -92,80 +170,7 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
     perThread = std::min<int>(perThread, std::max(numElems / numThreads, 1));
     LDBG("perThread: " << perThread);
 
-    if (perThread == 1) {
-      auto mainError = op->emitRemark()
-                       << "Coalescing only assigns one element per thread for "
-                          "this operation. Performance may be suboptimal.";
-
-      llvm::SetVector<Operation *> backwardSlice;
-      BackwardSliceOptions opt;
-      opt.omitBlockArguments = false;
-      opt.filter = [&axisInfoAnalysis](Operation *op) {
-        bool allDivisibilityOne = true;
-        // check if results are all with divisibility 1
-        for (auto result : op->getResults()) {
-          auto axisInfo = axisInfoAnalysis.getAxisInfo(result);
-          auto divisibility = axisInfo->getDivisibility();
-          auto divisibilityIsOne = product<int64_t>(divisibility) == 1;
-          allDivisibilityOne = allDivisibilityOne && divisibilityIsOne;
-        }
-        return allDivisibilityOne;
-      };
-      getBackwardSlice(op, &backwardSlice, opt);
-
-      auto divisibility = axisInfoAnalysis.getAxisInfo(ptr)->getDivisibility();
-      // check if divisibility in all dimensions is 1
-      auto divisibilityIsOne = product<int64_t>(divisibility) == 1;
-
-      auto contiguityIsOne = product<int64_t>(contiguity) == 1;
-
-      if (divisibilityIsOne) {
-        mainError.attachNote()
-            << "The divisibility of the pointer is 1 in all dimensions. ";
-        for (auto sliceOp : backwardSlice) {
-          bool operandWithDivisibilityOne = false;
-          for (auto operand : sliceOp->getOperands()) {
-            auto axisInfo = axisInfoAnalysis.getAxisInfo(operand);
-            if (product<int64_t>(axisInfo->getDivisibility()) == 1) {
-              operandWithDivisibilityOne = true;
-              break;
-            }
-          }
-          bool resultWithDivisibilityOne = false;
-          if (sliceOp->getNumResults() > 0) {
-            auto lhsValue = sliceOp->getResult(0);
-            auto axisInfo = axisInfoAnalysis.getAxisInfo(lhsValue);
-            resultWithDivisibilityOne =
-                product<int64_t>(axisInfo->getDivisibility()) == 1;
-          }
-          if (!operandWithDivisibilityOne && resultWithDivisibilityOne) {
-            // ignore certain ops
-            if (isa<triton::GetProgramIdOp>(sliceOp) ||
-                isa<arith::ConstantOp>(sliceOp)) {
-              continue;
-            }
-            mainError.attachNote(sliceOp->getLoc())
-                << "Divisibility of 1 first introduced here: " << *sliceOp;
-            if (isa<triton::LoadOp>(sliceOp)) {
-              mainError.attachNote(sliceOp->getLoc())
-                  << "tt.load resets divisibility. Consider add "
-                     "`tt.multiple_of` if you believe it is correct for the "
-                     "data.";
-            } else if (isa<arith::DivUIOp>(sliceOp) ||
-                       isa<arith::DivSIOp>(sliceOp)) {
-              mainError.attachNote(sliceOp->getLoc())
-                  << "Division resets divisibility. Consider add "
-                     "`tt.multiple_of` if you believe it is correct for the "
-                     "data.";
-            }
-          }
-        }
-      }
-      if (contiguityIsOne) {
-        mainError.attachNote()
-            << "The contiguity of the pointer is 1 in all dimensions.";
-      }
-    }
+    emitLowPerThreadRemarks(axisInfoAnalysis, op, ptr, perThread);
     if (!dyn_cast<triton::LoadOp>(op)) {
       // For ops that can result in a global memory write, we should enforce
       // that each thread handles at most 128 bits, which is the widest
