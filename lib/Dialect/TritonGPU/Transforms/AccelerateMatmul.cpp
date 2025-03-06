@@ -28,13 +28,14 @@ namespace {
 static int getMMAVersionSafe(int computeCapability, DotOp op) {
   // List supported mma version in order of preference.
   SmallVector<int> versionsSupported;
+  op.emitRemark() << "Your computeCapability is " << computeCapability;
   if (computeCapability < 75) {
     versionsSupported = {1};
   } else if (computeCapability < 90) {
     versionsSupported = {2};
   } else if (computeCapability < 100) {
     versionsSupported = {3, 2};
-  } else if (computeCapability < 110) {
+  } else if (computeCapability < 130) {
     versionsSupported = {5, 2};
   } else {
     assert(false && "computeCapability not supported");
