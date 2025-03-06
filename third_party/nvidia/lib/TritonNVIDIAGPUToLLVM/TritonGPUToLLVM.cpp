@@ -19,10 +19,9 @@
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 #include "PatternTritonGPUOpToLLVM.h"
+#include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/RecordOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
-
-#include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/PatternProtonOpToLLVM.h"
 
 namespace mlir {
 namespace triton {
@@ -182,8 +181,8 @@ struct ConvertTritonGPUToLLVM
     mlir::triton::NVIDIA::populateUpcastMXFPToLLVMPatterns(
         typeConverter, patterns, targetInfo, benefit);
 
-    mlir::triton::proton::populateProtonOpPatterns(typeConverter, patterns,
-                                                   targetInfo, benefit);
+    mlir::triton::proton::populateRecordOpToLLVMPattern(typeConverter, patterns,
+                                                        targetInfo, benefit);
 
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
       return signalPassFailure();

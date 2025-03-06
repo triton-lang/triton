@@ -1,9 +1,11 @@
 add_triton_library(ProtonGPUToLLVM
-    RecordOpToLLVM.cpp
-    ProtonGPUToLLVM.cpp
+    TargetInfoBase.cpp
+    PatternProtonGPUOpToLLVM.cpp
     AllocateProtonSharedMemory.cpp
     AddProtonKernelArg.cpp
     GlobalScratchAllocOpToLLVM.cpp
+    AllocateProtonGlobalScratchBuffer.cpp
+    RecordOpToLLVM.cpp
 
     DEPENDS
     ProtonGPUConversionPassIncGen
@@ -13,3 +15,6 @@ add_triton_library(ProtonGPUToLLVM
     ProtonGPUIR
     ProtonAnalysis
 )
+
+add_subdirectory(ProtonNvidiaGPUToLLVM)
+add_subdirectory(ProtonAMDGPUToLLVM)
