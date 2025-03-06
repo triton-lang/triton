@@ -206,7 +206,30 @@ def test_remark_coalescing(capfd, fresh_triton_cache):
         test_kernel[(1,)](x, x_offsets, output, stride_x, BLOCK_SIZE=BLOCK_SIZE)
 
     _, err = capfd.readouterr()
-    assert ("remark:" in err), "expect failure remark"
+    lines = err.splitlines()
+    # Define the expected strings in order
+    expected_strings = [
+        "remark: Coalescing only assigns one element per thread for this operation", "x = tl.load(block_ptr)",
+        "note: The divisibility of the pointer is 1 in all dimensions.",
+        "first introduced here", "block_start = tl.load(x_offsets).to(tl.int64)",
+        "add `tt.multiple_of`"
+    ]
+
+    # Initialize an index to track the position in expected_strings
+    index = 0
+    # Iterate over each line in the output
+    for line in lines:
+        # Check if the current expected string is in the line
+        if expected_strings[index] in line:
+            # Move to the next expected string
+            index += 1
+            # If all expected strings have been found, break out of the loop
+            if index == len(expected_strings):
+                break
+    # Check if all expected strings were found
+    if index != len(expected_strings):
+        missing_string = expected_strings[index]
+        raise AssertionError(f"Missing expected string: '{missing_string}' from {err}")
 
 
 
