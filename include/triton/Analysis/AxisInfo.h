@@ -203,7 +203,9 @@ public:
   }
 
   unsigned getPtrContiguity(Value ptr);
+  unsigned getPtrContiguity(Value ptr, Value offset);
   unsigned getPtrAlignment(Value ptr);
+  unsigned getPtrAlignment(Value ptr, Value offset);
   unsigned getMaskAlignment(Value mask);
 
 private:

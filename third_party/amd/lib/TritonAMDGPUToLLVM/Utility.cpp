@@ -554,8 +554,15 @@ unsigned getContiguity(Value ptr, Value offset,
   auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
   auto align = std::max<int64_t>(maxMultipleBytes / elemNumBytes, 1);
 
+  // Get offset alignment to see how many offset elements are contiguous (in a
+  // value sense)
+  auto offsetContig = axisAnalysisPass.getPtrContiguity(ptr, offset);
+
   // Final contiguity is a min of the offset contiguity and pointer alignment
+  // and offset alignment
   contiguity = std::min<int64_t>(align, contiguity);
+  contiguity = std::min<int64_t>(offsetContig, contiguity);
+
   return contiguity;
 }
 
