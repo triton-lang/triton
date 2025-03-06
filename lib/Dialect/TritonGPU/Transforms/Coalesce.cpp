@@ -107,12 +107,12 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
           auto axisInfo = axisInfoAnalysis.getAxisInfo(result);
           auto divisibility = axisInfo->getDivisibility();
           auto divisibilityIsOne = product<int64_t>(divisibility) == 1;
-          allDivisibilityOne = allDivisibilityOne && divisibilityIsOne;                          
+          allDivisibilityOne = allDivisibilityOne && divisibilityIsOne;
         }
         return allDivisibilityOne;
       };
       getBackwardSlice(op, &backwardSlice, opt);
-      
+
       auto divisibility = axisInfoAnalysis.getAxisInfo(ptr)->getDivisibility();
       // check if divisibility in all dimensions is 1
       auto divisibilityIsOne = product<int64_t>(divisibility) == 1;
@@ -135,7 +135,8 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
           if (sliceOp->getNumResults() > 0) {
             auto lhsValue = sliceOp->getResult(0);
             auto axisInfo = axisInfoAnalysis.getAxisInfo(lhsValue);
-            resultWithDivisibilityOne = product<int64_t>(axisInfo->getDivisibility()) == 1;
+            resultWithDivisibilityOne =
+                product<int64_t>(axisInfo->getDivisibility()) == 1;
           }
           if (!operandWithDivisibilityOne && resultWithDivisibilityOne) {
             // ignore certain ops
