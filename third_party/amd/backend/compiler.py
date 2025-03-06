@@ -70,6 +70,9 @@ class HIPOptions:
         # Ignore user-defined warp size for gfx9
         warp_size = 32 if 'gfx10' in self.arch or 'gfx11' in self.arch or 'gfx12' in self.arch else 64
         object.__setattr__(self, 'warp_size', warp_size)
+        # Cap warp count to 16 on devices with warp size 64 (1024 threads/block)
+        if warp_size == 64 and self.num_warps > 16:
+            object.__setattr__(self, 'num_warps', 16)
         # Only kpack=1 is supported on gfx950
         kpack = 1 if self.arch == 'gfx950' else self.kpack
         object.__setattr__(self, 'kpack', kpack)

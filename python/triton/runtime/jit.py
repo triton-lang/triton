@@ -566,9 +566,6 @@ class JITFunction(KernelInterface[T]):
                 return None
             # compile the kernel
             src = self.ASTSource(self, signature, constexprs, attrs)
-            # cap warp count to 16 for devices with warp size 64
-            if target.warp_size == 64 and options.__dict__['num_warps'] > 16:
-                options.__dict__.update({'num_warps': 16})
             kernel = self.compile(src, target=target, options=options.__dict__)
             kernel_cache[key] = kernel
             self._call_hook(key, signature, device, constexprs, options, [attrs], warmup, before=False)
