@@ -24,6 +24,12 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Tools/LinearLayout.h"
+#include "triton/Dialect/TritonGPU/IR/Attributes.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
+
+//#include "triton/Dialect/TritonGPU/IR/Dialect.cpp.inc"
+//#include "triton/Dialect/Triton/IR/Dialect.h.inc"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 #define GEN_PASS_CLASSES
@@ -636,89 +642,128 @@ LogicalResult rewriteLocalStoreOp(OpBuilder &rewriter,
   return success();
 }
 
+/*
+triton.language.reduce(input, axis, combine_fn, keep_dims=False)¶
+Applies the combine_fn to all elements in input tensors along the provided axis
+Parameters:
+input (Tensor) – the input tensor, or tuple of tensors
+axis (int | None) – the dimension along which the reduction should be done. If None, reduce all dimensions
+combine_fn (Callable) – a function to combine two groups of scalar tensors (must be marked with @triton.jit)
+keep_dims (bool) – if true, keep the reduced dimensions with length 1
 
-LogicalResult rewriteReduceOp(OpBuilder &rewriter,
-                              triton::ReduceOp op) {
+*/
+LogicalResult rewriteReduceOp(OpBuilder &rewriter, triton::ReduceOp op) {
   llvm::outs() << "\n\nRefineOps::rewriteReduceOp()\n";
   auto ctx = op->getContext();
   auto loc = op.getLoc();
+  uint32_t axisReduce = op.getAxis();
+  uint32_t axisNonReduce = (axisReduce+1)%2;
+  llvm::outs() << "op:\n" << op << "\n\n"; // long func
+  llvm::outs() << "reduce axis: " << op.getAxis() << "\n"; // 1
+  //auto combineOps = op.getCombineOp().getOps();
+  //llvm::outs() << combineOp. << "\n";
+  llvm::outs() << "parent: " << op->getParentOp() << "\n"; // hex
+  llvm::outs() << "num operands: " << op.getNumOperands() << "\n"; // 1
+  auto types = op.getInputTypes(); // ranked tensor type - tensor<128x32xf32...
+  auto input = types[0];
+  llvm::outs() << "type: " << types[0] << "\n";
+  llvm::outs() << "elemPerThread: " << ttg::getTotalElemsPerThread(types[0]) << "\n"; // 8
+  llvm::outs() << "numElem: " << input.getNumElements() << "\n";
 
-  llvm::outs() << op << "\n";
-
-  Value origSrc = op->getOperand(0);
-
-  // TODO(dtanner) how to calculate this
-  int numReps = 2;
+  // region, blocks, combine op
+  //auto region = op->getRegion(0);
+  //llvm::outs() << "region: " <<  << "\n";
+  //llvm::outs() << "combine: " << op.getCombineOp() << "\n";
 
   // Slice input tensor along non-dimension.
   // for numReps
-  // create extract_slice
+  auto src = op->getOperand(0);
+  auto srcType = rankedTType(src);
+  assert(srcType.getRank()==2);
+  auto srcShape = srcType.getShape();
+  auto srcEncoding = srcType.getEncoding();
+  auto srcShapePerCtaTile = triton::gpu::getShapePerCTATile(srcEncoding);
+  llvm::outs() << "srcShapePerCtaTile: " << srcShapePerCtaTile[0] << "x" << srcShapePerCtaTile[1] << "\n";
 
-  // for numReps
-  // create reduce
+  SmallVector<int64_t> repShape = {srcShape[0] / srcShapePerCtaTile[0], srcShape[1] / srcShapePerCtaTile[1]};
+  llvm::outs() << "repShape: " << repShape[0] << "x" << repShape[1] << "\n";
+  int numReps = repShape[axisNonReduce];
 
-  // concatOp
+  //llvm::outs() << "region: " << op->getRegion(0) << "\n";
+  //llvm::outs() << "combine: " << op.getCombineOp().cloneInto() << "\n";
 
-  // replace old op with concat op
+  SmallVector<int64_t> refinedSrcShape = {srcShape[0], srcShape[1]};
+  refinedSrcShape[axisNonReduce] /= numReps;
+  int64_t elementsPerRep = refinedSrcShape[axisNonReduce];
 
-/*
-  auto dotOp = rewriter.create<tt::DotOp>(
-    loc, refinedTensorTypeD,
-    ValueRange{refinedTensorA, refinedTensorB,
-               refinedDotValues[int32_t(m * numRepN + n)]},
-    dotAttrs);
-*/
-  //auto newReduce = rewriter.create<triton::ReduceOp>(
-  //    op.getLoc(), adaptor.getOperands(), adaptor.getAxis());
-  //addNamedAttrs(newReduce, adaptor.getAttributes());
-
-#if 0
-  auto origMemViewOp =
-      cast<ttg::MemDescSubviewOp>(op->getOperand(1).getDefiningOp());
-  Value origMemView = origMemViewOp->getOperand(0);
-  Value selectValue = origMemViewOp.getOffsets().front();
-
-  auto origSrcType = rankedTType(origSrc);
-  auto blockEncoding = dyn_cast<BlockedEncodingAttr>(origSrcType.getEncoding());
-  if (blockEncoding == nullptr)
-    return failure();
-
-  auto origMemViewType = cast<ttg::MemDescType>(origMemView.getType());
-  auto sharedEncoding = cast<triton::gpu::SwizzledSharedEncodingAttr>(
-      origMemViewType.getEncoding());
-  if (sharedEncoding == nullptr)
-    return failure();
-
-  RefinedBlock refinedBlock(origSrcType.getShape(),
-                            origSrcType.getElementType(), blockEncoding);
-
-  constexpr bool mutableMemory = true;
-  auto sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
-
-  auto subviewType = ttg::MemDescType::get(
-      refinedBlock.refinedShape, refinedBlock.elemType, sharedEncoding,
-      sharedMemorySpace, mutableMemory, origMemViewType.getAllocShape());
-
+  auto elemTy = srcType.getElementType();
+  auto refinedTensorType = RankedTensorType::get(refinedSrcShape, elemTy, srcEncoding);
   rewriter.setInsertionPointAfter(op);
-  CoordinateAux aux(refinedBlock.numPerDims);
-  for (size_t counter = 0; counter < refinedBlock.numSubTiles; ++counter) {
-    auto coords = aux.map(counter);
-    SmallVector<int64_t> offset(refinedBlock.numDims, 0);
-    for (auto [dim, coord] : llvm::enumerate(coords)) {
-      offset[dim] = coord * refinedBlock.elementsPerWorkGroup[dim];
-    }
-    auto offsetValues = createOffset({selectValue}, offset, rewriter, loc);
-    auto slicedSharedMemView = rewriter.create<ttg::MemDescSubviewOp>(
-        loc, subviewType, origMemView, offsetValues);
+  SmallVector<Value> refinedReduces;
+  for (int i = 0; i < numReps; ++i) {
+    SmallVector<int64_t> offset(refinedSrcShape.size(), 0);
+    offset[axisReduce] = 0;
+    offset[axisNonReduce] = i * elementsPerRep;
+    // Slice input.
+    auto sliceOp = rewriter.create<triton::amdgpu::ExtractSliceOp>(
+      loc, Type{refinedTensorType}, Value{src}, offset);
+    llvm::outs() << "sliceOp: " << sliceOp << "\n\n";
+    // Reduce slice.
+    auto reduceOp = rewriter.create<triton::ReduceOp>(
+        op.getLoc(), ValueRange{sliceOp}, axisReduce);
 
-    auto slice = rewriter.create<triton::amdgpu::ExtractSliceOp>(
-        loc, Type{refinedBlock.tensorType}, Value{origSrc}, offset);
+    IRMapping mapping;
+    //for (auto operand : reduce.getOperands()) {
+    //  auto viewOp = builder.create<triton::ReshapeOp>(
+    //      reduce.getLoc(), viewOpTensorType, operand,
+    //      /*allowReorder=*/true, /*efficientLayout=*/true);
+    //  mapping.map(operand, viewOp);
+    //}
+    mapping.map(reduceOp.getOperand(0), sliceOp);
 
-    rewriter.create<ttg::LocalStoreOp>(loc, slice, slicedSharedMemView);
+    op.getCombineOp().cloneInto(&reduceOp->getRegion(0), mapping);
+    //llvm::outs() << "region: " << reduceOp->getRegion(0) << "\n";
+    //llvm::outs() << "combine: " << reduceOp.getCombineOp() << "\n";
+
+    //auto reduceOp3 = rewriter.create<triton::ReduceOp>(
+    //      op.getLoc(), ValueRange{sliceOp}, axisReduce);
+
+    //auto reduceOp = op.clone();
+    //reduceOp->getOperand(0).setType(refinedTensorType);
+
+
+    //addNamedAttrs(reduceOp, adaptor.getAttributes());
+
+    //auto &newCombineOp = newReduce.getCombineOp();
+    //rewriter.cloneRegionBefore(op.getCombineOp(), newCombineOp, newCombineOp.end());
+
+    // TODO need lambda function inside
+    llvm::outs() << "reduceOp: " << reduceOp << "\n\n";
+    //auto reduceResult = reduceOp.getResult();
+    //reduceResult.getType();
+    //Value reduceValue = mlir::dyn_cast<Value>(reduceOp);
+    //if (reduceValue == nullptr) {
+    //  llvm::outs() << "ERROR converting reduceOp to Value\n";
+    //}
+    llvm::outs() << "reduceOp.results: " << reduceOp.getNumResults() << "\n";
+
+    refinedReduces.push_back(reduceOp->getResult(0));
   }
 
+  // Concat reduce slices.
+  auto reduceResultType = op.getResultTypes()[0];
+  SmallVector<int64_t> concatDimShape = {numReps};
+  //concatDimShape[axisReduce] = 1;
+  auto concatDims = DenseI64ArrayAttr::get(ctx, concatDimShape);
+  //llvm::outs() << "concatDimShape: " << concatDimShape[0] << "x" << concatDimShape[1] << "\n";
+  auto concatOp = rewriter.create<triton::amdgpu::ConcatOp>(
+      loc, reduceResultType, refinedReduces, concatDims);
+
+  auto origOpResult = op.getResult();
+  origOpResult.replaceAllUsesWith(concatOp);
+  llvm::outs() << "replaced uses\n";
   op.erase();
-#endif
+  llvm::outs() << "erase\n";
   return success();
 }
 
