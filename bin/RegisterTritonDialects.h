@@ -4,6 +4,8 @@
 #include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"
 #include "third_party/nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/Passes.h"
+#include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/ProtonAMDGPUToLLVM/Passes.h"
+#include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/ProtonNvidiaGPUToLLVM/Passes.h"
 #include "third_party/proton/dialect/include/Conversion/ProtonToProtonGPU/Passes.h"
 #include "third_party/proton/dialect/include/Dialect/Proton/IR/Dialect.h"
 #include "third_party/proton/dialect/include/Dialect/ProtonGPU/IR/Dialect.h"
@@ -106,6 +108,8 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::test::proton::registerTestScopeIdAllocationPass();
   mlir::triton::proton::registerConvertProtonToProtonGPU();
   mlir::triton::proton::registerAllocateProtonSharedMemoryPass();
+  mlir::triton::proton::registerConvertProtonNvidiaGPUToLLVM();
+  mlir::triton::proton::registerConvertProtonAMDGPUToLLVM();
   mlir::triton::proton::registerAddProtonKernelArgPass();
   mlir::triton::proton::registerAllocateProtonGlobalScratchBufferPass();
 
