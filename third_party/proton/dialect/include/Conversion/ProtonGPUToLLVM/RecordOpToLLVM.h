@@ -1,7 +1,11 @@
-#ifndef PROTON_GPU_TO_LLVM_PATTERN_PROTON_OP_TO_LLVM_H
-#define PROTON_GPU_TO_LLVM_PATTERN_PROTON_OP_TO_LLVM_H
+#ifndef PROTON_RECORDOP_TO_LLVM_H
+#define PROTON_RECORDOP_TO_LLVM_H
 
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+
+// TODO(fywkevin): This pattern is a temporary solution to convert the record op
+// to LLVM IR such that we could still have a path to test the frontend. Need to
+// be removed soon.
 
 namespace mlir::triton {
 class TargetInfoBase;
@@ -12,12 +16,7 @@ void populateRecordOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                    const TargetInfoBase &targetInfo,
                                    PatternBenefit benefit);
 
-void populateProtonOpPatterns(LLVMTypeConverter &typeConverter,
-                              RewritePatternSet &patterns,
-                              const TargetInfoBase &targetInfo,
-                              PatternBenefit benefit);
-
 } // namespace proton
 } // namespace mlir::triton
 
-#endif // PROTON_TO_LLVM_PATTERN_PROTON_OP_TO_LLVM_H
+#endif // PROTON_RECORDOP_TO_LLVM_H
