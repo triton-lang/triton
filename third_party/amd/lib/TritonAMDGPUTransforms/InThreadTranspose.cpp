@@ -423,10 +423,22 @@ findReachableSMemOps(ttg::LocalLoadOp root,
   return foundNetwork;
 }
 
+unsigned getDimRepeats(RankedTensorType type, int dimIdx) {
+  auto loadEnc = type.getEncoding();
+  auto blockedEnc = dyn_cast<ttg::BlockedEncodingAttr>(loadEnc);
+  if (!blockedEnc)
+    return 0;
+  auto sizePerThread = blockedEnc.getSizePerThread();
+  auto lanes = blockedEnc.getThreadsPerWarp();
+  auto warps = blockedEnc.getWarpsPerCTA();
+  auto shape = type.getShape();
+  int repeats =
+      shape[dimIdx] / (sizePerThread[dimIdx] * lanes[dimIdx] * warps[dimIdx]);
+  return std::max(1, repeats);
+}
+
 llvm::FailureOr<loadStoreLoadPatternComponents>
 matchThreadRakePattern(Value operand) {
-  // TODO implement general heuristic,
-  // analyzing local load/store vectorization and estimating bank conflicts
   auto opTensorTy = cast<RankedTensorType>(operand.getType());
   auto opEnc = opTensorTy.getEncoding();
   auto opDotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(opEnc);
@@ -502,12 +514,25 @@ matchThreadRakePattern(Value operand) {
   // otherwise can not guarantee transformation overhead is cheap
   auto expectedLoadType = pattern.globalLoads.front()->getResult(0).getType();
 
+  auto kDimRepeats =
+      getDimRepeats(cast<RankedTensorType>(expectedLoadType), kDimNum);
+  // kDimRepeats == 0 means loadType has unexpected layout
+  // kDimRepeats == 1 means there are no room in k dimension in layout to
+  // transpose in registers
+  if (kDimRepeats < 2) {
+    LDBG("Can not extend load layout");
+    return failure();
+  }
+
   for (auto load : pattern.globalLoads) {
     if (load->getResult(0).getType() != expectedLoadType) {
       LDBG("Mismatch between global loads result types");
       return failure();
     }
   }
+
+  // TODO implement general heuristic,
+  // analyzing local load/store vectorization and estimating bank conflicts
 
   return pattern;
 }
@@ -524,20 +549,17 @@ ttg::BlockedEncodingAttr getThreadRakedBlockedEnc(Value dotOperand,
   // get the current blocked encoding
   auto loadEnc = cast<RankedTensorType>(loadType).getEncoding();
   auto blockedEnc = dyn_cast<ttg::BlockedEncodingAttr>(loadEnc);
-  // compute the sizePerThread for the new encoding
-  auto sizePerThread = blockedEnc.getSizePerThread();
-  auto elemsPerIter = product(sizePerThread);
-  auto elemsTotal = ttg::getTotalElemsPerThread(loadType);
-  // we need to know how many iteration each thread will load
-  LDBG("elemsPerIter = " << elemsPerIter << "; elemsTotal = " << elemsTotal);
-  auto numMaxIters = elemsTotal / elemsPerIter;
-  auto bitwidth = tensorTy.getElementType().getIntOrFloatBitWidth();
-  // LDBG("bitwidth = " << bitwidth);
+
+  auto numMaxIters = getDimRepeats(loadType, kDimNum);
+  auto elemBitwidth = tensorTy.getElementType().getIntOrFloatBitWidth();
   // Current the widest is set to ds_write_b64
-  auto newKOuterDim = std::min(numMaxIters, 64 / bitwidth);
+  // In some cases b64 works best, in others 128
+  // TODO introduce a heuristic
+  const unsigned dsBitWidth = 64;
+  auto newKOuterDim = std::min(numMaxIters, dsBitWidth / elemBitwidth);
   LDBG("Choose the minimum of numIters: " << numMaxIters << " and numDtype: "
-                                          << 64 / bitwidth);
-  SmallVector<unsigned> newSizePerThread(sizePerThread);
+                                          << dsBitWidth / elemBitwidth);
+  SmallVector<unsigned> newSizePerThread{blockedEnc.getSizePerThread()};
   newSizePerThread[kDimNum] = newKOuterDim;
 
   // return the new blocked encoding
