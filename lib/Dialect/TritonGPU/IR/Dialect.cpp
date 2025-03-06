@@ -201,6 +201,10 @@ SmallVector<unsigned> getOrder(SharedEncodingTrait layout,
   if (auto sharedLayout = mlir::dyn_cast<NVMMASharedEncodingAttr>(layout)) {
     return sharedLayout.getOrder();
   }
+  if (auto sharedLayout =
+          mlir::dyn_cast<AMDRotatingSharedEncodingAttr>(layout)) {
+    return llvm::to_vector(sharedLayout.getOrder());
+  }
   llvm::report_fatal_error("Unimplemented usage of getOrder for MemDescType");
   return {};
 }
@@ -762,6 +766,18 @@ SmallVector<unsigned> NVMMASharedEncodingAttr::getCTAOrder() const {
   return SmallVector<unsigned>(getCTALayout().getCTAOrder());
 }
 SmallVector<unsigned> NVMMASharedEncodingAttr::getCTASplitNum() const {
+  return SmallVector<unsigned>(getCTALayout().getCTASplitNum());
+}
+
+int32_t AMDRotatingSharedEncodingAttr::getAlignment() const { return 16; }
+
+SmallVector<unsigned> AMDRotatingSharedEncodingAttr::getCTAsPerCGA() const {
+  return SmallVector<unsigned>(getCTALayout().getCTAsPerCGA());
+}
+SmallVector<unsigned> AMDRotatingSharedEncodingAttr::getCTAOrder() const {
+  return SmallVector<unsigned>(getCTALayout().getCTAOrder());
+}
+SmallVector<unsigned> AMDRotatingSharedEncodingAttr::getCTASplitNum() const {
   return SmallVector<unsigned>(getCTALayout().getCTASplitNum());
 }
 
@@ -1637,10 +1653,11 @@ void SliceEncodingAttr::print(mlir::AsmPrinter &printer) const {
 }
 
 //===----------------------------------------------------------------------===//
-// SwizzledShared encoding
+// Helper shared encoding functions
 //===----------------------------------------------------------------------===//
 
-Attribute SwizzledSharedEncodingAttr::parse(AsmParser &parser, Type type) {
+template <typename SpecificEncoding>
+Attribute parseSwizzledEncoding(AsmParser &parser, Type type) {
   if (parser.parseLess().failed())
     return {};
   // Parse the data as a dictionary
@@ -1694,8 +1711,16 @@ Attribute SwizzledSharedEncodingAttr::parse(AsmParser &parser, Type type) {
   if (!CTALayout.has_value())
     return {};
 
-  return parser.getChecked<SwizzledSharedEncodingAttr>(
-      parser.getContext(), vec, perPhase, maxPhase, order, *CTALayout);
+  return parser.getChecked<SpecificEncoding>(parser.getContext(), vec, perPhase,
+                                             maxPhase, order, *CTALayout);
+}
+
+//===----------------------------------------------------------------------===//
+// SwizzledShared encoding
+//===----------------------------------------------------------------------===//
+
+Attribute SwizzledSharedEncodingAttr::parse(AsmParser &parser, Type type) {
+  return parseSwizzledEncoding<SwizzledSharedEncodingAttr>(parser, type);
 }
 
 void SwizzledSharedEncodingAttr::print(AsmPrinter &printer) const {
@@ -1784,6 +1809,25 @@ void NVMMASharedEncodingAttr::print(AsmPrinter &printer) const {
   }
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/2);
+  printer << "}>";
+}
+
+//===----------------------------------------------------------------------===//
+// SwizzledBlocksShared encoding
+//===----------------------------------------------------------------------===//
+
+Attribute AMDRotatingSharedEncodingAttr::parse(AsmParser &parser, Type type) {
+  return parseSwizzledEncoding<AMDRotatingSharedEncodingAttr>(parser, type);
+}
+
+void AMDRotatingSharedEncodingAttr::print(AsmPrinter &printer) const {
+  printer << "<{"
+          << "vec = " << getVec() //
+          << ", perPhase = " << getPerPhase()
+          << ", maxPhase = " << getMaxPhase() //
+          << ", order = [" << getOrder() << "]";
+  maybePrintCTALayout(getContext(), printer, getCTALayout(),
+                      /*rank=*/getOrder().size());
   printer << "}>";
 }
 
@@ -1919,6 +1963,48 @@ AMDMfmaEncodingAttr::getRepForOperand(ArrayRef<int64_t> operandShape,
         std::max<int64_t>(1, operandShape[rank - 1] / (operandTileShape[1] *
                                                        warpsPerCTA[rank - 1]))};
   }
+}
+
+SwizzledSharedEncodingAttr AMDMfmaEncodingAttr::composeSharedLayoutForOperand(
+    CTALayoutAttr ctaLayout, int operandIdx, ArrayRef<int64_t> operandShape,
+    ArrayRef<unsigned> sharedOrder, unsigned vectorSize, unsigned elemBitWidth,
+    bool needTrans) const {
+  int kDimIndex = operandIdx == 0 ? 1 : 0;
+  if (needTrans)
+    kDimIndex = 1 - kDimIndex;
+
+  bool isKContig = sharedOrder[0] == kDimIndex;
+  // GFX950 supports LDS transpose load instructions, so we need swizzling even
+  // when K dimension is not the contiguous dimension.
+  bool isGFX950 = getVersionMajor() == 4;
+  bool swizzleNonKContig =
+      isGFX950 && (elemBitWidth == 8 || elemBitWidth == 16);
+
+  if (!isKContig && !swizzleNonKContig) {
+    // Do not swizzle. In this case accesses will go in different banks even
+    // without swizzling.
+    return SwizzledSharedEncodingAttr::get(getContext(), 1, 1, 1, sharedOrder,
+                                           ctaLayout);
+  }
+
+  const unsigned numBanks = isGFX950 ? 64 : 32;
+  const unsigned bankBitWidth = 32;
+  const unsigned simdWidth = 16;
+
+  // Number of inner dimension rows per one pattern repeat
+  int innerDimLength = operandShape[sharedOrder[0]];
+  int elemsPerOneBanksRow = (numBanks * bankBitWidth) / elemBitWidth;
+
+  int perPhase = std::max(1, elemsPerOneBanksRow / innerDimLength);
+  int maxPhase =
+      std::max(std::min(simdWidth / perPhase, innerDimLength / vectorSize), 1u);
+
+  // TODO (zhanglx): figure out better parameters for mfma4
+  if (getMDim() == 4)
+    maxPhase = 4;
+
+  return SwizzledSharedEncodingAttr::get(getContext(), vectorSize, perPhase,
+                                         maxPhase, sharedOrder, ctaLayout);
 }
 
 //===----------------------------------------------------------------------===//

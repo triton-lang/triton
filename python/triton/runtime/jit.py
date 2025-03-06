@@ -280,20 +280,14 @@ dtype2str = {}
 specialize_impl_cache = []
 
 
-def create_specialize_impl():
-    if specialize_impl_cache:
-        return specialize_impl_cache[-1]
+def create_specialize_impl(specialize_extra):
 
     from ..language import constexpr
 
-    def specialize_impl(arg, specialize_extra, is_const=False, specialize_value=True, align=True):
+    def specialize_impl(arg, is_const=False, specialize_value=True, align=True):
 
         if arg is None:
             return ("constexpr", None)
-        elif isinstance(arg, JITFunction):
-            return ("constexpr", arg.cache_key)
-        elif isinstance(arg, constexpr):
-            return ("constexpr", arg)
         elif isinstance(arg, bool):
             return ("i1", None)
         elif isinstance(arg, int):
@@ -308,15 +302,7 @@ def create_specialize_impl():
                 return ("i64", key)
         elif isinstance(arg, float):
             return ("fp32", None)
-        elif hasattr(arg, "tma_desc_cpu_ptr"):
-            return ("nvTmaDesc", None)
-        elif isinstance(arg, tuple):
-            spec = [specialize_impl(x, specialize_extra) for x in arg]
-            make_tuple = lambda vals: type(arg)(*vals) if hasattr(arg, "_fields") else tuple(vals)
-            tys = make_tuple([x[0] for x in spec])
-            keys = make_tuple([x[1] for x in spec])
-            return (tys, keys)
-        else:
+        elif hasattr(arg, "data_ptr"):
             # dtypes are hashable so we can memoize this mapping:
             dsk = (arg.dtype, is_const)
             res = dtype2str.get(dsk, None)
@@ -325,14 +311,29 @@ def create_specialize_impl():
                 dtype2str[dsk] = res
             key = specialize_extra(arg, "tensor", align=align) if specialize_value else None
             return (res, key)
+        elif isinstance(arg, JITFunction):
+            return ("constexpr", arg.cache_key)
+        elif isinstance(arg, constexpr):
+            return ("constexpr", arg)
+        elif hasattr(arg, "tma_desc_cpu_ptr"):
+            return ("nvTmaDesc", None)
+        elif isinstance(arg, tuple):
+            spec = [specialize_impl(x) for x in arg]
+            make_tuple = lambda vals: type(arg)(*vals) if hasattr(arg, "_fields") else tuple(vals)
+            tys = make_tuple([x[0] for x in spec])
+            keys = make_tuple([x[1] for x in spec])
+            return (tys, keys)
+        else:
+            raise TypeError("Unsupported type: %s" % type(arg))
 
-    specialize_impl_cache.append(specialize_impl)
     return specialize_impl
 
 
 def mangle_type(arg, specialize=False):
-    specialize_impl = create_specialize_impl()
-    return specialize_impl(arg, lambda _, **kwargs: None, specialize_value=specialize)[0]
+    if len(specialize_impl_cache) == 0:
+        specialize_impl_cache.append(create_specialize_impl(lambda _, **kwargs: None))
+    specialize_impl = specialize_impl_cache[0]
+    return specialize_impl(arg, specialize_value=specialize)[0]
 
 
 class KernelInterface(Generic[T]):
@@ -378,7 +379,7 @@ def create_function_from_signature(sig, kparams, backend):
             is_const = 'True' if kp.is_const else 'False'
             specialize = 'False' if kp.do_not_specialize else 'True'
             align = 'False' if kp.do_not_specialize_on_alignment else 'True'
-            ret = f"specialize_impl({name}, specialize_extra, {is_const}, {specialize}, {align})"
+            ret = f"specialize_impl({name}, {is_const}, {specialize}, {align})"
             if kp.annotation_type:
                 specialization.append(f'("{kp.annotation_type}",) + {ret}[1:]')
             else:
@@ -401,8 +402,7 @@ def dynamic_func({", ".join(list(map(arg, sig.parameters.items())) + ["**options
     }
 
     func_namespace["JITFunction"] = JITFunction
-    func_namespace["specialize_impl"] = create_specialize_impl()
-    func_namespace["specialize_extra"] = backend.get_arg_specialization
+    func_namespace["specialize_impl"] = create_specialize_impl(backend.get_arg_specialization)
 
     # Execute the function string in func_namespace to create the function
     exec(func_body, func_namespace)
