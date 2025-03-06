@@ -407,6 +407,23 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   triton::nvgpu::WGMMALayout layoutB = transB ? triton::nvgpu::WGMMALayout::row
                                               : triton::nvgpu::WGMMALayout::col;
 
+
+  SmallVector<int, 4> RepKIds;
+  bool slicedWgmma = false;
+
+  if(op->hasAttr("repKId")){
+    int repKId = op->getAttrOfType<mlir::IntegerAttr>("repKId").getInt();
+    RepKIds.push_back(repKId);
+    slicedWgmma = true;
+    llvm::errs() << "in repK mode: repKID " << repKId << "\n";
+  }
+  else{
+    // if the wgmma op has not RepKId, this wgmma needs to process all k batches
+    for(int k = 0; k < numRepK; k++){
+      RepKIds.push_back(k);}
+  }
+
+
   auto func = op->getParentOfType<LLVM::LLVMFuncOp>();
   Operation *startSequence = rewriter.create<triton::nvgpu::WGMMAFenceOp>(loc);
   SmallVector<Value> mmaResults;
@@ -430,7 +447,10 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
         useC = tb.and_(useC, useCOperand);
       uint32_t numLowPrecisionAcc = 0;
       Value partialAcc;
-      for (int k = 0; k < numRepK; ++k) {
+      // for (int k = 0; k < numRepK; ++k) {
+      for (int ki = 0; ki < RepKIds.size(); ++ki) {
+        int k = RepKIds[ki];
+
         Value a;
         if (aSharedLayout) {
           a = aLoader.smemLoad(m, k, rewriter, loc);
@@ -441,8 +461,9 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
                  32 / aTensorTy.getElementTypeBitWidth());
 
           unsigned regASize = (instrShape[0] * instrShape[2]) / 32;
+          unsigned regAStartAddr = slicedWgmma? m : (m * numRepK + k);
           llvm::SmallVector<Value> regA =
-              loadReg(rewriter, loc, structA, (m * numRepK + k) * regASize,
+              loadReg(rewriter, loc, structA, regAStartAddr * regASize,
                       regASize, startSequence);
           auto regATy = LLVM::LLVMStructType::getLiteral(
               rewriter.getContext(),
