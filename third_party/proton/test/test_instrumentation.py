@@ -1,6 +1,5 @@
 import torch
 import pathlib
-import pytest
 
 import triton
 import triton.language as tl
