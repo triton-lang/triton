@@ -402,10 +402,10 @@ def get_line_vals_names(a_dtype=None, b_dtype=None):
         line_names_suffix_str = '.' + a_dtype + '.' + b_dtype
         line_vals = ['triton' + line_vals_suffix_str]
         line_names = ['Triton' + line_names_suffix_str]
-    if not dtype_is_8_bit(name_to_torch_types[a_dtype]) and \
-       not dtype_is_8_bit(name_to_torch_types[b_dtype]):
-        line_vals += ['hipblaslt' + line_vals_suffix_str]
-        line_names += ['hipblaslt' + line_names_suffix_str]
+        if not dtype_is_8_bit(name_to_torch_types[a_dtype]) and \
+           not dtype_is_8_bit(name_to_torch_types[b_dtype]):
+            line_vals += ['hipblaslt' + line_vals_suffix_str]
+            line_names += ['hipblaslt' + line_names_suffix_str]
 
     return line_vals, line_names
 
