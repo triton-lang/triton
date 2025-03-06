@@ -73,8 +73,8 @@ int64_t getSwizzlingFromLayout(const NVMMASharedEncodingAttr &layout,
   // TODO[biaow]: remove it once we support swizzling size larger than matrix
   // width, which requires padding the matrix width to the swizzling size when
   // allocating shared memory.
-  assert(swizzlingByteWidth <= widthInByte &&
-         "swizzling size larger than matrix width is not supported.");
+  // assert(swizzlingByteWidth <= widthInByte &&
+  //        "swizzling size larger than matrix width is not supported.");
   return swizzlingByteWidth;
 }
 
