@@ -56,6 +56,7 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
     memAccessesSameOrder.insert(op);
     if (ptr.getDefiningOp()) {
       for (Operation *use : mlir::multiRootGetSlice(op)) {
+        LDBG("multi-root-slice: " << *use);
         Value val = getMemAccessPtr(use);
         if (!val || !matchesShape(val) || memAccessesSameOrder.contains(use))
           continue;
@@ -85,7 +86,9 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
       LDBG("perThread for opSameOrder: " << currPerThread);
       perThread = std::max(perThread, currPerThread);
     }
-
+    LDBG("perThread after max: " << perThread);
+    LDBG("numElems: " << numElems);
+    LDBG("numThreads: " << numThreads);
     perThread = std::min<int>(perThread, std::max(numElems / numThreads, 1));
     LDBG("perThread: " << perThread);
 

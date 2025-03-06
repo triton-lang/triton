@@ -166,6 +166,49 @@ def test_remark_vectorization(capfd, fresh_triton_cache):
     assert "note: see current operation:" in err
     assert "note: diagnostic emitted with trace:" in err
 
+def test_remark_coalescing(capfd, fresh_triton_cache):
+
+    @triton.jit
+    def test_kernel(x_ptr,  
+                x_offsets,  
+                output_ptr,  
+                stride_x,  
+                BLOCK_SIZE: tl.constexpr,
+                ):
+        block_start = tl.load(x_offsets).to(tl.int64)
+        block_ptr = tl.make_block_ptr(
+            base=x_ptr + block_start * stride_x, # block_start * stride_x has divisibility of 1
+            shape=(BLOCK_SIZE,),
+            strides=(stride_x,),
+            offsets=(0,),
+            block_shape=(BLOCK_SIZE,),
+            order=(0,),
+        )
+        x = tl.load(block_ptr) # block_ptr has divisibility of 1
+
+        output_ptr = tl.make_block_ptr(
+            base=output_ptr + block_start * stride_x,
+            shape=(BLOCK_SIZE,),
+            strides=(stride_x,),
+            offsets=(0,),
+            block_shape=(BLOCK_SIZE,),
+            order=(0,),
+        )
+        tl.store(output_ptr, x)
+
+    size = 4096
+    x = torch.rand(size, device=torch.device("cuda")).uniform_(-0.1, 0.1).to(torch.float8_e4m3fn)
+    x_offsets = torch.tensor([0], device=torch.device("cuda"))
+    output = torch.empty_like(x)
+    stride_x = 1
+    BLOCK_SIZE = 128
+    with enable_diagnostics_context('remarks'):
+        test_kernel[(1,)](x, x_offsets, output, stride_x, BLOCK_SIZE=BLOCK_SIZE)
+
+    _, err = capfd.readouterr()
+    assert ("remark:" in err), "expect failure remark"
+
+
 
 def test_remark_swp_op_before_operands(capfd, fresh_triton_cache):
 
