@@ -480,18 +480,18 @@ This shared encoding is similar to SwizzledSharedEncodingAttr,
 but instead of repeating swizzling pattern every `blockSize = maxPhase*perPhase` rows of memory object,
 this layout changes swizzling pattern maxPhase times, then repeats pattern.
 The name "Rotating" comes from the fact that first tensor element of each block is swizzled with different phase,
-which is equal to current block number: 0, 1, 2.. maxPhase, 0, 1, 2 ...
+which is equal to current block number: 0, 1, 2.. maxPhase-1, 0, 1, 2 ...
 
 Swizzling pattern affects only 2 fastest dimensions of a tensor.
 In following text these two dimensions are called row and column:
 - row is a fastest dimension
 - column is a second fastest dimension
 
-Elements in a row dimension are stored in memory consequentially.
+Elements in a row dimension are stored in memory contiguously.
 
 If a matrix of size [128x64] is stored in this shared layout with order [1, 0],
-dim 1 (64) will be stored consequentially and called row, dim 0 (128) is will be called column.
-If order of shared layout is [0, 1], dim 0 (128) is stored consequentially becomes a row, dim 1 (64) becomes a column.
+dim 1 (64) will be stored contiguously and called row, dim 0 (128) is will be called column.
+If order of shared layout is [0, 1], dim 0 (128) is stored contiguously becomes a row, dim 1 (64) becomes a column.
 
 Swizzling pattern is following:
 
