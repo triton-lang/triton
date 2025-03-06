@@ -533,9 +533,18 @@ unsigned getContiguity(Value ptr, ModuleAxisInfoAnalysis &axisAnalysisPass) {
 
 unsigned getContiguity(Value ptr, Value offset,
                        ModuleAxisInfoAnalysis &axisAnalysisPass) {
-  // Get contiguity from the offset
+  // When computing the contiguity for ptr and offset we need to get the
+  // contiguity from offsets, as they store the per lane offsets and we have to
+  // get the alignment from the ptr
+
   Type type = getPointerTypeWithShape(ptr, offset);
   RankedTensorType tensorTy = cast<RankedTensorType>(type);
+
+  auto contiguity = axisAnalysisPass.getPtrContiguity(offset, tensorTy);
+
+  // FIXME (Alex): this should not be needed anymore because it's done inside
+  // getPtrContiguity, but we have an order issues with LL, so we keep this
+  // until the LL order issue is fixed
   auto layout = tensorTy.getEncoding();
   auto linearLayout = triton::gpu::toLinearLayout(tensorTy.getShape(), layout);
   auto llAttr =
@@ -544,7 +553,7 @@ unsigned getContiguity(Value ptr, Value offset,
   auto contigPerThread = llAttr.getContigPerThread();
   assert(order[0] < contigPerThread.size() &&
          "Unexpected contigPerThread size");
-  unsigned contiguity = contigPerThread[order[0]];
+  contiguity = std::min(contiguity, contigPerThread[order[0]]);
 
   // Get alignment from the pointer. Since this is a scalar pointer
   // we should not take the pointer contiguity to consider alignment
@@ -552,18 +561,10 @@ unsigned getContiguity(Value ptr, Value offset,
   auto maxMultipleBytes = axisInfo->getDivisibility(0);
   auto elemNumBits = triton::getPointeeBitWidth(tensorTy);
   auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
-  auto align = std::max<int64_t>(maxMultipleBytes / elemNumBytes, 1);
-
-  // Get offset alignment to see how many offset elements are contiguous (in a
-  // value sense)
-  auto offsetContig = axisAnalysisPass.getPtrContiguity(ptr, offset);
+  auto align = std::max<unsigned>(maxMultipleBytes / elemNumBytes, 1);
 
   // Final contiguity is a min of the offset contiguity and pointer alignment
-  // and offset alignment
-  contiguity = std::min<int64_t>(align, contiguity);
-  contiguity = std::min<int64_t>(offsetContig, contiguity);
-
-  return contiguity;
+  return std::min(align, contiguity);
 }
 
 unsigned getVectorSize(Value ptr, ModuleAxisInfoAnalysis &axisAnalysisPass) {

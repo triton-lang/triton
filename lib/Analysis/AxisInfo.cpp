@@ -1218,7 +1218,9 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
   return AxisInfo(contiguity, divisibility, constancy, constantValue);
 }
 
-unsigned ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr) {
+unsigned
+ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr,
+                                         std::optional<Type> overrideType) {
   auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
   if (!tensorTy)
     return 1;
@@ -1229,7 +1231,7 @@ unsigned ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr) {
   auto linAttr =
       gpu::toLinearEncoding(tensorTy.getEncoding(), tensorTy.getShape());
   auto order = linAttr.getOrder();
-  unsigned align = getPtrAlignment(ptr);
+  unsigned align = getPtrAlignment(ptr, overrideType);
 
   auto uniqueContigPerThread = linAttr.getContigPerThread();
   assert(order[0] < uniqueContigPerThread.size() &&
@@ -1241,31 +1243,12 @@ unsigned ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr) {
   return contiguity;
 }
 
-unsigned ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr, Value offset) {
-  auto tensorTy = dyn_cast<RankedTensorType>(offset.getType());
-  if (!tensorTy)
-    return 1;
+unsigned
+ModuleAxisInfoAnalysis::getPtrAlignment(Value ptr,
+                                        std::optional<Type> overridePtrType) {
+  auto tensorTy =
+      dyn_cast<RankedTensorType>(overridePtrType.value_or(ptr.getType()));
 
-  // FIXME: This is not as good as it could be, as we don't need to restrict
-  // the analysis to one dimension. We should determine contiguity on the
-  // flattenOuts() layout
-  auto linAttr =
-      gpu::toLinearEncoding(tensorTy.getEncoding(), tensorTy.getShape());
-  auto order = linAttr.getOrder();
-  unsigned align = getPtrAlignment(ptr, offset);
-
-  auto uniqueContigPerThread = linAttr.getContigPerThread();
-  assert(order[0] < uniqueContigPerThread.size() &&
-         "Unexpected uniqueContigPerThread size");
-  unsigned contiguity = uniqueContigPerThread[order[0]];
-  LDBG("getPtrContiguity uniqueContigPerThread = " << contiguity);
-  contiguity = std::min(align, contiguity);
-
-  return contiguity;
-}
-
-unsigned ModuleAxisInfoAnalysis::getPtrAlignment(Value ptr) {
-  auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
   if (!tensorTy)
     return 1;
   auto *axisInfo = getAxisInfo(ptr);
@@ -1277,35 +1260,6 @@ unsigned ModuleAxisInfoAnalysis::getPtrAlignment(Value ptr) {
   auto maxMultipleBytes = axisInfo->getDivisibility(order[0]);
   auto maxContig = axisInfo->getContiguity(order[0]);
   auto elemNumBits = triton::getPointeeBitWidth(tensorTy);
-  auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
-  auto maxMultiple = std::max<int64_t>(maxMultipleBytes / elemNumBytes, 1);
-  unsigned alignment = std::min(maxMultiple, maxContig);
-  LDBG("getPtrAlignment order[0] "
-       << order[0] << " maxMultipleBytes = " << maxMultipleBytes
-       << " maxContig = " << maxContig << " elemNumBits = " << elemNumBits
-       << " maxMultiple = " << maxMultiple << " alignment " << alignment);
-  LLVM_DEBUG({
-    std::string axisStr;
-    llvm::raw_string_ostream os(axisStr);
-    axisInfo->print(os);
-    LDBG("-- " << axisStr);
-  });
-  return alignment;
-}
-
-unsigned ModuleAxisInfoAnalysis::getPtrAlignment(Value ptr, Value offset) {
-  auto tensorTy = dyn_cast<RankedTensorType>(offset.getType());
-  if (!tensorTy)
-    return 1;
-  auto *axisInfo = getAxisInfo(offset);
-  if (!axisInfo)
-    return 1;
-  auto linAttr =
-      gpu::toLinearEncoding(tensorTy.getEncoding(), tensorTy.getShape());
-  auto order = linAttr.getOrder();
-  auto maxMultipleBytes = axisInfo->getDivisibility(order[0]);
-  auto maxContig = axisInfo->getContiguity(order[0]);
-  auto elemNumBits = triton::getPointeeBitWidth(ptr.getType());
   auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
   auto maxMultiple = std::max<int64_t>(maxMultipleBytes / elemNumBytes, 1);
   unsigned alignment = std::min(maxMultiple, maxContig);
