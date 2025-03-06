@@ -3213,7 +3213,7 @@ def test_convert1d_bool(M, src_layout, dst_layout, src_dim, dst_dim, device, tmp
     y_tri = torch.tensor(y, device=device)
     pgm = kernel[(1, 1, 1)](x_tri, y_tri)
     y_ref = x
-    np.testing.assert_allclose(y_ref, y_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
+    np.testing.assert_allclose(y_ref, y_tri.cpu().numpy(), rtol=0, atol=0)
 
 
 @triton.jit
