@@ -2,9 +2,6 @@
 #include "mlir/Pass/Pass.h"
 #include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/ProtonAMDGPUToLLVM/Passes.h"
 #include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/ProtonAMDGPUToLLVM/TargetInfo.h"
-#include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "llvm/Support/MathExtras.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -21,10 +18,7 @@ namespace {
 struct ConvertProtonAMDGPUToLLVM
     : public mlir::triton::proton::impl::ConvertProtonAMDGPUToLLVMBase<
           ConvertProtonAMDGPUToLLVM> {
-  explicit ConvertProtonAMDGPUToLLVM(std::string arch, bool ftz) {
-    this->arch = arch;
-    this->ftz = ftz;
-  }
+  explicit ConvertProtonAMDGPUToLLVM(std::string arch) { this->arch = arch; }
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
@@ -45,8 +39,8 @@ namespace triton::proton {
 namespace gpu {
 
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertProtonAMDGPUToLLVMPass(std::string arch, bool ftz) {
-  return std::make_unique<ConvertProtonAMDGPUToLLVM>(arch, ftz);
+createConvertProtonAMDGPUToLLVMPass(std::string arch) {
+  return std::make_unique<ConvertProtonAMDGPUToLLVM>(arch);
 }
 
 } // namespace gpu

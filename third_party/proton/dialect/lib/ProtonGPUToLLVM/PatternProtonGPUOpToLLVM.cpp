@@ -11,7 +11,8 @@ void populateProtonGPUOpPatterns(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns,
                                  const TargetInfoBase &targetInfo,
                                  PatternBenefit benefit) {
-  // TODO(fywkevin): populate all kinds of platform-neutral patterns here.
+  // TODO(fywkevin): populate all kinds of "TargetInfoBase"-related patterns
+  // here.
 }
 
 } // namespace proton::gpu

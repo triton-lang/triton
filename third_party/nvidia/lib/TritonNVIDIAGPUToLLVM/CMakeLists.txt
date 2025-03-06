@@ -25,4 +25,5 @@ add_triton_library(TritonNVIDIAGPUToLLVM
 
     LINK_LIBS PUBLIC
     TritonGPUToLLVM
+    ProtonGPUToLLVM
 )

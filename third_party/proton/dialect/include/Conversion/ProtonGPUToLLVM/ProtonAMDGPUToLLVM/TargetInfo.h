@@ -3,7 +3,6 @@
 
 #include "Conversion/ProtonGPUToLLVM/TargetInfoBase.h"
 #include "third_party/amd/lib/TritonAMDGPUToLLVM/TargetInfo.h" // TODO(fywkevin): move amd TargetInfo.h to include/
-#include "llvm/TargetParser/TargetParser.h"
 #include <string>
 
 namespace mlir::triton::proton::AMD {

@@ -2,9 +2,6 @@
 #include "mlir/Pass/Pass.h"
 #include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/ProtonNvidiaGPUToLLVM/Passes.h"
 #include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/ProtonNvidiaGPUToLLVM/TargetInfo.h"
-#include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "llvm/Support/MathExtras.h"
 
 using namespace mlir;
 using namespace mlir::triton;

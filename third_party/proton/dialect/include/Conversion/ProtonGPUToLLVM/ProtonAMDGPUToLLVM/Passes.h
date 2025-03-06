@@ -19,7 +19,7 @@ namespace triton::proton {
 
 namespace gpu {
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertProtonAMDGPUToLLVMPass(std::string arch, bool ftz);
+createConvertProtonAMDGPUToLLVMPass(std::string arch);
 
 } // namespace gpu
 

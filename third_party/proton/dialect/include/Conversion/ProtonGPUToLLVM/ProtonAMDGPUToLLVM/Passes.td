@@ -8,7 +8,7 @@ def ConvertProtonAMDGPUToLLVM : Pass<"convert-proton-amdgpu-to-llvm", "mlir::Mod
     let description = [{
         Convert ProtonGPU to LLVM using AMD-specific lowering patterns.
     }];
-    let constructor = "mlir::triton::proton::gpu::createConvertProtonAMDGPUToLLVMPass(\"\", /*ftz=*/true)";
+    let constructor = "mlir::triton::proton::gpu::createConvertProtonAMDGPUToLLVMPass(\"\")";
 
     let dependentDialects = ["mlir::arith::ArithDialect",
                              "mlir::math::MathDialect",
@@ -22,9 +22,7 @@ def ConvertProtonAMDGPUToLLVM : Pass<"convert-proton-amdgpu-to-llvm", "mlir::Mod
 
     let options = [
         Option<"arch", "arch", "std::string", /*default*/"\"\"",
-               "gfx target device architecture, e.g., gfx942">,
-        Option<"ftz", "ftz", "bool", /*default*/"true",
-               "flush denorms for math functions">,
+               "gfx target device architecture, e.g., gfx942">
     ];
 }
 

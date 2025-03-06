@@ -8,7 +8,6 @@ import triton.profiler.language as pl
 import triton.profiler as proton
 
 
-@pytest.mark.skip(reason="proton intra kernel profiling not ready for e2e test")
 def test_record(tmp_path: pathlib.Path):
 
     @triton.jit
@@ -43,7 +42,6 @@ def test_record(tmp_path: pathlib.Path):
     assert "proton.record end" in ttir
 
 
-@pytest.mark.skip(reason="proton intra kernel profiling not ready for e2e test")
 def test_hook_instrumentation(tmp_path):
 
     @triton.jit

@@ -4,6 +4,7 @@ add_triton_library(ProtonGPUToLLVM
     AllocateProtonSharedMemory.cpp
     AddProtonKernelArg.cpp
     AllocateProtonGlobalScratchBuffer.cpp
+    RecordOpToLLVM.cpp
 
     DEPENDS
     ProtonGPUConversionPassIncGen
