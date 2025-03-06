@@ -533,14 +533,20 @@ unsigned getContiguity(Value ptr, ModuleAxisInfoAnalysis &axisAnalysisPass) {
 
 unsigned getContiguity(Value ptr, Value offset,
                        ModuleAxisInfoAnalysis &axisAnalysisPass) {
-  // When computing the contiguity for ptr and offset we need to get the
-  // contiguity from offsets, as they store the per lane offsets and we have to
-  // get the alignment from the ptr
 
   Type type = getPointerTypeWithShape(ptr, offset);
   RankedTensorType tensorTy = cast<RankedTensorType>(type);
 
+  // To compute the contiguity of the scalar/warp-uniform ptr and offset pair we
+  // need to look at the contiguity of the offsets and the alignment of the ptr
   auto contiguity = axisAnalysisPass.getContiguity(offset);
+
+  // To get the alignment of the scalar ptr we need to look at the divisibility
+  auto *axisInfo = axisAnalysisPass.getAxisInfo(ptr);
+  auto maxMultipleBytes = axisInfo->getDivisibility(0);
+  auto elemNumBits = triton::getPointeeBitWidth(tensorTy);
+  auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
+  auto align = std::max<unsigned>(maxMultipleBytes / elemNumBytes, 1);
 
   // FIXME (Alex): this should not be needed anymore because it's done inside
   // getContiguity, but we have an order issues with LL, so we keep this
@@ -554,14 +560,6 @@ unsigned getContiguity(Value ptr, Value offset,
   assert(order[0] < contigPerThread.size() &&
          "Unexpected contigPerThread size");
   contiguity = std::min(contiguity, contigPerThread[order[0]]);
-
-  // Get alignment from the pointer. Since this is a scalar pointer
-  // we should not take the pointer contiguity to consider alignment
-  auto *axisInfo = axisAnalysisPass.getAxisInfo(ptr);
-  auto maxMultipleBytes = axisInfo->getDivisibility(0);
-  auto elemNumBits = triton::getPointeeBitWidth(tensorTy);
-  auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
-  auto align = std::max<unsigned>(maxMultipleBytes / elemNumBytes, 1);
 
   // Final contiguity is a min of the offset contiguity and pointer alignment
   return std::min(align, contiguity);
