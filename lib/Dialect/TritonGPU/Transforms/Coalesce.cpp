@@ -27,7 +27,7 @@ namespace gpu {
 
 struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
 
-  void emitLowPerThreadRemarks(ModuleAxisInfoAnalysis &axisInfoAnalysis, Operation *op, Value memoryAccessPtr, int64_t perThread) {
+  void emitLowPerThreadRemarksOnAxisInfo(ModuleAxisInfoAnalysis &axisInfoAnalysis, Operation *op, Value memoryAccessPtr, int64_t perThread) {
     if (perThread > 1)
       return;
     auto mainError = op->emitRemark()
@@ -167,10 +167,14 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
     LDBG("perThread after max: " << perThread);
     LDBG("numElems: " << numElems);
     LDBG("numThreads: " << numThreads);
-    perThread = std::min<int>(perThread, std::max(numElems / numThreads, 1));
+    auto perThreadFromExecutionConfig = std::max(numElems / numThreads, 1);
+    auto perThreadFromAxisInfo = perThread;
+    if (perThreadFromAxisInfo == 1) {
+      emitLowPerThreadRemarksOnAxisInfo(axisInfoAnalysis, op, ptr, perThread);
+    }
+    perThread = std::min<int>(perThreadFromAxisInfo, perThreadFromExecutionConfig);
     LDBG("perThread: " << perThread);
 
-    emitLowPerThreadRemarks(axisInfoAnalysis, op, ptr, perThread);
     if (!dyn_cast<triton::LoadOp>(op)) {
       // For ops that can result in a global memory write, we should enforce
       // that each thread handles at most 128 bits, which is the widest
