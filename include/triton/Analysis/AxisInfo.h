@@ -202,10 +202,8 @@ public:
     return &(it->second);
   }
 
-  // Allow to override the type of the ptr to avoid recreating AxisAnalysis when
-  // we work with buffer ops which store the ptr and offset separate
-  unsigned getPtrContiguity(Value ptr, std::optional<Type> overrideType = {});
-  unsigned getPtrAlignment(Value ptr, std::optional<Type> overrideType = {});
+  unsigned getContiguity(Value value);
+  unsigned getAlignment(Value value);
 
   unsigned getMaskAlignment(Value mask);
 

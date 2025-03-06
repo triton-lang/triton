@@ -528,7 +528,7 @@ unsigned getContiguity(Value ptr, ModuleAxisInfoAnalysis &axisAnalysisPass) {
   auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
   if (!tensorTy)
     return 1;
-  return axisAnalysisPass.getPtrContiguity(ptr);
+  return axisAnalysisPass.getContiguity(ptr);
 }
 
 unsigned getContiguity(Value ptr, Value offset,
@@ -540,10 +540,10 @@ unsigned getContiguity(Value ptr, Value offset,
   Type type = getPointerTypeWithShape(ptr, offset);
   RankedTensorType tensorTy = cast<RankedTensorType>(type);
 
-  auto contiguity = axisAnalysisPass.getPtrContiguity(offset, tensorTy);
+  auto contiguity = axisAnalysisPass.getContiguity(offset);
 
   // FIXME (Alex): this should not be needed anymore because it's done inside
-  // getPtrContiguity, but we have an order issues with LL, so we keep this
+  // getContiguity, but we have an order issues with LL, so we keep this
   // until the LL order issue is fixed
   auto layout = tensorTy.getEncoding();
   auto linearLayout = triton::gpu::toLinearLayout(tensorTy.getShape(), layout);

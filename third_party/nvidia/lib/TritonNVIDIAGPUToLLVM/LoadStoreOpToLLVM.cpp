@@ -139,7 +139,7 @@ struct LoadStoreConversionBase {
     auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
     if (!tensorTy)
       return 1;
-    return axisAnalysisPass.getPtrContiguity(ptr);
+    return axisAnalysisPass.getContiguity(ptr);
   }
 
   unsigned getVectorSize(Value ptr) const {
