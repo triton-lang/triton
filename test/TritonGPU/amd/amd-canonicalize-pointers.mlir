@@ -132,6 +132,36 @@ module attributes {"ttg.num-warps" = 4 : i32} {
 
 // -----
 
+#blocked = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
+  tt.func public @convertLayoutOp(%arg0: !tt.ptr<f32>) -> tensor<1024xf32, #blocked1> {
+    %c1024_i32 = arith.constant 1024 : i32
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %c1024_i32 : i32
+    %2 = tt.splat %1 : i32 -> tensor<1024xi32, #blocked>
+    %3 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #blocked>
+    %4 = tt.addptr %3, %2 : tensor<1024x!tt.ptr<f32>, #blocked>, tensor<1024xi32, #blocked>
+    %5 = ttg.convert_layout %4 : tensor<1024x!tt.ptr<f32>, #blocked> -> tensor<1024x!tt.ptr<f32>, #blocked1>
+    %6 = tt.load %5 : tensor<1024x!tt.ptr<f32>, #blocked1>
+    tt.return %6 : tensor<1024xf32, #blocked1>
+  }
+}
+// CHECK: #[[$ATTR_0:.+]] = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [64], warpsPerCTA = [4], order = [0]}>
+
+// CHECK-LABEL:   tt.func public @convertLayoutOp(
+// CHECK-SAME:  %[[VAL_0:.*]]: !tt.ptr<f32>) -> tensor<1024xf32, #[[$ATTR_0]]> {
+// CHECK:           %[[VAL_1:.*]] = arith.constant 1024 : i32
+// CHECK:           %[[VAL_2:.*]] = tt.get_program_id x : i32
+// CHECK:           %[[VAL_3:.*]] = arith.muli %[[VAL_2]], %[[VAL_1]] : i32
+// CHECK:           %[[VAL_4:.*]] = tt.addptr %[[VAL_0]], %[[VAL_3]] : !tt.ptr<f32>, i32
+// CHECK:           %[[VAL_5:.*]] = tt.splat %[[VAL_4]] : !tt.ptr<f32> -> tensor<1024x!tt.ptr<f32>, #[[$ATTR_0]]>
+// CHECK:           %[[VAL_6:.*]] = tt.load %[[VAL_5]] : tensor<1024x!tt.ptr<f32>, #[[$ATTR_0]]>
+// CHECK:           tt.return %[[VAL_6]] : tensor<1024xf32, #[[$ATTR_0]]>
+// CHECK:         }
+
+// -----
+
 module attributes {"ttg.num-warps" = 4 : i32} {
   tt.func @forOp(%arg0: !tt.ptr<f32>, %arg1: tensor<1024xf32>) -> tensor<1024xf32> {
     %c1024_i32 = arith.constant 1024 : i32
