@@ -1222,13 +1222,26 @@ unsigned ModuleAxisInfoAnalysis::getContiguity(Value value) {
   auto tensorTy = dyn_cast<RankedTensorType>(value.getType());
   if (!tensorTy)
     return 1;
+  auto elemTy = tensorTy.getElementType();
+  // Get the pointee type if we have a tensor of ptrs to compute contiguity for
+  if (auto ptrTy = dyn_cast<PointerType>(elemTy)) {
+    elemTy = ptrTy.getPointeeType();
+  }
+  return getContiguity(value, elemTy.getIntOrFloatBitWidth());
+}
+
+unsigned ModuleAxisInfoAnalysis::getContiguity(Value value,
+                                               unsigned elementBitWidth) {
+  auto tensorTy = dyn_cast<RankedTensorType>(value.getType());
+  if (!tensorTy)
+    return 1;
   // FIXME: This is not as good as it could be, as we don't need to restrict
   // the analysis to one dimension. We should determine contiguity on the
   // flattenOuts() layout
   auto linAttr =
       gpu::toLinearEncoding(tensorTy.getEncoding(), tensorTy.getShape());
   auto order = linAttr.getOrder();
-  unsigned align = getAlignment(value);
+  unsigned align = getAlignment(value, elementBitWidth);
 
   auto uniqueContigPerThread = linAttr.getContigPerThread();
   assert(order[0] < uniqueContigPerThread.size() &&
@@ -1244,6 +1257,20 @@ unsigned ModuleAxisInfoAnalysis::getAlignment(Value value) {
   auto tensorTy = dyn_cast<RankedTensorType>(value.getType());
   if (!tensorTy)
     return 1;
+
+  auto elemTy = tensorTy.getElementType();
+  // Get the pointee type if we have a tensor of ptrs to compute contiguity for
+  if (auto ptrTy = dyn_cast<PointerType>(elemTy)) {
+    elemTy = ptrTy.getPointeeType();
+  }
+  return getAlignment(value, elemTy.getIntOrFloatBitWidth());
+}
+
+unsigned ModuleAxisInfoAnalysis::getAlignment(Value value,
+                                              unsigned elementBitWidth) {
+  auto tensorTy = dyn_cast<RankedTensorType>(value.getType());
+  if (!tensorTy)
+    return 1;
   auto *axisInfo = getAxisInfo(value);
   if (!axisInfo)
     return 1;
@@ -1253,18 +1280,12 @@ unsigned ModuleAxisInfoAnalysis::getAlignment(Value value) {
   auto maxMultipleBytes = axisInfo->getDivisibility(order[0]);
   auto maxContig = axisInfo->getContiguity(order[0]);
 
-  auto elemTy = tensorTy.getElementType();
-  // Get the pointee type if we have a tensor of ptrs to compute contiguity for
-  if (auto ptrTy = dyn_cast<PointerType>(elemTy)) {
-    elemTy = ptrTy.getPointeeType();
-  }
-  auto elemNumBits = elemTy.getIntOrFloatBitWidth();
-  auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
+  auto elemNumBytes = std::max<unsigned>(elementBitWidth / 8, 1);
   auto maxMultiple = std::max<int64_t>(maxMultipleBytes / elemNumBytes, 1);
   unsigned alignment = std::min(maxMultiple, maxContig);
   LDBG("getAlignment order[0] "
        << order[0] << " maxMultipleBytes = " << maxMultipleBytes
-       << " maxContig = " << maxContig << " elemNumBits = " << elemNumBits
+       << " maxContig = " << maxContig << " elemNumBits = " << elementBitWidth
        << " maxMultiple = " << maxMultiple << " alignment " << alignment);
   LLVM_DEBUG({
     std::string axisStr;
