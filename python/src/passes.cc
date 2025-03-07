@@ -53,6 +53,7 @@ void init_triton_passes_ttgpuir(py::module &&m) {
                      createTritonGPUOptimizeThreadLocality);
   ADD_PASS_OPTION_WRAPPER_2("add_pipeline", createTritonGPUPipeline, int, bool);
   ADD_PASS_WRAPPER_0("add_prefetch", createTritonGPUPrefetch);
+  ADD_PASS_WRAPPER_0("add_WGMMAPrefetch", createTritonGPUWGMMAPrefetch);
   ADD_PASS_WRAPPER_0("add_accelerate_matmul", createTritonGPUAccelerateMatmul);
   ADD_PASS_WRAPPER_0("add_reorder_instructions",
                      createTritonGPUReorderInstructions);
