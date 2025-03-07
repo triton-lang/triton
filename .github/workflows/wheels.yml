@@ -84,6 +84,11 @@ jobs:
           export CIBW_FREE_THREADED_SUPPORT=1
           python3 -m cibuildwheel python --output-dir wheelhouse
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cibw-wheels-manylinux_2_28_x86_64-${{ matrix.config.arch }}-wheels-upload
+          path: ./wheelhouse/*.whl
+
       - name: Install Azure CLI
         if: ${{ steps.check-version.outputs.new_commit == 'true' }}
         run: |
