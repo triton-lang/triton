@@ -313,17 +313,22 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     // 4. Buffer atomic RMW does not support FP8 ops
     //    easier to just check what we support
     auto checkType = getElementTypeOrSelf(op.getVal());
-    // TODO: F16 and BF16 data types are supported by intrinsics with packed
-    // arithmetic on adjacent addresses, requiring the leading address to be
-    // 4-byte aligned. A runtime check should be implemented to enforce this
-    // requirement and ensure fallback to regular atomic operations when
-    // alignment is not met.
-    bool isSupportedType = checkType.isF32() || checkType.isF64() ||
+    bool isSupportedType = checkType.isF16() || checkType.isBF16() ||
+                           checkType.isF32() || checkType.isF64() ||
                            checkType.isInteger(32) || checkType.isInteger(64);
     if (!isSupportedType) {
       return rewriter.notifyMatchFailure(op, "RMW with unsupported type");
     }
     LDBG("RMW supported type");
+
+    auto vecSize = getVectorSize(ptr, axisAnalysisPass);
+    // f16/bf16 dtypes could only be efficiently calculated using instructions
+    // that pack 2 elements (e.g. @llvm.amdgcn.raw.buffer.atomic.fadd.v2f16)
+    if (vecSize % 2 != 0 && (checkType.isF16() || checkType.isBF16())) {
+      return rewriter.notifyMatchFailure(
+          op, "RMW float 16 dtypes must be aligned by 2");
+    }
+    LDBG("RMW passed alignment check");
 
     // 5. Check if the RMWOp is supported
     switch (atomicRmwOp) {
@@ -355,8 +360,7 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
       // are contiguous we can emit the buffer op. Otherwise, the buffer ops
       // lowering will try to emit individual (unsupported) f16/bf16 ops.
       auto elemBitWidth = tensorType.getElementTypeBitWidth();
-      opBitWidth =
-          getVectorSize(basePtr, tensorOffset, axisAnalysisPass) * elemBitWidth;
+      opBitWidth = vecSize * elemBitWidth;
     } else {
       opBitWidth = opValueType.getIntOrFloatBitWidth();
     }
