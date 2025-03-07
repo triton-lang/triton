@@ -24,6 +24,8 @@
 #include "MMAHelpers.h"
 #include "Utility.h"
 #include "mlir/Support/LLVM.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -73,8 +75,8 @@ int64_t getSwizzlingFromLayout(const NVMMASharedEncodingAttr &layout,
   // TODO[biaow]: remove it once we support swizzling size larger than matrix
   // width, which requires padding the matrix width to the swizzling size when
   // allocating shared memory.
-  // assert(swizzlingByteWidth <= widthInByte &&
-  //        "swizzling size larger than matrix width is not supported.");
+  assert(swizzlingByteWidth <= widthInByte &&
+         "swizzling size larger than matrix width is not supported.");
   return swizzlingByteWidth;
 }
 
@@ -165,14 +167,22 @@ DotOpMmaV3SmemLoader loadA(const LLVMTypeConverter *typeConverter,
                            const NvidiaMmaEncodingAttr &mmaEncoding,
                            Value tensor, Value smemObjBase, Value thread) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto aTy = cast<triton::gpu::TensorOrMemDesc>(tensor.getType());
+  auto aTy = cast<MemDescType>(tensor.getType());
   auto aSharedLayout = dyn_cast<NVMMASharedEncodingAttr>(aTy.getEncoding());
   assert(aSharedLayout && "only support load dot operand from shared.");
   auto instrShape = mmaEncoding.getInstrShape();
   auto wpt = mmaEncoding.getWarpsPerCTA();
   bool transA = aSharedLayout.getTransposed();
   auto shapePerCTA = getShapePerCTA(aTy);
+  auto allocShape = aTy.getAllocShape();
 
+  auto allocShapeRank = allocShape.size();
+  auto shapeRank = shapePerCTA.size();
+  assert((allocShapeRank >= shapeRank) && "allocShape should be larger than shapePerCTA");
+  SmallVector<int64_t> allocSwizzleShape(shapeRank, 0);
+  for(int i = 0; i < shapeRank; i++){
+    allocSwizzleShape[i] = allocShape[allocShapeRank - shapeRank + i];
+  }
   // The descriptor should be calculated based on the first warp of the
   // warpgroup.
   Value warp = b.and_(b.udiv(thread, b.i32_val(32)), b.i32_val(0xFFFFFFFC));
@@ -185,7 +195,7 @@ DotOpMmaV3SmemLoader loadA(const LLVMTypeConverter *typeConverter,
 
   return {tensor,
           smemObjBase,
-          shapePerCTA,
+          allocSwizzleShape,
           warpId,
           wpt[0],
           transA,
@@ -207,6 +217,15 @@ DotOpMmaV3SmemLoader loadB(const LLVMTypeConverter *typeConverter,
   auto wpt = mmaEncoding.getWarpsPerCTA();
   bool transB = !bSharedLayout.getTransposed();
   auto shapePerCTA = triton::gpu::getShapePerCTA(bTy);
+  auto allocShape = bTy.getAllocShape();
+
+  auto allocShapeRank = allocShape.size();
+  auto shapeRank = shapePerCTA.size();
+  assert((allocShapeRank >= shapeRank) && "allocShape should be larger than shapePerCTA");
+  SmallVector<int64_t> allocSwizzleShape(shapeRank, 0);
+  for(int i = 0; i < shapeRank; i++){
+    allocSwizzleShape[i] = allocShape[allocShapeRank - shapeRank + i];
+  }
 
   Value warp = b.and_(b.udiv(thread, b.i32_val(32)), b.i32_val(0xFFFFFFFC));
   Value warpMN = b.udiv(warp, b.i32_val(wpt[0]));
@@ -215,7 +234,7 @@ DotOpMmaV3SmemLoader loadB(const LLVMTypeConverter *typeConverter,
 
   return {tensor,
           base,
-          shapePerCTA,
+          allocSwizzleShape,
           warpId,
           wpt[1],
           transB,
