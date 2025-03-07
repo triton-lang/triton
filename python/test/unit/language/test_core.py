@@ -7185,11 +7185,12 @@ def test_indirect_load(dtype, device):
     SIZE = 512
     x = numpy_random(SIZE, dtype_str=dtype)
     x_tri = to_triton(x, device)
-    ptr = torch.arange(SIZE, device=device, dtype=torch.int32)
+    # Flip the range to load the tensor in reverse order
+    ptr = torch.arange(SIZE, device=device, dtype=torch.int32).flip(0)
     out_tri = torch.empty(SIZE, device=device)
     indirect_load[(1, 1)](ptr, x_tri, out_tri, SIZE)
 
-    np.testing.assert_allclose(x, to_numpy(out_tri))
+    np.testing.assert_allclose(np.flip(x), to_numpy(out_tri))
 
 
 @pytest.mark.interpreter
@@ -7206,8 +7207,9 @@ def test_indirect_store(dtype, device):
     SIZE = 512
     x = numpy_random(SIZE, dtype_str=dtype)
     x_tri = to_triton(x, device)
-    ptr = torch.arange(SIZE, device=device, dtype=torch.int32)
+    # Flip the range to store the tensor in reverse order
+    ptr = torch.arange(SIZE, device=device, dtype=torch.int32).flip(0)
     out_tri = torch.empty(SIZE, device=device)
     indirect_store[(1, 1)](ptr, x_tri, out_tri, SIZE)
 
-    np.testing.assert_allclose(x, to_numpy(out_tri))
+    np.testing.assert_allclose(np.flip(x), to_numpy(out_tri))
