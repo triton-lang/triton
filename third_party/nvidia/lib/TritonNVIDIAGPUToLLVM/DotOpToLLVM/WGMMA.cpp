@@ -109,10 +109,10 @@ static Value createDescriptor(ConversionPatternRewriter &rewriter, Location loc,
 }
 
 mlir::triton::NVIDIA::DotOpMmaV3SmemLoader::DotOpMmaV3SmemLoader(
-    Value tensor, Value base, SmallVector<int64_t> shape, Value warpId,
+    Value tensor, Value base, SmallVector<int64_t> shape, SmallVector<int64_t> allocSwizzleShape, Value warpId,
     unsigned int dimWpt, bool trans, SmallVector<unsigned int> instrShape,
     int64_t elementBitwidth, ConversionPatternRewriter &rewriter, Location loc)
-    : base(base), shape(shape), warpId(warpId), dimWpt(dimWpt), trans(trans),
+    : base(base), shape(shape), allocSwizzleShape(allocSwizzleShape), warpId(warpId), dimWpt(dimWpt), trans(trans),
       instrShape(instrShape), elemBits(elementBitwidth) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto ty = cast<MemDescType>(tensor.getType());
@@ -122,7 +122,7 @@ mlir::triton::NVIDIA::DotOpMmaV3SmemLoader::DotOpMmaV3SmemLoader(
   elemsPerSwizzlingRow = (swizzlingByteWidth * 8) / elemBits;
   elemsPerSwizzlingRowVal = b.i32_val(elemsPerSwizzlingRow);
 
-  uint32_t widthInByte = shape[fastMovingDim] * elemBits / 8;
+  uint32_t widthInByte = allocSwizzleShape[fastMovingDim] * elemBits / 8;
   int64_t swizzling = getSwizzlingFromLayout(sharedLayout, widthInByte);
 
   descriptor =
@@ -195,6 +195,7 @@ DotOpMmaV3SmemLoader loadA(const LLVMTypeConverter *typeConverter,
 
   return {tensor,
           smemObjBase,
+          shapePerCTA,
           allocSwizzleShape,
           warpId,
           wpt[0],
@@ -234,6 +235,7 @@ DotOpMmaV3SmemLoader loadB(const LLVMTypeConverter *typeConverter,
 
   return {tensor,
           base,
+          shapePerCTA,
           allocSwizzleShape,
           warpId,
           wpt[1],
