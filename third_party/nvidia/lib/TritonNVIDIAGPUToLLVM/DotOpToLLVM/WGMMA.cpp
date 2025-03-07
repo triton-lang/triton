@@ -108,7 +108,7 @@ static Value createDescriptor(ConversionPatternRewriter &rewriter, Location loc,
 
 mlir::triton::NVIDIA::DotOpMmaV3SmemLoader::DotOpMmaV3SmemLoader(
     Value tensor, Value base, SmallVector<int64_t> shape,
-    SmallVector<int64_t> allocSwizzleShape, Value warpId, unsigned int dimWpt,
+    ArrayRef<int64_t> allocSwizzleShape, Value warpId, unsigned int dimWpt,
     bool trans, SmallVector<unsigned int> instrShape, int64_t elementBitwidth,
     ConversionPatternRewriter &rewriter, Location loc)
     : base(base), shape(shape), allocSwizzleShape(allocSwizzleShape),
@@ -174,16 +174,8 @@ DotOpMmaV3SmemLoader loadA(const LLVMTypeConverter *typeConverter,
   auto wpt = mmaEncoding.getWarpsPerCTA();
   bool transA = aSharedLayout.getTransposed();
   auto shapePerCTA = getShapePerCTA(aTy);
-  auto allocShape = aTy.getAllocShape();
+  auto allocSwizzleShape = aTy.getAllocShape().take_back(shapePerCTA.size());
 
-  auto allocShapeRank = allocShape.size();
-  auto shapeRank = shapePerCTA.size();
-  assert((allocShapeRank >= shapeRank) &&
-         "allocShape should be larger than shapePerCTA");
-  SmallVector<int64_t> allocSwizzleShape(shapeRank, 0);
-  for (int i = 0; i < shapeRank; i++) {
-    allocSwizzleShape[i] = allocShape[allocShapeRank - shapeRank + i];
-  }
   // The descriptor should be calculated based on the first warp of the
   // warpgroup.
   Value warp = b.and_(b.udiv(thread, b.i32_val(32)), b.i32_val(0xFFFFFFFC));
@@ -219,16 +211,7 @@ DotOpMmaV3SmemLoader loadB(const LLVMTypeConverter *typeConverter,
   auto wpt = mmaEncoding.getWarpsPerCTA();
   bool transB = !bSharedLayout.getTransposed();
   auto shapePerCTA = triton::gpu::getShapePerCTA(bTy);
-  auto allocShape = bTy.getAllocShape();
-
-  auto allocShapeRank = allocShape.size();
-  auto shapeRank = shapePerCTA.size();
-  assert((allocShapeRank >= shapeRank) &&
-         "allocShape should be larger than shapePerCTA");
-  SmallVector<int64_t> allocSwizzleShape(shapeRank, 0);
-  for (int i = 0; i < shapeRank; i++) {
-    allocSwizzleShape[i] = allocShape[allocShapeRank - shapeRank + i];
-  }
+  auto allocSwizzleShape = bTy.getAllocShape().take_back(shapePerCTA.size());
 
   Value warp = b.and_(b.udiv(thread, b.i32_val(32)), b.i32_val(0xFFFFFFFC));
   Value warpMN = b.udiv(warp, b.i32_val(wpt[0]));
