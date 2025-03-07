@@ -16,7 +16,7 @@ jobs:
     runs-on: ${{ matrix.config.runs_on }}
 
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         config:
         - {runs_on: ['self-hosted', 'CPU'], arch: 'x86_64'}
