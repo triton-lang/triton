@@ -208,9 +208,9 @@ public:
   // Overloads of the above methods but have separated elementBitWidth to
   // calculate the contiguity. These are useful for computing axis info when
   // lowering to hardware intrinsics that require a scalar/warp-uniform base ptr
-  // with separate per lane offsets. For those cases we want to compute the
-  // contiguity on the offsets but use the pointee type element bit width
-  // instead of the offset element type bit width
+  // with separate per lane offsets, e.g. AMD buffer operations. For those cases
+  // we want to compute the contiguity on the offsets but use the pointee type
+  // element bit width instead of the offset element type bit width
   unsigned getContiguity(Value value, unsigned elementBitWidth);
   unsigned getAlignment(Value value, unsigned elementBitWidth);
 
