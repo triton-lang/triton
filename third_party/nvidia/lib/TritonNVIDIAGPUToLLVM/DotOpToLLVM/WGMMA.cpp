@@ -109,11 +109,13 @@ static Value createDescriptor(ConversionPatternRewriter &rewriter, Location loc,
 }
 
 mlir::triton::NVIDIA::DotOpMmaV3SmemLoader::DotOpMmaV3SmemLoader(
-    Value tensor, Value base, SmallVector<int64_t> shape, SmallVector<int64_t> allocSwizzleShape, Value warpId,
-    unsigned int dimWpt, bool trans, SmallVector<unsigned int> instrShape,
-    int64_t elementBitwidth, ConversionPatternRewriter &rewriter, Location loc)
-    : base(base), shape(shape), allocSwizzleShape(allocSwizzleShape), warpId(warpId), dimWpt(dimWpt), trans(trans),
-      instrShape(instrShape), elemBits(elementBitwidth) {
+    Value tensor, Value base, SmallVector<int64_t> shape,
+    SmallVector<int64_t> allocSwizzleShape, Value warpId, unsigned int dimWpt,
+    bool trans, SmallVector<unsigned int> instrShape, int64_t elementBitwidth,
+    ConversionPatternRewriter &rewriter, Location loc)
+    : base(base), shape(shape), allocSwizzleShape(allocSwizzleShape),
+      warpId(warpId), dimWpt(dimWpt), trans(trans), instrShape(instrShape),
+      elemBits(elementBitwidth) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto ty = cast<MemDescType>(tensor.getType());
   auto sharedLayout = cast<NVMMASharedEncodingAttr>(ty.getEncoding());
@@ -178,9 +180,10 @@ DotOpMmaV3SmemLoader loadA(const LLVMTypeConverter *typeConverter,
 
   auto allocShapeRank = allocShape.size();
   auto shapeRank = shapePerCTA.size();
-  assert((allocShapeRank >= shapeRank) && "allocShape should be larger than shapePerCTA");
+  assert((allocShapeRank >= shapeRank) &&
+         "allocShape should be larger than shapePerCTA");
   SmallVector<int64_t> allocSwizzleShape(shapeRank, 0);
-  for(int i = 0; i < shapeRank; i++){
+  for (int i = 0; i < shapeRank; i++) {
     allocSwizzleShape[i] = allocShape[allocShapeRank - shapeRank + i];
   }
   // The descriptor should be calculated based on the first warp of the
@@ -222,9 +225,10 @@ DotOpMmaV3SmemLoader loadB(const LLVMTypeConverter *typeConverter,
 
   auto allocShapeRank = allocShape.size();
   auto shapeRank = shapePerCTA.size();
-  assert((allocShapeRank >= shapeRank) && "allocShape should be larger than shapePerCTA");
+  assert((allocShapeRank >= shapeRank) &&
+         "allocShape should be larger than shapePerCTA");
   SmallVector<int64_t> allocSwizzleShape(shapeRank, 0);
-  for(int i = 0; i < shapeRank; i++){
+  for (int i = 0; i < shapeRank; i++) {
     allocSwizzleShape[i] = allocShape[allocShapeRank - shapeRank + i];
   }
 
