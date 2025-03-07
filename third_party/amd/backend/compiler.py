@@ -307,7 +307,7 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.add_membar_analysis(pm)
         amd.passes.ttgpuir.add_refine_amdgpu_ops(pm, options.arch)
         passes.common.add_canonicalizer(pm)
-        #amd.passes.ttgpuir.add_reschedule_amdgpu_ops(pm, options.arch)
+        amd.passes.ttgpuir.add_reschedule_amdgpu_ops(pm, options.arch)
         ## __HIP_FTZ is used to control the denorm flushing behavior of exp2 op as follows:
         ## 1. If __HIP_FTZ = 1, exp2 flushes denorms in input and output regardless
         ##    of the value of kernel arg `allow_flush_denorm`.
