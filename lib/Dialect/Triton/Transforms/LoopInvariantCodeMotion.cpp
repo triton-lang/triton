@@ -44,16 +44,13 @@ class LoopInvariantCodeMotionPass
           },
           // shouldMoveOutOfRegion
           [&](Operation *op, Region *region) {
+            if (!isa<LoadOp>(op))
+              return isSpeculatable(op) && isMemoryEffectFree(op);
             if (!isLoopMemoryEffectFreeOrOnlyRead.contains(loopLike))
               isLoopMemoryEffectFreeOrOnlyRead[loopLike] =
                   isMemoryEffectFreeOrOnlyRead(loopLike);
-            bool nonLoadShouldMoveOutOfRegion = !isa<LoadOp>(op) &&
-                                                isSpeculatable(op) &&
-                                                isMemoryEffectFree(op);
-            bool loadShouldMoveOutOfRegion =
-                isa<LoadOp>(op) && isMemoryEffectFreeOrOnlyRead(op) &&
-                isLoopMemoryEffectFreeOrOnlyRead[loopLike];
-            return nonLoadShouldMoveOutOfRegion || loadShouldMoveOutOfRegion;
+            return isMemoryEffectFreeOrOnlyRead(op) &&
+                   isLoopMemoryEffectFreeOrOnlyRead[loopLike];
           },
           // moveOutOfRegion
           [&](Operation *op, Region *) {
@@ -72,8 +69,7 @@ class LoopInvariantCodeMotionPass
                 // TODO: Support Load Op hoisting for while loop.
                 return;
               } else {
-                loopLike->emitError("Unrecognized loop-like op");
-                llvm::report_fatal_error("Fatal LICM error");
+                return;
               }
               Value newMask = getPredMask(rewriter, loadOp.getPtr().getType(),
                                           loadOp.getMask(), cond);
