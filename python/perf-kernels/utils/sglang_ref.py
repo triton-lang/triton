@@ -899,16 +899,16 @@ def extend_attention_fwd(
 
     k_buffer, v_buffer: (prefix + extend) tensors in mem_manager
     """
-    print(
-        f"q_extend.shape: {q_extend.shape}\n"
-        f"k_extend.shape: {k_extend.shape}\n"
-        f"v_extend.shape: {v_extend.shape}\n"
-        f"k_buffer.shape: {k_buffer.shape}\n"
-        f"v_buffer.shape: {v_buffer.shape}\n"
-        f"qo_indptr: {qo_indptr}\n"
-        f"kv_indptr: {kv_indptr}\n"
-        f"kv_indices: {kv_indices}\n"
-    )
+    # print(
+    #     f"q_extend.shape: {q_extend.shape}\n"
+    #     f"k_extend.shape: {k_extend.shape}\n"
+    #     f"v_extend.shape: {v_extend.shape}\n"
+    #     f"k_buffer.shape: {k_buffer.shape}\n"
+    #     f"v_buffer.shape: {v_buffer.shape}\n"
+    #     f"qo_indptr: {qo_indptr}\n"
+    #     f"kv_indptr: {kv_indptr}\n"
+    #     f"kv_indices: {kv_indices}\n"
+    # )
     Lq, Lk, Lv = (
         q_extend.shape[-1],
         k_extend.shape[-1],

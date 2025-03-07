@@ -23,6 +23,7 @@ from utils.rotary_embedding import DeepseekScalingRotaryEmbedding
 from utils.sglang_ref import extend_attention_fwd as extend_attention_fwd_ref
 import argparse
 import sys
+import pytest
 
 is_cuda_available = torch.cuda.is_available()
 if is_cuda_available:
@@ -34,13 +35,15 @@ def is_hip():
 is_hip_ = is_hip()
 
 @triton.jit
-def _fwd_kernel(
+def _fwd_kernel_fused(
     Q_Extend,
     K_Extend,
     V_Extend,
     O_Extend,
     K_Buffer,
     V_Buffer,
+    W_KC,
+    W_VC,
     qo_indptr,
     kv_indptr,
     kv_indices,
@@ -60,14 +63,21 @@ def _fwd_kernel(
     stride_buf_kh,
     stride_buf_vbs,
     stride_buf_vh,
+    stride_w_kch,
+    stride_w_kcc,
+    stride_w_vch,
+    stride_w_vcc,
     logit_cap: tl.constexpr,
-    Lq: tl.constexpr,
-    Lv: tl.constexpr,
-    BLOCK_DMODEL: tl.constexpr,
+    BLOCK_D: tl.constexpr,
     BLOCK_DPE: tl.constexpr,
     BLOCK_DV: tl.constexpr,
+    BLOCK_C: tl.constexpr,
     BLOCK_M: tl.constexpr,
     BLOCK_N: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+    D: tl.constexpr,
+    DV: tl.constexpr,
+    C: tl.constexpr,
     USE_CUSTOM_MASK: tl.constexpr,
     STORE_TRANSPOSE: tl.constexpr,
 ):
@@ -85,13 +95,16 @@ def _fwd_kernel(
     if USE_CUSTOM_MASK:
         cur_seq_mask_start_idx = tl.load(mask_indptr + cur_seq)
 
-    offs_d = tl.arange(0, BLOCK_DMODEL)
+    offs_d = tl.arange(0, BLOCK_D)
     offs_dv = tl.arange(0, BLOCK_DV)
     offs_m = tl.arange(0, BLOCK_M)
+    # offs_c = tl.arange(0, BLOCK_C)
+    offs_c_k = tl.arange(0, BLOCK_K)
     mask_m = (cur_block_m * BLOCK_M + offs_m) < cur_seq_len_extend
 
-    mask_d = offs_d < Lq
-    mask_dv = offs_dv < Lv
+    mask_d = offs_d < D
+    mask_dv = offs_dv < DV
+    mask_k = offs_c_k < C
 
     offs_q = (
         (cur_seq_extend_start_idx + cur_block_m * BLOCK_M + offs_m[:, None])
@@ -104,7 +117,7 @@ def _fwd_kernel(
     )
 
     if BLOCK_DPE > 0:
-        offs_dpe = BLOCK_DMODEL + tl.arange(0, BLOCK_DPE)
+        offs_dpe = BLOCK_D + tl.arange(0, BLOCK_DPE)
         offs_qpe = (
             (cur_seq_extend_start_idx + cur_block_m * BLOCK_M + offs_m[:, None])
             * stride_qbs
@@ -131,13 +144,27 @@ def _fwd_kernel(
         offs_buf_k = (
             offs_kv_loc[None, :] * stride_buf_kbs
             + cur_kv_head * stride_buf_kh
-            + offs_d[:, None]
-        )
-        k = tl.load(
-            K_Buffer + offs_buf_k, mask=(mask_n[None, :]) & (mask_d[:, None]), other=0.0
+            + offs_c_k[:, None]
         )
 
-        qk = tl.dot(q.to(k.dtype), k)
+        offs_buf_w_kc = (
+            cur_head * stride_w_kch + offs_c_k[None, :] * stride_w_kcc + offs_d[:, None]
+        )
+
+        k = tl.zeros([BLOCK_D, BLOCK_N], dtype=tl.float32)
+        # tile the C dim
+        for _ in range(tl.cdiv(BLOCK_C, BLOCK_K)):
+            w_kc = tl.load(W_KC + offs_buf_w_kc, mask=(mask_d[:, None]) & (mask_k[None, :]), other=0.0)
+            k_pre_proj = tl.load(
+                K_Buffer + offs_buf_k, mask=(mask_n[None, :]) & (mask_k[:, None]), other=0.0
+            )
+
+            k += tl.dot(w_kc, k_pre_proj).to(k_pre_proj.dtype)
+
+            offs_buf_k += BLOCK_K
+            offs_buf_w_kc += BLOCK_K * stride_w_kcc
+
+        qk = tl.dot(q, k.to(q.dtype))
         if BLOCK_DPE > 0:
             offs_kpe = (
                 offs_kv_loc[None, :] * stride_buf_kbs
@@ -178,12 +205,28 @@ def _fwd_kernel(
         offs_buf_v = (
             offs_kv_loc[:, None] * stride_buf_vbs
             + cur_kv_head * stride_buf_vh
+            + offs_c_k[None, :]
+        )
+
+        offs_buf_w_vc = (
+            cur_head * stride_w_vch
+            + offs_c_k[:, None] * stride_w_vcc
             + offs_dv[None, :]
         )
-        v = tl.load(
-            V_Buffer + offs_buf_v, mask=mask_n[:, None] & mask_dv[None, :], other=0.0
-        )
-        p = p.to(v.dtype)
+
+        v = tl.zeros([BLOCK_N, BLOCK_DV], dtype=tl.float32)
+        for _ in range(tl.cdiv(BLOCK_DV, BLOCK_K)):
+            v_pre_proj = tl.load(
+                V_Buffer + offs_buf_v, mask=mask_n[:, None] & mask_k[None, :], other=0.0
+            )
+            w_vc = tl.load(W_VC + offs_buf_w_vc, mask=mask_dv[None, :] & mask_k[:, None], other=0.0)
+
+            v += tl.dot(v_pre_proj, w_vc).to(v_pre_proj.dtype)
+            offs_buf_v += BLOCK_K
+            offs_buf_w_vc += BLOCK_K * stride_w_vcc
+
+        p = p.to(q.dtype)
+        v = v.to(q.dtype)
         acc = acc * re_scale[:, None] + tl.dot(p, v)
 
         e_max = n_e_max
@@ -199,13 +242,27 @@ def _fwd_kernel(
         offs_k = (
             (cur_seq_extend_start_idx + start_n + offs_n[None, :]) * stride_kbs
             + cur_kv_head * stride_kh
-            + offs_d[:, None]
-        )
-        k = tl.load(
-            K_Extend + offs_k, mask=(mask_n[None, :]) & (mask_d[:, None]), other=0.0
+            + offs_c_k[:, None]
         )
 
-        qk = tl.dot(q, k, out_dtype=tl.float32)
+        offs_w_kc = (
+            cur_head * stride_w_kch + offs_d[:, None] + offs_c_k[None, :] * stride_w_kcc
+        )
+
+        k = tl.zeros([BLOCK_D, BLOCK_N], dtype=tl.float32)
+        # tile the C dim
+        for _ in range(tl.cdiv(BLOCK_C, BLOCK_K)):
+            w_kc = tl.load(W_KC + offs_w_kc, mask=(mask_d[:, None]) &(mask_k[None, :]), other=0.0)
+            k_pre_proj = tl.load(
+                K_Extend + offs_k, mask=(mask_n[None, :]) & (mask_k[:, None]), other=0.0
+            )
+
+            k += tl.dot(w_kc, k_pre_proj).to(k_pre_proj.dtype)
+
+            offs_k += BLOCK_K
+            offs_w_kc += BLOCK_K * stride_w_kcc
+
+        qk = tl.dot(q, k.to(q.dtype), out_dtype=tl.float32)
         if BLOCK_DPE > 0:
             offs_kpe = (
                 (cur_seq_extend_start_idx + start_n + offs_n[None, :]) * stride_kbs
@@ -252,12 +309,27 @@ def _fwd_kernel(
         offs_v = (
             (cur_seq_extend_start_idx + start_n + offs_n[:, None]) * stride_vbs
             + cur_kv_head * stride_vh
+            + offs_c_k[None, :]
+        )
+        offs_w_vc = (
+            cur_head * stride_w_vch
+            + offs_c_k[:, None] * stride_w_vcc
             + offs_dv[None, :]
         )
-        v = tl.load(
-            V_Extend + offs_v, mask=mask_n[:, None] & mask_dv[None, :], other=0.0
-        )
-        p = p.to(v.dtype)
+
+        v = tl.zeros([BLOCK_N, BLOCK_DV], dtype=tl.float32)
+        for _ in range(tl.cdiv(BLOCK_DV, BLOCK_K)):
+            v_pre_proj = tl.load(
+                V_Extend + offs_v, mask=mask_n[:, None] & mask_k[None, :], other=0.0
+            )
+            w_vc = tl.load(W_VC + offs_w_vc, mask=mask_dv[None, :] & mask_k[:, None], other=0.0)
+
+            v += tl.dot(v_pre_proj, w_vc).to(v_pre_proj.dtype)
+            offs_v += BLOCK_K
+            offs_w_vc += BLOCK_K * stride_w_vcc
+
+        p = p.to(q.dtype)
+        v = v.to(q.dtype)
         acc = acc * re_scale[:, None] + tl.dot(p, v)
 
         e_max = n_e_max
@@ -282,13 +354,15 @@ def _fwd_kernel(
         )
 
 
-def extend_attention_fwd(
+def extend_attention_fwd_fused(
     q_extend,
     k_extend,
     v_extend,
     o_extend,
     k_buffer,
     v_buffer,
+    w_kc,
+    w_vc,
     qo_indptr,
     kv_indptr,
     kv_indices,
@@ -309,19 +383,24 @@ def extend_attention_fwd(
         v_extend.shape[-1],
     )
 
-    if Lq == 576:
-        BLOCK_DMODEL = 512
+    D = w_kc.shape[-1]
+    DV = w_vc.shape[-1]
+    C = w_kc.shape[-2]
+
+    if Lk == 576:
+        BLOCK_C = 512
         BLOCK_DPE = 64
-    elif Lq == 288:
-        BLOCK_DMODEL = 256
+    elif Lk == 288:
+        BLOCK_C = 256
         BLOCK_DPE = 32
-    elif Lq == 192:
-        BLOCK_DMODEL = 128
+    elif Lk == 192:
+        BLOCK_C = 128
         BLOCK_DPE = 64
     else:
-        BLOCK_DMODEL = triton.next_power_of_2(Lq)
+        BLOCK_C = triton.next_power_of_2(Lk)
         BLOCK_DPE = 0
-    BLOCK_DV = triton.next_power_of_2(Lv)
+    BLOCK_D = triton.next_power_of_2(D)
+    BLOCK_DV = triton.next_power_of_2(DV)
 
     if is_hip_:
         BLOCK_M, BLOCK_N = (64, 64)
@@ -358,13 +437,15 @@ def extend_attention_fwd(
     if is_hip_:
         extra_kargs = {"waves_per_eu": 1, "matrix_instr_nonkdim": 16, "kpack": 2}
 
-    _fwd_kernel[grid](
+    _fwd_kernel_fused[grid](
         q_extend,
         k_extend,
         v_extend,
         o_extend,
         k_buffer,
         v_buffer,
+        w_kc,
+        w_vc,
         qo_indptr,
         kv_indptr,
         kv_indices,
@@ -384,14 +465,21 @@ def extend_attention_fwd(
         k_buffer.stride(1),
         v_buffer.stride(0),
         v_buffer.stride(1),
+        w_kc.stride(0),
+        w_kc.stride(1),
+        w_vc.stride(0),
+        w_vc.stride(1),
         logit_cap=logit_cap,
-        BLOCK_DMODEL=BLOCK_DMODEL,
+        BLOCK_D=BLOCK_D,
         BLOCK_DPE=BLOCK_DPE,
         BLOCK_DV=BLOCK_DV,
+        BLOCK_C=BLOCK_C,
         BLOCK_M=BLOCK_M,
         BLOCK_N=BLOCK_N,
-        Lq=Lq,
-        Lv=Lv,
+        BLOCK_K=128,
+        D=D,
+        DV=DV,
+        C=C,
         USE_CUSTOM_MASK=USE_CUSTOM_MASK,
         STORE_TRANSPOSE=is_hip_,
         num_warps=num_warps,
@@ -439,8 +527,8 @@ def input_helper(B, H, S_prefix, S_extend, kv_lora_rank, qk_nope_head_dim, v_hea
     q = torch.randn(B * S_extend, H, qk_nope_head_dim + qk_rope_head_dim, dtype=dtype, device=device)
     kv_cache = torch.randn(B * S_extend, 1, kv_lora_rank + qk_rope_head_dim, dtype=dtype, device=device)
 
-    k_buffer = torch.randn(B * S_prefix, 1, kv_lora_rank + qk_rope_head_dim)
-    v_buffer = torch.randn(B * S_prefix, 1, kv_lora_rank)
+    k_buffer = torch.randn(B * S_prefix, 1, kv_lora_rank + qk_rope_head_dim, dtype=dtype)
+    v_buffer = torch.randn(B * S_prefix, 1, kv_lora_rank, dtype=dtype)
 
     # interlancing [batch_start_off, batch_seq_len, batch_start_off, batch_seq_len, ...,]
     qo_indptr = torch.arange(B + 1, device=device) * S_extend
@@ -480,29 +568,30 @@ def kv_b_proj(kv_a, w_kc, w_vc):
 kv_a.shape: torch.Size([2048, 512])
 kv.shape: torch.Size([2048, 4096])
 """
-def forward_normal(
-        q,
-        latent_cache,
-        k_buffer,
-        v_buffer,
-        o,
-        qo_indptr,
-        kv_indptr,
-        kv_indices,
-        w_kc,
-        w_vc,
-        H,
-        kv_lora_rank,
-        qk_nope_head_dim,
-        v_head_dim,
-        qk_rope_head_dim,
-        rotary_emb,
-        positions
-    ):
+def forward_normal_ref(
+    q,
+    latent_cache,
+    k_buffer,
+    v_buffer,
+    o,
+    qo_indptr,
+    kv_indptr,
+    kv_indices,
+    w_kc,
+    w_vc,
+    H,
+    kv_lora_rank,
+    qk_nope_head_dim,
+    v_head_dim,
+    qk_rope_head_dim,
+    rotary_emb,
+    positions
+):
     _, q_pe = q.split([qk_nope_head_dim, qk_rope_head_dim], dim=-1)
 
     kv_a, _ = latent_cache.split([kv_lora_rank, qk_rope_head_dim], dim=-1)
-
+    # projection
+    # kv_a = self.kv_a_layernorm(kv_a.contiguous())
     kv = kv_b_proj(kv_a, w_kc, w_vc)
     kv = kv.view(-1, H, qk_nope_head_dim + v_head_dim)
     k_nope = kv[..., : qk_nope_head_dim]
@@ -535,66 +624,55 @@ def forward_normal(
     attn_output = attn_output.reshape(-1, H * v_head_dim)
     return attn_output
 
-def forward_absorb(
-    q,
-    latent_cache,
-    k_buffer,
-    v_buffer,
-    o,
-    qo_indptr,
-    kv_indptr,
-    kv_indices,
-    w_kc,
-    w_vc,
-    H,
-    kv_lora_rank,
-    qk_nope_head_dim,
-    v_head_dim,
-    qk_rope_head_dim,
-    rotary_emb,
-    positions
-):
-    q_input = q.new_empty(
-        q.shape[0], H, kv_lora_rank + qk_rope_head_dim
-    )
-    q_nope, q_pe = q.split([qk_nope_head_dim, qk_rope_head_dim], dim=-1)
 
-    if w_kc.dtype == torch.float8_e4m3fnuz:
-        # TODO(kernel): add bmm_fp8 for torch.float8_e4m3fnuz
-        pass
-        # q_nope_out = torch.bmm(
-        #     q_nope.to(torch.bfloat16).transpose(0, 1),
-        #     w_kc.to(torch.bfloat16) * w_scale,
-        # )
-    elif w_kc.dtype == torch.float8_e4m3fn:
-        pass
-        # q_nope_val, q_nope_scale = input_to_float8(
-        #     q_nope.transpose(0, 1), torch.float8_e4m3fn
-        # )
-        # q_nope_out = bmm_fp8(
-        #     q_nope_val, w_kc, q_nope_scale, w_scale, torch.bfloat16
-        # )
-    else:
-        q_nope_out = torch.bmm(q_nope.transpose(0, 1), w_kc.transpose(1, 2))
-    q_input[..., : kv_lora_rank] = q_nope_out.transpose(0, 1)
+def forward_normal_fused(
+        q,
+        latent_cache,
+        k_buffer,
+        v_buffer,
+        o,
+        qo_indptr,
+        kv_indptr,
+        kv_indices,
+        w_kc,
+        w_vc,
+        H,
+        kv_lora_rank,
+        qk_nope_head_dim,
+        v_head_dim,
+        qk_rope_head_dim,
+        rotary_emb,
+        positions
+    ):
+    _, q_pe = q.split([qk_nope_head_dim, qk_rope_head_dim], dim=-1)
 
-    v_input = latent_cache[..., : kv_lora_rank]
-    # v_input = kv_a_layernorm(v_input.contiguous()).unsqueeze(1)
-    k_input = latent_cache
-    k_input[..., : kv_lora_rank] = v_input
-    k_pe = k_input[..., kv_lora_rank :]
-
+    kv_a, _ = latent_cache.split([kv_lora_rank, qk_rope_head_dim], dim=-1)
+    # projection
+    # kv_a = self.kv_a_layernorm(kv_a.contiguous())
+    # kv = kv_b_proj(kv_a, w_kc, w_vc)
+    # kv = kv.view(-1, H, qk_nope_head_dim + v_head_dim)
+    k_nope = v = kv_a[..., : kv_lora_rank]
+    # k_nope = kv[..., : qk_nope_head_dim]
+    # v = kv[..., qk_nope_head_dim :]
+    k_pe = latent_cache[:, :, kv_lora_rank :]
     q_pe, k_pe = rotary_emb(positions, q_pe, k_pe)
-    q_input[..., kv_lora_rank :] = q_pe
-    k_input[..., kv_lora_rank :] = k_pe
+    q[..., qk_nope_head_dim :] = q_pe
+    # TODO check this
+    k_pe = k_pe.squeeze(0)
+    k = torch.cat((k_nope, k_pe), dim=-1)
 
-    extend_attention_fwd_ref(
-        q_input,
-        k_input,
-        v_input,
+    latent_cache[:, :, : kv_lora_rank] = kv_a
+    latent_cache[:, :, kv_lora_rank :] = k_pe
+
+    extend_attention_fwd_fused(
+        q,
+        k,
+        v,
         o,
         k_buffer,
         v_buffer,
+        w_kc,
+        w_vc,
         qo_indptr,
         kv_indptr,
         kv_indices,
@@ -603,91 +681,86 @@ def forward_absorb(
         max_len_extend=qo_indptr[1]
     )
     attn_output = o
-    attn_output = attn_output.view(-1, H, kv_lora_rank)
-
-    if w_vc.dtype == torch.float8_e4m3fnuz:
-        pass
-        # TODO(kernel): add bmm_fp8 for torch.float8_e4m3fnuz
-        # attn_bmm_output = torch.bmm(
-        #     attn_output.to(torch.bfloat16).transpose(0, 1),
-        #     w_vc.to(torch.bfloat16) * self.w_scale,
-        # )
-    elif w_vc.dtype == torch.float8_e4m3fn:
-        pass
-        # attn_output_val, attn_output_scale = input_to_float8(
-        #     attn_output.transpose(0, 1), torch.float8_e4m3fn
-        # )
-        # attn_bmm_output = bmm_fp8(
-        #     attn_output_val,
-        #     w_vc,
-        #     attn_output_scale,
-        #     w_scale,
-        #     torch.bfloat16,
-        # )
-    else:
-        attn_bmm_output = torch.bmm(attn_output.transpose(0, 1), w_vc)
-    attn_output = attn_bmm_output.transpose(0, 1).flatten(1, 2)
-
+    attn_output = attn_output.reshape(-1, H * v_head_dim)
     return attn_output
 
 
-def forward(q, latent_cache, k_buffer, v_buffer, qo_indptr, kv_indptr, kv_indices, w_kc, w_vc, H, kv_lora_rank, qk_nope_head_dim, v_head_dim, qk_rope_head_dim, rotary_emb, positions, absorb=False):
-    o = torch.empty(qo_indptr[-1], H, v_head_dim, dtype=q.dtype, device=q.device)
-    if absorb:
-        return forward_absorb(
-            q,
-            latent_cache,
-            k_buffer,
-            v_buffer,
-            o,
-            qo_indptr,
-            kv_indptr,
-            kv_indices,
-            w_kc,
-            w_vc,
-            H,
-            kv_lora_rank,
-            qk_nope_head_dim,
-            v_head_dim,
-            qk_rope_head_dim,
-            rotary_emb,
-            positions
-        )
-    else:
-        return forward_normal(
-            q,
-            latent_cache,
-            k_buffer,
-            v_buffer,
-            o,
-            qo_indptr,
-            kv_indptr,
-            kv_indices,
-            w_kc,
-            w_vc,
-            H,
-            kv_lora_rank,
-            qk_nope_head_dim,
-            v_head_dim,
-            qk_rope_head_dim,
-            rotary_emb,
-            positions
-        )
+
+@pytest.mark.parametrize('B, H, S_prefix, S_extend, kv_lora_rank, qk_nope_head_dim, v_head_dim, qk_rope_head_dim', [
+    (1, 16, 0, 2048, 512, 128, 128, 64)
+])
+@pytest.mark.parametrize('dtype', [torch.bfloat16, torch.float32])
+def test_op_fwd(B, H, S_prefix, S_extend, kv_lora_rank, qk_nope_head_dim, v_head_dim, qk_rope_head_dim, dtype, device="cuda"):
+    torch.manual_seed(0)
+
+    q, kv_cache, k_buffer, v_buffer, qo_indptr, kv_indptr, kv_indices, w_kc, w_vc, rotary_emb, positions = input_helper(
+        B,
+        H,
+        S_prefix,
+        S_extend,
+        kv_lora_rank,
+        qk_nope_head_dim,
+        v_head_dim,
+        qk_rope_head_dim,
+        dtype,
+        device
+    )
+
+    tri_o = torch.empty(qo_indptr[-1], H, v_head_dim, dtype=q.dtype, device=q.device)
+    ref_o = torch.empty(qo_indptr[-1], H, v_head_dim, dtype=q.dtype, device=q.device)
+
+    tri_output = forward_normal_fused(
+        q,
+        kv_cache,
+        k_buffer,
+        v_buffer,
+        tri_o,
+        qo_indptr,
+        kv_indptr,
+        kv_indices,
+        w_kc,
+        w_vc,
+        H,
+        kv_lora_rank,
+        qk_nope_head_dim,
+        v_head_dim,
+        qk_rope_head_dim,
+        rotary_emb,
+        positions
+    )
+
+    ref_output = forward_normal_ref(
+        q,
+        kv_cache,
+        k_buffer,
+        v_buffer,
+        ref_o,
+        qo_indptr,
+        kv_indptr,
+        kv_indices,
+        w_kc,
+        w_vc,
+        H,
+        kv_lora_rank,
+        qk_nope_head_dim,
+        v_head_dim,
+        qk_rope_head_dim,
+        rotary_emb,
+        positions)
+    print(ref_output)
+    print(tri_output)
+    torch.testing.assert_close(ref_output, tri_output, atol=1e-2, rtol=1e-2)
+
 
 # forward_batch.extend_prefix_lens.sum() == 0 => forward_normal
 def benchmark(args):
     dtype = arg_to_torch_dtype[args.dtype]
-    absorb = args.absorb
     configs = []
 
-    if not absorb:
-        # prefill
-        x_vals_list = [(args.B, 16, 0, 2048, 512, 128, 128, 64)]
-    else:
-        # decode
-        x_vals_list = [(args.B, 16, 1024, 1024, 512, 128, 128, 64)]
+    # prefill
+    x_vals_list = [(args.B, 16, 0, 2048, 512, 128, 128, 64)]
     x_names = ["B", "H", "S_prefix", "S_extend", "kv_lora_rank", "qk_nope_head_dim", "v_head_dim", "qk_rope_head_dim"]
-    line_vals = ["ref"]
+    line_vals = ["ref", "fused"]
     plot_name = "MLA-decode"
 
     configs.append(
@@ -713,10 +786,15 @@ def benchmark(args):
             dtype,
             device)
 
+        o = torch.empty(qo_indptr[-1], H, v_head_dim, dtype=q.dtype, device=q.device)
 
         if "ref" in provider:
             fn = lambda: {
-                forward(q, kv_cache, k_buffer, v_buffer, qo_indptr, kv_indptr, kv_indices, w_kc, w_vc, H, kv_lora_rank, qk_nope_head_dim, v_head_dim, qk_rope_head_dim, rotary_emb, positions, absorb)
+                forward_normal_ref(q, kv_cache, k_buffer, v_buffer, o, qo_indptr, kv_indptr, kv_indices, w_kc, w_vc, H, kv_lora_rank, qk_nope_head_dim, v_head_dim, qk_rope_head_dim, rotary_emb, positions)
+            }
+        if "fused" in provider:
+            fn = lambda: {
+                forward_normal_fused(q, kv_cache, k_buffer, v_buffer, o, qo_indptr, kv_indptr, kv_indices, w_kc, w_vc, H, kv_lora_rank, qk_nope_head_dim, v_head_dim, qk_rope_head_dim, rotary_emb, positions)
             }
 
         ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
@@ -737,7 +815,6 @@ def parse_args():
     parser.add_argument("-dtype", default='bf16', help="data type")
     parser.add_argument("-device", default='cuda')
     parser.add_argument("-B", type=int, default=1)
-    parser.add_argument("-absorb", type=bool, default=False)
     return parser.parse_args()
 
 
