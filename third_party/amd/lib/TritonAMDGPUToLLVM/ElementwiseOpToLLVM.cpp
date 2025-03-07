@@ -1077,7 +1077,8 @@ struct FpToFpOpConversion
 
     // numElements = 4 for conversions:
     // ocp bf8->fp16, ocp bf8->bf16, ocp bf8->fp32 on non-CDNA4
-    // fp16->ocp bf8, bf16->ocp bf8, fp32->ocp bf8 on non-CDNA4
+    // fp16->ocp bf8, bf16->ocp bf8, fp32->ocp bf8(RTNE) on non-CDNA4
+    // fp32->ocp bf8(RTZ)
     size_t numElements = 2;
     if (llvm::isa<Float8E5M2Type>(srcElementType) &&
             !llvm::isa<Float32Type>(dstElementType) ||
@@ -1087,7 +1088,8 @@ struct FpToFpOpConversion
             llvm::isa<Float8E5M2Type>(dstElementType) ||
         llvm::isa<Float32Type>(srcElementType) &&
             llvm::isa<Float8E5M2Type>(dstElementType) &&
-            isaFamily != AMD::ISAFamily::CDNA4) {
+            (roundingMode != RoundingMode::RTNE ||
+            isaFamily != AMD::ISAFamily::CDNA4)) {
       numElements = 4;
     }
 
