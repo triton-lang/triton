@@ -27,11 +27,14 @@ namespace gpu {
 
 struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
 
-  void emitLowPerThreadRemarksOnAxisInfo(ModuleAxisInfoAnalysis &axisInfoAnalysis, Operation *op, Value memoryAccessPtr, int64_t perThread) {
+  void
+  emitLowPerThreadRemarksOnAxisInfo(ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                                    Operation *op, Value memoryAccessPtr,
+                                    int64_t perThread) {
     if (perThread > 1)
       return;
     auto mainError = op->emitRemark()
-                      << "Coalescing only assigns one element per thread for "
+                     << "Coalescing only assigns one element per thread for "
                         "this operation. Performance may be suboptimal.";
 
     llvm::SetVector<Operation *> backwardSlice;
@@ -50,8 +53,10 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
     };
     getBackwardSlice(op, &backwardSlice, opt);
 
-    auto divisibility = axisInfoAnalysis.getAxisInfo(memoryAccessPtr)->getDivisibility();
-    auto contiguity = axisInfoAnalysis.getAxisInfo(memoryAccessPtr)->getContiguity();
+    auto divisibility =
+        axisInfoAnalysis.getAxisInfo(memoryAccessPtr)->getDivisibility();
+    auto contiguity =
+        axisInfoAnalysis.getAxisInfo(memoryAccessPtr)->getContiguity();
     // check if divisibility in all dimensions is 1
     auto divisibilityIsOne = product<int64_t>(divisibility) == 1;
 
@@ -87,14 +92,14 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
           if (isa<triton::LoadOp>(sliceOp)) {
             mainError.attachNote(sliceOp->getLoc())
                 << "tt.load resets divisibility. Consider add "
-                    "`tt.multiple_of` if you believe it is correct for the "
-                    "data.";
+                   "`tt.multiple_of` if you believe it is correct for the "
+                   "data.";
           } else if (isa<arith::DivUIOp>(sliceOp) ||
-                      isa<arith::DivSIOp>(sliceOp)) {
+                     isa<arith::DivSIOp>(sliceOp)) {
             mainError.attachNote(sliceOp->getLoc())
                 << "Division resets divisibility. Consider add "
-                    "`tt.multiple_of` if you believe it is correct for the "
-                    "data.";
+                   "`tt.multiple_of` if you believe it is correct for the "
+                   "data.";
           }
         }
       }
@@ -172,7 +177,8 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
     if (perThreadFromAxisInfo == 1) {
       emitLowPerThreadRemarksOnAxisInfo(axisInfoAnalysis, op, ptr, perThread);
     }
-    perThread = std::min<int>(perThreadFromAxisInfo, perThreadFromExecutionConfig);
+    perThread =
+        std::min<int>(perThreadFromAxisInfo, perThreadFromExecutionConfig);
     LDBG("perThread: " << perThread);
 
     if (!dyn_cast<triton::LoadOp>(op)) {
