@@ -10,7 +10,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 
 // CHECK-DAG: [[threadrake_layout:#.*]] = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 16], warpsPerCTA = [8, 1], order = [1, 0]}>
 // CHECK-DAG: [[transposed_in_regs_layout:#.*]] = #ttg.linear<{offset = {{.*}}}>
-// CHECK-DAG: [[special_shared:#.*]] = #ttg.swizzled_blocks_shared
+// CHECK-DAG: [[special_shared:#.*]] = #ttg.amd_rotating_shared
 // CHECK: [[load_ptr:%.*]] = ttg.convert_layout {{.*}} -> tensor<32x128x!tt.ptr<f16>, [[threadrake_layout]]>
 // CHECK: [[load_val:%.*]] = tt.load [[load_ptr]] : tensor<32x128x!tt.ptr<f16>, [[threadrake_layout]]>
 // CHECK: [[transposed_in_reg:%.*]] = ttg.convert_layout [[load_val]]{{.*}} -> tensor<32x128xf16, [[transposed_in_regs_layout]]>
@@ -31,3 +31,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     tt.return
   }
 }
+
+// -----
+
+// TBD example with small K
+
+// -----
+
+// TBD example with loop
