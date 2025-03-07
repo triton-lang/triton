@@ -1,7 +1,5 @@
 #include "Utility.h"
 #include "mlir/Support/LLVM.h"
-#include "llvm/ADT/SmallVector.h"
-#include <cstdint>
 
 namespace mlir {
 namespace triton {
