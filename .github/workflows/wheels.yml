@@ -63,7 +63,6 @@ jobs:
         run: |
           # Make sure cibuildwheel is updated to latest, this will enable latest python builds
           python3 -m pip install cibuildwheel --upgrade --user
-          export LATEST_DATE=$(TZ=UTC0 git show --quiet --date='format-local:%Y%m%d%H%M%S' --format="%cd")
           # Pass MAX_JOBS=4 because, at time of writing, the VM "only" has 32GB
           # of RAM and OOMs while building if we give it the default number of
           # workers (2 * NUM_CPUs).
