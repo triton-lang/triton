@@ -68,7 +68,6 @@ jobs:
           # of RAM and OOMs while building if we give it the default number of
           # workers (2 * NUM_CPUs).
           export CIBW_ENVIRONMENT="MAX_JOBS=4 \
-                  TRITON_WHEEL_VERSION_SUFFIX=-$LATEST_DATE \
                   TRITON_BUILD_WITH_CLANG_LLD=1"
 
           # many_linux_2_28 image comes with GCC 12.2.1, but not clang.
