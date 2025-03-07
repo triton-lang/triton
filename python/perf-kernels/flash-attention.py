@@ -1330,8 +1330,12 @@ def varlen_input_helper(Z, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, equal_seqlen
     if not equal_seqlens:
         max_seqlens_q = N_CTX_Q // Z
         max_seqlens_k = N_CTX_K // Z
-        seqlens_q = torch.randint(1, max_seqlens_q + 1, (Z, ), dtype=torch.int32)
-        seqlens_k = torch.randint(1, max_seqlens_k + 1, (Z, ), dtype=torch.int32)
+        if N_CTX_Q == N_CTX_K:
+            seqlens_q = torch.randint(1, max_seqlens_q + 1, (Z, ), dtype=torch.int32)
+            seqlens_k = seqlens_q
+        else:
+            seqlens_q = torch.randint(1, max_seqlens_q + 1, (Z, ), dtype=torch.int32)
+            seqlens_k = torch.randint(1, max_seqlens_k + 1, (Z, ), dtype=torch.int32)
     else:
         seqlens_q = torch.full((Z, ), N_CTX_Q // Z)
         seqlens_k = torch.full((Z, ), N_CTX_K // Z)
@@ -1900,7 +1904,7 @@ def model_benchmark_configs(args):
     for model_name, config in configs.items():
         HQ = config["num_attention_heads"]
         HK = HQ if config["num_key_value_heads"] is None else config["num_key_value_heads"]
-        N_CTX_Q = args.sq if args.sq else 4096
+        N_CTX_Q = args.sq if args.sq else 8192
         N_CTX_K = args.sk if args.sk else N_CTX_Q
         HEAD_DIM = config["hidden_size"] // HQ
         fa_configs.append((model_name, batch_size, HQ, HK, N_CTX_Q, N_CTX_K, HEAD_DIM))
@@ -1916,11 +1920,11 @@ def run_benchmark(custom, args):
     head_size = 128 if not args.d else args.d
     mode = 'fwd'
     x_names = ['BATCH', 'HQ', 'HK', 'N_CTX_Q', 'N_CTX_K']
-    causal = args.causal
+    causal = args.causal if not args.model else True
     int8 = args.int8
     quantize_p = args.quantize_p and int8
     int8_kv = args.int8_kv and int8
-    varlen = args.layout == 'thd'
+    varlen = True if args.model else args.layout == 'thd'
     configs = []
     plot_name = f'fused-attention-{mode}-d{head_size}-layout{args.layout}'
     extra_args = {'D_HEAD': head_size, 'dtype': dtype, 'causal': causal, 'mode': mode}
@@ -1969,13 +1973,23 @@ def run_benchmark(custom, args):
             q, k, v, input_metadata = varlen_input_helper(BATCH, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype,
                                                           args.equal_seqlens)
             for i in range(0, input_metadata.num_contexts):
-                seqlen_q = input_metadata.cu_seqlens_q[i + 1] - input_metadata.cu_seqlens_q[i]
-                seqlen_k = input_metadata.cu_seqlens_k[i + 1] - input_metadata.cu_seqlens_k[i]
-                # x2 for 2 GEMMs
-                flops_per_matmul += seqlen_q.item() * seqlen_k.item() * HQ * D_HEAD * 2
+                seqlen_q = (input_metadata.cu_seqlens_q[i + 1] - input_metadata.cu_seqlens_q[i]).item()
+                seqlen_k = (input_metadata.cu_seqlens_k[i + 1] - input_metadata.cu_seqlens_k[i]).item()
+                # x2 in both cases for 2 GEMMs
+                if causal:
+                    # If seqlen_q != seqlen_k then the causal mask ignores computation
+                    # depending on which seqlen is larger. Either the lower triangle, or right triangle
+                    causal_correction = seqlen_k if seqlen_q > seqlen_k else seqlen_q
+                    flops_per_matmul += (seqlen_q * seqlen_k - (causal_correction**2) / 2) * HQ * D_HEAD * 2
+                else:
+                    flops_per_matmul += seqlen_q * seqlen_k * HQ * D_HEAD * 2
         else:
             q, k, v, input_metadata = input_helper(BATCH, HQ, HK, N_CTX_Q, N_CTX_K, D_HEAD, dtype, args.layout)
-            flops_per_matmul = 2.0 * BATCH * HQ * N_CTX_Q * N_CTX_K * D_HEAD
+            if causal:
+                causal_correction = N_CTX_K if N_CTX_Q > N_CTX_K else N_CTX_Q
+                flops_per_matmul = 2.0 * BATCH * HQ * (N_CTX_Q * N_CTX_K - (causal_correction**2) / 2) * D_HEAD
+            else:
+                flops_per_matmul = 2.0 * BATCH * HQ * N_CTX_Q * N_CTX_K * D_HEAD
         if causal:
             input_metadata.need_causal()
 
@@ -2010,14 +2024,6 @@ def run_benchmark(custom, args):
 
         ms = triton.testing.do_bench(fn, warmup=warmup, rep=rep)
         total_flops = 2 * flops_per_matmul
-        if causal:
-            # total_flops *= 0.5 # normally, but we have to take into account the unequal seqlen_q/k
-            seqlen_q = N_CTX_Q
-            seqlen_k = N_CTX_K
-            if seqlen_q > seqlen_k:
-                total_flops *= (seqlen_k / (2 * seqlen_q))
-            else:
-                total_flops *= (1 - seqlen_q / (2 * seqlen_k))
         if mode == "bwd":
             total_flops *= 2.5  # 2.0(bwd) + 0.5(recompute)
         if print_time:
@@ -2077,8 +2083,8 @@ arg_to_torch_dtype = {'fp16': torch.float16, 'bf16': torch.bfloat16, 'fp32': tor
 def main():
     args = parse_args()
     custom_config = False
-    assert args.layout == 'thd' or not args.equal_seqlens, \
-           "Equal sequence lengths arg must be used with the thd layout."
+    assert args.layout == 'thd' or not args.equal_seqlens or args.model, \
+           "Equal sequence lengths arg must be used with the thd layout or a model config."
     if args.hq or args.hk or args.d:
         custom_config = True
         assert args.b and args.hq and args.sq and args.d, \
@@ -2092,6 +2098,9 @@ def main():
 
     assert args.dtype in arg_to_torch_dtype, \
            "Only fp16, bf16 and f32 types currently supported."
+
+    if args.model:
+        print("Note: Model config sets causal masking and THD layout (varlen) by default.")
 
     run_benchmark(custom_config, args)
 
