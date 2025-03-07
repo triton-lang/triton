@@ -202,8 +202,9 @@ public:
     return &(it->second);
   }
 
-  unsigned getPtrContiguity(Value ptr);
-  unsigned getPtrAlignment(Value ptr);
+  unsigned getContiguity(Value value);
+  unsigned getAlignment(Value value);
+
   unsigned getMaskAlignment(Value mask);
 
 private:
