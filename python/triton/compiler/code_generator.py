@@ -591,12 +591,12 @@ class CodeGenerator(ast.NodeVisitor):
         def _sanitize_value(value):
             if isinstance(value, language.tuple):
                 return _apply_to_tuple_values(value, _sanitize_value)
-            native_nontensor_types = (language.dtype, language.tuple)
-            value = _unwrap_if_constexpr(value)
+            native_nontensor_types = (language.dtype, language.tuple, int, float, bool)
+            non_constexpr_value = _unwrap_if_constexpr(value)
             if value is not None and \
-                not _is_triton_value(value) and \
-                not isinstance(value, native_nontensor_types):
-                value = semantic.to_tensor(value, self.builder)
+                not _is_triton_value(non_constexpr_value) and \
+                not isinstance(non_constexpr_value, native_nontensor_types):
+                value = semantic.to_tensor(non_constexpr_value, self.builder)
             return value
 
         values = _sanitize_value(self.visit(node.value))

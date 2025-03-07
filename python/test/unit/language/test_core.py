@@ -7172,6 +7172,26 @@ def test_jit_function_arg(device):
     torch.testing.assert_close(out, expect)
 
 
+def test_assign_tensor_shape(device):
+
+    @triton.jit
+    def kernel(in_ptr, out_ptr, BLOCK_SIZE: tl.constexpr):
+        idxs = tl.arange(0, BLOCK_SIZE)
+        data = tl.load(idxs + in_ptr)
+        SHAPE = data.shape  # <-- testing this: previously SHAPE would be assigned at tuple[tensor] type
+        ones = tl.full(SHAPE, 1, tl.float32)
+        result = ones + data
+        tl.store(idxs + out_ptr, result)
+
+    inp = torch.zeros(128, device=device)
+    result = torch.empty_like(inp)
+    kernel[(1, )](inp, result, 128)
+
+    expected = torch.ones(128, device=device)
+
+    torch.testing.assert_close(expected, result)
+
+
 @pytest.mark.interpreter
 def test_zero_strided_tensors(device):
 
