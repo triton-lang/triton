@@ -1089,7 +1089,7 @@ struct FpToFpOpConversion
         llvm::isa<Float32Type>(srcElementType) &&
             llvm::isa<Float8E5M2Type>(dstElementType) &&
             (roundingMode != RoundingMode::RTNE ||
-            isaFamily != AMD::ISAFamily::CDNA4)) {
+             isaFamily != AMD::ISAFamily::CDNA4)) {
       numElements = 4;
     }
 
