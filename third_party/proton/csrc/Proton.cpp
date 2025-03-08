@@ -87,6 +87,8 @@ static void initProton(pybind11::module &&m) {
     return SessionManager::instance().getContextDepth(sessionId);
   });
 
+  m.def("unmap_scope_ids", []() -> void {});
+
   pybind11::bind_map<std::map<std::string, MetricValueType>>(m, "MetricMap");
 }
 
