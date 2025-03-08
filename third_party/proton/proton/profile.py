@@ -5,7 +5,7 @@ import pathlib
 
 from triton import knobs
 from triton._C.libproton import proton as libproton
-from .hook import register_launch_hook, unregister_launch_hook, register_init_handle_hook, unregister_init_handle_hook
+from .hook import register_launch_hook, unregister_launch_hook, register_instrumentation_hook, unregister_instrumentation_hook
 from .flags import set_profiling_off, set_profiling_on, is_command_line
 from typing import Optional
 
@@ -116,7 +116,7 @@ def start(
     if hook == "triton":
         register_launch_hook()
     if backend == "instrumentation":
-        register_init_handle_hook()
+        register_instrumentation_hook()
 
     return libproton.start(name, context, data, backend, mode, backend_path)
 
@@ -176,7 +176,7 @@ def finalize(session: Optional[int] = None, output_format: str = "hatchet") -> N
         set_profiling_off()
         libproton.finalize_all(output_format)
         unregister_launch_hook()
-        unregister_init_handle_hook()
+        unregister_instrumentation_hook()
     else:
         if is_command_line() and session != 0:
             raise ValueError("Only one session can be finalized when running from the command line.")
