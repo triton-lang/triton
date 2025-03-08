@@ -256,7 +256,7 @@ class KernelParam:
             if width and ty1 in annotation:
                 return f"{ty2}{width}"
         if annotation == "bool":
-            return "u1"
+            return "i1"
         return ""
 
     @cached_property
@@ -381,7 +381,15 @@ def create_function_from_signature(sig, kparams, backend):
             align = 'False' if kp.do_not_specialize_on_alignment else 'True'
             ret = f"specialize_impl({name}, {is_const}, {specialize}, {align})"
             if kp.annotation_type:
-                specialization.append(f'("{kp.annotation_type}",) + {ret}[1:]')
+                if isinstance(kp.annotation_type, str):
+                    if kp.annotation_type[:2] in ["fp", "bf", "i1", "u1"]:
+                        # we do not specialize non-constexpr floats and bools:
+                        specialize = False
+                if specialize:
+                    specialization.append(f'("{kp.annotation_type}",) + {ret}[1:]')
+                else:
+                    # skip runtime specialization:
+                    specialization.append(f'("{kp.annotation_type}", None)')
             else:
                 specialization.append(f"{ret}")
 
