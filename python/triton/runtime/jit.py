@@ -242,7 +242,7 @@ def _normalize_ty(ty) -> str:
         return f"*{_normalize_ty(ty.element_ty)}"
     else:
         ty = str(ty)
-    return type_canonicalization_dict.get(ty, ty)
+    return type_canonicalisation_dict.get(ty, ty)
 
 
 class KernelParam:
@@ -272,7 +272,7 @@ class KernelParam:
             a = a[2:]
         elif a.startswith("*"):
             a = a[1:]
-        if a in set(type_canonicalization_dict.values()):
+        if a in set(type_canonicalisation_dict.values()):
             return self.annotation
         return ""
 
