@@ -49,17 +49,17 @@ def _path_to_binary(binary: str):
 
 
 @functools.lru_cache()
-def get_ptxas(arch: int):
-    name = "ptxas-blackwell" if arch >= 100 else "ptxas"
+def get_ptxas():
+    name = "ptxas"
     return _path_to_binary(name)
 
 
 @functools.lru_cache()
-def get_ptxas_version(arch: int):
+def get_ptxas_version():
     mock_ver = os.environ.get('TRITON_MOCK_PTX_VERSION')
     if mock_ver is not None:
         return mock_ver  # This is not really a version of ptxas, but it is good enough for testing
-    version = subprocess.check_output([get_ptxas(arch)[0], "--version"]).decode("utf-8")
+    version = subprocess.check_output([get_ptxas()[0], "--version"]).decode("utf-8")
     return version
 
 
@@ -85,7 +85,7 @@ def ptx_get_version(cuda_version) -> int:
 def get_ptx_version_from_options(options, arch: int):
     ptx_version = options.ptx_version
     if ptx_version is None:
-        _, cuda_version = get_ptxas(arch)
+        _, cuda_version = get_ptxas()
         ptx_version = ptx_get_version(cuda_version)
     return ptx_version
 
@@ -382,7 +382,7 @@ class CUDABackend(BaseBackend):
         return ret
 
     def make_cubin(self, src, metadata, opt, capability):
-        ptxas, _ = get_ptxas(self.target.arch)
+        ptxas, _ = get_ptxas()
         with tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.ptx') as fsrc, \
             tempfile.NamedTemporaryFile(delete=False, mode='r', suffix='.log') as flog:
             fsrc.write(src)
@@ -434,5 +434,5 @@ class CUDABackend(BaseBackend):
 
     @functools.lru_cache()
     def hash(self):
-        version = get_ptxas_version(self.target.arch)
+        version = get_ptxas_version()
         return f'{version}-{self.target.arch}'
