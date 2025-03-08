@@ -178,11 +178,7 @@ DotOpMmaV3SmemLoader loadA(const LLVMTypeConverter *typeConverter,
 
   // The descriptor should be calculated based on the first warp of the
   // warpgroup.
-  Value warp = b.and_(b.udiv(thread, b.i32_val(32)), b.i32_val(0xFFFFFFFC));
-  // Workaround for a bug in ptxas 12.3 that cause a failure in
-  // test_core.py::test_dot. The shuffle will force the compiler to treat the
-  // value as uniform and prevent wrong optimizations.
-  warp = mlir::LLVM::NVIDIA::shuffleIdx(loc, rewriter, warp, 0);
+  Value warp = b.and_(rewriter.create<nvgpu::WarpIdOp>(loc), b.i32_val(0xFFFFFFFC));
   Value warpM = b.urem(warp, b.i32_val(wpt[0]));
   Value warpId = b.urem(warpM, b.i32_val(shapePerCTA[0] / instrShape[0]));
 
@@ -213,7 +209,7 @@ DotOpMmaV3SmemLoader loadB(const LLVMTypeConverter *typeConverter,
   auto shapePerCTA = triton::gpu::getShapePerCTA(bTy);
   auto allocSwizzleShape = bTy.getAllocShape().take_back(shapePerCTA.size());
 
-  Value warp = b.and_(b.udiv(thread, b.i32_val(32)), b.i32_val(0xFFFFFFFC));
+  Value warp = b.and_(rewriter.create<nvgpu::WarpIdOp>(loc), b.i32_val(0xFFFFFFFC));
   Value warpMN = b.udiv(warp, b.i32_val(wpt[0]));
   Value warpN = b.urem(warpMN, b.i32_val(wpt[1]));
   Value warpId = b.urem(warpN, b.i32_val(shapePerCTA[1] / instrShape[1]));
