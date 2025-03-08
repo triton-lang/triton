@@ -27,13 +27,13 @@ class TritonHook:
         exit_scope(triton_op=True)
 
 
-def register_triton_hook() -> None:
+def register_launch_hook() -> None:
     if knobs.runtime.launch_enter_hook is None:
         knobs.runtime.launch_enter_hook = TritonHook.enter
         knobs.runtime.launch_exit_hook = TritonHook.exit
 
 
-def unregister_triton_hook() -> None:
+def unregister_launch_hook() -> None:
     if knobs.runtime.launch_enter_hook == TritonHook.enter:
         knobs.runtime.launch_enter_hook = None
         knobs.runtime.launch_exit_hook = None
@@ -41,6 +41,7 @@ def unregister_triton_hook() -> None:
 
 class TritonInitHandleHook:
     function_scope_ids: dict = {}
+    triton_hook: TritonHook = None
 
     @staticmethod
     def map_scope_ids(function, module, metadata_group) -> None:
@@ -51,8 +52,21 @@ class TritonInitHandleHook:
                 ir.load_dialects(context)
                 module = ir.parse_mlir_module(ir_path, context)
                 module.context = context
-                scope_id_pairs = triton_proton.get_scope_id_pairs(module)
-                libproton.map_scope_ids(function, scope_id_pairs)
+                TritonInitHandleHook.function_scope_ids[function] = triton_proton.get_scope_id_pairs(module)
+
+    @staticmethod
+    def enter(lazy_dict: LazyDict) -> None:
+        function = lazy_dict.data.get("function")
+        scope_id_pairs = TritonInitHandleHook.function_scope_ids.get(function, [])
+        libproton.map_scope_ids(scope_id_pairs)
+        if TritonInitHandleHook.triton_hook:
+            TritonInitHandleHook.triton_hook.enter(lazy_dict)
+
+    @staticmethod
+    def exit(lazy_dict: LazyDict) -> None:
+        libproton.unmap_scope_ids()
+        if TritonInitHandleHook.triton_hook:
+            TritonInitHandleHook.triton_hook.exit(lazy_dict)
 
 
 def register_init_handle_hook() -> None:
