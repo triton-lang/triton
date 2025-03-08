@@ -221,11 +221,28 @@ class DependenciesFinder(ast.NodeVisitor):
 
 
 def _normalize_ty(ty) -> str:
-    if isinstance(ty, type):
-        return ty.__name__
-    elif isinstance(ty, str):
-        return ty
-    return repr(ty)
+    if isinstance(ty, str):
+        ty = ty.strip()
+        if ty.endswith("*"):
+            return "*" + _normalize_ty(ty[:-1])
+        if ty.startswith("*"):
+            return "*" + _normalize_ty(ty[1:])
+        if ty.startswith("tl."):
+            return _normalize_ty(ty.removeprefix("tl."))
+        if ty.startswith("const "):
+            ty = ty.removeprefix("const")
+            ty = _normalize_ty(ty)
+            assert ty.startswith("*")
+            return "*k" + ty[1:]
+    elif isinstance(ty, type):
+        ty = ty.__name__
+    elif isinstance(ty, core.dtype):
+        ty = ty.name
+    elif isinstance(ty, core.pointer_type):
+        return f"*{_normalize_ty(ty.element_ty)}"
+    else:
+        ty = str(ty)
+    return type_canonicalization_dict.get(ty, ty)
 
 
 class KernelParam:
@@ -250,13 +267,13 @@ class KernelParam:
 
     @cached_property
     def annotation_type(self):
-        annotation = self.annotation
-        for ty1, ty2 in [("uint", 'u'), ("int", 'i')]:
-            width = annotation[annotation.find(ty1) + len(ty1):]
-            if width and ty1 in annotation:
-                return f"{ty2}{width}"
-        if annotation == "bool":
-            return "i1"
+        a = self.annotation
+        if a.startswith("*k"):
+            a = a[2:]
+        elif a.startswith("*"):
+            a = a[1:]
+        if a in set(type_canonicalization_dict.values()):
+            return self.annotation
         return ""
 
     @cached_property
