@@ -49,7 +49,6 @@ class TritonInstrumentationHook:
         function = lazy_dict.data.get("function")
         scope_id_pairs = TritonInstrumentationHook.function_scope_ids.get(function, [])
         libproton.map_scope_ids(scope_id_pairs)
-        # TODO(Keren): Allocate a buffer here
         if TritonInstrumentationHook.triton_hook:
             TritonInstrumentationHook.triton_hook.enter(lazy_dict)
 
