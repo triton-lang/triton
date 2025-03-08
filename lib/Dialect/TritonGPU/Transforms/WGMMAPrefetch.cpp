@@ -1,4 +1,6 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/Builders.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Analysis/Utility.h"
@@ -13,7 +15,9 @@
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/CodeGen.h"
 #include "llvm/Support/LogicalResult.h"
 
 
@@ -68,14 +72,15 @@ class WGMMAPrefetcher {
   DenseMap<Value, Value> dot2aHeaderDef;
   DenseMap<Value, Value> dot2bLoopArg;
   DenseMap<Value, Value> dot2bHeaderDef;
+  DenseMap<Value, Value> dot2aSrcMemDesc;
+  DenseMap<Value, Value> dot2bSrcMemDesc;
   DenseMap<Value, Value> dot2aYield;
   DenseMap<Value, Value> dot2bYield;
   DenseMap<Value, SmallVector<Value>> dot2aVals;
+  DenseMap<Value, SmallVector<Value>> dot2aValsLocalLoad;
+  DenseMap<Value, SmallVector<Value>> dot2aValsElementWise;
   DenseMap<Value, SmallVector<Value>> dot2bVals;
-
-
-
-
+  DenseMap<Value, Value> dot2Wait;
 
 public:
   WGMMAPrefetcher() = delete;
@@ -92,7 +97,6 @@ public:
 
 
 };
-
 
 LogicalResult WGMMAPrefetcher::initialize() {
   Block *loop = forOp.getBody();
@@ -165,7 +169,8 @@ LogicalResult WGMMAPrefetcher::initialize() {
 
   // [To Do]: OpenAI is working on refactoring the
   // pipeling logic. Currently, the subviewed matrix is
-  // Not from block arg
+  // Not from block arg. Instead, it is from the beginning
+  // of the loop after some calculation
   auto getIncomingOp = [this](Value v) -> Value {
     if (auto arg = mlir::dyn_cast<BlockArgument>(v))
       if (arg.getOwner()->getParentOp() == forOp.getOperation())
@@ -202,21 +207,110 @@ LogicalResult WGMMAPrefetcher::initialize() {
       if(!dyn_cast<MemDescSubviewOp>(aSmem.getDefiningOp()) || !dyn_cast<MemDescSubviewOp>(bSmem.getDefiningOp())){
         return failure();
       }
+      auto dotOpResult = dotOp.getResult();
+      LDBG("dotOpResult is " << dotOpResult);
+
+      if(!dotOpResult.hasOneUse())
+        return failure();
+
+      auto dotOpUser = *(dotOpResult.getUsers().begin());
+      auto dotWait = dyn_cast<nvidia_gpu::WarpGroupDotWaitOp>(dotOpUser);
+
+      if(!dotWait)
+        return failure();
+
+      LDBG("dotWait is " << dotWait);
+
+
       LDBG("Successfully check memory source");
+      dots.insert(dotOp);
+      dot2aVals[dotOp] = aVals;
+      for(auto op : aVals){
+        if(isa<MemDescSubviewOp, LocalLoadOp>(op.getDefiningOp())){
+          dot2aValsLocalLoad[dotOp].push_back(op);
+        }
+        else{
+          dot2aValsElementWise[dotOp].push_back(op);
+        }
+      }
+
+      for(auto op : dot2aValsLocalLoad[dotOp])
+        LDBG("aVal, mem load op " << op);
+
+      for(auto op : dot2aValsElementWise[dotOp])
+        LDBG("aVal, elementwise op " << op);
+
+      dot2bVals[dotOp] = bVals;
+      dot2aSrcMemDesc[dotOp] = aSmem;
+      dot2bSrcMemDesc[dotOp] = bSmem;
+      dot2Wait[dotOp] = dotWait.getResult(0);
+
+    }
+  }
+
+  return llvm::success();
+}
+
+scf::ForOp WGMMAPrefetcher::createNewForOp() {
+  OpBuilder builder(forOp);
+
+  SmallVector<Value> loopArgs;
+  for(auto v : forOp.getInitArgs())
+    loopArgs.push_back(v);
+
+  auto newForOp = builder.create<scf::ForOp>(
+      forOp.getLoc(), forOp.getLowerBound(), forOp.getUpperBound(),
+      forOp.getStep(), loopArgs);
+
+  builder.setInsertionPointToStart(newForOp.getBody());
+  IRMapping mapping;
+  for (const auto &arg : llvm::enumerate(forOp.getRegionIterArgs()))
+    mapping.map(arg.value(), newForOp.getRegionIterArgs()[arg.index()]);
+  mapping.map(forOp.getInductionVar(), newForOp.getInductionVar());
+
+  auto setInsertionPointBeforeYield = [](OpBuilder &builder,
+                                         scf::ForOp newForOp) {
+    if (newForOp.getBody()->mightHaveTerminator()) {
+      builder.setInsertionPoint(newForOp.getBody()->getTerminator());
+    } else {
+      builder.setInsertionPointToEnd(newForOp.getBody());
+    }
+  };
+
+  for (Operation &op : forOp.getBody()->without_terminator()) {
+    if (op.getNumRegions() > 0){
+      setInsertionPointBeforeYield(builder, newForOp);
+    }
+    for (auto operand : op.getOperands()){
+      if (auto def = operand.getDefiningOp()){
+        auto dot = dyn_cast<nvidia_gpu::WarpGroupDotOp>(def);
+        if (dot && dots.contains(dot)){
+          setInsertionPointBeforeYield(builder, newForOp);
+        }
+      }
+
+    }
+    Operation *newOp = builder.clone(op, mapping);
+    auto dot = dyn_cast<nvidia_gpu::WarpGroupDotOp>(&op);
+    if (dot && dots.contains(dot)) {
 
 
 
     }
 
 
-
-
   }
 
-  return llvm::success();
+  SmallVector<Value> yieldValues;
+  for (Value v : forOp.getBody()->getTerminator()->getOperands())
+    yieldValues.push_back(mapping.lookupOrDefault(v));
 
+  builder.setInsertionPointToEnd(newForOp.getBody());
+  if (!yieldValues.empty())
+    builder.create<scf::YieldOp>(yieldOp.getLoc(), yieldValues);
+
+  return newForOp;
 }
-
 
 
 }
@@ -243,6 +337,12 @@ struct WGMMAPrefetchPass : public impl:: TritonGPUWGMMAPrefetchBase<WGMMAPrefetc
 
       if (prefetcher.initialize().failed())
         return;
+
+      scf::ForOp newForOp = prefetcher.createNewForOp();
+
+      for(unsigned i = 0; i < forOp->getNumResults(); ++i)
+        forOp->getResult(i).replaceAllUsesWith(newForOp->getResult(i));
+      forOp->erase();
 
     });
 
