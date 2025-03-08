@@ -221,6 +221,7 @@ class DependenciesFinder(ast.NodeVisitor):
 
 
 def _normalize_ty(ty) -> str:
+    import triton.language.core as core
     if isinstance(ty, str):
         ty = ty.strip()
         if ty.endswith("*"):
