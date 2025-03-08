@@ -282,7 +282,9 @@ class KernelParam:
 
     @cached_property
     def is_const(self):
-        return "const" in self.annotation and not self.is_constexpr
+        if self.is_constexpr:
+            return False
+        return "const" in self.annotation or self.annotation.startswith("*k")
 
     @property
     def default(self):
