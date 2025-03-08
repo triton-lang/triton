@@ -563,20 +563,19 @@ void Pingponger::getDotPingponged() {
   auto origLocalLoadCount = lLoadOps.size();
   // Prune Memory operations that may be moved to only those involved in dot
   // computation.
-  auto gLoadIt = std::remove_if(gLoadOps.begin(), gLoadOps.end(),
-                                [&dotGlobalLoads](tt::LoadOp op) {
-                                  return !dotGlobalLoads.contains(op);
-                                });
+  auto gLoadIt = llvm::remove_if(gLoadOps, [&dotGlobalLoads](tt::LoadOp op) {
+    return !dotGlobalLoads.contains(op);
+  });
   gLoadOps.erase(gLoadIt, gLoadOps.end());
-  auto lLoadIt = std::remove_if(lLoadOps.begin(), lLoadOps.end(),
-                                [&dotLocalLoads](ttg::LocalLoadOp op) {
-                                  return !dotLocalLoads.contains(op);
-                                });
+  auto lLoadIt =
+      llvm::remove_if(lLoadOps, [&dotLocalLoads](ttg::LocalLoadOp op) {
+        return !dotLocalLoads.contains(op);
+      });
   lLoadOps.erase(lLoadIt, lLoadOps.end());
-  auto lStoreIt = std::remove_if(lStoreOps.begin(), lStoreOps.end(),
-                                 [&dotLocalStores](ttg::LocalStoreOp op) {
-                                   return !dotLocalStores.contains(op);
-                                 });
+  auto lStoreIt =
+      llvm::remove_if(lStoreOps, [&dotLocalStores](ttg::LocalStoreOp op) {
+        return !dotLocalStores.contains(op);
+      });
   lStoreOps.erase(lStoreIt, lStoreOps.end());
   // All PingPong Scheduler assumes there are 2 movable global loads and 2
   // movable local loads.
