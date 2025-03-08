@@ -12,8 +12,7 @@ class TritonHook:
     from triton.compiler import LazyDict
 
     flops_width = [8, 16, 32, 64]
-    metrics = [f"flops{width}" for width in flops_width] + \
-        ["bytes"] + ["flops"]
+    metrics = [f"flops{width}" for width in flops_width] + ["bytes"] + ["flops"]
 
     @staticmethod
     def enter(lazy_dict: LazyDict) -> None:
@@ -28,24 +27,42 @@ class TritonHook:
         exit_scope(triton_op=True)
 
 
-class TritonInitHandleHook:
+class TritonInstrumentationHook:
+    from triton.compiler import LazyDict
+
     function_scope_ids: dict = {}
+    triton_hook: TritonHook = None
 
     @staticmethod
     def map_scope_ids(function, module, metadata_group) -> None:
-        if function and function not in TritonInitHandleHook.function_scope_ids:
+        if function and function not in TritonInstrumentationHook.function_scope_ids:
             ir_path = next((path for key, path in metadata_group.items() if key.endswith(("ttgir", "ttir"))), None)
             if ir_path:
                 context = ir.context()
                 ir.load_dialects(context)
                 module = ir.parse_mlir_module(ir_path, context)
                 module.context = context
-                scope_id_pairs = triton_proton.get_scope_id_pairs(module)
-                libproton.map_scope_ids(function, scope_id_pairs)
+                TritonInstrumentationHook.function_scope_ids[function] = triton_proton.get_scope_id_pairs(module)
+
+    @staticmethod
+    def enter(lazy_dict: LazyDict) -> None:
+        function = lazy_dict.data.get("function")
+        scope_id_pairs = TritonInstrumentationHook.function_scope_ids.get(function, [])
+        libproton.map_scope_ids(scope_id_pairs)
+        # TODO(Keren): Allocate a buffer here
+        if TritonInstrumentationHook.triton_hook:
+            TritonInstrumentationHook.triton_hook.enter(lazy_dict)
+
+    @staticmethod
+    def exit(lazy_dict: LazyDict) -> None:
+        libproton.unmap_scope_ids()
+        if TritonInstrumentationHook.triton_hook:
+            TritonInstrumentationHook.triton_hook.exit(lazy_dict)
 
 
 def register_launch_hook() -> None:
     from triton.compiler import CompiledKernel
+
     if CompiledKernel.launch_enter_hook is None:
         CompiledKernel.launch_enter_hook = TritonHook.enter
         CompiledKernel.launch_exit_hook = TritonHook.exit
@@ -55,17 +72,29 @@ def register_launch_hook() -> None:
 
 def unregister_launch_hook() -> None:
     from triton.compiler import CompiledKernel
+
     CompiledKernel.launch_enter_hook = None
     CompiledKernel.launch_exit_hook = None
 
 
-def register_init_handle_hook() -> None:
+def register_instrumentation_hook() -> None:
     from triton.compiler import CompiledKernel
+
     if CompiledKernel.init_handle_hook is not None:
-        raise RuntimeError("Triton init handle hook is already registered.")
-    CompiledKernel.init_handle_hook = TritonInitHandleHook.map_scope_ids
+        raise RuntimeError("Triton instrumentation hook is already registered.")
+    CompiledKernel.init_handle_hook = TritonInstrumentationHook.map_scope_ids
+    if CompiledKernel.launch_enter_hook is not None:
+        TritonInstrumentationHook.triton_hook = TritonHook
+        CompiledKernel.launch_enter_hook = TritonInstrumentationHook.enter
+        CompiledKernel.launch_exit_hook = TritonInstrumentationHook.exit
 
 
-def unregister_init_handle_hook() -> None:
+def unregister_instrumentation_hook() -> None:
     from triton.compiler import CompiledKernel
+
     CompiledKernel.init_handle_hook = None
+    CompiledKernel.launch_enter_hook = None
+    CompiledKernel.launch_exit_hook = None
+    if TritonInstrumentationHook.triton_hook:
+        CompiledKernel.launch_enter_hook = TritonHook.enter
+        CompiledKernel.launch_exit_hook = TritonHook.exit

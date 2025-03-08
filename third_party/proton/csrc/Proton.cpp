@@ -84,9 +84,10 @@ void initProton(pybind11::module &&m) {
         });
 
   m.def("map_scope_ids",
-        [](uint64_t functionHandle,
-           const std::vector<std::pair<size_t, std::string>> &scopeIdPairs)
+        [](const std::vector<std::pair<size_t, std::string>> &scopeIdPairs)
             -> void {});
+
+  m.def("unmap_scope_ids", []() -> void {});
 
   pybind11::bind_map<std::map<std::string, MetricValueType>>(m, "MetricMap");
 }
