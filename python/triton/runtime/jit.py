@@ -224,17 +224,17 @@ def _normalize_ty(ty) -> str:
     import triton.language.core as core
     if isinstance(ty, str):
         ty = ty.strip()
+        if ty.startswith("const "):
+            ty = ty.removeprefix("const")
+            ty = _normalize_ty(ty)
+            assert ty.startswith("*")
+            return "*k" + ty[1:]
         if ty.endswith("*"):
             return "*" + _normalize_ty(ty[:-1])
         if ty.startswith("*"):
             return "*" + _normalize_ty(ty[1:])
         if ty.startswith("tl."):
             return _normalize_ty(ty.removeprefix("tl."))
-        if ty.startswith("const "):
-            ty = ty.removeprefix("const")
-            ty = _normalize_ty(ty)
-            assert ty.startswith("*")
-            return "*k" + ty[1:]
     elif isinstance(ty, type):
         ty = ty.__name__
     elif isinstance(ty, core.dtype):
