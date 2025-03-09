@@ -83,7 +83,6 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::registerTritonAMDGPULowerInstructionSchedHints();
 
   // Proton passes
-  mlir::triton::registerProtonLoweringPass();
   mlir::test::proton::registerTestScopeIdAllocationPass();
   mlir::triton::proton::registerConvertProtonToProtonGPU();
   mlir::triton::proton::registerAllocateProtonSharedMemoryPass();
