@@ -10,6 +10,8 @@ class PythonContextSource : public ContextSource {
 public:
   PythonContextSource() = default;
 
+  size_t getDepth() override;
+
 private:
   std::vector<Context> getContextsImpl() override;
 };

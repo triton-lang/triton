@@ -26,6 +26,11 @@ std::vector<Context> ShadowContextSource::getContextsImpl() {
   return threadContextStack;
 }
 
+size_t ShadowContextSource::getDepth() {
+  initializeThreadContext();
+  return threadContextStack.size();
+}
+
 void ShadowContextSource::exitScope(const Scope &scope) {
   if (threadContextStack.empty()) {
     throw std::runtime_error("Context stack is empty");
