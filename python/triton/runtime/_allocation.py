@@ -30,3 +30,11 @@ def set_allocator(allocator: Allocator):
     """
     global _allocator
     _allocator = allocator
+
+
+_profile_allocator: Allocator = NullAllocator()
+
+
+def set_profile_allocator(allocator: Optional[Allocator]):
+    global _profile_allocator
+    _profile_allocator = allocator

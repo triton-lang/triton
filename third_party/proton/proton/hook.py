@@ -100,6 +100,7 @@ def register_instrumentation_hook(mode: str) -> None:
 
     from triton.runtime.jit import JITFunction
     from triton.language import constexpr
+
     # Append the instrumentation mode to kwargs
     @functools.wraps(JITFunction.run)
     def run(self, *args, **kwargs):

@@ -535,7 +535,8 @@ class CudaLauncher(object):
         else:
             global_scratch = None
         if self.profile_scratch_size > 0:
-            profile_scratch = _allocation._allocator(self.profile_scratch_size, self.profile_scratch_align, stream)
+            profile_scratch = _allocation._profile_allocator(self.profile_scratch_size, self.profile_scratch_align,
+                                                             stream)
         else:
             profile_scratch = None
         self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, global_scratch,
