@@ -444,7 +444,7 @@ type_canonicalisation_dict = {
     "bool": "u1",
     "int1": "u1",
     "uint1": "u1",
-    "i1" : "u1",
+    "i1": "u1",
     # floating-point dtypes:
     "float8e4nv": "fp8e4nv",
     "float8e5": "fp8e5",
