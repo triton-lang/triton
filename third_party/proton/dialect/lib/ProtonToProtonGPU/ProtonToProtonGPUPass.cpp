@@ -110,7 +110,7 @@ public:
             (maxSharedMem - llvm::alignTo(sharedMemUsed, bytesPerEntry))) /
         (2 * bytesPerEntry);
     int allocSharedMemSize = sharedSlots * bytesPerEntry;
-    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+    int numWarps = mlir::triton::gpu::lookupNumWarps(mod);
     int allocBufferSize = bufferSize > 0 ? bufferSize : allocSharedMemSize;
     if (!allocBufferSize) {
       mlir::emitError(loc, "profiling buffer size can't be 0.");
