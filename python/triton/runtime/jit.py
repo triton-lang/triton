@@ -402,7 +402,7 @@ def create_function_from_signature(sig, kparams, backend):
             ret = f"specialize_impl({name}, {is_const}, {specialize}, {align})"
             if kp.annotation_type:
                 if isinstance(kp.annotation_type, str):
-                    if kp.annotation_type[:2] in ["fp", "bf", "i1", "u1"]:
+                    if kp.annotation_type == "i1" or kp.annotation_type[:2] in ["fp", "bf"]:
                         # we do not specialize non-constexpr floats and bools:
                         specialize = False
                 if specialize:
