@@ -115,7 +115,7 @@ def start(
     if hook == "triton":
         register_launch_hook()
     if backend == "instrumentation":
-        register_instrumentation_hook()
+        register_instrumentation_hook(mode)
 
     return libproton.start(name, context, data, backend, mode, backend_path)
 

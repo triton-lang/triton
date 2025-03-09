@@ -163,7 +163,7 @@ def make_launcher(constants, signature):
         }[ty_to_cpp(ty)]
 
     args_format = ''.join([format_of(ty) for ty in signature.values()])
-    format = "iiiKKpOOOOO" + args_format
+    format = "iiiKKpOOOOOO" + args_format
     signature = ','.join(map(_serialize_signature, signature.values()))
     signature = list(filter(bool, signature.split(',')))
     signature = {i: s for i, s in enumerate(signature)}
@@ -426,9 +426,10 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   PyObject *kernel_metadata = NULL;
   PyObject *launch_metadata = NULL;
   PyObject *global_scratch_obj = NULL;
+  PyObject *profile_scratch_obj = NULL;
   {newline.join([f"{_extracted_type(ty)} _arg{i};" for i, ty in signature.items()])}
   if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ,
-                                           &_stream, &_function, &launch_cooperative_grid, &global_scratch_obj,
+                                           &_stream, &_function, &launch_cooperative_grid, &global_scratch_obj, &profile_scratch_obj,
                                            &kernel_metadata, &launch_metadata,
                                            &launch_enter_hook, &launch_exit_hook{args_list})) {{
     return NULL;
@@ -443,7 +444,12 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   // extract launch metadata
   if (launch_enter_hook != Py_None){{
     PyObject* args = Py_BuildValue("(O)", launch_metadata);
-    PyObject* ret = PyObject_CallObject(launch_enter_hook, args);
+    PyObject* ret = NULL;
+    if (profile_scratch_obj != Py_None) {{
+      ret = PyObject_CallObject(launch_enter_hook, args, profile_scratch_obj);
+    }} else {{
+      ret = PyObject_CallObject(launch_enter_hook, args);
+    }}
     Py_DECREF(args);
     if (!ret)
       return NULL;
@@ -517,6 +523,8 @@ class CudaLauncher(object):
         self.launch = mod.launch
         self.global_scratch_size = metadata.global_scratch_size
         self.global_scratch_align = metadata.global_scratch_align
+        self.profile_scratch_size = metadata.profile_scratch_size
+        self.profile_scratch_align = metadata.profile_scratch_align
         self.launch_cooperative_grid = metadata.launch_cooperative_grid
 
     def __call__(self, gridX, gridY, gridZ, stream, function, *args):
@@ -526,7 +534,12 @@ class CudaLauncher(object):
             global_scratch = _allocation._allocator(alloc_size, self.global_scratch_align, stream)
         else:
             global_scratch = None
-        self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, global_scratch, *args)
+        if self.profile_scratch_size > 0:
+            profile_scratch = _allocation._allocator(self.profile_scratch_size, self.profile_scratch_align, stream)
+        else:
+            profile_scratch = None
+        self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, global_scratch,
+                    profile_scratch, *args)
 
 
 class CudaDriver(GPUDriver):

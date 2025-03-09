@@ -61,6 +61,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     auto sharedPtrTy =
         LLVM::LLVMPointerType::get(ctx, targetInfo.getSharedAddressSpace());
     auto globalPtrTy = LLVM::LLVMPointerType::get(ctx, 1);
+    auto profilePtrTy = LLVM::LLVMPointerType::get(ctx, 1);
 
     // 1. Modify the function type to add the new arguments.
     auto funcTy = funcOp.getFunctionType();
@@ -70,6 +71,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       amendedInputTy.push_back(sharedPtrTy);
     }
     amendedInputTy.push_back(globalPtrTy);
+    amendedInputTy.push_back(profilePtrTy);
     auto amendedFuncTy =
         FunctionType::get(ctx, amendedInputTy, funcTy.getResults());
     // 2. Modify the argument attributes to add the new argument.
@@ -94,6 +96,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       region.addArgument(sharedPtrTy, loc);
     }
     region.addArgument(globalPtrTy, loc);
+    region.addArgument(profilePtrTy, loc);
     rewriter.inlineRegionBefore(region, amendedFuncOp.getBody(),
                                 amendedFuncOp.end());
     return amendedFuncOp;
