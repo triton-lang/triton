@@ -235,12 +235,12 @@ def _normalize_ty(ty) -> str:
             return "*" + _normalize_ty(ty[1:])
         if ty.startswith("tl."):
             return _normalize_ty(ty.removeprefix("tl."))
-    elif isinstance(ty, type):
-        ty = ty.__name__
-    elif isinstance(ty, core.dtype):
-        ty = ty.name
     elif isinstance(ty, core.pointer_type):
         return f"*{_normalize_ty(ty.element_ty)}"
+    elif isinstance(ty, core.dtype):
+        ty = ty.name
+    elif isinstance(ty, type):
+        ty = ty.__name__
     else:
         ty = str(ty)
     return type_canonicalisation_dict.get(ty, ty)
