@@ -444,12 +444,7 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   // extract launch metadata
   if (launch_enter_hook != Py_None){{
     PyObject* args = Py_BuildValue("(O)", launch_metadata);
-    PyObject* ret = NULL;
-    if (profile_scratch_obj != Py_None) {{
-      ret = PyObject_CallObject(launch_enter_hook, args, profile_scratch_obj);
-    }} else {{
-      ret = PyObject_CallObject(launch_enter_hook, args);
-    }}
+    PyObject* ret = PyObject_CallObject(launch_enter_hook, args);
     Py_DECREF(args);
     if (!ret)
       return NULL;

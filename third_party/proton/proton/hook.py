@@ -6,6 +6,7 @@ from .scope import enter_scope, exit_scope
 from triton._C.libtriton import ir
 from triton._C.libtriton import proton as triton_proton
 from triton._C.libproton import proton as libproton
+from typing import Optional
 
 COMPUTE_METADATA_SCOPE_NAME = "__proton_launch_metadata"
 
@@ -49,15 +50,10 @@ class TritonInstrumentationHook:
                 TritonInstrumentationHook.function_scope_ids[function] = triton_proton.get_scope_id_pairs(module)
 
     @staticmethod
-    def enter(lazy_dict: LazyDict, scratch_buffer) -> None:
+    def enter(lazy_dict: LazyDict) -> None:
         function = lazy_dict.data.get("function")
         scope_id_pairs = TritonInstrumentationHook.function_scope_ids.get(function, [])
         libproton.map_scope_ids(scope_id_pairs)
-        libproton.set_scratch_buffer(
-            scratch_buffer,
-            TritonInstrumentationHook.profile_buffer_size,
-            TritonInstrumentationHook.profile_buffer_alignment,
-        )
         if TritonInstrumentationHook.triton_hook:
             TritonInstrumentationHook.triton_hook.enter(lazy_dict)
 
@@ -84,6 +80,17 @@ def unregister_launch_hook() -> None:
 
     CompiledKernel.launch_enter_hook = None
     CompiledKernel.launch_exit_hook = None
+
+
+class CudaAllocator:
+
+    def __call__(self, size: int, alignment: int, stream: Optional[int]):
+        import torch
+
+        aligned_size = (size + alignment - 1) // alignment * alignment
+        ret = torch.empty(aligned_size, dtype=torch.float32, device="cuda")
+        libproton.set_scratch_buffer(ret.data_ptr(), size)
+        return ret
 
 
 def register_instrumentation_hook(mode: str) -> None:
