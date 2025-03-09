@@ -88,8 +88,9 @@ class CudaAllocator:
         import torch
 
         aligned_size = (size + alignment - 1) // alignment * alignment
-        ret = torch.empty(aligned_size, dtype=torch.float32, device="cuda")
-        libproton.set_scratch_buffer(ret.data_ptr(), size)
+        ret = torch.empty(aligned_size, dtype=torch.uint8, device="cuda", stream=stream)
+        id = libproton.record_scope()
+        libproton.set_scratch_buffer(id, ret.data_ptr(), size)
         return ret
 
 
@@ -107,6 +108,7 @@ def register_instrumentation_hook(mode: str) -> None:
 
     from triton.runtime.jit import JITFunction
     from triton.language import constexpr
+    from triton.runtime._allocation import set_profile_allocator
 
     # Append the instrumentation mode to kwargs
     @functools.wraps(JITFunction.run)
@@ -115,6 +117,8 @@ def register_instrumentation_hook(mode: str) -> None:
         return self.run(*args, **kwargs)
 
     JITFunction.run = run
+
+    set_profile_allocator(CudaAllocator())
 
 
 def unregister_instrumentation_hook() -> None:

@@ -523,17 +523,17 @@ class CudaLauncher(object):
         self.launch_cooperative_grid = metadata.launch_cooperative_grid
 
     def __call__(self, gridX, gridY, gridZ, stream, function, *args):
-        if self.global_scratch_size > 0:
-            grid_size = gridX * gridY * gridZ
-            alloc_size = grid_size * self.global_scratch_size
-            global_scratch = _allocation._allocator(alloc_size, self.global_scratch_align, stream)
-        else:
-            global_scratch = None
-        if self.profile_scratch_size > 0:
-            profile_scratch = _allocation._profile_allocator(self.profile_scratch_size, self.profile_scratch_align,
-                                                             stream)
-        else:
-            profile_scratch = None
+
+        def allocate_scratch(size, align, allocator):
+            if size > 0:
+                grid_size = gridX * gridY * gridZ
+                alloc_size = grid_size * size
+                return allocator(alloc_size, align, stream)
+            return None
+
+        global_scratch = allocate_scratch(self.global_scratch_size, self.global_scratch_align, _allocation._allocator)
+        profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
+                                           _allocation._profile_allocator)
         self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, global_scratch,
                     profile_scratch, *args)
 
