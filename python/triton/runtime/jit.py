@@ -243,7 +243,7 @@ def _normalize_ty(ty) -> str:
         ty = ty.__name__
     else:
         ty = str(ty)
-    return type_canonicalisation_dict.get(ty, ty)
+    return type_canonicalisation_dict.get(ty.replace("_t", ""), ty)
 
 
 class KernelParam:
@@ -455,13 +455,17 @@ type_canonicalisation_dict = {
     "float8_e5m2": "fp8e5",
     "float8e5b16": "fp8e5b16",
     "float8_e5m2fnuz": "fp8e5b16",
+    "half": "fp16",
     "float16": "fp16",
     "bfloat16": "bf16",
+    "float": "fp32",
     "float32": "fp32",
+    "double": "fp64",
     "float64": "fp64",
     # signed integers:
     "int8": "i8",
     "int16": "i16",
+    "int": "i32",
     "int32": "i32",
     "int64": "i64",
     # unsigned integers:
