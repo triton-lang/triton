@@ -309,7 +309,7 @@ def create_specialize_impl(specialize_extra):
         if arg is None:
             return ("constexpr", None)
         elif isinstance(arg, bool):
-            return ("i1", None)
+            return ("u1", None)
         elif isinstance(arg, int):
             key = specialize_extra(arg, "int", align=align) if specialize_value else None
             if arg == 1 and specialize_value:
@@ -402,7 +402,7 @@ def create_function_from_signature(sig, kparams, backend):
             ret = f"specialize_impl({name}, {is_const}, {specialize}, {align})"
             if kp.annotation_type:
                 if isinstance(kp.annotation_type, str):
-                    if kp.annotation_type == "i1" or kp.annotation_type[:2] in ["fp", "bf"]:
+                    if kp.annotation_type == "u1" or kp.annotation_type[:2] in ["fp", "bf"]:
                         # we do not specialize non-constexpr floats and bools:
                         specialize = False
                 if specialize:
@@ -440,7 +440,12 @@ def dynamic_func({", ".join(list(map(arg, sig.parameters.items())) + ["**options
 
 
 type_canonicalisation_dict = {
-    "bool": "i1",
+    # we canonicalise all bools to be unsigned:
+    "bool": "u1",
+    "int1": "u1",
+    "uint1": "u1",
+    "i1" : "u1",
+    # floating-point dtypes:
     "float8e4nv": "fp8e4nv",
     "float8e5": "fp8e5",
     "float8e4b15": "fp8e4b15",
@@ -454,10 +459,12 @@ type_canonicalisation_dict = {
     "bfloat16": "bf16",
     "float32": "fp32",
     "float64": "fp64",
+    # signed integers:
     "int8": "i8",
     "int16": "i16",
     "int32": "i32",
     "int64": "i64",
+    # unsigned integers:
     "uint8": "u8",
     "uint16": "u16",
     "uint32": "u32",
