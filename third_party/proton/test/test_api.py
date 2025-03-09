@@ -233,6 +233,7 @@ def test_state(tmp_path: pathlib.Path):
 def test_context_depth(tmp_path: pathlib.Path):
     temp_file = tmp_path / "test_context_depth.hatchet"
     session_id = proton.start(str(temp_file.with_suffix("")))
+    assert proton.context.depth(session_id) == 0
     proton.enter_scope("test0")
     assert proton.context.depth(session_id) == 1
     proton.enter_scope("test1")
