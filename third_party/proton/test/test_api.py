@@ -239,7 +239,9 @@ def test_context_depth(tmp_path: pathlib.Path):
     proton.enter_scope("test1")
     assert proton.context.depth(session_id) == 2
     proton.exit_scope()
+    assert proton.context.depth(session_id) == 1
     proton.exit_scope()
+    assert proton.context.depth(session_id) == 0
 
 
 def test_throw(tmp_path: pathlib.Path):
