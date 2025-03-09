@@ -328,7 +328,8 @@ static LogicalResult lowerWarpSpecialize(LLVM::LLVMFuncOp func,
     b.setInsertionPointToEnd(before);
     Value statePtr = LLVM::getSharedMemoryBase(b.getLoc(), b, targetInfo, func);
     for (auto [i, state] : llvm::enumerate(stateMap)) {
-      b.store(b.i8_val(state), b.gep(ptrTy, i8_ty, statePtr, LLVM::GEPArg(i)));
+      Value stateVal = b.i8_val(state);
+      b.store(stateVal, b.gep(ptrTy, i8_ty, statePtr, LLVM::GEPArg(i)));
     }
 
     // Store the captures if there are any.
