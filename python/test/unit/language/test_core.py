@@ -7215,6 +7215,56 @@ def test_aliasing(device):
 
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype", list(dtypes) + ["bfloat16"])
+def test_strided_load(dtype, device):
+
+    @triton.jit
+    def take_every_second_element(x_ptr, output_ptr, BLOCK_SIZE: tl.constexpr):
+        strided_offsets = tl.arange(0, BLOCK_SIZE) * 2
+        linear_offsets = tl.arange(0, BLOCK_SIZE)
+        x = tl.load(x_ptr + strided_offsets)
+        tl.store(output_ptr + linear_offsets, x)
+
+    STRIDE = 2
+    SIZE = 512
+    OUT_SIZE = SIZE // STRIDE
+
+    x = numpy_random(SIZE, dtype_str=dtype)
+    x_tri = to_triton(x, device)
+    out_tri = torch.empty(OUT_SIZE, device=device)
+    take_every_second_element[(1, 1)](x_tri, out_tri, OUT_SIZE)
+
+    # Test that every second element (starting from [0]) from x is stored in out_tri
+    np.testing.assert_allclose(x[::2], to_numpy(out_tri))
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype", list(dtypes) + ["bfloat16"])
+def test_strided_store(dtype, device):
+
+    @triton.jit
+    def store_into_every_second(x_ptr, output_ptr, BLOCK_SIZE: tl.constexpr):
+        strided_offsets = tl.arange(0, BLOCK_SIZE) * 2
+        linear_offsets = tl.arange(0, BLOCK_SIZE)
+        x = tl.load(x_ptr + linear_offsets)
+        tl.store(output_ptr + strided_offsets, x)
+
+    STRIDE = 2
+    SIZE = 512
+    OUT_SIZE = SIZE * STRIDE
+
+    x = numpy_random(SIZE, dtype_str=dtype)
+    x_tri = to_triton(x, device)
+    out_tri = torch.zeros(OUT_SIZE, device=device)
+    store_into_every_second[(1, 1)](x_tri, out_tri, SIZE)
+
+    # Test that every second element (starting from [0]) is the same as in x
+    np.testing.assert_allclose(x, to_numpy(out_tri)[::2])
+    # Test that every second element (starting from [1]) is still zero
+    np.testing.assert_allclose(np.zeros_like(x), to_numpy(out_tri)[1::2])
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype", list(dtypes) + ["bfloat16"])
 def test_indirect_load(dtype, device):
 
     @triton.jit
