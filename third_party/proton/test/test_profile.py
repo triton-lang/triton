@@ -304,7 +304,7 @@ def test_multiple_sessions(tmp_path: pathlib.Path):
     proton.finalize(session_id0)
     torch.randn((10, 10), device="cuda")
     proton.finalize(session_id1)
-    # kernel has been invokved twice in session 0 and three times in session 1
+    # kernel has been invoked twice in session 0 and three times in session 1
     with temp_file0.open() as f:
         data = json.load(f)
     assert int(data[0]["children"][0]["metrics"]["count"]) == 2
