@@ -889,21 +889,26 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
         if (A_DATA_TYPE == 'float4' and not WITH_A_SCALE) or (B_DATA_TYPE == 'float4' and not WITH_B_SCALE):
             pytest.skip("Float4 without scale is tested in test_block_scale_fp4")
 
-    if B_DATA_TYPE != 'float4' and B_TRANS:
-        pytest.skip(f'No need to transpose B for {B_DATA_TYPE}')
-
     if not is_hip() and BLOCK_N == 256 and BLOCK_K == 256:
         NUM_STAGES = 2
 
     torch.manual_seed(42)
 
-    def create_operand(dtype: str, size0: int, size1: int, k_dim: int, transpose: bool = False):
+    def create_operand(dtype: str, size0: int, size1: int, k_dim: int, transpose: bool = True):
         if dtype == "float8e5":
-            v = torch.randint(20, 40, (size0, size1), dtype=torch.uint8).view(torch.float8_e5m2).to(device)
-            v_ref = f8_to_f16(v.view(torch.float8_e5m2), dtype).to(torch.float32)
+            if transpose:
+                v = torch.randint(20, 40, (size0, size1), dtype=torch.uint8).view(torch.float8_e5m2).to(device)
+                v_ref = f8_to_f16(v.view(torch.float8_e5m2), dtype).to(torch.float32)
+            else:
+                v = torch.randint(20, 40, (size1, size0), dtype=torch.uint8).view(torch.float8_e5m2).to(device).T
+                v_ref = f8_to_f16(v.view(torch.float8_e5m2).T, dtype).to(torch.float32).T
         elif dtype == "float8e4nv":
-            v = torch.randint(20, 40, (size0, size1), dtype=torch.uint8).view(torch.float8_e4m3fn).to(device)
-            v_ref = f8_to_f16(v.view(torch.float8_e4m3fn), dtype).to(torch.float32)
+            if transpose:
+                v = torch.randint(20, 40, (size0, size1), dtype=torch.uint8).view(torch.float8_e4m3fn).to(device)
+                v_ref = f8_to_f16(v.view(torch.float8_e4m3fn), dtype).to(torch.float32)
+            else:
+                v = torch.randint(20, 40, (size1, size0), dtype=torch.uint8).view(torch.float8_e4m3fn).to(device).T
+                v_ref = f8_to_f16(v.view(torch.float8_e4m3fn).T, dtype).to(torch.float32).T
         else:
             # float4
             if transpose:
@@ -921,8 +926,8 @@ def test_mxfp8_mxfp4_matmul(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, B_TR
     a, a_ref = create_operand(A_DATA_TYPE, M, K, 1)
     b, b_ref = create_operand(B_DATA_TYPE, K, N, 0, B_TRANS)
 
-    a_scale_mxfp4 = MXScaleTensor(size=(M, (K + 32 - 1) // 32), device=device).random(high=64.0)
-    b_scale_mxfp4 = MXScaleTensor(size=(N, (K + 32 - 1) // 32), device=device).random(high=64.0)
+    a_scale_mxfp4 = MXScaleTensor(size=(M, (K + 32 - 1) // 32), device=device).random(high=32.0)
+    b_scale_mxfp4 = MXScaleTensor(size=(N, (K + 32 - 1) // 32), device=device).random(high=32.0)
     a_scale = a_scale_mxfp4.data
     b_scale = b_scale_mxfp4.data
 
