@@ -100,6 +100,8 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
                    "`tt.multiple_of` if you believe it is correct for the "
                    "data.";
           }
+          // TODO: we can add more ops here. Still looking for examples for
+          // converging to 1 with GCD and multiplications.
         }
       }
     }
