@@ -21,8 +21,7 @@ struct GlobalScratchAllocOpConversion
                                           const TargetInfoBase &targetInfo,
                                           PatternBenefit benefit)
       : mlir::ConvertOpToLLVMPattern<proton::gpu::GlobalScratchAllocOp>(
-            typeConverter, benefit),
-        targetInfo(targetInfo) {}
+            typeConverter, benefit) {}
 
   LogicalResult
   matchAndRewrite(proton::gpu::GlobalScratchAllocOp op, OpAdaptor adaptor,
@@ -43,8 +42,6 @@ struct GlobalScratchAllocOpConversion
     return success();
   }
 
-protected:
-  const TargetInfoBase &targetInfo;
 };
 
 } // namespace
