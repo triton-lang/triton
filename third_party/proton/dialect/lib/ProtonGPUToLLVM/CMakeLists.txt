@@ -3,6 +3,7 @@ add_triton_library(ProtonGPUToLLVM
     PatternProtonGPUOpToLLVM.cpp
     AllocateProtonSharedMemory.cpp
     AddProtonKernelArg.cpp
+    GlobalScratchAllocOpToLLVM.cpp
     AllocateProtonGlobalScratchBuffer.cpp
     RecordOpToLLVM.cpp
 
