@@ -220,6 +220,31 @@ def open_url(url):
     # Set timeout to 300 seconds to prevent the request from hanging forever.
     return urllib.request.urlopen(request, timeout=300)
 
+def wget_url(url):
+    triton_cache_path = get_triton_cache_path()
+    npu_compiler_path = os.path.abspath(os.path.join(triton_cache_path, "npu"))
+    npu_compiler_file = os.path.join(npu_compiler_path, "npu_compiler.tar.gz")
+    # 调用wget命令
+    subprocess.run([
+        'wget',
+        '--header', "Authorization: Bearer df9bebbd68c1fc688ae656d31d6b9e7d",
+        '-O', npu_compiler_file,
+        url
+    ])
+
+    subprocess.run([
+        'tar',
+        '-xvf',
+        npu_compiler_file,
+        '-C',
+        npu_compiler_path
+    ])
+
+    subprocess.run([
+        'rm',
+        '-rf',
+        npu_compiler_file
+    ])
 
 # ---- package data ---
 
@@ -492,6 +517,10 @@ with open(nvidia_version_path, "r") as nvidia_version_file:
     # parse this json file to get the version of the nvidia toolchain
     NVIDIA_TOOLCHAIN_VERSION = json.load(nvidia_version_file)
 
+npu_version_path = os.path.join(os.getenv("TRITON_PLUGIN_DIRS"), "backend", "npu", "npu-toolchain-version.json")
+with open(npu_version_path, "r") as npu_version_file:
+    # parse this json file to get the version of the npu toolchain
+    NPU_TOOLCHAIN_VERSION = json.load(npu_version_file)
 
 def get_platform_dependent_src_path(subdir):
     return lambda platform, version: (
@@ -559,8 +588,54 @@ download_and_copy(
       f"https://anaconda.org/nvidia/cuda-cupti/{version}/download/{system}-{arch}/cuda-cupti-{version}-0.tar.bz2")
      (*version.split('.'))))
 
-backends = [*BackendInstaller.copy(["nvidia", "amd"]), *BackendInstaller.copy_externals()]
+# npu_compiler
+def download_and_copy_npu(name, src_path, dst_path, variable, version, url_func):
+    if is_offline_build():
+        return
+    triton_cache_path = get_triton_cache_path()
+    if variable in os.environ:
+        return
+    base_dir = os.path.dirname(__file__)
+    system = platform.system()
+    try:
+        arch = {"x86_64": "64", "arm64": "aarch64", "aarch64": "aarch64"}[platform.machine()]
+    except KeyError:
+        arch = platform.machine()
+    supported = {"Linux": "linux", "Darwin": "linux"}
+    url = url_func(supported[system], arch, version)
+    # tmp_path = os.path.join(triton_cache_path, "npu", name)  # path to cache the download
+    tmp_path = os.path.join(triton_cache_path, "npu")
+    dst_path = os.path.join(base_dir, "triton", "backends", "triton_x", "npu", dst_path)  # final binary path
 
+    platform_name = "sbsa-linux" if arch == "aarch64" else "x86_64-linux"
+    src_path = src_path(platform_name, version) if callable(src_path) else src_path
+    src_path = os.path.join(tmp_path, src_path)
+    download = not os.path.exists(src_path)
+
+    if os.path.exists(dst_path) and system == "Linux" and shutil.which(dst_path) is not None:
+        curr_version = subprocess.check_output([dst_path, "--version"]).decode("utf-8").strip()
+        curr_version = re.search(r"V([.|\d]+)", curr_version).group(1)
+        download = download or curr_version != version
+    if download:
+        print(f'downloading and extracting {url} ...')
+        wget_url(url)
+        # file = tarfile.open(fileobj=wget_url(url), mode="r|*")
+        # file.extractall(path=tmp_path)
+    os.makedirs(os.path.split(dst_path)[0], exist_ok=True)
+    print(f'copy {src_path} to {dst_path} ...')
+    if os.path.isdir(src_path):
+        shutil.copytree(src_path, dst_path, dirs_exist_ok=True)
+    else:
+        shutil.copy(src_path, dst_path)
+
+download_and_copy_npu(
+    name="npu_compiler", src_path="npu_compiler", dst_path="npu_compiler", variable="TRITON_NPU_COMPILER_PATH",
+    version=NPU_TOOLCHAIN_VERSION["npu_compiler"], url_func=lambda system, arch, version:
+    ((lambda version_major, version_minor1, version_minor2:
+      f"https://gitee.com/ascend/triton-ascend/releases/download/{version_major}/{version_minor1}/{version_minor2}/npu-compiler-aarch64.tar.gz")
+     (*version.split('.'))))
+
+backends = [*BackendInstaller.copy(["nvidia", "amd"]), *BackendInstaller.copy_externals()]
 
 def add_link_to_backends():
     for backend in backends:
