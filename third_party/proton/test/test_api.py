@@ -230,6 +230,21 @@ def test_state(tmp_path: pathlib.Path):
     assert child["metrics"]["a"] == 1.0
 
 
+def test_context_depth(tmp_path: pathlib.Path):
+    temp_file = tmp_path / "test_context_depth.hatchet"
+    session_id = proton.start(str(temp_file.with_suffix("")))
+    assert proton.context.depth(session_id) == 0
+    proton.enter_scope("test0")
+    assert proton.context.depth(session_id) == 1
+    proton.enter_scope("test1")
+    assert proton.context.depth(session_id) == 2
+    proton.exit_scope()
+    assert proton.context.depth(session_id) == 1
+    proton.exit_scope()
+    assert proton.context.depth(session_id) == 0
+    proton.finalize()
+
+
 def test_throw(tmp_path: pathlib.Path):
     # Catch an exception thrown by c++
     session_id = 100
