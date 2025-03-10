@@ -195,6 +195,7 @@ def make_launcher(constants, signature):
     ]
     params = [f"&arg{i}" for i, ty in signature.items() if ty != "constexpr"]
     params.append("&global_scratch")
+    params.append("&profile_scratch")
     src = f"""
 #include \"cuda.h\"
 #include <stdbool.h>
