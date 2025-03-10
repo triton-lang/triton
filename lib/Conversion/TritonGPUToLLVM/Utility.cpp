@@ -362,7 +362,8 @@ Value getSmemVecAddr(const LinearLayout &regLayout,
     }
   } else { // Case 2 -> rank-reduced swizzling
     assert(rank >= 2 && "Swizzling only applies to tensors with rank >= 2");
-    assert(isa<triton::gpu::SwizzledSharedEncodingAttr>(sharedEnc) &&
+    assert((isa<triton::gpu::SwizzledSharedEncodingAttr,
+                triton::gpu::AMDRotatingSharedEncodingAttr>(sharedEnc)) &&
            "NVMMA layout not supported for sliced tensors");
     // We define both tensor offsets and shared memory offsets:
     //
