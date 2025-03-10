@@ -16,7 +16,7 @@ jobs:
     runs-on: ${{ matrix.config.runs_on }}
 
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         config:
         - {runs_on: ['self-hosted', 'CPU'], arch: 'x86_64'}
@@ -63,12 +63,10 @@ jobs:
         run: |
           # Make sure cibuildwheel is updated to latest, this will enable latest python builds
           python3 -m pip install cibuildwheel --upgrade --user
-          export LATEST_DATE=$(TZ=UTC0 git show --quiet --date='format-local:%Y%m%d%H%M%S' --format="%cd")
           # Pass MAX_JOBS=4 because, at time of writing, the VM "only" has 32GB
           # of RAM and OOMs while building if we give it the default number of
           # workers (2 * NUM_CPUs).
           export CIBW_ENVIRONMENT="MAX_JOBS=4 \
-                  TRITON_WHEEL_VERSION_SUFFIX=-$LATEST_DATE \
                   TRITON_BUILD_WITH_CLANG_LLD=1"
 
           # many_linux_2_28 image comes with GCC 12.2.1, but not clang.
