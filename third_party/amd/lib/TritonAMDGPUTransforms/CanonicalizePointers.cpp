@@ -1088,7 +1088,6 @@ public:
   LogicalResult
   matchAndRewrite_(tt::gpu::ConvertLayoutOp cvtOp, OneToNOpAdaptor adaptor,
                    ConversionPatternRewriter &rewriter) const override {
-    LDBG("Convert layout: " << cvtOp);
     ValueRange remappedOperands = adaptor.getSrc();
     if (remappedOperands.size() != 2) {
       // some prior op materialized the fat ptr, e.g.:
