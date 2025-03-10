@@ -148,11 +148,11 @@ if __name__ == "__main__":
         "signature": ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names_not_1, arg_types_not_1)]),
         "full_signature": ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names, arg_types)]),
         "arg_pointers": ", ".join([f"&{arg}" for arg in arg_names_not_1] + ["&global_scratch"] + ["&profile_scratch"]),
-        "num_args": len(arg_names_not_1) + 1,
+        "num_args": len(arg_names_not_1) + 2,  # +2 for global and profile scratch
         "kernel_docstring": doc_string,
         "shared": ccinfo.metadata.shared,
         "num_warps": args.num_warps,
-        "algo_info": '_'.join([const_sig, meta_sig]),
+        "algo_info": "_".join([const_sig, meta_sig]),
         "gridX": grid[0],
         "gridY": grid[1],
         "gridZ": grid[2],
