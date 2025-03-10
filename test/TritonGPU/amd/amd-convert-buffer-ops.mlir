@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops='arch-generation-name=gfx942'| FileCheck %s
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-convert-buffer-ops='arch-generation-name=gfx942' | FileCheck %s
 
 #blocked0 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
@@ -38,10 +38,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %c48_i32 = arith.constant 48 : i32
     %c32_i32 = arith.constant 32 : i32
     %c0_i32 = arith.constant 0 : i32
+    %c1024_i32 = arith.constant 1024 : i32
     %0 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
     %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<256x1xi32, #blocked>
     %cmp = arith.cmpi sgt, %arg6, %c0_i32 : i32
     llvm.intr.assume %cmp : i1
+    %cmp1 = arith.cmpi slt, %arg6, %c1024_i32 : i32
+    llvm.intr.assume %cmp1 : i1
     %2 = tt.splat %arg6 : i32 -> tensor<256x1xi32, #blocked>
     %3 = arith.muli %1, %2 : tensor<256x1xi32, #blocked>
     %4 = tt.addptr %arg0, %c32_i32 : !tt.ptr<f16>, i32
@@ -66,8 +69,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %14 = tt.make_range {end = 64 : i32, start = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>>
     %15 = tt.expand_dims %13 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<256x1xi32, #blocked>
     %16 = tt.expand_dims %14 {axis = 0 : i32} : tensor<64xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x64xi32, #blocked>
-    %cmp1 = arith.cmpi sgt, %arg8, %c0_i32 : i32
-    llvm.intr.assume %cmp1 : i1
+    %cmp2 = arith.cmpi sgt, %arg8, %c0_i32 : i32
+    llvm.intr.assume %cmp2 : i1
+    %cmp3 = arith.cmpi slt, %arg8, %c1024_i32 : i32
+    llvm.intr.assume %cmp3 : i1
     %17 = tt.splat %arg8 : i32 -> tensor<256x1xi32, #blocked>
     %18 = arith.muli %17, %15 : tensor<256x1xi32, #blocked>
     %19 = tt.addptr %arg2, %c48_i32 : !tt.ptr<f16>, i32
@@ -104,6 +109,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %sub = arith.subi %1, %c128_i32 : i32
     %cmp = arith.cmpi sgt, %sub, %c0_i32 : i32
     llvm.intr.assume %cmp : i1
+    %cmp1 = arith.cmpi slt, %sub, %c1024_i32 : i32
+    llvm.intr.assume %cmp1 : i1
     %2 = tt.splat %sub : i32 -> tensor<1024xi32, #blocked>
     %3 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
     // CHECK: %[[offset:.*]] = arith.addi
@@ -236,6 +243,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+// failing due to "symbolic inference" ie bounding SSA values with other SSA values
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: assume_cmp_non_const
@@ -298,12 +306,12 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %13 = arith.addi %11, %12 : tensor<8x2xi32, #blocked>
     %14 = arith.minsi %13, %5 : tensor<8x2xi32, #blocked>
     // CHECK: %[[lhs:.*]], %[[rhs:.*]] = tt.split
-    %15, %16 = tt.split %11: tensor<8x2xi32, #blocked> -> tensor<8xi32, #blocked2>
+    %outLHS, %outRHS = tt.split %11: tensor<8x2xi32, #blocked> -> tensor<8xi32, #blocked2>
     %17 = tt.splat %arg0 : !tt.ptr<bf16> -> tensor<8x!tt.ptr<bf16>, #blocked2>
-    %18 = tt.addptr %17, %15 : tensor<8x!tt.ptr<bf16>, #blocked2>, tensor<8xi32, #blocked2>
+    %18 = tt.addptr %17, %outLHS : tensor<8x!tt.ptr<bf16>, #blocked2>, tensor<8xi32, #blocked2>
     // CHECK: %[[loaded:.*]] = amdgpu.buffer_load %arg0[%[[lhs]]]
     %19 = tt.load %18 : tensor<8x!tt.ptr<bf16>, #blocked2>
-    %20 = tt.addptr %17, %16 : tensor<8x!tt.ptr<bf16>, #blocked2>, tensor<8xi32, #blocked2>
+    %20 = tt.addptr %17, %outRHS : tensor<8x!tt.ptr<bf16>, #blocked2>, tensor<8xi32, #blocked2>
     // CHECK: %[[loaded2:.*]] = amdgpu.buffer_load %arg0[%[[rhs]]]
     %21 = tt.load %20 : tensor<8x!tt.ptr<bf16>, #blocked2>
     // CHECK: %[[added:.*]] = arith.addf %[[loaded]], %[[loaded2]]
@@ -375,13 +383,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+// failing due to mismatch between assumptions as initializations and hard-coded initializations
+// alternatively failing due to no `meet` in IntegerRangeLattice
 #blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: get_num_prog_nonneg
   tt.func @get_num_prog_nonneg(%arg0: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg1: !tt.ptr<bf16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32}, %arg2 : i32) {
+    %c1024_i32 = arith.constant 1024 : i32
+
     %0 = tt.get_num_programs x : i32
+    %cmp = arith.cmpi slt, %0, %c1024_i32 : i32
+    llvm.intr.assume %cmp : i1
+
     %1 = tt.get_num_programs y : i32
+    %cmp1 = arith.cmpi slt, %1, %c1024_i32 : i32
+    llvm.intr.assume %cmp1 : i1
+
     %2 = tt.get_num_programs z : i32
+    %cmp2 = arith.cmpi slt, %2, %c1024_i32 : i32
+    llvm.intr.assume %cmp2 : i1
+
     %3 = arith.minsi %0, %1 : i32
     %4 = arith.minsi %2, %3 : i32
     %5 = arith.maxsi %arg2, %4 : i32
@@ -402,6 +423,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+// no clue
 #blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: unsigned_ops
@@ -437,6 +459,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+// no clue
 #blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: extui_nonneg
@@ -461,6 +484,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+// failing due to scf.if not handled in RangeAnalysis::visitRegionSuccessors
 #blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: traverse_if
@@ -502,6 +526,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 
 // -----
 
+// failing due to scf.if not handled in RangeAnalysis::visitRegionSuccessors
 #blocked = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
   // CHECK-LABEL: traverse_if
@@ -558,6 +583,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     %sub = arith.subi %1, %c128_i32 : i32
     %cmp = arith.cmpi sgt, %sub, %c0_i32 : i32
     llvm.intr.assume %cmp : i1
+    %cmp1 = arith.cmpi slt, %sub, %c1024_i32 : i32
+    llvm.intr.assume %cmp1 : i1
     %2 = tt.splat %sub : i32 -> tensor<1024xi32, #blocked>
     %3 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32, #blocked>
     // CHECK: %[[offset:.*]] = arith.addi
@@ -584,10 +611,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %c48_i32 = arith.constant 48 : i32
     %c32_i32 = arith.constant 32 : i32
     %c0_i32 = arith.constant 0 : i32
+    %c1024_i32 = arith.constant 1024 : i32
     %0 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
     %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<256xi32, #ttg.slice<{dim = 1, parent = #blocked}>> -> tensor<256x1xi32, #blocked>
     %cmp = arith.cmpi sgt, %arg6, %c0_i32 : i32
     llvm.intr.assume %cmp : i1
+    %cmp1 = arith.cmpi slt, %arg6, %c1024_i32 : i32
+    llvm.intr.assume %cmp1 : i1
     %2 = tt.splat %arg6 : i32 -> tensor<256x1xi32, #blocked>
     %3 = arith.muli %1, %2 : tensor<256x1xi32, #blocked>
     %4 = tt.addptr %arg0, %c32_i32 : !tt.ptr<f16>, i32

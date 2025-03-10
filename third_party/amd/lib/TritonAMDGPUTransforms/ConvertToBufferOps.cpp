@@ -34,54 +34,7 @@ namespace tt = mlir::triton;
 
 namespace {
 
-bool verifyNonSmallerByAssumption(
-    Value expr, const DenseSet<Value> &assumptions,
-    const std::function<bool(Value)> &matchesOther) {
-  for (Value assume : assumptions) {
-    if (auto cmpOp = assume.getDefiningOp<arith::CmpIOp>()) {
-      switch (cmpOp.getPredicate()) {
-      case arith::CmpIPredicate::eq:
-      case arith::CmpIPredicate::sge:
-      case arith::CmpIPredicate::sgt: {
-        if (cmpOp.getLhs() == expr && matchesOther(cmpOp.getRhs())) {
-          LDBG("  " << expr << " non-neg by assumption " << cmpOp);
-          return true;
-        }
-        break;
-      }
-      case arith::CmpIPredicate::sle:
-      case arith::CmpIPredicate::slt: {
-        if (cmpOp.getRhs() == expr && matchesOther(cmpOp.getLhs())) {
-          LDBG("  " << expr << " non-neg by assumption " << cmpOp);
-          return true;
-        }
-        break;
-      }
-      default:
-        break;
-      }
-    }
-  }
-  return false;
-}
-
-bool verifyNonNegativeByAssumption(Value expr,
-                                   const DenseSet<Value> &assumptions) {
-  return verifyNonSmallerByAssumption(expr, assumptions, [](auto otherExpr) {
-    APInt cst;
-    return matchPattern(otherExpr, m_ConstantInt(&cst)) && cst.isNonNegative();
-  });
-}
-
-bool verifyNonSmallerByAssumption(Value expr,
-                                  const DenseSet<Value> &assumptions,
-                                  Value other) {
-  return verifyNonSmallerByAssumption(
-      expr, assumptions, [&](auto otherAssum) { return otherAssum == other; });
-}
-
-bool verifyNonNegativeExpr(Value expr, const DenseSet<Value> &assumptions,
-                           std::shared_ptr<DataFlowSolver> solver) {
+bool verifyNonNegativeExpr(Value expr, std::shared_ptr<DataFlowSolver> solver) {
   LDBG("Determing if non-negative: " << expr);
 
   if (!llvm::isa<mlir::BlockArgument>(expr) &&
@@ -89,129 +42,12 @@ bool verifyNonNegativeExpr(Value expr, const DenseSet<Value> &assumptions,
     return true;
   }
 
-  // Check if the expression is contained in any assumption
-  if (verifyNonNegativeByAssumption(expr, assumptions)) {
-    return true;
-  }
-
-  // Recurse if the operation is defined
-  Operation *op = expr.getDefiningOp();
-  if (!op) {
-    LDBG("  No defining op, assuming possibly negative");
-    return false;
-  }
-
-  bool nonNegative =
-      llvm::TypeSwitch<Operation *, bool>(expr.getDefiningOp())
-          // Various unary triton ops that don't change the sign of the operand
-          .Case<triton::TransOp, triton::SplitOp, triton::BroadcastOp,
-                triton::ExpandDimsOp, triton::SplatOp, triton::ReshapeOp,
-                triton::gpu::ConvertLayoutOp>([&](auto unaryOp) {
-            return verifyNonNegativeExpr(unaryOp.getOperand(), assumptions,
-                                         solver);
-          })
-          .Case<triton::GatherOp>([&](auto gatherOp) {
-            return verifyNonNegativeExpr(gatherOp.getSrc(), assumptions,
-                                         solver);
-          })
-          // Joining two non-negative tensors is still non-negative
-          .Case<triton::JoinOp, triton::CatOp>([&](auto joinOp) {
-            return verifyNonNegativeExpr(joinOp.getLhs(), assumptions,
-                                         solver) &&
-                   verifyNonNegativeExpr(joinOp.getRhs(), assumptions, solver);
-          })
-          // Returns a tensor representing histogram: historgrams only contain
-          // buckets of non-negative values.
-          .Case<triton::HistogramOp>([&](auto) { return true; })
-          .Case<triton::MakeRangeOp>([&](auto makeRangeOp) {
-            // See the warning in TritonOps.td: getStart/getEnd return unsigned,
-            // so we need to look through get*Attr.
-            return makeRangeOp.getStartAttr().getInt() >= 0 &&
-                   makeRangeOp.getEndAttr().getInt() >= 0;
-          })
-          .Case<arith::ConstantIntOp>(
-              [&](auto constIntOp) { return constIntOp.value() >= 0; })
-          .Case<arith::ConstantOp>([&](arith::ConstantOp constOp) {
-            Value val = constOp.getResult();
-            DenseIntElementsAttr constVal;
-            if (matchPattern(val, m_Constant(&constVal)) && constVal.isSplat())
-              return constVal.getSplatValue<APInt>().isNonNegative();
-            return false;
-          })
-          .Case<triton::GetNumProgramsOp, triton::GetProgramIdOp>([&](auto) {
-            // These are defined as signless, but are actually unsigned
-            return true;
-          })
-          .Case<arith::MaxSIOp>([&](auto maxOp) {
-            // max(a,b) >= 0 iff a>=0 || b>=0
-            return verifyNonNegativeExpr(maxOp.getLhs(), assumptions, solver) ||
-                   verifyNonNegativeExpr(maxOp.getRhs(), assumptions, solver);
-          })
-          .Case<arith::RemSIOp>([&](auto remsiOp) {
-            // a % b >= 0 iff a>=0
-            return verifyNonNegativeExpr(remsiOp.getLhs(), assumptions, solver);
-          })
-          .Case<arith::TruncIOp, arith::ExtSIOp>([&](Operation *unaryOp) {
-            // a = OP b >= 0 iff b >= 0
-            return verifyNonNegativeExpr(unaryOp->getOperand(0), assumptions,
-                                         solver);
-          })
-          // Casting from arbitrary data does *not* guarantee the offset is in
-          // range (even if pointer, or the data is non-negative when
-          // interpreted as the src's type).
-          .Case<triton::PtrToIntOp, triton::BitcastOp>(
-              [&](auto) { return false; })
-          .Case<arith::CeilDivUIOp, arith::DivUIOp, arith::ExtUIOp,
-                arith::FPToUIOp, arith::MaxUIOp, arith::MinUIOp, arith::RemUIOp,
-                arith::ShRUIOp>(
-              // These OPs also return unsigned values.
-              // TODO: We can also sniff whether a Value is unsigned by looking
-              //       for whether or not it's used as an argument to one of
-              //       these OPs.
-              [&](auto uOp) { return true; })
-          .Case<arith::AddIOp, arith::MinSIOp, arith::MulIOp, arith::DivSIOp>(
-              // Generally speaking, a OP b >= 0  iff  a >= 0 && b >= 0 when
-              // OP != sub
-              [&](Operation *binOp) {
-                return verifyNonNegativeExpr(binOp->getOperand(0), assumptions,
-                                             solver) &&
-                       verifyNonNegativeExpr(binOp->getOperand(1), assumptions,
-                                             solver);
-              })
-          // TODO: more scf
-          .Case<scf::IfOp>([&](auto ifOp) {
-            auto results = ifOp.getResults();
-            auto it = std::find(results.begin(), results.end(), expr);
-            assert(it != results.end() && "expr should be the result of ifOp");
-            auto resultIdx = it - results.begin();
-
-            // If we're here then we must have both then/else regions
-            // (each with 1 block) and each region must terminate with an
-            // `scf.yield` expression.
-            auto thenYield = cast<scf::YieldOp>(ifOp.thenYield());
-            auto elseYield = cast<scf::YieldOp>(ifOp.elseYield());
-            return verifyNonNegativeExpr(thenYield->getOperand(resultIdx),
-                                         assumptions, solver) &&
-                   verifyNonNegativeExpr(elseYield->getOperand(resultIdx),
-                                         assumptions, solver);
-          })
-          .Case<arith::SubIOp>([&](auto op) {
-            // If a user annotates tl.assume(a >= b) then we know a - b >= 0
-            return verifyNonSmallerByAssumption(op.getLhs(), assumptions,
-                                                op.getRhs());
-          })
-          .Default([&](Operation *) {
-            // Conservatively assume that the expression is negative
-            LDBG("  Unhandled op, cannot assume non-negative");
-            return false;
-          });
-  return nonNegative;
+  return false;
 }
 
 // Quick analysis on the Triton IR to decide if we can safely use
 // buffer operations
-bool canUseBufferOps(Value ptr, const DenseSet<Value> &assumptions,
-                     std::shared_ptr<DataFlowSolver> solver) {
+bool canUseBufferOps(Value ptr, std::shared_ptr<DataFlowSolver> solver) {
   // 1. Check if the pointer is uniform: i.e., if it comes from a uniform
   // pointer(splatted) and non-uniform offset addition
 
@@ -231,7 +67,7 @@ bool canUseBufferOps(Value ptr, const DenseSet<Value> &assumptions,
     return false;
   LDBG("32 bit offset");
 
-  return verifyNonNegativeExpr(offset, assumptions, std::move(solver));
+  return verifyNonNegativeExpr(offset, std::move(solver));
 }
 
 // Extract stride of the blocked offset of LD/ST ops.
@@ -258,12 +94,10 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
   using OpRewritePattern::OpRewritePattern;
 
   ConvertTritonAtomicRMWOpToBufferAtomicRMW(
-      mlir::MLIRContext *context, DenseSet<Value> &assumptions,
-      ModuleAxisInfoAnalysis &axisAnalysisPass,
+      mlir::MLIRContext *context, ModuleAxisInfoAnalysis &axisAnalysisPass,
       std::shared_ptr<DataFlowSolver> solver)
       : mlir::OpRewritePattern<triton::AtomicRMWOp>(context),
-        assumptions(assumptions), axisAnalysisPass(axisAnalysisPass),
-        solver(std::move(solver)) {}
+        axisAnalysisPass(axisAnalysisPass), solver(std::move(solver)) {}
 
   mlir::LogicalResult
   matchAndRewrite(triton::AtomicRMWOp op,
@@ -276,7 +110,7 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
 
     // In addition to the `canUserBufferOps` check, we should ensure that
     // 1. Perform the canUserBufferOps check
-    if (!canUseBufferOps(ptr, assumptions, solver)) {
+    if (!canUseBufferOps(ptr, solver)) {
       return rewriter.notifyMatchFailure(op, "canUseBufferOps check failed");
     }
 
@@ -397,17 +231,15 @@ struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
   using OpRewritePattern<SourceOp>::OpRewritePattern;
 
   ConvertTritonLoadToBufferLoad(mlir::MLIRContext *context,
-                                DenseSet<Value> &assumptions,
                                 std::shared_ptr<DataFlowSolver> solver)
-      : mlir::OpRewritePattern<SourceOp>(context), assumptions(assumptions),
-        solver(std::move(solver)) {}
+      : mlir::OpRewritePattern<SourceOp>(context), solver(std::move(solver)) {}
 
   mlir::LogicalResult
   matchAndRewrite(SourceOp op, PatternRewriter &rewriter) const override {
     LDBG("Try to convert: " << op);
     Value ptr = op.getOperand(0);
 
-    if (canUseBufferOps(ptr, assumptions, solver)) {
+    if (canUseBufferOps(ptr, solver)) {
       auto addPtrOp = ptr.getDefiningOp<triton::AddPtrOp>();
       Value tensorPtr = addPtrOp.getPtr();
       Value tensorOffset = addPtrOp.getOffset();
@@ -459,7 +291,6 @@ struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
 
 private:
   // Assumptions collected through the function
-  DenseSet<Value> assumptions;
   std::shared_ptr<DataFlowSolver> solver;
 };
 
@@ -468,10 +299,9 @@ struct ConvertTritonStoreToBufferStore
   using OpRewritePattern::OpRewritePattern;
 
   ConvertTritonStoreToBufferStore(mlir::MLIRContext *context,
-                                  DenseSet<Value> &assumptions,
                                   std::shared_ptr<DataFlowSolver> solver)
       : mlir::OpRewritePattern<triton::StoreOp>(context),
-        assumptions(assumptions), solver(std::move(solver)) {}
+        solver(std::move(solver)) {}
 
   mlir::LogicalResult
   matchAndRewrite(triton::StoreOp op,
@@ -479,7 +309,7 @@ struct ConvertTritonStoreToBufferStore
     LDBG("Try to convert: " << op);
     Value ptr = op.getPtr();
 
-    if (canUseBufferOps(ptr, assumptions, solver)) {
+    if (canUseBufferOps(ptr, solver)) {
       auto addPtrOp = ptr.getDefiningOp<triton::AddPtrOp>();
       Value tensorPtr = addPtrOp.getPtr();
       Value tensorOffset = addPtrOp.getOffset();
@@ -500,7 +330,6 @@ struct ConvertTritonStoreToBufferStore
 
 private:
   // Assumptions collected through the function
-  DenseSet<Value> assumptions;
   std::shared_ptr<DataFlowSolver> solver;
 };
 
@@ -519,35 +348,24 @@ public:
     ModuleOp mod = getOperation();
 
     // Collect assumptions in the function
-    DenseSet<Value> assumptions;
-    mod.walk([&](LLVM::AssumeOp op) {
-      auto oper = op->getOperand(0);
-      if (oper.getDefiningOp<arith::CmpIOp>())
-        assumptions.insert(oper);
-    });
-    LLVM_DEBUG({
-      DBGS() << "Number of assumptions found: " << assumptions.size() << "\n";
-      for (Value assume : assumptions) {
-        DBGS() << "Assumption:" << assume << "\n";
-      }
-    });
-
+    DenseMap<Value, SetVector<Operation *>> assumptions =
+        AMD::TritonIntegerRangeAnalysis::collectAssumptions(getOperation());
     std::shared_ptr<DataFlowSolver> solver = createDataFlowSolver();
-    solver->load<AMD::TritonIntegerRangeAnalysis>();
+    solver->load<AMD::TritonIntegerRangeAnalysis>(assumptions);
     if (failed(solver->initializeAndRun(getOperation())))
       return signalPassFailure();
 
     ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
     patterns.add<ConvertTritonLoadToBufferLoad<tt::LoadOp>,
                  ConvertTritonLoadToBufferLoad<ttg::AsyncCopyGlobalToLocalOp>,
-                 ConvertTritonStoreToBufferStore>(context, assumptions, solver);
+                 ConvertTritonStoreToBufferStore>(context, solver);
 
     // Gate buffer atomics behind CDNA3 (i.e., MI300 series) for now
     // GFX942-specific assumptions regarding cache coherence are made when
     // lowering to LLVM
     if (ISAFamily::CDNA3 == triton::AMD::deduceISAFamily(archGenerationName))
       patterns.add<ConvertTritonAtomicRMWOpToBufferAtomicRMW>(
-          context, assumptions, axisInfoAnalysis, solver);
+          context, axisInfoAnalysis, solver);
 
     if (applyPatternsGreedily(mod, std::move(patterns)).failed())
       signalPassFailure();
