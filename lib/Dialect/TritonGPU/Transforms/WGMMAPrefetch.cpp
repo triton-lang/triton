@@ -87,7 +87,8 @@ class WGMMAPrefetcher {
                          bool loodToReg,
                          Attribute dotEncoding, OpBuilder &builder,
                          std::optional<int64_t> offsetK = std::nullopt,
-                         std::optional<int64_t> shapeK = std::nullopt);
+                         std::optional<int64_t> shapeK = std::nullopt,
+                         std::optional<int64_t> kWidth = std::nullopt);
 
   void cloneElementwiseOps(Value &bRem, const SmallVector<Value> &vals,
                           Value source,
@@ -136,7 +137,8 @@ Value WGMMAPrefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue
                                    bool loadToReg,
                                    Attribute dotEncoding, OpBuilder &builder,
                                    std::optional<int64_t> offsetK,
-                                   std::optional<int64_t> shapeK) {
+                                   std::optional<int64_t> shapeK,
+                                   std::optional<int64_t> kWidth) {
   // opIdx: 0 => a, 1 => b
   auto type = cast<triton::gpu::MemDescType>(v.getType());
   SmallVector<int64_t> shape{type.getShape().begin(), type.getShape().end()};
@@ -167,8 +169,10 @@ Value WGMMAPrefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue
       v, offsetsVal);
 
   if(loadToReg){
+    int64_t newKWidth = kWidth ? *kWidth: prefetchWidth/8;
+
     auto dotOperandEnc = triton::gpu::DotOperandEncodingAttr::get(
-        builder.getContext(), opIdx, dotEncoding, prefetchWidth / 8);
+        builder.getContext(), opIdx, dotEncoding, newKWidth);
     Value prefetchSlice = builder.create<triton::gpu::LocalLoadOp>(
         v.getLoc(), RankedTensorType::get(shape, elementType, dotOperandEnc),
         newSmem);
@@ -272,6 +276,10 @@ LogicalResult WGMMAPrefetcher::initialize() {
     auto bEnc = mlir::cast<NVMMASharedEncodingAttr>(bType.getEncoding());
 
     // currently, we require b is in shared memory
+    if(!aEnc){
+      return failure();
+    }
+
     if(!bEnc){
       return failure();
     }
@@ -389,6 +397,8 @@ scf::ForOp WGMMAPrefetcher::createNewForOp() {
       Attribute dotEncoding = dot.getType().getEncoding();
 
       int64_t kShape = dot.getA().getType().getShape().back();
+      auto aEnc = dyn_cast<DotOperandEncodingAttr>(dot.getA().getType().getEncoding());
+      int64_t kWidth = aEnc.getKWidth();
       int64_t subTileCnt =  ceil<int64_t>(kShape, prefetchWidth);
 
       SmallVector<Value> PrefetchedA;
@@ -396,7 +406,7 @@ scf::ForOp WGMMAPrefetcher::createNewForOp() {
       // Prefetching
       for(int i = 0; i < subTileCnt; i++){
         Value aRem = generatePrefetch(mapping.lookup(dot2aSrcMemDesc[dot]), 0, false, true,
-            dotEncoding, builder, prefetchWidth*i, prefetchWidth);
+            dotEncoding, builder, prefetchWidth*i, prefetchWidth, kWidth);
         PrefetchedA.push_back(aRem);
       }
 
