@@ -7305,3 +7305,14 @@ def test_indirect_store(dtype, device):
     indirect_store[(1, 1)](ptr, x_tri, out_tri, SIZE)
 
     np.testing.assert_allclose(np.flip(x), to_numpy(out_tri))
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype", map(tl.dtype, tl.dtype.SINT_TYPES + tl.dtype.UINT_TYPES + tl.dtype.STANDARD_FP_TYPES))
+def test_dtype_tensor(device, dtype):
+
+    @triton.jit
+    def dtype_tensor_kernel(dtype: tl.constexpr):
+        tensor = tl.zeros((1, ), dtype)
+
+    dtype_tensor_kernel[(1, )](dtype)
