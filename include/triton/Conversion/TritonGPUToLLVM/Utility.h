@@ -568,6 +568,15 @@ inline Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
   return res;
 }
 
+inline Value getProfileScratchPtr(Location loc, RewriterBase &rewriter,
+                                  FunctionOpInterface funcOp) {
+  // See NOTE: [Additional Function Arguments]
+  // Base for this function
+  assert(isKernel(funcOp) &&
+         "Profile scratch does not support non-kernel functions yet");
+  return funcOp.getArgument(funcOp.getNumArguments() - 2);
+}
+
 inline Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
                                  const TargetInfoBase &target, Operation *op) {
   auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext(),
