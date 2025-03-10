@@ -644,6 +644,8 @@ LogicalResult rewriteReduceOp(OpBuilder &rewriter, triton::ReduceOp op) {
   auto loc = op.getLoc();
   uint32_t axisReduce = op.getAxis();
   uint32_t axisNonReduce = (axisReduce+1)%2;
+  if (op.getNumOperands() != 1)
+   return failure();
 
   // Calculate refined shape.
   auto src = op->getOperand(0);
@@ -671,7 +673,7 @@ LogicalResult rewriteReduceOp(OpBuilder &rewriter, triton::ReduceOp op) {
     auto sliceOp = rewriter.create<triton::amdgpu::ExtractSliceOp>(
       loc, Type{refinedTensorType}, Value{src}, offset);
     auto reduceOp = rewriter.create<triton::ReduceOp>(
-        op.getLoc(), ValueRange{sliceOp}, axisReduce);
+        loc, ValueRange{sliceOp}, axisReduce);
     IRMapping mapping;
     mapping.map(reduceOp.getOperand(0), sliceOp);
     op.getCombineOp().cloneInto(&reduceOp->getRegion(0), mapping);
