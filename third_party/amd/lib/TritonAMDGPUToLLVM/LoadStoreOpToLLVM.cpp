@@ -25,7 +25,6 @@ using ::mlir::LLVM::AMD::llLoad;
 using ::mlir::LLVM::AMD::llStore;
 using ::mlir::triton::AMD::ISAFamily;
 using ::mlir::triton::gpu::getTotalElemsPerThread;
-
 namespace {
 
 // Return a predicate that is true only if the current thread holds unique data,
@@ -1537,7 +1536,7 @@ struct AtomicRMWOpConversion
         Value offset = genPrefixSum(rewriter, maskI32);
         offset = b.mul(offset, maskI32);
         auto layout = tensorTy.getEncoding();
-        Value waveSize = b.i32_val(triton::gpu::getWarpSize(layout));
+        Value waveSize = b.i32_val(lookupThreadsPerWarp(rewriter));
         offset = b.select(b.icmp_eq(offset, b.i32_val(0)), waveSize, offset);
         Value idx = b.sub(offset, b.i32_val(1));
         idx = b.mul(idx, b.i32_val(4));

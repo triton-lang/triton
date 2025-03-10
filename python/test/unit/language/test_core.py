@@ -7261,3 +7261,47 @@ def test_strided_store(dtype, device):
     np.testing.assert_allclose(x, to_numpy(out_tri)[::2])
     # Test that every second element (starting from [1]) is still zero
     np.testing.assert_allclose(np.zeros_like(x), to_numpy(out_tri)[1::2])
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype", list(dtypes) + ["bfloat16"])
+def test_indirect_load(dtype, device):
+
+    @triton.jit
+    def indirect_load(offset_ptr, x_ptr, output_ptr, SIZE: tl.constexpr):
+        linear_offsets = tl.arange(0, SIZE)
+        offsets = tl.load(offset_ptr + linear_offsets)
+        x = tl.load(x_ptr + offsets)
+        tl.store(output_ptr + linear_offsets, x)
+
+    SIZE = 512
+    x = numpy_random(SIZE, dtype_str=dtype)
+    x_tri = to_triton(x, device)
+    # Flip the range to load the tensor in reverse order
+    ptr = torch.arange(SIZE, device=device, dtype=torch.int32).flip(0)
+    out_tri = torch.empty(SIZE, device=device)
+    indirect_load[(1, 1)](ptr, x_tri, out_tri, SIZE)
+
+    np.testing.assert_allclose(np.flip(x), to_numpy(out_tri))
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype", list(dtypes) + ["bfloat16"])
+def test_indirect_store(dtype, device):
+
+    @triton.jit
+    def indirect_store(offset_ptr, x_ptr, output_ptr, SIZE: tl.constexpr):
+        linear_offsets = tl.arange(0, SIZE)
+        offsets = tl.load(offset_ptr + linear_offsets)
+        x = tl.load(x_ptr + linear_offsets)
+        tl.store(output_ptr + offsets, x)
+
+    SIZE = 512
+    x = numpy_random(SIZE, dtype_str=dtype)
+    x_tri = to_triton(x, device)
+    # Flip the range to store the tensor in reverse order
+    ptr = torch.arange(SIZE, device=device, dtype=torch.int32).flip(0)
+    out_tri = torch.empty(SIZE, device=device)
+    indirect_store[(1, 1)](ptr, x_tri, out_tri, SIZE)
+
+    np.testing.assert_allclose(np.flip(x), to_numpy(out_tri))
