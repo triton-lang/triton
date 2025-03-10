@@ -1230,18 +1230,16 @@ unsigned ModuleAxisInfoAnalysis::getContiguity(Value value) {
   return getContiguity(value, elemTy.getIntOrFloatBitWidth());
 }
 
-unsigned ModuleAxisInfoAnalysis::getContiguity(Value value,
+unsigned ModuleAxisInfoAnalysis::getContiguity(Value offsetsValue,
                                                unsigned elementBitWidth) {
-  auto tensorTy = dyn_cast<RankedTensorType>(value.getType());
-  if (!tensorTy)
-    return 1;
   // FIXME: This is not as good as it could be, as we don't need to restrict
   // the analysis to one dimension. We should determine contiguity on the
   // flattenOuts() layout
+  auto tensorTy = cast<RankedTensorType>(offsetsValue.getType());
   auto linAttr =
       gpu::toLinearEncoding(tensorTy.getEncoding(), tensorTy.getShape());
   auto order = linAttr.getOrder();
-  unsigned align = getAlignment(value, elementBitWidth);
+  unsigned align = getAlignment(offsetsValue, elementBitWidth);
 
   auto uniqueContigPerThread = linAttr.getContigPerThread();
   assert(order[0] < uniqueContigPerThread.size() &&
@@ -1266,12 +1264,10 @@ unsigned ModuleAxisInfoAnalysis::getAlignment(Value value) {
   return getAlignment(value, elemTy.getIntOrFloatBitWidth());
 }
 
-unsigned ModuleAxisInfoAnalysis::getAlignment(Value value,
+unsigned ModuleAxisInfoAnalysis::getAlignment(Value offsetsValue,
                                               unsigned elementBitWidth) {
-  auto tensorTy = dyn_cast<RankedTensorType>(value.getType());
-  if (!tensorTy)
-    return 1;
-  auto *axisInfo = getAxisInfo(value);
+  auto tensorTy = cast<RankedTensorType>(offsetsValue.getType());
+  auto *axisInfo = getAxisInfo(offsetsValue);
   if (!axisInfo)
     return 1;
   auto linAttr =

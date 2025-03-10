@@ -208,11 +208,14 @@ public:
   // Overloads of the above methods but have separated elementBitWidth to
   // calculate the contiguity. These are useful for computing axis info when
   // lowering to hardware intrinsics that require a scalar/warp-uniform base ptr
-  // with separate per lane offsets, e.g. AMD buffer operations. For those cases
-  // we want to compute the contiguity on the offsets but use the pointee type
-  // element bit width instead of the offset element type bit width
-  unsigned getContiguity(Value value, unsigned elementBitWidth);
-  unsigned getAlignment(Value value, unsigned elementBitWidth);
+  // with separate per lane offsets like AMD buffer operations.
+  // As a concrete example, instead of a single tensor<128x64x!tt.ptr<f16>>
+  // value, now we have two separate values: !tt.ptr<f16> for the base pointer
+  // and tensor<128x64xi32> for the offset. For such cases, we want to compute
+  // the contiguity on the offsets but use the pointee element type bit width
+  // instead of the offset element type bit width for alignment
+  unsigned getContiguity(Value offsetsValue, unsigned elementBitWidth);
+  unsigned getAlignment(Value offsetsValue, unsigned elementBitWidth);
 
   unsigned getMaskAlignment(Value mask);
 
