@@ -571,11 +571,7 @@ class JITFunction(KernelInterface[T]):
             # constexprs
             constexprs = find_paths_if(sigvals, lambda _, val: val == "constexpr")
             constexprs = {path: get_iterable_path(list(bound_args.values()), path) for path in constexprs}
-            constexpr_params = {
-                p.name: v
-                for (v, p) in zip(tuple(bound_args.values()), self.params)
-                if p.is_constexpr
-            }
+            constexpr_params = {p.name: v for (v, p) in zip(tuple(bound_args.values()), self.params) if p.is_constexpr}
             _fn_orig_name = self._fn_name
             self._update_fn_name(constexpr_params)
             # attributes
