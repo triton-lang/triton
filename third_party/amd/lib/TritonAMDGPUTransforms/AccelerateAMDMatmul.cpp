@@ -16,7 +16,6 @@ using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 using ::mlir::LLVM::AMD::scaleDotElemTypeToMLIRType;
-using mlir::triton::gpu::chooseScaledMfmaOperandLayout;
 using mlir::triton::gpu::chooseScaledMfmaScaleLayout;
 
 namespace {
@@ -564,14 +563,10 @@ public:
       if (failed(aScaledElemTy) || failed(bScaledElemTy))
         return failure();
 
-      auto aEncLL = chooseScaledMfmaOperandLayout(
-          mfmaEnc, kWidth, /*dotOperandIdx=*/0, aScaledElemTy.value(),
-          oldAType.getShape());
-      auto bEncLL = chooseScaledMfmaOperandLayout(
-          mfmaEnc, kWidth, /*dotOperandIdx=*/1, bScaledElemTy.value(),
-          oldBType.getShape());
-      auto newAEncoding = ttg::LinearEncodingAttr::get(ctx, aEncLL);
-      auto newBEncoding = ttg::LinearEncodingAttr::get(ctx, bEncLL);
+      auto newAEncoding =
+          DotOperandEncodingAttr::get(ctx, 0, mfmaEnc, kWidth / 2);
+      auto newBEncoding =
+          DotOperandEncodingAttr::get(ctx, 1, mfmaEnc, kWidth / 2);
 
       a = convertAndCastTensor(rewriter, a, newAEncoding,
                                mfmaInstr->aElementType);
@@ -875,22 +870,24 @@ public:
 
     auto aShape = a.getType().getShape();
     auto bShape = b.getType().getShape();
-    auto aEncLL = chooseScaledMfmaOperandLayout(
-        mfmaEnc, kWidth, /*dotOperandIdx=*/0, aElemType, aShape);
-    auto bEncLL = chooseScaledMfmaOperandLayout(
-        mfmaEnc, kWidth, /*dotOperandIdx=*/1, bElemType, bShape);
+    auto aEncLL = LinearLayout::empty();
+    auto bEncLL = LinearLayout::empty();
 
     auto convertInputLayout = [&](TensorValue v,
-                                  LinearLayout layout) -> TensorValue {
+                                  unsigned opIdx) -> TensorValue {
       auto vType = v.getType();
 
-      auto newEnc = ttg::LinearEncodingAttr::get(ctx, layout);
+      auto newEnc =
+          DotOperandEncodingAttr::get(ctx, opIdx, mfmaEnc, kWidth / 2);
+
+      (opIdx == 0 ? aEncLL : bEncLL) *=
+          newEnc.toLinearLayout(opIdx == 0 ? aShape : bShape);
       auto newVType = RankedTensorType::get(vType.getShape(),
                                             vType.getElementType(), newEnc);
       return rewriter.create<ttg::ConvertLayoutOp>(v.getLoc(), newVType, v);
     };
-    a = convertInputLayout(a, aEncLL);
-    b = convertInputLayout(b, bEncLL);
+    a = convertInputLayout(a, 0);
+    b = convertInputLayout(b, 1);
 
     StringAttr kWarp = StringAttr::get(ctx, "warp");
     auto convertScaleLayout = [&](TensorValue scale,
