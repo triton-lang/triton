@@ -138,7 +138,6 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
     memAccessesSameOrder.insert(op);
     if (ptr.getDefiningOp()) {
       for (Operation *use : mlir::multiRootGetSlice(op)) {
-        LDBG("multi-root-slice: " << *use);
         Value val = getMemAccessPtr(use);
         if (!val || !matchesShape(val) || memAccessesSameOrder.contains(use))
           continue;
