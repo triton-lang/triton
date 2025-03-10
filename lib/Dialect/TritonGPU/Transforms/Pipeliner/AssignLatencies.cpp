@@ -260,7 +260,7 @@ public:
       // If the acc can not be multibuffered, do not pipeline the uses of
       // the MMA to later stages.
       if (isa<ttng::MMAv5OpInterface>(op) &&
-          isPipeliningOfMMAOpPossible(&op, forOp) &&
+          isPipeliningOfMMAOpPossible(&op, forOp, opLatency) &&
           !getDisallowAccMultiBuffer(forOp)) {
         opLatency[&op] = 1;
       }
@@ -271,9 +271,11 @@ private:
   scf::ForOp forOp;
   DenseMap<Operation *, int> &opLatency;
 
-  bool isPipeliningOfMMAOpPossible(Operation *op, scf::ForOp forOp) {
+  bool isPipeliningOfMMAOpPossible(Operation *op, scf::ForOp forOp,
+                                   DenseMap<Operation *, int> &opLatency) {
     assert((isa<ttng::MMAv5OpInterface>(op)) && "Only MMA ops are supported");
-    // Operands of the MMA op must come from the load, or from outside the loop.
+    // Operands of the MMA op must come from the (to be pipelined) load, or
+    // from outside the loop.
     auto comesFromLoadOrOutsideLoop = [&](Value v) {
       if (forOp.isDefinedOutsideOfLoop(v)) {
         return true;
@@ -286,9 +288,13 @@ private:
         if (!localAlloc.getSrc()) {
           return false;
         }
-        return (localAlloc.getSrc().getDefiningOp() &&
-                isa<tt::LoadOp>(localAlloc.getSrc().getDefiningOp())) ||
-               forOp.isDefinedOutsideOfLoop(localAlloc.getSrc());
+        if (forOp.isDefinedOutsideOfLoop(localAlloc.getSrc())) {
+          return true;
+        }
+        if (auto loadOp =
+                dyn_cast<tt::LoadOp>(localAlloc.getSrc().getDefiningOp())) {
+          return (opLatency.count(loadOp) && opLatency[loadOp] > 0);
+        }
       }
       return false;
     };
