@@ -18,8 +18,10 @@ using namespace mlir::triton;
 // To support use of shared memory and global scratch memory inside of a
 // function, the caller allocates a single large block of the relevant memory
 // and calls the function with these extra arguments at the end.
-// Specifically, the last argument is the global scratch memory allocation and
-// the second to last is the shared memory allocation.
+// Specifically, the second last argument is the global scratch memory
+// allocation and the third to last is the shared memory allocation.
+// Additionally, the last argument is the profile scratch memory allocation,
+// which is only used when the function is instrumented for profiling.
 //
 // For the kernel function itself, the shared memory base is a global symbol
 // so no additional function argument is required but global scratch memory
@@ -27,9 +29,6 @@ using namespace mlir::triton;
 // memory is shared between all programs, so a linear offset based on the
 // program id is required to get the local scratch base.
 
-/// FuncOp legalization pattern that converts MemRef arguments to pointers to
-/// MemRef descriptors (LLVM struct data types) containing all the MemRef type
-/// information.
 struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
   FuncOpConversion(LLVMTypeConverter &converter,
                    const TargetInfoBase &targetInfo, PatternBenefit benefit)
