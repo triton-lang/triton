@@ -11,12 +11,6 @@ namespace {
 // MFMA intrinsic query key
 //===----------------------------------------------------------------------===//
 
-// Returns true if the given type is an OCP FP8/FP6/FP6 type.
-inline bool isF8F6F4(mlir::Type type) {
-  return llvm::isa<Float8E4M3FNType, Float8E5M2Type, Float6E3M2FNType,
-                   Float6E2M3FNType, Float4E2M1FNType>(type);
-}
-
 // The tuple used as key to query MFMA intrinsic map.
 using MfmaKey =
     std::tuple<unsigned /*version*/, unsigned /*mDim*/, unsigned /*nDim*/,

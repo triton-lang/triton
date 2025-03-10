@@ -6,6 +6,9 @@ on:
       - llvm-head
     paths:
       - cmake/llvm-hash.txt
+  pull_request:
+    paths:
+      - .github/workflows/llvm-build.yml
   workflow_dispatch:
 
 env:
@@ -30,6 +33,7 @@ jobs:
         - {runner: 'Ubuntu 20.04 ARM64', runs_on: 'ubuntu-20.04', target-os: 'ubuntu', arch: 'arm64'}
         - {runner: 'CentOS 7', runs_on: ['self-hosted', 'CPU'], target-os: 'centos', arch: 'x64'}
         - {runner: 'AlmaLinux 8', runs_on: ['self-hosted', 'CPU'], target-os: 'almalinux', arch: 'x64'}
+        - {runner: 'AlmaLinux 8 ARM64', runs_on: 'ubuntu-22.04-arm', target-os: 'almalinux', arch: 'arm64'}
         - {runner: 'MacOS X64', runs_on: 'macos-13', target-os: 'macos', arch: 'x64'}
         - {runner: 'MacOS ARM64', runs_on: 'macos-13', target-os: 'macos', arch: 'arm64'}
         - {runner: 'Windows Latest', runs_on: 'windows-latest', target-os: 'windows', arch: 'x64'}
@@ -103,7 +107,7 @@ jobs:
         -DLLVM_BUILD_TOOLS=ON
         -DLLVM_ENABLE_ASSERTIONS=ON
         -DMLIR_ENABLE_BINDINGS_PYTHON=ON
-        -DLLVM_ENABLE_PROJECTS=mlir
+        -DLLVM_ENABLE_PROJECTS="mlir;lld"
         -DLLVM_INSTALL_UTILS=ON
         -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
         -DLLVM_ENABLE_TERMINFO=OFF
@@ -126,7 +130,7 @@ jobs:
         -DLLVM_BUILD_TOOLS=ON
         -DLLVM_ENABLE_ASSERTIONS=ON
         -DMLIR_ENABLE_BINDINGS_PYTHON=ON
-        -DLLVM_ENABLE_PROJECTS="mlir;llvm"
+        -DLLVM_ENABLE_PROJECTS="mlir;llvm;lld"
         -DLLVM_ENABLE_DIA_SDK=OFF
         -DLLVM_INSTALL_UTILS=ON
         -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
@@ -145,7 +149,7 @@ jobs:
         mkdir arm-sysroot
         mkdir -p llvm-project/host-tools
         cd llvm-project/host-tools
-        cmake -GNinja ../llvm -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_PROJECTS="mlir;llvm;clang"
+        cmake -GNinja ../llvm -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_PROJECTS="mlir;llvm;clang;lld"
         ninja mlir-tblgen
         ninja llvm-tblgen
         ninja clang-tblgen
@@ -167,7 +171,7 @@ jobs:
         echo $LINKER
         cmake -GNinja -Bllvm-project/build \
         -DCMAKE_BUILD_TYPE=Release \
-        -DLLVM_ENABLE_PROJECTS="mlir;llvm" \
+        -DLLVM_ENABLE_PROJECTS="mlir;llvm;lld" \
         -DLLVM_BUILD_UTILS=ON \
         -DLLVM_TABLEGEN=$HOST_TOOLS/llvm-tblgen \
         -DMLIR_TABLEGEN=$HOST_TOOLS/mlir-tblgen \
@@ -221,7 +225,7 @@ jobs:
         -DLLVM_BUILD_TOOLS=ON
         -DLLVM_ENABLE_ASSERTIONS=ON
         -DMLIR_ENABLE_BINDINGS_PYTHON=ON
-        -DLLVM_ENABLE_PROJECTS=mlir
+        -DLLVM_ENABLE_PROJECTS="mlir;lld"
         -DLLVM_ENABLE_ZSTD=OFF
         -DLLVM_INSTALL_UTILS=ON
         -DLLVM_TARGETS_TO_BUILD="AArch64;NVPTX;AMDGPU"

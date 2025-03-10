@@ -85,7 +85,7 @@ bool verifyNonNegativeExpr(Value expr, const DenseSet<Value> &assumptions,
   LDBG("Determing if non-negative: " << expr);
 
   if (!llvm::isa<mlir::BlockArgument>(expr) &&
-      succeeded(AMD::staticallyNonNegative(*solver, expr))) {
+      succeeded(dataflow::staticallyNonNegative(*solver, expr))) {
     return true;
   }
 
@@ -321,6 +321,15 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     }
     LDBG("RMW supported type");
 
+    auto vecSize = getVectorSize(ptr, axisAnalysisPass);
+    // f16/bf16 dtypes could only be efficiently calculated using instructions
+    // that pack 2 elements (e.g. @llvm.amdgcn.raw.buffer.atomic.fadd.v2f16)
+    if (vecSize % 2 != 0 && (checkType.isF16() || checkType.isBF16())) {
+      return rewriter.notifyMatchFailure(
+          op, "RMW float 16 dtypes must be aligned by 2");
+    }
+    LDBG("RMW passed alignment check");
+
     // 5. Check if the RMWOp is supported
     switch (atomicRmwOp) {
     case RMWOp::AND:
@@ -351,8 +360,7 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
       // are contiguous we can emit the buffer op. Otherwise, the buffer ops
       // lowering will try to emit individual (unsupported) f16/bf16 ops.
       auto elemBitWidth = tensorType.getElementTypeBitWidth();
-      opBitWidth =
-          getVectorSize(basePtr, tensorOffset, axisAnalysisPass) * elemBitWidth;
+      opBitWidth = vecSize * elemBitWidth;
     } else {
       opBitWidth = opValueType.getIntOrFloatBitWidth();
     }
@@ -379,20 +387,25 @@ private:
   std::shared_ptr<DataFlowSolver> solver;
 };
 
-struct ConvertTritonLoadToBufferLoad
-    : public mlir::OpRewritePattern<triton::LoadOp> {
-  using OpRewritePattern::OpRewritePattern;
+// Workaround to allow static_assert(false) on older compilers as it was
+// ill-formed before defect report CWG2518
+// (https://cplusplus.github.io/CWG/issues/2518.html)
+template <typename T> struct always_false : std::false_type {};
+
+template <typename SourceOp>
+struct ConvertTritonLoadToBufferLoad : public mlir::OpRewritePattern<SourceOp> {
+  using OpRewritePattern<SourceOp>::OpRewritePattern;
 
   ConvertTritonLoadToBufferLoad(mlir::MLIRContext *context,
                                 DenseSet<Value> &assumptions,
                                 std::shared_ptr<DataFlowSolver> solver)
-      : mlir::OpRewritePattern<triton::LoadOp>(context),
-        assumptions(assumptions), solver(std::move(solver)) {}
+      : mlir::OpRewritePattern<SourceOp>(context), assumptions(assumptions),
+        solver(std::move(solver)) {}
 
   mlir::LogicalResult
-  matchAndRewrite(triton::LoadOp op, PatternRewriter &rewriter) const override {
+  matchAndRewrite(SourceOp op, PatternRewriter &rewriter) const override {
     LDBG("Try to convert: " << op);
-    Value ptr = op.getPtr();
+    Value ptr = op.getOperand(0);
 
     if (canUseBufferOps(ptr, assumptions, solver)) {
       auto addPtrOp = ptr.getDefiningOp<triton::AddPtrOp>();
@@ -407,15 +420,32 @@ struct ConvertTritonLoadToBufferLoad
       if (op.getMask() && !isZeroConst(op.getMask()))
         maybeMask = op.getMask();
       Value blockStride = getBlockStride(op->getLoc(), tensorOffset, rewriter);
-      auto bufferLoadOp = rewriter.create<triton::amdgpu::BufferLoadOp>(
-          op->getLoc(), op.getType(), basePtr, tensorOffset, blockStride,
-          op.getCache(), maybeMask, maybeOther);
+
+      auto bufferLoadOp = [&]() {
+        if constexpr (std::is_same_v<SourceOp, triton::LoadOp>) {
+          return rewriter.create<triton::amdgpu::BufferLoadOp>(
+              op->getLoc(), op.getType(), basePtr, tensorOffset, blockStride,
+              op.getCache(), maybeMask, maybeOther);
+        } else if constexpr (std::is_same_v<
+                                 SourceOp,
+                                 triton::gpu::AsyncCopyGlobalToLocalOp>) {
+          return rewriter.create<triton::amdgpu::BufferLoadToLocalOp>(
+              op->getLoc(), op.getType(), op.getResult(), basePtr, tensorOffset,
+              maybeMask, maybeOther, blockStride, op.getCache());
+        } else {
+          static_assert(always_false<SourceOp>::value,
+                        "Unsupported type in ConvertTritonLoadToBufferLoad");
+        }
+      }();
+
+      assert(bufferLoadOp);
 
       // Propagate `OpIdxAttr` if the currently processed `tt.LoadOp` was
       // labeled it. The attribute needs to be preserved for custom instruction
       // scheduling.
-      if (auto opIdxAttr = op->getAttrOfType<triton::amdgpu::OpIdxAttr>(
-              triton::amdgpu::OpIdxAttr::getMnemonic())) {
+      if (auto opIdxAttr =
+              op->template getAttrOfType<triton::amdgpu::OpIdxAttr>(
+                  triton::amdgpu::OpIdxAttr::getMnemonic())) {
         bufferLoadOp->setAttr(triton::amdgpu::OpIdxAttr::getMnemonic(),
                               opIdxAttr);
       }
@@ -491,8 +521,9 @@ public:
     // Collect assumptions in the function
     DenseSet<Value> assumptions;
     mod.walk([&](LLVM::AssumeOp op) {
-      if (op->getOperand(0).getDefiningOp<arith::CmpIOp>())
-        assumptions.insert(op->getOperand(0));
+      auto oper = op->getOperand(0);
+      if (oper.getDefiningOp<arith::CmpIOp>())
+        assumptions.insert(oper);
     });
     LLVM_DEBUG({
       DBGS() << "Number of assumptions found: " << assumptions.size() << "\n";
@@ -507,8 +538,9 @@ public:
       return signalPassFailure();
 
     ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
-    patterns.add<ConvertTritonLoadToBufferLoad>(context, assumptions, solver);
-    patterns.add<ConvertTritonStoreToBufferStore>(context, assumptions, solver);
+    patterns.add<ConvertTritonLoadToBufferLoad<tt::LoadOp>,
+                 ConvertTritonLoadToBufferLoad<ttg::AsyncCopyGlobalToLocalOp>,
+                 ConvertTritonStoreToBufferStore>(context, assumptions, solver);
 
     // Gate buffer atomics behind CDNA3 (i.e., MI300 series) for now
     // GFX942-specific assumptions regarding cache coherence are made when

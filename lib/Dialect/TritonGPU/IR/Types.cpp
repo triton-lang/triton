@@ -52,6 +52,10 @@ Type MemDescType::parse(AsmParser &parser) {
   if (parser.parseGreater())
     return Type();
 
+  if (allocShape.size() > 0)
+    return MemDescType::get(parser.getContext(), dimensions, elementType,
+                            encoding, memorySpace, mutableMemory, allocShape);
+
   return MemDescType::get(parser.getContext(), dimensions, elementType,
                           encoding, memorySpace, mutableMemory, dimensions);
 }

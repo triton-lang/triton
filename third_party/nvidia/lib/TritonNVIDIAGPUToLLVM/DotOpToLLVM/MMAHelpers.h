@@ -36,7 +36,8 @@ class DotOpMmaV3SmemLoader : public DotOpMmaMemLoader {
 public:
   DotOpMmaV3SmemLoader() {}
   DotOpMmaV3SmemLoader(Value tensor, Value base, SmallVector<int64_t> shape,
-                       Value warpId, unsigned int dimWpt, bool trans,
+                       ArrayRef<int64_t> allocSwizzleShape, Value warpId,
+                       unsigned int dimWpt, bool trans,
                        SmallVector<unsigned int> instrShape,
                        int64_t elementBitwidth,
                        ConversionPatternRewriter &rewriter, Location loc);
@@ -53,6 +54,7 @@ public:
 private:
   Value base;
   SmallVector<int64_t> shape;
+  SmallVector<int64_t> allocSwizzleShape;
   Value warpId;
   int dimWpt;
   bool trans;

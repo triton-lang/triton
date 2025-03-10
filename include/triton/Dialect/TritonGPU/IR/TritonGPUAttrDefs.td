@@ -271,39 +271,14 @@ When vec=2, elements are swizzled in pairs of 2.  In other words, the element at
                      "unsigned":$typeWidthInBit,
                      "bool":$needTrans), [{
 
-        // ---- begin GFX908/GFX90A ----
+        // ---- begin MFMA ----
         if (auto mfmaEnc = mlir::dyn_cast<AMDMfmaEncodingAttr>(dotOpEnc.getParent())) {
-          int kDimNum = dotOpEnc.getOpIdx() == 0 ? 1 : 0;
-          if (needTrans)
-            kDimNum = 1 - kDimNum;
-          bool isKDimInner = (order[0] == kDimNum);
-          if (isKDimInner) {
-            const int numBanks = 32;
-            const int bankBitWidth = 32;
-            const int SIMDWidth = 16;
-
-            // number of inner dimension rows per one pattern repeat
-            int innerDimLength = shape[order[0]];
-            int elemsPerOneBanksRow = (numBanks * bankBitWidth) / typeWidthInBit;
-
-            int perPhase = std::max(1, elemsPerOneBanksRow / innerDimLength);
-            // vecSize is set to kWidth of the dotop layout
-            int vecSize = dotOpEnc.getKWidth();
-            int maxPhase = std::max(std::min(SIMDWidth / perPhase, innerDimLength / vecSize), 1);
-
-            // TODO (zhanglx): figure out better parameters for mfma4
-            if (mfmaEnc.getMDim() == 4)
-              maxPhase = 4;
-
-            return get(context, vecSize, perPhase, maxPhase, order, CTALayout);
-          } else {
-            // Do not swizzle in case k dimension is not innermost.
-            // In this case accesses will go in different banks even without swizzling.
-            return get(context, 1, 1, 1, order, CTALayout);
-          }
+          return mfmaEnc.composeSharedLayoutForOperand(
+              CTALayout, dotOpEnc.getOpIdx(), shape, order, dotOpEnc.getKWidth(),
+              typeWidthInBit, needTrans);
         }
 
-        // ---- begin GFX11 ----
+        // ---- begin WMMA ----
         if (mlir::isa<AMDWmmaEncodingAttr>(dotOpEnc.getParent())) {
           if (dotOpEnc.getOpIdx() == 0) {
             const int numBanks = 32;
@@ -471,6 +446,110 @@ def NVMMASharedEncodingAttr :
   let hasCustomAssemblyFormat = 1;
 }
 
+def AMDRotatingSharedEncodingAttr :
+  TritonGPU_Attr<"AMDRotatingSharedEncoding", "amd_rotating_shared_encoding",
+                 [SharedEncodingTrait, LayoutEncodingTrait]> {
+  let mnemonic = "amd_rotating_shared";
+
+  let description = [{
+This shared encoding is similar to SwizzledSharedEncodingAttr, but instead of
+repeating swizzling pattern every `maxPhase*perPhase` rows of the memory object,
+called a block, this layout changes swizzling pattern `maxPhase` times, then
+repeats the pattern. The name "rotating" comes from the fact that first tensor
+element of each block is swizzled with different phase, which is equal to
+current block number: 0, 1, 2.. maxPhase-1, 0, 1, 2 ...
+
+This layout is used to reduce bank conflicts in cases where shared memory writes
+and reads are performed on layouts with different order. It's meant for hardware
+without native shared memory tranpose support.
+
+Swizzling pattern affects only 2 fastest dimensions of a tensor.
+In the following text these two dimensions are called row and column:
+- row is a fastest dimension
+- column is a second fastest dimension
+
+Elements in a row dimension are stored in memory contiguously.
+
+If a matrix of size [128x64] is stored in this shared layout with order [1, 0],
+dim 1 (64) will be stored contiguously and called row, dim 0 (128) is will be
+called column. If order of shared layout is [0, 1], dim 0 (128) is stored
+contiguously becomes a row, dim 1 (64) becomes a column.
+
+Swizzling pattern is following:
+
+Let's consider an element with logical coordinates = (inRowId, inColId).
+For simplicity, we do not vectorize memory in examples,
+i.e. vec == 1 and layout swizzles inidividual elements.
+For vec != 1 example, take a look at SwizzledSharedEncodingAttr documentation.
+
+Swizzled coordinates within memory object are (outRowId, outColId):
+
+  outRowId = inRowId
+  phase   = (inRowId / perPhase) % maxPhase
+  blockNo = (inRowId / (perPhase * maxPhase)) % maxPhase
+  combinedPhase = phase ^ blockNo
+  outColId   = inColId ^ combinedPhase
+
+Actual offset in memory could be computed with following function:
+
+memmory_offset = (outColId + outRowId * num_of_element_in_row) * sizeof(element)
+
+
+Swizzling examples (matrix is filled with numbers 0, 1, 2, .. columns*rows-1):
+
+  #shared<{vec=1, perPhase=1, maxPhase=2, order=[1,0]}>
+  row      elements
+    0  [ 0,  1,  2,  3],  // phase = 0 blockNo = 0 (xor with 0)
+    1  [ 5,  4,  7,  6],  // phase = 1 blockNo = 0 (xor with 1)
+    2  [ 9,  8, 11, 10],  // phase = 0 blockNo = 1 (xor with 1)
+    3  [12, 13, 14, 15]   // phase = 1 blockNo = 1 (xor with 0)
+    4  [16, 17, 18, 19],  // phase = 0 blockNo = 0 (xor with 0)
+    5  [21, 20, 23, 22],  // phase = 1 blockNo = 0 (xor with 1)
+    6  [25, 24, 27, 26],  // phase = 0 blockNo = 1 (xor with 1)
+    7  [28, 29, 30, 31]   // phase = 1 blockNo = 1 (xor with 0)
+
+  #shared<{vec=1, perPhase=2, maxPhase=2, order=[1,0]}>
+  row      elements
+    0  [ 0,  1,  2,  3],  // phase = 0 blockNo = 0 (xor with 0)
+    1  [ 4,  5,  6,  7],  // phase = 0 blockNo = 0 (xor with 0)
+    2  [ 9,  8, 11, 10],  // phase = 1 blockNo = 0 (xor with 1)
+    3  [13, 12, 15, 14]   // phase = 1 blockNo = 0 (xor with 1)
+    4  [17, 16, 19, 18],  // phase = 0 blockNo = 1 (xor with 1)
+    5  [21, 20, 23, 22],  // phase = 0 blockNo = 1 (xor with 1)
+    6  [24, 25, 26, 27],  // phase = 1 blockNo = 1 (xor with 0)
+    7  [28, 29, 30, 31]   // phase = 1 blockNo = 1 (xor with 0)
+
+  #shared<{vec=1, perPhase=1, maxPhase=4, order=[1,0]}>
+  row      elements
+    0  [ 0,  1,  2,  3],  // phase = 0 blockNo = 0 (xor with 0)
+    1  [ 5,  4,  7,  6],  // phase = 1 blockNo = 0 (xor with 1)
+    2  [10, 11,  8,  9],  // phase = 2 blockNo = 0 (xor with 2)
+    3  [15, 14, 13, 12]   // phase = 3 blockNo = 0 (xor with 3)
+    4  [17, 16, 19, 18],  // phase = 0 blockNo = 1 (xor with 1)
+    5  [20, 21, 22, 23],  // phase = 1 blockNo = 1 (xor with 0)
+    6  [27, 26, 25, 24],  // phase = 2 blockNo = 1 (xor with 3)
+    7  [30, 31, 28, 29]   // phase = 3 blockNo = 1 (xor with 2)
+  }];
+
+  let parameters = (
+    ins
+    "unsigned":$vec,
+    "unsigned":$perPhase,
+    "unsigned":$maxPhase,
+    ArrayRefParameter<"unsigned">:$order,
+    "CTALayoutAttr":$CTALayout
+  );
+
+  let extraClassDeclaration = extraBaseClassDeclaration # [{
+    int32_t getAlignment() const;
+    SmallVector<unsigned> getCTAsPerCGA() const;
+    SmallVector<unsigned> getCTAOrder() const;
+    SmallVector<unsigned> getCTASplitNum() const;
+  }];
+  let hasCustomAssemblyFormat = 1;
+}
+
+
 //===----------------------------------------------------------------------===//
 // Distributed Layout Encoding
 //===----------------------------------------------------------------------===//
@@ -524,10 +603,6 @@ We call each individual tile "rep".
     InterfaceMethod<"Get the shape of the threads per warp",
                     "SmallVector<unsigned>",
                     "getThreadsPerWarp">,
-
-    InterfaceMethod<"Get the shape of the values per thread.",
-                    "SmallVector<unsigned>",
-                    "getSizePerThread">,
     InterfaceMethod<"Convert to LinearLayout.",
                     "LinearLayout",
                     "toLinearLayout",
@@ -596,8 +671,6 @@ L(T) = [ {0,8} , {1,9} , {2,10}, {3,11}, {0,8} , {1, 9} , {2, 10}, {3, 11},
     SmallVector<unsigned> getWarpsPerCTA() const;
     SmallVector<unsigned> getThreadsPerWarp() const;
 
-    SmallVector<unsigned> getSizePerThread() const;
-
     LinearLayout toLinearLayout(ArrayRef<int64_t> shape) const;
 
     // Legacy methods: They do not take into account the shape of the tensor
@@ -649,6 +722,10 @@ def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding"
     // If skipBroadcast is false, we count a base zero
     SmallVector<unsigned> basesPerDim(StringAttr dimName,
                                       bool skipBroadcast = true) const;
+
+    // [FIXME LL] Supports legacy behaviour. We should remove these functions
+    SmallVector<unsigned> getShapePerCTATile() const;
+    SmallVector<unsigned> getSizePerThread() const;
   }];
 
   let genVerifyDecl = 1;
@@ -753,7 +830,7 @@ for
 
   let parameters = (
     ins
-    ArrayRefParameter<"unsigned">:$sizePerThread__,
+    ArrayRefParameter<"unsigned">:$sizePerThread,
     ArrayRefParameter<"unsigned">:$threadsPerWarp__,
     ArrayRefParameter<"unsigned">:$warpsPerCTA__,
     ArrayRefParameter<"unsigned">:$order, // the fastest-changing axis first
@@ -843,13 +920,6 @@ for
 def MmaEncodingTrait : AttrInterface<"MmaEncodingTrait"> {
   let cppNamespace = "::mlir::triton::gpu";
   let methods = [
-
-    InterfaceMethod<"Return size per thread for dot operands.",
-                    "SmallVector<unsigned>",
-                    "getSizePerThreadForOperand",
-                    (ins "int":$opIdx,
-                         "int":$kWidth)>,
-
     InterfaceMethod<"Return the number of threads per warp for dot operands.",
                     "SmallVector<unsigned>",
                     "getThreadsPerWarpForOperand",
@@ -974,11 +1044,17 @@ V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,
   );
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
-    SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, int opIdx) const;
     SmallVector<int64_t> getInstrShapeForOperand(int kWidth, int opIdx) const;
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape, int kWidth, int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
     SmallVector<unsigned> getThreadsPerWarpForOperand(int opIdx) const;
+
+    // Returns a swizzled shared layout matching this MFMA layout for the
+    // dot operand at the given |operandIdx| with |operandShape|.
+    SwizzledSharedEncodingAttr composeSharedLayoutForOperand(
+        CTALayoutAttr ctaLayout, int operandIdx, ArrayRef<int64_t> operandShape,
+        ArrayRef<unsigned> sharedOrder, unsigned vectorSize,
+        unsigned elemBitWidth, bool needTrans) const;
   }];
 
   let genVerifyDecl = 1;
@@ -1089,12 +1165,12 @@ Row |
   let hasCustomAssemblyFormat = 1;
 
   let extraClassDeclaration = extraDistributedDeclaration # [{
-    SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, int opIdx) const;
     SmallVector<int64_t> getElemsPerInstrForOperands() const;
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape,
                                           Type elemType, int kWidth, int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
     SmallVector<unsigned> getThreadsPerWarpForOperand(int opIdx) const;
+    unsigned getKWidthForOperands() const;
     static SmallVector<unsigned> getMNKDimPerInstr();
   }];
 }
@@ -1204,7 +1280,6 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
                                           int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
     SmallVector<unsigned> getThreadsPerWarpForOperand(int opIdx) const;
-    SmallVector<unsigned> getSizePerThreadForOperand(int kWidth, int opIdx) const;
   }];
 
   let hasCustomAssemblyFormat = 1;

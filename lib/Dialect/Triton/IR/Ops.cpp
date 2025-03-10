@@ -1025,26 +1025,64 @@ LogicalResult ReturnOp::verify() {
 }
 
 // -- JoinOp --
-LogicalResult
-JoinOp::inferReturnTypes(MLIRContext *context, std::optional<Location> location,
-                         JoinOp::Adaptor adaptor,
-                         SmallVectorImpl<Type> &inferredReturnTypes) {
-  auto srcTy = cast<RankedTensorType>(adaptor.getLhs().getType());
 
-  SmallVector<int64_t> retShape(srcTy.getShape());
+void JoinOp::build(OpBuilder &builder, OperationState &state, Value lhs,
+                   Value rhs) {
+  auto lhsTy = cast<RankedTensorType>(lhs.getType());
+  SmallVector<int64_t> retShape(lhsTy.getShape());
   retShape.push_back(2);
 
-  Attribute srcEnc = srcTy.getEncoding();
+  Attribute srcEnc = lhsTy.getEncoding();
   Attribute retEnc;
   if (srcEnc) {
     if (cast<DialectInferLayoutInterface>(&srcEnc.getDialect())
-            ->inferJoinOpEncoding(srcEnc, retEnc, srcTy.getShape(), location)
+            ->inferDefaultJoinOpEncoding(srcEnc, retEnc, lhsTy.getShape(),
+                                         /*loc=*/std::nullopt)
             .failed()) {
-      return failure();
+      assert(false && "failed to infer join encoding");
     }
   }
-  inferredReturnTypes.push_back(
-      RankedTensorType::get(retShape, srcTy.getElementType(), retEnc));
+  auto retTy = RankedTensorType::get(retShape, lhsTy.getElementType(), retEnc);
+  JoinOp::build(builder, state, retTy, lhs, rhs);
+}
+
+LogicalResult JoinOp::verify() {
+  RankedTensorType srcTy = getLhs().getType();
+  SmallVector<int64_t> retShape(srcTy.getShape());
+  retShape.push_back(2);
+
+  RankedTensorType retTy = getType();
+  if (SmallVector<int64_t>(retTy.getShape()) != retShape) {
+    return emitOpError("result shape must be (")
+           << retShape << "), but got " << retTy.getShape();
+  }
+  if (retTy.getElementType() != srcTy.getElementType()) {
+    return emitOpError("result element type must match the input element type");
+  }
+  Attribute retEnc = retTy.getEncoding();
+  if (!retEnc) {
+    if (srcTy.getEncoding()) {
+      return emitOpError("result encoding must be specified");
+    }
+    return success();
+  }
+  // There are multiple correct destination layout for a given source layout but
+  // there is only one correct source layout for a given destination layout. So
+  // we verify that the source layout match the destination layout.
+  Attribute srcEnc;
+  Location location = getLoc();
+  if (cast<DialectInferLayoutInterface>(&retEnc.getDialect())
+          ->inferSplitOpEncoding(retEnc, srcEnc, retShape, location)
+          .failed()) {
+    return failure();
+  }
+
+  if (cast<triton::DialectInferLayoutInterface>(&srcEnc.getDialect())
+          ->verifyLayoutsAreEqual(srcTy.getShape(), srcEnc, srcTy.getEncoding(),
+                                  {})
+          .failed()) {
+    return emitOpError("incompatible join layout");
+  }
   return success();
 }
 

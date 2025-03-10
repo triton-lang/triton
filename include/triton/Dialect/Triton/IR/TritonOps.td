@@ -504,9 +504,7 @@ def TT_CatOp : TT_Op<"cat", [NoMemoryEffect,
 }
 
 def TT_JoinOp : TT_Op<"join", [
-    NoMemoryEffect, SameTypeOperands,
-    InferTypeOpWithLayoutEquivalence,
-]> {
+    NoMemoryEffect, SameTypeOperands]> {
     let summary = "join two tensors along a new, minor dimension";
     let description = [{
         For example, if the two input tensors are 4x8xf32, returns a tensor of
@@ -516,9 +514,13 @@ def TT_JoinOp : TT_Op<"join", [
         the two input tensors must have the same shape.
     }];
 
+    let builders = [
+      OpBuilder<(ins "Value":$lhs, "Value":$rhs)>
+    ];
     let arguments = (ins TT_Tensor:$lhs, TT_Tensor:$rhs);
     let results = (outs TT_Tensor:$result);
     let assemblyFormat = "$lhs `,` $rhs attr-dict `:` type($lhs) `->` type($result)";
+    let hasVerifier = 1;
 }
 
 def TT_SplitOp : TT_Op<"split", [

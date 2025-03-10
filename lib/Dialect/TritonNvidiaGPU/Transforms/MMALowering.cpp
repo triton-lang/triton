@@ -55,17 +55,22 @@ struct TCGen5MMAScaleSharedToTmemConversion
     : public OpRewritePattern<TCGen5MMAScaledOp> {
   using OpRewritePattern<TCGen5MMAScaledOp>::OpRewritePattern;
 
-  bool lowerScaleToTmem(OpOperand &operand, PatternRewriter &rewriter) const {
+  // Create a tmem_copy of scales from shared memory to tmem. `rows` is the M or
+  // N of the MMA operation (for LHS or RHS respectively).
+  bool lowerScaleToTmem(OpOperand &operand, PatternRewriter &rewriter,
+                        int rows) const {
     Location loc = operand.getOwner()->getLoc();
     MLIRContext *context = operand.getOwner()->getContext();
     Attribute tensorMemorySpace = TensorMemorySpaceAttr::get(context);
     auto oldType = cast<MemDescType>(operand.get().getType());
+    auto numElems = product(oldType.getShape());
     Type elType = oldType.getElementType();
     SwizzledSharedEncodingAttr oldEncoding =
         cast<SwizzledSharedEncodingAttr>(oldType.getEncoding());
     CTALayoutAttr CTALayout = getCTALayout(oldEncoding);
     ArrayRef<unsigned> CTASplitNum = CTALayout.getCTASplitNum();
-    ArrayRef<int64_t> shape = oldType.getShape();
+    // Distribute the scales across the rows of the MMA operation.
+    SmallVector<int64_t> shape = {rows, numElems / rows};
     Attribute scaleEncoding = TensorMemoryScalesEncodingAttr::get(
         context, CTASplitNum[0], CTASplitNum[1]);
     Type scaleAType =
@@ -84,12 +89,21 @@ struct TCGen5MMAScaleSharedToTmemConversion
     MLIRContext *context = op->getContext();
     auto aScaleType = op.getAScale().getType();
     auto bScaleType = op.getBScale().getType();
+    int blockM = op.getA()
+                     .getType()
+                     .getShape()[op.getA().getType().getShape().size() - 2];
+    int blockN = op.getB()
+                     .getType()
+                     .getShape()[op.getB().getType().getShape().size() - 1];
+    int blockK = op.getA()
+                     .getType()
+                     .getShape()[op.getA().getType().getShape().size() - 1];
     bool anyChanged = false;
     if (isa<SwizzledSharedEncodingAttr>(aScaleType.getEncoding())) {
-      anyChanged = lowerScaleToTmem(op.getAScaleMutable(), rewriter);
+      anyChanged = lowerScaleToTmem(op.getAScaleMutable(), rewriter, blockM);
     }
     if (isa<SwizzledSharedEncodingAttr>(bScaleType.getEncoding())) {
-      anyChanged = lowerScaleToTmem(op.getBScaleMutable(), rewriter);
+      anyChanged = lowerScaleToTmem(op.getBScaleMutable(), rewriter, blockN);
     }
     return LogicalResult::success(anyChanged);
   }

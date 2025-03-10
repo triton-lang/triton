@@ -137,29 +137,46 @@ struct JoinOpConversion : public ConvertOpToLLVMPattern<JoinOp> {
     // We rely on the following invariants of this op (which are checked by its
     // verifier):
     //
-    // - The op has a blocked encoding.
     // - The last dimension (the one we're joining) is also the most minor
     //   dimension.
     // - The input and output encodings are the same, except the output has
     //   2 elements per thread in the last dim.
     //
-    // With these invariants, join is trivial: We just return the i'th element
-    // from lhs, followed by the i'th elem from rhs.
+    // With these invariants, join is trivial: We can count how many contiguous
+    // registers belong to the same chunk then we merge the registers between
+    // two different chunks.
     Location loc = op->getLoc();
-    auto resultTy = cast<RankedTensorType>(op.getType());
-    auto typeConverter = getTypeConverter();
+    RankedTensorType dstTy = op.getType();
+    auto ll = toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
+    int splitDim = dstTy.getRank() - 1;
+    auto kReg = mlir::StringAttr::get(dstTy.getContext(), "register");
+    const auto &bases = ll.getBases();
+    const auto &regs = bases.find(kReg)->second;
+    int numContiguousValues = 1;
+    bool found = false;
+    for (const auto &reg : regs) {
+      if (reg[splitDim] == 1) {
+        found = true;
+        break;
+      }
+      numContiguousValues *= 2;
+    }
+    assert(found && "Join dimension is not distributed along registers.");
     SmallVector<Value> lhsVals =
         unpackLLElements(loc, adaptor.getLhs(), rewriter);
     SmallVector<Value> rhsVals =
         unpackLLElements(loc, adaptor.getRhs(), rewriter);
     assert(lhsVals.size() == rhsVals.size());
     SmallVector<Value> joinedVals;
-    for (int i = 0; i < lhsVals.size(); i++) {
-      joinedVals.push_back(lhsVals[i]);
-      joinedVals.push_back(rhsVals[i]);
+    joinedVals.resize(lhsVals.size() * 2);
+    for (int i = 0; i < lhsVals.size(); i += numContiguousValues) {
+      for (int j = 0; j < numContiguousValues; j++) {
+        joinedVals[2 * i + j] = lhsVals[i + j];
+        joinedVals[2 * i + numContiguousValues + j] = rhsVals[i + j];
+      }
     }
-    Value ret =
-        packLLElements(loc, typeConverter, joinedVals, rewriter, resultTy);
+    auto typeConverter = getTypeConverter();
+    Value ret = packLLElements(loc, typeConverter, joinedVals, rewriter, dstTy);
     rewriter.replaceOp(op, ret);
     return success();
   }
@@ -189,7 +206,7 @@ struct SplitOpConversion : public ConvertOpToLLVMPattern<SplitOp> {
     int numContiguousValues = 1;
     bool found = false;
     for (const auto &reg : regs) {
-      if (reg[splitDim] != 0) {
+      if (reg[splitDim] == 1) {
         found = true;
         break;
       }
