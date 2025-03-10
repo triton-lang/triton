@@ -17,11 +17,9 @@ namespace {
 
 struct GlobalScratchAllocOpConversion
     : public ConvertOpToLLVMPattern<proton::gpu::GlobalScratchAllocOp> {
-  explicit GlobalScratchAllocOpConversion(LLVMTypeConverter &typeConverter,
-                                          const TargetInfoBase &targetInfo,
-                                          PatternBenefit benefit)
-      : mlir::ConvertOpToLLVMPattern<proton::gpu::GlobalScratchAllocOp>(
-            typeConverter, benefit) {}
+  GlobalScratchAllocOpConversion(LLVMTypeConverter &converter,
+                                 PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit) {}
 
   LogicalResult
   matchAndRewrite(proton::gpu::GlobalScratchAllocOp op, OpAdaptor adaptor,
@@ -41,7 +39,6 @@ struct GlobalScratchAllocOpConversion
 
     return success();
   }
-
 };
 
 } // namespace
@@ -49,6 +46,5 @@ struct GlobalScratchAllocOpConversion
 void mlir::triton::proton::populateGlobalScratchAllocOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     const TargetInfoBase &targetInfo, PatternBenefit benefit) {
-  patterns.add<GlobalScratchAllocOpConversion>(typeConverter, targetInfo,
-                                               benefit);
+  patterns.add<GlobalScratchAllocOpConversion>(typeConverter, benefit);
 }
