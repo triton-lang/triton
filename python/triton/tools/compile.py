@@ -112,6 +112,8 @@ if __name__ == "__main__":
     ccinfo = triton.compile(src, options=opts)
     if ccinfo.metadata.global_scratch_size > 0:
         raise RuntimeError("AOT compiling kernels with global scratch requirements is not yet implemented")
+    if ccinfo.metadata.profile_scratch_size > 0:
+        raise RuntimeError("AOT compiling kernels with profile scratch requirements is not yet implemented")
 
     arg_names = []
     arg_types = []
@@ -145,7 +147,7 @@ if __name__ == "__main__":
         "bin_data": ", ".join([f"0x{x}{y}" for x, y in zip(hex_[::2], hex_[1::2])]),
         "signature": ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names_not_1, arg_types_not_1)]),
         "full_signature": ", ".join([f"{ty_to_cpp(ty)} {name}" for name, ty in zip(arg_names, arg_types)]),
-        "arg_pointers": ", ".join([f"&{arg}" for arg in arg_names_not_1] + ["&global_scratch"]),
+        "arg_pointers": ", ".join([f"&{arg}" for arg in arg_names_not_1] + ["&global_scratch"] + ["&profile_scratch"]),
         "num_args": len(arg_names_not_1) + 1,
         "kernel_docstring": doc_string,
         "shared": ccinfo.metadata.shared,
