@@ -31,6 +31,8 @@ public:
 
   void finalize(OutputFormat outputFormat);
 
+  size_t getContextDepth();
+
 private:
   Session(size_t id, const std::string &path, Profiler *profiler,
           std::unique_ptr<ContextSource> contextSource,
@@ -87,6 +89,8 @@ public:
   void deactivateSession(size_t sessionId);
 
   void deactivateAllSessions();
+
+  size_t getContextDepth(size_t sessionId);
 
   void enterScope(const Scope &scope);
 
