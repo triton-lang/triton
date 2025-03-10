@@ -9,7 +9,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK: llvm.br
     // CHECK: rocdl.barrier
     // CHECK: llvm.load
-    // CHECK: llvm.intr.masked.store
+    // CHECK: llvm.store
     %0 = tt.atomic_rmw fadd, relaxed, gpu, %arg0, %arg2, %arg1 : (!tt.ptr<f32>, f32, i1) -> f32
     tt.store %arg0, %0 : !tt.ptr<f32>
     tt.return
@@ -25,8 +25,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK: llvm.cond_br
     // CHECK: llvm.atomicrmw
     // CHECK: llvm.atomicrmw
-    // CHECK: llvm.intr.masked.store
-    // CHECK: llvm.intr.masked.store
+    // CHECK: llvm.store
+    // CHECK: llvm.store
     %0 = tt.atomic_rmw fadd, relaxed, gpu, %arg0, %arg2, %arg1 : (tensor<256x!tt.ptr<f32>, #blocked0>, tensor<256xf32, #blocked0>, tensor<256xi1, #blocked0>) -> tensor<256xf32, #blocked0>
     tt.store %arg0, %0 : tensor<256x!tt.ptr<f32>, #blocked0>
     tt.return
@@ -258,7 +258,20 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
   // CHECK-LABEL: atomic_runtime_lds_reduction
   tt.func @atomic_runtime_lds_reduction(%arg0 : tensor<64x!tt.ptr<f32>, #blocked5>, %arg2 : tensor<64xf32, #blocked5>) {
-    // CHECK: ptrtoint
+
+    // CHECK: llvm.zext
+    // CHECK-COUNT-7: rocdl.update.dpp
+    // CHECK: llvm.bitcast
+    // CHECK-COUNT: llvm.amdgcqn.ds.permute
+    // CHECK: llvm.bitcast
+    // CHECK: llvm.ptrtoint
+    // CHECK: llvm.bitcast
+    // CHECK-COUNT-2: llvm.amdgcn.ds.permute
+    // CHECK: llvm.bitcast
+    // CHECK: llvm.inttoptr
+    // CHECK: llvm.amdgcn.ballot
+    // CHECK: llvm.ptrtoint
+    // CHECK: llvm.amdgcn.ballot
 
     // loop body:
     // CHECK: llvm.bitcast
@@ -274,7 +287,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
     // CHECK-COUNT-2: llvm.amdgcn.ds.permute
     // CHECK: llvm.bitcast
     // 2. value
-    // CHECK: llvm.bitcast
     // CHECK: llvm.amdgcn.ds.permute
     // CHECK: llvm.bitcast
     // 3. packed methadata
@@ -326,6 +338,24 @@ module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.n
   tt.func @v_dot_fp16_fp16(%arg0: tensor<16x16xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>>, %arg1: tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>>, %arg2: tensor<16x16xf16, #blocked>) {
     // CHECK-COUNT-16: llvm.call_intrinsic "llvm.fmuladd.f16"
     %0 = tt.dot %arg0, %arg1, %arg2, inputPrecision = ieee : tensor<16x16xf16, #ttg.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<16x16xf16, #ttg.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<16x16xf16, #blocked>
+    tt.return
+  }
+}
+
+// -----
+
+// CHECK-LABEL: amd_rotating_shared_layout
+#blocked = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [8, 8], warpsPerCTA = [2, 2], order = [1, 0], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [1, 0]}>
+#shared = #ttg.amd_rotating_shared<{vec = 1, perPhase = 1, maxPhase = 4, order = [1, 0]}>
+#smem = #ttg.shared_memory
+module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 64 : i32} {
+  tt.func @amd_rotating_shared_layout(%arg0: tensor<64x64xf16, #blocked>) {
+    // CHECK-COUNT-16: llvm.store {{.*}} : vector<1xf16>, !llvm.ptr<3>
+    %0 = ttg.local_alloc %arg0 : (tensor<64x64xf16, #blocked>) -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
+    // CHECK-COUNT-16: llvm.load {{.*}} : !llvm.ptr<3> -> vector<1xf16>
+    %1 = ttg.local_load %0 : !ttg.memdesc<64x64xf16, #shared, #smem, mutable> -> tensor<64x64xf16, #blocked>
+    // CHECK-COUNT-16: llvm.store {{.*}} : vector<1xf16>, !llvm.ptr<3>
+    ttg.local_store %1, %0 : tensor<64x64xf16, #blocked> -> !ttg.memdesc<64x64xf16, #shared, #smem, mutable>
     tt.return
   }
 }

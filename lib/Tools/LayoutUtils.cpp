@@ -151,6 +151,19 @@ SmallVector<StringAttr> standardOutDimNames(MLIRContext *ctx, int rank) {
   return ret;
 }
 
+// Returns [("dim0", dstShape[0]), ("dim1", dstShape[1]), ...,
+// ("dim<rank-1>", dstShape[rank-1])].
+SmallVector<std::pair<StringAttr, int32_t>>
+standardOutDimPairs(MLIRContext *ctx, ArrayRef<int64_t> dstShape) {
+  auto newRank = dstShape.size();
+  SmallVector<std::pair<StringAttr, int32_t>> newOutDims;
+  for (auto [dim, size] :
+       llvm::zip(standardOutDimNames(ctx, newRank), dstShape)) {
+    newOutDims.emplace_back(dim, size);
+  }
+  return newOutDims;
+}
+
 // Returns a 1D -> ND layout into [dim0, dim1, ...] that's equivalent to
 // creating a 1D -> 1D mapping of size product(shape) and then reshaping to
 // permute(shape, order).
@@ -170,6 +183,69 @@ LinearLayout identityStandardND(StringAttr inDimName, ArrayRef<unsigned> shape,
     ret *= LinearLayout::identity1D(shape[dim], inDimName, outDimNames[dim]);
   }
   return ret;
+}
+
+// Compute the supremum of two lists.
+// If the supremum is not unique, we return the first list first
+// Error out if the supremum does not exist
+// e.g. sup([a, b], [a, c]) = [a, b, c], sup([a, b], [b, c]) = [a, b, c]
+//      sup([a, b], [b, a]) = error! Supremum does not exist.
+SmallVector<StringAttr> supremum(const SmallVector<StringAttr> &x,
+                                 const SmallVector<StringAttr> &y) {
+  llvm::SetVector<StringAttr> result;
+  DenseMap<StringAttr, int> posX, posY;
+  for (auto [idx, elem] : llvm::enumerate(x))
+    posX[elem] = idx;
+  for (auto [idx, elem] : llvm::enumerate(y))
+    posY[elem] = idx;
+  int i = 0, j = 0;
+  const int INF = std::numeric_limits<int>::max();
+  while (i < x.size() || j < y.size()) {
+    while (i < x.size() && result.contains(x[i]))
+      ++i;
+    while (j < y.size() && result.contains(y[j]))
+      ++j;
+    if (i >= x.size() && j >= y.size())
+      break;
+    if (i < x.size() && j < y.size() && x[i] == y[j]) {
+      if (posY[x[i]] < j)
+        llvm_unreachable("Supremum does not exist");
+      result.insert(x[i]);
+      ++i, ++j;
+      continue;
+    }
+    int candX = INF, candY = INF;
+    if (i < x.size()) {
+      if (posY.count(x[i]) && posY[x[i]] >= j)
+        candX = posY[x[i]];
+    }
+    if (j < y.size()) {
+      if (posX.count(y[j]) && posX[y[j]] >= i)
+        candY = posX[y[j]];
+    }
+    if (i < x.size() && candX == INF) {
+      result.insert(x[i]);
+      ++i;
+      continue;
+    }
+    if (j < y.size() && candY == INF) {
+      result.insert(y[j]);
+      ++j;
+      continue;
+    }
+    if (candX <= candY) {
+      if (posY[x[i]] < j)
+        llvm_unreachable("Supremum does not exist");
+      result.insert(x[i]);
+      ++i;
+    } else {
+      if (posX[y[j]] < i)
+        llvm_unreachable("Supremum does not exist");
+      result.insert(y[j]);
+      ++j;
+    }
+  }
+  return to_vector(result);
 }
 
 } // namespace mlir::triton

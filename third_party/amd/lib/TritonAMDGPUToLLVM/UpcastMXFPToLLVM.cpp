@@ -1,5 +1,6 @@
 #include "PatternTritonGPUOpToLLVM.h"
 
+#include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "Utility.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
@@ -22,7 +23,7 @@ using namespace mlir::triton::gpu;
 namespace {
 
 SmallVector<Value, 4> upcast8xMxfp4(RewriterBase &rewriter,
-                                    UpcastMXFPOp upcastOp, bool tofp16,
+                                    amdgpu::UpcastMXFPOp upcastOp, bool tofp16,
                                     Value packedVec) {
   Location loc = upcastOp.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -161,8 +162,9 @@ SmallVector<Value, 4> upcast8xMxfp4(RewriterBase &rewriter,
   return {res_10, res_32, res_54, res_76};
 }
 
-SmallVector<Value> upcastMxfp4(RewriterBase &rewriter, UpcastMXFPOp upcastOp,
-                               bool toFp16, ArrayRef<Value> values) {
+SmallVector<Value> upcastMxfp4(RewriterBase &rewriter,
+                               amdgpu::UpcastMXFPOp upcastOp, bool toFp16,
+                               ArrayRef<Value> values) {
   assert(values.size() % 4 == 0);
   Location loc = upcastOp.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -232,7 +234,8 @@ Value mxfpScaleBf16ViaF32(RewriterBase &rewriter, Location loc, Value v,
   return b.select(scaleIsNan, nanBf16, mulBf16);
 };
 
-class UpcastMXFPOpPattern : public ConvertOpToLLVMPattern<UpcastMXFPOp> {
+class UpcastMXFPOpPattern
+    : public ConvertOpToLLVMPattern<amdgpu::UpcastMXFPOp> {
 private:
   const TargetInfoBase &targetInfo;
 
@@ -243,7 +246,7 @@ public:
   }
 
   LogicalResult
-  matchAndRewrite(UpcastMXFPOp op, OpAdaptor adaptor,
+  matchAndRewrite(amdgpu::UpcastMXFPOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto fpType = op.getFpType();
     bool isPacked = fpType == ScaleDotElemType::E2M1;
@@ -278,10 +281,7 @@ public:
 
     int numThreads = triton::gpu::TritonGPUDialect::getThreadsPerWarp(
         op->getParentOfType<ModuleOp>());
-    Value warpSize = b.i32_val(numThreads);
-    Value tid = b.tid_val();
-    Value warpId = b.udiv(tid, warpSize);
-    Value laneId = b.urem(tid, warpSize);
+    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
 
     bool useFp16 = op.getType().getElementType().isF16();
     if (isPacked) {
@@ -324,7 +324,7 @@ public:
     } else {
       assert(mDim == 16);
       // One mfma16 intrinsic processes a 16x16 A tensor slice. Similarly, we
-      // need to tile the warp 2 times to cover 32 valeus. So for a thread, the
+      // need to tile the warp 2 times to cover 32 values. So for a thread, the
       // first 2 1x4 vectors shares the first scale value at row (tid % mDim).
       std::array<Value, 4> scaleThreads = {offset, b.add(offset, b.i32_val(1)),
                                            b.add(offset, b.i32_val(2)),

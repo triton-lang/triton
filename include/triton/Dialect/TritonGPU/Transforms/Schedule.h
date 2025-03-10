@@ -15,11 +15,13 @@ namespace gpu {
 
 /// Discover operations that should become async and assign latencies to them
 /// based on the numStages value provided by the user.
-DenseMap<Operation *, int> assignLatencies(ModuleOp forOp, int numStages);
+void assignLatencies(ModuleOp moduleOp, int numStages);
 
-/// Schedule the loop based on the latencies assigned to the operations.
-void scheduleLoop(scf::ForOp forOp,
-                  const DenseMap<Operation *, int> &opLatency);
+/// Schedule the loops based on the latencies assigned to the operations.
+void scheduleLoops(ModuleOp moduleOp);
+
+/// Lower the loops to prepare them for pipeline expansion.
+void lowerLoops(ModuleOp moduleOp);
 
 }; // namespace gpu
 
@@ -34,11 +36,10 @@ bool preProcessLoopAndGetSchedule(scf::ForOp &forOp, int numStages,
 bool getOuterLoopSchedule(scf::ForOp &forOp, int numStages,
                           mlir::triton::PipeliningOption &options);
 
-/// Pipeline the Tensor Core Gen 05 MMA ops in `forOps` with `numStages` stages.
-/// This will pre-process the loops, lowering the ops related to TG Gen5 MMA,
-/// and then pipeline the loops using expander.
-void pipelineTC05MMALoops(ModuleOp module,
-                          const SmallVector<scf::ForOp> &forOps, int numStages,
+/// Pipeline the Tensor Core Gen 05 MMA ops in the module with `numStages`
+/// stages. This will pre-process the loops, lowering the ops related to TG Gen5
+/// MMA, and then pipeline the loops using expander.
+void pipelineTC05MMALoops(ModuleOp module, int numStages,
                           bool disableExpander = false);
 
 /// Pipeline the TMA stores in the loop.
@@ -64,9 +65,12 @@ public:
 
   public:
     using iterator = decltype(orderClusters)::iterator;
+    using const_iterator = decltype(orderClusters)::const_iterator;
     ClusterList() = default;
     iterator begin() { return orderClusters.begin(); }
+    const_iterator begin() const { return orderClusters.begin(); }
     iterator end() { return orderClusters.end(); }
+    const_iterator end() const { return orderClusters.end(); }
     size_t size() { return orderClusters.size(); }
     iterator newAtBack() {
       orderClusters.push_back(orderClusters.size());
@@ -86,16 +90,31 @@ public:
       }
       return ret;
     }
+
+    bool isBefore(iterator a, iterator b) const {
+      for (auto it = begin(); it != end(); ++it) {
+        if (it == a)
+          return true;
+        if (it == b)
+          return false;
+      }
+      llvm::report_fatal_error(
+          "One or both clusters not found in clusters list!");
+    }
   };
 
+  CoarseSchedule() = default;
   CoarseSchedule(int numStages) : numStages(numStages) {}
-  int numStages;
   ClusterList clusters;
   using Cluster = decltype(clusters)::iterator;
 
   DenseMap<Operation *, std::pair<int, Cluster>> opToStageAndCluster;
 
+  void setNumStages(int numStages) { this->numStages = numStages; }
+  int getNumStages() { return numStages; }
+
   void insert(Operation *op, int stage, Cluster cluster) {
+    assert(stage < numStages && "Invalid stage");
     opToStageAndCluster[op] = {stage, cluster};
   }
 
@@ -106,27 +125,10 @@ public:
     return true;
   }
 
-  void insertMinimum(Operation *op, int stage, Cluster cluster) {
-    auto res = opToStageAndCluster.insert({op, {stage, cluster}});
-    if (res.second) {
-      return;
-    }
-    auto &[existingStage, existingCluster] = res.first->second;
-    existingStage = std::min(stage, existingStage);
-
-    // If existingCluster is reachable from cluster,
-    // then cluster is earlier in the list
-    auto it = cluster;
-    for (auto it = cluster; it != clusters.end(); ++it) {
-      if (it == existingCluster) {
-        existingCluster = cluster;
-        return;
-      }
-    }
-  }
+  bool insertMinimum(Operation *op, int stage, Cluster cluster);
 
   bool insertDepsOfOp(Operation *op, int stage, CoarseSchedule::Cluster cluster,
-                      bool includeArg);
+                      bool includeArg, bool insertIfEarlier = false);
 
   void erase(Operation *op) { opToStageAndCluster.erase(op); }
 
@@ -142,11 +144,20 @@ public:
   getOpsInOrder(scf::ForOp forOp);
   std::vector<std::pair<Operation *, unsigned>>
   createFinalSchedule(scf::ForOp forOp);
-  void dump();
-  bool empty() { return opToStageAndCluster.size() == 0; }
+
+  bool empty() const { return opToStageAndCluster.size() == 0; }
+  auto end() const { return opToStageAndCluster.end(); }
+  auto begin() const { return opToStageAndCluster.begin(); }
+
+  // Set <stage, cluster> based on CoarseSchedule.
   void serialize(scf::ForOp &forOp);
   // Create a CoarseSchedule based on forOp's <stage, cluster>.
-  void deSerialize(scf::ForOp &forOp);
+  LogicalResult deSerialize(scf::ForOp &forOp);
+
+  LLVM_DUMP_METHOD void dump();
+
+private:
+  int numStages = 0;
 };
 
 // Add dependencies of anchor ops to the coarse schedule. Schedule them to

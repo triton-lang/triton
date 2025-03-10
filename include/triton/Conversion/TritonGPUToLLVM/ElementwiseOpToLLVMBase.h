@@ -101,7 +101,7 @@ public:
     if (!axisInfo)
       // axis info (e.g., constancy) not available
       return resultVals;
-    SmallVector<unsigned> contigPerThread = getContigPerThread(encoding);
+    SmallVector<unsigned> contigPerThread = getContigPerThread(rtType);
     if (rank != contigPerThread.size())
       return resultVals;
 
@@ -135,7 +135,7 @@ public:
     if (rank > 1) {
       // reorder the shape and constancy vectors by the axis order:
       // from the fastest-changing to the smallest-changing axis
-      SmallVector<unsigned> order = getOrder(encoding);
+      SmallVector<unsigned> order = getOrder(rtType);
       if (rank != order.size())
         return resultVals;
       elemsPerThread = applyPermutation(elemsPerThread, order);

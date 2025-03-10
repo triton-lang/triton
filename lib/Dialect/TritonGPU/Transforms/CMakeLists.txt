@@ -4,16 +4,19 @@ add_triton_library(TritonGPUTransforms
   F32DotTC.cpp
   FuseNestedLoops.cpp
   CombineTensorSelectAndIf.cpp
-  LoopScheduling.cpp
+  DecomposeScaledBlocked.cpp
   ReduceDataDuplication.cpp
   OptimizeAccumulatorInit.cpp
   OptimizeDotOperands.cpp
   OptimizeThreadLocality.cpp
   Pipeliner/AssignLatencies.cpp
-  Pipeliner/MatmulLoopPipeline.cpp
+  Pipeliner/LowerLoops.cpp
+  Pipeliner/ScheduleLoops.cpp
+  Pipeliner/WGMMAPipeline.cpp
   Pipeliner/PipelineExpander.cpp
   Pipeliner/TestPipelineAssignLatencies.cpp
   Pipeliner/TestPipelineScheduleLoop.cpp
+  Pipeliner/TestPipelineLowerLoop.cpp
   Pipeliner/SoftwarePipeliner.cpp
   Pipeliner/TC05MMAPipeline.cpp
   Pipeliner/TMAStoresPipeline.cpp

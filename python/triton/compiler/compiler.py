@@ -234,6 +234,7 @@ def compile(src, target=None, options=None):
     # core changes to make it easier to track kernels by hash.
     enable_override = os.environ.get("TRITON_KERNEL_OVERRIDE", "0") == "1"
     enable_ir_dump = os.environ.get("TRITON_KERNEL_DUMP", "0") == "1"
+    store_only_binary = os.environ.get("TRITON_STORE_BINARY_ONLY", "0") == "1"
     fn_override_manager = get_override_manager(src.hash()) if enable_override else None
     fn_dump_manager = get_dump_manager(src.hash()) if enable_ir_dump else None
     # Pre-truncate the file name here to avoid hitting the 255 character limit on common platforms.
@@ -255,6 +256,7 @@ def compile(src, target=None, options=None):
         **options.__dict__,
         **env_vars,
     }
+    metadata["triton_version"] = __version__
     # run compilation pipeline  and populate metadata
     stages = dict()
     backend.add_stages(stages, options)
@@ -284,7 +286,9 @@ def compile(src, target=None, options=None):
         if (fn_override_manager is not None and (full_name := fn_override_manager.get_file(ir_filename)) is not None):
             print(f"\nOverriding kernel with file {full_name}")
             next_module = parse(full_name, ext, context)
-        metadata_group[ir_filename] = fn_cache_manager.put(next_module, ir_filename)
+        # If TRITON_STORE_BINARY_ONLY is 1, only store cubin/hsaco/json
+        if (not store_only_binary) or (ext in ("cubin", "hsaco", "json")):
+            metadata_group[ir_filename] = fn_cache_manager.put(next_module, ir_filename)
         if fn_dump_manager is not None:
             fn_dump_manager.put(next_module, ir_filename)
         # use an env variable to parse ir from file

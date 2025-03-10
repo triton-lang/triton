@@ -83,16 +83,16 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
                              %arg1: i32 {tt.divisibility = 16 : i32},
                              %arg2: !ttg.memdesc<32x64xf16, #shared, #smem, mutable>) {
     // The waitcnt stores all counters in one i32 bits 15:14 and 3:0 store the vmcnt we have to wait on
-    // CHECK: rocdl.waitcnt -49168
+    // CHECK: rocdl.s.waitcnt -49168
     // CHECK: rocdl.barrier
     ttg.async_wait {num = 0 : i32}
-    // CHECK: rocdl.waitcnt -49167
+    // CHECK: rocdl.s.waitcnt -49167
     // CHECK: rocdl.barrier
     ttg.async_wait {num = 1 : i32}
-    // CHECK: rocdl.waitcnt -2
+    // CHECK: rocdl.s.waitcnt -2
     // CHECK: rocdl.barrier
     ttg.async_wait {num = 62 : i32}
-    // CHECK: rocdl.waitcnt -1
+    // CHECK: rocdl.s.waitcnt -1
     // CHECK: rocdl.barrier
     ttg.async_wait {num = 63 : i32}
     tt.return
@@ -193,25 +193,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 16 : i32, ttg.sha
     // CHECK: rocdl.global.load.lds {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[aux_ca]]
     %2 = ttg.async_copy_global_to_local %1, %arg2 cacheModifier = ca: tensor<32x32x!tt.ptr<f16>, #blocked> -> <32x32xf16, #shared, #smem, mutable>
     // CHECK: llvm.getelementptr
-    // CHECK: %[[aux_cg:.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK: %[[aux_cg:.*]] = llvm.mlir.constant(3 : i32) : i32
     // CHECK: rocdl.global.load.lds {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[aux_cg]]
     %3 = ttg.async_copy_global_to_local %1, %arg2 cacheModifier = cg: tensor<32x32x!tt.ptr<f16>, #blocked> -> <32x32xf16, #shared, #smem, mutable>
     // CHECK: llvm.getelementptr
-    // CHECK: %[[aux_cs:.*]] = llvm.mlir.constant(3 : i32) : i32
-    // CHECK: rocdl.global.load.lds {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[aux_cs]]
-    %5 = ttg.async_copy_global_to_local %1, %arg2 cacheModifier = cs: tensor<32x32x!tt.ptr<f16>, #blocked> -> <32x32xf16, #shared, #smem, mutable>
-    // CHECK: llvm.getelementptr
-    // CHECK: %[[aux_cv:.*]] = llvm.mlir.constant(9 : i32) : i32
+    // CHECK: %[[aux_cv:.*]] = llvm.mlir.constant(17 : i32) : i32
     // CHECK: rocdl.global.load.lds {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[aux_cv]]
-    %6 = ttg.async_copy_global_to_local %1, %arg2 cacheModifier = cv: tensor<32x32x!tt.ptr<f16>, #blocked> -> <32x32xf16, #shared, #smem, mutable>
-    // CHECK: llvm.getelementptr
-    // CHECK: %[[aux_wb:.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK: rocdl.global.load.lds {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[aux_wb]]
-    %7 = ttg.async_copy_global_to_local %1, %arg2 cacheModifier = wb: tensor<32x32x!tt.ptr<f16>, #blocked> -> <32x32xf16, #shared, #smem, mutable>
-    // CHECK: llvm.getelementptr
-    // CHECK: %[[aux_wt:.*]] = llvm.mlir.constant(8 : i32) : i32
-    // CHECK: rocdl.global.load.lds {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[aux_wt]]
-    %8 = ttg.async_copy_global_to_local %1, %arg2 cacheModifier = wt: tensor<32x32x!tt.ptr<f16>, #blocked> -> <32x32xf16, #shared, #smem, mutable>
+    %4 = ttg.async_copy_global_to_local %1, %arg2 cacheModifier = cv: tensor<32x32x!tt.ptr<f16>, #blocked> -> <32x32xf16, #shared, #smem, mutable>
     tt.return
   }
 }

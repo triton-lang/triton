@@ -1,4 +1,4 @@
-﻿#include <optional>
+#include <optional>
 #include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -206,6 +206,22 @@ void outputWarning(Location loc, const std::string &msg) {
 
   PyErr_WarnEx(PyExc_UserWarning, (locStr + ": " + msg).c_str(),
                /*stack_level=*/2);
+}
+
+// Allow dump a reproducer in the console on crash.
+struct ConsoleReproducerStream : public mlir::ReproducerStream {
+  ~ConsoleReproducerStream() override {}
+
+  StringRef description() override {
+    return "std::errs, please share the reproducer above with Triton project.";
+  }
+  raw_ostream &os() override { return llvm::errs(); }
+};
+
+static ReproducerStreamFactory makeConsoleReproducer() {
+  return [](std::string &error) -> std::unique_ptr<ReproducerStream> {
+    return std::make_unique<ConsoleReproducerStream>();
+  };
 }
 
 } // anonymous namespace
@@ -1386,6 +1402,12 @@ void init_triton_ir(py::module &&m) {
              self.create<StoreOp>(ptrs, val, mask, cacheModifier,
                                   evictionPolicy);
            })
+      .def("create_tensor_descriptor_type",
+           [](TritonOpBuilder &self, Type blockTy) -> Type {
+             auto ctx = self.getContext();
+             return triton::TensorDescType::get(
+                 ctx, cast<RankedTensorType>(blockTy));
+           })
       .def("create_reinterpret_tensor_descriptor",
            [](TritonOpBuilder &self, Value desc_ptr, Type blockTy) -> Value {
              auto ctx = self.getContext();
@@ -1749,13 +1771,15 @@ void init_triton_ir(py::module &&m) {
   py::class_<PassManager>(m, "pass_manager", py::module_local())
       .def(py::init<MLIRContext *>())
       .def("enable_debug",
-           [](PassManager &self) {
+           [](PassManager &self) -> bool {
              auto *context = self.getContext();
              bool haveDump = ::triton::tools::getBoolEnv("MLIR_ENABLE_DUMP");
              std::string funcToDump;
              if (!haveDump) {
                funcToDump = triton::tools::getStrEnv("MLIR_ENABLE_DUMP");
-               if (!funcToDump.empty())
+               bool isEnvValueBool =
+                   triton::tools::isEnvValueBool(funcToDump).has_value();
+               if (!funcToDump.empty() && !isEnvValueBool)
                  haveDump = true;
              }
              if (haveDump) {
@@ -1784,6 +1808,7 @@ void init_triton_ir(py::module &&m) {
                    /*printAfterOnlyOnFailure*/ true, mlir_dumps_or_dbgs(),
                    printingFlags);
              }
+             return haveDump;
            })
       .def("get_pipeline_str",
            [](PassManager &self) {
@@ -1812,6 +1837,8 @@ void init_triton_ir(py::module &&m) {
           context->disableMultithreading();
           self.enableCrashReproducerGeneration(reproducerPath,
                                                /*genLocalReproducer=*/true);
+        } else {
+          self.enableCrashReproducerGeneration(makeConsoleReproducer());
         }
 
         if (triton::tools::getBoolEnv("TRITON_ENABLE_LLVM_DEBUG")) {

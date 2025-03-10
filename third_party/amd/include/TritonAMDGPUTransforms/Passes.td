@@ -19,9 +19,12 @@ def TritonAMDGPUStreamPipeline : Pass<"tritonamdgpu-stream-pipeline", "mlir::Mod
     Option<"numStages", "num_stages",
            "int32_t", /*default*/"2",
            "Number of Pipeline stages">,
-    Option<"prefetch", "prefetch",
+    Option<"globalPrefetch", "global_prefetch",
            "int32_t", /*default*/"0",
-           "Enable prefetch from shared memory">
+           "Set global prefetch stage count">,
+    Option<"localPrefetch", "local_prefetch",
+           "int32_t", /*default*/"0",
+           "Set local prefetch stage count">,
   ];
 }
 
@@ -35,7 +38,7 @@ def TritonAMDGPUAccelerateMatmul : Pass<"tritonamdgpu-accelerate-matmul", "mlir:
 
   let constructor = "mlir::createTritonAMDGPUAccelerateMatmulPass()";
 
-  let dependentDialects = [];
+  let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
 
   let options = [
     Option<"archGenerationName", "arch-generation-name",
@@ -59,6 +62,24 @@ def TritonAMDGPUOptimizeEpilogue : Pass<"tritonamdgpu-optimize-epilogue", "mlir:
   let constructor = "mlir::createTritonAMDGPUOptimizeEpiloguePass()";
 
   let dependentDialects = [];
+
+}
+
+def TritonAMDGPUHoistLayoutConversions : Pass<"tritonamdgpu-hoist-layout-conversions", "mlir::triton::FuncOp"> {
+  let summary = "Hoist layout conversions out of the loop";
+
+  let description = [{
+  This pass tries to hoist a convert_layout op out of the loop if 1) its dst is a tensor
+  of dotOperand layout, and 2) its src is defined out of the loop.
+  The rational is as follows:
+  1. When the defining op of the src is out of the loop, it means the src is loop-invariant.
+     Then we can potentially hoist this convert_layout op, since it's also loop-invariant.
+  2. The drawback of this LICM is higher register pressure. However, on AMD GPUs, we have
+     a larger register file but smaller shared memory. It's beneficial to keep loop-invariant
+     variables in registers rather than loading them from shared memory in the loop.
+  }];
+
+  let constructor = "mlir::createTritonAMDGPUHoistLayoutConversionsPass()";
 
 }
 

@@ -252,63 +252,6 @@ getAccOverrideOrFlagFalseInLoop(scf::ForOp forOp,
   return accOverridePoint;
 }
 
-// Given a result of MemDescSubview, or Alloca, create a MemDescSubview with a
-// single buffer slice (leading dimension equal to 1), at the given index.
-Value createSingleBufferView(IRRewriter &builder, Value alloc, Value idx) {
-  assert(isa<ttg::MemDescType>(alloc.getType()) && "Expected MemDescType");
-  auto allocDescType = cast<ttg::MemDescType>(alloc.getType());
-  SmallVector<int64_t> shape;
-  if (allocDescType.getShape().size() > 1) {
-    shape.insert(shape.end(), allocDescType.getShape().begin() + 1,
-                 allocDescType.getShape().end());
-  } else {
-    shape.push_back(1);
-  }
-  auto viewDescType = ttg::MemDescType::get(
-      shape, allocDescType.getElementType(), allocDescType.getEncoding(),
-      allocDescType.getMemorySpace(), allocDescType.getMutableMemory());
-  SmallVector<Value> idxs = {idx};
-  if (allocDescType.getShape().size() > 1) {
-    Value zero = builder.create<arith::ConstantIntOp>(alloc.getLoc(), 0, 32);
-    for (unsigned i = 1; i < allocDescType.getShape().size(); i++) {
-      idxs.push_back(zero);
-    }
-  }
-  return builder.create<ttg::MemDescSubviewOp>(alloc.getLoc(), viewDescType,
-                                               alloc, idxs);
-}
-
-Value createSingleBufferView(IRRewriter &builder, Value alloc, int idx) {
-  return createSingleBufferView(
-      builder, alloc,
-      builder.create<arith::ConstantIntOp>(alloc.getLoc(), idx, 32));
-}
-
-Value createBarrierAlloc(scf::ForOp forOp, int numStages) {
-  IRRewriter rewriter(forOp->getContext());
-  rewriter.setInsertionPoint(forOp);
-  MLIRContext *ctx = forOp.getContext();
-  Location loc = forOp.getLoc();
-  unsigned numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(
-      forOp->getParentOfType<ModuleOp>());
-  Attribute sharedMemorySpace = ttg::SharedMemorySpaceAttr::get(ctx);
-  auto barrierCTALayout = ttg::CTALayoutAttr::get(
-      /*context=*/ctx, /*CTAsPerCGA=*/{numCTAs},
-      /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
-  auto barrierEncoding =
-      ttg::SwizzledSharedEncodingAttr::get(ctx, 1, 1, 1, {0}, barrierCTALayout);
-  ttg::MemDescType barrierMemDescType =
-      ttg::MemDescType::get({numStages}, rewriter.getI64Type(), barrierEncoding,
-                            sharedMemorySpace, /*mutableMemory=*/true);
-  Value barrierAlloc =
-      rewriter.create<ttg::LocalAllocOp>(loc, barrierMemDescType, Value());
-  for (unsigned i = 0; i < numStages; i++) {
-    Value barrierView = createSingleBufferView(rewriter, barrierAlloc, i);
-    rewriter.create<ttng::InitBarrierOp>(forOp->getLoc(), barrierView, 1);
-  }
-  return barrierAlloc;
-}
-
 ttng::TMEMAllocOp createTMemAlloc(IRRewriter &builder,
                                   ttng::TMEMAllocOp oldTMemAllocOp,
                                   bool multiBufferred, int numStages) {
@@ -330,7 +273,7 @@ void createInitStore(IRRewriter &builder, ttng::TMEMAllocOp allocOp,
                      Value initVal, bool multiBufferred) {
   Value bufferSlice = allocOp;
   if (multiBufferred) {
-    bufferSlice = createSingleBufferView(builder, allocOp, 0);
+    bufferSlice = triton::createSingleBufferView(builder, allocOp, 0);
   }
   Value vTrue = builder.create<arith::ConstantIntOp>(allocOp.getLoc(), 1, 1);
   builder.create<ttng::TMEMStoreOp>(allocOp.getLoc(), bufferSlice, initVal,
@@ -377,7 +320,7 @@ void updateAccUsesInLoop(IRRewriter &builder, scf::ForOp forOp, MMAInfo &info,
     Value extractSlice = newAlloc;
     if (info.accIsMultiBuffered) {
       extractSlice =
-          createSingleBufferView(builder, newAlloc, info.accExtractIdx);
+          triton::createSingleBufferView(builder, newAlloc, info.accExtractIdx);
     }
     auto load = builder.create<ttng::TMEMLoadOp>(
         domOp->getLoc(), info.accLoad.getType(), extractSlice);
@@ -406,7 +349,8 @@ void updateAccUsesOutsideLoop(IRRewriter &builder, scf::ForOp forOp,
   Value bufferSlice = newAlloc;
   if (info.accIsMultiBuffered) {
     Value extractIdxVal = forOp.getResult(extractIdxArgNo);
-    bufferSlice = createSingleBufferView(builder, newAlloc, extractIdxVal);
+    bufferSlice =
+        triton::createSingleBufferView(builder, newAlloc, extractIdxVal);
   }
   auto load = builder.create<ttng::TMEMLoadOp>(
       forOp.getLoc(), forOp.getResult(info.yieldArgNo.value()).getType(),
@@ -461,7 +405,8 @@ void updateAccDefsInLoop(IRRewriter &builder, scf::ForOp forOp, MMAInfo &info,
   annotateWithPipelineStage(builder, newExtractIdx.getDefiningOp(), 1);
 
   if (info.accDef->initValue) {
-    Value bufferSlice = createSingleBufferView(builder, newAlloc, newInsertIdx);
+    Value bufferSlice =
+        triton::createSingleBufferView(builder, newAlloc, newInsertIdx);
     Value vTrue = builder.create<arith::ConstantIntOp>(loc, 1, 1);
     auto tmemStore = builder.create<ttng::TMEMStoreOp>(
         loc, bufferSlice, info.accDef->initValue,
@@ -519,7 +464,7 @@ void hoistAndUseTMemAlloc(IRRewriter &builder, scf::ForOp forOp,
   if (info.accIsMultiBuffered) {
     builder.setInsertionPoint(mmaOp);
     insertSlice =
-        createSingleBufferView(builder, insertSlice, info.accInsertIdx);
+        triton::createSingleBufferView(builder, insertSlice, info.accInsertIdx);
   }
 
   mmaOp.setAccumulator(insertSlice);
@@ -556,13 +501,13 @@ void createBarrierAndWaitOps(IRRewriter &builder, scf::ForOp forOp,
   Value numStagesVal =
       builder.create<arith::ConstantIntOp>(forOp.getLoc(), numStages, 32);
 
-  info.barrierAlloc = createBarrierAlloc(forOp, numStages);
+  info.barrierAlloc = triton::createBarrierAlloc(forOp, numStages);
 
   Location loc = mmaOp->getLoc();
   builder.setInsertionPoint(mmaOp);
 
-  Value barrierSlice =
-      createSingleBufferView(builder, info.barrierAlloc, info.barrierIdx);
+  Value barrierSlice = triton::createSingleBufferView(
+      builder, info.barrierAlloc, info.barrierIdx);
   mmaOp.setBarrier(barrierSlice);
 
   builder.setInsertionPointAfter(mmaOp);
@@ -625,24 +570,15 @@ void createBarrierAndWaitOps(IRRewriter &builder, scf::ForOp forOp,
   }
 }
 
-bool isSafeToPipeline(ttng::TCGen5MMAScaledOp scaledDot) {
-  auto getNumUsers = [](Value value) {
-    return std::distance(value.user_begin(), value.user_end());
-  };
-
-  auto isCopiedByTMEMCopy = [=](Value scale) {
-    if (getNumUsers(scale) != 2) {
-      // MMA and TMEM copy must be the only users
+bool isSafeToPipeline(ttng::TCGen5MMAScaledOp scaledDot, scf::ForOp forOp) {
+  // MMAv5 scaled dot (tcgen05.mma mxf8f6f4) is safe to be pipelined only
+  // when its scales in TMEM are stored by the TMEMCopy op (tcgen05.cp).
+  // That condition is equivalent to scale arguments of
+  // ttng::TCGen5MMAScaledOp being in SMEM during SWP in our convention.
+  auto isCopiedByTMEMCopy = [&](Value scale) {
+    auto scaleAlloc = findShmemAlloc(scale);
+    if (!scaleAlloc || !forOp.isDefinedOutsideOfLoop(scaleAlloc))
       return false;
-    }
-
-    for (auto user : scale.getUsers()) {
-      if (!isa<ttng::TMEMCopyOp, ttng::TCGen5MMAScaledOp>(user)) {
-        // If the scale is used by TMEM copy and the only other user is the
-        // scaled dot op, MMA pipelining is safe to apply.
-        return false;
-      }
-    }
     return true;
   };
 
@@ -664,7 +600,7 @@ FailureOr<scf::ForOp> preProcessLoopForTC05MMAPipelining(scf::ForOp forOp,
       if (isa<ttng::TCGen5MMAOp>(op)) {
         mmaOps.push_back(op);
       } else if (auto scaledDot = dyn_cast<ttng::TCGen5MMAScaledOp>(op)) {
-        if (isSafeToPipeline(scaledDot)) {
+        if (isSafeToPipeline(scaledDot, forOp)) {
           mmaOps.push_back(op);
         } else {
           op->emitWarning("Skipping pipelining of an MMAv5 scaled op because "
@@ -674,7 +610,10 @@ FailureOr<scf::ForOp> preProcessLoopForTC05MMAPipelining(scf::ForOp forOp,
     }
   });
 
-  if (mmaOps.empty()) {
+  // Temporarily disable mma pipelining if there are more than one mmaOp in the
+  // loop. This is a workaround for difficult to solve scheduling issues with
+  // loads feeding into non-0 stage ops.
+  if (mmaOps.empty() || mmaOps.size() > 1) {
     return failure();
   }
 
@@ -803,7 +742,7 @@ FailureOr<scf::ForOp> preProcessLoopForTC05MMAPipelining(scf::ForOp forOp,
     Location loc = mmaOp->getLoc();
     for (int i = 0; i < numStages; i++) {
       Value barrierView =
-          createSingleBufferView(builder, mmaInfo.barrierAlloc, i);
+          triton::createSingleBufferView(builder, mmaInfo.barrierAlloc, i);
       builder.create<ttng::InvalBarrierOp>(loc, barrierView);
     }
     builder.create<ttg::LocalDeallocOp>(loc, mmaInfo.barrierAlloc);
@@ -816,7 +755,9 @@ bool insertUsersOfOp(tt::CoarseSchedule &coarseSchedule, Operation *op,
                      int stage, tt::CoarseSchedule::Cluster cluster) {
   bool changed = false;
   for (auto user : op->getUsers()) {
-    if (coarseSchedule.count(user) == 0) {
+    // Let wait barriers be scheduled based on the stage of async op it waits
+    // for.
+    if (!isa<ttng::WaitBarrierOp>(user) && coarseSchedule.count(user) == 0) {
       changed = true;
       coarseSchedule.insert(user, stage, cluster);
       insertUsersOfOp(coarseSchedule, user, stage, cluster);
@@ -956,9 +897,11 @@ bool getTC05MMASchedule(scf::ForOp &forOp, int numStages,
 
 } // namespace
 
-void mlir::triton::pipelineTC05MMALoops(ModuleOp module,
-                                        const SmallVector<scf::ForOp> &forOps,
-                                        int numStages, bool disableExpander) {
+void mlir::triton::pipelineTC05MMALoops(ModuleOp module, int numStages,
+                                        bool disableExpander) {
+  SmallVector<scf::ForOp> forOps;
+  module->walk([&](scf::ForOp forOp) { forOps.push_back(forOp); });
+
   for (auto forOp : forOps) {
     FailureOr<scf::ForOp> newForOp =
         preProcessLoopForTC05MMAPipelining(forOp, numStages);

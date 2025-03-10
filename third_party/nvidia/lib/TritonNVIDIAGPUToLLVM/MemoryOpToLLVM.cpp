@@ -174,10 +174,7 @@ LogicalResult lowerDistributedToSharedStmatrix(
   auto kWarp = str_attr("warp");
   auto kBlock = str_attr("block");
 
-  Value threadId = getThreadId(rewriter, loc);
-  Value threadsPerWarp = b.i32_val(layout.getInDimSize(kLane));
-  Value laneId = b.urem(threadId, threadsPerWarp);
-  Value warpId = b.udiv(threadId, threadsPerWarp);
+  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
 
   auto regBase = applyLinearLayout(loc, rewriter, layout,
                                    {{kRegister, b.i32_val(0)},

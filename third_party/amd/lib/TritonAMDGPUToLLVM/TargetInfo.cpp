@@ -1,6 +1,7 @@
 #include "TargetInfo.h"
 #include "SchedInstructions.h"
 #include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
+#include "TritonAMDGPUToLLVM/TargetUtils.h"
 #include "Utility.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -25,7 +26,7 @@ LLVM::LLVMFuncOp getOrInsertFunction(T &moduleOp, const Location loc,
 }
 
 // Extend all values to 64-bit per printf call requirements.
-Value printfPromoteValue(RewriterBase &rewriter, Value value) {
+Value printfPromoteValue(RewriterBase &rewriter, Value value, bool isSigned) {
   auto *context = rewriter.getContext();
   auto loc = UnknownLoc::get(context);
   auto b = TritonLLVMOpBuilder(loc, rewriter);
@@ -47,12 +48,13 @@ Value printfPromoteValue(RewriterBase &rewriter, Value value) {
 
   assert(type.isIntOrIndex());
   if (type.getIntOrFloatBitWidth() < 64) {
-    if (type.isUnsignedInteger())
-      return b.zext(ui64_ty, value);
-    if (type.isSignedInteger())
+    if (isSigned) {
       return b.sext(i64_ty, value);
-    // Signless integers are printed using unsigned integer formats.
-    return b.zext(i64_ty, value);
+    } else {
+      // Signless and unsigned integers are printed using unsigned integer
+      // formats.
+      return b.zext(i64_ty, value);
+    }
   }
 
   return value;
@@ -63,7 +65,10 @@ llvm::AMDGPU::GPUKind TargetInfo::getGPUKind() const {
   return llvm::AMDGPU::parseArchAMDGCN(arch);
 }
 
-int TargetInfo::getSharedMemorySize() const { return 64 * 1024; }
+int TargetInfo::getSharedMemorySize() const {
+  int kbytes = getISAFamily() == ISAFamily::CDNA4 ? 160 : 64;
+  return kbytes * 1024;
+}
 
 bool TargetInfo::supportMaximumMinimum() const { return false; }
 
@@ -98,6 +103,11 @@ bool TargetInfo::canUseStMatrix(RankedTensorType tensorTy,
                                 int swizzleByteSize) const {
   // AMD does not support stmatrix
   return false;
+}
+
+bool TargetInfo::canUseLDSTransLoad(int bitwidth) const {
+  return getISAFamily() == ISAFamily::CDNA4 &&
+         llvm::is_contained({16, 8, 4, 6}, bitwidth);
 }
 
 void TargetInfo::storeMatrixShared(RewriterBase &rewriter, Location loc,
@@ -193,8 +203,9 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
   if (numLaneToReduce != 64)
     return false;
 
-  if (auto family = getISAFamily();
-      family != ISAFamily::CDNA3 && family != ISAFamily::CDNA2) {
+  if (!llvm::is_contained(
+          {ISAFamily::CDNA2, ISAFamily::CDNA3, ISAFamily::CDNA4},
+          getISAFamily())) {
     return false;
   }
 
@@ -324,8 +335,8 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
 }
 
 void TargetInfo::printfImpl(Value formatStrStart, int formatStrByteCount,
-                            ValueRange args, RewriterBase &rewriter,
-                            bool useStdErr) const {
+                            ValueRange args, ArrayRef<bool> isSigned,
+                            RewriterBase &rewriter, bool useStdErr) const {
   auto moduleOp = rewriter.getBlock()->getParent()->getParentOfType<ModuleOp>();
   auto *ctx = rewriter.getContext();
   mlir::Location loc = UnknownLoc::get(ctx);
@@ -377,7 +388,8 @@ void TargetInfo::printfImpl(Value formatStrStart, int formatStrByteCount,
     arguments.push_back(message);
     arguments.push_back(b.i32_val(numArgs));
     for (size_t i = group; i < bound; ++i) {
-      arguments.push_back(printfPromoteValue(rewriter, args[i]));
+      arguments.push_back(printfPromoteValue(
+          rewriter, args[i], isSigned.empty() ? true : isSigned[i]));
     }
     // Pad out to 7 arguments since the function always needs 7 args.
     for (size_t extra = numArgs; extra < kArgsPerGroup; ++extra) {
@@ -397,13 +409,15 @@ std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {
 }
 
 void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,
-                        int formatStrByteCount, ValueRange args) const {
-  return printfImpl(formatStrStart, formatStrByteCount, args, rewriter,
+                        int formatStrByteCount, ValueRange args,
+                        ArrayRef<bool> isSigned) const {
+  return printfImpl(formatStrStart, formatStrByteCount, args, isSigned,
+                    rewriter,
                     /*useStdError=*/false);
 }
 
-void TargetInfo::printf(RewriterBase &rewriter, StringRef msg,
-                        ValueRange args) const {
+void TargetInfo::printf(RewriterBase &rewriter, StringRef msg, ValueRange args,
+                        ArrayRef<bool> isSigned) const {
   assert(!msg.empty() && "printf with empty string not supported");
   llvm::SmallString<64> msgNewline(msg);
   msgNewline.push_back('\n');
@@ -411,7 +425,7 @@ void TargetInfo::printf(RewriterBase &rewriter, StringRef msg,
   Value msgValue =
       LLVM::addStringToModule(UnknownLoc::get(rewriter.getContext()), rewriter,
                               "printfFormat_", msgNewline);
-  printf(rewriter, msgValue, msgNewline.size_in_bytes(), args);
+  printf(rewriter, msgValue, msgNewline.size_in_bytes(), args, isSigned);
 }
 
 void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
@@ -426,9 +440,9 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
   Value msgValue =
       LLVM::addStringToModule(loc, rewriter, "printfFormat_", msgBuffer);
   printfImpl(msgValue, msgBuffer.size_in_bytes(), /*args=*/ValueRange(),
-             rewriter, /*useStdError=*/true);
+             /*isSigned=*/{}, rewriter, /*useStdError=*/true);
 
-  // Set block barrrier before aborting kernel, give a chance for all
+  // Set block barrier before aborting kernel, give a chance for all
   // the threads in a block to check/print the assert failure.
   b.barrier();
   // Perform the trap to abort the kernel.
@@ -436,6 +450,16 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
 }
 
 int TargetInfo::getSharedAddressSpace() const { return 3; }
+
+int TargetInfo::getAddressSpace(Attribute addressSpace) const {
+  int spaceId = 0;
+  if (isa<triton::gpu::SharedMemorySpaceAttr>(addressSpace)) {
+    spaceId = 3;
+  } else {
+    llvm::report_fatal_error("Only support SharedMemorySpace for now");
+  }
+  return spaceId;
+}
 
 bool TargetInfo::supportVectorizedAtomics() const {
   // Note: not currently tested or used, but AMD generally supports vectorized
@@ -446,6 +470,22 @@ bool TargetInfo::supportVectorizedAtomics() const {
 void TargetInfo::storeOpAnnotation(triton::gpu::LocalStoreOp op,
                                    size_t localStoreOpCount, Type type) const {
   storeOpSchedAnnotations(op, localStoreOpCount, type);
+}
+
+bool TargetInfo::supportsDirectToLdsLoadBitWidth(int bitWidth) const {
+  switch (getISAFamily()) {
+  case ISAFamily::CDNA1:
+  case ISAFamily::CDNA2:
+  case ISAFamily::CDNA3:
+    return llvm::is_contained({32, 16, 8}, bitWidth);
+  case ISAFamily::CDNA4:
+    // Disable 96 bits as it uses 128bit strides between threads in a warp
+    return llvm::is_contained({128, /*96, */ 32, 16, 8}, bitWidth);
+  default:
+    break;
+  }
+
+  return false;
 }
 
 } // namespace mlir::triton::AMD

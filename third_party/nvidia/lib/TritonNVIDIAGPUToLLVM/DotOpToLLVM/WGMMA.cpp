@@ -31,7 +31,6 @@ using namespace mlir::triton::NVIDIA;
 
 using ::mlir::LLVM::getSharedMemoryObjectFromStruct;
 using ::mlir::triton::gpu::getShapePerCTA;
-using ::mlir::triton::gpu::getShapePerCTATile;
 using ::mlir::triton::gpu::MemDescType;
 using ::mlir::triton::gpu::NvidiaMmaEncodingAttr;
 using ::mlir::triton::gpu::NVMMASharedEncodingAttr;
@@ -108,11 +107,13 @@ static Value createDescriptor(ConversionPatternRewriter &rewriter, Location loc,
 }
 
 mlir::triton::NVIDIA::DotOpMmaV3SmemLoader::DotOpMmaV3SmemLoader(
-    Value tensor, Value base, SmallVector<int64_t> shape, Value warpId,
-    unsigned int dimWpt, bool trans, SmallVector<unsigned int> instrShape,
-    int64_t elementBitwidth, ConversionPatternRewriter &rewriter, Location loc)
-    : base(base), shape(shape), warpId(warpId), dimWpt(dimWpt), trans(trans),
-      instrShape(instrShape), elemBits(elementBitwidth) {
+    Value tensor, Value base, SmallVector<int64_t> shape,
+    ArrayRef<int64_t> allocSwizzleShape, Value warpId, unsigned int dimWpt,
+    bool trans, SmallVector<unsigned int> instrShape, int64_t elementBitwidth,
+    ConversionPatternRewriter &rewriter, Location loc)
+    : base(base), shape(shape), allocSwizzleShape(allocSwizzleShape),
+      warpId(warpId), dimWpt(dimWpt), trans(trans), instrShape(instrShape),
+      elemBits(elementBitwidth) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto ty = cast<MemDescType>(tensor.getType());
   auto sharedLayout = cast<NVMMASharedEncodingAttr>(ty.getEncoding());
@@ -121,7 +122,7 @@ mlir::triton::NVIDIA::DotOpMmaV3SmemLoader::DotOpMmaV3SmemLoader(
   elemsPerSwizzlingRow = (swizzlingByteWidth * 8) / elemBits;
   elemsPerSwizzlingRowVal = b.i32_val(elemsPerSwizzlingRow);
 
-  uint32_t widthInByte = shape[fastMovingDim] * elemBits / 8;
+  uint32_t widthInByte = allocSwizzleShape[fastMovingDim] * elemBits / 8;
   int64_t swizzling = getSwizzlingFromLayout(sharedLayout, widthInByte);
 
   descriptor =
@@ -166,13 +167,14 @@ DotOpMmaV3SmemLoader loadA(const LLVMTypeConverter *typeConverter,
                            const NvidiaMmaEncodingAttr &mmaEncoding,
                            Value tensor, Value smemObjBase, Value thread) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto aTy = cast<triton::gpu::TensorOrMemDesc>(tensor.getType());
+  auto aTy = cast<MemDescType>(tensor.getType());
   auto aSharedLayout = dyn_cast<NVMMASharedEncodingAttr>(aTy.getEncoding());
   assert(aSharedLayout && "only support load dot operand from shared.");
   auto instrShape = mmaEncoding.getInstrShape();
   auto wpt = mmaEncoding.getWarpsPerCTA();
   bool transA = aSharedLayout.getTransposed();
   auto shapePerCTA = getShapePerCTA(aTy);
+  auto allocSwizzleShape = aTy.getAllocShape().take_back(shapePerCTA.size());
 
   // The descriptor should be calculated based on the first warp of the
   // warpgroup.
@@ -187,6 +189,7 @@ DotOpMmaV3SmemLoader loadA(const LLVMTypeConverter *typeConverter,
   return {tensor,
           smemObjBase,
           shapePerCTA,
+          allocSwizzleShape,
           warpId,
           wpt[0],
           transA,
@@ -208,6 +211,7 @@ DotOpMmaV3SmemLoader loadB(const LLVMTypeConverter *typeConverter,
   auto wpt = mmaEncoding.getWarpsPerCTA();
   bool transB = !bSharedLayout.getTransposed();
   auto shapePerCTA = triton::gpu::getShapePerCTA(bTy);
+  auto allocSwizzleShape = bTy.getAllocShape().take_back(shapePerCTA.size());
 
   Value warp = b.and_(b.udiv(thread, b.i32_val(32)), b.i32_val(0xFFFFFFFC));
   Value warpMN = b.udiv(warp, b.i32_val(wpt[0]));
@@ -217,6 +221,7 @@ DotOpMmaV3SmemLoader loadB(const LLVMTypeConverter *typeConverter,
   return {tensor,
           base,
           shapePerCTA,
+          allocSwizzleShape,
           warpId,
           wpt[1],
           transB,
@@ -379,7 +384,10 @@ LogicalResult convertDot(const LLVMTypeConverter *typeConverter,
   int N = instrShape[1];
   int K = instrShape[2];
   bool zeroAcc = isZeroConst(c);
-  auto shapePerCTATile = getShapePerCTATile(mmaEncoding);
+  auto instrMNK = mmaEncoding.getInstrShape();
+  auto warpSize = mmaEncoding.getWarpsPerCTA();
+  auto shapePerCTATile = SmallVector<unsigned>{instrMNK[0] * warpSize[0],
+                                               instrMNK[1] * warpSize[1]};
   int numRepM = ceil<unsigned>(dShapePerCTA[0], shapePerCTATile[0]);
   int numRepN = ceil<unsigned>(dShapePerCTA[1], shapePerCTATile[1]);
   int numRepK = ceil<unsigned>(aTensorTy.getShape()[1], instrShape[2]);

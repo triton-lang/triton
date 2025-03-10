@@ -380,3 +380,13 @@ tt.func @test_reshape_reduce(%0: tensor<32x4x2xi32>) -> (i32, tensor<16xi32>) {
   %3 = tt.histogram %1 : tensor<256xi32> -> tensor<16xi32>
   tt.return %2, %3 : i32, tensor<16xi32>
 }
+
+// CHECK-LABEL: test_rank_reduce_desc_load
+tt.func @test_rank_reduce_desc_load(%0: !tt.tensordesc<tensor<1x128x64xf16>>) -> (tensor<128x64xf16>) {
+  %c0 = arith.constant 0 : i32
+  // CHECK: %[[R:.+]] = tt.experimental_descriptor_load {{.*}} : !tt.tensordesc<tensor<1x128x64xf16>> -> tensor<128x64xf16>
+  // CHECK: tt.return %[[R]]
+  %l = tt.experimental_descriptor_load %0[%c0, %c0, %c0] : !tt.tensordesc<tensor<1x128x64xf16>> -> tensor<1x128x64xf16>
+  %r = tt.reshape %l : tensor<1x128x64xf16> -> tensor<128x64xf16>
+  tt.return %r :  tensor<128x64xf16>
+}

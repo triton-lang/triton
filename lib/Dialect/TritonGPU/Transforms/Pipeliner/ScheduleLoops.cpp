@@ -1,24 +1,21 @@
-#include "triton/Analysis/AxisInfo.h"
+#include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
-#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
 
-#define DEBUG_TYPE "triton-loop-schedule"
+#define DEBUG_TYPE "triton-loop-pipeline"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
+using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
+
 namespace mlir {
 namespace triton {
 namespace gpu {
-
-#define GEN_PASS_DEF_TRITONGPULOOPSCHEDULING
-#include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
 namespace {
 
@@ -30,8 +27,7 @@ bool hasGpuBarriers(scf::ForOp forOp) {
 
 // Return true if the preconditions for pipelining the loop are met.
 bool isSafeToPipeline(scf::ForOp forOp) {
-  // Skip loop with distance > 1 for now.
-  // TODO: relax the constraint in the expander.
+  // Skip loop with distance > 1.
   if (loopHasDistGreaterThanOne(forOp))
     return false;
   // Don't pipeline outer loops.
@@ -104,9 +100,7 @@ CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
   }
 
   // Assign stage to each op reachable from a latency op
-  for (auto &kv : distance) {
-    Operation *op = kv.first;
-    int dist = kv.second;
+  for (auto [op, dist] : distance) {
     // We only schedule ops that are downstream of a latency op
     // (had a non-negative distance due to a latency op).
     if (dist >= 0)
@@ -120,16 +114,31 @@ CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
   for (int i = 0; i <= maxStage; i++) {
     clusters[i] = schedule.clusters.newAtBack();
   }
-  CoarseSchedule::Cluster epilogue = schedule.clusters.newAtBack();
   // Assign ops to the clusters in reverse-stage order;
   // ops with higher stage numbers are assigned first. This way we will
   // end up with roughly reverse program order in the clusters.
-  for (auto [op, stage] : opToStage) {
-    if (isa<scf::IfOp>(op)) {
-      schedule.insert(op, stage, epilogue);
-      continue;
-    }
+  for (auto [op, stage] : opToStage)
     schedule.insert(op, stage, clusters[maxStage - stage]);
+
+  // Move `scf.if` ops in the current schedule (forward slice of the latency
+  // ops) into a new epilogue cluster at the end of the schedule, pushing them
+  // as close to the end of the loop body as possible.
+  CoarseSchedule::Cluster epilogue = schedule.clusters.newAtBack();
+  for (auto [op, stage] : opToStage) {
+    auto ifOp = dyn_cast<scf::IfOp>(op);
+    if (!ifOp)
+      continue;
+    // If the `scf.if` op itself is a latency op, skip it.
+    if (opLatency.contains(ifOp))
+      continue;
+    // Ensure this does not create scheduling conflicts by ensuring the forward
+    // slice of the `scf.if` does not contain ops that are already scheduled, as
+    // this will cause the `scf.if` to be scheduled after its dependents.
+    SetVector<Operation *> slice;
+    getForwardSlice(ifOp, &slice);
+    if (llvm::any_of(slice, [&](Operation *op) { return opToStage.count(op); }))
+      continue;
+    schedule.insert(ifOp, stage, epilogue);
   }
 
   return schedule;
@@ -139,17 +148,7 @@ CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
 // but in the cluster before the current op.
 void scheduleDistanceOneDependencies(scf::ForOp forOp,
                                      CoarseSchedule &schedule) {
-  int numStages = schedule.numStages;
-  auto getNestedOperands = [](Operation *op) -> SmallVector<Value> {
-    SmallVector<Value> operands;
-    op->walk([&](Operation *nestedOp) {
-      for (Value operand : nestedOp->getOperands()) {
-        if (operand.getParentBlock()->getParentOp()->isAncestor(nestedOp))
-          operands.push_back(operand);
-      }
-    });
-    return operands;
-  };
+  int numStages = schedule.getNumStages();
 
   // Mapping from the cluster to the cluster before it.
   DenseMap<CoarseSchedule::Cluster *, CoarseSchedule::Cluster> dist1Cluster;
@@ -171,14 +170,17 @@ void scheduleDistanceOneDependencies(scf::ForOp forOp,
               // Exception: Schedule loads with a distance of 1 together
               // with the current op.
               schedule.insertIfAbsent(defOp, stage, cluster);
-              schedule.insertDepsOfOp(defOp, stage, cluster, true);
+              schedule.insertDepsOfOp(defOp, stage, cluster,
+                                      /*includeArg=*/true,
+                                      /*insertIfEarlier=*/true);
             } else {
               if (dist1Cluster.count(&cluster) == 0) {
                 dist1Cluster[&cluster] = schedule.clusters.newBefore(cluster);
               }
               schedule.insertIfAbsent(defOp, stage + 1, dist1Cluster[&cluster]);
               schedule.insertDepsOfOp(defOp, stage + 1, dist1Cluster[&cluster],
-                                      true);
+                                      /*includeArg=*/true,
+                                      /*includeIfEarlier=*/true);
             }
           }
         }
@@ -192,7 +194,7 @@ void scheduleDistanceOneDependencies(scf::ForOp forOp,
 // prologue (or the beginning of the loop if there is no prologue).
 CoarseSchedule::Cluster schedulePrologueAndEpilogue(scf::ForOp forOp,
                                                     CoarseSchedule &schedule) {
-  int numStages = schedule.numStages;
+  int numStages = schedule.getNumStages();
   CoarseSchedule::Cluster afterPrologue = schedule.clusters.begin();
 
   // Look for the IfOp that is in the backward slice any of the currently
@@ -206,6 +208,7 @@ CoarseSchedule::Cluster schedulePrologueAndEpilogue(scf::ForOp forOp,
       SetVector<Operation *> backwardSlice;
       BackwardSliceOptions opt;
       opt.omitBlockArguments = true;
+      opt.omitUsesFromAbove = false;
       getBackwardSlice((Operation *)op, &backwardSlice, opt);
 
       for (auto op : backwardSlice) {
@@ -218,7 +221,7 @@ CoarseSchedule::Cluster schedulePrologueAndEpilogue(scf::ForOp forOp,
   if (!ifsToStage.empty()) {
     CoarseSchedule::Cluster prologueCluster = schedule.clusters.newAtFront();
     for (auto [ifOp, stage] : ifsToStage) {
-      schedule.insert(ifOp, stage, prologueCluster);
+      schedule.insertIfAbsent(ifOp, stage, prologueCluster);
     }
   }
 
@@ -237,7 +240,7 @@ CoarseSchedule::Cluster schedulePrologueAndEpilogue(scf::ForOp forOp,
 
 void scheduleRemainingToLastStage(scf::ForOp forOp, CoarseSchedule &schedule,
                                   CoarseSchedule::Cluster afterPrologue) {
-  int numStages = schedule.numStages;
+  int numStages = schedule.getNumStages();
   // Assign the rest of the ops to the last stage.
   // Take care of the ordering of the ops - uses cannot be scheduled to the
   // cluster before the definition.
@@ -277,8 +280,6 @@ void scheduleRemainingToLastStage(scf::ForOp forOp, CoarseSchedule &schedule,
   }
 }
 
-}; // namespace
-
 void scheduleLoop(scf::ForOp forOp,
                   const DenseMap<Operation *, int> &opLatency) {
   if (!hasLatenciesAssigned(forOp, opLatency) || !isSafeToPipeline(forOp))
@@ -288,77 +289,48 @@ void scheduleLoop(scf::ForOp forOp,
   if (schedule.empty())
     return;
   LLVM_DEBUG({
-    LDBG("Initial coarse schedule:");
-    schedule.dump();
+    schedule.serialize(forOp);
+    DBGS() << "Initial coarse schedule:\n" << forOp << "\n";
   });
   // Schedule the dependencies
   CoarseSchedule::Cluster afterPrologue =
       schedulePrologueAndEpilogue(forOp, schedule);
   LLVM_DEBUG({
-    LDBG("Coarse schedule with prologue and epilogue:");
-    schedule.dump();
+    schedule.serialize(forOp);
+    DBGS() << "Coarse schedule with prologue and epilogue:\n" << forOp << "\n";
   });
   scheduleDependencies(forOp, schedule);
   LLVM_DEBUG({
-    LDBG("Coarse schedule with dependencies:");
-    schedule.dump();
+    schedule.serialize(forOp);
+    DBGS() << "Coarse schedule with dependencies:\n" << forOp << "\n";
   });
   scheduleDistanceOneDependencies(forOp, schedule);
   LLVM_DEBUG({
-    LDBG("Coarse schedule with dist 1:");
-    schedule.dump();
+    schedule.serialize(forOp);
+    DBGS() << "Coarse schedule with dist 1:\n" << forOp << "\n";
   });
   scheduleRemainingToLastStage(forOp, schedule, afterPrologue);
   LLVM_DEBUG({
-    LDBG("Final coarse schedule:");
-    schedule.dump();
+    schedule.serialize(forOp);
+    DBGS() << "Final coarse schedule:\n" << forOp << "\n";
   });
 
   // Write the schedule to the IR
   schedule.serialize(forOp);
 }
 
-class TritonGPULoopSchedulingPass
-    : public impl::TritonGPULoopSchedulingBase<TritonGPULoopSchedulingPass> {
-public:
-  using impl::TritonGPULoopSchedulingBase<
-      TritonGPULoopSchedulingPass>::TritonGPULoopSchedulingBase;
+} // namespace
 
-  int getNumStagesOrDefault(scf::ForOp forOp) {
-    // Use the attribute attached to the loop if it exists otherwise use the
-    // global control.
-    if (!forOp->hasAttr(mlir::triton::kNumStagesAttrName))
-      return numStages;
-    return mlir::cast<IntegerAttr>(
-               forOp->getAttr(mlir::triton::kNumStagesAttrName))
-        .getInt();
+void scheduleLoops(ModuleOp moduleOp) {
+  DenseMap<Operation *, int> opLatency = deserializeLatencies(moduleOp);
+  SmallVector<scf::ForOp> loops;
+  moduleOp->walk([&](scf::ForOp forOp) { loops.push_back(forOp); });
+  if (loops.empty())
+    return;
+  for (auto forOp : loops) {
+    scheduleLoop(forOp, opLatency);
   }
-
-  void runOnOperation() override {
-    // Go over the interesting ops and assign latencies (based on the
-    // numStages) to the them, trying to populate the allowed stages. This
-    // step will be at some point extracted to separate pass that will be run
-    // only for loops missing the latency information.
-    DenseMap<Operation *, int> opLatency =
-        assignLatencies(getOperation(), numStages);
-    // numStages should not be used below this point. We should know everything
-    // based on the assigned stages
-
-    // Schedule the loops
-    SmallVector<scf::ForOp> loops;
-    getOperation()->walk([&](scf::ForOp forOp) {
-      // Bail out for loops with num_stage <= 1.
-      if (getNumStagesOrDefault(forOp) > 1)
-        loops.push_back(forOp);
-    });
-    if (loops.empty())
-      return;
-
-    for (auto forOp : loops) {
-      scheduleLoop(forOp, opLatency);
-    }
-  }
-};
+}
 
 } // namespace gpu
 } // namespace triton

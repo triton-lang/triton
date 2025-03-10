@@ -20,9 +20,9 @@ namespace mlir::triton::gpu {
 
 void decomposeTensorCoreToDotLayoutConversion(ModuleOp module,
                                               ShortcutFn shortcutFn) {
-  int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(module);
-  int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(module);
-  int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(module);
+  MLIRContext *ctx = module.getContext();
+  int numCTAs = TritonGPUDialect::getNumCTAs(module);
+  int threadsPerWarp = TritonGPUDialect::getThreadsPerWarp(module);
 
   module.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
     OpBuilder builder(cvtOp);
@@ -31,28 +31,32 @@ void decomposeTensorCoreToDotLayoutConversion(ModuleOp module,
     auto srcMma = dyn_cast<MmaEncodingTrait>(srcType.getEncoding());
     auto dstDotOp =
         dyn_cast<triton::gpu::DotOperandEncodingAttr>(dstType.getEncoding());
-    if (srcMma && dstDotOp && !shortcutFn(srcType, dstType)) {
-      auto tmpType = RankedTensorType::get(
-          dstType.getShape(), dstType.getElementType(),
-          triton::gpu::BlockedEncodingAttr::get(
-              module.getContext(), srcType.getShape(), getSizePerThread(srcMma),
-              getOrder(srcMma), numWarps, threadsPerWarp, numCTAs));
-      auto tmp = builder.create<triton::gpu::ConvertLayoutOp>(
-          cvtOp.getLoc(), tmpType, cvtOp.getSrc());
-      addAttrs(tmp, cvtOp->getAttrs());
-      auto newConvert = builder.create<triton::gpu::ConvertLayoutOp>(
-          cvtOp.getLoc(), dstType, tmp);
-      addAttrs(newConvert, cvtOp->getAttrs());
-      cvtOp.replaceAllUsesWith(newConvert.getResult());
-      cvtOp.erase();
-    }
+    if (!srcMma || !dstDotOp || shortcutFn(srcType, dstType))
+      return;
+
+    int numWarps = lookupNumWarps(cvtOp);
+    auto enc = BlockedEncodingAttr::get(
+        ctx, srcType.getShape(), getContigPerThread(srcType), getOrder(srcType),
+        numWarps, threadsPerWarp, numCTAs);
+    auto tmpType = RankedTensorType::get(dstType.getShape(),
+                                         dstType.getElementType(), enc);
+
+    auto tmp = builder.create<ConvertLayoutOp>(cvtOp.getLoc(), tmpType,
+                                               cvtOp.getSrc());
+    addAttrs(tmp, cvtOp->getAttrs());
+    auto newConvert =
+        builder.create<ConvertLayoutOp>(cvtOp.getLoc(), dstType, tmp);
+    addAttrs(newConvert, cvtOp->getAttrs());
+
+    cvtOp.replaceAllUsesWith(newConvert.getResult());
+    cvtOp.erase();
   });
 }
 
 void decomposeBlockedToDotLayoutConversion(ModuleOp module) {
-  int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(module);
   int numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(module);
   int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(module);
+
   module.walk([&](triton::gpu::ConvertLayoutOp cvtOp) -> void {
     OpBuilder builder(cvtOp);
     auto srcType = cast<RankedTensorType>(cvtOp.getSrc().getType());

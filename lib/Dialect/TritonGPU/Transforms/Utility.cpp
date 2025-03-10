@@ -12,6 +12,7 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
@@ -138,6 +139,10 @@ unsigned getNumElementsPerThread(Operation *op, SmallVector<unsigned> order,
                         << ", contig: " << valInfo.getContiguity(order[0])
                         << ", alignment: " << alignment);
   return currPerThread;
+}
+
+bool isView(Operation *op) {
+  return isa<ExpandDimsOp, ReshapeOp, TransOp, JoinOp, SplitOp>(op);
 }
 
 //===----------------------------------------------------------------------===//
@@ -297,8 +302,9 @@ std::string GraphLayoutMarker::getColor(const Type &type) const {
 // -------------------------------------------------------------------------- //
 
 static Attribute inferDstEncoding(triton::ReduceOp op, Attribute encoding) {
-  return triton::gpu::SliceEncodingAttr::get(op->getContext(), op.getAxis(),
-                                             encoding);
+  return triton::gpu::SliceEncodingAttr::get(
+      op->getContext(), op.getAxis(),
+      cast<ttg::DistributedEncodingTrait>(encoding));
 }
 
 static Attribute inferDstEncoding(triton::ExpandDimsOp op, Attribute encoding) {
@@ -312,10 +318,11 @@ static Attribute inferDstEncoding(triton::ExpandDimsOp op, Attribute encoding) {
 
 static Attribute inferDstEncoding(JoinOp op, Attribute srcEnc) {
   Attribute dstEnc;
+  auto shape = op.getLhs().getType().getShape();
   if (srcEnc.getDialect()
           .getRegisteredInterface<DialectInferLayoutInterface>()
-          ->inferJoinOpEncoding(srcEnc, dstEnc,
-                                /*loc=*/std::nullopt)
+          ->inferDefaultJoinOpEncoding(srcEnc, dstEnc, shape,
+                                       /*loc=*/std::nullopt)
           .succeeded()) {
     return dstEnc;
   }
@@ -324,9 +331,10 @@ static Attribute inferDstEncoding(JoinOp op, Attribute srcEnc) {
 
 static Attribute inferDstEncoding(SplitOp op, Attribute srcEnc) {
   Attribute dstEnc;
+  auto shape = op.getSrc().getType().getShape();
   if (srcEnc.getDialect()
           .getRegisteredInterface<DialectInferLayoutInterface>()
-          ->inferSplitOpEncoding(srcEnc, dstEnc,
+          ->inferSplitOpEncoding(srcEnc, dstEnc, shape,
                                  /*loc=*/std::nullopt)
           .succeeded()) {
     return dstEnc;
@@ -344,16 +352,18 @@ static Attribute inferSrcEncoding(triton::ReduceOp op, Attribute encoding) {
 }
 
 static Attribute inferSrcEncoding(triton::ExpandDimsOp op, Attribute encoding) {
-  return triton::gpu::SliceEncodingAttr::get(op->getContext(), op.getAxis(),
-                                             encoding);
+  return triton::gpu::SliceEncodingAttr::get(
+      op->getContext(), op.getAxis(),
+      cast<ttg::DistributedEncodingTrait>(encoding));
 }
 
 static Attribute inferSrcEncoding(JoinOp op, Attribute dstEnc) {
   // Split is the inverse of join.
+  auto shape = op.getResult().getType().getShape();
   Attribute srcEnc;
   if (dstEnc.getDialect()
           .getRegisteredInterface<DialectInferLayoutInterface>()
-          ->inferSplitOpEncoding(dstEnc, srcEnc, /*loc=*/std::nullopt)
+          ->inferSplitOpEncoding(dstEnc, srcEnc, shape, /*loc=*/std::nullopt)
           .succeeded()) {
     return srcEnc;
   }
@@ -363,9 +373,11 @@ static Attribute inferSrcEncoding(JoinOp op, Attribute dstEnc) {
 static Attribute inferSrcEncoding(SplitOp op, Attribute dstEnc) {
   // Join is the inverse of split.
   Attribute srcEnc;
+  auto shape = op.getOutLHS().getType().getShape();
   if (dstEnc.getDialect()
           .getRegisteredInterface<DialectInferLayoutInterface>()
-          ->inferJoinOpEncoding(dstEnc, srcEnc, /*loc=*/std::nullopt)
+          ->inferDefaultJoinOpEncoding(dstEnc, srcEnc, shape,
+                                       /*loc=*/std::nullopt)
           .succeeded()) {
     return srcEnc;
   }
@@ -387,6 +399,31 @@ static Attribute inferTransOpDstEncoding(Attribute srcEnc,
               .getRegisteredInterface<triton::DialectInferLayoutInterface>()
               ->inferTransOpEncoding(srcEnc, shape, order, retEncoding))) {
     return retEncoding;
+  }
+  return {};
+}
+
+static Attribute inferDstEncoding(triton::gpu::Fp4ToFpOp op, Attribute srcEnc) {
+  Attribute dstEnc;
+  auto shape = op.getSrc().getType().getShape();
+  auto result =
+      srcEnc.getDialect()
+          .getRegisteredInterface<triton::DialectInferLayoutInterface>()
+          ->inferFp4ToFpOpEncoding(shape, op.getAxis(), srcEnc, dstEnc,
+                                   /*fwdInference*/ true, std::nullopt);
+  assert(succeeded(result));
+  return dstEnc;
+}
+
+static Attribute inferSrcEncoding(triton::gpu::Fp4ToFpOp op, Attribute dstEnc) {
+  Attribute srcEnc;
+  auto shape = op.getSrc().getType().getShape();
+  if (succeeded(
+          dstEnc.getDialect()
+              .getRegisteredInterface<triton::DialectInferLayoutInterface>()
+              ->inferFp4ToFpOpEncoding(shape, op.getAxis(), dstEnc, srcEnc,
+                                       /*fwdInference*/ false, std::nullopt))) {
+    return srcEnc;
   }
   return {};
 }
@@ -494,6 +531,8 @@ Attribute inferSrcEncoding(Operation *op, Attribute encoding) {
     return inferSrcEncoding(reshape, encoding);
   if (auto gather = dyn_cast<triton::GatherOp>(op))
     return inferSrcEncoding(gather, encoding);
+  if (auto fp4ToFp = dyn_cast<triton::gpu::Fp4ToFpOp>(op))
+    return inferSrcEncoding(fp4ToFp, encoding);
 
   return {};
 }
@@ -523,6 +562,8 @@ Attribute inferDstEncoding(Operation *op, Attribute encoding) {
     return inferDstEncoding(reshape, encoding);
   if (auto gather = dyn_cast<triton::GatherOp>(op))
     return inferDstEncoding(gather, encoding);
+  if (auto fp4ToFp = dyn_cast<triton::gpu::Fp4ToFpOp>(op))
+    return inferDstEncoding(fp4ToFp, encoding);
 
   return {};
 }
@@ -540,7 +581,7 @@ bool isExpensiveLoadOrStore(Operation *op) {
   // we can presume a high hit-rate that makes it cheap to load
   auto ptrType = cast<RankedTensorType>(op->getOperand(0).getType());
   auto mod = op->getParentOfType<ModuleOp>();
-  int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+  int numWarps = triton::gpu::lookupNumWarps(op);
   int threadsPerWarp = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
   if (ptrType.getNumElements() < numWarps * threadsPerWarp)
     return false;
@@ -963,11 +1004,9 @@ bool isPureUnaryInlineAsm(Operation *op) {
 }
 
 int getNVIDIAComputeCapability(Operation *module) {
-  assert(module->hasAttr(triton::AttrTargetName) &&
-         "Expected a target attribute on the module operation");
-
   StringAttr targetAttr =
-      module->getAttrOfType<StringAttr>(triton::AttrTargetName);
+      module->getAttrOfType<StringAttr>(triton::gpu::AttrTargetName);
+  assert(targetAttr && "Expected a target attribute on the module operation");
 
   StringRef ref = targetAttr.strref();
   assert(ref.starts_with("cuda:") &&
@@ -983,11 +1022,9 @@ int getNVIDIAComputeCapability(Operation *module) {
 }
 
 StringRef getAMDArch(Operation *module) {
-  assert(module->hasAttr(triton::AttrTargetName) &&
-         "Expected a target attribute on the module operation");
-
   StringAttr targetAttr =
-      module->getAttrOfType<StringAttr>(triton::AttrTargetName);
+      module->getAttrOfType<StringAttr>(triton::gpu::AttrTargetName);
+  assert(targetAttr && "Expected a target attribute on the module operation");
 
   StringRef ref = targetAttr.strref();
   assert(ref.starts_with("hip:") &&
@@ -1029,7 +1066,7 @@ getSharedEncIfAllUsersAreDotEnc(Value val, bool &incompatible) {
         return std::nullopt;
       auto srcTy = cast<triton::gpu::TensorOrMemDesc>(val.getType());
       auto CTALayout = ttg::getCTALayout(srcTy.getEncoding());
-      auto order = ttg::getOrder(srcTy.getEncoding());
+      auto order = ttg::getOrder(srcTy);
       unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
       tempAttr = ttg::SwizzledSharedEncodingAttr::get(
           val.getContext(), dotOpEnc, srcTy.getShape(), order, CTALayout,

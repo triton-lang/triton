@@ -27,7 +27,7 @@ public:
   matchAndRewrite(triton::ReduceOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     ReduceOpHelper helper(op);
-    assert(helper.isSupportedLayout() &&
+    assert(helper.isReduceWithinCTA() &&
            "Unexpected srcLayout in ReduceOpConversion");
     Location loc = op->getLoc();
 
@@ -226,14 +226,9 @@ private:
     triton::ReduceOp op = helper.getOperation();
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    Value threadId = getThreadId(rewriter, loc);
     auto srcLayout =
         mlir::cast<DistributedEncodingTrait>(helper.getSrcLayout());
-    auto mod = op.getOperation()->getParentOfType<ModuleOp>();
-    Value warpSize =
-        b.i32_val(triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod));
-    Value warpId = b.udiv(threadId, warpSize);
-    Value laneId = b.urem(threadId, warpSize);
+    auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
     unsigned axis = op.getAxis();
     auto smemShape = helper.getScratchRepShape();
 
@@ -283,9 +278,9 @@ private:
     Location loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-    auto mod = op.getOperation()->getParentOfType<ModuleOp>();
+    auto mod = op->getParentOfType<ModuleOp>();
     int numLanes = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
-    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+    int numWarps = triton::gpu::lookupNumWarps(op);
     int numThreads = numLanes * numWarps;
 
     Value threadId = getThreadId(rewriter, loc);
@@ -354,7 +349,6 @@ private:
         auto resultIndices = emitIndices(loc, rewriter, targetInfo,
                                          resultLayout, resultTy, true);
         auto resultShape = resultTy.getShape();
-        auto resultCTATile = getShapePerCTATile(resultLayout);
         assert(resultIndices.size() == resultElems);
 
         SmallVector<Value> resultVals(resultElems);
@@ -364,8 +358,7 @@ private:
           for (size_t resultIdx = 0, resultDim = resultShape.size();
                resultIdx < resultDim; ++resultIdx) {
             auto smemIdx = resultIdx < op.getAxis() ? resultIdx : resultIdx + 1;
-            if (resultCTATile[resultIdx] > smemShape[smemIdx] ||
-                resultShape[resultIdx] > smemShape[smemIdx]) {
+            if (resultShape[resultIdx] > smemShape[smemIdx]) {
               // When srcShape smaller then src sizePerThread, only srcShape
               // elements is accumulated in smem. Modulo smemShape effectively
               // replicates srcShape elements to src sizePerThread.

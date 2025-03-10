@@ -28,6 +28,8 @@ namespace triton {
 
 // Bitwidth of pointers
 constexpr int kPtrBitWidth = 64;
+// Max shmem LDS/STS instruction in bits
+constexpr int kMaxShmemVecBitLength = 128;
 
 static SmallVector<unsigned> getRepShapeForCvt(RankedTensorType srcTy,
                                                RankedTensorType dstTy) {
@@ -47,8 +49,8 @@ static SmallVector<unsigned> getRepShapeForCvt(RankedTensorType srcTy,
 
   auto srcShapePerCTA = gpu::getShapePerCTA(srcTy);
   auto dstShapePerCTA = gpu::getShapePerCTA(dstTy);
-  auto srcShapePerCTATile = gpu::getShapePerCTATile(srcLayout);
-  auto dstShapePerCTATile = gpu::getShapePerCTATile(dstLayout);
+  auto srcShapePerCTATile = gpu::getShapePerCTATile(srcTy);
+  auto dstShapePerCTATile = gpu::getShapePerCTATile(dstTy);
 
   assert(srcTy.getRank() == dstTy.getRank() &&
          "src and dst must have the same rank");
@@ -79,15 +81,17 @@ std::pair<unsigned, unsigned>
 getScratchCvtInOutVecLengths(RankedTensorType srcTy, RankedTensorType dstTy) {
   Attribute srcLayout = srcTy.getEncoding();
   Attribute dstLayout = dstTy.getEncoding();
-  const auto &inOrd = gpu::getOrder(srcLayout);
-  const auto &outOrd = gpu::getOrder(dstLayout);
+
+  auto srcLinAttr = gpu::toLinearEncoding(srcLayout, srcTy.getShape());
+  auto dstLinAttr = gpu::toLinearEncoding(dstLayout, dstTy.getShape());
+  auto inOrd = srcLinAttr.getOrder();
+  auto outOrd = dstLinAttr.getOrder();
+
   unsigned rank = srcTy.getRank();
 
-  unsigned srcContigPerThread =
-      gpu::getUniqueContigPerThread(srcLayout, srcTy.getShape())[inOrd[0]];
-  unsigned dstContigPerThread =
-      gpu::getUniqueContigPerThread(dstLayout, dstTy.getShape())[outOrd[0]];
-  // TODO: Fix the legacy issue that ourOrd[0] == 0 always means
+  unsigned srcContigPerThread = srcLinAttr.getContigPerThread()[inOrd[0]];
+  unsigned dstContigPerThread = dstLinAttr.getContigPerThread()[outOrd[0]];
+  // TODO: Fix the legacy issue that outOrd[0] == 0 always means
   //       that we cannot do vectorization.
   unsigned innerDim = rank - 1;
   unsigned inVec = outOrd[0] != innerDim  ? 1
@@ -117,8 +121,7 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
   Attribute dstLayout = dstTy.getEncoding();
 
   assert(cvtNeedsSharedMemory(srcTy, dstTy));
-
-  const auto &outOrd = gpu::getOrder(dstLayout);
+  auto outOrd = gpu::toLinearEncoding(dstLayout, dstTy.getShape()).getOrder();
   scratchConfig.order = outOrd;
 
   std::tie(scratchConfig.inVec, scratchConfig.outVec) =
@@ -129,6 +132,18 @@ ScratchConfig getScratchConfigForCvt(RankedTensorType srcTy,
   unsigned contiguousShapeDim = scratchConfig.repShape[scratchConfig.order[0]];
   scratchConfig.inVec = std::min(scratchConfig.inVec, contiguousShapeDim);
   scratchConfig.outVec = std::min(scratchConfig.outVec, contiguousShapeDim);
+  // Clamp the vector length to kMaxShmemVecBitLength / element bitwidth as this
+  // is the max vectorisation
+  auto inBitWidth = isa<PointerType>(srcTy.getElementType())
+                        ? kPtrBitWidth
+                        : srcTy.getElementTypeBitWidth();
+  auto outBitWidth = isa<PointerType>(dstTy.getElementType())
+                         ? kPtrBitWidth
+                         : dstTy.getElementTypeBitWidth();
+  scratchConfig.inVec =
+      std::min(scratchConfig.inVec, kMaxShmemVecBitLength / inBitWidth);
+  scratchConfig.outVec =
+      std::min(scratchConfig.outVec, kMaxShmemVecBitLength / outBitWidth);
 
   // No padding is required if the tensor is 1-D, or if all dimensions except
   // the first accessed dimension have a size of 1.
@@ -228,21 +243,19 @@ private:
 
   /// Initializes explicitly defined shared memory values for a given operation.
   void getExplicitValueSize(Operation *op) {
-    for (Value result : op->getResults()) {
-      auto alloc = result.getDefiningOp<gpu::LocalAllocOp>();
-      if (alloc && alloc.isSharedMemoryAlloc()) {
-        // Bytes could be a different value once we support padding or other
-        // allocation policies.
-        auto allocType = alloc.getType();
-        auto shapePerCTA = gpu::getAllocationShapePerCTA(allocType);
-        auto bytes = product<int64_t>(shapePerCTA) *
-                     allocType.getElementTypeBitWidth() / 8;
+    auto alloc = dyn_cast<gpu::LocalAllocOp>(op);
+    if (!alloc || !alloc.isSharedMemoryAlloc())
+      return;
+    // Bytes could be a different value once we support padding or other
+    // allocation policies.
+    auto allocType = alloc.getType();
+    auto shapePerCTA = gpu::getAllocationShapePerCTA(allocType);
+    auto bytes =
+        product<int64_t>(shapePerCTA) * allocType.getElementTypeBitWidth() / 8;
 
-        auto alignment = alloc.getAlignmentOrDefault();
-        allocation->addBuffer<BufferT::BufferKind::Explicit>(result, bytes,
-                                                             alignment);
-      }
-    }
+    auto alignment = alloc.getAlignmentOrDefault();
+    allocation->addBuffer<BufferT::BufferKind::Explicit>(alloc, bytes,
+                                                         alignment);
   }
 
   template <BufferT::BufferKind T>
@@ -268,6 +281,24 @@ private:
       auto bytes = funcAlloc->getSharedMemorySize();
       maybeAddScratchBuffer<BufferT::BufferKind::Virtual>(op, bytes,
                                                           scratchAlignment);
+      return;
+    }
+    if (auto ws = dyn_cast<gpu::WarpSpecializeOp>(op)) {
+      // `ttg.warp_specialize` needs memory to pass its explicit captures. Pack
+      // the captures like a struct.
+      auto [captureSize, captureAlign] = ws.getCaptureSizeAlign();
+      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, captureSize,
+                                                          captureAlign);
+      return;
+    }
+    if (auto func = dyn_cast<FunctionOpInterface>(op)) {
+      unsigned numWarpIndices = 0;
+      // Warp specialization communicates states over shared memory to each
+      // warp. Add space for an i8 for each warpgroup warp.
+      func.walk([&](gpu::WarpSpecializeOp op) {
+        numWarpIndices = std::max(numWarpIndices, op.getTotalPartitionWarps());
+      });
+      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, numWarpIndices);
       return;
     }
     unsigned bytes = scratchSizeGetter(op);
@@ -299,10 +330,15 @@ private:
     std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
     SharedMemoryAliasAnalysis *aliasAnalysis =
         solver->load<SharedMemoryAliasAnalysis>();
-    if (failed(solver->initializeAndRun(operation))) {
-      // TODO: return error instead of bailing out..
-      llvm_unreachable("failed to run SharedMemoryAliasAnalysis");
-    }
+    // Run the analysis rooted at every isolated from above operation, including
+    // the top-level function but also any nested regions.
+    operation->walk([&](Operation *op) {
+      if (op->hasTrait<OpTrait::IsIsolatedFromAbove>() &&
+          failed(solver->initializeAndRun(op))) {
+        // TODO: return error instead of bailing out..
+        llvm_unreachable("failed to run SharedMemoryAliasAnalysis");
+      }
+    });
     operation->walk<WalkOrder::PreOrder>([&](Operation *op) {
       for (auto operand : op->getOperands()) {
         getValueAlias(operand, *aliasAnalysis);
@@ -333,9 +369,7 @@ private:
   /// arguments are involved.
   void resolveAliasBufferLiveness(
       function_ref<Interval<size_t>(Value value)> getLiveness) {
-    for (const auto &aliasBufferIter : allocation->aliasBuffer) {
-      auto value = aliasBufferIter.first;
-      auto buffers = aliasBufferIter.second;
+    for (const auto &[value, buffers] : allocation->aliasBuffer) {
       auto range = getLiveness(value);
       for (auto *buffer : buffers) {
         auto minId = range.start();
@@ -357,13 +391,20 @@ private:
       const DenseMap<Operation *, size_t> &operationId) {
     // Analyze liveness of scratch buffers and virtual buffers.
     auto processScratchMemory = [&](const auto &container) {
-      for (auto opScratchIter : container) {
+      for (auto [op, buffer] : container) {
+        // Buffers owned by the function are assumed live for the whole
+        // function. This memory is used for warp specialization codegen.
+        // FIXME: Spooky-action-at-a-distance. Find a better way to model this.
+        if (op == operation) {
+          bufferRange.insert(
+              {buffer, Interval(size_t(), std::numeric_limits<size_t>::max())});
+          continue;
+        }
+
         // Any scratch memory's live range is the current operation's live
         // range.
-        auto *op = opScratchIter.first;
-        auto *buffer = opScratchIter.second;
-        bufferRange.insert({buffer, Interval(operationId.lookup(op),
-                                             operationId.lookup(op) + 1)});
+        bufferRange.insert(
+            {buffer, Interval(operationId.at(op), operationId.at(op) + 1)});
         LLVM_DEBUG({
           llvm::dbgs() << "-- buffer " << buffer->id << "; value: ";
           op->dump();
@@ -402,15 +443,14 @@ private:
       auto liveOperations = liveness.resolveLiveness(value);
       auto minId = std::numeric_limits<size_t>::max();
       auto maxId = std::numeric_limits<size_t>::min();
-      std::for_each(liveOperations.begin(), liveOperations.end(),
-                    [&](Operation *liveOp) {
-                      if (operationId[liveOp] < minId) {
-                        minId = operationId[liveOp];
-                      }
-                      if ((operationId[liveOp] + 1) > maxId) {
-                        maxId = operationId[liveOp] + 1;
-                      }
-                    });
+      llvm::for_each(liveOperations, [&](Operation *liveOp) {
+        if (operationId[liveOp] < minId) {
+          minId = operationId[liveOp];
+        }
+        if ((operationId[liveOp] + 1) > maxId) {
+          maxId = operationId[liveOp] + 1;
+        }
+      });
       return Interval(minId, maxId);
     };
 
@@ -419,7 +459,7 @@ private:
     resolveScratchBufferLiveness(operationId);
   }
 
-  void dumpBuffers() {
+  void dumpBuffers() const {
     LDBG("Dump bufferRange: id size offset ---------");
     for (auto bufferIter : bufferRange) {
       llvm::dbgs() << "-- " << bufferIter.first->id << " "
@@ -429,7 +469,7 @@ private:
     }
   }
 
-  void dumpAllocationSize() {
+  void dumpAllocationSize() const {
     LDBG("Dump shared memory allocation size -----------");
     auto liveBuffers = allocation->getLiveBuffers();
     auto analyzedSize = 0;
@@ -445,7 +485,7 @@ private:
                  << ", analyzed: " << analyzedSize << "\n";
   }
 
-  void dumpInterferenceGraph(const GraphT &interference) {
+  void dumpInterferenceGraph(const GraphT &interference) const {
     LDBG("\n");
     LDBG("Dump interference graph: \n");
     for (auto edges : interference) {
@@ -572,7 +612,21 @@ private:
         Interval ySizeRange = {yStart, yStart + ySize};
         auto xOpRange = bufferRange.lookup(x);
         auto yOpRange = bufferRange.lookup(y);
+
+        // Buffers interfere if their allocation offsets overlap and they are
+        // live at the same time.
         if (xOpRange.intersects(yOpRange) &&
+            xSizeRange.intersects(ySizeRange)) {
+          interference[x].insert(y);
+        }
+
+        // Buffers also interfere if their allocation offsets overlap and they
+        // exist within regions that may execute simultaneously with respect to
+        // each other.
+        auto wsx = x->owner->getParentWithTrait<OpTrait::AsyncRegions>();
+        auto wsy = y->owner->getParentWithTrait<OpTrait::AsyncRegions>();
+        if (wsx && wsy && wsx == wsy &&
+            x->owner->getParentRegion() != y->owner->getParentRegion() &&
             xSizeRange.intersects(ySizeRange)) {
           interference[x].insert(y);
         }

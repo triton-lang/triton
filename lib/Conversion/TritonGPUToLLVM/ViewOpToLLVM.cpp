@@ -137,29 +137,46 @@ struct JoinOpConversion : public ConvertOpToLLVMPattern<JoinOp> {
     // We rely on the following invariants of this op (which are checked by its
     // verifier):
     //
-    // - The op has a blocked encoding.
     // - The last dimension (the one we're joining) is also the most minor
     //   dimension.
     // - The input and output encodings are the same, except the output has
     //   2 elements per thread in the last dim.
     //
-    // With these invariants, join is trivial: We just return the i'th element
-    // from lhs, followed by the i'th elem from rhs.
+    // With these invariants, join is trivial: We can count how many contiguous
+    // registers belong to the same chunk then we merge the registers between
+    // two different chunks.
     Location loc = op->getLoc();
-    auto resultTy = cast<RankedTensorType>(op.getType());
-    auto typeConverter = getTypeConverter();
+    RankedTensorType dstTy = op.getType();
+    auto ll = toLinearLayout(dstTy.getShape(), dstTy.getEncoding());
+    int splitDim = dstTy.getRank() - 1;
+    auto kReg = mlir::StringAttr::get(dstTy.getContext(), "register");
+    const auto &bases = ll.getBases();
+    const auto &regs = bases.find(kReg)->second;
+    int numContiguousValues = 1;
+    bool found = false;
+    for (const auto &reg : regs) {
+      if (reg[splitDim] == 1) {
+        found = true;
+        break;
+      }
+      numContiguousValues *= 2;
+    }
+    assert(found && "Join dimension is not distributed along registers.");
     SmallVector<Value> lhsVals =
         unpackLLElements(loc, adaptor.getLhs(), rewriter);
     SmallVector<Value> rhsVals =
         unpackLLElements(loc, adaptor.getRhs(), rewriter);
     assert(lhsVals.size() == rhsVals.size());
     SmallVector<Value> joinedVals;
-    for (int i = 0; i < lhsVals.size(); i++) {
-      joinedVals.push_back(lhsVals[i]);
-      joinedVals.push_back(rhsVals[i]);
+    joinedVals.resize(lhsVals.size() * 2);
+    for (int i = 0; i < lhsVals.size(); i += numContiguousValues) {
+      for (int j = 0; j < numContiguousValues; j++) {
+        joinedVals[2 * i + j] = lhsVals[i + j];
+        joinedVals[2 * i + numContiguousValues + j] = rhsVals[i + j];
+      }
     }
-    Value ret =
-        packLLElements(loc, typeConverter, joinedVals, rewriter, resultTy);
+    auto typeConverter = getTypeConverter();
+    Value ret = packLLElements(loc, typeConverter, joinedVals, rewriter, dstTy);
     rewriter.replaceOp(op, ret);
     return success();
   }
@@ -173,22 +190,29 @@ struct SplitOpConversion : public ConvertOpToLLVMPattern<SplitOp> {
     // We rely on the following invariants of this op (which are checked by its
     // verifier):
     //
-    // - The op has a blocked encoding.
+    // - The layout distribute the last dimension along registers
     // - The last dimension (the one we're splitting) has sizePerThread=2,
     // threadPerWarp=1 and warpPerBlock=1.
     //
     // With these invariants, split is trivial: We can count how many contiguous
     // registers belong to the same chunk then we separate the registers between
     // two different chunks.
+    auto srcTy = cast<RankedTensorType>(op.getSrc().getType());
+    auto ll = toLinearLayout(srcTy.getShape(), srcTy.getEncoding());
+    int splitDim = srcTy.getRank() - 1;
+    auto kReg = mlir::StringAttr::get(srcTy.getContext(), "register");
+    const auto &bases = ll.getBases();
+    const auto &regs = bases.find(kReg)->second;
     int numContiguousValues = 1;
-    auto encoding = cast<BlockedEncodingAttr>(
-        cast<RankedTensorType>(op.getSrc().getType()).getEncoding());
-    int splitDim = encoding.getOrder().size() - 1;
-    for (int i = 0; i < encoding.getOrder().size(); i++) {
-      if (encoding.getOrder()[i] == splitDim)
+    bool found = false;
+    for (const auto &reg : regs) {
+      if (reg[splitDim] == 1) {
+        found = true;
         break;
-      numContiguousValues *= encoding.getSizePerThread()[i];
+      }
+      numContiguousValues *= 2;
     }
+    assert(found && "Split dimension is not distributed along registers.");
     Location loc = op->getLoc();
     auto typeConverter = getTypeConverter();
     SmallVector<Value> srcVals =
@@ -369,7 +393,7 @@ struct MemDescSubviewOpConversion
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto srcTy = op.getSrc().getType();
     auto llvmElemTy = getTypeConverter()->convertType(srcTy.getElementType());
-    auto layoutOrder = getOrder(srcTy.getEncoding());
+    auto layoutOrder = getOrder(srcTy);
 
     // newBase = base + offset
     auto smemObj = getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),

@@ -13,6 +13,7 @@ target_link_libraries(triton-opt PRIVATE
   # tests
   TritonTestAnalysis
   TritonTestDialectTritonGPU
+  TritonAMDGPUTestAnalysis
   TritonTestProton
   # MLIR core
   MLIROptLib
@@ -33,6 +34,7 @@ target_link_libraries(triton-reduce PRIVATE
   # tests
   TritonTestAnalysis
   TritonTestDialectTritonGPU
+  TritonAMDGPUTestAnalysis
   TritonTestProton
   # MLIR core
   MLIRReduceLib
@@ -52,6 +54,7 @@ target_link_libraries(triton-lsp PRIVATE
   # tests
   TritonTestAnalysis
   TritonTestDialectTritonGPU
+  TritonAMDGPUTestAnalysis
   TritonTestProton
   # MLIR core
   MLIRLspServerLib
@@ -90,4 +93,5 @@ target_link_libraries(triton-tensor-layout PRIVATE
   TritonTestAnalysis
   TritonTestProton
   TritonTestDialectTritonGPU
+  TritonAMDGPUTestAnalysis
   )

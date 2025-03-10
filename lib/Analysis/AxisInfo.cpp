@@ -1218,44 +1218,51 @@ void AxisInfo::initPessimisticStateFromFunc(int argNumber, T funcOp,
   return AxisInfo(contiguity, divisibility, constancy, constantValue);
 }
 
-unsigned ModuleAxisInfoAnalysis::getPtrContiguity(Value ptr) {
-  auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
+unsigned ModuleAxisInfoAnalysis::getContiguity(Value value) {
+  auto tensorTy = dyn_cast<RankedTensorType>(value.getType());
   if (!tensorTy)
     return 1;
-  auto layout = tensorTy.getEncoding();
+  // FIXME: This is not as good as it could be, as we don't need to restrict
+  // the analysis to one dimension. We should determine contiguity on the
+  // flattenOuts() layout
+  auto linAttr =
+      gpu::toLinearEncoding(tensorTy.getEncoding(), tensorTy.getShape());
+  auto order = linAttr.getOrder();
+  unsigned align = getAlignment(value);
 
-  // Here order should be ordered by contiguous first, so the first element
-  // should have the largest contiguous.
-  auto order = triton::gpu::getOrder(layout);
-  unsigned align = getPtrAlignment(ptr);
-
-  auto uniqueContigPerThread =
-      triton::gpu::getUniqueContigPerThread(layout, tensorTy.getShape());
+  auto uniqueContigPerThread = linAttr.getContigPerThread();
   assert(order[0] < uniqueContigPerThread.size() &&
          "Unexpected uniqueContigPerThread size");
   unsigned contiguity = uniqueContigPerThread[order[0]];
-  LDBG("getPtrContiguity uniqueContigPerThread = " << contiguity);
+  LDBG("getContiguity uniqueContigPerThread = " << contiguity);
   contiguity = std::min(align, contiguity);
 
   return contiguity;
 }
 
-unsigned ModuleAxisInfoAnalysis::getPtrAlignment(Value ptr) {
-  auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
+unsigned ModuleAxisInfoAnalysis::getAlignment(Value value) {
+  auto tensorTy = dyn_cast<RankedTensorType>(value.getType());
   if (!tensorTy)
     return 1;
-  auto *axisInfo = getAxisInfo(ptr);
+  auto *axisInfo = getAxisInfo(value);
   if (!axisInfo)
     return 1;
-  auto layout = tensorTy.getEncoding();
-  auto order = triton::gpu::getOrder(layout);
+  auto linAttr =
+      gpu::toLinearEncoding(tensorTy.getEncoding(), tensorTy.getShape());
+  auto order = linAttr.getOrder();
   auto maxMultipleBytes = axisInfo->getDivisibility(order[0]);
   auto maxContig = axisInfo->getContiguity(order[0]);
-  auto elemNumBits = triton::getPointeeBitWidth(tensorTy);
+
+  auto elemTy = tensorTy.getElementType();
+  // Get the pointee type if we have a tensor of ptrs to compute contiguity for
+  if (auto ptrTy = dyn_cast<PointerType>(elemTy)) {
+    elemTy = ptrTy.getPointeeType();
+  }
+  auto elemNumBits = elemTy.getIntOrFloatBitWidth();
   auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
   auto maxMultiple = std::max<int64_t>(maxMultipleBytes / elemNumBytes, 1);
   unsigned alignment = std::min(maxMultiple, maxContig);
-  LDBG("getPtrAlignment order[0] "
+  LDBG("getAlignment order[0] "
        << order[0] << " maxMultipleBytes = " << maxMultipleBytes
        << " maxContig = " << maxContig << " elemNumBits = " << elemNumBits
        << " maxMultiple = " << maxMultiple << " alignment " << alignment);
@@ -1275,7 +1282,9 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
   auto *axisInfo = getAxisInfo(mask);
   if (!axisInfo)
     return 1;
-  auto maskOrder = triton::gpu::getOrder(tensorTy.getEncoding());
+  auto linAttr =
+      gpu::toLinearEncoding(tensorTy.getEncoding(), tensorTy.getShape());
+  auto maskOrder = linAttr.getOrder();
   auto alignment = std::max<unsigned>(axisInfo->getConstancy(maskOrder[0]), 1);
   LDBG("getMaskAlignment maskOrder[0] " << maskOrder[0] << " alignment "
                                         << alignment);
@@ -1291,8 +1300,15 @@ unsigned ModuleAxisInfoAnalysis::getMaskAlignment(Value mask) {
 void ModuleAxisInfoAnalysis::initialize(FunctionOpInterface funcOp) {
   std::unique_ptr<DataFlowSolver> solver = createDataFlowSolver();
   AxisInfoAnalysis *analysis = solver->load<AxisInfoAnalysis>();
-  if (failed(solver->initializeAndRun(funcOp)))
+  WalkResult result = funcOp.walk([&](Operation *op) {
+    if (op->hasTrait<OpTrait::IsIsolatedFromAbove>() &&
+        failed(solver->initializeAndRun(op)))
+      return WalkResult::interrupt();
+    return WalkResult::advance();
+  });
+  if (result.wasInterrupted())
     return;
+
   auto *axisInfoMap = getFuncData(funcOp);
   auto updateAxisInfoMap = [&](Value value) {
     auto axisInfo = analysis->getLatticeElement(value)->getValue();

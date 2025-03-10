@@ -65,12 +65,12 @@ struct ExtractSliceOpConversion
     auto resultTy = cast<RankedTensorType>(op.getType());
     auto vals = unpackLLElements(loc, adaptor.getSource(), rewriter);
     auto elemsPerThread = triton::gpu::getElemsPerThread(srcTy);
-    auto sizePerThread = triton::gpu::getSizePerThread(srcLayout);
-    auto totalSizePerThread = product<unsigned>(sizePerThread);
-    auto order = triton::gpu::getOrder(srcLayout);
+    auto contigPerThread = triton::gpu::getContigPerThread(srcTy);
+    auto totalContigPerThread = product<unsigned>(contigPerThread);
+    auto order = triton::gpu::getOrder(srcTy);
 
     // Calculate valid total number of workers in each dimension
-    auto shapePerCTATile = triton::gpu::getShapePerCTATile(srcLayout);
+    auto shapePerCTATile = triton::gpu::getShapePerCTATile(srcTy);
     shapePerCTATile[0] =
         std::min(static_cast<unsigned>(srcShape[0]), shapePerCTATile[0]);
     shapePerCTATile[1] =
@@ -94,21 +94,21 @@ struct ExtractSliceOpConversion
 
     // The diagram above illustrates the graphical representation of the
     // skipElems, tensorStride, and lastIdx variables.
-    auto skipElems = CTAOffsets[order[1]] *
-                         (elemsPerThread[order[0]] * sizePerThread[order[1]]) +
-                     CTAOffsets[order[0]] * totalSizePerThread;
+    auto skipElems = CTAOffsets[order[1]] * (elemsPerThread[order[0]] *
+                                             contigPerThread[order[1]]) +
+                     CTAOffsets[order[0]] * totalContigPerThread;
     auto tensorStride =
-        (CTAPerShape[order[0]] - CTASizes[order[0]]) * totalSizePerThread;
+        (CTAPerShape[order[0]] - CTASizes[order[0]]) * totalContigPerThread;
     auto lastIdx =
         (CTAOffsets[order[1]] + CTASizes[order[1]] - 1) *
-            elemsPerThread[order[0]] * sizePerThread[order[1]] +
-        (CTAOffsets[order[0]] + CTASizes[order[0]]) * totalSizePerThread;
+            elemsPerThread[order[0]] * contigPerThread[order[1]] +
+        (CTAOffsets[order[0]] + CTASizes[order[0]]) * totalContigPerThread;
 
     assert(lastIdx <= vals.size());
 
     SmallVector<Value> resultVals;
     for (int i = skipElems; i < lastIdx; i += tensorStride) {
-      for (int j = 0; j < totalSizePerThread * CTASizes[order[0]]; ++j, ++i) {
+      for (int j = 0; j < totalContigPerThread * CTASizes[order[0]]; ++j, ++i) {
         assert(i < lastIdx);
         resultVals.push_back(vals[i]);
       }

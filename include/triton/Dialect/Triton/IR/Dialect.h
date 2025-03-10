@@ -71,11 +71,13 @@ public:
                         Attribute got, std::optional<Location> loc) const = 0;
 
   virtual LogicalResult
-  inferJoinOpEncoding(Attribute srcEnc, Attribute &dstEnc,
-                      std::optional<Location> loc) const = 0;
+  inferDefaultJoinOpEncoding(Attribute srcEnc, Attribute &dstEnc,
+                             ArrayRef<int64_t> shape,
+                             std::optional<Location> loc) const = 0;
 
   virtual LogicalResult
   inferSplitOpEncoding(Attribute srcEnc, Attribute &dstEnc,
+                       ArrayRef<int64_t> shape,
                        std::optional<Location> loc) const = 0;
 
   // Verify that the encoding are compatible to be used together in a dot
@@ -83,6 +85,11 @@ public:
   virtual LogicalResult
   verifyDotOpEncodingCompatibility(Operation *op, Attribute operandEncodingA,
                                    Attribute operandEncodingB) const = 0;
+
+  virtual LogicalResult
+  inferFp4ToFpOpEncoding(ArrayRef<int64_t> shape, int axis, Attribute inEnc,
+                         Attribute &outEnc, bool fwdInference,
+                         std::optional<Location> loc) const = 0;
 };
 
 class DialectVerifyTensorLayoutInterface
@@ -91,7 +98,7 @@ public:
   DialectVerifyTensorLayoutInterface(Dialect *dialect) : Base(dialect) {}
 
   virtual LogicalResult
-  verifyTensorLayout(Attribute layout, RankedTensorType type, ModuleOp module,
+  verifyTensorLayout(Attribute layout, RankedTensorType type, Operation *op,
                      function_ref<InFlightDiagnostic()> emitError) const = 0;
 };
 

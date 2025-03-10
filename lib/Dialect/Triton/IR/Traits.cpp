@@ -21,7 +21,8 @@ LogicalResult OpTrait::impl::verifyEquivalentType(Type typeA, Type typeB) {
   auto shapeB = tensorTypeB.getShape();
   if (shapeA != shapeB)
     return failure();
-
+  if (tensorTypeA.getElementType() != tensorTypeB.getElementType())
+    return failure();
   // If there's no encoding or the encodings are the same
   if (encodingA == encodingB)
     return success();
@@ -126,7 +127,6 @@ LogicalResult OpTrait::impl::verifyTensorSize(Operation *op) {
 // on the op.  They do depend on the *module*, though, and a layout is attached
 // to a module only by virtue of being used in one of the module's ops.
 LogicalResult OpTrait::impl::verifyTensorLayouts(Operation *op) {
-  auto module = op->getParentOfType<ModuleOp>();
   auto checkLayout = [&](Value val, auto makeErr) -> LogicalResult {
     // Only ranked tensors can have layouts.
     auto rankedTy = dyn_cast<RankedTensorType>(val.getType());
@@ -141,7 +141,7 @@ LogicalResult OpTrait::impl::verifyTensorLayouts(Operation *op) {
     auto verifyLayoutInterface =
         dyn_cast<mlir::triton::DialectVerifyTensorLayoutInterface>(&dialect);
     if (verifyLayoutInterface) {
-      return verifyLayoutInterface->verifyTensorLayout(layout, rankedTy, module,
+      return verifyLayoutInterface->verifyTensorLayout(layout, rankedTy, op,
                                                        makeErr);
     }
 

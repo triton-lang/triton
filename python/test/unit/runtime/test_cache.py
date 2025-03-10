@@ -1,5 +1,6 @@
 import importlib.util
 import itertools
+import os
 import shutil
 import pathlib
 
@@ -223,7 +224,7 @@ def test_kernel_default_arg(device):
     assert len(kernel.device_caches[device][0]) == 1
 
 
-GLOBAL_VAR: tl.constexpr = 1
+GLOBAL_VAR = tl.constexpr(1)
 
 
 def test_kernel_global_var_change(device):
@@ -263,7 +264,7 @@ def test_local_shadows_global():
     kernel[(1, )]()
 
 
-CONSTEXPR_GLOBAL: tl.constexpr = 42
+CONSTEXPR_GLOBAL = tl.constexpr(42)
 
 
 def test_local_does_not_shadow_global():
@@ -274,9 +275,9 @@ def test_local_does_not_shadow_global():
         a = CONSTEXPR_GLOBAL  # noqa
         _, CONSTEXPR_GLOBAL = 0, 0  # noqa
 
-    CONSTEXPR_GLOBAL = 42
+    CONSTEXPR_GLOBAL = tl.constexpr(42)
     kernel[(1, )]()
-    CONSTEXPR_GLOBAL = 43
+    CONSTEXPR_GLOBAL = tl.constexpr(43)
 
     # Error because the `CONSTEXPR_GLOBAL` we're modifying is the same
     # `CONSTEXPR_GLOBAL` that's read inside `kernel`.  (Alternatively, we could
@@ -288,7 +289,7 @@ def test_local_does_not_shadow_global():
         kernel[(1, )]()
 
 
-CONFLICTING_GLOBAL: tl.constexpr = 0
+CONFLICTING_GLOBAL = tl.constexpr(0)
 
 
 @triton.jit
@@ -553,28 +554,45 @@ def test_hooks(device, fresh_triton_cache) -> None:
 
 @pytest.mark.skipif(reason="within_2g is a HIP specific optimization", condition=not is_hip())
 def test_within_2gb(device, fresh_triton_cache) -> None:
+    default_buffer_ops = os.environ.get("AMDGCN_USE_BUFFER_OPS", "0")
+    from triton.backends import backends
 
-    @triton.jit
-    def kernel_add(a):
-        tl.load(a)
+    amd_backend = backends["amd"]
+    try:
+        use_buffer_ops_opts = ["1", "0"]
+        # The ranges should only be available when buffer ops are enabled
+        pointer_ranges = [[(0, )], []]
+        for use_buffer_ops, pointer_range in zip(use_buffer_ops_opts, pointer_ranges):
+            # Set AMDGCN_USE_BUFFER_OPS
+            amd_backend.compiler.use_buffer_ops.cache_clear()
+            os.environ["AMDGCN_USE_BUFFER_OPS"] = use_buffer_ops
 
-    # This is the attribute we want to test
-    pointer_range_32 = None
+            @triton.jit
+            def kernel_add(a):
+                tl.load(a)
 
-    def cache_hook(*args, **kwargs):
-        nonlocal pointer_range_32
-        pointer_range_32 = [k for k, v in kwargs["compile"]["configs"][0].items() if ['tt.pointer_range', 32] in v]
+            # This is the attribute we want to test
+            pointer_range_32 = None
 
-    JITFunction.cache_hook = cache_hook
-    # In warmup we assume that the pointer range is 32 bits
-    kernel_add.warmup(torch.float32, grid=(1, ))
-    assert pointer_range_32 == [(0, )]
-    # Torch tensor > 2GB
-    kernel_add[(1, 0)](torch.empty(2**31, dtype=torch.int8, device=device))
-    assert len(pointer_range_32) == 0
-    # Torch tensor <= 2GB
-    kernel_add[(1, 0)](torch.empty(2**31 - 1, dtype=torch.int8, device=device))
-    assert pointer_range_32 == [(0, )]
+            def cache_hook(*args, **kwargs):
+                nonlocal pointer_range_32
+                pointer_range_32 = [
+                    k for k, v in kwargs["compile"]["configs"][0].items() if ["tt.pointer_range", 32] in v
+                ]
+
+            JITFunction.cache_hook = cache_hook
+            # In warmup we assume that the pointer range is 32 bits
+            kernel_add.warmup(torch.float32, grid=(1, ))
+            assert pointer_range_32 == pointer_range
+            # Torch tensor > 2GB
+            kernel_add[(1, 0)](torch.empty(2**31, dtype=torch.int8, device=device))
+            assert len(pointer_range_32) == 0
+            # Torch tensor <= 2GB
+            kernel_add[(1, 0)](torch.empty(2**31 - 1, dtype=torch.int8, device=device))
+            assert pointer_range_32 == pointer_range
+    finally:
+        amd_backend.compiler.use_buffer_ops.cache_clear()
+        os.environ["AMDGCN_USE_BUFFER_OPS"] = default_buffer_ops
 
 
 def test_function_arguments(device):

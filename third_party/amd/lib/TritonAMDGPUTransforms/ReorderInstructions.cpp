@@ -131,77 +131,6 @@ static void sinkDotConversion(triton::FuncOp funcOp) {
     kv.first->moveBefore(kv.second);
 }
 
-// Adjust the placement of shared memory writes and reads to immediately follow
-// the definition of their operands in case where shared memory write is in the
-// loop but its operand is not.
-//
-// This is a heuristic driven by optimizing fused attention by hoisting Q tensor
-// shared memory read/write operations outside of the loop, as Q is a loop
-// invariant and can be loaded once before entering the loop. But it should be
-// generally applicable.
-//
-// There are two possible patterns for this adjustment depending on whether the
-// write to shared memory is performed using an optional `local_alloc` argument
-// or a `local_store` instruction.
-//
-// 1) %1 = some_op ... (typically a load or an operation that scales the tensor
-//                      after loading)
-//    %2 = local_alloc %1
-//    %3 = local_load %2
-//
-// 2) %1 = some_op ...
-//    %2 = local_alloc
-//    %3 = local_store %1, %2
-//    %4 = local_load %2
-static void hoistLocalLoad(triton::FuncOp funcOp) {
-  funcOp.walk([&](ttg::LocalLoadOp localLoad) {
-    auto localAlloc = localLoad.getSrc().getDefiningOp<ttg::LocalAllocOp>();
-    if (!localAlloc)
-      return;
-
-    // Case when localAlloc has operands
-    if (localAlloc->getNumOperands() == 1) {
-      if (!localAlloc->hasOneUse())
-        return;
-
-      auto srcTensorOp = localAlloc.getSrc().getDefiningOp();
-      // Check if localAlloc is in the loop but it's src tensor defining op is
-      // outside of it.
-      if (!srcTensorOp || !isCrossLoopBoundary(localAlloc, srcTensorOp))
-        return;
-
-      localAlloc->moveAfter(srcTensorOp);
-      localLoad->moveAfter(localAlloc);
-      return;
-    }
-
-    // Case when localAlloc has no operands
-    assert(localAlloc->getNumOperands() < 1);
-    auto allocVal = localAlloc->getResult(0);
-
-    // Check if the localAlloc has exactly two uses (localStore and localLoad)
-    int numUses = std::distance(allocVal.use_begin(), allocVal.use_end());
-    if (numUses != 2)
-      return;
-
-    // localStore comes before localLoad in block.
-    Operation *localStore = getFirstUseInSameBlock(localAlloc);
-    if (!isa<ttg::LocalStoreOp>(localStore))
-      return;
-
-    auto srcTensorOp = localStore->getOperand(0).getDefiningOp();
-    // Check if localStore is in the loop but it's src tensor defining op is
-    // outside of it.
-    if (!srcTensorOp || !isCrossLoopBoundary(localStore, srcTensorOp)) {
-      return;
-    }
-
-    localAlloc->moveAfter(srcTensorOp);
-    localStore->moveAfter(localAlloc);
-    localLoad->moveAfter(localStore);
-  });
-}
-
 // Sink conversion after the last dealloc but before the first use in its block.
 // This helps to avoid unnecessary shared memory allocation.
 static void moveDownCoversion(triton::FuncOp funcOp) {
@@ -367,13 +296,21 @@ static void sinkSecondLoad(scf::ForOp forOp) {
   // Only apply the optimization when there are 2 load's in the loop
   if (loadOps.size() != 2)
     return;
+
+  auto ldAOp = loadOps[0];
+  auto loadAType = dyn_cast<RankedTensorType>(ldAOp.getType());
+  auto ldBOp = loadOps[1];
+  auto loadBType = dyn_cast<RankedTensorType>(ldBOp.getType());
+  // Only apply the optimization when loading a 2D tensor
+  if (!loadAType || !loadBType)
+    return;
+  auto tileAShape = loadAType.getShape();
+  auto tileBShape = loadBType.getShape();
+  if (tileAShape.size() != 2 || tileBShape.size() != 2)
+    return;
   // Only apply the optimization when tile size is large enough
   // 1. nonKDim >= 128
   // 2. kDim >= 64
-  auto ldAOp = loadOps[0];
-  auto tileAShape = cast<RankedTensorType>(ldAOp.getType()).getShape();
-  auto ldBOp = loadOps[1];
-  auto tileBShape = cast<RankedTensorType>(ldBOp.getType()).getShape();
   if (!(tileAShape[0] >= 128 && tileAShape[1] >= 64 && tileBShape[1] >= 128))
     return;
   // Only apply the optimization when the moving is legal
@@ -401,8 +338,6 @@ struct TritonAMDGPUReorderInstructionsPass
   void runOnOperation() override {
     ModuleOp m = getOperation();
     for (auto funcOp : m.getOps<triton::FuncOp>()) {
-      hoistLocalLoad(funcOp);
-
       sinkDotConversion(funcOp);
       moveDownCoversion(funcOp);
 

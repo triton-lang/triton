@@ -7,7 +7,7 @@ import triton
 import triton.language as tl
 from triton.compiler.errors import CompilationError, CompileTimeAssertionFailure
 import traceback
-from triton._internal_testing import is_cuda, is_hip, is_hip_mi300
+from triton._internal_testing import is_cuda, is_hip, is_hip_mi300, is_hip_mi350
 
 
 def format_exception(type, value, tb):
@@ -300,7 +300,11 @@ def test_constexpr_annotated_global_var_access():
         a = CONSTEXPR_ANNOTATED_GLOBAL  # noqa
 
     # No error.
-    triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constexprs={}))
+    try:
+        triton.compile(triton.compiler.ASTSource(fn=kernel, signature={}, constexprs={}))
+        assert False, "Using a constexpr annotated global variable should not be allowed"
+    except CompilationError as e:
+        assert "Cannot access global variable" in str(e)
 
 
 CONSTEXPR_GLOBAL = tl.constexpr(42)
@@ -375,6 +379,8 @@ def test_fp8_support(fresh_triton_cache, dtype):
     elif is_hip():
         if is_hip_mi300():
             supported_dtypes += [tl.float8e4nv, tl.float8e4b8, tl.float8e5b16]
+        if is_hip_mi350():
+            supported_dtypes += [tl.float8e4nv]
 
     @triton.jit
     def dtype_kernel(dtype: tl.constexpr):

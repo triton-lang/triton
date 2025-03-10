@@ -63,8 +63,7 @@ tt.func public @fn(%arg0: tensor<32x32xf32>, %arg1: tensor<32x32xf16>) {
 // -----
 
 tt.func public @fn(%arg0: tensor<32xf32>, %arg1: tensor<32xf32>) {
-    // expected-error @+2 {{op failed to infer returned types}}
-    // expected-error @+1 {{incompatible with return type}}
+    // expected-error @+1 {{op result shape must be (32, 2), but got 64}}
     %a = tt.join %arg0, %arg1 : tensor<32xf32> -> tensor<64xf32>
     tt.return
 }
@@ -72,8 +71,7 @@ tt.func public @fn(%arg0: tensor<32xf32>, %arg1: tensor<32xf32>) {
 // -----
 
 tt.func public @fn(%arg0: tensor<32x32xf32>, %arg1: tensor<32x32xf32>) {
-    // expected-error @+2 {{op failed to infer returned types}}
-    // expected-error @+1 {{incompatible with return type}}
+    // expected-error @+1 {{result shape must be (32, 32, 2), but got 32, 64}}
     %a = tt.join %arg0, %arg1 : tensor<32x32xf32> -> tensor<32x64xf32>
     tt.return
 }
@@ -160,8 +158,7 @@ tt.func public @fn(%v1: tensor<4x128xf32>, %v2: tensor<4x128xi64>) {
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0], CTAsPerCGA = [1], CTASplitNum = [1], CTAOrder = [0]}>
 module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
 tt.func public @fn(%arg0: tensor<32xf32, #blocked>) {
-    // expected-error @+2 {{op failed to infer returned types}}
-    // expected-error @+1 {{incompatible with return type}}
+    // expected-error @+1 {{op result encoding must be specified}}
     %a = tt.join %arg0, %arg0 : tensor<32xf32, #blocked> -> tensor<32x2xf32>
     tt.return
 }
@@ -170,12 +167,11 @@ tt.func public @fn(%arg0: tensor<32xf32, #blocked>) {
 // -----
 
 // Bad order; should be [1,0]
-#blocked  = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+#blocked  = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1,2], threadsPerWarp = [32,1], warpsPerCTA = [1,1], order = [0,1]}>
 module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 32 : i32} {
 tt.func public @fn(%arg0: tensor<32xf32, #blocked>) {
-    // expected-error @+2 {{order}}
-    // expected-error @+1 {{op failed to infer returned types}}
+    // expected-error @+1 {{op incompatible join layout}}
     %a = tt.join %arg0, %arg0 : tensor<32xf32, #blocked> -> tensor<32x2xf32, #blocked1>
     tt.return
 }
@@ -215,7 +211,7 @@ tt.func public @fn(%arg0: tensor<2xf32>) {
 
 // -----
 
-#blocked  = #ttg.blocked<{sizePerThread = [1,1,2], threadsPerWarp = [1,32,1], warpsPerCTA = [1,1,1], order = [2,0,1]}>
+#blocked  = #ttg.blocked<{sizePerThread = [1,2,2], threadsPerWarp = [1,32,1], warpsPerCTA = [1,1,1], order = [2,0,1]}>
 // Bad order, should be [1,0].
 #blocked1 = #ttg.blocked<{sizePerThread = [1,1], threadsPerWarp = [1,32], warpsPerCTA = [1,1], order = [1,0]}>
 
@@ -409,7 +405,7 @@ tt.func @gather_op(%arg0: tensor<128x16xf32>, %arg1: tensor<512x4xi32>) {
 
 tt.func @invalid_desc_load(%arg0: !tt.tensordesc<tensor<16x16xf32>>) {
   %c = arith.constant 0 : i32
-  // expected-error @below {{tensor desciptor block and tensor types must match}}
+  // expected-error @below {{ranked reduce load only allowed for unit dimension leading dim}}
   tt.experimental_descriptor_load %arg0[%c, %c] : !tt.tensordesc<tensor<16x16xf32>> -> tensor<16xf32>
   tt.return
 }

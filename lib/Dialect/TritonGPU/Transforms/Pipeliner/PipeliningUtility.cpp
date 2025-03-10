@@ -54,7 +54,7 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     return op;
   if (isa<ttg::LocalLoadOp, ttg::LocalStoreOp>(op))
     return op;
-  if (isa<ttng::TMEMAllocOp, ttng::TMEMCopyOp>(op))
+  if (isa<ttng::TMEMAllocOp>(op))
     return op;
   if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
     rewriter.setInsertionPoint(op);
@@ -142,48 +142,6 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
   return op;
 }
 
-/// Helper to recursively add dependencies to the same stage.
-void mlir::triton::addDep(Operation *op, DenseSet<Operation *> &deps,
-                          bool includeArg, DenseSet<Operation *> *filter) {
-  if (filter && filter->count(op))
-    return;
-  if (!deps.insert(op).second)
-    return;
-  for (Value operand : op->getOperands()) {
-    Value v = operand;
-    llvm::SmallDenseSet<Value> seen;
-    while (auto arg = mlir::dyn_cast<BlockArgument>(v)) {
-      if (!includeArg)
-        break;
-      if (!seen.insert(v).second)
-        break;
-      if (arg.getArgNumber() > 0 && arg.getOwner() == op->getBlock()) {
-        auto yieldOp = op->getBlock()->getTerminator();
-        v = yieldOp->getOperand(arg.getArgNumber() - 1);
-        continue;
-      }
-      break;
-    }
-    Operation *defOp = v.getDefiningOp();
-    if (defOp && defOp->getBlock() == op->getBlock()) {
-      addDep(defOp, deps, includeArg, filter);
-    }
-  }
-}
-
-// Add operations to the schedule with the given stage based on the filter
-// function.
-void mlir::triton::addOps(
-    scf::ForOp forOp, int stage,
-    std::vector<std::pair<Operation *, unsigned>> &schedule,
-    std::function<bool(Operation *)> filter) {
-  for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (!filter(&op))
-      continue;
-    schedule.emplace_back(&op, stage);
-  }
-}
-
 void mlir::triton::replaceUsesAndPropagateType(OpBuilder &builder,
                                                Operation *oldUse, Value val) {
   SmallVector<Operation *> opsToDelete;
@@ -240,47 +198,110 @@ bool mlir::triton::getDisallowAccMultiBuffer(scf::ForOp forOp) {
   return forOp->hasAttr(mlir::triton::kDisallowAccMultiBufferAttrName);
 }
 
-std::optional<std::pair<int, int>>
-mlir::triton::maybeGetStageCluster(Operation *op) {
-  auto stage =
-      dyn_cast_if_present<IntegerAttr>(op->getAttr(tt::kLoopStageAttrName));
-  auto clusterId =
-      dyn_cast_if_present<IntegerAttr>(op->getAttr(tt::kLoopClusterAttrName));
-  if (!stage || !clusterId) {
-    return std::nullopt;
-  }
-
-  return {
-      {stage.getValue().getSExtValue(), clusterId.getValue().getSExtValue()}};
-}
-std::pair<int, int> mlir::triton::getStageCluster(Operation *op) {
-  auto res = maybeGetStageCluster(op);
-  assert(res.has_value() || "Operation is missing stage & cluster attribute");
-  return *res;
-}
-
-void mlir::triton::setStageCluster(Operation *op, int stage, int cluster) {
-  auto ctx = op->getContext();
-  op->setAttr(mlir::triton::kLoopStageAttrName,
-              IntegerAttr::get(IntegerType::get(ctx, 32), stage));
-  op->setAttr(mlir::triton::kLoopClusterAttrName,
-              IntegerAttr::get(IntegerType::get(ctx, 32), cluster));
-}
-
-std::pair<int, int> mlir::triton::getMinMaxCluster(scf::ForOp &forOp) {
-  int minClusterId = -1, maxClusterId = -1;
-  for (auto &op : forOp.getBody()->without_terminator()) {
-    if (!op.hasAttr(mlir::triton::kLoopStageAttrName) ||
-        !op.hasAttr(mlir::triton::kLoopClusterAttrName))
-      continue;
-    auto [_, cluster] = getStageCluster(&op);
-    if (maxClusterId < 0) {
-      minClusterId = cluster;
-      maxClusterId = cluster;
-      continue;
+void mlir::triton::visitNestedOperands(Operation *op,
+                                       function_ref<void(Value)> visitor) {
+  op->walk([&](Operation *nestedOp) {
+    for (Value operand : nestedOp->getOperands()) {
+      if (operand.getParentBlock()->getParentOp()->isProperAncestor(op))
+        visitor(operand);
     }
-    maxClusterId = cluster > maxClusterId ? cluster : maxClusterId;
-    minClusterId = cluster < minClusterId ? cluster : minClusterId;
+  });
+}
+
+SetVector<Value> mlir::triton::getNestedOperands(Operation *op) {
+  SetVector<Value> result;
+  visitNestedOperands(op, [&](Value operand) { result.insert(operand); });
+  return result;
+}
+
+int mlir::triton::getCopyVecBytes(RankedTensorType registerTy,
+                                  ttg::SharedEncodingTrait sharedEnc) {
+  auto regLayout = triton::gpu::toLinearLayout(registerTy.getShape(),
+                                               registerTy.getEncoding());
+  auto sharedLayout =
+      triton::gpu::toLinearLayout(registerTy.getShape(), sharedEnc);
+  auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
+  const int vecElems = regToSharedLayout.getNumConsecutiveInOut();
+  return vecElems * registerTy.getElementTypeBitWidth() / 8;
+}
+
+void mlir::triton::serializeLatencies(ModuleOp module,
+                                      DenseMap<Operation *, int> &opLatency) {
+  for (auto &[op, latency] : opLatency) {
+    op->setAttr(
+        kLatencyAttrName,
+        IntegerAttr::get(IntegerType::get(module.getContext(), 32), latency));
   }
-  return std::make_pair(minClusterId, maxClusterId);
+}
+
+DenseMap<Operation *, int> mlir::triton::deserializeLatencies(ModuleOp module) {
+  DenseMap<Operation *, int> opLatency;
+  module.walk([&](Operation *op) {
+    if (op->hasAttr(kLatencyAttrName)) {
+      opLatency[op] = op->getAttrOfType<IntegerAttr>(kLatencyAttrName).getInt();
+      op->removeAttr(kLatencyAttrName);
+    }
+  });
+  return opLatency;
+}
+
+// Create an allocation and init the mbarriers.
+Value mlir::triton::createBarrierAlloc(scf::ForOp forOp, int numBarriers) {
+  IRRewriter rewriter(forOp->getContext());
+  rewriter.setInsertionPoint(forOp);
+  MLIRContext *ctx = forOp.getContext();
+  Location loc = forOp.getLoc();
+  unsigned numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(
+      forOp->getParentOfType<ModuleOp>());
+  Attribute sharedMemorySpace = ttg::SharedMemorySpaceAttr::get(ctx);
+  auto barrierCTALayout = ttg::CTALayoutAttr::get(
+      /*context=*/ctx, /*CTAsPerCGA=*/{numCTAs},
+      /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
+  auto barrierEncoding =
+      ttg::SwizzledSharedEncodingAttr::get(ctx, 1, 1, 1, {0}, barrierCTALayout);
+  ttg::MemDescType barrierMemDescType = ttg::MemDescType::get(
+      {numBarriers}, rewriter.getI64Type(), barrierEncoding, sharedMemorySpace,
+      /*mutableMemory=*/true);
+  Value barrierAlloc =
+      rewriter.create<ttg::LocalAllocOp>(loc, barrierMemDescType, Value());
+  for (unsigned i = 0; i < numBarriers; i++) {
+    Value barrierView = createSingleBufferView(rewriter, barrierAlloc, i);
+    rewriter.create<ttng::InitBarrierOp>(forOp->getLoc(), barrierView, 1);
+  }
+  return barrierAlloc;
+}
+
+Value mlir::triton::createSingleBufferView(OpBuilder &builder, Value alloc,
+                                           Value idx) {
+  assert(isa<triton::gpu::MemDescType>(alloc.getType()) &&
+         "Expected MemDescType");
+  auto allocDescType = cast<triton::gpu::MemDescType>(alloc.getType());
+  SmallVector<int64_t> shape;
+  if (allocDescType.getShape().size() > 1) {
+    shape.insert(shape.end(), allocDescType.getShape().begin() + 1,
+                 allocDescType.getShape().end());
+  } else {
+    shape.push_back(1);
+  }
+  auto viewDescType = triton::gpu::MemDescType::get(
+      shape, allocDescType.getElementType(), allocDescType.getEncoding(),
+      allocDescType.getMemorySpace(), allocDescType.getMutableMemory(),
+      /*allocShape=*/allocDescType.getAllocShape());
+  SmallVector<Value> idxs = {idx};
+  if (allocDescType.getShape().size() > 1) {
+    Value zero =
+        builder.template create<arith::ConstantIntOp>(alloc.getLoc(), 0, 32);
+    for (unsigned i = 1; i < allocDescType.getShape().size(); i++) {
+      idxs.push_back(zero);
+    }
+  }
+  return builder.template create<triton::gpu::MemDescSubviewOp>(
+      alloc.getLoc(), viewDescType, alloc, idxs);
+}
+
+Value mlir::triton::createSingleBufferView(OpBuilder &builder, Value alloc,
+                                           int idx) {
+  return mlir::triton::createSingleBufferView(
+      builder, alloc,
+      builder.create<arith::ConstantIntOp>(alloc.getLoc(), idx, 32));
 }

@@ -38,32 +38,6 @@ static constexpr bool disableLDAcquireLowering = false;
 
 namespace {
 
-llvm::MapVector<StringAttr, int32_t> getAllFreeVarMasks(MLIRContext *ctx) {
-  // Mask where all elements are redundant
-  auto kReg = str_attr("reg");
-  auto kLane = str_attr("lane");
-  auto kWarp = str_attr("warp");
-  auto kBlock = str_attr("block");
-
-  int32_t fullMask = -1;
-  llvm::MapVector<StringAttr, int32_t> ret;
-  for (auto dimName : {kReg, kLane, kWarp, kBlock}) {
-    ret[dimName] = fullMask;
-  }
-  return ret;
-}
-
-llvm::MapVector<StringAttr, int32_t> getFreeVariableMasks(Type type) {
-  auto ctx = type.getContext();
-  auto tensorTy = dyn_cast<RankedTensorType>(type);
-  if (!tensorTy) {
-    return getAllFreeVarMasks(ctx);
-  }
-
-  auto ll = ttg::toLinearLayout(tensorTy.getShape(), tensorTy.getEncoding());
-  return ll.getFreeVariableMasks();
-}
-
 Value maybeAnd(RewriterBase &rewriter, Location loc, Value a, Value b) {
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
   if (a && b) {
@@ -85,11 +59,11 @@ Value emitRedundantThreadPredicate(
   auto kWarp = str_attr("warp");
   auto kBlock = str_attr("block");
 
-  auto warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(moduleOp);
-  auto emitBlockId = freeVarMasks.lookup(kBlock) != 0;
-  auto [laneId, warpId, blockId] =
-      emitHardwareTuple(loc, rewriter, targetInfo, emitBlockId, warpSize);
-  auto zero = b.i32_val(0);
+  Value zero = b.i32_val(0);
+  auto [laneId, warpId] = getLaneAndWarpId(rewriter, loc);
+  Value blockId = freeVarMasks.lookup(kBlock) == 0
+                      ? zero
+                      : targetInfo.getClusterCTAId(rewriter, loc);
 
   Value pred;
   auto dimNames = {kLane, kWarp, kBlock};
@@ -102,10 +76,6 @@ Value emitRedundantThreadPredicate(
     }
   }
   return pred;
-}
-
-bool isCanonicalIndex(unsigned index, unsigned freeVarMask) {
-  return (index & freeVarMask) == 0;
 }
 
 unsigned getCanonicalIndex(unsigned index, unsigned freeVarMask) {
@@ -139,7 +109,7 @@ struct LoadStoreConversionBase {
     auto tensorTy = dyn_cast<RankedTensorType>(ptr.getType());
     if (!tensorTy)
       return 1;
-    return axisAnalysisPass.getPtrContiguity(ptr);
+    return axisAnalysisPass.getContiguity(ptr);
   }
 
   unsigned getVectorSize(Value ptr) const {
@@ -1044,8 +1014,6 @@ struct AsyncCopyGlobalToLocalOpConversion
     auto dstTy = op.getResult().getType();
     auto resElemTy = getTypeConverter()->convertType(dstTy.getElementType());
     auto srcLayout = srcTy.getEncoding();
-    assert((isa<BlockedEncodingAttr, SliceEncodingAttr>(srcLayout) &&
-            "Unexpected srcLayout in AsyncCopyGlobalToLocalOpConversion"));
 
     Value llDst = adaptor.getResult();
     Value llSrc = adaptor.getSrc();
@@ -1200,8 +1168,8 @@ struct AsyncTMACopyGlobalToLocalOpConversion
     auto id = getThreadId(rewriter, loc);
 
     auto mod = op->getParentOfType<ModuleOp>();
-    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
-    int warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    int numWarps = ttg::lookupNumWarps(op);
+    int warpSize = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
     Value warpID = rewriter.create<nvgpu::WarpIdOp>(loc);
     Value pred = adaptor.getPred();
     // Select just one thread for the TMA copy. This also helps the compiler to
@@ -1296,8 +1264,8 @@ struct AsyncTMACopyLocalToGlobalOpConversion
     int64_t size = totalNumElements * elementSizeInBytes;
 
     auto mod = op->getParentOfType<ModuleOp>();
-    int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
-    int warpSize = triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+    int numWarps = ttg::lookupNumWarps(op);
+    int warpSize = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
     Value warpID = rewriter.create<nvgpu::WarpIdOp>(loc);
     int innerBlockSize = op.getSrc().getType().getShape().back();
     int contigDimSizeInByte = innerBlockSize * elementSizeInBytes;

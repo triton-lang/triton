@@ -347,11 +347,16 @@ void convertDot(const LLVMTypeConverter *typeConverter,
   }
   auto bSharedLayout = cast<NVMMASharedEncodingAttr>(bTensorTy.getEncoding());
   bool transB = !bSharedLayout.getTransposed();
-  Value baseA =
-      getSharedMemoryObjectFromStruct(
-          loc, loadedA, typeConverter->convertType(aTensorTy.getElementType()),
-          rewriter)
-          .getBase();
+  Value baseA;
+  if (aInTmem) {
+    baseA = loadedA;
+  } else {
+    baseA =
+        getSharedMemoryObjectFromStruct(
+            loc, loadedA,
+            typeConverter->convertType(aTensorTy.getElementType()), rewriter)
+            .getBase();
+  }
   Value baseB =
       getSharedMemoryObjectFromStruct(
           loc, loadedB, typeConverter->convertType(bTensorTy.getElementType()),
@@ -388,11 +393,11 @@ void convertDot(const LLVMTypeConverter *typeConverter,
                                                      interleaved, transA);
   } else {
     aLoader = std::make_unique<DotOpMmaV3SmemLoader>(
-        a, baseA, shapeA, zero, 1, transA, aOperandShape,
+        a, baseA, shapeA, shapeA, zero, 1, transA, aOperandShape,
         aTensorTy.getElementTypeBitWidth(), rewriter, loc);
   }
   DotOpMmaV3SmemLoader bLoader =
-      DotOpMmaV3SmemLoader(b, baseB, shapeB, zero, 1, transB,
+      DotOpMmaV3SmemLoader(b, baseB, shapeB, shapeB, zero, 1, transB,
                            {(unsigned)mmaSizeN, (unsigned)mmaSizeK},
                            bTensorTy.getElementTypeBitWidth(), rewriter, loc);
   DotOpMmaV5TmemLoader dLoader = DotOpMmaV5TmemLoader(
@@ -540,15 +545,14 @@ struct TCGen5MMAScaledOpConversion
           op.getA(), baseA, aOperandShape, interleaved, transA);
     } else {
       aLoader = std::make_unique<DotOpMmaV3SmemLoader>(
-          op.getA(), baseA, shapeA, zero, 1, transA, aOperandShape,
+          op.getA(), baseA, shapeA, shapeA, zero, 1, transA, aOperandShape,
           numBitsPerElementA, rewriter, loc);
     }
     DotOpMmaV3SmemLoader bLoader =
-        DotOpMmaV3SmemLoader(op.getB(), baseB, shapeB, zero, 1, transB,
+        DotOpMmaV3SmemLoader(op.getB(), baseB, shapeB, shapeB, zero, 1, transB,
                              {(unsigned)mmaSizeN, (unsigned)mmaSizeK},
                              numBitsPerElementB, rewriter, loc);
 
-    Value useInitAcc = op.getUseD();
     // Only run mma on one thread. We currently use elect as ptxas is not able
     // to detect that tid.x == 0 is true only for 1 thread.
     Value pred =
@@ -588,6 +592,7 @@ struct TCGen5MMAScaledOpConversion
         // `TensorMemorySpace` definition.
         int blockId = m + n * numRepM;
         Value accAddress = tb.add(baseD, tb.i32_val(numColPerBlock * blockId));
+        Value useInitAcc = op.getUseD();
         for (int k = 0; k < numRepK; k++) {
           Value a = aLoader->memLoad(m, k, rewriter, loc);
           Value b = bLoader.smemLoad(n, k, rewriter, loc);
@@ -603,6 +608,7 @@ struct TCGen5MMAScaledOpConversion
           createScaledGen5MMA(rewriter, loc, op, a, b, accAddress, scaleA,
                               scaleB, pred, instDescriptor, useInitAcc, aInTmem,
                               mxfpInstKind);
+          useInitAcc = tb.i1_val(1);
         }
       }
     }

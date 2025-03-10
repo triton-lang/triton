@@ -277,51 +277,63 @@ class KernelParam:
 
 
 dtype2str = {}
+specialize_impl_cache = []
 
 
-def specialize_impl(arg, specialize_extra, is_const=False, specialize_value=True, align=True):
+def create_specialize_impl(specialize_extra):
+
     from ..language import constexpr
-    if arg is None:
-        return ("constexpr", None)
-    elif isinstance(arg, JITFunction):
-        return ("constexpr", arg.cache_key)
-    elif isinstance(arg, constexpr):
-        return ("constexpr", arg)
-    elif isinstance(arg, bool):
-        return ("i1", None)
-    elif isinstance(arg, int):
-        key = specialize_extra(arg, "int", align=align) if specialize_value else None
-        if arg == 1 and specialize_value:
-            return ("constexpr", 1)
-        elif -(2**31) <= arg and arg <= 2**31 - 1:
-            return ("i32", key)
-        elif 2**63 <= arg and arg <= 2**64 - 1:
-            return ("u64", key)
+
+    def specialize_impl(arg, is_const=False, specialize_value=True, align=True):
+
+        if arg is None:
+            return ("constexpr", None)
+        elif isinstance(arg, bool):
+            return ("i1", None)
+        elif isinstance(arg, int):
+            key = specialize_extra(arg, "int", align=align) if specialize_value else None
+            if arg == 1 and specialize_value:
+                return ("constexpr", 1)
+            elif -(2**31) <= arg and arg <= 2**31 - 1:
+                return ("i32", key)
+            elif 2**63 <= arg and arg <= 2**64 - 1:
+                return ("u64", key)
+            else:
+                return ("i64", key)
+        elif isinstance(arg, float):
+            return ("fp32", None)
+        elif hasattr(arg, "data_ptr"):
+            # dtypes are hashable so we can memoize this mapping:
+            dsk = (arg.dtype, is_const)
+            res = dtype2str.get(dsk, None)
+            if res is None:
+                res = ("*k" if dsk[1] else "*") + type_canonicalisation_dict[str(dsk[0]).split('.')[-1]]
+                dtype2str[dsk] = res
+            key = specialize_extra(arg, "tensor", align=align) if specialize_value else None
+            return (res, key)
+        elif isinstance(arg, JITFunction):
+            return ("constexpr", arg.cache_key)
+        elif isinstance(arg, constexpr):
+            return ("constexpr", arg)
+        elif hasattr(arg, "tma_desc_cpu_ptr"):
+            return ("nvTmaDesc", None)
+        elif isinstance(arg, tuple):
+            spec = [specialize_impl(x) for x in arg]
+            make_tuple = lambda vals: type(arg)(*vals) if hasattr(arg, "_fields") else tuple(vals)
+            tys = make_tuple([x[0] for x in spec])
+            keys = make_tuple([x[1] for x in spec])
+            return (tys, keys)
         else:
-            return ("i64", key)
-    elif isinstance(arg, float):
-        return ("fp32", None)
-    elif hasattr(arg, "tma_desc_cpu_ptr"):
-        return ("nvTmaDesc", None)
-    elif isinstance(arg, tuple):
-        spec = [specialize_impl(x, specialize_extra) for x in arg]
-        make_tuple = lambda vals: type(arg)(*vals) if hasattr(arg, "_fields") else tuple(vals)
-        tys = make_tuple([x[0] for x in spec])
-        keys = make_tuple([x[1] for x in spec])
-        return (tys, keys)
-    else:
-        # dtypes are hashable so we can memoize this mapping:
-        dsk = (arg.dtype, is_const)
-        res = dtype2str.get(dsk, None)
-        if res is None:
-            res = ("*k" if dsk[1] else "*") + type_canonicalisation_dict[str(dsk[0]).split('.')[-1]]
-            dtype2str[dsk] = res
-        key = specialize_extra(arg, "tensor", align=align) if specialize_value else None
-        return (res, key)
+            raise TypeError("Unsupported type: %s" % type(arg))
+
+    return specialize_impl
 
 
 def mangle_type(arg, specialize=False):
-    return specialize_impl(arg, lambda _, **kwargs: None, specialize_value=specialize)[0]
+    if len(specialize_impl_cache) == 0:
+        specialize_impl_cache.append(create_specialize_impl(lambda _, **kwargs: None))
+    specialize_impl = specialize_impl_cache[0]
+    return specialize_impl(arg, specialize_value=specialize)[0]
 
 
 class KernelInterface(Generic[T]):
@@ -367,7 +379,7 @@ def create_function_from_signature(sig, kparams, backend):
             is_const = 'True' if kp.is_const else 'False'
             specialize = 'False' if kp.do_not_specialize else 'True'
             align = 'False' if kp.do_not_specialize_on_alignment else 'True'
-            ret = f"specialize_impl({name}, specialize_extra, {is_const}, {specialize}, {align})"
+            ret = f"specialize_impl({name}, {is_const}, {specialize}, {align})"
             if kp.annotation_type:
                 specialization.append(f'("{kp.annotation_type}",) + {ret}[1:]')
             else:
@@ -390,8 +402,7 @@ def dynamic_func({", ".join(list(map(arg, sig.parameters.items())) + ["**options
     }
 
     func_namespace["JITFunction"] = JITFunction
-    func_namespace["specialize_impl"] = specialize_impl
-    func_namespace["specialize_extra"] = backend.get_arg_specialization
+    func_namespace["specialize_impl"] = create_specialize_impl(backend.get_arg_specialization)
 
     # Execute the function string in func_namespace to create the function
     exec(func_body, func_namespace)
@@ -509,11 +520,6 @@ class JITFunction(KernelInterface[T]):
         self.compile = compile
         self.ASTSource = ASTSource
         binder = create_function_from_signature(self.signature, self.params, backend)
-        self.constexpr_indices = [i for (i, p) in enumerate(self.params) if p.is_constexpr]
-        self.non_constexpr_indices = [i for (i, p) in enumerate(self.params) if not p.is_constexpr]
-        self.specialised_indices = [
-            i for (i, p) in enumerate(self.params) if (not p.do_not_specialize) and (not p.is_constexpr)
-        ]
         return {}, target, backend, binder
 
     def run(self, *args, grid, warmup, **kwargs):
@@ -587,6 +593,9 @@ class JITFunction(KernelInterface[T]):
                        *bound_args.values())
         return kernel
 
+    def repr(self, _):
+        return self._fn_name if self._repr is None else self._repr(_)
+
     def __init__(self, fn, version=None, do_not_specialize=None, do_not_specialize_on_alignment=None, debug=None,
                  noinline=None, repr=None, launch_metadata=None):
         do_not_specialize = do_not_specialize if do_not_specialize else []
@@ -599,7 +608,8 @@ class JITFunction(KernelInterface[T]):
         self.do_not_specialize = do_not_specialize
         self.do_not_specialize_on_alignment = do_not_specialize_on_alignment
         self.starting_line_number = inspect.getsourcelines(fn)[1]
-        self.repr = lambda _: fn.__name__ if repr is None else repr(_)
+        self._repr = repr
+        self._fn_name = fn.__name__
         self.launch_metadata = launch_metadata
 
         self.params = []
@@ -613,7 +623,7 @@ class JITFunction(KernelInterface[T]):
         src = src[re.search(r"^def\s+\w+\s*\(", src, re.MULTILINE).start():]
         self._unsafe_update_src(src)
         # cache of just-in-time compiled kernels
-        self.device_caches = defaultdict(lambda: self.create_binder())
+        self.device_caches = defaultdict(self.create_binder)
         self.hash = None
 
         # Map of global variables used by the function and any functions it

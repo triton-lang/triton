@@ -146,10 +146,10 @@ Attribute getTmemCompatibleLayout(unsigned M, unsigned N,
 }
 
 // Verify if the distributed layout can be mapped onto tensor memory.
-bool isDistributedLayoutTMemCompatible(ModuleOp mod,
+bool isDistributedLayoutTMemCompatible(Operation *op,
                                        RankedTensorType tensorType,
                                        MemDescType memType) {
-  int numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
+  int numWarps = lookupNumWarps(op);
   assert(numWarps % 4 == 0);
   int numWarpGroups = numWarps / 4;
 
@@ -164,9 +164,10 @@ bool isDistributedLayoutTMemCompatible(ModuleOp mod,
     assert(isa<triton::nvidia_gpu::TensorMemoryScalesEncodingAttr>(
                memType.getEncoding()) &&
            "Expecting a tensor memory encoding attribute");
-    blockM = 128;
-    blockN = 32;
-    scalesEncoding = true;
+    return tensorType.getEncoding() ==
+           triton::gpu::LinearEncodingAttr::get(
+               tensorType.getContext(),
+               getScaleTMEMStoreLinearLayout(tensorType, numWarps));
   }
   auto shapePerCTA = mlir::triton::gpu::getShapePerCTA(tensorType);
   int numElements = product(shapePerCTA);
@@ -185,7 +186,7 @@ bool isDistributedLayoutTMemCompatible(ModuleOp mod,
   if (order.size() != 2)
     return false;
 
-  if (!scalesEncoding && (order[0] != 0 || order[1] != 1))
+  if (order[0] != 0 || order[1] != 1)
     return false;
 
   if (useStridedMessage) {

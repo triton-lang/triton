@@ -151,7 +151,7 @@ struct TritonExpandDimsPattern
     auto retShape = argType.getShape().vec();
     retShape.insert(retShape.begin() + op.getAxis(), 1);
     // return encoding
-    auto retSizePerThread = argEncoding.getSizePerThread();
+    auto retSizePerThread = llvm::to_vector(argEncoding.getSizePerThread());
     retSizePerThread.insert(retSizePerThread.begin() + op.getAxis(), 1);
     auto retThreadsPerWarp = argEncoding.getThreadsPerWarp();
     retThreadsPerWarp.insert(retThreadsPerWarp.begin() + op.getAxis(), 1);
@@ -302,7 +302,6 @@ struct TritonCatPattern : public OpConversionPattern<triton::CatOp> {
     auto retTotalElemsPerThread = triton::gpu::getTotalElemsPerThread(retType);
     auto retShape = retType.getShape();
     auto retOrder = retEncoding.getOrder();
-    auto retSizePerThread = retEncoding.getSizePerThread();
     auto retThreadsPerWarp = retEncoding.getThreadsPerWarp();
     auto retWarpsPerCTA = retEncoding.getWarpsPerCTA();
     // Get new retSizePerThread if ret elems per thread is not enough.
@@ -310,7 +309,7 @@ struct TritonCatPattern : public OpConversionPattern<triton::CatOp> {
     // constraint.
     auto newRetTotalElemsPerThread =
         nextPowOf2(lhsTotalElemsPerThread + rhsTotalElemsPerThread);
-    auto newRetSizePerThread = retSizePerThread;
+    auto newRetSizePerThread = llvm::to_vector(retEncoding.getSizePerThread());
     newRetSizePerThread[retOrder[0]] *=
         newRetTotalElemsPerThread / retTotalElemsPerThread;
     triton::gpu::BlockedEncodingAttr newRetEncoding =
@@ -843,6 +842,13 @@ public:
   }
 
   void runOnOperation() override {
+    if (target.getValue().empty()) {
+      mlir::emitError(
+          getOperation().getLoc(),
+          "'convert-triton-to-tritongpu' requires 'target' option to be set");
+      return signalPassFailure();
+    }
+
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
     // type converter
@@ -863,24 +869,12 @@ public:
     patterns.insert<GenericOpPattern<ub::PoisonOp>>(typeConverter, context);
 
     auto inti = llvm::APSInt(32, false);
-    auto i32_ty = IntegerType::get(mod->getContext(), 32);
 
-    mod->setAttr(
-        AttrNumWarpsName,
-        IntegerAttr::get(i32_ty, llvm::APInt(32, numWarps.getValue())));
-    mod->setAttr(
-        AttrNumThreadsPerWarp,
-        IntegerAttr::get(i32_ty, llvm::APInt(32, threadsPerWarp.getValue())));
-
-    mod->setAttr(AttrNumCTAsName,
-                 IntegerAttr::get(i32_ty, llvm::APInt(32, numCTAs.getValue())));
-
-    if (this->target.getValue().empty()) {
-      mod.emitError("expected target specification to attach to the module op");
-      return signalPassFailure();
-    }
-    mod->setAttr(AttrTargetName,
-                 StringAttr::get(context, this->target.getValue()));
+    Builder b(&getContext());
+    mod->setAttr(AttrNumWarpsName, b.getI32IntegerAttr(numWarps));
+    mod->setAttr(AttrNumThreadsPerWarp, b.getI32IntegerAttr(threadsPerWarp));
+    mod->setAttr(AttrNumCTAsName, b.getI32IntegerAttr(numCTAs));
+    mod->setAttr(AttrTargetName, b.getStringAttr(this->target.getValue()));
 
     if (failed(applyPartialConversion(mod, target, std::move(patterns))))
       return signalPassFailure();
