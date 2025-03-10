@@ -112,6 +112,7 @@ class InterpreterOptions:
     extern_libs: dict = None
     debug: bool = False
     sanitize_overflow: bool = True
+    sanitize_nan: bool = True
     arch: str = None
     supported_fp8_dtypes: Tuple[str] = ("fp8e5", "fp8e5b16", "fp8e4nv", "fp8e4b8", "fp8e4b15")
     deprecated_fp8_dtypes: Tuple[str] = ()

@@ -220,8 +220,21 @@ def binary_op_sanitize_overflow_impl(lhs: tl.tensor, rhs: tl.tensor, builder: ir
     device_assert(cond, msg, builder)
 
 
+def binary_op_sanitize_nan_impl(lhs: tl.tensor, rhs: tl.tensor, builder: ir.builder, binary_op: callable):
+    """
+    Sanitizing the inputs to our ops. Specifically not checking the outputs to save
+    on computation as well as stop from too many recursive checks errors.
+    Checking to make sure our inputs are solid is enough of a validation for now.
+    """
+    if not builder.options.sanitize_nan:
+        return
+    input_cond = and_(equal(lhs,lhs,builder), equal(rhs,rhs,builder), builder)
+    msg = f"nan value detected in input for operation {binary_op.__name__}"
+    device_assert(input_cond, msg, builder)
+
+
 def add(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, sanitize_overflow: bool,
-        builder: ir.builder) -> tl.tensor:
+        sanitize_nan: bool, builder: ir.builder) -> tl.tensor:
     input, other = binary_op_type_checking_impl(input, other, builder, True, True)
     input_scalar_ty = input.type.scalar
     other_scalar_ty = other.type.scalar
@@ -246,9 +259,13 @@ def add(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, sa
         return tl.tensor(builder.create_addptr(input.handle, other_handle), input.type)
     # float + float
     elif input_scalar_ty.is_floating():
+        if sanitize_nan:
+            binary_op_sanitize_nan_impl(input, other, builder, add)
         return tl.tensor(builder.create_fadd(input.handle, other.handle), input.type)
     # int + int
     elif input_scalar_ty.is_int():
+        if sanitize_nan:
+            binary_op_sanitize_nan_impl(input, other, builder, add)
         if sanitize_overflow:
             binary_op_sanitize_overflow_impl(input, other, builder, add)
         return tl.tensor(builder.create_add(input.handle, other.handle), input.type)
@@ -256,7 +273,7 @@ def add(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, sa
 
 
 def sub(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, sanitize_overflow: bool,
-        builder: ir.builder) -> tl.tensor:
+        sanitize_nan: bool, builder: ir.builder) -> tl.tensor:
     input, other = binary_op_type_checking_impl(input, other, builder, True, False)
     scalar_ty = input.type.scalar
     # ptr - offset
@@ -264,9 +281,13 @@ def sub(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, sa
         return tl.tensor(builder.create_addptr(input.handle, minus(other, builder).handle), input.type)
     # float - float
     if scalar_ty.is_floating():
+        if sanitize_nan:
+            binary_op_sanitize_nan_impl(input, other, builder, add)
         return tl.tensor(builder.create_fsub(input.handle, other.handle), input.type)
     # int - int
     elif scalar_ty.is_int():
+        if sanitize_nan:
+            binary_op_sanitize_nan_impl(input, other, builder, add)
         if sanitize_overflow:
             binary_op_sanitize_overflow_impl(input, other, builder, sub)
         return tl.tensor(builder.create_sub(input.handle, other.handle), input.type)
@@ -274,9 +295,11 @@ def sub(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, sa
 
 
 def mul(input: tl.tensor | numbers.Number, other: tl.tensor | numbers.Number, sanitize_overflow: bool,
-        builder: ir.builder) -> tl.tensor:
+        sanitize_nan: bool, builder: ir.builder) -> tl.tensor:
     input, other = binary_op_type_checking_impl(input, other, builder)
     scalar_ty = input.type.scalar
+    if sanitize_nan:
+            binary_op_sanitize_nan_impl(input, other, builder, add)
     # float * float
     if scalar_ty.is_floating():
         return tl.tensor(builder.create_fmul(input.handle, other.handle), input.type)

@@ -7211,3 +7211,46 @@ def test_aliasing(device):
     buffer = torch.zeros(1, device=device)
     aliasing_kernel[(1, )](buffer, buffer)
     assert buffer[0] == 1
+
+
+# -----------------------
+# test NaN sanitizer
+# -----------------------
+
+
+def test_nan_sanitizer_raise_error(device):
+    if device != "cuda":
+        pytest.skip()
+
+    @triton.jit(debug=True)
+    def add_kernel(x, y):
+        output = x + y
+
+    x = torch.ones((16, 16), device=device)
+    y = torch.ones((16, 16), device=device)
+    x[0, 0] = torch.nan
+    y[0, 0] = torch.nan
+    x = to_triton(x, device=device)
+    y = to_triton(x, device=device)
+    try:
+        add_kernel[(1, )](x, y)
+        raise RuntimeError("Expected to raise an error")
+    except RuntimeError as e:
+        assert "nan value detected in input for operation" in str(e)
+
+def test_nan_sanitizer_no_error(device):
+    if device != "cuda":
+        pytest.skip()
+
+    @triton.jit(debug=True)
+    def add_kernel(x, y):
+        output = x + y
+
+    x = torch.ones((16, 16), device=device)
+    y = torch.ones((16, 16), device=device)
+    x = to_triton(x, device=device)
+    y = to_triton(x, device=device)
+    try:
+        add_kernel[(1, )](x, y)
+    except RuntimeError as e:
+        raise RuntimeError("Expected to not raise an error")

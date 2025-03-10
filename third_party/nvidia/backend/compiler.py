@@ -137,6 +137,7 @@ class CUDAOptions:
     debug: bool = False
     backend_name: str = 'cuda'
     sanitize_overflow: bool = True
+    sanitize_nan: bool = True
     arch: str = None
 
     def __post_init__(self):
