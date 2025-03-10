@@ -3,6 +3,7 @@
 
 #include "mlir/Analysis/DataFlow/IntegerRangeAnalysis.h"
 #include "mlir/Analysis/DataFlow/SparseAnalysis.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
 
 namespace mlir::triton::AMD {
@@ -26,34 +27,32 @@ namespace mlir::triton::AMD {
 /// See visitRegionSuccessors.
 struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
   using dataflow::IntegerRangeAnalysis::IntegerRangeAnalysis;
-
-  llvm::SmallDenseMap<LoopLikeOpInterface, int64_t> loopTripCounts;
-  llvm::SmallDenseMap<
-      std::pair<LoopLikeOpInterface, dataflow::IntegerValueRangeLattice *>,
-      int64_t>
-      loopVisits;
+  TritonIntegerRangeAnalysis(
+      DataFlowSolver &solver,
+      const DenseMap<Value, SetVector<Operation *>> &assumptions)
+      : dataflow::IntegerRangeAnalysis(solver), assumptions(assumptions) {}
 
   void setToEntryState(dataflow::IntegerValueRangeLattice *lattice) override;
 
   LogicalResult visitOperation(
       Operation *op,
       ArrayRef<const dataflow::IntegerValueRangeLattice *> operands,
-      ArrayRef<dataflow::IntegerValueRangeLattice *> results) override;
+      ArrayRef<dataflow::IntegerValueRangeLattice *> resultsLattices) override;
 
   /// This method (which overloads
-  /// AbstractSparseForwardDataFlowAnalysis::visitRegionSuccessors) implements
-  /// "abstract interpretation" of loops with statically known bounds in order
-  /// to infer tight ranges for loop carried values (and therefore loop body
-  /// values). By "abstract interpretation" we mean lattice states are
+  /// AbstractSparseForwardDataFlowAnalysis::visitRegionSuccessors)
+  /// implements "abstract interpretation" of loops with statically known bounds
+  /// in order to infer tight ranges for loop carried values (and therefore loop
+  /// body values). By "abstract interpretation" we mean lattice states are
   /// propagated to all region successors N times, where N is the total trip
   /// count of the loop. Recall for scf.for, both the loop itself and the users
   /// of the loop successors. Thus, after N propagations both loop body values
   /// and users of loop results will have accurate ranges (assuming we have
   /// implemented support for range analysis on the ops).
   /// *Note*, this implementation is majority similar to
-  /// AbstractSparseForwardDataFlowAnalysis::visitRegionSuccessors (so check
-  /// there for more explanation/insight) and basically only does two things
-  /// differently:
+  /// AbstractSparseForwardDataFlowAnalysis::visitRegionSuccessors
+  /// (so check there for more explanation/insight) and basically only does two
+  /// things differently:
   ///
   /// 1. If the branch op is a loop (LoopLikeOpInterface) then we attempt to
   /// compute its total trip count (nested loop trip counts multiply) and
@@ -72,12 +71,54 @@ struct TritonIntegerRangeAnalysis : dataflow::IntegerRangeAnalysis {
       ProgramPoint *point, RegionBranchOpInterface branch,
       RegionBranchPoint successor,
       ArrayRef<dataflow::AbstractSparseLattice *> abstractLattices) override;
+
+  /// Collect all operands that participate in assumptions (see description of
+  /// `assumptions` field below) under the rootOp. By default, operands that can
+  /// be folded to constants are excluded.
+  static DenseMap<Value, SetVector<Operation *>>
+  collectAssumptions(Operation *rootOp, bool filterConstants = true);
+
+  /// Construct the tightest/narrowest range possible using all the assumptions
+  /// that `anchor` participates in. For example, the pattern
+  ///   %assumesltlhs = arith.cmpi sge, %K, %c0 : i32
+  ///   llvm.intr.assume %assumesltlhs : i1
+  ///   %assumesltlhs = arith.cmpi slt, %K, %c128 : i32
+  ///   llvm.intr.assume %assumesltlhs : i1
+  /// for %K, will produce a final range
+  ///   [0, 2147483647] ∩ [-2147483648, 128] = [0, 128]
+  std::optional<ConstantIntRanges> maybeGetAssumedRange(Value anchor) const;
+
+  /// Trip counts of all loops with static loop bounds contained under the root
+  /// operation being analyzed. Note, nested loops have trip counts computed as
+  /// a product of enclosing loops; i.e. for
+  ///   scf.for i = 1 to 10
+  ///     scf.for j = 1 to 10
+  /// the trip count of the outer loop (on i) is 10 but the trip count of the
+  /// inner loop (on j) is 100.
+  llvm::SmallDenseMap<LoopLikeOpInterface, int64_t> loopTripCounts;
+
+  /// Visit counts tabulating how many times each lattice has been propagated
+  /// through each loop. This is used in visitRegionSuccessors to end
+  /// propagation when loopVisits[loop, lattice] reaches loopTripCounts[loop].
+  llvm::SmallDenseMap<
+      std::pair<LoopLikeOpInterface, dataflow::IntegerValueRangeLattice *>,
+      int64_t>
+      loopVisits;
+
+  /// `assumptions` maps from values to (possibly) any operations that satisfy
+  /// the pattern
+  ///   %assumesltlhs = arith.cmpi sge, %K, %c0 : i32
+  ///   llvm.intr.assume %assumesltlhs : i1
+  ///   %assumesltlhs = arith.cmpi slt, %K, %c128 : i32
+  ///   llvm.intr.assume %assumesltlhs : i1
+  /// If one uses collectAssumptions below then `assumptions` will look like
+  /// %K -> {arith.cmpi slt..., arith.cmpi sge}.
+  llvm::DenseMap<Value, SetVector<Operation *>> assumptions;
 };
 
-// TODO(max): remove after we catch up to
-// https://github.com/llvm/llvm-project/pull/127888
-LogicalResult staticallyNonNegative(DataFlowSolver &solver, Value v);
-LogicalResult staticallyNonNegative(DataFlowSolver &solver, Operation *op);
+std::optional<SmallVector<ConstantIntRanges>>
+collectRanges(const DataFlowSolver &solver, ValueRange values);
+bool cmpIIsStaticallyTrue(const DataFlowSolver &solver, arith::CmpIOp cmpOp);
 
 } // namespace mlir::triton::AMD
 

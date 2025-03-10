@@ -104,6 +104,28 @@ Value BufferEmitter::emitLoad(Type type, Value rsrcDesc, Value offset,
   return data;
 }
 
+void BufferEmitter::emitLoadToLds(Type type, Value byteWidth, Value rsrcDesc,
+                                  Value offset, Value dst, Value pred,
+                                  triton::CacheModifier cm) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  SmallVector<Value, 6> commonArgs;
+  fillCommonArgs(type, rsrcDesc, offset, pred, cm, /*isBufferLoad=*/true,
+                 commonArgs);
+  Type bufferType = getBufferOpType(type, false);
+  rewriter.create<ROCDL::RawPtrBufferLoadLdsOp>(
+      loc, TypeRange{},
+      ValueRange{
+          commonArgs[0], // Buffer descriptor
+          dst,           // LDS base ptr
+          byteWidth,     // Instr size
+          commonArgs[1], // Buffer offset
+          b.i32_val(0),  // LDS offset
+          commonArgs[2], // Instruction offset
+          commonArgs[3], // AUX
+      },
+      ArrayRef<NamedAttribute>());
+}
+
 Value BufferEmitter::emitAtomicRMW(RMWOp rmwType, Type type, Value rsrcDesc,
                                    Value offset, Value data, Value pred,
                                    bool hasUsers) {

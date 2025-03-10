@@ -46,7 +46,7 @@ bool isSmallLoad(tt::LoadOp loadOp,
   assert(!isLoadFromTensorPtr(loadOp) &&
          "Block ptr should have been lowered before this pass.");
   auto ptr = loadOp.getPtr();
-  unsigned vec = axisInfoAnalysis.getPtrContiguity(ptr);
+  unsigned vec = axisInfoAnalysis.getContiguity(ptr);
   if (auto mask = loadOp.getMask())
     vec = std::min<unsigned>(vec, axisInfoAnalysis.getMaskAlignment(mask));
 
