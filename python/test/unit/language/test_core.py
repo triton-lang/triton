@@ -3174,6 +3174,48 @@ def test_convert1d(M, src_layout, dst_layout, src_dim, dst_dim, device, tmp_path
     np.testing.assert_allclose(y_ref, y_tri.cpu().numpy(), rtol=0.01, atol=1e-3)
 
 
+@pytest.mark.parametrize("M", [64, 128, 256])
+@pytest.mark.parametrize("src_layout", filter_layouts(layouts))
+@pytest.mark.parametrize("dst_layout", filter_layouts(layouts))
+@pytest.mark.parametrize("src_dim", [0, 1])
+@pytest.mark.parametrize("dst_dim", [0, 1])
+def test_convert1d_bool(M, src_layout, dst_layout, src_dim, dst_dim, device, tmp_path: pathlib.Path):
+
+    ir = f"""
+    #dst = {dst_layout}
+    #src = {src_layout}
+    module attributes {{"{GPU_DIALECT}.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, "ttg.threads-per-warp" = {THREADS_PER_WARP} : i32}} {{
+        tt.func public @kernel(%arg0: !tt.ptr<i8> {{tt.divisibility = 16 : i32}}, %arg1: !tt.ptr<i32> {{tt.divisibility = 16 : i32}}) {{
+            %cst = arith.constant dense<0> : tensor<{M}xi8, #{GPU_DIALECT}.slice<{{dim = {src_dim}, parent = #src}}>>
+            %0 = tt.splat %arg0 : !tt.ptr<i8> -> tensor<{M}x!tt.ptr<i8>, #{GPU_DIALECT}.slice<{{dim = {src_dim}, parent = #src}}>>
+            %1 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #{GPU_DIALECT}.slice<{{dim = {src_dim}, parent = #src}}>>
+            %2 = tt.addptr %0, %1 : tensor<{M}x!tt.ptr<i8>, #{GPU_DIALECT}.slice<{{dim = {src_dim}, parent = #src}}>>, tensor<{M}xi32, #{GPU_DIALECT}.slice<{{dim = {src_dim}, parent = #src}}>>
+            %3 = tt.load %2 : tensor<{M}x!tt.ptr<i8>, #{GPU_DIALECT}.slice<{{dim = {src_dim}, parent = #src}}>>
+            %4 = arith.cmpi ne, %3, %cst : tensor<{M}xi8, #{GPU_DIALECT}.slice<{{dim = {src_dim}, parent = #src}}>>
+            %5 = tt.splat %arg1 : !tt.ptr<i32> -> tensor<{M}x!tt.ptr<i32>, #{GPU_DIALECT}.slice<{{dim = {dst_dim}, parent = #dst}}>>
+            %6 = tt.make_range {{end = {M} : i32, start = 0 : i32}} : tensor<{M}xi32, #{GPU_DIALECT}.slice<{{dim = {dst_dim}, parent = #dst}}>>
+            %7 = tt.addptr %5, %6 : tensor<{M}x!tt.ptr<i32>, #{GPU_DIALECT}.slice<{{dim = {dst_dim}, parent = #dst}}>>, tensor<{M}xi32, #{GPU_DIALECT}.slice<{{dim = {dst_dim}, parent = #dst}}>>
+            %8 = {GPU_DIALECT}.convert_layout %4 : tensor<{M}xi1, #{GPU_DIALECT}.slice<{{dim = {src_dim}, parent = #src}}>> -> tensor<{M}xi1, #{GPU_DIALECT}.slice<{{dim = {dst_dim}, parent = #dst}}>>
+            %9 = arith.extui %8 : tensor<{M}xi1, #{GPU_DIALECT}.slice<{{dim = {dst_dim}, parent = #dst}}>> to tensor<{M}xi32, #{GPU_DIALECT}.slice<{{dim = {dst_dim}, parent = #dst}}>>
+            tt.store %7, %9 : tensor<{M}x!tt.ptr<i32>, #{GPU_DIALECT}.slice<{{dim = {dst_dim}, parent = #dst}}>>
+            tt.return
+        }}
+    }}
+    """
+    temp_file = tmp_path / "test_convert1d.ttgir"
+    temp_file.write_text(ir)
+    kernel = triton.compile(str(temp_file))
+
+    rs = RandomState(17)
+    x = rs.randint(0, 2, (M, )).astype('bool')
+    y = np.zeros((M, ), dtype='int32')
+    x_tri = torch.tensor(x, device=device)
+    y_tri = torch.tensor(y, device=device)
+    pgm = kernel[(1, 1, 1)](x_tri, y_tri)
+    y_ref = x
+    np.testing.assert_allclose(y_ref, y_tri.cpu().numpy(), rtol=0, atol=0)
+
+
 @triton.jit
 def _welford_combine(mean_1, m2_1, weight_1, mean_2, m2_2, weight_2):
     delta = mean_2 - mean_1
@@ -5132,7 +5174,8 @@ def test_unary_math(func_str, device):
     y = torch.zeros(shape, dtype=torch.float32, device=device)
 
     kernel[(1, )](x, y, BLOCK=shape[0])
-    torch.allclose(getattr(torch, func_str)(x), y, rtol=1e-3)
+    # compare
+    torch.testing.assert_close(getattr(torch, func_str)(x), y, rtol=1e-3, atol=1e-5)
 
 
 # -----------------------
@@ -7168,3 +7211,97 @@ def test_aliasing(device):
     buffer = torch.zeros(1, device=device)
     aliasing_kernel[(1, )](buffer, buffer)
     assert buffer[0] == 1
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype", list(dtypes) + ["bfloat16"])
+def test_strided_load(dtype, device):
+
+    @triton.jit
+    def take_every_second_element(x_ptr, output_ptr, BLOCK_SIZE: tl.constexpr):
+        strided_offsets = tl.arange(0, BLOCK_SIZE) * 2
+        linear_offsets = tl.arange(0, BLOCK_SIZE)
+        x = tl.load(x_ptr + strided_offsets)
+        tl.store(output_ptr + linear_offsets, x)
+
+    STRIDE = 2
+    SIZE = 512
+    OUT_SIZE = SIZE // STRIDE
+
+    x = numpy_random(SIZE, dtype_str=dtype)
+    x_tri = to_triton(x, device)
+    out_tri = torch.empty(OUT_SIZE, device=device)
+    take_every_second_element[(1, 1)](x_tri, out_tri, OUT_SIZE)
+
+    # Test that every second element (starting from [0]) from x is stored in out_tri
+    np.testing.assert_allclose(x[::2], to_numpy(out_tri))
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype", list(dtypes) + ["bfloat16"])
+def test_strided_store(dtype, device):
+
+    @triton.jit
+    def store_into_every_second(x_ptr, output_ptr, BLOCK_SIZE: tl.constexpr):
+        strided_offsets = tl.arange(0, BLOCK_SIZE) * 2
+        linear_offsets = tl.arange(0, BLOCK_SIZE)
+        x = tl.load(x_ptr + linear_offsets)
+        tl.store(output_ptr + strided_offsets, x)
+
+    STRIDE = 2
+    SIZE = 512
+    OUT_SIZE = SIZE * STRIDE
+
+    x = numpy_random(SIZE, dtype_str=dtype)
+    x_tri = to_triton(x, device)
+    out_tri = torch.zeros(OUT_SIZE, device=device)
+    store_into_every_second[(1, 1)](x_tri, out_tri, SIZE)
+
+    # Test that every second element (starting from [0]) is the same as in x
+    np.testing.assert_allclose(x, to_numpy(out_tri)[::2])
+    # Test that every second element (starting from [1]) is still zero
+    np.testing.assert_allclose(np.zeros_like(x), to_numpy(out_tri)[1::2])
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype", list(dtypes) + ["bfloat16"])
+def test_indirect_load(dtype, device):
+
+    @triton.jit
+    def indirect_load(offset_ptr, x_ptr, output_ptr, SIZE: tl.constexpr):
+        linear_offsets = tl.arange(0, SIZE)
+        offsets = tl.load(offset_ptr + linear_offsets)
+        x = tl.load(x_ptr + offsets)
+        tl.store(output_ptr + linear_offsets, x)
+
+    SIZE = 512
+    x = numpy_random(SIZE, dtype_str=dtype)
+    x_tri = to_triton(x, device)
+    # Flip the range to load the tensor in reverse order
+    ptr = torch.arange(SIZE, device=device, dtype=torch.int32).flip(0)
+    out_tri = torch.empty(SIZE, device=device)
+    indirect_load[(1, 1)](ptr, x_tri, out_tri, SIZE)
+
+    np.testing.assert_allclose(np.flip(x), to_numpy(out_tri))
+
+
+@pytest.mark.interpreter
+@pytest.mark.parametrize("dtype", list(dtypes) + ["bfloat16"])
+def test_indirect_store(dtype, device):
+
+    @triton.jit
+    def indirect_store(offset_ptr, x_ptr, output_ptr, SIZE: tl.constexpr):
+        linear_offsets = tl.arange(0, SIZE)
+        offsets = tl.load(offset_ptr + linear_offsets)
+        x = tl.load(x_ptr + linear_offsets)
+        tl.store(output_ptr + offsets, x)
+
+    SIZE = 512
+    x = numpy_random(SIZE, dtype_str=dtype)
+    x_tri = to_triton(x, device)
+    # Flip the range to store the tensor in reverse order
+    ptr = torch.arange(SIZE, device=device, dtype=torch.int32).flip(0)
+    out_tri = torch.empty(SIZE, device=device)
+    indirect_store[(1, 1)](ptr, x_tri, out_tri, SIZE)
+
+    np.testing.assert_allclose(np.flip(x), to_numpy(out_tri))

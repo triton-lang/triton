@@ -27,6 +27,7 @@
 #include "mlir/Pass/Pass.h"
 #include "triton/Analysis/Allocation.h"
 #include "triton/Conversion/TritonGPUToLLVM/Patterns.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
@@ -100,8 +101,8 @@ class OptimizeAMDLDSUsage
     auto ctx = srcEnc.getContext();
     auto rank = srcType.getRank();
 
-    unsigned numWarps = triton::gpu::getNumWarpsPerCTA(srcEnc);
-    auto warpSize = triton::gpu::getWarpSize(srcEnc);
+    unsigned numWarps = triton::gpu::lookupNumWarps(cvtOp);
+    auto warpSize = triton::gpu::lookupThreadsPerWarp(builder);
 
     // Find all possible shapes of WarpsPerCTA by finding all possible
     // factorizations of numWarps. Pick shape for which both conversions in

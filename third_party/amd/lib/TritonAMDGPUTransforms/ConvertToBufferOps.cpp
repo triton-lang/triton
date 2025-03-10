@@ -85,7 +85,7 @@ bool verifyNonNegativeExpr(Value expr, const DenseSet<Value> &assumptions,
   LDBG("Determing if non-negative: " << expr);
 
   if (!llvm::isa<mlir::BlockArgument>(expr) &&
-      succeeded(AMD::staticallyNonNegative(*solver, expr))) {
+      succeeded(dataflow::staticallyNonNegative(*solver, expr))) {
     return true;
   }
 
@@ -321,6 +321,15 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
     }
     LDBG("RMW supported type");
 
+    auto vecSize = getVectorSize(ptr, axisAnalysisPass);
+    // f16/bf16 dtypes could only be efficiently calculated using instructions
+    // that pack 2 elements (e.g. @llvm.amdgcn.raw.buffer.atomic.fadd.v2f16)
+    if (vecSize % 2 != 0 && (checkType.isF16() || checkType.isBF16())) {
+      return rewriter.notifyMatchFailure(
+          op, "RMW float 16 dtypes must be aligned by 2");
+    }
+    LDBG("RMW passed alignment check");
+
     // 5. Check if the RMWOp is supported
     switch (atomicRmwOp) {
     case RMWOp::AND:
@@ -351,8 +360,7 @@ struct ConvertTritonAtomicRMWOpToBufferAtomicRMW
       // are contiguous we can emit the buffer op. Otherwise, the buffer ops
       // lowering will try to emit individual (unsupported) f16/bf16 ops.
       auto elemBitWidth = tensorType.getElementTypeBitWidth();
-      opBitWidth =
-          getVectorSize(basePtr, tensorOffset, axisAnalysisPass) * elemBitWidth;
+      opBitWidth = vecSize * elemBitWidth;
     } else {
       opBitWidth = opValueType.getIntOrFloatBitWidth();
     }
@@ -513,8 +521,9 @@ public:
     // Collect assumptions in the function
     DenseSet<Value> assumptions;
     mod.walk([&](LLVM::AssumeOp op) {
-      if (op->getOperand(0).getDefiningOp<arith::CmpIOp>())
-        assumptions.insert(op->getOperand(0));
+      auto oper = op->getOperand(0);
+      if (oper.getDefiningOp<arith::CmpIOp>())
+        assumptions.insert(oper);
     });
     LLVM_DEBUG({
       DBGS() << "Number of assumptions found: " << assumptions.size() << "\n";
