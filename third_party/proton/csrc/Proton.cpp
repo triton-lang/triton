@@ -92,8 +92,6 @@ void initProton(pybind11::module &&m) {
   m.def("set_profile_buffer",
         [](uint64_t *profileBuffer, size_t size, size_t alignment) -> void {});
 
-  m.def("unset_profile_buffer", []() -> void {});
-
   pybind11::bind_map<std::map<std::string, MetricValueType>>(m, "MetricMap");
 }
 
