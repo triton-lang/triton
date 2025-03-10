@@ -257,8 +257,11 @@ public:
 
   void run() {
     for (auto &op : forOp.getBody()->without_terminator()) {
+      // If the acc can not be multibuffered, do not pipeline the uses of
+      // the MMA to later stages.
       if (isa<ttng::MMAv5OpInterface>(op) &&
-          isPipeliningOfMMAOpPossible(&op, forOp)) {
+          isPipeliningOfMMAOpPossible(&op, forOp) &&
+          !getDisallowAccMultiBuffer(forOp)) {
         opLatency[&op] = 1;
       }
     }

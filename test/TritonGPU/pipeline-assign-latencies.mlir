@@ -436,6 +436,35 @@ tt.func @tc_gen5_mma(%lb : index, %ub : index, %step : index,
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
+// Do not put the use of the MMA to the later stages if the acc can not be
+// multibuffered.
+// CHECK-LABEL: @tc_gen5_mma_disallow_multibuffer
+tt.func @tc_gen5_mma_disallow_multibuffer(%lb : index, %ub : index, %step : index,
+                  %A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>,
+                  %B: tensor<128x128xf16, #blocked1>,
+                  %acc_tm : !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory>) -> () {
+  %true = arith.constant true
+  scf.for %iv = %lb to %ub step %step : index {
+    %A = tt.load %A_ptr : tensor<128x128x!tt.ptr<f16>, #blocked1>
+    %A_sh = ttg.local_alloc %A : (tensor<128x128xf16, #blocked1>) -> !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>
+    %B_sh = ttg.local_alloc %B : (tensor<128x128xf16, #blocked1>) -> !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>
+    // CHECK: ttng.tc_gen5_mma
+    // CHECK-NOT: tt.latency
+    ttng.tc_gen5_mma %A_sh, %B_sh, %acc_tm, %true, %true : (!ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory>, !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory>, i1, i1) -> ()
+    "use"(%acc_tm) : (!ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory>) -> ()
+  } {tt.disallow_acc_multi_buffer}
+  tt.return
+}
+}
+
+// -----
+
+#blocked = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
+#blocked1 = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
+#shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+#tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
+
+module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 // CHECK-LABEL: @tc_gen5_mma_defined_outside1
 tt.func @tc_gen5_mma_defined_outside1(%lb : index, %ub : index, %step : index,
                   %A_ptr: tensor<128x128x!tt.ptr<f16>, #blocked1>,

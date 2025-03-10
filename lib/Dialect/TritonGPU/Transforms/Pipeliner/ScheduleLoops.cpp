@@ -1,8 +1,10 @@
+#include "mlir/IR/Dominance.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "triton-loop-pipeline"
@@ -12,7 +14,7 @@
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
-
+namespace ttng = mlir::triton::nvidia_gpu;
 namespace mlir {
 namespace triton {
 namespace gpu {
@@ -48,6 +50,22 @@ bool hasLatenciesAssigned(scf::ForOp forOp,
   return false;
 }
 
+SmallVector<Operation *> getDependentOps(Operation *op,
+                                         DominanceInfo &domInfo) {
+  if (auto mmav5Op = dyn_cast<ttng::MMAv5OpInterface>(op)) {
+    SmallVector<Operation *> dependentOps;
+    Value acc = mmav5Op.getAccumulator();
+    for (Operation *user : acc.getUsers()) {
+      if (domInfo.properlyDominates(mmav5Op, user)) {
+        dependentOps.push_back(user);
+      }
+    }
+    return dependentOps;
+  } else {
+    return {op->getUsers().begin(), op->getUsers().end()};
+  }
+}
+
 CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
                               const DenseMap<Operation *, int> &opLatency) {
   llvm::MapVector<Operation *, int> opToStage;
@@ -63,6 +81,7 @@ CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
   if (latOps.empty())
     return CoarseSchedule(0);
 
+  DominanceInfo domInfo(forOp);
   // Compute the longest path to the yield for each operation reachable
   // from any latency operation.
   DenseMap<Operation *, int> distance;
@@ -72,7 +91,7 @@ CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
       return it->second;
     // Compute max distance among all users that are inside the loop body
     int maxDist = -1;
-    for (Operation *user : op->getUsers()) {
+    for (Operation *user : getDependentOps(op, domInfo)) {
       // Only consider users inside the same block and not the terminator
       Operation *inBlockUser = forOp.getBody()->findAncestorOpInBlock(*user);
       if (!inBlockUser || inBlockUser == terminator)
