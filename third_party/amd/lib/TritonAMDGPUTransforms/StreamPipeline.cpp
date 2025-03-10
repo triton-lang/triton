@@ -118,7 +118,7 @@ class StreamPipeliner {
 public:
   StreamPipeliner(scf::ForOp _forOp, int _numStages, int _globalPrefetch,
                   int _localPrefetch)
-      : forOp(_forOp), numBuffers(1), numStages(_numStages),
+      : forOp(_forOp), numStages(_numStages), numBuffers(1),
         schedule(numStages),
         axisInfoAnalysis(forOp->getParentOfType<ModuleOp>()) {
     int lastStage = numStages - 1;
