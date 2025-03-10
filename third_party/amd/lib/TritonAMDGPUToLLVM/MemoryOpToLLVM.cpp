@@ -202,8 +202,7 @@ private:
     }
 
     // 3. Check current limitations.
-    if (bitwidth != 16 &&
-        (bitwidth != 8 || !dstTy.getElementType().isInteger())) {
+    if (bitwidth != 16 && bitwidth != 8) {
       return false;
     }
 

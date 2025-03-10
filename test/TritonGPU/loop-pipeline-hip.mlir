@@ -451,10 +451,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %80 = tt.load %arg13 : tensor<128x256x!tt.ptr<f8E5M2>, #blocked>
       %81 = tt.load %arg14 : tensor<128x256x!tt.ptr<i8>, #blocked>
       %82 = tt.load %arg15 : tensor<256x8x!tt.ptr<i8>, #blocked1>
-      %83 = ttg.convert_layout %80 : tensor<128x256xf8E5M2, #blocked> -> tensor<128x256xf8E5M2, #linear1>
-      %84 = ttg.convert_layout %81 : tensor<128x256xi8, #blocked> -> tensor<128x256xi8, #linear2>
+      %83 = ttg.convert_layout %80 : tensor<128x256xf8E5M2, #blocked> -> tensor<128x256xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>
+      %84 = ttg.convert_layout %81 : tensor<128x256xi8, #blocked> -> tensor<128x256xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>>
       %85 = ttg.convert_layout %82 : tensor<256x8xi8, #blocked1> -> tensor<256x8xi8, #linear3>
-      %86 = tt.dot_scaled %83 scale %cst_1, %84 scale %85, %arg16 lhs = e5m2 rhs = e2m1 {fastMath = false} : tensor<128x256xf8E5M2, #linear1>, tensor<128x8xi8, #linear> * tensor<128x256xi8, #linear2>, tensor<256x8xi8, #linear3> -> tensor<128x256xf32, #mma>
+      %86 = tt.dot_scaled %83 scale %cst_1, %84 scale %85, %arg16 lhs = e5m2 rhs = e2m1 {fastMath = false} : tensor<128x256xf8E5M2, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 16}>>, tensor<128x8xi8, #linear> * tensor<128x256xi8, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 16}>>, tensor<256x8xi8, #linear3> -> tensor<128x256xf32, #mma>
       %87 = ttg.convert_layout %86 : tensor<128x256xf32, #mma> -> tensor<128x256xf32, #blocked2>
       %88 = tt.addptr %arg13, %cst : tensor<128x256x!tt.ptr<f8E5M2>, #blocked>, tensor<128x256xi32, #blocked>
       %89 = tt.addptr %arg14, %61 : tensor<128x256x!tt.ptr<i8>, #blocked>, tensor<128x256xi32, #blocked>
