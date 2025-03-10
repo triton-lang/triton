@@ -539,12 +539,12 @@ unsigned getContiguity(Value ptr, Value offset,
 
   // To compute the contiguity of the scalar/warp-uniform ptr and offset pair we
   // need to look at the contiguity of the offsets and the alignment of the ptr
-  auto contiguity = axisAnalysisPass.getContiguity(offset);
+  auto elemNumBits = triton::getPointeeBitWidth(tensorTy);
+  auto contiguity = axisAnalysisPass.getContiguity(offset, elemNumBits);
 
   // To get the alignment of the scalar ptr we need to look at the divisibility
   auto *axisInfo = axisAnalysisPass.getAxisInfo(ptr);
   auto maxMultipleBytes = axisInfo->getDivisibility(0);
-  auto elemNumBits = triton::getPointeeBitWidth(tensorTy);
   auto elemNumBytes = std::max<unsigned>(elemNumBits / 8, 1);
   auto align = std::max<unsigned>(maxMultipleBytes / elemNumBytes, 1);
 
