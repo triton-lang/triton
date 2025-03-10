@@ -4,13 +4,15 @@ from typing import Dict, List, Optional, Tuple, Any
 from triton._C.libtriton import ir
 from triton._C.libtriton import proton as triton_proton
 from triton._C.libproton import proton as libproton
+from triton.compiler import CompiledKernel, LazyDict
+from triton.runtime.jit import JITFunction
+from triton.language import constexpr
+from triton.runtime._allocation import set_profile_allocator, NullAllocator
 
 from .hook import TritonHook
 
 
 class TritonInstrumentationHook:
-    from triton.compiler import LazyDict
-
     # Mapping of function objects to their scope ID pairs
     function_scope_ids: Dict[Any, List[Tuple[int, int]]] = {}
 
@@ -35,7 +37,7 @@ class TritonInstrumentationHook:
             ir.load_dialects(context)
             module = ir.parse_mlir_module(ir_path, context)
             module.context = context
-            TritonInstrumentationHook.function_scope_ids[function] = (triton_proton.get_scope_id_pairs(module))
+            TritonInstrumentationHook.function_scope_ids[function] = triton_proton.get_scope_id_pairs(module)
 
     @staticmethod
     def enter(lazy_dict: LazyDict) -> None:
@@ -76,8 +78,6 @@ class CudaAllocator:
 
 
 def register_instrumentation_hook(mode: str) -> None:
-    from triton.compiler import CompiledKernel
-
     # Register init handle hook
     if CompiledKernel.init_handle_hook is not None:
         raise RuntimeError("Triton instrumentation hook is already registered.")
@@ -90,9 +90,6 @@ def register_instrumentation_hook(mode: str) -> None:
         CompiledKernel.launch_exit_hook = TritonInstrumentationHook.exit
 
     # Set up JIT function instrumentation
-    from triton.runtime.jit import JITFunction
-    from triton.language import constexpr
-    from triton.runtime._allocation import set_profile_allocator
 
     # Monkey patch JITFunction.run to include instrumentation mode
     original_run = JITFunction.run
@@ -109,8 +106,6 @@ def register_instrumentation_hook(mode: str) -> None:
 
 
 def unregister_instrumentation_hook() -> None:
-    from triton.compiler import CompiledKernel
-
     # Clean up hook references
     CompiledKernel.init_handle_hook = None
 
@@ -123,9 +118,6 @@ def unregister_instrumentation_hook() -> None:
         CompiledKernel.launch_exit_hook = None
 
     # Restore original JIT function run method
-    from triton.runtime.jit import JITFunction
-    from triton.runtime._allocation import set_profile_allocator, NullAllocator
-
     if hasattr(JITFunction.run, "__wrapped__"):
         JITFunction.run = JITFunction.run.__wrapped__
 

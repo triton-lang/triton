@@ -1,12 +1,11 @@
 from .state import enter_state, exit_state
 from .scope import enter_scope, exit_scope
+from triton.compiler import CompiledKernel, LazyDict
 
 COMPUTE_METADATA_SCOPE_NAME = "__proton_launch_metadata"
 
 
 class TritonHook:
-    from triton.compiler import LazyDict
-
     flops_width = [8, 16, 32, 64]
     metrics = [f"flops{width}" for width in flops_width] + ["bytes"] + ["flops"]
 
@@ -24,8 +23,6 @@ class TritonHook:
 
 
 def register_launch_hook() -> None:
-    from triton.compiler import CompiledKernel
-
     if CompiledKernel.launch_enter_hook is None:
         CompiledKernel.launch_enter_hook = TritonHook.enter
         CompiledKernel.launch_exit_hook = TritonHook.exit
@@ -34,7 +31,5 @@ def register_launch_hook() -> None:
 
 
 def unregister_launch_hook() -> None:
-    from triton.compiler import CompiledKernel
-
     CompiledKernel.launch_enter_hook = None
     CompiledKernel.launch_exit_hook = None
