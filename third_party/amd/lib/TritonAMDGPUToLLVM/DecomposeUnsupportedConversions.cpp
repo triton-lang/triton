@@ -82,7 +82,7 @@ struct DecomposeUnsupportedAMDConversions
         return;
       }
 
-      unsigned numWarps = triton::gpu::getNumWarpsPerCTA(srcEnc);
+      unsigned numWarps = lookupNumWarps(cvtOp);
 
       // Find all possible shapes of WarpsPerCTA by finding all possible
       // factorizations of numWarps. Pick shape for which both conversions in

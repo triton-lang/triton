@@ -194,26 +194,17 @@ Value getThreadId(OpBuilder &rewriter, Location loc) {
   return tid;
 }
 
-static int lookupThreadsPerWarp(OpBuilder &rewriter) {
-  assert(rewriter.getInsertionBlock() && "expected an insertion point");
-  Operation *op = rewriter.getInsertionBlock()->getParentOp();
-  while (op && !isa<ModuleOp>(op))
-    op = op->getParentOp();
-  assert(op && "cannot create thread ID outside of module");
-  return triton::gpu::TritonGPUDialect::getThreadsPerWarp(cast<ModuleOp>(op));
-}
-
 Value getLaneId(OpBuilder &rewriter, Location loc) {
   TritonLLVMOpBuilder b(loc, rewriter);
   Value tid = getThreadId(rewriter, loc);
-  int threadsPerWarp = lookupThreadsPerWarp(rewriter);
+  int threadsPerWarp = triton::gpu::lookupThreadsPerWarp(rewriter);
   return b.urem(tid, b.i32_val(threadsPerWarp));
 }
 
 std::pair<Value, Value> getLaneAndWarpId(OpBuilder &rewriter, Location loc) {
   TritonLLVMOpBuilder b(loc, rewriter);
   Value tid = getThreadId(rewriter, loc);
-  int threadsPerWarp = lookupThreadsPerWarp(rewriter);
+  int threadsPerWarp = triton::gpu::lookupThreadsPerWarp(rewriter);
   Value warpSizeVal = b.i32_val(threadsPerWarp);
 
   Value laneId = b.urem(tid, warpSizeVal);
