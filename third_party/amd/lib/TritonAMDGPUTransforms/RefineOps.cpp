@@ -643,25 +643,27 @@ LogicalResult rewriteReduceOp(OpBuilder &rewriter, triton::ReduceOp op) {
   auto ctx = op->getContext();
   auto loc = op.getLoc();
   uint32_t axisReduce = op.getAxis();
-  uint32_t axisNonReduce = (axisReduce+1)%2;
+  uint32_t axisNonReduce = (axisReduce + 1) % 2;
   if (op.getNumOperands() != 1)
-   return failure();
+    return failure();
 
   // Calculate refined shape.
   auto src = op->getOperand(0);
   auto srcType = rankedTType(src);
-  if (srcType.getRank()!=2)
+  if (srcType.getRank() != 2)
     return failure();
   auto srcShape = srcType.getShape();
   auto srcEncoding = srcType.getEncoding();
   auto srcShapePerCtaTile = triton::gpu::getShapePerCTATile(srcEncoding);
-  SmallVector<int64_t> repShape = {srcShape[0] / srcShapePerCtaTile[0], srcShape[1] / srcShapePerCtaTile[1]};
+  SmallVector<int64_t> repShape = {srcShape[0] / srcShapePerCtaTile[0],
+                                   srcShape[1] / srcShapePerCtaTile[1]};
   int numReps = repShape[axisNonReduce];
   SmallVector<int64_t> refinedSrcShape = {srcShape[0], srcShape[1]};
   refinedSrcShape[axisNonReduce] /= numReps;
   int64_t elementsPerRep = refinedSrcShape[axisNonReduce];
   auto elemTy = srcType.getElementType();
-  auto refinedTensorType = RankedTensorType::get(refinedSrcShape, elemTy, srcEncoding);
+  auto refinedTensorType =
+      RankedTensorType::get(refinedSrcShape, elemTy, srcEncoding);
 
   // Create refined ops.
   rewriter.setInsertionPointAfter(op);
@@ -671,9 +673,9 @@ LogicalResult rewriteReduceOp(OpBuilder &rewriter, triton::ReduceOp op) {
     offset[axisReduce] = 0;
     offset[axisNonReduce] = i * elementsPerRep;
     auto sliceOp = rewriter.create<triton::amdgpu::ExtractSliceOp>(
-      loc, Type{refinedTensorType}, Value{src}, offset);
-    auto reduceOp = rewriter.create<triton::ReduceOp>(
-        loc, ValueRange{sliceOp}, axisReduce);
+        loc, Type{refinedTensorType}, Value{src}, offset);
+    auto reduceOp =
+        rewriter.create<triton::ReduceOp>(loc, ValueRange{sliceOp}, axisReduce);
     IRMapping mapping;
     mapping.map(reduceOp.getOperand(0), sliceOp);
     op.getCombineOp().cloneInto(&reduceOp->getRegion(0), mapping);
