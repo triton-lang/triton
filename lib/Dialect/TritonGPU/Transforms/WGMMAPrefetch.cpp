@@ -221,6 +221,10 @@ LogicalResult WGMMAPrefetcher::initialize() {
     Operation *op = v.getDefiningOp();
     bool foundConvertFromShared = false;
     SmallVector<Value> rets;
+    if(dyn_cast<LocalAllocOp>(op)){
+      return rets;
+    }
+
     rets.push_back(op->getResult(0));
     if (dyn_cast<MemDescSubviewOp>(op))
       return rets;
@@ -290,7 +294,7 @@ LogicalResult WGMMAPrefetcher::initialize() {
     }
 
 
-    if (aVals.size()) {
+    if (aVals.size() && bVals.size()) {
       Value aSmem = aVals.front();
       Value bSmem = bVals.front();
       if(!dyn_cast<MemDescSubviewOp>(aSmem.getDefiningOp()) || !dyn_cast<MemDescSubviewOp>(bSmem.getDefiningOp())){
