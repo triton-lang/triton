@@ -354,8 +354,9 @@ class CUDABackend(BaseBackend):
         metadata["tmem_size"] = src.get_int_attr("ttg.tensor_memory_size")
         metadata["global_scratch_size"] = src.get_int_attr("ttg.global_scratch_memory_size")
         metadata["global_scratch_align"] = src.get_int_attr("ttg.global_scratch_memory_alignment")
-        metadata["profile_scratch_size"] = src.get_int_attr("ttg.profile_scratch_memory_size")
-        metadata["profile_scratch_align"] = src.get_int_attr("ttg.profile_scratch_memory_alignment")
+        # TODO(Keren): Update numbers
+        metadata["profile_scratch_size"] = 0
+        metadata["profile_scratch_align"] = 1
         ret = str(llvm_mod)
         del llvm_mod
         del context
