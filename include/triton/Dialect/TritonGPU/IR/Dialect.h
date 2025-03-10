@@ -240,4 +240,62 @@ llvm::SmallVector<unsigned>
 expandMatrixOrderWithBatch(llvm::ArrayRef<unsigned> o);
 } // namespace mlir::triton::gpu
 
+namespace mlir::triton::gpu {
+struct TritonGPUInferLayoutInterface
+    : public triton::DialectInferLayoutInterface {
+  using DialectInferLayoutInterface::DialectInferLayoutInterface;
+
+  LogicalResult inferTransOpEncoding(Attribute operandEncoding,
+                                     ArrayRef<int64_t> shape,
+                                     ArrayRef<int32_t> order,
+                                     Attribute &resultEncoding) const override;
+
+  LogicalResult inferReduceOpEncoding(Attribute operandEncoding, unsigned axis,
+                                      Attribute &resultEncoding) const override;
+
+  LogicalResult
+  inferExpandDimsOpEncoding(Attribute operandEncoding, unsigned axis,
+                            Attribute &resultEncoding,
+                            std::optional<Location> location) const override;
+
+  LogicalResult
+  inferDotOpEncoding(Attribute operandEncoding, unsigned opIdx,
+                     Attribute retEncoding,
+                     std::optional<Location> location) const override;
+
+  LogicalResult inferReshapeOpLegacyEncoding(ArrayRef<int64_t> srcShape,
+                                             Attribute srcEnc,
+                                             ArrayRef<int64_t> dstShape,
+                                             Attribute &dstEnc) const;
+  LogicalResult
+  inferReshapeOpEncoding(ArrayRef<int64_t> srcShape, Attribute srcEnc,
+                         ArrayRef<int64_t> dstShape, Attribute &dstEnc,
+                         std::optional<Location> loc) const override;
+
+  LogicalResult
+  verifyLayoutsAreEqual(ArrayRef<int64_t> shape, Attribute expected,
+                        Attribute got,
+                        std::optional<Location> loc) const override;
+
+  LogicalResult
+  inferDefaultJoinOpEncoding(Attribute srcEnc, Attribute &dstEnc,
+                             ArrayRef<int64_t> shape,
+                             std::optional<Location> loc) const override;
+
+  LogicalResult
+  inferSplitOpEncoding(Attribute srcEnc, Attribute &dstEnc,
+                       ArrayRef<int64_t> shape,
+                       std::optional<Location> loc) const override;
+
+  LogicalResult
+  verifyDotOpEncodingCompatibility(Operation *op, Attribute operandEncodingA,
+                                   Attribute operandEncodingB) const override;
+
+  LogicalResult
+  inferFp4ToFpOpEncoding(ArrayRef<int64_t> shape, int axis, Attribute inEnc,
+                         Attribute &outEnc, bool fwdInference,
+                         std::optional<Location> loc) const override;
+}
+} // namespace mlir::triton::gpu
+
 #endif // TRITON_DIALECT_TRITONGPU_IR_DIALECT_H_
