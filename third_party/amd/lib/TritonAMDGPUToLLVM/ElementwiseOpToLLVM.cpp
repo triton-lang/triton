@@ -298,14 +298,16 @@ static SmallVector<Value> Fp8E4M3FN_to_Fp32(Location loc,
                                             ConversionPatternRewriter &rewriter,
                                             const SmallVector<Value> &v) {
   assert(v.size() == 2);
-  return cvtScaleFp8ToFp32<ROCDL::CvtScale32PkF32Fp8>(loc, rewriter, v[0], v[1]);
+  return cvtScaleFp8ToFp32<ROCDL::CvtScale32PkF32Fp8>(loc, rewriter, v[0],
+                                                      v[1]);
 }
 
 static SmallVector<Value> Fp8E5M2_to_Fp32(Location loc,
                                           ConversionPatternRewriter &rewriter,
                                           const SmallVector<Value> &v) {
   assert(v.size() == 2);
-  return cvtScaleFp8ToFp32<ROCDL::CvtScale32PkF32Bf8>(loc, rewriter, v[0], v[1]);
+  return cvtScaleFp8ToFp32<ROCDL::CvtScale32PkF32Bf8>(loc, rewriter, v[0],
+                                                      v[1]);
 }
 
 template <typename convertOp>

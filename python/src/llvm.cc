@@ -46,8 +46,8 @@ std::unique_ptr<TargetMachine>
 createTargetMachine(llvm::Module *module, std::string proc,
                     bool enable_fp_fusion, const std::string &features) {
   std::string error;
-  auto target =
-      llvm::TargetRegistry::lookupTarget(module->getTargetTriple().str(), error);
+  auto target = llvm::TargetRegistry::lookupTarget(
+      module->getTargetTriple().str(), error);
   llvm::TargetOptions opt;
   bool disableLLVMOpt = mlir::triton::tools::getBoolEnv("DISABLE_LLVM_OPT");
   if (enable_fp_fusion)

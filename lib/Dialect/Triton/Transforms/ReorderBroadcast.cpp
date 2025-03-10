@@ -43,7 +43,8 @@ struct MoveSplatAfterElementwisePattern
   MoveSplatAfterElementwisePattern(MLIRContext *context)
       : OpTraitRewritePattern(context) {}
 
-  LogicalResult matchAndRewrite(Operation *op, PatternRewriter &rewriter) const override {
+  LogicalResult matchAndRewrite(Operation *op,
+                                PatternRewriter &rewriter) const override {
     if (!isMemoryEffectFree(op)) {
       return failure();
     }
@@ -57,9 +58,9 @@ struct MoveSplatAfterElementwisePattern
         return failure();
       }
     }
-    //return success(op->getNumOperands() > 0);
-    if(op->getNumOperands() <= 0)
-        return failure();
+
+    if (op->getNumOperands() <= 0)
+      return failure();
 
     auto loc = op->getLoc();
     auto operands = op->getOperands();
@@ -109,7 +110,8 @@ struct MoveBroadcastAfterElementwisePattern
   MoveBroadcastAfterElementwisePattern(MLIRContext *context)
       : OpTraitRewritePattern(context) {}
 
-  LogicalResult matchAndRewrite(Operation *op, PatternRewriter &rewriter) const override {
+  LogicalResult matchAndRewrite(Operation *op,
+                                PatternRewriter &rewriter) const override {
     if (!isMemoryEffectFree(op)) {
       return failure();
     }
@@ -139,7 +141,7 @@ struct MoveBroadcastAfterElementwisePattern
       }
     }
     if (!seenBroadcast)
-        return failure();
+      return failure();
 
     auto loc = op->getLoc();
 
