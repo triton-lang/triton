@@ -279,6 +279,7 @@ class CUDABackend(BaseBackend):
         else:
             passes.common.add_licm(pm)
         passes.ttgpuir.add_prefetch(pm)
+        passes.ttgpuir.add_WGMMAPrefetch(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, capability >= 80)
         passes.ttgpuir.add_coalesce_async_copy(pm)
         passes.ttgpuir.add_remove_layout_conversions(pm)
