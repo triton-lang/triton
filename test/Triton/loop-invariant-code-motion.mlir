@@ -58,7 +58,8 @@ tt.func @hoist_load_with_mask(%arg0: tensor<1024x!tt.ptr<f32>>, %arg1: tensor<10
   // CHECK: %[[TRIP_COUNT_CMP:.*]] = arith.cmpi slt, %[[LB:.*]], %[[UB:.*]]
   // CHECK: %[[SPLAT:.*]] = tt.splat %[[TRIP_COUNT_CMP]]
   // CHECK: %[[AND:.*]] = arith.andi %[[SPLAT]], %[[MASK]]
-  // CHECK: tt.load %[[_:.*]], %[[AND]]
+  // CHECK: %[[LOAD:.*]] = tt.load %[[_:.*]], %[[AND]]
+  // CHECK: arith.addf %[[LOAD]], %[[LOAD]]
   // CHECK: scf.for
   // CHECK-NOT: tt.load
   %0 = arith.cmpi slt, %arg1, %arg2 : tensor<1024xi32>
