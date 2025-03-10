@@ -257,7 +257,7 @@ public:
 
   void run() {
     for (auto &op : forOp.getBody()->without_terminator()) {
-      if (isa<ttng::TCGen5MMAOp, ttng::TCGen5MMAScaledOp>(op) &&
+      if (isa<ttng::MMAv5OpInterface>(op) &&
           isPipeliningOfMMAOpPossible(&op, forOp)) {
         opLatency[&op] = 1;
       }
@@ -269,8 +269,7 @@ private:
   DenseMap<Operation *, int> &opLatency;
 
   bool isPipeliningOfMMAOpPossible(Operation *op, scf::ForOp forOp) {
-    assert((isa<ttng::TCGen5MMAOp, ttng::TCGen5MMAScaledOp>(op)) &&
-           "Only MMA ops are supported");
+    assert((isa<ttng::MMAv5OpInterface>(op)) && "Only MMA ops are supported");
     // Operands of the MMA op must come from the load, or from outside the loop.
     auto comesFromLoadOrOutsideLoop = [&](Value v) {
       if (forOp.isDefinedOutsideOfLoop(v)) {
@@ -346,11 +345,9 @@ void assignLatencies(ModuleOp moduleOp, int defaultNumStages, bool assignMMA) {
       continue;
     }
     int numStages = getNumStagesOrDefault(forOp);
-    AssignLoadLatencies assignLoadLatencies(forOp, numStages, opLatency);
-    assignLoadLatencies.run();
+    AssignLoadLatencies(forOp, numStages, opLatency).run();
     if (assignMMA) {
-      AssignMMALatencies assignMMALatencies(forOp, opLatency);
-      assignMMALatencies.run();
+      AssignMMALatencies(forOp, opLatency).run();
     }
   }
   serializeLatencies(moduleOp, opLatency);
