@@ -213,7 +213,7 @@ def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier", [DeclareOpInterfaceMethods<
   let description = [{
     The `ttng.arrive_barrier` operation performs the "arrive" operation on an
     mbarrier object in shared memory. The operation requires a `count` attribute
-    of at least 1, and increases the pending arrival count of the mbarrier by
+    of at least 1, and decreasing the pending arrival count of the mbarrier by
     the specific count.
 
     The operation accepts an optional predicate.
