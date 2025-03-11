@@ -29,5 +29,4 @@ struct AutomaticWarpSpecialization
 };
 } // namespace
 
-void AutomaticWarpSpecialization::runOnOperation() {
-}
+void AutomaticWarpSpecialization::runOnOperation() {}

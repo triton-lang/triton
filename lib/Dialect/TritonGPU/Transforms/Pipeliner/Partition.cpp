@@ -41,7 +41,8 @@ FailureOr<WarpSchedule> WarpSchedule::deserialize(scf::ForOp loop) {
     if (auto attr = op.getAttrOfType<IntegerAttr>(kPartitionAttrName)) {
       int64_t idx = attr.getInt();
       if (idx < 0 || idx >= result.partitions.size()) {
-        return mlir::emitWarning(op.getLoc(), "invalid partition index ") << idx;
+        return mlir::emitWarning(op.getLoc(), "invalid partition index ")
+               << idx;
       }
       partition = result.partitions[idx].get();
     }
