@@ -1,5 +1,5 @@
-#ifndef PROTON_GPU_TO_LLVM_RECORDOP_TO_LLVM_H
-#define PROTON_GPU_TO_LLVM_RECORDOP_TO_LLVM_H
+#ifndef PROTONGPU_TO_LLVM_RECORDOP_TO_LLVM_H
+#define PROTONGPU_TO_LLVM_RECORDOP_TO_LLVM_H
 
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 
@@ -19,4 +19,4 @@ void populateRecordOpToLLVMPattern(LLVMTypeConverter &typeConverter,
 } // namespace proton
 } // namespace mlir::triton
 
-#endif // PROTON_GPU_TO_LLVM_RECORDOP_TO_LLVM_H
+#endif // PROTONGPU_TO_LLVM_RECORDOP_TO_LLVM_H

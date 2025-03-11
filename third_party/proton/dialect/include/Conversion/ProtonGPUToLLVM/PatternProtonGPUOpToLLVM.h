@@ -1,5 +1,5 @@
-#ifndef PROTON_GPU_TO_LLVM_PATTERN_PROTONGPUOP_TO_LLVM_H
-#define PROTON_GPU_TO_LLVM_PATTERN_PROTONGPUOP_TO_LLVM_H
+#ifndef PROTONGPU_TO_LLVM_PATTERN_PROTONGPUOP_TO_LLVM_H
+#define PROTONGPU_TO_LLVM_PATTERN_PROTONGPUOP_TO_LLVM_H
 
 #include "TargetInfoBase.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
@@ -15,4 +15,4 @@ void populateProtonGPUOpPatterns(LLVMTypeConverter &typeConverter,
 } // namespace proton
 } // namespace mlir::triton
 
-#endif // PROTON_GPU_TO_LLVM_PATTERN_PROTONGPUOP_TO_LLVM_H
+#endif // PROTONGPU_TO_LLVM_PATTERN_PROTONGPUOP_TO_LLVM_H
