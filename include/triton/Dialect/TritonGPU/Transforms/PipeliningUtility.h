@@ -78,6 +78,12 @@ Value createScalarAlloc(ImplicitLocOpBuilder &rewriter, Type type,
                         unsigned numBuffers);
 // Create an allocation and init the mbarriers.
 Value createBarrierAlloc(scf::ForOp forOp, int numBarriers);
+// Create an allocation that can hold distance number of tensor shapes.
+Value createAlloc(scf::ForOp forOp, RankedTensorType ty, Location loc,
+                  gpu::SharedEncodingTrait sharedEnc, unsigned distance);
+
+// Get the type of the view of a multi-buffered tensor value.
+gpu::MemDescType getBufferViewType(gpu::MemDescType allocTy);
 
 } // namespace triton
 } // namespace mlir

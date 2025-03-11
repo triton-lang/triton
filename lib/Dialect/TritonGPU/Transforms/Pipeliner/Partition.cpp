@@ -28,7 +28,7 @@ FailureOr<WarpSchedule> WarpSchedule::deserialize(scf::ForOp loop) {
   for (auto [idx, attr] : llvm::enumerate(stages)) {
     auto stage = dyn_cast<IntegerAttr>(attr);
     if (!stage || stage.getInt() < 0) {
-      return mlir::emitError(loop.getLoc(), "partition stages attribute '")
+      return mlir::emitWarning(loop.getLoc(), "partition stages attribute '")
              << kPartitionStagesAttrName << "' has invalid element " << attr;
     }
 
@@ -41,7 +41,7 @@ FailureOr<WarpSchedule> WarpSchedule::deserialize(scf::ForOp loop) {
     if (auto attr = op.getAttrOfType<IntegerAttr>(kPartitionAttrName)) {
       int64_t idx = attr.getInt();
       if (idx < 0 || idx >= result.partitions.size()) {
-        return mlir::emitError(op.getLoc(), "invalid partition index ") << idx;
+        return mlir::emitWarning(op.getLoc(), "invalid partition index ") << idx;
       }
       partition = result.partitions[idx].get();
     }

@@ -1,7 +1,12 @@
-// RUN: triton-opt %s -allow-unregistered-dialect -tritongpu-automatic-warp-specialization -verify-diagnostics
+// RUN: triton-opt %s -allow-unregistered-dialect -tritongpu-rewrite-partition-dependencies -verify-diagnostics
+
+#blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
+!ty = tensor<1xi32, #blocked>
+
+module attributes {"ttg.num-warps" = 4 : i32} {
 
 tt.func @invalid_attribute(%lb: i32, %ub: i32, %step: i32) {
-  // expected-error @below {{partition stages attribute 'ttg.partition.stages' has invalid element "a"}}
+  // expected-warning @below {{partition stages attribute 'ttg.partition.stages' has invalid element "a"}}
   scf.for %i = %lb to %ub step %step : i32 {
     scf.yield
   } {ttg.partition.stages = ["a"]}
@@ -9,7 +14,7 @@ tt.func @invalid_attribute(%lb: i32, %ub: i32, %step: i32) {
     scf.yield
   }
   scf.for %k = %lb to %ub step %step : i32 {
-    // expected-error @below {{invalid partition index -1}}
+    // expected-warning @below {{invalid partition index -1}}
     "op"() {ttg.partition = -1} : () -> ()
     scf.yield
   } {ttg.partition.stages = [2, 2]}
@@ -84,16 +89,49 @@ tt.func @invalid_future_partition(%lb: i32, %ub: i32, %step: i32) {
   tt.return
 }
 
-tt.func @simple_multiplicity(%lb: i32, %ub: i32, %step: i32) {
-  %c0 = arith.constant 0 : index
-  scf.for %i = %lb to %ub step %step iter_args(%k = %c0, %l = %c0) -> (index, index) : i32 {
-    %0 = "op_a"() {ttg.partition = 0} : () -> index
-    "op_b"(%k) {ttg.partition = 1} : (index) -> ()
-    "op_c"(%k) {ttg.partition = 2} : (index) -> ()
-    "op_c"(%k) {ttg.partition = 2} : (index) -> ()
-    "op_d"(%l) {ttg.partition = 1} : (index) -> ()
-    "op_d"(%l) {ttg.partition = 2} : (index) -> ()
-    scf.yield %0, %k : index, index
+tt.func @two_consumers(%lb: i32, %ub: i32, %step: i32) {
+  %c0 = arith.constant dense<0> : !ty
+  scf.for %i = %lb to %ub step %step iter_args() -> () : i32 {
+    %0 = "op_a"() {ttg.partition = 0} : () -> !ty
+    "op_b"(%0) {ttg.partition = 1} : (!ty) -> ()
+    "op_d"(%0) {ttg.partition = 2} : (!ty) -> ()
   } {ttg.partition.stages = [0, 2, 2]}
   tt.return
+}
+
+tt.func @distance_one(%lb: i32, %ub: i32, %step: i32) {
+  %c0 = arith.constant dense<0> : !ty
+  scf.for %i = %lb to %ub step %step iter_args(%k = %c0) -> (!ty) : i32 {
+    %0 = "op_a"() {ttg.partition = 0} : () -> !ty
+    "op_b"(%k) {ttg.partition = 1} : (!ty) -> ()
+    scf.yield %0 : !ty
+  } {ttg.partition.stages = [0, 0]}
+  tt.return
+}
+
+tt.func @complex_case(%lb: i32, %ub: i32, %step: i32) {
+  %c0 = arith.constant dense<0> : !ty
+  scf.for %i = %lb to %ub step %step iter_args(%k = %c0, %l = %c0) -> (!ty, !ty) : i32 {
+    %0 = "op_a"() {ttg.partition = 0} : () -> !ty
+    "op_b"(%k) {ttg.partition = 1} : (!ty) -> ()
+    "op_c"(%k) {ttg.partition = 2} : (!ty) -> ()
+    "op_c"(%k) {ttg.partition = 2} : (!ty) -> ()
+    "op_d"(%l) {ttg.partition = 1} : (!ty) -> ()
+    "op_d"(%l) {ttg.partition = 2} : (!ty) -> ()
+    scf.yield %0, %k : !ty, !ty
+  } {ttg.partition.stages = [0, 2, 2]}
+  tt.return
+}
+
+tt.func @reuse_argument(%lb: i32, %ub: i32, %step: i32) {
+  %c0 = arith.constant dense<0> : !ty
+  scf.for %i = %lb to %ub step %step iter_args(%k = %c0, %l = %c0) -> (!ty, !ty) : i32 {
+    %0 = "op_a"() {ttg.partition = 0} : () -> !ty
+    "op_d"(%l) {ttg.partition = 1} : (!ty) -> ()
+    "op_d"(%l) {ttg.partition = 2} : (!ty) -> ()
+    scf.yield %0, %k : !ty, !ty
+  } {ttg.partition.stages = [1, 0, 0]}
+  tt.return
+}
+
 }

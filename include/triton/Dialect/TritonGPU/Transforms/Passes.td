@@ -106,13 +106,25 @@ def TritonGPUFuseNestedLoops : Pass<"tritongpu-fuse-nested-loops", "mlir::Module
 }
 
 def TritonGPUAutomaticWarpSpecialization : Pass<"tritongpu-automatic-warp-specialization", "mlir::ModuleOp"> {
-  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
-                           "mlir::scf::SCFDialect",
-                           "mlir::arith::ArithDialect"];
+  let dependentDialects = [
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::scf::SCFDialect",
+    "mlir::arith::ArithDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
 
   let options = [
     Option<"numStages", "num-stages", "int32_t", /*default*/"3",
            "number of pipeline stages">
+  ];
+}
+
+def TritonGPURewritePartitionDependencies : Pass<"tritongpu-rewrite-partition-dependencies", "mlir::ModuleOp"> {
+  let dependentDialects = [
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::scf::SCFDialect",
+    "mlir::arith::ArithDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
   ];
 }
 

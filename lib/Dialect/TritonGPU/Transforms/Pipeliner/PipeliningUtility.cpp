@@ -123,6 +123,16 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     waitBarrier.getPredMutable().assign(mask);
     return op;
   }
+  if (auto arriveBarrier = dyn_cast<ttng::ArriveBarrierOp>(op)) {
+    rewriter.setInsertionPoint(arriveBarrier);
+    Value mask = pred;
+    Value currentPred = arriveBarrier.getPred();
+    if (currentPred) {
+      mask = getPredMask(rewriter, currentPred.getType(), currentPred, pred);
+    }
+    arriveBarrier.getPredMutable().assign(mask);
+    return op;
+  }
   if (auto storeOp = dyn_cast<tt::StoreOp>(op)) {
     rewriter.setInsertionPoint(storeOp);
     Value mask = getPredMask(rewriter, storeOp.getPtr().getType(),
@@ -337,4 +347,32 @@ Value mlir::triton::createSingleBufferView(OpBuilder &builder, Value alloc,
   return mlir::triton::createSingleBufferView(
       builder, alloc,
       builder.create<arith::ConstantIntOp>(alloc.getLoc(), idx, 32));
+}
+
+Value mlir::triton::createAlloc(scf::ForOp forOp, RankedTensorType ty,
+                                Location loc,
+                                gpu::SharedEncodingTrait sharedEnc,
+                                unsigned distance) {
+  OpBuilder builder(forOp);
+  Attribute sharedMemorySpace =
+      ttg::SharedMemorySpaceAttr::get(forOp.getContext());
+  SmallVector<int64_t> bufferShape(ty.getShape().begin(), ty.getShape().end());
+  bufferShape.insert(bufferShape.begin(), distance);
+  Type memdescType = ttg::MemDescType::get(bufferShape, ty.getElementType(),
+                                           sharedEnc, sharedMemorySpace,
+                                           /*mutableMemory=*/true);
+  Value alloc = builder.create<ttg::LocalAllocOp>(loc, memdescType);
+
+  builder.setInsertionPointAfter(forOp);
+  builder.create<ttg::LocalDeallocOp>(forOp.getLoc(), alloc);
+  return alloc;
+}
+
+ttg::MemDescType mlir::triton::getBufferViewType(ttg::MemDescType allocTy) {
+  Attribute sharedMemorySpace =
+      ttg::SharedMemorySpaceAttr::get(allocTy.getContext());
+  return ttg::MemDescType::get(allocTy.getShape().drop_front(),
+                               allocTy.getElementType(), allocTy.getEncoding(),
+                               sharedMemorySpace, /*mutableMemory=*/true,
+                               /*allocShape=*/allocTy.getAllocShape());
 }

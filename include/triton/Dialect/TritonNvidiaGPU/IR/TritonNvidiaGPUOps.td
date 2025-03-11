@@ -193,6 +193,21 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [DeclareOpInterfaceMethods<Memo
     let assemblyFormat = "$alloc `,` $phase attr-dict (`,` $pred^)? `:` qualified(type($alloc))";
 }
 
+def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+  let hasVerifier = 1;
+  let arguments = (ins TTG_MemDescType:$alloc, I32Attr:$count, Optional<I1>:$pred);
+
+  let assemblyFormat = [{
+    $alloc `,` $count (`,` $pred^)? attr-dict `:` qualified(type($alloc))
+  }];
+
+  let builders = [
+    OpBuilder<(ins "Value":$alloc, "uint32_t":$count), [{
+      return build($_builder, $_state, alloc, count, /*pred=*/Value());
+    }]>
+  ];
+}
+
 def TTNG_TensorDescToTMAPtrOp : TTNG_Op<"tensor_desc_to_tma_ptr", [Pure]> {
   let summary = "Convert tensor descriptor to pointer to tma descriptor";
 
