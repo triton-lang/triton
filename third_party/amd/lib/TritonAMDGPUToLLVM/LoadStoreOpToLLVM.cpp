@@ -1787,45 +1787,26 @@ private:
                                     afterRedBlock, operand);
     rewriter.setInsertionPointToEnd(partialReductionBlock);
 
-    auto performOpIfCond = [&](Value res, Value v, Value cond) -> Value {
-      Type ty = v.getType();
-      assert(ty == res.getType());
-      Value notCond = b.icmp_eq(cond, b.false_val());
+    auto performOp = [&](Value res, Value v) -> Value {
       switch (opKind) {
       case LLVM::AtomicBinOp::_and:
-        // res &= cond ? v : 1111..
-        return b.and_(res,
-                      b.or_(v, b.sub(b.int_val(ty.getIntOrFloatBitWidth(), 0),
-                                     b.zext(ty, notCond))));
+        return b.and_(res, v);
       case LLVM::AtomicBinOp::_or:
-        // res |= cond ? v : 0
-        return b.or_(res, b.mul(v, b.zext(ty, cond)));
+        return b.or_(res, v);
       case LLVM::AtomicBinOp::_xor:
-        // res ^= cond ? v : 0
-        return b.xor_(res, b.mul(v, b.zext(ty, cond)));
+        return b.xor_(res, v);
       case LLVM::AtomicBinOp::add:
-        // res += cond ? v : 0
-        return b.add(res, b.mul(v, b.zext(ty, cond)));
+        return b.add(res, v);
       case LLVM::AtomicBinOp::fadd:
-        // res += cond ? v : 0
-        return b.fadd(
-            res, b.fmul(v, b.inttofloat(
-                               ty, b.zext(int_ty(ty.getIntOrFloatBitWidth()),
-                                          cond))));
+        return b.fadd(res, v);
       case LLVM::AtomicBinOp::max:
       case LLVM::AtomicBinOp::umax:
-        // res = cond ? umax(v, res) : res
-        return b.or_(b.mul(res, b.zext(ty, notCond)),
-                     b.mul(b.umax(v, res), b.zext(ty, cond)));
+        return b.umax(v, res);
       case LLVM::AtomicBinOp::min:
       case LLVM::AtomicBinOp::umin:
-        // res = cond ? umin(v, res) : res
-        return b.or_(b.mul(res, b.zext(ty, notCond)),
-                     b.mul(b.umin(v, res), b.zext(ty, cond)));
+        return b.umin(v, res);
       case LLVM::AtomicBinOp::xchg:
-        // res = cond ? v : res
-        return b.or_(b.mul(res, b.zext(ty, notCond)),
-                     b.mul(v, b.zext(ty, cond)));
+        return v;
       default:
         llvm_unreachable("Unsupported atomic binary operation.");
       }
@@ -1835,7 +1816,8 @@ private:
     for (int i = 32; i != 0; i /= 2) {
       Value tmp = genI32TiledOp(rewriter, genBPermute, acc,
                                 b.add(idxScaledForPermute, b.i32_val(i * 4)));
-      acc = performOpIfCond(acc, tmp, b.icmp_ult(b.i32_val(i), cntRes));
+      acc =
+          b.select(b.icmp_ult(b.i32_val(i), cntRes), performOp(acc, tmp), acc);
     }
 
     rewriter.create<LLVM::BrOp>(loc, acc, afterRedBlock);
