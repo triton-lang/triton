@@ -5,6 +5,7 @@
 
 using namespace mlir;
 using namespace mlir::triton;
+using namespace mlir::triton::gpu;
 
 // Compute a histogram within a warp. This uses an algorithm by @apgoucher
 // that does the following:
@@ -22,10 +23,8 @@ static SmallVector<Value> computeWarpLevelHistogram(
   Value zero = b.i32_val(0);
   int numBits = llvm::Log2_64(numBins);
   int numBitsLaneId = llvm::Log2_64(numThreadPerWarp);
-  unsigned numElementsPerThreads = triton::gpu::getTotalElemsPerThread(srcType);
-  unsigned numThreadWithUniqueData =
-      triton::gpu::getThreadsPerWarpWithUniqueData(srcType.getEncoding(),
-                                                   srcType.getShape())[0];
+  unsigned numElementsPerThreads = getTotalElemsPerThread(srcType);
+  unsigned numThreadWithUniqueData = getThreadsPerWarp(srcType)[0];
   // The histogram is distributed across threads, each thread owns `numBins /
   // numThreadPerWarp` bins.
   SmallVector<Value> warpLevelHistogram(numBins / numThreadPerWarp, zero);

@@ -30,8 +30,8 @@ bool mlir::triton::isOuterLoop(scf::ForOp forOp) {
 }
 
 // Combine the current mask with the given predicate.
-static Value getPredMask(RewriterBase &rewriter, Type typeLike,
-                         Value currentMask, Value pred) {
+Value mlir::triton::getPredMask(RewriterBase &rewriter, Type typeLike,
+                                Value currentMask, Value pred) {
   Type maskType = tt::getI1SameShape(typeLike);
   Location loc = pred.getLoc();
   Value mask = pred;

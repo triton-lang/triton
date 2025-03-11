@@ -547,8 +547,6 @@ TEST_F(AMDMfmaLayoutTest, mfma_dot_op) {
   auto dot2dOp1 = createDotOperand(1, mfma2d, 4);
   ASSERT_THAT(dot2dOp0.getDefaultWarpOrder(), mfma2d.getDefaultWarpOrder());
   ASSERT_THAT(dot2dOp1.getDefaultWarpOrder(), mfma2d.getDefaultWarpOrder());
-  ASSERT_THAT(dot2dOp0.getThreadsPerWarp(), testing::ElementsAre(32u, 2u));
-  ASSERT_THAT(dot2dOp1.getThreadsPerWarp(), testing::ElementsAre(2u, 32u));
 
   auto tmfma2d = createTransposedMFMA(32, 32, {2, 4});
   auto tdot2dOp0 = createDotOperand(0, tmfma2d, 4);
@@ -561,63 +559,41 @@ TEST_F(AMDMfmaLayoutTest, mfma_dot_op) {
   auto dot3dOp1 = createDotOperand(1, mfma3d, 4);
   ASSERT_THAT(dot3dOp0.getDefaultWarpOrder(), mfma3d.getDefaultWarpOrder());
   ASSERT_THAT(dot3dOp1.getDefaultWarpOrder(), mfma3d.getDefaultWarpOrder());
-  ASSERT_THAT(dot3dOp0.getThreadsPerWarp(), testing::ElementsAre(1u, 32u, 2u));
-  ASSERT_THAT(dot3dOp1.getThreadsPerWarp(), testing::ElementsAre(1u, 2u, 32u));
 
   auto tmfma3d = createTransposedMFMA(32, 32, {2, 4, 1});
   auto tdot3dOp0 = createDotOperand(0, tmfma3d, 4);
   auto tdot3dOp1 = createDotOperand(1, tmfma3d, 4);
   ASSERT_THAT(tdot3dOp0.getDefaultWarpOrder(), tmfma3d.getDefaultWarpOrder());
   ASSERT_THAT(tdot3dOp1.getDefaultWarpOrder(), tmfma3d.getDefaultWarpOrder());
-
-  auto mfma16_2d = createMFMA(16, 16, {2, 4});
-  auto dot16_2dOp0 = createDotOperand(0, mfma16_2d, 4);
-  auto dot16_2dOp1 = createDotOperand(1, mfma16_2d, 4);
-  ASSERT_THAT(dot16_2dOp0.getThreadsPerWarp(), testing::ElementsAre(16u, 4u));
-  ASSERT_THAT(dot16_2dOp1.getThreadsPerWarp(), testing::ElementsAre(4u, 16u));
-
-  auto mfma16_3d = createMFMA(16, 16, {2, 4, 1});
-  auto dot16_3dOp0 = createDotOperand(0, mfma16_3d, 4);
-  auto dot16_3dOp1 = createDotOperand(1, mfma16_3d, 4);
-  ASSERT_THAT(dot16_3dOp0.getThreadsPerWarp(),
-              testing::ElementsAre(1u, 16u, 4u));
-  ASSERT_THAT(dot16_3dOp1.getThreadsPerWarp(),
-              testing::ElementsAre(1u, 4u, 16u));
 }
 
 TEST_F(AMDWmmaLayoutTest, wmmaV1) {
   auto wmma2d = createWMMAv1({2, 4});
   ASSERT_THAT(wmma2d.getDefaultThreadOrder(), testing::ElementsAre(1u, 0u));
   ASSERT_THAT(wmma2d.getDefaultWarpOrder(), testing::ElementsAre(1u, 0u));
-  ASSERT_THAT(wmma2d.getThreadsPerWarp(), testing::ElementsAre(2u, 16u));
 
   auto wmma3d = createWMMAv1({2, 4, 1});
   ASSERT_THAT(wmma3d.getDefaultThreadOrder(), testing::ElementsAre(2u, 1u, 0u));
   ASSERT_THAT(wmma3d.getDefaultWarpOrder(), testing::ElementsAre(2u, 1u, 0u));
-  ASSERT_THAT(wmma3d.getThreadsPerWarp(), testing::ElementsAre(1, 2u, 16u));
 }
 
 TEST_F(AMDWmmaLayoutTest, wmmaV2) {
   auto wmma2d = createWMMAv2(false, {2, 4});
   ASSERT_THAT(wmma2d.getDefaultThreadOrder(), testing::ElementsAre(1u, 0u));
   ASSERT_THAT(wmma2d.getDefaultWarpOrder(), testing::ElementsAre(1u, 0u));
-  ASSERT_THAT(wmma2d.getThreadsPerWarp(), testing::ElementsAre(2u, 16u));
 
   auto wmma3d = createWMMAv2(false, {2, 4, 1});
   ASSERT_THAT(wmma3d.getDefaultThreadOrder(), testing::ElementsAre(2u, 1u, 0u));
   ASSERT_THAT(wmma3d.getDefaultWarpOrder(), testing::ElementsAre(2u, 1u, 0u));
-  ASSERT_THAT(wmma3d.getThreadsPerWarp(), testing::ElementsAre(1u, 2u, 16u));
 
   auto twmma2d = createWMMAv2(true, {2, 4});
   ASSERT_THAT(twmma2d.getDefaultThreadOrder(), testing::ElementsAre(0u, 1u));
   ASSERT_THAT(twmma2d.getDefaultWarpOrder(), testing::ElementsAre(1u, 0u));
-  ASSERT_THAT(twmma2d.getThreadsPerWarp(), testing::ElementsAre(16u, 2u));
 
   auto twmma3d = createWMMAv2(true, {2, 4, 1});
   ASSERT_THAT(twmma3d.getDefaultThreadOrder(),
               testing::ElementsAre(1u, 2u, 0u));
   ASSERT_THAT(twmma3d.getDefaultWarpOrder(), testing::ElementsAre(2u, 1u, 0u));
-  ASSERT_THAT(twmma3d.getThreadsPerWarp(), testing::ElementsAre(1u, 16u, 2u));
 }
 
 TEST_F(AMDWmmaLayoutTest, wmma_dot_op) {
@@ -628,8 +604,6 @@ TEST_F(AMDWmmaLayoutTest, wmma_dot_op) {
               wmma2dVer1.getDefaultWarpOrder());
   ASSERT_THAT(dot2dVer1Op1.getDefaultWarpOrder(),
               wmma2dVer1.getDefaultWarpOrder());
-  ASSERT_THAT(dot2dVer1Op0.getThreadsPerWarp(), testing::ElementsAre(16u, 1u));
-  ASSERT_THAT(dot2dVer1Op1.getThreadsPerWarp(), testing::ElementsAre(1u, 16u));
 
   auto wmma3dVer1 = createWMMAv1({2, 4, 1});
   auto dot3dVer1Op0 = createDotOperand(0, wmma3dVer1, 16);
@@ -638,10 +612,6 @@ TEST_F(AMDWmmaLayoutTest, wmma_dot_op) {
               wmma3dVer1.getDefaultWarpOrder());
   ASSERT_THAT(dot3dVer1Op1.getDefaultWarpOrder(),
               wmma3dVer1.getDefaultWarpOrder());
-  ASSERT_THAT(dot3dVer1Op0.getThreadsPerWarp(),
-              testing::ElementsAre(1, 16u, 1u));
-  ASSERT_THAT(dot3dVer1Op1.getThreadsPerWarp(),
-              testing::ElementsAre(1, 1u, 16u));
 
   auto wmma2dVer2 = createWMMAv2(false, {2, 4});
   auto dot2dVer2Op0 = createDotOperand(0, wmma2dVer2, 16);
@@ -650,8 +620,6 @@ TEST_F(AMDWmmaLayoutTest, wmma_dot_op) {
               wmma2dVer2.getDefaultWarpOrder());
   ASSERT_THAT(dot2dVer2Op1.getDefaultWarpOrder(),
               wmma2dVer2.getDefaultWarpOrder());
-  ASSERT_THAT(dot2dVer2Op0.getThreadsPerWarp(), testing::ElementsAre(16u, 2u));
-  ASSERT_THAT(dot2dVer2Op1.getThreadsPerWarp(), testing::ElementsAre(2u, 16u));
 
   auto wmma3dVer2 = createWMMAv2(false, {2, 4, 1});
   auto dot3dVer2Op0 = createDotOperand(0, wmma3dVer2, 16);
@@ -660,10 +628,6 @@ TEST_F(AMDWmmaLayoutTest, wmma_dot_op) {
               wmma3dVer2.getDefaultWarpOrder());
   ASSERT_THAT(dot3dVer2Op1.getDefaultWarpOrder(),
               wmma3dVer2.getDefaultWarpOrder());
-  ASSERT_THAT(dot3dVer2Op0.getThreadsPerWarp(),
-              testing::ElementsAre(1, 16u, 2u));
-  ASSERT_THAT(dot3dVer2Op1.getThreadsPerWarp(),
-              testing::ElementsAre(1, 2u, 16u));
 }
 
 class LinearEncodingTest : public ::testing::Test {
@@ -740,10 +704,6 @@ TEST_F(LinearEncodingTest, DistributedEncodingToLinearEncoding) {
       if (!isa<triton::gpu::SliceEncodingAttr>(distributedEncoding)) {
         ASSERT_EQ(distributedEncoding.getWarpsPerCTA(),
                   linearEncoding.getWarpsPerCTA());
-        if (!is_dot_op_with_block_parent(distributedEncoding)) {
-          ASSERT_EQ(distributedEncoding.getThreadsPerWarp(),
-                    linearEncoding.getThreadsPerWarp());
-        }
       }
 
       // block level
