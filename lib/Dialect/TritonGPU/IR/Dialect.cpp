@@ -33,13 +33,27 @@ namespace mlir {
 namespace triton {
 namespace gpu {
 
+LinearEncodingAttr TritonGPUDialect::toLinearEncoding(ArrayRef<int64_t> shape,
+                                                      Attribute layout) {
+  CacheKey key{std::vector<int64_t>(shape.begin(), shape.end()), layout};
+  if (auto result = leCache.get(key)) {
+    return *result;
+  }
+  auto linearLayout = toLinearLayout(shape, layout);
+  auto linearEncoding =
+      LinearEncodingAttr::get(layout.getContext(), std::move(linearLayout));
+  leCache.set(key, linearEncoding);
+  return linearEncoding;
+}
+
 LinearEncodingAttr toLinearEncoding(RankedTensorType type) {
   return toLinearEncoding(type.getEncoding(), type.getShape());
 }
 
 LinearEncodingAttr toLinearEncoding(Attribute layout, ArrayRef<int64_t> shape) {
-  auto linearLayout = toLinearLayout(shape, layout);
-  return LinearEncodingAttr::get(layout.getContext(), std::move(linearLayout));
+  auto *ctx = layout.getContext();
+  return ctx->getLoadedDialect<TritonGPUDialect>()->toLinearEncoding(shape,
+                                                                     layout);
 }
 
 unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape) {

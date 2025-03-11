@@ -55,9 +55,9 @@ std::optional<int> maybeLookupNumWarps(Operation *op);
 // Utility to find the number of threads per warp
 int lookupThreadsPerWarp(OpBuilder &rewriter);
 
-class LinearLayoutCache {
+template <typename Key, typename Value> class Cache {
 public:
-  std::optional<LinearLayout> get(const CacheKey &key) {
+  std::optional<Value> get(const Key &key) {
     std::shared_lock lock(mutex);
     auto it = cache.find(key);
     if (it != cache.end()) {
@@ -66,15 +66,18 @@ public:
     return std::nullopt;
   }
 
-  void set(CacheKey key, LinearLayout result) {
+  void set(Key key, Value result) {
     std::scoped_lock lock(mutex);
     cache.emplace(std::move(key), std::move(result));
   }
 
 private:
-  std::unordered_map<CacheKey, LinearLayout> cache;
+  std::unordered_map<Key, Value> cache;
   llvm::sys::SmartRWMutex<true> mutex;
 };
+
+using LinearLayoutCache = Cache<CacheKey, LinearLayout>;
+using LinearEncodingCache = Cache<CacheKey, LinearEncodingAttr>;
 } // namespace mlir::triton::gpu
 
 #define GET_OP_CLASSES
