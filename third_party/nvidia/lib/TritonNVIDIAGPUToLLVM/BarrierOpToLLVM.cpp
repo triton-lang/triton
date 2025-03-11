@@ -192,7 +192,7 @@ struct ArriveBarrierOpConversion
   LogicalResult
   matchAndRewrite(triton::nvidia_gpu::ArriveBarrierOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // TODO: Add phase result and count as needed.
+    // TODO: Add phase result as needed.
     std::string ptxAsm =
         "mbarrier.arrive.shared.b64 _, [$0], " + std::to_string(op.getCount());
     if (op.getPred())
