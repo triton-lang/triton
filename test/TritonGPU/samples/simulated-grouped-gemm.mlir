@@ -58,9 +58,9 @@
 // CHECK:           %[[VAL_43:.*]] = tt.elementwise_inline_asm "mov.b32 $0, 0;" {constraints = "=r", packed_element = 1 : i32, pure = true} -> i32
 // CHECK:           %[[VAL_44:.*]] = arith.muli %[[VAL_29]], %[[VAL_39]] : i32
 // CHECK:           %[[VAL_45:.*]] = arith.subi %[[VAL_29]], %[[VAL_10]] : i32
-// CHECK:           %[[VAL_49:.*]] = ttg.local_alloc  : () -> !ttg.memdesc<3x128x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable>
-// CHECK:           %[[VAL_50:.*]] = ttg.local_alloc  : () -> !ttg.memdesc<3x256x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable>
-// CHECK:           %[[VAL_51:.*]] = ttg.local_alloc  : () -> !ttg.memdesc<3xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable>
+// CHECK:           %[[VAL_49:.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x128x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable>
+// CHECK:           %[[VAL_50:.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x256x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable>
+// CHECK:           %[[VAL_51:.*]] = ttg.local_alloc : () -> !ttg.memdesc<3xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable>
 // CHECK:           %[[VAL_52:.*]] = ttg.memdesc_subview %[[VAL_51]]{{\[}}%[[VAL_13]]] : !ttg.memdesc<3xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable> -> !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
 // CHECK:           ttng.init_barrier %[[VAL_52]], 1 : !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
 // CHECK:           %[[VAL_53:.*]] = ttg.memdesc_subview %[[VAL_51]]{{\[}}%[[VAL_10]]] : !ttg.memdesc<3xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable> -> !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
@@ -152,7 +152,7 @@
 // CHECK:           %[[VAL_114:.*]] = ttg.memdesc_subview %[[VAL_50]]{{\[}}%[[VAL_10]], %[[VAL_13]], %[[VAL_13]]] : !ttg.memdesc<3x256x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable> -> !ttg.memdesc<256x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable, 3x256x64>
 // CHECK:           %[[VAL_115:.*]] = ttng.tensor_desc_to_tma_ptr %[[VAL_113]]#1 : !tt.tensordesc<tensor<256x64xf16>> to !tt.ptr<i8>
 // CHECK:           ttng.async_tma_copy_global_to_local %[[VAL_115]]{{\[}}%[[VAL_113]]#6, %[[VAL_109]]] %[[VAL_114]], %[[VAL_110]], %[[VAL_75]] : !tt.ptr<i8>, !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3> -> !ttg.memdesc<256x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable, 3x256x64>
-// CHECK:           %[[VAL_116:.*]] = ttg.local_alloc  : () -> !ttg.memdesc<128x256xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable>
+// CHECK:           %[[VAL_116:.*]] = ttg.local_alloc : () -> !ttg.memdesc<128x256xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable>
 // CHECK:           %[[VAL_117:.*]]:20 = scf.for %[[VAL_118:.*]] = %[[VAL_13]] to %[[VAL_44]] step %[[VAL_10]] iter_args(%[[VAL_119:.*]] = %[[VAL_77]], %[[VAL_120:.*]] = %[[VAL_113]]#0, %[[VAL_121:.*]] = %[[VAL_113]]#1, %[[VAL_122:.*]] = %[[VAL_113]]#2, %[[VAL_123:.*]] = %[[VAL_113]]#3, %[[VAL_124:.*]] = %[[VAL_113]]#4, %[[VAL_125:.*]] = %[[VAL_113]]#5, %[[VAL_126:.*]] = %[[VAL_113]]#6, %[[VAL_127:.*]] = %[[VAL_22]], %[[VAL_128:.*]] = %[[VAL_9]], %[[VAL_129:.*]] = %[[VAL_10]], %[[VAL_130:.*]] = %[[VAL_12]], %[[VAL_131:.*]] = %[[VAL_13]], %[[VAL_132:.*]] = %[[VAL_113]]#7, %[[VAL_133:.*]] = %[[VAL_113]]#8, %[[VAL_134:.*]] = %[[VAL_113]]#9, %[[VAL_135:.*]] = %[[VAL_13]], %[[VAL_136:.*]] = %[[VAL_35]], %[[VAL_137:.*]] = %[[VAL_72]]#0, %[[VAL_138:.*]] = %[[VAL_72]]#1) -> (i32, !tt.tensordesc<tensor<128x64xf16>>, !tt.tensordesc<tensor<256x64xf16>>, !tt.tensordesc<tensor<128x256xf16>>, i32, i32, i32, i32, tensor<128x256xf32, #[[$ATTR_0]]>, i1, i32, i32, i32, i32, i32, i32, i32, !tt.tensordesc<tensor<128x256xf16>>, i32, i32)  : i32 {
 // CHECK:             %[[VAL_139:.*]] = arith.subi %[[VAL_44]], %[[VAL_7]] : i32
 // CHECK:             %[[VAL_140:.*]] = arith.cmpi slt, %[[VAL_118]], %[[VAL_139]] : i32

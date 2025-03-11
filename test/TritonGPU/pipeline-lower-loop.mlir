@@ -851,10 +851,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK-LABEL: @pipelining_mmav5_scaled
-  // CHECK: ttg.local_alloc  : () -> !ttg.memdesc<3x128x128xf8E5M2
-  // CHECK: ttg.local_alloc  : () -> !ttg.memdesc<3x128x128xf8E5M2
-  // CHECK: ttg.local_alloc  : () -> !ttg.memdesc<3x1x2x32x4x4xi8
-  // CHECK: ttg.local_alloc  : () -> !ttg.memdesc<3x1x2x32x4x4xi8
+  // CHECK: ttg.local_alloc : () -> !ttg.memdesc<3x128x128xf8E5M2
+  // CHECK: ttg.local_alloc : () -> !ttg.memdesc<3x128x128xf8E5M2
+  // CHECK: ttg.local_alloc : () -> !ttg.memdesc<3x1x2x32x4x4xi8
+  // CHECK: ttg.local_alloc : () -> !ttg.memdesc<3x1x2x32x4x4xi8
   tt.func public @pipelining_mmav5_scaled(%lb : index, %ub : index, %step : index,
                                               %A_ptr: tensor<128x128x!tt.ptr<f8E5M2>, #blocked1>,
                                               %B_ptr: tensor<128x128x!tt.ptr<f8E5M2>, #blocked1>,

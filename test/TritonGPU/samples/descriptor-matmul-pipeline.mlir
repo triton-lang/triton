@@ -52,9 +52,9 @@
 // CHECK:           %[[VAL_40:.*]] = arith.muli %[[VAL_33]], %[[VAL_11]] : i32
 // CHECK:           %[[VAL_41:.*]] = arith.addi %[[VAL_5]], %[[VAL_18]] : i32
 // CHECK:           %[[VAL_42:.*]] = arith.divsi %[[VAL_41]], %[[VAL_13]] : i32
-// CHECK:           %[[VAL_43:.*]] = ttg.local_alloc  : () -> !ttg.memdesc<3x128x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
-// CHECK:           %[[VAL_44:.*]] = ttg.local_alloc  : () -> !ttg.memdesc<3x256x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
-// CHECK:           %[[VAL_45:.*]] = ttg.local_alloc  : () -> !ttg.memdesc<3xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable>
+// CHECK:           %[[VAL_43:.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x128x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
+// CHECK:           %[[VAL_44:.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x256x64xf16, #[[$ATTR_2]], #[[$ATTR_5]], mutable>
+// CHECK:           %[[VAL_45:.*]] = ttg.local_alloc : () -> !ttg.memdesc<3xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable>
 // CHECK:           %[[VAL_46:.*]] = ttg.memdesc_subview %[[VAL_45]]{{\[}}%[[VAL_12]]] : !ttg.memdesc<3xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable, 3>
 // CHECK:           ttng.init_barrier %[[VAL_46]], 1 : !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable, 3>
 // CHECK:           %[[VAL_47:.*]] = ttg.memdesc_subview %[[VAL_45]]{{\[}}%[[VAL_15]]] : !ttg.memdesc<3xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable> -> !ttg.memdesc<1xi64, #[[$ATTR_3]], #[[$ATTR_5]], mutable, 3>
