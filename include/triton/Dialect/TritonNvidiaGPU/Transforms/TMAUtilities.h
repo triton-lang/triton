@@ -121,11 +121,11 @@ mlir::LogicalResult createTMADesc(mlir::Value tmaPtr,
     contig_dim_size = 128 / elemSize;
   }
   llvm::SmallVector<Value> boxDim;
-  if (fp4Padded) {
-    boxDim.push_back(mkI32Constant(128));
-  } else {
-    boxDim.push_back(mkI32Constant(contig_dim_size));
+  if (fp4Padded && contig_dim_size != 128) {
+    op->emitError(
+        "FP4 padded loads require 128 elements or more in the last dim");
   }
+  boxDim.push_back(mkI32Constant(contig_dim_size));
   for (int k = op.getTensorShape().size() - 2; k >= 0; --k) {
     boxDim.push_back(mkI32Constant(op.getTensorShape()[k]));
   }
