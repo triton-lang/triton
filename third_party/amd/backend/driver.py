@@ -346,7 +346,6 @@ static inline void gpuAssert(hipError_t code, const char *file, int line)
 #define HIP_CHECK(ans) {{ gpuAssert((ans), __FILE__, __LINE__); }}
 
 static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int launch_cooperative_grid, int clusterDimX, int clusterDimY, int clusterDimZ, int shared_memory, hipStream_t stream, hipFunction_t function{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
-  // printf("_launch hip kernel\\n");
   hipDeviceptr_t global_scratch = 0;
   hipDeviceptr_t profile_scratch = 0;
   void *params[] = {{ {', '.join(params)} }};
