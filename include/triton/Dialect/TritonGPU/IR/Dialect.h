@@ -99,11 +99,6 @@ unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape);
 
 SmallVector<unsigned> getElemsPerThread(Type type);
 
-// Returns the number of threads per warp that may have access to replicated
-// elements. If you want non-replicated threads, use
-// getThreadsPerWarpWithUniqueData.
-SmallVector<unsigned> getThreadsPerWarp(Attribute layout);
-
 // Returns the number of warps per CTA that may have access to replicated
 // elements. If you want non-replicated warps, use getWarpsPerCTAWithUniqueData.
 SmallVector<unsigned> getWarpsPerCTA(Attribute layout);
@@ -121,9 +116,11 @@ SmallVector<unsigned> getContigPerThread(RankedTensorType tensorType);
 // 1], threadsPerWarp = [2, 16] and tensor shape = [2, 2], threads 0, 1, 16, 17
 // have access to the full tensor, whereas the other threads have access to
 // replicated elements, so this function returns [2, 2].
-SmallVector<unsigned>
-getThreadsPerWarpWithUniqueData(Attribute layout,
-                                ArrayRef<int64_t> tensorShape);
+SmallVector<unsigned> getThreadsPerWarp(Attribute layout,
+                                        ArrayRef<int64_t> shape);
+inline SmallVector<unsigned> getThreadsPerWarp(RankedTensorType type) {
+  return getThreadsPerWarp(type.getEncoding(), type.getShape());
+}
 
 // Returns the number of warps per CTA that have access to non-replicated
 // elements of the tensor. E.g. for a blocked layout with sizePerThread = [1,
