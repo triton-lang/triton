@@ -128,6 +128,10 @@ def TritonGPURewritePartitionDependencies : Pass<"tritongpu-rewrite-partition-de
   ];
 }
 
+def TritonGPUPartitionLoops : Pass<"tritongpu-partition-loops", "mlir::ModuleOp"> {
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
+}
+
 def TritonGPUF32DotTC : Pass<"tritongpu-F32DotTC", "mlir::ModuleOp"> {
   let summary = "3xTF32 trick";
 

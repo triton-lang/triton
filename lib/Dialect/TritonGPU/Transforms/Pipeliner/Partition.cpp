@@ -37,7 +37,7 @@ FailureOr<WarpSchedule> WarpSchedule::deserialize(scf::ForOp loop) {
   }
 
   for (Operation &op : loop.getBody()->without_terminator()) {
-    Partition *partition = &result.rootPartition;
+    Partition *partition = result.getRootPartition();
     if (auto attr = op.getAttrOfType<IntegerAttr>(kPartitionAttrName)) {
       int64_t idx = attr.getInt();
       if (idx < 0 || idx >= result.partitions.size()) {
@@ -70,13 +70,13 @@ void WarpSchedule::serialize(scf::ForOp loop) const {
 FailureOr<PartitionGraph> WarpSchedule::verify(scf::ForOp loop) const {
   // The root partition is only allowed to transitively depend on itself.
   bool failed = false;
-  iterateInputs(loop, &rootPartition, [&](OpOperand &input) {
+  iterateInputs(loop, getRootPartition(), [&](OpOperand &input) {
     auto [def, distance] = getDefiningOpAndDistance(loop, input.get());
     // Ignore values defined outside the loop.
     if (!def || def->getParentOp() != loop)
       return;
     const Partition *defPartition = opToPartition.at(def);
-    if (defPartition == &rootPartition)
+    if (defPartition == getRootPartition())
       return;
     InFlightDiagnostic diag = mlir::emitWarning(input.getOwner()->getLoc());
     diag << "operation in the root partition depends on a value that "

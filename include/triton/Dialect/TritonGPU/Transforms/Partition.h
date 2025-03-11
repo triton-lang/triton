@@ -66,9 +66,9 @@ public:
   // Return an iterator range over the partitions.
   auto getPartitions() const { return llvm::make_pointee_range(partitions); }
   // Get the root partition.
-  Partition *getRootPartition() { return &rootPartition; }
+  Partition *getRootPartition() { return rootPartition.get(); }
   // Get the root partition.
-  const Partition *getRootPartition() const { return &rootPartition; }
+  const Partition *getRootPartition() const { return rootPartition.get(); }
 
   // Deserialize a warp schedule from an `scf.for` op using the attributes
   // tagged on operations in its body.
@@ -111,7 +111,8 @@ private:
   // The root partition contains operations that are not assigned to a
   // partition. Operations not assigned to partitions are assumed to be "free"
   // and can be cloned as necessary.
-  Partition rootPartition = Partition(kSentinel, kSentinel);
+  std::unique_ptr<Partition> rootPartition =
+      std::make_unique<Partition>(kSentinel, kSentinel);
 };
 
 //===----------------------------------------------------------------------===//
