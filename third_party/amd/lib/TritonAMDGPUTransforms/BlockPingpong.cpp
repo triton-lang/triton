@@ -80,6 +80,8 @@ private:
   void appendSlicedLoadAB(int slice);
   void appendClusterBarrier(OpBuilder &builder, Location loc);
   void appendOpWithPrio(OpBuilder &builder, Operation *Op, Location loc);
+  template <typename T> size_t countIfMemoryOps(scf::IfOp ifOp);
+  template <typename T> size_t countForMemoryOps(scf::ForOp forOp);
   template <typename T> size_t estimateNonDotMemoryImpact(T *start, T *end);
   void determineDotMemoryOps(tt::DotOp dotOp,
                              DenseSet<tt::LoadOp> &dotGlobalLoads,
@@ -201,19 +203,49 @@ void Pingponger::findClosestPredOps(Value v, DenseSet<T> &matchingOps) {
   impl(v);
 }
 
+template <typename T> size_t Pingponger::countIfMemoryOps(scf::IfOp ifOp) {
+  size_t thenCount = 0;
+  size_t elseCount = 0;
+  // Don't do a nested traversal as we are only estimating the "same level"
+  for (auto _ : ifOp.thenBlock()->getOps<T>()) {
+    thenCount++;
+  }
+  if (ifOp.elseBlock()) {
+    for (auto _ : ifOp.elseBlock()->getOps<T>()) {
+      elseCount++;
+    }
+  }
+  // TODO: Replace with a heuristic for deciding if we take
+  // the then, else, min, or max.
+  return std::max(thenCount, elseCount);
+}
+
+template <typename T> size_t Pingponger::countForMemoryOps(scf::ForOp forOp) {
+  return 1;
+}
+
 template <typename T>
 size_t Pingponger::estimateNonDotMemoryImpact(T *start, T *end) {
   DenseSet<Operation *> visitedParents;
   size_t count = 0;
   for (auto it = start; it != end; it++) {
     auto parent = (*it)->getParentOp();
-    if (parent == nullptr) {
-      // This shouldn't be reachable but is added
-      // for safety.
+    if (parent == nullptr)
       continue;
-    }
-    if (parent == forOp) {
+    if (parent == forOp)
       count += 1;
+    else {
+      if (visitedParents.contains(parent))
+        continue;
+      visitedParents.insert(parent);
+      if (auto ifOp = dyn_cast<scf::IfOp>(parent))
+        count += countIfMemoryOps<T>(ifOp);
+      else if (auto forOp = dyn_cast<scf::ForOp>(parent))
+        count += countForMemoryOps<T>(forOp);
+      else {
+        // Default to counting every memory access.
+        count += 1;
+      }
     }
   }
   return count;
