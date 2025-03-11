@@ -432,12 +432,10 @@ std::pair<Value, Value> DependencyRewriter::createAndGetAsyncIndex(
 
   auto yield = cast<scf::YieldOp>(loop.getBody()->getTerminator());
   yield.getResultsMutable().append({idx, phase});
-  {
-    OpBuilder::InsertionGuard guard(b);
-    b.setInsertionPoint(loop);
-    // The index is preincremented so subtract 1 from the start.
-    loop.getInitArgsMutable().append({intCst(b, startIdx - 1), intCst(b, 0)});
-  }
+  OpBuilder::InsertionGuard guard(b);
+  b.setInsertionPoint(loop);
+  // The index is preincremented so subtract 1 from the start.
+  loop.getInitArgsMutable().append({intCst(b, startIdx - 1), intCst(b, 0)});
   return {idx, phase};
 }
 
