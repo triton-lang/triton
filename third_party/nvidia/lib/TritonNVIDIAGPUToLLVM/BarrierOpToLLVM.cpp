@@ -184,6 +184,35 @@ struct WaitBarrierOpConversion
     return success();
   }
 };
+
+struct ArriveBarrierOpConversion
+    : public ConvertOpToLLVMPattern<triton::nvidia_gpu::ArriveBarrierOp> {
+  using ConvertOpToLLVMPattern::ConvertOpToLLVMPattern;
+
+  LogicalResult
+  matchAndRewrite(triton::nvidia_gpu::ArriveBarrierOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    // TODO: Add phase result as needed.
+    std::string ptxAsm =
+        "mbarrier.arrive.shared.b64 _, [$0], " + std::to_string(op.getCount());
+    if (op.getPred())
+      ptxAsm = "@$1 " + ptxAsm;
+
+    PTXBuilder ptxBuilder;
+    SmallVector<PTXBuilder::Operand *, 2> operands = {
+        ptxBuilder.newOperand(adaptor.getAlloc(), "r")};
+    if (op.getPred())
+      operands.push_back(ptxBuilder.newOperand(adaptor.getPred(), "b"));
+
+    auto arriveOp = *ptxBuilder.create<>(ptxAsm);
+    arriveOp(operands, /*onlyAttachMLIRArgs=*/true);
+    auto voidTy = void_ty(getContext());
+    ptxBuilder.launch(rewriter, op.getLoc(), voidTy);
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
 } // namespace
 
 void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
@@ -194,4 +223,5 @@ void mlir::triton::NVIDIA::populateBarrierOpToLLVMPatterns(
                                                                   benefit);
   patterns.add<WaitBarrierOpConversion>(typeConverter, benefit);
   patterns.add<BarrierExpectConversion>(typeConverter, benefit);
+  patterns.add<ArriveBarrierOpConversion>(typeConverter, benefit);
 }
