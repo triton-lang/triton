@@ -83,9 +83,7 @@ public:
   Prefetcher() = delete;
 
   Prefetcher(scf::ForOp forOp) : forOp(forOp) {
-    // LDBG("Check the yieldOp of for loop");
     yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
-    // LDBG(yieldOp);
   }
 
   LogicalResult initialize();
@@ -179,9 +177,8 @@ LogicalResult Prefetcher::initialize() {
       dotsInFor.push_back(dotOp);
     }
 
-  if (dotsInFor.empty()) {
+  if (dotsInFor.empty())
     return failure();
-  }
 
   // TODO: segfault (original for still has uses)
   // when used in flash attention that has 2 dots in the loop
@@ -262,14 +259,8 @@ LogicalResult Prefetcher::initialize() {
     if (aVals.size() && bVals.size()) {
       Value aSmem = aVals.front();
       Value bSmem = bVals.front();
-      LDBG("aSmem is: " << aSmem);
-      LDBG("bSmem is: " << bSmem);
-
       Value aHeaderDef = getIncomingOp(aSmem);
       Value bHeaderDef = getIncomingOp(bSmem);
-      LDBG("A IncomingOp is : " << aHeaderDef);
-      LDBG("B IncomingOp is : " << bHeaderDef);
-
       // Only prefetch loop arg
       if (aHeaderDef && bHeaderDef) {
         dots.insert(dot);
@@ -281,8 +272,6 @@ LogicalResult Prefetcher::initialize() {
         dot2bLoopArg[dot] = bSmem;
         dot2aYield[dot] = getYieldOperand(aSmem);
         dot2bYield[dot] = getYieldOperand(bSmem);
-      } else {
-        LDBG("Did not prefetch");
       }
     }
   }
@@ -450,9 +439,6 @@ struct PrefetchPass : public impl::TritonGPUPrefetchBase<PrefetchPass> {
       signalPassFailure();
     }
     getOperation()->walk([&](scf::ForOp forOp) {
-      // LDBG("Check if the layout convert has been removed");
-      // LDBG(forOp);
-
       Prefetcher prefetcher(forOp);
 
       if (prefetcher.initialize().failed())
