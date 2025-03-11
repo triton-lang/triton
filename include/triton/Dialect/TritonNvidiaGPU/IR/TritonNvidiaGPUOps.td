@@ -209,8 +209,28 @@ def TTNG_WaitBarrierOp : TTNG_Op<"wait_barrier", [
 }
 
 def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
-  let hasVerifier = 1;
-  let arguments = (ins TTG_MemDescType:$alloc, I32Attr:$count, Optional<I1>:$pred);
+  let summary = "perform the arrive operation on an mbarrier";
+  let description = [{
+    The `ttng.arrive_barrier` operation performs the "arrive" operation on an
+    mbarrier object in shared memory. The operation requires a `count` attribute
+    of at least 1, and increases the pending arrival count of the mbarrier by
+    the specific count.
+
+    The operation accepts an optional predicate.
+
+    Example:
+
+    ```mlir
+    ttng.arrive_barrier %barrier, 2 : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ttng.arrive_barrier %barrier, 1, %pred : !ttg.memdesc<1xi64, #shared, #smem, mutable>
+    ```
+  }];
+
+  let arguments = (ins
+    TTG_MemDescType:$alloc,
+    I32Attr:$count,
+    Optional<I1>:$pred
+  );
 
   let assemblyFormat = [{
     $alloc `,` $count (`,` $pred^)? attr-dict `:` qualified(type($alloc))
@@ -221,6 +241,8 @@ def TTNG_ArriveBarrierOp : TTNG_Op<"arrive_barrier", [DeclareOpInterfaceMethods<
       return build($_builder, $_state, alloc, count, /*pred=*/Value());
     }]>
   ];
+
+  let hasVerifier = 1;
 }
 
 def TTNG_TensorDescToTMAPtrOp : TTNG_Op<"tensor_desc_to_tma_ptr", [Pure]> {

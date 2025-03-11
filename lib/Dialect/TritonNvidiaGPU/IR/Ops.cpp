@@ -177,13 +177,15 @@ void WaitBarrierOp::getEffects(
 LogicalResult ArriveBarrierOp::verify() {
   if (failed(verifyBarrierType(*this, getAlloc().getType())))
     return failure();
+  if (getCount() < 1)
+    return emitOpError("count must be greater than or equal to 1");
   return success();
 }
 
 void ArriveBarrierOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
-  // The wait will flip the phase therefore it reads and writes the barrier.
+  // The arrive will increment the pending arrival count inside the barrier.
   effects.emplace_back(MemoryEffects::Read::get(), &getAllocMutable(),
                        mlir::triton::gpu::SharedMemory::get());
   effects.emplace_back(MemoryEffects::Write::get(), &getAllocMutable(),
