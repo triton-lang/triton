@@ -198,31 +198,28 @@ SmallVector<unsigned> getOrder(SharedEncodingTrait layout,
   return {};
 }
 
-// Convenience functions
-SmallVector<unsigned> getOrder(TensorOrMemDesc type) {
-  if (auto memDesc = dyn_cast<MemDescType>(type)) {
-    return getOrder(memDesc);
-  } else {
-    auto tensorTy = cast<RankedTensorType>(type);
-    return getOrder(tensorTy);
-  }
-}
-
-SmallVector<unsigned> getOrder(MemDescType type) {
-  return getOrder(cast<SharedEncodingTrait>(type.getEncoding()),
-                  type.getShape());
-}
-
-// Legacy impl for now
 SmallVector<unsigned> getOrder(DistributedEncodingTrait layout,
                                ArrayRef<int64_t> shape) {
-  return layout.getDefaultOrder();
+  return toLinearEncoding(layout, shape).getOrder();
 }
 
-// Convenience function
-SmallVector<unsigned> getOrder(RankedTensorType type) {
-  return getOrder(cast<DistributedEncodingTrait>(type.getEncoding()),
-                  type.getShape());
+SmallVector<unsigned> getOrderForMemory(DistributedEncodingTrait layout,
+                                        ArrayRef<int64_t> shape) {
+  auto linear = toLinearEncoding(layout, shape);
+  auto order = linear.getOrder();
+  auto threadOrder = linear.getThreadOrder();
+  if (order == threadOrder) {
+    return order;
+  }
+  // If the element contiguity does not align with the thread order
+  // because the thread order dimension has contiguity of 1---meaning that
+  // the order position of this dimension is irrelevant---we prefer
+  // to use the thread order for the memory layout
+  auto contig = linear.getContigPerThread();
+  if (contig[threadOrder[0]] == 1) {
+    return threadOrder;
+  }
+  return order;
 }
 
 SmallVector<unsigned> getDefaultMmaOrder(MmaEncodingTrait layout) {
@@ -231,28 +228,14 @@ SmallVector<unsigned> getDefaultMmaOrder(MmaEncodingTrait layout) {
   return getMatrixOrder(rank, /*rowMajor*/ true);
 }
 
-// Legacy impl for now
 SmallVector<unsigned> getThreadOrder(DistributedEncodingTrait layout,
                                      ArrayRef<int64_t> shape) {
-  return layout.getDefaultThreadOrder();
+  return toLinearEncoding(layout, shape).getThreadOrder();
 }
 
-// Convenience function
-SmallVector<unsigned> getThreadOrder(RankedTensorType type) {
-  return getThreadOrder(cast<DistributedEncodingTrait>(type.getEncoding()),
-                        type.getShape());
-}
-
-// Legacy impl for now
 SmallVector<unsigned> getWarpOrder(DistributedEncodingTrait layout,
                                    ArrayRef<int64_t> shape) {
-  return layout.getDefaultWarpOrder();
-}
-
-// Convenience function
-SmallVector<unsigned> getWarpOrder(RankedTensorType type) {
-  return getWarpOrder(cast<DistributedEncodingTrait>(type.getEncoding()),
-                      type.getShape());
+  return toLinearEncoding(layout, shape).getWarpOrder();
 }
 
 CTALayoutAttr getCTALayout(Attribute layout) {

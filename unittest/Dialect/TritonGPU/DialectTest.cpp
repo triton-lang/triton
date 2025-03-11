@@ -690,15 +690,6 @@ TEST_F(LinearEncodingTest, DistributedEncodingToLinearEncoding) {
         ASSERT_EQ(distributedEncoding.getRepOrder(),
                   linearEncoding.getRepOrder());
       }
-      // DotOperandEncodingAttr::getDefaultWarpOrder() is not defined
-      if (!isa<triton::gpu::DotOperandEncodingAttr>(distributedEncoding)) {
-        ASSERT_EQ(distributedEncoding.getDefaultWarpOrder(),
-                  linearEncoding.getWarpOrder());
-      }
-      if (!is_dot_op_with_block_parent(distributedEncoding)) {
-        ASSERT_EQ(distributedEncoding.getDefaultThreadOrder(),
-                  linearEncoding.getThreadOrder());
-      }
       // For slice these do not equal the total number of lines / warps
       // See [Note. Divergence of methods wrt. legacy layouts]
       if (!isa<triton::gpu::SliceEncodingAttr>(distributedEncoding)) {
