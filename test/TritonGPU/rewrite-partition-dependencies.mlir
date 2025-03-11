@@ -161,13 +161,13 @@ tt.func @two_consumers(%lb: i32, %ub: i32, %step: i32) {
 
   // CHECK-NEXT: ttg.partition.stages = [0 : i32, 2 : i32, 2 : i32]
   } {ttg.partition.stages = [0, 2, 2]}
+  // CHECK-NEXT: ttg.local_dealloc [[BUFFERS]]
+  // CHECK-NEXT: ttg.local_dealloc [[READY_BARS]]
+  // CHECK-NEXT: ttg.local_dealloc [[EMPTY_BARS]]
   // CHECK-NEXT: ttng.inval_barrier [[READY0]]
   // CHECK-NEXT: ttng.inval_barrier [[EMPTY0]]
   // CHECK-NEXT: ttng.inval_barrier [[READY1]]
   // CHECK-NEXT: ttng.inval_barrier [[EMPTY1]]
-  // CHECK-NEXT: ttg.local_dealloc [[READY_BARS]]
-  // CHECK-NEXT: ttg.local_dealloc [[EMPTY_BARS]]
-  // CHECK-NEXT: ttg.local_dealloc [[BUFFERS]]
   tt.return
 }
 

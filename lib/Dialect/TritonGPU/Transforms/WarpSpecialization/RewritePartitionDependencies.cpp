@@ -33,41 +33,6 @@ static Value intCst(ImplicitLocOpBuilder &b, int value) {
   return b.create<arith::ConstantOp>(b.getI32IntegerAttr(value));
 }
 
-// Get the view of a multi-buffered tensor value.
-static Value getValueView(ImplicitLocOpBuilder &b, Value idx, Value alloc,
-                          MemDescType viewType) {
-  auto allocType = cast<MemDescType>(alloc.getType());
-  SmallVector<Value> offsets(allocType.getRank(), intCst(b, 0));
-  offsets.front() = idx;
-  return b.create<MemDescSubviewOp>(viewType, alloc, offsets);
-}
-
-// Initialize the barriers for a particular buffer. If there is an initial value
-// for the buffer, store it and mark the buffer as ready to be consumed.
-static void initializeBarriers(ImplicitLocOpBuilder &b,
-                               ImplicitLocOpBuilder &endBuilder, int index,
-                               MemDescType viewType, Value alloc,
-                               Value readyBars, Value emptyBars,
-                               unsigned numConsumers, Value init) {
-  Value idx = intCst(b, index);
-  if (init) {
-    Value view = getValueView(b, idx, alloc, viewType);
-    b.create<LocalStoreOp>(init, view);
-  }
-
-  Value readyView = createSingleBufferView(b, readyBars, idx);
-  Value emptyView = createSingleBufferView(b, emptyBars, idx);
-  b.create<ttng::InitBarrierOp>(readyView, 1);
-  b.create<ttng::InitBarrierOp>(emptyView, numConsumers);
-  if (init)
-    b.create<ttng::ArriveBarrierOp>(readyView, 1);
-  else
-    b.create<ttng::ArriveBarrierOp>(emptyView, numConsumers);
-
-  endBuilder.create<ttng::InvalBarrierOp>(readyView);
-  endBuilder.create<ttng::InvalBarrierOp>(emptyView);
-}
-
 // Create an operation inside a partition.
 template <typename OpT, typename... Args>
 static auto createInPartition(ImplicitLocOpBuilder &b, Partition &partition,
@@ -312,16 +277,45 @@ int UseInfo::getMaxUseDistance(const Partition &partition) {
 }
 
 //===----------------------------------------------------------------------===//
-// DependencyRewriter
+// AsyncRef
 //===----------------------------------------------------------------------===//
 
 namespace {
+struct AsyncRef {
+  Value getValueView(ImplicitLocOpBuilder &b, Value idx) const {
+    SmallVector<Value> offsets(allocType.getRank(), intCst(b, 0));
+    offsets.front() = idx;
+    return b.create<MemDescSubviewOp>(viewType, alloc, offsets);
+  }
+  Value getReadyView(ImplicitLocOpBuilder &b, Value idx) const {
+    return createSingleBufferView(b, readyBars, idx);
+  }
+  Value getEmptyView(ImplicitLocOpBuilder &b, Value idx) const {
+    return createSingleBufferView(b, emptyBars, idx);
+  }
+  auto getView(ImplicitLocOpBuilder &b, Value idx) const {
+    return std::make_tuple(getValueView(b, idx), getReadyView(b, idx),
+                           getEmptyView(b, idx));
+  }
+
+  Value alloc;
+  Value readyBars;
+  Value emptyBars;
+
+  MemDescType allocType;
+  MemDescType viewType;
+};
+
+//===----------------------------------------------------------------------===//
+// DependencyRewriter
+//===----------------------------------------------------------------------===//
 
 // Helper class for dependency rewriting.
 class DependencyRewriter {
 public:
   DependencyRewriter(WarpSchedule &schedule, scf::ForOp loop)
-      : schedule(schedule), loop(loop) {}
+      : schedule(schedule), loop(loop), b(loop.getLoc(), loop),
+        endBuilder(loop.getLoc(), loop->getNextNode()) {}
 
   // Partition the loop.
   LogicalResult run();
@@ -329,11 +323,16 @@ public:
 private:
   void resolveOutputMultiplicity(llvm::MapVector<OpResult, UseInfo> &useInfo,
                                  const Partition &partition);
+  AsyncRef allocateAsyncValue(RankedTensorType tensorType, unsigned numBars);
+  void initializeBarriers(int index, const AsyncRef &aref,
+                          unsigned numConsumers, Value init);
 
   // The schedule to apply.
   WarpSchedule &schedule;
   // The loop to partition.
   scf::ForOp loop;
+  // The builders to use.
+  ImplicitLocOpBuilder b, endBuilder;
 };
 } // namespace
 
@@ -356,6 +355,42 @@ void DependencyRewriter::resolveOutputMultiplicity(
       info.multiplicity.add(uses, distance, yield);
     }
   }
+}
+
+AsyncRef DependencyRewriter::allocateAsyncValue(RankedTensorType tensorType,
+                                                unsigned numBars) {
+  Value alloc = createAlloc(loop, tensorType, b.getLoc(),
+                            getSharedEncoding(tensorType), numBars);
+  Value readyBars = createScalarAlloc(b, b.getI64Type(), numBars);
+  Value emptyBars = createScalarAlloc(b, b.getI64Type(), numBars);
+  auto allocType = cast<MemDescType>(alloc.getType());
+  endBuilder.create<LocalDeallocOp>(readyBars);
+  endBuilder.create<LocalDeallocOp>(emptyBars);
+  return AsyncRef{alloc, readyBars, emptyBars, allocType,
+                  getBufferViewType(allocType)};
+}
+
+// Initialize the barriers for a particular buffer. If there is an initial value
+// for the buffer, store it and mark the buffer as ready to be consumed.
+void DependencyRewriter::initializeBarriers(int index, const AsyncRef &aref,
+                                            unsigned numConsumers, Value init) {
+  Value idx = intCst(b, index);
+  if (init) {
+    Value view = aref.getValueView(b, idx);
+    b.create<LocalStoreOp>(init, view);
+  }
+
+  Value readyView = aref.getReadyView(b, idx);
+  Value emptyView = aref.getEmptyView(b, idx);
+  b.create<ttng::InitBarrierOp>(readyView, 1);
+  b.create<ttng::InitBarrierOp>(emptyView, numConsumers);
+  if (init)
+    b.create<ttng::ArriveBarrierOp>(readyView, 1);
+  else
+    b.create<ttng::ArriveBarrierOp>(emptyView, numConsumers);
+
+  endBuilder.create<ttng::InvalBarrierOp>(readyView);
+  endBuilder.create<ttng::InvalBarrierOp>(emptyView);
 }
 
 LogicalResult DependencyRewriter::run() {
@@ -401,33 +436,24 @@ LogicalResult DependencyRewriter::run() {
 
       // Allocate buffers for the value and its associated barriers.
       b.setLoc(output.getLoc());
-      Value alloc = createAlloc(loop, tensorType, output.getLoc(),
-                                getSharedEncoding(tensorType), numBars);
-      Value readyBars = createScalarAlloc(b, b.getI64Type(), numBars);
-      Value emptyBars = createScalarAlloc(b, b.getI64Type(), numBars);
-
-      auto allocType = cast<MemDescType>(alloc.getType());
-      MemDescType viewType = getBufferViewType(allocType);
+      ImplicitLocOpBuilder endBuilder(b.getLoc(), loop->getNextNode());
+      AsyncRef aref = allocateAsyncValue(tensorType, numBars);
 
       // Initialize the initial values of the loop-carried dependencies.
       unsigned numConsumers = info.consumers.size();
-      ImplicitLocOpBuilder endBuilder(b.getLoc(), loop->getNextNode());
       info.multiplicity.number([&](ArrayRef<Multiplicity::Node *> nodes,
                                    unsigned start, unsigned end) {
         for (auto [i, node] : llvm::zip(llvm::seq(start, end), nodes)) {
-          initializeBarriers(b, endBuilder, i, viewType, alloc, readyBars,
-                             emptyBars, numConsumers,
+          initializeBarriers(i, aref, numConsumers,
                              loop.getInitArgs()[node->argIdx]);
         }
       });
 
       // Initialize the buffers.
       for (auto i : llvm::seq(multiplicitySize, numBars)) {
-        initializeBarriers(b, endBuilder, i, viewType, alloc, readyBars,
-                           emptyBars, numConsumers, /*init=*/Value());
+        initializeBarriers(i, aref, numConsumers,
+                           /*init=*/Value());
       }
-      endBuilder.create<LocalDeallocOp>(readyBars);
-      endBuilder.create<LocalDeallocOp>(emptyBars);
 
       Block *body = loop.getBody();
       for (auto &[key, uses] : info.consumers) {
@@ -476,17 +502,8 @@ LogicalResult DependencyRewriter::run() {
           loop.getInitArgsMutable().append({intCst(b, startIdx - 1), zero});
         }
 
-        SmallVector<Value> offsets(allocType.getRank(), zero);
-        offsets.front() = idx;
-        Value view = b.create<MemDescSubviewOp>(viewType, alloc, offsets);
-        Value readyView = createSingleBufferView(b, readyBars, idx);
-        Value emptyView = createSingleBufferView(b, emptyBars, idx);
-
-        // Up until here, the ops we created are trivial arithmetic and can
-        // simply live in the root partition. The next ops must be assigned to
-        // the right partition.
-
         // Wait for the value to be available.
+        auto [view, readyView, emptyView] = aref.getView(b, idx);
         createInPartition<ttng::WaitBarrierOp>(b, *usePartition, readyView,
                                                phase);
         // Load the value at the current index and replace uses in this
@@ -518,12 +535,7 @@ LogicalResult DependencyRewriter::run() {
             {intCst(b, multiplicitySize - 1), zero});
       }
 
-      SmallVector<Value> offsets(allocType.getRank(), zero);
-      offsets.front() = idx;
-      Value view = b.create<MemDescSubviewOp>(viewType, alloc, offsets);
-      Value readyView = createSingleBufferView(b, readyBars, idx);
-      Value emptyView = createSingleBufferView(b, emptyBars, idx);
-
+      auto [view, readyView, emptyView] = aref.getView(b, idx);
       createInPartition<ttng::WaitBarrierOp>(b, partition, emptyView, phase);
       createInPartition<LocalStoreOp>(b, partition, output, view);
       createInPartition<ttng::ArriveBarrierOp>(b, partition, readyView, 1);
