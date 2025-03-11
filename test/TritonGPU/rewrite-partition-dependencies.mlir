@@ -180,9 +180,9 @@ tt.func @distance_one(%lb: i32, %ub: i32, %step: i32) {
   // CHECK-NEXT: [[EMPTY_BARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64,
 
   // CHECK-NEXT: [[INIT:%.*]] = ttg.memdesc_subview [[BUFFERS]][%c0_i32, %c0_i32]
+  // CHECK-NEXT: ttg.local_store %cst, [[INIT]]
   // CHECK-NEXT: [[READY0:%.*]] = ttg.memdesc_subview [[READY_BARS]][%c0_i32]
   // CHECK-NEXT: [[EMPTY0:%.*]] = ttg.memdesc_subview [[EMPTY_BARS]][%c0_i32]
-  // CHECK-NEXT: ttg.local_store %cst, [[INIT]]
   // CHECK-NEXT: ttng.init_barrier [[READY0]], 1
   // CHECK-NEXT: ttng.init_barrier [[EMPTY0]], 1
   // CHECK-NEXT: ttng.arrive_barrier [[READY0]], 1

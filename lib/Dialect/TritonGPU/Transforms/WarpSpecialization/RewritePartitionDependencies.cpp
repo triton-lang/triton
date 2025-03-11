@@ -33,6 +33,41 @@ static Value intCst(ImplicitLocOpBuilder &b, int value) {
   return b.create<arith::ConstantOp>(b.getI32IntegerAttr(value));
 }
 
+// Get the view of a multi-buffered tensor value.
+static Value getValueView(ImplicitLocOpBuilder &b, Value idx, Value alloc,
+                          MemDescType viewType) {
+  auto allocType = cast<MemDescType>(alloc.getType());
+  SmallVector<Value> offsets(allocType.getRank(), intCst(b, 0));
+  offsets.front() = idx;
+  return b.create<MemDescSubviewOp>(viewType, alloc, offsets);
+}
+
+// Initialize the barriers for a particular buffer. If there is an initial value
+// for the buffer, store it and mark the buffer as ready to be consumed.
+static void initializeBarriers(ImplicitLocOpBuilder &b,
+                               ImplicitLocOpBuilder &endBuilder, int index,
+                               MemDescType viewType, Value alloc,
+                               Value readyBars, Value emptyBars,
+                               unsigned numConsumers, Value init) {
+  Value idx = intCst(b, index);
+  if (init) {
+    Value view = getValueView(b, idx, alloc, viewType);
+    b.create<LocalStoreOp>(init, view);
+  }
+
+  Value readyView = createSingleBufferView(b, readyBars, idx);
+  Value emptyView = createSingleBufferView(b, emptyBars, idx);
+  b.create<ttng::InitBarrierOp>(readyView, 1);
+  b.create<ttng::InitBarrierOp>(emptyView, numConsumers);
+  if (init)
+    b.create<ttng::ArriveBarrierOp>(readyView, 1);
+  else
+    b.create<ttng::ArriveBarrierOp>(emptyView, numConsumers);
+
+  endBuilder.create<ttng::InvalBarrierOp>(readyView);
+  endBuilder.create<ttng::InvalBarrierOp>(emptyView);
+}
+
 // Create an operation inside a partition.
 template <typename OpT, typename... Args>
 static auto createInPartition(ImplicitLocOpBuilder &b, Partition &partition,
@@ -248,10 +283,40 @@ unsigned Multiplicity::getTotalBranchDepth() {
 }
 
 //===----------------------------------------------------------------------===//
+// UseInfo
+//===----------------------------------------------------------------------===//
+
+namespace {
+// Use information for a partition SSA output.
+struct UseInfo {
+  // Get the maximum distance to a use, according for stage and iteration, given
+  // the partition where the value is defined.
+  int getMaxUseDistance(const Partition &partitition);
+
+  // Map from partition and distance to the uses in that partition.
+  llvm::MapVector<std::pair<Partition *, unsigned>, SmallVector<OpOperand *>>
+      consumers;
+  // The multiplicity tree of the output.
+  Multiplicity multiplicity;
+};
+} // namespace
+
+int UseInfo::getMaxUseDistance(const Partition &partition) {
+  int maxDistance = 0;
+  for (auto [usePartition, distance] : llvm::make_first_range(consumers)) {
+    int dist = usePartition->getStage() - partition.getStage() + distance;
+    assert(dist > 0 && "expected verifier to check schedule validity");
+    maxDistance = std::max(maxDistance, dist);
+  }
+  return maxDistance;
+}
+
+//===----------------------------------------------------------------------===//
 // DependencyRewriter
 //===----------------------------------------------------------------------===//
 
 namespace {
+
 // Helper class for dependency rewriting.
 class DependencyRewriter {
 public:
@@ -262,25 +327,19 @@ public:
   LogicalResult run();
 
 private:
+  void resolveOutputMultiplicity(llvm::MapVector<OpResult, UseInfo> &useInfo,
+                                 const Partition &partition);
+
   // The schedule to apply.
   WarpSchedule &schedule;
   // The loop to partition.
   scf::ForOp loop;
 };
-
-// Use information for a partition SSA output.
-struct UseInfo {
-  // Map from partition and distance to the uses in that partition.
-  llvm::MapVector<std::pair<Partition *, unsigned>, SmallVector<OpOperand *>>
-      consumers;
-  // The multiplicity tree of the output.
-  Multiplicity multiplicity;
-};
 } // namespace
 
-static void
-resolveOutputMultiplicity(llvm::MapVector<OpResult, UseInfo> &useInfo,
-                          const Partition &partition, scf::YieldOp yield) {
+void DependencyRewriter::resolveOutputMultiplicity(
+    llvm::MapVector<OpResult, UseInfo> &useInfo, const Partition &partition) {
+  auto yield = cast<scf::YieldOp>(loop.getBody()->getTerminator());
   for (UseInfo &info : llvm::make_second_range(useInfo)) {
     for (auto [key, uses] : info.consumers) {
       auto [usePartition, distance] = key;
@@ -312,7 +371,7 @@ LogicalResult DependencyRewriter::run() {
       info.consumers[{usePartition, distance}].push_back(&use);
     };
     schedule.iterateUses(loop, &partition, callback);
-    resolveOutputMultiplicity(useInfo, partition, yield);
+    resolveOutputMultiplicity(useInfo, partition);
   }
 
   // Cut all SSA dependencies by passing outputs through shared memory.
@@ -324,24 +383,17 @@ LogicalResult DependencyRewriter::run() {
        llvm::zip(schedule.getPartitions(), partitionUseInfo)) {
     // The amount of buffering is based on the longest distance to a user.
     for (auto &[output, info] : useInfo) {
-      // Buffer the value based on the greatest distance to a consumer
-      // partition.
-      int maxDistance = 0;
-      for (auto [usePartition, distance] :
-           llvm::make_first_range(info.consumers)) {
-        int dist = usePartition->getStage() - partition.getStage() + distance;
-        assert(dist > 0 && "expected verifier to check schedule validity");
-        maxDistance = std::max(maxDistance, dist);
-      }
-
       // FIXME: No IR support for passing simple scalars through shared memory.
       auto tensorType = dyn_cast<RankedTensorType>(output.getType());
       if (!tensorType) {
         return mlir::emitWarning(output.getLoc(),
-                               "FIXME: only tensor SSA dependencies between "
-                               "partitions are supported");
+                                 "FIXME: only tensor SSA dependencies between "
+                                 "partitions are supported");
       }
 
+      // Buffer the value based on the greatest distance to a consumer
+      // partition.
+      int maxDistance = info.getMaxUseDistance(partition);
       // Number the branches of the multiplicity tree. The total number of
       // required buffers includes the lengths of all branches.
       int multiplicitySize = info.multiplicity.getTotalBranchDepth();
@@ -363,31 +415,16 @@ LogicalResult DependencyRewriter::run() {
       info.multiplicity.number([&](ArrayRef<Multiplicity::Node *> nodes,
                                    unsigned start, unsigned end) {
         for (auto [i, node] : llvm::zip(llvm::seq(start, end), nodes)) {
-          Value idx = intCst(b, i);
-          SmallVector<Value> offsets(allocType.getRank(), zero);
-          offsets.front() = idx;
-          Value view = b.create<MemDescSubviewOp>(viewType, alloc, offsets);
-          Value readyView = createSingleBufferView(b, readyBars, idx);
-          Value emptyView = createSingleBufferView(b, emptyBars, idx);
-          b.create<LocalStoreOp>(loop.getInitArgs()[node->argIdx], view);
-          b.create<ttng::InitBarrierOp>(readyView, 1);
-          b.create<ttng::InitBarrierOp>(emptyView, numConsumers);
-          b.create<ttng::ArriveBarrierOp>(readyView, 1);
-          endBuilder.create<ttng::InvalBarrierOp>(readyView);
-          endBuilder.create<ttng::InvalBarrierOp>(emptyView);
+          initializeBarriers(b, endBuilder, i, viewType, alloc, readyBars,
+                             emptyBars, numConsumers,
+                             loop.getInitArgs()[node->argIdx]);
         }
       });
 
       // Initialize the buffers.
       for (auto i : llvm::seq(multiplicitySize, numBars)) {
-        Value idx = intCst(b, i);
-        Value readyView = createSingleBufferView(b, readyBars, idx);
-        Value emptyView = createSingleBufferView(b, emptyBars, idx);
-        b.create<ttng::InitBarrierOp>(readyView, 1);
-        b.create<ttng::InitBarrierOp>(emptyView, numConsumers);
-        b.create<ttng::ArriveBarrierOp>(emptyView, numConsumers);
-        endBuilder.create<ttng::InvalBarrierOp>(readyView);
-        endBuilder.create<ttng::InvalBarrierOp>(emptyView);
+        initializeBarriers(b, endBuilder, i, viewType, alloc, readyBars,
+                           emptyBars, numConsumers, /*init=*/Value());
       }
       endBuilder.create<LocalDeallocOp>(readyBars);
       endBuilder.create<LocalDeallocOp>(emptyBars);
@@ -531,7 +568,8 @@ namespace {
 struct RewritePartitionDependencies
     : triton::gpu::impl::TritonGPURewritePartitionDependenciesBase<
           RewritePartitionDependencies> {
-            using TritonGPURewritePartitionDependenciesBase::TritonGPURewritePartitionDependenciesBase;
+  using TritonGPURewritePartitionDependenciesBase::
+      TritonGPURewritePartitionDependenciesBase;
 
   void runOnOperation() override;
 };
