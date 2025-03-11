@@ -13,6 +13,7 @@
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/ADT/PriorityWorklist.h"
+#include "llvm/ADT/Sequence.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/VersionTuple.h"
 #include <memory>
@@ -204,6 +205,25 @@ Attribute getFallbackSharedEncoding(RankedTensorType tensorType,
 
   if (!ctaLayout)
     ctaLayout = ttg::CTALayoutAttr::getDefault(ctx, tensorType.getRank());
+  else if (ctaLayout.getRank() < tensorType.getRank()) {
+    // For rank-reducing loads, we need to rank-increase the CTA Layout
+    auto rankDiff = tensorType.getRank() - ctaLayout.getRank();
+    for (unsigned i = 0; i < rankDiff; ++i) {
+      assert(tensorType.getShape()[i] == 1 &&
+             "Should only happen for rank-reducing loads");
+    }
+    SmallVector<unsigned> CTAsPerCGA(tensorType.getRank(), 1);
+    SmallVector<unsigned> CTASplitNum(tensorType.getRank(), 1);
+    SmallVector<unsigned> CTAOrder(tensorType.getRank(), 1);
+
+    llvm::copy(ctaLayout.getCTAsPerCGA(), CTAsPerCGA.begin() + rankDiff);
+    llvm::copy(ctaLayout.getCTASplitNum(), CTASplitNum.begin() + rankDiff);
+    for (unsigned i = 0; i < rankDiff; ++i) {
+      CTAOrder[i] = tensorType.getRank() - i;
+    }
+    llvm::copy(ctaLayout.getCTAOrder(), CTAOrder.begin() + rankDiff);
+    ctaLayout = ttg::CTALayoutAttr::get(ctx, CTAsPerCGA, CTASplitNum, CTAOrder);
+  }
 
   if (tensorType.getRank() == 1) {
     return ttg::SwizzledSharedEncodingAttr::get(ctx, 1, 1, 1, order, ctaLayout);

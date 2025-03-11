@@ -6,6 +6,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
@@ -23,6 +24,50 @@ using namespace triton;
 using namespace triton::gpu;
 using namespace triton::nvidia_gpu;
 
+static Attribute getEncoding(Operation *op, RankedTensorType tensorType,
+                             Value desc) {
+  auto descBlockType = cast<TensorDescType>(desc.getType()).getBlockType();
+  Attribute encoding = descBlockType.getEncoding();
+  if (!encoding) {
+    constexpr auto msg =
+        "Internal Error: Tensor descriptor should have encoding set";
+    op->emitError() << msg;
+    llvm::report_fatal_error(msg);
+  }
+  assert(isa<SharedEncodingTrait>(encoding));
+  if (descBlockType.getShape() == tensorType.getShape())
+    return encoding;
+
+  // Handle rank reducing loads
+  auto ctx = encoding.getContext();
+  auto rankDiff = descBlockType.getRank() - tensorType.getRank();
+  if (auto nvmmaEnc = dyn_cast<NVMMASharedEncodingAttr>(encoding)) {
+    auto existingCta = nvmmaEnc.getCTALayout();
+    auto newCtaEnc =
+        CTALayoutAttr::get(ctx, existingCta.getCTAsPerCGA().slice(rankDiff),
+                           existingCta.getCTASplitNum().slice(rankDiff),
+                           existingCta.getCTAOrder().slice(rankDiff));
+
+    return NVMMASharedEncodingAttr::get(
+        ctx, nvmmaEnc.getSwizzlingByteWidth(), nvmmaEnc.getTransposed(),
+        nvmmaEnc.getElementBitWidth(), nvmmaEnc.getFp4Padded(), newCtaEnc);
+  }
+  if (auto swizEnc = dyn_cast<SwizzledSharedEncodingAttr>(encoding)) {
+    auto existingCta = swizEnc.getCTALayout();
+    auto newCtaEnc =
+        CTALayoutAttr::get(ctx, existingCta.getCTAsPerCGA().slice(rankDiff),
+                           existingCta.getCTASplitNum().slice(rankDiff),
+                           existingCta.getCTAOrder().slice(rankDiff));
+    return SwizzledSharedEncodingAttr::get(
+        ctx, swizEnc.getVec(), swizEnc.getPerPhase(), swizEnc.getMaxPhase(),
+        swizEnc.getOrder().slice(rankDiff), newCtaEnc);
+  }
+
+  constexpr auto msg = "Internal Error: Unhandled tensor descriptor encoding";
+  op->emitError() << msg;
+  llvm::report_fatal_error(msg);
+}
+
 static void
 lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
              function_ref<void(Value, Value, Value, Value)> createLoad,
@@ -30,15 +75,7 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
   MLIRContext *ctx = op->getContext();
   Attribute sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
   auto loc = op->getLoc();
-  Attribute encoding =
-      cast<TensorDescType>(desc.getType()).getBlockType().getEncoding();
-  if (!encoding) {
-    constexpr auto msg =
-        "Internal Error: Tensor descriptor should have encoding set\n";
-    op->emitError() << msg;
-    llvm::report_fatal_error(msg);
-  }
-  assert(isa<SharedEncodingTrait>(encoding));
+  auto encoding = getEncoding(op, tensorType, desc);
   MemDescType memDescType =
       MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
                        encoding, sharedMemorySpace, /*mutableMemory=*/true);
@@ -108,14 +145,7 @@ static void lowerTMAStore(Operation *op, mlir::TypedValue<RankedTensorType> src,
   Attribute sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
   auto loc = op->getLoc();
   auto tensorType = src.getType();
-  auto encoding =
-      cast<TensorDescType>(desc.getType()).getBlockType().getEncoding();
-  if (!encoding) {
-    constexpr auto msg =
-        "Internal Error: Tensor descriptor should have encoding set\n";
-    op->emitError() << msg;
-    llvm::report_fatal_error(msg);
-  }
+  auto encoding = getEncoding(op, src.getType(), desc);
   assert(isa<SharedEncodingTrait>(encoding));
   MemDescType memDescType =
       MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
