@@ -5,6 +5,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
+#include "triton/Tools/StrUtil.h"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "triton-loop-pipeline"
@@ -171,8 +172,10 @@ ttg::SharedEncodingTrait getSharedEncoding(Operation *op) {
 
   auto ty = cast<RankedTensorType>(op->getResultTypes()[0]);
   auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
-  auto order = ttg::getOrder(ty);
   if (isTMALoad(op)) {
+    auto rank = ty.getRank();
+    auto order = SmallVector<unsigned>(rank);
+    std::iota(order.rbegin(), order.rend(), 0);
     // For TMA, the encoding compatible with it takes precedence over local
     // alloc created for the MMA operand.
     if (localAllocEnc) {
@@ -199,6 +202,7 @@ ttg::SharedEncodingTrait getSharedEncoding(Operation *op) {
   if (localAllocEnc)
     return localAllocEnc;
 
+  auto order = getOrderForMemory(ty);
   // Use generic layout. This won't be optimal for 2D tensors.
   return ttg::SwizzledSharedEncodingAttr::get(ty.getContext(), 1, 1, 1, order,
                                               ctaLayout);
@@ -726,6 +730,7 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
   for (Operation &op : forOp.getBody()->without_terminator()) {
     assert(schedule.count(&op) && "op not found in the schedule");
   }
+
   return forOp;
 }
 
