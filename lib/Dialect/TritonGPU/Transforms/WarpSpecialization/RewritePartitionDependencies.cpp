@@ -381,8 +381,6 @@ LogicalResult DependencyRewriter::run() {
       // Initialize the buffers.
       for (auto i : llvm::seq(multiplicitySize, numBars)) {
         Value idx = intCst(b, i);
-        SmallVector<Value> offsets(allocType.getRank(), zero);
-        offsets.front() = idx;
         Value readyView = createSingleBufferView(b, readyBars, idx);
         Value emptyView = createSingleBufferView(b, emptyBars, idx);
         b.create<ttng::InitBarrierOp>(readyView, 1);
