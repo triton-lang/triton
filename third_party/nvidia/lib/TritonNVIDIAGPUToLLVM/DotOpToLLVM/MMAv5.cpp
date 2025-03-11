@@ -393,11 +393,11 @@ void convertDot(const LLVMTypeConverter *typeConverter,
                                                      interleaved, transA);
   } else {
     aLoader = std::make_unique<DotOpMmaV3SmemLoader>(
-        a, baseA, shapeA, zero, 1, transA, aOperandShape,
+        a, baseA, shapeA, shapeA, zero, 1, transA, aOperandShape,
         aTensorTy.getElementTypeBitWidth(), rewriter, loc);
   }
   DotOpMmaV3SmemLoader bLoader =
-      DotOpMmaV3SmemLoader(b, baseB, shapeB, zero, 1, transB,
+      DotOpMmaV3SmemLoader(b, baseB, shapeB, shapeB, zero, 1, transB,
                            {(unsigned)mmaSizeN, (unsigned)mmaSizeK},
                            bTensorTy.getElementTypeBitWidth(), rewriter, loc);
   DotOpMmaV5TmemLoader dLoader = DotOpMmaV5TmemLoader(
@@ -545,11 +545,11 @@ struct TCGen5MMAScaledOpConversion
           op.getA(), baseA, aOperandShape, interleaved, transA);
     } else {
       aLoader = std::make_unique<DotOpMmaV3SmemLoader>(
-          op.getA(), baseA, shapeA, zero, 1, transA, aOperandShape,
+          op.getA(), baseA, shapeA, shapeA, zero, 1, transA, aOperandShape,
           numBitsPerElementA, rewriter, loc);
     }
     DotOpMmaV3SmemLoader bLoader =
-        DotOpMmaV3SmemLoader(op.getB(), baseB, shapeB, zero, 1, transB,
+        DotOpMmaV3SmemLoader(op.getB(), baseB, shapeB, shapeB, zero, 1, transB,
                              {(unsigned)mmaSizeN, (unsigned)mmaSizeK},
                              numBitsPerElementB, rewriter, loc);
 

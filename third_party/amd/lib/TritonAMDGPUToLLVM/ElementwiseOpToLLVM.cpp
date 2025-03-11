@@ -182,6 +182,7 @@ Fp16_to_Fp8E4M3FN_RTNE(Location loc, ConversionPatternRewriter &rewriter,
 
 static Value cvtFp16ToFp32(Location loc, ConversionPatternRewriter &rewriter,
                            const Value &v) {
+
   TritonLLVMOpBuilder b(loc, rewriter);
   return b.fpext(f32_ty, v);
 }
@@ -259,7 +260,6 @@ convert_val_Fp16_to_Fp8(Location loc, ConversionPatternRewriter &rewriter,
 static SmallVector<Value>
 convert_val_Fp8_to_Fp16(Location loc, ConversionPatternRewriter &rewriter,
                         Value v0, Value v1, const std::string &fp8_format) {
-
   // Convert fp8 to fp32
   SmallVector<Value> ret = cvtFp8ToFp32(loc, rewriter, v0, v1, fp8_format);
 
@@ -268,6 +268,84 @@ convert_val_Fp8_to_Fp16(Location loc, ConversionPatternRewriter &rewriter,
   ret[1] = LLVM::AMD::cvtFp32ToFp16(loc, rewriter, ret[1], RoundingMode::RTNE);
 
   return ret;
+}
+
+template <typename convertOp>
+static SmallVector<Value> cvtScaleFp8ToFp32(Location loc,
+                                            ConversionPatternRewriter &rewriter,
+                                            Value v0, Value v1) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  auto fp8x4VecTy = vec_ty(i8_ty, 4);
+  Value fp8x4Vec = b.undef(fp8x4VecTy);
+  fp8x4Vec = b.insert_element(fp8x4VecTy, fp8x4Vec, v0, b.i32_val(0));
+  fp8x4Vec = b.insert_element(fp8x4VecTy, fp8x4Vec, v1, b.i32_val(1));
+  auto i32v = b.bitcast(fp8x4Vec, i32_ty);
+
+  Value scale = b.f32_val(1);
+  Value select = b.false_val();
+  auto result = rewriter.create<convertOp>(loc, i64_ty, i32v, scale, select);
+  auto f32x2VecTy = vec_ty(f32_ty, 2);
+  auto f32x2Vec = b.bitcast(result, f32x2VecTy);
+  SmallVector<Value> ret(2);
+  auto idx0 = b.i32_val(0);
+  auto idx1 = b.i32_val(1);
+  ret[0] = b.extract_element(f32_ty, f32x2Vec, idx0);
+  ret[1] = b.extract_element(f32_ty, f32x2Vec, idx1);
+  return ret;
+}
+
+static SmallVector<Value> Fp8E4M3FN_to_Fp32(Location loc,
+                                            ConversionPatternRewriter &rewriter,
+                                            const SmallVector<Value> &v) {
+  assert(v.size() == 2);
+  return cvtScaleFp8ToFp32<ROCDL::CvtScale32PkF32Fp8>(loc, rewriter, v[0],
+                                                      v[1]);
+}
+
+static SmallVector<Value> Fp8E5M2_to_Fp32(Location loc,
+                                          ConversionPatternRewriter &rewriter,
+                                          const SmallVector<Value> &v) {
+  assert(v.size() == 2);
+  return cvtScaleFp8ToFp32<ROCDL::CvtScale32PkF32Bf8>(loc, rewriter, v[0],
+                                                      v[1]);
+}
+
+template <typename convertOp>
+static SmallVector<Value> cvtScaleFp32ToFp8(Location loc,
+                                            ConversionPatternRewriter &rewriter,
+                                            Value v0, Value v1) {
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  Type v2I16Ty = vec_ty(i16_ty, 2);
+  Value v2I16Vec = b.undef(v2I16Ty);
+  Value scale = b.f32_val(1);
+  Value select = b.false_val();
+  Value result;
+  result =
+      rewriter.create<convertOp>(loc, v2I16Ty, v2I16Vec, v0, v1, scale, select);
+  auto fp8x4VecTy = vec_ty(i8_ty, 4);
+  auto fp8x4Vec = b.bitcast(result, fp8x4VecTy);
+  SmallVector<Value> ret(2);
+  auto idx0 = b.i32_val(0);
+  auto idx1 = b.i32_val(1);
+  ret[0] = b.extract_element(i8_ty, fp8x4Vec, idx0);
+  ret[1] = b.extract_element(i8_ty, fp8x4Vec, idx1);
+  return ret;
+}
+
+static SmallVector<Value> Fp32_to_Fp8E4M3FN(Location loc,
+                                            ConversionPatternRewriter &rewriter,
+                                            const SmallVector<Value> &v) {
+  assert(v.size() == 2);
+  return cvtScaleFp32ToFp8<ROCDL::CvtScaleF32PkFp8F32>(loc, rewriter, v[0],
+                                                       v[1]);
+}
+
+static SmallVector<Value> Fp32_to_Fp8E5M2(Location loc,
+                                          ConversionPatternRewriter &rewriter,
+                                          const SmallVector<Value> &v) {
+  assert(v.size() == 2);
+  return cvtScaleFp32ToFp8<ROCDL::CvtScaleF32PkBf8F32>(loc, rewriter, v[0],
+                                                       v[1]);
 }
 
 static SmallVector<Value>
@@ -950,8 +1028,12 @@ struct FpToFpOpConversion
              Fp32_to_Fp8E4M3FNUZ},
             {{F32TyID, F8E5M2FNUZTyID, RoundingMode::RTNE},
              Fp32_to_Fp8E5M2FNUZ},
+            {{F32TyID, F8E4M3FNTyID, RoundingMode::RTNE}, Fp32_to_Fp8E4M3FN},
+            {{F32TyID, F8E5M2TyID, RoundingMode::RTNE}, Fp32_to_Fp8E5M2},
             {{F8E4M3FNUZTyID, F32TyID, undefRounding}, Fp8E4M3FNUZ_to_Fp32},
             {{F8E5M2FNUZTyID, F32TyID, undefRounding}, Fp8E5M2FNUZ_to_Fp32},
+            {{F8E4M3FNTyID, F32TyID, undefRounding}, Fp8E4M3FN_to_Fp32},
+            {{F8E5M2TyID, F32TyID, undefRounding}, Fp8E5M2_to_Fp32},
         };
     std::tuple<TypeID, TypeID, RoundingMode> key = {
         srcTy.getTypeID(), dstTy.getTypeID(),
@@ -969,8 +1051,8 @@ struct FpToFpOpConversion
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto srcElementType = getElementType(op.getSrc());
     auto dstElementType = getElementType(op.getResult());
-    auto roundingMode = op.getRounding();
 
+    auto roundingMode = op.getRounding();
     if (srcElementType.isF32() && dstElementType.isF16()) {
       assert(roundingMode.has_value() &&
              "rounding mode must be specified for fp32->fp16 conversion");
@@ -994,20 +1076,48 @@ struct FpToFpOpConversion
       }
       return outVals;
     }
-    size_t numElements = 4;
-    if (llvm::isa<Float8E4M3FNType, Float8E4M3FNUZType, Float8E5M2FNUZType>(
-            srcElementType) ||
-        llvm::isa<Float8E4M3FNType, Float8E4M3FNUZType, Float8E5M2FNUZType>(
-            dstElementType)) {
-      numElements = 2;
+
+    // numElements = 4 for conversions:
+    // ocp bf8->fp16, ocp bf8->bf16, ocp bf8->fp32 on non-CDNA4
+    // fp16->ocp bf8, bf16->ocp bf8, fp32->ocp bf8(RTNE) on non-CDNA4
+    // fp32->ocp bf8(RTZ)
+    size_t numElements = 2;
+    if (llvm::isa<Float8E5M2Type>(srcElementType) &&
+            !llvm::isa<Float32Type>(dstElementType) ||
+        llvm::isa<Float8E5M2Type>(srcElementType) &&
+            isaFamily != AMD::ISAFamily::CDNA4 ||
+        !llvm::isa<Float32Type>(srcElementType) &&
+            llvm::isa<Float8E5M2Type>(dstElementType) ||
+        llvm::isa<Float32Type>(srcElementType) &&
+            llvm::isa<Float8E5M2Type>(dstElementType) &&
+            (roundingMode != RoundingMode::RTNE ||
+             isaFamily != AMD::ISAFamily::CDNA4)) {
+      numElements = 4;
     }
+
+    // f32->fp8/bf8, if not nanoo fp8/bf8 on CDNA3 or ocp fp8/bf8 on CDNA4, is
+    // done in two steps: f32->fp16 with rtne and fp16->fp8/bf8 with rtne
     bool useFP16IntermediateSrc =
         srcElementType.isF32() &&
+        !(isaFamily == AMD::ISAFamily::CDNA4 &&
+          (llvm::isa<Float8E4M3FNType, Float8E5M2Type>(dstElementType)) &&
+          roundingMode == RoundingMode::RTNE) &&
         !(isaFamily == AMD::ISAFamily::CDNA3 &&
           (llvm::isa<Float8E4M3FNUZType, Float8E5M2FNUZType>(dstElementType)));
+
+    // fp8/bf8->f32, if not nanoo fp8/bf8 on CDNA3 or ocp fp8/bf8 on CDNA4, is
+    // done in two steps: fp8/bf8->fp16 and fp16->fp32
     bool isDstFP32 = dstElementType.isF32();
+    bool useFP16IntermediateDst =
+        (isDstFP32 &&
+         !(isaFamily == AMD::ISAFamily::CDNA4 &&
+           (llvm::isa<Float8E4M3FNType, Float8E5M2Type>(srcElementType))) &&
+         !(isaFamily == AMD::ISAFamily::CDNA3 &&
+           (llvm::isa<Float8E4M3FNUZType, Float8E5M2FNUZType>(
+               srcElementType))));
+
     Type srcType = useFP16IntermediateSrc ? f16_ty : srcElementType;
-    Type dstType = isDstFP32 ? f16_ty : dstElementType;
+    Type dstType = useFP16IntermediateDst ? f16_ty : dstElementType;
     SmallVector<Value> inVals;
     inVals.reserve(std::min(numElements, operands.size()));
     for (unsigned i = 0; i < std::min(numElements, operands.size()); i++) {
@@ -1052,7 +1162,7 @@ struct FpToFpOpConversion
 
     assert(outVals.size() == inVals.size());
     outVals.resize(std::min(numElements, operands.size()));
-    if (isDstFP32)
+    if (isDstFP32 && dstType == f16_ty)
       for (Value &v : outVals)
         v = convertFp16ToFp32(loc, rewriter, v);
     // Pack values

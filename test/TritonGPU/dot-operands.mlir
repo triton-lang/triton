@@ -57,7 +57,7 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [0, 1]}>
 #mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [4, 1], instrShape = [16, 8]}>
 #smem = #ttg.shared_memory
-module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
+module attributes {"ttg.target" = "cuda:80", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.threads-per-warp" = 32 : i32} {
 // CHECK-LABEL: mmav2_reorder_transpose
 // CHECK: ttg.local_alloc
 // CHECK: ttg.memdesc_trans
@@ -118,8 +118,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %acc_tm: !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory>
     ) attributes {noinline = false} {
       %true = arith.constant true
-      %A_la = ttg.local_alloc  : () -> !ttg.memdesc<2x512xi8, #shared1, #smem, mutable>
-      %B_la = ttg.local_alloc  : () -> !ttg.memdesc<2x512xi8, #shared1, #smem, mutable>
+      %A_la = ttg.local_alloc  : () -> !ttg.memdesc<2x512xi8, #shared1, #smem, mutable, 3x2x512>
+      %B_la = ttg.local_alloc  : () -> !ttg.memdesc<2x512xi8, #shared1, #smem, mutable, 3x2x512>
       %A_ll = ttg.local_load %A_la : !ttg.memdesc<2x512xi8, #shared1, #smem, mutable, 3x2x512> -> tensor<2x512xi8, #blocked4>
       %B_ll = ttg.local_load %B_la : !ttg.memdesc<2x512xi8, #shared1, #smem, mutable, 3x2x512> -> tensor<2x512xi8, #blocked4>
       %A_r = tt.reshape %A_ll : tensor<2x512xi8, #blocked4> -> tensor<2x1x32x4x4xi8, #blocked8>

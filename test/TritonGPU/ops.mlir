@@ -58,6 +58,12 @@ module attributes {"ttg.target" = "cuda:0", "ttg.num-ctas" = 1 : i32, "ttg.num-w
   tt.func @memdesc(%d : !ttg.memdesc<1x64x16xf16, #shared0, #smem>) {
     tt.return
   }
+
+  // CHECK-LABEL: memdesc_with_alloc_shape
+  // CHECK-SAME: !ttg.memdesc<64x16xf16, #{{.+}}, mutable, 2x64x16>
+  tt.func @memdesc_with_alloc_shape(%d : !ttg.memdesc<64x16xf16, #shared0, #smem, mutable, 2x64x16>){
+    tt.return
+  }
 }
 
 // -----

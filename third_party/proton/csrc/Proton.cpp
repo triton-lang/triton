@@ -78,6 +78,10 @@ void initProton(pybind11::module &&m) {
           SessionManager::instance().addMetrics(scopeId, metrics);
         });
 
+  m.def("get_context_depth", [](size_t sessionId) {
+    return SessionManager::instance().getContextDepth(sessionId);
+  });
+
   pybind11::bind_map<std::map<std::string, MetricValueType>>(m, "MetricMap");
 }
 

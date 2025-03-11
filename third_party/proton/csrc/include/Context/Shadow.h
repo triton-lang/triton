@@ -25,6 +25,8 @@ public:
 
   void exitScope(const Scope &scope) override;
 
+  size_t getDepth() override;
+
 private:
   std::vector<Context> getContextsImpl() override;
 

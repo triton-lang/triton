@@ -75,15 +75,6 @@ SmallVector<unsigned> getThreadsPerWarp(Attribute layout) {
   }
 }
 
-unsigned getWarpSize(Attribute layout) {
-  unsigned size = 1;
-  auto threadsPerWarp = getThreadsPerWarp(layout);
-  for (auto e : threadsPerWarp) {
-    size *= e;
-  }
-  return size;
-}
-
 SmallVector<unsigned>
 getThreadsPerWarpWithUniqueData(Attribute layout,
                                 ArrayRef<int64_t> tensorShape) {
@@ -200,6 +191,10 @@ SmallVector<unsigned> getOrder(SharedEncodingTrait layout,
   }
   if (auto sharedLayout = mlir::dyn_cast<NVMMASharedEncodingAttr>(layout)) {
     return sharedLayout.getOrder();
+  }
+  if (auto sharedLayout =
+          mlir::dyn_cast<AMDRotatingSharedEncodingAttr>(layout)) {
+    return llvm::to_vector(sharedLayout.getOrder());
   }
   llvm::report_fatal_error("Unimplemented usage of getOrder for MemDescType");
   return {};
@@ -371,28 +366,6 @@ SmallVector<int64_t> getAllocationShapePerCTA(Type type) {
   auto tensorType = cast<TensorOrMemDesc>(type);
   return getAllocationShapePerCTA(tensorType.getEncoding(),
                                   tensorType.getShape());
-}
-
-unsigned getNumWarpsPerCTA(Attribute layout) {
-  SmallVector<unsigned> warpsPerCTA;
-  if (auto blockedLayout = dyn_cast<BlockedEncodingAttr>(layout))
-    warpsPerCTA = blockedLayout.getWarpsPerCTA();
-  else if (auto sliceLayout = dyn_cast<SliceEncodingAttr>(layout))
-    return getNumWarpsPerCTA(sliceLayout.getParent());
-  else if (auto mmaLayout = dyn_cast<MmaEncodingTrait>(layout)) {
-    // Use the distributed layout interface to get the number of warps per
-    // CTA.
-    auto distributedLayout = cast<DistributedEncodingTrait>(layout);
-    warpsPerCTA = distributedLayout.getWarpsPerCTA();
-  } else if (auto mfmaLayout = dyn_cast<AMDMfmaEncodingAttr>(layout))
-    warpsPerCTA = mfmaLayout.getWarpsPerCTA();
-  else if (auto wmmaLayout = dyn_cast<AMDWmmaEncodingAttr>(layout))
-    warpsPerCTA = wmmaLayout.getWarpsPerCTA();
-  else if (auto dotLayout = dyn_cast<DotOperandEncodingAttr>(layout))
-    warpsPerCTA = dotLayout.getWarpsPerCTA();
-  else
-    llvm::report_fatal_error("Unimplemented usage of getNumWarpsPerCTA");
-  return product<unsigned>(warpsPerCTA);
 }
 
 unsigned getNumCTAs(Attribute layout) {
@@ -762,6 +735,18 @@ SmallVector<unsigned> NVMMASharedEncodingAttr::getCTAOrder() const {
   return SmallVector<unsigned>(getCTALayout().getCTAOrder());
 }
 SmallVector<unsigned> NVMMASharedEncodingAttr::getCTASplitNum() const {
+  return SmallVector<unsigned>(getCTALayout().getCTASplitNum());
+}
+
+int32_t AMDRotatingSharedEncodingAttr::getAlignment() const { return 16; }
+
+SmallVector<unsigned> AMDRotatingSharedEncodingAttr::getCTAsPerCGA() const {
+  return SmallVector<unsigned>(getCTALayout().getCTAsPerCGA());
+}
+SmallVector<unsigned> AMDRotatingSharedEncodingAttr::getCTAOrder() const {
+  return SmallVector<unsigned>(getCTALayout().getCTAOrder());
+}
+SmallVector<unsigned> AMDRotatingSharedEncodingAttr::getCTASplitNum() const {
   return SmallVector<unsigned>(getCTALayout().getCTASplitNum());
 }
 
@@ -1637,10 +1622,11 @@ void SliceEncodingAttr::print(mlir::AsmPrinter &printer) const {
 }
 
 //===----------------------------------------------------------------------===//
-// SwizzledShared encoding
+// Helper shared encoding functions
 //===----------------------------------------------------------------------===//
 
-Attribute SwizzledSharedEncodingAttr::parse(AsmParser &parser, Type type) {
+template <typename SpecificEncoding>
+Attribute parseSwizzledEncoding(AsmParser &parser, Type type) {
   if (parser.parseLess().failed())
     return {};
   // Parse the data as a dictionary
@@ -1694,8 +1680,16 @@ Attribute SwizzledSharedEncodingAttr::parse(AsmParser &parser, Type type) {
   if (!CTALayout.has_value())
     return {};
 
-  return parser.getChecked<SwizzledSharedEncodingAttr>(
-      parser.getContext(), vec, perPhase, maxPhase, order, *CTALayout);
+  return parser.getChecked<SpecificEncoding>(parser.getContext(), vec, perPhase,
+                                             maxPhase, order, *CTALayout);
+}
+
+//===----------------------------------------------------------------------===//
+// SwizzledShared encoding
+//===----------------------------------------------------------------------===//
+
+Attribute SwizzledSharedEncodingAttr::parse(AsmParser &parser, Type type) {
+  return parseSwizzledEncoding<SwizzledSharedEncodingAttr>(parser, type);
 }
 
 void SwizzledSharedEncodingAttr::print(AsmPrinter &printer) const {
@@ -1784,6 +1778,25 @@ void NVMMASharedEncodingAttr::print(AsmPrinter &printer) const {
   }
   maybePrintCTALayout(getContext(), printer, getCTALayout(),
                       /*rank=*/2);
+  printer << "}>";
+}
+
+//===----------------------------------------------------------------------===//
+// SwizzledBlocksShared encoding
+//===----------------------------------------------------------------------===//
+
+Attribute AMDRotatingSharedEncodingAttr::parse(AsmParser &parser, Type type) {
+  return parseSwizzledEncoding<AMDRotatingSharedEncodingAttr>(parser, type);
+}
+
+void AMDRotatingSharedEncodingAttr::print(AsmPrinter &printer) const {
+  printer << "<{"
+          << "vec = " << getVec() //
+          << ", perPhase = " << getPerPhase()
+          << ", maxPhase = " << getMaxPhase() //
+          << ", order = [" << getOrder() << "]";
+  maybePrintCTALayout(getContext(), printer, getCTALayout(),
+                      /*rank=*/getOrder().size());
   printer << "}>";
 }
 
@@ -3451,4 +3464,13 @@ int triton::gpu::lookupNumWarps(Operation *op) {
                              Twine(AttrNumWarpsName) + " attribute");
   }
   return *numWarps;
+}
+
+int triton::gpu::lookupThreadsPerWarp(OpBuilder &rewriter) {
+  assert(rewriter.getInsertionBlock() && "expected an insertion point");
+  Operation *op = rewriter.getInsertionBlock()->getParentOp();
+  while (op && !isa<ModuleOp>(op))
+    op = op->getParentOp();
+  assert(op && "cannot create thread ID outside of module");
+  return triton::gpu::TritonGPUDialect::getThreadsPerWarp(cast<ModuleOp>(op));
 }
