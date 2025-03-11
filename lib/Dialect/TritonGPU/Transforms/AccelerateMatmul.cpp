@@ -154,10 +154,11 @@ getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter, int opIdx,
     arg = cvtOp.getSrc();
   auto argType = cast<RankedTensorType>(arg.getType());
   assert(argType.getEncoding() && "unexpected tensor type");
-  auto newOrder = getOrder(argType);
+  auto order = getOrderForMemory(argType);
 
   // If the MMA op doesn't support transpose pick the layout expected by the MMA
   // op.
+  llvm::SmallVector<unsigned> newOrder = order;
   if (!allowTranspose) {
     if (opIdx == 1) {
       newOrder = {0, 1};
@@ -166,7 +167,7 @@ getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter, int opIdx,
     }
   }
 
-  if (newOrder != getOrder(argType) && op) {
+  if (newOrder != order && op) {
     op->emitWarning("Warning: Forcing a different order [")
         << newOrder[0] << ", " << newOrder[1]
         << "] on SMEM than the register order for the opreand " << opIdx
@@ -192,7 +193,7 @@ getSharedMemoryScale(Value arg, mlir::PatternRewriter &rewriter, Location loc) {
   OpBuilder::InsertionGuard g(rewriter);
   auto argType = cast<RankedTensorType>(arg.getType());
   assert(argType.getEncoding() && "unexpected tensor type");
-  auto newOrder = getOrder(argType);
+  auto newOrder = getOrderForMemory(argType);
 
   Attribute SharedMemorySpace =
       SharedMemorySpaceAttr::get(argType.getContext());
@@ -430,7 +431,7 @@ replaceCTALayout(DistributedEncodingTrait layout,
     return BlockedEncodingAttr::get(
         layout.getContext(), blockedLayout.getSizePerThread(),
         blockedLayout.getThreadsPerWarp(), blockedLayout.getWarpsPerCTA(),
-        blockedLayout.getDefaultOrder(), newCTALayout);
+        blockedLayout.getOrder(), newCTALayout);
   } else if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(layout)) {
     return SliceEncodingAttr::get(
         layout.getContext(), sliceLayout.getDim(),

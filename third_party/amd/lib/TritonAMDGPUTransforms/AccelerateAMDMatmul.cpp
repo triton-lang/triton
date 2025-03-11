@@ -852,7 +852,6 @@ public:
     auto mfmaEnc = ttg::AMDMfmaEncodingAttr::get(
         ctx, /*versionMajor=*/mfmaVersion, /*versionMinor=*/0, warpsPerTile,
         /*instrShape=*/mDim, nDim, /*isTransposed=*/true, ctaLayout);
-    auto warpOrder = mfmaEnc.getDefaultWarpOrder();
 
     auto newRetType =
         RankedTensorType::get(oldShape, oldRetType.getElementType(), mfmaEnc);

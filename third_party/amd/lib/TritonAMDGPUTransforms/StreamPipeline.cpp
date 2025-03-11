@@ -399,27 +399,13 @@ getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
 
       auto srcTy = cast<ttg::TensorOrMemDesc>(loadedValue.getType());
       auto ctaLayout = ttg::getCTALayout(srcTy.getEncoding());
-      auto order = ttg::getOrder(srcTy);
+      auto order = getOrderForMemory(srcTy);
       unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
-      SmallVector<unsigned> sharedOrder;
-      int rank = order.size();
-      // TODO rework this when shared -> dotOperand conversions support
-      // arbitrary shared memory ordering
-      if (rank == 3) {
-        // Move the batch dimension (dim #0) to be the last so that it will be
-        // the slowest varying dimension.
-        for (unsigned i = 0; i < rank; ++i)
-          if (order[i] != 0)
-            sharedOrder.emplace_back(order[i]);
-        sharedOrder.emplace_back(0);
-      } else {
-        sharedOrder = order;
-      }
 
       auto userResEnc = cast<ttg::TensorOrMemDesc>(userResType).getEncoding();
       if (auto dotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(userResEnc)) {
         tempAttr = ttg::SwizzledSharedEncodingAttr::get(
-            loadedValue.getContext(), dotOpEnc, srcTy.getShape(), sharedOrder,
+            loadedValue.getContext(), dotOpEnc, srcTy.getShape(), order,
             ctaLayout, bitWidth, /*needTrans=*/false);
       } else if (auto llEnc = dyn_cast<ttg::LinearEncodingAttr>(userResEnc)) {
         // We use linear layout directly for scaled dot fp8 operands. For such
@@ -430,8 +416,8 @@ getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
           unsigned vecSize = llEnc.getLinearLayout().getNumConsecutiveInOut();
           LDBG("deduced opIdx: " << opIdx << "; deduced vecSize: " << vecSize);
           tempAttr = dotEnc.composeSharedLayoutForOperand(
-              ctaLayout, opIdx, srcTy.getShape(), sharedOrder, vecSize,
-              bitWidth, /*needTrans=*/false);
+              ctaLayout, opIdx, srcTy.getShape(), order, vecSize, bitWidth,
+              /*needTrans=*/false);
         }
       }
     }
