@@ -400,7 +400,7 @@ getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
 
       auto srcTy = cast<ttg::TensorOrMemDesc>(loadedValue.getType());
       auto ctaLayout = ttg::getCTALayout(srcTy.getEncoding());
-      auto order = ttg::getOrder(srcTy);
+      auto order = getOrderForMemory(srcTy);
       unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
       SmallVector<unsigned> sharedOrder;
       int rank = order.size();
@@ -431,8 +431,8 @@ getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
           unsigned vecSize = llEnc.getLinearLayout().getNumConsecutiveInOut();
           LDBG("deduced opIdx: " << opIdx << "; deduced vecSize: " << vecSize);
           tempAttr = dotEnc.composeSharedLayoutForOperand(
-              ctaLayout, opIdx, srcTy.getShape(), sharedOrder, vecSize,
-              bitWidth, /*needTrans=*/false);
+              ctaLayout, opIdx, srcTy.getShape(), order, vecSize, bitWidth,
+              /*needTrans=*/false);
         }
       }
     }

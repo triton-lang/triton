@@ -137,17 +137,44 @@ getWarpsPerCTAWithUniqueData(Attribute layout, ArrayRef<int64_t> tensorShape);
 // is contiguous in shared memory.
 SmallVector<unsigned> getOrder(DistributedEncodingTrait layout,
                                ArrayRef<int64_t> shape);
-SmallVector<unsigned> getOrder(RankedTensorType type);
+inline SmallVector<unsigned> getOrder(RankedTensorType type) {
+  return getOrder(cast<DistributedEncodingTrait>(type.getEncoding()),
+                  type.getShape());
+}
 
 SmallVector<unsigned> getOrder(SharedEncodingTrait layout,
                                ArrayRef<int64_t> shape);
-SmallVector<unsigned> getOrder(MemDescType type);
-SmallVector<unsigned> getOrder(TensorOrMemDesc type);
+inline SmallVector<unsigned> getOrder(MemDescType type) {
+  return getOrder(cast<SharedEncodingTrait>(type.getEncoding()),
+                  type.getShape());
+}
+inline SmallVector<unsigned> getOrder(TensorOrMemDesc type) {
+  if (auto memDesc = dyn_cast<MemDescType>(type)) {
+    return getOrder(memDesc);
+  } else {
+    auto tensorTy = cast<RankedTensorType>(type);
+    return getOrder(tensorTy);
+  }
+}
 
-// Order of the elements in the shared memory as defined at layout creation
-// If this layout is associated with a MemDesc with a different shape
-// it may return a different order than the actual order of the elements
-SmallVector<unsigned> getDefaultOrder(SharedEncodingTrait layout);
+// To be removed once we implement arbitrary swizzled layouts
+// It chooses heuristically an order for the memory layout in which to save
+// a distributed layout taking into account the order of the elements
+// and the threads.
+SmallVector<unsigned> getOrderForMemory(DistributedEncodingTrait layout,
+                                        ArrayRef<int64_t> shape);
+inline SmallVector<unsigned> getOrderForMemory(RankedTensorType type) {
+  return getOrderForMemory(cast<DistributedEncodingTrait>(type.getEncoding()),
+                           type.getShape());
+}
+inline SmallVector<unsigned> getOrderForMemory(TensorOrMemDesc type) {
+  if (auto memDesc = dyn_cast<MemDescType>(type)) {
+    return getOrder(memDesc);
+  } else {
+    auto tensorTy = cast<RankedTensorType>(type);
+    return getOrderForMemory(tensorTy);
+  }
+}
 
 // Returns the dimensions along which warpId's are distributed.
 // warpsPerCTA only tells the warp layout in the CTA, e.g. warpsPerCTA = [2, 4]
@@ -158,14 +185,20 @@ SmallVector<unsigned> getDefaultOrder(SharedEncodingTrait layout);
 // [warp1  warp3  warp5 warp7]
 SmallVector<unsigned> getWarpOrder(DistributedEncodingTrait layout,
                                    ArrayRef<int64_t> shape);
-SmallVector<unsigned> getWarpOrder(RankedTensorType type);
+inline SmallVector<unsigned> getWarpOrder(RankedTensorType type) {
+  return getWarpOrder(cast<DistributedEncodingTrait>(type.getEncoding()),
+                      type.getShape());
+}
 
 // Returns the dimensions along which threadId's are distributed.
 // Similar to warpOrder, threadOrder is necessary to tell the specific thread
 // distribution in the warp.
 SmallVector<unsigned> getThreadOrder(DistributedEncodingTrait layout,
                                      ArrayRef<int64_t> shape);
-SmallVector<unsigned> getThreadOrder(RankedTensorType type);
+inline SmallVector<unsigned> getThreadOrder(RankedTensorType type) {
+  return getThreadOrder(cast<DistributedEncodingTrait>(type.getEncoding()),
+                        type.getShape());
+}
 
 CTALayoutAttr getCTALayout(Attribute layout);
 
