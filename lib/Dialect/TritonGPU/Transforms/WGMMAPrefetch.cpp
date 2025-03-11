@@ -3,32 +3,27 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Support/LLVM.h"
-#include "mlir/Transforms/Passes.h"
-#include "triton/Analysis/Utility.h"
-#include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/IR/Types.h"
-#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "mlir/Transforms/Passes.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Analysis/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/Types.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/LogicalResult.h"
 
-
-
 #define DEBUG_TYPE "tritongpu-wgmma-prefetch"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 using namespace mlir;
 namespace ttng = mlir::triton::nvidia_gpu;
-
 
 namespace mlir {
 namespace triton {
@@ -37,12 +32,11 @@ namespace gpu {
 #define GEN_PASS_DEF_TRITONGPUWGMMAPREFETCH
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
-
 namespace {
 
 // RSGEMM means the lhs is in register and the rhs is in
 // shared memory
-LogicalResult isRSGEMM(ttng::WarpGroupDotOp dotOp){
+LogicalResult isRSGEMM(ttng::WarpGroupDotOp dotOp) {
   Value operandA = dotOp.getA();
   Value operandB = dotOp.getB();
 
@@ -50,15 +44,14 @@ LogicalResult isRSGEMM(ttng::WarpGroupDotOp dotOp){
   auto encA = dyn_cast<TensorOrMemDesc>(operandA.getType()).getEncoding();
   auto encB = dyn_cast<TensorOrMemDesc>(operandB.getType()).getEncoding();
 
-  if(isa<DotOperandEncodingAttr>(encA) && isa<NVMMASharedEncodingAttr>(encB))
+  if (isa<DotOperandEncodingAttr>(encA) && isa<NVMMASharedEncodingAttr>(encB))
     return llvm::success();
 
   return llvm::failure();
 }
 
-
 class WGMMAPrefetcher {
-/// cache the ForOp we are working on
+  /// cache the ForOp we are working on
   scf::ForOp forOp;
   /// cache the YieldOp of this ForOp
   scf::YieldOp yieldOp;
@@ -68,7 +61,7 @@ class WGMMAPrefetcher {
 
   /// dots to be prefetched
   SetVector<ttng::WarpGroupDotOp> dots;
-/// dot => dot operand
+  /// dot => dot operand
   DenseMap<Value, Value> dot2aLoopArg;
   DenseMap<Value, Value> dot2aHeaderDef;
   DenseMap<Value, Value> dot2bLoopArg;
@@ -84,15 +77,14 @@ class WGMMAPrefetcher {
   DenseMap<Value, ttng::WarpGroupDotWaitOp> dot2Wait;
 
   Value generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
-                         bool loodToReg,
-                         Attribute dotEncoding, OpBuilder &builder,
+                         bool loodToReg, Attribute dotEncoding,
+                         OpBuilder &builder,
                          std::optional<int64_t> offsetK = std::nullopt,
                          std::optional<int64_t> shapeK = std::nullopt,
                          std::optional<int64_t> kWidth = std::nullopt);
 
   void cloneElementwiseOps(Value &bRem, const SmallVector<Value> &vals,
-                          Value source,
-                           OpBuilder &builder);
+                           Value source, OpBuilder &builder);
 
 public:
   WGMMAPrefetcher() = delete;
@@ -106,13 +98,11 @@ public:
   void emitPrologue();
 
   scf::ForOp createNewForOp();
-
-
 };
 
-void WGMMAPrefetcher::cloneElementwiseOps(Value &ret, const SmallVector<Value> &vals,
-                                     Value source,
-                                     OpBuilder &builder) {
+void WGMMAPrefetcher::cloneElementwiseOps(Value &ret,
+                                          const SmallVector<Value> &vals,
+                                          Value source, OpBuilder &builder) {
   IRMapping mapping;
   mapping.map(source, ret);
   for (int i = 0; i < vals.size(); i++) {
@@ -130,15 +120,12 @@ void WGMMAPrefetcher::cloneElementwiseOps(Value &ret, const SmallVector<Value> &
   }
   // if (vals.size() > 1)
   ret = mapping.lookup(vals.back());
-
 }
 
-Value WGMMAPrefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
-                                   bool loadToReg,
-                                   Attribute dotEncoding, OpBuilder &builder,
-                                   std::optional<int64_t> offsetK,
-                                   std::optional<int64_t> shapeK,
-                                   std::optional<int64_t> kWidth) {
+Value WGMMAPrefetcher::generatePrefetch(
+    Value v, unsigned opIdx, bool isPrologue, bool loadToReg,
+    Attribute dotEncoding, OpBuilder &builder, std::optional<int64_t> offsetK,
+    std::optional<int64_t> shapeK, std::optional<int64_t> kWidth) {
   // opIdx: 0 => a, 1 => b
   auto type = cast<triton::gpu::MemDescType>(v.getType());
   SmallVector<int64_t> shape{type.getShape().begin(), type.getShape().end()};
@@ -168,8 +155,8 @@ Value WGMMAPrefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue
           type.getMutableMemory(), type.getAllocShape()),
       v, offsetsVal);
 
-  if(loadToReg){
-    int64_t newKWidth = kWidth ? *kWidth: prefetchWidth/8;
+  if (loadToReg) {
+    int64_t newKWidth = kWidth ? *kWidth : prefetchWidth / 8;
 
     auto dotOperandEnc = triton::gpu::DotOperandEncodingAttr::get(
         builder.getContext(), opIdx, dotEncoding, newKWidth);
@@ -182,8 +169,6 @@ Value WGMMAPrefetcher::generatePrefetch(Value v, unsigned opIdx, bool isPrologue
   return newSmem;
 }
 
-
-
 LogicalResult WGMMAPrefetcher::initialize() {
   Block *loop = forOp.getBody();
 
@@ -194,27 +179,27 @@ LogicalResult WGMMAPrefetcher::initialize() {
   SmallVector<nvidia_gpu::WarpGroupDotOp> dotsInFor;
 
   // Step 1: check the condition if the forloop can be prefetched
-  for (Operation &op : *loop){
-    if(auto dotOp = dyn_cast<ttng::WarpGroupDotOp>(op)){
-      auto dstMmaEnc = dyn_cast<NvidiaMmaEncodingAttr>(getEncoding(dotOp.getResult()));
+  for (Operation &op : *loop) {
+    if (auto dotOp = dyn_cast<ttng::WarpGroupDotOp>(op)) {
+      auto dstMmaEnc =
+          dyn_cast<NvidiaMmaEncodingAttr>(getEncoding(dotOp.getResult()));
       dotsInFor.push_back(dotOp);
-    }
-    else if(auto dotOp = dyn_cast<triton::DotOp>(op)){
+    } else if (auto dotOp = dyn_cast<triton::DotOp>(op)) {
       // To be conservative, we only allow WarpGroupDotOp in the foor loop;
       return llvm::failure();
     }
   }
 
-  if (dotsInFor.empty()){
+  if (dotsInFor.empty()) {
     return llvm::failure();
   }
 
-  if (dotsInFor.size() > 1){
+  if (dotsInFor.size() > 1) {
     return llvm::failure();
   }
 
-  for(ttng::WarpGroupDotOp dotOp : dotsInFor){
-    if(isRSGEMM(dotOp).failed())
+  for (ttng::WarpGroupDotOp dotOp : dotsInFor) {
+    if (isRSGEMM(dotOp).failed())
       return llvm::failure();
   }
 
@@ -225,7 +210,7 @@ LogicalResult WGMMAPrefetcher::initialize() {
     Operation *op = v.getDefiningOp();
     bool foundConvertFromShared = false;
     SmallVector<Value> rets;
-    if(dyn_cast<LocalAllocOp>(op)){
+    if (dyn_cast<LocalAllocOp>(op)) {
       return rets;
     }
 
@@ -268,7 +253,7 @@ LogicalResult WGMMAPrefetcher::initialize() {
     return Value();
   };
 
-  for (ttng::WarpGroupDotOp dotOp : dotsInFor){
+  for (ttng::WarpGroupDotOp dotOp : dotsInFor) {
     auto aType = dotOp.getA().getType();
     auto bType = dotOp.getB().getType();
 
@@ -276,11 +261,11 @@ LogicalResult WGMMAPrefetcher::initialize() {
     auto bEnc = mlir::cast<NVMMASharedEncodingAttr>(bType.getEncoding());
 
     // currently, we require b is in shared memory
-    if(!aEnc){
+    if (!aEnc) {
       return failure();
     }
 
-    if(!bEnc){
+    if (!bEnc) {
       return failure();
     }
 
@@ -292,60 +277,57 @@ LogicalResult WGMMAPrefetcher::initialize() {
       return failure();
 
     auto aVals = getPrefetchSrc(dotOp.getA());
-    for(auto op : aVals){
+    for (auto op : aVals) {
       LDBG("aVals: " << op);
     }
 
     auto bVals = getPrefetchSrc(dotOp.getB());
-    for(auto op : bVals){
+    for (auto op : bVals) {
       LDBG("bVals: " << op);
     }
-
 
     if (aVals.size() && bVals.size()) {
       Value aSmem = aVals.front();
       Value bSmem = bVals.front();
-      if(!dyn_cast<MemDescSubviewOp>(aSmem.getDefiningOp()) || !dyn_cast<MemDescSubviewOp>(bSmem.getDefiningOp())){
+      if (!dyn_cast<MemDescSubviewOp>(aSmem.getDefiningOp()) ||
+          !dyn_cast<MemDescSubviewOp>(bSmem.getDefiningOp())) {
         return failure();
       }
       auto dotOpResult = dotOp.getResult();
       LDBG("dotOpResult is " << dotOpResult);
 
-      if(!dotOpResult.hasOneUse())
+      if (!dotOpResult.hasOneUse())
         return failure();
 
       auto dotOpUser = *(dotOpResult.getUsers().begin());
       auto dotWait = dyn_cast<nvidia_gpu::WarpGroupDotWaitOp>(dotOpUser);
 
-      if(!dotWait)
+      if (!dotWait)
         return failure();
 
       LDBG("dotWait is " << dotWait);
 
-
       LDBG("Successfully check memory source");
       dots.insert(dotOp);
       dot2aVals[dotOp] = aVals;
-      for(auto op : aVals){
-        if(isa<MemDescSubviewOp, LocalLoadOp>(op.getDefiningOp())){
+      for (auto op : aVals) {
+        if (isa<MemDescSubviewOp, LocalLoadOp>(op.getDefiningOp())) {
           dot2aValsLocalLoad[dotOp].push_back(op);
-        }
-        else{
+        } else {
           dot2aValsElementWise[dotOp].push_back(op);
         }
       }
 
-      for(auto op : dot2aValsLocalLoad[dotOp])
+      for (auto op : dot2aValsLocalLoad[dotOp])
         LDBG("aVal, mem load op " << op);
 
-      for(auto op : dot2aValsElementWise[dotOp])
+      for (auto op : dot2aValsElementWise[dotOp])
         LDBG("aVal, elementwise op " << op);
 
       dot2bVals[dotOp] = bVals;
       dot2aSrcMemDesc[dotOp] = aSmem;
       dot2bSrcMemDesc[dotOp] = bSmem;
       dot2Wait[dotOp] = dotWait;
-
     }
   }
 
@@ -356,7 +338,7 @@ scf::ForOp WGMMAPrefetcher::createNewForOp() {
   OpBuilder builder(forOp);
 
   SmallVector<Value> loopArgs;
-  for(auto v : forOp.getInitArgs())
+  for (auto v : forOp.getInitArgs())
     loopArgs.push_back(v);
 
   auto newForOp = builder.create<scf::ForOp>(
@@ -379,17 +361,16 @@ scf::ForOp WGMMAPrefetcher::createNewForOp() {
   };
 
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (op.getNumRegions() > 0){
+    if (op.getNumRegions() > 0) {
       setInsertionPointBeforeYield(builder, newForOp);
     }
-    for (auto operand : op.getOperands()){
-      if (auto def = operand.getDefiningOp()){
+    for (auto operand : op.getOperands()) {
+      if (auto def = operand.getDefiningOp()) {
         auto dot = dyn_cast<nvidia_gpu::WarpGroupDotOp>(def);
-        if (dot && dots.contains(dot)){
+        if (dot && dots.contains(dot)) {
           setInsertionPointBeforeYield(builder, newForOp);
         }
       }
-
     }
     Operation *newOp = builder.clone(op, mapping);
     auto dot = dyn_cast<nvidia_gpu::WarpGroupDotOp>(&op);
@@ -397,44 +378,46 @@ scf::ForOp WGMMAPrefetcher::createNewForOp() {
       Attribute dotEncoding = dot.getType().getEncoding();
 
       int64_t kShape = dot.getA().getType().getShape().back();
-      auto aEnc = dyn_cast<DotOperandEncodingAttr>(dot.getA().getType().getEncoding());
+      auto aEnc =
+          dyn_cast<DotOperandEncodingAttr>(dot.getA().getType().getEncoding());
       int64_t kWidth = aEnc.getKWidth();
-      int64_t subTileCnt =  ceil<int64_t>(kShape, prefetchWidth);
+      int64_t subTileCnt = ceil<int64_t>(kShape, prefetchWidth);
 
       SmallVector<Value> PrefetchedA;
 
       // Prefetching
-      for(int i = 0; i < subTileCnt; i++){
-        Value aRem = generatePrefetch(mapping.lookup(dot2aSrcMemDesc[dot]), 0, false, true,
-            dotEncoding, builder, prefetchWidth*i, prefetchWidth, kWidth);
+      for (int i = 0; i < subTileCnt; i++) {
+        Value aRem = generatePrefetch(mapping.lookup(dot2aSrcMemDesc[dot]), 0,
+                                      false, true, dotEncoding, builder,
+                                      prefetchWidth * i, prefetchWidth, kWidth);
         PrefetchedA.push_back(aRem);
       }
 
-      Operation * prevDot;
+      Operation *prevDot;
       // Interleave elementwise with WGMMA
-      for(int i = 0; i < subTileCnt; i++){
-        cloneElementwiseOps(PrefetchedA[i], dot2aValsElementWise[dot], dot2aValsLocalLoad[dot].back(), builder);
-        Value bSubtile =  generatePrefetch(mapping.lookup(dot2bSrcMemDesc[dot]), 1, false, false,
-            dotEncoding, builder, prefetchWidth*i, prefetchWidth);
+      for (int i = 0; i < subTileCnt; i++) {
+        cloneElementwiseOps(PrefetchedA[i], dot2aValsElementWise[dot],
+                            dot2aValsLocalLoad[dot].back(), builder);
+        Value bSubtile = generatePrefetch(mapping.lookup(dot2bSrcMemDesc[dot]),
+                                          1, false, false, dotEncoding, builder,
+                                          prefetchWidth * i, prefetchWidth);
         newOp = builder.clone(*dot, mapping);
         newOp->setOperand(0, PrefetchedA[i]);
         newOp->setOperand(1, bSubtile);
-        if(i > 0) newOp->setOperand(2, prevDot->getResult(0));
+        if (i > 0)
+          newOp->setOperand(2, prevDot->getResult(0));
         prevDot = newOp;
-
-
       }
 
       LDBG("For loop after inserting prefetch localload" << newForOp);
     }
     auto dotWait = dyn_cast<nvidia_gpu::WarpGroupDotWaitOp>(newOp);
-    if(dotWait){
-        builder.setInsertionPoint(dotWait);
+    if (dotWait) {
+      builder.setInsertionPoint(dotWait);
     }
 
     for (unsigned dstIdx : llvm::seq(unsigned(0), op.getNumResults()))
       mapping.map(op.getResult(dstIdx), newOp->getResult(dstIdx));
-
   }
 
   SmallVector<Value> yieldValues;
@@ -448,12 +431,10 @@ scf::ForOp WGMMAPrefetcher::createNewForOp() {
   return newForOp;
 }
 
+} // namespace
 
-}
-
-
-
-struct WGMMAPrefetchPass : public impl:: TritonGPUWGMMAPrefetchBase<WGMMAPrefetchPass> {
+struct WGMMAPrefetchPass
+    : public impl::TritonGPUWGMMAPrefetchBase<WGMMAPrefetchPass> {
   void runOnOperation() override {
 
     // Canonicalize convert ops to make the pattern matching easier.
@@ -476,24 +457,13 @@ struct WGMMAPrefetchPass : public impl:: TritonGPUWGMMAPrefetchBase<WGMMAPrefetc
 
       scf::ForOp newForOp = prefetcher.createNewForOp();
 
-      for(unsigned i = 0; i < forOp->getNumResults(); ++i)
+      for (unsigned i = 0; i < forOp->getNumResults(); ++i)
         forOp->getResult(i).replaceAllUsesWith(newForOp->getResult(i));
       forOp->erase();
-
     });
-
-
   }
-
 };
-
-
-
-
-
 
 } // namespace gpu
 } // namespace triton
 } // namespace mlir
-
-

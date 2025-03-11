@@ -179,7 +179,7 @@ LogicalResult Prefetcher::initialize() {
       dotsInFor.push_back(dotOp);
     }
 
-  if (dotsInFor.empty()){
+  if (dotsInFor.empty()) {
     return failure();
   }
 
@@ -281,8 +281,7 @@ LogicalResult Prefetcher::initialize() {
         dot2bLoopArg[dot] = bSmem;
         dot2aYield[dot] = getYieldOperand(aSmem);
         dot2bYield[dot] = getYieldOperand(bSmem);
-      }
-      else{
+      } else {
         LDBG("Did not prefetch");
       }
     }
