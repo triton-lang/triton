@@ -632,7 +632,7 @@ download_and_copy_npu(
     name="npu_compiler", src_path="npu_compiler", dst_path="npu_compiler", variable="TRITON_NPU_COMPILER_PATH",
     version=NPU_TOOLCHAIN_VERSION["npu_compiler"], url_func=lambda system, arch, version:
     ((lambda version_major, version_minor1, version_minor2:
-      f"https://gitee.com/ascend/triton-ascend/releases/download/{version_major}/{version_minor1}/{version_minor2}/npu-compiler-aarch64.tar.gz")
+      f"https://gitee.com/ascend/triton-ascend/releases/download/{version_major}.{version_minor1}.{version_minor2}/npu_compiler_aarch64.tar.gz")
      (*version.split('.'))))
 
 backends = [*BackendInstaller.copy(["nvidia", "amd"]), *BackendInstaller.copy_externals()]
