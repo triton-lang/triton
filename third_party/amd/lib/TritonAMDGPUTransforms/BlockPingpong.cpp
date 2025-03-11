@@ -203,7 +203,20 @@ void Pingponger::findClosestPredOps(Value v, DenseSet<T> &matchingOps) {
 
 template <typename T>
 size_t Pingponger::estimateNonDotMemoryImpact(T *start, T *end) {
-  return 0;
+  DenseSet<Operation *> visitedParents;
+  size_t count = 0;
+  for (auto it = start; it != end; it++) {
+    auto parent = (*it)->getParentOp();
+    if (parent == nullptr) {
+      // This shouldn't be reachable but is added
+      // for safety.
+      continue;
+    }
+    if (parent == forOp) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 // Populate the dotGlobalLoads, dotLocalLoads, and dotLocalStores set with
