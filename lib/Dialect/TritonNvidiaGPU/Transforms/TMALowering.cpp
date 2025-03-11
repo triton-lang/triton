@@ -75,7 +75,7 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
   MLIRContext *ctx = op->getContext();
   Attribute sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
   auto loc = op->getLoc();
-  auto encoding = getEncoding(op, tensorType, desc);
+  auto encoding = getEncodingFromDescriptor(op, tensorType, desc);
   MemDescType memDescType =
       MemDescType::get(tensorType.getShape(), tensorType.getElementType(),
                        encoding, sharedMemorySpace, /*mutableMemory=*/true);
@@ -145,7 +145,7 @@ static void lowerTMAStore(Operation *op, mlir::TypedValue<RankedTensorType> src,
   Attribute sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
   auto loc = op->getLoc();
   auto tensorType = src.getType();
-  auto encoding = getEncoding(op, src.getType(), desc);
+  auto encoding = getEncodingFromDescriptor(op, src.getType(), desc);
   assert(isa<SharedEncodingTrait>(encoding));
   MemDescType memDescType =
       MemDescType::get(tensorType.getShape(), tensorType.getElementType(),

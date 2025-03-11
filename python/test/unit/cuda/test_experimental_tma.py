@@ -1233,6 +1233,106 @@ def test_tensor_descriptor_rank_reducing_load(dtype_str, ndim, INNER_BLOCK):
     torch.testing.assert_close(expect, actual)
 
 
+@triton.jit
+def _compute_pid(tile_id, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS):
+    group_id = tile_id // num_pid_in_group
+    first_pid_m = group_id * GROUP_SIZE_M
+    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+    pid_m = first_pid_m + (tile_id % group_size_m)
+    pid_n = (tile_id % num_pid_in_group) // group_size_m
+    return pid_m, pid_n
+
+
+@triton.jit()
+def matmul_kernel_rank_reducing(a_ptr, b_ptr, c_ptr,  #
+                                M, N, K,  #
+                                BLOCK_SIZE_M: tl.constexpr,  #
+                                BLOCK_SIZE_N: tl.constexpr,  #
+                                BLOCK_SIZE_K: tl.constexpr,  #
+                                NUM_SMS: tl.constexpr):  #
+    # Matmul using TMA and device-side descriptor creation
+    GROUP_SIZE_M: tl.constexpr = 8
+    dtype = c_ptr.dtype.element_ty
+    start_pid = tl.program_id(axis=0)
+    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
+    k_tiles = tl.cdiv(K, BLOCK_SIZE_K)
+    num_tiles = num_pid_m * num_pid_n
+
+    a_desc = tl._experimental_make_tensor_descriptor(
+        a_ptr,
+        shape=[1, M, K],
+        strides=[M * K, K, 1],
+        block_shape=[1, BLOCK_SIZE_M, BLOCK_SIZE_K],
+    )
+    b_desc = tl._experimental_make_tensor_descriptor(
+        b_ptr,
+        shape=[1, N, K],
+        strides=[N * K, K, 1],
+        block_shape=[1, BLOCK_SIZE_N, BLOCK_SIZE_K],
+    )
+    c_desc = tl._experimental_make_tensor_descriptor(
+        c_ptr,
+        shape=[1, M, N],
+        strides=[M * N, N, 1],
+        block_shape=[1, BLOCK_SIZE_M, BLOCK_SIZE_N],
+    )
+
+    tile_id_c = start_pid - NUM_SMS
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n
+
+    for tile_id in tl.range(start_pid, num_tiles, NUM_SMS, flatten=True):
+        pid_m, pid_n = _compute_pid(tile_id, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS)
+        offs_am = pid_m * BLOCK_SIZE_M
+        offs_bn = pid_n * BLOCK_SIZE_N
+
+        accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+        for ki in range(k_tiles):
+            offs_k = ki * BLOCK_SIZE_K
+            a = a_desc.load([0, offs_am, offs_k]).reshape(BLOCK_SIZE_M, BLOCK_SIZE_K)
+            b = b_desc.load([0, offs_bn, offs_k]).reshape(BLOCK_SIZE_N, BLOCK_SIZE_K)
+            accumulator = tl.dot(a, b.T, accumulator)
+
+        tile_id_c += NUM_SMS
+        pid_m, pid_n = _compute_pid(tile_id_c, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS)
+        offs_cm = pid_m * BLOCK_SIZE_M
+        offs_cn = pid_n * BLOCK_SIZE_N
+
+        c = accumulator.to(dtype).reshape(1, BLOCK_SIZE_M, BLOCK_SIZE_N)
+        c_desc.store([0, offs_cm, offs_cn], c)
+
+
+@requires_tma
+@pytest.mark.parametrize("dtype_str", ["float16", "bfloat16", "float32"])
+def test_tensor_descriptor_rank_reducing_matmul(dtype_str):
+    NUM_SMS = 4
+    M, N, K = 256, 256, 64
+    A = to_triton(numpy_random((1, M, K), dtype_str), device="cuda", dst_type=dtype_str)
+    B = to_triton(numpy_random((1, N, K), dtype_str), device="cuda", dst_type=dtype_str)
+    C = A.new_empty(1, M, N)
+
+    def alloc_fn(size: int, align: int, stream: Optional[int]):
+        return torch.empty(size, dtype=torch.int8, device="cuda")
+
+    triton.set_allocator(alloc_fn)
+    matmul_kernel_rank_reducing[(NUM_SMS, )](
+        A,
+        B,
+        C,
+        M,
+        N,
+        K,
+        NUM_SMS=4,
+        BLOCK_SIZE_M=32,
+        BLOCK_SIZE_N=32,
+        BLOCK_SIZE_K=32,
+    )
+
+    actual = unwrap_tensor(C)
+    expect = torch.matmul(A, B.mT)
+    torch.testing.assert_close(expect, actual, atol=1e-1, rtol=1e-4)
+
+
 def f8_to_f16(x, dtype):
 
     @triton.jit

@@ -187,8 +187,7 @@ ttg::SharedEncodingTrait getSharedEncoding(Operation *op) {
       op->emitError() << "unrecognized tma load type";
       llvm::report_fatal_error("unrecognized tma load type");
     }
-    return cast<SharedEncodingTrait>(
-        desc.getType().getBlockType().getEncoding());
+    return ttng::getEncodingFromDescriptor(op, ty, desc);
   }
 
   if (localAllocEnc)
