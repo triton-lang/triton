@@ -60,4 +60,16 @@ def TritonLoopUnroll : Pass</*cli-arg*/"triton-loop-unroll", /*Op*/"mlir::Module
   let dependentDialects = ["mlir::triton::TritonDialect"];
 }
 
+def TritonLoopInvariantCodeMotion : Pass</*cli-arg*/"triton-licm", /*Op*/"mlir::ModuleOp"> {
+  let summary = "MLIR's LICM plus hoist load ops out of loops with masks.";
+  let description = [{
+    This pass uses MLIR's LICM pass as base. Additionally, it hoists load ops
+    out of loops that consists of pure/read-only ops. For scf.for loops, it
+    generates a trip-count check. For scf.while loops, it clones the condition
+    from the before body.
+  }];
+  let constructor = "mlir::triton::createLoopInvariantCodeMotionPass()";
+  let dependentDialects = ["mlir::triton::TritonDialect"];
+}
+
 #endif

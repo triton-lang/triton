@@ -151,9 +151,9 @@ struct TritonExpandDimsPattern
     auto retShape = argType.getShape().vec();
     retShape.insert(retShape.begin() + op.getAxis(), 1);
     // return encoding
-    auto retSizePerThread = argEncoding.getSizePerThread();
+    auto retSizePerThread = llvm::to_vector(argEncoding.getSizePerThread());
     retSizePerThread.insert(retSizePerThread.begin() + op.getAxis(), 1);
-    auto retThreadsPerWarp = argEncoding.getThreadsPerWarp();
+    auto retThreadsPerWarp = to_vector(argEncoding.getThreadsPerWarp());
     retThreadsPerWarp.insert(retThreadsPerWarp.begin() + op.getAxis(), 1);
     auto retWarpsPerCTA = argEncoding.getWarpsPerCTA();
     retWarpsPerCTA.insert(retWarpsPerCTA.begin() + op.getAxis(), 1);
@@ -302,7 +302,6 @@ struct TritonCatPattern : public OpConversionPattern<triton::CatOp> {
     auto retTotalElemsPerThread = triton::gpu::getTotalElemsPerThread(retType);
     auto retShape = retType.getShape();
     auto retOrder = retEncoding.getOrder();
-    auto retSizePerThread = retEncoding.getSizePerThread();
     auto retThreadsPerWarp = retEncoding.getThreadsPerWarp();
     auto retWarpsPerCTA = retEncoding.getWarpsPerCTA();
     // Get new retSizePerThread if ret elems per thread is not enough.
@@ -310,7 +309,7 @@ struct TritonCatPattern : public OpConversionPattern<triton::CatOp> {
     // constraint.
     auto newRetTotalElemsPerThread =
         nextPowOf2(lhsTotalElemsPerThread + rhsTotalElemsPerThread);
-    auto newRetSizePerThread = retSizePerThread;
+    auto newRetSizePerThread = llvm::to_vector(retEncoding.getSizePerThread());
     newRetSizePerThread[retOrder[0]] *=
         newRetTotalElemsPerThread / retTotalElemsPerThread;
     triton::gpu::BlockedEncodingAttr newRetEncoding =
@@ -406,19 +405,19 @@ struct TritonSplitOpPattern : public OpConversionPattern<triton::SplitOp> {
 // `gather4` and `scatter4` TMA instructions require 4 consecutive indices.
 // Thus, threads issuing these instructions must have all 4 index elements
 // available.
-static RankedTensorType getNewIndicesType(RankedTensorType type) {
+static RankedTensorType getNewIndicesType(RankedTensorType type,
+                                          unsigned numThreads,
+                                          unsigned numWarps) {
   assert(type.getRank() == 1);
   auto enc = cast<DistributedEncodingTrait>(type.getEncoding());
 
   // Technically any layout where we have a pack of 4 neighbouring elements plus
   // broadcasted over the warp dimension is okay but for now we just pick a
   // layout.
-  unsigned numThreadsPerWarp = product(enc.getThreadsPerWarp());
-  unsigned numWarps = product(enc.getWarpsPerCTA());
   std::array<unsigned, 2> sizePerThread{1, 4};
-  std::array<unsigned, 2> threadsPerWarp = {numThreadsPerWarp, 1};
+  std::array<unsigned, 2> threadsPerWarp = {numThreads, 1};
   std::array<unsigned, 2> order = {1, 0};
-  std::array<unsigned, 2> warpsPerCta = {1, static_cast<unsigned>(numWarps)};
+  std::array<unsigned, 2> warpsPerCta = {1, numWarps};
 
   MLIRContext *ctx = type.getContext();
   auto ctaLayout = CTALayoutAttr::getDefault(ctx, /*rank=*/2);
@@ -439,8 +438,11 @@ struct TritonDescriptorGatherPattern
   LogicalResult
   matchAndRewrite(triton::ExperimentalDescriptorGatherOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto numThreads = lookupThreadsPerWarp(rewriter);
+    auto numWarps = lookupNumWarps(op);
     RankedTensorType newType = getNewIndicesType(
-        cast<RankedTensorType>(adaptor.getXOffsets().getType()));
+        cast<RankedTensorType>(adaptor.getXOffsets().getType()), numThreads,
+        numWarps);
     if (!newType)
       return failure();
 
@@ -460,8 +462,11 @@ struct TritonDescriptorScatterPattern
   LogicalResult
   matchAndRewrite(triton::ExperimentalDescriptorScatterOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto numThreads = lookupThreadsPerWarp(rewriter);
+    auto numWarps = lookupNumWarps(op);
     RankedTensorType newType = getNewIndicesType(
-        cast<RankedTensorType>(adaptor.getXOffsets().getType()));
+        cast<RankedTensorType>(adaptor.getXOffsets().getType()), numThreads,
+        numWarps);
     if (!newType)
       return failure();
 

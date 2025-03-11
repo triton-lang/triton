@@ -1079,6 +1079,48 @@ public:
   }
 };
 
+/// convert integer offset, keep base
+class ConvertConvertLayoutOp
+    : public PointerCanonicalizationPattern<tt::gpu::ConvertLayoutOp> {
+public:
+  using PointerCanonicalizationPattern::PointerCanonicalizationPattern;
+
+  LogicalResult
+  matchAndRewrite_(tt::gpu::ConvertLayoutOp cvtOp, OneToNOpAdaptor adaptor,
+                   ConversionPatternRewriter &rewriter) const override {
+    ValueRange remappedOperands = adaptor.getSrc();
+    if (remappedOperands.size() != 2) {
+      // some prior op materialized the fat ptr, e.g.:
+      // %3 = tt.bitcast %2
+      // %4 = tt.splat %3
+      return success();
+    }
+    Value fatPtrBase = remappedOperands[0];
+    Value fatPtrOffset = remappedOperands[1];
+    if (!llvm::isa<tt::PointerType>(fatPtrBase.getType())) {
+      return rewriter.notifyMatchFailure(cvtOp,
+                                         "non tt.ptr base unimplemented");
+    }
+    auto offsetTensorTy = dyn_cast<RankedTensorType>(fatPtrOffset.getType());
+    if (!offsetTensorTy) {
+      return rewriter.notifyMatchFailure(
+          cvtOp, "non RankedTensorType offset unimplemented");
+    }
+
+    RankedTensorType outType = cvtOp.getResult().getType();
+    auto newOffsetType = RankedTensorType::get(outType.getShape(),
+                                               offsetTensorTy.getElementType(),
+                                               outType.getEncoding());
+    tt::gpu::ConvertLayoutOp cvtOffset =
+        rewriter.create<tt::gpu::ConvertLayoutOp>(cvtOp.getLoc(), newOffsetType,
+                                                  fatPtrOffset);
+    rewriter.replaceOpWithMultiple(cvtOp, {{fatPtrBase, cvtOffset}});
+    fatPtrs[{fatPtrBase, cvtOffset}] = fatPtrs.at({fatPtrBase, fatPtrOffset});
+
+    return success();
+  }
+};
+
 template <typename SourceOp, int PtrLikeIdx = 0>
 class MaterializeFatPointer : public PointerCanonicalizationPattern<SourceOp> {
 public:
@@ -1437,6 +1479,7 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   };
 
   target.addDynamicallyLegalDialect<tt::TritonDialect>(isLegal);
+  target.addDynamicallyLegalDialect<triton::gpu::TritonGPUDialect>(isLegal);
   target.addDynamicallyLegalDialect<scf::SCFDialect>(isLegal);
   target.addDynamicallyLegalDialect<cf::ControlFlowDialect>(isLegal);
   target.addDynamicallyLegalDialect<arith::ArithDialect>(isLegal);
@@ -1451,9 +1494,11 @@ void TritonAMDGPUCanonicalizePointersPass::runOnOperation() {
   RewritePatternSet patterns(&getContext());
   patterns.add<
       ConvertFuncOpArgsUnrealizedCasts, ConvertBroadcastOp, ConvertSplatOp,
-      ConvertAddPtrOp, MaterializeFatPointer<tt::AtomicCASOp>,
+      ConvertConvertLayoutOp, ConvertAddPtrOp,
+      MaterializeFatPointer<tt::AtomicCASOp>,
       MaterializeFatPointer<tt::AtomicRMWOp>,
       MaterializeFatPointer<tt::BitcastOp>, MaterializeFatPointer<tt::LoadOp>,
+      MaterializeFatPointer<triton::gpu::AsyncCopyGlobalToLocalOp>,
       MaterializeFatPointer<tt::PtrToIntOp>, MaterializeFatPointer<tt::StoreOp>,
       MaterializeFatPointerVariadic<tt::CallOp>,
       MaterializeFatPointerVariadic<tt::PrintOp>, ConvertSCFForOp,

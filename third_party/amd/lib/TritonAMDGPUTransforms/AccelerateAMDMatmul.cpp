@@ -825,6 +825,8 @@ public:
       return rewriter.notifyMatchFailure(dotOp, "NYI: mxfp6");
     }
 
+    bool bothScalesAbsent = !aScale && !bScale;
+
     MLIRContext *ctx = dotOp.getContext();
 
     ttg::CTALayoutAttr ctaLayout = ttg::getCTALayout(oldRetType.getEncoding());
@@ -894,6 +896,9 @@ public:
     auto convertScaleLayout = [&](TensorValue scale,
                                   llvm::ArrayRef<int64_t> valShape,
                                   LinearLayout dotLL, int idx) -> Value {
+      if (bothScalesAbsent)
+        return Value();
+
       LinearLayout::BasesT scaleBases = dotLL.getBases();
       auto &warpBases = scaleBases[kWarp];
 
@@ -1060,19 +1065,14 @@ public:
     auto oldAcc = dotOp.getC();
     auto newAcc =
         convertAndCastTensor(rewriter, oldAcc, wmmaEnc, operandTypes[2]);
+    auto kWidth = wmmaEnc.getKWidthForOperands();
 
-    auto newAType =
-        RankedTensorType::get(aShape, operandTypes[0],
-                              ttg::DotOperandEncodingAttr::get(
-                                  ctx, 0, wmmaEnc,
-                                  wmmaEnc.getSizePerThreadForOperand(
-                                      /*kWidth=*/0, /*opIdx=*/0)[rank - 1]));
-    auto newBType =
-        RankedTensorType::get(bShape, operandTypes[1],
-                              ttg::DotOperandEncodingAttr::get(
-                                  ctx, 1, wmmaEnc,
-                                  wmmaEnc.getSizePerThreadForOperand(
-                                      /*kWidth=*/0, /*opIdx=*/1)[rank - 2]));
+    auto newAType = RankedTensorType::get(
+        aShape, operandTypes[0],
+        ttg::DotOperandEncodingAttr::get(ctx, 0, wmmaEnc, kWidth));
+    auto newBType = RankedTensorType::get(
+        bShape, operandTypes[1],
+        ttg::DotOperandEncodingAttr::get(ctx, 1, wmmaEnc, kWidth));
 
     Value castedA = convertAndCastTensor(rewriter, a, newAType.getEncoding(),
                                          operandTypes[0]);

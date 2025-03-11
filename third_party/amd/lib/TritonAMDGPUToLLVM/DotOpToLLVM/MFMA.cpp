@@ -313,7 +313,7 @@ struct DotOpMFMAConversionHelper {
     auto dstElemTy = dTensorTy.getElementType();
     auto fc = unpackLLElements(loc, loadedC, rewriter);
 
-    unsigned warpSize = triton::gpu::getWarpSize(mfmaLayout);
+    unsigned warpSize = triton::gpu::lookupThreadsPerWarp(rewriter);
     // compute number of output elements that each thread holds for one MFMA
     // instruction.
     const int subBlocks =
@@ -640,7 +640,7 @@ struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
     auto dstElemTy = dTensorTy.getElementType();
     auto fc = unpackLLElements(loc, loadedC, rewriter);
 
-    unsigned warpSize = triton::gpu::getWarpSize(mfmaLayout);
+    unsigned warpSize = triton::gpu::lookupThreadsPerWarp(rewriter);
     // compute number of output elements that each thread holds for one MFMA
     // instruction. subBlocks
     const int subBlocks =
@@ -778,7 +778,9 @@ LogicalResult convertScaledMFMA(triton::DotScaledOp op,
   // If the tt.dot_scaled is not from a tt.dot but native, we support 0, 1, 2
   // scales and treat them in different ways:
   //
-  // 1. #scales = 0, 1: The upstream transform guarantees to create constant
+  // 1. #scales = 0: Just like those transformed from tt.dot, both scales remain
+  // None.
+  // 2. #scales = 1: The upstream transform guarantees to create constant
   // scales for the absent.
   // 2. #scales = 2: Both scales should exist.
 

@@ -31,6 +31,7 @@ include "triton/Dialect/Triton/IR/TritonTypes.td"
 include "triton/Dialect/Triton/IR/TritonAttrDefs.td"
 include "triton/Dialect/Triton/IR/TritonInterfaces.td"
 include "triton/Dialect/Triton/IR/TritonOpInterfaces.td"
+include "triton/Dialect/TritonGPU/IR/TritonGPUTypes.td"
 
 include "mlir/IR/EnumAttr.td"
 include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
@@ -47,6 +48,7 @@ class TT_AMDGPU_Op<string mnemonic, list<Trait> traits = []> :
 // Interfaces
 //
 def GlobalMemory : Resource<"::mlir::triton::GlobalMemory">;
+def SharedMemory : Resource<"::mlir::triton::gpu::SharedMemory">;
 
 //===----------------------------------------------------------------------===//
 // ExtractSliceOp
@@ -226,6 +228,43 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
       oilist(`cacheModifier` `=` $cache)
       (`stride` `=` $stride^)?
       attr-dict `:` type($result)
+    }];
+}
+
+//===----------------------------------------------------------------------===//
+// BufferLoadToLocalOp
+//===----------------------------------------------------------------------===//
+
+def BufferLoadToLocalOp : TT_AMDGPU_Op<"buffer_load_to_local", [
+  AttrSizedOperandSegments,
+  MemoryEffects<[MemRead<GlobalMemory>]>,
+  MemoryEffects<[MemWrite<SharedMemory>]>,
+  TypesMatchWith<"dest element type matches pointee type of ptr", "dest", "ptr", "getPointerTypeToElement($_self)">,
+  TypesMatchWith<"infer mask shape from offsets",
+                 "offsets", "mask", "getI1SameShape($_self)",
+                 "(cast<BufferLoadToLocalOp>($_op).getMask() == nullptr) || std::equal_to<>()">,
+  TypesMatchWith<"other matches shape and layout of offsets and the element type matches the pointee type of ptr",
+                 "offsets", "other", "cast<TensorType>($_self).clone(getPointeeType($ptr.getType()))",
+                 "(cast<BufferLoadToLocalOp>($_op).getOther() == nullptr) || std::equal_to<>()">,
+]>{
+    let summary = "Load from a scalar base pointer and a tensor offset to shared memory";
+    let description = [{
+      AMD Buffer load operation. Similar to amdgpu.buffer_load op but directly wirtes to shared memory instead of into registers. }];
+    let arguments = (ins
+      TTG_MemDescType:$dest,
+      TT_Ptr:$ptr,
+      I32Tensor:$offsets,
+      Optional<TT_BoolTensor>:$mask,
+      Optional<TT_Tensor>:$other,
+      Optional<I32>:$stride,
+      DefaultValuedAttr<TT_CacheModifierAttr, "::mlir::triton::CacheModifier::NONE">:$cache
+    );
+    let results = (outs TTG_AsyncToken:$token);
+
+    let assemblyFormat = [{
+      $ptr `[` $offsets `]` (`mask` `=` $mask^)? (`other` `=` $other^)? (`stride` `=` $stride^)?
+      oilist(`cacheModifier` `=` $cache) `into` $dest
+      attr-dict `:` type($ptr) `[` type($offsets) `]` type($other) `->` type($dest)
     }];
 }
 

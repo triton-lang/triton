@@ -51,9 +51,13 @@ int lookupNumWarps(Operation *op);
 // verifiers.
 std::optional<int> maybeLookupNumWarps(Operation *op);
 
-class LinearLayoutCache {
+// FIXME: Make this API and that of maybeLookupNumWarps consistent!
+// Utility to find the number of threads per warp
+int lookupThreadsPerWarp(OpBuilder &rewriter);
+
+template <typename Key, typename Value> class Cache {
 public:
-  std::optional<LinearLayout> get(const CacheKey &key) {
+  std::optional<Value> get(const Key &key) {
     std::shared_lock lock(mutex);
     auto it = cache.find(key);
     if (it != cache.end()) {
@@ -62,15 +66,18 @@ public:
     return std::nullopt;
   }
 
-  void set(CacheKey key, LinearLayout result) {
+  void set(Key key, Value result) {
     std::scoped_lock lock(mutex);
     cache.emplace(std::move(key), std::move(result));
   }
 
 private:
-  std::unordered_map<CacheKey, LinearLayout> cache;
+  std::unordered_map<Key, Value> cache;
   llvm::sys::SmartRWMutex<true> mutex;
 };
+
+using LinearLayoutCache = Cache<CacheKey, LinearLayout>;
+using LinearEncodingCache = Cache<CacheKey, LinearEncodingAttr>;
 } // namespace mlir::triton::gpu
 
 #define GET_OP_CLASSES
@@ -83,6 +90,7 @@ struct SharedMemory : public SideEffects::Resource::Base<SharedMemory> {
 };
 
 // Convert a distributed layout to a linear encoding
+LinearEncodingAttr toLinearEncoding(RankedTensorType type);
 LinearEncodingAttr toLinearEncoding(Attribute layout, ArrayRef<int64_t> shape);
 
 unsigned getTotalElemsPerThread(Type type);
@@ -91,18 +99,9 @@ unsigned getTotalElemsPerThread(Attribute layout, ArrayRef<int64_t> shape);
 
 SmallVector<unsigned> getElemsPerThread(Type type);
 
-// Returns the number of threads per warp that may have access to replicated
-// elements. If you want non-replicated threads, use
-// getThreadsPerWarpWithUniqueData.
-SmallVector<unsigned> getThreadsPerWarp(Attribute layout);
-
-unsigned getWarpSize(Attribute layout);
-
 // Returns the number of warps per CTA that may have access to replicated
 // elements. If you want non-replicated warps, use getWarpsPerCTAWithUniqueData.
 SmallVector<unsigned> getWarpsPerCTA(Attribute layout);
-
-SmallVector<unsigned> getSizePerThread(Attribute layout);
 
 // Returns the number of contiguous elements of the logical tensor that each
 // thread has access to, on each dimension of the tensor. For a blocked layout
@@ -117,9 +116,11 @@ SmallVector<unsigned> getContigPerThread(RankedTensorType tensorType);
 // 1], threadsPerWarp = [2, 16] and tensor shape = [2, 2], threads 0, 1, 16, 17
 // have access to the full tensor, whereas the other threads have access to
 // replicated elements, so this function returns [2, 2].
-SmallVector<unsigned>
-getThreadsPerWarpWithUniqueData(Attribute layout,
-                                ArrayRef<int64_t> tensorShape);
+SmallVector<unsigned> getThreadsPerWarp(Attribute layout,
+                                        ArrayRef<int64_t> shape);
+inline SmallVector<unsigned> getThreadsPerWarp(RankedTensorType type) {
+  return getThreadsPerWarp(type.getEncoding(), type.getShape());
+}
 
 // Returns the number of warps per CTA that have access to non-replicated
 // elements of the tensor. E.g. for a blocked layout with sizePerThread = [1,
@@ -181,7 +182,8 @@ SmallVector<unsigned> getCTAOrder(Attribute layout);
  * (3) In the implementation of emitIndices, ShapePerCTATile will
  *     be replicated or wrapped to fit ShapePerCTA.
  */
-SmallVector<unsigned> getShapePerCTATile(Attribute layout);
+// [FIXME LL] Kill this function
+SmallVector<unsigned> getShapePerCTATile(RankedTensorType layout);
 
 // Returns the "logical" shape per CTA
 SmallVector<int64_t> getShapePerCTA(ArrayRef<unsigned> CTASplitNum,
@@ -195,8 +197,6 @@ SmallVector<int64_t> getShapePerCTA(Type type);
 SmallVector<int64_t> getAllocationShapePerCTA(Attribute layout,
                                               ArrayRef<int64_t> shape);
 SmallVector<int64_t> getAllocationShapePerCTA(Type type);
-
-unsigned getNumWarpsPerCTA(Attribute layout);
 
 unsigned getNumCTAs(Attribute layout);
 
@@ -238,7 +238,6 @@ llvm::SmallVector<T> expandMatrixShapeWithBatch(llvm::ArrayRef<T> s);
 
 llvm::SmallVector<unsigned>
 expandMatrixOrderWithBatch(llvm::ArrayRef<unsigned> o);
-
 } // namespace mlir::triton::gpu
 
 #endif // TRITON_DIALECT_TRITONGPU_IR_DIALECT_H_

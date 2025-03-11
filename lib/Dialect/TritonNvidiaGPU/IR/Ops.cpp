@@ -405,7 +405,6 @@ LogicalResult TMEMAllocOp::verify() {
   return success();
 }
 
-// TMEMAllocOp
 void TMEMAllocOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
@@ -467,6 +466,15 @@ LogicalResult TMEMCopyOp::verify() {
   // checking we can do here are limited. For simplicity, shape checking is
   // omitted.
   return success();
+}
+
+void TMEMCopyOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  effects.emplace_back(MemoryEffects::Write::get(),
+                       mlir::triton::nvidia_gpu::TensorMemory::get());
+  effects.emplace_back(MemoryEffects::Read::get(), &getSrcMutable(),
+                       mlir::triton::gpu::SharedMemory::get());
 }
 
 } // namespace nvidia_gpu
