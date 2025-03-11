@@ -173,6 +173,23 @@ void WaitBarrierOp::getEffects(
                        mlir::triton::gpu::SharedMemory::get());
 }
 
+// -- ArriveBarrierOp --
+LogicalResult ArriveBarrierOp::verify() {
+  if (failed(verifyBarrierType(*this, getAlloc().getType())))
+    return failure();
+  return success();
+}
+
+void ArriveBarrierOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  // The wait will flip the phase therefore it reads and writes the barrier.
+  effects.emplace_back(MemoryEffects::Read::get(), &getAllocMutable(),
+                       mlir::triton::gpu::SharedMemory::get());
+  effects.emplace_back(MemoryEffects::Write::get(), &getAllocMutable(),
+                       mlir::triton::gpu::SharedMemory::get());
+}
+
 // -- TensorDescToTMAPtrOp --
 LogicalResult TensorDescToTMAPtrOp::canonicalize(TensorDescToTMAPtrOp op,
                                                  PatternRewriter &rewriter) {
