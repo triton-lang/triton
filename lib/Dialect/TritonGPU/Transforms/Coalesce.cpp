@@ -28,10 +28,7 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
 
   void
   emitLowPerThreadRemarksOnAxisInfo(ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                    Operation *op, Value memoryAccessPtr,
-                                    int64_t perThread) {
-    if (perThread > 1)
-      return;
+                                    Operation *op, Value memoryAccessPtr) {
     auto mainError = op->emitRemark()
                      << "Coalescing only assigns one element per thread for "
                         "this operation. Performance may be suboptimal.";
@@ -175,7 +172,7 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
     auto perThreadFromExecutionConfig = std::max(numElems / numThreads, 1);
     auto perThreadFromAxisInfo = perThread;
     if (perThreadFromAxisInfo == 1) {
-      emitLowPerThreadRemarksOnAxisInfo(axisInfoAnalysis, op, ptr, perThread);
+      emitLowPerThreadRemarksOnAxisInfo(axisInfoAnalysis, op, ptr);
     }
     perThread =
         std::min<int>(perThreadFromAxisInfo, perThreadFromExecutionConfig);
