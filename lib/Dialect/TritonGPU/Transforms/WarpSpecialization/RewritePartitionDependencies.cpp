@@ -499,7 +499,6 @@ LogicalResult DependencyRewriter::run() {
                            /*init=*/Value());
       }
 
-      Block *body = loop.getBody();
       for (auto &[key, uses] : info.consumers) {
         assert(!uses.empty() && "expected at least one use");
         Operation *earliestUser = getEarliestUser(uses);
