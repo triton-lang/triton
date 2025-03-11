@@ -1,3 +1,4 @@
+#include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Support/LLVM.h"
@@ -19,6 +20,7 @@
 using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
+namespace ttag = mlir::triton::amdgpu;
 
 namespace {
 
@@ -70,36 +72,9 @@ void convertLayout(Attribute encoding, Operation *op) {
   op->erase();
 }
 
-ttg::LinearEncodingAttr
-createInThreadTransposedEncoding(ArrayRef<int64_t> shape,
-                                 ttg::BlockedEncodingAttr srcEncoding) {
-  auto srcLL = srcEncoding.toLinearLayout(shape);
-  SmallVector<unsigned> newInRegOrder(srcEncoding.getOrder());
-  int rank = shape.size();
-  std::swap(newInRegOrder[rank - 2], newInRegOrder[rank - 1]);
-
-  // Make in-register transposed tile
-  auto ctx = srcEncoding.getContext();
-  auto regDimName = StringAttr::get(ctx, "register");
-  auto inRegTransposeTile = tt::identityStandardND(
-      regDimName, srcEncoding.getSizePerThread(), newInRegOrder);
-  // make sure basis in same order as in srcLayout
-  SmallVector<StringAttr> outDimNames(srcLL.getOutDimNames());
-  inRegTransposeTile = inRegTransposeTile.transposeOuts(outDimNames);
-
-  // Copy original bases, and replace register tile with transposed one
-  tt::LinearLayout::BasesT bases = srcLL.getBases();
-  auto &regBase = *bases.find(regDimName);
-  int regsTransposed = inRegTransposeTile.getInDimSizeLog2(regDimName);
-  for (int i = 0; i < regsTransposed; ++i)
-    regBase.second[i] = inRegTransposeTile.getBasis(regDimName, i);
-
-  tt::LinearLayout transposedLL(bases, SmallVector<StringAttr>(outDimNames));
-  return ttg::LinearEncodingAttr::get(ctx, transposedLL);
-}
-
 void transposeInRegsitersBeforeStoreInLocalMemory(
-    Operation *memStoreOp, Attribute transposedEncoding) {
+    Operation *memStoreOp, ArrayRef<int64_t> loadShape,
+    ttg::BlockedEncodingAttr newLoadEncoding) {
   if (memStoreOp->getNumOperands() == 0)
     return;
   auto data = memStoreOp->getOperand(0);
@@ -110,9 +85,19 @@ void transposeInRegsitersBeforeStoreInLocalMemory(
   if (!data)
     return;
 
-  auto newType = getNewType(data.getType(), transposedEncoding);
-  auto inThreadTransposed =
-      builder.create<ttg::ConvertLayoutOp>(memStoreOp->getLoc(), newType, data);
+  auto transposedLayout = ttag::TransposeInRegistersOp::deduceOutputLayout(
+      loadShape, newLoadEncoding);
+  auto transposedEncoding = triton::gpu::LinearEncodingAttr::get(
+      memStoreOp->getContext(), transposedLayout);
+
+  auto loc = memStoreOp->getLoc();
+  auto preEncodedType = getNewType(data.getType(), newLoadEncoding);
+  auto preEncoded =
+      builder.create<ttg::ConvertLayoutOp>(loc, preEncodedType, data);
+
+  auto transposedType = getNewType(data.getType(), transposedEncoding);
+  auto inThreadTransposed = builder.create<ttag::TransposeInRegistersOp>(
+      loc, transposedType, preEncoded);
   memStoreOp->setOperand(0, inThreadTransposed);
 }
 
@@ -603,16 +588,17 @@ public:
             pattern.globalLoads[0].getResult().getType());
         auto newBlockedEnc =
             getThreadRakedBlockedEnc(operand, loadResultType, mod);
+        auto loadShape = loadResultType.getShape();
+
         for (auto gLoad : pattern.globalLoads) {
           LDBG("operand newBlockedEnc = " << newBlockedEnc);
           convertLayout(newBlockedEnc, (Operation *)gLoad);
         }
 
         LDBG("Inserting transpose in registers before store in LDS");
-        Attribute transposedLayout = createInThreadTransposedEncoding(
-            loadResultType.getShape(), newBlockedEnc);
         for (auto memOp : pattern.localMemStores)
-          transposeInRegsitersBeforeStoreInLocalMemory(memOp, transposedLayout);
+          transposeInRegsitersBeforeStoreInLocalMemory(memOp, loadShape,
+                                                       newBlockedEnc);
 
         LDBG("Adjust shared encoding");
         auto newSharedEncoding =
