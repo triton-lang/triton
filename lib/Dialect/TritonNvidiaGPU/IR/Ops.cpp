@@ -185,7 +185,7 @@ LogicalResult ArriveBarrierOp::verify() {
 void ArriveBarrierOp::getEffects(
     SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
         &effects) {
-  // The wait will flip the phase therefore it reads and writes the barrier.
+  // The arrive will increment the pending arrival count inside the barrier.
   effects.emplace_back(MemoryEffects::Read::get(), &getAllocMutable(),
                        mlir::triton::gpu::SharedMemory::get());
   effects.emplace_back(MemoryEffects::Write::get(), &getAllocMutable(),
