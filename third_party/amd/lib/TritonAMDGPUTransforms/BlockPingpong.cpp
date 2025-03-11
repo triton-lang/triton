@@ -83,6 +83,7 @@ private:
   void appendClusterBarrier(OpBuilder &builder, Location loc);
   void prependClusterBarrier(OpBuilder &builder, Location loc);
   void appendOpWithPrio(OpBuilder &builder, Operation *Op, Location loc);
+  template <typename T> size_t estimateNonDotMemoryImpact(T *start, T *end);
   void determineDotMemoryOps(tt::DotOp dotOp,
                              DenseSet<tt::LoadOp> &dotGlobalLoads,
                              DenseSet<ttg::LocalLoadOp> &dotLocalLoads,
@@ -216,6 +217,11 @@ void Pingponger::findClosestPredOps(Value v, DenseSet<T> &matchingOps) {
     }
   };
   impl(v);
+}
+
+template <typename T>
+size_t Pingponger::estimateNonDotMemoryImpact(T *start, T *end) {
+  return 0;
 }
 
 // Populate the dotGlobalLoads, dotLocalLoads, and dotLocalStores set with
@@ -612,24 +618,34 @@ void Pingponger::getDotPingponged() {
   determineDotMemoryOps(dotOps[0], dotGlobalLoads, dotLocalLoads,
                         dotLocalStores);
 
-  auto origGlobalLoadCount = gLoadOps.size();
-  auto origLocalLoadCount = lLoadOps.size();
   // Prune Memory operations that may be moved to only those involved in dot
-  // computation.
-  auto gLoadIt = llvm::remove_if(gLoadOps, [&dotGlobalLoads](tt::LoadOp op) {
-    return !dotGlobalLoads.contains(op);
-  });
+  // computation. To understand the "cluster assumptions" we also estimate
+  // the impact of any additional loads/stores.
+  auto gLoadIt = std::stable_partition(gLoadOps.begin(), gLoadOps.end(),
+                                       [&dotGlobalLoads](tt::LoadOp op) {
+                                         return !dotGlobalLoads.contains(op);
+                                       });
+  auto effectiveGlobalLoadCount =
+      estimateNonDotMemoryImpact<tt::LoadOp>(gLoadIt, gLoadOps.end());
   gLoadOps.erase(gLoadIt, gLoadOps.end());
-  auto lLoadIt =
-      llvm::remove_if(lLoadOps, [&dotLocalLoads](ttg::LocalLoadOp op) {
-        return !dotLocalLoads.contains(op);
-      });
+  effectiveGlobalLoadCount += gLoadOps.size();
+  auto lLoadIt = std::stable_partition(lLoadOps.begin(), lLoadOps.end(),
+                                       [&dotLocalLoads](ttg::LocalLoadOp op) {
+                                         return !dotLocalLoads.contains(op);
+                                       });
+  auto effectiveLocalLoadCount =
+      estimateNonDotMemoryImpact<ttg::LocalLoadOp>(lLoadIt, lLoadOps.end());
   lLoadOps.erase(lLoadIt, lLoadOps.end());
+  effectiveLocalLoadCount += lLoadOps.size();
   auto lStoreIt =
-      llvm::remove_if(lStoreOps, [&dotLocalStores](ttg::LocalStoreOp op) {
-        return !dotLocalStores.contains(op);
-      });
+      std::stable_partition(lStoreOps.begin(), lStoreOps.end(),
+                            [&dotLocalStores](ttg::LocalStoreOp op) {
+                              return !dotLocalStores.contains(op);
+                            });
+  auto effectiveLocalStoreCount =
+      estimateNonDotMemoryImpact<ttg::LocalStoreOp>(lStoreIt, lStoreOps.end());
   lStoreOps.erase(lStoreIt, lStoreOps.end());
+  effectiveLocalStoreCount += lStoreOps.size();
   // All PingPong Scheduler assumes there are 2 movable global loads and 2
   // movable local loads.
   if (gLoadOps.size() != 2 || lLoadOps.size() != 2) {
@@ -700,7 +716,10 @@ void Pingponger::getDotPingponged() {
     // numWarps=4 doesn't need asymmetric sync, return.
     return;
   } else if (numWarps == 8) { // Pingpong between warps from the same block
-    if (origGlobalLoadCount != 2 || origLocalLoadCount != 2) {
+    // Restrict based on "effective loads" because this influenced the
+    // calculations used to generate the clusters.
+    if (effectiveGlobalLoadCount != 2 || effectiveLocalLoadCount != 2 ||
+        effectiveLocalStoreCount != 2) {
       std::stringstream message;
       message << "Unable to match ping pong slicing pattern. Details: "
               << gLoadOps.size() << " global loads, " << lLoadOps.size()
