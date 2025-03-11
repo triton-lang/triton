@@ -298,6 +298,8 @@ struct AsyncRef {
                            getEmptyView(b, idx));
   }
 
+  unsigned multiplicitySize;
+  unsigned maxDistance;
   Value alloc;
   Value readyBars;
   Value emptyBars;
@@ -323,9 +325,13 @@ public:
 private:
   void resolveOutputMultiplicity(llvm::MapVector<OpResult, UseInfo> &useInfo,
                                  const Partition &partition);
-  AsyncRef allocateAsyncValue(RankedTensorType tensorType, unsigned numBars);
+  AsyncRef allocateAsyncValue(RankedTensorType tensorType, unsigned maxDistance,
+                              unsigned multiplicitySize);
   void initializeBarriers(int index, const AsyncRef &aref,
                           unsigned numConsumers, Value init);
+  std::pair<Value, Value> createAndGetAsyncIndex(
+      const AsyncRef &aref,
+      function_ref<void(int &, Value &, Value)> extraCondition = {});
 
   // The schedule to apply.
   WarpSchedule &schedule;
@@ -358,7 +364,9 @@ void DependencyRewriter::resolveOutputMultiplicity(
 }
 
 AsyncRef DependencyRewriter::allocateAsyncValue(RankedTensorType tensorType,
-                                                unsigned numBars) {
+                                                unsigned multiplicitySize,
+                                                unsigned maxDistance) {
+  unsigned numBars = multiplicitySize + maxDistance;
   Value alloc = createAlloc(loop, tensorType, b.getLoc(),
                             getSharedEncoding(tensorType), numBars);
   Value readyBars = createScalarAlloc(b, b.getI64Type(), numBars);
@@ -366,7 +374,12 @@ AsyncRef DependencyRewriter::allocateAsyncValue(RankedTensorType tensorType,
   auto allocType = cast<MemDescType>(alloc.getType());
   endBuilder.create<LocalDeallocOp>(readyBars);
   endBuilder.create<LocalDeallocOp>(emptyBars);
-  return AsyncRef{alloc, readyBars, emptyBars, allocType,
+  return AsyncRef{multiplicitySize,
+                  maxDistance,
+                  alloc,
+                  readyBars,
+                  emptyBars,
+                  allocType,
                   getBufferViewType(allocType)};
 }
 
@@ -393,9 +406,45 @@ void DependencyRewriter::initializeBarriers(int index, const AsyncRef &aref,
   endBuilder.create<ttng::InvalBarrierOp>(emptyView);
 }
 
+std::pair<Value, Value> DependencyRewriter::createAndGetAsyncIndex(
+    const AsyncRef &aref,
+    function_ref<void(int &, Value &, Value)> extraCondition) {
+  Block *body = loop.getBody();
+  Value one = intCst(b, 1);
+
+  // Thread the phase and buffer index through the loop. The index is
+  // pre-incremented.
+  Value idx = body->addArgument(b.getI32Type(), b.getLoc());
+  Value phase = body->addArgument(b.getI32Type(), b.getLoc());
+  idx = b.create<arith::AddIOp>(idx, one);
+  Value nextPhase = b.create<arith::XOrIOp>(phase, one);
+  Value cnd = b.create<arith::CmpIOp>(
+      arith::CmpIPredicate::eq, idx,
+      intCst(b, aref.multiplicitySize + aref.maxDistance));
+  // The phase flips when we reach the end of all buffers.
+  phase = b.create<arith::SelectOp>(cnd, nextPhase, phase);
+
+  int startIdx = aref.multiplicitySize;
+  if (extraCondition)
+    extraCondition(startIdx, cnd, idx);
+
+  idx = b.create<arith::SelectOp>(cnd, intCst(b, aref.multiplicitySize), idx);
+
+  auto yield = cast<scf::YieldOp>(loop.getBody()->getTerminator());
+  yield.getResultsMutable().append({idx, phase});
+  {
+    OpBuilder::InsertionGuard guard(b);
+    b.setInsertionPoint(loop);
+    // The index is preincremented so subtract 1 from the start.
+    loop.getInitArgsMutable().append({intCst(b, startIdx - 1), intCst(b, 0)});
+  }
+  return {idx, phase};
+}
+
 LogicalResult DependencyRewriter::run() {
   SmallVector<llvm::MapVector<OpResult, UseInfo>> partitionUseInfo;
   auto yield = cast<scf::YieldOp>(loop.getBody()->getTerminator());
+
   for (const Partition &partition : schedule.getPartitions()) {
     // Find all consumers of all outputs of this partition, tracking the
     // specific partition and distance of each use.
@@ -410,9 +459,6 @@ LogicalResult DependencyRewriter::run() {
   }
 
   // Cut all SSA dependencies by passing outputs through shared memory.
-  ImplicitLocOpBuilder b(loop.getLoc(), loop);
-  Value zero = intCst(b, 0);
-  Value one = intCst(b, 1);
   llvm::BitVector toErase(yield.getNumOperands());
   for (auto [partition, useInfo] :
        llvm::zip(schedule.getPartitions(), partitionUseInfo)) {
@@ -432,12 +478,12 @@ LogicalResult DependencyRewriter::run() {
       // Number the branches of the multiplicity tree. The total number of
       // required buffers includes the lengths of all branches.
       int multiplicitySize = info.multiplicity.getTotalBranchDepth();
-      int numBars = maxDistance + multiplicitySize;
 
       // Allocate buffers for the value and its associated barriers.
       b.setLoc(output.getLoc());
       ImplicitLocOpBuilder endBuilder(b.getLoc(), loop->getNextNode());
-      AsyncRef aref = allocateAsyncValue(tensorType, numBars);
+      AsyncRef aref =
+          allocateAsyncValue(tensorType, multiplicitySize, maxDistance);
 
       // Initialize the initial values of the loop-carried dependencies.
       unsigned numConsumers = info.consumers.size();
@@ -450,57 +496,39 @@ LogicalResult DependencyRewriter::run() {
       });
 
       // Initialize the buffers.
-      for (auto i : llvm::seq(multiplicitySize, numBars)) {
-        initializeBarriers(i, aref, numConsumers,
+      for (auto i : llvm::seq(maxDistance)) {
+        initializeBarriers(multiplicitySize + i, aref, numConsumers,
                            /*init=*/Value());
       }
 
       Block *body = loop.getBody();
       for (auto &[key, uses] : info.consumers) {
         assert(!uses.empty() && "expected at least one use");
-
-        auto [usePartition, distance] = key;
-        // Thread the phase and buffer index through the loop. The index is
-        // pre-incremented.
-        Value idx = body->addArgument(b.getI32Type(), b.getLoc());
-        Value phase = body->addArgument(b.getI32Type(), b.getLoc());
         Operation *earliestUser = getEarliestUser(uses);
         b.setInsertionPoint(earliestUser);
-        idx = b.create<arith::AddIOp>(idx, one);
-        Value nextPhase = b.create<arith::XOrIOp>(phase, one);
-        Value cnd = b.create<arith::CmpIOp>(arith::CmpIPredicate::eq, idx,
-                                            intCst(b, numBars));
-        // The phase flips when we reach the end of all buffers.
-        phase = b.create<arith::SelectOp>(cnd, nextPhase, phase);
 
-        // Additionally rollover the buffer index when it has multiplicity.
-        int startIdx = multiplicitySize;
-        if (distance != 0) {
+        auto [usePartition, distance] = key;
+        auto modifyStart = [&, distance = distance, uses = uses, info = &info](
+                               int &startIdx, Value &cnd, Value idx) {
+          if (distance == 0)
+            return;
           unsigned argIdx =
               cast<BlockArgument>(uses.front()->get()).getArgNumber() - 1;
           toErase.set(argIdx);
           Multiplicity::Node *node =
-              info.multiplicity.nodes.find(argIdx)->second.get();
-          auto [start, end] = info.multiplicity.segments[node->number];
+              info->multiplicity.nodes.find(argIdx)->second.get();
+          auto [start, end] = info->multiplicity.segments[node->number];
           startIdx = end - node->depth;
           assert(node->depth && startIdx >= start && "incorrect numbering?");
-          // Micro-optimization: if the index would roll onto `multiplicitySize`
-          // anyways, skip generating the check.
+          // Micro-optimization: if the index would roll onto
+          // `multiplicitySize` anyways, skip generating the check.
           if (end != multiplicitySize) {
             Value initEnd = b.create<arith::CmpIOp>(arith::CmpIPredicate::eq,
                                                     idx, intCst(b, end));
-            cnd = b.create<arith::AndIOp>(cnd, initEnd);
+            cnd = b.create<arith::OrIOp>(cnd, initEnd);
           }
-        }
-
-        idx = b.create<arith::SelectOp>(cnd, intCst(b, multiplicitySize), idx);
-        yield.getResultsMutable().append({idx, phase});
-        {
-          OpBuilder::InsertionGuard guard(b);
-          b.setInsertionPoint(loop);
-          // The index is preincremented so subtract 1 from the start.
-          loop.getInitArgsMutable().append({intCst(b, startIdx - 1), zero});
-        }
+        };
+        auto [idx, phase] = createAndGetAsyncIndex(aref, modifyStart);
 
         // Wait for the value to be available.
         auto [view, readyView, emptyView] = aref.getView(b, idx);
@@ -519,22 +547,7 @@ LogicalResult DependencyRewriter::run() {
 
       // Set up production of the value.
       b.setInsertionPointAfter(output.getDefiningOp());
-      Value idx = body->addArgument(b.getI32Type(), b.getLoc());
-      Value phase = body->addArgument(b.getI32Type(), b.getLoc());
-      idx = b.create<arith::AddIOp>(idx, one);
-      Value nextPhase = b.create<arith::XOrIOp>(phase, one);
-      Value cnd = b.create<arith::CmpIOp>(arith::CmpIPredicate::eq, idx,
-                                          intCst(b, numBars));
-      phase = b.create<arith::SelectOp>(cnd, nextPhase, phase);
-      idx = b.create<arith::SelectOp>(cnd, intCst(b, multiplicitySize), idx);
-      yield.getResultsMutable().append({idx, phase});
-      {
-        OpBuilder::InsertionGuard guard(b);
-        b.setInsertionPoint(loop);
-        loop.getInitArgsMutable().append(
-            {intCst(b, multiplicitySize - 1), zero});
-      }
-
+      auto [idx, phase] = createAndGetAsyncIndex(aref);
       auto [view, readyView, emptyView] = aref.getView(b, idx);
       createInPartition<ttng::WaitBarrierOp>(b, partition, emptyView, phase);
       createInPartition<LocalStoreOp>(b, partition, output, view);
