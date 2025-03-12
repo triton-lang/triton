@@ -30,8 +30,7 @@ struct CoalescePass : public impl::TritonGPUCoalesceBase<CoalescePass> {
   emitLowPerThreadRemarksOnAxisInfo(ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                     Operation *op, Value memoryAccessPtr) {
     auto mainError = op->emitRemark()
-                     << "Coalescing only assigns one element per thread for "
-                        "this operation. Performance may be suboptimal.";
+                     << "Only one element per thread is assigned with information from axis info analysis. Performance may be suboptimal.";
 
     llvm::SetVector<Operation *> backwardSlice;
     BackwardSliceOptions opt;
