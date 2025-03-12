@@ -342,14 +342,14 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // CHECK-LABEL: mxfp8_mxfp4_matmul
 
 // Prologue
-// CHECK-COUNT-3: ttg.local_alloc
 // CHECK-COUNT-3: tt.load
-// CHECK-COUNT-3: ttg.local_store
+// CHECK-COUNT-3: ttg.local_alloc
 
 // Main loop
 //         CHECK: scf.for
 // CHECK-COUNT-3:   ttg.local_load
 //         CHECK:   tt.dot_scaled
+// CHECK-COUNT-3:   ttg.local_alloc
 //         CHECK:   scf.yield
 
 // Epilogue
@@ -357,7 +357,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 //         CHECK: scf.if
 //         CHECK:   tt.dot_scaled
 // CHECK-COUNT-2:   scf.yield
-// CHECK-COUNT-3: ttg.local_dealloc
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 16], threadsPerWarp = [4, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [64, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
