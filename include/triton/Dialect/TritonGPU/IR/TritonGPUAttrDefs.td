@@ -141,13 +141,6 @@ def LayoutEncodingTrait : AttrInterface<"LayoutEncodingTrait"> {
     InterfaceMethod<"Each CTA processes 1/CTASplitNum of the tensor.",
                     "SmallVector<unsigned>",
                     "getCTASplitNum">,
-    InterfaceMethod<"Get the number of dimensions of the layout.",
-                    "unsigned",
-                    "getRank",
-                     (ins),
-                     /*defaultImplementation=*/[{
-                         return $_self.getCTAOrder().size();
-                     }]>,
   ];
 }
 
@@ -651,7 +644,7 @@ L(T) = [ {0,8} , {1,9} , {2,10}, {3,11}, {0,8} , {1, 9} , {2, 10}, {3, 11},
   }];
 
   code extraDistributedDeclaration  = extraBaseClassDeclaration # [{
-    unsigned getRank() const;
+    unsigned getRank() const { return getCTAOrder().size(); }
     // Implemented in subclasses
     SmallVector<unsigned> getRepOrder() const;
     SmallVector<unsigned> getCTAsPerCGA() const;
