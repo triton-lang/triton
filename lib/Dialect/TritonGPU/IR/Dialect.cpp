@@ -211,11 +211,12 @@ SmallVector<unsigned> getOrderForMemory(DistributedEncodingTrait layout,
   if (order == threadOrder) {
     return order;
   }
+  // Heuristic:
   // If the element contiguity does not align with the thread order
   // because the thread order dimension has contiguity of 1---meaning that
   // the order position of this dimension is irrelevant---we prefer
   // to use the thread order for the memory layout
-  auto contig = linear.getContigPerThread();
+  auto contig = linear.getElemsPerThread(shape);
   if (contig[threadOrder[0]] == 1) {
     return threadOrder;
   }
