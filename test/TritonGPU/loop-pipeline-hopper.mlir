@@ -495,7 +495,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-LABEL: tma_multiple_store_pipeline
   tt.func public @tma_multiple_store_pipeline(%arg0: tensor<1xf32, #blocked>, %arg1: !tt.tensordesc<tensor<1xf32>>, %arg2: i32, %arg3: i32) attributes {noinline = false} {
     %c0_i32 = arith.constant 0 : i32
-    // CHECK: %[[ALLOC:.+]] = ttg.local_alloc  : () -> !ttg.memdesc<1xf32, #shared, #smem, mutable>
+    // CHECK: %[[ALLOC:.+]] = ttg.local_alloc : () -> !ttg.memdesc<1xf32, #shared, #smem, mutable>
     // CHECK: scf.for
     scf.for %arg4 = %c0_i32 to %arg3 step %arg2  : i32 {
       %1 = arith.divsi %arg4, %arg2 : i32

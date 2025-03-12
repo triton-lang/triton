@@ -67,6 +67,8 @@ struct DotOpMFMAConversionHelper {
   Location loc;
   MLIRContext *ctx{};
 
+  virtual ~DotOpMFMAConversionHelper() = default;
+
   explicit DotOpMFMAConversionHelper(AMDMfmaEncodingAttr mfmaLayout,
                                      ConversionPatternRewriter &rewriter,
                                      const LLVMTypeConverter *typeConverter,
@@ -483,6 +485,7 @@ struct DotOpMFMAConversionHelper {
 };
 
 struct ScaledDotOpMFMAConversionHelper : DotOpMFMAConversionHelper {
+  virtual ~ScaledDotOpMFMAConversionHelper() = default;
 
   ScaledDotOpMFMAConversionHelper(AMDMfmaEncodingAttr mfmaLayout,
                                   ConversionPatternRewriter &rewriter,

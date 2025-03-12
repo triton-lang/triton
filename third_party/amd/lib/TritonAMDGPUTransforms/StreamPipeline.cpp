@@ -118,7 +118,7 @@ class StreamPipeliner {
 public:
   StreamPipeliner(scf::ForOp _forOp, int _numStages, int _globalPrefetch,
                   int _localPrefetch)
-      : forOp(_forOp), numBuffers(1), numStages(_numStages),
+      : forOp(_forOp), numStages(_numStages), numBuffers(1),
         schedule(numStages),
         axisInfoAnalysis(forOp->getParentOfType<ModuleOp>()) {
     int lastStage = numStages - 1;
@@ -875,8 +875,8 @@ static bool checkPrecondition(scf::ForOp forOp) {
     // Don't pipeline outer loops.
     if (op != forOp && isa<scf::ForOp, scf::WhileOp>(op))
       return WalkResult::interrupt();
-    // Don't pipeline loops with barriers.
-    if (isa<gpu::BarrierOp>(op))
+    // Don't pipeline loops with barriers or asserts/prints.
+    if (isa<gpu::BarrierOp, tt::AssertOp, tt::PrintOp>(op))
       return WalkResult::interrupt();
     return WalkResult::advance();
   };
