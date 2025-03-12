@@ -480,7 +480,7 @@ the second fp4 element.</p>
 <h2><code class="docutils literal notranslate"><span class="pre">ttg.local_alloc</span></code> (triton::gpu::LocalAllocOp)<a class="headerlink" href="#ttg-local-alloc-triton-gpu-localallocop" title="Link to this heading">¶</a></h2>
 <p><em>Allocate tensor</em></p>
 <p>Syntax:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttg.local_alloc` $src attr-dict `:` functional-type(operands, results)
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>operation ::= `ttg.local_alloc` ($src^)? attr-dict `:` functional-type(operands, results)
 </pre></div>
 </div>
 <p>This operation allocates buffer in shared memory and return a descriptor

@@ -229,7 +229,7 @@ _Allocate tensor_
 Syntax:
 
 ```
-operation ::= `ttg.local_alloc` $src attr-dict `:` functional-type(operands, results)
+operation ::= `ttg.local_alloc` ($src^)? attr-dict `:` functional-type(operands, results)
 ```
 
 This operation allocates buffer in shared memory and return a descriptor
