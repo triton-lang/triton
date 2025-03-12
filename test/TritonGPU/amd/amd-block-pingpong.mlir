@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file --tritonamdgpu-block-pingpong="num-stages=2" | FileCheck %s
+// RUN: triton-opt %s -split-input-file --tritonamdgpu-block-pingpong="num-stages=2 conditional-tile-size-heuristic=33554432" | FileCheck %s
 
 //CHECK-LABEL: pingpong_small
 //CHECK: ttg.local_load
