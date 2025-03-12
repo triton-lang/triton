@@ -272,6 +272,8 @@ def compile(src, target=None, options=None):
         ir.load_dialects(context)
         backend.load_dialects(context)
 
+    if os.environ.get("MLIR_DISABLE_MULTITHREADING", "0") == "1":
+        context.disable_multithreading()
     codegen_fns = backend.get_codegen_implementation(options)
     module_map = backend.get_module_map()
     try:
