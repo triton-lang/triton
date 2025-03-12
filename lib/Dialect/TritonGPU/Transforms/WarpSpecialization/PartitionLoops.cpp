@@ -16,7 +16,7 @@ using namespace triton::gpu;
 using Partition = WarpSchedule::Partition;
 
 //===----------------------------------------------------------------------===//
-//
+// slicePartition
 //===----------------------------------------------------------------------===//
 
 static void eraseOtherPartitions(scf::ForOp &loop, const WarpSchedule &schedule,
@@ -41,17 +41,18 @@ static void eraseOtherPartitions(scf::ForOp &loop, const WarpSchedule &schedule,
       arg.dropAllUses();
   }
   eraseLoopCarriedValues(loop, std::move(toErase));
+  WarpSchedule::eraseFrom(loop);
 }
 
-static FailureOr<Block *> slicePartition(scf::ForOp baseLoop,
-                                         const WarpSchedule &baseSchedule,
-                                         const Partition *slicePartition) {
+static FailureOr<std::unique_ptr<Block>>
+slicePartition(scf::ForOp baseLoop, const WarpSchedule &baseSchedule,
+               const Partition *slicePartition) {
   // Generate the partition loop by cloning the whole loop and deleting anything
   // that doesn't belong to the partition and the root partition. This is easier
   // than trying to generate a new loop from scratch while keeping the
   // operations in the same order.
   scf::ForOp loop = baseLoop.clone();
-  Block *block = new Block;
+  std::unique_ptr<Block> block = std::make_unique<Block>();
   block->push_back(loop);
   WarpSchedule schedule = *WarpSchedule::deserialize(loop);
   Partition *partition = schedule.getPartition(slicePartition->getIndex());
@@ -91,7 +92,7 @@ static FailureOr<Block *> slicePartition(scf::ForOp baseLoop,
   // Delete everything else.
   eraseOtherPartitions(loop, schedule, partition);
 
-  return block;
+  return std::move(block);
 }
 
 //===----------------------------------------------------------------------===//
@@ -133,13 +134,13 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
 
   // Always assign the first partition to the default warp group.
   const Partition &defaultPartition = *schedule.getPartition(0u);
-  SmallVector<Block *> partitionBlocks;
+  SmallVector<std::unique_ptr<Block>> partitionBlocks;
   for (const Partition &partition :
        llvm::drop_begin(schedule.getPartitions())) {
-    FailureOr<Block *> blockOr = slicePartition(loop, schedule, &partition);
+    FailureOr<std::unique_ptr<Block>> blockOr = slicePartition(loop, schedule, &partition);
     if (failed(blockOr))
       return failure();
-    partitionBlocks.push_back(*blockOr);
+    partitionBlocks.push_back(std::move(*blockOr));
   }
 
   // Now delete everything except the default and root partitions from the base
@@ -151,8 +152,8 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
   SmallVector<int32_t> partitionNumWarps;
   int32_t functionNumWarps = lookupNumWarps(loop);
   auto isTensor = [](Type t) { return isa<RankedTensorType>(t); };
-  for (Block *block : partitionBlocks) {
-    WalkResult result = block->walk([&](Operation *op) {
+  for (Block &block : llvm::make_pointee_range(partitionBlocks)) {
+    WalkResult result = block.walk([&](Operation *op) {
       if (llvm::any_of(op->getOperandTypes(), isTensor) ||
           llvm::any_of(op->getResultTypes(), isTensor))
         return WalkResult::interrupt();
@@ -172,8 +173,8 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
   b.create<WarpYieldOp>(loop.getResults());
   for (auto [region, block] :
        llvm::zip(wsOp.getPartitionRegions(), partitionBlocks)) {
-    region->push_back(block);
-    b.setInsertionPointToEnd(block);
+    region->push_back(block.release());
+    b.setInsertionPointToEnd(&region->front());
     b.create<WarpReturnOp>();
   }
 

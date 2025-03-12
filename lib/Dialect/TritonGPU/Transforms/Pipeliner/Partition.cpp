@@ -221,6 +221,12 @@ LogicalResult WarpSchedule::verify(scf::ForOp loop) const {
   return success();
 }
 
+void WarpSchedule::eraseFrom(scf::ForOp loop) {
+  for (Operation &op:loop.getBody()->without_terminator())
+    op.removeAttr(kPartitionAttrName);
+  loop->removeAttr(kPartitionStagesAttrName);
+}
+
 void WarpSchedule::iterateInputs(
     scf::ForOp loop, const Partition *partition,
     function_ref<void(OpOperand &)> callback) const {

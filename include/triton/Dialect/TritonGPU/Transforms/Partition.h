@@ -81,6 +81,8 @@ public:
   // Verify that the warp schedule is valid by checking the SSA dependencies
   // between the schedules.
   LogicalResult verify(scf::ForOp loop) const;
+  // Remove partition attributes.
+  static void eraseFrom(scf::ForOp loop);
 
   // Iterate the inputs of the partition. Input values are those that originate
   // from a different partition or a previous iteration of the current
