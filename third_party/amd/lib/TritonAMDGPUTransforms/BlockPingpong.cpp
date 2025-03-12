@@ -776,6 +776,19 @@ void Pingponger::getDotPingponged() {
     return;
   }
 
+  // Restrict based on "effective loads" because this influenced the
+  // calculations used to generate the clusters.
+  if (effectiveGlobalLoadCount != 2 || effectiveLocalLoadCount != 2 ||
+      effectiveLocalStoreCount != 2) {
+    std::stringstream message;
+    message << "Unable to match memory expectations. Details: "
+            << effectiveGlobalLoadCount << " effective global load count, "
+            << effectiveLocalLoadCount << " effective local load count, "
+            << effectiveLocalStoreCount << " effective local store count";
+    LDBG(message.str());
+    return;
+  }
+
   const int64_t minTile = 262144;      // e.g. 32x128x64x16bit
   const int64_t smallTile = 16777216;  // e.g. 128x128x64x16bit
   const int64_t mediumTile = 33554432; // smallTile x 2
@@ -800,17 +813,6 @@ void Pingponger::getDotPingponged() {
     // numWarps=4 doesn't need asymmetric sync, return.
     return;
   } else if (numWarps == 8) { // Pingpong between warps from the same block
-    // Restrict based on "effective loads" because this influenced the
-    // calculations used to generate the clusters.
-    if (effectiveGlobalLoadCount != 2 || effectiveLocalLoadCount != 2 ||
-        effectiveLocalStoreCount != 2) {
-      std::stringstream message;
-      message << "Unable to match ping pong slicing pattern. Details: "
-              << gLoadOps.size() << " global loads, " << lLoadOps.size()
-              << " local loads";
-      LDBG(message.str());
-      return;
-    }
     if (lStoreOps.size() != 2) {
       std::stringstream message;
       message << "Unable to match ping pong slicing pattern. Details: "
@@ -868,9 +870,6 @@ public:
       });
     }
   }
-
-private:
-  int64_t conditionalTileSizeHeuristic = 33554432;
 };
 } // namespace
 
