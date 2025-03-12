@@ -138,16 +138,24 @@ bool hasSwizzleEnabled(const SwizzledSharedEncodingAttr &srcEncoding) {
 /// \param warpsPerBlock number of warps per horizontal axis
 /// \param numOfElems number of elements accessed by threads per repetition
 /// \param reps number of instructions repretition to fully cover dot operand
-/// \param cSwizzleOffset
+/// \param smemStrides shared memory strides
+/// \param smemOffsets shared memory offsets
 llvm::SmallVector<Value>
 fastPathComputeOffsets(ConversionPatternRewriter &rewriter, Location loc,
                        const ArrayRef<int64_t> &elemsPerInstr, Value warpId,
                        Value laneId, int warpsPerBlock, int numOfElems,
-                       ArrayRef<int64_t> reps, Value cSwizzleOffset) {
+                       ArrayRef<int64_t> reps, ArrayRef<Value> smemStrides,
+                       ArrayRef<Value> smemOffsets) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto numK = reps[1];
   auto numN = reps[2];
   SmallVector<Value> offsets(numK * numN * numOfElems);
+
+  auto smemStrideRow = smemStrides[0];
+  auto smemStrideCol = smemStrides[1];
+
+  auto smemOffsetRow = smemOffsets[0];
+  auto smmemOffsetCol = smemOffsets[1];
 
   auto iKDim = elemsPerInstr[0];
   auto iNonKDim = elemsPerInstr[1];
@@ -156,33 +164,38 @@ fastPathComputeOffsets(ConversionPatternRewriter &rewriter, Location loc,
   Value warpOffset = b.mul(warpId, b.i32_val(iNonKDim));
   Value colOffset = b.urem(laneId, _nonKDim);
 
+  // halfOffset is an offset related to wrapping of warp in the tile.
+  // for example, mfma 32 case (mapping of tensor elements to lane ids in
+  // warp):
+  //
+  //  0  1  2  3 ... 31
+  //  0  1  2  3 ... 31
+  //  0  1  2  3 ... 31
+  //  0  1  2  3 ... 31
+  // 32 33 34 35 ... 63  <- at this point warp is wrapping
+  // 32 33 34 35 ... 63
+  // 32 33 34 35 ... 63
+  // 32 33 34 35 ... 63
+  Value halfOffset;
+  if ((iKDim == 1 || iKDim == 4) && iNonKDim == 4)
+    halfOffset = b.i32_val(0);
+  else
+    halfOffset = b.mul(b.udiv(laneId, _nonKDim), b.i32_val(numOfElems));
+
   for (int block = 0; block < numN; ++block) {
     Value blockOffset = b.i32_val(block * iNonKDim * warpsPerBlock);
     for (int tile = 0; tile < numK; ++tile) {
-      Value tileOffset = b.i32_val(tile * iKDim * lineSize);
+      Value tileOffset = b.i32_val(tile * iKDim);
       for (int elem = 0; elem < numOfElems; ++elem) {
-        // halfOffset is an offset related to wrapping of warp in the tile.
-        // for example, mfma 32 case (mapping of tensor elements to lane ids in
-        // warp):
-        //
-        //  0  1  2  3 ... 31
-        //  0  1  2  3 ... 31
-        //  0  1  2  3 ... 31
-        //  0  1  2  3 ... 31
-        // 32 33 34 35 ... 63  <- at this point warp is wrapping
-        // 32 33 34 35 ... 63
-        // 32 33 34 35 ... 63
-        // 32 33 34 35 ... 63
-        Value halfOffset;
-        if ((iKDim == 1 || iKDim == 4) && iNonKDim == 4)
-          halfOffset = b.i32_val(0);
-        else
-          halfOffset =
-              b.mul(b.udiv(laneId, _nonKDim), b.i32_val(numOfElems * lineSize));
-        Value rowOffset = b.add(b.i32_val(elem * lineSize), halfOffset);
-        Value elemOffset = b.add(rowOffset, colOffset);
-        Value offset = b.add(b.add(b.add(warpOffset, blockOffset), tileOffset),
-                             elemOffset);
+
+        Value rowOffset = b.add(b.i32_val(elem), halfOffset);
+        Value row = b.add(b.add(rowOffset, tileOffset), smemOffsetRow);
+        Value col = b.add(b.add(blockOffset, b.add(warpOffset, colOffset)),
+                          smmemOffsetCol);
+
+        Value offset =
+            b.add(b.mul(row, smemStrideRow), b.mul(col, smemStrideCol));
+
         offsets[numK * numOfElems * block + numOfElems * tile + elem] = offset;
       }
     }
@@ -293,6 +306,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   SmallVector<Value> offsets;
   Value smemBase;
   auto smemStrides = smemObj.getStrides(aTensorTy, loc, rewriter);
+  auto smemOffsets = smemObj.getOffsets();
   bool isFastPath =
       !AMD::isKContig(order, opIdx) && !hasSwizzleEnabled(sharedLayout);
   if (isFastPath) {
@@ -300,14 +314,15 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
     // disabled, in which case offsets computation can be simplified
     // TODO (zhanglx): later when we enable vector access to LDS for non k-major
     // tensors, we'll refactor the scope of fast and normal path
-    Value cSwizzleOffset = smemObj.getCSwizzleOffset(order[0]);
     if (opIdx == 0) {
       if (isColMajor(order)) {
         SmallVector<int64_t> elemsPerInstr{mfmaInstrK, mfmaInstrNonK};
         SmallVector<int64_t> reps{numReps[0], numReps[2], numReps[1]};
+        SmallVector<Value> tStrides = {smemStrides[1], smemStrides[0]};
+        SmallVector<Value> tOffsets = {smemOffsets[1], smemOffsets[0]};
         offsets = fastPathComputeOffsets(rewriter, loc, elemsPerInstr,
                                          spatialWarpId, lane, warpsPerBlockNonK,
-                                         numOfElems, reps, cSwizzleOffset);
+                                         numOfElems, reps, tStrides, tOffsets);
       } else {
         llvm_unreachable(
             "row major operand A should be handled in the normal path");
@@ -317,12 +332,11 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
         llvm_unreachable(
             "col major operand B should be handled in the normal path");
       } else {
-        offsets = fastPathComputeOffsets(rewriter, loc, elemsPerInstr,
-                                         spatialWarpId, lane, warpsPerBlockNonK,
-                                         numOfElems, numReps, cSwizzleOffset);
+        offsets = fastPathComputeOffsets(
+            rewriter, loc, elemsPerInstr, spatialWarpId, lane,
+            warpsPerBlockNonK, numOfElems, numReps, smemStrides, smemOffsets);
       }
     }
-    smemBase = smemObj.getBaseBeforeSlice(order[0], loc, rewriter);
   } else { // normal path
     // Normal path handles tensors that fall into either of the following three
     // cases:
@@ -342,8 +356,8 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
           spatialWarpId, lane, warpsPerBlockNonK, numOfElems, numReps, smemObj,
           smemStrides, sharedLayout, nDim, mfmaInstrK);
     }
-    smemBase = AMD::computeBasePtr(rewriter, loc, smemObj, smemStrides);
   }
+  smemBase = AMD::computeBasePtr(rewriter, loc, smemObj, smemStrides);
 
   Type resElemTy = typeConverter->convertType(elemTy);
   Type smemPtrTy = ptr_ty(rewriter.getContext(), 3);
