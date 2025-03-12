@@ -67,7 +67,10 @@ struct ExtractSliceOpConversion
     auto elemsPerThread = triton::gpu::getElemsPerThread(srcTy);
     auto contigPerThread = triton::gpu::getContigPerThread(srcTy);
     auto totalContigPerThread = product<unsigned>(contigPerThread);
-    auto order = triton::gpu::getOrder(srcTy);
+    // FIXME(Lezcano): Calling getOrderForMemory here is wrong, but when you
+    // call `getOrder` the tests don't pass. There is a more generic issue with
+    // this lowering, in that I don't think it is correct for many layouts.
+    auto order = triton::gpu::getOrderForMemory(srcTy);
 
     // Calculate valid total number of workers in each dimension
     auto shapePerCTATile = triton::gpu::getShapePerCTATile(srcTy);
