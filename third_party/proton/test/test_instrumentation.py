@@ -55,5 +55,8 @@ def test_hook_instrumentation(tmp_path):
     temp_file = tmp_path / "test_hook_instrumentation.hatchet"
     proton.start(str(temp_file.with_suffix("")), backend="instrumentation")
     foo[(1, )](x, 1, y, num_warps=4)
+    device = triton.runtime.driver.active.get_current_device()
+    assert len(foo.device_caches[device][0]) == 1, "Kernel should be cached"
     proton.finalize()
-    # TODO: add asserts
+    foo[(1, )](x, 1, y, num_warps=4)
+    assert len(foo.device_caches[device][0]) == 2, "Instrument and uninstrumented kernels both should be cached"
