@@ -546,12 +546,6 @@ TEST_F(LinearEncodingTest, DistributedEncodingToLinearEncoding) {
         ASSERT_EQ(distributedEncoding.getRepOrder(),
                   linearEncoding.getRepOrder());
       }
-      // For slice these do not equal the total number of lines / warps
-      // See [Note. Divergence of methods wrt. legacy layouts]
-      if (!isa<triton::gpu::SliceEncodingAttr>(distributedEncoding)) {
-        ASSERT_EQ(distributedEncoding.getWarpsPerCTA(),
-                  linearEncoding.getWarpsPerCTA());
-      }
 
       // block level
       // SliceEncoding is not well-defined for CGAs

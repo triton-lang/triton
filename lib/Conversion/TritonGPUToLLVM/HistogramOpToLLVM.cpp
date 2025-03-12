@@ -87,9 +87,8 @@ static SmallVector<Value> computeCrossWarpHistogram(
     Value threadId, int numWarps) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value> histogramValues;
-  unsigned numWarpsWithUniqueData =
-      mlir::triton::gpu::getWarpsPerCTAWithUniqueData(srcType.getEncoding(),
-                                                      srcType.getShape())[0];
+  unsigned numWarpsWithUniqueData = mlir::triton::gpu::getWarpsPerCTA(
+      srcType.getEncoding(), srcType.getShape())[0];
   Value laneId = b.and_(threadId, b.i32_val(numThreadPerWarp - 1));
   // Initialize the shared memory with zeros.
   int64_t numElementPerThread =
