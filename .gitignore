@@ -57,7 +57,6 @@ cmake-build-*
 cuobjdump
 nvdisasm
 ptxas
-ptxas-blackwell
 
 # Third-party include
 third_party/nvidia/backend/include
