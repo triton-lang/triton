@@ -96,7 +96,6 @@ private:
   ConditionalSelectionHeuristic getIfHeuristic(int64_t tileSize);
   template <typename T>
   size_t countIfMemoryOps(scf::IfOp ifOp, int64_t tileSize);
-  template <typename T> size_t countForMemoryOps(scf::ForOp forOp);
   template <typename T>
   size_t estimateNonDotMemoryImpact(T *start, T *end, int64_t tileSize);
   void determineDotMemoryOps(tt::DotOp dotOp,
@@ -262,20 +261,6 @@ size_t Pingponger::countIfMemoryOps(scf::IfOp ifOp, int64_t tileSize) {
   }
 }
 
-// Determine the number of memory operations of type T that are expected
-// to execute each iteration of the outermost for loop for the forOp.
-template <typename T> size_t Pingponger::countForMemoryOps(scf::ForOp forOp) {
-  // Hardcode a constant number of iterations for now.
-  // TODO(njriasan): Determine a better way to estimate the number of
-  // iterations.
-  const size_t assumedIterations = 5;
-  size_t count = 0;
-  for (auto _ : forOp.getBody()->getOps<T>()) {
-    count++;
-  }
-  return count * assumedIterations;
-}
-
 // Estimate the expected number of memory operations of type T
 // rounded to an integer. This is used to determine any possible
 // influence on cluster setup.
@@ -296,10 +281,9 @@ size_t Pingponger::estimateNonDotMemoryImpact(T *start, T *end,
       visitedParents.insert(parent);
       if (auto ifOp = dyn_cast<scf::IfOp>(parent))
         count += countIfMemoryOps<T>(ifOp, tileSize);
-      else if (auto forOp = dyn_cast<scf::ForOp>(parent))
-        count += countForMemoryOps<T>(forOp);
       else {
-        // Default to counting every memory access.
+        // Default to counting every memory access as a
+        // single access.
         count += 1;
       }
     }
