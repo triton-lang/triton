@@ -141,6 +141,13 @@ def LayoutEncodingTrait : AttrInterface<"LayoutEncodingTrait"> {
     InterfaceMethod<"Each CTA processes 1/CTASplitNum of the tensor.",
                     "SmallVector<unsigned>",
                     "getCTASplitNum">,
+    InterfaceMethod<"Get the number of dimensions of the layout.",
+                    "unsigned",
+                    "getRank",
+                     (ins),
+                     /*defaultImplementation=*/[{
+                         return $_self.getCTAOrder().size();
+                     }]>,
   ];
 }
 
@@ -603,21 +610,6 @@ We call each individual tile "rep".
                     "LinearLayout",
                     "toLinearLayout",
                     (ins "ArrayRef<int64_t>":$shape)>,
-
-    // Legacy methods: They do not take into account the shape of the tensor
-    // that is, the fact that we use them to tile the tensor.
-    InterfaceMethod<"Get the default order of the registers per warp. The fastest-changing axis first",
-                    "SmallVector<unsigned>",
-                    "getDefaultOrder">,
-
-    InterfaceMethod<"Get the default order of the threads per warp. The fastest-changing axis first",
-                    "SmallVector<unsigned>",
-                    "getDefaultThreadOrder">,
-
-    InterfaceMethod<"Get the default order of the warps per CTA. The fastest-changing axis first",
-                    "SmallVector<unsigned>",
-                    "getDefaultWarpOrder">
-
   ];
 }
 
@@ -659,6 +651,7 @@ L(T) = [ {0,8} , {1,9} , {2,10}, {3,11}, {0,8} , {1, 9} , {2, 10}, {3, 11},
   }];
 
   code extraDistributedDeclaration  = extraBaseClassDeclaration # [{
+    unsigned getRank() const;
     // Implemented in subclasses
     SmallVector<unsigned> getRepOrder() const;
     SmallVector<unsigned> getCTAsPerCGA() const;
@@ -667,11 +660,6 @@ L(T) = [ {0,8} , {1,9} , {2,10}, {3,11}, {0,8} , {1, 9} , {2, 10}, {3, 11},
     SmallVector<unsigned> getWarpsPerCTA() const;
 
     LinearLayout toLinearLayout(ArrayRef<int64_t> shape) const;
-
-    // Legacy methods: They do not take into account the shape of the tensor
-    SmallVector<unsigned> getDefaultWarpOrder() const;
-    SmallVector<unsigned> getDefaultThreadOrder() const;
-    SmallVector<unsigned> getDefaultOrder() const;
   }];
 }
 

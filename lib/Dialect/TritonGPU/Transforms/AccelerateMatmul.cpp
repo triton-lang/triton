@@ -431,7 +431,7 @@ replaceCTALayout(DistributedEncodingTrait layout,
     return BlockedEncodingAttr::get(
         layout.getContext(), blockedLayout.getSizePerThread(),
         blockedLayout.getThreadsPerWarp(), blockedLayout.getWarpsPerCTA(),
-        blockedLayout.getDefaultOrder(), newCTALayout);
+        blockedLayout.getOrder(), newCTALayout);
   } else if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(layout)) {
     return SliceEncodingAttr::get(
         layout.getContext(), sliceLayout.getDim(),

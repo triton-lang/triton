@@ -192,7 +192,7 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   auto smemStrides = smemObj.getStrides(aTensorTy, loc, rewriter);
   Value spatialWarpId = AMD::getWarpIdInBlock(
       rewriter, loc, linearWaveId, warpsPerCTA, elemsPerInstr[0],
-      shape[nonKDimIdx], nonKDimIdx, wmmaLayout.getDefaultOrder());
+      shape[nonKDimIdx], nonKDimIdx, getWarpOrder(wmmaLayout, shape));
   if (opIdx == 0) {
     offsets = AMD::computeOffsetsAType(
         rewriter, loc, computeTensorElemMappingInBlock, elemsPerInstr,

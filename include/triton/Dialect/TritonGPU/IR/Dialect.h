@@ -176,11 +176,6 @@ inline SmallVector<unsigned> getOrderForMemory(TensorOrMemDesc type) {
   }
 }
 
-// Order of the elements in the shared memory as defined at layout creation
-// If this layout is associated with a MemDesc with a different shape
-// it may return a different order than the actual order of the elements
-SmallVector<unsigned> getDefaultOrder(SharedEncodingTrait layout);
-
 // Returns the dimensions along which warpId's are distributed.
 // warpsPerCTA only tells the warp layout in the CTA, e.g. warpsPerCTA = [2, 4]
 // tells there are 2 warps along dim0 and 4 warps along dim1.
