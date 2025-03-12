@@ -875,8 +875,8 @@ static bool checkPrecondition(scf::ForOp forOp) {
     // Don't pipeline outer loops.
     if (op != forOp && isa<scf::ForOp, scf::WhileOp>(op))
       return WalkResult::interrupt();
-    // Don't pipeline loops with barriers.
-    if (isa<gpu::BarrierOp>(op))
+    // Don't pipeline loops with barriers or asserts/prints.
+    if (isa<gpu::BarrierOp, tt::AssertOp, tt::PrintOp>(op))
       return WalkResult::interrupt();
     return WalkResult::advance();
   };
