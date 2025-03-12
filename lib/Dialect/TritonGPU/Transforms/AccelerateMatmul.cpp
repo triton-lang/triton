@@ -72,7 +72,7 @@ SmallVector<unsigned> warpsPerTileV2(DotOp dotOp, const ArrayRef<int64_t> shape,
       }
       if (auto mmaEncoding =
               dyn_cast<NvidiaMmaEncodingAttr>(resTy.getEncoding())) {
-        return getWarpsPerCTA(mmaEncoding);
+        return to_vector(mmaEncoding.getWarpsPerCTA());
       }
       hasChainedDot = true;
     }

@@ -155,7 +155,7 @@ struct TritonExpandDimsPattern
     retSizePerThread.insert(retSizePerThread.begin() + op.getAxis(), 1);
     auto retThreadsPerWarp = to_vector(argEncoding.getThreadsPerWarp());
     retThreadsPerWarp.insert(retThreadsPerWarp.begin() + op.getAxis(), 1);
-    auto retWarpsPerCTA = argEncoding.getWarpsPerCTA();
+    auto retWarpsPerCTA = to_vector(argEncoding.getWarpsPerCTA());
     retWarpsPerCTA.insert(retWarpsPerCTA.begin() + op.getAxis(), 1);
     SmallVector<unsigned, 4> retOrder(retShape.size());
     std::iota(retOrder.begin(), retOrder.end(), 0);

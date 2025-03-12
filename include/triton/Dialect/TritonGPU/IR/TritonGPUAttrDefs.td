@@ -594,11 +594,6 @@ We call each individual tile "rep".
                      /*defaultImplementation=*/[{
                          return toLinearEncoding($_self, shape).getElemsPerThread(shape);
                      }]>,
-    // Interface for the meta information about the multiple thread hierarchy.
-    InterfaceMethod<"Get the shape of the warps per CTA.",
-                    "SmallVector<unsigned>",
-                    "getWarpsPerCTA">,
-
     InterfaceMethod<"Convert to LinearLayout.",
                     "LinearLayout",
                     "toLinearLayout",
@@ -650,7 +645,6 @@ L(T) = [ {0,8} , {1,9} , {2,10}, {3,11}, {0,8} , {1, 9} , {2, 10}, {3, 11},
     SmallVector<unsigned> getCTAsPerCGA() const;
     SmallVector<unsigned> getCTAOrder() const;
     SmallVector<unsigned> getCTASplitNum() const;
-    SmallVector<unsigned> getWarpsPerCTA() const;
 
     LinearLayout toLinearLayout(ArrayRef<int64_t> shape) const;
   }];
@@ -700,6 +694,7 @@ def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding"
     SmallVector<unsigned> basesPerDim(StringAttr dimName,
                                       bool skipBroadcast = true) const;
     SmallVector<unsigned> getThreadsPerWarp() const;
+    SmallVector<unsigned> getWarpsPerCTA() const;
 
     // [FIXME LL] Supports legacy behaviour. We should remove these functions
     SmallVector<unsigned> getShapePerCTATile() const;
@@ -810,7 +805,7 @@ for
     ins
     ArrayRefParameter<"unsigned">:$sizePerThread,
     ArrayRefParameter<"unsigned">:$threadsPerWarp,
-    ArrayRefParameter<"unsigned">:$warpsPerCTA__,
+    ArrayRefParameter<"unsigned">:$warpsPerCTA,
     ArrayRefParameter<"unsigned">:$order, // the fastest-changing axis first
 
     // CTALayout is optional in the textual IR.  If omitted, we infer it to be a
@@ -1009,7 +1004,7 @@ V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,
     ins
     "unsigned": $versionMajor,
     "unsigned": $versionMinor,
-    ArrayRefParameter<"unsigned">:$warpsPerCTA__,
+    ArrayRefParameter<"unsigned">:$warpsPerCTA,
     "unsigned":$MDim,
     "unsigned":$NDim,
     "bool":$isTransposed,
@@ -1129,7 +1124,7 @@ Row |
     ins
     "unsigned": $version,
     "bool":$isTransposed,
-    ArrayRefParameter<"unsigned">:$warpsPerCTA__,
+    ArrayRefParameter<"unsigned">:$warpsPerCTA,
     "CTALayoutAttr":$CTALayout
   );
 
@@ -1234,7 +1229,7 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
     ins
     "unsigned":$versionMajor,
     "unsigned":$versionMinor,
-    ArrayRefParameter<"unsigned">:$warpsPerCTA__,
+    ArrayRefParameter<"unsigned">:$warpsPerCTA,
     "CTALayoutAttr":$CTALayout,
     ArrayRefParameter<"unsigned">:$instrShape
   );
