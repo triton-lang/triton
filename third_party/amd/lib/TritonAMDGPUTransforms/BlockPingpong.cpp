@@ -757,17 +757,16 @@ void Pingponger::getDotPingponged() {
   // Prune Memory operations that may be moved to only those involved in dot
   // computation. To understand the "cluster assumptions" we also estimate
   // the impact of any additional loads/stores.
-  auto gLoadIt = std::stable_partition(gLoadOps.begin(), gLoadOps.end(),
-                                       [&dotGlobalLoads](tt::LoadOp op) {
-                                         return !dotGlobalLoads.contains(op);
-                                       });
+  auto gLoadIt = std::stable_partition(
+      gLoadOps.begin(), gLoadOps.end(),
+      [&dotGlobalLoads](tt::LoadOp op) { return dotGlobalLoads.contains(op); });
   auto effectiveGlobalLoadCount =
       estimateNonDotMemoryImpact<tt::LoadOp>(gLoadIt, gLoadOps.end(), tileSize);
   gLoadOps.erase(gLoadIt, gLoadOps.end());
   effectiveGlobalLoadCount += gLoadOps.size();
   auto lLoadIt = std::stable_partition(lLoadOps.begin(), lLoadOps.end(),
                                        [&dotLocalLoads](ttg::LocalLoadOp op) {
-                                         return !dotLocalLoads.contains(op);
+                                         return dotLocalLoads.contains(op);
                                        });
   auto effectiveLocalLoadCount = estimateNonDotMemoryImpact<ttg::LocalLoadOp>(
       lLoadIt, lLoadOps.end(), tileSize);
@@ -776,7 +775,7 @@ void Pingponger::getDotPingponged() {
   auto lStoreIt =
       std::stable_partition(lStoreOps.begin(), lStoreOps.end(),
                             [&dotLocalStores](ttg::LocalStoreOp op) {
-                              return !dotLocalStores.contains(op);
+                              return dotLocalStores.contains(op);
                             });
   auto effectiveLocalStoreCount = estimateNonDotMemoryImpact<ttg::LocalStoreOp>(
       lStoreIt, lStoreOps.end(), tileSize);
