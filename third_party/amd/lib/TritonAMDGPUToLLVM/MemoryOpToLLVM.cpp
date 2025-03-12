@@ -4,6 +4,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
+using ::mlir::LLVM::AMD::usedInScaledOp;
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::AMDWmmaEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
@@ -118,7 +119,7 @@ public:
     Attribute srcLayout = srcTy.getEncoding();
     Attribute dstLayout = dstTy.getEncoding();
 
-    if (canUseTransLoad(srcTy, dstTy)) {
+    if (canUseTransLoad(op, srcTy, dstTy)) {
       assert(checkPerformanceProperties(srcTy, dstTy));
       return lowerSharedToDotOperandTransLL(op, adaptor, getTypeConverter(),
                                             rewriter);
@@ -187,7 +188,28 @@ private:
     return kWidth == expectedKWidth;
   }
 
-  bool canUseTransLoad(MemDescType srcTy, RankedTensorType dstTy) const {
+  bool checkCurrentLimitation(Operation *localLoad,
+                              RankedTensorType dstTy) const {
+
+    auto bitwidth = typeConverter->convertType(dstTy.getElementType())
+                        .getIntOrFloatBitWidth();
+
+    // Triton does not natively support the FP4 type, so it is packed and
+    // represented as an i8. Currently, the only way to distinguish FP4 from an
+    // actual int8 is by checking whether the localLoad is used in a scaled dot
+    // operation, as int8 is never used in one.
+    bool isFP4 = usedInScaledOp(localLoad) && bitwidth == 8 &&
+                 dstTy.getElementType().isInteger();
+
+    if (isFP4 || (bitwidth != 16 && bitwidth != 8)) {
+      return false;
+    }
+
+    return true;
+  }
+
+  bool canUseTransLoad(Operation *localLoad, MemDescType srcTy,
+                       RankedTensorType dstTy) const {
     auto bitwidth = typeConverter->convertType(dstTy.getElementType())
                         .getIntOrFloatBitWidth();
 
@@ -202,7 +224,7 @@ private:
     }
 
     // 3. Check current limitations.
-    if (bitwidth != 16 && bitwidth != 8) {
+    if (!checkCurrentLimitation(localLoad, dstTy)) {
       return false;
     }
 

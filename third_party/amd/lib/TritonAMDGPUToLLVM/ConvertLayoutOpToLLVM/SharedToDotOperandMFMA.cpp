@@ -235,6 +235,18 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
     mfmaInstrK = elemsPerInstr[kDimIdx];
   }
 
+  // Mismatches are observed in the SharedToDot path for scaled dot operations.
+  // However, these mismatches do not occur when the conversion is performed via
+  // LL. This approach is preferred anyway, as the SharedToDotOperandMFMA.cpp
+  // path will soon be deprecated.
+  for (auto op : tensor.getUsers()) {
+    if (auto localLoadOp = llvm::dyn_cast<triton::gpu::LocalLoadOp>(op)) {
+      if (mlir::LLVM::AMD::usedInScaledOp(op)) {
+        return Value();
+      }
+    }
+  }
+
   if (mfmaInstrNonK > shape[nonKDimIdx] || mfmaInstrK > shape[kDimIdx]) {
     // This pattern does not support cases tensor shape is smaller than
     // one instruction size, it will be processed by LinearLayout converter

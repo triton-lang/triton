@@ -92,6 +92,9 @@ bool canCoalesceWriteIntoSharedMemory(RewriterBase &rewriter,
                                       triton::gpu::MemDescType dstTy,
                                       unsigned vectorSize);
 
+// Return true if op is used by DotScaledOp or UpcastMXFPOp ops.
+bool usedInScaledOp(Operation *op);
+
 } // namespace mlir::LLVM::AMD
 
 #endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_UTILITY_H_
