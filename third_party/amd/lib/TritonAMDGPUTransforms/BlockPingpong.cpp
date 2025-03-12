@@ -256,9 +256,10 @@ void Pingponger::transformOnePPClusters(OpBuilder &builder, Location loc) {
   // scheduled across the barrier.
   auto preDotBar = builder.create<ROCDL::SchedBarrier>(loc, 1);
   updateOpInsertion(dotLoc);
+  appendOp(preDotBar);
 
   // Memory cluster #0
-  moveOpAndPredecessorsUpSameBlock(lLoadOps[0]);
+  updateOpInsertion(lLoadOps[0]);
   appendOp(builder.create<ROCDL::SetPrioOp>(loc, highPriority));
   moveOpAndPredecessorsUpSameBlock(gLoadOps[0]);
   appendOp(builder.create<ROCDL::SchedBarrier>(loc, 0));
@@ -267,7 +268,7 @@ void Pingponger::transformOnePPClusters(OpBuilder &builder, Location loc) {
   moveOpAndPredecessorsUpSameBlock(gLoadOps[1]);
 
   // Dot cluster #0
-  appendOp(preDotBar);
+  updateOpInsertion(preDotBar);
   appendOpWithPrio(builder, dotOps[0], loc);
   // Add a remark for user feedback
   dotOps[0]->emitRemark() << "Performed one ping pong cluster transformation\n";
