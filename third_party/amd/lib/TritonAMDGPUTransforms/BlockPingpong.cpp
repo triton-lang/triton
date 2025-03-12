@@ -276,6 +276,9 @@ template <typename T> size_t Pingponger::countForMemoryOps(scf::ForOp forOp) {
   return count * assumedIterations;
 }
 
+// Estimate the expected number of memory operations of type T
+// rounded to an integer. This is used to determine any possible
+// influence on cluster setup.
 template <typename T>
 size_t Pingponger::estimateNonDotMemoryImpact(T *start, T *end,
                                               int64_t tileSize) {
