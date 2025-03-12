@@ -247,4 +247,10 @@ void SessionManager::setState(std::optional<Context> context) {
   }
 }
 
+size_t SessionManager::getNumActiveSessions() const {
+  std::lock_guard<std::mutex> lock(mutex);
+  return std::count_if(sessionActive.begin(), sessionActive.end(),
+                       [](auto iter) { return iter.second; });
+}
+
 } // namespace proton

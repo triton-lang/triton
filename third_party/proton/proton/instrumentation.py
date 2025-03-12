@@ -13,6 +13,9 @@ from .hook import TritonHook
 
 
 class TritonInstrumentationHook:
+    # Set of sessions that register the hook
+    sessions = Dict[int, bool]
+
     # Mapping of function objects to their scope ID pairs
     function_scope_ids: Dict[Any, List[Tuple[int, int]]] = {}
 
@@ -75,6 +78,14 @@ class CudaAllocator:
         buffer = torch.empty(aligned_size, dtype=torch.uint8, device="cuda", stream=stream)
         libproton.set_profile_buffer(buffer.data_ptr(), size, alignment)
         return buffer
+
+
+def activate_instrumentation_hook(session: Optional[int] = None) -> None:
+    pass
+
+
+def deactivate_instrumentation_hook(session: int) -> None:
+    pass
 
 
 def register_instrumentation_hook(mode: str) -> None:

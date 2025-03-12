@@ -101,6 +101,8 @@ public:
 
   void setState(std::optional<Context> context);
 
+  size_t getNumActiveSessions() const;
+
 private:
   std::unique_ptr<Session> makeSession(size_t id, const std::string &path,
                                        const std::string &profilerName,

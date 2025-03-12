@@ -92,6 +92,9 @@ void initProton(pybind11::module &&m) {
   m.def("set_profile_buffer",
         [](uint64_t *profileBuffer, size_t size, size_t alignment) -> void {});
 
+  m.def("get_num_active_sessions",
+        []() { return SessionManager::instance().getNumActiveSessions(); });
+
   pybind11::bind_map<std::map<std::string, MetricValueType>>(m, "MetricMap");
 }
 
