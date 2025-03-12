@@ -33,6 +33,20 @@ enum class ConditionalSelectionHeuristic {
   elsePath,
 };
 
+std::string
+conditionalSelectionHeuristicToString(ConditionalSelectionHeuristic h) {
+  switch (h) {
+  case ConditionalSelectionHeuristic::minPath:
+    return "minimum";
+  case ConditionalSelectionHeuristic::maxPath:
+    return "maximum";
+  case ConditionalSelectionHeuristic::ifPath:
+    return "if branch";
+  default:
+    return "else branch";
+  }
+}
+
 // This pass transforms a for-loop calculating a GEMM. Main purpose of the
 // transform is improve the efficiency of the GPU dot instruction (mfma)
 // by interleaving the execution of two warps on each SIMD. Especially it groups
@@ -249,6 +263,8 @@ size_t Pingponger::countIfMemoryOps(scf::IfOp ifOp, int64_t tileSize) {
     }
   }
   auto heuristic = getIfHeuristic(tileSize);
+  LDBG("Encountered memory op inside conditional. Using heuristic: "
+       << conditionalSelectionHeuristicToString(heuristic));
   if (heuristic == ConditionalSelectionHeuristic::minPath)
     return std::min(thenCount, elseCount);
   else if (heuristic == ConditionalSelectionHeuristic::maxPath)
