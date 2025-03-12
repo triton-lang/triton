@@ -61,6 +61,11 @@ Value createSingleBufferView(OpBuilder &builder, Value alloc, int idx);
 // Create an allocation and init the mbarriers.
 Value createBarrierAlloc(scf::ForOp forOp, int numBarriers);
 
+// Return true if pipelining of MMA op is possible.
+bool isPipeliningOfMMAOpPossible(
+    Operation *op, scf::ForOp forOp,
+    std::function<bool(Operation *)> isLoadPipelineable);
+
 } // namespace triton
 } // namespace mlir
 

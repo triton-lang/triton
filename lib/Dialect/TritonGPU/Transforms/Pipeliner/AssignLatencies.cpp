@@ -256,11 +256,15 @@ public:
       : forOp(forOp), opLatency(opLatency) {};
 
   void run() {
+    // Check if the load op (mma operand) is pipelineable.
+    auto isLoadPipelineable = [&](Operation *op) {
+      return opLatency.count(op) && opLatency[op] > 0;
+    };
     for (auto &op : forOp.getBody()->without_terminator()) {
       // If the acc can not be multibuffered, do not pipeline the uses of
       // the MMA to later stages.
       if (isa<ttng::MMAv5OpInterface>(op) &&
-          isPipeliningOfMMAOpPossible(&op, forOp, opLatency) &&
+          isPipeliningOfMMAOpPossible(&op, forOp, isLoadPipelineable) &&
           !getDisallowAccMultiBuffer(forOp)) {
         opLatency[&op] = 1;
       }
@@ -270,55 +274,6 @@ public:
 private:
   scf::ForOp forOp;
   DenseMap<Operation *, int> &opLatency;
-
-  bool isPipeliningOfMMAOpPossible(Operation *op, scf::ForOp forOp,
-                                   DenseMap<Operation *, int> &opLatency) {
-    assert((isa<ttng::MMAv5OpInterface>(op)) && "Only MMA ops are supported");
-    // Operands of the MMA op must come from the (to be pipelined) load, or
-    // from outside the loop.
-    auto comesFromLoadOrOutsideLoop = [&](Value v) {
-      if (forOp.isDefinedOutsideOfLoop(v)) {
-        return true;
-      }
-      // Do not walk through the Block Arguments.
-      if (!v.getDefiningOp()) {
-        return false;
-      }
-      if (auto localAlloc = dyn_cast<ttg::LocalAllocOp>(v.getDefiningOp())) {
-        if (!localAlloc.getSrc()) {
-          return false;
-        }
-        if (forOp.isDefinedOutsideOfLoop(localAlloc.getSrc())) {
-          return true;
-        }
-        if (auto loadOp =
-                dyn_cast<tt::LoadOp>(localAlloc.getSrc().getDefiningOp())) {
-          return (opLatency.count(loadOp) && opLatency[loadOp] > 0);
-        }
-      }
-      return false;
-    };
-    if (auto dotOp = dyn_cast<tt::DotOpInterface>(op)) {
-      if (!comesFromLoadOrOutsideLoop(dotOp.getA()) ||
-          !comesFromLoadOrOutsideLoop(dotOp.getB())) {
-        return false;
-      }
-    }
-
-    // For scaled MMA check if the scales are passed through shared memory, and
-    // also coming from load or outside the loop.
-    if (auto scaledOp = dyn_cast<ttng::TCGen5MMAScaledOp>(op)) {
-      if (!isa<ttg::SharedEncodingTrait>(
-              scaledOp.getAScale().getType().getEncoding()) ||
-          !isa<ttg::SharedEncodingTrait>(
-              scaledOp.getBScale().getType().getEncoding()))
-        return false;
-      if (!comesFromLoadOrOutsideLoop(scaledOp.getAScale()) ||
-          !comesFromLoadOrOutsideLoop(scaledOp.getBScale()))
-        return false;
-    }
-    return true;
-  }
 };
 
 } // namespace

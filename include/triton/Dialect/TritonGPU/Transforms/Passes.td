@@ -76,6 +76,19 @@ def TritonGPUTestPipelineScheduleLoop : Pass<"tritongpu-test-pipeline-schedule-l
                            "mlir::arith::ArithDialect"];
 }
 
+def TritonGPUTestPipelineHoistTMEMAlloc : Pass<"tritongpu-test-pipeline-hoist-tmem-alloc", "mlir::ModuleOp"> {
+  let summary = "Test hoisting TMA allocations out of the loop. This is a preparation for the loop lowering.";
+
+  let description = [{
+    This is a test pass that tests `hoistTMEMAlloc` method of `TritonGPUPipeline`.
+  }];
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
+                           "mlir::scf::SCFDialect",
+                           "mlir::arith::ArithDialect"];
+}
+
 def TritonGPUTestPipelineLowerLoop : Pass<"tritongpu-test-pipeline-lower-loop", "mlir::ModuleOp"> {
   let summary = "test lowering a loop for software pipelining";
 

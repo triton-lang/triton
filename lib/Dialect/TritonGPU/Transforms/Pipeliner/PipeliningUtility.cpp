@@ -305,3 +305,53 @@ Value mlir::triton::createSingleBufferView(OpBuilder &builder, Value alloc,
       builder, alloc,
       builder.create<arith::ConstantIntOp>(alloc.getLoc(), idx, 32));
 }
+
+bool mlir::triton::isPipeliningOfMMAOpPossible(
+    Operation *op, scf::ForOp forOp,
+    std::function<bool(Operation *)> isLoadPipelineable) {
+  assert((isa<ttng::MMAv5OpInterface>(op)) && "Only MMA ops are supported");
+  // Operands of the MMA op must come from the (to be pipelined) load, or
+  // from outside the loop.
+  auto comesFromLoadOrOutsideLoop = [&](Value v) {
+    if (forOp.isDefinedOutsideOfLoop(v)) {
+      return true;
+    }
+    // Do not walk through the Block Arguments.
+    if (!v.getDefiningOp()) {
+      return false;
+    }
+    if (auto localAlloc = dyn_cast<ttg::LocalAllocOp>(v.getDefiningOp())) {
+      if (!localAlloc.getSrc()) {
+        return false;
+      }
+      if (forOp.isDefinedOutsideOfLoop(localAlloc.getSrc())) {
+        return true;
+      }
+      if (auto loadOp =
+              dyn_cast<tt::LoadOp>(localAlloc.getSrc().getDefiningOp())) {
+        return isLoadPipelineable(loadOp);
+      }
+    }
+    return false;
+  };
+  if (auto dotOp = dyn_cast<tt::DotOpInterface>(op)) {
+    if (!comesFromLoadOrOutsideLoop(dotOp.getA()) ||
+        !comesFromLoadOrOutsideLoop(dotOp.getB())) {
+      return false;
+    }
+  }
+
+  // For scaled MMA check if the scales are passed through shared memory, and
+  // also coming from load or outside the loop.
+  if (auto scaledOp = dyn_cast<ttng::TCGen5MMAScaledOp>(op)) {
+    if (!isa<ttg::SharedEncodingTrait>(
+            scaledOp.getAScale().getType().getEncoding()) ||
+        !isa<ttg::SharedEncodingTrait>(
+            scaledOp.getBScale().getType().getEncoding()))
+      return false;
+    if (!comesFromLoadOrOutsideLoop(scaledOp.getAScale()) ||
+        !comesFromLoadOrOutsideLoop(scaledOp.getBScale()))
+      return false;
+  }
+  return true;
+}
