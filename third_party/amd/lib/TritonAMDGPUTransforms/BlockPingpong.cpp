@@ -221,7 +221,13 @@ template <typename T> size_t Pingponger::countIfMemoryOps(scf::IfOp ifOp) {
 }
 
 template <typename T> size_t Pingponger::countForMemoryOps(scf::ForOp forOp) {
-  return 1;
+  // Hardcode a constant number of iterations for now.
+  const size_t assumedIterations = 5;
+  size_t count = 0;
+  for (auto _ : forOp.getBody()->getOps<T>()) {
+    count++;
+  }
+  return count * assumedIterations;
 }
 
 template <typename T>
