@@ -563,6 +563,7 @@ public:
       if (failed(aScaledElemTy) || failed(bScaledElemTy))
         return failure();
 
+      assert(kWidth == 32);
       auto newAEncoding =
           DotOperandEncodingAttr::get(ctx, 0, mfmaEnc, kWidth / 2);
       auto newBEncoding =
@@ -866,6 +867,7 @@ public:
     // elements. But since two fp4 elements are packed into one int8, the
     // kWidth is 16 for fp4.
     const unsigned kWidth = kBase;
+    assert(kWidth == 32);
     using basisT = std::vector<std::vector<int32_t>>;
 
     auto aShape = a.getType().getShape();
