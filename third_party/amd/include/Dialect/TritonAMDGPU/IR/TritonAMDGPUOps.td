@@ -395,16 +395,16 @@ def TTG_UpcastMXFPOp : TT_AMDGPU_Op<"upcast_mxfp", [Pure]> {
 }
 
 //===----------------------------------------------------------------------===//
-// TransposeInRegistersOp
+// InThreadTransposeOp
 //===----------------------------------------------------------------------===//
 
-def TTG_TransposeInRegistersOp : TT_AMDGPU_Op<"transpose_in_reg", [Pure]> {
-  let summary = "Transposes last two dimensions of layout in registers";
+def TTG_InThreadTransposeOp : TT_AMDGPU_Op<"in_thread_transpose", [Pure]> {
+  let summary = "Transposes last two dimensions of register sub layout";
 
   let hasVerifier = 1;
 
   let description = [{
-    Special case of convert_layout: transposes last two dimensions of register layout in "sizePerThread" blocks.
+    Special case of convert_layout: transposes last two dimensions in BlockedEncoding sizePerThread blocks.
   }];
 
   let arguments = (ins TT_Tensor:$src);

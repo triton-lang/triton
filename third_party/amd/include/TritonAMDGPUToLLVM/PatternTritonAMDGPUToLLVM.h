@@ -9,9 +9,9 @@ void populateExtractSliceOpToLLVMPatterns(
     mlir::LLVMTypeConverter &typeConverter, mlir::RewritePatternSet &patterns,
     mlir::PatternBenefit benefit);
 
-void populateTransposeInRegistersOpToTTGPatterns(
-    mlir::MLIRContext *ctx, mlir::RewritePatternSet &patterns,
-    mlir::PatternBenefit benefit);
+void populateInThreadTransposeOpToTTGPatterns(mlir::MLIRContext *ctx,
+                                              mlir::RewritePatternSet &patterns,
+                                              mlir::PatternBenefit benefit);
 
 } // namespace mlir::triton::AMD
 

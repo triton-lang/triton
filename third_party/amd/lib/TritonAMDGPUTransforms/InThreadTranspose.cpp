@@ -85,8 +85,8 @@ void transposeInRegsitersBeforeStoreInLocalMemory(
   if (!data)
     return;
 
-  auto transposedLayout = ttag::TransposeInRegistersOp::deduceOutputLayout(
-      loadShape, newLoadEncoding);
+  auto transposedLayout =
+      ttag::InThreadTransposeOp::deduceOutputLayout(loadShape, newLoadEncoding);
   auto transposedEncoding = triton::gpu::LinearEncodingAttr::get(
       memStoreOp->getContext(), transposedLayout);
 
@@ -96,7 +96,7 @@ void transposeInRegsitersBeforeStoreInLocalMemory(
       builder.create<ttg::ConvertLayoutOp>(loc, preEncodedType, data);
 
   auto transposedType = getNewType(data.getType(), transposedEncoding);
-  auto inThreadTransposed = builder.create<ttag::TransposeInRegistersOp>(
+  auto inThreadTransposed = builder.create<ttag::InThreadTransposeOp>(
       loc, transposedType, preEncoded);
   memStoreOp->setOperand(0, inThreadTransposed);
 }
