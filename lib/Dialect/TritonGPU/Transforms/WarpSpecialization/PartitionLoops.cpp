@@ -19,80 +19,55 @@ using Partition = WarpSchedule::Partition;
 //
 //===----------------------------------------------------------------------===//
 
-static void getBackwardSlice(Value value, scf::ForOp loop,
-                             SetVector<Operation *> &slice,
-                             SetVector<BlockArgument> &args) {
-  auto arg = dyn_cast<BlockArgument>(value);
-  if (arg && arg.getOwner() == loop.getBody()) {
-    args.insert(arg);
-    return;
-  }
-
-  Operation *op = value.getDefiningOp();
-  op->walk([&](Operation *op) {
-    for (Value operand : op->getOperands()) {
-      if (operand.getParentRegion() == &loop.getBodyRegion())
-        getBackwardSlice(operand, loop, slice, args);
+static void eraseOtherPartitions(scf::ForOp &loop, const WarpSchedule &schedule,
+                                 const Partition *partition) {
+  llvm::BitVector toErase(loop.getNumRegionIterArgs(), true);
+  for (Operation &op :
+       llvm::make_early_inc_range(loop.getBody()->without_terminator())) {
+    const Partition *opPartition = schedule.getPartition(&op);
+    if (!llvm::is_contained({partition, schedule.getRootPartition()},
+                            opPartition)) {
+      op.dropAllUses();
+      op.erase();
+      continue;
     }
-  });
-  slice.insert(op);
+    for (OpOperand &use : op.getUses()) {
+      if (use.getOwner() == loop.getBody()->getTerminator())
+        toErase.reset(use.getOperandNumber());
+    }
+  }
+  for (auto [i, arg] : llvm::enumerate(loop.getRegionIterArgs())) {
+    if (toErase.test(i))
+      arg.dropAllUses();
+  }
+  eraseLoopCarriedValues(loop, std::move(toErase));
 }
 
 static FailureOr<Block *> slicePartition(scf::ForOp baseLoop,
                                          const WarpSchedule &baseSchedule,
                                          const Partition *slicePartition) {
   // Generate the partition loop by cloning the whole loop and deleting anything
-  // that doesn't belong to the partition and its backward slice. This is easier
+  // that doesn't belong to the partition and the root partition. This is easier
   // than trying to generate a new loop from scratch while keeping the
   // operations in the same order.
   scf::ForOp loop = baseLoop.clone();
+  Block *block = new Block;
+  block->push_back(loop);
   WarpSchedule schedule = *WarpSchedule::deserialize(loop);
   Partition *partition = schedule.getPartition(slicePartition->getIndex());
 
-  // Add the ops in the partition to the slice and take the backward slice of
-  // their dependencies.
-  SetVector<Operation *> iterSlice;
-  iterSlice.insert(partition->getOps().begin(), partition->getOps().end());
-  SetVector<BlockArgument> iterArgs;
-  schedule.iterateInputs(loop, partition, [&](OpOperand &operand) {
-    getBackwardSlice(operand.get(), loop, iterSlice, iterArgs);
-  });
-
-  // Recurse on the block arguments.
-  for (unsigned i = 0; i < iterArgs.size(); ++i) {
-    BlockArgument arg = iterArgs[i];
-    if (arg == loop.getInductionVar())
-      continue;
-    unsigned idx = arg.getArgNumber() - 1;
-    getBackwardSlice(loop.getYieldedValues()[idx], loop, iterSlice, iterArgs);
-  }
-
-  // Check that we did this right. If the schedule is valid, all ops in the
-  // slice should belong to either the root partition or the current partition.
-  assert(llvm::all_of(iterSlice, [&](Operation *op) {
-    Partition *opPartition = schedule.getPartition(op);
-    return opPartition == schedule.getRootPartition() ||
-           opPartition == partition;
-  }));
-
   // Check for results that need to be passed back into the default warp group.
-  llvm::MapVector<unsigned, SmallVector<OpOperand *>> resultUses;
-  baseSchedule.iterateUses(
-      baseLoop, slicePartition,
-      [&](OpResult output, OpOperand &use, unsigned distance) {
-        if (distance != -1)
-          return;
-        auto result = cast<OpResult>(use.get());
-        assert(result.getDefiningOp() == baseLoop);
-        iterArgs.insert(loop.getRegionIterArg(result.getResultNumber()));
-        resultUses[result.getResultNumber()].push_back(&use);
-      },
-      /*includeResults=*/true);
+  SmallVector<unsigned> resultIndices;
+  baseSchedule.iterateOutputs(
+      baseLoop, slicePartition, [&](Operation *op, OpOperand &use) {
+        unsigned idx = use.getOperandNumber();
+        // Ignore results with no uses.
+        if (isa<scf::YieldOp>(op) && !baseLoop.getResult(idx).use_empty())
+          resultIndices.push_back(idx);
+      });
 
   // Pass these results through shared memory.
-  Block *block = new Block;
-  block->push_back(loop);
-  for (auto &[resultIdx, uses] : resultUses) {
+  for (unsigned resultIdx : resultIndices) {
     Value result = loop.getResult(resultIdx);
     auto ty = dyn_cast<RankedTensorType>(result.getType());
     if (!ty) {
@@ -114,21 +89,7 @@ static FailureOr<Block *> slicePartition(scf::ForOp baseLoop,
   }
 
   // Delete everything else.
-  for (Operation &op :
-       llvm::make_early_inc_range(loop.getBody()->without_terminator())) {
-    if (iterSlice.contains(&op))
-      continue;
-    op.dropAllUses();
-    op.erase();
-  }
-  llvm::BitVector toErase(loop.getNumRegionIterArgs());
-  for (auto [i, arg] : llvm::enumerate(loop.getRegionIterArgs())) {
-    if (iterArgs.contains(arg))
-      continue;
-    toErase.set(i);
-    arg.dropAllUses();
-  }
-  eraseLoopCarriedValues(loop, std::move(toErase));
+  eraseOtherPartitions(loop, schedule, partition);
 
   return block;
 }
@@ -166,8 +127,8 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
       return failure();
   }
 
-  // This loop has no partitions.
-  if (schedule.getPartitions().begin() == schedule.getPartitions().end())
+  // There is nothing to do if the loop has 1 or fewer partitions.
+  if (llvm::size(schedule.getPartitions()) <= 1)
     return success();
 
   // Always assign the first partition to the default warp group.
@@ -183,29 +144,7 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
 
   // Now delete everything except the default and root partitions from the base
   // loop.
-  DenseSet<BlockArgument> argsToKeep;
-  for (Operation &op :
-       llvm::make_early_inc_range(loop.getBody()->without_terminator())) {
-    const Partition *opPartition = schedule.getPartition(&op);
-    if (opPartition != &defaultPartition &&
-        opPartition != schedule.getRootPartition()) {
-      op.dropAllUses();
-      op.erase();
-      continue;
-    }
-    for (OpOperand &use : op.getUses()) {
-      if (use.getOwner() == loop.getBody()->getTerminator())
-        argsToKeep.insert(loop.getRegionIterArg(use.getOperandNumber()));
-    }
-  }
-  llvm::BitVector toErase(loop.getNumRegionIterArgs());
-  for (auto [i, arg] : llvm::enumerate(loop.getRegionIterArgs())) {
-    if (argsToKeep.contains(arg))
-      continue;
-    toErase.set(i);
-    arg.dropAllUses();
-  }
-  eraseLoopCarriedValues(loop, std::move(toErase));
+  eraseOtherPartitions(loop, schedule, &defaultPartition);
 
   // Figure out how many warps each partition needs. For now, this is either 1
   // or the number of warps.
@@ -213,15 +152,16 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
   int32_t functionNumWarps = lookupNumWarps(loop);
   auto isTensor = [](Type t) { return isa<RankedTensorType>(t); };
   for (Block *block : partitionBlocks) {
-    int32_t numWarps = 1;
-    if (llvm::any_of(*block, [&](Operation &op) {
-          return llvm::any_of(op.getOperandTypes(), isTensor) ||
-                 llvm::any_of(op.getResultTypes(), isTensor);
-        }))
-      numWarps = functionNumWarps;
-    partitionNumWarps.push_back(numWarps);
+    WalkResult result = block->walk([&](Operation *op) {
+      if (llvm::any_of(op->getOperandTypes(), isTensor) ||
+          llvm::any_of(op->getResultTypes(), isTensor))
+        return WalkResult::interrupt();
+      return WalkResult::advance();
+    });
+    partitionNumWarps.push_back(result.wasInterrupted() ? functionNumWarps : 1);
   }
 
+  // Create the warp specialize op and move in the partition blocks.
   ImplicitLocOpBuilder b(loop.getLoc(), loop);
   auto wsOp = b.create<WarpSpecializeOp>(
       loop.getResultTypes(), partitionNumWarps, partitionBlocks.size());
@@ -237,6 +177,8 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
     b.create<WarpReturnOp>();
   }
 
+  // The capture set is the same for every partition region, so now find the
+  // captures and thread them in to the regions.
   SetVector<Value> captures;
   getUsedValuesDefinedAbove(wsOp.getPartitionOpHolder(), captures);
   for (Value capture : captures) {

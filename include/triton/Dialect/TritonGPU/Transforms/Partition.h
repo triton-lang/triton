@@ -101,9 +101,9 @@ public:
                    function_ref<void(OpResult, unsigned)> callback) const;
   // Iterate the uses of all outputs of the partition in the current iteration
   // and in future iterations, including the distance in the future.
-  void iterateUses(scf::ForOp loop, const Partition *partition,
-                   function_ref<void(OpResult, OpOperand &, unsigned)> callback,
-                   bool includeResults = false) const;
+  void iterateUses(
+      scf::ForOp loop, const Partition *partition,
+      function_ref<void(OpResult, OpOperand &, unsigned)> callback) const;
 
 private:
   // Partitions are numbered [0, N).

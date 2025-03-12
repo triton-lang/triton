@@ -280,8 +280,7 @@ void WarpSchedule::iterateDefs(
 
 void WarpSchedule::iterateUses(
     scf::ForOp loop, const Partition *partition,
-    function_ref<void(OpResult, OpOperand &, unsigned)> callback,
-    bool includeResults) const {
+    function_ref<void(OpResult, OpOperand &, unsigned)> callback) const {
   SmallVector<std::tuple<OpResult, OpOperand *, unsigned>> uses;
   iterateOutputs(loop, partition, [&](Operation *owner, OpOperand &use) {
     uses.emplace_back(cast<OpResult>(use.get()), &use, 0);
@@ -295,10 +294,5 @@ void WarpSchedule::iterateUses(
     BlockArgument arg = loop.getRegionIterArg(use->getOperandNumber());
     for (OpOperand &use : arg.getUses())
       uses.emplace_back(output, &use, distance + 1);
-
-    if (includeResults) {
-      for (OpOperand &use : loop.getResult(use->getOperandNumber()).getUses())
-        callback(output, use, /*distance=*/-1);
-    }
   }
 }
