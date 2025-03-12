@@ -1050,8 +1050,8 @@ public:
   }
 };
 
-void hoistTMEMAlloc_impl(ttng::TMEMAllocOp alloc, scf::ForOp forOp,
-                         CoarseSchedule &schedule) {
+ttng::TMEMAllocOp hoistTMEMAlloc_impl(ttng::TMEMAllocOp alloc, scf::ForOp forOp,
+                                      CoarseSchedule &schedule) {
   OpBuilderForStage builder(alloc, schedule);
   builder.setInsertionPoint(forOp);
   Value vTrue = builder.create<arith::ConstantIntOp>(alloc.getLoc(), 1, 1);
@@ -1069,6 +1069,32 @@ void hoistTMEMAlloc_impl(ttng::TMEMAllocOp alloc, scf::ForOp forOp,
   if (applyPatternsGreedily(module, std::move(patterns)).failed()) {
     llvm_unreachable("Failed to hoist tmem_store");
   }
+
+  return alloc;
+}
+
+std::optional<int> getLowestStageOfLoad(ttng::TMEMAllocOp alloc,
+                                        CoarseSchedule &schedule) {
+  std::optional<int> lowestStage = std::nullopt;
+  for (auto user : alloc->getUsers()) {
+    if (auto load = dyn_cast<ttng::TMEMLoadOp>(user)) {
+      if (!lowestStage.has_value() || schedule[load].first < lowestStage) {
+        lowestStage = schedule[load].first;
+      }
+    }
+  }
+  return lowestStage;
+}
+
+void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
+                             ttng::MMAv5OpInterface mma,
+                             ttng::TMEMAllocOp alloc, int stageDiff) {
+  OpBuilderForStage builder(mma, schedule);
+  builder.setInsertionPoint(forOp);
+
+  Value barrierAlloc = createBarrierAlloc(forOp, stageDiff);
+  Location loc = mma->getLoc();
+  builder.setInsertionPoint(mma);
 }
 
 scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
@@ -1084,13 +1110,34 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
     return forOp;
   }
   auto [alloc, load] = allocAndLoad.value();
-  // Check that acc use is in later stage than the mma
-  if (schedule[mma].first >= schedule[load].first) {
-    return forOp;
+  alloc = hoistTMEMAlloc_impl(alloc, forOp, schedule);
+
+  // Create barrier and wait ops
+  std::optional<int> lowestStageOpt = getLowestStageOfLoad(alloc, schedule);
+  int stageDiff = 0;
+  if (lowestStageOpt.has_value()) {
+    stageDiff = lowestStageOpt.value() - schedule[mma].first;
+    assert(stageDiff >= 0 && "TMEMLoad precedes MMA in the schedule");
   }
 
-  hoistTMEMAlloc_impl(alloc, forOp, schedule);
+  OpBuilder builder(forOp);
+  Value zero = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 0, 32);
+  Value one = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 1, 32);
+  // TODO: numStages for cases without loads correct, or should be +1?
+  Value numStagesVal =
+      builder.create<arith::ConstantIntOp>(forOp.getLoc(), stageDiff, 32);
 
+  // Add arguments to the forOp
+  unsigned newOperandIndex = forOp.getBody()->getNumArguments();
+  SmallVector<Value> newOperands = {
+      zero, // phase
+      zero, // barrierIdx
+      zero, // accInsertIdx
+      zero, // accExtractIdx
+  };
+  // replaceForOpWithNewSignature(builder, forOp, newOperands);
+
+  createBarrierAndWaitOps(forOp, schedule, mma, alloc, stageDiff);
   return forOp;
 }
 
