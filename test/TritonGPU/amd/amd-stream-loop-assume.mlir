@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritonamdgpu-stream-pipeline="num_stages=2 local_prefetch=1" -canonicalize | FileCheck %s --check-prefixes=LOCAL_1
+// RUN: triton-opt %s -split-input-file -tritonamdgpu-stream-pipeline="num_stages=2" -canonicalize | FileCheck %s --check-prefixes=LOCAL_1
 
 // matmul: 128x32 @ 32x128 -> 128x128
 #AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -12,17 +12,19 @@
 
 // One Local buffer.
 // LOCAL_1-LABEL: tt.func @assume_matmul
-// ASSUME_1: llvm.intr.assume
 // LOCAL_1-COUNT-2: tt.load
 // LOCAL_1-COUNT-2: ttg.local_store
-// LOCAL_1-COUNT-2: ttg.local_load
 // LOCAL_1: scf.for
-// LOCAL_1-COUNT-2: tt.load
+// LOCAL_1: llvm.intr.assume
+// LOCAL_1: tt.load
+// LOCAL_1: ttg.local_load
+// LOCAL_1: tt.load
+// LOCAL_1: ttg.local_load
 // LOCAL_1: tt.dot
 // LOCAL_1-COUNT-2: ttg.local_store
-// LOCAL_1-COUNT-2: ttg.local_load
 // LOCAL_1: scf.yield
-// ASSUME_1-COUNT-2: llvm.intr.assume
+// LOCAL_1: llvm.intr.assume
+// LOCAL_1-COUNT-2: ttg.local_load
 // LOCAL_1: tt.dot
 // LOCAL_1-NOT: tt.dot
 
