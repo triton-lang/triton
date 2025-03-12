@@ -354,7 +354,7 @@ void TritonIntegerRangeAnalysis::visitRegionSuccessors(
       llvm::dyn_cast<LoopLikeOpInterface>(branch.getOperation());
   if (loop) {
     if (!loopTripCounts.contains(loop)) {
-      SmallVector loops{loop};
+      SmallVector<LoopLikeOpInterface> loops{loop};
       getEnclosingLoops(*loop, loops);
       int loopTripCount =
           std::accumulate(loops.begin(), loops.end(), 1,

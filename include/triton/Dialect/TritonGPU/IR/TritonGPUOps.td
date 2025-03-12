@@ -168,7 +168,9 @@ def TTG_LocalAllocOp : TTG_Op<"local_alloc", [DeclareOpInterfaceMethods<MemoryEf
     }
     int32_t getAlignmentOrDefault();
   }];
-  let assemblyFormat = [{$src attr-dict `:` functional-type(operands, results)}];
+  let assemblyFormat = [{
+    ($src^)? attr-dict `:` functional-type(operands, results)
+  }];
 
   let results = (outs TTG_MemDescType:$result);
   let hasFolder = 1;

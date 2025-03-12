@@ -742,8 +742,8 @@ tt.func @tma_special_cases(%arg1: !tt.ptr<i8, 0>) -> (tensor<256x64xf16, #blocke
   %true = arith.constant 1 : i1
   %cx = arith.constant dense<1> : tensor<32xi32>
   %c0 = arith.constant 0 : i32
-  %barrier = ttg.local_alloc  : () -> !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
-  %alloc = ttg.local_alloc  : () -> !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable>
+  %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable>
   //      CHECK: ttng.init_barrier
   // CHECK-NEXT: ttng.init_barrier
   ttng.init_barrier %barrier, 1 : !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
@@ -805,8 +805,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 tt.func @tma_special_cases_cf(%arg1: !tt.ptr<i8, 0>, %i1 : i1, %arg2: tensor<256x64xf16, #blocked>) -> (tensor<256x64xf16, #blocked>){
   %true = arith.constant 1 : i1
   %c0 = arith.constant 0 : i32
-  %barrier = ttg.local_alloc  : () -> !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
-  %alloc = ttg.local_alloc  : () -> !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable>
+  %barrier = ttg.local_alloc : () -> !ttg.memdesc<1xi64, #shared1, #ttg.shared_memory, mutable>
+  %alloc = ttg.local_alloc : () -> !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable>
   // CF: cf.cond_br
   // SCF: scf.if
   scf.if %i1 {
