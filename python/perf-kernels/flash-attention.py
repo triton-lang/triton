@@ -1833,7 +1833,7 @@ def test_op_bwd(Z, H, N_CTX, D_HEAD, qseqlen_not_equal_kseqlen, causal, torch_sd
     #print(tri_dv)
     # compare
     torch.testing.assert_close(ref_out, tri_out, atol=1e-2, rtol=0)
-    # The current block size for MI200 series is 64x64. This results in
+    # The current block size for gfx90a and gfx908 series is 64x64. This results in
     # larger differences in float results due to rounding.
 
     if dtype == torch.bfloat16:

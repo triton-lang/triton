@@ -68,7 +68,7 @@ class matmul(torch.autograd.Function):
         grids = min(total_programs_streamk, total_tiles)
         total_programs_streamk = min(total_programs_streamk, total_tiles)
         stride_bias = bias.stride(0) if use_bias else 0
-        # MI300X settings, MI250 set num_xcds = 1
+        # gfx942 settings, gfx90a set num_xcds = 1
         num_xcds = 8
 
         kk = streamk_gemm[(grids, )](

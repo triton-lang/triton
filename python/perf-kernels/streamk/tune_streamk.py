@@ -398,7 +398,7 @@ def matmul(kernel_func, a, b, c, bias, P, locks, num_sms, block_m, block_n, bloc
     m_tiles = triton.cdiv(M, block_m)
     n_tiles = triton.cdiv(N, block_n)
     streamk_tiles = m_tiles * n_tiles % num_sms
-    # change num_xcds = 1 if using MI250
+    # change num_xcds = 1 if using gfx90a
     num_xcds = 8
     kernel_func[
         grid,

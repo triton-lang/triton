@@ -69,7 +69,7 @@ The plan is to use this version as the base version for the future triton stream
 
 - use atomics for spinning lock to replace atomic_add for the final output.
 
-- pid renumbering based on chiplet structure of MI300X
+- pid renumbering based on chiplet structure of gfx942
 
 - dynamic grid setting
 

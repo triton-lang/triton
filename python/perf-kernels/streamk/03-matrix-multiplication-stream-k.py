@@ -73,7 +73,7 @@ class matmul(torch.autograd.Function):
         # compute grid (work to do per SM on the first wave)
         grids = total_programs_streamk
         stride_bias = bias.stride(0) if use_bias else 0
-        # MI300X settings, MI250 set num_xcds = 1
+        # gfx942 settings, gfx90a set num_xcds = 1
         num_xcds = 8
         kk = streamk_gemm[(grids, )](
             a,

@@ -302,7 +302,7 @@ def checkMfmaValidity(mfmaNonKDim, kWidth, kGroup, dtype_a, dtype_b, trans, scal
         dtype_a == dtype_b), f"Cannot do mixed precision mfma with {dtype_a} and {dtype_b}"
     '''
     Check mfma size according to data types
-    * refers to newly added instructions on MI350
+    * refers to newly added instructions on gfx950
     Both dtyes are f4 or fp6 or bf6
       *mfma_f32_16x16x128_f8f6f4: kWidth = 32, kGroup = 1
       *mfma_f32_32x32x64_f8f6f4: kWidth = 32, kGroup = 1

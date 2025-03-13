@@ -825,7 +825,7 @@ def test_op_bwd(Z, H, N_CTX, D_HEAD, dtype=torch.float16):
     assert torch.allclose(ref_out, tri_out, atol=1e-2, rtol=0)
     if torch.version.hip is None:
         assert torch.allclose(ref_dv, tri_dv, atol=1e-2, rtol=0)
-    # The current block size for MI200 series is 64x64. This results in
+    # The current block size for gfx90a and gfx908 series is 64x64. This results in
     # larger differences in float results due to rounding.
     else:
         assert torch.allclose(ref_dv, tri_dv, atol=5e-2, rtol=0)
