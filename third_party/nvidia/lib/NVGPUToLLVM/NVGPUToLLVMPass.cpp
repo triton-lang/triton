@@ -38,13 +38,13 @@ const std::string kClusterCtaIdOp = "{\n"
                                     "mad.lo.u32 $0, a1, a3, a0;     \n"
                                     "}";
 
-static bool isNumber(const std::string &s) {
+bool isNumber(const std::string &s) {
   return !s.empty() && std::find_if(s.begin(), s.end(), [](unsigned char c) {
                          return !std::isdigit(c);
                        }) == s.end();
 }
 
-static Type getTypeFromConstraint(char constraint, PatternRewriter &rewriter) {
+Type getTypeFromConstraint(char constraint, PatternRewriter &rewriter) {
   Type ty;
   if (constraint == 'b')
     ty = IntegerType::get(rewriter.getContext(), 1);
@@ -67,8 +67,8 @@ static Type getTypeFromConstraint(char constraint, PatternRewriter &rewriter) {
 // Converts the given value to the type represented by the constraint
 // E.g. if val is of type llvmptr and constraint is 'r', then we convert
 // val to i32 using ptrtoint(i32_ty, val)
-static Value convertToType(Value val, std::string constraint, Location loc,
-                           PatternRewriter &rewriter) {
+Value convertToType(Value val, std::string constraint, Location loc,
+                    PatternRewriter &rewriter) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto isConstraintNumber = isNumber(constraint);
   if (!isConstraintNumber) {
@@ -86,7 +86,7 @@ static Value convertToType(Value val, std::string constraint, Location loc,
   return val;
 }
 
-static SmallVector<PTXBuilder::Operand *>
+SmallVector<PTXBuilder::Operand *>
 getPtxOutputs(const nvgpu::Constraints &outputConstraints,
               PTXBuilder &ptxBuilder) {
   SmallVector<PTXBuilder::Operand *> ptxOutputs;
@@ -97,7 +97,7 @@ getPtxOutputs(const nvgpu::Constraints &outputConstraints,
   return ptxOutputs;
 }
 
-static OperandsAndConstraints
+OperandsAndConstraints
 unpackOperands(const OperandsAndConstraints &operandsAndConstraints,
                PTXBuilder &ptxBuilder, Location loc,
                PatternRewriter &rewriter) {
@@ -129,7 +129,7 @@ unpackOperands(const OperandsAndConstraints &operandsAndConstraints,
   return unpackedOperands;
 }
 
-static SmallVector<PTXBuilder::Operand *>
+SmallVector<PTXBuilder::Operand *>
 getPtxOperands(const OperandsAndConstraints &operandsAndConstraints,
                PTXBuilder &ptxBuilder, Location loc,
                PatternRewriter &rewriter) {
@@ -144,7 +144,7 @@ getPtxOperands(const OperandsAndConstraints &operandsAndConstraints,
   return ptxOperands;
 }
 
-static std::string patchPtxAsm(Operation *op, std::string ptxAsm) {
+std::string patchPtxAsm(Operation *op, std::string ptxAsm) {
   std::vector<std::pair<int, int>> patchLocations;
   std::vector<std::string> patchValues;
   auto start = ptxAsm.find("#", 0);

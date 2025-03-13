@@ -94,9 +94,11 @@ static LogicalResult layoutPrint(RankedTensorType tensorType, raw_ostream &os) {
   return failure();
 }
 
-static LogicalResult printLayoutFromFile(MLIRContext *context, StringRef filename,
-                                  ArrayRef<std::string> names,
-                                  TensorType tensorTy, raw_string_ostream &ss) {
+static LogicalResult printLayoutFromFile(MLIRContext *context,
+                                         StringRef filename,
+                                         ArrayRef<std::string> names,
+                                         TensorType tensorTy,
+                                         raw_string_ostream &ss) {
   if (filename.empty())
     return success();
 
@@ -153,9 +155,9 @@ static LogicalResult printLayoutFromFile(MLIRContext *context, StringRef filenam
 }
 
 static LogicalResult printLayoutFromString(MLIRContext *context,
-                                    StringRef layoutAttrStr,
-                                    TensorType tensorTy,
-                                    raw_string_ostream &ss) {
+                                           StringRef layoutAttrStr,
+                                           TensorType tensorTy,
+                                           raw_string_ostream &ss) {
   if (layoutAttrStr.empty())
     return success();
 

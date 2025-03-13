@@ -100,7 +100,7 @@ TMemMessageTraits getTMemMessageFromAtom(const TMemAccessAtom &atom,
 // Only allows half of the thread registers to be used for tensor memory access
 // to avoid register pressure. This ensures the largest tmem message width is
 // used for the workload without inducing spills.
-static int getTMemMessageNarrowingFactor(int workloadThreadRegs) {
+int getTMemMessageNarrowingFactor(int workloadThreadRegs) {
   const int allowedRegUsage = maxRegisters / 2;
   int narrowingFactor = 1;
   while (workloadThreadRegs > allowedRegUsage) {
@@ -110,7 +110,7 @@ static int getTMemMessageNarrowingFactor(int workloadThreadRegs) {
   return narrowingFactor;
 }
 
-static int getEffectiveRegs(bool unpackedb16, bool useStridedMessage, int numRegs) {
+int getEffectiveRegs(bool unpackedb16, bool useStridedMessage, int numRegs) {
   // The effective register count is less when using unpacked or strided
   // messages
   if (unpackedb16) {
@@ -139,7 +139,7 @@ TMemMessageTraits constrainMessageFromWorkload(TMemMessageTraits m,
   return m;
 }
 
-static SmallVector<Value> packToI32(const SmallVector<Value> &values, Location loc,
+SmallVector<Value> packToI32(const SmallVector<Value> &values, Location loc,
                              ConversionPatternRewriter &rewriter) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value> packedValues;
@@ -311,7 +311,7 @@ void createTensorMemoryStore(Location loc, Value address,
   ptxBuilder.launch(rewriter, loc, voidTy);
 }
 
-static void createWaitOpSt(Location loc, ConversionPatternRewriter &rewriter) {
+void createWaitOpSt(Location loc, ConversionPatternRewriter &rewriter) {
   PTXBuilder ptxBuilder;
   std::string opcode = "tcgen05.wait::st.sync.aligned;";
   auto &wait = *ptxBuilder.create<PTXInstr>(opcode);
@@ -319,7 +319,7 @@ static void createWaitOpSt(Location loc, ConversionPatternRewriter &rewriter) {
   ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
 }
 
-static TMemMessageTraits selectTMemMessage(const TMemRuntimeInfo &info) {
+TMemMessageTraits selectTMemMessage(const TMemRuntimeInfo &info) {
   auto atom = info.useStridedMessage ? TMemAccess16x32bx2 : TMemAccess32x32b;
 
   int totalRegsNeeded =

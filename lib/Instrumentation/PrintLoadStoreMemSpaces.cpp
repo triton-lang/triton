@@ -37,8 +37,9 @@ static std::string LoadOrStoreMap(const BasicBlock::iterator &I) {
     throw std::runtime_error("Error: unknown operation type");
 }
 template <typename LoadOrStoreInst>
-static void InstrumentationFunction(const BasicBlock::iterator &I, const Function &F,
-                             const llvm::Module &M, uint32_t &LocationCounter) {
+static void InstrumentationFunction(const BasicBlock::iterator &I,
+                                    const Function &F, const llvm::Module &M,
+                                    uint32_t &LocationCounter) {
   auto LSI = dyn_cast<LoadOrStoreInst>(I);
   if (not LSI)
     return;

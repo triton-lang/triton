@@ -12,7 +12,7 @@ using namespace triton::AMD;
 namespace {
 
 // Utility function to determine if a scalar/tensor value is zero
-static bool isZero(Value v) {
+bool isZero(Value v) {
   if (auto constantOp = v.getDefiningOp<LLVM::ConstantOp>()) {
     if (auto attr = dyn_cast<IntegerAttr>(constantOp.getValue()))
       return attr.getValue().isZero();

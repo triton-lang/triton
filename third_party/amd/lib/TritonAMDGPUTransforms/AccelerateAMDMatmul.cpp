@@ -21,7 +21,7 @@ using mlir::triton::gpu::chooseScaledMfmaScaleLayout;
 namespace {
 using triton::AMD::ISAFamily;
 
-static int getMfmaVersion(ISAFamily isaFamily) {
+int getMfmaVersion(ISAFamily isaFamily) {
   switch (isaFamily) {
   case ISAFamily::CDNA1:
     return 1;
@@ -37,7 +37,7 @@ static int getMfmaVersion(ISAFamily isaFamily) {
   return 0;
 }
 
-static int getWmmaVersion(StringRef archGen) {
+int getWmmaVersion(StringRef archGen) {
   if (archGen.contains("gfx11"))
     return 1;
   if (archGen.contains("gfx12"))
@@ -45,7 +45,7 @@ static int getWmmaVersion(StringRef archGen) {
   return 0;
 }
 
-static FailureOr<ScaleDotElemType> mlirTypeToScaledElemType(Type type) {
+FailureOr<ScaleDotElemType> mlirTypeToScaledElemType(Type type) {
   return llvm::TypeSwitch<Type, FailureOr<ScaleDotElemType>>(type)
       .Case<Float8E4M3FNType>([](Type) { return ScaleDotElemType::E4M3; })
       .Case<Float8E5M2Type>([](Type) { return ScaleDotElemType::E5M2; })
@@ -57,7 +57,7 @@ static FailureOr<ScaleDotElemType> mlirTypeToScaledElemType(Type type) {
 
 // Check if the result of this tl.dot is used as opA of another tl.dot
 // in the same region
-static bool isChainDotHead(tt::DotOpInterface dotOp) {
+bool isChainDotHead(tt::DotOpInterface dotOp) {
   auto isInSameRegion = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion();
   };
@@ -79,7 +79,7 @@ static bool isChainDotHead(tt::DotOpInterface dotOp) {
 
 // Check if the opA of this tl.dot is the result of another tl.dot
 // in the same region
-static bool isChainDotTail(tt::DotOpInterface dotOp) {
+bool isChainDotTail(tt::DotOpInterface dotOp) {
   auto isInSameRegion = [&dotOp](Operation *op) {
     return op->getParentRegion() == dotOp->getParentRegion();
   };
