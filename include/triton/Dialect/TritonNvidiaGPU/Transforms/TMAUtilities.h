@@ -11,6 +11,23 @@ namespace mlir::triton::nvidia_gpu {
 constexpr inline int TMA_SIZE_BYTES = 128;
 constexpr inline int TMA_ALIGN = 128;
 
+inline bool isFp4Padded(Attribute encoding) {
+  auto mmaEnc = dyn_cast<gpu::NVMMASharedEncodingAttr>(encoding);
+  return mmaEnc && mmaEnc.getFp4Padded();
+}
+
+template <typename BuilderT>
+inline SmallVector<Value> translateTMAIndices(BuilderT &builder, Location loc,
+                                              Attribute encoding,
+                                              SmallVector<Value> indices) {
+  if (isFp4Padded(encoding)) {
+    auto two = builder.template create<arith::ConstantIntOp>(loc, 2, 32);
+    indices.back() =
+        builder.template create<arith::MulIOp>(loc, indices.back(), two);
+  }
+  return indices;
+}
+
 inline gpu::CTALayoutAttr updateCTALayoutForShape(gpu::CTALayoutAttr ctaLayout,
                                                   ArrayRef<int64_t> shape) {
   auto rank = shape.size();
@@ -115,7 +132,8 @@ mlir::LogicalResult createTMADesc(mlir::Value tmaPtr,
       op.getType().getBlockType().getEncoding());
   bool fp4Padded = mmaEncoding && mmaEncoding.getFp4Padded();
 
-  int32_t contig_dim_size = op.getTensorShape().back();
+  int paddingScale = fp4Padded ? 2 : 1;
+  int32_t contig_dim_size = op.getTensorShape().back() * paddingScale;
   int32_t contig_dim_size_in_bytes = contig_dim_size * elemSize;
   if (contig_dim_size_in_bytes > 128) {
     contig_dim_size = 128 / elemSize;
@@ -158,6 +176,12 @@ mlir::LogicalResult createTMADesc(mlir::Value tmaPtr,
   SmallVector<Value> globalStride;
   for (int k = op.getStrides().size() - 2; k >= 0; --k) {
     globalStride.push_back(op.getStrides()[k]);
+  }
+
+  if (fp4Padded) {
+    // Convert number of bytes to number of mxfp4 elements
+    globalDim[0] = builder.template create<arith::MulIOp>(loc, globalDim[0],
+                                                          mkI32Constant(2));
   }
 
   SmallVector<Value> elementStride(globalDim.size(), mkI32Constant(1));

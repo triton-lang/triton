@@ -1,3 +1,4 @@
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Support/LogicalResult.h"
@@ -110,10 +111,14 @@ public:
 
   LogicalResult matchAndRewrite(ExperimentalDescriptorLoadOp op,
                                 PatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
     auto createLoad = [&](Value tmaPtr, Value barrierAlloc, Value alloc,
                           Value pred) {
+      auto indices = translateTMAIndices(
+          rewriter, op.getLoc(),
+          op.getDesc().getType().getBlockType().getEncoding(), op.getIndices());
       rewriter.create<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp>(
-          op.getLoc(), tmaPtr, op.getIndices(), barrierAlloc, alloc, pred);
+          op.getLoc(), tmaPtr, indices, barrierAlloc, alloc, pred);
     };
     lowerTMALoad(op, op.getType(), op.getDesc(), createLoad, rewriter);
     return success();
@@ -166,8 +171,11 @@ struct TMAStoreLowering
   LogicalResult matchAndRewrite(ExperimentalDescriptorStoreOp op,
                                 PatternRewriter &rewriter) const override {
     auto createStore = [&](Value tmaPtr, Value alloc) {
+      auto indices = translateTMAIndices(
+          rewriter, op.getLoc(),
+          op.getDesc().getType().getBlockType().getEncoding(), op.getIndices());
       rewriter.create<triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp>(
-          op.getLoc(), tmaPtr, op.getIndices(), alloc);
+          op.getLoc(), tmaPtr, indices, alloc);
     };
     lowerTMAStore(op, op.getSrc(), op.getDesc(), createStore, rewriter);
     return success();

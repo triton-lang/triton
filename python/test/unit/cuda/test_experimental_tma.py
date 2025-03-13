@@ -1379,7 +1379,7 @@ def mxfp8_mxfp4_matmul_tma(  #
 
     b_desc = tl._experimental_make_tensor_descriptor(
         b_ptr,
-        shape=[N, K],
+        shape=[N, K // 2],
         strides=[K // 2, 1],
         block_shape=[BLOCK_N, BLOCK_K // 2],
     )
@@ -1393,7 +1393,7 @@ def mxfp8_mxfp4_matmul_tma(  #
         accumulator = tl.dot_scaled(a, scale_a, "e5m2", b.T, scale_b, "e2m1", accumulator)
         a_ptrs += BLOCK_K * stride_ak
 
-        offs_bk += BLOCK_K
+        offs_bk += b_desc.block_shape[-1]
         a_scale_ptr += BLOCK_K // 32
         b_scale_ptr += BLOCK_K // 32
 
@@ -1405,11 +1405,9 @@ def mxfp8_mxfp4_matmul_tma(  #
 
 
 @requires_tma
-@pytest.mark.parametrize("M, N, K", [(1024, 512, 256), (128, 256, 256)])
-@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 256), (128, 256, 256)])
-# TODO: BLOCK_K == 128
-#@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (128, 128, 256), (128, 256, 128),
-#                                                       (128, 256, 256)])
+@pytest.mark.parametrize("M, N, K", [(1024, 512, 256), (128, 256, 256), (8192, 8192, 8192)])
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (128, 128, 256), (128, 256, 128),
+                                                       (128, 256, 256)])
 @pytest.mark.parametrize("NUM_STAGES", [1, 3])
 def test_mxfp8_mxfp4_matmul_tma(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, device):
     if BLOCK_N == 256 and BLOCK_K == 256:

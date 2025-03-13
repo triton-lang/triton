@@ -415,14 +415,19 @@ void createTMAAsyncLoad(scf::ForOp forOp,
                         tt::ExperimentalDescriptorLoadOp loadOp, Value alloc,
                         Value insertIdx, Value extractIdx, Value barrier,
                         Operation *waitOp, CoarseSchedule &schedule) {
-  return createTMAAsyncCopy(forOp, loadOp, loadOp.getDesc(), alloc, insertIdx,
-                            extractIdx, barrier, waitOp, schedule,
-                            [&](OpBuilderForStage &builder, Value tmaPtr,
-                                Value barrier, Value view, Value pred) {
-                              builder.create<ttng::AsyncTMACopyGlobalToLocalOp>(
-                                  loadOp.getLoc(), tmaPtr, loadOp.getIndices(),
-                                  barrier, view, pred);
-                            });
+  return createTMAAsyncCopy(
+      forOp, loadOp, loadOp.getDesc(), alloc, insertIdx, extractIdx, barrier,
+      waitOp, schedule,
+      [&](OpBuilderForStage &builder, Value tmaPtr, Value barrier, Value view,
+          Value pred) {
+        auto loc = loadOp.getLoc();
+        auto indices = ttng::translateTMAIndices(
+            builder, loadOp.getLoc(),
+            loadOp.getDesc().getType().getBlockType().getEncoding(),
+            loadOp.getIndices());
+        builder.create<ttng::AsyncTMACopyGlobalToLocalOp>(
+            loadOp.getLoc(), tmaPtr, indices, barrier, view, pred);
+      });
 }
 
 void createTMAAsyncGather(scf::ForOp forOp,
