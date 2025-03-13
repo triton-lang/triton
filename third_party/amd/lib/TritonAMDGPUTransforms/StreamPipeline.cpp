@@ -355,7 +355,7 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
 
 // Returns the given |inputValue|'s dot user result encoding and updates |opIdx|
 // with which dot operand |inputValue| is fed into if possible.
-ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue, unsigned *opIdx) {
+static ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue, unsigned *opIdx) {
   if (!llvm::hasSingleElement(inputValue.getUses()))
     return nullptr;
 
@@ -907,7 +907,7 @@ template <typename TargetOpType> Operation *passPrevUnaryOps(Value value) {
 // Annotate each `tt.LoadOp` instruction with its corresponding gemm operand
 // index. Note, this is a part of the instruction scheduling routine. Currently,
 // we support `forOp`s which contain only a single `tt.DotOp` in the bodies.
-void labelLoadOpsForTritonDot(scf::ForOp forOp) {
+static void labelLoadOpsForTritonDot(scf::ForOp forOp) {
   mlir::MLIRContext *ctx = forOp->getContext();
   if (auto dotOp = tt::getSingleDotOpIfExists(forOp)) {
     for (auto [opIdx, dotOperand] : llvm::enumerate(dotOp->getOperands())) {

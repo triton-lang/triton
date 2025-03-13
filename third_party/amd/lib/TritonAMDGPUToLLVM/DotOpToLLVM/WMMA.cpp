@@ -156,7 +156,7 @@ Value generateROCDLOp(ConversionPatternRewriter &rewriter, Location loc,
   return Value();
 }
 
-std::string getTypeStr(Type ty) {
+static std::string getTypeStr(Type ty) {
   std::string scalarName;
   if (ty.isF32()) {
     scalarName = "f32";

@@ -100,7 +100,7 @@ TMemMessageTraits getTMemMessageFromAtom(const TMemAccessAtom &atom,
 // Only allows half of the thread registers to be used for tensor memory access
 // to avoid register pressure. This ensures the largest tmem message width is
 // used for the workload without inducing spills.
-int getTMemMessageNarrowingFactor(int workloadThreadRegs) {
+static int getTMemMessageNarrowingFactor(int workloadThreadRegs) {
   const int allowedRegUsage = maxRegisters / 2;
   int narrowingFactor = 1;
   while (workloadThreadRegs > allowedRegUsage) {
@@ -110,7 +110,7 @@ int getTMemMessageNarrowingFactor(int workloadThreadRegs) {
   return narrowingFactor;
 }
 
-int getEffectiveRegs(bool unpackedb16, bool useStridedMessage, int numRegs) {
+static int getEffectiveRegs(bool unpackedb16, bool useStridedMessage, int numRegs) {
   // The effective register count is less when using unpacked or strided
   // messages
   if (unpackedb16) {
@@ -139,7 +139,7 @@ TMemMessageTraits constrainMessageFromWorkload(TMemMessageTraits m,
   return m;
 }
 
-SmallVector<Value> packToI32(const SmallVector<Value> &values, Location loc,
+static SmallVector<Value> packToI32(const SmallVector<Value> &values, Location loc,
                              ConversionPatternRewriter &rewriter) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   SmallVector<Value> packedValues;
@@ -319,7 +319,7 @@ static void createWaitOpSt(Location loc, ConversionPatternRewriter &rewriter) {
   ptxBuilder.launch(rewriter, loc, void_ty(rewriter.getContext()));
 }
 
-TMemMessageTraits selectTMemMessage(const TMemRuntimeInfo &info) {
+static TMemMessageTraits selectTMemMessage(const TMemRuntimeInfo &info) {
   auto atom = info.useStridedMessage ? TMemAccess16x32bx2 : TMemAccess32x32b;
 
   int totalRegsNeeded =

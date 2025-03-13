@@ -79,7 +79,7 @@ static cl::opt<std::string> TensorStr(
 // Helper functions
 //===--------------------------------------------------------------------===//
 
-LogicalResult layoutPrint(RankedTensorType tensorType, raw_ostream &os) {
+static LogicalResult layoutPrint(RankedTensorType tensorType, raw_ostream &os) {
   // DistributedEncodingTrait and SharedEncodingTrait implements the
   // toLinearLayout interface.
   mlir::Attribute layout = tensorType.getEncoding();
@@ -94,7 +94,7 @@ LogicalResult layoutPrint(RankedTensorType tensorType, raw_ostream &os) {
   return failure();
 }
 
-LogicalResult printLayoutFromFile(MLIRContext *context, StringRef filename,
+static LogicalResult printLayoutFromFile(MLIRContext *context, StringRef filename,
                                   ArrayRef<std::string> names,
                                   TensorType tensorTy, raw_string_ostream &ss) {
   if (filename.empty())
@@ -152,7 +152,7 @@ LogicalResult printLayoutFromFile(MLIRContext *context, StringRef filename,
   return success();
 }
 
-LogicalResult printLayoutFromString(MLIRContext *context,
+static LogicalResult printLayoutFromString(MLIRContext *context,
                                     StringRef layoutAttrStr,
                                     TensorType tensorTy,
                                     raw_string_ostream &ss) {

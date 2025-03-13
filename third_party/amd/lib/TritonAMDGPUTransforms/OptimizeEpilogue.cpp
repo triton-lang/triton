@@ -37,7 +37,7 @@ using namespace mlir;
 
 namespace {
 
-bool isOneOperandElementwiseOp(Operation *op) {
+static bool isOneOperandElementwiseOp(Operation *op) {
   if (llvm::isa<arith::ExtFOp, arith::ExtSIOp, arith::ExtUIOp, arith::FPToSIOp,
                 arith::FPToUIOp, arith::NegFOp, arith::SIToFPOp,
                 arith::TruncFOp, arith::TruncIOp, arith::UIToFPOp>(op))
