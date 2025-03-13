@@ -945,6 +945,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %24 = ttg.memdesc_subview %22[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x64x128xf16, #shared1, #ttg.shared_memory, mutable> -> !ttg.memdesc<64x128xf16, #shared1, #ttg.shared_memory, mutable>
     %99 = tt.splat %arg2 : !tt.ptr<f32> -> tensor<128x1x!tt.ptr<f32>, #mma>
     %100 = tt.broadcast %99 : tensor<128x1x!tt.ptr<f32>, #mma> -> tensor<128x128x!tt.ptr<f32>, #mma>
+    %101 = tt.load %100: tensor<128x128x!tt.ptr<f32>, #mma>
     %25:6 = scf.for %arg5 = %c0_i32 to %c64_i32 step %c1_i32 iter_args(%arg6 = %cst, %arg7 = %13, %arg8 = %20, %arg9 = %c0_i32, %arg10 = %23, %arg11 = %24) -> (tensor<128x128xf32, #mma>, tensor<128x64x!tt.ptr<f16>, #blocked1>, tensor<64x128x!tt.ptr<f16>, #blocked>, i32, !ttg.memdesc<128x64xf16, #shared, #ttg.shared_memory, mutable>, !ttg.memdesc<64x128xf16, #shared1, #ttg.shared_memory, mutable>)  : i32 {
       %26 = tt.addptr %arg7, %cst_1 : tensor<128x64x!tt.ptr<f16>, #blocked1>, tensor<128x64xi32, #blocked1>
       %27 = tt.load %26 : tensor<128x64x!tt.ptr<f16>, #blocked1>
@@ -955,9 +956,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       %32 = tt.dot %30, %31, %arg6 : tensor<128x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<128x128xf32, #mma>
       %33 = ttg.local_alloc  : () -> !ttg.memdesc<1x128x128xf32, #shared, #ttg.shared_memory, mutable>
       %34 = ttg.memdesc_subview %33[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<1x128x128xf32, #shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<128x128xf32, #shared, #ttg.shared_memory, mutable>
-      ttg.local_store %99, %34 : tensor<128x128xf32, #mma> -> !ttg.memdesc<128x128xf32, #shared, #ttg.shared_memory, mutable>
+      ttg.local_store %101, %34 : tensor<128x128xf32, #mma> -> !ttg.memdesc<128x128xf32, #shared, #ttg.shared_memory, mutable>
       %35 = ttg.local_load %34 : !ttg.memdesc<128x128xf32, #shared, #ttg.shared_memory, mutable> -> tensor<128x128xf32, #mma>
-      %36 = arith.addf %32, %35
+      %36 = arith.addf %32, %35: tensor<128x128xf32, #mma>
       %37 = arith.addi %arg9, %c1_i32 : i32
       %38 = arith.cmpi slt, %37, %c1_i32 : i32
       %39 = arith.select %38, %37, %c0_i32 : i32
