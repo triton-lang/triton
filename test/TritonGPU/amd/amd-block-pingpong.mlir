@@ -895,33 +895,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   }
 }
 
+
 // -----
-//CHECK-LABEL: pingpong_medium_load_iter
-//CHECK: ttg.local_load
-//CHECK: ttg.local_load
-//CHECK: rocdl.sched.barrier
-//CHECK: tt.load
-//CHECK: rocdl.sched.barrier
-//CHECK: ttg.local_load
-//CHECK: ttg.local_load
-//CHECK: rocdl.sched.barrier
-//CHECK: tt.load
-//CHECK: rocdl.s.barrier
-//CHECK: rocdl.sched.barrier
-//CHECK: rocdl.s.setprio 1
-//CHECK: tt.dot
-//CHECK: rocdl.s.setprio 0
-//CHECK: gpu.barrier
-//CHECK: rocdl.sched.barrier
-//CHECK: ttg.local_store
-//CHECK: ttg.local_store
-//CHECK: gpu.barrier
-//CHECK: rocdl.sched.barrier
-//CHECK: rocdl.s.setprio 1
-//CHECK: tt.dot
-//CHECK: rocdl.s.setprio 0
-//CHECK: gpu.barrier
-//CHECK: rocdl.sched.barrier
+//CHECK-LABEL: pingpong_reject_small_three_load
+// CHECK-COUNT-3: local_load
+// CHECK-NOT: local_load
+// CHECK-NOT: setprio
+// CHECK-NOT: barrier
 
 
 #blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [1, 4], order = [0, 1]}>
@@ -985,14 +965,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       ttg.local_store %29, %41 : tensor<64x128xf16, #blocked> -> !ttg.memdesc<64x128xf16, #shared1, #ttg.shared_memory, mutable>
       scf.yield %36, %26, %28, %39, %40, %41: tensor<128x128xf32, #mma>, tensor<128x64x!tt.ptr<f16>, #blocked1>, tensor<64x128x!tt.ptr<f16>, #blocked>, i32, !ttg.memdesc<128x64xf16, #shared, #ttg.shared_memory, mutable>, !ttg.memdesc<64x128xf16, #shared1, #ttg.shared_memory, mutable>
     }
-    %17 = ttg.local_load %16#4 : !ttg.memdesc<256x64xf16, #shared, #smem, mutable> -> tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
-    %18 = ttg.local_load %16#5 : !ttg.memdesc<64x128xf16, #shared1, #smem, mutable> -> tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
-    %19 = tt.dot %17, %18, %16#2, inputPrecision = tf32 : tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>> * tensor<64x128xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>> -> tensor<256x128xf32, #mma>
-    ttg.local_dealloc %10 : !ttg.memdesc<1x256x64xf16, #shared, #smem, mutable>
-    ttg.local_dealloc %11 : !ttg.memdesc<1x64x128xf16, #shared1, #smem, mutable>
-    %20 = arith.truncf %19 : tensor<256x128xf32, #mma> to tensor<256x128xf16, #mma>
-    %21 = tt.splat %arg2 : !tt.ptr<f16> -> tensor<256x128x!tt.ptr<f16>, #mma>
-    tt.store %21, %20 : tensor<256x128x!tt.ptr<f16>, #mma>
+    ttg.local_dealloc %21 : !ttg.memdesc<1x128x64xf16, #shared, #ttg.shared_memory, mutable>
+    ttg.local_dealloc %22 : !ttg.memdesc<1x64x128xf16, #shared1, #ttg.shared_memory, mutable>
     tt.return
   }
 }
