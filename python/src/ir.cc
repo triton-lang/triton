@@ -1819,6 +1819,8 @@ void init_triton_ir(py::module &&m) {
         // diagnostics
 
         auto *context = mod.getContext();
+        if (::triton::tools::getBoolEnv("MLIR_DISABLE_MULTITHREADING"))
+          context->disableMultithreading();
 
         auto reproducerPath =
             triton::tools::getStrEnv("TRITON_REPRODUCER_PATH");
