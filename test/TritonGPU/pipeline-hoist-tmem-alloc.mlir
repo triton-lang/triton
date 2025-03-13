@@ -47,7 +47,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK-LABEL: @changed_acc
   // CHECK-DAG: %[[TRUE:.*]] = arith.constant true
   // CHECK-DAG: %[[C0:.*]] = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked1>
-  // CHECK-DAG: %[[CND:.*]] = "cnd"() : () -> i1
   // CHECK: %[[ACC_TM:.*]] = ttng.tmem_alloc{{.*}}: ()
   // CHECK: ttng.tmem_store %[[C0]], %[[ACC_TM]]
   // CHECK: scf.for
