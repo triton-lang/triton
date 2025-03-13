@@ -259,14 +259,8 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   Value lane = tb.urem(thread, warpSize);
 
   auto warpOrder = getWarpOrder(mfmaLayout, shape);
-  //llvm::outs() << "opIdx = " << opIdx << "\n";
-  //llvm::outs() << "  warpOrder = ";
-  //printVec(warpOrder);
-  //llvm::outs() << "  shape = ";
-  //printVec(shape);
   warpOrder[0] = 1;
   warpOrder[1] = 0;
-
 
   Value spatialWarpId = AMD::getWarpIdInBlock(
       rewriter, loc, linearWarpId, warpsPerCTA, mfmaInstrNonK,
