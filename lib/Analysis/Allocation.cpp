@@ -389,7 +389,8 @@ private:
       func.walk([&](gpu::WarpSpecializeOp op) {
         numWarpIndices = std::max(numWarpIndices, op.getTotalPartitionWarps());
       });
-      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, numWarpIndices, 4);
+      maybeAddScratchBuffer<BufferT::BufferKind::Scratch>(op, numWarpIndices,
+                                                          4);
       return;
     }
     unsigned bytes = scratchSizeGetter(op);
@@ -494,8 +495,8 @@ private:
       } else {
         for (auto interval : ranges) {
           // Create Alias Buffer for each disjoint interval
-          BufferT *aliasBuf = allocation->addAlias(
-              value, buffer->size, buffer->alignment);
+          BufferT *aliasBuf =
+              allocation->addAlias(value, buffer->size, buffer->alignment);
           updateBufferRange(aliasBuf, interval);
           for (auto buffer : buffers)
             aliasBuf->aliases.push_back(buffer);
@@ -734,16 +735,16 @@ private:
               auto xOpRange = bufferRange.lookup(x);
               auto yOpRange = bufferRange.lookup(y);
 
-              // Buffers interfere if their allocation offsets overlap and they are
-              // live at the same time.
+              // Buffers interfere if their allocation offsets overlap and they
+              // are live at the same time.
               if (xOpRange.intersects(yOpRange) &&
                   xSizeRange.intersects(ySizeRange)) {
                 interference[x].insert(y);
               }
 
-              // Buffers also interfere if their allocation offsets overlap and they
-              // exist within regions that may execute simultaneously with respect to
-              // each other.
+              // Buffers also interfere if their allocation offsets overlap and
+              // they exist within regions that may execute simultaneously with
+              // respect to each other.
               auto xOwner = x->owner;
               auto yOwner = yActual->owner;
               auto wsx = xOwner->getParentWithTrait<OpTrait::AsyncRegions>();

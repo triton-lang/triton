@@ -277,7 +277,8 @@ private:
   BufferT *addAlias(Value key, size_t size, size_t alignment) {
     BufferId nextId = bufferIdCounter++;
     auto [it, inserted] = bufferSet.insert_or_assign(
-        nextId, BufferT(BufferT::BufferKind::Alias, nextId, nullptr, size, alignment));
+        nextId,
+        BufferT(BufferT::BufferKind::Alias, nextId, nullptr, size, alignment));
     BufferT *buffer = &it->second;
     valueBuffer[key] = buffer;
     return buffer;
