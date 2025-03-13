@@ -343,7 +343,7 @@ jobs:
       matrix:
         runner: ${{fromJson(needs.Runner-Preparation.outputs.matrix-HIP)}}
 
-    name: Integration-Tests (${{matrix.runner[1] == 'gfx90a' && 'mi210' || 'mi300x'}})
+    name: Integration-Tests (${{matrix.runner[1] == 'gfx90a' || 'gfx942'}})
 
     container:
       image: rocm/pytorch:rocm6.2.2_ubuntu22.04_py3.10_pytorch_2.5.1_asan

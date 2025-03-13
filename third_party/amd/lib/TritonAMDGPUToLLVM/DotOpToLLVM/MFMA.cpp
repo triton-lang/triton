@@ -400,7 +400,7 @@ struct DotOpMFMAConversionHelper {
       }
       if (type.getIntOrFloatBitWidth() == 8) {
         if (1 == kBase) {
-          // This is only for the scale operands of scaled mfma on MI350
+          // This is only for the scale operands of scaled mfma on CDNA4
           if (isConstantScale) {
             // If the scale is constant(created by arith::ConstantOp), it will
             // be put in a sgpr instead of vgpr. In that case, instead of
@@ -414,12 +414,12 @@ struct DotOpMFMAConversionHelper {
           }
         }
         if (4 == kBase)
-          // This is for int8 on pre- MI300 GPUs
+          // This is for int8 on pre- CDNA3 GPUs
           results.push_back(b.bitcast(vec, i32_ty));
         if (8 == kBase)
           results.push_back(b.bitcast(vec, i64_ty));
         if (16 == kBase)
-          // This is only for the operands of scaled mfma on MI350
+          // This is only for the operands of scaled mfma on CDNA4
           results.push_back(b.bitcast(vec, vec_ty(i32_ty, 4)));
         if (32 == kBase)
           results.push_back(b.bitcast(vec, vec_ty(i32_ty, 8)));

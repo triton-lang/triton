@@ -25,7 +25,7 @@ namespace {
 //===----------------------------------------------------------------------===//
 
 // FP8E5M2 is the open-compute standard FP8E5M2 format. NVIDIA GPU supports it
-// natively but we don't have hardware native support on MI300.
+// natively but we don't have hardware native support on CDNA3.
 //
 // The SW based downcast with RTNE is not fully functional for the denorm
 // values. We need rewrite it if we need to emulate this data type on AMDGPU.
