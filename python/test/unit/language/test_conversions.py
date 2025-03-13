@@ -342,7 +342,7 @@ def test_typeconvert_downcast(src_dtype, dst_dtype, rounding, max_repr, device):
 
     if is_hip():
         if dst_dtype == 'float8e5' and rounding == 'rtne' and not is_hip_cdna4():
-            pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on MI350")
+            pytest.skip(f"{dst_dtype} downcast with RTNE rounding tests only supported on CDNA4")
 
         if dst_dtype == 'float8e4nv':
             if not rounding == 'rtne':
