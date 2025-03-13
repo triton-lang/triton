@@ -42,48 +42,6 @@ static auto createInPartition(ImplicitLocOpBuilder &b, Partition &partition,
   return op;
 }
 
-// Get a generic shared encoding for a tensor.
-static SharedEncodingTrait getSharedEncoding(RankedTensorType ty) {
-  auto ctaLayout = getCTALayout(ty.getEncoding());
-  auto order = getOrder(ty);
-  // Use generic layout. This won't be optimal for 2D tensors.
-  return SwizzledSharedEncodingAttr::get(ty.getContext(), 1, 1, 1, order,
-                                         ctaLayout);
-}
-
-// Erase the given loop carried values from the loop, where `loop` is replaced
-// with a new loop.
-static void eraseLoopCarriedValues(scf::ForOp &loop, llvm::BitVector indices) {
-  // Pad the indices in case new arguments were added.
-  while (indices.size() != loop.getInitArgs().size())
-    indices.push_back(false);
-
-  loop.getBody()->getTerminator()->eraseOperands(indices);
-  loop.getBody()->eraseArguments([&](BlockArgument arg) {
-    int idx = arg.getArgNumber();
-    return idx != 0 && indices.test(idx - 1);
-  });
-
-  llvm::BitVector loopOperandIndices(loop->getNumOperands());
-  for (auto [i, operand] : llvm::enumerate(loop.getInitArgsMutable())) {
-    if (indices.test(i))
-      loopOperandIndices.set(operand.getOperandNumber());
-  }
-  loop->eraseOperands(loopOperandIndices);
-
-  // Rewrite the loop to erase results.
-  OperationState state(loop.getLoc(), loop->getName(), loop->getOperands(),
-                       loop.getInitArgs().getTypes(), loop->getAttrs());
-  state.addRegion()->takeBody(loop.getBodyRegion());
-
-  OpBuilder b(loop);
-  auto newLoop = cast<scf::ForOp>(b.create(state));
-  loop->replaceAllUsesWith(
-      newLoop.getResults().take_front(loop.getNumResults()));
-  loop.erase();
-  loop = newLoop;
-}
-
 //===----------------------------------------------------------------------===//
 // Multiplicity
 //===----------------------------------------------------------------------===//
@@ -232,7 +190,7 @@ void Multiplicity::number(
       segmentStart += node->depth;
       ++number;
       if (!dfs.empty())
-        trace.resize(dfs.back()->depth - 1);
+        trace.resize(dfs.back()->depth);
     }
   }
 }
@@ -348,11 +306,7 @@ void DependencyRewriter::resolveOutputMultiplicity(
   for (UseInfo &info : llvm::make_second_range(useInfo)) {
     for (auto [key, uses] : info.consumers) {
       auto [usePartition, distance] = key;
-      if (usePartition == &partition) {
-        // A partition using its own output won't be split across partitions.
-        assert(distance > 0 && "self recursion must occur in the future");
-        continue;
-      }
+      assert(usePartition != &partition && "unexpected self-recursion");
       if (distance == 0) {
         // This is a use of the output in the current iteration.
         continue;
@@ -372,8 +326,6 @@ AsyncRef DependencyRewriter::allocateAsyncValue(RankedTensorType tensorType,
   Value readyBars = createScalarAlloc(b, b.getI64Type(), numBars);
   Value emptyBars = createScalarAlloc(b, b.getI64Type(), numBars);
   auto allocType = cast<MemDescType>(alloc.getType());
-  endBuilder.create<LocalDeallocOp>(readyBars);
-  endBuilder.create<LocalDeallocOp>(emptyBars);
   return AsyncRef{multiplicitySize,
                   maxDistance,
                   alloc,
@@ -449,6 +401,11 @@ LogicalResult DependencyRewriter::run() {
     auto &useInfo = partitionUseInfo.emplace_back();
     auto callback = [&](OpResult output, OpOperand &use, unsigned distance) {
       Partition *usePartition = schedule.getPartition(use.getOwner());
+      // Ignore uses in the same partition in the future.
+      if (usePartition == &partition) {
+        assert(distance > 0 && "self-recursion must occur in the future");
+        return;
+      }
       UseInfo &info = useInfo[output];
       info.consumers[{usePartition, distance}].push_back(&use);
     };
@@ -457,7 +414,6 @@ LogicalResult DependencyRewriter::run() {
   }
 
   // Cut all SSA dependencies by passing outputs through shared memory.
-  llvm::BitVector toErase(yield.getNumOperands());
   for (auto [partition, useInfo] :
        llvm::zip(schedule.getPartitions(), partitionUseInfo)) {
     // The amount of buffering is based on the longest distance to a user.
@@ -498,6 +454,9 @@ LogicalResult DependencyRewriter::run() {
         initializeBarriers(multiplicitySize + i, aref, numConsumers,
                            /*init=*/Value());
       }
+      // Deallocate shared memory after the buffers are deinitialized.
+      endBuilder.create<LocalDeallocOp>(aref.readyBars);
+      endBuilder.create<LocalDeallocOp>(aref.emptyBars);
 
       for (auto &[key, uses] : info.consumers) {
         assert(!uses.empty() && "expected at least one use");
@@ -511,7 +470,6 @@ LogicalResult DependencyRewriter::run() {
             return;
           unsigned argIdx =
               cast<BlockArgument>(uses.front()->get()).getArgNumber() - 1;
-          toErase.set(argIdx);
           Multiplicity::Node *node =
               info->multiplicity.nodes.find(argIdx)->second.get();
           auto [start, end] = info->multiplicity.segments[node->number];
@@ -552,8 +510,9 @@ LogicalResult DependencyRewriter::run() {
     }
   }
 
-  // Erase unneeded loop-carried values.
-  eraseLoopCarriedValues(loop, std::move(toErase));
+  // Rewrite the loop to add the new results. Calling this function with no
+  // indices set will just resize the results.
+  eraseLoopCarriedValues(loop, {});
 
   // Update the schedule.
   schedule.serialize(loop);

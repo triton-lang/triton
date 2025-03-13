@@ -26,8 +26,6 @@ static constexpr char kPartitionStagesAttrName[] = "ttg.partition.stages";
 //===----------------------------------------------------------------------===//
 
 namespace mlir::triton::gpu {
-struct PartitionGraph;
-
 // A warp schedule divides a loop into multiple partitions. Ops in a loop are
 // assigned at most one partition. A warp schedule represents asynchronous
 // execution of the loop body, where partitions may execute simultaneously.
@@ -61,14 +59,18 @@ public:
   Partition *getPartition(Operation *op);
   // Get the partition the op belongs to.
   const Partition *getPartition(Operation *op) const;
+  // Get the partition at the index.
+  Partition *getPartition(unsigned idx);
+  // Get the partition at the index.
+  const Partition *getPartition(unsigned idx) const;
   // Return an iterator range over the partitions.
   auto getPartitions() { return llvm::make_pointee_range(partitions); }
   // Return an iterator range over the partitions.
   auto getPartitions() const { return llvm::make_pointee_range(partitions); }
   // Get the root partition.
-  Partition *getRootPartition() { return &rootPartition; }
+  Partition *getRootPartition() { return rootPartition.get(); }
   // Get the root partition.
-  const Partition *getRootPartition() const { return &rootPartition; }
+  const Partition *getRootPartition() const { return rootPartition.get(); }
 
   // Deserialize a warp schedule from an `scf.for` op using the attributes
   // tagged on operations in its body.
@@ -78,7 +80,9 @@ public:
   void serialize(scf::ForOp loop) const;
   // Verify that the warp schedule is valid by checking the SSA dependencies
   // between the schedules.
-  FailureOr<PartitionGraph> verify(scf::ForOp loop) const;
+  LogicalResult verify(scf::ForOp loop) const;
+  // Remove partition attributes.
+  static void eraseFrom(scf::ForOp loop);
 
   // Iterate the inputs of the partition. Input values are those that originate
   // from a different partition or a previous iteration of the current
@@ -111,53 +115,9 @@ private:
   // The root partition contains operations that are not assigned to a
   // partition. Operations not assigned to partitions are assumed to be "free"
   // and can be cloned as necessary.
-  Partition rootPartition = Partition(kSentinel, kSentinel);
+  std::unique_ptr<Partition> rootPartition =
+      std::make_unique<Partition>(kSentinel, kSentinel);
 };
-
-//===----------------------------------------------------------------------===//
-// PartitionGraph
-//===----------------------------------------------------------------------===//
-
-// A temporary node structure that can be used to build a graph of partitions.
-// The consumers have to be precomputed in order for the SCC iterator to have an
-// acceptable runtime complexity. This assumes the underlying loop is immutable.
-struct PartitionNode {
-  PartitionNode(const WarpSchedule::Partition *partition)
-      : partition(partition) {}
-
-  // The partition this node represents.
-  const WarpSchedule::Partition *partition;
-  // Partitions that consume the outputs of this partition.
-  SmallVector<std::pair<const PartitionNode *, OpOperand *>> consumers;
-};
-
-// A graph of partitions that can be used to check for cycles and other schedule
-// invariants.
-struct PartitionGraph {
-  PartitionGraph(scf::ForOp loop, const WarpSchedule &schedule);
-
-  PartitionNode root;
-  llvm::MapVector<const WarpSchedule::Partition *, PartitionNode> nodes;
-};
-
 } // namespace mlir::triton::gpu
-
-namespace llvm {
-template <> struct GraphTraits<mlir::triton::gpu::PartitionGraph> {
-  using NodeRef =
-      std::pair<const mlir::triton::gpu::PartitionNode *, mlir::OpOperand *>;
-  static NodeRef getEntryNode(const mlir::triton::gpu::PartitionGraph &graph) {
-    return {&graph.root, nullptr};
-  }
-
-  using ChildIteratorType = SmallVector<NodeRef>::const_iterator;
-  static ChildIteratorType child_begin(NodeRef node) {
-    return node.first->consumers.begin();
-  }
-  static ChildIteratorType child_end(NodeRef node) {
-    return node.first->consumers.end();
-  }
-};
-} // namespace llvm
 
 #endif // TRITON_TRITONGPU_TRANSFORM_PIPELINE_PARTITION_H_

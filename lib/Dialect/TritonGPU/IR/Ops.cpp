@@ -687,6 +687,18 @@ LogicalResult WarpSpecializeOp::verify() {
   return success();
 }
 
+void WarpSpecializeOp::build(OpBuilder &builder, OperationState &state,
+                             TypeRange resultTypes,
+                             ArrayRef<int32_t> partitionNumWarps,
+                             unsigned partitionNumRegions) {
+  build(builder, state, resultTypes, /*explicitCaptures=*/ValueRange(),
+        partitionNumWarps, /*warpGroupStartIds=*/{});
+  OpBuilder::InsertionGuard guard(builder);
+  Block *container = builder.createBlock(state.regions.back().get());
+  builder.create<WarpSpecializePartitionsOp>(state.location,
+                                             partitionNumRegions);
+}
+
 ParseResult WarpSpecializeOp::parse(OpAsmParser &p, OperationState &result) {
   SmallVector<OpAsmParser::UnresolvedOperand> operands;
   SMLoc operandLoc = p.getCurrentLocation();

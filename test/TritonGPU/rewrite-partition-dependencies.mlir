@@ -162,12 +162,12 @@ tt.func @two_consumers(%lb: i32, %ub: i32, %step: i32) {
   // CHECK-NEXT: ttg.partition.stages = [0 : i32, 2 : i32, 2 : i32]
   } {ttg.partition.stages = [0, 2, 2]}
   // CHECK-NEXT: ttg.local_dealloc [[BUFFERS]]
-  // CHECK-NEXT: ttg.local_dealloc [[READY_BARS]]
-  // CHECK-NEXT: ttg.local_dealloc [[EMPTY_BARS]]
   // CHECK-NEXT: ttng.inval_barrier [[READY0]]
   // CHECK-NEXT: ttng.inval_barrier [[EMPTY0]]
   // CHECK-NEXT: ttng.inval_barrier [[READY1]]
   // CHECK-NEXT: ttng.inval_barrier [[EMPTY1]]
+  // CHECK-NEXT: ttg.local_dealloc [[READY_BARS]]
+  // CHECK-NEXT: ttg.local_dealloc [[EMPTY_BARS]]
   tt.return
 }
 
@@ -278,14 +278,119 @@ tt.func @complex_case(%lb: i32, %ub: i32, %step: i32) {
 
 // CHECK-LABEL: @reuse_argument
 tt.func @reuse_argument(%lb: i32, %ub: i32, %step: i32) {
-  // CHECK: ttg.local_alloc : () -> !ttg.memdesc<3xi64,
-  %cst = arith.constant dense<0> : !ty
-  scf.for %i = %lb to %ub step %step iter_args(%k = %cst, %l = %cst) -> (!ty, !ty) : i32 {
+  // CHECK-DAG: [[CST0:%.*]] = arith.constant dense<0>
+  // CHECK-DAG: [[CST1:%.*]] = arith.constant dense<1>
+  %cst0 = arith.constant dense<0> : !ty
+  %cst1 = arith.constant dense<1> : !ty
+
+  // CHECK: [[BUFFERS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x1xi32
+  // CHECK: [[VALUE:%.*]] = ttg.memdesc_subview [[BUFFERS]][%c0_i32, %c0_i32]
+  // CHECK: local_store [[CST0]], [[VALUE]]
+  // CHECK: [[VALUE:%.*]] = ttg.memdesc_subview [[BUFFERS]][%c1_i32, %c0_i32]
+  // CHECK: local_store [[CST1]], [[VALUE]]
+  scf.for %i = %lb to %ub step %step iter_args(%k = %cst0, %l = %cst1) -> (!ty, !ty) : i32 {
     %0 = "op_a"() {ttg.partition = 0} : () -> !ty
     "op_d"(%l) {ttg.partition = 1} : (!ty) -> ()
     "op_d"(%l) {ttg.partition = 2} : (!ty) -> ()
     scf.yield %0, %k : !ty, !ty
   } {ttg.partition.stages = [1, 0, 0]}
+  tt.return
+}
+
+// CHECK-LABEL: @multiplicity_branch
+tt.func @multiplicity_branch(%lb: i32, %ub: i32, %step: i32) {
+  // CHECK-DAG: [[CST0:%.*]] = arith.constant dense<0>
+  // CHECK-DAG: [[CST1:%.*]] = arith.constant dense<1>
+  // CHECK-DAG: [[CST2:%.*]] = arith.constant dense<2>
+  %cst0 = arith.constant dense<0> : !ty
+  %cst1 = arith.constant dense<1> : !ty
+  %cst2 = arith.constant dense<2> : !ty
+
+  // CHECK: [[BUFFERS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<6x1xi32
+
+  // CHECK: [[VALUE:%.*]] = ttg.memdesc_subview [[BUFFERS]][%c0_i32, %c0_i32]
+  // CHECK: local_store [[CST0]], [[VALUE]]
+  // CHECK: [[VALUE:%.*]] = ttg.memdesc_subview [[BUFFERS]][%c1_i32, %c0_i32]
+  // CHECK: local_store [[CST2]], [[VALUE]]
+
+  // CHECK: [[VALUE:%.*]] = ttg.memdesc_subview [[BUFFERS]][%c2_i32, %c0_i32]
+  // CHECK: local_store [[CST0]], [[VALUE]]
+  // CHECK: [[VALUE:%.*]] = ttg.memdesc_subview [[BUFFERS]][%c3_i32, %c0_i32]
+  // CHECK: local_store [[CST1]], [[VALUE]]
+
+  // CHECK: iter_args
+  // CHECK-SAME: [[CIDX0:%arg[0-9]+]] = %c0_i32, %arg{{[0-9]+}}
+  // CHECK-SAME: [[CIDX1:%arg[0-9]+]] = %c1_i32, %arg{{[0-9]+}}
+  // CHECK-SAME: [[CIDX2:%arg[0-9]+]] = %c-1_i32, %arg{{[0-9]+}}
+  // CHECK-SAME: [[PIDX0:%arg[0-9]+]] = %c3_i32, %arg{{[0-9]+}}
+  scf.for %i = %lb to %ub step %step iter_args(%a = %cst0, %b = %cst1, %c = %cst2) -> (!ty, !ty, !ty) : i32 {
+    // CHECK: [[OUT:%.*]] = "op_a"()
+    %0 = "op_a"() {ttg.partition = 0} : () -> !ty
+    // CHECK: [[NEXT_IDX:%.*]] = arith.addi [[PIDX0]], %c1_i32
+    // CHECK: [[ROLLOVER:%.*]] = arith.cmpi eq, [[NEXT_IDX]], %c6_i32
+    // CHECK: [[IDX:%.*]] = arith.select [[ROLLOVER]], %c4_i32, [[NEXT_IDX]]
+    // CHECK: memdesc_subview [[BUFFERS]][[[IDX]], %c0_i32]
+
+    // CHECK: [[NEXT_IDX:%.*]] = arith.addi [[CIDX0]], %c1_i32
+    // CHECK: [[LAST:%.*]] = arith.cmpi eq, [[NEXT_IDX]], %c6_i32
+    // CHECK: [[AT_END:%.*]] = arith.cmpi eq, [[NEXT_IDX]], %c2_i32
+    // CHECK: [[ROLLOVER:%.*]] = arith.ori [[LAST]], [[AT_END]]
+    // CHECK: [[IDX:%.*]] = arith.select [[ROLLOVER]], %c4_i32, [[NEXT_IDX]]
+    // CHECK: memdesc_subview [[BUFFERS]][[[IDX]], %c0_i32]
+    // CHECK: op_b
+    "op_b"(%a) {ttg.partition = 1}: (!ty) -> ()
+
+    // CHECK: [[NEXT_IDX:%.*]] = arith.addi [[CIDX1]], %c1_i32
+    // CHECK: [[ROLLOVER:%.*]] = arith.cmpi eq, [[NEXT_IDX]], %c6_i32
+    // CHECK: [[IDX:%.*]] = arith.select [[ROLLOVER]], %c4_i32, [[NEXT_IDX]]
+    // CHECK: memdesc_subview [[BUFFERS]][[[IDX]], %c0_i32]
+    // CHECK: op_c
+    "op_c"(%b) {ttg.partition = 2}: (!ty) -> ()
+
+    // CHECK: [[NEXT_IDX:%.*]] = arith.addi [[CIDX2]], %c1_i32
+    // CHECK: [[LAST:%.*]] = arith.cmpi eq, [[NEXT_IDX]], %c6_i32
+    // CHECK: [[AT_END:%.*]] = arith.cmpi eq, [[NEXT_IDX]], %c2_i32
+    // CHECK: [[ROLLOVER:%.*]] = arith.ori [[LAST]], [[AT_END]]
+    // CHECK: [[IDX:%.*]] = arith.select [[ROLLOVER]], %c4_i32, [[NEXT_IDX]]
+    // CHECK: memdesc_subview [[BUFFERS]][[[IDX]], %c0_i32]
+    // CHECK: op_d
+    "op_d"(%c) {ttg.partition = 3}: (!ty) -> ()
+
+    scf.yield %0, %a, %a : !ty, !ty, !ty
+  } {ttg.partition.stages = [0, 0, 0, 0]}
+  tt.return
+}
+
+// CHECK-LABEL: @self_recursion
+tt.func @self_recursion(%lb: i32, %ub: i32, %step: i32) {
+  // CHECK-NOT: ttg.local_alloc
+  %cst = arith.constant dense<0> : !ty
+  // CHECK: iter_args([[ARG:%arg[0-9]+]] = %cst)
+  %0 = scf.for %i = %lb to %ub step %step iter_args(%k = %cst) -> (!ty) : i32 {
+    // CHECK-NEXT: [[OUT:%.*]] = "op_a"([[ARG]])
+    %0 = "op_a"(%k) {ttg.partition = 0} : (!ty) -> !ty
+    // CHECK: yield [[OUT]]
+    scf.yield %0 : !ty
+  } {ttg.partition.stages = [0]}
+  tt.return
+}
+
+// CHECK-LABEL: @self_recursion_and_use
+tt.func @self_recursion_and_use(%lb: i32, %ub: i32, %step: i32) {
+  %cst = arith.constant dense<0> : !ty
+  // CHECK: iter_args([[ARG:%arg[0-9]+]] = %cst,
+  %0 = scf.for %i = %lb to %ub step %step iter_args(%k = %cst) -> (!ty) : i32 {
+    // CHECK-NEXT: [[OUT:%.*]] = "op_a"([[ARG]])
+    // CHECK: local_store [[OUT]]
+    %0 = "op_a"(%k) {ttg.partition = 0} : (!ty) -> !ty
+
+    // CHECK: [[VALUE:%.*]] = ttg.local_load
+    // CHECK: "op_b"([[VALUE]])
+    "op_b"(%0) {ttg.partition = 1} : (!ty) -> !ty
+
+    // CHECK: yield [[OUT]]
+    scf.yield %0 : !ty
+  } {ttg.partition.stages = [0, 1]}
   tt.return
 }
 
