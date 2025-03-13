@@ -1092,7 +1092,7 @@ def _patch_lang(fn):
             _patch_builtin(lang.math, interpreter_builder)
         _patch_lang_tensor(lang.tensor)
         _patch_lang_core(lang)
-    _patch_builtin(tl.core._experimental_tensor_descriptor_base, interpreter_builder)
+    _patch_builtin(tl.core.tensor_descriptor_base, interpreter_builder)
 
 
 def _tuple_create(arg, contents):

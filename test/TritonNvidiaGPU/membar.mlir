@@ -96,7 +96,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   	%cst = arith.constant dense<0> : tensor<128x64xi64, #blocked0>
   	%alloc = ttg.local_alloc %cst : (tensor<128x64xi64, #blocked0>) -> !ttg.memdesc<128x64xi64, #shared0, #smem, mutable>
   	ttg.local_dealloc %alloc : !ttg.memdesc<128x64xi64, #shared0, #smem, mutable>
-    %l = tt.experimental_descriptor_load %arg0[%arg1, %arg1] : !tt.tensordesc<tensor<128x64xf16, #shared0>> -> tensor<128x64xf16, #blocked0>
+    %l = tt.descriptor_load %arg0[%arg1, %arg1] : !tt.tensordesc<tensor<128x64xf16, #shared0>> -> tensor<128x64xf16, #blocked0>
     tt.return %l : tensor<128x64xf16, #blocked0>
   }
 }
@@ -116,7 +116,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   	%cst = arith.constant dense<0> : tensor<128x64xi64, #blocked0>
   	%alloc = ttg.local_alloc %cst : (tensor<128x64xi64, #blocked0>) -> !ttg.memdesc<128x64xi64, #shared0, #smem, mutable>
   	ttg.local_dealloc %alloc : !ttg.memdesc<128x64xi64, #shared0, #smem, mutable>
-    tt.experimental_descriptor_store %arg0[%arg1, %arg1], %arg2 : !tt.tensordesc<tensor<128x256xf32, #shared0>>, tensor<128x256xf32, #blocked0>
+    tt.descriptor_store %arg0[%arg1, %arg1], %arg2 : !tt.tensordesc<tensor<128x256xf32, #shared0>>, tensor<128x256xf32, #blocked0>
     tt.return
   }
 }

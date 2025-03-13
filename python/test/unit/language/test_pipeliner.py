@@ -478,19 +478,19 @@ def matmul_kernel_persistent_scatter(a_ptr, b_ptr, c_ptr,  #
     num_tiles = num_pid_m * num_pid_n
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
 
-    a_desc = tl._experimental_make_tensor_descriptor(
+    a_desc = tl.make_tensor_descriptor(
         a_ptr,
         shape=[M, K],
         strides=[K, 1],
         block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_K],
     )
-    b_desc = tl._experimental_make_tensor_descriptor(
+    b_desc = tl.make_tensor_descriptor(
         b_ptr,
         shape=[N, K],
         strides=[K, 1],
         block_shape=[BLOCK_SIZE_N, BLOCK_SIZE_K],
     )
-    c_desc = tl._experimental_make_tensor_descriptor(
+    c_desc = tl.make_tensor_descriptor(
         c_ptr,
         shape=[M, N],
         strides=[N, 1],

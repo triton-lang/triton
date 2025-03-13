@@ -13,7 +13,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // CHECK: ttng.inval_barrier
 // CHECK: ttg.local_load
   tt.func public @tma_load(%arg0: !tt.tensordesc<tensor<128x64xf16, #nvmma_128>>, %arg1: i32) -> tensor<128x64xf16, #blocked> {
-    %l = tt.experimental_descriptor_load %arg0[%arg1, %arg1] : !tt.tensordesc<tensor<128x64xf16, #nvmma_128>> -> tensor<128x64xf16, #blocked>
+    %l = tt.descriptor_load %arg0[%arg1, %arg1] : !tt.tensordesc<tensor<128x64xf16, #nvmma_128>> -> tensor<128x64xf16, #blocked>
     tt.return %l : tensor<128x64xf16, #blocked>
   }
 }
@@ -29,7 +29,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 //       CHECK: ttng.tensor_desc_to_tma_ptr
 //       CHECK: ttng.async_tma_copy_local_to_global
   tt.func public @tma_store(%arg0: !tt.tensordesc<tensor<128x256xf32, #nvmma_128>>, %arg1: i32 {tt.divisibility = 16 : i32}, %arg2: tensor<128x256xf32, #blocked>) {
-    tt.experimental_descriptor_store %arg0[%arg1, %arg1], %arg2 : !tt.tensordesc<tensor<128x256xf32, #nvmma_128>>, tensor<128x256xf32, #blocked>
+    tt.descriptor_store %arg0[%arg1, %arg1], %arg2 : !tt.tensordesc<tensor<128x256xf32, #nvmma_128>>, tensor<128x256xf32, #blocked>
     tt.return
   }
 }
@@ -73,7 +73,7 @@ tt.func @tma_gather(%arg0: !tt.tensordesc<tensor<1x128xbf16, #nvmma_128>>, %arg1
   // CHECK: ttng.wait_barrier [[BARRIER]]
   // CHECK: ttng.inval_barrier [[BARRIER]]
   // CHECK: [[OUT:%.*]] = ttg.local_load [[RESULT]]
-  %0 = tt.experimental_descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<tensor<1x128xbf16, #nvmma_128>>, tensor<32xi32, #blocked>, i32) -> tensor<32x128xbf16, #blocked1>
+  %0 = tt.descriptor_gather %arg0[%arg1, %arg2] : (!tt.tensordesc<tensor<1x128xbf16, #nvmma_128>>, tensor<32xi32, #blocked>, i32) -> tensor<32x128xbf16, #blocked1>
   // CHECK: return [[OUT]]
   tt.return %0 : tensor<32x128xbf16, #blocked1>
 }
@@ -85,7 +85,7 @@ tt.func @tma_scatter(%arg0: !tt.tensordesc<tensor<1x128xbf16, #nvmma_128>>, %arg
   // CHECK-NEXT: [[PTR:%.*]] = ttng.tensor_desc_to_tma_ptr %arg0
   // CHECK-NEXT: ttng.async_tma_scatter [[PTR]][%arg1, %arg2] [[SRC]]
   // CHECK-NEXT: ttng.async_tma_store_wait
-  tt.experimental_descriptor_scatter %arg0[%arg1, %arg2], %arg3 : !tt.tensordesc<tensor<1x128xbf16, #nvmma_128>>, tensor<32xi32, #blocked>, i32, tensor<32x128xbf16, #blocked1>
+  tt.descriptor_scatter %arg0[%arg1, %arg2], %arg3 : !tt.tensordesc<tensor<1x128xbf16, #nvmma_128>>, tensor<32xi32, #blocked>, i32, tensor<32x128xbf16, #blocked1>
   tt.return
 }
 

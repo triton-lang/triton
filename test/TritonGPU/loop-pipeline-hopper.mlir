@@ -447,7 +447,7 @@ module attributes {"ttg.target" = "cuda:90", "ttg.num-ctas" = 1 : i32, "ttg.num-
 }
 
 // -----
-// Test pipelining of experimental_descriptor_store
+// Test pipelining of descriptor_store
 #blocked = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:90", "ttg.threads-per-warp" = 32 : i32} {
@@ -461,7 +461,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       // CHECK-NEXT: ttng.fence_async_shared
       // CHECK-NEXT: ttng.tensor_desc_to_tma_ptr
       // CHECK-NEXT: ttng.async_tma_copy_local_to_global
-      tt.experimental_descriptor_store %arg1[%1], %arg0 : !tt.tensordesc<tensor<1xf32, #shared>>, tensor<1xf32, #blocked>
+      tt.descriptor_store %arg1[%1], %arg0 : !tt.tensordesc<tensor<1xf32, #shared>>, tensor<1xf32, #blocked>
     }
     tt.return
   }
@@ -484,7 +484,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       // CHECK-NEXT: ttng.fence_async_shared
       // CHECK-NEXT: ttng.tensor_desc_to_tma_ptr
       // CHECK-NEXT: ttng.async_tma_scatter
-      tt.experimental_descriptor_scatter %arg1[%2, %1], %arg0 : !tt.tensordesc<tensor<1x128xf32, #shared>>, tensor<8xi32, #blocked1>, i32, tensor<8x128xf32, #blocked>
+      tt.descriptor_scatter %arg1[%2, %1], %arg0 : !tt.tensordesc<tensor<1x128xf32, #shared>>, tensor<8xi32, #blocked1>, i32, tensor<8x128xf32, #blocked>
     }
     tt.return
   }
@@ -513,8 +513,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
       // CHECK-NEXT: ttng.fence_async_shared
       // CHECK-NEXT: ttng.tensor_desc_to_tma_ptr
       // CHECK-NEXT: ttng.async_tma_copy_local_to_global %{{.*}} %[[ALLOC]]
-      tt.experimental_descriptor_store %arg1[%1], %arg0 : !tt.tensordesc<tensor<1xf32, #shared>>, tensor<1xf32, #blocked>
-      tt.experimental_descriptor_store %arg1[%2], %arg0 : !tt.tensordesc<tensor<1xf32, #shared>>, tensor<1xf32, #blocked>
+      tt.descriptor_store %arg1[%1], %arg0 : !tt.tensordesc<tensor<1xf32, #shared>>, tensor<1xf32, #blocked>
+      tt.descriptor_store %arg1[%2], %arg0 : !tt.tensordesc<tensor<1xf32, #shared>>, tensor<1xf32, #blocked>
     }
     tt.return
   }
@@ -817,9 +817,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %true = arith.constant true
     %false = arith.constant false
     %11:2 = scf.for %arg6 = %c0_i32 to %8 step %c1_i32 iter_args(%arg7 = %cst, %arg8 = %c0_i32) -> (tensor<128x64xf32, #ttg.nvidia_mma<{versionMajor = 3, versionMinor = 0, warpsPerCTA = [8, 1], instrShape = [16, 64, 32]}>>, i32)  : i32 {
-      %14 = tt.experimental_descriptor_load %9[%5, %arg8] : !tt.tensordesc<tensor<128x64xf8E4M3FN, #shared>> -> tensor<128x64xf8E4M3FN, #blocked>
+      %14 = tt.descriptor_load %9[%5, %arg8] : !tt.tensordesc<tensor<128x64xf8E4M3FN, #shared>> -> tensor<128x64xf8E4M3FN, #blocked>
       %15 = ttg.local_alloc %14 : (tensor<128x64xf8E4M3FN, #blocked>) -> !ttg.memdesc<128x64xf8E4M3FN, #shared, #ttg.shared_memory>
-      %16 = tt.experimental_descriptor_load %10[%arg8, %6] : !tt.tensordesc<tensor<64x64xf8E4M3FN, #shared>> -> tensor<64x64xf8E4M3FN, #blocked>
+      %16 = tt.descriptor_load %10[%arg8, %6] : !tt.tensordesc<tensor<64x64xf8E4M3FN, #shared>> -> tensor<64x64xf8E4M3FN, #blocked>
       %17 = ttg.local_alloc %16 : (tensor<64x64xf8E4M3FN, #blocked>) -> !ttg.memdesc<64x64xf8E4M3FN, #shared1, #ttg.shared_memory>
       %18 = ttng.warp_group_dot %15, %17, %arg7 {inputPrecision = 0 : i32, maxNumImpreciseAcc = 1073741824 : i32} : !ttg.memdesc<128x64xf8E4M3FN, #shared, #ttg.shared_memory> * !ttg.memdesc<64x64xf8E4M3FN, #shared1, #ttg.shared_memory> -> tensor<128x64xf32, #mma>
       %19 = arith.addi %arg8, %c64_i32 : i32
@@ -827,7 +827,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     }
     %12 = ttg.convert_layout %11#0 : tensor<128x64xf32, #mma> -> tensor<128x64xf32, #blocked>
     %13 = tt.reinterpret_tensor_descriptor %arg2 : !tt.ptr<i8, 0> to !tt.tensordesc<tensor<128x64xf32, #nvmma_128>>
-    tt.experimental_descriptor_store %13[%5, %6], %12 : !tt.tensordesc<tensor<128x64xf32, #nvmma_128>>, tensor<128x64xf32, #blocked>
+    tt.descriptor_store %13[%5, %6], %12 : !tt.tensordesc<tensor<128x64xf32, #nvmma_128>>, tensor<128x64xf32, #blocked>
     tt.return
   }
 }
