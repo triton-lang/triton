@@ -733,7 +733,7 @@ def permute(input: tl.tensor, dims: Tuple[int], builder: ir.builder) -> tl.tenso
     return tl.tensor(builder.create_trans(input.handle, dims), ret_type)
 
 
-def broadcast_impl_shape(input: tl.tensor, shape: List[int], builder: ir.builder) -> tl.tensor:
+def broadcast_impl_shape(input: tl.tensor, shape: Tuple[int], builder: ir.builder) -> tl.tensor:
     if not input.type.is_block():
         ret_ty = tl.block_type(input.type, shape)
         return tl.tensor(builder.create_splat(input.handle, shape), ret_ty)
