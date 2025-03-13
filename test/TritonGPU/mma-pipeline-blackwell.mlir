@@ -779,7 +779,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: ttng.tmem_store %[[CST]], %[[TMEM]], %[[TRUE]]
 
   // Barrier allocation:
-  // CHECK: %[[BAR_SH:.*]] = ttg.local_alloc  : () -> !ttg.memdesc<2xi64
+  // CHECK: %[[BAR_SH:.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
   // CHECK: %[[BAR_SLICE0:.*]] = ttg.memdesc_subview %[[BAR_SH]][%[[C0]]]
   // CHECK: ttng.init_barrier %[[BAR_SLICE0]], 1
   // CHECK: %[[BAR_SLICE1:.*]] = ttg.memdesc_subview %[[BAR_SH]][%[[C1]]]
@@ -819,8 +819,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c0_i32 = arith.constant 0 : i32
     %true = arith.constant true
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked1>
-    %1 = ttg.local_alloc  : () -> !ttg.memdesc<2x128x128xf16, #shared, #ttg.shared_memory, mutable>
-    %2 = ttg.local_alloc  : () -> !ttg.memdesc<2x128x128xf16, #shared, #ttg.shared_memory, mutable>
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<2x128x128xf16, #shared, #ttg.shared_memory, mutable>
+    %2 = ttg.local_alloc : () -> !ttg.memdesc<2x128x128xf16, #shared, #ttg.shared_memory, mutable>
     %3 = arith.cmpi sgt, %arg0, %c0_i32 : i32
     %4 = ttg.memdesc_subview %1[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<2x128x128xf16, #shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>
     %5 = tt.splat %3 : i1 -> tensor<128x128xi1, #blocked>
@@ -875,10 +875,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c0_i32 = arith.constant 0 : i32
     %true = arith.constant true
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked1>
-    %1 = ttg.local_alloc  : () -> !ttg.memdesc<2x128x128xf16, #shared, #ttg.shared_memory, mutable>
-    %2 = ttg.local_alloc  : () -> !ttg.memdesc<2x128x128xf16, #shared, #ttg.shared_memory, mutable>
-    %scale_A_SMEM = ttg.local_alloc  : () -> !ttg.memdesc<2x128x4xi8, #shared1, #ttg.shared_memory, mutable>
-    %scale_B_SMEM = ttg.local_alloc  : () -> !ttg.memdesc<2x128x4xi8, #shared1, #ttg.shared_memory, mutable>
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<2x128x128xf16, #shared, #ttg.shared_memory, mutable>
+    %2 = ttg.local_alloc : () -> !ttg.memdesc<2x128x128xf16, #shared, #ttg.shared_memory, mutable>
+    %scale_A_SMEM = ttg.local_alloc : () -> !ttg.memdesc<2x128x4xi8, #shared1, #ttg.shared_memory, mutable>
+    %scale_B_SMEM = ttg.local_alloc : () -> !ttg.memdesc<2x128x4xi8, #shared1, #ttg.shared_memory, mutable>
     %3 = arith.cmpi sgt, %arg0, %c0_i32 : i32
     %4 = ttg.memdesc_subview %1[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<2x128x128xf16, #shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>
     %5 = tt.splat %3 : i1 -> tensor<128x128xi1, #blocked>
@@ -958,10 +958,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c0_i32 = arith.constant 0 : i32
     %true = arith.constant true
     %cst = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked1>
-    %1 = ttg.local_alloc  : () -> !ttg.memdesc<2x128x128xf16, #shared, #ttg.shared_memory, mutable>
-    %2 = ttg.local_alloc  : () -> !ttg.memdesc<2x128x128xf16, #shared, #ttg.shared_memory, mutable>
-    %scale_A_SMEM = ttg.local_alloc  : () -> !ttg.memdesc<2x1x512xi8, #shared1, #ttg.shared_memory, mutable>
-    %scale_B_SMEM = ttg.local_alloc  : () -> !ttg.memdesc<2x1x512xi8, #shared1, #ttg.shared_memory, mutable>
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<2x128x128xf16, #shared, #ttg.shared_memory, mutable>
+    %2 = ttg.local_alloc : () -> !ttg.memdesc<2x128x128xf16, #shared, #ttg.shared_memory, mutable>
+    %scale_A_SMEM = ttg.local_alloc : () -> !ttg.memdesc<2x1x512xi8, #shared1, #ttg.shared_memory, mutable>
+    %scale_B_SMEM = ttg.local_alloc : () -> !ttg.memdesc<2x1x512xi8, #shared1, #ttg.shared_memory, mutable>
     %3 = arith.cmpi sgt, %arg0, %c0_i32 : i32
     %4 = ttg.memdesc_subview %1[%c0_i32, %c0_i32, %c0_i32] : !ttg.memdesc<2x128x128xf16, #shared, #ttg.shared_memory, mutable> -> !ttg.memdesc<128x128xf16, #shared, #ttg.shared_memory, mutable>
     %5 = tt.splat %3 : i1 -> tensor<128x128xi1, #blocked>

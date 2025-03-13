@@ -1,5 +1,6 @@
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
@@ -49,6 +50,8 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
                                      Value pred) {
   OpBuilder::InsertionGuard guard(rewriter);
   if (mlir::isMemoryEffectFree(op))
+    return op;
+  if (isa<LLVM::AssumeOp>(op))
     return op;
   if (isa<ttg::AsyncCommitGroupOp, ttg::AsyncWaitOp>(op))
     return op;
@@ -120,6 +123,16 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
       mask = getPredMask(rewriter, currentPred.getType(), currentPred, pred);
     }
     waitBarrier.getPredMutable().assign(mask);
+    return op;
+  }
+  if (auto arriveBarrier = dyn_cast<ttng::ArriveBarrierOp>(op)) {
+    rewriter.setInsertionPoint(arriveBarrier);
+    Value mask = pred;
+    Value currentPred = arriveBarrier.getPred();
+    if (currentPred) {
+      mask = getPredMask(rewriter, currentPred.getType(), currentPred, pred);
+    }
+    arriveBarrier.getPredMutable().assign(mask);
     return op;
   }
   if (auto storeOp = dyn_cast<tt::StoreOp>(op)) {

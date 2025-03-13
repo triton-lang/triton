@@ -25,7 +25,7 @@ namespace {
 //===----------------------------------------------------------------------===//
 
 // FP8E5M2 is the open-compute standard FP8E5M2 format. NVIDIA GPU supports it
-// natively but we don't have hardware native support on MI300.
+// natively but we don't have hardware native support on CDNA3.
 //
 // The SW based downcast with RTNE is not fully functional for the denorm
 // values. We need rewrite it if we need to emulate this data type on AMDGPU.
@@ -1082,16 +1082,16 @@ struct FpToFpOpConversion
     // fp16->ocp bf8, bf16->ocp bf8, fp32->ocp bf8(RTNE) on non-CDNA4
     // fp32->ocp bf8(RTZ)
     size_t numElements = 2;
-    if (llvm::isa<Float8E5M2Type>(srcElementType) &&
-            !llvm::isa<Float32Type>(dstElementType) ||
-        llvm::isa<Float8E5M2Type>(srcElementType) &&
-            isaFamily != AMD::ISAFamily::CDNA4 ||
-        !llvm::isa<Float32Type>(srcElementType) &&
-            llvm::isa<Float8E5M2Type>(dstElementType) ||
-        llvm::isa<Float32Type>(srcElementType) &&
-            llvm::isa<Float8E5M2Type>(dstElementType) &&
-            (roundingMode != RoundingMode::RTNE ||
-             isaFamily != AMD::ISAFamily::CDNA4)) {
+    if ((llvm::isa<Float8E5M2Type>(srcElementType) &&
+         !llvm::isa<Float32Type>(dstElementType)) ||
+        (llvm::isa<Float8E5M2Type>(srcElementType) &&
+         isaFamily != AMD::ISAFamily::CDNA4) ||
+        (!llvm::isa<Float32Type>(srcElementType) &&
+         llvm::isa<Float8E5M2Type>(dstElementType)) ||
+        (llvm::isa<Float32Type>(srcElementType) &&
+         llvm::isa<Float8E5M2Type>(dstElementType) &&
+         (roundingMode != RoundingMode::RTNE ||
+          isaFamily != AMD::ISAFamily::CDNA4))) {
       numElements = 4;
     }
 

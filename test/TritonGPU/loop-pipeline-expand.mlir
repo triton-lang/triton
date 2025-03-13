@@ -12,8 +12,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %c0_i32 = arith.constant 0 : i32
     %c1_i32 = arith.constant 1 : i32
     %c128_i32 = arith.constant 128 : i32
-    // CHECK: ttg.local_alloc  : () -> !ttg.memdesc<4x256x32xf32
-    // CHECK: ttg.local_alloc  : () -> !ttg.memdesc<4x32x128xf32
+    // CHECK: ttg.local_alloc : () -> !ttg.memdesc<4x256x32xf32
+    // CHECK: ttg.local_alloc : () -> !ttg.memdesc<4x32x128xf32
     %0:3 = scf.for %arg5 = %c0_i32 to %c128_i32 step %c1_i32 iter_args(%arg6 = %arg0, %arg7 = %arg1, %arg8 = %arg2) -> (tensor<256x128xf32, #mma>, tensor<256x32x!tt.ptr<f32>, #blocked>, tensor<32x128x!tt.ptr<f32>, #blocked1>)  : i32 {
       // CHECK: ttg.memdesc_subview {{.*}} : !ttg.memdesc<4x256x32xf32
       // CHECK: ttg.async_wait {{.*}} {num = 4 : i32}
