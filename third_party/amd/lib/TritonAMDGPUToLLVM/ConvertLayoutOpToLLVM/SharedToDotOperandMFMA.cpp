@@ -258,9 +258,19 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   Value linearWarpId = tb.udiv(thread, warpSize);
   Value lane = tb.urem(thread, warpSize);
 
+  auto warpOrder = getWarpOrder(mfmaLayout, shape);
+  //llvm::outs() << "opIdx = " << opIdx << "\n";
+  //llvm::outs() << "  warpOrder = ";
+  //printVec(warpOrder);
+  //llvm::outs() << "  shape = ";
+  //printVec(shape);
+  warpOrder[0] = 1;
+  warpOrder[1] = 0;
+
+
   Value spatialWarpId = AMD::getWarpIdInBlock(
       rewriter, loc, linearWarpId, warpsPerCTA, mfmaInstrNonK,
-      shape[nonKDimIdx], nonKDimIdx, getWarpOrder(mfmaLayout, shape));
+      shape[nonKDimIdx], nonKDimIdx, warpOrder);
 
   // number of duplicates of elements in warp
   // In case of 64x4 x 4x4 multiplication, 4x4 B operand is duplicated 16 times
