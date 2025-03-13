@@ -211,7 +211,7 @@ def test_remark_coalescing(capfd, fresh_triton_cache):
     lines = err.splitlines()
     # Define the expected strings in order
     expected_strings = [
-        "remark: Only one element per thread is assigned", "x = tl.load(block_ptr)",
+        "one element per thread is assigned", "x = tl.load(block_ptr)",
         "note: The divisibility of the pointer is 1 in all dimensions.", "first introduced here",
         "block_start = tl.load(x_offsets).to(tl.int64)", "add `tt.multiple_of`"
     ]
