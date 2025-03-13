@@ -46,21 +46,21 @@ def is_hip():
     return False if target is None else target.backend == "hip"
 
 
-def is_hip_mi200():
+def is_hip_cdna2():
     target = get_current_target()
     if target is None or target.backend != 'hip':
         return False
     return target.arch == 'gfx90a'
 
 
-def is_hip_mi300():
+def is_hip_cdna3():
     target = get_current_target()
     if target is None or target.backend != 'hip':
         return False
     return target.arch in ('gfx940', 'gfx941', 'gfx942')
 
 
-def is_hip_mi350():
+def is_hip_cdna4():
     target = get_current_target()
     if target is None or target.backend != 'hip':
         return False
@@ -68,7 +68,7 @@ def is_hip_mi350():
 
 
 def is_hip_cdna():
-    return is_hip_mi200() or is_hip_mi300() or is_hip_mi350()
+    return is_hip_cdna2() or is_hip_cdna3() or is_hip_cdna4()
 
 
 def is_xpu():

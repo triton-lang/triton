@@ -6,7 +6,7 @@ import triton
 import triton.language as tl
 import triton.tools.experimental_descriptor
 
-from triton._internal_testing import is_cuda, is_hopper, is_hip_cdna, is_hip_mi200, is_hip
+from triton._internal_testing import is_cuda, is_hopper, is_hip_cdna, is_hip_cdna2, is_hip
 
 
 def check_capabilities():
@@ -274,11 +274,11 @@ def test_pipeline_matmul(scale, device):
         ref_out = dot_scale_ref(a, scale_a, b, a_type, b_type)
     else:
         ref_out = torch.matmul(a, b)
-    # Bigger tolerance for AMD MI200 devices.
-    # MI200 devices use reduced precision fp16 and bf16 and flush input and
+    # Bigger tolerance for AMD CDNA2 devices.
+    # CDNA2 devices use reduced precision fp16 and bf16 and flush input and
     # output denormal values to zero. Detailed info is at: https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
-    atol = 1e-2 if is_hip_mi200() or scale else None
-    rtol = 1e-2 if is_hip_mi200() or scale else None
+    atol = 1e-2 if is_hip_cdna2() or scale else None
+    rtol = 1e-2 if is_hip_cdna2() or scale else None
     torch.testing.assert_close(ref_out, output, atol=atol, rtol=rtol, equal_nan=scale)
     if is_cuda():
         ttgir = handler.asm["ttgir"]

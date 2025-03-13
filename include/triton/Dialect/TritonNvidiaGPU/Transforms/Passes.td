@@ -134,4 +134,16 @@ def TritonNvidiaGPUPromoteLHSToTMemPass : Pass<"tritongpu-promote-lhs-to-tmem", 
                            "mlir::triton::TritonDialect"];
 }
 
+def TritonNvidiaGPUOptimizeDescriptorEncodingPass : Pass<"triton-nvidia-optimize-descriptor-encoding", "mlir::ModuleOp"> {
+  let summary = "Set encodings on tensor descriptor types";
+
+  let description = [{
+    Set shared memory encoding on tensor descriptors, which decides the swizzling mode and message size of the tma descriptor.
+  }];
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect",
+                           "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect",
+                           "mlir::triton::TritonDialect"];
+}
+
 #endif

@@ -1,6 +1,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 
 using namespace mlir;
 namespace tt = mlir::triton;
@@ -71,6 +72,10 @@ static void createTMAAsyncCopy(scf::ForOp forOp, const TMAStore &store,
   Value tmaPtr =
       builder.create<triton::nvidia_gpu::TensorDescToTMAPtrOp>(loc, store.desc);
   if (auto storeOp = dyn_cast<tt::ExperimentalDescriptorStoreOp>(store.op)) {
+    auto indices = ttng::translateTMAIndices(
+        builder, storeOp.getLoc(),
+        storeOp.getDesc().getType().getBlockType().getEncoding(),
+        storeOp.getIndices());
     builder.create<ttng::AsyncTMACopyLocalToGlobalOp>(
         loc, tmaPtr, storeOp.getIndices(), alloc);
   } else {

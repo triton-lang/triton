@@ -32,9 +32,9 @@ from triton._internal_testing import (
     is_hopper,
     is_hip,
     is_hip_cdna,
-    is_hip_mi200,
-    is_hip_mi300,
-    is_hip_mi350,
+    is_hip_cdna2,
+    is_hip_cdna3,
+    is_hip_cdna4,
     is_xpu,
     get_arch,
     torch_float8_dtypes,
@@ -3600,11 +3600,11 @@ def test_dot(M, N, K, num_warps, col_a, col_b, epilogue, input_precision, in_dty
                 pytest.skip("float8e4nv not supported on sm <= 80")
 
         if is_hip():
-            if in_dtype in ("float8e5", "float8e4nv") and not is_hip_mi350():
-                pytest.skip(f"{in_dtype} only supported on mi350")
-            if in_dtype in ("float8e5b16", "float8e4b8") and not is_hip_mi300():
-                pytest.skip(f"{in_dtype} only supported on mi300")
-            if not ((input_precision == "ieee") or (input_precision == "tf32" and is_hip_mi300())):
+            if in_dtype in ("float8e5", "float8e4nv") and not is_hip_cdna4():
+                pytest.skip(f"{in_dtype} only supported on CDNA4")
+            if in_dtype in ("float8e5b16", "float8e4b8") and not is_hip_cdna3():
+                pytest.skip(f"{in_dtype} only supported on CDNA3")
+            if not ((input_precision == "ieee") or (input_precision == "tf32" and is_hip_cdna3())):
                 pytest.skip(f"{input_precision} not supported on HIP")
             if kpack == 2 and in_dtype == 'int8' and K < 64:
                 pytest.skip("kpack too large for K")
@@ -3818,8 +3818,8 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
         if not is_hip_cdna():
             pytest.skip("scaled_dot only implemented for HIP CDNA")
         if "e4m3" in (mxfp_type, normal_type):
-            if not (is_hip_mi300() or is_hip_mi350()):
-                pytest.skip(f"scaled_dot({mxfp_type}, {normal_type}) only implemented for MI300 and MI350")
+            if not (is_hip_cdna3() or is_hip_cdna4()):
+                pytest.skip(f"scaled_dot({mxfp_type}, {normal_type}) only implemented for CDNA3 and CDNA4")
         if mma == 16 and K == 64:
             pytest.skip(f"K == {K} too small for mfma {mma} in scaled_dot")
 
@@ -3992,10 +3992,10 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
             # Clamp to avoid relative error issues
             ret.clamp_(-2**comp_dtype_max_exp, 2**comp_dtype_max_exp - 1)
         else:
-            if is_hip_mi350():
+            if is_hip_cdna4():
                 # On other chips, the A/B operands are upcasted to fp16/bf16
                 # before matmul, which has larger range to avoid overflow.
-                # On MI350, we use the V_MFMA_*_F8F6F4 instructions to
+                # On CDNA4, we use the V_MFMA_*_F8F6F4 instructions to
                 # directly calculate matmul on F8F6F4 data. So we need
                 # to narrow down the range of input to avoid overflow.
                 ret = torch.randint(20, 40, shape, dtype=torch.uint8, device=device)
@@ -4044,12 +4044,12 @@ def test_scaled_dot(M, N, K, col_a, col_b, rhs_scale, mxfp_type, normal_type, nu
     pgm = dot_scale_kernel[(1, )](x, *x.stride(), scale_x, y, *y.stride(), scale_y, z, M, N, K, type_a, type_b,
                                   **kernel_kwargs)
     z_ref = dot_scale_ref(x, scale_x, y, scale_y, type_a, type_b)
-    # Bigger tolerance for AMD MI200 devices.
-    # MI200 devices use reduced precision fp16 and bf16 and flush input and output denormal values
+    # Bigger tolerance for AMD CDNA2 devices.
+    # CDNA2 devices use reduced precision fp16 and bf16 and flush input and output denormal values
     # to zero. Detailed info is at:
     # https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
-    atol = 2e-4 if is_hip_mi200() else 1e-5
-    rtol = 2e-2 if is_hip_mi200() else 1e-2
+    atol = 2e-4 if is_hip_cdna2() else 1e-5
+    rtol = 2e-2 if is_hip_cdna2() else 1e-2
     torch.testing.assert_close(z, z_ref, atol=atol, rtol=rtol)
 
     # make sure ld/st are vectorized
@@ -6476,10 +6476,10 @@ def test_dot_max_num_imprecise_acc(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, in_type_s
             pytest.skip("Dot op does not support fp8e4b15 on CUDA arch >= 90")
     elif is_hip():
         num_stages = 2
-        if in_type_str in ("float8e5b16", "float8e4b8") and not is_hip_mi300():
-            pytest.skip(f"{in_type_str} only supported on mi300")
-        if in_type_str in ("float8e5", "float8e4nv") and not is_hip_mi350():
-            pytest.skip(f"{in_type_str} only supported on mi350")
+        if in_type_str in ("float8e5b16", "float8e4b8") and not is_hip_cdna3():
+            pytest.skip(f"{in_type_str} only supported on CDNA3")
+        if in_type_str in ("float8e5", "float8e4nv") and not is_hip_cdna4():
+            pytest.skip(f"{in_type_str} only supported on CDNA4")
 
     check_type_supported(in_type_str, device)
     A = numpy_random((M, K), dtype_str=in_type_str)

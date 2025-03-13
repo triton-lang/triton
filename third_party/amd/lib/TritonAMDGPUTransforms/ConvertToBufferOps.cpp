@@ -542,7 +542,7 @@ public:
                  ConvertTritonLoadToBufferLoad<ttg::AsyncCopyGlobalToLocalOp>,
                  ConvertTritonStoreToBufferStore>(context, assumptions, solver);
 
-    // Gate buffer atomics behind CDNA3 (i.e., MI300 series) for now
+    // Gate buffer atomics behind CDNA3 for now
     // GFX942-specific assumptions regarding cache coherence are made when
     // lowering to LLVM
     if (ISAFamily::CDNA3 == triton::AMD::deduceISAFamily(archGenerationName))

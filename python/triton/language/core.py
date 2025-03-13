@@ -660,7 +660,7 @@ class block_type(dtype):
     def is_block(self):
         return True
 
-    def get_block_shapes(self) -> List[int]:
+    def get_block_shapes(self) -> Tuple[int]:
         return self.shape
 
     def __eq__(self, other) -> bool:
