@@ -137,7 +137,8 @@ LogicalResult triton::gpu::partitionLoop(scf::ForOp loop) {
   SmallVector<std::unique_ptr<Block>> partitionBlocks;
   for (const Partition &partition :
        llvm::drop_begin(schedule.getPartitions())) {
-    FailureOr<std::unique_ptr<Block>> blockOr = slicePartition(loop, schedule, &partition);
+    FailureOr<std::unique_ptr<Block>> blockOr =
+        slicePartition(loop, schedule, &partition);
     if (failed(blockOr))
       return failure();
     partitionBlocks.push_back(std::move(*blockOr));
