@@ -32,7 +32,8 @@ class CudaAllocator:
 
 
 class InstrumentationHook(Hook):
-    # It's important to note that only one active session can use the instrumentation hook at a time.
+    # It's important to note that no other sessions can be active
+    # when the session with the instrumentation hook is active.
     # The check is enforced by the proton library.
 
     def __init__(self, mode: str,  #
