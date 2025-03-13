@@ -119,6 +119,9 @@ addition, if there's only one CTA per CGA, then Triton canonicalizes CTAOrder to
         CTAOrder.push_back(i);
       return get(context, CTAsPerCGA, CTASplitNum, CTAOrder);
     }
+    unsigned getRank() const {
+      return getCTAOrder().size();
+    }
   }];
 
   let genVerifyDecl = 1;

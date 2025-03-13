@@ -44,6 +44,8 @@ void init_triton_nvidia_passes_ttnvgpuir(py::module &&m) {
                      mlir::createTensorMemoryAllocationPass);
   ADD_PASS_WRAPPER_0("add_lower_mma",
                      mlir::createTritonNvidiaGPUMMALoweringPass);
+  ADD_PASS_WRAPPER_0("add_optimize_descriptor_encoding",
+                     mlir::createTritonNvidiaGPUOptimizeDescriptorEncodingPass);
 }
 
 void init_triton_nvidia(py::module &&m) {
