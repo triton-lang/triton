@@ -59,6 +59,18 @@ llvm::SmallVector<Value> computeOffsetsBType(
     ArrayRef<int64_t> reps, SharedMemoryObject smemObj, ArrayRef<Value> strides,
     gpu::SwizzledSharedEncodingAttr srcLayout, unsigned nonKDim, unsigned kDim);
 
+namespace helper {
+template <typename Container>
+static SmallVector<typename Container::value_type>
+transposeSpatialDims(const Container &vec) {
+  auto rank = vec.size();
+  assert(rank == 2 || rank == 3);
+  SmallVector<typename Container::value_type> res(rank, vec[0]);
+  res[rank - 2] = vec[rank - 1];
+  res[rank - 1] = vec[rank - 2];
+  return res;
+}
+} // namespace helper
 } // namespace mlir::triton::AMD
 
 #endif // TRITON_THIRD_PARTY_AMD_LIB_TRITONAMDGPUTOLLVM_CONVERTLAYOUTOPTOLLVM_SHAREDTODOTOPERANDHELPER_H_

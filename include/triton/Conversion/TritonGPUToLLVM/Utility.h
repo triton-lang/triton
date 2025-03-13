@@ -394,12 +394,6 @@ public:
                               allocStrides.end());
   }
 
-  // TODO(Keren): deprecate the method once AMD backend has cleaned up
-  Value getCSwizzleOffset(int dim) const {
-    assert(dim >= 0 && dim < offsets.size());
-    return offsets[dim];
-  }
-
 private:
   static SmallVector<unsigned>
   getOrderForShape(ArrayRef<int64_t> shape, ArrayRef<unsigned> layoutOrder) {

@@ -177,17 +177,6 @@ llvm::SmallVector<Value> computeOffsetsAType(
   return aOffsets;
 }
 
-template <typename Container>
-static SmallVector<typename Container::value_type>
-transposeSpatialDims(const Container &vec) {
-  auto rank = vec.size();
-  assert(rank == 2 || rank == 3);
-  SmallVector<typename Container::value_type> res(rank, vec[0]);
-  res[rank - 2] = vec[rank - 1];
-  res[rank - 1] = vec[rank - 2];
-  return res;
-}
-
 llvm::SmallVector<Value> computeOffsetsBType(
     ConversionPatternRewriter &rewriter, Location loc,
     computeTensorElemMappingInBlockT fn, const ArrayRef<int64_t> &elemsPerInstr,
@@ -202,9 +191,10 @@ llvm::SmallVector<Value> computeOffsetsBType(
   auto rank = smemObj.getOffsets().size();
   auto order = srcLayout.getOrder();
   SmallVector<int64_t> tElemsPerInstr{elemsPerInstr[1], elemsPerInstr[0]};
-  SmallVector<int64_t> tReps = transposeSpatialDims(reps);
-  SmallVector<Value> tOffsets = transposeSpatialDims(smemObj.getOffsets());
-  SmallVector<Value> tStrides = transposeSpatialDims(smemStrides);
+  SmallVector<int64_t> tReps = AMD::helper::transposeSpatialDims(reps);
+  SmallVector<Value> tOffsets =
+      AMD::helper::transposeSpatialDims(smemObj.getOffsets());
+  SmallVector<Value> tStrides = AMD::helper::transposeSpatialDims(smemStrides);
 
   int vectorSize = 1;
   if (order[0] == rank - 2) {
