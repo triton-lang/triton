@@ -5,7 +5,7 @@ import triton
 import triton.language as tl
 from triton.tools.experimental_descriptor import (create_1d_tma_descriptor, create_2d_tma_descriptor)
 from triton._internal_testing import dtypes_with_bfloat16, is_interpreter, numpy_random, to_triton, requires_tma, supports_tma, tma_skip_msg
-
+from triton.tools.mxfp import MXFP4Tensor, MXScaleTensor
 from typing import Optional
 
 
@@ -1177,3 +1177,273 @@ def test_tma_scatter(X, Y, BLOCK_X, BLOCK_Y, dtype, y):
 
     ref = torch_scatter_rows(input, idx, y, BLOCK_Y, X, Y)
     torch.testing.assert_close(ref, output, atol=0, rtol=0)
+
+
+@requires_tma
+@pytest.mark.parametrize("dtype_str", tma_dtypes)
+@pytest.mark.parametrize("ndim", [3, 4, 5])
+@pytest.mark.parametrize("INNER_BLOCK", [16, 32, 64, 128])
+def test_tensor_descriptor_rank_reducing_load(dtype_str, ndim, INNER_BLOCK):
+
+    @triton.jit
+    def kernel(out_ptr, a_ptr, shape, strides, BLOCK_SHAPE):
+        desc = tl._experimental_make_tensor_descriptor(
+            a_ptr,
+            shape=shape,
+            strides=strides,
+            block_shape=BLOCK_SHAPE,
+        )
+        ndim: tl.constexpr = len(BLOCK_SHAPE)
+
+        offs = (0, ) * ndim
+        M_BLOCK: tl.constexpr = BLOCK_SHAPE[-2]
+        N_BLOCK: tl.constexpr = BLOCK_SHAPE[-1]
+        block = desc.load(offs).reshape(M_BLOCK, N_BLOCK)
+
+        idx = tl.arange(0, M_BLOCK)[:, None] * strides[-2] + tl.arange(0, N_BLOCK)[None, :]
+        tl.store(out_ptr + idx, block)
+
+    def alloc_fn(size: int, align: int, stream: Optional[int]):
+        return torch.empty(size, dtype=torch.int8, device="cuda")
+
+    triton.set_allocator(alloc_fn)
+
+    alloc_shape = (1, 1, 1, 7, INNER_BLOCK)[-ndim:]
+    inp = to_triton(numpy_random(alloc_shape, dtype_str), device="cuda", dst_type=dtype_str)
+    inp.data = inp.data[..., :INNER_BLOCK - 3]
+
+    if INNER_BLOCK * inp.element_size() < 32:
+        return pytest.skip("Invalid last dim size")
+
+    BLOCK_SHAPE = (1, 1, 1, 8, INNER_BLOCK)[-ndim:]
+    out = inp.new_empty(BLOCK_SHAPE)
+
+    constexpr_block_shape = tuple(tl.constexpr(v) for v in BLOCK_SHAPE)
+    kernel[(1, )](out, inp, inp.shape, inp.stride(), constexpr_block_shape)
+
+    # Check in-bounds
+    actual = unwrap_tensor(out)
+    expect = unwrap_tensor(inp)
+    idx = [slice(None, s) for s in inp.shape]
+    torch.testing.assert_close(expect, actual[idx])
+
+    # Check out-of-bounds
+    actual[idx].zero_()
+    expect = expect.new_zeros(BLOCK_SHAPE)
+    torch.testing.assert_close(expect, actual)
+
+
+@triton.jit
+def _compute_pid(tile_id, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS):
+    group_id = tile_id // num_pid_in_group
+    first_pid_m = group_id * GROUP_SIZE_M
+    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+    pid_m = first_pid_m + (tile_id % group_size_m)
+    pid_n = (tile_id % num_pid_in_group) // group_size_m
+    return pid_m, pid_n
+
+
+@triton.jit()
+def matmul_kernel_rank_reducing(a_ptr, b_ptr, c_ptr,  #
+                                M, N, K,  #
+                                BLOCK_SIZE_M: tl.constexpr,  #
+                                BLOCK_SIZE_N: tl.constexpr,  #
+                                BLOCK_SIZE_K: tl.constexpr,  #
+                                NUM_SMS: tl.constexpr):  #
+    # Matmul using TMA and device-side descriptor creation
+    GROUP_SIZE_M: tl.constexpr = 8
+    dtype = c_ptr.dtype.element_ty
+    start_pid = tl.program_id(axis=0)
+    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
+    k_tiles = tl.cdiv(K, BLOCK_SIZE_K)
+    num_tiles = num_pid_m * num_pid_n
+
+    a_desc = tl._experimental_make_tensor_descriptor(
+        a_ptr,
+        shape=[1, M, K],
+        strides=[M * K, K, 1],
+        block_shape=[1, BLOCK_SIZE_M, BLOCK_SIZE_K],
+    )
+    b_desc = tl._experimental_make_tensor_descriptor(
+        b_ptr,
+        shape=[1, N, K],
+        strides=[N * K, K, 1],
+        block_shape=[1, BLOCK_SIZE_N, BLOCK_SIZE_K],
+    )
+    c_desc = tl._experimental_make_tensor_descriptor(
+        c_ptr,
+        shape=[1, M, N],
+        strides=[M * N, N, 1],
+        block_shape=[1, BLOCK_SIZE_M, BLOCK_SIZE_N],
+    )
+
+    tile_id_c = start_pid - NUM_SMS
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n
+
+    for tile_id in tl.range(start_pid, num_tiles, NUM_SMS, flatten=True):
+        pid_m, pid_n = _compute_pid(tile_id, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS)
+        offs_am = pid_m * BLOCK_SIZE_M
+        offs_bn = pid_n * BLOCK_SIZE_N
+
+        accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+        for ki in range(k_tiles):
+            offs_k = ki * BLOCK_SIZE_K
+            a = a_desc.load([0, offs_am, offs_k]).reshape(BLOCK_SIZE_M, BLOCK_SIZE_K)
+            b = b_desc.load([0, offs_bn, offs_k]).reshape(BLOCK_SIZE_N, BLOCK_SIZE_K)
+            accumulator = tl.dot(a, b.T, accumulator)
+
+        tile_id_c += NUM_SMS
+        pid_m, pid_n = _compute_pid(tile_id_c, num_pid_in_group, num_pid_m, GROUP_SIZE_M, NUM_SMS)
+        offs_cm = pid_m * BLOCK_SIZE_M
+        offs_cn = pid_n * BLOCK_SIZE_N
+
+        c = accumulator.to(dtype).reshape(1, BLOCK_SIZE_M, BLOCK_SIZE_N)
+        c_desc.store([0, offs_cm, offs_cn], c)
+
+
+@requires_tma
+@pytest.mark.parametrize("dtype_str", ["float16", "bfloat16", "float32"])
+def test_tensor_descriptor_rank_reducing_matmul(dtype_str):
+    NUM_SMS = 4
+    M, N, K = 256, 256, 64
+    A = to_triton(numpy_random((1, M, K), dtype_str), device="cuda", dst_type=dtype_str)
+    B = to_triton(numpy_random((1, N, K), dtype_str), device="cuda", dst_type=dtype_str)
+    C = A.new_empty(1, M, N)
+
+    def alloc_fn(size: int, align: int, stream: Optional[int]):
+        return torch.empty(size, dtype=torch.int8, device="cuda")
+
+    triton.set_allocator(alloc_fn)
+    matmul_kernel_rank_reducing[(NUM_SMS, )](
+        A,
+        B,
+        C,
+        M,
+        N,
+        K,
+        NUM_SMS=4,
+        BLOCK_SIZE_M=32,
+        BLOCK_SIZE_N=32,
+        BLOCK_SIZE_K=32,
+    )
+
+    actual = unwrap_tensor(C)
+    expect = torch.matmul(A, B.mT)
+    torch.testing.assert_close(expect, actual, atol=1e-1, rtol=1e-4)
+
+
+def f8_to_f16(x, dtype):
+
+    @triton.jit
+    def kernel(Y, X, N, BLOCK_SIZE: tl.constexpr):
+        pid = tl.program_id(0)
+        offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        mask = offs < N
+        x = tl.load(X + offs, mask=mask)
+        tl.store(Y + offs, x, mask=mask)
+
+    ret = torch.empty(x.shape, dtype=torch.float16, device=x.device)
+    grid = lambda META: (triton.cdiv(x.numel(), META['BLOCK_SIZE']), )
+    dtype = getattr(tl, dtype)
+    kernel[grid](ret, triton.reinterpret(x, dtype), ret.numel(), BLOCK_SIZE=1024)
+    return ret
+
+
+@triton.jit
+def mxfp8_mxfp4_matmul_tma(  #
+        a_ptr, b_ptr, output_ptr,  #
+        a_scale, b_scale,  #
+        M, N, K,  #
+        stride_scale,  #
+        stride_am, stride_ak,  #
+        stride_cm, stride_cn,  #
+        BLOCK_M: tl.constexpr,  #
+        BLOCK_N: tl.constexpr,  #
+        BLOCK_K: tl.constexpr,  #
+        NUM_STAGES: tl.constexpr):  #
+    pid = tl.program_id(axis=0)
+    num_pid_m = tl.cdiv(M, BLOCK_M)
+    pid_m = pid % num_pid_m
+    pid_n = pid // num_pid_m
+    offs_am = (pid_m * BLOCK_M + tl.arange(0, BLOCK_M)) % M
+    offs_bn = (pid_n * BLOCK_N + tl.arange(0, BLOCK_N)) % N
+    offs_bn_tma = pid_n * BLOCK_N
+    offs_ak = tl.arange(0, BLOCK_K)
+    offs_scale_k = tl.arange(0, BLOCK_K // 32)
+    a_scale_ptr = a_scale + offs_am[:, None] * stride_scale + offs_scale_k[None, :]
+    b_scale_ptr = b_scale + offs_bn[:, None] * stride_scale + offs_scale_k[None, :]
+    a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_ak[None, :] * stride_ak)
+    accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=output_ptr.dtype.element_ty)
+    offs_bk = 0
+
+    b_desc = tl._experimental_make_tensor_descriptor(
+        b_ptr,
+        shape=[N, K // 2],
+        strides=[K // 2, 1],
+        block_shape=[BLOCK_N, BLOCK_K // 2],
+    )
+
+    for k in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES):
+        a = tl.load(a_ptrs)
+        b = b_desc.load([offs_bn_tma, offs_bk])
+
+        scale_a = tl.load(a_scale_ptr)
+        scale_b = tl.load(b_scale_ptr)
+        accumulator = tl.dot_scaled(a, scale_a, "e5m2", b.T, scale_b, "e2m1", accumulator)
+        a_ptrs += BLOCK_K * stride_ak
+
+        offs_bk += b_desc.block_shape[-1]
+        a_scale_ptr += BLOCK_K // 32
+        b_scale_ptr += BLOCK_K // 32
+
+    offs_cm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_cn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    output_ptrs = output_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
+    c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
+    tl.store(output_ptrs, accumulator, mask=c_mask)
+
+
+@requires_tma
+@pytest.mark.parametrize("M, N, K", [(1024, 512, 256), (128, 256, 256), (8192, 8192, 8192)])
+@pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(128, 128, 128), (128, 128, 256), (128, 256, 128),
+                                                       (128, 256, 256)])
+@pytest.mark.parametrize("NUM_STAGES", [1, 3])
+def test_mxfp8_mxfp4_matmul_tma(M, N, K, BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES, device):
+    if BLOCK_N == 256 and BLOCK_K == 256:
+        NUM_STAGES = min(NUM_STAGES, 2)
+
+    if BLOCK_K < K and torch.cuda.get_device_capability(0)[0] != 10:
+        pytest.skip("Currently broken on hopper")
+
+    a = torch.randint(20, 40, (M, K), dtype=torch.uint8).view(torch.float8_e5m2).to(device)
+
+    dtype_src_str = "float8e5"
+
+    b_mxfp4 = MXFP4Tensor(size=(N, K), device=device).random()
+    b = b_mxfp4.to_packed_tensor(dim=1)
+    b_ref = b_mxfp4.to(torch.float32).T
+
+    a_scale_mxfp4 = MXScaleTensor(size=(M, (K + 32 - 1) // 32), device=device).random(high=64.0)
+    b_scale_mxfp4 = MXScaleTensor(size=(N, (K + 32 - 1) // 32), device=device).random(high=64.0)
+    a_scale = a_scale_mxfp4.data
+    b_scale = b_scale_mxfp4.data
+
+    a_scale_ref = a_scale_mxfp4.to(torch.float32).repeat_interleave(32, dim=1)[:M, :K]
+    b_scale_ref = b_scale_mxfp4.to(torch.float32).repeat_interleave(32, dim=1).T.contiguous()[:K, :N]
+
+    output = a.new_empty((M, N), dtype=torch.float32)
+    grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
+
+    def alloc_fn(size: int, align: int, stream: Optional[int]):
+        return torch.empty(size, dtype=torch.int8, device="cuda")
+
+    triton.set_allocator(alloc_fn)
+
+    mxfp8_mxfp4_matmul_tma[grid](a, b, output, a_scale, b_scale, M, N, K, a_scale.stride(0), a.stride(0), a.stride(1),
+                                 output.stride(0), output.stride(1), BLOCK_M, BLOCK_N, BLOCK_K, NUM_STAGES=NUM_STAGES)
+
+    a_ref = f8_to_f16(a.view(torch.float8_e5m2), dtype_src_str).to(torch.float32)
+    ref_out = torch.matmul(a_ref * a_scale_ref, b_ref * b_scale_ref)
+
+    torch.testing.assert_close(ref_out, output, atol=1e-3, rtol=1e-3)
