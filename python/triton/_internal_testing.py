@@ -20,6 +20,7 @@ dtypes = integral_dtypes + float_dtypes
 dtypes_with_bfloat16 = dtypes + ['bfloat16']
 torch_float8_dtypes = ['float8_e4m3fn', 'float8_e5m2']
 torch_dtypes = ['bool'] + int_dtypes + ['uint8'] + float_dtypes + ['bfloat16']
+tma_dtypes = sorted(set(dtypes_with_bfloat16) - {"int64", "uint64", "float64"})
 
 
 def is_interpreter():
@@ -176,3 +177,9 @@ def tma_skip_msg(byval_only=False):
 
 
 requires_tma = pytest.mark.skipif(not supports_tma(), reason=tma_skip_msg())
+
+
+def unwrap_tensor(t: torch.Tensor | triton.runtime.jit.TensorWrapper):
+    if isinstance(t, triton.runtime.jit.TensorWrapper):
+        return t.base
+    return t
