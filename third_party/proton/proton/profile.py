@@ -4,9 +4,8 @@ import os
 import pathlib
 
 from triton._C.libproton import proton as libproton
-from .hook import register_launch_hook, unregister_launch_hook, activate_launch_hook, deactivate_launch_hook
-from .instrumentation import register_instrumentation_hook, unregister_instrumentation_hook
 from .flags import set_profiling_off, set_profiling_on, is_command_line
+from .hook import HookManager, LaunchHook, InstrumentationHook
 from typing import Optional
 
 DEFAULT_PROFILE_NAME = "proton"
@@ -116,9 +115,9 @@ def start(
     session = libproton.start(name, context, data, backend, mode, backend_path)
 
     if hook == "triton":
-        register_launch_hook(session)
+        HookManager.register(LaunchHook(), session)
     if backend == "instrumentation":
-        register_instrumentation_hook(mode)
+        HookManager.register(InstrumentationHook(mode), session)
 
     return libproton.start(name, context, data, backend, mode, backend_path)
 
@@ -137,7 +136,7 @@ def activate(session: Optional[int] = None) -> None:
     if is_command_line() and session != 0:
         raise ValueError("Only one session can be activated when running from the command line.")
 
-    activate_launch_hook(session)
+    HookManager.activate(session)
 
     if session is None:
         libproton.activate_all()
@@ -159,7 +158,7 @@ def deactivate(session: Optional[int] = None) -> None:
     if is_command_line() and session != 0:
         raise ValueError("Only one session can be deactivated when running from the command line.")
 
-    deactivate_launch_hook(session)
+    HookManager.deactivate(session)
 
     if session is None:
         libproton.deactivate_all()
@@ -180,8 +179,7 @@ def finalize(session: Optional[int] = None, output_format: str = "hatchet") -> N
     Returns:
         None
     """
-    unregister_launch_hook(session)
-    unregister_instrumentation_hook()
+    HookManager.unregister(session)
 
     if session is None:
         set_profiling_off()

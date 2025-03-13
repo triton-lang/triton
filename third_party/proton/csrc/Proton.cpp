@@ -70,6 +70,22 @@ void initProton(pybind11::module &&m) {
     SessionManager::instance().exitOp(Scope(scopeId, name));
   });
 
+  m.def("init_scope_ids",
+        [](uint64_t functionId,
+           const std::vector<std::pair<size_t, std::string>> &scopeIds) {
+          SessionManager::instance().initScopeIds(functionId, scopeIds);
+        });
+
+  m.def("enter_instrumented_op", [](size_t functionId, const uint8_t *buffer,
+                                    size_t size) {
+    SessionManager::instance().enterInstrumentedOp(functionId, buffer, size);
+  });
+
+  m.def("exit_instrumented_op", [](size_t functionId, const uint8_t *buffer,
+                                   size_t size) {
+    SessionManager::instance().exitInstrumentedOp(functionId, buffer, size);
+  });
+
   m.def("enter_state", [](const std::string &state) {
     SessionManager::instance().setState(state);
   });
@@ -82,18 +98,6 @@ void initProton(pybind11::module &&m) {
            const std::map<std::string, MetricValueType> &metrics) {
           SessionManager::instance().addMetrics(scopeId, metrics);
         });
-
-  m.def("set_scope_ids",
-        [](const std::vector<std::pair<size_t, std::string>> &scopeIdPairs)
-            -> void {});
-
-  m.def("unset_scope_ids", []() -> void {});
-
-  m.def("set_profile_buffer",
-        [](uint64_t *profileBuffer, size_t size, size_t alignment) -> void {});
-
-  m.def("get_num_active_sessions",
-        []() { return SessionManager::instance().getNumActiveSessions(); });
 
   pybind11::bind_map<std::map<std::string, MetricValueType>>(m, "MetricMap");
 }

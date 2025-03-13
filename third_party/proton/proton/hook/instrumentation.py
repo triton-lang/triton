@@ -10,31 +10,30 @@ from triton.language import constexpr
 from triton.runtime._allocation import set_profile_allocator, NullAllocator
 
 from .hook import Hook
-from ..scope import enter_scope, exit_scope
 
 
 class CudaAllocator:
 
-    def __init__(self, profile_buffer_size: int, profile_buffer_alignment: int):
-        self.profile_buffer_size = profile_buffer_size
-        self.profile_buffer_alignment = profile_buffer_alignment
-        self.current_buffer = None
+    def __init__(self, instrumentation_hook):
+        self.instrumentation_hook = instrumentation_hook
 
     def __call__(self, size: int, alignment: int, stream: Optional[int]):
         import torch
 
         # Ensure proper alignment and minimum size
-        alignment = max(alignment, self.profile_buffer_alignment)
+        alignment = max(alignment, self.instrumentation_hook.profile_buffer_alignment)
         aligned_size = (size + alignment - 1) // alignment * alignment
-        aligned_size = max(aligned_size, self.profile_buffer_size)
+        aligned_size = max(aligned_size, self.instrumentation_hook.profile_buffer_size)
 
         # Create the buffer
         buffer = torch.empty(aligned_size, dtype=torch.uint8, device="cuda", stream=stream)
-        self.current_buffer = buffer
+        self.instrumentation_hook.buffer = buffer.data_ptr()
         return buffer
 
 
 class InstrumentationHook(Hook):
+    # It's important to note that only one active session can use the instrumentation hook at a time.
+    # The check is enforced by the proton library.
 
     def __init__(self, mode: str,  #
                  profile_buffer_size: int = 16 * 1024 * 1024,  #
@@ -47,7 +46,8 @@ class InstrumentationHook(Hook):
         # Default buffer configuration
         self.profile_buffer_size = profile_buffer_size
         self.profile_buffer_alignment = profile_buffer_alignment
-        self.allocator = CudaAllocator(self.profile_buffer_alignment, self.profile_buffer_alignment)
+        self.allocator = CudaAllocator(self)
+        self.buffer = None
 
     def activate(self):
         # Set up the profiling allocator
@@ -84,12 +84,12 @@ class InstrumentationHook(Hook):
                 self.function_scope_ids[function] = triton_proton.get_scope_id_pairs(module)
 
         scope_id_pairs = self.function_scope_ids.get(function, [])
-        libproton.map_scope_ids(function, scope_id_pairs)
+        libproton.init_scope_ids(function, scope_id_pairs)
 
     def enter(self, lazy_dict: LazyDict) -> None:
-        enter_scope(triton_op=True,
-                    metrics={"function(exc)": lazy_dict.get("function"), "buffer(exc)": self.current_buffer})
+        libproton.enter_instrumented_op(lazy_dict.get("function"), self.buffer, self.profile_buffer_size)
 
-    @staticmethod
-    def exit(lazy_dict: LazyDict) -> None:
-        exit_scope(triton_op=True)
+    def exit(self, lazy_dict: LazyDict) -> None:
+        libproton.exit_instrumented_op(lazy_dict.get("function"), self.buffer, self.profile_buffer_size)
+        # Release the profiling buffer for recycling
+        self.buffer = None

@@ -10,6 +10,18 @@ class LaunchHook(Hook):
     flops_width = [8, 16, 32, 64]
     metrics = [f"flops{width}" for width in flops_width] + ["bytes"] + ["flops"]
 
+    def __init__(self):
+        pass
+
+    def init_handle(self, function, module, metadata_group):
+        pass
+
+    def activate(self):
+        pass
+
+    def deactivate(self):
+        pass
+
     def enter(self, lazy_dict: LazyDict) -> None:
         enter_state(COMPUTE_METADATA_SCOPE_NAME)
         metadata = lazy_dict.get()

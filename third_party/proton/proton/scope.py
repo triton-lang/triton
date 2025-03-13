@@ -117,10 +117,13 @@ def enter_scope(name: str, *, triton_op: bool = False, metrics: Optional[dict[st
     return id
 
 
-def exit_scope(triton_op: bool = False, metrics: Optional[dict[str, MetricValueType]] = None) -> int:
+def exit_scope(name: Optional[str] = None, *, triton_op: bool = False,
+               metrics: Optional[dict[str, MetricValueType]] = None) -> int:
     if not get_profiling_on():
         return -1
-    id, name = thread_local_scopes.scopes.pop()
+    id, popped_name = thread_local_scopes.scopes.pop()
+    if name and name != popped_name:
+        raise ValueError(f"Scope name mismatch: {name} != {popped_name}")
     if triton_op:
         libproton.exit_op(id, name)
     else:
