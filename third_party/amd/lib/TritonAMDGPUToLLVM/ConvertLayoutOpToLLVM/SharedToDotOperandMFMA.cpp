@@ -127,78 +127,52 @@ bool hasSwizzleEnabled(const SwizzledSharedEncodingAttr &srcEncoding) {
   return srcEncoding.getMaxPhase() > 1;
 }
 
-/// Computes offsets for operand B or transposed operand A
-///
-/// \param rewriter
-/// \param loc
-/// \param elemsPerInstr operand tile shape [K, nonK] consumed by one MFMA
-/// instruction
-/// \param warpId warp id for the "non K" axis
-/// \param laneId lane id in warp [0..63]
-/// \param warpsPerBlock number of warps per horizontal axis
-/// \param numOfElems number of elements accessed by threads per repetition
-/// \param reps number of instructions repretition to fully cover dot operand
-/// \param smemStrides shared memory strides
-/// \param smemOffsets shared memory offsets
 llvm::SmallVector<Value>
 fastPathComputeOffsets(ConversionPatternRewriter &rewriter, Location loc,
-                       const ArrayRef<int64_t> &elemsPerInstr, Value warpId,
-                       Value laneId, int warpsPerBlock, int numOfElems,
-                       ArrayRef<int64_t> reps, ArrayRef<Value> smemStrides,
-                       ArrayRef<Value> smemOffsets) {
+                       int64_t opIdx, ArrayRef<int64_t> elemsPerInstr,
+                       Value warpId, Value laneId, int warpsPerBlock,
+                       int numOfElems, SmallVector<int64_t> reps,
+                       SharedMemoryObject smemObj, ArrayRef<Value> smemStrides,
+                       unsigned nonKDim, unsigned kDim) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  auto numK = reps[1];
-  auto numN = reps[2];
-  SmallVector<Value> offsets(numK * numN * numOfElems);
 
-  auto smemStrideRow = smemStrides[0];
-  auto smemStrideCol = smemStrides[1];
+  SmallVector<Value> smemOffsets = smemObj.getOffsets();
+  auto rank = smemObj.getOffsets().size();
 
-  auto smemOffsetRow = smemOffsets[0];
-  auto smmemOffsetCol = smemOffsets[1];
+  SmallVector<int64_t> adjustedElemsPerInstr{elemsPerInstr};
+  if (opIdx == 1) {
+    // transpose reps and offsets, because operand B has layout equal to
+    // transposed operand A layout
+    // this unifies axis order, so non-K dim is 0, k dim is 1
+    adjustedElemsPerInstr = {elemsPerInstr[1], elemsPerInstr[0]};
+    reps = AMD::helper::transposeSpatialDims(reps);
+    smemOffsets = AMD::helper::transposeSpatialDims(smemOffsets);
+  }
 
-  auto iKDim = elemsPerInstr[0];
-  auto iNonKDim = elemsPerInstr[1];
-  int lineSize = warpsPerBlock * iNonKDim * numN;
-  Value _nonKDim = b.i32_val(iNonKDim);
-  Value warpOffset = b.mul(warpId, b.i32_val(iNonKDim));
-  Value colOffset = b.urem(laneId, _nonKDim);
+  constexpr int vectorSize = 1;
+  auto mapping = computeTensorElemMappingInBlock(
+      rewriter, loc, adjustedElemsPerInstr, warpId, laneId, numOfElems, reps,
+      smemOffsets, vectorSize, nonKDim, kDim);
+  llvm::SmallVector<Value> inblockOffset(mapping.size());
+  for (int i = 0; i < mapping.size(); ++i) {
+    const int rowIndex = opIdx == 0 ? 0 : 1;
+    const int colIndex = opIdx == 0 ? 1 : 0;
+    Value row = mapping[i][rowIndex];
+    Value col = mapping[i][colIndex];
+    inblockOffset[i] = b.add(b.mul(row, smemStrides[rank - 2]),
+                             b.mul(col, smemStrides[rank - 1]));
+  }
 
-  // halfOffset is an offset related to wrapping of warp in the tile.
-  // for example, mfma 32 case (mapping of tensor elements to lane ids in
-  // warp):
-  //
-  //  0  1  2  3 ... 31
-  //  0  1  2  3 ... 31
-  //  0  1  2  3 ... 31
-  //  0  1  2  3 ... 31
-  // 32 33 34 35 ... 63  <- at this point warp is wrapping
-  // 32 33 34 35 ... 63
-  // 32 33 34 35 ... 63
-  // 32 33 34 35 ... 63
-  Value halfOffset;
-  if ((iKDim == 1 || iKDim == 4) && iNonKDim == 4)
-    halfOffset = b.i32_val(0);
-  else
-    halfOffset = b.mul(b.udiv(laneId, _nonKDim), b.i32_val(numOfElems));
+  const auto numBlocks = reps[reps.size() - 2];
+  const auto blockSize = mapping.size();
+  llvm::SmallVector<Value> offsets(blockSize * numBlocks);
 
-  for (int block = 0; block < numN; ++block) {
-    Value blockOffset = b.i32_val(block * iNonKDim * warpsPerBlock);
-    for (int tile = 0; tile < numK; ++tile) {
-      Value tileOffset = b.i32_val(tile * iKDim);
-      for (int elem = 0; elem < numOfElems; ++elem) {
-
-        Value rowOffset = b.add(b.i32_val(elem), halfOffset);
-        Value row = b.add(b.add(rowOffset, tileOffset), smemOffsetRow);
-        Value col = b.add(b.add(blockOffset, b.add(warpOffset, colOffset)),
-                          smmemOffsetCol);
-
-        Value offset =
-            b.add(b.mul(row, smemStrideRow), b.mul(col, smemStrideCol));
-
-        offsets[numK * numOfElems * block + numOfElems * tile + elem] = offset;
-      }
-    }
+  auto blockStride = opIdx == 0 ? smemStrides[rank - 2] : smemStrides[rank - 1];
+  for (int block = 0; block < numBlocks; ++block) {
+    int blockNonKOffset = block * nonKDim * warpsPerBlock;
+    Value offAdjust = b.mul(b.i32_val(blockNonKOffset), blockStride);
+    for (int i = 0; i < blockSize; ++i)
+      offsets[block * blockSize + i] = b.add(offAdjust, inblockOffset[i]);
   }
   return offsets;
 }
@@ -314,29 +288,21 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
     // disabled, in which case offsets computation can be simplified
     // TODO (zhanglx): later when we enable vector access to LDS for non k-major
     // tensors, we'll refactor the scope of fast and normal path
-    if (opIdx == 0) {
-      if (isColMajor(order)) {
-        SmallVector<int64_t> elemsPerInstr{mfmaInstrK, mfmaInstrNonK};
-        SmallVector<int64_t> reps{numReps[0], numReps[2], numReps[1]};
-        SmallVector<Value> tStrides = {smemStrides[1], smemStrides[0]};
-        SmallVector<Value> tOffsets = {smemOffsets[1], smemOffsets[0]};
-        offsets = fastPathComputeOffsets(rewriter, loc, elemsPerInstr,
-                                         spatialWarpId, lane, warpsPerBlockNonK,
-                                         numOfElems, reps, tStrides, tOffsets);
-      } else {
-        llvm_unreachable(
-            "row major operand A should be handled in the normal path");
-      }
-    } else {
-      if (isColMajor(order)) {
-        llvm_unreachable(
-            "col major operand B should be handled in the normal path");
-      } else {
-        offsets = fastPathComputeOffsets(
-            rewriter, loc, elemsPerInstr, spatialWarpId, lane,
-            warpsPerBlockNonK, numOfElems, numReps, smemStrides, smemOffsets);
-      }
+    if ((opIdx == 0) && !isColMajor(order)) {
+      llvm_unreachable(
+          "row major operand A should be handled in the normal path");
     }
+
+    if ((opIdx == 1) && isColMajor(order)) {
+      llvm_unreachable(
+          "col major operand B should be handled in the normal path");
+    }
+
+    offsets = fastPathComputeOffsets(rewriter, loc, opIdx, elemsPerInstr,
+                                     spatialWarpId, lane, warpsPerBlockNonK,
+                                     numOfElems, numReps, smemObj, smemStrides,
+                                     opIdx == 0 ? mDim : nDim, mfmaInstrK);
+    smemBase = AMD::computeBasePtr(rewriter, loc, smemObj, smemStrides);
   } else { // normal path
     // Normal path handles tensors that fall into either of the following three
     // cases:
