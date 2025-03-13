@@ -93,7 +93,7 @@ bool canCoalesceWriteIntoSharedMemory(RewriterBase &rewriter,
                                       unsigned vectorSize);
 
 // Return true if op is used by DotScaledOp or UpcastMXFPOp ops.
-bool usedInScaledOp(Operation *op);
+bool isUsedByDotScaledOp(Operation *op);
 
 } // namespace mlir::LLVM::AMD
 

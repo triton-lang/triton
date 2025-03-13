@@ -199,6 +199,17 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
                     Location loc, Value tensor, DotOperandEncodingAttr encoding,
                     const SharedMemoryObject &smemObj,
                     const LLVMTypeConverter *typeConverter, Value thread) {
+  // We observe mismatches going down this path for scaled dot operations.
+  // However, these mismatches do not occur when the conversion is performed via
+  // LL, which is the preferred anyway.
+  // TODO: Deprecate and remove this path once fixing LLM performance issues.
+  for (auto op : tensor.getUsers()) {
+    if (auto localLoadOp = llvm::dyn_cast<triton::gpu::LocalLoadOp>(op)) {
+      if (mlir::LLVM::AMD::isUsedByDotScaledOp(op))
+        return Value();
+    }
+  }
+
   auto tb = TritonLLVMOpBuilder(loc, rewriter);
   assert((opIdx == 0 || opIdx == 1) && "unexpected operand idx");
   auto aTensorTy = cast<triton::gpu::MemDescType>(tensor.getType());
@@ -233,18 +244,6 @@ Value convertLayout(int opIdx, ConversionPatternRewriter &rewriter,
   } else {
     mfmaInstrNonK = elemsPerInstr[nonKDimIdx];
     mfmaInstrK = elemsPerInstr[kDimIdx];
-  }
-
-  // Mismatches are observed in the SharedToDot path for scaled dot operations.
-  // However, these mismatches do not occur when the conversion is performed via
-  // LL. This approach is preferred anyway, as the SharedToDotOperandMFMA.cpp
-  // path will soon be deprecated.
-  for (auto op : tensor.getUsers()) {
-    if (auto localLoadOp = llvm::dyn_cast<triton::gpu::LocalLoadOp>(op)) {
-      if (mlir::LLVM::AMD::usedInScaledOp(op)) {
-        return Value();
-      }
-    }
   }
 
   if (mfmaInstrNonK > shape[nonKDimIdx] || mfmaInstrK > shape[kDimIdx]) {

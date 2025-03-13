@@ -629,7 +629,7 @@ bool canCoalesceWriteIntoSharedMemory(RewriterBase &rewriter,
   return true;
 }
 
-bool usedInScaledOp(Operation *op) {
+bool isUsedByDotScaledOp(Operation *op) {
   const ForwardSliceOptions fwdOpt;
   SetVector<mlir::Operation *> forwardSliceSet;
   getForwardSlice(op, &forwardSliceSet, fwdOpt);

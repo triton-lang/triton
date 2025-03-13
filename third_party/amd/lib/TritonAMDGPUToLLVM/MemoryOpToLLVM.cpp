@@ -4,7 +4,7 @@
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
-using ::mlir::LLVM::AMD::usedInScaledOp;
+using ::mlir::LLVM::AMD::isUsedByDotScaledOp;
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
 using ::mlir::triton::gpu::AMDWmmaEncodingAttr;
 using ::mlir::triton::gpu::DotOperandEncodingAttr;
@@ -198,7 +198,7 @@ private:
     // represented as an i8. Currently, the only way to distinguish FP4 from an
     // actual int8 is by checking whether the localLoad is used in a scaled dot
     // operation, as int8 is never used in one.
-    bool isFP4 = usedInScaledOp(localLoad) && bitwidth == 8 &&
+    bool isFP4 = isUsedByDotScaledOp(localLoad) && bitwidth == 8 &&
                  dstTy.getElementType().isInteger();
 
     if (isFP4 || (bitwidth != 16 && bitwidth != 8)) {
