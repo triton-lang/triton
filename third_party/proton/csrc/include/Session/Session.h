@@ -185,20 +185,11 @@ private:
     updateInterfaceCount<Interface, Counter, false>(sessionId, interfaceCounts);
   }
 
-  template <typename Counter> void enterInterface(Counter &interfaceCounts) {
-    for (auto iter : interfaceCounts) {
-      auto [interface, count] = iter;
+  template <typename Counter, typename FnT>
+  void executeInterface(Counter &interfaceCounts, FnT &&fn) {
+    for (auto [interface, count] : interfaceCounts) {
       if (count > 0) {
-        interface->enterOp(scope);
-      }
-    }
-  }
-
-  template <typename Counter> void exitInterface(Counter &interfaceCounts) {
-    for (auto iter : interfaceCounts) {
-      auto [interface, count] = iter;
-      if (count > 0) {
-        interface->exitOp(scope);
+        fn(interface);
       }
     }
   }
