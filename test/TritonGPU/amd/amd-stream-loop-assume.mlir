@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritonamdgpu-stream-pipeline="num_stages=2" -canonicalize | FileCheck %s --check-prefixes=LOCAL_1
+// RUN: triton-opt %s -split-input-file -tritonamdgpu-stream-pipeline="num_stages=2" -canonicalize | FileCheck %s
 
 // matmul: 128x32 @ 32x128 -> 128x128
 #AL = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
@@ -10,23 +10,22 @@
 #A = #ttg.dot_op<{opIdx = 0, parent = #C, kWidth=2}>
 #B = #ttg.dot_op<{opIdx = 1, parent = #C, kWidth=2}>
 
-// One Local buffer.
-// LOCAL_1-LABEL: tt.func @assume_matmul
-// LOCAL_1-COUNT-2: tt.load
-// LOCAL_1-COUNT-2: ttg.local_store
-// LOCAL_1: scf.for
-// LOCAL_1: llvm.intr.assume
-// LOCAL_1: tt.load
-// LOCAL_1: ttg.local_load
-// LOCAL_1: tt.load
-// LOCAL_1: ttg.local_load
-// LOCAL_1: tt.dot
-// LOCAL_1-COUNT-2: ttg.local_store
-// LOCAL_1: scf.yield
-// LOCAL_1: llvm.intr.assume
-// LOCAL_1-COUNT-2: ttg.local_load
-// LOCAL_1: tt.dot
-// LOCAL_1-NOT: tt.dot
+// CHECK-LABEL: tt.func @assume_matmul
+// CHECK-COUNT-2: tt.load
+// CHECK-COUNT-2: ttg.local_store
+// CHECK: scf.for
+// CHECK: llvm.intr.assume
+// CHECK: tt.load
+// CHECK: ttg.local_load
+// CHECK: tt.load
+// CHECK: ttg.local_load
+// CHECK: tt.dot
+// CHECK-COUNT-2: ttg.local_store
+// CHECK: scf.yield
+// CHECK: llvm.intr.assume
+// CHECK-COUNT-2: ttg.local_load
+// CHECK: tt.dot
+// CHECK-NOT: tt.dot
 
 module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32} {
 tt.func @assume_matmul(%lb : index, %ub : index, %step : index,
