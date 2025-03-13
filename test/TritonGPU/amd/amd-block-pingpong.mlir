@@ -1245,7 +1245,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     %c1_i32 = arith.constant 1 : i32
     %cst_0 = arith.constant dense<64> : tensor<64x256xi32, #blocked>
     %cst_1 = arith.constant dense<64> : tensor<256x64xi32, #blocked1>
-    %cst_2 = arith.constant dense<1.000000e+00> : tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
+    %cst_2 = arith.constant dense<1.000000e+00> : tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
     %c0_i32 = arith.constant 0 : i32
     %c63_i32 = arith.constant 63 : i32
     %c64_i32 = arith.constant 64 : i32
@@ -1282,9 +1282,9 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
       %30 = tt.load %29 : tensor<256x64x!tt.ptr<f16>, #blocked1>
       %31 = tt.addptr %arg8, %cst_0 : tensor<64x256x!tt.ptr<f16>, #blocked>, tensor<64x256xi32, #blocked>
       %32 = tt.load %31 : tensor<64x256x!tt.ptr<f16>, #blocked>
-      %33 = ttg.local_load %arg10 : !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable> -> tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>>
-      %34 = ttg.local_load %arg11 : !ttg.memdesc<64x256xf16, #shared1, #ttg.shared_memory, mutable> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>>
-      %35 = tt.dot %33, %34, %arg6 : tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 8}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 8}>> -> tensor<256x256xf32, #mma>
+      %33 = ttg.local_load %arg10 : !ttg.memdesc<256x64xf16, #shared, #ttg.shared_memory, mutable> -> tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>>
+      %34 = ttg.local_load %arg11 : !ttg.memdesc<64x256xf16, #shared1, #ttg.shared_memory, mutable> -> tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+      %35 = tt.dot %33, %34, %arg6 : tensor<256x64xf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 4}>> * tensor<64x256xf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>> -> tensor<256x256xf32, #mma>
       %36 = arith.cmpi eq, %arg5, %c63_i32: i32
       %37 = scf.if %36 -> tensor<256x256xf32, #mma> {
         %38 = ttg.local_alloc  : () -> !ttg.memdesc<1x256x256xf32, #shared, #ttg.shared_memory, mutable>
