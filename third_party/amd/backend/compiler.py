@@ -17,6 +17,7 @@ def min_dot_size(target: GPUTarget):
     return lambda lhsType, rhsType: (1, 1, 1)
 
 
+
 def is_pingpong_enabled(arch):
     default = "1" if arch == "gfx942" else "0"
     return os.getenv("TRITON_HIP_USE_BLOCK_PINGPONG", default) == "1"
