@@ -936,10 +936,10 @@ available on AMD Instinct GPUs of CDNA architectures.
 
 It is characterized by the following parameters:
 - `versionMajor` and `versionMinor` indicates the GPU architecture:
-  - 1.0: gfx908, i.e. MI100
-  - 2.0: gfx90a: i.e. MI200, MI210, MI250
-  - 3.0: gfx940, gfx941, gfx942: MI300
-  - 4.0: gfx950: MI350
+  - 1.0: gfx908, i.e. CDNA1
+  - 2.0: gfx90a: i.e. CDNA2
+  - 3.0: gfx942: CDNA3
+  - 4.0: gfx950: CDNA4
 - `warpsPerCTA` indicates the warp layout in the block.
 - `MDim` and `NDim` indicate the dimension of the output of the mfma instruction.
 - `isTransposed` indicates the result tensor is transposed so that it can be converted to dotOperand layout
