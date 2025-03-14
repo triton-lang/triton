@@ -253,7 +253,9 @@ def initialize_block_scaled(M, N, K, block_scale_type="nvfp4", compute_reference
     # logically transposed. Note that if one operand is of fp8 precision, unlike Hopper,
     # Blackwell supports both row-major and col-major layouts for the RHS matrix.
     # For the mixed-precision case, the fp4 RHS can be either in row or col-major layout.
-    # But for performance reason, it is recommended to use col-major layout.
+    # But for performance reason, it is recommended to use col-major layout. If TMA is used
+    # for the fp4 RHS operand load in mixed-precision dot, as in this tutorial, it must be
+    # in col-major layout.
     b_ref = MXFP4Tensor(size=(N, K), device=device).random()
     if block_scale_type in ["mxfp8", "mixed"]:
         a_ref = a_ref.to(torch.float32)
