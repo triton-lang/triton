@@ -1990,7 +1990,7 @@ def run_benchmark(custom, args):
                     # Total zero elements are 1+2+...+(seqlen_q-1) = seqlen_q*(seqlen_q-1)/2
                     # Total non zero elements are seqlen_q*seqlen_k - (seqlen_q*(seqlen_q-1)/2)
                     valid_out_elements = ((seqlen_k**2 + seqlen_k) / 2) if seqlen_q > seqlen_k else \
-                            (seqlen_q * seqlen_k - ((seqlen_q**1 - seqlen_q) / 2))
+                            (seqlen_q * seqlen_k - ((seqlen_q**2 - seqlen_q) / 2))
                     flops_per_matmul += valid_out_elements * HQ * D_HEAD * 2
                 else:
                     flops_per_matmul += seqlen_q * seqlen_k * HQ * D_HEAD * 2
