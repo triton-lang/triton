@@ -8,6 +8,9 @@ import triton.profiler as proton
 
 
 def test_record(tmp_path: pathlib.Path):
+    # TODO(Keren): Remove hack
+    import os
+    os.environ["TEST_PROFILE_SCRATCH_SIZE"] = "1"
 
     @triton.jit
     def add_kernel(
@@ -40,6 +43,7 @@ def test_record(tmp_path: pathlib.Path):
     proton.start(str(temp_file.with_suffix("")), backend="instrumentation")
     pgm = add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
     proton.finalize()
+    os.environ["TEST_PROFILE_SCRATCH_SIZE"] = "0"
     ttir = pgm.asm['ttir']
     assert "proton.record start" in ttir
     assert "proton.record end" in ttir
