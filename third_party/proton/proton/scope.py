@@ -124,6 +124,8 @@ def exit_scope(name: Optional[str] = None, *, triton_op: bool = False,
     id, popped_name = thread_local_scopes.scopes.pop()
     if name and name != popped_name:
         raise ValueError(f"Scope name mismatch: {name} != {popped_name}")
+    elif not name:
+        name = popped_name
     if triton_op:
         libproton.exit_op(id, name)
     else:

@@ -56,9 +56,11 @@ class InstrumentationHook(Hook):
 
         original_run = JITFunction.run
 
+        mode = self.mode
+
         @functools.wraps(original_run)
         def instrumented_run(self, *args, **kwargs):
-            kwargs["instrumentation"] = constexpr(self.mode)
+            kwargs["instrumentation"] = constexpr(mode)
             return original_run(self, *args, **kwargs)
 
         JITFunction.run = instrumented_run
@@ -88,9 +90,9 @@ class InstrumentationHook(Hook):
         libproton.init_scope_ids(function, scope_id_pairs)
 
     def enter(self, lazy_dict: LazyDict) -> None:
-        libproton.enter_instrumented_op(lazy_dict.get("function"), self.buffer, self.profile_buffer_size)
+        libproton.enter_instrumented_op(lazy_dict.data.get("function", None), self.buffer, self.profile_buffer_size)
 
     def exit(self, lazy_dict: LazyDict) -> None:
-        libproton.exit_instrumented_op(lazy_dict.get("function"), self.buffer, self.profile_buffer_size)
+        libproton.exit_instrumented_op(lazy_dict.data.get("function", None), self.buffer, self.profile_buffer_size)
         # Release the profiling buffer for recycling
         self.buffer = None
