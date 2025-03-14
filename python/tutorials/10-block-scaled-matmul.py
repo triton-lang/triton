@@ -190,12 +190,14 @@ def block_scaled_matmul_kernel(  #
 
     accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
     for k in tl.range(0, tl.cdiv(K, BLOCK_K), num_stages=NUM_STAGES):
-        a = tl._experimental_descriptor_load(a_desc, [offs_am, offs_k_a], [BLOCK_M, BLOCK_K // ELEM_PER_BYTE_A], dtype_a)
+        a = tl._experimental_descriptor_load(a_desc, [offs_am, offs_k_a], [BLOCK_M, BLOCK_K // ELEM_PER_BYTE_A],
+                                             dtype_a)
 
         if ELEM_PER_BYTE_A == 1 and ELEM_PER_BYTE_B == 2:
             b = b_desc.load([offs_bn, offs_k_b])
         else:
-            b = tl._experimental_descriptor_load(b_desc, [offs_bn, offs_k_b], [BLOCK_N, BLOCK_K // ELEM_PER_BYTE_B], dtype_b)
+            b = tl._experimental_descriptor_load(b_desc, [offs_bn, offs_k_b], [BLOCK_N, BLOCK_K // ELEM_PER_BYTE_B],
+                                                 dtype_b)
 
         scale_a = tl.load(a_scale_ptr)
         scale_b = tl.load(b_scale_ptr)
@@ -237,10 +239,9 @@ def block_scaled_matmul(a_desc, a_scale, b_desc_or_tensor, b_scale, dtype_dst, M
     grid = (triton.cdiv(M, configs["BLOCK_SIZE_M"]) * triton.cdiv(N, configs["BLOCK_SIZE_N"]), 1)
     block_scaled_matmul_kernel[grid](a_desc, a_scale, b_desc_or_tensor, b_scale, c_desc, M, N, K, a_scale.stride(0),
                                      a_scale.stride(1), a_scale.stride(2), a_scale.stride(3), dtype_dst,
-                                     configs["ELEM_PER_BYTE_A"], configs["ELEM_PER_BYTE_B"],
-                                     configs["VEC_SIZE"], configs["BLOCK_SIZE_M"],
-                                     configs["BLOCK_SIZE_N"], configs["BLOCK_SIZE_K"], configs["num_stages"],
-                                     USE_2D_SCALE_LOAD=True)
+                                     configs["ELEM_PER_BYTE_A"], configs["ELEM_PER_BYTE_B"], configs["VEC_SIZE"],
+                                     configs["BLOCK_SIZE_M"], configs["BLOCK_SIZE_N"], configs["BLOCK_SIZE_K"],
+                                     configs["num_stages"], USE_2D_SCALE_LOAD=True)
     return output
 
 
