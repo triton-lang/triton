@@ -1,5 +1,5 @@
-#ifndef CONVERSION_PROTONGPU_TO_LLVM_TARGETINFOBASE_H
-#define CONVERSION_PROTONGPU_TO_LLVM_TARGETINFOBASE_H
+#ifndef PROTONGPU_TO_LLVM_TARGETINFO_BASE_H
+#define PROTONGPU_TO_LLVM_TARGETINFO_BASE_H
 
 #include "triton/Conversion/MLIRTypes.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
@@ -24,4 +24,5 @@ protected:
   const mlir::triton::TargetInfoBase &helper;
 };
 } // namespace mlir::triton::proton
-#endif // CONVERSION_PROTONGPU_TO_LLVM_TARGETINFOBASE_H
+
+#endif // PROTONGPU_TO_LLVM_TARGETINFO_BASE_H

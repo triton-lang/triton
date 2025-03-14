@@ -96,10 +96,22 @@ public:
 
   void exitOp(const Scope &scope);
 
+  void
+  initScopeIds(uint64_t functionId,
+               const std::vector<std::pair<size_t, std::string>> &scopeIds);
+
+  void enterInstrumentedOp(uint64_t functionId, const uint8_t *buffer,
+                           size_t size);
+
+  void exitInstrumentedOp(uint64_t functionId, const uint8_t *buffer,
+                          size_t size);
+
   void addMetrics(size_t scopeId,
                   const std::map<std::string, MetricValueType> &metrics);
 
   void setState(std::optional<Context> context);
+
+  size_t getNumActiveSessions() const;
 
 private:
   std::unique_ptr<Session> makeSession(size_t id, const std::string &path,
@@ -124,6 +136,21 @@ private:
   }
 
   void removeSession(size_t sessionId);
+
+  template <typename Interface, typename Counter>
+  bool checkInterface(size_t sessionId, Counter &interfaceCounts) {
+    auto interfaces = sessions[sessionId]->getInterfaces<Interface>();
+    for (auto *interface : interfaces) {
+      auto it = std::find_if(
+          interfaceCounts.begin(), interfaceCounts.end(),
+          [interface](const auto &pair) { return pair.first == interface; });
+
+      if (it != interfaceCounts.end()) {
+        return true;
+      }
+    }
+    return false;
+  }
 
   template <typename Interface, typename Counter, bool isRegistering>
   void updateInterfaceCount(size_t sessionId, Counter &interfaceCounts) {
@@ -158,6 +185,15 @@ private:
     updateInterfaceCount<Interface, Counter, false>(sessionId, interfaceCounts);
   }
 
+  template <typename Counter, typename FnT>
+  void executeInterface(Counter &interfaceCounts, FnT &&fn) {
+    for (auto [interface, count] : interfaceCounts) {
+      if (count > 0) {
+        fn(interface);
+      }
+    }
+  }
+
   mutable std::mutex mutex;
 
   size_t nextSessionId{};
@@ -171,6 +207,9 @@ private:
   std::vector<std::pair<ScopeInterface *, size_t>> scopeInterfaceCounts;
   // {op, active count}
   std::vector<std::pair<OpInterface *, size_t>> opInterfaceCounts;
+  // {instrumentation, active count}
+  std::vector<std::pair<InstrumentationInterface *, size_t>>
+      instrumentationInterfaceCounts;
   // {context source, active count}
   std::vector<std::pair<ContextSource *, size_t>> contextSourceCounts;
 };

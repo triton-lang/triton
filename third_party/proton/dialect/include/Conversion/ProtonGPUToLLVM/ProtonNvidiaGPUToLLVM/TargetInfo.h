@@ -1,5 +1,5 @@
-#ifndef CONVERSION_PROTONGPU_TO_LLVM_TARGETINFONVIDIA_H
-#define CONVERSION_PROTONGPU_TO_LLVM_TARGETINFONVIDIA_H
+#ifndef PROTONGPU_TO_LLVM_TARGETINFO_NVIDIA_H
+#define PROTONGPU_TO_LLVM_TARGETINFO_NVIDIA_H
 
 #include "Conversion/ProtonGPUToLLVM/TargetInfoBase.h"
 #include "third_party/nvidia/lib/TritonNVIDIAGPUToLLVM/TargetInfo.h" // TODO(fywkevin): move nvidia TargetInfo.h to include/
@@ -21,4 +21,4 @@ public:
 };
 } // namespace mlir::triton::proton::NVIDIA
 
-#endif // CONVERSION_PROTONGPU_TO_LLVM_TARGETINFONVIDIA_H
+#endif // PROTONGPU_TO_LLVM_TARGETINFO_NVIDIA_H

@@ -23,7 +23,7 @@ Profiler *getProfiler(const std::string &name, const std::string &path,
     return &RoctracerProfiler::instance();
   }
   if (proton::toLower(name) == "instrumentation") {
-    return new InstrumentationProfiler(mode);
+    return InstrumentationProfiler::instance().setMode(mode);
   }
   throw std::runtime_error("Unknown profiler: " + name);
 }
@@ -119,7 +119,15 @@ void SessionManager::activateSessionImpl(size_t sessionId) {
   sessions[sessionId]->activate();
   registerInterface<ScopeInterface>(sessionId, scopeInterfaceCounts);
   registerInterface<OpInterface>(sessionId, opInterfaceCounts);
+  registerInterface<InstrumentationInterface>(sessionId,
+                                              instrumentationInterfaceCounts);
   registerInterface<ContextSource>(sessionId, contextSourceCounts);
+  if (checkInterface<InstrumentationInterface>(
+          sessionId, instrumentationInterfaceCounts) &&
+      sessionActive.size() > 1) {
+    throw std::runtime_error("Cannot activate an instrumentation session while "
+                             "other sessions are active.");
+  }
 }
 
 void SessionManager::deActivateSessionImpl(size_t sessionId) {
@@ -131,6 +139,8 @@ void SessionManager::deActivateSessionImpl(size_t sessionId) {
   sessions[sessionId]->deactivate();
   unregisterInterface<ScopeInterface>(sessionId, scopeInterfaceCounts);
   unregisterInterface<OpInterface>(sessionId, opInterfaceCounts);
+  unregisterInterface<InstrumentationInterface>(sessionId,
+                                                instrumentationInterfaceCounts);
   unregisterInterface<ContextSource>(sessionId, contextSourceCounts);
 }
 
@@ -189,42 +199,56 @@ void SessionManager::finalizeAllSessions(OutputFormat outputFormat) {
 
 void SessionManager::enterScope(const Scope &scope) {
   std::lock_guard<std::mutex> lock(mutex);
-  for (auto iter : scopeInterfaceCounts) {
-    auto [scopeInterface, count] = iter;
-    if (count > 0) {
-      scopeInterface->enterScope(scope);
-    }
-  }
+  executeInterface(scopeInterfaceCounts, [&](ScopeInterface *interface) {
+    interface->enterScope(scope);
+  });
 }
 
 void SessionManager::exitScope(const Scope &scope) {
   std::lock_guard<std::mutex> lock(mutex);
-  for (auto iter : scopeInterfaceCounts) {
-    auto [scopeInterface, count] = iter;
-    if (count > 0) {
-      scopeInterface->exitScope(scope);
-    }
-  }
+  executeInterface(scopeInterfaceCounts, [&](ScopeInterface *interface) {
+    interface->exitScope(scope);
+  });
 }
 
 void SessionManager::enterOp(const Scope &scope) {
   std::lock_guard<std::mutex> lock(mutex);
-  for (auto iter : opInterfaceCounts) {
-    auto [opInterface, count] = iter;
-    if (count > 0) {
-      opInterface->enterOp(scope);
-    }
-  }
+  executeInterface(opInterfaceCounts,
+                   [&](OpInterface *interface) { interface->enterOp(scope); });
 }
 
 void SessionManager::exitOp(const Scope &scope) {
   std::lock_guard<std::mutex> lock(mutex);
-  for (auto iter : opInterfaceCounts) {
-    auto [opInterface, count] = iter;
-    if (count > 0) {
-      opInterface->exitOp(scope);
-    }
-  }
+  executeInterface(opInterfaceCounts,
+                   [&](OpInterface *interface) { interface->exitOp(scope); });
+}
+
+void SessionManager::initScopeIds(
+    uint64_t functionId,
+    const std::vector<std::pair<size_t, std::string>> &scopeIds) {
+  std::lock_guard<std::mutex> lock(mutex);
+  executeInterface(instrumentationInterfaceCounts,
+                   [&](InstrumentationInterface *interface) {
+                     interface->initScopeIds(functionId, scopeIds);
+                   });
+}
+
+void SessionManager::enterInstrumentedOp(uint64_t functionId,
+                                         const uint8_t *buffer, size_t size) {
+  std::lock_guard<std::mutex> lock(mutex);
+  executeInterface(instrumentationInterfaceCounts,
+                   [&](InstrumentationInterface *interface) {
+                     interface->enterInstrumentedOp(functionId, buffer, size);
+                   });
+}
+
+void SessionManager::exitInstrumentedOp(uint64_t functionId,
+                                        const uint8_t *buffer, size_t size) {
+  std::lock_guard<std::mutex> lock(mutex);
+  executeInterface(instrumentationInterfaceCounts,
+                   [&](InstrumentationInterface *interface) {
+                     interface->exitInstrumentedOp(functionId, buffer, size);
+                   });
 }
 
 void SessionManager::addMetrics(

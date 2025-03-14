@@ -1,5 +1,5 @@
-#ifndef CONVERSION_PROTON_TO_PROTON_GPU_PASSES_H
-#define CONVERSION_PROTON_TO_PROTON_GPU_PASSES_H
+#ifndef PROTON_TO_PROTONGPU_PASSES_H
+#define PROTON_TO_PROTONGPU_PASSES_H
 
 #include "mlir/Pass/Pass.h"
 #include "proton/dialect/include/Dialect/Proton/IR/Dialect.h"
@@ -27,4 +27,4 @@ createConvertProtonToProtonGPUPass(std::string metric, std::string granularity,
 } // namespace triton
 } // namespace mlir
 
-#endif
+#endif // PROTON_TO_PROTONGPU_PASSES_H

@@ -91,6 +91,10 @@ def test_scope(tmp_path: pathlib.Path):
 
     proton.enter_scope("test")
     proton.exit_scope()
+
+    proton.enter_scope("test0")
+    proton.exit_scope("test0")
+
     proton.finalize()
     assert temp_file.exists()
 

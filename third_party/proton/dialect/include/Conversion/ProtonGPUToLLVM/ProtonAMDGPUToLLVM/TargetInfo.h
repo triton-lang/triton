@@ -1,5 +1,5 @@
-#ifndef CONVERSION_PROTONGPU_TO_LLVM_TARGETINFOAMD_H
-#define CONVERSION_PROTONGPU_TO_LLVM_TARGETINFOAMD_H
+#ifndef PROTONGPU_TO_LLVM_TARGETINFO_AMD_H
+#define PROTONGPU_TO_LLVM_TARGETINFO_AMD_H
 
 #include "Conversion/ProtonGPUToLLVM/TargetInfoBase.h"
 #include "third_party/amd/lib/TritonAMDGPUToLLVM/TargetInfo.h" // TODO(fywkevin): move amd TargetInfo.h to include/
@@ -22,4 +22,4 @@ public:
 };
 } // namespace mlir::triton::proton::AMD
 
-#endif // CONVERSION_PROTONGPU_TO_LLVM_TARGETINFOAMD_H
+#endif // PROTONGPU_TO_LLVM_TARGETINFO_AMD_H
