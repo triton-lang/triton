@@ -119,6 +119,9 @@ addition, if there's only one CTA per CGA, then Triton canonicalizes CTAOrder to
         CTAOrder.push_back(i);
       return get(context, CTAsPerCGA, CTASplitNum, CTAOrder);
     }
+    unsigned getRank() const {
+      return getCTAOrder().size();
+    }
   }];
 
   let genVerifyDecl = 1;
@@ -599,10 +602,6 @@ We call each individual tile "rep".
                     "SmallVector<unsigned>",
                     "getWarpsPerCTA">,
 
-
-    InterfaceMethod<"Get the shape of the threads per warp",
-                    "SmallVector<unsigned>",
-                    "getThreadsPerWarp">,
     InterfaceMethod<"Convert to LinearLayout.",
                     "LinearLayout",
                     "toLinearLayout",
@@ -669,7 +668,6 @@ L(T) = [ {0,8} , {1,9} , {2,10}, {3,11}, {0,8} , {1, 9} , {2, 10}, {3, 11},
     SmallVector<unsigned> getCTAOrder() const;
     SmallVector<unsigned> getCTASplitNum() const;
     SmallVector<unsigned> getWarpsPerCTA() const;
-    SmallVector<unsigned> getThreadsPerWarp() const;
 
     LinearLayout toLinearLayout(ArrayRef<int64_t> shape) const;
 
@@ -710,6 +708,7 @@ def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding"
     SmallVector<unsigned> getWarpOrder() const;
     SmallVector<unsigned> getThreadOrder() const;
 
+
     // Generalizes get{Warp,Thread,CTA}Order to linear layouts.
     // Returns the order of the dimensions `dimName` of the layout.
     // If more than dimension is of size one, it uses defaultOrder to determine
@@ -722,6 +721,7 @@ def LinearEncodingAttr : DistributedEncoding<"LinearEncoding", "linear_encoding"
     // If skipBroadcast is false, we count a base zero
     SmallVector<unsigned> basesPerDim(StringAttr dimName,
                                       bool skipBroadcast = true) const;
+    SmallVector<unsigned> getThreadsPerWarp() const;
 
     // [FIXME LL] Supports legacy behaviour. We should remove these functions
     SmallVector<unsigned> getShapePerCTATile() const;
@@ -831,7 +831,7 @@ for
   let parameters = (
     ins
     ArrayRefParameter<"unsigned">:$sizePerThread,
-    ArrayRefParameter<"unsigned">:$threadsPerWarp__,
+    ArrayRefParameter<"unsigned">:$threadsPerWarp,
     ArrayRefParameter<"unsigned">:$warpsPerCTA__,
     ArrayRefParameter<"unsigned">:$order, // the fastest-changing axis first
 
@@ -920,11 +920,6 @@ for
 def MmaEncodingTrait : AttrInterface<"MmaEncodingTrait"> {
   let cppNamespace = "::mlir::triton::gpu";
   let methods = [
-    InterfaceMethod<"Return the number of threads per warp for dot operands.",
-                    "SmallVector<unsigned>",
-                    "getThreadsPerWarpForOperand",
-                    (ins "int":$opIdx)>,
-
     InterfaceMethod<"Get the order of reps (tiles of this layout that tile the whole tensor). The fastest-changing axis first",
                     "SmallVector<unsigned>",
                     "getRepOrderForOperand",
@@ -941,10 +936,10 @@ available on AMD Instinct GPUs of CDNA architectures.
 
 It is characterized by the following parameters:
 - `versionMajor` and `versionMinor` indicates the GPU architecture:
-  - 1.0: gfx908, i.e. MI100
-  - 2.0: gfx90a: i.e. MI200, MI210, MI250
-  - 3.0: gfx940, gfx941, gfx942: MI300
-  - 4.0: gfx950: MI350
+  - 1.0: gfx908, i.e. CDNA1
+  - 2.0: gfx90a: i.e. CDNA2
+  - 3.0: gfx942: CDNA3
+  - 4.0: gfx950: CDNA4
 - `warpsPerCTA` indicates the warp layout in the block.
 - `MDim` and `NDim` indicate the dimension of the output of the mfma instruction.
 - `isTransposed` indicates the result tensor is transposed so that it can be converted to dotOperand layout
@@ -1047,7 +1042,6 @@ V [ 0,4,8...60   1,5...61     2,6...62     3,7...63    ]   [ 128,132...188  129,
     SmallVector<int64_t> getInstrShapeForOperand(int kWidth, int opIdx) const;
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape, int kWidth, int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
-    SmallVector<unsigned> getThreadsPerWarpForOperand(int opIdx) const;
 
     // Returns a swizzled shared layout matching this MFMA layout for the
     // dot operand at the given |operandIdx| with |operandShape|.
@@ -1169,7 +1163,6 @@ Row |
     SmallVector<int64_t> getRepForOperand(ArrayRef<int64_t> operandShape,
                                           Type elemType, int kWidth, int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
-    SmallVector<unsigned> getThreadsPerWarpForOperand(int opIdx) const;
     unsigned getKWidthForOperands() const;
     static SmallVector<unsigned> getMNKDimPerInstr();
   }];
@@ -1279,7 +1272,6 @@ For example, the matrix L corresponding to blockTileSize=[32,16] is:
                                           int bitwidth, int kWidth,
                                           int opIdx) const;
     SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
-    SmallVector<unsigned> getThreadsPerWarpForOperand(int opIdx) const;
   }];
 
   let hasCustomAssemblyFormat = 1;

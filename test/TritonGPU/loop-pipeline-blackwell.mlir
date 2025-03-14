@@ -168,6 +168,8 @@ module attributes {"ttg.num-warps" = 4 : i32, "ttg.num-ctas" = 1 : i32, ttg.targ
 #blocked2 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [1, 4], order = [1, 0]}>
 #blocked3 = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #mma = #ttg.nvidia_mma<{versionMajor = 2, versionMinor = 0, warpsPerCTA = [2, 2], instrShape = [16, 8]}>
+#nvmma_64 = #ttg.nvmma_shared<{swizzlingByteWidth = 64, transposed = false, elementBitWidth = 16}>
+#nvmma_128 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
 
@@ -177,8 +179,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 // CHECK-SAME: [[LHS_X:%arg[0-9]+]]:
 // CHECK-SAME: [[RHS_X:%arg[0-9]+]]:
 tt.func private @pipelined_gather(
-    %lhs_desc: !tt.tensordesc<tensor<1x128xbf16>>,
-    %rhs_desc: !tt.tensordesc<tensor<1x32xbf16>>,
+    %lhs_desc: !tt.tensordesc<tensor<1x128xbf16, #nvmma_128>>,
+    %rhs_desc: !tt.tensordesc<tensor<1x32xbf16, #nvmma_64>>,
     %lhs_x_offsets: tensor<32xi32, #blocked1>,
     %rhs_x_offsets: tensor<128xi32, #blocked1>) -> tensor<32x32xf32, #blocked> {
   %c0_i32 = arith.constant 0 : i32
@@ -219,8 +221,8 @@ tt.func private @pipelined_gather(
     // CHECK: [[LHS_VIEW:%.*]] = ttg.memdesc_subview [[LHS_BUFS]]
     // CHECK: [[LHS:%.*]] = ttg.local_load [[LHS_VIEW]]
     // CHECK: tt.dot [[LHS]], [[RHS]]
-    %lhs = tt.experimental_descriptor_gather %lhs_desc[%lhs_x_offsets, %y] : (!tt.tensordesc<tensor<1x128xbf16>>, tensor<32xi32, #blocked1>, i32) -> tensor<32x128xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
-    %rhs = tt.experimental_descriptor_gather %rhs_desc[%rhs_x_offsets, %y] : (!tt.tensordesc<tensor<1x32xbf16>>, tensor<128xi32, #blocked1>, i32) -> tensor<128x32xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
+    %lhs = tt.experimental_descriptor_gather %lhs_desc[%lhs_x_offsets, %y] : (!tt.tensordesc<tensor<1x128xbf16, #nvmma_128>>, tensor<32xi32, #blocked1>, i32) -> tensor<32x128xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>>
+    %rhs = tt.experimental_descriptor_gather %rhs_desc[%rhs_x_offsets, %y] : (!tt.tensordesc<tensor<1x32xbf16, #nvmma_64>>, tensor<128xi32, #blocked1>, i32) -> tensor<128x32xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
     %next = tt.dot %lhs, %rhs, %acc : tensor<32x128xbf16, #ttg.dot_op<{opIdx = 0, parent = #mma, kWidth = 2}>> *
                                       tensor<128x32xbf16, #ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 2}>>
                                    -> tensor<32x32xf32, #mma>
@@ -251,11 +253,11 @@ tt.func private @pipelined_gather(
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @block_scale_mxfp_matmul(%lb : index, %ub : index, %step : index, %arg0: !tt.ptr<f8E5M2> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f8E5M2> {tt.divisibility = 16 : i32}, %arg3: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg4: !tt.ptr<i8> {tt.divisibility = 16 : i32}) -> tensor<128x128xf32, #blocked4> {
-    // CHECK: ttg.local_alloc  : () -> !ttg.memdesc<3x128x256xf8E5M2
-    // CHECK: ttg.local_alloc  : () -> !ttg.memdesc<3x256x128xf8E5M2
+    // CHECK: ttg.local_alloc : () -> !ttg.memdesc<3x128x256xf8E5M2
+    // CHECK: ttg.local_alloc : () -> !ttg.memdesc<3x256x128xf8E5M2
     // Do not multibuffer the scale loads, as we cannot pipeline the mma due to tmem.cp not being used
-    // CHECK: ttg.local_alloc  : () -> !ttg.memdesc<2x1x2x32x4x4xi8
-    // CHECK: ttg.local_alloc  : () -> !ttg.memdesc<2x1x2x32x4x4xi8
+    // CHECK: ttg.local_alloc : () -> !ttg.memdesc<2x1x2x32x4x4xi8
+    // CHECK: ttg.local_alloc : () -> !ttg.memdesc<2x1x2x32x4x4xi8
 
     %true = arith.constant true
     %cst_1 = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked4>
@@ -339,10 +341,10 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   tt.func public @block_scale_mxfp_matmul_tmem_copy(%lb : index, %ub : index, %step : index, %arg0: !tt.ptr<f8E5M2> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f8E5M2> {tt.divisibility = 16 : i32}, %arg3: !tt.ptr<i8> {tt.divisibility = 16 : i32}, %arg4: !tt.ptr<i8> {tt.divisibility = 16 : i32}) -> tensor<128x128xf32, #blocked4> {
-    // CHECK: ttg.local_alloc  : () -> !ttg.memdesc<3x128x256xf8E5M2
-    // CHECK: ttg.local_alloc  : () -> !ttg.memdesc<3x256x128xf8E5M2
-    // CHECK: ttg.local_alloc  : () -> !ttg.memdesc<3x1x2x32x4x4xi8
-    // CHECK: ttg.local_alloc  : () -> !ttg.memdesc<3x1x2x32x4x4xi8
+    // CHECK: ttg.local_alloc : () -> !ttg.memdesc<3x128x256xf8E5M2
+    // CHECK: ttg.local_alloc : () -> !ttg.memdesc<3x256x128xf8E5M2
+    // CHECK: ttg.local_alloc : () -> !ttg.memdesc<3x1x2x32x4x4xi8
+    // CHECK: ttg.local_alloc : () -> !ttg.memdesc<3x1x2x32x4x4xi8
 
     %true = arith.constant true
     %cst_1 = arith.constant dense<0.000000e+00> : tensor<128x128xf32, #blocked4>

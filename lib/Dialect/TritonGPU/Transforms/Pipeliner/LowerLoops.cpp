@@ -1,11 +1,15 @@
 #include "triton/Analysis/Utility.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 
 #define DEBUG_TYPE "triton-loop-pipeline"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -173,18 +177,17 @@ ttg::SharedEncodingTrait getSharedEncoding(Operation *op) {
   auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
   auto order = ttg::getOrder(ty);
   if (isTMALoad(op)) {
-    // For TMA, the encoding compatible with it takes precedence over local
-    // alloc created for the MMA operand.
-    if (localAllocEnc) {
-      if (auto sharedMMALayout =
-              dyn_cast<ttg::NVMMASharedEncodingAttr>(localAllocEnc)) {
-        assert(!sharedMMALayout.getFp4Padded() &&
-               "TMA load for mixed precision MMAv5 is not supported yet.");
-      }
+    // TMA encoding is set on the descriptor type
+    TypedValue<tt::TensorDescType> desc;
+    if (auto load = dyn_cast<tt::ExperimentalDescriptorLoadOp>(op)) {
+      desc = load.getDesc();
+    } else if (auto gather = dyn_cast<tt::ExperimentalDescriptorGatherOp>(op)) {
+      desc = gather.getDesc();
+    } else {
+      op->emitError() << "unrecognized tma load type";
+      llvm::report_fatal_error("unrecognized tma load type");
     }
-    return ttg::NVMMASharedEncodingAttr::get(
-        ty.getContext(), ty.getShape(), order, ctaLayout, ty.getElementType(),
-        /*fp4Padded*/ false);
+    return ttng::getEncodingFromDescriptor(op, ty, desc);
   }
 
   if (localAllocEnc)
@@ -412,14 +415,19 @@ void createTMAAsyncLoad(scf::ForOp forOp,
                         tt::ExperimentalDescriptorLoadOp loadOp, Value alloc,
                         Value insertIdx, Value extractIdx, Value barrier,
                         Operation *waitOp, CoarseSchedule &schedule) {
-  return createTMAAsyncCopy(forOp, loadOp, loadOp.getDesc(), alloc, insertIdx,
-                            extractIdx, barrier, waitOp, schedule,
-                            [&](OpBuilderForStage &builder, Value tmaPtr,
-                                Value barrier, Value view, Value pred) {
-                              builder.create<ttng::AsyncTMACopyGlobalToLocalOp>(
-                                  loadOp.getLoc(), tmaPtr, loadOp.getIndices(),
-                                  barrier, view, pred);
-                            });
+  return createTMAAsyncCopy(
+      forOp, loadOp, loadOp.getDesc(), alloc, insertIdx, extractIdx, barrier,
+      waitOp, schedule,
+      [&](OpBuilderForStage &builder, Value tmaPtr, Value barrier, Value view,
+          Value pred) {
+        auto loc = loadOp.getLoc();
+        auto indices = ttng::translateTMAIndices(
+            builder, loadOp.getLoc(),
+            loadOp.getDesc().getType().getBlockType().getEncoding(),
+            loadOp.getIndices());
+        builder.create<ttng::AsyncTMACopyGlobalToLocalOp>(
+            loadOp.getLoc(), tmaPtr, indices, barrier, view, pred);
+      });
 }
 
 void createTMAAsyncGather(scf::ForOp forOp,

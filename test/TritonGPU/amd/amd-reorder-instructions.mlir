@@ -132,8 +132,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %7 = tt.expand_dims %6 {axis = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x128xi32, #blocked>
     %8 = tt.broadcast %7 : tensor<1x128xi32, #blocked> -> tensor<32x128xi32, #blocked>
     %9 = tt.addptr %5, %8 : tensor<32x128x!tt.ptr<f16>, #blocked>, tensor<32x128xi32, #blocked>
-    %10 = ttg.local_alloc  : () -> !ttg.memdesc<1x128x32xf16, #shared, #smem, mutable>
-    %11 = ttg.local_alloc  : () -> !ttg.memdesc<1x32x128xf16, #shared1, #smem, mutable>
+    %10 = ttg.local_alloc : () -> !ttg.memdesc<1x128x32xf16, #shared, #smem, mutable>
+    %11 = ttg.local_alloc : () -> !ttg.memdesc<1x32x128xf16, #shared1, #smem, mutable>
     %12 = arith.cmpi slt, %arg0, %arg1 : index
     %13 = tt.splat %12 : i1 -> tensor<128x32xi1, #blocked1>
     %14 = tt.load %4, %13 : tensor<128x32x!tt.ptr<f16>, #blocked1>
@@ -223,8 +223,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %7 = tt.expand_dims %6 {axis = 0 : i32} : tensor<128xi32, #ttg.slice<{dim = 0, parent = #blocked}>> -> tensor<1x128xi32, #blocked>
     %8 = tt.broadcast %7 : tensor<1x128xi32, #blocked> -> tensor<32x128xi32, #blocked>
     %9 = tt.addptr %5, %8 : tensor<32x128x!tt.ptr<f16>, #blocked>, tensor<32x128xi32, #blocked>
-    %10 = ttg.local_alloc  : () -> !ttg.memdesc<2x128x32xf16, #shared, #smem, mutable>
-    %11 = ttg.local_alloc  : () -> !ttg.memdesc<2x32x128xf16, #shared1, #smem, mutable>
+    %10 = ttg.local_alloc : () -> !ttg.memdesc<2x128x32xf16, #shared, #smem, mutable>
+    %11 = ttg.local_alloc : () -> !ttg.memdesc<2x32x128xf16, #shared1, #smem, mutable>
     %12 = arith.cmpi slt, %arg0, %arg1 : index
     %13 = tt.splat %12 : i1 -> tensor<128x32xi1, #blocked1>
     %14 = tt.load %4, %13 : tensor<128x32x!tt.ptr<f16>, #blocked1>
@@ -314,8 +314,8 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
     %c0 = arith.constant 0 : index
     %c1_i32 = arith.constant 1 : i32
     %cst_0 = arith.constant dense<1> : tensor<16xi32, #ttg.slice<{dim = 1, parent = #blocked}>>
-    %0 = ttg.local_alloc  : () -> !ttg.memdesc<1x16x16xf16, #shared2, #smem, mutable>
-    %1 = ttg.local_alloc  : () -> !ttg.memdesc<1x16x16xf16, #shared2, #smem, mutable>
+    %0 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #shared2, #smem, mutable>
+    %1 = ttg.local_alloc : () -> !ttg.memdesc<1x16x16xf16, #shared2, #smem, mutable>
     %2 = arith.cmpi sgt, %arg1, %c0 : index
     %3 = tt.splat %2 : i1 -> tensor<16xi1, #ttg.slice<{dim = 1, parent = #blocked}>>
     %4 = tt.load %arg3, %3 : tensor<16x!tt.ptr<i64>, #ttg.slice<{dim = 1, parent = #blocked}>>
