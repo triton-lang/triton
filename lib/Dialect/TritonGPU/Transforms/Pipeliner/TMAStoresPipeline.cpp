@@ -37,8 +37,7 @@ static SmallVector<TMAStore> getTMAStores(scf::ForOp forOp) {
 static Value createAlloc(scf::ForOp &forOp, const TMAStore &store) {
   OpBuilder builder(forOp);
   RankedTensorType ty = store.src.getType();
-  // Is this one correct or should it always be [2, 1, 0]?
-  auto order = triton::gpu::getOrderForMemory(ty);
+  auto order = ttg::getOrder(ty);
   auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
   Attribute encoding = ttg::SwizzledSharedEncodingAttr::get(
       ty.getContext(), 1, 1, 1, order, ctaLayout);
@@ -62,6 +61,7 @@ static void createTMAAsyncCopy(scf::ForOp forOp, const TMAStore &store,
   OpBuilder builder(store.op);
   Location loc = store.op->getLoc();
   RankedTensorType ty = store.src.getType();
+  auto order = ttg::getOrder(ty);
   auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
 
   // Put wait before the local_store make the store truly async. We know

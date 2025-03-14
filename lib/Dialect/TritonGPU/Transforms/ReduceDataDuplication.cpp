@@ -44,13 +44,24 @@ public:
         return;
       if (!cvtNeedsSharedMemory(srcType, dstType))
         return;
-      auto order = getOrderForMemory(srcType);
+      auto srcOrder = triton::gpu::getOrder(srcType);
+      auto rank = srcOrder.size();
+      SmallVector<unsigned> sharedOrder;
+      if (rank == 3) {
+        // add all elements except the element that is zero
+        for (unsigned i = 0; i < rank; ++i)
+          if (srcOrder[i] != 0)
+            sharedOrder.emplace_back(srcOrder[i]);
+        sharedOrder.emplace_back(0);
+      } else {
+        sharedOrder = srcOrder;
+      }
       auto sharedMemorySpace =
           triton::gpu::SharedMemorySpaceAttr::get(srcType.getContext());
       auto tmpType = triton::gpu::MemDescType::get(
           dstType.getShape(), dstType.getElementType(),
           triton::gpu::SwizzledSharedEncodingAttr::get(
-              mod.getContext(), dstDotOp, srcType.getShape(), order,
+              mod.getContext(), dstDotOp, srcType.getShape(), sharedOrder,
               triton::gpu::getCTALayout(srcEncoding), srcType.getElementType()),
           sharedMemorySpace);
       auto tmp = builder.create<triton::gpu::LocalAllocOp>(

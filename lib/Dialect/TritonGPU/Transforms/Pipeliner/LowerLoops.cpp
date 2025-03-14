@@ -8,7 +8,6 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
-#include "triton/Tools/StrUtil.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 
@@ -176,6 +175,7 @@ ttg::SharedEncodingTrait getSharedEncoding(Operation *op) {
 
   auto ty = cast<RankedTensorType>(op->getResultTypes()[0]);
   auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
+  auto order = ttg::getOrder(ty);
   if (isTMALoad(op)) {
     // TMA encoding is set on the descriptor type
     TypedValue<tt::TensorDescType> desc;
@@ -202,7 +202,6 @@ ttg::SharedEncodingTrait getSharedEncoding(Operation *op) {
   if (localAllocEnc)
     return localAllocEnc;
 
-  auto order = getOrderForMemory(ty);
   // Use generic layout. This won't be optimal for 2D tensors.
   return ttg::SwizzledSharedEncodingAttr::get(ty.getContext(), 1, 1, 1, order,
                                               ctaLayout);
