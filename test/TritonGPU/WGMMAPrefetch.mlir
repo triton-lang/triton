@@ -301,4 +301,3 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
     tt.return %loop#4 : tensor<8x128x256xf32, #C>
    }
 }
-

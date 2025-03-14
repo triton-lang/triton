@@ -203,8 +203,6 @@ LogicalResult WGMMAPrefetcher::initialize() {
       return llvm::failure();
   }
 
-  LDBG("Pass all the precondition test");
-
   auto getPrefetchSrc = [](Value v) -> SmallVector<Value> {
     // walk back to conversion
     Operation *op = v.getDefiningOp();
@@ -242,17 +240,6 @@ LogicalResult WGMMAPrefetcher::initialize() {
     return {};
   };
 
-  // [To Do]: OpenAI is working on refactoring the
-  // pipeling logic. Currently, the subviewed matrix is
-  // Not from block arg. Instead, it is from the beginning
-  // of the loop after some calculation
-  auto getIncomingOp = [this](Value v) -> Value {
-    if (auto arg = mlir::dyn_cast<BlockArgument>(v))
-      if (arg.getOwner()->getParentOp() == forOp.getOperation())
-        return forOp.getTiedLoopInit(arg)->get();
-    return Value();
-  };
-
   for (ttng::WarpGroupDotOp dotOp : dotsInFor) {
     auto aType = dotOp.getA().getType();
     auto bType = dotOp.getB().getType();
@@ -260,31 +247,16 @@ LogicalResult WGMMAPrefetcher::initialize() {
     auto aEnc = mlir::cast<DotOperandEncodingAttr>(aType.getEncoding());
     auto bEnc = mlir::cast<NVMMASharedEncodingAttr>(bType.getEncoding());
 
-    // currently, we require b is in shared memory
-    if (!aEnc) {
-      return failure();
-    }
-
-    if (!bEnc) {
+    if (!aEnc || !bEnc) {
       return failure();
     }
 
     auto kSize = aType.getShape().back();
-
-    LDBG("kSize is " << kSize);
-
     if (kSize < prefetchWidth)
       return failure();
 
     auto aVals = getPrefetchSrc(dotOp.getA());
-    for (auto op : aVals) {
-      LDBG("aVals: " << op);
-    }
-
     auto bVals = getPrefetchSrc(dotOp.getB());
-    for (auto op : bVals) {
-      LDBG("bVals: " << op);
-    }
 
     if (aVals.size() && bVals.size()) {
       Value aSmem = aVals.front();
@@ -294,20 +266,14 @@ LogicalResult WGMMAPrefetcher::initialize() {
         return failure();
       }
       auto dotOpResult = dotOp.getResult();
-      LDBG("dotOpResult is " << dotOpResult);
-
       if (!dotOpResult.hasOneUse())
         return failure();
 
       auto dotOpUser = *(dotOpResult.getUsers().begin());
       auto dotWait = dyn_cast<nvidia_gpu::WarpGroupDotWaitOp>(dotOpUser);
-
       if (!dotWait)
         return failure();
 
-      LDBG("dotWait is " << dotWait);
-
-      LDBG("Successfully check memory source");
       dots.insert(dotOp);
       dot2aVals[dotOp] = aVals;
       for (auto op : aVals) {
@@ -317,12 +283,6 @@ LogicalResult WGMMAPrefetcher::initialize() {
           dot2aValsElementWise[dotOp].push_back(op);
         }
       }
-
-      for (auto op : dot2aValsLocalLoad[dotOp])
-        LDBG("aVal, mem load op " << op);
-
-      for (auto op : dot2aValsElementWise[dotOp])
-        LDBG("aVal, elementwise op " << op);
 
       dot2bVals[dotOp] = bVals;
       dot2aSrcMemDesc[dotOp] = aSmem;
@@ -408,8 +368,6 @@ scf::ForOp WGMMAPrefetcher::createNewForOp() {
           newOp->setOperand(2, prevDot->getResult(0));
         prevDot = newOp;
       }
-
-      LDBG("For loop after inserting prefetch localload" << newForOp);
     }
     auto dotWait = dyn_cast<nvidia_gpu::WarpGroupDotWaitOp>(newOp);
     if (dotWait) {
@@ -436,7 +394,8 @@ scf::ForOp WGMMAPrefetcher::createNewForOp() {
 struct WGMMAPrefetchPass
     : public impl::TritonGPUWGMMAPrefetchBase<WGMMAPrefetchPass> {
   void runOnOperation() override {
-
+    // The detailed explanation of this pass can be found in
+    // https://github.com/triton-lang/triton/pull/6196
     // Canonicalize convert ops to make the pattern matching easier.
     RewritePatternSet cleanUpPatterns(&getContext());
     triton::gpu::ConvertLayoutOp::getCanonicalizationPatterns(cleanUpPatterns,
@@ -447,9 +406,6 @@ struct WGMMAPrefetchPass
     }
 
     getOperation()->walk([&](scf::ForOp forOp) {
-      LDBG("check if the layout convert has been removed");
-      LDBG(forOp);
-
       WGMMAPrefetcher prefetcher(forOp);
 
       if (prefetcher.initialize().failed())
