@@ -516,7 +516,7 @@ void StreamPipeliner::assignMemoryLayouts() {
         cast<tt::PointerType>(tensorTy.getElementType()).getPointeeType();
     unsigned width = vec * pointeeTy.getIntOrFloatBitWidth();
 
-    LDBG("assign memory layouts for load " << loadOp);
+    LDBG("assign memory layouts (width=" << width << ") for load " << loadOp);
     LoadInfo loadInfo;
     if (isa<tt::DotOpInterface>(use)) {
       // Only use shared memory when feeding into a dot op.
