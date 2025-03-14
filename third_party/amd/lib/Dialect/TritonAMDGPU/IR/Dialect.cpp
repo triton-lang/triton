@@ -245,26 +245,30 @@ UpcastMXFPOp::deduceOutputType(TypedValue<RankedTensorType> inputTensor,
 LogicalResult InThreadTransposeOp::verify() {
   auto srcTy = getSrc().getType();
   auto dstTy = getResult().getType();
+  if (srcTy.getElementType() != dstTy.getElementType()) {
+    return emitOpError("Expect input and output tensor to have same dtype");
+  }
+
   auto shape = srcTy.getShape();
   if (shape != dstTy.getShape()) {
     return emitOpError("Expect equal input and output shapes");
   }
+
+  if (shape.size() != 2) {
+    return emitOpError("Expect 2d tensor");
+  }
+
   auto srcEncoding = dyn_cast<BlockedEncodingAttr>(srcTy.getEncoding());
   if (!srcEncoding) {
     return emitOpError("Expect input tensor in Blocked encoding");
   }
-  auto dstEncoding = dstTy.getEncoding();
 
+  auto dstEncoding = dstTy.getEncoding();
   auto expectedLinearLayout = deduceOutputLayout(shape, srcEncoding);
   auto dstLinearLayout = triton::gpu::toLinearLayout(shape, dstEncoding);
   if (dstLinearLayout != expectedLinearLayout) {
-    return emitOpError(
-        "Expect output layout to be transposed inside of threads: " +
-        expectedLinearLayout.toString());
-  }
-
-  if (srcTy.getElementType() != dstTy.getElementType()) {
-    return emitOpError("Expect input and output tensor to have same dtype");
+    return emitOpError("Expect output layout to be transposed per thread: " +
+                       expectedLinearLayout.toString());
   }
   return success();
 }
@@ -275,6 +279,7 @@ InThreadTransposeOp::deduceOutputLayout(ArrayRef<int64_t> shape,
   auto srcLL = srcEncoding.toLinearLayout(shape);
   SmallVector<unsigned> newRegOrder(srcEncoding.getOrder());
   int rank = shape.size();
+  assert(rank == 2 && "InThreadTransposeOp do not support non 2d tensors yet");
   std::swap(newRegOrder[rank - 2], newRegOrder[rank - 1]);
 
   // Make in-register transposed tile

@@ -12,16 +12,13 @@ struct InThreadTransposeOpConversion
 public:
   explicit InThreadTransposeOpConversion(MLIRContext *ctx,
                                          PatternBenefit benefit)
-      : OpConversionPattern<triton::amdgpu::InThreadTransposeOp>(ctx, benefit) {
-  }
+      : OpConversionPattern(ctx, benefit) {}
 
   LogicalResult
   matchAndRewrite(triton::amdgpu::InThreadTransposeOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto ctx = getContext();
-    auto dstType = op.getResult().getType();
-    auto src = op.getSrc();
-    rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(op, dstType, src);
+    rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(op, op.getType(),
+                                                      op.getSrc());
     return success();
   }
 };
@@ -30,10 +27,9 @@ public:
 
 namespace mlir::triton::AMD {
 
-void populateInThreadTransposeOpToTTGPatterns(MLIRContext *ctx,
-                                              RewritePatternSet &patterns,
+void populateInThreadTransposeOpToTTGPatterns(RewritePatternSet &patterns,
                                               PatternBenefit benefit) {
-  patterns.add<InThreadTransposeOpConversion>(ctx, benefit);
+  patterns.add<InThreadTransposeOpConversion>(patterns.getContext(), benefit);
 }
 
 } // namespace mlir::triton::AMD
