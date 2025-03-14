@@ -1256,9 +1256,14 @@ LinearLayout LinearEncodingAttr::toLinearLayout(ArrayRef<int64_t> shape) const {
     namedShape[canonicalDims[dim]] = shape[dim];
   }
   ll = ll.transposeOuts(permutedDims);
-  ll = ensureLayoutNotSmallerThan(ll, namedShape);
   ll = ensureLayoutNotLargerThan(ll, namedShape, /*broadcastRegisters=*/false);
   ll = ll.transposeOuts(canonicalDims);
+  if (llvm::to_vector(ll.getOutDimSizes()) !=
+      SmallVector<int32_t>(shape.begin(), shape.end())) {
+    llvm::errs() << "shape: " << triton::join(llvm::to_vector(shape), ",")
+                 << "\n";
+    llvm::errs() << "layout: " << ll << "\n";
+  }
   return ll;
 }
 
