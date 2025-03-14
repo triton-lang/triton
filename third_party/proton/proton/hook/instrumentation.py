@@ -26,7 +26,7 @@ class CudaAllocator:
         aligned_size = max(aligned_size, self.instrumentation_hook.profile_buffer_size)
 
         # Create the buffer
-        buffer = torch.empty(aligned_size, dtype=torch.uint8, device="cuda", stream=stream)
+        buffer = torch.empty((aligned_size, ), dtype=torch.uint8, device="cuda")
         self.instrumentation_hook.buffer = buffer.data_ptr()
         return buffer
 

@@ -42,6 +42,9 @@ def test_record(tmp_path: pathlib.Path):
 
 
 def test_hook_instrumentation(tmp_path):
+    # TODO(Keren): Remove hack
+    import os
+    os.environ["TEST_PROFILE_SCRATCH_SIZE"] = 1
 
     @triton.jit
     def foo(x, size: tl.constexpr, y):
