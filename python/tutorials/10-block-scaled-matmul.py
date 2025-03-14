@@ -107,8 +107,8 @@ def block_scaled_matmul_kernel(  #
         b_desc_or_tensor, b_scale,  #
         c_desc,  #
         M: tl.constexpr, N: tl.constexpr, K: tl.constexpr,  #
-        stride_sk: tl.constexpr, stride_sb: tl.constexpr,
-        stride_sc: tl.constexpr, stride_sd: tl.constexpr, output_type: tl.constexpr,  #
+        stride_sk: tl.constexpr, stride_sb: tl.constexpr, stride_sc: tl.constexpr, stride_sd: tl.constexpr,
+        output_type: tl.constexpr,  #
         ELEM_PER_BYTE: tl.constexpr,  #
         VEC_SIZE: tl.constexpr,  #
         BLOCK_M: tl.constexpr,  #
@@ -187,8 +187,7 @@ def block_scaled_matmul_kernel(  #
         if MIXED_PREC:
             b = b_desc.load([offs_bn, offs_k_packed])
         else:
-            b = tl._experimental_descriptor_load(b_desc, [offs_bn, offs_k], [BLOCK_N, BLOCK_K // ELEM_PER_BYTE],
-                                                 dtype)
+            b = tl._experimental_descriptor_load(b_desc, [offs_bn, offs_k], [BLOCK_N, BLOCK_K // ELEM_PER_BYTE], dtype)
 
         scale_a = tl.load(a_scale_ptr)
         scale_b = tl.load(b_scale_ptr)
@@ -228,9 +227,9 @@ def block_scaled_matmul(a_desc, a_scale, b_desc_or_tensor, b_scale, dtype_dst, M
                                 output.element_size())
 
     grid = (triton.cdiv(M, configs["BLOCK_SIZE_M"]) * triton.cdiv(N, configs["BLOCK_SIZE_N"]), 1)
-    block_scaled_matmul_kernel[grid](a_desc, a_scale, b_desc_or_tensor, b_scale, c_desc, M, N, K,
-                                     a_scale.stride(0), a_scale.stride(1), a_scale.stride(2), a_scale.stride(3),
-                                     dtype_dst, configs["ELEM_PER_BYTE"], configs["VEC_SIZE"], configs["BLOCK_SIZE_M"],
+    block_scaled_matmul_kernel[grid](a_desc, a_scale, b_desc_or_tensor, b_scale, c_desc, M, N, K, a_scale.stride(0),
+                                     a_scale.stride(1), a_scale.stride(2), a_scale.stride(3), dtype_dst,
+                                     configs["ELEM_PER_BYTE"], configs["VEC_SIZE"], configs["BLOCK_SIZE_M"],
                                      configs["BLOCK_SIZE_N"], configs["BLOCK_SIZE_K"], configs["num_stages"],
                                      USE_2D_SCALE_LOAD=True, MIXED_PREC=block_scale_type == "mixed")
     return output
