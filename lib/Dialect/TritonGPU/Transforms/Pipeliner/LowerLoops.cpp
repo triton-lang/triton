@@ -998,6 +998,35 @@ bool aliasingStoresBetween(Operation *op, ttng::TMEMStoreOp store) {
   return false;
 }
 
+Operation *findNearestCommonDominator(ArrayRef<Operation *> ops,
+                                      DominanceInfo &domInfo) {
+  if (ops.size() == 0) {
+    return nullptr;
+  }
+  if (ops.size() == 1) {
+    return ops[0];
+  }
+  llvm::SmallPtrSet<Block *, 16> blocks;
+  for (auto op : ops) {
+    blocks.insert(op->getBlock());
+  }
+  Block *domBlock = domInfo.findNearestCommonDominator(blocks);
+  if (domBlock == nullptr) {
+    return nullptr;
+  }
+  SmallVector<Operation *> ancestorOps;
+  for (auto op : ops) {
+    ancestorOps.push_back(domBlock->findAncestorOpInBlock(*op));
+  }
+  Operation *dom = ancestorOps[0];
+  for (unsigned i = 1; i < ops.size(); i++) {
+    if (ancestorOps[i]->isBeforeInBlock(dom)) {
+      dom = ancestorOps[i];
+    }
+  }
+  return dom;
+}
+
 class CombineTMEMStoreAndSelect : public OpRewritePattern<ttng::TMEMStoreOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
@@ -1071,6 +1100,34 @@ public:
   }
 };
 
+class SinkTMEMLoad : public OpRewritePattern<ttng::TMEMLoadOp> {
+public:
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ttng::TMEMLoadOp load,
+                                PatternRewriter &rewriter) const override {
+    auto forOp = load->getParentOfType<scf::ForOp>();
+    if (!forOp) {
+      return failure();
+    }
+    // If the load is used by a yield, it may have uses in the next loop
+    // iteration so we can't sink it
+    if (llvm::any_of(load->getUsers(),
+                     [](Operation *op) { return isa<scf::YieldOp>(op); })) {
+      return failure();
+    }
+    DominanceInfo domInfo(forOp);
+    Operation *domOp =
+        findNearestCommonDominator(llvm::to_vector(load->getUsers()), domInfo);
+    if (!domOp || !domInfo.properlyDominates(load.getOperation(), domOp) ||
+        domOp == load->getNextNode()) {
+      return failure();
+    }
+    rewriter.moveOpBefore(load, domOp);
+    return success();
+  }
+};
+
 ttng::TMEMAllocOp createTMemAlloc(OpBuilder &builder,
                                   ttng::TMEMAllocOp oldTMemAllocOp,
                                   bool multiBufferred, int numStages) {
@@ -1104,7 +1161,7 @@ ttng::TMEMAllocOp hoistTMEMAlloc_impl(ttng::TMEMAllocOp alloc, scf::ForOp forOp,
   ModuleOp module = forOp->getParentOfType<ModuleOp>();
   mlir::RewritePatternSet patterns(module.getContext());
   patterns.add<HoistTMEMStoreThroughFor, CombineTMEMLoadAndStore,
-               CombineTMEMStoreAndSelect>(module.getContext());
+               CombineTMEMStoreAndSelect, SinkTMEMLoad>(module.getContext());
   if (applyPatternsGreedily(module, std::move(patterns)).failed()) {
     llvm_unreachable("Failed to hoist tmem_store");
   }

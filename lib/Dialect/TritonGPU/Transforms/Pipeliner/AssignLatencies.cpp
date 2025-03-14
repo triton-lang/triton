@@ -265,7 +265,9 @@ public:
       // the MMA to later stages.
       if (isa<ttng::MMAv5OpInterface>(op) &&
           isPipeliningOfMMAOpPossible(&op, forOp, isLoadPipelineable) &&
-          !getDisallowAccMultiBuffer(forOp)) {
+          !getDisallowAccMultiBuffer(forOp) &&
+          isAccMultibufferingPossible(cast<ttng::MMAv5OpInterface>(&op),
+                                      forOp)) {
         opLatency[&op] = 1;
       }
     }
@@ -274,6 +276,46 @@ public:
 private:
   scf::ForOp forOp;
   DenseMap<Operation *, int> &opLatency;
+
+  bool isConstantZero(Value v) {
+    if (auto constantOp = v.getDefiningOp<arith::ConstantOp>()) {
+      if (auto attr = dyn_cast<IntegerAttr>(constantOp.getValue())) {
+        return attr.getValue().isZero();
+      }
+      if (auto attr = dyn_cast<FloatAttr>(constantOp.getValue())) {
+        return attr.getValue().isZero();
+      }
+    }
+    return false;
+  }
+
+  bool accUseFlagSetToFalse(ttng::MMAv5OpInterface mma, scf::ForOp forOp) {
+    Value accUseFlag = mma.useAccumulator();
+    if (isConstantZero(accUseFlag)) {
+      return true;
+    }
+    auto yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+    while (auto blockArg = dyn_cast<BlockArgument>(accUseFlag)) {
+      accUseFlag = yieldOp.getOperand(blockArg.getArgNumber() - 1);
+    }
+    // If the accUseFlag is overwritten in the loop, we treat it as a 'false'
+    // with condition being ~accUseFlag.
+    return accUseFlag.getDefiningOp() &&
+           forOp->isAncestor(accUseFlag.getDefiningOp());
+  }
+
+  bool accOverwrittenInLoop(ttng::MMAv5OpInterface mma, scf::ForOp forOp) {
+    // TODO: Implement this
+    return false;
+  }
+
+  bool isAccMultibufferingPossible(ttng::MMAv5OpInterface mma,
+                                   scf::ForOp forOp) {
+    // If the accumulator is never overwritten in the loop, we can't multibuffer
+    // it, as the overwrite point is the only place where we can swap the
+    // buffer.
+    return accUseFlagSetToFalse(mma, forOp) || accOverwrittenInLoop(mma, forOp);
+  }
 };
 
 } // namespace
