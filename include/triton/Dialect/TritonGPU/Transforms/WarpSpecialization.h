@@ -18,6 +18,9 @@ LogicalResult rewritePartitionDependencies(scf::ForOp loop);
 // `ttg.warp_specialize` by duplicating the loop for each partition and
 // rematerializing, as necessary, operations in the root partition.
 LogicalResult partitionLoop(scf::ForOp loop);
+// Identify load-mma dependencies and specialize them to different partitions.
+LogicalResult specializeLoadMMADependencies(scf::ForOp loop,
+                                            int defaultNumStages);
 } // namespace triton::gpu
 } // namespace mlir
 

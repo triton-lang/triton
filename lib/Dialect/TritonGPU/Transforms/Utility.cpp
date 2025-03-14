@@ -633,7 +633,7 @@ bool canFoldIntoConversion(Operation *op, Attribute targetEncoding) {
 }
 
 scf::ForOp replaceForOpWithNewSignature(
-    RewriterBase &rewriter, scf::ForOp loop, ValueRange newIterOperands,
+    OpBuilder &rewriter, scf::ForOp loop, ValueRange newIterOperands,
     SmallVectorImpl<std::tuple<Value, Value>> &replacements) {
   OpBuilder::InsertionGuard g(rewriter);
   rewriter.setInsertionPoint(loop);
@@ -657,13 +657,13 @@ scf::ForOp replaceForOpWithNewSignature(
   return newLoop;
 }
 
-scf::ForOp replaceForOpWithNewSignature(RewriterBase &rewriter, scf::ForOp loop,
+scf::ForOp replaceForOpWithNewSignature(OpBuilder &rewriter, scf::ForOp loop,
                                         ValueRange newIterOperands) {
   SmallVector<std::tuple<Value, Value>> replacements;
   auto newForOp = replaceForOpWithNewSignature(rewriter, loop, newIterOperands,
                                                replacements);
-  for (auto &kv : replacements) {
-    rewriter.replaceAllUsesWith(std::get<0>(kv), std::get<1>(kv));
+  for (auto [result, value] : replacements) {
+    result.replaceAllUsesWith(value);
   }
   return newForOp;
 }

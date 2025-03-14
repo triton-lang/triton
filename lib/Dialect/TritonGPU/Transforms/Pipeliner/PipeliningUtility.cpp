@@ -272,9 +272,9 @@ void mlir::triton::serializeLatencies(ModuleOp module,
   }
 }
 
-DenseMap<Operation *, int> mlir::triton::deserializeLatencies(ModuleOp module) {
+DenseMap<Operation *, int> mlir::triton::deserializeLatencies(Operation *op) {
   DenseMap<Operation *, int> opLatency;
-  module.walk([&](Operation *op) {
+  op->walk([&](Operation *op) {
     if (op->hasAttr(kLatencyAttrName)) {
       opLatency[op] = op->getAttrOfType<IntegerAttr>(kLatencyAttrName).getInt();
       op->removeAttr(kLatencyAttrName);
@@ -303,14 +303,22 @@ Value mlir::triton::createScalarAlloc(ImplicitLocOpBuilder &rewriter, Type type,
 
 // Create an allocation and init the mbarriers.
 Value mlir::triton::createBarrierAlloc(scf::ForOp forOp, int numBarriers) {
+  assert(numBarriers > 0);
   ImplicitLocOpBuilder rewriter(forOp.getLoc(), forOp);
 
   Value barrierAlloc =
       createScalarAlloc(rewriter, rewriter.getI64Type(), numBarriers);
   for (unsigned i = 0; i < numBarriers; i++) {
-    Value barrierView = createSingleBufferView(rewriter, barrierAlloc, i);
+    Value barrierView = barrierAlloc;
+    rewriter.setInsertionPoint(forOp);
+    if (numBarriers > 1)
+      barrierView = createSingleBufferView(rewriter, barrierAlloc, i);
     rewriter.create<ttng::InitBarrierOp>(barrierView, 1);
+    // Invalidate and deallocate the barriers.
+    rewriter.setInsertionPointAfter(forOp);
+    rewriter.create<ttng::InvalBarrierOp>(barrierView);
   }
+  rewriter.create<ttg::LocalDeallocOp>(barrierAlloc);
   return barrierAlloc;
 }
 
@@ -368,6 +376,11 @@ Value mlir::triton::createAlloc(scf::ForOp forOp, RankedTensorType ty,
   return alloc;
 }
 
+bool mlir::triton::isTMALoad(Operation *op) {
+  return isa<tt::ExperimentalDescriptorLoadOp,
+             tt::ExperimentalDescriptorGatherOp>(op);
+}
+
 ttg::MemDescType mlir::triton::getBufferViewType(ttg::MemDescType allocTy) {
   Attribute sharedMemorySpace =
       ttg::SharedMemorySpaceAttr::get(allocTy.getContext());
@@ -383,6 +396,66 @@ ttg::SharedEncodingTrait mlir::triton::getSharedEncoding(RankedTensorType ty) {
   // Use generic layout. This won't be optimal for 2D tensors.
   return ttg::SwizzledSharedEncodingAttr::get(ty.getContext(), 1, 1, 1, order,
                                               ctaLayout);
+}
+
+ttg::SharedEncodingTrait mlir::triton::getSharedEncoding(Operation *op) {
+  // Try to use local alloc encoding if possible.
+  ttg::SharedEncodingTrait localAllocEnc;
+  if (llvm::any_of(op->getUsers(), [&](Operation *user) {
+        return isa<ttg::LocalAllocOp>(user);
+      })) {
+    for (auto user : op->getUsers()) {
+      auto localAlloc = dyn_cast<ttg::LocalAllocOp>(user);
+      if (!localAlloc)
+        continue;
+      auto enc = mlir::cast<ttg::SharedEncodingTrait>(
+          localAlloc.getType().getEncoding());
+      if (!localAllocEnc) {
+        localAllocEnc = enc;
+      }
+      if (enc != localAllocEnc) {
+        // Some users have different encoding than others.
+        // Use one of the encodings, and warn about the performance issue.
+        op->emitRemark()
+            << "Pipelining load with different use encodings. This will lead "
+               "to layout conversions and performance degradation.";
+        continue;
+      }
+    }
+  }
+
+  auto ty = cast<RankedTensorType>(op->getResultTypes()[0]);
+  if (isTMALoad(op)) {
+    // For TMA, the encoding compatible with it takes precedence over local
+    // alloc created for the MMA operand.
+    if (localAllocEnc) {
+      if (auto sharedMMALayout =
+              dyn_cast<ttg::NVMMASharedEncodingAttr>(localAllocEnc)) {
+        assert(!sharedMMALayout.getFp4Padded() &&
+               "TMA load for mixed precision MMAv5 is not supported yet.");
+      }
+    }
+    auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
+    auto order = ttg::getOrder(ty);
+    return ttg::NVMMASharedEncodingAttr::get(
+        ty.getContext(), ty.getShape(), order, ctaLayout, ty.getElementType(),
+        /*fp4Padded*/ false);
+  }
+
+  if (localAllocEnc)
+    return localAllocEnc;
+
+  // Try to use dot encoding if possible.
+  bool incompatible = false;
+  localAllocEnc =
+      getSharedEncIfAllUsersAreDotEnc(op->getResult(0), incompatible)
+          .value_or(nullptr);
+
+  if (localAllocEnc)
+    return localAllocEnc;
+
+  // Use generic layout. This won't be optimal for 2D tensors.
+  return getSharedEncoding(ty);
 }
 
 void mlir::triton::eraseLoopCarriedValues(scf::ForOp &loop,
@@ -424,4 +497,15 @@ void mlir::triton::eraseLoopCarriedValues(scf::ForOp &loop,
 
   loop.erase();
   loop = newLoop;
+}
+
+int mlir::triton::getNumStagesOrDefault(scf::ForOp forOp,
+                                        int defaultNumStages) {
+  // Use the attribute attached to the loop if it exists otherwise use the
+  // global control.
+  if (!forOp->hasAttr(mlir::triton::kNumStagesAttrName))
+    return defaultNumStages;
+  return mlir::cast<IntegerAttr>(
+             forOp->getAttr(mlir::triton::kNumStagesAttrName))
+      .getInt();
 }

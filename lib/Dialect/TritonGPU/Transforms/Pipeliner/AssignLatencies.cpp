@@ -319,20 +319,11 @@ private:
 // cover all the stages with the sum of latencies in the chain from the first
 // load to the final dot op.
 void assignLatencies(ModuleOp moduleOp, int defaultNumStages, bool assignMMA) {
-  auto getNumStagesOrDefault = [defaultNumStages](scf::ForOp forOp) -> int {
-    // Use the attribute attached to the loop if it exists otherwise use the
-    // global control.
-    if (!forOp->hasAttr(mlir::triton::kNumStagesAttrName))
-      return defaultNumStages;
-    return mlir::cast<IntegerAttr>(
-               forOp->getAttr(mlir::triton::kNumStagesAttrName))
-        .getInt();
-  };
-
   SmallVector<scf::ForOp> loops;
   moduleOp->walk([&](scf::ForOp forOp) {
     // Bail out for loops with num_stage <= 1.
-    if (preCondition(forOp) && getNumStagesOrDefault(forOp) > 1)
+    if (preCondition(forOp) &&
+        getNumStagesOrDefault(forOp, defaultNumStages) > 1)
       loops.push_back(forOp);
   });
   if (loops.empty())
@@ -344,7 +335,7 @@ void assignLatencies(ModuleOp moduleOp, int defaultNumStages, bool assignMMA) {
       assignUserProvidedLatencies(forOp, opLatency);
       continue;
     }
-    int numStages = getNumStagesOrDefault(forOp);
+    int numStages = getNumStagesOrDefault(forOp, defaultNumStages);
     AssignLoadLatencies(forOp, numStages, opLatency).run();
     if (assignMMA) {
       AssignMMALatencies(forOp, opLatency).run();

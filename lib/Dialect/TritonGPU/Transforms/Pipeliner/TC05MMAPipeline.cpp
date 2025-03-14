@@ -4,6 +4,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Types.h"
+#include "triton/Dialect/TritonGPU/Transforms/MMAv5PipelineUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipelineExpander.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
@@ -15,6 +16,43 @@ using namespace mlir;
 namespace tt = mlir::triton;
 namespace ttg = mlir::triton::gpu;
 namespace ttng = mlir::triton::nvidia_gpu;
+
+//===----------------------------------------------------------------------===//
+// Utilities
+//===----------------------------------------------------------------------===//
+
+std::optional<std::pair<ttng::TMEMAllocOp, ttng::TMEMLoadOp>>
+ttng::getTMemAllocAndLoad(ttng::MMAv5OpInterface mmaOp) {
+  auto acc = mmaOp->getOperand(2).getDefiningOp<ttng::TMEMAllocOp>();
+  if (!acc || acc->getParentRegion() != mmaOp->getParentRegion()) {
+    return std::nullopt;
+  }
+  for (auto user : acc->getUsers()) {
+    if (auto load = dyn_cast<ttng::TMEMLoadOp>(user)) {
+      if (load->getParentRegion() == mmaOp->getParentRegion()) {
+        return std::make_pair(acc, load);
+      }
+    }
+  }
+  return std::nullopt;
+}
+
+ttng::TMEMAllocOp ttng::createTMemAlloc(OpBuilder &builder,
+                                        ttng::TMEMAllocOp oldTMemAllocOp,
+                                        bool multiBufferred, int numStages) {
+  Location loc = oldTMemAllocOp.getLoc();
+  auto oldRetType = oldTMemAllocOp.getType();
+  SmallVector<int64_t> shape = {oldRetType.getShape().begin(),
+                                oldRetType.getShape().end()};
+  if (multiBufferred) {
+    shape.insert(shape.begin(), numStages);
+  }
+  Type accMemDescType = triton::gpu::MemDescType::get(
+      shape, oldRetType.getElementType(), oldRetType.getEncoding(),
+      oldRetType.getMemorySpace(), /*mutableMemory=*/true);
+  return builder.create<ttng::TMEMAllocOp>(oldTMemAllocOp.getLoc(),
+                                           accMemDescType, nullptr);
+}
 
 namespace {
 
@@ -62,25 +100,6 @@ struct MMAInfo {
   Value accExtractIdx = nullptr;
   Value barrierAlloc = nullptr;
 };
-
-// Returns the TMEMAllocOp and TMEMLoadOp that are used to allocate and load the
-// accumulator for the given MMA operation. The TMEMAllocOp and TMEMLoadOp must
-// be in the same region as the MMA operation.
-std::optional<std::pair<ttng::TMEMAllocOp, ttng::TMEMLoadOp>>
-getTMemAllocAndLoad(ttng::MMAv5OpInterface mmaOp) {
-  auto acc = mmaOp->getOperand(2).getDefiningOp<ttng::TMEMAllocOp>();
-  if (!acc || acc->getParentRegion() != mmaOp->getParentRegion()) {
-    return std::nullopt;
-  }
-  for (auto user : acc->getUsers()) {
-    if (auto load = dyn_cast<ttng::TMEMLoadOp>(user)) {
-      if (load->getParentRegion() == mmaOp->getParentRegion()) {
-        return std::make_pair(acc, load);
-      }
-    }
-  }
-  return std::nullopt;
-}
 
 // Check if the accumulator is being used by the same MMA in the next iteration.
 // If so, return the yield argument number that the accumulator is being used
@@ -250,23 +269,6 @@ getAccOverrideOrFlagFalseInLoop(scf::ForOp forOp,
   }
 
   return accOverridePoint;
-}
-
-ttng::TMEMAllocOp createTMemAlloc(IRRewriter &builder,
-                                  ttng::TMEMAllocOp oldTMemAllocOp,
-                                  bool multiBufferred, int numStages) {
-  Location loc = oldTMemAllocOp.getLoc();
-  auto oldRetType = oldTMemAllocOp.getType();
-  SmallVector<int64_t> shape = {oldRetType.getShape().begin(),
-                                oldRetType.getShape().end()};
-  if (multiBufferred) {
-    shape.insert(shape.begin(), numStages);
-  }
-  Type accMemDescType = triton::gpu::MemDescType::get(
-      shape, oldRetType.getElementType(), oldRetType.getEncoding(),
-      oldRetType.getMemorySpace(), /*mutableMemory=*/true);
-  return builder.create<ttng::TMEMAllocOp>(oldTMemAllocOp.getLoc(),
-                                           accMemDescType, nullptr);
 }
 
 void createInitStore(IRRewriter &builder, ttng::TMEMAllocOp allocOp,
@@ -736,16 +738,6 @@ FailureOr<scf::ForOp> preProcessLoopForTC05MMAPipelining(scf::ForOp forOp,
     annotateWithPipelineStage(builder, mmaOp, 0);
     hoistAndUseTMemAlloc(builder, forOp, mmaOp, mmaInfo, numStages);
     createBarrierAndWaitOps(builder, forOp, mmaOp, mmaInfo, numStages);
-
-    // Invalidate and dealloc barrier
-    builder.setInsertionPointAfter(forOp);
-    Location loc = mmaOp->getLoc();
-    for (int i = 0; i < numStages; i++) {
-      Value barrierView =
-          triton::createSingleBufferView(builder, mmaInfo.barrierAlloc, i);
-      builder.create<ttng::InvalBarrierOp>(loc, barrierView);
-    }
-    builder.create<ttg::LocalDeallocOp>(loc, mmaInfo.barrierAlloc);
   }
 
   return forOp;

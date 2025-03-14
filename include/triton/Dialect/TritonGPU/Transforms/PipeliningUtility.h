@@ -69,7 +69,7 @@ int getCopyVecBytes(RankedTensorType registerTy,
 void serializeLatencies(ModuleOp module, DenseMap<Operation *, int> &opLatency);
 
 // Deserialize the latencies of the operations in the loops from the attribute.
-DenseMap<Operation *, int> deserializeLatencies(ModuleOp module);
+DenseMap<Operation *, int> deserializeLatencies(Operation *op);
 
 // Given a result of MemDescSubview, or Alloca, create a MemDescSubview with a
 // single buffer slice (leading dimension equal to 1), at the given index.
@@ -85,14 +85,23 @@ Value createBarrierAlloc(scf::ForOp forOp, int numBarriers);
 Value createAlloc(scf::ForOp forOp, RankedTensorType ty, Location loc,
                   gpu::SharedEncodingTrait sharedEnc, unsigned distance);
 
+// Determine if the operation is a TMA load.
+bool isTMALoad(Operation *op);
+
 // Get the type of the view of a multi-buffered tensor value.
 gpu::MemDescType getBufferViewType(gpu::MemDescType allocTy);
 // Get a generic shared encoding for a tensor.
 gpu::SharedEncodingTrait getSharedEncoding(RankedTensorType ty);
+// Get a shared encoding for a tensor based on its uses.
+gpu::SharedEncodingTrait getSharedEncoding(Operation *loadOp);
 
 // Erase the given loop carried values from the loop, where `loop` is replaced
 // with a new loop.
 void eraseLoopCarriedValues(scf::ForOp &loop, llvm::BitVector indices);
+
+// Get the number of stages to pipeline the loop with, if it is explicitly
+// specified.
+int getNumStagesOrDefault(scf::ForOp forOp, int defaultNumStages);
 
 } // namespace triton
 } // namespace mlir
