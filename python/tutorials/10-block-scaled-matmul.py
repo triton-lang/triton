@@ -150,7 +150,9 @@ def block_scaled_matmul_kernel(  #
     offs_sm = (pid_m * (BLOCK_M // 128) + tl.arange(0, BLOCK_M // 128)) % M
     offs_sn = (pid_n * (BLOCK_N // 128) + tl.arange(0, BLOCK_N // 128)) % N
 
-    if ELEM_PER_BYTE_A == 1 and ELEM_PER_BYTE_B == 2:
+    MIXED_PREC: tl.constexpr = ELEM_PER_BYTE_A == 1 and ELEM_PER_BYTE_B == 2
+
+    if MIXED_PREC:
         b_desc = tl._experimental_make_tensor_descriptor(
             b_desc_or_tensor,
             shape=[N, K // ELEM_PER_BYTE_B],
@@ -193,7 +195,7 @@ def block_scaled_matmul_kernel(  #
         a = tl._experimental_descriptor_load(a_desc, [offs_am, offs_k_a], [BLOCK_M, BLOCK_K // ELEM_PER_BYTE_A],
                                              dtype_a)
 
-        if ELEM_PER_BYTE_A == 1 and ELEM_PER_BYTE_B == 2:
+        if MIXED_PREC:
             b = b_desc.load([offs_bn, offs_k_b])
         else:
             b = tl._experimental_descriptor_load(b_desc, [offs_bn, offs_k_b], [BLOCK_N, BLOCK_K // ELEM_PER_BYTE_B],
@@ -207,7 +209,7 @@ def block_scaled_matmul_kernel(  #
         scale_a = scale_a.trans(0, 3, 2, 1, 4).reshape(BLOCK_M, BLOCK_K // VEC_SIZE)
         scale_b = scale_b.trans(0, 3, 2, 1, 4).reshape(BLOCK_N, BLOCK_K // VEC_SIZE)
 
-        if ELEM_PER_BYTE_A == 1 and ELEM_PER_BYTE_B == 2:
+        if MIXED_PREC:
             accumulator = tl.dot_scaled(a, scale_a, "e4m3", b.T, scale_b, "e2m1", accumulator)
         elif ELEM_PER_BYTE_A == 2 and ELEM_PER_BYTE_B == 2:
             accumulator = tl.dot_scaled(a, scale_a, "e2m1", b.T, scale_b, "e2m1", accumulator)
