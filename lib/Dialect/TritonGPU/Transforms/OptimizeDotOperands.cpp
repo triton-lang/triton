@@ -58,7 +58,7 @@ public:
     // swizzling code.
     auto newInnerCvtEnc = SwizzledSharedEncodingAttr::get(
         getContext(), cvtEncoding, srcTy.getShape(),
-        /*order=*/getOrderForMemory(srcTy),
+        /*order=*/getOrder(srcTy),
         triton::gpu::getCTALayout(srcTy.getEncoding()), srcTy.getElementType(),
         /*needTrans=*/true);
     if (newInnerCvtEnc == cvtEncoding)
@@ -107,9 +107,9 @@ public:
 
     // MMAv3 with transpose only supports f16 and bf16.  Fall back to MMAv3
     // without transpose for other data types.)
-    auto newInnerCvtOrder = getOrderForMemory(srcTy);
+    auto newInnerCvtOrder = getOrder(srcTy);
     if (auto cvt = trans.getSrc().getDefiningOp<ConvertLayoutOp>()) {
-      newInnerCvtOrder = getOrderForMemory(cvt.getSrc().getType());
+      newInnerCvtOrder = getOrder(cvt.getSrc().getType());
     }
     auto srcElemTy = allocType.getElementType();
     if (!srcElemTy.isF16() && !srcElemTy.isBF16()) {
