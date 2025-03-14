@@ -5,10 +5,18 @@ import triton
 import triton.language as tl
 import triton.profiler.language as pl
 import triton.profiler as proton
+import pytest
+
+
+def is_hip():
+    return triton.runtime.driver.active.get_current_target().backend == "hip"
 
 
 def test_record(tmp_path: pathlib.Path):
-    # TODO(Keren): Remove hack
+    # TODO(Keren): Remove hacks
+    if is_hip():
+        pytest.skip("HIP backend does not support record")
+
     import os
     os.environ["TEST_PROFILE_SCRATCH_SIZE"] = "1"
 
@@ -50,7 +58,10 @@ def test_record(tmp_path: pathlib.Path):
 
 
 def test_hook_instrumentation(tmp_path):
-    # TODO(Keren): Remove hack
+    # TODO(Keren): Remove hacks
+    if is_hip():
+        pytest.skip("HIP backend does not support record")
+
     import os
     os.environ["TEST_PROFILE_SCRATCH_SIZE"] = "1"
 
