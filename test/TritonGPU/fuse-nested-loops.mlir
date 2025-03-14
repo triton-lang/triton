@@ -454,7 +454,8 @@ tt.func @preserve_stage_count(%lb: i32, %ub: i32) {
       "body"(%j) : (i32) -> ()
       scf.yield
     } {tt.num_stages = 6 : i32}
-  } {"ttg.always-fuse"}
+  } {"ttg.always-fuse", "tt.disallow_acc_multi_buffer"}
+  // CHECK: tt.disallow_acc_multi_buffer
   // CHECK: tt.num_stages = 6 : i32
   // CHECK-NOT: scf.for
   tt.return
