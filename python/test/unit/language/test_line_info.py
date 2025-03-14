@@ -6,6 +6,7 @@ import torch
 
 import triton
 import triton.language as tl
+from triton._internal_testing import is_interpreter
 
 
 @triton.jit
@@ -132,16 +133,8 @@ def check_file_lines(file_lines, file_name, lineno, should_contain=True):
 func_types = ["single", "call", "call_noinline", "autotune", "dot_combine", "cdiv"]
 
 
-def is_interpreter():
-    import os
-    return os.environ.get('TRITON_INTERPRET', '0') == '1'
-
-
 @pytest.mark.parametrize("func", func_types)
 def test_line_info(func: str):
-    if is_interpreter():
-        pytest.skip("interpreter does not support warmup compilation")
-
     try:
         obj_kind, command, anchor, separator = get_disassembler_command_and_debug_line_format()
     except BaseException:
@@ -216,9 +209,6 @@ def test_line_info_interpreter(func: str):
 
 @pytest.mark.parametrize("status", ["0", "1"])
 def test_line_info_env(monkeypatch, status: str):
-    if is_interpreter():
-        pytest.skip("interpreter does not support warmup compilation")
-
     try:
         obj_kind, command, anchor, separator = get_disassembler_command_and_debug_line_format()
     except BaseException:
