@@ -247,6 +247,15 @@ LogicalResult WGMMAPrefetcher::initialize() {
     if (!aEnc || !bEnc) {
       return failure();
     }
+    // Currently, the subitling + prefetching would fail if BLOCK_K = 64
+    // and the input for wgmma is 32bit. Disable the optimization for
+    // 32-bit input which need further inverstigation
+    auto aElementBitWidth = aType.getElementTypeBitWidth();
+    auto bElementBitWidth = bType.getElementTypeBitWidth();
+    assert((aElementBitWidth = bElementBitWidth) &&
+           "BitWidth of a and b for dot  does not match");
+    if (aElementBitWidth == 32)
+      return failure();
 
     auto kSize = aType.getShape().back();
     if (kSize < prefetchWidth)
