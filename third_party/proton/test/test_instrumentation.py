@@ -65,5 +65,6 @@ def test_hook_instrumentation(tmp_path):
     device = triton.runtime.driver.active.get_current_device()
     assert len(foo.device_caches[device][0]) == 1, "Kernel should be cached"
     proton.finalize()
+    os.environ["TEST_PROFILE_SCRATCH_SIZE"] = "0"
     foo[(1, )](x, 1, y, num_warps=4)
     assert len(foo.device_caches[device][0]) == 2, "Instrument and uninstrumented kernels both should be cached"
