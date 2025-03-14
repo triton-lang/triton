@@ -66,25 +66,25 @@ Extra Credits:
     TMA benchmarks will be running with experimental grid constant TMA descriptor.
     fused-attention-batch4-head32-d64-fwd-causal=True:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0     113.369171     84.455303
-    1   2048.0     139.713728    103.564383
-    2   4096.0     152.757600    115.051353
-    3   8192.0     164.279510    122.086871
-    4  16384.0     170.937167    124.564017
+    0   1024.0     112.556272     84.867855
+    1   2048.0     138.680066    103.679061
+    2   4096.0     149.844813    114.297692
+    3   8192.0     164.065309    121.444775
+    4  16384.0     169.741422    124.999052
     fused-attention-batch4-head32-d64-fwd-causal=False:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0     159.034440    117.180262
-    1   2048.0     168.609564    118.098829
-    2   4096.0     170.274678    119.853817
-    3   8192.0     175.083255    119.987244
-    4  16384.0     166.561987    120.896450
+    0   1024.0     158.612006    116.165407
+    1   2048.0     167.331223    117.244245
+    2   4096.0     171.340122    117.079454
+    3   8192.0     173.946937    118.914868
+    4  16384.0     174.890759    119.555376
     fused-attention-batch4-head32-d64-bwd-causal=True:
          N_CTX  Triton [FP16]  Triton [FP8]
-    0   1024.0      36.031390     35.991337
-    1   2048.0      44.144760     44.206796
-    2   4096.0      49.329208     49.358753
-    3   8192.0      52.363347     52.355174
-    4  16384.0      53.757783     53.777169
+    0   1024.0      36.047303     35.950900
+    1   2048.0      44.155410     44.156863
+    2   4096.0      49.371202     49.423665
+    3   8192.0      52.368454     52.256313
+    4  16384.0      53.790638     53.786056
 
 
 
@@ -893,7 +893,7 @@ Extra Credits:
         # compare
         assert torch.allclose(ref_out, tri_out, atol=1e-2, rtol=0)
         rtol = 0.0
-        # Relative tolerance workaround for known hardware limitation of MI200 GPU.
+        # Relative tolerance workaround for known hardware limitation of CDNA2 GPU.
         # For details see https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
         if torch.version.hip is not None and triton.runtime.driver.active.get_current_target().arch == "gfx90a":
             rtol = 1e-2
@@ -984,7 +984,7 @@ Extra Credits:
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 53.239 seconds)
+   **Total running time of the script:** (0 minutes 53.138 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_06-fused-attention.py:

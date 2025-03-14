@@ -270,7 +270,7 @@ more than 10% on some hardware architecture (e.g., 220 to 245 TFLOPS on A100).</
     <span class="k">return</span> <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">get_current_target</span><span class="p">()</span><span class="o">.</span><span class="n">backend</span> <span class="o">==</span> <span class="s2">&quot;cuda&quot;</span>
 
 
-<span class="k">def</span><span class="w"> </span><span class="nf">is_hip_mi200</span><span class="p">():</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">is_hip_cdna2</span><span class="p">():</span>
     <span class="n">target</span> <span class="o">=</span> <span class="n">triton</span><span class="o">.</span><span class="n">runtime</span><span class="o">.</span><span class="n">driver</span><span class="o">.</span><span class="n">active</span><span class="o">.</span><span class="n">get_current_target</span><span class="p">()</span>
     <span class="k">return</span> <span class="n">target</span><span class="o">.</span><span class="n">backend</span> <span class="o">==</span> <span class="s1">&#39;hip&#39;</span> <span class="ow">and</span> <span class="n">target</span><span class="o">.</span><span class="n">arch</span> <span class="o">==</span> <span class="s1">&#39;gfx90a&#39;</span>
 
@@ -467,10 +467,10 @@ and (1) checks any shape constraint; (2) allocates the output; (3) launches the 
 <span class="n">torch_output</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">matmul</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;triton_output_with_fp16_inputs=</span><span class="si">{</span><span class="n">triton_output</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;torch_output_with_fp16_inputs=</span><span class="si">{</span><span class="n">torch_output</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-<span class="c1"># Bigger tolerance for AMD MI200 devices.</span>
-<span class="c1"># MI200 devices use reduced precision fp16 and bf16 and flush input and</span>
+<span class="c1"># Bigger tolerance for AMD CDNA2 devices.</span>
+<span class="c1"># CDNA2 devices use reduced precision fp16 and bf16 and flush input and</span>
 <span class="c1"># output denormal values to zero. Detailed info is at: https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices</span>
-<span class="n">rtol</span> <span class="o">=</span> <span class="mf">1e-2</span> <span class="k">if</span> <span class="n">is_hip_mi200</span><span class="p">()</span> <span class="k">else</span> <span class="mi">0</span>
+<span class="n">rtol</span> <span class="o">=</span> <span class="mf">1e-2</span> <span class="k">if</span> <span class="n">is_hip_cdna2</span><span class="p">()</span> <span class="k">else</span> <span class="mi">0</span>
 <span class="k">if</span> <span class="n">torch</span><span class="o">.</span><span class="n">allclose</span><span class="p">(</span><span class="n">triton_output</span><span class="p">,</span> <span class="n">torch_output</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mf">1e-2</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="n">rtol</span><span class="p">):</span>
     <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;✅ Triton and Torch match&quot;</span><span class="p">)</span>
 <span class="k">else</span><span class="p">:</span>
@@ -589,35 +589,35 @@ but feel free to arrange this script as you wish to benchmark any other matrix s
          M       N       K      cuBLAS      Triton
 0    256.0   256.0   256.0    4.096000    4.096000
 1    384.0   384.0   384.0   11.059200   12.288000
-2    512.0   512.0   512.0   26.214401   26.214401
+2    512.0   512.0   512.0   26.214401   23.831273
 3    640.0   640.0   640.0   42.666665   42.666665
 4    768.0   768.0   768.0   63.195428   58.982401
 5    896.0   896.0   896.0   78.051553   82.642822
 6   1024.0  1024.0  1024.0  110.376426   80.659693
-7   1152.0  1152.0  1152.0  135.726544  102.964963
+7   1152.0  1152.0  1152.0  135.726544  106.642284
 8   1280.0  1280.0  1280.0  157.538463  132.129034
 9   1408.0  1408.0  1408.0  155.765024  118.516867
-10  1536.0  1536.0  1536.0  176.947204  138.782120
-11  1664.0  1664.0  1664.0  179.978245  157.875646
+10  1536.0  1536.0  1536.0  176.947204  141.557764
+11  1664.0  1664.0  1664.0  183.651271  157.875646
 12  1792.0  1792.0  1792.0  172.914215  184.252856
-13  1920.0  1920.0  1920.0  200.347822  148.645157
+13  1920.0  1920.0  1920.0  203.294114  147.063826
 14  2048.0  2048.0  2048.0  223.696203  166.111053
-15  2176.0  2176.0  2176.0  211.827867  171.996987
-16  2304.0  2304.0  2304.0  229.691080  183.752861
-17  2432.0  2432.0  2432.0  206.576938  175.590404
-18  2560.0  2560.0  2560.0  222.911566  192.752942
-19  2688.0  2688.0  2688.0  199.647657  167.105976
-20  2816.0  2816.0  2816.0  212.752230  171.036115
-21  2944.0  2944.0  2944.0  222.482283  173.644709
-22  3072.0  3072.0  3072.0  208.173173  186.260219
-23  3200.0  3200.0  3200.0  216.949149  191.616760
-24  3328.0  3328.0  3328.0  209.277023  168.597886
-25  3456.0  3456.0  3456.0  219.677297  176.414815
-26  3584.0  3584.0  3584.0  219.305830  183.127066
-27  3712.0  3712.0  3712.0  211.646909  194.352804
-28  3840.0  3840.0  3840.0  209.851994  177.515241
-29  3968.0  3968.0  3968.0  210.749463  182.397520
-30  4096.0  4096.0  4096.0  221.481394  192.841562
+15  2176.0  2176.0  2176.0  209.621326  173.479720
+16  2304.0  2304.0  2304.0  229.691080  182.350177
+17  2432.0  2432.0  2432.0  205.069087  176.694739
+18  2560.0  2560.0  2560.0  221.405396  191.625723
+19  2688.0  2688.0  2688.0  198.602388  167.845378
+20  2816.0  2816.0  2816.0  212.752230  170.368000
+21  2944.0  2944.0  2944.0  220.513412  171.848388
+22  3072.0  3072.0  3072.0  206.653671  185.649525
+23  3200.0  3200.0  3200.0  216.949149  189.910976
+24  3328.0  3328.0  3328.0  208.670419  168.993647
+25  3456.0  3456.0  3456.0  216.724640  174.884100
+26  3584.0  3584.0  3584.0  221.466479  186.934289
+27  3712.0  3712.0  3712.0  209.428397  192.480434
+28  3840.0  3840.0  3840.0  202.921095  173.886789
+29  3968.0  3968.0  3968.0  208.587935  182.397520
+30  4096.0  4096.0  4096.0  217.180793  192.841562
 matmul-performance-fp8:
          M       N       K      Triton
 0    256.0   256.0   256.0    4.096000
@@ -625,7 +625,7 @@ matmul-performance-fp8:
 2    512.0   512.0   512.0   26.214401
 3    640.0   640.0   640.0   46.545454
 4    768.0   768.0   768.0   58.982401
-5    896.0   896.0   896.0   82.642822
+5    896.0   896.0   896.0   87.808000
 6   1024.0  1024.0  1024.0   91.180520
 7   1152.0  1152.0  1152.0  119.439363
 8   1280.0  1280.0  1280.0  141.241376
@@ -637,23 +637,23 @@ matmul-performance-fp8:
 14  2048.0  2048.0  2048.0  190.650180
 15  2176.0  2176.0  2176.0  184.620623
 16  2304.0  2304.0  2304.0  204.169841
-17  2432.0  2432.0  2432.0  197.848332
+17  2432.0  2432.0  2432.0  195.100438
 18  2560.0  2560.0  2560.0  204.800005
 19  2688.0  2688.0  2688.0  189.665285
-20  2816.0  2816.0  2816.0  203.804711
-21  2944.0  2944.0  2944.0  209.395098
-22  3072.0  3072.0  3072.0  202.950194
-23  3200.0  3200.0  3200.0  209.836070
-24  3328.0  3328.0  3328.0  197.778282
-25  3456.0  3456.0  3456.0  209.951993
-26  3584.0  3584.0  3584.0  206.702053
-27  3712.0  3712.0  3712.0  208.553950
-28  3840.0  3840.0  3840.0  202.549441
-29  3968.0  3968.0  3968.0  209.843397
-30  4096.0  4096.0  4096.0  212.706392
+20  2816.0  2816.0  2816.0  201.917629
+21  2944.0  2944.0  2944.0  210.278616
+22  3072.0  3072.0  3072.0  199.377121
+23  3200.0  3200.0  3200.0  206.451611
+24  3328.0  3328.0  3328.0  198.323130
+25  3456.0  3456.0  3456.0  208.864166
+26  3584.0  3584.0  3584.0  204.353162
+27  3712.0  3712.0  3712.0  209.428397
+28  3840.0  3840.0  3840.0  201.442627
+29  3968.0  3968.0  3968.0  210.023986
+30  4096.0  4096.0  4096.0  215.092520
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (2 minutes 10.405 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (2 minutes 10.424 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-getting-started-tutorials-03-matrix-multiplication-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/b51b68bc1c6b1a5e509f67800b6235af/03-matrix-multiplication.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">03-matrix-multiplication.ipynb</span></code></a></p>
