@@ -10,6 +10,7 @@ from triton.language import constexpr
 from triton.runtime._allocation import set_profile_allocator, NullAllocator
 
 from .hook import Hook
+from ..flags import set_instrumentation_on, set_instrumentation_off
 
 
 class CudaAllocator:
@@ -51,6 +52,7 @@ class InstrumentationHook(Hook):
         self.buffer = None
 
     def activate(self):
+        set_instrumentation_on()
         # Set up the profiling allocator
         set_profile_allocator(self.allocator)
 
@@ -66,6 +68,8 @@ class InstrumentationHook(Hook):
         JITFunction.run = instrumented_run
 
     def deactivate(self):
+        set_instrumentation_off()
+
         # Restore original JIT function run method
         if hasattr(JITFunction.run, "__wrapped__"):
             JITFunction.run = JITFunction.run.__wrapped__
