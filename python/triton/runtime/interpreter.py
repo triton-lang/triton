@@ -309,6 +309,9 @@ class InterpreterBuilder:
     def get_int8_ty(self):
         return tl.int8
 
+    def get_int1_ty(self):
+        return tl.int1
+
     def get_uint8_ty(self):
         return tl.uint8
 
