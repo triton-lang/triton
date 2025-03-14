@@ -1,10 +1,20 @@
+#include "Dialect/Proton/IR/Dialect.h"
 #include "Dialect/ProtonGPU/IR/Dialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Pass/Pass.h"
+#include "third_party/nvidia/include/Dialect/NVGPU/IR/Dialect.h"
+#include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/PatternProtonGPUOpToLLVM.h"
 #include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/ProtonNvidiaGPUToLLVM/Passes.h"
 #include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/ProtonNvidiaGPUToLLVM/TargetInfo.h"
+#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 using namespace mlir;
 using namespace mlir::triton;
+using namespace mlir::triton::proton::gpu;
 
 namespace mlir {
 namespace triton::proton {
@@ -14,6 +24,23 @@ namespace triton::proton {
 } // namespace mlir
 
 namespace {
+
+class ProtonLLVMConversionTarget : public ConversionTarget {
+public:
+  explicit ProtonLLVMConversionTarget(MLIRContext &ctx)
+      : ConversionTarget(ctx) {
+    addLegalDialect<LLVM::LLVMDialect>();
+    addLegalDialect<NVVM::NVVMDialect>();
+    addLegalDialect<mlir::triton::gpu::TritonGPUDialect>();
+    addLegalDialect<mlir::triton::nvgpu::NVGPUDialect>();
+    addLegalDialect<mlir::gpu::GPUDialect>();
+    addLegalDialect<triton::nvidia_gpu::TritonNvidiaGPUDialect>();
+    addIllegalDialect<triton::TritonDialect>();
+    addIllegalDialect<triton::proton::ProtonDialect>();
+    addIllegalDialect<triton::proton::gpu::ProtonGPUDialect>();
+    addLegalOp<mlir::UnrealizedConversionCastOp>();
+  }
+};
 
 struct ConvertProtonNvidiaGPUToLLVM
     : public mlir::triton::proton::impl::ConvertProtonNvidiaGPUToLLVMBase<
@@ -31,6 +58,22 @@ struct ConvertProtonNvidiaGPUToLLVM
         mlir::triton::NVIDIA::TargetInfo(computeCapability, ptxVersion);
     auto protonTargetInfo =
         mlir::triton::proton::NVIDIA::TargetInfo(tritonTargetInfo);
+
+    mlir::LowerToLLVMOptions option(context);
+    option.overrideIndexBitwidth(32);
+    TritonGPUToLLVMTypeConverter typeConverter(context, option,
+                                               tritonTargetInfo);
+
+    RewritePatternSet patterns(context);
+    int benefit = patternBenefitDefault;
+
+    populateProtonGPUOpPatterns(typeConverter, patterns, protonTargetInfo,
+                                benefit);
+
+    ProtonLLVMConversionTarget convTarget(*context);
+    if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
+      return signalPassFailure();
+
     return;
   }
 };
