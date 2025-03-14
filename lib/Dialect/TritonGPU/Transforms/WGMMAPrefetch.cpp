@@ -55,8 +55,7 @@ class WGMMAPrefetcher {
   scf::ForOp forOp;
   /// cache the YieldOp of this ForOp
   scf::YieldOp yieldOp;
-  ///
-  // For Hopper, we implicitly use the prefetchWidth 16
+  /// For Hopper, we implicitly use the prefetchWidth 16
   unsigned prefetchWidth = 16;
 
   /// dots to be prefetched
@@ -118,7 +117,6 @@ void WGMMAPrefetcher::cloneElementwiseOps(Value &ret,
     }
     mapping.map(v, curr);
   }
-  // if (vals.size() > 1)
   ret = mapping.lookup(vals.back());
 }
 
@@ -133,7 +131,6 @@ Value WGMMAPrefetcher::generatePrefetch(
   SmallVector<int64_t> offset(rank, 0);
   Type elementType = type.getElementType();
 
-  // k => (prefetchWidth, k - prefetchWidth)
   int64_t kIdx = opIdx == 0 ? rank - 1 : rank - 2;
 
   offset[kIdx] = isPrologue ? 0 : prefetchWidth;
