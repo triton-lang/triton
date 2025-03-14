@@ -836,6 +836,7 @@ void Pingponger::getDotPingponged() {
       LDBG(message.str());
       return;
     }
+
     // Transform a loop where the tile size requires dots to be sliced
     if (tileSize == mediumTile) {
       if (transformTwoPPClusters(builder, dotOps[0]->getLoc()).failed()) {
