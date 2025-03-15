@@ -535,13 +535,14 @@ class CudaLauncher(object):
     def __call__(self, gridX, gridY, gridZ, stream, function, *args):
 
         def allocate_scratch(size, align, allocator):
-            # TODO(Keren): Remove hack
+            # TODO(Keren): Remove hack, should be just size > 0
             if size > 0 and not isinstance(allocator, _allocation.NullAllocator):
                 grid_size = gridX * gridY * gridZ
                 alloc_size = grid_size * size
                 return allocator(alloc_size, align, stream)
             return None
 
+        # TODO(Keren): Reduce launch overhead
         global_scratch = allocate_scratch(self.global_scratch_size, self.global_scratch_align, _allocation._allocator)
         profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
                                            _allocation._profile_allocator)

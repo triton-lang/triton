@@ -15,13 +15,13 @@ using namespace mlir;
 using namespace mlir::triton;
 
 // NOTE: [Additional Function Arguments]
+// Triton patches additional arguments to the function signature to support
+// (1) shared memory, (2) global scratch memory, and (3) profile scratch memory.
 // To support use of shared memory and global scratch memory inside of a
 // function, the caller allocates a single large block of the relevant memory
 // and calls the function with these extra arguments at the end.
-// Specifically, the second last argument is the global scratch memory
-// allocation and the third to last is the shared memory allocation.
-// Additionally, the last argument is the profile scratch memory allocation,
-// which is only used when the function is instrumented for profiling.
+// Profile scratch memory is only used when the function is instrumented for
+// profiling.
 //
 // For the kernel function itself, the shared memory base is a global symbol
 // so no additional function argument is required but global scratch memory

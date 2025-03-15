@@ -22,11 +22,16 @@ class CudaAllocator:
         import torch
 
         # Ensure proper alignment and minimum size
+        # `alignment` and `size` are specified by the instrumentation engine to specify the minimum required
+        # alignment and size of the buffer.
+        # Then, we make it match the default profile buffer alignment and size here, taking the maximum of the two.
         alignment = max(alignment, self.instrumentation_hook.profile_buffer_alignment)
         aligned_size = (size + alignment - 1) // alignment * alignment
         aligned_size = max(aligned_size, self.instrumentation_hook.profile_buffer_size)
 
         # Create the buffer
+        # FIXME(Keren): This is not correct in general, as the buffer will be deallocated by the Torch runtime.
+        # We should use a custom allocator to manage the buffer lifecycle.
         buffer = torch.empty((aligned_size, ), dtype=torch.uint8, device="cuda")
         self.instrumentation_hook.buffer = buffer.data_ptr()
         return buffer
@@ -97,6 +102,9 @@ class InstrumentationHook(Hook):
         libproton.enter_instrumented_op(lazy_dict.data.get("function", None), self.buffer, self.profile_buffer_size)
 
     def exit(self, lazy_dict: LazyDict) -> None:
+        # FIXME(Keren): exit_instrumented_op will sync the device and copy the buffer back to the host.
+        # But this is not necessary if we can delay the copy to reduce the overhead.
+        # We should fix it after the profiling buffer is managed by a custom allocator.
         libproton.exit_instrumented_op(lazy_dict.data.get("function", None), self.buffer, self.profile_buffer_size)
         # Release the profiling buffer for recycling
         self.buffer = None

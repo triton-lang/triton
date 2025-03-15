@@ -82,4 +82,4 @@ def test_hook_instrumentation(tmp_path):
     proton.finalize()
     os.environ["TEST_PROFILE_SCRATCH_SIZE"] = "0"
     foo[(1, )](x, 1, y, num_warps=4)
-    assert len(foo.device_caches[device][0]) == 2, "Instrument and uninstrumented kernels both should be cached"
+    assert len(foo.device_caches[device][0]) == 2, "Instrumented and uninstrumented kernels both should be cached"

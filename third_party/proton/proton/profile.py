@@ -119,7 +119,7 @@ def start(
     if backend == "instrumentation":
         HookManager.register(InstrumentationHook(mode), session)
 
-    return libproton.start(name, context, data, backend, mode, backend_path)
+    return session
 
 
 def activate(session: Optional[int] = None) -> None:
