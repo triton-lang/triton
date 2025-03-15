@@ -23,6 +23,30 @@ namespace tt = mlir::triton;
 
 namespace {
 
+// Determine when tracking the memory operations
+// associated with a conditional how to define the
+// expected memory count.
+enum class ConditionalSelectionHeuristic {
+  minPath,
+  maxPath,
+  ifPath,
+  elsePath,
+};
+
+std::string
+conditionalSelectionHeuristicToString(ConditionalSelectionHeuristic h) {
+  switch (h) {
+  case ConditionalSelectionHeuristic::minPath:
+    return "minimum";
+  case ConditionalSelectionHeuristic::maxPath:
+    return "maximum";
+  case ConditionalSelectionHeuristic::ifPath:
+    return "if branch";
+  default:
+    return "else branch";
+  }
+}
+
 // This pass transforms a for-loop calculating a GEMM. Main purpose of the
 // transform is improve the efficiency of the GPU dot instruction (mfma)
 // by interleaving the execution of two warps on each SIMD. Especially it groups
@@ -43,6 +67,7 @@ class Pingponger {
   SmallVector<Operation *> dotSliceOps;
   SmallVector<Value> constOffsets;
   Operation *lastInsertedOp;
+  int64_t conditionalTileSizeHeuristic;
 
   // rocdl.s.setprio will be mapped to `s_setprio` instruction which set the
   // priority of the warp within a SIMD, determines which warp to occupy the
@@ -57,8 +82,10 @@ class Pingponger {
   int32_t numWarps;
 
 public:
-  Pingponger(scf::ForOp forOp, int32_t numWarps)
-      : forOp(forOp), numWarps(numWarps) {}
+  Pingponger(scf::ForOp forOp, int32_t numWarps,
+             int64_t _conditionalTileSizeHeuristic)
+      : forOp(forOp), numWarps(numWarps),
+        conditionalTileSizeHeuristic(_conditionalTileSizeHeuristic) {}
   void getDotPingponged();
 
 private:
@@ -79,6 +106,11 @@ private:
   void appendSlicedLoadAB(int slice);
   void appendClusterBarrier(OpBuilder &builder, Location loc);
   void appendOpWithPrio(OpBuilder &builder, Operation *Op, Location loc);
+  ConditionalSelectionHeuristic getIfHeuristic(int64_t tileSize);
+  template <typename T>
+  size_t countIfMemoryOps(scf::IfOp ifOp, int64_t tileSize);
+  template <typename T>
+  size_t estimateNonDotMemoryImpact(T *start, T *end, int64_t tileSize);
   void determineDotMemoryOps(tt::DotOp dotOp,
                              DenseSet<tt::LoadOp> &dotGlobalLoads,
                              DenseSet<ttg::LocalLoadOp> &dotLocalLoads,
@@ -197,6 +229,81 @@ void Pingponger::findClosestPredOps(Value v, DenseSet<T> &matchingOps) {
     }
   };
   impl(v);
+}
+
+// Determine how memory operations are counted for conditionals
+// (e.g. which side of the branch to consider).
+ConditionalSelectionHeuristic Pingponger::getIfHeuristic(int64_t tileSize) {
+  // TODO(njriasan): Consider looking at the actual value in the conditional
+  // to determine when to use the heuristic.
+  if (conditionalTileSizeHeuristic == -1)
+    return ConditionalSelectionHeuristic::minPath;
+  else if (conditionalTileSizeHeuristic == -2)
+    return ConditionalSelectionHeuristic::maxPath;
+  else if (tileSize >= conditionalTileSizeHeuristic)
+    return ConditionalSelectionHeuristic::elsePath;
+  else
+    return ConditionalSelectionHeuristic::ifPath;
+}
+
+// Determine the number of memory operations of type T that are expected
+// to execute each iteration of the outermost for loop for the ifOp.
+template <typename T>
+size_t Pingponger::countIfMemoryOps(scf::IfOp ifOp, int64_t tileSize) {
+  size_t thenCount = 0;
+  size_t elseCount = 0;
+  // Don't do a nested traversal as we are only estimating the "same level"
+  for (auto _ : ifOp.thenBlock()->getOps<T>()) {
+    thenCount++;
+  }
+  if (ifOp.elseBlock()) {
+    for (auto _ : ifOp.elseBlock()->getOps<T>()) {
+      elseCount++;
+    }
+  }
+  auto heuristic = getIfHeuristic(tileSize);
+  LDBG("Encountered memory op inside conditional. Using heuristic: "
+       << conditionalSelectionHeuristicToString(heuristic));
+  if (heuristic == ConditionalSelectionHeuristic::minPath)
+    return std::min(thenCount, elseCount);
+  else if (heuristic == ConditionalSelectionHeuristic::maxPath)
+    return std::max(thenCount, elseCount);
+  else if (heuristic == ConditionalSelectionHeuristic::ifPath)
+    return thenCount;
+  else {
+    assert(heuristic == ConditionalSelectionHeuristic::elsePath);
+    return elseCount;
+  }
+}
+
+// Estimate the expected number of memory operations of type T
+// rounded to an integer. This is used to determine any possible
+// influence on cluster setup.
+template <typename T>
+size_t Pingponger::estimateNonDotMemoryImpact(T *start, T *end,
+                                              int64_t tileSize) {
+  DenseSet<Operation *> visitedParents;
+  size_t count = 0;
+  for (auto it = start; it != end; it++) {
+    auto parent = (*it)->getParentOp();
+    if (parent == nullptr)
+      continue;
+    if (parent == forOp)
+      count += 1;
+    else {
+      if (visitedParents.contains(parent))
+        continue;
+      visitedParents.insert(parent);
+      if (auto ifOp = dyn_cast<scf::IfOp>(parent))
+        count += countIfMemoryOps<T>(ifOp, tileSize);
+      else {
+        // Default to counting every memory access as a
+        // single access.
+        count += 1;
+      }
+    }
+  }
+  return count;
 }
 
 // Populate the dotGlobalLoads, dotLocalLoads, and dotLocalStores set with
@@ -564,45 +671,6 @@ void Pingponger::getDotPingponged() {
     return;
   }
 
-  // The existing code depends on the loads being targeted being safe to move,
-  // which will not hold if we do not properly have a GEMM. As a result, we
-  // filter the associated load operations to only those that are associated
-  // // with the GEMM.
-  DenseSet<tt::LoadOp> dotGlobalLoads;
-  DenseSet<ttg::LocalLoadOp> dotLocalLoads;
-  DenseSet<ttg::LocalStoreOp> dotLocalStores;
-  determineDotMemoryOps(dotOps[0], dotGlobalLoads, dotLocalLoads,
-                        dotLocalStores);
-
-  auto origGlobalLoadCount = gLoadOps.size();
-  auto origLocalLoadCount = lLoadOps.size();
-  // Prune Memory operations that may be moved to only those involved in dot
-  // computation.
-  auto gLoadIt = llvm::remove_if(gLoadOps, [&dotGlobalLoads](tt::LoadOp op) {
-    return !dotGlobalLoads.contains(op);
-  });
-  gLoadOps.erase(gLoadIt, gLoadOps.end());
-  auto lLoadIt =
-      llvm::remove_if(lLoadOps, [&dotLocalLoads](ttg::LocalLoadOp op) {
-        return !dotLocalLoads.contains(op);
-      });
-  lLoadOps.erase(lLoadIt, lLoadOps.end());
-  auto lStoreIt =
-      llvm::remove_if(lStoreOps, [&dotLocalStores](ttg::LocalStoreOp op) {
-        return !dotLocalStores.contains(op);
-      });
-  lStoreOps.erase(lStoreIt, lStoreOps.end());
-  // All PingPong Scheduler assumes there are 2 movable global loads and 2
-  // movable local loads.
-  if (gLoadOps.size() != 2 || lLoadOps.size() != 2) {
-    std::stringstream message;
-    message << "Unable to match ping pong slicing pattern. Details: "
-            << gLoadOps.size() << " global loads in dot computation, "
-            << lLoadOps.size() << " local loads in dot computation";
-    LDBG(message.str());
-    return;
-  }
-
   // Pingpong scheduling tries to form two different types of the instruction
   // clusters, i.e., Dot clusters and Memory clusters. While each SIMD has
   // two concurrent warps, both warps can execute a different type of
@@ -638,6 +706,67 @@ void Pingponger::getDotPingponged() {
   auto elemWidth = aType.getElementTypeBitWidth();
   int64_t tileSize = dotShape[0] * dotShape[1] * aShape[1] * elemWidth;
 
+  // The existing code depends on the loads being targeted being safe to move,
+  // which will not hold if we do not properly have a GEMM. As a result, we
+  // filter the associated load operations to only those that are associated
+  // // with the GEMM.
+  DenseSet<tt::LoadOp> dotGlobalLoads;
+  DenseSet<ttg::LocalLoadOp> dotLocalLoads;
+  DenseSet<ttg::LocalStoreOp> dotLocalStores;
+  determineDotMemoryOps(dotOps[0], dotGlobalLoads, dotLocalLoads,
+                        dotLocalStores);
+
+  // Prune Memory operations that may be moved to only those involved in dot
+  // computation. To understand the "cluster assumptions" we also estimate
+  // the impact of any additional loads/stores.
+  auto gLoadIt = std::stable_partition(
+      gLoadOps.begin(), gLoadOps.end(),
+      [&dotGlobalLoads](tt::LoadOp op) { return dotGlobalLoads.contains(op); });
+  auto effectiveGlobalLoadCount =
+      estimateNonDotMemoryImpact<tt::LoadOp>(gLoadIt, gLoadOps.end(), tileSize);
+  gLoadOps.erase(gLoadIt, gLoadOps.end());
+  effectiveGlobalLoadCount += gLoadOps.size();
+  auto lLoadIt = std::stable_partition(lLoadOps.begin(), lLoadOps.end(),
+                                       [&dotLocalLoads](ttg::LocalLoadOp op) {
+                                         return dotLocalLoads.contains(op);
+                                       });
+  auto effectiveLocalLoadCount = estimateNonDotMemoryImpact<ttg::LocalLoadOp>(
+      lLoadIt, lLoadOps.end(), tileSize);
+  lLoadOps.erase(lLoadIt, lLoadOps.end());
+  effectiveLocalLoadCount += lLoadOps.size();
+  auto lStoreIt =
+      std::stable_partition(lStoreOps.begin(), lStoreOps.end(),
+                            [&dotLocalStores](ttg::LocalStoreOp op) {
+                              return dotLocalStores.contains(op);
+                            });
+  auto effectiveLocalStoreCount = estimateNonDotMemoryImpact<ttg::LocalStoreOp>(
+      lStoreIt, lStoreOps.end(), tileSize);
+  lStoreOps.erase(lStoreIt, lStoreOps.end());
+  effectiveLocalStoreCount += lStoreOps.size();
+  // All PingPong Scheduler assumes there are 2 movable global loads and 2
+  // movable local loads.
+  if (gLoadOps.size() != 2 || lLoadOps.size() != 2) {
+    std::stringstream message;
+    message << "Unable to match ping pong slicing pattern. Details: "
+            << gLoadOps.size() << " global loads in dot computation, "
+            << lLoadOps.size() << " local loads in dot computation";
+    LDBG(message.str());
+    return;
+  }
+
+  // Restrict based on "effective loads" because this influenced the
+  // calculations used to generate the clusters.
+  if (effectiveGlobalLoadCount != 2 || effectiveLocalLoadCount != 2 ||
+      effectiveLocalStoreCount != 2) {
+    std::stringstream message;
+    message << "Unable to match memory expectations. Details: "
+            << effectiveGlobalLoadCount << " effective global load count, "
+            << effectiveLocalLoadCount << " effective local load count, "
+            << effectiveLocalStoreCount << " effective local store count";
+    LDBG(message.str());
+    return;
+  }
+
   const int64_t minTile = 262144;      // e.g. 32x128x64x16bit
   const int64_t smallTile = 16777216;  // e.g. 128x128x64x16bit
   const int64_t mediumTile = 33554432; // smallTile x 2
@@ -662,14 +791,6 @@ void Pingponger::getDotPingponged() {
     // numWarps=4 doesn't need asymmetric sync, return.
     return;
   } else if (numWarps == 8) { // Pingpong between warps from the same block
-    if (origGlobalLoadCount != 2 || origLocalLoadCount != 2) {
-      std::stringstream message;
-      message << "Unable to match ping pong slicing pattern. Details: "
-              << gLoadOps.size() << " global loads, " << lLoadOps.size()
-              << " local loads";
-      LDBG(message.str());
-      return;
-    }
     if (lStoreOps.size() != 2) {
       std::stringstream message;
       message << "Unable to match ping pong slicing pattern. Details: "
@@ -712,11 +833,15 @@ class TritonAMDGPUBlockPingpongPass
     : public TritonAMDGPUBlockPingpongBase<TritonAMDGPUBlockPingpongPass> {
 public:
   TritonAMDGPUBlockPingpongPass() = default;
+  TritonAMDGPUBlockPingpongPass(int64_t _conditionalTileSizeHeuristic) {
+    this->conditionalTileSizeHeuristic = _conditionalTileSizeHeuristic;
+  }
   void runOnOperation() override {
     ModuleOp m = getOperation();
     for (auto funcOp : m.getOps<tt::FuncOp>()) {
       funcOp.walk([&](scf::ForOp forOp) {
-        Pingponger pingponger(forOp, ttg::lookupNumWarps(forOp));
+        Pingponger pingponger(forOp, ttg::lookupNumWarps(forOp),
+                              conditionalTileSizeHeuristic);
         pingponger.getDotPingponged();
       });
     }
@@ -724,6 +849,8 @@ public:
 };
 } // namespace
 
-std::unique_ptr<Pass> mlir::createTritonAMDGPUBlockPingpongPass() {
-  return std::make_unique<TritonAMDGPUBlockPingpongPass>();
+std::unique_ptr<Pass> mlir::createTritonAMDGPUBlockPingpongPass(
+    int64_t conditionalTileSizeHeuristic) {
+  return std::make_unique<TritonAMDGPUBlockPingpongPass>(
+      conditionalTileSizeHeuristic);
 }
