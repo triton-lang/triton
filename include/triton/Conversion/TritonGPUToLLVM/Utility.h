@@ -579,8 +579,8 @@ inline Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
 inline Value getProfileScratchPtr(Location loc, RewriterBase &rewriter,
                                   FunctionOpInterface funcOp) {
   // See NOTE: [Additional Function Arguments]
-  // FIXME(Keren): This is actually broken when we have device functions, we
-  // need implement proper calling convention
+  // FIXME(Keren): This is broken when we have device functions, we
+  // need to implement proper calling convention
   return funcOp.getArgument(funcOp.getNumArguments() +
                             kProfileScratchBufferOffset);
 }
