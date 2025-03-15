@@ -305,7 +305,16 @@ private:
   }
 
   bool accOverwrittenInLoop(ttng::MMAv5OpInterface mma, scf::ForOp forOp) {
-    // TODO: Implement this
+    auto tmemAlloc = mma.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
+    if (!tmemAlloc || !forOp.isDefinedOutsideOfLoop(tmemAlloc)) {
+      return false;
+    }
+    for (auto user : tmemAlloc->getUsers()) {
+      if (isa<ttng::TMEMStoreOp>(user) &&
+          forOp->isAncestor(user->getParentOp())) {
+        return true;
+      }
+    }
     return false;
   }
 

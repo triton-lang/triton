@@ -242,6 +242,13 @@ public:
     Value yieldArgValue = yield.getOperand(argNo);
     store.getSrcMutable().assign(yieldArgValue);
     store->setAttrs(attributes);
+
+    // Load from the tmem after the loop, and use it instead of the loop carried
+    // value.
+    rewriter.setInsertionPointAfter(forOp);
+    auto load = rewriter.create<ttng::TMEMLoadOp>(
+        store.getLoc(), store.getSrc().getType(), store.getDst());
+    forOp->getResult(argNo).replaceAllUsesWith(load.getResult());
     // Loop carried value is no longer used, short-circuit it.
     yield.setOperand(argNo, forOp.getRegionIterArg(argNo));
     return success();

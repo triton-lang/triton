@@ -321,6 +321,15 @@ bool mlir::triton::isPipeliningOfMMAOpPossible(
     Operation *op, scf::ForOp forOp,
     std::function<bool(Operation *)> isLoadPipelineable) {
   assert((isa<ttng::MMAv5OpInterface>(op)) && "Only MMA ops are supported");
+  // Accumulator alloc must be outside the loop.
+  auto mmaOp = cast<ttng::MMAv5OpInterface>(op);
+  auto tmemAlloc = mmaOp.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
+  if (!tmemAlloc) {
+    return false;
+  }
+  if (!forOp.isDefinedOutsideOfLoop(tmemAlloc)) {
+    return false;
+  }
   // Operands of the MMA op must come from the (to be pipelined) load, or
   // from outside the loop.
   auto comesFromLoadOrOutsideLoop = [&](Value v) {

@@ -916,10 +916,14 @@ scf::ForOp lowerTMADescriptors(scf::ForOp forOp, CoarseSchedule &schedule) {
 /////////////////////////////
 
 std::optional<int> getLowestStageOfLoad(ttng::TMEMAllocOp alloc,
+                                        scf::ForOp forOp,
                                         CoarseSchedule &schedule) {
   std::optional<int> lowestStage = std::nullopt;
   for (auto user : alloc->getUsers()) {
     if (auto load = dyn_cast<ttng::TMEMLoadOp>(user)) {
+      if (!forOp->isAncestor(load->getParentOp())) {
+        continue;
+      }
       if (!lowestStage.has_value() || schedule[load].first < lowestStage) {
         lowestStage = schedule[load].first;
       }
@@ -988,7 +992,8 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
   }
 
   // Create barrier and wait ops
-  std::optional<int> lowestStageOpt = getLowestStageOfLoad(alloc, schedule);
+  std::optional<int> lowestStageOpt =
+      getLowestStageOfLoad(alloc, forOp, schedule);
   int stageDiff = 0;
   if (lowestStageOpt.has_value()) {
     stageDiff = lowestStageOpt.value() - schedule[mma].first;
