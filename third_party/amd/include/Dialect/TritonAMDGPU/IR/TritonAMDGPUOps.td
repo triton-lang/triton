@@ -394,4 +394,29 @@ def TTG_UpcastMXFPOp : TT_AMDGPU_Op<"upcast_mxfp", [Pure]> {
   }];
 }
 
+//===----------------------------------------------------------------------===//
+// InThreadTransposeOp
+//===----------------------------------------------------------------------===//
+
+def TTG_InThreadTransposeOp : TT_AMDGPU_Op<"in_thread_transpose", [Pure]> {
+  let summary = "Transposes last two dimensions of register sub layout";
+
+  let hasVerifier = 1;
+
+  let description = [{
+    Special case of convert_layout: transposes last two dimensions in BlockedEncoding sizePerThread blocks.
+  }];
+
+  let arguments = (ins TT_Tensor:$src);
+
+  let results = (outs TT_Tensor:$result);
+
+  let assemblyFormat = "$src attr-dict `:` type($src) `->` type($result)";
+
+  let extraClassDeclaration = [{
+    static mlir::triton::LinearLayout deduceOutputLayout(mlir::ArrayRef<int64_t> shape,
+                                 mlir::triton::gpu::BlockedEncodingAttr srcEncoding);
+  }];
+}
+
 #endif
