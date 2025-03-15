@@ -247,7 +247,7 @@ def test_tensor_descriptor_load(dtype_str):
 
     @triton.jit
     def kernel(out_ptr, a_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
-        desc = tl._experimental_make_tensor_descriptor(
+        desc = tl.make_tensor_descriptor(
             a_ptr,
             shape=[M, N],
             strides=[N, 1],
@@ -300,7 +300,7 @@ def test_tensor_descriptor_store(dtype_str):
 
         val = tl.load(a_ptr + idx)
 
-        desc = tl._experimental_make_tensor_descriptor(
+        desc = tl.make_tensor_descriptor(
             out_ptr,
             shape=[M, N],
             strides=[N, 1],
@@ -346,7 +346,7 @@ def test_tensor_descriptor_load3d(dtype_str, K_BLOCK):
     @triton.jit
     def kernel(out_ptr, a_ptr, M, N, K, stride_m, stride_n, stride_k, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr,
                K_BLOCK: tl.constexpr):
-        desc = tl._experimental_make_tensor_descriptor(
+        desc = tl.make_tensor_descriptor(
             a_ptr,
             shape=[M, N, K],
             strides=[stride_m, stride_n, stride_k],
@@ -396,7 +396,7 @@ def test_tensor_descriptor_store3d(dtype_str, K_BLOCK):
     @triton.jit
     def kernel(out_ptr, a_ptr, M, N, K, stride_m, stride_n, stride_k, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr,
                K_BLOCK: tl.constexpr):
-        desc = tl._experimental_make_tensor_descriptor(
+        desc = tl.make_tensor_descriptor(
             out_ptr,
             shape=[M, N, K],
             strides=[stride_m, stride_n, stride_k],
@@ -444,7 +444,7 @@ def test_tensor_descriptor_load_nd(dtype_str, ndim, INNER_BLOCK):
 
     @triton.jit
     def kernel(out_ptr, a_ptr, shape, strides, BLOCK_SHAPE):
-        desc = tl._experimental_make_tensor_descriptor(
+        desc = tl.make_tensor_descriptor(
             a_ptr,
             shape=shape,
             strides=strides,
@@ -507,7 +507,7 @@ def test_tensor_descriptor_store_nd(dtype_str, ndim, INNER_BLOCK):
 
     @triton.jit
     def kernel(out_ptr, a_ptr, shape, strides, BLOCK_SHAPE):
-        desc = tl._experimental_make_tensor_descriptor(
+        desc = tl.make_tensor_descriptor(
             out_ptr,
             shape=shape,
             strides=strides,
@@ -564,13 +564,13 @@ def test_tensor_descriptor_store_nd(dtype_str, ndim, INNER_BLOCK):
 
 @triton.jit(noinline=True)
 def tensor_descriptor_in_function_helper(out_ptr, in_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
-    in_desc = tl._experimental_make_tensor_descriptor(
+    in_desc = tl.make_tensor_descriptor(
         in_ptr,
         shape=[M, N],
         strides=[N, 1],
         block_shape=[M_BLOCK, N_BLOCK],
     )
-    out_desc = tl._experimental_make_tensor_descriptor(
+    out_desc = tl.make_tensor_descriptor(
         out_ptr,
         shape=[M, N],
         strides=[N, 1],
@@ -615,7 +615,7 @@ def test_tensor_descriptor_in_function():
 
 @triton.jit(noinline=True)
 def tensor_descriptor_return_helper(ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
-    return tl._experimental_make_tensor_descriptor(
+    return tl.make_tensor_descriptor(
         ptr,
         shape=[M, N],
         strides=[N, 1],
@@ -667,19 +667,19 @@ def matmul_kernel_make_tensor_desciptor(a_ptr, b_ptr, c_ptr,  #
     offs_bn = pid_n * BLOCK_SIZE_N
     offs_k = 0
 
-    a_desc = tl._experimental_make_tensor_descriptor(
+    a_desc = tl.make_tensor_descriptor(
         a_ptr,
         shape=[M, K],
         strides=[K, 1],
         block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_K],
     )
-    b_desc = tl._experimental_make_tensor_descriptor(
+    b_desc = tl.make_tensor_descriptor(
         b_ptr,
         shape=[K, N],
         strides=[N, 1],
         block_shape=[BLOCK_SIZE_K, BLOCK_SIZE_N],
     )
-    c_desc = tl._experimental_make_tensor_descriptor(
+    c_desc = tl.make_tensor_descriptor(
         c_ptr,
         shape=[M, N],
         strides=[N, 1],
@@ -700,7 +700,7 @@ def matmul_kernel_make_tensor_desciptor(a_ptr, b_ptr, c_ptr,  #
 @pytest.mark.interpreter
 @pytest.mark.parametrize("num_stages", [1, 4])
 @pytest.mark.parametrize("BLOCK_M, BLOCK_N, BLOCK_K", [(32, 32, 32), (128, 64, 64), (128, 128, 64), (128, 256, 64)])
-def test_experimental_make_tensor_descriptor_matmul(num_stages, BLOCK_M, BLOCK_N, BLOCK_K):
+def testmake_tensor_descriptor_matmul(num_stages, BLOCK_M, BLOCK_N, BLOCK_K):
     device = "cuda"
     if is_interpreter():
         M, N, K = BLOCK_M, BLOCK_N, BLOCK_K
@@ -751,7 +751,7 @@ def kernel_make_tensor_desciptor_loop_carried(a_ptr, M, N, MBLOCK: tl.constexpr,
     pid = tl.program_id(0)
     moffset = MBLOCK * pid
 
-    a_desc = tl._experimental_make_tensor_descriptor(
+    a_desc = tl.make_tensor_descriptor(
         a_ptr,
         shape=[M, N],
         strides=[N, 1],
@@ -759,31 +759,31 @@ def kernel_make_tensor_desciptor_loop_carried(a_ptr, M, N, MBLOCK: tl.constexpr,
     )
 
     for i in range(0, N, NBLOCK):
-        assert isinstance(a_desc, tl._experimental_tensor_descriptor)
+        assert isinstance(a_desc, tl.tensor_descriptor)
         if i % (3 * NBLOCK) == 0:
-            a_desc = tl._experimental_make_tensor_descriptor(
+            a_desc = tl.make_tensor_descriptor(
                 a_ptr,
                 shape=[M, N],
                 strides=[N, 1],
                 block_shape=[MBLOCK, NBLOCK],
             )
-            assert isinstance(a_desc, tl._experimental_tensor_descriptor)
-        assert isinstance(a_desc, tl._experimental_tensor_descriptor)
+            assert isinstance(a_desc, tl.tensor_descriptor)
+        assert isinstance(a_desc, tl.tensor_descriptor)
         a = a_desc.load([moffset, i])
         a_desc.store([moffset, i], a + 10)
 
     n = 0
     while n < N:
-        assert isinstance(a_desc, tl._experimental_tensor_descriptor)
+        assert isinstance(a_desc, tl.tensor_descriptor)
         if n % (3 * NBLOCK) == 0:
-            assert isinstance(a_desc, tl._experimental_tensor_descriptor)
-            a_desc = tl._experimental_make_tensor_descriptor(
+            assert isinstance(a_desc, tl.tensor_descriptor)
+            a_desc = tl.make_tensor_descriptor(
                 a_ptr,
                 shape=[M, N],
                 strides=[N, 1],
                 block_shape=[MBLOCK, NBLOCK],
             )
-        assert isinstance(a_desc, tl._experimental_tensor_descriptor)
+        assert isinstance(a_desc, tl.tensor_descriptor)
         a = a_desc.load([moffset, n])
         a_desc.store([moffset, n], a + 5)
 
@@ -792,7 +792,7 @@ def kernel_make_tensor_desciptor_loop_carried(a_ptr, M, N, MBLOCK: tl.constexpr,
 
 @requires_tma
 @pytest.mark.interpreter
-def test_experimental_make_tensor_descriptor_loop_carried():
+def test_make_tensor_descriptor_loop_carried():
     device = "cuda"
     M, N = 64, 512
     torch.manual_seed(42)
@@ -850,9 +850,9 @@ def batched_gemm_2d_tma_kernel(a_ptr, b_ptr, c_ptr,  #
     offs_n = 0
     offs_b = 0
 
-    a_desc = tl._experimental_make_tensor_descriptor(a_ptr + offs_b * (M * K), [M, K], [K, 1], [BLOCK_M, BLOCK_K])
-    b_desc = tl._experimental_make_tensor_descriptor(b_ptr + offs_b * (N * K), [N, K], [K, 1], [BLOCK_N, BLOCK_K])
-    c_desc = tl._experimental_make_tensor_descriptor(c_ptr + offs_b * (M * N), [M, N], [N, 1], [BLOCK_M, BLOCK_N])
+    a_desc = tl.make_tensor_descriptor(a_ptr + offs_b * (M * K), [M, K], [K, 1], [BLOCK_M, BLOCK_K])
+    b_desc = tl.make_tensor_descriptor(b_ptr + offs_b * (N * K), [N, K], [K, 1], [BLOCK_N, BLOCK_K])
+    c_desc = tl.make_tensor_descriptor(c_ptr + offs_b * (M * N), [M, N], [N, 1], [BLOCK_M, BLOCK_N])
 
     accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
 
@@ -868,12 +868,9 @@ def batched_gemm_2d_tma_kernel(a_ptr, b_ptr, c_ptr,  #
             offs_m = tile_m * BLOCK_M
             offs_n = tile_n * BLOCK_N
 
-            a_desc = tl._experimental_make_tensor_descriptor(a_ptr + offs_b * (M * K), [M, K], [K, 1],
-                                                             [BLOCK_M, BLOCK_K])
-            b_desc = tl._experimental_make_tensor_descriptor(b_ptr + offs_b * (N * K), [N, K], [K, 1],
-                                                             [BLOCK_N, BLOCK_K])
-            c_desc = tl._experimental_make_tensor_descriptor(c_ptr + offs_b * (M * N), [M, N], [N, 1],
-                                                             [BLOCK_M, BLOCK_N])
+            a_desc = tl.make_tensor_descriptor(a_ptr + offs_b * (M * K), [M, K], [K, 1], [BLOCK_M, BLOCK_K])
+            b_desc = tl.make_tensor_descriptor(b_ptr + offs_b * (N * K), [N, K], [K, 1], [BLOCK_N, BLOCK_K])
+            c_desc = tl.make_tensor_descriptor(c_ptr + offs_b * (M * N), [M, N], [N, 1], [BLOCK_M, BLOCK_N])
 
         offs_k = ki * BLOCK_K
 
@@ -957,9 +954,9 @@ def batched_gemm_3d_tma_kernel(a_ptr, b_ptr, c_ptr,  #
     offs_n = 0
     offs_b = 0
 
-    a_desc = tl._experimental_make_tensor_descriptor(a_ptr, [B, M, K], [K * M, K, 1], [1, BLOCK_M, BLOCK_K])
-    b_desc = tl._experimental_make_tensor_descriptor(b_ptr, [B, N, K], [N * K, K, 1], [1, BLOCK_N, BLOCK_K])
-    c_desc = tl._experimental_make_tensor_descriptor(c_ptr, [B, M, N], [M * N, N, 1], [1, BLOCK_M, BLOCK_N])
+    a_desc = tl.make_tensor_descriptor(a_ptr, [B, M, K], [K * M, K, 1], [1, BLOCK_M, BLOCK_K])
+    b_desc = tl.make_tensor_descriptor(b_ptr, [B, N, K], [N * K, K, 1], [1, BLOCK_N, BLOCK_K])
+    c_desc = tl.make_tensor_descriptor(c_ptr, [B, M, N], [M * N, N, 1], [1, BLOCK_M, BLOCK_N])
 
     accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
 
@@ -1038,7 +1035,7 @@ def test_tensor_descriptor_batched_gemm_3d_tma():
 def tma_gather_rows_kernel(out_ptr, in_ptr, idx_ptr, y, X: tl.constexpr, Y: tl.constexpr, BLOCK_X: tl.constexpr,
                            BLOCK_Y: tl.constexpr):
     idx = tl.load(idx_ptr + tl.arange(0, BLOCK_X))
-    desc = tl._experimental_make_tensor_descriptor(in_ptr, [X, Y], [Y, 1], [1, BLOCK_Y])
+    desc = tl.make_tensor_descriptor(in_ptr, [X, Y], [Y, 1], [1, BLOCK_Y])
     out = desc.gather(idx, y)
     tl.store(out_ptr + tl.arange(0, BLOCK_X)[:, None] * BLOCK_Y + tl.arange(0, BLOCK_Y)[None, :], out)
 
@@ -1091,8 +1088,8 @@ def tma_gather_dot_pipeline(  #
         K: tl.constexpr,  #
         BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,  #
 ):
-    a_desc = tl._experimental_make_tensor_descriptor(a_ptr, [BLOCK_M, K], [K, 1], [1, BLOCK_K])
-    b_desc = tl._experimental_make_tensor_descriptor(b_ptr, [K, BLOCK_N], [BLOCK_N, 1], [1, BLOCK_N])
+    a_desc = tl.make_tensor_descriptor(a_ptr, [BLOCK_M, K], [K, 1], [1, BLOCK_K])
+    b_desc = tl.make_tensor_descriptor(b_ptr, [K, BLOCK_N], [BLOCK_N, 1], [1, BLOCK_N])
 
     accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=output_ptr.dtype.element_ty)
     for k in range(0, K, BLOCK_K):
@@ -1147,7 +1144,7 @@ def tma_scatter_rows_kernel(out_ptr, in_ptr, idx_ptr, y, X: tl.constexpr, Y: tl.
                             BLOCK_Y: tl.constexpr):
     idx = tl.load(idx_ptr + tl.arange(0, BLOCK_X))
     data = tl.load(in_ptr + tl.arange(0, BLOCK_X)[:, None] * BLOCK_Y + tl.arange(0, BLOCK_Y)[None, :])
-    desc = tl._experimental_make_tensor_descriptor(out_ptr, [X, Y], [Y, 1], [1, BLOCK_Y])
+    desc = tl.make_tensor_descriptor(out_ptr, [X, Y], [Y, 1], [1, BLOCK_Y])
     desc.scatter(data, idx, y)
 
 
@@ -1187,7 +1184,7 @@ def test_tensor_descriptor_rank_reducing_load(dtype_str, ndim, INNER_BLOCK):
 
     @triton.jit
     def kernel(out_ptr, a_ptr, shape, strides, BLOCK_SHAPE):
-        desc = tl._experimental_make_tensor_descriptor(
+        desc = tl.make_tensor_descriptor(
             a_ptr,
             shape=shape,
             strides=strides,
@@ -1259,19 +1256,19 @@ def matmul_kernel_rank_reducing(a_ptr, b_ptr, c_ptr,  #
     k_tiles = tl.cdiv(K, BLOCK_SIZE_K)
     num_tiles = num_pid_m * num_pid_n
 
-    a_desc = tl._experimental_make_tensor_descriptor(
+    a_desc = tl.make_tensor_descriptor(
         a_ptr,
         shape=[1, M, K],
         strides=[M * K, K, 1],
         block_shape=[1, BLOCK_SIZE_M, BLOCK_SIZE_K],
     )
-    b_desc = tl._experimental_make_tensor_descriptor(
+    b_desc = tl.make_tensor_descriptor(
         b_ptr,
         shape=[1, N, K],
         strides=[N * K, K, 1],
         block_shape=[1, BLOCK_SIZE_N, BLOCK_SIZE_K],
     )
-    c_desc = tl._experimental_make_tensor_descriptor(
+    c_desc = tl.make_tensor_descriptor(
         c_ptr,
         shape=[1, M, N],
         strides=[M * N, N, 1],
@@ -1377,7 +1374,7 @@ def mxfp8_mxfp4_matmul_tma(  #
     accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=output_ptr.dtype.element_ty)
     offs_bk = 0
 
-    b_desc = tl._experimental_make_tensor_descriptor(
+    b_desc = tl.make_tensor_descriptor(
         b_ptr,
         shape=[N, K // 2],
         strides=[K // 2, 1],

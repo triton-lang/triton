@@ -4974,7 +4974,7 @@ def test_tma_load_block_shape_err(device):
 
     @triton.jit
     def kernel(ptr):
-        desc = tl._experimental_make_tensor_descriptor(ptr, [128, 128], [128, 1], [1, 32])
+        desc = tl.make_tensor_descriptor(ptr, [128, 128], [128, 1], [1, 32])
         desc.load([0, 0])
 
     input = torch.empty((128, 128), dtype=torch.int32, device=device)
@@ -4990,7 +4990,7 @@ def test_tma_store_block_shape_err(device):
 
     @triton.jit
     def kernel(ptr):
-        desc = tl._experimental_make_tensor_descriptor(ptr, [128, 128], [128, 1], [8, 8])
+        desc = tl.make_tensor_descriptor(ptr, [128, 128], [128, 1], [8, 8])
         desc.store([0, 0], tl.zeros((1, 32), dtype=tl.int16))
 
     input = torch.empty((128, 128), dtype=torch.int16, device=device)
