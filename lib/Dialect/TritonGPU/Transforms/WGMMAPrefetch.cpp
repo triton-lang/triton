@@ -55,8 +55,8 @@ class WGMMAPrefetcher {
   scf::ForOp forOp;
   /// cache the YieldOp of this ForOp
   scf::YieldOp yieldOp;
-  /// For Hopper, we implicitly use the prefetchWidth 16
-  unsigned prefetchWidth = 16;
+
+  unsigned prefetchWidth;
 
   /// dots to be prefetched
   SetVector<ttng::WarpGroupDotOp> dots;
@@ -254,11 +254,20 @@ LogicalResult WGMMAPrefetcher::initialize() {
     auto bElementBitWidth = bType.getElementTypeBitWidth();
     assert((aElementBitWidth = bElementBitWidth) &&
            "BitWidth of a and b for dot  does not match");
-    if (aElementBitWidth == 32)
-      return failure();
+
+    // Get Prefetchwidth based on the instruction shape in K dim
+    auto dType = dotOp.getType();
+    auto mmaEnncoding = cast<NvidiaMmaEncodingAttr>(dType.getEncoding());
+    auto instrShape = mmaEnncoding.getInstrShape();
+    prefetchWidth = instrShape[2];
 
     auto kSize = aType.getShape().back();
     if (kSize < prefetchWidth)
+      return failure();
+
+    // Have to disable the opt when kSize > 32 and aElementBitWidth = 32
+    // The subtiling would fail in this case. Need further inverstigation
+    if (kSize > 32 && aElementBitWidth >= 32)
       return failure();
 
     auto aVals = getPrefetchSrc(dotOp.getA());
