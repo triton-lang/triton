@@ -82,9 +82,11 @@ struct LocalAllocOpConversion
                                       loc, rewriter);
     // If there is an initial tensor, store it into the shared memory.
     if (op.getSrc()) {
+      std::pair<size_t, Type> llvmOpCount;
       lowerDistributedToShared(loc, op.getSrc(), op.getResult(),
                                adaptor.getSrc(), smemObj, typeConverter,
-                               rewriter, targetInfo);
+                               rewriter, targetInfo, &llvmOpCount);
+      targetInfo.allocOpAnnotation(op, llvmOpCount.first, llvmOpCount.second);
     }
     auto retVal = getStructFromSharedMemoryObject(loc, smemObj, rewriter);
     rewriter.replaceOp(op, retVal);

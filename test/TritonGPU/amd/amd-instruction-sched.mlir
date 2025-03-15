@@ -147,8 +147,8 @@ module {
     // LABELING_PS_2: scf.for
     // LABELING_PS_2: %[[REG0_OP0:.+]] = tt.load {{.*}} {OpIdx = #amdgpu.OpIdx<0>}
     // LABELING_PS_2: %[[REG0_OP1:.+]] = tt.load {{.*}} {OpIdx = #amdgpu.OpIdx<1>}
-    // LABELING_PS_2: ttg.local_store %[[REG0_OP0]], %{{.*}} {OpIdx = #amdgpu.OpIdx<0>}
-    // LABELING_PS_2: ttg.local_store %[[REG0_OP1]], %{{.*}} {OpIdx = #amdgpu.OpIdx<1>}
+    // LABELING_PS_2: ttg.local_alloc %[[REG0_OP0]] {OpIdx = #amdgpu.OpIdx<0>}
+    // LABELING_PS_2: ttg.local_alloc %[[REG0_OP1]] {OpIdx = #amdgpu.OpIdx<1>}
 
     %c = tt.dot %a, %b, %prev_c : tensor<128x32xf16> * tensor<32x128xf16> -> tensor<128x128xf32>
     %next_a_ptr = tt.addptr %a_ptr, %a_off : tensor<128x32x!tt.ptr<f16>>, tensor<128x32xi32>

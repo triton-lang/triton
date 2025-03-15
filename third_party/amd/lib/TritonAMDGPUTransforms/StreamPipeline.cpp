@@ -116,10 +116,10 @@ class StreamPipeliner {
   };
 
 public:
-  StreamPipeliner(scf::ForOp _forOp, int _numStages, int _globalPrefetch,
-                  int _localPrefetch)
-      : forOp(_forOp), numStages(_numStages), numBuffers(1),
-        schedule(numStages),
+  StreamPipeliner(scf::ForOp _forOp, int _numStages, int _maxDepth,
+                  int _globalPrefetch, int _localPrefetch)
+      : forOp(_forOp), numStages(_numStages), maxDepth(_maxDepth),
+        numBuffers(1), schedule(numStages),
         axisInfoAnalysis(forOp->getParentOfType<ModuleOp>()) {
     int lastStage = numStages - 1;
     stages[SCHED_GLOBAL_LOAD] = 0;
@@ -163,6 +163,7 @@ private:
 
   // User settings
   int numStages;
+  int maxDepth;
 
   // Computed number of buffers
   int numBuffers;
@@ -308,31 +309,46 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
   auto subviewTy = ttg::MemDescType::get(
       allocTy.getShape().drop_front(), allocTy.getElementType(),
       allocTy.getEncoding(), sharedMemorySpace, /*mutableMemory=*/true);
-  auto viewLoad =
-      builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, loadOffsets);
-  // Clean up old local caches.
-  SmallVector<ttg::LocalAllocOp> allocsToErase;
-  for (Operation *user : loadOp->getUsers()) {
-    if (auto alloc = dyn_cast<ttg::LocalAllocOp>(user)) {
-      tt::replaceUsesAndPropagateType(builder, alloc, viewLoad.getResult());
-      allocsToErase.push_back(alloc);
+  Value viewRes;
+  if (numBuffers > 1) {
+    auto viewLoad = builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc,
+                                                          loadOffsets);
+    scheduleOp(viewLoad, SCHED_LOCAL_STORE);
+    viewRes = viewLoad;
+    // Clean up old local caches.
+    SmallVector<ttg::LocalAllocOp> allocsToErase;
+    for (Operation *user : loadOp->getUsers()) {
+      if (auto alloc = dyn_cast<ttg::LocalAllocOp>(user)) {
+        tt::replaceUsesAndPropagateType(builder, alloc, viewRes);
+        allocsToErase.push_back(alloc);
+      }
     }
-  }
-  for (auto alloc : allocsToErase)
-    alloc.erase();
+    for (auto alloc : allocsToErase)
+      alloc.erase();
+  } else
+    alloc.getDefiningOp()->erase();
 
   // Prefetch load ahead of the dot stage if is used by the dot.
-  auto storeOp =
-      builder.create<ttg::LocalStoreOp>(loc, copy->getResult(0), viewLoad);
-  scheduleOp(viewLoad, SCHED_LOCAL_STORE);
-  scheduleOp(storeOp, SCHED_LOCAL_STORE);
+  auto copyVal = copy->getResult(0);
+  Operation *localStoreOp;
+  if (numBuffers == 1)
+    localStoreOp = builder.create<ttg::LocalAllocOp>(loc, subviewTy, copyVal);
+  else
+    localStoreOp = builder.create<ttg::LocalStoreOp>(loc, copyVal, viewRes);
+  scheduleOp(localStoreOp, SCHED_LOCAL_STORE);
 
   // Create local load
-  auto sharedLoad =
-      builder.create<ttg::LocalLoadOp>(loc, loadOp.getType(), viewLoad);
-  Value result = sharedLoad.getResult();
+  Operation *localLoadOp;
+  if (numBuffers == 1)
+    localLoadOp = builder.create<ttg::LocalLoadOp>(loc, loadOp.getType(),
+                                                   localStoreOp->getResult(0));
+  else
+    localLoadOp =
+        builder.create<ttg::LocalLoadOp>(loc, loadOp.getType(), viewRes);
   if (stages[SCHED_LOCAL_LOAD] != stages[SCHED_COMPUTE])
-    scheduleOp(sharedLoad, SCHED_LOCAL_LOAD);
+    scheduleOp(localLoadOp, SCHED_LOCAL_LOAD);
+
+  Value result = localLoadOp->getResult(0);
 
   // If the currently processed `LoadOp` is labeled with an index regarding
   // to which `DotOp` operand the corresponding data belongs to, then label the
@@ -340,7 +356,7 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
   // instruction scheduling hints to correctly count the emitted `ds_write`
   // instructions for each GEMM tile.
   if (auto attr = loadOp->getAttr(tt::amdgpu::OpIdxAttr::getMnemonic())) {
-    storeOp->setAttr(tt::amdgpu::OpIdxAttr::getMnemonic(), attr);
+    localStoreOp->setAttr(tt::amdgpu::OpIdxAttr::getMnemonic(), attr);
   }
 
   loadOp->replaceAllUsesWith(ValueRange{result});
@@ -443,6 +459,18 @@ getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
   return attr;
 }
 
+// Lookup a `compute-factor` for the current op. For now
+// this just returns 1 for (potentially) heavy compute ops.
+// TODO: base on machine model to determine actual latency.
+static float getComputeFactor(Operation *op) {
+  if (isa<mlir::triton::DotOpInterface>(op)) {
+    return 1;
+  } else if (isa<tt::ReduceOp>(op)) {
+    return 1;
+  }
+  return 0;
+}
+
 // Create a map from load ops to their indirection levels and the final uses
 // of the load op (another load op, or a dot op).
 //
@@ -473,11 +501,31 @@ void StreamPipeliner::computeLoadOpsToIndirectionLevelAndUse() {
         }
       };
 
+  DenseMap<Operation *, int> depthMap;
+
   for (Operation &op : forOp.getBody()->without_terminator()) {
-    if (!isa<tt::DotOpInterface>(op))
+    Operation *opp = &op;
+
+    // Compute depth of current op based on compute factor and depth
+    // of inputs.
+    int depth = 0;
+    for (Value operand : op.getOperands()) {
+      Operation *defOp = operand.getDefiningOp();
+      if (defOp && depthMap.contains(defOp))
+        depth = std::max(depth, depthMap[defOp]);
+    }
+    int computeDepth = getComputeFactor(opp) + depth;
+    depthMap[opp] = computeDepth;
+    LDBG("DEPTH(" << computeDepth << "):  " << op);
+
+    if (maxDepth != 0 && computeDepth > maxDepth)
       continue;
+
+    if (isa<tt::LoadOp>(opp) || !isa<tt::DotOpInterface>(op))
+      continue;
+
     seen.clear();
-    dfs(&op, 0, &op);
+    dfs(opp, 0, opp);
   }
 
   // If the loop has numStages attribute, also consider pipelining other loads
@@ -516,20 +564,17 @@ void StreamPipeliner::assignMemoryLayouts() {
         cast<tt::PointerType>(tensorTy.getElementType()).getPointeeType();
     unsigned width = vec * pointeeTy.getIntOrFloatBitWidth();
 
-    // Limit shared memory sharing to width >= 32 elements.
     LDBG("Load " << *loadOp << " has width " << width);
-    if (width < 32) {
-      LDBG("Skip width<32 load " << loadOp);
-      continue;
-    }
 
-    LDBG("assign memory layouts for load " << loadOp);
     LoadInfo loadInfo;
     if (isa<tt::DotOpInterface>(use)) {
       // Only use shared memory when feeding into a dot op.
       loadInfo.usedByDot = true;
-      loadInfo.sharedEncoding =
-          getSharedEncIfAllUsersAreDotEnc(loadOp).value_or(nullptr);
+      // Limit shared memory sharing to width >= 32 elements.
+      if (width >= 32) {
+        loadInfo.sharedEncoding =
+            getSharedEncIfAllUsersAreDotEnc(loadOp).value_or(nullptr);
+      }
     } else if (auto useOp = dyn_cast<tt::LoadOp>(use)) {
       // The use of this loadOp is another loadOp. If the use is not in the
       // loadToInfo already, it means that the use is not valid for pipelining
@@ -743,7 +788,8 @@ Value StreamPipeliner::createAlloc(Operation *loadOp,
                                            sharedEnc, sharedMemorySpace,
                                            /*mutableMemory=*/true);
   auto alloc = builder.create<ttg::LocalAllocOp>(loadOp->getLoc(), memdescType);
-  sharedMemAllocs.push_back(alloc);
+  if (numBuffers > 1)
+    sharedMemAllocs.push_back(alloc);
   return alloc;
 }
 
@@ -921,9 +967,10 @@ void labelLoadOpsForTritonDot(scf::ForOp forOp) {
 
 struct PipelinePass : public TritonAMDGPUStreamPipelineBase<PipelinePass> {
   PipelinePass() = default;
-  PipelinePass(int32_t _numStages, int32_t _globalPrefetch,
+  PipelinePass(int32_t _numStages, int32_t _maxDepth, int32_t _globalPrefetch,
                int32_t _localPrefetch) {
     this->numStages = _numStages;
+    this->maxDepth = _maxDepth;
 
     this->globalPrefetch = _globalPrefetch;
     this->localPrefetch = _localPrefetch;
@@ -955,8 +1002,8 @@ struct PipelinePass : public TritonAMDGPUStreamPipelineBase<PipelinePass> {
     for (scf::ForOp forOp : loops) {
       if (!checkPrecondition(forOp))
         continue;
-      StreamPipeliner sp(forOp, getNumStagesOrDefault(forOp), globalPrefetch,
-                         localPrefetch);
+      StreamPipeliner sp(forOp, getNumStagesOrDefault(forOp), maxDepth,
+                         globalPrefetch, localPrefetch);
       if (failed(sp.pipelineLoop()))
         continue;
     }
@@ -973,9 +1020,8 @@ private:
 };
 } // namespace
 
-std::unique_ptr<Pass>
-mlir::createTritonAMDGPUStreamPipelinePass(int numStages, int globalPrefetch,
-                                           int localPrefetch) {
-  return std::make_unique<PipelinePass>(numStages, globalPrefetch,
+std::unique_ptr<Pass> mlir::createTritonAMDGPUStreamPipelinePass(
+    int numStages, int maxDepth, int globalPrefetch, int localPrefetch) {
+  return std::make_unique<PipelinePass>(numStages, maxDepth, globalPrefetch,
                                         localPrefetch);
 }
