@@ -87,17 +87,17 @@ void inferResultRanges(tt::GatherOp *op, ArrayRef<ConstantIntRanges> argRanges,
 void inferResultRangesUnaryOpForwardArgRange(
     Operation *op, ArrayRef<ConstantIntRanges> argRanges,
     SetIntRangeFn setResultRange) {
-  assert(op->getNumResults() == 1 && "expected op to have one result");
-  setResultRange(op->getResult(0), argRanges[0]);
+  for (const auto &result : op->getResults())
+    setResultRange(result, argRanges[0]);
 }
 
 void inferResultRangesBinaryOpUnionArgRanges(
     Operation *op, ArrayRef<ConstantIntRanges> argRanges,
     SetIntRangeFn setResultRange) {
-  assert(op->getNumResults() == 1 && "expected op to have one result");
   assert(op->getNumOperands() == 2 && "expected op to have two operands");
   assert(argRanges.size() == 2 && "expected two arg ranges");
-  setResultRange(op->getResult(0), argRanges[0].rangeUnion(argRanges[1]));
+  for (const auto &result : op->getResults())
+    setResultRange(result, argRanges[0].rangeUnion(argRanges[1]));
 }
 
 void inferResultRangesMaxNonNegSigned(Operation *op,
@@ -234,14 +234,22 @@ void TritonIntegerRangeAnalysis::setToEntryState(
   IntegerValueRange range = IntegerValueRange::getMaxRange(anchor);
   if (auto maybeRange = maybeGetAssumedRange(anchor))
     range = *maybeRange;
-  propagateIfChanged(lattice, lattice->join(range));
+  auto changed = lattice->join(range);
+  LLVM_DEBUG({
+    if (changed == ChangeResult::Change) {
+      DBGS() << "Set range of ";
+      anchor.printAsOperand(llvm::dbgs(), {});
+      llvm::dbgs() << " to " << range << "\n";
+    }
+  });
+  propagateIfChanged(lattice, changed);
 }
 
 LogicalResult TritonIntegerRangeAnalysis::visitOperation(
     Operation *op,
     ArrayRef<const dataflow::IntegerValueRangeLattice *> operands,
     ArrayRef<dataflow::IntegerValueRangeLattice *> resultsLattices) {
-  LDBG("  Inferring ranges for " << *op << "\n");
+  LDBG("Inferring ranges for " << *op);
   // This callback is almost exactly like the callback in
   // IntegerRangeAnalysis::visitOperation except we do not "short-cicruit" the
   // analysis by inferring a maximum range for loop results (instead we
@@ -253,34 +261,34 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperation(
       return;
     assert(llvm::is_contained(op->getResults(), result));
 
-    LDBG("  Inferred range " << incomingRange << "\n");
     dataflow::IntegerValueRangeLattice *lattice =
         resultsLattices[result.getResultNumber()];
-    IntegerValueRange oldRange = lattice->getValue();
     ChangeResult changed = lattice->join(incomingRange);
+    LLVM_DEBUG({
+      if (changed == ChangeResult::Change) {
+        DBGS() << "Inferred range for ";
+        v.printAsOperand(llvm::dbgs(), {});
+        llvm::dbgs() << " to " << incomingRange << "\n";
+      }
+    });
     propagateIfChanged(lattice, changed);
   };
 
-  // Ops with fixed/constant ranges.
-  if (llvm::isa<GetProgramIdOp, MakeRangeOp, HistogramOp, GetNumProgramsOp>(
-          op)) {
-    assert(resultsLattices.size() == 1 && "expected exactly one result");
-    auto resultLattice = resultsLattices[0];
-
-    // No updates necessary.
+  // Initialize lattices with assumptions.
+  for (const auto &resultLattice : resultsLattices) {
     if (!resultLattice->getValue().isUninitialized())
-      return success();
-
-    // Check if user hinted/assumed (this really only applies to get_pid but
-    // simpler to keep it out of the typeswitch).
+      continue;
     auto anchor = resultLattice->getAnchor();
     if (auto assumptions = this->assumptions.lookup(anchor);
         !assumptions.empty()) {
       setToEntryState(resultLattice);
       return success();
     }
+  }
 
-    // else use defaults
+  // Ops with fixed/constant ranges.
+  if (llvm::isa<GetProgramIdOp, MakeRangeOp, HistogramOp, GetNumProgramsOp>(
+          op)) {
     llvm::TypeSwitch<Operation *>(op)
         .Case<GetProgramIdOp>([&](auto getPIDOp) {
           inferResultRangesPID(getPIDOp, kDefaultMaxPrograms - 1, joinCallback);
@@ -304,8 +312,8 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperation(
       });
 
   // Ops with actually changing/variable input/output ranges.
-  if (llvm::isa<TransOp, BroadcastOp, ReshapeOp, gpu::ConvertLayoutOp, SplatOp,
-                ExpandDimsOp, JoinOp, CatOp, GatherOp>(op)) {
+  if (llvm::isa<TransOp, SplitOp, BroadcastOp, ReshapeOp, gpu::ConvertLayoutOp,
+                SplatOp, ExpandDimsOp, JoinOp, CatOp, GatherOp>(op)) {
     SmallVector<ConstantIntRanges> argConstIntRanges;
     for (const auto &r : argIntValueRanges) {
       if (r.isUninitialized()) {
@@ -315,7 +323,7 @@ LogicalResult TritonIntegerRangeAnalysis::visitOperation(
       argConstIntRanges.push_back(r.getValue());
     }
     llvm::TypeSwitch<Operation *>(op)
-        .Case<TransOp, BroadcastOp, ExpandDimsOp, SplatOp, ReshapeOp,
+        .Case<TransOp, SplitOp, BroadcastOp, ExpandDimsOp, SplatOp, ReshapeOp,
               gpu::ConvertLayoutOp>([&](auto) {
           return inferResultRangesUnaryOpForwardArgRange(op, argConstIntRanges,
                                                          joinCallback);
