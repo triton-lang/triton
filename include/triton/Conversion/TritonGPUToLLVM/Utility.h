@@ -394,22 +394,6 @@ public:
                               allocStrides.end());
   }
 
-  // TODO(Keren): deprecate the method once AMD backend has cleaned up
-  Value getCSwizzleOffset(int dim) const {
-    assert(dim >= 0 && dim < offsets.size());
-    return offsets[dim];
-  }
-
-  // TODO(Keren): deprecate the method once AMD backend has cleaned up
-  Value getBaseBeforeSlice(int dim, Location loc,
-                           RewriterBase &rewriter) const {
-    auto b = TritonLLVMOpBuilder(loc, rewriter);
-    Value cSwizzleOffset = getCSwizzleOffset(dim);
-    Value offset = b.sub(b.i32_val(0), cSwizzleOffset);
-    Type type = base.getType();
-    return b.gep(type, baseElemType, base, offset);
-  }
-
 private:
   static SmallVector<unsigned>
   getOrderForShape(ArrayRef<int64_t> shape, ArrayRef<unsigned> layoutOrder) {
