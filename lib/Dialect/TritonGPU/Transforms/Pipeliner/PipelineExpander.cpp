@@ -38,6 +38,7 @@
 
 // FIXME: PipelineExpander should not depend on Triton-specific headers!
 #include "triton/Dialect/TritonGPU/IR/Types.h"
+#include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 
 #define DEBUG_TYPE "triton-loop-pipelining"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -407,21 +408,7 @@ LoopPipelinerInternal::analyzeCrossStageValues() {
 
 std::pair<Operation *, int64_t>
 LoopPipelinerInternal::getDefiningOpAndDistance(Value value) {
-  int64_t distance = 0;
-  while (auto arg = dyn_cast<BlockArgument>(value)) {
-    if (arg.getOwner() != forOp.getBody())
-      return {nullptr, 0};
-    // Ignore induction variable.
-    if (arg.getArgNumber() == 0)
-      return {nullptr, 0};
-    distance++;
-    value =
-        forOp.getBody()->getTerminator()->getOperand(arg.getArgNumber() - 1);
-  }
-  Operation *def = value.getDefiningOp();
-  if (!def)
-    return {nullptr, 0};
-  return {def, distance};
+  return triton::getDefiningOpAndDistance(forOp, value);
 }
 
 scf::ForOp LoopPipelinerInternal::createKernelLoop(

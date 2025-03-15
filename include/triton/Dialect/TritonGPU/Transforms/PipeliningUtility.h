@@ -8,6 +8,7 @@
 #include <vector>
 
 namespace mlir {
+class ImplicitLocOpBuilder;
 namespace triton {
 
 static const char *kNumStagesAttrName = "tt.num_stages";
@@ -39,10 +40,24 @@ bool getDisallowAccMultiBuffer(scf::ForOp forOp);
 
 /// Visit the operands of `op` and the operands of any nested ops defined
 /// outside of `op`.
+void visitNestedOperands(Operation *op,
+                         function_ref<void(OpOperand &)> visitor);
+/// Visit the operands of `op` and the operands of any nested ops defined
+/// outside of `op`.
 void visitNestedOperands(Operation *op, function_ref<void(Value)> visitor);
 /// Get the operands of `op` and the operands of any nested ops defined outside
 /// of `op`.
 SetVector<Value> getNestedOperands(Operation *op);
+
+// Return the definition of the given value. If the value is a loop-carried
+// dependency, return the definition and the distance to it.
+std::pair<OpResult, int64_t> getDefinitionAndDistance(scf::ForOp forOp,
+                                                      Value value);
+// Return the defining op of the given value, if the Value is an argument of the
+// loop return the associated defining op in the loop and its distance to the
+// Value.
+std::pair<Operation *, int64_t> getDefiningOpAndDistance(scf::ForOp forOp,
+                                                         Value value);
 
 // Return maxumum length of the vectorized copy between registers and shared
 // memory for the given tensor type and shared encoding.
@@ -61,8 +76,17 @@ DenseMap<Operation *, int> deserializeLatencies(ModuleOp module);
 Value createSingleBufferView(OpBuilder &builder, Value alloc, Value idx);
 Value createSingleBufferView(OpBuilder &builder, Value alloc, int idx);
 
+// Create an allocation for multibuffered scalars.
+Value createScalarAlloc(ImplicitLocOpBuilder &rewriter, Type type,
+                        unsigned numBuffers);
 // Create an allocation and init the mbarriers.
 Value createBarrierAlloc(scf::ForOp forOp, int numBarriers);
+// Create an allocation that can hold distance number of tensor shapes.
+Value createAlloc(scf::ForOp forOp, RankedTensorType ty, Location loc,
+                  gpu::SharedEncodingTrait sharedEnc, unsigned distance);
+
+// Get the type of the view of a multi-buffered tensor value.
+gpu::MemDescType getBufferViewType(gpu::MemDescType allocTy);
 
 } // namespace triton
 } // namespace mlir

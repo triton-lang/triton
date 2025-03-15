@@ -2,6 +2,7 @@
 
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
@@ -211,20 +212,47 @@ bool mlir::triton::getDisallowAccMultiBuffer(scf::ForOp forOp) {
   return forOp->hasAttr(mlir::triton::kDisallowAccMultiBufferAttrName);
 }
 
-void mlir::triton::visitNestedOperands(Operation *op,
-                                       function_ref<void(Value)> visitor) {
+void mlir::triton::visitNestedOperands(
+    Operation *op, function_ref<void(OpOperand &)> visitor) {
   op->walk([&](Operation *nestedOp) {
-    for (Value operand : nestedOp->getOperands()) {
-      if (operand.getParentBlock()->getParentOp()->isProperAncestor(op))
+    for (OpOperand &operand : nestedOp->getOpOperands()) {
+      if (operand.get().getParentBlock()->getParentOp()->isProperAncestor(op))
         visitor(operand);
     }
   });
+}
+
+void mlir::triton::visitNestedOperands(Operation *op,
+                                       function_ref<void(Value)> visitor) {
+  visitNestedOperands(op, [&](OpOperand &operand) { visitor(operand.get()); });
 }
 
 SetVector<Value> mlir::triton::getNestedOperands(Operation *op) {
   SetVector<Value> result;
   visitNestedOperands(op, [&](Value operand) { result.insert(operand); });
   return result;
+}
+
+std::pair<OpResult, int64_t>
+mlir::triton::getDefinitionAndDistance(scf::ForOp forOp, Value value) {
+  int64_t distance = 0;
+  while (auto arg = dyn_cast<BlockArgument>(value)) {
+    // Ignore implicit captures.
+    if (arg.getOwner() != forOp.getBody())
+      return {nullptr, 0};
+    // Ignore induction variable.
+    if (arg.getArgNumber() == 0)
+      return {nullptr, 0};
+    ++distance;
+    value = forOp.getYieldedValues()[arg.getArgNumber() - 1];
+  }
+  return {cast<OpResult>(value), distance};
+}
+
+std::pair<Operation *, int64_t>
+mlir::triton::getDefiningOpAndDistance(scf::ForOp forOp, Value value) {
+  auto [definition, distance] = getDefinitionAndDistance(forOp, value);
+  return {definition ? definition.getDefiningOp() : nullptr, distance};
 }
 
 int mlir::triton::getCopyVecBytes(RankedTensorType registerTy,
@@ -258,28 +286,33 @@ DenseMap<Operation *, int> mlir::triton::deserializeLatencies(ModuleOp module) {
   return opLatency;
 }
 
-// Create an allocation and init the mbarriers.
-Value mlir::triton::createBarrierAlloc(scf::ForOp forOp, int numBarriers) {
-  IRRewriter rewriter(forOp->getContext());
-  rewriter.setInsertionPoint(forOp);
-  MLIRContext *ctx = forOp.getContext();
-  Location loc = forOp.getLoc();
+Value mlir::triton::createScalarAlloc(ImplicitLocOpBuilder &rewriter, Type type,
+                                      unsigned numBuffers) {
+  MLIRContext *ctx = rewriter.getContext();
   unsigned numCTAs = triton::gpu::TritonGPUDialect::getNumCTAs(
-      forOp->getParentOfType<ModuleOp>());
-  Attribute sharedMemorySpace = ttg::SharedMemorySpaceAttr::get(ctx);
-  auto barrierCTALayout = ttg::CTALayoutAttr::get(
-      /*context=*/ctx, /*CTAsPerCGA=*/{numCTAs},
-      /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
+      rewriter.getBlock()->getParentOp()->getParentOfType<ModuleOp>());
+  Attribute sharedMemorySpace =
+      ttg::SharedMemorySpaceAttr::get(rewriter.getContext());
+  auto barrierCTALayout =
+      ttg::CTALayoutAttr::get(/*context=*/ctx, /*CTAsPerCGA=*/{numCTAs},
+                              /*CTASplitNum=*/{1}, /*CTAOrder=*/{0});
   auto barrierEncoding =
       ttg::SwizzledSharedEncodingAttr::get(ctx, 1, 1, 1, {0}, barrierCTALayout);
-  ttg::MemDescType barrierMemDescType = ttg::MemDescType::get(
-      {numBarriers}, rewriter.getI64Type(), barrierEncoding, sharedMemorySpace,
+  ttg::MemDescType memDescType = ttg::MemDescType::get(
+      {numBuffers}, type, barrierEncoding, sharedMemorySpace,
       /*mutableMemory=*/true);
+  return rewriter.create<ttg::LocalAllocOp>(memDescType, Value());
+}
+
+// Create an allocation and init the mbarriers.
+Value mlir::triton::createBarrierAlloc(scf::ForOp forOp, int numBarriers) {
+  ImplicitLocOpBuilder rewriter(forOp.getLoc(), forOp);
+
   Value barrierAlloc =
-      rewriter.create<ttg::LocalAllocOp>(loc, barrierMemDescType, Value());
+      createScalarAlloc(rewriter, rewriter.getI64Type(), numBarriers);
   for (unsigned i = 0; i < numBarriers; i++) {
     Value barrierView = createSingleBufferView(rewriter, barrierAlloc, i);
-    rewriter.create<ttng::InitBarrierOp>(forOp->getLoc(), barrierView, 1);
+    rewriter.create<ttng::InitBarrierOp>(barrierView, 1);
   }
   return barrierAlloc;
 }
@@ -317,4 +350,32 @@ Value mlir::triton::createSingleBufferView(OpBuilder &builder, Value alloc,
   return mlir::triton::createSingleBufferView(
       builder, alloc,
       builder.create<arith::ConstantIntOp>(alloc.getLoc(), idx, 32));
+}
+
+Value mlir::triton::createAlloc(scf::ForOp forOp, RankedTensorType ty,
+                                Location loc,
+                                gpu::SharedEncodingTrait sharedEnc,
+                                unsigned distance) {
+  OpBuilder builder(forOp);
+  Attribute sharedMemorySpace =
+      ttg::SharedMemorySpaceAttr::get(forOp.getContext());
+  SmallVector<int64_t> bufferShape(ty.getShape().begin(), ty.getShape().end());
+  bufferShape.insert(bufferShape.begin(), distance);
+  Type memdescType = ttg::MemDescType::get(bufferShape, ty.getElementType(),
+                                           sharedEnc, sharedMemorySpace,
+                                           /*mutableMemory=*/true);
+  Value alloc = builder.create<ttg::LocalAllocOp>(loc, memdescType);
+
+  builder.setInsertionPointAfter(forOp);
+  builder.create<ttg::LocalDeallocOp>(forOp.getLoc(), alloc);
+  return alloc;
+}
+
+ttg::MemDescType mlir::triton::getBufferViewType(ttg::MemDescType allocTy) {
+  Attribute sharedMemorySpace =
+      ttg::SharedMemorySpaceAttr::get(allocTy.getContext());
+  return ttg::MemDescType::get(allocTy.getShape().drop_front(),
+                               allocTy.getElementType(), allocTy.getEncoding(),
+                               sharedMemorySpace, /*mutableMemory=*/true,
+                               /*allocShape=*/allocTy.getAllocShape());
 }
