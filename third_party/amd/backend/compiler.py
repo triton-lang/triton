@@ -230,6 +230,11 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         amd.passes.ttgpuir.add_hoist_layout_conversions(pm)
 
+        passes.ttgpuir.add_fuse_nested_loops(pm)
+        passes.common.add_canonicalizer(pm)
+        passes.common.add_licm(pm)
+        passes.common.add_canonicalizer(pm)
+
         global_prefetch = int(os.getenv("TRITON_HIP_GLOBAL_PREFETCH", "0"))
         local_prefetch = int(os.getenv("TRITON_HIP_LOCAL_PREFETCH", "0"))
 
