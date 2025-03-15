@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritongpu-test-pipeline-hoist-tmem-alloc -canonicalize | FileCheck %s
+// RUN: triton-opt %s -split-input-file -allow-unregistered-dialect -tritongpu-hoist-tmem-alloc -canonicalize | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [1, 0]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [2, 16], warpsPerCTA = [4, 1], order = [1, 0]}>
