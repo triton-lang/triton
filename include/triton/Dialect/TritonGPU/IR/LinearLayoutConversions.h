@@ -268,14 +268,6 @@ LinearLayout chooseLdMatrixLayout(Attribute enc, ArrayRef<int64_t> shape,
 LinearLayout chooseDsReadB64TrLayout(Attribute enc, ArrayRef<int64_t> shape,
                                      int32_t elemBitWidth);
 
-// Create LinearLayout for mxfp4 and mxfp8 operand in scaled mfma.
-// For mxfp4, we use dot layout directly. Mxfp8 is not covered by dot
-// layout, so we need to manually create linear layout for it.
-LinearLayout
-chooseScaledMfmaOperandLayout(AMDMfmaEncodingAttr mfmaEnc, int kWidth,
-                              int dotOperandIdx, ScaleDotElemType elemType,
-                              llvm::ArrayRef<int64_t> dotOperandShape);
-
 LinearLayout getScaleTMEMStoreLinearLayout(RankedTensorType scaleType,
                                            int numWarps);
 
