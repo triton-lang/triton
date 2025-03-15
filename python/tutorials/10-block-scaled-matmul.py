@@ -153,7 +153,7 @@ def block_scaled_matmul_kernel(  #
     MIXED_PREC: tl.constexpr = ELEM_PER_BYTE_A == 1 and ELEM_PER_BYTE_B == 2
 
     if MIXED_PREC:
-        b_desc = tl._experimental_make_tensor_descriptor(
+        b_desc = tl.make_tensor_descriptor(
             b_desc_or_tensor,
             shape=[N, K // ELEM_PER_BYTE_B],
             strides=[K // ELEM_PER_BYTE_B, 1],
