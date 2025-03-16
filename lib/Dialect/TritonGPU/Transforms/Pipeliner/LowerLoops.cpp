@@ -915,21 +915,25 @@ scf::ForOp lowerTMADescriptors(scf::ForOp forOp, CoarseSchedule &schedule) {
 // LOWER MMA
 /////////////////////////////
 
-std::optional<int> getLowestStageTmemLoadStore(ttng::TMEMAllocOp alloc,
-                                               scf::ForOp forOp,
-                                               CoarseSchedule &schedule) {
-  std::optional<int> lowestStage = std::nullopt;
+std::pair<int, int> getTmemUseStageBounds(ttng::TMEMAllocOp alloc,
+                                          scf::ForOp forOp,
+                                          CoarseSchedule &schedule) {
+  std::pair<int, int> bounds = {std::numeric_limits<int>::max(),
+                                std::numeric_limits<int>::min()};
   for (auto user : alloc->getUsers()) {
-    if (isa<ttng::TMEMLoadOp, ttng::TMEMStoreOp>(user)) {
-      if (!forOp->isAncestor(user->getParentOp())) {
-        continue;
-      }
-      if (!lowestStage.has_value() || schedule[user].first < lowestStage) {
-        lowestStage = schedule[user].first;
-      }
+    if (!forOp->isAncestor(user->getParentOp())) {
+      continue;
+    }
+    auto topLevelUser = forOp.getBody()->findAncestorOpInBlock(*user);
+    if (schedule[topLevelUser].first < bounds.first) {
+      bounds.first = schedule[topLevelUser].first;
+    }
+    if (schedule[topLevelUser].first > bounds.second) {
+      bounds.second = schedule[topLevelUser].first;
     }
   }
-  return lowestStage;
+  assert(bounds.first <= bounds.second && "Invalid stage bounds");
+  return bounds;
 }
 
 // TODO: clean up the references to the phase and barrierIdx, this is a mess
@@ -997,8 +1001,8 @@ ttng::TMEMAllocOp createTMemAlloc(OpBuilder &builder,
 
 void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
                              ttng::MMAv5OpInterface mma,
-                             ttng::TMEMAllocOp alloc, Value &accInsertIdx,
-                             Value &accExtractIdx, int stageDiff) {
+                             ttng::TMEMAllocOp alloc, Value &bufIdx,
+                             int bufIdxArgIdx, int tmemUseNumStages) {
   SmallVector<Operation *> allocUsers = llvm::to_vector(alloc->getUsers());
   // If we are multibuffering, we require that a store is present in the loop,
   // as this is the only point we can change the accumulator buffer.
@@ -1007,34 +1011,50 @@ void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
                    [](Operation *op) { return isa<ttng::TMEMStoreOp>(op); }) &&
       "No tmem_store found in the loop");
 
-  OpBuilder builder(forOp);
-  auto newAlloc = createTMemAlloc(builder, alloc, true, stageDiff + 1);
-  Value numStagesVal =
-      builder.create<arith::ConstantIntOp>(forOp.getLoc(), stageDiff + 1, 32);
+  OpBuilder builder(alloc);
+  auto newAlloc = createTMemAlloc(builder, alloc, true, tmemUseNumStages);
+  Value numStagesVal = builder.create<arith::ConstantIntOp>(
+      forOp.getLoc(), tmemUseNumStages, 32);
   Value zero = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 0, 32);
   Value one = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 1, 32);
-  // TODO: is order of the users following program order? Even if, is the code
-  // below correct w.r.t. how we are overwriting accInsertIdx and accExtractIdx?
+  // Put the bufIdx increment at the beginning of the loop
+  builder.setInsertionPoint(forOp.getBody(), forOp.getBody()->begin());
+  bufIdx = createIncrementModulo(builder, forOp.getLoc(), bufIdx, numStagesVal,
+                                 zero, one);
   for (auto user : allocUsers) {
     if (auto store = dyn_cast<ttng::TMEMStoreOp>(user)) {
-      OpBuilderForStage stageBuilder(store, schedule);
-      auto tmemSlice =
-          triton::createSingleBufferView(stageBuilder, newAlloc, accInsertIdx);
-      store.getDstMutable().assign(tmemSlice);
-      stageBuilder.setInsertionPointAfter(store);
-      accInsertIdx = createIncrementModulo(
-          stageBuilder, store.getLoc(), accInsertIdx, numStagesVal, zero, one);
-      accExtractIdx = createIncrementModulo(
-          stageBuilder, store.getLoc(), accExtractIdx, numStagesVal, zero, one);
+      if (forOp->isAncestor(store)) {
+        OpBuilderForStage stageBuilder(store, schedule);
+        auto tmemSlice =
+            triton::createSingleBufferView(stageBuilder, newAlloc, bufIdx);
+        store.getDstMutable().assign(tmemSlice);
+        stageBuilder.setInsertionPointAfter(store);
+      } else {
+        // Store before the loop
+        assert(store->isBeforeInBlock(forOp) && "Store is not before the loop");
+        builder.setInsertionPoint(store);
+        auto tmemSlice =
+            triton::createSingleBufferView(builder, newAlloc, zero);
+        store.getDstMutable().assign(tmemSlice);
+      }
     } else if (auto load = dyn_cast<ttng::TMEMLoadOp>(user)) {
-      OpBuilderForStage stageBuilder(load, schedule);
-      auto tmemSlice =
-          triton::createSingleBufferView(stageBuilder, newAlloc, accExtractIdx);
-      load.getSrcMutable().assign(tmemSlice);
+      if (forOp->isAncestor(load)) {
+        OpBuilderForStage stageBuilder(load, schedule);
+        auto tmemSlice =
+            triton::createSingleBufferView(stageBuilder, newAlloc, bufIdx);
+        load.getSrcMutable().assign(tmemSlice);
+      } else {
+        // Load after the loop
+        assert(forOp->isBeforeInBlock(load) && "Load is not after the loop");
+        builder.setInsertionPoint(load);
+        auto tmemSlice = triton::createSingleBufferView(
+            builder, newAlloc, forOp->getResult(bufIdxArgIdx));
+        load.getSrcMutable().assign(tmemSlice);
+      }
     } else if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(user)) {
       OpBuilderForStage stageBuilder(mma, schedule);
       auto tmemSlice =
-          triton::createSingleBufferView(stageBuilder, newAlloc, accInsertIdx);
+          triton::createSingleBufferView(stageBuilder, newAlloc, bufIdx);
       mma.setAccumulator(tmemSlice);
     } else {
       llvm::errs() << "Unsupported user of the accumulator: " << *user << "\n";
@@ -1058,31 +1078,30 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
   }
 
   // Create barrier and wait ops
-  std::optional<int> lowestStageOpt =
-      getLowestStageTmemLoadStore(alloc, forOp, schedule);
-  int stageDiff = 0;
-  if (lowestStageOpt.has_value()) {
-    stageDiff = lowestStageOpt.value() - schedule[mma].first;
-    assert(stageDiff >= 0 && "TMEMLoad precedes MMA in the schedule");
+  std::pair<int, int> tmemUseStageBounds =
+      getTmemUseStageBounds(alloc, forOp, schedule);
+  int tmemUseNumStages =
+      tmemUseStageBounds.second - tmemUseStageBounds.first + 1;
+  int waitNumStages = tmemUseStageBounds.second - schedule[mma].first + 1;
+  if (waitNumStages == 1) {
+    // Overlap the mma with itself, even if there is no use of the accumulator
+    // after the mma
+    waitNumStages = 2;
   }
 
-  int waitNumStages = std::max(stageDiff, 1) + 1;
-
   OpBuilder builder(forOp);
+  Value minusOne = builder.create<arith::ConstantIntOp>(forOp.getLoc(), -1, 32);
   Value zero = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 0, 32);
   Value one = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 1, 32);
-  Value stageDiffVal =
-      builder.create<arith::ConstantIntOp>(forOp.getLoc(), stageDiff, 32);
   Value waitNumStagesVal =
       builder.create<arith::ConstantIntOp>(forOp.getLoc(), waitNumStages, 32);
 
   // Add arguments to the forOp
   unsigned newOperandIndex = forOp.getInitArgs().size();
   SmallVector<Value> newOperands = {
-      zero, // phase
-      zero, // barrierIdx
-      zero, // accInsertIdx
-      zero, // accExtractIdx
+      zero,     // phase
+      zero,     // barrierIdx
+      minusOne, // bufIdx
   };
   scf::ForOp newForOp =
       replaceForOpWithNewSignature(builder, forOp, newOperands);
@@ -1091,22 +1110,20 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
 
   Value phase = forOp.getRegionIterArg(newOperandIndex + 0);
   Value barrierIdx = forOp.getRegionIterArg(newOperandIndex + 1);
-  Value accInsertIdx = forOp.getRegionIterArg(newOperandIndex + 2);
-  Value accExtractIdx = forOp.getRegionIterArg(newOperandIndex + 3);
+  Value bufIdx = forOp.getRegionIterArg(newOperandIndex + 2);
 
   createBarrierAndWaitOps(forOp, schedule, mma, alloc, phase, barrierIdx,
                           waitNumStages, waitNumStagesVal, zero, one);
 
-  if (stageDiff > 0) {
-    multibufferTensorMemory(forOp, schedule, mma, alloc, accInsertIdx,
-                            accExtractIdx, stageDiff);
+  if (tmemUseNumStages > 1) {
+    multibufferTensorMemory(forOp, schedule, mma, alloc, bufIdx,
+                            newOperandIndex + 2, tmemUseNumStages);
   }
 
   SmallVector<Value> newYieldOperands;
   newYieldOperands.push_back(phase);
   newYieldOperands.push_back(barrierIdx);
-  newYieldOperands.push_back(accInsertIdx);
-  newYieldOperands.push_back(accExtractIdx);
+  newYieldOperands.push_back(bufIdx);
   appendToForOpYield(forOp, newYieldOperands);
 
   return forOp;
