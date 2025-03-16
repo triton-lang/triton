@@ -915,17 +915,17 @@ scf::ForOp lowerTMADescriptors(scf::ForOp forOp, CoarseSchedule &schedule) {
 // LOWER MMA
 /////////////////////////////
 
-std::optional<int> getLowestStageOfLoad(ttng::TMEMAllocOp alloc,
-                                        scf::ForOp forOp,
-                                        CoarseSchedule &schedule) {
+std::optional<int> getLowestStageTmemLoadStore(ttng::TMEMAllocOp alloc,
+                                               scf::ForOp forOp,
+                                               CoarseSchedule &schedule) {
   std::optional<int> lowestStage = std::nullopt;
   for (auto user : alloc->getUsers()) {
-    if (auto load = dyn_cast<ttng::TMEMLoadOp>(user)) {
-      if (!forOp->isAncestor(load->getParentOp())) {
+    if (isa<ttng::TMEMLoadOp, ttng::TMEMStoreOp>(user)) {
+      if (!forOp->isAncestor(user->getParentOp())) {
         continue;
       }
-      if (!lowestStage.has_value() || schedule[load].first < lowestStage) {
-        lowestStage = schedule[load].first;
+      if (!lowestStage.has_value() || schedule[user].first < lowestStage) {
+        lowestStage = schedule[user].first;
       }
     }
   }
@@ -978,6 +978,72 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   // TODO: add barrier before load from the accumulator
 }
 
+ttng::TMEMAllocOp createTMemAlloc(OpBuilder &builder,
+                                  ttng::TMEMAllocOp oldTMemAllocOp,
+                                  bool multiBufferred, int numStages) {
+  Location loc = oldTMemAllocOp.getLoc();
+  auto oldRetType = oldTMemAllocOp.getType();
+  SmallVector<int64_t> shape = {oldRetType.getShape().begin(),
+                                oldRetType.getShape().end()};
+  if (multiBufferred) {
+    shape.insert(shape.begin(), numStages);
+  }
+  Type accMemDescType = triton::gpu::MemDescType::get(
+      shape, oldRetType.getElementType(), oldRetType.getEncoding(),
+      oldRetType.getMemorySpace(), /*mutableMemory=*/true);
+  return builder.create<ttng::TMEMAllocOp>(oldTMemAllocOp.getLoc(),
+                                           accMemDescType, nullptr);
+}
+
+void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
+                             ttng::MMAv5OpInterface mma,
+                             ttng::TMEMAllocOp alloc, Value &accInsertIdx,
+                             Value &accExtractIdx, int stageDiff) {
+  SmallVector<Operation *> allocUsers = llvm::to_vector(alloc->getUsers());
+  // If we are multibuffering, we require that a store is present in the loop,
+  // as this is the only point we can change the accumulator buffer.
+  assert(
+      llvm::any_of(allocUsers,
+                   [](Operation *op) { return isa<ttng::TMEMStoreOp>(op); }) &&
+      "No tmem_store found in the loop");
+
+  OpBuilder builder(forOp);
+  auto newAlloc = createTMemAlloc(builder, alloc, true, stageDiff + 1);
+  Value numStagesVal =
+      builder.create<arith::ConstantIntOp>(forOp.getLoc(), stageDiff + 1, 32);
+  Value zero = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 0, 32);
+  Value one = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 1, 32);
+  // TODO: is order of the users following program order? Even if, is the code
+  // below correct w.r.t. how we are overwriting accInsertIdx and accExtractIdx?
+  for (auto user : allocUsers) {
+    if (auto store = dyn_cast<ttng::TMEMStoreOp>(user)) {
+      OpBuilderForStage stageBuilder(store, schedule);
+      auto tmemSlice =
+          triton::createSingleBufferView(stageBuilder, newAlloc, accInsertIdx);
+      store.getDstMutable().assign(tmemSlice);
+      stageBuilder.setInsertionPointAfter(store);
+      accInsertIdx = createIncrementModulo(
+          stageBuilder, store.getLoc(), accInsertIdx, numStagesVal, zero, one);
+      accExtractIdx = createIncrementModulo(
+          stageBuilder, store.getLoc(), accExtractIdx, numStagesVal, zero, one);
+    } else if (auto load = dyn_cast<ttng::TMEMLoadOp>(user)) {
+      OpBuilderForStage stageBuilder(load, schedule);
+      auto tmemSlice =
+          triton::createSingleBufferView(stageBuilder, newAlloc, accExtractIdx);
+      load.getSrcMutable().assign(tmemSlice);
+    } else if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(user)) {
+      OpBuilderForStage stageBuilder(mma, schedule);
+      auto tmemSlice =
+          triton::createSingleBufferView(stageBuilder, newAlloc, accInsertIdx);
+      mma.setAccumulator(tmemSlice);
+    } else {
+      llvm::errs() << "Unsupported user of the accumulator: " << *user << "\n";
+      llvm::report_fatal_error("Unsupported user of the accumulator");
+    }
+  }
+  alloc->erase();
+}
+
 scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
                     CoarseSchedule &schedule) {
   auto isLoadPipelineable = [&](Operation *op) {
@@ -993,7 +1059,7 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
 
   // Create barrier and wait ops
   std::optional<int> lowestStageOpt =
-      getLowestStageOfLoad(alloc, forOp, schedule);
+      getLowestStageTmemLoadStore(alloc, forOp, schedule);
   int stageDiff = 0;
   if (lowestStageOpt.has_value()) {
     stageDiff = lowestStageOpt.value() - schedule[mma].first;
@@ -1030,6 +1096,11 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
 
   createBarrierAndWaitOps(forOp, schedule, mma, alloc, phase, barrierIdx,
                           waitNumStages, waitNumStagesVal, zero, one);
+
+  if (stageDiff > 0) {
+    multibufferTensorMemory(forOp, schedule, mma, alloc, accInsertIdx,
+                            accExtractIdx, stageDiff);
+  }
 
   SmallVector<Value> newYieldOperands;
   newYieldOperands.push_back(phase);

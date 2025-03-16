@@ -114,7 +114,9 @@ public:
   int getNumStages() { return numStages; }
 
   void insert(Operation *op, int stage, Cluster cluster) {
-    assert(stage < numStages && "Invalid stage");
+    if (stage >= numStages) {
+      numStages = stage + 1;
+    }
     opToStageAndCluster[op] = {stage, cluster};
   }
 
