@@ -968,18 +968,32 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
     waitBuffers.push_back(mmaAsScaledDotOp.getAScale());
     waitBuffers.push_back(mmaAsScaledDotOp.getBScale());
   }
-  auto waitOp = builder.create<ttng::WaitBarrierOp>(loc, barrierSlice, phase,
-                                                    waitBuffers);
+  builder.create<ttng::WaitBarrierOp>(loc, barrierSlice, phase, waitBuffers);
   Value barWrap;
-  barrierIdx = createIncrementModulo(builder, loc, barrierIdx, numStagesVal,
-                                     zero, one, &barWrap);
-  phase = builder.create<arith::SelectOp>(
+  Value newBarrierIdx = createIncrementModulo(
+      builder, loc, barrierIdx, numStagesVal, zero, one, &barWrap);
+  Value newPhase = builder.create<arith::SelectOp>(
       loc, phase.getType(), barWrap,
       builder.create<arith::XOrIOp>(loc, phase, one), phase);
 
   createBarrierDealloc(forOp, barrierAlloc, numStages);
 
-  // TODO: add barrier before load from the accumulator
+  // Look for loads from the accumulator in stages earlier than the wait
+  // and insert a barrier before them
+  for (auto user : alloc->getUsers()) {
+    if (auto load = dyn_cast<ttng::TMEMLoadOp>(user)) {
+      auto topLevelUser = forOp.getBody()->findAncestorOpInBlock(*load);
+      if (topLevelUser && schedule[topLevelUser].first < waitStage) {
+        // Put the wait in the same stage as the load
+        builder.setInsertionPoint(load);
+        builder.setStageCluster(schedule[load]);
+        builder.create<ttng::WaitBarrierOp>(loc, barrierSlice, phase,
+                                            waitBuffers);
+      }
+    }
+  }
+  barrierIdx = newBarrierIdx;
+  phase = newPhase;
 }
 
 ttng::TMEMAllocOp createTMemAlloc(OpBuilder &builder,

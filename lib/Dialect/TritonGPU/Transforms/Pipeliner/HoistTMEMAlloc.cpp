@@ -271,6 +271,7 @@ ttng::TMEMAllocOp hoistTMEMAlloc(ttng::TMEMAllocOp alloc, scf::ForOp forOp) {
   mlir::RewritePatternSet patterns(module.getContext());
   patterns.add<HoistTMEMStoreThroughFor, CombineTMEMLoadAndStore,
                CombineTMEMStoreAndSelect, SinkTMEMLoad>(module.getContext());
+  scf::ForOp::getCanonicalizationPatterns(patterns, module.getContext());
   if (applyPatternsGreedily(module, std::move(patterns)).failed()) {
     llvm_unreachable("Failed to hoist tmem_store");
   }

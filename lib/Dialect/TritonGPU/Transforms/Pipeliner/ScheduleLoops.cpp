@@ -50,13 +50,26 @@ bool hasLatenciesAssigned(scf::ForOp forOp,
   return false;
 }
 
+Value getTmemOperand(Operation *op) {
+  if (auto mmav5Op = dyn_cast<ttng::MMAv5OpInterface>(op)) {
+    return mmav5Op.getAccumulator();
+  }
+  if (auto tmemStoreOp = dyn_cast<ttng::TMEMStoreOp>(op)) {
+    return tmemStoreOp.getDst();
+  }
+  if (auto tmemLoadOp = dyn_cast<ttng::TMEMLoadOp>(op)) {
+    return tmemLoadOp.getSrc();
+  }
+  return {};
+}
+
 SmallVector<Operation *> getDependentOps(Operation *op,
                                          DominanceInfo &domInfo) {
-  if (auto mmav5Op = dyn_cast<ttng::MMAv5OpInterface>(op)) {
+  if (isa<ttng::MMAv5OpInterface, ttng::TMEMStoreOp>(op)) {
     SmallVector<Operation *> dependentOps;
-    Value acc = mmav5Op.getAccumulator();
+    Value acc = getTmemOperand(op);
     for (Operation *user : acc.getUsers()) {
-      if (domInfo.properlyDominates(mmav5Op, user)) {
+      if (domInfo.properlyDominates(op, user)) {
         dependentOps.push_back(user);
       }
     }
@@ -64,6 +77,21 @@ SmallVector<Operation *> getDependentOps(Operation *op,
   } else {
     return {op->getUsers().begin(), op->getUsers().end()};
   }
+}
+
+SmallVector<Operation *>
+getTmemBackwardDependentOps(Operation *op, PostDominanceInfo &domInfo) {
+  if (isa<ttng::MMAv5OpInterface, ttng::TMEMLoadOp>(op)) {
+    SmallVector<Operation *> dependentOps;
+    Value acc = getTmemOperand(op);
+    for (Operation *user : acc.getUsers()) {
+      if (domInfo.properlyPostDominates(op, user)) {
+        dependentOps.push_back(user);
+      }
+    }
+    return dependentOps;
+  }
+  return {};
 }
 
 CoarseSchedule scheduleKeyOps(scf::ForOp forOp,
@@ -208,6 +236,31 @@ void scheduleDistanceOneDependencies(scf::ForOp forOp,
   }
 }
 
+void scheduleTmemDependencies(scf::ForOp forOp, CoarseSchedule &schedule) {
+  PostDominanceInfo postDomInfo(forOp);
+  int numStages = schedule.getNumStages();
+  SmallVector<std::tuple<Operation *, int, tt::CoarseSchedule::Cluster>>
+      opsInOrder = schedule.getOpsInOrder(forOp);
+  // Schedule dependencies stage by stage.
+  for (int stage = 0; stage < numStages; stage++) {
+    for (auto [op, stage_, cluster] : opsInOrder) {
+      if (stage_ != stage)
+        continue;
+      SmallVector<Operation *> tmemBackwardDependentOps =
+          getTmemBackwardDependentOps(op, postDomInfo);
+      for (Operation *tmemBackwardDependentOp : tmemBackwardDependentOps) {
+        bool inserted =
+            schedule.insertIfAbsent(tmemBackwardDependentOp, stage, cluster);
+        if (inserted) {
+          schedule.insertDepsOfOp(tmemBackwardDependentOp, stage, cluster,
+                                  /*includeArg=*/true,
+                                  /*insertIfEarlier=*/true);
+        }
+      }
+    }
+  }
+}
+
 // Schedule the prologue and epilogue `if` ops in the loop, pushing them as
 // close to the loop boundaries as possible. Return the cluster after the
 // prologue (or the beginning of the loop if there is no prologue).
@@ -319,6 +372,7 @@ void scheduleLoop(scf::ForOp forOp,
     DBGS() << "Coarse schedule with prologue and epilogue:\n" << forOp << "\n";
   });
   scheduleDependencies(forOp, schedule);
+  scheduleTmemDependencies(forOp, schedule);
   LLVM_DEBUG({
     schedule.serialize(forOp);
     DBGS() << "Coarse schedule with dependencies:\n" << forOp << "\n";
