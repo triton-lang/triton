@@ -51,16 +51,16 @@ of gemms. The scheduling is static and we do it on device.
 
     group-gemm-performance:
             N    cuBLAS    Triton
-    0   128.0  0.021504  0.013312
-    1   256.0  0.023552  0.016384
-    2   512.0  0.033792  0.021504
-    3  1024.0  0.072704  0.079872
+    0   128.0  0.020480  0.012288
+    1   256.0  0.023552  0.015360
+    2   512.0  0.032768  0.021504
+    3  1024.0  0.071680  0.077824
     group-gemm-performance-m-8192-k-8192:
             M    cuBLAS    Triton
-    0   128.0  0.460800  0.534528
-    1   256.0  0.734208  0.928768
-    2   512.0  1.709056  1.844224
-    3  1024.0  2.735104  3.586048
+    0   128.0  0.459776  0.544768
+    1   256.0  0.726016  1.070080
+    2   512.0  1.724416  2.151424
+    3  1024.0  2.724352  4.344832
 
 
 
@@ -338,20 +338,20 @@ of gemms. The scheduling is static and we do it on device.
                 b_ptr = tl.load(group_b_ptrs + g).to(tl.pointer_type(dtype))
                 c_ptr = tl.load(group_c_ptrs + g).to(tl.pointer_type(dtype))
 
-                a_desc = tl._experimental_make_tensor_descriptor(
+                a_desc = tl.make_tensor_descriptor(
                     a_ptr,
                     shape=[gm, gk],
                     strides=[lda, 1],
                     block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_K],
                 )
 
-                b_desc = tl._experimental_make_tensor_descriptor(
+                b_desc = tl.make_tensor_descriptor(
                     b_ptr,
                     shape=[gn, gk],
                     strides=[ldb, 1],
                     block_shape=[BLOCK_SIZE_N, BLOCK_SIZE_K],
                 )
-                c_desc = tl._experimental_make_tensor_descriptor(
+                c_desc = tl.make_tensor_descriptor(
                     c_ptr,
                     shape=[gm, gn],
                     strides=[ldc, 1],
@@ -634,7 +634,7 @@ of gemms. The scheduling is static and we do it on device.
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 5.624 seconds)
+   **Total running time of the script:** (0 minutes 5.639 seconds)
 
 
 .. _sphx_glr_download_getting-started_tutorials_08-grouped-gemm.py:
