@@ -229,12 +229,12 @@ def matmul(a, b):
 )
 @triton.jit(launch_metadata=_matmul_launch_metadata)
 def matmul_tma_ws_kernel(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
-                      M, N, K,  #
-                      BLOCK_SIZE_M: tl.constexpr,  #
-                      BLOCK_SIZE_N: tl.constexpr,  #
-                      BLOCK_SIZE_K: tl.constexpr,  #
-                      GROUP_SIZE_M: tl.constexpr, #
-                      ):
+                         M, N, K,  #
+                         BLOCK_SIZE_M: tl.constexpr,  #
+                         BLOCK_SIZE_N: tl.constexpr,  #
+                         BLOCK_SIZE_K: tl.constexpr,  #
+                         GROUP_SIZE_M: tl.constexpr,  #
+                         ):
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
@@ -746,7 +746,8 @@ def validate(M, N, K, dtype):
     descriptor_persistent_result = matmul_descriptor_persistent(a, b) if supports_tma() else None
 
     if tma_ws_result is not None:
-        naive_vs_tma_ws = "✅" if torch.allclose(naive_result.to(torch.float16), tma_ws_result.to(torch.float16), atol=1.0) else "❌"
+        naive_vs_tma_ws = "✅" if torch.allclose(naive_result.to(torch.float16), tma_ws_result.to(torch.float16),
+                                                atol=1.0) else "❌"
     if torch_result is not None:
         naive_vs_torch = "✅" if torch.allclose(naive_result.to(torch.float16), torch_result.to(torch.float16),
                                                atol=1.0) else "❌"
