@@ -265,15 +265,18 @@ struct DotOpMFMAConverter {
     auto mfmaVersion = mfmaLayout.getVersionMajor();
     bool allowXF32 =
         dotOp.getInputPrecision() == InputPrecision::TF32 && mfmaVersion == 3;
-    auto maybeMfmaInsn = MfmaInsn::selectMfma(
-        mDim, nDim, kDimOperandSize, elemTyA, elemTyB, mfmaVersion, allowXF32);
+
+    FailureOr<MfmaIntrinsic> maybeMfmaInsn = MfmaIntrinsic::selectFor(
+        mfmaVersion, mDim, nDim, kDimOperandSize, elemTyA, elemTyB,
+        /*withScale=*/false, allowXF32);
+
     SmallVector<unsigned> mfmaShape = {16, 16, 16};
     if (failed(maybeMfmaInsn)) {
       llvm::errs() << "No match found in MFMA database\n";
     } else {
-      mfmaShape[0] = maybeMfmaInsn->getMDim();
-      mfmaShape[1] = maybeMfmaInsn->getNDim();
-      mfmaShape[2] = maybeMfmaInsn->getKDim();
+      mfmaShape[0] = maybeMfmaInsn->mDim;
+      mfmaShape[1] = maybeMfmaInsn->nDim;
+      mfmaShape[2] = maybeMfmaInsn->kDim;
     }
 
     auto mfmasPerRep =
@@ -654,7 +657,7 @@ LogicalResult rewriteReduceOp(OpBuilder &rewriter, triton::ReduceOp op) {
     return failure();
   auto srcShape = srcType.getShape();
   auto srcEncoding = srcType.getEncoding();
-  auto srcShapePerCtaTile = triton::gpu::getShapePerCTATile(srcEncoding);
+  auto srcShapePerCtaTile = triton::gpu::getShapePerCTATile(srcType);
   SmallVector<int64_t> repShape = {srcShape[0] / srcShapePerCtaTile[0],
                                    srcShape[1] / srcShapePerCtaTile[1]};
   int numReps = repShape[axisNonReduce];

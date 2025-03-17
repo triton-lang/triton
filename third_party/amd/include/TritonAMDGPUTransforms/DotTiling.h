@@ -27,6 +27,7 @@ unsigned getCyclesPerMfma(DotOp dotOp) {
   // Get mfma op type.
   auto mfmaLayout = cast<AMDMfmaEncodingAttr>(
       cast<RankedTensorType>(dotOp.getResult().getType()).getEncoding());
+  MLIRContext *ctx = dotOp->getContext();
   Value a = dotOp.getA();
   Value b = dotOp.getB();
   auto aTensorTy = cast<RankedTensorType>(a.getType());
@@ -40,14 +41,17 @@ unsigned getCyclesPerMfma(DotOp dotOp) {
   auto mfmaVersion = mfmaLayout.getVersionMajor();
   bool allowXF32 =
       dotOp.getInputPrecision() == InputPrecision::TF32 && mfmaVersion == 3;
-  auto maybeMfmaInsn = MfmaInsn::selectMfma(
-      mDim, nDim, kDimOperandSize, elemTyA, elemTyB, mfmaVersion, allowXF32);
+
+  FailureOr<MfmaIntrinsic> maybeMfmaInsn = MfmaIntrinsic::selectFor(
+      mfmaVersion, mDim, nDim, kDimOperandSize, elemTyA, elemTyB,
+      /*withScale=*/false, allowXF32);
+
   if (failed(maybeMfmaInsn))
     llvm::report_fatal_error("No match found in MFMA database\n");
   // Estimate rate of mfma op type.
   unsigned maxBitWidth =
-      std::max(maybeMfmaInsn->getElementTypeA().getIntOrFloatBitWidth(),
-               maybeMfmaInsn->getElementTypeB().getIntOrFloatBitWidth());
+      std::max(maybeMfmaInsn->aElementType.getIntOrFloatBitWidth(),
+               maybeMfmaInsn->bElementType.getIntOrFloatBitWidth());
   // Estimate throughput as fma's per cycle.
   unsigned opsPerCycle;
   if (maxBitWidth <= 8) { // fp8, bf8, i8
@@ -60,10 +64,10 @@ unsigned getCyclesPerMfma(DotOp dotOp) {
     opsPerCycle = 64; // fp64
   }
   // total floating point mfmas
-  int64_t totalOps = maybeMfmaInsn->getMDim() * maybeMfmaInsn->getNDim() *
-                     maybeMfmaInsn->getKDim();
+  int64_t totalOps =
+      maybeMfmaInsn->mDim * maybeMfmaInsn->nDim * maybeMfmaInsn->kDim;
   unsigned cyclesPerMfma = static_cast<unsigned>(totalOps / opsPerCycle);
-  LDBG(maybeMfmaInsn->getInsnName() << " = " << cyclesPerMfma << " cycles\n");
+  LDBG(maybeMfmaInsn->name << " = " << cyclesPerMfma << " cycles\n");
   return cyclesPerMfma;
 }
 
