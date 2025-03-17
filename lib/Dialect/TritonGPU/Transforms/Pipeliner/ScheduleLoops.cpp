@@ -198,7 +198,7 @@ void scheduleDistanceOneDependencies(scf::ForOp forOp,
   int numStages = schedule.getNumStages();
 
   // Mapping from the cluster to the cluster before it.
-  DenseMap<CoarseSchedule::Cluster *, CoarseSchedule::Cluster> dist1Cluster;
+  DenseMap<CoarseSchedule::ClusterHash, CoarseSchedule::Cluster> dist1Cluster;
   for (auto &op : forOp.getBody()->without_terminator()) {
     if (schedule.count(&op) == 0)
       continue;
@@ -221,11 +221,16 @@ void scheduleDistanceOneDependencies(scf::ForOp forOp,
                                       /*includeArg=*/true,
                                       /*insertIfEarlier=*/true);
             } else {
-              if (dist1Cluster.count(&cluster) == 0) {
-                dist1Cluster[&cluster] = schedule.clusters.newBefore(cluster);
+              CoarseSchedule::ClusterHash clusterHash =
+                  CoarseSchedule::hashCluster(cluster);
+              if (dist1Cluster.count(clusterHash) == 0) {
+                dist1Cluster[clusterHash] =
+                    schedule.clusters.newBefore(cluster);
               }
-              schedule.insertIfAbsent(defOp, stage + 1, dist1Cluster[&cluster]);
-              schedule.insertDepsOfOp(defOp, stage + 1, dist1Cluster[&cluster],
+              schedule.insertIfAbsent(defOp, stage + 1,
+                                      dist1Cluster[clusterHash]);
+              schedule.insertDepsOfOp(defOp, stage + 1,
+                                      dist1Cluster[clusterHash],
                                       /*includeArg=*/true,
                                       /*includeIfEarlier=*/true);
             }

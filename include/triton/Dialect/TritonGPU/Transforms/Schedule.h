@@ -106,7 +106,8 @@ public:
   CoarseSchedule() = default;
   CoarseSchedule(int numStages) : numStages(numStages) {}
   ClusterList clusters;
-  using Cluster = decltype(clusters)::iterator;
+  using Cluster = ClusterList::iterator;
+  using ClusterHash = size_t;
 
   DenseMap<Operation *, std::pair<int, Cluster>> opToStageAndCluster;
 
@@ -155,6 +156,10 @@ public:
   void serialize(scf::ForOp &forOp);
   // Create a CoarseSchedule based on forOp's <stage, cluster>.
   LogicalResult deSerialize(scf::ForOp &forOp);
+
+  static ClusterHash hashCluster(Cluster cluster) {
+    return reinterpret_cast<ClusterHash>(&*cluster);
+  }
 
   LLVM_DUMP_METHOD void dump();
 

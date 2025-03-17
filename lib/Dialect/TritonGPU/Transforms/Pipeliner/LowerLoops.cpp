@@ -944,10 +944,16 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
                              Value numStagesVal, Value zero, Value one) {
   OpBuilderForStage builder(mma, schedule);
   builder.setInsertionPoint(forOp);
-
   Value barrierAlloc = createBarrierAlloc(forOp, numStages);
-  Location loc = mma->getLoc();
+
   builder.setInsertionPoint(mma);
+  Location loc = mma->getLoc();
+  Value barWrap;
+  barrierIdx = createIncrementModulo(builder, loc, barrierIdx, numStagesVal,
+                                     zero, one, &barWrap);
+  phase = builder.create<arith::SelectOp>(
+      loc, phase.getType(), barWrap,
+      builder.create<arith::XOrIOp>(loc, phase, one), phase);
   Value barrierSlice =
       triton::createSingleBufferView(builder, barrierAlloc, barrierIdx);
   mma.setBarrier(barrierSlice);
@@ -969,12 +975,6 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
     waitBuffers.push_back(mmaAsScaledDotOp.getBScale());
   }
   builder.create<ttng::WaitBarrierOp>(loc, barrierSlice, phase, waitBuffers);
-  Value barWrap;
-  Value newBarrierIdx = createIncrementModulo(
-      builder, loc, barrierIdx, numStagesVal, zero, one, &barWrap);
-  Value newPhase = builder.create<arith::SelectOp>(
-      loc, phase.getType(), barWrap,
-      builder.create<arith::XOrIOp>(loc, phase, one), phase);
 
   createBarrierDealloc(forOp, barrierAlloc, numStages);
 
@@ -992,8 +992,6 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
       }
     }
   }
-  barrierIdx = newBarrierIdx;
-  phase = newPhase;
 }
 
 ttng::TMEMAllocOp createTMemAlloc(OpBuilder &builder,
@@ -1113,8 +1111,8 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
   // Add arguments to the forOp
   unsigned newOperandIndex = forOp.getInitArgs().size();
   SmallVector<Value> newOperands = {
-      zero,     // phase
-      zero,     // barrierIdx
+      one,      // phase
+      minusOne, // barrierIdx
       minusOne, // bufIdx
   };
   scf::ForOp newForOp =

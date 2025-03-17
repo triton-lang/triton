@@ -340,6 +340,9 @@ bool mlir::triton::mmaHasPipelineableOperands(
     if (!v.getDefiningOp()) {
       return false;
     }
+    while (isa<ttg::MemDescTransOp>(v.getDefiningOp())) {
+      v = v.getDefiningOp()->getOperand(0);
+    }
     if (auto localAlloc = dyn_cast<ttg::LocalAllocOp>(v.getDefiningOp())) {
       if (!localAlloc.getSrc()) {
         return false;
@@ -347,9 +350,10 @@ bool mlir::triton::mmaHasPipelineableOperands(
       if (forOp.isDefinedOutsideOfLoop(localAlloc.getSrc())) {
         return true;
       }
-      if (auto loadOp =
-              dyn_cast<tt::LoadOp>(localAlloc.getSrc().getDefiningOp())) {
-        return isLoadPipelineable(loadOp);
+      if (isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp,
+              tt::ExperimentalDescriptorGatherOp>(
+              localAlloc.getSrc().getDefiningOp())) {
+        return isLoadPipelineable(localAlloc.getSrc().getDefiningOp());
       }
     }
     return false;
