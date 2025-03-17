@@ -105,6 +105,14 @@ void addControlConstant(llvm::Module *module, const char *name,
 
 } // namespace
 
+namespace lld {
+// Just take the shortest codepath with global exception handling and no memory
+// cleanup on exit.
+int unsafeLldMain(llvm::ArrayRef<const char *> args,
+                  llvm::raw_ostream &stdoutOS, llvm::raw_ostream &stderrOS,
+                  llvm::ArrayRef<DriverDef> drivers, bool exitEarly);
+} // namespace lld
+
 LLD_HAS_DRIVER(elf)
 
 static std::optional<std::string> lldInvoke(const char *inPath,
@@ -113,9 +121,10 @@ static std::optional<std::string> lldInvoke(const char *inPath,
                                        outPath};
   std::string errString;
   llvm::raw_string_ostream errStream(errString);
-  lld::Result s = lld::lldMain(args, llvm::outs(), errStream,
-                               {{lld::Gnu, &lld::elf::link}});
-  if (s.retCode || !s.canRunAgain) {
+  int retCode =
+      lld::unsafeLldMain(args, llvm::outs(), errStream,
+                         {{lld::Gnu, &lld::elf::link}}, /*exitEarly=*/true);
+  if (retCode) {
     errStream.flush();
     return errString;
   }
