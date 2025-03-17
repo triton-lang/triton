@@ -75,7 +75,7 @@ ttg::CTALayoutAttr getCtaLayoutFromEncoding(Attribute encoding) {
 std::optional<UseInfo> getUseInfo(Operation *op) {
   UseInfo info;
   info.use = op;
-  if (auto load = dyn_cast<tt::ExperimentalDescriptorLoadOp>(op)) {
+  if (auto load = dyn_cast<tt::DescriptorLoadOp>(op)) {
     info.descriptor = load.getDesc();
     info.desiredSharedEncoding = findLoadEncodingFromUsers(op);
     auto encoding = info.desiredSharedEncoding ? info.desiredSharedEncoding
@@ -83,7 +83,7 @@ std::optional<UseInfo> getUseInfo(Operation *op) {
     info.ctaLayout = ttg::getCTALayout(encoding);
     return info;
   }
-  if (auto gather = dyn_cast<tt::ExperimentalDescriptorGatherOp>(op)) {
+  if (auto gather = dyn_cast<tt::DescriptorGatherOp>(op)) {
     info.descriptor = gather.getDesc();
     info.desiredSharedEncoding = findLoadEncodingFromUsers(op);
     auto encoding = info.desiredSharedEncoding ? info.desiredSharedEncoding
@@ -91,13 +91,13 @@ std::optional<UseInfo> getUseInfo(Operation *op) {
     info.ctaLayout = ttg::getCTALayout(encoding);
     return info;
   }
-  if (auto store = dyn_cast<tt::ExperimentalDescriptorStoreOp>(op)) {
+  if (auto store = dyn_cast<tt::DescriptorStoreOp>(op)) {
     info.descriptor = store.getDesc();
     auto encoding = store.getSrc().getType().getEncoding();
     info.ctaLayout = ttg::getCTALayout(encoding);
     return info;
   }
-  if (auto scatter = dyn_cast<tt::ExperimentalDescriptorScatterOp>(op)) {
+  if (auto scatter = dyn_cast<tt::DescriptorScatterOp>(op)) {
     info.descriptor = scatter.getDesc();
     auto encoding = scatter.getSrc().getType().getEncoding();
     info.ctaLayout = ttg::getCTALayout(encoding);
