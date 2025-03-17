@@ -79,7 +79,7 @@ class HookManager:
 
     @staticmethod
     def unregister(session: Optional[int] = None) -> None:
-        if session and session not in HookManager.sessions:
+        if session and session not in HookManager.session_hooks:
             return
 
         if not session:
