@@ -19,6 +19,8 @@ using Partition = WarpSchedule::Partition;
 // slicePartition
 //===----------------------------------------------------------------------===//
 
+// Given a loop, erase ops and loop iter args that are not part of the root
+// partition or the provided `partition`.
 static void eraseOtherPartitions(scf::ForOp &loop, const WarpSchedule &schedule,
                                  const Partition *partition) {
   llvm::BitVector toErase(loop.getNumRegionIterArgs(), true);
@@ -31,6 +33,8 @@ static void eraseOtherPartitions(scf::ForOp &loop, const WarpSchedule &schedule,
       op.erase();
       continue;
     }
+    // Trace uses into the `scf.yield` to mark the corresponding iter arg as
+    // used.
     for (OpOperand &use : op.getUses()) {
       if (use.getOwner() == loop.getBody()->getTerminator())
         toErase.reset(use.getOperandNumber());
@@ -41,9 +45,12 @@ static void eraseOtherPartitions(scf::ForOp &loop, const WarpSchedule &schedule,
       arg.dropAllUses();
   }
   eraseLoopCarriedValues(loop, std::move(toErase));
+  // Erase the schedule attributes.
   WarpSchedule::eraseFrom(loop);
 }
 
+// Given a loop and a scheduled partition, slice a copy of the partition into a
+// new loop. This returns the block containing the new loop.
 static FailureOr<std::unique_ptr<Block>>
 slicePartition(scf::ForOp baseLoop, const WarpSchedule &baseSchedule,
                const Partition *slicePartition) {
