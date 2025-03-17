@@ -7,7 +7,7 @@ from typing import NamedTuple
 import pathlib
 
 import triton.language as tl
-from triton.profiler.hook.launch import COMPUTE_METADATA_SCOPE_NAME
+from triton.profiler.hooks.launch import COMPUTE_METADATA_SCOPE_NAME
 
 
 def is_hip():
