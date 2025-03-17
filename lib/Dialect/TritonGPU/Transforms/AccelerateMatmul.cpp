@@ -154,11 +154,10 @@ getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter, int opIdx,
     arg = cvtOp.getSrc();
   auto argType = cast<RankedTensorType>(arg.getType());
   assert(argType.getEncoding() && "unexpected tensor type");
-  auto order = getOrderForMemory(argType);
+  auto newOrder = getOrder(argType);
 
   // If the MMA op doesn't support transpose pick the layout expected by the MMA
   // op.
-  llvm::SmallVector<unsigned> newOrder = order;
   if (!allowTranspose) {
     if (opIdx == 1) {
       newOrder = {0, 1};
@@ -167,7 +166,7 @@ getSharedMemoryMMAOperand(Value v, mlir::PatternRewriter &rewriter, int opIdx,
     }
   }
 
-  if (newOrder != order && op) {
+  if (newOrder != getOrder(argType) && op) {
     op->emitWarning("Warning: Forcing a different order [")
         << newOrder[0] << ", " << newOrder[1]
         << "] on SMEM than the register order for the opreand " << opIdx
@@ -193,7 +192,7 @@ getSharedMemoryScale(Value arg, mlir::PatternRewriter &rewriter, Location loc) {
   OpBuilder::InsertionGuard g(rewriter);
   auto argType = cast<RankedTensorType>(arg.getType());
   assert(argType.getEncoding() && "unexpected tensor type");
-  auto newOrder = getOrderForMemory(argType);
+  auto newOrder = getOrder(argType);
 
   Attribute SharedMemorySpace =
       SharedMemorySpaceAttr::get(argType.getContext());
@@ -224,8 +223,8 @@ getWarpsPerTile(DotOp dotOp, const ArrayRef<int64_t> shape, int version,
 static bool bwdFilter(Operation *op) {
   return (op->hasTrait<OpTrait::Elementwise>() && isMemoryEffectFree(op)) ||
          isView(op) ||
-         isa<Fp4ToFpOp, LoadOp, ExperimentalDescriptorLoadOp, BroadcastOp,
-             ConvertLayoutOp>(op);
+         isa<Fp4ToFpOp, LoadOp, DescriptorLoadOp, BroadcastOp, ConvertLayoutOp>(
+             op);
 }
 
 // Finds the bitwidth with which the value x is loaded
@@ -244,7 +243,7 @@ static int computeOrigBitWidth(Value x) {
 
   int origBitWidth = getElementTypeOrSelf(x).getIntOrFloatBitWidth();
   for (auto op : slice) {
-    if (isa<LoadOp, ExperimentalDescriptorLoadOp>(op)) {
+    if (isa<LoadOp, DescriptorLoadOp>(op)) {
       if (auto tensorTy =
               dyn_cast<RankedTensorType>(op->getResultTypes().front())) {
         origBitWidth =
@@ -319,7 +318,7 @@ public:
       // If this is problematic we can totally drop them
       return isa<BlockArgument>(v) ||
              (v.getDefiningOp() &&
-              isa<LoadOp, ExperimentalDescriptorLoadOp>(v.getDefiningOp()));
+              isa<LoadOp, DescriptorLoadOp>(v.getDefiningOp()));
     };
 
     bool aFromLoad = comesFromLoadOrBlockArg(dotOp.getA());
@@ -431,7 +430,7 @@ replaceCTALayout(DistributedEncodingTrait layout,
     return BlockedEncodingAttr::get(
         layout.getContext(), blockedLayout.getSizePerThread(),
         blockedLayout.getThreadsPerWarp(), blockedLayout.getWarpsPerCTA(),
-        blockedLayout.getOrder(), newCTALayout);
+        blockedLayout.getDefaultOrder(), newCTALayout);
   } else if (auto sliceLayout = mlir::dyn_cast<SliceEncodingAttr>(layout)) {
     return SliceEncodingAttr::get(
         layout.getContext(), sliceLayout.getDim(),

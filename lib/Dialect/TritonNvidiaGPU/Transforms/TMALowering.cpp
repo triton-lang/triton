@@ -105,11 +105,11 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
   rewriter.replaceOpWithNewOp<LocalLoadOp>(op, tensorType, alloc);
 }
 
-class TMALoadLowering : public OpRewritePattern<ExperimentalDescriptorLoadOp> {
+class TMALoadLowering : public OpRewritePattern<DescriptorLoadOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(ExperimentalDescriptorLoadOp op,
+  LogicalResult matchAndRewrite(DescriptorLoadOp op,
                                 PatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     auto createLoad = [&](Value tmaPtr, Value barrierAlloc, Value alloc,
@@ -125,11 +125,10 @@ public:
   }
 };
 
-struct TMAGatherLowering
-    : public OpRewritePattern<ExperimentalDescriptorGatherOp> {
+struct TMAGatherLowering : public OpRewritePattern<DescriptorGatherOp> {
   using OpRewritePattern::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(ExperimentalDescriptorGatherOp op,
+  LogicalResult matchAndRewrite(DescriptorGatherOp op,
                                 PatternRewriter &rewriter) const override {
     auto createLoad = [&](Value tmaPtr, Value barrierAlloc, Value alloc,
                           Value pred) {
@@ -164,11 +163,10 @@ static void lowerTMAStore(Operation *op, mlir::TypedValue<RankedTensorType> src,
   rewriter.eraseOp(op);
 }
 
-struct TMAStoreLowering
-    : public OpRewritePattern<ExperimentalDescriptorStoreOp> {
+struct TMAStoreLowering : public OpRewritePattern<DescriptorStoreOp> {
   using OpRewritePattern::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(ExperimentalDescriptorStoreOp op,
+  LogicalResult matchAndRewrite(DescriptorStoreOp op,
                                 PatternRewriter &rewriter) const override {
     auto createStore = [&](Value tmaPtr, Value alloc) {
       auto indices = translateTMAIndices(
@@ -182,11 +180,10 @@ struct TMAStoreLowering
   }
 };
 
-struct TMAScatterLowering
-    : public OpRewritePattern<ExperimentalDescriptorScatterOp> {
+struct TMAScatterLowering : public OpRewritePattern<DescriptorScatterOp> {
   using OpRewritePattern::OpRewritePattern;
 
-  LogicalResult matchAndRewrite(ExperimentalDescriptorScatterOp op,
+  LogicalResult matchAndRewrite(DescriptorScatterOp op,
                                 PatternRewriter &rewriter) const override {
     auto createStore = [&](Value tmaPtr, Value alloc) {
       rewriter.create<triton::nvidia_gpu::AsyncTMAScatterOp>(

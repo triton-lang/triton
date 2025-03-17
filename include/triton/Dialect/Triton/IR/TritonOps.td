@@ -1255,7 +1255,7 @@ def ReturnOp : TT_Op<"return", [Pure, HasParent<"FuncOp">, /*MemRefsNormalizable
 }
 
 
-def TT_ExperimentalDescriptorLoadOp : TT_Op<"experimental_descriptor_load", [MemoryEffects<[MemRead<GlobalMemory>]>]> {
+def TT_DescriptorLoadOp : TT_Op<"descriptor_load", [MemoryEffects<[MemRead<GlobalMemory>]>]> {
   let summary = "Load from descriptor";
   let description = [{
     This operation will be lowered to Nvidia TMA load operation on targets supporting it.
@@ -1286,7 +1286,7 @@ def TT_ExperimentalDescriptorLoadOp : TT_Op<"experimental_descriptor_load", [Mem
   let hasVerifier = 1;
 }
 
-def TT_ExperimentalDescriptorStoreOp : TT_Op<"experimental_descriptor_store", [
+def TT_DescriptorStoreOp : TT_Op<"descriptor_store", [
     MemoryEffects<[MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>,
 ]> {
   let summary = "store value based on descriptor";
@@ -1312,10 +1312,10 @@ def TT_ExperimentalDescriptorStoreOp : TT_Op<"experimental_descriptor_store", [
   let hasVerifier = 1;
 }
 
-def TT_ExperimentalDescriptorGatherOp : TT_Op<"experimental_descriptor_gather", [MemoryEffects<[MemRead<GlobalMemory>]>]> {
+def TT_DescriptorGatherOp : TT_Op<"descriptor_gather", [MemoryEffects<[MemRead<GlobalMemory>]>]> {
   let summary = "gather multiple rows from a descriptor into a single tensor";
   let description = [{
-    The `tt.experimental_desciptor_gather` op will be lowered to NVIDIA TMA
+    The `tt.desciptor_gather` op will be lowered to NVIDIA TMA
     load operations on targets that support it.
 
     `desc_ptr` is a pointer to the TMA descriptor allocated in global memory.
@@ -1347,7 +1347,7 @@ def TT_ExperimentalDescriptorGatherOp : TT_Op<"experimental_descriptor_gather", 
   }];
 }
 
-def TT_ExperimentalDescriptorScatterOp : TT_Op<"experimental_descriptor_scatter", [
+def TT_DescriptorScatterOp : TT_Op<"descriptor_scatter", [
     MemoryEffects<[MemRead<GlobalMemory>, MemWrite<GlobalMemory>]>,
 ]> {
   let arguments = (ins

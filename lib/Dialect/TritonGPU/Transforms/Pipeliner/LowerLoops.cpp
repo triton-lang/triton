@@ -8,7 +8,6 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
-#include "triton/Tools/StrUtil.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 
@@ -64,8 +63,7 @@ public:
 };
 
 bool isTMALoad(Operation *op) {
-  return isa<tt::ExperimentalDescriptorLoadOp,
-             tt::ExperimentalDescriptorGatherOp>(op);
+  return isa<tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op);
 }
 
 DenseSet<Operation *> getTopLevelUsersInLoop(Operation *op, scf::ForOp forOp) {
@@ -176,12 +174,13 @@ ttg::SharedEncodingTrait getSharedEncoding(Operation *op) {
 
   auto ty = cast<RankedTensorType>(op->getResultTypes()[0]);
   auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
+  auto order = ttg::getOrder(ty);
   if (isTMALoad(op)) {
     // TMA encoding is set on the descriptor type
     TypedValue<tt::TensorDescType> desc;
-    if (auto load = dyn_cast<tt::ExperimentalDescriptorLoadOp>(op)) {
+    if (auto load = dyn_cast<tt::DescriptorLoadOp>(op)) {
       desc = load.getDesc();
-    } else if (auto gather = dyn_cast<tt::ExperimentalDescriptorGatherOp>(op)) {
+    } else if (auto gather = dyn_cast<tt::DescriptorGatherOp>(op)) {
       desc = gather.getDesc();
     } else {
       op->emitError() << "unrecognized tma load type";
@@ -202,7 +201,6 @@ ttg::SharedEncodingTrait getSharedEncoding(Operation *op) {
   if (localAllocEnc)
     return localAllocEnc;
 
-  auto order = getOrderForMemory(ty);
   // Use generic layout. This won't be optimal for 2D tensors.
   return ttg::SwizzledSharedEncodingAttr::get(ty.getContext(), 1, 1, 1, order,
                                               ctaLayout);
@@ -412,10 +410,10 @@ void createTMAAsyncCopy(
   loadOp->erase();
 }
 
-void createTMAAsyncLoad(scf::ForOp forOp,
-                        tt::ExperimentalDescriptorLoadOp loadOp, Value alloc,
-                        Value insertIdx, Value extractIdx, Value barrier,
-                        Operation *waitOp, CoarseSchedule &schedule) {
+void createTMAAsyncLoad(scf::ForOp forOp, tt::DescriptorLoadOp loadOp,
+                        Value alloc, Value insertIdx, Value extractIdx,
+                        Value barrier, Operation *waitOp,
+                        CoarseSchedule &schedule) {
   return createTMAAsyncCopy(
       forOp, loadOp, loadOp.getDesc(), alloc, insertIdx, extractIdx, barrier,
       waitOp, schedule,
@@ -431,8 +429,7 @@ void createTMAAsyncLoad(scf::ForOp forOp,
       });
 }
 
-void createTMAAsyncGather(scf::ForOp forOp,
-                          tt::ExperimentalDescriptorGatherOp gatherOp,
+void createTMAAsyncGather(scf::ForOp forOp, tt::DescriptorGatherOp gatherOp,
                           Value alloc, Value insertIdx, Value extractIdx,
                           Value barrier, Operation *waitOp,
                           CoarseSchedule &schedule) {
@@ -583,8 +580,7 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
   // Only visit the top level ops, we do not support pipelining conditional
   // loads for now
   for (auto &op : forOp.getBody()->without_terminator()) {
-    if (isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp,
-            tt::ExperimentalDescriptorGatherOp>(op)) {
+    if (isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op)) {
       int stageDiff = getDefUseStageDiff(&op, forOp, schedule);
       if (stageDiff == 0 || !isa<RankedTensorType>(op.getResultTypes()[0])) {
         // Don't care about non-pipelined loads. Don't use async loads for
@@ -703,10 +699,10 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
     if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
       createAsyncCopy(forOp, loadOp, asyncLoad.alloc, insertIdx, extractIdx,
                       schedule);
-    } else if (auto loadOp = dyn_cast<tt::ExperimentalDescriptorLoadOp>(op)) {
+    } else if (auto loadOp = dyn_cast<tt::DescriptorLoadOp>(op)) {
       createTMAAsyncLoad(forOp, loadOp, asyncLoad.alloc, insertIdx, extractIdx,
                          asyncLoad.barrier, asyncLoad.waitOp, schedule);
-    } else if (auto loadOp = dyn_cast<tt::ExperimentalDescriptorGatherOp>(op)) {
+    } else if (auto loadOp = dyn_cast<tt::DescriptorGatherOp>(op)) {
       createTMAAsyncGather(forOp, loadOp, asyncLoad.alloc, insertIdx,
                            extractIdx, asyncLoad.barrier, asyncLoad.waitOp,
                            schedule);

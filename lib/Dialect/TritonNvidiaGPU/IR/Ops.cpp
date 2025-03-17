@@ -244,7 +244,7 @@ LogicalResult AsyncTMAGatherOp::verify() {
   triton::gpu::MemDescType resultType = getResult().getType();
   if (!resultType.getMutableMemory())
     return emitOpError("cannot store into immutable memory");
-  return ExperimentalDescriptorGatherOp::verifyResultType(*this, resultType);
+  return DescriptorGatherOp::verifyResultType(*this, resultType);
 }
 
 void AsyncTMAGatherOp::getEffects(
