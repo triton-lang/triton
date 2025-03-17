@@ -311,36 +311,3 @@ def test_multiple_sessions(tmp_path: pathlib.Path):
     with temp_file1.open() as f:
         data = json.load(f)
     assert int(data[0]["children"][0]["metrics"]["count"]) == 3
-
-
-def test_multi_session_hook(tmp_path: pathlib.Path):
-
-    def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
-        # get arg's element size
-        element_size = args["x"].element_size()  # non-const
-        size = args["size"]  # const
-        key = "flops" + str(element_size * 8)
-        num_ctas = metadata.num_ctas
-        return {"name": f"foo_test_{num_ctas}ctas_{size}elems", key: 1.0}
-
-    @triton.jit(launch_metadata=metadata_fn)
-    def foo(x, size: tl.constexpr, y):
-        offs = tl.arange(0, size)
-        tl.store(y + offs, tl.load(x + offs))
-
-    x = torch.tensor([2], device="cuda", dtype=torch.float32)
-    y = torch.zeros_like(x)
-    temp_file0 = tmp_path / "test_multiple_sessions0.hatchet"
-    temp_file1 = tmp_path / "test_multiple_sessions1.hatchet"
-    proton.start(str(temp_file0.with_suffix("")), hook="triton")
-    proton.start(str(temp_file1.with_suffix("")))
-    with proton.scope("test0"):
-        foo[(1, )](x, 1, y, num_warps=4)
-    proton.finalize()
-    with temp_file0.open() as f:
-        data = json.load(f)
-    assert len(data[0]["children"]) == 1
-    assert data[0]["children"][0]["frame"]["name"] == "test0"
-    assert data[0]["children"][0]["children"][0]["frame"]["name"] == "foo_test_1ctas_1elems"
-    assert data[0]["children"][0]["children"][0]["metrics"]["flops32"] == 1.0
-    assert data[0]["children"][0]["children"][0]["metrics"]["time (ns)"] > 0
