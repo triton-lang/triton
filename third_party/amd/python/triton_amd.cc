@@ -28,6 +28,8 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/TargetParser/TargetParser.h"
+
+#include <iostream>
 #include <pybind11/pybind11.h>
 #include <stdexcept>
 
@@ -114,7 +116,12 @@ void addControlConstant(llvm::Module *module, const char *name,
 
 } // namespace
 
-LLD_HAS_DRIVER(elf)
+namespace lld {
+namespace elf {
+bool link(llvm::ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
+          llvm::raw_ostream &stderrOS, bool exitEarly, bool disableOutput);
+}
+} // namespace lld
 
 static std::optional<std::string> lldInvoke(const char *inPath,
                                             const char *outPath) {
@@ -122,9 +129,9 @@ static std::optional<std::string> lldInvoke(const char *inPath,
                                        outPath};
   std::string errString;
   llvm::raw_string_ostream errStream(errString);
-  lld::Result s = lld::lldMain(args, llvm::outs(), errStream,
-                               {{lld::Gnu, &lld::elf::link}});
-  if (s.retCode || !s.canRunAgain) {
+  bool noErrors = lld::elf::link(args, llvm::outs(), errStream,
+                                 /*exitEarly=*/false, /*disableOutput*/ false);
+  if (!noErrors) {
     errStream.flush();
     return errString;
   }
