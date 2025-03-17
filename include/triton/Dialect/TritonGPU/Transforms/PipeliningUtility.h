@@ -66,9 +66,11 @@ void createBarrierDealloc(scf::ForOp forOp, Value barrierAlloc,
                           int numBarriers);
 
 // Return true if pipelining of MMA op is possible.
-bool isPipeliningOfMMAOpPossible(
-    Operation *op, scf::ForOp forOp,
+bool mmaHasPipelineableOperands(
+    Operation *mma, scf::ForOp forOp,
     std::function<bool(Operation *)> isLoadPipelineable);
+
+bool hasAccReadModifyWrite(Operation *mma, scf::ForOp forOp);
 
 } // namespace triton
 } // namespace mlir

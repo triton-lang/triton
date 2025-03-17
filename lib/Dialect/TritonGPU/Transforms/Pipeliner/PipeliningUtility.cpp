@@ -317,7 +317,7 @@ Value mlir::triton::createSingleBufferView(OpBuilder &builder, Value alloc,
       builder.create<arith::ConstantIntOp>(alloc.getLoc(), idx, 32));
 }
 
-bool mlir::triton::isPipeliningOfMMAOpPossible(
+bool mlir::triton::mmaHasPipelineableOperands(
     Operation *op, scf::ForOp forOp,
     std::function<bool(Operation *)> isLoadPipelineable) {
   assert((isa<ttng::MMAv5OpInterface>(op)) && "Only MMA ops are supported");
@@ -374,4 +374,77 @@ bool mlir::triton::isPipeliningOfMMAOpPossible(
       return false;
   }
   return true;
+}
+
+// Return true if the accumulator of an mma in subsequent iterations is either
+// independent from the previous iteration (overwritten) or completely reused,
+// without read-modify-write.
+// Otherwise, we can not pipeline the MMA, as we need to insert a wait after the
+// mma to read back the accumulator for RMW.
+bool mlir::triton::hasAccReadModifyWrite(Operation *op, scf::ForOp forOp) {
+  auto mma = cast<ttng::MMAv5OpInterface>(op);
+  auto tmemAlloc = mma.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
+  if (!tmemAlloc || !forOp.isDefinedOutsideOfLoop(tmemAlloc)) {
+    // Alloc not hoisted, or IR is not canonicalized. Pessimistically assume
+    // the accumulator is read-modify-written.
+    return true;
+  }
+  SmallVector<Operation *> stores;
+  SmallVector<Operation *> loads;
+  for (auto user : tmemAlloc->getUsers()) {
+    if (isa<ttng::TMEMStoreOp>(user) &&
+        forOp->isAncestor(user->getParentOp())) {
+      stores.push_back(cast<ttng::TMEMStoreOp>(user));
+    }
+    if (isa<ttng::TMEMLoadOp>(user) && forOp->isAncestor(user->getParentOp())) {
+      loads.push_back(cast<ttng::TMEMLoadOp>(user));
+    }
+  }
+  if (stores.empty() || loads.empty()) {
+    return false;
+  }
+  SmallVector<Value> readValues;
+  llvm::SetVector<Value> modifiedValues;
+  for (auto load : loads) {
+    readValues.push_back(load->getResult(0));
+  }
+  while (!readValues.empty()) {
+    Value v = readValues.pop_back_val();
+    for (auto &use : v.getUses()) {
+      if (llvm::is_contained(stores, use.getOwner())) {
+        continue; // R-W, not midified, this is safe
+      }
+      if (auto yieldOp = dyn_cast<scf::YieldOp>(use.getOwner())) {
+        if (auto ifOp = dyn_cast<scf::IfOp>(yieldOp->getParentOp())) {
+          readValues.push_back(ifOp.getResult(use.getOperandNumber()));
+        }
+        if (forOp == yieldOp->getParentOp()) {
+          readValues.push_back(forOp.getRegionIterArg(use.getOperandNumber()));
+        }
+      } else {
+        modifiedValues.insert(use.getOwner()->getResults().begin(),
+                              use.getOwner()->getResults().end());
+      }
+    }
+  }
+  while (!modifiedValues.empty()) {
+    Value v = modifiedValues.pop_back_val();
+    for (auto &use : v.getUses()) {
+      if (llvm::is_contained(stores, use.getOwner())) {
+        return true; // RMW!
+      }
+      if (auto yieldOp = dyn_cast<scf::YieldOp>(use.getOwner())) {
+        if (auto ifOp = dyn_cast<scf::IfOp>(yieldOp->getParentOp())) {
+          modifiedValues.insert(ifOp.getResult(use.getOperandNumber()));
+        }
+        if (forOp == yieldOp->getParentOp()) {
+          modifiedValues.insert(forOp.getRegionIterArg(use.getOperandNumber()));
+        }
+      } else {
+        modifiedValues.insert(use.getOwner()->getResults().begin(),
+                              use.getOwner()->getResults().end());
+      }
+    }
+  }
+  return false;
 }

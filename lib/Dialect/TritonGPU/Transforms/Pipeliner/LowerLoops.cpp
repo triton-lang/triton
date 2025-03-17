@@ -1083,7 +1083,7 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
   auto isLoadPipelineable = [&](Operation *op) {
     return schedule[mma].first > schedule[op].first;
   };
-  if (!isPipeliningOfMMAOpPossible(mma, forOp, isLoadPipelineable)) {
+  if (!mmaHasPipelineableOperands(mma, forOp, isLoadPipelineable)) {
     return forOp;
   }
   auto alloc = mma.getAccumulator().getDefiningOp<ttng::TMEMAllocOp>();
@@ -1097,7 +1097,7 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
   int tmemUseNumStages =
       tmemUseStageBounds.second - tmemUseStageBounds.first + 1;
   int waitNumStages = tmemUseStageBounds.second - schedule[mma].first + 1;
-  if (waitNumStages == 1) {
+  if (waitNumStages == 1 && !hasAccReadModifyWrite(mma, forOp)) {
     // Overlap the mma with itself, even if there is no use of the accumulator
     // after the mma
     waitNumStages = 2;
@@ -1126,8 +1126,10 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
   Value barrierIdx = forOp.getRegionIterArg(newOperandIndex + 1);
   Value bufIdx = forOp.getRegionIterArg(newOperandIndex + 2);
 
-  createBarrierAndWaitOps(forOp, schedule, mma, alloc, phase, barrierIdx,
-                          waitNumStages, waitNumStagesVal, zero, one);
+  if (waitNumStages > 1) {
+    createBarrierAndWaitOps(forOp, schedule, mma, alloc, phase, barrierIdx,
+                            waitNumStages, waitNumStagesVal, zero, one);
+  }
 
   if (tmemUseNumStages > 1) {
     multibufferTensorMemory(forOp, schedule, mma, alloc, bufIdx,

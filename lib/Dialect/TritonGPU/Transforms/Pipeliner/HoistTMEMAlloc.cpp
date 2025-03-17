@@ -210,7 +210,7 @@ public:
   }
 };
 
-class HoistTMEMStoreThroughFor : public OpRewritePattern<ttng::TMEMStoreOp> {
+class RotateTMEMStoreInLoop : public OpRewritePattern<ttng::TMEMStoreOp> {
 public:
   using OpRewritePattern::OpRewritePattern;
 
@@ -269,7 +269,7 @@ ttng::TMEMAllocOp hoistTMEMAlloc(ttng::TMEMAllocOp alloc, scf::ForOp forOp) {
 
   ModuleOp module = forOp->getParentOfType<ModuleOp>();
   mlir::RewritePatternSet patterns(module.getContext());
-  patterns.add<HoistTMEMStoreThroughFor, CombineTMEMLoadAndStore,
+  patterns.add<RotateTMEMStoreInLoop, CombineTMEMLoadAndStore,
                CombineTMEMStoreAndSelect, SinkTMEMLoad>(module.getContext());
   scf::ForOp::getCanonicalizationPatterns(patterns, module.getContext());
   if (applyPatternsGreedily(module, std::move(patterns)).failed()) {

@@ -5,6 +5,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "triton-loop-pipeline"
@@ -264,7 +265,8 @@ public:
       // If the acc can not be multibuffered, do not pipeline the uses of
       // the MMA to later stages.
       if (isa<ttng::MMAv5OpInterface>(op) &&
-          isPipeliningOfMMAOpPossible(&op, forOp, isLoadPipelineable) &&
+          mmaHasPipelineableOperands(&op, forOp, isLoadPipelineable) &&
+          !hasAccReadModifyWrite(cast<ttng::MMAv5OpInterface>(&op), forOp) &&
           !getDisallowAccMultiBuffer(forOp) &&
           isAccMultibufferingPossible(cast<ttng::MMAv5OpInterface>(&op),
                                       forOp)) {
@@ -361,7 +363,8 @@ void assignLatencies(ModuleOp moduleOp, int defaultNumStages, bool assignMMA) {
     }
     int numStages = getNumStagesOrDefault(forOp);
     AssignLoadLatencies(forOp, numStages, opLatency).run();
-    if (assignMMA) {
+    if (assignMMA || mlir::triton::tools::getBoolEnv("TRITON_NEW_PIPELINER") ||
+        1) {
       AssignMMALatencies(forOp, opLatency).run();
     }
   }
