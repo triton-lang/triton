@@ -108,6 +108,7 @@ jobs:
         -DLLVM_ENABLE_ASSERTIONS=ON
         -DMLIR_ENABLE_BINDINGS_PYTHON=ON
         -DLLVM_ENABLE_PROJECTS="mlir;lld"
+        -DLLVM_VERSION_SUFFIX="$short_llvm_commit_hash"
         -DLLVM_INSTALL_UTILS=ON
         -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
         -DLLVM_ENABLE_TERMINFO=OFF
@@ -131,6 +132,7 @@ jobs:
         -DLLVM_ENABLE_ASSERTIONS=ON
         -DMLIR_ENABLE_BINDINGS_PYTHON=ON
         -DLLVM_ENABLE_PROJECTS="mlir;llvm;lld"
+        -DLLVM_VERSION_SUFFIX="$short_llvm_commit_hash"
         -DLLVM_ENABLE_DIA_SDK=OFF
         -DLLVM_INSTALL_UTILS=ON
         -DLLVM_TARGETS_TO_BUILD="host;NVPTX;AMDGPU"
@@ -172,6 +174,7 @@ jobs:
         cmake -GNinja -Bllvm-project/build \
         -DCMAKE_BUILD_TYPE=Release \
         -DLLVM_ENABLE_PROJECTS="mlir;llvm;lld" \
+        -DLLVM_VERSION_SUFFIX="$short_llvm_commit_hash" \
         -DLLVM_BUILD_UTILS=ON \
         -DLLVM_TABLEGEN=$HOST_TOOLS/llvm-tblgen \
         -DMLIR_TABLEGEN=$HOST_TOOLS/mlir-tblgen \
@@ -226,6 +229,7 @@ jobs:
         -DLLVM_ENABLE_ASSERTIONS=ON
         -DMLIR_ENABLE_BINDINGS_PYTHON=ON
         -DLLVM_ENABLE_PROJECTS="mlir;lld"
+        -DLLVM_VERSION_SUFFIX="$short_llvm_commit_hash"
         -DLLVM_ENABLE_ZSTD=OFF
         -DLLVM_INSTALL_UTILS=ON
         -DLLVM_TARGETS_TO_BUILD="AArch64;NVPTX;AMDGPU"
@@ -247,6 +251,7 @@ jobs:
         docker rmi -f $(docker images -q)
 
         docker build --tag llvm-build --build-arg llvm_dir=llvm-project \
+          --build-arg short_llvm_commit_hash=$short_llvm_commit_hash \
           -f llvm-build/.github/workflows/llvm-build/centos.Dockerfile .
 
         # Create temporary container to copy cache and installed artifacts.
@@ -270,6 +275,7 @@ jobs:
         docker rmi -f $(docker images -q)
 
         docker build --tag llvm-build --build-arg llvm_dir=llvm-project \
+          --build-arg short_llvm_commit_hash=$short_llvm_commit_hash \
           -f llvm-build/.github/workflows/llvm-build/almalinux.Dockerfile .
 
         # Create temporary container to copy cache and installed artifacts.

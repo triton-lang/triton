@@ -333,4 +333,6 @@ void init_triton_amd(py::module &&m) {
                                      inPath + " into object file " + outPath +
                                      " because " + errString.value());
         });
+
+  m.def("llvm_version", []() { return LLVM_VERSION_STRING; });
 }

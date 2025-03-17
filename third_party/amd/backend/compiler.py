@@ -399,4 +399,4 @@ class HIPBackend(BaseBackend):
 
     @functools.lru_cache()
     def hash(self):
-        return f'{self.target}'
+        return f'{amd.llvm_version()}-{self.target}'
