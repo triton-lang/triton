@@ -1,5 +1,5 @@
-#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Support/LLVM.h"
@@ -15,9 +15,8 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/Support/Casting.h"
-#include "llvm/Support/CodeGen.h"
 #include "llvm/Support/LogicalResult.h"
+#include "llvm/Support/raw_ostream.h"
 
 #define DEBUG_TYPE "tritongpu-wgmma-prefetch"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -205,7 +204,7 @@ LogicalResult WGMMAPrefetcher::initialize() {
     Operation *op = v.getDefiningOp();
     bool foundConvertFromShared = false;
     SmallVector<Value> rets;
-    if (dyn_cast<LocalAllocOp>(op)) {
+    if (isa<LocalAllocOp>(op)) {
       return rets;
     }
 
@@ -238,6 +237,14 @@ LogicalResult WGMMAPrefetcher::initialize() {
   };
 
   for (ttng::WarpGroupDotOp dotOp : dotsInFor) {
+    // If getMaxNumImpreciseAcc > 0, WGMMA.cpp will have
+    // extra treatment for dotOp (e.g., add accumulator).
+    // Therefore, we disable the optimization here
+    // when getMaxNumImpreciseAcc > 0;
+    if(dotOp.getMaxNumImpreciseAcc() > 0){
+      return failure();
+    }
+
     auto aType = dotOp.getA().getType();
     auto bType = dotOp.getB().getType();
 
@@ -247,13 +254,10 @@ LogicalResult WGMMAPrefetcher::initialize() {
     if (!aEnc || !bEnc) {
       return failure();
     }
-    // Currently, the subitling + prefetching would fail if BLOCK_K = 64
-    // and the input for wgmma is 32bit. Disable the optimization for
-    // 32-bit input which need further inverstigation
     auto aElementBitWidth = aType.getElementTypeBitWidth();
     auto bElementBitWidth = bType.getElementTypeBitWidth();
-    assert((aElementBitWidth = bElementBitWidth) &&
-           "BitWidth of a and b for dot  does not match");
+    assert((aElementBitWidth == bElementBitWidth) &&
+           "BitWidth of a and b for dot does not match");
 
     // Get Prefetchwidth based on the instruction shape in K dim
     auto dType = dotOp.getType();
@@ -368,21 +372,36 @@ scf::ForOp WGMMAPrefetcher::createNewForOp() {
         PrefetchedA.push_back(aRem);
       }
 
-      Operation *prevDot;
+      nvidia_gpu::WarpGroupDotOp prevDot;
       // Interleave elementwise with WGMMA
+      llvm::errs() << "get useC \n";
+      Value UseC = nullptr;
+      if(dot.getUseC()){
+        UseC = mapping.lookup(dot.getUseC());
+      }
+      Value OpC = mapping.lookup(dot.getC());
+      llvm::errs() << "after get useC \n";
+
       for (int i = 0; i < subTileCnt; i++) {
         cloneElementwiseOps(PrefetchedA[i], dot2aValsElementWise[dot],
                             dot2aValsLocalLoad[dot].back(), builder);
         Value bSubtile = generatePrefetch(mapping.lookup(dot2bSrcMemDesc[dot]),
                                           1, false, false, dotEncoding, builder,
                                           prefetchWidth * i, prefetchWidth);
-        newOp = builder.clone(*dot, mapping);
-        newOp->setOperand(0, PrefetchedA[i]);
-        newOp->setOperand(1, bSubtile);
-        if (i > 0)
-          newOp->setOperand(2, prevDot->getResult(0));
-        prevDot = newOp;
+        if(i > 0){
+          OpC = prevDot.getResult();
+          // for subtiles with index > 0, useC is set to 1 for
+          // using the result of prevDot
+          UseC = builder.create<mlir::arith::ConstantIntOp>(newOp->getLoc(), 1, 1);
+        }
+        auto newDotOp = builder.create<nvidia_gpu::WarpGroupDotOp>(
+            newOp->getLoc(), dot.getType(),
+            PrefetchedA[i], bSubtile, OpC, UseC, dot.getInputPrecision(),
+            dot.getMaxNumImpreciseAcc(), dot.getIsAsync()
+            );
+        prevDot = newDotOp;
       }
+      newOp = (Operation *) prevDot;
     }
     auto dotWait = dyn_cast<nvidia_gpu::WarpGroupDotWaitOp>(newOp);
     if (dotWait) {
