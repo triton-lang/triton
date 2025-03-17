@@ -5,7 +5,7 @@ import pathlib
 
 from triton._C.libproton import proton as libproton
 from .flags import set_profiling_off, set_profiling_on, is_command_line
-from .hook import HookManager, LaunchHook, InstrumentationHook
+from .hooks import HookManager, LaunchHook, InstrumentationHook
 from typing import Optional
 
 DEFAULT_PROFILE_NAME = "proton"

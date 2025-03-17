@@ -86,7 +86,7 @@ class HookManager:
             for hook in HookManager.active_hooks:
                 hook.deactivate()
             HookManager.active_hooks.clear()
-            HookManager.sessions.clear()
+            HookManager.session_hooks.clear()
         else:
             popped_hooks = HookManager.session_hooks.pop(session)
             # Deactivate hooks that are not used by any other session

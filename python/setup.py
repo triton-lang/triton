@@ -705,7 +705,7 @@ def get_packages():
     packages += get_extra_packages("language")
     packages += get_extra_packages("tools")
     if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
-        packages += ["triton/profiler"]
+        packages += ["triton/profiler", "triton/profiler/hooks"]
 
     return packages
 

@@ -6,12 +6,10 @@
 
 namespace mlir::triton {
 namespace proton {
-namespace gpu {
 void populateProtonGPUOpPatterns(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns,
                                  const TargetInfoBase &targetInfo,
                                  PatternBenefit benefit);
-} // namespace gpu
 } // namespace proton
 } // namespace mlir::triton
 
