@@ -147,7 +147,7 @@ class HIPBackend(BaseBackend):
     @staticmethod
     @functools.lru_cache()
     def use_buffer_ops():
-        return os.environ.get("AMDGCN_USE_BUFFER_OPS", "0") == "1"
+        return os.environ.get("AMDGCN_USE_BUFFER_OPS", "1") == "1"
 
     @staticmethod
     def is_within_2gb(arg):
