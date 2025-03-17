@@ -8,6 +8,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <numeric>
 #include <set>
 #include <string>
 #include <vector>
@@ -135,19 +136,23 @@ private:
 
   void removeSession(size_t sessionId);
 
-  template <typename Interface, typename Counter>
-  bool checkInterface(size_t sessionId, Counter &interfaceCounts) {
+  template <typename Interface, typename Counter, size_t activeLimit>
+  bool checkInterfaceCount(size_t sessionId, Counter &interfaceCounts) {
     auto interfaces = sessions[sessionId]->getInterfaces<Interface>();
+    size_t total = 0;
     for (auto *interface : interfaces) {
-      auto it = std::find_if(
-          interfaceCounts.begin(), interfaceCounts.end(),
-          [interface](const auto &pair) { return pair.first == interface; });
-
-      if (it != interfaceCounts.end()) {
-        return true;
+      // Count number of active interfaces of the same type
+      size_t count =
+          std::accumulate(interfaceCounts.begin(), interfaceCounts.end(), 0,
+                          [interface](size_t sum, const auto &pair) {
+                            return sum + (pair.first == interface);
+                          });
+      total += count;
+      if (total > activeLimit) {
+        return false;
       }
     }
-    return false;
+    return true;
   }
 
   template <typename Interface, typename Counter, bool isRegistering>
