@@ -7,7 +7,7 @@ import pytest
 
 def do_bench(kernel_call, quantiles, use_cuda_graph=False):
     if use_cuda_graph:
-        return triton.testing.do_bench_cudagraph(kernel_call, quantiles=quantiles, warmup=1, rep=1)
+        return triton.testing.do_bench_cudagraph(kernel_call, quantiles=quantiles)
     return triton.testing.do_bench(kernel_call, quantiles=quantiles, warmup=1, rep=1)
 
 
