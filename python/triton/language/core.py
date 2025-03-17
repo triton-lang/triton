@@ -2936,10 +2936,14 @@ class range:
     :param flatten: automatically flatten the loop nest starting at this loop to
         create a single flattened loop. The compiler will try to pipeline the
         flattened loop which can avoid stage stalling.
+    :param warp_specialize: Enable automatic warp specialization on the loop.
+        The compiler will attempt to partition memory, MMA, and vector
+        operations in the loop into separate async partitions. This will
+        increase the total number of warps required by the kernel.
     """
 
     def __init__(self, arg1, arg2=None, step=None, num_stages=None, loop_unroll_factor=None,
-                 disallow_acc_multi_buffer=False, flatten=False):
+                 disallow_acc_multi_buffer=False, flatten=False, warp_specialize=False):
         if step is None:
             self.step = constexpr(1)
         else:
@@ -2954,6 +2958,7 @@ class range:
         self.loop_unroll_factor = loop_unroll_factor
         self.disallow_acc_multi_buffer = disallow_acc_multi_buffer
         self.flatten = flatten
+        self.warp_specialize = warp_specialize
 
     def __iter__(self):
         raise RuntimeError("tl.range can only be used in @triton.jit'd functions")

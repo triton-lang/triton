@@ -1238,14 +1238,16 @@ ttg::LocalAllocOp findShmemAlloc(Value operand) {
       transitiveOperand = transitiveOperand.getDefiningOp()->getOperand(0);
     }
   }
-  if (auto subView =
-          dyn_cast<ttg::MemDescSubviewOp>(transitiveOperand.getDefiningOp())) {
+  if (auto subView = dyn_cast_or_null<ttg::MemDescSubviewOp>(
+          transitiveOperand.getDefiningOp())) {
     // Multi-buffered operand
-    return dyn_cast<ttg::LocalAllocOp>(subView.getSrc().getDefiningOp());
+    return dyn_cast_or_null<ttg::LocalAllocOp>(
+        subView.getSrc().getDefiningOp());
   } else {
     // Single bufferred operand that does not require a subview (not loaded in
     // the loop)
-    return dyn_cast<ttg::LocalAllocOp>(transitiveOperand.getDefiningOp());
+    return dyn_cast_or_null<ttg::LocalAllocOp>(
+        transitiveOperand.getDefiningOp());
   }
   return nullptr;
 }

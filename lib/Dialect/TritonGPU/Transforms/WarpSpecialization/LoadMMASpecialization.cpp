@@ -125,7 +125,7 @@ static void lowerTMACopy(ImplicitLocOpBuilder &b,
   }
 }
 
-LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp loop,
+LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
                                                          int defaultNumStages) {
   auto ops = llvm::to_vector(loop.getOps<ttng::MMAv5OpInterface>());
   // Support only 1 MMA op.
@@ -158,12 +158,14 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp loop,
   };
 
   // Rewrite the loop to pass things through buffers.
+  unsigned idx = cast<BlockArgument>(accAlloc.getSrc()).getArgNumber() - 1;
   Value newAlloc = createTMemAlloc(b, accAlloc, /*multiBufferred=*/false,
                                    /*numStages=*/1);
   Value mmaBarrier = createBarrierAlloc(loop, /*numBarriers=*/1);
+  b.create<ttng::TMEMStoreOp>(newAlloc, loop.getInitArgs()[idx],
+                              intCst(true, /*width=*/1));
   mmaOp.setBarrier(mmaBarrier);
   accAlloc.replaceAllUsesWith(newAlloc);
-  unsigned idx = cast<BlockArgument>(accAlloc.getSrc()).getArgNumber() - 1;
   accLoad->dropAllUses();
   accLoad->moveAfter(loop);
   loop.getResult(idx).replaceAllUsesWith(accLoad);
@@ -179,8 +181,6 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp loop,
   auto bType = cast<RankedTensorType>(bLoad->getResult(0).getType());
   SharedEncodingTrait aEnc = getSharedEncoding(aChain.back());
   SharedEncodingTrait bEnc = getSharedEncoding(bChain.back());
-  aEnc.dump();
-  bEnc.dump();
   Value aAlloc = createAlloc(loop, aType, aLoad->getLoc(), aEnc, numBuffers);
   Value bAlloc = createAlloc(loop, bType, bLoad->getLoc(), bEnc, numBuffers);
 
@@ -212,7 +212,7 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp loop,
   phase = b.create<arith::SelectOp>(
       rollover, b.create<arith::XOrIOp>(phase, intCst(1)), phase);
 
-  Value nextMmaPhase = b.create<arith::XOrIOp>(phase, intCst(1));
+  Value nextMmaPhase = b.create<arith::XOrIOp>(mmaPhase, intCst(1));
   auto yield = cast<scf::YieldOp>(loop.getBody()->getTerminator());
   yield->insertOperands(yield.getNumOperands(), {index, phase, nextMmaPhase});
 
@@ -238,11 +238,15 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp loop,
   Value aView = createSingleBufferView(b, aAlloc, index);
   lowerTMACopy(b, *loadPartition, aLoad, curLoadBarrier, aView);
   replaceUsesAndPropagateType(b, *aLoad->user_begin(), aView);
+  aLoad->user_begin()->erase();
+  aLoad->erase();
 
   b.setInsertionPoint(bLoad);
   Value bView = createSingleBufferView(b, bAlloc, index);
   lowerTMACopy(b, *loadPartition, bLoad, curLoadBarrier, bView);
   replaceUsesAndPropagateType(b, *bLoad->user_begin(), bView);
+  bLoad->user_begin()->erase();
+  bLoad->erase();
 
   // Place the remaining users in the MMA partition. Re-acquire the use chain
   // because some ops were invalidated by `replaceUsesAndPropagateType`.
@@ -297,7 +301,12 @@ struct LoadMMASpecialization
 
 void LoadMMASpecialization::runOnOperation() {
   SmallVector<scf::ForOp> loops;
-  getOperation().walk([&](scf::ForOp loop) { loops.push_back(loop); });
-  for (scf::ForOp loop : loops)
-    (void)specializeLoadMMADependencies(loop, /*defaultNumStages=*/3);
+  getOperation().walk([&](scf::ForOp loop) {
+    if (loop->hasAttr("tt.warp_specialize"))
+      loops.push_back(loop);
+  });
+  for (scf::ForOp loop : loops) {
+    if (failed(specializeLoadMMADependencies(loop, numStages)))
+      continue;
+  }
 }
