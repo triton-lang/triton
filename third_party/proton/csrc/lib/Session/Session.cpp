@@ -116,13 +116,6 @@ void SessionManager::activateSessionImpl(size_t sessionId) {
   registerInterface<ScopeInterface>(sessionId, scopeInterfaceCounts);
   registerInterface<OpInterface>(sessionId, opInterfaceCounts);
   registerInterface<ContextSource>(sessionId, contextSourceCounts);
-  if (!checkInterfaceCount<InstrumentationInterface,
-                           decltype(instrumentationInterfaceCounts),
-                           /*activeLimit=*/1>(sessionId,
-                                              instrumentationInterfaceCounts)) {
-    throw std::runtime_error(
-        "Only one active instrumentation interface is allowed");
-  }
 }
 
 void SessionManager::deActivateSessionImpl(size_t sessionId) {

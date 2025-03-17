@@ -38,9 +38,8 @@ class CudaAllocator:
 
 
 class InstrumentationHook(Hook):
-    # It's important to note that no other sessions can be active
-    # when the session with the instrumentation hook is active.
-    # The check is enforced by the proton library.
+    # It's important to note that only one instance of the instrumentation hook can be active at a time.
+    active_count = 0
 
     def __init__(self, mode: str,  #
                  profile_buffer_size: int = 16 * 1024 * 1024,  #
@@ -57,6 +56,11 @@ class InstrumentationHook(Hook):
         self.buffer = None
 
     def activate(self):
+        if InstrumentationHook.active_count > 0:
+            raise RuntimeError("Only one instance of the instrumentation hook can be active at a time.")
+
+        InstrumentationHook.active_count += 1
+
         set_instrumentation_on()
         # Set up the profiling allocator
         set_profile_allocator(self.allocator)
@@ -73,6 +77,11 @@ class InstrumentationHook(Hook):
         JITFunction.run = instrumented_run
 
     def deactivate(self):
+        if InstrumentationHook.active_count == 0:
+            return
+
+        InstrumentationHook.active_count -= 1
+
         set_instrumentation_off()
 
         # Restore original JIT function run method

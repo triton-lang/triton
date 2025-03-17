@@ -136,25 +136,6 @@ private:
 
   void removeSession(size_t sessionId);
 
-  template <typename Interface, typename Counter, size_t activeLimit>
-  bool checkInterfaceCount(size_t sessionId, Counter &interfaceCounts) {
-    auto interfaces = sessions[sessionId]->getInterfaces<Interface>();
-    size_t total = 0;
-    for (auto *interface : interfaces) {
-      // Count number of active interfaces of the same type
-      size_t count =
-          std::accumulate(interfaceCounts.begin(), interfaceCounts.end(), 0,
-                          [interface](size_t sum, const auto &pair) {
-                            return sum + (pair.first == interface);
-                          });
-      total += count;
-      if (total > activeLimit) {
-        return false;
-      }
-    }
-    return true;
-  }
-
   template <typename Interface, typename Counter, bool isRegistering>
   void updateInterfaceCount(size_t sessionId, Counter &interfaceCounts) {
     auto interfaces = sessions[sessionId]->getInterfaces<Interface>();

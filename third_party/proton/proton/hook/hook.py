@@ -1,6 +1,6 @@
 from triton.compiler import LazyDict
 from abc import abstractmethod
-from typing import Dict, Any, Type, Optional
+from typing import Dict, Any, Optional, Set
 from collections import defaultdict
 from triton.compiler.compiler import CompiledKernel
 
@@ -29,61 +29,53 @@ class Hook:
 
 
 class HookManager:
-    # hook_type -> hook
-    hooks: Dict[Type[Hook], Hook] = defaultdict(Hook)
+    # active hooks
+    active_hooks: Set[Hook] = set()
     # session_id -> (hook_type -> active)
-    sessions: Dict[int, Dict[Type[Hook], bool]] = defaultdict(lambda: defaultdict(lambda: False))
+    session_hooks: Dict[int, Dict[Hook, bool]] = defaultdict(lambda: defaultdict(bool))
 
     @staticmethod
     def init_handle(function: Any, module: Any, metadata_group: Dict[str, str]) -> None:
-        for hook in HookManager.hooks.values():
+        for hook in HookManager.active_hooks:
             hook.init_handle(function, module, metadata_group)
 
     @staticmethod
     def enter(lazy_dict: LazyDict) -> None:
-        for hook in HookManager.hooks.values():
+        for hook in HookManager.active_hooks:
             hook.enter(lazy_dict)
 
     @staticmethod
     def exit(lazy_dict: LazyDict) -> None:
-        for hook in HookManager.hooks.values():
+        for hook in HookManager.active_hooks:
             hook.exit(lazy_dict)
 
     @staticmethod
-    def _collect_hook_types(session: Optional[int] = None) -> set:
-        hook_types = []
-        if session:
-            hook_types = HookManager.sessions[session]
-        else:
-            hook_types = set(hook_type for session_hooks in HookManager.sessions.values()
-                             for hook_type in session_hooks)
-        return hook_types
-
-    @staticmethod
     def activate(session: Optional[int] = None) -> None:
-        hook_types = HookManager._collect_hook_types(session)
-        for hook_type in hook_types:
-            HookManager.sessions[session][hook_type] = True
-            if hook_type not in HookManager.hooks:
-                HookManager.hooks[hook_type].activate()
+        for hook in HookManager.session_hooks[session]:
+            if hook not in HookManager.active_hooks:
+                hook.activate()
+                HookManager.active_hooks.add(hook)
+            HookManager.session_hooks[session][hook] = True
 
     @staticmethod
     def deactivate(session: Optional[int] = None) -> None:
-        hook_types = HookManager._collect_hook_types(session)
-        for hook_type in hook_types:
-            HookManager.sessions[session][hook_type] = False
-            if not any(session_hooks[hook_type] for session_hooks in HookManager.sessions.values()):
-                HookManager.hooks[hook_type].deactivate()
+        for hook in HookManager.session_hooks[session]:
+            HookManager.session_hooks[session][hook] = False
+            # Check if any other sessions rely on this hook
+            if not any(session_hooks[hook] for session_hooks in HookManager.session_hooks.values()):
+                hook.deactivate()
+                HookManager.active_hooks.remove(hook)
 
     @staticmethod
     def register(hook: Hook, session: int) -> None:
-        HookManager.sessions[session][type(hook)] = True
-        if type(hook) not in HookManager.hooks:
+        HookManager.session_hooks[session][hook] = True
+        if hook not in HookManager.active_hooks:
             hook.activate()
-            HookManager.hooks[type(hook)] = hook
-        CompiledKernel.launch_enter_hook = HookManager.enter
-        CompiledKernel.launch_exit_hook = HookManager.exit
-        CompiledKernel.init_handle_hook = HookManager.init_handle
+            HookManager.active_hooks.add(hook)
+        if CompiledKernel.launch_enter_hook is None:
+            CompiledKernel.launch_enter_hook = HookManager.enter
+            CompiledKernel.launch_exit_hook = HookManager.exit
+            CompiledKernel.init_handle_hook = HookManager.init_handle
 
     @staticmethod
     def unregister(session: Optional[int] = None) -> None:
@@ -91,19 +83,20 @@ class HookManager:
             return
 
         if not session:
-            for hook in HookManager.hooks.values():
+            for hook in HookManager.active_hooks:
                 hook.deactivate()
-            HookManager.hooks.clear()
+            HookManager.active_hooks.clear()
             HookManager.sessions.clear()
         else:
-            hook_types = HookManager._collect_hook_types(session)
+            popped_hooks = HookManager.session_hooks.pop(session)
             # Deactivate hooks that are not used by any other session
-            for hook_type in hook_types:
-                if not any(session_hooks[hook_type] for session_hooks in HookManager.sessions.values()):
-                    HookManager.hooks[hook_type].deactivate()
-                    HookManager.sessions[session][hook_type] = False
-                    HookManager.hooks.pop(hook_type)
-        if not HookManager.hooks:
+            for hook, active in popped_hooks.items():
+                if not active:
+                    continue
+                if not any(session_hooks[hook] for session_hooks in HookManager.session_hooks.values()):
+                    hook.deactivate()
+                    HookManager.active_hooks.remove(hook)
+        if not HookManager.active_hooks:
             CompiledKernel.launch_enter_hook = None
             CompiledKernel.launch_exit_hook = None
             CompiledKernel.init_handle_hook = None

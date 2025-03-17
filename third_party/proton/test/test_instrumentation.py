@@ -17,9 +17,6 @@ def test_record(tmp_path: pathlib.Path):
     if is_hip():
         pytest.skip("HIP backend does not support record")
 
-    import os
-    os.environ["TEST_PROFILE_SCRATCH_SIZE"] = "1"
-
     @triton.jit
     def add_kernel(
         x_ptr,
@@ -51,7 +48,6 @@ def test_record(tmp_path: pathlib.Path):
     proton.start(str(temp_file.with_suffix("")), backend="instrumentation")
     pgm = add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
     proton.finalize()
-    os.environ["TEST_PROFILE_SCRATCH_SIZE"] = "0"
     ttir = pgm.asm['ttir']
     assert "proton.record start" in ttir
     assert "proton.record end" in ttir
@@ -61,9 +57,6 @@ def test_hook_instrumentation(tmp_path):
     # TODO(Keren): Remove hacks
     if is_hip():
         pytest.skip("HIP backend does not support record")
-
-    import os
-    os.environ["TEST_PROFILE_SCRATCH_SIZE"] = "1"
 
     @triton.jit
     def foo(x, size: tl.constexpr, y):
@@ -80,6 +73,5 @@ def test_hook_instrumentation(tmp_path):
     device = triton.runtime.driver.active.get_current_device()
     assert len(foo.device_caches[device][0]) == 1, "Kernel should be cached"
     proton.finalize()
-    os.environ["TEST_PROFILE_SCRATCH_SIZE"] = "0"
     foo[(1, )](x, 1, y, num_warps=4)
     assert len(foo.device_caches[device][0]) == 2, "Instrumented and uninstrumented kernels both should be cached"

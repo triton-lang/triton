@@ -7,12 +7,19 @@ COMPUTE_METADATA_SCOPE_NAME = "__proton_launch_metadata"
 
 
 class LaunchHook(Hook):
+    # This is a singleton class
+    _instance = None
     flops_width = [8, 16, 32, 64]
     metrics = [f"flops{width}" for width in flops_width] + ["bytes"] + ["flops"]
 
     def __init__(self):
-        self.name = None
+        self.op_name = None
         self.id = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(LaunchHook, cls).__new__(cls)
+        return cls._instance
 
     def init_handle(self, function, module, metadata_group):
         pass
@@ -28,10 +35,10 @@ class LaunchHook(Hook):
         metadata = lazy_dict.get()
         exit_state()
         fn_metrics = {k: metadata[k] for k in LaunchHook.metrics if k in metadata}
-        self.name = metadata["name"]
+        self.op_name = metadata["name"]
         self.id = libproton.record_scope()
         libproton.enter_op(self.id, metadata["name"])
         libproton.add_metrics(self.id, fn_metrics)
 
     def exit(self, lazy_dict: LazyDict) -> None:
-        libproton.exit_op(self.id, self.name)
+        libproton.exit_op(self.id, self.op_name)
