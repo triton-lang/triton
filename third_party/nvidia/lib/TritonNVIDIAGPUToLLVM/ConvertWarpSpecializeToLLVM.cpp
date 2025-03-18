@@ -109,6 +109,7 @@ static LogicalResult rewriteWarpGroupBarriers(LLVM::LLVMFuncOp func,
                                               unsigned threadsPerWarp,
                                               unsigned defaultWarpGroupSize) {
   // HACK: Turn all `nvvm.barrier0` ops into warp group barriers.
+  SmallVector<NVVM::Barrier0Op> to_erase;
   func.walk<mlir::WalkOrder::PreOrder>([&](Operation *op) {
     // Walk into default regions but not partition regions.
     if (isa<WarpSpecializePartitionsOp>(op))
@@ -117,11 +118,14 @@ static LogicalResult rewriteWarpGroupBarriers(LLVM::LLVMFuncOp func,
     if (auto bar = dyn_cast<NVVM::Barrier0Op>(op)) {
       TritonLLVMIRRewriter b(bar.getLoc(), bar);
       createBarrier(b, /*barIdx=*/0, defaultWarpGroupSize, /*aligned=*/true);
-      bar.erase();
+      to_erase.push_back(bar);
       return WalkResult::advance();
     }
     return WalkResult::advance();
   });
+  for (auto bar : to_erase) {
+    bar.erase();
+  }
 
   // Each partition executes simultaneously, so each will get a different
   // barrier ID, but note this means there is a maximum of 16 barriers.
