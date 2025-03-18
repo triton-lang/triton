@@ -243,8 +243,8 @@ def test_tensor_descriptor_store_downcast(dtype_str):
 
     @triton.jit
     def kernel(out_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
-        moffset = tl.program_id(0) * M_BLOCK
-        noffset = tl.program_id(1) * N_BLOCK
+        moffset = tl.program_id(axis=0) * M_BLOCK
+        noffset = tl.program_id(axis=1) * N_BLOCK
         midx = moffset + tl.arange(0, M_BLOCK)[:, None]
         nidx = noffset + tl.arange(0, N_BLOCK)[None, :]
         # Generate a float32 block based on linear indices.
@@ -258,14 +258,14 @@ def test_tensor_descriptor_store_downcast(dtype_str):
         desc.store([moffset, noffset], val_f32)
 
     M, N = 32, 128
-    # baseline pattern 0..M*N-1 in the target dtype
     torch_dtype = getattr(torch, dtype_str)
-    baseline = torch.arange(M * N, dtype=torch.float32).reshape(M, N).to(torch_dtype)
     M_BLOCK = 8
     N_BLOCK = 32
-    out = torch.empty((M, N), dtype=torch_dtype, device="cuda")
     grid_m = M // M_BLOCK
     grid_n = N // N_BLOCK
-
-    def alloc_fn(size: int, align: int, stream: Optional[int]):
-        assert size == 128 * (grid_m * grid_n)
+    out = torch.empty((M, N), dtype=torch_dtype, device="cuda")
+    # Launch kernel over blocks covering entire tensor
+    kernel[(grid_m, grid_n)](out, M, N, M_BLOCK=M_BLOCK, N_BLOCK=N_BLOCK)
+    baseline = torch.arange(M * N, dtype=torch.float32).reshape(M, N).to(torch_dtype)
+    # Verify block written values match baseline pattern after downcast
+    torch.testing.assert_close(unwrap_tensor(out), unwrap_tensor(baseline))
