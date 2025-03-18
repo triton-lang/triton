@@ -629,7 +629,7 @@ def get_package_dirs():
                 yield (f"triton.tools.extra.{x}", os.path.join(backend.tools_dir, x))
 
     if check_env_flag("TRITON_BUILD_PROTON", "ON"):  # Default ON
-        yield ("triton.profiler", "third_party/proton/proton")
+        yield ("triton.profiler", "third_party/proton/proton", "third_party/proton/proton/hooks")
 
 
 def get_packages():
