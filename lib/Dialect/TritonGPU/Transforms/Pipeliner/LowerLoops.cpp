@@ -178,14 +178,14 @@ int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
 template <typename BuilderT>
 Value createIncrementModulo(BuilderT &builder, Location loc, Value counter,
                             Value modulus, Value zero, Value one,
-                            Value *outCond = nullptr) {
+                            Value *outWrapCond = nullptr) {
   Value addOne = builder.template create<arith::AddIOp>(loc, counter, one);
-  Value inRangeCond = builder.template create<arith::CmpIOp>(
-      loc, arith::CmpIPredicate::slt, addOne, modulus);
-  if (outCond)
-    *outCond = inRangeCond;
-  return builder.template create<arith::SelectOp>(loc, inRangeCond, addOne,
-                                                  zero);
+  Value outOfRangeCond = builder.template create<arith::CmpIOp>(
+      loc, arith::CmpIPredicate::sge, addOne, modulus);
+  if (outWrapCond)
+    *outWrapCond = outOfRangeCond;
+  return builder.template create<arith::SelectOp>(loc, outOfRangeCond, zero,
+                                                  addOne);
 }
 
 /////////////////////////////
