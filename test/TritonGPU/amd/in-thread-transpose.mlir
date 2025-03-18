@@ -222,6 +222,26 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, ttg.targ
 
 // CHECK-LABEL: inThreadTranspose_multiple_local_loads
 
+// CHECK: [[LOAD_ADDR:%.*]] = tt.splat
+// CHECK: [[IF:%.*]] = scf.if
+// CHECK-DAG: [[LOAD_ADDR_CVT1:%.*]] = ttg.convert_layout [[LOAD_ADDR]]
+// CHECK-DAG: [[LOAD_VAL1:%.*]] = tt.load [[LOAD_ADDR_CVT1]]
+// CHECK-DAG: [[LOAD_VAL1_CVT1:%.*]] = ttg.convert_layout [[LOAD_VAL1]]
+// CHECK-DAG: [[LOAD_VAL1_CVT2:%.*]] = ttg.convert_layout [[LOAD_VAL1_CVT1:%.*]]
+// CHECK-DAG: [[TRANSPOSED_IN_REG1:%.*]] = amdgpu.in_thread_transpose [[LOAD_VAL1_CVT2]]
+// CHECK-DAG: [[LOCAL_ALLOC1:%.*]] = ttg.local_alloc [[TRANSPOSED_IN_REG1]]
+// CHECK-DAG: [[LOCAL_LOAD1:%.*]] = ttg.local_load [[LOCAL_ALLOC1]]
+// CHECK-DAG: scf.yield [[LOCAL_LOAD1]]
+// CHECK: } else {
+// CHECK-DAG: [[LOAD_ADDR_CVT2:%.*]] = ttg.convert_layout [[LOAD_ADDR]]
+// CHECK-DAG: [[LOAD_VAL2:%.*]] = tt.load [[LOAD_ADDR_CVT2]]
+// CHECK-DAG: [[LOAD_VAL2_CVT1:%.*]] = ttg.convert_layout [[LOAD_VAL2]]
+// CHECK-DAG: [[LOAD_VAL2_CVT2:%.*]] = ttg.convert_layout [[LOAD_VAL2_CVT1:%.*]]
+// CHECK-DAG: [[TRANSPOSED_IN_REG2:%.*]] = amdgpu.in_thread_transpose [[LOAD_VAL2_CVT2]]
+// CHECK-DAG: [[LOCAL_ALLOC2:%.*]] = ttg.local_alloc [[TRANSPOSED_IN_REG2]]
+// CHECK-DAG: [[LOCAL_LOAD2:%.*]] = ttg.local_load [[LOCAL_ALLOC2]]
+// CHECK-DAG: scf.yield [[LOCAL_LOAD2]]
+// CHECK: tt.dot {{.*}}, [[IF]]
 #blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 8], warpsPerCTA = [8, 1], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [1, 8], order = [1, 0]}>
 #shared = #ttg.swizzled_shared<{vec = 4, perPhase = 2, maxPhase = 4, order = [0, 1], CTAsPerCGA = [1, 1], CTASplitNum = [1, 1], CTAOrder = [0, 1]}>

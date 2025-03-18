@@ -2,7 +2,7 @@
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Support/LLVM.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "mlir/Transforms/WalkPatternRewriteDriver.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
@@ -84,9 +84,10 @@ static Type replaceEncoding(Type type, Attribute encoding) {
                                tensorType.getElementType(), encoding);
 }
 
-void refineGlobalLoadLayout(Attribute encoding, tt::LoadOp load) {
-  OpBuilder builder(load);
+void refineGlobalLoadLayout(PatternRewriter &rewriter, Attribute encoding,
+                            tt::LoadOp load) {
   auto loc = load->getLoc();
+  rewriter.setInsertionPoint(load);
   // Convert operands
   SmallVector<Value, 4> newArgs;
   for (auto operand : load->getOperands()) {
@@ -94,7 +95,7 @@ void refineGlobalLoadLayout(Attribute encoding, tt::LoadOp load) {
     if (tensorType) {
       Type newType = replaceEncoding(tensorType, encoding);
       newArgs.push_back(
-          builder.create<ttg::ConvertLayoutOp>(loc, newType, operand));
+          rewriter.create<ttg::ConvertLayoutOp>(loc, newType, operand));
     } else {
       newArgs.push_back(operand);
     }
@@ -102,26 +103,23 @@ void refineGlobalLoadLayout(Attribute encoding, tt::LoadOp load) {
 
   // Construct new load with the new encoding
   auto attrs = load->getAttrs();
-  auto newLoad = builder.create<tt::LoadOp>(loc, newArgs, attrs);
+  auto newLoad = rewriter.create<tt::LoadOp>(loc, newArgs, attrs);
 
   // Cast the results back to the original layout
   auto loadType = load.getType();
   Value newResult = newLoad.getResult();
-  auto restoreConvert =
-      builder.create<ttg::ConvertLayoutOp>(loc, loadType, newResult);
-  load.replaceAllUsesWith(restoreConvert.getResult());
-  load.erase();
+  rewriter.replaceOpWithNewOp<ttg::ConvertLayoutOp>(load, loadType, newResult);
 }
 
 void transposeInRegsitersBeforeStoreInLocalMemory(
-    Operation *memStoreOp, ArrayRef<int64_t> loadShape,
-    ttg::BlockedEncodingAttr newLoadEncoding) {
+    PatternRewriter &rewriter, Operation *memStoreOp,
+    ArrayRef<int64_t> loadShape, ttg::BlockedEncodingAttr newLoadEncoding) {
   assert((mlir::isa<ttg::LocalAllocOp, ttg::LocalStoreOp>(memStoreOp)));
   // skip local_alloc with zero arguments
   if (memStoreOp->getNumOperands() == 0)
     return;
   auto data = memStoreOp->getOperand(0);
-  OpBuilder builder(memStoreOp);
+  rewriter.setInsertionPoint(memStoreOp);
 
   auto transposedLayout =
       ttag::InThreadTransposeOp::deduceOutputLayout(loadShape, newLoadEncoding);
@@ -131,12 +129,14 @@ void transposeInRegsitersBeforeStoreInLocalMemory(
   auto loc = memStoreOp->getLoc();
   auto newLoadType = replaceEncoding(data.getType(), newLoadEncoding);
   auto nonTransposed =
-      builder.create<ttg::ConvertLayoutOp>(loc, newLoadType, data);
+      rewriter.create<ttg::ConvertLayoutOp>(loc, newLoadType, data);
 
   auto transposedType = replaceEncoding(data.getType(), transposedEncoding);
-  auto inThreadTransposed = builder.create<ttag::InThreadTransposeOp>(
+  auto inThreadTransposed = rewriter.create<ttag::InThreadTransposeOp>(
       loc, transposedType, nonTransposed);
+  rewriter.startOpModification(memStoreOp);
   memStoreOp->setOperand(0, inThreadTransposed);
+  rewriter.finalizeOpModification(memStoreOp);
 }
 
 Attribute createNewSharedEncoding(RankedTensorType operandType) {
@@ -163,7 +163,8 @@ Attribute createNewSharedEncoding(RankedTensorType operandType) {
   return newSharedEnc;
 }
 
-void changeSharedEncoding(Value memVal, Attribute newEncoding) {
+void changeSharedEncoding(PatternRewriter &rewriter, Value memVal,
+                          Attribute newEncoding) {
   auto originalType = cast<ttg::MemDescType>(memVal.getType());
   auto sharedEnc =
       dyn_cast<ttg::SwizzledSharedEncodingAttr>(originalType.getEncoding());
@@ -174,8 +175,10 @@ void changeSharedEncoding(Value memVal, Attribute newEncoding) {
   auto newType = ttg::MemDescType::get(
       originalType.getShape(), originalType.getElementType(), newEncoding,
       originalType.getMemorySpace(), originalType.getMutableMemory());
-
+  auto parentOp = memVal.getParentBlock()->getParentOp();
+  rewriter.startOpModification(parentOp);
   memVal.setType(newType);
+  rewriter.finalizeOpModification(parentOp);
 }
 
 /// Structure describes operations involved in tt.load -> ttg.local_store op
@@ -501,18 +504,16 @@ findReachableSMemOps(ttg::LocalLoadOp root,
   return foundNetwork;
 }
 
-unsigned getDimRepeats(RankedTensorType type, int dimIdx) {
+unsigned getMaxSizePerThread(RankedTensorType type, int dimIdx) {
   auto loadEnc = type.getEncoding();
   auto blockedEnc = dyn_cast<ttg::BlockedEncodingAttr>(loadEnc);
   if (!blockedEnc)
     return 0;
-  auto sizePerThread = blockedEnc.getSizePerThread();
   auto lanes = blockedEnc.getThreadsPerWarp();
   auto warps = blockedEnc.getWarpsPerCTA();
   auto shape = type.getShape();
-  int repeats =
-      shape[dimIdx] / (sizePerThread[dimIdx] * lanes[dimIdx] * warps[dimIdx]);
-  return std::max(1, repeats);
+  int maxSize = shape[dimIdx] / (lanes[dimIdx] * warps[dimIdx]);
+  return std::max(1, maxSize);
 }
 
 // Looking for def-use network of following kind:
@@ -527,11 +528,8 @@ unsigned getDimRepeats(RankedTensorType type, int dimIdx) {
 // If data flow pattern match, check applicability
 // of inThreadTrasnpose optimization and return found pattern.
 llvm::FailureOr<GlobalToSharedMemoryOpChain>
-matchInThreadTransposePattern(Value operand) {
-  auto opTensorTy = cast<RankedTensorType>(operand.getType());
-  // TODO support non 2d tensors
-  if (opTensorTy.getRank() != 2)
-    return failure();
+matchInThreadTransposePattern(ttg::LocalLoadOp lLoad) {
+  auto opTensorTy = cast<RankedTensorType>(lLoad.getType());
   auto opEnc = opTensorTy.getEncoding();
   auto opDotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(opEnc);
   if (!opDotOpEnc)
@@ -545,31 +543,15 @@ matchInThreadTransposePattern(Value operand) {
     return failure();
   }
 
-  // Find nearest local_load
-  auto localLoadSearch = findAllDefiningOps<ttg::LocalLoadOp>(operand);
-  if (failed(localLoadSearch)) {
-    LDBG("Failed to traverse local loads");
-    return failure();
-  }
-
-  if (localLoadSearch.value().empty()) {
-    LDBG("Did not find local load operation");
-    return failure();
-  }
-
-  GlobalToSharedMemoryOpChain pattern;
-
   SetVector<Operation *> visited;
-  for (auto lLoad : localLoadSearch.value()) {
-    // find local_alloc, local_store, local_load and ttg.memdesc_subview
-    // operations
-    auto sharedMemSearch = findReachableSMemOps(lLoad, visited);
-    if (failed(sharedMemSearch)) {
-      LDBG("Failed to traverse shared memmory operation network");
-      return failure();
-    }
-    pattern = sharedMemSearch.value();
+  // find local_alloc, local_store, local_load and ttg.memdesc_subview
+  // operations
+  auto sharedMemSearch = findReachableSMemOps(lLoad, visited);
+  if (failed(sharedMemSearch)) {
+    LDBG("Failed to traverse shared memmory operation network");
+    return failure();
   }
+  auto pattern = sharedMemSearch.value();
 
   if (pattern.localAllocStores.empty()) {
     LDBG("Did not find local alloc or store operations");
@@ -604,14 +586,19 @@ matchInThreadTransposePattern(Value operand) {
   }
   // check that all global loads have same type(i.e. shape and layout),
   // otherwise can not guarantee transformation overhead is cheap
-  auto expectedLoadType = pattern.globalLoads.front()->getResult(0).getType();
+  auto expectedLoadType =
+      cast<RankedTensorType>(pattern.globalLoads.front().getResult().getType());
+  // TODO support non 2d tensors:
+  // in_thread_transpose operation and getTransposableBlockedEnc function
+  // are limited to 2d tensors
+  if (expectedLoadType.getRank() != 2)
+    return failure();
 
-  auto kDimRepeats =
-      getDimRepeats(cast<RankedTensorType>(expectedLoadType), kDimNum);
+  auto kDimMaxSizePerThread = getMaxSizePerThread(expectedLoadType, kDimNum);
   // kDimRepeats == 0 means loadType has unexpected layout
   // kDimRepeats == 1 means there are no room in k dimension in layout to
   // transpose in registers
-  if (kDimRepeats < 2) {
+  if (kDimMaxSizePerThread < 2) {
     LDBG("Can not extend load layout");
     return failure();
   }
@@ -650,26 +637,23 @@ matchInThreadTransposePattern(Value operand) {
 ///
 /// Number of elements added across K dimension is limited by tensor dtype bit
 /// width and shape across K
-ttg::BlockedEncodingAttr getTransposableBlockedEnc(Value dotOperand,
+ttg::BlockedEncodingAttr getTransposableBlockedEnc(int dotOperandIdx,
                                                    RankedTensorType loadType) {
   // get the K dim according to dotOp operand's index
-  auto tensorTy = cast<RankedTensorType>(dotOperand.getType());
-  auto shape = tensorTy.getShape();
-  auto opEnc = tensorTy.getEncoding();
-  auto opDotOpEnc = dyn_cast<ttg::DotOperandEncodingAttr>(opEnc);
-  int kDimNum = opDotOpEnc.getOpIdx() == 0 ? 1 : 0;
+  auto shape = loadType.getShape();
+  int kDimNum = dotOperandIdx == 0 ? 1 : 0;
   // get the current blocked encoding
   auto loadEnc = loadType.getEncoding();
   auto blockedEnc = cast<ttg::BlockedEncodingAttr>(loadEnc);
 
-  auto numMaxIters = getDimRepeats(loadType, kDimNum);
-  auto elemBitwidth = tensorTy.getElementType().getIntOrFloatBitWidth();
+  auto maxkDimSizePerThread = getMaxSizePerThread(loadType, kDimNum);
+  auto elemBitwidth = loadType.getElementType().getIntOrFloatBitWidth();
   // Current the widest is set to ds_write_b64
   // In some cases b64 works best, in others 128
   // TODO introduce a heuristic
   const unsigned dsBitWidth = 64;
-  auto newKDimSize = std::min(numMaxIters, dsBitWidth / elemBitwidth);
-  LDBG("Choose the minimum of numIters: " << numMaxIters << " and numElements: "
+  auto newKDimSize = std::min(maxkDimSizePerThread, dsBitWidth / elemBitwidth);
+  LDBG("Choose the minimum of numIters: " << newKDimSize << " and numElements: "
                                           << dsBitWidth / elemBitwidth);
   SmallVector<unsigned> newSizePerThread{blockedEnc.getSizePerThread()};
   newSizePerThread[kDimNum] = newKDimSize;
@@ -684,45 +668,56 @@ ttg::BlockedEncodingAttr getTransposableBlockedEnc(Value dotOperand,
                                        numWarps, threadsPerWarp, numCTAs);
 }
 
+class InThreadTransposePattern : public OpRewritePattern<ttg::LocalLoadOp> {
+public:
+  InThreadTransposePattern(MLIRContext *context, PatternBenefit benefit = 1)
+      : OpRewritePattern(context, benefit) {}
+
+  LogicalResult matchAndRewrite(ttg::LocalLoadOp localLoad,
+                                PatternRewriter &rewriter) const override {
+    LDBG("Consider " << localLoad);
+    auto matchResult = matchInThreadTransposePattern(localLoad);
+    if (!llvm::succeeded(matchResult)) {
+      LDBG("Failed to match InThreadTranspose pattern and nothing to be "
+           "done");
+      return failure();
+    }
+    auto pattern = matchResult.value();
+
+    auto dotOpEnc =
+        cast<ttg::DotOperandEncodingAttr>(localLoad.getType().getEncoding());
+
+    LDBG("Adjusting global loads");
+    RankedTensorType loadResultType =
+        cast<RankedTensorType>(pattern.globalLoads[0].getResult().getType());
+    auto newBlockedEnc =
+        getTransposableBlockedEnc(dotOpEnc.getOpIdx(), loadResultType);
+    auto loadShape = loadResultType.getShape();
+
+    for (auto gLoad : pattern.globalLoads) {
+      LDBG("operand newBlockedEnc = " << newBlockedEnc);
+      refineGlobalLoadLayout(rewriter, newBlockedEnc, gLoad);
+    }
+
+    LDBG("Inserting transpose in registers before store in LDS");
+    for (auto memOp : pattern.localAllocStores)
+      transposeInRegsitersBeforeStoreInLocalMemory(rewriter, memOp, loadShape,
+                                                   newBlockedEnc);
+
+    LDBG("Adjust shared encoding");
+    auto newSharedEncoding =
+        createNewSharedEncoding(cast<RankedTensorType>(localLoad.getType()));
+    for (auto memVal : pattern.sharedMemVals)
+      changeSharedEncoding(rewriter, memVal, newSharedEncoding);
+    return success();
+  }
+};
+
 } // namespace
 
 class TritonAMDGPUInThreadTransposePass
     : public TritonAMDGPUInThreadTransposeBase<
           TritonAMDGPUInThreadTransposePass> {
-
-  void tryToOptimize(Value operand) {
-    LDBG("Consider " << operand);
-    // Dot operand
-    auto matchResult = matchInThreadTransposePattern(operand);
-    if (!llvm::succeeded(matchResult)) {
-      LDBG("Failed to match InThreadTranspose pattern and nothing to be "
-           "done");
-      return;
-    }
-    auto pattern = matchResult.value();
-
-    LDBG("Adjusting global loads");
-    RankedTensorType loadResultType =
-        cast<RankedTensorType>(pattern.globalLoads[0].getResult().getType());
-    auto newBlockedEnc = getTransposableBlockedEnc(operand, loadResultType);
-    auto loadShape = loadResultType.getShape();
-
-    for (auto gLoad : pattern.globalLoads) {
-      LDBG("operand newBlockedEnc = " << newBlockedEnc);
-      refineGlobalLoadLayout(newBlockedEnc, gLoad);
-    }
-
-    LDBG("Inserting transpose in registers before store in LDS");
-    for (auto memOp : pattern.localAllocStores)
-      transposeInRegsitersBeforeStoreInLocalMemory(memOp, loadShape,
-                                                   newBlockedEnc);
-
-    LDBG("Adjust shared encoding");
-    auto newSharedEncoding =
-        createNewSharedEncoding(cast<RankedTensorType>(operand.getType()));
-    for (auto memVal : pattern.sharedMemVals)
-      changeSharedEncoding(memVal, newSharedEncoding);
-  };
 
 public:
   TritonAMDGPUInThreadTransposePass() = default;
@@ -730,13 +725,10 @@ public:
   void runOnOperation() override {
     tt::FuncOp f = getOperation();
 
-    f.walk([&](tt::DotOp dotOp) {
-      LDBG("DotOp under inspection: " << dotOp);
-      // Check opA
-      tryToOptimize(dotOp.getA());
-      // Check opB
-      tryToOptimize(dotOp.getB());
-    });
+    auto ctx = f.getContext();
+    RewritePatternSet patterns(ctx);
+    patterns.add<::InThreadTransposePattern>(ctx, /*benefit=*/1);
+    walkAndApplyPatterns(f, std::move(patterns));
   }
 };
 
