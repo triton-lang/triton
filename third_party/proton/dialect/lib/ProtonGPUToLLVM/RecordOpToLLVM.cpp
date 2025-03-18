@@ -1,7 +1,7 @@
-#include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/RecordOpToLLVM.h"
+#include "Conversion/ProtonGPUToLLVM/RecordOpToLLVM.h"
+#include "Dialect/Proton/IR/Dialect.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/IR/PatternMatch.h"
-#include "third_party/proton/dialect/include/Dialect/Proton/IR/Dialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
