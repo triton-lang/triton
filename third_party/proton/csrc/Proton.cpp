@@ -70,6 +70,24 @@ static void initProton(pybind11::module &&m) {
     SessionManager::instance().exitOp(Scope(scopeId, name));
   });
 
+  m.def("init_scope_ids",
+        [](uint64_t functionId,
+           const std::vector<std::pair<size_t, std::string>> &scopeIds) {
+          SessionManager::instance().initScopeIds(functionId, scopeIds);
+        });
+
+  m.def("enter_instrumented_op",
+        [](uint64_t functionId, uint64_t buffer, size_t size) {
+          SessionManager::instance().enterInstrumentedOp(
+              functionId, reinterpret_cast<const uint8_t *>(buffer), size);
+        });
+
+  m.def("exit_instrumented_op",
+        [](uint64_t functionId, uint64_t buffer, size_t size) {
+          SessionManager::instance().exitInstrumentedOp(
+              functionId, reinterpret_cast<const uint8_t *>(buffer), size);
+        });
+
   m.def("enter_state", [](const std::string &state) {
     SessionManager::instance().setState(state);
   });
@@ -82,12 +100,6 @@ static void initProton(pybind11::module &&m) {
            const std::map<std::string, MetricValueType> &metrics) {
           SessionManager::instance().addMetrics(scopeId, metrics);
         });
-
-  m.def("get_context_depth", [](size_t sessionId) {
-    return SessionManager::instance().getContextDepth(sessionId);
-  });
-
-  m.def("unmap_scope_ids", []() -> void {});
 
   pybind11::bind_map<std::map<std::string, MetricValueType>>(m, "MetricMap");
 }

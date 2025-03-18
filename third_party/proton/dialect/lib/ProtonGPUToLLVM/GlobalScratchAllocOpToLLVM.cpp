@@ -36,7 +36,10 @@ struct GlobalScratchAllocOpConversion
     auto llvmPointerType = LLVM::LLVMPointerType::get(ctx);
     rewriter.create<LLVM::GEPOp>(loc, llvmPointerType, llvmPointerType,
                                  gmemBase, b.i32_val(offset));
-
+    funcOp->setAttr("ttg.profile_scratch_memory_size",
+                    rewriter.getI32IntegerAttr(1));
+    funcOp->setAttr("ttg.profile_scratch_memory_alignment",
+                    rewriter.getI32IntegerAttr(1));
     return success();
   }
 };
