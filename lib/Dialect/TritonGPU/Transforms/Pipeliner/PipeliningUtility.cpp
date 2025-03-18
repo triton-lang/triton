@@ -1,5 +1,6 @@
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -50,6 +51,8 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
                                      Value pred) {
   OpBuilder::InsertionGuard guard(rewriter);
   if (mlir::isMemoryEffectFree(op))
+    return op;
+  if (isa<LLVM::AssumeOp>(op))
     return op;
   if (isa<ttg::AsyncCommitGroupOp, ttg::AsyncWaitOp>(op))
     return op;

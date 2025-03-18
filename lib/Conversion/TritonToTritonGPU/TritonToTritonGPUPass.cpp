@@ -432,11 +432,11 @@ static RankedTensorType getNewIndicesType(RankedTensorType type,
 }
 
 struct TritonDescriptorGatherPattern
-    : public OpConversionPattern<triton::ExperimentalDescriptorGatherOp> {
+    : public OpConversionPattern<triton::DescriptorGatherOp> {
   using OpConversionPattern::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(triton::ExperimentalDescriptorGatherOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::DescriptorGatherOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto numThreads = lookupThreadsPerWarp(rewriter);
     auto numWarps = lookupNumWarps(op);
@@ -448,7 +448,7 @@ struct TritonDescriptorGatherPattern
 
     Value newInd = rewriter.create<ConvertLayoutOp>(op.getLoc(), newType,
                                                     adaptor.getXOffsets());
-    rewriter.replaceOpWithNewOp<triton::ExperimentalDescriptorGatherOp>(
+    rewriter.replaceOpWithNewOp<triton::DescriptorGatherOp>(
         op, getTypeConverter()->convertType(op.getType()), adaptor.getDesc(),
         newInd, adaptor.getYOffset());
     return success();
@@ -456,11 +456,11 @@ struct TritonDescriptorGatherPattern
 };
 
 struct TritonDescriptorScatterPattern
-    : public OpConversionPattern<triton::ExperimentalDescriptorScatterOp> {
+    : public OpConversionPattern<triton::DescriptorScatterOp> {
   using OpConversionPattern::OpConversionPattern;
 
   LogicalResult
-  matchAndRewrite(triton::ExperimentalDescriptorScatterOp op, OpAdaptor adaptor,
+  matchAndRewrite(triton::DescriptorScatterOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto numThreads = lookupThreadsPerWarp(rewriter);
     auto numWarps = lookupNumWarps(op);
@@ -472,7 +472,7 @@ struct TritonDescriptorScatterPattern
 
     Value newInd = rewriter.create<ConvertLayoutOp>(op.getLoc(), newType,
                                                     adaptor.getXOffsets());
-    rewriter.replaceOpWithNewOp<triton::ExperimentalDescriptorScatterOp>(
+    rewriter.replaceOpWithNewOp<triton::DescriptorScatterOp>(
         op, adaptor.getDesc(), newInd, adaptor.getYOffset(), adaptor.getSrc());
     return success();
   }
@@ -627,8 +627,8 @@ void populateTritonPatterns(TritonGPUTypeConverter &typeConverter,
       GenericOpPattern<triton::PrintOp>, GenericOpPattern<triton::AssertOp>,
       GenericOpPattern<triton::AtomicCASOp>,
       GenericOpPattern<triton::AtomicRMWOp>, GenericOpPattern<ReturnOp>,
-      GenericOpPattern<triton::ExperimentalDescriptorLoadOp>,
-      GenericOpPattern<triton::ExperimentalDescriptorStoreOp>,
+      GenericOpPattern<triton::DescriptorLoadOp>,
+      GenericOpPattern<triton::DescriptorStoreOp>,
       GenericOpPattern<triton::ExperimentalTensormapCreateOp>,
       GenericOpPattern<triton::ExperimentalTensormapFenceproxyAcquireOp>,
       // this assumes the right layout will be set later for dot scaled.

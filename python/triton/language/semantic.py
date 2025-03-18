@@ -733,7 +733,7 @@ def permute(input: tl.tensor, dims: Tuple[int], builder: ir.builder) -> tl.tenso
     return tl.tensor(builder.create_trans(input.handle, dims), ret_type)
 
 
-def broadcast_impl_shape(input: tl.tensor, shape: List[int], builder: ir.builder) -> tl.tensor:
+def broadcast_impl_shape(input: tl.tensor, shape: Tuple[int], builder: ir.builder) -> tl.tensor:
     if not input.type.is_block():
         ret_ty = tl.block_type(input.type, shape)
         return tl.tensor(builder.create_splat(input.handle, shape), ret_ty)
@@ -1149,7 +1149,7 @@ def load(ptr: tl.tensor, mask: Optional[tl.tensor], other: Optional[tl.tensor], 
 
 def reinterpret_tensor_descriptor(desc_ptr: tl.tensor, block_ty: tl.block_type, builder: ir.builder):
     handle = builder.create_reinterpret_tensor_descriptor(desc_ptr.handle, block_ty.to_ir(builder))
-    return tl._experimental_tensor_descriptor_base(handle, block_ty)
+    return tl.tensor_descriptor_base(handle, block_ty)
 
 
 def validate_descriptor_block(shape, dtype):
@@ -1165,7 +1165,7 @@ def validate_descriptor_block(shape, dtype):
 
 def descriptor_load(desc: tl._experimental_tensor_desciptor_base, offsets, cache_modifier: str, eviction_policy: str,
                     builder: ir.builder) -> tl.tensor:
-    assert isinstance(desc, tl._experimental_tensor_descriptor_base)
+    assert isinstance(desc, tl.tensor_descriptor_base)
     validate_descriptor_block(desc.block_shape, desc.dtype)
     ndim = len(desc.block_shape)
     assert len(offsets) == ndim, f"expected {ndim} offsets, but got {len(offsets)}"
@@ -1176,9 +1176,8 @@ def descriptor_load(desc: tl._experimental_tensor_desciptor_base, offsets, cache
     return tl.tensor(x, desc.block_type)
 
 
-def descriptor_store(desc: tl._experimental_tensor_descriptor_base, value: tl.tensor, offsets,
-                     builder: ir.builder) -> tl.tensor:
-    assert isinstance(desc, tl._experimental_tensor_descriptor_base)
+def descriptor_store(desc: tl.tensor_descriptor_base, value: tl.tensor, offsets, builder: ir.builder) -> tl.tensor:
+    assert isinstance(desc, tl.tensor_descriptor_base)
     validate_descriptor_block(desc.block_shape, desc.dtype)
     ndim = len(desc.block_shape)
     assert len(offsets) == ndim, f"expected {ndim} offsets, but got {len(offsets)}"
@@ -1190,7 +1189,7 @@ def descriptor_store(desc: tl._experimental_tensor_descriptor_base, value: tl.te
 
 def descriptor_gather(desc, x_offsets, y_offset, cache_modifier: str, eviction_policy: str,
                       builder: ir.builder) -> tl.tensor:
-    assert isinstance(desc, tl._experimental_tensor_descriptor_base)
+    assert isinstance(desc, tl.tensor_descriptor_base)
     assert cache_modifier == "", "cache modifier is not supported yet"
     assert eviction_policy == "", "eviction policy is not supported yet"
 
@@ -1215,7 +1214,7 @@ def descriptor_gather(desc, x_offsets, y_offset, cache_modifier: str, eviction_p
 
 
 def descriptor_scatter(desc, value: tl.tensor, x_offsets, y_offset, builder: ir.builder) -> tl.tensor:
-    assert isinstance(desc, tl._experimental_tensor_descriptor_base)
+    assert isinstance(desc, tl.tensor_descriptor_base)
 
     # Validate descriptor.
     assert len(desc.block_shape) == 2, f"descriptor must be 2D, but got {desc.block_shape}"
@@ -1924,7 +1923,7 @@ def make_tensor_descriptor(
     strides: List[tl.tensor],
     block_shape: List[tl.constexpr],
     builder: ir.builder,
-) -> tl._experimental_tensor_descriptor:
+) -> tl.tensor_descriptor:
     ndim = len(shape)
     if not (2 <= ndim <= 5):
         raise ValueError(f"Expected 2 <= ndim <= 5 but got {ndim} dimensions")
@@ -1947,4 +1946,4 @@ def make_tensor_descriptor(
     type = tl.block_type(base.type.element_ty, block_shape)
     handle = builder.create_make_tensor_descriptor(base.handle, [s.handle for s in shape], [s.handle for s in strides],
                                                    block_shape)
-    return tl._experimental_tensor_descriptor(handle, shape, strides, type)
+    return tl.tensor_descriptor(handle, shape, strides, type)
