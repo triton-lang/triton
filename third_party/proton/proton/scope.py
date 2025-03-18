@@ -115,8 +115,7 @@ def enter_scope(name: str, *, metrics: Optional[dict[str, MetricValueType]] = No
 
 
 def exit_scope(name: Optional[str] = None, *, metrics: Optional[dict[str, MetricValueType]] = None) -> Optional[int]:
-    # `name`` is an optional argument here, only to match the counterpart in enter_scope to make the API consistent and clearer
-    # in code instrumentation.
+    # `name` is an optional argument here, only to match the counterpart in enter_scope to make the API consistent with `proton.language.exit_scope`
     if not get_profiling_on():
         return None
     id, popped_name = thread_local_scopes.scopes.pop()
