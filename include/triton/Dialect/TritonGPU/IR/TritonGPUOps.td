@@ -402,6 +402,7 @@ def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [
 
   let hasVerifier = 1;
   let hasCustomAssemblyFormat = 1;
+  let hasCanonicalizeMethod = 1;
 }
 
 def TTG_WarpSpecializePartitionsOp : TTG_Op<"warp_specialize.partitions", [

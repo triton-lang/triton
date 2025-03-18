@@ -55,6 +55,9 @@ public:
     SmallVector<Operation *> ops;
   };
 
+  // Create a new partition with a stage.
+  Partition *addPartition(unsigned stage);
+
   // Get the partition the op belongs to.
   Partition *getPartition(Operation *op);
   // Get the partition the op belongs to.

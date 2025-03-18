@@ -29,4 +29,19 @@ struct AutomaticWarpSpecialization
 };
 } // namespace
 
-void AutomaticWarpSpecialization::runOnOperation() {}
+void AutomaticWarpSpecialization::runOnOperation() {
+  SmallVector<scf::ForOp> loops;
+  getOperation().walk([&](scf::ForOp loop) {
+    if (loop->hasAttr("tt.warp_specialize"))
+      loops.push_back(loop);
+  });
+
+  for (scf::ForOp loop : loops) {
+    if (failed(specializeLoadMMADependencies(loop, numStages)))
+      continue;
+    if (failed(rewritePartitionDependencies(loop)))
+      continue;
+    if (failed(partitionLoop(loop)))
+      continue;
+  }
+}

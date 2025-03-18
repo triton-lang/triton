@@ -81,6 +81,11 @@ template <> struct GraphTraits<PartitionGraph> {
 // WarpSchedule
 //===----------------------------------------------------------------------===//
 
+WarpSchedule::Partition *WarpSchedule::addPartition(unsigned stage) {
+  partitions.push_back(std::make_unique<Partition>(partitions.size(), stage));
+  return partitions.back().get();
+}
+
 WarpSchedule::Partition *WarpSchedule::getPartition(Operation *op) {
   return opToPartition.at(op);
 }
