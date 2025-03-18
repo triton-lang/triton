@@ -585,7 +585,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: ttng.init_barrier %[[BAR_SUB2]], 1
   // CHECK: %[[A:.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x128x128
   // CHECK: %[[B:.*]] = ttg.local_alloc : () -> !ttg.memdesc<3x128x128
-  // CHECK: scf.for {{.*}} iter_args(%[[PHASE:.*]] = %[[ONE]], %[[BAR_IDX:.*]] = %[[MINUS_ONE]], %[[INS:.*]] = %[[MINUS_ONE]], %[[EXT:.*]] = %[[MINUS_ONE]])
+  // CHECK: scf.for {{.*}} iter_args(%[[PHASE:.*]] = %[[ZERO]], %[[BAR_IDX:.*]] = %[[MINUS_ONE]], %[[INS:.*]] = %[[MINUS_ONE]], %[[EXT:.*]] = %[[MINUS_ONE]])
   // CHECK:   %[[INS_P1:.*]] = arith.addi %[[INS]], %[[ONE]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}  : i32
   // CHECK:   %[[INS_CMP:.*]] = arith.cmpi sge, %[[INS_P1]], %[[NUM_BUFS]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}  : i32
   // CHECK:   %[[INS_NEXT:.*]] = arith.select %[[INS_CMP]], %[[ZERO]], %[[INS_P1]] {loop.cluster = 2 : i32, loop.stage = 0 : i32}  : i32
@@ -962,7 +962,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: ttng.init_barrier %[[BAR_SLICE]], 1
   // CHECK: %[[BAR_SLICE_2:.*]] = ttg.memdesc_subview %[[BAR]][%[[C_1]]
   // CHECK: ttng.init_barrier %[[BAR_SLICE_2]], 1
-  // CHECK: %[[FOR_RES:.*]]:5 = scf.for {{.*}} iter_args(%[[PHASE:.*]] = %[[C_1]], %[[BAR_IDX:.*]] = %[[C_N1]], %[[BUF_IDX:.*]] = %[[C_N1]], %[[INSERT_IDX:.*]] = %[[C_N1]], %[[EXTRACT_IDX:.*]] = %[[C_N1]]
+  // CHECK: %[[FOR_RES:.*]]:5 = scf.for {{.*}} iter_args(%[[PHASE:.*]] = %[[C_0]], %[[BAR_IDX:.*]] = %[[C_N1]], %[[BUF_IDX:.*]] = %[[C_N1]], %[[INSERT_IDX:.*]] = %[[C_N1]], %[[EXTRACT_IDX:.*]] = %[[C_N1]]
   // CHECK:   %[[BUF_IDX_P1:.*]] = arith.addi %[[BUF_IDX]], %[[C_1]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK:   %[[BUF_IDX_CND:.*]] = arith.cmpi sge, %[[BUF_IDX_P1]], %[[C_2]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK:   %[[BUF_IDX_NEXT:.*]] = arith.select %[[BUF_IDX_CND]], %[[C_0]], %[[BUF_IDX_P1]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
@@ -1036,7 +1036,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
   // CHECK: ttng.init_barrier %[[BAR_SLICE0]], 1
   // CHECK: %[[BAR_SLICE1:.+]] = ttg.memdesc_subview %[[BAR_BUF]][%[[C1]]]
   // CHECK: ttng.init_barrier %[[BAR_SLICE1]], 1
-  // CHECK: scf.for {{.*}} iter_args(%[[PHASE:[^,]+]] = %[[C1]], %[[BAR_IDX:[^,]+]] = %[[CN1]],
+  // CHECK: scf.for {{.*}} iter_args(%[[PHASE:[^,]+]] = %[[C0]], %[[BAR_IDX:[^,]+]] = %[[CN1]],
   // CHECK:   %[[BAR_IDX_P1:.+]] = arith.addi %[[BAR_IDX]], %[[C1]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK:   %[[BAR_WRAP:.+]] = arith.cmpi sge, %[[BAR_IDX_P1]], %[[C2]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}
   // CHECK:   %[[BAR_IDX_NEXT:.+]] = arith.select %[[BAR_WRAP]], %[[C0]], %[[BAR_IDX_P1]] {loop.cluster = 0 : i32, loop.stage = 2 : i32}

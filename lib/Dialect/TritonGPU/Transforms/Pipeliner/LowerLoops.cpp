@@ -1111,7 +1111,7 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
   // Add arguments to the forOp
   unsigned newOperandIndex = forOp.getInitArgs().size();
   SmallVector<Value> newOperands = {
-      one,      // phase
+      zero,     // phase
       minusOne, // barrierIdx
       minusOne, // bufIdx
   };
