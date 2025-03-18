@@ -422,19 +422,18 @@ FailureOr<SmallVector<Op>> findAllDefiningOps(Value val) {
   return result;
 }
 
-/// Look for all operations with one of OpTy types in def-use chains in both
-/// forward and backward directions.
+/// Find all shared mem related operations reachable from given ttg.local_load
+/// along shared memory data flow.
 ///
-/// Traversal goes through control flow operations and and stops at non OpTy
-/// operation. For example: findAllDefUseOps<local_load, mem_subview,
-/// local_store>(dot_operand)
+/// Traversal bypasses control flow operations.
 ///
-///                                                    ----------------->
-///                                                    local_store | traversed
-/// global_load -> local_store -> mem_subview -> local_load -> dot
-///                 traversed      traversed      traversed
+/// Example of found operation network:
 ///
-/// \returns true on success, false if analysis failed
+/// ttg.local_alloc -----x-------------------------> ttg.local_dealloc
+///                      V
+/// tt.load -> ttg.local_store -> ttg.mem_subview -> ttg.local_load
+///
+/// \returns partially filled GlobalToSharedMemoryOpChain structure of failure.
 FailureOr<GlobalToSharedMemoryOpChain>
 findReachableSMemOps(ttg::LocalLoadOp root,
                      SetVector<mlir::Operation *> &visited) {
