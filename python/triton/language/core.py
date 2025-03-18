@@ -1892,8 +1892,9 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
     :type boundary_check: tuple of ints, optional
     :param padding_option: should be one of {"", "zero", "nan"}, the padding value to use while out of bounds. "" means an undefined value.
     :param cache_modifier: changes cache option in NVIDIA PTX
-    :type cache_modifier: str, optional, should be one of {"", "ca", "cg"}, where "ca" stands for
-        cache at all levels and "cg" stands for cache at global level (cache in L2 and below, not L1), see
+    :type cache_modifier: str, optional, should be one of {"", ".ca", ".cg", ".cv"}, where ".ca" stands for
+        cache at all levels, ".cg" stands for cache at global level (cache in L2 and below, not L1),
+        and ".cv" means don’t cache and fetch again. see
         `cache operator <https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#cache-operators>`_ for more details.
     :param eviction_policy: changes eviction policy in NVIDIA PTX
     :type eviction_policy: str, optional
