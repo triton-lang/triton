@@ -4,8 +4,8 @@ import os
 import pathlib
 
 from triton._C.libproton import proton as libproton
-from .hook import register_launch_hook, unregister_launch_hook, register_instrumentation_hook, unregister_instrumentation_hook
 from .flags import set_profiling_off, set_profiling_on, is_command_line
+from .hooks import HookManager, LaunchHook, InstrumentationHook
 from typing import Optional
 
 DEFAULT_PROFILE_NAME = "proton"
@@ -112,12 +112,14 @@ def start(
     _check_env(backend)
     _check_mode(backend, mode)
 
-    if hook == "triton":
-        register_launch_hook()
-    if backend == "instrumentation":
-        register_instrumentation_hook()
+    session = libproton.start(name, context, data, backend, mode, backend_path)
 
-    return libproton.start(name, context, data, backend, mode, backend_path)
+    if hook == "triton":
+        HookManager.register(LaunchHook(), session)
+    if backend == "instrumentation":
+        HookManager.register(InstrumentationHook(mode), session)
+
+    return session
 
 
 def activate(session: Optional[int] = None) -> None:
@@ -133,6 +135,9 @@ def activate(session: Optional[int] = None) -> None:
     """
     if is_command_line() and session != 0:
         raise ValueError("Only one session can be activated when running from the command line.")
+
+    HookManager.activate(session)
+
     if session is None:
         libproton.activate_all()
     else:
@@ -152,6 +157,9 @@ def deactivate(session: Optional[int] = None) -> None:
     """
     if is_command_line() and session != 0:
         raise ValueError("Only one session can be deactivated when running from the command line.")
+
+    HookManager.deactivate(session)
+
     if session is None:
         libproton.deactivate_all()
     else:
@@ -171,11 +179,11 @@ def finalize(session: Optional[int] = None, output_format: str = "hatchet") -> N
     Returns:
         None
     """
+    HookManager.unregister(session)
+
     if session is None:
         set_profiling_off()
         libproton.finalize_all(output_format)
-        unregister_launch_hook()
-        unregister_instrumentation_hook()
     else:
         if is_command_line() and session != 0:
             raise ValueError("Only one session can be finalized when running from the command line.")
