@@ -210,21 +210,9 @@ ttg::SharedEncodingTrait getSharedEncoding(Operation *op) {
 static Value createAlloc(scf::ForOp &forOp, Operation *loadOp,
                          ttg::SharedEncodingTrait sharedEnc,
                          unsigned distance) {
-  OpBuilder builder(forOp);
-  Attribute sharedMemorySpace =
-      ttg::SharedMemorySpaceAttr::get(forOp.getContext());
-  auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
-  SmallVector<int64_t> bufferShape(ty.getShape().begin(), ty.getShape().end());
-  bufferShape.insert(bufferShape.begin(), distance);
-  Type memdescType = ttg::MemDescType::get(bufferShape, ty.getElementType(),
-                                           sharedEnc, sharedMemorySpace,
-                                           /*mutableMemory=*/true);
-  Value alloc =
-      builder.create<ttg::LocalAllocOp>(loadOp->getLoc(), memdescType);
-
-  builder.setInsertionPointAfter(forOp);
-  builder.create<ttg::LocalDeallocOp>(forOp.getLoc(), alloc);
-  return alloc;
+  return triton::createAlloc(
+      forOp, cast<RankedTensorType>(loadOp->getResultTypes().front()),
+      loadOp->getLoc(), sharedEnc, distance);
 }
 
 template <typename BuilderT, typename... Args>
@@ -277,12 +265,7 @@ void createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
   // Create async copy
   SmallVector<Value> copyOffsets(allocTy.getRank(), zero);
   copyOffsets[0] = insertIdx;
-  Attribute sharedMemorySpace =
-      triton::gpu::SharedMemorySpaceAttr::get(forOp.getContext());
-  ttg::MemDescType subviewTy = ttg::MemDescType::get(
-      allocTy.getShape().drop_front(), allocTy.getElementType(),
-      allocTy.getEncoding(), sharedMemorySpace, /*mutableMemory=*/true,
-      /*allocShape=*/allocTy.getAllocShape());
+  ttg::MemDescType subviewTy = getBufferViewType(allocTy);
   auto view =
       builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, copyOffsets);
   Operation *copy = builder.create<ttg::AsyncCopyGlobalToLocalOp>(
