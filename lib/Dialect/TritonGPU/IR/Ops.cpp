@@ -687,6 +687,74 @@ LogicalResult WarpSpecializeOp::verify() {
   return success();
 }
 
+LogicalResult WarpSpecializeOp::canonicalize(WarpSpecializeOp op,
+                                             PatternRewriter &b) {
+  // Propagate unused results and captures by removing them from the op.
+  llvm::BitVector unusedArgs(op.getNumOperands());
+  llvm::BitVector unusedResults(op.getNumResults());
+  for (auto [i, result] : llvm::enumerate(op.getResults())) {
+    if (result.use_empty())
+      unusedResults.set(i);
+  }
+  for (auto i : llvm::seq(op.getNumOperands())) {
+    auto noUseInRegion = [&](Region *region) {
+      return region->getArgument(i).use_empty();
+    };
+    if (llvm::all_of(op.getPartitionRegions(), noUseInRegion))
+      unusedArgs.set(i);
+  }
+  if (unusedArgs.none() && unusedResults.none())
+    return failure();
+
+  if (unusedArgs.any()) {
+    b.modifyOpInPlace(op, [&] {
+      for (Region *region : op.getPartitionRegions())
+        region->front().eraseArguments(unusedArgs);
+      op->eraseOperands(unusedArgs);
+    });
+  }
+
+  if (unusedResults.any()) {
+    for (Block &block : op.getDefaultRegion()) {
+      if (auto yield = dyn_cast<WarpYieldOp>(block.getTerminator())) {
+        b.modifyOpInPlace(yield, [&] { yield->eraseOperands(unusedResults); });
+      }
+    }
+
+    SmallVector<Type> newTypes;
+    for (auto [i, type] : llvm::enumerate(op.getResultTypes())) {
+      if (!unusedResults.test(i))
+        newTypes.push_back(type);
+    }
+    OperationState state(op.getLoc(), op->getName(), op.getOperands(), newTypes,
+                         op->getAttrs());
+    state.addRegion()->takeBody(op.getDefaultRegion());
+    state.addRegion()->takeBody(op.getPartitionOpHolder());
+    auto newOp = cast<WarpSpecializeOp>(b.create(state));
+    unsigned newResultIdx = 0;
+    for (auto [i, result] : llvm::enumerate(op.getResults())) {
+      if (!unusedResults.test(i))
+        result.replaceAllUsesWith(newOp.getResult(newResultIdx++));
+    }
+    assert(newResultIdx == newOp.getNumResults());
+    b.eraseOp(op);
+  }
+
+  return success();
+}
+
+void WarpSpecializeOp::build(OpBuilder &builder, OperationState &state,
+                             TypeRange resultTypes,
+                             ArrayRef<int32_t> partitionNumWarps,
+                             unsigned partitionNumRegions) {
+  build(builder, state, resultTypes, /*explicitCaptures=*/ValueRange(),
+        partitionNumWarps, /*warpGroupStartIds=*/{});
+  OpBuilder::InsertionGuard guard(builder);
+  Block *container = builder.createBlock(state.regions.back().get());
+  builder.create<WarpSpecializePartitionsOp>(state.location,
+                                             partitionNumRegions);
+}
+
 ParseResult WarpSpecializeOp::parse(OpAsmParser &p, OperationState &result) {
   SmallVector<OpAsmParser::UnresolvedOperand> operands;
   SMLoc operandLoc = p.getCurrentLocation();

@@ -118,7 +118,7 @@ class StreamPipeliner {
 public:
   StreamPipeliner(scf::ForOp _forOp, int _numStages, int _globalPrefetch,
                   int _localPrefetch)
-      : forOp(_forOp), numBuffers(1), numStages(_numStages),
+      : forOp(_forOp), numStages(_numStages), numBuffers(1),
         schedule(numStages),
         axisInfoAnalysis(forOp->getParentOfType<ModuleOp>()) {
     int lastStage = numStages - 1;
@@ -875,8 +875,8 @@ static bool checkPrecondition(scf::ForOp forOp) {
     // Don't pipeline outer loops.
     if (op != forOp && isa<scf::ForOp, scf::WhileOp>(op))
       return WalkResult::interrupt();
-    // Don't pipeline loops with barriers.
-    if (isa<gpu::BarrierOp>(op))
+    // Don't pipeline loops with barriers or asserts/prints.
+    if (isa<gpu::BarrierOp, tt::AssertOp, tt::PrintOp>(op))
       return WalkResult::interrupt();
     return WalkResult::advance();
   };
@@ -948,27 +948,18 @@ struct PipelinePass : public TritonAMDGPUStreamPipelineBase<PipelinePass> {
     getOperation()->walk([&](scf::ForOp forOp) {
       labelLoadOpsForTritonDot(forOp);
       // Bail out for loops with num_stage <= 1.
-      if (getNumStagesOrDefault(forOp) > 1)
+      if (tt::getNumStagesOrDefault(forOp, numStages) > 1)
         loops.push_back(forOp);
     });
 
     for (scf::ForOp forOp : loops) {
       if (!checkPrecondition(forOp))
         continue;
-      StreamPipeliner sp(forOp, getNumStagesOrDefault(forOp), globalPrefetch,
-                         localPrefetch);
+      StreamPipeliner sp(forOp, tt::getNumStagesOrDefault(forOp, numStages),
+                         globalPrefetch, localPrefetch);
       if (failed(sp.pipelineLoop()))
         continue;
     }
-  }
-
-private:
-  int getNumStagesOrDefault(scf::ForOp forOp) {
-    // Use the attribute attached to the loop if it exists, otherwise use the
-    // global control.
-    if (auto attr = forOp->getAttrOfType<IntegerAttr>(tt::kNumStagesAttrName))
-      return attr.getInt();
-    return numStages;
   }
 };
 } // namespace

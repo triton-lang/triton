@@ -173,6 +173,25 @@ void WaitBarrierOp::getEffects(
                        mlir::triton::gpu::SharedMemory::get());
 }
 
+// -- ArriveBarrierOp --
+LogicalResult ArriveBarrierOp::verify() {
+  if (failed(verifyBarrierType(*this, getAlloc().getType())))
+    return failure();
+  if (getCount() < 1)
+    return emitOpError("count must be greater than or equal to 1");
+  return success();
+}
+
+void ArriveBarrierOp::getEffects(
+    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
+        &effects) {
+  // The arrive will increment the pending arrival count inside the barrier.
+  effects.emplace_back(MemoryEffects::Read::get(), &getAllocMutable(),
+                       mlir::triton::gpu::SharedMemory::get());
+  effects.emplace_back(MemoryEffects::Write::get(), &getAllocMutable(),
+                       mlir::triton::gpu::SharedMemory::get());
+}
+
 // -- TensorDescToTMAPtrOp --
 LogicalResult TensorDescToTMAPtrOp::canonicalize(TensorDescToTMAPtrOp op,
                                                  PatternRewriter &rewriter) {
@@ -225,7 +244,7 @@ LogicalResult AsyncTMAGatherOp::verify() {
   triton::gpu::MemDescType resultType = getResult().getType();
   if (!resultType.getMutableMemory())
     return emitOpError("cannot store into immutable memory");
-  return ExperimentalDescriptorGatherOp::verifyResultType(*this, resultType);
+  return DescriptorGatherOp::verifyResultType(*this, resultType);
 }
 
 void AsyncTMAGatherOp::getEffects(

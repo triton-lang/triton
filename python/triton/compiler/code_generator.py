@@ -1028,6 +1028,7 @@ class CodeGenerator(ast.NodeVisitor):
         loop_unroll_factor = None
         disallow_acc_multi_buffer = False
         flatten = False
+        warp_specialize = False
         if IteratorClass is language.range:
             iterator = IteratorClass(*iter_args, **iter_kwargs)
             # visit iterator arguments
@@ -1040,6 +1041,7 @@ class CodeGenerator(ast.NodeVisitor):
             loop_unroll_factor = iterator.loop_unroll_factor
             disallow_acc_multi_buffer = iterator.disallow_acc_multi_buffer
             flatten = iterator.flatten
+            warp_specialize = iterator.warp_specialize
         elif IteratorClass is range:
             # visit iterator arguments
             # note: only `range` iterator is supported now
@@ -1118,6 +1120,8 @@ class CodeGenerator(ast.NodeVisitor):
                 for_op.set_attr("tt.disallow_acc_multi_buffer", self.builder.get_unit_attr())
             if flatten:
                 for_op.set_attr("tt.flatten", self.builder.get_unit_attr())
+            if warp_specialize:
+                for_op.set_attr("tt.warp_specialize", self.builder.get_unit_attr())
 
             self.scf_stack.append(node)
             for_op_body = for_op.get_body(0)

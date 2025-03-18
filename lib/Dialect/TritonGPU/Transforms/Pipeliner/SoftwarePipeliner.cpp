@@ -80,16 +80,6 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
 
   using impl::TritonGPUPipelineBase<PipelinePass>::TritonGPUPipelineBase;
 
-  int getNumStagesOrDefault(scf::ForOp forOp) {
-    // Use the attribute attached to the loop if it exists otherwise use the
-    // global control.
-    if (!forOp->hasAttr(mlir::triton::kNumStagesAttrName))
-      return numStages;
-    return mlir::cast<IntegerAttr>(
-               forOp->getAttr(mlir::triton::kNumStagesAttrName))
-        .getInt();
-  }
-
   void runOnOperation() override {
     ModuleOp moduleOp = getOperation();
     // Go over the interesting ops and assign latencies (based on the
@@ -158,7 +148,7 @@ struct PipelinePass : public impl::TritonGPUPipelineBase<PipelinePass> {
       SmallVector<scf::ForOp> loops;
       getOperation()->walk([&](scf::ForOp forOp) {
         // Bail out for loops with num_stage <= 1.
-        if (getNumStagesOrDefault(forOp) > 1)
+        if (getNumStagesOrDefault(forOp, numStages) > 1)
           loops.push_back(forOp);
       });
 

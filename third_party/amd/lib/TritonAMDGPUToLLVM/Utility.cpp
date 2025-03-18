@@ -1,4 +1,5 @@
 #include "Utility.h"
+#include "Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "TritonAMDGPUToLLVM/GCNAsmFormat.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
@@ -626,6 +627,18 @@ bool canCoalesceWriteIntoSharedMemory(RewriterBase &rewriter,
     }
   }
   return true;
+}
+
+bool isUsedByDotScaledOp(Operation *op) {
+  const ForwardSliceOptions fwdOpt;
+  SetVector<mlir::Operation *> forwardSliceSet;
+  getForwardSlice(op, &forwardSliceSet, fwdOpt);
+
+  return std::any_of(
+      forwardSliceSet.begin(), forwardSliceSet.end(), [](auto *operation) {
+        return isa<triton::DotScaledOp, triton::amdgpu::UpcastMXFPOp>(
+            operation);
+      });
 }
 
 } // namespace mlir::LLVM::AMD

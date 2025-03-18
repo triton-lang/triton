@@ -1,13 +1,17 @@
 #include "mlir/IR/Dominance.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/Utility.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 
 #define DEBUG_TYPE "triton-loop-pipeline"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -59,11 +63,6 @@ public:
     return op;
   }
 };
-
-bool isTMALoad(Operation *op) {
-  return isa<tt::ExperimentalDescriptorLoadOp,
-             tt::ExperimentalDescriptorGatherOp>(op);
-}
 
 DenseSet<Operation *>
 getTopLevelUsersInLoop(Operation *op, scf::ForOp forOp,
@@ -192,86 +191,13 @@ Value createIncrementModulo(BuilderT &builder, Location loc, Value counter,
 // LOWER LOADS
 /////////////////////////////
 
-ttg::SharedEncodingTrait getSharedEncoding(Operation *op) {
-  // Try to use local alloc encoding if possible.
-  ttg::SharedEncodingTrait localAllocEnc;
-  if (llvm::any_of(op->getUsers(), [&](Operation *user) {
-        return isa<ttg::LocalAllocOp>(user);
-      })) {
-    for (auto user : op->getUsers()) {
-      auto localAlloc = dyn_cast<ttg::LocalAllocOp>(user);
-      if (!localAlloc)
-        continue;
-      auto enc = mlir::cast<ttg::SharedEncodingTrait>(
-          localAlloc.getType().getEncoding());
-      if (!localAllocEnc) {
-        localAllocEnc = enc;
-      }
-      if (enc != localAllocEnc) {
-        // Some users have different encoding than others.
-        // Use one of the encodings, and warn about the performance issue.
-        op->emitRemark()
-            << "Pipelining load with different use encodings. This will lead "
-               "to layout conversions and performance degradation.";
-        continue;
-      }
-    }
-  }
-
-  auto ty = cast<RankedTensorType>(op->getResultTypes()[0]);
-  auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
-  auto order = ttg::getOrder(ty);
-  if (isTMALoad(op)) {
-    // For TMA, the encoding compatible with it takes precedence over local
-    // alloc created for the MMA operand.
-    if (localAllocEnc) {
-      if (auto sharedMMALayout =
-              dyn_cast<ttg::NVMMASharedEncodingAttr>(localAllocEnc)) {
-        assert(!sharedMMALayout.getFp4Padded() &&
-               "TMA load for mixed precision MMAv5 is not supported yet.");
-      }
-    }
-    return ttg::NVMMASharedEncodingAttr::get(
-        ty.getContext(), ty.getShape(), order, ctaLayout, ty.getElementType(),
-        /*fp4Padded*/ false);
-  }
-
-  if (localAllocEnc)
-    return localAllocEnc;
-
-  // Try to use dot encoding if possible.
-  bool incompatible = false;
-  localAllocEnc =
-      getSharedEncIfAllUsersAreDotEnc(op->getResult(0), incompatible)
-          .value_or(nullptr);
-
-  if (localAllocEnc)
-    return localAllocEnc;
-
-  // Use generic layout. This won't be optimal for 2D tensors.
-  return ttg::SwizzledSharedEncodingAttr::get(ty.getContext(), 1, 1, 1, order,
-                                              ctaLayout);
-}
-
 // Create an allocation that can hold distance number of loadOp shapes.
 static Value createAlloc(scf::ForOp &forOp, Operation *loadOp,
                          ttg::SharedEncodingTrait sharedEnc,
                          unsigned distance) {
-  OpBuilder builder(forOp);
-  Attribute sharedMemorySpace =
-      ttg::SharedMemorySpaceAttr::get(forOp.getContext());
-  auto ty = cast<RankedTensorType>(loadOp->getResultTypes()[0]);
-  SmallVector<int64_t> bufferShape(ty.getShape().begin(), ty.getShape().end());
-  bufferShape.insert(bufferShape.begin(), distance);
-  Type memdescType = ttg::MemDescType::get(bufferShape, ty.getElementType(),
-                                           sharedEnc, sharedMemorySpace,
-                                           /*mutableMemory=*/true);
-  Value alloc =
-      builder.create<ttg::LocalAllocOp>(loadOp->getLoc(), memdescType);
-
-  builder.setInsertionPointAfter(forOp);
-  builder.create<ttg::LocalDeallocOp>(forOp.getLoc(), alloc);
-  return alloc;
+  return triton::createAlloc(
+      forOp, cast<RankedTensorType>(loadOp->getResultTypes().front()),
+      loadOp->getLoc(), sharedEnc, distance);
 }
 
 template <typename BuilderT, typename... Args>
@@ -302,16 +228,7 @@ void createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
   ttg::MemDescType allocTy = cast<ttg::MemDescType>(alloc.getType());
 
   // Create async copy
-  SmallVector<Value> copyOffsets(allocTy.getRank(), zero);
-  copyOffsets[0] = insertIdx;
-  Attribute sharedMemorySpace =
-      triton::gpu::SharedMemorySpaceAttr::get(forOp.getContext());
-  ttg::MemDescType subviewTy = ttg::MemDescType::get(
-      allocTy.getShape().drop_front(), allocTy.getElementType(),
-      allocTy.getEncoding(), sharedMemorySpace, /*mutableMemory=*/true,
-      /*allocShape=*/allocTy.getAllocShape());
-  auto view =
-      builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, copyOffsets);
+  Value view = createSingleBufferView(builder, alloc, insertIdx);
   Operation *copy = builder.create<ttg::AsyncCopyGlobalToLocalOp>(
       loc, src, view, mask, other, loadOp.getCache(), loadOp.getEvict(),
       loadOp.getIsVolatile());
@@ -322,10 +239,7 @@ void createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
   builder.setStageCluster(schedule[firstUse]);
   Operation *wait =
       builder.create<ttg::AsyncWaitOp>(loc, commit->getResult(0), 0);
-  SmallVector<Value> loadOffsets(allocTy.getRank(), zero);
-  loadOffsets[0] = extractIdx;
-  auto viewLoad =
-      builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, loadOffsets);
+  Value viewLoad = createSingleBufferView(builder, alloc, extractIdx);
 
   if (!loadOp.getOther() || isZeroConst(loadOp.getOther())) {
     // Remove redundant local_load -> local_alloc, but only if
@@ -335,8 +249,7 @@ void createAsyncCopy(scf::ForOp forOp, tt::LoadOp loadOp, Value alloc,
     for (Operation *user : loadOp->getUsers()) {
       if (auto userAlloc = dyn_cast<ttg::LocalAllocOp>(user)) {
         if (allocTy.getEncoding() == userAlloc.getType().getEncoding()) {
-          tt::replaceUsesAndPropagateType(builder, userAlloc,
-                                          viewLoad.getResult());
+          tt::replaceUsesAndPropagateType(builder, userAlloc, viewLoad);
           allocsToErase.push_back(userAlloc);
         }
       }
@@ -389,14 +302,7 @@ void createTMAAsyncCopy(
   ttg::MemDescType allocTy = cast<ttg::MemDescType>(alloc.getType());
 
   // Create async copy
-  SmallVector<Value> copyOffsets(allocTy.getRank(), zero);
-  copyOffsets[0] = insertIdx;
-  ttg::MemDescType subviewTy = ttg::MemDescType::get(
-      allocTy.getShape().drop_front(), allocTy.getElementType(),
-      allocTy.getEncoding(), sharedMemorySpace, /*mutableMemory=*/true,
-      /*allocShape=*/allocTy.getAllocShape());
-  auto view =
-      builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, copyOffsets);
+  Value view = createSingleBufferView(builder, alloc, insertIdx);
 
   Value pred = builder.create<arith::ConstantIntOp>(loc, 1, 1);
   Value tmaPtr =
@@ -406,17 +312,13 @@ void createTMAAsyncCopy(
   // Create local load after the wait
   builder.setInsertionPointAfter(waitOp);
   builder.setStageCluster(schedule[firstUse]);
-  SmallVector<Value> loadOffsets(allocTy.getRank(), zero);
-  loadOffsets[0] = extractIdx;
-  auto viewLoad =
-      builder.create<ttg::MemDescSubviewOp>(loc, subviewTy, alloc, loadOffsets);
-  // Remove redundant local_load -> local_alloc
+  Value viewLoad = createSingleBufferView(builder, alloc, extractIdx);
+  //  Remove redundant local_load -> local_alloc
   SmallVector<ttg::LocalAllocOp> allocsToErase;
   for (Operation *user : loadOp->getUsers()) {
     if (auto userAlloc = dyn_cast<ttg::LocalAllocOp>(user)) {
       if (allocTy.getEncoding() == userAlloc.getType().getEncoding()) {
-        tt::replaceUsesAndPropagateType(builder, userAlloc,
-                                        viewLoad.getResult());
+        tt::replaceUsesAndPropagateType(builder, userAlloc, viewLoad);
         allocsToErase.push_back(userAlloc);
       }
     }
@@ -437,22 +339,26 @@ void createTMAAsyncCopy(
   loadOp->erase();
 }
 
-void createTMAAsyncLoad(scf::ForOp forOp,
-                        tt::ExperimentalDescriptorLoadOp loadOp, Value alloc,
-                        Value insertIdx, Value extractIdx, Value barrier,
-                        Operation *waitOp, CoarseSchedule &schedule) {
-  return createTMAAsyncCopy(forOp, loadOp, loadOp.getDesc(), alloc, insertIdx,
-                            extractIdx, barrier, waitOp, schedule,
-                            [&](OpBuilderForStage &builder, Value tmaPtr,
-                                Value barrier, Value view, Value pred) {
-                              builder.create<ttng::AsyncTMACopyGlobalToLocalOp>(
-                                  loadOp.getLoc(), tmaPtr, loadOp.getIndices(),
-                                  barrier, view, pred);
-                            });
+void createTMAAsyncLoad(scf::ForOp forOp, tt::DescriptorLoadOp loadOp,
+                        Value alloc, Value insertIdx, Value extractIdx,
+                        Value barrier, Operation *waitOp,
+                        CoarseSchedule &schedule) {
+  return createTMAAsyncCopy(
+      forOp, loadOp, loadOp.getDesc(), alloc, insertIdx, extractIdx, barrier,
+      waitOp, schedule,
+      [&](OpBuilderForStage &builder, Value tmaPtr, Value barrier, Value view,
+          Value pred) {
+        auto loc = loadOp.getLoc();
+        auto indices = ttng::translateTMAIndices(
+            builder, loadOp.getLoc(),
+            loadOp.getDesc().getType().getBlockType().getEncoding(),
+            loadOp.getIndices());
+        builder.create<ttng::AsyncTMACopyGlobalToLocalOp>(
+            loadOp.getLoc(), tmaPtr, indices, barrier, view, pred);
+      });
 }
 
-void createTMAAsyncGather(scf::ForOp forOp,
-                          tt::ExperimentalDescriptorGatherOp gatherOp,
+void createTMAAsyncGather(scf::ForOp forOp, tt::DescriptorGatherOp gatherOp,
                           Value alloc, Value insertIdx, Value extractIdx,
                           Value barrier, Operation *waitOp,
                           CoarseSchedule &schedule) {
@@ -540,8 +446,7 @@ void createTMABarrierAndWait(
     for (Operation *op : group) {
       auto tensorTy = cast<RankedTensorType>(op->getResultTypes()[0]);
       int loadSize = product(tensorTy.getShape());
-      sizeInBytes +=
-          loadSize * tensorTy.getElementType().getIntOrFloatBitWidth() / 8;
+      sizeInBytes += loadSize * tensorTy.getElementTypeBitWidth() / 8;
     }
 
     Value barrierAlloc = triton::createBarrierAlloc(forOp, numBuffers);
@@ -565,8 +470,6 @@ void createTMABarrierAndWait(
       asyncLoads[op].barrier = barrier;
       asyncLoads[op].waitOp = wait;
     }
-
-    triton::createBarrierDealloc(forOp, barrierAlloc, numBuffers);
   }
 }
 
@@ -597,8 +500,7 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
   // Only visit the top level ops, we do not support pipelining conditional
   // loads for now
   for (auto &op : forOp.getBody()->without_terminator()) {
-    if (isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp,
-            tt::ExperimentalDescriptorGatherOp>(op)) {
+    if (isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op)) {
       int stageDiff = getDefUseStageDiff(&op, forOp, schedule);
       if (stageDiff == 0 || !isa<RankedTensorType>(op.getResultTypes()[0])) {
         // Don't care about non-pipelined loads. Don't use async loads for
@@ -717,10 +619,10 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
     if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
       createAsyncCopy(forOp, loadOp, asyncLoad.alloc, insertIdx, extractIdx,
                       schedule);
-    } else if (auto loadOp = dyn_cast<tt::ExperimentalDescriptorLoadOp>(op)) {
+    } else if (auto loadOp = dyn_cast<tt::DescriptorLoadOp>(op)) {
       createTMAAsyncLoad(forOp, loadOp, asyncLoad.alloc, insertIdx, extractIdx,
                          asyncLoad.barrier, asyncLoad.waitOp, schedule);
-    } else if (auto loadOp = dyn_cast<tt::ExperimentalDescriptorGatherOp>(op)) {
+    } else if (auto loadOp = dyn_cast<tt::DescriptorGatherOp>(op)) {
       createTMAAsyncGather(forOp, loadOp, asyncLoad.alloc, insertIdx,
                            extractIdx, asyncLoad.barrier, asyncLoad.waitOp,
                            schedule);
@@ -975,8 +877,6 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
     waitBuffers.push_back(mmaAsScaledDotOp.getBScale());
   }
   builder.create<ttng::WaitBarrierOp>(loc, barrierSlice, phase, waitBuffers);
-
-  createBarrierDealloc(forOp, barrierAlloc, numStages);
 
   // Look for loads from the accumulator in stages earlier than the wait
   // and insert a barrier before them

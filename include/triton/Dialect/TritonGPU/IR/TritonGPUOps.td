@@ -168,7 +168,9 @@ def TTG_LocalAllocOp : TTG_Op<"local_alloc", [DeclareOpInterfaceMethods<MemoryEf
     }
     int32_t getAlignmentOrDefault();
   }];
-  let assemblyFormat = [{$src attr-dict `:` functional-type(operands, results)}];
+  let assemblyFormat = [{
+    ($src^)? attr-dict `:` functional-type(operands, results)
+  }];
 
   let results = (outs TTG_MemDescType:$result);
   let hasFolder = 1;
@@ -392,8 +394,15 @@ def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [
     unsigned getTotalPartitionWarps();
   }];
 
+  let builders = [
+    OpBuilder<(ins "TypeRange":$resultTypes,
+                   "ArrayRef<int32_t>":$partitionNumWarps,
+                   "unsigned":$numPartitionRegions)>
+  ];
+
   let hasVerifier = 1;
   let hasCustomAssemblyFormat = 1;
+  let hasCanonicalizeMethod = 1;
 }
 
 def TTG_WarpSpecializePartitionsOp : TTG_Op<"warp_specialize.partitions", [

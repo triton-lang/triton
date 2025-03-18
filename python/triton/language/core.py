@@ -660,7 +660,7 @@ class block_type(dtype):
     def is_block(self):
         return True
 
-    def get_block_shapes(self) -> List[int]:
+    def get_block_shapes(self) -> Tuple[int]:
         return self.shape
 
     def __eq__(self, other) -> bool:
@@ -1259,8 +1259,8 @@ class tensor_descriptor_base_type(base_type):
     def __init__(self, block_type: block_type):
         self.block_type = block_type
 
-    def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[_experimental_tensor_descriptor_base, int]:
-        value = _experimental_tensor_descriptor_base(handles[cursor], self.block_type)
+    def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[tensor_descriptor_base, int]:
+        value = tensor_descriptor_base(handles[cursor], self.block_type)
         return value, cursor + 1
 
     def to_ir(self, builder: ir.builder):
@@ -1279,7 +1279,7 @@ class tensor_descriptor_base_type(base_type):
         return not (self == other)
 
 
-class _experimental_tensor_descriptor_base(base_value):
+class tensor_descriptor_base(base_value):
     """"
     A tensor descriptor with unknown shape and strides
     """
@@ -1353,14 +1353,14 @@ class tensor_descriptor_type(tensor_descriptor_base_type):
         self.shape_type = shape_type
         self.strides_type = strides_type
 
-    def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[_experimental_tensor_descriptor_base, int]:
+    def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[tensor_descriptor_base, int]:
         handle = handles[cursor]
         cursor += 1
         shape, cursor = self.shape_type._unflatten_ir(handles, cursor)
         strides, cursor = self.strides_type._unflatten_ir(handles, cursor)
         shape = shape.values
         strides = strides.values
-        value = _experimental_tensor_descriptor(handle, shape, strides, self.block_type)
+        value = tensor_descriptor(handle, shape, strides, self.block_type)
         return value, cursor
 
     def to_ir(self, builder: ir.builder):
@@ -1371,7 +1371,7 @@ class tensor_descriptor_type(tensor_descriptor_base_type):
                                                                                     == other.strides_type)
 
 
-class _experimental_tensor_descriptor(_experimental_tensor_descriptor_base):
+class tensor_descriptor(tensor_descriptor_base):
     """A descriptor representing a tensor in global memory.
     """
 
@@ -1892,8 +1892,9 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
     :type boundary_check: tuple of ints, optional
     :param padding_option: should be one of {"", "zero", "nan"}, the padding value to use while out of bounds. "" means an undefined value.
     :param cache_modifier: changes cache option in NVIDIA PTX
-    :type cache_modifier: str, optional, should be one of {"", "ca", "cg"}, where "ca" stands for
-        cache at all levels and "cg" stands for cache at global level (cache in L2 and below, not L1), see
+    :type cache_modifier: str, optional, should be one of {"", ".ca", ".cg", ".cv"}, where ".ca" stands for
+        cache at all levels, ".cg" stands for cache at global level (cache in L2 and below, not L1),
+        and ".cv" means don’t cache and fetch again. see
         `cache operator <https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#cache-operators>`_ for more details.
     :param eviction_policy: changes eviction policy in NVIDIA PTX
     :type eviction_policy: str, optional
@@ -1916,8 +1917,7 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
 
 
 @builtin
-def _experimental_reinterpret_tensor_descriptor(desc_ptr, block_shape, dtype,
-                                                _builder=None) -> _experimental_tensor_descriptor_base:
+def _experimental_reinterpret_tensor_descriptor(desc_ptr, block_shape, dtype, _builder=None) -> tensor_descriptor_base:
     """
     Reinterpret a generic pointer as a TMA-backed tensor descriptor object.
     """
@@ -2028,14 +2028,14 @@ def advance(base, offsets, _builder=None):
 
 
 @builtin
-def _experimental_make_tensor_descriptor(
+def make_tensor_descriptor(
     base: tensor,
     shape: List[tensor],
     strides: List[tensor],
     block_shape: List[constexpr],
     _builder=None,
-) -> _experimental_tensor_descriptor:
-    """Make an experimental tensor descriptor object
+) -> tensor_descriptor:
+    """Make a tensor descriptor object
 
     :param base: the base pointer of the tensor, must be 16-byte aligned
     :param shape: A list of non-negative integers representing the tensor shape
@@ -2056,7 +2056,7 @@ def _experimental_make_tensor_descriptor(
 
         @triton.jit
         def inplace_abs(in_out_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
-            desc = tl._experimental_make_tensor_descriptor(
+            desc = tl.make_tensor_descriptor(
                 in_out_ptr,
                 shape=[M, N],
                 strides=[N, 1],
@@ -2936,10 +2936,18 @@ class range:
     :param flatten: automatically flatten the loop nest starting at this loop to
         create a single flattened loop. The compiler will try to pipeline the
         flattened loop which can avoid stage stalling.
+    :param warp_specialize: Enable automatic warp specialization on the loop.
+        The compiler will attempt to partition memory, MMA, and vector
+        operations in the loop into separate async partitions. This will
+        increase the total number of warps required by the kernel.
+
+        Note that warp specialization is only supported on Blackwell GPUs and
+        only works on simple matmul loops. Support for arbitrary loops will be
+        expanded over time.
     """
 
     def __init__(self, arg1, arg2=None, step=None, num_stages=None, loop_unroll_factor=None,
-                 disallow_acc_multi_buffer=False, flatten=False):
+                 disallow_acc_multi_buffer=False, flatten=False, warp_specialize=False):
         if step is None:
             self.step = constexpr(1)
         else:
@@ -2954,6 +2962,7 @@ class range:
         self.loop_unroll_factor = loop_unroll_factor
         self.disallow_acc_multi_buffer = disallow_acc_multi_buffer
         self.flatten = flatten
+        self.warp_specialize = warp_specialize
 
     def __iter__(self):
         raise RuntimeError("tl.range can only be used in @triton.jit'd functions")

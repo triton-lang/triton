@@ -70,6 +70,12 @@ class HIPOptions:
         # Ignore user-defined warp size for gfx9
         warp_size = 32 if 'gfx10' in self.arch or 'gfx11' in self.arch or 'gfx12' in self.arch else 64
         object.__setattr__(self, 'warp_size', warp_size)
+        # Error out if max threads per block is exceeded.
+        # This is theoretically architecture specific but in reality they are all 1024.
+        max_threads = 1024
+        assert self.num_warps * warp_size <= max_threads, \
+                f"{self.num_warps} warps * {warp_size} warp size" \
+                f" must not exceed the max threads per block limit ({max_threads})"
         # Only kpack=1 is supported on gfx950
         kpack = 1 if self.arch == 'gfx950' else self.kpack
         object.__setattr__(self, 'kpack', kpack)
@@ -143,7 +149,7 @@ class HIPBackend(BaseBackend):
     @staticmethod
     @functools.lru_cache()
     def use_buffer_ops():
-        return os.environ.get("AMDGCN_USE_BUFFER_OPS", "0") == "1"
+        return os.environ.get("AMDGCN_USE_BUFFER_OPS", "1") == "1"
 
     @staticmethod
     def is_within_2gb(arg):
@@ -202,7 +208,7 @@ class HIPBackend(BaseBackend):
         passes.ttir.add_combine(pm)
         passes.ttir.add_reorder_broadcast(pm)
         passes.common.add_cse(pm)
-        passes.common.add_licm(pm)
+        passes.ttir.add_triton_licm(pm)
         passes.common.add_symbol_dce(pm)
         passes.ttir.add_loop_unroll(pm)
         pm.run(mod)
@@ -225,6 +231,11 @@ class HIPBackend(BaseBackend):
         amd.passes.ttgpuir.add_optimize_epilogue(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         amd.passes.ttgpuir.add_hoist_layout_conversions(pm)
+
+        passes.ttgpuir.add_fuse_nested_loops(pm)
+        passes.common.add_canonicalizer(pm)
+        passes.ttir.add_triton_licm(pm)
+        passes.common.add_canonicalizer(pm)
 
         global_prefetch = int(os.getenv("TRITON_HIP_GLOBAL_PREFETCH", "0"))
         local_prefetch = int(os.getenv("TRITON_HIP_LOCAL_PREFETCH", "0"))

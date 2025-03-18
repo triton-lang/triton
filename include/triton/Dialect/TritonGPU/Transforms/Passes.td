@@ -118,6 +118,78 @@ def TritonGPUFuseNestedLoops : Pass<"tritongpu-fuse-nested-loops", "mlir::Module
   ];
 }
 
+def TritonGPUAutomaticWarpSpecialization : Pass<"tritongpu-automatic-warp-specialization", "mlir::ModuleOp"> {
+  let summary = "automatic warp specialization of loops";
+
+  let description = [{
+    The `tritongpu-automatic-warp-specialization` pass applies automatic
+    warp specialization to eligible loops in the module. The pass will analyze
+    the loops in the kernel and attempt to create a partition schedule, which
+    if successful lowers the loop by duplicating it into `ttg.warp_specialize`
+    partition regions.
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::scf::SCFDialect",
+    "mlir::arith::ArithDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+
+  let options = [
+    Option<"numStages", "num-stages", "int32_t", /*default*/"3",
+           "number of pipeline stages">
+  ];
+}
+
+def TritonGPURewritePartitionDependencies : Pass<"tritongpu-rewrite-partition-dependencies", "mlir::ModuleOp"> {
+  let summary = "test pass for rewriting partition dependencies";
+
+  let description = [{
+    The `tritongpu-rewrite-partition-dependencies` pass analyzes the partitions
+    assigned to a loop and their SSA dependencies. It rewrites the dependencies
+    to be passed through shared memory, applying multi-buffering according to
+    the assigned stages of the partitions.
+  }];
+
+  let dependentDialects = [
+    "mlir::triton::gpu::TritonGPUDialect",
+    "mlir::scf::SCFDialect",
+    "mlir::arith::ArithDialect",
+    "mlir::triton::nvidia_gpu::TritonNvidiaGPUDialect"
+  ];
+}
+
+def TritonGPUPartitionLoops : Pass<"tritongpu-partition-loops", "mlir::ModuleOp"> {
+  let summary = "split scheduled loops into `ttg.warp_specialize`";
+
+  let description = [{
+    The `tritongpu-partition-loops` pass will analyze the loops in the module
+    that have been scheduled for warp specialization and split them into
+    `ttg.warp_specialize` partition regions. This requires no SSA dependencies
+    between any of the partitions.
+  }];
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
+}
+
+def TritonGPULoadMMASpecialization : Pass<"tritongpu-load-mma-specialization", "mlir::ModuleOp"> {
+  let summary = "load MMA specialization";
+
+  let description = [{
+    The `tritongpu-load-mma-specialization` pass looks for matmul loops in the
+    module and attempts to create a partition schedule, separating async loads
+    and async MMAs into separate partitions.
+  }];
+
+  let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
+
+  let options = [
+    Option<"numStages", "num-stages", "int32_t", /*default*/"3",
+           "number of pipeline stages">
+  ];
+}
+
 def TritonGPUF32DotTC : Pass<"tritongpu-F32DotTC", "mlir::ModuleOp"> {
   let summary = "3xTF32 trick";
 
