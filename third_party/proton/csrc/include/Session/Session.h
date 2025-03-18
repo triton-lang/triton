@@ -8,6 +8,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <numeric>
 #include <set>
 #include <string>
 #include <vector>
@@ -100,6 +101,16 @@ public:
 
   void exitOp(const Scope &scope);
 
+  void
+  initScopeIds(uint64_t functionId,
+               const std::vector<std::pair<size_t, std::string>> &scopeIds);
+
+  void enterInstrumentedOp(uint64_t functionId, const uint8_t *buffer,
+                           size_t size);
+
+  void exitInstrumentedOp(uint64_t functionId, const uint8_t *buffer,
+                          size_t size);
+
   void addMetrics(size_t scopeId,
                   const std::map<std::string, MetricValueType> &metrics);
 
@@ -162,6 +173,15 @@ private:
     updateInterfaceCount<Interface, Counter, false>(sessionId, interfaceCounts);
   }
 
+  template <typename Counter, typename FnT>
+  void executeInterface(Counter &interfaceCounts, FnT &&fn) {
+    for (auto [interface, count] : interfaceCounts) {
+      if (count > 0) {
+        fn(interface);
+      }
+    }
+  }
+
   mutable std::mutex mutex;
 
   size_t nextSessionId{};
@@ -175,6 +195,9 @@ private:
   std::vector<std::pair<ScopeInterface *, size_t>> scopeInterfaceCounts;
   // {op, active count}
   std::vector<std::pair<OpInterface *, size_t>> opInterfaceCounts;
+  // {instrumentation, active count}
+  std::vector<std::pair<InstrumentationInterface *, size_t>>
+      instrumentationInterfaceCounts;
   // {context source, active count}
   std::vector<std::pair<ContextSource *, size_t>> contextSourceCounts;
 };

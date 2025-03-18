@@ -166,6 +166,8 @@ struct ConvertTritonGPUToLLVM
                                                            patterns, benefit);
     mlir::triton::NVIDIA::populateFp4ToFpToLLVMPatterns(typeConverter, patterns,
                                                         benefit);
+    // FIXME: remove this temporary solution, which is needed to get tests
+    // passed
     mlir::triton::proton::populateRecordOpToLLVMPattern(typeConverter, patterns,
                                                         targetInfo, benefit);
     TritonLLVMConversionTarget convTarget(*context);
