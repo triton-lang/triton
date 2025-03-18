@@ -372,15 +372,13 @@ scf::ForOp WGMMAPrefetcher::createNewForOp() {
         PrefetchedA.push_back(aRem);
       }
 
-      nvidia_gpu::WarpGroupDotOp prevDot;
       // Interleave elementwise with WGMMA
-      llvm::errs() << "get useC \n";
+      nvidia_gpu::WarpGroupDotOp prevDot;
       Value UseC = nullptr;
       if(dot.getUseC()){
         UseC = mapping.lookup(dot.getUseC());
       }
       Value OpC = mapping.lookup(dot.getC());
-      llvm::errs() << "after get useC \n";
 
       for (int i = 0; i < subTileCnt; i++) {
         cloneElementwiseOps(PrefetchedA[i], dot2aValsElementWise[dot],
