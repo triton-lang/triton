@@ -1,5 +1,5 @@
-#ifndef DIALECT_PROTON_GPU_IR_DIALECT_H_
-#define DIALECT_PROTON_GPU_IR_DIALECT_H_
+#ifndef DIALECT_PROTONGPU_IR_DIALECT_H_
+#define DIALECT_PROTONGPU_IR_DIALECT_H_
 
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -26,4 +26,4 @@ const int getBytesPerClockEntry();
 } // namespace triton
 } // namespace mlir
 
-#endif // DIALECT_PROTON_GPU_IR_DIALECT_H_
+#endif // DIALECT_PROTONGPU_IR_DIALECT_H_

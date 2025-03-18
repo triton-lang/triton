@@ -470,6 +470,7 @@ class CompiledKernel:
     def launch_metadata(self, grid, stream, *args):
         if knobs.runtime.launch_enter_hook is None:
             return None
+        self._init_handles()
         ret = LazyDict({"name": self.name, "function": self.function, "stream": stream})
         if not isinstance(self.src, ASTSource) or self.src.fn.launch_metadata is None:
             return ret
@@ -484,7 +485,7 @@ class CompiledKernel:
             if stream is None:
                 device = driver.active.get_current_device()
                 stream = driver.active.get_current_stream(device)
-            launch_metadata = self.launch_metadata(grid, stream, *args)
+            launch_metadata = self.launch_metadata(grid, stream, self.function, *args)
             self.run(grid[0], grid[1], grid[2], stream, self.function, self.packed_metadata, launch_metadata,
                      knobs.runtime.launch_enter_hook, knobs.runtime.launch_exit_hook, *args)
 

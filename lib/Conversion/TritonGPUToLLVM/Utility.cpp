@@ -1221,7 +1221,7 @@ SharedMemoryObject getSharedMemoryObjectFromStruct(Location loc,
 Value getStackPointer(RewriterBase &rewriter, FunctionOpInterface funcOp) {
   // See NOTE: [Additional Function Arguments]
   if (!isKernel(funcOp)) {
-    return funcOp.getArgument(funcOp.getNumArguments() - 2);
+    return funcOp.getArgument(funcOp.getNumArguments() - kSharedMemoryOffset);
   }
 
   auto mod = funcOp->getParentOfType<ModuleOp>();

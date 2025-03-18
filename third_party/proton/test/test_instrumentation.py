@@ -5,9 +5,18 @@ import triton
 import triton.language as tl
 import triton.profiler.language as pl
 import triton.profiler as proton
+import pytest
 
 
-def test_record(tmp_path: pathlib.Path):
+def is_hip():
+    return triton.runtime.driver.active.get_current_target().backend == "hip"
+
+
+def test_record(tmp_path: pathlib.Path, monkeypatch):
+    monkeypatch.setenv("ttg.profile_scratch_memory_size", "1")
+
+    if is_hip():
+        pytest.skip("HIP backend does not support record")
 
     @triton.jit
     def add_kernel(
@@ -32,16 +41,25 @@ def test_record(tmp_path: pathlib.Path):
     size = 256
     x = torch.rand(size, device='cuda')
     y = torch.rand(size, device='cuda')
+    temp_file = tmp_path / "test_hook_instrumentation.hatchet"
+
     output = torch.empty_like(x)
     n_elements = output.numel()
     grid = (1, 1, 1)
+    proton.start(str(temp_file.with_suffix("")), backend="instrumentation")
     pgm = add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
+    proton.finalize()
     ttir = pgm.asm['ttir']
     assert "proton.record start" in ttir
     assert "proton.record end" in ttir
 
 
-def test_hook_instrumentation(tmp_path):
+def test_jit(tmp_path, monkeypatch):
+    monkeypatch.setenv("ttg.profile_scratch_memory_size", "1")
+
+    # TODO(Keren): Remove hacks
+    if is_hip():
+        pytest.skip("HIP backend does not support record")
 
     @triton.jit
     def foo(x, size: tl.constexpr, y):
@@ -55,5 +73,8 @@ def test_hook_instrumentation(tmp_path):
     temp_file = tmp_path / "test_hook_instrumentation.hatchet"
     proton.start(str(temp_file.with_suffix("")), backend="instrumentation")
     foo[(1, )](x, 1, y, num_warps=4)
+    device = triton.runtime.driver.active.get_current_device()
+    assert len(foo.device_caches[device][0]) == 1, "Kernel should be cached"
     proton.finalize()
-    # TODO: add asserts
+    foo[(1, )](x, 1, y, num_warps=4)
+    assert len(foo.device_caches[device][0]) == 2, "Instrumented and uninstrumented kernels both should be cached"
