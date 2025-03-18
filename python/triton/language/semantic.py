@@ -1153,12 +1153,16 @@ def reinterpret_tensor_descriptor(desc_ptr: tl.tensor, block_ty: tl.block_type, 
 
 
 def validate_descriptor_block(shape, dtype):
-    if len(shape) != 2:
+    if len(shape) < 2:
+        return
+    elem_bytes = dtype.primitive_bitwidth / 8
+    contig_dim_size = shape[-1] * elem_bytes
+    if contig_dim_size < 32:
         return
     # Due to limitations of the shared memory encoding, the TMA bounding box has
     # to be at least as big as the swizzle tile.
-    assert shape[0] >= 8, f"tensor descriptor block shape must have at least 8 rows, but got {shape[0]}"
-    min_cols = 32 // dtype.primitive_bitwidth * 8
+    assert shape[-2] >= 8, f"tensor descriptor block shape must have at least 8 rows, but got {shape[0]}"
+    min_cols = 32 // elem_bytes
     assert shape[
         1] >= min_cols, f"{dtype} tensor descriptor block shape must have at least {min_cols} columns, but got {shape[1]}"
 
@@ -1931,6 +1935,13 @@ def make_tensor_descriptor(
         raise ValueError(f"Expected {ndim} strides but got {len(strides)}")
     if len(block_shape) != ndim:
         raise ValueError(f"Expected block_shape to have {ndim} dimensions but got {len(strides)}")
+    assert isinstance(base.dtype, tl.pointer_type)
+    elem_size = base.dtype.element_ty.primitive_bitwidth // 8
+    contig_dim_size = tl._constexpr_to_value(block_shape[-1])
+    if contig_dim_size * elem_size < 16:
+        raise ValueError(
+            f"Descriptor block shape must have at least 16 bytes in the last dimension, but got {contig_dim_size} * {elem_size} = {contig_dim_size * elem_size} bytes"
+        )
 
     strides[-1] = tl._constexpr_to_value(strides[-1])
     if strides[-1] != 1:

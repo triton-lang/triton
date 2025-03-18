@@ -219,12 +219,18 @@ Attribute getFallbackSharedEncoding(RankedTensorType tensorType,
   for (int i = tensorType.getRank() - 1; i >= 0; --i)
     order.push_back(i);
 
+  auto shape = tensorType.getShape();
   if (!ctaLayout)
     ctaLayout = ttg::CTALayoutAttr::getDefault(ctx, tensorType.getRank());
   else if (ctaLayout.getRank() != tensorType.getRank())
-    ctaLayout = ttng::updateCTALayoutForShape(ctaLayout, tensorType.getShape());
+    ctaLayout = ttng::updateCTALayoutForShape(ctaLayout, shape);
 
-  if (tensorType.getRank() == 1) {
+  auto elemTy = tensorType.getElementType();
+  auto shapePerCTA = ttg::getShapePerCTA(ctaLayout.getCTASplitNum(), shape);
+  unsigned eleBitWidth = tensorType.getElementType().getIntOrFloatBitWidth();
+
+  auto contigDimSizeInBytes = shapePerCTA.back() * eleBitWidth / 8;
+  if (tensorType.getRank() == 1 || contigDimSizeInBytes < 32) {
     return ttg::SwizzledSharedEncodingAttr::get(ctx, 1, 1, 1, order, ctaLayout);
   }
   return ttg::NVMMASharedEncodingAttr::get(
