@@ -355,7 +355,8 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
 
 // Returns the given |inputValue|'s dot user result encoding and updates |opIdx|
 // with which dot operand |inputValue| is fed into if possible.
-ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue, unsigned *opIdx) {
+static ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue,
+                                               unsigned *opIdx) {
   if (!llvm::hasSingleElement(inputValue.getUses()))
     return nullptr;
 
