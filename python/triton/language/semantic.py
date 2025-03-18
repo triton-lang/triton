@@ -1155,7 +1155,7 @@ def reinterpret_tensor_descriptor(desc_ptr: tl.tensor, block_ty: tl.block_type, 
 def validate_descriptor_block(shape, dtype):
     if len(shape) < 2:
         return
-    elem_bytes = dtype.primitive_bitwidth / 8
+    elem_bytes = dtype.primitive_bitwidth // 8
     contig_dim_size = shape[-1] * elem_bytes
     if contig_dim_size < 32:
         return
@@ -1164,7 +1164,7 @@ def validate_descriptor_block(shape, dtype):
     assert shape[-2] >= 8, f"tensor descriptor block shape must have at least 8 rows, but got {shape[0]}"
     min_cols = 32 // elem_bytes
     assert shape[
-        1] >= min_cols, f"{dtype} tensor descriptor block shape must have at least {min_cols} columns, but got {shape[1]}"
+        -1] >= min_cols, f"{dtype} tensor descriptor block shape must have at least {min_cols} columns, but got {shape[1]}"
 
 
 def descriptor_load(desc: tl._experimental_tensor_desciptor_base, offsets, cache_modifier: str, eviction_policy: str,
