@@ -329,6 +329,11 @@ public:
 #define str_attr(str) ::mlir::StringAttr::get(ctx, (str))
 
 namespace mlir {
+
+constexpr int kProfileScratchBufferOffset = -1;
+constexpr int kGlobalScratchBufferOffset = -2;
+constexpr int kSharedMemoryOffset = -3;
+
 namespace triton {
 
 namespace gpu {
@@ -338,6 +343,7 @@ LLVM::LLVMFuncOp appendOrGetExternFuncOp(RewriterBase &rewriter, Operation *op,
                                          StringRef funcName, Type funcType,
                                          StringRef libname = "",
                                          StringRef libpath = "");
+
 } // namespace gpu
 
 } // namespace triton
@@ -499,7 +505,7 @@ inline Value getStackPointer(RewriterBase &rewriter,
                              FunctionOpInterface funcOp) {
   // See NOTE: [Additional Function Arguments]
   if (!isKernel(funcOp)) {
-    return funcOp.getArgument(funcOp.getNumArguments() - 2);
+    return funcOp.getArgument(funcOp.getNumArguments() + kSharedMemoryOffset);
   }
 
   auto mod = funcOp->getParentOfType<ModuleOp>();
@@ -515,7 +521,8 @@ inline Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
   // See NOTE: [Additional Function Arguments]
   if (!isKernel(funcOp)) {
     // Base for this function
-    auto gmemBase = funcOp.getArgument(funcOp.getNumArguments() - 1);
+    auto gmemBase = funcOp.getArgument(funcOp.getNumArguments() +
+                                       kGlobalScratchBufferOffset);
     if (!allocOffset) {
       return gmemBase;
     }
@@ -526,7 +533,8 @@ inline Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
   }
 
   // Base for entire kernel
-  auto gmemBase = funcOp.getArgument(funcOp.getNumArguments() - 1);
+  auto gmemBase =
+      funcOp.getArgument(funcOp.getNumArguments() + kGlobalScratchBufferOffset);
 
   ModuleOp mod = funcOp.getOperation()->getParentOfType<ModuleOp>();
   auto allocSizeAttr = mod.getOperation()->getAttrOfType<mlir::IntegerAttr>(
@@ -566,6 +574,15 @@ inline Value getGlobalScratchPtr(Location loc, RewriterBase &rewriter,
   auto res =
       b.gep(mlir::LLVM::LLVMPointerType::get(ctx, 1), i8_ty, gmemBase, offset);
   return res;
+}
+
+inline Value getProfileScratchPtr(Location loc, RewriterBase &rewriter,
+                                  FunctionOpInterface funcOp) {
+  // See NOTE: [Additional Function Arguments]
+  // FIXME(Keren): This is broken when we have device functions, we
+  // need to implement proper calling convention
+  return funcOp.getArgument(funcOp.getNumArguments() +
+                            kProfileScratchBufferOffset);
 }
 
 inline Value getSharedMemoryBase(Location loc, RewriterBase &rewriter,
