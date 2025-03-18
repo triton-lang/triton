@@ -6,6 +6,7 @@ import triton
 import triton.language as tl
 import triton.profiler.language as pl
 import triton.profiler as proton
+import pytest
 
 
 def is_hip():

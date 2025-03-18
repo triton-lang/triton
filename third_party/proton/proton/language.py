@@ -4,6 +4,8 @@ from triton._C.libtriton import proton as triton_proton
 
 from .flags import get_instrumentation_on
 
+from .flags import get_instrumentation_on
+
 
 def record(is_start: tl.constexpr, scope_name: tl.constexpr, triton_builder=None):
     if not get_instrumentation_on():
