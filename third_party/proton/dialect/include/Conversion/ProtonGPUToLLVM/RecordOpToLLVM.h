@@ -1,11 +1,7 @@
-#ifndef PROTON_RECORDOP_TO_LLVM_H
-#define PROTON_RECORDOP_TO_LLVM_H
+#ifndef PROTONGPU_TO_LLVM_RECORDOP_TO_LLVM_H
+#define PROTONGPU_TO_LLVM_RECORDOP_TO_LLVM_H
 
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
-
-// TODO(fywkevin): This pattern is a temporary solution to convert the record op
-// to LLVM IR such that we could still have a path to test the frontend. Need to
-// be removed soon.
 
 namespace mlir::triton {
 class TargetInfoBase;
@@ -19,4 +15,4 @@ void populateRecordOpToLLVMPattern(LLVMTypeConverter &typeConverter,
 } // namespace proton
 } // namespace mlir::triton
 
-#endif // PROTON_RECORDOP_TO_LLVM_H
+#endif // PROTONGPU_TO_LLVM_RECORDOP_TO_LLVM_H

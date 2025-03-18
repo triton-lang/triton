@@ -7,7 +7,7 @@ from typing import NamedTuple
 import pathlib
 
 import triton.language as tl
-from triton.profiler.hook import COMPUTE_METADATA_SCOPE_NAME
+from triton.profiler.hooks.launch import COMPUTE_METADATA_SCOPE_NAME
 
 
 def is_hip():
@@ -177,7 +177,7 @@ def test_cpu_timed_scope(tmp_path: pathlib.Path):
     assert kernel_frame["metrics"]["time (ns)"] > 0
 
 
-def test_hook_triton(tmp_path: pathlib.Path):
+def test_hook_launch(tmp_path: pathlib.Path):
 
     def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
         # get arg's element size
@@ -209,7 +209,7 @@ def test_hook_triton(tmp_path: pathlib.Path):
 
 
 @pytest.mark.parametrize("context", ["shadow", "python"])
-def test_hook_gpu_kernel(tmp_path: pathlib.Path, context: str):
+def test_hook_launch_context(tmp_path: pathlib.Path, context: str):
 
     def metadata_fn(grid: tuple, metadata: NamedTuple, args: dict):
         x = args["x"]
