@@ -10,11 +10,13 @@ using namespace mlir;
 using namespace mlir::triton;
 
 // NOTE: [Additional Function Arguments]
+// Triton patches additional arguments to the function signature to support
+// (1) shared memory, (2) global scratch memory, and (3) profile scratch memory.
 // To support use of shared memory and global scratch memory inside of a
 // function, the caller allocates a single large block of the relevant memory
 // and calls the function with these extra arguments at the end.
-// Specifically, the last argument is the global scratch memory allocation and
-// the second to last is the shared memory allocation.
+// Profile scratch memory is only used when the function is instrumented for
+// profiling.
 //
 // For the kernel function itself, the shared memory base is a global symbol
 // so no additional function argument is required but global scratch memory
@@ -22,9 +24,6 @@ using namespace mlir::triton;
 // memory is shared between all programs, so a linear offset based on the
 // program id is required to get the local scratch base.
 
-/// FuncOp legalization pattern that converts MemRef arguments to pointers to
-/// MemRef descriptors (LLVM struct data types) containing all the MemRef type
-/// information.
 struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
   FuncOpConversion(LLVMTypeConverter &converter,
                    const TargetInfoBase &targetInfo, PatternBenefit benefit)
@@ -56,6 +55,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     auto sharedPtrTy =
         LLVM::LLVMPointerType::get(ctx, targetInfo.getSharedAddressSpace());
     auto globalPtrTy = LLVM::LLVMPointerType::get(ctx, 1);
+    auto profilePtrTy = LLVM::LLVMPointerType::get(ctx, 1);
 
     // 1. Modify the function type to add the new arguments.
     auto funcTy = funcOp.getFunctionType();
@@ -73,6 +73,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       amendedInputTy.push_back(sharedPtrTy);
     }
     amendedInputTy.push_back(globalPtrTy);
+    amendedInputTy.push_back(profilePtrTy);
     auto amendedFuncTy =
         FunctionType::get(ctx, amendedInputTy, funcTy.getResults());
     // 2. Modify the argument attributes to add the new argument.
@@ -97,6 +98,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       region.addArgument(sharedPtrTy, loc);
     }
     region.addArgument(globalPtrTy, loc);
+    region.addArgument(profilePtrTy, loc);
     rewriter.inlineRegionBefore(region, amendedFuncOp.getBody(),
                                 amendedFuncOp.end());
     return amendedFuncOp;

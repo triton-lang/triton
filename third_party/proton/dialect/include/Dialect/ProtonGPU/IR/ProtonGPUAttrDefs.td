@@ -1,5 +1,5 @@
-#ifndef PROTON_GPU_ATTR_DEFS
-#define PROTON_GPU_ATTR_DEFS
+#ifndef PROTONGPU_ATTR_DEFS
+#define PROTONGPU_ATTR_DEFS
 
 include "mlir/IR/EnumAttr.td"
 
@@ -12,4 +12,4 @@ def GranularityAttr : I32EnumAttr<
   let cppNamespace = "::mlir::triton::proton::gpu";
 }
 
-#endif // PROTON_GPU_ATTR_DEFS
+#endif // PROTONGPU_ATTR_DEFS
