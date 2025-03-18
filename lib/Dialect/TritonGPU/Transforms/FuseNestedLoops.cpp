@@ -911,6 +911,8 @@ static void fuseOneLevel(LoopNestNode *parent, mlir::DominanceInfo &domInfo) {
   // Update the parent's loop to the fused loop. Set the new stage count to the
   // max stage count of the inner loops.
   int numStages = 1;
+  if (auto stageAttr = outer->getAttrOfType<IntegerAttr>(kNumStagesAttrName))
+    numStages = stageAttr.getInt();
   for (scf::ForOp loop : innerLoops) {
     if (auto stageAttr = loop->getAttrOfType<IntegerAttr>(kNumStagesAttrName))
       numStages = std::max<int>(numStages, stageAttr.getInt());
