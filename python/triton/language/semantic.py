@@ -1182,7 +1182,9 @@ def descriptor_store(desc: tl.tensor_descriptor_base, value: tl.tensor, offsets,
     ndim = len(desc.block_shape)
     assert len(offsets) == ndim, f"expected {ndim} offsets, but got {len(offsets)}"
     assert value.shape == desc.block_shape
-
+    # Ensure we store a block value with the correct element type for this descriptor
+    # (e.g., implicitly downcast values whose element type is wider than the descriptor's)
+    value = cast(value, desc.dtype, builder)
     offsets = _convert_to_ir_values(builder, offsets, require_i64=False)
     return tl.tensor(builder.create_descriptor_store(desc.handle, value.handle, offsets), tl.void)
 
