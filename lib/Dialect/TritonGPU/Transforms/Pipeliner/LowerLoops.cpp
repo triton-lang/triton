@@ -705,7 +705,7 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
         builder, loc, extractIdx, numBuffersVal, zero, one, &cndExt);
     if (phase) {
       Value nextPhase = builder.create<arith::XOrIOp>(loc, phase, one);
-      phase = builder.create<arith::SelectOp>(loc, cndExt, phase, nextPhase);
+      phase = builder.create<arith::SelectOp>(loc, cndExt, nextPhase, phase);
       loadGroup.phase = phase;
     }
   }

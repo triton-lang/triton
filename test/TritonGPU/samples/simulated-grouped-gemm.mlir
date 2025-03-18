@@ -219,7 +219,7 @@
 // CHECK:             %[[VAL_188:.*]] = arith.cmpi slt, %[[VAL_187]], %[[VAL_8]] : i32
 // CHECK:             %[[VAL_189:.*]] = arith.select %[[VAL_188]], %[[VAL_187]], %[[VAL_13]] : i32
 // CHECK:             %[[VAL_190:.*]] = arith.xori %[[VAL_131]], %[[VAL_10]] : i32
-// CHECK:             %[[VAL_191:.*]] = arith.select %[[VAL_188]], %[[VAL_131]], %[[VAL_190]] : i32
+// CHECK:             %[[VAL_191:.*]] = arith.select %[[VAL_188]], %[[VAL_190]], %[[VAL_131]] : i32
 // CHECK:             %[[VAL_192:.*]] = ttg.memdesc_subview %[[VAL_51]]{{\[}}%[[VAL_189]]] : !ttg.memdesc<3xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable> -> !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
 // CHECK:             ttng.wait_barrier %[[VAL_192]], %[[VAL_191]] : !ttg.memdesc<1xi64, #[[$ATTR_2]], #[[$ATTR_4]], mutable, 3>
 // CHECK:             %[[VAL_193:.*]] = ttg.memdesc_subview %[[VAL_50]]{{\[}}%[[VAL_189]], %[[VAL_13]], %[[VAL_13]]] : !ttg.memdesc<3x256x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable> -> !ttg.memdesc<256x64xf16, #[[$ATTR_1]], #[[$ATTR_4]], mutable, 3x256x64>
