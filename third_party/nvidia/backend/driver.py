@@ -218,6 +218,7 @@ def make_launcher(constants, signature):
     ]
     params = [f"&arg{i}" for i, ty in signature.items() if ty != "constexpr"]
     params.append("&global_scratch")
+    params.append("&profile_scratch")
     src = f"""
 #include \"cuda.h\"
 #include <stdbool.h>
@@ -264,7 +265,7 @@ static cuLaunchKernelEx_t getLaunchKernelExHandle() {{
   return cuLaunchKernelExHandle;
 }}
 
-static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int launch_cooperative_grid, int clusterDimX, int clusterDimY, int clusterDimZ, int shared_memory, CUstream stream, CUfunction function, CUdeviceptr global_scratch{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
+static void _launch(int gridX, int gridY, int gridZ, int num_warps, int num_ctas, int launch_cooperative_grid, int clusterDimX, int clusterDimY, int clusterDimZ, int shared_memory, CUstream stream, CUfunction function, CUdeviceptr global_scratch, CUdeviceptr profile_scratch{', ' + arg_decls if len(arg_decls) > 0 else ''}) {{
   void *params[] = {{ {', '.join(params)} }};
   if (gridX*gridY*gridZ > 0) {{
     if ((num_ctas == 1) && (0 == launch_cooperative_grid)) {{
@@ -449,9 +450,10 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
   PyObject *kernel_metadata = NULL;
   PyObject *launch_metadata = NULL;
   PyObject *global_scratch_obj = NULL;
+  PyObject *profile_scratch_obj = NULL;
   {newline.join([f"{_extracted_type(ty)} _arg{i};" for i, ty in signature.items()])}
   if(!PyArg_ParseTuple(args, \"{format}\", &gridX, &gridY, &gridZ,
-                                           &_stream, &_function, &launch_cooperative_grid, &global_scratch_obj,
+                                           &_stream, &_function, &launch_cooperative_grid, &global_scratch_obj, &profile_scratch_obj,
                                            &kernel_metadata, &launch_metadata,
                                            &launch_enter_hook, &launch_exit_hook{args_list})) {{
     return NULL;
@@ -481,11 +483,20 @@ static PyObject* launch(PyObject* self, PyObject* args) {{
     global_scratch = global_scratch_info.dev_ptr;
   }}
 
+  CUdeviceptr profile_scratch = 0;
+  if (profile_scratch_obj != Py_None) {{
+    DevicePtrInfo profile_scratch_info = getPointer(profile_scratch_obj, -1);
+    if (!profile_scratch_info.valid) {{
+      return NULL;
+    }}
+    profile_scratch = profile_scratch_info.dev_ptr;
+  }}
+
   // raise exception asap
   {newline.join(ptr_decls)}
   {newline.join(tma_decls)}
   Py_BEGIN_ALLOW_THREADS;
-  _launch(gridX, gridY, gridZ, num_warps, num_ctas, launch_cooperative_grid, clusterDimX, clusterDimY, clusterDimZ, shared_memory, (CUstream)_stream, (CUfunction)_function, global_scratch{', ' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
+  _launch(gridX, gridY, gridZ, num_warps, num_ctas, launch_cooperative_grid, clusterDimX, clusterDimY, clusterDimZ, shared_memory, (CUstream)_stream, (CUfunction)_function, global_scratch, profile_scratch{', ' + ', '.join(internal_args_list) if len(internal_args_list) > 0 else ''});
   Py_END_ALLOW_THREADS;
   if (PyErr_Occurred()) {{
     return NULL;
@@ -617,16 +628,25 @@ class CudaLauncher(object):
             self.launch = mod.launch
         self.global_scratch_size = metadata.global_scratch_size
         self.global_scratch_align = metadata.global_scratch_align
+        self.profile_scratch_size = metadata.profile_scratch_size
+        self.profile_scratch_align = metadata.profile_scratch_align
         self.launch_cooperative_grid = metadata.launch_cooperative_grid
 
     def __call__(self, gridX, gridY, gridZ, stream, function, *args):
-        if self.global_scratch_size > 0:
-            grid_size = gridX * gridY * gridZ
-            alloc_size = grid_size * self.num_ctas * self.global_scratch_size
-            global_scratch = _allocation._allocator(alloc_size, self.global_scratch_align, stream)
-        else:
-            global_scratch = None
-        self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, global_scratch, *args)
+
+        def allocate_scratch(size, align, allocator):
+            if size > 0 and not isinstance(allocator, _allocation.NullAllocator):
+                grid_size = gridX * gridY * gridZ * self.num_ctas
+                alloc_size = grid_size * size
+                return allocator(alloc_size, align, stream)
+            return None
+
+        # TODO(Keren): Reduce launch overhead
+        global_scratch = allocate_scratch(self.global_scratch_size, self.global_scratch_align, _allocation._allocator)
+        profile_scratch = allocate_scratch(self.profile_scratch_size, self.profile_scratch_align,
+                                           _allocation._profile_allocator)
+        self.launch(gridX, gridY, gridZ, stream, function, self.launch_cooperative_grid, global_scratch,
+                    profile_scratch, *args)
 
 
 class CudaDriver(GPUDriver):
