@@ -1,5 +1,5 @@
-#ifndef PROTONGPU_CONVERSION_PROTONGPUTOLLVM_PASSES_H
-#define PROTONGPU_CONVERSION_PROTONGPUTOLLVM_PASSES_H
+#ifndef PROTONGPU_TO_LLVM_PASSES_H
+#define PROTONGPU_TO_LLVM_PASSES_H
 
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Pass/Pass.h"
@@ -32,4 +32,4 @@ createAllocateProtonGlobalScratchBufferPass();
 
 } // namespace mlir
 
-#endif
+#endif // PROTONGPU_TO_LLVM_PASSES_H

@@ -30,3 +30,15 @@ def set_allocator(allocator: Allocator):
     """
     global _allocator
     _allocator = allocator
+
+
+_profile_allocator: Allocator = NullAllocator()
+
+
+def set_profile_allocator(allocator: Optional[Allocator]):
+    """
+    The profile allocator function is called before kernel launch for kernels
+    that require additional global memory workspace.
+    """
+    global _profile_allocator
+    _profile_allocator = allocator
