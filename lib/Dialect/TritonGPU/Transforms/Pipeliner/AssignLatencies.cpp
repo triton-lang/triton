@@ -133,8 +133,7 @@ private:
         return false;
       }
     }
-    if (isa<tt::ExperimentalDescriptorLoadOp,
-            tt::ExperimentalDescriptorGatherOp>(op))
+    if (isa<tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op))
       return true;
     if (!canHaveSharedEncoding(cast<tt::LoadOp>(op))) {
       LDBG("Load " << *op << " cannot have shared encoding");
@@ -189,8 +188,8 @@ private:
         [&](Operation *op, Operation *finalUser, int distance) {
           if (!seen.insert(op).second || excluded.count(op))
             return;
-          if (isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp,
-                  tt::ExperimentalDescriptorGatherOp>(op)) {
+          if (isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp>(
+                  op)) {
             if (!isPipeliningBeneficial(op, finalUser, axisInfoAnalysis))
               return;
             if (loadOpToIndLevel.count(op)) {
@@ -240,8 +239,7 @@ private:
     // that are not directly used by dot ops.
     if (pipelineWithoutDot && !seenDot) {
       for (Operation &op : forOp.getBody()->without_terminator()) {
-        if (!isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp,
-                 tt::ExperimentalDescriptorGatherOp>(op))
+        if (!isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op))
           dfs(&op, &op, 0);
       }
     }

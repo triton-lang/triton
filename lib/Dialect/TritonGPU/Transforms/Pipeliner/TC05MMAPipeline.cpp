@@ -577,15 +577,22 @@ bool isSafeToPipeline(ttng::TCGen5MMAScaledOp scaledDot, scf::ForOp forOp) {
   // when its scales in TMEM are stored by the TMEMCopy op (tcgen05.cp).
   // That condition is equivalent to scale arguments of
   // ttng::TCGen5MMAScaledOp being in SMEM during SWP in our convention.
-  auto isCopiedByTMEMCopy = [&](Value scale) {
+  auto isInvariantOrCopiedByTMEMCopy = [&](Value scale) {
+    if (forOp.isDefinedOutsideOfLoop(scale))
+      return true;
+    if (auto tmemAlloc = scale.getDefiningOp<ttng::TMEMAllocOp>()) {
+      Value tmemAllocSrc = tmemAlloc.getSrc();
+      if (tmemAllocSrc && forOp.isDefinedOutsideOfLoop(tmemAllocSrc))
+        return true;
+    }
     auto scaleAlloc = findShmemAlloc(scale);
     if (!scaleAlloc || !forOp.isDefinedOutsideOfLoop(scaleAlloc))
       return false;
     return true;
   };
 
-  return isCopiedByTMEMCopy(scaledDot.getAScale()) &&
-         isCopiedByTMEMCopy(scaledDot.getBScale());
+  return isInvariantOrCopiedByTMEMCopy(scaledDot.getAScale()) &&
+         isInvariantOrCopiedByTMEMCopy(scaledDot.getBScale());
 }
 
 // Find MMAs eligible for pipelining and lower them by:

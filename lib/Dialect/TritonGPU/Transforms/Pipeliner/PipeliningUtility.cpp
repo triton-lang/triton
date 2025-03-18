@@ -1,5 +1,6 @@
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/IR/TypeUtilities.h"
@@ -8,6 +9,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/Support/Casting.h"
 
@@ -50,6 +52,8 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
                                      Value pred) {
   OpBuilder::InsertionGuard guard(rewriter);
   if (mlir::isMemoryEffectFree(op))
+    return op;
+  if (isa<LLVM::AssumeOp>(op))
     return op;
   if (isa<ttg::AsyncCommitGroupOp, ttg::AsyncWaitOp>(op))
     return op;
@@ -376,8 +380,7 @@ Value mlir::triton::createAlloc(scf::ForOp forOp, RankedTensorType ty,
 }
 
 bool mlir::triton::isTMALoad(Operation *op) {
-  return isa<tt::ExperimentalDescriptorLoadOp,
-             tt::ExperimentalDescriptorGatherOp>(op);
+  return isa<tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op);
 }
 
 ttg::MemDescType mlir::triton::getBufferViewType(ttg::MemDescType allocTy) {
@@ -424,21 +427,20 @@ ttg::SharedEncodingTrait mlir::triton::getSharedEncoding(Operation *op) {
   }
 
   auto ty = cast<RankedTensorType>(op->getResultTypes()[0]);
+  auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
+  auto order = ttg::getOrder(ty);
   if (isTMALoad(op)) {
-    // For TMA, the encoding compatible with it takes precedence over local
-    // alloc created for the MMA operand.
-    if (localAllocEnc) {
-      if (auto sharedMMALayout =
-              dyn_cast<ttg::NVMMASharedEncodingAttr>(localAllocEnc)) {
-        assert(!sharedMMALayout.getFp4Padded() &&
-               "TMA load for mixed precision MMAv5 is not supported yet.");
-      }
+    // TMA encoding is set on the descriptor type
+    TypedValue<tt::TensorDescType> desc;
+    if (auto load = dyn_cast<tt::DescriptorLoadOp>(op)) {
+      desc = load.getDesc();
+    } else if (auto gather = dyn_cast<tt::DescriptorGatherOp>(op)) {
+      desc = gather.getDesc();
+    } else {
+      op->emitError() << "unrecognized tma load type";
+      llvm::report_fatal_error("unrecognized tma load type");
     }
-    auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
-    auto order = ttg::getOrder(ty);
-    return ttg::NVMMASharedEncodingAttr::get(
-        ty.getContext(), ty.getShape(), order, ctaLayout, ty.getElementType(),
-        /*fp4Padded*/ false);
+    return ttng::getEncodingFromDescriptor(op, ty, desc);
   }
 
   if (localAllocEnc)
@@ -454,7 +456,8 @@ ttg::SharedEncodingTrait mlir::triton::getSharedEncoding(Operation *op) {
     return localAllocEnc;
 
   // Use generic layout. This won't be optimal for 2D tensors.
-  return getSharedEncoding(ty);
+  return ttg::SwizzledSharedEncodingAttr::get(ty.getContext(), 1, 1, 1, order,
+                                              ctaLayout);
 }
 
 void mlir::triton::eraseLoopCarriedValues(scf::ForOp &loop,

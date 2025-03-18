@@ -1212,10 +1212,9 @@ LogicalResult GatherOp::inferReturnTypes(
   return success();
 }
 
-// -- ExperimentalDescriptorGatherOp
-LogicalResult
-ExperimentalDescriptorGatherOp::verifyResultType(Operation *op,
-                                                 mlir::ShapedType type) {
+// -- DescriptorGatherOp
+LogicalResult DescriptorGatherOp::verifyResultType(Operation *op,
+                                                   mlir::ShapedType type) {
   if (type.getRank() != 2)
     return op->emitOpError("result must be a 2D tensor, but got ") << type;
 
@@ -1242,7 +1241,7 @@ ExperimentalDescriptorGatherOp::verifyResultType(Operation *op,
   return success();
 }
 
-LogicalResult ExperimentalDescriptorGatherOp::verify() {
+LogicalResult DescriptorGatherOp::verify() {
   RankedTensorType blockType = getDesc().getType().getBlockType();
   // Gather from `!tt.tensordesc<tensor<1xMxdtype>>`.
   if (blockType.getRank() != 2)
@@ -1277,7 +1276,7 @@ LogicalResult ExperimentalDescriptorGatherOp::verify() {
   return success();
 }
 
-// -- ExperimentalDesciptorLoadOp --
+// -- DescriptorLoadOp --
 static LogicalResult verifyDesciptorLoadStoreType(Operation *op,
                                                   TensorDescType desc,
                                                   RankedTensorType tensor) {
@@ -1300,12 +1299,12 @@ static LogicalResult verifyDesciptorLoadStoreType(Operation *op,
   return op->emitOpError("tensor desciptor block and tensor types must match");
 }
 
-LogicalResult ExperimentalDescriptorLoadOp::verify() {
+LogicalResult DescriptorLoadOp::verify() {
   return verifyDesciptorLoadStoreType(*this, getDesc().getType(), getType());
 }
 
-// -- ExperimentalDesciptorStoreOp --
-LogicalResult ExperimentalDescriptorStoreOp::verify() {
+// -- DescriptorStoreOp --
+LogicalResult DescriptorStoreOp::verify() {
   return verifyDesciptorLoadStoreType(*this, getDesc().getType(),
                                       getSrc().getType());
 }

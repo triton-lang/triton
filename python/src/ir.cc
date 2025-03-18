@@ -1421,25 +1421,24 @@ void init_triton_ir(py::module &&m) {
               EvictionPolicy evictionPolicy) -> Value {
              auto descTy = cast<triton::TensorDescType>(desc.getType());
              auto resTy = descTy.getBlockType();
-             return self.create<ExperimentalDescriptorLoadOp>(
+             return self.create<DescriptorLoadOp>(
                  resTy, desc, indices, cacheModifier, evictionPolicy);
            })
       .def("create_descriptor_gather",
            [](TritonOpBuilder &self, Value desc, Value x_indices, Value y_index,
               Type type) -> Value {
-             return self.create<ExperimentalDescriptorGatherOp>(
-                 type, desc, x_indices, y_index);
+             return self.create<DescriptorGatherOp>(type, desc, x_indices,
+                                                    y_index);
            })
       .def("create_descriptor_store",
            [](TritonOpBuilder &self, Value desc, Value value,
               std::vector<Value> &indices) -> void {
-             self.create<ExperimentalDescriptorStoreOp>(desc, value, indices);
+             self.create<DescriptorStoreOp>(desc, value, indices);
            })
       .def("create_descriptor_scatter",
            [](TritonOpBuilder &self, Value desc, Value value, Value x_indices,
               Value y_index) -> void {
-             self.create<ExperimentalDescriptorScatterOp>(desc, x_indices,
-                                                          y_index, value);
+             self.create<DescriptorScatterOp>(desc, x_indices, y_index, value);
            })
       .def("create_tensormap_create",
            [](TritonOpBuilder &self, Value desc_ptr, Value global_address,
@@ -1819,6 +1818,8 @@ void init_triton_ir(py::module &&m) {
         // diagnostics
 
         auto *context = mod.getContext();
+        if (::triton::tools::getBoolEnv("MLIR_DISABLE_MULTITHREADING"))
+          context->disableMultithreading();
 
         auto reproducerPath =
             triton::tools::getStrEnv("TRITON_REPRODUCER_PATH");

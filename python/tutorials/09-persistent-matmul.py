@@ -588,19 +588,19 @@ def matmul_kernel_descriptor_persistent(a_ptr, b_ptr, c_ptr,  #
     k_tiles = tl.cdiv(K, BLOCK_SIZE_K)
     num_tiles = num_pid_m * num_pid_n
 
-    a_desc = tl._experimental_make_tensor_descriptor(
+    a_desc = tl.make_tensor_descriptor(
         a_ptr,
         shape=[M, K],
         strides=[K, 1],
         block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_K],
     )
-    b_desc = tl._experimental_make_tensor_descriptor(
+    b_desc = tl.make_tensor_descriptor(
         b_ptr,
         shape=[N, K],
         strides=[K, 1],
         block_shape=[BLOCK_SIZE_N, BLOCK_SIZE_K],
     )
-    c_desc = tl._experimental_make_tensor_descriptor(
+    c_desc = tl.make_tensor_descriptor(
         c_ptr,
         shape=[M, N],
         strides=[N, 1],

@@ -56,7 +56,7 @@ static LogicalResult findSingleChainToLoad(scf::ForOp loop, Value value,
   //
   //     cp.async.wait_group 2 # the i-2 load group is complete
   //     mbarrier.arrive %load_mbars[(i-2)%3]
-  if (isa<ExperimentalDescriptorLoadOp, ExperimentalDescriptorGatherOp>(
+  if (isa<DescriptorLoadOp, DescriptorGatherOp>(
           defOp)) {
     ops.push_back(defOp);
     return success();
@@ -110,13 +110,13 @@ static void lowerTMACopy(ImplicitLocOpBuilder &b,
                          WarpSchedule::Partition &partition, Operation *op,
                          Value barrier, Value view) {
   Value truePred = b.create<arith::ConstantIntOp>(true, /*width=*/1);
-  if (auto load = dyn_cast<ExperimentalDescriptorLoadOp>(op)) {
+  if (auto load = dyn_cast<DescriptorLoadOp>(op)) {
     Value tmaPtr = createInPartition<ttng::TensorDescToTMAPtrOp>(
         b, partition, load.getDesc());
     createInPartition<ttng::AsyncTMACopyGlobalToLocalOp>(
         b, partition, tmaPtr, load.getIndices(), barrier, view, truePred);
   } else {
-    auto gather = cast<ExperimentalDescriptorGatherOp>(op);
+    auto gather = cast<DescriptorGatherOp>(op);
     Value tmaPtr = createInPartition<ttng::TensorDescToTMAPtrOp>(
         b, partition, gather.getDesc());
     createInPartition<ttng::AsyncTMAGatherOp>(

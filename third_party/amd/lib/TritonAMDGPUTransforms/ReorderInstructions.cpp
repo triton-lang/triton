@@ -247,7 +247,7 @@ static void scheduleGlobalLoadLocalStore(Operation *parentOp) {
 // The basic idea of sched-load optimization is to sink the 2nd tt.load
 // after local_load so that global_load instructions can be interleaved with
 // mfma's. This can help hide the issue latency of global_load instructions
-// and improve performance on MI300X.
+// and improve performance on CDNA3.
 //
 // It's assumed that the IR before this optimization has the following
 // structure:

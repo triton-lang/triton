@@ -117,12 +117,9 @@ def matmul_tma_ws_kernel(  #
         BLOCK_SIZE_K: tl.constexpr,  #
         GROUP_SIZE_M: tl.constexpr,  #
 ):
-    a_desc = tl._experimental_make_tensor_descriptor(a_ptr, shape=[M, K], strides=[a_stride0, a_stride1],
-                                                     block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_K])
-    b_desc = tl._experimental_make_tensor_descriptor(b_ptr, shape=[N, K], strides=[b_stride0, b_stride1],
-                                                     block_shape=[BLOCK_SIZE_N, BLOCK_SIZE_K])
-    c_desc = tl._experimental_make_tensor_descriptor(c_ptr, shape=[M, N], strides=[c_stride0, c_stride1],
-                                                     block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_N])
+    a_desc = tl.make_tensor_descriptor(a_ptr, shape=[M, K], strides=[a_stride0, a_stride1], block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_K])
+    b_desc = tl.make_tensor_descriptor(b_ptr, shape=[N, K], strides=[b_stride0, b_stride1], block_shape=[BLOCK_SIZE_N, BLOCK_SIZE_K])
+    c_desc = tl.make_tensor_descriptor(c_ptr, shape=[M, N], strides=[c_stride0, c_stride1], block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_N])
 
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)

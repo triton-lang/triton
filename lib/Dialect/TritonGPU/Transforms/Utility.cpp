@@ -669,7 +669,7 @@ scf::ForOp replaceForOpWithNewSignature(OpBuilder &rewriter, scf::ForOp loop,
 }
 
 scf::WhileOp replaceWhileOpWithNewSignature(
-    RewriterBase &rewriter, scf::WhileOp loop, ValueRange newIterOperands,
+    OpBuilder &rewriter, scf::WhileOp loop, ValueRange newIterOperands,
     TypeRange newResultTypes,
     SmallVectorImpl<std::tuple<Value, Value>> &replacements) {
   OpBuilder::InsertionGuard g(rewriter);
@@ -708,11 +708,11 @@ scf::WhileOp replaceWhileOpWithNewSignature(
   for (auto [oldArg, newArg] : llvm::zip(
            loop.getBeforeArguments(), newLoop.getBeforeArguments().take_front(
                                           loop.getBeforeArguments().size())))
-    rewriter.replaceAllUsesWith(oldArg, newArg);
+    oldArg.replaceAllUsesWith(newArg);
   for (auto [oldArg, newArg] : llvm::zip(loop.getAfterArguments(),
                                          newLoop.getAfterArguments().take_front(
                                              loop.getAfterArguments().size())))
-    rewriter.replaceAllUsesWith(oldArg, newArg);
+    oldArg.replaceAllUsesWith(newArg);
 
   // Stack the new results
   for (auto it : llvm::zip(loop.getResults(), newLoop.getResults().take_front(
@@ -722,7 +722,7 @@ scf::WhileOp replaceWhileOpWithNewSignature(
   return newLoop;
 }
 
-scf::WhileOp replaceWhileOpWithNewSignature(RewriterBase &rewriter,
+scf::WhileOp replaceWhileOpWithNewSignature(OpBuilder &rewriter,
                                             scf::WhileOp loop,
                                             ValueRange newIterOperands,
                                             TypeRange newResultTypes) {
@@ -730,13 +730,13 @@ scf::WhileOp replaceWhileOpWithNewSignature(RewriterBase &rewriter,
   auto newWhileOp = replaceWhileOpWithNewSignature(
       rewriter, loop, newIterOperands, newResultTypes, replacements);
   for (auto &kv : replacements) {
-    rewriter.replaceAllUsesWith(std::get<0>(kv), std::get<1>(kv));
+    std::get<0>(kv).replaceAllUsesWith(std::get<1>(kv));
   }
   return newWhileOp;
 }
 
 scf::IfOp replaceIfOpWithNewSignature(
-    RewriterBase &rewriter, scf::IfOp ifOp, TypeRange newResultTypes,
+    OpBuilder &rewriter, scf::IfOp ifOp, TypeRange newResultTypes,
     SmallVectorImpl<std::tuple<Value, Value>> &replacements) {
   OpBuilder::InsertionGuard g(rewriter);
   rewriter.setInsertionPoint(ifOp);
@@ -769,13 +769,13 @@ void appendToForOpYield(scf::ForOp forOp, ArrayRef<Value> newOperands) {
   yieldOp->erase();
 }
 
-scf::IfOp replaceIfOpWithNewSignature(RewriterBase &rewriter, scf::IfOp ifOp,
+scf::IfOp replaceIfOpWithNewSignature(OpBuilder &rewriter, scf::IfOp ifOp,
                                       TypeRange newResultTypes) {
   SmallVector<std::tuple<Value, Value>> replacements;
   auto newIfOp =
       replaceIfOpWithNewSignature(rewriter, ifOp, newResultTypes, replacements);
   for (auto &kv : replacements)
-    rewriter.replaceAllUsesWith(std::get<0>(kv), std::get<1>(kv));
+    std::get<0>(kv).replaceAllUsesWith(std::get<1>(kv));
   return newIfOp;
 }
 

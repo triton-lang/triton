@@ -4,6 +4,8 @@
 #tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
 #tmem1 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 128, unpacked = true>
 #tmem2 = #ttng.tensor_memory_encoding<blockM = 64, blockN = 256, unpacked = true>
+#tmem_scales = #ttng.tensor_memory_scales_encoding<>
+#linear = #ttg.linear<{register = [[0, 1], [0, 2], [32, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[0, 0], [0, 0]], block = []}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 65536 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
   // CHECK: ttg.tensor_memory_size = 512
   // CHECK: alloc_tensor_memory
@@ -13,6 +15,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     %cst0 = arith.constant dense<0.000000e+00> : tensor<128x128xf16, #blocked>
     %cst1 = arith.constant dense<0.000000e+00> : tensor<64x64xf16, #blocked>
     %cst2 = arith.constant dense<0.000000e+00> : tensor<64x256xf16, #blocked>
+    %cst3 = arith.constant dense<0> : tensor<64x4xi8, #linear>
 
     // CHECK: ttng.tmem_alloc %{{.+}} {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32}
     %0 = ttng.tmem_alloc %cst : (tensor<128x128xf32, #blocked>) -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
@@ -38,6 +41,15 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
     ttng.tmem_store %cst2, %4, %true : tensor<64x256xf16, #blocked> -> !ttg.memdesc<64x128xf16, #tmem2, #ttng.tensor_memory, mutable>
     ttng.tmem_store %cst2, %5, %true : tensor<64x256xf16, #blocked> -> !ttg.memdesc<64x128xf16, #tmem2, #ttng.tensor_memory, mutable>
     ttng.tmem_store %cst, %6, %true : tensor<128x128xf32, #blocked> -> !ttg.memdesc<128x128xf32, #tmem, #ttng.tensor_memory, mutable>
+
+    %7 = ttng.tmem_alloc : () -> !ttg.memdesc<64x4xi8, #tmem_scales, #ttng.tensor_memory, mutable>
+    // CHECK: ttng.tmem_alloc  {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32}
+    %8 = ttng.tmem_alloc : () -> !ttg.memdesc<64x4xi8, #tmem_scales, #ttng.tensor_memory, mutable>
+    // CHECK: ttng.tmem_alloc  {tensor_memory_col_offset = 4 : i32, tensor_memory_row_offset = 0 : i32}
+
+    ttng.tmem_store %cst3, %7, %true : tensor<64x4xi8, #linear> -> !ttg.memdesc<64x4xi8, #tmem_scales, #ttng.tensor_memory, mutable>
+    ttng.tmem_store %cst3, %8, %true : tensor<64x4xi8, #linear> -> !ttg.memdesc<64x4xi8, #tmem_scales, #ttng.tensor_memory, mutable>
+
 
     tt.return
   }

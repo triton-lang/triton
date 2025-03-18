@@ -21,8 +21,8 @@ tt.func @warp_specialize_tma_matmul(
   %k_tiles: i32,
   %off_m: i32,
   %off_n: i32,
-  %a_desc: !tt.tensordesc<tensor<128x64xf16>>,
-  %b_desc: !tt.tensordesc<tensor<128x64xf16>>
+  %a_desc: !tt.tensordesc<tensor<128x64xf16, #shared>>,
+  %b_desc: !tt.tensordesc<tensor<128x64xf16, #shared>>
 ) {
   // CHECK-DAG: [[TRUE:%.*]] = arith.constant true
   %true = arith.constant true
@@ -88,11 +88,11 @@ tt.func @warp_specialize_tma_matmul(
     // CHECK-NEXT: [[A_BUF:%.*]] = ttg.memdesc_subview [[A_BUFS]][[[IDX]], [[C0]], [[C0]]]
     // CHECK-NEXT: [[A_DESC_PTR:%.*]] = ttng.tensor_desc_to_tma_ptr [[A_DESC]]
     // CHECK-NEXT: ttng.async_tma_copy_global_to_local [[A_DESC_PTR]][[[OFF_M]], [[OFF_K]]] [[A_BUF]], [[OPER_MBAR]], [[TRUE]] {ttg.partition = 0 : i32}
-    %a_reg = tt.experimental_descriptor_load %a_desc[%off_m, %off_k] : !tt.tensordesc<tensor<128x64xf16>> -> tensor<128x64xf16, #oper_layout>
+    %a_reg = tt.descriptor_load %a_desc[%off_m, %off_k] : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #oper_layout>
     // CHECK-NEXT: [[B_BUF:%.*]] = ttg.memdesc_subview [[B_BUFS]][[[IDX]], [[C0]], [[C0]]]
     // CHECK-NEXT: [[B_DESC_PTR:%.*]] = ttng.tensor_desc_to_tma_ptr [[B_DESC]]
     // CHECK-NEXT: ttng.async_tma_copy_global_to_local [[B_DESC_PTR]][[[OFF_N]], [[OFF_K]]] [[B_BUF]], [[OPER_MBAR]], [[TRUE]] {ttg.partition = 0 : i32}
-    %b_reg = tt.experimental_descriptor_load %b_desc[%off_n, %off_k] : !tt.tensordesc<tensor<128x64xf16>> -> tensor<128x64xf16, #oper_layout>
+    %b_reg = tt.descriptor_load %b_desc[%off_n, %off_k] : !tt.tensordesc<tensor<128x64xf16, #shared>> -> tensor<128x64xf16, #oper_layout>
 
     %a_shared = ttg.local_alloc %a_reg : (tensor<128x64xf16, #oper_layout>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
     %b_shared = ttg.local_alloc %b_reg : (tensor<128x64xf16, #oper_layout>) -> !ttg.memdesc<128x64xf16, #shared, #smem>
