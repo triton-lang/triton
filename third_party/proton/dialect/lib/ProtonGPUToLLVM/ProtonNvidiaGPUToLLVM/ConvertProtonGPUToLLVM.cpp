@@ -1,7 +1,11 @@
 #include "Dialect/ProtonGPU/IR/Dialect.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Transforms/DialectConversion.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/PatternProtonGPUOpToLLVM.h"
 #include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/ProtonNvidiaGPUToLLVM/Passes.h"
 #include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/ProtonNvidiaGPUToLLVM/TargetInfo.h"
+#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 
 using namespace mlir;
 using namespace mlir::triton;
@@ -26,12 +30,21 @@ struct ConvertProtonNvidiaGPUToLLVM
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
+    RewritePatternSet patterns(context);
     ModuleOp mod = getOperation();
     auto tritonTargetInfo =
         mlir::triton::NVIDIA::TargetInfo(computeCapability, ptxVersion);
     auto protonTargetInfo =
         mlir::triton::proton::NVIDIA::TargetInfo(tritonTargetInfo);
-    return;
+    mlir::LowerToLLVMOptions option(context);
+    TritonGPUToLLVMTypeConverter typeConverter(context, option,
+                                               tritonTargetInfo);
+    mlir::triton::proton::populateProtonGPUOpPatterns(typeConverter, patterns,
+                                                      protonTargetInfo, 1);
+    if (failed(
+            mlir::applyPatternsGreedily(getOperation(), std::move(patterns)))) {
+      signalPassFailure();
+    }
   }
 };
 

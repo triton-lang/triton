@@ -1,5 +1,5 @@
-#ifndef PROTON_TO_PROTON_GPU_PASSES
-#define PROTON_TO_PROTON_GPU_PASSES
+#ifndef PROTON_TO_PROTONGPU_PASSES
+#define PROTON_TO_PROTONGPU_PASSES
 
 include "mlir/Pass/PassBase.td"
 

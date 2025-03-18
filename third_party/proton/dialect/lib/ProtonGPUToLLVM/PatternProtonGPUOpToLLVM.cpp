@@ -3,17 +3,16 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/IR/PatternMatch.h"
+#include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/GlobalScratchAllocOpToLLVM.h"
+#include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/RecordOpToLLVM.h"
 #include "third_party/proton/dialect/include/Dialect/ProtonGPU/IR/Dialect.h"
 
 namespace mlir::triton {
-namespace proton::gpu {
+namespace proton {
 void populateProtonGPUOpPatterns(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns,
                                  const TargetInfoBase &targetInfo,
-                                 PatternBenefit benefit) {
-  // TODO(fywkevin): populate all kinds of "TargetInfoBase"-related patterns
-  // here.
-}
+                                 PatternBenefit benefit) {}
 
-} // namespace proton::gpu
+} // namespace proton
 } // namespace mlir::triton
