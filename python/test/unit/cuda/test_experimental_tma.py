@@ -249,7 +249,7 @@ def test_tensor_descriptor_store_downcast(dtype_str):
         nidx = noffset + tl.arange(0, N_BLOCK)[None, :]
         # Generate a float32 block based on linear indices.
         val_f32 = (midx * N + nidx).to(tl.float32)
-        desc = tl._experimental_make_tensor_descriptor(
+        desc = tl.make_tensor_descriptor(
             out_ptr,
             shape=[M, N],
             strides=[N, 1],
