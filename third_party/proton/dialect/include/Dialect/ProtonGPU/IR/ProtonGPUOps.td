@@ -1,5 +1,5 @@
-#ifndef PROTON_GPU_OPS
-#define PROTON_GPU_OPS
+#ifndef PROTONGPU_OPS
+#define PROTONGPU_OPS
 
 include "mlir/IR/OpBase.td"
 include "mlir/IR/EnumAttr.td"
@@ -117,4 +117,4 @@ def PTG_GlobalScratchAllocOp : PTG_Op<"global_scratch_alloc", [MemoryEffects<[Me
   let assemblyFormat = [{attr-dict `:` qualified(type($result))}];
 }
 
-#endif  // PROTON_GPU_OPS
+#endif  // PROTONGPU_OPS

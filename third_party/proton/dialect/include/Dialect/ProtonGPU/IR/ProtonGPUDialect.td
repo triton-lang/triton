@@ -1,5 +1,5 @@
-#ifndef PROTON_GPU_DIALECT
-#define PROTON_GPU_DIALECT
+#ifndef PROTONGPU_DIALECT
+#define PROTONGPU_DIALECT
 
 include "mlir/IR/OpBase.td"
 
@@ -19,4 +19,4 @@ def ProtonGPU_Dialect : Dialect {
   let usePropertiesForAttributes = 1;
 }
 
-#endif  // PROTON_GPU_DIALECT
+#endif  // PROTONGPU_DIALECT
