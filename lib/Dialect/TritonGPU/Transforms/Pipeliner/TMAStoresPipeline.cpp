@@ -1,6 +1,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
 
 using namespace mlir;
 namespace tt = mlir::triton;
@@ -17,10 +18,9 @@ static SmallVector<TMAStore> getTMAStores(scf::ForOp forOp) {
   SmallVector<TMAStore> tmaStores;
 
   forOp.getBody()->walk<mlir::WalkOrder::PreOrder>([&](Operation *op) {
-    if (auto storeOp = dyn_cast<tt::ExperimentalDescriptorStoreOp>(op)) {
+    if (auto storeOp = dyn_cast<tt::DescriptorStoreOp>(op)) {
       tmaStores.push_back({storeOp, storeOp.getDesc(), storeOp.getSrc()});
-    } else if (auto scatterOp =
-                   dyn_cast<tt::ExperimentalDescriptorScatterOp>(op)) {
+    } else if (auto scatterOp = dyn_cast<tt::DescriptorScatterOp>(op)) {
       tmaStores.push_back({scatterOp, scatterOp.getDesc(), scatterOp.getSrc()});
 
       // Don't walk into nested loops.
@@ -70,11 +70,15 @@ static void createTMAAsyncCopy(scf::ForOp forOp, const TMAStore &store,
   builder.create<ttng::FenceAsyncSharedOp>(loc, false);
   Value tmaPtr =
       builder.create<triton::nvidia_gpu::TensorDescToTMAPtrOp>(loc, store.desc);
-  if (auto storeOp = dyn_cast<tt::ExperimentalDescriptorStoreOp>(store.op)) {
+  if (auto storeOp = dyn_cast<tt::DescriptorStoreOp>(store.op)) {
+    auto indices = ttng::translateTMAIndices(
+        builder, storeOp.getLoc(),
+        storeOp.getDesc().getType().getBlockType().getEncoding(),
+        storeOp.getIndices());
     builder.create<ttng::AsyncTMACopyLocalToGlobalOp>(
         loc, tmaPtr, storeOp.getIndices(), alloc);
   } else {
-    auto scatterOp = cast<tt::ExperimentalDescriptorScatterOp>(store.op);
+    auto scatterOp = cast<tt::DescriptorScatterOp>(store.op);
     builder.create<ttng::AsyncTMAScatterOp>(
         loc, tmaPtr, scatterOp.getXOffsets(), scatterOp.getYOffset(), alloc);
   }

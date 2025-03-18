@@ -7,6 +7,7 @@
 #include "mlir/Interfaces/LoopLikeInterface.h"
 
 namespace mlir::triton::AMD {
+
 /// This struct (analysis) adapt's upstream's IntegerRangeAnalysis (inferring
 /// lower/upperbounds on integer constants) to our needs.
 /// Specifically there are 2 points of extension:
