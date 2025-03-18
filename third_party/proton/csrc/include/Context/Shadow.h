@@ -33,8 +33,10 @@ private:
   void initializeThreadContext();
 
   std::vector<Context> *mainContextStack{};
-  static thread_local bool contextInitialized;
-  static thread_local std::vector<Context> threadContextStack;
+  static thread_local std::map<ShadowContextSource *, bool>
+      threadContextInitialized;
+  static thread_local std::map<ShadowContextSource *, std::vector<Context>>
+      threadContextStack;
 };
 
 } // namespace proton
