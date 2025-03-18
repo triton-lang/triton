@@ -1,10 +1,9 @@
-#include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/PatternProtonGPUOpToLLVM.h"
-#include "Conversion/ProtonGPUToLLVM/GlobalScratchAllocOpToLLVM.h"
+#include "Conversion/ProtonGPUToLLVM/PatternProtonGPUOpToLLVM.h"
 #include "Conversion/ProtonGPUToLLVM/TargetInfoBase.h"
+#include "Dialect/ProtonGPU/IR/Dialect.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/IR/PatternMatch.h"
-#include "third_party/proton/dialect/include/Dialect/ProtonGPU/IR/Dialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
 namespace mlir::triton {

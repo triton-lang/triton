@@ -1,6 +1,6 @@
+#include "Conversion/ProtonGPUToLLVM/Passes.h"
 #include "Dialect/ProtonGPU/IR/Dialect.h"
 #include "mlir/Pass/Pass.h"
-#include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/Passes.h"
 
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
@@ -12,8 +12,8 @@
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
-#include "third_party/proton/dialect/include/Dialect/Proton/IR/Dialect.h"
-#include "third_party/proton/dialect/include/Dialect/ProtonGPU/IR/Dialect.h"
+#include "Dialect/Proton/IR/Dialect.h"
+#include "Dialect/ProtonGPU/IR/Dialect.h"
 
 using namespace mlir;
 using namespace mlir::triton;
