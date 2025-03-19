@@ -1689,7 +1689,7 @@ void NVMMASharedEncodingAttr::print(AsmPrinter &printer) const {
 }
 
 //===----------------------------------------------------------------------===//
-// SwizzledBlocksShared encoding
+// AMDRotatingShared encoding
 //===----------------------------------------------------------------------===//
 
 Attribute AMDRotatingSharedEncodingAttr::parse(AsmParser &parser, Type type) {

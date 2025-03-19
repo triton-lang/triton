@@ -166,4 +166,58 @@ def TritonAMDGPUBlockPingpong: Pass<"tritonamdgpu-block-pingpong", "mlir::Module
   let dependentDialects = ["mlir::ROCDL::ROCDLDialect, mlir::triton::amdgpu::TritonAMDGPUDialect"];
 }
 
+def TritonAMDGPUInThreadTranspose: Pass<"tritonamdgpu-in-thread-transpose", "mlir::triton::FuncOp"> {
+  let summary = "Extend global load sizePerThread to 2D shape and perform transpose within registers per thread before writing to shared memory";
+
+  let description = [{
+    Pass looks for inefficient load->local_store->local_load chains.
+    In particular, this pass optimizes dot operand loading from shared memory
+    in cases when operand is stored in global memory in non-K-continous way.
+
+    ```
+      #blocked = #ttg.blocked<{sizePerThread = [1, 8], ..., order = [1, 0]}>
+      #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
+      #mma = #ttg.amd_mfma<{...}>
+
+      // pass consider global loads are coalesced at this point
+      %loaded_data = tt.load ... : tensor<#blocked>
+      %local_data = ttg.local_alloc %loaded_data : (tensor<#blocked>) -> !ttg.memdesc<#shared>
+      // following local_load is not vectorized because of different mma dot register order and memory order of shared layout
+      %dot_operand = ttg.local_load %local_data : !ttg.memdesc<#shared> -> tensor<#ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+    ```
+
+    transforms it into code with vectorized local_loads and local_store with specialized shared layout to minimize bank conflicts:
+
+    ```
+      #blocked = #ttg.blocked<{sizePerThread = [1, 8], ..., order = [1, 0]}>
+      #transposable_layout = #ttg.blocked<{sizePerThread = [4, 8], ..., order = [1, 0]}>
+      // layout identical to #transposable_layout, but with transposed register values
+      // transposition makes it possible to do vectorized shared memory stores
+      #linear = #ttg.linear<{register = [[1, 0], [2, 0], [0, 1], [0, 2], [0, 4] ... }>
+      // shared layout with order compatible with mma layout, so shared loads are vectorized
+      #shared = #ttg.amd_rotating_shared<{vec = 4, perPhase = 1, maxPhase = 16, order = [0, 1]}>
+
+      %loaded_data = tt.load ... : tensor<#transposable_layout>
+      %tmp1 = ttg.convert_layout %loaded_data : tensor<#transposable_layout> -> tensor<#blocked>
+      %tmp2 = ttg.convert_layout %tmp1 : tensor<#blocked> -> tensor<#transposable_layout>
+      %transposed = amdgpu.in_thread_transpose %tmp2 : tensor<#transposable_layout> -> tensor<#linear>
+      %local_data = ttg.local_alloc %transposed : tensor<#linear> -> !ttg.memdesc<#shared>
+      %dot_operand = ttg.local_load %local_data : !ttg.memdesc<#shared> -> tensor<#ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
+    ```
+
+    After transformation tt.load stays coalesced, because optimization do not change anything across fastest dimension.
+    local_alloc is vectorized and uses swizzled memory, number of bank conflics reduced
+    local_load is vectorized, because shared memory order matches destination layout register order.
+
+    This pass introduces two ttg.convert_layouts to properly cover cases when between ttg.load and ttg.local_alloc/ttg.local_store
+    exist more operations like scf or ttg.memdesc_subview. These convert_layouts ops are optimized out by later passes.
+  }];
+
+  let constructor = "mlir::createTritonAMDGPUInThreadTransposePass()";
+
+  let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect", "mlir::triton::gpu::TritonGPUDialect"];
+}
+
+
+
 #endif
