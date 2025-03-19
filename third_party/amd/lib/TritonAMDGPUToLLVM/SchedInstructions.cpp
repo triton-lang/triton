@@ -425,7 +425,8 @@ struct InstructionSchedHintsRewriter
     // not supposed to be used together with IGLP OPT according to the AMDGPU
     // backend documentation.
     const bool limitSchedulingRange =
-        schedVariant == mlir::triton::amdgpu::SchedHint::local_prefetch;
+        schedVariant == mlir::triton::amdgpu::SchedHint::local_prefetch ||
+        schedVariant == mlir::triton::amdgpu::SchedHint::attention;
     ;
     Location loc = instructionSchedHint->getLoc();
     Block *block = instructionSchedHint->getBlock();
@@ -438,12 +439,11 @@ struct InstructionSchedHintsRewriter
     rewriter.setInsertionPoint(block, std::prev(block->end()));
 
     switch (schedVariant) {
-    case mlir::triton::amdgpu::SchedHint::llvm_iglp_0:
-    case mlir::triton::amdgpu::SchedHint::llvm_iglp_1:
-      createIglpOpt(rewriter, loc, static_cast<int>(schedVariant) - 1);
-      break;
     case mlir::triton::amdgpu::SchedHint::local_prefetch:
       createLocalPrefetchSchedule(rewriter, loc, instructionSchedHint);
+      break;
+    case mlir::triton::amdgpu::SchedHint::attention:
+      createIglpOpt(rewriter, loc, 2);
       break;
     case mlir::triton::amdgpu::SchedHint::none:
     default:
@@ -497,6 +497,19 @@ struct TritonAMDGPULowerInstructionSchedHints
   }
 };
 
+static bool hasDotOpAndExpOp(scf::ForOp forOp) {
+  size_t dotCounter = 0;
+  size_t expCounter = 0;
+  forOp->walk([&dotCounter, &expCounter](Operation *op) {
+    if (isa<triton::DotOp>(op))
+      dotCounter++;
+    if (isa<math::Exp2Op, math::ExpOp>(op))
+      expCounter++;
+  });
+
+  return dotCounter > 0 && expCounter > 0;
+}
+
 struct TritonAMDGPUInsertInstructionSchedHints
     : public triton::impl::TritonAMDGPUInsertInstructionSchedHintsBase<
           TritonAMDGPUInsertInstructionSchedHints> {
@@ -525,10 +538,10 @@ struct TritonAMDGPUInsertInstructionSchedHints
         // Note, instruction schedule barriers are inserted only in the case of
         // a single `tt.dot` op in a `scf::ForOp` scope in the current
         // implementation.
-        if (auto dotOp = getSingleDotOpIfExists(forOp)) {
+        if (hasDotOpAndExpOp(forOp)) {
           OpBuilder rewriter(ctx);
-          rewriter.setInsertionPointAfter(dotOp);
-          rewriter.create<triton::amdgpu::InstructionSchedHint>(dotOp->getLoc(),
+          rewriter.setInsertionPointToStart(forOp.getBody());
+          rewriter.create<triton::amdgpu::InstructionSchedHint>(forOp->getLoc(),
                                                                 schedHint);
         }
       });

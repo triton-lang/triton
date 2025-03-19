@@ -53,15 +53,13 @@ class HIPOptions:
     #
     # Current experimental scheduling variants:
     #
-    # llvm-iglp-0: injects `llvm.amdgcn.iglp_opt` intrinsic call with value `0` to the GEMM's
-    #              k-loop; i.e., "interleave DS and MFMA instructions for small GEMM kernels".
-    # llvm-iglp-1: injects `llvm.amdgcn.iglp_opt` intrinsic call with value `1` to the GEMM's
-    #              k-loop; i.e., "interleave DS and MFMA instructions for single wave small
-    #              GEMM kernels.".
     # local-prefetch: implements instruction scheduling similar to the one from the ROCm Composable
     #                 Kernel library. Note, this variant requires the use of buffer load/store ops
     #                 and a special software pipelining style - i.e., 1x LDS and 1x register
     #                 prefetch buffers for each GEMM tile.
+    # attention: enables a bunch of optimizations for attention kernels, including:
+    #            - iglp 2 and sched.barrier around it
+    #            - sink-insts-to-avoid-spills flag to avoid register spills
     instruction_sched_variant: str = 'none'
 
     def __post_init__(self):
@@ -261,7 +259,8 @@ class HIPBackend(BaseBackend):
         passes.ttgpuir.add_optimize_dot_operands(pm, True)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_reduce_data_duplication(pm)
-        if os.environ.get("TRITON_HIP_USE_IN_THREAD_TRANSPOSE", "0") == "1":
+        is_attention_variant = options.instruction_sched_variant.lower() == "attention"
+        if os.environ.get("TRITON_HIP_USE_IN_THREAD_TRANSPOSE", "0") == "1" or is_attention_variant:
             amd.passes.ttgpuir.add_in_thread_transpose(pm)
             passes.ttgpuir.add_remove_layout_conversions(pm)
         if amd.has_matrix_core_feature(options.arch):
@@ -396,7 +395,14 @@ class HIPBackend(BaseBackend):
         assert len(names) == 1
         metadata["name"] = names[0]
         # llvm -> hsaco
-        amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, '', [], options.enable_fp_fusion, False)
+        flags = []
+        # XXX(Kyle): The sink-insts-to-avoid-spills helps mitigate register spills
+        # under heavy workload, but it can also lead to regression in some cases.
+        # But from existing observation, the regression is not significant.
+        # It would be better to have some heuristics for it.
+        if options.instruction_sched_variant == 'attention':
+            flags.append('sink-insts-to-avoid-spills')
+        amdgcn = llvm.translate_to_asm(src, amd.TARGET_TRIPLE, options.arch, '', flags, options.enable_fp_fusion, False)
         if os.environ.get("AMDGCN_ENABLE_DUMP", "0") == "1":
             print("// -----// AMDGCN Dump //----- //")
             print(amdgcn)
