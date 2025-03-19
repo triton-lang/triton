@@ -826,6 +826,34 @@ LogicalResult FpToFpOp::verify() {
   return success();
 }
 
+//-- BitcastOp --
+LogicalResult BitcastOp::verify() {
+  // Bitcast only allows conversion between types with the same bit width.
+  Type dstType = getType();
+  Type srcType = getSrc().getType();
+  // Strip tensor shapes; SameOperandsAndResultShape guarantees shapes match.
+  if (auto dstTensorType = dyn_cast<RankedTensorType>(dstType))
+    dstType = dstTensorType.getElementType();
+  if (auto srcTensorType = dyn_cast<RankedTensorType>(srcType))
+    srcType = srcTensorType.getElementType();
+  bool dstIsPtr = isa<triton::PointerType>(dstType);
+  bool srcIsPtr = isa<triton::PointerType>(srcType);
+  if (dstIsPtr || srcIsPtr) {
+    // Bitcast supports pointer-to-pointer conversions but not
+    // pointer-to-scalar.
+    if (dstIsPtr && srcIsPtr)
+      return success();
+    return emitError("Cannot bitcast pointer to non-pointer type");
+  }
+  unsigned dstBits = dstType.getIntOrFloatBitWidth();
+  unsigned srcBits = srcType.getIntOrFloatBitWidth();
+  if (dstBits != srcBits) {
+    return emitError("Cannot bitcast data-type of size ")
+           << srcBits << " to data-type of size " << dstBits;
+  }
+  return success();
+}
+
 //-- BroadcastOp --
 void BroadcastOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                               MLIRContext *context) {
