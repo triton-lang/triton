@@ -184,7 +184,7 @@ private:
         (mDim == 32) ? kSizeSingleRateMfma32 : kSizeSingleRateMfma16;
 
     // For FP8, wider MFMA instructions (scaled MFMA) have a k-dimension
-    // that is four times larger than regular MFMA instructions.
+    // that is four times of regular MFMA instructions.
     if (dstTy.getElementType().isFloat() && bitwidth == 8) {
       largeTileThreshold *= 2;
     }
