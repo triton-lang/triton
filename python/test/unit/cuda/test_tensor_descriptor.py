@@ -11,7 +11,8 @@ from typing import Optional
 @requires_tma
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
-def test_tensor_descriptor_load(dtype_str):
+@pytest.mark.parametrize("functional", [False, True])
+def test_tensor_descriptor_load(dtype_str, functional):
 
     @triton.jit
     def kernel(out_ptr, a_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
@@ -27,7 +28,10 @@ def test_tensor_descriptor_load(dtype_str):
         assert desc.strides[0] == N
         assert desc.strides[1] == 1
         assert desc.block_shape == [M_BLOCK, N_BLOCK]
-        block = desc.load([M_BLOCK, 2 * N_BLOCK])
+        if functional:
+            block = tl._experimental_load_tensor_descriptor(desc, [M_BLOCK, 2 * N_BLOCK])
+        else:
+            block = desc.load([M_BLOCK, 2 * N_BLOCK])
         idx = tl.arange(0, M_BLOCK)[:, None] * N_BLOCK + tl.arange(0, N_BLOCK)[None, :]
         tl.store(out_ptr + idx, block)
 
@@ -55,7 +59,8 @@ def test_tensor_descriptor_load(dtype_str):
 @requires_tma
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
-def test_tensor_descriptor_store(dtype_str):
+@pytest.mark.parametrize("functional", [False, True])
+def test_tensor_descriptor_store(dtype_str, functional):
 
     @triton.jit
     def kernel(out_ptr, a_ptr, M, N, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr):
@@ -80,7 +85,10 @@ def test_tensor_descriptor_store(dtype_str):
         assert desc.strides[0] == N
         assert desc.strides[1] == 1
         assert desc.block_shape == [M_BLOCK, N_BLOCK]
-        desc.store([moffset, noffset], val)
+        if functional:
+            tl._experimental_store_tensor_descriptor(desc, [moffset, noffset], val)
+        else:
+            desc.store([moffset, noffset], val)
 
     M, N = 32, 128
     inp = to_triton(numpy_random((M, N), dtype_str), device="cuda", dst_type=dtype_str)
@@ -109,7 +117,8 @@ def test_tensor_descriptor_store(dtype_str):
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
 @pytest.mark.parametrize("K_BLOCK", [16, 32, 64, 128])
-def test_tensor_descriptor_load3d(dtype_str, K_BLOCK):
+@pytest.mark.parametrize("functional", [False, True])
+def test_tensor_descriptor_load3d(dtype_str, K_BLOCK, functional):
 
     @triton.jit
     def kernel(out_ptr, a_ptr, M, N, K, stride_m, stride_n, stride_k, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr,
@@ -124,7 +133,10 @@ def test_tensor_descriptor_load3d(dtype_str, K_BLOCK):
         pid_m, pid_n, pid_k = tl.program_id(0), tl.program_id(1), tl.program_id(2)
         offs = pid_m * M_BLOCK, pid_n * N_BLOCK, pid_k * K_BLOCK
 
-        block = desc.load(offs)
+        if functional:
+            block = tl._experimental_load_tensor_descriptor(desc, offs)
+        else:
+            block = desc.load(offs)
 
         idx_m = offs[0] + tl.arange(0, M_BLOCK)[:, None, None]
         idx_n = offs[1] + tl.arange(0, N_BLOCK)[None, :, None]
@@ -159,7 +171,8 @@ def test_tensor_descriptor_load3d(dtype_str, K_BLOCK):
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
 @pytest.mark.parametrize("K_BLOCK", [16, 32, 64, 128])
-def test_tensor_descriptor_store3d(dtype_str, K_BLOCK):
+@pytest.mark.parametrize("functional", [False, True])
+def test_tensor_descriptor_store3d(dtype_str, K_BLOCK, functional):
 
     @triton.jit
     def kernel(out_ptr, a_ptr, M, N, K, stride_m, stride_n, stride_k, M_BLOCK: tl.constexpr, N_BLOCK: tl.constexpr,
@@ -181,7 +194,10 @@ def test_tensor_descriptor_store3d(dtype_str, K_BLOCK):
         mask = (idx_m < M) & (idx_n < N) & (idx_k < K)
         block = tl.load(a_ptr + idx, mask)
 
-        desc.store(offs, block)
+        if functional:
+            tl._experimental_store_tensor_descriptor(desc, offs, block)
+        else:
+            desc.store(offs, block)
 
     def alloc_fn(size: int, align: int, stream: Optional[int]):
         return torch.empty(size, dtype=torch.int8, device="cuda")
