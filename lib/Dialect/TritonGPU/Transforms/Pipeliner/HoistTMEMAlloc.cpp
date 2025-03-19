@@ -259,11 +259,13 @@ ttng::TMEMAllocOp hoistTMEMAlloc(ttng::TMEMAllocOp alloc, scf::ForOp forOp) {
   OpBuilder builder(alloc);
   builder.setInsertionPoint(forOp);
   Value vTrue = builder.create<arith::ConstantIntOp>(alloc.getLoc(), 1, 1);
-  auto src = alloc->getOperand(0);
+  auto src = alloc.getSrc();
   auto newAlloc = createTMemAlloc(builder, alloc, false, 0);
-  builder.setInsertionPoint(alloc);
-  builder.create<ttng::TMEMStoreOp>(alloc.getLoc(), newAlloc.getResult(), src,
-                                    vTrue);
+  if (src != nullptr) {
+    builder.setInsertionPoint(alloc);
+    builder.create<ttng::TMEMStoreOp>(alloc.getLoc(), newAlloc.getResult(), src,
+                                      vTrue);
+  }
   alloc.replaceAllUsesWith(newAlloc.getResult());
   alloc.erase();
 
