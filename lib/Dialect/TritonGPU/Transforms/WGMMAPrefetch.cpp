@@ -1,7 +1,9 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/IRMapping.h"
+#include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/Value.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
@@ -51,7 +53,10 @@ LogicalResult isSupportedRSGEMM(ttng::WarpGroupDotOp dotOp) {
     auto ElementBitWidth = EncB.getElementBitWidth();
     auto TransB = EncB.getTransposed();
     int64_t SwizzleDimSize = TransB ? bShape[rank - 2] : bShape[rank - 1];
-
+    // Currently, memory subview does not calculate correct base
+    // address for subtile when SwizzleByteWidth is larger than
+    // the matrix size in the swizzle dim. It can be fixed through
+    // calculating correct base address in subview op for subtile
     if(SwizzleDimSize * ElementBitWidth == SwizzleByteWidth * 8)
       return llvm::success();
   }
@@ -279,11 +284,6 @@ LogicalResult WGMMAPrefetcher::initialize() {
     if (kSize < prefetchWidth)
       return failure();
 
-    // Have to disable the opt when kSize > 32 and aElementBitWidth = 32
-    // The subtiling would fail in this case. Need further inverstigation
-    // if (kSize > 32 && aElementBitWidth >= 32)
-    //   return failure();
-
     auto aVals = getPrefetchSrc(dotOp.getA());
     auto bVals = getPrefetchSrc(dotOp.getB());
 
@@ -309,7 +309,11 @@ LogicalResult WGMMAPrefetcher::initialize() {
         if (isa<MemDescSubviewOp, LocalLoadOp>(op.getDefiningOp())) {
           dot2aValsLocalLoad[dotOp].push_back(op);
         } else {
-          dot2aValsElementWise[dotOp].push_back(op);
+          auto curOp = op.getDefiningOp();
+          if(curOp->hasTrait<mlir::OpTrait::Elementwise>() && isMemoryEffectFree(curOp))
+            dot2aValsElementWise[dotOp].push_back(op);
+          else
+           return failure();
         }
       }
 
