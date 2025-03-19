@@ -35,7 +35,7 @@ static int getMMAVersionSafe(int computeCapability, DotOp op) {
   } else if (computeCapability < 100) {
     versionsSupported = {3, 2};
   } else if (computeCapability < 110) {
-    versionsSupported = {5, 2};
+    versionsSupported = {2};
   } else if (computeCapability < 130) {
     versionsSupported = {2};
   } else {
