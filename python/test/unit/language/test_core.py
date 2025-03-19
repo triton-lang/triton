@@ -5265,42 +5265,81 @@ def test_inline_asm_with_pointers(num_ctas, device):
 
 
 def test_inline_asm_multiple_outputs(device):
-    if not is_cuda():
-        pytest.skip('test_inline_asm is only supported in CUDA')
-
-    @triton.jit
-    def kernel(A, B, C, D, BLOCK: tl.constexpr):
-        a = tl.load(A + tl.arange(0, BLOCK))
-        b = tl.load(B + tl.arange(0, BLOCK))
-
-        # C = A - B
-        # D = B - A
-        (c, d) = tl.inline_asm_elementwise(
-            asm="""
-            sub.u32 $0, $2, $3;  // C = A - B
-            sub.u32 $1, $3, $2;  // D = B - A
-            """,
-            constraints=(
-                # 2 output registers: $0=C and $1=D.
-                "=r,=r,"
-                # 2 input registers: $2=A and $3=B.
-                "r,r"),
-            args=[a, b],
-            dtype=(tl.uint32, tl.uint32),
-            is_pure=True,
-            pack=1,
-        )
-        tl.store(C + tl.arange(0, BLOCK), c)
-        tl.store(D + tl.arange(0, BLOCK), d)
-
     shape = (512, )
     rs = RandomState(17)
-    A = numpy_random(shape, dtype_str='uint32', rs=rs)
-    B = numpy_random(shape, dtype_str='uint32', rs=rs)
+
+    if is_cuda():
+
+        @triton.jit
+        def kernel(A, B, C, D, BLOCK: tl.constexpr):
+            a = tl.load(A + tl.arange(0, BLOCK))
+            b = tl.load(B + tl.arange(0, BLOCK))
+
+            # C = A - B
+            # D = B - A
+            (c, d) = tl.inline_asm_elementwise(
+                asm="""
+                sub.u32 $0, $2, $3;  // C = A - B
+                sub.u32 $1, $3, $2;  // D = B - A
+                """,
+                constraints=(
+                    # 2 output registers: $0=C and $1=D.
+                    "=r,=r,"
+                    # 2 input registers: $2=A and $3=B.
+                    "r,r"),
+                args=[a, b],
+                dtype=(tl.uint32, tl.uint32),
+                is_pure=True,
+                pack=1,
+            )
+            tl.store(C + tl.arange(0, BLOCK), c)
+            tl.store(D + tl.arange(0, BLOCK), d)
+
+        A = numpy_random(shape, dtype_str='uint32', rs=rs)
+        B = numpy_random(shape, dtype_str='uint32', rs=rs)
+        C = numpy_random(shape, dtype_str='uint32', rs=rs)
+        D = numpy_random(shape, dtype_str='uint32', rs=rs)
+
+    elif is_hip():
+
+        @triton.jit
+        def kernel(A, B, C, D, BLOCK: tl.constexpr):
+            a = tl.load(A + tl.arange(0, BLOCK))
+            b = tl.load(B + tl.arange(0, BLOCK))
+
+            # C = A - B
+            # D = B - A
+            (c, d) = tl.inline_asm_elementwise(
+                asm="""
+                v_readfirstlane_b32 s20, $2
+                v_readfirstlane_b32 s21, $3
+                s_sub_u32 $0, s20, s21;  // C = A - B
+                s_sub_u32 $1, s21, s20;  // D = B - A
+                """,
+                constraints=(
+                    # 2 output registers: $0=C and $1=D.
+                    "=r,=r,"
+                    # 2 input registers: $2=A and $3=B.
+                    "r,r"),
+                args=[a, b],
+                dtype=(tl.uint32, tl.uint32),
+                is_pure=True,
+                pack=1,
+            )
+            tl.store(C + tl.arange(0, BLOCK), c)
+            tl.store(D + tl.arange(0, BLOCK), d)
+
+        A = np.ones(shape, dtype=np.uint32)
+        B = 2 * np.ones(shape, dtype=np.uint32)
+        C = np.zeros(shape, dtype=np.uint32)
+        D = np.zeros(shape, dtype=np.uint32)
+    else:
+        pytest.skip('test_inline_asm is only supported in CUDA and HIP')
+
     A_tri = to_triton(A, device=device)
     B_tri = to_triton(B, device=device)
-    C_tri = to_triton(numpy_random(shape, dtype_str='uint32', rs=rs), device=device)
-    D_tri = to_triton(numpy_random(shape, dtype_str='uint32', rs=rs), device=device)
+    C_tri = to_triton(C, device=device)
+    D_tri = to_triton(D, device=device)
     kernel[(1, )](A_tri, B_tri, C_tri, D_tri, BLOCK=shape[0])
 
     C_ref = A - B
