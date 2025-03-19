@@ -421,14 +421,14 @@ struct MemDescSubviewOpConversion
              "Shape size should be >= 2 when using NVMMAShared encoding");
       auto swizzleStride = b.i32_val((nvmmaEnc.getSwizzlingByteWidth() * 8) /
                                      llvmElemTy.getIntOrFloatBitWidth());
-      // base - (stridedOff * swizzledStride + contigOff / swizzledStride *
-      // tileSize + contigOff % swizzledStride)
-      // + stridedInc * swizzledStride + contigInc / swizzledStride *
-      // tileSize + contigInc % swizzledStride
       offset = b.i32_val(0);
       for (auto i = 0; i < opOffsetVals.size() - 2; ++i) {
         offset = b.add(offset, b.mul(opOffsetVals[i], opSmemStrides[i]));
       }
+      // newOffset = offset - (stridedOff * swizzledStride + contigOff /
+      // swizzledStride * tileSize + contigOff % swizzledStride)
+      // + stridedInc * swizzledStride + contigInc / swizzledStride *
+      // tileSize + contigInc % swizzledStride
       auto stridedDim = destRank - 1 - layoutOrder[0];
       auto contigDim = destRank - 1 - layoutOrder[1];
       auto stridedOff = smemObj.getOffsets()[stridedDim];
