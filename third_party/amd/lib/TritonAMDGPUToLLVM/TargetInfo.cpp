@@ -201,14 +201,17 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             unsigned interleave) const {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
 
-  if (!(
-    numLaneToReduce == 64 && llvm::is_contained({ISAFamily::CDNA2, ISAFamily::CDNA3, ISAFamily::CDNA4}, getISAFamily()) ||
-    numLaneToReduce == 32 && llvm::is_contained({ISAFamily::RDNA3}, getISAFamily()))
-  ) {
+  if (!(numLaneToReduce == 64 &&
+            llvm::is_contained(
+                {ISAFamily::CDNA2, ISAFamily::CDNA3, ISAFamily::CDNA4},
+                getISAFamily()) ||
+        numLaneToReduce == 32 &&
+            llvm::is_contained({ISAFamily::RDNA3}, getISAFamily()))) {
     return false;
   }
 
-  bool isCDNA = llvm::is_contained({ISAFamily::CDNA2, ISAFamily::CDNA3, ISAFamily::CDNA4}, getISAFamily());
+  bool isCDNA = llvm::is_contained(
+      {ISAFamily::CDNA2, ISAFamily::CDNA3, ISAFamily::CDNA4}, getISAFamily());
 
   Operation *reduxOp = op.getSingleCombiner();
   if (!reduxOp)
@@ -315,10 +318,16 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
     } else {
       // RDNA doesn't have broadcast dpp mode
       Type actualType = castToAndSExtInt(rewriter, loc, buf, valType, 32);
-      
-      Value permlaneResult = LLVM::createLLVMIntrinsicCallOp(rewriter, loc, "llvm.amdgcn.permlanex16", actualType, ValueRange{buf, buf, b.i32_val(-1), b.i32_val(-1), b.true_val(), b.false_val()})->getResult(0);
+
+      Value permlaneResult =
+          LLVM::createLLVMIntrinsicCallOp(
+              rewriter, loc, "llvm.amdgcn.permlanex16", actualType,
+              ValueRange{buf, buf, b.i32_val(-1), b.i32_val(-1), b.true_val(),
+                         b.false_val()})
+              ->getResult(0);
       buf = truncAndCastFromInt(rewriter, loc, buf, valType, 32);
-      permlaneResult = truncAndCastFromInt(rewriter, loc, permlaneResult, valType, 32);
+      permlaneResult =
+          truncAndCastFromInt(rewriter, loc, permlaneResult, valType, 32);
       IRMapping mapping;
       mapping.map(reduxOp->getOperand(0), buf);
       mapping.map(reduxOp->getOperand(1), permlaneResult);
@@ -326,9 +335,9 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
     }
 
     if (isCDNA) {
-      buf = createDppReduxOpWithBoundCtrl(valType, buf,
-                                        static_cast<uint32_t>(DppCtrl::BCAST31),
-                                        allRows, allBanks);
+      buf = createDppReduxOpWithBoundCtrl(
+          valType, buf, static_cast<uint32_t>(DppCtrl::BCAST31), allRows,
+          allBanks);
     }
 
     // Similarly, we need to cast data types for readlane instruction.
@@ -336,10 +345,10 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
 
     // Get reduction result from lane 63/31
     std::string intrinsic = "llvm.amdgcn.readlane";
-    Value result =
-        LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, actualType,
-                                        ValueRange{buf, b.i32_val(isCDNA ? 63 : 31)})
-            ->getResult(0);
+    Value result = LLVM::createLLVMIntrinsicCallOp(
+                       rewriter, loc, intrinsic, actualType,
+                       ValueRange{buf, b.i32_val(isCDNA ? 63 : 31)})
+                       ->getResult(0);
 
     result = truncAndCastFromInt(rewriter, loc, result, valType, 16);
 
