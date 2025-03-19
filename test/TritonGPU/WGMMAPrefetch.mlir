@@ -10,6 +10,7 @@
 #smem = #ttg.shared_memory
 
 // CHECK: tt.func @wgmma_mixed_precision
+// CHECK-DAG: %[[TRUE:.+]] = arith.constant true
 // CHECK-DAG: %[[C0:.+]] = arith.constant 0 : i32
 // CHECK-DAG: %[[C16:.+]] = arith.constant 16 : i32
 // CHECK-DAG: %[[C32:.+]] = arith.constant 32 : i32
@@ -28,11 +29,11 @@
 // CHECK:       %[[A_SUBITLE_1_REG_CVT:.*]] = arith.sitofp %[[A_SUBITLE_1_REG]]
 // CHECK:       %[[D_1:.*]] = ttng.warp_group_dot %[[A_SUBITLE_1_REG_CVT]], %[[B_SUBTILE_1_SMEM:.*]], %[[D_arg]]
 // CHECK:       %[[A_SUBITLE_2_REG_CVT:.*]] = arith.sitofp %[[A_SUBITLE_2_REG]]
-// CHECK:       %[[D_2:.*]] = ttng.warp_group_dot %[[A_SUBITLE_2_REG_CVT]], %[[B_SUBTILE_2_SMEM:.*]], %[[D_1]]
+// CHECK:       %[[D_2:.*]] = ttng.warp_group_dot %[[A_SUBITLE_2_REG_CVT]], %[[B_SUBTILE_2_SMEM:.*]], %[[D_1]], %[[TRUE]]
 // CHECK:       %[[A_SUBITLE_3_REG_CVT:.*]] = arith.sitofp %[[A_SUBITLE_3_REG]]
-// CHECK:       %[[D_3:.*]] = ttng.warp_group_dot %[[A_SUBITLE_3_REG_CVT]], %[[B_SUBTILE_3_SMEM:.*]], %[[D_2]]
+// CHECK:       %[[D_3:.*]] = ttng.warp_group_dot %[[A_SUBITLE_3_REG_CVT]], %[[B_SUBTILE_3_SMEM:.*]], %[[D_2]], %[[TRUE]]
 // CHECK:       %[[A_SUBITLE_4_REG_CVT:.*]] = arith.sitofp %[[A_SUBITLE_4_REG]]
-// CHECK:       %[[D_4:.*]] = ttng.warp_group_dot %[[A_SUBITLE_4_REG_CVT]], %[[B_SUBTILE_4_SMEM:.*]], %[[D_3]]
+// CHECK:       %[[D_4:.*]] = ttng.warp_group_dot %[[A_SUBITLE_4_REG_CVT]], %[[B_SUBTILE_4_SMEM:.*]], %[[D_3]], %[[TRUE]]
 // CHECK-DAG:   %[[D:.*]] = ttng.warp_group_dot_wait %[[D_4]]
 // CHECK-NEXT: scf.yield {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[D]]
 
@@ -231,6 +232,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 #smem = #ttg.shared_memory
 
 // CHECK: tt.func @wgmma_mixed_precision
+// CHECK-DAG: %[[TRUE:.+]] = arith.constant true
 // CHECK-DAG: %[[C0:.+]] = arith.constant 0 : i32
 // CHECK-DAG: %[[C16:.+]] = arith.constant 16 : i32
 // CHECK-DAG: %[[C32:.+]] = arith.constant 32 : i32
@@ -249,11 +251,11 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 8 : i32, ttg.targ
 // CHECK:       %[[A_SUBITLE_1_REG_CVT:.*]] = arith.sitofp %[[A_SUBITLE_1_REG]]
 // CHECK:       %[[D_1:.*]] = ttng.warp_group_dot %[[A_SUBITLE_1_REG_CVT]], %[[B_SUBTILE_1_SMEM:.*]], %[[D_arg]]
 // CHECK:       %[[A_SUBITLE_2_REG_CVT:.*]] = arith.sitofp %[[A_SUBITLE_2_REG]]
-// CHECK:       %[[D_2:.*]] = ttng.warp_group_dot %[[A_SUBITLE_2_REG_CVT]], %[[B_SUBTILE_2_SMEM:.*]], %[[D_1]]
+// CHECK:       %[[D_2:.*]] = ttng.warp_group_dot %[[A_SUBITLE_2_REG_CVT]], %[[B_SUBTILE_2_SMEM:.*]], %[[D_1]], %[[TRUE]]
 // CHECK:       %[[A_SUBITLE_3_REG_CVT:.*]] = arith.sitofp %[[A_SUBITLE_3_REG]]
-// CHECK:       %[[D_3:.*]] = ttng.warp_group_dot %[[A_SUBITLE_3_REG_CVT]], %[[B_SUBTILE_3_SMEM:.*]], %[[D_2]]
+// CHECK:       %[[D_3:.*]] = ttng.warp_group_dot %[[A_SUBITLE_3_REG_CVT]], %[[B_SUBTILE_3_SMEM:.*]], %[[D_2]], %[[TRUE]]
 // CHECK:       %[[A_SUBITLE_4_REG_CVT:.*]] = arith.sitofp %[[A_SUBITLE_4_REG]]
-// CHECK:       %[[D_4:.*]] = ttng.warp_group_dot %[[A_SUBITLE_4_REG_CVT]], %[[B_SUBTILE_4_SMEM:.*]], %[[D_3]]
+// CHECK:       %[[D_4:.*]] = ttng.warp_group_dot %[[A_SUBITLE_4_REG_CVT]], %[[B_SUBTILE_4_SMEM:.*]], %[[D_3]], %[[TRUE]]
 // CHECK-DAG:   %[[D:.*]] = ttng.warp_group_dot_wait %[[D_4]]
 // CHECK-NEXT: scf.yield {{.*}}, {{.*}}, {{.*}}, {{.*}}, %[[D]]
 
