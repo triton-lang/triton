@@ -333,7 +333,7 @@ private:
 // on the requested number of stages assign the latencies in a way that
 // cover all the stages with the sum of latencies in the chain from the first
 // load to the final dot op.
-void assignLatencies(ModuleOp moduleOp, int defaultNumStages, bool assignMMA) {
+void assignLatencies(ModuleOp moduleOp, int defaultNumStages) {
   SmallVector<scf::ForOp> loops;
   moduleOp->walk([&](scf::ForOp forOp) {
     // Bail out for loops with num_stage <= 1.
@@ -352,10 +352,7 @@ void assignLatencies(ModuleOp moduleOp, int defaultNumStages, bool assignMMA) {
     }
     int numStages = getNumStagesOrDefault(forOp, defaultNumStages);
     AssignLoadLatencies(forOp, numStages, opLatency).run();
-    if (assignMMA || mlir::triton::tools::getBoolEnv("TRITON_NEW_PIPELINER") ||
-        1) {
-      AssignMMALatencies(forOp, opLatency).run();
-    }
+    AssignMMALatencies(forOp, opLatency).run();
   }
   serializeLatencies(moduleOp, opLatency);
 }

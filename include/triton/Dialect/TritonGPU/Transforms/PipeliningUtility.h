@@ -103,10 +103,6 @@ void eraseLoopCarriedValues(scf::ForOp &loop, llvm::BitVector indices);
 // specified.
 int getNumStagesOrDefault(scf::ForOp forOp, int defaultNumStages);
 
-// Create a deallocation and invalidation for the barriers.
-void createBarrierDealloc(scf::ForOp forOp, Value barrierAlloc,
-                          int numBarriers);
-
 // Return true if pipelining of MMA op is possible.
 bool mmaHasPipelineableOperands(
     Operation *mma, scf::ForOp forOp,

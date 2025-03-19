@@ -144,8 +144,7 @@ int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
   // uses will become direct uses of the async load.
   // TODO: This is overly conservative, we may need to restrict to cases where
   // local_alloc is used by a dot product and has correct encoding.
-  if (isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp,
-          tt::ExperimentalDescriptorGatherOp>(op) &&
+  if (isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op) &&
       op->hasOneUse()) {
     if (auto localAlloc =
             dyn_cast<ttg::LocalAllocOp>(*op->getUsers().begin())) {
@@ -838,16 +837,18 @@ std::pair<int, int> getTmemUseStageBounds(ttng::TMEMAllocOp alloc,
   return bounds;
 }
 
-// TODO: clean up the references to the phase and barrierIdx, this is a mess
 void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
                              ttng::MMAv5OpInterface mma,
                              ttng::TMEMAllocOp alloc, Value &phase,
-                             Value &barrierIdx, int numStages,
-                             Value numStagesVal, Value zero, Value one) {
-  OpBuilderForStage builder(mma, schedule);
-  builder.setInsertionPoint(forOp);
+                             Value &barrierIdx, int numStages) {
+  OpBuilderForStage builder(forOp, schedule);
+  Value zero = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 0, 32);
+  Value one = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 1, 32);
+  Value numStagesVal =
+      builder.create<arith::ConstantIntOp>(forOp.getLoc(), numStages, 32);
   Value barrierAlloc = createBarrierAlloc(forOp, numStages);
 
+  builder.setStageCluster(schedule[mma]);
   builder.setInsertionPoint(mma);
   Location loc = mma->getLoc();
   Value barWrap;
@@ -1004,9 +1005,6 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
   OpBuilder builder(forOp);
   Value minusOne = builder.create<arith::ConstantIntOp>(forOp.getLoc(), -1, 32);
   Value zero = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 0, 32);
-  Value one = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 1, 32);
-  Value waitNumStagesVal =
-      builder.create<arith::ConstantIntOp>(forOp.getLoc(), waitNumStages, 32);
 
   // Add arguments to the forOp
   unsigned newOperandIndex = forOp.getInitArgs().size();
@@ -1026,7 +1024,7 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
 
   if (waitNumStages > 1) {
     createBarrierAndWaitOps(forOp, schedule, mma, alloc, phase, barrierIdx,
-                            waitNumStages, waitNumStagesVal, zero, one);
+                            waitNumStages);
   }
 
   if (tmemUseNumStages > 1) {

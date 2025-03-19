@@ -325,17 +325,6 @@ Value mlir::triton::createBarrierAlloc(scf::ForOp forOp, int numBarriers) {
   return barrierAlloc;
 }
 
-void mlir::triton::createBarrierDealloc(scf::ForOp forOp, Value barrierAlloc,
-                                        int numBarriers) {
-  IRRewriter rewriter(forOp->getContext());
-  rewriter.setInsertionPointAfter(forOp);
-  for (unsigned i = 0; i < numBarriers; i++) {
-    Value barrierView = createSingleBufferView(rewriter, barrierAlloc, i);
-    rewriter.create<ttng::InvalBarrierOp>(forOp->getLoc(), barrierView);
-  }
-  rewriter.create<ttg::LocalDeallocOp>(forOp->getLoc(), barrierAlloc);
-}
-
 Value mlir::triton::createSingleBufferView(OpBuilder &builder, Value alloc,
                                            Value idx) {
   assert(isa<triton::gpu::MemDescType>(alloc.getType()) &&
@@ -556,8 +545,7 @@ bool mlir::triton::mmaHasPipelineableOperands(
       if (forOp.isDefinedOutsideOfLoop(localAlloc.getSrc())) {
         return true;
       }
-      if (isa<tt::LoadOp, tt::ExperimentalDescriptorLoadOp,
-              tt::ExperimentalDescriptorGatherOp>(
+      if (isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp>(
               localAlloc.getSrc().getDefiningOp())) {
         return isLoadPipelineable(localAlloc.getSrc().getDefiningOp());
       }
