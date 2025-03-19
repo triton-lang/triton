@@ -215,7 +215,7 @@ def TritonAMDGPUInThreadTranspose: Pass<"tritonamdgpu-in-thread-transpose", "mli
 
   let constructor = "mlir::createTritonAMDGPUInThreadTransposePass()";
 
-  let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect"];
+  let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect", "mlir::triton::gpu::TritonGPUDialect"];
 }
 
 
