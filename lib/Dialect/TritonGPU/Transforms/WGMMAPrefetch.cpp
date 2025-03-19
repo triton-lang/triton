@@ -35,7 +35,7 @@ namespace {
 
 // RSGEMM means the lhs is in register and the rhs is in
 // shared memory
-LogicalResult isRSGEMM(ttng::WarpGroupDotOp dotOp) {
+LogicalResult isSupportedRSGEMM(ttng::WarpGroupDotOp dotOp) {
   Value operandA = dotOp.getA();
   Value operandB = dotOp.getB();
 
@@ -43,8 +43,18 @@ LogicalResult isRSGEMM(ttng::WarpGroupDotOp dotOp) {
   auto encA = dyn_cast<TensorOrMemDesc>(operandA.getType()).getEncoding();
   auto encB = dyn_cast<TensorOrMemDesc>(operandB.getType()).getEncoding();
 
-  if (isa<DotOperandEncodingAttr>(encA) && isa<NVMMASharedEncodingAttr>(encB))
-    return llvm::success();
+  if (isa<DotOperandEncodingAttr>(encA) && isa<NVMMASharedEncodingAttr>(encB)){
+    auto bShape = cast<MemDescType>(operandB.getType()).getShape();
+    auto rank = bShape.size();
+    auto EncB = cast<NVMMASharedEncodingAttr>(encB);
+    auto SwizzleByteWidth = EncB.getSwizzlingByteWidth();
+    auto ElementBitWidth = EncB.getElementBitWidth();
+    auto TransB = EncB.getTransposed();
+    int64_t SwizzleDimSize = TransB ? bShape[rank - 2] : bShape[rank - 1];
+
+    if(SwizzleDimSize * ElementBitWidth == SwizzleByteWidth * 8)
+      return llvm::success();
+  }
 
   return llvm::failure();
 }
@@ -195,7 +205,7 @@ LogicalResult WGMMAPrefetcher::initialize() {
   }
 
   for (ttng::WarpGroupDotOp dotOp : dotsInFor) {
-    if (isRSGEMM(dotOp).failed())
+    if (isSupportedRSGEMM(dotOp).failed())
       return llvm::failure();
   }
 
@@ -271,8 +281,8 @@ LogicalResult WGMMAPrefetcher::initialize() {
 
     // Have to disable the opt when kSize > 32 and aElementBitWidth = 32
     // The subtiling would fail in this case. Need further inverstigation
-    if (kSize > 32 && aElementBitWidth >= 32)
-      return failure();
+    // if (kSize > 32 && aElementBitWidth >= 32)
+    //   return failure();
 
     auto aVals = getPrefetchSrc(dotOp.getA());
     auto bVals = getPrefetchSrc(dotOp.getB());
