@@ -206,20 +206,26 @@ def get_cuda_autotune_config():
 
 def get_hip_autotune_config():
     return [
+        #triton.Config(
+        #    {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 16, 'GROUP_SIZE_M': 1, 'waves_per_eu': 2},
+        #    num_warps=4, num_stages=2),
+        #triton.Config(
+        #    {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 1, 'waves_per_eu': 2},
+        #    num_warps=8, num_stages=2),
+        #triton.Config(
+        #    {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'waves_per_eu': 3},
+        #    num_warps=4, num_stages=2),
         triton.Config(
-            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 16, 'GROUP_SIZE_M': 1, 'waves_per_eu': 2},
+            {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 8, 'waves_per_eu': 0,
+             'matrix_instr_nonkdim': 16, 'kpack': 2},
             num_warps=4, num_stages=2),
         triton.Config(
-            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 16, 'GROUP_SIZE_M': 4, 'waves_per_eu': 2},
+            {'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4, 'waves_per_eu': 2,
+             'matrix_instr_nonkdim': 16, 'kpack': 1},
             num_warps=8, num_stages=2),
         triton.Config(
-            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 1, 'waves_per_eu': 2},
-            num_warps=8, num_stages=2),
-        triton.Config(
-            {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 8, 'waves_per_eu': 3},
-            num_warps=4, num_stages=2),
-        triton.Config(
-            {'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32, 'GROUP_SIZE_M': 1, 'waves_per_eu': 8},
+            {'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4, 'waves_per_eu': 2,
+             'matrix_instr_nonkdim': 16, 'kpack': 1},
             num_warps=4, num_stages=2),
     ]
 
@@ -264,6 +270,14 @@ def matmul_kernel(
     # Map program ids `pid` to the block of C it should compute.
     # This is done in a grouped ordering to promote L2 data reuse.
     # See above `L2 Cache Optimizations` section for details.
+
+    tl.assume(stride_am > 0)
+    tl.assume(stride_ak > 0)
+    tl.assume(stride_bk > 0)
+    tl.assume(stride_bn > 0)
+    tl.assume(stride_cm > 0)
+    tl.assume(stride_cn > 0)
+
     pid = tl.program_id(axis=0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
@@ -273,6 +287,9 @@ def matmul_kernel(
     group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
     pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
     pid_n = (pid % num_pid_in_group) // group_size_m
+
+    tl.assume(pid_m >= 0)
+    tl.assume(pid_n >= 0)
 
     # ----------------------------------------------------------
     # Create pointers for the first blocks of A and B.
@@ -354,24 +371,6 @@ def matmul(a, b, activation=""):
 # Unit Test
 # ---------
 #
-# We can test our custom matrix multiplication operation against a native torch implementation (i.e., cuBLAS).
-
-torch.manual_seed(0)
-a = torch.randn((512, 512), device=DEVICE, dtype=torch.float16)
-b = torch.randn((512, 512), device=DEVICE, dtype=torch.float16)
-triton_output = matmul(a, b)
-torch_output = torch.matmul(a, b)
-print(f"triton_output_with_fp16_inputs={triton_output}")
-print(f"torch_output_with_fp16_inputs={torch_output}")
-# Bigger tolerance for AMD CDNA2 devices.
-# CDNA2 devices use reduced precision fp16 and bf16 and flush input and
-# output denormal values to zero. Detailed info is at: https://pytorch.org/docs/stable/notes/numerical_accuracy.html#reduced-precision-fp16-and-bf16-gemms-and-convolutions-on-amd-instinct-mi200-devices
-rtol = 1e-2 if is_hip_cdna2() else 0
-if torch.allclose(triton_output, torch_output, atol=1e-2, rtol=rtol):
-    print("✅ Triton and Torch match")
-else:
-    print("❌ Triton and Torch differ")
-
 TORCH_HAS_FP8 = hasattr(torch, "float8_e5m2")
 if TORCH_HAS_FP8 and is_cuda():
     torch.manual_seed(0)
@@ -409,7 +408,14 @@ for fp8_inputs in [False, True]:
     configs.append(
         triton.testing.Benchmark(
             x_names=["M", "N", "K"],  # Argument names to use as an x-axis for the plot
-            x_vals=[128 * i for i in range(2, 33)],  # Different possible values for `x_name`
+            x_vals=[
+                (1024, 1024, 1024),
+                (2048, 2048, 2048),
+                (4096, 4096, 4096),
+                (4096, 4096, 4160),
+                (4864, 4096, 4160),
+                (4864, 8192, 4160),
+            ],
             line_arg="provider",  # Argument name whose value corresponds to a different line in the plot
             # Possible values for `line_arg`
             # Don't compare to cublas for fp8 cases as torch.matmul doesn't support fp8 at the moment.
@@ -426,7 +432,7 @@ for fp8_inputs in [False, True]:
 @triton.testing.perf_report(configs)
 def benchmark(M, N, K, provider, fp8_inputs):
     a = torch.randn((M, K), device=DEVICE, dtype=torch.float16)
-    b = torch.randn((K, N), device=DEVICE, dtype=torch.float16)
+    b = torch.randn((N, K), device=DEVICE, dtype=torch.float16).T
     if TORCH_HAS_FP8 and fp8_inputs:
         a = a.to(torch.float8_e5m2)
         b = b.T
