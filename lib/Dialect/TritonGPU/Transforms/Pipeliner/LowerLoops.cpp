@@ -186,6 +186,13 @@ Value createIncrementModulo(BuilderT &builder, Location loc, Value counter,
                                                   addOne);
 }
 
+void replaceAllUsesDominatedBy(Operation *domOp, Value newValue, Value oldValue,
+                               DominanceInfo &domInfo) {
+  oldValue.replaceUsesWithIf(newValue, [&](OpOperand &use) {
+    return domInfo.properlyDominates(domOp, use.getOwner());
+  });
+}
+
 /////////////////////////////
 // LOWER LOADS
 /////////////////////////////
@@ -913,35 +920,47 @@ ttng::TMEMAllocOp createTMemAlloc(OpBuilder &builder,
 }
 
 void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
-                             ttng::MMAv5OpInterface mma,
                              ttng::TMEMAllocOp alloc, Value &bufIdx,
                              int bufIdxArgIdx, int tmemUseNumStages) {
-  SmallVector<Operation *> allocUsers = llvm::to_vector(alloc->getUsers());
-  // If we are multibuffering, we require that a store is present in the loop,
-  // as this is the only point we can change the accumulator buffer.
-  assert(
-      llvm::any_of(allocUsers,
-                   [](Operation *op) { return isa<ttng::TMEMStoreOp>(op); }) &&
-      "No tmem_store found in the loop");
+  DominanceInfo domInfo(forOp);
 
-  OpBuilder builder(alloc);
+  SmallVector<std::pair<Operation *, Value>> bufIdxDefs;
+  auto getCurrBufIdx = [&](Operation *op) {
+    for (auto [_op, _val] : llvm::reverse(bufIdxDefs)) {
+      if (domInfo.properlyDominates(_op, op)) {
+        return _val;
+      }
+    }
+    return Value();
+  };
+  bufIdxDefs.push_back({&forOp.getBody()->front(), bufIdx});
+
+  OpBuilderForStage builder(alloc, schedule);
   auto newAlloc = createTMemAlloc(builder, alloc, true, tmemUseNumStages);
   Value numStagesVal = builder.create<arith::ConstantIntOp>(
       forOp.getLoc(), tmemUseNumStages, 32);
   Value zero = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 0, 32);
   Value one = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 1, 32);
-  // Put the bufIdx increment at the beginning of the loop
-  builder.setInsertionPoint(forOp.getBody(), forOp.getBody()->begin());
-  bufIdx = createIncrementModulo(builder, forOp.getLoc(), bufIdx, numStagesVal,
-                                 zero, one);
+
+  SmallVector<Operation *> allocUsers = llvm::to_vector(alloc->getUsers());
   for (auto user : allocUsers) {
     if (auto store = dyn_cast<ttng::TMEMStoreOp>(user)) {
       if (forOp->isAncestor(store)) {
-        OpBuilderForStage stageBuilder(store, schedule);
+        builder.setStageCluster(schedule[store]);
+        builder.setInsertionPoint(store);
+        // Change the buffer index to the new buffer index on store.
+        Value curBufIdx = getCurrBufIdx(store);
+        Value newBufIdx = createIncrementModulo(
+            builder, forOp.getLoc(), curBufIdx, numStagesVal, zero, one);
+        if (Value pred = store.getPred()) {
+          newBufIdx = builder.create<arith::SelectOp>(
+              forOp.getLoc(), newBufIdx.getType(), pred, newBufIdx, curBufIdx);
+        }
+        replaceAllUsesDominatedBy(store, newBufIdx, curBufIdx, domInfo);
+        bufIdxDefs.push_back({store, newBufIdx});
         auto tmemSlice =
-            triton::createSingleBufferView(stageBuilder, newAlloc, bufIdx);
+            triton::createSingleBufferView(builder, newAlloc, newBufIdx);
         store.getDstMutable().assign(tmemSlice);
-        stageBuilder.setInsertionPointAfter(store);
       } else {
         // Store before the loop
         assert(store->isBeforeInBlock(forOp) && "Store is not before the loop");
@@ -952,9 +971,11 @@ void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
       }
     } else if (auto load = dyn_cast<ttng::TMEMLoadOp>(user)) {
       if (forOp->isAncestor(load)) {
-        OpBuilderForStage stageBuilder(load, schedule);
+        builder.setStageCluster(schedule[load]);
+        builder.setInsertionPoint(load);
+        Value curBufIdx = getCurrBufIdx(load);
         auto tmemSlice =
-            triton::createSingleBufferView(stageBuilder, newAlloc, bufIdx);
+            triton::createSingleBufferView(builder, newAlloc, curBufIdx);
         load.getSrcMutable().assign(tmemSlice);
       } else {
         // Load after the loop
@@ -965,9 +986,20 @@ void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
         load.getSrcMutable().assign(tmemSlice);
       }
     } else if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(user)) {
-      OpBuilderForStage stageBuilder(mma, schedule);
+      builder.setStageCluster(schedule[mma]);
+      builder.setInsertionPoint(mma);
+      // Change the buffer index when the mma does not use the accumulator
+      Value curBufIdx = getCurrBufIdx(mma.getOperation());
+      Value newBufIdx = createIncrementModulo(
+          builder, forOp.getLoc(), curBufIdx, numStagesVal, zero, one);
+      newBufIdx = builder.create<arith::SelectOp>(
+          forOp.getLoc(), newBufIdx.getType(), mma.useAccumulator(), curBufIdx,
+          newBufIdx);
+      replaceAllUsesDominatedBy(mma.getOperation(), newBufIdx, curBufIdx,
+                                domInfo);
+      bufIdxDefs.push_back({mma.getOperation(), newBufIdx});
       auto tmemSlice =
-          triton::createSingleBufferView(stageBuilder, newAlloc, bufIdx);
+          triton::createSingleBufferView(builder, newAlloc, newBufIdx);
       mma.setAccumulator(tmemSlice);
     } else {
       llvm::errs() << "Unsupported user of the accumulator: " << *user << "\n";
@@ -975,6 +1007,7 @@ void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,
     }
   }
   alloc->erase();
+  bufIdx = bufIdxDefs.back().second;
 }
 
 scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
@@ -1028,8 +1061,8 @@ scf::ForOp lowerMMA(ttng::MMAv5OpInterface mma, scf::ForOp forOp,
   }
 
   if (tmemUseNumStages > 1) {
-    multibufferTensorMemory(forOp, schedule, mma, alloc, bufIdx,
-                            newOperandIndex + 2, tmemUseNumStages);
+    multibufferTensorMemory(forOp, schedule, alloc, bufIdx, newOperandIndex + 2,
+                            tmemUseNumStages);
   }
 
   SmallVector<Value> newYieldOperands;
