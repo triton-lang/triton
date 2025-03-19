@@ -10,6 +10,7 @@
 #include <numeric>
 
 namespace mlir {
+class DominanceInfo;
 
 namespace triton {
 class ModuleAxisInfoAnalysis;
@@ -213,6 +214,12 @@ triton::gpu::LocalAllocOp findShmemAlloc(Value operand);
 SmallVector<Operation *>
 getMMAsWithMultiBufferredOperands(scf::ForOp forOp,
                                   SmallVector<Operation *> &mmaOps);
+
+// Given a list of ops, find the naerest common dominator of all ops or return
+// null if one could not be found. The ops are allowed to be in different
+// regions. The result op is not necessarily one of the ops in the list.
+Operation *findNearestCommonDominator(ArrayRef<Operation *> ops,
+                                      DominanceInfo &domInfo);
 } // namespace mlir
 
 #endif // TRITON_DIALECT_TRITONGPU_TRANSFORMS_UTILITY_H_

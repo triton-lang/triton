@@ -6,6 +6,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Support/LLVM.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Conversion/TritonToTritonGPU/TritonToTritonGPUPass.h"
@@ -16,6 +17,7 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "llvm/Support/Debug.h"
+
 #define DEBUG_TYPE "ttg-utility"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 #define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
@@ -1267,6 +1269,35 @@ getMMAsWithMultiBufferredOperands(scf::ForOp forOp,
   }
 
   return eligible;
+}
+
+Operation *findNearestCommonDominator(ArrayRef<Operation *> ops,
+                                      DominanceInfo &domInfo) {
+  if (ops.size() == 0) {
+    return nullptr;
+  }
+  if (ops.size() == 1) {
+    return ops[0];
+  }
+  llvm::SmallPtrSet<Block *, 16> blocks;
+  for (auto op : ops) {
+    blocks.insert(op->getBlock());
+  }
+  Block *domBlock = domInfo.findNearestCommonDominator(blocks);
+  if (domBlock == nullptr) {
+    return nullptr;
+  }
+  SmallVector<Operation *> ancestorOps;
+  for (auto op : ops) {
+    ancestorOps.push_back(domBlock->findAncestorOpInBlock(*op));
+  }
+  Operation *dom = ancestorOps[0];
+  for (unsigned i = 1; i < ops.size(); i++) {
+    if (ancestorOps[i]->isBeforeInBlock(dom)) {
+      dom = ancestorOps[i];
+    }
+  }
+  return dom;
 }
 
 } // namespace mlir

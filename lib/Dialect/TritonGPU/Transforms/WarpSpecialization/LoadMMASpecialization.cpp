@@ -75,13 +75,12 @@ static LogicalResult findSingleChainToLoad(scf::ForOp loop, Value value,
   return failure();
 }
 
-// FIXME: This won't work for persistent matmul.
 static LogicalResult matchAccumulatorPattern(ttng::TMEMAllocOp alloc,
                                              ttng::TMEMLoadOp load) {
   if (!alloc.getSrc())
     return failure();
   auto arg = dyn_cast<BlockArgument>(alloc.getSrc());
-  if (!arg)
+  if (!arg || !arg.hasOneUse())
     return failure();
 
   auto loop = cast<scf::ForOp>(alloc->getParentOp());
@@ -90,7 +89,7 @@ static LogicalResult matchAccumulatorPattern(ttng::TMEMAllocOp alloc,
 
   unsigned idx = arg.getArgNumber() - 1;
   OpOperand &yielded = loop.getBody()->getTerminator()->getOpOperand(idx);
-  if (yielded.get() != load.getResult() || !load->hasOneUse())
+  if (yielded.get() != load.getResult())
     return failure();
   return success();
 }
