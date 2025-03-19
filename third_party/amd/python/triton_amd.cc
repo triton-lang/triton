@@ -83,6 +83,10 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
                      mlir::createTritonAMDGPUBlockPingpongPass);
   ADD_PASS_WRAPPER_3("add_stream_pipeline",
                      mlir::createTritonAMDGPUStreamPipelinePass, int, int, int);
+  m.def("add_in_thread_transpose", [](mlir::PassManager &pm) {
+    pm.addNestedPass<mlir::triton::FuncOp>(
+        mlir::createTritonAMDGPUInThreadTransposePass());
+  });
 }
 
 void addControlConstant(llvm::Module *module, const char *name,
