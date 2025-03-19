@@ -1,24 +1,10 @@
-#include "mlir/IR/Builders.h"
-#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/IRMapping.h"
-#include "mlir/IR/OpDefinition.h"
-#include "mlir/IR/Value.h"
-#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
 #include "triton/Analysis/AxisInfo.h"
-#include "triton/Analysis/Utility.h"
-#include "triton/Dialect/Triton/IR/Dialect.h"
-#include "triton/Dialect/Triton/IR/Types.h"
-#include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Dialect/TritonGPU/IR/Types.h"
-#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include "llvm/ADT/STLExtras.h"
-#include "llvm/Support/LogicalResult.h"
-#include "llvm/Support/raw_ostream.h"
 
 #define DEBUG_TYPE "tritongpu-wgmma-prefetch"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -72,17 +58,9 @@ class WGMMAPrefetcher {
 
   unsigned prefetchWidth;
 
-  /// dots to be prefetched
   SetVector<ttng::WarpGroupDotOp> dots;
-  /// dot => dot operand
-  DenseMap<Value, Value> dot2aLoopArg;
-  DenseMap<Value, Value> dot2aHeaderDef;
-  DenseMap<Value, Value> dot2bLoopArg;
-  DenseMap<Value, Value> dot2bHeaderDef;
   DenseMap<Value, Value> dot2aSrcMemDesc;
   DenseMap<Value, Value> dot2bSrcMemDesc;
-  DenseMap<Value, Value> dot2aYield;
-  DenseMap<Value, Value> dot2bYield;
   DenseMap<Value, SmallVector<Value>> dot2aVals;
   DenseMap<Value, SmallVector<Value>> dot2aValsLocalLoad;
   DenseMap<Value, SmallVector<Value>> dot2aValsElementWise;
