@@ -10,59 +10,11 @@
 #include "triton/Tools/LayoutUtils.h"
 #include "llvm/Support/Debug.h"
 
-// InThreadTranspose pass looks for inefficient
+// InThreadTranspose pass optimizes inefficient
 // tt.load->ttg.local_store->ttg.local_load chains.
-// In particular, this pass optimizes dot operand loading from shared memory
-// in cases when operand is stored in global memory in non-K-continous way.
 //
-// clang-format off
-//
-//   #blocked = #ttg.blocked<{sizePerThread = [1, 8], ..., order = [1, 0]}>
-//   #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
-//   #mma = #ttg.amd_mfma<{...}>
-//   #dotop = ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}> // register order = [0, 1]
-//
-//   // pass consider global loads are coalesced at this point
-//   %loaded_data = tt.load ... : tensor<#blocked>
-//   %local_data = ttg.local_alloc %loaded_data : (tensor<#blocked>) -> !ttg.memdesc<#shared>
-//   // following local_load is not vectorized because of different mma dot register order and memory order of shared layout
-//   %dot_operand = ttg.local_load %local_data : !ttg.memdesc<#shared> -> tensor<#dotop>
-//
-// clang-format on
-//
-// transforms it into code with vectorized local_loads and local_store with
-// specialized shared layout to minimize bank conflicts:
-//
-// clang-format off
-//
-//   #blocked = #ttg.blocked<{sizePerThread = [1, 8], ..., order = [1, 0]}>
-//   #transposable_layout = #ttg.blocked<{sizePerThread = [4, 8], ..., order = [1, 0]}>
-//   // layout identical to #transposable_layout, but with transposed register values
-//   // transposition makes it possible to do vectorized shared memory stores,
-//   // despite that #blocked and #shared order are different
-//   #linear = #ttg.linear<{register = [[1, 0], [2, 0], [0, 1], [0, 2], [0, 4] ... }>
-//   // shared layout with order compatible with mma layout, so shared loads are vectorized
-//   #shared = #ttg.amd_rotating_shared<{vec = 4, perPhase = 1, maxPhase = 16, order = [0, 1]}>
-//
-//   %loaded_data = tt.load ... : tensor<#transposable_layout>
-//   %tmp1 = ttg.convert_layout %loaded_data : tensor<#transposable_layout> -> tensor<#blocked>
-//   %tmp2 = ttg.convert_layout %tmp1 : tensor<#blocked> -> tensor<#transposable_layout>
-//   %transposed = amdgpu.in_thread_transpose %tmp2 : tensor<#transposable_layout> -> tensor<#linear>
-//   %local_data = ttg.local_alloc %transposed : tensor<#linear> -> !ttg.memdesc<#shared>
-//   %dot_operand = ttg.local_load %local_data : !ttg.memdesc<#shared> -> tensor<#ttg.dot_op<{opIdx = 1, parent = #mma, kWidth = 4}>>
-//
-// clang-format on
-//
-// After transformation tt.load stays coalesced, because optimization
-// do not change anything across fastest dimension.
-// ttg.local_alloc is vectorized and number of bank conflics reduced.
-// ttg.local_load is vectorized now, because shared memory order
-// matches destination layout register order.
-//
-// This pass introduces two ttg.convert_layouts to properly cover cases when
-// between ttg.load and ttg.local_alloc/ttg.local_store exist more operations
-// like scf or ttg.memdesc_subview. These convert_layouts ops are optimized out
-// by later passes.
+// For details please look pass description in
+// TritonAMDGPUTransforms/Passes.td
 
 #define DEBUG_TYPE "tritonamdgpu-in-thread-transpose"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
@@ -84,6 +36,22 @@ static Type replaceEncoding(Type type, Attribute encoding) {
                                tensorType.getElementType(), encoding);
 }
 
+/// Replace load encoding with given one.
+///
+/// This functions converts load inputs to given one
+/// and replaces old load with new:
+///
+///   %load_val = tt.load %addr : #blocked
+///
+/// converts to:
+///
+///   %addr_new = ttg.convert_layout %addr : #blocked -> #new_blocked
+///   %load_val_new = tt.load %addr_new : #new_blocked
+///   %load_val = ttg.convert_layout %load_val_new : #new_blocked -> #blocked
+///
+/// \param rewriter
+/// \param encoding new encoding
+/// \param load tt.load operation to replace
 void refineGlobalLoadLayout(PatternRewriter &rewriter, Attribute encoding,
                             tt::LoadOp load) {
   auto loc = load->getLoc();
@@ -468,7 +436,7 @@ findReachableSMemOps(ttg::LocalLoadOp root,
       } else {
         // this operation is not part of shared memory def-use network,
         // algorithm should not reach this point
-        LDBG("  catched operation unrelated to shared memory");
+        LDBG("  catched operation unrelated to shared memory" << *candidate);
         // this is critical error, assert in debug mode.
         assert(false && "  catched operation unrelated to shared memory");
         return failure();

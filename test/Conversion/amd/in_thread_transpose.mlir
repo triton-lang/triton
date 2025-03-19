@@ -7,22 +7,22 @@
 #smem = #ttg.shared_memory
 module attributes {"ttg.target" = "hip:gfx942", "ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.threads-per-warp" = 64 : i32} {
   tt.func @amd_in_thread_transpose(%arg0: tensor<16x16xf16, #blocked>) {
-    // CHECK-DAG:  [[vec_undef:%.*]] = llvm.mlir.undef : vector<2xf16>
-    // CHECK-DAG: [[cst_0:%.*]] = llvm.mlir.constant(0 : i32) : i32
-    // CHECK-DAG: [[cst_1:%.*]] = llvm.mlir.constant(1 : i32) : i32
+    // CHECK-DAG:  [[VEC_UNDEF:%.*]] = llvm.mlir.undef : vector<2xf16>
+    // CHECK-DAG: [[CST_0:%.*]] = llvm.mlir.constant(0 : i32) : i32
+    // CHECK-DAG: [[CST_1:%.*]] = llvm.mlir.constant(1 : i32) : i32
 
-    // CHECK-DAG: [[val0:%.*]] = llvm.extractvalue {{.*}}[0] : !llvm.struct<(f16, f16, f16, f16)>
-    // CHECK-DAG: [[val1:%.*]] = llvm.extractvalue {{.*}}[1] : !llvm.struct<(f16, f16, f16, f16)>
-    // CHECK-DAG: [[val2:%.*]] = llvm.extractvalue {{.*}}[2] : !llvm.struct<(f16, f16, f16, f16)>
-    // CHECK-DAG: [[val3:%.*]] = llvm.extractvalue {{.*}}[3] : !llvm.struct<(f16, f16, f16, f16)>
+    // CHECK-DAG: [[VAL0:%.*]] = llvm.extractvalue {{.*}}[0] : !llvm.struct<(f16, f16, f16, f16)>
+    // CHECK-DAG: [[VAL1:%.*]] = llvm.extractvalue {{.*}}[1] : !llvm.struct<(f16, f16, f16, f16)>
+    // CHECK-DAG: [[VAL2:%.*]] = llvm.extractvalue {{.*}}[2] : !llvm.struct<(f16, f16, f16, f16)>
+    // CHECK-DAG: [[VAL3:%.*]] = llvm.extractvalue {{.*}}[3] : !llvm.struct<(f16, f16, f16, f16)>
 
-    // CHECK-DAG: [[vec1_tmp:%.*]] = llvm.insertelement [[val0]], [[vec_undef]]{{\[}}[[cst_0]] : i32] : vector<2xf16>
-    // CHECK-DAG: [[vec1:%.*]] = llvm.insertelement [[val2]], [[vec1_tmp]]{{\[}}[[cst_1]] : i32] : vector<2xf16>
-    // CHECK-DAG: llvm.store [[vec1]], {{.*}} {alignment = 4 : i64} : vector<2xf16>, !llvm.ptr<3>
+    // CHECK-DAG: [[VEC1_TMP:%.*]] = llvm.insertelement [[VAL0]], [[VEC_UNDEF]]{{\[}}[[CST_0]] : i32] : vector<2xf16>
+    // CHECK-DAG: [[VEC1:%.*]] = llvm.insertelement [[VAL2]], [[VEC1_TMP]]{{\[}}[[CST_1]] : i32] : vector<2xf16>
+    // CHECK-DAG: llvm.store [[VEC1]], {{.*}} {alignment = 4 : i64} : vector<2xf16>, !llvm.ptr<3>
 
-    // CHECK-DAG: [[vec2_tmp:%.*]] = llvm.insertelement [[val1]], [[vec_undef]]{{\[}}[[cst_0]] : i32] : vector<2xf16>
-    // CHECK-DAG: [[vec2:%.*]] = llvm.insertelement [[val3]], [[vec2_tmp]]{{\[}}[[cst_1]] : i32] : vector<2xf16>
-    // CHECK-DAG: llvm.store [[vec2]], {{.*}} {alignment = 4 : i64} : vector<2xf16>, !llvm.ptr<3>
+    // CHECK-DAG: [[VEC2_TMP:%.*]] = llvm.insertelement [[VAL1]], [[VEC_UNDEF]]{{\[}}[[CST_0]] : i32] : vector<2xf16>
+    // CHECK-DAG: [[VEC2:%.*]] = llvm.insertelement [[VAL3]], [[VEC2_TMP]]{{\[}}[[CST_1]] : i32] : vector<2xf16>
+    // CHECK-DAG: llvm.store [[VEC2]], {{.*}} {alignment = 4 : i64} : vector<2xf16>, !llvm.ptr<3>
 
     %0 = amdgpu.in_thread_transpose %arg0 : tensor<16x16xf16, #blocked> -> tensor<16x16xf16, #linear>
     ttg.local_alloc %0 : (tensor<16x16xf16, #linear>) -> !ttg.memdesc<16x16xf16, #shared, #smem, mutable>
