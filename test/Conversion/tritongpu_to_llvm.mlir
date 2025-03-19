@@ -532,6 +532,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
     // CHECK-NEXT: llvm.mlir.constant(512 : i32) : i32
     // CHECK-NEXT: llvm.add
     // CHECK-NEXT: llvm.add
+    // CHECK-NEXT: llvm.mlir.undef
     // CHECK-NEXT: llvm.mlir.constant(0 : i32) : i32
     // CHECK-NEXT: llvm.mul
     // CHECK-NEXT: llvm.add

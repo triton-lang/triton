@@ -412,15 +412,12 @@ struct MemDescSubviewOpConversion
     }
     Value offset = b.undef(i32_ty);
     auto allocShape = srcTy.getAllocShape();
-    bool isSimpleSubview =
-        allocShape.take_back(destRank) == destTy.getShape() ||
+    bool isSimpleSubview = allocShape.take_back(destRank) == destTy.getShape() ||
         !isa<NVMMASharedEncodingAttr>(enc);
     if (!isSimpleSubview) {
       auto nvmmaEnc = cast<NVMMASharedEncodingAttr>(enc);
-      assert(destRank >= 2 &&
-             "Shape size should be >= 2 when using NVMMAShared encoding");
-      auto swizzleStride = b.i32_val((nvmmaEnc.getSwizzlingByteWidth() * 8) /
-                                     llvmElemTy.getIntOrFloatBitWidth());
+      assert(destRank >= 2 && "Shape size should be >= 2 when using NVMMAShared encoding");
+      auto swizzleStride = b.i32_val((nvmmaEnc.getSwizzlingByteWidth() * 8)  / llvmElemTy.getIntOrFloatBitWidth());
       // base - (stridedOff * swizzledStride + contigOff / swizzledStride *
       // tileSize + contigOff % swizzledStride)
       // + stridedInc * swizzledStride + contigInc / swizzledStride *
