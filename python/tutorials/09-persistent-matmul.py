@@ -52,6 +52,8 @@ def _matmul_launch_metadata(grid, kernel, args):
     ret["name"] = f"{kernel.name} [M={M}, N={N}, K={K}]"
     if "c_ptr" in args:
         bytes_per_elem = args["c_ptr"].element_size()
+    elif "c_desc_ptr" in args:
+        bytes_per_elem = 2
     else:
         bytes_per_elem = 1 if args["FP8_OUTPUT"] else 2
     ret[f"flops{bytes_per_elem * 8}"] = 2. * M * N * K
@@ -217,6 +219,111 @@ def matmul(a, b):
         a.stride(0), a.stride(1),  #
         b.stride(0), b.stride(1),  #
         c.stride(0), c.stride(1),  #
+    )
+    return c
+
+
+@triton.autotune(
+    configs=matmul_get_configs(),
+    key=["M", "N", "K"],
+)
+@triton.jit(launch_metadata=_matmul_launch_metadata)
+def matmul_tma_ws_kernel(a_desc_ptr, b_desc_ptr, c_desc_ptr,  #
+                         M, N, K,  #
+                         BLOCK_SIZE_M: tl.constexpr,  #
+                         BLOCK_SIZE_N: tl.constexpr,  #
+                         BLOCK_SIZE_K: tl.constexpr,  #
+                         GROUP_SIZE_M: tl.constexpr,  #
+                         ):
+    pid = tl.program_id(axis=0)
+    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n
+    group_id = pid // num_pid_in_group
+    first_pid_m = group_id * GROUP_SIZE_M
+    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+    pid_m = first_pid_m + (pid % group_size_m)
+    pid_n = (pid % num_pid_in_group) // group_size_m
+
+    k_tiles = tl.cdiv(K, BLOCK_SIZE_K)
+
+    offs_am = pid_m * BLOCK_SIZE_M
+    offs_bn = pid_n * BLOCK_SIZE_N
+
+    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+
+    for k in tl.range(k_tiles, warp_specialize=True, num_stages=3):
+        offs_k = k * BLOCK_SIZE_K
+        a = tl._experimental_descriptor_load(a_desc_ptr, [offs_am, offs_k], [BLOCK_SIZE_M, BLOCK_SIZE_K], tl.float16)
+        b = tl._experimental_descriptor_load(b_desc_ptr, [offs_bn, offs_k], [BLOCK_SIZE_N, BLOCK_SIZE_K], tl.float16)
+        accumulator = tl.dot(a, b.T, accumulator)
+
+    c = accumulator.to(tl.float16)
+
+    offs_cm = pid_m * BLOCK_SIZE_M
+    offs_cn = pid_n * BLOCK_SIZE_N
+    tl._experimental_descriptor_store(c_desc_ptr, c, [offs_cm, offs_cn])
+
+
+def matmul_tma_ws(a, b):
+    # Check constraints.
+    assert a.shape[1] == b.shape[1], "Incompatible dimensions"  # b is transposed
+    assert a.dtype == b.dtype, "Incompatible dtypes"
+
+    M, K = a.shape
+    N, K = b.shape
+    dtype = a.dtype
+
+    c = torch.empty((M, N), device=a.device, dtype=dtype)
+
+    desc_helper = TmaAutoTuneHelper()
+    desc_helper.init_tma_descriptor("a")
+    desc_helper.init_tma_descriptor("b")
+    desc_helper.init_tma_descriptor("c")
+
+    def grid(META):
+        nonlocal desc_helper
+        desc_helper.fill_2d_tma_descriptor(
+            "a",
+            a.data_ptr(),
+            M,
+            K,
+            META["BLOCK_SIZE_M"],
+            META["BLOCK_SIZE_K"],
+            a.element_size(),
+        )
+
+        desc_helper.fill_2d_tma_descriptor(
+            "b",
+            b.data_ptr(),
+            N,
+            K,
+            META["BLOCK_SIZE_N"],
+            META["BLOCK_SIZE_K"],
+            b.element_size(),
+        )
+
+        store_block_n = META["BLOCK_SIZE_N"]
+
+        desc_helper.fill_2d_tma_descriptor(
+            "c",
+            c.data_ptr(),
+            M,
+            N,
+            META["BLOCK_SIZE_M"],
+            store_block_n,
+            c.element_size(),
+        )
+
+        return (triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]), )
+
+    desc_a = desc_helper.get_tma_descriptor_kernel_param("a")
+    desc_b = desc_helper.get_tma_descriptor_kernel_param("b")
+    desc_c = desc_helper.get_tma_descriptor_kernel_param("c")
+
+    matmul_tma_ws_kernel[grid](
+        desc_a, desc_b, desc_c,  #
+        M, N, K,  #
     )
     return c
 
@@ -481,19 +588,19 @@ def matmul_kernel_descriptor_persistent(a_ptr, b_ptr, c_ptr,  #
     k_tiles = tl.cdiv(K, BLOCK_SIZE_K)
     num_tiles = num_pid_m * num_pid_n
 
-    a_desc = tl._experimental_make_tensor_descriptor(
+    a_desc = tl.make_tensor_descriptor(
         a_ptr,
         shape=[M, K],
         strides=[K, 1],
         block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_K],
     )
-    b_desc = tl._experimental_make_tensor_descriptor(
+    b_desc = tl.make_tensor_descriptor(
         b_ptr,
         shape=[N, K],
         strides=[K, 1],
         block_shape=[BLOCK_SIZE_N, BLOCK_SIZE_K],
     )
-    c_desc = tl._experimental_make_tensor_descriptor(
+    c_desc = tl.make_tensor_descriptor(
         c_ptr,
         shape=[M, N],
         strides=[N, 1],
@@ -618,6 +725,7 @@ def bench(K, dtype, reps=1000, warmup_reps=10000):
     if dtype == torch.float16:
         bench_fn(reps, warmup_reps, torch_matmul, a, b)
     bench_fn(reps, warmup_reps, matmul, a, b.T)
+    bench_fn(reps, warmup_reps, matmul_tma_ws, a, b)
     bench_fn(reps, warmup_reps, matmul_persistent, a, b.T)
     if supports_tma():
         bench_fn(reps, warmup_reps, matmul_tma_persistent, a, b)
@@ -632,10 +740,14 @@ def validate(M, N, K, dtype):
     torch_result = torch_matmul(a, b) if dtype == torch.float16 else None
     cublas_result = cublas_matmul(a, b) if cublas is not None else None
     naive_result = matmul(a, b.T)
+    tma_ws_result = matmul_tma_ws(a, b) if supports_tma() else None
     persistent_result = matmul_persistent(a, b.T)
     tma_persistent_result = matmul_tma_persistent(a, b) if supports_tma() else None
     descriptor_persistent_result = matmul_descriptor_persistent(a, b) if supports_tma() else None
 
+    if tma_ws_result is not None:
+        naive_vs_tma_ws = "✅" if torch.allclose(naive_result.to(torch.float16), tma_ws_result.to(torch.float16),
+                                                atol=1.0) else "❌"
     if torch_result is not None:
         naive_vs_torch = "✅" if torch.allclose(naive_result.to(torch.float16), torch_result.to(torch.float16),
                                                atol=1.0) else "❌"
@@ -651,6 +763,8 @@ def validate(M, N, K, dtype):
         naive_vs_descriptor_persistent = "✅" if torch.allclose(cublas_result.to(
             torch.float16), descriptor_persistent_result.to(torch.float16), atol=1.0) else "❌"
     print(f"M={M}, N={N}, K={K} verification naive vs: ", end="")
+    if tma_ws_result is not None:
+        print(f"tma: {naive_vs_tma_ws} ", end="")
     if torch_result is not None:
         print(f"torch: {naive_vs_torch} ", end="")
     if cublas_result is not None:

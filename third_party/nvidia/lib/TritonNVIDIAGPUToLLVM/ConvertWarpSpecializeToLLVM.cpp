@@ -118,7 +118,7 @@ static LogicalResult rewriteWarpGroupBarriers(LLVM::LLVMFuncOp func,
       TritonLLVMIRRewriter b(bar.getLoc(), bar);
       createBarrier(b, /*barIdx=*/0, defaultWarpGroupSize, /*aligned=*/true);
       bar.erase();
-      return WalkResult::advance();
+      return WalkResult::skip();
     }
     return WalkResult::advance();
   });

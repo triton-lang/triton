@@ -54,12 +54,17 @@ struct MemoryBitMap {
   }
 
   TMemChunk findFirstFit(TMemAllocation allocSize,
-                         std::optional<int> rowIdConstraint) const {
+                         std::optional<int> rowIdConstraint,
+                         int columnAlignment) const {
     int numRows = allocSize.numRows / allocGranularity;
     assert(kNumRows - numRows >= 0);
     assert(allocSize.numRows % allocGranularity == 0);
     int startCol = 0;
     while (1) {
+      // Skip to the next aligned address.
+      if (startCol % columnAlignment != 0) {
+        startCol = (startCol / columnAlignment + 1) * columnAlignment;
+      }
       // Iterate over possible starting rows
       for (int startRow = 0; startRow <= kNumRows - numRows; ++startRow) {
         if (rowIdConstraint && *rowIdConstraint != startRow)
@@ -152,7 +157,8 @@ static void updateMap(MemoryBitMap &memoryMap, Interval<int> liveInterval,
 static TMemChunk allocFirstFit(MemoryBitMap &memoryMap,
                                TMemAllocation allocSize,
                                std::optional<int> rowIdConstraint,
-                               ArrayRef<TMemChunk> coexistingChunks) {
+                               ArrayRef<TMemChunk> coexistingChunks,
+                               int columnAlignment) {
   // `coexistingChunks` are all the allocations that might need to be live at
   // the same time as the current allocation plus what is known to be currently
   // live. Union those allocations with a copy of the current memory map and use
@@ -160,7 +166,8 @@ static TMemChunk allocFirstFit(MemoryBitMap &memoryMap,
   MemoryBitMap mapForAlloc = memoryMap;
   for (const TMemChunk &chunk : coexistingChunks)
     mapForAlloc.alloc(chunk);
-  TMemChunk chunk = mapForAlloc.findFirstFit(allocSize, rowIdConstraint);
+  TMemChunk chunk =
+      mapForAlloc.findFirstFit(allocSize, rowIdConstraint, columnAlignment);
 
   // Mark this chunk as allocated in the actual memory map.
   memoryMap.alloc(chunk);
@@ -267,8 +274,12 @@ allocateTMem(Operation *parentOp,
 
     std::optional<int> rowIdConstraint =
         rowIdConstraints.getRowIdConstraint(alloc);
+    // TODO: clarify the alignment requirements for different allocations. For
+    // now enforce an alignment of 4 columns.
+    const int columnAlignment = 4;
     TMemChunk chunkAllocated =
-        allocFirstFit(memoryMap, allocSize, rowIdConstraint, coexistingChunks);
+        allocFirstFit(memoryMap, allocSize, rowIdConstraint, coexistingChunks,
+                      columnAlignment);
     allocChunks.insert({alloc, chunkAllocated});
     // currently naively constraint allocs based on the first one we find.
     rowIdConstraints.addConstraints(alloc, chunkAllocated.startRow);

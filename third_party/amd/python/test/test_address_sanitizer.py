@@ -29,6 +29,9 @@ def test_address_sanitizer():
     # https://rocm.docs.amd.com/en/docs-6.1.0/conceptual/gpu-memory.html
     os.environ["HSA_XNACK"] = "1"
 
+    # Disable buffer ops given it has builtin support for out of bound access.
+    os.environ["AMDGCN_USE_BUFFER_OPS"] = "0"
+
     out = subprocess.Popen(["python", "address_sanitizer_helper.py"], stderr=subprocess.PIPE, stdout=subprocess.PIPE)
     assert "Begin function __asan_report" in out.stdout.read().decode()
     assert "heap-buffer-overflow" in out.stderr.read().decode()

@@ -355,7 +355,8 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
 
 // Returns the given |inputValue|'s dot user result encoding and updates |opIdx|
 // with which dot operand |inputValue| is fed into if possible.
-ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue, unsigned *opIdx) {
+static ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue,
+                                               unsigned *opIdx) {
   if (!llvm::hasSingleElement(inputValue.getUses()))
     return nullptr;
 
@@ -948,27 +949,18 @@ struct PipelinePass : public TritonAMDGPUStreamPipelineBase<PipelinePass> {
     getOperation()->walk([&](scf::ForOp forOp) {
       labelLoadOpsForTritonDot(forOp);
       // Bail out for loops with num_stage <= 1.
-      if (getNumStagesOrDefault(forOp) > 1)
+      if (tt::getNumStagesOrDefault(forOp, numStages) > 1)
         loops.push_back(forOp);
     });
 
     for (scf::ForOp forOp : loops) {
       if (!checkPrecondition(forOp))
         continue;
-      StreamPipeliner sp(forOp, getNumStagesOrDefault(forOp), globalPrefetch,
-                         localPrefetch);
+      StreamPipeliner sp(forOp, tt::getNumStagesOrDefault(forOp, numStages),
+                         globalPrefetch, localPrefetch);
       if (failed(sp.pipelineLoop()))
         continue;
     }
-  }
-
-private:
-  int getNumStagesOrDefault(scf::ForOp forOp) {
-    // Use the attribute attached to the loop if it exists, otherwise use the
-    // global control.
-    if (auto attr = forOp->getAttrOfType<IntegerAttr>(tt::kNumStagesAttrName))
-      return attr.getInt();
-    return numStages;
   }
 };
 } // namespace

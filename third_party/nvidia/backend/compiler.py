@@ -257,6 +257,7 @@ class CUDABackend(BaseBackend):
         passes.ttgpuir.add_accelerate_matmul(pm)
         passes.ttgpuir.add_remove_layout_conversions(pm)
         passes.ttgpuir.add_optimize_dot_operands(pm, capability >= 80)
+        nvidia.passes.ttnvgpuir.add_optimize_descriptor_encoding(pm)
         passes.common.add_cse(pm)
         if capability // 10 in [8, 9]:
             passes.ttgpuir.add_fuse_nested_loops(pm)
@@ -270,6 +271,7 @@ class CUDABackend(BaseBackend):
             passes.common.add_canonicalizer(pm)
             passes.ttir.add_triton_licm(pm)
             passes.ttgpuir.add_optimize_accumulator_init(pm)
+            passes.ttgpuir.add_warp_specialize(pm, opt.num_stages)
             passes.ttgpuir.add_pipeline(pm, opt.num_stages, dump_enabled)
             passes.ttgpuir.add_combine_tensor_select_and_if(pm)
             nvidia.passes.ttnvgpuir.add_promote_lhs_to_tmem(pm)
