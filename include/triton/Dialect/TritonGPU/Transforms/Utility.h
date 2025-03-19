@@ -216,7 +216,7 @@ triton::gpu::LocalAllocOp findShmemAlloc(Value operand);
 SmallVector<Operation *>
 getMMAsWithMultiBufferredOperands(scf::ForOp forOp,
                                   SmallVector<Operation *> &mmaOps);
-                                  
+
 // 0 is reserved for default sync.
 // TODO: comprehensive mechanism to globally manage namedbarrier.
 static int const nameBarrierIdBegin = 1;

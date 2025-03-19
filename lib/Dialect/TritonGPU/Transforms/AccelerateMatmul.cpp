@@ -385,8 +385,8 @@ public:
 
       a = getDotOperand(a, 0, minBitwidth);
       b = getDotOperand(b, 1, minBitwidth);
-      newDot = taskIdRewriter.create<DotOp>(dotOp.getLoc(), newRetType, a, b, newAcc,
-                                            dotOp.getInputPrecision(),
+      newDot = taskIdRewriter.create<DotOp>(dotOp.getLoc(), newRetType, a, b,
+                                            newAcc, dotOp.getInputPrecision(),
                                             dotOp.getMaxNumImpreciseAcc());
     }
     // convert dot instruction

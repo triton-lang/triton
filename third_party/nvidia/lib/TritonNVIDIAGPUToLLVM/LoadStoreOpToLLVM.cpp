@@ -18,8 +18,8 @@
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
-#include <cassert>
 #include "triton/Tools/Sys/GetEnv.hpp"
+#include <cassert>
 
 using namespace mlir;
 using namespace mlir::triton;
