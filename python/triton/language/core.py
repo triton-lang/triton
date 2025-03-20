@@ -1952,20 +1952,14 @@ def _experimental_descriptor_store(desc_pointer, value, offsets, _builder=None):
 @builtin
 def load_tensor_descriptor(desc: tensor_descriptor_base, offsets: Sequence[constexpr | tensor],
                            _builder=None) -> tensor:
-    """Functional interface to load from a tensor descriptor.
-
-    Simply forwards to :meth:`~tensor_descriptor_base.load`.
-    """
+    """Load a block of data from a tensor descriptor."""
     return desc.load(offsets, _builder=_builder)
 
 
 @builtin
 def store_tensor_descriptor(desc: tensor_descriptor_base, offsets: Sequence[constexpr | tensor], value: tensor,
                             _builder=None) -> tensor:
-    """Functional interface to store to a tensor descriptor.
-
-    Simply forwards to :meth:`~tensor_descriptor_base.store`.
-    """
+    """Store a block of data to a tensor descriptor."""
     return desc.store(offsets, value, _builder=_builder)
 
 
