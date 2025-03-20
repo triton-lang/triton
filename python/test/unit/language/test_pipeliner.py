@@ -251,7 +251,7 @@ def test_pipeline_matmul(scale, device):
         a_type, b_type = None, None
         output = torch.empty((M, N), dtype=torch.float16, device=device)
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N), 1)
-    use_tma = False
+    use_tma = not scale and is_hopper()
 
     if use_tma:
         a_tma = triton.tools.experimental_descriptor.create_2d_tma_descriptor(a.data_ptr(), M, K, BLOCK_M, BLOCK_K,
