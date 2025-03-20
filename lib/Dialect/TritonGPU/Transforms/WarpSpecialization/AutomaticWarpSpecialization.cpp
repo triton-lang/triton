@@ -33,9 +33,7 @@ void AutomaticWarpSpecialization::runOnOperation() {
   OpPassManager pm;
   pm.addPass(createTritonGPULoadMMASpecialization());
   pm.addPass(createTritonGPURewritePartitionDependencies());
-  pm.addPass(createCanonicalizerPass());
   pm.addPass(createSCCPPass());
-  pm.addPass(createCanonicalizerPass());
   pm.addPass(createCSEPass());
   pm.addPass(createTritonGPUPartitionLoops());
   pm.addPass(createTritonGPULoopDCE());
