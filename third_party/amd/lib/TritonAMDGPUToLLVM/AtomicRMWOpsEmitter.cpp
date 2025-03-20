@@ -1,9 +1,5 @@
-#include "PatternTritonGPUOpToLLVM.h"
-#include "TargetInfo.h"
 #include "Utility.h"
-#include "mlir/Dialect/LLVMIR/LLVMTypes.h"
-#include "mlir/IR/PatternMatch.h"
-#include "triton/Dialect/Triton/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 #include "AtomicRMWOpsEmitter.h"
 
@@ -11,7 +7,7 @@ using namespace triton::AMD;
 
 namespace {
 
-Value generateI32DppMove(PatternRewriter &rewriter, Value val, int dppCtrl,
+Value generateI32DppMove(RewriterBase &rewriter, Value val, int dppCtrl,
                          int rowMask = 0b1111,  // enable all rows
                          int bankMask = 0b1111, // enable all banks
                          bool boundCtrl = false) {
@@ -24,15 +20,15 @@ Value generateI32DppMove(PatternRewriter &rewriter, Value val, int dppCtrl,
   return dppMovOp.getResult();
 }
 
-Value shiftLeftI32ByDpp(PatternRewriter &rewriter, Value val) {
-  return generateI32DppMove(rewriter, val, 0x100); // shift left
+Value shiftLeftI32ByDpp(RewriterBase &rewriter, Value val) {
+  return generateI32DppMove(rewriter, val, 0x101); // shift left
 }
 
-Value shiftRightI32ByDpp(PatternRewriter &rewriter, Value val) {
-  return generateI32DppMove(rewriter, val, 0x110); // shift right 1 lane
+Value shiftRightI32ByDpp(RewriterBase &rewriter, Value val) {
+  return generateI32DppMove(rewriter, val, 0x111); // shift right 1 lane
 }
 
-Value generatePopcount64(PatternRewriter &rewriter, Value val) {
+Value generatePopcount64(RewriterBase &rewriter, Value val) {
   auto loc = val.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value m1 = b.i64_val(0x5555555555555555); // binary: 0101 0101..
@@ -50,7 +46,7 @@ Value generatePopcount64(PatternRewriter &rewriter, Value val) {
   return b.lshr(b.mul(val, h01), b.i64_val(56));
 }
 
-Value genReadFirstLane(PatternRewriter &rewriter, Value v) {
+Value genReadFirstLane(RewriterBase &rewriter, Value v) {
   auto loc = v.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   std::string intrinsic = "llvm.amdgcn.readfirstlane";
@@ -58,7 +54,7 @@ Value genReadFirstLane(PatternRewriter &rewriter, Value v) {
       ->getResult(0);
 }
 
-Value genPermute(PatternRewriter &rewriter, Value v, Value dst) {
+Value genPermute(RewriterBase &rewriter, Value v, Value dst) {
   auto loc = v.getLoc();
   std::string intrinsic = "llvm.amdgcn.ds.permute";
   return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, i32_ty,
@@ -66,7 +62,7 @@ Value genPermute(PatternRewriter &rewriter, Value v, Value dst) {
       ->getResult(0);
 }
 
-Value genBPermute(PatternRewriter &rewriter, Value v, Value dst) {
+Value genBPermute(RewriterBase &rewriter, Value v, Value dst) {
   auto loc = v.getLoc();
   std::string intrinsic = "llvm.amdgcn.ds.bpermute";
   return LLVM::createLLVMIntrinsicCallOp(rewriter, loc, intrinsic, i32_ty,
@@ -75,8 +71,8 @@ Value genBPermute(PatternRewriter &rewriter, Value v, Value dst) {
 }
 
 template <typename Generator, typename... Values>
-Value genI32TiledOp(PatternRewriter &rewriter, Generator genCall,
-                    Value argToSplit, Values... args) {
+Value genI32TiledOp(RewriterBase &rewriter, Generator genCall, Value argToSplit,
+                    Values... args) {
   auto loc = argToSplit.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Type ty = argToSplit.getType();
@@ -96,18 +92,22 @@ Value genI32TiledOp(PatternRewriter &rewriter, Generator genCall,
   return b.bitcast(vec, ty);
 }
 
-Value genPrefixSum(PatternRewriter &rewriter, Value v0) {
+Value genPrefixSum(RewriterBase &rewriter, Value v0) {
   auto loc = v0.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
-  Value old = b.i32_val(0);
+
+  auto v0Ty = v0.getType();
+  assert(v0Ty.getIntOrFloatBitWidth() == i32_ty.getIntOrFloatBitWidth());
 
   Value v1 = v0;
   // v_add_f32 v1, v0, v0 row_shr:1 bound_ctrl:0
   Value tmp = generateI32DppMove(rewriter, v0, 0x111);
   v1 = b.add(v1, tmp);
+
   // v_add_f32 v1, v0, v1 row_shr:2 bound_ctrl:0
   tmp = generateI32DppMove(rewriter, v0, 0x112);
   v1 = b.add(v1, tmp);
+
   // v_add_f32 v1, v0, v1 row_shr:3 bound_ctrl:0
   tmp = generateI32DppMove(rewriter, v0, 0x113);
   v1 = b.add(v1, tmp);
@@ -134,9 +134,8 @@ Value genPrefixSum(PatternRewriter &rewriter, Value v0) {
 
 namespace mlir::LLVM::AMD {
 
-Value AtomicRMWEmitter::emitAtomicRMW(ConversionPatternRewriter &rewriter,
-                                      Value rmwPtr, Value valElem,
-                                      Value rmwMask,
+Value AtomicRMWEmitter::emitAtomicRMW(RewriterBase &rewriter, Value rmwPtr,
+                                      Value valElem, Value rmwMask,
                                       std::optional<Value> sharedMemBase,
                                       bool enableIntraWaveReduce) const {
   auto loc = rmwPtr.getLoc();
@@ -151,6 +150,38 @@ Value AtomicRMWEmitter::emitAtomicRMW(ConversionPatternRewriter &rewriter,
   endBlock->addArgument({retType}, {loc});
 
   rewriter.setInsertionPointToEnd(curBlock);
+
+  // intraWave reduce optimization for atomic ops needs all active threads
+  // at the beginning of a wave. This is achieved as:
+  // 1. Compute the prefix sum of the mask, then each active lane gets a
+  //    different value (offset) from its previous lane.
+  // 2. Multiply the mask and the offset, so only active lanes have a
+  //    non-zero offset, and the offset is different in each active lane
+  // 3. Sub 1 from offset to get the idx each active lane is moved to
+  // 4. Call ds_permute to move active lanes to the beginning of a wave
+  // 5. Update mask of each lane
+  if (enableIntraWaveReduce) {
+    Value maskI32 = b.zext(i32_ty, rmwMask);
+    Value offset = genPrefixSum(rewriter, maskI32);
+    offset = b.mul(offset, maskI32);
+    Value waveSize =
+        b.i32_val(mlir::triton::gpu::lookupThreadsPerWarp(rewriter));
+    offset = b.select(b.icmp_eq(offset, b.i32_val(0)), waveSize, offset);
+    Value idx = b.sub(offset, b.i32_val(1));
+    idx = b.mul(idx, b.i32_val(4));
+    valElem = genI32TiledOp(rewriter, genPermute, valElem, idx);
+    Value castedAddr = b.ptrtoint(i64_ty, rmwPtr);
+    castedAddr = genI32TiledOp(rewriter, genPermute, castedAddr, idx);
+    rmwPtr = b.inttoptr(rmwPtr.getType(), castedAddr);
+
+    // update mask
+    Value maskFlag = targetInfo.ballot(rewriter, loc, i64_ty, rmwMask);
+    Value numActiveLanes =
+        b.trunc(i32_ty, generatePopcount64(rewriter, maskFlag));
+
+    Value laneID = b.urem(getThreadId(rewriter, loc), waveSize);
+    rmwMask = b.icmp_ult(laneID, numActiveLanes);
+  }
 
   rewriter.create<LLVM::CondBrOp>(loc, rmwMask, atomicBlock, endBlock,
                                   undefVal);
@@ -174,9 +205,10 @@ Value AtomicRMWEmitter::emitAtomicRMW(ConversionPatternRewriter &rewriter,
   return endBlock->getArgument(0);
 }
 
-Value AtomicRMWEmitter::emitPairedAtomicForEvenTID(
-    ConversionPatternRewriter &rewriter, Value rmwPtr, Value valElem,
-    Value rmwMask, bool checkPairs) const {
+Value AtomicRMWEmitter::emitPairedAtomicForEvenTID(RewriterBase &rewriter,
+                                                   Value rmwPtr, Value valElem,
+                                                   Value rmwMask,
+                                                   bool checkPairs) const {
   auto loc = rmwPtr.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value i64Ones = b.i64_val(~uint64_t(0));
@@ -187,8 +219,8 @@ Value AtomicRMWEmitter::emitPairedAtomicForEvenTID(
   castedAddr = b.select(rmwMask, castedAddr, i64Ones);
 
   Type valueElemTy = valElem.getType();
-
   Type packF16Ty = vec_ty(valueElemTy, 2);
+
   // Move %val to left neighbour to proceed packed atomic further.
   Value packedVal = b.null(packF16Ty);
   packedVal = b.insert_element(packF16Ty, packedVal, valElem, isOddI32);
@@ -234,6 +266,8 @@ Value AtomicRMWEmitter::emitPairedAtomicForEvenTID(
     // Unpack results back
     rightNeighbourPtr = b.inttoptr(rmwPtr.getType(), rightNeighbourAddr);
     rmwPtr = b.inttoptr(rmwPtr.getType(), castedAddr);
+  } else {
+    rmwMask = b.and_(rmwMask, b.icmp_eq(isOddI32, b.i32_val(0)));
   }
 
   Value undefVal = b.undef(packF16Ty);
@@ -299,7 +333,7 @@ Value AtomicRMWEmitter::emitPairedAtomicForEvenTID(
                            b.urem(getThreadId(rewriter, loc), b.i32_val(2)));
 }
 
-Value AtomicRMWEmitter::atomicIntraWaveReduce(PatternRewriter &rewriter,
+Value AtomicRMWEmitter::atomicIntraWaveReduce(RewriterBase &rewriter,
                                               Value rmwPtr, Value operand,
                                               LLVM::AtomicBinOp opKind,
                                               LLVM::AtomicOrdering memOrdering,
@@ -338,7 +372,8 @@ Value AtomicRMWEmitter::atomicIntraWaveReduce(PatternRewriter &rewriter,
   rewriter.setInsertionPointToEnd(curBlock);
 
   // check how many adjacent address are in the wave
-  Value rightNeighbourAddr = genI32TiledOp(rewriter, shiftLeftI32ByDpp, rmwPtr);
+  Value rightNeighbourAddr = genI32TiledOp(rewriter, generateI32DppMove, rmwPtr,
+                                           0x130, 0xF, 0xF, false);
   Value elemSize = b.i64_val(operandElemType.getIntOrFloatBitWidth() / 8);
   Value isNeighbour = b.icmp_eq(rightNeighbourAddr, b.add(rmwPtr, elemSize));
   Value neighbourFlag = targetInfo.ballot(rewriter, loc, i64_ty, isNeighbour);

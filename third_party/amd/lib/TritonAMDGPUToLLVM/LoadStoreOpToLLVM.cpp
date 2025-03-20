@@ -29,53 +29,59 @@ using ::mlir::triton::gpu::getTotalElemsPerThread;
 namespace {
 
 std::optional<LLVM::AtomicBinOp> matchAtomicOp(RMWOp atomicOp) {
-  static const std::unordered_map<RMWOp, LLVM::AtomicBinOp> atomicMap = {
-      {RMWOp::AND, LLVM::AtomicBinOp::_and},
-      {RMWOp::OR, LLVM::AtomicBinOp::_or},
-      {RMWOp::XOR, LLVM::AtomicBinOp::_xor},
-      {RMWOp::ADD, LLVM::AtomicBinOp::add},
-      {RMWOp::FADD, LLVM::AtomicBinOp::fadd},
-      {RMWOp::MAX, LLVM::AtomicBinOp::max},
-      {RMWOp::MIN, LLVM::AtomicBinOp::min},
-      {RMWOp::UMAX, LLVM::AtomicBinOp::umax},
-      {RMWOp::UMIN, LLVM::AtomicBinOp::umin},
-      {RMWOp::XCHG, LLVM::AtomicBinOp::xchg}};
-
-  if (auto it = atomicMap.find(atomicOp); it != atomicMap.end()) {
-    return it->second;
+  switch (atomicOp) {
+  case RMWOp::AND:
+    return LLVM::AtomicBinOp::_and;
+  case RMWOp::OR:
+    return LLVM::AtomicBinOp::_or;
+  case RMWOp::XOR:
+    return LLVM::AtomicBinOp::_xor;
+  case RMWOp::ADD:
+    return LLVM::AtomicBinOp::add;
+  case RMWOp::FADD:
+    return LLVM::AtomicBinOp::fadd;
+  case RMWOp::MAX:
+    return LLVM::AtomicBinOp::max;
+  case RMWOp::MIN:
+    return LLVM::AtomicBinOp::min;
+  case RMWOp::UMAX:
+    return LLVM::AtomicBinOp::umax;
+  case RMWOp::UMIN:
+    return LLVM::AtomicBinOp::umin;
+  case RMWOp::XCHG:
+    return LLVM::AtomicBinOp::xchg;
+  default:
+    return {};
   }
-
-  return std::nullopt;
 }
 
 std::optional<LLVM::AtomicOrdering> getMemoryOrdering(MemSemantic memOrdering) {
-  static const std::unordered_map<MemSemantic, LLVM::AtomicOrdering>
-      memOrderMap = {
-          {MemSemantic::RELAXED, LLVM::AtomicOrdering::monotonic},
-          {MemSemantic::ACQUIRE, LLVM::AtomicOrdering::acquire},
-          {MemSemantic::RELEASE, LLVM::AtomicOrdering::release},
-          {MemSemantic::ACQUIRE_RELEASE, LLVM::AtomicOrdering::acq_rel}};
-
-  if (auto it = memOrderMap.find(memOrdering); it != memOrderMap.end()) {
-    return it->second;
+  switch (memOrdering) {
+  case MemSemantic::RELAXED:
+    return LLVM::AtomicOrdering::monotonic;
+  case MemSemantic::ACQUIRE:
+    return LLVM::AtomicOrdering::acquire;
+  case MemSemantic::RELEASE:
+    return LLVM::AtomicOrdering::release;
+  case MemSemantic::ACQUIRE_RELEASE:
+    return LLVM::AtomicOrdering::acq_rel;
+  default:
+    return {};
   }
-
-  return std::nullopt;
 }
 
 std::optional<const char *> getAMDGPUMemScopeStr(MemSyncScope scope) {
-  static const std::unordered_map<MemSyncScope, const char *> scopeMap = {
-      // The default AMDHSA LLVM Sync Scope is "system", so no string is
-      // provided here
-      {MemSyncScope::SYSTEM, ""},
-      {MemSyncScope::GPU, "agent"},
-      {MemSyncScope::CTA, "workgroup"}};
-
-  if (auto it = scopeMap.find(scope); it != scopeMap.end()) {
-    return it->second;
+  switch (scope) {
+  case MemSyncScope::GPU:
+    return "agent";
+  case MemSyncScope::CTA:
+    return "workgroup";
+  // The default AMDHSA LLVM Sync Scope is "system", so no string is
+  // provided here
+  case MemSyncScope::SYSTEM:
+  default:
+    return "";
   }
-
-  return std::nullopt;
 }
 
 // Return a predicate that is true only if the current thread holds unique data,
@@ -1245,9 +1251,28 @@ struct AtomicRMWOpConversion
                  : opResult.getType();
 
     int numElems = 1;
+    // In the case of unpaired f16 elements utilize dpp instructions to
+    // accelerate atomics. Here is an algorithm of lowering
+    // tt::atomicRmwOp(%ptr, %val, %mask):
+    // 0. Group thread by pairs. Master thread is (tid % 2 == 0);
+    // 1. All the threads send %val to (tid - 1) thread via dppUpdateOp shl, so
+    //    all the masters receive value from secondary threads;
+    // 2. Take into account parity in the %mask value, build control flow
+    //    structures according to it;
+    // 3. Generate llvm::atomicRmwOp in the threads enabled by %mask value;
+    // 4. All the threads send result of generated operation to (tid + 1) thread
+    //    via dppUpdateOp shl, so all secondary thread also receive their
+    //    result.
+    //
+    // This approach enables us to use half the active threads committing atomic
+    // requests to avoid generating of code providing unified access to f16
+    // element and reduce contention.
     bool applyPackingF16 = false;
     auto vec = getVectorSize(ptr, axisAnalysisPass);
 
+    // CDNA3/CDNA4 arch allows to accelerate its atomics with LDS reduction
+    // algorithm, which is only applicable for atomics with no return. Otherwise
+    // we have to deal with an additional overhead.
     bool enableIntraWaveReduce =
         llvm::is_contained({ISAFamily::CDNA3, ISAFamily::CDNA4},
                            targetInfo.getISAFamily()) &&
@@ -1275,8 +1300,8 @@ struct AtomicRMWOpConversion
       checkPairs = !(contigWithinLanes > 1 && contigWithinLanes % 2 == 0);
       enableIntraWaveReduce &= contigWithinLanes == 1;
     }
-    auto vecTy = vec_ty(valueElemTy, vec);
 
+    auto vecTy = vec_ty(valueElemTy, vec);
     auto elemsPerThread = getTotalElemsPerThread(val.getType());
 
     Value mask = b.true_val();
