@@ -139,7 +139,7 @@ tt.func @warp_specialize_tma_matmul(
 }
 
 // AWS-LABEL: @unsupported_multiple_dot_ops
-// CHECK-LABEL: @unsupported_multiple_dot_ops
+// CHECK: @unsupported_multiple_dot_ops
 tt.func @unsupported_multiple_dot_ops() {
   %c0_i32 = arith.constant 0 : i32
   %c1_i32 = arith.constant 1 : i32
@@ -166,7 +166,7 @@ tt.func @unsupported_multiple_dot_ops() {
 }
 
 // AWS-LABEL: @unsupported_load
-// CHECK-LABEL: @unsupported_load
+// CHECK: @unsupported_load
 tt.func @unsupported_load() {
   %c0_i32 = arith.constant 0 : i32
   %c1_i32 = arith.constant 1 : i32
@@ -194,7 +194,7 @@ tt.func @unsupported_load() {
 }
 
 // AWS-LABEL: @cant_pipeline_mma
-// CHECK-LABEL: @cant_pipeline_mma
+// CHECK: @cant_pipeline_mma
 tt.func @cant_pipeline_mma(
   %a_desc: !tt.tensordesc<tensor<128x64xf16, #shared>>,
   %b_desc: !tt.tensordesc<tensor<64x128xf16, #shared>>
@@ -222,7 +222,7 @@ tt.func @cant_pipeline_mma(
 }
 
 // AWS-LABEL: @invalid_acc_reset
-// CHECK-LABEL: @invalid_acc_reset
+// CHECK: @invalid_acc_reset
 tt.func @invalid_acc_reset(
   %a_desc: !tt.tensordesc<tensor<128x64xf16, #shared>>,
   %b_desc: !tt.tensordesc<tensor<64x128xf16, #shared>>
@@ -254,7 +254,7 @@ tt.func @invalid_acc_reset(
 // AWS-LABEL: @matmul_tma_acc_with_unconditional_user
 // AWS: ttg.warp_specialize
 
-// CHECK-LABEL: @matmul_tma_acc_with_unconditional_user
+// CHECK: @matmul_tma_acc_with_unconditional_user
 // CHECK-SAME: [[A_DESC:%arg[0-9]+]]
 // CHECK-SAME: [[B_DESC:%arg[0-9]+]]
 tt.func @matmul_tma_acc_with_unconditional_user(
@@ -371,7 +371,7 @@ tt.func @matmul_tma_acc_with_unconditional_user(
 // AWS-LABEL: @matmul_tma_acc_with_conditional_user
 // AWS: ttg.warp_specialize
 
-// CHECK-LABEL: @matmul_tma_acc_with_conditional_user
+// CHECK: @matmul_tma_acc_with_conditional_user
 // CHECK-SAME: [[A_DESC:%arg[0-9]+]]
 // CHECK-SAME: [[B_DESC:%arg[0-9]+]]
 tt.func @matmul_tma_acc_with_conditional_user(
@@ -465,7 +465,7 @@ tt.func @matmul_tma_acc_with_conditional_user(
 // AWS-LABEL: @matmul_tma_acc_with_conditional_def
 // AWS: ttg.warp_specialize
 
-// CHECK-LABEL: @matmul_tma_acc_with_conditional_def
+// CHECK: @matmul_tma_acc_with_conditional_def
 // CHECK-SAME: [[A_DESC:%arg[0-9]+]]
 // CHECK-SAME: [[B_DESC:%arg[0-9]+]]
 tt.func @matmul_tma_acc_with_conditional_def(
@@ -557,7 +557,7 @@ tt.func @matmul_tma_acc_with_conditional_def(
 // AWS-LABEL: @matmul_tma_acc_with_conditional_def_and_use
 // AWS: ttg.warp_specialize
 
-// CHECK-LABEL: @matmul_tma_acc_with_conditional_def_and_use
+// CHECK: @matmul_tma_acc_with_conditional_def_and_use
 // CHECK-SAME: [[A_DESC:%arg[0-9]+]]
 // CHECK-SAME: [[B_DESC:%arg[0-9]+]]
 tt.func @matmul_tma_acc_with_conditional_def_and_use(
@@ -652,7 +652,7 @@ tt.func @matmul_tma_acc_with_conditional_def_and_use(
 // AWS-LABEL: @matmul_tma_acc_with_conditional_def_and_use_no_multibuf
 // AWS: ttg.warp_specialize
 
-// CHECK-LABEL: @matmul_tma_acc_with_conditional_def_and_use_no_multibuf
+// CHECK: @matmul_tma_acc_with_conditional_def_and_use_no_multibuf
 // CHECK-SAME: [[A_DESC:%arg[0-9]+]]
 // CHECK-SAME: [[B_DESC:%arg[0-9]+]]
 tt.func @matmul_tma_acc_with_conditional_def_and_use_no_multibuf_flag(
