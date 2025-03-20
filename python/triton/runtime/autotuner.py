@@ -178,11 +178,16 @@ class Autotuner(KernelInterface):
             bench_fn()
             return
 
-        from triton.compiler.compiler import triton_key
+        from triton.compiler.compiler import make_backend, triton_key
         from triton.runtime.cache import get_cache_manager
+        from triton._C.libtriton import get_cache_invalidating_env_vars
+
+        env_vars = get_cache_invalidating_env_vars()
         cache_key = [
             triton_key(),
+            make_backend(driver.active.get_current_target()).hash(),
             self.fn.cache_key,
+            str(sorted(env_vars.items())),
             str(tuning_key),
         ] + [str(c) for c in configs]
         cache_key = hashlib.sha256("-".join(cache_key).encode("utf-8")).hexdigest()
