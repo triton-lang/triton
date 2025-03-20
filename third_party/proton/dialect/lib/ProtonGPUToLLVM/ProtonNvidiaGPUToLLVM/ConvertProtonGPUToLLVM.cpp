@@ -11,7 +11,7 @@ using namespace mlir;
 using namespace mlir::triton;
 
 namespace mlir {
-namespace triton::proton {
+namespace triton::proton::gpu {
 #define GEN_PASS_DEF_CONVERTPROTONNVIDIAGPUTOLLVM
 #include "proton/dialect/include/Conversion/ProtonGPUToLLVM/ProtonNvidiaGPUToLLVM/Passes.h.inc"
 } // namespace triton::proton
@@ -20,7 +20,7 @@ namespace triton::proton {
 namespace {
 
 struct ConvertProtonNvidiaGPUToLLVM
-    : public mlir::triton::proton::impl::ConvertProtonNvidiaGPUToLLVMBase<
+    : public mlir::triton::proton::gpu::impl::ConvertProtonNvidiaGPUToLLVMBase<
           ConvertProtonNvidiaGPUToLLVM> {
   explicit ConvertProtonNvidiaGPUToLLVM(int32_t computeCapability,
                                         int32_t ptxVersion) {

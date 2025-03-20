@@ -44,6 +44,7 @@ class HIPOptions:
     allow_flush_denorm: bool = False
     max_num_imprecise_acc_default: int = 0
     backend_name: str = 'hip'
+    instrumentation_mode: str = 'none'
 
     # The following option provides hints to the AMDGPU backend regarding instruction scheduling
     # for all `tt.dot` operations in a kernel. The "none" variant preserves the default

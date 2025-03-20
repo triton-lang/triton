@@ -138,6 +138,7 @@ class CUDAOptions:
     backend_name: str = 'cuda'
     sanitize_overflow: bool = True
     arch: str = None
+    instrumentation_mode: str = "none"
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'

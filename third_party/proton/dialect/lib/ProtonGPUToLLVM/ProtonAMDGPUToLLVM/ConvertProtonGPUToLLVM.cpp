@@ -10,7 +10,7 @@ using namespace mlir;
 using namespace mlir::triton;
 
 namespace mlir {
-namespace triton::proton {
+namespace triton::proton::gpu {
 #define GEN_PASS_DEF_CONVERTPROTONAMDGPUTOLLVM
 #include "proton/dialect/include/Conversion/ProtonGPUToLLVM/ProtonAMDGPUToLLVM/Passes.h.inc"
 } // namespace triton::proton
@@ -19,7 +19,7 @@ namespace triton::proton {
 namespace {
 
 struct ConvertProtonAMDGPUToLLVM
-    : public mlir::triton::proton::impl::ConvertProtonAMDGPUToLLVMBase<
+    : public mlir::triton::proton::gpu::impl::ConvertProtonAMDGPUToLLVMBase<
           ConvertProtonAMDGPUToLLVM> {
   explicit ConvertProtonAMDGPUToLLVM(std::string arch) { this->arch = arch; }
 

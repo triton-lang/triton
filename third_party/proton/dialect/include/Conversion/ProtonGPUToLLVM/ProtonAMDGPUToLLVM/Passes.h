@@ -12,16 +12,13 @@ namespace mlir {
 class ModuleOp;
 template <typename T> class OperationPass;
 
-namespace triton::proton {
+namespace triton::proton::gpu {
 
 #define GEN_PASS_DECL
 #include "proton/dialect/include/Conversion/ProtonGPUToLLVM/ProtonAMDGPUToLLVM/Passes.h.inc"
 
-namespace gpu {
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertProtonAMDGPUToLLVMPass(std::string arch);
-
-} // namespace gpu
+createConvertProtonAMDGPUToLLVMPass(std::string arch="");
 
 #define GEN_PASS_REGISTRATION
 #include "proton/dialect/include/Conversion/ProtonGPUToLLVM/ProtonAMDGPUToLLVM/Passes.h.inc"
