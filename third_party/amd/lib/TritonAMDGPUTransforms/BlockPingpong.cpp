@@ -55,10 +55,11 @@ class Pingponger {
   int highPriority = 1;
   int32_t kWidth;
   int32_t numWarps;
+  int32_t numStages;
 
 public:
-  Pingponger(scf::ForOp forOp, int32_t numWarps)
-      : forOp(forOp), numWarps(numWarps) {}
+  Pingponger(scf::ForOp forOp, int32_t numWarps, int32_t numStages)
+      : forOp(forOp), numWarps(numWarps), numStages(numStages) {}
   void getDotPingponged();
 
 private:
@@ -526,6 +527,14 @@ void Pingponger::addAsymmetricSyncToLoop(OpBuilder &builder, Location loc) {
 }
 
 void Pingponger::getDotPingponged() {
+  if (numStages != 2) {
+    std::stringstream message;
+    message << "All ping pong scheduling requires 2 stages. Found " << numStages
+            << " stages";
+    LDBG(message.str());
+    return;
+  }
+
   OpBuilder builder(forOp);
   MLIRContext *ctx = forOp.getContext();
   Location loc = forOp.getLoc();
@@ -711,11 +720,14 @@ class TritonAMDGPUBlockPingpongPass
     : public TritonAMDGPUBlockPingpongBase<TritonAMDGPUBlockPingpongPass> {
 public:
   TritonAMDGPUBlockPingpongPass() = default;
+  TritonAMDGPUBlockPingpongPass(int32_t numStages) {
+    this->numStages = numStages;
+  }
   void runOnOperation() override {
     ModuleOp m = getOperation();
     for (auto funcOp : m.getOps<tt::FuncOp>()) {
       funcOp.walk([&](scf::ForOp forOp) {
-        Pingponger pingponger(forOp, ttg::lookupNumWarps(forOp));
+        Pingponger pingponger(forOp, ttg::lookupNumWarps(forOp), numStages);
         pingponger.getDotPingponged();
       });
     }
@@ -723,6 +735,7 @@ public:
 };
 } // namespace
 
-std::unique_ptr<Pass> mlir::createTritonAMDGPUBlockPingpongPass() {
-  return std::make_unique<TritonAMDGPUBlockPingpongPass>();
+std::unique_ptr<Pass>
+mlir::createTritonAMDGPUBlockPingpongPass(int32_t numStages) {
+  return std::make_unique<TritonAMDGPUBlockPingpongPass>(numStages);
 }

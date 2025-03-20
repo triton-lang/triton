@@ -164,6 +164,12 @@ def TritonAMDGPUBlockPingpong: Pass<"tritonamdgpu-block-pingpong", "mlir::Module
   let constructor = "mlir::createTritonAMDGPUBlockPingpongPass()";
 
   let dependentDialects = ["mlir::ROCDL::ROCDLDialect, mlir::triton::amdgpu::TritonAMDGPUDialect"];
+
+  let options = [
+    Option<"numStages", "num-stages",
+        "int32_t", /*default*/"2",
+        "Number of Pipeline stages">,
+    ];
 }
 
 def TritonAMDGPUInThreadTranspose: Pass<"tritonamdgpu-in-thread-transpose", "mlir::triton::FuncOp"> {
