@@ -18,10 +18,9 @@ tt.func public @fn(%arg0: tensor<128xf32>) {
 // -----
 
 // Invalid bitcast between pointer and non-pointer type.
-tt.func public @fn(%arg0: i64) {
-    %ptr = tt.int_to_ptr %arg0 : i64 -> ptr<f32>
+tt.func public @fn(%arg0: !tt.ptr<f32>) {
     // expected-error @+1 {{Cannot bitcast pointer to non-pointer type}}
-    %a = tt.bitcast %ptr : ptr<f32> -> i32
+    %a = tt.bitcast %arg0 : !tt.ptr<f32> -> i32
     tt.return
 }
 // -----
