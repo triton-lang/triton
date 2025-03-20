@@ -288,3 +288,14 @@ ttng::TMEMAllocOp ttng::createTMemAlloc(OpBuilder &builder,
   return builder.create<ttng::TMEMAllocOp>(oldTMemAllocOp.getLoc(),
                                            accMemDescType, nullptr);
 }
+
+void ttng::createInitStore(OpBuilder &builder, ttng::TMEMAllocOp allocOp,
+                           Value initVal, bool multiBufferred) {
+  Value bufferSlice = allocOp;
+  if (multiBufferred) {
+    bufferSlice = triton::createSingleBufferView(builder, allocOp, 0);
+  }
+  Value vTrue = builder.create<arith::ConstantIntOp>(allocOp.getLoc(), 1, 1);
+  builder.create<ttng::TMEMStoreOp>(allocOp.getLoc(), bufferSlice, initVal,
+                                    vTrue);
+}

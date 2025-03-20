@@ -75,6 +75,10 @@ std::optional<MMAInfo> getMMAInfo(scf::ForOp forOp, MMAv5OpInterface mmaOp,
 // optionally multi-buffered based on the number of stages.
 TMEMAllocOp createTMemAlloc(OpBuilder &builder, TMEMAllocOp oldTMemAllocOp,
                             bool multiBufferred, int numStages);
+// Create a store op of the initial value of the accumulator into the
+// potentially multi-buffered accumulator.
+void createInitStore(OpBuilder &builder, TMEMAllocOp allocOp, Value initVal,
+                     bool multiBufferred);
 
 } // namespace triton::nvidia_gpu
 } // namespace mlir

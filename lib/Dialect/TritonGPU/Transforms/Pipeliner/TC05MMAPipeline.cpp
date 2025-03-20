@@ -41,17 +41,6 @@ int getPipelineStage(Operation *op) {
   return op->getAttrOfType<IntegerAttr>(kPipelineStageAttrName).getInt();
 }
 
-void createInitStore(IRRewriter &builder, ttng::TMEMAllocOp allocOp,
-                     Value initVal, bool multiBufferred) {
-  Value bufferSlice = allocOp;
-  if (multiBufferred) {
-    bufferSlice = triton::createSingleBufferView(builder, allocOp, 0);
-  }
-  Value vTrue = builder.create<arith::ConstantIntOp>(allocOp.getLoc(), 1, 1);
-  builder.create<ttng::TMEMStoreOp>(allocOp.getLoc(), bufferSlice, initVal,
-                                    vTrue);
-}
-
 void updateAccUsesInLoop(IRRewriter &builder, scf::ForOp forOp, MMAInfo &info,
                          ttng::TMEMAllocOp newAlloc, int numStages) {
   DominanceInfo domInfo(forOp);
@@ -198,7 +187,8 @@ void hoistAndUseTMemAlloc(IRRewriter &builder, scf::ForOp forOp,
   bool chainedAcc = info.yieldArgNo.has_value();
   if (chainedAcc) {
     Value accInitValue = forOp.getInitArgs()[info.yieldArgNo.value()];
-    createInitStore(builder, newAlloc, accInitValue, info.accIsMultiBuffered);
+    ttng::createInitStore(builder, newAlloc, accInitValue,
+                          info.accIsMultiBuffered);
   }
 
   // Update mma ops to use the hoisted tmem allocs
@@ -408,9 +398,7 @@ FailureOr<scf::ForOp> preProcessLoopForTC05MMAPipelining(scf::ForOp forOp,
     assert(newOperands.size() == argsPerMMA);
 
     int firstNewOperandIndex = forOp.getInitArgs().size();
-    auto newForOp = replaceForOpWithNewSignature(builder, forOp, newOperands);
-    forOp.erase();
-    forOp = newForOp;
+    (void)addIterArgsToLoop(builder, forOp, newOperands);
 
     mmaInfo.phase = forOp.getRegionIterArg(firstNewOperandIndex + 0);
     mmaInfo.barrierIdx = forOp.getRegionIterArg(firstNewOperandIndex + 1);

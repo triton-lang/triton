@@ -160,6 +160,17 @@ def TritonGPUPartitionLoops : Pass<"tritongpu-partition-loops", "mlir::ModuleOp"
   let dependentDialects = ["mlir::triton::gpu::TritonGPUDialect"];
 }
 
+def TritonGPULoopDCE : Pass<"tritongpu-loop-dce", "mlir::ModuleOp"> {
+  let summary = "recursive dead code elimination for loops";
+
+  let description = [{
+    The `tritongpu-loop-dce` pass analyzes loops to find recursively dead code
+    within the body of the loop. These are subgraphs of memory-effect-free ops
+    whose results are transitively used only by themselves in future iterations
+    of the loop (i.e. the corresponding loop result is unused).
+  }];
+}
+
 def TritonGPULoadMMASpecialization : Pass<"tritongpu-load-mma-specialization", "mlir::ModuleOp"> {
   let summary = "load MMA specialization";
 

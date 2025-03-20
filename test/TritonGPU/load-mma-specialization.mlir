@@ -1,4 +1,5 @@
-// RUN: triton-opt %s -allow-unregistered-dialect -tritongpu-load-mma-specialization -canonicalize -cse | FileCheck %s
+// RUN: triton-opt %s -allow-unregistered-dialect -verify-diagnostics -tritongpu-load-mma-specialization -sccp -canonicalize -cse -tritongpu-loop-dce | FileCheck %s
+// RUN: triton-opt %s -allow-unregistered-dialect -verify-diagnostics -tritongpu-automatic-warp-specialization | FileCheck %s --check-prefix=AWS
 
 #acc_layout = #ttg.blocked<{sizePerThread = [1, 128], threadsPerWarp = [32, 1], warpsPerCTA = [4, 1], order = [0, 1]}>
 #oper_layout = #ttg.blocked<{sizePerThread = [1, 1], threadsPerWarp = [1, 32], warpsPerCTA = [2, 2], order = [1, 0]}>
@@ -10,6 +11,9 @@
 #acc_tmem = #ttng.tensor_memory_encoding<blockM = 128, blockN = 128, unpacked = true>
 
 module attributes {"ttg.num-warps" = 4 : i32, ttg.target = "cuda:100"} {
+
+// AWS-LABEL: @warp_specialize_tma_matmul
+// AWS: ttg.warp_specialize
 
 // CHECK: @warp_specialize_tma_matmul
 // CHECK-SAME: [[K_TILES:%arg[0-9]+]]
@@ -36,14 +40,7 @@ tt.func @warp_specialize_tma_matmul(
   // CHECK-DAG: [[ZERO:%.*]] = arith.constant dense<0.0
   %zero = arith.constant dense<0.0> : tensor<128x128xf32, #acc_layout>
 
-  // CHECK-DAG: [[CNEG1:%.*]] = arith.constant -1 : i32
   // CHECK-DAG: [[C2:%.*]] = arith.constant 2 : i32
-
-  // CHECK:      [[C_TMEM:%.*]] = ttng.tmem_alloc : () -> !ttg.memdesc<128x128xf32, [[ACC_TMEM]], #ttng.tensor_memory, mutable>
-  // CHECK-NEXT: [[MMA_MBAR:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1xi64
-  // CHECK-NEXT: [[MMA_MBAR_VIEW:%.*]] = ttg.memdesc_subview [[MMA_MBAR]][[[C0]]]
-  // CHECK-NEXT: ttng.init_barrier [[MMA_MBAR_VIEW]], 1
-  // CHECK-NEXT: ttng.tmem_store [[ZERO]], [[C_TMEM]]
 
   // CHECK-NEXT: [[A_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x128x64xf16, [[SHARED]]
   // CHECK-NEXT: [[B_BUFS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2x128x64xf16, [[SHARED]]
@@ -53,6 +50,7 @@ tt.func @warp_specialize_tma_matmul(
   // CHECK-NEXT: ttng.init_barrier [[READY_MBAR0]], 1
   // CHECK-NEXT: [[READY_MBAR1:%.*]] = ttg.memdesc_subview [[READY_MBARS]][[[C1]]]
   // CHECK-NEXT: ttng.init_barrier [[READY_MBAR1]], 1
+
   // CHECK-NEXT: [[OPER_MBARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<2xi64
   // CHECK-NEXT: [[OPER_MBAR0:%.*]] = ttg.memdesc_subview [[OPER_MBARS]][[[C0]]]
   // CHECK-NEXT: ttng.init_barrier [[OPER_MBAR0]], 1
@@ -62,21 +60,20 @@ tt.func @warp_specialize_tma_matmul(
   // CHECK-NEXT: ttng.arrive_barrier [[READY_MBAR0]], 1
   // CHECK-NEXT: ttng.arrive_barrier [[READY_MBAR1]], 1
 
+  // CHECK-NEXT: [[MMA_MBARS:%.*]] = ttg.local_alloc : () -> !ttg.memdesc<1xi64
+  // CHECK-NEXT: [[MMA_MBAR:%.*]] = ttg.memdesc_subview [[MMA_MBARS]][[[C0]]]
+  // CHECK-NEXT: ttng.init_barrier [[MMA_MBAR]], 1
+  // CHECK-NEXT: [[ACC_BUFS:%.*]] = ttng.tmem_alloc : () -> !ttg.memdesc<1x128x128xf32, [[ACC_TMEM]], #ttng.tensor_memory, mutable>
+  // CHECK-NEXT: [[ACC_BUF:%.*]] = ttg.memdesc_subview [[ACC_BUFS]][[[C0]], [[C0]], [[C0]]]
+  // CHECK-NEXT: ttng.tmem_store [[ZERO]], [[ACC_BUF]]
+
   // CHECK-NEXT: {{[0-9]+}}:3 = scf.for [[K:%arg[0-9]+]] = [[C0]] to [[K_TILES]] step [[C1]]
-  // CHECK-SAME: [[OPER_IDX:%arg[0-9]+]] = [[CNEG1]]
-  // CHECK-SAME: [[OPER_PHASE:%arg[0-9]+]] = [[C0]]
+  // CHECK-SAME: [[IDX:%arg[0-9]+]] = [[C0]]
+  // CHECK-SAME: [[PHASE:%arg[0-9]+]] = [[C0]]
   // CHECK-SAME: [[MMA_PHASE:%arg[0-9]+]] = [[C0]]
   // CHECK-SAME: -> (i32, i32, i32)
   %result = scf.for %k = %c0_i32 to %k_tiles step %c1_i32
       iter_args(%acc = %zero) -> tensor<128x128xf32, #acc_layout> : i32 {
-    // CHECK-NEXT: [[OPER_IDX_NEXT:%.*]] = arith.addi [[OPER_IDX]], [[C1]]
-    // CHECK-NEXT: [[ROLLOVER:%.*]] = arith.cmpi eq, [[OPER_IDX_NEXT]], [[C2]]
-    // CHECK-NEXT: [[IDX:%.*]] = arith.select [[ROLLOVER]], [[C0]], [[OPER_IDX_NEXT]]
-    // CHECK-NEXT: [[NEXT_PHASE:%.*]] = arith.xori [[OPER_PHASE]], [[C1]]
-    // CHECK-NEXT: [[PHASE:%.*]] = arith.select [[ROLLOVER]], [[NEXT_PHASE]], [[OPER_PHASE]]
-
-    // CHECK-NEXT: [[NEXT_MMA_PHASE:%.*]] = arith.xori [[MMA_PHASE]], [[C1]]
-
     // CHECK-NEXT: [[OFF_K:%.*]] = arith.muli [[K]], [[BLOCK_K]]
     %off_k = arith.muli %k, %BLOCK_K : i32
 
@@ -100,17 +97,30 @@ tt.func @warp_specialize_tma_matmul(
     // CHECK-NEXT: [[B_T:%.*]] = ttg.memdesc_trans [[B_BUF]] {order = array<i32: 1, 0>, ttg.partition = 1 : i32}
     %b_T_shared = ttg.memdesc_trans %b_shared {order = array<i32: 1, 0>} : !ttg.memdesc<128x64xf16, #shared, #smem> -> !ttg.memdesc<64x128xf16, #shared_trans, #smem>
     %c_tmem = ttng.tmem_alloc %acc : (tensor<128x128xf32, #acc_layout>) -> !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>
-    // CHECK-NEXT: ttng.tc_gen5_mma [[A_BUF]], [[B_T]], [[C_TMEM]], [[TRUE]], [[TRUE]], [[MMA_MBAR]] {ttg.partition = 1 : i32}
+    // CHECK-NEXT: ttng.tc_gen5_mma [[A_BUF]], [[B_T]], [[ACC_BUF]], [[TRUE]], [[TRUE]], [[MMA_MBAR]] {ttg.partition = 1 : i32}
     // CHECK-NEXT: ttng.wait_barrier [[MMA_MBAR]], [[MMA_PHASE]] {ttg.partition = 1 : i32}
     // CHECK-NEXT: ttng.arrive_barrier [[READY_MBAR]], 1 {ttg.partition = 1 : i32}
     ttng.tc_gen5_mma %a_shared, %b_T_shared, %c_tmem, %true, %true : (!ttg.memdesc<128x64xf16, #shared, #smem>, !ttg.memdesc<64x128xf16, #shared_trans, #smem>, !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable>, i1, i1) -> ()
 
     %c = ttng.tmem_load %c_tmem : !ttg.memdesc<128x128xf32, #acc_tmem, #ttng.tensor_memory, mutable> -> tensor<128x128xf32, #acc_layout>
-    // CHECK-NEXT: yield [[IDX]], [[PHASE]], [[NEXT_MMA_PHASE]]
+
+    // CHECK-NEXT: [[IDX_INCR:%.*]] = arith.addi [[IDX]], [[C1]]
+    // CHECK-NEXT: [[PHASE_INCR:%.*]] = arith.xori [[PHASE]], [[C1]]
+    // CHECK-NEXT: [[ROLLOVER:%.*]] = arith.cmpi eq, [[IDX_INCR]], [[C2]]
+    // CHECK-NEXT: [[IDX_NEXT:%.*]] = arith.select [[ROLLOVER]], [[C0]], [[IDX_INCR]]
+    // CHECK-NEXT: [[PHASE_NEXT:%.*]] = arith.select [[ROLLOVER]], [[PHASE_INCR]], [[PHASE]]
+
+    // CHECK-NEXT: [[MMA_PHASE_NEXT:%.*]] = arith.xori [[MMA_PHASE]], [[C1]]
+
+    // CHECK-NEXT: yield [[IDX_NEXT]], [[PHASE_NEXT]], [[MMA_PHASE_NEXT]]
     scf.yield %c : tensor<128x128xf32, #acc_layout>
 
   // CHECK-NEXT: {tt.warp_specialize, ttg.partition.stages = [0 : i32, 2 : i32]}
   } {tt.warp_specialize}
+
+  // CHECK-NEXT: [[RESULT:%.*]] = ttng.tmem_load [[ACC_BUF]]
+  // CHECK-NEXT: ttng.inval_barrier [[MMA_MBAR]]
+  // CHECK-NEXT: ttg.local_dealloc [[MMA_MBARS]]
 
   // CHECK-NEXT: ttng.inval_barrier [[OPER_MBAR0]]
   // CHECK-NEXT: ttng.inval_barrier [[OPER_MBAR1]]
@@ -122,10 +132,6 @@ tt.func @warp_specialize_tma_matmul(
 
   // CHECK-NEXT: ttg.local_dealloc [[B_BUFS]]
   // CHECK-NEXT: ttg.local_dealloc [[A_BUFS]]
-
-  // CHECK-NEXT: [[RESULT:%.*]] = ttng.tmem_load [[C_TMEM]]
-  // CHECK-NEXT: ttng.inval_barrier [[MMA_MBAR_VIEW]]
-  // CHECK-NEXT: ttg.local_dealloc [[MMA_MBAR]]
 
   // CHECK-NEXT: "use"([[RESULT]])
   "use"(%result) : (tensor<128x128xf32, #acc_layout>) -> ()

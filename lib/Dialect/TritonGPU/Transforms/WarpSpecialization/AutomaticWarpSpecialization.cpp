@@ -2,6 +2,7 @@
 #include "mlir/Pass/Pass.h"
 #include "triton/Dialect/TritonGPU/Transforms/Partition.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
+#include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/WarpSpecialization.h"
 
 using namespace mlir;
@@ -32,7 +33,7 @@ struct AutomaticWarpSpecialization
 void AutomaticWarpSpecialization::runOnOperation() {
   SmallVector<scf::ForOp> loops;
   getOperation().walk([&](scf::ForOp loop) {
-    if (loop->hasAttr("tt.warp_specialize"))
+    if (loop->hasAttr(kWarpSpecializeAttrName))
       loops.push_back(loop);
   });
 

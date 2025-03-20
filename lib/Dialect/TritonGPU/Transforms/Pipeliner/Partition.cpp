@@ -1,5 +1,6 @@
 #include "triton/Dialect/TritonGPU/Transforms/Partition.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "llvm/ADT/SCCIterator.h"
 
 using namespace mlir;
@@ -202,7 +203,8 @@ LogicalResult WarpSchedule::verify(scf::ForOp loop) const {
   for (Partition &partition : getPartitions()) {
     bool failed = false;
     auto callback = [&](OpResult output, OpOperand &use, unsigned distance) {
-      const Partition *consumer = opToPartition.at(use.getOwner());
+      Operation *user = loop.getBody()->findAncestorOpInBlock(*use.getOwner());
+      const Partition *consumer = opToPartition.at(user);
       if (partition.getStage() < consumer->getStage() + distance)
         return;
       InFlightDiagnostic diag =
@@ -298,7 +300,8 @@ void WarpSchedule::iterateUses(
   });
   while (!uses.empty()) {
     auto [output, use, distance] = uses.pop_back_val();
-    if (!isa<scf::YieldOp>(use->getOwner())) {
+    Operation *owner = loop.getBody()->findAncestorOpInBlock(*use->getOwner());
+    if (!isa<scf::YieldOp>(owner)) {
       callback(output, *use, distance);
       continue;
     }

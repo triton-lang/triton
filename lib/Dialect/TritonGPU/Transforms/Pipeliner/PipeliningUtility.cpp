@@ -213,27 +213,6 @@ bool mlir::triton::getDisallowAccMultiBuffer(scf::ForOp forOp) {
   return forOp->hasAttr(mlir::triton::kDisallowAccMultiBufferAttrName);
 }
 
-void mlir::triton::visitNestedOperands(
-    Operation *op, function_ref<void(OpOperand &)> visitor) {
-  op->walk([&](Operation *nestedOp) {
-    for (OpOperand &operand : nestedOp->getOpOperands()) {
-      if (operand.get().getParentBlock()->getParentOp()->isProperAncestor(op))
-        visitor(operand);
-    }
-  });
-}
-
-void mlir::triton::visitNestedOperands(Operation *op,
-                                       function_ref<void(Value)> visitor) {
-  visitNestedOperands(op, [&](OpOperand &operand) { visitor(operand.get()); });
-}
-
-SetVector<Value> mlir::triton::getNestedOperands(Operation *op) {
-  SetVector<Value> result;
-  visitNestedOperands(op, [&](Value operand) { result.insert(operand); });
-  return result;
-}
-
 std::pair<OpResult, int64_t>
 mlir::triton::getDefinitionAndDistance(scf::ForOp forOp, Value value) {
   int64_t distance = 0;
@@ -458,47 +437,6 @@ ttg::SharedEncodingTrait mlir::triton::getSharedEncoding(Operation *op) {
   // Use generic layout. This won't be optimal for 2D tensors.
   return ttg::SwizzledSharedEncodingAttr::get(ty.getContext(), 1, 1, 1, order,
                                               ctaLayout);
-}
-
-void mlir::triton::eraseLoopCarriedValues(scf::ForOp &loop,
-                                          llvm::BitVector indices) {
-  // Pad the indices in case new arguments were added.
-  while (indices.size() != loop.getInitArgs().size())
-    indices.push_back(false);
-
-  loop.getBody()->getTerminator()->eraseOperands(indices);
-  loop.getBody()->eraseArguments([&](BlockArgument arg) {
-    int idx = arg.getArgNumber();
-    return idx != 0 && indices.test(idx - 1);
-  });
-
-  llvm::BitVector loopOperandIndices(loop->getNumOperands());
-  for (auto [i, operand] : llvm::enumerate(loop.getInitArgsMutable())) {
-    if (indices.test(i))
-      loopOperandIndices.set(operand.getOperandNumber());
-  }
-  loop->eraseOperands(loopOperandIndices);
-
-  // Rewrite the loop to erase results.
-  OperationState state(loop.getLoc(), loop->getName(), loop->getOperands(),
-                       loop.getInitArgs().getTypes(), loop->getAttrs());
-  state.addRegion()->takeBody(loop.getBodyRegion());
-
-  OpBuilder b(loop);
-  auto newLoop = cast<scf::ForOp>(b.create(state));
-
-  // Replace uses of the old loop with the new loop.
-  unsigned newResultIdx = 0;
-  for (auto [i, result] : llvm::enumerate(loop.getResults())) {
-    if (indices.test(i)) {
-      assert(result.use_empty() && "loop carried value still has uses");
-      continue;
-    }
-    result.replaceAllUsesWith(newLoop.getResult(newResultIdx++));
-  }
-
-  loop.erase();
-  loop = newLoop;
 }
 
 int mlir::triton::getNumStagesOrDefault(scf::ForOp forOp,

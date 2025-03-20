@@ -5,6 +5,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Partition.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/WarpSpecialization.h"
 #include "llvm/ADT/SCCIterator.h"
@@ -26,20 +27,6 @@ static Operation *getEarliestUser(ArrayRef<OpOperand *> uses) {
     return lhs->getOwner()->isBeforeInBlock(rhs->getOwner());
   });
   return use->getOwner();
-}
-
-// Create an i32 constant.
-static Value intCst(ImplicitLocOpBuilder &b, int value) {
-  return b.create<arith::ConstantOp>(b.getI32IntegerAttr(value));
-}
-
-// Create an operation inside a partition.
-template <typename OpT, typename... Args>
-static auto createInPartition(ImplicitLocOpBuilder &b, Partition &partition,
-                              Args &&...args) {
-  auto op = b.create<OpT>(std::forward<Args>(args)...);
-  partition.insert(op);
-  return op;
 }
 
 //===----------------------------------------------------------------------===//
@@ -241,7 +228,8 @@ int UseInfo::getMaxUseDistance(const Partition &partition) {
 namespace {
 struct AsyncRef {
   Value getValueView(ImplicitLocOpBuilder &b, Value idx) const {
-    SmallVector<Value> offsets(allocType.getRank(), intCst(b, 0));
+    Value zero = b.create<arith::ConstantOp>(b.getI32IntegerAttr(0));
+    SmallVector<Value> offsets(allocType.getRank(), zero);
     offsets.front() = idx;
     return b.create<MemDescSubviewOp>(viewType, alloc, offsets);
   }
@@ -281,6 +269,16 @@ public:
   LogicalResult run();
 
 private:
+  Value intCst(int value, unsigned width = 32) {
+    return b.create<arith::ConstantIntOp>(value, width);
+  }
+  template <typename OpT, typename... Args>
+  auto createInPartition(Partition &partition, Args &&...args) {
+    auto op = b.create<OpT>(std::forward<Args>(args)...);
+    partition.insert(op);
+    return op;
+  }
+
   void resolveOutputMultiplicity(llvm::MapVector<OpResult, UseInfo> &useInfo,
                                  const Partition &partition);
   AsyncRef allocateAsyncValue(RankedTensorType tensorType, unsigned maxDistance,
@@ -339,7 +337,7 @@ AsyncRef DependencyRewriter::allocateAsyncValue(RankedTensorType tensorType,
 // for the buffer, store it and mark the buffer as ready to be consumed.
 void DependencyRewriter::initializeBarriers(int index, const AsyncRef &aref,
                                             unsigned numConsumers, Value init) {
-  Value idx = intCst(b, index);
+  Value idx = intCst(index);
   if (init) {
     Value view = aref.getValueView(b, idx);
     b.create<LocalStoreOp>(init, view);
@@ -362,7 +360,7 @@ std::pair<Value, Value> DependencyRewriter::createAndGetAsyncIndex(
     const AsyncRef &aref,
     function_ref<void(int &, Value &, Value)> extraCondition) {
   Block *body = loop.getBody();
-  Value one = intCst(b, 1);
+  Value one = intCst(1);
 
   // Thread the phase and buffer index through the loop. The index is
   // pre-incremented.
@@ -370,9 +368,9 @@ std::pair<Value, Value> DependencyRewriter::createAndGetAsyncIndex(
   Value phase = body->addArgument(b.getI32Type(), b.getLoc());
   idx = b.create<arith::AddIOp>(idx, one);
   Value nextPhase = b.create<arith::XOrIOp>(phase, one);
-  Value cnd = b.create<arith::CmpIOp>(
-      arith::CmpIPredicate::eq, idx,
-      intCst(b, aref.multiplicitySize + aref.maxDistance));
+  Value cnd =
+      b.create<arith::CmpIOp>(arith::CmpIPredicate::eq, idx,
+                              intCst(aref.multiplicitySize + aref.maxDistance));
   // The phase flips when we reach the end of all buffers.
   phase = b.create<arith::SelectOp>(cnd, nextPhase, phase);
 
@@ -380,14 +378,14 @@ std::pair<Value, Value> DependencyRewriter::createAndGetAsyncIndex(
   if (extraCondition)
     extraCondition(startIdx, cnd, idx);
 
-  idx = b.create<arith::SelectOp>(cnd, intCst(b, aref.multiplicitySize), idx);
+  idx = b.create<arith::SelectOp>(cnd, intCst(aref.multiplicitySize), idx);
 
   auto yield = cast<scf::YieldOp>(loop.getBody()->getTerminator());
   yield.getResultsMutable().append({idx, phase});
   OpBuilder::InsertionGuard guard(b);
   b.setInsertionPoint(loop);
   // The index is preincremented so subtract 1 from the start.
-  loop.getInitArgsMutable().append({intCst(b, startIdx - 1), intCst(b, 0)});
+  loop.getInitArgsMutable().append({intCst(startIdx - 1), intCst(0)});
   return {idx, phase};
 }
 
@@ -400,7 +398,8 @@ LogicalResult DependencyRewriter::run() {
     // specific partition and distance of each use.
     auto &useInfo = partitionUseInfo.emplace_back();
     auto callback = [&](OpResult output, OpOperand &use, unsigned distance) {
-      Partition *usePartition = schedule.getPartition(use.getOwner());
+      Operation *user = loop.getBody()->findAncestorOpInBlock(*use.getOwner());
+      Partition *usePartition = schedule.getPartition(user);
       // Ignore uses in the same partition in the future.
       if (usePartition == &partition) {
         assert(distance > 0 && "self-recursion must occur in the future");
@@ -461,7 +460,8 @@ LogicalResult DependencyRewriter::run() {
       for (auto &[key, uses] : info.consumers) {
         assert(!uses.empty() && "expected at least one use");
         Operation *earliestUser = getEarliestUser(uses);
-        b.setInsertionPoint(earliestUser);
+        b.setInsertionPoint(
+            loop.getBody()->findAncestorOpInBlock(*earliestUser));
 
         auto [usePartition, distance] = key;
         auto modifyStart = [&, distance = distance, uses = uses, info = &info](
@@ -479,7 +479,7 @@ LogicalResult DependencyRewriter::run() {
           // `multiplicitySize` anyways, skip generating the check.
           if (end != multiplicitySize) {
             Value initEnd = b.create<arith::CmpIOp>(arith::CmpIPredicate::eq,
-                                                    idx, intCst(b, end));
+                                                    idx, intCst(end));
             cnd = b.create<arith::OrIOp>(cnd, initEnd);
           }
         };
@@ -487,26 +487,24 @@ LogicalResult DependencyRewriter::run() {
 
         // Wait for the value to be available.
         auto [view, readyView, emptyView] = aref.getView(b, idx);
-        createInPartition<ttng::WaitBarrierOp>(b, *usePartition, readyView,
-                                               phase);
+        createInPartition<ttng::WaitBarrierOp>(*usePartition, readyView, phase);
         // Load the value at the current index and replace uses in this
         // partition with it.
         Value value =
-            createInPartition<LocalLoadOp>(b, *usePartition, tensorType, view);
+            createInPartition<LocalLoadOp>(*usePartition, tensorType, view);
         for (OpOperand *use : uses)
           use->set(value);
         // Mark the buffer as ready.
-        createInPartition<ttng::ArriveBarrierOp>(b, *usePartition, emptyView,
-                                                 1);
+        createInPartition<ttng::ArriveBarrierOp>(*usePartition, emptyView, 1);
       }
 
       // Set up production of the value.
       b.setInsertionPointAfter(output.getDefiningOp());
       auto [idx, phase] = createAndGetAsyncIndex(aref);
       auto [view, readyView, emptyView] = aref.getView(b, idx);
-      createInPartition<ttng::WaitBarrierOp>(b, partition, emptyView, phase);
-      createInPartition<LocalStoreOp>(b, partition, output, view);
-      createInPartition<ttng::ArriveBarrierOp>(b, partition, readyView, 1);
+      createInPartition<ttng::WaitBarrierOp>(partition, emptyView, phase);
+      createInPartition<LocalStoreOp>(partition, output, view);
+      createInPartition<ttng::ArriveBarrierOp>(partition, readyView, 1);
     }
   }
 
