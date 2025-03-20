@@ -841,8 +841,12 @@ LogicalResult BitcastOp::verify() {
   if (dstIsPtr || srcIsPtr) {
     // Bitcast supports pointer-to-pointer conversions but not
     // pointer-to-scalar.
-    if (dstIsPtr && srcIsPtr)
+    if (dstIsPtr && srcIsPtr) {
+      if (triton::getAddressSpace(dstType) != triton::getAddressSpace(srcType))
+        return emitError(
+            "Cannot bitcast pointer between different address spaces");
       return success();
+    }
     return emitError("Cannot bitcast pointer to non-pointer type");
   }
   unsigned dstBits = dstType.getIntOrFloatBitWidth();
