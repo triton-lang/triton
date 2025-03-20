@@ -221,8 +221,11 @@ class Autotuner(KernelInterface):
                     timings = {}
                     bench_start = time.time()
                     new_timings = False
-                    # we want to skip benchmarking configs that aren't in the cache; but we don't
-                    # want to select any cached configs that aren't in the pruned set
+                    # We want to find timings for any config in the pruned set; we can't
+                    # just return the cached set of configs, because the user may have
+                    # changed the config set or the pruning function.  But if the cache
+                    # already has a timing for a given config, use that instead of
+                    # re-running the benchmark.
                     for config in pruned_configs:
                         if config in cached_timings:
                             timings[config] = cached_timings[config]
