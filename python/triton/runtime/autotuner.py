@@ -222,13 +222,12 @@ class Autotuner(KernelInterface):
                 pruned_configs = self.prune_configs(kwargs)
 
                 def benchmark():
-                    # prune configs
-                    bench_start = time.time()
                     # We want to find timings for any config in the pruned set; we can't
                     # just return the cached set of configs, because the user may have
                     # changed the config set or the pruning function.  But if the cache
                     # already has a timing for a given config, use that instead of
                     # re-running the benchmark.
+                    bench_start = time.time()
                     timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
                     bench_end = time.time()
                     self.bench_time = bench_end - bench_start
