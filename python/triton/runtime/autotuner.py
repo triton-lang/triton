@@ -191,13 +191,14 @@ class Autotuner(KernelInterface):
                 cached_timings = {Config(**config): timings for config, timings in cached_timings}
 
         new_timings = bench_fn(cached_timings)
-        new_timings = {cfg: timing for cfg, timing in new_timings.items() if not cfg.pre_hook}
         if new_timings:
             cache.put(
                 json.dumps({
                     "key":
                     tuning_key,
-                    "configs_timings": [(config.__dict__, timings) for config, timings in self.configs_timings.items()],
+                    "configs_timings": [(config.__dict__, timings)
+                                        for config, timings in self.configs_timings.items()
+                                        if not config.pre_hook],
                 }), file_name, binary=False)
 
     def run(self, *args, **kwargs):
@@ -217,13 +218,17 @@ class Autotuner(KernelInterface):
                 def benchmark(cached_timings):
                     # prune configs
                     pruned_configs = self.prune_configs(kwargs)
-                    new_configs = set(pruned_configs) - set(cached_timings.keys())
+                    timings = {}
                     bench_start = time.time()
-                    new_timings = {config: self._bench(*args, config=config, **kwargs) for config in new_configs}
-                    timings = {
-                        config: new_timings.get(config, cached_timings.get(config, None))
-                        for config in pruned_configs
-                    }
+                    new_timings = False
+                    # we want to skip benchmarking configs that aren't in the cache; but we don't
+                    # want to select any cached configs that aren't in the pruned set
+                    for config in pruned_configs:
+                        if config in cached_timings:
+                            timings[config] = cached_timings[config]
+                        else:
+                            new_timings = True
+                            timings[config] = self._bench(*args, config=config, **kwargs)
                     bench_end = time.time()
                     self.bench_time = bench_end - bench_start
                     self.cache[key] = builtins.min(timings, key=timings.get)
