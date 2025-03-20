@@ -59,7 +59,7 @@ Operation *mlir::triton::predicateOp(RewriterBase &rewriter, Operation *op,
     return op;
   if (isa<ttg::LocalLoadOp, ttg::LocalStoreOp>(op))
     return op;
-  if (isa<ttng::TMEMAllocOp>(op))
+  if (isa<ttng::TMEMAllocOp, ttng::TMEMLoadOp>(op))
     return op;
   if (auto ifOp = dyn_cast<scf::IfOp>(op)) {
     rewriter.setInsertionPoint(op);
@@ -323,41 +323,6 @@ Value mlir::triton::createBarrierAlloc(scf::ForOp forOp, int numBarriers) {
   }
   rewriter.create<ttg::LocalDeallocOp>(barrierAlloc);
   return barrierAlloc;
-}
-
-Value mlir::triton::createSingleBufferView(OpBuilder &builder, Value alloc,
-                                           Value idx) {
-  assert(isa<triton::gpu::MemDescType>(alloc.getType()) &&
-         "Expected MemDescType");
-  auto allocDescType = cast<triton::gpu::MemDescType>(alloc.getType());
-  SmallVector<int64_t> shape;
-  if (allocDescType.getShape().size() > 1) {
-    shape.insert(shape.end(), allocDescType.getShape().begin() + 1,
-                 allocDescType.getShape().end());
-  } else {
-    shape.push_back(1);
-  }
-  auto viewDescType = triton::gpu::MemDescType::get(
-      shape, allocDescType.getElementType(), allocDescType.getEncoding(),
-      allocDescType.getMemorySpace(), allocDescType.getMutableMemory(),
-      /*allocShape=*/allocDescType.getAllocShape());
-  SmallVector<Value> idxs = {idx};
-  if (allocDescType.getShape().size() > 1) {
-    Value zero =
-        builder.template create<arith::ConstantIntOp>(alloc.getLoc(), 0, 32);
-    for (unsigned i = 1; i < allocDescType.getShape().size(); i++) {
-      idxs.push_back(zero);
-    }
-  }
-  return builder.template create<triton::gpu::MemDescSubviewOp>(
-      alloc.getLoc(), viewDescType, alloc, idxs);
-}
-
-Value mlir::triton::createSingleBufferView(OpBuilder &builder, Value alloc,
-                                           int idx) {
-  return mlir::triton::createSingleBufferView(
-      builder, alloc,
-      builder.create<arith::ConstantIntOp>(alloc.getLoc(), idx, 32));
 }
 
 Value mlir::triton::createAlloc(scf::ForOp forOp, RankedTensorType ty,

@@ -80,6 +80,13 @@ getTopLevelUsersInLoop(Operation *op, scf::ForOp forOp,
         q.push_back(&use);
       continue;
     }
+    // Don't count view operations as uses. Follow them through to their
+    // users.
+    if (isa<ttg::MemDescTransOp, ttg::MemDescSubviewOp>(use->getOwner())) {
+      for (auto &use : use->getOwner()->getUses())
+        q.push_back(&use);
+      continue;
+    }
     if (filter && !filter(use->getOwner()))
       continue;
     Operation *topLevelUser =
@@ -138,24 +145,30 @@ bool canBeShmemPipelined(Operation *op) {
 int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
                        CoarseSchedule &schedule) {
   assert(schedule.count(op) && "Op not found in the schedule");
-  auto [defStage, _] = schedule[op];
+  int defStage = schedule[op].first;
+  std::optional<int> useStage;
+  DenseSet<Operation *> topLevelUsers = getTopLevelUsersInLoop(op, forOp);
   // Special case for loads used by local_alloc:
   // we must consider the uses of the local_alloc, as it may be removed and its
   // uses will become direct uses of the async load.
   // TODO: This is overly conservative, we may need to restrict to cases where
   // local_alloc is used by a dot product and has correct encoding.
-  if (isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op) &&
-      op->hasOneUse()) {
-    if (auto localAlloc =
-            dyn_cast<ttg::LocalAllocOp>(*op->getUsers().begin())) {
-      return schedule[localAlloc].first - defStage +
-             getDefUseStageDiff(localAlloc, forOp, schedule);
+  if (isa<tt::LoadOp, tt::DescriptorLoadOp, tt::DescriptorGatherOp>(op)) {
+    DenseSet<Operation *> allocUsers;
+    for (Operation *topLevelUser : topLevelUsers) {
+      if (auto localAlloc = dyn_cast<ttg::LocalAllocOp>(topLevelUser)) {
+        DenseSet<Operation *> users = getTopLevelUsersInLoop(localAlloc, forOp);
+        allocUsers.insert(users.begin(), users.end());
+      }
+    }
+    topLevelUsers.insert(allocUsers.begin(), allocUsers.end());
+  }
+  DenseSet<Operation *> topLevelWaitUsers;
+  for (Operation *topLevelUser : topLevelUsers) {
+    if (isa<ttng::WaitBarrierOp>(topLevelUser)) {
+      topLevelWaitUsers.insert(topLevelUser);
     }
   }
-  std::optional<int> useStage;
-  DenseSet<Operation *> topLevelUsers = getTopLevelUsersInLoop(op, forOp);
-  DenseSet<Operation *> topLevelUsersOnlyWait = getTopLevelUsersInLoop(
-      op, forOp, [](Operation *op) { return isa<ttng::WaitBarrierOp>(op); });
   for (Operation *topLevelUser : topLevelUsers) {
     auto [_useStage, _] = schedule[topLevelUser];
     useStage = std::min(_useStage, useStage.value_or(_useStage));
@@ -163,7 +176,7 @@ int getDefUseStageDiff(Operation *op, scf::ForOp forOp,
   // Waits tells us the buffer is still in use until the wait completes, we
   // can't simply load from the buffer and replace the uses of the buffer with
   // the load. The stage diff needs to account for the furthest wait.
-  for (Operation *topLevelUser : topLevelUsersOnlyWait) {
+  for (Operation *topLevelUser : topLevelWaitUsers) {
     auto [_useStage, _] = schedule[topLevelUser];
     useStage = std::max(_useStage, useStage.value_or(_useStage));
   }
