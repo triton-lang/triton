@@ -53,11 +53,6 @@ void init_triton_amd_passes_ttgpuir(py::module &&m) {
           pm.addPass(createTritonAMDGPULowerInstructionSchedHintsPass(
               arch, numStages));
         });
-  m.def("add_decompose_unsupported_conversions", [](mlir::PassManager &pm,
-                                                    const std::string &arch) {
-    pm.addPass(
-        mlir::triton::AMD::createDecomposeUnsupportedConversionsPass(arch));
-  });
   ADD_PASS_WRAPPER_2("add_optimize_lds_usage",
                      mlir::triton::AMD::createOptimizeLDSUsagePass,
                      const std::string &, int32_t);
