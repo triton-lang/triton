@@ -1,3 +1,17 @@
+//===----------------------------------------------------------------------===//
+//
+// This file implements the WGMMA (Warp Group Matrix Multiply-Accumulate)
+// prefetch optimization pass. The pass optimizes matrix multiplication
+// operations by prefetching operands into registers, specifically targeting
+// NVIDIA's WGMMA instructions.
+//
+// Key optimizations:
+// 1. Prefetches operands for warp group dot operations within loops
+// 2. Focuses on Register-Shared Memory GEMM (RSGEMM) patterns
+// 3. Handles elementwise operations interleaved with WGMMA
+//
+//===----------------------------------------------------------------------===//
+
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -21,8 +35,14 @@ namespace gpu {
 
 namespace {
 
-// RSGEMM means the lhs is in register and the rhs is in
-// shared memory
+/// Checks if the given dot operation is a supported Register-Shared Memory
+/// GEMM. Currently supports operations where:
+/// 1. LHS (A) is in registers
+/// 2. RHS (B) is in shared memory
+/// 3. Swizzle byte width matches the matrix size in swizzle dimension
+///
+/// @param dotOp The dot operation to check
+/// @return success if the operation is supported, failure otherwise
 LogicalResult isSupportedRSGEMM(ttng::WarpGroupDotOp dotOp) {
   Value operandA = dotOp.getA();
   Value operandB = dotOp.getB();
@@ -31,7 +51,7 @@ LogicalResult isSupportedRSGEMM(ttng::WarpGroupDotOp dotOp) {
   auto encA = dyn_cast<TensorOrMemDesc>(operandA.getType()).getEncoding();
   auto encB = dyn_cast<TensorOrMemDesc>(operandB.getType()).getEncoding();
 
-  if (isa<DotOperandEncodingAttr>(encA) && isa<NVMMASharedEncodingAttr>(encB)){
+  if (isa<DotOperandEncodingAttr>(encA) && isa<NVMMASharedEncodingAttr>(encB)) {
     auto bShape = cast<MemDescType>(operandB.getType()).getShape();
     auto rank = bShape.size();
     auto EncB = cast<NVMMASharedEncodingAttr>(encB);
@@ -39,26 +59,46 @@ LogicalResult isSupportedRSGEMM(ttng::WarpGroupDotOp dotOp) {
     auto ElementBitWidth = EncB.getElementBitWidth();
     auto TransB = EncB.getTransposed();
     int64_t SwizzleDimSize = TransB ? bShape[rank - 2] : bShape[rank - 1];
+
     // Currently, memory subview does not calculate correct base
     // address for subtile when SwizzleByteWidth is larger than
-    // the matrix size in the swizzle dim. It can be fixed through
-    // calculating correct base address in subview op for subtile
-    if(SwizzleDimSize * ElementBitWidth == SwizzleByteWidth * 8)
-      return llvm::success();
+    // the matrix size in the swizzle dim
+    if (SwizzleDimSize * ElementBitWidth == SwizzleByteWidth * 8)
+      return success();
   }
 
-  return llvm::failure();
+  return failure();
 }
 
+/// Main class implementing the WGMMA prefetch optimization
 class WGMMAPrefetcher {
-  /// cache the ForOp we are working on
+public:
+  WGMMAPrefetcher() = delete;
+  explicit WGMMAPrefetcher(scf::ForOp forOp) : forOp(forOp) {
+    yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
+  }
+
+  /// Initialize the prefetcher by analyzing the loop and collecting dot
+  /// operations
+  LogicalResult initialize();
+
+  /// Create a new optimized for loop with prefetching
+  scf::ForOp createNewForOp();
+
+private:
+  /// The original for loop being optimized
   scf::ForOp forOp;
-  /// cache the YieldOp of this ForOp
+
+  /// The yield operation of the original for loop
   scf::YieldOp yieldOp;
 
+  /// Width of the prefetch window in elements
   unsigned prefetchWidth;
 
+  /// Collection of dot operations to be optimized
   SetVector<ttng::WarpGroupDotOp> dots;
+
+  /// Maps for tracking various aspects of dot operations
   DenseMap<Value, Value> dot2aSrcMemDesc;
   DenseMap<Value, Value> dot2bSrcMemDesc;
   DenseMap<Value, SmallVector<Value>> dot2aVals;
@@ -68,27 +108,15 @@ class WGMMAPrefetcher {
   DenseMap<Value, ttng::WarpGroupDotWaitOp> dot2Wait;
 
   Value generatePrefetch(Value v, unsigned opIdx, bool isPrologue,
-                         bool loodToReg, Attribute dotEncoding,
+                         bool loadToReg, Attribute dotEncoding,
                          OpBuilder &builder,
                          std::optional<int64_t> offsetK = std::nullopt,
                          std::optional<int64_t> shapeK = std::nullopt,
                          std::optional<int64_t> kWidth = std::nullopt);
 
+  /// Clone elementwise operations for prefetched values
   void cloneElementwiseOps(Value &bRem, const SmallVector<Value> &vals,
                            Value source, OpBuilder &builder);
-
-public:
-  WGMMAPrefetcher() = delete;
-
-  WGMMAPrefetcher(scf::ForOp forOp) : forOp(forOp) {
-    yieldOp = cast<scf::YieldOp>(forOp.getBody()->getTerminator());
-  }
-
-  LogicalResult initialize();
-
-  void emitPrologue();
-
-  scf::ForOp createNewForOp();
 };
 
 void WGMMAPrefetcher::cloneElementwiseOps(Value &ret,
@@ -174,22 +202,20 @@ LogicalResult WGMMAPrefetcher::initialize() {
           dyn_cast<NvidiaMmaEncodingAttr>(getEncoding(dotOp.getResult()));
       dotsInFor.push_back(dotOp);
     } else if (auto dotOp = dyn_cast<triton::DotOp>(op)) {
-      // To be conservative, we only allow WarpGroupDotOp in the foor loop;
-      return llvm::failure();
+      // Only allow WarpGroupDotOp in the loop for now
+      return failure();
     }
   }
 
-  if (dotsInFor.empty()) {
-    return llvm::failure();
+  // Early exit conditions
+  if (dotsInFor.empty() || dotsInFor.size() > 1) {
+    return failure();
   }
 
-  if (dotsInFor.size() > 1) {
-    return llvm::failure();
-  }
-
+  // Verify all dots are supported RSGEMM operations
   for (ttng::WarpGroupDotOp dotOp : dotsInFor) {
     if (isSupportedRSGEMM(dotOp).failed())
-      return llvm::failure();
+      return failure();
   }
 
   auto getPrefetchSrc = [](Value v) -> SmallVector<Value> {
@@ -234,7 +260,7 @@ LogicalResult WGMMAPrefetcher::initialize() {
     // extra treatment for dotOp (e.g., add accumulator).
     // Therefore, we disable the optimization here
     // when getMaxNumImpreciseAcc > 0;
-    if(dotOp.getMaxNumImpreciseAcc() > 0){
+    if (dotOp.getMaxNumImpreciseAcc() > 0) {
       return failure();
     }
 
@@ -288,10 +314,11 @@ LogicalResult WGMMAPrefetcher::initialize() {
           dot2aValsLocalLoad[dotOp].push_back(op);
         } else {
           auto curOp = op.getDefiningOp();
-          if(curOp->hasTrait<mlir::OpTrait::Elementwise>() && isMemoryEffectFree(curOp))
+          if (curOp->hasTrait<mlir::OpTrait::Elementwise>() &&
+              isMemoryEffectFree(curOp))
             dot2aValsElementWise[dotOp].push_back(op);
           else
-           return failure();
+            return failure();
         }
       }
 
@@ -367,7 +394,7 @@ scf::ForOp WGMMAPrefetcher::createNewForOp() {
       // Interleave elementwise with WGMMA
       nvidia_gpu::WarpGroupDotOp prevDot;
       Value UseC = nullptr;
-      if(dot.getUseC()){
+      if (dot.getUseC()) {
         UseC = mapping.lookup(dot.getUseC());
       }
       Value OpC = mapping.lookup(dot.getC());
@@ -378,20 +405,20 @@ scf::ForOp WGMMAPrefetcher::createNewForOp() {
         Value bSubtile = generatePrefetch(mapping.lookup(dot2bSrcMemDesc[dot]),
                                           1, false, false, dotEncoding, builder,
                                           prefetchWidth * i, prefetchWidth);
-        if(i > 0){
+        if (i > 0) {
           OpC = prevDot.getResult();
           // for subtiles with index > 0, useC is set to 1 for
           // using the result of prevDot
-          UseC = builder.create<mlir::arith::ConstantIntOp>(newOp->getLoc(), 1, 1);
+          UseC =
+              builder.create<mlir::arith::ConstantIntOp>(newOp->getLoc(), 1, 1);
         }
         auto newDotOp = builder.create<nvidia_gpu::WarpGroupDotOp>(
-            newOp->getLoc(), dot.getType(),
-            PrefetchedA[i], bSubtile, OpC, UseC, dot.getInputPrecision(),
-            dot.getMaxNumImpreciseAcc(), dot.getIsAsync()
-            );
+            newOp->getLoc(), dot.getType(), PrefetchedA[i], bSubtile, OpC, UseC,
+            dot.getInputPrecision(), dot.getMaxNumImpreciseAcc(),
+            dot.getIsAsync());
         prevDot = newDotOp;
       }
-      newOp = (Operation *) prevDot;
+      newOp = (Operation *)prevDot;
     }
     auto dotWait = dyn_cast<nvidia_gpu::WarpGroupDotWaitOp>(newOp);
     if (dotWait) {
@@ -415,12 +442,14 @@ scf::ForOp WGMMAPrefetcher::createNewForOp() {
 
 } // namespace
 
+/// Pass to perform WGMMA prefetch optimization
 struct WGMMAPrefetchPass
     : public impl::TritonGPUWGMMAPrefetchBase<WGMMAPrefetchPass> {
   void runOnOperation() override {
     // The detailed explanation of this pass can be found in
     // https://github.com/triton-lang/triton/pull/6196
-    // Canonicalize convert ops to make the pattern matching easier.
+
+    // Step 1: Canonicalize convert ops for easier pattern matching
     RewritePatternSet cleanUpPatterns(&getContext());
     triton::gpu::ConvertLayoutOp::getCanonicalizationPatterns(cleanUpPatterns,
                                                               &getContext());
@@ -429,14 +458,18 @@ struct WGMMAPrefetchPass
       signalPassFailure();
     }
 
+    // Step 2: Walk through all for loops and apply prefetch optimization
     getOperation()->walk([&](scf::ForOp forOp) {
       WGMMAPrefetcher prefetcher(forOp);
 
+      // Skip if initialization fails
       if (prefetcher.initialize().failed())
         return;
 
+      // Create new optimized loop
       scf::ForOp newForOp = prefetcher.createNewForOp();
 
+      // Replace old loop with new one
       for (unsigned i = 0; i < forOp->getNumResults(); ++i)
         forOp->getResult(i).replaceAllUsesWith(newForOp->getResult(i));
       forOp->erase();
