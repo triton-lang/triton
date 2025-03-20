@@ -257,7 +257,7 @@ def TTNG_TensorDescToTMAPtrOp : TTNG_Op<"tensor_desc_to_tma_ptr", [Pure]> {
 
   let builders = [
     OpBuilder<(ins "Value":$desc), [{
-      auto ptrTy = triton::PointerType::get($_builder.getI8Type(), 1);
+      auto ptrTy = triton::PointerType::get($_builder.getI8Type(), 0);
       build($_builder, $_state, ptrTy, desc);
     }]>
   ];
