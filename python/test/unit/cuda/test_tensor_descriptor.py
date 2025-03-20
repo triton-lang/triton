@@ -142,7 +142,6 @@ def test_tensor_descriptor_functional_interface(dtype_str):
     grid_n = N // N_BLOCK
 
     def alloc_fn(size: int, align: int, stream: Optional[int]):
-        # We should see one descriptor per block in this simple copy kernel.
         assert size == 2 * 128 * (grid_m * grid_n)
         assert align == 128
         assert stream == 0
