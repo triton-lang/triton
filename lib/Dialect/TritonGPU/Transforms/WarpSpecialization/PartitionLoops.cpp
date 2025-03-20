@@ -6,8 +6,8 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Partition.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
-#include "triton/Dialect/TritonGPU/Transforms/WarpSpecialization.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
+#include "triton/Dialect/TritonGPU/Transforms/WarpSpecialization.h"
 #include "llvm/ADT/SCCIterator.h"
 
 using namespace mlir;

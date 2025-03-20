@@ -1313,8 +1313,8 @@ Operation *findNearestCommonDominator(ArrayRef<Operation *> ops,
   return dom;
 }
 
-void visitNestedOperands(
-    Operation *op, function_ref<void(OpOperand &)> visitor) {
+void visitNestedOperands(Operation *op,
+                         function_ref<void(OpOperand &)> visitor) {
   op->walk([&](Operation *nestedOp) {
     for (OpOperand &operand : nestedOp->getOpOperands()) {
       if (operand.get().getParentBlock()->getParentOp()->isProperAncestor(op))
@@ -1323,8 +1323,7 @@ void visitNestedOperands(
   });
 }
 
-void visitNestedOperands(Operation *op,
-                                       function_ref<void(Value)> visitor) {
+void visitNestedOperands(Operation *op, function_ref<void(Value)> visitor) {
   visitNestedOperands(op, [&](OpOperand &operand) { visitor(operand.get()); });
 }
 
@@ -1334,8 +1333,7 @@ SetVector<Value> getNestedOperands(Operation *op) {
   return result;
 }
 
-void eraseLoopCarriedValues(scf::ForOp &loop,
-                                          llvm::BitVector indices) {
+void eraseLoopCarriedValues(scf::ForOp &loop, llvm::BitVector indices) {
   // Pad the indices in case new arguments were added.
   while (indices.size() != loop.getInitArgs().size())
     indices.push_back(false);
