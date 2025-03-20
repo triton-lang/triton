@@ -40,7 +40,7 @@ tt.func @async_copy_2d(%input: tensor<64x64x!tt.ptr<f16>, #blocked>,
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32} {
 // sizePerThread = [1, 1, 1] because we have no information about contiguity of src pointers
 // CHECK: #[[NEW_BLOCKED:.*]] = #ttg.blocked<{sizePerThread = [1, 1, 1], threadsPerWarp = [32, 1, 1], warpsPerCTA = [4, 1, 1], order = [0, 1, 2]}>
-tt.func @async_copy_2d(%input: tensor<1024x1024x1024x!tt.ptr<f16>, #blocked>,
+tt.func @async_copy_3d(%input: tensor<1024x1024x1024x!tt.ptr<f16>, #blocked>,
     %view: !ttg.memdesc<1024x1024x1024xf16, #shared, #smem, mutable>) {
   // CHECK: %{{.*}} = ttg.convert_layout %{{.*}} : {{.*}} -> tensor<1024x1024x1024x!tt.ptr<f16>, #[[NEW_BLOCKED]]>
   // CHECK: %{{.*}} = ttg.async_copy_global_to_local %{{.*}}: tensor<1024x1024x1024x!tt.ptr<f16>, #[[NEW_BLOCKED]]>
@@ -101,7 +101,6 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shar
 #smem = #ttg.shared_memory
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32, ttg.shared = 8192 : i32, ttg.target = "hip:gfx942", "ttg.threads-per-warp" = 64 : i32} {
   // Clip to vector size 4 (128bit) which is the largest supported load width
-  // 8 elements is the largest supported vector size
   // CHECK: #[[NEW_BLOCKED:.*]] = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [8, 8], warpsPerCTA = [4, 1], order = [1, 0]}>
   tt.func public @async_copy_vector_size_8(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32, tt.pointer_range = 32 : i32},
                                 %arg1: i32 {tt.divisibility = 16 : i32},

@@ -15,27 +15,28 @@
 using namespace mlir;
 namespace ttg = triton::gpu;
 
-struct CoalesceAsyncCopySharedWrites
+// On gfx9 global and buffer loads directly to shared memory need to write
+// coalesced. This pass converts the layout of the src, mask and other to ensure
+// the owned data per thread is contigious and does no exceed the supported
+// load vector size to ensure coalesed writes
+struct CoalesceAsyncCopyWrites
     : public OpRewritePattern<ttg::AsyncCopyGlobalToLocalOp> {
-  CoalesceAsyncCopySharedWrites(const triton::AMD::TargetInfo &targetInfo,
-                                MLIRContext *ctx,
-                                triton::ModuleAxisInfoAnalysis &axisAnalysis)
+  CoalesceAsyncCopyWrites(const triton::AMD::TargetInfo &targetInfo,
+                          MLIRContext *ctx,
+                          triton::ModuleAxisInfoAnalysis &axisAnalysis)
       : OpRewritePattern(ctx), targetInfo{targetInfo},
         axisAnalysis(axisAnalysis) {}
-  // On gfx9 global and buffer loads directly to lds need to write coalesced
-  // into LDS. This means the contigous elements owned by a thread cannot exceed
-  // the supported load width from the hardware.
-  LogicalResult matchAndRewrite(ttg::AsyncCopyGlobalToLocalOp asyncCopy,
+  LogicalResult matchAndRewrite(ttg::AsyncCopyGlobalToLocalOp copyOp,
                                 PatternRewriter &rewriter) const override {
-    auto src = asyncCopy.getSrc();
-    auto dst = asyncCopy.getResult();
-    Value mask = asyncCopy.getMask();
-    Value other = asyncCopy.getOther();
+    auto src = copyOp.getSrc();
+    auto dst = copyOp.getResult();
+    Value mask = copyOp.getMask();
+    Value other = copyOp.getOther();
 
-    // Skip the AsyncCopy if we already adjusted the layout (axis analysis will
-    // be unvailable for added cvtLayout)
+    // AxisAnalysis will not have data about the src if we already processed the
+    // copyOp
     if (axisAnalysis.getAxisInfo(src) == nullptr) {
-      return rewriter.notifyMatchFailure(asyncCopy, "already adjusted layout");
+      return rewriter.notifyMatchFailure(copyOp, "already adjusted layout");
     }
 
     auto srcTy = cast<RankedTensorType>(src.getType());
@@ -43,17 +44,17 @@ struct CoalesceAsyncCopySharedWrites
 
     auto blockedEnc = dyn_cast<ttg::BlockedEncodingAttr>(srcTy.getEncoding());
     if (!blockedEnc)
-      return rewriter.notifyMatchFailure(asyncCopy,
+      return rewriter.notifyMatchFailure(copyOp,
                                          "src encoding must be #blocked");
 
     auto sharedEnc =
         dyn_cast<ttg::SwizzledSharedEncodingAttr>(dstTy.getEncoding());
     if (!sharedEnc)
       return rewriter.notifyMatchFailure(
-          asyncCopy, "destination encoding must be #SwizzledShared");
+          copyOp, "destination encoding must be #SwizzledShared");
     if (sharedEnc.getMaxPhase() > 1)
       return rewriter.notifyMatchFailure(
-          asyncCopy, "swizzled shared encoding not supported");
+          copyOp, "swizzled shared encoding not supported");
 
     // Get the minimum contiguity based on the src and mask contiguity and
     // alignment
@@ -63,7 +64,7 @@ struct CoalesceAsyncCopySharedWrites
           std::min<unsigned>(loadContig, axisAnalysis.getMaskAlignment(mask));
     }
 
-    // Look for the closest supported load width
+    // Select the largest supported load width equal or smaller than loadContig
     auto elemBitWidth = dstTy.getElementTypeBitWidth();
     while (loadContig > 0 && !targetInfo.supportsDirectToLdsLoadBitWidth(
                                  loadContig * elemBitWidth)) {
@@ -72,24 +73,25 @@ struct CoalesceAsyncCopySharedWrites
 
     if (loadContig == 0) {
       return rewriter.notifyMatchFailure(
-          asyncCopy, "could not find layout config to create coalesced writes");
+          copyOp, "could not find layout config to create coalesced writes");
     }
 
-    // Do not rewrite if we already use the correct contig
+    // Do not rewrite if we already use the correct contiguity
     auto contigPerThread = ttg::getContigPerThread(srcTy);
     auto blockedContig = contigPerThread[blockedEnc.getOrder()[0]];
     if (blockedContig == loadContig) {
-      return rewriter.notifyMatchFailure(asyncCopy,
+      return rewriter.notifyMatchFailure(copyOp,
                                          "already using the correct layout");
     }
 
-    // Get new blocked encoding based on max vector size
+    // Get new blocked encoding with loadContig as sizePerThread in the fastest
+    // dim
     contigPerThread[blockedEnc.getOrder()[0]] = loadContig;
-    int numWarps = triton::gpu::lookupNumWarps(asyncCopy);
-    auto mod = asyncCopy->getParentOfType<ModuleOp>();
+    int numWarps = triton::gpu::lookupNumWarps(copyOp);
+    auto mod = copyOp->getParentOfType<ModuleOp>();
     int threadsPerWarp = ttg::TritonGPUDialect::getThreadsPerWarp(mod);
     auto newBlockEnc = BlockedEncodingAttr::get(
-        asyncCopy.getContext(), srcTy.getShape(), contigPerThread,
+        copyOp.getContext(), srcTy.getShape(), contigPerThread,
         blockedEnc.getOrder(), numWarps, threadsPerWarp,
         blockedEnc.getCTALayout());
 
@@ -101,7 +103,7 @@ struct CoalesceAsyncCopySharedWrites
       return rewriter.create<ttg::ConvertLayoutOp>(loc, newSrcTy, old);
     };
 
-    auto loc = asyncCopy->getLoc();
+    auto loc = copyOp->getLoc();
     Value cvtSrc = convertLayout(loc, src, newBlockEnc);
 
     if (mask)
@@ -109,12 +111,12 @@ struct CoalesceAsyncCopySharedWrites
     if (other)
       other = convertLayout(loc, other, newBlockEnc);
 
-    rewriter.modifyOpInPlace(asyncCopy, [&]() {
-      asyncCopy.getSrcMutable().assign(cvtSrc);
+    rewriter.modifyOpInPlace(copyOp, [&]() {
+      copyOp.getSrcMutable().assign(cvtSrc);
       if (mask)
-        asyncCopy.getMaskMutable().assign(mask);
+        copyOp.getMaskMutable().assign(mask);
       if (other)
-        asyncCopy.getOtherMutable().assign(other);
+        copyOp.getOtherMutable().assign(other);
     });
 
     return success();
@@ -147,8 +149,8 @@ public:
     case triton::AMD::ISAFamily::CDNA2:
     case triton::AMD::ISAFamily::CDNA3:
     case triton::AMD::ISAFamily::CDNA4:
-      patterns.add<CoalesceAsyncCopySharedWrites>(targetInfo, context,
-                                                  axisInfoAnalysis);
+      patterns.add<CoalesceAsyncCopyWrites>(targetInfo, context,
+                                            axisInfoAnalysis);
       break;
     default:
       break;
