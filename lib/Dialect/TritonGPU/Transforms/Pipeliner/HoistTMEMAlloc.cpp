@@ -1,6 +1,7 @@
 #include "mlir/IR/Dominance.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/MMAv5PipelineUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
@@ -18,24 +19,6 @@ namespace gpu {
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h.inc"
 
 namespace {
-// Returns the TMEMAllocOp and TMEMLoadOp that are used to allocate and load the
-// accumulator for the given MMA operation. The TMEMAllocOp and TMEMLoadOp must
-// be in the same region as the MMA operation.
-std::optional<std::pair<ttng::TMEMAllocOp, ttng::TMEMLoadOp>>
-getTMemAllocAndLoad(ttng::MMAv5OpInterface mmaOp) {
-  auto acc = mmaOp->getOperand(2).getDefiningOp<ttng::TMEMAllocOp>();
-  if (!acc || acc->getParentRegion() != mmaOp->getParentRegion()) {
-    return std::nullopt;
-  }
-  for (auto user : acc->getUsers()) {
-    if (auto load = dyn_cast<ttng::TMEMLoadOp>(user)) {
-      if (load->getParentRegion() == mmaOp->getParentRegion()) {
-        return std::make_pair(acc, load);
-      }
-    }
-  }
-  return std::nullopt;
-}
 
 // Returns true if between the op and the store there is another store to the
 // same TMEMAlloc.
@@ -90,23 +73,6 @@ Operation *findNearestCommonDominator(ArrayRef<Operation *> ops,
     }
   }
   return dom;
-}
-
-ttng::TMEMAllocOp createTMemAlloc(OpBuilder &builder,
-                                  ttng::TMEMAllocOp oldTMemAllocOp,
-                                  bool multiBufferred, int numStages) {
-  Location loc = oldTMemAllocOp.getLoc();
-  auto oldRetType = oldTMemAllocOp.getType();
-  SmallVector<int64_t> shape = {oldRetType.getShape().begin(),
-                                oldRetType.getShape().end()};
-  if (multiBufferred) {
-    shape.insert(shape.begin(), numStages);
-  }
-  Type accMemDescType = triton::gpu::MemDescType::get(
-      shape, oldRetType.getElementType(), oldRetType.getEncoding(),
-      oldRetType.getMemorySpace(), /*mutableMemory=*/true);
-  return builder.create<ttng::TMEMAllocOp>(oldTMemAllocOp.getLoc(),
-                                           accMemDescType, nullptr);
 }
 
 class CombineTMEMStoreAndSelect : public OpRewritePattern<ttng::TMEMStoreOp> {
@@ -260,7 +226,7 @@ ttng::TMEMAllocOp hoistTMEMAlloc(ttng::TMEMAllocOp alloc, scf::ForOp forOp) {
   builder.setInsertionPoint(forOp);
   Value vTrue = builder.create<arith::ConstantIntOp>(alloc.getLoc(), 1, 1);
   auto src = alloc.getSrc();
-  auto newAlloc = createTMemAlloc(builder, alloc, false, 0);
+  auto newAlloc = ttng::createTMemAlloc(builder, alloc, false, 0);
   if (src != nullptr) {
     builder.setInsertionPoint(alloc);
     builder.create<ttng::TMEMStoreOp>(alloc.getLoc(), newAlloc.getResult(), src,

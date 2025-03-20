@@ -674,8 +674,10 @@ def test_tensor_descriptor_batched_gemm_2d_tma():
     expect = torch.bmm(a, b.mT)
 
     def alloc_fn(size: int, align: int, stream: Optional[int]):
-        # TODO: should only need num_stages * 3 descriptors per SM
-        assert size == 128 * 3 * (num_stages + 1) * grid[0]
+        # TODO: should only need (num_stages + 1) * 3 descriptors per SM
+        # Actual pipeline requires num_stages + 1 stages because of the
+        # mma pipelining.
+        assert size == 128 * 3 * (num_stages + 2) * grid[0]
         assert align == 128
         assert stream == 0
         return torch.empty(size, dtype=torch.int8, device="cuda")

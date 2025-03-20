@@ -5,6 +5,7 @@
 #include "triton/Dialect/Triton/IR/Types.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/TritonGPUInterfaces.h"
+#include "triton/Dialect/TritonGPU/Transforms/MMAv5PipelineUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
@@ -922,23 +923,6 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
     builder.setStageCluster({waitStage, mmaCluster});
     builder.create<ttng::WaitBarrierOp>(loc, barrierSlice, phase, waitBuffers);
   }
-}
-
-ttng::TMEMAllocOp createTMemAlloc(OpBuilder &builder,
-                                  ttng::TMEMAllocOp oldTMemAllocOp,
-                                  bool multiBufferred, int numStages) {
-  Location loc = oldTMemAllocOp.getLoc();
-  auto oldRetType = oldTMemAllocOp.getType();
-  SmallVector<int64_t> shape = {oldRetType.getShape().begin(),
-                                oldRetType.getShape().end()};
-  if (multiBufferred) {
-    shape.insert(shape.begin(), numStages);
-  }
-  Type accMemDescType = triton::gpu::MemDescType::get(
-      shape, oldRetType.getElementType(), oldRetType.getEncoding(),
-      oldRetType.getMemorySpace(), /*mutableMemory=*/true);
-  return builder.create<ttng::TMEMAllocOp>(oldTMemAllocOp.getLoc(),
-                                           accMemDescType, nullptr);
 }
 
 void multibufferTensorMemory(scf::ForOp forOp, CoarseSchedule &schedule,

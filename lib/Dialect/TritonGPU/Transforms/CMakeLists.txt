@@ -19,8 +19,8 @@ add_triton_library(TritonGPUTransforms
   Pipeliner/TestPipelineLowerLoop.cpp
   Pipeliner/HoistTMEMAlloc.cpp
   Pipeliner/SoftwarePipeliner.cpp
-  Pipeliner/TC05MMAPipeline.cpp
   Pipeliner/TMAStoresPipeline.cpp
+  Pipeliner/MMAv5PipelineUtility.cpp
   Pipeliner/ModifiedAccMMAPipeline.cpp
   Pipeliner/Partition.cpp
   Pipeliner/PipeliningUtility.cpp
