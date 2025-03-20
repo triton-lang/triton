@@ -862,6 +862,7 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
                              ttng::TMEMAllocOp alloc, Value &phase,
                              Value &barrierIdx, int numStages) {
   OpBuilderForStage builder(forOp, schedule);
+  DominanceInfo domInfo(forOp);
   Value zero = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 0, 32);
   Value one = builder.create<arith::ConstantIntOp>(forOp.getLoc(), 1, 32);
   Value numStagesVal =
@@ -881,12 +882,6 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
       triton::createSingleBufferView(builder, barrierAlloc, barrierIdx);
   mma.setBarrier(barrierSlice);
 
-  builder.setInsertionPointAfter(mma);
-  auto [mmaStage, mmaCluster] = schedule[mma];
-  // Put wait in the next stage after the MMA even if other users of the mma
-  // are in the same stage, or there are no users.
-  int waitStage = mmaStage + numStages - 1;
-  builder.setStageCluster({waitStage, mmaCluster});
   // List of buffers that may be used until wait completes
   SmallVector<Value> waitBuffers;
   auto mmaAsDotOp = cast<DotOpInterface>(mma.getOperation());
@@ -897,21 +892,35 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
     waitBuffers.push_back(mmaAsScaledDotOp.getAScale());
     waitBuffers.push_back(mmaAsScaledDotOp.getBScale());
   }
-  builder.create<ttng::WaitBarrierOp>(loc, barrierSlice, phase, waitBuffers);
 
-  // Look for loads from the accumulator in stages earlier than the wait
-  // and insert a barrier before them
+  // Add waits before loads from the accumulator
+  bool addedWaitInMMABlock = false;
   for (auto user : alloc->getUsers()) {
     if (auto load = dyn_cast<ttng::TMEMLoadOp>(user)) {
-      auto topLevelUser = forOp.getBody()->findAncestorOpInBlock(*load);
-      if (topLevelUser && schedule[topLevelUser].first < waitStage) {
-        // Put the wait in the same stage as the load
-        builder.setInsertionPoint(load);
-        builder.setStageCluster(schedule[load]);
-        builder.create<ttng::WaitBarrierOp>(loc, barrierSlice, phase,
-                                            waitBuffers);
+      if (!forOp->isAncestor(load)) {
+        continue;
+      }
+      // Put the wait in the same stage as the load
+      assert(domInfo.properlyDominates(mma, load) &&
+             "Loads before the mma are not supported for the moment.");
+      // TODO: No point in adding more than one wait in a block
+      builder.setInsertionPoint(load);
+      builder.setStageCluster(schedule[load]);
+      builder.create<ttng::WaitBarrierOp>(loc, barrierSlice, phase,
+                                          waitBuffers);
+      if (load->getBlock() == mma->getBlock()) {
+        addedWaitInMMABlock = true;
       }
     }
+  }
+  if (!addedWaitInMMABlock) {
+    // Add a wait in the same stage as the mma
+    builder.setInsertionPointAfter(mma);
+    auto [mmaStage, mmaCluster] = schedule[mma];
+    // Put wait in the next stage after the MMA.
+    int waitStage = mmaStage + numStages - 1;
+    builder.setStageCluster({waitStage, mmaCluster});
+    builder.create<ttng::WaitBarrierOp>(loc, barrierSlice, phase, waitBuffers);
   }
 }
 
