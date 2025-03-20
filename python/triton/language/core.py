@@ -1950,23 +1950,21 @@ def _experimental_descriptor_store(desc_pointer, value, offsets, _builder=None):
 
 
 @builtin
-def _experimental_load_tensor_descriptor(desc: tensor_descriptor_base, offsets: Sequence[constexpr | tensor],
-                                         _builder=None) -> tensor:
-    """Experimental functional interface to load from a tensor descriptor.
+def load_tensor_descriptor(desc: tensor_descriptor_base, offsets: Sequence[constexpr | tensor],
+                           _builder=None) -> tensor:
+    """Functional interface to load from a tensor descriptor.
 
-    This simply calls :meth:`~tensor_descriptor_base.load` on the descriptor and will be
-    removed in the future. It is an escape hatch to exercise TTGIR operations.
+    Simply forwards to :meth:`~tensor_descriptor_base.load`.
     """
     return desc.load(offsets, _builder=_builder)
 
 
 @builtin
-def _experimental_store_tensor_descriptor(desc: tensor_descriptor_base, offsets: Sequence[constexpr | tensor],
-                                          value: tensor, _builder=None) -> tensor:
-    """Experimental functional interface to store to a tensor descriptor.
+def store_tensor_descriptor(desc: tensor_descriptor_base, offsets: Sequence[constexpr | tensor], value: tensor,
+                            _builder=None) -> tensor:
+    """Functional interface to store to a tensor descriptor.
 
-    This simply calls :meth:`~tensor_descriptor_base.store` on the descriptor and will be
-    removed in the future. It is an escape hatch to exercise TTGIR operations.
+    Simply forwards to :meth:`~tensor_descriptor_base.store`.
     """
     return desc.store(offsets, value, _builder=_builder)
 
