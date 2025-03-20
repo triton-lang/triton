@@ -218,6 +218,26 @@ def TritonAMDGPUInThreadTranspose: Pass<"tritonamdgpu-in-thread-transpose", "mli
   let dependentDialects = ["mlir::triton::amdgpu::TritonAMDGPUDialect", "mlir::triton::gpu::TritonGPUDialect"];
 }
 
+def TritonAMDGPUCoalesceAsyncCopy: Pass<"tritonamdgpu-coalesce-async-copy", "mlir::ModuleOp"> {
+  let summary = "Improve coalescing for async global to local copies";
+
+  let description = [{
+    GFX9:
+      For AsyncCopyGlobalToLocal ops where the blocked encoding's sizePerThread is larger than the contiguity of the
+      source or the supported load vector size we clip it to the largest supported size. This ensures we get coalesced writes to
+      shared memory as required by the hardware. Does only work for non swizzled shared memory layouts
+  }];
+
+  let constructor = "mlir::createTritonAMDGPUCoalesceAsyncCopyPass()";
+
+  let dependentDialects = [];
+
+  let options = [
+    Option<"archGenerationName", "arch-generation-name",
+           "std::string", /*default=*/"std::string{}",
+           "GFX generation name of target device.">,
+  ];
+}
 
 
 #endif
