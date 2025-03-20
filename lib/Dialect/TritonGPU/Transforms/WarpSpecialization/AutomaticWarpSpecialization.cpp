@@ -1,3 +1,4 @@
+#include "mlir/Dialect/Arith/Transforms/Passes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
@@ -33,9 +34,12 @@ void AutomaticWarpSpecialization::runOnOperation() {
   OpPassManager pm;
   pm.addPass(createTritonGPULoadMMASpecialization());
   pm.addPass(createTritonGPURewritePartitionDependencies());
-  pm.addPass(createSCCPPass());
+  // `int-range-optimizations` combines SCCP with integer range analysis. It's
+  // good at cleaning up loop arithmetic.
+  pm.addPass(arith::createIntRangeOptimizationsPass());
   pm.addPass(createCSEPass());
   pm.addPass(createTritonGPUPartitionLoops());
+  // Strip dead code that might have been created by loop partitioning.
   pm.addPass(createTritonGPULoopDCE());
   if (failed(runPipeline(pm, getOperation())))
     return signalPassFailure();
