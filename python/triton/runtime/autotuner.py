@@ -184,15 +184,21 @@ class Autotuner(KernelInterface):
         cache = get_cache_manager(cache_key)
         file_name = f"{self.fn.__name__[:150]}.autotune.json"
         path = cache.get_file(file_name)
+        cached_timings = {}
         if path:
             with open(path, "r") as cached_configs:
-                self.cache[tuning_key] = Config(**json.load(cached_configs)["config"])
-        else:
-            bench_fn()
-            cache.put(json.dumps({
-                "key": tuning_key,
-                "config": self.cache[tuning_key].__dict__,
-            }), file_name, binary=False)
+                cached_timings = json.load(cached_configs)["configs_timings"]
+                cached_timings = {Config(**config): timings for config, timings in cached_timings}
+
+        new_timings = bench_fn(cached_timings)
+        new_timings = {cfg: timing for cfg, timing in new_timings.items() if not cfg.pre_hook}
+        if new_timings:
+            cache.put(
+                json.dumps({
+                    "key":
+                    tuning_key,
+                    "configs_timings": [(config.__dict__, timings) for config, timings in self.configs_timings.items()],
+                }), file_name, binary=False)
 
     def run(self, *args, **kwargs):
         self.nargs = dict(zip(self.arg_names, args))
@@ -208,17 +214,23 @@ class Autotuner(KernelInterface):
             if key not in self.cache:
                 used_cached_result = False
 
-                def benchmark():
+                def benchmark(cached_timings):
                     # prune configs
                     pruned_configs = self.prune_configs(kwargs)
+                    new_configs = set(pruned_configs) - set(cached_timings.keys())
                     bench_start = time.time()
-                    timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                    new_timings = {config: self._bench(*args, config=config, **kwargs) for config in new_configs}
+                    timings = {
+                        config: new_timings.get(config, cached_timings.get(config, None))
+                        for config in pruned_configs
+                    }
                     bench_end = time.time()
                     self.bench_time = bench_end - bench_start
                     self.cache[key] = builtins.min(timings, key=timings.get)
                     full_nargs = {**self.nargs, **kwargs, **self.cache[key].all_kwargs()}
                     self.pre_hook(full_nargs, reset_only=True)
                     self.configs_timings = timings
+                    return new_timings
 
                 self.check_disk_cache(key, benchmark)
 
@@ -328,6 +340,35 @@ class Config:
         res.append(f"num_stages: {self.num_stages}")
         res.append(f"maxnreg: {self.maxnreg}")
         return ", ".join(res)
+
+    def __hash__(self):
+        return hash((
+            *self.kwargs.items(),
+            self.num_warps,
+            self.num_ctas,
+            self.num_stages,
+            self.maxnreg,
+            self.pre_hook,
+        ))
+
+    def __eq__(self, other):
+        self_tuple = tuple((
+            *self.kwargs.items(),
+            self.num_warps,
+            self.num_ctas,
+            self.num_stages,
+            self.maxnreg,
+            self.pre_hook,
+        ))
+        other_tuple = tuple((
+            *other.kwargs.items(),
+            other.num_warps,
+            other.num_ctas,
+            other.num_stages,
+            other.maxnreg,
+            other.pre_hook,
+        ))
+        return self_tuple == other_tuple
 
 
 def autotune(configs, key, prune_configs_by=None, reset_to_zero=None, restore_value=None, pre_hook=None, post_hook=None,
