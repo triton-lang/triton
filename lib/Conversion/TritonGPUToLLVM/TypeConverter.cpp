@@ -25,7 +25,7 @@ TritonGPUToLLVMTypeConverter::TritonGPUToLLVMTypeConverter(
     return LLVM::LLVMPointerType::get(ctx, type.getAddressSpace());
   });
   addConversion([ctx](TensorDescType type) -> std::optional<Type> {
-    return LLVM::LLVMPointerType::get(ctx);
+    return LLVM::LLVMPointerType::get(ctx, 1);
   });
   addConversion([&](RankedTensorType type) -> std::optional<Type> {
     return convertTritonTensorType(type, targetInfo);

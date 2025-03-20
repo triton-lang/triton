@@ -262,7 +262,12 @@ void init_triton_llvm(py::module &&m) {
   m.def(
       "to_module",
       [](mlir::ModuleOp &mod, llvm::LLVMContext &ctx) {
-        return mlir::translateModuleToLLVMIR(mod, ctx);
+        std::unique_ptr<llvm::Module> llvmMod =
+            mlir::translateModuleToLLVMIR(mod, ctx);
+        if (!llvmMod) {
+          throw std::runtime_error("failed to translate module to LLVM IR");
+        }
+        return llvmMod;
       },
       py::keep_alive<0, 2>());
 
