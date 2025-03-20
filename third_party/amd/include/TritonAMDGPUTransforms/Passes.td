@@ -172,7 +172,10 @@ def TritonAMDGPUBlockPingpong: Pass<"tritonamdgpu-block-pingpong", "mlir::Module
     Option<"numStages", "num-stages",
         "int32_t", /*default*/"2",
         "Number of Pipeline stages">,
-    ];
+    Option<"conditionalTileSizeHeuristic", "conditional-tile-size-heuristic",
+           "int64_t", /*default=*/"0",
+           "Tile size threshold used to determine when persistent prologue/epilogue memory loads/stores should be ignored.">,
+  ];
 }
 
 def TritonAMDGPUInThreadTranspose: Pass<"tritonamdgpu-in-thread-transpose", "mlir::triton::FuncOp"> {
