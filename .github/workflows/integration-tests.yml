@@ -49,18 +49,10 @@ jobs:
           echo "enable_integration=true" >> $GITHUB_ENV
       - name: Checkout post-submit commits
         if: github.event_name == 'push'
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           # Only fetch two commits to check the latest changed files.
           fetch-depth: 2
-      - name: Detect if build deps (e.g. LLVM hash) changed
-        id: detect-change
-        if: github.event_name == 'push'
-        uses: tj-actions/changed-files@v45
-        with:
-          files: |
-            cmake/*.txt
-            cmake/*.json
       - name: Detect if enough time has passed since last post-submit run
         id: detect-time
         if: github.event_name == 'push'
@@ -104,9 +96,7 @@ jobs:
       # (e.g.  we update the LLVM hash).
       - name: Decide whether to run integration tests post-submit
         if: |
-          github.event_name == 'push' &&
-          (steps.detect-change.outputs.any_changed == 'true' ||
-           env.n_hours_since_last_run == 'true')
+          github.event_name == 'push' && env.n_hours_since_last_run == 'true'
         run: |
           echo "enable_integration=true" >> $GITHUB_ENV
       - name: Prepare runner matrix
@@ -128,8 +118,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
         with:
           python-version: '3.12'
           cache: 'pip'
@@ -139,7 +129,7 @@ jobs:
           echo "pre_commit_hash=$(sha256sum .pre-commit-config.yaml | cut -d ' ' -f 1)" >> $GITHUB_OUTPUT
         shell: bash
       - name: Cache pre-commit's cache dir
-        uses: actions/cache@v4
+        uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
         with:
           # Note that we cannot use environment variables here given there is
           # no shell to interpret them in the paths.
@@ -166,7 +156,7 @@ jobs:
       RUNNER_TYPE: ${{ matrix.runner[0] }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           submodules: "true"
       - name: Compute cache keys
@@ -189,7 +179,7 @@ jobs:
           echo "datetime=$(date -u -Iseconds)" >> $GITHUB_OUTPUT
         shell: bash
       - name: Cache build dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
         with:
           # Note that we cannot use environment variables here given there is
           # no shell to interpret them in the paths.
@@ -211,7 +201,7 @@ jobs:
         name: Restore cache of ccache and Triton compilation artifacts
         id: restore-build-cache
         if: github.ref != 'refs/heads/main'
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
         with:
           path: |
             ~/.triton/cache
@@ -282,7 +272,7 @@ jobs:
         # evicts cache entries LRU, but maybe this saves a bit of time in CI.)
         name: Save ccache and Triton compilation artifacts to cache
         if: github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
         with:
           path: |
             ~/.triton/cache
@@ -304,7 +294,7 @@ jobs:
       options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --user root
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           submodules: 'true'
       - name: Compute cache keys
@@ -327,7 +317,7 @@ jobs:
           echo "datetime=$(date -u -Iseconds)" >> $GITHUB_OUTPUT
         shell: bash
       - name: Cache build dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
         with:
           # Note that we cannot use environment variables here given there is
           # no shell to interpret them in the paths.
@@ -349,7 +339,7 @@ jobs:
         name: Restore cache of ccache and Triton compilation artifacts
         id: restore-build-cache
         if: github.ref != 'refs/heads/main'
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
         with:
           path: |
             ~/.triton/cache
@@ -440,7 +430,7 @@ jobs:
         # evicts cache entries LRU, but maybe this saves a bit of time in CI.)
         name: Save ccache and Triton compilation artifacts to cache
         if: github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
         with:
           path: |
             ~/.triton/cache
@@ -464,7 +454,7 @@ jobs:
       RUNNER_TYPE: ${{ matrix.runner[0] }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           submodules: "true"
       - name: Install brew dependencies
@@ -491,7 +481,7 @@ jobs:
           echo "datetime=$(date -u -Iseconds)" >> $GITHUB_OUTPUT
         shell: bash
       - name: Cache build dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
         with:
           # Note that we cannot use environment variables here given there is
           # no shell to interpret them in the paths.
@@ -513,7 +503,7 @@ jobs:
         name: Restore cache of ccache and Triton compilation artifacts
         id: restore-build-cache
         if: github.ref != 'refs/heads/main'
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
         with:
           path: |
             ~/.triton/cache
@@ -569,7 +559,7 @@ jobs:
         # evicts cache entries LRU, but maybe this saves a bit of time in CI.)
         name: Save ccache and Triton compilation artifacts to cache
         if: github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
         with:
           path: |
             ~/.triton/cache

@@ -41,7 +41,7 @@ jobs:
     steps:
 
     - name: Checkout Repo
-      uses: actions/checkout@v4
+      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       with:
         path: llvm-build
 
@@ -61,20 +61,20 @@ jobs:
         echo "llvm_install_dir=${INSTALL_DIR}" >> ${GITHUB_ENV}
 
     - name: Checkout LLVM
-      uses: actions/checkout@v4
+      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       with:
         repository: llvm/llvm-project
         path: llvm-project
         ref: ${{ env.llvm_commit_hash }}
 
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
       with:
         python-version: 3.11
 
     - name: Set up MSVC
       if: matrix.config.arch == 'x64' && (matrix.config.target-os == 'windows')
-      uses: ilammy/msvc-dev-cmd@v1.13.0
+      uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
       with:
         arch: amd64
 
@@ -86,7 +86,7 @@ jobs:
         rm -rf ${{ env.SCCACHE_DIR }}/*
 
     - name: Enable Cache
-      uses: actions/cache@v4
+      uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
       with:
         path: ${{ env.SCCACHE_DIR }}
         key: ${{ matrix.config.target-os }}-${{ matrix.config.arch }}-${{ env.short_llvm_commit_hash }}
@@ -288,7 +288,7 @@ jobs:
         docker rm "${CONTAINER_ID}"
 
     - name: Upload Build Artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
       with:
         name: llvm-${{ matrix.config.target-os }}-${{ matrix.config.arch }}
         path: |
@@ -296,7 +296,7 @@ jobs:
 
     - name: Azure Login
       if: ${{ (github.repository == 'triton-lang/triton') }}
-      uses: azure/login@v2
+      uses: azure/login@a65d910e8af852a8061c627c456678983e180302 # v2.2.0
       with:
         client-id: ${{ secrets.AZURE_CLIENT_ID }}
         tenant-id: ${{ secrets.AZURE_TENANT_ID }}
