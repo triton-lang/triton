@@ -320,6 +320,11 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
     Value accEmptyBars = createBarrierAlloc(loop, numMmaStages);
     Value accReadyBars = createBarrierAlloc(loop, numMmaStages);
     b.setInsertionPoint(loop);
+    // Because the accumulator reset occurs after the MMA op, we have to place
+    // the wait on the empty barrier after the MMA op as well. This is OK since
+    // we know all buffers are empty upon entry to the loop. However, this means
+    // the last mbarrier is guarding the first buffer. Thus, initialize all but
+    // the last mbarrier.
     for (auto i : llvm::drop_end(llvm::seq(numMmaStages))) {
       Value emptyBar = createSingleBufferView(b, accEmptyBars, i);
       b.create<ttng::ArriveBarrierOp>(emptyBar, 1);
@@ -340,6 +345,8 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
     for (Operation *user : accUses)
       user->replaceUsesOfWith(info.accLoad, acc);
 
+    // Signal the accumulator buffer is ready for the next iteration. Because
+    // the mbarriers got shifted over by 1, we have to signal the next mbarrier.
     Value adjIndex = b.create<arith::AddIOp>(accIndex, intCst(1));
     adjIndex = b.create<arith::RemUIOp>(adjIndex, intCst(numMmaStages));
     Value adjAccEmptyBar = createSingleBufferView(b, accEmptyBars, adjIndex);
