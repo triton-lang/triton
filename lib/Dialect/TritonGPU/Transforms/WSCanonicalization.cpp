@@ -94,7 +94,9 @@ public:
     });
 
     // Fix up the async task ids for each op in the specialized region
-    for (auto [ifOp, taskId] : ifOpToTaskId) {
+    for (const auto &item : ifOpToTaskId) {
+      auto ifOp = item.first;
+      auto taskId = item.second;
       SmallVector<AsyncTaskId> regionTaskIds = {taskId};
       ifOp->walk([&](Operation *op) {
         // Fix up the async task ids
