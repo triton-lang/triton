@@ -21,7 +21,8 @@ import triton
 import triton.language as tl
 import inspect
 import os
-from triton.language.extra import libdevice
+# from triton.language.extra import libdevice
+from triton.language.extra.hip import libdevice
 
 from pathlib import Path
 
@@ -40,7 +41,8 @@ def asin_kernel(
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
     x = tl.load(x_ptr + offsets, mask=mask)
-    x = libdevice.asin(x)
+    # x = libdevice.asin(x)
+    x = libdevice.load_acquire_system(x_ptr + offsets)
     tl.store(y_ptr + offsets, x, mask=mask)
 
 
