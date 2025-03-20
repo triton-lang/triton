@@ -4,6 +4,8 @@ import builtins
 import os
 import time
 import inspect
+import hashlib
+import json
 from typing import Dict, Tuple, List, Optional
 
 from .jit import KernelInterface
@@ -170,6 +172,28 @@ class Autotuner(KernelInterface):
                 print(f"Autotuning failed with {e}")
             return [float("inf"), float("inf"), float("inf")]
 
+    def check_disk_cache(self, tuning_key, bench_fn):
+        from triton.compiler.compiler import triton_key
+        from triton.runtime.cache import get_cache_manager
+        cache_key = [
+            triton_key(),
+            self.fn.cache_key,
+            str(tuning_key),
+        ]
+        cache_key = hashlib.sha256("-".join(cache_key).encode("utf-8")).hexdigest()
+        cache = get_cache_manager(cache_key)
+        file_name = f"{self.fn.__name__[:150]}.autotune.json"
+        path = cache.get_file(file_name)
+        if path:
+            with open(path, "r") as cached_configs:
+                self.cache[tuning_key] = Config(**json.load(cached_configs)["config"])
+        else:
+            bench_fn()
+            cache.put(json.dumps({
+                "key": tuning_key,
+                "config": self.cache[tuning_key].__dict__,
+            }), file_name, binary=False)
+
     def run(self, *args, **kwargs):
         self.nargs = dict(zip(self.arg_names, args))
         used_cached_result = True
@@ -182,17 +206,22 @@ class Autotuner(KernelInterface):
                     key.append(str(arg.dtype))
             key = tuple(key)
             if key not in self.cache:
-                # prune configs
                 used_cached_result = False
-                pruned_configs = self.prune_configs(kwargs)
-                bench_start = time.time()
-                timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
-                bench_end = time.time()
-                self.bench_time = bench_end - bench_start
-                self.cache[key] = builtins.min(timings, key=timings.get)
-                full_nargs = {**self.nargs, **kwargs, **self.cache[key].all_kwargs()}
-                self.pre_hook(full_nargs, reset_only=True)
-                self.configs_timings = timings
+
+                def benchmark():
+                    # prune configs
+                    pruned_configs = self.prune_configs(kwargs)
+                    bench_start = time.time()
+                    timings = {config: self._bench(*args, config=config, **kwargs) for config in pruned_configs}
+                    bench_end = time.time()
+                    self.bench_time = bench_end - bench_start
+                    self.cache[key] = builtins.min(timings, key=timings.get)
+                    full_nargs = {**self.nargs, **kwargs, **self.cache[key].all_kwargs()}
+                    self.pre_hook(full_nargs, reset_only=True)
+                    self.configs_timings = timings
+
+                self.check_disk_cache(key, benchmark)
+
             config = self.cache[key]
         else:
             config = self.configs[0]
