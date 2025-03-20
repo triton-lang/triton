@@ -11,25 +11,25 @@ using namespace triton::AMD;
 
 namespace {
 
-Value generateI32DppMove(PatternRewriter &rewriter, Value val, int dppCtrl) {
+Value generateI32DppMove(PatternRewriter &rewriter, Value val, int dppCtrl,
+                         int rowMask = 0b1111,  // enable all rows
+                         int bankMask = 0b1111, // enable all banks
+                         bool boundCtrl = false) {
   assert(val.getType().isInteger(32));
   auto loc = val.getLoc();
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   Value old = b.i32_val(0);
-  int rowMask = 0b1111;  // enable all rows
-  int bankMask = 0b1111; // enable all banks
-  bool boundCtrl = false;
   auto dppMovOp = rewriter.create<ROCDL::DPPUpdateOp>(
       loc, i32_ty, old, val, dppCtrl, rowMask, bankMask, boundCtrl);
   return dppMovOp.getResult();
 }
 
 Value shiftLeftI32ByDpp(PatternRewriter &rewriter, Value val) {
-  return generateI32DppMove(rewriter, val, 0x101); // shift left 1 lane
+  return generateI32DppMove(rewriter, val, 0x100); // shift left
 }
 
 Value shiftRightI32ByDpp(PatternRewriter &rewriter, Value val) {
-  return generateI32DppMove(rewriter, val, 0x111); // shift right 1 lane
+  return generateI32DppMove(rewriter, val, 0x110); // shift right 1 lane
 }
 
 Value generatePopcount64(PatternRewriter &rewriter, Value val) {
@@ -103,36 +103,29 @@ Value genPrefixSum(PatternRewriter &rewriter, Value v0) {
 
   Value v1 = v0;
   // v_add_f32 v1, v0, v0 row_shr:1 bound_ctrl:0
-  Value tmp = rewriter.create<ROCDL::DPPUpdateOp>(loc, i32_ty, old, v0, 0x111,
-                                                  0xF, 0xF, false);
+  Value tmp = generateI32DppMove(rewriter, v0, 0x111);
   v1 = b.add(v1, tmp);
   // v_add_f32 v1, v0, v1 row_shr:2 bound_ctrl:0
-  tmp = rewriter.create<ROCDL::DPPUpdateOp>(loc, i32_ty, old, v0, 0x112, 0xF,
-                                            0xF, false);
+  tmp = generateI32DppMove(rewriter, v0, 0x112);
   v1 = b.add(v1, tmp);
   // v_add_f32 v1, v0, v1 row_shr:3 bound_ctrl:0
-  tmp = rewriter.create<ROCDL::DPPUpdateOp>(loc, i32_ty, old, v0, 0x113, 0xF,
-                                            0xF, false);
+  tmp = generateI32DppMove(rewriter, v0, 0x113);
   v1 = b.add(v1, tmp);
 
   // v_add_f32 v1, v1, v1 row_shr:4 bank_mask:0xe
-  tmp = rewriter.create<ROCDL::DPPUpdateOp>(loc, i32_ty, old, v1, 0x114, 0xF,
-                                            0xE, true);
+  tmp = generateI32DppMove(rewriter, v1, 0x114, 0xF, 0xE, true);
   v1 = b.add(v1, tmp);
 
   // v_add_f32 v1, v1, v1 row_shr:8 bank_mask:0xc
-  tmp = rewriter.create<ROCDL::DPPUpdateOp>(loc, i32_ty, old, v1, 0x118, 0xF,
-                                            0xC, true);
+  tmp = generateI32DppMove(rewriter, v1, 0x118, 0xF, 0xC, true);
   v1 = b.add(v1, tmp);
 
   // v_add_f32 v1, v1, v1 row_bcast:15 row_mask:0xa
-  tmp = rewriter.create<ROCDL::DPPUpdateOp>(loc, i32_ty, old, v1, 0x142, 0xA,
-                                            0xF, true);
+  tmp = generateI32DppMove(rewriter, v1, 0x142, 0xA, 0xF, true);
   v1 = b.add(v1, tmp);
 
   // v_add_f32 v1, v1, v1 row_bcast:31 row_mask:0xc
-  tmp = rewriter.create<ROCDL::DPPUpdateOp>(loc, i32_ty, old, v1, 0x143, 0xC,
-                                            0xF, true);
+  tmp = generateI32DppMove(rewriter, v1, 0x143, 0xC, 0xF, true);
   v1 = b.add(v1, tmp);
 
   return v1;
