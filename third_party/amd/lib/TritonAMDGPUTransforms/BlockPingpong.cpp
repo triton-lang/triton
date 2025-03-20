@@ -67,7 +67,6 @@ class Pingponger {
   SmallVector<Operation *> dotSliceOps;
   SmallVector<Value> constOffsets;
   Operation *lastInsertedOp;
-  int64_t conditionalTileSizeHeuristic;
 
   // rocdl.s.setprio will be mapped to `s_setprio` instruction which set the
   // priority of the warp within a SIMD, determines which warp to occupy the
@@ -81,6 +80,7 @@ class Pingponger {
   int32_t kWidth;
   int32_t numWarps;
   int32_t numStages;
+  int64_t conditionalTileSizeHeuristic;
 
 public:
   Pingponger(scf::ForOp forOp, int32_t numWarps, int32_t numStages,
