@@ -27,8 +27,8 @@ public:
                       bool enableIntraWaveReduce) const;
 
   Value emitPairedAtomicForEvenTID(ConversionPatternRewriter &rewriter,
-                                   Value rmwPtr, Value valElem,
-                                   Value rmwMask) const;
+                                   Value rmwPtr, Value valElem, Value rmwMask,
+                                   bool checkPairs = true) const;
 
 private:
   const mlir::triton::AMD::TargetInfo &targetInfo;
