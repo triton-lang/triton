@@ -347,30 +347,15 @@ class Config:
         return ", ".join(res)
 
     def __hash__(self):
-        return hash((
-            *self.kwargs.items(),
-            self.num_warps,
-            self.num_ctas,
-            self.num_stages,
-            self.maxnreg,
-            self.pre_hook,
-        ))
+        return hash((*self.all_kwargs().items(), self.pre_hook))
 
     def __eq__(self, other):
         self_tuple = tuple((
-            *self.kwargs.items(),
-            self.num_warps,
-            self.num_ctas,
-            self.num_stages,
-            self.maxnreg,
+            *self.all_kwargs().items(),
             self.pre_hook,
         ))
         other_tuple = tuple((
-            *other.kwargs.items(),
-            other.num_warps,
-            other.num_ctas,
-            other.num_stages,
-            other.maxnreg,
+            *other.all_kwargs().items(),
             other.pre_hook,
         ))
         return self_tuple == other_tuple
