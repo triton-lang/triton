@@ -1,5 +1,6 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
 using namespace mlir;
@@ -34,7 +35,7 @@ static SmallVector<TMAStore> getTMAStores(scf::ForOp forOp) {
 }
 
 static Value createAlloc(scf::ForOp &forOp, const TMAStore &store) {
-  OpBuilder builder(forOp);
+  OpBuilderWithAsyncTaskIds builder(forOp);
   RankedTensorType ty = store.src.getType();
   auto order = ttg::getOrder(ty);
   auto ctaLayout = ttg::getCTALayout(ty.getEncoding());
@@ -50,14 +51,14 @@ static Value createAlloc(scf::ForOp &forOp, const TMAStore &store) {
   Type memdescType =
       ttg::MemDescType::get(ty.getShape(), ty.getElementType(), encoding,
                             sharedMemorySpace, /*mutableMemory*/ true);
-  Value alloc =
-      builder.create<ttg::LocalAllocOp>(store.op->getLoc(), memdescType);
+  Value alloc = builder.createWithAsyncTaskIds<ttg::LocalAllocOp>(
+      store.op->getLoc(), memdescType);
   return alloc;
 }
 
 static void createTMAAsyncCopy(scf::ForOp forOp, const TMAStore &store,
                                Value alloc) {
-  OpBuilder builder(store.op);
+  OpBuilderWithAsyncTaskIds builder(store.op);
   Location loc = store.op->getLoc();
   RankedTensorType ty = store.src.getType();
   auto order = ttg::getOrder(ty);
@@ -65,17 +66,18 @@ static void createTMAAsyncCopy(scf::ForOp forOp, const TMAStore &store,
 
   // Put wait before the local_store make the store truly async. We know
   // that we are the only user of the CopyLocalToGlobal.
-  builder.create<ttng::TMAStoreWaitOp>(loc, 0);
-  builder.create<ttg::LocalStoreOp>(loc, store.src, alloc);
-  builder.create<ttng::FenceAsyncSharedOp>(loc, false);
+  builder.createWithAsyncTaskIds<ttng::TMAStoreWaitOp>(loc, 0);
+  builder.createWithAsyncTaskIds<ttg::LocalStoreOp>(loc, store.src, alloc);
+  builder.createWithAsyncTaskIds<ttng::FenceAsyncSharedOp>(loc, false);
   Value tmaPtr =
-      builder.create<triton::nvidia_gpu::TensorDescToTMAPtrOp>(loc, store.desc);
+      builder.createWithAsyncTaskIds<triton::nvidia_gpu::TensorDescToTMAPtrOp>(
+          loc, store.desc);
   if (auto storeOp = dyn_cast<tt::ExperimentalDescriptorStoreOp>(store.op)) {
-    builder.create<ttng::AsyncTMACopyLocalToGlobalOp>(
+    builder.createWithAsyncTaskIds<ttng::AsyncTMACopyLocalToGlobalOp>(
         loc, tmaPtr, storeOp.getIndices(), alloc);
   } else {
     auto scatterOp = cast<tt::ExperimentalDescriptorScatterOp>(store.op);
-    builder.create<ttng::AsyncTMAScatterOp>(
+    builder.createWithAsyncTaskIds<ttng::AsyncTMAScatterOp>(
         loc, tmaPtr, scatterOp.getXOffsets(), scatterOp.getYOffset(), alloc);
   }
 

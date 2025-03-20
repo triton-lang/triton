@@ -6,6 +6,7 @@
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonNvidiaGPU/Transforms/TMAUtilities.h"
@@ -25,7 +26,8 @@ using namespace triton::nvidia_gpu;
 static void
 lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
              function_ref<void(Value, Value, Value, Value)> createLoad,
-             PatternRewriter &rewriter) {
+             PatternRewriterWithAsyncTaskIds &rewriter,
+             PatternRewriter &baseRewriter) {
   MLIRContext *ctx = op->getContext();
   Attribute sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
   auto loc = op->getLoc();
@@ -48,7 +50,7 @@ lowerTMALoad(Operation *op, RankedTensorType tensorType, Value desc,
   auto barrierEncoding = SwizzledSharedEncodingAttr::get(
       tensorType.getContext(), 1, 1, 1, {0}, barrierCTALayout);
   MemDescType barrierMemDescType =
-      MemDescType::get({1}, rewriter.getI64Type(), barrierEncoding,
+      MemDescType::get({1}, baseRewriter.getI64Type(), barrierEncoding,
                        sharedMemorySpace, /*mutableMemory=*/true);
   Value barrierAlloc = rewriter.create<LocalAllocOp>(loc, barrierMemDescType);
   rewriter.create<InitBarrierOp>(loc, barrierAlloc, 1);
@@ -71,13 +73,15 @@ public:
   using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(ExperimentalDescriptorLoadOp op,
-                                PatternRewriter &rewriter) const override {
+                                PatternRewriter &baseRewriter) const override {
+    PatternRewriterWithAsyncTaskIds rewriter(baseRewriter, op);
     auto createLoad = [&](Value tmaPtr, Value barrierAlloc, Value alloc,
                           Value pred) {
       rewriter.create<triton::nvidia_gpu::AsyncTMACopyGlobalToLocalOp>(
           op.getLoc(), tmaPtr, op.getIndices(), barrierAlloc, alloc, pred);
     };
-    lowerTMALoad(op, op.getType(), op.getDesc(), createLoad, rewriter);
+    lowerTMALoad(op, op.getType(), op.getDesc(), createLoad, rewriter,
+                 baseRewriter);
     return success();
   }
 };
@@ -87,14 +91,16 @@ struct TMAGatherLowering
   using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(ExperimentalDescriptorGatherOp op,
-                                PatternRewriter &rewriter) const override {
+                                PatternRewriter &baseRewriter) const override {
+    PatternRewriterWithAsyncTaskIds rewriter(baseRewriter, op);
     auto createLoad = [&](Value tmaPtr, Value barrierAlloc, Value alloc,
                           Value pred) {
       rewriter.create<triton::nvidia_gpu::AsyncTMAGatherOp>(
           op.getLoc(), tmaPtr, op.getXOffsets(), op.getYOffset(), barrierAlloc,
           alloc, pred);
     };
-    lowerTMALoad(op, op.getType(), op.getDesc(), createLoad, rewriter);
+    lowerTMALoad(op, op.getType(), op.getDesc(), createLoad, rewriter,
+                 baseRewriter);
     return success();
   }
 };
@@ -102,7 +108,8 @@ struct TMAGatherLowering
 static void lowerTMAStore(Operation *op, mlir::TypedValue<RankedTensorType> src,
                           Value desc,
                           function_ref<void(Value, Value)> createStore,
-                          PatternRewriter &rewriter) {
+                          PatternRewriterWithAsyncTaskIds &rewriter,
+                          PatternRewriter &baseRewriter) {
   MLIRContext *ctx = op->getContext();
   Attribute sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(ctx);
   auto loc = op->getLoc();
@@ -125,7 +132,7 @@ static void lowerTMAStore(Operation *op, mlir::TypedValue<RankedTensorType> src,
       rewriter.create<triton::nvidia_gpu::TensorDescToTMAPtrOp>(loc, desc);
   createStore(tmaPtr, alloc);
   rewriter.create<triton::nvidia_gpu::TMAStoreWaitOp>(loc, 0);
-  rewriter.eraseOp(op);
+  baseRewriter.eraseOp(op);
 }
 
 struct TMAStoreLowering
@@ -133,12 +140,14 @@ struct TMAStoreLowering
   using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(ExperimentalDescriptorStoreOp op,
-                                PatternRewriter &rewriter) const override {
+                                PatternRewriter &baseRewriter) const override {
+    PatternRewriterWithAsyncTaskIds rewriter(baseRewriter, op);
     auto createStore = [&](Value tmaPtr, Value alloc) {
       rewriter.create<triton::nvidia_gpu::AsyncTMACopyLocalToGlobalOp>(
           op.getLoc(), tmaPtr, op.getIndices(), alloc);
     };
-    lowerTMAStore(op, op.getSrc(), op.getDesc(), createStore, rewriter);
+    lowerTMAStore(op, op.getSrc(), op.getDesc(), createStore, rewriter,
+                  baseRewriter);
     return success();
   }
 };
@@ -148,12 +157,14 @@ struct TMAScatterLowering
   using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(ExperimentalDescriptorScatterOp op,
-                                PatternRewriter &rewriter) const override {
+                                PatternRewriter &baseRewriter) const override {
+    PatternRewriterWithAsyncTaskIds rewriter(baseRewriter, op);
     auto createStore = [&](Value tmaPtr, Value alloc) {
       rewriter.create<triton::nvidia_gpu::AsyncTMAScatterOp>(
           op.getLoc(), tmaPtr, op.getXOffsets(), op.getYOffset(), alloc);
     };
-    lowerTMAStore(op, op.getSrc(), op.getDesc(), createStore, rewriter);
+    lowerTMAStore(op, op.getSrc(), op.getDesc(), createStore, rewriter,
+                  baseRewriter);
     return success();
   }
 };
@@ -163,19 +174,21 @@ public:
   using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(MakeTensorDescOp op,
-                                PatternRewriter &rewriter) const override {
+                                PatternRewriter &baseRewriter) const override {
     MLIRContext *ctx = op.getContext();
     auto loc = op.getLoc();
+    PatternRewriterWithAsyncTaskIds rewriter(baseRewriter, op);
     auto alloc = rewriter.create<triton::gpu::GlobalScratchAllocOp>(
-        loc, getPointerType(rewriter.getI8Type()), TMA_SIZE_BYTES, TMA_ALIGN);
-    if (failed(createTMADesc(alloc, op, rewriter))) {
+        loc, getPointerType(baseRewriter.getI8Type()), TMA_SIZE_BYTES,
+        TMA_ALIGN);
+    if (failed(createTMADesc(alloc, op, baseRewriter))) {
       return failure();
     }
     rewriter.create<triton::ExperimentalTensormapFenceproxyAcquireOp>(
         loc, alloc.getResult());
     auto newDesc = rewriter.create<triton::ReinterpretTensorDescOp>(
         loc, op.getType(), alloc.getResult());
-    rewriter.replaceOp(op, newDesc);
+    baseRewriter.replaceOp(op, newDesc);
     return success();
   }
 };

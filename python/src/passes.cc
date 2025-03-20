@@ -75,6 +75,19 @@ void init_triton_passes_ttgpuir(py::module &&m) {
   ADD_PASS_WRAPPER_0("add_fuse_nested_loops", createTritonGPUFuseNestedLoops);
   ADD_PASS_WRAPPER_0("add_coalesce_async_copy",
                      createTritonGPUCoalesceAsyncCopy);
+  ADD_PASS_OPTION_WRAPPER_1("add_ws_task_partition",
+                            createTritonGPUWSTaskPartition, int);
+  ADD_PASS_OPTION_WRAPPER_1("add_ws_data_partition",
+                            createTritonGPUWSDataPartition, int);
+  ADD_PASS_OPTION_WRAPPER_1("add_ws_lowering", createTritonGPUWSLowering, int);
+  ADD_PASS_OPTION_WRAPPER_1("add_taskid_propagate",
+                            createTritonGPUTaskIdPropagate, int);
+  ADD_PASS_OPTION_WRAPPER_4("add_ws_code_partition",
+                            createTritonGPUWSCodePartition, int, int, int, int);
+  ADD_PASS_OPTION_WRAPPER_1("add_ping_pong_sync", createTritonGPUPingPongSync,
+                            int);
+  ADD_PASS_OPTION_WRAPPER_1("add_ws_canonicalization",
+                            createTritonGPUWSCanonicalization, int);
 }
 
 void init_triton_passes_convert(py::module &&m) {

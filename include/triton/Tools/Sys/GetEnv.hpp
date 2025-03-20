@@ -42,6 +42,7 @@ inline const std::set<std::string> CACHE_INVALIDATING_ENV_VARS = {
     "ALLOW_LHS_TMEM_LAYOUT_CONVERSION",
     "ENABLE_LHS_TO_TMEM",
     "TRITON_F32_DEFAULT",
+    "ENABLE_PINGPONG",
     // clang-format on
 };
 
