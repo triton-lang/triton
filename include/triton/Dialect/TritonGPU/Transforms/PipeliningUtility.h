@@ -98,13 +98,6 @@ void eraseLoopCarriedValues(scf::ForOp &loop, llvm::BitVector indices);
 // specified.
 int getNumStagesOrDefault(scf::ForOp forOp, int defaultNumStages);
 
-// Return true if pipelining of MMA op is possible.
-bool mmaHasPipelineableOperands(
-    Operation *mma, scf::ForOp forOp,
-    std::function<bool(Operation *)> isLoadPipelineable);
-
-bool hasAccReadModifyWrite(Operation *mma, scf::ForOp forOp);
-
 // Given a result of MemDescSubview, or Alloca, create a MemDescSubview with a
 // single buffer slice (leading dimension equal to 1), at the given index.
 template <typename TBuilder>

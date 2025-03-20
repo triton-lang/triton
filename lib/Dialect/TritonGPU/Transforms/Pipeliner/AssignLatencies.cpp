@@ -1,11 +1,11 @@
 #include "triton/Analysis/AxisInfo.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
+#include "triton/Dialect/TritonGPU/Transforms/MMAv5PipelineUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/PipeliningUtility.h"
 #include "triton/Dialect/TritonGPU/Transforms/Schedule.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
-#include "triton/Tools/Sys/GetEnv.hpp"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "triton-loop-pipeline"
@@ -262,13 +262,13 @@ public:
     for (auto &op : forOp.getBody()->without_terminator()) {
       // If the acc can not be multibuffered, do not pipeline the uses of
       // the MMA to later stages.
-      if (isa<ttng::MMAv5OpInterface>(op) &&
-          mmaHasPipelineableOperands(&op, forOp, isLoadPipelineable) &&
-          !hasAccReadModifyWrite(cast<ttng::MMAv5OpInterface>(&op), forOp) &&
-          !getDisallowAccMultiBuffer(forOp) &&
-          isAccMultibufferingPossible(cast<ttng::MMAv5OpInterface>(&op),
-                                      forOp)) {
-        opLatency[&op] = 1;
+      if (auto mma = dyn_cast<ttng::MMAv5OpInterface>(&op)) {
+        if (ttng::mmaHasPipelineableOperands(mma, forOp, isLoadPipelineable) &&
+            !ttng::hasAccReadModifyWrite(mma, forOp) &&
+            !getDisallowAccMultiBuffer(forOp) &&
+            isAccMultibufferingPossible(mma, forOp)) {
+          opLatency[&op] = 1;
+        }
       }
     }
   }
