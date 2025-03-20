@@ -567,12 +567,16 @@ bool mlir::triton::hasAccReadModifyWrite(Operation *op, scf::ForOp forOp) {
     return false;
   }
   SmallVector<Value> readValues;
+  DenseSet<Value> seen;
   llvm::SetVector<Value> modifiedValues;
   for (auto load : loads) {
     readValues.push_back(load->getResult(0));
   }
   while (!readValues.empty()) {
     Value v = readValues.pop_back_val();
+    if (!seen.insert(v).second) {
+      continue;
+    }
     for (auto &use : v.getUses()) {
       if (llvm::is_contained(stores, use.getOwner())) {
         continue; // R-W, not midified, this is safe
@@ -592,6 +596,9 @@ bool mlir::triton::hasAccReadModifyWrite(Operation *op, scf::ForOp forOp) {
   }
   while (!modifiedValues.empty()) {
     Value v = modifiedValues.pop_back_val();
+    if (!seen.insert(v).second) {
+      continue;
+    }
     for (auto &use : v.getUses()) {
       if (llvm::is_contained(stores, use.getOwner())) {
         return true; // RMW!
