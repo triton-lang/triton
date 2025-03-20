@@ -1,4 +1,4 @@
-// RUN: triton-opt %s -split-input-file -tritongpu-optimize-accumulator-init | FileCheck %s
+// RUN: triton-opt %s -tritongpu-optimize-accumulator-init | FileCheck %s
 
 #blocked = #ttg.blocked<{sizePerThread = [8, 1], threadsPerWarp = [8, 4], warpsPerCTA = [1, 4], order = [0, 1]}>
 #blocked1 = #ttg.blocked<{sizePerThread = [1, 8], threadsPerWarp = [4, 8], warpsPerCTA = [4, 1], order = [1, 0]}>

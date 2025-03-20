@@ -1,4 +1,4 @@
-// RUN: triton-opt --split-input-file %s | FileCheck %s
+// RUN: triton-opt %s | FileCheck %s
 
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = false, elementBitWidth = 8}>
 #shared1 = #ttg.nvmma_shared<{swizzlingByteWidth = 32, transposed = true, elementBitWidth = 8}>
