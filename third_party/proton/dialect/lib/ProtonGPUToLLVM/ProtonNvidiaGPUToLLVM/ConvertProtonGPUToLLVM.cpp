@@ -19,6 +19,17 @@ namespace triton::proton::gpu {
 
 namespace {
 
+class ProtonLLVMConversionTarget : public ConversionTarget {
+public:
+  explicit ProtonLLVMConversionTarget(MLIRContext &ctx)
+      : ConversionTarget(ctx) {
+    addLegalDialect<LLVM::LLVMDialect>();
+    addIllegalDialect<mlir::triton::proton::gpu::ProtonGPUDialect>();
+    addIllegalDialect<mlir::triton::proton::ProtonDialect>();
+    addLegalOp<mlir::UnrealizedConversionCastOp>();
+  }
+};
+
 struct ConvertProtonNvidiaGPUToLLVM
     : public mlir::triton::proton::gpu::impl::ConvertProtonNvidiaGPUToLLVMBase<
           ConvertProtonNvidiaGPUToLLVM> {
@@ -41,10 +52,10 @@ struct ConvertProtonNvidiaGPUToLLVM
                                                tritonTargetInfo);
     mlir::triton::proton::gpu::populateProtonGPUOpPatterns(
         typeConverter, patterns, protonTargetInfo, 1);
-    if (failed(
-            mlir::applyPatternsGreedily(getOperation(), std::move(patterns)))) {
-      signalPassFailure();
-    }
+    auto convTarget =
+        ProtonLLVMConversionTarget(*context);
+    if (failed(applyPartialConversion(mod, convTarget, std::move(patterns))))
+      return signalPassFailure();
   }
 };
 
