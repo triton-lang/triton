@@ -93,6 +93,7 @@ class HIPOptions:
 
 
 class HIPBackend(BaseBackend):
+    instrumentation = {}
 
     @staticmethod
     def supports_target(target: GPUTarget):
@@ -216,7 +217,7 @@ class HIPBackend(BaseBackend):
         return mod
 
     @staticmethod
-    def make_ttgir(mod, metadata, options, instrumentation):
+    def make_ttgir(mod, metadata, options):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
         passes.ttir.add_convert_to_ttgpuir(pm, f"hip:{options.arch}", options.num_warps, options.warp_size,
@@ -274,13 +275,13 @@ class HIPBackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
-        if "ttir" in instrumentation:
-            instrumentation["ttir"](pm)
+        if "ttir" in HIPBackend.instrumentation:
+            HIPBackend.instrumentation["ttir"](pm)
         pm.run(mod)
         return mod
 
     @staticmethod
-    def make_llir(src, metadata, options, instrumentation):
+    def make_llir(src, metadata, options):
         mod = src
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
@@ -319,8 +320,8 @@ class HIPBackend(BaseBackend):
         if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":
             passes.llvmir.add_di_scope(pm)
         amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm, __HIP_FTZ)
-        if "ttgpuir" in instrumentation:
-            instrumentation["ttgpuir"](pm)
+        if "ttgpuir" in HIPBackend.instrumentation:
+            HIPBackend.instrumentation["ttgpuir"](pm)
         pm.run(mod)
 
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
@@ -423,8 +424,8 @@ class HIPBackend(BaseBackend):
 
     def add_stages(self, stages, options):
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
-        stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, self.instrumentation)
-        stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options, self.instrumentation)
+        stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options)
+        stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options)
         stages["amdgcn"] = lambda src, metadata: self.make_amdgcn(src, metadata, options)
         stages["hsaco"] = lambda src, metadata: self.make_hsaco(src, metadata, options)
 

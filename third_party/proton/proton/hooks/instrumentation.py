@@ -74,7 +74,7 @@ class InstrumentationHook(Hook):
         else:
             raise RuntimeError(f"Unsupported backend: {backend}")
 
-        backends[backend_name].instrumentation = {
+        backends[backend_name].compiler.instrumentation = {
             "ttir": triton_proton.add_convert_proton_to_protongpu,
             "ttgpuir": ttgpuir_func,
         }
@@ -107,7 +107,7 @@ class InstrumentationHook(Hook):
         else:
             raise RuntimeError(f"Unsupported backend: {backend}")
 
-        backends[backend_name].instrumentation = {}
+        backends[backend_name].compiler.instrumentation = {}
 
         set_instrumentation_off()
 

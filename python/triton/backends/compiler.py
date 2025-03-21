@@ -21,7 +21,6 @@ class BaseBackend(metaclass=ABCMeta):
 
     def __init__(self, target: GPUTarget) -> None:
         self.target = target
-        self.instrumentation = {}
         assert self.supports_target(target)
 
     @staticmethod
