@@ -64,6 +64,18 @@ struct CoalesceAsyncCopyWrites
           std::min<unsigned>(loadContig, axisAnalysis.getMaskAlignment(mask));
     }
 
+    // Further restrict the contiguity based on the contiguity of the src to dst
+    // layout e.g. if the order of the blocked and shared encoding is different
+    // we can only load one element at a time or if the shared encoding is
+    // swizzled we cannot exceed the vector size of the swizzling pattern
+    LinearLayout regLayout =
+        triton::gpu::toLinearLayout(srcTy.getShape(), blockedEnc);
+    LinearLayout sharedLayout =
+        triton::gpu::toLinearLayout(srcTy.getShape(), sharedEnc);
+    auto regToSharedLayout = regLayout.invertAndCompose(sharedLayout);
+    loadContig = std::min<unsigned>(loadContig,
+                                    regToSharedLayout.getNumConsecutiveInOut());
+
     // Select the largest supported load width equal or smaller than loadContig
     auto elemBitWidth = dstTy.getElementTypeBitWidth();
     while (loadContig > 0 && !targetInfo.supportsDirectToLdsLoadBitWidth(
