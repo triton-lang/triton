@@ -29,16 +29,14 @@ struct GlobalScratchAllocOpConversion
     auto loc = funcOp.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto gmemBase = funcOp.getArgument(funcOp.getNumArguments() - 1);
-    size_t offset =
-        cast<IntegerAttr>(op->getAttr("offset")).getValue().getZExtValue();
     auto llvmPointerType = LLVM::LLVMPointerType::get(ctx);
-    rewriter.eraseOp(op);
-    rewriter.create<LLVM::GEPOp>(loc, llvmPointerType, llvmPointerType,
-                                 gmemBase, b.i32_val(0));
     funcOp->setAttr("ttg.profile_scratch_memory_size",
                     rewriter.getI32IntegerAttr(1));
     funcOp->setAttr("ttg.profile_scratch_memory_alignment",
                     rewriter.getI32IntegerAttr(1));
+    rewriter.replaceOpWithNewOp<LLVM::GEPOp>(
+        op, llvmPointerType, llvmPointerType, gmemBase, b.i32_val(0));
+
     return success();
   }
 };
