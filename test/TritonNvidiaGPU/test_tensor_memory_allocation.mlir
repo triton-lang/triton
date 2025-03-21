@@ -123,11 +123,11 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
     %cst0 = arith.constant dense<0.000000e+00> : tensor<256x128xf16, #blocked>
 
     // CHECK: ttng.tmem_alloc {tensor_memory_col_offset = 0 : i32, tensor_memory_row_offset = 0 : i32}
-    %0 = ttng.tmem_alloc  : () -> !ttg.memdesc<256x128xf16, #tmem, #ttng.tensor_memory, mutable>
+    %0 = ttng.tmem_alloc : () -> !ttg.memdesc<256x128xf16, #tmem, #ttng.tensor_memory, mutable>
     // CHECK: ttng.tmem_alloc {tensor_memory_col_offset = 128 : i32, tensor_memory_row_offset = 0 : i32}
-    %1 = ttng.tmem_alloc  : () -> !ttg.memdesc<256x128xf16, #tmem1, #ttng.tensor_memory, mutable>
+    %1 = ttng.tmem_alloc : () -> !ttg.memdesc<256x128xf16, #tmem1, #ttng.tensor_memory, mutable>
     // CHECK: ttng.tmem_alloc {tensor_memory_col_offset = 256 : i32, tensor_memory_row_offset = 0 : i32}
-    %2 = ttng.tmem_alloc  : () -> !ttg.memdesc<256x128xf16, #tmem, #ttng.tensor_memory, mutable>
+    %2 = ttng.tmem_alloc : () -> !ttg.memdesc<256x128xf16, #tmem, #ttng.tensor_memory, mutable>
 
     ttng.tmem_store %cst0, %0, %true : tensor<256x128xf16, #blocked> -> !ttg.memdesc<256x128xf16, #tmem, #ttng.tensor_memory, mutable>
     ttng.tmem_store %cst0, %1, %true : tensor<256x128xf16, #blocked> -> !ttg.memdesc<256x128xf16, #tmem1, #ttng.tensor_memory, mutable>

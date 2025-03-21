@@ -425,7 +425,7 @@ void TMEMAllocOp::getEffects(
                          mlir::triton::nvidia_gpu::TensorMemory::get());
 }
 
-bool isDescendingOrder(triton::gpu::MemDescType type) {
+static bool isDescendingOrder(triton::gpu::MemDescType type) {
   auto order = triton::gpu::getOrder(type);
   auto rank = type.getRank();
   for (int i = 0; i < rank; ++i) {

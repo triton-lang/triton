@@ -463,7 +463,9 @@ def TTNG_TMEMAllocOp : TTNG_Op<"tmem_alloc", [DeclareOpInterfaceMethods<MemoryEf
   }];
   let arguments = (ins Optional<TT_Tensor>:$src);
 
-  let assemblyFormat = [{$src attr-dict `:` functional-type(operands, results)}];
+  let assemblyFormat = [{
+    ($src^)? attr-dict `:` functional-type(operands, results)
+  }];
 
   let results = (outs TTG_MemDescType:$result);
   let hasVerifier = 1;

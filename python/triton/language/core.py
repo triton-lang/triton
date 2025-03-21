@@ -307,6 +307,12 @@ class base_type:
         """
         raise NotImplementedError
 
+    def mangle(self) -> str:
+        raise NotImplementedError(f"NYI: Type mangling for type {self.__class__}")
+
+    def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
+        raise NotImplementedError
+
 
 # -----------------------
 # dtype
@@ -502,10 +508,6 @@ class dtype(base_type):
     def is_const():
         return False
 
-    @staticmethod
-    def is_tuple():
-        return False
-
     def __eq__(self, other: dtype):
         if not isinstance(other, dtype):
             return False
@@ -517,6 +519,9 @@ class dtype(base_type):
     @property
     def scalar(self):
         return self
+
+    def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
+        out.append(self.to_ir(builder))
 
     def to_ir(self, builder: ir.builder) -> ir.type:
         if self.name.startswith("fp8"):
@@ -581,6 +586,17 @@ class dtype(base_type):
     def _unflatten_ir(self, handles: List[ir.value], cursor: int) -> Tuple[base_value, int]:
         return tensor(handles[cursor], self), cursor + 1
 
+    def mangle(self) -> str:
+        if self.is_int():
+            SIGNED = dtype.SIGNEDNESS.SIGNED
+            prefix = 'i' if self.int_signedness == SIGNED else 'u'
+            return prefix + str(self.int_bitwidth)
+        if self.is_floating():
+            return str(self)
+        if self.is_void():
+            return 'V'
+        return super().mangle()
+
 
 # Some functions have a param named `dtype`, which shadows the `dtype` class.
 # We can't change the param name because it is part of function's public API.
@@ -622,6 +638,9 @@ class pointer_type(dtype):
     @property
     def scalar(self):
         return self
+
+    def mangle(self) -> str:
+        return f"P{self.element_ty.mangle()}"
 
 
 class nv_tma_desc_type(pointer_type):
@@ -672,6 +691,11 @@ class block_type(dtype):
     def scalar(self):
         return self.element_ty
 
+    def mangle(self) -> str:
+        elt = self.scalar.mangle()
+        shape = '_'.join(map(str, self.shape))
+        return f'{elt}S{shape}S'
+
 
 class tuple_type(base_type):
 
@@ -686,14 +710,13 @@ class tuple_type(base_type):
     def __iter__(self):
         return iter(self.types)
 
-    def to_ir(self, builder: ir.builder):
-        return [ty.to_ir(builder) for ty in self.types]
+    def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]):
+        for ty in self.types:
+            if not isinstance(ty, constexpr):
+                ty._flatten_ir_types(builder, out)
 
     def __getitem__(self, index: int) -> dtype:
         return self.types[index]
-
-    def is_tuple(self):
-        return True
 
     def __eq__(self, other):
         return type(self) is type(other) and self.types == other.types and self.fields == other.fields
@@ -704,6 +727,9 @@ class tuple_type(base_type):
             value, cursor = ty._unflatten_ir(handles, cursor)
             values.append(value)
         return tuple(values, self), cursor
+
+    def mangle(self):
+        return 'T' + '_'.join(ty.mangle for ty in self.types) + 'T'
 
 
 class slice_type(dtype):
@@ -1263,8 +1289,8 @@ class tensor_descriptor_base_type(base_type):
         value = tensor_descriptor_base(handles[cursor], self.block_type)
         return value, cursor + 1
 
-    def to_ir(self, builder: ir.builder):
-        return builder.create_tensor_descriptor_type(self.block_type.to_ir(builder))
+    def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
+        out.append(builder.create_tensor_descriptor_type(self.block_type.to_ir(builder)))
 
     def __str__(self) -> str:
         # ex. "tensor_descriptor<float32[16, 32]>"
@@ -1277,6 +1303,9 @@ class tensor_descriptor_base_type(base_type):
 
     def __neq__(self, other) -> bool:
         return not (self == other)
+
+    def mangle(self) -> str:
+        return f"TD{self.block_type.mangle()}"
 
 
 class tensor_descriptor_base(base_value):
@@ -1363,8 +1392,10 @@ class tensor_descriptor_type(tensor_descriptor_base_type):
         value = tensor_descriptor(handle, shape, strides, self.block_type)
         return value, cursor
 
-    def to_ir(self, builder: ir.builder):
-        return [super().to_ir(builder), *self.shape_type.to_ir(builder), *self.strides_type.to_ir(builder)]
+    def _flatten_ir_types(self, builder: ir.builder, out: List[ir.type]) -> None:
+        super()._flatten_ir_types(builder, out)
+        self.shape_type._flatten_ir_types(builder, out)
+        self.strides_type._flatten_ir_types(builder, out)
 
     def __eq__(self, other):
         return super().__eq__(other) and (self.shape_type == other.shape_type) and (self.strides_type
@@ -1892,8 +1923,9 @@ def load(pointer, mask=None, other=None, boundary_check=(), padding_option="", c
     :type boundary_check: tuple of ints, optional
     :param padding_option: should be one of {"", "zero", "nan"}, the padding value to use while out of bounds. "" means an undefined value.
     :param cache_modifier: changes cache option in NVIDIA PTX
-    :type cache_modifier: str, optional, should be one of {"", "ca", "cg"}, where "ca" stands for
-        cache at all levels and "cg" stands for cache at global level (cache in L2 and below, not L1), see
+    :type cache_modifier: str, optional, should be one of {"", ".ca", ".cg", ".cv"}, where ".ca" stands for
+        cache at all levels, ".cg" stands for cache at global level (cache in L2 and below, not L1),
+        and ".cv" means don’t cache and fetch again. see
         `cache operator <https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#cache-operators>`_ for more details.
     :param eviction_policy: changes eviction policy in NVIDIA PTX
     :type eviction_policy: str, optional
@@ -2935,10 +2967,18 @@ class range:
     :param flatten: automatically flatten the loop nest starting at this loop to
         create a single flattened loop. The compiler will try to pipeline the
         flattened loop which can avoid stage stalling.
+    :param warp_specialize: Enable automatic warp specialization on the loop.
+        The compiler will attempt to partition memory, MMA, and vector
+        operations in the loop into separate async partitions. This will
+        increase the total number of warps required by the kernel.
+
+        Note that warp specialization is only supported on Blackwell GPUs and
+        only works on simple matmul loops. Support for arbitrary loops will be
+        expanded over time.
     """
 
     def __init__(self, arg1, arg2=None, step=None, num_stages=None, loop_unroll_factor=None,
-                 disallow_acc_multi_buffer=False, flatten=False):
+                 disallow_acc_multi_buffer=False, flatten=False, warp_specialize=False):
         if step is None:
             self.step = constexpr(1)
         else:
@@ -2953,6 +2993,7 @@ class range:
         self.loop_unroll_factor = loop_unroll_factor
         self.disallow_acc_multi_buffer = disallow_acc_multi_buffer
         self.flatten = flatten
+        self.warp_specialize = warp_specialize
 
     def __iter__(self):
         raise RuntimeError("tl.range can only be used in @triton.jit'd functions")

@@ -394,8 +394,15 @@ def TTG_WarpSpecializeOp : TTG_Op<"warp_specialize", [
     unsigned getTotalPartitionWarps();
   }];
 
+  let builders = [
+    OpBuilder<(ins "TypeRange":$resultTypes,
+                   "ArrayRef<int32_t>":$partitionNumWarps,
+                   "unsigned":$numPartitionRegions)>
+  ];
+
   let hasVerifier = 1;
   let hasCustomAssemblyFormat = 1;
+  let hasCanonicalizeMethod = 1;
 }
 
 def TTG_WarpSpecializePartitionsOp : TTG_Op<"warp_specialize.partitions", [

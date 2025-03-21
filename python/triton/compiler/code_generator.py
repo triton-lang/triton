@@ -16,6 +16,7 @@ from ..runtime.jit import get_jit_fn_file_line
 # ideally we wouldn't need any runtime component
 from ..runtime import JITFunction
 from .._utils import find_paths_if, get_iterable_path, set_iterable_path
+from . import config
 
 from .errors import (CompilationError, CompileTimeAssertionFailure, UnsupportedLanguageConstruct)
 
@@ -27,29 +28,9 @@ def check_identifier_legality(name, type):
     return name
 
 
-def mangle_ty(ty):
-    if ty.is_tuple():
-        return 'T' + '_'.join(map(mangle_ty, ty.types)) + 'T'
-    if ty.is_ptr():
-        return 'P' + mangle_ty(ty.element_ty)
-    if ty.is_int():
-        SIGNED = language.dtype.SIGNEDNESS.SIGNED
-        prefix = 'i' if ty.int_signedness == SIGNED else 'u'
-        return prefix + str(ty.int_bitwidth)
-    if ty.is_floating():
-        return str(ty)
-    if ty.is_block():
-        elt = mangle_ty(ty.scalar)
-        shape = '_'.join(map(str, ty.shape))
-        return f'{elt}S{shape}S'
-    if ty.is_void():
-        return 'V'
-    raise TypeError(f'Unsupported type {ty}')
-
-
 def mangle_fn(name, arg_tys, constants):
     # doesn't mangle ret type, which must be a function of arg tys
-    mangled_arg_names = '_'.join([mangle_ty(ty) for ty in arg_tys])
+    mangled_arg_names = '_'.join([ty.mangle() for ty in arg_tys])
     mangled_constants = '_'.join([f'{i}c{repr(constants[i])}' for i in sorted(constants)])
     mangled_constants = mangled_constants.replace('.', '_d_')
     mangled_constants = mangled_constants.replace("'", '_sq_')
@@ -71,8 +52,8 @@ def _is_constexpr(o: Any) -> bool:
     return o is None or isinstance(o, (constexpr, language.core.dtype))
 
 
-def _is_triton_scalar(o: Any) -> bool:
-    return _is_triton_tensor(o) and (not o.type.is_block() or o.type.numel == 1)
+def _is_non_scalar_tensor(o: Any) -> bool:
+    return _is_triton_tensor(o) and (o.type.is_block() and o.type.numel != 1)
 
 
 def _is_list_like(o: Any) -> bool:
@@ -82,7 +63,7 @@ def _is_list_like(o: Any) -> bool:
 def _check_fn_args(node, fn, args):
     if fn.noinline:
         for idx, arg in enumerate(args):
-            if not _is_constexpr(arg) and not _is_triton_scalar(arg):
+            if not _is_constexpr(arg) and _is_non_scalar_tensor(arg):
                 raise UnsupportedLanguageConstruct(
                     fn.src, node,
                     f'Function {fn.__name__} is marked noinline, but was called with non-scalar argument {fn.arg_names[idx]}:{arg}'
@@ -241,26 +222,26 @@ class ASTFunction:
         self.constants = constants
         self.attrs = attrs
 
-    def return_types_ir(self, builder: ir.builder):
-        ret_types = []
-        for ret_ty in self.ret_types:
-            if ret_ty is None:
+    def flatten_ir_types(self, builder: ir.builder, types: List[base_type]) -> List[ir.type]:
+        ir_types = []
+        for ty in types:
+            if ty is None:
                 continue
-            ir_ty = ret_ty.to_ir(builder)
-            if isinstance(ir_ty, list):
-                ret_types.extend(ir_ty)
-            else:
-                ret_types.append(ir_ty)
-        return ret_types
+            ty._flatten_ir_types(builder, ir_types)
+        return ir_types
+
+    def return_types_ir(self, builder: ir.builder) -> List[ir.type]:
+        return self.flatten_ir_types(builder, self.ret_types)
 
     def serialize(self, builder: ir.builder):
         # fill up IR values in template
         # > build function
         is_val = lambda path, _: path not in self.constants and _ is not None
         val_paths = list(find_paths_if(self.arg_types, is_val))
-        arg_types = [get_iterable_path(self.arg_types, path).to_ir(builder) for path in val_paths]
-        ret_types = self.return_types_ir(builder)
-        return builder.get_function_ty(arg_types, ret_types)
+        arg_types = [get_iterable_path(self.arg_types, path) for path in val_paths]
+        arg_types_ir = self.flatten_ir_types(builder, arg_types)
+        ret_types_ir = self.return_types_ir(builder)
+        return builder.get_function_ty(arg_types_ir, ret_types_ir)
 
     def deserialize(self, fn):
         # create "template"
@@ -282,9 +263,12 @@ class ASTFunction:
             if isinstance(ty, nv_tma_desc_type):
                 fn.set_arg_attr(i, "tt.nv_tma_desc", 1)
         # > add IR values to the template
-        for i, path in enumerate(val_paths):
+        cursor = 0
+        handles = [fn.args(i) for i in range(fn.get_num_args())]
+        for path in val_paths:
             ty = get_iterable_path(self.arg_types, path)
-            set_iterable_path(vals, path, language.tensor(fn.args(i), ty))
+            val, cursor = ty._unflatten_ir(handles, cursor)
+            set_iterable_path(vals, path, val)
         # > add constexpr values to the template
         constants = self.constants
         for path, val in constants.items():
@@ -1028,6 +1012,7 @@ class CodeGenerator(ast.NodeVisitor):
         loop_unroll_factor = None
         disallow_acc_multi_buffer = False
         flatten = False
+        warp_specialize = False
         if IteratorClass is language.range:
             iterator = IteratorClass(*iter_args, **iter_kwargs)
             # visit iterator arguments
@@ -1040,6 +1025,7 @@ class CodeGenerator(ast.NodeVisitor):
             loop_unroll_factor = iterator.loop_unroll_factor
             disallow_acc_multi_buffer = iterator.disallow_acc_multi_buffer
             flatten = iterator.flatten
+            warp_specialize = iterator.warp_specialize
         elif IteratorClass is range:
             # visit iterator arguments
             # note: only `range` iterator is supported now
@@ -1118,6 +1104,8 @@ class CodeGenerator(ast.NodeVisitor):
                 for_op.set_attr("tt.disallow_acc_multi_buffer", self.builder.get_unit_attr())
             if flatten:
                 for_op.set_attr("tt.flatten", self.builder.get_unit_attr())
+            if warp_specialize:
+                for_op.set_attr("tt.warp_specialize", self.builder.get_unit_attr())
 
             self.scf_stack.append(node)
             for_op_body = for_op.get_body(0)
@@ -1214,6 +1202,8 @@ class CodeGenerator(ast.NodeVisitor):
                 generator.visit(fn.parse())
             except Exception as e:
                 # Wrap the error in the callee with the location of the call.
+                if config.front_end_debugging():
+                    raise
                 raise CompilationError(self.jit_fn.src, self.cur_node, None) from e
 
             callee_ret_type = generator.ret_type
@@ -1221,7 +1211,7 @@ class CodeGenerator(ast.NodeVisitor):
         else:
             callee_ret_type = self.function_ret_types[fn_name]
         symbol = self.module.get_function(fn_name)
-        args_val = [arg.handle for arg in args_val]
+        args_val = flatten_values_to_ir(args_val)
         call_op = self.builder.call(symbol, args_val)
         if callee_ret_type == language.void:
             return None
@@ -1252,6 +1242,8 @@ class CodeGenerator(ast.NodeVisitor):
                     ret = language.tuple(ret)
                 return ret
             except Exception as e:
+                if config.front_end_debugging():
+                    raise
                 # Normally when we raise a CompilationError, we raise it as
                 # `from None`, because the original fileline from the exception
                 # is not relevant (and often points into code_generator.py
@@ -1331,6 +1323,8 @@ class CodeGenerator(ast.NodeVisitor):
             except CompilationError:
                 raise
             except Exception as e:
+                if config.front_end_debugging():
+                    raise
                 # Wrap the error in a CompilationError which contains the source
                 # of the @jit function.
                 raise CompilationError(self.jit_fn.src, self.cur_node, repr(e)) from None
