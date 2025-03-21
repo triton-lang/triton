@@ -21,10 +21,10 @@ namespace ttg = triton::gpu;
 // supported load vector size to ensure coalesed writes
 struct CoalesceAsyncCopyWrites
     : public OpRewritePattern<ttg::AsyncCopyGlobalToLocalOp> {
-  CoalesceAsyncCopyWrites(
-      const triton::AMD::TargetInfo &targetInfo,
-      DenseMap<ttg::AsyncCopyGlobalToLocalOp, unsigned> asyncCopyContiguity,
-      MLIRContext *ctx)
+  CoalesceAsyncCopyWrites(const triton::AMD::TargetInfo &targetInfo,
+                          const DenseMap<ttg::AsyncCopyGlobalToLocalOp,
+                                         unsigned> &asyncCopyContiguity,
+                          MLIRContext *ctx)
       : OpRewritePattern(ctx), targetInfo{targetInfo},
         asyncCopyContiguity{std::move(asyncCopyContiguity)} {}
 
@@ -135,7 +135,7 @@ struct CoalesceAsyncCopyWrites
 
 private:
   const triton::AMD::TargetInfo &targetInfo;
-  DenseMap<ttg::AsyncCopyGlobalToLocalOp, unsigned> asyncCopyContiguity;
+  const DenseMap<ttg::AsyncCopyGlobalToLocalOp, unsigned> &asyncCopyContiguity;
 };
 
 class TritonAMDGPUCoalesceAsyncCopyPass
@@ -159,27 +159,28 @@ public:
     case triton::AMD::ISAFamily::CDNA2:
     case triton::AMD::ISAFamily::CDNA3:
     case triton::AMD::ISAFamily::CDNA4: {
-      // Precompute the contiguity of all AsyncCopy ops based on the src and
-      // mask contiguity/alignment to avoid rebuilding ModuleAxisInfoAnalysis
-      // after every IR change.
-      triton::ModuleAxisInfoAnalysis axisAnalysis(m);
-      DenseMap<ttg::AsyncCopyGlobalToLocalOp, unsigned> asyncCopyContiguity;
-      m->walk([&](ttg::AsyncCopyGlobalToLocalOp copyOp) {
-        unsigned contiguity =
-            mlir::LLVM::AMD::getContiguity(copyOp.getSrc(), axisAnalysis);
-        if (auto mask = copyOp.getMask()) {
-          contiguity = std::min<unsigned>(contiguity,
-                                          axisAnalysis.getMaskAlignment(mask));
-        }
-        asyncCopyContiguity.insert({copyOp, contiguity});
-      });
-      patterns.add<CoalesceAsyncCopyWrites>(targetInfo, asyncCopyContiguity,
-                                            context);
       break;
     }
     default:
-      break;
+      return;
     }
+
+    // Precompute the contiguity of all AsyncCopy ops based on the src and
+    // mask contiguity/alignment to avoid rebuilding ModuleAxisInfoAnalysis
+    // after every IR change.
+    triton::ModuleAxisInfoAnalysis axisAnalysis(m);
+    DenseMap<ttg::AsyncCopyGlobalToLocalOp, unsigned> asyncCopyContiguity;
+    m->walk([&](ttg::AsyncCopyGlobalToLocalOp copyOp) {
+      unsigned contiguity =
+          mlir::LLVM::AMD::getContiguity(copyOp.getSrc(), axisAnalysis);
+      if (auto mask = copyOp.getMask()) {
+        contiguity =
+            std::min<unsigned>(contiguity, axisAnalysis.getMaskAlignment(mask));
+      }
+      asyncCopyContiguity.insert({copyOp, contiguity});
+    });
+    patterns.add<CoalesceAsyncCopyWrites>(targetInfo, asyncCopyContiguity,
+                                          context);
 
     if (applyPatternsGreedily(m, std::move(patterns)).failed())
       signalPassFailure();
