@@ -21,6 +21,7 @@ class BaseBackend(metaclass=ABCMeta):
 
     def __init__(self, target: GPUTarget) -> None:
         self.target = target
+        self.instrumentation = {}
         assert self.supports_target(target)
 
     @staticmethod
@@ -69,6 +70,10 @@ class BaseBackend(metaclass=ABCMeta):
         a `bytes` object for execution by the launcher.
         """
         raise NotImplementedError
+
+    @abstractmethod
+    def set_instrumentation(self, stages: dict) -> None:
+        self.instrumentation = stages
 
     @abstractmethod
     def load_dialects(self, context):

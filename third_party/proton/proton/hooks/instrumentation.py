@@ -7,7 +7,6 @@ from triton._C.libtriton import proton as triton_proton
 from triton._C.libproton import proton as libproton
 from triton.compiler import LazyDict
 from triton.runtime.jit import JITFunction
-from triton.language import constexpr
 from triton.runtime._allocation import set_profile_allocator, NullAllocator
 from triton.backends import backends
 
@@ -74,9 +73,11 @@ class InstrumentationHook(Hook):
             ttgpuir_func = triton_proton.add_convert_proton_amd_gpu_to_llvm
         else:
             raise RuntimeError(f"Unsupported backend: {backend}")
-            
-        backends[backend_name].ttir_instrumentation = triton_proton.add_convert_proton_to_protongpu
-        backends[backend_name].ttgpuir_instrumentation = ttgpuir_func
+
+        backends[backend_name].set_instrumentation({
+            "ttir": triton_proton.add_convert_proton_to_protongpu,
+            "ttgpuir": ttgpuir_func,
+        })
 
         # Set up the profiling allocator
         set_profile_allocator(self.allocator)
@@ -105,9 +106,8 @@ class InstrumentationHook(Hook):
             backend_name = "amd"
         else:
             raise RuntimeError(f"Unsupported backend: {backend}")
-            
-        backends[backend_name].ttir_instrumentation = None
-        backends[backend_name].ttgpuir_instrumentation = None
+
+        backends[backend_name].set_instrumentation({})
 
         set_instrumentation_off()
 

@@ -16,7 +16,7 @@ public:
   }
 
   Value clock(ConversionPatternRewriter &rewriter, Location loc,
-               bool isClock64) const override;
+              bool isClock64) const override;
 
   ~TargetInfo() = default;
 };

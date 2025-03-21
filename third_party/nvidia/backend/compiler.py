@@ -240,7 +240,7 @@ class CUDABackend(BaseBackend):
         return mod
 
     @staticmethod
-    def make_ttgir(mod, metadata, opt, capability):
+    def make_ttgir(mod, metadata, opt, capability, instrumentation):
         cluster_info = nvidia.ClusterInfo()
         if opt.cluster_dims is not None:
             cluster_info.clusterDimX = opt.cluster_dims[0]
@@ -294,13 +294,13 @@ class CUDABackend(BaseBackend):
             nvidia.passes.ttnvgpuir.add_fence_insertion(pm)
             nvidia.passes.ttnvgpuir.add_tma_lowering(pm)
         passes.common.add_canonicalizer(pm)
-        if CUDABackend.ttir_instrumentation is not None:
-            CUDABackend.ttir_instrumentation(pm)
+        if "ttir" in instrumentation:
+            instrumentation["ttir"](pm)
         pm.run(mod)
         metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
         return mod
 
-    def make_llir(self, src, metadata, options, capability):
+    def make_llir(self, src, metadata, options, capability, instrumentation):
         ptx_version = get_ptx_version_from_options(options, self.target.arch)
 
         mod = src
@@ -325,8 +325,8 @@ class CUDABackend(BaseBackend):
         passes.common.add_symbol_dce(pm)
         if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":
             passes.llvmir.add_di_scope(pm)
-        if CUDABackend.ttgpuir_instrumentation is not None:
-            CUDABackend.ttgpuir_instrumentation(pm, options.arch)
+        if "ttgpuir" in instrumentation:
+            instrumentation["ttgpuir"](pm)
         pm.run(mod)
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
         llvm.init_targets()
@@ -437,8 +437,9 @@ class CUDABackend(BaseBackend):
     def add_stages(self, stages, options):
         capability = self._parse_arch(options.arch)
         stages["ttir"] = lambda src, metadata: self.make_ttir(src, metadata, options)
-        stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, capability)
-        stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options, capability)
+        stages["ttgir"] = lambda src, metadata: self.make_ttgir(src, metadata, options, capability, self.instrumentation
+                                                                )
+        stages["llir"] = lambda src, metadata: self.make_llir(src, metadata, options, capability, self.isntrumentation)
         stages["ptx"] = lambda src, metadata: self.make_ptx(src, metadata, options, self.target.arch)
         stages["cubin"] = lambda src, metadata: self.make_cubin(src, metadata, options, self.target.arch)
 

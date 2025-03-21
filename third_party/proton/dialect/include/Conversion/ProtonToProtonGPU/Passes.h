@@ -21,7 +21,6 @@ std::unique_ptr<OperationPass<ModuleOp>> createConvertProtonToProtonGPUPass(
 #define GEN_PASS_REGISTRATION
 #include "proton/dialect/include/Conversion/ProtonToProtonGPU/Passes.h.inc"
 
-
 } // namespace mlir::triton::proton
 
 #endif // PROTON_TO_PROTONGPU_PASSES_H

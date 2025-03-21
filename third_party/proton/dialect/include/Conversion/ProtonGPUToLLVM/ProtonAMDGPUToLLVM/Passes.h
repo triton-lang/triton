@@ -18,12 +18,12 @@ namespace triton::proton::gpu {
 #include "proton/dialect/include/Conversion/ProtonGPUToLLVM/ProtonAMDGPUToLLVM/Passes.h.inc"
 
 std::unique_ptr<OperationPass<ModuleOp>>
-createConvertProtonAMDGPUToLLVMPass(std::string arch="");
+createConvertProtonAMDGPUToLLVMPass(std::string arch = "");
 
 #define GEN_PASS_REGISTRATION
 #include "proton/dialect/include/Conversion/ProtonGPUToLLVM/ProtonAMDGPUToLLVM/Passes.h.inc"
 
-} // namespace triton::proton
+} // namespace triton::proton::gpu
 
 } // namespace mlir
 

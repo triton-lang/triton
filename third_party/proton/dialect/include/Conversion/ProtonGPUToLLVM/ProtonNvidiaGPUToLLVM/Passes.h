@@ -24,7 +24,7 @@ createConvertProtonNvidiaGPUToLLVMPass(int32_t computeCapability = 80,
 #define GEN_PASS_REGISTRATION
 #include "proton/dialect/include/Conversion/ProtonGPUToLLVM/ProtonNvidiaGPUToLLVM/Passes.h.inc"
 
-} // namespace triton::proton
+} // namespace triton::proton::gpu
 
 } // namespace mlir
 
