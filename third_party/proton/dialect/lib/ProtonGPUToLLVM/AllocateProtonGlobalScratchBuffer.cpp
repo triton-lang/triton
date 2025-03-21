@@ -24,8 +24,8 @@ struct AllocateProtonGlobalScratchBuffer
     MLIRContext *ctx = &getContext();
     OpBuilder builder(ctx);
 
-    assert(llvm::range_size(mod.getOps<triton::FuncOp>()) == 1);
-    FuncOp func = *mod.getOps<triton::FuncOp>().begin();
+    assert(llvm::range_size(mod.getOps<FunctionOpInterface>()) == 1);
+    auto func = *mod.getOps<FunctionOpInterface>().begin();
 
     int32_t cumulativeMemorySize = 0; // bytes
     std::vector<uint32_t> Alignments;
