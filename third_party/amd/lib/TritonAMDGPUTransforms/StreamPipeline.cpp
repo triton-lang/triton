@@ -295,6 +295,7 @@ LogicalResult StreamPipeliner::initSchedule(int maxIndirectionLevel) {
 
 bool StreamPipeliner::createAsyncCopy(tt::LoadOp loadOp, Value alloc,
                                       Value extractIdx) {
+  assert(useAsyncCopy);
   // If we have a single buffer we would require another barrier after the
   // local_reads so instead we fall back to pipeline with registers
   if (numBuffers == 1)
@@ -303,18 +304,17 @@ bool StreamPipeliner::createAsyncCopy(tt::LoadOp loadOp, Value alloc,
   OpBuilder builder(forOp);
   builder.setInsertionPoint(loadOp);
   Location loc = loadOp.getLoc();
+
   Value src = loadOp.getPtr();
-  Value mask = loadOp.getMask();
-  Value other = loadOp.getOther();
+  auto srcTy = cast<triton::gpu::TensorOrMemDesc>(src.getType());
 
   ttg::MemDescType allocTy = cast<ttg::MemDescType>(alloc.getType());
   auto sharedEncodingAttr =
       cast<ttg::SwizzledSharedEncodingAttr>(allocTy.getEncoding());
 
-  auto srcTy = dyn_cast<triton::gpu::TensorOrMemDesc>(src.getType());
-  assert(srcTy);
-
-  // Skip if the shared encoding is swizzled or the order is different than src
+  // Skip swizzled shared encodings because they are not supported by the
+  // lowering to llvm
+  // TODO: remove once swizzle async copies are supported
   if (!useAsyncCopy || sharedEncodingAttr.getMaxPhase() != 1 ||
       sharedEncodingAttr.getPerPhase() != 1) {
     return false;
@@ -347,14 +347,14 @@ bool StreamPipeliner::createAsyncCopy(tt::LoadOp loadOp, Value alloc,
   auto newLoadOp = builder.create<ttg::AsyncCopyGlobalToLocalOp>(
       loadOp.getLoc(), src, viewLoad, loadOp.getMask(), loadOp.getOther(),
       loadOp.getCache(), loadOp.getEvict(), loadOp.getIsVolatile());
+  schedule.erase(loadOp);
+  schedule.insert(newLoadOp, stage, cluster);
 
+  // Insert synchronization primitives to create barriers during lowering
   Operation *commit =
       builder.create<ttg::AsyncCommitGroupOp>(loc, newLoadOp->getResult(0));
   ttg::AsyncWaitOp wait =
       builder.create<ttg::AsyncWaitOp>(loc, commit->getResult(0), 0);
-
-  schedule.erase(loadOp);
-  schedule.insert(newLoadOp, stage, cluster);
 
   // If we have 2 buffers we need to place the prefetches (AsyncCopy)
   // after the local_reads and therefore also the AsyncWaits to avoid another
@@ -362,7 +362,7 @@ bool StreamPipeliner::createAsyncCopy(tt::LoadOp loadOp, Value alloc,
   if (numBuffers == 2)
     scheduleOp(newLoadOp, SCHED_LOCAL_STORE);
 
-  // Create local load
+  // Create local load which consumes the async token from the AsyncWait
   auto sharedLoad = builder.create<ttg::LocalLoadOp>(
       loc, loadOp.getType(), viewLoad, wait->getResult(0));
   Value result = sharedLoad.getResult();
@@ -887,12 +887,11 @@ void StreamPipeliner::createStreamOps() {
                                                extractIdx, numBuffersVal);
   extractIdx = builder.create<arith::SelectOp>(loc, cndExt, extractIdx, zero);
 
-  // Rewrite loads to store into LDS
+  // Replace tt.loads with async copies or stream copies
   for (auto &[op, alloc] : loadToAllocs) {
     if (auto loadOp = dyn_cast<tt::LoadOp>(op)) {
-      if (useAsyncCopy && createAsyncCopy(loadOp, alloc, extractIdx)) {
+      if (useAsyncCopy && createAsyncCopy(loadOp, alloc, extractIdx))
         continue;
-      }
       createStreamCopy(loadOp, alloc, extractIdx);
     }
   }
