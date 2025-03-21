@@ -355,7 +355,8 @@ void StreamPipeliner::createStreamCopy(tt::LoadOp loadOp, Value alloc,
 
 // Returns the given |inputValue|'s dot user result encoding and updates |opIdx|
 // with which dot operand |inputValue| is fed into if possible.
-ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue, unsigned *opIdx) {
+static ttg::AMDMfmaEncodingAttr getDotEncoding(Value inputValue,
+                                               unsigned *opIdx) {
   if (!llvm::hasSingleElement(inputValue.getUses()))
     return nullptr;
 
@@ -399,7 +400,7 @@ getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
 
       auto srcTy = cast<ttg::TensorOrMemDesc>(loadedValue.getType());
       auto ctaLayout = ttg::getCTALayout(srcTy.getEncoding());
-      auto order = ttg::getOrder(srcTy);
+      auto order = getOrderForMemory(srcTy);
       unsigned bitWidth = srcTy.getElementType().getIntOrFloatBitWidth();
       SmallVector<unsigned> sharedOrder;
       int rank = order.size();
@@ -430,8 +431,8 @@ getSharedEncIfAllUsersAreDotEnc(Value loadedValue) {
           unsigned vecSize = llEnc.getLinearLayout().getNumConsecutiveInOut();
           LDBG("deduced opIdx: " << opIdx << "; deduced vecSize: " << vecSize);
           tempAttr = dotEnc.composeSharedLayoutForOperand(
-              ctaLayout, opIdx, srcTy.getShape(), sharedOrder, vecSize,
-              bitWidth, /*needTrans=*/false);
+              ctaLayout, opIdx, srcTy.getShape(), order, vecSize, bitWidth,
+              /*needTrans=*/false);
         }
       }
     }

@@ -87,7 +87,7 @@ getValuesFromDotOperandLayoutStruct(ConversionPatternRewriter &rewriter,
   return vals;
 }
 
-static WMMAInstrType getWMMAInstrTypeFromDot(DotOp op) {
+WMMAInstrType getWMMAInstrTypeFromDot(DotOp op) {
   auto aOperandTy = op.getA().getType();
   auto aTensorTy = cast<RankedTensorType>(aOperandTy);
   auto aElemTy = aTensorTy.getElementType();

@@ -252,8 +252,10 @@ struct AsyncRef {
     return createSingleBufferView(b, emptyBars, idx);
   }
   auto getView(ImplicitLocOpBuilder &b, Value idx) const {
-    return std::make_tuple(getValueView(b, idx), getReadyView(b, idx),
-                           getEmptyView(b, idx));
+    auto valView = getValueView(b, idx);
+    auto readyView = getReadyView(b, idx);
+    auto emptyView = getEmptyView(b, idx);
+    return std::make_tuple(valView, readyView, emptyView);
   }
 
   unsigned multiplicitySize;

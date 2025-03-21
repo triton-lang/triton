@@ -26,8 +26,6 @@
 #include "mlir/Analysis/Liveness.h"
 #include "mlir/Pass/Pass.h"
 #include "triton/Analysis/Allocation.h"
-#include "triton/Conversion/TritonGPUToLLVM/Patterns.h"
-#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
