@@ -11,7 +11,7 @@ from typing import Optional
 @requires_tma
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
-@pytest.mark.parametrize("M_BLOCK,N_BLOCK", [(8, 16), (8, 32)])
+@pytest.mark.parametrize("M_BLOCK,N_BLOCK", [(2, 16), (8, 16), (8, 32)])
 def test_tensor_descriptor_load(dtype_str, M_BLOCK, N_BLOCK):
 
     @triton.jit
@@ -53,7 +53,7 @@ def test_tensor_descriptor_load(dtype_str, M_BLOCK, N_BLOCK):
 @requires_tma
 @pytest.mark.interpreter
 @pytest.mark.parametrize("dtype_str", tma_dtypes)
-@pytest.mark.parametrize("M_BLOCK,N_BLOCK", [(8, 16), (8, 32)])
+@pytest.mark.parametrize("M_BLOCK,N_BLOCK", [(2, 16), (8, 16), (8, 32)])
 def test_tensor_descriptor_store(dtype_str, M_BLOCK, N_BLOCK):
 
     @triton.jit

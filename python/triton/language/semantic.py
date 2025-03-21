@@ -1152,25 +1152,9 @@ def reinterpret_tensor_descriptor(desc_ptr: tl.tensor, block_ty: tl.block_type, 
     return tl.tensor_descriptor_base(handle, block_ty)
 
 
-def validate_descriptor_block(shape, dtype):
-    if len(shape) < 2:
-        return
-    elem_bytes = dtype.primitive_bitwidth // 8
-    contig_dim_size = shape[-1] * elem_bytes
-    if contig_dim_size < 32:
-        return
-    # Due to limitations of the shared memory encoding, the TMA bounding box has
-    # to be at least as big as the swizzle tile.
-    assert shape[-2] >= 8, f"tensor descriptor block shape must have at least 8 rows, but got {shape[0]}"
-    min_cols = 32 // elem_bytes
-    assert shape[
-        -1] >= min_cols, f"{dtype} tensor descriptor block shape must have at least {min_cols} columns, but got {shape[1]}"
-
-
 def descriptor_load(desc: tl._experimental_tensor_desciptor_base, offsets, cache_modifier: str, eviction_policy: str,
                     builder: ir.builder) -> tl.tensor:
     assert isinstance(desc, tl.tensor_descriptor_base)
-    validate_descriptor_block(desc.block_shape, desc.dtype)
     ndim = len(desc.block_shape)
     assert len(offsets) == ndim, f"expected {ndim} offsets, but got {len(offsets)}"
 
@@ -1182,7 +1166,6 @@ def descriptor_load(desc: tl._experimental_tensor_desciptor_base, offsets, cache
 
 def descriptor_store(desc: tl.tensor_descriptor_base, value: tl.tensor, offsets, builder: ir.builder) -> tl.tensor:
     assert isinstance(desc, tl.tensor_descriptor_base)
-    validate_descriptor_block(desc.block_shape, desc.dtype)
     ndim = len(desc.block_shape)
     assert len(offsets) == ndim, f"expected {ndim} offsets, but got {len(offsets)}"
     assert value.shape == desc.block_shape

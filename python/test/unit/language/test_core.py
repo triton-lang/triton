@@ -4974,7 +4974,7 @@ def test_tma_load_block_shape_err(device):
 
     @triton.jit
     def kernel(ptr):
-        desc = tl.make_tensor_descriptor(ptr, [128, 128], [128, 1], [1, 32])
+        desc = tl.make_tensor_descriptor(ptr, [128, 128], [128, 1], [1, 2])
         desc.load([0, 0])
 
     input = torch.empty((128, 128), dtype=torch.int32, device=device)
@@ -4982,7 +4982,7 @@ def test_tma_load_block_shape_err(device):
     with pytest.raises(errc) as e:
         kernel[(1, )](input)
 
-    assert "tensor descriptor block shape must have at least 8 rows" in str(e.value.__cause__)
+    assert "Descriptor block shape must have at least 16 bytes" in str(e.value.__cause__)
 
 
 @pytest.mark.interpreter
