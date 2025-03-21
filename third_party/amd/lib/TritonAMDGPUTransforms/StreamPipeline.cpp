@@ -234,11 +234,11 @@ LogicalResult StreamPipeliner::initSchedule(int maxIndirectionLevel) {
   // TODO: Use the precise number of buffers needed by the particular load.
   numBuffers =
       std::max(1, stages[SCHED_LOCAL_LOAD] - stages[SCHED_LOCAL_STORE]);
-
   // If we use AsyncCopy we need one more buffer since we are not using a
   // register buffer
-  if (useAsyncCopy)
-    numBuffers = numStages;
+  if (useAsyncCopy) {
+    numBuffers += 1;
+  }
 
   LDBG("deduced max shared memory buffer number = " << numBuffers);
 
@@ -295,6 +295,11 @@ LogicalResult StreamPipeliner::initSchedule(int maxIndirectionLevel) {
 
 bool StreamPipeliner::createAsyncCopy(tt::LoadOp loadOp, Value alloc,
                                       Value extractIdx) {
+  // If we have a single buffer we would require another barrier after the
+  // local_reads so instead we fall back to pipeline with registers
+  if (numBuffers == 1)
+    return false;
+
   OpBuilder builder(forOp);
   builder.setInsertionPoint(loadOp);
   Location loc = loadOp.getLoc();
@@ -311,8 +316,7 @@ bool StreamPipeliner::createAsyncCopy(tt::LoadOp loadOp, Value alloc,
 
   // Skip if the shared encoding is swizzled or the order is different than src
   if (!useAsyncCopy || sharedEncodingAttr.getMaxPhase() != 1 ||
-      sharedEncodingAttr.getPerPhase() != 1 ||
-      !llvm::equal(sharedEncodingAttr.getOrder(), ttg::getOrder(srcTy))) {
+      sharedEncodingAttr.getPerPhase() != 1) {
     return false;
   }
 
@@ -352,9 +356,10 @@ bool StreamPipeliner::createAsyncCopy(tt::LoadOp loadOp, Value alloc,
   schedule.erase(loadOp);
   schedule.insert(newLoadOp, stage, cluster);
 
-  // For numStages==2 make sure the AsyncCopy (prefetch) is scheduled after the
-  // AsyncWait or otherwise we will require another barrier
-  if (numStages == 2)
+  // If we have 2 buffers we need to place the prefetches (AsyncCopy)
+  // after the local_reads and therefore also the AsyncWaits to avoid another
+  // barrier. This is done by scheduling it as a local_store.
+  if (numBuffers == 2)
     scheduleOp(newLoadOp, SCHED_LOCAL_STORE);
 
   // Create local load
