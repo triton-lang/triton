@@ -72,10 +72,6 @@ class BaseBackend(metaclass=ABCMeta):
         raise NotImplementedError
 
     @abstractmethod
-    def set_instrumentation(self, stages: dict) -> None:
-        self.instrumentation = stages
-
-    @abstractmethod
     def load_dialects(self, context):
         """
         Load additional MLIR dialects into the provided `context`

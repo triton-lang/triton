@@ -74,10 +74,10 @@ class InstrumentationHook(Hook):
         else:
             raise RuntimeError(f"Unsupported backend: {backend}")
 
-        backends[backend_name].set_instrumentation({
+        backends[backend_name].instrumentation = {
             "ttir": triton_proton.add_convert_proton_to_protongpu,
             "ttgpuir": ttgpuir_func,
-        })
+        }
 
         # Set up the profiling allocator
         set_profile_allocator(self.allocator)
@@ -107,7 +107,7 @@ class InstrumentationHook(Hook):
         else:
             raise RuntimeError(f"Unsupported backend: {backend}")
 
-        backends[backend_name].set_instrumentation({})
+        backends[backend_name].instrumentation = {}
 
         set_instrumentation_off()
 
