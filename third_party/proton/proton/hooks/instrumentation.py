@@ -9,8 +9,7 @@ from triton.compiler import LazyDict
 from triton.runtime.jit import JITFunction
 from triton.language import constexpr
 from triton.runtime._allocation import set_profile_allocator, NullAllocator
-from triton.backends.nvidia.compiler import CUDABackend
-from triton.backends.amd.compiler import HIPBackend
+from triton.backends import backends
 
 from .hook import Hook
 from ..flags import set_instrumentation_on, set_instrumentation_off
@@ -68,13 +67,16 @@ class InstrumentationHook(Hook):
 
         backend = triton.runtime.driver.active.get_current_target().backend
         if backend == "cuda":
-            CUDABackend.ttir_instrumentation = triton_proton.add_convert_proton_to_protongpu
-            CUDABackend.ttgpuir_instrumentation = triton_proton.add_convert_proton_nvidia_gpu_to_llvm
+            backend_name = "nvidia"
+            ttgpuir_func = triton_proton.add_convert_proton_nvidia_gpu_to_llvm
         elif backend == "hip":
-            HIPBackend.ttir_instrumentation = triton_proton.add_convert_proton_amd_to_llvm
-            HIPBackend.ttgpuir_instrumentation = triton_proton.add_convert_proton_amd_gpu_to_llvm
+            backend_name = "amd"
+            ttgpuir_func = triton_proton.add_convert_proton_amd_gpu_to_llvm
         else:
             raise RuntimeError(f"Unsupported backend: {backend}")
+            
+        backends[backend_name].ttir_instrumentation = triton_proton.add_convert_proton_to_proton
+        backends[backend_name].ttgpuir_instrumentation = ttgpuir_func
 
         # Set up the profiling allocator
         set_profile_allocator(self.allocator)
@@ -85,7 +87,7 @@ class InstrumentationHook(Hook):
 
         @functools.wraps(original_run)
         def instrumented_run(self, *args, **kwargs):
-            kwargs["instrumentation_mode"] = constexpr(mode)
+            kwargs["instrumentation_mode"] = mode
             return original_run(self, *args, **kwargs)
 
         JITFunction.run = instrumented_run
@@ -98,13 +100,14 @@ class InstrumentationHook(Hook):
 
         backend = triton.runtime.driver.active.get_current_target().backend
         if backend == "cuda":
-            CUDABackend.ttir_instrumentation = None
-            CUDABackend.ttgpuir_instrumentation = None
+            backend_name = "nvidia"
         elif backend == "hip":
-            HIPBackend.ttir_instrumentation = None
-            HIPBackend.ttgpuir_instrumentation = None
+            backend_name = "amd"
         else:
             raise RuntimeError(f"Unsupported backend: {backend}")
+            
+        backends[backend_name].ttir_instrumentation = None
+        backends[backend_name].ttgpuir_instrumentation = None
 
         set_instrumentation_off()
 
