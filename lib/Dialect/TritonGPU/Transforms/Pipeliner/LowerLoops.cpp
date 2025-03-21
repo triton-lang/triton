@@ -714,12 +714,12 @@ Value subviewTMADescriptor(BuilderT &builder, Location loc, Value alloc,
 LogicalResult rewriteTMABufferUpdates(
     scf::ForOp forOp,
     const llvm::MapVector<Operation *, Value> &tmaBufferMapping,
-    ArrayRef<BlockArgument> tmaCounters, int numStages, Value one, Value zero,
+    ArrayRef<BlockArgument> tmaCounters, int numBuffers, Value one, Value zero,
     CoarseSchedule &schedule) {
   assert(tmaBufferMapping.size() == tmaCounters.size());
 
-  Value numStagesVal = mlir::OpBuilder(forOp).create<arith::ConstantIntOp>(
-      forOp.getLoc(), numStages, 32);
+  Value numBuffersVal = mlir::OpBuilder(forOp).create<arith::ConstantIntOp>(
+      forOp.getLoc(), numBuffers, 32);
 
   for (auto [iOp, pair] : llvm::enumerate(tmaBufferMapping)) {
     auto &[op, alloc] = pair;
@@ -744,7 +744,7 @@ LogicalResult rewriteTMABufferUpdates(
 
     // Increment the buffer index counter
     Value nextCounter = createIncrementModulo(stageBuilder, loc, counter,
-                                              numStagesVal, zero, one);
+                                              numBuffersVal, zero, one);
 
     // If we are in a (potentially nested) if region, propagate the counter
     // up to the main for op body scope
@@ -836,8 +836,7 @@ scf::ForOp lowerTMADescriptors(scf::ForOp forOp, CoarseSchedule &schedule) {
   }
 
   if (failed(rewriteTMABufferUpdates(newForOp, tmaBufferMapping, tmaCounters,
-                                     schedule.getNumStages(), one, zero,
-                                     schedule))) {
+                                     maxStage, one, zero, schedule))) {
     llvm_unreachable("Failed to rewrite TMA ops");
   }
   return newForOp;
@@ -908,7 +907,11 @@ void createBarrierAndWaitOps(scf::ForOp forOp, CoarseSchedule &schedule,
   bool addedWaitInMMABlock = false;
   for (auto user : alloc->getUsers()) {
     if (auto load = dyn_cast<ttng::TMEMLoadOp>(user)) {
-      if (!forOp->isAncestor(load)) {
+      int waitStage = schedule[mma].first + numStages - 1;
+      if (!forOp->isAncestor(load) ||
+          // If the load is in the same stage as the mma wait, no need to add
+          // a new wait.
+          schedule[load].first == waitStage) {
         continue;
       }
       // Put the wait in the same stage as the load

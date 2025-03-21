@@ -515,7 +515,8 @@ struct TCGen5MMAScaledOpConversion
                                            : aTensorTy.getElementTypeBitWidth();
     int numBitsPerElementB = opKindIsMXFP4 ? getFormatBitSize(op.getBType())
                                            : bTensorTy.getElementTypeBitWidth();
-    unsigned int K = (aTensorTy.getDimSize(1) * 8) / numBitsPerElementA;
+    unsigned int K =
+        (aTensorTy.getDimSize(1) * 8) / getFormatBitSize(op.getAType());
 
     // Get MMA size based on acc layout.
     auto tensorMemAttr = cast<triton::nvidia_gpu::TensorMemoryEncodingAttr>(
