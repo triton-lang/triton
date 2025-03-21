@@ -59,7 +59,7 @@ createTargetMachine(llvm::Module *module, std::string proc,
   opt.MCOptions.AsmVerbose = true;
   opt.MCOptions.PreserveAsmComments = true;
   std::unique_ptr<llvm::TargetMachine> machine{target->createTargetMachine(
-      module->getTargetTriple(), proc, features, opt, llvm::Reloc::PIC_,
+      module->getTargetTriple().str(), proc, features, opt, llvm::Reloc::PIC_,
       std::nullopt,
       disableLLVMOpt ? llvm::CodeGenOptLevel::None
                      : llvm::CodeGenOptLevel::Aggressive)};
