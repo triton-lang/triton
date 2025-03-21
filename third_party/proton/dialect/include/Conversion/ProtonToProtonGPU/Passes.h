@@ -13,7 +13,7 @@ namespace mlir::triton::proton {
 
 std::unique_ptr<OperationPass<ModuleOp>> createConvertProtonToProtonGPUPass(
     std::string metric = "cycle", std::string granularity = "warpgroup",
-    int32_t maxSharedMem = 0, int32_t scratchMem = 32768,
+    int32_t maxSharedMem = 32768, int32_t scratchMem = 32768,
     int32_t alignment = 128, std::string strategy = "circular",
     std::string bufferType = "shared_mem", int32_t bufferSize = 0);
 
