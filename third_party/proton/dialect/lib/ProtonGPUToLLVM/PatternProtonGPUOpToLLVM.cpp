@@ -1,5 +1,6 @@
 #include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/PatternProtonGPUOpToLLVM.h"
 #include "Conversion/ProtonGPUToLLVM/TargetInfoBase.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/IR/PatternMatch.h"
@@ -22,7 +23,10 @@ struct CircularStoreOpConversion
   LogicalResult
   matchAndRewrite(mlir::triton::proton::gpu::CircularStoreOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.eraseOp(op);
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto zero = b.i32_val(0);
+    rewriter.replaceOp(op, zero.getDefiningOp());
     return success();
   }
 
@@ -42,7 +46,10 @@ struct InitBufferIndexOpConversion
   LogicalResult
   matchAndRewrite(mlir::triton::proton::gpu::InitBufferIndexOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.eraseOp(op);
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto zero = b.i32_val(0);
+    rewriter.replaceOp(op, zero.getDefiningOp());
     return success();
   }
 
@@ -62,7 +69,10 @@ struct ReadCounterOpConversion
   LogicalResult
   matchAndRewrite(mlir::triton::proton::gpu::ReadCounterOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    rewriter.eraseOp(op);
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    auto zero = b.i32_val(0);
+    rewriter.replaceOp(op, zero.getDefiningOp());
     return success();
   }
 protected:
@@ -86,7 +96,7 @@ struct FinalizeOpConversion
   }
 protected:
   const proton::gpu::TargetInfoBase &targetInfo;
-    };
+};
 
 }
 
