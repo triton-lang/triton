@@ -16,9 +16,9 @@ using namespace mlir;
 namespace ttg = triton::gpu;
 
 // On gfx9 global and buffer loads directly to shared memory need to write
-// coalesced. This pass converts the layout of the src, mask and other to ensure
-// the owned data per thread is contigious and does no exceed the supported
-// load vector size to ensure coalesed writes
+// coalesced. This pattern converts the layout of the src, mask and other to
+// ensure the owned data per thread is contigious and does no exceed the
+// supported load vector size to ensure coalesed writes
 struct CoalesceAsyncCopyWrites
     : public OpRewritePattern<ttg::AsyncCopyGlobalToLocalOp> {
   CoalesceAsyncCopyWrites(const triton::AMD::TargetInfo &targetInfo,
@@ -86,6 +86,7 @@ struct CoalesceAsyncCopyWrites
 
     // Get new blocked encoding with loadContig as sizePerThread in the fastest
     // dim
+    assert(blockedContig >= loadContig);
     contigPerThread[blockedEnc.getOrder()[0]] = loadContig;
     int numWarps = triton::gpu::lookupNumWarps(copyOp);
     auto mod = copyOp->getParentOfType<ModuleOp>();
@@ -131,8 +132,8 @@ class TritonAMDGPUCoalesceAsyncCopyPass
     : public TritonAMDGPUCoalesceAsyncCopyBase<
           TritonAMDGPUCoalesceAsyncCopyPass> {
 public:
-  TritonAMDGPUCoalesceAsyncCopyPass(std::string archGenName) {
-    this->archGenerationName = std::move(archGenName);
+  TritonAMDGPUCoalesceAsyncCopyPass(StringRef archGenName) {
+    this->archGenerationName = archGenName.str();
   }
 
   void runOnOperation() override {
