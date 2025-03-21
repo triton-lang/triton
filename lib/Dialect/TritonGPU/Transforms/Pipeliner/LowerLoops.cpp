@@ -681,7 +681,7 @@ scf::ForOp lowerLoads(scf::ForOp forOp, CoarseSchedule &schedule) {
 LogicalResult
 allocTMABuffers(scf::ForOp forOp,
                 llvm::MapVector<Operation *, Value> &tmaBufferMapping,
-                int numStages) {
+                int maxStage) {
   IRRewriter rewriter(forOp);
 
   // Create a multi-buffered allocation for each MakeTensorDescOp call in the
@@ -693,7 +693,7 @@ allocTMABuffers(scf::ForOp forOp,
     auto loc = op.getLoc();
     Value alloc = rewriter.create<triton::gpu::GlobalScratchAllocOp>(
         loc, triton::getPointerType(rewriter.getI8Type()),
-        numStages * ttng::TMA_SIZE_BYTES, ttng::TMA_ALIGN);
+        maxStage * ttng::TMA_SIZE_BYTES, ttng::TMA_ALIGN);
     tmaBufferMapping[op.getOperation()] = alloc;
   });
   return success();
@@ -792,8 +792,17 @@ LogicalResult rewriteTMABufferUpdates(
 
 scf::ForOp lowerTMADescriptors(scf::ForOp forOp, CoarseSchedule &schedule) {
   llvm::MapVector<Operation *, Value> tmaBufferMapping;
-  if (failed(
-          allocTMABuffers(forOp, tmaBufferMapping, schedule.getNumStages()))) {
+  int maxStage = schedule.getNumStages() - 1;
+  for (auto &op : forOp.getBody()->without_terminator()) {
+    if (auto wgMmaOp = dyn_cast<ttng::WarpGroupDotOp>(&op)) {
+      // Hopper only: Add one more buffer slice if there is a WarpGroupDotOp,
+      // as if it will be pipelined, we will effectively make the pipeline
+      // one stage longer.
+      maxStage += 1;
+      break;
+    }
+  }
+  if (failed(allocTMABuffers(forOp, tmaBufferMapping, maxStage))) {
     llvm_unreachable("TMA pipelining failed");
   }
 
