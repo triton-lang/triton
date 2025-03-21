@@ -511,10 +511,12 @@ struct TCGen5MMAScaledOpConversion
 
     unsigned int M = dTensorTy.getDimSize(0);
     unsigned int N = dTensorTy.getDimSize(1);
-    int numBitsPerElementA = opKindIsMXFP4 ? getFormatBitSize(op.getAType())
-                                           : aTensorTy.getElementTypeBitWidth();
-    int numBitsPerElementB = opKindIsMXFP4 ? getFormatBitSize(op.getBType())
-                                           : bTensorTy.getElementTypeBitWidth();
+    int numBitsUnpackedPerElementA = opKindIsMXFP4
+                                         ? getFormatBitSize(op.getAType())
+                                         : aTensorTy.getElementTypeBitWidth();
+    int numBitsUnpackedPerElementB = opKindIsMXFP4
+                                         ? getFormatBitSize(op.getBType())
+                                         : bTensorTy.getElementTypeBitWidth();
     unsigned int K =
         (aTensorTy.getDimSize(1) * 8) / getFormatBitSize(op.getAType());
 
@@ -547,12 +549,12 @@ struct TCGen5MMAScaledOpConversion
     } else {
       aLoader = std::make_unique<DotOpMmaV3SmemLoader>(
           op.getA(), baseA, shapeA, shapeA, zero, 1, transA, aOperandShape,
-          numBitsPerElementA, rewriter, loc);
+          numBitsUnpackedPerElementA, rewriter, loc);
     }
     DotOpMmaV3SmemLoader bLoader =
         DotOpMmaV3SmemLoader(op.getB(), baseB, shapeB, shapeB, zero, 1, transB,
                              {(unsigned)mmaSizeN, (unsigned)mmaSizeK},
-                             numBitsPerElementB, rewriter, loc);
+                             numBitsUnpackedPerElementB, rewriter, loc);
 
     // Only run mma on one thread. We currently use elect as ptxas is not able
     // to detect that tid.x == 0 is true only for 1 thread.
