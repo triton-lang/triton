@@ -405,6 +405,9 @@ LogicalResult triton::gpu::specializeLoadMMADependencies(scf::ForOp &loop,
       userPartition->insert(op);
       llvm::append_range(accUses, op->getUsers());
     }
+
+    // Place the epilogue partition in the default warpgroup.
+    schedule.reorderPartitions({2, 1, 0});
   }
 
   // Update the reset of the accumulator in the loop if it is multi-buffered.

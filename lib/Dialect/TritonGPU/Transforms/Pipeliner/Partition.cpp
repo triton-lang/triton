@@ -87,6 +87,19 @@ WarpSchedule::Partition *WarpSchedule::addPartition(unsigned stage) {
   return partitions.back().get();
 }
 
+void WarpSchedule::reorderPartitions(ArrayRef<unsigned> order) {
+  assert(order.size() == partitions.size());
+  assert(DenseSet<unsigned>(order.begin(), order.end()).size() == order.size());
+
+  SmallVector<std::unique_ptr<Partition>> newPartitions(partitions.size());
+  for (auto [i, order] : llvm::enumerate(order)) {
+    assert(order < partitions.size());
+    newPartitions[order] = std::move(partitions[i]);
+    newPartitions[order]->setIndex(order);
+  }
+  partitions = std::move(newPartitions);
+}
+
 WarpSchedule::Partition *WarpSchedule::getPartition(Operation *op) {
   return opToPartition.at(op);
 }
