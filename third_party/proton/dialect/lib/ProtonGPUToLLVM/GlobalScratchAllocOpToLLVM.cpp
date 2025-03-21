@@ -25,18 +25,14 @@ struct GlobalScratchAllocOpConversion
   matchAndRewrite(proton::gpu::GlobalScratchAllocOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     auto funcOp = op->getParentOfType<LLVM::LLVMFuncOp>();
-    auto ctx = funcOp->getContext();
-    auto loc = funcOp.getLoc();
+    auto loc = op.getLoc();
     auto b = TritonLLVMOpBuilder(loc, rewriter);
-    auto gmemBase = funcOp.getArgument(funcOp.getNumArguments() - 1);
-    auto llvmPointerType = LLVM::LLVMPointerType::get(ctx);
+    auto zero = b.i32_val(0);
+    rewriter.replaceOp(op, zero.getDefiningOp());
     funcOp->setAttr("ttg.profile_scratch_memory_size",
                     rewriter.getI32IntegerAttr(1));
     funcOp->setAttr("ttg.profile_scratch_memory_alignment",
                     rewriter.getI32IntegerAttr(1));
-    rewriter.replaceOpWithNewOp<LLVM::GEPOp>(
-        op, llvmPointerType, llvmPointerType, gmemBase, b.i32_val(0));
-
     return success();
   }
 };
