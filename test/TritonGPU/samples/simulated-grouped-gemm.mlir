@@ -13,6 +13,7 @@
 // To regenerate this test case, run `make golden-samples` in the triton root directory
 // RUN: triton-opt %s -tritongpu-pipeline -canonicalize | FileCheck --dump-input-context=50 %s
 #nvmma_128 = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+
 // CHECK-LABEL:   tt.func public @matmul_kernel_descriptor_persistent(
 // CHECK-SAME:  %[[VAL_0:.*]]: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %[[VAL_1:.*]]: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %[[VAL_2:.*]]: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %[[VAL_3:.*]]: i32 {tt.divisibility = 16 : i32}, %[[VAL_4:.*]]: i32 {tt.divisibility = 16 : i32}, %[[VAL_5:.*]]: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
 // CHECK:           %[[VAL_6:.*]] = arith.constant 2 : i64

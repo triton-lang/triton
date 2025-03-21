@@ -15,6 +15,7 @@
 // RUN: triton-opt %s -tritongpu-pipeline -canonicalize | FileCheck --dump-input-context=51 %s
 
 #shared = #ttg.nvmma_shared<{swizzlingByteWidth = 128, transposed = false, elementBitWidth = 16}>
+
 // CHECK-LABEL:   tt.func public @matmul_kernel_with_descriptors(
 // CHECK-SAME:  %[[VAL_0:.*]]: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %[[VAL_1:.*]]: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %[[VAL_2:.*]]: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %[[VAL_3:.*]]: i32 {tt.divisibility = 16 : i32}, %[[VAL_4:.*]]: i32 {tt.divisibility = 16 : i32}, %[[VAL_5:.*]]: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
 // CHECK:           %[[VAL_6:.*]] = arith.constant 3 : i32
