@@ -8,11 +8,15 @@
 #include "third_party/proton/dialect/include/Dialect/ProtonGPU/IR/Dialect.h"
 
 namespace mlir::triton {
-namespace proton {
+namespace proton::gpu {
 void populateProtonGPUOpPatterns(LLVMTypeConverter &typeConverter,
                                  RewritePatternSet &patterns,
                                  const TargetInfoBase &targetInfo,
-                                 PatternBenefit benefit) {}
+                                 PatternBenefit benefit) {
+  populateGlobalScratchAllocOpToLLVMPattern(typeConverter, patterns, targetInfo,
+                                            benefit);
+  populateRecordOpToLLVMPattern(typeConverter, patterns, targetInfo, benefit);
+}
 
-} // namespace proton
+} // namespace proton::gpu
 } // namespace mlir::triton

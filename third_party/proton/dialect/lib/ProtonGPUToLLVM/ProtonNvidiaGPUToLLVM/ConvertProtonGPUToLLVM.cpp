@@ -35,12 +35,12 @@ struct ConvertProtonNvidiaGPUToLLVM
     auto tritonTargetInfo =
         mlir::triton::NVIDIA::TargetInfo(computeCapability, ptxVersion);
     auto protonTargetInfo =
-        mlir::triton::proton::NVIDIA::TargetInfo(tritonTargetInfo);
+        mlir::triton::proton::gpu::NVIDIA::TargetInfo(tritonTargetInfo);
     mlir::LowerToLLVMOptions option(context);
     TritonGPUToLLVMTypeConverter typeConverter(context, option,
                                                tritonTargetInfo);
-    mlir::triton::proton::populateProtonGPUOpPatterns(typeConverter, patterns,
-                                                      protonTargetInfo, 1);
+    mlir::triton::proton::gpu::populateProtonGPUOpPatterns(
+        typeConverter, patterns, protonTargetInfo, 1);
     if (failed(
             mlir::applyPatternsGreedily(getOperation(), std::move(patterns)))) {
       signalPassFailure();

@@ -138,7 +138,7 @@ class CUDAOptions:
     backend_name: str = 'cuda'
     sanitize_overflow: bool = True
     arch: str = None
-    instrumentation_mode: str = "none"
+    instrumentation_mode: str = ""
 
     def __post_init__(self):
         default_libdir = Path(__file__).parent / 'lib'
@@ -157,6 +157,8 @@ class CUDAOptions:
 
 
 class CUDABackend(BaseBackend):
+    ttir_instrumentation = None
+    ttgpuir_instrumentation = None
 
     @staticmethod
     def supports_target(target: GPUTarget):
@@ -292,6 +294,8 @@ class CUDABackend(BaseBackend):
             nvidia.passes.ttnvgpuir.add_fence_insertion(pm)
             nvidia.passes.ttnvgpuir.add_tma_lowering(pm)
         passes.common.add_canonicalizer(pm)
+        if CUDABackend.ttir_instrumentation is not None:
+            CUDABackend.ttir_instrumentation(pm)
         pm.run(mod)
         metadata["cluster_dims"] = (cluster_info.clusterDimX, cluster_info.clusterDimY, cluster_info.clusterDimZ)
         return mod
@@ -321,6 +325,8 @@ class CUDABackend(BaseBackend):
         passes.common.add_symbol_dce(pm)
         if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":
             passes.llvmir.add_di_scope(pm)
+        if CUDABackend.ttgpuir_instrumentation is not None:
+            CUDABackend.ttgpuir_instrumentation(pm, options.arch)
         pm.run(mod)
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
         llvm.init_targets()

@@ -4,7 +4,6 @@ add_triton_library(ProtonGPUToLLVM
     GlobalScratchAllocOpToLLVM.cpp
     PatternProtonGPUOpToLLVM.cpp
     RecordOpToLLVM.cpp
-    TargetInfoBase.cpp
 
     DEPENDS
     ProtonGPUConversionPassIncGen

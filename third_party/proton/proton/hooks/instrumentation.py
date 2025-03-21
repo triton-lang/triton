@@ -1,6 +1,7 @@
 import functools
 from typing import Dict, List, Optional, Tuple, Any
 
+import triton
 from triton._C.libtriton import ir
 from triton._C.libtriton import proton as triton_proton
 from triton._C.libproton import proton as libproton
@@ -8,6 +9,8 @@ from triton.compiler import LazyDict
 from triton.runtime.jit import JITFunction
 from triton.language import constexpr
 from triton.runtime._allocation import set_profile_allocator, NullAllocator
+from triton.backends.nvidia.compiler import CUDABackend
+from triton.backends.amd.compiler import HIPBackend
 
 from .hook import Hook
 from ..flags import set_instrumentation_on, set_instrumentation_off
@@ -62,6 +65,17 @@ class InstrumentationHook(Hook):
         InstrumentationHook.active_count += 1
 
         set_instrumentation_on()
+
+        backend = triton.runtime.driver.active.get_current_target().backend
+        if backend == "cuda":
+            CUDABackend.ttir_instrumentation = triton_proton.add_convert_proton_to_protongpu
+            CUDABackend.ttgpuir_instrumentation = triton_proton.add_convert_proton_nvidia_gpu_to_llvm
+        elif backend == "hip":
+            HIPBackend.ttir_instrumentation = triton_proton.add_convert_proton_amd_to_llvm
+            HIPBackend.ttgpuir_instrumentation = triton_proton.add_convert_proton_amd_gpu_to_llvm
+        else:
+            raise RuntimeError(f"Unsupported backend: {backend}")
+
         # Set up the profiling allocator
         set_profile_allocator(self.allocator)
 
@@ -71,7 +85,7 @@ class InstrumentationHook(Hook):
 
         @functools.wraps(original_run)
         def instrumented_run(self, *args, **kwargs):
-            kwargs["instrumentation"] = constexpr(mode)
+            kwargs["instrumentation_mode"] = constexpr(mode)
             return original_run(self, *args, **kwargs)
 
         JITFunction.run = instrumented_run
@@ -81,6 +95,16 @@ class InstrumentationHook(Hook):
             return
 
         InstrumentationHook.active_count -= 1
+
+        backend = triton.runtime.driver.active.get_current_target().backend
+        if backend == "cuda":
+            CUDABackend.ttir_instrumentation = None
+            CUDABackend.ttgpuir_instrumentation = None
+        elif backend == "hip":
+            HIPBackend.ttir_instrumentation = None
+            HIPBackend.ttgpuir_instrumentation = None
+        else:
+            raise RuntimeError(f"Unsupported backend: {backend}")
 
         set_instrumentation_off()
 

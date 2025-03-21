@@ -2,15 +2,15 @@
 #include "mlir/Conversion/LLVMCommon/Pattern.h"
 #include "mlir/IR/PatternMatch.h"
 #include "third_party/proton/dialect/include/Dialect/Proton/IR/Dialect.h"
-#include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "Conversion/ProtonGPUToLLVM/TargetInfoBase.h"
 
 namespace {
 
 struct RecordOpConversion
     : public ConvertOpToLLVMPattern<mlir::triton::proton::RecordOp> {
   explicit RecordOpConversion(LLVMTypeConverter &typeConverter,
-                              const TargetInfoBase &targetInfo,
+                              const proton::gpu::TargetInfoBase &targetInfo,
                               PatternBenefit benefit)
       : mlir::ConvertOpToLLVMPattern<mlir::triton::proton::RecordOp>(
             typeConverter, benefit),
@@ -24,12 +24,12 @@ struct RecordOpConversion
   }
 
 protected:
-  const TargetInfoBase &targetInfo;
+  const proton::gpu::TargetInfoBase &targetInfo;
 };
 
 } // namespace
 
-void mlir::triton::proton::populateRecordOpToLLVMPattern(
+void mlir::triton::proton::gpu::populateRecordOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     const TargetInfoBase &targetInfo, PatternBenefit benefit) {
   patterns.add<RecordOpConversion>(typeConverter, targetInfo, benefit);

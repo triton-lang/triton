@@ -44,7 +44,7 @@ class HIPOptions:
     allow_flush_denorm: bool = False
     max_num_imprecise_acc_default: int = 0
     backend_name: str = 'hip'
-    instrumentation_mode: str = 'none'
+    instrumentation_mode: str = ""
 
     # The following option provides hints to the AMDGPU backend regarding instruction scheduling
     # for all `tt.dot` operations in a kernel. The "none" variant preserves the default
@@ -93,6 +93,8 @@ class HIPOptions:
 
 
 class HIPBackend(BaseBackend):
+    ttir_instrumentation = None
+    ttgpuir_instrumentation = None
 
     @staticmethod
     def supports_target(target: GPUTarget):
@@ -274,6 +276,8 @@ class HIPBackend(BaseBackend):
         passes.common.add_canonicalizer(pm)
         passes.common.add_cse(pm)
         passes.common.add_symbol_dce(pm)
+        if HIPBackend.ttir_instrumentation:
+            HIPBackend.ttir_instrumentation(pm)
         pm.run(mod)
         return mod
 
@@ -317,6 +321,8 @@ class HIPBackend(BaseBackend):
         if os.environ.get("TRITON_DISABLE_LINE_INFO", "0") == "0":
             passes.llvmir.add_di_scope(pm)
         amd.passes.ttgpuir.add_builtin_func_to_llvmir(pm, __HIP_FTZ)
+        if HIPBackend.ttgpuir_instrumentation:
+            HIPBackend.ttgpuir_instrumentation(pm, options.arch)
         pm.run(mod)
 
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)

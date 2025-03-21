@@ -5,7 +5,7 @@
 #include "mlir/Pass/Pass.h"
 #include "third_party/proton/dialect/include/Conversion/ProtonGPUToLLVM/Passes.h"
 #include "third_party/proton/dialect/include/Dialect/Proton/IR/Dialect.h"
-#include "triton/Conversion/TritonGPUToLLVM/TargetInfoBase.h"
+#include "Conversion/ProtonGPUToLLVM/TargetInfoBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -46,7 +46,7 @@ struct GlobalScratchAllocOpConversion
 
 } // namespace
 
-void mlir::triton::proton::populateGlobalScratchAllocOpToLLVMPattern(
+void mlir::triton::proton::gpu::populateGlobalScratchAllocOpToLLVMPattern(
     LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
     const TargetInfoBase &targetInfo, PatternBenefit benefit) {
   patterns.add<GlobalScratchAllocOpConversion>(typeConverter, benefit);

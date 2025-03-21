@@ -2,10 +2,10 @@
 #define PROTONGPU_TO_LLVM_RECORDOP_TO_LLVM_H
 
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "Conversion/ProtonGPUToLLVM/TargetInfoBase.h"
 
 namespace mlir::triton {
-class TargetInfoBase;
-namespace proton {
+namespace proton::gpu {
 
 void populateRecordOpToLLVMPattern(LLVMTypeConverter &typeConverter,
                                    RewritePatternSet &patterns,

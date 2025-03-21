@@ -29,12 +29,12 @@ struct ConvertProtonAMDGPUToLLVM
     ModuleOp mod = getOperation();
     auto tritonTargetInfo = mlir::triton::AMD::TargetInfo(arch);
     auto protonTargetInfo =
-        mlir::triton::proton::AMD::TargetInfo(tritonTargetInfo);
+        mlir::triton::proton::gpu::AMD::TargetInfo(tritonTargetInfo);
     mlir::LowerToLLVMOptions option(context);
     TritonGPUToLLVMTypeConverter typeConverter(context, option,
                                                tritonTargetInfo);
-    mlir::triton::proton::populateProtonGPUOpPatterns(typeConverter, patterns,
-                                                      protonTargetInfo, 1);
+    mlir::triton::proton::gpu::populateProtonGPUOpPatterns(
+        typeConverter, patterns, protonTargetInfo, 1);
     if (failed(
             mlir::applyPatternsGreedily(getOperation(), std::move(patterns)))) {
       signalPassFailure();
