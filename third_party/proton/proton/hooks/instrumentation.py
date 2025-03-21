@@ -67,7 +67,8 @@ class InstrumentationHook(Hook):
         backend = triton.runtime.driver.active.get_current_target().backend
 
         def passes(pm, backend_pass):
-            triton_proton.add_allocate_proton_shared_memory(pm)
+            # TODO(Keren): Confirm if proton shared memory allocation is needed
+            #triton_proton.add_allocate_proton_shared_memory(pm)
             triton_proton.add_allocate_proton_global_scratch_buffer(pm)
             backend_pass(pm)
 
