@@ -8,9 +8,17 @@ import re
 
 from utils.benchmark_utils import get_available_models, get_model_configs
 
+# TODO: Make this an argument, Benchmarking, testing code and kernel helper need to change for it.
+SCALE_BLOCK_SIZE = 128
+
 
 @triton.autotune(
     configs=[
+        triton.Config(
+            {
+                'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 128, 'GROUP_SIZE_M': 4, 'waves_per_eu': 2,
+                'kpack': 2, 'matrix_instr_nonkdim': 16
+            }, num_warps=4, num_stages=2),
         triton.Config(
             {
                 'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 4, 'waves_per_eu': 2,
@@ -60,7 +68,13 @@ def matmul_kernel(
     stride_cn,
     a_scale_ptr,
     b_scale_ptr,
+    stride_ascale_m,
+    stride_ascale_k,
+    stride_bscale_k,
+    stride_bscale_n,
     # Meta-parameters
+    GROUP_K: tl.constexpr,
+    GROUP_N: tl.constexpr,
     BLOCK_SIZE_M: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr,
     BLOCK_SIZE_K: tl.constexpr,
@@ -76,12 +90,19 @@ def matmul_kernel(
 
     NUM_XCDS: tl.constexpr = 8
 
+    tl.static_assert(((APPLY_SCALE is None) or (APPLY_SCALE == 'tensor')) or (APPLY_SCALE == 'block'),
+                     f"Scaling mode {APPLY_SCALE} is not supported!!!")
+
     tl.assume(stride_am > 0)
     tl.assume(stride_ak > 0)
     tl.assume(stride_bk > 0)
     tl.assume(stride_bn > 0)
     tl.assume(stride_cm > 0)
     tl.assume(stride_cn > 0)
+    tl.assume(stride_ascale_m > 0)
+    tl.assume(stride_ascale_k > 0)
+    tl.assume(stride_bscale_k > 0)
+    tl.assume(stride_bscale_n > 0)
 
     # -----------------------------------------------------------
     # Map program ids `pid` to the block of C it should compute.
@@ -132,9 +153,16 @@ def matmul_kernel(
     offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
-    if APPLY_SCALE:
-        a_scale = tl.load(a_scale_ptr) if (a_scale_ptr) else 1.0
+    if APPLY_SCALE == 'tensor':
+        a_scale = tl.load(a_scale_ptr) if a_scale_ptr else 1.0
         b_scale = tl.load(b_scale_ptr)
+    elif APPLY_SCALE == 'block':
+        k_start = 0
+        offs_ks = k_start // GROUP_K
+        a_scale_ptrs = None if a_scale_ptr is None else (a_scale_ptr + offs_am * stride_ascale_m +
+                                                         offs_ks * stride_ascale_k)
+        offs_bsn = offs_bn // GROUP_N
+        b_scale_ptrs = b_scale_ptr + offs_bsn * stride_bscale_n + offs_ks * stride_bscale_k
 
     acc_dtype = tl.float32 if c_ptr.type.element_ty != tl.int8 else tl.int32
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=acc_dtype)
@@ -148,15 +176,37 @@ def matmul_kernel(
         else:
             a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
             b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
+
+        if APPLY_SCALE == 'block':
+            b_scale = tl.load(b_scale_ptrs)
+            if a_scale_ptrs is not None:
+                a_scale = tl.load(a_scale_ptrs)
+
         # Type conversion to support mixed precision GEMMs where b is lower precision than a
         b = b.to(a_ptr.type.element_ty)
-        accumulator += tl.dot(a, b, input_precision="ieee")
+
+        if APPLY_SCALE == 'block':
+            if a_scale_ptrs is not None:
+                accumulator += tl.dot(a, b, input_precision="ieee") * a_scale[:, None] * b_scale[None, :]
+            else:
+                accumulator += tl.dot(a, b, input_precision="ieee") * b_scale[None, :]
+        else:
+            accumulator += tl.dot(a, b, input_precision="ieee")
 
         # Advance the ptrs to the next K block.
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
+
+        if APPLY_SCALE == 'block':
+            k_cur = k * BLOCK_SIZE_K // GROUP_K
+            k_nxt = (k + 1) * BLOCK_SIZE_K // GROUP_K
+            offs_ks = k_nxt - k_cur
+            b_scale_ptrs += offs_ks * stride_bscale_k
+            if a_scale_ptrs is not None:
+                a_scale_ptrs += offs_ks * stride_ascale_k
+
     # Apply scale to recover dynamic range reduced due to lower precision inputs.
-    if APPLY_SCALE:
+    if APPLY_SCALE == 'tensor':
         accumulator = accumulator * a_scale * b_scale
     # Apply activation function, if specified.
     # TODO(vgokhale): Add different types of activations.
@@ -180,13 +230,14 @@ def leaky_relu(x):
 
 
 # Wrapper for gemm kernel.
-def matmul(a, b, c, a_scale, b_scale, scale_a8_b8=False, activation=""):
+def matmul(a, b, c, a_scale, b_scale, scale_a8_b8=None, activation=""):
     # Check constraints.
     assert a.shape[1] == b.shape[0], "Incompatible dimensions!!!"
     assert (a.element_size()
             >= b.element_size()), "Mixed dtype GEMMs are only supported when data type of a is bigger than b!!!"
     assert (a.is_floating_point() == b.is_floating_point()
             ), "GEMMs between float and integer type tensors are not supported!!!"
+    assert (scale_a8_b8 in [None, 'tensor', 'block']), f"Scaling mode {scale_a8_b8} is not supported!!!"
     M, K = a.shape
     K, N = b.shape
     grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
@@ -205,6 +256,12 @@ def matmul(a, b, c, a_scale, b_scale, scale_a8_b8=False, activation=""):
         c.stride(1),
         a_scale,
         b_scale,
+        a_scale.stride(0) if (a_scale is not None) and a_scale.ndim else 0,
+        a_scale.stride(1) if (a_scale is not None) and a_scale.ndim else 0,
+        b_scale.stride(0) if (b_scale is not None) and b_scale.ndim else 0,
+        b_scale.stride(1) if (b_scale is not None) and b_scale.ndim else 0,
+        GROUP_K=SCALE_BLOCK_SIZE,
+        GROUP_N=SCALE_BLOCK_SIZE,
         APPLY_SCALE=scale_a8_b8,
         ACTIVATION=activation,
     )
@@ -243,7 +300,7 @@ def dtype_is_8_bit(dtype):
            (dtype is torch.int8)
 
 
-def gen_input(M, N, dtype, needTrans, seed, device='cuda'):
+def gen_input(M, N, dtype, needTrans, seed=0, fp8_scaling_mode='tensor', device='cuda'):
     torch.manual_seed(seed)
 
     if needTrans:
@@ -252,9 +309,28 @@ def gen_input(M, N, dtype, needTrans, seed, device='cuda'):
         raw_data = torch.randn((M, N), dtype=torch.float32, device='cuda')
     scale = None
     if dtype_is_8_bit(dtype):
-        max_val = torch.max(torch.abs(raw_data))
-        scale = max_val / dtype_max[dtype]
-        raw_data = raw_data / scale
+        if fp8_scaling_mode == 'token':
+            assert raw_data.size(1) % SCALE_BLOCK_SIZE == 0
+            raw_data = raw_data.view(M, -1, SCALE_BLOCK_SIZE)
+            max_val = raw_data.abs().float().amax(dim=2).view(M, -1).clamp(1e-4)
+            scale = max_val.unsqueeze(2) / dtype_max[dtype]
+            raw_data = (raw_data / scale).view(M, N)
+            scale = scale.view(M, -1)
+            scale = scale.T.contiguous().T
+        elif fp8_scaling_mode == 'block':
+            x_padded = torch.zeros((triton.cdiv(M, SCALE_BLOCK_SIZE) * SCALE_BLOCK_SIZE,
+                                    triton.cdiv(N, SCALE_BLOCK_SIZE) * SCALE_BLOCK_SIZE), dtype=raw_data.dtype,
+                                   device=raw_data.device)
+            x_padded[:M, :N] = raw_data
+            x_view = x_padded.view(-1, SCALE_BLOCK_SIZE, x_padded.size(1) // SCALE_BLOCK_SIZE, SCALE_BLOCK_SIZE)
+            x_amax = x_view.abs().float().amax(dim=(1, 3), keepdim=True).clamp(1e-4)
+            x_scaled = x_view * (dtype_max[dtype] / x_amax)
+            raw_data = x_scaled.view_as(x_padded)[:M, :N].T.contiguous().T
+            scale = (x_amax / dtype_max[dtype]).view(x_view.size(0), x_view.size(2))
+        elif fp8_scaling_mode == 'tensor':
+            max_val = torch.max(torch.abs(raw_data))
+            scale = max_val / dtype_max[dtype]
+            raw_data = raw_data / scale
 
     input = raw_data.to(dtype)
     input_f32 = input.to(torch.float32)
@@ -289,27 +365,82 @@ def get_x_vals():
 def test_correctness(M, N, K, col_a, col_b, in_dtype_a, in_dtype_b, out_dtype):
     torch_in_dtype_a = name_to_torch_types[in_dtype_a]
     torch_in_dtype_b = name_to_torch_types[in_dtype_b]
-    a, a_fp32, a_scale = gen_input(M, K, torch_in_dtype_a, col_a, 1, device='cuda')
-    b, b_fp32, b_scale = gen_input(K, N, torch_in_dtype_b, col_b, 2, device='cuda')
+    a, a_fp32, a_scale = gen_input(M, K, torch_in_dtype_a, col_a, seed=1, device='cuda')
+    b, b_fp32, b_scale = gen_input(K, N, torch_in_dtype_b, col_b, seed=2, device='cuda')
     torch_out_dtype = name_to_torch_types[out_dtype]
     c = torch.empty((M, N), device=a.device, dtype=torch_out_dtype)
     # For 8-bit, we have scaled to the dynamic range of the data type.
     # This requires us to compute in fp32 because for e5m2, the range is same as fp16 (e5m10).
     # If we use fp16 it is possible to return infs from the torch.matmul call.
     if dtype_is_8_bit(torch_in_dtype_a) or dtype_is_8_bit(torch_in_dtype_b):
-        matmul(a, b, c, a_scale, b_scale, scale_a8_b8=True, activation="")
+        matmul(a, b, c, a_scale, b_scale, scale_a8_b8='tensor', activation="")
         torch_output = torch.matmul(a_fp32, b_fp32)
         # Set a_scale to 1.0 if it is not set
         torch_output = torch_output * (a_scale or 1.0) * b_scale
     # For other dtypes, use the same torch matmul as the dtype.
     else:
-        matmul(a, b, c, a_scale=None, b_scale=None, scale_a8_b8=False, activation="")
+        matmul(a, b, c, a_scale=None, b_scale=None, scale_a8_b8=None, activation="")
         torch_output = torch.matmul(a.to(torch_in_dtype_a), b.to(torch_in_dtype_b))
     if out_dtype == 'int8':
         torch.testing.assert_close(c.to(torch.float32),
                                    torch_output.to(torch.int8).to(torch.float32), atol=1e-3, rtol=1e-2)
     else:
         torch.testing.assert_close(c, torch_output.to(torch_out_dtype), atol=5e-3, rtol=1e-2)
+
+
+# yapf: disable
+@pytest.mark.parametrize(
+    "M, N, K, in_dtype_a, in_dtype_b, out_dtype, col_a, col_b",
+    [(*shape, in_dtype_a, in_dtype_b, out_dtype, col_a, col_b)
+     for shape in get_x_vals()
+     for in_dtype_a, in_dtype_b, out_dtype in [
+        ('fp8e4', 'fp8e4', 'fp16'), ('fp8e5', 'fp8e5', 'fp16'), ('fp16', 'fp8e4', 'fp16'),
+        ('fp16', 'fp8e5', 'fp16'),  ('bf16', 'fp8e4', 'bf16'),  ('bf16', 'fp8e5', 'bf16')]
+     # Defines if a matrix is row or column major.
+     for col_a in [True, False]
+     for col_b in [True, False]])
+# yapf: enable
+def test_correctness_block_scaling(M, N, K, col_a, col_b, in_dtype_a, in_dtype_b, out_dtype):
+    if (N % SCALE_BLOCK_SIZE != 0) or (K % SCALE_BLOCK_SIZE != 0):
+        pytest.skip("Skip N/K sizes not aligned to SCALE_BLOCK_SIZE")
+    # Generate Inputs
+    torch_in_dtype_a = name_to_torch_types[in_dtype_a]
+    torch_in_dtype_b = name_to_torch_types[in_dtype_b]
+    a, a_fp32, a_scale = gen_input(M, K, torch_in_dtype_a, col_a, seed=1, fp8_scaling_mode='token', device='cuda')
+    b, b_fp32, b_scale = gen_input(K, N, torch_in_dtype_b, col_b, seed=2, fp8_scaling_mode='block', device='cuda')
+    # Create output tensor
+    torch_out_dtype = name_to_torch_types[out_dtype]
+    c = torch.empty((M, N), device=a.device, dtype=torch_out_dtype)
+    # For 8-bit, we have scaled to the dynamic range of the data type.
+    # This requires us to compute in fp32 because for e5m2, the range is same as fp16 (e5m10).
+    # If we use fp16 it is possible to return infs from the torch.matmul call.
+    matmul(a, b, c, a_scale, b_scale, scale_a8_b8='block', activation="")
+    # Reference Implementation
+    block_k = SCALE_BLOCK_SIZE
+    block_n = SCALE_BLOCK_SIZE
+    k_tiles = triton.cdiv(K, block_k)
+    n_tiles = triton.cdiv(N, block_n)
+    c_ref = torch.zeros((M, N), device=a_fp32.device, dtype=torch.float32)
+
+    A_tiles = [a_fp32[:, i * block_k:min((i + 1) * block_k, K)] for i in range(k_tiles)]
+    B_tiles = [[
+        b_fp32[
+            i * block_k:min((i + 1) * block_k, K),
+            j * block_n:min((j + 1) * block_n, N),
+        ] for j in range(n_tiles)
+    ] for i in range(k_tiles)]
+    C_tiles = [c_ref[:, j * block_n:min((j + 1) * block_n, N)] for j in range(n_tiles)]
+    As_tiles = [a_scale[:, i:i + 1] for i in range(k_tiles)] if (a_scale is not None) else None
+
+    for i in range(k_tiles):
+        for j in range(n_tiles):
+            a_tile = A_tiles[i]
+            b_tile = B_tiles[i][j]
+            c_tile = C_tiles[j]
+            s_tile = (As_tiles[i] * b_scale[i][j]) if dtype_is_8_bit(torch_in_dtype_a) else b_scale[i][j]
+            c_tile[:, :] += torch.matmul(a_tile, b_tile) * s_tile
+
+    torch.testing.assert_close(c, c_ref.to(torch_out_dtype), atol=5e-3, rtol=1e-2)
 
 
 def get_type(provider):
@@ -341,8 +472,14 @@ def benchmark(M, N, K, provider, model=None, args=None):
 
     quantiles = [0.5, 0.2, 0.8]
     layout_tn = args.layout == 'tn'
-    a, _, a_scale = gen_input(M, K, in_dtype_a, False, 1, device='cuda')
-    b, _, b_scale = gen_input(K, N, in_dtype_b, layout_tn, 2, device='cuda')
+
+    if args.fp8_scaling_mode == 'tensor' or in_dtype_b == torch.int8:
+        a, _, a_scale = gen_input(M, K, in_dtype_a, False, seed=1, device='cuda')
+        b, _, b_scale = gen_input(K, N, in_dtype_b, layout_tn, seed=2, device='cuda')
+    else:
+        a, _, a_scale = gen_input(M, K, in_dtype_a, False, seed=1, fp8_scaling_mode='token', device='cuda')
+        b, _, b_scale = gen_input(K, N, in_dtype_b, layout_tn, seed=2, fp8_scaling_mode='block', device='cuda')
+
     if 'hipblaslt' in provider:
         ms, min_ms, max_ms = triton.testing.do_bench(lambda: torch.matmul(a, b), quantiles=quantiles)
     else:  # triton, different data types
@@ -350,7 +487,13 @@ def benchmark(M, N, K, provider, model=None, args=None):
         # Allocates output.
         c = torch.empty((M, N), device=a.device, dtype=out_dtype)
 
-        scale_a8_b8 = dtype_is_8_bit(in_dtype_a) or dtype_is_8_bit(in_dtype_b)
+        # If data type is 8 bit
+        #   Default to tensor scaling if scaling mode is tensor or dtype is int8
+        #   Use block scaling otherwise
+        scale_a8_b8 = None
+        if dtype_is_8_bit(in_dtype_a) or dtype_is_8_bit(in_dtype_b):
+            scale_a8_b8 = 'tensor' if in_dtype_b == torch.int8 else args.fp8_scaling_mode
+
         ms, min_ms, max_ms = triton.testing.do_bench(
             lambda: matmul(a, b, c, a_scale, b_scale, scale_a8_b8=scale_a8_b8, activation=""), quantiles=quantiles)
         if args.v:
@@ -381,6 +524,8 @@ def parse_args():
     parser.add_argument("-dtype", type=str, default=None, help="Data type of inputs and outputs")
     parser.add_argument("-b_dtype", type=str, default=None,
                         help="Data type of B operand, if specified (else same as dtype)")
+    parser.add_argument("-fp8_scaling_mode", type=str, default='tensor', choices=['tensor', 'block'],
+                        help="Type of scaling to apply when either or both inputs are fp8")
 
     args = parser.parse_args()
 
