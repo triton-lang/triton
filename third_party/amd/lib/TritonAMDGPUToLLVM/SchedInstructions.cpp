@@ -83,7 +83,9 @@ void setNumGeneratedDsReads(gpu::LocalLoadOp op, size_t dsReadsCount,
     Value dst = op.getResult();
     auto dstTensorTy = cast<RankedTensorType>(dst.getType());
     auto dotOperandLayout =
-        cast<DotOperandEncodingAttr>(dstTensorTy.getEncoding());
+        dyn_cast<DotOperandEncodingAttr>(dstTensorTy.getEncoding());
+    if (!dotOperandLayout)
+      return;
     const size_t opIdx = dotOperandLayout.getOpIdx();
     assert(opIdx < 2);
     if (opIdx == 0)

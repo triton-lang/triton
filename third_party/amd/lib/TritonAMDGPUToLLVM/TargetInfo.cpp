@@ -467,6 +467,10 @@ bool TargetInfo::supportVectorizedAtomics() const {
   return true;
 }
 
+void TargetInfo::loadOpAnnotation(triton::gpu::LocalLoadOp op,
+                                  size_t localLoadOpCount, Type type) const {
+  setNumGeneratedDsReads(op, localLoadOpCount, type);
+}
 void TargetInfo::storeOpAnnotation(triton::gpu::LocalStoreOp op,
                                    size_t localStoreOpCount, Type type) const {
   storeOpSchedAnnotations(op, localStoreOpCount, type);

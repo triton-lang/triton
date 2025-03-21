@@ -706,12 +706,12 @@ emitIndices(Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
     Location loc, RewriterBase &rewriter, const TargetInfoBase &target,
     std::function<void(VectorType, Value /*shmemAddr*/)> perVectorCallback);
 
-SmallVector<Value> loadSharedToDistributed(RankedTensorType dstTy,
-                                           triton::gpu::MemDescType srcTy,
-                                           Type elemLlvmTy,
-                                           const SharedMemoryObject &smemObj,
-                                           Location loc, RewriterBase &rewriter,
-                                           const TargetInfoBase &target);
+SmallVector<Value>
+loadSharedToDistributed(RankedTensorType dstTy, triton::gpu::MemDescType srcTy,
+                        Type elemLlvmTy, const SharedMemoryObject &smemObj,
+                        Location loc, RewriterBase &rewriter,
+                        const TargetInfoBase &target,
+                        std::pair<size_t, Type> *const llvmOpCount = nullptr);
 
 void storeDistributedToShared(
     triton::gpu::MemDescType dstTy, RankedTensorType srcTy, Type elemLlvmTy,
